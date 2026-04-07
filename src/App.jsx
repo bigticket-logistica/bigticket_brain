@@ -106,11 +106,10 @@ function Login({ onLogin }) {
     <div className="login-wrap">
       <div className="login-card">
         <div style={{ textAlign: "center", marginBottom: 28 }}>
-          <div style={{ fontSize: 26, fontWeight: 800 }}>
-            <span style={{ color: "#1a3a6b" }}>big</span>
-            <span style={{ color: "#F47B20" }}>ticket</span>
-          </div>
-          <div style={{ fontSize: 13, color: "#888", marginTop: 4 }}>Portal de Certificaciones MX</div>
+          <img src="https://psvdtgjvognbmxfvqbaa.supabase.co/storage/v1/object/public/assets/LOGO%20BT.jpeg"
+            alt="BigTicket" style={{ height: 64, objectFit: "contain", marginBottom: 12 }} />
+          <div style={{ fontSize: 22, fontWeight: 800, color: "#1a3a6b" }}>BigTicket</div>
+          <div style={{ fontSize: 13, color: "#888", marginTop: 4 }}>Sistema Integrado BigTicket</div>
         </div>
         {error && <div style={{ background: "#fee2e2", borderRadius: 8, padding: "10px 14px", fontSize: 13, color: "#c0392b", marginBottom: 14, textAlign: "center" }}>{error}</div>}
         <div className="field-row">
