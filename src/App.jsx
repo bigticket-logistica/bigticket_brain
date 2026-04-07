@@ -8,7 +8,19 @@ const sb = createClient(SUPABASE_URL, SUPABASE_KEY);
 const PIPEFY_TOKEN = "eyJhbGciOiJIUzUxMiJ9.eyJpc3MiOiJQaXBlZnkiLCJpYXQiOjE3NzU1ODc5MTQsImp0aSI6ImQzNzJiMzRlLTE4YzItNDA3OC1hYjFkLTBmOTI2MGMxZjhhZSIsInN1YiI6MzA2MzEwNjQ3LCJ1c2VyIjp7ImlkIjozMDYzMTA2NDcsImVtYWlsIjoiY2FtaWxvLm5hcmFuam9AYmlndGlja2V0LmNsIn0sInVzZXJfdHlwZSI6ImF1dGhlbnRpY2F0ZWQifQ.MsaieG6W9IUYB8diNf-Q4C87WC0pIv4FMHsSpnCZ6SD_qGiK-REQvfowkcfw3LzWVWI-o64TEJrlj5FCZBe1vA";
 const PIPE_ID = "306833898";
 
-// IDs campos Pipefy
+const MODULOS = {
+  superadmin: ["certificaciones", "wiki", "checklist", "kpis", "maestro", "configuracion"],
+  certificacion: ["certificaciones"],
+};
+
+const MODULOS_LABELS = {
+  certificaciones: "Certificaciones",
+  wiki: "Wiki y Procesos",
+  checklist: "Checklist",
+  kpis: "KPIs",
+  maestro: "Maestro Operaciones",
+  configuracion: "Configuración",
+};
 const PIPEFY_FIELDS = {
   nombres:   "e1399354-35f2-4fbc-89c1-310c3cead4b5",
   curp:      "49649781-c018-4a02-b1eb-f4c5d4fd7366",
@@ -546,8 +558,9 @@ export default function App() {
       <div>
         <div className="topbar">
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-            <span className="logo">big<span>ticket</span></span>
-            <span style={{ background: "#F47B20", color: "#fff", fontSize: 10, padding: "2px 8px", borderRadius: 20, fontWeight: 700 }}>CERT MX</span>
+            <img src="https://psvdtgjvognbmxfvqbaa.supabase.co/storage/v1/object/public/assets/LOGO%20BT.jpeg"
+              alt="Bigticket" style={{ height: 32, objectFit: "contain" }} />
+            <span style={{ color: "#fff", fontSize: 15, fontWeight: 600 }}>Bigticket</span>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
             <span style={{ fontSize: 12, color: "#aac3e8" }}>👤 {usuario.nombre}</span>
@@ -556,8 +569,10 @@ export default function App() {
         </div>
 
         <div className="admin-nav">
-          {[["certificaciones", "🏅 Certificaciones"], ["configuracion", "⚙️ Configuración"]].map(([k, l]) => (
-            <button key={k} className={`nav-btn ${tab === k ? "active" : ""}`} onClick={() => setTab(k)}>{l}</button>
+          {MODULOS[usuario.rol]?.map(k => (
+            <button key={k} className={`nav-btn ${tab === k ? "active" : ""}`} onClick={() => setTab(k)}>
+              {MODULOS_LABELS[k]}
+            </button>
           ))}
         </div>
 
@@ -567,7 +582,7 @@ export default function App() {
             <div className="sec-title">Configuración</div>
             <div className="sec-sub">Gestión del sistema de certificaciones</div>
             <div className="form-card">
-              <div className="form-title">🔗 Conexiones activas</div>
+              <div className="form-title">Conexiones activas</div>
               <div style={{ fontSize: 13, color: "#555", lineHeight: 2 }}>
                 <div>✅ Supabase — tabla certificaciones_mx</div>
                 <div>✅ Pipefy — Pipe {PIPE_ID} · Fase: Validación MELI</div>
@@ -577,7 +592,7 @@ export default function App() {
               </div>
             </div>
             <div className="form-card">
-              <div className="form-title">👥 Usuarios del sistema</div>
+              <div className="form-title">Usuarios del sistema</div>
               {Object.entries(USUARIOS).map(([email, u]) => (
                 <div key={email} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 0", borderBottom: "1px solid #f4f5f7" }}>
                   <div>
@@ -589,6 +604,15 @@ export default function App() {
                   </span>
                 </div>
               ))}
+            </div>
+          </div>
+        )}
+        {["wiki","checklist","kpis","maestro"].includes(tab) && (
+          <div className="pg">
+            <div style={{ textAlign: "center", padding: "60px 20px" }}>
+              <div style={{ fontSize: 48, marginBottom: 16 }}>🚧</div>
+              <div style={{ fontSize: 18, fontWeight: 700, color: "#1a1a1a", marginBottom: 8 }}>{MODULOS_LABELS[tab]}</div>
+              <div style={{ fontSize: 13, color: "#888" }}>Módulo en desarrollo — próximamente disponible</div>
             </div>
           </div>
         )}
