@@ -558,9 +558,10 @@ export default function App() {
       <div>
         <div className="topbar">
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-            <img src="https://psvdtgjvognbmxfvqbaa.supabase.co/storage/v1/object/public/assets/LOGO%20BT.jpeg"
-              alt="Bigticket" style={{ height: 32, objectFit: "contain" }} />
-            <span style={{ color: "#fff", fontSize: 15, fontWeight: 600 }}>Bigticket</span>
+            <span style={{ fontSize: 16, fontWeight: 700 }}>
+              <span style={{ color: "#F47B20" }}>Big</span>
+              <span style={{ color: "#fff" }}>ticket</span>
+            </span>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
             <span style={{ fontSize: 12, color: "#aac3e8" }}>👤 {usuario.nombre}</span>
