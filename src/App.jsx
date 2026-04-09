@@ -110,9 +110,48 @@ function Login({ onLogin }) {
 }
 
 // ─── VISOR DOCUMENTO (imagen o PDF) ─────────────────────────────────
+// Extrae el path relativo desde una URL pública de Supabase Storage
+function extraerPathSupabase(url) {
+  if (!url) return null;
+  // Formato: .../storage/v1/object/public/BUCKET/PATH
+  const match = url.match(/\/storage\/v1\/object\/public\/([^?]+)/);
+  if (!match) return null;
+  const partes = match[1].split("/");
+  const bucket = partes[0];
+  const path = partes.slice(1).join("/");
+  return { bucket, path };
+}
+
 function VisorDoc({ url, label }) {
   const [ampliado, setAmpliado] = useState(false);
+  const [blobUrl, setBlobUrl] = useState(null);
+  const [cargando, setCargando] = useState(false);
+  const [error, setError] = useState(false);
   const esPDF = url && (url.toLowerCase().includes(".pdf") || url.toLowerCase().includes("pdf"));
+
+  useEffect(() => {
+    if (!url || esPDF) return;
+    setCargando(true);
+    setError(false);
+
+    const info = extraerPathSupabase(url);
+    if (info) {
+      // Descarga con el SDK para incluir el token de autenticación
+      sb.storage.from(info.bucket).download(info.path)
+        .then(({ data, error: err }) => {
+          if (err || !data) { setError(true); setCargando(false); return; }
+          const objectUrl = URL.createObjectURL(data);
+          setBlobUrl(objectUrl);
+          setCargando(false);
+        });
+    } else {
+      // URL externa — intentar cargar directo
+      setBlobUrl(url);
+      setCargando(false);
+    }
+
+    return () => { if (blobUrl && blobUrl.startsWith("blob:")) URL.revokeObjectURL(blobUrl); };
+  }, [url]);
 
   if (!url) return (
     <div style={{ background: "#f8f9fa", borderRadius: 8, padding: "20px", textAlign: "center", border: "1px dashed #d0d5dd" }}>
@@ -121,6 +160,28 @@ function VisorDoc({ url, label }) {
       <div style={{ fontSize: 10, color: "#bbb", marginTop: 2 }}>Sin documento</div>
     </div>
   );
+
+  const miniatura = () => {
+    if (esPDF) return (
+      <div style={{ background: "#f0f9ff", borderRadius: 8, height: 120, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", border: "1px solid #bae6fd" }}>
+        <div style={{ fontSize: 28 }}>📄</div>
+        <div style={{ fontSize: 11, color: "#0369a1", fontWeight: 600, marginTop: 4 }}>PDF</div>
+      </div>
+    );
+    if (cargando) return (
+      <div style={{ background: "#f8f9fa", borderRadius: 8, height: 120, display: "flex", alignItems: "center", justifyContent: "center", border: "1px solid #e4e7ec" }}>
+        <div style={{ fontSize: 11, color: "#888" }}>Cargando...</div>
+      </div>
+    );
+    if (error || !blobUrl) return (
+      <div style={{ background: "#fff0f0", borderRadius: 8, height: 120, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", border: "1px dashed #fca5a5" }}>
+        <div style={{ fontSize: 22 }}>🖼️</div>
+        <div style={{ fontSize: 10, color: "#c0392b", marginTop: 4 }}>Error al cargar</div>
+        <a href={url} target="_blank" rel="noreferrer" style={{ fontSize: 10, color: "#1a3a6b", marginTop: 2 }} onClick={e => e.stopPropagation()}>Ver enlace</a>
+      </div>
+    );
+    return <img src={blobUrl} alt={label} style={{ width: "100%", height: 120, objectFit: "cover", borderRadius: 8, border: "1px solid #e4e7ec" }} />;
+  };
 
   return (
     <>
@@ -131,23 +192,26 @@ function VisorDoc({ url, label }) {
             onClick={e => e.stopPropagation()}>
             <div style={{ background: "#1a3a6b", padding: "10px 16px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <span style={{ color: "#fff", fontWeight: 600, fontSize: 13 }}>{label}</span>
-              <button onClick={() => setAmpliado(false)} style={{ background: "rgba(255,255,255,0.2)", border: "none", color: "#fff", borderRadius: "50%", width: 28, height: 28, cursor: "pointer", fontSize: 16 }}>×</button>
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <a href={url} target="_blank" rel="noreferrer" style={{ color: "#aac3e8", fontSize: 11, textDecoration: "none" }}>Abrir original ↗</a>
+                <button onClick={() => setAmpliado(false)} style={{ background: "rgba(255,255,255,0.2)", border: "none", color: "#fff", borderRadius: "50%", width: 28, height: 28, cursor: "pointer", fontSize: 16 }}>×</button>
+              </div>
             </div>
             {esPDF
               ? <embed src={url} type="application/pdf" style={{ width: "100%", height: "75vh" }} />
-              : <img src={url} alt={label} style={{ width: "100%", maxHeight: "75vh", objectFit: "contain", background: "#000" }} />
+              : blobUrl
+                ? <img src={blobUrl} alt={label} style={{ width: "100%", maxHeight: "75vh", objectFit: "contain", background: "#111" }} />
+                : <div style={{ height: "75vh", display: "flex", alignItems: "center", justifyContent: "center", color: "#888", flexDirection: "column", gap: 12 }}>
+                    <div style={{ fontSize: 32 }}>🖼️</div>
+                    <div>No se pudo cargar la imagen</div>
+                    <a href={url} target="_blank" rel="noreferrer" style={{ color: "#1a3a6b", fontSize: 13 }}>Abrir en nueva pestaña ↗</a>
+                  </div>
             }
           </div>
         </div>
       )}
       <div onClick={() => setAmpliado(true)} style={{ cursor: "pointer" }}>
-        {esPDF
-          ? <div style={{ background: "#f0f9ff", borderRadius: 8, padding: "16px", textAlign: "center", border: "1px solid #bae6fd", height: 120, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}>
-              <div style={{ fontSize: 28 }}>📄</div>
-              <div style={{ fontSize: 11, color: "#0369a1", fontWeight: 600, marginTop: 4 }}>PDF</div>
-            </div>
-          : <img src={url} alt={label} style={{ width: "100%", height: 120, objectFit: "cover", borderRadius: 8, border: "1px solid #e4e7ec" }} />
-        }
+        {miniatura()}
         <div style={{ fontSize: 11, color: "#555", textAlign: "center", marginTop: 4, fontWeight: 500 }}>{label} 🔍</div>
       </div>
     </>
