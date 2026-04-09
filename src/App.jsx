@@ -110,36 +110,11 @@ function Login({ onLogin }) {
 }
 
 // ─── VISOR DOCUMENTO (imagen o PDF) ─────────────────────────────────
-// Extrae bucket y path desde URL pública de Supabase Storage
-function extraerPathSupabase(url) {
-  if (!url) return null;
-  const match = url.match(/\/storage\/v1\/object\/(?:public|sign)\/([^?]+)/);
-  if (!match) return null;
-  const partes = match[1].split("/");
-  return { bucket: partes[0], path: partes.slice(1).join("/") };
-}
-
+// Bucket "certificaciones" es público — usamos URL directa sin signed URLs.
+// PDFs se abren via Google Docs Viewer para evitar bloqueos del navegador.
 function VisorDoc({ url, label }) {
   const [ampliado, setAmpliado] = useState(false);
-  const [signedUrl, setSignedUrl] = useState(null);
-  const [cargando, setCargando] = useState(false);
-  const [err, setErr] = useState(false);
   const esPDF = url && url.toLowerCase().includes(".pdf");
-
-  useEffect(() => {
-    if (!url) return;
-    setCargando(true);
-    setErr(false);
-    setSignedUrl(null);
-    const info = extraerPathSupabase(url);
-    if (!info) { setSignedUrl(url); setCargando(false); return; }
-    sb.storage.from(info.bucket).createSignedUrl(info.path, 3600)
-      .then(({ data, error }) => {
-        if (error || !data?.signedUrl) { setErr(true); }
-        else { setSignedUrl(data.signedUrl); }
-        setCargando(false);
-      });
-  }, [url]);
 
   if (!url) return (
     <div style={{ background: "#f8f9fa", borderRadius: 8, padding: "20px", textAlign: "center", border: "1px dashed #d0d5dd" }}>
@@ -149,32 +124,8 @@ function VisorDoc({ url, label }) {
     </div>
   );
 
-  const miniatura = () => {
-    if (esPDF) return (
-      <div style={{ background: "#f0f9ff", borderRadius: 8, height: 120, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", border: "1px solid #bae6fd" }}>
-        <div style={{ fontSize: 28 }}>📄</div>
-        <div style={{ fontSize: 11, color: "#0369a1", fontWeight: 600, marginTop: 4 }}>PDF</div>
-        {cargando && <div style={{ fontSize: 10, color: "#888", marginTop: 2 }}>Preparando...</div>}
-      </div>
-    );
-    if (cargando) return (
-      <div style={{ background: "#f8f9fa", borderRadius: 8, height: 120, display: "flex", alignItems: "center", justifyContent: "center", border: "1px solid #e4e7ec" }}>
-        <div style={{ fontSize: 11, color: "#888" }}>⏳ Cargando...</div>
-      </div>
-    );
-    if (err || !signedUrl) return (
-      <div style={{ background: "#fff0f0", borderRadius: 8, height: 120, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", border: "1px dashed #fca5a5" }}>
-        <div style={{ fontSize: 22 }}>🖼️</div>
-        <div style={{ fontSize: 10, color: "#c0392b", marginTop: 4 }}>Sin acceso</div>
-        <a href={url} target="_blank" rel="noreferrer" style={{ fontSize: 10, color: "#1a3a6b", marginTop: 2 }} onClick={e => e.stopPropagation()}>Ver enlace ↗</a>
-      </div>
-    );
-    return <img src={signedUrl} alt={label} style={{ width: "100%", height: 120, objectFit: "cover", borderRadius: 8, border: "1px solid #e4e7ec" }} onError={() => setErr(true)} />;
-  };
-
-  // PDF: usar Google Docs Viewer para evitar bloqueos del navegador
-  const pdfViewerUrl = signedUrl
-    ? `https://docs.google.com/viewer?url=${encodeURIComponent(signedUrl)}&embedded=true`
+  const pdfViewerUrl = esPDF
+    ? `https://docs.google.com/viewer?url=${encodeURIComponent(url)}&embedded=true`
     : null;
 
   return (
@@ -187,38 +138,30 @@ function VisorDoc({ url, label }) {
             <div style={{ background: "#1a3a6b", padding: "10px 16px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <span style={{ color: "#fff", fontWeight: 600, fontSize: 13 }}>{label}</span>
               <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-                <a href={signedUrl || url} target="_blank" rel="noreferrer"
-                  style={{ color: "#aac3e8", fontSize: 11, textDecoration: "none" }}>Abrir ↗</a>
-                <button onClick={() => setAmpliado(false)}
-                  style={{ background: "rgba(255,255,255,0.2)", border: "none", color: "#fff", borderRadius: "50%", width: 28, height: 28, cursor: "pointer", fontSize: 16 }}>×</button>
+                <a href={url} target="_blank" rel="noreferrer" style={{ color: "#aac3e8", fontSize: 11, textDecoration: "none" }}>Abrir ↗</a>
+                <button onClick={() => setAmpliado(false)} style={{ background: "rgba(255,255,255,0.2)", border: "none", color: "#fff", borderRadius: "50%", width: 28, height: 28, cursor: "pointer", fontSize: 16 }}>×</button>
               </div>
             </div>
-            {cargando ? (
-              <div style={{ height: "75vh", display: "flex", alignItems: "center", justifyContent: "center", color: "#888" }}>
-                ⏳ Preparando documento...
-              </div>
-            ) : err || !signedUrl ? (
-              <div style={{ height: "75vh", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 12, color: "#888" }}>
-                <div style={{ fontSize: 32 }}>🔒</div>
-                <div style={{ fontSize: 13 }}>No se pudo acceder al archivo</div>
-                <a href={url} target="_blank" rel="noreferrer" style={{ color: "#1a3a6b", fontSize: 13 }}>Abrir enlace original ↗</a>
-              </div>
-            ) : esPDF ? (
-              <iframe
-                src={pdfViewerUrl}
-                style={{ width: "100%", height: "75vh", border: "none" }}
-                title={label}
-              />
+            {esPDF ? (
+              <iframe src={pdfViewerUrl} style={{ width: "100%", height: "75vh", border: "none" }} title={label} />
             ) : (
-              <img src={signedUrl} alt={label}
-                style={{ width: "100%", maxHeight: "75vh", objectFit: "contain", background: "#111" }}
-                onError={() => setErr(true)} />
+              <img src={url} alt={label} style={{ width: "100%", maxHeight: "75vh", objectFit: "contain", background: "#111" }} />
             )}
           </div>
         </div>
       )}
-      <div onClick={() => !cargando && setAmpliado(true)} style={{ cursor: cargando ? "wait" : "pointer" }}>
-        {miniatura()}
+      <div onClick={() => setAmpliado(true)} style={{ cursor: "pointer" }}>
+        {esPDF ? (
+          <div style={{ background: "#f0f9ff", borderRadius: 8, height: 120, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", border: "1px solid #bae6fd" }}>
+            <div style={{ fontSize: 28 }}>📄</div>
+            <div style={{ fontSize: 11, color: "#0369a1", fontWeight: 600, marginTop: 4 }}>PDF</div>
+            <div style={{ fontSize: 10, color: "#888", marginTop: 2 }}>Click para ver</div>
+          </div>
+        ) : (
+          <img src={url} alt={label} style={{ width: "100%", height: 120, objectFit: "cover", borderRadius: 8, border: "1px solid #e4e7ec" }}
+            onError={e => { e.target.style.display="none"; e.target.nextSibling.style.display="flex"; }}
+          />
+        )}
         <div style={{ fontSize: 11, color: "#555", textAlign: "center", marginTop: 4, fontWeight: 500 }}>{label} 🔍</div>
       </div>
     </>
