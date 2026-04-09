@@ -110,7 +110,9 @@ function Login({ onLogin }) {
 }
 
 // ─── VISOR DOCUMENTO (imagen o PDF) ─────────────────────────────────
-// Extrae bucket y path desde una URL pública de Supabase Storage
+// Las fotos están en el bucket "documentos-terceros" de Supabase Storage.
+// Usamos createSignedUrl para generar una URL temporal firmada (1 hora)
+// que funciona independientemente de si el bucket es público o privado.
 function extraerPathSupabase(url) {
   if (!url) return null;
   const match = url.match(/\/storage\/v1\/object\/(?:public|sign)\/([^?]+)/);
@@ -131,24 +133,12 @@ function VisorDoc({ url, label }) {
     setCargando(true);
     setErr(false);
     setSignedUrl(null);
-
     const info = extraerPathSupabase(url);
-    if (!info) {
-      // URL externa sin path de Supabase — usar directa
-      setSignedUrl(url);
-      setCargando(false);
-      return;
-    }
-
-    // Generar signed URL válida por 1 hora (3600 seg)
+    if (!info) { setSignedUrl(url); setCargando(false); return; }
     sb.storage.from(info.bucket).createSignedUrl(info.path, 3600)
       .then(({ data, error }) => {
-        if (error || !data?.signedUrl) {
-          console.error("Signed URL error:", error);
-          setErr(true);
-        } else {
-          setSignedUrl(data.signedUrl);
-        }
+        if (error || !data?.signedUrl) { console.error("Signed URL error:", error); setErr(true); }
+        else { setSignedUrl(data.signedUrl); }
         setCargando(false);
       });
   }, [url]);
@@ -166,7 +156,7 @@ function VisorDoc({ url, label }) {
       <div style={{ background: "#f0f9ff", borderRadius: 8, height: 120, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", border: "1px solid #bae6fd" }}>
         <div style={{ fontSize: 28 }}>📄</div>
         <div style={{ fontSize: 11, color: "#0369a1", fontWeight: 600, marginTop: 4 }}>PDF</div>
-        {cargando && <div style={{ fontSize: 10, color: "#888", marginTop: 2 }}>Cargando...</div>}
+        {cargando && <div style={{ fontSize: 10, color: "#888", marginTop: 2 }}>Preparando...</div>}
       </div>
     );
     if (cargando) return (
@@ -181,7 +171,7 @@ function VisorDoc({ url, label }) {
         <a href={url} target="_blank" rel="noreferrer" style={{ fontSize: 10, color: "#1a3a6b", marginTop: 2 }} onClick={e => e.stopPropagation()}>Ver enlace ↗</a>
       </div>
     );
-    return <img src={signedUrl} alt={label} style={{ width: "100%", height: 120, objectFit: "cover", borderRadius: 8, border: "1px solid #e4e7ec" }} />;
+    return <img src={signedUrl} alt={label} style={{ width: "100%", height: 120, objectFit: "cover", borderRadius: 8, border: "1px solid #e4e7ec" }} onError={() => setErr(true)} />;
   };
 
   return (
@@ -194,26 +184,22 @@ function VisorDoc({ url, label }) {
             <div style={{ background: "#1a3a6b", padding: "10px 16px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <span style={{ color: "#fff", fontWeight: 600, fontSize: 13 }}>{label}</span>
               <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-                <a href={signedUrl || url} target="_blank" rel="noreferrer"
-                  style={{ color: "#aac3e8", fontSize: 11, textDecoration: "none" }}>Abrir ↗</a>
-                <button onClick={() => setAmpliado(false)}
-                  style={{ background: "rgba(255,255,255,0.2)", border: "none", color: "#fff", borderRadius: "50%", width: 28, height: 28, cursor: "pointer", fontSize: 16 }}>×</button>
+                <a href={signedUrl || url} target="_blank" rel="noreferrer" style={{ color: "#aac3e8", fontSize: 11, textDecoration: "none" }}>Abrir ↗</a>
+                <button onClick={() => setAmpliado(false)} style={{ background: "rgba(255,255,255,0.2)", border: "none", color: "#fff", borderRadius: "50%", width: 28, height: 28, cursor: "pointer", fontSize: 16 }}>×</button>
               </div>
             </div>
             {cargando ? (
-              <div style={{ height: "75vh", display: "flex", alignItems: "center", justifyContent: "center", color: "#888" }}>
-                ⏳ Cargando documento...
-              </div>
+              <div style={{ height: "75vh", display: "flex", alignItems: "center", justifyContent: "center", color: "#888" }}>⏳ Preparando documento...</div>
             ) : err || !signedUrl ? (
               <div style={{ height: "75vh", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 12, color: "#888" }}>
                 <div style={{ fontSize: 32 }}>🔒</div>
-                <div style={{ fontSize: 13 }}>No se pudo obtener acceso al archivo</div>
+                <div style={{ fontSize: 13 }}>No se pudo acceder al archivo</div>
                 <a href={url} target="_blank" rel="noreferrer" style={{ color: "#1a3a6b", fontSize: 13 }}>Abrir enlace original ↗</a>
               </div>
             ) : esPDF ? (
               <embed src={signedUrl} type="application/pdf" style={{ width: "100%", height: "75vh" }} />
             ) : (
-              <img src={signedUrl} alt={label} style={{ width: "100%", maxHeight: "75vh", objectFit: "contain", background: "#111" }} />
+              <img src={signedUrl} alt={label} style={{ width: "100%", maxHeight: "75vh", objectFit: "contain", background: "#111" }} onError={() => setErr(true)} />
             )}
           </div>
         </div>
