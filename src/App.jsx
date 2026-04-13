@@ -364,16 +364,15 @@ Responde con este JSON exacto:
         }
       }
 
-      const response = await fetch("https://api.anthropic.com/v1/messages", {
+      const response = await fetch("https://bigticket2026.app.n8n.cloud/webhook/analizar-documentos", {
         method: "POST",
-        headers: { "Content-Type": "application/json", "x-api-key": "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", "anthropic-version": "2023-06-01" },
-        body: JSON.stringify({ model: "claude-opus-4-5", max_tokens: 1500, messages: [{ role: "user", content: contenido }] })
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...candidato })
       });
 
       const data = await response.json();
-      const texto = data.content?.[0]?.text || "{}";
-      const clean = texto.replace(/```json|```/g, "").trim();
-      const parsed = JSON.parse(clean);
+      const parsed = data.analisis;
+      if (!parsed) throw new Error("Sin análisis de Claude");
 
       setAnalisis(parsed);
       setScore(parsed.score_global);
