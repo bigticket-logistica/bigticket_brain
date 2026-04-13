@@ -196,6 +196,11 @@ function BiggyChatBubble({ analizando, analisis, score, recomendacion, alertas }
         </div>
       ) : !analisis ? (
         <div style={{ fontSize: 13, color: "#888", fontStyle: "italic" }}>Biggy revisará los documentos automáticamente al cargar el candidato.</div>
+      ) : analisis._error ? (
+        <div style={{ background: "#fee2e2", borderRadius: 10, padding: "12px 14px", fontSize: 13, color: "#c0392b" }}>
+          ⚠️ {analisis.resumen}
+          <button onClick={analizarConClaude} style={{ marginLeft: 12, background: "#c0392b", color: "#fff", border: "none", borderRadius: 8, padding: "4px 12px", fontSize: 12, cursor: "pointer" }}>Reintentar</button>
+        </div>
       ) : (
         <div className="biggy-bubble">
           {recomendacion && recStyle && (
@@ -304,9 +309,9 @@ function DetalleCandidato({ candidato, onVolver, onActualizar }) {
   const [recomendacion, setRecomendacion] = useState(candidato.claude_recomendacion || null);
   const [alertas, setAlertas] = useState(candidato.claude_alertas || []);
 
-  // ✅ Análisis automático al abrir si aún no tiene score
+  // ✅ Análisis automático: corre si no hay analisis local cargado
   useEffect(() => {
-    if (!candidato.claude_score_global && !analizando) {
+    if (!analisis && !analizando) {
       analizarConClaude();
     }
   }, [candidato.id]);
@@ -390,6 +395,7 @@ Responde con este JSON exacto:
       onActualizar({ ...candidato, claude_analisis: parsed, claude_score_global: parsed.score_global, claude_recomendacion: parsed.recomendacion, claude_alertas: parsed.alertas || [] });
     } catch (e) {
       console.error("Error Claude:", e.message);
+      setAnalisis({ _error: true, resumen: "No se pudo conectar con el servicio de análisis. Intenta de nuevo." });
     } finally {
       setAnalizando(false);
     }
