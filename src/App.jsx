@@ -375,10 +375,12 @@ Responde con este JSON exacto:
         body: JSON.stringify({ ...candidato })
       });
 
-      const data = await response.json();
-      console.log("🔍 Respuesta N8N:", JSON.stringify(data).substring(0, 500));
+      const rawText = await response.text();
+      console.log("🔍 Respuesta N8N:", rawText.substring(0, 500));
+      if (!rawText || rawText.trim() === "") throw new Error("N8N devolvió respuesta vacía");
+      const data = JSON.parse(rawText);
       const parsed = data.analisis;
-      if (!parsed) throw new Error("Sin análisis de Claude — respuesta: " + JSON.stringify(data).substring(0, 200));
+      if (!parsed) throw new Error("Sin análisis — respuesta: " + rawText.substring(0, 200));
 
       setAnalisis(parsed);
       setScore(parsed.score_global);
