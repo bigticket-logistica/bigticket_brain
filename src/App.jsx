@@ -167,7 +167,7 @@ function VisorDoc({ url, label }) {
 }
 
 // ─── BIGGY MESSENGER ────────────────────────────────────────────────
-function BiggyChatBubble({ analizando, analisis, score, recomendacion, alertas }) {
+function BiggyChatBubble({ analizando, analisis, score, recomendacion, alertas, onReanalizar }) {
   const colorRec = { APROBAR: { bg: "#dcfce7", color: "#166534", border: "#86efac" }, REVISAR: { bg: "#fef3c7", color: "#92400e", border: "#fde68a" }, RECHAZAR: { bg: "#fee2e2", color: "#c0392b", border: "#fca5a5" } };
   const nivelColor = { ALTA: "#c0392b", MEDIA: "#92400e", BAJA: "#1e40af" };
   const nivelBg   = { ALTA: "#fee2e2", MEDIA: "#fef3c7", BAJA: "#dbeafe" };
@@ -199,7 +199,7 @@ function BiggyChatBubble({ analizando, analisis, score, recomendacion, alertas }
       ) : analisis._error ? (
         <div style={{ background: "#fee2e2", borderRadius: 10, padding: "12px 14px", fontSize: 13, color: "#c0392b" }}>
           ⚠️ {analisis.resumen}
-          <button onClick={analizarConClaude} style={{ marginLeft: 12, background: "#c0392b", color: "#fff", border: "none", borderRadius: 8, padding: "4px 12px", fontSize: 12, cursor: "pointer" }}>Reintentar</button>
+          <button onClick={onReanalizar} style={{ marginLeft: 12, background: "#c0392b", color: "#fff", border: "none", borderRadius: 8, padding: "4px 12px", fontSize: 12, cursor: "pointer" }}>Reintentar</button>
         </div>
       ) : (
         <div className="biggy-bubble">
@@ -376,8 +376,9 @@ Responde con este JSON exacto:
       });
 
       const data = await response.json();
+      console.log("🔍 Respuesta N8N:", JSON.stringify(data).substring(0, 500));
       const parsed = data.analisis;
-      if (!parsed) throw new Error("Sin análisis de Claude");
+      if (!parsed) throw new Error("Sin análisis de Claude — respuesta: " + JSON.stringify(data).substring(0, 200));
 
       setAnalisis(parsed);
       setScore(parsed.score_global);
@@ -438,7 +439,7 @@ Responde con este JSON exacto:
 
       <div className="pg-detail">
         {/* Biggy análisis automático */}
-        <BiggyChatBubble analizando={analizando} analisis={analisis} score={score} recomendacion={recomendacion} alertas={alertas} />
+        <BiggyChatBubble analizando={analizando} analisis={analisis} score={score} recomendacion={recomendacion} alertas={alertas} onReanalizar={analizarConClaude} />
 
         {/* Datos del candidato */}
         <div className="form-card">
