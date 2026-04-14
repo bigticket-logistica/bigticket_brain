@@ -520,7 +520,7 @@ Responde con este JSON exacto:
 
           <div style={{ background: "#f0f9ff", borderRadius: 10, padding: "12px 16px", marginBottom: 16, border: "1px solid #bae6fd", fontSize: 12, color: "#555", lineHeight: 2 }}>
             <div style={{ fontWeight: 700, color: "#0369a1", marginBottom: 6 }}>Datos a enviar al formulario Meli</div>
-            <div>📧 Correo: <strong>camilonaranjo.bigticket@gmail.com</strong></div>
+            <div>📧 Correo: <strong>certificacionbigticketmx@gmail.com</strong></div>
             <div>👤 Nombre: <strong>{candidato.nombre}</strong></div>
             <div>🪪 CURP: <strong>{candidato.curp_validado || candidato.curp}</strong></div>
             <div>🏢 MLP: <strong>Big Ticket</strong></div>
