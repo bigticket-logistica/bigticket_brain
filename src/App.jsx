@@ -722,9 +722,24 @@ function ModuloCertificaciones() {
 
 // ─── APP PRINCIPAL ───────────────────────────────────────────────────
 export default function App() {
-  const [usuario, setUsuario] = useState(null);
+  const [usuario, setUsuario] = useState(() => {
+    try {
+      const guardado = localStorage.getItem("bt_usuario");
+      return guardado ? JSON.parse(guardado) : null;
+    } catch { return null; }
+  });
   const [tab, setTab] = useState("certificaciones");
-  if (!usuario) return <><style>{css}</style><Login onLogin={setUsuario} /></>;
+
+  const handleLogin = (u) => {
+    localStorage.setItem("bt_usuario", JSON.stringify(u));
+    setUsuario(u);
+  };
+  const handleLogout = () => {
+    localStorage.removeItem("bt_usuario");
+    setUsuario(null);
+  };
+
+  if (!usuario) return <><style>{css}</style><Login onLogin={handleLogin} /></>; 
   return (
     <>
       <style>{css}</style>
@@ -738,7 +753,7 @@ export default function App() {
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
             <span style={{ fontSize: 12, color: "#aac3e8" }}>👤 {usuario.nombre}</span>
-            <button className="btn-gw" onClick={() => setUsuario(null)}>Salir</button>
+            <button className="btn-gw" onClick={handleLogout}>Salir</button>
           </div>
         </div>
         <div className="admin-nav">
