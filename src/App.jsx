@@ -414,32 +414,31 @@ Responde con este JSON exacto:
       if (puesto === "ayudante" || puesto === "auxiliar") valorLicencia = "Auxiliar";
       else if (puesto === "dispatcher") valorLicencia = "Dispatcher";
 
-      // ✅ Enviar via N8N webhook con SVC corregido
-      const respMeli = await fetch("https://bigticket2026.app.n8n.cloud/webhook/enviar-meli-form", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          id: candidato.id,
-          candidato_id: candidato.id,
-          nombre: candidato.nombre,
-          curp: candidato.curp_validado || candidato.curp,
-          svc: candidato.svc,
-          licencia: valorLicencia,
-          puesto: candidato.puesto,
-        })
-      });
+      // ✅ Abrir Google Form pre-rellenado — Google bloquea envíos automáticos desde servidores
+      function encode(v) { return encodeURIComponent(v || ""); }
+      const nombreMayus = (candidato.nombre || "").toUpperCase();
+      const svcFinal = (candidato.svc || "").split("_").pop();
 
-      if (!respMeli.ok) throw new Error(`Error al conectar con N8N: ${respMeli.status}`);
-      const resultadoMeli = await respMeli.json().catch(() => ({}));
-      if (resultadoMeli.ok === false) throw new Error("El formulario de Meli no pudo enviarse. Verifica en N8N.");
+      const prefilledUrl = [
+        "https://docs.google.com/forms/d/e/1FAIpQLSfKqWuSMBNwRcp-bJpqiSU8ZAFAPCGB3qTkfiMT2jk_8PVGzw/viewform",
+        `?entry.1418110277=${encode(nombreMayus)}`,
+        `&entry.715792240=${encode(candidato.curp_validado || candidato.curp)}`,
+        `&entry.1927588691=Last+mile`,
+        `&entry.1391555266=Big+Ticket`,
+        `&entry.1422784112=${encode(svcFinal)}`,
+        `&entry.1912583612=${encode(valorLicencia)}`,
+        `&entry.137537185=MLP`,
+      ].join("");
 
-      // ✅ Solo cambia de fase si N8N confirmó éxito
+      window.open(prefilledUrl, "_blank");
+
+      // ✅ Marcar como enviado en Supabase
       await sb.from("certificaciones_mx")
         .update({ estado: "enviado", fecha_envio_meli: now })
         .eq("id", candidato.id);
 
       onActualizar({ ...candidato, estado: "enviado", fecha_envio_meli: now });
-      alert("✅ Formulario enviado a Mercado Libre — tarjeta movida a Enviado a Meli");
+      alert("✅ Formulario abierto con los datos pre-rellenados.\n\nVerifica que estés con la cuenta certificacionbigticketmx@gmail.com y haz clic en Enviar.");
     } catch (e) {
       alert("Error al enviar: " + e.message);
     } finally {
