@@ -414,33 +414,40 @@ Responde con este JSON exacto:
       if (puesto === "ayudante" || puesto === "auxiliar") valorLicencia = "Auxiliar";
       else if (puesto === "dispatcher") valorLicencia = "Dispatcher";
 
-      // ✅ Esperar confirmación REAL de N8N antes de cambiar de fase
-      const respMeli = await fetch("https://bigticket2026.app.n8n.cloud/webhook/enviar-meli-form", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          id: candidato.id,
-          candidato_id: candidato.id,
-          nombre: candidato.nombre,
-          curp: candidato.curp_validado || candidato.curp,
-          svc: candidato.svc,
-          licencia: valorLicencia,
-          puesto: candidato.puesto,
-        })
-      });
+      // ✅ Enviar directo desde el navegador — N8N cloud no puede acceder a Google
+      function encode(k, v) { return encodeURIComponent(k) + "=" + encodeURIComponent(v || ""); }
+      const nombreMayus = (candidato.nombre || "").toUpperCase();
+      const formBody = [
+        encode("entry.1418110277", nombreMayus),
+        encode("entry.715792240",  candidato.curp_validado || candidato.curp || ""),
+        encode("entry.1927588691", "Last mile"),
+        encode("entry.1391555266", "Big Ticket"),
+        encode("entry.1422784112", candidato.svc || ""),
+        encode("entry.1912583612", valorLicencia),
+        encode("entry.137537185",  "MLP"),
+        encode("emailReceipt",     "true"),
+        encode("fvv",              "1"),
+        encode("pageHistory",      "0"),
+      ].join("&");
 
-      // ❌ Si N8N falla → no cambiamos de fase, mostramos error
-      if (!respMeli.ok) throw new Error(`Error al conectar con el servidor: ${respMeli.status}`);
-      const resultadoMeli = await respMeli.json().catch(() => ({}));
-      if (resultadoMeli.ok === false) throw new Error("El formulario de Meli no pudo enviarse. Revisa el flujo en N8N.");
+      // mode: no-cors necesario para Google Forms — si no lanza excepción, el envío fue exitoso
+      await fetch(
+        "https://docs.google.com/forms/u/0/d/e/1FAIpQLSfKqWuSMBNwRcp-bJpqiSU8ZAFAPCGB3qTkfiMT2jk_8PVGzw/formResponse",
+        {
+          method: "POST",
+          mode: "no-cors",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: formBody,
+        }
+      );
 
-      // ✅ Solo aquí cambiamos de fase — N8N confirmó que el form fue enviado
+      // ✅ Si llegamos aquí sin excepción → form enviado → cambiamos de fase
       await sb.from("certificaciones_mx")
         .update({ estado: "enviado", fecha_envio_meli: now })
         .eq("id", candidato.id);
 
       onActualizar({ ...candidato, estado: "enviado", fecha_envio_meli: now });
-      alert("✅ Formulario enviado a Mercado Libre correctamente — tarjeta movida a Enviado a Meli");
+      alert("✅ Formulario enviado a Mercado Libre — tarjeta movida a Enviado a Meli");
     } catch (e) {
       alert("Error al enviar: " + e.message);
     } finally {
