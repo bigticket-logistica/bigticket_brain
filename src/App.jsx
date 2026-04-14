@@ -414,40 +414,31 @@ Responde con este JSON exacto:
       if (puesto === "ayudante" || puesto === "auxiliar") valorLicencia = "Auxiliar";
       else if (puesto === "dispatcher") valorLicencia = "Dispatcher";
 
-      // ✅ Enviar directo desde el navegador — N8N cloud no puede acceder a Google
-      function encode(k, v) { return encodeURIComponent(k) + "=" + encodeURIComponent(v || ""); }
+      // ✅ Abrir Google Form pre-rellenado en nueva pestaña
+      // El usuario solo hace clic en "Enviar" — sin problemas de autenticación
+      function encode(v) { return encodeURIComponent(v || ""); }
       const nombreMayus = (candidato.nombre || "").toUpperCase();
-      const formBody = [
-        encode("entry.1418110277", nombreMayus),
-        encode("entry.715792240",  candidato.curp_validado || candidato.curp || ""),
-        encode("entry.1927588691", "Last mile"),
-        encode("entry.1391555266", "Big Ticket"),
-        encode("entry.1422784112", candidato.svc || ""),
-        encode("entry.1912583612", valorLicencia),
-        encode("entry.137537185",  "MLP"),
-        encode("emailReceipt",     "true"),
-        encode("fvv",              "1"),
-        encode("pageHistory",      "0"),
-      ].join("&");
 
-      // mode: no-cors necesario para Google Forms — si no lanza excepción, el envío fue exitoso
-      await fetch(
-        "https://docs.google.com/forms/u/0/d/e/1FAIpQLSfKqWuSMBNwRcp-bJpqiSU8ZAFAPCGB3qTkfiMT2jk_8PVGzw/formResponse",
-        {
-          method: "POST",
-          mode: "no-cors",
-          headers: { "Content-Type": "application/x-www-form-urlencoded" },
-          body: formBody,
-        }
-      );
+      const prefilledUrl = [
+        "https://docs.google.com/forms/d/e/1FAIpQLSfKqWuSMBNwRcp-bJpqiSU8ZAFAPCGB3qTkfiMT2jk_8PVGzw/viewform",
+        `?entry.1418110277=${encode(nombreMayus)}`,
+        `&entry.715792240=${encode(candidato.curp_validado || candidato.curp)}`,
+        `&entry.1927588691=Last+mile`,
+        `&entry.1391555266=Big+Ticket`,
+        `&entry.1422784112=${encode(candidato.svc)}`,
+        `&entry.1912583612=${encode(valorLicencia)}`,
+        `&entry.137537185=MLP`,
+      ].join("");
 
-      // ✅ Si llegamos aquí sin excepción → form enviado → cambiamos de fase
+      window.open(prefilledUrl, "_blank");
+
+      // Marcar como enviado en Supabase
       await sb.from("certificaciones_mx")
         .update({ estado: "enviado", fecha_envio_meli: now })
         .eq("id", candidato.id);
 
       onActualizar({ ...candidato, estado: "enviado", fecha_envio_meli: now });
-      alert("✅ Formulario enviado a Mercado Libre — tarjeta movida a Enviado a Meli");
+      alert("✅ Se abrió el formulario de Meli pre-rellenado. Revisa la nueva pestaña y haz clic en Enviar.");
     } catch (e) {
       alert("Error al enviar: " + e.message);
     } finally {
