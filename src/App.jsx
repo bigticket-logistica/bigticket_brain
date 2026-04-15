@@ -2749,6 +2749,46 @@ const WIKI_TIPO_CFG = {
   link:        { icon: "🔗", color: "#10B981", bg: "#f0fdf4" },
 };
 
+// ── Campo con asistente Biggy (fuera del editor para evitar re-renders) ──────
+function CampoConBiggy({ campo, label, placeholder, alto, valor, onChange, biggyField, setBiggyField, biggyPrompt, setBiggyPrompt, biggyLoading, onPedirBiggy }) {
+  return (
+    <div className="field-row">
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
+        <label className="field-label" style={{ margin: 0 }}>{label}</label>
+        <button onClick={() => setBiggyField(biggyField === campo ? null : campo)}
+          style={{ background: biggyField === campo ? "#F47B20" : "#fff7ed",
+            border: `1px solid ${biggyField === campo ? "#F47B20" : "#fde8cc"}`,
+            borderRadius: 8, padding: "3px 10px", fontSize: 11, fontWeight: 700, cursor: "pointer",
+            color: biggyField === campo ? "#fff" : "#F47B20", display: "flex", alignItems: "center", gap: 5 }}>
+          <img src="https://psvdtgjvognbmxfvqbaa.supabase.co/storage/v1/object/public/assets/Don_B1.jpeg"
+            style={{ width: 16, height: 16, borderRadius: "50%", objectFit: "cover" }} alt="" />
+          Biggy
+        </button>
+      </div>
+      <textarea value={valor} onChange={e => onChange(e.target.value)}
+        placeholder={placeholder} style={{ height: alto || 120, resize: "vertical", lineHeight: 1.7 }} />
+      {biggyField === campo && (
+        <div style={{ marginTop: 8, background: "#fff7ed", border: "1px solid #fde8cc", borderRadius: 10, padding: 12 }}>
+          <div style={{ fontSize: 11, color: "#F47B20", fontWeight: 700, marginBottom: 6 }}>
+            💬 Biggy te ayuda con "{label}"
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <input value={biggyPrompt} onChange={e => setBiggyPrompt(e.target.value)}
+              onKeyDown={e => e.key === "Enter" && onPedirBiggy(campo, biggyPrompt)}
+              placeholder="Ej: Explica en 3 puntos clave..."
+              style={{ flex: 1, fontSize: 12 }} />
+            <button className="btn-orange" onClick={() => onPedirBiggy(campo, biggyPrompt)}
+              disabled={biggyLoading || !biggyPrompt.trim()}
+              style={{ padding: "7px 14px", fontSize: 12, whiteSpace: "nowrap" }}>
+              {biggyLoading ? "..." : "✨ Generar"}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function WikiEditor({ articulo, onSave, onCancel, usuario }) {
   const [form, setForm] = useState({
     titulo:      articulo?.titulo      || "",
@@ -2834,42 +2874,6 @@ ${JSON.stringify(contexto, null, 2)}`,
     finally { setGuardando(false); }
   };
 
-  // Componente de campo con Biggy
-  const CampoConBiggy = ({ campo, label, placeholder, alto = 120 }) => (
-    <div className="field-row">
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
-        <label className="field-label" style={{ margin: 0 }}>{label}</label>
-        <button onClick={() => setBiggyField(biggyField === campo ? null : campo)}
-          style={{ background: biggyField === campo ? "#F47B20" : "#fff7ed", border: `1px solid ${biggyField === campo ? "#F47B20" : "#fde8cc"}`,
-            borderRadius: 8, padding: "3px 10px", fontSize: 11, fontWeight: 700, cursor: "pointer",
-            color: biggyField === campo ? "#fff" : "#F47B20", display: "flex", alignItems: "center", gap: 5 }}>
-          <img src="https://psvdtgjvognbmxfvqbaa.supabase.co/storage/v1/object/public/assets/Don_B1.jpeg"
-            style={{ width: 16, height: 16, borderRadius: "50%", objectFit: "cover" }} alt="" />
-          Biggy
-        </button>
-      </div>
-      <textarea value={form[campo]} onChange={e => setForm(f => ({ ...f, [campo]: e.target.value }))}
-        placeholder={placeholder} style={{ height: alto, resize: "vertical", lineHeight: 1.7 }} />
-      {biggyField === campo && (
-        <div style={{ marginTop: 8, background: "#fff7ed", border: "1px solid #fde8cc", borderRadius: 10, padding: 12 }}>
-          <div style={{ fontSize: 11, color: "#F47B20", fontWeight: 700, marginBottom: 6 }}>
-            💬 Biggy te ayuda con "{label}"
-          </div>
-          <div style={{ display: "flex", gap: 8 }}>
-            <input value={biggyPrompt} onChange={e => setBiggyPrompt(e.target.value)}
-              onKeyDown={e => e.key === "Enter" && pedirABiggy(campo, biggyPrompt)}
-              placeholder={`Ej: Explica en 3 puntos clave...`}
-              style={{ flex: 1, fontSize: 12 }} />
-            <button className="btn-orange" onClick={() => pedirABiggy(campo, biggyPrompt)}
-              disabled={biggyLoading || !biggyPrompt.trim()} style={{ padding: "7px 14px", fontSize: 12, whiteSpace: "nowrap" }}>
-              {biggyLoading ? "..." : "✨ Generar"}
-            </button>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-
   return (
     <div style={{ maxWidth: 900, margin: "0 auto" }}>
       {/* Header */}
@@ -2942,30 +2946,30 @@ ${JSON.stringify(contexto, null, 2)}`,
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
             <div className="form-card">
               <div style={{ fontSize: 13, fontWeight: 700, color: "#002f5d", marginBottom: 12 }}>❓ ¿QUÉ?</div>
-              <CampoConBiggy campo="que" label="Define qué es este documento / proceso" placeholder="Describe qué regula, qué establece o qué define este documento..." alto={160} />
+              <CampoConBiggy campo="que" label="Define qué es este documento / proceso" placeholder="Describe qué regula, qué establece o qué define este documento..." alto={160} valor={form["que"]} onChange={v => setForm(f => ({...f, que: v}))} biggyField={biggyField} setBiggyField={setBiggyField} biggyPrompt={biggyPrompt} setBiggyPrompt={setBiggyPrompt} biggyLoading={biggyLoading} onPedirBiggy={pedirABiggy} />
             </div>
             <div className="form-card">
               <div style={{ fontSize: 13, fontWeight: 700, color: "#002f5d", marginBottom: 12 }}>💡 ¿POR QUÉ?</div>
-              <CampoConBiggy campo="porque" label="Justificación y objetivos" placeholder="Explica por qué existe este proceso, qué problema resuelve..." alto={160} />
+              <CampoConBiggy campo="porque" label="Justificación y objetivos" placeholder="Explica por qué existe este proceso, qué problema resuelve..." alto={160} valor={form["porque"]} onChange={v => setForm(f => ({...f, porque: v}))} biggyField={biggyField} setBiggyField={setBiggyField} biggyPrompt={biggyPrompt} setBiggyPrompt={setBiggyPrompt} biggyLoading={biggyLoading} onPedirBiggy={pedirABiggy} />
             </div>
             <div className="form-card">
               <div style={{ fontSize: 13, fontWeight: 700, color: "#002f5d", marginBottom: 12 }}>👤 ¿QUIÉN Y CUÁNDO?</div>
-              <CampoConBiggy campo="quien" label="Roles, responsables y temporalidad" placeholder="Define quiénes aplican este proceso, cuándo y en qué condiciones..." alto={160} />
+              <CampoConBiggy campo="quien" label="Roles, responsables y temporalidad" placeholder="Define quiénes aplican este proceso, cuándo y en qué condiciones..." alto={160} valor={form["quien"]} onChange={v => setForm(f => ({...f, quien: v}))} biggyField={biggyField} setBiggyField={setBiggyField} biggyPrompt={biggyPrompt} setBiggyPrompt={setBiggyPrompt} biggyLoading={biggyLoading} onPedirBiggy={pedirABiggy} />
             </div>
             <div className="form-card">
               <div style={{ fontSize: 13, fontWeight: 700, color: "#002f5d", marginBottom: 12 }}>⚙️ ¿CÓMO?</div>
-              <CampoConBiggy campo="como" label="Pasos, herramientas y procedimiento" placeholder="Describe paso a paso cómo se ejecuta el proceso..." alto={160} />
+              <CampoConBiggy campo="como" label="Pasos, herramientas y procedimiento" placeholder="Describe paso a paso cómo se ejecuta el proceso..." alto={160} valor={form["como"]} onChange={v => setForm(f => ({...f, como: v}))} biggyField={biggyField} setBiggyField={setBiggyField} biggyPrompt={biggyPrompt} setBiggyPrompt={setBiggyPrompt} biggyLoading={biggyLoading} onPedirBiggy={pedirABiggy} />
             </div>
           </div>
           <div className="form-card" style={{ marginTop: 0 }}>
             <div className="form-title">📊 Contenido adicional (KPIs, tablas, notas)</div>
-            <CampoConBiggy campo="contenido" label="Información complementaria" placeholder="KPIs, evolución del modelo, flujos rápidos, notas..." alto={140} />
+            <CampoConBiggy campo="contenido" label="Información complementaria" placeholder="KPIs, evolución del modelo, flujos rápidos, notas..." alto={140} valor={form["contenido"]} onChange={v => setForm(f => ({...f, contenido: v}))} biggyField={biggyField} setBiggyField={setBiggyField} biggyPrompt={biggyPrompt} setBiggyPrompt={setBiggyPrompt} biggyLoading={biggyLoading} onPedirBiggy={pedirABiggy} />
           </div>
         </div>
       ) : (
         <div className="form-card">
           <div className="form-title">📝 Contenido</div>
-          <CampoConBiggy campo="contenido" label="Escribe el contenido completo" placeholder="Escribe el contenido del artículo, instrucciones o política..." alto={320} />
+          <CampoConBiggy campo="contenido" label="Escribe el contenido completo" placeholder="Escribe el contenido del artículo, instrucciones o política..." alto={320} valor={form["contenido"]} onChange={v => setForm(f => ({...f, contenido: v}))} biggyField={biggyField} setBiggyField={setBiggyField} biggyPrompt={biggyPrompt} setBiggyPrompt={setBiggyPrompt} biggyLoading={biggyLoading} onPedirBiggy={pedirABiggy} />
         </div>
       )}
 
