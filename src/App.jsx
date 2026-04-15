@@ -2720,6 +2720,491 @@ function LogiFlowApp() {
 }
 
 
+// ─── MÓDULO WIKI ──────────────────────────────────────────────────────────────
+
+const WIKI_AREAS = [
+  { id: "todos",          icon: "🌐", label: "Todos" },
+  { id: "operaciones",    icon: "🚚", label: "Operaciones" },
+  { id: "certificaciones",icon: "✅", label: "Certificaciones" },
+  { id: "rrhh",           icon: "👥", label: "RRHH" },
+  { id: "legal",          icon: "⚖️",  label: "Legal" },
+  { id: "finanzas",       icon: "💰", label: "Finanzas" },
+  { id: "tecnologia",     icon: "💻", label: "Tecnología" },
+  { id: "comercial",      icon: "📈", label: "Comercial" },
+];
+
+const WIKI_TIPOS = [
+  { id: "articulo",    icon: "📝", label: "Artículo" },
+  { id: "documento",   icon: "📄", label: "Documento" },
+  { id: "instructivo", icon: "📋", label: "Instructivo" },
+  { id: "politica",    icon: "📜", label: "Política" },
+  { id: "link",        icon: "🔗", label: "Link externo" },
+];
+
+const WIKI_TIPO_CFG = {
+  articulo:    { icon: "📝", color: "#3B82F6", bg: "#eff6ff" },
+  documento:   { icon: "📄", color: "#8B5CF6", bg: "#f5f3ff" },
+  instructivo: { icon: "📋", color: "#F47B20", bg: "#fff7ed" },
+  politica:    { icon: "📜", color: "#1a3a6b", bg: "#eef2ff" },
+  link:        { icon: "🔗", color: "#10B981", bg: "#f0fdf4" },
+};
+
+function WikiEditor({ articulo, onSave, onCancel, usuario }) {
+  const [form, setForm] = useState({
+    titulo: articulo?.titulo || "",
+    contenido: articulo?.contenido || "",
+    area: articulo?.area || "operaciones",
+    tipo: articulo?.tipo || "articulo",
+    archivo_url: articulo?.archivo_url || "",
+    tags: articulo?.tags?.join(", ") || "",
+  });
+  const [guardando, setGuardando] = useState(false);
+  const [subiendo, setSubiendo] = useState(false);
+
+  const subirArchivo = async (file) => {
+    setSubiendo(true);
+    try {
+      const ext = file.name.split(".").pop();
+      const path = `wiki/${Date.now()}_${file.name.replace(/\s+/g, "_")}`;
+      const { error } = await sb.storage.from("wiki-docs").upload(path, file, { upsert: true, contentType: file.type });
+      if (error) throw error;
+      const { data } = sb.storage.from("wiki-docs").getPublicUrl(path);
+      setForm(f => ({ ...f, archivo_url: data.publicUrl }));
+    } catch (e) {
+      alert("Error subiendo archivo: " + e.message);
+    } finally {
+      setSubiendo(false);
+    }
+  };
+
+  const guardar = async () => {
+    if (!form.titulo.trim()) { alert("El título es obligatorio"); return; }
+    setGuardando(true);
+    try {
+      const payload = {
+        ...form,
+        tags: form.tags ? form.tags.split(",").map(t => t.trim()).filter(Boolean) : [],
+        autor: usuario.nombre,
+        updated_at: new Date().toISOString(),
+      };
+      if (articulo?.id) {
+        await sb.from("wiki_articulos").update(payload).eq("id", articulo.id);
+      } else {
+        await sb.from("wiki_articulos").insert({ ...payload, created_at: new Date().toISOString() });
+      }
+      onSave();
+    } catch (e) {
+      alert("Error guardando: " + e.message);
+    } finally {
+      setGuardando(false);
+    }
+  };
+
+  return (
+    <div style={{ maxWidth: 800, margin: "0 auto" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 24 }}>
+        <button className="btn-back" onClick={onCancel}>← Volver</button>
+        <div style={{ flex: 1 }}>
+          <div className="sec-title">{articulo?.id ? "Editar artículo" : "Nuevo artículo"}</div>
+        </div>
+        <button className="btn-blue" onClick={guardar} disabled={guardando}>
+          {guardando ? "Guardando..." : "💾 Guardar"}
+        </button>
+      </div>
+
+      <div className="form-card">
+        <div className="field-row">
+          <label className="field-label">Título *</label>
+          <input value={form.titulo} onChange={e => setForm(f => ({ ...f, titulo: e.target.value }))}
+            placeholder="Ej: Proceso de certificación de conductores" style={{ fontSize: 15, fontWeight: 600 }} />
+        </div>
+        <div className="two-col">
+          <div className="field-row">
+            <label className="field-label">Área</label>
+            <select value={form.area} onChange={e => setForm(f => ({ ...f, area: e.target.value }))}>
+              {WIKI_AREAS.filter(a => a.id !== "todos").map(a => (
+                <option key={a.id} value={a.id}>{a.icon} {a.label}</option>
+              ))}
+            </select>
+          </div>
+          <div className="field-row">
+            <label className="field-label">Tipo</label>
+            <select value={form.tipo} onChange={e => setForm(f => ({ ...f, tipo: e.target.value }))}>
+              {WIKI_TIPOS.map(t => (
+                <option key={t.id} value={t.id}>{t.icon} {t.label}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+        <div className="field-row">
+          <label className="field-label">Contenido</label>
+          <textarea value={form.contenido} onChange={e => setForm(f => ({ ...f, contenido: e.target.value }))}
+            placeholder="Escribe el contenido del artículo, instrucciones, política o proceso..."
+            style={{ height: 280, resize: "vertical", lineHeight: 1.7 }} />
+        </div>
+        <div className="field-row">
+          <label className="field-label">Tags (separados por coma)</label>
+          <input value={form.tags} onChange={e => setForm(f => ({ ...f, tags: e.target.value }))}
+            placeholder="Ej: meli, conductor, validación" />
+        </div>
+        <div className="field-row">
+          <label className="field-label">Adjunto — Documento, PDF o Link externo</label>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <input value={form.archivo_url} onChange={e => setForm(f => ({ ...f, archivo_url: e.target.value }))}
+              placeholder="https://... o sube un archivo abajo" style={{ flex: 1 }} />
+          </div>
+          <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 10 }}>
+            <label style={{ cursor: "pointer", background: "#f0f2f5", border: "0.5px solid #e4e7ec", borderRadius: 8,
+              padding: "7px 14px", fontSize: 12, fontWeight: 600, color: "#444", display: "inline-flex", alignItems: "center", gap: 6 }}>
+              {subiendo ? "Subiendo..." : "📎 Subir archivo"}
+              <input type="file" style={{ display: "none" }} accept=".pdf,.doc,.docx,.png,.jpg,.jpeg,.xlsx,.pptx"
+                onChange={e => e.target.files[0] && subirArchivo(e.target.files[0])} />
+            </label>
+            {form.archivo_url && (
+              <a href={form.archivo_url} target="_blank" rel="noreferrer"
+                style={{ fontSize: 12, color: "#1a3a6b", fontWeight: 600 }}>👁 Ver archivo</a>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function WikiDetalle({ articulo, onVolver, onEditar, onEliminar, usuario }) {
+  const [pregunta, setPregunta] = useState("");
+  const [respuesta, setRespuesta] = useState(null);
+  const [preguntando, setPreguntando] = useState(false);
+  const cfg = WIKI_TIPO_CFG[articulo.tipo] || WIKI_TIPO_CFG.articulo;
+  const area = WIKI_AREAS.find(a => a.id === articulo.area);
+
+  const preguntarABiggy = async () => {
+    if (!pregunta.trim()) return;
+    setPreguntando(true);
+    setRespuesta(null);
+    try {
+      const resp = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-20250514",
+          max_tokens: 1000,
+          system: `Eres Biggy, el asistente de BigTicket México. Responde preguntas basándote ÚNICAMENTE en el siguiente artículo de la wiki interna. Si la respuesta no está en el artículo, dilo claramente.\n\nARTÍCULO: "${articulo.titulo}"\nÁREA: ${area?.label || articulo.area}\n\nCONTENIDO:\n${articulo.contenido || "(Sin contenido de texto — ver archivo adjunto)"}`,
+          messages: [{ role: "user", content: pregunta }]
+        })
+      });
+      const data = await resp.json();
+      setRespuesta(data.content?.[0]?.text || "Sin respuesta");
+    } catch (e) {
+      setRespuesta("Error al consultar a Biggy: " + e.message);
+    } finally {
+      setPreguntando(false);
+    }
+  };
+
+  return (
+    <div style={{ maxWidth: 860, margin: "0 auto" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 24 }}>
+        <button className="btn-back" onClick={onVolver}>← Volver</button>
+        <div style={{ flex: 1 }} />
+        {usuario.rol === "superadmin" && (
+          <>
+            <button className="btn-blue" onClick={() => onEditar(articulo)} style={{ padding: "7px 14px", fontSize: 12 }}>✏️ Editar</button>
+            <button onClick={() => onEliminar(articulo)} style={{ background: "#fee2e2", color: "#c0392b", border: "1px solid #fca5a5", borderRadius: 10, padding: "7px 14px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>🗑 Eliminar</button>
+          </>
+        )}
+      </div>
+
+      <div className="form-card" style={{ marginBottom: 16 }}>
+        <div style={{ display: "flex", alignItems: "flex-start", gap: 16, marginBottom: 16 }}>
+          <div style={{ width: 48, height: 48, borderRadius: 12, background: cfg.bg, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22, flexShrink: 0 }}>
+            {cfg.icon}
+          </div>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 20, fontWeight: 700, color: "#1a1a1a", marginBottom: 6 }}>{articulo.titulo}</div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <span style={{ fontSize: 11, fontWeight: 600, padding: "3px 10px", borderRadius: 20, background: cfg.bg, color: cfg.color }}>{cfg.icon} {WIKI_TIPOS.find(t => t.id === articulo.tipo)?.label || articulo.tipo}</span>
+              <span style={{ fontSize: 11, fontWeight: 600, padding: "3px 10px", borderRadius: 20, background: "#f0f2f5", color: "#555" }}>{area?.icon} {area?.label}</span>
+              {articulo.tags?.map(tag => (
+                <span key={tag} style={{ fontSize: 11, padding: "3px 10px", borderRadius: 20, background: "#eef2ff", color: "#1a3a6b" }}>#{tag}</span>
+              ))}
+            </div>
+          </div>
+        </div>
+        <div style={{ fontSize: 11, color: "#aaa", marginBottom: articulo.contenido ? 16 : 0 }}>
+          Por {articulo.autor || "—"} · {new Date(articulo.updated_at || articulo.created_at).toLocaleDateString("es-MX", { day: "2-digit", month: "short", year: "numeric" })}
+        </div>
+        {articulo.contenido && (
+          <div style={{ fontSize: 14, color: "#333", lineHeight: 1.8, whiteSpace: "pre-wrap", borderTop: "0.5px solid #e4e7ec", paddingTop: 16 }}>
+            {articulo.contenido}
+          </div>
+        )}
+        {articulo.archivo_url && (
+          <div style={{ marginTop: 16, borderTop: "0.5px solid #e4e7ec", paddingTop: 16 }}>
+            <div style={{ fontSize: 12, color: "#888", marginBottom: 8, fontWeight: 600 }}>ARCHIVO ADJUNTO</div>
+            {articulo.archivo_url.match(/\.(jpg|jpeg|png|gif|webp)$/i) ? (
+              <img src={articulo.archivo_url} alt={articulo.titulo} style={{ maxWidth: "100%", borderRadius: 10, border: "0.5px solid #e4e7ec" }} />
+            ) : (
+              <a href={articulo.archivo_url} target="_blank" rel="noreferrer"
+                style={{ display: "inline-flex", alignItems: "center", gap: 8, background: "#f0f2f5", border: "0.5px solid #e4e7ec", borderRadius: 10, padding: "10px 16px", fontSize: 13, color: "#1a3a6b", fontWeight: 600, textDecoration: "none" }}>
+                📎 Ver / Descargar documento
+              </a>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Biggy pregunta */}
+      <div className="form-card" style={{ background: "linear-gradient(135deg, #fff7ed, #fff)" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
+          <img src="https://psvdtgjvognbmxfvqbaa.supabase.co/storage/v1/object/public/assets/Don_B1.jpeg"
+            alt="Biggy" style={{ width: 36, height: 36, borderRadius: "50%", objectFit: "cover", border: "2px solid #F47B20" }} />
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 700, color: "#1a1a1a" }}>Pregúntale a Biggy</div>
+            <div style={{ fontSize: 11, color: "#888" }}>Responderá basándose en este artículo</div>
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <input value={pregunta} onChange={e => setPregunta(e.target.value)}
+            onKeyDown={e => e.key === "Enter" && preguntarABiggy()}
+            placeholder="¿Cuáles son los pasos para...?" style={{ flex: 1 }} />
+          <button className="btn-orange" onClick={preguntarABiggy} disabled={preguntando || !pregunta.trim()}
+            style={{ whiteSpace: "nowrap", padding: "9px 16px" }}>
+            {preguntando ? "..." : "Preguntar"}
+          </button>
+        </div>
+        {preguntando && (
+          <div style={{ marginTop: 14, display: "flex", gap: 8, alignItems: "center" }}>
+            <div className="biggy-typing"><span /><span /><span /></div>
+            <span style={{ fontSize: 12, color: "#888" }}>Biggy está leyendo el artículo...</span>
+          </div>
+        )}
+        {respuesta && (
+          <div style={{ marginTop: 14, background: "#fff", border: "0.5px solid #e4e7ec", borderRadius: 12, padding: 16, fontSize: 13, color: "#333", lineHeight: 1.7, whiteSpace: "pre-wrap" }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: "#F47B20", marginBottom: 8 }}>💬 BIGGY RESPONDE</div>
+            {respuesta}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ModuloWiki({ usuario }) {
+  const [articulos, setArticulos] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [areaFiltro, setAreaFiltro] = useState("todos");
+  const [busqueda, setBusqueda] = useState("");
+  const [vista, setVista] = useState("grid"); // grid | detalle | editor
+  const [seleccionado, setSeleccionado] = useState(null);
+  const [editando, setEditando] = useState(null);
+  const [preguntaGlobal, setPreguntaGlobal] = useState("");
+  const [respuestaGlobal, setRespuestaGlobal] = useState(null);
+  const [preguntando, setPreguntando] = useState(false);
+
+  useEffect(() => { cargar(); }, []);
+
+  const cargar = async () => {
+    setLoading(true);
+    const { data } = await sb.from("wiki_articulos").select("*").order("updated_at", { ascending: false });
+    setArticulos(data || []);
+    setLoading(false);
+  };
+
+  const eliminar = async (art) => {
+    if (!window.confirm(`¿Eliminar "${art.titulo}"?`)) return;
+    await sb.from("wiki_articulos").delete().eq("id", art.id);
+    setVista("grid");
+    await cargar();
+  };
+
+  const preguntarBiggyGlobal = async () => {
+    if (!preguntaGlobal.trim()) return;
+    setPreguntando(true);
+    setRespuestaGlobal(null);
+    try {
+      // Buscar artículos relevantes por texto
+      const relevantes = articulos
+        .filter(a => {
+          const q = preguntaGlobal.toLowerCase();
+          return (a.titulo + " " + (a.contenido || "") + " " + (a.tags || []).join(" ")).toLowerCase().includes(q.split(" ")[0]);
+        })
+        .slice(0, 5);
+
+      const contexto = relevantes.length > 0
+        ? relevantes.map(a => `## ${a.titulo}\n${a.contenido || "(ver archivo adjunto)"}`).join("\n\n---\n\n")
+        : articulos.slice(0, 10).map(a => `## ${a.titulo}\n${a.contenido || "(ver archivo adjunto)"}`).join("\n\n---\n\n");
+
+      const resp = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-20250514",
+          max_tokens: 1200,
+          system: `Eres Biggy, el asistente interno de BigTicket México. Responde ÚNICAMENTE usando los artículos de la wiki que se te proporcionan. Si la información no está en la wiki, di "No tenemos documentado esto aún" y sugiere crear el artículo. Siempre cita el título del artículo que usaste.\n\nWIKI DISPONIBLE:\n${contexto}`,
+          messages: [{ role: "user", content: preguntaGlobal }]
+        })
+      });
+      const data = await resp.json();
+      setRespuestaGlobal(data.content?.[0]?.text || "Sin respuesta");
+    } catch (e) {
+      setRespuestaGlobal("Error: " + e.message);
+    } finally {
+      setPreguntando(false);
+    }
+  };
+
+  const articulosFiltrados = articulos.filter(a => {
+    const matchArea = areaFiltro === "todos" || a.area === areaFiltro;
+    const q = busqueda.toLowerCase();
+    const matchBusqueda = !q || (a.titulo + " " + (a.contenido || "") + " " + (a.tags || []).join(" ")).toLowerCase().includes(q);
+    return matchArea && matchBusqueda;
+  });
+
+  if (vista === "editor") return (
+    <div className="pg">
+      <WikiEditor articulo={editando} usuario={usuario}
+        onSave={async () => { await cargar(); setVista("grid"); setEditando(null); }}
+        onCancel={() => { setVista("grid"); setEditando(null); }} />
+    </div>
+  );
+
+  if (vista === "detalle" && seleccionado) return (
+    <div className="pg">
+      <WikiDetalle articulo={seleccionado} usuario={usuario}
+        onVolver={() => setVista("grid")}
+        onEditar={(a) => { setEditando(a); setVista("editor"); }}
+        onEliminar={eliminar} />
+    </div>
+  );
+
+  return (
+    <div className="pg">
+      {/* Header */}
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 24, flexWrap: "wrap", gap: 12 }}>
+        <div>
+          <div className="sec-title">📚 BigWiki</div>
+          <div className="sec-sub">Enciclopedia interna de BigTicket — {articulos.length} artículos documentados</div>
+        </div>
+        {usuario.rol === "superadmin" && (
+          <button className="btn-orange" onClick={() => { setEditando(null); setVista("editor"); }}>
+            + Nuevo artículo
+          </button>
+        )}
+      </div>
+
+      {/* Biggy pregunta global */}
+      <div className="form-card" style={{ background: "linear-gradient(135deg, #fff7ed, #fff)", marginBottom: 24 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
+          <img src="https://psvdtgjvognbmxfvqbaa.supabase.co/storage/v1/object/public/assets/Don_B1.jpeg"
+            alt="Biggy" style={{ width: 40, height: 40, borderRadius: "50%", objectFit: "cover", border: "2px solid #F47B20" }} />
+          <div>
+            <div style={{ fontSize: 14, fontWeight: 700 }}>Pregúntale a Biggy</div>
+            <div style={{ fontSize: 12, color: "#888" }}>Busca en toda la wiki y responde con fuentes</div>
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <input value={preguntaGlobal} onChange={e => setPreguntaGlobal(e.target.value)}
+            onKeyDown={e => e.key === "Enter" && preguntarBiggyGlobal()}
+            placeholder="¿Cómo se hace la certificación con Meli? ¿Cuál es la política de...?" style={{ flex: 1 }} />
+          <button className="btn-orange" onClick={preguntarBiggyGlobal} disabled={preguntando || !preguntaGlobal.trim()}>
+            {preguntando ? "..." : "Preguntar"}
+          </button>
+        </div>
+        {preguntando && (
+          <div style={{ marginTop: 12, display: "flex", gap: 8, alignItems: "center" }}>
+            <div className="biggy-typing"><span /><span /><span /></div>
+            <span style={{ fontSize: 12, color: "#888" }}>Biggy está buscando en la wiki...</span>
+          </div>
+        )}
+        {respuestaGlobal && (
+          <div style={{ marginTop: 14, background: "#fff", border: "0.5px solid #e4e7ec", borderRadius: 12, padding: 16, fontSize: 13, lineHeight: 1.7, color: "#333", whiteSpace: "pre-wrap" }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: "#F47B20", marginBottom: 8 }}>💬 BIGGY RESPONDE</div>
+            {respuestaGlobal}
+          </div>
+        )}
+      </div>
+
+      {/* Filtros */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 20, flexWrap: "wrap", alignItems: "center" }}>
+        <input value={busqueda} onChange={e => setBusqueda(e.target.value)}
+          placeholder="🔍 Buscar artículos..." style={{ width: 240 }} />
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          {WIKI_AREAS.map(area => (
+            <button key={area.id} onClick={() => setAreaFiltro(area.id)}
+              style={{ padding: "6px 12px", borderRadius: 20, border: "0.5px solid", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "'Geist',sans-serif",
+                background: areaFiltro === area.id ? "#1a3a6b" : "#fff",
+                color: areaFiltro === area.id ? "#fff" : "#666",
+                borderColor: areaFiltro === area.id ? "#1a3a6b" : "#e4e7ec" }}>
+              {area.icon} {area.label}
+              {area.id !== "todos" && <span style={{ marginLeft: 4, opacity: 0.7 }}>({articulos.filter(a => a.area === area.id).length})</span>}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Grid de artículos */}
+      {loading ? <div className="loading">Cargando wiki...</div>
+        : articulosFiltrados.length === 0 ? (
+          <div className="empty">
+            <div style={{ fontSize: 40, marginBottom: 12 }}>📚</div>
+            <div style={{ fontWeight: 600, marginBottom: 8 }}>
+              {busqueda || areaFiltro !== "todos" ? "No hay artículos con ese filtro" : "La wiki está vacía"}
+            </div>
+            <div style={{ fontSize: 12 }}>
+              {usuario.rol === "superadmin" ? "Crea el primer artículo con el botón de arriba" : "Pronto habrá contenido aquí"}
+            </div>
+          </div>
+        ) : (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 16 }}>
+            {articulosFiltrados.map(art => {
+              const cfg = WIKI_TIPO_CFG[art.tipo] || WIKI_TIPO_CFG.articulo;
+              const area = WIKI_AREAS.find(a => a.id === art.area);
+              return (
+                <div key={art.id} onClick={() => { setSeleccionado(art); setVista("detalle"); }}
+                  style={{ background: "#fff", border: "0.5px solid #e4e7ec", borderRadius: 14, padding: 18, cursor: "pointer", transition: "box-shadow 0.15s, transform 0.1s" }}
+                  onMouseEnter={e => { e.currentTarget.style.boxShadow = "0 4px 16px rgba(0,0,0,0.08)"; e.currentTarget.style.transform = "translateY(-2px)"; }}
+                  onMouseLeave={e => { e.currentTarget.style.boxShadow = "none"; e.currentTarget.style.transform = "none"; }}>
+                  <div style={{ display: "flex", alignItems: "flex-start", gap: 12, marginBottom: 12 }}>
+                    <div style={{ width: 40, height: 40, borderRadius: 10, background: cfg.bg, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, flexShrink: 0 }}>
+                      {cfg.icon}
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 14, fontWeight: 700, color: "#1a1a1a", marginBottom: 4, lineHeight: 1.3 }}>{art.titulo}</div>
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                        <span style={{ fontSize: 10, fontWeight: 600, padding: "2px 8px", borderRadius: 20, background: cfg.bg, color: cfg.color }}>{cfg.icon} {WIKI_TIPOS.find(t => t.id === art.tipo)?.label}</span>
+                        <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 20, background: "#f0f2f5", color: "#666" }}>{area?.icon} {area?.label}</span>
+                      </div>
+                    </div>
+                  </div>
+                  {art.contenido && (
+                    <div style={{ fontSize: 12, color: "#888", lineHeight: 1.5, marginBottom: 10, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>
+                      {art.contenido}
+                    </div>
+                  )}
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 8 }}>
+                    <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                      {art.tags?.slice(0, 3).map(tag => (
+                        <span key={tag} style={{ fontSize: 10, padding: "2px 6px", borderRadius: 10, background: "#eef2ff", color: "#1a3a6b" }}>#{tag}</span>
+                      ))}
+                    </div>
+                    <div style={{ fontSize: 10, color: "#bbb" }}>
+                      {new Date(art.updated_at || art.created_at).toLocaleDateString("es-MX", { day: "2-digit", month: "short" })}
+                    </div>
+                  </div>
+                  {art.archivo_url && (
+                    <div style={{ marginTop: 8, fontSize: 11, color: "#10B981", fontWeight: 600 }}>📎 Tiene archivo adjunto</div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+    </div>
+  );
+}
+
+
 export default function App() {
   const [usuario, setUsuario] = useState(() => {
     try {
@@ -2798,7 +3283,8 @@ export default function App() {
             <LogiFlowApp />
           </div>
         )}
-        {["wiki", "checklist", "kpis", "maestro"].includes(tab) && (
+        {tab === "wiki" && <ModuloWiki usuario={usuario} />}
+        {["checklist", "kpis", "maestro"].includes(tab) && (
           <div className="pg">
             <div style={{ textAlign: "center", padding: "60px 20px" }}>
               <div style={{ fontSize: 48, marginBottom: 16 }}>🚧</div>
