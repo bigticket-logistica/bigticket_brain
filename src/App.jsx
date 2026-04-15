@@ -2751,30 +2751,67 @@ const WIKI_TIPO_CFG = {
 
 function WikiEditor({ articulo, onSave, onCancel, usuario }) {
   const [form, setForm] = useState({
-    titulo: articulo?.titulo || "",
-    contenido: articulo?.contenido || "",
-    area: articulo?.area || "operaciones",
-    tipo: articulo?.tipo || "articulo",
+    titulo:      articulo?.titulo      || "",
+    version:     articulo?.version     || "1.0",
+    responsable: articulo?.responsable || "",
+    area:        articulo?.area        || "operaciones",
+    tipo:        articulo?.tipo        || "politica",
+    tags:        articulo?.tags?.join(", ") || "",
+    que:         articulo?.que         || "",
+    porque:      articulo?.porque      || "",
+    quien:       articulo?.quien       || "",
+    como:        articulo?.como        || "",
+    contenido:   articulo?.contenido   || "",
     archivo_url: articulo?.archivo_url || "",
-    tags: articulo?.tags?.join(", ") || "",
   });
-  const [guardando, setGuardando] = useState(false);
-  const [subiendo, setSubiendo] = useState(false);
+  const [guardando,  setGuardando]  = useState(false);
+  const [subiendo,   setSubiendo]   = useState(false);
+  const [biggyField, setBiggyField] = useState(null); // campo activo para Biggy
+  const [biggyPrompt,setBiggyPrompt]= useState("");
+  const [biggyLoading,setBiggyLoading]=useState(false);
+  const [modoDoc, setModoDoc] = useState(
+    articulo?.que ? "documento" : "simple"
+  );
 
   const subirArchivo = async (file) => {
     setSubiendo(true);
     try {
-      const ext = file.name.split(".").pop();
       const path = `wiki/${Date.now()}_${file.name.replace(/\s+/g, "_")}`;
       const { error } = await sb.storage.from("wiki-docs").upload(path, file, { upsert: true, contentType: file.type });
       if (error) throw error;
       const { data } = sb.storage.from("wiki-docs").getPublicUrl(path);
       setForm(f => ({ ...f, archivo_url: data.publicUrl }));
-    } catch (e) {
-      alert("Error subiendo archivo: " + e.message);
-    } finally {
-      setSubiendo(false);
-    }
+    } catch (e) { alert("Error subiendo: " + e.message); }
+    finally { setSubiendo(false); }
+  };
+
+  const pedirABiggy = async (campo, instruccion) => {
+    if (!instruccion.trim()) return;
+    setBiggyLoading(true);
+    try {
+      const contexto = {
+        titulo: form.titulo, area: form.area, tipo: form.tipo,
+        que: form.que, porque: form.porque, quien: form.quien, como: form.como,
+        contenido: form.contenido,
+      };
+      const resp = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-20250514",
+          max_tokens: 800,
+          system: `Eres Biggy, asistente de contenido de BigTicket. Ayudas a redactar documentos internos profesionales: políticas, instructivos, procedimientos. Escribe en español, tono corporativo claro y directo. Responde SOLO con el texto del campo solicitado, sin explicaciones ni formato extra.
+
+Contexto del documento:
+${JSON.stringify(contexto, null, 2)}`,
+          messages: [{ role: "user", content: `Redacta o mejora el campo "${campo}" del documento. Instrucción: ${instruccion}` }]
+        })
+      });
+      const data = await resp.json();
+      const texto = data.content?.[0]?.text || "";
+      setForm(f => ({ ...f, [campo]: f[campo] ? f[campo] + "\n\n" + texto : texto }));
+    } catch(e) { alert("Error: " + e.message); }
+    finally { setBiggyLoading(false); setBiggyField(null); setBiggyPrompt(""); }
   };
 
   const guardar = async () => {
@@ -2793,32 +2830,77 @@ function WikiEditor({ articulo, onSave, onCancel, usuario }) {
         await sb.from("wiki_articulos").insert({ ...payload, created_at: new Date().toISOString() });
       }
       onSave();
-    } catch (e) {
-      alert("Error guardando: " + e.message);
-    } finally {
-      setGuardando(false);
-    }
+    } catch (e) { alert("Error guardando: " + e.message); }
+    finally { setGuardando(false); }
   };
 
+  // Componente de campo con Biggy
+  const CampoConBiggy = ({ campo, label, placeholder, alto = 120 }) => (
+    <div className="field-row">
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
+        <label className="field-label" style={{ margin: 0 }}>{label}</label>
+        <button onClick={() => setBiggyField(biggyField === campo ? null : campo)}
+          style={{ background: biggyField === campo ? "#F47B20" : "#fff7ed", border: `1px solid ${biggyField === campo ? "#F47B20" : "#fde8cc"}`,
+            borderRadius: 8, padding: "3px 10px", fontSize: 11, fontWeight: 700, cursor: "pointer",
+            color: biggyField === campo ? "#fff" : "#F47B20", display: "flex", alignItems: "center", gap: 5 }}>
+          <img src="https://psvdtgjvognbmxfvqbaa.supabase.co/storage/v1/object/public/assets/Don_B1.jpeg"
+            style={{ width: 16, height: 16, borderRadius: "50%", objectFit: "cover" }} alt="" />
+          Biggy
+        </button>
+      </div>
+      <textarea value={form[campo]} onChange={e => setForm(f => ({ ...f, [campo]: e.target.value }))}
+        placeholder={placeholder} style={{ height: alto, resize: "vertical", lineHeight: 1.7 }} />
+      {biggyField === campo && (
+        <div style={{ marginTop: 8, background: "#fff7ed", border: "1px solid #fde8cc", borderRadius: 10, padding: 12 }}>
+          <div style={{ fontSize: 11, color: "#F47B20", fontWeight: 700, marginBottom: 6 }}>
+            💬 Biggy te ayuda con "{label}"
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <input value={biggyPrompt} onChange={e => setBiggyPrompt(e.target.value)}
+              onKeyDown={e => e.key === "Enter" && pedirABiggy(campo, biggyPrompt)}
+              placeholder={`Ej: Explica en 3 puntos clave...`}
+              style={{ flex: 1, fontSize: 12 }} />
+            <button className="btn-orange" onClick={() => pedirABiggy(campo, biggyPrompt)}
+              disabled={biggyLoading || !biggyPrompt.trim()} style={{ padding: "7px 14px", fontSize: 12, whiteSpace: "nowrap" }}>
+              {biggyLoading ? "..." : "✨ Generar"}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+
   return (
-    <div style={{ maxWidth: 800, margin: "0 auto" }}>
+    <div style={{ maxWidth: 900, margin: "0 auto" }}>
+      {/* Header */}
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 24 }}>
         <button className="btn-back" onClick={onCancel}>← Volver</button>
         <div style={{ flex: 1 }}>
-          <div className="sec-title">{articulo?.id ? "Editar artículo" : "Nuevo artículo"}</div>
+          <div className="sec-title">{articulo?.id ? "Editar documento" : "Nuevo documento"}</div>
+          <div className="sec-sub" style={{ margin: 0 }}>Biggy puede ayudarte a redactar cada sección</div>
         </div>
-        <button className="btn-blue" onClick={guardar} disabled={guardando}>
-          {guardando ? "Guardando..." : "💾 Guardar"}
-        </button>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button onClick={() => setModoDoc(modoDoc === "documento" ? "simple" : "documento")}
+            style={{ background: "#f0f2f5", border: "0.5px solid #e4e7ec", borderRadius: 10, padding: "9px 14px",
+              fontSize: 12, cursor: "pointer", fontWeight: 600, color: "#555" }}>
+            {modoDoc === "documento" ? "📝 Modo simple" : "📋 Modo documento"}
+          </button>
+          <button className="btn-blue" onClick={guardar} disabled={guardando}>
+            {guardando ? "Guardando..." : "💾 Guardar"}
+          </button>
+        </div>
       </div>
 
-      <div className="form-card">
+      {/* Metadatos */}
+      <div className="form-card" style={{ marginBottom: 16 }}>
+        <div className="form-title">📌 Información del documento</div>
         <div className="field-row">
           <label className="field-label">Título *</label>
           <input value={form.titulo} onChange={e => setForm(f => ({ ...f, titulo: e.target.value }))}
-            placeholder="Ej: Proceso de certificación de conductores" style={{ fontSize: 15, fontWeight: 600 }} />
+            placeholder="Ej: Política de Compensación y Control de Movilización"
+            style={{ fontSize: 15, fontWeight: 600 }} />
         </div>
-        <div className="two-col">
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 12 }}>
           <div className="field-row">
             <label className="field-label">Área</label>
             <select value={form.area} onChange={e => setForm(f => ({ ...f, area: e.target.value }))}>
@@ -2830,42 +2912,88 @@ function WikiEditor({ articulo, onSave, onCancel, usuario }) {
           <div className="field-row">
             <label className="field-label">Tipo</label>
             <select value={form.tipo} onChange={e => setForm(f => ({ ...f, tipo: e.target.value }))}>
-              {WIKI_TIPOS.map(t => (
-                <option key={t.id} value={t.id}>{t.icon} {t.label}</option>
-              ))}
+              {WIKI_TIPOS.map(t => <option key={t.id} value={t.id}>{t.icon} {t.label}</option>)}
             </select>
           </div>
-        </div>
-        <div className="field-row">
-          <label className="field-label">Contenido</label>
-          <textarea value={form.contenido} onChange={e => setForm(f => ({ ...f, contenido: e.target.value }))}
-            placeholder="Escribe el contenido del artículo, instrucciones, política o proceso..."
-            style={{ height: 280, resize: "vertical", lineHeight: 1.7 }} />
+          <div className="field-row">
+            <label className="field-label">Versión</label>
+            <input value={form.version} onChange={e => setForm(f => ({ ...f, version: e.target.value }))}
+              placeholder="1.0" />
+          </div>
+          <div className="field-row">
+            <label className="field-label">Responsable</label>
+            <input value={form.responsable} onChange={e => setForm(f => ({ ...f, responsable: e.target.value }))}
+              placeholder="Gerencia de Operaciones" />
+          </div>
         </div>
         <div className="field-row">
           <label className="field-label">Tags (separados por coma)</label>
           <input value={form.tags} onChange={e => setForm(f => ({ ...f, tags: e.target.value }))}
-            placeholder="Ej: meli, conductor, validación" />
+            placeholder="Ej: compensación, vehículo, operaciones" />
         </div>
-        <div className="field-row">
-          <label className="field-label">Adjunto — Documento, PDF o Link externo</label>
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <input value={form.archivo_url} onChange={e => setForm(f => ({ ...f, archivo_url: e.target.value }))}
-              placeholder="https://... o sube un archivo abajo" style={{ flex: 1 }} />
+      </div>
+
+      {/* Contenido */}
+      {modoDoc === "documento" ? (
+        <div>
+          <div style={{ background: "#eef2ff", border: "0.5px solid #c7d2fe", borderRadius: 12, padding: "12px 16px", marginBottom: 16, fontSize: 12, color: "#1a3a6b" }}>
+            📋 <b>Modo Documento</b> — Sigue la estructura estándar de BigTicket: <b>¿Qué? · ¿Por qué? · ¿Quién y cuándo? · ¿Cómo?</b> · Haz clic en <b>Biggy</b> en cada sección para que te ayude a redactar.
           </div>
-          <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 10 }}>
-            <label style={{ cursor: "pointer", background: "#f0f2f5", border: "0.5px solid #e4e7ec", borderRadius: 8,
-              padding: "7px 14px", fontSize: 12, fontWeight: 600, color: "#444", display: "inline-flex", alignItems: "center", gap: 6 }}>
-              {subiendo ? "Subiendo..." : "📎 Subir archivo"}
-              <input type="file" style={{ display: "none" }} accept=".pdf,.doc,.docx,.png,.jpg,.jpeg,.xlsx,.pptx"
-                onChange={e => e.target.files[0] && subirArchivo(e.target.files[0])} />
-            </label>
-            {form.archivo_url && (
-              <a href={form.archivo_url} target="_blank" rel="noreferrer"
-                style={{ fontSize: 12, color: "#1a3a6b", fontWeight: 600 }}>👁 Ver archivo</a>
-            )}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+            <div className="form-card">
+              <div style={{ fontSize: 13, fontWeight: 700, color: "#002f5d", marginBottom: 12 }}>❓ ¿QUÉ?</div>
+              <CampoConBiggy campo="que" label="Define qué es este documento / proceso" placeholder="Describe qué regula, qué establece o qué define este documento..." alto={160} />
+            </div>
+            <div className="form-card">
+              <div style={{ fontSize: 13, fontWeight: 700, color: "#002f5d", marginBottom: 12 }}>💡 ¿POR QUÉ?</div>
+              <CampoConBiggy campo="porque" label="Justificación y objetivos" placeholder="Explica por qué existe este proceso, qué problema resuelve..." alto={160} />
+            </div>
+            <div className="form-card">
+              <div style={{ fontSize: 13, fontWeight: 700, color: "#002f5d", marginBottom: 12 }}>👤 ¿QUIÉN Y CUÁNDO?</div>
+              <CampoConBiggy campo="quien" label="Roles, responsables y temporalidad" placeholder="Define quiénes aplican este proceso, cuándo y en qué condiciones..." alto={160} />
+            </div>
+            <div className="form-card">
+              <div style={{ fontSize: 13, fontWeight: 700, color: "#002f5d", marginBottom: 12 }}>⚙️ ¿CÓMO?</div>
+              <CampoConBiggy campo="como" label="Pasos, herramientas y procedimiento" placeholder="Describe paso a paso cómo se ejecuta el proceso..." alto={160} />
+            </div>
+          </div>
+          <div className="form-card" style={{ marginTop: 0 }}>
+            <div className="form-title">📊 Contenido adicional (KPIs, tablas, notas)</div>
+            <CampoConBiggy campo="contenido" label="Información complementaria" placeholder="KPIs, evolución del modelo, flujos rápidos, notas..." alto={140} />
           </div>
         </div>
+      ) : (
+        <div className="form-card">
+          <div className="form-title">📝 Contenido</div>
+          <CampoConBiggy campo="contenido" label="Escribe el contenido completo" placeholder="Escribe el contenido del artículo, instrucciones o política..." alto={320} />
+        </div>
+      )}
+
+      {/* Adjuntos */}
+      <div className="form-card" style={{ marginTop: 16 }}>
+        <div className="form-title">📎 Archivos adjuntos</div>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <input value={form.archivo_url} onChange={e => setForm(f => ({ ...f, archivo_url: e.target.value }))}
+            placeholder="https://... o sube un archivo" style={{ flex: 1 }} />
+          <label style={{ cursor: "pointer", background: "#f0f2f5", border: "0.5px solid #e4e7ec", borderRadius: 8,
+            padding: "9px 14px", fontSize: 12, fontWeight: 600, color: "#444", whiteSpace: "nowrap",
+            display: "inline-flex", alignItems: "center", gap: 6 }}>
+            {subiendo ? "Subiendo..." : "📎 Subir archivo"}
+            <input type="file" style={{ display: "none" }} accept=".pdf,.doc,.docx,.png,.jpg,.jpeg,.xlsx,.pptx"
+              onChange={e => e.target.files[0] && subirArchivo(e.target.files[0])} />
+          </label>
+          {form.archivo_url && (
+            <a href={form.archivo_url} target="_blank" rel="noreferrer"
+              style={{ fontSize: 12, color: "#1a3a6b", fontWeight: 600, whiteSpace: "nowrap" }}>👁 Ver</a>
+          )}
+        </div>
+      </div>
+
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 20 }}>
+        <button onClick={onCancel} style={{ background: "#f0f2f5", border: "0.5px solid #e4e7ec", borderRadius: 10, padding: "10px 20px", fontSize: 13, cursor: "pointer", color: "#555" }}>Cancelar</button>
+        <button className="btn-blue" onClick={guardar} disabled={guardando} style={{ minWidth: 140 }}>
+          {guardando ? "Guardando..." : "💾 Guardar documento"}
+        </button>
       </div>
     </div>
   );
