@@ -579,7 +579,17 @@ function KanbanBoard({ items, onCardClick }) {
                     </span>
                   )}
                 </div>
-                <div style={{ fontSize: 13, fontWeight: 600, color: "#1a1a1a", marginBottom: 2 }}>{card.nombre || "Sin nombre"}</div>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 2 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: "#1a1a1a", flex: 1 }}>{card.nombre || "Sin nombre"}</div>
+                  <span style={{
+                    fontSize: 9, fontWeight: 700, padding: "2px 6px", borderRadius: 6, flexShrink: 0,
+                    background: card.origen === "crm" ? "#ede9fe" : "#e0f2fe",
+                    color: card.origen === "crm" ? "#6d28d9" : "#0369a1",
+                    border: card.origen === "crm" ? "1px solid #c4b5fd" : "1px solid #7dd3fc",
+                  }}>
+                    {card.origen === "crm" ? "🎯 CRM" : "⚙️ Pipefy"}
+                  </span>
+                </div>
                 <div style={{ fontSize: 11, color: "#888" }}>{card.svc || "—"} · {card.puesto || "—"}</div>
                 <div style={{ fontSize: 10, color: "#aaa", marginTop: 4 }}>CURP: {card.curp?.substring(0, 10) || "—"}...</div>
                 {card.claude_recomendacion && (
@@ -764,7 +774,17 @@ function ModuloCertificaciones() {
                 {item.nombre?.charAt(0)?.toUpperCase() || "?"}
               </div>
               <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 14, fontWeight: 600 }}>{item.nombre}</div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <div style={{ fontSize: 14, fontWeight: 600 }}>{item.nombre}</div>
+                  <span style={{
+                    fontSize: 9, fontWeight: 700, padding: "2px 6px", borderRadius: 6,
+                    background: item.origen === "crm" ? "#ede9fe" : "#e0f2fe",
+                    color: item.origen === "crm" ? "#6d28d9" : "#0369a1",
+                    border: item.origen === "crm" ? "1px solid #c4b5fd" : "1px solid #7dd3fc",
+                  }}>
+                    {item.origen === "crm" ? "🎯 CRM" : "⚙️ Pipefy"}
+                  </span>
+                </div>
                 <div style={{ fontSize: 12, color: "#888" }}>{item.svc} · {item.puesto} · {item.curp}</div>
               </div>
               {item.claude_recomendacion && (
