@@ -637,7 +637,7 @@ function ModuloCertificaciones() {
       // 1. Onboardings completos de México con documentos
       const { data: onboardings, error: errOnb } = await sb
         .from("onboarding_terceros")
-        .select("*, leads(id, nombre, etapa, curp, email, telefono, zona)")
+        .select("*, leads(id, nombre, etapa, curp, email, telefono, zona, region_estado)")
         .eq("pais", "México")
         .not("url_ine", "is", null)
         .not("url_curp", "is", null)
@@ -672,7 +672,7 @@ function ModuloCertificaciones() {
         ine:          o.rut          || "",
         licencia:     o.licencia     || "",
         puesto:       o.puesto       || "",
-        svc:          o.leads?.zona  || "",
+        svc:          (o.leads?.region_estado || o.leads?.zona || "").split(" ")[0],
         email:        o.email        || o.leads?.email     || "",
         telefono:     o.telefono     || o.leads?.telefono  || "",
         url_ine:      o.url_ine      || "",
@@ -2589,86 +2589,64 @@ function LogiFlowApp() {
   ];
 
   return (
-    <div style={{display:"flex",height:"100vh",background:"#f0f2f5",color:"#1a1a1a",overflow:"hidden",fontFamily:"'DM Mono','Fira Code',monospace"}}>
-      <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Outfit:wght@400;600;700;800;900&display=swap');
-        *{box-sizing:border-box;margin:0;padding:0;}
-        ::-webkit-scrollbar{width:4px;height:4px}::-webkit-scrollbar-track{background:#f0f2f5}::-webkit-scrollbar-thumb{background:#d0d5dd;border-radius:4px}
-        input,textarea,select{outline:none;font-family:inherit;}
-        @keyframes spin{to{transform:rotate(360deg)}}@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
-      `}</style>
+    <div style={{display:"flex",height:"calc(100vh - 106px)",background:"#f0f2f5",color:"#1a1a1a",overflow:"hidden",fontFamily:"'Geist',sans-serif"}}>
 
-      {/* SIDEBAR */}
+      {/* SIDEBAR CRM — estilo Brain */}
       <div style={{width:200,background:"#1a3a6b",borderRight:"1px solid #ffffff20",display:"flex",flexDirection:"column",flexShrink:0}}>
-        <div style={{padding:"20px 16px",borderBottom:"1px solid #ffffff20"}}>
-          <div style={{fontSize:20,fontWeight:900,letterSpacing:-1,fontFamily:"'Outfit',sans-serif"}}>
-            <span style={{color:"#FF6B00"}}>BIGPRO</span><span style={{color:"#ffffff"}}> FLOTA</span>
-          </div>
-          <div style={{fontSize:9,color:"#ffffff88",fontWeight:700,letterSpacing:2,marginTop:3}}>BIGPRO · CRM LIVE</div>
+        <div style={{padding:"14px 16px",borderBottom:"1px solid #ffffff20"}}>
+          <div style={{fontSize:13,fontWeight:700,color:"#fff",letterSpacing:0.5}}>📊 Prospección CRM</div>
+          <div style={{fontSize:10,color:"#ffffff66",marginTop:2}}>{leads.length} leads en total</div>
         </div>
-        <nav style={{flex:1,padding:"10px 10px"}}>
+        <nav style={{flex:1,padding:"8px"}}>
           {NAV.map(item=>(
             <button key={item.id} onClick={()=>setSeccion(item.id)}
-              style={{width:"100%",display:"flex",alignItems:"center",gap:10,padding:"9px 12px",borderRadius:8,
-                background:seccion===item.id?"#1a3a6b":"none",border:seccion===item.id?"1px solid #e4e7ec":"1px solid transparent",
-                color:seccion===item.id?"#f1f5f9":"#475569",cursor:"pointer",fontSize:12,
-                fontWeight:seccion===item.id?700:500,marginBottom:3,transition:"all .2s",textAlign:"left",fontFamily:"'Outfit',sans-serif"}}>
-              <span style={{fontSize:14,color:seccion===item.id?"#ffffff":"#aac3e8"}}>{item.icon}</span>
+              style={{width:"100%",display:"flex",alignItems:"center",gap:8,padding:"8px 10px",borderRadius:8,
+                background:seccion===item.id?"rgba(255,255,255,0.15)":"none",
+                border:"none",
+                color:seccion===item.id?"#ffffff":"#aac3e8",cursor:"pointer",fontSize:12,
+                fontWeight:seccion===item.id?700:400,marginBottom:2,transition:"all .2s",textAlign:"left",fontFamily:"'Geist',sans-serif"}}>
+              <span style={{fontSize:13}}>{item.icon}</span>
               {item.label}
-              {item.count!==undefined&&<span style={{marginLeft:"auto",background:"#3B82F622",color:"#3B82F6",fontSize:9,fontWeight:800,padding:"1px 6px",borderRadius:20}}>{item.count}</span>}
+              {item.count!==undefined&&<span style={{marginLeft:"auto",background:"#F47B2022",color:"#F47B20",fontSize:9,fontWeight:800,padding:"1px 6px",borderRadius:20}}>{item.count}</span>}
             </button>
           ))}
         </nav>
-        <div style={{padding:12,borderBottom:"1px solid #ffffff20"}}>
-          <button onClick={fetchLeads} style={{width:"100%",background:"#1a3a6b",border:"1px solid #e4e7ec",color:"#888888",borderRadius:8,padding:"7px",fontSize:11,cursor:"pointer",fontWeight:600,fontFamily:"'Outfit',sans-serif"}}>🔄 Actualizar</button>
-          {lastUpdate&&<div style={{fontSize:9,color:"#aaaaaa",textAlign:"center",marginTop:4}}>{lastUpdate.toLocaleTimeString("es-CL",{hour:"2-digit",minute:"2-digit"})}</div>}
-        </div>
-        <div style={{padding:12}}>
-          <div style={{background:"#1a3a6b",border:"1px solid #e4e7ec",borderRadius:8,padding:"8px 10px"}}>
-            <div style={{fontSize:9,color:"#aaaaaa",fontWeight:700,letterSpacing:1}}>ESTADO DB</div>
-            <div style={{display:"flex",alignItems:"center",gap:6,marginTop:4}}>
-              <div style={{width:6,height:6,borderRadius:"50%",background:error?"#EF4444":"#10B981",animation:error?"none":"pulse 2s infinite"}}/>
-              <span style={{fontSize:10,color:error?"#EF4444":"#10B981",fontWeight:700}}>{error?"Error":"Conectado"}</span>
-            </div>
+        <div style={{padding:12,borderTop:"1px solid #ffffff20"}}>
+          <div style={{display:"flex",alignItems:"center",gap:6}}>
+            <div style={{width:6,height:6,borderRadius:"50%",background:error?"#EF4444":"#10B981"}}/>
+            <span style={{fontSize:10,color:error?"#EF4444":"#aaaaaa"}}>{error?"Sin conexión":"Conectado"}</span>
           </div>
         </div>
       </div>
 
       {/* MAIN */}
       <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
-        <div style={{height:56,background:"#1a3a6b",borderBottom:"1px solid #ffffff20",display:"flex",alignItems:"center",padding:"0 20px",gap:12,flexShrink:0}}>
-          <div style={{flex:1,display:"flex",gap:10,alignItems:"center"}}>
-            {(seccion==="campana"||seccion==="libre")&&(
-              <>
-                <input value={busqueda} onChange={e=>setBusqueda(e.target.value)} placeholder="🔍 Buscar leads..."
-                  style={{background:"#ffffff",color:"#1a1a1a",border:"1px solid #e4e7ec",borderRadius:7,padding:"6px 12px",fontSize:12,width:220}}/>
-                <div style={{display:"flex",background:"#ffffff",border:"1px solid #e4e7ec",borderRadius:7,overflow:"hidden"}}>
-                  {[["pipeline","⬛ Kanban"],["lista","☰ Lista"]].map(([v,label])=>(
-                    <button key={v} onClick={()=>setVista(v)} style={{padding:"6px 12px",background:vista===v?"#F47B20":"none",border:"none",color:vista===v?"#ffffff":"#ffffffaa",cursor:"pointer",fontSize:11,fontWeight:vista===v?700:400}}>{label}</button>
-                  ))}
-                </div>
-              </>
-            )}
-            {seccion==="basedatos"&&(
-              <input value={busqueda} onChange={e=>setBusqueda(e.target.value)} placeholder="🔍 Buscar leads..."
-                style={{background:"#ffffff",color:"#1a1a1a",border:"1px solid #e4e7ec",borderRadius:7,padding:"6px 12px",fontSize:12,width:220}}/>
-            )}
-            <div style={{fontSize:11,color:"#888888"}}>
-              {seccion==="dashboard"  &&"📊 Resumen en tiempo real"}
-              {seccion==="campana"    &&`🎯 ${leadsCampana.length} leads de campaña · ordenados por fecha y puntaje`}
-              {seccion==="libre"      &&`📋 ${leadsLibre.length} leads postulación libre · ordenados por fecha`}
-              {seccion==="basedatos"  &&`🗄️ ${leadsBaseDatos.length} leads · tibios, fríos, rechazados y no calificados`}
-              {seccion==="kpis"       &&"📊 KPIs Generales"}
-              {seccion==="kpiscampana"&&"🎯 KPIs por Campaña"}
+        <div style={{background:"#fff",borderBottom:"0.5px solid #e4e7ec",padding:"10px 20px",display:"flex",alignItems:"center",gap:10,flexShrink:0}}>
+          {(seccion==="campana"||seccion==="libre"||seccion==="basedatos")&&(
+            <input value={busqueda} onChange={e=>setBusqueda(e.target.value)} placeholder="🔍 Buscar leads..."
+              style={{background:"#f8f9fa",color:"#1a1a1a",border:"0.5px solid #d0d5dd",borderRadius:8,padding:"7px 12px",fontSize:12,width:220,fontFamily:"'Geist',sans-serif"}}/>
+          )}
+          {(seccion==="campana"||seccion==="libre")&&(
+            <div style={{display:"flex",background:"#fff",border:"0.5px solid #e4e7ec",borderRadius:8,overflow:"hidden"}}>
+              {[["pipeline","Kanban"],["lista","Lista"]].map(([v,label])=>(
+                <button key={v} onClick={()=>setVista(v)} style={{padding:"7px 14px",background:vista===v?"#1a3a6b":"#fff",border:"none",color:vista===v?"#fff":"#666",cursor:"pointer",fontSize:12,fontWeight:vista===v?600:400,fontFamily:"'Geist',sans-serif"}}>{label}</button>
+              ))}
             </div>
+          )}
+          <div style={{fontSize:11,color:"#888",flex:1}}>
+            {seccion==="dashboard"  &&"📊 Resumen en tiempo real"}
+            {seccion==="campana"    &&`🎯 ${leadsCampana.length} leads de campaña`}
+            {seccion==="libre"      &&`📋 ${leadsLibre.length} leads postulación libre`}
+            {seccion==="basedatos"  &&`🗄️ ${leadsBaseDatos.length} leads base de datos`}
+            {seccion==="kpis"       &&"📊 KPIs Generales"}
+            {seccion==="kpiscampana"&&"🎯 KPIs por Campaña"}
           </div>
-          <div style={{background:"#dcfce7",border:"1px solid #86efac",borderRadius:7,padding:"5px 10px",fontSize:10,color:"#166534",fontWeight:700}}>⚡ N8N Activo</div>
           {(()=>{const {olvidados,estancados}=calcAlertas(leads);const total=olvidados.length+estancados.length;return total>0?(
-            <button onClick={()=>setShowAlertas(true)} style={{position:"relative",background:"#EF444422",border:"1px solid #EF444466",borderRadius:7,padding:"5px 10px",fontSize:13,cursor:"pointer",display:"flex",alignItems:"center",gap:4}}>
-              🔔
-              <span style={{position:"absolute",top:-5,right:-5,background:"#EF4444",color:"white",borderRadius:"50%",width:16,height:16,fontSize:9,fontWeight:800,display:"flex",alignItems:"center",justifyContent:"center"}}>{total}</span>
+            <button onClick={()=>setShowAlertas(true)} style={{position:"relative",background:"#fee2e2",border:"1px solid #fca5a5",borderRadius:8,padding:"6px 10px",fontSize:12,cursor:"pointer",display:"flex",alignItems:"center",gap:4,color:"#c0392b",fontWeight:700}}>
+              🔔 {total} alerta{total>1?"s":""}
             </button>
           ):null;})()}
+          <button onClick={fetchLeads} style={{background:"#f0f2f5",border:"0.5px solid #e4e7ec",borderRadius:8,padding:"7px 12px",fontSize:11,cursor:"pointer",color:"#666",fontFamily:"'Geist',sans-serif"}}>🔄 Actualizar</button>
         </div>
 
         <div style={{flex:1,overflow:"auto",padding:20,display:"flex",flexDirection:"column"}}>
