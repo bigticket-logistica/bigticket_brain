@@ -2834,21 +2834,15 @@ function WikiEditor({ articulo, onSave, onCancel, usuario }) {
         que: form.que, porque: form.porque, quien: form.quien, como: form.como,
         contenido: form.contenido,
       };
-      const resp = await fetch("https://api.anthropic.com/v1/messages", {
+      // ✅ Via N8N para evitar CORS
+      const resp = await fetch("https://bigticket2026.app.n8n.cloud/webhook/biggy-wiki", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-20250514",
-          max_tokens: 800,
-          system: `Eres Biggy, asistente de contenido de BigTicket. Ayudas a redactar documentos internos profesionales: políticas, instructivos, procedimientos. Escribe en español, tono corporativo claro y directo. Responde SOLO con el texto del campo solicitado, sin explicaciones ni formato extra.
-
-Contexto del documento:
-${JSON.stringify(contexto, null, 2)}`,
-          messages: [{ role: "user", content: `Redacta o mejora el campo "${campo}" del documento. Instrucción: ${instruccion}` }]
-        })
+        body: JSON.stringify({ campo, label: campo, instruccion, contexto })
       });
+      if (!resp.ok) throw new Error(`Error ${resp.status}`);
       const data = await resp.json();
-      const texto = data.content?.[0]?.text || "";
+      const texto = data.texto || "";
       setForm(f => ({ ...f, [campo]: f[campo] ? f[campo] + "\n\n" + texto : texto }));
     } catch(e) { alert("Error: " + e.message); }
     finally { setBiggyLoading(false); setBiggyField(null); setBiggyPrompt(""); }
