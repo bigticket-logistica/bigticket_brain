@@ -602,6 +602,10 @@ function ModuloCertificaciones() {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [sincronizando, setSincronizando] = useState(false);
+  const [sincronizandoCRM, setSincronizandoCRM] = useState(false);
+
+  // ✅ Auto-sync CRM cada vez que carga el módulo
+  useEffect(() => { autoSyncCRM(); }, []);
   const [selected, setSelected] = useState(null);
   const [vista, setVista] = useState("kanban");
 
@@ -627,6 +631,65 @@ function ModuloCertificaciones() {
       alert("✅ Sincronización completada");
     } catch (e) { alert("Error: " + e.message); }
     finally { setSincronizando(false); }
+  };
+
+  const autoSyncCRM = async () => {
+    try {
+      // 1. Onboardings completos de México con documentos
+      const { data: onboardings, error: errOnb } = await sb
+        .from("onboarding_terceros")
+        .select("*, leads(id, nombre, etapa, curp, email, telefono, zona)")
+        .eq("pais", "México")
+        .not("url_ine", "is", null)
+        .not("url_curp", "is", null)
+        .not("url_rfc", "is", null);
+
+      if (errOnb || !onboardings) return;
+
+      // 2. Solo los que están en etapa "Entrevistas y Validaciones"
+      const enValidacion = onboardings.filter(o =>
+        o.leads?.etapa === "Entrevistas y Validaciones"
+      );
+      if (enValidacion.length === 0) return;
+
+      // 3. IDs ya existentes en certificaciones_mx
+      const { data: existentes } = await sb
+        .from("certificaciones_mx")
+        .select("lead_crm_id")
+        .not("lead_crm_id", "is", null);
+
+      const idsExistentes = (existentes || []).map(e => e.lead_crm_id);
+
+      // 4. Solo nuevos
+      const nuevos = enValidacion.filter(o => !idsExistentes.includes(o.lead_id));
+      if (nuevos.length === 0) return;
+
+      // 5. Insertar en certificaciones_mx
+      const registros = nuevos.map(o => ({
+        lead_crm_id:  o.lead_id,
+        nombre:       o.nombre       || o.leads?.nombre    || "",
+        curp:         o.curp         || o.leads?.curp      || "",
+        rfc:          o.rfc          || "",
+        ine:          o.rut          || "",
+        licencia:     o.licencia     || "",
+        puesto:       o.puesto       || "",
+        svc:          o.leads?.zona  || "",
+        email:        o.email        || o.leads?.email     || "",
+        telefono:     o.telefono     || o.leads?.telefono  || "",
+        url_ine:      o.url_ine      || "",
+        url_curp:     o.url_curp     || "",
+        url_rfc:      o.url_rfc      || "",
+        url_licencia: o.url_licencia || "",
+        estado:       "pendiente",
+        origen:       "crm",
+        updated_at:   new Date().toISOString(),
+      }));
+
+      const { error: errInsert } = await sb.from("certificaciones_mx").insert(registros);
+      if (!errInsert) await cargar();
+    } catch (e) {
+      console.error("Auto-sync CRM error:", e.message);
+    }
   };
 
   if (selected) return (
@@ -669,6 +732,7 @@ function ModuloCertificaciones() {
           <button className="btn-orange" onClick={sincronizarPipefy} disabled={sincronizando}>
             {sincronizando ? "Sincronizando..." : "🔄 Sincronizar Pipefy"}
           </button>
+
         </div>
       </div>
 
