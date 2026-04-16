@@ -3219,6 +3219,23 @@ function ModuloWiki({ usuario }) {
         )}
       </div>
 
+      {/* Video presentación Biggy */}
+      <div style={{ marginBottom: 24, background: "#fff", border: "0.5px solid #e4e7ec", borderRadius: 14, overflow: "hidden" }}>
+        <div style={{ background: "#002f5d", padding: "12px 20px", display: "flex", alignItems: "center", gap: 10 }}>
+          <img src="https://psvdtgjvognbmxfvqbaa.supabase.co/storage/v1/object/public/assets/Don_B1.jpeg"
+            alt="Biggy" style={{ width: 32, height: 32, borderRadius: "50%", objectFit: "cover", border: "2px solid #F47B20" }} />
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 700, color: "#fff" }}>¿Quién es Biggy?</div>
+            <div style={{ fontSize: 11, color: "#aac3e8" }}>Tu asistente inteligente de BigTicket</div>
+          </div>
+        </div>
+        <video
+          src="https://psvdtgjvognbmxfvqbaa.supabase.co/storage/v1/object/public/wiki%20docs/wiki/v2_afc94b0c-b0c8-44dc-8432-a60779643ec8.mp4"
+          controls
+          style={{ width: "100%", maxHeight: 400, background: "#000", display: "block" }}
+        />
+      </div>
+
       {/* Biggy pregunta global */}
       <div className="form-card" style={{ background: "linear-gradient(135deg, #fff7ed, #fff)", marginBottom: 24 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
