@@ -456,12 +456,14 @@ Responde con este JSON exacto:
         nombre_curp:   candidato.validacion_nombre,
         curp_renapo:   candidato.validacion_renapo,
         rfc_sat:       candidato.validacion_sat,
+        antecedentes:  candidato.validacion_antecedentes,
+        listas_negras: candidato.validacion_listas_negras,
         edad:          candidato.edad_calculada ? `${candidato.edad_calculada} años` : '—',
         sexo:          candidato.sexo_curp || '—',
         estado_nac:    candidato.estado_nacimiento_curp || '—',
         fecha_nac:     candidato.fecha_nacimiento_curp || '—',
       },
-      alertas: candidato.alertas_validacion ? JSON.parse(candidato.alertas_validacion) : [],
+      alertas: candidato.alertas_validacion ? (() => { try { return JSON.parse(candidato.alertas_validacion); } catch(e) { return []; } })() : [],
     } : null
   );
 
@@ -482,15 +484,17 @@ Responde con este JSON exacto:
       const data = await resp.json();
       setValidacion(data);
       onActualizar({ ...candidato,
-        validacion_curp: data.resumen?.curp_formato,
-        validacion_rfc: data.resumen?.rfc_formato,
-        validacion_nombre: data.resumen?.nombre_curp,
-        validacion_renapo: data.resumen?.curp_renapo,
-        validacion_sat: data.resumen?.rfc_sat,
-        edad_calculada: data.curp_data?.edad,
-        sexo_curp: data.curp_data?.sexo,
-        estado_nacimiento_curp: data.curp_data?.estado_nacimiento,
-        fecha_nacimiento_curp: data.curp_data?.fecha_nacimiento,
+        validacion_curp:          data.resumen?.curp_formato,
+        validacion_rfc:           data.resumen?.rfc_formato,
+        validacion_nombre:        data.resumen?.nombre_curp,
+        validacion_renapo:        data.resumen?.curp_renapo,
+        validacion_sat:           data.resumen?.rfc_sat,
+        validacion_antecedentes:  data.resumen?.antecedentes,
+        validacion_listas_negras: data.resumen?.listas_negras,
+        edad_calculada:           data.curp_data?.edad,
+        sexo_curp:                data.curp_data?.sexo,
+        estado_nacimiento_curp:   data.curp_data?.estado_nacimiento,
+        fecha_nacimiento_curp:    data.curp_data?.fecha_nacimiento,
       });
     } catch(e) { alert("Error al validar: " + e.message); }
     finally { setValidando(false); }
@@ -536,20 +540,37 @@ Responde con este JSON exacto:
 
           {validacion && !validando && (
             <div>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10, marginBottom: 14 }}>
+              {/* Fuente Verifik */}
+              <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 12 }}>
+                <div style={{ fontSize: 10, color: "#888" }}>Fuente:</div>
+                <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 20, background: "#eef2ff", color: "#1a3a6b", border: "0.5px solid #c7d2fe" }}>
+                  🔐 Verifik · RENAPO · SAT · RNPCP
+                </span>
+              </div>
+              {/* Grid 6 chips */}
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, marginBottom: 14 }}>
                 {[
-                  { label: "CURP formato",   valor: validacion.resumen?.curp_formato },
-                  { label: "CURP en RENAPO", valor: validacion.resumen?.curp_renapo },
-                  { label: "RFC formato",    valor: validacion.resumen?.rfc_formato },
-                  { label: "RFC en SAT",     valor: validacion.resumen?.rfc_sat },
-                ].map(({ label, valor }) => (
-                  <div key={label} style={{ background: valor?.startsWith("✅") ? "#f0fdf4" : valor?.startsWith("❌") ? "#fef2f2" : "#fefce8",
-                    border: `0.5px solid ${valor?.startsWith("✅") ? "#86efac" : valor?.startsWith("❌") ? "#fca5a5" : "#fde68a"}`,
-                    borderRadius: 10, padding: "10px 12px" }}>
-                    <div style={{ fontSize: 10, color: "#888", marginBottom: 4 }}>{label}</div>
-                    <div style={{ fontSize: 12, fontWeight: 700 }}>{valor || "—"}</div>
-                  </div>
-                ))}
+                  { label: "CURP formato",      valor: validacion.resumen?.curp_formato },
+                  { label: "CURP en RENAPO",    valor: validacion.resumen?.curp_renapo },
+                  { label: "Nombre vs RENAPO",  valor: validacion.resumen?.nombre_curp },
+                  { label: "RFC formato",        valor: validacion.resumen?.rfc_formato },
+                  { label: "RFC en SAT",         valor: validacion.resumen?.rfc_sat },
+                  { label: "Antecedentes penales", valor: validacion.resumen?.antecedentes },
+                ].map(({ label, valor }) => {
+                  const esOk  = valor?.startsWith("✅");
+                  const esErr = valor?.startsWith("❌") || valor?.startsWith("🚨");
+                  const esWarn= !esOk && !esErr;
+                  return (
+                    <div key={label} style={{
+                      background: esOk ? "#f0fdf4" : esErr ? "#fef2f2" : "#fefce8",
+                      border: `0.5px solid ${esOk ? "#86efac" : esErr ? "#fca5a5" : "#fde68a"}`,
+                      borderRadius: 10, padding: "10px 12px"
+                    }}>
+                      <div style={{ fontSize: 10, color: "#888", marginBottom: 4 }}>{label}</div>
+                      <div style={{ fontSize: 11, fontWeight: 700, color: esOk ? "#166534" : esErr ? "#c0392b" : "#92400e" }}>{valor || "—"}</div>
+                    </div>
+                  );
+                })}
               </div>
               <div style={{ background: "#f8f9fb", borderRadius: 10, padding: "12px 14px", marginBottom: 14 }}>
                 <div style={{ fontSize: 11, fontWeight: 700, color: "#555", marginBottom: 8 }}>DATOS EXTRAÍDOS DEL CURP</div>
