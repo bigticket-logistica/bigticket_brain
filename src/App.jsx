@@ -446,6 +446,56 @@ Responde con este JSON exacto:
     }
   };
 
+  // ── Validación de documentos ──────────────────────────────────────
+  const [validando, setValidando] = useState(false);
+  const [validacion, setValidacion] = useState(
+    candidato.validacion_curp ? {
+      resumen: {
+        curp_formato:  candidato.validacion_curp,
+        rfc_formato:   candidato.validacion_rfc,
+        nombre_curp:   candidato.validacion_nombre,
+        curp_renapo:   candidato.validacion_renapo,
+        rfc_sat:       candidato.validacion_sat,
+        edad:          candidato.edad_calculada ? `${candidato.edad_calculada} años` : '—',
+        sexo:          candidato.sexo_curp || '—',
+        estado_nac:    candidato.estado_nacimiento_curp || '—',
+        fecha_nac:     candidato.fecha_nacimiento_curp || '—',
+      },
+      alertas: candidato.alertas_validacion ? JSON.parse(candidato.alertas_validacion) : [],
+    } : null
+  );
+
+  const validarProspecto = async () => {
+    setValidando(true);
+    try {
+      const resp = await fetch("https://bigticket2026.app.n8n.cloud/webhook/validar-prospecto", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: candidato.id,
+          curp: candidato.curp_validado || candidato.curp,
+          rfc: candidato.rfc,
+          nombre: candidato.nombre,
+        })
+      });
+      if (!resp.ok) throw new Error(`Error ${resp.status}`);
+      const data = await resp.json();
+      setValidacion(data);
+      onActualizar({ ...candidato,
+        validacion_curp: data.resumen?.curp_formato,
+        validacion_rfc: data.resumen?.rfc_formato,
+        validacion_nombre: data.resumen?.nombre_curp,
+        validacion_renapo: data.resumen?.curp_renapo,
+        validacion_sat: data.resumen?.rfc_sat,
+        edad_calculada: data.curp_data?.edad,
+        sexo_curp: data.curp_data?.sexo,
+        estado_nacimiento_curp: data.curp_data?.estado_nacimiento,
+        fecha_nacimiento_curp: data.curp_data?.fecha_nacimiento,
+      });
+    } catch(e) { alert("Error al validar: " + e.message); }
+    finally { setValidando(false); }
+  };
+
   const estadoBadge = { pendiente: "badge-pendiente", enviado: "badge-enviado", aprobado: "badge-aprobado", rechazado: "badge-rechazado" };
 
   return (
@@ -460,6 +510,96 @@ Responde con este JSON exacto:
       </div>
 
       <div className="pg-detail">
+        {/* ── Validación de identidad ──────────────────────────── */}
+        <div className="form-card" style={{ marginBottom: 16 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+            <div className="form-title" style={{ margin: 0 }}>🔍 Validación de identidad</div>
+            <button className="btn-blue" onClick={validarProspecto} disabled={validando}
+              style={{ padding: "7px 14px", fontSize: 12 }}>
+              {validando ? "Validando..." : validacion ? "🔄 Re-validar" : "🔍 Validar ahora"}
+            </button>
+          </div>
+
+          {!validacion && !validando && (
+            <div style={{ textAlign: "center", padding: "20px", color: "#888", fontSize: 13 }}>
+              <div style={{ fontSize: 32, marginBottom: 8 }}>🔍</div>
+              Haz clic en "Validar ahora" para verificar CURP, RFC y nombre contra registros oficiales
+            </div>
+          )}
+
+          {validando && (
+            <div style={{ textAlign: "center", padding: "20px" }}>
+              <div className="biggy-typing"><span /><span /><span /></div>
+              <div style={{ fontSize: 12, color: "#888", marginTop: 8 }}>Consultando RENAPO y SAT...</div>
+            </div>
+          )}
+
+          {validacion && !validando && (
+            <div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10, marginBottom: 14 }}>
+                {[
+                  { label: "CURP formato",   valor: validacion.resumen?.curp_formato },
+                  { label: "CURP en RENAPO", valor: validacion.resumen?.curp_renapo },
+                  { label: "RFC formato",    valor: validacion.resumen?.rfc_formato },
+                  { label: "RFC en SAT",     valor: validacion.resumen?.rfc_sat },
+                ].map(({ label, valor }) => (
+                  <div key={label} style={{ background: valor?.startsWith("✅") ? "#f0fdf4" : valor?.startsWith("❌") ? "#fef2f2" : "#fefce8",
+                    border: `0.5px solid ${valor?.startsWith("✅") ? "#86efac" : valor?.startsWith("❌") ? "#fca5a5" : "#fde68a"}`,
+                    borderRadius: 10, padding: "10px 12px" }}>
+                    <div style={{ fontSize: 10, color: "#888", marginBottom: 4 }}>{label}</div>
+                    <div style={{ fontSize: 12, fontWeight: 700 }}>{valor || "—"}</div>
+                  </div>
+                ))}
+              </div>
+              <div style={{ background: "#f8f9fb", borderRadius: 10, padding: "12px 14px", marginBottom: 14 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#555", marginBottom: 8 }}>DATOS EXTRAÍDOS DEL CURP</div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8 }}>
+                  {[
+                    { label: "Fecha nacimiento", valor: validacion.resumen?.fecha_nac },
+                    { label: "Edad",             valor: validacion.resumen?.edad },
+                    { label: "Sexo",             valor: validacion.resumen?.sexo },
+                    { label: "Estado nacimiento",valor: validacion.resumen?.estado_nac },
+                  ].map(({ label, valor }) => (
+                    <div key={label}>
+                      <div style={{ fontSize: 10, color: "#888" }}>{label}</div>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: "#1a1a1a" }}>{valor || "—"}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              {validacion.alertas?.length > 0 ? (
+                <div>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: "#c0392b", marginBottom: 8 }}>⚠️ ALERTAS DETECTADAS</div>
+                  {validacion.alertas.map((a, i) => (
+                    <div key={i} style={{ display: "flex", gap: 10, alignItems: "flex-start", marginBottom: 6,
+                      background: a.nivel === "ALTA" ? "#fef2f2" : a.nivel === "MEDIA" ? "#fefce8" : "#f0f9ff",
+                      border: `0.5px solid ${a.nivel === "ALTA" ? "#fca5a5" : a.nivel === "MEDIA" ? "#fde68a" : "#bae6fd"}`,
+                      borderRadius: 8, padding: "8px 12px" }}>
+                      <span style={{ fontSize: 10, fontWeight: 800, padding: "2px 8px", borderRadius: 10, whiteSpace: "nowrap",
+                        background: a.nivel === "ALTA" ? "#fee2e2" : a.nivel === "MEDIA" ? "#fef3c7" : "#e0f2fe",
+                        color: a.nivel === "ALTA" ? "#c0392b" : a.nivel === "MEDIA" ? "#92400e" : "#0369a1" }}>
+                        {a.nivel}
+                      </span>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: 11, fontWeight: 700 }}>{a.campo}</div>
+                        <div style={{ fontSize: 11, color: "#555" }}>{a.detalle}</div>
+                        {a.declarado && <div style={{ fontSize: 10, color: "#888", marginTop: 2 }}>
+                          Declarado: <b>{a.declarado}</b> · Encontrado: <b>{a.encontrado}</b>
+                        </div>}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div style={{ background: "#f0fdf4", border: "0.5px solid #86efac", borderRadius: 10,
+                  padding: "10px 14px", fontSize: 12, color: "#166534", fontWeight: 600, textAlign: "center" }}>
+                  ✅ Sin alertas — documentos consistentes
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
         {/* Biggy análisis automático */}
         <BiggyChatBubble analizando={analizando} analisis={analisis} score={score} recomendacion={recomendacion} alertas={alertas} onReanalizar={analizarConClaude} />
 
