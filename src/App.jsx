@@ -3516,7 +3516,7 @@ function ModuloWiki({ usuario }) {
 // DRIVER, PARADAS, CARGADOS, ENTREGADOS, DEVUELTOS, KM, SEG_ZONAL, TIPOLOGIA
 // ─────────────────────────────────────────────────────────────────────────────
 
-const SCRAPER_URL    = "https://bigticket-meli-scraper-production.up.railway.app"; // ← reemplazar con URL real de Railway
+const SCRAPER_URL    = "https://bigticket-meli-scraper-production.up.railway.app";
 const SCRAPER_SECRET = "bigticket-secret-2025";
 
 const fmtFechaMaestro = (iso) => {
@@ -3581,32 +3581,47 @@ const PanelSyncTMS = ({ onSyncOk, fechaInicio, fechaFin }) => {
 
   const agregarLog = (msg) => setLogs(prev => [...prev, msg]);
 
-  const abrirTMS = () => {
-    window.open("https://envios.adminml.com/carriers/reports", "_blank");
-    setFase("abierto");
-    setError(null);
-    setLogs([]);
-  };
-
-  const yaIngrese = async () => {
+  // Función principal — descarga el Excel de MELI directamente desde el browser
+  // y lo manda a Railway para procesarlo. Sin consola, sin código manual.
+  const sincronizarDesdeBrain = async () => {
     const hoy = new Date().toISOString().split("T")[0];
     const fi  = fechaInicio || hoy;
     const ff  = fechaFin    || hoy;
 
     setFase("procesando");
-    setLogs(["Conectando con el servidor de extracción..."]);
+    setLogs(["Descargando reporte desde MELI..."]);
     setError(null);
+
     try {
-      const health = await fetch(`${SCRAPER_URL}/health`, { signal: AbortSignal.timeout(5000) })
-        .catch(() => null);
-      if (!health || !health.ok) {
-        throw new Error("El servidor no responde. Verifica que Railway esté activo.");
+      // 1. Descargar Excel directamente de MELI (con las cookies del browser actual)
+      const meliRes = await fetch(
+        `https://envios.adminml.com/api/carriers/reports?mile=LM&init_date=${fi}&end_date=${ff}&report_type=carrier`,
+        { credentials: "include" }
+      );
+
+      if (!meliRes.ok) {
+        if (meliRes.status === 401 || meliRes.status === 403) {
+          throw new Error("Sesión de MELI expirada. Por favor haz login en el TMS primero.");
+        }
+        throw new Error(`MELI respondió ${meliRes.status}. Verifica que estés logueado en el TMS.`);
       }
-      agregarLog(`Servidor OK. Extrayendo datos del ${fi} al ${ff}...`);
-      const res = await fetch(`${SCRAPER_URL}/sync`, {
+
+      agregarLog("Excel descargado. Enviando a servidor...");
+
+      // 2. Convertir a base64
+      const buffer = await meliRes.arrayBuffer();
+      const bytes  = new Uint8Array(buffer);
+      let binary   = "";
+      for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+      const base64 = btoa(binary);
+
+      agregarLog(`Excel: ${Math.round(base64.length / 1024)} KB. Procesando...`);
+
+      // 3. Mandar a Railway para parsear y guardar en Supabase
+      const res = await fetch(`${SCRAPER_URL}/upload-excel`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-api-secret": SCRAPER_SECRET },
-        body: JSON.stringify({ cookies: [], source: "manual", fechaInicio: fi, fechaFin: ff, mile: "LM" }),
+        body: JSON.stringify({ excelBase64: base64, fechaInicio: fi, fechaFin: ff, user: "supervisor" }),
       });
       if (!res.ok) {
         const d = await res.json().catch(() => ({}));
@@ -3650,18 +3665,6 @@ const PanelSyncTMS = ({ onSyncOk, fechaInicio, fechaFin }) => {
 
   const reset = () => { setFase("idle"); setLogs([]); setError(null); };
 
-  const stepStyle = (activo) => ({
-    display: "flex", alignItems: "center", gap: 12,
-    padding: "12px 16px", background: "#f8fafc", borderRadius: 8,
-    marginBottom: 8, opacity: activo ? 1 : 0.4, transition: "opacity .3s",
-  });
-
-  const numStyle = (color = "#1e40af", bg = "#dbeafe") => ({
-    width: 28, height: 28, borderRadius: "50%", background: bg, color,
-    display: "flex", alignItems: "center", justifyContent: "center",
-    fontSize: 12, fontWeight: 800, flexShrink: 0,
-  });
-
   return (
     <div style={{ background: "#fff", border: "1px solid #e4e7ec",
       borderRadius: 12, padding: 20, marginBottom: 24 }}>
@@ -3670,7 +3673,7 @@ const PanelSyncTMS = ({ onSyncOk, fechaInicio, fechaFin }) => {
         <div>
           <div style={{ fontWeight: 800, fontSize: 14 }}>Sincronización TMS</div>
           <div style={{ fontSize: 11, color: "#888", marginTop: 2 }}>
-            {ultima ? `Última sync: hoy ${ultima}` : "Sin sincronizaciones recientes"}
+            {ultima ? `Última sync: ${ultima}` : "Sin sincronizaciones recientes"}
           </div>
         </div>
         {fase === "ok" && (
@@ -3687,40 +3690,26 @@ const PanelSyncTMS = ({ onSyncOk, fechaInicio, fechaFin }) => {
         )}
       </div>
 
-      {/* Paso 1 */}
-      <div style={stepStyle(true)}>
-        <div style={numStyle()}>1</div>
+      {/* Un solo botón — todo automático */}
+      <div style={{ display: "flex", alignItems: "center", gap: 12,
+        padding: "14px 16px", background: "#f8fafc", borderRadius: 8 }}>
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: 13, fontWeight: 700, color: "#1a1a1a" }}>
-            Abre el TMS y haz login</div>
+            Sincronizar con MELI</div>
           <div style={{ fontSize: 11, color: "#888" }}>
-            Ingresa tu usuario, contraseña y código Okta normalmente</div>
+            {fase === "procesando"
+              ? "Descargando y procesando datos..."
+              : `Toca para traer los datos del período seleccionado`}
+          </div>
         </div>
-        <button onClick={abrirTMS}
+        <button
+          onClick={sincronizarDesdeBrain}
           disabled={fase === "procesando"}
-          style={{ padding: "6px 14px", borderRadius: 8, border: "1px solid #3B82F6",
-            background: "#3B82F6", color: "#fff", fontSize: 11, fontWeight: 700,
-            cursor: fase === "procesando" ? "not-allowed" : "pointer", opacity: fase === "procesando" ? 0.5 : 1 }}>
-          Abrir TMS
-        </button>
-      </div>
-
-      {/* Paso 2 */}
-      <div style={stepStyle(fase === "abierto" || fase === "error")}>
-        <div style={numStyle("#166534", "#dcfce7")}>2</div>
-        <div style={{ flex: 1 }}>
-          <div style={{ fontSize: 13, fontWeight: 700, color: "#1a1a1a" }}>
-            Confirma que ya ingresaste</div>
-          <div style={{ fontSize: 11, color: "#888" }}>
-            Cuando estés dentro del TMS, toca este botón</div>
-        </div>
-        <button onClick={yaIngrese}
-          disabled={fase !== "abierto" && fase !== "error"}
-          style={{ padding: "6px 14px", borderRadius: 8, border: "1px solid #16a34a",
-            background: "#16a34a", color: "#fff", fontSize: 11, fontWeight: 700,
-            cursor: (fase === "abierto" || fase === "error") ? "pointer" : "not-allowed",
-            opacity: (fase === "abierto" || fase === "error") ? 1 : 0.4 }}>
-          Ya ingresé
+          style={{ padding: "8px 20px", borderRadius: 8,
+            border: "1px solid #3B82F6", background: fase === "procesando" ? "#93c5fd" : "#3B82F6",
+            color: "#fff", fontSize: 12, fontWeight: 700,
+            cursor: fase === "procesando" ? "not-allowed" : "pointer" }}>
+          {fase === "procesando" ? "Sincronizando..." : "Sincronizar"}
         </button>
       </div>
 
@@ -3861,10 +3850,11 @@ const VistaViajesMaestro = ({ fecha }) => {
                   <td style={{ padding: "9px 12px", whiteSpace: "nowrap", fontSize: 11 }}>
                     {fmtFechaMaestro(v.fecha_salida)}</td>
                   <td style={{ padding: "9px 12px", fontWeight: 600 }}>
-                    {v.drivers?.nombre || textos[5] || "—"}</td>
+                    {v.drivers?.nombre || raw["Nombre del transportista"] || v.observaciones || "—"}</td>
                   <td style={{ padding: "9px 12px", fontFamily: "monospace",
-                    fontSize: 11, color: "#555" }}>{patente}</td>
-                  <td style={{ padding: "9px 12px", textAlign: "right" }}>{paradas}</td>
+                    fontSize: 11, color: "#555" }}>{raw["Patente"] || raw["patente"] || "—"}</td>
+                  <td style={{ padding: "9px 12px", textAlign: "right" }}>
+                    {raw["Ciclo"] || "—"}</td>
                   <td style={{ padding: "9px 12px", textAlign: "right" }}>
                     {fmtNumMaestro(v.paquetes_asignados)}</td>
                   <td style={{ padding: "9px 12px", textAlign: "right",
