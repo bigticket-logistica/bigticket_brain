@@ -3516,7 +3516,7 @@ function ModuloWiki({ usuario }) {
 // DRIVER, PARADAS, CARGADOS, ENTREGADOS, DEVUELTOS, KM, SEG_ZONAL, TIPOLOGIA
 // ─────────────────────────────────────────────────────────────────────────────
 
-const SCRAPER_URL    = "https://bigticket-meli-scraper-production.up.railway.app"; // ← reemplazar con URL real de Railway
+const SCRAPER_URL    = "https://TU-APP.railway.app"; // ← reemplazar con URL real de Railway
 const SCRAPER_SECRET = "bigticket-secret-2025";
 
 const fmtFechaMaestro = (iso) => {
@@ -4283,6 +4283,7 @@ const VistaDriversMaestro = () => {
 const ModuloMaestro = ({ usuario }) => {
   const [vista, setVista]     = useState("viajes");
   const [fecha, setFecha]     = useState(new Date().toISOString().split("T")[0]);
+  const [fechaFin, setFechaFin] = useState(new Date().toISOString().split("T")[0]);
   const [periodo, setPeriodo] = useState(new Date().toISOString().slice(0, 7));
   const [reloadKey, setReloadKey] = useState(0);
 
@@ -4295,34 +4296,56 @@ const ModuloMaestro = ({ usuario }) => {
   return (
     <div className="pg" style={{ maxWidth: 1200 }}>
       {/* Header */}
-      <div style={{ display: "flex", alignItems: "center",
-        justifyContent: "space-between", marginBottom: 20, flexWrap: "wrap", gap: 12 }}>
-        <div>
-          <div style={{ fontSize: 20, fontWeight: 800 }}>Maestro de Operaciones</div>
-          <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>
-            Última milla · MercadoLibre México
+      <div style={{ marginBottom: 20 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+          <div>
+            <div style={{ fontSize: 20, fontWeight: 800 }}>Maestro de Operaciones</div>
+            <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>Última milla · MercadoLibre México</div>
           </div>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          {vista === "viajes" && (
-            <input type="date" value={fecha}
-              onChange={e => setFecha(e.target.value)}
-              style={{ background: "#f0f2f5", border: "1px solid #e4e7ec",
-                borderRadius: 8, padding: "7px 10px", fontSize: 12,
-                fontFamily: "'Outfit', sans-serif" }} />
-          )}
-          {vista === "jornadas" && (
-            <input type="month" value={periodo}
-              onChange={e => setPeriodo(e.target.value)}
-              style={{ background: "#f0f2f5", border: "1px solid #e4e7ec",
-                borderRadius: 8, padding: "7px 10px", fontSize: 12,
-                fontFamily: "'Outfit', sans-serif" }} />
-          )}
-        </div>
+        {/* Selector de fecha mejorado */}
+        {vista === "viajes" && (
+          <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10, padding: "12px 16px" }}>
+            <div style={{ fontSize: 10, color: "#888", fontWeight: 800, textTransform: "uppercase", letterSpacing: 1, marginBottom: 10 }}>Período</div>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
+              {[
+                { label: "Hoy", fn: () => { const h = new Date().toISOString().split("T")[0]; setFecha(h); setFechaFin(h); } },
+                { label: "Ayer", fn: () => { const a = new Date(); a.setDate(a.getDate()-1); const s = a.toISOString().split("T")[0]; setFecha(s); setFechaFin(s); } },
+                { label: "Esta semana", fn: () => { const h = new Date(); const l = new Date(h); l.setDate(h.getDate()-h.getDay()+1); setFecha(l.toISOString().split("T")[0]); setFechaFin(h.toISOString().split("T")[0]); } },
+                { label: "Este mes", fn: () => { const h = new Date(); const i = new Date(h.getFullYear(), h.getMonth(), 1); setFecha(i.toISOString().split("T")[0]); setFechaFin(h.toISOString().split("T")[0]); } },
+                { label: "Mes anterior", fn: () => { const h = new Date(); const i = new Date(h.getFullYear(), h.getMonth()-1, 1); const f = new Date(h.getFullYear(), h.getMonth(), 0); setFecha(i.toISOString().split("T")[0]); setFechaFin(f.toISOString().split("T")[0]); } },
+              ].map(({ label, fn }) => (
+                <button key={label} onClick={fn}
+                  style={{ padding: "5px 14px", borderRadius: 20, border: "1px solid #e4e7ec",
+                    background: "#f8fafc", color: "#555", fontSize: 11, fontWeight: 700,
+                    cursor: "pointer", fontFamily: "'Outfit', sans-serif" }}>
+                  {label}
+                </button>
+              ))}
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <input type="date" value={fecha} onChange={e => setFecha(e.target.value)}
+                style={{ background: "#f0f2f5", border: "1px solid #e4e7ec", borderRadius: 8,
+                  padding: "6px 10px", fontSize: 12, fontFamily: "'Outfit', sans-serif", flex: 1 }} />
+              <span style={{ color: "#888", fontSize: 12 }}>→</span>
+              <input type="date" value={fechaFin || fecha} onChange={e => setFechaFin(e.target.value)}
+                style={{ background: "#f0f2f5", border: "1px solid #e4e7ec", borderRadius: 8,
+                  padding: "6px 10px", fontSize: 12, fontFamily: "'Outfit', sans-serif", flex: 1 }} />
+            </div>
+          </div>
+        )}
+        {vista === "jornadas" && (
+          <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10, padding: "12px 16px" }}>
+            <div style={{ fontSize: 10, color: "#888", fontWeight: 800, textTransform: "uppercase", letterSpacing: 1, marginBottom: 8 }}>Período de pago</div>
+            <input type="month" value={periodo} onChange={e => setPeriodo(e.target.value)}
+              style={{ background: "#f0f2f5", border: "1px solid #e4e7ec", borderRadius: 8,
+                padding: "6px 10px", fontSize: 12, fontFamily: "'Outfit', sans-serif" }} />
+          </div>
+        )}
       </div>
 
       {/* Panel sync */}
-      <PanelSyncTMS onSyncOk={() => setReloadKey(k => k + 1)} fechaInicio={fecha} fechaFin={fecha} />
+      <PanelSyncTMS onSyncOk={() => setReloadKey(k => k + 1)} fechaInicio={fecha} fechaFin={fechaFin || fecha} />
 
       {/* Tabs */}
       <div style={{ display: "flex", gap: 0, marginBottom: 20,
@@ -4340,7 +4363,7 @@ const ModuloMaestro = ({ usuario }) => {
       </div>
 
       {/* Contenido */}
-      {vista === "viajes"   && <VistaViajesMaestro key={`v-${fecha}-${reloadKey}`} fecha={fecha} />}
+      {vista === "viajes"   && <VistaViajesMaestro key={`v-${fecha}-${fechaFin}-${reloadKey}`} fecha={fecha} fechaFin={fechaFin || fecha} />}
       {vista === "jornadas" && <VistaJornadasMaestro key={`j-${periodo}-${reloadKey}`} periodo={periodo} />}
       {vista === "drivers"  && <VistaDriversMaestro key={`d-${reloadKey}`} />}
     </div>
