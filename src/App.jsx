@@ -3576,6 +3576,18 @@ const KpiCardMaestro = ({ label, valor, sub, color = "#1a1a1a" }) => (
 );
 
 // ── Panel de sincronización con el TMS ────────────────────────────────────────
+
+const KpiCardMaestro = ({ label, valor, sub, color = "#1a1a1a" }) => (
+  <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10,
+    padding: "14px 16px", flex: 1, minWidth: 120 }}>
+    <div style={{ fontSize: 10, color: "#888", fontWeight: 800,
+      textTransform: "uppercase", letterSpacing: 1, marginBottom: 6 }}>{label}</div>
+    <div style={{ fontSize: 22, fontWeight: 800, color }}>{valor}</div>
+    {sub && <div style={{ fontSize: 11, color: "#888", marginTop: 4 }}>{sub}</div>}
+  </div>
+);
+
+// ── Panel de sincronización con el TMS ────────────────────────────────────────
 const PanelSyncTMS = ({ onSyncOk, fechaInicio, fechaFin }) => {
   const [fase, setFase]   = useState("idle");
   const [logs, setLogs]   = useState([]);
@@ -3760,7 +3772,7 @@ const PanelSyncTMS = ({ onSyncOk, fechaInicio, fechaFin }) => {
 };
 
 // ── Vista de viajes del día ───────────────────────────────────────────────────
-const VistaViajesMaestro = ({ fecha, fechaFin }) => {
+const VistaViajesMaestro = ({ fecha, fechaFin, pais }) => {
   const [viajes, setViajes]     = useState([]);
   const [loading, setLoading]   = useState(true);
   const [busqueda, setBusqueda] = useState("");
@@ -3778,11 +3790,11 @@ const VistaViajesMaestro = ({ fecha, fechaFin }) => {
       .order("fecha_salida", { ascending: false })
       .limit(500);
     if (fecha) {
-      // Usar la fecha como string directo para evitar desfase por timezone
-      const fechaStr = fecha.substring(0, 10); // YYYY-MM-DD
+      const fechaStr = fecha.substring(0, 10);
       const finStr   = (fechaFin || fecha).substring(0, 10);
       q = q.gte("fecha_salida", fechaStr + "T00:00:00Z").lte("fecha_salida", finStr + "T23:59:59Z");
     }
+    if (pais) q = q.eq("pais", pais);
     const { data } = await q;
     setViajes(data || []);
     setLoading(false);
@@ -3877,6 +3889,7 @@ const VistaViajesMaestro = ({ fecha, fechaFin }) => {
                 { label: "No visitados",   col: null },
                 { label: "Eficiencia %",   col: "eficiencia" },
                 { label: "KM",             col: "km" },
+                { label: "Municipio",      col: null },
                 { label: "Service center", col: null },
                 { label: "ORH",            col: null },
                 { label: "SPORH",          col: null },
@@ -3897,7 +3910,7 @@ const VistaViajesMaestro = ({ fecha, fechaFin }) => {
           </thead>
           <tbody>
             {filtrados.length === 0 && (
-              <tr><td colSpan={16} style={{ padding: 40, textAlign: "center",
+              <tr><td colSpan={17} style={{ padding: 40, textAlign: "center",
                 color: "#888", fontSize: 13 }}>
                 {busqueda ? "Sin resultados para esa búsqueda" : "Sin viajes para esta fecha. Sincroniza el TMS."}
               </td></tr>
@@ -3924,7 +3937,7 @@ const VistaViajesMaestro = ({ fecha, fechaFin }) => {
                     {raw["Nombre del transportista"] || v.observaciones || "—"}</td>
                   <td style={{ padding: "9px 12px", fontFamily: "monospace",
                     fontSize: 11, color: "#555" }}>
-                    {raw["Patente"] || "—"}</td>
+                    {raw["Patente"] || raw["Placa"] || "—"}</td>
                   <td style={{ padding: "9px 12px", fontSize: 11, color: "#555" }}>
                     {raw["Vehículo"] || "—"}</td>
                   <td style={{ padding: "9px 12px", textAlign: "center", fontSize: 11 }}>
@@ -3943,6 +3956,8 @@ const VistaViajesMaestro = ({ fecha, fechaFin }) => {
                       ? Number(raw["Entrega exitosa"]).toFixed(1) + "%" : "—"}</td>
                   <td style={{ padding: "9px 12px", textAlign: "right", fontSize: 11 }}>
                     {v.km_recorridos ? `${Number(v.km_recorridos).toFixed(1)} km` : "—"}</td>
+                  <td style={{ padding: "9px 12px", fontSize: 11, color: "#555" }}>
+                    {raw["Municipio visitado"] || "—"}</td>
                   <td style={{ padding: "9px 12px", fontSize: 11, color: "#555" }}>
                     {raw["Service center"] || "—"}</td>
                   <td style={{ padding: "9px 12px", textAlign: "right", fontSize: 11 }}>
@@ -4393,11 +4408,12 @@ const VistaDriversMaestro = () => {
 
 // ── MÓDULO MAESTRO PRINCIPAL ──────────────────────────────────────────────────
 const ModuloMaestro = ({ usuario }) => {
-  const [vista, setVista]     = useState("viajes");
-  const [fecha, setFecha]     = useState(new Date().toISOString().split("T")[0]);
+  const [vista, setVista]       = useState("viajes");
+  const [fecha, setFecha]       = useState(new Date().toISOString().split("T")[0]);
   const [fechaFin, setFechaFin] = useState(new Date().toISOString().split("T")[0]);
-  const [periodo, setPeriodo] = useState(new Date().toISOString().slice(0, 7));
+  const [periodo, setPeriodo]   = useState(new Date().toISOString().slice(0, 7));
   const [reloadKey, setReloadKey] = useState(0);
+  const [pais, setPais]         = useState("CL");
 
   const tabs = [
     { id: "viajes",   label: "Viajes del día" },
@@ -4409,10 +4425,23 @@ const ModuloMaestro = ({ usuario }) => {
     <div className="pg" style={{ maxWidth: 1200 }}>
       {/* Header */}
       <div style={{ marginBottom: 20 }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14, flexWrap: "wrap", gap: 12 }}>
           <div>
             <div style={{ fontSize: 20, fontWeight: 800 }}>Maestro de Operaciones</div>
-            <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>Última milla · MercadoLibre México</div>
+            <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>Última milla · MercadoLibre</div>
+          </div>
+          {/* Selector de país */}
+          <div style={{ display: "flex", gap: 6 }}>
+            {[{ id: "CL", label: "🇨🇱 Chile" }, { id: "MX", label: "🇲🇽 México" }].map(p => (
+              <button key={p.id} onClick={() => { setPais(p.id); setReloadKey(k => k + 1); }}
+                style={{ padding: "6px 16px", borderRadius: 20,
+                  border: `1px solid ${pais === p.id ? "#3B82F6" : "#e4e7ec"}`,
+                  background: pais === p.id ? "#3B82F6" : "#fff",
+                  color: pais === p.id ? "#fff" : "#555",
+                  fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+                {p.label}
+              </button>
+            ))}
           </div>
         </div>
         {/* Selector de fecha mejorado */}
@@ -4457,8 +4486,6 @@ const ModuloMaestro = ({ usuario }) => {
       </div>
 
       {/* Panel sync */}
-      <PanelSyncTMS onSyncOk={() => setReloadKey(k => k + 1)} fechaInicio={fecha} fechaFin={fechaFin || fecha} />
-
       {/* Tabs */}
       <div style={{ display: "flex", gap: 0, marginBottom: 20,
         borderBottom: "2px solid #e4e7ec" }}>
@@ -4475,7 +4502,7 @@ const ModuloMaestro = ({ usuario }) => {
       </div>
 
       {/* Contenido */}
-      {vista === "viajes"   && <VistaViajesMaestro key={`v-${fecha}-${fechaFin}-${reloadKey}`} fecha={fecha} fechaFin={fechaFin || fecha} />}
+      {vista === "viajes"   && <VistaViajesMaestro key={`v-${fecha}-${fechaFin}-${pais}-${reloadKey}`} fecha={fecha} fechaFin={fechaFin || fecha} pais={pais} />}
       {vista === "jornadas" && <VistaJornadasMaestro key={`j-${periodo}-${reloadKey}`} periodo={periodo} />}
       {vista === "drivers"  && <VistaDriversMaestro key={`d-${reloadKey}`} />}
     </div>
