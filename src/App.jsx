@@ -3521,6 +3521,9 @@ const SCRAPER_SECRET = "bigticket-secret-2025";
 
 const fmtFechaMaestro = (iso) => {
   if (!iso) return "—";
+  // Tomar solo la parte de fecha (YYYY-MM-DD) para evitar desfase por timezone
+  const partes = iso.substring(0, 10).split("-");
+  if (partes.length === 3) return `${partes[2]}/${partes[1]}/${partes[0]}`;
   const d = new Date(iso);
   return d.toLocaleDateString("es-MX", { day: "2-digit", month: "2-digit", year: "numeric" });
 };
@@ -3690,27 +3693,42 @@ const PanelSyncTMS = ({ onSyncOk, fechaInicio, fechaFin }) => {
         )}
       </div>
 
-      {/* Un solo botón — todo automático */}
+      {/* Panel principal */}
       <div style={{ display: "flex", alignItems: "center", gap: 12,
-        padding: "14px 16px", background: "#f8fafc", borderRadius: 8 }}>
+        padding: "14px 16px", background: "#f8fafc", borderRadius: 8, marginBottom: 8 }}>
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: 13, fontWeight: 700, color: "#1a1a1a" }}>
             Sincronizar con MELI</div>
           <div style={{ fontSize: 11, color: "#888" }}>
             {fase === "procesando"
               ? "Descargando y procesando datos..."
-              : `Toca para traer los datos del período seleccionado`}
+              : fase === "error" && error?.includes("Sesión")
+                ? "⚠️ Debes estar logueado en el TMS — abre envios.adminml.com primero"
+                : "El browser debe tener sesión activa en envios.adminml.com"}
           </div>
         </div>
-        <button
-          onClick={sincronizarDesdeBrain}
-          disabled={fase === "procesando"}
-          style={{ padding: "8px 20px", borderRadius: 8,
-            border: "1px solid #3B82F6", background: fase === "procesando" ? "#93c5fd" : "#3B82F6",
-            color: "#fff", fontSize: 12, fontWeight: 700,
-            cursor: fase === "procesando" ? "not-allowed" : "pointer" }}>
-          {fase === "procesando" ? "Sincronizando..." : "Sincronizar"}
-        </button>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button
+            onClick={() => window.open("https://envios.adminml.com/carriers/reports", "_blank")}
+            style={{ padding: "8px 14px", borderRadius: 8,
+              border: "1px solid #e4e7ec", background: "#fff",
+              color: "#555", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+            Abrir TMS
+          </button>
+          <button
+            onClick={sincronizarDesdeBrain}
+            disabled={fase === "procesando"}
+            style={{ padding: "8px 20px", borderRadius: 8,
+              border: "1px solid #3B82F6", background: fase === "procesando" ? "#93c5fd" : "#3B82F6",
+              color: "#fff", fontSize: 12, fontWeight: 700,
+              cursor: fase === "procesando" ? "not-allowed" : "pointer" }}>
+            {fase === "procesando" ? "Sincronizando..." : "Sincronizar"}
+          </button>
+        </div>
+      </div>
+      {/* Instrucción simple */}
+      <div style={{ fontSize: 11, color: "#888", padding: "8px 4px" }}>
+        💡 Para sincronizar: abre el TMS, haz login, vuelve aquí y toca <strong>Sincronizar</strong>. El Brain descarga los datos automáticamente.
       </div>
 
       {/* Log */}
@@ -3742,12 +3760,16 @@ const PanelSyncTMS = ({ onSyncOk, fechaInicio, fechaFin }) => {
 };
 
 // ── Vista de viajes del día ───────────────────────────────────────────────────
-const VistaViajesMaestro = ({ fecha }) => {
+const VistaViajesMaestro = ({ fecha, fechaFin }) => {
   const [viajes, setViajes]     = useState([]);
   const [loading, setLoading]   = useState(true);
   const [busqueda, setBusqueda] = useState("");
+  const [pagina, setPagina]     = useState(1);
+  const resetPagina = () => setPagina(1);
+  const [orden, setOrden]       = useState({ col: "fecha_salida", asc: false });
+  const POR_PAGINA = 20;
 
-  useEffect(() => { cargarViajes(); }, [fecha]);
+  useEffect(() => { cargarViajes(); }, [fecha, fechaFin]);
 
   const cargarViajes = async () => {
     setLoading(true);
@@ -3756,10 +3778,10 @@ const VistaViajesMaestro = ({ fecha }) => {
       .order("fecha_salida", { ascending: false })
       .limit(500);
     if (fecha) {
-      const d = new Date(fecha);
-      const ini = new Date(d); ini.setHours(0, 0, 0, 0);
-      const fin = new Date(d); fin.setHours(23, 59, 59, 999);
-      q = q.gte("fecha_salida", ini.toISOString()).lte("fecha_salida", fin.toISOString());
+      // Usar la fecha como string directo para evitar desfase por timezone
+      const fechaStr = fecha.substring(0, 10); // YYYY-MM-DD
+      const finStr   = (fechaFin || fecha).substring(0, 10);
+      q = q.gte("fecha_salida", fechaStr + "T00:00:00Z").lte("fecha_salida", finStr + "T23:59:59Z");
     }
     const { data } = await q;
     setViajes(data || []);
@@ -3769,19 +3791,45 @@ const VistaViajesMaestro = ({ fecha }) => {
   const filtrados = viajes.filter(v => {
     if (!busqueda) return true;
     const b = busqueda.toLowerCase();
+    const raw = v.tms_raw || {};
     return (
       (v.tms_id || "").toLowerCase().includes(b) ||
-      (v.drivers?.nombre || "").toLowerCase().includes(b) ||
-      (v.estado || "").toLowerCase().includes(b) ||
-      ((v.tms_raw?.dataAttrs?.patente || v.tms_raw?.textos?.[4] || "")).toLowerCase().includes(b)
+      (raw["Nombre del transportista"] || v.observaciones || "").toLowerCase().includes(b) ||
+      (raw["Patente"] || "").toLowerCase().includes(b) ||
+      (raw["Service center"] || "").toLowerCase().includes(b) ||
+      (v.estado || "").toLowerCase().includes(b)
     );
   });
+
+  // Ordenamiento
+  const ordenados = [...filtrados].sort((a, b) => {
+    const rawA = a.tms_raw || {}, rawB = b.tms_raw || {};
+    let va, vb;
+    if (orden.col === "fecha_salida")       { va = a.fecha_salida; vb = b.fecha_salida; }
+    else if (orden.col === "driver")        { va = rawA["Nombre del transportista"] || ""; vb = rawB["Nombre del transportista"] || ""; }
+    else if (orden.col === "entregados")    { va = a.paquetes_entregados || 0; vb = b.paquetes_entregados || 0; }
+    else if (orden.col === "eficiencia")    { va = rawA["Entrega exitosa"] || 0; vb = rawB["Entrega exitosa"] || 0; }
+    else if (orden.col === "km")            { va = a.km_recorridos || 0; vb = b.km_recorridos || 0; }
+    else { va = a[orden.col] || ""; vb = b[orden.col] || ""; }
+    if (va < vb) return orden.asc ? -1 : 1;
+    if (va > vb) return orden.asc ? 1 : -1;
+    return 0;
+  });
+
+  const totalPaginas = Math.ceil(ordenados.length / POR_PAGINA);
+  const paginados    = ordenados.slice((pagina - 1) * POR_PAGINA, pagina * POR_PAGINA);
+
+  const toggleOrden = (col) => {
+    setPagina(1);
+    setOrden(prev => ({ col, asc: prev.col === col ? !prev.asc : true }));
+  };
 
   const totalCargados   = filtrados.reduce((s, v) => s + (v.paquetes_asignados || 0), 0);
   const totalEntregados = filtrados.reduce((s, v) => s + (v.paquetes_entregados || 0), 0);
   const totalDevueltos  = filtrados.reduce((s, v) => s + (v.paquetes_devueltos || 0), 0);
   const efTotal         = totalCargados > 0 ? totalEntregados / totalCargados : null;
   const kmTotal         = filtrados.reduce((s, v) => s + (v.km_recorridos || 0), 0);
+  const noVisitadosTotal = filtrados.reduce((s, v) => s + (v.tms_raw?.["No visitado"] || 0), 0);
 
   if (loading) return (
     <div style={{ textAlign: "center", padding: 48, color: "#888", fontSize: 13 }}>
@@ -3806,54 +3854,80 @@ const VistaViajesMaestro = ({ fecha }) => {
 
       {/* Buscador */}
       <div style={{ marginBottom: 12 }}>
-        <Input value={busqueda} onChange={e => setBusqueda(e.target.value)}
-          placeholder="Buscar por ID viaje, driver, patente, estado..." />
+        <Input value={busqueda} onChange={e => { setBusqueda(e.target.value); setPagina(1); }}
+          placeholder="Buscar por driver, patente, service center..." />
       </div>
 
-      {/* Tabla */}
+      {/* Tabla con scroll horizontal */}
       <div style={{ overflowX: "auto", borderRadius: 10,
-        border: "1px solid #e4e7ec", background: "#fff" }}>
+        border: "1px solid #e4e7ec", background: "#fff",
+        WebkitOverflowScrolling: "touch" }}>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
           <thead>
             <tr style={{ background: "#f8fafc", borderBottom: "2px solid #e4e7ec" }}>
-              {["ID Viaje","Fecha","Driver","Patente","Paradas","Cargados",
-                "Entregados","Devueltos","Eficiencia","KM","CECOS","Tipología","Observación","Estado"].map(h => (
-                <th key={h} style={{ padding: "10px 12px", textAlign: "left",
-                  fontWeight: 800, fontSize: 10, textTransform: "uppercase",
-                  letterSpacing: 0.5, color: "#555", whiteSpace: "nowrap" }}>{h}</th>
+              {[
+                { label: "ID Ruta",        col: null },
+                { label: "Fecha",          col: "fecha_salida" },
+                { label: "Driver",         col: "driver" },
+                { label: "Patente",        col: null },
+                { label: "Vehículo",       col: null },
+                { label: "Ciclo",          col: null },
+                { label: "Despachados",    col: null },
+                { label: "Entregados",     col: "entregados" },
+                { label: "No visitados",   col: null },
+                { label: "Eficiencia %",   col: "eficiencia" },
+                { label: "KM",             col: "km" },
+                { label: "Service center", col: null },
+                { label: "ORH",            col: null },
+                { label: "SPORH",          col: null },
+                { label: "DPPH",           col: null },
+                { label: "Estado",         col: null },
+              ].map(({ label, col }) => (
+                <th key={label}
+                  onClick={col ? () => toggleOrden(col) : undefined}
+                  style={{ padding: "10px 12px", textAlign: "left",
+                    fontWeight: 800, fontSize: 10, textTransform: "uppercase",
+                    letterSpacing: 0.5, color: col ? "#3B82F6" : "#555",
+                    whiteSpace: "nowrap", cursor: col ? "pointer" : "default",
+                    userSelect: "none" }}>
+                  {label}{col && orden.col === col ? (orden.asc ? " ↑" : " ↓") : ""}
+                </th>
               ))}
             </tr>
           </thead>
           <tbody>
             {filtrados.length === 0 && (
-              <tr><td colSpan={14} style={{ padding: 40, textAlign: "center",
+              <tr><td colSpan={16} style={{ padding: 40, textAlign: "center",
                 color: "#888", fontSize: 13 }}>
                 {busqueda ? "Sin resultados para esa búsqueda" : "Sin viajes para esta fecha. Sincroniza el TMS."}
               </td></tr>
             )}
             {filtrados.map((v, i) => {
               const raw = v.tms_raw || {};
-              const textos = raw.textos || [];
-              const datos  = raw.dataAttrs || {};
-              const ef = v.paquetes_asignados > 0
+              const ef  = v.paquetes_asignados > 0
                 ? v.paquetes_entregados / v.paquetes_asignados : null;
-              const patente = datos.patente || textos[4] || "—";
-              const cecos   = datos.cecos   || textos[1] || "—";
-              const tipologia = datos.tipologia || textos[13] || "—";
-              const paradas = v.tms_raw?.textos?.[6] || "—";
+              const orh   = raw["ORH (Horas en ruta)"] != null
+                ? Number(raw["ORH (Horas en ruta)"]).toFixed(2) : "—";
+              const sporh = raw["SPORH (Número de paquetes despachados por hora)"] != null
+                ? Number(raw["SPORH (Número de paquetes despachados por hora)"]).toFixed(1) : "—";
+              const dpph  = raw["DPPH (Número de paquetes entregados por hora)"] != null
+                ? Number(raw["DPPH (Número de paquetes entregados por hora)"]).toFixed(1) : "—";
               return (
                 <tr key={v.id} style={{ borderBottom: "1px solid #f1f5f9",
-                  background: i % 2 === 0 ? "#fff" : "#fafafa",
-                  transition: "background .1s" }}>
+                  background: i % 2 === 0 ? "#fff" : "#fafafa" }}>
                   <td style={{ padding: "9px 12px", fontWeight: 700,
-                    color: "#3B82F6", fontFamily: "monospace", fontSize: 11 }}>{v.tms_id}</td>
+                    color: "#3B82F6", fontFamily: "monospace", fontSize: 11 }}>
+                    {raw["Id de la ruta"] || v.tms_id}</td>
                   <td style={{ padding: "9px 12px", whiteSpace: "nowrap", fontSize: 11 }}>
                     {fmtFechaMaestro(v.fecha_salida)}</td>
                   <td style={{ padding: "9px 12px", fontWeight: 600 }}>
-                    {v.drivers?.nombre || raw["Nombre del transportista"] || v.observaciones || "—"}</td>
+                    {raw["Nombre del transportista"] || v.observaciones || "—"}</td>
                   <td style={{ padding: "9px 12px", fontFamily: "monospace",
-                    fontSize: 11, color: "#555" }}>{raw["Patente"] || raw["patente"] || "—"}</td>
-                  <td style={{ padding: "9px 12px", textAlign: "right" }}>
+                    fontSize: 11, color: "#555" }}>
+                    {raw["Patente"] || "—"}</td>
+                  <td style={{ padding: "9px 12px", fontSize: 11, color: "#555" }}>
+                    {raw["Vehículo"] || "—"}</td>
+                  <td style={{ padding: "9px 12px", textAlign: "center", fontSize: 11 }}>
                     {raw["Ciclo"] || "—"}</td>
                   <td style={{ padding: "9px 12px", textAlign: "right" }}>
                     {fmtNumMaestro(v.paquetes_asignados)}</td>
@@ -3861,22 +3935,22 @@ const VistaViajesMaestro = ({ fecha }) => {
                     color: "#16a34a", fontWeight: 700 }}>
                     {fmtNumMaestro(v.paquetes_entregados)}</td>
                   <td style={{ padding: "9px 12px", textAlign: "right",
-                    color: (v.paquetes_devueltos || 0) > 0 ? "#dc2626" : "#888",
-                    fontWeight: (v.paquetes_devueltos || 0) > 0 ? 700 : 400 }}>
-                    {fmtNumMaestro(v.paquetes_devueltos)}</td>
+                    color: (raw["No visitado"] || 0) > 0 ? "#dc2626" : "#888" }}>
+                    {raw["No visitado"] ?? "—"}</td>
                   <td style={{ padding: "9px 12px", textAlign: "right",
-                    fontWeight: 800, color: colorEfMaestro(ef) }}>
-                    {fmtPctMaestro(ef)}</td>
-                  <td style={{ padding: "9px 12px", textAlign: "right",
-                    fontSize: 11 }}>
-                    {v.km_recorridos ? `${v.km_recorridos} km` : "—"}</td>
-                  <td style={{ padding: "9px 12px", fontSize: 11,
-                    color: "#555" }}>{cecos}</td>
-                  <td style={{ padding: "9px 12px", fontSize: 11 }}>{tipologia}</td>
-                  <td style={{ padding: "9px 12px", color: "#888",
-                    maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis",
-                    whiteSpace: "nowrap", fontSize: 11 }}>
-                    {v.observaciones || textos[14] || "—"}</td>
+                    fontWeight: 800, color: colorEfMaestro(raw["Entrega exitosa"] != null ? raw["Entrega exitosa"] / 100 : null) }}>
+                    {raw["Entrega exitosa"] != null
+                      ? Number(raw["Entrega exitosa"]).toFixed(1) + "%" : "—"}</td>
+                  <td style={{ padding: "9px 12px", textAlign: "right", fontSize: 11 }}>
+                    {v.km_recorridos ? `${Number(v.km_recorridos).toFixed(1)} km` : "—"}</td>
+                  <td style={{ padding: "9px 12px", fontSize: 11, color: "#555" }}>
+                    {raw["Service center"] || "—"}</td>
+                  <td style={{ padding: "9px 12px", textAlign: "right", fontSize: 11 }}>
+                    {orh}h</td>
+                  <td style={{ padding: "9px 12px", textAlign: "right", fontSize: 11 }}>
+                    {sporh}</td>
+                  <td style={{ padding: "9px 12px", textAlign: "right", fontSize: 11 }}>
+                    {dpph}</td>
                   <td style={{ padding: "9px 12px" }}>
                     <BadgeEstadoMaestro estado={v.estado} /></td>
                 </tr>
@@ -3885,6 +3959,53 @@ const VistaViajesMaestro = ({ fecha }) => {
           </tbody>
         </table>
       </div>
+
+      {/* Paginación */}
+      {totalPaginas > 1 && (
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between",
+          marginTop: 12, flexWrap: "wrap", gap: 8 }}>
+          <div style={{ fontSize: 12, color: "#888" }}>
+            Mostrando {((pagina-1)*POR_PAGINA)+1}–{Math.min(pagina*POR_PAGINA, ordenados.length)} de {ordenados.length} viajes
+          </div>
+          <div style={{ display: "flex", gap: 4 }}>
+            <button onClick={() => setPagina(1)} disabled={pagina === 1}
+              style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid #e4e7ec",
+                background: pagina === 1 ? "#f8fafc" : "#fff", cursor: pagina === 1 ? "not-allowed" : "pointer",
+                fontSize: 12, color: pagina === 1 ? "#ccc" : "#555" }}>«</button>
+            <button onClick={() => setPagina(p => Math.max(1, p-1))} disabled={pagina === 1}
+              style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid #e4e7ec",
+                background: pagina === 1 ? "#f8fafc" : "#fff", cursor: pagina === 1 ? "not-allowed" : "pointer",
+                fontSize: 12, color: pagina === 1 ? "#ccc" : "#555" }}>‹</button>
+            {Array.from({ length: Math.min(5, totalPaginas) }, (_, i) => {
+              let p;
+              if (totalPaginas <= 5) p = i + 1;
+              else if (pagina <= 3) p = i + 1;
+              else if (pagina >= totalPaginas - 2) p = totalPaginas - 4 + i;
+              else p = pagina - 2 + i;
+              return (
+                <button key={p} onClick={() => setPagina(p)}
+                  style={{ padding: "5px 10px", borderRadius: 6,
+                    border: `1px solid ${pagina === p ? "#3B82F6" : "#e4e7ec"}`,
+                    background: pagina === p ? "#3B82F6" : "#fff",
+                    color: pagina === p ? "#fff" : "#555",
+                    cursor: "pointer", fontSize: 12, fontWeight: pagina === p ? 700 : 400 }}>
+                  {p}
+                </button>
+              );
+            })}
+            <button onClick={() => setPagina(p => Math.min(totalPaginas, p+1))} disabled={pagina === totalPaginas}
+              style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid #e4e7ec",
+                background: pagina === totalPaginas ? "#f8fafc" : "#fff",
+                cursor: pagina === totalPaginas ? "not-allowed" : "pointer",
+                fontSize: 12, color: pagina === totalPaginas ? "#ccc" : "#555" }}>›</button>
+            <button onClick={() => setPagina(totalPaginas)} disabled={pagina === totalPaginas}
+              style={{ padding: "5px 10px", borderRadius: 6, border: "1px solid #e4e7ec",
+                background: pagina === totalPaginas ? "#f8fafc" : "#fff",
+                cursor: pagina === totalPaginas ? "not-allowed" : "pointer",
+                fontSize: 12, color: pagina === totalPaginas ? "#ccc" : "#555" }}>»</button>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
@@ -3971,9 +4092,10 @@ const VistaJornadasMaestro = ({ periodo }) => {
         ))}
       </div>
 
-      {/* Tabla */}
+      {/* Tabla con scroll horizontal */}
       <div style={{ overflowX: "auto", borderRadius: 10,
-        border: "1px solid #e4e7ec", background: "#fff" }}>
+        border: "1px solid #e4e7ec", background: "#fff",
+        WebkitOverflowScrolling: "touch" }}>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
           <thead>
             <tr style={{ background: "#f8fafc", borderBottom: "2px solid #e4e7ec" }}>
