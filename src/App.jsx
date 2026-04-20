@@ -3509,6 +3509,842 @@ function ModuloWiki({ usuario }) {
 }
 
 
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MÓDULO MAESTRO DE OPERACIONES - BIGTICKET
+// Basado en estructura real: SERVICIO, CECOS, FECHA, ID VIAJE, PATENTE,
+// DRIVER, PARADAS, CARGADOS, ENTREGADOS, DEVUELTOS, KM, SEG_ZONAL, TIPOLOGIA
+// ─────────────────────────────────────────────────────────────────────────────
+
+const SCRAPER_URL    = "https://TU-APP.railway.app"; // ← reemplazar con URL real de Railway
+const SCRAPER_SECRET = "bigticket-secret-2025";
+
+const fmtFechaMaestro = (iso) => {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  return d.toLocaleDateString("es-MX", { day: "2-digit", month: "2-digit", year: "numeric" });
+};
+
+const fmtPctMaestro = (v) => {
+  if (v == null || isNaN(v)) return "—";
+  const p = v > 1 ? v : v * 100;
+  return p.toFixed(1) + "%";
+};
+
+const fmtNumMaestro = (v) => (v == null ? "—" : Number(v).toLocaleString("es-MX"));
+
+const colorEfMaestro = (v) => {
+  if (v == null) return "#888";
+  const p = v > 1 ? v / 100 : v;
+  if (p >= 0.98) return "#16a34a";
+  if (p >= 0.92) return "#ca8a04";
+  return "#dc2626";
+};
+
+const BadgeEstadoMaestro = ({ estado }) => {
+  const map = {
+    pendiente:     { bg: "#fef9c3", color: "#854d0e" },
+    en_ruta:       { bg: "#dbeafe", color: "#1e40af" },
+    completado:    { bg: "#dcfce7", color: "#166534" },
+    cancelado:     { bg: "#fee2e2", color: "#991b1b" },
+    con_novedades: { bg: "#ffedd5", color: "#9a3412" },
+    borrador:      { bg: "#f3f4f6", color: "#374151" },
+    revisado:      { bg: "#ede9fe", color: "#5b21b6" },
+    aprobado:      { bg: "#fef9c3", color: "#854d0e" },
+    pagado:        { bg: "#dcfce7", color: "#166534" },
+  };
+  const s = map[estado] || { bg: "#f3f4f6", color: "#374151" };
+  return (
+    <span style={{ background: s.bg, color: s.color, borderRadius: 20,
+      padding: "2px 10px", fontSize: 11, fontWeight: 700 }}>
+      {estado || "—"}
+    </span>
+  );
+};
+
+const KpiCardMaestro = ({ label, valor, sub, color = "#1a1a1a" }) => (
+  <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10,
+    padding: "14px 16px", flex: 1, minWidth: 120 }}>
+    <div style={{ fontSize: 10, color: "#888", fontWeight: 800,
+      textTransform: "uppercase", letterSpacing: 1, marginBottom: 6 }}>{label}</div>
+    <div style={{ fontSize: 22, fontWeight: 800, color }}>{valor}</div>
+    {sub && <div style={{ fontSize: 11, color: "#888", marginTop: 4 }}>{sub}</div>}
+  </div>
+);
+
+// ── Panel de sincronización con el TMS ────────────────────────────────────────
+const PanelSyncTMS = ({ onSyncOk }) => {
+  const [fase, setFase]   = useState("idle"); // idle | abierto | procesando | ok | error
+  const [logs, setLogs]   = useState([]);
+  const [error, setError] = useState(null);
+  const [ultima, setUltima] = useState(null);
+
+  const agregarLog = (msg) => setLogs(prev => [...prev, msg]);
+
+  const abrirTMS = () => {
+    window.open("https://auth-meli.adminml.com", "_blank");
+    setFase("abierto");
+    setError(null);
+    setLogs([]);
+  };
+
+  const yaIngrese = async () => {
+    setFase("procesando");
+    setLogs(["Conectando con el servidor de extracción..."]);
+    setError(null);
+    try {
+      const health = await fetch(`${SCRAPER_URL}/health`, { signal: AbortSignal.timeout(5000) })
+        .catch(() => null);
+      if (!health || !health.ok) {
+        throw new Error("El servidor no responde. Verifica que Railway esté activo.");
+      }
+      agregarLog("Servidor OK. Iniciando extracción...");
+      const res = await fetch(`${SCRAPER_URL}/sync`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-api-secret": SCRAPER_SECRET },
+        body: JSON.stringify({ cookies: [], source: "manual" }),
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        throw new Error(d.error || "Error al iniciar sync");
+      }
+      agregarLog("Extracción iniciada. Esperando resultados...");
+      let intentos = 0;
+      const poll = setInterval(async () => {
+        intentos++;
+        try {
+          const sr = await fetch(`${SCRAPER_URL}/status`, {
+            headers: { "x-api-secret": SCRAPER_SECRET },
+          });
+          const status = await sr.json();
+          if (status.progreso?.length) setLogs(status.progreso.map(p => p.msg));
+          if (status.estado === "success") {
+            clearInterval(poll);
+            setFase("ok");
+            setUltima(new Date().toLocaleString("es-MX", { hour: "2-digit", minute: "2-digit" }));
+            if (onSyncOk) onSyncOk();
+          } else if (status.estado === "error") {
+            clearInterval(poll);
+            setFase("error");
+            setError(status.errorMsg || "Error en el scraping");
+          } else if (intentos > 40) {
+            clearInterval(poll);
+            setFase("error");
+            setError("Timeout: el proceso tardó demasiado. Intenta de nuevo.");
+          }
+        } catch (e) {
+          clearInterval(poll);
+          setFase("error");
+          setError(e.message);
+        }
+      }, 2000);
+    } catch (e) {
+      setFase("error");
+      setError(e.message);
+    }
+  };
+
+  const reset = () => { setFase("idle"); setLogs([]); setError(null); };
+
+  const stepStyle = (activo) => ({
+    display: "flex", alignItems: "center", gap: 12,
+    padding: "12px 16px", background: "#f8fafc", borderRadius: 8,
+    marginBottom: 8, opacity: activo ? 1 : 0.4, transition: "opacity .3s",
+  });
+
+  const numStyle = (color = "#1e40af", bg = "#dbeafe") => ({
+    width: 28, height: 28, borderRadius: "50%", background: bg, color,
+    display: "flex", alignItems: "center", justifyContent: "center",
+    fontSize: 12, fontWeight: 800, flexShrink: 0,
+  });
+
+  return (
+    <div style={{ background: "#fff", border: "1px solid #e4e7ec",
+      borderRadius: 12, padding: 20, marginBottom: 24 }}>
+      <div style={{ display: "flex", alignItems: "center",
+        justifyContent: "space-between", marginBottom: 16 }}>
+        <div>
+          <div style={{ fontWeight: 800, fontSize: 14 }}>Sincronización TMS</div>
+          <div style={{ fontSize: 11, color: "#888", marginTop: 2 }}>
+            {ultima ? `Última sync: hoy ${ultima}` : "Sin sincronizaciones recientes"}
+          </div>
+        </div>
+        {fase === "ok" && (
+          <span style={{ background: "#dcfce7", color: "#166534", borderRadius: 20,
+            padding: "3px 14px", fontSize: 11, fontWeight: 700 }}>✓ Sync exitosa</span>
+        )}
+        {fase === "procesando" && (
+          <span style={{ background: "#dbeafe", color: "#1e40af", borderRadius: 20,
+            padding: "3px 14px", fontSize: 11, fontWeight: 700 }}>Procesando...</span>
+        )}
+        {fase === "error" && (
+          <span style={{ background: "#fee2e2", color: "#991b1b", borderRadius: 20,
+            padding: "3px 14px", fontSize: 11, fontWeight: 700 }}>Error</span>
+        )}
+      </div>
+
+      {/* Paso 1 */}
+      <div style={stepStyle(true)}>
+        <div style={numStyle()}>1</div>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#1a1a1a" }}>
+            Abre el TMS y haz login</div>
+          <div style={{ fontSize: 11, color: "#888" }}>
+            Ingresa tu usuario, contraseña y código Okta normalmente</div>
+        </div>
+        <button onClick={abrirTMS}
+          disabled={fase === "procesando"}
+          style={{ padding: "6px 14px", borderRadius: 8, border: "1px solid #3B82F6",
+            background: "#3B82F6", color: "#fff", fontSize: 11, fontWeight: 700,
+            cursor: fase === "procesando" ? "not-allowed" : "pointer", opacity: fase === "procesando" ? 0.5 : 1 }}>
+          Abrir TMS
+        </button>
+      </div>
+
+      {/* Paso 2 */}
+      <div style={stepStyle(fase === "abierto" || fase === "error")}>
+        <div style={numStyle("#166534", "#dcfce7")}>2</div>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#1a1a1a" }}>
+            Confirma que ya ingresaste</div>
+          <div style={{ fontSize: 11, color: "#888" }}>
+            Cuando estés dentro del TMS, toca este botón</div>
+        </div>
+        <button onClick={yaIngrese}
+          disabled={fase !== "abierto" && fase !== "error"}
+          style={{ padding: "6px 14px", borderRadius: 8, border: "1px solid #16a34a",
+            background: "#16a34a", color: "#fff", fontSize: 11, fontWeight: 700,
+            cursor: (fase === "abierto" || fase === "error") ? "pointer" : "not-allowed",
+            opacity: (fase === "abierto" || fase === "error") ? 1 : 0.4 }}>
+          Ya ingresé
+        </button>
+      </div>
+
+      {/* Log */}
+      {logs.length > 0 && (
+        <div style={{ background: "#0f172a", borderRadius: 8, padding: "10px 14px",
+          fontFamily: "monospace", fontSize: 11, color: "#94a3b8", marginTop: 8,
+          maxHeight: 140, overflowY: "auto" }}>
+          {logs.map((l, i) => (
+            <div key={i} style={{ marginBottom: 2 }}>
+              <span style={{ color: "#4ade80" }}>›</span> {l}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Error */}
+      {error && (
+        <div style={{ background: "#fee2e2", border: "1px solid #fca5a5",
+          borderRadius: 8, padding: 12, marginTop: 8, fontSize: 12, color: "#991b1b",
+          display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <span><strong>Error:</strong> {error}</span>
+          <button onClick={reset} style={{ background: "none", border: "none",
+            color: "#991b1b", cursor: "pointer", fontWeight: 700, fontSize: 12,
+            textDecoration: "underline" }}>Reintentar</button>
+        </div>
+      )}
+    </div>
+  );
+};
+
+// ── Vista de viajes del día ───────────────────────────────────────────────────
+const VistaViajesMaestro = ({ fecha }) => {
+  const [viajes, setViajes]     = useState([]);
+  const [loading, setLoading]   = useState(true);
+  const [busqueda, setBusqueda] = useState("");
+
+  useEffect(() => { cargarViajes(); }, [fecha]);
+
+  const cargarViajes = async () => {
+    setLoading(true);
+    let q = sb.from("viajes")
+      .select("*, drivers(nombre, rut), rutas(nombre, zona)")
+      .order("fecha_salida", { ascending: false })
+      .limit(500);
+    if (fecha) {
+      const d = new Date(fecha);
+      const ini = new Date(d); ini.setHours(0, 0, 0, 0);
+      const fin = new Date(d); fin.setHours(23, 59, 59, 999);
+      q = q.gte("fecha_salida", ini.toISOString()).lte("fecha_salida", fin.toISOString());
+    }
+    const { data } = await q;
+    setViajes(data || []);
+    setLoading(false);
+  };
+
+  const filtrados = viajes.filter(v => {
+    if (!busqueda) return true;
+    const b = busqueda.toLowerCase();
+    return (
+      (v.tms_id || "").toLowerCase().includes(b) ||
+      (v.drivers?.nombre || "").toLowerCase().includes(b) ||
+      (v.estado || "").toLowerCase().includes(b) ||
+      ((v.tms_raw?.dataAttrs?.patente || v.tms_raw?.textos?.[4] || "")).toLowerCase().includes(b)
+    );
+  });
+
+  const totalCargados   = filtrados.reduce((s, v) => s + (v.paquetes_asignados || 0), 0);
+  const totalEntregados = filtrados.reduce((s, v) => s + (v.paquetes_entregados || 0), 0);
+  const totalDevueltos  = filtrados.reduce((s, v) => s + (v.paquetes_devueltos || 0), 0);
+  const efTotal         = totalCargados > 0 ? totalEntregados / totalCargados : null;
+  const kmTotal         = filtrados.reduce((s, v) => s + (v.km_recorridos || 0), 0);
+
+  if (loading) return (
+    <div style={{ textAlign: "center", padding: 48, color: "#888", fontSize: 13 }}>
+      Cargando viajes...
+    </div>
+  );
+
+  return (
+    <div>
+      {/* KPIs */}
+      <div style={{ display: "flex", gap: 10, marginBottom: 20, flexWrap: "wrap" }}>
+        <KpiCardMaestro label="Viajes" valor={fmtNumMaestro(filtrados.length)} />
+        <KpiCardMaestro label="Cargados" valor={fmtNumMaestro(totalCargados)} color="#3B82F6" />
+        <KpiCardMaestro label="Entregados" valor={fmtNumMaestro(totalEntregados)} color="#16a34a" />
+        <KpiCardMaestro label="Devueltos" valor={fmtNumMaestro(totalDevueltos)} color="#dc2626" />
+        <KpiCardMaestro
+          label="Eficiencia"
+          valor={efTotal != null ? fmtPctMaestro(efTotal) : "—"}
+          color={colorEfMaestro(efTotal)}
+          sub={`${Math.round(kmTotal)} km recorridos`} />
+      </div>
+
+      {/* Buscador */}
+      <div style={{ marginBottom: 12 }}>
+        <Input value={busqueda} onChange={e => setBusqueda(e.target.value)}
+          placeholder="Buscar por ID viaje, driver, patente, estado..." />
+      </div>
+
+      {/* Tabla */}
+      <div style={{ overflowX: "auto", borderRadius: 10,
+        border: "1px solid #e4e7ec", background: "#fff" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+          <thead>
+            <tr style={{ background: "#f8fafc", borderBottom: "2px solid #e4e7ec" }}>
+              {["ID Viaje","Fecha","Driver","Patente","Paradas","Cargados",
+                "Entregados","Devueltos","Eficiencia","KM","CECOS","Tipología","Observación","Estado"].map(h => (
+                <th key={h} style={{ padding: "10px 12px", textAlign: "left",
+                  fontWeight: 800, fontSize: 10, textTransform: "uppercase",
+                  letterSpacing: 0.5, color: "#555", whiteSpace: "nowrap" }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {filtrados.length === 0 && (
+              <tr><td colSpan={14} style={{ padding: 40, textAlign: "center",
+                color: "#888", fontSize: 13 }}>
+                {busqueda ? "Sin resultados para esa búsqueda" : "Sin viajes para esta fecha. Sincroniza el TMS."}
+              </td></tr>
+            )}
+            {filtrados.map((v, i) => {
+              const raw = v.tms_raw || {};
+              const textos = raw.textos || [];
+              const datos  = raw.dataAttrs || {};
+              const ef = v.paquetes_asignados > 0
+                ? v.paquetes_entregados / v.paquetes_asignados : null;
+              const patente = datos.patente || textos[4] || "—";
+              const cecos   = datos.cecos   || textos[1] || "—";
+              const tipologia = datos.tipologia || textos[13] || "—";
+              const paradas = v.tms_raw?.textos?.[6] || "—";
+              return (
+                <tr key={v.id} style={{ borderBottom: "1px solid #f1f5f9",
+                  background: i % 2 === 0 ? "#fff" : "#fafafa",
+                  transition: "background .1s" }}>
+                  <td style={{ padding: "9px 12px", fontWeight: 700,
+                    color: "#3B82F6", fontFamily: "monospace", fontSize: 11 }}>{v.tms_id}</td>
+                  <td style={{ padding: "9px 12px", whiteSpace: "nowrap", fontSize: 11 }}>
+                    {fmtFechaMaestro(v.fecha_salida)}</td>
+                  <td style={{ padding: "9px 12px", fontWeight: 600 }}>
+                    {v.drivers?.nombre || textos[5] || "—"}</td>
+                  <td style={{ padding: "9px 12px", fontFamily: "monospace",
+                    fontSize: 11, color: "#555" }}>{patente}</td>
+                  <td style={{ padding: "9px 12px", textAlign: "right" }}>{paradas}</td>
+                  <td style={{ padding: "9px 12px", textAlign: "right" }}>
+                    {fmtNumMaestro(v.paquetes_asignados)}</td>
+                  <td style={{ padding: "9px 12px", textAlign: "right",
+                    color: "#16a34a", fontWeight: 700 }}>
+                    {fmtNumMaestro(v.paquetes_entregados)}</td>
+                  <td style={{ padding: "9px 12px", textAlign: "right",
+                    color: (v.paquetes_devueltos || 0) > 0 ? "#dc2626" : "#888",
+                    fontWeight: (v.paquetes_devueltos || 0) > 0 ? 700 : 400 }}>
+                    {fmtNumMaestro(v.paquetes_devueltos)}</td>
+                  <td style={{ padding: "9px 12px", textAlign: "right",
+                    fontWeight: 800, color: colorEfMaestro(ef) }}>
+                    {fmtPctMaestro(ef)}</td>
+                  <td style={{ padding: "9px 12px", textAlign: "right",
+                    fontSize: 11 }}>
+                    {v.km_recorridos ? `${v.km_recorridos} km` : "—"}</td>
+                  <td style={{ padding: "9px 12px", fontSize: 11,
+                    color: "#555" }}>{cecos}</td>
+                  <td style={{ padding: "9px 12px", fontSize: 11 }}>{tipologia}</td>
+                  <td style={{ padding: "9px 12px", color: "#888",
+                    maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis",
+                    whiteSpace: "nowrap", fontSize: 11 }}>
+                    {v.observaciones || textos[14] || "—"}</td>
+                  <td style={{ padding: "9px 12px" }}>
+                    <BadgeEstadoMaestro estado={v.estado} /></td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+};
+
+// ── Vista de jornadas y liquidación ──────────────────────────────────────────
+const VistaJornadasMaestro = ({ periodo }) => {
+  const [jornadas, setJornadas] = useState([]);
+  const [loading, setLoading]   = useState(true);
+  const [filtro, setFiltro]     = useState("todas");
+  const [editando, setEditando] = useState(null);
+  const [formMonto, setFormMonto] = useState({ monto_base: 0, bonos: 0, descuentos: 0, notas: "" });
+
+  useEffect(() => { cargarJornadas(); }, [periodo]);
+
+  const cargarJornadas = async () => {
+    setLoading(true);
+    let q = sb.from("jornadas")
+      .select("*, drivers(nombre, rut, tipo_vehiculo)")
+      .order("fecha", { ascending: false })
+      .limit(500);
+    if (periodo) q = q.eq("periodo_pago", periodo);
+    const { data } = await q;
+    setJornadas(data || []);
+    setLoading(false);
+  };
+
+  const cambiarEstado = async (id, estado, extra = {}) => {
+    await sb.from("jornadas").update({
+      estado,
+      ...extra,
+      ...(estado === "pagado" ? { pagado: true, pagado_at: new Date().toISOString() } : {}),
+    }).eq("id", id);
+    cargarJornadas();
+  };
+
+  const guardarMonto = async () => {
+    await sb.from("jornadas").update({
+      monto_base:  parseFloat(formMonto.monto_base) || 0,
+      bonos:       parseFloat(formMonto.bonos) || 0,
+      descuentos:  parseFloat(formMonto.descuentos) || 0,
+      notas:       formMonto.notas,
+      estado:      "revisado",
+    }).eq("id", editando.id);
+    setEditando(null);
+    cargarJornadas();
+  };
+
+  const filtradas = filtro === "todas" ? jornadas
+    : jornadas.filter(j => j.estado === filtro);
+
+  const totalMonto    = filtradas.reduce((s, j) => s + (j.total || 0), 0);
+  const totalAprobado = jornadas.filter(j => j.estado === "aprobado").length;
+  const totalPagado   = jornadas.filter(j => j.estado === "pagado").length;
+
+  if (loading) return (
+    <div style={{ textAlign: "center", padding: 48, color: "#888" }}>
+      Cargando jornadas...
+    </div>
+  );
+
+  return (
+    <div>
+      {/* KPIs */}
+      <div style={{ display: "flex", gap: 10, marginBottom: 20, flexWrap: "wrap" }}>
+        <KpiCardMaestro label="Jornadas" valor={fmtNumMaestro(filtradas.length)} />
+        <KpiCardMaestro label="Total período"
+          valor={`$${fmtNumMaestro(Math.round(totalMonto))}`} color="#16a34a" />
+        <KpiCardMaestro label="Aprobadas" valor={fmtNumMaestro(totalAprobado)} color="#ca8a04" />
+        <KpiCardMaestro label="Pagadas" valor={fmtNumMaestro(totalPagado)} color="#16a34a" />
+      </div>
+
+      {/* Filtros */}
+      <div style={{ display: "flex", gap: 6, marginBottom: 16, flexWrap: "wrap" }}>
+        {["todas","borrador","revisado","aprobado","pagado"].map(f => (
+          <button key={f} onClick={() => setFiltro(f)}
+            style={{ padding: "5px 14px", borderRadius: 20,
+              border: `1px solid ${filtro === f ? "#3B82F6" : "#e4e7ec"}`,
+              background: filtro === f ? "#3B82F6" : "#fff",
+              color: filtro === f ? "#fff" : "#555",
+              fontSize: 11, fontWeight: 700, cursor: "pointer",
+              textTransform: "capitalize" }}>
+            {f === "todas" ? "Todas" : f}
+          </button>
+        ))}
+      </div>
+
+      {/* Tabla */}
+      <div style={{ overflowX: "auto", borderRadius: 10,
+        border: "1px solid #e4e7ec", background: "#fff" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+          <thead>
+            <tr style={{ background: "#f8fafc", borderBottom: "2px solid #e4e7ec" }}>
+              {["Driver","Patente","Fecha","Viajes","Cargados","Entregados",
+                "Eficiencia","Monto base","Bonos","Desc.","Total","Estado","Acciones"].map(h => (
+                <th key={h} style={{ padding: "10px 12px", textAlign: "left",
+                  fontWeight: 800, fontSize: 10, textTransform: "uppercase",
+                  letterSpacing: 0.5, color: "#555", whiteSpace: "nowrap" }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {filtradas.length === 0 && (
+              <tr><td colSpan={13} style={{ padding: 40, textAlign: "center",
+                color: "#888" }}>Sin jornadas para este período</td></tr>
+            )}
+            {filtradas.map((j, i) => (
+              <tr key={j.id} style={{ borderBottom: "1px solid #f1f5f9",
+                background: i % 2 === 0 ? "#fff" : "#fafafa" }}>
+                <td style={{ padding: "9px 12px", fontWeight: 700 }}>
+                  {j.drivers?.nombre || "—"}</td>
+                <td style={{ padding: "9px 12px", fontFamily: "monospace",
+                  fontSize: 11, color: "#555" }}>{j.drivers?.rut || "—"}</td>
+                <td style={{ padding: "9px 12px", whiteSpace: "nowrap", fontSize: 11 }}>
+                  {fmtFechaMaestro(j.fecha)}</td>
+                <td style={{ padding: "9px 12px", textAlign: "right" }}>
+                  {j.total_viajes}</td>
+                <td style={{ padding: "9px 12px", textAlign: "right" }}>
+                  {fmtNumMaestro(j.total_paquetes_asignados)}</td>
+                <td style={{ padding: "9px 12px", textAlign: "right",
+                  color: "#16a34a", fontWeight: 700 }}>
+                  {fmtNumMaestro(j.total_paquetes_entregados)}</td>
+                <td style={{ padding: "9px 12px", textAlign: "right",
+                  fontWeight: 800,
+                  color: colorEfMaestro(j.eficiencia_pct != null ? j.eficiencia_pct / 100 : null) }}>
+                  {j.eficiencia_pct != null ? j.eficiencia_pct.toFixed(1) + "%" : "—"}</td>
+                <td style={{ padding: "9px 12px", textAlign: "right" }}>
+                  ${fmtNumMaestro(j.monto_base)}</td>
+                <td style={{ padding: "9px 12px", textAlign: "right",
+                  color: "#16a34a" }}>+${fmtNumMaestro(j.bonos)}</td>
+                <td style={{ padding: "9px 12px", textAlign: "right",
+                  color: "#dc2626" }}>-${fmtNumMaestro(j.descuentos)}</td>
+                <td style={{ padding: "9px 12px", textAlign: "right",
+                  fontWeight: 800, fontSize: 13 }}>
+                  ${fmtNumMaestro(Math.round(j.total || 0))}</td>
+                <td style={{ padding: "9px 12px" }}>
+                  <BadgeEstadoMaestro estado={j.estado} /></td>
+                <td style={{ padding: "9px 12px" }}>
+                  <div style={{ display: "flex", gap: 6, flexWrap: "nowrap" }}>
+                    {(j.estado === "borrador" || j.estado === "revisado") && (
+                      <button onClick={() => {
+                        setEditando(j);
+                        setFormMonto({
+                          monto_base: j.monto_base || 0,
+                          bonos: j.bonos || 0,
+                          descuentos: j.descuentos || 0,
+                          notas: j.notas || "",
+                        });
+                      }} style={{ padding: "4px 10px", borderRadius: 6,
+                        border: "1px solid #6366f1", background: "transparent",
+                        color: "#6366f1", fontSize: 10, fontWeight: 700, cursor: "pointer" }}>
+                        Editar
+                      </button>
+                    )}
+                    {j.estado === "revisado" && (
+                      <button onClick={() => cambiarEstado(j.id, "aprobado",
+                        { aprobado_por: "supervisor" })}
+                        style={{ padding: "4px 10px", borderRadius: 6,
+                          border: "1px solid #ca8a04", background: "transparent",
+                          color: "#ca8a04", fontSize: 10, fontWeight: 700, cursor: "pointer" }}>
+                        Aprobar
+                      </button>
+                    )}
+                    {j.estado === "aprobado" && (
+                      <button onClick={() => cambiarEstado(j.id, "pagado")}
+                        style={{ padding: "4px 10px", borderRadius: 6,
+                          border: "1px solid #16a34a", background: "#16a34a",
+                          color: "#fff", fontSize: 10, fontWeight: 700, cursor: "pointer" }}>
+                        Pagar
+                      </button>
+                    )}
+                    {j.estado === "pagado" && (
+                      <span style={{ fontSize: 11, color: "#16a34a", fontWeight: 700 }}>
+                        ✓ Pagado
+                      </span>
+                    )}
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Modal editar montos */}
+      {editando && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)",
+          display: "flex", alignItems: "center", justifyContent: "center", zIndex: 9999 }}>
+          <div style={{ background: "#fff", borderRadius: 12, padding: 24,
+            width: 380, maxWidth: "90vw" }}>
+            <div style={{ fontWeight: 800, fontSize: 15, marginBottom: 4 }}>
+              Liquidación — {editando.drivers?.nombre}</div>
+            <div style={{ fontSize: 11, color: "#888", marginBottom: 20 }}>
+              {fmtFechaMaestro(editando.fecha)} · {editando.total_viajes} viajes</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              <div>
+                <Label>Monto base ($)</Label>
+                <Input type="number" value={formMonto.monto_base}
+                  onChange={e => setFormMonto({...formMonto, monto_base: e.target.value})}
+                  placeholder="0" />
+              </div>
+              <div>
+                <Label>Bonos ($)</Label>
+                <Input type="number" value={formMonto.bonos}
+                  onChange={e => setFormMonto({...formMonto, bonos: e.target.value})}
+                  placeholder="0" />
+              </div>
+              <div>
+                <Label>Descuentos ($)</Label>
+                <Input type="number" value={formMonto.descuentos}
+                  onChange={e => setFormMonto({...formMonto, descuentos: e.target.value})}
+                  placeholder="0" />
+              </div>
+              <div style={{ background: "#f8fafc", borderRadius: 8, padding: 12,
+                fontSize: 14, fontWeight: 800, textAlign: "right" }}>
+                Total: ${fmtNumMaestro(
+                  Math.round(
+                    (parseFloat(formMonto.monto_base) || 0) +
+                    (parseFloat(formMonto.bonos) || 0) -
+                    (parseFloat(formMonto.descuentos) || 0)
+                  )
+                )}
+              </div>
+              <div>
+                <Label>Notas</Label>
+                <Textarea value={formMonto.notas} rows={2}
+                  onChange={e => setFormMonto({...formMonto, notas: e.target.value})}
+                  placeholder="Observaciones de la jornada..." />
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: 8, marginTop: 20,
+              justifyContent: "flex-end" }}>
+              <Btn outline color="#475569" onClick={() => setEditando(null)}>
+                Cancelar
+              </Btn>
+              <Btn onClick={guardarMonto}>Guardar</Btn>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+// ── Vista de drivers ──────────────────────────────────────────────────────────
+const VistaDriversMaestro = () => {
+  const [drivers, setDrivers]   = useState([]);
+  const [loading, setLoading]   = useState(true);
+  const [modalAdd, setModalAdd] = useState(false);
+  const [form, setForm] = useState({
+    nombre: "", rut: "", telefono: "", email: "",
+    tipo_vehiculo: "furgon", estado: "activo",
+  });
+
+  useEffect(() => { cargarDrivers(); }, []);
+
+  const cargarDrivers = async () => {
+    setLoading(true);
+    const { data } = await sb.from("drivers").select("*").order("nombre");
+    setDrivers(data || []);
+    setLoading(false);
+  };
+
+  const guardarDriver = async () => {
+    if (!form.nombre.trim()) return;
+    await sb.from("drivers").insert(form);
+    setModalAdd(false);
+    setForm({ nombre: "", rut: "", telefono: "", email: "",
+      tipo_vehiculo: "furgon", estado: "activo" });
+    cargarDrivers();
+  };
+
+  const toggleEstado = async (d) => {
+    await sb.from("drivers").update({
+      estado: d.estado === "activo" ? "inactivo" : "activo"
+    }).eq("id", d.id);
+    cargarDrivers();
+  };
+
+  if (loading) return (
+    <div style={{ textAlign: "center", padding: 48, color: "#888" }}>
+      Cargando drivers...
+    </div>
+  );
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between",
+        alignItems: "center", marginBottom: 20 }}>
+        <div style={{ fontSize: 13, color: "#888" }}>
+          {drivers.filter(d => d.estado === "activo").length} activos
+          · {drivers.length} total
+        </div>
+        <Btn onClick={() => setModalAdd(true)} small>+ Nuevo driver</Btn>
+      </div>
+
+      <div style={{ display: "grid",
+        gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))", gap: 12 }}>
+        {drivers.map(d => {
+          const iniciales = (d.nombre || "").split(" ")
+            .map(n => n[0]).join("").slice(0, 2).toUpperCase();
+          return (
+            <div key={d.id} style={{ background: "#fff", border: "1px solid #e4e7ec",
+              borderRadius: 10, padding: 16 }}>
+              <div style={{ display: "flex", justifyContent: "space-between",
+                alignItems: "flex-start", marginBottom: 10 }}>
+                <div style={{ width: 40, height: 40, borderRadius: "50%",
+                  background: d.estado === "activo" ? "#dbeafe" : "#f3f4f6",
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  fontWeight: 800, fontSize: 13,
+                  color: d.estado === "activo" ? "#1e40af" : "#9ca3af" }}>
+                  {iniciales}
+                </div>
+                <span style={{
+                  background: d.estado === "activo" ? "#dcfce7" : "#f3f4f6",
+                  color: d.estado === "activo" ? "#166534" : "#6b7280",
+                  borderRadius: 20, padding: "2px 10px", fontSize: 10, fontWeight: 700 }}>
+                  {d.estado}
+                </span>
+              </div>
+              <div style={{ fontWeight: 800, fontSize: 13, marginBottom: 3 }}>
+                {d.nombre}</div>
+              <div style={{ fontSize: 11, color: "#888", marginBottom: 2,
+                fontFamily: "monospace" }}>{d.rut || "Sin patente"}</div>
+              <div style={{ fontSize: 11, color: "#888", marginBottom: 10 }}>
+                {d.tipo_vehiculo || "—"}{d.telefono ? ` · ${d.telefono}` : ""}</div>
+              <button onClick={() => toggleEstado(d)}
+                style={{ fontSize: 10, color: d.estado === "activo" ? "#dc2626" : "#16a34a",
+                  background: "none", border: "none", cursor: "pointer",
+                  padding: 0, fontWeight: 700 }}>
+                {d.estado === "activo" ? "Desactivar" : "Activar"}
+              </button>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Modal nuevo driver */}
+      {modalAdd && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)",
+          display: "flex", alignItems: "center", justifyContent: "center", zIndex: 9999 }}>
+          <div style={{ background: "#fff", borderRadius: 12, padding: 24,
+            width: 400, maxWidth: "90vw" }}>
+            <div style={{ fontWeight: 800, fontSize: 15, marginBottom: 20 }}>
+              Nuevo driver</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              <div><Label>Nombre completo *</Label>
+                <Input value={form.nombre}
+                  onChange={e => setForm({...form, nombre: e.target.value})}
+                  placeholder="Arturo Romero" /></div>
+              <div><Label>Patente / RUT</Label>
+                <Input value={form.rut}
+                  onChange={e => setForm({...form, rut: e.target.value})}
+                  placeholder="P35AXV" /></div>
+              <div><Label>Teléfono</Label>
+                <Input value={form.telefono}
+                  onChange={e => setForm({...form, telefono: e.target.value})}
+                  placeholder="+52 55 1234 5678" /></div>
+              <div><Label>Email</Label>
+                <Input type="email" value={form.email}
+                  onChange={e => setForm({...form, email: e.target.value})}
+                  placeholder="driver@email.com" /></div>
+              <div><Label>Tipo vehículo</Label>
+                <Select value={form.tipo_vehiculo}
+                  onChange={e => setForm({...form, tipo_vehiculo: e.target.value})}>
+                  <option value="moto">Moto</option>
+                  <option value="furgon">Furgón</option>
+                  <option value="camion">Camión</option>
+                  <option value="van">Van</option>
+                </Select></div>
+            </div>
+            <div style={{ display: "flex", gap: 8, marginTop: 20,
+              justifyContent: "flex-end" }}>
+              <Btn outline color="#475569" onClick={() => setModalAdd(false)}>
+                Cancelar
+              </Btn>
+              <Btn onClick={guardarDriver}>Guardar</Btn>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+// ── MÓDULO MAESTRO PRINCIPAL ──────────────────────────────────────────────────
+const ModuloMaestro = ({ usuario }) => {
+  const [vista, setVista]     = useState("viajes");
+  const [fecha, setFecha]     = useState(new Date().toISOString().split("T")[0]);
+  const [periodo, setPeriodo] = useState(new Date().toISOString().slice(0, 7));
+  const [reloadKey, setReloadKey] = useState(0);
+
+  const tabs = [
+    { id: "viajes",   label: "Viajes del día" },
+    { id: "jornadas", label: "Jornadas y pagos" },
+    { id: "drivers",  label: "Drivers" },
+  ];
+
+  return (
+    <div className="pg" style={{ maxWidth: 1200 }}>
+      {/* Header */}
+      <div style={{ display: "flex", alignItems: "center",
+        justifyContent: "space-between", marginBottom: 20, flexWrap: "wrap", gap: 12 }}>
+        <div>
+          <div style={{ fontSize: 20, fontWeight: 800 }}>Maestro de Operaciones</div>
+          <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>
+            Última milla · MercadoLibre México
+          </div>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          {vista === "viajes" && (
+            <input type="date" value={fecha}
+              onChange={e => setFecha(e.target.value)}
+              style={{ background: "#f0f2f5", border: "1px solid #e4e7ec",
+                borderRadius: 8, padding: "7px 10px", fontSize: 12,
+                fontFamily: "'Outfit', sans-serif" }} />
+          )}
+          {vista === "jornadas" && (
+            <input type="month" value={periodo}
+              onChange={e => setPeriodo(e.target.value)}
+              style={{ background: "#f0f2f5", border: "1px solid #e4e7ec",
+                borderRadius: 8, padding: "7px 10px", fontSize: 12,
+                fontFamily: "'Outfit', sans-serif" }} />
+          )}
+        </div>
+      </div>
+
+      {/* Panel sync */}
+      <PanelSyncTMS onSyncOk={() => setReloadKey(k => k + 1)} />
+
+      {/* Tabs */}
+      <div style={{ display: "flex", gap: 0, marginBottom: 20,
+        borderBottom: "2px solid #e4e7ec" }}>
+        {tabs.map(t => (
+          <button key={t.id} onClick={() => setVista(t.id)}
+            style={{ padding: "10px 22px", background: "none", border: "none",
+              borderBottom: vista === t.id ? "2px solid #3B82F6" : "2px solid transparent",
+              color: vista === t.id ? "#3B82F6" : "#555",
+              fontSize: 12, fontWeight: 800, cursor: "pointer",
+              marginBottom: -2, fontFamily: "'Outfit', sans-serif" }}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Contenido */}
+      {vista === "viajes"   && <VistaViajesMaestro key={`v-${fecha}-${reloadKey}`} fecha={fecha} />}
+      {vista === "jornadas" && <VistaJornadasMaestro key={`j-${periodo}-${reloadKey}`} periodo={periodo} />}
+      {vista === "drivers"  && <VistaDriversMaestro key={`d-${reloadKey}`} />}
+    </div>
+  );
+};
+
+
+
 export default function App() {
   const [usuario, setUsuario] = useState(() => {
     try {
@@ -3588,7 +4424,7 @@ export default function App() {
           </div>
         )}
         {tab === "wiki" && <ModuloWiki usuario={usuario} />}
-        {["checklist", "kpis", "maestro"].includes(tab) && (
+        {["checklist", "kpis"].includes(tab) && (
           <div className="pg">
             <div style={{ textAlign: "center", padding: "60px 20px" }}>
               <div style={{ fontSize: 48, marginBottom: 16 }}>🚧</div>
@@ -3597,6 +4433,7 @@ export default function App() {
             </div>
           </div>
         )}
+        {tab === "maestro" && <ModuloMaestro usuario={usuario} />}
       </div>
     </>
   );
