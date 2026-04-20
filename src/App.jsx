@@ -3582,7 +3582,7 @@ const PanelSyncTMS = ({ onSyncOk }) => {
   const agregarLog = (msg) => setLogs(prev => [...prev, msg]);
 
   const abrirTMS = () => {
-    window.open("https://auth-meli.adminml.com", "_blank");
+    window.open("https://auth-meli.adminml.com/oauth2/v1/authorize?client_id=0oa1qymyibcKeqqBo1d8&response_type=code&scope=openid+profile+email&redirect_uri=https%3A%2F%2Fokta-login-shipping.adminml.com%2Fauthorization-code-response&state=requestId%3D8ffaed70-cfe5-4b0d-94fb-24c6b961a77c%26callbackURL%3Dhttps%253A%252F%252Fenvios.adminml.com%252Flogistics%252Fcase-center%252Fcases", "_blank");
     setFase("abierto");
     setError(null);
     setLogs([]);
