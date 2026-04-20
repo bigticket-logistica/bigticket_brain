@@ -3516,7 +3516,7 @@ function ModuloWiki({ usuario }) {
 // DRIVER, PARADAS, CARGADOS, ENTREGADOS, DEVUELTOS, KM, SEG_ZONAL, TIPOLOGIA
 // ─────────────────────────────────────────────────────────────────────────────
 
-const SCRAPER_URL    = "https://TU-APP.railway.app"; // ← reemplazar con URL real de Railway
+const SCRAPER_URL    = "bigticket-meli-scraper-production.up.railway.app"; // ← reemplazar con URL real de Railway
 const SCRAPER_SECRET = "bigticket-secret-2025";
 
 const fmtFechaMaestro = (iso) => {
