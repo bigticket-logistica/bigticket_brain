@@ -3516,7 +3516,7 @@ function ModuloWiki({ usuario }) {
 // DRIVER, PARADAS, CARGADOS, ENTREGADOS, DEVUELTOS, KM, SEG_ZONAL, TIPOLOGIA
 // ─────────────────────────────────────────────────────────────────────────────
 
-const SCRAPER_URL    = "https://bigticket-meli-scraper-production.up.railway.app"; // ← reemplazar con URL real de Railway
+const SCRAPER_URL    = "https://TU-APP.railway.app"; // ← reemplazar con URL real de Railway
 const SCRAPER_SECRET = "bigticket-secret-2025";
 
 const fmtFechaMaestro = (iso) => {
@@ -3573,8 +3573,8 @@ const KpiCardMaestro = ({ label, valor, sub, color = "#1a1a1a" }) => (
 );
 
 // ── Panel de sincronización con el TMS ────────────────────────────────────────
-const PanelSyncTMS = ({ onSyncOk }) => {
-  const [fase, setFase]   = useState("idle"); // idle | abierto | procesando | ok | error
+const PanelSyncTMS = ({ onSyncOk, fechaInicio, fechaFin }) => {
+  const [fase, setFase]   = useState("idle");
   const [logs, setLogs]   = useState([]);
   const [error, setError] = useState(null);
   const [ultima, setUltima] = useState(null);
@@ -3582,13 +3582,17 @@ const PanelSyncTMS = ({ onSyncOk }) => {
   const agregarLog = (msg) => setLogs(prev => [...prev, msg]);
 
   const abrirTMS = () => {
-    window.open("https://auth-meli.adminml.com/oauth2/v1/authorize?client_id=0oa1qymyibcKeqqBo1d8&response_type=code&scope=openid+profile+email&redirect_uri=https%3A%2F%2Fokta-login-shipping.adminml.com%2Fauthorization-code-response&state=requestId%3D8ffaed70-cfe5-4b0d-94fb-24c6b961a77c%26callbackURL%3Dhttps%253A%252F%252Fenvios.adminml.com%252Flogistics%252Fcase-center%252Fcases", "_blank");
+    window.open("https://envios.adminml.com/carriers/reports", "_blank");
     setFase("abierto");
     setError(null);
     setLogs([]);
   };
 
   const yaIngrese = async () => {
+    const hoy = new Date().toISOString().split("T")[0];
+    const fi  = fechaInicio || hoy;
+    const ff  = fechaFin    || hoy;
+
     setFase("procesando");
     setLogs(["Conectando con el servidor de extracción..."]);
     setError(null);
@@ -3598,11 +3602,11 @@ const PanelSyncTMS = ({ onSyncOk }) => {
       if (!health || !health.ok) {
         throw new Error("El servidor no responde. Verifica que Railway esté activo.");
       }
-      agregarLog("Servidor OK. Iniciando extracción...");
+      agregarLog(`Servidor OK. Extrayendo datos del ${fi} al ${ff}...`);
       const res = await fetch(`${SCRAPER_URL}/sync`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-api-secret": SCRAPER_SECRET },
-        body: JSON.stringify({ cookies: [], source: "manual" }),
+        body: JSON.stringify({ cookies: [], source: "manual", fechaInicio: fi, fechaFin: ff, mile: "LM" }),
       });
       if (!res.ok) {
         const d = await res.json().catch(() => ({}));
@@ -3626,7 +3630,7 @@ const PanelSyncTMS = ({ onSyncOk }) => {
           } else if (status.estado === "error") {
             clearInterval(poll);
             setFase("error");
-            setError(status.errorMsg || "Error en el scraping");
+            setError(status.error || status.errorMsg || "Error en el scraping");
           } else if (intentos > 40) {
             clearInterval(poll);
             setFase("error");
@@ -4318,7 +4322,7 @@ const ModuloMaestro = ({ usuario }) => {
       </div>
 
       {/* Panel sync */}
-      <PanelSyncTMS onSyncOk={() => setReloadKey(k => k + 1)} />
+      <PanelSyncTMS onSyncOk={() => setReloadKey(k => k + 1)} fechaInicio={fecha} fechaFin={fecha} />
 
       {/* Tabs */}
       <div style={{ display: "flex", gap: 0, marginBottom: 20,
