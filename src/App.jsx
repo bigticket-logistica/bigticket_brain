@@ -4508,39 +4508,37 @@ function ModuloPNR() {
   );
 }
 
+// ─── MÓDULO INCIDENCIAS LAST MILE (API JSON) ────────────────────────
 function ModuloIncidencias() {
   const [resumen, setResumen] = useState(null);
   const [casos, setCasos] = useState([]);
-  const [capturas, setCapturas] = useState([]);
-  const [capturaId, setCapturaId] = useState(null);
+  const [fechas, setFechas] = useState([]);
+  const [fechaCaptura, setFechaCaptura] = useState("");
   const [loading, setLoading] = useState(true);
   const [tabInc, setTabInc] = useState("casos");
   const [filtroEstado, setFiltroEstado] = useState("todos");
-  const [filtroMotivo, setFiltroMotivo] = useState("todos");
+  const [filtroTipo, setFiltroTipo] = useState("todos");
+  const [filtroSvc, setFiltroSvc] = useState("todos");
   const [busqueda, setBusqueda] = useState("");
 
-  useEffect(() => { cargarCapturas(); }, []);
-  useEffect(() => { if (capturaId) cargarDetalle(capturaId); }, [capturaId]);
+  useEffect(() => { cargarFechas(); }, []);
+  useEffect(() => { if (fechaCaptura) cargarDetalle(fechaCaptura); }, [fechaCaptura]);
 
-  const cargarCapturas = async () => {
+  const cargarFechas = async () => {
     setLoading(true);
-    const { data } = await sb.from("incidencias_resumen")
-      .select("captura_id, capturado_at, total_casos, screenshot_url")
-      .order("capturado_at", { ascending: false })
-      .limit(20);
-    if (data?.length) {
-      setCapturas(data);
-      setCapturaId(data[0].captura_id);
-    } else {
-      setLoading(false);
-    }
+    const { data } = await sb.from("incidencias_resumen_lm")
+      .select("fecha_captura, total_casos, ultima_sync")
+      .order("fecha_captura", { ascending: false })
+      .limit(30);
+    if (data?.length) { setFechas(data); setFechaCaptura(data[0].fecha_captura); }
+    else setLoading(false);
   };
 
-  const cargarDetalle = async (id) => {
+  const cargarDetalle = async (fecha) => {
     setLoading(true);
     const [{ data: r }, { data: c }] = await Promise.all([
-      sb.from("incidencias_resumen").select("*").eq("captura_id", id).single(),
-      sb.from("incidencias_casos").select("*").eq("captura_id", id).order("id"),
+      sb.from("incidencias_resumen_lm").select("*").eq("fecha_captura", fecha).single(),
+      sb.from("incidencias_casos_lm").select("*").eq("fecha_captura", fecha).order("case_id", { ascending: false }),
     ]);
     setResumen(r);
     setCasos(c || []);
@@ -4550,111 +4548,119 @@ function ModuloIncidencias() {
   const estadoColor = {
     "Nuevo":               { bg: "#dbeafe", color: "#1e40af" },
     "Abierto":             { bg: "#fef3c7", color: "#92400e" },
-    "Cerrado | Con reintento": { bg: "#dcfce7", color: "#166534" },
-    "Cerrado":             { bg: "#f0fdf4", color: "#166534" },
-    "Esperando respuesta": { bg: "#f3e8ff", color: "#6b21a8" },
+    "Cerrado":             { bg: "#dcfce7", color: "#166534" },
     "Cancelado":           { bg: "#f1f5f9", color: "#475569" },
-    "Anulado":             { bg: "#f1f5f9", color: "#475569" },
+    "Esperando respuesta": { bg: "#f3e8ff", color: "#6b21a8" },
+  };
+  const subEstadoColor = {
+    "Con reintento":         { bg: "#dcfce7", color: "#166534" },
+    "Sin reintento":         { bg: "#fee2e2", color: "#c0392b" },
+    "Anulado":               { bg: "#f1f5f9", color: "#475569" },
+    "Cerrado":               { bg: "#dcfce7", color: "#166534" },
+    "Sin sugerencia de reintento": { bg: "#fef3c7", color: "#92400e" },
+  };
+  const prioridadColor = {
+    "VERY_HIGH": { bg: "#fee2e2", color: "#c0392b", label: "Muy alta" },
+    "HIGH":      { bg: "#fef3c7", color: "#92400e", label: "Alta" },
+    "MEDIUM":    { bg: "#dbeafe", color: "#1e40af", label: "Media" },
+    "LOW":       { bg: "#f1f5f9", color: "#475569", label: "Baja" },
   };
 
-  const getEstadoStyle = (estado) => estadoColor[estado] || { bg: "#f1f5f9", color: "#475569" };
+  const getEstilo = (mapa, k) => mapa[k] || { bg: "#f1f5f9", color: "#475569" };
 
   const casosFiltrados = casos.filter(c => {
-    const matchEstado = filtroEstado === "todos" || c.estado === filtroEstado;
-    const matchMotivo = filtroMotivo === "todos" || c.motivo === filtroMotivo;
+    const matchEstado = filtroEstado === "todos" || c.estado_label === filtroEstado;
+    const matchTipo   = filtroTipo   === "todos" || c.tipo_label === filtroTipo;
+    const matchSvc    = filtroSvc    === "todos" || c.svc_name === filtroSvc;
     const matchBusqueda = !busqueda ||
-      c.id_caso?.toLowerCase().includes(busqueda.toLowerCase()) ||
-      c.ruta_id?.toLowerCase().includes(busqueda.toLowerCase()) ||
-      c.conductor_id?.toLowerCase().includes(busqueda.toLowerCase());
-    return matchEstado && matchMotivo && matchBusqueda;
+      String(c.case_id || "").includes(busqueda) ||
+      c.route_code?.toLowerCase().includes(busqueda.toLowerCase()) ||
+      c.route_id?.toLowerCase().includes(busqueda.toLowerCase()) ||
+      String(c.shipment_id || "").includes(busqueda);
+    return matchEstado && matchTipo && matchSvc && matchBusqueda;
   });
 
-  const estadosUnicos = [...new Set(casos.map(c => c.estado).filter(Boolean))];
-  const motivosUnicos = [...new Set(casos.map(c => c.motivo).filter(Boolean))];
-
-  const capturaActual = capturas.find(c => c.captura_id === capturaId);
+  const estadosUnicos = [...new Set(casos.map(c => c.estado_label).filter(Boolean))];
+  const tiposUnicos   = [...new Set(casos.map(c => c.tipo_label).filter(Boolean))];
+  const svcsUnicos    = [...new Set(casos.map(c => c.svc_name).filter(Boolean))];
 
   if (loading) return (
-    <div className="pg" style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "60vh" }}>
-      <div style={{ textAlign: "center" }}>
-        <div style={{ fontSize: 40, marginBottom: 12 }}>🚨</div>
-        <div style={{ fontSize: 14, color: "#888" }}>Cargando incidencias...</div>
+    <div className="pg" style={{ display:"flex", alignItems:"center", justifyContent:"center", height:"60vh" }}>
+      <div style={{ textAlign:"center" }}>
+        <div style={{ fontSize:40, marginBottom:12 }}>🚨</div>
+        <div style={{ fontSize:14, color:"#888" }}>Cargando incidencias...</div>
       </div>
     </div>
   );
 
-  if (!resumen && !loading) return (
-    <div className="pg" style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "60vh" }}>
-      <div style={{ textAlign: "center" }}>
-        <div style={{ fontSize: 48, marginBottom: 12 }}>📭</div>
-        <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 8 }}>Sin datos aún</div>
-        <div style={{ fontSize: 13, color: "#888" }}>Usa el botón Incidencias en Don B para capturar datos</div>
+  if (!casos.length && !loading) return (
+    <div className="pg" style={{ display:"flex", alignItems:"center", justifyContent:"center", height:"60vh" }}>
+      <div style={{ textAlign:"center" }}>
+        <div style={{ fontSize:48, marginBottom:12 }}>📭</div>
+        <div style={{ fontSize:16, fontWeight:700, marginBottom:8 }}>Sin datos aún</div>
+        <div style={{ fontSize:13, color:"#888" }}>Usa el botón 🚨 Incidencias en Don B para capturar datos</div>
       </div>
     </div>
   );
+
+  const fechaActual = fechas.find(f => f.fecha_captura === fechaCaptura);
 
   return (
     <div className="pg">
       {/* Header */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20, flexWrap: "wrap", gap: 12 }}>
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:20, flexWrap:"wrap", gap:12 }}>
         <div>
-          <div style={{ fontSize: 20, fontWeight: 800, color: "#1a3a6b" }}>🚨 Incidencias</div>
-          <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>Bandeja de soporte Last Mile</div>
+          <div style={{ fontSize:20, fontWeight:800, color:"#1a3a6b" }}>🚨 Incidencias Last Mile</div>
+          <div style={{ fontSize:12, color:"#888", marginTop:2 }}>
+            {fechaActual?.ultima_sync && `Última sync: ${new Date(fechaActual.ultima_sync).toLocaleString("es-MX", { day:"2-digit", month:"short", hour:"2-digit", minute:"2-digit" })}`}
+          </div>
         </div>
-        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          {/* Selector de captura */}
-          <select value={capturaId || ""} onChange={e => setCapturaId(e.target.value)}
-            style={{ fontSize: 12, padding: "6px 10px", borderRadius: 8, border: "1px solid #e4e7ec", background: "#fff", fontFamily: "'Outfit', sans-serif", cursor: "pointer" }}>
-            {capturas.map(c => (
-              <option key={c.captura_id} value={c.captura_id}>
-                {new Date(c.capturado_at).toLocaleString("es-MX", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })} — {c.total_casos} casos
+        <div style={{ display:"flex", gap:8, alignItems:"center" }}>
+          <select value={fechaCaptura} onChange={e => setFechaCaptura(e.target.value)}
+            style={{ fontSize:12, padding:"6px 10px", borderRadius:8, border:"1px solid #e4e7ec", fontFamily:"'Outfit', sans-serif" }}>
+            {fechas.map(f => (
+              <option key={f.fecha_captura} value={f.fecha_captura}>
+                {new Date(f.fecha_captura + "T12:00:00").toLocaleDateString("es-MX", { weekday:"short", day:"2-digit", month:"short" })} — {f.total_casos} casos
               </option>
             ))}
           </select>
-          <button onClick={cargarCapturas}
-            style={{ fontSize: 12, padding: "6px 14px", borderRadius: 8, border: "1px solid #e4e7ec", background: "#fff", cursor: "pointer", fontFamily: "'Outfit', sans-serif" }}>
+          <button onClick={() => cargarDetalle(fechaCaptura)}
+            style={{ fontSize:12, padding:"6px 14px", borderRadius:8, border:"1px solid #e4e7ec", background:"#fff", cursor:"pointer", fontFamily:"'Outfit', sans-serif" }}>
             🔄 Actualizar
           </button>
-          {capturaActual?.screenshot_url && (
-            <a href={capturaActual.screenshot_url} target="_blank" rel="noreferrer"
-              style={{ fontSize: 12, padding: "6px 14px", borderRadius: 8, border: "1px solid #3B82F6", color: "#3B82F6", textDecoration: "none", fontFamily: "'Outfit', sans-serif" }}>
-              📸 Ver screenshot
-            </a>
-          )}
         </div>
       </div>
 
       {/* KPIs */}
       {resumen && (
-        <div className="three-col" style={{ marginBottom: 20 }}>
-          <div className="form-card" style={{ textAlign: "center", padding: "16px 12px" }}>
-            <div style={{ fontSize: 36, fontWeight: 800, color: "#1a3a6b" }}>{resumen.total_casos}</div>
-            <div style={{ fontSize: 11, color: "#888", fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>Total Casos</div>
+        <div className="three-col" style={{ marginBottom:20 }}>
+          <div className="form-card" style={{ textAlign:"center", padding:"16px 12px" }}>
+            <div style={{ fontSize:36, fontWeight:800, color:"#1a3a6b" }}>{resumen.total_casos}</div>
+            <div style={{ fontSize:11, color:"#888", fontWeight:600, textTransform:"uppercase", letterSpacing:1 }}>Total Casos</div>
           </div>
-          <div className="form-card" style={{ textAlign: "center", padding: "16px 12px" }}>
-            <div style={{ fontSize: 36, fontWeight: 800, color: "#c0392b" }}>
-              {resumen.estados?.find(e => e.estado === "Nuevo")?.cantidad || 0}
+          <div className="form-card" style={{ textAlign:"center", padding:"16px 12px" }}>
+            <div style={{ fontSize:36, fontWeight:800, color:"#c0392b" }}>
+              {(resumen.estados || []).find(e => e.id === "NEW")?.value || 0}
             </div>
-            <div style={{ fontSize: 11, color: "#888", fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>Nuevos</div>
+            <div style={{ fontSize:11, color:"#888", fontWeight:600, textTransform:"uppercase", letterSpacing:1 }}>Nuevos</div>
           </div>
-          <div className="form-card" style={{ textAlign: "center", padding: "16px 12px" }}>
-            <div style={{ fontSize: 36, fontWeight: 800, color: "#166534" }}>
-              {resumen.estados?.find(e => e.estado?.includes("Cerrado"))?.cantidad ||
-               resumen.estados?.filter(e => e.estado?.includes("Cerrado")).reduce((a, b) => a + (b.cantidad || 0), 0) || 0}
+          <div className="form-card" style={{ textAlign:"center", padding:"16px 12px" }}>
+            <div style={{ fontSize:36, fontWeight:800, color:"#166534" }}>
+              {(resumen.estados || []).find(e => e.id === "CLOSED")?.value || 0}
             </div>
-            <div style={{ fontSize: 11, color: "#888", fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>Cerrados</div>
+            <div style={{ fontSize:11, color:"#888", fontWeight:600, textTransform:"uppercase", letterSpacing:1 }}>Cerrados</div>
           </div>
         </div>
       )}
 
-      {/* Tabs internos */}
-      <div style={{ display: "flex", gap: 0, borderBottom: "2px solid #e4e7ec", marginBottom: 16 }}>
-        {[{ id: "casos", label: "📋 Casos" }, { id: "resumen", label: "📊 Resumen" }, { id: "screenshot", label: "📸 Screenshot" }].map(t => (
+      {/* Tabs */}
+      <div style={{ display:"flex", gap:0, borderBottom:"2px solid #e4e7ec", marginBottom:16 }}>
+        {[{id:"casos",label:"📋 Casos"},{id:"resumen",label:"📊 Resumen"},{id:"rutas",label:"🚛 Por Ruta"}].map(t => (
           <button key={t.id} onClick={() => setTabInc(t.id)}
-            style={{ padding: "10px 20px", background: "none", border: "none",
-              borderBottom: tabInc === t.id ? "2px solid #3B82F6" : "2px solid transparent",
-              color: tabInc === t.id ? "#3B82F6" : "#555",
-              fontSize: 12, fontWeight: 800, cursor: "pointer", marginBottom: -2, fontFamily: "'Outfit', sans-serif" }}>
+            style={{ padding:"10px 20px", background:"none", border:"none",
+              borderBottom:tabInc===t.id?"2px solid #3B82F6":"2px solid transparent",
+              color:tabInc===t.id?"#3B82F6":"#555",
+              fontSize:12, fontWeight:800, cursor:"pointer", marginBottom:-2, fontFamily:"'Outfit', sans-serif" }}>
             {t.label}
           </button>
         ))}
@@ -4663,54 +4669,72 @@ function ModuloIncidencias() {
       {/* Tab: Casos */}
       {tabInc === "casos" && (
         <div>
-          {/* Filtros */}
-          <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap", alignItems: "center" }}>
-            <input placeholder="🔍 Buscar caso, ruta, conductor..." value={busqueda} onChange={e => setBusqueda(e.target.value)}
-              style={{ fontSize: 12, padding: "6px 12px", borderRadius: 8, border: "1px solid #e4e7ec", fontFamily: "'Outfit', sans-serif", minWidth: 240 }} />
+          <div style={{ display:"flex", gap:8, marginBottom:14, flexWrap:"wrap", alignItems:"center" }}>
+            <input placeholder="🔍 Buscar caso, ruta, envío..." value={busqueda} onChange={e => setBusqueda(e.target.value)}
+              style={{ fontSize:12, padding:"6px 12px", borderRadius:8, border:"1px solid #e4e7ec", fontFamily:"'Outfit', sans-serif", minWidth:240 }} />
             <select value={filtroEstado} onChange={e => setFiltroEstado(e.target.value)}
-              style={{ fontSize: 12, padding: "6px 10px", borderRadius: 8, border: "1px solid #e4e7ec", fontFamily: "'Outfit', sans-serif" }}>
+              style={{ fontSize:12, padding:"6px 10px", borderRadius:8, border:"1px solid #e4e7ec" }}>
               <option value="todos">Todos los estados</option>
               {estadosUnicos.map(e => <option key={e} value={e}>{e}</option>)}
             </select>
-            <select value={filtroMotivo} onChange={e => setFiltroMotivo(e.target.value)}
-              style={{ fontSize: 12, padding: "6px 10px", borderRadius: 8, border: "1px solid #e4e7ec", fontFamily: "'Outfit', sans-serif" }}>
+            <select value={filtroTipo} onChange={e => setFiltroTipo(e.target.value)}
+              style={{ fontSize:12, padding:"6px 10px", borderRadius:8, border:"1px solid #e4e7ec" }}>
               <option value="todos">Todos los motivos</option>
-              {motivosUnicos.map(m => <option key={m} value={m}>{m}</option>)}
+              {tiposUnicos.map(t => <option key={t} value={t}>{t}</option>)}
             </select>
-            <span style={{ fontSize: 12, color: "#888" }}>{casosFiltrados.length} casos</span>
+            <select value={filtroSvc} onChange={e => setFiltroSvc(e.target.value)}
+              style={{ fontSize:12, padding:"6px 10px", borderRadius:8, border:"1px solid #e4e7ec" }}>
+              <option value="todos">Todas las SC</option>
+              {svcsUnicos.map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
+            <span style={{ fontSize:12, color:"#888" }}>{casosFiltrados.length} casos</span>
           </div>
 
-          {/* Tabla */}
-          <div style={{ background: "#fff", borderRadius: 10, border: "1px solid #e4e7ec", overflow: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+          <div style={{ background:"#fff", borderRadius:10, border:"1px solid #e4e7ec", overflow:"auto" }}>
+            <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12 }}>
               <thead>
-                <tr style={{ background: "#f8f9fa" }}>
-                  {["ID Caso", "Motivo", "Conductor", "Ruta", "S/C", "Promesa", "Estado", "Alerta"].map(h => (
-                    <th key={h} style={{ padding: "10px 12px", textAlign: "left", fontWeight: 700, color: "#555", borderBottom: "1px solid #e4e7ec", whiteSpace: "nowrap" }}>{h}</th>
+                <tr style={{ background:"#f8f9fa" }}>
+                  {["ID Caso","Motivo","Estado","Cierre","Prioridad","Ruta","SC","Progreso","Promesa","Envío"].map(h => (
+                    <th key={h} style={{ padding:"10px 12px", textAlign:"left", fontWeight:700, color:"#555", borderBottom:"1px solid #e4e7ec", whiteSpace:"nowrap" }}>{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {casosFiltrados.length === 0 ? (
-                  <tr><td colSpan={8} style={{ padding: "30px", textAlign: "center", color: "#888" }}>Sin casos con los filtros aplicados</td></tr>
+                  <tr><td colSpan={10} style={{ padding:"30px", textAlign:"center", color:"#888" }}>Sin casos con los filtros aplicados</td></tr>
                 ) : casosFiltrados.map((c, i) => {
-                  const estilo = getEstadoStyle(c.estado);
+                  const estE = getEstilo(estadoColor, c.estado_label);
+                  const estS = getEstilo(subEstadoColor, c.sub_estado_label);
+                  const estP = prioridadColor[c.priority] || { bg:"#f1f5f9", color:"#475569", label: c.priority };
                   return (
-                    <tr key={c.id || i} style={{ borderBottom: "1px solid #f4f5f7" }}>
-                      <td style={{ padding: "9px 12px", fontWeight: 600, color: "#1a3a6b" }}>{c.id_caso || "—"}</td>
-                      <td style={{ padding: "9px 12px", color: "#444", maxWidth: 180 }}>{c.motivo || "—"}</td>
-                      <td style={{ padding: "9px 12px", color: "#555" }}>{c.conductor_id || "—"}</td>
-                      <td style={{ padding: "9px 12px", color: "#555" }}>{c.ruta_id || "—"}</td>
-                      <td style={{ padding: "9px 12px", color: "#555" }}>{c.service_center || "—"}</td>
-                      <td style={{ padding: "9px 12px", color: "#555", whiteSpace: "nowrap" }}>{c.promesa_entrega || "—"}</td>
-                      <td style={{ padding: "9px 12px" }}>
-                        <span style={{ ...estilo, padding: "3px 10px", borderRadius: 20, fontSize: 11, fontWeight: 700, whiteSpace: "nowrap" }}>
-                          {c.estado || "—"}
-                        </span>
+                    <tr key={c.case_id || i} style={{ borderBottom:"1px solid #f4f5f7" }}>
+                      <td style={{ padding:"9px 12px", fontWeight:600, color:"#1a3a6b" }}>{c.case_id}</td>
+                      <td style={{ padding:"9px 12px", color:"#444", maxWidth:200 }}>{c.tipo_label || "—"}</td>
+                      <td style={{ padding:"9px 12px" }}>
+                        <span style={{ ...estE, padding:"3px 10px", borderRadius:20, fontSize:11, fontWeight:700, whiteSpace:"nowrap" }}>{c.estado_label || "—"}</span>
                       </td>
-                      <td style={{ padding: "9px 12px", color: c.tiempo_alerta ? "#c0392b" : "#888", fontWeight: c.tiempo_alerta ? 700 : 400 }}>
-                        {c.tiempo_alerta || "—"}
+                      <td style={{ padding:"9px 12px" }}>
+                        {c.sub_estado_label ? <span style={{ ...estS, padding:"3px 10px", borderRadius:20, fontSize:11, fontWeight:700, whiteSpace:"nowrap" }}>{c.sub_estado_label}</span> : "—"}
                       </td>
+                      <td style={{ padding:"9px 12px" }}>
+                        <span style={{ ...estP, padding:"2px 8px", borderRadius:6, fontSize:10, fontWeight:700 }}>{estP.label}</span>
+                      </td>
+                      <td style={{ padding:"9px 12px", color:"#555" }}>{c.route_code || "—"}</td>
+                      <td style={{ padding:"9px 12px", color:"#555" }}>{c.svc_name || "—"}</td>
+                      <td style={{ padding:"9px 12px", color:"#555" }}>
+                        {c.route_progress != null ? (
+                          <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+                            <div style={{ background:"#f1f5f9", borderRadius:8, height:6, width:50, overflow:"hidden" }}>
+                              <div style={{ background:"#3B82F6", height:"100%", width:`${c.route_progress}%` }} />
+                            </div>
+                            <span style={{ fontSize:11 }}>{c.route_progress}%</span>
+                          </div>
+                        ) : "—"}
+                      </td>
+                      <td style={{ padding:"9px 12px", color:"#555", whiteSpace:"nowrap" }}>
+                        {c.promise_date ? new Date(c.promise_date).toLocaleDateString("es-MX", { day:"2-digit", month:"short" }) : "—"}
+                      </td>
+                      <td style={{ padding:"9px 12px", color:"#888" }}>{c.shipment_id || "—"}</td>
                     </tr>
                   );
                 })}
@@ -4725,62 +4749,88 @@ function ModuloIncidencias() {
         <div className="three-col">
           <div className="form-card">
             <div className="form-title">Motivo de los casos</div>
-            {(resumen.motivos || []).map((m, i) => (
-              <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: "1px solid #f4f5f7", fontSize: 13 }}>
-                <span style={{ color: "#444" }}>{m.motivo}</span>
-                <span style={{ fontWeight: 700, color: "#1a3a6b" }}>{m.cantidad} <span style={{ color: "#888", fontWeight: 400 }}>({m.porcentaje})</span></span>
+            {(resumen.tipos || []).filter(t => t.value > 0).sort((a,b) => b.value - a.value).map((m, i) => (
+              <div key={i} style={{ display:"flex", justifyContent:"space-between", padding:"6px 0", borderBottom:"1px solid #f4f5f7", fontSize:13 }}>
+                <span style={{ color:"#444" }}>{m.label}</span>
+                <span style={{ fontWeight:700, color:"#1a3a6b" }}>{m.value}</span>
               </div>
             ))}
           </div>
           <div className="form-card">
             <div className="form-title">Estado de los casos</div>
-            {(resumen.estados || []).map((e, i) => {
-              const estilo = getEstadoStyle(e.estado);
+            {(resumen.estados || []).filter(e => e.value > 0).map((e, i) => {
+              const estilo = getEstilo(estadoColor, e.label);
               return (
-                <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderBottom: "1px solid #f4f5f7", fontSize: 13 }}>
-                  <span style={{ ...estilo, padding: "2px 10px", borderRadius: 20, fontSize: 11, fontWeight: 700 }}>{e.estado}</span>
-                  <span style={{ fontWeight: 700, color: "#1a3a6b" }}>{e.cantidad} <span style={{ color: "#888", fontWeight: 400 }}>({e.porcentaje})</span></span>
+                <div key={i} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"6px 0", borderBottom:"1px solid #f4f5f7", fontSize:13 }}>
+                  <span style={{ ...estilo, padding:"2px 10px", borderRadius:20, fontSize:11, fontWeight:700 }}>{e.label}</span>
+                  <span style={{ fontWeight:700, color:"#1a3a6b" }}>{e.value}</span>
                 </div>
               );
             })}
           </div>
           <div className="form-card">
             <div className="form-title">Detalle de cierre</div>
-            {(resumen.detalle_cierre || []).map((d, i) => (
-              <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: "1px solid #f4f5f7", fontSize: 13 }}>
-                <span style={{ color: "#444" }}>{d.tipo}</span>
-                <span style={{ fontWeight: 700, color: "#1a3a6b" }}>{d.cantidad} <span style={{ color: "#888", fontWeight: 400 }}>({d.porcentaje})</span></span>
-              </div>
-            ))}
+            {(resumen.sub_estados || []).filter(s => s.value > 0).map((d, i) => {
+              const estilo = getEstilo(subEstadoColor, d.label);
+              return (
+                <div key={i} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"6px 0", borderBottom:"1px solid #f4f5f7", fontSize:13 }}>
+                  <span style={{ ...estilo, padding:"2px 10px", borderRadius:20, fontSize:11, fontWeight:700 }}>{d.label}</span>
+                  <span style={{ fontWeight:700, color:"#1a3a6b" }}>{d.value}</span>
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
 
-      {/* Tab: Screenshot */}
-      {tabInc === "screenshot" && (
-        <div className="form-card" style={{ textAlign: "center" }}>
-          {capturaActual?.screenshot_url ? (
-            <>
-              <div style={{ fontSize: 12, color: "#888", marginBottom: 12 }}>
-                Captura: {capturaActual && new Date(capturaActual.capturado_at).toLocaleString("es-MX")}
-              </div>
-              <img src={capturaActual.screenshot_url} alt="Screenshot incidencias"
-                style={{ maxWidth: "100%", borderRadius: 8, border: "1px solid #e4e7ec" }} />
-              <div style={{ marginTop: 12 }}>
-                <a href={capturaActual.screenshot_url} target="_blank" rel="noreferrer"
-                  style={{ fontSize: 12, color: "#3B82F6", textDecoration: "none" }}>
-                  Abrir en nueva pestaña ↗
-                </a>
-              </div>
-            </>
-          ) : (
-            <div style={{ padding: "40px 20px", color: "#888" }}>Sin screenshot disponible</div>
-          )}
+      {/* Tab: Por Ruta */}
+      {tabInc === "rutas" && (
+        <div style={{ background:"#fff", borderRadius:10, border:"1px solid #e4e7ec", overflow:"auto" }}>
+          <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12 }}>
+            <thead>
+              <tr style={{ background:"#f8f9fa" }}>
+                {["Ruta","SC","Progreso","Casos","Nuevos","Cerrados"].map(h => (
+                  <th key={h} style={{ padding:"10px 12px", textAlign:"left", fontWeight:700, color:"#555", borderBottom:"1px solid #e4e7ec" }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {Object.entries(casos.reduce((acc, c) => {
+                const k = c.route_code || "Sin ruta";
+                if (!acc[k]) acc[k] = { ruta: k, svc: c.svc_name, progreso: c.route_progress, casos: 0, nuevos: 0, cerrados: 0 };
+                acc[k].casos++;
+                if (c.estado_id === "NEW") acc[k].nuevos++;
+                if (c.estado_id === "CLOSED") acc[k].cerrados++;
+                return acc;
+              }, {})).sort((a,b) => b[1].casos - a[1].casos).map(([k,r],i) => (
+                <tr key={i} style={{ borderBottom:"1px solid #f4f5f7" }}>
+                  <td style={{ padding:"9px 12px", fontWeight:600, color:"#1a3a6b" }}>{r.ruta}</td>
+                  <td style={{ padding:"9px 12px", color:"#555" }}>{r.svc || "—"}</td>
+                  <td style={{ padding:"9px 12px" }}>
+                    {r.progreso != null ? (
+                      <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+                        <div style={{ background:"#f1f5f9", borderRadius:8, height:6, width:60, overflow:"hidden" }}>
+                          <div style={{ background:"#3B82F6", height:"100%", width:`${r.progreso}%` }} />
+                        </div>
+                        <span style={{ fontSize:11 }}>{r.progreso}%</span>
+                      </div>
+                    ) : "—"}
+                  </td>
+                  <td style={{ padding:"9px 12px", fontWeight:700 }}>{r.casos}</td>
+                  <td style={{ padding:"9px 12px" }}>
+                    {r.nuevos > 0 ? <span style={{ background:"#dbeafe", color:"#1e40af", padding:"2px 10px", borderRadius:20, fontWeight:700 }}>{r.nuevos}</span> : "—"}
+                  </td>
+                  <td style={{ padding:"9px 12px", color:"#166534", fontWeight:700 }}>{r.cerrados || "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
     </div>
   );
 }
+
 
 export default function App() {
   const [usuario, setUsuario] = useState(() => {
