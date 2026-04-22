@@ -1907,6 +1907,15 @@ const LeadPanel = ({ lead, onClose, onUpdate, onEtapaChangeRequest }) => {
   const [etapa,setEtapa]=useState(lead.etapa||"Nuevo Lead");
   const [saving,setSaving]=useState(false);
   const [saved,setSaved]=useState(false);
+  const [respuestas,setRespuestas]=useState([]);
+
+  useEffect(()=>{
+    const fetchRespuestas=async()=>{
+      const data=await lfSb.from("lead_respuestas").select("*").eq("lead_id",lead.id).order("created_at");
+      if(Array.isArray(data)) setRespuestas(data);
+    };
+    fetchRespuestas();
+  },[lead.id]);
 
   useEffect(()=>{ setEtapa(lead.etapa||"Nuevo Lead"); },[lead.etapa]);
   const handleEtapaChange=async(newEtapa)=>{
@@ -2121,6 +2130,36 @@ const LeadPanel = ({ lead, onClose, onUpdate, onEtapaChangeRequest }) => {
                 <div style={{fontSize:10,fontWeight:800,color:"#aac3e8",letterSpacing:1,textTransform:"uppercase",marginBottom:8}}>Postulación libre — información adicional</div>
                 <div style={{background:"#ffffff15",borderRadius:10,padding:"12px 14px",fontSize:12,color:"#e2e8f0",lineHeight:1.7}}>
                   {lead.notas}
+                </div>
+              </div>
+            )}
+            {respuestas.length>0&&(
+              <div style={{marginTop:8}}>
+                <div style={{fontSize:10,fontWeight:800,color:"#aac3e8",letterSpacing:1,textTransform:"uppercase",marginBottom:8}}>
+                  Respuestas del formulario
+                </div>
+                <div style={{display:"flex",flexDirection:"column",gap:0}}>
+                  {respuestas.map((r,i)=>(
+                    <div key={r.id} style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",padding:"9px 0",borderBottom:"1px solid #ffffff15"}}>
+                      <div style={{flex:1}}>
+                        <div style={{fontSize:10,color:"#aac3e8",marginBottom:2}}>{r.pregunta}</div>
+                        <div style={{fontSize:12,color:"#ffffff",fontWeight:600}}>{r.respuesta||"—"}</div>
+                      </div>
+                      {r.puntaje_maximo>0&&(
+                        <div style={{flexShrink:0,marginLeft:12,textAlign:"right"}}>
+                          <div style={{fontSize:11,fontWeight:800,color:r.puntaje>0?"#10B981":"#aac3e8"}}>
+                            {r.puntaje}/{r.puntaje_maximo} pts
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                  {lead.tipo_postulacion==="campaña"&&(
+                    <div style={{display:"flex",justifyContent:"space-between",padding:"10px 0",marginTop:4}}>
+                      <span style={{fontSize:11,fontWeight:800,color:"#aac3e8"}}>PUNTAJE TOTAL</span>
+                      <span style={{fontSize:14,fontWeight:900,color:"#F47B20"}}>{respuestas.reduce((s,r)=>s+r.puntaje,0)} pts</span>
+                    </div>
+                  )}
                 </div>
               </div>
             )}
