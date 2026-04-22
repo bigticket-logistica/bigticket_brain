@@ -1871,22 +1871,22 @@ const TimelineView = ({ lead }) => {
 
   return(
     <div style={{display:"flex",flexDirection:"column",gap:0}}>
-      <div style={{fontSize:10,fontWeight:800,color:"#555555",letterSpacing:1,marginBottom:12,textTransform:"uppercase"}}>Historia del lead</div>
-      {loading?<div style={{color:"#aaaaaa",fontSize:12}}>Cargando historial...</div>:(
+      <div style={{fontSize:10,fontWeight:800,color:"#aac3e8",letterSpacing:1,marginBottom:12,textTransform:"uppercase"}}>Historia del lead</div>
+      {loading?<div style={{color:"#aac3e8",fontSize:12}}>Cargando historial...</div>:(
         <div style={{position:"relative"}}>
-          <div style={{position:"absolute",left:15,top:0,bottom:0,width:2,background:"#e4e7ec"}}/>
+          <div style={{position:"absolute",left:15,top:0,bottom:0,width:2,background:"#ffffff30"}}/>
           {eventos.map((ev,i)=>(
             <div key={i} style={{display:"flex",gap:14,paddingBottom:16,position:"relative"}}>
-              <div style={{width:32,height:32,borderRadius:"50%",background:ev.color+"22",border:`2px solid ${ev.color}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,flexShrink:0,zIndex:1,background:"#ffffff"}}>
+              <div style={{width:32,height:32,borderRadius:"50%",border:`2px solid ${ev.color}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,flexShrink:0,zIndex:1,background:"#1a3a6b"}}>
                 {ev.icon}
               </div>
               <div style={{flex:1,paddingTop:4}}>
-                <div style={{fontSize:12,fontWeight:700,color:"#1a1a1a",lineHeight:1.4}}>{ev.label}</div>
-                <div style={{fontSize:10,color:"#888888",marginTop:3}}>{formatFecha(ev.fecha)}</div>
+                <div style={{fontSize:12,fontWeight:700,color:"#ffffff",lineHeight:1.4}}>{ev.label}</div>
+                <div style={{fontSize:10,color:"#aac3e8",marginTop:3}}>{formatFecha(ev.fecha)}</div>
               </div>
             </div>
           ))}
-          {eventos.length===0&&<div style={{color:"#aaaaaa",fontSize:12,paddingLeft:46}}>Sin movimientos aún</div>}
+          {eventos.length===0&&<div style={{color:"#aac3e8",fontSize:12,paddingLeft:46}}>Sin movimientos aún</div>}
         </div>
       )}
     </div>
@@ -1921,8 +1921,8 @@ const LeadPanel = ({ lead, onClose, onUpdate, onEtapaChangeRequest }) => {
       <div style={{padding:"18px 20px",background:"linear-gradient(135deg,#0f1f3d,#1a3a6b)",borderBottom:"1px solid #e4e7ec",flexShrink:0}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
           <div style={{flex:1}}>
-            <div style={{fontSize:18,fontWeight:800,color:"#1a1a1a"}}>{lead.nombre||"Sin nombre"}</div>
-            <div style={{fontSize:12,color:"#888888",marginTop:2}}>{lead.cargo?`${lead.cargo} · `:""}{lead.empresa||"Sin empresa"}</div>
+            <div style={{fontSize:18,fontWeight:800,color:"#ffffff"}}>{lead.nombre||"Sin nombre"}</div>
+            <div style={{fontSize:12,color:"#aac3e8",marginTop:2}}>{lead.cargo?`${lead.cargo} · `:""}{lead.empresa||"Sin empresa"}</div>
             <div style={{display:"flex",gap:6,marginTop:8,flexWrap:"wrap"}}>
               <CanalTag canal={lead.fuente_contacto||lead.canal}/>
               {lead.pais&&<div style={{display:"flex",alignItems:"center",gap:4,background:"#f0f2f5",borderRadius:20,padding:"2px 8px"}}><PaisFlag pais={lead.pais}/><span style={{fontSize:10,fontWeight:700,color:"#555"}}>{lead.pais}</span></div>}
@@ -1944,7 +1944,7 @@ const LeadPanel = ({ lead, onClose, onUpdate, onEtapaChangeRequest }) => {
         </div>
       </div>
       <div style={{display:"flex",background:"#1a3a6b",borderBottom:"1px solid #e4e7ec",flexShrink:0}}>
-        {[["info","📋 Datos"],["score","⭐ Score"],["timeline","🕐 Historial"]].map(([id,label])=>(
+        {[["info","📋 Datos"],["score","⭐ Score"],["timeline","🕐 Historial"],["postulacion","📝 Información"]].map(([id,label])=>(
           <button key={id} onClick={()=>setTab(id)} style={{flex:1,padding:"10px 0",background:"none",border:"none",borderBottom:tab===id?"2px solid #3B82F6":"2px solid transparent",color:tab===id?"#3B82F6":"#475569",fontSize:11,fontWeight:700,cursor:"pointer",letterSpacing:.5}}>{label}</button>
         ))}
       </div>
@@ -2067,6 +2067,37 @@ const LeadPanel = ({ lead, onClose, onUpdate, onEtapaChangeRequest }) => {
           </div>
         )}
         {tab==="timeline"&&<TimelineView lead={lead}/>}
+        {tab==="postulacion"&&(
+          <div style={{display:"flex",flexDirection:"column",gap:12}}>
+            <div style={{fontSize:10,fontWeight:800,color:"#aac3e8",letterSpacing:1,marginBottom:4,textTransform:"uppercase"}}>Información de postulación</div>
+            {[
+              ["🗓️","Fecha postulación",      lead.created_at ? new Date(lead.created_at).toLocaleDateString("es-MX",{day:"2-digit",month:"long",year:"numeric"}) : null],
+              ["📍","Región / Estado",         lead.region_estado],
+              ["🏢","Zona / SVC",              lead.zona],
+              ["🚐","Tipo de vehículo",        lead.tipo_vehiculo],
+              ["📦","Volumen declarado",       lead.volumen],
+              ["🎯","Tipo postulación",        lead.tipo_postulacion],
+              ["📋","Campaña",                 lead.campana_id],
+              ["🌐","Canal de captación",      lead.fuente_contacto||lead.canal],
+              ["🌎","País",                    lead.pais],
+              ["🏷️","Código postulación",      lead.codigo_postulacion],
+              ["💬","Comentario vehículo",     lead.vehiculo_comentario],
+              ["📝","Notas internas",          lead.notas],
+              ["✅","Onboarding completado",   lead.onboarding_completado?"Sí":"No"],
+            ].filter(([,,v])=>v!=null&&v!=="").map(([icon,label,valor])=>(
+              <div key={label} style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",padding:"9px 0",borderBottom:"1px solid #ffffff15"}}>
+                <span style={{fontSize:12,color:"#aac3e8"}}>{icon} {label}</span>
+                <span style={{fontSize:12,color:"#ffffff",fontWeight:600,textAlign:"right",maxWidth:220}}>{String(valor)}</span>
+              </div>
+            ))}
+            {lead.url_vehiculo&&(
+              <div style={{marginTop:8}}>
+                <div style={{fontSize:10,color:"#aac3e8",fontWeight:800,letterSpacing:1,textTransform:"uppercase",marginBottom:8}}>Foto del vehículo</div>
+                <img src={lead.url_vehiculo} alt="Vehículo" style={{width:"100%",borderRadius:10,border:"1px solid #ffffff20"}} onError={e=>e.target.style.display="none"}/>
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
