@@ -1662,21 +1662,20 @@ const LeadCard = ({ lead, onSelect, onDragStart }) => {
   const cfg=ETAPA_CFG[lead.etapa]||{color:"#888888"};
   return (
     <div draggable onDragStart={(e)=>onDragStart(e,lead)} onClick={()=>onSelect(lead)}
-      style={{background:"#ffffff",border:`1px solid ${cfg.color}`,borderRadius:10,
-        padding:0,cursor:"grab",transition:"all .2s",userSelect:"none",overflow:"hidden"}}
-      onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-2px)";e.currentTarget.style.boxShadow=`0 4px 12px ${cfg.color}33`;}}
-      onMouseLeave={e=>{e.currentTarget.style.transform="translateY(0)";e.currentTarget.style.boxShadow="none";}}>
-      <div style={{background:cfg.color,padding:"8px 12px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+      style={{background:"#ffffff",border:"1px solid #e4e7ec",borderRadius:10,
+        padding:12,cursor:"grab",transition:"all .2s",userSelect:"none"}}
+      onMouseEnter={e=>{e.currentTarget.style.borderColor=cfg.color;e.currentTarget.style.transform="translateY(-2px)";}}
+      onMouseLeave={e=>{e.currentTarget.style.borderColor="#e4e7ec";e.currentTarget.style.transform="translateY(0)";}}>
+      <div style={{display:"flex",justifyContent:"space-between",marginBottom:7}}>
         <div style={{flex:1,minWidth:0}}>
-          <div style={{fontSize:12,fontWeight:800,color:"#ffffff",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{lead.nombre||"Sin nombre"}</div>
-          <div style={{fontSize:10,color:"rgba(255,255,255,0.8)",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{lead.empresa||"Sin empresa"}</div>
+          <div style={{fontSize:12,fontWeight:700,color:"#1a1a1a",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{lead.nombre||"Sin nombre"}</div>
+          <div style={{fontSize:10,color:"#555",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{lead.empresa||"Sin empresa"}</div>
         </div>
         <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:3}}>
           <ScoreDot score={lead.score} clasificacion={lead.clasificacion}/>
           {lead.pais&&<PaisFlag pais={lead.pais}/>}
         </div>
       </div>
-      <div style={{padding:"8px 12px"}}>
       <div style={{marginBottom:6}}><CanalTag canal={lead.canal}/></div>
       {lead.volumen&&<div style={{fontSize:10,color:"#555555"}}>📦 {lead.volumen}</div>}
       <div style={{fontSize:10,color:"#aaa",marginTop:3}}>⏱ {formatFecha(lead.updated_at)}</div>
@@ -1686,7 +1685,6 @@ const LeadCard = ({ lead, onSelect, onDragStart }) => {
             color={lead.clasificacion?.includes("Caliente")?"#c0392b":lead.clasificacion?.includes("Candidato")?"#F47B20":"#F47B20"}/>
         </div>
       )}
-      </div>
     </div>
   );
 };
@@ -1923,7 +1921,7 @@ const LeadPanel = ({ lead, onClose, onUpdate, onEtapaChangeRequest }) => {
       <div style={{padding:"18px 20px",background:"linear-gradient(135deg,#0f1f3d,#1a3a6b)",borderBottom:"1px solid #e4e7ec",flexShrink:0}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
           <div style={{flex:1}}>
-            <div style={{fontSize:18,fontWeight:800,color:"#1a1a1a"}}>{lead.nombre||"Sin nombre"}</div>
+            <div style={{fontSize:18,fontWeight:800,color:"#ffffff"}}>{lead.nombre||"Sin nombre"}</div>
             <div style={{fontSize:12,color:"#888888",marginTop:2}}>{lead.cargo?`${lead.cargo} · `:""}{lead.empresa||"Sin empresa"}</div>
             <div style={{display:"flex",gap:6,marginTop:8,flexWrap:"wrap"}}>
               <CanalTag canal={lead.fuente_contacto||lead.canal}/>
@@ -1946,7 +1944,7 @@ const LeadPanel = ({ lead, onClose, onUpdate, onEtapaChangeRequest }) => {
         </div>
       </div>
       <div style={{display:"flex",background:"#1a3a6b",borderBottom:"1px solid #e4e7ec",flexShrink:0}}>
-        {[["info","📋 Datos"],["score","⭐ Score"],["timeline","🕐 Historial"]].map(([id,label])=>(
+        {[["info","📋 Datos"],["score","⭐ Score"],["timeline","🕐 Historial"],["postulacion","📝 Información"]].map(([id,label])=>(
           <button key={id} onClick={()=>setTab(id)} style={{flex:1,padding:"10px 0",background:"none",border:"none",borderBottom:tab===id?"2px solid #3B82F6":"2px solid transparent",color:tab===id?"#3B82F6":"#475569",fontSize:11,fontWeight:700,cursor:"pointer",letterSpacing:.5}}>{label}</button>
         ))}
       </div>
