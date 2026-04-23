@@ -1907,8 +1907,18 @@ const LeadPanel = ({ lead, onClose, onUpdate, onEtapaChangeRequest }) => {
   const [etapa,setEtapa]=useState(lead.etapa||"Nuevo Lead");
   const [saving,setSaving]=useState(false);
   const [saved,setSaved]=useState(false);
+  const [respuestas,setRespuestas]=useState([]);
 
   useEffect(()=>{ setEtapa(lead.etapa||"Nuevo Lead"); },[lead.etapa]);
+
+  useEffect(()=>{
+    const fetchResp=async()=>{
+      const {data,error}=await sb.from("lead_respuestas").select("*").eq("lead_id",lead.id).order("created_at");
+      if(error) console.log("Error lead_respuestas:", error.message);
+      if(Array.isArray(data)) setRespuestas(data);
+    };
+    fetchResp();
+  },[lead.id]);
   const handleEtapaChange=async(newEtapa)=>{
     const etapaActual=etapa;
     if(etapaActual===newEtapa) return;
@@ -2067,6 +2077,95 @@ const LeadPanel = ({ lead, onClose, onUpdate, onEtapaChangeRequest }) => {
           </div>
         )}
         {tab==="timeline"&&<TimelineView lead={lead}/>}
+        {tab==="postulacion"&&(
+          <div style={{display:"flex",flexDirection:"column",gap:12}}>
+            <div style={{fontSize:10,fontWeight:800,color:"#aac3e8",letterSpacing:1,marginBottom:4,textTransform:"uppercase"}}>Información de postulación</div>
+            {[
+              ["🗓️","Fecha postulación",      lead.created_at ? new Date(lead.created_at).toLocaleDateString("es-MX",{day:"2-digit",month:"long",year:"numeric"}) : null],
+              ["📍","Región / Estado",         lead.region_estado],
+              ["🏢","Zona / SVC",              lead.zona],
+              ["🚐","Tipo de vehículo",        lead.tipo_vehiculo],
+              ["📦","Volumen declarado",       lead.volumen],
+              ["🎯","Tipo postulación",        lead.tipo_postulacion],
+              ["📋","Campaña",                 lead.origen ? lead.origen.replace("Campaña: ","") : lead.campana_id],
+              ["🌐","Canal de captación",      lead.fuente_contacto||lead.canal],
+              ["🌎","País",                    lead.pais],
+              ["🏷️","Código postulación",      lead.codigo_postulacion],
+              ["💬","Comentario vehículo",     lead.vehiculo_comentario],
+              ["📝","Notas internas",          lead.notas],
+              ["✅","Onboarding completado",   lead.onboarding_completado?"Sí":"No"],
+            ].filter(([,,v])=>v!=null&&v!=="").map(([icon,label,valor])=>(
+              <div key={label} style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",padding:"9px 0",borderBottom:"1px solid #ffffff15"}}>
+                <span style={{fontSize:12,color:"#aac3e8"}}>{icon} {label}</span>
+                <span style={{fontSize:12,color:"#ffffff",fontWeight:600,textAlign:"right",maxWidth:220}}>{String(valor)}</span>
+              </div>
+            ))}
+            {lead.url_vehiculo&&(
+              <div style={{marginTop:8}}>
+                <div style={{fontSize:10,color:"#aac3e8",fontWeight:800,letterSpacing:1,textTransform:"uppercase",marginBottom:8}}>Foto del vehículo</div>
+                <img src={lead.url_vehiculo} alt="Vehículo" style={{width:"100%",borderRadius:10,border:"1px solid #ffffff20"}} onError={e=>e.target.style.display="none"}/>
+              </div>
+            )}
+            {(lead.score>0||lead.razones_score)&&(
+              <div style={{marginTop:8}}>
+                <div style={{fontSize:10,fontWeight:800,color:"#aac3e8",letterSpacing:1,textTransform:"uppercase",marginBottom:8}}>Puntaje de postulación</div>
+                <div style={{background:"#ffffff15",borderRadius:10,padding:"12px 14px"}}>
+                  <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:lead.razones_score?12:0}}>
+                    <div style={{fontSize:32,fontWeight:900,color:"#F47B20",fontFamily:"monospace"}}>{lead.score||0}</div>
+                    <div>
+                      <div style={{fontSize:10,color:"#aac3e8"}}>Score total / 100</div>
+                      {lead.clasificacion&&<div style={{fontSize:11,fontWeight:700,color:"#ffffff"}}>{lead.emoji||""} {lead.clasificacion}</div>}
+                    </div>
+                  </div>
+                  {lead.razones_score&&lead.razones_score.split(" | ").map((r,i)=>(
+                    <div key={i} style={{display:"flex",alignItems:"flex-start",gap:8,padding:"5px 0",borderTop:"1px solid #ffffff15"}}>
+                      <span style={{color:"#2d7a4f",flexShrink:0}}>✓</span>
+                      <span style={{fontSize:11,color:"#e2e8f0"}}>{r}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {lead.tipo_postulacion==="libre"&&lead.notas&&(
+              <div style={{marginTop:8}}>
+                <div style={{fontSize:10,fontWeight:800,color:"#aac3e8",letterSpacing:1,textTransform:"uppercase",marginBottom:8}}>Postulación libre — información adicional</div>
+                <div style={{background:"#ffffff15",borderRadius:10,padding:"12px 14px",fontSize:12,color:"#e2e8f0",lineHeight:1.7}}>
+                  {lead.notas}
+                </div>
+              </div>
+            )}
+            {respuestas.length>0&&(
+              <div style={{marginTop:8}}>
+                <div style={{fontSize:10,fontWeight:800,color:"#aac3e8",letterSpacing:1,textTransform:"uppercase",marginBottom:8}}>
+                  Respuestas del formulario
+                </div>
+                <div style={{display:"flex",flexDirection:"column",gap:0}}>
+                  {respuestas.map((r)=>(
+                    <div key={r.id} style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",padding:"9px 0",borderBottom:"1px solid #ffffff15"}}>
+                      <div style={{flex:1}}>
+                        <div style={{fontSize:10,color:"#aac3e8",marginBottom:2}}>{r.pregunta}</div>
+                        <div style={{fontSize:12,color:"#ffffff",fontWeight:600}}>{r.respuesta||"—"}</div>
+                      </div>
+                      {r.puntaje_maximo>0&&(
+                        <div style={{flexShrink:0,marginLeft:12,textAlign:"right"}}>
+                          <div style={{fontSize:11,fontWeight:800,color:r.puntaje>0?"#2d7a4f":"#aac3e8"}}>
+                            {r.puntaje}/{r.puntaje_maximo} pts
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                  {lead.tipo_postulacion==="campaña"&&(
+                    <div style={{display:"flex",justifyContent:"space-between",padding:"10px 0",marginTop:4}}>
+                      <span style={{fontSize:11,fontWeight:800,color:"#aac3e8"}}>PUNTAJE TOTAL</span>
+                      <span style={{fontSize:14,fontWeight:900,color:"#F47B20"}}>{respuestas.reduce((s,r)=>s+r.puntaje,0)} pts</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
