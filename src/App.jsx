@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const SUPABASE_URL = "https://psvdtgjvognbmxfvqbaa.supabase.co";
@@ -5133,345 +5133,467 @@ function ModuloConfigPagos() {
   );
 }
 
-// ─── MÓDULO PAGOS (CERTIFICACIÓN DOCUMENTAL CHILE) ──────────────────
-// Replica EXACTA del archivo del analista. Cada fila = transportista,
-// cada columna = documento. Filtros: CECO (Operación) → Contratista.
+// ─── MÓDULO PAGOS · CERTIFICACIÓN DOCUMENTAL CHILE ──────────────────
+// Dashboard con vista Excel-like para reproducir el archivo del analista.
+// Conectado a tablas Supabase: certronic_estados_documentos + certronic_matriz_documentos
 function ModuloPagos() {
-  const [datos, setDatos] = useState([]);
+  const [datos, setDatos] = useState({ pc: [], ryc: [], sub: [] });
   const [loading, setLoading] = useState(true);
-  const [periodo, setPeriodo] = useState("");
+  const [periodo, setPeriodo] = useState(""); // YYYY-MM
   const [periodos, setPeriodos] = useState([]);
-  const [categoria, setCategoria] = useState("PC"); // PC | RYC | SUB
-  const [filtroCeco, setFiltroCeco] = useState("todos");
-  const [filtroContratista, setFiltroContratista] = useState("todos");
-  const [filtroEstado, setFiltroEstado] = useState("todos");
+  const [tabActiva, setTabActiva] = useState("pc"); // "pc" | "ryc" | "sub"
   const [busqueda, setBusqueda] = useState("");
-  const [orden, setOrden] = useState({ campo: "transporte", dir: "asc" });
+  const [filtroOperacion, setFiltroOperacion] = useState("todos");
+  const [filtroEstado, setFiltroEstado] = useState("todos");
+  const [filtroMandante, setFiltroMandante] = useState("todos");
   const [ultimaEjecucion, setUltimaEjecucion] = useState(null);
   const [ejecutandoScraper, setEjecutandoScraper] = useState(false);
-  const [filaExpandida, setFilaExpandida] = useState(null);
+  const [ordenCol, setOrdenCol] = useState("transporte");
+  const [ordenAsc, setOrdenAsc] = useState(true);
 
   useEffect(() => { cargarPeriodos(); }, []);
-  useEffect(() => { if (periodo) cargar(); }, [periodo]);
-  // Resetear filtro de contratista cuando cambia el CECO o categoría
-  useEffect(() => { setFiltroContratista("todos"); }, [filtroCeco, categoria]);
+  useEffect(() => { if (periodo) cargarDatos(); }, [periodo]);
 
   const cargarPeriodos = async () => {
-    const { data } = await sb.from("certronic_certificacion_mensual")
-      .select("anio, mes")
-      .order("anio", { ascending: false })
-      .order("mes", { ascending: false });
-    if (data && data.length) {
-      const unicos = [...new Set(data.map(r => `${r.anio}-${String(r.mes).padStart(2,"0")}`))];
+    try {
+      const { data } = await sb.from("certronic_certificacion_mensual")
+        .select("anio, mes")
+        .order("anio", { ascending: false })
+        .order("mes", { ascending: false });
+      const unicos = data && data.length
+        ? [...new Set(data.map(r => `${r.anio}-${String(r.mes).padStart(2,"0")}`))]
+        : [`${new Date().getFullYear()}-${String(new Date().getMonth()+1).padStart(2,"0")}`];
       setPeriodos(unicos);
       setPeriodo(unicos[0]);
-    } else {
-      const ahora = new Date();
-      const p = `${ahora.getFullYear()}-${String(ahora.getMonth()+1).padStart(2,"0")}`;
-      setPeriodos([p]);
-      setPeriodo(p);
+      const { data: log } = await sb.from("certronic_ejecuciones_log")
+        .select("*").order("fecha_ejecucion", { ascending: false }).limit(1);
+      if (log && log[0]) setUltimaEjecucion(log[0]);
+    } catch(e) {
+      console.error("Error cargar periodos:", e);
+      const p = `${new Date().getFullYear()}-${String(new Date().getMonth()+1).padStart(2,"0")}`;
+      setPeriodos([p]); setPeriodo(p);
     }
-    const { data: log } = await sb.from("certronic_ejecuciones_log")
-      .select("*").order("fecha_ejecucion", { ascending: false }).limit(1);
-    if (log && log[0]) setUltimaEjecucion(log[0]);
   };
 
-  const cargar = async () => {
+  const cargarDatos = async () => {
     setLoading(true);
     const [anio, mes] = periodo.split("-").map(Number);
-    const { data } = await sb.from("certronic_certificacion_mensual")
-      .select("*")
-      .eq("anio", anio)
-      .eq("mes", mes)
-      .order("transporte");
-    setDatos(data || []);
+    try {
+      const { data } = await sb.from("certronic_certificacion_mensual")
+        .select("*")
+        .eq("anio", anio).eq("mes", mes);
+      const todos = data || [];
+      setDatos({
+        pc: todos.filter(d => d.categoria === "PC"),
+        ryc: todos.filter(d => d.categoria === "RYC"),
+        sub: todos.filter(d => d.categoria === "SUB"),
+      });
+    } catch(e) {
+      console.error("Error cargar datos:", e);
+      setDatos({ pc: [], ryc: [], sub: [] });
+    }
     setLoading(false);
   };
 
   const reEjecutarScraper = async () => {
-    if (!confirm("¿Ejecutar el scraper de Certronic ahora? (puede tomar ~7 min)")) return;
+    if (!confirm("¿Ejecutar el scraper de Certronic? (~3 segundos para reporte completo + 7 min para gigante)")) return;
     setEjecutandoScraper(true);
     try {
       const res = await fetch("https://n8n.bigticket.cl/webhook/certronic-trigger", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+        method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ trigger_by: "manual_brain", periodo }),
       });
-      if (!res.ok) throw new Error("Webhook respondió " + res.status);
-      alert("✅ Scraper iniciado. Recibirás los nuevos datos en ~7 minutos.");
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      alert("✅ Scrapers iniciados. Recibirás los nuevos datos en pocos minutos.");
     } catch(e) {
-      alert("⚠ No se pudo iniciar el scraper: " + e.message + "\n\nPuedes ejecutarlo manualmente vía SSH:\nssh root@162.243.90.161\ncd /opt/certronic-scraper && node descargar-completo.js");
+      alert("⚠ No se pudo iniciar el scraper: " + e.message + "\n\nEjecuta manualmente:\nssh root@162.243.90.161\ncd /opt/certronic-scraper\nnode descargar-reporte-analista.js");
     }
     setEjecutandoScraper(false);
   };
 
-  // ─── Datos derivados ────────────────────────────────────────────
-  const datosCategoria = datos.filter(d => d.categoria === categoria);
+  // ── Helpers ──
+  const operacionAMandante = (op) => {
+    if (!op) return "Mercado Libre";
+    const u = String(op).toUpperCase();
+    if (u.includes("F_") || u.includes("FALABELLA")) return "Falabella";
+    if (u.includes("R_") || u.includes("ROSEN")) return "Rosen";
+    if (u.includes("C_") || u.includes("CANNON")) return "Cannon";
+    if (u.includes("ESPORADIC")) return "Esporádicos";
+    return "Mercado Libre";
+  };
 
-  // CECOs (operaciones) únicas dentro de la categoría seleccionada
-  const cecosUnicos = [...new Set(datosCategoria.map(d => d.operacion).filter(Boolean))].sort();
+  const fmt$ = (n) => "$" + Math.round(n || 0).toLocaleString("es-CL");
+  const fmtPct = (n) => n != null ? `${Math.round(n)}%` : "—";
 
-  // Contratistas únicos dentro del CECO seleccionado
-  const contratistasUnicos = [...new Set(
-    datosCategoria
-      .filter(d => filtroCeco === "todos" || d.operacion === filtroCeco)
-      .map(d => d.transporte)
-      .filter(Boolean)
-  )].sort();
+  // ── Filtrado y orden ──
+  const datosCategoriaActual = useMemo(() => {
+    let arr = datos[tabActiva] || [];
+    // Búsqueda
+    if (busqueda) {
+      const q = busqueda.toLowerCase();
+      arr = arr.filter(d =>
+        (d.transporte || "").toLowerCase().includes(q) ||
+        (d.subcontratista_nombre || "").toLowerCase().includes(q) ||
+        (d.email || "").toLowerCase().includes(q) ||
+        (d.operacion || "").toLowerCase().includes(q)
+      );
+    }
+    // Filtros
+    if (filtroOperacion !== "todos") arr = arr.filter(d => d.operacion === filtroOperacion);
+    if (filtroEstado !== "todos") arr = arr.filter(d => d.estado_final === filtroEstado);
+    if (filtroMandante !== "todos") arr = arr.filter(d => operacionAMandante(d.operacion) === filtroMandante);
+    // Orden
+    arr = [...arr].sort((a, b) => {
+      const va = a[ordenCol], vb = b[ordenCol];
+      if (va == null) return 1;
+      if (vb == null) return -1;
+      if (typeof va === "number") return ordenAsc ? va - vb : vb - va;
+      return ordenAsc ? String(va).localeCompare(String(vb)) : String(vb).localeCompare(String(va));
+    });
+    return arr;
+  }, [datos, tabActiva, busqueda, filtroOperacion, filtroEstado, filtroMandante, ordenCol, ordenAsc]);
 
-  // Aplicar todos los filtros
-  let datosFiltrados = datosCategoria
-    .filter(d => filtroCeco === "todos" || d.operacion === filtroCeco)
-    .filter(d => filtroContratista === "todos" || d.transporte === filtroContratista)
-    .filter(d => filtroEstado === "todos" || d.estado_final === filtroEstado)
-    .filter(d => !busqueda ||
-      `${d.transporte} ${d.subcontratista_nombre || ""} ${d.email || ""}`
-        .toLowerCase().includes(busqueda.toLowerCase()));
-
-  // Ordenamiento
-  datosFiltrados = [...datosFiltrados].sort((a, b) => {
-    const av = a[orden.campo] || "";
-    const bv = b[orden.campo] || "";
-    if (typeof av === "number") return orden.dir === "asc" ? av - bv : bv - av;
-    return orden.dir === "asc" ? String(av).localeCompare(String(bv)) : String(bv).localeCompare(String(av));
-  });
-
-  // KPIs del subset filtrado (resumen que aparece arriba de la tabla)
-  const total = datosFiltrados.length;
-  const certificados = datosFiltrados.filter(d => d.estado_final === "CERTIFICADO").length;
-  const parciales    = datosFiltrados.filter(d => d.estado_final === "PENDIENTE").length;
-  const sinCert      = datosFiltrados.filter(d => d.estado_final === "NO_CERTIFICADO").length;
-  const pctAvance    = total ? Math.round((certificados / total) * 100) : 0;
-  const montoRet     = datosFiltrados.reduce((s, d) => s + (Number(d.monto_retencion) || 0), 0);
-  const anomaliasN   = datosFiltrados.filter(d => d.tiene_anomalia).length;
-
-  // ─── Helpers visuales ───────────────────────────────────────────
-  const cellEstado = (estado) => {
-    const styles = {
-      VALIDADO:     { bg: "#dcfce7", color: "#166534", label: "VALIDADO" },
-      RECEPCIONADO: { bg: "#dbeafe", color: "#1e40af", label: "RECEPCIONADO" },
-      ENVIADO:      { bg: "#e0e7ff", color: "#3730a3", label: "ENVIADO" },
-      PENDIENTE:    { bg: "#fef3c7", color: "#92400e", label: "PENDIENTE" },
-      NO_APLICA:    { bg: "#f1f5f9", color: "#64748b", label: "NO APLICA" },
+  // KPIs por tab
+  const kpis = useMemo(() => {
+    const todos = [...datos.pc, ...datos.ryc, ...datos.sub];
+    const certificados = todos.filter(d => d.estado_final === "CERTIFICADO").length;
+    const parciales = todos.filter(d => d.estado_final === "PENDIENTE").length;
+    const sinCert = todos.filter(d => d.estado_final === "NO_CERTIFICADO").length;
+    const monto = todos.reduce((s, d) => s + (Number(d.monto_retencion) || 0), 0);
+    return {
+      total: todos.length,
+      certificados, parciales, sinCert,
+      pctAvance: todos.length ? Math.round(certificados / todos.length * 100) : 0,
+      monto,
+      anomalias: todos.filter(d => d.tiene_anomalia).length,
     };
-    const s = styles[estado] || { bg: "#f1f5f9", color: "#64748b", label: estado || "—" };
+  }, [datos]);
+
+  // Operaciones únicas (para filtro)
+  const operacionesUnicas = useMemo(() => {
+    const todos = [...datos.pc, ...datos.ryc, ...datos.sub];
+    return [...new Set(todos.map(d => d.operacion).filter(Boolean))].sort();
+  }, [datos]);
+
+  // Documentos por categoría (columnas dinámicas)
+  const docsPorCategoria = {
+    pc: [
+      { key: "doc_f30", label: "F30" },
+      { key: "doc_f30_1", label: "F30-1" },
+      { key: "doc_liquidaciones", label: "LIQUIDACIONES" },
+      { key: "doc_cotizaciones", label: "COTIZACIONES" },
+      { key: "doc_mutualidad", label: "MUTUALIDAD" },
+    ],
+    ryc: [
+      { key: "doc_f30", label: "F30" },
+      { key: "doc_mutualidad", label: "MUTUALIDAD" },
+    ],
+    sub: [
+      { key: "doc_boleta_honorarios", label: "BOLETA HON." },
+      { key: "doc_comprobante_pago", label: "COMP. PAGO" },
+    ],
+  };
+
+  // ── Descargar Excel multi-hoja (formato del analista) ──
+  // Genera un .xlsx real con 4 hojas:
+  //   1. RESUMEN — KPIs y métricas para enviar por email
+  //   2. Personal Contratado — formato idéntico al del analista
+  //   3. Representante y Conductor
+  //   4. Subcontratista
+  const descargarExcel = async () => {
+    // Cargar SheetJS dinámicamente (incluido en el entorno Claude artifacts)
+    let XLSX;
+    try {
+      XLSX = await import("https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js")
+        .then(() => window.XLSX);
+    } catch(e) {
+      // Fallback: cargar via script tag si el import dinámico no está disponible
+      if (!window.XLSX) {
+        await new Promise((resolve, reject) => {
+          const s = document.createElement("script");
+          s.src = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
+          s.onload = resolve;
+          s.onerror = reject;
+          document.head.appendChild(s);
+        });
+      }
+      XLSX = window.XLSX;
+    }
+    if (!XLSX) {
+      alert("No se pudo cargar la librería de Excel. Verifica tu conexión.");
+      return;
+    }
+
+    const meses = ["","ENERO","FEBRERO","MARZO","ABRIL","MAYO","JUNIO","JULIO","AGOSTO","SEPTIEMBRE","OCTUBRE","NOVIEMBRE","DICIEMBRE"];
+    const [anioStr, mesStr] = periodo.split("-");
+    const nombreMes = meses[parseInt(mesStr)] || mesStr;
+    const anio = parseInt(anioStr);
+
+    const wb = XLSX.utils.book_new();
+
+    // ─── HOJA 1: RESUMEN ─────────────────────────────────────────
+    const resumen = [
+      [`BIGTICKET — CERTIFICACIÓN DOCUMENTAL ${nombreMes} ${anio}`],
+      [`Generado: ${new Date().toLocaleString("es-CL")}`],
+      [],
+      ["MÉTRICA", "TOTAL", "PERSONAL CONTRATADO", "REP. Y CONDUCTOR", "SUBCONTRATISTA"],
+      ["Total registros", kpis.total, datos.pc.length, datos.ryc.length, datos.sub.length],
+      ["Certificados", kpis.certificados,
+        datos.pc.filter(d => d.estado_final === "CERTIFICADO").length,
+        datos.ryc.filter(d => d.estado_final === "CERTIFICADO").length,
+        datos.sub.filter(d => d.estado_final === "CERTIFICADO").length],
+      ["Pendientes (parcial)", kpis.parciales,
+        datos.pc.filter(d => d.estado_final === "PENDIENTE").length,
+        datos.ryc.filter(d => d.estado_final === "PENDIENTE").length,
+        datos.sub.filter(d => d.estado_final === "PENDIENTE").length],
+      ["Sin certificar", kpis.sinCert,
+        datos.pc.filter(d => d.estado_final === "NO_CERTIFICADO").length,
+        datos.ryc.filter(d => d.estado_final === "NO_CERTIFICADO").length,
+        datos.sub.filter(d => d.estado_final === "NO_CERTIFICADO").length],
+      ["% Avance",
+        `${kpis.pctAvance}%`,
+        `${datos.pc.length ? Math.round(datos.pc.filter(d => d.estado_final === "CERTIFICADO").length / datos.pc.length * 100) : 0}%`,
+        `${datos.ryc.length ? Math.round(datos.ryc.filter(d => d.estado_final === "CERTIFICADO").length / datos.ryc.length * 100) : 0}%`,
+        `${datos.sub.length ? Math.round(datos.sub.filter(d => d.estado_final === "CERTIFICADO").length / datos.sub.length * 100) : 0}%`],
+      ["Anomalías detectadas", kpis.anomalias, "", "", ""],
+      ["Monto retenido (CLP)", fmt$(kpis.monto), "", "", ""],
+      [],
+      ["LEYENDA"],
+      ["VALIDADO", "Documento aprobado por el mandante"],
+      ["RECEPCIONADO", "Documento recibido pero no validado"],
+      ["ENVIADO", "Documento subido por el contratista"],
+      ["PENDIENTE", "Falta cargar el documento"],
+      ["NO_APLICA", "El documento no es exigible para esta categoría/mandante"],
+    ];
+    const wsResumen = XLSX.utils.aoa_to_sheet(resumen);
+    wsResumen["!cols"] = [{ wch: 25 }, { wch: 18 }, { wch: 22 }, { wch: 22 }, { wch: 22 }];
+    XLSX.utils.book_append_sheet(wb, wsResumen, "RESUMEN");
+
+    // Helper para formatear filas de cada categoría
+    const construirHojaCategoria = (filas, headers, mapFn) => {
+      const datos2D = [headers, ...filas.map(mapFn)];
+      const ws = XLSX.utils.aoa_to_sheet(datos2D);
+      // Anchos de columna automáticos
+      ws["!cols"] = headers.map(h => ({ wch: Math.max(h.length + 2, 14) }));
+      return ws;
+    };
+
+    // ─── HOJA 2: PERSONAL CONTRATADO ─────────────────────────────
+    const headersPC = ["AÑO","MES","CERTIFICACIÓN","OPERACIÓN","TRANSPORTE","E-MAIL",
+                       "F30","F30-1","LIQUIDACIONES","COTIZACIONES","MUTUALIDAD",
+                       "% RETENCIÓN","% AVANCE","ESTADO","OBSERVACIONES"];
+    const wsPC = construirHojaCategoria(datos.pc, headersPC, d => [
+      d.anio, d.mes, nombreMes,
+      d.operacion || "", d.transporte || "", d.email || "",
+      d.doc_f30 || "—", d.doc_f30_1 || "—", d.doc_liquidaciones || "—",
+      d.doc_cotizaciones || "—", d.doc_mutualidad || "—",
+      d.pct_retencion ? `${d.pct_retencion}%` : "—",
+      d.pct_avance != null ? `${d.pct_avance}%` : "—",
+      d.estado_final || "—",
+      d.anomalia_descripcion || "",
+    ]);
+    XLSX.utils.book_append_sheet(wb, wsPC, "Personal Contratado");
+
+    // ─── HOJA 3: REPRESENTANTE Y CONDUCTOR ───────────────────────
+    const headersRYC = ["AÑO","MES","CERTIFICACIÓN","OPERACIÓN","TRANSPORTE","E-MAIL",
+                        "F30","MUTUALIDAD","% RETENCIÓN","% AVANCE","ESTADO","OBSERVACIONES"];
+    const wsRYC = construirHojaCategoria(datos.ryc, headersRYC, d => [
+      d.anio, d.mes, nombreMes,
+      d.operacion || "", d.transporte || "", d.email || "",
+      d.doc_f30 || "—", d.doc_mutualidad || "—",
+      d.pct_retencion ? `${d.pct_retencion}%` : "—",
+      d.pct_avance != null ? `${d.pct_avance}%` : "—",
+      d.estado_final || "—",
+      d.anomalia_descripcion || "",
+    ]);
+    XLSX.utils.book_append_sheet(wb, wsRYC, "Representante y Conductor");
+
+    // ─── HOJA 4: SUBCONTRATISTA ──────────────────────────────────
+    const headersSUB = ["AÑO","MES","CERTIFICACIÓN","OPERACIÓN","TRANSPORTE","SUBCONTRATISTA",
+                        "FECHA INGRESO","BOLETA HON.","COMP. PAGO",
+                        "% RETENCIÓN","% AVANCE","ESTADO","OBSERVACIONES"];
+    const wsSUB = construirHojaCategoria(datos.sub, headersSUB, d => [
+      d.anio, d.mes, nombreMes,
+      d.operacion || "", d.transporte || "", d.subcontratista_nombre || "",
+      d.fecha_ingreso || "—",
+      d.doc_boleta_honorarios || "—", d.doc_comprobante_pago || "—",
+      d.pct_retencion ? `${d.pct_retencion}%` : "—",
+      d.pct_avance != null ? `${d.pct_avance}%` : "—",
+      d.estado_final || "—",
+      d.anomalia_descripcion || "",
+    ]);
+    XLSX.utils.book_append_sheet(wb, wsSUB, "Subcontratista");
+
+    // ─── HOJA 5: SOLO PENDIENTES (filtrado para acción) ──────────
+    const todosPendientes = [...datos.pc, ...datos.ryc, ...datos.sub]
+      .filter(d => d.estado_final !== "CERTIFICADO");
+    const headersPend = ["CATEGORÍA","OPERACIÓN","TRANSPORTE","SUBCONTRATISTA","E-MAIL",
+                         "ESTADO","% RETENCIÓN","% AVANCE","DOCS PENDIENTES"];
+    const wsPend = construirHojaCategoria(todosPendientes, headersPend, d => {
+      const docsKeys = ["doc_f30","doc_f30_1","doc_liquidaciones","doc_cotizaciones","doc_mutualidad","doc_boleta_honorarios","doc_comprobante_pago"];
+      const docNombres = {
+        doc_f30: "F30", doc_f30_1: "F30-1",
+        doc_liquidaciones: "Liquidaciones", doc_cotizaciones: "Cotizaciones",
+        doc_mutualidad: "Mutualidad", doc_boleta_honorarios: "Boleta Hon.",
+        doc_comprobante_pago: "Comp. Pago",
+      };
+      const pendientes = docsKeys
+        .filter(k => d[k] && !["VALIDADO","NO_APLICA"].includes(d[k]))
+        .map(k => `${docNombres[k]} (${d[k]})`)
+        .join(" · ");
+      return [
+        d.categoria || "",
+        d.operacion || "",
+        d.transporte || "",
+        d.subcontratista_nombre || "",
+        d.email || "",
+        d.estado_final || "",
+        d.pct_retencion ? `${d.pct_retencion}%` : "—",
+        d.pct_avance != null ? `${d.pct_avance}%` : "—",
+        pendientes,
+      ];
+    });
+    XLSX.utils.book_append_sheet(wb, wsPend, "PENDIENTES");
+
+    // ─── Descargar ──────────────────────────────────────────────
+    XLSX.writeFile(wb, `Certificacion_Bigticket_${nombreMes}_${anio}.xlsx`);
+  };
+
+  // ── Render del ícono de estado de documento ──
+  const renderIconoDoc = (estado) => {
+    const conf = {
+      VALIDADO: { ico: "✓", color: "#16a34a", bg: "#dcfce7", titulo: "Validado" },
+      RECEPCIONADO: { ico: "◐", color: "#1e40af", bg: "#dbeafe", titulo: "Recepcionado" },
+      ENVIADO: { ico: "↗", color: "#3730a3", bg: "#e0e7ff", titulo: "Enviado" },
+      PENDIENTE: { ico: "⏳", color: "#92400e", bg: "#fef3c7", titulo: "Pendiente" },
+      NO_APLICA: { ico: "—", color: "#94a3b8", bg: "#f1f5f9", titulo: "No aplica" },
+    };
+    const c = conf[estado] || { ico: "?", color: "#64748b", bg: "#f1f5f9", titulo: estado || "Sin dato" };
     return (
-      <span style={{
-        fontSize: 10, padding: "3px 8px", borderRadius: 6, fontWeight: 600,
-        background: s.bg, color: s.color, whiteSpace: "nowrap", display: "inline-block",
-      }}>
-        {s.label}
-      </span>
+      <div title={c.titulo} style={{
+        width: 28, height: 28, borderRadius: 6,
+        background: c.bg, color: c.color,
+        display: "flex", alignItems: "center", justifyContent: "center",
+        fontSize: 14, fontWeight: 700, margin: "0 auto",
+      }}>{c.ico}</div>
     );
   };
 
-  const cellEstadoFinal = (estado, pctAvance) => {
-    const styles = {
-      CERTIFICADO:    { bg: "#dcfce7", color: "#166534", icon: "✓" },
-      PENDIENTE:      { bg: "#fef3c7", color: "#92400e", icon: "⏳" },
-      NO_CERTIFICADO: { bg: "#fee2e2", color: "#c0392b", icon: "✗" },
+  const renderEstadoFinal = (estado) => {
+    const conf = {
+      CERTIFICADO: { label: "✓ Certificado", bg: "#dcfce7", color: "#166534" },
+      PENDIENTE: { label: "⏳ Parcial", bg: "#fef3c7", color: "#92400e" },
+      NO_CERTIFICADO: { label: "✗ Sin cert.", bg: "#fee2e2", color: "#c0392b" },
     };
-    const s = styles[estado] || { bg: "#f1f5f9", color: "#64748b", icon: "?" };
+    const c = conf[estado] || { label: estado || "—", bg: "#f1f5f9", color: "#64748b" };
     return (
       <span style={{
-        fontSize: 11, padding: "3px 10px", borderRadius: 12, fontWeight: 600,
-        background: s.bg, color: s.color, whiteSpace: "nowrap",
-      }}>
-        {s.icon} {pctAvance != null ? `${pctAvance}%` : (estado || "—")}
-      </span>
+        display: "inline-block", padding: "3px 10px", borderRadius: 12,
+        fontSize: 11, fontWeight: 600, background: c.bg, color: c.color, whiteSpace: "nowrap",
+      }}>{c.label}</span>
     );
   };
 
-  const formatPesoCL = (n) => {
-    if (!n) return "$0";
-    return "$" + Math.round(n).toLocaleString("es-CL");
+  // Toggle orden
+  const toggleOrden = (col) => {
+    if (ordenCol === col) setOrdenAsc(!ordenAsc);
+    else { setOrdenCol(col); setOrdenAsc(true); }
   };
 
-  const cambiarOrden = (campo) => {
-    if (orden.campo === campo) {
-      setOrden({ campo, dir: orden.dir === "asc" ? "desc" : "asc" });
-    } else {
-      setOrden({ campo, dir: "asc" });
-    }
-  };
+  const flecha = (col) => ordenCol === col ? (ordenAsc ? " ▲" : " ▼") : "";
 
-  const flechaOrden = (campo) =>
-    orden.campo === campo ? (orden.dir === "asc" ? " ▲" : " ▼") : "";
-
-  // ─── Descargar Excel (formato analista) ─────────────────────────
-  const descargarExcel = () => {
-    const nombreMes = ["", "ENERO","FEBRERO","MARZO","ABRIL","MAYO","JUNIO","JULIO","AGOSTO","SEPTIEMBRE","OCTUBRE","NOVIEMBRE","DICIEMBRE"];
-    let headers, rowsFn;
-
-    if (categoria === "PC") {
-      headers = ["AÑO","MES","CERTIFICACION","SERVICIO","OPERACIÓN","TRANSPORTE","E-MAIL",
-        "F30","F30-1","LIQUIDACIONES DE SUELDO","CERTIFICADO DE PAGO COTIZACIONES","AFILIACIÓN MUTUALIDAD",
-        "% RETENCION","% AVANCE","OBSERVACIONES","ESTADO"];
-      rowsFn = (d) => [d.anio, d.mes, nombreMes[d.mes] || "", d.servicio || "", d.operacion || "", d.transporte || "", d.email || "",
-        d.doc_f30 || "", d.doc_f30_1 || "", d.doc_liquidaciones || "", d.doc_cotizaciones || "", d.doc_mutualidad || "",
-        d.pct_retencion || "", d.pct_avance || "", d.anomalia_descripcion || "", d.estado_final || ""];
-    } else if (categoria === "RYC") {
-      headers = ["AÑO","MES","CERTIFICACION","SERVICIO","OPERACIÓN","TRANSPORTE","E-MAIL",
-        "F30","AFILIACIÓN MUTUALIDAD","% RETENCION","% AVANCE","OBSERVACIONES","ESTADO"];
-      rowsFn = (d) => [d.anio, d.mes, nombreMes[d.mes] || "", d.servicio || "", d.operacion || "", d.transporte || "", d.email || "",
-        d.doc_f30 || "", d.doc_mutualidad || "", d.pct_retencion || "", d.pct_avance || "", d.anomalia_descripcion || "", d.estado_final || ""];
-    } else {
-      headers = ["AÑO","MES","CERTIFICACION","SERVICIO","OPERACIÓN","TRANSPORTE","SUBCONTRATISTA","Correo",
-        "Boleta de honorarios o Factura","Comprobante de Pago","% RETENCION","% AVANCE","OBSERVACIONES","ESTADO"];
-      rowsFn = (d) => [d.anio, d.mes, nombreMes[d.mes] || "", d.servicio || "", d.operacion || "", d.transporte || "", d.subcontratista_nombre || "", d.email || "",
-        d.doc_boleta_honorarios || "", d.doc_comprobante_pago || "", d.pct_retencion || "", d.pct_avance || "", d.anomalia_descripcion || "", d.estado_final || ""];
-    }
-
-    const rows = datosFiltrados.map(rowsFn);
-    const csv = [headers, ...rows].map(r => r.map(c => `"${String(c).replace(/"/g,'""')}"`).join(",")).join("\n");
-    const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `Certificacion_${categoria}_${periodo}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-
-  // ─── Definición de columnas por categoría (igual al Excel) ──────
-  const columnasPC = [
-    { id: "doc_f30",            label: "F30" },
-    { id: "doc_f30_1",          label: "F30-1" },
-    { id: "doc_liquidaciones",  label: "LIQ. SUELDO" },
-    { id: "doc_cotizaciones",   label: "COTIZACIONES" },
-    { id: "doc_mutualidad",     label: "MUTUALIDAD" },
-  ];
-  const columnasRYC = [
-    { id: "doc_f30",        label: "F30" },
-    { id: "doc_mutualidad", label: "MUTUALIDAD" },
-  ];
-  const columnasSUB = [
-    { id: "doc_boleta_honorarios", label: "BOLETA HON." },
-    { id: "doc_comprobante_pago",  label: "COMP. PAGO" },
-  ];
-  const columnasDoc = categoria === "PC" ? columnasPC : categoria === "RYC" ? columnasRYC : columnasSUB;
-
-  // ─── RENDER ─────────────────────────────────────────────────────
+  // ── RENDER ──
   return (
-    <div className="pg" style={{ maxWidth: 1600 }}>
+    <div className="pg" style={{ paddingBottom: 40 }}>
       {/* HEADER */}
-      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 16, flexWrap: "wrap", gap: 12 }}>
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 18, flexWrap: "wrap", gap: 12 }}>
         <div>
           <div className="sec-title">💸 Pagos · Certificación Documental</div>
           <div className="sec-sub">
-            Conectado a Certronic
+            Replicación automática del trabajo del analista · {kpis.total} registros
             {ultimaEjecucion && (
               <> · Última actualización: {new Date(ultimaEjecucion.fecha_ejecucion).toLocaleString("es-CL", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}</>
             )}
           </div>
         </div>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <select value={periodo} onChange={(e) => setPeriodo(e.target.value)} style={{ width: "auto", minWidth: 140 }}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <select value={periodo} onChange={(e) => setPeriodo(e.target.value)} style={{ width: "auto", minWidth: 130 }}>
             {periodos.map(p => {
               const [a, m] = p.split("-");
-              const nombreMes = ["","Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"][parseInt(m)];
-              return <option key={p} value={p}>{nombreMes} {a}</option>;
+              const nm = ["","Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"][parseInt(m)];
+              return <option key={p} value={p}>{nm} {a}</option>;
             })}
           </select>
-          <button className="btn-blue" onClick={descargarExcel} disabled={loading || !datosFiltrados.length}>
-            📥 Descargar
+          <button className="btn-blue" onClick={descargarExcel} disabled={loading || kpis.total === 0}>
+            📥 Descargar Excel
           </button>
           <button className="btn-orange" onClick={reEjecutarScraper} disabled={ejecutandoScraper}>
-            {ejecutandoScraper ? "⏳..." : "🔄 Re-ejecutar"}
+            {ejecutandoScraper ? "⏳ Ejecutando..." : "🔄 Re-ejecutar"}
           </button>
         </div>
       </div>
 
-      {/* SELECTOR DE CATEGORÍA (PC / RYC / SUB) — pestañas tipo Excel */}
-      <div style={{ display: "flex", gap: 0, marginBottom: 16, borderBottom: "2px solid #e4e7ec" }}>
+      {/* KPIs */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 10, marginBottom: 16 }}>
+        <KPI label="Total registros" valor={kpis.total} sub={`${operacionesUnicas.length} operaciones`} color="#1a3a6b" />
+        <KPI label="% Avance certificación" valor={`${kpis.pctAvance}%`} sub={`${kpis.certificados} certificados`} color="#16a34a" />
+        <KPI label="Pendientes" valor={kpis.parciales + kpis.sinCert} sub={`${kpis.parciales} parcial · ${kpis.sinCert} sin cert.`} color="#F47B20" />
+        <KPI label="Anomalías" valor={kpis.anomalias} sub={kpis.anomalias > 0 ? "Requieren revisión" : "Todo OK"} color={kpis.anomalias > 0 ? "#c0392b" : "#16a34a"} />
+        <KPI label="Monto retenido" valor={fmt$(kpis.monto)} sub="Total CLP" color="#c0392b" />
+      </div>
+
+      {/* TABS por categoría (PC / RYC / SUB) */}
+      <div style={{ display: "flex", gap: 4, marginBottom: 12, borderBottom: "2px solid #e4e7ec", paddingBottom: 0 }}>
         {[
-          { id: "PC",  label: "Personal Contratado" },
-          { id: "RYC", label: "Representante y Conductor" },
-          { id: "SUB", label: "Subcontratista" },
-        ].map(c => {
-          const n = datos.filter(d => d.categoria === c.id).length;
-          const activa = categoria === c.id;
-          return (
-            <button key={c.id}
-              onClick={() => setCategoria(c.id)}
-              style={{
-                padding: "10px 18px", fontSize: 13, fontWeight: activa ? 700 : 500,
-                border: "none", background: "transparent",
-                color: activa ? "#1a3a6b" : "#666",
-                borderBottom: activa ? "3px solid #F47B20" : "3px solid transparent",
-                marginBottom: -2, cursor: "pointer", fontFamily: "Geist, sans-serif",
-                transition: "all 0.15s",
-              }}>
-              {c.label}
-              <span style={{
-                marginLeft: 8, fontSize: 11, padding: "2px 7px", borderRadius: 10,
-                background: activa ? "#1a3a6b" : "#f1f5f9",
-                color: activa ? "#fff" : "#666", fontWeight: 600,
-              }}>
-                {n}
-              </span>
-            </button>
-          );
-        })}
+          { id: "pc", label: "👥 Personal Contratado", n: datos.pc.length },
+          { id: "ryc", label: "🚐 Representante y Conductor", n: datos.ryc.length },
+          { id: "sub", label: "🤝 Subcontratista", n: datos.sub.length },
+        ].map(t => (
+          <button key={t.id} onClick={() => setTabActiva(t.id)}
+            style={{
+              padding: "10px 16px", border: "none", cursor: "pointer",
+              borderBottom: tabActiva === t.id ? "3px solid #1a3a6b" : "3px solid transparent",
+              background: "transparent", color: tabActiva === t.id ? "#1a3a6b" : "#666",
+              fontWeight: tabActiva === t.id ? 700 : 500,
+              fontSize: 13, fontFamily: "Geist, sans-serif",
+              marginBottom: -2,
+            }}>
+            {t.label} <span style={{ opacity: 0.6, marginLeft: 4 }}>({t.n})</span>
+          </button>
+        ))}
       </div>
 
-      {/* FILTROS: CECO → Contratista → Estado → Buscar */}
-      <div className="form-card" style={{ padding: 14, marginBottom: 12 }}>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1.5fr", gap: 10 }}>
-          <div>
-            <div style={{ fontSize: 11, color: "#666", fontWeight: 600, marginBottom: 4 }}>CECO / OPERACIÓN</div>
-            <select value={filtroCeco} onChange={(e) => setFiltroCeco(e.target.value)}>
-              <option value="todos">Todas las operaciones ({cecosUnicos.length})</option>
-              {cecosUnicos.map(c => (
-                <option key={c} value={c}>{c}</option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <div style={{ fontSize: 11, color: "#666", fontWeight: 600, marginBottom: 4 }}>
-              CONTRATISTA {filtroCeco !== "todos" && <span style={{ color: "#F47B20" }}>en {filtroCeco}</span>}
-            </div>
-            <select value={filtroContratista} onChange={(e) => setFiltroContratista(e.target.value)}>
-              <option value="todos">Todos ({contratistasUnicos.length})</option>
-              {contratistasUnicos.map(c => (
-                <option key={c} value={c}>{c.length > 35 ? c.slice(0, 32) + "…" : c}</option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <div style={{ fontSize: 11, color: "#666", fontWeight: 600, marginBottom: 4 }}>ESTADO</div>
-            <select value={filtroEstado} onChange={(e) => setFiltroEstado(e.target.value)}>
-              <option value="todos">Todos</option>
-              <option value="CERTIFICADO">✓ Certificado</option>
-              <option value="PENDIENTE">⏳ Parcial</option>
-              <option value="NO_CERTIFICADO">✗ Sin certificación</option>
-            </select>
-          </div>
-          <div>
-            <div style={{ fontSize: 11, color: "#666", fontWeight: 600, marginBottom: 4 }}>BUSCAR</div>
-            <input placeholder="Transportista, email, chofer…"
-              value={busqueda} onChange={(e) => setBusqueda(e.target.value)} />
-          </div>
-        </div>
+      {/* Filtros */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 160px 160px 160px", gap: 8, marginBottom: 12 }}>
+        <input placeholder="🔎 Buscar por transportista, chofer, email u operación..." value={busqueda} onChange={(e) => setBusqueda(e.target.value)} />
+        <select value={filtroMandante} onChange={(e) => setFiltroMandante(e.target.value)}>
+          <option value="todos">Todos los mandantes</option>
+          <option value="Mercado Libre">Mercado Libre</option>
+          <option value="Falabella">Falabella</option>
+          <option value="Rosen">Rosen</option>
+          <option value="Cannon">Cannon</option>
+          <option value="Esporádicos">Esporádicos</option>
+        </select>
+        <select value={filtroOperacion} onChange={(e) => setFiltroOperacion(e.target.value)}>
+          <option value="todos">Todas operaciones</option>
+          {operacionesUnicas.map(o => <option key={o} value={o}>{o}</option>)}
+        </select>
+        <select value={filtroEstado} onChange={(e) => setFiltroEstado(e.target.value)}>
+          <option value="todos">Todos estados</option>
+          <option value="CERTIFICADO">✓ Certificado</option>
+          <option value="PENDIENTE">⏳ Parcial</option>
+          <option value="NO_CERTIFICADO">✗ Sin certificación</option>
+        </select>
       </div>
 
-      {/* KPIs RESUMEN del subset filtrado (cambia según filtros) */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 8, marginBottom: 12 }}>
-        <KPIMini label="Total" valor={total} color="#1a3a6b" />
-        <KPIMini label="✓ Certificados" valor={certificados} sub={`${pctAvance}%`} color="#16a34a" />
-        <KPIMini label="⏳ Parciales" valor={parciales} color="#F47B20" />
-        <KPIMini label="✗ Sin cert." valor={sinCert} color="#c0392b" />
-        <KPIMini label="⚠ Anomalías" valor={anomaliasN} color="#9a3412" />
-        <KPIMini label="$ Retenido" valor={formatPesoCL(montoRet)} color="#1a3a6b" />
-      </div>
-
+      {/* Loading / vacío */}
       {loading && <div className="loading">Cargando datos…</div>}
 
-      {!loading && datos.length === 0 && (
+      {!loading && kpis.total === 0 && (
         <div className="empty">
-          <div style={{ fontSize: 32, marginBottom: 12 }}>📭</div>
+          <div style={{ fontSize: 36, marginBottom: 12 }}>📭</div>
           <div style={{ fontWeight: 600, marginBottom: 6 }}>Sin datos para este período</div>
-          <div style={{ fontSize: 12, marginBottom: 16 }}>
+          <div style={{ fontSize: 12, marginBottom: 16, color: "#666" }}>
             Ejecuta el scraper para descargar la información de Certronic.
           </div>
           <button className="btn-orange" onClick={reEjecutarScraper} disabled={ejecutandoScraper}>
@@ -5480,69 +5602,114 @@ function ModuloPagos() {
         </div>
       )}
 
-      {/* TABLA PRINCIPAL — Replica del Excel del analista */}
-      {!loading && datos.length > 0 && (
-        <div className="form-card" style={{ padding: 0, overflow: "hidden" }}>
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-              <thead>
-                <tr style={{ background: "#f8f9fa", borderBottom: "2px solid #1a3a6b" }}>
-                  <th style={{ ...thSticky, cursor: "pointer" }} onClick={() => cambiarOrden("operacion")}>
-                    OPERACIÓN{flechaOrden("operacion")}
-                  </th>
-                  <th style={{ ...thSticky, cursor: "pointer", minWidth: 220 }} onClick={() => cambiarOrden("transporte")}>
-                    TRANSPORTE{flechaOrden("transporte")}
-                  </th>
-                  {categoria === "SUB" && (
-                    <th style={{ ...thSticky, cursor: "pointer", minWidth: 180 }} onClick={() => cambiarOrden("subcontratista_nombre")}>
-                      SUBCONTRATISTA{flechaOrden("subcontratista_nombre")}
-                    </th>
+      {/* TABLA TIPO EXCEL */}
+      {!loading && kpis.total > 0 && (
+        <div style={{
+          background: "#fff", border: "1px solid #e4e7ec", borderRadius: 8,
+          overflow: "hidden",
+        }}>
+          <div style={{ overflowX: "auto", maxHeight: "calc(100vh - 380px)", overflowY: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11.5, minWidth: tabActiva === "pc" ? 1300 : 1000 }}>
+              <thead style={{ position: "sticky", top: 0, zIndex: 2 }}>
+                <tr style={{ background: "#1a3a6b", color: "#fff" }}>
+                  <th style={thE} onClick={() => toggleOrden("operacion")}>Operación{flecha("operacion")}</th>
+                  <th style={{...thE, textAlign: "left", paddingLeft: 12}} onClick={() => toggleOrden("transporte")}>Transporte{flecha("transporte")}</th>
+                  {tabActiva === "sub" && (
+                    <th style={{...thE, textAlign: "left"}} onClick={() => toggleOrden("subcontratista_nombre")}>Subcontratista{flecha("subcontratista_nombre")}</th>
                   )}
-                  <th style={{ ...thSticky, minWidth: 180 }}>E-MAIL</th>
-                  {columnasDoc.map(col => (
-                    <th key={col.id} style={{ ...thSticky, textAlign: "center", cursor: "pointer", minWidth: 110 }}
-                        onClick={() => cambiarOrden(col.id)}>
-                      {col.label}{flechaOrden(col.id)}
-                    </th>
+                  <th style={{...thE, textAlign: "left"}}>E-mail</th>
+                  {/* Columnas dinámicas por documento */}
+                  {docsPorCategoria[tabActiva].map(d => (
+                    <th key={d.key} style={thE} title={d.label}>{d.label}</th>
                   ))}
-                  <th style={{ ...thSticky, textAlign: "center", cursor: "pointer" }} onClick={() => cambiarOrden("pct_retencion")}>
-                    % RET{flechaOrden("pct_retencion")}
-                  </th>
-                  <th style={{ ...thSticky, textAlign: "center", cursor: "pointer" }} onClick={() => cambiarOrden("estado_final")}>
-                    ESTADO{flechaOrden("estado_final")}
-                  </th>
+                  <th style={thE} onClick={() => toggleOrden("pct_retencion")}>% Reten.{flecha("pct_retencion")}</th>
+                  <th style={thE} onClick={() => toggleOrden("pct_avance")}>% Avance{flecha("pct_avance")}</th>
+                  <th style={thE} onClick={() => toggleOrden("estado_final")}>Estado{flecha("estado_final")}</th>
                 </tr>
               </thead>
               <tbody>
-                {datosFiltrados.map((d, i) => {
-                  const expandida = filaExpandida === d.id;
+                {datosCategoriaActual.map((d, i) => {
+                  const mandante = operacionAMandante(d.operacion);
+                  const colorOp = {
+                    "Mercado Libre": "#fef3c7",
+                    "Falabella": "#dcfce7",
+                    "Rosen": "#fce7f3",
+                    "Cannon": "#dbeafe",
+                    "Esporádicos": "#f3e8ff",
+                  }[mandante] || "#f1f5f9";
                   return (
-                    <FilaPago key={d.id}
-                      d={d} i={i} expandida={expandida}
-                      categoria={categoria} columnasDoc={columnasDoc}
-                      onToggle={() => setFilaExpandida(expandida ? null : d.id)}
-                      cellEstado={cellEstado} cellEstadoFinal={cellEstadoFinal}
-                      formatPesoCL={formatPesoCL} />
+                    <tr key={d.id || i} style={{
+                      borderBottom: "1px solid #f0f0f0",
+                      background: d.tiene_anomalia ? "#fff7ed" : (i % 2 === 0 ? "#fafbfc" : "#fff"),
+                    }}>
+                      <td style={tdE}>
+                        <span title={mandante} style={{
+                          fontSize: 9.5, padding: "2px 6px", borderRadius: 4,
+                          background: colorOp, color: "#1a3a6b", fontWeight: 700, whiteSpace: "nowrap",
+                        }}>
+                          {d.operacion || "—"}
+                        </span>
+                      </td>
+                      <td style={{...tdE, textAlign: "left", paddingLeft: 12, fontWeight: 500}}>
+                        {d.transporte}
+                        {d.tiene_anomalia && (
+                          <div style={{ fontSize: 9.5, color: "#c0392b", marginTop: 2, fontStyle: "italic" }}>
+                            ⚠ {d.anomalia_descripcion}
+                          </div>
+                        )}
+                      </td>
+                      {tabActiva === "sub" && (
+                        <td style={{...tdE, textAlign: "left", color: "#374151"}}>{d.subcontratista_nombre || "—"}</td>
+                      )}
+                      <td style={{...tdE, textAlign: "left", fontSize: 10.5, color: "#64748b"}}>
+                        {d.email || "—"}
+                      </td>
+                      {docsPorCategoria[tabActiva].map(doc => (
+                        <td key={doc.key} style={tdE}>{renderIconoDoc(d[doc.key])}</td>
+                      ))}
+                      <td style={{...tdE, fontWeight: 700, color: d.pct_retencion > 0 ? "#c0392b" : "#94a3b8"}}>
+                        {d.pct_retencion ? `${d.pct_retencion}%` : "—"}
+                      </td>
+                      <td style={tdE}>
+                        {d.pct_avance != null ? (
+                          <div style={{ display: "flex", alignItems: "center", gap: 6, justifyContent: "center" }}>
+                            <div style={{ width: 50, height: 6, background: "#e5e7eb", borderRadius: 3, overflow: "hidden" }}>
+                              <div style={{
+                                width: `${d.pct_avance}%`, height: "100%",
+                                background: d.pct_avance >= 100 ? "#16a34a" : d.pct_avance >= 60 ? "#F47B20" : "#c0392b",
+                              }} />
+                            </div>
+                            <span style={{ fontSize: 10, fontWeight: 700, minWidth: 28 }}>{Math.round(d.pct_avance)}%</span>
+                          </div>
+                        ) : "—"}
+                      </td>
+                      <td style={tdE}>{renderEstadoFinal(d.estado_final)}</td>
+                    </tr>
                   );
                 })}
-                {datosFiltrados.length === 0 && (
-                  <tr>
-                    <td colSpan={5 + columnasDoc.length} style={{ padding: 24, textAlign: "center", color: "#888", fontSize: 12 }}>
-                      No hay registros que coincidan con los filtros actuales.
-                    </td>
-                  </tr>
-                )}
               </tbody>
             </table>
+            {datosCategoriaActual.length === 0 && (
+              <div style={{ padding: 30, textAlign: "center", color: "#888", fontSize: 12 }}>
+                No hay registros que coincidan con los filtros.
+              </div>
+            )}
           </div>
-          {/* Footer de la tabla */}
-          <div style={{ padding: "10px 14px", background: "#f8f9fa", borderTop: "1px solid #e4e7ec", fontSize: 11, color: "#666", display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
-            <span>
-              Mostrando <strong>{datosFiltrados.length}</strong> de {datosCategoria.length} registros · Categoría: <strong>{categoria}</strong>
-              {filtroCeco !== "todos" && <> · CECO: <strong>{filtroCeco}</strong></>}
-              {filtroContratista !== "todos" && <> · Contratista: <strong>{filtroContratista.length > 30 ? filtroContratista.slice(0, 27) + "…" : filtroContratista}</strong></>}
-            </span>
-            <span style={{ color: "#888" }}>Tip: clic en una fila para ver más detalles</span>
+        </div>
+      )}
+
+      {/* Footer informativo */}
+      {!loading && kpis.total > 0 && (
+        <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8, fontSize: 10.5, color: "#64748b" }}>
+          <div>
+            Mostrando {datosCategoriaActual.length} de {datos[tabActiva].length} registros · {tabActiva.toUpperCase()}
+          </div>
+          <div style={{ display: "flex", gap: 12 }}>
+            <span>✓ Validado</span>
+            <span>◐ Recepcionado</span>
+            <span>↗ Enviado</span>
+            <span>⏳ Pendiente</span>
+            <span>— No aplica</span>
           </div>
         </div>
       )}
@@ -5550,103 +5717,32 @@ function ModuloPagos() {
   );
 }
 
-// ─── Helpers visuales del módulo Pagos ──────────────────────────────
-function FilaPago({ d, i, expandida, categoria, columnasDoc, onToggle, cellEstado, cellEstadoFinal, formatPesoCL }) {
-  return (
-    <>
-      <tr style={{
-        borderBottom: "1px solid #f4f5f7",
-        background: d.tiene_anomalia ? "#fff7ed" : (i % 2 === 0 ? "#fff" : "#fafbfc"),
-        cursor: "pointer",
-      }}
-      onClick={onToggle}>
-        <td style={tdStyle}>
-          <span style={{ fontSize: 10, padding: "3px 7px", borderRadius: 4, background: "#eef2ff", color: "#1a3a6b", fontWeight: 600 }}>
-            {d.operacion || "—"}
-          </span>
-        </td>
-        <td style={{ ...tdStyle, fontWeight: 500 }}>
-          <div>{d.transporte}</div>
-          {d.tiene_anomalia && (
-            <div style={{ fontSize: 10, color: "#c0392b", marginTop: 2 }}>
-              ⚠ {d.anomalia_descripcion}
-            </div>
-          )}
-        </td>
-        {categoria === "SUB" && (
-          <td style={tdStyle}>{d.subcontratista_nombre || "—"}</td>
-        )}
-        <td style={{ ...tdStyle, color: "#666", fontSize: 11 }}>{d.email || "—"}</td>
-        {columnasDoc.map(col => (
-          <td key={col.id} style={{ ...tdStyle, textAlign: "center" }}>
-            {cellEstado(d[col.id])}
-          </td>
-        ))}
-        <td style={{ ...tdStyle, textAlign: "center", fontWeight: 600, color: d.pct_retencion > 0 ? "#c0392b" : "#888" }}>
-          {d.pct_retencion ? `${d.pct_retencion}%` : "—"}
-        </td>
-        <td style={{ ...tdStyle, textAlign: "center" }}>
-          {cellEstadoFinal(d.estado_final, d.pct_avance)}
-        </td>
-      </tr>
-      {expandida && (
-        <tr style={{ background: "#f8f9fa" }}>
-          <td colSpan={5 + columnasDoc.length} style={{ padding: 16 }}>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 14, fontSize: 12 }}>
-              <div>
-                <div style={{ fontWeight: 600, marginBottom: 4, color: "#1a3a6b" }}>Datos generales</div>
-                <div><strong>Servicio:</strong> {d.servicio || "—"}</div>
-                <div><strong>Año / Mes:</strong> {d.anio} / {d.mes}</div>
-                <div><strong>Fecha de cálculo:</strong> {d.fecha_calculo || "—"}</div>
-              </div>
-              <div>
-                <div style={{ fontWeight: 600, marginBottom: 4, color: "#1a3a6b" }}>Fechas de ingreso</div>
-                <div><strong>Real:</strong> {d.fecha_ingreso || "—"}</div>
-                <div><strong>Certronic:</strong> {d.fecha_ingreso_certronic || "—"}</div>
-              </div>
-              <div>
-                <div style={{ fontWeight: 600, marginBottom: 4, color: "#1a3a6b" }}>Cálculos</div>
-                <div><strong>% Avance:</strong> {d.pct_avance || 0}%</div>
-                <div><strong>% Retención:</strong> {d.pct_retencion || 0}%</div>
-                <div><strong>Monto retenido:</strong> {formatPesoCL(d.monto_retencion)}</div>
-              </div>
-              <div>
-                <div style={{ fontWeight: 600, marginBottom: 4, color: "#1a3a6b" }}>Comparación mes anterior</div>
-                <div><strong>Estado anterior:</strong> {d.estado_anterior || "—"}</div>
-                <div><strong>Cambio detectado:</strong> {d.cambio_detectado || "Sin cambio"}</div>
-              </div>
-              {d.tiene_anomalia && (
-                <div style={{ gridColumn: "1 / -1", padding: 10, background: "#fff7ed", borderRadius: 6, borderLeft: "3px solid #F47B20" }}>
-                  <div style={{ fontWeight: 600, color: "#9a3412" }}>⚠ Anomalía: {d.anomalia_tipo}</div>
-                  <div style={{ color: "#7c2d12", marginTop: 4 }}>{d.anomalia_descripcion}</div>
-                </div>
-              )}
-            </div>
-          </td>
-        </tr>
-      )}
-    </>
-  );
-}
-
-function KPIMini({ label, valor, sub, color = "#1a3a6b" }) {
+// Helpers visuales del módulo Pagos
+function KPI({ label, valor, sub, color = "#1a3a6b" }) {
   return (
     <div style={{
-      background: "#fff", border: "0.5px solid #e4e7ec", borderRadius: 8,
-      padding: "10px 12px", borderLeft: `3px solid ${color}`,
+      background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10,
+      padding: 12, borderLeft: `3px solid ${color}`,
     }}>
-      <div style={{ fontSize: 10, color: "#888", textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 3 }}>
+      <div style={{ fontSize: 10, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 4, fontWeight: 600 }}>
         {label}
       </div>
-      <div style={{ fontSize: 18, fontWeight: 700, color, lineHeight: 1.1 }}>{valor}</div>
-      {sub && <div style={{ fontSize: 10, color: "#888", marginTop: 2 }}>{sub}</div>}
+      <div style={{ fontSize: 22, fontWeight: 700, color, lineHeight: 1.1 }}>{valor}</div>
+      {sub && <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 2 }}>{sub}</div>}
     </div>
   );
 }
 
-const thStyle = { padding: "10px 12px", textAlign: "left", fontSize: 11, fontWeight: 600, color: "#666", textTransform: "uppercase", letterSpacing: 0.3 };
-const thSticky = { padding: "12px 10px", textAlign: "left", fontSize: 10, fontWeight: 700, color: "#1a3a6b", textTransform: "uppercase", letterSpacing: 0.4, position: "sticky", top: 0, background: "#f8f9fa", zIndex: 1, whiteSpace: "nowrap" };
-const tdStyle = { padding: "10px 10px", verticalAlign: "middle" };
+const thE = {
+  padding: "10px 8px", textAlign: "center", fontSize: 10,
+  fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.3,
+  cursor: "pointer", userSelect: "none", whiteSpace: "nowrap",
+  borderRight: "1px solid rgba(255,255,255,0.1)",
+};
+const tdE = {
+  padding: "8px 6px", textAlign: "center", verticalAlign: "middle",
+  borderRight: "1px solid #f4f5f7",
+};
 
 // ─── MÓDULO PNR ─────────────────────────────────────────────────────
 function ModuloPNR() {
