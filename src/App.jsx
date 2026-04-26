@@ -5133,19 +5133,24 @@ function ModuloConfigPagos() {
   );
 }
 
-// ─── MÓDULO PAGOS · CERTIFICACIÓN DOCUMENTAL CHILE ──────────────────
-// Dashboard con vista Excel-like para reproducir el archivo del analista.
-// Conectado a tablas Supabase: certronic_estados_documentos + certronic_matriz_documentos
+// ─── MÓDULO PAGOS · CERTIFICACIÓN DOCUMENTAL CHILE (V2 con Opción B + Editor) ──
+// Conectado a tablas Supabase:
+//   - certronic_certificacion_mensual (datos calculados por el calculador V7)
+//   - certronic_matriz_documentos (reglas por mandante, editables)
+//   - certronic_estados_documentos (snapshot del scraper liviano)
+//   - certronic_ejecuciones_log (log de jobs)
 function ModuloPagos() {
   const [datos, setDatos] = useState({ pc: [], ryc: [], sub: [] });
   const [loading, setLoading] = useState(true);
   const [periodo, setPeriodo] = useState(""); // YYYY-MM
   const [periodos, setPeriodos] = useState([]);
-  const [tabActiva, setTabActiva] = useState("pc"); // "pc" | "ryc" | "sub"
+  const [vistaActiva, setVistaActiva] = useState("dashboard"); // dashboard | criticos | limpieza | matriz
+  const [tabCategoria, setTabCategoria] = useState("pc");
   const [busqueda, setBusqueda] = useState("");
   const [filtroOperacion, setFiltroOperacion] = useState("todos");
   const [filtroEstado, setFiltroEstado] = useState("todos");
   const [filtroMandante, setFiltroMandante] = useState("todos");
+  const [mostrarInhabilitados, setMostrarInhabilitados] = useState(false);
   const [ultimaEjecucion, setUltimaEjecucion] = useState(null);
   const [ejecutandoScraper, setEjecutandoScraper] = useState(false);
   const [ordenCol, setOrdenCol] = useState("transporte");
@@ -5196,7 +5201,7 @@ function ModuloPagos() {
   };
 
   const reEjecutarScraper = async () => {
-    if (!confirm("¿Ejecutar el scraper de Certronic? (~3 segundos para reporte completo + 7 min para gigante)")) return;
+    if (!confirm("¿Ejecutar el scraper de Certronic? Esto tarda ~3 segundos para el reporte liviano.")) return;
     setEjecutandoScraper(true);
     try {
       const res = await fetch("https://n8n.bigticket.cl/webhook/certronic-trigger", {
@@ -5206,7 +5211,7 @@ function ModuloPagos() {
       if (!res.ok) throw new Error("HTTP " + res.status);
       alert("✅ Scrapers iniciados. Recibirás los nuevos datos en pocos minutos.");
     } catch(e) {
-      alert("⚠ No se pudo iniciar el scraper: " + e.message + "\n\nEjecuta manualmente:\nssh root@162.243.90.161\ncd /opt/certronic-scraper\nnode descargar-reporte-analista.js");
+      alert("⚠ No se pudo iniciar el scraper: " + e.message + "\n\nEjecuta manualmente:\nssh root@162.243.90.161\ncd /opt/certronic-scraper\nnode descargar-reporte-analista.cjs && node calcular-certificacion-mensual.cjs");
     }
     setEjecutandoScraper(false);
   };
@@ -5223,59 +5228,55 @@ function ModuloPagos() {
   };
 
   const fmt$ = (n) => "$" + Math.round(n || 0).toLocaleString("es-CL");
-  const fmtPct = (n) => n != null ? `${Math.round(n)}%` : "—";
 
-  // ── Filtrado y orden ──
-  const datosCategoriaActual = useMemo(() => {
-    let arr = datos[tabActiva] || [];
-    // Búsqueda
-    if (busqueda) {
-      const q = busqueda.toLowerCase();
-      arr = arr.filter(d =>
-        (d.transporte || "").toLowerCase().includes(q) ||
-        (d.subcontratista_nombre || "").toLowerCase().includes(q) ||
-        (d.email || "").toLowerCase().includes(q) ||
-        (d.operacion || "").toLowerCase().includes(q)
-      );
-    }
-    // Filtros
-    if (filtroOperacion !== "todos") arr = arr.filter(d => d.operacion === filtroOperacion);
-    if (filtroEstado !== "todos") arr = arr.filter(d => d.estado_final === filtroEstado);
-    if (filtroMandante !== "todos") arr = arr.filter(d => operacionAMandante(d.operacion) === filtroMandante);
-    // Orden
-    arr = [...arr].sort((a, b) => {
-      const va = a[ordenCol], vb = b[ordenCol];
-      if (va == null) return 1;
-      if (vb == null) return -1;
-      if (typeof va === "number") return ordenAsc ? va - vb : vb - va;
-      return ordenAsc ? String(va).localeCompare(String(vb)) : String(vb).localeCompare(String(va));
-    });
-    return arr;
-  }, [datos, tabActiva, busqueda, filtroOperacion, filtroEstado, filtroMandante, ordenCol, ordenAsc]);
-
-  // KPIs por tab
-  const kpis = useMemo(() => {
+  // ── Datos derivados ──
+  const todosActivos = useMemo(() => {
     const todos = [...datos.pc, ...datos.ryc, ...datos.sub];
-    const certificados = todos.filter(d => d.estado_final === "CERTIFICADO").length;
-    const parciales = todos.filter(d => d.estado_final === "PENDIENTE").length;
-    const sinCert = todos.filter(d => d.estado_final === "NO_CERTIFICADO").length;
-    const monto = todos.reduce((s, d) => s + (Number(d.monto_retencion) || 0), 0);
+    return todos.filter(d => !d.recurso_inhabilitado);
+  }, [datos]);
+
+  const todosInhabilitados = useMemo(() => {
+    const todos = [...datos.pc, ...datos.ryc, ...datos.sub];
+    return todos.filter(d => d.recurso_inhabilitado);
+  }, [datos]);
+
+  // KPIs (excluyen inhabilitados por defecto)
+  const kpis = useMemo(() => {
+    const base = mostrarInhabilitados
+      ? [...datos.pc, ...datos.ryc, ...datos.sub]
+      : todosActivos;
+    const certificados = base.filter(d => d.estado_final === "CERTIFICADO").length;
+    const parciales = base.filter(d => d.estado_final === "PENDIENTE").length;
+    const sinCert = base.filter(d => d.estado_final === "NO_CERTIFICADO").length;
     return {
-      total: todos.length,
+      total: base.length,
       certificados, parciales, sinCert,
-      pctAvance: todos.length ? Math.round(certificados / todos.length * 100) : 0,
-      monto,
-      anomalias: todos.filter(d => d.tiene_anomalia).length,
+      pctAvance: base.length ? Math.round(certificados / base.length * 100) : 0,
+      anomalias: base.filter(d => d.tiene_anomalia).length,
+      inhabilitados: todosInhabilitados.length,
     };
+  }, [datos, mostrarInhabilitados, todosActivos, todosInhabilitados]);
+
+  // ─── ACTIVOS CRÍTICOS (Opción B): empresas activas con retención ───
+  const activosCriticos = useMemo(() => {
+    // Empresas que NO están inhabilitadas, tienen empleados/vehículos activos
+    // y tienen retención > 0
+    return [...datos.pc, ...datos.ryc, ...datos.sub]
+      .filter(d => !d.recurso_inhabilitado)
+      .filter(d => Number(d.pct_retencion) > 0)
+      .filter(d => (d.empleados_activos || 0) > 0 || (d.vehiculos_activos || 0) > 0)
+      .sort((a, b) => Number(b.pct_retencion) - Number(a.pct_retencion));
   }, [datos]);
 
   // Operaciones únicas (para filtro)
   const operacionesUnicas = useMemo(() => {
-    const todos = [...datos.pc, ...datos.ryc, ...datos.sub];
+    const todos = mostrarInhabilitados
+      ? [...datos.pc, ...datos.ryc, ...datos.sub]
+      : todosActivos;
     return [...new Set(todos.map(d => d.operacion).filter(Boolean))].sort();
-  }, [datos]);
+  }, [datos, mostrarInhabilitados, todosActivos]);
 
-  // Documentos por categoría (columnas dinámicas)
+  // Documentos por categoría
   const docsPorCategoria = {
     pc: [
       { key: "doc_f30", label: "F30" },
@@ -5294,35 +5295,44 @@ function ModuloPagos() {
     ],
   };
 
-  // ── Descargar Excel multi-hoja (formato del analista) ──
-  // Genera un .xlsx real con 4 hojas:
-  //   1. RESUMEN — KPIs y métricas para enviar por email
-  //   2. Personal Contratado — formato idéntico al del analista
-  //   3. Representante y Conductor
-  //   4. Subcontratista
+  // Filtrado para tabla por categoría
+  const datosCategoriaActual = useMemo(() => {
+    let arr = datos[tabCategoria] || [];
+    if (!mostrarInhabilitados) arr = arr.filter(d => !d.recurso_inhabilitado);
+    if (busqueda) {
+      const q = busqueda.toLowerCase();
+      arr = arr.filter(d =>
+        (d.transporte || "").toLowerCase().includes(q) ||
+        (d.subcontratista_nombre || "").toLowerCase().includes(q) ||
+        (d.email || "").toLowerCase().includes(q) ||
+        (d.operacion || "").toLowerCase().includes(q)
+      );
+    }
+    if (filtroOperacion !== "todos") arr = arr.filter(d => d.operacion === filtroOperacion);
+    if (filtroEstado !== "todos") arr = arr.filter(d => d.estado_final === filtroEstado);
+    if (filtroMandante !== "todos") arr = arr.filter(d => operacionAMandante(d.operacion) === filtroMandante);
+    arr = [...arr].sort((a, b) => {
+      const va = a[ordenCol], vb = b[ordenCol];
+      if (va == null) return 1;
+      if (vb == null) return -1;
+      if (typeof va === "number") return ordenAsc ? va - vb : vb - va;
+      return ordenAsc ? String(va).localeCompare(String(vb)) : String(vb).localeCompare(String(va));
+    });
+    return arr;
+  }, [datos, tabCategoria, busqueda, filtroOperacion, filtroEstado, filtroMandante, ordenCol, ordenAsc, mostrarInhabilitados]);
+
+  // ─── Descargar Excel multi-hoja ───
   const descargarExcel = async () => {
-    // Cargar SheetJS dinámicamente (incluido en el entorno Claude artifacts)
-    let XLSX;
-    try {
-      XLSX = await import("https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js")
-        .then(() => window.XLSX);
-    } catch(e) {
-      // Fallback: cargar via script tag si el import dinámico no está disponible
-      if (!window.XLSX) {
-        await new Promise((resolve, reject) => {
-          const s = document.createElement("script");
-          s.src = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
-          s.onload = resolve;
-          s.onerror = reject;
-          document.head.appendChild(s);
-        });
-      }
-      XLSX = window.XLSX;
+    if (!window.XLSX) {
+      await new Promise((resolve, reject) => {
+        const s = document.createElement("script");
+        s.src = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
+        s.onload = resolve; s.onerror = reject;
+        document.head.appendChild(s);
+      });
     }
-    if (!XLSX) {
-      alert("No se pudo cargar la librería de Excel. Verifica tu conexión.");
-      return;
-    }
+    const XLSX = window.XLSX;
+    if (!XLSX) { alert("No se pudo cargar la librería de Excel."); return; }
 
     const meses = ["","ENERO","FEBRERO","MARZO","ABRIL","MAYO","JUNIO","JULIO","AGOSTO","SEPTIEMBRE","OCTUBRE","NOVIEMBRE","DICIEMBRE"];
     const [anioStr, mesStr] = periodo.split("-");
@@ -5330,136 +5340,115 @@ function ModuloPagos() {
     const anio = parseInt(anioStr);
 
     const wb = XLSX.utils.book_new();
+    const datosActivos = todosActivos;
+    const pcA = datos.pc.filter(d => !d.recurso_inhabilitado);
+    const rycA = datos.ryc.filter(d => !d.recurso_inhabilitado);
+    const subA = datos.sub.filter(d => !d.recurso_inhabilitado);
 
-    // ─── HOJA 1: RESUMEN ─────────────────────────────────────────
+    // RESUMEN
     const resumen = [
       [`BIGTICKET — CERTIFICACIÓN DOCUMENTAL ${nombreMes} ${anio}`],
       [`Generado: ${new Date().toLocaleString("es-CL")}`],
+      [`Total activos: ${datosActivos.length} · Inhabilitados (no contados): ${todosInhabilitados.length}`],
       [],
-      ["MÉTRICA", "TOTAL", "PERSONAL CONTRATADO", "REP. Y CONDUCTOR", "SUBCONTRATISTA"],
-      ["Total registros", kpis.total, datos.pc.length, datos.ryc.length, datos.sub.length],
+      ["MÉTRICA", "TOTAL ACTIVOS", "PERSONAL CONTRATADO", "REP. Y CONDUCTOR", "SUBCONTRATISTA"],
+      ["Total registros activos", kpis.total, pcA.length, rycA.length, subA.length],
       ["Certificados", kpis.certificados,
-        datos.pc.filter(d => d.estado_final === "CERTIFICADO").length,
-        datos.ryc.filter(d => d.estado_final === "CERTIFICADO").length,
-        datos.sub.filter(d => d.estado_final === "CERTIFICADO").length],
+        pcA.filter(d => d.estado_final === "CERTIFICADO").length,
+        rycA.filter(d => d.estado_final === "CERTIFICADO").length,
+        subA.filter(d => d.estado_final === "CERTIFICADO").length],
       ["Pendientes (parcial)", kpis.parciales,
-        datos.pc.filter(d => d.estado_final === "PENDIENTE").length,
-        datos.ryc.filter(d => d.estado_final === "PENDIENTE").length,
-        datos.sub.filter(d => d.estado_final === "PENDIENTE").length],
+        pcA.filter(d => d.estado_final === "PENDIENTE").length,
+        rycA.filter(d => d.estado_final === "PENDIENTE").length,
+        subA.filter(d => d.estado_final === "PENDIENTE").length],
       ["Sin certificar", kpis.sinCert,
-        datos.pc.filter(d => d.estado_final === "NO_CERTIFICADO").length,
-        datos.ryc.filter(d => d.estado_final === "NO_CERTIFICADO").length,
-        datos.sub.filter(d => d.estado_final === "NO_CERTIFICADO").length],
+        pcA.filter(d => d.estado_final === "NO_CERTIFICADO").length,
+        rycA.filter(d => d.estado_final === "NO_CERTIFICADO").length,
+        subA.filter(d => d.estado_final === "NO_CERTIFICADO").length],
       ["% Avance",
         `${kpis.pctAvance}%`,
-        `${datos.pc.length ? Math.round(datos.pc.filter(d => d.estado_final === "CERTIFICADO").length / datos.pc.length * 100) : 0}%`,
-        `${datos.ryc.length ? Math.round(datos.ryc.filter(d => d.estado_final === "CERTIFICADO").length / datos.ryc.length * 100) : 0}%`,
-        `${datos.sub.length ? Math.round(datos.sub.filter(d => d.estado_final === "CERTIFICADO").length / datos.sub.length * 100) : 0}%`],
-      ["Anomalías detectadas", kpis.anomalias, "", "", ""],
-      ["Monto retenido (CLP)", fmt$(kpis.monto), "", "", ""],
+        `${pcA.length ? Math.round(pcA.filter(d => d.estado_final === "CERTIFICADO").length / pcA.length * 100) : 0}%`,
+        `${rycA.length ? Math.round(rycA.filter(d => d.estado_final === "CERTIFICADO").length / rycA.length * 100) : 0}%`,
+        `${subA.length ? Math.round(subA.filter(d => d.estado_final === "CERTIFICADO").length / subA.length * 100) : 0}%`],
       [],
-      ["LEYENDA"],
-      ["VALIDADO", "Documento aprobado por el mandante"],
-      ["RECEPCIONADO", "Documento recibido pero no validado"],
-      ["ENVIADO", "Documento subido por el contratista"],
-      ["PENDIENTE", "Falta cargar el documento"],
-      ["NO_APLICA", "El documento no es exigible para esta categoría/mandante"],
+      ["🚨 ACTIVOS CRÍTICOS (con retención)", activosCriticos.length],
+      ["🧹 INHABILITADOS (limpieza pendiente)", todosInhabilitados.length],
     ];
     const wsResumen = XLSX.utils.aoa_to_sheet(resumen);
-    wsResumen["!cols"] = [{ wch: 25 }, { wch: 18 }, { wch: 22 }, { wch: 22 }, { wch: 22 }];
+    wsResumen["!cols"] = [{ wch: 30 }, { wch: 18 }, { wch: 22 }, { wch: 22 }, { wch: 22 }];
     XLSX.utils.book_append_sheet(wb, wsResumen, "RESUMEN");
 
-    // Helper para formatear filas de cada categoría
-    const construirHojaCategoria = (filas, headers, mapFn) => {
+    // Helper
+    const construirHoja = (filas, headers, mapFn) => {
       const datos2D = [headers, ...filas.map(mapFn)];
       const ws = XLSX.utils.aoa_to_sheet(datos2D);
-      // Anchos de columna automáticos
       ws["!cols"] = headers.map(h => ({ wch: Math.max(h.length + 2, 14) }));
       return ws;
     };
 
-    // ─── HOJA 2: PERSONAL CONTRATADO ─────────────────────────────
     const headersPC = ["AÑO","MES","CERTIFICACIÓN","OPERACIÓN","TRANSPORTE","E-MAIL",
                        "F30","F30-1","LIQUIDACIONES","COTIZACIONES","MUTUALIDAD",
-                       "% RETENCIÓN","% AVANCE","ESTADO","OBSERVACIONES"];
-    const wsPC = construirHojaCategoria(datos.pc, headersPC, d => [
-      d.anio, d.mes, nombreMes,
-      d.operacion || "", d.transporte || "", d.email || "",
+                       "% RETENCIÓN","% AVANCE","ESTADO","EMPLEADOS ACTIVOS","VEHÍCULOS ACTIVOS","OBSERVACIONES"];
+    const wsPC = construirHoja(pcA, headersPC, d => [
+      d.anio, d.mes, nombreMes, d.operacion || "", d.transporte || "", d.email || "",
       d.doc_f30 || "—", d.doc_f30_1 || "—", d.doc_liquidaciones || "—",
       d.doc_cotizaciones || "—", d.doc_mutualidad || "—",
       d.pct_retencion ? `${d.pct_retencion}%` : "—",
       d.pct_avance != null ? `${d.pct_avance}%` : "—",
-      d.estado_final || "—",
+      d.estado_final || "—", d.empleados_activos || 0, d.vehiculos_activos || 0,
       d.anomalia_descripcion || "",
     ]);
     XLSX.utils.book_append_sheet(wb, wsPC, "Personal Contratado");
 
-    // ─── HOJA 3: REPRESENTANTE Y CONDUCTOR ───────────────────────
     const headersRYC = ["AÑO","MES","CERTIFICACIÓN","OPERACIÓN","TRANSPORTE","E-MAIL",
-                        "F30","MUTUALIDAD","% RETENCIÓN","% AVANCE","ESTADO","OBSERVACIONES"];
-    const wsRYC = construirHojaCategoria(datos.ryc, headersRYC, d => [
-      d.anio, d.mes, nombreMes,
-      d.operacion || "", d.transporte || "", d.email || "",
+                        "F30","MUTUALIDAD","% RETENCIÓN","% AVANCE","ESTADO","EMPLEADOS ACTIVOS","VEHÍCULOS ACTIVOS"];
+    const wsRYC = construirHoja(rycA, headersRYC, d => [
+      d.anio, d.mes, nombreMes, d.operacion || "", d.transporte || "", d.email || "",
       d.doc_f30 || "—", d.doc_mutualidad || "—",
       d.pct_retencion ? `${d.pct_retencion}%` : "—",
       d.pct_avance != null ? `${d.pct_avance}%` : "—",
-      d.estado_final || "—",
-      d.anomalia_descripcion || "",
+      d.estado_final || "—", d.empleados_activos || 0, d.vehiculos_activos || 0,
     ]);
     XLSX.utils.book_append_sheet(wb, wsRYC, "Representante y Conductor");
 
-    // ─── HOJA 4: SUBCONTRATISTA ──────────────────────────────────
     const headersSUB = ["AÑO","MES","CERTIFICACIÓN","OPERACIÓN","TRANSPORTE","SUBCONTRATISTA",
                         "FECHA INGRESO","BOLETA HON.","COMP. PAGO",
                         "% RETENCIÓN","% AVANCE","ESTADO","OBSERVACIONES"];
-    const wsSUB = construirHojaCategoria(datos.sub, headersSUB, d => [
-      d.anio, d.mes, nombreMes,
-      d.operacion || "", d.transporte || "", d.subcontratista_nombre || "",
-      d.fecha_ingreso || "—",
-      d.doc_boleta_honorarios || "—", d.doc_comprobante_pago || "—",
+    const wsSUB = construirHoja(subA, headersSUB, d => [
+      d.anio, d.mes, nombreMes, d.operacion || "", d.transporte || "", d.subcontratista_nombre || "",
+      d.fecha_ingreso || "—", d.doc_boleta_honorarios || "—", d.doc_comprobante_pago || "—",
       d.pct_retencion ? `${d.pct_retencion}%` : "—",
       d.pct_avance != null ? `${d.pct_avance}%` : "—",
-      d.estado_final || "—",
-      d.anomalia_descripcion || "",
+      d.estado_final || "—", d.anomalia_descripcion || "",
     ]);
     XLSX.utils.book_append_sheet(wb, wsSUB, "Subcontratista");
 
-    // ─── HOJA 5: SOLO PENDIENTES (filtrado para acción) ──────────
-    const todosPendientes = [...datos.pc, ...datos.ryc, ...datos.sub]
-      .filter(d => d.estado_final !== "CERTIFICADO");
-    const headersPend = ["CATEGORÍA","OPERACIÓN","TRANSPORTE","SUBCONTRATISTA","E-MAIL",
-                         "ESTADO","% RETENCIÓN","% AVANCE","DOCS PENDIENTES"];
-    const wsPend = construirHojaCategoria(todosPendientes, headersPend, d => {
-      const docsKeys = ["doc_f30","doc_f30_1","doc_liquidaciones","doc_cotizaciones","doc_mutualidad","doc_boleta_honorarios","doc_comprobante_pago"];
-      const docNombres = {
-        doc_f30: "F30", doc_f30_1: "F30-1",
-        doc_liquidaciones: "Liquidaciones", doc_cotizaciones: "Cotizaciones",
-        doc_mutualidad: "Mutualidad", doc_boleta_honorarios: "Boleta Hon.",
-        doc_comprobante_pago: "Comp. Pago",
-      };
-      const pendientes = docsKeys
-        .filter(k => d[k] && !["VALIDADO","NO_APLICA"].includes(d[k]))
-        .map(k => `${docNombres[k]} (${d[k]})`)
-        .join(" · ");
-      return [
-        d.categoria || "",
-        d.operacion || "",
-        d.transporte || "",
-        d.subcontratista_nombre || "",
-        d.email || "",
-        d.estado_final || "",
-        d.pct_retencion ? `${d.pct_retencion}%` : "—",
-        d.pct_avance != null ? `${d.pct_avance}%` : "—",
-        pendientes,
-      ];
-    });
-    XLSX.utils.book_append_sheet(wb, wsPend, "PENDIENTES");
+    // ACTIVOS CRÍTICOS
+    const headersCrit = ["TRANSPORTE","CATEGORÍA","OPERACIÓN","SUBCONTRATISTA","E-MAIL",
+                         "EMPLEADOS","VEHÍCULOS","% RETENCIÓN","% AVANCE","ESTADO"];
+    const wsCrit = construirHoja(activosCriticos, headersCrit, d => [
+      d.transporte || "", d.categoria, d.operacion || "", d.subcontratista_nombre || "", d.email || "",
+      d.empleados_activos || 0, d.vehiculos_activos || 0,
+      d.pct_retencion ? `${d.pct_retencion}%` : "—",
+      d.pct_avance != null ? `${d.pct_avance}%` : "—",
+      d.estado_final || "—",
+    ]);
+    XLSX.utils.book_append_sheet(wb, wsCrit, "🚨 ACTIVOS CRÍTICOS");
 
-    // ─── Descargar ──────────────────────────────────────────────
+    // LIMPIEZA (inhabilitados)
+    const headersLimp = ["TRANSPORTE","CATEGORÍA","OPERACIÓN","ESTADO","% RETENCIÓN","% AVANCE"];
+    const wsLimp = construirHoja(todosInhabilitados, headersLimp, d => [
+      d.transporte || "", d.categoria, d.operacion || "",
+      d.estado_final || "—",
+      d.pct_retencion ? `${d.pct_retencion}%` : "—",
+      d.pct_avance != null ? `${d.pct_avance}%` : "—",
+    ]);
+    XLSX.utils.book_append_sheet(wb, wsLimp, "🧹 LIMPIEZA");
+
     XLSX.writeFile(wb, `Certificacion_Bigticket_${nombreMes}_${anio}.xlsx`);
   };
 
-  // ── Render del ícono de estado de documento ──
+  // ─── Helpers de UI ───
   const renderIconoDoc = (estado) => {
     const conf = {
       VALIDADO: { ico: "✓", color: "#16a34a", bg: "#dcfce7", titulo: "Validado" },
@@ -5494,25 +5483,23 @@ function ModuloPagos() {
     );
   };
 
-  // Toggle orden
   const toggleOrden = (col) => {
     if (ordenCol === col) setOrdenAsc(!ordenAsc);
     else { setOrdenCol(col); setOrdenAsc(true); }
   };
-
   const flecha = (col) => ordenCol === col ? (ordenAsc ? " ▲" : " ▼") : "";
 
   // ── RENDER ──
   return (
     <div className="pg" style={{ paddingBottom: 40 }}>
       {/* HEADER */}
-      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 18, flexWrap: "wrap", gap: 12 }}>
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 14, flexWrap: "wrap", gap: 12 }}>
         <div>
           <div className="sec-title">💸 Pagos · Certificación Documental</div>
           <div className="sec-sub">
-            Replicación automática del trabajo del analista · {kpis.total} registros
+            {kpis.total} activos · {todosInhabilitados.length} inhabilitados · {operacionesUnicas.length} operaciones
             {ultimaEjecucion && (
-              <> · Última actualización: {new Date(ultimaEjecucion.fecha_ejecucion).toLocaleString("es-CL", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}</>
+              <> · Última: {new Date(ultimaEjecucion.fecha_ejecucion).toLocaleString("es-CL", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}</>
             )}
           </div>
         </div>
@@ -5525,38 +5512,167 @@ function ModuloPagos() {
             })}
           </select>
           <button className="btn-blue" onClick={descargarExcel} disabled={loading || kpis.total === 0}>
-            📥 Descargar Excel
+            📥 Excel
           </button>
           <button className="btn-orange" onClick={reEjecutarScraper} disabled={ejecutandoScraper}>
-            {ejecutandoScraper ? "⏳ Ejecutando..." : "🔄 Re-ejecutar"}
+            {ejecutandoScraper ? "⏳..." : "🔄 Actualizar"}
           </button>
         </div>
       </div>
 
+      {/* Banner inhabilitados */}
+      {todosInhabilitados.length > 0 && !mostrarInhabilitados && (
+        <div style={{
+          background: "#fef3c7", border: "1px solid #fbbf24", borderRadius: 8,
+          padding: "10px 14px", marginBottom: 14, fontSize: 12,
+          display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap",
+        }}>
+          <div>
+            ⚠️ <strong>{todosInhabilitados.length} contratistas inhabilitados</strong> aparecen en los datos pero NO se cuentan en los KPIs.
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={() => setVistaActiva("limpieza")} 
+              style={{ padding: "4px 10px", border: "1px solid #92400e", background: "#fff", borderRadius: 6, fontSize: 11, fontWeight: 600, color: "#92400e", cursor: "pointer" }}>
+              🧹 Ver Limpieza
+            </button>
+            <button onClick={() => setMostrarInhabilitados(true)} 
+              style={{ padding: "4px 10px", border: "1px solid #92400e", background: "transparent", borderRadius: 6, fontSize: 11, color: "#92400e", cursor: "pointer" }}>
+              Mostrar todo
+            </button>
+          </div>
+        </div>
+      )}
+
+      {mostrarInhabilitados && (
+        <div style={{
+          background: "#dbeafe", border: "1px solid #3b82f6", borderRadius: 8,
+          padding: "8px 14px", marginBottom: 14, fontSize: 12,
+          display: "flex", alignItems: "center", justifyContent: "space-between",
+        }}>
+          <div>📊 Mostrando TODOS los registros (incluidos inhabilitados)</div>
+          <button onClick={() => setMostrarInhabilitados(false)}
+            style={{ padding: "4px 10px", border: "1px solid #3b82f6", background: "#fff", borderRadius: 6, fontSize: 11, color: "#1e40af", cursor: "pointer" }}>
+            Ocultar inhabilitados
+          </button>
+        </div>
+      )}
+
+      {/* TABS de vista principal */}
+      <div style={{ display: "flex", gap: 4, marginBottom: 14, borderBottom: "2px solid #e4e7ec" }}>
+        {[
+          { id: "dashboard", label: "📊 Dashboard", n: kpis.total },
+          { id: "criticos", label: "🚨 Activos Críticos", n: activosCriticos.length, alert: activosCriticos.length > 0 },
+          { id: "limpieza", label: "🧹 Limpieza", n: todosInhabilitados.length, warn: todosInhabilitados.length > 0 },
+          { id: "matriz", label: "⚙️ Matriz Documentos", n: null },
+        ].map(t => (
+          <button key={t.id} onClick={() => setVistaActiva(t.id)}
+            style={{
+              padding: "10px 14px", border: "none", cursor: "pointer",
+              borderBottom: vistaActiva === t.id ? "3px solid #1a3a6b" : "3px solid transparent",
+              background: "transparent",
+              color: vistaActiva === t.id ? "#1a3a6b" : (t.alert ? "#c0392b" : t.warn ? "#92400e" : "#666"),
+              fontWeight: vistaActiva === t.id ? 700 : 500,
+              fontSize: 13, fontFamily: "Geist, sans-serif",
+              marginBottom: -2,
+            }}>
+            {t.label}
+            {t.n != null && <span style={{ opacity: 0.7, marginLeft: 6, fontWeight: 600 }}>({t.n})</span>}
+          </button>
+        ))}
+      </div>
+
+      {loading && <div className="loading">Cargando datos…</div>}
+
+      {!loading && (
+        <>
+          {/* ─── VISTA: DASHBOARD ─── */}
+          {vistaActiva === "dashboard" && (
+            <DashboardCertificacion
+              datos={datos}
+              kpis={kpis}
+              tabCategoria={tabCategoria} setTabCategoria={setTabCategoria}
+              busqueda={busqueda} setBusqueda={setBusqueda}
+              filtroOperacion={filtroOperacion} setFiltroOperacion={setFiltroOperacion}
+              filtroEstado={filtroEstado} setFiltroEstado={setFiltroEstado}
+              filtroMandante={filtroMandante} setFiltroMandante={setFiltroMandante}
+              mostrarInhabilitados={mostrarInhabilitados}
+              operacionesUnicas={operacionesUnicas}
+              datosCategoriaActual={datosCategoriaActual}
+              docsPorCategoria={docsPorCategoria}
+              renderIconoDoc={renderIconoDoc} renderEstadoFinal={renderEstadoFinal}
+              toggleOrden={toggleOrden} flecha={flecha}
+              operacionAMandante={operacionAMandante}
+              reEjecutarScraper={reEjecutarScraper} ejecutandoScraper={ejecutandoScraper}
+            />
+          )}
+
+          {/* ─── VISTA: ACTIVOS CRÍTICOS ─── */}
+          {vistaActiva === "criticos" && (
+            <ActivosCriticos
+              activosCriticos={activosCriticos}
+              renderEstadoFinal={renderEstadoFinal}
+              operacionAMandante={operacionAMandante}
+            />
+          )}
+
+          {/* ─── VISTA: LIMPIEZA ─── */}
+          {vistaActiva === "limpieza" && (
+            <LimpiezaInhabilitados
+              inhabilitados={todosInhabilitados}
+              renderEstadoFinal={renderEstadoFinal}
+              operacionAMandante={operacionAMandante}
+            />
+          )}
+
+          {/* ─── VISTA: MATRIZ ─── */}
+          {vistaActiva === "matriz" && <EditorMatriz />}
+        </>
+      )}
+    </div>
+  );
+}
+
+// ─── Sub-componente: Dashboard (vista normal de PC/RyC/SUB) ─────────
+function DashboardCertificacion({
+  datos, kpis, tabCategoria, setTabCategoria,
+  busqueda, setBusqueda, filtroOperacion, setFiltroOperacion,
+  filtroEstado, setFiltroEstado, filtroMandante, setFiltroMandante,
+  mostrarInhabilitados, operacionesUnicas, datosCategoriaActual,
+  docsPorCategoria, renderIconoDoc, renderEstadoFinal,
+  toggleOrden, flecha, operacionAMandante,
+  reEjecutarScraper, ejecutandoScraper,
+}) {
+  const datosTab = (cat) => mostrarInhabilitados
+    ? datos[cat]
+    : datos[cat].filter(d => !d.recurso_inhabilitado);
+
+  return (
+    <>
       {/* KPIs */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 10, marginBottom: 16 }}>
-        <KPI label="Total registros" valor={kpis.total} sub={`${operacionesUnicas.length} operaciones`} color="#1a3a6b" />
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 10, marginBottom: 14 }}>
+        <KPI label={mostrarInhabilitados ? "Total registros" : "Activos reales"} valor={kpis.total} sub={`${operacionesUnicas.length} operaciones`} color="#1a3a6b" />
         <KPI label="% Avance certificación" valor={`${kpis.pctAvance}%`} sub={`${kpis.certificados} certificados`} color="#16a34a" />
         <KPI label="Pendientes" valor={kpis.parciales + kpis.sinCert} sub={`${kpis.parciales} parcial · ${kpis.sinCert} sin cert.`} color="#F47B20" />
         <KPI label="Anomalías" valor={kpis.anomalias} sub={kpis.anomalias > 0 ? "Requieren revisión" : "Todo OK"} color={kpis.anomalias > 0 ? "#c0392b" : "#16a34a"} />
-        <KPI label="Monto retenido" valor={fmt$(kpis.monto)} sub="Total CLP" color="#c0392b" />
+        {!mostrarInhabilitados && (
+          <KPI label="Inhabilitados" valor={kpis.inhabilitados} sub="Excluidos del cálculo" color="#94a3b8" />
+        )}
       </div>
 
-      {/* TABS por categoría (PC / RYC / SUB) */}
-      <div style={{ display: "flex", gap: 4, marginBottom: 12, borderBottom: "2px solid #e4e7ec", paddingBottom: 0 }}>
+      {/* Tabs categoría */}
+      <div style={{ display: "flex", gap: 4, marginBottom: 12, borderBottom: "1px solid #e4e7ec" }}>
         {[
-          { id: "pc", label: "👥 Personal Contratado", n: datos.pc.length },
-          { id: "ryc", label: "🚐 Representante y Conductor", n: datos.ryc.length },
-          { id: "sub", label: "🤝 Subcontratista", n: datos.sub.length },
+          { id: "pc", label: "👥 Personal Contratado", n: datosTab("pc").length },
+          { id: "ryc", label: "🚐 Representante y Conductor", n: datosTab("ryc").length },
+          { id: "sub", label: "🤝 Subcontratista", n: datosTab("sub").length },
         ].map(t => (
-          <button key={t.id} onClick={() => setTabActiva(t.id)}
+          <button key={t.id} onClick={() => setTabCategoria(t.id)}
             style={{
-              padding: "10px 16px", border: "none", cursor: "pointer",
-              borderBottom: tabActiva === t.id ? "3px solid #1a3a6b" : "3px solid transparent",
-              background: "transparent", color: tabActiva === t.id ? "#1a3a6b" : "#666",
-              fontWeight: tabActiva === t.id ? 700 : 500,
-              fontSize: 13, fontFamily: "Geist, sans-serif",
-              marginBottom: -2,
+              padding: "8px 14px", border: "none", cursor: "pointer",
+              borderBottom: tabCategoria === t.id ? "2px solid #1a3a6b" : "2px solid transparent",
+              background: "transparent", color: tabCategoria === t.id ? "#1a3a6b" : "#666",
+              fontWeight: tabCategoria === t.id ? 700 : 500,
+              fontSize: 12, fontFamily: "Geist, sans-serif", marginBottom: -1,
             }}>
             {t.label} <span style={{ opacity: 0.6, marginLeft: 4 }}>({t.n})</span>
           </button>
@@ -5565,7 +5681,7 @@ function ModuloPagos() {
 
       {/* Filtros */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 160px 160px 160px", gap: 8, marginBottom: 12 }}>
-        <input placeholder="🔎 Buscar por transportista, chofer, email u operación..." value={busqueda} onChange={(e) => setBusqueda(e.target.value)} />
+        <input placeholder="🔎 Buscar..." value={busqueda} onChange={(e) => setBusqueda(e.target.value)} />
         <select value={filtroMandante} onChange={(e) => setFiltroMandante(e.target.value)}>
           <option value="todos">Todos los mandantes</option>
           <option value="Mercado Libre">Mercado Libre</option>
@@ -5586,40 +5702,27 @@ function ModuloPagos() {
         </select>
       </div>
 
-      {/* Loading / vacío */}
-      {loading && <div className="loading">Cargando datos…</div>}
-
-      {!loading && kpis.total === 0 && (
+      {datos.pc.length === 0 && datos.ryc.length === 0 && datos.sub.length === 0 ? (
         <div className="empty">
           <div style={{ fontSize: 36, marginBottom: 12 }}>📭</div>
           <div style={{ fontWeight: 600, marginBottom: 6 }}>Sin datos para este período</div>
-          <div style={{ fontSize: 12, marginBottom: 16, color: "#666" }}>
-            Ejecuta el scraper para descargar la información de Certronic.
-          </div>
           <button className="btn-orange" onClick={reEjecutarScraper} disabled={ejecutandoScraper}>
-            {ejecutandoScraper ? "⏳ Ejecutando..." : "🔄 Ejecutar scraper ahora"}
+            {ejecutandoScraper ? "⏳..." : "🔄 Ejecutar scraper"}
           </button>
         </div>
-      )}
-
-      {/* TABLA TIPO EXCEL */}
-      {!loading && kpis.total > 0 && (
-        <div style={{
-          background: "#fff", border: "1px solid #e4e7ec", borderRadius: 8,
-          overflow: "hidden",
-        }}>
-          <div style={{ overflowX: "auto", maxHeight: "calc(100vh - 380px)", overflowY: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11.5, minWidth: tabActiva === "pc" ? 1300 : 1000 }}>
+      ) : (
+        <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 8, overflow: "hidden" }}>
+          <div style={{ overflowX: "auto", maxHeight: "calc(100vh - 420px)", overflowY: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11.5, minWidth: tabCategoria === "pc" ? 1300 : 1000 }}>
               <thead style={{ position: "sticky", top: 0, zIndex: 2 }}>
                 <tr style={{ background: "#1a3a6b", color: "#fff" }}>
                   <th style={thE} onClick={() => toggleOrden("operacion")}>Operación{flecha("operacion")}</th>
                   <th style={{...thE, textAlign: "left", paddingLeft: 12}} onClick={() => toggleOrden("transporte")}>Transporte{flecha("transporte")}</th>
-                  {tabActiva === "sub" && (
+                  {tabCategoria === "sub" && (
                     <th style={{...thE, textAlign: "left"}} onClick={() => toggleOrden("subcontratista_nombre")}>Subcontratista{flecha("subcontratista_nombre")}</th>
                   )}
-                  <th style={{...thE, textAlign: "left"}}>E-mail</th>
-                  {/* Columnas dinámicas por documento */}
-                  {docsPorCategoria[tabActiva].map(d => (
+                  <th style={thE}>Activos</th>
+                  {docsPorCategoria[tabCategoria].map(d => (
                     <th key={d.key} style={thE} title={d.label}>{d.label}</th>
                   ))}
                   <th style={thE} onClick={() => toggleOrden("pct_retencion")}>% Reten.{flecha("pct_retencion")}</th>
@@ -5637,10 +5740,12 @@ function ModuloPagos() {
                     "Cannon": "#dbeafe",
                     "Esporádicos": "#f3e8ff",
                   }[mandante] || "#f1f5f9";
+                  const isInhabilitado = d.recurso_inhabilitado;
                   return (
                     <tr key={d.id || i} style={{
                       borderBottom: "1px solid #f0f0f0",
-                      background: d.tiene_anomalia ? "#fff7ed" : (i % 2 === 0 ? "#fafbfc" : "#fff"),
+                      background: isInhabilitado ? "#f8fafc" : (d.tiene_anomalia ? "#fff7ed" : (i % 2 === 0 ? "#fafbfc" : "#fff")),
+                      opacity: isInhabilitado ? 0.6 : 1,
                     }}>
                       <td style={tdE}>
                         <span title={mandante} style={{
@@ -5652,19 +5757,26 @@ function ModuloPagos() {
                       </td>
                       <td style={{...tdE, textAlign: "left", paddingLeft: 12, fontWeight: 500}}>
                         {d.transporte}
+                        {isInhabilitado && (
+                          <span style={{ fontSize: 9, marginLeft: 6, padding: "1px 5px", borderRadius: 3, background: "#fee2e2", color: "#991b1b", fontWeight: 600 }}>
+                            INHABILITADO
+                          </span>
+                        )}
                         {d.tiene_anomalia && (
                           <div style={{ fontSize: 9.5, color: "#c0392b", marginTop: 2, fontStyle: "italic" }}>
                             ⚠ {d.anomalia_descripcion}
                           </div>
                         )}
                       </td>
-                      {tabActiva === "sub" && (
+                      {tabCategoria === "sub" && (
                         <td style={{...tdE, textAlign: "left", color: "#374151"}}>{d.subcontratista_nombre || "—"}</td>
                       )}
-                      <td style={{...tdE, textAlign: "left", fontSize: 10.5, color: "#64748b"}}>
-                        {d.email || "—"}
+                      <td style={tdE}>
+                        <div style={{ fontSize: 10, color: "#64748b" }}>
+                          👥 {d.empleados_activos || 0} · 🚛 {d.vehiculos_activos || 0}
+                        </div>
                       </td>
-                      {docsPorCategoria[tabActiva].map(doc => (
+                      {docsPorCategoria[tabCategoria].map(doc => (
                         <td key={doc.key} style={tdE}>{renderIconoDoc(d[doc.key])}</td>
                       ))}
                       <td style={{...tdE, fontWeight: 700, color: d.pct_retencion > 0 ? "#c0392b" : "#94a3b8"}}>
@@ -5698,21 +5810,546 @@ function ModuloPagos() {
         </div>
       )}
 
-      {/* Footer informativo */}
-      {!loading && kpis.total > 0 && (
-        <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8, fontSize: 10.5, color: "#64748b" }}>
-          <div>
-            Mostrando {datosCategoriaActual.length} de {datos[tabActiva].length} registros · {tabActiva.toUpperCase()}
-          </div>
-          <div style={{ display: "flex", gap: 12 }}>
-            <span>✓ Validado</span>
-            <span>◐ Recepcionado</span>
-            <span>↗ Enviado</span>
-            <span>⏳ Pendiente</span>
-            <span>— No aplica</span>
+      <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8, fontSize: 10.5, color: "#64748b" }}>
+        <div>Mostrando {datosCategoriaActual.length} registros · {tabCategoria.toUpperCase()}</div>
+        <div style={{ display: "flex", gap: 12 }}>
+          <span>✓ Validado</span><span>◐ Recepcionado</span>
+          <span>↗ Enviado</span><span>⏳ Pendiente</span><span>— No aplica</span>
+        </div>
+      </div>
+    </>
+  );
+}
+
+// ─── Sub-componente: Activos Críticos ────────────────────────────────
+function ActivosCriticos({ activosCriticos, renderEstadoFinal, operacionAMandante }) {
+  return (
+    <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10, padding: 16 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
+        <span style={{ fontSize: 20 }}>🚨</span>
+        <div>
+          <div style={{ fontSize: 16, fontWeight: 700, color: "#c0392b" }}>Activos Críticos</div>
+          <div style={{ fontSize: 11, color: "#64748b" }}>
+            Empresas operando HOY con retención de pagos. Requieren acción inmediata.
           </div>
         </div>
+      </div>
+
+      {activosCriticos.length === 0 ? (
+        <div style={{ padding: 30, textAlign: "center", color: "#16a34a", fontSize: 14 }}>
+          ✅ No hay empresas activas con retención. Todo en orden.
+        </div>
+      ) : (
+        <>
+          <div style={{ background: "#fee2e2", padding: "10px 14px", borderRadius: 6, fontSize: 12, marginTop: 12, marginBottom: 12, color: "#7f1d1d" }}>
+            Estas <strong>{activosCriticos.length} empresas</strong> tienen empleados o vehículos operando y al mismo tiempo tienen documentación que retiene pagos.
+            Es la <strong>lista de llamadas del día</strong>.
+          </div>
+
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+              <thead>
+                <tr style={{ background: "#fef2f2", borderBottom: "2px solid #fca5a5" }}>
+                  <th style={thE2}>Transporte</th>
+                  <th style={thE2}>Cat.</th>
+                  <th style={thE2}>Operación</th>
+                  <th style={thE2}>Subcontratista</th>
+                  <th style={thE2}>Activos</th>
+                  <th style={thE2}>% Reten.</th>
+                  <th style={thE2}>% Avance</th>
+                  <th style={thE2}>Estado</th>
+                </tr>
+              </thead>
+              <tbody>
+                {activosCriticos.map((d, i) => (
+                  <tr key={d.id || i} style={{ borderBottom: "1px solid #fee2e2", background: i % 2 === 0 ? "#fff" : "#fffafa" }}>
+                    <td style={{...tdE2, fontWeight: 600}}>{d.transporte}</td>
+                    <td style={tdE2}><span style={{ fontSize: 10, padding: "2px 6px", borderRadius: 4, background: "#1a3a6b", color: "#fff", fontWeight: 700 }}>{d.categoria}</span></td>
+                    <td style={tdE2}>{d.operacion || "—"}</td>
+                    <td style={tdE2}>{d.subcontratista_nombre || "—"}</td>
+                    <td style={{...tdE2, textAlign: "center"}}>
+                      <div style={{ fontSize: 11 }}>👥 {d.empleados_activos || 0}</div>
+                      <div style={{ fontSize: 11 }}>🚛 {d.vehiculos_activos || 0}</div>
+                    </td>
+                    <td style={{...tdE2, fontWeight: 700, color: "#c0392b"}}>{d.pct_retencion}%</td>
+                    <td style={tdE2}>{d.pct_avance != null ? `${d.pct_avance}%` : "—"}</td>
+                    <td style={tdE2}>{renderEstadoFinal(d.estado_final)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
       )}
+    </div>
+  );
+}
+
+// ─── Sub-componente: Limpieza Inhabilitados ──────────────────────────
+function LimpiezaInhabilitados({ inhabilitados, renderEstadoFinal, operacionAMandante }) {
+  // Agrupar por contratista (un contratista puede aparecer en PC, RyC y SUB)
+  const agrupados = useMemo(() => {
+    const map = new Map();
+    for (const d of inhabilitados) {
+      if (!map.has(d.transporte)) {
+        map.set(d.transporte, { transporte: d.transporte, operacion: d.operacion, registros: [] });
+      }
+      map.get(d.transporte).registros.push(d);
+    }
+    return [...map.values()].sort((a, b) => b.registros.length - a.registros.length);
+  }, [inhabilitados]);
+
+  return (
+    <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10, padding: 16 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
+        <span style={{ fontSize: 20 }}>🧹</span>
+        <div>
+          <div style={{ fontSize: 16, fontWeight: 700, color: "#92400e" }}>Limpieza · Inhabilitados</div>
+          <div style={{ fontSize: 11, color: "#64748b" }}>
+            Contratistas marcados como Inhabilitados en Certronic. Excluidos del cálculo de retenciones.
+          </div>
+        </div>
+      </div>
+
+      {agrupados.length === 0 ? (
+        <div style={{ padding: 30, textAlign: "center", color: "#16a34a", fontSize: 14 }}>
+          ✅ No hay contratistas inhabilitados.
+        </div>
+      ) : (
+        <>
+          <div style={{ background: "#fef3c7", padding: "10px 14px", borderRadius: 6, fontSize: 12, marginTop: 12, marginBottom: 12, color: "#78350f" }}>
+            <strong>{agrupados.length} contratistas inhabilitados</strong> con un total de {inhabilitados.length} registros entre PC, RyC y SUB.
+            Estos NO afectan tus métricas, pero deben ser dados de baja en Certronic para limpiar el sistema.
+          </div>
+
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+              <thead>
+                <tr style={{ background: "#fef3c7", borderBottom: "2px solid #fbbf24" }}>
+                  <th style={thE2}>Transporte</th>
+                  <th style={thE2}>Operación</th>
+                  <th style={thE2}>Categorías</th>
+                  <th style={thE2}>Reg.</th>
+                </tr>
+              </thead>
+              <tbody>
+                {agrupados.map((g, i) => (
+                  <tr key={i} style={{ borderBottom: "1px solid #fef3c7", background: i % 2 === 0 ? "#fff" : "#fffbeb" }}>
+                    <td style={{...tdE2, fontWeight: 500}}>{g.transporte}</td>
+                    <td style={tdE2}>{g.operacion || "—"}</td>
+                    <td style={tdE2}>
+                      {[...new Set(g.registros.map(r => r.categoria))].map(c => (
+                        <span key={c} style={{ display: "inline-block", fontSize: 10, padding: "2px 6px", borderRadius: 4, background: "#1a3a6b", color: "#fff", fontWeight: 700, marginRight: 4 }}>{c}</span>
+                      ))}
+                    </td>
+                    <td style={{...tdE2, textAlign: "center", fontWeight: 600}}>{g.registros.length}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ─── Sub-componente: Editor Matriz ───────────────────────────────────
+function EditorMatriz() {
+  const [reglas, setReglas] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [filtroMandante, setFiltroMandante] = useState("todos");
+  const [filtroCategoria, setFiltroCategoria] = useState("todos");
+  const [busqueda, setBusqueda] = useState("");
+  const [editando, setEditando] = useState(null); // id de la regla en edición
+  const [formNueva, setFormNueva] = useState(null); // datos del form para nueva regla
+  const [guardando, setGuardando] = useState(false);
+
+  useEffect(() => { cargar(); }, []);
+
+  const cargar = async () => {
+    setLoading(true);
+    try {
+      const { data } = await sb.from("certronic_matriz_documentos")
+        .select("*")
+        .is("fecha_fin_vigencia", null)
+        .order("mandante")
+        .order("categoria")
+        .order("doc_nombre");
+      setReglas(data || []);
+    } catch(e) {
+      console.error(e);
+      alert("Error cargando matriz: " + e.message);
+    }
+    setLoading(false);
+  };
+
+  const mandantes = useMemo(() => {
+    return [...new Set(reglas.map(r => r.mandante))].sort();
+  }, [reglas]);
+
+  const reglasFiltradas = useMemo(() => {
+    let arr = reglas;
+    if (filtroMandante !== "todos") arr = arr.filter(r => r.mandante === filtroMandante);
+    if (filtroCategoria !== "todos") arr = arr.filter(r => r.categoria === filtroCategoria);
+    if (busqueda) {
+      const q = busqueda.toLowerCase();
+      arr = arr.filter(r =>
+        (r.doc_nombre || "").toLowerCase().includes(q) ||
+        (r.observaciones || "").toLowerCase().includes(q)
+      );
+    }
+    return arr;
+  }, [reglas, filtroMandante, filtroCategoria, busqueda]);
+
+  const guardarEdicion = async (regla) => {
+    setGuardando(true);
+    try {
+      const { error } = await sb.from("certronic_matriz_documentos")
+        .update({
+          pct_retencion: Number(regla.pct_retencion) || 0,
+          impide_acceso: regla.impide_acceso,
+          impide_pago: regla.impide_pago,
+          criticidad: regla.criticidad,
+          periodicidad: regla.periodicidad,
+          observaciones: regla.observaciones,
+        })
+        .eq("id", regla.id);
+      if (error) throw error;
+      setEditando(null);
+      await cargar();
+    } catch(e) {
+      alert("Error guardando: " + e.message);
+    }
+    setGuardando(false);
+  };
+
+  const eliminarRegla = async (id) => {
+    if (!confirm("¿Marcar esta regla como no vigente? (no se borra, queda histórica)")) return;
+    setGuardando(true);
+    try {
+      const { error } = await sb.from("certronic_matriz_documentos")
+        .update({ fecha_fin_vigencia: new Date().toISOString().slice(0, 10) })
+        .eq("id", id);
+      if (error) throw error;
+      await cargar();
+    } catch(e) {
+      alert("Error: " + e.message);
+    }
+    setGuardando(false);
+  };
+
+  const guardarNueva = async () => {
+    if (!formNueva.mandante || !formNueva.doc_nombre || !formNueva.categoria) {
+      alert("Mandante, categoría y nombre del documento son obligatorios.");
+      return;
+    }
+    setGuardando(true);
+    try {
+      const { error } = await sb.from("certronic_matriz_documentos").insert([{
+        mandante: formNueva.mandante,
+        categoria: formNueva.categoria,
+        doc_codigo: formNueva.doc_codigo || null,
+        doc_nombre: formNueva.doc_nombre,
+        doc_nombre_norm: (formNueva.doc_nombre || "").toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9 ]/g, " ").replace(/\s+/g, " ").trim(),
+        periodicidad: formNueva.periodicidad,
+        criticidad: formNueva.criticidad,
+        impide_acceso: formNueva.impide_acceso,
+        impide_pago: formNueva.impide_pago,
+        pct_retencion: Number(formNueva.pct_retencion) || 0,
+        observaciones: formNueva.observaciones || null,
+        fecha_inicio_vigencia: new Date().toISOString().slice(0, 10),
+      }]);
+      if (error) throw error;
+      setFormNueva(null);
+      await cargar();
+    } catch(e) {
+      alert("Error: " + e.message);
+    }
+    setGuardando(false);
+  };
+
+  return (
+    <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10, padding: 16 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14, gap: 8, flexWrap: "wrap" }}>
+        <div>
+          <div style={{ fontSize: 16, fontWeight: 700, color: "#1a3a6b" }}>⚙️ Matriz de Documentos por Mandante</div>
+          <div style={{ fontSize: 11, color: "#64748b" }}>
+            Reglas de qué documentos exige cada mandante y % de retención. {reglas.length} reglas vigentes.
+          </div>
+        </div>
+        <button className="btn-blue" onClick={() => setFormNueva({
+          mandante: mandantes[0] || "",
+          categoria: "Empresa",
+          doc_codigo: "",
+          doc_nombre: "",
+          periodicidad: "Mensual",
+          criticidad: "Alta",
+          impide_acceso: "NO",
+          impide_pago: "SI",
+          pct_retencion: 0.10,
+          observaciones: "",
+        })}>
+          + Nueva regla
+        </button>
+      </div>
+
+      {/* Filtros */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 200px 200px", gap: 8, marginBottom: 12 }}>
+        <input placeholder="🔎 Buscar documento..." value={busqueda} onChange={(e) => setBusqueda(e.target.value)} />
+        <select value={filtroMandante} onChange={(e) => setFiltroMandante(e.target.value)}>
+          <option value="todos">Todos los mandantes</option>
+          {mandantes.map(m => <option key={m} value={m}>{m}</option>)}
+        </select>
+        <select value={filtroCategoria} onChange={(e) => setFiltroCategoria(e.target.value)}>
+          <option value="todos">Todas las categorías</option>
+          <option value="Empresa">Empresa</option>
+          <option value="Trabajador">Trabajador</option>
+          <option value="Vehiculo">Vehículo</option>
+        </select>
+      </div>
+
+      {/* Form nueva regla (modal inline) */}
+      {formNueva && (
+        <FormNuevaRegla
+          formNueva={formNueva}
+          setFormNueva={setFormNueva}
+          mandantes={mandantes}
+          guardando={guardando}
+          onGuardar={guardarNueva}
+          onCancelar={() => setFormNueva(null)}
+        />
+      )}
+
+      {loading ? (
+        <div className="loading">Cargando matriz…</div>
+      ) : (
+        <div style={{ overflowX: "auto", maxHeight: "60vh", overflowY: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11.5 }}>
+            <thead style={{ position: "sticky", top: 0, zIndex: 2 }}>
+              <tr style={{ background: "#1a3a6b", color: "#fff" }}>
+                <th style={thE2L}>Mandante</th>
+                <th style={thE2L}>Categoría</th>
+                <th style={thE2L}>Documento</th>
+                <th style={thE2}>Periodicidad</th>
+                <th style={thE2}>Criticidad</th>
+                <th style={thE2}>Imp.Acc</th>
+                <th style={thE2}>Imp.Pago</th>
+                <th style={thE2}>% Reten.</th>
+                <th style={thE2}>Acciones</th>
+              </tr>
+            </thead>
+            <tbody>
+              {reglasFiltradas.map((r, i) => (
+                <FilaRegla key={r.id} regla={r} index={i}
+                  editando={editando === r.id}
+                  onEditar={() => setEditando(r.id)}
+                  onCancelar={() => setEditando(null)}
+                  onGuardar={guardarEdicion}
+                  onEliminar={() => eliminarRegla(r.id)}
+                  guardando={guardando} />
+              ))}
+            </tbody>
+          </table>
+          {reglasFiltradas.length === 0 && (
+            <div style={{ padding: 20, textAlign: "center", color: "#888", fontSize: 12 }}>
+              No hay reglas que coincidan con los filtros.
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Sub-componente: Fila de regla (con modo edición inline) ────────
+function FilaRegla({ regla, index, editando, onEditar, onCancelar, onGuardar, onEliminar, guardando }) {
+  const [edit, setEdit] = useState(regla);
+  useEffect(() => { setEdit(regla); }, [regla, editando]);
+
+  if (!editando) {
+    return (
+      <tr style={{ borderBottom: "1px solid #f0f0f0", background: index % 2 === 0 ? "#fff" : "#fafbfc" }}>
+        <td style={{...tdE2, fontWeight: 600, color: "#1a3a6b"}}>{regla.mandante}</td>
+        <td style={tdE2}>{regla.categoria}</td>
+        <td style={{...tdE2, textAlign: "left"}}>
+          {regla.doc_codigo && <span style={{ fontSize: 9, color: "#94a3b8", marginRight: 4 }}>{regla.doc_codigo}</span>}
+          {regla.doc_nombre}
+          {regla.observaciones && <div style={{ fontSize: 10, color: "#64748b", marginTop: 2 }}>{regla.observaciones}</div>}
+        </td>
+        <td style={tdE2}>{regla.periodicidad || "—"}</td>
+        <td style={tdE2}>{regla.criticidad || "—"}</td>
+        <td style={tdE2}>{regla.impide_acceso === "SI" ? "✓" : "✗"}</td>
+        <td style={tdE2}>{regla.impide_pago === "SI" ? "✓" : "✗"}</td>
+        <td style={{...tdE2, fontWeight: 700, color: regla.pct_retencion > 0 ? "#c0392b" : "#94a3b8"}}>
+          {regla.pct_retencion ? `${Math.round(regla.pct_retencion * 100)}%` : "—"}
+        </td>
+        <td style={tdE2}>
+          <button onClick={onEditar} style={btnIcon}>✏️</button>
+          <button onClick={onEliminar} style={{...btnIcon, color: "#c0392b"}}>🗑</button>
+        </td>
+      </tr>
+    );
+  }
+
+  return (
+    <tr style={{ background: "#fef3c7", borderBottom: "2px solid #fbbf24" }}>
+      <td style={tdE2}>{regla.mandante}</td>
+      <td style={tdE2}>{regla.categoria}</td>
+      <td style={{...tdE2, textAlign: "left", fontSize: 11}}>{regla.doc_nombre}</td>
+      <td style={tdE2}>
+        <select value={edit.periodicidad || ""} onChange={(e) => setEdit({...edit, periodicidad: e.target.value})}
+          style={inputMini}>
+          <option value="">—</option>
+          <option value="Mensual">Mensual</option>
+          <option value="Anual">Anual</option>
+          <option value="Inicial">Inicial</option>
+          <option value="Esporadico">Esporádico</option>
+          <option value="Con Vencimiento">Con Vencimiento</option>
+          <option value="Presentación Única">Presentación Única</option>
+          <option value="Cese">Cese</option>
+        </select>
+      </td>
+      <td style={tdE2}>
+        <select value={edit.criticidad || ""} onChange={(e) => setEdit({...edit, criticidad: e.target.value})}
+          style={inputMini}>
+          <option value="">—</option>
+          <option value="Alta">Alta</option>
+          <option value="Media">Media</option>
+          <option value="Baja">Baja</option>
+        </select>
+      </td>
+      <td style={tdE2}>
+        <select value={edit.impide_acceso || ""} onChange={(e) => setEdit({...edit, impide_acceso: e.target.value})}
+          style={inputMini}>
+          <option value="">—</option>
+          <option value="SI">SI</option>
+          <option value="NO">NO</option>
+        </select>
+      </td>
+      <td style={tdE2}>
+        <select value={edit.impide_pago || ""} onChange={(e) => setEdit({...edit, impide_pago: e.target.value})}
+          style={inputMini}>
+          <option value="">—</option>
+          <option value="SI">SI</option>
+          <option value="NO">NO</option>
+        </select>
+      </td>
+      <td style={tdE2}>
+        <input type="number" step="0.01" min="0" max="1"
+          value={edit.pct_retencion || 0}
+          onChange={(e) => setEdit({...edit, pct_retencion: e.target.value})}
+          style={{...inputMini, width: 70}} />
+        <div style={{ fontSize: 9, color: "#64748b" }}>0.10 = 10%</div>
+      </td>
+      <td style={tdE2}>
+        <button onClick={() => onGuardar(edit)} disabled={guardando} style={{...btnIcon, color: "#16a34a"}}>💾</button>
+        <button onClick={onCancelar} style={btnIcon}>✗</button>
+      </td>
+    </tr>
+  );
+}
+
+// ─── Sub-componente: Form nueva regla ────────────────────────────────
+function FormNuevaRegla({ formNueva, setFormNueva, mandantes, guardando, onGuardar, onCancelar }) {
+  const [nuevoMandante, setNuevoMandante] = useState(false);
+  return (
+    <div style={{
+      background: "#eef2ff", border: "2px solid #3b82f6", borderRadius: 8,
+      padding: 14, marginBottom: 14,
+    }}>
+      <div style={{ fontSize: 13, fontWeight: 700, color: "#1e40af", marginBottom: 10 }}>
+        + Nueva regla en la matriz
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 8 }}>
+        <div>
+          <label style={lbl}>Mandante</label>
+          {nuevoMandante ? (
+            <div style={{ display: "flex", gap: 4 }}>
+              <input value={formNueva.mandante} onChange={(e) => setFormNueva({...formNueva, mandante: e.target.value})}
+                placeholder="Nombre del mandante" />
+              <button onClick={() => setNuevoMandante(false)} style={btnIcon}>↩</button>
+            </div>
+          ) : (
+            <div style={{ display: "flex", gap: 4 }}>
+              <select value={formNueva.mandante} onChange={(e) => setFormNueva({...formNueva, mandante: e.target.value})}>
+                {mandantes.map(m => <option key={m} value={m}>{m}</option>)}
+              </select>
+              <button onClick={() => { setFormNueva({...formNueva, mandante: ""}); setNuevoMandante(true); }} 
+                style={btnIcon} title="Crear nuevo mandante">+</button>
+            </div>
+          )}
+        </div>
+        <div>
+          <label style={lbl}>Categoría</label>
+          <select value={formNueva.categoria} onChange={(e) => setFormNueva({...formNueva, categoria: e.target.value})}>
+            <option value="Empresa">Empresa</option>
+            <option value="Trabajador">Trabajador</option>
+            <option value="Vehiculo">Vehículo</option>
+          </select>
+        </div>
+        <div>
+          <label style={lbl}>Código (opcional)</label>
+          <input value={formNueva.doc_codigo || ""} onChange={(e) => setFormNueva({...formNueva, doc_codigo: e.target.value})}
+            placeholder="ej: 1.1" />
+        </div>
+        <div style={{ gridColumn: "1 / -1" }}>
+          <label style={lbl}>Nombre del documento *</label>
+          <input value={formNueva.doc_nombre} onChange={(e) => setFormNueva({...formNueva, doc_nombre: e.target.value})}
+            placeholder="ej: Certificado de Antecedentes" />
+        </div>
+        <div>
+          <label style={lbl}>Periodicidad</label>
+          <select value={formNueva.periodicidad} onChange={(e) => setFormNueva({...formNueva, periodicidad: e.target.value})}>
+            <option value="Mensual">Mensual</option>
+            <option value="Anual">Anual</option>
+            <option value="Inicial">Inicial</option>
+            <option value="Esporadico">Esporádico</option>
+            <option value="Con Vencimiento">Con Vencimiento</option>
+            <option value="Presentación Única">Presentación Única</option>
+          </select>
+        </div>
+        <div>
+          <label style={lbl}>Criticidad</label>
+          <select value={formNueva.criticidad} onChange={(e) => setFormNueva({...formNueva, criticidad: e.target.value})}>
+            <option value="Alta">Alta</option>
+            <option value="Media">Media</option>
+            <option value="Baja">Baja</option>
+          </select>
+        </div>
+        <div>
+          <label style={lbl}>Impide Acceso</label>
+          <select value={formNueva.impide_acceso} onChange={(e) => setFormNueva({...formNueva, impide_acceso: e.target.value})}>
+            <option value="SI">SI</option>
+            <option value="NO">NO</option>
+          </select>
+        </div>
+        <div>
+          <label style={lbl}>Impide Pago</label>
+          <select value={formNueva.impide_pago} onChange={(e) => setFormNueva({...formNueva, impide_pago: e.target.value})}>
+            <option value="SI">SI</option>
+            <option value="NO">NO</option>
+          </select>
+        </div>
+        <div>
+          <label style={lbl}>% Retención (0-1)</label>
+          <input type="number" step="0.01" min="0" max="1"
+            value={formNueva.pct_retencion}
+            onChange={(e) => setFormNueva({...formNueva, pct_retencion: e.target.value})} />
+          <div style={{ fontSize: 9, color: "#64748b" }}>0.10 = 10%</div>
+        </div>
+        <div style={{ gridColumn: "1 / -1" }}>
+          <label style={lbl}>Observaciones</label>
+          <input value={formNueva.observaciones || ""} onChange={(e) => setFormNueva({...formNueva, observaciones: e.target.value})}
+            placeholder="opcional" />
+        </div>
+      </div>
+      <div style={{ display: "flex", gap: 8, marginTop: 12, justifyContent: "flex-end" }}>
+        <button onClick={onCancelar} className="btn-back">Cancelar</button>
+        <button onClick={onGuardar} className="btn-blue" disabled={guardando}>
+          {guardando ? "⏳..." : "💾 Crear regla"}
+        </button>
+      </div>
     </div>
   );
 }
@@ -5739,11 +6376,33 @@ const thE = {
   cursor: "pointer", userSelect: "none", whiteSpace: "nowrap",
   borderRight: "1px solid rgba(255,255,255,0.1)",
 };
+const thE2 = {
+  padding: "8px 10px", textAlign: "center", fontSize: 10,
+  fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.3,
+  whiteSpace: "nowrap",
+};
+const thE2L = { ...thE2, textAlign: "left" };
 const tdE = {
   padding: "8px 6px", textAlign: "center", verticalAlign: "middle",
   borderRight: "1px solid #f4f5f7",
 };
+const tdE2 = {
+  padding: "8px 10px", textAlign: "center", verticalAlign: "middle",
+};
+const btnIcon = {
+  border: "none", background: "transparent", cursor: "pointer",
+  fontSize: 14, padding: "4px 6px", margin: "0 2px",
+};
+const inputMini = {
+  fontSize: 11, padding: "4px 6px", borderRadius: 4, border: "1px solid #cbd5e1",
+  width: "100%",
+};
+const lbl = {
+  display: "block", fontSize: 10, fontWeight: 600,
+  color: "#64748b", textTransform: "uppercase", marginBottom: 3, letterSpacing: 0.3,
+};
 
+// ─── MÓDULO PNR ─────────────────────────────────────────────────────
 // ─── MÓDULO PNR ─────────────────────────────────────────────────────
 function ModuloPNR() {
   const [casos, setCasos] = useState([]);
