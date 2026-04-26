@@ -14,7 +14,7 @@ const MODULOS = {
 const MODULOS_LABELS = {
   certificaciones: "Certificaciones", prospeccion: "Prospección CRM", wiki: "Wiki y Procesos",
   checklist: "Checklist", kpis: "KPIs",
-  maestro: "Maestro Operaciones", incidencias: "🚨 Incidencias", pnr: "📋 PNR", drivers: "🚗 Drivers MX", pagos: "💸 Pagos CL", config_pagos: "💰 Config. Pagos", configuracion: "Configuración",
+  maestro: "Maestro Operaciones", incidencias: "Incidencias", pnr: " PNR", drivers: " Drivers MX", pagos: " Pagos CL", config_pagos: " Config. Pagos", configuracion: "Configuración",
 };
 const USUARIOS = {
   "admin@bigticket.cl": { pass: "Admin2026!", rol: "superadmin", nombre: "Super Admin" },
@@ -5240,6 +5240,18 @@ function ModuloPagos() {
     return todos.filter(d => d.recurso_inhabilitado);
   }, [datos]);
 
+  // Empresas únicas inhabilitadas (cada empresa puede aparecer en PC + RyC + SUB)
+  const empresasInhabilitadasUnicas = useMemo(() => {
+    return new Set(todosInhabilitados.map(d => d.transporte)).size;
+  }, [todosInhabilitados]);
+
+  // Empresas únicas activas
+  const empresasActivasUnicas = useMemo(() => {
+    return new Set([...datos.pc, ...datos.ryc, ...datos.sub]
+      .filter(d => !d.recurso_inhabilitado)
+      .map(d => d.transporte)).size;
+  }, [datos]);
+
   // KPIs (excluyen inhabilitados por defecto)
   const kpis = useMemo(() => {
     const base = mostrarInhabilitados
@@ -5497,7 +5509,7 @@ function ModuloPagos() {
         <div>
           <div className="sec-title">💸 Pagos · Certificación Documental</div>
           <div className="sec-sub">
-            {kpis.total} activos · {todosInhabilitados.length} inhabilitados · {operacionesUnicas.length} operaciones
+            {empresasActivasUnicas} empresas activas · {empresasInhabilitadasUnicas} inhabilitadas · {operacionesUnicas.length} operaciones
             {ultimaEjecucion && (
               <> · Última: {new Date(ultimaEjecucion.fecha_ejecucion).toLocaleString("es-CL", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}</>
             )}
@@ -5528,7 +5540,7 @@ function ModuloPagos() {
           display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap",
         }}>
           <div>
-            ⚠️ <strong>{todosInhabilitados.length} contratistas inhabilitados</strong> aparecen en los datos pero NO se cuentan en los KPIs.
+            ⚠️ <strong>{empresasInhabilitadasUnicas} empresas inhabilitadas</strong> ({todosInhabilitados.length} registros entre PC/RyC/SUB) aparecen en los datos pero NO se cuentan en los KPIs.
           </div>
           <div style={{ display: "flex", gap: 8 }}>
             <button onClick={() => setVistaActiva("limpieza")} 
@@ -5562,7 +5574,8 @@ function ModuloPagos() {
         {[
           { id: "dashboard", label: "📊 Dashboard", n: kpis.total },
           { id: "criticos", label: "🚨 Activos Críticos", n: activosCriticos.length, alert: activosCriticos.length > 0 },
-          { id: "limpieza", label: "🧹 Limpieza", n: todosInhabilitados.length, warn: todosInhabilitados.length > 0 },
+          { id: "limpieza", label: "🧹 Limpieza", n: empresasInhabilitadasUnicas, warn: empresasInhabilitadasUnicas > 0 },
+          { id: "hallazgos", label: "💡 Hallazgos", n: null },
           { id: "matriz", label: "⚙️ Matriz Documentos", n: null },
         ].map(t => (
           <button key={t.id} onClick={() => setVistaActiva(t.id)}
@@ -5620,6 +5633,17 @@ function ModuloPagos() {
             <LimpiezaInhabilitados
               inhabilitados={todosInhabilitados}
               renderEstadoFinal={renderEstadoFinal}
+              operacionAMandante={operacionAMandante}
+            />
+          )}
+
+          {/* ─── VISTA: HALLAZGOS ─── */}
+          {vistaActiva === "hallazgos" && (
+            <HallazgosAutomaticos
+              datos={datos}
+              activosCriticos={activosCriticos}
+              todosInhabilitados={todosInhabilitados}
+              empresasInhabilitadasUnicas={empresasInhabilitadasUnicas}
               operacionAMandante={operacionAMandante}
             />
           )}
@@ -5955,6 +5979,300 @@ function LimpiezaInhabilitados({ inhabilitados, renderEstadoFinal, operacionAMan
 }
 
 // ─── Sub-componente: Editor Matriz ───────────────────────────────────
+// ─── Sub-componente: Hallazgos Automáticos ──────────────────────────
+// Calcula hallazgos accionables comparando datos del mes con el historial.
+// Cada hallazgo tiene un nivel (alto/medio/bajo) y una sugerencia de acción.
+function HallazgosAutomaticos({ datos, activosCriticos, todosInhabilitados, empresasInhabilitadasUnicas, operacionAMandante }) {
+  const [estadosCertronic, setEstadosCertronic] = useState([]);
+  const [matriz, setMatriz] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => { cargar(); }, []);
+
+  const cargar = async () => {
+    setLoading(true);
+    try {
+      // Último snapshot de estados
+      const { data: snap } = await sb.from("certronic_estados_documentos")
+        .select("fecha_snapshot")
+        .order("fecha_snapshot", { ascending: false }).limit(1);
+      if (snap && snap[0]) {
+        // Cargar TODOS los estados (paginado)
+        let todos = [];
+        let from = 0;
+        while (true) {
+          const { data } = await sb.from("certronic_estados_documentos")
+            .select("*")
+            .eq("fecha_snapshot", snap[0].fecha_snapshot)
+            .range(from, from + 999);
+          if (!data || data.length === 0) break;
+          todos = todos.concat(data);
+          if (data.length < 1000) break;
+          from += 1000;
+        }
+        setEstadosCertronic(todos);
+      }
+      const { data: m } = await sb.from("certronic_matriz_documentos")
+        .select("*").is("fecha_fin_vigencia", null);
+      setMatriz(m || []);
+    } catch(e) { console.error(e); }
+    setLoading(false);
+  };
+
+  // ─── Cálculo de los 8 hallazgos automáticos ─────────────────────
+  const hallazgos = useMemo(() => {
+    if (loading || estadosCertronic.length === 0) return [];
+
+    const out = [];
+
+    // H1: Empresas activas con retención (lo más urgente)
+    if (activosCriticos.length > 0) {
+      out.push({
+        id: "H1",
+        nivel: "alto",
+        icono: "🚨",
+        titulo: `${activosCriticos.length} empresas activas con retención de pagos`,
+        descripcion: `Estas empresas tienen empleados o vehículos operando HOY pero su documentación retiene total o parcialmente sus pagos.`,
+        impacto: `Riesgo de retraso en pagos a transportistas que sí están trabajando. ${activosCriticos.filter(a => Number(a.pct_retencion) >= 100).length} con retención total (100%).`,
+        accion: "Llamar a estas empresas hoy. Lista priorizada en pestaña 🚨 Activos Críticos.",
+        ejemplos: activosCriticos.slice(0, 5).map(a => ({
+          nombre: a.transporte + (a.subcontratista_nombre ? ` / ${a.subcontratista_nombre}` : ""),
+          dato: `${a.pct_retencion}% retención · ${a.empleados_activos} emp · ${a.vehiculos_activos} veh`,
+        })),
+      });
+    }
+
+    // H2: Empresas inhabilitadas en el sistema
+    if (empresasInhabilitadasUnicas > 0) {
+      out.push({
+        id: "H2",
+        nivel: "medio",
+        icono: "🧹",
+        titulo: `${empresasInhabilitadasUnicas} empresas inhabilitadas siguen apareciendo en reportes`,
+        descripcion: "Empresas que ya no operan para Bigticket pero siguen activas en Certronic.",
+        impacto: "Generan ruido en los reportes mensuales y cargan trabajo innecesario al equipo.",
+        accion: "Solicitar baja definitiva en Certronic para limpiar el sistema. Lista en pestaña 🧹 Limpieza.",
+        ejemplos: [],
+      });
+    }
+
+    // H3: Vehículos sin documentación legal para circular
+    const vehiculosSinDocs = estadosCertronic.filter(e => 
+      e.entidad === 'vehiculo' && e.cumple === 'N' && e.impide_acceso === 'S'
+    );
+    const vehiculosUnicosAfectados = new Set(vehiculosSinDocs.map(v => `${v.contratista}|${v.detalle}`));
+    if (vehiculosUnicosAfectados.size > 0) {
+      const docsCriticos = ["Permiso de Circulación", "Revisión Técnica", "Seguro Obligatorio Vehicular", "Certificado de Emisión de Contaminantes"];
+      const totalCriticos = vehiculosSinDocs.filter(v => docsCriticos.some(d => v.documento.includes(d.split(" ")[0]))).length;
+      out.push({
+        id: "H3",
+        nivel: "alto",
+        icono: "🚛",
+        titulo: `${vehiculosUnicosAfectados.size} vehículos con documentación legal vencida o pendiente`,
+        descripcion: "Vehículos sin Permiso de Circulación, Revisión Técnica, Seguro Obligatorio o Certificado de Emisión.",
+        impacto: "Riesgo de responsabilidad solidaria para Bigticket si circulan. No deberían operar legalmente.",
+        accion: "Sacar de operación inmediata. Notificar a contratistas para regularización urgente.",
+        ejemplos: [...vehiculosUnicosAfectados].slice(0, 5).map(v => {
+          const [contratista, detalle] = v.split("|");
+          return { nombre: detalle, dato: `de ${contratista}` };
+        }),
+      });
+    }
+
+    // H4: Documentos que más fallan sistémicamente
+    const docFallas = {};
+    for (const e of estadosCertronic) {
+      if (!docFallas[e.documento]) docFallas[e.documento] = { total: 0, fallas: 0, contratistas: new Set() };
+      docFallas[e.documento].total++;
+      if (e.cumple === 'N') {
+        docFallas[e.documento].fallas++;
+        docFallas[e.documento].contratistas.add(e.contratista);
+      }
+    }
+    const topFallas = Object.entries(docFallas)
+      .filter(([_, v]) => v.total >= 10 && v.fallas / v.total >= 0.4)
+      .map(([doc, v]) => ({ doc, pctFalla: Math.round(v.fallas / v.total * 100), contratistas: v.contratistas.size }))
+      .sort((a, b) => b.pctFalla - a.pctFalla)
+      .slice(0, 5);
+    if (topFallas.length > 0) {
+      out.push({
+        id: "H4",
+        nivel: "medio",
+        icono: "📋",
+        titulo: `${topFallas.length} documentos fallan en más del 40% de los casos`,
+        descripcion: "Documentos con tasa de no-cumplimiento alta. Indica problema sistémico, no casos puntuales.",
+        impacto: "Sugiere revisar el proceso de captura de estos documentos: ¿son innecesarios? ¿están mal explicados al transportista? ¿vencen muy seguido?",
+        accion: "Analizar con el mandante si el documento sigue siendo necesario o si la captura puede simplificarse.",
+        ejemplos: topFallas.map(t => ({ nombre: t.doc.substring(0, 60), dato: `${t.pctFalla}% falla · ${t.contratistas} empresas` })),
+      });
+    }
+
+    // H5: Top contratistas problemáticos
+    const contratistaProblemas = {};
+    for (const e of estadosCertronic) {
+      if (e.cumple !== 'N') continue;
+      if (!contratistaProblemas[e.contratista]) {
+        contratistaProblemas[e.contratista] = { total: 0, retentivos: 0, accesoNegado: 0 };
+      }
+      contratistaProblemas[e.contratista].total++;
+      if (e.impide_pago === 'S') contratistaProblemas[e.contratista].retentivos++;
+      if (e.impide_acceso === 'S') contratistaProblemas[e.contratista].accesoNegado++;
+    }
+    const topProblema = Object.entries(contratistaProblemas)
+      .map(([c, v]) => ({ contratista: c, ...v }))
+      .filter(x => x.retentivos >= 10)
+      .sort((a, b) => b.retentivos - a.retentivos)
+      .slice(0, 5);
+    if (topProblema.length > 0) {
+      out.push({
+        id: "H5",
+        nivel: "medio",
+        icono: "🥇",
+        titulo: `${topProblema.length} contratistas concentran problemas extremos`,
+        descripcion: "Empresas con 10 o más documentos pendientes que generan retención.",
+        impacto: "Estas empresas requieren atención individual o decisión sobre su continuidad.",
+        accion: "Reunión 1:1 con cada uno: ¿quieren regularizar o ya no van a operar más?",
+        ejemplos: topProblema.map(t => ({ nombre: t.contratista, dato: `${t.retentivos} docs retentivos · ${t.accesoNegado} sin acceso` })),
+      });
+    }
+
+    // H6: Inconsistencias de Certronic (inhabilitada con empleados activos)
+    const inconsistentes = [...datos.pc, ...datos.ryc, ...datos.sub]
+      .filter(d => d.recurso_inhabilitado && (d.empleados_activos > 0 || d.vehiculos_activos > 0));
+    const inconsistentesUnicos = [...new Set(inconsistentes.map(d => d.transporte))];
+    if (inconsistentesUnicos.length > 0) {
+      out.push({
+        id: "H6",
+        nivel: "bajo",
+        icono: "⚠️",
+        titulo: `${inconsistentesUnicos.length} inconsistencias en Certronic`,
+        descripcion: "Empresas marcadas como Inhabilitadas pero con empleados o vehículos aún activos.",
+        impacto: "Datos sucios en Certronic. Probablemente la baja se hizo a medias.",
+        accion: "Solicitar al equipo administrativo que cierre completamente estos registros.",
+        ejemplos: inconsistentesUnicos.slice(0, 5).map(c => ({ nombre: c, dato: "Inhabilitada con recursos activos" })),
+      });
+    }
+
+    // H7: Documentos por mandante - distribución
+    const porMandante = {};
+    for (const e of estadosCertronic) {
+      const m = e.planta;
+      if (!porMandante[m]) porMandante[m] = { total: 0, retentivos: 0 };
+      porMandante[m].total++;
+      if (e.cumple === 'N' && e.impide_pago === 'S') porMandante[m].retentivos++;
+    }
+    const distMandante = Object.entries(porMandante).map(([m, v]) => ({
+      mandante: m, total: v.total, retentivos: v.retentivos,
+      pctRetentivos: Math.round(v.retentivos / v.total * 100),
+    })).sort((a, b) => b.retentivos - a.retentivos);
+    if (distMandante.length > 0) {
+      const peor = distMandante[0];
+      out.push({
+        id: "H7",
+        nivel: "bajo",
+        icono: "🏭",
+        titulo: `${peor.mandante} concentra el ${Math.round(peor.retentivos / distMandante.reduce((s,x) => s+x.retentivos, 0) * 100)}% de retenciones`,
+        descripcion: `De los ${distMandante.reduce((s,x) => s+x.retentivos, 0)} documentos retentivos totales, ${peor.retentivos} están en ${peor.mandante}.`,
+        impacto: "Permite priorizar dónde concentrar los esfuerzos de gestión documental.",
+        accion: `Considerar acciones específicas para mejorar la performance en ${peor.mandante}.`,
+        ejemplos: distMandante.slice(0, 5).map(d => ({ nombre: d.mandante, dato: `${d.retentivos} retentivos · ${d.pctRetentivos}% del total mandante` })),
+      });
+    }
+
+    return out;
+  }, [estadosCertronic, datos, activosCriticos, todosInhabilitados, loading]);
+
+  if (loading) return <div className="loading">Calculando hallazgos...</div>;
+
+  const colorNivel = {
+    alto: { bg: "#fee2e2", border: "#fca5a5", text: "#991b1b", label: "ALTA" },
+    medio: { bg: "#fef3c7", border: "#fbbf24", text: "#92400e", label: "MEDIA" },
+    bajo: { bg: "#dbeafe", border: "#93c5fd", text: "#1e40af", label: "BAJA" },
+  };
+
+  return (
+    <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10, padding: 16 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
+        <span style={{ fontSize: 22 }}>💡</span>
+        <div>
+          <div style={{ fontSize: 16, fontWeight: 700, color: "#1a3a6b" }}>Hallazgos Automáticos del Mes</div>
+          <div style={{ fontSize: 11, color: "#64748b" }}>
+            {hallazgos.length} hallazgos detectados al cruzar datos del scraper, matriz y reglas de negocio. Se recalculan automáticamente cada vez que el sistema se actualiza.
+          </div>
+        </div>
+      </div>
+
+      {hallazgos.length === 0 ? (
+        <div style={{ padding: 30, textAlign: "center", color: "#16a34a", fontSize: 14 }}>
+          ✅ No se detectaron hallazgos relevantes en este período.
+        </div>
+      ) : (
+        <div style={{ display: "grid", gap: 12 }}>
+          {hallazgos.map(h => {
+            const c = colorNivel[h.nivel];
+            return (
+              <div key={h.id} style={{
+                background: c.bg, border: `1.5px solid ${c.border}`, borderRadius: 10,
+                padding: 14,
+              }}>
+                <div style={{ display: "flex", alignItems: "flex-start", gap: 12, marginBottom: 8 }}>
+                  <div style={{ fontSize: 28, lineHeight: 1 }}>{h.icono}</div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4, flexWrap: "wrap" }}>
+                      <span style={{
+                        fontSize: 9.5, padding: "2px 8px", borderRadius: 4,
+                        background: c.text, color: "#fff", fontWeight: 700, letterSpacing: 0.5,
+                      }}>
+                        {c.label}
+                      </span>
+                      <span style={{ fontSize: 9.5, color: "#64748b", fontWeight: 600 }}>HALLAZGO {h.id}</span>
+                    </div>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: c.text, marginBottom: 4 }}>
+                      {h.titulo}
+                    </div>
+                    <div style={{ fontSize: 12, color: "#1f2937", marginBottom: 6 }}>
+                      {h.descripcion}
+                    </div>
+                  </div>
+                </div>
+
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 8 }}>
+                  <div style={{ background: "rgba(255,255,255,0.6)", borderRadius: 6, padding: "8px 10px" }}>
+                    <div style={{ fontSize: 9, fontWeight: 700, color: c.text, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 3 }}>📊 Impacto</div>
+                    <div style={{ fontSize: 11, color: "#1f2937" }}>{h.impacto}</div>
+                  </div>
+                  <div style={{ background: "rgba(255,255,255,0.6)", borderRadius: 6, padding: "8px 10px" }}>
+                    <div style={{ fontSize: 9, fontWeight: 700, color: c.text, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 3 }}>🎯 Acción sugerida</div>
+                    <div style={{ fontSize: 11, color: "#1f2937" }}>{h.accion}</div>
+                  </div>
+                </div>
+
+                {h.ejemplos.length > 0 && (
+                  <div style={{ background: "rgba(255,255,255,0.7)", borderRadius: 6, padding: "8px 10px" }}>
+                    <div style={{ fontSize: 9, fontWeight: 700, color: c.text, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>📌 Ejemplos (top {h.ejemplos.length})</div>
+                    <div style={{ display: "grid", gap: 3 }}>
+                      {h.ejemplos.map((e, i) => (
+                        <div key={i} style={{ fontSize: 11, display: "flex", justifyContent: "space-between", gap: 8 }}>
+                          <span style={{ fontWeight: 500, color: "#1f2937" }}>• {e.nombre}</span>
+                          <span style={{ color: c.text, fontWeight: 600, whiteSpace: "nowrap" }}>{e.dato}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      <div style={{ marginTop: 16, padding: "10px 14px", background: "#f1f5f9", borderRadius: 6, fontSize: 11, color: "#64748b" }}>
+        <strong>💡 ¿Cómo se calculan estos hallazgos?</strong> El algoritmo cruza automáticamente los datos descargados de Certronic, las reglas de la matriz y el histórico de meses anteriores para detectar patrones. Cada vez que el sistema se actualiza, los hallazgos se recalculan.
+      </div>
+    </div>
+  );
+}
+
 function EditorMatriz() {
   const [reglas, setReglas] = useState([]);
   const [loading, setLoading] = useState(true);
