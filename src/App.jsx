@@ -14,7 +14,7 @@ const MODULOS = {
 const MODULOS_LABELS = {
   certificaciones: "Certificaciones", prospeccion: "Prospección CRM", wiki: "Wiki y Procesos",
   checklist: "Checklist", kpis: "KPIs",
-  maestro: "Maestro Operaciones", incidencias: "🚨 Incidencias", pnr: "📋 PNR", drivers: "🚗 Drivers MX", pagos: "Pagos CL", config_pagos: "💰 Config. Pagos", configuracion: "Configuración",
+  maestro: "Maestro Operaciones", incidencias: " Incidencias", pnr: " PNR", drivers: "Drivers MX", pagos: "Pagos CL", config_pagos: " Config. Pagos", configuracion: "Configuración",
 };
 const USUARIOS = {
   "admin@bigticket.cl": { pass: "Admin2026!", rol: "superadmin", nombre: "Super Admin" },
