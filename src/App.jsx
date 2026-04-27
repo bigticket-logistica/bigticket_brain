@@ -14,7 +14,7 @@ const MODULOS = {
 const MODULOS_LABELS = {
   certificaciones: "Certificaciones", prospeccion: "Prospección CRM", wiki: "Wiki y Procesos",
   checklist: "Checklist", kpis: "KPIs",
-  maestro: "Maestro Operaciones", incidencias: "Incidencias", pnr: " PNR", drivers: " Drivers MX", pagos: " Pagos CL", config_pagos: " Config. Pagos", configuracion: "Configuración",
+  maestro: "Maestro Operaciones", incidencias: "🚨 Incidencias", pnr: "📋 PNR", drivers: "🚗 Drivers MX", pagos: "Pagos CL", config_pagos: "💰 Config. Pagos", configuracion: "Configuración",
 };
 const USUARIOS = {
   "admin@bigticket.cl": { pass: "Admin2026!", rol: "superadmin", nombre: "Super Admin" },
@@ -5152,7 +5152,6 @@ function ModuloPagos() {
   const [filtroMandante, setFiltroMandante] = useState("todos");
   const [mostrarInhabilitados, setMostrarInhabilitados] = useState(false);
   const [ultimaEjecucion, setUltimaEjecucion] = useState(null);
-  const [ejecutandoScraper, setEjecutandoScraper] = useState(false);
   const [ordenCol, setOrdenCol] = useState("transporte");
   const [ordenAsc, setOrdenAsc] = useState(true);
 
@@ -5198,22 +5197,6 @@ function ModuloPagos() {
       setDatos({ pc: [], ryc: [], sub: [] });
     }
     setLoading(false);
-  };
-
-  const reEjecutarScraper = async () => {
-    if (!confirm("¿Ejecutar el scraper de Certronic? Esto tarda ~3 segundos para el reporte liviano.")) return;
-    setEjecutandoScraper(true);
-    try {
-      const res = await fetch("https://n8n.bigticket.cl/webhook/certronic-trigger", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ trigger_by: "manual_brain", periodo }),
-      });
-      if (!res.ok) throw new Error("HTTP " + res.status);
-      alert("✅ Scrapers iniciados. Recibirás los nuevos datos en pocos minutos.");
-    } catch(e) {
-      alert("⚠ No se pudo iniciar el scraper: " + e.message + "\n\nEjecuta manualmente:\nssh root@162.243.90.161\ncd /opt/certronic-scraper\nnode descargar-reporte-analista.cjs && node calcular-certificacion-mensual.cjs");
-    }
-    setEjecutandoScraper(false);
   };
 
   // ── Helpers ──
@@ -5507,7 +5490,7 @@ function ModuloPagos() {
       {/* HEADER */}
       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 14, flexWrap: "wrap", gap: 12 }}>
         <div>
-          <div className="sec-title">💸 Pagos · Certificación Documental</div>
+          <div className="sec-title">Pagos · Certificación Documental</div>
           <div className="sec-sub">
             {empresasActivasUnicas} empresas activas · {empresasInhabilitadasUnicas} inhabilitadas · {operacionesUnicas.length} operaciones
             {ultimaEjecucion && (
@@ -5524,46 +5507,21 @@ function ModuloPagos() {
             })}
           </select>
           <button className="btn-blue" onClick={descargarExcel} disabled={loading || kpis.total === 0}>
-            📥 Excel
-          </button>
-          <button className="btn-orange" onClick={reEjecutarScraper} disabled={ejecutandoScraper}>
-            {ejecutandoScraper ? "⏳..." : "🔄 Actualizar"}
+            Descargar Excel
           </button>
         </div>
       </div>
 
       {/* Banner inhabilitados */}
-      {todosInhabilitados.length > 0 && !mostrarInhabilitados && (
-        <div style={{
-          background: "#fef3c7", border: "1px solid #fbbf24", borderRadius: 8,
-          padding: "10px 14px", marginBottom: 14, fontSize: 12,
-          display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap",
-        }}>
-          <div>
-            ⚠️ <strong>{empresasInhabilitadasUnicas} empresas inhabilitadas</strong> ({todosInhabilitados.length} registros entre PC/RyC/SUB) aparecen en los datos pero NO se cuentan en los KPIs.
-          </div>
-          <div style={{ display: "flex", gap: 8 }}>
-            <button onClick={() => setVistaActiva("limpieza")} 
-              style={{ padding: "4px 10px", border: "1px solid #92400e", background: "#fff", borderRadius: 6, fontSize: 11, fontWeight: 600, color: "#92400e", cursor: "pointer" }}>
-              🧹 Ver Limpieza
-            </button>
-            <button onClick={() => setMostrarInhabilitados(true)} 
-              style={{ padding: "4px 10px", border: "1px solid #92400e", background: "transparent", borderRadius: 6, fontSize: 11, color: "#92400e", cursor: "pointer" }}>
-              Mostrar todo
-            </button>
-          </div>
-        </div>
-      )}
-
       {mostrarInhabilitados && (
         <div style={{
-          background: "#dbeafe", border: "1px solid #3b82f6", borderRadius: 8,
-          padding: "8px 14px", marginBottom: 14, fontSize: 12,
+          background: "#f8fafc", border: "1px solid #e4e7ec", borderRadius: 6,
+          padding: "6px 12px", marginBottom: 12, fontSize: 11, color: "#64748b",
           display: "flex", alignItems: "center", justifyContent: "space-between",
         }}>
-          <div>📊 Mostrando TODOS los registros (incluidos inhabilitados)</div>
+          <div>Mostrando todos los registros (incluidos inhabilitados)</div>
           <button onClick={() => setMostrarInhabilitados(false)}
-            style={{ padding: "4px 10px", border: "1px solid #3b82f6", background: "#fff", borderRadius: 6, fontSize: 11, color: "#1e40af", cursor: "pointer" }}>
+            style={{ padding: "3px 10px", border: "1px solid #cbd5e1", background: "#fff", borderRadius: 4, fontSize: 11, color: "#475569", cursor: "pointer" }}>
             Ocultar inhabilitados
           </button>
         </div>
@@ -5572,11 +5530,11 @@ function ModuloPagos() {
       {/* TABS de vista principal */}
       <div style={{ display: "flex", gap: 4, marginBottom: 14, borderBottom: "2px solid #e4e7ec" }}>
         {[
-          { id: "dashboard", label: "📊 Dashboard", n: kpis.total },
-          { id: "criticos", label: "🚨 Activos Críticos", n: activosCriticos.length, alert: activosCriticos.length > 0 },
-          { id: "limpieza", label: "🧹 Limpieza", n: empresasInhabilitadasUnicas, warn: empresasInhabilitadasUnicas > 0 },
-          { id: "hallazgos", label: "💡 Hallazgos", n: null },
-          { id: "matriz", label: "⚙️ Matriz Documentos", n: null },
+          { id: "dashboard", label: "Dashboard", n: kpis.total },
+          { id: "criticos", label: "Activos Críticos", n: activosCriticos.length, alert: activosCriticos.length > 0 },
+          { id: "limpieza", label: "Limpieza", n: empresasInhabilitadasUnicas, warn: empresasInhabilitadasUnicas > 0 },
+          { id: "hallazgos", label: "Hallazgos", n: null },
+          { id: "matriz", label: "Matriz Documentos", n: null },
         ].map(t => (
           <button key={t.id} onClick={() => setVistaActiva(t.id)}
             style={{
@@ -5603,6 +5561,8 @@ function ModuloPagos() {
             <DashboardCertificacion
               datos={datos}
               kpis={kpis}
+              empresasActivasUnicas={empresasActivasUnicas}
+              empresasInhabilitadasUnicas={empresasInhabilitadasUnicas}
               tabCategoria={tabCategoria} setTabCategoria={setTabCategoria}
               busqueda={busqueda} setBusqueda={setBusqueda}
               filtroOperacion={filtroOperacion} setFiltroOperacion={setFiltroOperacion}
@@ -5615,7 +5575,7 @@ function ModuloPagos() {
               renderIconoDoc={renderIconoDoc} renderEstadoFinal={renderEstadoFinal}
               toggleOrden={toggleOrden} flecha={flecha}
               operacionAMandante={operacionAMandante}
-              reEjecutarScraper={reEjecutarScraper} ejecutandoScraper={ejecutandoScraper}
+              operacionAMandante={operacionAMandante}
             />
           )}
 
@@ -5658,13 +5618,13 @@ function ModuloPagos() {
 
 // ─── Sub-componente: Dashboard (vista normal de PC/RyC/SUB) ─────────
 function DashboardCertificacion({
-  datos, kpis, tabCategoria, setTabCategoria,
+  datos, kpis, empresasActivasUnicas, empresasInhabilitadasUnicas,
+  tabCategoria, setTabCategoria,
   busqueda, setBusqueda, filtroOperacion, setFiltroOperacion,
   filtroEstado, setFiltroEstado, filtroMandante, setFiltroMandante,
   mostrarInhabilitados, operacionesUnicas, datosCategoriaActual,
   docsPorCategoria, renderIconoDoc, renderEstadoFinal,
   toggleOrden, flecha, operacionAMandante,
-  reEjecutarScraper, ejecutandoScraper,
 }) {
   const datosTab = (cat) => mostrarInhabilitados
     ? datos[cat]
@@ -5674,21 +5634,27 @@ function DashboardCertificacion({
     <>
       {/* KPIs */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 10, marginBottom: 14 }}>
-        <KPI label={mostrarInhabilitados ? "Total registros" : "Activos reales"} valor={kpis.total} sub={`${operacionesUnicas.length} operaciones`} color="#1a3a6b" />
+        <KPI 
+          label={mostrarInhabilitados ? "Total registros" : "Registros activos"} 
+          valor={kpis.total} 
+          sub={mostrarInhabilitados 
+            ? `${(empresasActivasUnicas + empresasInhabilitadasUnicas)} empresas únicas` 
+            : `${empresasActivasUnicas} empresas · ${operacionesUnicas.length} mandantes`} 
+          color="#1a3a6b" />
         <KPI label="% Avance certificación" valor={`${kpis.pctAvance}%`} sub={`${kpis.certificados} certificados`} color="#16a34a" />
         <KPI label="Pendientes" valor={kpis.parciales + kpis.sinCert} sub={`${kpis.parciales} parcial · ${kpis.sinCert} sin cert.`} color="#F47B20" />
         <KPI label="Anomalías" valor={kpis.anomalias} sub={kpis.anomalias > 0 ? "Requieren revisión" : "Todo OK"} color={kpis.anomalias > 0 ? "#c0392b" : "#16a34a"} />
         {!mostrarInhabilitados && (
-          <KPI label="Inhabilitados" valor={kpis.inhabilitados} sub="Excluidos del cálculo" color="#94a3b8" />
+          <KPI label="Inhabilitados" valor={kpis.inhabilitados} sub={`${empresasInhabilitadasUnicas} empresas · excluidas`} color="#94a3b8" />
         )}
       </div>
 
       {/* Tabs categoría */}
       <div style={{ display: "flex", gap: 4, marginBottom: 12, borderBottom: "1px solid #e4e7ec" }}>
         {[
-          { id: "pc", label: "👥 Personal Contratado", n: datosTab("pc").length },
-          { id: "ryc", label: "🚐 Representante y Conductor", n: datosTab("ryc").length },
-          { id: "sub", label: "🤝 Subcontratista", n: datosTab("sub").length },
+          { id: "pc", label: "Personal Contratado", n: datosTab("pc").length },
+          { id: "ryc", label: "Representante y Conductor", n: datosTab("ryc").length },
+          { id: "sub", label: "Subcontratista", n: datosTab("sub").length },
         ].map(t => (
           <button key={t.id} onClick={() => setTabCategoria(t.id)}
             style={{
@@ -5728,11 +5694,10 @@ function DashboardCertificacion({
 
       {datos.pc.length === 0 && datos.ryc.length === 0 && datos.sub.length === 0 ? (
         <div className="empty">
-          <div style={{ fontSize: 36, marginBottom: 12 }}>📭</div>
-          <div style={{ fontWeight: 600, marginBottom: 6 }}>Sin datos para este período</div>
-          <button className="btn-orange" onClick={reEjecutarScraper} disabled={ejecutandoScraper}>
-            {ejecutandoScraper ? "⏳..." : "🔄 Ejecutar scraper"}
-          </button>
+          <div style={{ fontWeight: 600, marginBottom: 6, color: "#64748b" }}>Sin datos para este período</div>
+          <div style={{ fontSize: 11, color: "#94a3b8" }}>
+            Los datos se actualizan automáticamente los lunes y jueves a las 04:00 UTC.
+          </div>
         </div>
       ) : (
         <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 8, overflow: "hidden" }}>
@@ -5797,7 +5762,7 @@ function DashboardCertificacion({
                       )}
                       <td style={tdE}>
                         <div style={{ fontSize: 10, color: "#64748b" }}>
-                          👥 {d.empleados_activos || 0} · 🚛 {d.vehiculos_activos || 0}
+                          {d.empleados_activos || 0} emp · {d.vehiculos_activos || 0} veh
                         </div>
                       </td>
                       {docsPorCategoria[tabCategoria].map(doc => (
@@ -5850,50 +5815,52 @@ function ActivosCriticos({ activosCriticos, renderEstadoFinal, operacionAMandant
   return (
     <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10, padding: 16 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
-        <span style={{ fontSize: 20 }}>🚨</span>
         <div>
           <div style={{ fontSize: 16, fontWeight: 700, color: "#c0392b" }}>Activos Críticos</div>
           <div style={{ fontSize: 11, color: "#64748b" }}>
-            Empresas operando HOY con retención de pagos. Requieren acción inmediata.
+            Empresas operando hoy con retención de pagos. Requieren acción inmediata.
           </div>
         </div>
       </div>
 
       {activosCriticos.length === 0 ? (
         <div style={{ padding: 30, textAlign: "center", color: "#16a34a", fontSize: 14 }}>
-          ✅ No hay empresas activas con retención. Todo en orden.
+          No hay empresas activas con retención. Todo en orden.
         </div>
       ) : (
         <>
-          <div style={{ background: "#fee2e2", padding: "10px 14px", borderRadius: 6, fontSize: 12, marginTop: 12, marginBottom: 12, color: "#7f1d1d" }}>
-            Estas <strong>{activosCriticos.length} empresas</strong> tienen empleados o vehículos operando y al mismo tiempo tienen documentación que retiene pagos.
-            Es la <strong>lista de llamadas del día</strong>.
+          <div style={{ background: "#f8fafc", border: "1px solid #e4e7ec", borderLeft: "3px solid #c0392b", padding: "12px 14px", borderRadius: 4, fontSize: 12, marginTop: 12, marginBottom: 12, color: "#475569" }}>
+            <div style={{ fontWeight: 600, marginBottom: 4, color: "#1f2937" }}>
+              {activosCriticos.length} empresas requieren acción inmediata
+            </div>
+            <div>
+              Tienen empleados o vehículos operando y al mismo tiempo tienen documentación que retiene pagos. Es la lista de llamadas del día.
+            </div>
           </div>
 
           <div style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
               <thead>
-                <tr style={{ background: "#fef2f2", borderBottom: "2px solid #fca5a5" }}>
-                  <th style={thE2}>Transporte</th>
-                  <th style={thE2}>Cat.</th>
-                  <th style={thE2}>Operación</th>
-                  <th style={thE2}>Subcontratista</th>
-                  <th style={thE2}>Activos</th>
-                  <th style={thE2}>% Reten.</th>
-                  <th style={thE2}>% Avance</th>
-                  <th style={thE2}>Estado</th>
+                <tr style={{ background: "#f1f5f9", borderBottom: "1px solid #cbd5e1" }}>
+                  <th style={{...thE2, textAlign: "left", paddingLeft: 12, color: "#475569"}}>Transporte</th>
+                  <th style={{...thE2, color: "#475569"}}>Cat.</th>
+                  <th style={{...thE2, color: "#475569"}}>Operación</th>
+                  <th style={{...thE2, color: "#475569"}}>Subcontratista</th>
+                  <th style={{...thE2, color: "#475569"}}>Activos</th>
+                  <th style={{...thE2, color: "#475569"}}>% Reten.</th>
+                  <th style={{...thE2, color: "#475569"}}>% Avance</th>
+                  <th style={{...thE2, color: "#475569"}}>Estado</th>
                 </tr>
               </thead>
               <tbody>
                 {activosCriticos.map((d, i) => (
-                  <tr key={d.id || i} style={{ borderBottom: "1px solid #fee2e2", background: i % 2 === 0 ? "#fff" : "#fffafa" }}>
-                    <td style={{...tdE2, fontWeight: 600}}>{d.transporte}</td>
+                  <tr key={d.id || i} style={{ borderBottom: "1px solid #f0f0f0", background: i % 2 === 0 ? "#fff" : "#fafbfc" }}>
+                    <td style={{...tdE2, textAlign: "left", paddingLeft: 12, fontWeight: 500}}>{d.transporte}</td>
                     <td style={tdE2}><span style={{ fontSize: 10, padding: "2px 6px", borderRadius: 4, background: "#1a3a6b", color: "#fff", fontWeight: 700 }}>{d.categoria}</span></td>
                     <td style={tdE2}>{d.operacion || "—"}</td>
                     <td style={tdE2}>{d.subcontratista_nombre || "—"}</td>
                     <td style={{...tdE2, textAlign: "center"}}>
-                      <div style={{ fontSize: 11 }}>👥 {d.empleados_activos || 0}</div>
-                      <div style={{ fontSize: 11 }}>🚛 {d.vehiculos_activos || 0}</div>
+                      <div style={{ fontSize: 11 }}>{d.empleados_activos || 0} emp · {d.vehiculos_activos || 0} veh</div>
                     </td>
                     <td style={{...tdE2, fontWeight: 700, color: "#c0392b"}}>{d.pct_retencion}%</td>
                     <td style={tdE2}>{d.pct_avance != null ? `${d.pct_avance}%` : "—"}</td>
@@ -5926,7 +5893,6 @@ function LimpiezaInhabilitados({ inhabilitados, renderEstadoFinal, operacionAMan
   return (
     <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10, padding: 16 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
-        <span style={{ fontSize: 20 }}>🧹</span>
         <div>
           <div style={{ fontSize: 16, fontWeight: 700, color: "#92400e" }}>Limpieza · Inhabilitados</div>
           <div style={{ fontSize: 11, color: "#64748b" }}>
@@ -5937,29 +5903,36 @@ function LimpiezaInhabilitados({ inhabilitados, renderEstadoFinal, operacionAMan
 
       {agrupados.length === 0 ? (
         <div style={{ padding: 30, textAlign: "center", color: "#16a34a", fontSize: 14 }}>
-          ✅ No hay contratistas inhabilitados.
+          No hay contratistas inhabilitados.
         </div>
       ) : (
         <>
-          <div style={{ background: "#fef3c7", padding: "10px 14px", borderRadius: 6, fontSize: 12, marginTop: 12, marginBottom: 12, color: "#78350f" }}>
-            <strong>{agrupados.length} contratistas inhabilitados</strong> con un total de {inhabilitados.length} registros entre PC, RyC y SUB.
-            Estos NO afectan tus métricas, pero deben ser dados de baja en Certronic para limpiar el sistema.
+          <div style={{ background: "#f8fafc", border: "1px solid #e4e7ec", padding: "12px 14px", borderRadius: 4, fontSize: 12, marginTop: 12, marginBottom: 12, color: "#475569" }}>
+            <div style={{ fontWeight: 600, marginBottom: 6, color: "#1f2937" }}>
+              {agrupados.length} empresas inhabilitadas · {inhabilitados.length} registros entre PC/RyC/SUB
+            </div>
+            <div style={{ marginBottom: 4 }}>
+              Estas empresas están marcadas como <strong>Inhabilitadas</strong> en Certronic. <strong>NO se cuentan en los KPIs del Dashboard</strong> porque ya no operan para Bigticket.
+            </div>
+            <div>
+              ¿Por qué aparecen acá? Porque siguen apareciendo en los reportes de Certronic generando ruido. Conviene solicitar baja definitiva al equipo administrativo para limpiar el sistema.
+            </div>
           </div>
 
           <div style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
               <thead>
-                <tr style={{ background: "#fef3c7", borderBottom: "2px solid #fbbf24" }}>
-                  <th style={thE2}>Transporte</th>
-                  <th style={thE2}>Operación</th>
-                  <th style={thE2}>Categorías</th>
-                  <th style={thE2}>Reg.</th>
+                <tr style={{ background: "#f1f5f9", borderBottom: "1px solid #cbd5e1" }}>
+                  <th style={{...thE2, textAlign: "left", paddingLeft: 12, color: "#475569"}}>Transporte</th>
+                  <th style={{...thE2, color: "#475569"}}>Operación</th>
+                  <th style={{...thE2, color: "#475569"}}>Categorías</th>
+                  <th style={{...thE2, color: "#475569"}}>Reg.</th>
                 </tr>
               </thead>
               <tbody>
                 {agrupados.map((g, i) => (
-                  <tr key={i} style={{ borderBottom: "1px solid #fef3c7", background: i % 2 === 0 ? "#fff" : "#fffbeb" }}>
-                    <td style={{...tdE2, fontWeight: 500}}>{g.transporte}</td>
+                  <tr key={i} style={{ borderBottom: "1px solid #f0f0f0", background: i % 2 === 0 ? "#fff" : "#fafbfc" }}>
+                    <td style={{...tdE2, textAlign: "left", paddingLeft: 12, fontWeight: 500}}>{g.transporte}</td>
                     <td style={tdE2}>{g.operacion || "—"}</td>
                     <td style={tdE2}>
                       {[...new Set(g.registros.map(r => r.categoria))].map(c => (
@@ -5986,6 +5959,7 @@ function HallazgosAutomaticos({ datos, activosCriticos, todosInhabilitados, empr
   const [estadosCertronic, setEstadosCertronic] = useState([]);
   const [matriz, setMatriz] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [generandoPDF, setGenerandoPDF] = useState(false);
 
   useEffect(() => { cargar(); }, []);
 
@@ -6017,6 +5991,171 @@ function HallazgosAutomaticos({ datos, activosCriticos, todosInhabilitados, empr
       setMatriz(m || []);
     } catch(e) { console.error(e); }
     setLoading(false);
+  };
+
+  // ─── Generar PDF de hallazgos on-demand ──────────────────────────
+  const descargarPDF = async () => {
+    setGenerandoPDF(true);
+    try {
+      // Cargar jsPDF dinámicamente
+      if (!window.jspdf) {
+        await new Promise((resolve, reject) => {
+          const s = document.createElement("script");
+          s.src = "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js";
+          s.onload = resolve; s.onerror = reject;
+          document.head.appendChild(s);
+        });
+      }
+      const { jsPDF } = window.jspdf;
+      const pdf = new jsPDF({ unit: "mm", format: "a4" });
+      const pageW = 210, pageH = 297;
+      const margin = 15;
+      let y = margin;
+
+      // Header
+      pdf.setFontSize(18);
+      pdf.setTextColor(26, 58, 107); // azul
+      pdf.setFont("helvetica", "bold");
+      pdf.text("Hallazgos Automáticos · Certificación Documental", margin, y);
+      y += 7;
+      pdf.setFontSize(9);
+      pdf.setTextColor(100, 116, 139);
+      pdf.setFont("helvetica", "italic");
+      pdf.text(`Generado: ${new Date().toLocaleString("es-CL")} · ${hallazgos.length} hallazgos`, margin, y);
+      y += 10;
+
+      // Resumen rápido
+      pdf.setDrawColor(228, 231, 236);
+      pdf.setFillColor(248, 250, 252);
+      pdf.roundedRect(margin, y, pageW - 2 * margin, 18, 2, 2, "FD");
+      pdf.setFontSize(9);
+      pdf.setTextColor(31, 41, 55);
+      pdf.setFont("helvetica", "normal");
+      const resumenText = `Empresas activas: ${[...datos.pc, ...datos.ryc, ...datos.sub].filter(d => !d.recurso_inhabilitado && d.categoria === "RYC").length}  ·  Inhabilitadas: ${empresasInhabilitadasUnicas}  ·  Críticas (con retención): ${activosCriticos.length}`;
+      pdf.text(resumenText, margin + 4, y + 7);
+      pdf.text(`Total registros calculados: ${[...datos.pc, ...datos.ryc, ...datos.sub].length}  ·  Período: ${new Date().toLocaleDateString("es-CL", { month: "long", year: "numeric" })}`, margin + 4, y + 13);
+      y += 22;
+
+      // Hallazgos
+      const colorByNivel = {
+        alto: [192, 57, 43],
+        medio: [244, 123, 32],
+        bajo: [59, 130, 246],
+      };
+      const nivelLabel = { alto: "ALTA", medio: "MEDIA", bajo: "BAJA" };
+
+      hallazgos.forEach(h => {
+        // Estimar altura del bloque
+        const lineasDesc = pdf.splitTextToSize(h.descripcion, pageW - 2 * margin - 10);
+        const lineasImpacto = pdf.splitTextToSize(h.impacto, pageW - 2 * margin - 10);
+        const lineasAccion = pdf.splitTextToSize(h.accion, pageW - 2 * margin - 10);
+        const altoBloque = 30 + (lineasDesc.length + lineasImpacto.length + lineasAccion.length) * 4 + (h.ejemplos.length > 0 ? h.ejemplos.length * 4 + 8 : 0);
+
+        // Salto de página si no entra
+        if (y + altoBloque > pageH - 20) {
+          pdf.addPage();
+          y = margin;
+        }
+
+        const [r, g, b] = colorByNivel[h.nivel] || [100, 100, 100];
+
+        // Línea izquierda de color
+        pdf.setDrawColor(r, g, b);
+        pdf.setLineWidth(1);
+        pdf.line(margin, y, margin, y + altoBloque - 4);
+
+        // Badge de nivel
+        pdf.setFillColor(r, g, b);
+        pdf.roundedRect(margin + 3, y + 1, 14, 5, 1, 1, "F");
+        pdf.setTextColor(255, 255, 255);
+        pdf.setFontSize(7);
+        pdf.setFont("helvetica", "bold");
+        pdf.text(nivelLabel[h.nivel], margin + 4, y + 4.5);
+
+        // ID hallazgo
+        pdf.setTextColor(100, 116, 139);
+        pdf.setFontSize(7);
+        pdf.text(`HALLAZGO ${h.id}`, margin + 20, y + 4.5);
+
+        y += 8;
+
+        // Título
+        pdf.setTextColor(r, g, b);
+        pdf.setFontSize(11);
+        pdf.setFont("helvetica", "bold");
+        const lineasTitulo = pdf.splitTextToSize(h.titulo, pageW - 2 * margin - 5);
+        pdf.text(lineasTitulo, margin + 3, y);
+        y += lineasTitulo.length * 5 + 1;
+
+        // Descripción
+        pdf.setTextColor(31, 41, 55);
+        pdf.setFontSize(9);
+        pdf.setFont("helvetica", "normal");
+        pdf.text(lineasDesc, margin + 3, y);
+        y += lineasDesc.length * 4 + 3;
+
+        // Impacto
+        pdf.setTextColor(r, g, b);
+        pdf.setFont("helvetica", "bold");
+        pdf.setFontSize(8);
+        pdf.text("Impacto:", margin + 3, y);
+        y += 3.5;
+        pdf.setTextColor(31, 41, 55);
+        pdf.setFont("helvetica", "normal");
+        pdf.setFontSize(8.5);
+        pdf.text(lineasImpacto, margin + 3, y);
+        y += lineasImpacto.length * 4 + 2;
+
+        // Acción
+        pdf.setTextColor(r, g, b);
+        pdf.setFont("helvetica", "bold");
+        pdf.setFontSize(8);
+        pdf.text("Acción sugerida:", margin + 3, y);
+        y += 3.5;
+        pdf.setTextColor(31, 41, 55);
+        pdf.setFont("helvetica", "normal");
+        pdf.setFontSize(8.5);
+        pdf.text(lineasAccion, margin + 3, y);
+        y += lineasAccion.length * 4 + 2;
+
+        // Ejemplos
+        if (h.ejemplos.length > 0) {
+          pdf.setTextColor(r, g, b);
+          pdf.setFont("helvetica", "bold");
+          pdf.setFontSize(8);
+          pdf.text("Ejemplos:", margin + 3, y);
+          y += 3.5;
+          pdf.setTextColor(31, 41, 55);
+          pdf.setFont("helvetica", "normal");
+          pdf.setFontSize(8);
+          h.ejemplos.forEach(e => {
+            const linea = `• ${e.nombre} — ${e.dato}`;
+            const lineasEj = pdf.splitTextToSize(linea, pageW - 2 * margin - 8);
+            pdf.text(lineasEj, margin + 5, y);
+            y += lineasEj.length * 3.5;
+          });
+          y += 2;
+        }
+
+        y += 5;
+      });
+
+      // Footer en cada página
+      const totalPaginas = pdf.internal.getNumberOfPages();
+      for (let i = 1; i <= totalPaginas; i++) {
+        pdf.setPage(i);
+        pdf.setFontSize(7);
+        pdf.setTextColor(150, 150, 150);
+        pdf.text(`Bigticket · Hallazgos automáticos · Página ${i} de ${totalPaginas}`, margin, pageH - 8);
+      }
+
+      const fecha = new Date().toISOString().slice(0, 10);
+      pdf.save(`Hallazgos_Bigticket_${fecha}.pdf`);
+    } catch(e) {
+      console.error(e);
+      alert("Error generando PDF: " + e.message);
+    }
+    setGenerandoPDF(false);
   };
 
   // ─── Cálculo de los 8 hallazgos automáticos ─────────────────────
@@ -6192,14 +6331,17 @@ function HallazgosAutomaticos({ datos, activosCriticos, todosInhabilitados, empr
 
   return (
     <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10, padding: 16 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
-        <span style={{ fontSize: 22 }}>💡</span>
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 14, gap: 8, flexWrap: "wrap" }}>
         <div>
           <div style={{ fontSize: 16, fontWeight: 700, color: "#1a3a6b" }}>Hallazgos Automáticos del Mes</div>
           <div style={{ fontSize: 11, color: "#64748b" }}>
             {hallazgos.length} hallazgos detectados al cruzar datos del scraper, matriz y reglas de negocio. Se recalculan automáticamente cada vez que el sistema se actualiza.
           </div>
         </div>
+        <button onClick={descargarPDF} disabled={hallazgos.length === 0 || generandoPDF}
+          style={{ padding: "7px 14px", background: "#1a3a6b", color: "#fff", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "Geist, sans-serif" }}>
+          {generandoPDF ? "Generando..." : "Descargar PDF"}
+        </button>
       </div>
 
       {hallazgos.length === 0 ? (
@@ -6212,44 +6354,41 @@ function HallazgosAutomaticos({ datos, activosCriticos, todosInhabilitados, empr
             const c = colorNivel[h.nivel];
             return (
               <div key={h.id} style={{
-                background: c.bg, border: `1.5px solid ${c.border}`, borderRadius: 10,
+                background: "#fff", border: `1px solid ${c.border}`, borderLeft: `4px solid ${c.text}`, borderRadius: 6,
                 padding: 14,
               }}>
-                <div style={{ display: "flex", alignItems: "flex-start", gap: 12, marginBottom: 8 }}>
-                  <div style={{ fontSize: 28, lineHeight: 1 }}>{h.icono}</div>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4, flexWrap: "wrap" }}>
-                      <span style={{
-                        fontSize: 9.5, padding: "2px 8px", borderRadius: 4,
-                        background: c.text, color: "#fff", fontWeight: 700, letterSpacing: 0.5,
-                      }}>
-                        {c.label}
-                      </span>
-                      <span style={{ fontSize: 9.5, color: "#64748b", fontWeight: 600 }}>HALLAZGO {h.id}</span>
-                    </div>
-                    <div style={{ fontSize: 14, fontWeight: 700, color: c.text, marginBottom: 4 }}>
-                      {h.titulo}
-                    </div>
-                    <div style={{ fontSize: 12, color: "#1f2937", marginBottom: 6 }}>
-                      {h.descripcion}
-                    </div>
+                <div style={{ marginBottom: 8 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4, flexWrap: "wrap" }}>
+                    <span style={{
+                      fontSize: 9.5, padding: "2px 8px", borderRadius: 4,
+                      background: c.text, color: "#fff", fontWeight: 700, letterSpacing: 0.5,
+                    }}>
+                      {c.label}
+                    </span>
+                    <span style={{ fontSize: 9.5, color: "#64748b", fontWeight: 600 }}>HALLAZGO {h.id}</span>
+                  </div>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: c.text, marginBottom: 4 }}>
+                    {h.titulo}
+                  </div>
+                  <div style={{ fontSize: 12, color: "#1f2937", marginBottom: 6 }}>
+                    {h.descripcion}
                   </div>
                 </div>
 
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 8 }}>
-                  <div style={{ background: "rgba(255,255,255,0.6)", borderRadius: 6, padding: "8px 10px" }}>
-                    <div style={{ fontSize: 9, fontWeight: 700, color: c.text, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 3 }}>📊 Impacto</div>
+                  <div style={{ background: "#f8fafc", borderRadius: 4, padding: "8px 10px" }}>
+                    <div style={{ fontSize: 9, fontWeight: 700, color: c.text, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 3 }}>Impacto</div>
                     <div style={{ fontSize: 11, color: "#1f2937" }}>{h.impacto}</div>
                   </div>
-                  <div style={{ background: "rgba(255,255,255,0.6)", borderRadius: 6, padding: "8px 10px" }}>
-                    <div style={{ fontSize: 9, fontWeight: 700, color: c.text, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 3 }}>🎯 Acción sugerida</div>
+                  <div style={{ background: "#f8fafc", borderRadius: 4, padding: "8px 10px" }}>
+                    <div style={{ fontSize: 9, fontWeight: 700, color: c.text, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 3 }}>Acción sugerida</div>
                     <div style={{ fontSize: 11, color: "#1f2937" }}>{h.accion}</div>
                   </div>
                 </div>
 
                 {h.ejemplos.length > 0 && (
-                  <div style={{ background: "rgba(255,255,255,0.7)", borderRadius: 6, padding: "8px 10px" }}>
-                    <div style={{ fontSize: 9, fontWeight: 700, color: c.text, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>📌 Ejemplos (top {h.ejemplos.length})</div>
+                  <div style={{ background: "#f8fafc", borderRadius: 4, padding: "8px 10px" }}>
+                    <div style={{ fontSize: 9, fontWeight: 700, color: c.text, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>Ejemplos (top {h.ejemplos.length})</div>
                     <div style={{ display: "grid", gap: 3 }}>
                       {h.ejemplos.map((e, i) => (
                         <div key={i} style={{ fontSize: 11, display: "flex", justifyContent: "space-between", gap: 8 }}>
@@ -6266,8 +6405,8 @@ function HallazgosAutomaticos({ datos, activosCriticos, todosInhabilitados, empr
         </div>
       )}
 
-      <div style={{ marginTop: 16, padding: "10px 14px", background: "#f1f5f9", borderRadius: 6, fontSize: 11, color: "#64748b" }}>
-        <strong>💡 ¿Cómo se calculan estos hallazgos?</strong> El algoritmo cruza automáticamente los datos descargados de Certronic, las reglas de la matriz y el histórico de meses anteriores para detectar patrones. Cada vez que el sistema se actualiza, los hallazgos se recalculan.
+      <div style={{ marginTop: 16, padding: "10px 14px", background: "#f8fafc", border: "1px solid #e4e7ec", borderRadius: 4, fontSize: 11, color: "#64748b" }}>
+        <strong>¿Cómo se calculan estos hallazgos?</strong> El algoritmo cruza automáticamente los datos descargados de Certronic, las reglas de la matriz y el histórico de meses anteriores para detectar patrones. Cada vez que el sistema se actualiza, los hallazgos se recalculan.
       </div>
     </div>
   );
@@ -6391,7 +6530,7 @@ function EditorMatriz() {
     <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10, padding: 16 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14, gap: 8, flexWrap: "wrap" }}>
         <div>
-          <div style={{ fontSize: 16, fontWeight: 700, color: "#1a3a6b" }}>⚙️ Matriz de Documentos por Mandante</div>
+          <div style={{ fontSize: 16, fontWeight: 700, color: "#1a3a6b" }}>Matriz de Documentos por Mandante</div>
           <div style={{ fontSize: 11, color: "#64748b" }}>
             Reglas de qué documentos exige cada mandante y % de retención. {reglas.length} reglas vigentes.
           </div>
