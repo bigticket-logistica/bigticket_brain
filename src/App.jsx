@@ -5331,7 +5331,7 @@ function ModuloPagos() {
     const nombreMes = meses[parseInt(mesStr)] || mesStr;
     const anio = parseInt(anioStr);
 
-    const wb = XLSX.utils.book_new();
+    const wb = window.XLSX.utils.book_new();
     const datosActivos = todosActivos;
     const pcA = datos.pc.filter(d => !d.recurso_inhabilitado);
     const rycA = datos.ryc.filter(d => !d.recurso_inhabilitado);
@@ -5366,14 +5366,14 @@ function ModuloPagos() {
       ["🚨 ACTIVOS CRÍTICOS (con retención)", activosCriticos.length],
       ["🧹 INHABILITADOS (limpieza pendiente)", todosInhabilitados.length],
     ];
-    const wsResumen = XLSX.utils.aoa_to_sheet(resumen);
+    const wsResumen = window.XLSX.utils.aoa_to_sheet(resumen);
     wsResumen["!cols"] = [{ wch: 30 }, { wch: 18 }, { wch: 22 }, { wch: 22 }, { wch: 22 }];
     XLSX.utils.book_append_sheet(wb, wsResumen, "RESUMEN");
 
     // Helper
     const construirHoja = (filas, headers, mapFn) => {
       const datos2D = [headers, ...filas.map(mapFn)];
-      const ws = XLSX.utils.aoa_to_sheet(datos2D);
+      const ws = window.XLSX.utils.aoa_to_sheet(datos2D);
       ws["!cols"] = headers.map(h => ({ wch: Math.max(h.length + 2, 14) }));
       return ws;
     };
@@ -5437,7 +5437,7 @@ function ModuloPagos() {
     ]);
     XLSX.utils.book_append_sheet(wb, wsLimp, "🧹 LIMPIEZA");
 
-    XLSX.writeFile(wb, `Certificacion_Bigticket_${nombreMes}_${anio}.xlsx`);
+    window.XLSX.writeFile(wb, `Certificacion_Bigticket_${nombreMes}_${anio}.xlsx`);
   };
 
   // ─── Helpers de UI ───
@@ -8012,15 +8012,15 @@ function ModuloCertificacionesMadre() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// PAGOS MADRE — wrapper con sub-tabs
+// PAGOS MADRE — wrapper con sub-tabs (Listado / Drivers / Ayudantes / Config)
 // ═══════════════════════════════════════════════════════════════════════════
 function ModuloPagosMadre() {
   const [subtab, setSubtab] = useState("listado");
   const tabs = [
-    { id: "listado", label: "Listado de Pagos", desc: "Cálculo diario por contratista" },
-    { id: "drivers", label: "Drivers", desc: "Maestro de choferes MX" },
-    { id: "config", label: "Configuración", desc: "Tarifario y reglas" },
-    { id: "matrices", label: "Matrices", desc: "Ayudantes · Zonas · Especiales" },
+    { id: "listado",   label: "Listado de Pagos", desc: "Cálculo diario por contratista" },
+    { id: "drivers",   label: "Drivers",          desc: "Maestro de choferes MX" },
+    { id: "ayudantes", label: "Ayudantes",        desc: "Detalle diario de auxiliares" },
+    { id: "config",    label: "Configuración",    desc: "Tarifario, zonas y reglas" },
   ];
   return (
     <div style={{ padding: 0 }}>
@@ -8041,10 +8041,10 @@ function ModuloPagosMadre() {
           ))}
         </div>
       </div>
-      {subtab === "listado" && <ListadoPagosDiarios />}
-      {subtab === "drivers" && <ModuloDriversMX />}
-      {subtab === "config" && <ModuloConfigPagos />}
-      {subtab === "matrices" && <ModuloMatricesPagos />}
+      {subtab === "listado"   && <ListadoPagosDiarios />}
+      {subtab === "drivers"   && <DriversMaestroMX />}
+      {subtab === "ayudantes" && <AyudantesDetalleDia />}
+      {subtab === "config"    && <ConfiguracionPagos />}
     </div>
   );
 }
@@ -8178,22 +8178,632 @@ function ListadoPagosDiarios() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// MATRICES DE PAGOS (Ayudantes · Zonas SC · Tarifas Especiales)
+// DRIVERS MAESTRO MX — con carga masiva Excel
 // ═══════════════════════════════════════════════════════════════════════════
-function ModuloMatricesPagos() {
-  const [subtab, setSubtab] = useState("ayudantes");
+function DriversMaestroMX() {
+  const [drivers, setDrivers] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [busqueda, setBusqueda] = useState("");
+  const [filtroEstado, setFiltroEstado] = useState("todos");
+  const [showCarga, setShowCarga] = useState(false);
+  const [previewData, setPreviewData] = useState(null);
+  const [uploading, setUploading] = useState(false);
+  const [uploadResult, setUploadResult] = useState(null);
+  const fileInputRef = useRef(null);
+
+  useEffect(() => { cargar(); }, []);
+
+  const cargar = async () => {
+    setLoading(true);
+    try {
+      const { data } = await sb.from("drivers_mx")
+        .select("*")
+        .order("nombre_completo");
+      setDrivers(data || []);
+    } catch (e) { console.error(e); }
+    setLoading(false);
+  };
+
+  // Procesar archivo Excel subido
+  const handleFile = async (file) => {
+    if (!file) return;
+    setUploadResult(null);
+    setPreviewData(null);
+    
+    try {
+      const data = await file.arrayBuffer();
+      const wb = window.XLSX.read(data, { type: "array" });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      // Saltamos las primeras 2 filas (header + REQ/OPT)
+      const json = window.XLSX.utils.sheet_to_json(ws, { range: 1, defval: null });
+      
+      // Filtrar filas vacías y la fila REQ/OPT
+      const filas = json.filter(r => 
+        r.driver_id && 
+        String(r.driver_id).toUpperCase() !== "REQ" && 
+        String(r.driver_id).toUpperCase() !== "OPT"
+      );
+      
+      // Validar campos obligatorios
+      const errores = [];
+      const validas = [];
+      filas.forEach((r, i) => {
+        const fila = i + 3; // fila real en Excel (saltamos 2 + base 1)
+        if (!r.driver_id || isNaN(parseInt(r.driver_id))) {
+          errores.push(`Fila ${fila}: driver_id inválido o vacío`);
+          return;
+        }
+        if (!r.nombre_completo || String(r.nombre_completo).trim() === "") {
+          errores.push(`Fila ${fila}: nombre_completo vacío`);
+          return;
+        }
+        // Limpiar fila
+        const limpia = {};
+        Object.keys(r).forEach(k => {
+          const v = r[k];
+          if (v !== null && v !== undefined && String(v).trim() !== "") {
+            // Convertir fecha de Excel a YYYY-MM-DD
+            if (k === "fecha_alta" && v instanceof Date) {
+              limpia[k] = v.toISOString().slice(0, 10);
+            } else {
+              limpia[k] = typeof v === "string" ? v.trim() : v;
+            }
+          }
+        });
+        limpia.driver_id = parseInt(limpia.driver_id);
+        validas.push(limpia);
+      });
+      
+      setPreviewData({ validas, errores, total: filas.length });
+    } catch (e) {
+      console.error(e);
+      setUploadResult({ ok: false, msg: "Error leyendo Excel: " + e.message });
+    }
+  };
+
+  // Confirmar carga (upsert por driver_id)
+  const confirmarCarga = async () => {
+    if (!previewData || previewData.validas.length === 0) return;
+    setUploading(true);
+    try {
+      // Upsert por driver_id
+      const { error, count } = await sb.from("drivers_mx")
+        .upsert(previewData.validas, { onConflict: "driver_id", count: "exact" });
+      if (error) throw error;
+      
+      setUploadResult({ ok: true, msg: `${previewData.validas.length} drivers cargados/actualizados` });
+      setPreviewData(null);
+      setShowCarga(false);
+      cargar();
+    } catch (e) {
+      setUploadResult({ ok: false, msg: "Error: " + e.message });
+    }
+    setUploading(false);
+  };
+
+  // Descargar template
+  const descargarTemplate = () => {
+    const headers = [
+      "driver_id", "nombre_completo", "rfc", "curp", "placa_principal",
+      "vehiculo_tipo", "service_center_principal", "zona", "tipo_contrato",
+      "metodo_pago", "banco", "clabe", "email", "telefono",
+      "fecha_alta", "estado", "observaciones"
+    ];
+    const reqRow = ["REQ", "REQ", "OPT", "OPT", "OPT", "OPT", "OPT", "OPT", "OPT", "OPT", "OPT", "OPT", "OPT", "OPT", "OPT", "OPT", "OPT"];
+    const ej1 = [3828508, "Jose Julian Rivera", "", "", "SDD-TJ8576H", "Large Van", "SCY1", "L3", "Subcontratista", "Transferencia", "BBVA", "", "", "", "2025-01-15", "Activo", ""];
+    const ej2 = [3797281, "Said Alberto Astorga", "", "", "SDD-TJ5417H", "Large Van", "SCY1", "L3", "Subcontratista", "Transferencia", "Banamex", "", "", "", "", "Activo", "Driver Platino"];
+    
+    const ws = window.XLSX.utils.aoa_to_sheet([headers, reqRow, ej1, ej2]);
+    ws["!cols"] = headers.map(h => ({ wch: h.length + 6 }));
+    const wb = window.XLSX.utils.book_new();
+    window.XLSX.utils.book_append_sheet(wb, ws, "Drivers MX");
+    window.XLSX.writeFile(wb, "Plantilla_Drivers_MX.xlsx");
+  };
+
+  const filtrados = useMemo(() => {
+    return drivers.filter(d => {
+      if (filtroEstado !== "todos" && d.estado !== filtroEstado) return false;
+      if (!busqueda) return true;
+      const b = busqueda.toLowerCase();
+      return (
+        (d.nombre_completo || "").toLowerCase().includes(b) ||
+        String(d.driver_id || "").includes(b) ||
+        (d.rfc || "").toLowerCase().includes(b) ||
+        (d.placa_principal || "").toLowerCase().includes(b) ||
+        (d.service_center_principal || "").toLowerCase().includes(b)
+      );
+    });
+  }, [drivers, busqueda, filtroEstado]);
+
+  const conteoPorEstado = drivers.reduce((acc, d) => {
+    acc[d.estado] = (acc[d.estado] || 0) + 1;
+    return acc;
+  }, {});
+
+  return (
+    <div className="pg" style={{ maxWidth: 1200 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, flexWrap: "wrap", gap: 12 }}>
+        <div>
+          <div className="sec-title">Drivers MX</div>
+          <div className="sec-sub">Maestro de choferes Mercado Libre · {drivers.length} registros</div>
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button onClick={descargarTemplate}
+            style={{ padding: "8px 14px", background: "#fff", border: "1px solid #cbd5e1", borderRadius: 6, fontSize: 12, fontWeight: 600, color: "#475569", cursor: "pointer" }}>
+            Descargar plantilla
+          </button>
+          <button onClick={() => setShowCarga(s => !s)}
+            style={{ padding: "8px 14px", background: "#1a3a6b", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 600, color: "#fff", cursor: "pointer" }}>
+            {showCarga ? "Cerrar" : "Subir Excel"}
+          </button>
+        </div>
+      </div>
+
+      {/* Carga Excel */}
+      {showCarga && (
+        <div style={{ background: "#f8fafc", border: "1px dashed #cbd5e1", borderRadius: 6, padding: 16, marginBottom: 16 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: "#1a3a6b", marginBottom: 8 }}>Carga Masiva desde Excel</div>
+          <div style={{ fontSize: 11, color: "#64748b", marginBottom: 12 }}>
+            Subí el Excel con los drivers. Si un driver_id ya existe, se actualiza (no se duplica).
+          </div>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".xlsx,.xls"
+            onChange={(e) => handleFile(e.target.files[0])}
+            style={{ fontSize: 12 }}
+          />
+          
+          {uploadResult && (
+            <div style={{ marginTop: 12, padding: "8px 12px", borderRadius: 4, background: uploadResult.ok ? "#dcfce7" : "#fee2e2", color: uploadResult.ok ? "#166534" : "#991b1b", fontSize: 12, fontWeight: 600 }}>
+              {uploadResult.msg}
+            </div>
+          )}
+          
+          {previewData && (
+            <div style={{ marginTop: 14, background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: 14 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: "#1a3a6b" }}>Preview</div>
+                  <div style={{ fontSize: 11, color: "#64748b" }}>
+                    {previewData.validas.length} válidas · {previewData.errores.length} con error · {previewData.total} totales
+                  </div>
+                </div>
+                <button onClick={confirmarCarga}
+                  disabled={uploading || previewData.validas.length === 0}
+                  style={{ padding: "8px 16px", background: "#16a34a", border: "none", borderRadius: 4, fontSize: 12, fontWeight: 600, color: "#fff", cursor: uploading ? "wait" : "pointer", opacity: uploading || previewData.validas.length === 0 ? 0.5 : 1 }}>
+                  {uploading ? "Cargando..." : `Cargar ${previewData.validas.length} drivers`}
+                </button>
+              </div>
+              
+              {previewData.errores.length > 0 && (
+                <div style={{ background: "#fee2e2", border: "1px solid #fecaca", borderRadius: 4, padding: 10, marginBottom: 10 }}>
+                  <div style={{ fontSize: 11, fontWeight: 600, color: "#991b1b", marginBottom: 4 }}>Errores:</div>
+                  {previewData.errores.slice(0, 5).map((e, i) => (
+                    <div key={i} style={{ fontSize: 11, color: "#991b1b" }}>• {e}</div>
+                  ))}
+                  {previewData.errores.length > 5 && <div style={{ fontSize: 11, color: "#991b1b" }}>... y {previewData.errores.length - 5} más</div>}
+                </div>
+              )}
+              
+              {previewData.validas.slice(0, 5).map((d, i) => (
+                <div key={i} style={{ padding: "6px 0", borderBottom: "1px solid #f0f0f0", fontSize: 11 }}>
+                  <span style={{ fontWeight: 600 }}>{d.nombre_completo}</span>
+                  <span style={{ color: "#64748b" }}> · ID: {d.driver_id} · {d.placa_principal || "—"} · {d.service_center_principal || "—"}</span>
+                </div>
+              ))}
+              {previewData.validas.length > 5 && (
+                <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 6 }}>... y {previewData.validas.length - 5} más</div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Filtros */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
+        <input type="text" placeholder="Buscar por nombre, ID, RFC, placa..." value={busqueda} onChange={e => setBusqueda(e.target.value)}
+          style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 4, padding: "7px 10px", fontSize: 12, flex: 1, minWidth: 240 }} />
+        <select value={filtroEstado} onChange={e => setFiltroEstado(e.target.value)}
+          style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 4, padding: "7px 10px", fontSize: 12, fontWeight: 600 }}>
+          <option value="todos">Todos los estados ({drivers.length})</option>
+          <option value="Activo">Activos ({conteoPorEstado.Activo || 0})</option>
+          <option value="Inactivo">Inactivos ({conteoPorEstado.Inactivo || 0})</option>
+          <option value="Vacaciones">Vacaciones ({conteoPorEstado.Vacaciones || 0})</option>
+          <option value="Suspendido">Suspendidos ({conteoPorEstado.Suspendido || 0})</option>
+        </select>
+      </div>
+
+      {/* Tabla */}
+      <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, overflow: "auto" }}>
+        {loading ? (
+          <div style={{ padding: 30, textAlign: "center", color: "#94a3b8" }}>Cargando...</div>
+        ) : filtrados.length === 0 ? (
+          <div style={{ padding: 40, textAlign: "center", color: "#94a3b8" }}>
+            <div style={{ fontWeight: 600, marginBottom: 6, color: "#475569" }}>Sin drivers cargados</div>
+            <div style={{ fontSize: 11 }}>Descarga la plantilla, llénala y súbela con "Subir Excel"</div>
+          </div>
+        ) : (
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+            <thead>
+              <tr style={{ background: "#f8fafc", borderBottom: "1px solid #e4e7ec" }}>
+                <th style={{ padding: "10px 14px", textAlign: "left", fontSize: 11, fontWeight: 600, color: "#475569" }}>ID ML</th>
+                <th style={{ padding: "10px 14px", textAlign: "left", fontSize: 11, fontWeight: 600, color: "#475569" }}>Nombre</th>
+                <th style={{ padding: "10px 14px", textAlign: "left", fontSize: 11, fontWeight: 600, color: "#475569" }}>Placa</th>
+                <th style={{ padding: "10px 14px", textAlign: "left", fontSize: 11, fontWeight: 600, color: "#475569" }}>Vehículo</th>
+                <th style={{ padding: "10px 14px", textAlign: "left", fontSize: 11, fontWeight: 600, color: "#475569" }}>SC</th>
+                <th style={{ padding: "10px 14px", textAlign: "left", fontSize: 11, fontWeight: 600, color: "#475569" }}>Zona</th>
+                <th style={{ padding: "10px 14px", textAlign: "left", fontSize: 11, fontWeight: 600, color: "#475569" }}>Contrato</th>
+                <th style={{ padding: "10px 14px", textAlign: "center", fontSize: 11, fontWeight: 600, color: "#475569" }}>Estado</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtrados.map(d => (
+                <tr key={d.id} style={{ borderBottom: "1px solid #f0f0f0" }}>
+                  <td style={{ padding: "10px 14px", fontFamily: "monospace", color: "#64748b" }}>{d.driver_id}</td>
+                  <td style={{ padding: "10px 14px", fontWeight: 500 }}>{d.nombre_completo}</td>
+                  <td style={{ padding: "10px 14px" }}>{d.placa_principal || "—"}</td>
+                  <td style={{ padding: "10px 14px", color: "#64748b" }}>{d.vehiculo_tipo || "—"}</td>
+                  <td style={{ padding: "10px 14px" }}>{d.service_center_principal || "—"}</td>
+                  <td style={{ padding: "10px 14px", color: "#64748b" }}>{d.zona || "—"}</td>
+                  <td style={{ padding: "10px 14px", color: "#64748b" }}>{d.tipo_contrato || "—"}</td>
+                  <td style={{ padding: "10px 14px", textAlign: "center" }}>
+                    <span style={{
+                      fontSize: 10, padding: "2px 8px", borderRadius: 4, fontWeight: 600,
+                      background: d.estado === "Activo" ? "#dcfce7" : d.estado === "Inactivo" ? "#fee2e2" : "#fef3c7",
+                      color: d.estado === "Activo" ? "#166534" : d.estado === "Inactivo" ? "#991b1b" : "#854d0e"
+                    }}>
+                      {d.estado}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// AYUDANTES — DETALLE DEL DÍA con tickets, hora exacta y descarga Excel
+// ═══════════════════════════════════════════════════════════════════════════
+function AyudantesDetalleDia() {
+  const [snapshots, setSnapshots] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [fecha, setFecha] = useState(new Date().toISOString().split("T")[0]);
+  const [busqueda, setBusqueda] = useState("");
+
+  useEffect(() => { cargar(); }, [fecha]);
+
+  const cargar = async () => {
+    setLoading(true);
+    try {
+      const { data } = await sb.from("logistic_ayudantes_snapshots")
+        .select("*")
+        .eq("fecha", fecha)
+        .order("hora_snapshot", { ascending: true })
+        .limit(5000);
+      setSnapshots(data || []);
+    } catch (e) { console.error(e); }
+    setLoading(false);
+  };
+
+  // Hora exacta de cada momento del día (lo más temprano de cada uno)
+  const horasMomentos = useMemo(() => {
+    const m = {};
+    for (const s of snapshots) {
+      if (!m[s.momento_dia]) m[s.momento_dia] = s.hora_snapshot;
+    }
+    return m;
+  }, [snapshots]);
+
+  // Consolidar por id_ruta
+  const consolidados = useMemo(() => {
+    const m = {};
+    for (const s of snapshots) {
+      const k = String(s.id_ruta);
+      if (!m[k]) m[k] = {
+        id_ruta: s.id_ruta,
+        cluster: s.cluster,
+        service_center_id: s.service_center_id,
+        driver_id: s.driver_id,
+        driver_name: s.driver_name,
+        vehiculo_descripcion: s.vehiculo_descripcion,
+        placa: s.placa,
+        snapshots: { inicio: null, media_manana: null, tarde: null, fin_tarde: null, pre_cierre: null },
+        snapshots_horas: {},
+        snapshots_con_helper: 0,
+        total_snapshots: 0,
+      };
+      m[k].snapshots[s.momento_dia] = s.has_helper;
+      m[k].snapshots_horas[s.momento_dia] = s.hora_snapshot;
+      m[k].total_snapshots++;
+      if (s.has_helper) m[k].snapshots_con_helper++;
+    }
+    return Object.values(m)
+      .filter(c => !busqueda || 
+        (c.driver_name || "").toLowerCase().includes(busqueda.toLowerCase()) ||
+        (c.placa || "").toLowerCase().includes(busqueda.toLowerCase()) ||
+        (c.service_center_id || "").toLowerCase().includes(busqueda.toLowerCase()) ||
+        String(c.id_ruta).includes(busqueda)
+      )
+      .sort((a, b) => {
+        if (a.service_center_id !== b.service_center_id) return a.service_center_id.localeCompare(b.service_center_id);
+        return (a.cluster || "").localeCompare(b.cluster || "");
+      });
+  }, [snapshots, busqueda]);
+
+  const totalConHelper = consolidados.filter(c => c.snapshots_con_helper >= 3).length;
+  const totalSospechosos = consolidados.filter(c => c.snapshots_con_helper >= 1 && c.snapshots_con_helper < 3).length;
+
+  // Formatear hora a hora local Chile
+  const formatHora = (h) => {
+    if (!h) return "—";
+    try {
+      return new Date(h).toLocaleTimeString("es-CL", { hour: "2-digit", minute: "2-digit", timeZone: "America/Santiago" });
+    } catch { return "—"; }
+  };
+
+  const formatHoraMx = (h) => {
+    if (!h) return "—";
+    try {
+      return new Date(h).toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit", timeZone: "America/Mexico_City" });
+    } catch { return "—"; }
+  };
+
+  // Renderizar ticket o vacío
+  const renderTicket = (h, hora) => {
+    if (h === true) return (
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
+        <span style={{ color: "#16a34a", fontSize: 16, fontWeight: 700 }}>✓</span>
+        {hora && <span style={{ fontSize: 9, color: "#94a3b8", marginTop: 2 }}>{formatHora(hora)}</span>}
+      </div>
+    );
+    if (h === false) return (
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
+        <span style={{ color: "#cbd5e1", fontSize: 14 }}>—</span>
+        {hora && <span style={{ fontSize: 9, color: "#cbd5e1", marginTop: 2 }}>{formatHora(hora)}</span>}
+      </div>
+    );
+    return <span style={{ color: "#e2e8f0", fontSize: 14 }}>·</span>;
+  };
+
+  // Descargar Excel
+  const descargarExcel = () => {
+    if (consolidados.length === 0) return;
+    
+    const headers = [
+      "Fecha", "Service Center", "Cluster", "ID Ruta", "Driver ID", "Driver",
+      "Placa", "Vehículo",
+      "Inicio (✓/—)", "Hora Inicio (Chile)", "Hora Inicio (México)",
+      "Media Mañana", "Hora MM (Chile)", "Hora MM (México)",
+      "Tarde", "Hora Tarde (Chile)", "Hora Tarde (México)",
+      "Fin Tarde", "Hora FT (Chile)", "Hora FT (México)",
+      "Pre Cierre", "Hora PC (Chile)", "Hora PC (México)",
+      "Total Snapshots", "Snapshots con Helper", "Estado", "Pago Auxiliar"
+    ];
+    
+    const formatHelper = (h) => h === true ? "Sí" : h === false ? "No" : "—";
+    
+    const data = consolidados.map(c => {
+      const estado = c.snapshots_con_helper >= 3 ? "OK" : c.snapshots_con_helper >= 1 ? "SOSPECHOSO" : "SIN_HELPER";
+      const pago = estado === "OK" ? 300 : 0;
+      return [
+        fecha,
+        c.service_center_id,
+        c.cluster || "",
+        c.id_ruta,
+        c.driver_id || "",
+        c.driver_name || "",
+        c.placa || "",
+        c.vehiculo_descripcion || "",
+        formatHelper(c.snapshots.inicio), formatHora(c.snapshots_horas.inicio), formatHoraMx(c.snapshots_horas.inicio),
+        formatHelper(c.snapshots.media_manana), formatHora(c.snapshots_horas.media_manana), formatHoraMx(c.snapshots_horas.media_manana),
+        formatHelper(c.snapshots.tarde), formatHora(c.snapshots_horas.tarde), formatHoraMx(c.snapshots_horas.tarde),
+        formatHelper(c.snapshots.fin_tarde), formatHora(c.snapshots_horas.fin_tarde), formatHoraMx(c.snapshots_horas.fin_tarde),
+        formatHelper(c.snapshots.pre_cierre), formatHora(c.snapshots_horas.pre_cierre), formatHoraMx(c.snapshots_horas.pre_cierre),
+        c.total_snapshots,
+        c.snapshots_con_helper,
+        estado,
+        pago,
+      ];
+    });
+    
+    const ws = window.XLSX.utils.aoa_to_sheet([headers, ...data]);
+    
+    // Anchos de columna
+    const widths = [10, 14, 10, 12, 12, 24, 14, 18, 12, 12, 12, 14, 12, 12, 10, 12, 12, 12, 12, 12, 12, 12, 12, 10, 14, 14, 12];
+    ws["!cols"] = widths.map(w => ({ wch: w }));
+    
+    // Hoja resumen
+    const resumen = [
+      ["RESUMEN AYUDANTES MX"],
+      [""],
+      ["Fecha", fecha],
+      ["Total rutas detectadas", consolidados.length],
+      ["Confirmadas (≥3 snapshots con helper)", totalConHelper],
+      ["Sospechosas (1-2 snapshots con helper)", totalSospechosos],
+      ["Sin helper", consolidados.length - totalConHelper - totalSospechosos],
+      [""],
+      ["MONTO A PAGAR (sólo confirmadas)", `$${(totalConHelper * 300).toLocaleString("es-MX")} MXN`],
+      [""],
+      ["Snapshots ejecutados:"],
+      ["  Inicio", formatHora(horasMomentos.inicio) + " Chile / " + formatHoraMx(horasMomentos.inicio) + " MX"],
+      ["  Media Mañana", formatHora(horasMomentos.media_manana) + " Chile / " + formatHoraMx(horasMomentos.media_manana) + " MX"],
+      ["  Tarde", formatHora(horasMomentos.tarde) + " Chile / " + formatHoraMx(horasMomentos.tarde) + " MX"],
+      ["  Fin Tarde", formatHora(horasMomentos.fin_tarde) + " Chile / " + formatHoraMx(horasMomentos.fin_tarde) + " MX"],
+      ["  Pre Cierre", formatHora(horasMomentos.pre_cierre) + " Chile / " + formatHoraMx(horasMomentos.pre_cierre) + " MX"],
+    ];
+    const wsResumen = window.XLSX.utils.aoa_to_sheet(resumen);
+    wsResumen["!cols"] = [{ wch: 40 }, { wch: 30 }];
+    
+    const wb = window.XLSX.utils.book_new();
+    window.XLSX.utils.book_append_sheet(wb, wsResumen, "Resumen");
+    window.XLSX.utils.book_append_sheet(wb, ws, "Detalle");
+    window.XLSX.writeFile(wb, `Ayudantes_MX_${fecha}.xlsx`);
+  };
+
+  return (
+    <div className="pg" style={{ maxWidth: 1400 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, flexWrap: "wrap", gap: 12 }}>
+        <div>
+          <div className="sec-title">Ayudantes — Detalle del Día</div>
+          <div className="sec-sub">Captura automática 5x al día desde la plataforma de Logistic</div>
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <input type="date" value={fecha} onChange={e => setFecha(e.target.value)}
+            style={{ background: "#fff", border: "1px solid #cbd5e1", borderRadius: 4, padding: "7px 10px", fontSize: 12 }} />
+          <button onClick={descargarExcel} disabled={consolidados.length === 0}
+            style={{ padding: "8px 14px", background: "#16a34a", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 600, color: "#fff", cursor: consolidados.length === 0 ? "not-allowed" : "pointer", opacity: consolidados.length === 0 ? 0.5 : 1 }}>
+            Descargar Excel
+          </button>
+        </div>
+      </div>
+
+      {/* Resumen de horas de los snapshots */}
+      <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: "10px 14px", marginBottom: 14 }}>
+        <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", marginBottom: 6 }}>Snapshots ejecutados hoy</div>
+        <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
+          {[
+            { id: "inicio", l: "Inicio" },
+            { id: "media_manana", l: "Media mañana" },
+            { id: "tarde", l: "Tarde" },
+            { id: "fin_tarde", l: "Fin tarde" },
+            { id: "pre_cierre", l: "Pre cierre" },
+          ].map(m => (
+            <div key={m.id} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ width: 8, height: 8, borderRadius: "50%", background: horasMomentos[m.id] ? "#16a34a" : "#cbd5e1" }} />
+              <span style={{ fontSize: 11, fontWeight: 600, color: "#475569" }}>{m.l}:</span>
+              <span style={{ fontSize: 11, color: horasMomentos[m.id] ? "#1f2937" : "#94a3b8" }}>
+                {horasMomentos[m.id] ? `${formatHora(horasMomentos[m.id])} Chile (${formatHoraMx(horasMomentos[m.id])} MX)` : "pendiente"}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* KPIs */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 10, marginBottom: 14 }}>
+        <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderLeft: "3px solid #1a3a6b", borderRadius: 6, padding: "12px 14px" }}>
+          <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase" }}>Total rutas</div>
+          <div style={{ fontSize: 22, fontWeight: 700, color: "#1a3a6b", marginTop: 2 }}>{consolidados.length}</div>
+        </div>
+        <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderLeft: "3px solid #16a34a", borderRadius: 6, padding: "12px 14px" }}>
+          <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase" }}>Confirmados</div>
+          <div style={{ fontSize: 22, fontWeight: 700, color: "#16a34a", marginTop: 2 }}>{totalConHelper}</div>
+          <div style={{ fontSize: 10, color: "#94a3b8" }}>≥3 snapshots con helper</div>
+        </div>
+        <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderLeft: "3px solid #F47B20", borderRadius: 6, padding: "12px 14px" }}>
+          <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase" }}>Sospechosos</div>
+          <div style={{ fontSize: 22, fontWeight: 700, color: "#F47B20", marginTop: 2 }}>{totalSospechosos}</div>
+          <div style={{ fontSize: 10, color: "#94a3b8" }}>1-2 snapshots</div>
+        </div>
+        <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderLeft: "3px solid #16a34a", borderRadius: 6, padding: "12px 14px" }}>
+          <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase" }}>Pago auxiliares</div>
+          <div style={{ fontSize: 22, fontWeight: 700, color: "#16a34a", marginTop: 2 }}>${(totalConHelper * 300).toLocaleString("es-MX")}</div>
+          <div style={{ fontSize: 10, color: "#94a3b8" }}>$300 × {totalConHelper} rutas</div>
+        </div>
+      </div>
+
+      {/* Búsqueda */}
+      <div style={{ marginBottom: 14 }}>
+        <input type="text" placeholder="Buscar por driver, placa, SC o ID ruta..." value={busqueda} onChange={e => setBusqueda(e.target.value)}
+          style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 4, padding: "7px 10px", fontSize: 12, width: "100%", maxWidth: 400 }} />
+      </div>
+
+      {/* Tabla */}
+      <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, overflow: "auto" }}>
+        {loading ? (
+          <div style={{ padding: 30, textAlign: "center", color: "#94a3b8" }}>Cargando...</div>
+        ) : consolidados.length === 0 ? (
+          <div style={{ padding: 40, textAlign: "center", color: "#94a3b8", fontSize: 13 }}>
+            Sin datos para esta fecha. Los snapshots se capturan automáticamente 5 veces al día.
+          </div>
+        ) : (
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+            <thead>
+              <tr style={{ background: "#f8fafc", borderBottom: "1px solid #e4e7ec" }}>
+                <th style={{ padding: "10px 8px", textAlign: "left", fontSize: 10, fontWeight: 600, color: "#475569" }}>SC</th>
+                <th style={{ padding: "10px 8px", textAlign: "left", fontSize: 10, fontWeight: 600, color: "#475569" }}>Cluster</th>
+                <th style={{ padding: "10px 8px", textAlign: "left", fontSize: 10, fontWeight: 600, color: "#475569" }}>ID Ruta</th>
+                <th style={{ padding: "10px 8px", textAlign: "left", fontSize: 10, fontWeight: 600, color: "#475569" }}>Placa</th>
+                <th style={{ padding: "10px 8px", textAlign: "left", fontSize: 10, fontWeight: 600, color: "#475569" }}>Driver</th>
+                <th style={{ padding: "10px 8px", textAlign: "left", fontSize: 10, fontWeight: 600, color: "#475569" }}>Vehículo</th>
+                {[
+                  { id: "inicio", l: "Inicio" },
+                  { id: "media_manana", l: "Media mañana" },
+                  { id: "tarde", l: "Tarde" },
+                  { id: "fin_tarde", l: "Fin tarde" },
+                  { id: "pre_cierre", l: "Pre cierre" },
+                ].map(m => (
+                  <th key={m.id} style={{ padding: "10px 4px", textAlign: "center", fontSize: 10, fontWeight: 600, color: "#475569", minWidth: 70 }}>
+                    <div>{m.l}</div>
+                    <div style={{ fontSize: 9, color: "#94a3b8", fontWeight: 400, marginTop: 2 }}>
+                      {horasMomentos[m.id] ? formatHora(horasMomentos[m.id]) : "—"}
+                    </div>
+                  </th>
+                ))}
+                <th style={{ padding: "10px 8px", textAlign: "center", fontSize: 10, fontWeight: 600, color: "#475569" }}>Estado</th>
+                <th style={{ padding: "10px 8px", textAlign: "right", fontSize: 10, fontWeight: 600, color: "#475569" }}>Pago</th>
+              </tr>
+            </thead>
+            <tbody>
+              {consolidados.map((c, i) => {
+                const estado = c.snapshots_con_helper >= 3 ? "OK" : c.snapshots_con_helper >= 1 ? "SOSPECHOSO" : "SIN_HELPER";
+                const colorEstado = estado === "OK" ? "#16a34a" : estado === "SOSPECHOSO" ? "#F47B20" : "#94a3b8";
+                const bgEstado = estado === "OK" ? "#dcfce7" : estado === "SOSPECHOSO" ? "#fed7aa" : "#f1f5f9";
+                return (
+                  <tr key={i} style={{ borderBottom: "1px solid #f0f0f0" }}>
+                    <td style={{ padding: "8px", fontWeight: 500 }}>{c.service_center_id}</td>
+                    <td style={{ padding: "8px" }}>{c.cluster}</td>
+                    <td style={{ padding: "8px", fontFamily: "monospace", color: "#64748b", fontSize: 11 }}>{c.id_ruta}</td>
+                    <td style={{ padding: "8px", fontSize: 11 }}>{c.placa || "—"}</td>
+                    <td style={{ padding: "8px", fontWeight: 500 }}>{c.driver_name || "—"}</td>
+                    <td style={{ padding: "8px", color: "#64748b", fontSize: 11 }}>{c.vehiculo_descripcion}</td>
+                    <td style={{ padding: "8px 4px", textAlign: "center" }}>{renderTicket(c.snapshots.inicio, c.snapshots_horas.inicio)}</td>
+                    <td style={{ padding: "8px 4px", textAlign: "center" }}>{renderTicket(c.snapshots.media_manana, c.snapshots_horas.media_manana)}</td>
+                    <td style={{ padding: "8px 4px", textAlign: "center" }}>{renderTicket(c.snapshots.tarde, c.snapshots_horas.tarde)}</td>
+                    <td style={{ padding: "8px 4px", textAlign: "center" }}>{renderTicket(c.snapshots.fin_tarde, c.snapshots_horas.fin_tarde)}</td>
+                    <td style={{ padding: "8px 4px", textAlign: "center" }}>{renderTicket(c.snapshots.pre_cierre, c.snapshots_horas.pre_cierre)}</td>
+                    <td style={{ padding: "8px", textAlign: "center" }}>
+                      <span style={{ fontSize: 9, padding: "2px 6px", borderRadius: 4, background: bgEstado, color: colorEstado, fontWeight: 600 }}>
+                        {estado}
+                      </span>
+                    </td>
+                    <td style={{ padding: "8px", textAlign: "right", fontWeight: 600, color: estado === "OK" ? "#16a34a" : "#94a3b8" }}>
+                      {estado === "OK" ? "$300" : "—"}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CONFIGURACIÓN DE PAGOS — sub-tabs
+// ═══════════════════════════════════════════════════════════════════════════
+function ConfiguracionPagos() {
+  const [subtab, setSubtab] = useState("tarifario");
   return (
     <div className="pg" style={{ maxWidth: 1200 }}>
       <div style={{ marginBottom: 16 }}>
-        <div className="sec-title">Matrices Editables</div>
-        <div className="sec-sub">Reglas que alimentan el cálculo automático del motor de pagos</div>
+        <div className="sec-title">Configuración</div>
+        <div className="sec-sub">Reglas y valores que alimentan el motor de cálculo de pagos</div>
       </div>
       <div style={{ display: "flex", gap: 6, marginBottom: 16, flexWrap: "wrap" }}>
         {[
-          { id: "ayudantes", l: "Ayudantes Autorizados" },
-          { id: "zonas", l: "Mapeo SC ↔ Zonas" },
-          { id: "tarifas", l: "Tarifas Especiales" },
           { id: "tarifario", l: "Tarifario Base" },
+          { id: "especiales", l: "Tarifas Especiales" },
+          { id: "zonas", l: "Mapeo SC ↔ Zonas" },
+          { id: "auxiliares", l: "Matriz Auxiliares" },
+          { id: "ns", l: "Reglas NS" },
         ].map(t => (
           <button key={t.id} onClick={() => setSubtab(t.id)}
             style={{ padding: "7px 14px", borderRadius: 4, border: `1px solid ${subtab === t.id ? "#1a3a6b" : "#e4e7ec"}`,
@@ -8203,148 +8813,25 @@ function ModuloMatricesPagos() {
           </button>
         ))}
       </div>
-      {subtab === "ayudantes" && <MatrizAyudantes />}
-      {subtab === "zonas" && <MatrizZonas />}
-      {subtab === "tarifas" && <MatrizTarifasEspeciales />}
-      {subtab === "tarifario" && <MatrizTarifario />}
+      {subtab === "tarifario" && <ConfigTarifario />}
+      {subtab === "especiales" && <ConfigTarifasEspeciales />}
+      {subtab === "zonas" && <ConfigZonas />}
+      {subtab === "auxiliares" && <ConfigMatrizAuxiliares />}
+      {subtab === "ns" && <ConfigReglasNS />}
     </div>
   );
 }
 
-// ─── Sub-componente: Matriz Ayudantes ──────────────────────────────────────
-function MatrizAyudantes() {
+// ─── Config: Tarifario Base ────────────────────────────────────────────────
+function ConfigTarifario() {
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [snapshots, setSnapshots] = useState([]);
 
   useEffect(() => { cargar(); }, []);
-
   const cargar = async () => {
     setLoading(true);
     try {
-      const { data: m } = await sb.from("matriz_ayudantes_autorizados").select("*").order("prioridad", { ascending: false });
-      setData(m || []);
-      // Snapshot del día de hoy
-      const hoy = new Date().toISOString().split("T")[0];
-      const { data: s } = await sb.from("logistic_ayudantes_snapshots")
-        .select("id_ruta, cluster, service_center_id, driver_name, vehiculo_descripcion, has_helper, momento_dia")
-        .eq("fecha", hoy)
-        .order("hora_snapshot", { ascending: false });
-      setSnapshots(s || []);
-    } catch (e) { console.error(e); }
-    setLoading(false);
-  };
-
-  if (loading) return <div className="loading" style={{ textAlign: "center", padding: 40, color: "#94a3b8" }}>Cargando...</div>;
-
-  const conAyudante = snapshots.filter(s => s.has_helper);
-  const ultimoMomento = snapshots[0]?.momento_dia;
-
-  return (
-    <div>
-      {/* KPIs en vivo del día */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10, marginBottom: 16 }}>
-        <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderLeft: "3px solid #1a3a6b", borderRadius: 6, padding: "12px 14px" }}>
-          <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase" }}>Snapshot del día</div>
-          <div style={{ fontSize: 18, fontWeight: 700, color: "#1a3a6b", marginTop: 2 }}>{snapshots.length} rutas</div>
-          <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 2 }}>Último: {ultimoMomento || "—"}</div>
-        </div>
-        <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderLeft: "3px solid #F47B20", borderRadius: 6, padding: "12px 14px" }}>
-          <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase" }}>Con Ayudante</div>
-          <div style={{ fontSize: 18, fontWeight: 700, color: "#F47B20", marginTop: 2 }}>{conAyudante.length} rutas</div>
-          <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 2 }}>${(conAyudante.length * 300).toLocaleString("es-MX")} MXN</div>
-        </div>
-        <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderLeft: "3px solid #16a34a", borderRadius: 6, padding: "12px 14px" }}>
-          <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase" }}>Reglas activas</div>
-          <div style={{ fontSize: 18, fontWeight: 700, color: "#16a34a", marginTop: 2 }}>{data.filter(d => !d.vigente_hasta || d.vigente_hasta >= new Date().toISOString().split("T")[0]).length}</div>
-          <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 2 }}>{data.length} totales</div>
-        </div>
-      </div>
-
-      {/* Reglas de la matriz */}
-      <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: 14, marginBottom: 14 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-          <div>
-            <div style={{ fontSize: 14, fontWeight: 700, color: "#1a3a6b" }}>Reglas de Autorización</div>
-            <div style={{ fontSize: 11, color: "#94a3b8" }}>Define qué SC + vehículo + zona pueden cobrar el ayudante de $300 MXN</div>
-          </div>
-        </div>
-        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-          <thead>
-            <tr style={{ background: "#f8fafc", borderBottom: "1px solid #e4e7ec" }}>
-              <th style={{ padding: "8px 10px", textAlign: "left", fontSize: 10, color: "#64748b", fontWeight: 600 }}>SC</th>
-              <th style={{ padding: "8px 10px", textAlign: "left", fontSize: 10, color: "#64748b", fontWeight: 600 }}>Vehículo</th>
-              <th style={{ padding: "8px 10px", textAlign: "left", fontSize: 10, color: "#64748b", fontWeight: 600 }}>Zona</th>
-              <th style={{ padding: "8px 10px", textAlign: "center", fontSize: 10, color: "#64748b", fontWeight: 600 }}>Estado</th>
-              <th style={{ padding: "8px 10px", textAlign: "right", fontSize: 10, color: "#64748b", fontWeight: 600 }}>Monto</th>
-              <th style={{ padding: "8px 10px", textAlign: "left", fontSize: 10, color: "#64748b", fontWeight: 600 }}>Observaciones</th>
-            </tr>
-          </thead>
-          <tbody>
-            {data.map(r => (
-              <tr key={r.id} style={{ borderBottom: "1px solid #f0f0f0" }}>
-                <td style={{ padding: "8px 10px" }}>{r.service_center_id || <span style={{ color: "#94a3b8" }}>TODOS</span>}</td>
-                <td style={{ padding: "8px 10px" }}>{r.vehiculo_tipo || <span style={{ color: "#94a3b8" }}>TODOS</span>}</td>
-                <td style={{ padding: "8px 10px" }}>{r.zona || <span style={{ color: "#94a3b8" }}>TODAS</span>}</td>
-                <td style={{ padding: "8px 10px", textAlign: "center" }}>
-                  <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 4, background: r.autorizado ? "#dcfce7" : "#fee2e2", color: r.autorizado ? "#166534" : "#991b1b", fontWeight: 600 }}>
-                    {r.autorizado ? "AUTORIZADO" : "NO AUTORIZADO"}
-                  </span>
-                </td>
-                <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 600, color: r.autorizado ? "#16a34a" : "#94a3b8" }}>${r.monto}</td>
-                <td style={{ padding: "8px 10px", color: "#64748b", fontSize: 11 }}>{r.observaciones || "—"}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      {/* Snapshot detalle del día */}
-      <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: 14 }}>
-        <div style={{ fontSize: 14, fontWeight: 700, color: "#1a3a6b", marginBottom: 10 }}>Ayudantes detectados hoy ({conAyudante.length})</div>
-        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-          <thead>
-            <tr style={{ background: "#f8fafc", borderBottom: "1px solid #e4e7ec" }}>
-              <th style={{ padding: "8px 10px", textAlign: "left", fontSize: 10, color: "#64748b", fontWeight: 600 }}>SC</th>
-              <th style={{ padding: "8px 10px", textAlign: "left", fontSize: 10, color: "#64748b", fontWeight: 600 }}>Cluster</th>
-              <th style={{ padding: "8px 10px", textAlign: "left", fontSize: 10, color: "#64748b", fontWeight: 600 }}>Driver</th>
-              <th style={{ padding: "8px 10px", textAlign: "left", fontSize: 10, color: "#64748b", fontWeight: 600 }}>Vehículo</th>
-              <th style={{ padding: "8px 10px", textAlign: "center", fontSize: 10, color: "#64748b", fontWeight: 600 }}>Momento</th>
-            </tr>
-          </thead>
-          <tbody>
-            {conAyudante.length === 0 ? (
-              <tr><td colSpan={5} style={{ padding: 30, textAlign: "center", color: "#94a3b8", fontSize: 11 }}>Sin datos del día. El scraper corre 5 veces al día.</td></tr>
-            ) : conAyudante.slice(0, 50).map((s, i) => (
-              <tr key={i} style={{ borderBottom: "1px solid #f0f0f0" }}>
-                <td style={{ padding: "8px 10px" }}>{s.service_center_id}</td>
-                <td style={{ padding: "8px 10px" }}>{s.cluster}</td>
-                <td style={{ padding: "8px 10px", fontWeight: 500 }}>{s.driver_name}</td>
-                <td style={{ padding: "8px 10px", color: "#64748b" }}>{s.vehiculo_descripcion}</td>
-                <td style={{ padding: "8px 10px", textAlign: "center" }}>
-                  <span style={{ fontSize: 10, padding: "2px 6px", borderRadius: 4, background: "#eef2ff", color: "#1a3a6b", fontWeight: 600 }}>{s.momento_dia}</span>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
-
-// ─── Sub-componente: Matriz Zonas SC ──────────────────────────────────────
-function MatrizZonas() {
-  const [data, setData] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [filtroZona, setFiltroZona] = useState("todas");
-
-  useEffect(() => { cargar(); }, []);
-
-  const cargar = async () => {
-    setLoading(true);
-    try {
-      const { data: d } = await sb.from("sc_zonas_mx").select("*").order("zona").order("service_center_id");
+      const { data: d } = await sb.from("tarifario_mx").select("*").order("zona").order("tipologia").order("tramo_km");
       setData(d || []);
     } catch (e) { console.error(e); }
     setLoading(false);
@@ -8352,49 +8839,58 @@ function MatrizZonas() {
 
   if (loading) return <div style={{ textAlign: "center", padding: 40, color: "#94a3b8" }}>Cargando...</div>;
 
-  const filtrados = filtroZona === "todas" ? data : data.filter(d => d.zona === filtroZona);
-  const conteo = data.reduce((acc, d) => { acc[d.zona] = (acc[d.zona] || 0) + 1; return acc; }, {});
+  const zonas = ["L1", "L2", "L3", "L4"];
+  const tipologias = ["Large Van", "Small Van", "Car"];
+  const tramos = ["0-100", "101-150", "151-200", "201-250", "251+"];
 
   return (
     <div>
       <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: 14, marginBottom: 14 }}>
-        <div style={{ fontSize: 14, fontWeight: 700, color: "#1a3a6b", marginBottom: 4 }}>Mapeo Service Center ↔ Zona</div>
-        <div style={{ fontSize: 11, color: "#94a3b8", marginBottom: 12 }}>{data.length} Service Centers en {Object.keys(conteo).length} zonas. Editable.</div>
-        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-          <button onClick={() => setFiltroZona("todas")}
-            style={{ padding: "5px 12px", borderRadius: 4, border: `1px solid ${filtroZona === "todas" ? "#1a3a6b" : "#e4e7ec"}`,
-              background: filtroZona === "todas" ? "#1a3a6b" : "#fff", color: filtroZona === "todas" ? "#fff" : "#475569",
-              fontSize: 11, fontWeight: 600, cursor: "pointer" }}>Todas ({data.length})</button>
-          {["L1", "L2", "L3", "L4"].map(z => (
-            <button key={z} onClick={() => setFiltroZona(z)}
-              style={{ padding: "5px 12px", borderRadius: 4, border: `1px solid ${filtroZona === z ? "#1a3a6b" : "#e4e7ec"}`,
-                background: filtroZona === z ? "#1a3a6b" : "#fff", color: filtroZona === z ? "#fff" : "#475569",
-                fontSize: 11, fontWeight: 600, cursor: "pointer" }}>{z} ({conteo[z] || 0})</button>
-          ))}
-        </div>
+        <div style={{ fontSize: 14, fontWeight: 700, color: "#1a3a6b", marginBottom: 4 }}>Tarifario Base MELI MX</div>
+        <div style={{ fontSize: 11, color: "#94a3b8" }}>{data.length} tarifas · 4 zonas × 3 tipologías × 5 tramos · MXN</div>
       </div>
-
-      <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: 14 }}>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(120px, 1fr))", gap: 6 }}>
-          {filtrados.map(sc => (
-            <div key={sc.id} style={{ padding: "8px 10px", background: "#f8fafc", borderRadius: 4, fontSize: 12, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <span style={{ fontWeight: 600 }}>{sc.service_center_id}</span>
-              <span style={{ fontSize: 10, padding: "2px 6px", borderRadius: 4, background: "#1a3a6b", color: "#fff", fontWeight: 600 }}>{sc.zona}</span>
-            </div>
-          ))}
+      {zonas.map(z => (
+        <div key={z} style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: 14, marginBottom: 14 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#1a3a6b", marginBottom: 10 }}>Zona {z}</div>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+            <thead>
+              <tr style={{ background: "#f8fafc", borderBottom: "1px solid #e4e7ec" }}>
+                <th style={{ padding: "6px 10px", textAlign: "left", fontSize: 10, color: "#64748b", fontWeight: 600 }}>Tipología</th>
+                {tramos.map(t => <th key={t} style={{ padding: "6px 10px", textAlign: "right", fontSize: 10, color: "#64748b", fontWeight: 600 }}>{t} km</th>)}
+              </tr>
+            </thead>
+            <tbody>
+              {tipologias.map(tipo => {
+                const filas = data.filter(d => d.zona === z && d.tipologia === tipo);
+                if (filas.length === 0) return null;
+                return (
+                  <tr key={tipo} style={{ borderBottom: "1px solid #f0f0f0" }}>
+                    <td style={{ padding: "6px 10px", fontWeight: 600 }}>{tipo}</td>
+                    {tramos.map(tr => {
+                      const f = filas.find(x => x.tramo_km === tr);
+                      return (
+                        <td key={tr} style={{ padding: "6px 10px", textAlign: "right", color: f ? "#1f2937" : "#cbd5e1" }}>
+                          {f ? `$${f.monto.toLocaleString("es-MX")}` : "—"}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
-      </div>
+      ))}
     </div>
   );
 }
 
-// ─── Sub-componente: Tarifas Especiales ───────────────────────────────────
-function MatrizTarifasEspeciales() {
+// ─── Config: Tarifas Especiales ────────────────────────────────────────────
+function ConfigTarifasEspeciales() {
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => { cargar(); }, []);
-
   const cargar = async () => {
     setLoading(true);
     try {
@@ -8406,7 +8902,6 @@ function MatrizTarifasEspeciales() {
 
   if (loading) return <div style={{ textAlign: "center", padding: 40, color: "#94a3b8" }}>Cargando...</div>;
 
-  // Agrupar por driver
   const drivers = [...new Set(data.map(d => d.driver_name))];
 
   return (
@@ -8415,7 +8910,6 @@ function MatrizTarifasEspeciales() {
         <div style={{ fontSize: 14, fontWeight: 700, color: "#1a3a6b", marginBottom: 4 }}>Tarifas Especiales por Chofer</div>
         <div style={{ fontSize: 11, color: "#94a3b8" }}>{drivers.length} choferes con tarifa custom · {data.length} reglas totales</div>
       </div>
-
       {drivers.map(driver => {
         const tarifas = data.filter(d => d.driver_name === driver);
         return (
@@ -8448,17 +8942,17 @@ function MatrizTarifasEspeciales() {
   );
 }
 
-// ─── Sub-componente: Tarifario Base ───────────────────────────────────────
-function MatrizTarifario() {
+// ─── Config: Zonas SC ──────────────────────────────────────────────────────
+function ConfigZonas() {
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [filtroZona, setFiltroZona] = useState("todas");
 
   useEffect(() => { cargar(); }, []);
-
   const cargar = async () => {
     setLoading(true);
     try {
-      const { data: d } = await sb.from("tarifario_mx").select("*").order("zona").order("tipologia").order("tramo_km");
+      const { data: d } = await sb.from("sc_zonas_mx").select("*").order("zona").order("service_center_id");
       setData(d || []);
     } catch (e) { console.error(e); }
     setLoading(false);
@@ -8466,55 +8960,152 @@ function MatrizTarifario() {
 
   if (loading) return <div style={{ textAlign: "center", padding: 40, color: "#94a3b8" }}>Cargando...</div>;
 
-  // Pivotear por zona y tipología
-  const zonas = ["L1", "L2", "L3", "L4"];
-  const tipologias = ["Large Van", "Small Van", "Car"];
-  const tramos = ["0-100", "101-150", "151-200", "201-250", "251+"];
+  const filtrados = filtroZona === "todas" ? data : data.filter(d => d.zona === filtroZona);
+  const conteo = data.reduce((acc, d) => { acc[d.zona] = (acc[d.zona] || 0) + 1; return acc; }, {});
 
   return (
     <div>
       <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: 14, marginBottom: 14 }}>
-        <div style={{ fontSize: 14, fontWeight: 700, color: "#1a3a6b", marginBottom: 4 }}>Tarifario Base MELI MX</div>
-        <div style={{ fontSize: 11, color: "#94a3b8" }}>{data.length} tarifas · 4 zonas × 3 tipologías × 5 tramos</div>
+        <div style={{ fontSize: 14, fontWeight: 700, color: "#1a3a6b", marginBottom: 4 }}>Mapeo Service Center ↔ Zona</div>
+        <div style={{ fontSize: 11, color: "#94a3b8", marginBottom: 12 }}>{data.length} Service Centers en {Object.keys(conteo).length} zonas</div>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          <button onClick={() => setFiltroZona("todas")}
+            style={{ padding: "5px 12px", borderRadius: 4, border: `1px solid ${filtroZona === "todas" ? "#1a3a6b" : "#e4e7ec"}`,
+              background: filtroZona === "todas" ? "#1a3a6b" : "#fff", color: filtroZona === "todas" ? "#fff" : "#475569",
+              fontSize: 11, fontWeight: 600, cursor: "pointer" }}>Todas ({data.length})</button>
+          {["L1", "L2", "L3", "L4"].map(z => (
+            <button key={z} onClick={() => setFiltroZona(z)}
+              style={{ padding: "5px 12px", borderRadius: 4, border: `1px solid ${filtroZona === z ? "#1a3a6b" : "#e4e7ec"}`,
+                background: filtroZona === z ? "#1a3a6b" : "#fff", color: filtroZona === z ? "#fff" : "#475569",
+                fontSize: 11, fontWeight: 600, cursor: "pointer" }}>{z} ({conteo[z] || 0})</button>
+          ))}
+        </div>
       </div>
 
-      {zonas.map(z => (
-        <div key={z} style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: 14, marginBottom: 14 }}>
-          <div style={{ fontSize: 13, fontWeight: 700, color: "#1a3a6b", marginBottom: 10 }}>Zona {z}</div>
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-            <thead>
-              <tr style={{ background: "#f8fafc", borderBottom: "1px solid #e4e7ec" }}>
-                <th style={{ padding: "6px 10px", textAlign: "left", fontSize: 10, color: "#64748b", fontWeight: 600 }}>Tipología</th>
-                {tramos.map(t => (
-                  <th key={t} style={{ padding: "6px 10px", textAlign: "right", fontSize: 10, color: "#64748b", fontWeight: 600 }}>{t} km</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {tipologias.map(tipo => {
-                const filas = data.filter(d => d.zona === z && d.tipologia === tipo);
-                if (filas.length === 0) return null;
-                return (
-                  <tr key={tipo} style={{ borderBottom: "1px solid #f0f0f0" }}>
-                    <td style={{ padding: "6px 10px", fontWeight: 600 }}>{tipo}</td>
-                    {tramos.map(tr => {
-                      const f = filas.find(x => x.tramo_km === tr);
-                      return (
-                        <td key={tr} style={{ padding: "6px 10px", textAlign: "right", color: f ? "#1f2937" : "#cbd5e1" }}>
-                          {f ? `$${f.monto.toLocaleString("es-MX")}` : "—"}
-                        </td>
-                      );
-                    })}
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+      <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: 14 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(120px, 1fr))", gap: 6 }}>
+          {filtrados.map(sc => (
+            <div key={sc.id} style={{ padding: "8px 10px", background: "#f8fafc", borderRadius: 4, fontSize: 12, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <span style={{ fontWeight: 600 }}>{sc.service_center_id}</span>
+              <span style={{ fontSize: 10, padding: "2px 6px", borderRadius: 4, background: "#1a3a6b", color: "#fff", fontWeight: 600 }}>{sc.zona}</span>
+            </div>
+          ))}
         </div>
-      ))}
+      </div>
     </div>
   );
 }
+
+// ─── Config: Matriz Auxiliares ─────────────────────────────────────────────
+function ConfigMatrizAuxiliares() {
+  const [data, setData] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => { cargar(); }, []);
+  const cargar = async () => {
+    setLoading(true);
+    try {
+      const { data: m } = await sb.from("matriz_ayudantes_autorizados").select("*").order("prioridad", { ascending: false });
+      setData(m || []);
+    } catch (e) { console.error(e); }
+    setLoading(false);
+  };
+
+  if (loading) return <div style={{ textAlign: "center", padding: 40, color: "#94a3b8" }}>Cargando...</div>;
+
+  return (
+    <div>
+      <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: 14, marginBottom: 14 }}>
+        <div style={{ fontSize: 14, fontWeight: 700, color: "#1a3a6b", marginBottom: 4 }}>Matriz de Auxiliares Autorizados</div>
+        <div style={{ fontSize: 11, color: "#94a3b8" }}>Define qué SC + vehículo + zona pueden cobrar el ayudante de $300 MXN</div>
+      </div>
+      <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: 14 }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+          <thead>
+            <tr style={{ background: "#f8fafc", borderBottom: "1px solid #e4e7ec" }}>
+              <th style={{ padding: "8px 10px", textAlign: "left", fontSize: 10, color: "#64748b", fontWeight: 600 }}>SC</th>
+              <th style={{ padding: "8px 10px", textAlign: "left", fontSize: 10, color: "#64748b", fontWeight: 600 }}>Vehículo</th>
+              <th style={{ padding: "8px 10px", textAlign: "left", fontSize: 10, color: "#64748b", fontWeight: 600 }}>Zona</th>
+              <th style={{ padding: "8px 10px", textAlign: "center", fontSize: 10, color: "#64748b", fontWeight: 600 }}>Estado</th>
+              <th style={{ padding: "8px 10px", textAlign: "right", fontSize: 10, color: "#64748b", fontWeight: 600 }}>Monto</th>
+              <th style={{ padding: "8px 10px", textAlign: "left", fontSize: 10, color: "#64748b", fontWeight: 600 }}>Observaciones</th>
+            </tr>
+          </thead>
+          <tbody>
+            {data.map(r => (
+              <tr key={r.id} style={{ borderBottom: "1px solid #f0f0f0" }}>
+                <td style={{ padding: "8px 10px" }}>{r.service_center_id || <span style={{ color: "#94a3b8" }}>TODOS</span>}</td>
+                <td style={{ padding: "8px 10px" }}>{r.vehiculo_tipo || <span style={{ color: "#94a3b8" }}>TODOS</span>}</td>
+                <td style={{ padding: "8px 10px" }}>{r.zona || <span style={{ color: "#94a3b8" }}>TODAS</span>}</td>
+                <td style={{ padding: "8px 10px", textAlign: "center" }}>
+                  <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 4, background: r.autorizado ? "#dcfce7" : "#fee2e2", color: r.autorizado ? "#166534" : "#991b1b", fontWeight: 600 }}>
+                    {r.autorizado ? "AUTORIZADO" : "NO AUTORIZADO"}
+                  </span>
+                </td>
+                <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 600, color: r.autorizado ? "#16a34a" : "#94a3b8" }}>${r.monto}</td>
+                <td style={{ padding: "8px 10px", color: "#64748b", fontSize: 11 }}>{r.observaciones || "—"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ─── Config: Reglas NS ─────────────────────────────────────────────────────
+function ConfigReglasNS() {
+  return (
+    <div>
+      <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: 14, marginBottom: 14 }}>
+        <div style={{ fontSize: 14, fontWeight: 700, color: "#1a3a6b", marginBottom: 4 }}>Reglas de Nivel de Servicio (NS)</div>
+        <div style={{ fontSize: 11, color: "#94a3b8" }}>Premio o multa según el rendimiento del chofer</div>
+      </div>
+      <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: 14 }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+          <thead>
+            <tr style={{ background: "#f8fafc", borderBottom: "1px solid #e4e7ec" }}>
+              <th style={{ padding: "10px", textAlign: "left", fontSize: 11, color: "#475569", fontWeight: 600 }}>Categoría</th>
+              <th style={{ padding: "10px", textAlign: "left", fontSize: 11, color: "#475569", fontWeight: 600 }}>Condición</th>
+              <th style={{ padding: "10px", textAlign: "right", fontSize: 11, color: "#475569", fontWeight: 600 }}>Ajuste</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr style={{ borderBottom: "1px solid #f0f0f0" }}>
+              <td style={{ padding: "10px" }}>
+                <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 4, background: "#dcfce7", color: "#166534", fontWeight: 600 }}>Excelente</span>
+              </td>
+              <td style={{ padding: "10px", color: "#64748b" }}>NS ≥ 99.5% Y No visitado &lt; 0.5%</td>
+              <td style={{ padding: "10px", textAlign: "right", fontWeight: 700, color: "#16a34a" }}>+5%</td>
+            </tr>
+            <tr style={{ borderBottom: "1px solid #f0f0f0" }}>
+              <td style={{ padding: "10px" }}>
+                <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 4, background: "#f1f5f9", color: "#475569", fontWeight: 600 }}>Aceptable</span>
+              </td>
+              <td style={{ padding: "10px", color: "#64748b" }}>NS entre 95% y 99.49%</td>
+              <td style={{ padding: "10px", textAlign: "right", fontWeight: 700, color: "#475569" }}>0%</td>
+            </tr>
+            <tr style={{ borderBottom: "1px solid #f0f0f0" }}>
+              <td style={{ padding: "10px" }}>
+                <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 4, background: "#fed7aa", color: "#9a3412", fontWeight: 600 }}>Deficiente</span>
+              </td>
+              <td style={{ padding: "10px", color: "#64748b" }}>NS &lt; 95%</td>
+              <td style={{ padding: "10px", textAlign: "right", fontWeight: 700, color: "#F47B20" }}>-3%</td>
+            </tr>
+            <tr style={{ borderBottom: "1px solid #f0f0f0" }}>
+              <td style={{ padding: "10px" }}>
+                <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 4, background: "#fee2e2", color: "#991b1b", fontWeight: 600 }}>Crítico</span>
+              </td>
+              <td style={{ padding: "10px", color: "#64748b" }}>No visitado &gt; 10%</td>
+              <td style={{ padding: "10px", textAlign: "right", fontWeight: 700, color: "#c0392b" }}>NO PAGO</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 
 
 export default function App() {
