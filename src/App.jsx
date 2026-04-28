@@ -5939,7 +5939,7 @@ function RecursosContratista({ transporte, categoria, subcontratistaNombre }) {
           let query = sb.from("certronic_documentos")
             .select("contratista, recurso_nombre, tipo_recurso, fecha_inicio, acceso, planta")
             .eq("fecha_snapshot", fechaSnapshot)
-            .ilike("contratista", transporte)
+            .ilike("contratista", `%${transporte}%`)
             .range(from, from + limite - 1);
           const { data, error } = await query;
           if (cancel) return;
@@ -5949,6 +5949,7 @@ function RecursosContratista({ transporte, categoria, subcontratistaNombre }) {
           if (data.length < limite) break;
           from += limite;
         }
+        console.log(`[Recursos] "${transporte}" en snapshot ${fechaSnapshot}: ${resultado.length} filas crudas`);
 
         // 3. Deduplicar por (recurso_nombre + tipo_recurso) y conservar la primera fecha
         const recursosMap = new Map();
@@ -6084,8 +6085,21 @@ function RecursosContratista({ transporte, categoria, subcontratistaNombre }) {
         <div style={{ padding: 20, textAlign: "center", color: "#94a3b8", fontSize: 12 }}>Cargando recursos...</div>
       ) : recursos.length === 0 ? (
         <div style={{ padding: 20, textAlign: "center", color: "#94a3b8", fontSize: 12 }}>
-          <div style={{ fontWeight: 600, marginBottom: 4, color: "#475569" }}>Sin recursos en certronic_documentos</div>
-          <div style={{ fontSize: 11 }}>El reporte completo (lunes/jueves) puede no haber capturado este contratista todavía.</div>
+          <div style={{ fontWeight: 600, marginBottom: 4, color: "#475569" }}>Sin recursos para este contratista</div>
+          <div style={{ fontSize: 11, marginBottom: 6 }}>
+            Buscamos en <code>certronic_documentos</code> con snapshot <strong>{snapshotUsado || "sin snapshot"}</strong>
+          </div>
+          <div style={{ fontSize: 10, color: "#64748b" }}>
+            Posibles causas:
+          </div>
+          <ul style={{ fontSize: 10, color: "#64748b", textAlign: "left", display: "inline-block", margin: "4px 0" }}>
+            <li>El reporte completo (lunes/jueves 04:00) no incluyó a este contratista</li>
+            <li>El nombre "<strong>{transporte}</strong>" no coincide exacto con la BD</li>
+            <li>La tabla certronic_documentos está vacía o desactualizada</li>
+          </ul>
+          <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 4 }}>
+            Abrir consola (F12) para ver detalle de la consulta
+          </div>
         </div>
       ) : (
         <>
