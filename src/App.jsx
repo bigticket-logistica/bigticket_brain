@@ -5937,7 +5937,7 @@ function RecursosContratista({ transporte, categoria, subcontratistaNombre }) {
         const limite = 1000;
         while (true) {
           let query = sb.from("certronic_documentos")
-            .select("contratista, recurso_nombre, tipo_recurso, fecha_inicio, acceso, planta")
+            .select("contratista, recurso_nombre, recurso_identificador, tipo_recurso, fecha_inicio, acceso, planta, documento")
             .eq("fecha_snapshot", fechaSnapshot)
             .ilike("contratista", `%${transporte}%`)
             .range(from, from + limite - 1);
@@ -5951,24 +5951,34 @@ function RecursosContratista({ transporte, categoria, subcontratistaNombre }) {
         }
         console.log(`[Recursos] "${transporte}" en snapshot ${fechaSnapshot}: ${resultado.length} filas crudas`);
 
-        // 3. Deduplicar por (recurso_nombre + tipo_recurso) y conservar la primera fecha
+        // 3. Deduplicar por recurso, juntar todos los documentos de cada uno
         const recursosMap = new Map();
         for (const r of resultado) {
           const key = `${r.recurso_nombre || ""}|${r.tipo_recurso || ""}`;
           if (!recursosMap.has(key)) {
             recursosMap.set(key, {
               recurso_nombre: r.recurso_nombre,
+              recurso_identificador: r.recurso_identificador,
               tipo_recurso: r.tipo_recurso,
               fecha_inicio: r.fecha_inicio,
               acceso: r.acceso,
               planta: r.planta,
+              documentos: [],  // 🆕 lista de docs del recurso
+              fecha_ingreso_real: null,  // 🆕 vendrá de certronic_empleados_detalle
             });
-          } else {
-            // Si ya existe, conservar la fecha más antigua si la nueva es más antigua
-            const existing = recursosMap.get(key);
-            if (r.fecha_inicio && (!existing.fecha_inicio || r.fecha_inicio < existing.fecha_inicio)) {
-              existing.fecha_inicio = r.fecha_inicio;
-            }
+          }
+          const existing = recursosMap.get(key);
+          // Conservar fecha más antigua si la nueva es menor
+          if (r.fecha_inicio && (!existing.fecha_inicio || r.fecha_inicio < existing.fecha_inicio)) {
+            existing.fecha_inicio = r.fecha_inicio;
+          }
+          // Acumular documento (si no se duplica)
+          if (r.documento && !existing.documentos.find(d => d.documento === r.documento)) {
+            existing.documentos.push({ documento: r.documento });
+          }
+          // Conservar el primer identificador no-vacío
+          if (!existing.recurso_identificador && r.recurso_identificador) {
+            existing.recurso_identificador = r.recurso_identificador;
           }
         }
 
@@ -5981,12 +5991,65 @@ function RecursosContratista({ transporte, categoria, subcontratistaNombre }) {
           recursosFinales = recursosFinales.filter(r => norm(r.recurso_nombre).includes(target) || target.includes(norm(r.recurso_nombre)));
         }
 
-        // 5. Ordenar: nuevos primero (más recientes), después por nombre
+        // 5. 🆕 ENRIQUECER con certronic_empleados_detalle (fecha_ingreso real)
+        // Buscamos por CUIL (recurso_identificador en docs == cuil en detalle)
+        const cuils = recursosFinales
+          .filter(r => r.tipo_recurso === "empleado" && r.recurso_identificador)
+          .map(r => r.recurso_identificador.replace(/[^0-9kK]/g, ""));  // limpiar formato
+
+        if (cuils.length > 0) {
+          try {
+            // Snapshot más reciente de empleados detalle
+            const { data: empSnap } = await sb.from("certronic_empleados_detalle")
+              .select("fecha_snapshot")
+              .order("fecha_snapshot", { ascending: false })
+              .limit(1);
+
+            if (empSnap && empSnap.length > 0) {
+              const fechaSnapEmp = empSnap[0].fecha_snapshot;
+              // Cargar todos los empleados de ese snapshot que matchen los cuils
+              const { data: empleados } = await sb.from("certronic_empleados_detalle")
+                .select("cuil, fecha_ingreso, email, celular, telefono, ficha_completa, categoria, funcion, tipo_contrato, tipo_trabajador")
+                .eq("fecha_snapshot", fechaSnapEmp)
+                .in("cuil", cuils);
+
+              if (empleados && empleados.length > 0) {
+                console.log(`[Recursos] Match con certronic_empleados_detalle: ${empleados.length}/${cuils.length}`);
+                const empMap = new Map();
+                for (const e of empleados) empMap.set(e.cuil, e);
+
+                for (const r of recursosFinales) {
+                  if (r.tipo_recurso === "empleado" && r.recurso_identificador) {
+                    const cuilLimpio = r.recurso_identificador.replace(/[^0-9kK]/g, "");
+                    const detalle = empMap.get(cuilLimpio);
+                    if (detalle) {
+                      r.fecha_ingreso_real = detalle.fecha_ingreso;
+                      r.email = detalle.email;
+                      r.celular = detalle.celular;
+                      r.telefono = detalle.telefono;
+                      r.ficha_completa = detalle.ficha_completa;
+                      r.categoria = detalle.categoria;
+                      r.funcion = detalle.funcion;
+                      r.tipo_contrato = detalle.tipo_contrato;
+                      r.tipo_trabajador = detalle.tipo_trabajador;
+                    }
+                  }
+                }
+              }
+            }
+          } catch (eEnrich) {
+            console.warn("[Recursos] No se pudo enriquecer con detalle:", eEnrich.message);
+          }
+        }
+
+        // 6. Ordenar: nuevos primero (más recientes), después por nombre
         recursosFinales.sort((a, b) => {
-          if (a.fecha_inicio && !b.fecha_inicio) return -1;
-          if (!a.fecha_inicio && b.fecha_inicio) return 1;
-          if (a.fecha_inicio && b.fecha_inicio) {
-            const cmp = b.fecha_inicio.localeCompare(a.fecha_inicio);
+          const fa = a.fecha_ingreso_real || a.fecha_inicio;
+          const fb = b.fecha_ingreso_real || b.fecha_inicio;
+          if (fa && !fb) return -1;
+          if (!fa && fb) return 1;
+          if (fa && fb) {
+            const cmp = fb.localeCompare(fa);
             if (cmp !== 0) return cmp;
           }
           return (a.recurso_nombre || "").localeCompare(b.recurso_nombre || "");
@@ -6044,15 +6107,19 @@ function RecursosContratista({ transporte, categoria, subcontratistaNombre }) {
   }, [recursos, busqueda, filtroEntidad]);
 
   // Stats
-  const stats = useMemo(() => ({
-    total: recursos.length,
-    empleados: recursos.filter(r => r.tipo_recurso === "empleado").length,
-    vehiculos: recursos.filter(r => r.tipo_recurso === "vehiculo").length,
-    contratistas: recursos.filter(r => r.tipo_recurso === "contratista").length,
-    nuevosEsteMes: recursos.filter(r => esEsteMes(r.fecha_inicio)).length,
-    inhabilitados: recursos.filter(r => r.acceso === "Inhabilitado").length,
-    sinFecha: recursos.filter(r => !r.fecha_inicio).length,
-  }), [recursos]);
+  const stats = useMemo(() => {
+    const fechaParaUsar = (r) => r.fecha_ingreso_real || r.fecha_inicio;
+    return {
+      total: recursos.length,
+      empleados: recursos.filter(r => r.tipo_recurso === "empleado").length,
+      vehiculos: recursos.filter(r => r.tipo_recurso === "vehiculo").length,
+      contratistas: recursos.filter(r => r.tipo_recurso === "contratista").length,
+      nuevosEsteMes: recursos.filter(r => esEsteMes(fechaParaUsar(r))).length,
+      inhabilitados: recursos.filter(r => r.acceso === "Inhabilitado").length,
+      sinFecha: recursos.filter(r => !fechaParaUsar(r)).length,
+      conFechaReal: recursos.filter(r => r.fecha_ingreso_real).length,
+    };
+  }, [recursos]);
 
   return (
     <div style={{ padding: 14 }}>
@@ -6110,6 +6177,12 @@ function RecursosContratista({ transporte, categoria, subcontratistaNombre }) {
               {stats.empleados > 0 && <span style={{ color: "#64748b" }}> · {stats.empleados} empl.</span>}
               {stats.vehiculos > 0 && <span style={{ color: "#64748b" }}> · {stats.vehiculos} veh.</span>}
             </div>
+            {stats.conFechaReal > 0 && (
+              <div title="Empleados con fecha real extraída de su ficha en Certronic" 
+                style={{ background: "#dbeafe", border: "1px solid #93c5fd", borderRadius: 4, padding: "5px 10px", fontSize: 11, color: "#1e40af", fontWeight: 600 }}>
+                ✓ {stats.conFechaReal} con fecha real
+              </div>
+            )}
             {stats.nuevosEsteMes > 0 && (
               <div style={{ background: "#dcfce7", border: "1px solid #86efac", borderRadius: 4, padding: "5px 10px", fontSize: 11, color: "#166534", fontWeight: 600 }}>
                 🆕 {stats.nuevosEsteMes} ingresaron en {nombreMesActual()}
@@ -6128,7 +6201,7 @@ function RecursosContratista({ transporte, categoria, subcontratistaNombre }) {
           </div>
 
           {/* Tabla de recursos */}
-          <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 4, overflow: "auto", maxHeight: 400 }}>
+          <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 4, overflow: "auto", maxHeight: 500 }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
               <thead style={{ position: "sticky", top: 0, background: "#f1f5f9", zIndex: 1 }}>
                 <tr>
@@ -6142,8 +6215,10 @@ function RecursosContratista({ transporte, categoria, subcontratistaNombre }) {
               </thead>
               <tbody>
                 {recursosFiltrados.map((r, i) => {
-                  const esteMes = esEsteMes(r.fecha_inicio);
-                  const dias = diasDesde(r.fecha_inicio);
+                  // Usar fecha_ingreso_real si existe, sino fecha_inicio (de docs)
+                  const fechaIngreso = r.fecha_ingreso_real || r.fecha_inicio;
+                  const esteMes = esEsteMes(fechaIngreso);
+                  const dias = diasDesde(fechaIngreso);
                   const tipoColor = {
                     "empleado": "#dbeafe",
                     "vehiculo": "#fef3c7",
@@ -6154,51 +6229,96 @@ function RecursosContratista({ transporte, categoria, subcontratistaNombre }) {
                     "vehiculo": "#92400e",
                     "contratista": "#6b21a8",
                   }[r.tipo_recurso] || "#64748b";
+                  const fuenteFecha = r.fecha_ingreso_real ? "REAL" : (r.fecha_inicio ? "CONTRATO" : null);
+                  
+                  // Documentos problemáticos: si ingresó este mes, los del periodo anterior no aplican
+                  const DOCS_NO_APLICAN_ANTES = [
+                    "F30", "F30-1", "Liquidación de Sueldo", "Liquidacion de Sueldo",
+                    "Cotizaciones", "Cotizaciones PREVIRED", "Mutualidad",
+                  ];
+                  const docsProblematicos = esteMes && r.documentos
+                    ? r.documentos.filter(d => DOCS_NO_APLICAN_ANTES.some(t => (d.documento || "").toLowerCase().includes(t.toLowerCase())))
+                    : [];
+
                   return (
-                    <tr key={i} style={{
-                      borderTop: "1px solid #f1f5f9",
-                      background: esteMes ? "#ecfdf5" : undefined,
-                    }}>
-                      <td style={{ padding: "6px 10px" }}>
-                        <span style={{ fontSize: 9, padding: "1px 6px", borderRadius: 3, background: tipoColor, color: tipoTextColor, fontWeight: 600, textTransform: "uppercase" }}>
-                          {r.tipo_recurso || "—"}
-                        </span>
-                      </td>
-                      <td style={{ padding: "6px 10px", fontWeight: 500 }}>{r.recurso_nombre || "—"}</td>
-                      <td style={{ padding: "6px 10px", color: r.fecha_inicio ? "#475569" : "#cbd5e1", fontFamily: r.fecha_inicio ? "inherit" : "monospace", fontSize: r.fecha_inicio ? 11 : 10 }}>
-                        {fmtFecha(r.fecha_inicio)}
-                      </td>
-                      <td style={{ padding: "6px 10px", textAlign: "right", color: "#64748b", fontSize: 10 }}>
-                        {dias != null ? `${dias} días` : "—"}
-                      </td>
-                      <td style={{ padding: "6px 10px", textAlign: "center" }}>
-                        {esteMes && (
-                          <span style={{
-                            fontSize: 9, padding: "2px 7px", borderRadius: 10, fontWeight: 700,
-                            background: "#16a34a", color: "#fff",
-                          }}>
-                            {nombreMesActual()}
+                    <Fragment key={i}>
+                      <tr style={{
+                        borderTop: "1px solid #f1f5f9",
+                        background: esteMes ? "#ecfdf5" : undefined,
+                      }}>
+                        <td style={{ padding: "6px 10px" }}>
+                          <span style={{ fontSize: 9, padding: "1px 6px", borderRadius: 3, background: tipoColor, color: tipoTextColor, fontWeight: 600, textTransform: "uppercase" }}>
+                            {r.tipo_recurso || "—"}
                           </span>
-                        )}
-                        {!esteMes && dias != null && dias <= 90 && (
+                        </td>
+                        <td style={{ padding: "6px 10px", fontWeight: 500 }}>
+                          {r.recurso_nombre || "—"}
+                          {r.email && <div style={{ fontSize: 9, color: "#64748b", marginTop: 1 }}>{r.email}</div>}
+                        </td>
+                        <td style={{ padding: "6px 10px", color: fechaIngreso ? "#475569" : "#cbd5e1", fontFamily: fechaIngreso ? "inherit" : "monospace", fontSize: fechaIngreso ? 11 : 10 }}>
+                          {fmtFecha(fechaIngreso)}
+                          {fuenteFecha === "REAL" && (
+                            <span title="Fecha extraída de la ficha del empleado en Certronic" style={{ marginLeft: 4, fontSize: 9, color: "#16a34a", fontWeight: 700 }}>✓</span>
+                          )}
+                          {fuenteFecha === "CONTRATO" && (
+                            <span title="Fecha del contrato comercial (no del recurso individual)" style={{ marginLeft: 4, fontSize: 9, color: "#94a3b8" }}>~</span>
+                          )}
+                        </td>
+                        <td style={{ padding: "6px 10px", textAlign: "right", color: "#64748b", fontSize: 10 }}>
+                          {dias != null ? `${dias} días` : "—"}
+                        </td>
+                        <td style={{ padding: "6px 10px", textAlign: "center" }}>
+                          {esteMes && (
+                            <span style={{
+                              fontSize: 9, padding: "2px 7px", borderRadius: 10, fontWeight: 700,
+                              background: "#16a34a", color: "#fff",
+                            }}>
+                              🆕 INGRESÓ {nombreMesActual()}
+                            </span>
+                          )}
+                          {!esteMes && dias != null && dias <= 90 && (
+                            <span style={{
+                              fontSize: 9, padding: "2px 7px", borderRadius: 10, fontWeight: 600,
+                              background: "#fef3c7", color: "#92400e",
+                            }}>
+                              ≤ 90d
+                            </span>
+                          )}
+                        </td>
+                        <td style={{ padding: "6px 10px", textAlign: "center" }}>
                           <span style={{
-                            fontSize: 9, padding: "2px 7px", borderRadius: 10, fontWeight: 600,
-                            background: "#fef3c7", color: "#92400e",
+                            fontSize: 10, padding: "2px 6px", borderRadius: 3, fontWeight: 600,
+                            background: r.acceso === "Habilitado" ? "#dcfce7" : r.acceso === "Inhabilitado" ? "#fee2e2" : "#f1f5f9",
+                            color: r.acceso === "Habilitado" ? "#166534" : r.acceso === "Inhabilitado" ? "#991b1b" : "#64748b",
                           }}>
-                            ≤ 90d
+                            {r.acceso || "—"}
                           </span>
-                        )}
-                      </td>
-                      <td style={{ padding: "6px 10px", textAlign: "center" }}>
-                        <span style={{
-                          fontSize: 10, padding: "2px 6px", borderRadius: 3, fontWeight: 600,
-                          background: r.acceso === "Habilitado" ? "#dcfce7" : r.acceso === "Inhabilitado" ? "#fee2e2" : "#f1f5f9",
-                          color: r.acceso === "Habilitado" ? "#166534" : r.acceso === "Inhabilitado" ? "#991b1b" : "#64748b",
-                        }}>
-                          {r.acceso || "—"}
-                        </span>
-                      </td>
-                    </tr>
+                        </td>
+                      </tr>
+                      {/* Fila de alerta cuando ingresó este mes y tiene docs problemáticos */}
+                      {esteMes && docsProblematicos.length > 0 && (
+                        <tr style={{ background: "#fffbeb" }}>
+                          <td colSpan={6} style={{ padding: "6px 12px 8px 32px", borderTop: "none" }}>
+                            <div style={{ fontSize: 10, color: "#92400e", display: "flex", alignItems: "flex-start", gap: 6 }}>
+                              <span style={{ fontWeight: 700 }}>⚠️ Atención:</span>
+                              <div>
+                                <div>Ingresó este mes — los siguientes documentos del periodo anterior NO deberían aplicar:</div>
+                                <div style={{ marginTop: 3 }}>
+                                  {docsProblematicos.map((d, j) => (
+                                    <span key={j} style={{ display: "inline-block", marginRight: 6, marginTop: 2, fontSize: 9, padding: "2px 6px", borderRadius: 3, background: "#fed7aa", color: "#9a3412", fontWeight: 600 }}>
+                                      {d.documento}
+                                    </span>
+                                  ))}
+                                </div>
+                                <div style={{ marginTop: 3, fontStyle: "italic", color: "#a16207" }}>
+                                  El analista debe revisar manualmente y marcar como NO_APLICA si corresponde.
+                                </div>
+                              </div>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
                   );
                 })}
               </tbody>
@@ -6211,8 +6331,8 @@ function RecursosContratista({ transporte, categoria, subcontratistaNombre }) {
           </div>
 
           <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 8, fontStyle: "italic" }}>
-            💡 Los recursos resaltados en verde con badge "{nombreMesActual()}" son los que ingresaron este mes.
-            Tener en cuenta: documentos de meses anteriores a su ingreso pueden no aplicar (revisar manualmente).
+            💡 Símbolos en la columna fecha: <strong style={{ color: "#16a34a" }}>✓</strong> = fecha real del empleado (de su ficha); <strong style={{ color: "#94a3b8" }}>~</strong> = fecha del contrato comercial (aproximada).
+            Recursos con badge <strong style={{ color: "#16a34a" }}>INGRESÓ {nombreMesActual()}</strong> requieren revisión manual de docs anteriores.
           </div>
         </>
       )}
@@ -8771,7 +8891,7 @@ function VariacionesDiarias() {
               { id: "nuevos_doc",  label: "Documentos nuevos",        count: analisis.totales.docsNuevos,         col: "#0891b2", desc: "Aparecen hoy" },
               { id: "elim_doc",    label: "Documentos eliminados",    count: analisis.totales.docsEliminados,     col: "#94a3b8", desc: "Ya no aparecen" },
               { id: "nuevos",      label: "Contratistas nuevos",      count: analisis.totales.contratistasNuevos, col: "#0891b2", desc: "No estaban ayer" },
-              { id: "eliminados",  label: "Contratistas eliminados",  count: analisis.totales.contratistasEliminados, col: "#94a3b8", desc: "Estaban ayer, no hoy" },
+              { id: "eliminados",  label: "Contratistas sin docs hoy",  count: analisis.totales.contratistasEliminados, col: "#d97706", desc: "Estaban ayer pero no aparecen hoy" },
             ].map(item => (
               <div key={item.id} style={{
                 background: item.count > 0 ? "#fff" : "#fafafa",
@@ -8803,7 +8923,7 @@ function VariacionesDiarias() {
             { id: "mejoraron",  label: "Mejoraron" },
             { id: "empeoraron", label: "Empeoraron" },
             { id: "nuevos",     label: "Nuevos" },
-            { id: "eliminados", label: "Eliminados" },
+            { id: "eliminados", label: "Sin docs hoy" },
           ].map(f => (
             <button key={f.id} onClick={() => setFiltroTipo(f.id)}
               style={{
@@ -8868,10 +8988,12 @@ function VariacionesDiarias() {
                       <td style={tdStyle(true)}>
                         {c.contratista}
                         {c.esContratistaNuevo && (
-                          <span style={{ marginLeft: 6, fontSize: 9, padding: "2px 6px", borderRadius: 3, background: "#dcfce7", color: "#166534", fontWeight: 700 }}>NUEVO</span>
+                          <span title="Aparece en este snapshot pero no en el de comparación" 
+                            style={{ marginLeft: 6, fontSize: 9, padding: "2px 6px", borderRadius: 3, background: "#dcfce7", color: "#166534", fontWeight: 700 }}>NUEVO</span>
                         )}
                         {c.esContratistaEliminado && (
-                          <span style={{ marginLeft: 6, fontSize: 9, padding: "2px 6px", borderRadius: 3, background: "#fee2e2", color: "#991b1b", fontWeight: 700 }}>ELIMINADO</span>
+                          <span title="Aparecía en el snapshot anterior pero no en el de hoy. Puede ser que: (1) fue dado de baja en Certronic, o (2) sigue existiendo pero sin docs cargados este mes. Verificar manualmente." 
+                            style={{ marginLeft: 6, fontSize: 9, padding: "2px 6px", borderRadius: 3, background: "#fef3c7", color: "#92400e", fontWeight: 700 }}>SIN DOCS HOY</span>
                         )}
                       </td>
                       <td style={{ ...tdStyle(), fontSize: 10, color: "#64748b" }}>{c.planta || "—"}</td>
