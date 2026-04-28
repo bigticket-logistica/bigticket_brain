@@ -8433,15 +8433,44 @@ function ListadoPagosDiarios() {
 
       // Borrar lo existente del día (recálculo idempotente)
       const { error: delError } = await sb.from("maestro_jornada_mx").delete().eq("fecha", fecha);
-      if (delError) throw new Error("delete previo: " + delError.message);
+      if (delError) throw new Error("DELETE previo falló: " + delError.message);
 
-      // Insertar en chunks de 100 para no superar límites
+      // Insertar en chunks de 100. Si falla un chunk, intentamos uno por uno
+      // dentro de ese chunk para identificar la fila problemática.
       let insertados = 0;
+      let primerError = null;
       for (let i = 0; i < filas.length; i += 100) {
         const chunk = filas.slice(i, i + 100);
         const { error: insError } = await sb.from("maestro_jornada_mx").insert(chunk);
-        if (insError) throw new Error("insert: " + insError.message);
-        insertados += chunk.length;
+        if (insError) {
+          // Reintentar fila por fila para ubicar la culpable
+          for (const fila of chunk) {
+            const { error: e2 } = await sb.from("maestro_jornada_mx").insert(fila);
+            if (e2) {
+              primerError = {
+                mensaje: e2.message,
+                fila_problema: fila,
+              };
+              break;
+            } else {
+              insertados++;
+            }
+          }
+          if (primerError) break;
+        } else {
+          insertados += chunk.length;
+        }
+      }
+
+      if (primerError) {
+        const f = primerError.fila_problema;
+        const detalle = `Falló al insertar registro:\n\n` +
+          `Chofer: ${f.driver_name}\n` +
+          `Ruta: ${f.id_ruta}\n` +
+          `ns_categoria: "${f.ns_categoria}"\n` +
+          `Mensaje BD: ${primerError.mensaje}\n\n` +
+          `Se insertaron ${insertados} registros antes del error.`;
+        throw new Error(detalle);
       }
 
       setResumenCalculo({
@@ -8456,7 +8485,7 @@ function ListadoPagosDiarios() {
       await cargar();
     } catch (e) {
       console.error(e);
-      alert("Error en cálculo: " + e.message);
+      alert("Error en cálculo:\n\n" + e.message);
     }
     setCalculando(false);
   };
