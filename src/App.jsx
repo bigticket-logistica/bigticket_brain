@@ -8297,6 +8297,16 @@ function calcularPagos({ viajes, snapshots, scZonas, matrizPrecios, especiales, 
     let auxiliarEstado = aux.estado;
     let montoAux = 0;
 
+    // Detectar si los snapshots están en una fecha distinta a la del viaje
+    // (caso "ruta cruza medianoche") y dejar observación informativa
+    if (snapsRuta.length > 0 && fechaSalida) {
+      const fechasSnap = [...new Set(snapsRuta.map(s => s.fecha))];
+      const otrasFechas = fechasSnap.filter(f => f !== fechaSalida);
+      if (otrasFechas.length > 0) {
+        obs.push(`Ruta cruzó medianoche: snapshots de ${otrasFechas.join(", ")}`);
+      }
+    }
+
     if (aux.estado === "OK" || aux.estado === "MID_ROUTE") {
       // Verificar matriz de autorización
       const autorizacion = aplicarMatrizAyudantes(sc, tipologia, zona, matrizAux);
@@ -8363,31 +8373,41 @@ function calcularPagos({ viajes, snapshots, scZonas, matrizPrecios, especiales, 
   return { filas, errores };
 }
 
-// ─── Componente principal ──────────────────────────────────────────────────
+// ─── Componente principal: Vista por RUTA ─────────────────────────────────
 function ListadoPagosDiarios() {
   const [fecha, setFecha] = useState(fechaOperativaOffset(-1)); // ayer por defecto
   const [pagos, setPagos] = useState([]);
   const [loading, setLoading] = useState(true);
   const [calculando, setCalculando] = useState(false);
   const [busqueda, setBusqueda] = useState("");
-  const [expandido, setExpandido] = useState(null); // driver_name del que se ve detalle
   const [resumenCalculo, setResumenCalculo] = useState(null);
+  const [filtroEstado, setFiltroEstado] = useState("todas"); // todas | pagadas | no_pagadas | con_alerta
+  const [orderBy, setOrderBy] = useState("driver_name"); // columna por la que ordenar
+  const [orderDir, setOrderDir] = useState("asc");
 
-  useEffect(() => { cargar(); }, [fecha]);
-
-  const cargar = async () => {
-    setLoading(true);
-    setResumenCalculo(null);
-    try {
-      const { data, error } = await sb.from("maestro_jornada_mx")
-        .select("*")
-        .eq("fecha", fecha)
-        .order("driver_name");
-      if (error) throw error;
-      setPagos(data || []);
-    } catch (e) { console.error(e); }
-    setLoading(false);
-  };
+  // Carga al montar y al cambiar fecha
+  useEffect(() => {
+    let cancel = false;
+    (async () => {
+      setLoading(true);
+      setResumenCalculo(null);
+      try {
+        const { data, error } = await sb.from("maestro_jornada_mx")
+          .select("*")
+          .eq("fecha", fecha)
+          .order("driver_name")
+          .limit(5000);
+        if (cancel) return;
+        if (error) throw error;
+        setPagos(data || []);
+      } catch (e) {
+        console.error("Error cargando pagos:", e);
+        if (!cancel) setPagos([]);
+      }
+      if (!cancel) setLoading(false);
+    })();
+    return () => { cancel = true; };
+  }, [fecha]);
 
   const calcularDia = async () => {
     if (!confirm(`¿Calcular pagos del ${fecha}?\n\nEsto leerá los viajes y snapshots de ese día y guardará el resultado en maestro_jornada_mx.`)) return;
@@ -8395,15 +8415,21 @@ function ListadoPagosDiarios() {
     setResumenCalculo(null);
 
     try {
-      // Cargar todos los inputs en paralelo
       const fechaInicio = fecha;
       const fechaSig = new Date(fecha + "T00:00:00");
       fechaSig.setDate(fechaSig.getDate() + 1);
       const fechaFin = fechaSig.toISOString().slice(0, 10);
 
+      // Para snapshots usamos ventana ±1 día porque las rutas pueden cruzar medianoche
+      // (rutas que arrancan tarde y se cierran al día siguiente)
+      const fechaPrev = new Date(fecha + "T00:00:00");
+      fechaPrev.setDate(fechaPrev.getDate() - 1);
+      const fechaSnapDesde = fechaPrev.toISOString().slice(0, 10);
+      const fechaSnapHasta = fechaFin; // ya es +1 día
+
       const [vRes, sRes, zRes, mpRes, eRes, nsRes, maRes] = await Promise.all([
-        sb.from("viajes").select("*").eq("pais", "MX").gte("fecha_salida", fechaInicio).lt("fecha_salida", fechaFin),
-        sb.from("logistic_ayudantes_snapshots").select("*").eq("fecha", fecha),
+        sb.from("viajes").select("*").eq("pais", "MX").gte("fecha_salida", fechaInicio).lt("fecha_salida", fechaFin).limit(5000),
+        sb.from("logistic_ayudantes_snapshots").select("*").gte("fecha", fechaSnapDesde).lte("fecha", fechaSnapHasta).limit(30000),
         sb.from("sc_zonas_mx").select("service_center_id, zona"),
         sb.from("matriz_precios").select("*").eq("activo", true),
         sb.from("tarifas_especiales_mx").select("*"),
@@ -8431,26 +8457,19 @@ function ListadoPagosDiarios() {
         matrizAux: maRes.data || [],
       });
 
-      // Borrar lo existente del día (recálculo idempotente)
       const { error: delError } = await sb.from("maestro_jornada_mx").delete().eq("fecha", fecha);
       if (delError) throw new Error("DELETE previo falló: " + delError.message);
 
-      // Insertar en chunks de 100. Si falla un chunk, intentamos uno por uno
-      // dentro de ese chunk para identificar la fila problemática.
       let insertados = 0;
       let primerError = null;
       for (let i = 0; i < filas.length; i += 100) {
         const chunk = filas.slice(i, i + 100);
         const { error: insError } = await sb.from("maestro_jornada_mx").insert(chunk);
         if (insError) {
-          // Reintentar fila por fila para ubicar la culpable
           for (const fila of chunk) {
             const { error: e2 } = await sb.from("maestro_jornada_mx").insert(fila);
             if (e2) {
-              primerError = {
-                mensaje: e2.message,
-                fila_problema: fila,
-              };
+              primerError = { mensaje: e2.message, fila_problema: fila };
               break;
             } else {
               insertados++;
@@ -8464,13 +8483,14 @@ function ListadoPagosDiarios() {
 
       if (primerError) {
         const f = primerError.fila_problema;
-        const detalle = `Falló al insertar registro:\n\n` +
+        throw new Error(
+          `Falló al insertar registro:\n\n` +
           `Chofer: ${f.driver_name}\n` +
           `Ruta: ${f.id_ruta}\n` +
           `ns_categoria: "${f.ns_categoria}"\n` +
           `Mensaje BD: ${primerError.mensaje}\n\n` +
-          `Se insertaron ${insertados} registros antes del error.`;
-        throw new Error(detalle);
+          `Se insertaron ${insertados} registros antes del error.`
+        );
       }
 
       setResumenCalculo({
@@ -8482,7 +8502,10 @@ function ListadoPagosDiarios() {
         timestamp: new Date().toISOString(),
       });
 
-      await cargar();
+      // Recargar
+      const { data: recargados } = await sb.from("maestro_jornada_mx")
+        .select("*").eq("fecha", fecha).order("driver_name").limit(5000);
+      setPagos(recargados || []);
     } catch (e) {
       console.error(e);
       alert("Error en cálculo:\n\n" + e.message);
@@ -8490,60 +8513,101 @@ function ListadoPagosDiarios() {
     setCalculando(false);
   };
 
-  // Agrupar por driver
-  const agrupados = useMemo(() => {
-    const m = {};
-    for (const p of pagos) {
-      const k = p.driver_name || "Sin nombre";
-      if (!m[k]) {
-        m[k] = {
-          driver_name: k,
-          driver_id: p.driver_id,
-          rutas: [],
-          total_rutas: 0,
-          rutas_no_pagadas: 0,
-          tarifa_base_total: 0,
-          ajuste_ns_total: 0,
-          monto_auxiliar_total: 0,
-          pago_bruto_total: 0,
-          pago_neto_total: 0,
-          alertas: 0,
-        };
-      }
-      m[k].rutas.push(p);
-      m[k].total_rutas++;
-      if (p.ns_categoria === "NO_PAGO_NV>10%") m[k].rutas_no_pagadas++;
-      m[k].tarifa_base_total += Number(p.tarifa_base || 0);
-      m[k].ajuste_ns_total += Number(p.ajuste_ns || 0);
-      m[k].monto_auxiliar_total += Number(p.monto_auxiliar || 0);
-      m[k].pago_bruto_total += Number(p.pago_bruto || 0);
-      m[k].pago_neto_total += Number(p.pago_neto || 0);
-      if (p.observaciones) m[k].alertas++;
-    }
-    return Object.values(m).filter(d =>
-      !busqueda || d.driver_name.toLowerCase().includes(busqueda.toLowerCase())
-    ).sort((a, b) => b.pago_neto_total - a.pago_neto_total);
-  }, [pagos, busqueda]);
-
-  const totales = useMemo(() => ({
-    choferes: agrupados.length,
-    rutas: pagos.length,
-    tarifaBase: agrupados.reduce((s, d) => s + d.tarifa_base_total, 0),
-    ajusteNS: agrupados.reduce((s, d) => s + d.ajuste_ns_total, 0),
-    auxiliar: agrupados.reduce((s, d) => s + d.monto_auxiliar_total, 0),
-    pagoNeto: agrupados.reduce((s, d) => s + d.pago_neto_total, 0),
-    alertas: agrupados.reduce((s, d) => s + d.alertas, 0),
-    noPagadas: agrupados.reduce((s, d) => s + d.rutas_no_pagadas, 0),
-  }), [agrupados, pagos]);
-
+  // Helpers de formato
   const fmtMXN = (n) => `$${Number(n || 0).toLocaleString("es-MX", { maximumFractionDigits: 0 })}`;
   const fmtPct = (n) => `${Number(n || 0).toFixed(2)}%`;
 
+  // Filtrado y ordenamiento de filas
+  const filasFiltradas = useMemo(() => {
+    let res = [...pagos];
+
+    // Filtro por búsqueda
+    if (busqueda) {
+      const q = busqueda.toLowerCase();
+      res = res.filter(p =>
+        (p.driver_name || "").toLowerCase().includes(q) ||
+        (p.placa || "").toLowerCase().includes(q) ||
+        (p.service_center_id || "").toLowerCase().includes(q) ||
+        (p.id_ruta || "").toLowerCase().includes(q)
+      );
+    }
+
+    // Filtro por estado
+    if (filtroEstado === "pagadas") res = res.filter(p => p.ns_categoria !== "NO_PAGO_NV>10%");
+    else if (filtroEstado === "no_pagadas") res = res.filter(p => p.ns_categoria === "NO_PAGO_NV>10%");
+    else if (filtroEstado === "con_alerta") res = res.filter(p => !!p.observaciones);
+
+    // Ordenamiento
+    res.sort((a, b) => {
+      const va = a[orderBy], vb = b[orderBy];
+      const numA = typeof va === "number" || (!isNaN(parseFloat(va)) && va !== null);
+      const numB = typeof vb === "number" || (!isNaN(parseFloat(vb)) && vb !== null);
+      let cmp = 0;
+      if (numA && numB) cmp = Number(va) - Number(vb);
+      else cmp = String(va || "").localeCompare(String(vb || ""));
+      return orderDir === "asc" ? cmp : -cmp;
+    });
+
+    return res;
+  }, [pagos, busqueda, filtroEstado, orderBy, orderDir]);
+
+  // Totales
+  const totales = useMemo(() => {
+    const choferesUnicos = new Set(filasFiltradas.map(p => p.driver_name)).size;
+    return {
+      choferes: choferesUnicos,
+      rutas: filasFiltradas.length,
+      tarifaBase: filasFiltradas.reduce((s, p) => s + Number(p.tarifa_base || 0), 0),
+      ajusteNS: filasFiltradas.reduce((s, p) => s + Number(p.ajuste_ns || 0), 0),
+      auxiliar: filasFiltradas.reduce((s, p) => s + Number(p.monto_auxiliar || 0), 0),
+      pagoNeto: filasFiltradas.reduce((s, p) => s + Number(p.pago_neto || 0), 0),
+      noPagadas: filasFiltradas.filter(p => p.ns_categoria === "NO_PAGO_NV>10%").length,
+      alertas: filasFiltradas.filter(p => !!p.observaciones).length,
+    };
+  }, [filasFiltradas]);
+
+  const toggleOrder = (col) => {
+    if (orderBy === col) setOrderDir(orderDir === "asc" ? "desc" : "asc");
+    else { setOrderBy(col); setOrderDir("asc"); }
+  };
+
+  const ordIcon = (col) => orderBy === col ? (orderDir === "asc" ? " ↑" : " ↓") : "";
+
+  // Exportar a Excel (CSV simple)
+  const exportarCSV = () => {
+    if (filasFiltradas.length === 0) { alert("No hay datos para exportar"); return; }
+    const headers = [
+      "Fecha","Chofer","Patente","Vehículo","Tipología","SC","Zona","ID Ruta","Ciclo",
+      "Km","Envíos despachados","Envíos entregados","NS%","No visitado %","Categoría NS",
+      "Tarifa base","Ajuste NS","Estado auxiliar","Snapshots con helper","$ Auxiliar",
+      "Pago bruto","Pago neto","Observaciones"
+    ];
+    const rows = filasFiltradas.map(p => [
+      p.fecha, p.driver_name, p.placa, p.vehiculo_raw, p.tipologia, p.service_center_id, p.zona,
+      p.id_ruta, p.ciclo, p.km_recorridos, p.envios_despachados, p.envios_entregados,
+      p.ns_pct, p.ns_no_visitado, p.ns_categoria, p.tarifa_base, p.ajuste_ns,
+      p.auxiliar_estado, p.auxiliar_snapshots_total, p.monto_auxiliar,
+      p.pago_bruto, p.pago_neto, (p.observaciones || "").replace(/[\r\n]+/g, " ")
+    ]);
+    const csv = [headers, ...rows].map(r => r.map(v => {
+      if (v === null || v === undefined) return "";
+      const s = String(v);
+      return s.includes(",") || s.includes("\"") || s.includes("\n") ? `"${s.replace(/"/g, '""')}"` : s;
+    }).join(",")).join("\n");
+    const blob = new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `pagos_${fecha}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   return (
-    <div className="pg" style={{ maxWidth: 1280 }}>
+    <div className="pg" style={{ maxWidth: 1600 }}>
       <div style={{ marginBottom: 16 }}>
         <div className="sec-title">Listado de Pagos Diarios</div>
-        <div className="sec-sub">Cálculo automático por contratista · alimenta la app de choferes</div>
+        <div className="sec-sub">Cálculo por ruta · alimenta la app de choferes · fuente maestro_jornada_mx</div>
       </div>
 
       {/* Filtros y botones */}
@@ -8563,8 +8627,12 @@ function ListadoPagosDiarios() {
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
           <input type="date" value={fecha} onChange={e => setFecha(e.target.value)}
             style={{ background: "#f8fafc", border: "1px solid #e4e7ec", borderRadius: 4, padding: "6px 10px", fontSize: 12 }} />
-          <input type="text" placeholder="Buscar por chofer..." value={busqueda} onChange={e => setBusqueda(e.target.value)}
-            style={{ background: "#f8fafc", border: "1px solid #e4e7ec", borderRadius: 4, padding: "6px 10px", fontSize: 12, flex: 1, minWidth: 200 }} />
+          <input type="text" placeholder="Buscar chofer / patente / SC / id ruta..." value={busqueda} onChange={e => setBusqueda(e.target.value)}
+            style={{ background: "#f8fafc", border: "1px solid #e4e7ec", borderRadius: 4, padding: "6px 10px", fontSize: 12, flex: 1, minWidth: 240 }} />
+          <button onClick={exportarCSV} disabled={filasFiltradas.length === 0}
+            style={{ padding: "8px 14px", borderRadius: 4, border: "1px solid #e4e7ec", background: "#fff", color: "#475569", fontSize: 12, fontWeight: 600, cursor: filasFiltradas.length === 0 ? "not-allowed" : "pointer", opacity: filasFiltradas.length === 0 ? 0.5 : 1 }}>
+            Exportar CSV
+          </button>
           <button onClick={calcularDia} disabled={calculando}
             style={{ padding: "8px 16px", borderRadius: 4, border: "none", background: calculando ? "#94a3b8" : "#F47B20", color: "#fff", fontSize: 12, fontWeight: 600, cursor: calculando ? "wait" : "pointer" }}>
             {calculando ? "Calculando..." : pagos.length > 0 ? "Recalcular día" : "Calcular pagos del día"}
@@ -8575,7 +8643,7 @@ function ListadoPagosDiarios() {
       {/* Resumen del último cálculo */}
       {resumenCalculo && (
         <div style={{ background: "#ecfdf5", border: "1px solid #a7f3d0", borderRadius: 8, padding: 12, marginBottom: 14, fontSize: 12 }}>
-          <div style={{ fontWeight: 600, color: "#065f46", marginBottom: 6 }}>✓ Cálculo completado</div>
+          <div style={{ fontWeight: 600, color: "#065f46", marginBottom: 6 }}>Cálculo completado</div>
           <div style={{ color: "#047857" }}>
             {resumenCalculo.viajes_procesados} viajes procesados · {resumenCalculo.registros_insertados} registros guardados en maestro_jornada_mx
             {resumenCalculo.errores > 0 && ` · ${resumenCalculo.errores} viajes con error`}
@@ -8628,128 +8696,123 @@ function ListadoPagosDiarios() {
         )}
         {totales.alertas > 0 && (
           <div style={{ background: "#fef3c7", border: "1px solid #fcd34d", borderRadius: 6, padding: "12px 14px" }}>
-            <div style={{ fontSize: 10, color: "#92400e", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>Alertas</div>
+            <div style={{ fontSize: 10, color: "#92400e", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>Con alertas</div>
             <div style={{ fontSize: 22, fontWeight: 700, color: "#92400e", marginTop: 2 }}>{totales.alertas}</div>
           </div>
         )}
       </div>
 
-      {/* Tabla principal */}
-      <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, overflow: "hidden" }}>
+      {/* Filtros de estado */}
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
+        {[
+          { id: "todas", l: `Todas (${pagos.length})` },
+          { id: "pagadas", l: `Pagadas (${pagos.filter(p => p.ns_categoria !== "NO_PAGO_NV>10%").length})` },
+          { id: "no_pagadas", l: `No pagadas (${pagos.filter(p => p.ns_categoria === "NO_PAGO_NV>10%").length})` },
+          { id: "con_alerta", l: `Con alertas (${pagos.filter(p => !!p.observaciones).length})` },
+        ].map(({ id, l }) => (
+          <button key={id} onClick={() => setFiltroEstado(id)}
+            style={{ padding: "5px 12px", borderRadius: 4,
+              border: `1px solid ${filtroEstado === id ? "#1a3a6b" : "#e4e7ec"}`,
+              background: filtroEstado === id ? "#1a3a6b" : "#fff",
+              color: filtroEstado === id ? "#fff" : "#475569",
+              fontSize: 11, fontWeight: 600, cursor: "pointer" }}>
+            {l}
+          </button>
+        ))}
+      </div>
+
+      {/* Tabla principal — vista por RUTA */}
+      <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, overflow: "auto" }}>
         {loading ? (
-          <div style={{ padding: 30, textAlign: "center", color: "#94a3b8" }}>Cargando...</div>
-        ) : agrupados.length === 0 ? (
+          <div style={{ padding: 30, textAlign: "center", color: "#94a3b8" }}>Cargando datos del {fecha}...</div>
+        ) : pagos.length === 0 ? (
           <div style={{ padding: 40, textAlign: "center", color: "#94a3b8" }}>
             <div style={{ fontWeight: 600, marginBottom: 6, color: "#475569" }}>Sin pagos calculados para {fecha}</div>
             <div style={{ fontSize: 11 }}>Apretá "Calcular pagos del día" para procesar viajes y snapshots de esa fecha.</div>
           </div>
+        ) : filasFiltradas.length === 0 ? (
+          <div style={{ padding: 30, textAlign: "center", color: "#94a3b8" }}>Ningún registro coincide con los filtros</div>
         ) : (
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11, minWidth: 1400 }}>
             <thead>
-              <tr style={{ background: "#f8fafc", borderBottom: "1px solid #e4e7ec" }}>
-                <th style={{ padding: "10px 14px", textAlign: "left", fontSize: 11, fontWeight: 600, color: "#475569" }}>Chofer</th>
-                <th style={{ padding: "10px 14px", textAlign: "center", fontSize: 11, fontWeight: 600, color: "#475569" }}>Rutas</th>
-                <th style={{ padding: "10px 14px", textAlign: "right", fontSize: 11, fontWeight: 600, color: "#475569" }}>Tarifa base</th>
-                <th style={{ padding: "10px 14px", textAlign: "right", fontSize: 11, fontWeight: 600, color: "#475569" }}>Ajuste NS</th>
-                <th style={{ padding: "10px 14px", textAlign: "right", fontSize: 11, fontWeight: 600, color: "#475569" }}>Auxiliar</th>
-                <th style={{ padding: "10px 14px", textAlign: "right", fontSize: 11, fontWeight: 600, color: "#475569" }}>Pago neto</th>
-                <th style={{ padding: "10px 14px", textAlign: "center", fontSize: 11, fontWeight: 600, color: "#475569" }}>Detalle</th>
+              <tr style={{ background: "#f8fafc", borderBottom: "1px solid #e4e7ec", position: "sticky", top: 0 }}>
+                <Th onClick={() => toggleOrder("driver_name")}>Chofer{ordIcon("driver_name")}</Th>
+                <Th onClick={() => toggleOrder("placa")}>Patente{ordIcon("placa")}</Th>
+                <Th onClick={() => toggleOrder("tipologia")}>Vehículo{ordIcon("tipologia")}</Th>
+                <Th onClick={() => toggleOrder("service_center_id")} center>SC · Zona{ordIcon("service_center_id")}</Th>
+                <Th onClick={() => toggleOrder("id_ruta")}>ID Ruta{ordIcon("id_ruta")}</Th>
+                <Th onClick={() => toggleOrder("km_recorridos")} right>Km{ordIcon("km_recorridos")}</Th>
+                <Th onClick={() => toggleOrder("ns_pct")} right>NS%{ordIcon("ns_pct")}</Th>
+                <Th onClick={() => toggleOrder("tarifa_base")} right>Tarifa{ordIcon("tarifa_base")}</Th>
+                <Th onClick={() => toggleOrder("ajuste_ns")} right>±NS{ordIcon("ajuste_ns")}</Th>
+                <Th onClick={() => toggleOrder("auxiliar_estado")} center>Aux{ordIcon("auxiliar_estado")}</Th>
+                <Th onClick={() => toggleOrder("monto_auxiliar")} right>$Aux{ordIcon("monto_auxiliar")}</Th>
+                <Th onClick={() => toggleOrder("pago_neto")} right>Pago neto{ordIcon("pago_neto")}</Th>
+                <Th>Obs</Th>
               </tr>
             </thead>
             <tbody>
-              {agrupados.map((d, i) => (
-                <Fragment key={d.driver_name + i}>
-                  <tr style={{ borderBottom: "1px solid #f0f0f0", background: d.rutas_no_pagadas > 0 ? "#fef2f2" : (d.alertas > 0 ? "#fffbeb" : undefined) }}>
-                    <td style={{ padding: "10px 14px", fontWeight: 500 }}>
-                      {d.driver_name}
-                      {d.rutas_no_pagadas > 0 && <span style={{ marginLeft: 6, fontSize: 10, color: "#991b1b", fontWeight: 600, background: "#fee2e2", padding: "1px 6px", borderRadius: 3 }}>{d.rutas_no_pagadas} no pagada{d.rutas_no_pagadas > 1 ? "s" : ""}</span>}
-                      {d.alertas > 0 && <span style={{ marginLeft: 6, fontSize: 10, color: "#92400e", fontWeight: 600 }}>⚠ {d.alertas}</span>}
+              {filasFiltradas.map((r, i) => {
+                const noPagada = r.ns_categoria === "NO_PAGO_NV>10%";
+                const tieneAlerta = !!r.observaciones && !noPagada;
+                return (
+                  <tr key={r.id || i} style={{ borderBottom: "1px solid #f0f0f0", background: noPagada ? "#fef2f2" : tieneAlerta ? "#fffbeb" : undefined }}>
+                    <td style={tdStyle(true)}>{r.driver_name || "—"}</td>
+                    <td style={{ ...tdStyle(), fontFamily: "monospace", fontSize: 10 }}>{r.placa || "—"}</td>
+                    <td style={tdStyle()}>
+                      <div style={{ fontSize: 10, color: "#475569" }}>{r.tipologia || "?"}</div>
+                      <div style={{ fontSize: 9, color: "#94a3b8", marginTop: 1 }}>{r.vehiculo_raw || ""}</div>
                     </td>
-                    <td style={{ padding: "10px 14px", textAlign: "center" }}>
-                      {d.total_rutas}
-                      {d.rutas_no_pagadas > 0 && <span style={{ fontSize: 10, color: "#991b1b", marginLeft: 4 }}>({d.total_rutas - d.rutas_no_pagadas} pagadas)</span>}
+                    <td style={{ ...tdStyle(), textAlign: "center" }}>
+                      <div style={{ fontWeight: 700, color: "#1a3a6b" }}>{r.service_center_id}</div>
+                      <span style={{ fontSize: 9, padding: "1px 6px", borderRadius: 3, background: "#e0e7ff", color: "#3730a3", fontWeight: 600 }}>{r.zona || "?"}</span>
                     </td>
-                    <td style={{ padding: "10px 14px", textAlign: "right", color: "#475569" }}>{fmtMXN(d.tarifa_base_total)}</td>
-                    <td style={{ padding: "10px 14px", textAlign: "right", color: d.ajuste_ns_total >= 0 ? "#16a34a" : "#dc2626" }}>
-                      {d.ajuste_ns_total >= 0 ? "+" : ""}{fmtMXN(d.ajuste_ns_total)}
+                    <td style={{ ...tdStyle(), fontFamily: "monospace", fontSize: 10 }}>{r.id_ruta}</td>
+                    <td style={{ ...tdStyle(), textAlign: "right" }}>{Number(r.km_recorridos || 0).toFixed(1)}</td>
+                    <td style={{ ...tdStyle(), textAlign: "right" }}>
+                      <div>{fmtPct(r.ns_pct)}</div>
+                      <div style={{ fontSize: 9, color: noPagada ? "#991b1b" : "#94a3b8", fontWeight: noPagada ? 600 : 400 }}>
+                        {noPagada ? `NV ${r.ns_no_visitado}%` : r.ns_categoria}
+                      </div>
                     </td>
-                    <td style={{ padding: "10px 14px", textAlign: "right", color: "#475569" }}>
-                      {d.monto_auxiliar_total > 0 ? fmtMXN(d.monto_auxiliar_total) : "—"}
+                    <td style={{ ...tdStyle(), textAlign: "right", textDecoration: noPagada ? "line-through" : undefined, color: noPagada ? "#94a3b8" : undefined }}>
+                      {fmtMXN(r.tarifa_base)}
+                      {r.tiene_tarifa_especial && <div style={{ fontSize: 8, color: "#7c3aed", fontWeight: 600 }}>ESP</div>}
                     </td>
-                    <td style={{ padding: "10px 14px", textAlign: "right", fontWeight: 700, color: "#16a34a" }}>{fmtMXN(d.pago_neto_total)}</td>
-                    <td style={{ padding: "10px 14px", textAlign: "center" }}>
-                      <button onClick={() => setExpandido(expandido === d.driver_name ? null : d.driver_name)}
-                        style={{ padding: "4px 10px", borderRadius: 4, border: "1px solid #e4e7ec", background: expandido === d.driver_name ? "#1a3a6b" : "#fff", color: expandido === d.driver_name ? "#fff" : "#475569", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>
-                        {expandido === d.driver_name ? "Cerrar" : "Ver"}
-                      </button>
+                    <td style={{ ...tdStyle(), textAlign: "right", color: noPagada ? "#94a3b8" : (Number(r.ajuste_ns) >= 0 ? "#16a34a" : "#dc2626"), textDecoration: noPagada ? "line-through" : undefined }}>
+                      {Number(r.ajuste_ns) >= 0 ? "+" : ""}{fmtMXN(r.ajuste_ns)}
+                    </td>
+                    <td style={{ ...tdStyle(), textAlign: "center", fontSize: 9 }}>
+                      <span style={{ ...badgeAux(r.auxiliar_estado) }}>{r.auxiliar_estado}</span>
+                    </td>
+                    <td style={{ ...tdStyle(), textAlign: "right" }}>
+                      {Number(r.monto_auxiliar) > 0 ? fmtMXN(r.monto_auxiliar) : "—"}
+                    </td>
+                    <td style={{ ...tdStyle(), textAlign: "right", fontWeight: 700, color: noPagada ? "#991b1b" : "#16a34a", fontSize: 12 }}>
+                      {noPagada ? "$0" : fmtMXN(r.pago_neto)}
+                    </td>
+                    <td style={{ ...tdStyle(), fontSize: 10, color: noPagada ? "#991b1b" : "#92400e", fontWeight: noPagada ? 600 : 400, maxWidth: 220 }}>
+                      {r.observaciones || ""}
                     </td>
                   </tr>
-                  {expandido === d.driver_name && (
-                    <tr>
-                      <td colSpan={7} style={{ padding: 0, background: "#f8fafc" }}>
-                        <div style={{ padding: 14 }}>
-                          <div style={{ fontSize: 11, fontWeight: 600, color: "#475569", marginBottom: 8 }}>Detalle por ruta</div>
-                          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11, background: "#fff", border: "1px solid #e4e7ec", borderRadius: 4 }}>
-                            <thead>
-                              <tr style={{ background: "#f1f5f9" }}>
-                                <th style={{ padding: "6px 10px", textAlign: "left", fontWeight: 600, color: "#64748b" }}>ID Ruta</th>
-                                <th style={{ padding: "6px 10px", textAlign: "left", fontWeight: 600, color: "#64748b" }}>Vehículo · Zona · Tramo</th>
-                                <th style={{ padding: "6px 10px", textAlign: "center", fontWeight: 600, color: "#64748b" }}>SC</th>
-                                <th style={{ padding: "6px 10px", textAlign: "right", fontWeight: 600, color: "#64748b" }}>Km</th>
-                                <th style={{ padding: "6px 10px", textAlign: "right", fontWeight: 600, color: "#64748b" }}>NS</th>
-                                <th style={{ padding: "6px 10px", textAlign: "right", fontWeight: 600, color: "#64748b" }}>Tarifa</th>
-                                <th style={{ padding: "6px 10px", textAlign: "right", fontWeight: 600, color: "#64748b" }}>±NS</th>
-                                <th style={{ padding: "6px 10px", textAlign: "center", fontWeight: 600, color: "#64748b" }}>Aux</th>
-                                <th style={{ padding: "6px 10px", textAlign: "right", fontWeight: 600, color: "#64748b" }}>$Aux</th>
-                                <th style={{ padding: "6px 10px", textAlign: "right", fontWeight: 600, color: "#64748b" }}>Neto</th>
-                                <th style={{ padding: "6px 10px", textAlign: "left", fontWeight: 600, color: "#64748b" }}>Obs</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {d.rutas.map((r, j) => {
-                                const noPagada = r.ns_categoria === "NO_PAGO_NV>10%";
-                                return (
-                                <tr key={j} style={{ borderTop: "1px solid #f0f0f0", background: noPagada ? "#fef2f2" : undefined }}>
-                                  <td style={{ padding: "6px 10px", fontFamily: "monospace", fontSize: 10 }}>{r.id_ruta}</td>
-                                  <td style={{ padding: "6px 10px" }}>
-                                    {r.tipologia || "?"} · {r.zona || "?"} · {r.tramo_km}
-                                    {r.tiene_tarifa_especial && <span style={{ marginLeft: 4, fontSize: 9, color: "#7c3aed", fontWeight: 600 }}>ESP</span>}
-                                  </td>
-                                  <td style={{ padding: "6px 10px", textAlign: "center" }}>{r.service_center_id}</td>
-                                  <td style={{ padding: "6px 10px", textAlign: "right" }}>{Number(r.km_recorridos).toFixed(1)}</td>
-                                  <td style={{ padding: "6px 10px", textAlign: "right" }}>
-                                    {fmtPct(r.ns_pct)}{" "}
-                                    <span style={{ fontSize: 9, color: noPagada ? "#991b1b" : "#94a3b8", fontWeight: noPagada ? 600 : 400 }}>
-                                      ({noPagada ? `NV ${r.ns_no_visitado}%` : r.ns_categoria})
-                                    </span>
-                                  </td>
-                                  <td style={{ padding: "6px 10px", textAlign: "right", textDecoration: noPagada ? "line-through" : undefined, color: noPagada ? "#94a3b8" : undefined }}>{fmtMXN(r.tarifa_base)}</td>
-                                  <td style={{ padding: "6px 10px", textAlign: "right", color: noPagada ? "#94a3b8" : (r.ajuste_ns >= 0 ? "#16a34a" : "#dc2626"), textDecoration: noPagada ? "line-through" : undefined }}>
-                                    {r.ajuste_ns >= 0 ? "+" : ""}{fmtMXN(r.ajuste_ns)}
-                                  </td>
-                                  <td style={{ padding: "6px 10px", textAlign: "center", fontSize: 9 }}>
-                                    <span style={{
-                                      padding: "2px 6px", borderRadius: 3, fontWeight: 600,
-                                      background: r.auxiliar_estado === "OK" ? "#dcfce7" : r.auxiliar_estado === "MID_ROUTE_REVISION" ? "#fef3c7" : r.auxiliar_estado === "SOSPECHOSO" ? "#fee2e2" : "#f1f5f9",
-                                      color: r.auxiliar_estado === "OK" ? "#166534" : r.auxiliar_estado === "MID_ROUTE_REVISION" ? "#92400e" : r.auxiliar_estado === "SOSPECHOSO" ? "#991b1b" : "#64748b"
-                                    }}>{r.auxiliar_estado}</span>
-                                  </td>
-                                  <td style={{ padding: "6px 10px", textAlign: "right" }}>{r.monto_auxiliar > 0 ? fmtMXN(r.monto_auxiliar) : "—"}</td>
-                                  <td style={{ padding: "6px 10px", textAlign: "right", fontWeight: 700, color: noPagada ? "#991b1b" : "#16a34a" }}>
-                                    {noPagada ? "$0" : fmtMXN(r.pago_neto)}
-                                  </td>
-                                  <td style={{ padding: "6px 10px", fontSize: 10, color: noPagada ? "#991b1b" : "#92400e", fontWeight: noPagada ? 600 : 400 }}>{r.observaciones || ""}</td>
-                                </tr>
-                                );
-                              })}
-                            </tbody>
-                          </table>
-                        </div>
-                      </td>
-                    </tr>
-                  )}
-                </Fragment>
-              ))}
+                );
+              })}
+              {/* Fila de totales */}
+              {filasFiltradas.length > 0 && (
+                <tr style={{ background: "#f1f5f9", borderTop: "2px solid #cbd5e1", fontWeight: 700 }}>
+                  <td colSpan={7} style={{ ...tdStyle(), textAlign: "right", color: "#1a3a6b" }}>
+                    TOTAL · {filasFiltradas.length} rutas · {totales.choferes} choferes
+                  </td>
+                  <td style={{ ...tdStyle(), textAlign: "right", color: "#1a3a6b" }}>{fmtMXN(totales.tarifaBase)}</td>
+                  <td style={{ ...tdStyle(), textAlign: "right", color: totales.ajusteNS >= 0 ? "#16a34a" : "#dc2626" }}>
+                    {totales.ajusteNS >= 0 ? "+" : ""}{fmtMXN(totales.ajusteNS)}
+                  </td>
+                  <td style={tdStyle()}></td>
+                  <td style={{ ...tdStyle(), textAlign: "right", color: "#1a3a6b" }}>{fmtMXN(totales.auxiliar)}</td>
+                  <td style={{ ...tdStyle(), textAlign: "right", color: "#16a34a", fontSize: 13 }}>{fmtMXN(totales.pagoNeto)}</td>
+                  <td style={tdStyle()}></td>
+                </tr>
+              )}
             </tbody>
           </table>
         )}
@@ -8757,6 +8820,43 @@ function ListadoPagosDiarios() {
     </div>
   );
 }
+
+// Helpers de estilo de la tabla (declarados fuera del componente para no recrear cada render)
+const tdStyle = (bold) => ({
+  padding: "8px 10px",
+  fontWeight: bold ? 600 : 400,
+  verticalAlign: "top",
+});
+
+const Th = ({ children, onClick, right, center }) => (
+  <th onClick={onClick}
+    style={{
+      padding: "10px 10px",
+      textAlign: right ? "right" : center ? "center" : "left",
+      fontSize: 10,
+      fontWeight: 700,
+      color: "#475569",
+      cursor: onClick ? "pointer" : "default",
+      userSelect: "none",
+      background: "#f8fafc",
+      whiteSpace: "nowrap",
+    }}>
+    {children}
+  </th>
+);
+
+const badgeAux = (estado) => {
+  const map = {
+    "OK":                   { bg: "#dcfce7", co: "#166534" },
+    "MID_ROUTE_REVISION":   { bg: "#fef3c7", co: "#92400e" },
+    "MID_ROUTE":            { bg: "#fef3c7", co: "#92400e" },
+    "SOSPECHOSO":           { bg: "#fee2e2", co: "#991b1b" },
+    "NO_AUTORIZADO":        { bg: "#fee2e2", co: "#991b1b" },
+    "SIN_HELPER":           { bg: "#f1f5f9", co: "#64748b" },
+  };
+  const m = map[estado] || map["SIN_HELPER"];
+  return { padding: "2px 6px", borderRadius: 3, fontWeight: 600, background: m.bg, color: m.co };
+};
 
 // ═══════════════════════════════════════════════════════════════════════════
 // DRIVERS MAESTRO MX — con carga masiva Excel
