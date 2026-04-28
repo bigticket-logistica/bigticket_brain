@@ -8396,14 +8396,27 @@ function VariacionesDiarias() {
   useEffect(() => {
     (async () => {
       try {
-        const { data, error } = await sb.from("certronic_estados_documentos")
-          .select("fecha_snapshot")
-          .order("fecha_snapshot", { ascending: false })
-          .limit(2000);
-        if (error) throw error;
-        const unicas = [...new Set((data || []).map(r => r.fecha_snapshot))]
-          .sort()
-          .reverse();
+        // Paginamos en chunks de 1000 para sacar todas las fechas únicas.
+        // Tope: 30 chunks (= 30K filas, suficiente para ~4 días con 7.5K filas c/u).
+        const fechasSet = new Set();
+        let from = 0;
+        const limite = 1000;
+        const maxChunks = 30;
+
+        for (let c = 0; c < maxChunks; c++) {
+          const { data, error } = await sb.from("certronic_estados_documentos")
+            .select("fecha_snapshot")
+            .order("fecha_snapshot", { ascending: false })
+            .range(from, from + limite - 1);
+          if (error) throw error;
+          if (!data || data.length === 0) break;
+          for (const r of data) fechasSet.add(r.fecha_snapshot);
+          if (data.length < limite) break;
+          from += limite;
+        }
+
+        const unicas = Array.from(fechasSet).sort().reverse();
+        console.log(`[Variaciones] Fechas disponibles: ${unicas.length}`, unicas);
         setFechasDisponibles(unicas);
         if (unicas.length >= 2) {
           setFechaHoy(unicas[0]);
@@ -8413,7 +8426,7 @@ function VariacionesDiarias() {
           setFechaAyer(null);
         }
       } catch (e) {
-        console.error(e);
+        console.error("[Variaciones] Error cargando fechas:", e);
       }
     })();
   }, []);
