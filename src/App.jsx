@@ -5686,6 +5686,16 @@ function DashboardCertificacion({
     ? datos[cat]
     : datos[cat].filter(d => !d.recurso_inhabilitado);
 
+  // Estado de expansión por contratista (compuesto: id + transporte para evitar colisiones)
+  const [expandidoId, setExpandidoId] = useState(null);
+  // Cantidad de columnas para el colSpan del detalle expandido
+  const numColumnas = useMemo(() => {
+    let n = 4; // Operación, Transporte, Activos, %Reten + %Avance + Estado + Detalle = 7 base
+    n = 7 + (docsPorCategoria[tabCategoria]?.length || 0);
+    if (tabCategoria === "sub") n += 1; // columna Subcontratista
+    return n;
+  }, [tabCategoria, docsPorCategoria]);
+
   return (
     <>
       {/* KPIs */}
@@ -5773,6 +5783,7 @@ function DashboardCertificacion({
                   <th style={thE} onClick={() => toggleOrden("pct_retencion")}>% Reten.{flecha("pct_retencion")}</th>
                   <th style={thE} onClick={() => toggleOrden("pct_avance")}>% Avance{flecha("pct_avance")}</th>
                   <th style={thE} onClick={() => toggleOrden("estado_final")}>Estado{flecha("estado_final")}</th>
+                  <th style={thE}>Detalle</th>
                 </tr>
               </thead>
               <tbody>
@@ -5786,8 +5797,11 @@ function DashboardCertificacion({
                     "Esporádicos": "#f3e8ff",
                   }[mandante] || "#f1f5f9";
                   const isInhabilitado = d.recurso_inhabilitado;
+                  const filaId = d.id || `${d.transporte}|${d.categoria}|${d.subcontratista_nombre || ""}`;
+                  const expandida = expandidoId === filaId;
                   return (
-                    <tr key={d.id || i} style={{
+                    <Fragment key={filaId + "_" + i}>
+                    <tr style={{
                       borderBottom: "1px solid #f0f0f0",
                       background: isInhabilitado ? "#f8fafc" : (d.tiene_anomalia ? "#fff7ed" : (i % 2 === 0 ? "#fafbfc" : "#fff")),
                       opacity: isInhabilitado ? 0.6 : 1,
@@ -5841,7 +5855,30 @@ function DashboardCertificacion({
                         ) : "—"}
                       </td>
                       <td style={tdE}>{renderEstadoFinal(d.estado_final)}</td>
+                      <td style={tdE}>
+                        <button onClick={() => setExpandidoId(expandida ? null : filaId)}
+                          style={{
+                            padding: "3px 10px", borderRadius: 4, border: "1px solid #e4e7ec",
+                            background: expandida ? "#1a3a6b" : "#fff",
+                            color: expandida ? "#fff" : "#475569",
+                            fontSize: 10, fontWeight: 600, cursor: "pointer",
+                          }}>
+                          {expandida ? "Cerrar" : "Ver"}
+                        </button>
+                      </td>
                     </tr>
+                    {expandida && (
+                      <tr>
+                        <td colSpan={numColumnas} style={{ padding: 0, background: "#f8fafc" }}>
+                          <RecursosContratista
+                            transporte={d.transporte}
+                            categoria={d.categoria}
+                            subcontratistaNombre={d.subcontratista_nombre}
+                          />
+                        </td>
+                      </tr>
+                    )}
+                    </Fragment>
                   );
                 })}
               </tbody>
@@ -5863,6 +5900,309 @@ function DashboardCertificacion({
         </div>
       </div>
     </>
+  );
+}
+
+// ─── Componente: Lista de recursos del contratista ────────────────────
+// Lee de certronic_documentos para mostrar empleados y vehículos con
+// fecha_inicio. Marca los ingresados en el mes en curso con badge.
+function RecursosContratista({ transporte, categoria, subcontratistaNombre }) {
+  const [recursos, setRecursos] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [snapshotUsado, setSnapshotUsado] = useState(null);
+  const [busqueda, setBusqueda] = useState("");
+  const [filtroEntidad, setFiltroEntidad] = useState("todas");
+
+  useEffect(() => {
+    let cancel = false;
+    (async () => {
+      setLoading(true);
+      try {
+        // 1. Obtener el último snapshot disponible de certronic_documentos
+        const { data: snapData } = await sb.from("certronic_documentos")
+          .select("fecha_snapshot")
+          .order("fecha_snapshot", { ascending: false })
+          .limit(1);
+        if (!snapData || !snapData.length) {
+          if (!cancel) { setRecursos([]); setLoading(false); }
+          return;
+        }
+        const fechaSnapshot = snapData[0].fecha_snapshot;
+        if (!cancel) setSnapshotUsado(fechaSnapshot);
+
+        // 2. Cargar recursos (con paginación por si hay muchos)
+        // Tomamos solo distintos: contratista + recurso_nombre + tipo + fecha_inicio + acceso
+        let resultado = [];
+        let from = 0;
+        const limite = 1000;
+        while (true) {
+          let query = sb.from("certronic_documentos")
+            .select("contratista, recurso_nombre, tipo_recurso, fecha_inicio, acceso, planta")
+            .eq("fecha_snapshot", fechaSnapshot)
+            .ilike("contratista", transporte)
+            .range(from, from + limite - 1);
+          const { data, error } = await query;
+          if (cancel) return;
+          if (error) throw error;
+          if (!data || data.length === 0) break;
+          resultado = resultado.concat(data);
+          if (data.length < limite) break;
+          from += limite;
+        }
+
+        // 3. Deduplicar por (recurso_nombre + tipo_recurso) y conservar la primera fecha
+        const recursosMap = new Map();
+        for (const r of resultado) {
+          const key = `${r.recurso_nombre || ""}|${r.tipo_recurso || ""}`;
+          if (!recursosMap.has(key)) {
+            recursosMap.set(key, {
+              recurso_nombre: r.recurso_nombre,
+              tipo_recurso: r.tipo_recurso,
+              fecha_inicio: r.fecha_inicio,
+              acceso: r.acceso,
+              planta: r.planta,
+            });
+          } else {
+            // Si ya existe, conservar la fecha más antigua si la nueva es más antigua
+            const existing = recursosMap.get(key);
+            if (r.fecha_inicio && (!existing.fecha_inicio || r.fecha_inicio < existing.fecha_inicio)) {
+              existing.fecha_inicio = r.fecha_inicio;
+            }
+          }
+        }
+
+        // 4. Para SUB, filtrar solo el subcontratista específico (si está dado)
+        let recursosFinales = Array.from(recursosMap.values());
+        if (categoria === "SUB" && subcontratistaNombre) {
+          // Match flexible: ignorar mayúsculas/acentos
+          const norm = (s) => (s || "").toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "").trim();
+          const target = norm(subcontratistaNombre);
+          recursosFinales = recursosFinales.filter(r => norm(r.recurso_nombre).includes(target) || target.includes(norm(r.recurso_nombre)));
+        }
+
+        // 5. Ordenar: nuevos primero (más recientes), después por nombre
+        recursosFinales.sort((a, b) => {
+          if (a.fecha_inicio && !b.fecha_inicio) return -1;
+          if (!a.fecha_inicio && b.fecha_inicio) return 1;
+          if (a.fecha_inicio && b.fecha_inicio) {
+            const cmp = b.fecha_inicio.localeCompare(a.fecha_inicio);
+            if (cmp !== 0) return cmp;
+          }
+          return (a.recurso_nombre || "").localeCompare(b.recurso_nombre || "");
+        });
+
+        if (!cancel) setRecursos(recursosFinales);
+      } catch (e) {
+        console.error(e);
+        if (!cancel) setRecursos([]);
+      }
+      if (!cancel) setLoading(false);
+    })();
+    return () => { cancel = true; };
+  }, [transporte, categoria, subcontratistaNombre]);
+
+  // Formato de fecha
+  const fmtFecha = (iso) => {
+    if (!iso) return "—";
+    try {
+      const d = new Date(iso + "T00:00:00");
+      return d.toLocaleDateString("es-CL", { day: "2-digit", month: "short", year: "numeric" });
+    } catch { return iso; }
+  };
+
+  // Determinar si la fecha es del mes en curso
+  const esEsteMes = (iso) => {
+    if (!iso) return false;
+    const hoy = new Date();
+    const fecha = new Date(iso + "T00:00:00");
+    return fecha.getFullYear() === hoy.getFullYear() && fecha.getMonth() === hoy.getMonth();
+  };
+  // Días desde el ingreso
+  const diasDesde = (iso) => {
+    if (!iso) return null;
+    const hoy = new Date();
+    const fecha = new Date(iso + "T00:00:00");
+    return Math.floor((hoy - fecha) / (1000 * 60 * 60 * 24));
+  };
+  // Mes en castellano
+  const nombreMesActual = () => {
+    return new Date().toLocaleDateString("es-CL", { month: "long" }).toUpperCase();
+  };
+
+  // Filtros aplicados
+  const recursosFiltrados = useMemo(() => {
+    let res = recursos;
+    if (busqueda) {
+      const q = busqueda.toLowerCase();
+      res = res.filter(r => (r.recurso_nombre || "").toLowerCase().includes(q));
+    }
+    if (filtroEntidad !== "todas") {
+      res = res.filter(r => r.tipo_recurso === filtroEntidad);
+    }
+    return res;
+  }, [recursos, busqueda, filtroEntidad]);
+
+  // Stats
+  const stats = useMemo(() => ({
+    total: recursos.length,
+    empleados: recursos.filter(r => r.tipo_recurso === "empleado").length,
+    vehiculos: recursos.filter(r => r.tipo_recurso === "vehiculo").length,
+    contratistas: recursos.filter(r => r.tipo_recurso === "contratista").length,
+    nuevosEsteMes: recursos.filter(r => esEsteMes(r.fecha_inicio)).length,
+    inhabilitados: recursos.filter(r => r.acceso === "Inhabilitado").length,
+    sinFecha: recursos.filter(r => !r.fecha_inicio).length,
+  }), [recursos]);
+
+  return (
+    <div style={{ padding: 14 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
+        <div>
+          <div style={{ fontSize: 12, fontWeight: 700, color: "#1a3a6b" }}>
+            Recursos del contratista — {transporte}
+          </div>
+          <div style={{ fontSize: 10, color: "#64748b", marginTop: 2 }}>
+            {snapshotUsado && `Snapshot: ${snapshotUsado}`}
+            {categoria === "SUB" && subcontratistaNombre && ` · Filtrado: ${subcontratistaNombre}`}
+          </div>
+        </div>
+        {!loading && recursos.length > 0 && (
+          <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+            <input type="text" placeholder="Buscar recurso..." value={busqueda} onChange={e => setBusqueda(e.target.value)}
+              style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 4, padding: "5px 10px", fontSize: 11, minWidth: 160 }} />
+            <select value={filtroEntidad} onChange={e => setFiltroEntidad(e.target.value)}
+              style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 4, padding: "5px 10px", fontSize: 11 }}>
+              <option value="todas">Todos los tipos</option>
+              <option value="empleado">Empleados</option>
+              <option value="vehiculo">Vehículos</option>
+              <option value="contratista">Contratista</option>
+            </select>
+          </div>
+        )}
+      </div>
+
+      {loading ? (
+        <div style={{ padding: 20, textAlign: "center", color: "#94a3b8", fontSize: 12 }}>Cargando recursos...</div>
+      ) : recursos.length === 0 ? (
+        <div style={{ padding: 20, textAlign: "center", color: "#94a3b8", fontSize: 12 }}>
+          <div style={{ fontWeight: 600, marginBottom: 4, color: "#475569" }}>Sin recursos en certronic_documentos</div>
+          <div style={{ fontSize: 11 }}>El reporte completo (lunes/jueves) puede no haber capturado este contratista todavía.</div>
+        </div>
+      ) : (
+        <>
+          {/* Mini KPIs */}
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+            <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 4, padding: "5px 10px", fontSize: 11 }}>
+              <strong>{stats.total}</strong> recursos
+              {stats.empleados > 0 && <span style={{ color: "#64748b" }}> · {stats.empleados} empl.</span>}
+              {stats.vehiculos > 0 && <span style={{ color: "#64748b" }}> · {stats.vehiculos} veh.</span>}
+            </div>
+            {stats.nuevosEsteMes > 0 && (
+              <div style={{ background: "#dcfce7", border: "1px solid #86efac", borderRadius: 4, padding: "5px 10px", fontSize: 11, color: "#166534", fontWeight: 600 }}>
+                🆕 {stats.nuevosEsteMes} ingresaron en {nombreMesActual()}
+              </div>
+            )}
+            {stats.inhabilitados > 0 && (
+              <div style={{ background: "#fee2e2", border: "1px solid #fca5a5", borderRadius: 4, padding: "5px 10px", fontSize: 11, color: "#991b1b", fontWeight: 600 }}>
+                🚫 {stats.inhabilitados} inhabilitados
+              </div>
+            )}
+            {stats.sinFecha > 0 && (
+              <div style={{ background: "#f1f5f9", border: "1px solid #e2e8f0", borderRadius: 4, padding: "5px 10px", fontSize: 11, color: "#64748b" }}>
+                ? {stats.sinFecha} sin fecha de ingreso
+              </div>
+            )}
+          </div>
+
+          {/* Tabla de recursos */}
+          <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 4, overflow: "auto", maxHeight: 400 }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+              <thead style={{ position: "sticky", top: 0, background: "#f1f5f9", zIndex: 1 }}>
+                <tr>
+                  <th style={{ padding: "6px 10px", textAlign: "left", fontSize: 10, fontWeight: 600, color: "#64748b" }}>Tipo</th>
+                  <th style={{ padding: "6px 10px", textAlign: "left", fontSize: 10, fontWeight: 600, color: "#64748b" }}>Recurso</th>
+                  <th style={{ padding: "6px 10px", textAlign: "left", fontSize: 10, fontWeight: 600, color: "#64748b" }}>Fecha de ingreso</th>
+                  <th style={{ padding: "6px 10px", textAlign: "right", fontSize: 10, fontWeight: 600, color: "#64748b" }}>Días</th>
+                  <th style={{ padding: "6px 10px", textAlign: "center", fontSize: 10, fontWeight: 600, color: "#64748b" }}>Indicador</th>
+                  <th style={{ padding: "6px 10px", textAlign: "center", fontSize: 10, fontWeight: 600, color: "#64748b" }}>Acceso</th>
+                </tr>
+              </thead>
+              <tbody>
+                {recursosFiltrados.map((r, i) => {
+                  const esteMes = esEsteMes(r.fecha_inicio);
+                  const dias = diasDesde(r.fecha_inicio);
+                  const tipoColor = {
+                    "empleado": "#dbeafe",
+                    "vehiculo": "#fef3c7",
+                    "contratista": "#f3e8ff",
+                  }[r.tipo_recurso] || "#f1f5f9";
+                  const tipoTextColor = {
+                    "empleado": "#1e40af",
+                    "vehiculo": "#92400e",
+                    "contratista": "#6b21a8",
+                  }[r.tipo_recurso] || "#64748b";
+                  return (
+                    <tr key={i} style={{
+                      borderTop: "1px solid #f1f5f9",
+                      background: esteMes ? "#ecfdf5" : undefined,
+                    }}>
+                      <td style={{ padding: "6px 10px" }}>
+                        <span style={{ fontSize: 9, padding: "1px 6px", borderRadius: 3, background: tipoColor, color: tipoTextColor, fontWeight: 600, textTransform: "uppercase" }}>
+                          {r.tipo_recurso || "—"}
+                        </span>
+                      </td>
+                      <td style={{ padding: "6px 10px", fontWeight: 500 }}>{r.recurso_nombre || "—"}</td>
+                      <td style={{ padding: "6px 10px", color: r.fecha_inicio ? "#475569" : "#cbd5e1", fontFamily: r.fecha_inicio ? "inherit" : "monospace", fontSize: r.fecha_inicio ? 11 : 10 }}>
+                        {fmtFecha(r.fecha_inicio)}
+                      </td>
+                      <td style={{ padding: "6px 10px", textAlign: "right", color: "#64748b", fontSize: 10 }}>
+                        {dias != null ? `${dias} días` : "—"}
+                      </td>
+                      <td style={{ padding: "6px 10px", textAlign: "center" }}>
+                        {esteMes && (
+                          <span style={{
+                            fontSize: 9, padding: "2px 7px", borderRadius: 10, fontWeight: 700,
+                            background: "#16a34a", color: "#fff",
+                          }}>
+                            {nombreMesActual()}
+                          </span>
+                        )}
+                        {!esteMes && dias != null && dias <= 90 && (
+                          <span style={{
+                            fontSize: 9, padding: "2px 7px", borderRadius: 10, fontWeight: 600,
+                            background: "#fef3c7", color: "#92400e",
+                          }}>
+                            ≤ 90d
+                          </span>
+                        )}
+                      </td>
+                      <td style={{ padding: "6px 10px", textAlign: "center" }}>
+                        <span style={{
+                          fontSize: 10, padding: "2px 6px", borderRadius: 3, fontWeight: 600,
+                          background: r.acceso === "Habilitado" ? "#dcfce7" : r.acceso === "Inhabilitado" ? "#fee2e2" : "#f1f5f9",
+                          color: r.acceso === "Habilitado" ? "#166534" : r.acceso === "Inhabilitado" ? "#991b1b" : "#64748b",
+                        }}>
+                          {r.acceso || "—"}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            {recursosFiltrados.length === 0 && (
+              <div style={{ padding: 16, textAlign: "center", color: "#94a3b8", fontSize: 11 }}>
+                Ningún recurso coincide con los filtros
+              </div>
+            )}
+          </div>
+
+          <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 8, fontStyle: "italic" }}>
+            💡 Los recursos resaltados en verde con badge "{nombreMesActual()}" son los que ingresaron este mes.
+            Tener en cuenta: documentos de meses anteriores a su ingreso pueden no aplicar (revisar manualmente).
+          </div>
+        </>
+      )}
+    </div>
   );
 }
 
