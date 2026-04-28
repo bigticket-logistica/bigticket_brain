@@ -8474,6 +8474,7 @@ function AyudantesDetalleDia() {
   const [loading, setLoading] = useState(true);
   const [fecha, setFecha] = useState(new Date().toISOString().split("T")[0]);
   const [busqueda, setBusqueda] = useState("");
+  const [filtroAsignable, setFiltroAsignable] = useState("asignables"); // "asignables" | "no_asignables" | "todas"
 
   useEffect(() => { cargar(); }, [fecha]);
 
@@ -8512,6 +8513,7 @@ function AyudantesDetalleDia() {
         driver_name: s.driver_name,
         vehiculo_descripcion: s.vehiculo_descripcion,
         placa: s.placa,
+        is_assignable: s.is_assignable,
         snapshots: { inicio: null, media_manana: null, tarde: null, fin_tarde: null, pre_cierre: null },
         snapshots_horas: {},
         snapshots_con_helper: 0,
@@ -8521,19 +8523,42 @@ function AyudantesDetalleDia() {
       m[k].snapshots_horas[s.momento_dia] = s.hora_snapshot;
       m[k].total_snapshots++;
       if (s.has_helper) m[k].snapshots_con_helper++;
+      // Si en algún snapshot fue asignable, marcamos como asignable
+      if (s.is_assignable) m[k].is_assignable = true;
     }
     return Object.values(m)
-      .filter(c => !busqueda || 
-        (c.driver_name || "").toLowerCase().includes(busqueda.toLowerCase()) ||
-        (c.placa || "").toLowerCase().includes(busqueda.toLowerCase()) ||
-        (c.service_center_id || "").toLowerCase().includes(busqueda.toLowerCase()) ||
-        String(c.id_ruta).includes(busqueda)
-      )
+      .filter(c => {
+        // Filtro asignable
+        if (filtroAsignable === "asignables" && !c.is_assignable) return false;
+        if (filtroAsignable === "no_asignables" && c.is_assignable) return false;
+        // Filtro búsqueda
+        if (!busqueda) return true;
+        return (
+          (c.driver_name || "").toLowerCase().includes(busqueda.toLowerCase()) ||
+          (c.placa || "").toLowerCase().includes(busqueda.toLowerCase()) ||
+          (c.service_center_id || "").toLowerCase().includes(busqueda.toLowerCase()) ||
+          String(c.id_ruta).includes(busqueda)
+        );
+      })
       .sort((a, b) => {
         if (a.service_center_id !== b.service_center_id) return a.service_center_id.localeCompare(b.service_center_id);
         return (a.cluster || "").localeCompare(b.cluster || "");
       });
-  }, [snapshots, busqueda]);
+  }, [snapshots, busqueda, filtroAsignable]);
+
+  // Conteos para mostrar en filtros
+  const todasRutas = useMemo(() => {
+    const m = {};
+    for (const s of snapshots) {
+      const k = String(s.id_ruta);
+      if (!m[k]) m[k] = { is_assignable: false };
+      if (s.is_assignable) m[k].is_assignable = true;
+    }
+    return Object.values(m);
+  }, [snapshots]);
+
+  const conteoAsignables = todasRutas.filter(r => r.is_assignable).length;
+  const conteoNoAsignables = todasRutas.filter(r => !r.is_assignable).length;
 
   const totalConHelper = consolidados.filter(c => c.snapshots_con_helper >= 3).length;
   const totalSospechosos = consolidados.filter(c => c.snapshots_con_helper >= 1 && c.snapshots_con_helper < 3).length;
@@ -8707,10 +8732,33 @@ function AyudantesDetalleDia() {
         </div>
       </div>
 
-      {/* Búsqueda */}
-      <div style={{ marginBottom: 14 }}>
+      {/* Filtros */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap", alignItems: "center" }}>
+        <div style={{ display: "flex", gap: 4 }}>
+          <button onClick={() => setFiltroAsignable("asignables")}
+            style={{ padding: "7px 14px", borderRadius: 4, border: `1px solid ${filtroAsignable === "asignables" ? "#1a3a6b" : "#e4e7ec"}`,
+              background: filtroAsignable === "asignables" ? "#1a3a6b" : "#fff",
+              color: filtroAsignable === "asignables" ? "#fff" : "#475569",
+              fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+            Asignadas ({conteoAsignables})
+          </button>
+          <button onClick={() => setFiltroAsignable("no_asignables")}
+            style={{ padding: "7px 14px", borderRadius: 4, border: `1px solid ${filtroAsignable === "no_asignables" ? "#1a3a6b" : "#e4e7ec"}`,
+              background: filtroAsignable === "no_asignables" ? "#1a3a6b" : "#fff",
+              color: filtroAsignable === "no_asignables" ? "#fff" : "#475569",
+              fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+            Sin asignar ({conteoNoAsignables})
+          </button>
+          <button onClick={() => setFiltroAsignable("todas")}
+            style={{ padding: "7px 14px", borderRadius: 4, border: `1px solid ${filtroAsignable === "todas" ? "#1a3a6b" : "#e4e7ec"}`,
+              background: filtroAsignable === "todas" ? "#1a3a6b" : "#fff",
+              color: filtroAsignable === "todas" ? "#fff" : "#475569",
+              fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+            Todas ({conteoAsignables + conteoNoAsignables})
+          </button>
+        </div>
         <input type="text" placeholder="Buscar por driver, placa, SC o ID ruta..." value={busqueda} onChange={e => setBusqueda(e.target.value)}
-          style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 4, padding: "7px 10px", fontSize: 12, width: "100%", maxWidth: 400 }} />
+          style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 4, padding: "7px 10px", fontSize: 12, flex: 1, minWidth: 240 }} />
       </div>
 
       {/* Tabla */}
