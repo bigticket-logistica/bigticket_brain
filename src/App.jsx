@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useRef, useMemo, Fragment } from "react";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const SUPABASE_URL = "https://psvdtgjvognbmxfvqbaa.supabase.co";
@@ -8109,30 +8109,356 @@ function ModuloPagosMadre() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// LISTADO DE PAGOS DIARIOS (vista principal)
-// Usa la tabla maestro_jornada_mx que se llena con el motor (cuando esté listo)
-// Por ahora muestra un placeholder con datos de ejemplo
+// LISTADO DE PAGOS DIARIOS — con motor de cálculo (Bloque D)
+// Lee de maestro_jornada_mx; si no hay datos del día, ofrece calcularlos
+// cruzando viajes + logistic_ayudantes_snapshots + matriz_precios + matriz_ns
 // ═══════════════════════════════════════════════════════════════════════════
+
+// ─── Helpers de cálculo ────────────────────────────────────────────────────
+
+// Parsea el campo "Vehículo" del tms_raw a una de: LARGE VAN | SMALL VAN | CAR
+function parsearTipologia(vehiculoRaw) {
+  if (!vehiculoRaw) return null;
+  const v = String(vehiculoRaw).toUpperCase();
+  if (v.includes("LARGE VAN")) return "LARGE VAN";
+  if (v.includes("SMALL VAN")) return "SMALL VAN";
+  if (v.includes("CAR")) return "CAR";
+  return null;
+}
+
+// Convierte tipología a la forma usada en tarifas_especiales_mx (Title Case)
+function tipologiaTitleCase(t) {
+  if (!t) return null;
+  const map = { "LARGE VAN": "Large Van", "SMALL VAN": "Small Van", "CAR": "Car" };
+  return map[t] || t;
+}
+
+// Determina el tramo de km
+function determinarTramoKm(km) {
+  const k = Number(km) || 0;
+  if (k <= 100) return "0-100";
+  if (k <= 150) return "101-150";
+  if (k <= 200) return "151-200";
+  if (k <= 250) return "201-250";
+  return "251+";
+}
+
+// Aplica matriz_ns para obtener categoría y porcentaje
+function aplicarMatrizNS(nsPct, matrizNS) {
+  const ns = Number(nsPct) || 0;
+  for (const r of matrizNS) {
+    const min = Number(r.ns_min);
+    const max = Number(r.ns_max);
+    if (ns >= min && ns <= max) {
+      return { categoria: r.label, porcentaje: Number(r.porcentaje), tipo: r.tipo };
+    }
+  }
+  return { categoria: "Sin categoría", porcentaje: 0, tipo: "neutro" };
+}
+
+// Busca tarifa: primero en tarifas_especiales_mx, sino en matriz_precios
+function buscarTarifa(driverName, tipologia, zona, tramo, especiales, matrizPrecios) {
+  // 1) Tarifa especial por driver
+  const tipTitleCase = tipologiaTitleCase(tipologia);
+  const especial = especiales.find(e =>
+    e.driver_name === driverName &&
+    e.tipologia === tipTitleCase &&
+    e.zona === zona &&
+    e.tramo_km === tramo
+  );
+  if (especial) return { monto: Number(especial.monto), fuente: "ESPECIAL" };
+
+  // 2) Matriz precios general
+  const general = matrizPrecios.find(m =>
+    m.tipo_vehiculo === tipologia &&
+    m.zonificacion === zona &&
+    m.tramo_km === tramo &&
+    m.activo === true
+  );
+  if (general) return { monto: Number(general.tarifa_mxn), fuente: "MATRIZ" };
+
+  return { monto: 0, fuente: "SIN_TARIFA" };
+}
+
+// Determina estado consolidado del auxiliar (replica vw_ayudantes_dia_actual)
+function consolidarAuxiliar(snapshots) {
+  if (!snapshots || snapshots.length === 0) {
+    return { estado: "SIN_HELPER", total: 0, conHelper: 0, helperInicio: false };
+  }
+  const conHelper = snapshots.filter(s => s.has_helper).length;
+  const helperInicio = snapshots.some(s => s.momento_dia === "inicio" && s.has_helper);
+
+  let estado;
+  if (conHelper >= 3 && helperInicio) estado = "OK";
+  else if (conHelper >= 3) estado = "MID_ROUTE";
+  else if (conHelper >= 1) estado = "SOSPECHOSO";
+  else estado = "SIN_HELPER";
+
+  return { estado, total: snapshots.length, conHelper, helperInicio };
+}
+
+// Aplica matriz_ayudantes_autorizados — devuelve si paga y cuánto
+function aplicarMatrizAyudantes(scId, vehiculoTipo, zona, matriz) {
+  // Buscar la regla más específica primero (mayor prioridad gana)
+  const ordenadas = [...matriz].sort((a, b) => (b.prioridad || 0) - (a.prioridad || 0));
+  for (const r of ordenadas) {
+    const matchSC = r.service_center_id == null || r.service_center_id === scId;
+    const matchVeh = r.vehiculo_tipo == null || r.vehiculo_tipo === vehiculoTipo;
+    const matchZona = r.zona == null || r.zona === zona;
+    if (matchSC && matchVeh && matchZona) {
+      return { autorizado: r.autorizado, monto: Number(r.monto || 0) };
+    }
+  }
+  return { autorizado: false, monto: 0 };
+}
+
+// Calcula la semana_pago en formato "YYYY-Www" (ISO)
+function calcularSemanaPago(fechaStr) {
+  const d = new Date(fechaStr + "T00:00:00");
+  const target = new Date(d.valueOf());
+  const dayNr = (d.getDay() + 6) % 7;
+  target.setDate(target.getDate() - dayNr + 3);
+  const firstThursday = target.valueOf();
+  target.setMonth(0, 1);
+  if (target.getDay() !== 4) {
+    target.setMonth(0, 1 + ((4 - target.getDay()) + 7) % 7);
+  }
+  const week = 1 + Math.ceil((firstThursday - target) / (7 * 24 * 3600 * 1000));
+  return `${d.getFullYear()}-W${String(week).padStart(2, "0")}`;
+}
+
+// ─── Motor de cálculo principal ────────────────────────────────────────────
+// Toma todos los inputs y devuelve los registros listos para INSERT en
+// maestro_jornada_mx
+function calcularPagos({ viajes, snapshots, scZonas, matrizPrecios, especiales, matrizNS, matrizAux }) {
+  const errores = [];
+  const filas = [];
+
+  // Index snapshots por id_ruta
+  const snapsPorRuta = {};
+  for (const s of snapshots) {
+    const k = String(s.id_ruta);
+    if (!snapsPorRuta[k]) snapsPorRuta[k] = [];
+    snapsPorRuta[k].push(s);
+  }
+
+  // Index sc_zonas
+  const zonaPorSC = {};
+  for (const z of scZonas) zonaPorSC[z.service_center_id] = z.zona;
+
+  for (const v of viajes) {
+    const tms = v.tms_raw || {};
+    const idRuta = String(tms["Id de la ruta"] || "");
+    const driverName = tms["Nombre del transportista"] || v.observaciones || "Sin nombre";
+    const driverIdML = tms["Id del transportista"] ? Number(tms["Id del transportista"]) : null;
+    const sc = tms["Service center"] || null;
+    const vehiculoRaw = tms["Vehículo"] || null;
+    const placa = tms["Placa"] || tms["Patente"] || null;
+    const ciclo = tms["Ciclo"] || null;
+    const km = Number(tms["Kilómetros recorridos"] || v.km_recorridos || 0);
+    const nsPct = Number(tms["Entrega exitosa"] || v.eficiencia_pct || 0);
+    const noVisitado = Number(tms["No visitado"] || 0);
+    const enviosDespachados = Number(tms["Envíos despachados"] || v.paquetes_asignados || 0);
+    const enviosEntregados = Number(tms["Envíos entregados"] || v.paquetes_entregados || 0);
+
+    const fechaSalida = v.fecha_salida ? String(v.fecha_salida).slice(0, 10) : null;
+
+    // Validaciones
+    if (!idRuta) { errores.push({ tms_id: v.tms_id, motivo: "Sin Id de la ruta en tms_raw" }); continue; }
+    if (!sc) { errores.push({ tms_id: v.tms_id, motivo: "Sin Service center" }); continue; }
+
+    const tipologia = parsearTipologia(vehiculoRaw);
+    const zona = zonaPorSC[sc] || null;
+    const tramo = determinarTramoKm(km);
+
+    const obs = [];
+    if (!tipologia) obs.push(`Tipología no reconocida: "${vehiculoRaw}"`);
+    if (!zona) obs.push(`SC no mapeado en sc_zonas_mx: ${sc}`);
+
+    // Tarifa
+    let tarifaInfo = { monto: 0, fuente: "SIN_TARIFA" };
+    if (tipologia && zona) {
+      tarifaInfo = buscarTarifa(driverName, tipologia, zona, tramo, especiales, matrizPrecios);
+      if (tarifaInfo.fuente === "SIN_TARIFA") {
+        obs.push(`Sin tarifa para ${tipologia} / ${zona} / ${tramo}`);
+      }
+    }
+    const tarifaBase = tarifaInfo.monto;
+    const tieneTarifaEspecial = tarifaInfo.fuente === "ESPECIAL";
+
+    // Factor NS
+    const ns = aplicarMatrizNS(nsPct, matrizNS);
+    const factorNS = 1 + (ns.porcentaje / 100);
+    const ajusteNS = tarifaBase * (ns.porcentaje / 100);
+
+    // Auxiliar
+    const snapsRuta = snapsPorRuta[idRuta] || [];
+    const aux = consolidarAuxiliar(snapsRuta);
+    let auxiliarEstado = aux.estado;
+    let montoAux = 0;
+
+    if (aux.estado === "OK" || aux.estado === "MID_ROUTE") {
+      // Verificar matriz de autorización
+      const autorizacion = aplicarMatrizAyudantes(sc, tipologia, zona, matrizAux);
+      if (autorizacion.autorizado) {
+        montoAux = autorizacion.monto;
+        if (aux.estado === "MID_ROUTE") {
+          auxiliarEstado = "MID_ROUTE_REVISION";
+          obs.push("Helper sin estar al inicio — pago $300 con flag de revisión");
+        }
+      } else {
+        montoAux = 0;
+        auxiliarEstado = "NO_AUTORIZADO";
+        obs.push(`Tuvo helper pero matriz NO autoriza para ${sc}/${tipologia}/${zona}`);
+      }
+    }
+
+    // ⭐ REGLA CRÍTICA: Si no_visitado > 10% → no se paga el viaje (todo en 0)
+    // Conservamos los valores calculados como informativos para auditoría
+    const descartadoPorNV = noVisitado > 10;
+    if (descartadoPorNV) {
+      obs.push(`NO PAGADO: no_visitado ${noVisitado}% supera umbral 10%`);
+    }
+
+    // Pago bruto / neto
+    const pagoBruto = descartadoPorNV ? 0 : (tarifaBase + ajusteNS + montoAux);
+    const descuentos = 0; // por ahora
+    const pagoNeto = pagoBruto - descuentos;
+    const nsCategoriaFinal = descartadoPorNV ? "NO_PAGO_NV>10%" : ns.categoria;
+
+    filas.push({
+      fecha: fechaSalida,
+      id_ruta: idRuta,
+      driver_id: driverIdML,
+      driver_name: driverName,
+      vehiculo_raw: vehiculoRaw,
+      tipologia,
+      placa,
+      service_center_id: sc,
+      zona,
+      km_recorridos: km,
+      tramo_km: tramo,
+      ciclo,
+      envios_despachados: enviosDespachados,
+      envios_entregados: enviosEntregados,
+      ns_pct: nsPct,
+      ns_no_visitado: noVisitado,
+      ns_categoria: nsCategoriaFinal,
+      factor_ns: factorNS,
+      tarifa_base: tarifaBase,
+      ajuste_ns: ajusteNS,
+      tiene_auxiliar: aux.conHelper > 0,
+      auxiliar_estado: auxiliarEstado,
+      auxiliar_snapshots_total: aux.conHelper,
+      monto_auxiliar: descartadoPorNV ? 0 : montoAux,
+      pago_bruto: pagoBruto,
+      descuentos_externos: descuentos,
+      pago_neto: pagoNeto,
+      semana_pago: calcularSemanaPago(fechaSalida),
+      tiene_tarifa_especial: tieneTarifaEspecial,
+      observaciones: obs.length > 0 ? obs.join(" | ") : null,
+    });
+  }
+
+  return { filas, errores };
+}
+
+// ─── Componente principal ──────────────────────────────────────────────────
 function ListadoPagosDiarios() {
+  const [fecha, setFecha] = useState(fechaOperativaOffset(-1)); // ayer por defecto
   const [pagos, setPagos] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [fecha, setFecha] = useState(fechaHoyOperativa());
-  const [fechaFin, setFechaFin] = useState(fechaHoyOperativa());
+  const [calculando, setCalculando] = useState(false);
   const [busqueda, setBusqueda] = useState("");
+  const [expandido, setExpandido] = useState(null); // driver_name del que se ve detalle
+  const [resumenCalculo, setResumenCalculo] = useState(null);
 
-  useEffect(() => { cargar(); }, [fecha, fechaFin]);
+  useEffect(() => { cargar(); }, [fecha]);
 
   const cargar = async () => {
     setLoading(true);
+    setResumenCalculo(null);
     try {
-      const { data } = await sb.from("maestro_jornada_mx")
+      const { data, error } = await sb.from("maestro_jornada_mx")
         .select("*")
-        .gte("fecha", fecha)
-        .lte("fecha", fechaFin)
-        .order("fecha", { ascending: false });
+        .eq("fecha", fecha)
+        .order("driver_name");
+      if (error) throw error;
       setPagos(data || []);
     } catch (e) { console.error(e); }
     setLoading(false);
+  };
+
+  const calcularDia = async () => {
+    if (!confirm(`¿Calcular pagos del ${fecha}?\n\nEsto leerá los viajes y snapshots de ese día y guardará el resultado en maestro_jornada_mx.`)) return;
+    setCalculando(true);
+    setResumenCalculo(null);
+
+    try {
+      // Cargar todos los inputs en paralelo
+      const fechaInicio = fecha;
+      const fechaSig = new Date(fecha + "T00:00:00");
+      fechaSig.setDate(fechaSig.getDate() + 1);
+      const fechaFin = fechaSig.toISOString().slice(0, 10);
+
+      const [vRes, sRes, zRes, mpRes, eRes, nsRes, maRes] = await Promise.all([
+        sb.from("viajes").select("*").eq("pais", "MX").gte("fecha_salida", fechaInicio).lt("fecha_salida", fechaFin),
+        sb.from("logistic_ayudantes_snapshots").select("*").eq("fecha", fecha),
+        sb.from("sc_zonas_mx").select("service_center_id, zona"),
+        sb.from("matriz_precios").select("*").eq("activo", true),
+        sb.from("tarifas_especiales_mx").select("*"),
+        sb.from("matriz_ns").select("*").eq("activo", true),
+        sb.from("matriz_ayudantes_autorizados").select("*"),
+      ]);
+
+      if (vRes.error) throw new Error("viajes: " + vRes.error.message);
+      if (sRes.error) throw new Error("snapshots: " + sRes.error.message);
+
+      const viajes = vRes.data || [];
+      if (viajes.length === 0) {
+        alert(`No hay viajes MX para ${fecha}. Verifique que el informe Logistic se haya cargado.`);
+        setCalculando(false);
+        return;
+      }
+
+      const { filas, errores } = calcularPagos({
+        viajes,
+        snapshots: sRes.data || [],
+        scZonas: zRes.data || [],
+        matrizPrecios: mpRes.data || [],
+        especiales: eRes.data || [],
+        matrizNS: nsRes.data || [],
+        matrizAux: maRes.data || [],
+      });
+
+      // Borrar lo existente del día (recálculo idempotente)
+      const { error: delError } = await sb.from("maestro_jornada_mx").delete().eq("fecha", fecha);
+      if (delError) throw new Error("delete previo: " + delError.message);
+
+      // Insertar en chunks de 100 para no superar límites
+      let insertados = 0;
+      for (let i = 0; i < filas.length; i += 100) {
+        const chunk = filas.slice(i, i + 100);
+        const { error: insError } = await sb.from("maestro_jornada_mx").insert(chunk);
+        if (insError) throw new Error("insert: " + insError.message);
+        insertados += chunk.length;
+      }
+
+      setResumenCalculo({
+        viajes_procesados: viajes.length,
+        registros_calculados: filas.length,
+        registros_insertados: insertados,
+        errores: errores.length,
+        detalle_errores: errores,
+        timestamp: new Date().toISOString(),
+      });
+
+      await cargar();
+    } catch (e) {
+      console.error(e);
+      alert("Error en cálculo: " + e.message);
+    }
+    setCalculando(false);
   };
 
   // Agrupar por driver
@@ -8140,34 +8466,67 @@ function ListadoPagosDiarios() {
     const m = {};
     for (const p of pagos) {
       const k = p.driver_name || "Sin nombre";
-      if (!m[k]) m[k] = { driver_name: k, driver_id: p.driver_id, total_rutas: 0, pago_neto: 0, ultima_fecha: null };
+      if (!m[k]) {
+        m[k] = {
+          driver_name: k,
+          driver_id: p.driver_id,
+          rutas: [],
+          total_rutas: 0,
+          rutas_no_pagadas: 0,
+          tarifa_base_total: 0,
+          ajuste_ns_total: 0,
+          monto_auxiliar_total: 0,
+          pago_bruto_total: 0,
+          pago_neto_total: 0,
+          alertas: 0,
+        };
+      }
+      m[k].rutas.push(p);
       m[k].total_rutas++;
-      m[k].pago_neto += Number(p.pago_neto || 0);
-      if (!m[k].ultima_fecha || p.fecha > m[k].ultima_fecha) m[k].ultima_fecha = p.fecha;
+      if (p.ns_categoria === "NO_PAGO_NV>10%") m[k].rutas_no_pagadas++;
+      m[k].tarifa_base_total += Number(p.tarifa_base || 0);
+      m[k].ajuste_ns_total += Number(p.ajuste_ns || 0);
+      m[k].monto_auxiliar_total += Number(p.monto_auxiliar || 0);
+      m[k].pago_bruto_total += Number(p.pago_bruto || 0);
+      m[k].pago_neto_total += Number(p.pago_neto || 0);
+      if (p.observaciones) m[k].alertas++;
     }
-    return Object.values(m).filter(d => 
+    return Object.values(m).filter(d =>
       !busqueda || d.driver_name.toLowerCase().includes(busqueda.toLowerCase())
-    ).sort((a, b) => b.pago_neto - a.pago_neto);
+    ).sort((a, b) => b.pago_neto_total - a.pago_neto_total);
   }, [pagos, busqueda]);
 
-  const totalGlobal = agrupados.reduce((s, d) => s + d.pago_neto, 0);
+  const totales = useMemo(() => ({
+    choferes: agrupados.length,
+    rutas: pagos.length,
+    tarifaBase: agrupados.reduce((s, d) => s + d.tarifa_base_total, 0),
+    ajusteNS: agrupados.reduce((s, d) => s + d.ajuste_ns_total, 0),
+    auxiliar: agrupados.reduce((s, d) => s + d.monto_auxiliar_total, 0),
+    pagoNeto: agrupados.reduce((s, d) => s + d.pago_neto_total, 0),
+    alertas: agrupados.reduce((s, d) => s + d.alertas, 0),
+    noPagadas: agrupados.reduce((s, d) => s + d.rutas_no_pagadas, 0),
+  }), [agrupados, pagos]);
+
+  const fmtMXN = (n) => `$${Number(n || 0).toLocaleString("es-MX", { maximumFractionDigits: 0 })}`;
+  const fmtPct = (n) => `${Number(n || 0).toFixed(2)}%`;
 
   return (
-    <div className="pg" style={{ maxWidth: 1200 }}>
+    <div className="pg" style={{ maxWidth: 1280 }}>
       <div style={{ marginBottom: 16 }}>
         <div className="sec-title">Listado de Pagos Diarios</div>
         <div className="sec-sub">Cálculo automático por contratista · alimenta la app de choferes</div>
       </div>
 
-      {/* Filtros de fecha */}
+      {/* Filtros y botones */}
       <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 8, padding: 14, marginBottom: 14 }}>
-        <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>Período</div>
+        <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>Fecha de operación</div>
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
           {[
-            { l: "Hoy", fn: () => { const h = fechaHoyOperativa(); setFecha(h); setFechaFin(h); } },
-            { l: "Ayer", fn: () => { const s = fechaOperativaOffset(-1); setFecha(s); setFechaFin(s); } },
-            { l: "Esta semana", fn: () => { const h = new Date(); const l = new Date(h); l.setDate(h.getDate()-h.getDay()+1); setFecha(l.toISOString().split("T")[0]); setFechaFin(h.toISOString().split("T")[0]); } },
-            { l: "Este mes", fn: () => { const h = new Date(); const i = new Date(h.getFullYear(), h.getMonth(), 1); setFecha(i.toISOString().split("T")[0]); setFechaFin(h.toISOString().split("T")[0]); } },
+            { l: "Ayer", fn: () => setFecha(fechaOperativaOffset(-1)) },
+            { l: "Hoy", fn: () => setFecha(fechaHoyOperativa()) },
+            { l: "-2 días", fn: () => setFecha(fechaOperativaOffset(-2)) },
+            { l: "-3 días", fn: () => setFecha(fechaOperativaOffset(-3)) },
+            { l: "-7 días", fn: () => setFecha(fechaOperativaOffset(-7)) },
           ].map(({ l, fn }) => (
             <button key={l} onClick={fn} style={{ padding: "5px 12px", borderRadius: 4, border: "1px solid #e4e7ec", background: "#f8fafc", color: "#475569", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>{l}</button>
           ))}
@@ -8175,39 +8534,85 @@ function ListadoPagosDiarios() {
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
           <input type="date" value={fecha} onChange={e => setFecha(e.target.value)}
             style={{ background: "#f8fafc", border: "1px solid #e4e7ec", borderRadius: 4, padding: "6px 10px", fontSize: 12 }} />
-          <span style={{ color: "#94a3b8", fontSize: 12 }}>→</span>
-          <input type="date" value={fechaFin} onChange={e => setFechaFin(e.target.value)}
-            style={{ background: "#f8fafc", border: "1px solid #e4e7ec", borderRadius: 4, padding: "6px 10px", fontSize: 12 }} />
           <input type="text" placeholder="Buscar por chofer..." value={busqueda} onChange={e => setBusqueda(e.target.value)}
             style={{ background: "#f8fafc", border: "1px solid #e4e7ec", borderRadius: 4, padding: "6px 10px", fontSize: 12, flex: 1, minWidth: 200 }} />
+          <button onClick={calcularDia} disabled={calculando}
+            style={{ padding: "8px 16px", borderRadius: 4, border: "none", background: calculando ? "#94a3b8" : "#F47B20", color: "#fff", fontSize: 12, fontWeight: 600, cursor: calculando ? "wait" : "pointer" }}>
+            {calculando ? "Calculando..." : pagos.length > 0 ? "Recalcular día" : "Calcular pagos del día"}
+          </button>
         </div>
       </div>
 
+      {/* Resumen del último cálculo */}
+      {resumenCalculo && (
+        <div style={{ background: "#ecfdf5", border: "1px solid #a7f3d0", borderRadius: 8, padding: 12, marginBottom: 14, fontSize: 12 }}>
+          <div style={{ fontWeight: 600, color: "#065f46", marginBottom: 6 }}>✓ Cálculo completado</div>
+          <div style={{ color: "#047857" }}>
+            {resumenCalculo.viajes_procesados} viajes procesados · {resumenCalculo.registros_insertados} registros guardados en maestro_jornada_mx
+            {resumenCalculo.errores > 0 && ` · ${resumenCalculo.errores} viajes con error`}
+          </div>
+          {resumenCalculo.detalle_errores && resumenCalculo.detalle_errores.length > 0 && (
+            <details style={{ marginTop: 8 }}>
+              <summary style={{ cursor: "pointer", color: "#dc2626", fontWeight: 600 }}>Ver errores</summary>
+              <div style={{ marginTop: 6, maxHeight: 150, overflowY: "auto" }}>
+                {resumenCalculo.detalle_errores.map((e, i) => (
+                  <div key={i} style={{ fontSize: 11, padding: "2px 0" }}>{e.tms_id}: {e.motivo}</div>
+                ))}
+              </div>
+            </details>
+          )}
+        </div>
+      )}
+
       {/* KPIs */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 10, marginBottom: 14 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10, marginBottom: 14 }}>
         <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: "12px 14px" }}>
           <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>Choferes</div>
-          <div style={{ fontSize: 22, fontWeight: 700, color: "#1a3a6b", marginTop: 2 }}>{agrupados.length}</div>
+          <div style={{ fontSize: 22, fontWeight: 700, color: "#1a3a6b", marginTop: 2 }}>{totales.choferes}</div>
         </div>
         <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: "12px 14px" }}>
           <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>Rutas</div>
-          <div style={{ fontSize: 22, fontWeight: 700, color: "#1a3a6b", marginTop: 2 }}>{pagos.length}</div>
+          <div style={{ fontSize: 22, fontWeight: 700, color: "#1a3a6b", marginTop: 2 }}>{totales.rutas}</div>
+        </div>
+        <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: "12px 14px" }}>
+          <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>Tarifa base</div>
+          <div style={{ fontSize: 18, fontWeight: 700, color: "#475569", marginTop: 2 }}>{fmtMXN(totales.tarifaBase)}</div>
+        </div>
+        <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: "12px 14px" }}>
+          <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>Ajuste NS</div>
+          <div style={{ fontSize: 18, fontWeight: 700, color: totales.ajusteNS >= 0 ? "#16a34a" : "#dc2626", marginTop: 2 }}>{totales.ajusteNS >= 0 ? "+" : ""}{fmtMXN(totales.ajusteNS)}</div>
+        </div>
+        <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: "12px 14px" }}>
+          <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>Auxiliares</div>
+          <div style={{ fontSize: 18, fontWeight: 700, color: "#475569", marginTop: 2 }}>{fmtMXN(totales.auxiliar)}</div>
         </div>
         <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: "12px 14px" }}>
           <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>Total a pagar</div>
-          <div style={{ fontSize: 22, fontWeight: 700, color: "#16a34a", marginTop: 2 }}>${totalGlobal.toLocaleString("es-MX", { maximumFractionDigits: 0 })}</div>
+          <div style={{ fontSize: 22, fontWeight: 700, color: "#16a34a", marginTop: 2 }}>{fmtMXN(totales.pagoNeto)}</div>
         </div>
+        {totales.noPagadas > 0 && (
+          <div style={{ background: "#fee2e2", border: "1px solid #fca5a5", borderRadius: 6, padding: "12px 14px" }}>
+            <div style={{ fontSize: 10, color: "#991b1b", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>Rutas no pagadas</div>
+            <div style={{ fontSize: 22, fontWeight: 700, color: "#991b1b", marginTop: 2 }}>{totales.noPagadas}</div>
+            <div style={{ fontSize: 9, color: "#991b1b", marginTop: 2 }}>no_visitado &gt; 10%</div>
+          </div>
+        )}
+        {totales.alertas > 0 && (
+          <div style={{ background: "#fef3c7", border: "1px solid #fcd34d", borderRadius: 6, padding: "12px 14px" }}>
+            <div style={{ fontSize: 10, color: "#92400e", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>Alertas</div>
+            <div style={{ fontSize: 22, fontWeight: 700, color: "#92400e", marginTop: 2 }}>{totales.alertas}</div>
+          </div>
+        )}
       </div>
 
-      {/* Tabla */}
+      {/* Tabla principal */}
       <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, overflow: "hidden" }}>
         {loading ? (
           <div style={{ padding: 30, textAlign: "center", color: "#94a3b8" }}>Cargando...</div>
         ) : agrupados.length === 0 ? (
           <div style={{ padding: 40, textAlign: "center", color: "#94a3b8" }}>
-            <div style={{ fontWeight: 600, marginBottom: 6, color: "#475569" }}>Sin datos para este período</div>
-            <div style={{ fontSize: 11 }}>Los pagos se calculan automáticamente cuando el motor procese el informe Logistic + ayudantes + matriz.</div>
-            <div style={{ fontSize: 11, marginTop: 8, color: "#cbd5e1" }}>Tabla destino: maestro_jornada_mx</div>
+            <div style={{ fontWeight: 600, marginBottom: 6, color: "#475569" }}>Sin pagos calculados para {fecha}</div>
+            <div style={{ fontSize: 11 }}>Apretá "Calcular pagos del día" para procesar viajes y snapshots de esa fecha.</div>
           </div>
         ) : (
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
@@ -8215,18 +8620,106 @@ function ListadoPagosDiarios() {
               <tr style={{ background: "#f8fafc", borderBottom: "1px solid #e4e7ec" }}>
                 <th style={{ padding: "10px 14px", textAlign: "left", fontSize: 11, fontWeight: 600, color: "#475569" }}>Chofer</th>
                 <th style={{ padding: "10px 14px", textAlign: "center", fontSize: 11, fontWeight: 600, color: "#475569" }}>Rutas</th>
-                <th style={{ padding: "10px 14px", textAlign: "center", fontSize: 11, fontWeight: 600, color: "#475569" }}>Última fecha</th>
-                <th style={{ padding: "10px 14px", textAlign: "right", fontSize: 11, fontWeight: 600, color: "#475569" }}>Total a pagar</th>
+                <th style={{ padding: "10px 14px", textAlign: "right", fontSize: 11, fontWeight: 600, color: "#475569" }}>Tarifa base</th>
+                <th style={{ padding: "10px 14px", textAlign: "right", fontSize: 11, fontWeight: 600, color: "#475569" }}>Ajuste NS</th>
+                <th style={{ padding: "10px 14px", textAlign: "right", fontSize: 11, fontWeight: 600, color: "#475569" }}>Auxiliar</th>
+                <th style={{ padding: "10px 14px", textAlign: "right", fontSize: 11, fontWeight: 600, color: "#475569" }}>Pago neto</th>
+                <th style={{ padding: "10px 14px", textAlign: "center", fontSize: 11, fontWeight: 600, color: "#475569" }}>Detalle</th>
               </tr>
             </thead>
             <tbody>
               {agrupados.map((d, i) => (
-                <tr key={d.driver_id || i} style={{ borderBottom: "1px solid #f0f0f0" }}>
-                  <td style={{ padding: "10px 14px", fontWeight: 500 }}>{d.driver_name}</td>
-                  <td style={{ padding: "10px 14px", textAlign: "center" }}>{d.total_rutas}</td>
-                  <td style={{ padding: "10px 14px", textAlign: "center", color: "#64748b" }}>{d.ultima_fecha}</td>
-                  <td style={{ padding: "10px 14px", textAlign: "right", fontWeight: 700, color: "#16a34a" }}>${d.pago_neto.toLocaleString("es-MX", { maximumFractionDigits: 0 })}</td>
-                </tr>
+                <Fragment key={d.driver_name + i}>
+                  <tr style={{ borderBottom: "1px solid #f0f0f0", background: d.rutas_no_pagadas > 0 ? "#fef2f2" : (d.alertas > 0 ? "#fffbeb" : undefined) }}>
+                    <td style={{ padding: "10px 14px", fontWeight: 500 }}>
+                      {d.driver_name}
+                      {d.rutas_no_pagadas > 0 && <span style={{ marginLeft: 6, fontSize: 10, color: "#991b1b", fontWeight: 600, background: "#fee2e2", padding: "1px 6px", borderRadius: 3 }}>{d.rutas_no_pagadas} no pagada{d.rutas_no_pagadas > 1 ? "s" : ""}</span>}
+                      {d.alertas > 0 && <span style={{ marginLeft: 6, fontSize: 10, color: "#92400e", fontWeight: 600 }}>⚠ {d.alertas}</span>}
+                    </td>
+                    <td style={{ padding: "10px 14px", textAlign: "center" }}>
+                      {d.total_rutas}
+                      {d.rutas_no_pagadas > 0 && <span style={{ fontSize: 10, color: "#991b1b", marginLeft: 4 }}>({d.total_rutas - d.rutas_no_pagadas} pagadas)</span>}
+                    </td>
+                    <td style={{ padding: "10px 14px", textAlign: "right", color: "#475569" }}>{fmtMXN(d.tarifa_base_total)}</td>
+                    <td style={{ padding: "10px 14px", textAlign: "right", color: d.ajuste_ns_total >= 0 ? "#16a34a" : "#dc2626" }}>
+                      {d.ajuste_ns_total >= 0 ? "+" : ""}{fmtMXN(d.ajuste_ns_total)}
+                    </td>
+                    <td style={{ padding: "10px 14px", textAlign: "right", color: "#475569" }}>
+                      {d.monto_auxiliar_total > 0 ? fmtMXN(d.monto_auxiliar_total) : "—"}
+                    </td>
+                    <td style={{ padding: "10px 14px", textAlign: "right", fontWeight: 700, color: "#16a34a" }}>{fmtMXN(d.pago_neto_total)}</td>
+                    <td style={{ padding: "10px 14px", textAlign: "center" }}>
+                      <button onClick={() => setExpandido(expandido === d.driver_name ? null : d.driver_name)}
+                        style={{ padding: "4px 10px", borderRadius: 4, border: "1px solid #e4e7ec", background: expandido === d.driver_name ? "#1a3a6b" : "#fff", color: expandido === d.driver_name ? "#fff" : "#475569", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>
+                        {expandido === d.driver_name ? "Cerrar" : "Ver"}
+                      </button>
+                    </td>
+                  </tr>
+                  {expandido === d.driver_name && (
+                    <tr>
+                      <td colSpan={7} style={{ padding: 0, background: "#f8fafc" }}>
+                        <div style={{ padding: 14 }}>
+                          <div style={{ fontSize: 11, fontWeight: 600, color: "#475569", marginBottom: 8 }}>Detalle por ruta</div>
+                          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11, background: "#fff", border: "1px solid #e4e7ec", borderRadius: 4 }}>
+                            <thead>
+                              <tr style={{ background: "#f1f5f9" }}>
+                                <th style={{ padding: "6px 10px", textAlign: "left", fontWeight: 600, color: "#64748b" }}>ID Ruta</th>
+                                <th style={{ padding: "6px 10px", textAlign: "left", fontWeight: 600, color: "#64748b" }}>Vehículo · Zona · Tramo</th>
+                                <th style={{ padding: "6px 10px", textAlign: "center", fontWeight: 600, color: "#64748b" }}>SC</th>
+                                <th style={{ padding: "6px 10px", textAlign: "right", fontWeight: 600, color: "#64748b" }}>Km</th>
+                                <th style={{ padding: "6px 10px", textAlign: "right", fontWeight: 600, color: "#64748b" }}>NS</th>
+                                <th style={{ padding: "6px 10px", textAlign: "right", fontWeight: 600, color: "#64748b" }}>Tarifa</th>
+                                <th style={{ padding: "6px 10px", textAlign: "right", fontWeight: 600, color: "#64748b" }}>±NS</th>
+                                <th style={{ padding: "6px 10px", textAlign: "center", fontWeight: 600, color: "#64748b" }}>Aux</th>
+                                <th style={{ padding: "6px 10px", textAlign: "right", fontWeight: 600, color: "#64748b" }}>$Aux</th>
+                                <th style={{ padding: "6px 10px", textAlign: "right", fontWeight: 600, color: "#64748b" }}>Neto</th>
+                                <th style={{ padding: "6px 10px", textAlign: "left", fontWeight: 600, color: "#64748b" }}>Obs</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {d.rutas.map((r, j) => {
+                                const noPagada = r.ns_categoria === "NO_PAGO_NV>10%";
+                                return (
+                                <tr key={j} style={{ borderTop: "1px solid #f0f0f0", background: noPagada ? "#fef2f2" : undefined }}>
+                                  <td style={{ padding: "6px 10px", fontFamily: "monospace", fontSize: 10 }}>{r.id_ruta}</td>
+                                  <td style={{ padding: "6px 10px" }}>
+                                    {r.tipologia || "?"} · {r.zona || "?"} · {r.tramo_km}
+                                    {r.tiene_tarifa_especial && <span style={{ marginLeft: 4, fontSize: 9, color: "#7c3aed", fontWeight: 600 }}>ESP</span>}
+                                  </td>
+                                  <td style={{ padding: "6px 10px", textAlign: "center" }}>{r.service_center_id}</td>
+                                  <td style={{ padding: "6px 10px", textAlign: "right" }}>{Number(r.km_recorridos).toFixed(1)}</td>
+                                  <td style={{ padding: "6px 10px", textAlign: "right" }}>
+                                    {fmtPct(r.ns_pct)}{" "}
+                                    <span style={{ fontSize: 9, color: noPagada ? "#991b1b" : "#94a3b8", fontWeight: noPagada ? 600 : 400 }}>
+                                      ({noPagada ? `NV ${r.ns_no_visitado}%` : r.ns_categoria})
+                                    </span>
+                                  </td>
+                                  <td style={{ padding: "6px 10px", textAlign: "right", textDecoration: noPagada ? "line-through" : undefined, color: noPagada ? "#94a3b8" : undefined }}>{fmtMXN(r.tarifa_base)}</td>
+                                  <td style={{ padding: "6px 10px", textAlign: "right", color: noPagada ? "#94a3b8" : (r.ajuste_ns >= 0 ? "#16a34a" : "#dc2626"), textDecoration: noPagada ? "line-through" : undefined }}>
+                                    {r.ajuste_ns >= 0 ? "+" : ""}{fmtMXN(r.ajuste_ns)}
+                                  </td>
+                                  <td style={{ padding: "6px 10px", textAlign: "center", fontSize: 9 }}>
+                                    <span style={{
+                                      padding: "2px 6px", borderRadius: 3, fontWeight: 600,
+                                      background: r.auxiliar_estado === "OK" ? "#dcfce7" : r.auxiliar_estado === "MID_ROUTE_REVISION" ? "#fef3c7" : r.auxiliar_estado === "SOSPECHOSO" ? "#fee2e2" : "#f1f5f9",
+                                      color: r.auxiliar_estado === "OK" ? "#166534" : r.auxiliar_estado === "MID_ROUTE_REVISION" ? "#92400e" : r.auxiliar_estado === "SOSPECHOSO" ? "#991b1b" : "#64748b"
+                                    }}>{r.auxiliar_estado}</span>
+                                  </td>
+                                  <td style={{ padding: "6px 10px", textAlign: "right" }}>{r.monto_auxiliar > 0 ? fmtMXN(r.monto_auxiliar) : "—"}</td>
+                                  <td style={{ padding: "6px 10px", textAlign: "right", fontWeight: 700, color: noPagada ? "#991b1b" : "#16a34a" }}>
+                                    {noPagada ? "$0" : fmtMXN(r.pago_neto)}
+                                  </td>
+                                  <td style={{ padding: "6px 10px", fontSize: 10, color: noPagada ? "#991b1b" : "#92400e", fontWeight: noPagada ? 600 : 400 }}>{r.observaciones || ""}</td>
+                                </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
               ))}
             </tbody>
           </table>
@@ -9081,13 +9574,21 @@ function ConfigTarifasEspeciales() {
   );
 }
 
-// ─── Config: Zonas SC ──────────────────────────────────────────────────────
+// ─── Config: Mapeo SC ↔ Zonas (CRUD + detector de huérfanos) ───────────────
 function ConfigZonas() {
   const [data, setData] = useState([]);
+  const [huerfanos, setHuerfanos] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadingHuerfanos, setLoadingHuerfanos] = useState(true);
   const [filtroZona, setFiltroZona] = useState("todas");
+  const [busqueda, setBusqueda] = useState("");
 
-  useEffect(() => { cargar(); }, []);
+  // Modal de edición/creación
+  const [modal, setModal] = useState(null); // { mode: 'create'|'edit', data: {...} }
+  const [guardando, setGuardando] = useState(false);
+
+  useEffect(() => { cargar(); detectarHuerfanos(); }, []);
+
   const cargar = async () => {
     setLoading(true);
     try {
@@ -9097,17 +9598,188 @@ function ConfigZonas() {
     setLoading(false);
   };
 
-  if (loading) return <div style={{ textAlign: "center", padding: 40, color: "#94a3b8" }}>Cargando...</div>;
+  const detectarHuerfanos = async () => {
+    setLoadingHuerfanos(true);
+    try {
+      // Traer SCs distintos de viajes MX en últimos 7 días vs sc_zonas_mx
+      const fechaDesde = new Date();
+      fechaDesde.setDate(fechaDesde.getDate() - 7);
+      const fdStr = fechaDesde.toISOString().split("T")[0];
 
-  const filtrados = filtroZona === "todas" ? data : data.filter(d => d.zona === filtroZona);
+      const [vRes, zRes] = await Promise.all([
+        sb.from("viajes").select("tms_raw, fecha_salida")
+          .eq("pais", "MX")
+          .gte("fecha_salida", fdStr),
+        sb.from("sc_zonas_mx").select("service_center_id"),
+      ]);
+
+      const viajes = vRes.data || [];
+      const zonasMapeadas = new Set((zRes.data || []).map(z => z.service_center_id));
+
+      // Agrupar por SC
+      const map = {};
+      for (const v of viajes) {
+        const sc = v.tms_raw?.["Service center"];
+        if (!sc) continue;
+        if (zonasMapeadas.has(sc)) continue;
+        if (!map[sc]) map[sc] = { sc, viajes: 0, primera: v.fecha_salida, ultima: v.fecha_salida };
+        map[sc].viajes++;
+        if (v.fecha_salida < map[sc].primera) map[sc].primera = v.fecha_salida;
+        if (v.fecha_salida > map[sc].ultima) map[sc].ultima = v.fecha_salida;
+      }
+      const lista = Object.values(map).sort((a, b) => b.viajes - a.viajes);
+      setHuerfanos(lista);
+    } catch (e) { console.error(e); }
+    setLoadingHuerfanos(false);
+  };
+
+  const abrirCrear = (scIdPreset = "") => {
+    setModal({
+      mode: "create",
+      data: {
+        service_center_id: scIdPreset,
+        zona: "L1",
+        ciudad: "",
+        observaciones: "",
+        vigente_desde: new Date().toISOString().split("T")[0],
+      }
+    });
+  };
+
+  const abrirEditar = (sc) => {
+    setModal({
+      mode: "edit",
+      data: { ...sc, vigente_desde: sc.vigente_desde || new Date().toISOString().split("T")[0] }
+    });
+  };
+
+  const cerrarModal = () => setModal(null);
+
+  const guardar = async () => {
+    if (!modal) return;
+    const d = modal.data;
+    if (!d.service_center_id?.trim()) { alert("El ID del Service Center es obligatorio"); return; }
+    if (!["L1", "L2", "L3", "L4"].includes(d.zona)) { alert("Zona inválida"); return; }
+
+    setGuardando(true);
+    try {
+      const payload = {
+        service_center_id: d.service_center_id.trim().toUpperCase(),
+        zona: d.zona,
+        ciudad: d.ciudad?.trim() || null,
+        observaciones: d.observaciones?.trim() || null,
+        vigente_desde: d.vigente_desde,
+        actualizado_por: "brain",
+      };
+
+      if (modal.mode === "create") {
+        // Verificar duplicado
+        const ya = data.find(x => x.service_center_id === payload.service_center_id);
+        if (ya) { alert(`Ya existe el SC ${payload.service_center_id}. Usá "Editar" en su lugar.`); setGuardando(false); return; }
+        payload.creado_por = "brain";
+        const { error } = await sb.from("sc_zonas_mx").insert(payload);
+        if (error) throw error;
+      } else {
+        const { error } = await sb.from("sc_zonas_mx").update(payload).eq("id", d.id);
+        if (error) throw error;
+      }
+
+      cerrarModal();
+      await cargar();
+      await detectarHuerfanos();
+    } catch (e) {
+      console.error(e);
+      alert("Error al guardar: " + e.message);
+    }
+    setGuardando(false);
+  };
+
+  const eliminar = async (sc) => {
+    if (!confirm(`¿Dar de baja el SC ${sc.service_center_id}?\n\nSe marcará como vigente_hasta = hoy. Los registros históricos se mantienen.`)) return;
+    try {
+      const hoy = new Date().toISOString().split("T")[0];
+      const { error } = await sb.from("sc_zonas_mx").update({ vigente_hasta: hoy, actualizado_por: "brain" }).eq("id", sc.id);
+      if (error) throw error;
+      await cargar();
+    } catch (e) {
+      alert("Error: " + e.message);
+    }
+  };
+
+  const filtrados = useMemo(() => {
+    let res = filtroZona === "todas" ? data : data.filter(d => d.zona === filtroZona);
+    if (busqueda) res = res.filter(d => d.service_center_id?.toLowerCase().includes(busqueda.toLowerCase()) || d.ciudad?.toLowerCase().includes(busqueda.toLowerCase()));
+    return res;
+  }, [data, filtroZona, busqueda]);
+
   const conteo = data.reduce((acc, d) => { acc[d.zona] = (acc[d.zona] || 0) + 1; return acc; }, {});
+  const activos = data.filter(d => !d.vigente_hasta).length;
+
+  if (loading) return <div style={{ textAlign: "center", padding: 40, color: "#94a3b8" }}>Cargando...</div>;
 
   return (
     <div>
+      {/* Detector de huérfanos */}
+      {loadingHuerfanos ? (
+        <div style={{ background: "#f8fafc", border: "1px solid #e4e7ec", borderRadius: 6, padding: "10px 14px", marginBottom: 14, fontSize: 11, color: "#94a3b8" }}>
+          Buscando SCs sin mapeo en viajes recientes...
+        </div>
+      ) : huerfanos.length > 0 ? (
+        <div style={{ background: "#fef2f2", border: "1px solid #fca5a5", borderRadius: 6, padding: 14, marginBottom: 14 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: "#991b1b", marginBottom: 2 }}>
+                {huerfanos.length} Service Center{huerfanos.length > 1 ? "s" : ""} sin mapear
+              </div>
+              <div style={{ fontSize: 11, color: "#7f1d1d" }}>
+                Detectados en viajes MX de los últimos 7 días pero ausentes en sc_zonas_mx. Sin zona, esos viajes no calculan pago.
+              </div>
+            </div>
+            <button onClick={detectarHuerfanos}
+              style={{ padding: "5px 10px", borderRadius: 4, border: "1px solid #fca5a5", background: "#fff", color: "#991b1b", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>
+              Refrescar
+            </button>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 8 }}>
+            {huerfanos.map(h => (
+              <div key={h.sc} style={{ background: "#fff", border: "1px solid #fca5a5", borderRadius: 4, padding: 10, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <div>
+                  <div style={{ fontFamily: "monospace", fontSize: 13, fontWeight: 700, color: "#991b1b" }}>{h.sc}</div>
+                  <div style={{ fontSize: 10, color: "#7f1d1d", marginTop: 2 }}>
+                    {h.viajes} viaje{h.viajes > 1 ? "s" : ""} · desde {String(h.primera).slice(0, 10)}
+                  </div>
+                </div>
+                <button onClick={() => abrirCrear(h.sc)}
+                  style={{ padding: "5px 10px", borderRadius: 4, border: "none", background: "#F47B20", color: "#fff", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>
+                  Mapear
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : (
+        <div style={{ background: "#ecfdf5", border: "1px solid #a7f3d0", borderRadius: 6, padding: "10px 14px", marginBottom: 14, fontSize: 11, color: "#065f46", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <span>Sin Service Centers huérfanos en últimos 7 días — todos los viajes pueden calcular pago.</span>
+          <button onClick={detectarHuerfanos}
+            style={{ padding: "4px 10px", borderRadius: 4, border: "1px solid #a7f3d0", background: "#fff", color: "#065f46", fontSize: 10, fontWeight: 600, cursor: "pointer" }}>
+            Refrescar
+          </button>
+        </div>
+      )}
+
+      {/* Header con KPIs y acciones */}
       <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: 14, marginBottom: 14 }}>
-        <div style={{ fontSize: 14, fontWeight: 700, color: "#1a3a6b", marginBottom: 4 }}>Mapeo Service Center ↔ Zona</div>
-        <div style={{ fontSize: 11, color: "#94a3b8", marginBottom: 12 }}>{data.length} Service Centers en {Object.keys(conteo).length} zonas</div>
-        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12, flexWrap: "wrap", gap: 10 }}>
+          <div>
+            <div style={{ fontSize: 14, fontWeight: 700, color: "#1a3a6b", marginBottom: 4 }}>Mapeo Service Center ↔ Zona</div>
+            <div style={{ fontSize: 11, color: "#94a3b8" }}>{activos} Service Centers activos · {data.length} totales</div>
+          </div>
+          <button onClick={() => abrirCrear()}
+            style={{ padding: "8px 16px", borderRadius: 4, border: "none", background: "#1a3a6b", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+            + Agregar Service Center
+          </button>
+        </div>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
           <button onClick={() => setFiltroZona("todas")}
             style={{ padding: "5px 12px", borderRadius: 4, border: `1px solid ${filtroZona === "todas" ? "#1a3a6b" : "#e4e7ec"}`,
               background: filtroZona === "todas" ? "#1a3a6b" : "#fff", color: filtroZona === "todas" ? "#fff" : "#475569",
@@ -9119,18 +9791,132 @@ function ConfigZonas() {
                 fontSize: 11, fontWeight: 600, cursor: "pointer" }}>{z} ({conteo[z] || 0})</button>
           ))}
         </div>
+        <input type="text" placeholder="Buscar por SC o ciudad..." value={busqueda} onChange={e => setBusqueda(e.target.value)}
+          style={{ width: "100%", background: "#f8fafc", border: "1px solid #e4e7ec", borderRadius: 4, padding: "6px 10px", fontSize: 12 }} />
       </div>
 
-      <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: 14 }}>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(120px, 1fr))", gap: 6 }}>
-          {filtrados.map(sc => (
-            <div key={sc.id} style={{ padding: "8px 10px", background: "#f8fafc", borderRadius: 4, fontSize: 12, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <span style={{ fontWeight: 600 }}>{sc.service_center_id}</span>
-              <span style={{ fontSize: 10, padding: "2px 6px", borderRadius: 4, background: "#1a3a6b", color: "#fff", fontWeight: 600 }}>{sc.zona}</span>
-            </div>
-          ))}
-        </div>
+      {/* Tabla de SCs */}
+      <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, overflow: "hidden" }}>
+        {filtrados.length === 0 ? (
+          <div style={{ padding: 40, textAlign: "center", color: "#94a3b8", fontSize: 12 }}>Sin resultados</div>
+        ) : (
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+            <thead>
+              <tr style={{ background: "#f8fafc", borderBottom: "1px solid #e4e7ec" }}>
+                <th style={{ padding: "10px 14px", textAlign: "left", fontSize: 11, fontWeight: 600, color: "#475569" }}>SC ID</th>
+                <th style={{ padding: "10px 14px", textAlign: "center", fontSize: 11, fontWeight: 600, color: "#475569" }}>Zona</th>
+                <th style={{ padding: "10px 14px", textAlign: "left", fontSize: 11, fontWeight: 600, color: "#475569" }}>Ciudad</th>
+                <th style={{ padding: "10px 14px", textAlign: "left", fontSize: 11, fontWeight: 600, color: "#475569" }}>Observaciones</th>
+                <th style={{ padding: "10px 14px", textAlign: "center", fontSize: 11, fontWeight: 600, color: "#475569" }}>Vigente</th>
+                <th style={{ padding: "10px 14px", textAlign: "center", fontSize: 11, fontWeight: 600, color: "#475569" }}>Acciones</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtrados.map(sc => {
+                const dadoBaja = sc.vigente_hasta && new Date(sc.vigente_hasta) <= new Date();
+                return (
+                  <tr key={sc.id} style={{ borderBottom: "1px solid #f0f0f0", opacity: dadoBaja ? 0.5 : 1 }}>
+                    <td style={{ padding: "10px 14px", fontFamily: "monospace", fontWeight: 700, color: "#1a3a6b" }}>{sc.service_center_id}</td>
+                    <td style={{ padding: "10px 14px", textAlign: "center" }}>
+                      <span style={{ fontSize: 11, padding: "3px 10px", borderRadius: 4, background: "#1a3a6b", color: "#fff", fontWeight: 600 }}>{sc.zona}</span>
+                    </td>
+                    <td style={{ padding: "10px 14px", color: sc.ciudad ? "#1f2937" : "#cbd5e1" }}>{sc.ciudad || "—"}</td>
+                    <td style={{ padding: "10px 14px", fontSize: 11, color: "#64748b" }}>{sc.observaciones || ""}</td>
+                    <td style={{ padding: "10px 14px", textAlign: "center", fontSize: 11 }}>
+                      {dadoBaja ? (
+                        <span style={{ color: "#dc2626", fontWeight: 600 }}>Baja {String(sc.vigente_hasta).slice(0, 10)}</span>
+                      ) : (
+                        <span style={{ color: "#16a34a", fontWeight: 600 }}>Activo</span>
+                      )}
+                    </td>
+                    <td style={{ padding: "10px 14px", textAlign: "center" }}>
+                      <button onClick={() => abrirEditar(sc)}
+                        style={{ padding: "4px 10px", borderRadius: 4, border: "1px solid #e4e7ec", background: "#fff", color: "#475569", fontSize: 11, fontWeight: 600, cursor: "pointer", marginRight: 4 }}>
+                        Editar
+                      </button>
+                      {!dadoBaja && (
+                        <button onClick={() => eliminar(sc)}
+                          style={{ padding: "4px 10px", borderRadius: 4, border: "1px solid #fca5a5", background: "#fff", color: "#991b1b", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>
+                          Baja
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
       </div>
+
+      {/* Modal de edición/creación */}
+      {modal && (
+        <div onClick={cerrarModal}
+          style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }}>
+          <div onClick={e => e.stopPropagation()}
+            style={{ background: "#fff", borderRadius: 8, padding: 20, width: "90%", maxWidth: 480, boxShadow: "0 20px 25px -5px rgba(0,0,0,0.1)" }}>
+            <div style={{ fontSize: 16, fontWeight: 700, color: "#1a3a6b", marginBottom: 16 }}>
+              {modal.mode === "create" ? "Agregar Service Center" : `Editar ${modal.data.service_center_id}`}
+            </div>
+
+            <div style={{ marginBottom: 12 }}>
+              <label style={{ fontSize: 11, fontWeight: 600, color: "#475569", display: "block", marginBottom: 4 }}>Service Center ID *</label>
+              <input type="text" value={modal.data.service_center_id} disabled={modal.mode === "edit"}
+                onChange={e => setModal({ ...modal, data: { ...modal.data, service_center_id: e.target.value.toUpperCase() } })}
+                placeholder="Ej: SMX7"
+                style={{ width: "100%", background: modal.mode === "edit" ? "#f1f5f9" : "#f8fafc", border: "1px solid #e4e7ec", borderRadius: 4, padding: "8px 10px", fontSize: 12, fontFamily: "monospace", fontWeight: 600 }} />
+            </div>
+
+            <div style={{ marginBottom: 12 }}>
+              <label style={{ fontSize: 11, fontWeight: 600, color: "#475569", display: "block", marginBottom: 4 }}>Zona *</label>
+              <div style={{ display: "flex", gap: 6 }}>
+                {["L1", "L2", "L3", "L4"].map(z => (
+                  <button key={z} onClick={() => setModal({ ...modal, data: { ...modal.data, zona: z } })}
+                    style={{ flex: 1, padding: "8px 0", borderRadius: 4, border: `1px solid ${modal.data.zona === z ? "#1a3a6b" : "#e4e7ec"}`,
+                      background: modal.data.zona === z ? "#1a3a6b" : "#fff", color: modal.data.zona === z ? "#fff" : "#475569",
+                      fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+                    {z}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div style={{ marginBottom: 12 }}>
+              <label style={{ fontSize: 11, fontWeight: 600, color: "#475569", display: "block", marginBottom: 4 }}>Ciudad</label>
+              <input type="text" value={modal.data.ciudad || ""}
+                onChange={e => setModal({ ...modal, data: { ...modal.data, ciudad: e.target.value } })}
+                placeholder="Ej: Pachuca"
+                style={{ width: "100%", background: "#f8fafc", border: "1px solid #e4e7ec", borderRadius: 4, padding: "8px 10px", fontSize: 12 }} />
+            </div>
+
+            <div style={{ marginBottom: 12 }}>
+              <label style={{ fontSize: 11, fontWeight: 600, color: "#475569", display: "block", marginBottom: 4 }}>Vigente desde</label>
+              <input type="date" value={modal.data.vigente_desde}
+                onChange={e => setModal({ ...modal, data: { ...modal.data, vigente_desde: e.target.value } })}
+                style={{ width: "100%", background: "#f8fafc", border: "1px solid #e4e7ec", borderRadius: 4, padding: "8px 10px", fontSize: 12 }} />
+            </div>
+
+            <div style={{ marginBottom: 16 }}>
+              <label style={{ fontSize: 11, fontWeight: 600, color: "#475569", display: "block", marginBottom: 4 }}>Observaciones</label>
+              <textarea value={modal.data.observaciones || ""}
+                onChange={e => setModal({ ...modal, data: { ...modal.data, observaciones: e.target.value } })}
+                placeholder="Notas internas (opcional)"
+                style={{ width: "100%", background: "#f8fafc", border: "1px solid #e4e7ec", borderRadius: 4, padding: "8px 10px", fontSize: 12, fontFamily: "inherit", minHeight: 60, resize: "vertical" }} />
+            </div>
+
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+              <button onClick={cerrarModal} disabled={guardando}
+                style={{ padding: "8px 16px", borderRadius: 4, border: "1px solid #e4e7ec", background: "#fff", color: "#475569", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+                Cancelar
+              </button>
+              <button onClick={guardar} disabled={guardando}
+                style={{ padding: "8px 16px", borderRadius: 4, border: "none", background: guardando ? "#94a3b8" : "#1a3a6b", color: "#fff", fontSize: 12, fontWeight: 600, cursor: guardando ? "wait" : "pointer" }}>
+                {guardando ? "Guardando..." : modal.mode === "create" ? "Crear" : "Guardar cambios"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
