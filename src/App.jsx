@@ -9326,13 +9326,6 @@ function InformacionDeRuta() {
                         </button>
                       </td>
                     </tr>
-                    {expanded && (
-                      <tr>
-                        <td colSpan={14} style={{ padding: 0, background: "#f8fafc" }}>
-                          <DetalleRutaExpandido detalle={detalleRuta} fmtHoraMX={fmtHoraMX} />
-                        </td>
-                      </tr>
-                    )}
                   </Fragment>
                 );
               })}
@@ -9340,17 +9333,29 @@ function InformacionDeRuta() {
           </table>
         )}
       </div>
+
+      {/* Detalle expandido — fuera de la tabla para no heredar minWidth */}
+      {detalleRuta && (
+        <div style={{ marginTop: 14, background: "#f8fafc", border: "1px solid #e4e7ec", borderRadius: 8, padding: 0 }}>
+          <DetalleRutaExpandido detalle={detalleRuta} fmtHoraMX={fmtHoraMX} onClose={() => setDetalleRuta(null)} />
+        </div>
+      )}
     </div>
   );
 }
 
 // Componente para mostrar el detalle expandido (raw_json del último snapshot + timeline)
-function DetalleRutaExpandido({ detalle, fmtHoraMX }) {
+function DetalleRutaExpandido({ detalle, fmtHoraMX, onClose }) {
   if (detalle.loading) {
     return <div style={{ padding: 20, textAlign: "center", color: "#94a3b8", fontSize: 12 }}>Cargando detalle...</div>;
   }
   if (!detalle.snapshots || detalle.snapshots.length === 0) {
-    return <div style={{ padding: 20, textAlign: "center", color: "#94a3b8", fontSize: 12 }}>Sin snapshots disponibles para esta ruta</div>;
+    return (
+      <div style={{ padding: 20, textAlign: "center", color: "#94a3b8", fontSize: 12 }}>
+        Sin snapshots disponibles para esta ruta
+        {onClose && <button onClick={onClose} style={{ marginLeft: 12, padding: "4px 12px", borderRadius: 4, border: "1px solid #e4e7ec", background: "#fff", cursor: "pointer", fontSize: 11 }}>Cerrar</button>}
+      </div>
+    );
   }
   const r = detalle.ruta;
   // Tomar el último snapshot con raw_json
@@ -9363,19 +9368,40 @@ function DetalleRutaExpandido({ detalle, fmtHoraMX }) {
   const flags = rj.flags || {};
 
   const Item = ({ label, value, color }) => (
-    <div style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", borderBottom: "1px dashed #e4e7ec" }}>
-      <span style={{ fontSize: 11, color: "#64748b" }}>{label}</span>
-      <span style={{ fontSize: 11, fontWeight: 600, color: color || "#1a3a6b" }}>{value}</span>
+    <div style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", borderBottom: "1px dashed #e4e7ec", gap: 8 }}>
+      <span style={{ fontSize: 11, color: "#64748b", whiteSpace: "nowrap" }}>{label}</span>
+      <span style={{ fontSize: 11, fontWeight: 600, color: color || "#1a3a6b", textAlign: "right", wordBreak: "break-word" }}>{value}</span>
     </div>
   );
 
   return (
-    <div style={{ padding: 16 }}>
-      <div style={{ fontSize: 12, fontWeight: 700, color: "#1a3a6b", marginBottom: 10 }}>
-        Detalle de la ruta {r.id_ruta} — {r.driver_name}
+    <div>
+      {/* Header sticky con título y botón cerrar */}
+      <div style={{
+        display: "flex", justifyContent: "space-between", alignItems: "center",
+        padding: "12px 16px", borderBottom: "1px solid #e4e7ec",
+        background: "#fff", borderRadius: "8px 8px 0 0",
+        position: "sticky", top: 0, zIndex: 5,
+      }}>
+        <div>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#1a3a6b" }}>
+            Detalle de la ruta {r.id_ruta}
+          </div>
+          <div style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}>
+            {r.driver_name} · {r.service_center_id} · {r.placa}
+          </div>
+        </div>
+        {onClose && (
+          <button onClick={onClose}
+            style={{ padding: "6px 14px", borderRadius: 4, border: "1px solid #e4e7ec",
+              background: "#fff", color: "#475569", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+            Cerrar
+          </button>
+        )}
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 14 }}>
+      <div style={{ padding: 16 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 12 }}>
         {/* Driver */}
         <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: 12 }}>
           <div style={{ fontSize: 10, fontWeight: 700, color: "#7c3aed", textTransform: "uppercase", marginBottom: 8 }}>Chofer</div>
@@ -9456,25 +9482,26 @@ function DetalleRutaExpandido({ detalle, fmtHoraMX }) {
           <Item label="Monto auxiliar" value={`$${Number(r.monto_auxiliar || 0).toLocaleString("es-MX")}`} />
           <Item label="Pago neto" value={`$${Number(r.pago_neto || 0).toLocaleString("es-MX")}`} color="#16a34a" />
         </div>
-      </div>
-
-      {/* Timeline de snapshots */}
-      <div style={{ marginTop: 14, background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: 12 }}>
-        <div style={{ fontSize: 10, fontWeight: 700, color: "#1a3a6b", textTransform: "uppercase", marginBottom: 8 }}>
-          Timeline de snapshots ({detalle.snapshots.length})
         </div>
-        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-          {detalle.snapshots.map((s, i) => (
-            <div key={i} style={{ background: s.has_helper ? "#dcfce7" : "#f1f5f9", border: "1px solid #e4e7ec",
-              borderRadius: 4, padding: "6px 10px", fontSize: 10 }}>
-              <div style={{ fontWeight: 700, color: "#1a3a6b" }}>{s.momento_dia}</div>
-              <div style={{ color: "#64748b" }}>{fmtHoraMX(s.hora_snapshot)}</div>
-              <div style={{ color: s.has_helper ? "#166534" : "#94a3b8", marginTop: 2 }}>
-                {s.has_helper ? "✓ helper" : "sin helper"}
+
+        {/* Timeline de snapshots */}
+        <div style={{ marginTop: 14, background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: 12 }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: "#1a3a6b", textTransform: "uppercase", marginBottom: 8 }}>
+            Timeline de snapshots ({detalle.snapshots.length})
+          </div>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            {detalle.snapshots.map((s, i) => (
+              <div key={i} style={{ background: s.has_helper ? "#dcfce7" : "#f1f5f9", border: "1px solid #e4e7ec",
+                borderRadius: 4, padding: "6px 10px", fontSize: 10 }}>
+                <div style={{ fontWeight: 700, color: "#1a3a6b" }}>{s.momento_dia}</div>
+                <div style={{ color: "#64748b" }}>{fmtHoraMX(s.hora_snapshot)}</div>
+                <div style={{ color: s.has_helper ? "#166534" : "#94a3b8", marginTop: 2 }}>
+                  {s.has_helper ? "✓ helper" : "sin helper"}
+                </div>
+                <div style={{ color: "#64748b", fontSize: 9, marginTop: 1 }}>{s.status}</div>
               </div>
-              <div style={{ color: "#64748b", fontSize: 9, marginTop: 1 }}>{s.status}</div>
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
       </div>
     </div>
