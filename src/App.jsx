@@ -8038,17 +8038,622 @@ function BrainCentral({ setTab, usuario }) {
 // ═══════════════════════════════════════════════════════════════════════════
 // CERTIFICACIONES MADRE — wrapper con sub-tabs
 // ═══════════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════
+// VARIACIONES DIARIAS CERTRONIC — comparación día a día
+// ═══════════════════════════════════════════════════════════════════════════
+function VariacionesDiarias() {
+  const [fechaHoy, setFechaHoy] = useState(null);
+  const [fechaAyer, setFechaAyer] = useState(null);
+  const [fechasDisponibles, setFechasDisponibles] = useState([]);
+  const [datos, setDatos] = useState({ hoy: [], ayer: [] });
+  const [loading, setLoading] = useState(true);
+  const [busqueda, setBusqueda] = useState("");
+  const [filtroTipo, setFiltroTipo] = useState("todos");
+  const [filtroOperacion, setFiltroOperacion] = useState("todas");
+  const [expandido, setExpandido] = useState(null);
+
+  // Cargar fechas disponibles al montar
+  useEffect(() => {
+    (async () => {
+      try {
+        const { data, error } = await sb.from("certronic_estados_documentos")
+          .select("fecha_snapshot")
+          .order("fecha_snapshot", { ascending: false })
+          .limit(2000);
+        if (error) throw error;
+        const unicas = [...new Set((data || []).map(r => r.fecha_snapshot))]
+          .sort()
+          .reverse();
+        setFechasDisponibles(unicas);
+        if (unicas.length >= 2) {
+          setFechaHoy(unicas[0]);
+          setFechaAyer(unicas[1]);
+        } else if (unicas.length === 1) {
+          setFechaHoy(unicas[0]);
+          setFechaAyer(null);
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    })();
+  }, []);
+
+  // Cargar datos cuando cambian las fechas
+  useEffect(() => {
+    if (!fechaHoy) return;
+    let cancel = false;
+    (async () => {
+      setLoading(true);
+      try {
+        const promesas = [
+          sb.from("certronic_estados_documentos")
+            .select("contratista, planta, entidad, detalle, documento, periodo, impide_acceso, impide_pago, estado, cumple")
+            .eq("fecha_snapshot", fechaHoy)
+            .limit(20000),
+        ];
+        if (fechaAyer) {
+          promesas.push(
+            sb.from("certronic_estados_documentos")
+              .select("contratista, planta, entidad, detalle, documento, periodo, impide_acceso, impide_pago, estado, cumple")
+              .eq("fecha_snapshot", fechaAyer)
+              .limit(20000)
+          );
+        }
+        const [hoyRes, ayerRes] = await Promise.all(promesas);
+        if (cancel) return;
+        if (hoyRes.error) throw hoyRes.error;
+        if (ayerRes && ayerRes.error) throw ayerRes.error;
+        setDatos({
+          hoy: hoyRes.data || [],
+          ayer: ayerRes ? (ayerRes.data || []) : [],
+        });
+      } catch (e) {
+        console.error(e);
+        if (!cancel) setDatos({ hoy: [], ayer: [] });
+      }
+      if (!cancel) setLoading(false);
+    })();
+    return () => { cancel = true; };
+  }, [fechaHoy, fechaAyer]);
+
+  // Comparación: agrupar por contratista y calcular cambios
+  const analisis = useMemo(() => {
+    if (!datos.hoy.length) return { porContratista: [], totales: {} };
+
+    // Indexar por (contratista, documento, detalle, periodo) — clave única
+    const claveDoc = (r) =>
+      `${(r.contratista || "").toUpperCase().trim()}|${r.documento || ""}|${r.detalle || ""}|${r.periodo || ""}`;
+
+    const ayerMap = new Map();
+    for (const r of datos.ayer) ayerMap.set(claveDoc(r), r);
+
+    const hoyMap = new Map();
+    for (const r of datos.hoy) hoyMap.set(claveDoc(r), r);
+
+    // Construir lista de cambios por documento
+    const cambiosDocs = [];
+    const contratistasHoy = new Set();
+    const contratistasAyer = new Set();
+
+    for (const r of datos.hoy) {
+      contratistasHoy.add(r.contratista);
+      const ayer = ayerMap.get(claveDoc(r));
+      let tipo = "SIN_CAMBIO";
+      if (!ayer) {
+        tipo = "DOC_NUEVO";
+      } else if (ayer.cumple === "N" && r.cumple === "S") {
+        tipo = "MEJORA";
+      } else if (ayer.cumple === "S" && r.cumple === "N") {
+        tipo = "EMPEORO";
+      } else if (ayer.impide_pago !== r.impide_pago) {
+        tipo = "CAMBIO_IMPIDE_PAGO";
+      } else if (ayer.impide_acceso !== r.impide_acceso) {
+        tipo = "CAMBIO_IMPIDE_ACCESO";
+      }
+      if (tipo !== "SIN_CAMBIO") {
+        cambiosDocs.push({
+          contratista: r.contratista,
+          planta: r.planta,
+          entidad: r.entidad,
+          detalle: r.detalle,
+          documento: r.documento,
+          periodo: r.periodo,
+          tipo,
+          cumple_ayer: ayer?.cumple || null,
+          cumple_hoy: r.cumple,
+          impide_pago_ayer: ayer?.impide_pago || null,
+          impide_pago_hoy: r.impide_pago,
+          impide_acceso_ayer: ayer?.impide_acceso || null,
+          impide_acceso_hoy: r.impide_acceso,
+          estado_hoy: r.estado,
+        });
+      }
+    }
+    // Detectar docs que existían ayer y no hoy (eliminados)
+    for (const r of datos.ayer) {
+      contratistasAyer.add(r.contratista);
+      if (!hoyMap.has(claveDoc(r))) {
+        cambiosDocs.push({
+          contratista: r.contratista,
+          planta: r.planta,
+          entidad: r.entidad,
+          detalle: r.detalle,
+          documento: r.documento,
+          periodo: r.periodo,
+          tipo: "DOC_ELIMINADO",
+          cumple_ayer: r.cumple,
+          cumple_hoy: null,
+          impide_pago_ayer: r.impide_pago,
+          impide_pago_hoy: null,
+          impide_acceso_ayer: r.impide_acceso,
+          impide_acceso_hoy: null,
+          estado_hoy: null,
+        });
+      }
+    }
+
+    // Agrupar por contratista
+    const porContratistaMap = new Map();
+    for (const c of cambiosDocs) {
+      if (!porContratistaMap.has(c.contratista)) {
+        porContratistaMap.set(c.contratista, {
+          contratista: c.contratista,
+          planta: c.planta,
+          esContratistaNuevo: !contratistasAyer.has(c.contratista),
+          esContratistaEliminado: !contratistasHoy.has(c.contratista),
+          cambios: [],
+          mejoras: 0,
+          empeoraron: 0,
+          impidePago: 0,
+          impideAcceso: 0,
+          docsNuevos: 0,
+          docsEliminados: 0,
+        });
+      }
+      const grp = porContratistaMap.get(c.contratista);
+      grp.cambios.push(c);
+      if (c.tipo === "MEJORA") grp.mejoras++;
+      else if (c.tipo === "EMPEORO") grp.empeoraron++;
+      else if (c.tipo === "CAMBIO_IMPIDE_PAGO") grp.impidePago++;
+      else if (c.tipo === "CAMBIO_IMPIDE_ACCESO") grp.impideAcceso++;
+      else if (c.tipo === "DOC_NUEVO") grp.docsNuevos++;
+      else if (c.tipo === "DOC_ELIMINADO") grp.docsEliminados++;
+    }
+    const porContratista = Array.from(porContratistaMap.values());
+
+    // Calcular cumple por contratista hoy y ayer (cuántos S vs total)
+    const calcularResumen = (filas) => {
+      const m = new Map();
+      for (const r of filas) {
+        if (!m.has(r.contratista)) m.set(r.contratista, { total: 0, ok: 0 });
+        const g = m.get(r.contratista);
+        g.total++;
+        if (r.cumple === "S") g.ok++;
+      }
+      return m;
+    };
+    const resumenHoy = calcularResumen(datos.hoy);
+    const resumenAyer = calcularResumen(datos.ayer);
+
+    for (const grp of porContratista) {
+      const h = resumenHoy.get(grp.contratista);
+      const a = resumenAyer.get(grp.contratista);
+      grp.docs_ok_hoy = h ? h.ok : 0;
+      grp.docs_total_hoy = h ? h.total : 0;
+      grp.docs_ok_ayer = a ? a.ok : 0;
+      grp.docs_total_ayer = a ? a.total : 0;
+      grp.cambio_neto = grp.docs_ok_hoy - grp.docs_ok_ayer;
+    }
+
+    // Totales globales
+    const totales = {
+      contratistasNuevos: porContratista.filter(c => c.esContratistaNuevo).length,
+      contratistasEliminados: porContratista.filter(c => c.esContratistaEliminado).length,
+      mejoras: cambiosDocs.filter(c => c.tipo === "MEJORA").length,
+      empeoraron: cambiosDocs.filter(c => c.tipo === "EMPEORO").length,
+      impidePago: cambiosDocs.filter(c => c.tipo === "CAMBIO_IMPIDE_PAGO").length,
+      impideAcceso: cambiosDocs.filter(c => c.tipo === "CAMBIO_IMPIDE_ACCESO").length,
+      docsNuevos: cambiosDocs.filter(c => c.tipo === "DOC_NUEVO").length,
+      docsEliminados: cambiosDocs.filter(c => c.tipo === "DOC_ELIMINADO").length,
+      contratistasConCambios: porContratista.length,
+      totalContratistasHoy: contratistasHoy.size,
+      totalContratistasAyer: contratistasAyer.size,
+    };
+
+    return { porContratista, totales, cambiosDocs };
+  }, [datos]);
+
+  // Aplicar filtros
+  const filtrados = useMemo(() => {
+    let res = analisis.porContratista || [];
+    if (busqueda) {
+      const q = busqueda.toLowerCase();
+      res = res.filter(c =>
+        (c.contratista || "").toLowerCase().includes(q) ||
+        (c.planta || "").toLowerCase().includes(q)
+      );
+    }
+    if (filtroOperacion !== "todas") {
+      res = res.filter(c => (c.planta || "").toLowerCase().includes(filtroOperacion.toLowerCase()));
+    }
+    if (filtroTipo === "criticos")        res = res.filter(c => c.impidePago > 0 || c.impideAcceso > 0);
+    else if (filtroTipo === "mejoraron")  res = res.filter(c => c.cambio_neto > 0);
+    else if (filtroTipo === "empeoraron") res = res.filter(c => c.cambio_neto < 0);
+    else if (filtroTipo === "nuevos")     res = res.filter(c => c.esContratistaNuevo);
+    else if (filtroTipo === "eliminados") res = res.filter(c => c.esContratistaEliminado);
+
+    return res.sort((a, b) => {
+      // Críticos primero, después por magnitud de cambio
+      const aCritico = (a.impidePago + a.impideAcceso) > 0 ? 1 : 0;
+      const bCritico = (b.impidePago + b.impideAcceso) > 0 ? 1 : 0;
+      if (aCritico !== bCritico) return bCritico - aCritico;
+      return Math.abs(b.cambio_neto) - Math.abs(a.cambio_neto);
+    });
+  }, [analisis, busqueda, filtroTipo, filtroOperacion]);
+
+  // Operaciones únicas para el filtro
+  const operacionesUnicas = useMemo(() => {
+    const set = new Set();
+    for (const c of (analisis.porContratista || [])) {
+      if (c.planta) set.add(c.planta);
+    }
+    return Array.from(set).sort();
+  }, [analisis]);
+
+  // Export CSV
+  const exportarCSV = () => {
+    const filas = [];
+    for (const c of filtrados) {
+      for (const cb of c.cambios) {
+        filas.push({
+          contratista: c.contratista,
+          operacion: c.planta,
+          tipo_cambio: cb.tipo,
+          documento: cb.documento,
+          recurso: cb.detalle,
+          periodo: cb.periodo,
+          cumple_ayer: cb.cumple_ayer,
+          cumple_hoy: cb.cumple_hoy,
+          impide_pago_ayer: cb.impide_pago_ayer,
+          impide_pago_hoy: cb.impide_pago_hoy,
+          impide_acceso_ayer: cb.impide_acceso_ayer,
+          impide_acceso_hoy: cb.impide_acceso_hoy,
+          estado_hoy: cb.estado_hoy,
+        });
+      }
+    }
+    if (filas.length === 0) { alert("No hay datos para exportar"); return; }
+    const headers = Object.keys(filas[0]);
+    const csv = [headers.join(",")].concat(
+      filas.map(r => headers.map(h => {
+        const v = r[h];
+        if (v === null || v === undefined) return "";
+        const s = String(v);
+        return s.includes(",") || s.includes("\"") || s.includes("\n") ? `"${s.replace(/"/g, '""')}"` : s;
+      }).join(","))
+    ).join("\n");
+    const blob = new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `variaciones_${fechaHoy}_vs_${fechaAyer || "ninguna"}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  return (
+    <div className="pg" style={{ maxWidth: 1500 }}>
+      <div style={{ marginBottom: 16 }}>
+        <div className="sec-title">Variaciones Diarias</div>
+        <div className="sec-sub">Cambios en estados de documentos día a día (Certronic liviano)</div>
+      </div>
+
+      {/* Selector de fechas */}
+      <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 8, padding: 14, marginBottom: 14 }}>
+        <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 10 }}>Comparación</div>
+        <div style={{ display: "flex", gap: 14, flexWrap: "wrap", alignItems: "center" }}>
+          <div>
+            <div style={{ fontSize: 11, color: "#475569", fontWeight: 600, marginBottom: 4 }}>Snapshot HOY</div>
+            <select value={fechaHoy || ""} onChange={e => setFechaHoy(e.target.value)}
+              style={{ background: "#f8fafc", border: "1px solid #e4e7ec", borderRadius: 4, padding: "6px 10px", fontSize: 12, minWidth: 160 }}>
+              {fechasDisponibles.map(f => <option key={f} value={f}>{f}</option>)}
+            </select>
+          </div>
+          <div style={{ fontSize: 18, color: "#94a3b8", marginTop: 18 }}>vs</div>
+          <div>
+            <div style={{ fontSize: 11, color: "#475569", fontWeight: 600, marginBottom: 4 }}>Snapshot AYER (referencia)</div>
+            <select value={fechaAyer || ""} onChange={e => setFechaAyer(e.target.value || null)}
+              style={{ background: "#f8fafc", border: "1px solid #e4e7ec", borderRadius: 4, padding: "6px 10px", fontSize: 12, minWidth: 160 }}>
+              <option value="">— ninguno —</option>
+              {fechasDisponibles.map(f => <option key={f} value={f}>{f}</option>)}
+            </select>
+          </div>
+          <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
+            <input type="text" placeholder="Buscar contratista..." value={busqueda} onChange={e => setBusqueda(e.target.value)}
+              style={{ background: "#f8fafc", border: "1px solid #e4e7ec", borderRadius: 4, padding: "6px 10px", fontSize: 12, minWidth: 200 }} />
+            <select value={filtroOperacion} onChange={e => setFiltroOperacion(e.target.value)}
+              style={{ background: "#f8fafc", border: "1px solid #e4e7ec", borderRadius: 4, padding: "6px 10px", fontSize: 12 }}>
+              <option value="todas">Todas las operaciones</option>
+              {operacionesUnicas.map(o => <option key={o} value={o}>{o}</option>)}
+            </select>
+            <button onClick={exportarCSV} disabled={!filtrados.length}
+              style={{ padding: "8px 14px", borderRadius: 4, border: "1px solid #e4e7ec", background: "#fff", color: "#475569", fontSize: 12, fontWeight: 600, cursor: filtrados.length === 0 ? "not-allowed" : "pointer", opacity: filtrados.length === 0 ? 0.5 : 1 }}>
+              Exportar CSV
+            </button>
+          </div>
+        </div>
+        {fechasDisponibles.length < 2 && (
+          <div style={{ marginTop: 10, padding: 10, background: "#fef3c7", border: "1px solid #fcd34d", borderRadius: 4, fontSize: 11, color: "#92400e" }}>
+            ⚠ Solo hay {fechasDisponibles.length} snapshot disponible. Se necesitan al menos 2 para comparar. Esperá al cron diario de mañana 06:00 Chile.
+          </div>
+        )}
+      </div>
+
+      {/* Resumen de cambios */}
+      {!loading && analisis.totales && fechaAyer && (
+        <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 8, padding: 14, marginBottom: 14 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: "#1a3a6b", marginBottom: 10 }}>
+            Resumen de cambios entre {fechaAyer} y {fechaHoy}
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 10 }}>
+            {[
+              { id: "criticos",    label: "Cambios en impide_pago",   count: analisis.totales.impidePago,         col: "#dc2626", desc: "Afecta retenciones" },
+              { id: "criticos2",   label: "Cambios en impide_acceso", count: analisis.totales.impideAcceso,       col: "#7c3aed", desc: "No pueden ingresar" },
+              { id: "mejoraron",   label: "Mejoras (cumple N→S)",     count: analisis.totales.mejoras,            col: "#16a34a", desc: "Docs aprobados" },
+              { id: "empeoraron",  label: "Empeoraron (cumple S→N)",  count: analisis.totales.empeoraron,         col: "#dc2626", desc: "Docs rechazados/vencidos" },
+              { id: "nuevos_doc",  label: "Documentos nuevos",        count: analisis.totales.docsNuevos,         col: "#0891b2", desc: "Aparecen hoy" },
+              { id: "elim_doc",    label: "Documentos eliminados",    count: analisis.totales.docsEliminados,     col: "#94a3b8", desc: "Ya no aparecen" },
+              { id: "nuevos",      label: "Contratistas nuevos",      count: analisis.totales.contratistasNuevos, col: "#0891b2", desc: "No estaban ayer" },
+              { id: "eliminados",  label: "Contratistas eliminados",  count: analisis.totales.contratistasEliminados, col: "#94a3b8", desc: "Estaban ayer, no hoy" },
+            ].map(item => (
+              <div key={item.id} style={{
+                background: item.count > 0 ? "#fff" : "#fafafa",
+                border: `1px solid ${item.count > 0 ? item.col + "44" : "#e4e7ec"}`,
+                borderLeft: `3px solid ${item.col}`,
+                borderRadius: 4, padding: "8px 12px",
+                opacity: item.count === 0 ? 0.6 : 1,
+              }}>
+                <div style={{ fontSize: 10, color: "#64748b", fontWeight: 600 }}>{item.label}</div>
+                <div style={{ fontSize: 22, fontWeight: 700, color: item.col, marginTop: 2 }}>{item.count}</div>
+                <div style={{ fontSize: 9, color: "#94a3b8", marginTop: 1 }}>{item.desc}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{ marginTop: 10, fontSize: 11, color: "#64748b" }}>
+            <strong>{analisis.totales.contratistasConCambios}</strong> contratistas con cambios
+            de un total de <strong>{analisis.totales.totalContratistasHoy}</strong> registrados hoy
+            ({analisis.totales.totalContratistasAyer} estaban ayer).
+          </div>
+        </div>
+      )}
+
+      {/* Filtros de tipo */}
+      {!loading && fechaAyer && analisis.porContratista.length > 0 && (
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
+          {[
+            { id: "todos",      label: "Todos" },
+            { id: "criticos",   label: "Críticos (impide_pago / acceso)" },
+            { id: "mejoraron",  label: "Mejoraron" },
+            { id: "empeoraron", label: "Empeoraron" },
+            { id: "nuevos",     label: "Nuevos" },
+            { id: "eliminados", label: "Eliminados" },
+          ].map(f => (
+            <button key={f.id} onClick={() => setFiltroTipo(f.id)}
+              style={{
+                padding: "6px 12px", borderRadius: 4,
+                border: "1px solid " + (filtroTipo === f.id ? "#1a3a6b" : "#e4e7ec"),
+                background: filtroTipo === f.id ? "#1a3a6b" : "#fff",
+                color: filtroTipo === f.id ? "#fff" : "#475569",
+                fontSize: 11, fontWeight: 600, cursor: "pointer",
+              }}>
+              {f.label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Tabla de contratistas con cambios */}
+      <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, overflow: "auto" }}>
+        {loading ? (
+          <div style={{ padding: 30, textAlign: "center", color: "#94a3b8" }}>Cargando snapshots...</div>
+        ) : !fechaAyer ? (
+          <div style={{ padding: 40, textAlign: "center", color: "#94a3b8" }}>
+            <div style={{ fontWeight: 600, marginBottom: 6, color: "#475569" }}>Seleccioná un snapshot de comparación</div>
+            <div style={{ fontSize: 11 }}>Necesitamos 2 snapshots para mostrar variaciones. Si solo hay uno, esperá al próximo cron diario.</div>
+          </div>
+        ) : filtrados.length === 0 ? (
+          <div style={{ padding: 40, textAlign: "center", color: "#94a3b8" }}>
+            <div style={{ fontWeight: 600, marginBottom: 6, color: "#16a34a" }}>✓ Sin cambios para mostrar</div>
+            <div style={{ fontSize: 11 }}>
+              {analisis.porContratista.length === 0
+                ? "Los snapshots son idénticos."
+                : "Ningún contratista coincide con los filtros aplicados."}
+            </div>
+          </div>
+        ) : (
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11, minWidth: 900 }}>
+            <thead>
+              <tr style={{ background: "#f8fafc", borderBottom: "1px solid #e4e7ec" }}>
+                <Th>Contratista</Th>
+                <Th>Operación</Th>
+                <Th right>Docs OK<br/>{fechaAyer?.slice(5)}</Th>
+                <Th right>Docs OK<br/>{fechaHoy?.slice(5)}</Th>
+                <Th right>Δ Neto</Th>
+                <Th center>✅ Mej.</Th>
+                <Th center>❌ Emp.</Th>
+                <Th center>💰 Pago</Th>
+                <Th center>🚫 Acc.</Th>
+                <Th center>🆕 Nuevos</Th>
+                <Th center>🗑 Elim.</Th>
+                <Th center>Detalle</Th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtrados.map((c, i) => {
+                const expandedThis = expandido === c.contratista;
+                const esCritico = (c.impidePago + c.impideAcceso) > 0;
+                return (
+                  <Fragment key={c.contratista + i}>
+                    <tr style={{
+                      borderBottom: "1px solid #f0f0f0",
+                      background: c.esContratistaNuevo ? "#ecfdf5" : esCritico ? "#fef2f2" : undefined,
+                    }}>
+                      <td style={tdStyle(true)}>
+                        {c.contratista}
+                        {c.esContratistaNuevo && (
+                          <span style={{ marginLeft: 6, fontSize: 9, padding: "2px 6px", borderRadius: 3, background: "#dcfce7", color: "#166534", fontWeight: 700 }}>NUEVO</span>
+                        )}
+                        {c.esContratistaEliminado && (
+                          <span style={{ marginLeft: 6, fontSize: 9, padding: "2px 6px", borderRadius: 3, background: "#fee2e2", color: "#991b1b", fontWeight: 700 }}>ELIMINADO</span>
+                        )}
+                      </td>
+                      <td style={{ ...tdStyle(), fontSize: 10, color: "#64748b" }}>{c.planta || "—"}</td>
+                      <td style={{ ...tdStyle(), textAlign: "right", color: "#94a3b8", fontSize: 10 }}>
+                        {c.docs_ok_ayer} / {c.docs_total_ayer}
+                      </td>
+                      <td style={{ ...tdStyle(), textAlign: "right", fontWeight: 600, color: "#1a3a6b" }}>
+                        {c.docs_ok_hoy} / {c.docs_total_hoy}
+                      </td>
+                      <td style={{ ...tdStyle(), textAlign: "right", fontWeight: 700,
+                        color: c.cambio_neto > 0 ? "#16a34a" : c.cambio_neto < 0 ? "#dc2626" : "#94a3b8" }}>
+                        {c.cambio_neto > 0 ? "+" : ""}{c.cambio_neto}
+                      </td>
+                      <td style={{ ...tdStyle(), textAlign: "center", color: c.mejoras > 0 ? "#16a34a" : "#cbd5e1", fontWeight: c.mejoras > 0 ? 700 : 400 }}>{c.mejoras || "—"}</td>
+                      <td style={{ ...tdStyle(), textAlign: "center", color: c.empeoraron > 0 ? "#dc2626" : "#cbd5e1", fontWeight: c.empeoraron > 0 ? 700 : 400 }}>{c.empeoraron || "—"}</td>
+                      <td style={{ ...tdStyle(), textAlign: "center", color: c.impidePago > 0 ? "#dc2626" : "#cbd5e1", fontWeight: c.impidePago > 0 ? 700 : 400 }}>{c.impidePago || "—"}</td>
+                      <td style={{ ...tdStyle(), textAlign: "center", color: c.impideAcceso > 0 ? "#7c3aed" : "#cbd5e1", fontWeight: c.impideAcceso > 0 ? 700 : 400 }}>{c.impideAcceso || "—"}</td>
+                      <td style={{ ...tdStyle(), textAlign: "center", color: c.docsNuevos > 0 ? "#0891b2" : "#cbd5e1", fontWeight: c.docsNuevos > 0 ? 700 : 400 }}>{c.docsNuevos || "—"}</td>
+                      <td style={{ ...tdStyle(), textAlign: "center", color: c.docsEliminados > 0 ? "#94a3b8" : "#cbd5e1", fontWeight: c.docsEliminados > 0 ? 700 : 400 }}>{c.docsEliminados || "—"}</td>
+                      <td style={{ ...tdStyle(), textAlign: "center" }}>
+                        <button onClick={() => setExpandido(expandedThis ? null : c.contratista)}
+                          style={{
+                            padding: "4px 10px", borderRadius: 4, border: "1px solid #e4e7ec",
+                            background: expandedThis ? "#1a3a6b" : "#fff",
+                            color: expandedThis ? "#fff" : "#475569",
+                            fontSize: 11, fontWeight: 600, cursor: "pointer",
+                          }}>
+                          {expandedThis ? "Cerrar" : "Ver"}
+                        </button>
+                      </td>
+                    </tr>
+                    {expandedThis && (
+                      <tr>
+                        <td colSpan={12} style={{ padding: 0, background: "#f8fafc" }}>
+                          <DetalleVariacionContratista contratista={c} fechaHoy={fechaHoy} fechaAyer={fechaAyer} />
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Componente del detalle de variaciones por contratista
+function DetalleVariacionContratista({ contratista, fechaHoy, fechaAyer }) {
+  const cambios = contratista.cambios || [];
+  const sinCambioCount = (contratista.docs_total_hoy || 0) - cambios.filter(c => c.tipo !== "DOC_ELIMINADO" && c.tipo !== "DOC_NUEVO").length;
+
+  // Color y label por tipo de cambio
+  const tipoConfig = {
+    MEJORA:               { col: "#16a34a", bg: "#dcfce7", label: "Mejoró", icono: "✅" },
+    EMPEORO:              { col: "#dc2626", bg: "#fee2e2", label: "Empeoró", icono: "❌" },
+    CAMBIO_IMPIDE_PAGO:   { col: "#dc2626", bg: "#fee2e2", label: "Cambió impide_pago", icono: "💰" },
+    CAMBIO_IMPIDE_ACCESO: { col: "#7c3aed", bg: "#f3e8ff", label: "Cambió impide_acceso", icono: "🚫" },
+    DOC_NUEVO:            { col: "#0891b2", bg: "#cffafe", label: "Documento nuevo", icono: "🆕" },
+    DOC_ELIMINADO:        { col: "#94a3b8", bg: "#f1f5f9", label: "Documento eliminado", icono: "🗑" },
+  };
+
+  // Agrupar por tipo
+  const porTipo = {};
+  for (const c of cambios) {
+    if (!porTipo[c.tipo]) porTipo[c.tipo] = [];
+    porTipo[c.tipo].push(c);
+  }
+  const ordenTipos = ["CAMBIO_IMPIDE_PAGO", "CAMBIO_IMPIDE_ACCESO", "EMPEORO", "MEJORA", "DOC_NUEVO", "DOC_ELIMINADO"];
+
+  return (
+    <div style={{ padding: 16 }}>
+      <div style={{ fontSize: 12, fontWeight: 700, color: "#1a3a6b", marginBottom: 4 }}>
+        {contratista.contratista}
+      </div>
+      <div style={{ fontSize: 11, color: "#64748b", marginBottom: 14 }}>
+        Cambios entre {fechaAyer} y {fechaHoy} · {cambios.length} documento{cambios.length !== 1 ? "s" : ""} con cambios · {sinCambioCount} sin cambios
+      </div>
+
+      {ordenTipos.filter(t => porTipo[t]).map(tipo => {
+        const config = tipoConfig[tipo];
+        return (
+          <div key={tipo} style={{ marginBottom: 12 }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: config.col, textTransform: "uppercase", marginBottom: 6, letterSpacing: 0.5 }}>
+              {config.icono} {config.label} ({porTipo[tipo].length})
+            </div>
+            <div style={{ background: "#fff", border: `1px solid ${config.col}33`, borderRadius: 4, overflow: "hidden" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+                <thead>
+                  <tr style={{ background: config.bg }}>
+                    <th style={{ padding: "5px 10px", textAlign: "left", fontSize: 10, fontWeight: 600, color: config.col }}>Recurso</th>
+                    <th style={{ padding: "5px 10px", textAlign: "left", fontSize: 10, fontWeight: 600, color: config.col }}>Documento</th>
+                    <th style={{ padding: "5px 10px", textAlign: "left", fontSize: 10, fontWeight: 600, color: config.col }}>Periodo</th>
+                    <th style={{ padding: "5px 10px", textAlign: "center", fontSize: 10, fontWeight: 600, color: config.col }}>Ayer</th>
+                    <th style={{ padding: "5px 10px", textAlign: "center", fontSize: 10, fontWeight: 600, color: config.col }}>Hoy</th>
+                    <th style={{ padding: "5px 10px", textAlign: "left", fontSize: 10, fontWeight: 600, color: config.col }}>Estado actual</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {porTipo[tipo].map((c, i) => {
+                    let ayerCol = "—", hoyCol = "—";
+                    if (tipo === "CAMBIO_IMPIDE_PAGO") {
+                      ayerCol = `pago: ${c.impide_pago_ayer}`;
+                      hoyCol = `pago: ${c.impide_pago_hoy}`;
+                    } else if (tipo === "CAMBIO_IMPIDE_ACCESO") {
+                      ayerCol = `acc: ${c.impide_acceso_ayer}`;
+                      hoyCol = `acc: ${c.impide_acceso_hoy}`;
+                    } else {
+                      ayerCol = c.cumple_ayer || "—";
+                      hoyCol = c.cumple_hoy || "—";
+                    }
+                    return (
+                      <tr key={i} style={{ borderTop: "1px solid #f1f5f9" }}>
+                        <td style={{ padding: "6px 10px", fontSize: 10 }}>
+                          <div>{c.detalle || "—"}</div>
+                          <div style={{ fontSize: 9, color: "#94a3b8" }}>{c.entidad}</div>
+                        </td>
+                        <td style={{ padding: "6px 10px", fontSize: 10 }}>{c.documento}</td>
+                        <td style={{ padding: "6px 10px", fontSize: 10, color: "#64748b" }}>{c.periodo || "—"}</td>
+                        <td style={{ padding: "6px 10px", textAlign: "center", fontSize: 10, fontFamily: "monospace" }}>{ayerCol}</td>
+                        <td style={{ padding: "6px 10px", textAlign: "center", fontSize: 10, fontFamily: "monospace", fontWeight: 700, color: config.col }}>{hoyCol}</td>
+                        <td style={{ padding: "6px 10px", fontSize: 10, color: "#64748b" }}>{c.estado_hoy || "—"}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function ModuloCertificacionesMadre() {
   const [subtab, setSubtab] = useState("ingresos");
   const tabs = [
-    { id: "ingresos", label: "Certificación Nuevos Ingresos", desc: "Drivers MX (Mercado Libre)" },
-    { id: "pagos", label: "Certificación para Pagos", desc: "Contratistas Chile (Certronic)" },
+    { id: "ingresos",    label: "Certificación Nuevos Ingresos", desc: "Drivers MX (Mercado Libre)" },
+    { id: "pagos",       label: "Certificación para Pagos",      desc: "Contratistas Chile (Certronic)" },
+    { id: "variaciones", label: "Variaciones Diarias",            desc: "Cambios día a día en estados" },
   ];
   return (
     <div style={{ padding: 0 }}>
       <div style={{ background: "#fff", borderBottom: "1px solid #e4e7ec", padding: "12px 24px" }}>
         <div style={{ fontSize: 18, fontWeight: 700, color: "#1a3a6b", marginBottom: 10 }}>Certificaciones</div>
-        <div style={{ display: "flex", gap: 0, borderBottom: "2px solid #e4e7ec", marginLeft: -8 }}>
+        <div style={{ display: "flex", gap: 0, borderBottom: "2px solid #e4e7ec", marginLeft: -8, flexWrap: "wrap" }}>
           {tabs.map(t => (
             <button key={t.id} onClick={() => setSubtab(t.id)}
               style={{
@@ -8064,8 +8669,9 @@ function ModuloCertificacionesMadre() {
           ))}
         </div>
       </div>
-      {subtab === "ingresos" && <ModuloCertificaciones />}
-      {subtab === "pagos" && <ModuloPagos />}
+      {subtab === "ingresos"    && <ModuloCertificaciones />}
+      {subtab === "pagos"       && <ModuloPagos />}
+      {subtab === "variaciones" && <VariacionesDiarias />}
     </div>
   );
 }
