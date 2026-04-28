@@ -8076,10 +8076,11 @@ function ModuloCertificacionesMadre() {
 function ModuloPagosMadre() {
   const [subtab, setSubtab] = useState("listado");
   const tabs = [
-    { id: "listado",   label: "Listado de Pagos", desc: "Cálculo diario por contratista" },
-    { id: "drivers",   label: "Drivers",          desc: "Maestro de choferes MX" },
-    { id: "ayudantes", label: "Ayudantes",        desc: "Detalle diario de auxiliares" },
-    { id: "config",    label: "Configuración",    desc: "Tarifario, zonas y reglas" },
+    { id: "listado",   label: "Listado de Pagos",      desc: "Cálculo diario por contratista" },
+    { id: "info_ruta", label: "Información de Ruta",   desc: "Análisis operacional por ruta" },
+    { id: "drivers",   label: "Drivers",               desc: "Maestro de choferes MX" },
+    { id: "ayudantes", label: "Ayudantes",             desc: "Detalle diario de auxiliares" },
+    { id: "config",    label: "Configuración",         desc: "Tarifario, zonas y reglas" },
   ];
   return (
     <div style={{ padding: 0 }}>
@@ -8101,6 +8102,7 @@ function ModuloPagosMadre() {
         </div>
       </div>
       {subtab === "listado"   && <ListadoPagosDiarios />}
+      {subtab === "info_ruta" && <InformacionDeRuta />}
       {subtab === "drivers"   && <DriversMaestroMX />}
       {subtab === "ayudantes" && <AyudantesDetalleDia />}
       {subtab === "config"    && <ConfiguracionPagos />}
@@ -8297,13 +8299,67 @@ function calcularPagos({ viajes, snapshots, scZonas, matrizPrecios, especiales, 
     let auxiliarEstado = aux.estado;
     let montoAux = 0;
 
-    // Detectar si los snapshots están en una fecha distinta a la del viaje
-    // (caso "ruta cruza medianoche") y dejar observación informativa
-    if (snapsRuta.length > 0 && fechaSalida) {
+    // Extraer datos del raw_json del último snapshot disponible
+    // (orden: pre_cierre > fin_tarde > tarde > media_manana > inicio)
+    // Sacamos: timestamps + loyalty + performance + retrasos + incidentes
+    let initDateUnix = null, finalDateUnix = null;
+    let loyaltyTier = null;
+    let performanceScore = null;
+    let tieneRetrasoInicial = false;
+    let cantidadIncidentes = 0;
+    let stemOutMinutos = null;
+    if (snapsRuta.length > 0) {
+      const ordenados = [...snapsRuta].sort((a, b) =>
+        new Date(b.hora_snapshot || 0) - new Date(a.hora_snapshot || 0)
+      );
+      // Primero buscamos los timestamps
+      for (const s of ordenados) {
+        const rj = s.raw_json || {};
+        if (!initDateUnix && rj.initDate) initDateUnix = Number(rj.initDate);
+        if (!finalDateUnix && rj.finalDate) finalDateUnix = Number(rj.finalDate);
+        if (initDateUnix && finalDateUnix) break;
+      }
+      // Métricas operacionales: tomamos el último snapshot que las tenga
+      for (const s of ordenados) {
+        const rj = s.raw_json || {};
+        if (loyaltyTier === null && rj.driver?.loyalty?.name) loyaltyTier = rj.driver.loyalty.name;
+        if (performanceScore === null && rj.routePerformanceScore) performanceScore = rj.routePerformanceScore;
+        if (rj.flags?.hasInitialDelay === true) tieneRetrasoInicial = true;
+        if (Array.isArray(rj.incidentTypes) && rj.incidentTypes.length > cantidadIncidentes) {
+          cantidadIncidentes = rj.incidentTypes.length;
+        }
+        if (stemOutMinutos === null && rj.timingData?.stemOut != null) {
+          stemOutMinutos = Number(rj.timingData.stemOut);
+        }
+        if (loyaltyTier && performanceScore && stemOutMinutos !== null) break;
+      }
+    }
+
+    // Detectar cruce de medianoche con timestamps exactos (zona MX)
+    // Si la fecha local MX de initDate ≠ fecha local MX de finalDate → cruzó medianoche
+    let cruzaMedianoche = false;
+    let duracionMinutos = null;
+    if (initDateUnix && finalDateUnix) {
+      duracionMinutos = Math.round((finalDateUnix - initDateUnix) / 60);
+      const fechaInicioMX = new Intl.DateTimeFormat("en-CA", {
+        timeZone: "America/Mexico_City", year: "numeric", month: "2-digit", day: "2-digit"
+      }).format(new Date(initDateUnix * 1000));
+      const fechaFinMX = new Intl.DateTimeFormat("en-CA", {
+        timeZone: "America/Mexico_City", year: "numeric", month: "2-digit", day: "2-digit"
+      }).format(new Date(finalDateUnix * 1000));
+      if (fechaInicioMX !== fechaFinMX) {
+        cruzaMedianoche = true;
+        const horas = Math.floor(duracionMinutos / 60);
+        const mins = duracionMinutos % 60;
+        obs.push(`Ruta cruzó medianoche: ${fechaInicioMX} → ${fechaFinMX} (duración ${horas}h ${mins}min)`);
+      }
+    } else if (snapsRuta.length > 0 && fechaSalida) {
+      // Fallback: detección por fechas de snapshots (si no hay raw_json con timestamps)
       const fechasSnap = [...new Set(snapsRuta.map(s => s.fecha))];
       const otrasFechas = fechasSnap.filter(f => f !== fechaSalida);
       if (otrasFechas.length > 0) {
-        obs.push(`Ruta cruzó medianoche: snapshots de ${otrasFechas.join(", ")}`);
+        cruzaMedianoche = true;
+        obs.push(`Ruta cruzó medianoche (estimado por snapshots): fechas ${fechasSnap.join(", ")}`);
       }
     }
 
@@ -8367,6 +8423,17 @@ function calcularPagos({ viajes, snapshots, scZonas, matrizPrecios, especiales, 
       semana_pago: calcularSemanaPago(fechaSalida),
       tiene_tarifa_especial: tieneTarifaEspecial,
       observaciones: obs.length > 0 ? obs.join(" | ") : null,
+      // Datos temporales (Bloque D — auditoría operacional)
+      hora_inicio_ruta: initDateUnix ? new Date(initDateUnix * 1000).toISOString() : null,
+      hora_fin_ruta: finalDateUnix ? new Date(finalDateUnix * 1000).toISOString() : null,
+      duracion_minutos: duracionMinutos,
+      cruza_medianoche: cruzaMedianoche,
+      // Métricas operacionales del raw_json
+      loyalty_tier: loyaltyTier,
+      performance_score: performanceScore,
+      tiene_retraso_inicial: tieneRetrasoInicial,
+      cantidad_incidentes: cantidadIncidentes,
+      stem_out_minutos: stemOutMinutos,
     });
   }
 
@@ -8516,6 +8583,22 @@ function ListadoPagosDiarios() {
   // Helpers de formato
   const fmtMXN = (n) => `$${Number(n || 0).toLocaleString("es-MX", { maximumFractionDigits: 0 })}`;
   const fmtPct = (n) => `${Number(n || 0).toFixed(2)}%`;
+  const fmtDuracion = (mins) => {
+    if (mins == null || mins === 0) return "—";
+    const h = Math.floor(mins / 60);
+    const m = mins % 60;
+    return h > 0 ? `${h}h ${String(m).padStart(2, "0")}m` : `${m}m`;
+  };
+  const fmtHoraMX = (iso) => {
+    if (!iso) return "—";
+    try {
+      return new Intl.DateTimeFormat("es-MX", {
+        timeZone: "America/Mexico_City",
+        day: "2-digit", month: "2-digit",
+        hour: "2-digit", minute: "2-digit", hour12: false,
+      }).format(new Date(iso));
+    } catch { return "—"; }
+  };
 
   // Filtrado y ordenamiento de filas
   const filasFiltradas = useMemo(() => {
@@ -8857,6 +8940,546 @@ const badgeAux = (estado) => {
   const m = map[estado] || map["SIN_HELPER"];
   return { padding: "2px 6px", borderRadius: 3, fontWeight: 600, background: m.bg, color: m.co };
 };
+
+// ═══════════════════════════════════════════════════════════════════════════
+// INFORMACIÓN DE RUTA — análisis operacional (lee de maestro_jornada_mx)
+// ═══════════════════════════════════════════════════════════════════════════
+function InformacionDeRuta() {
+  const [fecha, setFecha] = useState(fechaOperativaOffset(-1));
+  const [rutas, setRutas] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [busqueda, setBusqueda] = useState("");
+  const [filtroAlerta, setFiltroAlerta] = useState("todas");
+  const [orderBy, setOrderBy] = useState("driver_name");
+  const [orderDir, setOrderDir] = useState("asc");
+  const [detalleRuta, setDetalleRuta] = useState(null); // {ruta, snapshots} cuando se expande
+
+  useEffect(() => {
+    let cancel = false;
+    (async () => {
+      setLoading(true);
+      try {
+        const { data, error } = await sb.from("maestro_jornada_mx")
+          .select("*")
+          .eq("fecha", fecha)
+          .order("driver_name")
+          .limit(5000);
+        if (cancel) return;
+        if (error) throw error;
+        setRutas(data || []);
+      } catch (e) {
+        console.error(e);
+        if (!cancel) setRutas([]);
+      }
+      if (!cancel) setLoading(false);
+    })();
+    return () => { cancel = true; };
+  }, [fecha]);
+
+  // Helpers
+  const fmtDuracion = (mins) => {
+    if (mins == null || mins === 0) return "—";
+    const h = Math.floor(mins / 60);
+    const m = mins % 60;
+    return h > 0 ? `${h}h ${String(m).padStart(2, "0")}m` : `${m}m`;
+  };
+  const fmtHoraMX = (iso) => {
+    if (!iso) return "—";
+    try {
+      return new Intl.DateTimeFormat("es-MX", {
+        timeZone: "America/Mexico_City",
+        day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false,
+      }).format(new Date(iso));
+    } catch { return "—"; }
+  };
+  const fmtPct = (n) => `${Number(n || 0).toFixed(2)}%`;
+
+  // Reglas de coloración (semáforo)
+  const colorDuracion = (mins) => {
+    if (mins == null) return "#94a3b8";
+    if (mins > 720) return "#dc2626"; // > 12h rojo
+    if (mins > 480) return "#d97706"; // > 8h ámbar
+    return "#16a34a"; // verde
+  };
+  const colorNS = (ns) => {
+    const n = Number(ns) || 0;
+    if (n >= 99.5) return "#16a34a";
+    if (n >= 95) return "#d97706";
+    return "#dc2626";
+  };
+  const colorStemOut = (m) => {
+    if (m == null) return "#94a3b8";
+    if (m > 90) return "#dc2626";
+    if (m > 30) return "#d97706";
+    return "#16a34a";
+  };
+  const colorLoyalty = (tier) => {
+    const t = String(tier || "").toLowerCase();
+    if (t.includes("oro") || t.includes("gold")) return "#ca8a04";
+    if (t.includes("plata") || t.includes("silver")) return "#64748b";
+    if (t.includes("bronce") || t.includes("bronze")) return "#9a3412";
+    return "#94a3b8";
+  };
+
+  // Filtrado
+  const filtradas = useMemo(() => {
+    let res = [...rutas];
+    if (busqueda) {
+      const q = busqueda.toLowerCase();
+      res = res.filter(r =>
+        (r.driver_name || "").toLowerCase().includes(q) ||
+        (r.placa || "").toLowerCase().includes(q) ||
+        (r.service_center_id || "").toLowerCase().includes(q) ||
+        (r.id_ruta || "").toLowerCase().includes(q)
+      );
+    }
+    if (filtroAlerta === "rutas_largas") res = res.filter(r => (r.duracion_minutos || 0) > 720);
+    else if (filtroAlerta === "cruces") res = res.filter(r => r.cruza_medianoche);
+    else if (filtroAlerta === "ns_bajo") res = res.filter(r => Number(r.ns_pct || 0) < 95);
+    else if (filtroAlerta === "performance_not_ok") res = res.filter(r => r.performance_score === "NOT_OK");
+    else if (filtroAlerta === "retraso_inicial") res = res.filter(r => r.tiene_retraso_inicial);
+    else if (filtroAlerta === "incidentes") res = res.filter(r => (r.cantidad_incidentes || 0) > 0);
+    else if (filtroAlerta === "loyalty_bronce") res = res.filter(r => (r.loyalty_tier || "").toLowerCase().includes("bronce"));
+
+    res.sort((a, b) => {
+      const va = a[orderBy], vb = b[orderBy];
+      const numA = typeof va === "number" || (!isNaN(parseFloat(va)) && va !== null);
+      const numB = typeof vb === "number" || (!isNaN(parseFloat(vb)) && vb !== null);
+      let cmp = 0;
+      if (numA && numB) cmp = Number(va) - Number(vb);
+      else cmp = String(va || "").localeCompare(String(vb || ""));
+      return orderDir === "asc" ? cmp : -cmp;
+    });
+    return res;
+  }, [rutas, busqueda, filtroAlerta, orderBy, orderDir]);
+
+  const toggleOrder = (col) => {
+    if (orderBy === col) setOrderDir(orderDir === "asc" ? "desc" : "asc");
+    else { setOrderBy(col); setOrderDir("asc"); }
+  };
+  const ordIcon = (col) => orderBy === col ? (orderDir === "asc" ? " ↑" : " ↓") : "";
+
+  // KPIs
+  const kpis = useMemo(() => {
+    const conDur = rutas.filter(r => r.duracion_minutos != null);
+    const durProm = conDur.length > 0 ? conDur.reduce((s, r) => s + r.duracion_minutos, 0) / conDur.length : 0;
+    const kmProm = rutas.length > 0 ? rutas.reduce((s, r) => s + Number(r.km_recorridos || 0), 0) / rutas.length : 0;
+    const nsProm = rutas.length > 0 ? rutas.reduce((s, r) => s + Number(r.ns_pct || 0), 0) / rutas.length : 0;
+    const tiers = rutas.reduce((acc, r) => {
+      const t = r.loyalty_tier || "Sin loyalty";
+      acc[t] = (acc[t] || 0) + 1;
+      return acc;
+    }, {});
+    return {
+      total: rutas.length,
+      durProm,
+      kmProm,
+      nsProm,
+      tiers,
+      rutasLargas: rutas.filter(r => (r.duracion_minutos || 0) > 720).length,
+      cruces: rutas.filter(r => r.cruza_medianoche).length,
+      nsBajo: rutas.filter(r => Number(r.ns_pct || 0) < 95).length,
+      perfNotOk: rutas.filter(r => r.performance_score === "NOT_OK").length,
+      retrasoInicial: rutas.filter(r => r.tiene_retraso_inicial).length,
+      conIncidentes: rutas.filter(r => (r.cantidad_incidentes || 0) > 0).length,
+      bronces: rutas.filter(r => (r.loyalty_tier || "").toLowerCase().includes("bronce")).length,
+    };
+  }, [rutas]);
+
+  // Cargar detalle expandido (raw_json del último snapshot)
+  const cargarDetalle = async (ruta) => {
+    if (detalleRuta?.ruta?.id === ruta.id) {
+      setDetalleRuta(null);
+      return;
+    }
+    setDetalleRuta({ ruta, snapshots: null, loading: true });
+    try {
+      const { data, error } = await sb.from("logistic_ayudantes_snapshots")
+        .select("momento_dia, hora_snapshot, status, has_helper, raw_json")
+        .eq("id_ruta", Number(ruta.id_ruta))
+        .gte("fecha", new Date(new Date(fecha).getTime() - 86400000).toISOString().slice(0, 10))
+        .lte("fecha", new Date(new Date(fecha).getTime() + 86400000).toISOString().slice(0, 10))
+        .order("hora_snapshot");
+      if (error) throw error;
+      setDetalleRuta({ ruta, snapshots: data || [], loading: false });
+    } catch (e) {
+      console.error(e);
+      setDetalleRuta({ ruta, snapshots: [], loading: false, error: e.message });
+    }
+  };
+
+  // Export CSV
+  const exportarCSV = () => {
+    if (filtradas.length === 0) { alert("No hay datos para exportar"); return; }
+    const headers = [
+      "Fecha","Chofer","Patente","Vehículo","Tipología","SC","Zona","ID Ruta","Ciclo",
+      "Hora inicio MX","Hora fin MX","Duración min","Cruzó medianoche",
+      "Km","NS%","No visitado %","Categoría NS",
+      "Loyalty","Performance","Retraso inicial","Incidentes","Stem out min",
+      "Pago neto",
+    ];
+    const rows = filtradas.map(r => [
+      r.fecha, r.driver_name, r.placa, r.vehiculo_raw, r.tipologia, r.service_center_id, r.zona,
+      r.id_ruta, r.ciclo, fmtHoraMX(r.hora_inicio_ruta), fmtHoraMX(r.hora_fin_ruta),
+      r.duracion_minutos, r.cruza_medianoche ? "SI" : "NO",
+      r.km_recorridos, r.ns_pct, r.ns_no_visitado, r.ns_categoria,
+      r.loyalty_tier, r.performance_score, r.tiene_retraso_inicial ? "SI" : "NO",
+      r.cantidad_incidentes, r.stem_out_minutos, r.pago_neto,
+    ]);
+    const csv = [headers, ...rows].map(r => r.map(v => {
+      if (v === null || v === undefined) return "";
+      const s = String(v);
+      return s.includes(",") || s.includes("\"") || s.includes("\n") ? `"${s.replace(/"/g, '""')}"` : s;
+    }).join(",")).join("\n");
+    const blob = new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `info_ruta_${fecha}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  return (
+    <div className="pg" style={{ maxWidth: 1700 }}>
+      <div style={{ marginBottom: 16 }}>
+        <div className="sec-title">Información de Ruta</div>
+        <div className="sec-sub">Análisis operacional · datos del raw_json de Logistic</div>
+      </div>
+
+      {/* Selector de fecha + búsqueda + export */}
+      <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 8, padding: 14, marginBottom: 14 }}>
+        <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>Fecha de operación</div>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
+          {[
+            { l: "Ayer", fn: () => setFecha(fechaOperativaOffset(-1)) },
+            { l: "Hoy", fn: () => setFecha(fechaHoyOperativa()) },
+            { l: "-2 días", fn: () => setFecha(fechaOperativaOffset(-2)) },
+            { l: "-3 días", fn: () => setFecha(fechaOperativaOffset(-3)) },
+            { l: "-7 días", fn: () => setFecha(fechaOperativaOffset(-7)) },
+          ].map(({ l, fn }) => (
+            <button key={l} onClick={fn} style={{ padding: "5px 12px", borderRadius: 4, border: "1px solid #e4e7ec", background: "#f8fafc", color: "#475569", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>{l}</button>
+          ))}
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <input type="date" value={fecha} onChange={e => setFecha(e.target.value)}
+            style={{ background: "#f8fafc", border: "1px solid #e4e7ec", borderRadius: 4, padding: "6px 10px", fontSize: 12 }} />
+          <input type="text" placeholder="Buscar chofer / patente / SC / id ruta..." value={busqueda} onChange={e => setBusqueda(e.target.value)}
+            style={{ background: "#f8fafc", border: "1px solid #e4e7ec", borderRadius: 4, padding: "6px 10px", fontSize: 12, flex: 1, minWidth: 240 }} />
+          <button onClick={exportarCSV} disabled={filtradas.length === 0}
+            style={{ padding: "8px 14px", borderRadius: 4, border: "1px solid #e4e7ec", background: "#fff", color: "#475569", fontSize: 12, fontWeight: 600, cursor: filtradas.length === 0 ? "not-allowed" : "pointer", opacity: filtradas.length === 0 ? 0.5 : 1 }}>
+            Exportar CSV
+          </button>
+        </div>
+      </div>
+
+      {/* Panel de alertas */}
+      {!loading && rutas.length > 0 && (
+        <div style={{ background: "#fef9f3", border: "1px solid #fed7aa", borderRadius: 8, padding: 14, marginBottom: 14 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: "#9a3412", marginBottom: 10 }}>Alertas del día</div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 8 }}>
+            {[
+              { id: "rutas_largas",        label: "Rutas largas (>12h)",     count: kpis.rutasLargas,     col: "#dc2626" },
+              { id: "cruces",              label: "Cruzaron medianoche",      count: kpis.cruces,          col: "#7c3aed" },
+              { id: "ns_bajo",             label: "NS < 95% (Crítico)",        count: kpis.nsBajo,          col: "#dc2626" },
+              { id: "performance_not_ok",  label: "Performance NOT_OK",       count: kpis.perfNotOk,       col: "#dc2626" },
+              { id: "retraso_inicial",     label: "Con retraso inicial",      count: kpis.retrasoInicial,  col: "#d97706" },
+              { id: "incidentes",          label: "Con incidentes",           count: kpis.conIncidentes,   col: "#d97706" },
+              { id: "loyalty_bronce",      label: "Choferes Bronce",          count: kpis.bronces,         col: "#9a3412" },
+            ].filter(a => a.count > 0).map(a => (
+              <button key={a.id} onClick={() => setFiltroAlerta(filtroAlerta === a.id ? "todas" : a.id)}
+                style={{ background: filtroAlerta === a.id ? a.col : "#fff", color: filtroAlerta === a.id ? "#fff" : a.col,
+                  border: `1px solid ${a.col}`, borderRadius: 4, padding: "8px 10px", textAlign: "left", cursor: "pointer", fontSize: 11, fontWeight: 600 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <span>{a.label}</span>
+                  <span style={{ fontSize: 16, fontWeight: 700 }}>{a.count}</span>
+                </div>
+              </button>
+            ))}
+            {kpis.rutasLargas + kpis.cruces + kpis.nsBajo + kpis.perfNotOk + kpis.retrasoInicial + kpis.conIncidentes + kpis.bronces === 0 && (
+              <div style={{ fontSize: 11, color: "#16a34a", fontWeight: 600 }}>Sin alertas — todo en orden ✓</div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* KPIs */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 10, marginBottom: 14 }}>
+        <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: "12px 14px" }}>
+          <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>Rutas</div>
+          <div style={{ fontSize: 22, fontWeight: 700, color: "#1a3a6b", marginTop: 2 }}>{kpis.total}</div>
+        </div>
+        <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: "12px 14px" }}>
+          <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>Duración prom.</div>
+          <div style={{ fontSize: 22, fontWeight: 700, color: "#1a3a6b", marginTop: 2 }}>{fmtDuracion(Math.round(kpis.durProm))}</div>
+        </div>
+        <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: "12px 14px" }}>
+          <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>Km prom.</div>
+          <div style={{ fontSize: 22, fontWeight: 700, color: "#1a3a6b", marginTop: 2 }}>{kpis.kmProm.toFixed(1)}</div>
+        </div>
+        <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: "12px 14px" }}>
+          <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>NS prom.</div>
+          <div style={{ fontSize: 22, fontWeight: 700, color: colorNS(kpis.nsProm), marginTop: 2 }}>{fmtPct(kpis.nsProm)}</div>
+        </div>
+        <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: "12px 14px" }}>
+          <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>Loyalty mix</div>
+          <div style={{ fontSize: 11, marginTop: 4, color: "#475569" }}>
+            {Object.entries(kpis.tiers).slice(0, 4).map(([t, c]) => (
+              <div key={t} style={{ display: "flex", justifyContent: "space-between" }}>
+                <span style={{ color: colorLoyalty(t), fontWeight: 600 }}>{t}</span>
+                <span>{c}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Tabla */}
+      <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, overflow: "auto" }}>
+        {loading ? (
+          <div style={{ padding: 30, textAlign: "center", color: "#94a3b8" }}>Cargando datos del {fecha}...</div>
+        ) : rutas.length === 0 ? (
+          <div style={{ padding: 40, textAlign: "center", color: "#94a3b8" }}>
+            <div style={{ fontWeight: 600, marginBottom: 6, color: "#475569" }}>Sin datos para {fecha}</div>
+            <div style={{ fontSize: 11 }}>Andá a "Listado de Pagos" y apretá "Calcular pagos del día" para esta fecha.</div>
+          </div>
+        ) : filtradas.length === 0 ? (
+          <div style={{ padding: 30, textAlign: "center", color: "#94a3b8" }}>Ningún registro coincide con los filtros</div>
+        ) : (
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11, minWidth: 1500 }}>
+            <thead>
+              <tr style={{ background: "#f8fafc", borderBottom: "1px solid #e4e7ec" }}>
+                <Th onClick={() => toggleOrder("driver_name")}>Chofer{ordIcon("driver_name")}</Th>
+                <Th onClick={() => toggleOrder("service_center_id")} center>SC · Zona{ordIcon("service_center_id")}</Th>
+                <Th onClick={() => toggleOrder("placa")}>Patente · Vehíc.{ordIcon("placa")}</Th>
+                <Th onClick={() => toggleOrder("id_ruta")}>ID Ruta{ordIcon("id_ruta")}</Th>
+                <Th onClick={() => toggleOrder("hora_inicio_ruta")} center>Inicio MX{ordIcon("hora_inicio_ruta")}</Th>
+                <Th onClick={() => toggleOrder("hora_fin_ruta")} center>Fin MX{ordIcon("hora_fin_ruta")}</Th>
+                <Th onClick={() => toggleOrder("duracion_minutos")} right>Dur.{ordIcon("duracion_minutos")}</Th>
+                <Th onClick={() => toggleOrder("km_recorridos")} right>Km{ordIcon("km_recorridos")}</Th>
+                <Th onClick={() => toggleOrder("ns_pct")} right>NS%{ordIcon("ns_pct")}</Th>
+                <Th onClick={() => toggleOrder("loyalty_tier")} center>Loyalty{ordIcon("loyalty_tier")}</Th>
+                <Th onClick={() => toggleOrder("performance_score")} center>Perf.{ordIcon("performance_score")}</Th>
+                <Th onClick={() => toggleOrder("stem_out_minutos")} right>StemOut{ordIcon("stem_out_minutos")}</Th>
+                <Th onClick={() => toggleOrder("cantidad_incidentes")} right>Incid.{ordIcon("cantidad_incidentes")}</Th>
+                <Th center>Detalle</Th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtradas.map((r, i) => {
+                const expanded = detalleRuta?.ruta?.id === r.id;
+                return (
+                  <Fragment key={r.id || i}>
+                    <tr style={{ borderBottom: "1px solid #f0f0f0" }}>
+                      <td style={tdStyle(true)}>{r.driver_name || "—"}</td>
+                      <td style={{ ...tdStyle(), textAlign: "center" }}>
+                        <div style={{ fontWeight: 700, color: "#1a3a6b" }}>{r.service_center_id}</div>
+                        <span style={{ fontSize: 9, padding: "1px 6px", borderRadius: 3, background: "#e0e7ff", color: "#3730a3", fontWeight: 600 }}>{r.zona || "?"}</span>
+                      </td>
+                      <td style={tdStyle()}>
+                        <div style={{ fontFamily: "monospace", fontSize: 10 }}>{r.placa || "—"}</div>
+                        <div style={{ fontSize: 9, color: "#94a3b8", marginTop: 1 }}>{r.tipologia || "?"}</div>
+                      </td>
+                      <td style={{ ...tdStyle(), fontFamily: "monospace", fontSize: 10 }}>{r.id_ruta}</td>
+                      <td style={{ ...tdStyle(), textAlign: "center", fontSize: 10 }}>{fmtHoraMX(r.hora_inicio_ruta)}</td>
+                      <td style={{ ...tdStyle(), textAlign: "center", fontSize: 10 }}>
+                        {fmtHoraMX(r.hora_fin_ruta)}
+                        {r.cruza_medianoche && <div style={{ fontSize: 9, color: "#7c3aed", fontWeight: 700 }}>★ cruzó 0h</div>}
+                      </td>
+                      <td style={{ ...tdStyle(), textAlign: "right", fontWeight: 700, color: colorDuracion(r.duracion_minutos) }}>
+                        {fmtDuracion(r.duracion_minutos)}
+                      </td>
+                      <td style={{ ...tdStyle(), textAlign: "right" }}>{Number(r.km_recorridos || 0).toFixed(1)}</td>
+                      <td style={{ ...tdStyle(), textAlign: "right", color: colorNS(r.ns_pct), fontWeight: 600 }}>
+                        <div>{fmtPct(r.ns_pct)}</div>
+                        <div style={{ fontSize: 9, color: "#94a3b8", fontWeight: 400 }}>{r.ns_categoria}</div>
+                      </td>
+                      <td style={{ ...tdStyle(), textAlign: "center" }}>
+                        {r.loyalty_tier ? (
+                          <span style={{ fontSize: 10, padding: "2px 6px", borderRadius: 3, fontWeight: 600,
+                            background: colorLoyalty(r.loyalty_tier) + "22", color: colorLoyalty(r.loyalty_tier) }}>
+                            {r.loyalty_tier}
+                          </span>
+                        ) : "—"}
+                      </td>
+                      <td style={{ ...tdStyle(), textAlign: "center", fontSize: 10 }}>
+                        {r.performance_score ? (
+                          <span style={{ fontSize: 10, padding: "2px 6px", borderRadius: 3, fontWeight: 600,
+                            background: r.performance_score === "OK" ? "#dcfce7" : "#fee2e2",
+                            color: r.performance_score === "OK" ? "#166534" : "#991b1b" }}>
+                            {r.performance_score}
+                          </span>
+                        ) : "—"}
+                      </td>
+                      <td style={{ ...tdStyle(), textAlign: "right", color: colorStemOut(r.stem_out_minutos), fontWeight: 600 }}>
+                        {r.stem_out_minutos != null ? `${r.stem_out_minutos}m` : "—"}
+                      </td>
+                      <td style={{ ...tdStyle(), textAlign: "right", color: r.cantidad_incidentes > 0 ? "#dc2626" : "#94a3b8", fontWeight: r.cantidad_incidentes > 0 ? 700 : 400 }}>
+                        {r.cantidad_incidentes || 0}
+                      </td>
+                      <td style={{ ...tdStyle(), textAlign: "center" }}>
+                        <button onClick={() => cargarDetalle(r)}
+                          style={{ padding: "4px 10px", borderRadius: 4, border: "1px solid #e4e7ec",
+                            background: expanded ? "#1a3a6b" : "#fff", color: expanded ? "#fff" : "#475569",
+                            fontSize: 11, fontWeight: 600, cursor: "pointer" }}>
+                          {expanded ? "Cerrar" : "Ver"}
+                        </button>
+                      </td>
+                    </tr>
+                    {expanded && (
+                      <tr>
+                        <td colSpan={14} style={{ padding: 0, background: "#f8fafc" }}>
+                          <DetalleRutaExpandido detalle={detalleRuta} fmtHoraMX={fmtHoraMX} />
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Componente para mostrar el detalle expandido (raw_json del último snapshot + timeline)
+function DetalleRutaExpandido({ detalle, fmtHoraMX }) {
+  if (detalle.loading) {
+    return <div style={{ padding: 20, textAlign: "center", color: "#94a3b8", fontSize: 12 }}>Cargando detalle...</div>;
+  }
+  if (!detalle.snapshots || detalle.snapshots.length === 0) {
+    return <div style={{ padding: 20, textAlign: "center", color: "#94a3b8", fontSize: 12 }}>Sin snapshots disponibles para esta ruta</div>;
+  }
+  const r = detalle.ruta;
+  // Tomar el último snapshot con raw_json
+  const ultimo = [...detalle.snapshots].reverse().find(s => s.raw_json) || detalle.snapshots[detalle.snapshots.length - 1];
+  const rj = ultimo?.raw_json || {};
+  const stats = rj.driver?.loyalty?.stats || [];
+  const counters = rj.counters || {};
+  const shipmentData = rj.shipmentData || {};
+  const timing = rj.timingData || {};
+  const flags = rj.flags || {};
+
+  const Item = ({ label, value, color }) => (
+    <div style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", borderBottom: "1px dashed #e4e7ec" }}>
+      <span style={{ fontSize: 11, color: "#64748b" }}>{label}</span>
+      <span style={{ fontSize: 11, fontWeight: 600, color: color || "#1a3a6b" }}>{value}</span>
+    </div>
+  );
+
+  return (
+    <div style={{ padding: 16 }}>
+      <div style={{ fontSize: 12, fontWeight: 700, color: "#1a3a6b", marginBottom: 10 }}>
+        Detalle de la ruta {r.id_ruta} — {r.driver_name}
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 14 }}>
+        {/* Driver */}
+        <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: 12 }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: "#7c3aed", textTransform: "uppercase", marginBottom: 8 }}>Chofer</div>
+          <Item label="ID MELI" value={rj.driver?.driverId || r.driver_id || "—"} />
+          <Item label="Nombre" value={rj.driver?.driverName || r.driver_name} />
+          <Item label="Loyalty" value={rj.driver?.loyalty?.name || "—"} />
+          {stats.map((s, i) => (
+            <div key={i} style={{ fontSize: 10, color: "#64748b", padding: "2px 0" }}>· {s.label}</div>
+          ))}
+          <Item label="Reclamos hoy" value={rj.driver?.driverClaims ?? "—"} color={rj.driver?.driverClaims > 0 ? "#dc2626" : undefined} />
+          <Item label="Contact rate" value={rj.driver?.contactRate || "—"} />
+        </div>
+
+        {/* Ruta y vehículo */}
+        <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: 12 }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: "#1a3a6b", textTransform: "uppercase", marginBottom: 8 }}>Ruta y Vehículo</div>
+          <Item label="Patente" value={rj.vehicle?.license || r.placa || "—"} />
+          <Item label="Descripción" value={rj.vehicle?.description || r.vehiculo_raw || "—"} />
+          <Item label="Cluster" value={rj.cluster || "—"} />
+          <Item label="Cycle" value={rj.plannedRoute?.cycleName || r.ciclo || "—"} />
+          <Item label="Service Center" value={rj.serviceCenterId || r.service_center_id} />
+          <Item label="Performance Score" value={rj.routePerformanceScore || "—"}
+            color={rj.routePerformanceScore === "NOT_OK" ? "#dc2626" : "#16a34a"} />
+          <Item label="Status" value={rj.status || "—"} />
+        </div>
+
+        {/* Tiempos */}
+        <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: 12 }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: "#0891b2", textTransform: "uppercase", marginBottom: 8 }}>Tiempos</div>
+          <Item label="Inicio asignado" value={fmtHoraMX(r.hora_inicio_ruta)} />
+          <Item label="Fin de ruta" value={fmtHoraMX(r.hora_fin_ruta)} />
+          <Item label="1ª entrega real" value={rj.dateFirstMovement ? fmtHoraMX(new Date(rj.dateFirstMovement * 1000).toISOString()) : "—"} />
+          <Item label="Duración total" value={r.duracion_minutos ? `${Math.floor(r.duracion_minutos/60)}h ${r.duracion_minutos%60}m` : "—"} />
+          <Item label="ORH (min en ruta)" value={timing.orh ?? "—"} />
+          <Item label="OZH (min en zona)" value={timing.ozh ?? "—"} />
+          <Item label="Stem In" value={timing.stemIn != null ? `${timing.stemIn} min` : "—"} />
+          <Item label="Stem Out" value={timing.stemOut != null ? `${timing.stemOut} min` : "—"}
+            color={timing.stemOut > 90 ? "#dc2626" : timing.stemOut > 30 ? "#d97706" : "#16a34a"} />
+          <Item label="Retraso inicial" value={flags.hasInitialDelay ? "SÍ" : "NO"}
+            color={flags.hasInitialDelay ? "#dc2626" : "#16a34a"} />
+        </div>
+
+        {/* Entregas */}
+        <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: 12 }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: "#16a34a", textTransform: "uppercase", marginBottom: 8 }}>Entregas</div>
+          <Item label="Total despachados" value={counters.total ?? r.envios_despachados ?? "—"} />
+          <Item label="Entregados" value={counters.delivered ?? r.envios_entregados ?? "—"} />
+          <Item label="No entregados" value={counters.notDelivered ?? "—"}
+            color={counters.notDelivered > 0 ? "#dc2626" : undefined} />
+          <Item label="NS%" value={`${r.ns_pct}%`} />
+          <Item label="No visitado %" value={`${r.ns_no_visitado}%`}
+            color={r.ns_no_visitado > 10 ? "#dc2626" : r.ns_no_visitado > 2 ? "#d97706" : "#16a34a"} />
+          <Item label="Failed delivery idx" value={flags.failedDeliveryIndex?.percent || "—"} />
+          <Item label="Reclamos" value={rj.claimsCount ?? flags.claimsCount ?? 0} />
+        </div>
+
+        {/* Incidencias y notas */}
+        <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: 12 }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: "#dc2626", textTransform: "uppercase", marginBottom: 8 }}>Incidentes y Notas</div>
+          <Item label="Incidentes (cant.)" value={rj.incidentTypes?.length || 0}
+            color={(rj.incidentTypes?.length || 0) > 0 ? "#dc2626" : "#16a34a"} />
+          <Item label="Tipos de incidente" value={rj.incidentTypes?.join(", ") || "—"} />
+          <Item label="Notas (cant.)" value={rj.notesQuantity ?? 0} />
+          <Item label="Casos abiertos (TOC)" value={rj.tocTotalCases ?? 0}
+            color={(rj.tocTotalCases || 0) > 0 ? "#d97706" : undefined} />
+          <Item label="Warnings" value={rj.warningsQuantity ?? 0} />
+          <Item label="Has comments" value={rj.hasComments ? "SÍ" : "NO"} />
+        </div>
+
+        {/* Auxiliar / Pago */}
+        <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: 12 }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: "#F47B20", textTransform: "uppercase", marginBottom: 8 }}>Auxiliar y Pago</div>
+          <Item label="Estado auxiliar" value={r.auxiliar_estado || "—"} />
+          <Item label="Snapshots con helper" value={`${r.auxiliar_snapshots_total || 0} / 5`} />
+          <Item label="Tarifa base" value={`$${Number(r.tarifa_base || 0).toLocaleString("es-MX")}`} />
+          <Item label="Ajuste NS" value={`$${Number(r.ajuste_ns || 0).toLocaleString("es-MX")}`}
+            color={r.ajuste_ns >= 0 ? "#16a34a" : "#dc2626"} />
+          <Item label="Monto auxiliar" value={`$${Number(r.monto_auxiliar || 0).toLocaleString("es-MX")}`} />
+          <Item label="Pago neto" value={`$${Number(r.pago_neto || 0).toLocaleString("es-MX")}`} color="#16a34a" />
+        </div>
+      </div>
+
+      {/* Timeline de snapshots */}
+      <div style={{ marginTop: 14, background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: 12 }}>
+        <div style={{ fontSize: 10, fontWeight: 700, color: "#1a3a6b", textTransform: "uppercase", marginBottom: 8 }}>
+          Timeline de snapshots ({detalle.snapshots.length})
+        </div>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          {detalle.snapshots.map((s, i) => (
+            <div key={i} style={{ background: s.has_helper ? "#dcfce7" : "#f1f5f9", border: "1px solid #e4e7ec",
+              borderRadius: 4, padding: "6px 10px", fontSize: 10 }}>
+              <div style={{ fontWeight: 700, color: "#1a3a6b" }}>{s.momento_dia}</div>
+              <div style={{ color: "#64748b" }}>{fmtHoraMX(s.hora_snapshot)}</div>
+              <div style={{ color: s.has_helper ? "#166534" : "#94a3b8", marginTop: 2 }}>
+                {s.has_helper ? "✓ helper" : "sin helper"}
+              </div>
+              <div style={{ color: "#64748b", fontSize: 9, marginTop: 1 }}>{s.status}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // DRIVERS MAESTRO MX — con carga masiva Excel
