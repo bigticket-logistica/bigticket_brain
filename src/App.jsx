@@ -5210,9 +5210,20 @@ function ModuloPagos() {
   const [ultimaEjecucion, setUltimaEjecucion] = useState(null);
   const [ordenCol, setOrdenCol] = useState("transporte");
   const [ordenAsc, setOrdenAsc] = useState(true);
+  
+  // ─── 🆕 OVERRIDES DEL ANALISTA ────────────────────────────────
+  // Map de overrides activos: key = "contratista|categoria|subcontratista|doc_campo"
+  const [overrides, setOverrides] = useState(new Map());
+  // Modal de edición
+  const [modalOverride, setModalOverride] = useState(null);  // { contratista, categoria, subcontratista, docCampo, docLabel, estadoCertronic, fechaSnapshot, overrideExistente }
 
   useEffect(() => { cargarPeriodos(); }, []);
-  useEffect(() => { if (periodo) cargarDatos(); }, [periodo]);
+  useEffect(() => { 
+    if (periodo) {
+      cargarDatos();
+      cargarOverrides();
+    }
+  }, [periodo]);
 
   const cargarPeriodos = async () => {
     try {
@@ -5254,6 +5265,146 @@ function ModuloPagos() {
     }
     setLoading(false);
   };
+
+  // ─── 🆕 OVERRIDES ────────────────────────────────────────────
+  // Construye la key única de un override
+  const overrideKey = (contratista, categoria, subcontratista, docCampo) => {
+    return `${contratista || ""}|${categoria || ""}|${subcontratista || ""}|${docCampo || ""}`;
+  };
+
+  const cargarOverrides = async () => {
+    try {
+      const { data, error } = await sb.from("certronic_overrides_analista")
+        .select("*")
+        .eq("activo", true);
+      if (error) {
+        if (error.message && error.message.includes("does not exist")) {
+          console.log("[Overrides] Tabla aún no existe, saltando");
+          return;
+        }
+        throw error;
+      }
+      const map = new Map();
+      for (const o of data || []) {
+        const k = overrideKey(o.contratista, o.categoria, o.subcontratista_nombre, o.doc_campo);
+        map.set(k, o);
+      }
+      console.log(`[Overrides] Cargados ${map.size} overrides activos`);
+      setOverrides(map);
+    } catch (e) {
+      console.warn("[Overrides] Error cargando:", e.message);
+    }
+  };
+
+  const guardarOverride = async ({ contratista, categoria, subcontratista, docCampo, estadoCertronic, fechaSnapshot, estadoOverride, motivo, fechaCambio }) => {
+    if (!motivo || !motivo.trim()) {
+      alert("El motivo es obligatorio");
+      return false;
+    }
+    if (!fechaCambio) {
+      alert("La fecha del cambio es obligatoria");
+      return false;
+    }
+    try {
+      // Si ya existe un override activo para esta tupla, lo invalidamos primero
+      const k = overrideKey(contratista, categoria, subcontratista, docCampo);
+      const existente = overrides.get(k);
+      if (existente) {
+        await sb.from("certronic_overrides_analista")
+          .update({ activo: false, invalidado_at: new Date().toISOString(), invalidado_motivo: "Reemplazado por nuevo override" })
+          .eq("id", existente.id);
+      }
+      // Insertar el nuevo
+      const { data, error } = await sb.from("certronic_overrides_analista")
+        .insert({
+          contratista,
+          categoria,
+          subcontratista_nombre: subcontratista || null,
+          doc_campo: docCampo,
+          estado_certronic_original: estadoCertronic || null,
+          fecha_snapshot_original: fechaSnapshot || null,
+          estado_override: estadoOverride,
+          motivo: motivo.trim(),
+          fecha_cambio: fechaCambio,
+          editado_por: "analista",
+          activo: true,
+        })
+        .select()
+        .single();
+      if (error) throw error;
+      // Actualizar el map local
+      const nuevoMap = new Map(overrides);
+      nuevoMap.set(k, data);
+      setOverrides(nuevoMap);
+      return true;
+    } catch (e) {
+      console.error("[Overrides] Error guardando:", e);
+      alert("Error guardando el override: " + (e.message || e));
+      return false;
+    }
+  };
+
+  const quitarOverride = async (override) => {
+    if (!confirm(`¿Quitar este override?\n\nEstado override: ${override.estado_override}\nMotivo: ${override.motivo}\n\nVuelve a mostrarse el estado de Certronic.`)) return;
+    try {
+      const { error } = await sb.from("certronic_overrides_analista")
+        .update({ activo: false, invalidado_at: new Date().toISOString(), invalidado_motivo: "Eliminado manualmente por analista" })
+        .eq("id", override.id);
+      if (error) throw error;
+      const k = overrideKey(override.contratista, override.categoria, override.subcontratista_nombre, override.doc_campo);
+      const nuevoMap = new Map(overrides);
+      nuevoMap.delete(k);
+      setOverrides(nuevoMap);
+    } catch (e) {
+      console.error("[Overrides] Error quitando:", e);
+      alert("Error quitando el override: " + (e.message || e));
+    }
+  };
+
+  // Auto-invalidar overrides cuando Certronic cambió el campo
+  // Se ejecuta cuando llegan datos nuevos
+  useEffect(() => {
+    if (overrides.size === 0) return;
+    if (!datos.pc.length && !datos.ryc.length && !datos.sub.length) return;
+    
+    const aInvalidar = [];
+    for (const [k, o] of overrides.entries()) {
+      // Buscar la fila correspondiente en los datos actuales
+      let dataset = [];
+      if (o.categoria === "PC") dataset = datos.pc;
+      else if (o.categoria === "RYC") dataset = datos.ryc;
+      else if (o.categoria === "SUB") dataset = datos.sub;
+      
+      const fila = dataset.find(d => 
+        d.transporte === o.contratista && 
+        (!o.subcontratista_nombre || d.subcontratista_nombre === o.subcontratista_nombre)
+      );
+      if (!fila) continue;  // ya no existe esa fila, dejarlo igual
+      
+      const valorActual = fila[o.doc_campo];
+      // Si Certronic cambió el valor (a algo distinto del original que tenía cuando se hizo el override)
+      if (valorActual && o.estado_certronic_original && valorActual !== o.estado_certronic_original) {
+        aInvalidar.push(o);
+      }
+    }
+    
+    if (aInvalidar.length > 0) {
+      console.log(`[Overrides] Invalidando ${aInvalidar.length} overrides porque Certronic actualizó esos campos`);
+      (async () => {
+        for (const o of aInvalidar) {
+          await sb.from("certronic_overrides_analista")
+            .update({ 
+              activo: false, 
+              invalidado_at: new Date().toISOString(), 
+              invalidado_motivo: "Certronic actualizó el campo" 
+            })
+            .eq("id", o.id);
+        }
+        // Recargar overrides
+        cargarOverrides();
+      })();
+    }
+  }, [datos]);
 
   // ── Helpers ──
   const operacionAMandante = (op) => {
@@ -5500,7 +5651,9 @@ function ModuloPagos() {
   };
 
   // ─── Helpers de UI ───
-  const renderIconoDoc = (estado) => {
+  // 🆕 Versión modificada que acepta contexto para click→modal y muestra indicador de override
+  const renderIconoDoc = (estado, ctx = null) => {
+    // ctx: { contratista, categoria, subcontratista, docCampo, docLabel, fechaSnapshot }
     const conf = {
       VALIDADO: { ico: "✓", color: "#16a34a", bg: "#dcfce7", titulo: "Validado" },
       RECEPCIONADO: { ico: "◐", color: "#1e40af", bg: "#dbeafe", titulo: "Recepcionado" },
@@ -5508,14 +5661,62 @@ function ModuloPagos() {
       PENDIENTE: { ico: "⏳", color: "#92400e", bg: "#fef3c7", titulo: "Pendiente" },
       NO_APLICA: { ico: "—", color: "#94a3b8", bg: "#f1f5f9", titulo: "No aplica" },
     };
-    const c = conf[estado] || { ico: "?", color: "#64748b", bg: "#f1f5f9", titulo: estado || "Sin dato" };
+    
+    // ¿Hay override activo para este doc?
+    let override = null;
+    let estadoMostrar = estado;
+    if (ctx) {
+      const k = overrideKey(ctx.contratista, ctx.categoria, ctx.subcontratista, ctx.docCampo);
+      override = overrides.get(k);
+      if (override) {
+        estadoMostrar = override.estado_override;
+      }
+    }
+    
+    const c = conf[estadoMostrar] || { ico: "?", color: "#64748b", bg: "#f1f5f9", titulo: estadoMostrar || "Sin dato" };
+    
+    // Tooltip con info del override
+    let tooltip = c.titulo;
+    if (override) {
+      tooltip = `OVERRIDE ANALISTA\nEstado Certronic: ${conf[estado]?.titulo || estado || "—"}\nEstado override: ${c.titulo}\nMotivo: ${override.motivo}\nEditado: ${override.fecha_cambio}`;
+    }
+    
+    const clickeable = !!ctx;
+    
     return (
-      <div title={c.titulo} style={{
-        width: 28, height: 28, borderRadius: 6,
-        background: c.bg, color: c.color,
-        display: "flex", alignItems: "center", justifyContent: "center",
-        fontSize: 14, fontWeight: 700, margin: "0 auto",
-      }}>{c.ico}</div>
+      <div 
+        title={tooltip} 
+        onClick={clickeable ? (e) => {
+          e.stopPropagation();
+          setModalOverride({
+            contratista: ctx.contratista,
+            categoria: ctx.categoria,
+            subcontratista: ctx.subcontratista,
+            docCampo: ctx.docCampo,
+            docLabel: ctx.docLabel,
+            estadoCertronic: estado,
+            fechaSnapshot: ctx.fechaSnapshot,
+            overrideExistente: override || null,
+          });
+        } : undefined}
+        style={{
+          width: 28, height: 28, borderRadius: 6,
+          background: c.bg, color: c.color,
+          display: "flex", alignItems: "center", justifyContent: "center",
+          fontSize: 14, fontWeight: 700, margin: "0 auto",
+          cursor: clickeable ? "pointer" : "default",
+          position: "relative",
+          border: override ? "2px solid #f59e0b" : undefined,
+        }}>
+        {c.ico}
+        {override && (
+          <span style={{
+            position: "absolute", top: -3, right: -3,
+            width: 10, height: 10, borderRadius: "50%",
+            background: "#f59e0b", border: "2px solid #fff",
+          }} title="Editado por analista" />
+        )}
+      </div>
     );
   };
 
@@ -5668,6 +5869,211 @@ function ModuloPagos() {
           {vistaActiva === "matriz" && <EditorMatriz />}
         </>
       )}
+      
+      {/* 🆕 MODAL DE OVERRIDE DEL ANALISTA */}
+      {modalOverride && (
+        <ModalOverride
+          contexto={modalOverride}
+          onClose={() => setModalOverride(null)}
+          onGuardar={async (datos) => {
+            const ok = await guardarOverride({
+              contratista: modalOverride.contratista,
+              categoria: modalOverride.categoria,
+              subcontratista: modalOverride.subcontratista,
+              docCampo: modalOverride.docCampo,
+              estadoCertronic: modalOverride.estadoCertronic,
+              fechaSnapshot: modalOverride.fechaSnapshot,
+              estadoOverride: datos.estado,
+              motivo: datos.motivo,
+              fechaCambio: datos.fecha,
+            });
+            if (ok) setModalOverride(null);
+          }}
+          onQuitar={async () => {
+            if (modalOverride.overrideExistente) {
+              await quitarOverride(modalOverride.overrideExistente);
+              setModalOverride(null);
+            }
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+// ─── 🆕 MODAL: Editar override del analista ─────────────────────
+function ModalOverride({ contexto, onClose, onGuardar, onQuitar }) {
+  const ESTADOS = [
+    { v: "VALIDADO", ico: "✓", label: "Validado", color: "#16a34a", bg: "#dcfce7" },
+    { v: "RECEPCIONADO", ico: "◐", label: "Recepcionado", color: "#1e40af", bg: "#dbeafe" },
+    { v: "ENVIADO", ico: "↗", label: "Enviado", color: "#3730a3", bg: "#e0e7ff" },
+    { v: "PENDIENTE", ico: "⏳", label: "Pendiente", color: "#92400e", bg: "#fef3c7" },
+    { v: "NO_APLICA", ico: "—", label: "No aplica", color: "#94a3b8", bg: "#f1f5f9" },
+  ];
+  const tieneOverride = !!contexto.overrideExistente;
+  const estadoInicial = tieneOverride ? contexto.overrideExistente.estado_override : (contexto.estadoCertronic || "PENDIENTE");
+  const motivoInicial = tieneOverride ? contexto.overrideExistente.motivo : "";
+  const fechaInicial = tieneOverride ? contexto.overrideExistente.fecha_cambio : new Date().toISOString().slice(0, 10);
+  
+  const [estado, setEstado] = useState(estadoInicial);
+  const [motivo, setMotivo] = useState(motivoInicial);
+  const [fecha, setFecha] = useState(fechaInicial);
+  const [guardando, setGuardando] = useState(false);
+  
+  const estadoCertronicConf = ESTADOS.find(e => e.v === contexto.estadoCertronic) || { ico: "?", label: contexto.estadoCertronic || "—", color: "#64748b", bg: "#f1f5f9" };
+  
+  const handleGuardar = async () => {
+    if (!motivo.trim()) {
+      alert("El motivo es obligatorio");
+      return;
+    }
+    if (!fecha) {
+      alert("La fecha es obligatoria");
+      return;
+    }
+    setGuardando(true);
+    await onGuardar({ estado, motivo, fecha });
+    setGuardando(false);
+  };
+  
+  return (
+    <div onClick={onClose} style={{
+      position: "fixed", top: 0, left: 0, right: 0, bottom: 0,
+      background: "rgba(0,0,0,0.4)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 9999,
+    }}>
+      <div onClick={e => e.stopPropagation()} style={{
+        background: "#fff", borderRadius: 8, padding: 0, maxWidth: 520, width: "90%",
+        boxShadow: "0 20px 60px rgba(0,0,0,0.3)", overflow: "hidden",
+      }}>
+        {/* Header */}
+        <div style={{ padding: "14px 18px", background: "#1a3a6b", color: "#fff", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 700 }}>
+              {tieneOverride ? "Editar override del analista" : "Editar estado de documento"}
+            </div>
+            <div style={{ fontSize: 10, opacity: 0.8, marginTop: 2 }}>
+              Override: NO modifica datos de Certronic
+            </div>
+          </div>
+          <button onClick={onClose} style={{ background: "transparent", border: "none", color: "#fff", fontSize: 22, cursor: "pointer", lineHeight: 1 }}>×</button>
+        </div>
+        
+        {/* Body */}
+        <div style={{ padding: 18 }}>
+          {/* Contexto */}
+          <div style={{ background: "#f8fafc", border: "1px solid #e4e7ec", borderRadius: 6, padding: 10, marginBottom: 14, fontSize: 11 }}>
+            <div><strong>Contratista:</strong> {contexto.contratista}</div>
+            {contexto.subcontratista && <div><strong>Subcontratista:</strong> {contexto.subcontratista}</div>}
+            <div><strong>Documento:</strong> {contexto.docLabel || contexto.docCampo}</div>
+            <div><strong>Categoría:</strong> {contexto.categoria}</div>
+          </div>
+          
+          {/* Estado actual de Certronic */}
+          <div style={{ marginBottom: 14 }}>
+            <div style={{ fontSize: 10, color: "#64748b", marginBottom: 4, fontWeight: 600, textTransform: "uppercase" }}>
+              Estado actual en Certronic
+            </div>
+            <div style={{ 
+              padding: "8px 12px", borderRadius: 6, fontSize: 12, fontWeight: 600,
+              background: estadoCertronicConf.bg, color: estadoCertronicConf.color, display: "inline-block",
+            }}>
+              {estadoCertronicConf.ico} {estadoCertronicConf.label}
+            </div>
+            {contexto.fechaSnapshot && (
+              <span style={{ fontSize: 10, color: "#94a3b8", marginLeft: 8 }}>
+                Snapshot: {contexto.fechaSnapshot}
+              </span>
+            )}
+          </div>
+          
+          {/* Si ya hay override, mostrarlo */}
+          {tieneOverride && (
+            <div style={{ marginBottom: 14, padding: 10, background: "#fef3c7", border: "1px solid #fbbf24", borderRadius: 6 }}>
+              <div style={{ fontSize: 10, color: "#92400e", fontWeight: 700, marginBottom: 4 }}>
+                ● OVERRIDE ACTIVO (editado por analista)
+              </div>
+              <div style={{ fontSize: 11, color: "#78350f" }}>
+                <strong>Motivo actual:</strong> {contexto.overrideExistente.motivo}<br />
+                <strong>Fecha:</strong> {contexto.overrideExistente.fecha_cambio} · <strong>Por:</strong> {contexto.overrideExistente.editado_por}
+              </div>
+            </div>
+          )}
+          
+          {/* Selector de nuevo estado */}
+          <div style={{ marginBottom: 14 }}>
+            <div style={{ fontSize: 10, color: "#64748b", marginBottom: 6, fontWeight: 600, textTransform: "uppercase" }}>
+              Nuevo estado
+            </div>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              {ESTADOS.map(e => (
+                <button key={e.v} onClick={() => setEstado(e.v)} style={{
+                  padding: "8px 12px", borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: "pointer",
+                  background: estado === e.v ? e.bg : "#fff",
+                  color: estado === e.v ? e.color : "#475569",
+                  border: estado === e.v ? `2px solid ${e.color}` : "1px solid #e4e7ec",
+                  display: "flex", alignItems: "center", gap: 5,
+                }}>
+                  <span style={{ fontSize: 14 }}>{e.ico}</span> {e.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          
+          {/* Motivo (obligatorio) */}
+          <div style={{ marginBottom: 14 }}>
+            <div style={{ fontSize: 10, color: "#64748b", marginBottom: 4, fontWeight: 600, textTransform: "uppercase" }}>
+              Motivo <span style={{ color: "#dc2626" }}>*</span>
+            </div>
+            <textarea
+              value={motivo}
+              onChange={e => setMotivo(e.target.value)}
+              placeholder="Ej: Documento aprobado por mail el 26-abr, Certronic aún no actualizado"
+              rows={3}
+              style={{
+                width: "100%", padding: 8, borderRadius: 6, border: "1px solid #e4e7ec", fontSize: 11, fontFamily: "inherit",
+                resize: "vertical",
+              }}
+            />
+          </div>
+          
+          {/* Fecha (obligatorio) */}
+          <div style={{ marginBottom: 18 }}>
+            <div style={{ fontSize: 10, color: "#64748b", marginBottom: 4, fontWeight: 600, textTransform: "uppercase" }}>
+              Fecha del cambio <span style={{ color: "#dc2626" }}>*</span>
+            </div>
+            <input
+              type="date"
+              value={fecha}
+              onChange={e => setFecha(e.target.value)}
+              style={{ padding: 6, borderRadius: 6, border: "1px solid #e4e7ec", fontSize: 11 }}
+            />
+          </div>
+          
+          {/* Botones */}
+          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap" }}>
+            {tieneOverride && (
+              <button onClick={onQuitar} style={{
+                padding: "8px 14px", borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: "pointer",
+                background: "#fee2e2", color: "#991b1b", border: "1px solid #fca5a5", marginRight: "auto",
+              }}>
+                🗑 Quitar override
+              </button>
+            )}
+            <button onClick={onClose} style={{
+              padding: "8px 14px", borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: "pointer",
+              background: "#fff", color: "#64748b", border: "1px solid #e4e7ec",
+            }}>
+              Cancelar
+            </button>
+            <button onClick={handleGuardar} disabled={guardando} style={{
+              padding: "8px 16px", borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: guardando ? "wait" : "pointer",
+              background: "#1a3a6b", color: "#fff", border: "none", opacity: guardando ? 0.6 : 1,
+            }}>
+              {guardando ? "Guardando..." : (tieneOverride ? "Actualizar override" : "Guardar override")}
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -5836,7 +6242,14 @@ function DashboardCertificacion({
                         </div>
                       </td>
                       {docsPorCategoria[tabCategoria].map(doc => (
-                        <td key={doc.key} style={tdE}>{renderIconoDoc(d[doc.key])}</td>
+                        <td key={doc.key} style={tdE}>{renderIconoDoc(d[doc.key], {
+                          contratista: d.transporte,
+                          categoria: d.categoria,
+                          subcontratista: d.subcontratista_nombre,
+                          docCampo: doc.key,
+                          docLabel: doc.label,
+                          fechaSnapshot: d.fecha_snapshot_ultimo,
+                        })}</td>
                       ))}
                       <td style={{...tdE, fontWeight: 700, color: d.pct_retencion > 0 ? "#c0392b" : "#94a3b8"}}>
                         {d.pct_retencion ? `${d.pct_retencion}%` : "—"}
