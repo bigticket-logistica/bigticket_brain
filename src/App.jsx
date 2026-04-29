@@ -6332,15 +6332,24 @@ function RecursosContratista({ transporte, categoria, subcontratistaNombre }) {
       setLoading(true);
       try {
         // 1. Obtener el último snapshot disponible de certronic_documentos
-        const { data: snapData } = await sb.from("certronic_documentos")
+        console.log(`[Recursos] Buscando snapshot para "${transporte}"...`);
+        const { data: snapData, error: snapErr } = await sb.from("certronic_documentos")
           .select("fecha_snapshot")
           .order("fecha_snapshot", { ascending: false })
           .limit(1);
+        
+        if (snapErr) {
+          console.error(`[Recursos] Error consultando snapshot:`, snapErr);
+          if (!cancel) { setRecursos([]); setLoading(false); }
+          return;
+        }
         if (!snapData || !snapData.length) {
+          console.warn(`[Recursos] certronic_documentos está vacía (sin snapshots)`);
           if (!cancel) { setRecursos([]); setLoading(false); }
           return;
         }
         const fechaSnapshot = snapData[0].fecha_snapshot;
+        console.log(`[Recursos] Snapshot encontrado: ${fechaSnapshot}`);
         if (!cancel) setSnapshotUsado(fechaSnapshot);
 
         // 2. Cargar recursos (con paginación por si hay muchos)
@@ -6356,7 +6365,10 @@ function RecursosContratista({ transporte, categoria, subcontratistaNombre }) {
             .range(from, from + limite - 1);
           const { data, error } = await query;
           if (cancel) return;
-          if (error) throw error;
+          if (error) {
+            console.error(`[Recursos] Error consultando documentos:`, error);
+            throw error;
+          }
           if (!data || data.length === 0) break;
           resultado = resultado.concat(data);
           if (data.length < limite) break;
