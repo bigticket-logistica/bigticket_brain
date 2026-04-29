@@ -5216,12 +5216,16 @@ function ModuloPagos() {
   const [overrides, setOverrides] = useState(new Map());
   // Modal de edición
   const [modalOverride, setModalOverride] = useState(null);  // { contratista, categoria, subcontratista, docCampo, docLabel, estadoCertronic, fechaSnapshot, overrideExistente }
+  // 🆕 Cumplimiento de docs iniciales por contratista (para el triángulo)
+  // Map: contratista → { porcentaje, semaforo, cumplen, total }
+  const [cumplInicial, setCumplInicial] = useState(new Map());
 
   useEffect(() => { cargarPeriodos(); }, []);
   useEffect(() => { 
     if (periodo) {
       cargarDatos();
       cargarOverrides();
+      cargarCumplInicial();
     }
   }, [periodo]);
 
@@ -5272,8 +5276,72 @@ function ModuloPagos() {
     return `${contratista || ""}|${categoria || ""}|${subcontratista || ""}|${docCampo || ""}`;
   };
 
-  const cargarOverrides = async () => {
+  // 🆕 Carga el cumplimiento de docs iniciales por contratista (para el triángulo en Dashboard Mensual)
+  const cargarCumplInicial = async () => {
     try {
+      // 1. Snapshot más reciente
+      const { data: snap } = await sb.from("certronic_empleados_docs")
+        .select("fecha_snapshot")
+        .order("fecha_snapshot", { ascending: false })
+        .limit(1);
+      if (!snap || snap.length === 0) return;
+      const fechaSnap = snap[0].fecha_snapshot;
+
+      // 2. Cargar todos los DOC_CONTRATISTA del snapshot (paginado)
+      let todos = [];
+      let from = 0;
+      const lim = 1000;
+      while (true) {
+        const { data, error } = await sb.from("certronic_empleados_docs")
+          .select("token_certronic, documento, cumple")
+          .eq("fecha_snapshot", fechaSnap)
+          .eq("origen", "DOC_CONTRATISTA")
+          .range(from, from + lim - 1);
+        if (error) break;
+        if (!data || data.length === 0) break;
+        todos = todos.concat(data);
+        if (data.length < lim) break;
+        from += lim;
+      }
+
+      // 3. Mapping token → contratista
+      const { data: detalles } = await sb.from("certronic_empleados_detalle")
+        .select("token_certronic, contratista")
+        .eq("fecha_snapshot", fechaSnap);
+      const tokenAContr = new Map();
+      for (const d of detalles || []) {
+        if (d.contratista) tokenAContr.set(d.token_certronic, d.contratista);
+      }
+
+      // 4. Agrupar por contratista (1 doc único por contratista, sin duplicar entre empleados)
+      const porContratista = new Map();
+      for (const d of todos) {
+        const c = tokenAContr.get(d.token_certronic);
+        if (!c) continue;
+        if (!porContratista.has(c)) porContratista.set(c, new Map());
+        const m = porContratista.get(c);
+        if (!m.has(d.documento)) m.set(d.documento, d.cumple);
+      }
+
+      // 5. Calcular % cumplimiento + semáforo
+      const resultado = new Map();
+      for (const [contratista, docsMap] of porContratista.entries()) {
+        const total = docsMap.size;
+        const cumplen = Array.from(docsMap.values()).filter(v => v === true).length;
+        const porcentaje = total > 0 ? Math.round((cumplen * 100) / total) : 0;
+        let semaforo = "rojo";
+        if (porcentaje === 100) semaforo = "verde";
+        else if (porcentaje >= 50) semaforo = "amarillo";
+        resultado.set(contratista, { porcentaje, semaforo, cumplen, total });
+      }
+      console.log(`[CumplInicial] Cargados ${resultado.size} contratistas`);
+      setCumplInicial(resultado);
+    } catch (e) {
+      console.warn("[CumplInicial] Error:", e.message);
+    }
+  };
+
+  const cargarOverrides = async () => {    try {
       const { data, error } = await sb.from("certronic_overrides_analista")
         .select("*")
         .eq("activo", true);
@@ -5835,7 +5903,7 @@ function ModuloPagos() {
               renderIconoDoc={renderIconoDoc} renderEstadoFinal={renderEstadoFinal}
               toggleOrden={toggleOrden} flecha={flecha}
               operacionAMandante={operacionAMandante}
-              operacionAMandante={operacionAMandante}
+              cumplInicial={cumplInicial}
             />
           )}
 
@@ -6422,6 +6490,7 @@ function DashboardCertificacion({
   mostrarInhabilitados, operacionesUnicas, datosCategoriaActual,
   docsPorCategoria, renderIconoDoc, renderEstadoFinal,
   toggleOrden, flecha, operacionAMandante,
+  cumplInicial = new Map(),  // 🆕 cumplimiento de docs iniciales por contratista
 }) {
   const datosTab = (cat) => mostrarInhabilitados
     ? datos[cat]
@@ -6556,6 +6625,25 @@ function DashboardCertificacion({
                         </span>
                       </td>
                       <td style={{...tdE, textAlign: "left", paddingLeft: 12, fontWeight: 500}}>
+                        {(() => {
+                          // 🆕 Triángulo de cumplimiento de docs iniciales
+                          const ci = cumplInicial.get(d.transporte);
+                          if (!ci) return null;
+                          const colorTri = ci.semaforo === "verde" ? "#16a34a" 
+                                         : ci.semaforo === "amarillo" ? "#f59e0b" 
+                                         : "#dc2626";
+                          const tooltipTri = `Documentación inicial del contratista: ${ci.cumplen}/${ci.total} (${ci.porcentaje}%)\n${ci.semaforo === "verde" ? "✓ Cumple 100%" : ci.semaforo === "amarillo" ? "⚠ Parcial 50-99%" : "✗ Crítico <50%"}`;
+                          return (
+                            <span 
+                              title={tooltipTri}
+                              style={{ 
+                                display: "inline-block", marginRight: 6, fontSize: 12, color: colorTri,
+                                cursor: "help", verticalAlign: "middle",
+                              }}>
+                              ▲
+                            </span>
+                          );
+                        })()}
                         {d.transporte}
                         {isInhabilitado && (
                           <span style={{ fontSize: 9, marginLeft: 6, padding: "1px 5px", borderRadius: 3, background: "#fee2e2", color: "#991b1b", fontWeight: 600 }}>
