@@ -6139,15 +6139,26 @@ function DashboardInicial() {
           <thead style={{ position: "sticky", top: 0, background: "#1a3a6b", color: "#fff", zIndex: 2 }}>
             <tr>
               <th style={{ padding: "10px 8px", textAlign: "left", fontSize: 10, fontWeight: 700, position: "sticky", left: 0, background: "#1a3a6b", zIndex: 3, minWidth: 220 }}>Contratista</th>
-              <th style={{ padding: "10px 8px", textAlign: "center", fontSize: 10, fontWeight: 700, minWidth: 100 }}>Cumplimiento</th>
-              {todosDocsUnicos.map(doc => (
-                <th key={doc} style={{ padding: "10px 4px", textAlign: "center", fontSize: 9, fontWeight: 600, minWidth: 80, maxWidth: 140 }}
-                    title={doc}>
-                  <div style={{ writingMode: "vertical-rl", transform: "rotate(180deg)", maxHeight: 130, overflow: "hidden", lineHeight: 1.2 }}>
-                    {doc.length > 40 ? doc.slice(0, 38) + "…" : doc}
-                  </div>
-                </th>
-              ))}
+              <th style={{ padding: "10px 8px", textAlign: "center", fontSize: 10, fontWeight: 700, minWidth: 110, whiteSpace: "nowrap" }}>Cumplimiento</th>
+              {todosDocsUnicos.map(doc => {
+                // Generar abreviación corta del documento (3-4 palabras max)
+                const abrev = doc
+                  .replace(/Recepción /i, "Recep. ")
+                  .replace(/Actualización /i, "Act. ")
+                  .replace(/Certificado de /i, "Cert. ")
+                  .replace(/Declaración Jurada /i, "Decl.J. ")
+                  .replace(/Aceptación de términos y condiciones del /i, "Acept. ")
+                  .replace(/Pago Cotizaciones Previsionales /i, "Cotiz. ")
+                  .replace(/Procedimiento de /i, "Proc. ");
+                return (
+                  <th key={doc} style={{ 
+                    padding: "10px 6px", textAlign: "center", fontSize: 9, fontWeight: 600,
+                    minWidth: 90, maxWidth: 130, lineHeight: 1.25, verticalAlign: "middle",
+                  }} title={doc}>
+                    {abrev}
+                  </th>
+                );
+              })}
             </tr>
           </thead>
           <tbody>
@@ -6162,8 +6173,9 @@ function DashboardInicial() {
                 </td>
                 <td style={{ padding: "8px", textAlign: "center" }}>
                   <span style={{
-                    padding: "3px 8px", borderRadius: 10, fontSize: 11, fontWeight: 700,
+                    padding: "3px 10px", borderRadius: 10, fontSize: 11, fontWeight: 700,
                     background: bgSemaforo(c.semaforo), color: colorSemaforo(c.semaforo),
+                    whiteSpace: "nowrap", display: "inline-block",
                   }}>
                     {c.cumplen}/{c.totalDocs} ({c.porcentaje}%)
                   </span>
