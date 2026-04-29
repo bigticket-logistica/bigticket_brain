@@ -5911,9 +5911,6 @@ function ModuloPagos() {
               return <option key={p} value={p}>{nm} {a}</option>;
             })}
           </select>
-          <button className="btn-blue" onClick={descargarExcel} disabled={loading || kpis.total === 0}>
-            Descargar Excel
-          </button>
         </div>
       </div>
 
@@ -7957,24 +7954,74 @@ function DashboardCertificacion({
         )}
       </div>
 
-      {/* Tabs categoría */}
-      <div style={{ display: "flex", gap: 4, marginBottom: 12, borderBottom: "1px solid #e4e7ec" }}>
-        {[
-          { id: "pc", label: "Personal Contratado", n: datosTab("pc").length },
-          { id: "ryc", label: "Representante y Conductor", n: datosTab("ryc").length },
-          { id: "sub", label: "Subcontratista", n: datosTab("sub").length },
-        ].map(t => (
-          <button key={t.id} onClick={() => setTabCategoria(t.id)}
-            style={{
-              padding: "8px 14px", border: "none", cursor: "pointer",
-              borderBottom: tabCategoria === t.id ? "2px solid #1a3a6b" : "2px solid transparent",
-              background: "transparent", color: tabCategoria === t.id ? "#1a3a6b" : "#666",
-              fontWeight: tabCategoria === t.id ? 700 : 500,
-              fontSize: 12, fontFamily: "Geist, sans-serif", marginBottom: -1,
-            }}>
-            {t.label} <span style={{ opacity: 0.6, marginLeft: 4 }}>({t.n})</span>
-          </button>
-        ))}
+      {/* Tabs categoría + botón Excel */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 12, borderBottom: "1px solid #e4e7ec", gap: 12 }}>
+        <div style={{ display: "flex", gap: 4 }}>
+          {[
+            { id: "pc", label: "Personal Contratado", n: datosTab("pc").length },
+            { id: "ryc", label: "Representante y Conductor", n: datosTab("ryc").length },
+            { id: "sub", label: "Subcontratista", n: datosTab("sub").length },
+          ].map(t => (
+            <button key={t.id} onClick={() => setTabCategoria(t.id)}
+              style={{
+                padding: "8px 14px", border: "none", cursor: "pointer",
+                borderBottom: tabCategoria === t.id ? "2px solid #1a3a6b" : "2px solid transparent",
+                background: "transparent", color: tabCategoria === t.id ? "#1a3a6b" : "#666",
+                fontWeight: tabCategoria === t.id ? 700 : 500,
+                fontSize: 12, fontFamily: "Geist, sans-serif", marginBottom: -1,
+              }}>
+              {t.label} <span style={{ opacity: 0.6, marginLeft: 4 }}>({t.n})</span>
+            </button>
+          ))}
+        </div>
+        <div style={{ paddingBottom: 6 }}>
+          <BotonDescargarExcel onClick={() => {
+            const labelCat = tabCategoria === "pc" ? "Personal Contratado"
+                           : tabCategoria === "ryc" ? "Representante y Conductor"
+                           : "Subcontratista";
+            const docsDeLaCategoria = docsPorCategoria[tabCategoria] || [];
+            const headers = [
+              "Operación",
+              "Mandante",
+              "Transporte",
+              ...(tabCategoria === "sub" ? ["Subcontratista"] : []),
+              "Empleados Activos",
+              "Vehículos Activos",
+              ...docsDeLaCategoria.map(d => d.label),
+              "% Retención",
+              "% Avance",
+              "Estado",
+              "Inhabilitado",
+              "Anomalía",
+            ];
+            const filas = datosCategoriaActual.map(d => {
+              const fila = [
+                d.operacion || "",
+                operacionAMandante(d.operacion) || "",
+                d.transporte || "",
+                ...(tabCategoria === "sub" ? [d.subcontratista_nombre || ""] : []),
+                d.empleados_activos || 0,
+                d.vehiculos_activos || 0,
+              ];
+              for (const doc of docsDeLaCategoria) {
+                const val = d[doc.key];
+                fila.push(val || "");
+              }
+              fila.push(
+                d.pct_retencion != null ? d.pct_retencion + "%" : "",
+                d.pct_avance != null ? d.pct_avance + "%" : "",
+                d.estado_final || "",
+                d.recurso_inhabilitado ? "Sí" : "No",
+                d.anomalia_descripcion || "",
+              );
+              return fila;
+            });
+            
+            descargarExcelMultihoja([
+              { nombre: labelCat, datos: [headers, ...filas] },
+            ], `Dashboard_Mensual_${tabCategoria.toUpperCase()}`);
+          }} disabled={datosCategoriaActual.length === 0} />
+        </div>
       </div>
 
       {/* Filtros */}
@@ -9200,10 +9247,6 @@ function HallazgosAutomaticos({ datos, activosCriticos, todosInhabilitados, empr
             {hallazgos.length} hallazgos detectados al cruzar datos del scraper, matriz y reglas de negocio. Se recalculan automáticamente cada vez que el sistema se actualiza.
           </div>
         </div>
-        <button onClick={descargarPDF} disabled={hallazgos.length === 0 || generandoPDF}
-          style={{ padding: "7px 14px", background: "#1a3a6b", color: "#fff", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "Geist, sans-serif" }}>
-          {generandoPDF ? "Generando..." : "Descargar PDF"}
-        </button>
       </div>
 
       {hallazgos.length === 0 ? (
