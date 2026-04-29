@@ -7885,9 +7885,11 @@ function DashboardRiesgoRSE() {
 
   // Calcular score por contratista (en base a config y datos)
   const contratistasConScore = useMemo(() => {
-    if (!config || !datos.docsContratista.length) return [];
+    if (!config) return [];
+    // Si no hay datos de docs ni de cumpl mensual, no podemos calcular nada
+    if (!datos.docsContratista.length && !datos.cumplMensual.length) return [];
 
-    // Mapping token → contratista
+    // Mapping token → contratista (de empleados detalle)
     const tokenAContr = new Map();
     const tokenAPlanta = new Map();
     for (const d of datos.detalles) {
@@ -7895,20 +7897,40 @@ function DashboardRiesgoRSE() {
       if (d.planta) tokenAPlanta.set(d.token_certronic, d.planta);
     }
 
-    // Agrupar docs por contratista
+    // 🆕 Inicializar porContratista con TODOS los contratistas conocidos
+    // (los que están en certificación mensual, aunque no tengan empleados)
     const porContratista = new Map();
+    for (const c of datos.cumplMensual) {
+      if (!c.transporte) continue;
+      if (!porContratista.has(c.transporte)) {
+        porContratista.set(c.transporte, {
+          contratista: c.transporte,
+          planta: null,
+          docsIniciales: new Map(),
+          pendientes: [],
+          tieneEmpleadosScrapeados: false,
+        });
+      }
+    }
+
+    // Agregar los datos de docs cuando los haya
     for (const d of datos.docsContratista) {
       const c = tokenAContr.get(d.token_certronic);
       if (!c) continue;
       if (!porContratista.has(c)) {
+        // Edge case: empleado existe pero contratista no figura en certif mensual
         porContratista.set(c, {
           contratista: c,
           planta: tokenAPlanta.get(d.token_certronic) || null,
           docsIniciales: new Map(),
           pendientes: [],
+          tieneEmpleadosScrapeados: true,
         });
       }
       const grupo = porContratista.get(c);
+      grupo.tieneEmpleadosScrapeados = true;
+      if (!grupo.planta) grupo.planta = tokenAPlanta.get(d.token_certronic) || null;
+      
       if (d.origen === "DOC_CONTRATISTA") {
         if (!grupo.docsIniciales.has(d.documento)) {
           grupo.docsIniciales.set(d.documento, { cumple: d.cumple, vencimiento: d.vencimiento });
@@ -7932,19 +7954,43 @@ function DashboardRiesgoRSE() {
     const factor = totalPesos > 0 ? 100 / totalPesos : 1;
 
     for (const [contratista, grupo] of porContratista.entries()) {
+      // Determinar si el contratista tiene datos para calcular score
+      const cumplMen = cumplPorContr.get(contratista) || [];
+      
+      // 🆕 Agrupar por (anio, mes) — un contratista puede tener varias filas por mes
+      // (una por categoría: PC, RyC, SUB). Promediamos el pct_avance del mes.
+      const porMes = new Map();
+      for (const c of cumplMen) {
+        const key = `${c.anio}-${String(c.mes).padStart(2, '0')}`;
+        if (!porMes.has(key)) {
+          porMes.set(key, { anio: c.anio, mes: c.mes, pcts: [] });
+        }
+        if (c.pct_avance != null) porMes.get(key).pcts.push(c.pct_avance);
+      }
+      const cumplMenAgrupado = Array.from(porMes.values())
+        .map(g => ({
+          anio: g.anio,
+          mes: g.mes,
+          pct_avance: g.pcts.length > 0 ? g.pcts.reduce((s, x) => s + x, 0) / g.pcts.length : 0,
+        }))
+        .sort((a, b) => (b.anio - a.anio) || (b.mes - a.mes));  // más reciente primero
+      
+      const tieneDocsIniciales = grupo.docsIniciales.size > 0;
+      const tieneCumplMensual = cumplMenAgrupado.length > 0;
+      const sinDatos = !tieneDocsIniciales && !tieneCumplMensual;
+
       // Factor 1: % docs iniciales (a más cumplimiento, menor riesgo)
       const totalDocs = grupo.docsIniciales.size;
       const cumplenDocs = Array.from(grupo.docsIniciales.values()).filter(v => v.cumple === true).length;
       const pctIniciales = totalDocs > 0 ? cumplenDocs / totalDocs : 0;
-      const f1 = (1 - pctIniciales) * config.peso_docs_iniciales;
+      const f1 = tieneDocsIniciales ? (1 - pctIniciales) * config.peso_docs_iniciales : 0;
 
       // Factor 2: cumplimiento mensual promedio últimos 6 meses
-      const cumplMen = cumplPorContr.get(contratista) || [];
-      const ultimos6 = cumplMen.slice(0, 6);
+      const ultimos6 = cumplMenAgrupado.slice(0, 6);
       const promPctAvance = ultimos6.length > 0
         ? ultimos6.reduce((s, c) => s + (c.pct_avance || 0), 0) / ultimos6.length / 100
         : 0;
-      const f2 = (1 - promPctAvance) * config.peso_cumpl_mensual;
+      const f2 = tieneCumplMensual ? (1 - promPctAvance) * config.peso_cumpl_mensual : 0;
 
       // Factor 3: cantidad de pendientes acumulados (max 10 = peso completo)
       const f3 = Math.min(1, grupo.pendientes.length / 10) * config.peso_pendientes;
@@ -7971,7 +8017,8 @@ function DashboardRiesgoRSE() {
 
       // Determinar nivel
       let nivel, colorNivel, bgNivel;
-      if (score < config.umbral_bajo) { nivel = "BAJO"; colorNivel = "#16a34a"; bgNivel = "#dcfce7"; }
+      if (sinDatos) { nivel = "SIN DATOS"; colorNivel = "#64748b"; bgNivel = "#f1f5f9"; }
+      else if (score < config.umbral_bajo) { nivel = "BAJO"; colorNivel = "#16a34a"; bgNivel = "#dcfce7"; }
       else if (score < config.umbral_medio) { nivel = "MEDIO"; colorNivel = "#f59e0b"; bgNivel = "#fef3c7"; }
       else if (score < config.umbral_alto) { nivel = "ALTO"; colorNivel = "#dc2626"; bgNivel = "#fee2e2"; }
       else { nivel = "CRÍTICO"; colorNivel = "#7f1d1d"; bgNivel = "#fecaca"; }
@@ -7982,8 +8029,11 @@ function DashboardRiesgoRSE() {
       lista.push({
         contratista,
         planta: grupo.planta,
-        score,
+        score: sinDatos ? null : score,
         nivel, colorNivel, bgNivel,
+        sinDatos,
+        tieneDocsIniciales,
+        tieneCumplMensual,
         // Detalle de factores
         factores: {
           docsIniciales: { val: pctIniciales, peso: config.peso_docs_iniciales, contrib: Math.round(f1 * factor), label: "Docs iniciales" },
@@ -8005,8 +8055,13 @@ function DashboardRiesgoRSE() {
       });
     }
 
-    // Ordenar de mayor a menor riesgo
-    lista.sort((a, b) => b.score - a.score);
+    // Ordenar: con score primero (de mayor a menor), sin datos al final
+    lista.sort((a, b) => {
+      if (a.sinDatos && !b.sinDatos) return 1;
+      if (!a.sinDatos && b.sinDatos) return -1;
+      if (a.sinDatos && b.sinDatos) return a.contratista.localeCompare(b.contratista);
+      return (b.score || 0) - (a.score || 0);
+    });
     return lista;
   }, [datos, config]);
 
@@ -8034,6 +8089,7 @@ function DashboardRiesgoRSE() {
     medio: contratistasConScore.filter(c => c.nivel === "MEDIO").length,
     alto: contratistasConScore.filter(c => c.nivel === "ALTO").length,
     critico: contratistasConScore.filter(c => c.nivel === "CRÍTICO").length,
+    sinDatos: contratistasConScore.filter(c => c.sinDatos).length,
     activos: contratistasConScore.filter(c => !c.estaInhabilitado).length,
     inhab: contratistasConScore.filter(c => c.estaInhabilitado).length,
   }), [contratistasConScore]);
@@ -8205,6 +8261,13 @@ function DashboardRiesgoRSE() {
           background: filtroNivel === "CRÍTICO" ? "#7f1d1d" : "#fecaca", color: filtroNivel === "CRÍTICO" ? "#fff" : "#7f1d1d",
           border: "1px solid #7f1d1d",
         }}>⚫ Crítico ({stats.critico})</button>
+        {stats.sinDatos > 0 && (
+          <button onClick={() => setFiltroNivel("SIN DATOS")} style={{
+            padding: "8px 14px", borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: "pointer",
+            background: filtroNivel === "SIN DATOS" ? "#64748b" : "#f1f5f9", color: filtroNivel === "SIN DATOS" ? "#fff" : "#475569",
+            border: "1px solid #cbd5e1",
+          }}>○ Sin datos ({stats.sinDatos})</button>
+        )}
       </div>
 
       {/* Filtros adicionales */}
@@ -8282,7 +8345,7 @@ function DashboardRiesgoRSE() {
                         display: "inline-block", padding: "6px 12px", borderRadius: 6,
                         background: c.colorNivel, color: "#fff", fontWeight: 800, fontSize: 14, minWidth: 50,
                       }}>
-                        {c.score}
+                        {c.sinDatos ? "—" : c.score}
                       </div>
                     </td>
                     <td style={{ padding: "8px" }}>
@@ -8403,13 +8466,15 @@ function DetalleRiesgoRSE({ contratista }) {
           ) : (
             <div style={{ display: "flex", gap: 4, alignItems: "flex-end", height: 80, marginTop: 10 }}>
               {[...c.cumplMen6m].reverse().map((m, i) => {
-                const altura = (m.pct_avance || 0);
+                const altura = Math.round(m.pct_avance || 0);
                 const color = altura >= 80 ? "#16a34a" : altura >= 50 ? "#f59e0b" : "#dc2626";
                 const meses = ["ene","feb","mar","abr","may","jun","jul","ago","sep","oct","nov","dic"];
+                const mesIdx = (m.mes && m.mes >= 1 && m.mes <= 12) ? m.mes - 1 : null;
+                const labelMes = mesIdx !== null ? `${meses[mesIdx]}-${String(m.anio).slice(2)}` : "?";
                 return (
                   <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
-                    <div title={`${altura}%`} style={{ width: "100%", height: `${Math.max(altura * 0.6, 5)}px`, background: color, borderRadius: 3, transition: "height 0.3s" }} />
-                    <div style={{ fontSize: 9, color: "#64748b", fontWeight: 600 }}>{meses[m.mes - 1]}</div>
+                    <div title={`${labelMes}: ${altura}%`} style={{ width: "100%", height: `${Math.max(altura * 0.6, 5)}px`, background: color, borderRadius: 3, transition: "height 0.3s" }} />
+                    <div style={{ fontSize: 9, color: "#64748b", fontWeight: 600 }}>{labelMes}</div>
                     <div style={{ fontSize: 8, color: "#94a3b8" }}>{altura}%</div>
                   </div>
                 );
