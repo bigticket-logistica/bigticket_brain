@@ -6625,8 +6625,9 @@ function DashboardCertificacion({
                         </span>
                       </td>
                       <td style={{...tdE, textAlign: "left", paddingLeft: 12, fontWeight: 500}}>
+                        {d.transporte}
                         {(() => {
-                          // 🆕 Triángulo de cumplimiento de docs iniciales
+                          // 🆕 Triángulo de cumplimiento de docs iniciales (a la derecha, grande)
                           const ci = cumplInicial.get(d.transporte);
                           if (!ci) return null;
                           const colorTri = ci.semaforo === "verde" ? "#16a34a" 
@@ -6637,14 +6638,14 @@ function DashboardCertificacion({
                             <span 
                               title={tooltipTri}
                               style={{ 
-                                display: "inline-block", marginRight: 6, fontSize: 12, color: colorTri,
-                                cursor: "help", verticalAlign: "middle",
+                                display: "inline-block", marginLeft: 8, fontSize: 22, color: colorTri,
+                                cursor: "help", verticalAlign: "middle", lineHeight: 1,
+                                textShadow: ci.semaforo === "rojo" ? "0 0 4px rgba(220, 38, 38, 0.4)" : undefined,
                               }}>
-                              ▲
+                              ⚠
                             </span>
                           );
                         })()}
-                        {d.transporte}
                         {isInhabilitado && (
                           <span style={{ fontSize: 9, marginLeft: 6, padding: "1px 5px", borderRadius: 3, background: "#fee2e2", color: "#991b1b", fontWeight: 600 }}>
                             INHABILITADO
