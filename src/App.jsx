@@ -5299,8 +5299,10 @@ function ModuloPagos() {
   // 🆕 Cumplimiento de docs iniciales por contratista (para el triángulo)
   // Map: contratista → { porcentaje, semaforo, cumplen, total }
   const [cumplInicial, setCumplInicial] = useState(new Map());
+  // 🆕 Último run del pipeline (para banner de alerta)
+  const [ultimoRun, setUltimoRun] = useState(null);
 
-  useEffect(() => { cargarPeriodos(); }, []);
+  useEffect(() => { cargarPeriodos(); cargarUltimoRun(); }, []);
   useEffect(() => { 
     if (periodo) {
       cargarDatos();
@@ -5354,6 +5356,22 @@ function ModuloPagos() {
   // Construye la key única de un override
   const overrideKey = (contratista, categoria, subcontratista, docCampo) => {
     return `${contratista || ""}|${categoria || ""}|${subcontratista || ""}|${docCampo || ""}`;
+  };
+
+  // 🆕 Carga el último run del pipeline para mostrar banner si hubo errores
+  const cargarUltimoRun = async () => {
+    try {
+      const { data, error } = await sb.from("certronic_pipeline_runs")
+        .select("*")
+        .order("fecha_run", { ascending: false })
+        .limit(1);
+      if (error) { console.warn("[UltimoRun] Error:", error.message); return; }
+      if (data && data.length > 0) {
+        setUltimoRun(data[0]);
+      }
+    } catch (e) {
+      console.warn("[UltimoRun] Error:", e.message);
+    }
   };
 
   // 🆕 Carga el cumplimiento de docs iniciales por contratista (para el triángulo en Dashboard Mensual)
@@ -5913,6 +5931,48 @@ function ModuloPagos() {
           </select>
         </div>
       </div>
+
+      {/* 🆕 Banner alerta del último run del pipeline */}
+      {ultimoRun && ultimoRun.tiene_errores && (() => {
+        const fecha = new Date(ultimoRun.fecha_run);
+        const fechaStr = fecha.toLocaleString("es-CL", { 
+          day: "2-digit", month: "2-digit", year: "numeric", 
+          hour: "2-digit", minute: "2-digit" 
+        });
+        const pasosConError = (ultimoRun.pasos || []).filter(p => p.status === "warn" || p.status === "error");
+        return (
+          <div style={{
+            background: "#fef3c7", border: "1px solid #fbbf24", borderLeft: "4px solid #f59e0b",
+            borderRadius: 6, padding: "10px 14px", marginBottom: 12, fontSize: 11.5, color: "#78350f",
+          }}>
+            <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontWeight: 700, marginBottom: 4, fontSize: 12, color: "#92400e" }}>
+                  ⚠ Última actualización ({fechaStr}) tuvo {pasosConError.length} {pasosConError.length === 1 ? "advertencia" : "advertencias"}
+                </div>
+                <div style={{ marginBottom: 6 }}>
+                  Algunos datos en Brain pueden estar desactualizados. Pasos con error:
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 3, marginLeft: 6 }}>
+                  {pasosConError.map((p, i) => (
+                    <div key={i} style={{ fontSize: 11 }}>
+                      <strong>[{p.paso}] {p.label}:</strong> {p.mensaje || "(sin mensaje)"}
+                      {p.errores > 0 && <span style={{ color: "#dc2626", fontWeight: 700, marginLeft: 6 }}>{p.errores} fichas</span>}
+                    </div>
+                  ))}
+                </div>
+                <div style={{ fontSize: 10, color: "#92400e", marginTop: 6, fontStyle: "italic" }}>
+                  💡 Si tenés acceso al servidor: <code style={{ background: "#fff", padding: "1px 4px", borderRadius: 3 }}>ssh root@162.243.90.161</code> y ejecutar <code style={{ background: "#fff", padding: "1px 4px", borderRadius: 3 }}>node /opt/certronic-scraper/rescatar-fichas.cjs</code> (o vehículos)
+                </div>
+              </div>
+              <button onClick={() => setUltimoRun(null)}
+                style={{ padding: "4px 10px", border: "1px solid #fbbf24", background: "#fff", borderRadius: 4, fontSize: 11, color: "#92400e", cursor: "pointer", whiteSpace: "nowrap", height: "fit-content" }}>
+                Ocultar
+              </button>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Banner inhabilitados */}
       {mostrarInhabilitados && (
