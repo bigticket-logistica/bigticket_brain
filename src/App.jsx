@@ -15110,6 +15110,33 @@ function ConfigReglasNS() {
 // Lee de las vistas vw_meli_* en Supabase
 // ═══════════════════════════════════════════════════════════════════════════
 
+// SheetJS está disponible vía CDN en runtime; para descarga Excel
+const cargarSheetJS = () => new Promise((resolve, reject) => {
+  if (window.XLSX) return resolve(window.XLSX);
+  const s = document.createElement('script');
+  s.src = 'https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js';
+  s.onload = () => resolve(window.XLSX);
+  s.onerror = reject;
+  document.head.appendChild(s);
+});
+
+async function descargarExcelMeli(filas, nombreArchivo, nombreHoja = "Datos") {
+  if (!filas || filas.length === 0) {
+    alert("No hay datos para descargar");
+    return;
+  }
+  try {
+    const XLSX = await cargarSheetJS();
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.json_to_sheet(filas);
+    XLSX.utils.book_append_sheet(wb, ws, nombreHoja.slice(0, 31));
+    XLSX.writeFile(wb, `${nombreArchivo}.xlsx`);
+  } catch (e) {
+    console.error("Error descargando Excel:", e);
+    alert("No se pudo descargar el Excel: " + (e.message || e));
+  }
+}
+
 function IndicadoresOperacionalesMX({ usuario }) {
   const [vista, setVista] = useState("inventario");
   const [loading, setLoading] = useState(true);
@@ -15119,6 +15146,10 @@ function IndicadoresOperacionalesMX({ usuario }) {
   const [vehiculos, setVehiculos] = useState([]);
   const [scs, setSCs] = useState([]);
   const [scores, setScores] = useState([]);
+
+  // Estado del modal
+  const [modal, setModal] = useState(null); 
+  // modal = { titulo, columnas, filas, nombreArchivo } | null
 
   useEffect(() => {
     let alive = true;
@@ -15182,7 +15213,7 @@ function IndicadoresOperacionalesMX({ usuario }) {
             {error}
             <br /><br />
             <strong>Causa probable:</strong> las vistas <code>vw_meli_*</code> aún no fueron creadas en Supabase.
-            Ejecutá los SQL del paquete <code>sql_etapas_meli</code> (ETAPA 1 a 8) y volvé a recargar.
+            Ejecutá los SQL del paquete <code>sql_etapas_meli</code> y volvé a recargar.
           </div>
         </div>
       </div>
@@ -15214,21 +15245,133 @@ function IndicadoresOperacionalesMX({ usuario }) {
         </div>
       </div>
 
-      {vista === "inventario" && <PoolMeliInventario drivers={drivers} vehiculos={vehiculos} resumen={resumen} />}
-      {vista === "ciclo"      && <PoolMeliCiclo scs={scs} resumen={resumen} />}
+      {vista === "inventario" && <PoolMeliInventario drivers={drivers} vehiculos={vehiculos} resumen={resumen} setModal={setModal} />}
+      {vista === "ciclo"      && <PoolMeliCiclo scs={scs} resumen={resumen} setModal={setModal} />}
       {vista === "score"      && <PoolMeliScore scores={scores} resumen={resumen} />}
+
+      {modal && <MeliModal modal={modal} onClose={() => setModal(null)} />}
     </div>
   );
 }
 
-// ── Helpers visuales reutilizables ─────────────────────────────────────────
-function PoolMeliKpi({ label, value, sublabel, color = "#1a3a6b", danger = false, warn = false }) {
+// ── MODAL: tabla con buscador + descarga Excel ─────────────────────────────
+function MeliModal({ modal, onClose }) {
+  const [busqueda, setBusqueda] = useState("");
+  const filas = modal.filas || [];
+  const columnas = modal.columnas || (filas[0] ? Object.keys(filas[0]) : []);
+
+  const filtradas = useMemo(() => {
+    if (!busqueda.trim()) return filas;
+    const q = busqueda.toLowerCase().trim();
+    return filas.filter(row =>
+      columnas.some(c => {
+        const val = row[c];
+        if (val == null) return false;
+        return String(val).toLowerCase().includes(q);
+      })
+    );
+  }, [busqueda, filas, columnas]);
+
+  return (
+    <div onClick={onClose}
+      style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0,
+        background: "rgba(15,23,42,0.55)", zIndex: 9999,
+        display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+      <div onClick={e => e.stopPropagation()}
+        style={{ background: "#fff", borderRadius: 12, width: "100%", maxWidth: 1200,
+          maxHeight: "92vh", display: "flex", flexDirection: "column", overflow: "hidden",
+          boxShadow: "0 20px 50px rgba(0,0,0,0.25)" }}>
+        {/* Header */}
+        <div style={{ padding: "14px 20px", borderBottom: "1px solid #e4e7ec",
+          display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+          <div>
+            <div style={{ fontSize: 15, fontWeight: 700, color: "#1a3a6b" }}>{modal.titulo}</div>
+            <div style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}>
+              {filtradas.length} {filtradas.length === 1 ? "registro" : "registros"}
+              {busqueda && ` (de ${filas.length} totales)`}
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <input
+              type="text"
+              placeholder="Buscar..."
+              value={busqueda}
+              onChange={e => setBusqueda(e.target.value)}
+              style={{ width: 240, padding: "7px 10px", border: "1px solid #d0d5dd",
+                borderRadius: 6, fontSize: 12, fontFamily: "'Geist', sans-serif" }}
+            />
+            <button
+              onClick={() => descargarExcelMeli(filas, modal.nombreArchivo || "export_meli", modal.titulo.slice(0, 31))}
+              className="btn-orange"
+              style={{ padding: "7px 12px", fontSize: 12 }}>
+              Descargar Excel
+            </button>
+            <button onClick={onClose}
+              style={{ background: "transparent", border: "none", fontSize: 22, cursor: "pointer",
+                color: "#64748b", padding: "0 4px", lineHeight: 1 }}>×</button>
+          </div>
+        </div>
+
+        {/* Tabla */}
+        <div style={{ flex: 1, overflow: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+            <thead style={{ position: "sticky", top: 0, background: "#f8fafc", zIndex: 1 }}>
+              <tr style={{ borderBottom: "2px solid #e2e8f0" }}>
+                {columnas.map(c => (
+                  <th key={c} style={{ textAlign: "left", padding: "8px 12px",
+                    fontSize: 10, fontWeight: 700, color: "#475569",
+                    textTransform: "uppercase", letterSpacing: 0.5,
+                    whiteSpace: "nowrap" }}>{c}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {filtradas.length === 0 && (
+                <tr><td colSpan={columnas.length}
+                  style={{ padding: 30, textAlign: "center", color: "#94a3b8" }}>
+                  Sin resultados {busqueda && "para esa búsqueda"}
+                </td></tr>
+              )}
+              {filtradas.map((row, i) => (
+                <tr key={i} style={{ borderBottom: "1px solid #f1f5f9" }}>
+                  {columnas.map(c => (
+                    <td key={c} style={{ padding: "7px 12px", color: "#1a1a1a", whiteSpace: "nowrap" }}>
+                      {row[c] === null || row[c] === undefined ? "—"
+                        : typeof row[c] === "boolean" ? (row[c] ? "Sí" : "No")
+                        : String(row[c])}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Helpers visuales ───────────────────────────────────────────────────────
+function PoolMeliKpi({ label, value, sublabel, color = "#1a3a6b", danger = false, warn = false, onClick = null }) {
   const bg = danger ? "#fef2f2" : warn ? "#fffbeb" : "#fff";
   const border = danger ? "#fecaca" : warn ? "#fde68a" : "#e4e7ec";
   const valColor = danger ? "#991b1b" : warn ? "#92400e" : color;
+  const clickable = !!onClick;
   return (
-    <div style={{ background: bg, border: `1px solid ${border}`, borderRadius: 12, padding: 16 }}>
-      <div style={{ fontSize: 11, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6, fontWeight: 600 }}>{label}</div>
+    <div onClick={onClick}
+      style={{
+        background: bg, border: `1px solid ${border}`, borderRadius: 12, padding: 16,
+        cursor: clickable ? "pointer" : "default",
+        transition: "all 0.15s",
+        ...(clickable ? { boxShadow: "0 1px 2px rgba(0,0,0,0.03)" } : {})
+      }}
+      onMouseEnter={e => clickable && (e.currentTarget.style.boxShadow = "0 4px 12px rgba(26,58,107,0.12)")}
+      onMouseLeave={e => clickable && (e.currentTarget.style.boxShadow = "0 1px 2px rgba(0,0,0,0.03)")}>
+      <div style={{ fontSize: 11, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6, fontWeight: 600,
+        display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <span>{label}</span>
+        {clickable && <span style={{ fontSize: 9, color: "#94a3b8" }}>VER →</span>}
+      </div>
       <div style={{ fontSize: 28, fontWeight: 700, color: valColor, lineHeight: 1, marginBottom: 4 }}>{value}</div>
       {sublabel && <div style={{ fontSize: 11, color: "#94a3b8" }}>{sublabel}</div>}
     </div>
@@ -15267,14 +15410,64 @@ function ScoreBadgeMX({ cat }) {
 }
 
 // ── Sub-vista 1: INVENTARIO ────────────────────────────────────────────────
-function PoolMeliInventario({ drivers, vehiculos, resumen }) {
+function PoolMeliInventario({ drivers, vehiculos, resumen, setModal }) {
   const [tipo, setTipo] = useState("drivers");
   const r = resumen || {};
 
-  const driversActivos = drivers.filter(d => d.categoria !== "durmiente").length;
+  // Drivers categorizados
+  const driversActivos = drivers.filter(d => d.categoria !== "durmiente" && d.categoria !== "fantasma");
+  const driversDurmientes = drivers.filter(d => d.categoria === "durmiente");
   const driversFantasma = drivers.filter(d => d.categoria === "fantasma");
-  const vehiculosActivos = vehiculos.filter(v => v.categoria !== "durmiente").length;
-  const topDrivers = drivers.filter(d => d.categoria !== "durmiente" && d.categoria !== "fantasma").slice(0, 6);
+  const driversEnMaster = drivers.filter(d => d.en_master);
+  const topDrivers = driversActivos.slice(0, 6);
+
+  // Vehículos categorizados
+  const vehiculosActivos = vehiculos.filter(v => v.categoria !== "durmiente" && v.categoria !== "fantasma");
+  const vehiculosDurmientes = vehiculos.filter(v => v.categoria === "durmiente");
+  const vehiculosFantasma = vehiculos.filter(v => v.categoria === "fantasma");
+  const vehiculosEnMaster = vehiculos.filter(v => v.en_master);
+
+  // Acciones para abrir modal
+  const verDriversMaster = () => setModal({
+    titulo: "Drivers · Master Oficial Meli",
+    filas: driversEnMaster,
+    nombreArchivo: "drivers_master_oficial_meli"
+  });
+  const verDriversActivos = () => setModal({
+    titulo: "Drivers · Activos en abril",
+    filas: driversActivos,
+    nombreArchivo: "drivers_activos_abril"
+  });
+  const verDriversDurmientes = () => setModal({
+    titulo: "Drivers · Durmientes (en master, no operaron)",
+    filas: driversDurmientes,
+    nombreArchivo: "drivers_durmientes"
+  });
+  const verDriversFantasma = () => setModal({
+    titulo: "Drivers · FANTASMAS (operan sin estar en master)",
+    filas: driversFantasma,
+    nombreArchivo: "drivers_fantasma_compliance"
+  });
+  const verVehMaster = () => setModal({
+    titulo: "Vehículos · Master Oficial Meli",
+    filas: vehiculosEnMaster,
+    nombreArchivo: "vehiculos_master_oficial_meli"
+  });
+  const verVehActivos = () => setModal({
+    titulo: "Vehículos · Activos en abril",
+    filas: vehiculosActivos,
+    nombreArchivo: "vehiculos_activos_abril"
+  });
+  const verVehDurmientes = () => setModal({
+    titulo: "Vehículos · Durmientes (sin uso)",
+    filas: vehiculosDurmientes,
+    nombreArchivo: "vehiculos_durmientes"
+  });
+  const verVehFantasma = () => setModal({
+    titulo: "Vehículos · FANTASMAS (sin registro oficial)",
+    filas: vehiculosFantasma,
+    nombreArchivo: "vehiculos_fantasma_compliance"
+  });
 
   return (
     <div className="pg">
@@ -15297,21 +15490,37 @@ function PoolMeliInventario({ drivers, vehiculos, resumen }) {
             Vehículos ({vehiculos.length})
           </button>
         </div>
+        <div style={{ fontSize: 11, color: "#94a3b8" }}>
+          Tip: hacé click en cualquier KPI para ver el listado completo
+        </div>
       </div>
 
       {tipo === "drivers" && (
         <>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 16 }}>
-            <PoolMeliKpi label="En master oficial" value={r.drivers_master ?? "—"} sublabel="API rostering Meli" />
-            <PoolMeliKpi label="Activos en abril" value={driversActivos} sublabel={`${Math.round(driversActivos / (r.drivers_master || 1) * 100)}% del master`} color="#047857" />
-            <PoolMeliKpi label="Durmientes" value={r.drivers_durmientes ?? "—"} sublabel="En master, no operaron" />
-            <PoolMeliKpi label="Fantasmas" value={r.drivers_fantasma ?? driversFantasma.length} sublabel="Operan sin estar en master" danger />
+            <PoolMeliKpi label="En master oficial" value={r.drivers_master ?? driversEnMaster.length} sublabel="API rostering Meli"
+                         onClick={verDriversMaster} />
+            <PoolMeliKpi label="Activos en abril" value={driversActivos.length} sublabel={`${Math.round(driversActivos.length / (r.drivers_master || 1) * 100)}% del master`} color="#047857"
+                         onClick={verDriversActivos} />
+            <PoolMeliKpi label="Durmientes" value={r.drivers_durmientes ?? driversDurmientes.length} sublabel="En master, no operaron"
+                         onClick={verDriversDurmientes} />
+            <PoolMeliKpi label="Fantasmas" value={r.drivers_fantasma ?? driversFantasma.length} sublabel="Operan sin estar en master" danger
+                         onClick={verDriversFantasma} />
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
             <div className="form-card" style={{ marginBottom: 0 }}>
-              <div className="form-title">Top drivers operativos</div>
-              <div style={{ fontSize: 11, color: "#64748b", marginTop: -8, marginBottom: 12 }}>Ordenados por viajes ejecutados</div>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                <div>
+                  <div className="form-title">Top drivers operativos</div>
+                  <div style={{ fontSize: 11, color: "#64748b", marginTop: -8, marginBottom: 12 }}>Ordenados por viajes ejecutados</div>
+                </div>
+                <button onClick={verDriversActivos}
+                  style={{ background: "transparent", border: "none", fontSize: 11, color: "#1a3a6b",
+                    fontWeight: 600, cursor: "pointer", padding: 0 }}>
+                  Ver todos →
+                </button>
+              </div>
               <div>
                 {topDrivers.length === 0 && <div style={{ fontSize: 12, color: "#94a3b8" }}>Sin datos</div>}
                 {topDrivers.map(d => (
@@ -15332,13 +15541,22 @@ function PoolMeliInventario({ drivers, vehiculos, resumen }) {
             </div>
 
             <div className="form-card" style={{ marginBottom: 0, background: "#fffbf5", border: "1px solid #fed7aa" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-                <div className="form-title" style={{ marginBottom: 0 }}>Drivers fantasma</div>
-                <span style={{ fontSize: 9, padding: "2px 6px", borderRadius: 3, background: "#fee2e2", color: "#991b1b", fontWeight: 700, letterSpacing: 0.5 }}>
-                  RIESGO COMPLIANCE
-                </span>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                    <div className="form-title" style={{ marginBottom: 0 }}>Drivers fantasma</div>
+                    <span style={{ fontSize: 9, padding: "2px 6px", borderRadius: 3, background: "#fee2e2", color: "#991b1b", fontWeight: 700, letterSpacing: 0.5 }}>
+                      RIESGO COMPLIANCE
+                    </span>
+                  </div>
+                  <div style={{ fontSize: 11, color: "#92400e", marginBottom: 12 }}>Operan sin estar en el master oficial de Meli</div>
+                </div>
+                <button onClick={verDriversFantasma}
+                  style={{ background: "transparent", border: "none", fontSize: 11, color: "#991b1b",
+                    fontWeight: 600, cursor: "pointer", padding: 0 }}>
+                  Ver todos →
+                </button>
               </div>
-              <div style={{ fontSize: 11, color: "#92400e", marginBottom: 12 }}>Operan sin estar en el master oficial de Meli</div>
               <div>
                 {driversFantasma.length === 0 && <div style={{ fontSize: 12, color: "#94a3b8" }}>Sin fantasmas detectados ✓</div>}
                 {driversFantasma.slice(0, 8).map(d => (
@@ -15363,10 +15581,14 @@ function PoolMeliInventario({ drivers, vehiculos, resumen }) {
       {tipo === "vehicles" && (
         <>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 16 }}>
-            <PoolMeliKpi label="En master oficial" value={r.vehiculos_master ?? "—"} sublabel="API rostering Meli" />
-            <PoolMeliKpi label="Activos en abril" value={vehiculosActivos} sublabel={`${Math.round(vehiculosActivos / (r.vehiculos_master || 1) * 100)}% de la flota`} color="#047857" />
-            <PoolMeliKpi label="Durmientes" value={r.vehiculos_durmientes ?? "—"} sublabel="Sin uso en abril" />
-            <PoolMeliKpi label="Fantasmas" value={r.vehiculos_fantasma ?? "—"} sublabel="Sin registro oficial" danger />
+            <PoolMeliKpi label="En master oficial" value={r.vehiculos_master ?? vehiculosEnMaster.length} sublabel="API rostering Meli"
+                         onClick={verVehMaster} />
+            <PoolMeliKpi label="Activos en abril" value={vehiculosActivos.length} sublabel={`${Math.round(vehiculosActivos.length / (r.vehiculos_master || 1) * 100)}% de la flota`} color="#047857"
+                         onClick={verVehActivos} />
+            <PoolMeliKpi label="Durmientes" value={r.vehiculos_durmientes ?? vehiculosDurmientes.length} sublabel="Sin uso en abril"
+                         onClick={verVehDurmientes} />
+            <PoolMeliKpi label="Fantasmas" value={r.vehiculos_fantasma ?? vehiculosFantasma.length} sublabel="Sin registro oficial" danger
+                         onClick={verVehFantasma} />
           </div>
 
           <div className="form-card">
@@ -15415,8 +15637,9 @@ function PoolMeliInventario({ drivers, vehiculos, resumen }) {
     </div>
   );
 }
+
 // ── Sub-vista 2: CICLO DE ACEPTACIÓN ───────────────────────────────────────
-function PoolMeliCiclo({ scs, resumen }) {
+function PoolMeliCiclo({ scs, resumen, setModal }) {
   const [perfilFiltro, setPerfilFiltro] = useState("TODOS");
   const r = resumen || {};
 
@@ -15431,21 +15654,143 @@ function PoolMeliCiclo({ scs, resumen }) {
 
   const problematicos = scs.filter(s => s.perfil === "PROBLEMATICO");
 
+  // Funciones para abrir cada listado
+  const abrirRechazadas = async (filtroSC = null) => {
+    const tituloSC = filtroSC ? ` · ${filtroSC}` : "";
+    setModal({ titulo: `Cargando rechazadas${tituloSC}…`, filas: [], nombreArchivo: "rechazadas" });
+    try {
+      let q = sb.from("vw_meli_tr_rechazadas").select("*").order("fecha", { ascending: false });
+      if (filtroSC) q = q.eq("service_center", filtroSC);
+      const { data, error } = await q;
+      if (error) throw error;
+      setModal({
+        titulo: `Viajes RECHAZADOS${tituloSC} (${(data || []).length})`,
+        filas: data || [],
+        nombreArchivo: filtroSC ? `rechazadas_${filtroSC}` : "rechazadas_abril"
+      });
+    } catch (e) {
+      setModal({ titulo: "Error", filas: [{ error: e.message }], nombreArchivo: "error" });
+    }
+  };
+
+  const abrirCanceladas = async (filtroSC = null) => {
+    const tituloSC = filtroSC ? ` · ${filtroSC}` : "";
+    setModal({ titulo: `Cargando canceladas${tituloSC}…`, filas: [], nombreArchivo: "canceladas" });
+    try {
+      let q = sb.from("vw_meli_tr_canceladas").select("*").order("fecha", { ascending: false });
+      if (filtroSC) q = q.eq("service_center", filtroSC);
+      const { data, error } = await q;
+      if (error) throw error;
+      setModal({
+        titulo: `Viajes CANCELADOS${tituloSC} (${(data || []).length})`,
+        filas: data || [],
+        nombreArchivo: filtroSC ? `canceladas_${filtroSC}` : "canceladas_abril"
+      });
+    } catch (e) {
+      setModal({ titulo: "Error", filas: [{ error: e.message }], nombreArchivo: "error" });
+    }
+  };
+
+  const abrirNoPresentadas = async (filtroSC = null) => {
+    const tituloSC = filtroSC ? ` · ${filtroSC}` : "";
+    setModal({ titulo: `Cargando no presentadas${tituloSC}…`, filas: [], nombreArchivo: "no_presentadas" });
+    try {
+      let q = sb.from("vw_meli_no_presentadas").select("*").order("fecha", { ascending: false });
+      if (filtroSC) q = q.eq("service_center", filtroSC);
+      const { data, error } = await q;
+      if (error) throw error;
+      setModal({
+        titulo: `Viajes NO PRESENTADOS${tituloSC} (${(data || []).length})`,
+        filas: data || [],
+        nombreArchivo: filtroSC ? `no_presentadas_${filtroSC}` : "no_presentadas_abril"
+      });
+    } catch (e) {
+      setModal({ titulo: "Error", filas: [{ error: e.message }], nombreArchivo: "error" });
+    }
+  };
+
+  const abrirEjecutadas = async (filtroSC = null) => {
+    const tituloSC = filtroSC ? ` · ${filtroSC}` : "";
+    setModal({ titulo: `Cargando ejecutadas${tituloSC}…`, filas: [], nombreArchivo: "ejecutadas" });
+    try {
+      let q = sb.from("vw_meli_tr_ejecutadas_detalle").select("*").order("fecha", { ascending: false });
+      if (filtroSC) q = q.eq("service_center", filtroSC);
+      const { data, error } = await q;
+      if (error) throw error;
+      setModal({
+        titulo: `Viajes EJECUTADOS${tituloSC} (${(data || []).length})`,
+        filas: data || [],
+        nombreArchivo: filtroSC ? `ejecutadas_${filtroSC}` : "ejecutadas_abril"
+      });
+    } catch (e) {
+      setModal({ titulo: "Error", filas: [{ error: e.message }], nombreArchivo: "error" });
+    }
+  };
+
+  // Embudo: ofrecidas, aceptadas, ejecutadas son sumas — para el modal mostramos el SC respectivo
+  const abrirAceptadas = async (filtroSC = null) => {
+    const tituloSC = filtroSC ? ` · ${filtroSC}` : "";
+    setModal({ titulo: `Cargando aceptadas${tituloSC}…`, filas: [], nombreArchivo: "aceptadas" });
+    try {
+      let q = sb.from("meli_travel_requests")
+        .select("request_id, facility_id, fecha, destination, travel_id, vehicle_type, mel_service_description, etd, eta, status")
+        .eq("status", "accepted")
+        .gte("fecha", "2026-04-01")
+        .lte("fecha", "2026-04-30")
+        .order("fecha", { ascending: false });
+      if (filtroSC) q = q.eq("facility_id", filtroSC);
+      const { data, error } = await q;
+      if (error) throw error;
+      setModal({
+        titulo: `Viajes ACEPTADOS${tituloSC} (${(data || []).length})`,
+        filas: data || [],
+        nombreArchivo: filtroSC ? `aceptadas_${filtroSC}` : "aceptadas_abril"
+      });
+    } catch (e) {
+      setModal({ titulo: "Error", filas: [{ error: e.message }], nombreArchivo: "error" });
+    }
+  };
+
+  const abrirOfrecidas = async (filtroSC = null) => {
+    const tituloSC = filtroSC ? ` · ${filtroSC}` : "";
+    setModal({ titulo: `Cargando ofrecidas${tituloSC}…`, filas: [], nombreArchivo: "ofrecidas" });
+    try {
+      let q = sb.from("meli_travel_requests")
+        .select("request_id, facility_id, fecha, destination, travel_id, vehicle_type, mel_service_description, etd, eta, status")
+        .gte("fecha", "2026-04-01")
+        .lte("fecha", "2026-04-30")
+        .order("fecha", { ascending: false });
+      if (filtroSC) q = q.eq("facility_id", filtroSC);
+      const { data, error } = await q;
+      if (error) throw error;
+      setModal({
+        titulo: `Viajes OFRECIDOS${tituloSC} (${(data || []).length})`,
+        filas: data || [],
+        nombreArchivo: filtroSC ? `ofrecidas_${filtroSC}` : "ofrecidas_abril"
+      });
+    } catch (e) {
+      setModal({ titulo: "Error", filas: [{ error: e.message }], nombreArchivo: "error" });
+    }
+  };
+
   return (
     <div className="pg">
       <div className="form-card">
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 18 }}>
           <div>
             <div className="form-title" style={{ marginBottom: 4 }}>Embudo del ciclo · Abril 2026</div>
-            <div style={{ fontSize: 12, color: "#64748b" }}>Trayectoria completa: ofrecidas → aceptadas → ejecutadas</div>
+            <div style={{ fontSize: 12, color: "#64748b" }}>
+              Trayectoria completa: ofrecidas → aceptadas → ejecutadas
+              <span style={{ marginLeft: 8, color: "#94a3b8" }}>· hacé click en cualquier número para ver el detalle</span>
+            </div>
           </div>
           <div style={{ fontSize: 11, color: "#94a3b8" }}>Cubre 1 abr — 30 abr</div>
         </div>
 
         {[
-          { label: "Ofrecidas por Meli", valor: totOfr, base: totOfr, color: "#1a3a6b" },
-          { label: "Aceptadas por Bigticket", valor: totAcc, base: totOfr, color: "#0891b2" },
-          { label: "Ejecutadas", valor: totEjec, base: totOfr, color: "#047857" },
+          { label: "Ofrecidas por Meli", valor: totOfr, base: totOfr, color: "#1a3a6b", onClick: () => abrirOfrecidas() },
+          { label: "Aceptadas por Bigticket", valor: totAcc, base: totOfr, color: "#0891b2", onClick: () => abrirAceptadas() },
+          { label: "Ejecutadas", valor: totEjec, base: totOfr, color: "#047857", onClick: () => abrirEjecutadas() },
         ].map(f => {
           const pct = f.base > 0 ? (f.valor / f.base * 100).toFixed(0) : 0;
           return (
@@ -15453,7 +15798,15 @@ function PoolMeliCiclo({ scs, resumen }) {
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 5 }}>
                 <span style={{ fontSize: 12, fontWeight: 600, color: "#334155" }}>{f.label}</span>
                 <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                  <span style={{ fontSize: 18, fontWeight: 700, color: f.color }}>{f.valor.toLocaleString()}</span>
+                  <button onClick={f.onClick}
+                    style={{ background: "transparent", border: "none", cursor: "pointer",
+                      fontSize: 18, fontWeight: 700, color: f.color, padding: 0,
+                      textDecoration: "underline", textDecorationColor: "transparent",
+                      transition: "text-decoration-color 0.15s", fontFamily: "inherit" }}
+                    onMouseEnter={e => e.currentTarget.style.textDecorationColor = f.color}
+                    onMouseLeave={e => e.currentTarget.style.textDecorationColor = "transparent"}>
+                    {f.valor.toLocaleString()}
+                  </button>
                   <span style={{ fontSize: 11, color: "#64748b", width: 36, textAlign: "right" }}>{pct}%</span>
                 </div>
               </div>
@@ -15465,18 +15818,42 @@ function PoolMeliCiclo({ scs, resumen }) {
         })}
 
         <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginTop: 18 }}>
-          <div style={{ background: "#fef2f2", borderRadius: 8, padding: 12 }}>
-            <div style={{ fontSize: 10, fontWeight: 700, color: "#991b1b", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>Rechazadas</div>
+          <div onClick={() => abrirRechazadas()}
+            style={{ background: "#fef2f2", borderRadius: 8, padding: 12, cursor: "pointer",
+              transition: "all 0.15s" }}
+            onMouseEnter={e => e.currentTarget.style.boxShadow = "0 4px 12px rgba(185,28,28,0.15)"}
+            onMouseLeave={e => e.currentTarget.style.boxShadow = "none"}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: "#991b1b", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4,
+              display: "flex", justifyContent: "space-between" }}>
+              <span>Rechazadas</span>
+              <span style={{ fontSize: 9, opacity: 0.6 }}>VER →</span>
+            </div>
             <div style={{ fontSize: 20, fontWeight: 700, color: "#991b1b" }}>{totRech}</div>
             <div style={{ fontSize: 10, color: "#7f1d1d", marginTop: 2 }}>{totOfr > 0 ? Math.round(totRech / totOfr * 100) : 0}% de ofrecidas</div>
           </div>
-          <div style={{ background: "#f1f5f9", borderRadius: 8, padding: 12 }}>
-            <div style={{ fontSize: 10, fontWeight: 700, color: "#475569", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>Canceladas</div>
+          <div onClick={() => abrirCanceladas()}
+            style={{ background: "#f1f5f9", borderRadius: 8, padding: 12, cursor: "pointer",
+              transition: "all 0.15s" }}
+            onMouseEnter={e => e.currentTarget.style.boxShadow = "0 4px 12px rgba(71,85,105,0.15)"}
+            onMouseLeave={e => e.currentTarget.style.boxShadow = "none"}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: "#475569", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4,
+              display: "flex", justifyContent: "space-between" }}>
+              <span>Canceladas</span>
+              <span style={{ fontSize: 9, opacity: 0.6 }}>VER →</span>
+            </div>
             <div style={{ fontSize: 20, fontWeight: 700, color: "#475569" }}>{totCanc}</div>
             <div style={{ fontSize: 10, color: "#64748b", marginTop: 2 }}>{totOfr > 0 ? Math.round(totCanc / totOfr * 100) : 0}% de ofrecidas</div>
           </div>
-          <div style={{ background: "#fffbeb", borderRadius: 8, padding: 12, border: "1px solid #fde68a" }}>
-            <div style={{ fontSize: 10, fontWeight: 700, color: "#92400e", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>No presentadas</div>
+          <div onClick={() => abrirNoPresentadas()}
+            style={{ background: "#fffbeb", borderRadius: 8, padding: 12, border: "1px solid #fde68a", cursor: "pointer",
+              transition: "all 0.15s" }}
+            onMouseEnter={e => e.currentTarget.style.boxShadow = "0 4px 12px rgba(146,64,14,0.15)"}
+            onMouseLeave={e => e.currentTarget.style.boxShadow = "none"}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: "#92400e", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4,
+              display: "flex", justifyContent: "space-between" }}>
+              <span>No presentadas</span>
+              <span style={{ fontSize: 9, opacity: 0.6 }}>VER →</span>
+            </div>
             <div style={{ fontSize: 20, fontWeight: 700, color: "#92400e" }}>{totNoPres}</div>
             <div style={{ fontSize: 10, color: "#92400e", marginTop: 2 }}>aceptadas - ejecutadas</div>
           </div>
@@ -15503,6 +15880,9 @@ function PoolMeliCiclo({ scs, resumen }) {
       </div>
 
       <div className="form-card" style={{ padding: 0, overflow: "hidden" }}>
+        <div style={{ padding: "10px 16px", borderBottom: "1px solid #f1f5f9", background: "#f8fafc" }}>
+          <div style={{ fontSize: 11, color: "#64748b" }}>Hacé click en cualquier número para ver el detalle de ese SC</div>
+        </div>
         <div style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
@@ -15521,14 +15901,51 @@ function PoolMeliCiclo({ scs, resumen }) {
               {filtrados.map(s => {
                 const cumpl = s.aceptadas > 0 ? (s.ejecutadas / s.aceptadas * 100).toFixed(0) : 0;
                 const cumplColor = cumpl >= 90 ? "#047857" : cumpl >= 70 ? "#92400e" : "#991b1b";
+                const linkStyle = (color, bold = false) => ({
+                  background: "transparent", border: "none", cursor: "pointer",
+                  color, fontWeight: bold ? 700 : 400, padding: 0,
+                  fontFamily: "inherit", fontSize: 12, fontVariantNumeric: "tabular-nums",
+                  textDecoration: "underline", textDecorationColor: "transparent",
+                  transition: "text-decoration-color 0.15s",
+                });
                 return (
                   <tr key={s.service_center} style={{ borderBottom: "1px solid #f1f5f9" }}>
                     <td style={{ ...pm_tdStyle, fontFamily: "monospace", fontWeight: 700 }}>{s.service_center}</td>
-                    <td style={pm_tdStyleR}>{s.ofrecidas}</td>
-                    <td style={{ ...pm_tdStyleR, color: "#0891b2" }}>{s.aceptadas}</td>
-                    <td style={{ ...pm_tdStyleR, color: s.rechazadas > 50 ? "#991b1b" : "#64748b" }}>{s.rechazadas}</td>
-                    <td style={{ ...pm_tdStyleR, color: "#047857" }}>{s.ejecutadas}</td>
-                    <td style={{ ...pm_tdStyleR, fontWeight: 600, color: s.no_presentadas > 20 ? "#991b1b" : "#92400e" }}>{s.no_presentadas}</td>
+                    <td style={pm_tdStyleR}>
+                      <button onClick={() => abrirOfrecidas(s.service_center)} style={linkStyle("#0f172a")}
+                        onMouseEnter={e => e.currentTarget.style.textDecorationColor = "#0f172a"}
+                        onMouseLeave={e => e.currentTarget.style.textDecorationColor = "transparent"}>
+                        {s.ofrecidas}
+                      </button>
+                    </td>
+                    <td style={pm_tdStyleR}>
+                      <button onClick={() => abrirAceptadas(s.service_center)} style={linkStyle("#0891b2")}
+                        onMouseEnter={e => e.currentTarget.style.textDecorationColor = "#0891b2"}
+                        onMouseLeave={e => e.currentTarget.style.textDecorationColor = "transparent"}>
+                        {s.aceptadas}
+                      </button>
+                    </td>
+                    <td style={pm_tdStyleR}>
+                      <button onClick={() => abrirRechazadas(s.service_center)} style={linkStyle(s.rechazadas > 50 ? "#991b1b" : "#64748b")}
+                        onMouseEnter={e => e.currentTarget.style.textDecorationColor = s.rechazadas > 50 ? "#991b1b" : "#64748b"}
+                        onMouseLeave={e => e.currentTarget.style.textDecorationColor = "transparent"}>
+                        {s.rechazadas}
+                      </button>
+                    </td>
+                    <td style={pm_tdStyleR}>
+                      <button onClick={() => abrirEjecutadas(s.service_center)} style={linkStyle("#047857")}
+                        onMouseEnter={e => e.currentTarget.style.textDecorationColor = "#047857"}
+                        onMouseLeave={e => e.currentTarget.style.textDecorationColor = "transparent"}>
+                        {s.ejecutadas}
+                      </button>
+                    </td>
+                    <td style={pm_tdStyleR}>
+                      <button onClick={() => abrirNoPresentadas(s.service_center)} style={linkStyle(s.no_presentadas > 20 ? "#991b1b" : "#92400e", true)}
+                        onMouseEnter={e => e.currentTarget.style.textDecorationColor = s.no_presentadas > 20 ? "#991b1b" : "#92400e"}
+                        onMouseLeave={e => e.currentTarget.style.textDecorationColor = "transparent"}>
+                        {s.no_presentadas}
+                      </button>
+                    </td>
                     <td style={{ ...pm_tdStyleR, fontWeight: 700, color: cumplColor }}>{cumpl}%</td>
                     <td style={{ ...pm_tdStyle, textAlign: "center" }}><PerfilBadgeMX perfil={s.perfil} /></td>
                   </tr>
@@ -15693,7 +16110,7 @@ function PoolMeliScore({ scores, resumen }) {
   );
 }
 
-// Estilos compartidos para tablas del módulo Pool Meli
+// Estilos compartidos para tablas
 const pm_thStyle  = { textAlign: "left", fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5, padding: "10px 12px" };
 const pm_thStyleR = { ...pm_thStyle, textAlign: "right" };
 const pm_tdStyle  = { fontSize: 12, color: "#0f172a", padding: "10px 12px" };
