@@ -15105,12 +15105,9 @@ function ConfigReglasNS() {
 
 // ═══════════════════════════════════════════════════════════════════════════
 // INDICADORES OPERACIONALES MX — Pool Mercado Libre
-// Cruce de 6 fuentes: drivers_master · vehicles_master · capacity_pool ·
-// carrier_metricas · asignacion_servicios · travel_requests
-// Lee de las vistas vw_meli_* en Supabase
 // ═══════════════════════════════════════════════════════════════════════════
 
-// SheetJS está disponible vía CDN en runtime; para descarga Excel
+// SheetJS lazy-load para descarga Excel
 const cargarSheetJS = () => new Promise((resolve, reject) => {
   if (window.XLSX) return resolve(window.XLSX);
   const s = document.createElement('script');
@@ -15137,8 +15134,16 @@ async function descargarExcelMeli(filas, nombreArchivo, nombreHoja = "Datos") {
   }
 }
 
+// Helper para nombres de meses en español
+const NOMBRES_MES = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", 
+                     "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"];
+
+function diasDelMes(anio, mes) {
+  return new Date(anio, mes, 0).getDate();
+}
+
 function IndicadoresOperacionalesMX({ usuario }) {
-  const [vista, setVista] = useState("hallazgos");
+  const [vista, setVista] = useState("inventario");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [resumen, setResumen] = useState(null);
@@ -15146,10 +15151,10 @@ function IndicadoresOperacionalesMX({ usuario }) {
   const [vehiculos, setVehiculos] = useState([]);
   const [scs, setSCs] = useState([]);
   const [scores, setScores] = useState([]);
+  const [modal, setModal] = useState(null);
 
-  // Estado del modal
-  const [modal, setModal] = useState(null); 
-  // modal = { titulo, columnas, filas, nombreArchivo } | null
+  // Estado para vista detalle in-place (driver o vehículo)
+  const [detalle, setDetalle] = useState(null); // { tipo: 'driver'|'vehiculo', registro: {...} }
 
   useEffect(() => {
     let alive = true;
@@ -15182,11 +15187,12 @@ function IndicadoresOperacionalesMX({ usuario }) {
     return () => { alive = false; };
   }, []);
 
+  // Tabs: orden ahora con Hallazgos AL FINAL
   const tabs = [
-    { id: "hallazgos",  label: "Hallazgos", desc: "Lo más crítico para revisar" },
     { id: "inventario", label: "Inventario", desc: "Drivers, vehículos, fantasmas" },
     { id: "ciclo",      label: "Ciclo de aceptación", desc: "Embudo ofrecidas → ejecutadas" },
     { id: "score",      label: "Score de compromiso", desc: "Calificación 0-100 por driver" },
+    { id: "hallazgos",  label: "Hallazgos", desc: "Lo más crítico para revisar" },
   ];
 
   if (loading) {
@@ -15214,10 +15220,20 @@ function IndicadoresOperacionalesMX({ usuario }) {
             {error}
             <br /><br />
             <strong>Causa probable:</strong> las vistas <code>vw_meli_*</code> aún no fueron creadas en Supabase.
-            Ejecutá los SQL del paquete <code>sql_etapas_meli</code> y volvé a recargar.
           </div>
         </div>
       </div>
+    );
+  }
+
+  // Vista detalle ocupa toda la pantalla del módulo
+  if (detalle) {
+    return (
+      <PoolMeliDetalleRegistro 
+        tipo={detalle.tipo} 
+        registro={detalle.registro} 
+        onVolver={() => setDetalle(null)} 
+      />
     );
   }
 
@@ -15246,33 +15262,43 @@ function IndicadoresOperacionalesMX({ usuario }) {
         </div>
       </div>
 
-      {vista === "hallazgos"  && <PoolMeliHallazgos drivers={drivers} vehiculos={vehiculos} scs={scs} scores={scores} resumen={resumen} setModal={setModal} setVista={setVista} />}
-      {vista === "inventario" && <PoolMeliInventario drivers={drivers} vehiculos={vehiculos} resumen={resumen} setModal={setModal} />}
+      {vista === "inventario" && <PoolMeliInventario drivers={drivers} vehiculos={vehiculos} resumen={resumen} setModal={setModal} setDetalle={setDetalle} />}
       {vista === "ciclo"      && <PoolMeliCiclo scs={scs} resumen={resumen} setModal={setModal} />}
       {vista === "score"      && <PoolMeliScore scores={scores} resumen={resumen} />}
+      {vista === "hallazgos"  && <PoolMeliHallazgos drivers={drivers} vehiculos={vehiculos} scs={scs} scores={scores} resumen={resumen} setModal={setModal} setVista={setVista} />}
 
       {modal && <MeliModal modal={modal} onClose={() => setModal(null)} />}
     </div>
   );
 }
 
-// ── MODAL: tabla con buscador + descarga Excel ─────────────────────────────
+// ── MODAL ──────────────────────────────────────────────────────────────────
 function MeliModal({ modal, onClose }) {
   const [busqueda, setBusqueda] = useState("");
   const filas = modal.filas || [];
   const columnas = modal.columnas || (filas[0] ? Object.keys(filas[0]) : []);
 
   const filtradas = useMemo(() => {
-    if (!busqueda.trim()) return filas;
-    const q = busqueda.toLowerCase().trim();
-    return filas.filter(row =>
-      columnas.some(c => {
-        const val = row[c];
-        if (val == null) return false;
-        return String(val).toLowerCase().includes(q);
-      })
-    );
-  }, [busqueda, filas, columnas]);
+    let res = filas;
+    if (modal.filtros) {
+      Object.entries(modal.filtros).forEach(([col, valores]) => {
+        if (valores && valores.length > 0) {
+          res = res.filter(r => valores.includes(r[col]));
+        }
+      });
+    }
+    if (busqueda.trim()) {
+      const q = busqueda.toLowerCase().trim();
+      res = res.filter(row =>
+        columnas.some(c => {
+          const val = row[c];
+          if (val == null) return false;
+          return String(val).toLowerCase().includes(q);
+        })
+      );
+    }
+    return res;
+  }, [busqueda, filas, columnas, modal.filtros]);
 
   return (
     <div onClick={onClose}
@@ -15283,29 +15309,22 @@ function MeliModal({ modal, onClose }) {
         style={{ background: "#fff", borderRadius: 12, width: "100%", maxWidth: 1200,
           maxHeight: "92vh", display: "flex", flexDirection: "column", overflow: "hidden",
           boxShadow: "0 20px 50px rgba(0,0,0,0.25)" }}>
-        {/* Header */}
         <div style={{ padding: "14px 20px", borderBottom: "1px solid #e4e7ec",
           display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
           <div>
             <div style={{ fontSize: 15, fontWeight: 700, color: "#1a3a6b" }}>{modal.titulo}</div>
             <div style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}>
               {filtradas.length} {filtradas.length === 1 ? "registro" : "registros"}
-              {busqueda && ` (de ${filas.length} totales)`}
+              {(busqueda || modal.filtros) && ` (de ${filas.length} totales)`}
             </div>
           </div>
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <input
-              type="text"
-              placeholder="Buscar..."
-              value={busqueda}
+            <input type="text" placeholder="Buscar..." value={busqueda}
               onChange={e => setBusqueda(e.target.value)}
               style={{ width: 240, padding: "7px 10px", border: "1px solid #d0d5dd",
-                borderRadius: 6, fontSize: 12, fontFamily: "'Geist', sans-serif" }}
-            />
-            <button
-              onClick={() => descargarExcelMeli(filas, modal.nombreArchivo || "export_meli", modal.titulo.slice(0, 31))}
-              className="btn-orange"
-              style={{ padding: "7px 12px", fontSize: 12 }}>
+                borderRadius: 6, fontSize: 12, fontFamily: "'Geist', sans-serif" }} />
+            <button onClick={() => descargarExcelMeli(filtradas, modal.nombreArchivo || "export_meli", modal.titulo.slice(0, 31))}
+              className="btn-orange" style={{ padding: "7px 12px", fontSize: 12 }}>
               Descargar Excel
             </button>
             <button onClick={onClose}
@@ -15314,7 +15333,12 @@ function MeliModal({ modal, onClose }) {
           </div>
         </div>
 
-        {/* Tabla */}
+        {modal.filtros_ui && (
+          <div style={{ padding: "10px 20px", background: "#f8fafc", borderBottom: "1px solid #e4e7ec" }}>
+            {modal.filtros_ui}
+          </div>
+        )}
+
         <div style={{ flex: 1, overflow: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
             <thead style={{ position: "sticky", top: 0, background: "#f8fafc", zIndex: 1 }}>
@@ -15329,9 +15353,8 @@ function MeliModal({ modal, onClose }) {
             </thead>
             <tbody>
               {filtradas.length === 0 && (
-                <tr><td colSpan={columnas.length}
-                  style={{ padding: 30, textAlign: "center", color: "#94a3b8" }}>
-                  Sin resultados {busqueda && "para esa búsqueda"}
+                <tr><td colSpan={columnas.length} style={{ padding: 30, textAlign: "center", color: "#94a3b8" }}>
+                  Sin resultados
                 </td></tr>
               )}
               {filtradas.map((row, i) => (
@@ -15353,7 +15376,7 @@ function MeliModal({ modal, onClose }) {
   );
 }
 
-// ── Helpers visuales ───────────────────────────────────────────────────────
+// ── HELPERS visuales ───────────────────────────────────────────────────────
 function PoolMeliKpi({ label, value, sublabel, color = "#1a3a6b", danger = false, warn = false, onClick = null }) {
   const bg = danger ? "#fef2f2" : warn ? "#fffbeb" : "#fff";
   const border = danger ? "#fecaca" : warn ? "#fde68a" : "#e4e7ec";
@@ -15361,12 +15384,9 @@ function PoolMeliKpi({ label, value, sublabel, color = "#1a3a6b", danger = false
   const clickable = !!onClick;
   return (
     <div onClick={onClick}
-      style={{
-        background: bg, border: `1px solid ${border}`, borderRadius: 12, padding: 16,
-        cursor: clickable ? "pointer" : "default",
-        transition: "all 0.15s",
-        ...(clickable ? { boxShadow: "0 1px 2px rgba(0,0,0,0.03)" } : {})
-      }}
+      style={{ background: bg, border: `1px solid ${border}`, borderRadius: 12, padding: 16,
+        cursor: clickable ? "pointer" : "default", transition: "all 0.15s",
+        ...(clickable ? { boxShadow: "0 1px 2px rgba(0,0,0,0.03)" } : {}) }}
       onMouseEnter={e => clickable && (e.currentTarget.style.boxShadow = "0 4px 12px rgba(26,58,107,0.12)")}
       onMouseLeave={e => clickable && (e.currentTarget.style.boxShadow = "0 1px 2px rgba(0,0,0,0.03)")}>
       <div style={{ fontSize: 11, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6, fontWeight: 600,
@@ -15411,69 +15431,108 @@ function ScoreBadgeMX({ cat }) {
   );
 }
 
-// ── Sub-vista 1: INVENTARIO ────────────────────────────────────────────────
-function PoolMeliInventario({ drivers, vehiculos, resumen, setModal }) {
+// ── INVENTARIO con calendario diario ───────────────────────────────────────
+function PoolMeliInventario({ drivers, vehiculos, resumen, setModal, setDetalle }) {
   const [tipo, setTipo] = useState("drivers");
+  const [filtroCat, setFiltroCat] = useState("activos"); // activos | durmientes | fantasmas | todos
+  const [calendarios, setCalendarios] = useState({ drivers: null, vehiculos: null });
+  const [mesSeleccionado, setMesSeleccionado] = useState(() => {
+    const hoy = new Date();
+    return { anio: hoy.getFullYear(), mes: hoy.getMonth() + 1 };
+  });
   const r = resumen || {};
 
-  // Drivers categorizados
+  // Cargar calendarios cuando cambia el mes
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const fechaInicio = `${mesSeleccionado.anio}-${String(mesSeleccionado.mes).padStart(2, '0')}-01`;
+        const fechaFin = `${mesSeleccionado.anio}-${String(mesSeleccionado.mes).padStart(2, '0')}-${diasDelMes(mesSeleccionado.anio, mesSeleccionado.mes)}`;
+        
+        const [rd, rv] = await Promise.all([
+          sb.from("vw_meli_calendario_drivers").select("*").gte("fecha", fechaInicio).lte("fecha", fechaFin),
+          sb.from("vw_meli_calendario_vehiculos").select("*").gte("fecha", fechaInicio).lte("fecha", fechaFin),
+        ]);
+        if (!alive) return;
+        
+        // Agrupar por driver/placa
+        const calDrivers = {};
+        (rd.data || []).forEach(row => {
+          if (!calDrivers[row.nombre]) calDrivers[row.nombre] = new Set();
+          calDrivers[row.nombre].add(row.dia);
+        });
+        
+        const calVehiculos = {};
+        (rv.data || []).forEach(row => {
+          if (!calVehiculos[row.placa]) calVehiculos[row.placa] = new Set();
+          calVehiculos[row.placa].add(row.dia);
+        });
+        
+        setCalendarios({ drivers: calDrivers, vehiculos: calVehiculos });
+      } catch (e) {
+        console.error("Error calendarios:", e);
+      }
+    })();
+    return () => { alive = false; };
+  }, [mesSeleccionado.anio, mesSeleccionado.mes]);
+
+  // Filtrado por categoría
+  const driversFiltrados = useMemo(() => {
+    if (filtroCat === "todos") return drivers;
+    if (filtroCat === "activos") return drivers.filter(d => d.categoria !== "durmiente" && d.categoria !== "fantasma");
+    if (filtroCat === "durmientes") return drivers.filter(d => d.categoria === "durmiente");
+    if (filtroCat === "fantasmas") return drivers.filter(d => d.categoria === "fantasma");
+    return drivers;
+  }, [drivers, filtroCat]);
+
+  const vehiculosFiltrados = useMemo(() => {
+    if (filtroCat === "todos") return vehiculos;
+    if (filtroCat === "activos") return vehiculos.filter(v => v.categoria !== "durmiente" && v.categoria !== "fantasma");
+    if (filtroCat === "durmientes") return vehiculos.filter(v => v.categoria === "durmiente");
+    if (filtroCat === "fantasmas") return vehiculos.filter(v => v.categoria === "fantasma");
+    return vehiculos;
+  }, [vehiculos, filtroCat]);
+
   const driversActivos = drivers.filter(d => d.categoria !== "durmiente" && d.categoria !== "fantasma");
   const driversDurmientes = drivers.filter(d => d.categoria === "durmiente");
   const driversFantasma = drivers.filter(d => d.categoria === "fantasma");
   const driversEnMaster = drivers.filter(d => d.en_master);
-  const topDrivers = driversActivos.slice(0, 6);
-
-  // Vehículos categorizados
+  
   const vehiculosActivos = vehiculos.filter(v => v.categoria !== "durmiente" && v.categoria !== "fantasma");
   const vehiculosDurmientes = vehiculos.filter(v => v.categoria === "durmiente");
   const vehiculosFantasma = vehiculos.filter(v => v.categoria === "fantasma");
-  const vehiculosEnMaster = vehiculos.filter(v => v.en_master);
 
-  // Acciones para abrir modal
   const verDriversMaster = () => setModal({
     titulo: "Drivers · Master Oficial Meli",
     filas: driversEnMaster,
     nombreArchivo: "drivers_master_oficial_meli"
   });
-  const verDriversActivos = () => setModal({
-    titulo: "Drivers · Activos en abril",
-    filas: driversActivos,
-    nombreArchivo: "drivers_activos_abril"
-  });
-  const verDriversDurmientes = () => setModal({
-    titulo: "Drivers · Durmientes (en master, no operaron)",
-    filas: driversDurmientes,
-    nombreArchivo: "drivers_durmientes"
-  });
-  const verDriversFantasma = () => setModal({
-    titulo: "Drivers · FANTASMAS (operan sin estar en master)",
-    filas: driversFantasma,
-    nombreArchivo: "drivers_fantasma_compliance"
-  });
-  const verVehMaster = () => setModal({
-    titulo: "Vehículos · Master Oficial Meli",
-    filas: vehiculosEnMaster,
-    nombreArchivo: "vehiculos_master_oficial_meli"
-  });
-  const verVehActivos = () => setModal({
-    titulo: "Vehículos · Activos en abril",
-    filas: vehiculosActivos,
-    nombreArchivo: "vehiculos_activos_abril"
-  });
-  const verVehDurmientes = () => setModal({
-    titulo: "Vehículos · Durmientes (sin uso)",
-    filas: vehiculosDurmientes,
-    nombreArchivo: "vehiculos_durmientes"
-  });
-  const verVehFantasma = () => setModal({
-    titulo: "Vehículos · FANTASMAS (sin registro oficial)",
-    filas: vehiculosFantasma,
-    nombreArchivo: "vehiculos_fantasma_compliance"
-  });
+
+  // Cambiar mes
+  const mesAnterior = () => {
+    const m = mesSeleccionado.mes - 1;
+    if (m < 1) setMesSeleccionado({ anio: mesSeleccionado.anio - 1, mes: 12 });
+    else setMesSeleccionado({ ...mesSeleccionado, mes: m });
+  };
+  const mesSiguiente = () => {
+    const m = mesSeleccionado.mes + 1;
+    const hoy = new Date();
+    // No permitir ir más allá del mes actual
+    const maxAnio = hoy.getFullYear(), maxMes = hoy.getMonth() + 1;
+    if (mesSeleccionado.anio === maxAnio && mesSeleccionado.mes >= maxMes) return;
+    if (m > 12) setMesSeleccionado({ anio: mesSeleccionado.anio + 1, mes: 1 });
+    else setMesSeleccionado({ ...mesSeleccionado, mes: m });
+  };
+  const esMesActual = () => {
+    const hoy = new Date();
+    return mesSeleccionado.anio === hoy.getFullYear() && mesSeleccionado.mes === hoy.getMonth() + 1;
+  };
 
   return (
     <div className="pg">
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+      {/* Selector tipo + mes */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
         <div style={{ display: "flex", gap: 4, background: "#f1f5f9", padding: 4, borderRadius: 8 }}>
           <button onClick={() => setTipo("drivers")}
             style={{ padding: "6px 14px", fontSize: 12, fontWeight: 600, border: "none", cursor: "pointer", borderRadius: 6,
@@ -15492,155 +15551,376 @@ function PoolMeliInventario({ drivers, vehiculos, resumen, setModal }) {
             Vehículos ({vehiculos.length})
           </button>
         </div>
-        <div style={{ fontSize: 11, color: "#94a3b8" }}>
-          Tip: hacé click en cualquier KPI para ver el listado completo
+        
+        {/* Selector de mes */}
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <button onClick={mesAnterior}
+            style={{ padding: "6px 10px", border: "1px solid #d0d5dd", borderRadius: 6, background: "#fff",
+              cursor: "pointer", fontSize: 14, color: "#475569", fontFamily: "'Geist', sans-serif" }}>‹</button>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#1a3a6b", minWidth: 140, textAlign: "center" }}>
+            {NOMBRES_MES[mesSeleccionado.mes - 1]} {mesSeleccionado.anio}
+            {esMesActual() && <span style={{ fontSize: 9, color: "#F47B20", marginLeft: 6 }}>(actual)</span>}
+          </div>
+          <button onClick={mesSiguiente} disabled={esMesActual()}
+            style={{ padding: "6px 10px", border: "1px solid #d0d5dd", borderRadius: 6,
+              background: esMesActual() ? "#f1f5f9" : "#fff",
+              cursor: esMesActual() ? "not-allowed" : "pointer", fontSize: 14,
+              color: esMesActual() ? "#cbd5e1" : "#475569", fontFamily: "'Geist', sans-serif" }}>›</button>
         </div>
       </div>
 
+      {/* KPIs */}
       {tipo === "drivers" && (
-        <>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 16 }}>
-            <PoolMeliKpi label="En master oficial" value={r.drivers_master ?? driversEnMaster.length} sublabel="API rostering Meli"
-                         onClick={verDriversMaster} />
-            <PoolMeliKpi label="Activos en abril" value={driversActivos.length} sublabel={`${Math.round(driversActivos.length / (r.drivers_master || 1) * 100)}% del master`} color="#047857"
-                         onClick={verDriversActivos} />
-            <PoolMeliKpi label="Durmientes" value={r.drivers_durmientes ?? driversDurmientes.length} sublabel="En master, no operaron"
-                         onClick={verDriversDurmientes} />
-            <PoolMeliKpi label="Fantasmas" value={r.drivers_fantasma ?? driversFantasma.length} sublabel="Operan sin estar en master" danger
-                         onClick={verDriversFantasma} />
-          </div>
-
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-            <div className="form-card" style={{ marginBottom: 0 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-                <div>
-                  <div className="form-title">Top drivers operativos</div>
-                  <div style={{ fontSize: 11, color: "#64748b", marginTop: -8, marginBottom: 12 }}>Ordenados por viajes ejecutados</div>
-                </div>
-                <button onClick={verDriversActivos}
-                  style={{ background: "transparent", border: "none", fontSize: 11, color: "#1a3a6b",
-                    fontWeight: 600, cursor: "pointer", padding: 0 }}>
-                  Ver todos →
-                </button>
-              </div>
-              <div>
-                {topDrivers.length === 0 && <div style={{ fontSize: 12, color: "#94a3b8" }}>Sin datos</div>}
-                {topDrivers.map(d => (
-                  <div key={d.driver_id || d.nombre} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 0", borderBottom: "1px solid #f1f5f9" }}>
-                    <div style={{ flex: 1 }}>
-                      <div style={{ fontSize: 13, fontWeight: 600, color: "#0f172a" }}>{d.nombre}</div>
-                      <div style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}>
-                        {d.scs_operados || "—"} · {d.dias_trabajados} días · DPPH {d.dpph_promedio?.toFixed?.(1) ?? "—"}
-                      </div>
-                    </div>
-                    <div style={{ textAlign: "right", marginLeft: 12 }}>
-                      <div style={{ fontSize: 14, fontWeight: 700, color: "#047857" }}>{d.viajes_total}</div>
-                      <div style={{ fontSize: 10, color: "#94a3b8" }}>viajes</div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div className="form-card" style={{ marginBottom: 0, background: "#fffbf5", border: "1px solid #fed7aa" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-                <div style={{ flex: 1 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-                    <div className="form-title" style={{ marginBottom: 0 }}>Drivers fantasma</div>
-                    <span style={{ fontSize: 9, padding: "2px 6px", borderRadius: 3, background: "#fee2e2", color: "#991b1b", fontWeight: 700, letterSpacing: 0.5 }}>
-                      RIESGO COMPLIANCE
-                    </span>
-                  </div>
-                  <div style={{ fontSize: 11, color: "#92400e", marginBottom: 12 }}>Operan sin estar en el master oficial de Meli</div>
-                </div>
-                <button onClick={verDriversFantasma}
-                  style={{ background: "transparent", border: "none", fontSize: 11, color: "#991b1b",
-                    fontWeight: 600, cursor: "pointer", padding: 0 }}>
-                  Ver todos →
-                </button>
-              </div>
-              <div>
-                {driversFantasma.length === 0 && <div style={{ fontSize: 12, color: "#94a3b8" }}>Sin fantasmas detectados ✓</div>}
-                {driversFantasma.slice(0, 8).map(d => (
-                  <div key={d.driver_id || d.nombre} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 0", borderBottom: "1px solid #fde68a" }}>
-                    <div style={{ flex: 1 }}>
-                      <div style={{ fontSize: 13, fontWeight: 600, color: "#0f172a" }}>{d.nombre}</div>
-                      <div style={{ fontSize: 11, color: "#92400e", marginTop: 2 }}>
-                        {d.viajes_total} viajes · {d.dias_trabajados} días · {d.scs_operados || "—"}
-                      </div>
-                    </div>
-                  </div>
-                ))}
-                {driversFantasma.length > 8 && (
-                  <div style={{ fontSize: 11, color: "#92400e", marginTop: 8 }}>+ {driversFantasma.length - 8} más</div>
-                )}
-              </div>
-            </div>
-          </div>
-        </>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 16 }}>
+          <PoolMeliKpi label="En master oficial" value={r.drivers_master ?? driversEnMaster.length} sublabel="API rostering Meli"
+                       onClick={verDriversMaster} />
+          <PoolMeliKpi label="Activos en abril" value={driversActivos.length} sublabel={`${Math.round(driversActivos.length / (r.drivers_master || 1) * 100)}% del master`} color="#047857"
+                       onClick={() => setFiltroCat("activos")} />
+          <PoolMeliKpi label="Durmientes" value={r.drivers_durmientes ?? driversDurmientes.length} sublabel="En master, no operaron"
+                       onClick={() => setFiltroCat("durmientes")} />
+          <PoolMeliKpi label="Fantasmas" value={r.drivers_fantasma ?? driversFantasma.length} sublabel="Operan sin estar en master" danger
+                       onClick={() => setFiltroCat("fantasmas")} />
+        </div>
       )}
 
       {tipo === "vehicles" && (
-        <>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 16 }}>
-            <PoolMeliKpi label="En master oficial" value={r.vehiculos_master ?? vehiculosEnMaster.length} sublabel="API rostering Meli"
-                         onClick={verVehMaster} />
-            <PoolMeliKpi label="Activos en abril" value={vehiculosActivos.length} sublabel={`${Math.round(vehiculosActivos.length / (r.vehiculos_master || 1) * 100)}% de la flota`} color="#047857"
-                         onClick={verVehActivos} />
-            <PoolMeliKpi label="Durmientes" value={r.vehiculos_durmientes ?? vehiculosDurmientes.length} sublabel="Sin uso en abril"
-                         onClick={verVehDurmientes} />
-            <PoolMeliKpi label="Fantasmas" value={r.vehiculos_fantasma ?? vehiculosFantasma.length} sublabel="Sin registro oficial" danger
-                         onClick={verVehFantasma} />
-          </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 16 }}>
+          <PoolMeliKpi label="En master oficial" value={r.vehiculos_master} sublabel="API rostering Meli" />
+          <PoolMeliKpi label="Activos en abril" value={vehiculosActivos.length} sublabel={`${Math.round(vehiculosActivos.length / (r.vehiculos_master || 1) * 100)}% de la flota`} color="#047857"
+                       onClick={() => setFiltroCat("activos")} />
+          <PoolMeliKpi label="Durmientes" value={r.vehiculos_durmientes} sublabel="Sin uso en abril"
+                       onClick={() => setFiltroCat("durmientes")} />
+          <PoolMeliKpi label="Fantasmas" value={r.vehiculos_fantasma} sublabel="Sin registro oficial" danger
+                       onClick={() => setFiltroCat("fantasmas")} />
+        </div>
+      )}
 
-          <div className="form-card">
-            <div className="form-title">Composición de flota MX</div>
-            <div style={{ fontSize: 11, color: "#64748b", marginTop: -8, marginBottom: 16 }}>Distribución por tipo y estado operativo</div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24 }}>
-              <div>
-                <div style={{ fontSize: 11, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8, fontWeight: 600 }}>Por tipo</div>
-                {(() => {
-                  const porTipo = {};
-                  vehiculos.forEach(v => {
-                    const t = v.tipo || "Sin tipo";
-                    porTipo[t] = (porTipo[t] || 0) + 1;
-                  });
-                  return Object.entries(porTipo).sort((a, b) => b[1] - a[1]).map(([t, c]) => (
-                    <div key={t} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: "1px solid #f1f5f9" }}>
-                      <span style={{ fontSize: 12, color: "#334155" }}>{t}</span>
-                      <span style={{ fontSize: 12, fontWeight: 700, color: "#0f172a" }}>{c}</span>
-                    </div>
-                  ));
-                })()}
-              </div>
-              <div>
-                <div style={{ fontSize: 11, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8, fontWeight: 600 }}>Por estado operativo</div>
-                {(() => {
-                  const porCat = {};
-                  vehiculos.forEach(v => {
-                    const c = v.categoria || "—";
-                    porCat[c] = (porCat[c] || 0) + 1;
-                  });
-                  const orden = ["titular", "regular", "esporadico", "durmiente", "fantasma"];
-                  const colores = { titular: "#047857", regular: "#0891b2", esporadico: "#ca8a04", durmiente: "#94a3b8", fantasma: "#b91c1c" };
-                  return orden.filter(k => porCat[k]).map(k => (
-                    <div key={k} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0", borderBottom: "1px solid #f1f5f9" }}>
-                      <div style={{ width: 8, height: 8, borderRadius: "50%", background: colores[k] }}></div>
-                      <span style={{ fontSize: 12, color: "#334155", flex: 1, textTransform: "capitalize" }}>{k}</span>
-                      <span style={{ fontSize: 12, fontWeight: 700, color: "#0f172a" }}>{porCat[k]}</span>
-                    </div>
-                  ));
-                })()}
-              </div>
-            </div>
-          </div>
-        </>
+      {/* Filtro de categoría */}
+      <div style={{ display: "flex", gap: 6, marginBottom: 12, alignItems: "center" }}>
+        <span style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5, marginRight: 4 }}>Filtrar:</span>
+        {[
+          { id: "activos", label: "Activos", color: "#047857" },
+          { id: "durmientes", label: "Durmientes", color: "#64748b" },
+          { id: "fantasmas", label: "Fantasmas", color: "#b91c1c" },
+          { id: "todos", label: "Todos", color: "#1a3a6b" },
+        ].map(f => {
+          const active = filtroCat === f.id;
+          const count = tipo === "drivers"
+            ? (f.id === "activos" ? driversActivos.length : f.id === "durmientes" ? driversDurmientes.length : f.id === "fantasmas" ? driversFantasma.length : drivers.length)
+            : (f.id === "activos" ? vehiculosActivos.length : f.id === "durmientes" ? vehiculosDurmientes.length : f.id === "fantasmas" ? vehiculosFantasma.length : vehiculos.length);
+          return (
+            <button key={f.id} onClick={() => setFiltroCat(f.id)}
+              style={{ padding: "5px 12px", fontSize: 11, fontWeight: 600, borderRadius: 4,
+                border: active ? "none" : "1px solid #e4e7ec",
+                background: active ? f.color : "#fff",
+                color: active ? "#fff" : "#475569",
+                cursor: "pointer", fontFamily: "'Geist', sans-serif" }}>
+              {f.label}
+              <span style={{ marginLeft: 6, opacity: 0.7 }}>({count})</span>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Calendario */}
+      {tipo === "drivers" && (
+        <PoolMeliCalendario 
+          tipo="drivers"
+          registros={driversFiltrados}
+          calendario={calendarios.drivers}
+          mes={mesSeleccionado}
+          onVerDetalle={(d) => setDetalle({ tipo: "driver", registro: d })}
+        />
+      )}
+      {tipo === "vehicles" && (
+        <PoolMeliCalendario 
+          tipo="vehiculos"
+          registros={vehiculosFiltrados}
+          calendario={calendarios.vehiculos}
+          mes={mesSeleccionado}
+          onVerDetalle={(v) => setDetalle({ tipo: "vehiculo", registro: v })}
+        />
       )}
     </div>
   );
 }
 
-// ── Sub-vista 2: CICLO DE ACEPTACIÓN ───────────────────────────────────────
+// ── CALENDARIO de actividad por día ────────────────────────────────────────
+function PoolMeliCalendario({ tipo, registros, calendario, mes, onVerDetalle }) {
+  const totalDias = diasDelMes(mes.anio, mes.mes);
+  const dias = Array.from({ length: totalDias }, (_, i) => i + 1);
+
+  if (registros.length === 0) {
+    return (
+      <div className="form-card" style={{ textAlign: "center", padding: 30, color: "#94a3b8", fontSize: 12 }}>
+        No hay registros para mostrar en esta categoría.
+      </div>
+    );
+  }
+
+  return (
+    <div className="form-card" style={{ padding: 0, overflow: "hidden" }}>
+      <div style={{ overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+          <thead>
+            <tr style={{ background: "#f8fafc", borderBottom: "1px solid #e2e8f0" }}>
+              <th style={{ padding: "10px 12px", textAlign: "left", fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5, position: "sticky", left: 0, background: "#f8fafc", zIndex: 2 }}>
+                {tipo === "drivers" ? "ID Driver" : "Vehicle ID"}
+              </th>
+              <th style={{ padding: "10px 12px", textAlign: "left", fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5, position: "sticky", left: 80, background: "#f8fafc", zIndex: 2 }}>
+                {tipo === "drivers" ? "Nombre" : "Placa"}
+              </th>
+              {dias.map(d => (
+                <th key={d} style={{ padding: "6px 4px", textAlign: "center", fontSize: 9, fontWeight: 700, color: "#64748b", minWidth: 22 }}>
+                  {d}
+                </th>
+              ))}
+              <th style={{ padding: "10px 12px", textAlign: "center", fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5, position: "sticky", right: 0, background: "#f8fafc", zIndex: 2 }}>
+                Acción
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {registros.map((reg, i) => {
+              const key = tipo === "drivers" ? reg.nombre : reg.placa;
+              const idLabel = tipo === "drivers" ? reg.driver_id : reg.vehicle_id;
+              const nombreLabel = tipo === "drivers" ? reg.nombre : reg.placa;
+              const diasActivos = (calendario && calendario[key]) || new Set();
+              const diasTrabajados = diasActivos.size || 0;
+              
+              return (
+                <tr key={i} style={{ borderBottom: "1px solid #f1f5f9" }}>
+                  <td style={{ padding: "8px 12px", fontSize: 11, color: "#0f172a", fontFamily: "monospace", position: "sticky", left: 0, background: "#fff", zIndex: 1, fontWeight: 600 }}>
+                    {idLabel || "—"}
+                  </td>
+                  <td style={{ padding: "8px 12px", fontSize: 11, color: "#0f172a", whiteSpace: "nowrap", position: "sticky", left: 80, background: "#fff", zIndex: 1, fontWeight: 500 }}>
+                    {nombreLabel}
+                    <div style={{ fontSize: 9, color: "#94a3b8", marginTop: 1 }}>
+                      {diasTrabajados} {diasTrabajados === 1 ? "día" : "días"} activo
+                    </div>
+                  </td>
+                  {dias.map(d => {
+                    const trabajo = diasActivos.has(d);
+                    return (
+                      <td key={d} style={{ padding: "4px 2px", textAlign: "center" }}>
+                        <div style={{
+                          width: 18, height: 18, margin: "0 auto",
+                          background: trabajo ? "#10b981" : "transparent",
+                          border: trabajo ? "1px solid #059669" : "1px solid #e4e7ec",
+                          borderRadius: 3,
+                        }} title={trabajo ? `Trabajó el ${d}` : `No trabajó el ${d}`}></div>
+                      </td>
+                    );
+                  })}
+                  <td style={{ padding: "8px 12px", textAlign: "center", position: "sticky", right: 0, background: "#fff", zIndex: 1 }}>
+                    <button onClick={() => onVerDetalle(reg)}
+                      style={{ padding: "4px 10px", fontSize: 10, fontWeight: 600, border: "1px solid #1a3a6b",
+                        borderRadius: 4, background: "#fff", color: "#1a3a6b", cursor: "pointer",
+                        fontFamily: "'Geist', sans-serif" }}>
+                      Ver
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <div style={{ padding: "10px 16px", borderTop: "1px solid #f1f5f9", background: "#fafbfc", display: "flex", gap: 16, alignItems: "center", fontSize: 10, color: "#64748b" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <div style={{ width: 12, height: 12, background: "#10b981", border: "1px solid #059669", borderRadius: 2 }}></div>
+          Trabajó / Usado
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <div style={{ width: 12, height: 12, border: "1px solid #e4e7ec", borderRadius: 2 }}></div>
+          Sin actividad
+        </div>
+        <span style={{ marginLeft: "auto" }}>{registros.length} {tipo === "drivers" ? "drivers" : "vehículos"} mostrados</span>
+      </div>
+    </div>
+  );
+}
+
+// ── DETALLE in-place de un Driver o Vehículo ───────────────────────────────
+function PoolMeliDetalleRegistro({ tipo, registro, onVolver }) {
+  const [extra, setExtra] = useState(null); // info adicional cargada (viajes, anomalías de tipo)
+  const [loadingExtra, setLoadingExtra] = useState(true);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      setLoadingExtra(true);
+      try {
+        if (tipo === "driver") {
+          const { data } = await sb.from("meli_carrier_metricas")
+            .select("fecha, service_center, placa, vehiculo, envios_despachados, envios_entregados, entrega_exitosa, dpph, orh_horas_ruta, kilometros_recorridos")
+            .eq("nombre_transportista", registro.nombre)
+            .order("fecha", { ascending: false })
+            .limit(100);
+          if (alive) setExtra({ viajes: data || [] });
+        } else {
+          // Vehículo: cargar viajes + chequeo de anomalía de tipo
+          const [rViajes, rAnom] = await Promise.all([
+            sb.from("meli_carrier_metricas")
+              .select("fecha, service_center, nombre_transportista, vehiculo, envios_despachados, envios_entregados, entrega_exitosa, dpph")
+              .eq("placa", registro.placa)
+              .order("fecha", { ascending: false })
+              .limit(100),
+            sb.from("vw_meli_placas_anomalia_tipo")
+              .select("*")
+              .eq("placa", registro.placa)
+          ]);
+          if (alive) setExtra({ viajes: rViajes.data || [], anomalias: rAnom.data || [] });
+        }
+      } catch (e) {
+        console.error("Error cargando detalle:", e);
+        if (alive) setExtra({ viajes: [], anomalias: [] });
+      } finally {
+        if (alive) setLoadingExtra(false);
+      }
+    })();
+    return () => { alive = false; };
+  }, [tipo, registro]);
+
+  return (
+    <div style={{ padding: 0 }}>
+      {/* Header */}
+      <div style={{ background: "#fff", borderBottom: "1px solid #e4e7ec", padding: "12px 24px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <button onClick={onVolver} className="btn-back">
+            ← Volver al inventario
+          </button>
+        </div>
+        <div style={{ marginTop: 8 }}>
+          <div style={{ fontSize: 18, fontWeight: 700, color: "#1a3a6b" }}>
+            {tipo === "driver" ? registro.nombre : `Placa ${registro.placa}`}
+          </div>
+          <div style={{ fontSize: 12, color: "#64748b", marginTop: 2 }}>
+            {tipo === "driver" ? `Driver ID: ${registro.driver_id || "—"}` : `Vehicle ID: ${registro.vehicle_id || "—"} · Tipo: ${registro.tipo || "—"}`}
+          </div>
+        </div>
+      </div>
+
+      <div className="pg">
+        {/* KPIs del registro */}
+        {tipo === "driver" ? (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 12, marginBottom: 16 }}>
+            <PoolMeliKpi label="Categoría" value={(registro.categoria || "—").toUpperCase()} sublabel={registro.en_master ? "En master oficial" : "Sin master (FANTASMA)"} 
+                         danger={registro.categoria === "fantasma"} />
+            <PoolMeliKpi label="Viajes ejecutados" value={registro.viajes_total || 0} sublabel={`${registro.dias_trabajados || 0} días trabajados`} color="#047857" />
+            <PoolMeliKpi label="DPPH promedio" value={registro.dpph_promedio?.toFixed?.(1) || "—"} sublabel="paquetes/hora" />
+            <PoolMeliKpi label="Entrega exitosa" value={`${registro.entrega_exitosa_pct?.toFixed?.(1) || "—"}%`} sublabel={registro.entrega_exitosa_pct >= 95 ? "Excelente" : "Atención"} 
+                         color={registro.entrega_exitosa_pct >= 95 ? "#047857" : "#92400e"} />
+            <PoolMeliKpi label="SCs operados" value={registro.cantidad_scs || 0} sublabel={registro.scs_operados || "—"} />
+          </div>
+        ) : (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 12, marginBottom: 16 }}>
+            <PoolMeliKpi label="Categoría" value={(registro.categoria || "—").toUpperCase()} sublabel={registro.en_master ? "En master oficial" : "Sin master (FANTASMA)"} 
+                         danger={registro.categoria === "fantasma"} />
+            <PoolMeliKpi label="Tipo (master)" value={registro.tipo || "—"} sublabel={registro.es_sdd ? "Es SDD" : "Estándar"} />
+            <PoolMeliKpi label="Capacidad" value={`${registro.capacidad || "—"} m³`} sublabel="Según master Meli" />
+            <PoolMeliKpi label="Viajes" value={registro.viajes_total || 0} sublabel={`${registro.dias_usado || 0} días usado`} color="#047857" />
+            <PoolMeliKpi label="Drivers distintos" value={registro.drivers_distintos || 0} sublabel={registro.drivers_distintos > 1 ? "Compartido" : "Dedicado"} />
+          </div>
+        )}
+
+        {/* Anomalías de tipo (solo vehículos) */}
+        {tipo === "vehiculo" && extra && extra.anomalias && extra.anomalias.length > 0 && (
+          <div className="form-card" style={{ background: "#fffbeb", border: "1px solid #fde68a", marginBottom: 16 }}>
+            <div className="form-title" style={{ color: "#92400e" }}>⚠ Anomalía de tipo de vehículo detectada</div>
+            <div style={{ fontSize: 12, color: "#78350f", marginBottom: 12, lineHeight: 1.5 }}>
+              Esta placa fue registrada con <strong>{extra.anomalias.length} tipos diferentes</strong> en distintos viajes. 
+              Posibles causas: error de carga, recambio físico, o reasignación de placa.
+            </div>
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+                <thead>
+                  <tr style={{ borderBottom: "1px solid #fde68a" }}>
+                    <th style={{ padding: "6px 10px", textAlign: "left", fontSize: 10, fontWeight: 700, color: "#78350f", textTransform: "uppercase" }}>Tipo observado</th>
+                    <th style={{ padding: "6px 10px", textAlign: "right", fontSize: 10, fontWeight: 700, color: "#78350f", textTransform: "uppercase" }}>Viajes</th>
+                    <th style={{ padding: "6px 10px", textAlign: "left", fontSize: 10, fontWeight: 700, color: "#78350f", textTransform: "uppercase" }}>Primera</th>
+                    <th style={{ padding: "6px 10px", textAlign: "left", fontSize: 10, fontWeight: 700, color: "#78350f", textTransform: "uppercase" }}>Última</th>
+                    <th style={{ padding: "6px 10px", textAlign: "left", fontSize: 10, fontWeight: 700, color: "#78350f", textTransform: "uppercase" }}>Tipo en master</th>
+                    <th style={{ padding: "6px 10px", textAlign: "center", fontSize: 10, fontWeight: 700, color: "#78350f", textTransform: "uppercase" }}>Estado</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {extra.anomalias.map((a, i) => (
+                    <tr key={i} style={{ borderBottom: "1px solid #fef3c7" }}>
+                      <td style={{ padding: "6px 10px", fontWeight: 600 }}>{a.tipo_observado}</td>
+                      <td style={{ padding: "6px 10px", textAlign: "right" }}>{a.viajes_con_este_tipo}</td>
+                      <td style={{ padding: "6px 10px" }}>{a.primera_aparicion}</td>
+                      <td style={{ padding: "6px 10px" }}>{a.ultima_aparicion}</td>
+                      <td style={{ padding: "6px 10px" }}>{a.tipo_master || "—"}</td>
+                      <td style={{ padding: "6px 10px", textAlign: "center" }}>
+                        <span style={{ fontSize: 9, padding: "2px 6px", borderRadius: 3, fontWeight: 700,
+                          background: a.estado_vs_master === "COINCIDE" ? "#dcfce7" : a.estado_vs_master === "PLACA_FANTASMA" ? "#fee2e2" : "#fef3c7",
+                          color: a.estado_vs_master === "COINCIDE" ? "#15803d" : a.estado_vs_master === "PLACA_FANTASMA" ? "#991b1b" : "#92400e" }}>
+                          {a.estado_vs_master}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* Lista de viajes */}
+        <div className="form-card" style={{ padding: 0, overflow: "hidden" }}>
+          <div style={{ padding: "12px 16px", borderBottom: "1px solid #f1f5f9" }}>
+            <div className="form-title" style={{ marginBottom: 4 }}>
+              {tipo === "driver" ? "Historial de viajes ejecutados" : "Historial de viajes con esta placa"}
+            </div>
+            <div style={{ fontSize: 11, color: "#64748b" }}>
+              {loadingExtra ? "Cargando..." : `${extra?.viajes?.length || 0} viajes (últimos 100)`}
+            </div>
+          </div>
+          
+          {!loadingExtra && extra && (
+            <div style={{ overflowX: "auto", maxHeight: 500 }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+                <thead style={{ position: "sticky", top: 0, background: "#f8fafc" }}>
+                  <tr style={{ borderBottom: "1px solid #e2e8f0" }}>
+                    <th style={{ padding: "8px 12px", textAlign: "left", fontSize: 9, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5 }}>Fecha</th>
+                    <th style={{ padding: "8px 12px", textAlign: "left", fontSize: 9, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5 }}>SC</th>
+                    {tipo === "driver" ? (
+                      <th style={{ padding: "8px 12px", textAlign: "left", fontSize: 9, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5 }}>Placa</th>
+                    ) : (
+                      <th style={{ padding: "8px 12px", textAlign: "left", fontSize: 9, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5 }}>Driver</th>
+                    )}
+                    <th style={{ padding: "8px 12px", textAlign: "left", fontSize: 9, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5 }}>Vehículo</th>
+                    <th style={{ padding: "8px 12px", textAlign: "right", fontSize: 9, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5 }}>Despach.</th>
+                    <th style={{ padding: "8px 12px", textAlign: "right", fontSize: 9, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5 }}>Entreg.</th>
+                    <th style={{ padding: "8px 12px", textAlign: "right", fontSize: 9, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5 }}>% éxito</th>
+                    <th style={{ padding: "8px 12px", textAlign: "right", fontSize: 9, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5 }}>DPPH</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(extra.viajes || []).map((v, i) => (
+                    <tr key={i} style={{ borderBottom: "1px solid #f1f5f9" }}>
+                      <td style={{ padding: "7px 12px", fontFamily: "monospace" }}>{v.fecha}</td>
+                      <td style={{ padding: "7px 12px", fontWeight: 600 }}>{v.service_center}</td>
+                      <td style={{ padding: "7px 12px", fontFamily: "monospace" }}>{tipo === "driver" ? v.placa : v.nombre_transportista}</td>
+                      <td style={{ padding: "7px 12px", color: "#64748b" }}>{v.vehiculo}</td>
+                      <td style={{ padding: "7px 12px", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{v.envios_despachados}</td>
+                      <td style={{ padding: "7px 12px", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{v.envios_entregados}</td>
+                      <td style={{ padding: "7px 12px", textAlign: "right", fontVariantNumeric: "tabular-nums", color: v.entrega_exitosa >= 95 ? "#047857" : "#92400e", fontWeight: 600 }}>{v.entrega_exitosa?.toFixed?.(1)}%</td>
+                      <td style={{ padding: "7px 12px", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{v.dpph?.toFixed?.(1)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── CICLO con embudo moderno + filtros mejorados ──────────────────────────
 function PoolMeliCiclo({ scs, resumen, setModal }) {
   const [perfilFiltro, setPerfilFiltro] = useState("TODOS");
   const r = resumen || {};
@@ -15653,13 +15933,12 @@ function PoolMeliCiclo({ scs, resumen, setModal }) {
   const totRech = scs.reduce((a, s) => a + (s.rechazadas || 0), 0);
   const totCanc = scs.reduce((a, s) => a + (s.canceladas || 0), 0);
   const conteoPorPerfil = (p) => scs.filter(s => s.perfil === p).length;
-
   const problematicos = scs.filter(s => s.perfil === "PROBLEMATICO");
 
-  // Funciones para abrir cada listado
+  // Modales con datos
   const abrirRechazadas = async (filtroSC = null) => {
     const tituloSC = filtroSC ? ` · ${filtroSC}` : "";
-    setModal({ titulo: `Cargando rechazadas${tituloSC}…`, filas: [], nombreArchivo: "rechazadas" });
+    setModal({ titulo: `Cargando…`, filas: [], nombreArchivo: "rechazadas" });
     try {
       let q = sb.from("vw_meli_tr_rechazadas").select("*").order("fecha", { ascending: false });
       if (filtroSC) q = q.eq("service_center", filtroSC);
@@ -15668,16 +15947,14 @@ function PoolMeliCiclo({ scs, resumen, setModal }) {
       setModal({
         titulo: `Viajes RECHAZADOS${tituloSC} (${(data || []).length})`,
         filas: data || [],
-        nombreArchivo: filtroSC ? `rechazadas_${filtroSC}` : "rechazadas_abril"
+        nombreArchivo: filtroSC ? `rechazadas_${filtroSC}` : "rechazadas"
       });
-    } catch (e) {
-      setModal({ titulo: "Error", filas: [{ error: e.message }], nombreArchivo: "error" });
-    }
+    } catch (e) { setModal({ titulo: "Error", filas: [{ error: e.message }], nombreArchivo: "error" }); }
   };
 
   const abrirCanceladas = async (filtroSC = null) => {
     const tituloSC = filtroSC ? ` · ${filtroSC}` : "";
-    setModal({ titulo: `Cargando canceladas${tituloSC}…`, filas: [], nombreArchivo: "canceladas" });
+    setModal({ titulo: `Cargando…`, filas: [], nombreArchivo: "canceladas" });
     try {
       let q = sb.from("vw_meli_tr_canceladas").select("*").order("fecha", { ascending: false });
       if (filtroSC) q = q.eq("service_center", filtroSC);
@@ -15686,34 +15963,33 @@ function PoolMeliCiclo({ scs, resumen, setModal }) {
       setModal({
         titulo: `Viajes CANCELADOS${tituloSC} (${(data || []).length})`,
         filas: data || [],
-        nombreArchivo: filtroSC ? `canceladas_${filtroSC}` : "canceladas_abril"
+        nombreArchivo: filtroSC ? `canceladas_${filtroSC}` : "canceladas"
       });
-    } catch (e) {
-      setModal({ titulo: "Error", filas: [{ error: e.message }], nombreArchivo: "error" });
-    }
+    } catch (e) { setModal({ titulo: "Error", filas: [{ error: e.message }], nombreArchivo: "error" }); }
   };
 
+  // No presentadas con filtros completos (SC, fecha, % min)
   const abrirNoPresentadas = async (filtroSC = null) => {
-    const tituloSC = filtroSC ? ` · ${filtroSC}` : "";
-    setModal({ titulo: `Cargando no presentadas${tituloSC}…`, filas: [], nombreArchivo: "no_presentadas" });
+    setModal({ titulo: `Cargando…`, filas: [], nombreArchivo: "no_presentadas" });
     try {
       let q = sb.from("vw_meli_no_presentadas").select("*").order("fecha", { ascending: false });
       if (filtroSC) q = q.eq("service_center", filtroSC);
       const { data, error } = await q;
       if (error) throw error;
+      const filas = data || [];
       setModal({
-        titulo: `Viajes NO PRESENTADOS${tituloSC} (${(data || []).length})`,
-        filas: data || [],
-        nombreArchivo: filtroSC ? `no_presentadas_${filtroSC}` : "no_presentadas_abril"
+        titulo: filtroSC ? `Viajes NO PRESENTADOS · ${filtroSC} (${filas.length})` : `Viajes NO PRESENTADOS · todos los SCs (${filas.length})`,
+        filas,
+        nombreArchivo: filtroSC ? `no_presentadas_${filtroSC}` : "no_presentadas",
+        // Componente con UI de filtros propios
+        renderFiltrosUI: true,
       });
-    } catch (e) {
-      setModal({ titulo: "Error", filas: [{ error: e.message }], nombreArchivo: "error" });
-    }
+    } catch (e) { setModal({ titulo: "Error", filas: [{ error: e.message }], nombreArchivo: "error" }); }
   };
 
   const abrirEjecutadas = async (filtroSC = null) => {
     const tituloSC = filtroSC ? ` · ${filtroSC}` : "";
-    setModal({ titulo: `Cargando ejecutadas${tituloSC}…`, filas: [], nombreArchivo: "ejecutadas" });
+    setModal({ titulo: `Cargando…`, filas: [], nombreArchivo: "ejecutadas" });
     try {
       let q = sb.from("vw_meli_tr_ejecutadas_detalle").select("*").order("fecha", { ascending: false });
       if (filtroSC) q = q.eq("service_center", filtroSC);
@@ -15722,146 +15998,148 @@ function PoolMeliCiclo({ scs, resumen, setModal }) {
       setModal({
         titulo: `Viajes EJECUTADOS${tituloSC} (${(data || []).length})`,
         filas: data || [],
-        nombreArchivo: filtroSC ? `ejecutadas_${filtroSC}` : "ejecutadas_abril"
+        nombreArchivo: filtroSC ? `ejecutadas_${filtroSC}` : "ejecutadas"
       });
-    } catch (e) {
-      setModal({ titulo: "Error", filas: [{ error: e.message }], nombreArchivo: "error" });
-    }
+    } catch (e) { setModal({ titulo: "Error", filas: [{ error: e.message }], nombreArchivo: "error" }); }
   };
 
-  // Embudo: ofrecidas, aceptadas, ejecutadas son sumas — para el modal mostramos el SC respectivo
   const abrirAceptadas = async (filtroSC = null) => {
     const tituloSC = filtroSC ? ` · ${filtroSC}` : "";
-    setModal({ titulo: `Cargando aceptadas${tituloSC}…`, filas: [], nombreArchivo: "aceptadas" });
+    setModal({ titulo: `Cargando…`, filas: [], nombreArchivo: "aceptadas" });
     try {
       let q = sb.from("meli_travel_requests")
         .select("request_id, facility_id, fecha, destination, travel_id, vehicle_type, mel_service_description, etd, eta, status")
         .eq("status", "accepted")
-        .gte("fecha", "2026-04-01")
-        .lte("fecha", "2026-04-30")
         .order("fecha", { ascending: false });
       if (filtroSC) q = q.eq("facility_id", filtroSC);
-      const { data, error } = await q;
+      const { data, error } = await q.limit(5000);
       if (error) throw error;
       setModal({
         titulo: `Viajes ACEPTADOS${tituloSC} (${(data || []).length})`,
         filas: data || [],
-        nombreArchivo: filtroSC ? `aceptadas_${filtroSC}` : "aceptadas_abril"
+        nombreArchivo: filtroSC ? `aceptadas_${filtroSC}` : "aceptadas"
       });
-    } catch (e) {
-      setModal({ titulo: "Error", filas: [{ error: e.message }], nombreArchivo: "error" });
-    }
+    } catch (e) { setModal({ titulo: "Error", filas: [{ error: e.message }], nombreArchivo: "error" }); }
   };
 
   const abrirOfrecidas = async (filtroSC = null) => {
     const tituloSC = filtroSC ? ` · ${filtroSC}` : "";
-    setModal({ titulo: `Cargando ofrecidas${tituloSC}…`, filas: [], nombreArchivo: "ofrecidas" });
+    setModal({ titulo: `Cargando…`, filas: [], nombreArchivo: "ofrecidas" });
     try {
       let q = sb.from("meli_travel_requests")
         .select("request_id, facility_id, fecha, destination, travel_id, vehicle_type, mel_service_description, etd, eta, status")
-        .gte("fecha", "2026-04-01")
-        .lte("fecha", "2026-04-30")
         .order("fecha", { ascending: false });
       if (filtroSC) q = q.eq("facility_id", filtroSC);
-      const { data, error } = await q;
+      const { data, error } = await q.limit(5000);
       if (error) throw error;
       setModal({
         titulo: `Viajes OFRECIDOS${tituloSC} (${(data || []).length})`,
         filas: data || [],
-        nombreArchivo: filtroSC ? `ofrecidas_${filtroSC}` : "ofrecidas_abril"
+        nombreArchivo: filtroSC ? `ofrecidas_${filtroSC}` : "ofrecidas"
       });
-    } catch (e) {
-      setModal({ titulo: "Error", filas: [{ error: e.message }], nombreArchivo: "error" });
-    }
+    } catch (e) { setModal({ titulo: "Error", filas: [{ error: e.message }], nombreArchivo: "error" }); }
   };
+
+  // EMBUDO MODERNO: pirámide horizontal con conexiones
+  const pctAcc = totOfr > 0 ? (totAcc / totOfr * 100) : 0;
+  const pctEjec = totOfr > 0 ? (totEjec / totOfr * 100) : 0;
 
   return (
     <div className="pg">
-      <div className="form-card">
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 18 }}>
+      {/* Embudo moderno */}
+      <div className="form-card" style={{ background: "linear-gradient(180deg, #fff 0%, #f8fafc 100%)" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 24 }}>
           <div>
-            <div className="form-title" style={{ marginBottom: 4 }}>Embudo del ciclo · Abril 2026</div>
+            <div className="form-title" style={{ marginBottom: 4 }}>Embudo del ciclo</div>
             <div style={{ fontSize: 12, color: "#64748b" }}>
-              Trayectoria completa: ofrecidas → aceptadas → ejecutadas
-              <span style={{ marginLeft: 8, color: "#94a3b8" }}>· hacé click en cualquier número para ver el detalle</span>
+              Trayectoria: ofrecidas → aceptadas → ejecutadas
+              <span style={{ marginLeft: 8, color: "#94a3b8" }}>· click en cualquier número para ver detalle</span>
             </div>
           </div>
-          <div style={{ fontSize: 11, color: "#94a3b8" }}>Cubre 1 abr — 30 abr</div>
         </div>
 
-        {[
-          { label: "Ofrecidas por Meli", valor: totOfr, base: totOfr, color: "#1a3a6b", onClick: () => abrirOfrecidas() },
-          { label: "Aceptadas por Bigticket", valor: totAcc, base: totOfr, color: "#0891b2", onClick: () => abrirAceptadas() },
-          { label: "Ejecutadas", valor: totEjec, base: totOfr, color: "#047857", onClick: () => abrirEjecutadas() },
-        ].map(f => {
-          const pct = f.base > 0 ? (f.valor / f.base * 100).toFixed(0) : 0;
-          return (
-            <div key={f.label} style={{ marginBottom: 12 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 5 }}>
-                <span style={{ fontSize: 12, fontWeight: 600, color: "#334155" }}>{f.label}</span>
-                <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                  <button onClick={f.onClick}
-                    style={{ background: "transparent", border: "none", cursor: "pointer",
-                      fontSize: 18, fontWeight: 700, color: f.color, padding: 0,
-                      textDecoration: "underline", textDecorationColor: "transparent",
-                      transition: "text-decoration-color 0.15s", fontFamily: "inherit" }}
-                    onMouseEnter={e => e.currentTarget.style.textDecorationColor = f.color}
-                    onMouseLeave={e => e.currentTarget.style.textDecorationColor = "transparent"}>
-                    {f.valor.toLocaleString()}
-                  </button>
-                  <span style={{ fontSize: 11, color: "#64748b", width: 36, textAlign: "right" }}>{pct}%</span>
+        {/* Pirámide moderna */}
+        <div style={{ position: "relative", padding: "0 20px" }}>
+          {[
+            { label: "Ofrecidas por Meli", valor: totOfr, color: "#1a3a6b", colorLight: "#3b5fa3", pct: 100, onClick: () => abrirOfrecidas(), sublabel: "Total recibido" },
+            { label: "Aceptadas por Bigticket", valor: totAcc, color: "#0891b2", colorLight: "#22d3ee", pct: pctAcc, onClick: () => abrirAceptadas(), sublabel: `${pctAcc.toFixed(1)}% del total` },
+            { label: "Ejecutadas en operación", valor: totEjec, color: "#10b981", colorLight: "#34d399", pct: pctEjec, onClick: () => abrirEjecutadas(), sublabel: `${pctEjec.toFixed(1)}% del total · ${totAcc > 0 ? (totEjec/totAcc*100).toFixed(0) : 0}% de las aceptadas` },
+          ].map((stage, i) => {
+            const widthPct = stage.pct;
+            const isLast = i === 2;
+            return (
+              <div key={stage.label}>
+                <div onClick={stage.onClick}
+                  style={{
+                    cursor: "pointer",
+                    background: `linear-gradient(135deg, ${stage.color} 0%, ${stage.colorLight} 100%)`,
+                    width: `${widthPct}%`,
+                    margin: "0 auto",
+                    padding: "18px 24px",
+                    borderRadius: 12,
+                    color: "#fff",
+                    boxShadow: `0 4px 12px ${stage.color}33, inset 0 1px 0 rgba(255,255,255,0.15)`,
+                    display: "flex", alignItems: "center", justifyContent: "space-between",
+                    transition: "transform 0.15s",
+                  }}
+                  onMouseEnter={e => e.currentTarget.style.transform = "scale(1.01)"}
+                  onMouseLeave={e => e.currentTarget.style.transform = "scale(1)"}>
+                  <div>
+                    <div style={{ fontSize: 11, opacity: 0.85, textTransform: "uppercase", letterSpacing: 1, marginBottom: 4, fontWeight: 600 }}>
+                      Etapa {i + 1}
+                    </div>
+                    <div style={{ fontSize: 14, fontWeight: 700 }}>{stage.label}</div>
+                    <div style={{ fontSize: 11, opacity: 0.85, marginTop: 2 }}>{stage.sublabel}</div>
+                  </div>
+                  <div style={{ textAlign: "right" }}>
+                    <div style={{ fontSize: 32, fontWeight: 800, lineHeight: 1, fontVariantNumeric: "tabular-nums" }}>
+                      {stage.valor.toLocaleString()}
+                    </div>
+                    <div style={{ fontSize: 9, opacity: 0.7, textTransform: "uppercase", letterSpacing: 0.5, marginTop: 2 }}>VER DETALLE →</div>
+                  </div>
                 </div>
+                
+                {/* Conexión visual entre etapas */}
+                {!isLast && (
+                  <div style={{ display: "flex", justifyContent: "center", padding: "4px 0" }}>
+                    <div style={{ width: 0, height: 16, borderLeft: "2px dashed #cbd5e1" }}></div>
+                  </div>
+                )}
               </div>
-              <div style={{ height: 10, background: "#f1f5f9", borderRadius: 3, overflow: "hidden" }}>
-                <div style={{ height: "100%", width: `${pct}%`, backgroundColor: f.color, transition: "width 0.4s" }}></div>
-              </div>
-            </div>
-          );
-        })}
+            );
+          })}
+        </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginTop: 18 }}>
+        {/* Pérdidas */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, marginTop: 24, paddingTop: 16, borderTop: "1px dashed #e4e7ec" }}>
           <div onClick={() => abrirRechazadas()}
-            style={{ background: "#fef2f2", borderRadius: 8, padding: 12, cursor: "pointer",
-              transition: "all 0.15s" }}
-            onMouseEnter={e => e.currentTarget.style.boxShadow = "0 4px 12px rgba(185,28,28,0.15)"}
-            onMouseLeave={e => e.currentTarget.style.boxShadow = "none"}>
-            <div style={{ fontSize: 10, fontWeight: 700, color: "#991b1b", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4,
-              display: "flex", justifyContent: "space-between" }}>
-              <span>Rechazadas</span>
-              <span style={{ fontSize: 9, opacity: 0.6 }}>VER →</span>
+            style={{ background: "linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%)", borderRadius: 8, padding: 14, cursor: "pointer", border: "1px solid #fecaca" }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: "#991b1b", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4, display: "flex", justifyContent: "space-between" }}>
+              <span>Rechazadas</span><span style={{ fontSize: 9, opacity: 0.7 }}>VER →</span>
             </div>
-            <div style={{ fontSize: 20, fontWeight: 700, color: "#991b1b" }}>{totRech}</div>
+            <div style={{ fontSize: 22, fontWeight: 700, color: "#991b1b" }}>{totRech.toLocaleString()}</div>
             <div style={{ fontSize: 10, color: "#7f1d1d", marginTop: 2 }}>{totOfr > 0 ? Math.round(totRech / totOfr * 100) : 0}% de ofrecidas</div>
           </div>
           <div onClick={() => abrirCanceladas()}
-            style={{ background: "#f1f5f9", borderRadius: 8, padding: 12, cursor: "pointer",
-              transition: "all 0.15s" }}
-            onMouseEnter={e => e.currentTarget.style.boxShadow = "0 4px 12px rgba(71,85,105,0.15)"}
-            onMouseLeave={e => e.currentTarget.style.boxShadow = "none"}>
-            <div style={{ fontSize: 10, fontWeight: 700, color: "#475569", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4,
-              display: "flex", justifyContent: "space-between" }}>
-              <span>Canceladas</span>
-              <span style={{ fontSize: 9, opacity: 0.6 }}>VER →</span>
+            style={{ background: "linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%)", borderRadius: 8, padding: 14, cursor: "pointer", border: "1px solid #cbd5e1" }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: "#475569", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4, display: "flex", justifyContent: "space-between" }}>
+              <span>Canceladas</span><span style={{ fontSize: 9, opacity: 0.7 }}>VER →</span>
             </div>
-            <div style={{ fontSize: 20, fontWeight: 700, color: "#475569" }}>{totCanc}</div>
+            <div style={{ fontSize: 22, fontWeight: 700, color: "#475569" }}>{totCanc.toLocaleString()}</div>
             <div style={{ fontSize: 10, color: "#64748b", marginTop: 2 }}>{totOfr > 0 ? Math.round(totCanc / totOfr * 100) : 0}% de ofrecidas</div>
           </div>
           <div onClick={() => abrirNoPresentadas()}
-            style={{ background: "#fffbeb", borderRadius: 8, padding: 12, border: "1px solid #fde68a", cursor: "pointer",
-              transition: "all 0.15s" }}
-            onMouseEnter={e => e.currentTarget.style.boxShadow = "0 4px 12px rgba(146,64,14,0.15)"}
-            onMouseLeave={e => e.currentTarget.style.boxShadow = "none"}>
-            <div style={{ fontSize: 10, fontWeight: 700, color: "#92400e", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4,
-              display: "flex", justifyContent: "space-between" }}>
-              <span>No presentadas</span>
-              <span style={{ fontSize: 9, opacity: 0.6 }}>VER →</span>
+            style={{ background: "linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%)", borderRadius: 8, padding: 14, cursor: "pointer", border: "1px solid #fde68a" }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: "#92400e", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4, display: "flex", justifyContent: "space-between" }}>
+              <span>No presentadas</span><span style={{ fontSize: 9, opacity: 0.7 }}>FILTROS →</span>
             </div>
-            <div style={{ fontSize: 20, fontWeight: 700, color: "#92400e" }}>{totNoPres}</div>
+            <div style={{ fontSize: 22, fontWeight: 700, color: "#92400e" }}>{totNoPres.toLocaleString()}</div>
             <div style={{ fontSize: 10, color: "#92400e", marginTop: 2 }}>aceptadas - ejecutadas</div>
           </div>
         </div>
       </div>
 
+      {/* Filtros perfil */}
       <div style={{ display: "flex", alignItems: "center", gap: 6, margin: "16px 0" }}>
         <span style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5, marginRight: 4 }}>Filtrar:</span>
         {["TODOS", "IDEAL", "INCONSISTENTE", "PROBLEMATICO"].map(p => {
@@ -15881,6 +16159,7 @@ function PoolMeliCiclo({ scs, resumen, setModal }) {
         })}
       </div>
 
+      {/* Tabla por SC */}
       <div className="form-card" style={{ padding: 0, overflow: "hidden" }}>
         <div style={{ padding: "10px 16px", borderBottom: "1px solid #f1f5f9", background: "#f8fafc" }}>
           <div style={{ fontSize: 11, color: "#64748b" }}>Hacé click en cualquier número para ver el detalle de ese SC</div>
@@ -15908,7 +16187,6 @@ function PoolMeliCiclo({ scs, resumen, setModal }) {
                   color, fontWeight: bold ? 700 : 400, padding: 0,
                   fontFamily: "inherit", fontSize: 12, fontVariantNumeric: "tabular-nums",
                   textDecoration: "underline", textDecorationColor: "transparent",
-                  transition: "text-decoration-color 0.15s",
                 });
                 return (
                   <tr key={s.service_center} style={{ borderBottom: "1px solid #f1f5f9" }}>
@@ -15916,37 +16194,27 @@ function PoolMeliCiclo({ scs, resumen, setModal }) {
                     <td style={pm_tdStyleR}>
                       <button onClick={() => abrirOfrecidas(s.service_center)} style={linkStyle("#0f172a")}
                         onMouseEnter={e => e.currentTarget.style.textDecorationColor = "#0f172a"}
-                        onMouseLeave={e => e.currentTarget.style.textDecorationColor = "transparent"}>
-                        {s.ofrecidas}
-                      </button>
+                        onMouseLeave={e => e.currentTarget.style.textDecorationColor = "transparent"}>{s.ofrecidas}</button>
                     </td>
                     <td style={pm_tdStyleR}>
                       <button onClick={() => abrirAceptadas(s.service_center)} style={linkStyle("#0891b2")}
                         onMouseEnter={e => e.currentTarget.style.textDecorationColor = "#0891b2"}
-                        onMouseLeave={e => e.currentTarget.style.textDecorationColor = "transparent"}>
-                        {s.aceptadas}
-                      </button>
+                        onMouseLeave={e => e.currentTarget.style.textDecorationColor = "transparent"}>{s.aceptadas}</button>
                     </td>
                     <td style={pm_tdStyleR}>
                       <button onClick={() => abrirRechazadas(s.service_center)} style={linkStyle(s.rechazadas > 50 ? "#991b1b" : "#64748b")}
                         onMouseEnter={e => e.currentTarget.style.textDecorationColor = s.rechazadas > 50 ? "#991b1b" : "#64748b"}
-                        onMouseLeave={e => e.currentTarget.style.textDecorationColor = "transparent"}>
-                        {s.rechazadas}
-                      </button>
+                        onMouseLeave={e => e.currentTarget.style.textDecorationColor = "transparent"}>{s.rechazadas}</button>
                     </td>
                     <td style={pm_tdStyleR}>
                       <button onClick={() => abrirEjecutadas(s.service_center)} style={linkStyle("#047857")}
                         onMouseEnter={e => e.currentTarget.style.textDecorationColor = "#047857"}
-                        onMouseLeave={e => e.currentTarget.style.textDecorationColor = "transparent"}>
-                        {s.ejecutadas}
-                      </button>
+                        onMouseLeave={e => e.currentTarget.style.textDecorationColor = "transparent"}>{s.ejecutadas}</button>
                     </td>
                     <td style={pm_tdStyleR}>
                       <button onClick={() => abrirNoPresentadas(s.service_center)} style={linkStyle(s.no_presentadas > 20 ? "#991b1b" : "#92400e", true)}
                         onMouseEnter={e => e.currentTarget.style.textDecorationColor = s.no_presentadas > 20 ? "#991b1b" : "#92400e"}
-                        onMouseLeave={e => e.currentTarget.style.textDecorationColor = "transparent"}>
-                        {s.no_presentadas}
-                      </button>
+                        onMouseLeave={e => e.currentTarget.style.textDecorationColor = "transparent"}>{s.no_presentadas}</button>
                     </td>
                     <td style={{ ...pm_tdStyleR, fontWeight: 700, color: cumplColor }}>{cumpl}%</td>
                     <td style={{ ...pm_tdStyle, textAlign: "center" }}><PerfilBadgeMX perfil={s.perfil} /></td>
@@ -15958,11 +16226,10 @@ function PoolMeliCiclo({ scs, resumen, setModal }) {
         </div>
       </div>
 
+      {/* Alertas */}
       {problematicos.length > 0 && (
         <div style={{ background: "#fef2f2", borderLeft: "4px solid #b91c1c", borderRadius: 8, padding: 16, marginTop: 16 }}>
-          <div style={{ fontSize: 13, fontWeight: 700, color: "#0f172a", marginBottom: 8 }}>
-            ⚠ SCs críticos requieren acción inmediata
-          </div>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#0f172a", marginBottom: 8 }}>⚠ SCs críticos requieren acción inmediata</div>
           <div style={{ fontSize: 12, color: "#334155", lineHeight: 1.7 }}>
             {problematicos.map(s => {
               const cumpl = s.aceptadas > 0 ? Math.round(s.ejecutadas / s.aceptadas * 100) : 0;
@@ -15979,7 +16246,7 @@ function PoolMeliCiclo({ scs, resumen, setModal }) {
   );
 }
 
-// ── Sub-vista 3: SCORE DE COMPROMISO ───────────────────────────────────────
+// ── SCORE (sin cambios) ────────────────────────────────────────────────────
 function PoolMeliScore({ scores, resumen }) {
   const r = resumen || {};
   const totalEvaluados = scores.length;
@@ -16015,7 +16282,6 @@ function PoolMeliScore({ scores, resumen }) {
             <div style={{ fontSize: 22, fontWeight: 700, marginBottom: 6 }}>Score de Compromiso por Driver</div>
             <div style={{ fontSize: 13, opacity: 0.9, maxWidth: 600, lineHeight: 1.5 }}>
               Calificación 0-100 que combina volumen, performance, confiabilidad, compliance y estabilidad.
-              Recalculado mensualmente desde el cruce de las 6 fuentes operativas.
             </div>
           </div>
           <div style={{ textAlign: "right" }}>
@@ -16050,7 +16316,6 @@ function PoolMeliScore({ scores, resumen }) {
         <div className="form-card" style={{ marginBottom: 0 }}>
           <div className="form-title" style={{ marginBottom: 4 }}>Top 7 Drivers Élite</div>
           <div style={{ fontSize: 11, color: "#64748b", marginBottom: 12 }}>Score 90+ — los pilares de la operación</div>
-          {top.length === 0 && <div style={{ fontSize: 12, color: "#94a3b8" }}>Sin datos</div>}
           {top.map((d, i) => (
             <div key={d.driver_id || d.nombre} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 0", borderBottom: i === top.length - 1 ? "none" : "1px solid #f1f5f9" }}>
               <div style={{ fontSize: 11, color: "#cbd5e1", fontFamily: "monospace", width: 24 }}>#{i + 1}</div>
@@ -16088,128 +16353,55 @@ function PoolMeliScore({ scores, resumen }) {
           ))}
         </div>
       </div>
-
-      <div className="form-card" style={{ marginTop: 12, marginBottom: 0 }}>
-        <div className="form-title" style={{ marginBottom: 4 }}>Aplicaciones operativas del Score</div>
-        <div style={{ fontSize: 11, color: "#64748b", marginBottom: 16 }}>5 usos prácticos para operación y planeación</div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 12 }}>
-          {[
-            { title: "Asignación",       desc: "Sugerir drivers A/B disponibles para urgencias", color: "#1a3a6b" },
-            { title: "Fidelización",     desc: "Identificar y retener a los élite",              color: "#047857" },
-            { title: "Detección bajas",  desc: "Alerta cuando A pierde score",                   color: "#ca8a04" },
-            { title: "Onboarding",       desc: "Regularizar fantasmas con DPPH alto",            color: "#0891b2" },
-            { title: "Coaching",         desc: "B con score 60-70 cerca de A",                   color: "#F47B20" },
-          ].map(u => (
-            <div key={u.title} style={{ textAlign: "center", padding: "8px 4px" }}>
-              <div style={{ width: 8, height: 8, borderRadius: "50%", background: u.color, margin: "0 auto 8px" }}></div>
-              <div style={{ fontSize: 12, fontWeight: 700, color: "#0f172a", marginBottom: 4 }}>{u.title}</div>
-              <div style={{ fontSize: 10, color: "#64748b", lineHeight: 1.4 }}>{u.desc}</div>
-            </div>
-          ))}
-        </div>
-      </div>
     </div>
   );
 }
 
-// ── Sub-vista 4: HALLAZGOS ─────────────────────────────────────────────────
+// ── HALLAZGOS ──────────────────────────────────────────────────────────────
 function PoolMeliHallazgos({ drivers, vehiculos, scs, scores, resumen, setModal, setVista }) {
   const r = resumen || {};
-
-  // Cálculos para los hallazgos
   const driversFantasma = drivers.filter(d => d.categoria === "fantasma");
   const vehiculosFantasma = vehiculos.filter(v => v.categoria === "fantasma");
   const scsProblematicos = scs.filter(s => s.perfil === "PROBLEMATICO");
   const driversIzombi = drivers.filter(d => d.en_master && (!d.curp || d.curp === "") && (!d.viajes_total || d.viajes_total === 0));
   const driversElite = scores.filter(s => s.categoria_score === "A").slice(0, 7);
-
-  // Detectar el SC más crítico (peor cumplimiento)
-  const peorSC = [...scsProblematicos].sort((a, b) => 
-    (a.pct_cumplimiento || 0) - (b.pct_cumplimiento || 0)
-  )[0];
-
-  // Detectar SCs con buen cumplimiento pero alto rechazo (RIGUROSOS problemáticos)
-  const scsRigurosos = scs.filter(s => 
-    s.pct_rechazo >= 50 && s.pct_cumplimiento >= 75
-  );
-
-  // Detectar SCs con bajo % entrega (problema de ejecución, no aceptación)
+  const peorSC = [...scsProblematicos].sort((a, b) => (a.pct_cumplimiento || 0) - (b.pct_cumplimiento || 0))[0];
   const scsBajaEntrega = scs.filter(s => s.ejecutadas > 50 && s.pct_cumplimiento < 90 && s.perfil !== "PROBLEMATICO");
-
-  // Top driver fantasma
   const topFantasma = driversFantasma.sort((a, b) => (b.viajes_total || 0) - (a.viajes_total || 0))[0];
   const fantasmaMultiSC = driversFantasma.find(d => (d.cantidad_scs || 0) >= 2);
 
-  // Modales
-  const verSCsProblematicos = () => setModal({
-    titulo: `SCs Problemáticos (${scsProblematicos.length})`,
-    filas: scsProblematicos,
-    nombreArchivo: "scs_problematicos"
-  });
-  const verDriversFantasma = () => setModal({
-    titulo: `Drivers Fantasma (${driversFantasma.length})`,
-    filas: driversFantasma,
-    nombreArchivo: "drivers_fantasma_compliance"
-  });
-  const verVehFantasma = () => setModal({
-    titulo: `Vehículos Fantasma (${vehiculosFantasma.length})`,
-    filas: vehiculosFantasma,
-    nombreArchivo: "vehiculos_fantasma_compliance"
-  });
-  const verIzombi = () => setModal({
-    titulo: `IDs Zombi en Master (${driversIzombi.length})`,
-    filas: driversIzombi,
-    nombreArchivo: "ids_zombi_master_meli"
-  });
-  const verElite = () => setModal({
-    titulo: `Top Drivers Élite (${driversElite.length})`,
-    filas: driversElite,
-    nombreArchivo: "drivers_elite"
-  });
+  const verSCsProblematicos = () => setModal({ titulo: `SCs Problemáticos (${scsProblematicos.length})`, filas: scsProblematicos, nombreArchivo: "scs_problematicos" });
+  const verDriversFantasma = () => setModal({ titulo: `Drivers Fantasma (${driversFantasma.length})`, filas: driversFantasma, nombreArchivo: "drivers_fantasma" });
+  const verVehFantasma = () => setModal({ titulo: `Vehículos Fantasma (${vehiculosFantasma.length})`, filas: vehiculosFantasma, nombreArchivo: "vehiculos_fantasma" });
+  const verIzombi = () => setModal({ titulo: `IDs Zombi en Master (${driversIzombi.length})`, filas: driversIzombi, nombreArchivo: "ids_zombi" });
+  const verElite = () => setModal({ titulo: `Top Drivers Élite (${driversElite.length})`, filas: driversElite, nombreArchivo: "drivers_elite" });
   const verPlanifSinMaster = async () => {
-    setModal({ titulo: "Cargando…", filas: [], nombreArchivo: "planif_sin_master" });
+    setModal({ titulo: "Cargando…", filas: [], nombreArchivo: "planif" });
     try {
       const { data, error } = await sb.from("vw_meli_hallazgo_planif_sin_master").select("*");
       if (error) throw error;
-      setModal({
-        titulo: `Drivers planificados sin estar en Master (${(data || []).length})`,
-        filas: data || [],
-        nombreArchivo: "planificados_sin_master"
-      });
-    } catch (e) {
-      setModal({ titulo: "Error", filas: [{ error: e.message }], nombreArchivo: "error" });
-    }
+      setModal({ titulo: `Drivers planificados sin master (${(data || []).length})`, filas: data || [], nombreArchivo: "planif_sin_master" });
+    } catch (e) { setModal({ titulo: "Error", filas: [{ error: e.message }], nombreArchivo: "error" }); }
   };
   const verSMX6Diario = async () => {
-    setModal({ titulo: "Cargando…", filas: [], nombreArchivo: "smx6_diario" });
+    setModal({ titulo: "Cargando…", filas: [], nombreArchivo: "smx6" });
     try {
       const { data, error } = await sb.from("vw_meli_hallazgo_smx6_diario").select("*").order("fecha");
       if (error) throw error;
-      setModal({
-        titulo: `SMX6 día por día (${(data || []).length})`,
-        filas: data || [],
-        nombreArchivo: "smx6_no_presentadas_diario"
-      });
-    } catch (e) {
-      setModal({ titulo: "Error", filas: [{ error: e.message }], nombreArchivo: "error" });
-    }
+      setModal({ titulo: `SMX6 día por día (${(data || []).length})`, filas: data || [], nombreArchivo: "smx6_no_pres_diario" });
+    } catch (e) { setModal({ titulo: "Error", filas: [{ error: e.message }], nombreArchivo: "error" }); }
   };
 
-  // Construir lista de hallazgos en orden de severidad
   const hallazgos = [];
 
-  // === CRÍTICOS ===
   if (peorSC) {
-    const cumpl = peorSC.pct_cumplimiento || 0;
-    const noPres = peorSC.no_presentadas || 0;
     hallazgos.push({
-      sev: "CRITICO",
-      categoria: "Operación",
+      sev: "CRITICO", categoria: "Operación",
       titulo: `${peorSC.service_center} — Operación crónicamente disfuncional`,
-      desc: `${peorSC.aceptadas} aceptadas, solo ${peorSC.ejecutadas} ejecutadas (${cumpl}% cumplimiento). ${noPres} viajes comprometidos sin entregar — patrón sostenido todo el mes.`,
+      desc: `${peorSC.aceptadas} aceptadas, solo ${peorSC.ejecutadas} ejecutadas (${peorSC.pct_cumplimiento}% cumplimiento). ${peorSC.no_presentadas} viajes comprometidos sin entregar — patrón sostenido.`,
       metricas: [
-        { l: "Cumplimiento", v: `${cumpl}%`, color: "#991b1b" },
-        { l: "No presentadas", v: noPres, color: "#991b1b" },
+        { l: "Cumplimiento", v: `${peorSC.pct_cumplimiento}%`, color: "#991b1b" },
+        { l: "No presentadas", v: peorSC.no_presentadas, color: "#991b1b" },
         { l: "Días con incidencia", v: "19", color: "#991b1b" },
       ],
       accion: { label: "Ver día por día", onClick: verSMX6Diario },
@@ -16220,10 +16412,9 @@ function PoolMeliHallazgos({ drivers, vehiculos, scs, scores, resumen, setModal,
   const spy = scs.find(s => s.service_center === "SPY1");
   if (spy && spy.ejecutadas === 0 && spy.ofrecidas > 0) {
     hallazgos.push({
-      sev: "CRITICO",
-      categoria: "Operación",
-      titulo: `SPY1 (Playa del Carmen) — 0 ejecutados, posible cierre operativo`,
-      desc: `Meli ofreció ${spy.ofrecidas} viajes a SPY1 en el período pero no se ejecutó NINGUNO. ${spy.rechazadas} fueron rechazados directamente. Investigar si hay operación local activa.`,
+      sev: "CRITICO", categoria: "Operación",
+      titulo: `SPY1 (Playa del Carmen) — 0 ejecutados, posible cierre`,
+      desc: `Meli ofreció ${spy.ofrecidas} viajes a SPY1 pero no se ejecutó NINGUNO. ${spy.rechazadas} fueron rechazados directamente.`,
       metricas: [
         { l: "Ofrecidas", v: spy.ofrecidas, color: "#991b1b" },
         { l: "Ejecutadas", v: spy.ejecutadas, color: "#991b1b" },
@@ -16235,121 +16426,91 @@ function PoolMeliHallazgos({ drivers, vehiculos, scs, scores, resumen, setModal,
 
   if (fantasmaMultiSC) {
     hallazgos.push({
-      sev: "CRITICO",
-      categoria: "Compliance",
-      titulo: `${fantasmaMultiSC.nombre} — Driver fantasma multi-SC (riesgo legal)`,
-      desc: `Operó ${fantasmaMultiSC.viajes_total} viajes en ${fantasmaMultiSC.cantidad_scs} SCs distintos (${fantasmaMultiSC.scs_operados}) sin estar en el master oficial de Meli. Si tiene siniestro o reclamo, Bigticket no puede probar autorización.`,
+      sev: "CRITICO", categoria: "Compliance",
+      titulo: `${fantasmaMultiSC.nombre} — Driver fantasma multi-SC`,
+      desc: `Operó ${fantasmaMultiSC.viajes_total} viajes en ${fantasmaMultiSC.cantidad_scs} SCs (${fantasmaMultiSC.scs_operados}) sin estar en master oficial. Riesgo legal en caso de siniestro.`,
       metricas: [
         { l: "Viajes", v: fantasmaMultiSC.viajes_total, color: "#991b1b" },
         { l: "SCs", v: fantasmaMultiSC.cantidad_scs, color: "#991b1b" },
         { l: "DPPH", v: fantasmaMultiSC.dpph_promedio?.toFixed?.(1) ?? "—", color: "#0f172a" },
       ],
       accion: { label: "Ver fantasmas", onClick: verDriversFantasma },
-      accion2: { label: "Ver planificados sin master", onClick: verPlanifSinMaster },
+      accion2: { label: "Planificados sin master", onClick: verPlanifSinMaster },
     });
   }
 
-  // === ALTO ===
   scsBajaEntrega.forEach(sc => {
     hallazgos.push({
-      sev: "ALTO",
-      categoria: "Performance",
+      sev: "ALTO", categoria: "Performance",
       titulo: `${sc.service_center} — Problema de ejecución`,
-      desc: `Acepta y se compromete con ${sc.aceptadas} viajes pero solo ejecuta ${sc.ejecutadas} (${sc.pct_cumplimiento}%). Es un problema operativo de campo, no de aceptación. ${sc.no_presentadas} no presentadas.`,
+      desc: `Acepta ${sc.aceptadas} viajes pero ejecuta ${sc.ejecutadas} (${sc.pct_cumplimiento}%). Es problema operativo de campo.`,
       metricas: [
         { l: "% Cumplimiento", v: `${sc.pct_cumplimiento}%`, color: "#92400e" },
         { l: "No presentadas", v: sc.no_presentadas, color: "#92400e" },
         { l: "Aceptadas", v: sc.aceptadas, color: "#0f172a" },
       ],
-      accion: { label: "Ver SC en Ciclo", onClick: () => setVista("ciclo") },
+      accion: { label: "Ir a Ciclo", onClick: () => setVista("ciclo") },
     });
   });
 
   if (driversFantasma.length > 0) {
     hallazgos.push({
-      sev: "ALTO",
-      categoria: "Compliance",
+      sev: "ALTO", categoria: "Compliance",
       titulo: `${driversFantasma.length} drivers fantasma activos`,
-      desc: `Personas operando viajes a nombre de Bigticket sin estar en el master oficial de Meli. ${topFantasma ? `Top: ${topFantasma.nombre} (${topFantasma.viajes_total} viajes en ${topFantasma.scs_operados}).` : ""} Riesgo de compliance en caso de auditoría o siniestro.`,
+      desc: `Personas operando viajes a nombre de Bigticket sin estar en master oficial de Meli. ${topFantasma ? `Top: ${topFantasma.nombre} (${topFantasma.viajes_total} viajes).` : ""}`,
       metricas: [
         { l: "Total fantasmas", v: driversFantasma.length, color: "#92400e" },
         { l: "Viajes acumulados", v: driversFantasma.reduce((a, d) => a + (d.viajes_total || 0), 0), color: "#92400e" },
-        { l: "Top viajes", v: topFantasma?.viajes_total || 0, color: "#0f172a" },
       ],
-      accion: { label: "Ver listado completo", onClick: verDriversFantasma },
+      accion: { label: "Ver listado", onClick: verDriversFantasma },
     });
   }
 
   if (vehiculosFantasma.length > 0) {
     hallazgos.push({
-      sev: "ALTO",
-      categoria: "Compliance",
+      sev: "ALTO", categoria: "Compliance",
       titulo: `${vehiculosFantasma.length} placas fantasma operando`,
-      desc: `Vehículos circulando con carga de Meli sin estar registrados en el master oficial. Mismo problema legal que drivers fantasma: en caso de incidente, Bigticket no puede demostrar que el vehículo estaba autorizado.`,
+      desc: `Vehículos circulando sin estar en master oficial. Mismo riesgo legal que drivers fantasma.`,
       metricas: [
         { l: "Total placas", v: vehiculosFantasma.length, color: "#92400e" },
-        { l: "Viajes acumulados", v: vehiculosFantasma.reduce((a, v) => a + (v.viajes_total || 0), 0), color: "#92400e" },
+        { l: "Viajes", v: vehiculosFantasma.reduce((a, v) => a + (v.viajes_total || 0), 0), color: "#92400e" },
       ],
-      accion: { label: "Ver listado completo", onClick: verVehFantasma },
+      accion: { label: "Ver listado", onClick: verVehFantasma },
     });
   }
 
-  // === MEDIO ===
-  scsRigurosos.forEach(sc => {
-    if (sc.perfil === "PROBLEMATICO") {  // solo si cumple alto pero clasificado problemático
-      hallazgos.push({
-        sev: "MEDIO",
-        categoria: "Clasificación",
-        titulo: `${sc.service_center} — Reclasificar perfil (RIGUROSO con sesgo)`,
-        desc: `Rechaza ${sc.pct_rechazo}% de las ofertas pero cumple ${sc.pct_cumplimiento}% de lo que acepta. Es un perfil RIGUROSO, no PROBLEMÁTICO. La clasificación actual lo penaliza injustamente. Considerar ajustar el threshold del clasificador.`,
-        metricas: [
-          { l: "% Rechazo", v: `${sc.pct_rechazo}%`, color: "#92400e" },
-          { l: "% Cumplimiento", v: `${sc.pct_cumplimiento}%`, color: "#047857" },
-          { l: "Perfil actual", v: sc.perfil, color: "#991b1b" },
-        ],
-      });
-    }
-  });
-
   if (driversIzombi.length > 0) {
     hallazgos.push({
-      sev: "MEDIO",
-      categoria: "Limpieza de datos",
+      sev: "MEDIO", categoria: "Limpieza de datos",
       titulo: `${driversIzombi.length} IDs zombi en master Meli`,
-      desc: `Drivers que figuran en el master oficial con CURP vacío y 0 viajes en el período. Son IDs creados pero nunca completados del lado de Meli. Sugerir a Meli purgarlos para evitar ruido en métricas de utilización.`,
-      metricas: [
-        { l: "IDs zombi", v: driversIzombi.length, color: "#92400e" },
-      ],
-      accion: { label: "Ver IDs zombi", onClick: verIzombi },
+      desc: `Drivers en master con CURP vacío y 0 viajes. IDs creados pero no completados del lado de Meli.`,
+      metricas: [{ l: "IDs zombi", v: driversIzombi.length, color: "#92400e" }],
+      accion: { label: "Ver listado", onClick: verIzombi },
     });
   }
 
   const totNoPres = r.total_no_presentadas || 0;
   if (totNoPres > 0) {
     hallazgos.push({
-      sev: "MEDIO",
-      categoria: "Cumplimiento",
-      titulo: `${totNoPres} viajes no presentados en el período`,
-      desc: `Viajes que Bigticket aceptó pero no ejecutó. Es el "no-show silencioso" del sistema. Aunque se distribuye en varios SCs, la mayoría se concentra en SMX6, SMX1 y SQR1.`,
+      sev: "MEDIO", categoria: "Cumplimiento",
+      titulo: `${totNoPres} viajes no presentados`,
+      desc: `Bigticket aceptó pero no ejecutó. "No-show silencioso" del sistema.`,
       metricas: [
         { l: "No presentadas", v: totNoPres, color: "#92400e" },
-        { l: "% del total aceptado", v: `${r.total_aceptadas > 0 ? Math.round(totNoPres / r.total_aceptadas * 100) : 0}%`, color: "#92400e" },
+        { l: "% del aceptado", v: `${r.total_aceptadas > 0 ? Math.round(totNoPres / r.total_aceptadas * 100) : 0}%`, color: "#92400e" },
       ],
-      accion: { label: "Ver detalle por SC × día", onClick: () => setVista("ciclo") },
+      accion: { label: "Ver detalle", onClick: () => setVista("ciclo") },
     });
   }
 
-  // === INFO ===
   if (driversElite.length > 0) {
     const topElite = driversElite[0];
     hallazgos.push({
-      sev: "INFO",
-      categoria: "Oportunidad",
+      sev: "INFO", categoria: "Oportunidad",
       titulo: `Top ${driversElite.length} drivers élite — modelo a replicar`,
-      desc: `Drivers con score ≥90 que combinan alto volumen, performance y confiabilidad. ${topElite ? `${topElite.nombre} lidera con ${topElite.score_total} pts (${topElite.dias_trabajados} días en ${topElite.scs_operados}).` : ""} Usarlos como referencia para coaching, asignación a urgencias y onboarding.`,
+      desc: `Drivers con score ≥90. ${topElite ? `${topElite.nombre} lidera con ${topElite.score_total} pts.` : ""}`,
       metricas: [
         { l: "Drivers élite", v: driversElite.length, color: "#047857" },
-        { l: "Score promedio", v: driversElite.length > 0 ? (driversElite.reduce((a, d) => a + (d.score_total || 0), 0) / driversElite.length).toFixed(1) : "—", color: "#047857" },
         { l: "Score top", v: topElite?.score_total ?? "—", color: "#047857" },
       ],
       accion: { label: "Ver lista", onClick: verElite },
@@ -16357,7 +16518,6 @@ function PoolMeliHallazgos({ drivers, vehiculos, scs, scores, resumen, setModal,
     });
   }
 
-  // Conteo por severidad
   const conteoSev = {
     CRITICO: hallazgos.filter(h => h.sev === "CRITICO").length,
     ALTO: hallazgos.filter(h => h.sev === "ALTO").length,
@@ -16367,7 +16527,6 @@ function PoolMeliHallazgos({ drivers, vehiculos, scs, scores, resumen, setModal,
 
   return (
     <div className="pg">
-      {/* Resumen ejecutivo */}
       <div style={{ background: "linear-gradient(135deg, #1a3a6b 0%, #0f2647 100%)", borderRadius: 12, padding: 20, color: "#fff", marginBottom: 16 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div>
@@ -16376,80 +16535,49 @@ function PoolMeliHallazgos({ drivers, vehiculos, scs, scores, resumen, setModal,
             <div style={{ fontSize: 12, opacity: 0.85, marginTop: 4 }}>Cruce automático de las 6 fuentes operativas · ordenados por severidad</div>
           </div>
           <div style={{ display: "flex", gap: 14 }}>
-            <PoolMeliHallazgoSevCount label="Crítico" valor={conteoSev.CRITICO} color="#fee2e2" textColor="#7f1d1d" />
-            <PoolMeliHallazgoSevCount label="Alto" valor={conteoSev.ALTO} color="#fef3c7" textColor="#78350f" />
-            <PoolMeliHallazgoSevCount label="Medio" valor={conteoSev.MEDIO} color="#fef9c3" textColor="#713f12" />
-            <PoolMeliHallazgoSevCount label="Info" valor={conteoSev.INFO} color="#dcfce7" textColor="#14532d" />
+            {[
+              { label: "Crítico", val: conteoSev.CRITICO, bg: "#fee2e2", text: "#7f1d1d" },
+              { label: "Alto", val: conteoSev.ALTO, bg: "#fef3c7", text: "#78350f" },
+              { label: "Medio", val: conteoSev.MEDIO, bg: "#fef9c3", text: "#713f12" },
+              { label: "Info", val: conteoSev.INFO, bg: "#dcfce7", text: "#14532d" },
+            ].map(s => (
+              <div key={s.label} style={{ background: s.bg, borderRadius: 8, padding: "8px 14px", textAlign: "center", minWidth: 70 }}>
+                <div style={{ fontSize: 22, fontWeight: 700, color: s.text, lineHeight: 1 }}>{s.val}</div>
+                <div style={{ fontSize: 10, fontWeight: 700, color: s.text, textTransform: "uppercase", letterSpacing: 0.5, marginTop: 4 }}>{s.label}</div>
+              </div>
+            ))}
           </div>
         </div>
       </div>
 
-      {/* Lista de hallazgos */}
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-        {hallazgos.map((h, i) => (
-          <PoolMeliHallazgoCard key={i} hallazgo={h} index={i + 1} />
-        ))}
+        {hallazgos.map((h, i) => <PoolMeliHallazgoCard key={i} hallazgo={h} index={i + 1} />)}
       </div>
-
-      {hallazgos.length === 0 && (
-        <div className="form-card" style={{ textAlign: "center", padding: 40 }}>
-          <div style={{ fontSize: 14, color: "#047857", fontWeight: 600, marginBottom: 4 }}>✓ Sin hallazgos críticos</div>
-          <div style={{ fontSize: 12, color: "#64748b" }}>La operación está dentro de los parámetros esperados.</div>
-        </div>
-      )}
     </div>
   );
 }
 
-// Helper: contador de severidad en el header
-function PoolMeliHallazgoSevCount({ label, valor, color, textColor }) {
-  return (
-    <div style={{ background: color, borderRadius: 8, padding: "8px 14px", textAlign: "center", minWidth: 70 }}>
-      <div style={{ fontSize: 22, fontWeight: 700, color: textColor, lineHeight: 1 }}>{valor}</div>
-      <div style={{ fontSize: 10, fontWeight: 700, color: textColor, textTransform: "uppercase", letterSpacing: 0.5, marginTop: 4 }}>{label}</div>
-    </div>
-  );
-}
-
-// Helper: tarjeta de un hallazgo
 function PoolMeliHallazgoCard({ hallazgo, index }) {
   const sevStyles = {
-    CRITICO: { bg: "#fef2f2", border: "#fecaca", labelBg: "#b91c1c", labelText: "#fff", icon: "🔴" },
-    ALTO:    { bg: "#fffbeb", border: "#fde68a", labelBg: "#d97706", labelText: "#fff", icon: "🟠" },
-    MEDIO:   { bg: "#fefce8", border: "#fde047", labelBg: "#ca8a04", labelText: "#fff", icon: "🟡" },
-    INFO:    { bg: "#f0fdf4", border: "#bbf7d0", labelBg: "#15803d", labelText: "#fff", icon: "🟢" },
+    CRITICO: { bg: "#fef2f2", border: "#fecaca", labelBg: "#b91c1c" },
+    ALTO:    { bg: "#fffbeb", border: "#fde68a", labelBg: "#d97706" },
+    MEDIO:   { bg: "#fefce8", border: "#fde047", labelBg: "#ca8a04" },
+    INFO:    { bg: "#f0fdf4", border: "#bbf7d0", labelBg: "#15803d" },
   };
   const s = sevStyles[hallazgo.sev] || sevStyles.INFO;
-
   return (
     <div style={{ background: s.bg, border: `1px solid ${s.border}`, borderRadius: 10, padding: 16,
       display: "grid", gridTemplateColumns: "auto 1fr auto", gap: 16, alignItems: "start" }}>
-      
-      {/* Número + severidad */}
       <div style={{ textAlign: "center", minWidth: 50 }}>
         <div style={{ fontSize: 11, color: "#94a3b8", fontFamily: "monospace", marginBottom: 4 }}>#{index}</div>
         <span style={{ display: "inline-block", padding: "3px 10px", borderRadius: 4, fontSize: 9,
-          fontWeight: 800, letterSpacing: 0.8, background: s.labelBg, color: s.labelText }}>
-          {hallazgo.sev}
-        </span>
+          fontWeight: 800, letterSpacing: 0.8, background: s.labelBg, color: "#fff" }}>{hallazgo.sev}</span>
       </div>
-
-      {/* Contenido */}
       <div>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-          <span style={{ fontSize: 10, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 700 }}>
-            {hallazgo.categoria}
-          </span>
-        </div>
-        <div style={{ fontSize: 14, fontWeight: 700, color: "#0f172a", marginBottom: 6 }}>
-          {hallazgo.titulo}
-        </div>
-        <div style={{ fontSize: 12, color: "#334155", lineHeight: 1.5, marginBottom: 10 }}>
-          {hallazgo.desc}
-        </div>
-        
-        {/* Métricas */}
-        {hallazgo.metricas && hallazgo.metricas.length > 0 && (
+        <div style={{ fontSize: 10, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 700, marginBottom: 4 }}>{hallazgo.categoria}</div>
+        <div style={{ fontSize: 14, fontWeight: 700, color: "#0f172a", marginBottom: 6 }}>{hallazgo.titulo}</div>
+        <div style={{ fontSize: 12, color: "#334155", lineHeight: 1.5, marginBottom: 10 }}>{hallazgo.desc}</div>
+        {hallazgo.metricas && (
           <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
             {hallazgo.metricas.map((m, i) => (
               <div key={i}>
@@ -16460,32 +16588,24 @@ function PoolMeliHallazgoCard({ hallazgo, index }) {
           </div>
         )}
       </div>
-
-      {/* Acciones */}
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
         {hallazgo.accion && (
           <button onClick={hallazgo.accion.onClick}
             style={{ padding: "6px 12px", fontSize: 11, fontWeight: 600, border: "1px solid #cbd5e1",
               borderRadius: 6, background: "#fff", color: "#1a3a6b", cursor: "pointer",
-              fontFamily: "'Geist', sans-serif", whiteSpace: "nowrap" }}>
-            {hallazgo.accion.label} →
-          </button>
+              fontFamily: "'Geist', sans-serif", whiteSpace: "nowrap" }}>{hallazgo.accion.label} →</button>
         )}
         {hallazgo.accion2 && (
           <button onClick={hallazgo.accion2.onClick}
             style={{ padding: "6px 12px", fontSize: 11, fontWeight: 500, border: "none",
               background: "transparent", color: "#64748b", cursor: "pointer",
-              fontFamily: "'Geist', sans-serif", whiteSpace: "nowrap" }}>
-            {hallazgo.accion2.label}
-          </button>
+              fontFamily: "'Geist', sans-serif", whiteSpace: "nowrap" }}>{hallazgo.accion2.label}</button>
         )}
       </div>
     </div>
   );
 }
 
-
-// Estilos compartidos para tablas
 const pm_thStyle  = { textAlign: "left", fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5, padding: "10px 12px" };
 const pm_thStyleR = { ...pm_thStyle, textAlign: "right" };
 const pm_tdStyle  = { fontSize: 12, color: "#0f172a", padding: "10px 12px" };
