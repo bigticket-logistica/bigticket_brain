@@ -147,11 +147,12 @@ function BotonDescargarExcel({ onClick, disabled, label = "Descargar Excel" }) {
 }
 
 const MODULOS = {
-  superadmin: ["brain", "pagos", "maestro", "certificaciones", "incidencias", "pnr", "prospeccion", "wiki", "configuracion"],
+  superadmin: ["brain", "pool_meli_mx", "pagos", "maestro", "certificaciones", "incidencias", "pnr", "prospeccion", "wiki", "configuracion"],
   certificacion: ["certificaciones"],
 };
 const MODULOS_LABELS = {
   brain: "Brain Central",
+  pool_meli_mx: "Indicadores Operacionales MX",
   certificaciones: "Certificaciones",
   prospeccion: "Prospección CRM",
   wiki: "Wiki y Procesos",
@@ -15102,6 +15103,603 @@ function ConfigReglasNS() {
 
 
 
+// ═══════════════════════════════════════════════════════════════════════════
+// INDICADORES OPERACIONALES MX — Pool Mercado Libre
+// Cruce de 6 fuentes: drivers_master · vehicles_master · capacity_pool ·
+// carrier_metricas · asignacion_servicios · travel_requests
+// Lee de las vistas vw_meli_* en Supabase
+// ═══════════════════════════════════════════════════════════════════════════
+
+function IndicadoresOperacionalesMX({ usuario }) {
+  const [vista, setVista] = useState("inventario");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [resumen, setResumen] = useState(null);
+  const [drivers, setDrivers] = useState([]);
+  const [vehiculos, setVehiculos] = useState([]);
+  const [scs, setSCs] = useState([]);
+  const [scores, setScores] = useState([]);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const [r1, r2, r3, r4, r5] = await Promise.all([
+          sb.from("vw_meli_dashboard_resumen").select("*").maybeSingle(),
+          sb.from("vw_meli_inventario_drivers").select("*").order("viajes_total", { ascending: false }),
+          sb.from("vw_meli_inventario_vehiculos").select("*").order("viajes_total", { ascending: false }),
+          sb.from("vw_meli_ciclo_aceptacion_sc").select("*").order("ofrecidas", { ascending: false }),
+          sb.from("vw_meli_score_compromiso").select("*").order("score_total", { ascending: false }),
+        ]);
+        if (!alive) return;
+        if (r1.error || r2.error || r3.error || r4.error || r5.error) {
+          throw new Error(r1.error?.message || r2.error?.message || r3.error?.message || r4.error?.message || r5.error?.message);
+        }
+        setResumen(r1.data);
+        setDrivers(r2.data || []);
+        setVehiculos(r3.data || []);
+        setSCs(r4.data || []);
+        setScores(r5.data || []);
+      } catch (e) {
+        if (alive) setError(e.message || "Error cargando datos");
+      } finally {
+        if (alive) setLoading(false);
+      }
+    })();
+    return () => { alive = false; };
+  }, []);
+
+  const tabs = [
+    { id: "inventario", label: "Inventario", desc: "Drivers, vehículos, fantasmas" },
+    { id: "ciclo",      label: "Ciclo de aceptación", desc: "Embudo ofrecidas → ejecutadas" },
+    { id: "score",      label: "Score de compromiso", desc: "Calificación 0-100 por driver" },
+  ];
+
+  if (loading) {
+    return (
+      <div className="pg">
+        <div className="sec-title">Indicadores Operacionales MX</div>
+        <div className="sec-sub">Pool Mercado Libre · Bigticket México</div>
+        <div className="form-card" style={{ textAlign: "center", padding: 40, color: "#666" }}>
+          Cargando indicadores…
+        </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="pg">
+        <div className="sec-title">Indicadores Operacionales MX</div>
+        <div className="sec-sub">Pool Mercado Libre · Bigticket México</div>
+        <div className="form-card" style={{ background: "#fef2f2", border: "1px solid #fecaca" }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: "#991b1b", marginBottom: 6 }}>
+            No se pudo cargar la información
+          </div>
+          <div style={{ fontSize: 12, color: "#7f1d1d", lineHeight: 1.6 }}>
+            {error}
+            <br /><br />
+            <strong>Causa probable:</strong> las vistas <code>vw_meli_*</code> aún no fueron creadas en Supabase.
+            Ejecutá los SQL del paquete <code>sql_etapas_meli</code> (ETAPA 1 a 8) y volvé a recargar.
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ padding: 0 }}>
+      <div style={{ background: "#fff", borderBottom: "1px solid #e4e7ec", padding: "12px 24px" }}>
+        <div style={{ fontSize: 18, fontWeight: 700, color: "#1a3a6b", marginBottom: 4 }}>
+          Indicadores Operacionales MX
+        </div>
+        <div style={{ fontSize: 12, color: "#64748b", marginBottom: 10 }}>
+          Pool Mercado Libre · cruce de 6 fuentes operativas
+        </div>
+        <div style={{ display: "flex", gap: 0, borderBottom: "2px solid #e4e7ec", marginLeft: -8, flexWrap: "wrap" }}>
+          {tabs.map(t => (
+            <button key={t.id} onClick={() => setVista(t.id)}
+              style={{
+                background: "transparent", border: "none", padding: "10px 16px",
+                fontSize: 13, fontWeight: 600, cursor: "pointer", color: vista === t.id ? "#1a3a6b" : "#64748b",
+                borderBottom: vista === t.id ? "2px solid #1a3a6b" : "2px solid transparent",
+                marginBottom: -2,
+              }}>
+              <div>{t.label}</div>
+              <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 400, marginTop: 2 }}>{t.desc}</div>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {vista === "inventario" && <PoolMeliInventario drivers={drivers} vehiculos={vehiculos} resumen={resumen} />}
+      {vista === "ciclo"      && <PoolMeliCiclo scs={scs} resumen={resumen} />}
+      {vista === "score"      && <PoolMeliScore scores={scores} resumen={resumen} />}
+    </div>
+  );
+}
+
+// ── Helpers visuales reutilizables ─────────────────────────────────────────
+function PoolMeliKpi({ label, value, sublabel, color = "#1a3a6b", danger = false, warn = false }) {
+  const bg = danger ? "#fef2f2" : warn ? "#fffbeb" : "#fff";
+  const border = danger ? "#fecaca" : warn ? "#fde68a" : "#e4e7ec";
+  const valColor = danger ? "#991b1b" : warn ? "#92400e" : color;
+  return (
+    <div style={{ background: bg, border: `1px solid ${border}`, borderRadius: 12, padding: 16 }}>
+      <div style={{ fontSize: 11, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6, fontWeight: 600 }}>{label}</div>
+      <div style={{ fontSize: 28, fontWeight: 700, color: valColor, lineHeight: 1, marginBottom: 4 }}>{value}</div>
+      {sublabel && <div style={{ fontSize: 11, color: "#94a3b8" }}>{sublabel}</div>}
+    </div>
+  );
+}
+
+function PerfilBadgeMX({ perfil }) {
+  const styles = {
+    IDEAL:         { bg: "#ecfdf5", color: "#047857", label: "IDEAL" },
+    INCONSISTENTE: { bg: "#fef3c7", color: "#92400e", label: "INCONSISTENTE" },
+    PROBLEMATICO:  { bg: "#fee2e2", color: "#991b1b", label: "PROBLEMÁTICO" },
+    RIGUROSO:      { bg: "#dbeafe", color: "#1e40af", label: "RIGUROSO" },
+    sin_datos:     { bg: "#f1f5f9", color: "#64748b", label: "S/D" },
+  };
+  const s = styles[perfil] || styles.sin_datos;
+  return (
+    <span style={{ display: "inline-block", padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 700, letterSpacing: 0.5, backgroundColor: s.bg, color: s.color }}>
+      {s.label}
+    </span>
+  );
+}
+
+function ScoreBadgeMX({ cat }) {
+  const styles = {
+    A: { bg: "#047857", color: "#fff" },
+    B: { bg: "#0891b2", color: "#fff" },
+    C: { bg: "#ca8a04", color: "#fff" },
+    D: { bg: "#b91c1c", color: "#fff" },
+  };
+  const s = styles[cat] || styles.B;
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 24, height: 24, borderRadius: 4, fontSize: 12, fontWeight: 700, backgroundColor: s.bg, color: s.color }}>
+      {cat}
+    </span>
+  );
+}
+
+// ── Sub-vista 1: INVENTARIO ────────────────────────────────────────────────
+function PoolMeliInventario({ drivers, vehiculos, resumen }) {
+  const [tipo, setTipo] = useState("drivers");
+  const r = resumen || {};
+
+  const driversActivos = drivers.filter(d => d.categoria !== "durmiente").length;
+  const driversFantasma = drivers.filter(d => d.categoria === "fantasma");
+  const vehiculosActivos = vehiculos.filter(v => v.categoria !== "durmiente").length;
+  const topDrivers = drivers.filter(d => d.categoria !== "durmiente" && d.categoria !== "fantasma").slice(0, 6);
+
+  return (
+    <div className="pg">
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+        <div style={{ display: "flex", gap: 4, background: "#f1f5f9", padding: 4, borderRadius: 8 }}>
+          <button onClick={() => setTipo("drivers")}
+            style={{ padding: "6px 14px", fontSize: 12, fontWeight: 600, border: "none", cursor: "pointer", borderRadius: 6,
+              background: tipo === "drivers" ? "#fff" : "transparent",
+              color: tipo === "drivers" ? "#1a3a6b" : "#64748b",
+              boxShadow: tipo === "drivers" ? "0 1px 2px rgba(0,0,0,0.05)" : "none",
+              fontFamily: "'Geist', sans-serif" }}>
+            Drivers ({drivers.length})
+          </button>
+          <button onClick={() => setTipo("vehicles")}
+            style={{ padding: "6px 14px", fontSize: 12, fontWeight: 600, border: "none", cursor: "pointer", borderRadius: 6,
+              background: tipo === "vehicles" ? "#fff" : "transparent",
+              color: tipo === "vehicles" ? "#1a3a6b" : "#64748b",
+              boxShadow: tipo === "vehicles" ? "0 1px 2px rgba(0,0,0,0.05)" : "none",
+              fontFamily: "'Geist', sans-serif" }}>
+            Vehículos ({vehiculos.length})
+          </button>
+        </div>
+      </div>
+
+      {tipo === "drivers" && (
+        <>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 16 }}>
+            <PoolMeliKpi label="En master oficial" value={r.drivers_master ?? "—"} sublabel="API rostering Meli" />
+            <PoolMeliKpi label="Activos en abril" value={driversActivos} sublabel={`${Math.round(driversActivos / (r.drivers_master || 1) * 100)}% del master`} color="#047857" />
+            <PoolMeliKpi label="Durmientes" value={r.drivers_durmientes ?? "—"} sublabel="En master, no operaron" />
+            <PoolMeliKpi label="Fantasmas" value={r.drivers_fantasma ?? driversFantasma.length} sublabel="Operan sin estar en master" danger />
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            <div className="form-card" style={{ marginBottom: 0 }}>
+              <div className="form-title">Top drivers operativos</div>
+              <div style={{ fontSize: 11, color: "#64748b", marginTop: -8, marginBottom: 12 }}>Ordenados por viajes ejecutados</div>
+              <div>
+                {topDrivers.length === 0 && <div style={{ fontSize: 12, color: "#94a3b8" }}>Sin datos</div>}
+                {topDrivers.map(d => (
+                  <div key={d.driver_id || d.nombre} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 0", borderBottom: "1px solid #f1f5f9" }}>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: "#0f172a" }}>{d.nombre}</div>
+                      <div style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}>
+                        {d.scs_operados || "—"} · {d.dias_trabajados} días · DPPH {d.dpph_promedio?.toFixed?.(1) ?? "—"}
+                      </div>
+                    </div>
+                    <div style={{ textAlign: "right", marginLeft: 12 }}>
+                      <div style={{ fontSize: 14, fontWeight: 700, color: "#047857" }}>{d.viajes_total}</div>
+                      <div style={{ fontSize: 10, color: "#94a3b8" }}>viajes</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="form-card" style={{ marginBottom: 0, background: "#fffbf5", border: "1px solid #fed7aa" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                <div className="form-title" style={{ marginBottom: 0 }}>Drivers fantasma</div>
+                <span style={{ fontSize: 9, padding: "2px 6px", borderRadius: 3, background: "#fee2e2", color: "#991b1b", fontWeight: 700, letterSpacing: 0.5 }}>
+                  RIESGO COMPLIANCE
+                </span>
+              </div>
+              <div style={{ fontSize: 11, color: "#92400e", marginBottom: 12 }}>Operan sin estar en el master oficial de Meli</div>
+              <div>
+                {driversFantasma.length === 0 && <div style={{ fontSize: 12, color: "#94a3b8" }}>Sin fantasmas detectados ✓</div>}
+                {driversFantasma.slice(0, 8).map(d => (
+                  <div key={d.driver_id || d.nombre} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 0", borderBottom: "1px solid #fde68a" }}>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: "#0f172a" }}>{d.nombre}</div>
+                      <div style={{ fontSize: 11, color: "#92400e", marginTop: 2 }}>
+                        {d.viajes_total} viajes · {d.dias_trabajados} días · {d.scs_operados || "—"}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+                {driversFantasma.length > 8 && (
+                  <div style={{ fontSize: 11, color: "#92400e", marginTop: 8 }}>+ {driversFantasma.length - 8} más</div>
+                )}
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+
+      {tipo === "vehicles" && (
+        <>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 16 }}>
+            <PoolMeliKpi label="En master oficial" value={r.vehiculos_master ?? "—"} sublabel="API rostering Meli" />
+            <PoolMeliKpi label="Activos en abril" value={vehiculosActivos} sublabel={`${Math.round(vehiculosActivos / (r.vehiculos_master || 1) * 100)}% de la flota`} color="#047857" />
+            <PoolMeliKpi label="Durmientes" value={r.vehiculos_durmientes ?? "—"} sublabel="Sin uso en abril" />
+            <PoolMeliKpi label="Fantasmas" value={r.vehiculos_fantasma ?? "—"} sublabel="Sin registro oficial" danger />
+          </div>
+
+          <div className="form-card">
+            <div className="form-title">Composición de flota MX</div>
+            <div style={{ fontSize: 11, color: "#64748b", marginTop: -8, marginBottom: 16 }}>Distribución por tipo y estado operativo</div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24 }}>
+              <div>
+                <div style={{ fontSize: 11, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8, fontWeight: 600 }}>Por tipo</div>
+                {(() => {
+                  const porTipo = {};
+                  vehiculos.forEach(v => {
+                    const t = v.tipo || "Sin tipo";
+                    porTipo[t] = (porTipo[t] || 0) + 1;
+                  });
+                  return Object.entries(porTipo).sort((a, b) => b[1] - a[1]).map(([t, c]) => (
+                    <div key={t} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: "1px solid #f1f5f9" }}>
+                      <span style={{ fontSize: 12, color: "#334155" }}>{t}</span>
+                      <span style={{ fontSize: 12, fontWeight: 700, color: "#0f172a" }}>{c}</span>
+                    </div>
+                  ));
+                })()}
+              </div>
+              <div>
+                <div style={{ fontSize: 11, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8, fontWeight: 600 }}>Por estado operativo</div>
+                {(() => {
+                  const porCat = {};
+                  vehiculos.forEach(v => {
+                    const c = v.categoria || "—";
+                    porCat[c] = (porCat[c] || 0) + 1;
+                  });
+                  const orden = ["titular", "regular", "esporadico", "durmiente", "fantasma"];
+                  const colores = { titular: "#047857", regular: "#0891b2", esporadico: "#ca8a04", durmiente: "#94a3b8", fantasma: "#b91c1c" };
+                  return orden.filter(k => porCat[k]).map(k => (
+                    <div key={k} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0", borderBottom: "1px solid #f1f5f9" }}>
+                      <div style={{ width: 8, height: 8, borderRadius: "50%", background: colores[k] }}></div>
+                      <span style={{ fontSize: 12, color: "#334155", flex: 1, textTransform: "capitalize" }}>{k}</span>
+                      <span style={{ fontSize: 12, fontWeight: 700, color: "#0f172a" }}>{porCat[k]}</span>
+                    </div>
+                  ));
+                })()}
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+// ── Sub-vista 2: CICLO DE ACEPTACIÓN ───────────────────────────────────────
+function PoolMeliCiclo({ scs, resumen }) {
+  const [perfilFiltro, setPerfilFiltro] = useState("TODOS");
+  const r = resumen || {};
+
+  const filtrados = perfilFiltro === "TODOS" ? scs : scs.filter(s => s.perfil === perfilFiltro);
+  const totOfr = r.total_ofrecidas || scs.reduce((a, s) => a + (s.ofrecidas || 0), 0);
+  const totAcc = r.total_aceptadas || scs.reduce((a, s) => a + (s.aceptadas || 0), 0);
+  const totEjec = r.total_ejecutadas || scs.reduce((a, s) => a + (s.ejecutadas || 0), 0);
+  const totNoPres = r.total_no_presentadas || scs.reduce((a, s) => a + (s.no_presentadas || 0), 0);
+  const totRech = scs.reduce((a, s) => a + (s.rechazadas || 0), 0);
+  const totCanc = scs.reduce((a, s) => a + (s.canceladas || 0), 0);
+  const conteoPorPerfil = (p) => scs.filter(s => s.perfil === p).length;
+
+  const problematicos = scs.filter(s => s.perfil === "PROBLEMATICO");
+
+  return (
+    <div className="pg">
+      <div className="form-card">
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 18 }}>
+          <div>
+            <div className="form-title" style={{ marginBottom: 4 }}>Embudo del ciclo · Abril 2026</div>
+            <div style={{ fontSize: 12, color: "#64748b" }}>Trayectoria completa: ofrecidas → aceptadas → ejecutadas</div>
+          </div>
+          <div style={{ fontSize: 11, color: "#94a3b8" }}>Cubre 1 abr — 30 abr</div>
+        </div>
+
+        {[
+          { label: "Ofrecidas por Meli", valor: totOfr, base: totOfr, color: "#1a3a6b" },
+          { label: "Aceptadas por Bigticket", valor: totAcc, base: totOfr, color: "#0891b2" },
+          { label: "Ejecutadas", valor: totEjec, base: totOfr, color: "#047857" },
+        ].map(f => {
+          const pct = f.base > 0 ? (f.valor / f.base * 100).toFixed(0) : 0;
+          return (
+            <div key={f.label} style={{ marginBottom: 12 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 5 }}>
+                <span style={{ fontSize: 12, fontWeight: 600, color: "#334155" }}>{f.label}</span>
+                <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                  <span style={{ fontSize: 18, fontWeight: 700, color: f.color }}>{f.valor.toLocaleString()}</span>
+                  <span style={{ fontSize: 11, color: "#64748b", width: 36, textAlign: "right" }}>{pct}%</span>
+                </div>
+              </div>
+              <div style={{ height: 10, background: "#f1f5f9", borderRadius: 3, overflow: "hidden" }}>
+                <div style={{ height: "100%", width: `${pct}%`, backgroundColor: f.color, transition: "width 0.4s" }}></div>
+              </div>
+            </div>
+          );
+        })}
+
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginTop: 18 }}>
+          <div style={{ background: "#fef2f2", borderRadius: 8, padding: 12 }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: "#991b1b", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>Rechazadas</div>
+            <div style={{ fontSize: 20, fontWeight: 700, color: "#991b1b" }}>{totRech}</div>
+            <div style={{ fontSize: 10, color: "#7f1d1d", marginTop: 2 }}>{totOfr > 0 ? Math.round(totRech / totOfr * 100) : 0}% de ofrecidas</div>
+          </div>
+          <div style={{ background: "#f1f5f9", borderRadius: 8, padding: 12 }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: "#475569", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>Canceladas</div>
+            <div style={{ fontSize: 20, fontWeight: 700, color: "#475569" }}>{totCanc}</div>
+            <div style={{ fontSize: 10, color: "#64748b", marginTop: 2 }}>{totOfr > 0 ? Math.round(totCanc / totOfr * 100) : 0}% de ofrecidas</div>
+          </div>
+          <div style={{ background: "#fffbeb", borderRadius: 8, padding: 12, border: "1px solid #fde68a" }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: "#92400e", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>No presentadas</div>
+            <div style={{ fontSize: 20, fontWeight: 700, color: "#92400e" }}>{totNoPres}</div>
+            <div style={{ fontSize: 10, color: "#92400e", marginTop: 2 }}>aceptadas - ejecutadas</div>
+          </div>
+        </div>
+      </div>
+
+      <div style={{ display: "flex", alignItems: "center", gap: 6, margin: "16px 0" }}>
+        <span style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5, marginRight: 4 }}>Filtrar:</span>
+        {["TODOS", "IDEAL", "INCONSISTENTE", "PROBLEMATICO"].map(p => {
+          const c = p === "TODOS" ? scs.length : conteoPorPerfil(p);
+          const active = perfilFiltro === p;
+          return (
+            <button key={p} onClick={() => setPerfilFiltro(p)}
+              style={{ padding: "5px 12px", fontSize: 11, fontWeight: 600, borderRadius: 4,
+                border: active ? "none" : "1px solid #e4e7ec",
+                background: active ? "#0f172a" : "#fff",
+                color: active ? "#fff" : "#475569",
+                cursor: "pointer", fontFamily: "'Geist', sans-serif" }}>
+              {p === "TODOS" ? "Todos" : p}
+              <span style={{ marginLeft: 6, opacity: 0.6 }}>({c})</span>
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="form-card" style={{ padding: 0, overflow: "hidden" }}>
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr style={{ background: "#f8fafc", borderBottom: "1px solid #e2e8f0" }}>
+                <th style={pm_thStyle}>SC</th>
+                <th style={pm_thStyleR}>Ofrecidas</th>
+                <th style={pm_thStyleR}>Aceptadas</th>
+                <th style={pm_thStyleR}>Rechazadas</th>
+                <th style={pm_thStyleR}>Ejecutadas</th>
+                <th style={pm_thStyleR}>No present.</th>
+                <th style={pm_thStyleR}>Cumpl.</th>
+                <th style={{ ...pm_thStyle, textAlign: "center" }}>Perfil</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtrados.map(s => {
+                const cumpl = s.aceptadas > 0 ? (s.ejecutadas / s.aceptadas * 100).toFixed(0) : 0;
+                const cumplColor = cumpl >= 90 ? "#047857" : cumpl >= 70 ? "#92400e" : "#991b1b";
+                return (
+                  <tr key={s.service_center} style={{ borderBottom: "1px solid #f1f5f9" }}>
+                    <td style={{ ...pm_tdStyle, fontFamily: "monospace", fontWeight: 700 }}>{s.service_center}</td>
+                    <td style={pm_tdStyleR}>{s.ofrecidas}</td>
+                    <td style={{ ...pm_tdStyleR, color: "#0891b2" }}>{s.aceptadas}</td>
+                    <td style={{ ...pm_tdStyleR, color: s.rechazadas > 50 ? "#991b1b" : "#64748b" }}>{s.rechazadas}</td>
+                    <td style={{ ...pm_tdStyleR, color: "#047857" }}>{s.ejecutadas}</td>
+                    <td style={{ ...pm_tdStyleR, fontWeight: 600, color: s.no_presentadas > 20 ? "#991b1b" : "#92400e" }}>{s.no_presentadas}</td>
+                    <td style={{ ...pm_tdStyleR, fontWeight: 700, color: cumplColor }}>{cumpl}%</td>
+                    <td style={{ ...pm_tdStyle, textAlign: "center" }}><PerfilBadgeMX perfil={s.perfil} /></td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {problematicos.length > 0 && (
+        <div style={{ background: "#fef2f2", borderLeft: "4px solid #b91c1c", borderRadius: 8, padding: 16, marginTop: 16 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#0f172a", marginBottom: 8 }}>
+            ⚠ SCs críticos requieren acción inmediata
+          </div>
+          <div style={{ fontSize: 12, color: "#334155", lineHeight: 1.7 }}>
+            {problematicos.map(s => {
+              const cumpl = s.aceptadas > 0 ? Math.round(s.ejecutadas / s.aceptadas * 100) : 0;
+              return (
+                <div key={s.service_center} style={{ marginBottom: 6 }}>
+                  <strong>{s.service_center}:</strong> {s.ofrecidas} ofrecidas, aceptó {s.aceptadas}, ejecutó {s.ejecutadas} ({cumpl}% cumplimiento). {s.no_presentadas} no presentadas.
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Sub-vista 3: SCORE DE COMPROMISO ───────────────────────────────────────
+function PoolMeliScore({ scores, resumen }) {
+  const r = resumen || {};
+  const totalEvaluados = scores.length;
+  const top = scores.slice(0, 7);
+  const cuentas = {
+    A: r.score_a ?? scores.filter(s => s.categoria_score === "A").length,
+    B: r.score_b ?? scores.filter(s => s.categoria_score === "B").length,
+    C: r.score_c ?? scores.filter(s => s.categoria_score === "C").length,
+    D: r.score_d ?? scores.filter(s => s.categoria_score === "D").length,
+  };
+
+  const cats = [
+    { cat: "A", label: "Élite",    range: "80-100", color: "#047857", desc: "Driver A+ - alta performance" },
+    { cat: "B", label: "Sólido",   range: "60-79",  color: "#0891b2", desc: "Confiable y consistente" },
+    { cat: "C", label: "Promedio", range: "40-59",  color: "#ca8a04", desc: "Espacio para mejorar" },
+    { cat: "D", label: "Riesgo",   range: "0-39",   color: "#b91c1c", desc: "Requiere atención" },
+  ];
+
+  const dimensiones = [
+    { label: "Volumen",       pts: 30, desc: "Días trabajados",   color: "#1a3a6b" },
+    { label: "Performance",   pts: 25, desc: "DPPH (paq/hora)",   color: "#0891b2" },
+    { label: "Confiabilidad", pts: 20, desc: "% entrega exitosa", color: "#F47B20" },
+    { label: "Compliance",    pts: 15, desc: "Master + CURP",     color: "#ca8a04" },
+    { label: "Estabilidad",   pts: 10, desc: "Mismo SC",          color: "#94a3b8" },
+  ];
+
+  return (
+    <div className="pg">
+      <div style={{ background: "linear-gradient(135deg, #1a3a6b 0%, #0f2647 100%)", borderRadius: 12, padding: 24, color: "#fff", marginBottom: 16 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+          <div>
+            <div style={{ fontSize: 10, fontWeight: 700, opacity: 0.8, textTransform: "uppercase", letterSpacing: 1.2, marginBottom: 6 }}>Innovación Brain</div>
+            <div style={{ fontSize: 22, fontWeight: 700, marginBottom: 6 }}>Score de Compromiso por Driver</div>
+            <div style={{ fontSize: 13, opacity: 0.9, maxWidth: 600, lineHeight: 1.5 }}>
+              Calificación 0-100 que combina volumen, performance, confiabilidad, compliance y estabilidad.
+              Recalculado mensualmente desde el cruce de las 6 fuentes operativas.
+            </div>
+          </div>
+          <div style={{ textAlign: "right" }}>
+            <div style={{ fontSize: 44, fontWeight: 700, lineHeight: 1 }}>{totalEvaluados}</div>
+            <div style={{ fontSize: 11, opacity: 0.8, marginTop: 4 }}>drivers evaluados</div>
+          </div>
+        </div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 16 }}>
+        {cats.map(c => {
+          const pct = totalEvaluados > 0 ? Math.round(cuentas[c.cat] / totalEvaluados * 100) : 0;
+          return (
+            <div key={c.cat} className="form-card" style={{ marginBottom: 0 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
+                <div style={{ fontSize: 28, fontWeight: 700, color: c.color, lineHeight: 1 }}>{c.cat}</div>
+                <div style={{ fontSize: 10, fontFamily: "monospace", color: "#94a3b8" }}>{c.range} pts</div>
+              </div>
+              <div style={{ fontSize: 22, fontWeight: 700, color: "#0f172a", lineHeight: 1, marginBottom: 4 }}>{cuentas[c.cat]}</div>
+              <div style={{ fontSize: 12, fontWeight: 600, color: "#334155", marginBottom: 2 }}>{c.label}</div>
+              <div style={{ fontSize: 10, color: "#64748b", marginBottom: 10 }}>{c.desc}</div>
+              <div style={{ height: 4, background: "#f1f5f9", borderRadius: 2, overflow: "hidden" }}>
+                <div style={{ height: "100%", width: `${pct}%`, background: c.color }}></div>
+              </div>
+              <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 4 }}>{pct}% del total</div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 12 }}>
+        <div className="form-card" style={{ marginBottom: 0 }}>
+          <div className="form-title" style={{ marginBottom: 4 }}>Top 7 Drivers Élite</div>
+          <div style={{ fontSize: 11, color: "#64748b", marginBottom: 12 }}>Score 90+ — los pilares de la operación</div>
+          {top.length === 0 && <div style={{ fontSize: 12, color: "#94a3b8" }}>Sin datos</div>}
+          {top.map((d, i) => (
+            <div key={d.driver_id || d.nombre} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 0", borderBottom: i === top.length - 1 ? "none" : "1px solid #f1f5f9" }}>
+              <div style={{ fontSize: 11, color: "#cbd5e1", fontFamily: "monospace", width: 24 }}>#{i + 1}</div>
+              <ScoreBadgeMX cat={d.categoria_score} />
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: "#0f172a" }}>{d.nombre}</div>
+                <div style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}>
+                  {d.scs_operados || "—"} · {d.dias_trabajados} días · DPPH {d.dpph_promedio?.toFixed?.(1) ?? "—"} · {d.entrega_exitosa_pct?.toFixed?.(1) ?? "—"}% entrega
+                </div>
+              </div>
+              <div style={{ textAlign: "right" }}>
+                <div style={{ fontSize: 22, fontWeight: 700, color: "#047857", lineHeight: 1 }}>{d.score_total?.toFixed?.(1) ?? "—"}</div>
+                <div style={{ fontSize: 9, color: "#94a3b8", textTransform: "uppercase", letterSpacing: 0.5 }}>score</div>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div className="form-card" style={{ marginBottom: 0 }}>
+          <div className="form-title" style={{ marginBottom: 4 }}>Composición del score</div>
+          <div style={{ fontSize: 11, color: "#64748b", marginBottom: 16 }}>5 dimensiones · 100 pts total</div>
+          {dimensiones.map(d => (
+            <div key={d.label} style={{ marginBottom: 12 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                <span style={{ fontSize: 12, fontWeight: 600, color: "#0f172a" }}>{d.label}</span>
+                <span style={{ fontSize: 13, fontWeight: 700, color: d.color }}>
+                  {d.pts}<span style={{ fontSize: 10, color: "#94a3b8", marginLeft: 2 }}>pts</span>
+                </span>
+              </div>
+              <div style={{ height: 5, background: "#f1f5f9", borderRadius: 3, overflow: "hidden", marginBottom: 4 }}>
+                <div style={{ height: "100%", width: `${d.pts / 30 * 100}%`, background: d.color }}></div>
+              </div>
+              <div style={{ fontSize: 10, color: "#64748b" }}>{d.desc}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="form-card" style={{ marginTop: 12, marginBottom: 0 }}>
+        <div className="form-title" style={{ marginBottom: 4 }}>Aplicaciones operativas del Score</div>
+        <div style={{ fontSize: 11, color: "#64748b", marginBottom: 16 }}>5 usos prácticos para operación y planeación</div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 12 }}>
+          {[
+            { title: "Asignación",       desc: "Sugerir drivers A/B disponibles para urgencias", color: "#1a3a6b" },
+            { title: "Fidelización",     desc: "Identificar y retener a los élite",              color: "#047857" },
+            { title: "Detección bajas",  desc: "Alerta cuando A pierde score",                   color: "#ca8a04" },
+            { title: "Onboarding",       desc: "Regularizar fantasmas con DPPH alto",            color: "#0891b2" },
+            { title: "Coaching",         desc: "B con score 60-70 cerca de A",                   color: "#F47B20" },
+          ].map(u => (
+            <div key={u.title} style={{ textAlign: "center", padding: "8px 4px" }}>
+              <div style={{ width: 8, height: 8, borderRadius: "50%", background: u.color, margin: "0 auto 8px" }}></div>
+              <div style={{ fontSize: 12, fontWeight: 700, color: "#0f172a", marginBottom: 4 }}>{u.title}</div>
+              <div style={{ fontSize: 10, color: "#64748b", lineHeight: 1.4 }}>{u.desc}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Estilos compartidos para tablas del módulo Pool Meli
+const pm_thStyle  = { textAlign: "left", fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5, padding: "10px 12px" };
+const pm_thStyleR = { ...pm_thStyle, textAlign: "right" };
+const pm_tdStyle  = { fontSize: 12, color: "#0f172a", padding: "10px 12px" };
+const pm_tdStyleR = { ...pm_tdStyle, textAlign: "right", fontVariantNumeric: "tabular-nums" };
+
+
 export default function App() {
   const [usuario, setUsuario] = useState(() => {
     try {
@@ -15145,6 +15743,7 @@ export default function App() {
           ))}
         </div>
         {tab === "brain" && <BrainCentral setTab={setTab} usuario={usuario} />}
+        {tab === "pool_meli_mx" && <IndicadoresOperacionalesMX usuario={usuario} />}
         {tab === "certificaciones" && <ModuloCertificacionesMadre />}
         {tab === "configuracion" && (
           <div className="pg" style={{ maxWidth: 700 }}>
