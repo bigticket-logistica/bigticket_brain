@@ -15138,7 +15138,7 @@ async function descargarExcelMeli(filas, nombreArchivo, nombreHoja = "Datos") {
 }
 
 function IndicadoresOperacionalesMX({ usuario }) {
-  const [vista, setVista] = useState("inventario");
+  const [vista, setVista] = useState("hallazgos");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [resumen, setResumen] = useState(null);
@@ -15183,6 +15183,7 @@ function IndicadoresOperacionalesMX({ usuario }) {
   }, []);
 
   const tabs = [
+    { id: "hallazgos",  label: "Hallazgos", desc: "Lo más crítico para revisar" },
     { id: "inventario", label: "Inventario", desc: "Drivers, vehículos, fantasmas" },
     { id: "ciclo",      label: "Ciclo de aceptación", desc: "Embudo ofrecidas → ejecutadas" },
     { id: "score",      label: "Score de compromiso", desc: "Calificación 0-100 por driver" },
@@ -15245,6 +15246,7 @@ function IndicadoresOperacionalesMX({ usuario }) {
         </div>
       </div>
 
+      {vista === "hallazgos"  && <PoolMeliHallazgos drivers={drivers} vehiculos={vehiculos} scs={scs} scores={scores} resumen={resumen} setModal={setModal} setVista={setVista} />}
       {vista === "inventario" && <PoolMeliInventario drivers={drivers} vehiculos={vehiculos} resumen={resumen} setModal={setModal} />}
       {vista === "ciclo"      && <PoolMeliCiclo scs={scs} resumen={resumen} setModal={setModal} />}
       {vista === "score"      && <PoolMeliScore scores={scores} resumen={resumen} />}
@@ -16109,6 +16111,379 @@ function PoolMeliScore({ scores, resumen }) {
     </div>
   );
 }
+
+// ── Sub-vista 4: HALLAZGOS ─────────────────────────────────────────────────
+function PoolMeliHallazgos({ drivers, vehiculos, scs, scores, resumen, setModal, setVista }) {
+  const r = resumen || {};
+
+  // Cálculos para los hallazgos
+  const driversFantasma = drivers.filter(d => d.categoria === "fantasma");
+  const vehiculosFantasma = vehiculos.filter(v => v.categoria === "fantasma");
+  const scsProblematicos = scs.filter(s => s.perfil === "PROBLEMATICO");
+  const driversIzombi = drivers.filter(d => d.en_master && (!d.curp || d.curp === "") && (!d.viajes_total || d.viajes_total === 0));
+  const driversElite = scores.filter(s => s.categoria_score === "A").slice(0, 7);
+
+  // Detectar el SC más crítico (peor cumplimiento)
+  const peorSC = [...scsProblematicos].sort((a, b) => 
+    (a.pct_cumplimiento || 0) - (b.pct_cumplimiento || 0)
+  )[0];
+
+  // Detectar SCs con buen cumplimiento pero alto rechazo (RIGUROSOS problemáticos)
+  const scsRigurosos = scs.filter(s => 
+    s.pct_rechazo >= 50 && s.pct_cumplimiento >= 75
+  );
+
+  // Detectar SCs con bajo % entrega (problema de ejecución, no aceptación)
+  const scsBajaEntrega = scs.filter(s => s.ejecutadas > 50 && s.pct_cumplimiento < 90 && s.perfil !== "PROBLEMATICO");
+
+  // Top driver fantasma
+  const topFantasma = driversFantasma.sort((a, b) => (b.viajes_total || 0) - (a.viajes_total || 0))[0];
+  const fantasmaMultiSC = driversFantasma.find(d => (d.cantidad_scs || 0) >= 2);
+
+  // Modales
+  const verSCsProblematicos = () => setModal({
+    titulo: `SCs Problemáticos (${scsProblematicos.length})`,
+    filas: scsProblematicos,
+    nombreArchivo: "scs_problematicos"
+  });
+  const verDriversFantasma = () => setModal({
+    titulo: `Drivers Fantasma (${driversFantasma.length})`,
+    filas: driversFantasma,
+    nombreArchivo: "drivers_fantasma_compliance"
+  });
+  const verVehFantasma = () => setModal({
+    titulo: `Vehículos Fantasma (${vehiculosFantasma.length})`,
+    filas: vehiculosFantasma,
+    nombreArchivo: "vehiculos_fantasma_compliance"
+  });
+  const verIzombi = () => setModal({
+    titulo: `IDs Zombi en Master (${driversIzombi.length})`,
+    filas: driversIzombi,
+    nombreArchivo: "ids_zombi_master_meli"
+  });
+  const verElite = () => setModal({
+    titulo: `Top Drivers Élite (${driversElite.length})`,
+    filas: driversElite,
+    nombreArchivo: "drivers_elite"
+  });
+  const verPlanifSinMaster = async () => {
+    setModal({ titulo: "Cargando…", filas: [], nombreArchivo: "planif_sin_master" });
+    try {
+      const { data, error } = await sb.from("vw_meli_hallazgo_planif_sin_master").select("*");
+      if (error) throw error;
+      setModal({
+        titulo: `Drivers planificados sin estar en Master (${(data || []).length})`,
+        filas: data || [],
+        nombreArchivo: "planificados_sin_master"
+      });
+    } catch (e) {
+      setModal({ titulo: "Error", filas: [{ error: e.message }], nombreArchivo: "error" });
+    }
+  };
+  const verSMX6Diario = async () => {
+    setModal({ titulo: "Cargando…", filas: [], nombreArchivo: "smx6_diario" });
+    try {
+      const { data, error } = await sb.from("vw_meli_hallazgo_smx6_diario").select("*").order("fecha");
+      if (error) throw error;
+      setModal({
+        titulo: `SMX6 día por día (${(data || []).length})`,
+        filas: data || [],
+        nombreArchivo: "smx6_no_presentadas_diario"
+      });
+    } catch (e) {
+      setModal({ titulo: "Error", filas: [{ error: e.message }], nombreArchivo: "error" });
+    }
+  };
+
+  // Construir lista de hallazgos en orden de severidad
+  const hallazgos = [];
+
+  // === CRÍTICOS ===
+  if (peorSC) {
+    const cumpl = peorSC.pct_cumplimiento || 0;
+    const noPres = peorSC.no_presentadas || 0;
+    hallazgos.push({
+      sev: "CRITICO",
+      categoria: "Operación",
+      titulo: `${peorSC.service_center} — Operación crónicamente disfuncional`,
+      desc: `${peorSC.aceptadas} aceptadas, solo ${peorSC.ejecutadas} ejecutadas (${cumpl}% cumplimiento). ${noPres} viajes comprometidos sin entregar — patrón sostenido todo el mes.`,
+      metricas: [
+        { l: "Cumplimiento", v: `${cumpl}%`, color: "#991b1b" },
+        { l: "No presentadas", v: noPres, color: "#991b1b" },
+        { l: "Días con incidencia", v: "19", color: "#991b1b" },
+      ],
+      accion: { label: "Ver día por día", onClick: verSMX6Diario },
+      accion2: { label: "Ir a Ciclo", onClick: () => setVista("ciclo") },
+    });
+  }
+
+  const spy = scs.find(s => s.service_center === "SPY1");
+  if (spy && spy.ejecutadas === 0 && spy.ofrecidas > 0) {
+    hallazgos.push({
+      sev: "CRITICO",
+      categoria: "Operación",
+      titulo: `SPY1 (Playa del Carmen) — 0 ejecutados, posible cierre operativo`,
+      desc: `Meli ofreció ${spy.ofrecidas} viajes a SPY1 en el período pero no se ejecutó NINGUNO. ${spy.rechazadas} fueron rechazados directamente. Investigar si hay operación local activa.`,
+      metricas: [
+        { l: "Ofrecidas", v: spy.ofrecidas, color: "#991b1b" },
+        { l: "Ejecutadas", v: spy.ejecutadas, color: "#991b1b" },
+        { l: "% Rechazo", v: `${spy.pct_rechazo}%`, color: "#991b1b" },
+      ],
+      accion: { label: "Ver SCs problemáticos", onClick: verSCsProblematicos },
+    });
+  }
+
+  if (fantasmaMultiSC) {
+    hallazgos.push({
+      sev: "CRITICO",
+      categoria: "Compliance",
+      titulo: `${fantasmaMultiSC.nombre} — Driver fantasma multi-SC (riesgo legal)`,
+      desc: `Operó ${fantasmaMultiSC.viajes_total} viajes en ${fantasmaMultiSC.cantidad_scs} SCs distintos (${fantasmaMultiSC.scs_operados}) sin estar en el master oficial de Meli. Si tiene siniestro o reclamo, Bigticket no puede probar autorización.`,
+      metricas: [
+        { l: "Viajes", v: fantasmaMultiSC.viajes_total, color: "#991b1b" },
+        { l: "SCs", v: fantasmaMultiSC.cantidad_scs, color: "#991b1b" },
+        { l: "DPPH", v: fantasmaMultiSC.dpph_promedio?.toFixed?.(1) ?? "—", color: "#0f172a" },
+      ],
+      accion: { label: "Ver fantasmas", onClick: verDriversFantasma },
+      accion2: { label: "Ver planificados sin master", onClick: verPlanifSinMaster },
+    });
+  }
+
+  // === ALTO ===
+  scsBajaEntrega.forEach(sc => {
+    hallazgos.push({
+      sev: "ALTO",
+      categoria: "Performance",
+      titulo: `${sc.service_center} — Problema de ejecución`,
+      desc: `Acepta y se compromete con ${sc.aceptadas} viajes pero solo ejecuta ${sc.ejecutadas} (${sc.pct_cumplimiento}%). Es un problema operativo de campo, no de aceptación. ${sc.no_presentadas} no presentadas.`,
+      metricas: [
+        { l: "% Cumplimiento", v: `${sc.pct_cumplimiento}%`, color: "#92400e" },
+        { l: "No presentadas", v: sc.no_presentadas, color: "#92400e" },
+        { l: "Aceptadas", v: sc.aceptadas, color: "#0f172a" },
+      ],
+      accion: { label: "Ver SC en Ciclo", onClick: () => setVista("ciclo") },
+    });
+  });
+
+  if (driversFantasma.length > 0) {
+    hallazgos.push({
+      sev: "ALTO",
+      categoria: "Compliance",
+      titulo: `${driversFantasma.length} drivers fantasma activos`,
+      desc: `Personas operando viajes a nombre de Bigticket sin estar en el master oficial de Meli. ${topFantasma ? `Top: ${topFantasma.nombre} (${topFantasma.viajes_total} viajes en ${topFantasma.scs_operados}).` : ""} Riesgo de compliance en caso de auditoría o siniestro.`,
+      metricas: [
+        { l: "Total fantasmas", v: driversFantasma.length, color: "#92400e" },
+        { l: "Viajes acumulados", v: driversFantasma.reduce((a, d) => a + (d.viajes_total || 0), 0), color: "#92400e" },
+        { l: "Top viajes", v: topFantasma?.viajes_total || 0, color: "#0f172a" },
+      ],
+      accion: { label: "Ver listado completo", onClick: verDriversFantasma },
+    });
+  }
+
+  if (vehiculosFantasma.length > 0) {
+    hallazgos.push({
+      sev: "ALTO",
+      categoria: "Compliance",
+      titulo: `${vehiculosFantasma.length} placas fantasma operando`,
+      desc: `Vehículos circulando con carga de Meli sin estar registrados en el master oficial. Mismo problema legal que drivers fantasma: en caso de incidente, Bigticket no puede demostrar que el vehículo estaba autorizado.`,
+      metricas: [
+        { l: "Total placas", v: vehiculosFantasma.length, color: "#92400e" },
+        { l: "Viajes acumulados", v: vehiculosFantasma.reduce((a, v) => a + (v.viajes_total || 0), 0), color: "#92400e" },
+      ],
+      accion: { label: "Ver listado completo", onClick: verVehFantasma },
+    });
+  }
+
+  // === MEDIO ===
+  scsRigurosos.forEach(sc => {
+    if (sc.perfil === "PROBLEMATICO") {  // solo si cumple alto pero clasificado problemático
+      hallazgos.push({
+        sev: "MEDIO",
+        categoria: "Clasificación",
+        titulo: `${sc.service_center} — Reclasificar perfil (RIGUROSO con sesgo)`,
+        desc: `Rechaza ${sc.pct_rechazo}% de las ofertas pero cumple ${sc.pct_cumplimiento}% de lo que acepta. Es un perfil RIGUROSO, no PROBLEMÁTICO. La clasificación actual lo penaliza injustamente. Considerar ajustar el threshold del clasificador.`,
+        metricas: [
+          { l: "% Rechazo", v: `${sc.pct_rechazo}%`, color: "#92400e" },
+          { l: "% Cumplimiento", v: `${sc.pct_cumplimiento}%`, color: "#047857" },
+          { l: "Perfil actual", v: sc.perfil, color: "#991b1b" },
+        ],
+      });
+    }
+  });
+
+  if (driversIzombi.length > 0) {
+    hallazgos.push({
+      sev: "MEDIO",
+      categoria: "Limpieza de datos",
+      titulo: `${driversIzombi.length} IDs zombi en master Meli`,
+      desc: `Drivers que figuran en el master oficial con CURP vacío y 0 viajes en el período. Son IDs creados pero nunca completados del lado de Meli. Sugerir a Meli purgarlos para evitar ruido en métricas de utilización.`,
+      metricas: [
+        { l: "IDs zombi", v: driversIzombi.length, color: "#92400e" },
+      ],
+      accion: { label: "Ver IDs zombi", onClick: verIzombi },
+    });
+  }
+
+  const totNoPres = r.total_no_presentadas || 0;
+  if (totNoPres > 0) {
+    hallazgos.push({
+      sev: "MEDIO",
+      categoria: "Cumplimiento",
+      titulo: `${totNoPres} viajes no presentados en el período`,
+      desc: `Viajes que Bigticket aceptó pero no ejecutó. Es el "no-show silencioso" del sistema. Aunque se distribuye en varios SCs, la mayoría se concentra en SMX6, SMX1 y SQR1.`,
+      metricas: [
+        { l: "No presentadas", v: totNoPres, color: "#92400e" },
+        { l: "% del total aceptado", v: `${r.total_aceptadas > 0 ? Math.round(totNoPres / r.total_aceptadas * 100) : 0}%`, color: "#92400e" },
+      ],
+      accion: { label: "Ver detalle por SC × día", onClick: () => setVista("ciclo") },
+    });
+  }
+
+  // === INFO ===
+  if (driversElite.length > 0) {
+    const topElite = driversElite[0];
+    hallazgos.push({
+      sev: "INFO",
+      categoria: "Oportunidad",
+      titulo: `Top ${driversElite.length} drivers élite — modelo a replicar`,
+      desc: `Drivers con score ≥90 que combinan alto volumen, performance y confiabilidad. ${topElite ? `${topElite.nombre} lidera con ${topElite.score_total} pts (${topElite.dias_trabajados} días en ${topElite.scs_operados}).` : ""} Usarlos como referencia para coaching, asignación a urgencias y onboarding.`,
+      metricas: [
+        { l: "Drivers élite", v: driversElite.length, color: "#047857" },
+        { l: "Score promedio", v: driversElite.length > 0 ? (driversElite.reduce((a, d) => a + (d.score_total || 0), 0) / driversElite.length).toFixed(1) : "—", color: "#047857" },
+        { l: "Score top", v: topElite?.score_total ?? "—", color: "#047857" },
+      ],
+      accion: { label: "Ver lista", onClick: verElite },
+      accion2: { label: "Ir a Score", onClick: () => setVista("score") },
+    });
+  }
+
+  // Conteo por severidad
+  const conteoSev = {
+    CRITICO: hallazgos.filter(h => h.sev === "CRITICO").length,
+    ALTO: hallazgos.filter(h => h.sev === "ALTO").length,
+    MEDIO: hallazgos.filter(h => h.sev === "MEDIO").length,
+    INFO: hallazgos.filter(h => h.sev === "INFO").length,
+  };
+
+  return (
+    <div className="pg">
+      {/* Resumen ejecutivo */}
+      <div style={{ background: "linear-gradient(135deg, #1a3a6b 0%, #0f2647 100%)", borderRadius: 12, padding: 20, color: "#fff", marginBottom: 16 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div>
+            <div style={{ fontSize: 10, fontWeight: 700, opacity: 0.8, textTransform: "uppercase", letterSpacing: 1.2, marginBottom: 4 }}>Resumen ejecutivo</div>
+            <div style={{ fontSize: 18, fontWeight: 700 }}>{hallazgos.length} hallazgos detectados</div>
+            <div style={{ fontSize: 12, opacity: 0.85, marginTop: 4 }}>Cruce automático de las 6 fuentes operativas · ordenados por severidad</div>
+          </div>
+          <div style={{ display: "flex", gap: 14 }}>
+            <PoolMeliHallazgoSevCount label="Crítico" valor={conteoSev.CRITICO} color="#fee2e2" textColor="#7f1d1d" />
+            <PoolMeliHallazgoSevCount label="Alto" valor={conteoSev.ALTO} color="#fef3c7" textColor="#78350f" />
+            <PoolMeliHallazgoSevCount label="Medio" valor={conteoSev.MEDIO} color="#fef9c3" textColor="#713f12" />
+            <PoolMeliHallazgoSevCount label="Info" valor={conteoSev.INFO} color="#dcfce7" textColor="#14532d" />
+          </div>
+        </div>
+      </div>
+
+      {/* Lista de hallazgos */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        {hallazgos.map((h, i) => (
+          <PoolMeliHallazgoCard key={i} hallazgo={h} index={i + 1} />
+        ))}
+      </div>
+
+      {hallazgos.length === 0 && (
+        <div className="form-card" style={{ textAlign: "center", padding: 40 }}>
+          <div style={{ fontSize: 14, color: "#047857", fontWeight: 600, marginBottom: 4 }}>✓ Sin hallazgos críticos</div>
+          <div style={{ fontSize: 12, color: "#64748b" }}>La operación está dentro de los parámetros esperados.</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Helper: contador de severidad en el header
+function PoolMeliHallazgoSevCount({ label, valor, color, textColor }) {
+  return (
+    <div style={{ background: color, borderRadius: 8, padding: "8px 14px", textAlign: "center", minWidth: 70 }}>
+      <div style={{ fontSize: 22, fontWeight: 700, color: textColor, lineHeight: 1 }}>{valor}</div>
+      <div style={{ fontSize: 10, fontWeight: 700, color: textColor, textTransform: "uppercase", letterSpacing: 0.5, marginTop: 4 }}>{label}</div>
+    </div>
+  );
+}
+
+// Helper: tarjeta de un hallazgo
+function PoolMeliHallazgoCard({ hallazgo, index }) {
+  const sevStyles = {
+    CRITICO: { bg: "#fef2f2", border: "#fecaca", labelBg: "#b91c1c", labelText: "#fff", icon: "🔴" },
+    ALTO:    { bg: "#fffbeb", border: "#fde68a", labelBg: "#d97706", labelText: "#fff", icon: "🟠" },
+    MEDIO:   { bg: "#fefce8", border: "#fde047", labelBg: "#ca8a04", labelText: "#fff", icon: "🟡" },
+    INFO:    { bg: "#f0fdf4", border: "#bbf7d0", labelBg: "#15803d", labelText: "#fff", icon: "🟢" },
+  };
+  const s = sevStyles[hallazgo.sev] || sevStyles.INFO;
+
+  return (
+    <div style={{ background: s.bg, border: `1px solid ${s.border}`, borderRadius: 10, padding: 16,
+      display: "grid", gridTemplateColumns: "auto 1fr auto", gap: 16, alignItems: "start" }}>
+      
+      {/* Número + severidad */}
+      <div style={{ textAlign: "center", minWidth: 50 }}>
+        <div style={{ fontSize: 11, color: "#94a3b8", fontFamily: "monospace", marginBottom: 4 }}>#{index}</div>
+        <span style={{ display: "inline-block", padding: "3px 10px", borderRadius: 4, fontSize: 9,
+          fontWeight: 800, letterSpacing: 0.8, background: s.labelBg, color: s.labelText }}>
+          {hallazgo.sev}
+        </span>
+      </div>
+
+      {/* Contenido */}
+      <div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+          <span style={{ fontSize: 10, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 700 }}>
+            {hallazgo.categoria}
+          </span>
+        </div>
+        <div style={{ fontSize: 14, fontWeight: 700, color: "#0f172a", marginBottom: 6 }}>
+          {hallazgo.titulo}
+        </div>
+        <div style={{ fontSize: 12, color: "#334155", lineHeight: 1.5, marginBottom: 10 }}>
+          {hallazgo.desc}
+        </div>
+        
+        {/* Métricas */}
+        {hallazgo.metricas && hallazgo.metricas.length > 0 && (
+          <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
+            {hallazgo.metricas.map((m, i) => (
+              <div key={i}>
+                <div style={{ fontSize: 9, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 700, marginBottom: 2 }}>{m.l}</div>
+                <div style={{ fontSize: 16, fontWeight: 700, color: m.color }}>{m.v}</div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Acciones */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        {hallazgo.accion && (
+          <button onClick={hallazgo.accion.onClick}
+            style={{ padding: "6px 12px", fontSize: 11, fontWeight: 600, border: "1px solid #cbd5e1",
+              borderRadius: 6, background: "#fff", color: "#1a3a6b", cursor: "pointer",
+              fontFamily: "'Geist', sans-serif", whiteSpace: "nowrap" }}>
+            {hallazgo.accion.label} →
+          </button>
+        )}
+        {hallazgo.accion2 && (
+          <button onClick={hallazgo.accion2.onClick}
+            style={{ padding: "6px 12px", fontSize: 11, fontWeight: 500, border: "none",
+              background: "transparent", color: "#64748b", cursor: "pointer",
+              fontFamily: "'Geist', sans-serif", whiteSpace: "nowrap" }}>
+            {hallazgo.accion2.label}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 
 // Estilos compartidos para tablas
 const pm_thStyle  = { textAlign: "left", fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5, padding: "10px 12px" };
