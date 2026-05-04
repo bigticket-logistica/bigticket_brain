@@ -165,6 +165,8 @@ const MODULOS_LABELS = {
 const USUARIOS = {
   "admin@bigticket.cl": { pass: "Admin2026!", rol: "superadmin", nombre: "Super Admin" },
   "cert@bigticket.mx":  { pass: "Cert2026!", rol: "certificacion", nombre: "Equipo Certificación" },
+  "adriana.giummarra@bigticket.cl": { pass: "adriana.2026", rol: "superadmin", nombre: "Adriana Giummarra" },
+  "nicole.vargas@bigticket.cl":     { pass: "nicole.2026",  rol: "superadmin", nombre: "Nicole Vargas" },
 };
 const COLUMNAS = [
   { id: "pendiente", label: "Validación MELI", color: "#92400e", bg: "#fef3c7", border: "#fde68a" },
