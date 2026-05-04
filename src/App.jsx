@@ -15999,6 +15999,7 @@ function PoolMeliCiclo({ scs, resumen, setModal, mesGlobal }) {
   const totNoPres = scs.reduce((a, s) => a + (s.no_presentadas || 0), 0);
   const totRech = scs.reduce((a, s) => a + (s.rechazadas || 0), 0);
   const totCanc = scs.reduce((a, s) => a + (s.canceladas || 0), 0);
+  const totPend = scs.reduce((a, s) => a + (s.pendientes || 0), 0);
   const conteoPorPerfil = (p) => scs.filter(s => s.perfil === p).length;
   const problematicos = scs.filter(s => s.perfil === "PROBLEMATICO");
 
@@ -16031,6 +16032,58 @@ function PoolMeliCiclo({ scs, resumen, setModal, mesGlobal }) {
         titulo: `Viajes CANCELADOS${tituloSC} (${(data || []).length})`,
         filas: data || [],
         nombreArchivo: filtroSC ? `canceladas_${filtroSC}` : "canceladas"
+      });
+    } catch (e) { setModal({ titulo: "Error", filas: [{ error: e.message }], nombreArchivo: "error" }); }
+  };
+
+  // Pendientes (último snapshot, sin respuesta del carrier)
+  const abrirPendientes = async (filtroSC = null) => {
+    if (!mesGlobal) return;
+    const tituloSC = filtroSC ? ` · ${filtroSC}` : "";
+    setModal({ titulo: `Cargando…`, filas: [], nombreArchivo: "pendientes" });
+    try {
+      const desde = `${mesGlobal.anio}-${String(mesGlobal.mes).padStart(2, '0')}-01`;
+      const ultDia = new Date(mesGlobal.anio, mesGlobal.mes, 0).getDate();
+      const hasta = `${mesGlobal.anio}-${String(mesGlobal.mes).padStart(2, '0')}-${ultDia}`;
+      // Traemos los pending del último snapshot por request_id
+      const { data: rawData, error } = await sb
+        .from("meli_travel_requests")
+        .select("request_id, facility_id, fecha, status, vehicle_type, fecha_snapshot, hora_snapshot, attributes")
+        .eq("status", "pending")
+        .gte("fecha", desde)
+        .lte("fecha", hasta)
+        .order("fecha_snapshot", { ascending: false })
+        .order("hora_snapshot", { ascending: false });
+      if (error) throw error;
+      // Dedup por request_id (último snapshot)
+      const seen = new Set();
+      let dedup = (rawData || []).filter(r => {
+        if (seen.has(r.request_id)) return false;
+        seen.add(r.request_id);
+        return true;
+      });
+      if (filtroSC) dedup = dedup.filter(r => r.facility_id === filtroSC);
+      // Calcular días pasados desde la fecha de operación
+      const hoy = new Date();
+      const filas = dedup.map(r => {
+        const fechaOp = new Date(r.fecha);
+        const diasPasados = Math.floor((hoy - fechaOp) / (1000 * 60 * 60 * 24));
+        const fleet = r.attributes && Array.isArray(r.attributes) && r.attributes.some(a => a.id === 'sdd') ? 'SDD' : 'VARIABLE';
+        return {
+          request_id: r.request_id,
+          service_center: r.facility_id,
+          fecha_operacion: r.fecha,
+          dias_desde_operacion: diasPasados,
+          vehicle_type: r.vehicle_type,
+          fleet,
+          ultimo_snapshot: `${r.fecha_snapshot} ${r.hora_snapshot || ''}`,
+          critico: diasPasados > 0 ? 'SÍ' : 'NO'
+        };
+      });
+      setModal({
+        titulo: `Viajes PENDIENTES sin respuesta${tituloSC} (${filas.length})`,
+        filas,
+        nombreArchivo: filtroSC ? `pendientes_${filtroSC}` : "pendientes"
       });
     } catch (e) { setModal({ titulo: "Error", filas: [{ error: e.message }], nombreArchivo: "error" }); }
   };
@@ -16178,7 +16231,7 @@ function PoolMeliCiclo({ scs, resumen, setModal, mesGlobal }) {
         </div>
 
         {/* Pérdidas */}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, marginTop: 24, paddingTop: 16, borderTop: "1px dashed #e4e7ec" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10, marginTop: 24, paddingTop: 16, borderTop: "1px dashed #e4e7ec" }}>
           <div onClick={() => abrirRechazadas()}
             style={{ background: "linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%)", borderRadius: 8, padding: 14, cursor: "pointer", border: "1px solid #fecaca" }}>
             <div style={{ fontSize: 10, fontWeight: 700, color: "#991b1b", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4, display: "flex", justifyContent: "space-between" }}>
@@ -16194,6 +16247,14 @@ function PoolMeliCiclo({ scs, resumen, setModal, mesGlobal }) {
             </div>
             <div style={{ fontSize: 22, fontWeight: 700, color: "#475569" }}>{totCanc.toLocaleString()}</div>
             <div style={{ fontSize: 10, color: "#64748b", marginTop: 2 }}>{totOfr > 0 ? Math.round(totCanc / totOfr * 100) : 0}% de ofrecidas</div>
+          </div>
+          <div onClick={() => abrirPendientes()}
+            style={{ background: "linear-gradient(135deg, #faf5ff 0%, #f3e8ff 100%)", borderRadius: 8, padding: 14, cursor: "pointer", border: "1px solid #e9d5ff" }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: "#6b21a8", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4, display: "flex", justifyContent: "space-between" }}>
+              <span>Pendientes</span><span style={{ fontSize: 9, opacity: 0.7 }}>VER →</span>
+            </div>
+            <div style={{ fontSize: 22, fontWeight: 700, color: "#6b21a8" }}>{totPend.toLocaleString()}</div>
+            <div style={{ fontSize: 10, color: "#7e22ce", marginTop: 2 }}>sin respuesta del carrier</div>
           </div>
           <div onClick={() => abrirNoPresentadas()}
             style={{ background: "linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%)", borderRadius: 8, padding: 14, cursor: "pointer", border: "1px solid #fde68a" }}>
@@ -16475,6 +16536,8 @@ function PoolMeliHallazgos({ drivers, vehiculos, scs, scores, resumen, setModal,
 
   // SDD no realizados por SC (se carga según el mes global)
   const [sddNoRealizados, setSddNoRealizados] = useState([]);
+  // Pending viejos (sin respuesta del carrier en fechas pasadas)
+  const [pendientesViejos, setPendientesViejos] = useState([]);
   useEffect(() => {
     if (!mesGlobal) return;
     let alive = true;
@@ -16483,20 +16546,29 @@ function PoolMeliHallazgos({ drivers, vehiculos, scs, scores, resumen, setModal,
         const desde = `${mesGlobal.anio}-${String(mesGlobal.mes).padStart(2, '0')}-01`;
         const ultDia = new Date(mesGlobal.anio, mesGlobal.mes, 0).getDate();
         const hasta = `${mesGlobal.anio}-${String(mesGlobal.mes).padStart(2, '0')}-${ultDia}`;
-        const { data, error } = await sb.rpc("get_hallazgo_sdd_no_realizados", {
-          fecha_desde: desde,
-          fecha_hasta: hasta,
-        });
+        const [rsdd, rpend] = await Promise.all([
+          sb.rpc("get_hallazgo_sdd_no_realizados", { fecha_desde: desde, fecha_hasta: hasta }),
+          sb.rpc("get_hallazgo_pendientes_viejos", { fecha_desde: desde, fecha_hasta: hasta }),
+        ]);
         if (!alive) return;
-        if (error) {
-          console.error("Error cargando SDD no realizados:", error);
+        if (rsdd.error) {
+          console.error("Error cargando SDD no realizados:", rsdd.error);
           setSddNoRealizados([]);
         } else {
-          setSddNoRealizados(data || []);
+          setSddNoRealizados(rsdd.data || []);
+        }
+        if (rpend.error) {
+          console.error("Error cargando pendientes viejos:", rpend.error);
+          setPendientesViejos([]);
+        } else {
+          setPendientesViejos(rpend.data || []);
         }
       } catch (e) {
-        console.error("Error SDD no realizados:", e);
-        if (alive) setSddNoRealizados([]);
+        console.error("Error cargando hallazgos del mes:", e);
+        if (alive) {
+          setSddNoRealizados([]);
+          setPendientesViejos([]);
+        }
       }
     })();
     return () => { alive = false; };
@@ -16504,11 +16576,27 @@ function PoolMeliHallazgos({ drivers, vehiculos, scs, scores, resumen, setModal,
 
   const totalSDDNoRealizadas = sddNoRealizados.reduce((a, s) => a + Number(s.sdd_no_realizadas || 0), 0);
   const peorSCsdd = sddNoRealizados[0];
+  
+  // Pendientes con fecha de operación pasada (críticos)
+  const pendientesPasados = pendientesViejos.filter(p => Number(p.dias_pasados) > 0);
+  const totalPendPasados = pendientesPasados.length;
+  // Agrupar por SC para detectar concentración
+  const pendPorSC = {};
+  pendientesPasados.forEach(p => {
+    pendPorSC[p.service_center] = (pendPorSC[p.service_center] || 0) + 1;
+  });
+  const peorSCpend = Object.entries(pendPorSC).sort((a, b) => b[1] - a[1])[0];
 
   const verSDDNoRealizados = () => setModal({
     titulo: `SDD no realizadas por SC · ${NOMBRES_MES[mesGlobal.mes - 1]} ${mesGlobal.anio}`,
     filas: sddNoRealizados,
     nombreArchivo: `sdd_no_realizados_${mesGlobal.anio}_${mesGlobal.mes}`,
+  });
+  
+  const verPendientesViejos = () => setModal({
+    titulo: `Pending sin respuesta · ${NOMBRES_MES[mesGlobal.mes - 1]} ${mesGlobal.anio}`,
+    filas: pendientesViejos,
+    nombreArchivo: `pendientes_${mesGlobal.anio}_${mesGlobal.mes}`,
   });
 
   const verSCsProblematicos = () => setModal({ titulo: `SCs Problemáticos (${scsProblematicos.length})`, filas: scsProblematicos, nombreArchivo: "scs_problematicos" });
@@ -16551,6 +16639,26 @@ function PoolMeliHallazgos({ drivers, vehiculos, scs, scores, resumen, setModal,
         { l: "Total MX", v: totalSDDNoRealizadas, color: "#92400e" },
       ],
       accion: { label: "Ver todos los SCs", onClick: verSDDNoRealizados },
+    });
+  }
+
+  // ─── HALLAZGO CRÍTICO: Pendientes con fecha pasada (sin respuesta del carrier) ──
+  if (totalPendPasados > 0) {
+    const fechasMasViejas = [...pendientesPasados].sort((a, b) => Number(b.dias_pasados) - Number(a.dias_pasados));
+    const masVieja = fechasMasViejas[0];
+    hallazgos.push({
+      sev: "CRITICO", categoria: "SLA Carrier",
+      titulo: `${totalPendPasados} viajes pending sin respuesta · fecha de operación ya pasó`,
+      desc: `MELI ofreció ${totalPendPasados} viajes que Bigticket NUNCA respondió (ni aceptó ni rechazó). ` +
+            `Las fechas de operación ya pasaron — son ofertas perdidas y posible incumplimiento de SLA. ` +
+            (peorSCpend ? `Concentración: ${peorSCpend[0]} (${peorSCpend[1]} viajes). ` : '') +
+            `El más viejo es del ${masVieja.fecha_operacion} (${masVieja.dias_pasados} días sin respuesta).`,
+      metricas: [
+        { l: "Pending vencidos", v: totalPendPasados, color: "#991b1b" },
+        { l: "SC con más casos", v: peorSCpend ? peorSCpend[0] : "—", color: "#991b1b" },
+        { l: "Días más antiguo", v: masVieja.dias_pasados, color: "#991b1b" },
+      ],
+      accion: { label: "Ver lista completa", onClick: verPendientesViejos },
     });
   }
 
