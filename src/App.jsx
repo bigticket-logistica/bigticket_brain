@@ -15976,50 +15976,29 @@ function PoolMeliCiclo({ scs: scsInicial, resumen, setModal }) {
         setScsLocal((data || []).sort((a, b) => (b.ofrecidas || 0) - (a.ofrecidas || 0)));
 
         // 2. Split de no presentadas por fleet (SDD vs VARIABLE)
-        // Lo hacemos con dos queries simples al frontend
-        const [{ data: trData }, { data: cmData }] = await Promise.all([
-          sb.from("meli_travel_requests")
-            .select("request_id, status, attributes, fecha, fecha_snapshot, hora_snapshot")
-            .eq("status", "accepted")
-            .gte("fecha", desde)
-            .lte("fecha", hasta),
-          sb.from("vw_meli_carrier_unified")
-            .select("vehiculo")
-            .gte("fecha", desde)
-            .lte("fecha", hasta),
-        ]);
+        // Usa la función SQL get_no_presentadas_por_fleet (más confiable que cálculo en frontend)
+        const { data: fleetData, error: fleetError } = await sb.rpc("get_no_presentadas_por_fleet", {
+          fecha_desde: desde,
+          fecha_hasta: hasta,
+        });
         if (!alive) return;
-        
-        // Dedup por request_id (último snapshot)
-        const drMap = new Map();
-        (trData || []).forEach(r => {
-          const prev = drMap.get(r.request_id);
-          const key = `${r.fecha_snapshot}_${r.hora_snapshot}`;
-          if (!prev || `${prev.fecha_snapshot}_${prev.hora_snapshot}` < key) {
-            drMap.set(r.request_id, r);
-          }
-        });
-        
-        // Clasificar aceptadas
-        let acSDD = 0, acVAR = 0;
-        drMap.forEach(r => {
-          const attrs = r.attributes || [];
-          const isSDD = Array.isArray(attrs) && attrs.some(a => a.id === 'sdd');
-          if (isSDD) acSDD++;
-          else acVAR++;
-        });
-        
-        // Clasificar ejecutadas
-        let ejSDD = 0, ejVAR = 0;
-        (cmData || []).forEach(r => {
-          if ((r.vehiculo || "").toUpperCase().includes("SDD")) ejSDD++;
-          else ejVAR++;
-        });
-        
-        if (alive) {
+        if (fleetError) {
+          console.error("Error cargando split fleet:", fleetError);
+          setSplitFleet({ sdd: null, variable: null });
+        } else {
+          const sddRow = (fleetData || []).find(r => r.fleet_type === 'SDD');
+          const varRow = (fleetData || []).find(r => r.fleet_type === 'VARIABLE');
           setSplitFleet({
-            sdd: { aceptadas: acSDD, ejecutadas: ejSDD, no_presentadas: Math.max(0, acSDD - ejSDD) },
-            variable: { aceptadas: acVAR, ejecutadas: ejVAR, no_presentadas: Math.max(0, acVAR - ejVAR) },
+            sdd: sddRow ? { 
+              aceptadas: Number(sddRow.aceptadas), 
+              ejecutadas: Number(sddRow.ejecutadas), 
+              no_presentadas: Number(sddRow.no_presentadas) 
+            } : null,
+            variable: varRow ? { 
+              aceptadas: Number(varRow.aceptadas), 
+              ejecutadas: Number(varRow.ejecutadas), 
+              no_presentadas: Number(varRow.no_presentadas) 
+            } : null,
           });
         }
       } catch (e) {
