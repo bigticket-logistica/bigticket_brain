@@ -15921,15 +15921,72 @@ function PoolMeliDetalleRegistro({ tipo, registro, onVolver }) {
 }
 
 // ── CICLO con embudo moderno + filtros mejorados ──────────────────────────
-function PoolMeliCiclo({ scs, resumen, setModal }) {
+function PoolMeliCiclo({ scs: scsInicial, resumen, setModal }) {
   const [perfilFiltro, setPerfilFiltro] = useState("TODOS");
   const r = resumen || {};
 
+  // ─── Selector de mes ─────────────────────────────────────────────────────
+  const [mesesDisponibles, setMesesDisponibles] = useState([]);
+  const [mesSeleccionado, setMesSeleccionado] = useState(() => {
+    const hoy = new Date();
+    return { anio: hoy.getFullYear(), mes: hoy.getMonth() + 1 };
+  });
+  const [scsLocal, setScsLocal] = useState(scsInicial || []);
+  const [loadingMes, setLoadingMes] = useState(false);
+
+  // Cargar meses disponibles al montar
+  useEffect(() => {
+    (async () => {
+      try {
+        const { data, error } = await sb.rpc("get_meses_con_datos_meli");
+        if (error) throw error;
+        setMesesDisponibles(data || []);
+        // Si no hay datos del mes actual, ir al mes más reciente con datos
+        const hoy = new Date();
+        const anioActual = hoy.getFullYear(), mesActual = hoy.getMonth() + 1;
+        const tieneActual = (data || []).some(m => m.anio === anioActual && m.mes === mesActual);
+        if (!tieneActual && data && data.length > 0) {
+          setMesSeleccionado({ anio: data[0].anio, mes: data[0].mes });
+        }
+      } catch (e) {
+        console.error("Error cargando meses:", e);
+      }
+    })();
+  }, []);
+
+  // Recargar datos cuando cambia el mes seleccionado
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      setLoadingMes(true);
+      try {
+        const desde = `${mesSeleccionado.anio}-${String(mesSeleccionado.mes).padStart(2, '0')}-01`;
+        const ultDia = new Date(mesSeleccionado.anio, mesSeleccionado.mes, 0).getDate();
+        const hasta = `${mesSeleccionado.anio}-${String(mesSeleccionado.mes).padStart(2, '0')}-${ultDia}`;
+        const { data, error } = await sb.rpc("get_ciclo_aceptacion_sc", {
+          fecha_desde: desde,
+          fecha_hasta: hasta,
+        });
+        if (!alive) return;
+        if (error) throw error;
+        setScsLocal((data || []).sort((a, b) => (b.ofrecidas || 0) - (a.ofrecidas || 0)));
+      } catch (e) {
+        console.error("Error cargando ciclo del mes:", e);
+        if (alive) setScsLocal([]);
+      } finally {
+        if (alive) setLoadingMes(false);
+      }
+    })();
+    return () => { alive = false; };
+  }, [mesSeleccionado.anio, mesSeleccionado.mes]);
+
+  const scs = scsLocal;  // alias para no cambiar todo el código de abajo
+
   const filtrados = perfilFiltro === "TODOS" ? scs : scs.filter(s => s.perfil === perfilFiltro);
-  const totOfr = r.total_ofrecidas || scs.reduce((a, s) => a + (s.ofrecidas || 0), 0);
-  const totAcc = r.total_aceptadas || scs.reduce((a, s) => a + (s.aceptadas || 0), 0);
-  const totEjec = r.total_ejecutadas || scs.reduce((a, s) => a + (s.ejecutadas || 0), 0);
-  const totNoPres = r.total_no_presentadas || scs.reduce((a, s) => a + (s.no_presentadas || 0), 0);
+  const totOfr = scs.reduce((a, s) => a + (s.ofrecidas || 0), 0);
+  const totAcc = scs.reduce((a, s) => a + (s.aceptadas || 0), 0);
+  const totEjec = scs.reduce((a, s) => a + (s.ejecutadas || 0), 0);
+  const totNoPres = scs.reduce((a, s) => a + (s.no_presentadas || 0), 0);
   const totRech = scs.reduce((a, s) => a + (s.rechazadas || 0), 0);
   const totCanc = scs.reduce((a, s) => a + (s.canceladas || 0), 0);
   const conteoPorPerfil = (p) => scs.filter(s => s.perfil === p).length;
@@ -16046,6 +16103,42 @@ function PoolMeliCiclo({ scs, resumen, setModal }) {
 
   return (
     <div className="pg">
+      {/* Selector de mes */}
+      <div style={{
+        display: "flex", alignItems: "center", justifyContent: "space-between",
+        background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10,
+        padding: "12px 16px", marginBottom: 16,
+      }}>
+        <div>
+          <div style={{ fontSize: 11, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>
+            Período de análisis
+          </div>
+          <div style={{ fontSize: 14, fontWeight: 600, color: "#1a3a6b" }}>
+            {NOMBRES_MES[mesSeleccionado.mes - 1]} {mesSeleccionado.anio}
+            {loadingMes && <span style={{ fontSize: 11, color: "#94a3b8", marginLeft: 8 }}>cargando...</span>}
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", maxWidth: "60%", justifyContent: "flex-end" }}>
+          {mesesDisponibles.map(m => {
+            const active = m.anio === mesSeleccionado.anio && m.mes === mesSeleccionado.mes;
+            return (
+              <button key={`${m.anio}-${m.mes}`}
+                onClick={() => setMesSeleccionado({ anio: m.anio, mes: m.mes })}
+                style={{
+                  padding: "6px 12px", fontSize: 11, fontWeight: 600, borderRadius: 6,
+                  border: active ? "none" : "1px solid #e4e7ec",
+                  background: active ? "#1a3a6b" : "#fff",
+                  color: active ? "#fff" : "#475569",
+                  cursor: "pointer", fontFamily: "'Geist', sans-serif",
+                }}>
+                {NOMBRES_MES[m.mes - 1].substring(0, 3)} {m.anio}
+                <span style={{ marginLeft: 4, opacity: 0.6 }}>({m.dias_con_datos}d)</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
       {/* Embudo moderno */}
       <div className="form-card" style={{ background: "linear-gradient(180deg, #fff 0%, #f8fafc 100%)" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 24 }}>
