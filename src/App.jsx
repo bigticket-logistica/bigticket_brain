@@ -15933,6 +15933,8 @@ function PoolMeliCiclo({ scs: scsInicial, resumen, setModal }) {
   });
   const [scsLocal, setScsLocal] = useState(scsInicial || []);
   const [loadingMes, setLoadingMes] = useState(false);
+  // Split de no presentadas por fleet (SDD vs VARIABLE)
+  const [splitFleet, setSplitFleet] = useState({ sdd: null, variable: null });
 
   // Cargar meses disponibles al montar
   useEffect(() => {
@@ -15963,6 +15965,8 @@ function PoolMeliCiclo({ scs: scsInicial, resumen, setModal }) {
         const desde = `${mesSeleccionado.anio}-${String(mesSeleccionado.mes).padStart(2, '0')}-01`;
         const ultDia = new Date(mesSeleccionado.anio, mesSeleccionado.mes, 0).getDate();
         const hasta = `${mesSeleccionado.anio}-${String(mesSeleccionado.mes).padStart(2, '0')}-${ultDia}`;
+        
+        // 1. Ciclo por SC
         const { data, error } = await sb.rpc("get_ciclo_aceptacion_sc", {
           fecha_desde: desde,
           fecha_hasta: hasta,
@@ -15970,9 +15974,60 @@ function PoolMeliCiclo({ scs: scsInicial, resumen, setModal }) {
         if (!alive) return;
         if (error) throw error;
         setScsLocal((data || []).sort((a, b) => (b.ofrecidas || 0) - (a.ofrecidas || 0)));
+
+        // 2. Split de no presentadas por fleet (SDD vs VARIABLE)
+        // Lo hacemos con dos queries simples al frontend
+        const [{ data: trData }, { data: cmData }] = await Promise.all([
+          sb.from("meli_travel_requests")
+            .select("request_id, status, attributes, fecha, fecha_snapshot, hora_snapshot")
+            .eq("status", "accepted")
+            .gte("fecha", desde)
+            .lte("fecha", hasta),
+          sb.from("vw_meli_carrier_unified")
+            .select("vehiculo")
+            .gte("fecha", desde)
+            .lte("fecha", hasta),
+        ]);
+        if (!alive) return;
+        
+        // Dedup por request_id (último snapshot)
+        const drMap = new Map();
+        (trData || []).forEach(r => {
+          const prev = drMap.get(r.request_id);
+          const key = `${r.fecha_snapshot}_${r.hora_snapshot}`;
+          if (!prev || `${prev.fecha_snapshot}_${prev.hora_snapshot}` < key) {
+            drMap.set(r.request_id, r);
+          }
+        });
+        
+        // Clasificar aceptadas
+        let acSDD = 0, acVAR = 0;
+        drMap.forEach(r => {
+          const attrs = r.attributes || [];
+          const isSDD = Array.isArray(attrs) && attrs.some(a => a.id === 'sdd');
+          if (isSDD) acSDD++;
+          else acVAR++;
+        });
+        
+        // Clasificar ejecutadas
+        let ejSDD = 0, ejVAR = 0;
+        (cmData || []).forEach(r => {
+          if ((r.vehiculo || "").toUpperCase().includes("SDD")) ejSDD++;
+          else ejVAR++;
+        });
+        
+        if (alive) {
+          setSplitFleet({
+            sdd: { aceptadas: acSDD, ejecutadas: ejSDD, no_presentadas: Math.max(0, acSDD - ejSDD) },
+            variable: { aceptadas: acVAR, ejecutadas: ejVAR, no_presentadas: Math.max(0, acVAR - ejVAR) },
+          });
+        }
       } catch (e) {
         console.error("Error cargando ciclo del mes:", e);
-        if (alive) setScsLocal([]);
+        if (alive) {
+          setScsLocal([]);
+          setSplitFleet({ sdd: null, variable: null });
+        }
       } finally {
         if (alive) setLoadingMes(false);
       }
@@ -16228,6 +16283,42 @@ function PoolMeliCiclo({ scs: scsInicial, resumen, setModal }) {
             </div>
             <div style={{ fontSize: 22, fontWeight: 700, color: "#92400e" }}>{totNoPres.toLocaleString()}</div>
             <div style={{ fontSize: 10, color: "#92400e", marginTop: 2 }}>aceptadas - ejecutadas</div>
+            
+            {/* Split SDD vs Variable */}
+            {splitFleet.sdd && splitFleet.variable && (
+              <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px dashed #fde68a", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                {/* SDD */}
+                <div style={{ background: "rgba(255,255,255,0.6)", borderRadius: 6, padding: "8px 10px" }}>
+                  <div style={{ fontSize: 9, fontWeight: 700, color: "#0f172a", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 2 }}>
+                    SDD <span style={{ color: "#94a3b8", fontWeight: 500 }}>(Súper Dedicada)</span>
+                  </div>
+                  <div style={{ fontSize: 18, fontWeight: 700, color: "#92400e", lineHeight: 1 }}>
+                    {splitFleet.sdd.no_presentadas.toLocaleString()}
+                  </div>
+                  <div style={{ fontSize: 9, color: "#92400e", marginTop: 3 }}>
+                    {splitFleet.sdd.aceptadas} acept · {splitFleet.sdd.ejecutadas} ejec
+                  </div>
+                  <div style={{ fontSize: 9, color: splitFleet.sdd.aceptadas > 0 && (splitFleet.sdd.no_presentadas / splitFleet.sdd.aceptadas) < 0.10 ? "#047857" : "#92400e", fontWeight: 600, marginTop: 1 }}>
+                    {splitFleet.sdd.aceptadas > 0 ? ((splitFleet.sdd.no_presentadas / splitFleet.sdd.aceptadas) * 100).toFixed(1) : "0.0"}% no-show
+                  </div>
+                </div>
+                {/* Variable */}
+                <div style={{ background: "rgba(255,255,255,0.6)", borderRadius: 6, padding: "8px 10px" }}>
+                  <div style={{ fontSize: 9, fontWeight: 700, color: "#0f172a", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 2 }}>
+                    Variable <span style={{ color: "#94a3b8", fontWeight: 500 }}>(Flota libre)</span>
+                  </div>
+                  <div style={{ fontSize: 18, fontWeight: 700, color: "#92400e", lineHeight: 1 }}>
+                    {splitFleet.variable.no_presentadas.toLocaleString()}
+                  </div>
+                  <div style={{ fontSize: 9, color: "#92400e", marginTop: 3 }}>
+                    {splitFleet.variable.aceptadas} acept · {splitFleet.variable.ejecutadas} ejec
+                  </div>
+                  <div style={{ fontSize: 9, color: splitFleet.variable.aceptadas > 0 && (splitFleet.variable.no_presentadas / splitFleet.variable.aceptadas) < 0.10 ? "#047857" : "#92400e", fontWeight: 600, marginTop: 1 }}>
+                    {splitFleet.variable.aceptadas > 0 ? ((splitFleet.variable.no_presentadas / splitFleet.variable.aceptadas) * 100).toFixed(1) : "0.0"}% no-show
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </div>
