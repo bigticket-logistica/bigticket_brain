@@ -15152,22 +15152,54 @@ function IndicadoresOperacionalesMX({ usuario }) {
   const [scs, setSCs] = useState([]);
   const [scores, setScores] = useState([]);
   const [modal, setModal] = useState(null);
+  
+  // ─── SELECTOR GLOBAL DE MES ─────────────────────────────────────────────
+  const [mesesDisponibles, setMesesDisponibles] = useState([]);
+  const [mesGlobal, setMesGlobal] = useState(() => {
+    const hoy = new Date();
+    return { anio: hoy.getFullYear(), mes: hoy.getMonth() + 1 };
+  });
 
   // Estado para vista detalle in-place (driver o vehículo)
   const [detalle, setDetalle] = useState(null); // { tipo: 'driver'|'vehiculo', registro: {...} }
 
+  // Cargar meses disponibles UNA sola vez al montar
+  useEffect(() => {
+    (async () => {
+      try {
+        const { data, error } = await sb.rpc("get_meses_con_datos_meli");
+        if (error) throw error;
+        setMesesDisponibles(data || []);
+        // Si no hay datos del mes actual, ir al mes más reciente
+        const hoy = new Date();
+        const anioActual = hoy.getFullYear(), mesActual = hoy.getMonth() + 1;
+        const tieneActual = (data || []).some(m => m.anio === anioActual && m.mes === mesActual);
+        if (!tieneActual && data && data.length > 0) {
+          setMesGlobal({ anio: data[0].anio, mes: data[0].mes });
+        }
+      } catch (e) {
+        console.error("Error cargando meses:", e);
+      }
+    })();
+  }, []);
+
+  // Recargar TODOS los datos cuando cambia el mes
   useEffect(() => {
     let alive = true;
     (async () => {
       setLoading(true);
       setError(null);
       try {
+        const desde = `${mesGlobal.anio}-${String(mesGlobal.mes).padStart(2, '0')}-01`;
+        const ultDia = new Date(mesGlobal.anio, mesGlobal.mes, 0).getDate();
+        const hasta = `${mesGlobal.anio}-${String(mesGlobal.mes).padStart(2, '0')}-${ultDia}`;
+        
         const [r1, r2, r3, r4, r5] = await Promise.all([
           sb.from("vw_meli_dashboard_resumen").select("*").maybeSingle(),
           sb.from("vw_meli_inventario_drivers").select("*").order("viajes_total", { ascending: false }),
           sb.from("vw_meli_inventario_vehiculos").select("*").order("viajes_total", { ascending: false }),
-          sb.from("vw_meli_ciclo_aceptacion_sc").select("*").order("ofrecidas", { ascending: false }),
-          sb.from("vw_meli_score_compromiso").select("*").order("score_total", { ascending: false }),
+          sb.rpc("get_ciclo_aceptacion_sc", { fecha_desde: desde, fecha_hasta: hasta }),
+          sb.rpc("get_score_compromiso", { fecha_desde: desde, fecha_hasta: hasta }),
         ]);
         if (!alive) return;
         if (r1.error || r2.error || r3.error || r4.error || r5.error) {
@@ -15176,8 +15208,8 @@ function IndicadoresOperacionalesMX({ usuario }) {
         setResumen(r1.data);
         setDrivers(r2.data || []);
         setVehiculos(r3.data || []);
-        setSCs(r4.data || []);
-        setScores(r5.data || []);
+        setSCs((r4.data || []).sort((a, b) => (b.ofrecidas || 0) - (a.ofrecidas || 0)));
+        setScores((r5.data || []).sort((a, b) => (b.score_total || 0) - (a.score_total || 0)));
       } catch (e) {
         if (alive) setError(e.message || "Error cargando datos");
       } finally {
@@ -15185,7 +15217,7 @@ function IndicadoresOperacionalesMX({ usuario }) {
       }
     })();
     return () => { alive = false; };
-  }, []);
+  }, [mesGlobal.anio, mesGlobal.mes]);
 
   // Tabs: orden ahora con Hallazgos AL FINAL
   const tabs = [
@@ -15246,26 +15278,51 @@ function IndicadoresOperacionalesMX({ usuario }) {
         <div style={{ fontSize: 12, color: "#64748b", marginBottom: 10 }}>
           Pool Mercado Libre · cruce de 6 fuentes operativas
         </div>
-        <div style={{ display: "flex", gap: 0, borderBottom: "2px solid #e4e7ec", marginLeft: -8, flexWrap: "wrap" }}>
-          {tabs.map(t => (
-            <button key={t.id} onClick={() => setVista(t.id)}
+        <div style={{ display: "flex", gap: 0, borderBottom: "2px solid #e4e7ec", marginLeft: -8, flexWrap: "wrap", alignItems: "flex-end", justifyContent: "space-between" }}>
+          <div style={{ display: "flex", gap: 0, flexWrap: "wrap" }}>
+            {tabs.map(t => (
+              <button key={t.id} onClick={() => setVista(t.id)}
+                style={{
+                  background: "transparent", border: "none", padding: "10px 16px",
+                  fontSize: 13, fontWeight: 600, cursor: "pointer", color: vista === t.id ? "#1a3a6b" : "#64748b",
+                  borderBottom: vista === t.id ? "2px solid #1a3a6b" : "2px solid transparent",
+                  marginBottom: -2,
+                }}>
+                <div>{t.label}</div>
+                <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 400, marginTop: 2 }}>{t.desc}</div>
+              </button>
+            ))}
+          </div>
+          {/* Dropdown global de mes */}
+          <div style={{ display: "flex", alignItems: "center", gap: 8, paddingBottom: 8 }}>
+            <span style={{ fontSize: 11, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5 }}>
+              Período:
+            </span>
+            <select 
+              value={`${mesGlobal.anio}-${mesGlobal.mes}`}
+              onChange={(e) => {
+                const [a, m] = e.target.value.split('-').map(Number);
+                setMesGlobal({ anio: a, mes: m });
+              }}
               style={{
-                background: "transparent", border: "none", padding: "10px 16px",
-                fontSize: 13, fontWeight: 600, cursor: "pointer", color: vista === t.id ? "#1a3a6b" : "#64748b",
-                borderBottom: vista === t.id ? "2px solid #1a3a6b" : "2px solid transparent",
-                marginBottom: -2,
+                padding: "6px 12px", fontSize: 13, fontWeight: 600, borderRadius: 6,
+                border: "1px solid #cbd5e1", background: "#fff", color: "#1a3a6b",
+                cursor: "pointer", fontFamily: "'Geist', sans-serif", outline: "none",
               }}>
-              <div>{t.label}</div>
-              <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 400, marginTop: 2 }}>{t.desc}</div>
-            </button>
-          ))}
+              {mesesDisponibles.map(m => (
+                <option key={`${m.anio}-${m.mes}`} value={`${m.anio}-${m.mes}`}>
+                  {NOMBRES_MES[m.mes - 1]} {m.anio} ({m.dias_con_datos} días)
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
       </div>
 
-      {vista === "inventario" && <PoolMeliInventario drivers={drivers} vehiculos={vehiculos} resumen={resumen} setModal={setModal} setDetalle={setDetalle} />}
-      {vista === "ciclo"      && <PoolMeliCiclo scs={scs} resumen={resumen} setModal={setModal} />}
-      {vista === "score"      && <PoolMeliScore scores={scores} resumen={resumen} />}
-      {vista === "hallazgos"  && <PoolMeliHallazgos drivers={drivers} vehiculos={vehiculos} scs={scs} scores={scores} resumen={resumen} setModal={setModal} setVista={setVista} />}
+      {vista === "inventario" && <PoolMeliInventario drivers={drivers} vehiculos={vehiculos} resumen={resumen} setModal={setModal} setDetalle={setDetalle} mesGlobal={mesGlobal} />}
+      {vista === "ciclo"      && <PoolMeliCiclo scs={scs} resumen={resumen} setModal={setModal} mesGlobal={mesGlobal} />}
+      {vista === "score"      && <PoolMeliScore scores={scores} resumen={resumen} mesGlobal={mesGlobal} />}
+      {vista === "hallazgos"  && <PoolMeliHallazgos drivers={drivers} vehiculos={vehiculos} scs={scs} scores={scores} resumen={resumen} setModal={setModal} setVista={setVista} mesGlobal={mesGlobal} />}
 
       {modal && <MeliModal modal={modal} onClose={() => setModal(null)} />}
     </div>
@@ -15432,14 +15489,15 @@ function ScoreBadgeMX({ cat }) {
 }
 
 // ── INVENTARIO con calendario diario ───────────────────────────────────────
-function PoolMeliInventario({ drivers, vehiculos, resumen, setModal, setDetalle }) {
+function PoolMeliInventario({ drivers, vehiculos, resumen, setModal, setDetalle, mesGlobal }) {
   const [tipo, setTipo] = useState("drivers");
   const [filtroCat, setFiltroCat] = useState("activos"); // activos | durmientes | fantasmas | todos
   const [calendarios, setCalendarios] = useState({ drivers: null, vehiculos: null });
-  const [mesSeleccionado, setMesSeleccionado] = useState(() => {
+  // Mes viene del padre (mesGlobal). Usamos directamente.
+  const mesSeleccionado = mesGlobal || (() => {
     const hoy = new Date();
     return { anio: hoy.getFullYear(), mes: hoy.getMonth() + 1 };
-  });
+  })();
   const r = resumen || {};
 
   // Cargar calendarios cuando cambia el mes
@@ -15509,26 +15567,6 @@ function PoolMeliInventario({ drivers, vehiculos, resumen, setModal, setDetalle 
     nombreArchivo: "drivers_master_oficial_meli"
   });
 
-  // Cambiar mes
-  const mesAnterior = () => {
-    const m = mesSeleccionado.mes - 1;
-    if (m < 1) setMesSeleccionado({ anio: mesSeleccionado.anio - 1, mes: 12 });
-    else setMesSeleccionado({ ...mesSeleccionado, mes: m });
-  };
-  const mesSiguiente = () => {
-    const m = mesSeleccionado.mes + 1;
-    const hoy = new Date();
-    // No permitir ir más allá del mes actual
-    const maxAnio = hoy.getFullYear(), maxMes = hoy.getMonth() + 1;
-    if (mesSeleccionado.anio === maxAnio && mesSeleccionado.mes >= maxMes) return;
-    if (m > 12) setMesSeleccionado({ anio: mesSeleccionado.anio + 1, mes: 1 });
-    else setMesSeleccionado({ ...mesSeleccionado, mes: m });
-  };
-  const esMesActual = () => {
-    const hoy = new Date();
-    return mesSeleccionado.anio === hoy.getFullYear() && mesSeleccionado.mes === hoy.getMonth() + 1;
-  };
-
   return (
     <div className="pg">
       {/* Selector tipo + mes */}
@@ -15550,22 +15588,6 @@ function PoolMeliInventario({ drivers, vehiculos, resumen, setModal, setDetalle 
               fontFamily: "'Geist', sans-serif" }}>
             Vehículos ({vehiculos.length})
           </button>
-        </div>
-        
-        {/* Selector de mes */}
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <button onClick={mesAnterior}
-            style={{ padding: "6px 10px", border: "1px solid #d0d5dd", borderRadius: 6, background: "#fff",
-              cursor: "pointer", fontSize: 14, color: "#475569", fontFamily: "'Geist', sans-serif" }}>‹</button>
-          <div style={{ fontSize: 13, fontWeight: 700, color: "#1a3a6b", minWidth: 140, textAlign: "center" }}>
-            {NOMBRES_MES[mesSeleccionado.mes - 1]} {mesSeleccionado.anio}
-            {esMesActual() && <span style={{ fontSize: 9, color: "#F47B20", marginLeft: 6 }}>(actual)</span>}
-          </div>
-          <button onClick={mesSiguiente} disabled={esMesActual()}
-            style={{ padding: "6px 10px", border: "1px solid #d0d5dd", borderRadius: 6,
-              background: esMesActual() ? "#f1f5f9" : "#fff",
-              cursor: esMesActual() ? "not-allowed" : "pointer", fontSize: 14,
-              color: esMesActual() ? "#cbd5e1" : "#475569", fontFamily: "'Geist', sans-serif" }}>›</button>
         </div>
       </div>
 
@@ -15921,62 +15943,23 @@ function PoolMeliDetalleRegistro({ tipo, registro, onVolver }) {
 }
 
 // ── CICLO con embudo moderno + filtros mejorados ──────────────────────────
-function PoolMeliCiclo({ scs: scsInicial, resumen, setModal }) {
+function PoolMeliCiclo({ scs, resumen, setModal, mesGlobal }) {
   const [perfilFiltro, setPerfilFiltro] = useState("TODOS");
   const r = resumen || {};
 
-  // ─── Selector de mes ─────────────────────────────────────────────────────
-  const [mesesDisponibles, setMesesDisponibles] = useState([]);
-  const [mesSeleccionado, setMesSeleccionado] = useState(() => {
-    const hoy = new Date();
-    return { anio: hoy.getFullYear(), mes: hoy.getMonth() + 1 };
-  });
-  const [scsLocal, setScsLocal] = useState(scsInicial || []);
-  const [loadingMes, setLoadingMes] = useState(false);
   // Split de no presentadas por fleet (SDD vs VARIABLE)
   const [splitFleet, setSplitFleet] = useState({ sdd: null, variable: null });
 
-  // Cargar meses disponibles al montar
+  // Recargar split fleet cuando cambia el mes global
   useEffect(() => {
-    (async () => {
-      try {
-        const { data, error } = await sb.rpc("get_meses_con_datos_meli");
-        if (error) throw error;
-        setMesesDisponibles(data || []);
-        // Si no hay datos del mes actual, ir al mes más reciente con datos
-        const hoy = new Date();
-        const anioActual = hoy.getFullYear(), mesActual = hoy.getMonth() + 1;
-        const tieneActual = (data || []).some(m => m.anio === anioActual && m.mes === mesActual);
-        if (!tieneActual && data && data.length > 0) {
-          setMesSeleccionado({ anio: data[0].anio, mes: data[0].mes });
-        }
-      } catch (e) {
-        console.error("Error cargando meses:", e);
-      }
-    })();
-  }, []);
-
-  // Recargar datos cuando cambia el mes seleccionado
-  useEffect(() => {
+    if (!mesGlobal) return;
     let alive = true;
     (async () => {
-      setLoadingMes(true);
       try {
-        const desde = `${mesSeleccionado.anio}-${String(mesSeleccionado.mes).padStart(2, '0')}-01`;
-        const ultDia = new Date(mesSeleccionado.anio, mesSeleccionado.mes, 0).getDate();
-        const hasta = `${mesSeleccionado.anio}-${String(mesSeleccionado.mes).padStart(2, '0')}-${ultDia}`;
+        const desde = `${mesGlobal.anio}-${String(mesGlobal.mes).padStart(2, '0')}-01`;
+        const ultDia = new Date(mesGlobal.anio, mesGlobal.mes, 0).getDate();
+        const hasta = `${mesGlobal.anio}-${String(mesGlobal.mes).padStart(2, '0')}-${ultDia}`;
         
-        // 1. Ciclo por SC
-        const { data, error } = await sb.rpc("get_ciclo_aceptacion_sc", {
-          fecha_desde: desde,
-          fecha_hasta: hasta,
-        });
-        if (!alive) return;
-        if (error) throw error;
-        setScsLocal((data || []).sort((a, b) => (b.ofrecidas || 0) - (a.ofrecidas || 0)));
-
-        // 2. Split de no presentadas por fleet (SDD vs VARIABLE)
-        // Usa la función SQL get_no_presentadas_por_fleet (más confiable que cálculo en frontend)
         const { data: fleetData, error: fleetError } = await sb.rpc("get_no_presentadas_por_fleet", {
           fecha_desde: desde,
           fecha_hasta: hasta,
@@ -16003,18 +15986,11 @@ function PoolMeliCiclo({ scs: scsInicial, resumen, setModal }) {
         }
       } catch (e) {
         console.error("Error cargando ciclo del mes:", e);
-        if (alive) {
-          setScsLocal([]);
-          setSplitFleet({ sdd: null, variable: null });
-        }
-      } finally {
-        if (alive) setLoadingMes(false);
+        if (alive) setSplitFleet({ sdd: null, variable: null });
       }
     })();
     return () => { alive = false; };
-  }, [mesSeleccionado.anio, mesSeleccionado.mes]);
-
-  const scs = scsLocal;  // alias para no cambiar todo el código de abajo
+  }, [mesGlobal?.anio, mesGlobal?.mes]);
 
   const filtrados = perfilFiltro === "TODOS" ? scs : scs.filter(s => s.perfil === perfilFiltro);
   const totOfr = scs.reduce((a, s) => a + (s.ofrecidas || 0), 0);
@@ -16137,42 +16113,6 @@ function PoolMeliCiclo({ scs: scsInicial, resumen, setModal }) {
 
   return (
     <div className="pg">
-      {/* Selector de mes */}
-      <div style={{
-        display: "flex", alignItems: "center", justifyContent: "space-between",
-        background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10,
-        padding: "12px 16px", marginBottom: 16,
-      }}>
-        <div>
-          <div style={{ fontSize: 11, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>
-            Período de análisis
-          </div>
-          <div style={{ fontSize: 14, fontWeight: 600, color: "#1a3a6b" }}>
-            {NOMBRES_MES[mesSeleccionado.mes - 1]} {mesSeleccionado.anio}
-            {loadingMes && <span style={{ fontSize: 11, color: "#94a3b8", marginLeft: 8 }}>cargando...</span>}
-          </div>
-        </div>
-        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", maxWidth: "60%", justifyContent: "flex-end" }}>
-          {mesesDisponibles.map(m => {
-            const active = m.anio === mesSeleccionado.anio && m.mes === mesSeleccionado.mes;
-            return (
-              <button key={`${m.anio}-${m.mes}`}
-                onClick={() => setMesSeleccionado({ anio: m.anio, mes: m.mes })}
-                style={{
-                  padding: "6px 12px", fontSize: 11, fontWeight: 600, borderRadius: 6,
-                  border: active ? "none" : "1px solid #e4e7ec",
-                  background: active ? "#1a3a6b" : "#fff",
-                  color: active ? "#fff" : "#475569",
-                  cursor: "pointer", fontFamily: "'Geist', sans-serif",
-                }}>
-                {NOMBRES_MES[m.mes - 1].substring(0, 3)} {m.anio}
-                <span style={{ marginLeft: 4, opacity: 0.6 }}>({m.dias_con_datos}d)</span>
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
       {/* Embudo moderno */}
       <div className="form-card" style={{ background: "linear-gradient(180deg, #fff 0%, #f8fafc 100%)" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 24 }}>
@@ -16521,7 +16461,7 @@ function PoolMeliScore({ scores, resumen }) {
 }
 
 // ── HALLAZGOS ──────────────────────────────────────────────────────────────
-function PoolMeliHallazgos({ drivers, vehiculos, scs, scores, resumen, setModal, setVista }) {
+function PoolMeliHallazgos({ drivers, vehiculos, scs, scores, resumen, setModal, setVista, mesGlobal }) {
   const r = resumen || {};
   const driversFantasma = drivers.filter(d => d.categoria === "fantasma");
   const vehiculosFantasma = vehiculos.filter(v => v.categoria === "fantasma");
@@ -16532,6 +16472,44 @@ function PoolMeliHallazgos({ drivers, vehiculos, scs, scores, resumen, setModal,
   const scsBajaEntrega = scs.filter(s => s.ejecutadas > 50 && s.pct_cumplimiento < 90 && s.perfil !== "PROBLEMATICO");
   const topFantasma = driversFantasma.sort((a, b) => (b.viajes_total || 0) - (a.viajes_total || 0))[0];
   const fantasmaMultiSC = driversFantasma.find(d => (d.cantidad_scs || 0) >= 2);
+
+  // SDD no realizados por SC (se carga según el mes global)
+  const [sddNoRealizados, setSddNoRealizados] = useState([]);
+  useEffect(() => {
+    if (!mesGlobal) return;
+    let alive = true;
+    (async () => {
+      try {
+        const desde = `${mesGlobal.anio}-${String(mesGlobal.mes).padStart(2, '0')}-01`;
+        const ultDia = new Date(mesGlobal.anio, mesGlobal.mes, 0).getDate();
+        const hasta = `${mesGlobal.anio}-${String(mesGlobal.mes).padStart(2, '0')}-${ultDia}`;
+        const { data, error } = await sb.rpc("get_hallazgo_sdd_no_realizados", {
+          fecha_desde: desde,
+          fecha_hasta: hasta,
+        });
+        if (!alive) return;
+        if (error) {
+          console.error("Error cargando SDD no realizados:", error);
+          setSddNoRealizados([]);
+        } else {
+          setSddNoRealizados(data || []);
+        }
+      } catch (e) {
+        console.error("Error SDD no realizados:", e);
+        if (alive) setSddNoRealizados([]);
+      }
+    })();
+    return () => { alive = false; };
+  }, [mesGlobal?.anio, mesGlobal?.mes]);
+
+  const totalSDDNoRealizadas = sddNoRealizados.reduce((a, s) => a + Number(s.sdd_no_realizadas || 0), 0);
+  const peorSCsdd = sddNoRealizados[0];
+
+  const verSDDNoRealizados = () => setModal({
+    titulo: `SDD no realizadas por SC · ${NOMBRES_MES[mesGlobal.mes - 1]} ${mesGlobal.anio}`,
+    filas: sddNoRealizados,
+    nombreArchivo: `sdd_no_realizados_${mesGlobal.anio}_${mesGlobal.mes}`,
+  });
 
   const verSCsProblematicos = () => setModal({ titulo: `SCs Problemáticos (${scsProblematicos.length})`, filas: scsProblematicos, nombreArchivo: "scs_problematicos" });
   const verDriversFantasma = () => setModal({ titulo: `Drivers Fantasma (${driversFantasma.length})`, filas: driversFantasma, nombreArchivo: "drivers_fantasma" });
@@ -16556,6 +16534,25 @@ function PoolMeliHallazgos({ drivers, vehiculos, scs, scores, resumen, setModal,
   };
 
   const hallazgos = [];
+
+  // ─── HALLAZGO CRÍTICO: SDD no realizadas (compromiso obligatorio con MELI) ──
+  if (peorSCsdd && Number(peorSCsdd.sdd_no_realizadas) > 0) {
+    hallazgos.push({
+      sev: "CRITICO", categoria: "Compromiso SDD",
+      titulo: `${peorSCsdd.service_center} — ${peorSCsdd.sdd_no_realizadas} viajes SDD no ejecutados`,
+      desc: `La flota fija (Súper Dedicada) es un compromiso obligatorio con MELI. ` +
+            `${peorSCsdd.service_center} aceptó ${peorSCsdd.sdd_aceptadas} SDD pero solo ejecutó ${peorSCsdd.sdd_ejecutadas} ` +
+            `(${peorSCsdd.pct_no_presentado}% no-show, en ${peorSCsdd.dias_con_no_show} días distintos). ` +
+            `Total mensual MX: ${totalSDDNoRealizadas} SDD comprometidas no realizadas.`,
+      metricas: [
+        { l: "SDD no realizadas", v: peorSCsdd.sdd_no_realizadas, color: "#991b1b" },
+        { l: "% no-show", v: `${peorSCsdd.pct_no_presentado}%`, color: "#991b1b" },
+        { l: "Días con incidencia", v: peorSCsdd.dias_con_no_show, color: "#991b1b" },
+        { l: "Total MX", v: totalSDDNoRealizadas, color: "#92400e" },
+      ],
+      accion: { label: "Ver todos los SCs", onClick: verSDDNoRealizados },
+    });
+  }
 
   if (peorSC) {
     hallazgos.push({
