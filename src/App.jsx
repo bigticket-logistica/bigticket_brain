@@ -15142,6 +15142,30 @@ function diasDelMes(anio, mes) {
   return new Date(anio, mes, 0).getDate();
 }
 
+// Calcula el rango {desde, hasta} de un mes seleccionado.
+// Regla: si el mes ya terminó → mes completo. Si es el actual → hasta ayer (CURRENT_DATE - 1).
+function rangoMesGlobal(mesGlobal) {
+  const yyyy = mesGlobal.anio;
+  const mm = String(mesGlobal.mes).padStart(2, '0');
+  const desde = `${yyyy}-${mm}-01`;
+  
+  const hoy = new Date();
+  const esMesActual = mesGlobal.anio === hoy.getFullYear() && mesGlobal.mes === (hoy.getMonth() + 1);
+  
+  let hasta;
+  if (esMesActual) {
+    // Mes en curso: hasta ayer
+    const ayer = new Date(hoy);
+    ayer.setDate(ayer.getDate() - 1);
+    hasta = ayer.toISOString().slice(0, 10);
+  } else {
+    // Mes pasado: mes completo
+    const ultDia = diasDelMes(mesGlobal.anio, mesGlobal.mes);
+    hasta = `${yyyy}-${mm}-${String(ultDia).padStart(2, '0')}`;
+  }
+  return { desde, hasta };
+}
+
 function IndicadoresOperacionalesMX({ usuario }) {
   const [vista, setVista] = useState("inventario");
   const [loading, setLoading] = useState(true);
@@ -15190,9 +15214,7 @@ function IndicadoresOperacionalesMX({ usuario }) {
       setLoading(true);
       setError(null);
       try {
-        const desde = `${mesGlobal.anio}-${String(mesGlobal.mes).padStart(2, '0')}-01`;
-        const ultDia = new Date(mesGlobal.anio, mesGlobal.mes, 0).getDate();
-        const hasta = `${mesGlobal.anio}-${String(mesGlobal.mes).padStart(2, '0')}-${ultDia}`;
+        const { desde, hasta } = rangoMesGlobal(mesGlobal);
         
         const [r1, r2, r3, r4, r5] = await Promise.all([
           sb.from("vw_meli_dashboard_resumen").select("*").maybeSingle(),
@@ -15956,9 +15978,7 @@ function PoolMeliCiclo({ scs, resumen, setModal, mesGlobal }) {
     let alive = true;
     (async () => {
       try {
-        const desde = `${mesGlobal.anio}-${String(mesGlobal.mes).padStart(2, '0')}-01`;
-        const ultDia = new Date(mesGlobal.anio, mesGlobal.mes, 0).getDate();
-        const hasta = `${mesGlobal.anio}-${String(mesGlobal.mes).padStart(2, '0')}-${ultDia}`;
+        const { desde, hasta } = rangoMesGlobal(mesGlobal);
         
         const { data: fleetData, error: fleetError } = await sb.rpc("get_no_presentadas_por_fleet", {
           fecha_desde: desde,
@@ -16042,9 +16062,7 @@ function PoolMeliCiclo({ scs, resumen, setModal, mesGlobal }) {
     const tituloSC = filtroSC ? ` · ${filtroSC}` : "";
     setModal({ titulo: `Cargando…`, filas: [], nombreArchivo: "pendientes" });
     try {
-      const desde = `${mesGlobal.anio}-${String(mesGlobal.mes).padStart(2, '0')}-01`;
-      const ultDia = new Date(mesGlobal.anio, mesGlobal.mes, 0).getDate();
-      const hasta = `${mesGlobal.anio}-${String(mesGlobal.mes).padStart(2, '0')}-${ultDia}`;
+      const { desde, hasta } = rangoMesGlobal(mesGlobal);
       // Traemos los pending del último snapshot por request_id
       const { data: rawData, error } = await sb
         .from("meli_travel_requests")
@@ -16543,9 +16561,7 @@ function PoolMeliHallazgos({ drivers, vehiculos, scs, scores, resumen, setModal,
     let alive = true;
     (async () => {
       try {
-        const desde = `${mesGlobal.anio}-${String(mesGlobal.mes).padStart(2, '0')}-01`;
-        const ultDia = new Date(mesGlobal.anio, mesGlobal.mes, 0).getDate();
-        const hasta = `${mesGlobal.anio}-${String(mesGlobal.mes).padStart(2, '0')}-${ultDia}`;
+        const { desde, hasta } = rangoMesGlobal(mesGlobal);
         const [rsdd, rpend] = await Promise.all([
           sb.rpc("get_hallazgo_sdd_no_realizados", { fecha_desde: desde, fecha_hasta: hasta }),
           sb.rpc("get_hallazgo_pendientes_viejos", { fecha_desde: desde, fecha_hasta: hasta }),
