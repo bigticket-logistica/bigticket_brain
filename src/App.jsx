@@ -3822,6 +3822,7 @@ const KpiCardMaestro = ({ label, valor, sub, color = "#1a1a1a" }) => (
 
 const VistaViajesMaestro = ({ fecha, fechaFin, pais }) => {
   const [viajes, setViajes]     = useState([]);
+  const [ayudantesMap, setAyudantesMap] = useState({});  // {id_ruta: has_helper}
   const [loading, setLoading]   = useState(true);
   const [busqueda, setBusqueda] = useState("");
   const [pagina, setPagina]     = useState(1);
@@ -3845,6 +3846,37 @@ const VistaViajesMaestro = ({ fecha, fechaFin, pais }) => {
     if (pais) q = q.eq("pais", pais);
     const { data } = await q;
     setViajes(data || []);
+    
+    // Cargar info de ayudantes desde logistic_ayudantes_snapshots (solo para MX)
+    if (pais === "MX" && fecha) {
+      try {
+        const fechaStr = fecha.substring(0, 10);
+        const finStr   = (fechaFin || fecha).substring(0, 10);
+        const { data: ayudData } = await sb
+          .from("logistic_ayudantes_snapshots")
+          .select("id_ruta, has_helper, hora_snapshot, momento_dia")
+          .gte("fecha", fechaStr)
+          .lte("fecha", finStr);
+        // Tomar el ÚLTIMO snapshot del día por id_ruta (el que tiene info más completa)
+        const map = {};
+        (ayudData || []).forEach(r => {
+          const prev = map[r.id_ruta];
+          // Si no hay previo o el actual es más reciente → guardar
+          if (!prev || (r.hora_snapshot || "") > (prev.hora_snapshot || "")) {
+            map[r.id_ruta] = { has_helper: r.has_helper, hora_snapshot: r.hora_snapshot };
+          }
+        });
+        // Extraer solo has_helper para mapa final
+        const finalMap = {};
+        Object.keys(map).forEach(k => { finalMap[k] = map[k].has_helper; });
+        setAyudantesMap(finalMap);
+      } catch (e) {
+        console.error("Error cargando ayudantes:", e);
+        setAyudantesMap({});
+      }
+    } else {
+      setAyudantesMap({});
+    }
     setLoading(false);
   };
 
@@ -3918,17 +3950,56 @@ const VistaViajesMaestro = ({ fecha, fechaFin, pais }) => {
           placeholder="Buscar por driver, patente, service center..." />
       </div>
 
-      {/* Tabla con scroll horizontal */}
-      <div style={{ overflowX: "auto", borderRadius: 10,
-        border: "1px solid #e4e7ec", background: "#fff",
-        WebkitOverflowScrolling: "touch" }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+      {/* Tabla con DOBLE SCROLL HORIZONTAL — arriba y abajo, sincronizados */}
+      <div style={{ position: "relative" }}>
+        {/* Scroll superior (sticky, sigue al usuario al hacer scroll vertical) */}
+        <div 
+          id="maestro-scroll-top"
+          onScroll={(e) => {
+            const bottom = document.getElementById("maestro-scroll-bottom");
+            if (bottom && bottom.scrollLeft !== e.target.scrollLeft) {
+              bottom.scrollLeft = e.target.scrollLeft;
+            }
+          }}
+          style={{ 
+            overflowX: "auto", 
+            overflowY: "hidden",
+            borderRadius: "10px 10px 0 0",
+            border: "1px solid #e4e7ec",
+            borderBottom: "none",
+            background: "#fff",
+            position: "sticky",
+            top: 0,
+            zIndex: 10,
+          }}>
+          <div style={{ height: 1, minWidth: "1900px" }}/>
+        </div>
+        
+        {/* Tabla real con scroll inferior */}
+        <div 
+          id="maestro-scroll-bottom"
+          onScroll={(e) => {
+            const top = document.getElementById("maestro-scroll-top");
+            if (top && top.scrollLeft !== e.target.scrollLeft) {
+              top.scrollLeft = e.target.scrollLeft;
+            }
+          }}
+          style={{ 
+            overflowX: "auto", 
+            borderRadius: "0 0 10px 10px",
+            border: "1px solid #e4e7ec",
+            borderTop: "none",
+            background: "#fff",
+            WebkitOverflowScrolling: "touch" 
+          }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, minWidth: "1900px" }}>
           <thead>
             <tr style={{ background: "#f8fafc", borderBottom: "2px solid #e4e7ec" }}>
               {[
                 { label: "ID Ruta",        col: null },
                 { label: "Fecha",          col: "fecha_salida" },
                 { label: "Driver",         col: "driver" },
+                { label: "Ayudante",       col: null },
                 { label: "Patente",        col: null },
                 { label: "Vehículo",       col: null },
                 { label: "Ciclo",          col: null },
@@ -3958,7 +4029,7 @@ const VistaViajesMaestro = ({ fecha, fechaFin, pais }) => {
           </thead>
           <tbody>
             {filtrados.length === 0 && (
-              <tr><td colSpan={17} style={{ padding: 40, textAlign: "center",
+              <tr><td colSpan={18} style={{ padding: 40, textAlign: "center",
                 color: "#888", fontSize: 13 }}>
                 {busqueda ? "Sin resultados para esa búsqueda" : "Sin viajes para esta fecha. Sincroniza el TMS."}
               </td></tr>
@@ -3983,6 +4054,18 @@ const VistaViajesMaestro = ({ fecha, fechaFin, pais }) => {
                     {fmtFechaMaestro(v.fecha_salida)}</td>
                   <td style={{ padding: "9px 12px", fontWeight: 600 }}>
                     {raw["Nombre del transportista"] || v.observaciones || "—"}</td>
+                  <td style={{ padding: "9px 12px", textAlign: "center", fontSize: 11 }}>
+                    {(() => {
+                      const idRuta = raw["Id de la ruta"];
+                      if (!idRuta || !(idRuta in ayudantesMap)) {
+                        return <span style={{ color: "#cbd5e1" }}>—</span>;
+                      }
+                      const helper = ayudantesMap[idRuta];
+                      return helper 
+                        ? <span style={{ color: "#16a34a", fontWeight: 700 }}>Sí</span>
+                        : <span style={{ color: "#94a3b8" }}>No</span>;
+                    })()}
+                  </td>
                   <td style={{ padding: "9px 12px", fontFamily: "monospace",
                     fontSize: 11, color: "#555" }}>
                     {raw["Patente"] || raw["Placa"] || "—"}</td>
@@ -4021,6 +4104,7 @@ const VistaViajesMaestro = ({ fecha, fechaFin, pais }) => {
             })}
           </tbody>
         </table>
+        </div>
       </div>
 
       {/* Paginación */}
