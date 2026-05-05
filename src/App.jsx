@@ -15253,7 +15253,7 @@ function rangoMesGlobal(mesGlobal) {
 }
 
 function IndicadoresOperacionalesMX({ usuario }) {
-  const [vista, setVista] = useState("inventario");
+  const [vista, setVista] = useState("resumen_kpi");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [resumen, setResumen] = useState(null);
@@ -15329,6 +15329,7 @@ function IndicadoresOperacionalesMX({ usuario }) {
 
   // Tabs: orden ahora con Hallazgos AL FINAL
   const tabs = [
+    { id: "resumen_kpi", label: "Resumen KPI", desc: "Día anterior · vista ejecutiva" },
     { id: "inventario", label: "Inventario", desc: "Drivers, vehículos, fantasmas" },
     { id: "ciclo",      label: "Ciclo de aceptación", desc: "Embudo ofrecidas → ejecutadas" },
     { id: "score",      label: "Score de compromiso", desc: "Calificación 0-100 por driver" },
@@ -15401,7 +15402,8 @@ function IndicadoresOperacionalesMX({ usuario }) {
               </button>
             ))}
           </div>
-          {/* Dropdown global de mes */}
+          {/* Dropdown global de mes (no aplica en Resumen KPI) */}
+          {vista !== "resumen_kpi" && (
           <div style={{ display: "flex", alignItems: "center", gap: 8, paddingBottom: 8 }}>
             <span style={{ fontSize: 11, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5 }}>
               Período:
@@ -15424,9 +15426,11 @@ function IndicadoresOperacionalesMX({ usuario }) {
               ))}
             </select>
           </div>
+          )}
         </div>
       </div>
 
+      {vista === "resumen_kpi" && <PoolMeliResumenKPI />}
       {vista === "inventario" && <PoolMeliInventario drivers={drivers} vehiculos={vehiculos} resumen={resumen} setModal={setModal} setDetalle={setDetalle} mesGlobal={mesGlobal} />}
       {vista === "ciclo"      && <PoolMeliCiclo scs={scs} resumen={resumen} setModal={setModal} mesGlobal={mesGlobal} />}
       {vista === "score"      && <PoolMeliScore scores={scores} resumen={resumen} mesGlobal={mesGlobal} />}
@@ -15593,6 +15597,299 @@ function ScoreBadgeMX({ cat }) {
     <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 24, height: 24, borderRadius: 4, fontSize: 12, fontWeight: 700, backgroundColor: s.bg, color: s.color }}>
       {cat}
     </span>
+  );
+}
+
+// ── RESUMEN KPI · Día anterior (D-1) ────────────────────────────────────
+function PoolMeliResumenKPI() {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  
+  // Día anterior (D-1)
+  const ayer = useMemo(() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 1);
+    return d;
+  }, []);
+  
+  const fechaAyer = `${ayer.getFullYear()}-${String(ayer.getMonth() + 1).padStart(2, '0')}-${String(ayer.getDate()).padStart(2, '0')}`;
+  const fechaDisplayAyer = `${String(ayer.getDate()).padStart(2, '0')}-${String(ayer.getMonth() + 1).padStart(2, '0')}-${ayer.getFullYear()}`;
+  
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const { data: rpc, error } = await sb.rpc("get_resumen_kpi_dia", { p_fecha: fechaAyer });
+        if (!alive) return;
+        if (error) throw error;
+        setData(rpc);
+      } catch (e) {
+        if (alive) setError(e.message || "Error cargando datos");
+      } finally {
+        if (alive) setLoading(false);
+      }
+    })();
+    return () => { alive = false; };
+  }, [fechaAyer]);
+  
+  if (loading) return <div className="pg" style={{ textAlign: "center", padding: 60, color: "#888" }}>Cargando resumen...</div>;
+  if (error) return <div className="pg" style={{ padding: 40, color: "#c0392b" }}>Error: {error}</div>;
+  if (!data) return <div className="pg" style={{ padding: 40, color: "#888" }}>Sin datos</div>;
+  
+  const cp = data.cumplimiento_promesa || {};
+  const ns = data.nivel_servicio || {};
+  const nv = data.nivel_visitados || {};
+  const pnr = data.pnr || {};
+  
+  const cumple = (pct, umbral) => Number(pct) >= Number(umbral);
+  const colorPct = (pct, umbral) => cumple(pct, umbral) ? "#16a34a" : "#dc2626";
+  const colorBg = (pct, umbral) => cumple(pct, umbral) ? "#f0fdf4" : "#fef2f2";
+  
+  const meses = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"];
+  const fechaTexto = `${ayer.getDate()} de ${meses[ayer.getMonth()]} de ${ayer.getFullYear()}`;
+  
+  return (
+    <div className="pg">
+      {/* Header con fecha */}
+      <div style={{
+        background: "linear-gradient(135deg, #1a3a6b 0%, #2d4f8e 100%)",
+        borderRadius: 12, padding: "16px 20px", marginBottom: 20,
+        color: "#fff", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12
+      }}>
+        <div>
+          <div style={{ fontSize: 11, color: "#aac3e8", textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 700 }}>
+            Resumen del día anterior
+          </div>
+          <div style={{ fontSize: 22, fontWeight: 700, marginTop: 2 }}>{fechaTexto}</div>
+        </div>
+        <div style={{ fontSize: 12, color: "#aac3e8" }}>
+          {fechaDisplayAyer}
+        </div>
+      </div>
+
+      {/* BLOQUE 1: CUMPLIMIENTO DE PROMESA */}
+      <div style={{ background: "#fff", borderRadius: 12, padding: 20, marginBottom: 16, border: "1px solid #e4e7ec" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 14 }}>
+          <div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: "#1a3a6b" }}>Cumplimiento de Promesa</div>
+            <div style={{ fontSize: 11, color: "#888", marginTop: 2 }}>Rutas aceptadas vs ejecutadas</div>
+          </div>
+          <div style={{ fontSize: 28, fontWeight: 800, color: cp.pct_cumplimiento >= 95 ? "#16a34a" : cp.pct_cumplimiento >= 85 ? "#f59e0b" : "#dc2626" }}>
+            {cp.pct_cumplimiento || 0}%
+          </div>
+        </div>
+        
+        {/* Línea principal */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12, marginBottom: 14 }}>
+          <div style={{ background: "#f0f9ff", borderRadius: 8, padding: "12px 14px" }}>
+            <div style={{ fontSize: 10, color: "#1e40af", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5 }}>Aceptadas</div>
+            <div style={{ fontSize: 24, fontWeight: 700, color: "#1e40af", marginTop: 2 }}>{cp.aceptadas || 0}</div>
+          </div>
+          <div style={{ background: "#f0fdf4", borderRadius: 8, padding: "12px 14px" }}>
+            <div style={{ fontSize: 10, color: "#166534", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5 }}>Ejecutadas</div>
+            <div style={{ fontSize: 24, fontWeight: 700, color: "#166534", marginTop: 2 }}>{cp.ejecutadas || 0}</div>
+          </div>
+          <div style={{ background: cp.no_realizadas > 0 ? "#fef2f2" : "#f9fafb", borderRadius: 8, padding: "12px 14px" }}>
+            <div style={{ fontSize: 10, color: cp.no_realizadas > 0 ? "#991b1b" : "#666", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5 }}>No realizadas</div>
+            <div style={{ fontSize: 24, fontWeight: 700, color: cp.no_realizadas > 0 ? "#991b1b" : "#666", marginTop: 2 }}>{cp.no_realizadas || 0}</div>
+          </div>
+        </div>
+        
+        {/* Split SDD vs Variable */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12 }}>
+          <div style={{ background: "#fff7ed", borderRadius: 8, padding: 14, border: "1px solid #fed7aa" }}>
+            <div style={{ fontSize: 11, color: "#9a3412", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>
+              SDD (Súper Dedicada)
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
+              <div><span style={{ color: "#888" }}>Aceptadas:</span> <strong>{cp.sdd?.aceptadas || 0}</strong></div>
+              <div><span style={{ color: "#888" }}>Ejecutadas:</span> <strong>{cp.sdd?.ejecutadas || 0}</strong></div>
+              <div style={{ color: cp.sdd?.no_realizadas > 0 ? "#991b1b" : "#666" }}>
+                <span style={{ color: "#888" }}>No realiz.:</span> <strong>{cp.sdd?.no_realizadas || 0}</strong>
+              </div>
+            </div>
+          </div>
+          <div style={{ background: "#eef2ff", borderRadius: 8, padding: 14, border: "1px solid #c7d2fe" }}>
+            <div style={{ fontSize: 11, color: "#3730a3", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>
+              Variable (Flota libre)
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
+              <div><span style={{ color: "#888" }}>Aceptadas:</span> <strong>{cp.variable?.aceptadas || 0}</strong></div>
+              <div><span style={{ color: "#888" }}>Ejecutadas:</span> <strong>{cp.variable?.ejecutadas || 0}</strong></div>
+              <div style={{ color: cp.variable?.no_realizadas > 0 ? "#991b1b" : "#666" }}>
+                <span style={{ color: "#888" }}>No realiz.:</span> <strong>{cp.variable?.no_realizadas || 0}</strong>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* BLOQUE 2: NIVEL DE SERVICIO */}
+      <div style={{ background: "#fff", borderRadius: 12, padding: 20, marginBottom: 16, border: "1px solid #e4e7ec" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 14 }}>
+          <div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: "#1a3a6b" }}>Nivel de Servicio</div>
+            <div style={{ fontSize: 11, color: "#888", marginTop: 2 }}>Umbral mínimo: {ns.umbral}%</div>
+          </div>
+        </div>
+        
+        {/* NS dual: ponderado vs promedio */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12, marginBottom: 16 }}>
+          <div style={{ 
+            background: colorBg(ns.pct_ponderado, ns.umbral), 
+            borderRadius: 8, padding: 16, 
+            border: `2px solid ${colorPct(ns.pct_ponderado, ns.umbral)}` 
+          }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: "#1a3a6b", textTransform: "uppercase", letterSpacing: 0.5 }}>
+              NS Ponderado (oficial MELI)
+            </div>
+            <div style={{ fontSize: 36, fontWeight: 800, color: colorPct(ns.pct_ponderado, ns.umbral), marginTop: 4 }}>
+              {ns.pct_ponderado || 0}% {!cumple(ns.pct_ponderado, ns.umbral) ? "🔴" : "✅"}
+            </div>
+            <div style={{ fontSize: 11, color: "#666", marginTop: 4 }}>
+              {Number(ns.ent_total || 0).toLocaleString()} entregados de {Number(ns.desp_total || 0).toLocaleString()} despachados
+            </div>
+          </div>
+          <div style={{ 
+            background: colorBg(ns.pct_promedio, ns.umbral), 
+            borderRadius: 8, padding: 16, 
+            border: `2px solid ${colorPct(ns.pct_promedio, ns.umbral)}` 
+          }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: "#1a3a6b", textTransform: "uppercase", letterSpacing: 0.5 }}>
+              NS Promedio por ruta
+            </div>
+            <div style={{ fontSize: 36, fontWeight: 800, color: colorPct(ns.pct_promedio, ns.umbral), marginTop: 4 }}>
+              {ns.pct_promedio || 0}% {!cumple(ns.pct_promedio, ns.umbral) ? "🔴" : "✅"}
+            </div>
+            <div style={{ fontSize: 11, color: "#666", marginTop: 4 }}>
+              Promedio simple del % de cada ruta
+            </div>
+          </div>
+        </div>
+        
+        {/* NS por SC */}
+        {(ns.por_sc || []).length > 0 && (
+          <div style={{ marginBottom: 14 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: "#475569", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>
+              Por Service Center (peor → mejor)
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 8 }}>
+              {(ns.por_sc || []).map(s => (
+                <div key={s.sc} style={{ 
+                  background: colorBg(s.ns_pct, ns.umbral), 
+                  borderRadius: 6, padding: "8px 10px", 
+                  border: `1px solid ${colorPct(s.ns_pct, ns.umbral)}33` 
+                }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: "#1a3a6b" }}>{s.sc}</div>
+                  <div style={{ fontSize: 18, fontWeight: 800, color: colorPct(s.ns_pct, ns.umbral) }}>
+                    {s.ns_pct}%
+                  </div>
+                  <div style={{ fontSize: 9, color: "#888" }}>
+                    {s.rutas} rutas · {Number(s.ent || 0).toLocaleString()}/{Number(s.desp || 0).toLocaleString()}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        
+        {/* NS por tipo de ruta */}
+        {(ns.por_tipo || []).length > 0 && (
+          <div>
+            <div style={{ fontSize: 12, fontWeight: 700, color: "#475569", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>
+              Por tipo de ruta
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 8 }}>
+              {(ns.por_tipo || []).map(t => (
+                <div key={t.tipo} style={{ 
+                  background: colorBg(t.ns_pct, ns.umbral), 
+                  borderRadius: 6, padding: "10px 12px", 
+                  border: `1px solid ${colorPct(t.ns_pct, ns.umbral)}33` 
+                }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: "#1a3a6b" }}>{t.tipo}</div>
+                  <div style={{ fontSize: 20, fontWeight: 800, color: colorPct(t.ns_pct, ns.umbral) }}>
+                    {t.ns_pct}%
+                  </div>
+                  <div style={{ fontSize: 10, color: "#888" }}>
+                    {t.rutas} rutas
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        
+        {(ns.por_tipo || []).length === 0 && (
+          <div style={{ fontSize: 11, color: "#94a3b8", fontStyle: "italic", marginTop: 8 }}>
+            Tipos de ruta no disponibles (cruce con scraper de ayudantes pendiente)
+          </div>
+        )}
+      </div>
+
+      {/* BLOQUE 3: NIVEL DE VISITADOS */}
+      <div style={{ background: "#fff", borderRadius: 12, padding: 20, marginBottom: 16, border: "1px solid #e4e7ec" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: "#1a3a6b" }}>Nivel de Visitados</div>
+            <div style={{ fontSize: 11, color: "#888", marginTop: 2 }}>Umbral mínimo: {nv.umbral}%</div>
+          </div>
+          <div style={{ 
+            background: colorBg(nv.pct_general, nv.umbral), 
+            borderRadius: 8, padding: "10px 18px", 
+            border: `2px solid ${colorPct(nv.pct_general, nv.umbral)}`
+          }}>
+            <div style={{ fontSize: 32, fontWeight: 800, color: colorPct(nv.pct_general, nv.umbral) }}>
+              {nv.pct_general || 0}% {!cumple(nv.pct_general, nv.umbral) ? "🔴" : "✅"}
+            </div>
+            <div style={{ fontSize: 11, color: "#666", textAlign: "right" }}>
+              {Math.round(nv.no_visitados || 0)} no visitados de {Number(nv.desp_total || 0).toLocaleString()}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* BLOQUE 4: PNR */}
+      <div style={{ background: "#fff", borderRadius: 12, padding: 20, border: "1px solid #e4e7ec" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 14 }}>
+          <div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: "#1a3a6b" }}>PNR del día anterior</div>
+            <div style={{ fontSize: 11, color: "#888", marginTop: 2 }}>Casos creados el {fechaTexto}</div>
+          </div>
+          <div style={{ fontSize: 32, fontWeight: 800, color: "#1a3a6b" }}>
+            {pnr.total || 0}
+          </div>
+        </div>
+        
+        {(pnr.por_estado || []).length === 0 ? (
+          <div style={{ fontSize: 13, color: "#94a3b8", fontStyle: "italic", textAlign: "center", padding: 16 }}>
+            No hay casos PNR registrados para este día
+          </div>
+        ) : (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 8 }}>
+            {(pnr.por_estado || []).map(e => {
+              // Definir colores según estado (heurística)
+              const esCerrado = e.estado === "Anulado" || e.estado === "Enviado a facturacion";
+              const bg = esCerrado ? "#f0fdf4" : "#fff7ed";
+              const colorTxt = esCerrado ? "#166534" : "#9a3412";
+              const colorVal = esCerrado ? "#16a34a" : "#ea580c";
+              return (
+                <div key={e.estado} style={{ background: bg, borderRadius: 8, padding: "10px 14px", border: "1px solid #e4e7ec" }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: colorTxt, textTransform: "uppercase", letterSpacing: 0.3 }}>
+                    {e.estado}
+                  </div>
+                  <div style={{ fontSize: 22, fontWeight: 800, color: colorVal, marginTop: 2 }}>
+                    {e.cantidad}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 
