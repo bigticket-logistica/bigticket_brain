@@ -15745,13 +15745,13 @@ function PoolMeliResumenKPI() {
     ? formatearDisplay(fechaSeleccionada)
     : `${formatearDisplay(rangoSel.desde)} → ${formatearDisplay(rangoSel.hasta)}`;
   
-  // Cantidad de días del rango
-  const diasRango = useMemo(() => {
-    if (modo !== 'rango') return 1;
+  // Cantidad de días del rango (cálculo simple, sin useMemo para evitar el error de hooks)
+  let diasRango = 1;
+  if (modo === 'rango') {
     const d1 = new Date(rangoSel.desde);
     const d2 = new Date(rangoSel.hasta);
-    return Math.round((d2 - d1) / (1000 * 60 * 60 * 24)) + 1;
-  }, [modo, rangoSel.desde, rangoSel.hasta]);
+    diasRango = Math.round((d2 - d1) / (1000 * 60 * 60 * 24)) + 1;
+  }
   
   // Detectar botón activo (día)
   const botonDiaActivo = fechaSeleccionada === fechasReferencia.d1 ? 'd1'
