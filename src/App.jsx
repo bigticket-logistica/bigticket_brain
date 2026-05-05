@@ -15890,51 +15890,63 @@ function PoolMeliResumenKPI() {
         
         {/* Características especiales (overlap permitido) */}
         {ns.caracteristicas && (
-          (ns.caracteristicas.bulky || 0) + (ns.caracteristicas.bags || 0) + 
-          (ns.caracteristicas.ambulancia || 0) + (ns.caracteristicas.pickup_node || 0) > 0
+          (ns.caracteristicas.bulky?.rutas || 0) + (ns.caracteristicas.bags?.rutas || 0) + 
+          (ns.caracteristicas.ambulancia?.rutas || 0) + (ns.caracteristicas.pickup_node?.rutas || 0) > 0
         ) && (
           <div>
             <div style={{ fontSize: 12, fontWeight: 700, color: "#475569", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>
               Características especiales (puede haber overlap)
             </div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 8 }}>
-              {ns.caracteristicas.bulky > 0 && (
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 8 }}>
+              {(ns.caracteristicas.bulky?.rutas || 0) > 0 && (
                 <div onClick={() => abrirDetalle("ejecutadas", { caracteristica: "bulky" }, "Rutas con Bulky")}
                   style={{ background: "#fef3c7", borderRadius: 6, padding: "10px 12px", border: "1px solid #fde68a", cursor: "pointer" }}>
                   <div style={{ fontSize: 11, fontWeight: 700, color: "#92400e", textTransform: "uppercase", letterSpacing: 0.3, display: "flex", justifyContent: "space-between" }}>
                     <span>📦 Bulky</span><span style={{ fontSize: 9, opacity: 0.5 }}>→</span>
                   </div>
-                  <div style={{ fontSize: 22, fontWeight: 800, color: "#92400e" }}>{ns.caracteristicas.bulky}</div>
+                  <div style={{ fontSize: 22, fontWeight: 800, color: "#92400e" }}>{ns.caracteristicas.bulky.rutas}</div>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: cumple(ns.caracteristicas.bulky.ns_pct, ns.umbral) ? "#16a34a" : "#dc2626", marginTop: 2 }}>
+                    NS {ns.caracteristicas.bulky.ns_pct || 0}%
+                  </div>
                   <div style={{ fontSize: 10, color: "#888" }}>paquetes voluminosos</div>
                 </div>
               )}
-              {ns.caracteristicas.bags > 0 && (
+              {(ns.caracteristicas.bags?.rutas || 0) > 0 && (
                 <div onClick={() => abrirDetalle("ejecutadas", { caracteristica: "bags" }, "Rutas con Bags")}
                   style={{ background: "#dbeafe", borderRadius: 6, padding: "10px 12px", border: "1px solid #bfdbfe", cursor: "pointer" }}>
                   <div style={{ fontSize: 11, fontWeight: 700, color: "#1e40af", textTransform: "uppercase", letterSpacing: 0.3, display: "flex", justifyContent: "space-between" }}>
                     <span>👜 Bags</span><span style={{ fontSize: 9, opacity: 0.5 }}>→</span>
                   </div>
-                  <div style={{ fontSize: 22, fontWeight: 800, color: "#1e40af" }}>{ns.caracteristicas.bags}</div>
+                  <div style={{ fontSize: 22, fontWeight: 800, color: "#1e40af" }}>{ns.caracteristicas.bags.rutas}</div>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: cumple(ns.caracteristicas.bags.ns_pct, ns.umbral) ? "#16a34a" : "#dc2626", marginTop: 2 }}>
+                    NS {ns.caracteristicas.bags.ns_pct || 0}%
+                  </div>
                   <div style={{ fontSize: 10, color: "#888" }}>envíos consolidados</div>
                 </div>
               )}
-              {ns.caracteristicas.ambulancia > 0 && (
+              {(ns.caracteristicas.ambulancia?.rutas || 0) > 0 && (
                 <div onClick={() => abrirDetalle("ejecutadas", { caracteristica: "ambulancia" }, "Rutas Ambulancia")}
                   style={{ background: "#fee2e2", borderRadius: 6, padding: "10px 12px", border: "1px solid #fecaca", cursor: "pointer" }}>
                   <div style={{ fontSize: 11, fontWeight: 700, color: "#991b1b", textTransform: "uppercase", letterSpacing: 0.3, display: "flex", justifyContent: "space-between" }}>
                     <span>🚑 Ambulancia</span><span style={{ fontSize: 9, opacity: 0.5 }}>→</span>
                   </div>
-                  <div style={{ fontSize: 22, fontWeight: 800, color: "#991b1b" }}>{ns.caracteristicas.ambulancia}</div>
+                  <div style={{ fontSize: 22, fontWeight: 800, color: "#991b1b" }}>{ns.caracteristicas.ambulancia.rutas}</div>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: cumple(ns.caracteristicas.ambulancia.ns_pct, ns.umbral) ? "#16a34a" : "#dc2626", marginTop: 2 }}>
+                    NS {ns.caracteristicas.ambulancia.ns_pct || 0}%
+                  </div>
                   <div style={{ fontSize: 10, color: "#888" }}>ruta de urgencia</div>
                 </div>
               )}
-              {ns.caracteristicas.pickup_node > 0 && (
+              {(ns.caracteristicas.pickup_node?.rutas || 0) > 0 && (
                 <div onClick={() => abrirDetalle("ejecutadas", { caracteristica: "pickup_node" }, "Rutas con Pickup Node")}
                   style={{ background: "#e0e7ff", borderRadius: 6, padding: "10px 12px", border: "1px solid #c7d2fe", cursor: "pointer" }}>
                   <div style={{ fontSize: 11, fontWeight: 700, color: "#3730a3", textTransform: "uppercase", letterSpacing: 0.3, display: "flex", justifyContent: "space-between" }}>
                     <span>📍 Pickup Node</span><span style={{ fontSize: 9, opacity: 0.5 }}>→</span>
                   </div>
-                  <div style={{ fontSize: 22, fontWeight: 800, color: "#3730a3" }}>{ns.caracteristicas.pickup_node}</div>
+                  <div style={{ fontSize: 22, fontWeight: 800, color: "#3730a3" }}>{ns.caracteristicas.pickup_node.rutas}</div>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: cumple(ns.caracteristicas.pickup_node.ns_pct, ns.umbral) ? "#16a34a" : "#dc2626", marginTop: 2 }}>
+                    NS {ns.caracteristicas.pickup_node.ns_pct || 0}%
+                  </div>
                   <div style={{ fontSize: 10, color: "#888" }}>punto de recolección</div>
                 </div>
               )}
@@ -16069,15 +16081,42 @@ function PoolMeliResumenKPI() {
                 <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
                   <thead style={{ background: "#f8fafc", position: "sticky", top: 0, zIndex: 1 }}>
                     <tr>
-                      {Object.keys(modal.filas[0] || {}).map(col => (
-                        <th key={col} style={{
-                          padding: "10px 12px", textAlign: "left", fontWeight: 700,
-                          color: "#475569", textTransform: "uppercase", fontSize: 10, letterSpacing: 0.5,
-                          borderBottom: "2px solid #e4e7ec", whiteSpace: "nowrap"
-                        }}>
-                          {col.replace(/_/g, " ")}
-                        </th>
-                      ))}
+                      {Object.keys(modal.filas[0] || {}).map(col => {
+                        const labels = {
+                          'request_id': 'Request ID',
+                          'service_center': 'SC',
+                          'fecha_operacion': 'Fecha Op.',
+                          'vehiculo': 'Vehículo',
+                          'fleet': 'Fleet',
+                          'estado': 'Estado',
+                          'motivo': 'Motivo',
+                          'id_ruta': 'ID Ruta',
+                          'driver': 'Driver',
+                          'patente': 'Patente',
+                          'tipo_ruta': 'Tipo Ruta',
+                          'despachados': 'Despachados',
+                          'entregados': 'Entregados',
+                          'no_visitado': 'No Visitado',
+                          'ns_ruta_pct': 'NS Ruta %',
+                          'id_caso': 'ID Caso',
+                          'tipo_pnr': 'Tipo PNR',
+                          'fecha_caso': 'Fecha Caso',
+                          'ruta': 'Ruta',
+                          'conductor': 'Conductor',
+                          'valor_compra': 'Valor Compra',
+                          'productos': 'Productos',
+                          'comentario_cierre': 'Comentario',
+                        };
+                        return (
+                          <th key={col} style={{
+                            padding: "10px 12px", textAlign: "left", fontWeight: 700,
+                            color: "#475569", textTransform: "uppercase", fontSize: 10, letterSpacing: 0.5,
+                            borderBottom: "2px solid #e4e7ec", whiteSpace: "nowrap"
+                          }}>
+                            {labels[col] || col.replace(/_/g, " ")}
+                          </th>
+                        );
+                      })}
                     </tr>
                   </thead>
                   <tbody>
