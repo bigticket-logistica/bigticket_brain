@@ -15634,6 +15634,39 @@ function PoolMeliResumenKPI() {
     })();
     return () => { alive = false; };
   }, [fechaAyer]);
+
+  // Modal de detalle drilldown
+  const [modal, setModal] = useState(null);
+  const [modalLoading, setModalLoading] = useState(false);
+  
+  const abrirDetalle = async (tipo, filtros = {}, titulo = "") => {
+    setModalLoading(true);
+    setModal({ titulo: titulo || `Cargando...`, filas: [], tipo });
+    try {
+      const { data: filas, error: err } = await sb.rpc("get_kpi_detalle", {
+        p_fecha: fechaAyer,
+        p_tipo: tipo,
+        p_filtro_sc: filtros.sc || null,
+        p_filtro_fleet: filtros.fleet || null,
+        p_filtro_tipo_ruta: filtros.tipo_ruta || null,
+        p_filtro_caracteristica: filtros.caracteristica || null,
+        p_filtro_pnr_estado: filtros.pnr_estado || null,
+      });
+      if (err) throw err;
+      const arr = Array.isArray(filas) ? filas : [];
+      setModal({ 
+        titulo: `${titulo} (${arr.length})`, 
+        filas: arr, 
+        tipo,
+        nombreArchivo: `kpi_${tipo}_${fechaAyer}${filtros.sc ? '_' + filtros.sc : ''}${filtros.fleet ? '_' + filtros.fleet : ''}`
+      });
+    } catch (e) {
+      setModal({ titulo: "Error", filas: [{ error: e.message }], tipo });
+    } finally {
+      setModalLoading(false);
+    }
+  };
+  
   
   if (loading) return <div className="pg" style={{ textAlign: "center", padding: 60, color: "#888" }}>Cargando resumen...</div>;
   if (error) return <div className="pg" style={{ padding: 40, color: "#c0392b" }}>Error: {error}</div>;
@@ -15684,25 +15717,47 @@ function PoolMeliResumenKPI() {
         
         {/* Línea principal */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12, marginBottom: 14 }}>
-          <div style={{ background: "#f0f9ff", borderRadius: 8, padding: "12px 14px" }}>
-            <div style={{ fontSize: 10, color: "#1e40af", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5 }}>Aceptadas</div>
+          <div onClick={() => abrirDetalle("aceptadas", {}, "Ofertas aceptadas")}
+            style={{ background: "#f0f9ff", borderRadius: 8, padding: "12px 14px", cursor: "pointer", transition: "transform 0.1s", border: "1px solid transparent" }}
+            onMouseOver={e => { e.currentTarget.style.borderColor = "#1e40af"; }}
+            onMouseOut={e => { e.currentTarget.style.borderColor = "transparent"; }}>
+            <div style={{ fontSize: 10, color: "#1e40af", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, display: "flex", justifyContent: "space-between" }}>
+              <span>Aceptadas</span><span style={{ fontSize: 9, opacity: 0.6 }}>VER →</span>
+            </div>
             <div style={{ fontSize: 24, fontWeight: 700, color: "#1e40af", marginTop: 2 }}>{cp.aceptadas || 0}</div>
           </div>
-          <div style={{ background: "#f0fdf4", borderRadius: 8, padding: "12px 14px" }}>
-            <div style={{ fontSize: 10, color: "#166534", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5 }}>Ejecutadas</div>
+          <div onClick={() => abrirDetalle("ejecutadas", {}, "Viajes ejecutados")}
+            style={{ background: "#f0fdf4", borderRadius: 8, padding: "12px 14px", cursor: "pointer", border: "1px solid transparent" }}
+            onMouseOver={e => { e.currentTarget.style.borderColor = "#166534"; }}
+            onMouseOut={e => { e.currentTarget.style.borderColor = "transparent"; }}>
+            <div style={{ fontSize: 10, color: "#166534", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, display: "flex", justifyContent: "space-between" }}>
+              <span>Ejecutadas</span><span style={{ fontSize: 9, opacity: 0.6 }}>VER →</span>
+            </div>
             <div style={{ fontSize: 24, fontWeight: 700, color: "#166534", marginTop: 2 }}>{cp.ejecutadas || 0}</div>
           </div>
-          <div style={{ background: cp.no_realizadas > 0 ? "#fef2f2" : "#f9fafb", borderRadius: 8, padding: "12px 14px" }}>
-            <div style={{ fontSize: 10, color: cp.no_realizadas > 0 ? "#991b1b" : "#666", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5 }}>No realizadas</div>
+          <div onClick={() => cp.no_realizadas > 0 && abrirDetalle("no_realizadas", {}, "Aceptadas no realizadas")}
+            style={{ 
+              background: cp.no_realizadas > 0 ? "#fef2f2" : "#f9fafb", 
+              borderRadius: 8, padding: "12px 14px", 
+              cursor: cp.no_realizadas > 0 ? "pointer" : "default",
+              border: "1px solid transparent"
+            }}
+            onMouseOver={e => { if (cp.no_realizadas > 0) e.currentTarget.style.borderColor = "#991b1b"; }}
+            onMouseOut={e => { e.currentTarget.style.borderColor = "transparent"; }}>
+            <div style={{ fontSize: 10, color: cp.no_realizadas > 0 ? "#991b1b" : "#666", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, display: "flex", justifyContent: "space-between" }}>
+              <span>No realizadas</span>
+              {cp.no_realizadas > 0 && <span style={{ fontSize: 9, opacity: 0.6 }}>VER →</span>}
+            </div>
             <div style={{ fontSize: 24, fontWeight: 700, color: cp.no_realizadas > 0 ? "#991b1b" : "#666", marginTop: 2 }}>{cp.no_realizadas || 0}</div>
           </div>
         </div>
         
         {/* Split SDD vs Variable */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12 }}>
-          <div style={{ background: "#fff7ed", borderRadius: 8, padding: 14, border: "1px solid #fed7aa" }}>
-            <div style={{ fontSize: 11, color: "#9a3412", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>
-              SDD (Súper Dedicada)
+          <div onClick={() => abrirDetalle("ejecutadas", { fleet: "SDD" }, "Viajes ejecutados · SDD")}
+            style={{ background: "#fff7ed", borderRadius: 8, padding: 14, border: "1px solid #fed7aa", cursor: "pointer" }}>
+            <div style={{ fontSize: 11, color: "#9a3412", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8, display: "flex", justifyContent: "space-between" }}>
+              <span>SDD (Súper Dedicada)</span><span style={{ fontSize: 9, opacity: 0.6 }}>VER →</span>
             </div>
             <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
               <div><span style={{ color: "#888" }}>Aceptadas:</span> <strong>{cp.sdd?.aceptadas || 0}</strong></div>
@@ -15712,9 +15767,10 @@ function PoolMeliResumenKPI() {
               </div>
             </div>
           </div>
-          <div style={{ background: "#eef2ff", borderRadius: 8, padding: 14, border: "1px solid #c7d2fe" }}>
-            <div style={{ fontSize: 11, color: "#3730a3", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>
-              Variable (Flota libre)
+          <div onClick={() => abrirDetalle("ejecutadas", { fleet: "Variable" }, "Viajes ejecutados · Variable")}
+            style={{ background: "#eef2ff", borderRadius: 8, padding: 14, border: "1px solid #c7d2fe", cursor: "pointer" }}>
+            <div style={{ fontSize: 11, color: "#3730a3", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8, display: "flex", justifyContent: "space-between" }}>
+              <span>Variable (Flota libre)</span><span style={{ fontSize: 9, opacity: 0.6 }}>VER →</span>
             </div>
             <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
               <div><span style={{ color: "#888" }}>Aceptadas:</span> <strong>{cp.variable?.aceptadas || 0}</strong></div>
@@ -15738,13 +15794,14 @@ function PoolMeliResumenKPI() {
         
         {/* NS dual: ponderado vs promedio */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12, marginBottom: 16 }}>
-          <div style={{ 
-            background: colorBg(ns.pct_ponderado, ns.umbral), 
-            borderRadius: 8, padding: 16, 
-            border: `2px solid ${colorPct(ns.pct_ponderado, ns.umbral)}` 
-          }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: "#1a3a6b", textTransform: "uppercase", letterSpacing: 0.5 }}>
-              NS Ponderado (oficial MELI)
+          <div onClick={() => abrirDetalle("ejecutadas", {}, "Rutas ejecutadas (peor a mejor NS)")}
+            style={{ 
+              background: colorBg(ns.pct_ponderado, ns.umbral), 
+              borderRadius: 8, padding: 16, cursor: "pointer",
+              border: `2px solid ${colorPct(ns.pct_ponderado, ns.umbral)}` 
+            }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: "#1a3a6b", textTransform: "uppercase", letterSpacing: 0.5, display: "flex", justifyContent: "space-between" }}>
+              <span>NS Ponderado (oficial MELI)</span><span style={{ fontSize: 9, opacity: 0.6 }}>VER →</span>
             </div>
             <div style={{ fontSize: 36, fontWeight: 800, color: colorPct(ns.pct_ponderado, ns.umbral), marginTop: 4 }}>
               {ns.pct_ponderado || 0}% {!cumple(ns.pct_ponderado, ns.umbral) ? "🔴" : "✅"}
@@ -15753,13 +15810,14 @@ function PoolMeliResumenKPI() {
               {Number(ns.ent_total || 0).toLocaleString()} entregados de {Number(ns.desp_total || 0).toLocaleString()} despachados
             </div>
           </div>
-          <div style={{ 
-            background: colorBg(ns.pct_promedio, ns.umbral), 
-            borderRadius: 8, padding: 16, 
-            border: `2px solid ${colorPct(ns.pct_promedio, ns.umbral)}` 
-          }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: "#1a3a6b", textTransform: "uppercase", letterSpacing: 0.5 }}>
-              NS Promedio por ruta
+          <div onClick={() => abrirDetalle("ejecutadas", {}, "Rutas ejecutadas (NS por ruta)")}
+            style={{ 
+              background: colorBg(ns.pct_promedio, ns.umbral), 
+              borderRadius: 8, padding: 16, cursor: "pointer",
+              border: `2px solid ${colorPct(ns.pct_promedio, ns.umbral)}` 
+            }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: "#1a3a6b", textTransform: "uppercase", letterSpacing: 0.5, display: "flex", justifyContent: "space-between" }}>
+              <span>NS Promedio por ruta</span><span style={{ fontSize: 9, opacity: 0.6 }}>VER →</span>
             </div>
             <div style={{ fontSize: 36, fontWeight: 800, color: colorPct(ns.pct_promedio, ns.umbral), marginTop: 4 }}>
               {ns.pct_promedio || 0}% {!cumple(ns.pct_promedio, ns.umbral) ? "🔴" : "✅"}
@@ -15778,12 +15836,16 @@ function PoolMeliResumenKPI() {
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 8 }}>
               {(ns.por_sc || []).map(s => (
-                <div key={s.sc} style={{ 
+                <div key={s.sc} 
+                  onClick={() => abrirDetalle("ejecutadas", { sc: s.sc }, `Rutas de ${s.sc}`)}
+                  style={{ 
                   background: colorBg(s.ns_pct, ns.umbral), 
-                  borderRadius: 6, padding: "8px 10px", 
+                  borderRadius: 6, padding: "8px 10px", cursor: "pointer",
                   border: `1px solid ${colorPct(s.ns_pct, ns.umbral)}33` 
                 }}>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: "#1a3a6b" }}>{s.sc}</div>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: "#1a3a6b", display: "flex", justifyContent: "space-between" }}>
+                    <span>{s.sc}</span><span style={{ fontSize: 8, opacity: 0.5 }}>→</span>
+                  </div>
                   <div style={{ fontSize: 18, fontWeight: 800, color: colorPct(s.ns_pct, ns.umbral) }}>
                     {s.ns_pct}%
                   </div>
@@ -15804,12 +15866,16 @@ function PoolMeliResumenKPI() {
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 8 }}>
               {(ns.por_tipo || []).map(t => (
-                <div key={t.tipo} style={{ 
+                <div key={t.tipo} 
+                  onClick={() => abrirDetalle("ejecutadas", { tipo_ruta: t.tipo }, `Rutas tipo ${t.tipo}`)}
+                  style={{ 
                   background: colorBg(t.ns_pct, ns.umbral), 
-                  borderRadius: 6, padding: "10px 12px", 
+                  borderRadius: 6, padding: "10px 12px", cursor: "pointer",
                   border: `1px solid ${colorPct(t.ns_pct, ns.umbral)}33` 
                 }}>
-                  <div style={{ fontSize: 12, fontWeight: 700, color: "#1a3a6b" }}>{t.tipo}</div>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: "#1a3a6b", display: "flex", justifyContent: "space-between" }}>
+                    <span>{t.tipo}</span><span style={{ fontSize: 9, opacity: 0.5 }}>→</span>
+                  </div>
                   <div style={{ fontSize: 20, fontWeight: 800, color: colorPct(t.ns_pct, ns.umbral) }}>
                     {t.ns_pct}%
                   </div>
@@ -15833,29 +15899,41 @@ function PoolMeliResumenKPI() {
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 8 }}>
               {ns.caracteristicas.bulky > 0 && (
-                <div style={{ background: "#fef3c7", borderRadius: 6, padding: "10px 12px", border: "1px solid #fde68a" }}>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: "#92400e", textTransform: "uppercase", letterSpacing: 0.3 }}>📦 Bulky</div>
+                <div onClick={() => abrirDetalle("ejecutadas", { caracteristica: "bulky" }, "Rutas con Bulky")}
+                  style={{ background: "#fef3c7", borderRadius: 6, padding: "10px 12px", border: "1px solid #fde68a", cursor: "pointer" }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: "#92400e", textTransform: "uppercase", letterSpacing: 0.3, display: "flex", justifyContent: "space-between" }}>
+                    <span>📦 Bulky</span><span style={{ fontSize: 9, opacity: 0.5 }}>→</span>
+                  </div>
                   <div style={{ fontSize: 22, fontWeight: 800, color: "#92400e" }}>{ns.caracteristicas.bulky}</div>
                   <div style={{ fontSize: 10, color: "#888" }}>paquetes voluminosos</div>
                 </div>
               )}
               {ns.caracteristicas.bags > 0 && (
-                <div style={{ background: "#dbeafe", borderRadius: 6, padding: "10px 12px", border: "1px solid #bfdbfe" }}>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: "#1e40af", textTransform: "uppercase", letterSpacing: 0.3 }}>👜 Bags</div>
+                <div onClick={() => abrirDetalle("ejecutadas", { caracteristica: "bags" }, "Rutas con Bags")}
+                  style={{ background: "#dbeafe", borderRadius: 6, padding: "10px 12px", border: "1px solid #bfdbfe", cursor: "pointer" }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: "#1e40af", textTransform: "uppercase", letterSpacing: 0.3, display: "flex", justifyContent: "space-between" }}>
+                    <span>👜 Bags</span><span style={{ fontSize: 9, opacity: 0.5 }}>→</span>
+                  </div>
                   <div style={{ fontSize: 22, fontWeight: 800, color: "#1e40af" }}>{ns.caracteristicas.bags}</div>
                   <div style={{ fontSize: 10, color: "#888" }}>envíos consolidados</div>
                 </div>
               )}
               {ns.caracteristicas.ambulancia > 0 && (
-                <div style={{ background: "#fee2e2", borderRadius: 6, padding: "10px 12px", border: "1px solid #fecaca" }}>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: "#991b1b", textTransform: "uppercase", letterSpacing: 0.3 }}>🚑 Ambulancia</div>
+                <div onClick={() => abrirDetalle("ejecutadas", { caracteristica: "ambulancia" }, "Rutas Ambulancia")}
+                  style={{ background: "#fee2e2", borderRadius: 6, padding: "10px 12px", border: "1px solid #fecaca", cursor: "pointer" }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: "#991b1b", textTransform: "uppercase", letterSpacing: 0.3, display: "flex", justifyContent: "space-between" }}>
+                    <span>🚑 Ambulancia</span><span style={{ fontSize: 9, opacity: 0.5 }}>→</span>
+                  </div>
                   <div style={{ fontSize: 22, fontWeight: 800, color: "#991b1b" }}>{ns.caracteristicas.ambulancia}</div>
                   <div style={{ fontSize: 10, color: "#888" }}>ruta de urgencia</div>
                 </div>
               )}
               {ns.caracteristicas.pickup_node > 0 && (
-                <div style={{ background: "#e0e7ff", borderRadius: 6, padding: "10px 12px", border: "1px solid #c7d2fe" }}>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: "#3730a3", textTransform: "uppercase", letterSpacing: 0.3 }}>📍 Pickup Node</div>
+                <div onClick={() => abrirDetalle("ejecutadas", { caracteristica: "pickup_node" }, "Rutas con Pickup Node")}
+                  style={{ background: "#e0e7ff", borderRadius: 6, padding: "10px 12px", border: "1px solid #c7d2fe", cursor: "pointer" }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: "#3730a3", textTransform: "uppercase", letterSpacing: 0.3, display: "flex", justifyContent: "space-between" }}>
+                    <span>📍 Pickup Node</span><span style={{ fontSize: 9, opacity: 0.5 }}>→</span>
+                  </div>
                   <div style={{ fontSize: 22, fontWeight: 800, color: "#3730a3" }}>{ns.caracteristicas.pickup_node}</div>
                   <div style={{ fontSize: 10, color: "#888" }}>punto de recolección</div>
                 </div>
@@ -15878,16 +15956,19 @@ function PoolMeliResumenKPI() {
             <div style={{ fontSize: 16, fontWeight: 700, color: "#1a3a6b" }}>Nivel de Visitados</div>
             <div style={{ fontSize: 11, color: "#888", marginTop: 2 }}>Umbral mínimo: {nv.umbral}%</div>
           </div>
-          <div style={{ 
+          <div onClick={() => (nv.no_visitados || 0) > 0 && abrirDetalle("no_visitados", {}, "Rutas con paquetes no visitados")}
+            style={{ 
             background: colorBg(nv.pct_general, nv.umbral), 
             borderRadius: 8, padding: "10px 18px", 
-            border: `2px solid ${colorPct(nv.pct_general, nv.umbral)}`
+            border: `2px solid ${colorPct(nv.pct_general, nv.umbral)}`,
+            cursor: (nv.no_visitados || 0) > 0 ? "pointer" : "default"
           }}>
             <div style={{ fontSize: 32, fontWeight: 800, color: colorPct(nv.pct_general, nv.umbral) }}>
               {nv.pct_general || 0}% {!cumple(nv.pct_general, nv.umbral) ? "🔴" : "✅"}
             </div>
             <div style={{ fontSize: 11, color: "#666", textAlign: "right" }}>
               {Math.round(nv.no_visitados || 0)} no visitados de {Number(nv.desp_total || 0).toLocaleString()}
+              {(nv.no_visitados || 0) > 0 && <span style={{ marginLeft: 8, opacity: 0.6 }}>VER →</span>}
             </div>
           </div>
         </div>
@@ -15912,15 +15993,16 @@ function PoolMeliResumenKPI() {
         ) : (
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 8 }}>
             {(pnr.por_estado || []).map(e => {
-              // Definir colores según estado (heurística)
               const esCerrado = e.estado === "Anulado" || e.estado === "Enviado a facturacion";
               const bg = esCerrado ? "#f0fdf4" : "#fff7ed";
               const colorTxt = esCerrado ? "#166534" : "#9a3412";
               const colorVal = esCerrado ? "#16a34a" : "#ea580c";
               return (
-                <div key={e.estado} style={{ background: bg, borderRadius: 8, padding: "10px 14px", border: "1px solid #e4e7ec" }}>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: colorTxt, textTransform: "uppercase", letterSpacing: 0.3 }}>
-                    {e.estado}
+                <div key={e.estado} 
+                  onClick={() => abrirDetalle("pnr", { pnr_estado: e.estado }, `PNR · ${e.estado}`)}
+                  style={{ background: bg, borderRadius: 8, padding: "10px 14px", border: "1px solid #e4e7ec", cursor: "pointer" }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: colorTxt, textTransform: "uppercase", letterSpacing: 0.3, display: "flex", justifyContent: "space-between" }}>
+                    <span>{e.estado}</span><span style={{ fontSize: 9, opacity: 0.6 }}>VER →</span>
                   </div>
                   <div style={{ fontSize: 22, fontWeight: 800, color: colorVal, marginTop: 2 }}>
                     {e.cantidad}
@@ -15931,6 +16013,108 @@ function PoolMeliResumenKPI() {
           </div>
         )}
       </div>
+      
+      {/* MODAL DE DETALLE */}
+      {modal && (
+        <div onClick={() => setModal(null)}
+          style={{
+            position: "fixed", top: 0, left: 0, right: 0, bottom: 0,
+            background: "rgba(0,0,0,0.5)", zIndex: 1000,
+            display: "flex", alignItems: "center", justifyContent: "center", padding: 20
+          }}>
+          <div onClick={(e) => e.stopPropagation()}
+            style={{
+              background: "#fff", borderRadius: 12, maxWidth: "95vw", maxHeight: "90vh",
+              width: 1200, display: "flex", flexDirection: "column", overflow: "hidden"
+            }}>
+            {/* Header */}
+            <div style={{
+              padding: "16px 20px", borderBottom: "1px solid #e4e7ec",
+              display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12
+            }}>
+              <div style={{ fontSize: 16, fontWeight: 700, color: "#1a3a6b" }}>{modal.titulo}</div>
+              <div style={{ display: "flex", gap: 8 }}>
+                {modal.filas && modal.filas.length > 0 && !modal.filas[0]?.error && (
+                  <button onClick={() => descargarExcelMeli(modal.filas, modal.nombreArchivo || "kpi_detalle", "Detalle")}
+                    style={{
+                      background: "#16a34a", color: "#fff", border: "none", borderRadius: 6,
+                      padding: "8px 14px", fontSize: 12, fontWeight: 600, cursor: "pointer"
+                    }}>
+                    📥 Descargar Excel
+                  </button>
+                )}
+                <button onClick={() => setModal(null)}
+                  style={{
+                    background: "#f1f5f9", border: "none", borderRadius: 6,
+                    padding: "8px 14px", fontSize: 12, fontWeight: 600, cursor: "pointer", color: "#475569"
+                  }}>
+                  Cerrar
+                </button>
+              </div>
+            </div>
+            
+            {/* Contenido tabla */}
+            <div style={{ overflow: "auto", flex: 1, padding: 0 }}>
+              {modalLoading ? (
+                <div style={{ padding: 40, textAlign: "center", color: "#888" }}>Cargando...</div>
+              ) : modal.filas && modal.filas.length === 0 ? (
+                <div style={{ padding: 40, textAlign: "center", color: "#888" }}>
+                  Sin datos para mostrar
+                </div>
+              ) : modal.filas && modal.filas[0]?.error ? (
+                <div style={{ padding: 40, textAlign: "center", color: "#c0392b" }}>
+                  Error: {modal.filas[0].error}
+                </div>
+              ) : (
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                  <thead style={{ background: "#f8fafc", position: "sticky", top: 0, zIndex: 1 }}>
+                    <tr>
+                      {Object.keys(modal.filas[0] || {}).map(col => (
+                        <th key={col} style={{
+                          padding: "10px 12px", textAlign: "left", fontWeight: 700,
+                          color: "#475569", textTransform: "uppercase", fontSize: 10, letterSpacing: 0.5,
+                          borderBottom: "2px solid #e4e7ec", whiteSpace: "nowrap"
+                        }}>
+                          {col.replace(/_/g, " ")}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {modal.filas.map((fila, i) => (
+                      <tr key={i} style={{ borderBottom: "1px solid #f1f5f9" }}>
+                        {Object.keys(modal.filas[0] || {}).map(col => {
+                          const val = fila[col];
+                          const display = val === null || val === undefined ? "—" : 
+                                         typeof val === "boolean" ? (val ? "Sí" : "No") :
+                                         typeof val === "number" ? val.toLocaleString() : 
+                                         String(val);
+                          return (
+                            <td key={col} style={{ 
+                              padding: "8px 12px", color: "#475569", whiteSpace: "nowrap",
+                              maxWidth: 300, overflow: "hidden", textOverflow: "ellipsis"
+                            }}>
+                              {display}
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+            
+            {/* Footer */}
+            <div style={{
+              padding: "10px 20px", borderTop: "1px solid #e4e7ec",
+              fontSize: 11, color: "#888", background: "#f8fafc"
+            }}>
+              {modal.filas && !modal.filas[0]?.error ? `${modal.filas.length} fila${modal.filas.length === 1 ? '' : 's'}` : ''}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
