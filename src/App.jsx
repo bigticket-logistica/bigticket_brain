@@ -15304,8 +15304,8 @@ function IndicadoresOperacionalesMX({ usuario }) {
         
         const [r1, r2, r3, r4, r5] = await Promise.all([
           sb.from("vw_meli_dashboard_resumen").select("*").maybeSingle(),
-          sb.from("vw_meli_inventario_drivers").select("*").order("viajes_total", { ascending: false }),
-          sb.from("vw_meli_inventario_vehiculos").select("*").order("viajes_total", { ascending: false }),
+          sb.rpc("get_inventario_drivers_mes", { fecha_desde: desde, fecha_hasta: hasta }),
+          sb.rpc("get_inventario_vehiculos_mes", { fecha_desde: desde, fecha_hasta: hasta }),
           sb.rpc("get_ciclo_aceptacion_sc", { fecha_desde: desde, fecha_hasta: hasta }),
           sb.rpc("get_score_compromiso", { fecha_desde: desde, fecha_hasta: hasta }),
         ]);
@@ -15314,8 +15314,8 @@ function IndicadoresOperacionalesMX({ usuario }) {
           throw new Error(r1.error?.message || r2.error?.message || r3.error?.message || r4.error?.message || r5.error?.message);
         }
         setResumen(r1.data);
-        setDrivers(r2.data || []);
-        setVehiculos(r3.data || []);
+        setDrivers((r2.data || []).sort((a, b) => (b.viajes_total || 0) - (a.viajes_total || 0)));
+        setVehiculos((r3.data || []).sort((a, b) => (b.viajes_total || 0) - (a.viajes_total || 0)));
         setSCs((r4.data || []).sort((a, b) => (b.ofrecidas || 0) - (a.ofrecidas || 0)));
         setScores((r5.data || []).sort((a, b) => (b.score_total || 0) - (a.score_total || 0)));
       } catch (e) {
@@ -15704,7 +15704,7 @@ function PoolMeliInventario({ drivers, vehiculos, resumen, setModal, setDetalle,
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 16 }}>
           <PoolMeliKpi label="En master oficial" value={r.drivers_master ?? driversEnMaster.length} sublabel="API rostering Meli"
                        onClick={verDriversMaster} />
-          <PoolMeliKpi label="Activos en abril" value={driversActivos.length} sublabel={`${Math.round(driversActivos.length / (r.drivers_master || 1) * 100)}% del master`} color="#047857"
+          <PoolMeliKpi label={`Activos en ${NOMBRES_MES[mesSeleccionado.mes - 1]}`} value={driversActivos.length} sublabel={`${Math.round(driversActivos.length / (r.drivers_master || 1) * 100)}% del master`} color="#047857"
                        onClick={() => setFiltroCat("activos")} />
           <PoolMeliKpi label="Durmientes" value={r.drivers_durmientes ?? driversDurmientes.length} sublabel="En master, no operaron"
                        onClick={() => setFiltroCat("durmientes")} />
@@ -15716,9 +15716,9 @@ function PoolMeliInventario({ drivers, vehiculos, resumen, setModal, setDetalle,
       {tipo === "vehicles" && (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 16 }}>
           <PoolMeliKpi label="En master oficial" value={r.vehiculos_master} sublabel="API rostering Meli" />
-          <PoolMeliKpi label="Activos en abril" value={vehiculosActivos.length} sublabel={`${Math.round(vehiculosActivos.length / (r.vehiculos_master || 1) * 100)}% de la flota`} color="#047857"
+          <PoolMeliKpi label={`Activos en ${NOMBRES_MES[mesSeleccionado.mes - 1]}`} value={vehiculosActivos.length} sublabel={`${Math.round(vehiculosActivos.length / (r.vehiculos_master || 1) * 100)}% de la flota`} color="#047857"
                        onClick={() => setFiltroCat("activos")} />
-          <PoolMeliKpi label="Durmientes" value={r.vehiculos_durmientes} sublabel="Sin uso en abril"
+          <PoolMeliKpi label="Durmientes" value={r.vehiculos_durmientes} sublabel={`Sin uso en ${NOMBRES_MES[mesSeleccionado.mes - 1]}`}
                        onClick={() => setFiltroCat("durmientes")} />
           <PoolMeliKpi label="Fantasmas" value={r.vehiculos_fantasma} sublabel="Sin registro oficial" danger
                        onClick={() => setFiltroCat("fantasmas")} />
