@@ -15606,15 +15606,27 @@ function PoolMeliResumenKPI() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   
-  // Día anterior (D-1)
-  const ayer = useMemo(() => {
+  // Helpers de fecha
+  const restarDias = (n) => {
     const d = new Date();
-    d.setDate(d.getDate() - 1);
+    d.setDate(d.getDate() - n);
     return d;
-  }, []);
+  };
+  const formatearISO = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   
-  const fechaAyer = `${ayer.getFullYear()}-${String(ayer.getMonth() + 1).padStart(2, '0')}-${String(ayer.getDate()).padStart(2, '0')}`;
-  const fechaDisplayAyer = `${String(ayer.getDate()).padStart(2, '0')}-${String(ayer.getMonth() + 1).padStart(2, '0')}-${ayer.getFullYear()}`;
+  // Estado de la fecha seleccionada (default: D-1)
+  const [fechaSeleccionada, setFechaSeleccionada] = useState(() => formatearISO(restarDias(1)));
+  
+  // Calcular qué tipo de fecha tenemos para el botón activo
+  const fechasReferencia = useMemo(() => ({
+    d1: formatearISO(restarDias(1)),
+    d7: formatearISO(restarDias(7)),
+    d30: formatearISO(restarDias(30)),
+  }), []);
+  
+  // Para mostrar la fecha en formato legible
+  const fechaObj = useMemo(() => new Date(fechaSeleccionada + 'T12:00:00'), [fechaSeleccionada]);
+  const fechaDisplay = `${String(fechaObj.getDate()).padStart(2, '0')}-${String(fechaObj.getMonth() + 1).padStart(2, '0')}-${fechaObj.getFullYear()}`;
   
   useEffect(() => {
     let alive = true;
@@ -15622,7 +15634,7 @@ function PoolMeliResumenKPI() {
       setLoading(true);
       setError(null);
       try {
-        const { data: rpc, error } = await sb.rpc("get_resumen_kpi_dia", { p_fecha: fechaAyer });
+        const { data: rpc, error } = await sb.rpc("get_resumen_kpi_dia", { p_fecha: fechaSeleccionada });
         if (!alive) return;
         if (error) throw error;
         setData(rpc);
@@ -15633,7 +15645,7 @@ function PoolMeliResumenKPI() {
       }
     })();
     return () => { alive = false; };
-  }, [fechaAyer]);
+  }, [fechaSeleccionada]);
 
   // Modal de detalle drilldown
   const [modal, setModal] = useState(null);
@@ -15644,7 +15656,7 @@ function PoolMeliResumenKPI() {
     setModal({ titulo: titulo || `Cargando...`, filas: [], tipo });
     try {
       const { data: filas, error: err } = await sb.rpc("get_kpi_detalle", {
-        p_fecha: fechaAyer,
+        p_fecha: fechaSeleccionada,
         p_tipo: tipo,
         p_filtro_sc: filtros.sc || null,
         p_filtro_fleet: filtros.fleet || null,
@@ -15658,7 +15670,7 @@ function PoolMeliResumenKPI() {
         titulo: `${titulo} (${arr.length})`, 
         filas: arr, 
         tipo,
-        nombreArchivo: `kpi_${tipo}_${fechaAyer}${filtros.sc ? '_' + filtros.sc : ''}${filtros.fleet ? '_' + filtros.fleet : ''}`
+        nombreArchivo: `kpi_${tipo}_${fechaSeleccionada}${filtros.sc ? '_' + filtros.sc : ''}${filtros.fleet ? '_' + filtros.fleet : ''}`
       });
     } catch (e) {
       setModal({ titulo: "Error", filas: [{ error: e.message }], tipo });
@@ -15682,24 +15694,81 @@ function PoolMeliResumenKPI() {
   const colorBg = (pct, umbral) => cumple(pct, umbral) ? "#f0fdf4" : "#fef2f2";
   
   const meses = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"];
-  const fechaTexto = `${ayer.getDate()} de ${meses[ayer.getMonth()]} de ${ayer.getFullYear()}`;
+  const fechaTexto = `${fechaObj.getDate()} de ${meses[fechaObj.getMonth()]} de ${fechaObj.getFullYear()}`;
+  
+  // Botón activo: comparar fecha seleccionada con cada referencia
+  const botonActivo = fechaSeleccionada === fechasReferencia.d1 ? 'd1'
+                   : fechaSeleccionada === fechasReferencia.d7 ? 'd7'
+                   : fechaSeleccionada === fechasReferencia.d30 ? 'd30'
+                   : 'custom';
+  
+  const estiloBoton = (activo) => ({
+    padding: "8px 14px",
+    background: activo ? "#fff" : "transparent",
+    color: activo ? "#1a3a6b" : "#fff",
+    border: "1px solid rgba(255,255,255,0.3)",
+    borderRadius: 6,
+    fontSize: 12,
+    fontWeight: 700,
+    cursor: "pointer",
+    fontFamily: "'Geist', sans-serif",
+    transition: "all 0.15s",
+  });
   
   return (
     <div className="pg">
-      {/* Header con fecha */}
+      {/* Header con selector de fecha */}
       <div style={{
         background: "linear-gradient(135deg, #1a3a6b 0%, #2d4f8e 100%)",
         borderRadius: 12, padding: "16px 20px", marginBottom: 20,
-        color: "#fff", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12
+        color: "#fff"
       }}>
-        <div>
-          <div style={{ fontSize: 11, color: "#aac3e8", textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 700 }}>
-            Resumen del día anterior
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12, marginBottom: 12 }}>
+          <div>
+            <div style={{ fontSize: 11, color: "#aac3e8", textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 700 }}>
+              Resumen del día
+            </div>
+            <div style={{ fontSize: 22, fontWeight: 700, marginTop: 2 }}>{fechaTexto}</div>
           </div>
-          <div style={{ fontSize: 22, fontWeight: 700, marginTop: 2 }}>{fechaTexto}</div>
+          <div style={{ fontSize: 12, color: "#aac3e8" }}>
+            {fechaDisplay}
+          </div>
         </div>
-        <div style={{ fontSize: 12, color: "#aac3e8" }}>
-          {fechaDisplayAyer}
+        
+        {/* Botones de selección rápida + calendario */}
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <button onClick={() => setFechaSeleccionada(fechasReferencia.d1)}
+                  style={estiloBoton(botonActivo === 'd1')}>
+            Ayer (D-1)
+          </button>
+          <button onClick={() => setFechaSeleccionada(fechasReferencia.d7)}
+                  style={estiloBoton(botonActivo === 'd7')}>
+            D-7
+          </button>
+          <button onClick={() => setFechaSeleccionada(fechasReferencia.d30)}
+                  style={estiloBoton(botonActivo === 'd30')}>
+            D-30
+          </button>
+          <div style={{ width: 1, height: 24, background: "rgba(255,255,255,0.3)", margin: "0 4px" }} />
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ fontSize: 11, color: "#aac3e8", fontWeight: 600 }}>📅</span>
+            <input type="date"
+                   value={fechaSeleccionada}
+                   max={fechasReferencia.d1}
+                   onChange={(e) => e.target.value && setFechaSeleccionada(e.target.value)}
+                   style={{
+                     padding: "7px 10px",
+                     background: botonActivo === 'custom' ? "#fff" : "rgba(255,255,255,0.15)",
+                     color: botonActivo === 'custom' ? "#1a3a6b" : "#fff",
+                     border: "1px solid rgba(255,255,255,0.3)",
+                     borderRadius: 6,
+                     fontSize: 12,
+                     fontWeight: 600,
+                     cursor: "pointer",
+                     fontFamily: "'Geist', sans-serif",
+                     colorScheme: botonActivo === 'custom' ? "light" : "dark",
+                   }} />
+          </div>
         </div>
       </div>
 
