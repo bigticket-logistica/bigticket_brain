@@ -15798,7 +15798,7 @@ function PoolMeliResumenKPI() {
         
         {/* NS por tipo de ruta */}
         {(ns.por_tipo || []).length > 0 && (
-          <div>
+          <div style={{ marginBottom: 14 }}>
             <div style={{ fontSize: 12, fontWeight: 700, color: "#475569", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>
               Por tipo de ruta
             </div>
@@ -15818,6 +15818,48 @@ function PoolMeliResumenKPI() {
                   </div>
                 </div>
               ))}
+            </div>
+          </div>
+        )}
+        
+        {/* Características especiales (overlap permitido) */}
+        {ns.caracteristicas && (
+          (ns.caracteristicas.bulky || 0) + (ns.caracteristicas.bags || 0) + 
+          (ns.caracteristicas.ambulancia || 0) + (ns.caracteristicas.pickup_node || 0) > 0
+        ) && (
+          <div>
+            <div style={{ fontSize: 12, fontWeight: 700, color: "#475569", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>
+              Características especiales (puede haber overlap)
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 8 }}>
+              {ns.caracteristicas.bulky > 0 && (
+                <div style={{ background: "#fef3c7", borderRadius: 6, padding: "10px 12px", border: "1px solid #fde68a" }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: "#92400e", textTransform: "uppercase", letterSpacing: 0.3 }}>📦 Bulky</div>
+                  <div style={{ fontSize: 22, fontWeight: 800, color: "#92400e" }}>{ns.caracteristicas.bulky}</div>
+                  <div style={{ fontSize: 10, color: "#888" }}>paquetes voluminosos</div>
+                </div>
+              )}
+              {ns.caracteristicas.bags > 0 && (
+                <div style={{ background: "#dbeafe", borderRadius: 6, padding: "10px 12px", border: "1px solid #bfdbfe" }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: "#1e40af", textTransform: "uppercase", letterSpacing: 0.3 }}>👜 Bags</div>
+                  <div style={{ fontSize: 22, fontWeight: 800, color: "#1e40af" }}>{ns.caracteristicas.bags}</div>
+                  <div style={{ fontSize: 10, color: "#888" }}>envíos consolidados</div>
+                </div>
+              )}
+              {ns.caracteristicas.ambulancia > 0 && (
+                <div style={{ background: "#fee2e2", borderRadius: 6, padding: "10px 12px", border: "1px solid #fecaca" }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: "#991b1b", textTransform: "uppercase", letterSpacing: 0.3 }}>🚑 Ambulancia</div>
+                  <div style={{ fontSize: 22, fontWeight: 800, color: "#991b1b" }}>{ns.caracteristicas.ambulancia}</div>
+                  <div style={{ fontSize: 10, color: "#888" }}>ruta de urgencia</div>
+                </div>
+              )}
+              {ns.caracteristicas.pickup_node > 0 && (
+                <div style={{ background: "#e0e7ff", borderRadius: 6, padding: "10px 12px", border: "1px solid #c7d2fe" }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: "#3730a3", textTransform: "uppercase", letterSpacing: 0.3 }}>📍 Pickup Node</div>
+                  <div style={{ fontSize: 22, fontWeight: 800, color: "#3730a3" }}>{ns.caracteristicas.pickup_node}</div>
+                  <div style={{ fontSize: 10, color: "#888" }}>punto de recolección</div>
+                </div>
+              )}
             </div>
           </div>
         )}
