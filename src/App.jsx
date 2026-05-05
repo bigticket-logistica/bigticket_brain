@@ -15614,27 +15614,55 @@ function PoolMeliResumenKPI() {
   };
   const formatearISO = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   
-  // Estado de la fecha seleccionada (default: D-1)
+  // ─── Selector de período ───────────────────────────────────────────────
+  // modo: 'dia' (un día específico) | 'rango' (período acumulado)
+  const [modo, setModo] = useState('dia');
+  
+  // Estado del día (default: ayer)
   const [fechaSeleccionada, setFechaSeleccionada] = useState(() => formatearISO(restarDias(1)));
   
-  // Calcular qué tipo de fecha tenemos para el botón activo
+  // Estado del rango (default: últimos 7 días)
+  const [rangoSel, setRangoSel] = useState(() => ({
+    desde: formatearISO(restarDias(7)),
+    hasta: formatearISO(restarDias(1)),
+  }));
+  
+  // Fechas de referencia para los botones (calculadas una vez al montar)
   const fechasReferencia = useMemo(() => ({
     d1: formatearISO(restarDias(1)),
     d7: formatearISO(restarDias(7)),
     d30: formatearISO(restarDias(30)),
   }), []);
   
-  // Para mostrar la fecha en formato legible
-  const fechaObj = useMemo(() => new Date(fechaSeleccionada + 'T12:00:00'), [fechaSeleccionada]);
-  const fechaDisplay = `${String(fechaObj.getDate()).padStart(2, '0')}-${String(fechaObj.getMonth() + 1).padStart(2, '0')}-${fechaObj.getFullYear()}`;
+  // Display formateado
+  const formatearDisplay = (yyyymmdd) => {
+    if (!yyyymmdd) return '';
+    const [y, m, d] = yyyymmdd.split('-');
+    return `${d}-${m}-${y}`;
+  };
+  const meses = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
+  const fechaTextoLargo = (yyyymmdd) => {
+    if (!yyyymmdd) return '';
+    const [y, m, d] = yyyymmdd.split('-').map(Number);
+    return `${d} de ${meses[m-1]} de ${y}`;
+  };
   
+  // Cargar datos según modo
   useEffect(() => {
     let alive = true;
     (async () => {
       setLoading(true);
       setError(null);
       try {
-        const { data: rpc, error } = await sb.rpc("get_resumen_kpi_dia", { p_fecha: fechaSeleccionada });
+        let rpc, error;
+        if (modo === 'dia') {
+          ({ data: rpc, error } = await sb.rpc("get_resumen_kpi_dia", { p_fecha: fechaSeleccionada }));
+        } else {
+          ({ data: rpc, error } = await sb.rpc("get_resumen_kpi_rango", { 
+            p_fecha_desde: rangoSel.desde, 
+            p_fecha_hasta: rangoSel.hasta 
+          }));
+        }
         if (!alive) return;
         if (error) throw error;
         setData(rpc);
@@ -15645,7 +15673,7 @@ function PoolMeliResumenKPI() {
       }
     })();
     return () => { alive = false; };
-  }, [fechaSeleccionada]);
+  }, [modo, fechaSeleccionada, rangoSel.desde, rangoSel.hasta]);
 
   // Modal de detalle drilldown
   const [modal, setModal] = useState(null);
@@ -15655,22 +15683,37 @@ function PoolMeliResumenKPI() {
     setModalLoading(true);
     setModal({ titulo: titulo || `Cargando...`, filas: [], tipo });
     try {
-      const { data: filas, error: err } = await sb.rpc("get_kpi_detalle", {
-        p_fecha: fechaSeleccionada,
-        p_tipo: tipo,
-        p_filtro_sc: filtros.sc || null,
-        p_filtro_fleet: filtros.fleet || null,
-        p_filtro_tipo_ruta: filtros.tipo_ruta || null,
-        p_filtro_caracteristica: filtros.caracteristica || null,
-        p_filtro_pnr_estado: filtros.pnr_estado || null,
-      });
+      let filas, err;
+      if (modo === 'dia') {
+        ({ data: filas, error: err } = await sb.rpc("get_kpi_detalle", {
+          p_fecha: fechaSeleccionada,
+          p_tipo: tipo,
+          p_filtro_sc: filtros.sc || null,
+          p_filtro_fleet: filtros.fleet || null,
+          p_filtro_tipo_ruta: filtros.tipo_ruta || null,
+          p_filtro_caracteristica: filtros.caracteristica || null,
+          p_filtro_pnr_estado: filtros.pnr_estado || null,
+        }));
+      } else {
+        ({ data: filas, error: err } = await sb.rpc("get_kpi_detalle_rango", {
+          p_fecha_desde: rangoSel.desde,
+          p_fecha_hasta: rangoSel.hasta,
+          p_tipo: tipo,
+          p_filtro_sc: filtros.sc || null,
+          p_filtro_fleet: filtros.fleet || null,
+          p_filtro_tipo_ruta: filtros.tipo_ruta || null,
+          p_filtro_caracteristica: filtros.caracteristica || null,
+          p_filtro_pnr_estado: filtros.pnr_estado || null,
+        }));
+      }
       if (err) throw err;
       const arr = Array.isArray(filas) ? filas : [];
+      const sufijoArchivo = modo === 'dia' ? fechaSeleccionada : `${rangoSel.desde}_a_${rangoSel.hasta}`;
       setModal({ 
         titulo: `${titulo} (${arr.length})`, 
         filas: arr, 
         tipo,
-        nombreArchivo: `kpi_${tipo}_${fechaSeleccionada}${filtros.sc ? '_' + filtros.sc : ''}${filtros.fleet ? '_' + filtros.fleet : ''}`
+        nombreArchivo: `kpi_${tipo}_${sufijoArchivo}${filtros.sc ? '_' + filtros.sc : ''}${filtros.fleet ? '_' + filtros.fleet : ''}`
       });
     } catch (e) {
       setModal({ titulo: "Error", filas: [{ error: e.message }], tipo });
@@ -15693,14 +15736,33 @@ function PoolMeliResumenKPI() {
   const colorPct = (pct, umbral) => cumple(pct, umbral) ? "#16a34a" : "#dc2626";
   const colorBg = (pct, umbral) => cumple(pct, umbral) ? "#f0fdf4" : "#fef2f2";
   
-  const meses = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"];
-  const fechaTexto = `${fechaObj.getDate()} de ${meses[fechaObj.getMonth()]} de ${fechaObj.getFullYear()}`;
+  // Texto principal del header según modo
+  const tituloModo = modo === 'dia' ? 'Resumen del día' : 'Resumen del período';
+  const fechaTexto = modo === 'dia' 
+    ? fechaTextoLargo(fechaSeleccionada)
+    : `${fechaTextoLargo(rangoSel.desde)} → ${fechaTextoLargo(rangoSel.hasta)}`;
+  const fechaCorta = modo === 'dia'
+    ? formatearDisplay(fechaSeleccionada)
+    : `${formatearDisplay(rangoSel.desde)} → ${formatearDisplay(rangoSel.hasta)}`;
   
-  // Botón activo: comparar fecha seleccionada con cada referencia
-  const botonActivo = fechaSeleccionada === fechasReferencia.d1 ? 'd1'
-                   : fechaSeleccionada === fechasReferencia.d7 ? 'd7'
-                   : fechaSeleccionada === fechasReferencia.d30 ? 'd30'
-                   : 'custom';
+  // Cantidad de días del rango
+  const diasRango = useMemo(() => {
+    if (modo !== 'rango') return 1;
+    const d1 = new Date(rangoSel.desde);
+    const d2 = new Date(rangoSel.hasta);
+    return Math.round((d2 - d1) / (1000 * 60 * 60 * 24)) + 1;
+  }, [modo, rangoSel.desde, rangoSel.hasta]);
+  
+  // Detectar botón activo (día)
+  const botonDiaActivo = fechaSeleccionada === fechasReferencia.d1 ? 'd1'
+                     : fechaSeleccionada === fechasReferencia.d7 ? 'd7'
+                     : fechaSeleccionada === fechasReferencia.d30 ? 'd30'
+                     : 'custom';
+  
+  // Detectar botón activo (rango)
+  const esRango7 = rangoSel.desde === fechasReferencia.d7 && rangoSel.hasta === fechasReferencia.d1;
+  const esRango30 = rangoSel.desde === fechasReferencia.d30 && rangoSel.hasta === fechasReferencia.d1;
+  const botonRangoActivo = esRango7 ? '7d' : esRango30 ? '30d' : 'custom';
   
   const estiloBoton = (activo) => ({
     padding: "8px 14px",
@@ -15715,6 +15777,18 @@ function PoolMeliResumenKPI() {
     transition: "all 0.15s",
   });
   
+  const estiloToggle = (activo) => ({
+    padding: "6px 14px",
+    background: activo ? "#fff" : "rgba(255,255,255,0.1)",
+    color: activo ? "#1a3a6b" : "#fff",
+    border: "none",
+    borderRadius: 6,
+    fontSize: 12,
+    fontWeight: 700,
+    cursor: "pointer",
+    fontFamily: "'Geist', sans-serif",
+  });
+  
   return (
     <div className="pg">
       {/* Header con selector de fecha */}
@@ -15726,50 +15800,112 @@ function PoolMeliResumenKPI() {
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12, marginBottom: 12 }}>
           <div>
             <div style={{ fontSize: 11, color: "#aac3e8", textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 700 }}>
-              Resumen del día
+              {tituloModo}
+              {modo === 'rango' && <span style={{ marginLeft: 8, opacity: 0.7 }}>· {diasRango} días</span>}
             </div>
-            <div style={{ fontSize: 22, fontWeight: 700, marginTop: 2 }}>{fechaTexto}</div>
+            <div style={{ fontSize: modo === 'rango' ? 16 : 22, fontWeight: 700, marginTop: 2 }}>{fechaTexto}</div>
           </div>
           <div style={{ fontSize: 12, color: "#aac3e8" }}>
-            {fechaDisplay}
+            {fechaCorta}
           </div>
         </div>
         
-        {/* Botones de selección rápida + calendario */}
-        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-          <button onClick={() => setFechaSeleccionada(fechasReferencia.d1)}
-                  style={estiloBoton(botonActivo === 'd1')}>
-            Ayer (D-1)
+        {/* Toggle Día / Rango */}
+        <div style={{ display: "flex", alignItems: "center", gap: 4, marginBottom: 10, background: "rgba(0,0,0,0.15)", padding: 4, borderRadius: 8, width: "fit-content" }}>
+          <button onClick={() => setModo('dia')} style={estiloToggle(modo === 'dia')}>
+            📅 Día exacto
           </button>
-          <button onClick={() => setFechaSeleccionada(fechasReferencia.d7)}
-                  style={estiloBoton(botonActivo === 'd7')}>
-            D-7
+          <button onClick={() => setModo('rango')} style={estiloToggle(modo === 'rango')}>
+            📊 Rango acumulado
           </button>
-          <button onClick={() => setFechaSeleccionada(fechasReferencia.d30)}
-                  style={estiloBoton(botonActivo === 'd30')}>
-            D-30
-          </button>
-          <div style={{ width: 1, height: 24, background: "rgba(255,255,255,0.3)", margin: "0 4px" }} />
-          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <span style={{ fontSize: 11, color: "#aac3e8", fontWeight: 600 }}>📅</span>
-            <input type="date"
-                   value={fechaSeleccionada}
-                   max={fechasReferencia.d1}
-                   onChange={(e) => e.target.value && setFechaSeleccionada(e.target.value)}
-                   style={{
-                     padding: "7px 10px",
-                     background: botonActivo === 'custom' ? "#fff" : "rgba(255,255,255,0.15)",
-                     color: botonActivo === 'custom' ? "#1a3a6b" : "#fff",
-                     border: "1px solid rgba(255,255,255,0.3)",
-                     borderRadius: 6,
-                     fontSize: 12,
-                     fontWeight: 600,
-                     cursor: "pointer",
-                     fontFamily: "'Geist', sans-serif",
-                     colorScheme: botonActivo === 'custom' ? "light" : "dark",
-                   }} />
-          </div>
         </div>
+        
+        {/* Botones contextuales según modo */}
+        {modo === 'dia' ? (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <button onClick={() => setFechaSeleccionada(fechasReferencia.d1)}
+                    style={estiloBoton(botonDiaActivo === 'd1')}>
+              Ayer (D-1)
+            </button>
+            <button onClick={() => setFechaSeleccionada(fechasReferencia.d7)}
+                    style={estiloBoton(botonDiaActivo === 'd7')}>
+              D-7
+            </button>
+            <button onClick={() => setFechaSeleccionada(fechasReferencia.d30)}
+                    style={estiloBoton(botonDiaActivo === 'd30')}>
+              D-30
+            </button>
+            <div style={{ width: 1, height: 24, background: "rgba(255,255,255,0.3)", margin: "0 4px" }} />
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ fontSize: 11, color: "#aac3e8", fontWeight: 600 }}>📅 Día específico:</span>
+              <input type="date"
+                     value={fechaSeleccionada}
+                     max={fechasReferencia.d1}
+                     onChange={(e) => e.target.value && setFechaSeleccionada(e.target.value)}
+                     style={{
+                       padding: "7px 10px",
+                       background: botonDiaActivo === 'custom' ? "#fff" : "rgba(255,255,255,0.15)",
+                       color: botonDiaActivo === 'custom' ? "#1a3a6b" : "#fff",
+                       border: "1px solid rgba(255,255,255,0.3)",
+                       borderRadius: 6,
+                       fontSize: 12,
+                       fontWeight: 600,
+                       cursor: "pointer",
+                       fontFamily: "'Geist', sans-serif",
+                       colorScheme: botonDiaActivo === 'custom' ? "light" : "dark",
+                     }} />
+            </div>
+          </div>
+        ) : (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <button onClick={() => setRangoSel({ desde: fechasReferencia.d7, hasta: fechasReferencia.d1 })}
+                    style={estiloBoton(botonRangoActivo === '7d')}>
+              Últimos 7 días
+            </button>
+            <button onClick={() => setRangoSel({ desde: fechasReferencia.d30, hasta: fechasReferencia.d1 })}
+                    style={estiloBoton(botonRangoActivo === '30d')}>
+              Últimos 30 días
+            </button>
+            <div style={{ width: 1, height: 24, background: "rgba(255,255,255,0.3)", margin: "0 4px" }} />
+            <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+              <span style={{ fontSize: 11, color: "#aac3e8", fontWeight: 600 }}>📅 Rango personalizado:</span>
+              <input type="date"
+                     value={rangoSel.desde}
+                     max={rangoSel.hasta}
+                     onChange={(e) => e.target.value && setRangoSel(r => ({ ...r, desde: e.target.value }))}
+                     style={{
+                       padding: "7px 10px",
+                       background: botonRangoActivo === 'custom' ? "#fff" : "rgba(255,255,255,0.15)",
+                       color: botonRangoActivo === 'custom' ? "#1a3a6b" : "#fff",
+                       border: "1px solid rgba(255,255,255,0.3)",
+                       borderRadius: 6,
+                       fontSize: 12,
+                       fontWeight: 600,
+                       cursor: "pointer",
+                       fontFamily: "'Geist', sans-serif",
+                       colorScheme: botonRangoActivo === 'custom' ? "light" : "dark",
+                     }} />
+              <span style={{ fontSize: 12, color: "#aac3e8" }}>→</span>
+              <input type="date"
+                     value={rangoSel.hasta}
+                     min={rangoSel.desde}
+                     max={fechasReferencia.d1}
+                     onChange={(e) => e.target.value && setRangoSel(r => ({ ...r, hasta: e.target.value }))}
+                     style={{
+                       padding: "7px 10px",
+                       background: botonRangoActivo === 'custom' ? "#fff" : "rgba(255,255,255,0.15)",
+                       color: botonRangoActivo === 'custom' ? "#1a3a6b" : "#fff",
+                       border: "1px solid rgba(255,255,255,0.3)",
+                       borderRadius: 6,
+                       fontSize: 12,
+                       fontWeight: 600,
+                       cursor: "pointer",
+                       fontFamily: "'Geist', sans-serif",
+                       colorScheme: botonRangoActivo === 'custom' ? "light" : "dark",
+                     }} />
+            </div>
+          </div>
+        )}
       </div>
 
       {/* BLOQUE 1: CUMPLIMIENTO DE PROMESA */}
