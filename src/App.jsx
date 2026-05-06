@@ -15796,6 +15796,7 @@ function PoolMeliResumenKPI() {
   if (!data) return <div className="pg" style={{ padding: 40, color: "#888" }}>Sin datos</div>;
   
   const cp = data.cumplimiento_promesa || {};
+  const cno = data.capacidad_no_operable || { total: 0, walker: 0, crowd: 0, moto: 0, detalle: [] };
   const ns = data.nivel_servicio || {};
   const nv = data.nivel_visitados || {};
   const pnr = data.pnr || {};
@@ -16057,6 +16058,77 @@ function PoolMeliResumenKPI() {
           </div>
         </div>
       </div>
+
+      {/* BLOQUE 1.B: CAPACIDAD NO OPERABLE (Walker / Car 8h Crowd / Moto MLP) */}
+      {cno.total > 0 && (
+        <div style={{ 
+          background: "linear-gradient(135deg, #fefce8 0%, #fef3c7 100%)", 
+          borderRadius: 12, 
+          padding: 16, 
+          marginBottom: 16, 
+          border: "1px solid #fde68a" 
+        }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 14, fontWeight: 700, color: "#854d0e", display: "flex", alignItems: "center", gap: 6 }}>
+                🟡 Capacidad asignada no operable
+              </div>
+              <div style={{ fontSize: 11, color: "#92400e", marginTop: 4, lineHeight: 1.5 }}>
+                Rutas que MELI nos asignó en el panel TMS para modalidades que <strong>no operamos</strong> (Walker, Car 8h Crowd, Moto MLP).
+                <br/>
+                <span style={{ color: "#a16207" }}>No son leakage: aparecen una sola vez y MELI las rota a otro operador. No afectan el cumplimiento.</span>
+              </div>
+            </div>
+            <div style={{ textAlign: "right", marginLeft: 16 }}>
+              <div style={{ fontSize: 28, fontWeight: 800, color: "#854d0e", fontVariantNumeric: "tabular-nums", lineHeight: 1 }}>
+                {cno.total}
+              </div>
+              <div style={{ fontSize: 9, color: "#a16207", textTransform: "uppercase", letterSpacing: 0.5, marginTop: 2 }}>rutas</div>
+            </div>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginTop: 8 }}>
+            <div style={{ background: "#fffbeb", borderRadius: 6, padding: "8px 10px", border: "1px solid #fde68a" }}>
+              <div style={{ fontSize: 10, color: "#a16207", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.3 }}>🚗 Car 8h Crowd</div>
+              <div style={{ fontSize: 18, fontWeight: 700, color: "#854d0e", fontVariantNumeric: "tabular-nums" }}>{cno.crowd || 0}</div>
+            </div>
+            <div style={{ background: "#fffbeb", borderRadius: 6, padding: "8px 10px", border: "1px solid #fde68a" }}>
+              <div style={{ fontSize: 10, color: "#a16207", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.3 }}>🚶 Walker</div>
+              <div style={{ fontSize: 18, fontWeight: 700, color: "#854d0e", fontVariantNumeric: "tabular-nums" }}>{cno.walker || 0}</div>
+            </div>
+            <div style={{ background: "#fffbeb", borderRadius: 6, padding: "8px 10px", border: "1px solid #fde68a" }}>
+              <div style={{ fontSize: 10, color: "#a16207", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.3 }}>🏍️ Moto MLP</div>
+              <div style={{ fontSize: 18, fontWeight: 700, color: "#854d0e", fontVariantNumeric: "tabular-nums" }}>{cno.moto || 0}</div>
+            </div>
+          </div>
+          {Array.isArray(cno.detalle) && cno.detalle.length > 0 && (
+            <details style={{ marginTop: 10 }}>
+              <summary style={{ fontSize: 11, color: "#854d0e", cursor: "pointer", fontWeight: 600 }}>
+                Ver detalle por SC ({cno.detalle.length} rutas)
+              </summary>
+              <div style={{ marginTop: 8, maxHeight: 200, overflowY: "auto", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 6, padding: 8 }}>
+                <table style={{ width: "100%", fontSize: 11, borderCollapse: "collapse" }}>
+                  <thead>
+                    <tr style={{ borderBottom: "1px solid #fde68a", color: "#92400e" }}>
+                      <th style={{ textAlign: "left", padding: "4px 8px", fontWeight: 700 }}>SC</th>
+                      <th style={{ textAlign: "left", padding: "4px 8px", fontWeight: 700 }}>ID Ruta</th>
+                      <th style={{ textAlign: "left", padding: "4px 8px", fontWeight: 700 }}>Vehículo</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {cno.detalle.map((r, i) => (
+                      <tr key={i} style={{ borderBottom: "1px dashed #fde68a" }}>
+                        <td style={{ padding: "4px 8px", fontWeight: 600, color: "#0f172a" }}>{r.sc}</td>
+                        <td style={{ padding: "4px 8px", color: "#475569", fontFamily: "monospace" }}>{r.id_ruta}</td>
+                        <td style={{ padding: "4px 8px", color: "#475569" }}>{r.vehiculo}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </details>
+          )}
+        </div>
+      )}
 
       {/* BLOQUE 1.5: EMBUDO DE ACEPTACIÓN */}
       <div style={{ background: "#fff", borderRadius: 12, padding: 20, marginBottom: 16, border: "1px solid #e4e7ec" }}>
