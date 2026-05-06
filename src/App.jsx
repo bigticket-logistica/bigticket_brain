@@ -15723,6 +15723,72 @@ function PoolMeliResumenKPI() {
       setModalLoading(false);
     }
   };
+
+  // Drilldown del Embudo de Aceptación
+  const abrirDetalleEmbudo = async (status, filtros = {}, titulo = "") => {
+    setModalLoading(true);
+    setModal({ titulo: titulo || `Cargando...`, filas: [], tipo: 'embudo' });
+    try {
+      let filas, err;
+      if (modo === 'dia') {
+        ({ data: filas, error: err } = await sb.rpc("get_embudo_detalle_dia", {
+          p_fecha: fechaSeleccionada,
+          p_status: status || null,
+          p_sc: filtros.sc || null,
+          p_es_sdd: typeof filtros.es_sdd === 'boolean' ? filtros.es_sdd : null,
+          p_tipo_flota: filtros.tipo_flota || null,
+        }));
+      } else {
+        ({ data: filas, error: err } = await sb.rpc("get_embudo_detalle_rango", {
+          p_fecha_desde: rangoSel.desde,
+          p_fecha_hasta: rangoSel.hasta,
+          p_status: status || null,
+          p_sc: filtros.sc || null,
+          p_es_sdd: typeof filtros.es_sdd === 'boolean' ? filtros.es_sdd : null,
+          p_tipo_flota: filtros.tipo_flota || null,
+        }));
+      }
+      if (err) throw err;
+      const arr = Array.isArray(filas) ? filas : [];
+      const sufijoArchivo = modo === 'dia' ? fechaSeleccionada : `${rangoSel.desde}_a_${rangoSel.hasta}`;
+      setModal({ 
+        titulo: `${titulo} (${arr.length})`, 
+        filas: arr, 
+        tipo: 'embudo',
+        nombreArchivo: `embudo_${status || 'todos'}_${sufijoArchivo}${filtros.sc ? '_' + filtros.sc : ''}`
+      });
+    } catch (e) {
+      setModal({ titulo: "Error", filas: [{ error: e.message }], tipo: 'embudo' });
+    } finally {
+      setModalLoading(false);
+    }
+  };
+
+  // Helper: tooltip "i" inline
+  const TooltipInfo = ({ texto }) => (
+    <span 
+      title={texto}
+      style={{ 
+        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+        width: 14, height: 14, borderRadius: '50%', 
+        background: '#cbd5e1', color: '#475569', 
+        fontSize: 9, fontWeight: 700, marginLeft: 6, cursor: 'help',
+        verticalAlign: 'middle'
+      }}>
+      i
+    </span>
+  );
+
+  // Helper: top 3 SCs por métrica
+  const top3SCs = (porSc, campo, orden = 'desc') => {
+    if (!Array.isArray(porSc) || porSc.length === 0) return { peores: [], mejores: [] };
+    const conValor = porSc.filter(s => s[campo] !== null && s[campo] !== undefined);
+    const sorted = [...conValor].sort((a, b) => orden === 'desc' ? b[campo] - a[campo] : a[campo] - b[campo]);
+    return {
+      peores: sorted.slice(0, 3),
+      mejores: sorted.slice(-3).reverse()
+    };
+  };
   
   
   if (loading) return <div className="pg" style={{ textAlign: "center", padding: 60, color: "#888" }}>Cargando resumen...</div>;
@@ -15733,6 +15799,8 @@ function PoolMeliResumenKPI() {
   const ns = data.nivel_servicio || {};
   const nv = data.nivel_visitados || {};
   const pnr = data.pnr || {};
+  const ea = data.embudo_aceptacion || {};
+  const eaT = ea.totales || {};
   
   const cumple = (pct, umbral) => Number(pct) >= Number(umbral);
   const colorPct = (pct, umbral) => cumple(pct, umbral) ? "#16a34a" : "#dc2626";
@@ -15988,6 +16056,287 @@ function PoolMeliResumenKPI() {
             </div>
           </div>
         </div>
+      </div>
+
+      {/* BLOQUE 1.5: EMBUDO DE ACEPTACIÓN */}
+      <div style={{ background: "#fff", borderRadius: 12, padding: 20, marginBottom: 16, border: "1px solid #e4e7ec" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 14 }}>
+          <div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: "#1a3a6b" }}>
+              📊 Embudo de Aceptación
+              <TooltipInfo texto="Trazabilidad del ciclo de oferta MELI: cuántas rutas nos ofreció MELI y qué pasó con cada una (aceptamos / rechazamos / MELI canceló / quedaron pending)." />
+            </div>
+            <div style={{ fontSize: 11, color: "#888", marginTop: 2 }}>De macro a micro: ofertas → respuestas → ranking por SC</div>
+          </div>
+          <div style={{ fontSize: 28, fontWeight: 800, color: (eaT.pct_aceptacion || 0) >= 90 ? "#16a34a" : (eaT.pct_aceptacion || 0) >= 75 ? "#f59e0b" : "#dc2626" }}>
+            {eaT.pct_aceptacion || 0}% <span style={{ fontSize: 12, fontWeight: 600, color: "#888" }}>aceptación</span>
+          </div>
+        </div>
+        
+        {/* Línea 1: Ofrecidas (tarjeta grande) */}
+        <div onClick={() => abrirDetalleEmbudo(null, {}, "Todas las ofertas MELI")}
+          style={{ 
+            background: "linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%)", 
+            borderRadius: 10, padding: "14px 18px", marginBottom: 14, 
+            cursor: "pointer", border: "1px solid #bae6fd" 
+          }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div>
+              <div style={{ fontSize: 11, color: "#0369a1", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5 }}>
+                📥 Ofrecidas
+                <TooltipInfo texto="Total de ofertas de viaje que MELI puso a disposición del carrier en este período. Es el universo total del embudo." />
+              </div>
+              <div style={{ fontSize: 32, fontWeight: 800, color: "#0c4a6e", marginTop: 2 }}>{eaT.ofrecidas || 0}</div>
+            </div>
+            <div style={{ fontSize: 11, color: "#0369a1", textAlign: "right" }}>
+              {(() => {
+                const top = top3SCs(ea.por_sc || [], 'ofrecidas', 'desc');
+                return (
+                  <>
+                    <div style={{ fontWeight: 700, marginBottom: 4 }}>Más activos:</div>
+                    {top.peores.map(s => (
+                      <div key={s.sc} style={{ fontSize: 10, color: "#0369a1" }}>
+                        {s.sc}: <strong>{s.ofrecidas}</strong>
+                      </div>
+                    ))}
+                  </>
+                );
+              })()}
+            </div>
+          </div>
+        </div>
+        
+        {/* Línea 2: 4 tarjetas de status */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 14 }}>
+          {/* Aceptadas */}
+          <div onClick={() => abrirDetalleEmbudo("accepted", {}, "Ofertas aceptadas")}
+            style={{ background: "#f0fdf4", borderRadius: 8, padding: "12px 14px", cursor: "pointer", border: "1px solid transparent" }}
+            onMouseOver={e => { e.currentTarget.style.borderColor = "#166534"; }}
+            onMouseOut={e => { e.currentTarget.style.borderColor = "transparent"; }}>
+            <div style={{ fontSize: 10, color: "#166534", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, display: "flex", justifyContent: "space-between" }}>
+              <span>
+                ✅ Aceptadas
+                <TooltipInfo texto="Ofertas que aceptamos para operar. Pasan al embudo operativo (logistic + maestro)." />
+              </span>
+              <span style={{ fontSize: 9, opacity: 0.6 }}>VER →</span>
+            </div>
+            <div style={{ fontSize: 22, fontWeight: 700, color: "#166534", marginTop: 2 }}>{eaT.aceptadas || 0}</div>
+            <div style={{ fontSize: 11, color: "#888" }}>{eaT.pct_aceptacion || 0}%</div>
+            {(() => {
+              const top = top3SCs(ea.por_sc || [], 'pct_aceptacion', 'asc');
+              if (top.peores.length === 0) return null;
+              return (
+                <div style={{ marginTop: 8, paddingTop: 8, borderTop: "1px solid #d1fae5", fontSize: 10 }}>
+                  <div style={{ color: "#991b1b", fontWeight: 600, marginBottom: 2 }}>Peores:</div>
+                  {top.peores.map(s => (
+                    <div key={s.sc} style={{ color: "#666", fontSize: 10 }}>
+                      {s.sc}: <strong>{s.pct_aceptacion || 0}%</strong>
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
+          </div>
+          
+          {/* Rechazadas */}
+          <div onClick={() => (eaT.rechazadas || 0) > 0 && abrirDetalleEmbudo("rejected", {}, "Ofertas rechazadas (rechazo propio)")}
+            style={{ 
+              background: (eaT.rechazadas || 0) > 0 ? "#fef2f2" : "#f9fafb", 
+              borderRadius: 8, padding: "12px 14px", 
+              cursor: (eaT.rechazadas || 0) > 0 ? "pointer" : "default",
+              border: "1px solid transparent"
+            }}
+            onMouseOver={e => { if ((eaT.rechazadas || 0) > 0) e.currentTarget.style.borderColor = "#991b1b"; }}
+            onMouseOut={e => { e.currentTarget.style.borderColor = "transparent"; }}>
+            <div style={{ fontSize: 10, color: (eaT.rechazadas || 0) > 0 ? "#991b1b" : "#666", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, display: "flex", justifyContent: "space-between" }}>
+              <span>
+                ❌ Rechazadas
+                <TooltipInfo texto="Ofertas que rechazamos antes del día de operación. Indicador de eficiencia operacional: idealmente bajo (<5%)." />
+              </span>
+              {(eaT.rechazadas || 0) > 0 && <span style={{ fontSize: 9, opacity: 0.6 }}>VER →</span>}
+            </div>
+            <div style={{ fontSize: 22, fontWeight: 700, color: (eaT.rechazadas || 0) > 0 ? "#991b1b" : "#666", marginTop: 2 }}>
+              {eaT.rechazadas || 0}
+            </div>
+            <div style={{ fontSize: 11, color: "#888" }}>{eaT.pct_rechazo_propio || 0}%</div>
+            {(() => {
+              const top = top3SCs((ea.por_sc || []).filter(s => (s.rechazadas || 0) > 0), 'pct_rechazo', 'desc');
+              if (top.peores.length === 0) return null;
+              return (
+                <div style={{ marginTop: 8, paddingTop: 8, borderTop: "1px solid #fee2e2", fontSize: 10 }}>
+                  <div style={{ color: "#991b1b", fontWeight: 600, marginBottom: 2 }}>Top problemas:</div>
+                  {top.peores.map(s => (
+                    <div key={s.sc} style={{ color: "#666", fontSize: 10 }}>
+                      {s.sc}: <strong>{s.pct_rechazo}%</strong>
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
+          </div>
+          
+          {/* Canceladas MELI */}
+          <div onClick={() => (eaT.canceladas_meli || 0) > 0 && abrirDetalleEmbudo("canceled", {}, "Canceladas por MELI")}
+            style={{ 
+              background: (eaT.canceladas_meli || 0) > 0 ? "#fffbeb" : "#f9fafb", 
+              borderRadius: 8, padding: "12px 14px", 
+              cursor: (eaT.canceladas_meli || 0) > 0 ? "pointer" : "default",
+              border: "1px solid transparent"
+            }}
+            onMouseOver={e => { if ((eaT.canceladas_meli || 0) > 0) e.currentTarget.style.borderColor = "#b45309"; }}
+            onMouseOut={e => { e.currentTarget.style.borderColor = "transparent"; }}>
+            <div style={{ fontSize: 10, color: (eaT.canceladas_meli || 0) > 0 ? "#b45309" : "#666", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, display: "flex", justifyContent: "space-between" }}>
+              <span>
+                🚫 Cancel. MELI
+                <TooltipInfo texto="Ofertas que aceptamos pero MELI canceló después. % calculado sobre (aceptadas + canceladas). No es responsabilidad propia, pero ayuda a planificar oferta de drivers." />
+              </span>
+              {(eaT.canceladas_meli || 0) > 0 && <span style={{ fontSize: 9, opacity: 0.6 }}>VER →</span>}
+            </div>
+            <div style={{ fontSize: 22, fontWeight: 700, color: (eaT.canceladas_meli || 0) > 0 ? "#b45309" : "#666", marginTop: 2 }}>
+              {eaT.canceladas_meli || 0}
+            </div>
+            <div style={{ fontSize: 11, color: "#888" }}>{eaT.pct_cancelacion_meli || 0}%</div>
+            {(() => {
+              const top = top3SCs((ea.por_sc || []).filter(s => (s.canceladas_meli || 0) > 0), 'pct_cancelacion_meli', 'desc');
+              if (top.peores.length === 0) return null;
+              return (
+                <div style={{ marginTop: 8, paddingTop: 8, borderTop: "1px solid #fef3c7", fontSize: 10 }}>
+                  <div style={{ color: "#b45309", fontWeight: 600, marginBottom: 2 }}>Top afectados:</div>
+                  {top.peores.map(s => (
+                    <div key={s.sc} style={{ color: "#666", fontSize: 10 }}>
+                      {s.sc}: <strong>{s.pct_cancelacion_meli}%</strong>
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
+          </div>
+          
+          {/* Pending */}
+          <div onClick={() => (eaT.pendientes || 0) > 0 && abrirDetalleEmbudo("pending", {}, "Ofertas pending")}
+            style={{ 
+              background: (eaT.pendientes || 0) > 0 ? "#f5f3ff" : "#f9fafb", 
+              borderRadius: 8, padding: "12px 14px", 
+              cursor: (eaT.pendientes || 0) > 0 ? "pointer" : "default",
+              border: "1px solid transparent"
+            }}
+            onMouseOver={e => { if ((eaT.pendientes || 0) > 0) e.currentTarget.style.borderColor = "#6d28d9"; }}
+            onMouseOut={e => { e.currentTarget.style.borderColor = "transparent"; }}>
+            <div style={{ fontSize: 10, color: (eaT.pendientes || 0) > 0 ? "#6d28d9" : "#666", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, display: "flex", justifyContent: "space-between" }}>
+              <span>
+                ⏳ Pending
+                <TooltipInfo texto="Ofertas pendientes de respuesta. Si quedan viejas (más de 1 día) son SLA crítico: MELI las rota a otro carrier y perdemos negocio." />
+              </span>
+              {(eaT.pendientes || 0) > 0 && <span style={{ fontSize: 9, opacity: 0.6 }}>VER →</span>}
+            </div>
+            <div style={{ fontSize: 22, fontWeight: 700, color: (eaT.pendientes || 0) > 0 ? "#6d28d9" : "#666", marginTop: 2 }}>
+              {eaT.pendientes || 0}
+            </div>
+            {(() => {
+              const top = top3SCs((ea.por_sc || []).filter(s => (s.pendientes || 0) > 0), 'pendientes', 'desc');
+              if (top.peores.length === 0) return null;
+              return (
+                <div style={{ marginTop: 8, paddingTop: 8, borderTop: "1px solid #ede9fe", fontSize: 10 }}>
+                  <div style={{ color: "#6d28d9", fontWeight: 600, marginBottom: 2 }}>Por SC:</div>
+                  {top.peores.map(s => (
+                    <div key={s.sc} style={{ color: "#666", fontSize: 10 }}>
+                      {s.sc}: <strong>{s.pendientes}</strong>
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
+          </div>
+        </div>
+        
+        {/* Línea 3: Split por Servicio + por Flota */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12, marginBottom: 14 }}>
+          {/* Por Servicio (SDD vs Variable) */}
+          <div style={{ background: "#fff7ed", borderRadius: 8, padding: 14, border: "1px solid #fed7aa" }}>
+            <div style={{ fontSize: 11, color: "#9a3412", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>
+              Por Servicio
+              <TooltipInfo texto="SDD = Same Day Delivery (compromiso entrega rápida, alta prioridad). Variable = sin compromiso temporal." />
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+              <div onClick={() => abrirDetalleEmbudo(null, { es_sdd: true }, "Ofertas SDD")}
+                style={{ cursor: "pointer", padding: 8, borderRadius: 6, background: "#fff" }}>
+                <div style={{ fontSize: 10, color: "#888", marginBottom: 4 }}>SDD</div>
+                <div style={{ fontSize: 13 }}>
+                  <span style={{ color: "#888" }}>Ofrecidas:</span> <strong>{ea.por_servicio?.sdd?.ofrecidas || 0}</strong>
+                  <br/>
+                  <span style={{ color: "#888" }}>Aceptadas:</span> <strong>{ea.por_servicio?.sdd?.aceptadas || 0}</strong>
+                  {(ea.por_servicio?.sdd?.rechazadas || 0) > 0 && (
+                    <><br/><span style={{ color: "#991b1b" }}>Rechaz.: {ea.por_servicio.sdd.rechazadas}</span></>
+                  )}
+                </div>
+              </div>
+              <div onClick={() => abrirDetalleEmbudo(null, { es_sdd: false }, "Ofertas Variable")}
+                style={{ cursor: "pointer", padding: 8, borderRadius: 6, background: "#fff" }}>
+                <div style={{ fontSize: 10, color: "#888", marginBottom: 4 }}>Variable</div>
+                <div style={{ fontSize: 13 }}>
+                  <span style={{ color: "#888" }}>Ofrecidas:</span> <strong>{ea.por_servicio?.variable?.ofrecidas || 0}</strong>
+                  <br/>
+                  <span style={{ color: "#888" }}>Aceptadas:</span> <strong>{ea.por_servicio?.variable?.aceptadas || 0}</strong>
+                  {(ea.por_servicio?.variable?.rechazadas || 0) > 0 && (
+                    <><br/><span style={{ color: "#991b1b" }}>Rechaz.: {ea.por_servicio.variable.rechazadas}</span></>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          {/* Por Flota (Fija vs Variable) */}
+          <div style={{ background: "#eef2ff", borderRadius: 8, padding: 14, border: "1px solid #c7d2fe" }}>
+            <div style={{ fontSize: 11, color: "#3730a3", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>
+              Por Flota
+              <TooltipInfo texto="Fija = drivers propios contratados (más estables). Variable = drivers temporales/crowd (más cancelaciones MELI)." />
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+              <div onClick={() => abrirDetalleEmbudo(null, { tipo_flota: 'fija' }, "Ofertas · Flota Fija")}
+                style={{ cursor: "pointer", padding: 8, borderRadius: 6, background: "#fff" }}>
+                <div style={{ fontSize: 10, color: "#888", marginBottom: 4 }}>Fija</div>
+                <div style={{ fontSize: 13 }}>
+                  <span style={{ color: "#888" }}>Ofrecidas:</span> <strong>{ea.por_flota?.fija?.ofrecidas || 0}</strong>
+                  <br/>
+                  <span style={{ color: "#888" }}>Aceptadas:</span> <strong>{ea.por_flota?.fija?.aceptadas || 0}</strong>
+                </div>
+              </div>
+              <div onClick={() => abrirDetalleEmbudo(null, { tipo_flota: 'variable' }, "Ofertas · Flota Variable")}
+                style={{ cursor: "pointer", padding: 8, borderRadius: 6, background: "#fff" }}>
+                <div style={{ fontSize: 10, color: "#888", marginBottom: 4 }}>Variable</div>
+                <div style={{ fontSize: 13 }}>
+                  <span style={{ color: "#888" }}>Ofrecidas:</span> <strong>{ea.por_flota?.variable?.ofrecidas || 0}</strong>
+                  <br/>
+                  <span style={{ color: "#888" }}>Aceptadas:</span> <strong>{ea.por_flota?.variable?.aceptadas || 0}</strong>
+                  {(ea.por_flota?.variable?.canceladas || 0) > 0 && (
+                    <><br/><span style={{ color: "#b45309" }}>Cancel MELI: {ea.por_flota.variable.canceladas}</span></>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        
+        {/* Alerta crítica: Pending viejos */}
+        {ea.pending_viejos?.total > 0 && (
+          <div onClick={() => abrirDetalleEmbudo("pending_viejos", {}, "⚠️ Pending viejos sin responder")}
+            style={{ 
+              background: "#fef2f2", borderRadius: 8, padding: "12px 16px", 
+              border: "2px solid #fecaca", cursor: "pointer",
+              display: "flex", justifyContent: "space-between", alignItems: "center"
+            }}>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: "#991b1b" }}>
+                ⚠️ ALERTA: {ea.pending_viejos.total} pending {ea.pending_viejos.total === 1 ? 'viejo' : 'viejos'} sin responder
+                <TooltipInfo texto="Ofertas que aceptamos hace varios días y siguen pending. MELI puede rotarlas a otro carrier en cualquier momento. Responder con urgencia." />
+              </div>
+              <div style={{ fontSize: 11, color: "#7f1d1d", marginTop: 2 }}>
+                Click para ver detalle (request_id, SC, días pendiente)
+              </div>
+            </div>
+            <div style={{ fontSize: 11, color: "#991b1b", fontWeight: 600 }}>VER →</div>
+          </div>
+        )}
       </div>
 
       {/* BLOQUE 2: NIVEL DE SERVICIO */}
