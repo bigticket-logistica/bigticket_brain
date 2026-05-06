@@ -16100,33 +16100,39 @@ function PoolMeliResumenKPI() {
               <div style={{ fontSize: 18, fontWeight: 700, color: "#854d0e", fontVariantNumeric: "tabular-nums" }}>{cno.moto || 0}</div>
             </div>
           </div>
-          {Array.isArray(cno.detalle) && cno.detalle.length > 0 && (
-            <details style={{ marginTop: 10 }}>
-              <summary style={{ fontSize: 11, color: "#854d0e", cursor: "pointer", fontWeight: 600 }}>
-                Ver detalle por SC ({cno.detalle.length} rutas)
-              </summary>
-              <div style={{ marginTop: 8, maxHeight: 200, overflowY: "auto", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 6, padding: 8 }}>
-                <table style={{ width: "100%", fontSize: 11, borderCollapse: "collapse" }}>
-                  <thead>
-                    <tr style={{ borderBottom: "1px solid #fde68a", color: "#92400e" }}>
-                      <th style={{ textAlign: "left", padding: "4px 8px", fontWeight: 700 }}>SC</th>
-                      <th style={{ textAlign: "left", padding: "4px 8px", fontWeight: 700 }}>ID Ruta</th>
-                      <th style={{ textAlign: "left", padding: "4px 8px", fontWeight: 700 }}>Vehículo</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {cno.detalle.map((r, i) => (
-                      <tr key={i} style={{ borderBottom: "1px dashed #fde68a" }}>
-                        <td style={{ padding: "4px 8px", fontWeight: 600, color: "#0f172a" }}>{r.sc}</td>
-                        <td style={{ padding: "4px 8px", color: "#475569", fontFamily: "monospace" }}>{r.id_ruta}</td>
-                        <td style={{ padding: "4px 8px", color: "#475569" }}>{r.vehiculo}</td>
+          {Array.isArray(cno.detalle) && cno.detalle.length > 0 && (() => {
+            // Detectar si los datos tienen fecha (modo rango) o no (modo día)
+            const tieneFecha = cno.detalle.some(r => r.fecha);
+            return (
+              <details style={{ marginTop: 10 }}>
+                <summary style={{ fontSize: 11, color: "#854d0e", cursor: "pointer", fontWeight: 600 }}>
+                  Ver detalle por SC ({cno.detalle.length} rutas)
+                </summary>
+                <div style={{ marginTop: 8, maxHeight: 200, overflowY: "auto", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 6, padding: 8 }}>
+                  <table style={{ width: "100%", fontSize: 11, borderCollapse: "collapse" }}>
+                    <thead>
+                      <tr style={{ borderBottom: "1px solid #fde68a", color: "#92400e" }}>
+                        {tieneFecha && <th style={{ textAlign: "left", padding: "4px 8px", fontWeight: 700 }}>Fecha</th>}
+                        <th style={{ textAlign: "left", padding: "4px 8px", fontWeight: 700 }}>SC</th>
+                        <th style={{ textAlign: "left", padding: "4px 8px", fontWeight: 700 }}>ID Ruta</th>
+                        <th style={{ textAlign: "left", padding: "4px 8px", fontWeight: 700 }}>Vehículo</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </details>
-          )}
+                    </thead>
+                    <tbody>
+                      {cno.detalle.map((r, i) => (
+                        <tr key={i} style={{ borderBottom: "1px dashed #fde68a" }}>
+                          {tieneFecha && <td style={{ padding: "4px 8px", color: "#475569" }}>{r.fecha}</td>}
+                          <td style={{ padding: "4px 8px", fontWeight: 600, color: "#0f172a" }}>{r.sc}</td>
+                          <td style={{ padding: "4px 8px", color: "#475569", fontFamily: "monospace" }}>{r.id_ruta}</td>
+                          <td style={{ padding: "4px 8px", color: "#475569" }}>{r.vehiculo}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </details>
+            );
+          })()}
         </div>
       )}
 
