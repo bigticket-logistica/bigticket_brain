@@ -15797,6 +15797,7 @@ function PoolMeliResumenKPI() {
   
   const cp = data.cumplimiento_promesa || {};
   const cno = data.capacidad_no_operable || { total: 0, walker: 0, crowd: 0, moto: 0, detalle: [] };
+  const dtv = data.delta_tr_vs_panel || { tr_aceptadas: 0, logistic_operables: 0, delta: 0, detalle_tr_por_sc: [] };
   const ns = data.nivel_servicio || {};
   const nv = data.nivel_visitados || {};
   const pnr = data.pnr || {};
@@ -16133,6 +16134,91 @@ function PoolMeliResumenKPI() {
               </details>
             );
           })()}
+        </div>
+      )}
+
+      {/* BLOQUE 1.C: DELTA TR vs PANEL OPERATIVO (a investigar) */}
+      {dtv.delta > 0 && (
+        <div style={{
+          background: "linear-gradient(135deg, #faf5ff 0%, #f3e8ff 100%)",
+          borderRadius: 12,
+          padding: 16,
+          marginBottom: 16,
+          border: "1px solid #d8b4fe"
+        }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 14, fontWeight: 700, color: "#6b21a8", display: "flex", alignItems: "center", gap: 6 }}>
+                🔬 A investigar: delta de {dtv.delta} ofertas
+              </div>
+              <div style={{ fontSize: 11, color: "#7e22ce", marginTop: 4, lineHeight: 1.5 }}>
+                Travel Requests dice <strong>{dtv.tr_aceptadas} aceptadas</strong>, panel operativo (Logistic Monitoring) dice <strong>{dtv.logistic_operables} rutas</strong>.
+                <br/>
+                <span style={{ color: "#9333ea" }}>
+                  La diferencia es trackeable día a día. Causa por validar con MELI tras observación de patrón en ~2 semanas con captura completa.
+                </span>
+              </div>
+            </div>
+            <div style={{ textAlign: "right", marginLeft: 16 }}>
+              <div style={{ fontSize: 28, fontWeight: 800, color: "#6b21a8", fontVariantNumeric: "tabular-nums", lineHeight: 1 }}>
+                {dtv.delta}
+              </div>
+              <div style={{ fontSize: 9, color: "#9333ea", textTransform: "uppercase", letterSpacing: 0.5, marginTop: 2 }}>delta</div>
+            </div>
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginTop: 8 }}>
+            <div style={{ background: "#faf5ff", borderRadius: 6, padding: "8px 10px", border: "1px solid #e9d5ff" }}>
+              <div style={{ fontSize: 10, color: "#7e22ce", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.3 }}>📋 TR aceptadas</div>
+              <div style={{ fontSize: 18, fontWeight: 700, color: "#6b21a8", fontVariantNumeric: "tabular-nums" }}>{dtv.tr_aceptadas}</div>
+            </div>
+            <div style={{ background: "#faf5ff", borderRadius: 6, padding: "8px 10px", border: "1px solid #e9d5ff" }}>
+              <div style={{ fontSize: 10, color: "#7e22ce", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.3 }}>🚚 En panel</div>
+              <div style={{ fontSize: 18, fontWeight: 700, color: "#6b21a8", fontVariantNumeric: "tabular-nums" }}>{dtv.logistic_operables}</div>
+            </div>
+            <div style={{ background: "#faf5ff", borderRadius: 6, padding: "8px 10px", border: "1px solid #e9d5ff" }}>
+              <div style={{ fontSize: 10, color: "#7e22ce", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.3 }}>🔬 Sin trazabilidad</div>
+              <div style={{ fontSize: 18, fontWeight: 700, color: "#6b21a8", fontVariantNumeric: "tabular-nums" }}>{dtv.delta}</div>
+            </div>
+          </div>
+
+          {Array.isArray(dtv.detalle_tr_por_sc) && dtv.detalle_tr_por_sc.length > 0 && (
+            <details style={{ marginTop: 10 }}>
+              <summary style={{ fontSize: 11, color: "#6b21a8", cursor: "pointer", fontWeight: 600 }}>
+                Ver detalle de TR aceptadas por SC y vehículo
+              </summary>
+              <div style={{ marginTop: 8, maxHeight: 240, overflowY: "auto", background: "#faf5ff", border: "1px solid #e9d5ff", borderRadius: 6, padding: 8 }}>
+                <table style={{ width: "100%", fontSize: 11, borderCollapse: "collapse" }}>
+                  <thead>
+                    <tr style={{ borderBottom: "1px solid #e9d5ff", color: "#7e22ce" }}>
+                      <th style={{ textAlign: "left", padding: "4px 8px", fontWeight: 700 }}>SC</th>
+                      <th style={{ textAlign: "left", padding: "4px 8px", fontWeight: 700 }}>Vehículo</th>
+                      <th style={{ textAlign: "left", padding: "4px 8px", fontWeight: 700 }}>Tipo</th>
+                      <th style={{ textAlign: "right", padding: "4px 8px", fontWeight: 700 }}>Aceptadas TR</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {dtv.detalle_tr_por_sc.map((r, i) => (
+                      <tr key={i} style={{ borderBottom: "1px dashed #e9d5ff" }}>
+                        <td style={{ padding: "4px 8px", fontWeight: 600, color: "#0f172a" }}>{r.sc}</td>
+                        <td style={{ padding: "4px 8px", color: "#475569" }}>{r.vehicle_type}</td>
+                        <td style={{ padding: "4px 8px", color: r.es_sdd ? "#9a3412" : "#3730a3", fontWeight: 600 }}>
+                          {r.es_sdd ? "SDD" : "VAR"}
+                        </td>
+                        <td style={{ padding: "4px 8px", textAlign: "right", fontWeight: 700, color: "#0f172a", fontVariantNumeric: "tabular-nums" }}>{r.aceptadas}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </details>
+          )}
+
+          <div style={{ marginTop: 10, padding: 8, background: "rgba(255, 255, 255, 0.6)", borderRadius: 6, fontSize: 10, color: "#6b21a8", lineHeight: 1.5 }}>
+            <strong>Hipótesis a validar:</strong> Ofertas marcadas como aceptadas en TR que no llegaron al panel operativo del día.
+            Los dos sistemas de MELI (TR y Logistic Monitoring) están desacoplados — no comparten ID directo,
+            por lo que el cruce solo es posible a nivel agregado (SC + vehículo + fecha).
+          </div>
         </div>
       )}
 
