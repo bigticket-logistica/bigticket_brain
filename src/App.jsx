@@ -17173,6 +17173,22 @@ function PoolMeliCiclo({ scs, resumen, setModal, mesGlobal }) {
   const [perfilFiltro, setPerfilFiltro] = useState("TODOS");
   const r = resumen || {};
 
+  // Helper de estilo para enlaces clickeables (números con underline al hover)
+  const linkStyle = (color, bold = false) => ({
+    background: "transparent",
+    border: "none",
+    color,
+    cursor: "pointer",
+    fontWeight: bold ? 700 : 600,
+    fontSize: "inherit",
+    fontVariantNumeric: "tabular-nums",
+    padding: 0,
+    textDecoration: "underline",
+    textDecorationColor: "transparent",
+    textUnderlineOffset: 3,
+    transition: "text-decoration-color 0.15s",
+  });
+
   // Split de no presentadas por fleet (SDD vs VARIABLE)
   const [splitFleet, setSplitFleet] = useState({ sdd: null, variable: null });
 
