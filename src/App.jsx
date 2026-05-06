@@ -15798,6 +15798,7 @@ function PoolMeliResumenKPI() {
   const cp = data.cumplimiento_promesa || {};
   const cno = data.capacidad_no_operable || { total: 0, walker: 0, crowd: 0, moto: 0, detalle: [] };
   const dtv = data.delta_tr_vs_panel || { tr_aceptadas: 0, logistic_operables: 0, delta: 0, detalle_tr_por_sc: [] };
+  const rsm = data.reporte_sdd_meli || { tiene_reporte: false, totales: null, por_sc: [], no_ejecutadas_detalle: [] };
   const ns = data.nivel_servicio || {};
   const nv = data.nivel_visitados || {};
   const pnr = data.pnr || {};
@@ -16219,6 +16220,135 @@ function PoolMeliResumenKPI() {
             Los dos sistemas de MELI (TR y Logistic Monitoring) están desacoplados — no comparten ID directo,
             por lo que el cruce solo es posible a nivel agregado (SC + vehículo + fecha).
           </div>
+        </div>
+      )}
+
+      {/* BLOQUE 1.D: REPORTE SDD OFICIAL MELI (información complementaria) */}
+      {rsm.tiene_reporte && rsm.totales && (
+        <div style={{
+          background: "linear-gradient(135deg, #eef2ff 0%, #e0e7ff 100%)",
+          borderRadius: 12,
+          padding: 16,
+          marginBottom: 16,
+          border: "1px solid #a5b4fc"
+        }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 14, fontWeight: 700, color: "#3730a3", display: "flex", alignItems: "center", gap: 6 }}>
+                📑 Reporte SDD oficial MELI
+              </div>
+              <div style={{ fontSize: 11, color: "#4338ca", marginTop: 4, lineHeight: 1.5 }}>
+                Información complementaria descargada del panel TMS oficial de MELI.
+                Solo cubre rutas SDD (Súper Dedicadas).
+                <br/>
+                <span style={{ color: "#6366f1" }}>
+                  Esta información no modifica el cumplimiento principal del Brain.
+                </span>
+              </div>
+            </div>
+            <div style={{ textAlign: "right", marginLeft: 16 }}>
+              <div style={{ 
+                fontSize: 28, 
+                fontWeight: 800, 
+                color: rsm.totales.pct_cumplimiento >= 95 ? "#16a34a" : rsm.totales.pct_cumplimiento >= 85 ? "#f59e0b" : "#dc2626",
+                fontVariantNumeric: "tabular-nums",
+                lineHeight: 1
+              }}>
+                {rsm.totales.pct_cumplimiento}%
+              </div>
+              <div style={{ fontSize: 9, color: "#4338ca", textTransform: "uppercase", letterSpacing: 0.5, marginTop: 2 }}>
+                cumplimiento SDD
+              </div>
+            </div>
+          </div>
+
+          {/* 3 sub-tarjetas: Solicitadas / Ejecutadas / No ejecutadas */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginTop: 8 }}>
+            <div style={{ background: "#eef2ff", borderRadius: 6, padding: "8px 10px", border: "1px solid #c7d2fe" }}>
+              <div style={{ fontSize: 10, color: "#4338ca", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.3 }}>📋 Solicitadas</div>
+              <div style={{ fontSize: 18, fontWeight: 700, color: "#3730a3", fontVariantNumeric: "tabular-nums" }}>{rsm.totales.solicitadas}</div>
+            </div>
+            <div style={{ background: "#eef2ff", borderRadius: 6, padding: "8px 10px", border: "1px solid #c7d2fe" }}>
+              <div style={{ fontSize: 10, color: "#4338ca", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.3 }}>✅ Ejecutadas</div>
+              <div style={{ fontSize: 18, fontWeight: 700, color: "#16a34a", fontVariantNumeric: "tabular-nums" }}>{rsm.totales.ejecutadas}</div>
+            </div>
+            <div style={{ background: "#eef2ff", borderRadius: 6, padding: "8px 10px", border: "1px solid #c7d2fe" }}>
+              <div style={{ fontSize: 10, color: "#4338ca", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.3 }}>❌ No ejecutadas</div>
+              <div style={{ fontSize: 18, fontWeight: 700, color: rsm.totales.no_ejecutadas > 0 ? "#dc2626" : "#3730a3", fontVariantNumeric: "tabular-nums" }}>{rsm.totales.no_ejecutadas}</div>
+            </div>
+          </div>
+
+          {/* Detalle por SC (solo SCs con problemas) */}
+          {Array.isArray(rsm.por_sc) && rsm.por_sc.filter(s => s.no_ejecutadas > 0).length > 0 && (
+            <div style={{ marginTop: 10 }}>
+              <div style={{ fontSize: 11, color: "#3730a3", fontWeight: 600, marginBottom: 6 }}>
+                ⚠️ SCs con SDD no ejecutadas:
+              </div>
+              <div style={{ background: "rgba(255,255,255,0.6)", borderRadius: 6, padding: 8, border: "1px solid #c7d2fe" }}>
+                <table style={{ width: "100%", fontSize: 11, borderCollapse: "collapse" }}>
+                  <thead>
+                    <tr style={{ borderBottom: "1px solid #c7d2fe", color: "#4338ca" }}>
+                      <th style={{ textAlign: "left", padding: "4px 8px", fontWeight: 700 }}>SC</th>
+                      <th style={{ textAlign: "right", padding: "4px 8px", fontWeight: 700 }}>Solicitadas</th>
+                      <th style={{ textAlign: "right", padding: "4px 8px", fontWeight: 700 }}>Ejecutadas</th>
+                      <th style={{ textAlign: "right", padding: "4px 8px", fontWeight: 700 }}>No ejec.</th>
+                      <th style={{ textAlign: "right", padding: "4px 8px", fontWeight: 700 }}>%</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rsm.por_sc.filter(s => s.no_ejecutadas > 0).map((s, i) => (
+                      <tr key={i} style={{ borderBottom: "1px dashed #c7d2fe" }}>
+                        <td style={{ padding: "4px 8px", fontWeight: 600, color: "#0f172a" }}>{s.sc}</td>
+                        <td style={{ padding: "4px 8px", textAlign: "right", color: "#475569", fontVariantNumeric: "tabular-nums" }}>{s.solicitadas}</td>
+                        <td style={{ padding: "4px 8px", textAlign: "right", color: "#16a34a", fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>{s.ejecutadas}</td>
+                        <td style={{ padding: "4px 8px", textAlign: "right", color: "#dc2626", fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>{s.no_ejecutadas}</td>
+                        <td style={{ padding: "4px 8px", textAlign: "right", fontWeight: 700, color: s.pct_cumplimiento >= 95 ? "#16a34a" : s.pct_cumplimiento >= 85 ? "#f59e0b" : "#dc2626", fontVariantNumeric: "tabular-nums" }}>{s.pct_cumplimiento}%</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* Detalle desplegable de las no ejecutadas */}
+          {Array.isArray(rsm.no_ejecutadas_detalle) && rsm.no_ejecutadas_detalle.length > 0 && (
+            <details style={{ marginTop: 10 }}>
+              <summary style={{ fontSize: 11, color: "#3730a3", cursor: "pointer", fontWeight: 600 }}>
+                Ver detalle de {rsm.no_ejecutadas_detalle.length} rutas SDD no ejecutadas
+              </summary>
+              <div style={{ marginTop: 8, maxHeight: 240, overflowY: "auto", background: "rgba(255,255,255,0.6)", border: "1px solid #c7d2fe", borderRadius: 6, padding: 8 }}>
+                <table style={{ width: "100%", fontSize: 11, borderCollapse: "collapse" }}>
+                  <thead>
+                    <tr style={{ borderBottom: "1px solid #c7d2fe", color: "#4338ca" }}>
+                      <th style={{ textAlign: "left", padding: "4px 8px", fontWeight: 700 }}>SC</th>
+                      <th style={{ textAlign: "left", padding: "4px 8px", fontWeight: 700 }}>Vehículo</th>
+                      <th style={{ textAlign: "left", padding: "4px 8px", fontWeight: 700 }}>ID Ruta</th>
+                      <th style={{ textAlign: "left", padding: "4px 8px", fontWeight: 700 }}>Driver</th>
+                      <th style={{ textAlign: "left", padding: "4px 8px", fontWeight: 700 }}>Etapa caída</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rsm.no_ejecutadas_detalle.map((r, i) => (
+                      <tr key={i} style={{ borderBottom: "1px dashed #c7d2fe" }}>
+                        <td style={{ padding: "4px 8px", fontWeight: 600, color: "#0f172a" }}>{r.sc}</td>
+                        <td style={{ padding: "4px 8px", color: "#475569", fontSize: 10 }}>{r.vehiculo}</td>
+                        <td style={{ padding: "4px 8px", color: "#475569", fontFamily: "monospace", fontSize: 10 }}>
+                          {r.id_ruta || <span style={{ color: "#94a3b8", fontStyle: "italic" }}>sin asignar</span>}
+                        </td>
+                        <td style={{ padding: "4px 8px", color: "#475569" }}>
+                          {r.driver_name || <span style={{ color: "#94a3b8", fontStyle: "italic" }}>sin driver</span>}
+                        </td>
+                        <td style={{ padding: "4px 8px", fontWeight: 600, color: r.etapa_caida.includes("última hora") ? "#dc2626" : "#9333ea" }}>
+                          {r.etapa_caida}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </details>
+          )}
         </div>
       )}
 
