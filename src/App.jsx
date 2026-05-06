@@ -17176,6 +17176,10 @@ function PoolMeliCiclo({ scs, resumen, setModal, mesGlobal }) {
   // Split de no presentadas por fleet (SDD vs VARIABLE)
   const [splitFleet, setSplitFleet] = useState({ sdd: null, variable: null });
 
+  // Trayectorias de Estado y Matrix Embudo↔Cumplimiento
+  const [trayectorias, setTrayectorias] = useState([]);
+  const [matrixData, setMatrixData] = useState([]);
+
   // Recargar split fleet cuando cambia el mes global
   useEffect(() => {
     if (!mesGlobal) return;
@@ -17208,9 +17212,39 @@ function PoolMeliCiclo({ scs, resumen, setModal, mesGlobal }) {
             } : null,
           });
         }
+
+        // Trayectorias de estado
+        const { data: trayData, error: trayError } = await sb.rpc("get_trayectorias_estado", {
+          p_desde: desde,
+          p_hasta: hasta,
+        });
+        if (!alive) return;
+        if (trayError) {
+          console.error("Error cargando trayectorias:", trayError);
+          setTrayectorias([]);
+        } else {
+          setTrayectorias(trayData || []);
+        }
+
+        // Matrix Embudo ↔ Cumplimiento
+        const { data: mData, error: mError } = await sb.rpc("get_matrix_embudo_cumplimiento", {
+          p_desde: desde,
+          p_hasta: hasta,
+        });
+        if (!alive) return;
+        if (mError) {
+          console.error("Error cargando matrix:", mError);
+          setMatrixData([]);
+        } else {
+          setMatrixData(mData || []);
+        }
       } catch (e) {
         console.error("Error cargando ciclo del mes:", e);
-        if (alive) setSplitFleet({ sdd: null, variable: null });
+        if (alive) {
+          setSplitFleet({ sdd: null, variable: null });
+          setTrayectorias([]);
+          setMatrixData([]);
+        }
       }
     })();
     return () => { alive = false; };
@@ -17380,6 +17414,89 @@ function PoolMeliCiclo({ scs, resumen, setModal, mesGlobal }) {
         nombreArchivo: filtroSC ? `ofrecidas_${filtroSC}` : "ofrecidas"
       });
     } catch (e) { setModal({ titulo: "Error", filas: [{ error: e.message }], nombreArchivo: "error" }); }
+  };
+
+  // Drilldown: Trayectoria de estado
+  const abrirTrayectoria = async (trayectoria) => {
+    if (!mesGlobal) return;
+    setModal({ titulo: `Cargando…`, filas: [], nombreArchivo: "trayectoria" });
+    try {
+      const { desde, hasta } = rangoMesGlobal(mesGlobal);
+      const { data, error } = await sb.rpc("get_trayectorias_detalle", {
+        p_desde: desde,
+        p_hasta: hasta,
+        p_trayectoria: trayectoria,
+      });
+      if (error) throw error;
+      // Mapear nombres amigables
+      const filas = (data || []).map(d => ({
+        "Request ID": d.request_id,
+        "SC": d.facility_id,
+        "Fecha Op.": d.fecha_operacion,
+        "Estado Inicial": d.estado_inicial,
+        "Estado Final": d.estado_final,
+        "Snapshots": d.cantidad_snapshots,
+        "Momento del cambio": d.momento_cambio,
+        "Horas antes ETD": d.horas_antes_etd,
+        "Tipo flota": d.fleet_type,
+        "Servicio": d.service_description,
+        "Vehículo": d.vehicle_type,
+        "ETD": d.etd_date,
+      }));
+      setModal({
+        titulo: `Trayectoria: ${trayectoria} (${filas.length})`,
+        filas,
+        nombreArchivo: `trayectoria_${trayectoria.replace(/\s|→/g, "_")}`,
+      });
+    } catch (e) {
+      setModal({ titulo: "Error", filas: [{ error: e.message }], nombreArchivo: "error" });
+    }
+  };
+
+  // Drilldown: Matrix (aceptadas o ejecutadas por SC+fecha)
+  const abrirMatrixDetalle = async (fecha, sc, tipo) => {
+    setModal({ titulo: `Cargando…`, filas: [], nombreArchivo: "matrix" });
+    try {
+      const { data, error } = await sb.rpc("get_matrix_detalle", {
+        p_fecha: fecha,
+        p_sc: sc,
+        p_tipo: tipo,
+      });
+      if (error) throw error;
+      const filas = (data || []).map(d => {
+        if (tipo === "aceptadas") {
+          return {
+            "Request ID": d.identificador,
+            "Origen": d.origen,
+            "Tipo flota": d.fleet_type,
+            "Servicio": d.service_description,
+            "Vehículo": d.vehicle_type,
+            "Estado": d.estado_o_ns,
+            "ETD": d.driver_o_etd,
+          };
+        } else {
+          return {
+            "ID Ruta": d.identificador,
+            "Origen": d.origen,
+            "Tipo flota": d.fleet_type,
+            "Servicio": d.service_description,
+            "Vehículo": d.vehicle_type,
+            "NS %": d.estado_o_ns,
+            "Conductor": d.driver_o_etd,
+            "Despachados": d.envios_despachados,
+            "Entregados": d.envios_entregados,
+          };
+        }
+      });
+      const tituloTipo = tipo === "aceptadas" ? "Aceptadas (TR)" : "Ejecutadas (Maestro)";
+      setModal({
+        titulo: `${tituloTipo} · ${sc} · ${fecha} (${filas.length})`,
+        filas,
+        nombreArchivo: `matrix_${tipo}_${sc}_${fecha}`,
+      });
+    } catch (e) {
+      setModal({ titulo: "Error", filas: [{ error: e.message }], nombreArchivo: "error" });
+    }
   };
 
   // EMBUDO MODERNO: pirámide horizontal con conexiones
@@ -17628,6 +17745,321 @@ function PoolMeliCiclo({ scs, resumen, setModal, mesGlobal }) {
           </div>
         </div>
       )}
+
+      {/* ════════════════════════════════════════════════════════════════════ */}
+      {/* BLOQUE: Trayectorias de Estado                                      */}
+      {/* ════════════════════════════════════════════════════════════════════ */}
+      {trayectorias.length > 0 && (() => {
+        const conCambio = trayectorias.filter(t => t.tipo === "Con cambio" && Number(t.cantidad_ofertas) > 0);
+        const sinCambio = trayectorias.filter(t => t.tipo === "Sin cambio");
+        const totalCambios = conCambio.reduce((a, t) => a + Number(t.cantidad_ofertas), 0);
+        const totalSinCambio = sinCambio.reduce((a, t) => a + Number(t.cantidad_ofertas), 0);
+        const totalOfertas = totalCambios + totalSinCambio;
+        const pctEstable = totalOfertas > 0 ? ((totalSinCambio / totalOfertas) * 100).toFixed(1) : "0.0";
+
+        // Mapeo de etiquetas amigables
+        const etiquetasTray = {
+          "accepted → rejected": { 
+            label: "Aceptada → Rechazada", 
+            emoji: "🔴", 
+            color: "#991b1b", 
+            bg: "linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%)", 
+            border: "#fecaca",
+            descripcion: "Echarse atrás" 
+          },
+          "accepted → canceled": { 
+            label: "Aceptada → Cancelada", 
+            emoji: "🟠", 
+            color: "#9a3412", 
+            bg: "linear-gradient(135deg, #fff7ed 0%, #fed7aa 100%)", 
+            border: "#fdba74",
+            descripcion: "MELI canceló" 
+          },
+          "pending → accepted": { 
+            label: "Pending → Aceptada", 
+            emoji: "🟢", 
+            color: "#166534", 
+            bg: "linear-gradient(135deg, #f0fdf4 0%, #bbf7d0 100%)", 
+            border: "#86efac",
+            descripcion: "Recuperación tardía" 
+          },
+          "pending → rejected": { 
+            label: "Pending → Rechazada", 
+            emoji: "🟡", 
+            color: "#854d0e", 
+            bg: "linear-gradient(135deg, #fefce8 0%, #fef08a 100%)", 
+            border: "#fde047",
+            descripcion: "Decisión consciente" 
+          },
+        };
+        const pendingPending = sinCambio.find(t => t.trayectoria === "pending → pending");
+
+        return (
+          <div className="form-card" style={{ marginTop: 20, background: "linear-gradient(180deg, #fff 0%, #f8fafc 100%)" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
+              <div>
+                <div className="form-title" style={{ marginBottom: 4 }}>🔄 Trayectorias de Estado</div>
+                <div style={{ fontSize: 12, color: "#64748b" }}>
+                  Cómo evolucionan las ofertas entre snapshots
+                  <span style={{ marginLeft: 8, color: "#94a3b8" }}>· click en cualquier card para ver detalle</span>
+                </div>
+              </div>
+              <div style={{ textAlign: "right", fontSize: 11, color: "#64748b" }}>
+                <div><strong style={{ color: "#10b981" }}>{pctEstable}%</strong> estables</div>
+                <div><strong style={{ color: "#dc2626" }}>{totalCambios}</strong> con cambio</div>
+              </div>
+            </div>
+
+            {/* Cards de cambios */}
+            {conCambio.length > 0 && (
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#475569", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 10 }}>
+                  ⚠️ Atención · Cambios de estado
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: `repeat(${Math.min(conCambio.length, 4)}, 1fr)`, gap: 12, marginBottom: 16 }}>
+                  {conCambio.map(t => {
+                    const meta = etiquetasTray[t.trayectoria] || { 
+                      label: t.trayectoria, emoji: "❓", color: "#475569", 
+                      bg: "#f8fafc", border: "#e2e8f0", descripcion: "" 
+                    };
+                    return (
+                      <div key={t.trayectoria}
+                        onClick={() => abrirTrayectoria(t.trayectoria)}
+                        style={{ 
+                          background: meta.bg, 
+                          borderRadius: 10, 
+                          padding: 14, 
+                          cursor: "pointer", 
+                          border: `1px solid ${meta.border}`,
+                          transition: "transform 0.15s",
+                        }}
+                        onMouseEnter={e => e.currentTarget.style.transform = "scale(1.02)"}
+                        onMouseLeave={e => e.currentTarget.style.transform = "scale(1)"}>
+                        <div style={{ fontSize: 10, fontWeight: 700, color: meta.color, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6, display: "flex", justifyContent: "space-between" }}>
+                          <span>{meta.emoji} {meta.label}</span>
+                          <span style={{ fontSize: 9, opacity: 0.7 }}>VER →</span>
+                        </div>
+                        <div style={{ fontSize: 26, fontWeight: 800, color: meta.color, fontVariantNumeric: "tabular-nums", lineHeight: 1 }}>
+                          {Number(t.cantidad_ofertas).toLocaleString()}
+                        </div>
+                        <div style={{ fontSize: 11, color: meta.color, opacity: 0.85, marginTop: 4, fontStyle: "italic" }}>
+                          {meta.descripcion}
+                        </div>
+                        <div style={{ fontSize: 10, color: "#64748b", marginTop: 6, paddingTop: 6, borderTop: `1px dashed ${meta.border}` }}>
+                          {t.cantidad_scs} SC{t.cantidad_scs === 1 ? "" : "s"}: <strong>{t.scs_involucrados}</strong>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Card de oportunidades perdidas (pending → pending) */}
+            {pendingPending && Number(pendingPending.cantidad_ofertas) > 0 && (
+              <div
+                onClick={() => abrirTrayectoria("pending → pending")}
+                style={{ 
+                  background: "linear-gradient(135deg, #fefce8 0%, #fef9c3 100%)", 
+                  borderLeft: "4px solid #ca8a04", 
+                  borderRadius: 8, 
+                  padding: 14, 
+                  marginBottom: 16,
+                  cursor: "pointer",
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  transition: "transform 0.15s",
+                }}
+                onMouseEnter={e => e.currentTarget.style.transform = "scale(1.005)"}
+                onMouseLeave={e => e.currentTarget.style.transform = "scale(1)"}>
+                <div>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: "#854d0e", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>
+                    🟡 Oportunidades perdidas
+                  </div>
+                  <div style={{ fontSize: 13, color: "#0f172a", fontWeight: 600 }}>
+                    Pending sin respuesta
+                  </div>
+                  <div style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}>
+                    MELI las rota a otro carrier = negocio perdido directo · SCs: <strong>{pendingPending.scs_involucrados}</strong>
+                  </div>
+                </div>
+                <div style={{ textAlign: "right" }}>
+                  <div style={{ fontSize: 30, fontWeight: 800, color: "#854d0e", fontVariantNumeric: "tabular-nums", lineHeight: 1 }}>
+                    {Number(pendingPending.cantidad_ofertas).toLocaleString()}
+                  </div>
+                  <div style={{ fontSize: 9, color: "#854d0e", opacity: 0.7, marginTop: 2 }}>VER DETALLE →</div>
+                </div>
+              </div>
+            )}
+
+            {/* Resumen de estables */}
+            {sinCambio.length > 0 && (
+              <div style={{ 
+                background: "#f0fdf4", 
+                border: "1px solid #bbf7d0", 
+                borderRadius: 8, 
+                padding: 12, 
+                fontSize: 12, 
+                color: "#166534" 
+              }}>
+                ✅ <strong>Comportamiento estable:</strong> {totalSinCambio.toLocaleString()} ofertas mantuvieron su estado ({pctEstable}% del total)
+                <span style={{ marginLeft: 6, color: "#64748b", fontSize: 11 }}>
+                  · {sinCambio.filter(t => t.trayectoria !== "pending → pending").map(t => 
+                      `${t.trayectoria.split(" → ")[0]}: ${Number(t.cantidad_ofertas).toLocaleString()}`
+                    ).join(" · ")}
+                </span>
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
+      {/* ════════════════════════════════════════════════════════════════════ */}
+      {/* BLOQUE: Matrix Embudo ↔ Cumplimiento                                */}
+      {/* ════════════════════════════════════════════════════════════════════ */}
+      {matrixData.length > 0 && (() => {
+        // Totales agregados del período
+        const totAceptadas = matrixData.reduce((a, r) => a + Number(r.tr_aceptadas || 0), 0);
+        const totEjecutadas = matrixData.reduce((a, r) => a + Number(r.rutas_ejecutadas || 0), 0);
+        const totLeakage = matrixData.reduce((a, r) => a + Number(r.aceptadas_no_ejecutadas || 0), 0);
+        const totSDDPre = matrixData.reduce((a, r) => a + Number(r.ejecutadas_sin_aceptar || 0), 0);
+        const cumplGlobal = totAceptadas > 0 ? ((totAceptadas - totLeakage) / totAceptadas * 100) : 0;
+
+        // Casos críticos: leakage > 20% y al menos 3 ofertas perdidas
+        const criticos = matrixData
+          .filter(r => Number(r.aceptadas_no_ejecutadas) >= 3 && Number(r.cumplimiento_pct) < 80)
+          .sort((a, b) => Number(a.cumplimiento_pct) - Number(b.cumplimiento_pct))
+          .slice(0, 10);
+
+        return (
+          <div className="form-card" style={{ marginTop: 20, background: "linear-gradient(180deg, #fff 0%, #f8fafc 100%)" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
+              <div>
+                <div className="form-title" style={{ marginBottom: 4 }}>🎯 Matrix Embudo ↔ Cumplimiento</div>
+                <div style={{ fontSize: 12, color: "#64748b" }}>
+                  De las que aceptamos, ¿cuáles realmente se ejecutaron? Vinculación agregada por SC + fecha
+                  <span style={{ marginLeft: 8, color: "#94a3b8" }}>· click en cualquier celda para ver detalle</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Resumen de KPIs del período */}
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 16 }}>
+              <div style={{ background: "linear-gradient(135deg, #ecfeff 0%, #cffafe 100%)", borderRadius: 8, padding: 12, border: "1px solid #a5f3fc" }}>
+                <div style={{ fontSize: 10, fontWeight: 700, color: "#155e75", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>Aceptadas (TR)</div>
+                <div style={{ fontSize: 24, fontWeight: 800, color: "#0e7490", fontVariantNumeric: "tabular-nums", lineHeight: 1 }}>{totAceptadas.toLocaleString()}</div>
+              </div>
+              <div style={{ background: "linear-gradient(135deg, #f0fdf4 0%, #bbf7d0 100%)", borderRadius: 8, padding: 12, border: "1px solid #86efac" }}>
+                <div style={{ fontSize: 10, fontWeight: 700, color: "#14532d", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>Ejecutadas (Maestro)</div>
+                <div style={{ fontSize: 24, fontWeight: 800, color: "#166534", fontVariantNumeric: "tabular-nums", lineHeight: 1 }}>{totEjecutadas.toLocaleString()}</div>
+              </div>
+              <div style={{ background: "linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%)", borderRadius: 8, padding: 12, border: "1px solid #fecaca" }}>
+                <div style={{ fontSize: 10, fontWeight: 700, color: "#7f1d1d", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>🔴 Leakage</div>
+                <div style={{ fontSize: 24, fontWeight: 800, color: "#991b1b", fontVariantNumeric: "tabular-nums", lineHeight: 1 }}>{totLeakage.toLocaleString()}</div>
+                <div style={{ fontSize: 10, color: "#991b1b", opacity: 0.85, marginTop: 4 }}>aceptadas no ejecutadas</div>
+              </div>
+              <div style={{ background: "linear-gradient(135deg, #fefce8 0%, #fef9c3 100%)", borderRadius: 8, padding: 12, border: "1px solid #fde047" }}>
+                <div style={{ fontSize: 10, fontWeight: 700, color: "#713f12", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>🟡 SDD pre-asignadas</div>
+                <div style={{ fontSize: 24, fontWeight: 800, color: "#854d0e", fontVariantNumeric: "tabular-nums", lineHeight: 1 }}>{totSDDPre.toLocaleString()}</div>
+                <div style={{ fontSize: 10, color: "#854d0e", opacity: 0.85, marginTop: 4 }}>sin pasar por TR</div>
+              </div>
+            </div>
+
+            {/* Cumplimiento global */}
+            <div style={{
+              background: cumplGlobal >= 95 ? "#f0fdf4" : cumplGlobal >= 85 ? "#fefce8" : "#fef2f2",
+              border: `1px solid ${cumplGlobal >= 95 ? "#bbf7d0" : cumplGlobal >= 85 ? "#fde047" : "#fecaca"}`,
+              borderRadius: 8,
+              padding: 14,
+              marginBottom: 16,
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+            }}>
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#475569", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>
+                  Cumplimiento global del período
+                </div>
+                <div style={{ fontSize: 12, color: "#64748b" }}>
+                  De cada 100 aceptadas, {Math.round(cumplGlobal)} llegaron a operar
+                </div>
+              </div>
+              <div style={{ 
+                fontSize: 36, 
+                fontWeight: 800, 
+                color: cumplGlobal >= 95 ? "#166534" : cumplGlobal >= 85 ? "#854d0e" : "#991b1b",
+                fontVariantNumeric: "tabular-nums", 
+                lineHeight: 1 
+              }}>
+                {cumplGlobal.toFixed(1)}%
+              </div>
+            </div>
+
+            {/* Casos críticos */}
+            {criticos.length > 0 && (
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#475569", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 10 }}>
+                  🚨 Top {criticos.length} casos críticos · click para ver detalle
+                </div>
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                    <thead>
+                      <tr style={{ background: "#f1f5f9", borderBottom: "1px solid #cbd5e1" }}>
+                        <th style={{ ...pm_thStyle, textAlign: "left" }}>SC</th>
+                        <th style={pm_thStyle}>Fecha</th>
+                        <th style={{ ...pm_thStyle, textAlign: "right" }}>Aceptadas</th>
+                        <th style={{ ...pm_thStyle, textAlign: "right" }}>Ejecutadas</th>
+                        <th style={{ ...pm_thStyle, textAlign: "right" }}>No ejec.</th>
+                        <th style={{ ...pm_thStyle, textAlign: "right" }}>Cumpl.%</th>
+                        <th style={{ ...pm_thStyle, textAlign: "left" }}>Interpretación</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {criticos.map((row, idx) => {
+                        const cumpl = Number(row.cumplimiento_pct);
+                        const cumplColor = cumpl >= 95 ? "#166534" : cumpl >= 85 ? "#854d0e" : "#991b1b";
+                        return (
+                          <tr key={`${row.sc}-${row.fecha}-${idx}`} style={{ borderBottom: "1px solid #e2e8f0" }}>
+                            <td style={{ ...pm_tdStyle, fontWeight: 700 }}>{row.sc}</td>
+                            <td style={{ ...pm_tdStyle, textAlign: "center" }}>{row.fecha}</td>
+                            <td style={pm_tdStyleR}>
+                              <button onClick={() => abrirMatrixDetalle(row.fecha, row.sc, "aceptadas")}
+                                style={linkStyle("#0e7490", true)}
+                                onMouseEnter={e => e.currentTarget.style.textDecorationColor = "#0e7490"}
+                                onMouseLeave={e => e.currentTarget.style.textDecorationColor = "transparent"}>
+                                {row.tr_aceptadas}
+                              </button>
+                            </td>
+                            <td style={pm_tdStyleR}>
+                              <button onClick={() => abrirMatrixDetalle(row.fecha, row.sc, "ejecutadas")}
+                                style={linkStyle("#166534", true)}
+                                onMouseEnter={e => e.currentTarget.style.textDecorationColor = "#166534"}
+                                onMouseLeave={e => e.currentTarget.style.textDecorationColor = "transparent"}>
+                                {row.rutas_ejecutadas}
+                              </button>
+                            </td>
+                            <td style={{ ...pm_tdStyleR, color: "#991b1b", fontWeight: 700 }}>{row.aceptadas_no_ejecutadas}</td>
+                            <td style={{ ...pm_tdStyleR, fontWeight: 700, color: cumplColor }}>{cumpl.toFixed(1)}%</td>
+                            <td style={{ ...pm_tdStyle, fontSize: 11, color: "#475569" }}>{row.interpretacion}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {criticos.length === 0 && (
+              <div style={{ background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 8, padding: 14, fontSize: 12, color: "#166534", textAlign: "center" }}>
+                ✅ Sin casos críticos en el período. Todas las SCs cumplieron por encima del 80% o tuvieron pocas ofertas no ejecutadas.
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
     </div>
   );
 }
