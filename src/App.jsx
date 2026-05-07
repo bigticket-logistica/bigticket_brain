@@ -15799,6 +15799,7 @@ function PoolMeliResumenKPI() {
   const cno = data.capacidad_no_operable || { total: 0, walker: 0, crowd: 0, moto: 0, detalle: [] };
   const dtv = data.delta_tr_vs_panel || { tr_aceptadas: 0, logistic_operables: 0, delta: 0, detalle_tr_por_sc: [] };
   const rsm = data.reporte_sdd_meli || { tiene_reporte: false, totales: null, por_sc: [], no_ejecutadas_detalle: [] };
+  const ccon = data.cumplimiento_contractual || { sdd_solicitadas: 0, sdd_ejecutadas: 0, sdd_no_cumplidas: 0, sdd_pct: 0, var_solicitadas: 0, var_ejecutadas: 0, var_no_cumplidas: 0, var_pct: 0, total_solicitadas: 0, total_ejecutadas: 0, total_no_cumplidas: 0, pct_total: 0, usa_reporte_oficial_sdd: false };
   const ns = data.nivel_servicio || {};
   const nv = data.nivel_visitados || {};
   const pnr = data.pnr || {};
@@ -15981,19 +15982,62 @@ function PoolMeliResumenKPI() {
         )}
       </div>
 
-      {/* BLOQUE 1: CUMPLIMIENTO DE PROMESA */}
+      {/* BLOQUE 1: CUMPLIMIENTO DE PROMESA (Operativo + Contractual) */}
       <div style={{ background: "#fff", borderRadius: 12, padding: 20, marginBottom: 16, border: "1px solid #e4e7ec" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 14 }}>
           <div>
             <div style={{ fontSize: 16, fontWeight: 700, color: "#1a3a6b" }}>Cumplimiento de Promesa</div>
-            <div style={{ fontSize: 11, color: "#888", marginTop: 2 }}>Rutas aceptadas vs ejecutadas</div>
-          </div>
-          <div style={{ fontSize: 28, fontWeight: 800, color: cp.pct_cumplimiento >= 95 ? "#16a34a" : cp.pct_cumplimiento >= 85 ? "#f59e0b" : "#dc2626" }}>
-            {cp.pct_cumplimiento || 0}%
+            <div style={{ fontSize: 11, color: "#888", marginTop: 2 }}>Dos visiones complementarias del cumplimiento</div>
           </div>
         </div>
-        
-        {/* Línea principal */}
+
+        {/* CABECERA DUAL: Operativo vs Contractual */}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
+          {/* OPERATIVO (Brain) */}
+          <div style={{ background: "#f0fdf4", borderRadius: 10, padding: 14, border: "1px solid #bbf7d0" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+              <div>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#166534", textTransform: "uppercase", letterSpacing: 0.5 }}>Operativo (Brain)</div>
+                <div style={{ fontSize: 10, color: "#166534", opacity: 0.7, marginTop: 2 }}>Lo que efectivamente operamos</div>
+              </div>
+              <div style={{ fontSize: 28, fontWeight: 800, color: cp.pct_cumplimiento >= 95 ? "#16a34a" : cp.pct_cumplimiento >= 85 ? "#f59e0b" : "#dc2626" }}>
+                {cp.pct_cumplimiento || 0}%
+              </div>
+            </div>
+            <div style={{ fontSize: 11, color: "#166534" }}>
+              <strong>{cp.ejecutadas || 0}</strong> ejecutadas / <strong>{cp.aceptadas || 0}</strong> prometidas
+            </div>
+            <div style={{ fontSize: 10, color: "#166534", opacity: 0.7, marginTop: 4, fontStyle: "italic" }}>
+              Fuente: Logistic Monitoring + Maestro Jornada
+            </div>
+          </div>
+
+          {/* CONTRACTUAL (MELI) */}
+          {ccon.total_solicitadas > 0 && (
+            <div style={{ background: "#fef3c7", borderRadius: 10, padding: 14, border: "1px solid #fcd34d" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                <div>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: "#854d0e", textTransform: "uppercase", letterSpacing: 0.5 }}>Contractual (MELI)</div>
+                  <div style={{ fontSize: 10, color: "#854d0e", opacity: 0.7, marginTop: 2 }}>Lo que MELI nos pidió cumplir</div>
+                </div>
+                <div style={{ fontSize: 28, fontWeight: 800, color: ccon.pct_total >= 95 ? "#16a34a" : ccon.pct_total >= 85 ? "#f59e0b" : "#dc2626" }}>
+                  {ccon.pct_total || 0}%
+                </div>
+              </div>
+              <div style={{ fontSize: 11, color: "#854d0e" }}>
+                <strong>{ccon.total_ejecutadas || 0}</strong> ejecutadas / <strong>{ccon.total_solicitadas || 0}</strong> solicitadas
+              </div>
+              <div style={{ fontSize: 10, color: "#854d0e", opacity: 0.7, marginTop: 4, fontStyle: "italic" }}>
+                Fuente: {ccon.usa_reporte_oficial_sdd ? "Reporte oficial MELI (SDD)" : "TR (SDD)"} + TR (Variables)
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Línea principal Operativo: Aceptadas / Ejecutadas / No realizadas */}
+        <div style={{ fontSize: 10, color: "#666", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6 }}>
+          Detalle operativo
+        </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12, marginBottom: 14 }}>
           <div onClick={() => abrirDetalle("aceptadas", {}, "Ofertas aceptadas")}
             style={{ background: "#f0f9ff", borderRadius: 8, padding: "12px 14px", cursor: "pointer", transition: "transform 0.1s", border: "1px solid transparent" }}
@@ -16030,8 +16074,8 @@ function PoolMeliResumenKPI() {
           </div>
         </div>
         
-        {/* Split SDD vs Variable */}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12 }}>
+        {/* Split SDD vs Variable - Operativo */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12, marginBottom: 14 }}>
           <div onClick={() => abrirDetalle("ejecutadas", { fleet: "SDD" }, "Viajes ejecutados · SDD")}
             style={{ background: "#fff7ed", borderRadius: 8, padding: 14, border: "1px solid #fed7aa", cursor: "pointer" }}>
             <div style={{ fontSize: 11, color: "#9a3412", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8, display: "flex", justifyContent: "space-between" }}>
@@ -16059,6 +16103,79 @@ function PoolMeliResumenKPI() {
             </div>
           </div>
         </div>
+
+        {/* DETALLE CONTRACTUAL: SDD vs Variable con etiquetas de fuente */}
+        {ccon.total_solicitadas > 0 && (
+          <>
+            <div style={{ fontSize: 10, color: "#854d0e", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6, marginTop: 4 }}>
+              Detalle contractual MELI
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12 }}>
+              {/* SDD Contractual */}
+              <div style={{ background: "#fffbeb", borderRadius: 8, padding: 14, border: "1px solid #fde68a", position: "relative" }}>
+                <div style={{ position: "absolute", top: 8, right: 10, fontSize: 9, color: ccon.usa_reporte_oficial_sdd ? "#16a34a" : "#9333ea", fontWeight: 700 }}>
+                  {ccon.usa_reporte_oficial_sdd ? "✅ VALIDADO" : "⚠️ FALLBACK TR"}
+                </div>
+                <div style={{ fontSize: 11, color: "#854d0e", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6 }}>
+                  SDD (Súper Dedicada)
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 6 }}>
+                  <div style={{ fontSize: 13 }}>
+                    <strong>{ccon.sdd_ejecutadas || 0}</strong>
+                    <span style={{ color: "#888" }}> / </span>
+                    <strong>{ccon.sdd_solicitadas || 0}</strong>
+                  </div>
+                  <div style={{ fontSize: 18, fontWeight: 800, color: ccon.sdd_pct >= 95 ? "#16a34a" : ccon.sdd_pct >= 85 ? "#f59e0b" : "#dc2626" }}>
+                    {ccon.sdd_pct || 0}%
+                  </div>
+                </div>
+                <div style={{ fontSize: 10, color: "#854d0e" }}>
+                  No cumplidas: <strong style={{ color: ccon.sdd_no_cumplidas > 0 ? "#991b1b" : "#16a34a" }}>{ccon.sdd_no_cumplidas || 0}</strong>
+                </div>
+                <div style={{ fontSize: 9, color: "#a16207", marginTop: 4, fontStyle: "italic" }}>
+                  Fuente: {ccon.usa_reporte_oficial_sdd ? "Reporte oficial MELI" : "TR (no hay reporte hoy)"}
+                </div>
+              </div>
+
+              {/* Variable Contractual */}
+              <div style={{ background: "#fffbeb", borderRadius: 8, padding: 14, border: "1px solid #fde68a", position: "relative" }}>
+                <div style={{ position: "absolute", top: 8, right: 10, fontSize: 9, color: "#9333ea", fontWeight: 700 }}>
+                  ⚠️ EN INVESTIGACIÓN
+                </div>
+                <div style={{ fontSize: 11, color: "#854d0e", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6 }}>
+                  Variable (Flota libre)
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 6 }}>
+                  <div style={{ fontSize: 13 }}>
+                    <strong>{ccon.var_ejecutadas || 0}</strong>
+                    <span style={{ color: "#888" }}> / </span>
+                    <strong>{ccon.var_solicitadas || 0}</strong>
+                  </div>
+                  <div style={{ fontSize: 18, fontWeight: 800, color: ccon.var_pct >= 95 ? "#16a34a" : ccon.var_pct >= 85 ? "#f59e0b" : "#dc2626" }}>
+                    {ccon.var_pct || 0}%
+                  </div>
+                </div>
+                <div style={{ fontSize: 10, color: "#854d0e" }}>
+                  No cumplidas: <strong style={{ color: ccon.var_no_cumplidas > 0 ? "#991b1b" : "#16a34a" }}>{ccon.var_no_cumplidas || 0}</strong>
+                </div>
+                <div style={{ fontSize: 9, color: "#a16207", marginTop: 4, fontStyle: "italic" }}>
+                  Fuente: TR (no existe reporte oficial Variables · contiene incertidumbre del delta)
+                </div>
+              </div>
+            </div>
+
+            {/* Caja explicativa */}
+            <div style={{ marginTop: 12, padding: 10, background: "rgba(254, 243, 199, 0.5)", borderRadius: 6, fontSize: 10, color: "#92400e", lineHeight: 1.5, borderLeft: "3px solid #fcd34d" }}>
+              <strong>📌 Sobre las dos visiones:</strong>
+              <br />
+              • <strong>Operativo</strong>: mide rutas que efectivamente operamos vs las que llegaron al panel Logistic.
+              <br />
+              • <strong>Contractual</strong>: mide rutas que MELI nos pidió cumplir vs las que efectivamente operamos.
+              <br />
+              • <strong>SDD</strong> tiene fuente oficial confiable (reporte MELI). <strong>Variables</strong> usa TR mientras se valida el delta de aceptadas vs panel.
+            </div>
+          </>
+        )}
       </div>
 
       {/* BLOQUE 1.B: CAPACIDAD NO OPERABLE (Walker / Car 8h Crowd / Moto MLP) */}
