@@ -15334,6 +15334,7 @@ function IndicadoresOperacionalesMX({ usuario }) {
     { id: "resumen_kpi", label: "Resumen KPI", desc: "Día anterior · vista ejecutiva" },
     { id: "inventario", label: "Inventario", desc: "Drivers, vehículos, fantasmas" },
     { id: "ciclo",      label: "Ciclo de aceptación", desc: "Embudo ofrecidas → ejecutadas" },
+    { id: "ventana_decisiones", label: "Ventana de Decisiones", desc: "Cambios de estado: arrepentimientos, cancelaciones, aceptaciones tarde" },
     { id: "score",      label: "Score de compromiso", desc: "Calificación 0-100 por driver" },
     { id: "hallazgos",  label: "Hallazgos", desc: "Lo más crítico para revisar" },
   ];
@@ -15435,6 +15436,7 @@ function IndicadoresOperacionalesMX({ usuario }) {
       {vista === "resumen_kpi" && <PoolMeliResumenKPI />}
       {vista === "inventario" && <PoolMeliInventario drivers={drivers} vehiculos={vehiculos} resumen={resumen} setModal={setModal} setDetalle={setDetalle} mesGlobal={mesGlobal} />}
       {vista === "ciclo"      && <PoolMeliCiclo scs={scs} resumen={resumen} setModal={setModal} mesGlobal={mesGlobal} />}
+      {vista === "ventana_decisiones" && <PoolMeliVentanaDecisiones mesGlobal={mesGlobal} />}
       {vista === "score"      && <PoolMeliScore scores={scores} resumen={resumen} mesGlobal={mesGlobal} />}
       {vista === "hallazgos"  && <PoolMeliHallazgos drivers={drivers} vehiculos={vehiculos} scs={scs} scores={scores} resumen={resumen} setModal={setModal} setVista={setVista} mesGlobal={mesGlobal} />}
 
@@ -17575,6 +17577,377 @@ function PoolMeliDetalleRegistro({ tipo, registro, onVolver }) {
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PESTAÑA: VENTANA DE DECISIONES
+// Muestra trayectorias de estado en TR: aceptadas tarde, arrepentimientos,
+// cancelaciones MELI, recuperaciones, pending rechazadas
+// 3 niveles de drill-down: Tipos → SCs → Rutas individuales
+// ═══════════════════════════════════════════════════════════════════════════
+function PoolMeliVentanaDecisiones({ mesGlobal }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [modo, setModo] = useState("dia"); // "dia" o "rango"
+  const [fechaDia, setFechaDia] = useState(() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 1);
+    return d.toISOString().slice(0, 10);
+  });
+  const [fechaDesde, setFechaDesde] = useState(() => {
+    const hoy = new Date();
+    const inicioMes = new Date(hoy.getFullYear(), hoy.getMonth(), 1);
+    return inicioMes.toISOString().slice(0, 10);
+  });
+  const [fechaHasta, setFechaHasta] = useState(() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 1);
+    return d.toISOString().slice(0, 10);
+  });
+  
+  // Drill-down state
+  const [tipoExpandido, setTipoExpandido] = useState(null);
+  const [scExpandido, setScExpandido] = useState(null);
+
+  useEffect(() => {
+    let cancelado = false;
+    async function cargar() {
+      setLoading(true);
+      setError(null);
+      setTipoExpandido(null);
+      setScExpandido(null);
+      try {
+        const params = modo === "dia"
+          ? { p_fecha_desde: fechaDia }
+          : { p_fecha_desde: fechaDesde, p_fecha_hasta: fechaHasta };
+        const { data: result, error: err } = await supabase.rpc("get_ventana_decisiones", params);
+        if (cancelado) return;
+        if (err) throw err;
+        setData(result);
+      } catch (e) {
+        if (!cancelado) setError(e.message || String(e));
+      } finally {
+        if (!cancelado) setLoading(false);
+      }
+    }
+    cargar();
+    return () => { cancelado = true; };
+  }, [modo, fechaDia, fechaDesde, fechaHasta]);
+
+  if (loading) return <div className="pg" style={{ padding: 40, color: "#888" }}>Cargando ventana de decisiones...</div>;
+  if (error) return <div className="pg" style={{ padding: 40, color: "#c0392b" }}>Error: {error}</div>;
+  if (!data) return <div className="pg" style={{ padding: 40, color: "#888" }}>Sin datos</div>;
+
+  const totales = data.totales_por_tipo || {};
+  const desglose = data.desglose_por_sc || {};
+  const detalles = data.detalle_completo || {};
+  const totalCambios = data.total_cambios || 0;
+
+  // Definición de los 5 tipos con sus metadatos
+  const tiposConfig = [
+    {
+      id: "aceptadas_tarde",
+      label: "Aceptadas tarde",
+      icon: "⏱️",
+      desc: "Pending → Accepted",
+      explicacion: "Ofertas que estaban en pending y terminamos aceptando, posiblemente después del ETD",
+      color: "#9333ea",
+      bg: "#faf5ff",
+      border: "#e9d5ff"
+    },
+    {
+      id: "arrepentimientos",
+      label: "Arrepentimientos",
+      icon: "↩️",
+      desc: "Accepted → Rejected",
+      explicacion: "Ofertas que aceptamos y luego rechazamos. Indican cambio de criterio operativo.",
+      color: "#dc2626",
+      bg: "#fef2f2",
+      border: "#fecaca"
+    },
+    {
+      id: "canceladas_meli",
+      label: "Canceladas MELI",
+      icon: "❌",
+      desc: "Accepted → Canceled",
+      explicacion: "Aceptamos y MELI canceló. No es responsabilidad nuestra pero impacta capacidad.",
+      color: "#b45309",
+      bg: "#fffbeb",
+      border: "#fde68a"
+    },
+    {
+      id: "recuperaciones",
+      label: "Recuperaciones",
+      icon: "♻️",
+      desc: "Rejected → Accepted",
+      explicacion: "Rechazamos y luego aceptamos. Probablemente tras revisión operativa.",
+      color: "#16a34a",
+      bg: "#f0fdf4",
+      border: "#bbf7d0"
+    },
+    {
+      id: "pending_rechazadas",
+      label: "Pending rechazadas",
+      icon: "⛔",
+      desc: "Pending → Rejected",
+      explicacion: "Ofertas que ignoramos hasta el final y terminamos rechazando.",
+      color: "#64748b",
+      bg: "#f1f5f9",
+      border: "#cbd5e1"
+    },
+  ];
+
+  const periodoTexto = data.es_rango
+    ? `${data.fecha_desde} a ${data.fecha_hasta}`
+    : data.fecha_desde;
+
+  return (
+    <div className="pg">
+      <div className="sec-title">Ventana de Decisiones</div>
+      <div className="sec-sub">
+        Cambios de estado en Travel Requests · período {periodoTexto}
+      </div>
+
+      {/* Selector de modo y fechas */}
+      <div style={{ display: "flex", gap: 12, alignItems: "center", marginTop: 20, marginBottom: 16, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", gap: 4, padding: 4, background: "#f1f5f9", borderRadius: 8 }}>
+          <button onClick={() => setModo("dia")} style={{
+            padding: "6px 14px", fontSize: 12, fontWeight: 600, borderRadius: 6,
+            border: "none", cursor: "pointer",
+            background: modo === "dia" ? "#1a3a6b" : "transparent",
+            color: modo === "dia" ? "#fff" : "#475569"
+          }}>Día</button>
+          <button onClick={() => setModo("rango")} style={{
+            padding: "6px 14px", fontSize: 12, fontWeight: 600, borderRadius: 6,
+            border: "none", cursor: "pointer",
+            background: modo === "rango" ? "#1a3a6b" : "transparent",
+            color: modo === "rango" ? "#fff" : "#475569"
+          }}>Rango</button>
+        </div>
+        {modo === "dia" ? (
+          <input type="date" value={fechaDia} onChange={(e) => setFechaDia(e.target.value)} style={{
+            padding: "6px 10px", fontSize: 13, borderRadius: 6, border: "1px solid #cbd5e1"
+          }} />
+        ) : (
+          <>
+            <input type="date" value={fechaDesde} onChange={(e) => setFechaDesde(e.target.value)} style={{
+              padding: "6px 10px", fontSize: 13, borderRadius: 6, border: "1px solid #cbd5e1"
+            }} />
+            <span style={{ color: "#64748b" }}>→</span>
+            <input type="date" value={fechaHasta} onChange={(e) => setFechaHasta(e.target.value)} style={{
+              padding: "6px 10px", fontSize: 13, borderRadius: 6, border: "1px solid #cbd5e1"
+            }} />
+          </>
+        )}
+      </div>
+
+      {/* Cabecera con total */}
+      <div style={{
+        background: "linear-gradient(135deg, #1a3a6b 0%, #0f1e3d 100%)",
+        borderRadius: 12, padding: 20, marginBottom: 16, color: "#fff"
+      }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div>
+            <div style={{ fontSize: 14, fontWeight: 700, opacity: 0.9 }}>🔄 Total de cambios detectados</div>
+            <div style={{ fontSize: 11, opacity: 0.7, marginTop: 4 }}>Ofertas TR cuyo estado cambió durante el período</div>
+          </div>
+          <div style={{ fontSize: 48, fontWeight: 800, fontVariantNumeric: "tabular-nums" }}>
+            {totalCambios}
+          </div>
+        </div>
+      </div>
+
+      {/* Tarjetas de tipos */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12, marginBottom: 16 }}>
+        {tiposConfig.map(t => {
+          const cantidad = totales[t.id] || 0;
+          const expandida = tipoExpandido === t.id;
+          return (
+            <div key={t.id}
+              onClick={() => {
+                if (cantidad === 0) return;
+                setTipoExpandido(expandida ? null : t.id);
+                setScExpandido(null);
+              }}
+              style={{
+                background: t.bg,
+                borderRadius: 10,
+                padding: 14,
+                border: `1px solid ${expandida ? t.color : t.border}`,
+                borderWidth: expandida ? 2 : 1,
+                cursor: cantidad > 0 ? "pointer" : "default",
+                opacity: cantidad === 0 ? 0.6 : 1,
+                transition: "all 0.15s",
+                position: "relative"
+              }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+                <span style={{ fontSize: 18 }}>{t.icon}</span>
+                <span style={{ fontSize: 12, fontWeight: 700, color: t.color, textTransform: "uppercase", letterSpacing: 0.3 }}>
+                  {t.label}
+                </span>
+              </div>
+              <div style={{ fontSize: 32, fontWeight: 800, color: t.color, fontVariantNumeric: "tabular-nums", lineHeight: 1 }}>
+                {cantidad}
+              </div>
+              <div style={{ fontSize: 10, color: t.color, opacity: 0.7, marginTop: 4 }}>
+                {t.desc}
+              </div>
+              {cantidad > 0 && (
+                <div style={{ fontSize: 9, color: t.color, opacity: 0.6, marginTop: 6, fontWeight: 600 }}>
+                  {expandida ? "▲ Cerrar" : "▼ Click para ver SCs"}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Drill-down: SCs del tipo expandido */}
+      {tipoExpandido && (() => {
+        const tipo = tiposConfig.find(t => t.id === tipoExpandido);
+        const scs = desglose[tipoExpandido] || [];
+        const rutas = detalles[tipoExpandido] || [];
+        return (
+          <div style={{
+            background: "#fff",
+            borderRadius: 12,
+            padding: 20,
+            marginBottom: 16,
+            border: `2px solid ${tipo.color}`
+          }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+              <div>
+                <div style={{ fontSize: 16, fontWeight: 700, color: tipo.color }}>
+                  {tipo.icon} {tipo.label}
+                </div>
+                <div style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}>
+                  {tipo.explicacion}
+                </div>
+              </div>
+              <div style={{ fontSize: 24, fontWeight: 800, color: tipo.color }}>
+                {totales[tipoExpandido]}
+              </div>
+            </div>
+
+            {/* Tabla de SCs */}
+            <div style={{ marginBottom: 12 }}>
+              <div style={{ fontSize: 11, color: "#64748b", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>
+                Desglose por Service Center
+              </div>
+              <table style={{ width: "100%", fontSize: 12, borderCollapse: "collapse" }}>
+                <thead>
+                  <tr style={{ borderBottom: "1px solid #e2e8f0", color: "#475569" }}>
+                    <th style={{ textAlign: "left", padding: "8px 10px", fontWeight: 700 }}>SC</th>
+                    <th style={{ textAlign: "right", padding: "8px 10px", fontWeight: 700 }}>Total</th>
+                    <th style={{ textAlign: "right", padding: "8px 10px", fontWeight: 700 }}>SDD</th>
+                    <th style={{ textAlign: "right", padding: "8px 10px", fontWeight: 700 }}>Variable</th>
+                    <th style={{ textAlign: "left", padding: "8px 10px", fontWeight: 700 }}>Vehículos</th>
+                    <th style={{ textAlign: "center", padding: "8px 10px", fontWeight: 700 }}>Detalle</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {scs.map((sc, i) => {
+                    const expSc = scExpandido === sc.sc;
+                    return (
+                      <tr key={i}
+                        style={{
+                          borderBottom: "1px solid #f1f5f9",
+                          background: expSc ? tipo.bg : (i % 2 === 0 ? "#fafbfc" : "#fff"),
+                          cursor: "pointer"
+                        }}
+                        onClick={() => setScExpandido(expSc ? null : sc.sc)}>
+                        <td style={{ padding: "8px 10px", fontWeight: 600, color: "#0f172a" }}>{sc.sc}</td>
+                        <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 700, color: tipo.color, fontVariantNumeric: "tabular-nums" }}>{sc.cantidad}</td>
+                        <td style={{ padding: "8px 10px", textAlign: "right", color: "#9a3412", fontVariantNumeric: "tabular-nums" }}>{sc.sdd || 0}</td>
+                        <td style={{ padding: "8px 10px", textAlign: "right", color: "#3730a3", fontVariantNumeric: "tabular-nums" }}>{sc.variable || 0}</td>
+                        <td style={{ padding: "8px 10px", color: "#64748b", fontSize: 11 }}>{sc.vehiculos}</td>
+                        <td style={{ padding: "8px 10px", textAlign: "center", fontSize: 11, color: tipo.color, fontWeight: 600 }}>
+                          {expSc ? "▲" : "▼"}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Drill-down nivel 3: rutas individuales del SC */}
+            {scExpandido && (() => {
+              const rutasSc = rutas.filter(r => r.sc === scExpandido);
+              return (
+                <div style={{ background: tipo.bg, borderRadius: 8, padding: 12, marginTop: 8, border: `1px solid ${tipo.border}` }}>
+                  <div style={{ fontSize: 11, color: tipo.color, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>
+                    Rutas individuales · {scExpandido} ({rutasSc.length})
+                  </div>
+                  <div style={{ maxHeight: 320, overflowY: "auto" }}>
+                    <table style={{ width: "100%", fontSize: 11, borderCollapse: "collapse" }}>
+                      <thead style={{ position: "sticky", top: 0, background: tipo.bg, zIndex: 1 }}>
+                        <tr style={{ borderBottom: `1px solid ${tipo.border}`, color: tipo.color }}>
+                          {data.es_rango && <th style={{ textAlign: "left", padding: "4px 8px", fontWeight: 700 }}>Fecha op.</th>}
+                          <th style={{ textAlign: "left", padding: "4px 8px", fontWeight: 700 }}>Request ID</th>
+                          <th style={{ textAlign: "left", padding: "4px 8px", fontWeight: 700 }}>Travel ID</th>
+                          <th style={{ textAlign: "left", padding: "4px 8px", fontWeight: 700 }}>Vehículo</th>
+                          <th style={{ textAlign: "left", padding: "4px 8px", fontWeight: 700 }}>Tipo</th>
+                          <th style={{ textAlign: "left", padding: "4px 8px", fontWeight: 700 }}>Trayectoria</th>
+                          <th style={{ textAlign: "left", padding: "4px 8px", fontWeight: 700 }}>Último cambio</th>
+                          <th style={{ textAlign: "right", padding: "4px 8px", fontWeight: 700 }}>Hs vs ETD</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {rutasSc.map((r, i) => (
+                          <tr key={i} style={{ borderBottom: `1px dashed ${tipo.border}` }}>
+                            {data.es_rango && <td style={{ padding: "4px 8px", color: "#475569" }}>{r.fecha}</td>}
+                            <td style={{ padding: "4px 8px", color: "#475569", fontFamily: "monospace" }}>{r.request_id}</td>
+                            <td style={{ padding: "4px 8px", color: "#475569", fontFamily: "monospace" }}>{r.travel_id || "—"}</td>
+                            <td style={{ padding: "4px 8px", color: "#475569" }}>{r.vehiculo}</td>
+                            <td style={{ padding: "4px 8px", fontWeight: 600, color: r.es_sdd ? "#9a3412" : "#3730a3" }}>
+                              {r.es_sdd ? "SDD" : "VAR"}
+                            </td>
+                            <td style={{ padding: "4px 8px", fontFamily: "monospace", fontSize: 10, color: tipo.color, fontWeight: 600 }}>
+                              {r.estado_inicial} → {r.estado_final}
+                            </td>
+                            <td style={{ padding: "4px 8px", color: "#64748b", fontSize: 10 }}>
+                              {r.momento_cambio ? new Date(r.momento_cambio).toLocaleString('es-MX', {
+                                day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit'
+                              }) : "—"}
+                            </td>
+                            <td style={{ padding: "4px 8px", textAlign: "right", color: r.horas_vs_etd > 0 ? "#dc2626" : "#16a34a", fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>
+                              {r.horas_vs_etd != null ? `${r.horas_vs_etd > 0 ? '+' : ''}${r.horas_vs_etd}h` : "—"}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div style={{ fontSize: 10, color: tipo.color, opacity: 0.7, marginTop: 8, fontStyle: "italic" }}>
+                    💡 "Hs vs ETD" en positivo: el cambio ocurrió DESPUÉS del horario de salida planeado.
+                  </div>
+                </div>
+              );
+            })()}
+          </div>
+        );
+      })()}
+
+      {/* Mensaje cuando no hay datos */}
+      {totalCambios === 0 && (
+        <div style={{
+          background: "#f0fdf4",
+          borderRadius: 12,
+          padding: 24,
+          textAlign: "center",
+          border: "1px solid #bbf7d0"
+        }}>
+          <div style={{ fontSize: 28, marginBottom: 8 }}>✅</div>
+          <div style={{ fontSize: 14, fontWeight: 700, color: "#166534" }}>Sin cambios de estado en este período</div>
+          <div style={{ fontSize: 11, color: "#166534", marginTop: 4, opacity: 0.8 }}>
+            Todas las ofertas TR mantuvieron su estado inicial.
+          </div>
+        </div>
+      )}
     </div>
   );
 }
