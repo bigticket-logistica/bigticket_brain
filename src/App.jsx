@@ -17623,7 +17623,7 @@ function PoolMeliVentanaDecisiones({ mesGlobal }) {
         const params = modo === "dia"
           ? { p_fecha_desde: fechaDia }
           : { p_fecha_desde: fechaDesde, p_fecha_hasta: fechaHasta };
-        const { data: result, error: err } = await supabase.rpc("get_ventana_decisiones", params);
+        const { data: result, error: err } = await sb.rpc("get_ventana_decisiones", params);
         if (cancelado) return;
         if (err) throw err;
         setData(result);
