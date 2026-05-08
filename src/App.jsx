@@ -8791,15 +8791,15 @@ function DashboardCertificacion({
   // 🆕 datosTab: muestra TODO siempre, los inhabilitados son ciudadanos completos
   const datosTab = (cat) => datos[cat] || [];
 
-  // Estado de expansión por contratista (compuesto: id + transporte para evitar colisiones)
-  const [expandidoId, setExpandidoId] = useState(null);
-  // Cantidad de columnas para el colSpan del detalle expandido
-  const numColumnas = useMemo(() => {
-    let n = 4; // Operación, Transporte, Estado(activo/inh), Activos, %Reten + %Avance + Estado + Detalle = 8 base
-    n = 8 + (docsPorCategoria[tabCategoria]?.length || 0);
-    if (tabCategoria === "sub") n += 1; // columna Subcontratista
-    return n;
-  }, [tabCategoria, docsPorCategoria]);
+  // 🆕 Modal de detalle: contiene la fila completa o null si está cerrado
+  const [modalDetalle, setModalDetalle] = useState(null);
+  // Cerrar modal con tecla ESC
+  useEffect(() => {
+    if (!modalDetalle) return;
+    const onKey = (e) => { if (e.key === "Escape") setModalDetalle(null); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [modalDetalle]);
 
   return (
     <>
@@ -8960,10 +8960,8 @@ function DashboardCertificacion({
                   }[mandante] || "#f1f5f9";
                   const isInhabilitado = d.recurso_inhabilitado;
                   const filaId = d.id || `${d.transporte}|${d.categoria}|${d.subcontratista_nombre || ""}`;
-                  const expandida = expandidoId === filaId;
                   return (
-                    <Fragment key={filaId + "_" + i}>
-                    <tr style={{
+                    <tr key={filaId + "_" + i} style={{
                       borderBottom: "1px solid #f0f0f0",
                       background: isInhabilitado 
                         ? "#FCEBEB"
@@ -9076,29 +9074,19 @@ function DashboardCertificacion({
                       </td>
                       <td style={tdE}>{renderEstadoFinal(d.estado_final)}</td>
                       <td style={tdE}>
-                        <button onClick={() => setExpandidoId(expandida ? null : filaId)}
+                        <button 
+                          onClick={() => setModalDetalle(d)}
+                          title="Ver detalle completo del contratista"
                           style={{
-                            padding: "3px 10px", borderRadius: 4, border: "1px solid #e4e7ec",
-                            background: expandida ? "#1a3a6b" : "#fff",
-                            color: expandida ? "#fff" : "#475569",
+                            padding: "4px 12px", borderRadius: 4, border: "1px solid #1a3a6b",
+                            background: "#1a3a6b", color: "#fff",
                             fontSize: 10, fontWeight: 600, cursor: "pointer",
+                            display: "inline-flex", alignItems: "center", gap: 4,
                           }}>
-                          {expandida ? "Cerrar" : "Ver"}
+                          Ver detalle
                         </button>
                       </td>
                     </tr>
-                    {expandida && (
-                      <tr>
-                        <td colSpan={numColumnas} style={{ padding: 0, background: "#f8fafc" }}>
-                          <RecursosContratista
-                            transporte={d.transporte}
-                            categoria={d.categoria}
-                            subcontratistaNombre={d.subcontratista_nombre}
-                          />
-                        </td>
-                      </tr>
-                    )}
-                    </Fragment>
                   );
                 })}
               </tbody>
@@ -9119,7 +9107,450 @@ function DashboardCertificacion({
           <span>↗ Enviado</span><span>⏳ Pendiente</span><span>— No aplica</span>
         </div>
       </div>
+
+      {/* 🆕 Modal de detalle del contratista */}
+      {modalDetalle && (
+        <ModalDetalleContratista 
+          fila={modalDetalle}
+          onCerrar={() => setModalDetalle(null)}
+          docsPorCategoria={docsPorCategoria}
+          renderIconoDoc={renderIconoDoc}
+          operacionAMandante={operacionAMandante}
+        />
+      )}
     </>
+  );
+}
+
+// ─── 🆕 Modal de detalle completo del contratista ────────────────────
+// Reemplaza la vista expandida. Adaptativo según categoría (RYC vs SUB):
+// - RYC/PC: empleados + vehículos del contratista
+// - SUB: foco en el subcontratista específico (boletero)
+function ModalDetalleContratista({ fila, onCerrar, docsPorCategoria, renderIconoDoc, operacionAMandante }) {
+  const [tabActivo, setTabActivo] = useState("documentos");
+  const [recursos, setRecursos] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [snapshotUsado, setSnapshotUsado] = useState(null);
+
+  const esSub = fila.categoria === "SUB";
+  const mandante = operacionAMandante(fila.operacion);
+  const isInhabilitado = fila.recurso_inhabilitado;
+
+  // Carga de recursos del contratista (similar a RecursosContratista pero más simple)
+  useEffect(() => {
+    let cancel = false;
+    (async () => {
+      setLoading(true);
+      try {
+        const { data: snapData } = await sb.from("certronic_documentos")
+          .select("fecha_snapshot")
+          .order("fecha_snapshot", { ascending: false })
+          .limit(1);
+        if (!snapData || !snapData.length) {
+          if (!cancel) { setRecursos([]); setLoading(false); }
+          return;
+        }
+        const fechaSnapshot = snapData[0].fecha_snapshot;
+        if (!cancel) setSnapshotUsado(fechaSnapshot);
+
+        let resultado = [];
+        let from = 0;
+        const limite = 1000;
+        while (true) {
+          const { data, error } = await sb.from("certronic_documentos")
+            .select("contratista, recurso_nombre, recurso_identificador, tipo_recurso, fecha_inicio, acceso, planta, documento")
+            .eq("fecha_snapshot", fechaSnapshot)
+            .ilike("contratista", `%${fila.transporte}%`)
+            .range(from, from + limite - 1);
+          if (cancel) return;
+          if (error) throw error;
+          if (!data || data.length === 0) break;
+          resultado = resultado.concat(data);
+          if (data.length < limite) break;
+          from += limite;
+        }
+
+        // Deduplicar por recurso, juntar todos los documentos de cada uno
+        const recursosMap = new Map();
+        for (const r of resultado) {
+          const key = `${r.recurso_nombre || ""}|${r.tipo_recurso || ""}`;
+          if (!recursosMap.has(key)) {
+            recursosMap.set(key, {
+              recurso_nombre: r.recurso_nombre,
+              recurso_identificador: r.recurso_identificador,
+              tipo_recurso: r.tipo_recurso,
+              fecha_inicio: r.fecha_inicio,
+              acceso: r.acceso,
+              planta: r.planta,
+              documentos: [],
+            });
+          }
+          const existing = recursosMap.get(key);
+          if (r.documento && !existing.documentos.find(d => d.documento === r.documento)) {
+            existing.documentos.push({ documento: r.documento });
+          }
+          if (!existing.recurso_identificador && r.recurso_identificador) {
+            existing.recurso_identificador = r.recurso_identificador;
+          }
+        }
+
+        let recursosFinales = Array.from(recursosMap.values());
+        // Si es SUB, filtrar solo el subcontratista específico
+        if (esSub && fila.subcontratista_nombre) {
+          const norm = (s) => (s || "").toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "").trim();
+          const target = norm(fila.subcontratista_nombre);
+          recursosFinales = recursosFinales.filter(r => norm(r.recurso_nombre).includes(target) || target.includes(norm(r.recurso_nombre)));
+        }
+
+        recursosFinales.sort((a, b) => (a.recurso_nombre || "").localeCompare(b.recurso_nombre || ""));
+        if (!cancel) setRecursos(recursosFinales);
+      } catch (e) {
+        console.error("[ModalDetalle]", e);
+        if (!cancel) setRecursos([]);
+      }
+      if (!cancel) setLoading(false);
+    })();
+    return () => { cancel = true; };
+  }, [fila.transporte, fila.categoria, fila.subcontratista_nombre, esSub]);
+
+  // Particiones de recursos
+  const empleados = useMemo(() => recursos.filter(r => r.tipo_recurso === "empleado"), [recursos]);
+  const vehiculos = useMemo(() => recursos.filter(r => r.tipo_recurso === "vehiculo"), [recursos]);
+  const empleadosInhab = empleados.filter(e => e.acceso === "Inhabilitado").length;
+  const vehiculosInhab = vehiculos.filter(v => v.acceso === "Inhabilitado").length;
+
+  // Documentos exigidos por categoría (matriz)
+  const docsCategoria = docsPorCategoria[fila.categoria.toLowerCase()] || [];
+
+  // Click en overlay (fuera del modal) cierra
+  const onOverlayClick = (e) => {
+    if (e.target === e.currentTarget) onCerrar();
+  };
+
+  // Color mandante
+  const colorOp = {
+    "Mercado Libre": "#fef3c7",
+    "Falabella": "#dcfce7",
+    "Rosen": "#fce7f3",
+    "Cannon": "#dbeafe",
+    "Esporádicos": "#f3e8ff",
+  }[mandante] || "#f1f5f9";
+
+  // Estilo común de tab
+  const tabStyle = (activo) => ({
+    padding: "8px 16px", cursor: "pointer", fontSize: 12, fontWeight: activo ? 700 : 500,
+    color: activo ? "#1a3a6b" : "#64748b",
+    borderBottom: activo ? "2px solid #1a3a6b" : "2px solid transparent",
+    background: "transparent", border: "none", borderRadius: 0,
+    transition: "all 0.15s",
+  });
+
+  const tituloModal = esSub 
+    ? (fila.subcontratista_nombre || fila.transporte)
+    : fila.transporte;
+  const subtituloModal = esSub
+    ? `Subcontratista de ${fila.transporte} · ${mandante}`
+    : `${mandante} · ${fila.categoria}${fila.email ? " · " + fila.email : ""}`;
+
+  return (
+    <div onClick={onOverlayClick}
+      style={{
+        position: "fixed", top: 0, left: 0, right: 0, bottom: 0,
+        background: "rgba(15, 23, 42, 0.55)", zIndex: 9999,
+        display: "flex", alignItems: "flex-start", justifyContent: "center",
+        padding: "40px 20px", overflow: "auto",
+      }}>
+      <div style={{
+        background: "#fff", borderRadius: 8, width: "100%", maxWidth: 980,
+        boxShadow: "0 20px 60px rgba(0,0,0,0.35)",
+        display: "flex", flexDirection: "column", maxHeight: "calc(100vh - 80px)",
+        overflow: "hidden",
+      }}>
+
+        {/* HEADER */}
+        <div style={{
+          padding: "16px 20px", borderBottom: "1px solid #e4e7ec",
+          display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12,
+          background: isInhabilitado ? "#FCEBEB" : "#fff",
+          borderLeft: isInhabilitado ? "4px solid #A32D2D" : "4px solid transparent",
+        }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 4 }}>
+              <span style={{
+                fontSize: 10, padding: "2px 8px", borderRadius: 4,
+                background: colorOp, color: "#1a3a6b", fontWeight: 700,
+              }}>{fila.operacion || mandante}</span>
+              {isInhabilitado && (
+                <span style={{ 
+                  fontSize: 9.5, padding: "2px 8px", borderRadius: 3,
+                  background: "#A32D2D", color: "#fff", fontWeight: 700, letterSpacing: 0.3,
+                }}>INHABILITADO</span>
+              )}
+              <span style={{ fontSize: 10, color: "#64748b" }}>{fila.categoria}</span>
+            </div>
+            <div style={{ fontSize: 17, fontWeight: 700, color: isInhabilitado ? "#791F1F" : "#1a3a6b", marginBottom: 2 }}>
+              {tituloModal}
+            </div>
+            <div style={{ fontSize: 11, color: isInhabilitado ? "#791F1F" : "#64748b" }}>
+              {subtituloModal}
+              {esSub && (
+                <span style={{ marginLeft: 6, padding: "1px 6px", borderRadius: 3, background: "#f3e8ff", color: "#6b21a8", fontWeight: 600 }}>
+                  Boletero
+                </span>
+              )}
+            </div>
+          </div>
+          <button onClick={onCerrar} aria-label="Cerrar"
+            style={{
+              border: "1px solid #e4e7ec", background: "#fff", cursor: "pointer",
+              padding: "4px 10px", borderRadius: 4, fontSize: 16, color: "#64748b",
+              lineHeight: 1, fontWeight: 700,
+            }}>✕</button>
+        </div>
+
+        {/* KPIs */}
+        <div style={{ padding: "12px 20px", display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10, borderBottom: "1px solid #e4e7ec" }}>
+          <div style={{ background: "#f8fafc", borderRadius: 6, padding: "8px 12px" }}>
+            <div style={{ fontSize: 9.5, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 600 }}>Estado</div>
+            <div style={{ fontSize: 14, fontWeight: 700, color: isInhabilitado ? "#A32D2D" : "#16a34a", marginTop: 2 }}>
+              {isInhabilitado ? "Inhabilitado" : "Activo"}
+            </div>
+          </div>
+          <div style={{ background: "#f8fafc", borderRadius: 6, padding: "8px 12px" }}>
+            <div style={{ fontSize: 9.5, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 600 }}>Avance</div>
+            <div style={{ fontSize: 14, fontWeight: 700, color: "#1a3a6b", marginTop: 2 }}>
+              {fila.pct_avance != null ? `${Math.round(fila.pct_avance)}%` : "—"}
+            </div>
+          </div>
+          <div style={{ background: "#f8fafc", borderRadius: 6, padding: "8px 12px" }}>
+            <div style={{ fontSize: 9.5, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 600 }}>Retención</div>
+            <div style={{ fontSize: 14, fontWeight: 700, color: fila.pct_retencion > 0 ? "#c0392b" : "#94a3b8", marginTop: 2 }}>
+              {fila.pct_retencion ? `${fila.pct_retencion}%` : "—"}
+            </div>
+          </div>
+          {!esSub && (
+            <>
+              <div style={{ background: "#f8fafc", borderRadius: 6, padding: "8px 12px" }}>
+                <div style={{ fontSize: 9.5, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 600 }}>Empleados</div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: "#1a3a6b", marginTop: 2 }}>
+                  {fila.empleados_activos || 0}
+                  {empleadosInhab > 0 && <span style={{ fontSize: 10, color: "#A32D2D", marginLeft: 4 }}>({empleadosInhab} inh.)</span>}
+                </div>
+              </div>
+              <div style={{ background: "#f8fafc", borderRadius: 6, padding: "8px 12px" }}>
+                <div style={{ fontSize: 9.5, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 600 }}>Vehículos</div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: "#1a3a6b", marginTop: 2 }}>
+                  {fila.vehiculos_activos || 0}
+                  {vehiculosInhab > 0 && <span style={{ fontSize: 10, color: "#A32D2D", marginLeft: 4 }}>({vehiculosInhab} inh.)</span>}
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+
+        {/* TABS */}
+        <div style={{ borderBottom: "1px solid #e4e7ec", padding: "0 20px", display: "flex", gap: 4 }}>
+          <button onClick={() => setTabActivo("documentos")} style={tabStyle(tabActivo === "documentos")}>
+            Documentos {docsCategoria.length > 0 && `(${docsCategoria.length})`}
+          </button>
+          {!esSub && (
+            <>
+              <button onClick={() => setTabActivo("empleados")} style={tabStyle(tabActivo === "empleados")}>
+                Empleados {empleados.length > 0 && `(${empleados.length})`}
+              </button>
+              <button onClick={() => setTabActivo("vehiculos")} style={tabStyle(tabActivo === "vehiculos")}>
+                Vehículos {vehiculos.length > 0 && `(${vehiculos.length})`}
+              </button>
+            </>
+          )}
+          <button onClick={() => setTabActivo("historico")} style={tabStyle(tabActivo === "historico")}>
+            Histórico
+          </button>
+        </div>
+
+        {/* CONTENIDO TAB */}
+        <div style={{ flex: 1, overflowY: "auto", padding: "16px 20px", background: "#fafbfc" }}>
+          {loading && tabActivo !== "documentos" && tabActivo !== "historico" ? (
+            <div style={{ padding: 40, textAlign: "center", color: "#94a3b8", fontSize: 12 }}>Cargando...</div>
+          ) : (
+            <>
+              {/* TAB DOCUMENTOS */}
+              {tabActivo === "documentos" && (
+                <div>
+                  <div style={{ fontSize: 11, color: "#64748b", marginBottom: 10 }}>
+                    Estado de los {docsCategoria.length} documentos exigidos por mandante para esta categoría
+                  </div>
+                  <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, overflow: "hidden" }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                      <thead style={{ background: "#f1f5f9" }}>
+                        <tr>
+                          <th style={{ padding: "8px 12px", textAlign: "left", fontSize: 10, fontWeight: 700, color: "#475569" }}>Documento</th>
+                          <th style={{ padding: "8px 12px", textAlign: "center", fontSize: 10, fontWeight: 700, color: "#475569", width: 100 }}>Estado</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {docsCategoria.map((doc) => (
+                          <tr key={doc.key} style={{ borderTop: "1px solid #f1f5f9" }}>
+                            <td style={{ padding: "8px 12px", fontWeight: 500 }}>{doc.label}</td>
+                            <td style={{ padding: "8px 12px", textAlign: "center" }}>
+                              {renderIconoDoc(fila[doc.key], {
+                                contratista: fila.transporte,
+                                categoria: fila.categoria,
+                                subcontratista: fila.subcontratista_nombre,
+                                docCampo: doc.key,
+                                docLabel: doc.label,
+                                fechaSnapshot: fila.fecha_snapshot_ultimo,
+                              })}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div style={{ fontSize: 10.5, color: "#64748b", marginTop: 10, display: "flex", gap: 10, flexWrap: "wrap" }}>
+                    <span>✓ Validado</span><span>◐ Recepcionado</span>
+                    <span>↗ Enviado</span><span>⏳ Pendiente</span><span>— No aplica</span>
+                  </div>
+                </div>
+              )}
+
+              {/* TAB EMPLEADOS */}
+              {tabActivo === "empleados" && !esSub && (
+                <div>
+                  {empleados.length === 0 ? (
+                    <div style={{ padding: 40, textAlign: "center", color: "#94a3b8", fontSize: 12 }}>
+                      Sin empleados registrados en el snapshot {snapshotUsado || "—"}
+                    </div>
+                  ) : (
+                    <>
+                      <div style={{ fontSize: 11, color: "#64748b", marginBottom: 10 }}>
+                        {empleados.length} empleado{empleados.length !== 1 ? "s" : ""} en Certronic 
+                        {empleadosInhab > 0 && <span style={{ color: "#A32D2D", fontWeight: 600 }}> · {empleadosInhab} con acceso Inhabilitado individualmente</span>}
+                      </div>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                        {empleados.map((e, i) => {
+                          const inhab = e.acceso === "Inhabilitado";
+                          return (
+                            <div key={i} style={{
+                              padding: "10px 12px", borderRadius: 6,
+                              background: inhab ? "#FCEBEB" : "#fff",
+                              border: "1px solid " + (inhab ? "#F09595" : "#e4e7ec"),
+                              borderLeft: inhab ? "3px solid #A32D2D" : "3px solid transparent",
+                              display: "flex", alignItems: "center", gap: 12,
+                            }}>
+                              <div style={{ flex: 1, minWidth: 0 }}>
+                                <div style={{ fontSize: 12, fontWeight: 600, color: inhab ? "#791F1F" : "#1a3a6b" }}>
+                                  {e.recurso_nombre || "—"}
+                                </div>
+                                {e.recurso_identificador && (
+                                  <div style={{ fontSize: 10, color: inhab ? "#791F1F" : "#64748b", marginTop: 2 }}>
+                                    RUT {e.recurso_identificador}
+                                    {e.documentos && e.documentos.length > 0 && (
+                                      <span style={{ marginLeft: 8 }}>· {e.documentos.length} doc{e.documentos.length !== 1 ? "s" : ""}</span>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                              <span style={{
+                                fontSize: 10, padding: "3px 10px", borderRadius: 4, fontWeight: 700,
+                                background: inhab ? "#A32D2D" : "#EAF3DE",
+                                color: inhab ? "#fff" : "#3B6D11",
+                                whiteSpace: "nowrap",
+                              }}>
+                                {e.acceso || "—"}
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
+
+              {/* TAB VEHÍCULOS */}
+              {tabActivo === "vehiculos" && !esSub && (
+                <div>
+                  {vehiculos.length === 0 ? (
+                    <div style={{ padding: 40, textAlign: "center", color: "#94a3b8", fontSize: 12 }}>
+                      Sin vehículos registrados en el snapshot {snapshotUsado || "—"}
+                    </div>
+                  ) : (
+                    <>
+                      <div style={{ fontSize: 11, color: "#64748b", marginBottom: 10 }}>
+                        {vehiculos.length} vehículo{vehiculos.length !== 1 ? "s" : ""} en Certronic
+                        {vehiculosInhab > 0 && <span style={{ color: "#A32D2D", fontWeight: 600 }}> · {vehiculosInhab} con acceso Inhabilitado</span>}
+                      </div>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                        {vehiculos.map((v, i) => {
+                          const inhab = v.acceso === "Inhabilitado";
+                          return (
+                            <div key={i} style={{
+                              padding: "10px 12px", borderRadius: 6,
+                              background: inhab ? "#FCEBEB" : "#fff",
+                              border: "1px solid " + (inhab ? "#F09595" : "#e4e7ec"),
+                              borderLeft: inhab ? "3px solid #A32D2D" : "3px solid transparent",
+                              display: "flex", alignItems: "center", gap: 12,
+                            }}>
+                              <div style={{ flex: 1, minWidth: 0 }}>
+                                <div style={{ fontSize: 12, fontWeight: 600, color: inhab ? "#791F1F" : "#1a3a6b" }}>
+                                  {v.recurso_nombre || "—"}
+                                </div>
+                                {v.documentos && v.documentos.length > 0 && (
+                                  <div style={{ fontSize: 10, color: inhab ? "#791F1F" : "#64748b", marginTop: 2 }}>
+                                    {v.documentos.length} doc{v.documentos.length !== 1 ? "s" : ""} asociado{v.documentos.length !== 1 ? "s" : ""}
+                                  </div>
+                                )}
+                              </div>
+                              <span style={{
+                                fontSize: 10, padding: "3px 10px", borderRadius: 4, fontWeight: 700,
+                                background: inhab ? "#A32D2D" : "#EAF3DE",
+                                color: inhab ? "#fff" : "#3B6D11",
+                                whiteSpace: "nowrap",
+                              }}>
+                                {v.acceso || "—"}
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
+
+              {/* TAB HISTÓRICO */}
+              {tabActivo === "historico" && (
+                <div style={{ padding: 40, textAlign: "center", color: "#64748b" }}>
+                  <div style={{ fontSize: 36, marginBottom: 12 }}>📊</div>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: "#475569", marginBottom: 6 }}>
+                    Histórico próximamente
+                  </div>
+                  <div style={{ fontSize: 11, maxWidth: 400, margin: "0 auto", lineHeight: 1.5 }}>
+                    Disponible cuando se implemente el scraper iterativo de Certronic 
+                    para guardar mes por mes desde enero 2025. Permitirá ver tendencias de cumplimiento, 
+                    documentos vencidos por período y patrones de comportamiento.
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+
+        {/* FOOTER */}
+        <div style={{ padding: "10px 20px", borderTop: "1px solid #e4e7ec", display: "flex", justifyContent: "space-between", alignItems: "center", background: "#f8fafc" }}>
+          <div style={{ fontSize: 10, color: "#94a3b8" }}>
+            {snapshotUsado && `Snapshot: ${snapshotUsado}`}
+            {fila.fecha_calculo && ` · Calculado: ${fila.fecha_calculo}`}
+          </div>
+          <button onClick={onCerrar} style={{
+            padding: "6px 16px", borderRadius: 4, border: "1px solid #1a3a6b",
+            background: "#1a3a6b", color: "#fff", fontSize: 11, fontWeight: 600, cursor: "pointer",
+          }}>Cerrar</button>
+        </div>
+
+      </div>
+    </div>
   );
 }
 
