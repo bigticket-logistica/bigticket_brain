@@ -5369,13 +5369,12 @@ function ModuloPagos() {
   const [loading, setLoading] = useState(true);
   const [periodo, setPeriodo] = useState(""); // YYYY-MM
   const [periodos, setPeriodos] = useState([]);
-  const [vistaActiva, setVistaActiva] = useState("dashboard"); // dashboard | criticos | limpieza | matriz
+  const [vistaActiva, setVistaActiva] = useState("dashboard"); // dashboard | criticos | matriz | hallazgos | rse | empleados | vehiculos | inicial
   const [tabCategoria, setTabCategoria] = useState("pc");
   const [busqueda, setBusqueda] = useState("");
-  const [filtroOperacion, setFiltroOperacion] = useState("todos");
   const [filtroEstado, setFiltroEstado] = useState("todos");
   const [filtroMandante, setFiltroMandante] = useState("todos");
-  const [mostrarInhabilitados, setMostrarInhabilitados] = useState(false);
+  const [filtroActivo, setFiltroActivo] = useState("todos"); // todos | solo_activos | solo_inhabilitados
   const [ultimaEjecucion, setUltimaEjecucion] = useState(null);
   const [ordenCol, setOrdenCol] = useState("transporte");
   const [ordenAsc, setOrdenAsc] = useState(true);
@@ -5697,11 +5696,9 @@ function ModuloPagos() {
       .map(d => d.transporte)).size;
   }, [datos]);
 
-  // KPIs (excluyen inhabilitados por defecto)
+  // KPIs (cuentan TODO: activos + inhabilitados, los inhabilitados son ciudadanos completos)
   const kpis = useMemo(() => {
-    const base = mostrarInhabilitados
-      ? [...datos.pc, ...datos.ryc, ...datos.sub]
-      : todosActivos;
+    const base = [...datos.pc, ...datos.ryc, ...datos.sub];
     const certificados = base.filter(d => d.estado_final === "CERTIFICADO").length;
     const parciales = base.filter(d => d.estado_final === "PENDIENTE").length;
     const sinCert = base.filter(d => d.estado_final === "NO_CERTIFICADO").length;
@@ -5712,7 +5709,7 @@ function ModuloPagos() {
       anomalias: base.filter(d => d.tiene_anomalia).length,
       inhabilitados: todosInhabilitados.length,
     };
-  }, [datos, mostrarInhabilitados, todosActivos, todosInhabilitados]);
+  }, [datos, todosActivos, todosInhabilitados]);
 
   // ─── ACTIVOS CRÍTICOS (Opción B): empresas activas con retención ───
   const activosCriticos = useMemo(() => {
@@ -5725,13 +5722,11 @@ function ModuloPagos() {
       .sort((a, b) => Number(b.pct_retencion) - Number(a.pct_retencion));
   }, [datos]);
 
-  // Operaciones únicas (para filtro)
+  // Operaciones únicas (para filtro) — siempre incluye todo
   const operacionesUnicas = useMemo(() => {
-    const todos = mostrarInhabilitados
-      ? [...datos.pc, ...datos.ryc, ...datos.sub]
-      : todosActivos;
+    const todos = [...datos.pc, ...datos.ryc, ...datos.sub];
     return [...new Set(todos.map(d => d.operacion).filter(Boolean))].sort();
-  }, [datos, mostrarInhabilitados, todosActivos]);
+  }, [datos]);
 
   // Documentos por categoría
   const docsPorCategoria = {
@@ -5752,22 +5747,41 @@ function ModuloPagos() {
     ],
   };
 
+  // 🆕 Helper: normaliza texto (sin acentos, sin tildes, lowercase) para búsqueda inteligente
+  const normalizar = (s) => (s || "")
+    .toString()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+
   // Filtrado para tabla por categoría
   const datosCategoriaActual = useMemo(() => {
     let arr = datos[tabCategoria] || [];
-    if (!mostrarInhabilitados) arr = arr.filter(d => !d.recurso_inhabilitado);
+    
+    // 🆕 Filtro de estado activo/inhabilitado
+    if (filtroActivo === "solo_activos") arr = arr.filter(d => !d.recurso_inhabilitado);
+    if (filtroActivo === "solo_inhabilitados") arr = arr.filter(d => d.recurso_inhabilitado);
+    
+    // 🆕 Búsqueda inteligente: tolerante a acentos, mayúsculas, parciales
+    // Soporta múltiples palabras: "bastian diaz" encuentra "Bastian Andres Diaz"
     if (busqueda) {
-      const q = busqueda.toLowerCase();
-      arr = arr.filter(d =>
-        (d.transporte || "").toLowerCase().includes(q) ||
-        (d.subcontratista_nombre || "").toLowerCase().includes(q) ||
-        (d.email || "").toLowerCase().includes(q) ||
-        (d.operacion || "").toLowerCase().includes(q)
-      );
+      const palabras = normalizar(busqueda).split(/\s+/).filter(Boolean);
+      arr = arr.filter(d => {
+        const camposBusqueda = [
+          d.transporte,
+          d.subcontratista_nombre,
+          d.email,
+          d.operacion,
+          d.rut,
+        ].map(normalizar).join(" ");
+        // TODAS las palabras deben aparecer (AND lógico)
+        return palabras.every(p => camposBusqueda.includes(p));
+      });
     }
-    if (filtroOperacion !== "todos") arr = arr.filter(d => d.operacion === filtroOperacion);
+    
     if (filtroEstado !== "todos") arr = arr.filter(d => d.estado_final === filtroEstado);
     if (filtroMandante !== "todos") arr = arr.filter(d => operacionAMandante(d.operacion) === filtroMandante);
+    
     arr = [...arr].sort((a, b) => {
       const va = a[ordenCol], vb = b[ordenCol];
       if (va == null) return 1;
@@ -5776,7 +5790,7 @@ function ModuloPagos() {
       return ordenAsc ? String(va).localeCompare(String(vb)) : String(vb).localeCompare(String(va));
     });
     return arr;
-  }, [datos, tabCategoria, busqueda, filtroOperacion, filtroEstado, filtroMandante, ordenCol, ordenAsc, mostrarInhabilitados]);
+  }, [datos, tabCategoria, busqueda, filtroEstado, filtroMandante, filtroActivo, ordenCol, ordenAsc]);
 
   // ─── Descargar Excel multi-hoja ───
   const descargarExcel = async () => {
@@ -5797,39 +5811,44 @@ function ModuloPagos() {
     const anio = parseInt(anioStr);
 
     const wb = window.XLSX.utils.book_new();
-    const datosActivos = todosActivos;
-    const pcA = datos.pc.filter(d => !d.recurso_inhabilitado);
-    const rycA = datos.ryc.filter(d => !d.recurso_inhabilitado);
-    const subA = datos.sub.filter(d => !d.recurso_inhabilitado);
+    // 🆕 Excel ahora incluye TODOS los registros (activos + inhabilitados)
+    const todosPC = datos.pc;
+    const todosRYC = datos.ryc;
+    const todosSUB = datos.sub;
+    const totalTodos = todosPC.length + todosRYC.length + todosSUB.length;
 
     // RESUMEN
     const resumen = [
       [`BIGTICKET — CERTIFICACIÓN DOCUMENTAL ${nombreMes} ${anio}`],
       [`Generado: ${new Date().toLocaleString("es-CL")}`],
-      [`Total activos: ${datosActivos.length} · Inhabilitados (no contados): ${todosInhabilitados.length}`],
+      [`Total registros: ${totalTodos} (incluye activos + inhabilitados)`],
+      [`Inhabilitados: ${todosInhabilitados.length} · resaltados con columna ESTADO`],
       [],
-      ["MÉTRICA", "TOTAL ACTIVOS", "PERSONAL CONTRATADO", "REP. Y CONDUCTOR", "SUBCONTRATISTA"],
-      ["Total registros activos", kpis.total, pcA.length, rycA.length, subA.length],
+      ["MÉTRICA", "TOTAL", "PERSONAL CONTRATADO", "REP. Y CONDUCTOR", "SUBCONTRATISTA"],
+      ["Total registros", kpis.total, todosPC.length, todosRYC.length, todosSUB.length],
       ["Certificados", kpis.certificados,
-        pcA.filter(d => d.estado_final === "CERTIFICADO").length,
-        rycA.filter(d => d.estado_final === "CERTIFICADO").length,
-        subA.filter(d => d.estado_final === "CERTIFICADO").length],
+        todosPC.filter(d => d.estado_final === "CERTIFICADO").length,
+        todosRYC.filter(d => d.estado_final === "CERTIFICADO").length,
+        todosSUB.filter(d => d.estado_final === "CERTIFICADO").length],
       ["Pendientes (parcial)", kpis.parciales,
-        pcA.filter(d => d.estado_final === "PENDIENTE").length,
-        rycA.filter(d => d.estado_final === "PENDIENTE").length,
-        subA.filter(d => d.estado_final === "PENDIENTE").length],
+        todosPC.filter(d => d.estado_final === "PENDIENTE").length,
+        todosRYC.filter(d => d.estado_final === "PENDIENTE").length,
+        todosSUB.filter(d => d.estado_final === "PENDIENTE").length],
       ["Sin certificar", kpis.sinCert,
-        pcA.filter(d => d.estado_final === "NO_CERTIFICADO").length,
-        rycA.filter(d => d.estado_final === "NO_CERTIFICADO").length,
-        subA.filter(d => d.estado_final === "NO_CERTIFICADO").length],
+        todosPC.filter(d => d.estado_final === "NO_CERTIFICADO").length,
+        todosRYC.filter(d => d.estado_final === "NO_CERTIFICADO").length,
+        todosSUB.filter(d => d.estado_final === "NO_CERTIFICADO").length],
+      ["Inhabilitados", kpis.inhabilitados,
+        todosPC.filter(d => d.recurso_inhabilitado).length,
+        todosRYC.filter(d => d.recurso_inhabilitado).length,
+        todosSUB.filter(d => d.recurso_inhabilitado).length],
       ["% Avance",
         `${kpis.pctAvance}%`,
-        `${pcA.length ? Math.round(pcA.filter(d => d.estado_final === "CERTIFICADO").length / pcA.length * 100) : 0}%`,
-        `${rycA.length ? Math.round(rycA.filter(d => d.estado_final === "CERTIFICADO").length / rycA.length * 100) : 0}%`,
-        `${subA.length ? Math.round(subA.filter(d => d.estado_final === "CERTIFICADO").length / subA.length * 100) : 0}%`],
+        `${todosPC.length ? Math.round(todosPC.filter(d => d.estado_final === "CERTIFICADO").length / todosPC.length * 100) : 0}%`,
+        `${todosRYC.length ? Math.round(todosRYC.filter(d => d.estado_final === "CERTIFICADO").length / todosRYC.length * 100) : 0}%`,
+        `${todosSUB.length ? Math.round(todosSUB.filter(d => d.estado_final === "CERTIFICADO").length / todosSUB.length * 100) : 0}%`],
       [],
       ["🚨 ACTIVOS CRÍTICOS (con retención)", activosCriticos.length],
-      ["🧹 INHABILITADOS (limpieza pendiente)", todosInhabilitados.length],
     ];
     const wsResumen = window.XLSX.utils.aoa_to_sheet(resumen);
     wsResumen["!cols"] = [{ wch: 30 }, { wch: 18 }, { wch: 22 }, { wch: 22 }, { wch: 22 }];
@@ -5843,11 +5862,12 @@ function ModuloPagos() {
       return ws;
     };
 
-    const headersPC = ["AÑO","MES","CERTIFICACIÓN","OPERACIÓN","TRANSPORTE","E-MAIL",
+    const headersPC = ["AÑO","MES","CERTIFICACIÓN","OPERACIÓN","TRANSPORTE","E-MAIL","ESTADO CONTRATISTA",
                        "F30","F30-1","LIQUIDACIONES","COTIZACIONES","MUTUALIDAD",
-                       "% RETENCIÓN","% AVANCE","ESTADO","EMPLEADOS ACTIVOS","VEHÍCULOS ACTIVOS","OBSERVACIONES"];
-    const wsPC = construirHoja(pcA, headersPC, d => [
+                       "% RETENCIÓN","% AVANCE","ESTADO CERT.","EMPLEADOS ACTIVOS","VEHÍCULOS ACTIVOS","OBSERVACIONES"];
+    const wsPC = construirHoja(todosPC, headersPC, d => [
       d.anio, d.mes, nombreMes, d.operacion || "", d.transporte || "", d.email || "",
+      d.recurso_inhabilitado ? "INHABILITADO" : "Activo",
       d.doc_f30 || "—", d.doc_f30_1 || "—", d.doc_liquidaciones || "—",
       d.doc_cotizaciones || "—", d.doc_mutualidad || "—",
       d.pct_retencion ? `${d.pct_retencion}%` : "—",
@@ -5857,10 +5877,11 @@ function ModuloPagos() {
     ]);
     XLSX.utils.book_append_sheet(wb, wsPC, "Personal Contratado");
 
-    const headersRYC = ["AÑO","MES","CERTIFICACIÓN","OPERACIÓN","TRANSPORTE","E-MAIL",
-                        "F30","MUTUALIDAD","% RETENCIÓN","% AVANCE","ESTADO","EMPLEADOS ACTIVOS","VEHÍCULOS ACTIVOS"];
-    const wsRYC = construirHoja(rycA, headersRYC, d => [
+    const headersRYC = ["AÑO","MES","CERTIFICACIÓN","OPERACIÓN","TRANSPORTE","E-MAIL","ESTADO CONTRATISTA",
+                        "F30","MUTUALIDAD","% RETENCIÓN","% AVANCE","ESTADO CERT.","EMPLEADOS ACTIVOS","VEHÍCULOS ACTIVOS"];
+    const wsRYC = construirHoja(todosRYC, headersRYC, d => [
       d.anio, d.mes, nombreMes, d.operacion || "", d.transporte || "", d.email || "",
+      d.recurso_inhabilitado ? "INHABILITADO" : "Activo",
       d.doc_f30 || "—", d.doc_mutualidad || "—",
       d.pct_retencion ? `${d.pct_retencion}%` : "—",
       d.pct_avance != null ? `${d.pct_avance}%` : "—",
@@ -5868,11 +5889,12 @@ function ModuloPagos() {
     ]);
     XLSX.utils.book_append_sheet(wb, wsRYC, "Representante y Conductor");
 
-    const headersSUB = ["AÑO","MES","CERTIFICACIÓN","OPERACIÓN","TRANSPORTE","SUBCONTRATISTA",
+    const headersSUB = ["AÑO","MES","CERTIFICACIÓN","OPERACIÓN","TRANSPORTE","SUBCONTRATISTA","ESTADO CONTRATISTA",
                         "FECHA INGRESO","BOLETA HON.","COMP. PAGO",
-                        "% RETENCIÓN","% AVANCE","ESTADO","OBSERVACIONES"];
-    const wsSUB = construirHoja(subA, headersSUB, d => [
+                        "% RETENCIÓN","% AVANCE","ESTADO CERT.","OBSERVACIONES"];
+    const wsSUB = construirHoja(todosSUB, headersSUB, d => [
       d.anio, d.mes, nombreMes, d.operacion || "", d.transporte || "", d.subcontratista_nombre || "",
+      d.recurso_inhabilitado ? "INHABILITADO" : "Activo",
       d.fecha_ingreso || "—", d.doc_boleta_honorarios || "—", d.doc_comprobante_pago || "—",
       d.pct_retencion ? `${d.pct_retencion}%` : "—",
       d.pct_avance != null ? `${d.pct_avance}%` : "—",
@@ -5891,16 +5913,6 @@ function ModuloPagos() {
       d.estado_final || "—",
     ]);
     XLSX.utils.book_append_sheet(wb, wsCrit, "🚨 ACTIVOS CRÍTICOS");
-
-    // LIMPIEZA (inhabilitados)
-    const headersLimp = ["TRANSPORTE","CATEGORÍA","OPERACIÓN","ESTADO","% RETENCIÓN","% AVANCE"];
-    const wsLimp = construirHoja(todosInhabilitados, headersLimp, d => [
-      d.transporte || "", d.categoria, d.operacion || "",
-      d.estado_final || "—",
-      d.pct_retencion ? `${d.pct_retencion}%` : "—",
-      d.pct_avance != null ? `${d.pct_avance}%` : "—",
-    ]);
-    XLSX.utils.book_append_sheet(wb, wsLimp, "🧹 LIMPIEZA");
 
     window.XLSX.writeFile(wb, `Certificacion_Bigticket_${nombreMes}_${anio}.xlsx`);
   };
@@ -6063,21 +6075,6 @@ function ModuloPagos() {
         );
       })()}
 
-      {/* Banner inhabilitados */}
-      {mostrarInhabilitados && (
-        <div style={{
-          background: "#f8fafc", border: "1px solid #e4e7ec", borderRadius: 6,
-          padding: "6px 12px", marginBottom: 12, fontSize: 11, color: "#64748b",
-          display: "flex", alignItems: "center", justifyContent: "space-between",
-        }}>
-          <div>Mostrando todos los registros (incluidos inhabilitados)</div>
-          <button onClick={() => setMostrarInhabilitados(false)}
-            style={{ padding: "3px 10px", border: "1px solid #cbd5e1", background: "#fff", borderRadius: 4, fontSize: 11, color: "#475569", cursor: "pointer" }}>
-            Ocultar inhabilitados
-          </button>
-        </div>
-      )}
-
       {/* TABS de vista principal */}
       <div style={{ display: "flex", gap: 4, marginBottom: 14, borderBottom: "2px solid #e4e7ec", flexWrap: "wrap" }}>
         {[
@@ -6086,7 +6083,6 @@ function ModuloPagos() {
           { id: "empleados", label: "Empleados", n: null },
           { id: "vehiculos", label: "Vehículos", n: null },
           { id: "criticos", label: "Activos Críticos", n: activosCriticos.length, alert: activosCriticos.length > 0 },
-          { id: "limpieza", label: "Limpieza", n: empresasInhabilitadasUnicas, warn: empresasInhabilitadasUnicas > 0 },
           { id: "hallazgos", label: "Hallazgos", n: null },
           { id: "rse", label: "🛡️ Riesgo RSE", n: null },
           { id: "matriz", label: "Matriz Documentos", n: null },
@@ -6120,10 +6116,9 @@ function ModuloPagos() {
               empresasInhabilitadasUnicas={empresasInhabilitadasUnicas}
               tabCategoria={tabCategoria} setTabCategoria={setTabCategoria}
               busqueda={busqueda} setBusqueda={setBusqueda}
-              filtroOperacion={filtroOperacion} setFiltroOperacion={setFiltroOperacion}
               filtroEstado={filtroEstado} setFiltroEstado={setFiltroEstado}
               filtroMandante={filtroMandante} setFiltroMandante={setFiltroMandante}
-              mostrarInhabilitados={mostrarInhabilitados}
+              filtroActivo={filtroActivo} setFiltroActivo={setFiltroActivo}
               operacionesUnicas={operacionesUnicas}
               datosCategoriaActual={datosCategoriaActual}
               docsPorCategoria={docsPorCategoria}
@@ -6147,15 +6142,6 @@ function ModuloPagos() {
           {vistaActiva === "criticos" && (
             <ActivosCriticos
               activosCriticos={activosCriticos}
-              renderEstadoFinal={renderEstadoFinal}
-              operacionAMandante={operacionAMandante}
-            />
-          )}
-
-          {/* ─── VISTA: LIMPIEZA ─── */}
-          {vistaActiva === "limpieza" && (
-            <LimpiezaInhabilitados
-              inhabilitados={todosInhabilitados}
               renderEstadoFinal={renderEstadoFinal}
               operacionAMandante={operacionAMandante}
             />
@@ -8794,44 +8780,44 @@ function ModalOverride({ contexto, onClose, onGuardar, onQuitar }) {
 function DashboardCertificacion({
   datos, kpis, empresasActivasUnicas, empresasInhabilitadasUnicas,
   tabCategoria, setTabCategoria,
-  busqueda, setBusqueda, filtroOperacion, setFiltroOperacion,
+  busqueda, setBusqueda,
   filtroEstado, setFiltroEstado, filtroMandante, setFiltroMandante,
-  mostrarInhabilitados, operacionesUnicas, datosCategoriaActual,
+  filtroActivo, setFiltroActivo,
+  operacionesUnicas, datosCategoriaActual,
   docsPorCategoria, renderIconoDoc, renderEstadoFinal,
   toggleOrden, flecha, operacionAMandante,
   cumplInicial = new Map(),  // 🆕 cumplimiento de docs iniciales por contratista
 }) {
-  const datosTab = (cat) => mostrarInhabilitados
-    ? datos[cat]
-    : datos[cat].filter(d => !d.recurso_inhabilitado);
+  // 🆕 datosTab: muestra TODO siempre, los inhabilitados son ciudadanos completos
+  const datosTab = (cat) => datos[cat] || [];
 
   // Estado de expansión por contratista (compuesto: id + transporte para evitar colisiones)
   const [expandidoId, setExpandidoId] = useState(null);
   // Cantidad de columnas para el colSpan del detalle expandido
   const numColumnas = useMemo(() => {
-    let n = 4; // Operación, Transporte, Activos, %Reten + %Avance + Estado + Detalle = 7 base
-    n = 7 + (docsPorCategoria[tabCategoria]?.length || 0);
+    let n = 4; // Operación, Transporte, Estado(activo/inh), Activos, %Reten + %Avance + Estado + Detalle = 8 base
+    n = 8 + (docsPorCategoria[tabCategoria]?.length || 0);
     if (tabCategoria === "sub") n += 1; // columna Subcontratista
     return n;
   }, [tabCategoria, docsPorCategoria]);
 
   return (
     <>
-      {/* KPIs */}
+      {/* KPIs (incluyen TODO: activos + inhabilitados) */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 10, marginBottom: 14 }}>
         <KPI 
-          label={mostrarInhabilitados ? "Total registros" : "Registros activos"} 
+          label="Total registros" 
           valor={kpis.total} 
-          sub={mostrarInhabilitados 
-            ? `${(empresasActivasUnicas + empresasInhabilitadasUnicas)} empresas únicas` 
-            : `${empresasActivasUnicas} empresas · ${operacionesUnicas.length} mandantes`} 
+          sub={`${(empresasActivasUnicas + empresasInhabilitadasUnicas)} empresas · ${operacionesUnicas.length} mandantes`}
           color="#1a3a6b" />
         <KPI label="% Avance certificación" valor={`${kpis.pctAvance}%`} sub={`${kpis.certificados} certificados`} color="#16a34a" />
         <KPI label="Pendientes" valor={kpis.parciales + kpis.sinCert} sub={`${kpis.parciales} parcial · ${kpis.sinCert} sin cert.`} color="#F47B20" />
         <KPI label="Anomalías" valor={kpis.anomalias} sub={kpis.anomalias > 0 ? "Requieren revisión" : "Todo OK"} color={kpis.anomalias > 0 ? "#c0392b" : "#16a34a"} />
-        {!mostrarInhabilitados && (
-          <KPI label="Inhabilitados" valor={kpis.inhabilitados} sub={`${empresasInhabilitadasUnicas} empresas · excluidas`} color="#94a3b8" />
-        )}
+        <KPI 
+          label="Inhabilitados" 
+          valor={kpis.inhabilitados} 
+          sub={`${empresasInhabilitadasUnicas} empresas · resaltadas en tabla`} 
+          color="#dc2626" />
       </div>
 
       {/* Tabs categoría + botón Excel */}
@@ -8906,7 +8892,12 @@ function DashboardCertificacion({
 
       {/* Filtros */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 160px 160px 160px", gap: 8, marginBottom: 12 }}>
-        <input placeholder="🔎 Buscar..." value={busqueda} onChange={(e) => setBusqueda(e.target.value)} />
+        <input 
+          placeholder="🔎 Buscar (nombre, RUT, email · sin acentos · busca cualquier parte)" 
+          value={busqueda} 
+          onChange={(e) => setBusqueda(e.target.value)} 
+          title="Buscador inteligente: tolerante a acentos y mayúsculas. Acepta múltiples palabras: 'bastian diaz' encuentra 'Bastian Andres Diaz'."
+        />
         <select value={filtroMandante} onChange={(e) => setFiltroMandante(e.target.value)}>
           <option value="todos">Todos los mandantes</option>
           <option value="Mercado Libre">Mercado Libre</option>
@@ -8915,15 +8906,16 @@ function DashboardCertificacion({
           <option value="Cannon">Cannon</option>
           <option value="Esporádicos">Esporádicos</option>
         </select>
-        <select value={filtroOperacion} onChange={(e) => setFiltroOperacion(e.target.value)}>
-          <option value="todos">Todas operaciones</option>
-          {operacionesUnicas.map(o => <option key={o} value={o}>{o}</option>)}
-        </select>
         <select value={filtroEstado} onChange={(e) => setFiltroEstado(e.target.value)}>
           <option value="todos">Todos estados</option>
           <option value="CERTIFICADO">✓ Certificado</option>
           <option value="PENDIENTE">⏳ Parcial</option>
           <option value="NO_CERTIFICADO">✗ Sin certificación</option>
+        </select>
+        <select value={filtroActivo} onChange={(e) => setFiltroActivo(e.target.value)}>
+          <option value="todos">Activos + inhabilitados</option>
+          <option value="solo_activos">Solo activos</option>
+          <option value="solo_inhabilitados">Solo inhabilitados</option>
         </select>
       </div>
 
@@ -8945,13 +8937,14 @@ function DashboardCertificacion({
                   {tabCategoria === "sub" && (
                     <th style={{...thE, textAlign: "left"}} onClick={() => toggleOrden("subcontratista_nombre")}>Subcontratista{flecha("subcontratista_nombre")}</th>
                   )}
+                  <th style={thE} onClick={() => toggleOrden("recurso_inhabilitado")} title="Inhabilitado: distintivo de Certronic — el contratista debe documentación. NO significa que no esté operando.">Estado{flecha("recurso_inhabilitado")}</th>
                   <th style={thE}>Activos</th>
                   {docsPorCategoria[tabCategoria].map(d => (
                     <th key={d.key} style={thE} title={d.label}>{d.label}</th>
                   ))}
                   <th style={thE} onClick={() => toggleOrden("pct_retencion")}>% Reten.{flecha("pct_retencion")}</th>
                   <th style={thE} onClick={() => toggleOrden("pct_avance")}>% Avance{flecha("pct_avance")}</th>
-                  <th style={thE} onClick={() => toggleOrden("estado_final")}>Estado{flecha("estado_final")}</th>
+                  <th style={thE} onClick={() => toggleOrden("estado_final")}>Cert.{flecha("estado_final")}</th>
                   <th style={thE}>Detalle</th>
                 </tr>
               </thead>
@@ -8972,8 +8965,10 @@ function DashboardCertificacion({
                     <Fragment key={filaId + "_" + i}>
                     <tr style={{
                       borderBottom: "1px solid #f0f0f0",
-                      background: isInhabilitado ? "#f8fafc" : (d.tiene_anomalia ? "#fff7ed" : (i % 2 === 0 ? "#fafbfc" : "#fff")),
-                      opacity: isInhabilitado ? 0.6 : 1,
+                      background: isInhabilitado 
+                        ? "#FCEBEB"
+                        : (d.tiene_anomalia ? "#fff7ed" : (i % 2 === 0 ? "#fafbfc" : "#fff")),
+                      borderLeft: isInhabilitado ? "3px solid #A32D2D" : "3px solid transparent",
                     }}>
                       <td style={tdE}>
                         <span title={mandante} style={{
@@ -8983,7 +8978,7 @@ function DashboardCertificacion({
                           {d.operacion || "—"}
                         </span>
                       </td>
-                      <td style={{...tdE, textAlign: "left", paddingLeft: 12, fontWeight: 500}}>
+                      <td style={{...tdE, textAlign: "left", paddingLeft: 12, fontWeight: 500, color: isInhabilitado ? "#791F1F" : undefined}}>
                         {d.transporte}
                         {(() => {
                           // 🆕 Triángulo de cumplimiento de docs iniciales (a la derecha, grande)
@@ -9006,7 +9001,13 @@ function DashboardCertificacion({
                           );
                         })()}
                         {isInhabilitado && (
-                          <span style={{ fontSize: 9, marginLeft: 6, padding: "1px 5px", borderRadius: 3, background: "#fee2e2", color: "#991b1b", fontWeight: 600 }}>
+                          <span 
+                            title="Distintivo de Certronic: el contratista debe documentación. NO significa que no esté operando."
+                            style={{ 
+                              fontSize: 9, marginLeft: 8, padding: "2px 7px", borderRadius: 3, 
+                              background: "#A32D2D", color: "#fff", fontWeight: 600, 
+                              letterSpacing: 0.3, verticalAlign: "middle",
+                            }}>
                             INHABILITADO
                           </span>
                         )}
@@ -9017,10 +9018,33 @@ function DashboardCertificacion({
                         )}
                       </td>
                       {tabCategoria === "sub" && (
-                        <td style={{...tdE, textAlign: "left", color: "#374151"}}>{d.subcontratista_nombre || "—"}</td>
+                        <td style={{...tdE, textAlign: "left", color: isInhabilitado ? "#791F1F" : "#374151"}}>{d.subcontratista_nombre || "—"}</td>
                       )}
+                      {/* 🆕 Columna Estado: pill Activo/Inhabilitado */}
                       <td style={tdE}>
-                        <div style={{ fontSize: 10, color: "#64748b" }}>
+                        {isInhabilitado ? (
+                          <span 
+                            title="Distintivo de Certronic. El contratista debe documentación pero puede seguir operando."
+                            style={{
+                              fontSize: 10, padding: "2px 8px", borderRadius: 4,
+                              background: "#FCEBEB", color: "#A32D2D", 
+                              fontWeight: 600, border: "0.5px solid #F09595",
+                              whiteSpace: "nowrap",
+                            }}>
+                            Inhabilitado
+                          </span>
+                        ) : (
+                          <span style={{
+                            fontSize: 10, padding: "2px 8px", borderRadius: 4,
+                            background: "#EAF3DE", color: "#3B6D11",
+                            fontWeight: 600, whiteSpace: "nowrap",
+                          }}>
+                            Activo
+                          </span>
+                        )}
+                      </td>
+                      <td style={tdE}>
+                        <div style={{ fontSize: 10, color: isInhabilitado ? "#791F1F" : "#64748b" }}>
                           {d.empleados_activos || 0} emp · {d.vehiculos_activos || 0} veh
                         </div>
                       </td>
@@ -9635,110 +9659,6 @@ function ActivosCriticos({ activosCriticos, renderEstadoFinal, operacionAMandant
   );
 }
 
-// ─── Sub-componente: Limpieza Inhabilitados ──────────────────────────
-function LimpiezaInhabilitados({ inhabilitados, renderEstadoFinal, operacionAMandante }) {
-  // Agrupar por contratista (un contratista puede aparecer en PC, RyC y SUB)
-  const agrupados = useMemo(() => {
-    const map = new Map();
-    for (const d of inhabilitados) {
-      if (!map.has(d.transporte)) {
-        map.set(d.transporte, { transporte: d.transporte, operacion: d.operacion, registros: [] });
-      }
-      map.get(d.transporte).registros.push(d);
-    }
-    return [...map.values()].sort((a, b) => b.registros.length - a.registros.length);
-  }, [inhabilitados]);
-
-  return (
-    <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10, padding: 16 }}>
-      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10, marginBottom: 4 }}>
-        <div>
-          <div style={{ fontSize: 16, fontWeight: 700, color: "#92400e" }}>Limpieza · Inhabilitados</div>
-          <div style={{ fontSize: 11, color: "#64748b" }}>
-            Contratistas marcados como Inhabilitados en Certronic. Excluidos del cálculo de retenciones.
-          </div>
-        </div>
-        {inhabilitados.length > 0 && (
-          <BotonDescargarExcel onClick={() => {
-            // Hoja 1: agrupados por contratista
-            const headersAgr = ["Transporte", "Operación", "Cantidad de Registros", "Categorías"];
-            const filasAgr = agrupados.map(g => [
-              g.transporte || "",
-              g.operacion || "",
-              g.registros.length,
-              [...new Set(g.registros.map(r => r.categoria))].join(", "),
-            ]);
-            
-            // Hoja 2: detalle de cada registro
-            const headersDet = ["Transporte", "Categoría", "Operación", "Mandante", "Subcontratista", "Estado Final", "% Avance", "% Retención"];
-            const filasDet = inhabilitados.map(d => [
-              d.transporte || "",
-              d.categoria || "",
-              d.operacion || "",
-              operacionAMandante ? operacionAMandante(d.operacion) || "" : "",
-              d.subcontratista_nombre || "",
-              d.estado_final || "",
-              d.porcentaje_avance != null ? d.porcentaje_avance + "%" : "",
-              d.porcentaje_retencion != null ? d.porcentaje_retencion + "%" : "",
-            ]);
-            
-            descargarExcelMultihoja([
-              { nombre: "Por Contratista", datos: [headersAgr, ...filasAgr] },
-              { nombre: "Detalle", datos: [headersDet, ...filasDet] },
-            ], "Limpieza_Inhabilitados");
-          }} />
-        )}
-      </div>
-
-      {agrupados.length === 0 ? (
-        <div style={{ padding: 30, textAlign: "center", color: "#16a34a", fontSize: 14 }}>
-          No hay contratistas inhabilitados.
-        </div>
-      ) : (
-        <>
-          <div style={{ background: "#f8fafc", border: "1px solid #e4e7ec", padding: "12px 14px", borderRadius: 4, fontSize: 12, marginTop: 12, marginBottom: 12, color: "#475569" }}>
-            <div style={{ fontWeight: 600, marginBottom: 6, color: "#1f2937" }}>
-              {agrupados.length} empresas inhabilitadas · {inhabilitados.length} registros entre PC/RyC/SUB
-            </div>
-            <div style={{ marginBottom: 4 }}>
-              Estas empresas están marcadas como <strong>Inhabilitadas</strong> en Certronic. <strong>NO se cuentan en los KPIs del Dashboard</strong> porque ya no operan para Bigticket.
-            </div>
-            <div>
-              ¿Por qué aparecen acá? Porque siguen apareciendo en los reportes de Certronic generando ruido. Conviene solicitar baja definitiva al equipo administrativo para limpiar el sistema.
-            </div>
-          </div>
-
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-              <thead>
-                <tr style={{ background: "#f1f5f9", borderBottom: "1px solid #cbd5e1" }}>
-                  <th style={{...thE2, textAlign: "left", paddingLeft: 12, color: "#475569"}}>Transporte</th>
-                  <th style={{...thE2, color: "#475569"}}>Operación</th>
-                  <th style={{...thE2, color: "#475569"}}>Categorías</th>
-                  <th style={{...thE2, color: "#475569"}}>Reg.</th>
-                </tr>
-              </thead>
-              <tbody>
-                {agrupados.map((g, i) => (
-                  <tr key={i} style={{ borderBottom: "1px solid #f0f0f0", background: i % 2 === 0 ? "#fff" : "#fafbfc" }}>
-                    <td style={{...tdE2, textAlign: "left", paddingLeft: 12, fontWeight: 500}}>{g.transporte}</td>
-                    <td style={tdE2}>{g.operacion || "—"}</td>
-                    <td style={tdE2}>
-                      {[...new Set(g.registros.map(r => r.categoria))].map(c => (
-                        <span key={c} style={{ display: "inline-block", fontSize: 10, padding: "2px 6px", borderRadius: 4, background: "#1a3a6b", color: "#fff", fontWeight: 700, marginRight: 4 }}>{c}</span>
-                      ))}
-                    </td>
-                    <td style={{...tdE2, textAlign: "center", fontWeight: 600}}>{g.registros.length}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
 
 // ─── Sub-componente: Editor Matriz ───────────────────────────────────
 // ─── Sub-componente: Hallazgos Automáticos ──────────────────────────
@@ -9970,16 +9890,16 @@ function HallazgosAutomaticos({ datos, activosCriticos, todosInhabilitados, empr
       });
     }
 
-    // H2: Empresas inhabilitadas en el sistema
+    // H2: Empresas inhabilitadas — distintivo Certronic por docs pendientes
     if (empresasInhabilitadasUnicas > 0) {
       out.push({
         id: "H2",
         nivel: "medio",
-        icono: "🧹",
-        titulo: `${empresasInhabilitadasUnicas} empresas inhabilitadas siguen apareciendo en reportes`,
-        descripcion: "Empresas que ya no operan para Bigticket pero siguen activas en Certronic.",
-        impacto: "Generan ruido en los reportes mensuales y cargan trabajo innecesario al equipo.",
-        accion: "Solicitar baja definitiva en Certronic para limpiar el sistema. Lista en pestaña 🧹 Limpieza.",
+        icono: "⚠️",
+        titulo: `${empresasInhabilitadasUnicas} empresas marcadas como Inhabilitadas en Certronic`,
+        descripcion: "El distintivo INHABILITADO indica documentación pendiente. La empresa puede seguir operando pero requiere regularizar documentos.",
+        impacto: "Riesgo de retención de pagos. Estas empresas siguen apareciendo en el Dashboard Mensual destacadas en rojo.",
+        accion: "Revisar las empresas marcadas en rojo en las pestañas PC/RyC/SUB. Coordinar con cada contratista la entrega de documentos pendientes.",
         ejemplos: [],
       });
     }
@@ -10064,20 +9984,30 @@ function HallazgosAutomaticos({ datos, activosCriticos, todosInhabilitados, empr
       });
     }
 
-    // H6: Inconsistencias de Certronic (inhabilitada con empleados activos)
-    const inconsistentes = [...datos.pc, ...datos.ryc, ...datos.sub]
+    // H6: Empresas Inhabilitadas que SIGUEN OPERANDO (prioridad de regularización)
+    // Estas empresas tienen empleados/vehículos activos pero Certronic las marca como
+    // Inhabilitadas por documentación pendiente. Son las que requieren acción urgente.
+    const inhabPeroOperan = [...datos.pc, ...datos.ryc, ...datos.sub]
       .filter(d => d.recurso_inhabilitado && (d.empleados_activos > 0 || d.vehiculos_activos > 0));
-    const inconsistentesUnicos = [...new Set(inconsistentes.map(d => d.transporte))];
-    if (inconsistentesUnicos.length > 0) {
+    const inhabPeroOperanUnicas = [...new Set(inhabPeroOperan.map(d => d.transporte))];
+    if (inhabPeroOperanUnicas.length > 0) {
+      // Calcular empleados/vehículos totales involucrados para mostrar magnitud real
+      const empleadosAfectados = inhabPeroOperan.reduce((sum, d) => sum + (d.empleados_activos || 0), 0);
+      const vehiculosAfectados = inhabPeroOperan.reduce((sum, d) => sum + (d.vehiculos_activos || 0), 0);
       out.push({
         id: "H6",
-        nivel: "bajo",
-        icono: "⚠️",
-        titulo: `${inconsistentesUnicos.length} inconsistencias en Certronic`,
-        descripcion: "Empresas marcadas como Inhabilitadas pero con empleados o vehículos aún activos.",
-        impacto: "Datos sucios en Certronic. Probablemente la baja se hizo a medias.",
-        accion: "Solicitar al equipo administrativo que cierre completamente estos registros.",
-        ejemplos: inconsistentesUnicos.slice(0, 5).map(c => ({ nombre: c, dato: "Inhabilitada con recursos activos" })),
+        nivel: "alto",
+        icono: "🚨",
+        titulo: `${inhabPeroOperanUnicas.length} empresas inhabilitadas operando con personal activo`,
+        descripcion: `Estas empresas están marcadas como Inhabilitadas en Certronic (documentación pendiente) pero siguen operando con ${empleadosAfectados} empleado(s) y ${vehiculosAfectados} vehículo(s) activo(s). Son la prioridad #1 de regularización: están generando servicio mientras tienen retención de pago activa.`,
+        impacto: "Riesgo dual: contratista no cobra (retención por docs pendientes) + Bigticket expuesto a contingencia laboral/cumplimiento por personal sin cobertura documental al día.",
+        accion: "Revisar caso a caso en pestañas PC/RyC/SUB (filas en rojo). Para cada una: identificar qué documento falta (matriz de docs), contactar al contratista con plazo concreto, y escalar si no responde en 48h. Considerar suspensión operativa si pasa 7 días sin regularizar.",
+        ejemplos: inhabPeroOperanUnicas.slice(0, 5).map(c => {
+          const filas = inhabPeroOperan.filter(d => d.transporte === c);
+          const totalEmp = filas.reduce((s, d) => s + (d.empleados_activos || 0), 0);
+          const totalVeh = filas.reduce((s, d) => s + (d.vehiculos_activos || 0), 0);
+          return { nombre: c, dato: `${totalEmp} emp · ${totalVeh} veh activos` };
+        }),
       });
     }
 
