@@ -20704,33 +20704,32 @@ export default function App() {
 
 
 // ═══════════════════════════════════════════════════════════════════════════════════════
-// MÓDULO PREFACTURAS · MX
+// MÓDULO PREFACTURAS · MX (v3 · lectura directa del PDF, sin planilla intermedia)
 // ───────────────────────────────────────────────────────────────────────────────────────
 // 4 sub-tabs:
-//   • Envío masivo (default): drag-and-drop de PDFs + cruce + envío vía n8n
-//   • Transportistas: editar/agregar/eliminar transportistas con sus correos
-//   • Parámetros: configurar CECOs, supervisores, asuntos y CUERPO POR CECO
-//   • Historial: envíos pasados (persistidos en Supabase)
+//   • Envío masivo (default): drag-and-drop de PDFs · el Brain extrae datos del PDF
+//     (EMPRESA TRANSPORTE, OPERACIÓN→CECO, PERIODO PREFACTURADO) y los cruza con
+//     Supabase (transportistas + parámetros por CECO) para armar cada correo.
+//   • Transportistas: CRUD de transportistas (nombre, RFC, correos TO/CC/BCC).
+//   • Parámetros: CRUD de CECOs (supervisor, asunto, cuerpo plantilla, cuenta envío).
+//   • Historial: log de envíos pasados (Supabase).
 //
-// Datos en Supabase (tablas creadas en setup_supabase.sql):
-//   • prefacturas_transportistas_mx
-//   • prefacturas_parametros_mx
-//   • prefacturas_envios_log
+// Webhook n8n: https://bigticket2026.app.n8n.cloud/webhook/prefacturas-enviar-mx
 //
-// Webhook n8n:
-//   https://bigticket2026.app.n8n.cloud/webhook/prefacturas-enviar-mx
-//
-// Plantillas con variables soportadas en asunto/cuerpo:
-//   {TRANSPORTISTA} {CECO} {PERIODO} {RFC} {OPERACION} {SUPERVISOR}
-//   {NETO} {IVA} {BRUTO} {LIQUIDO}
+// Variables en plantillas: {TRANSPORTISTA} {CECO} {PERIODO} {RFC} {OPERACION} {SUPERVISOR}
 // ═══════════════════════════════════════════════════════════════════════════════════════
 
 const PREFACTURAS_WEBHOOK = "https://bigticket2026.app.n8n.cloud/webhook/prefacturas-enviar-mx";
 const PAUSA_ENTRE_ENVIOS_MS = 1500;
 const VARIABLES_PLANTILLA = [
   "TRANSPORTISTA", "CECO", "PERIODO", "RFC", "OPERACION", "SUPERVISOR",
-  "NETO", "IVA", "BRUTO", "LIQUIDO"
 ];
+// Regex de CECO: S + 1-3 letras + 1-2 dígitos. Sin \b para que detecte SMX7 dentro de ML_MXSMX7
+// Ejemplos válidos: SMX7, SMX10, SCY1, SHP1, SPY1, SQR1, STL1, STX1, SVH1
+const REGEX_CECO = /S[A-Z]{1,3}\d{1,2}/g;
+// PDF.js desde CDN
+const PDFJS_CDN = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
+const PDFJS_WORKER = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
 
 // ─── HELPERS ─────────────────────────────────────────────────────────────────────────
 function pf_correoValido(c) {
@@ -20742,16 +20741,6 @@ function pf_limpiarLista(s) {
   const partes = String(s).split(/[;,]/).map(x => x.trim()).filter(Boolean);
   if (partes.length === 0) return { limpia: "", valida: true };
   return { limpia: partes.join("; "), valida: partes.every(pf_correoValido) };
-}
-async function pf_cargarXLSX() {
-  if (window.XLSX) return window.XLSX;
-  await new Promise((res, rej) => {
-    const s = document.createElement("script");
-    s.src = "https://cdn.sheetjs.com/xlsx-0.20.0/package/dist/xlsx.full.min.js";
-    s.onload = res; s.onerror = rej;
-    document.head.appendChild(s);
-  });
-  return window.XLSX;
 }
 function pf_fileToBase64(file) {
   return new Promise((resolve, reject) => {
@@ -20765,58 +20754,114 @@ function pf_fileToBase64(file) {
     r.readAsDataURL(file);
   });
 }
-function pf_normalizarNombre(s) {
-  return String(s || "").replace(/\.pdf$/i, "").replace(/\s+/g, "_").toLowerCase().trim();
-}
 function pf_aplicarPlantilla(template, vars) {
   if (!template) return "";
   let out = template;
   Object.entries(vars).forEach(([k, v]) => {
-    const val = (v == null) ? "" :
-      (typeof v === "number" ? v.toLocaleString("es-MX") : String(v));
+    const val = (v == null) ? "" : String(v);
     out = out.replace(new RegExp("\\{" + k + "\\}", "g"), val);
   });
   return out;
 }
 
-// ─── EXTRAER PLANILLA PREFACTURAS EMITIDAS ───────────────────────────────────────────
-async function pf_extraerPlanilla(file) {
-  const XLSX = await pf_cargarXLSX();
-  const buf = await file.arrayBuffer();
-  const wb = XLSX.read(buf, { type: "array" });
-  const nombreHoja = wb.SheetNames.find(n =>
-    String(n).toUpperCase().includes("PREFACTURAS EMITIDAS")
-  );
-  if (!nombreHoja) throw new Error("El archivo no contiene la hoja 'PREFACTURAS EMITIDAS'.");
-  const ws = wb.Sheets[nombreHoja];
-  const todas = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null });
-  const filas = [];
-  for (let i = 2; i < todas.length; i++) {
-    const r = todas[i];
-    if (!r || r.every(c => c == null || String(c).trim() === "")) continue;
-    const nombrePdf = String(r[10] || "").trim();
-    if (!nombrePdf) continue;
-    filas.push({
-      n: r[0] ?? "",
-      transportista: String(r[1] || "").trim(),
-      rfc: String(r[2] || "").trim(),
-      ceco: String(r[3] || "").trim(),
-      operacion: String(r[4] || "").trim(),
-      periodo: String(r[5] || "").trim(),
-      neto: Number(r[6]) || 0,
-      iva: Number(r[7]) || 0,
-      bruto: Number(r[8]) || 0,
-      liquido: Number(r[9]) || 0,
-      nombrePdf,
-      correoToOriginal: String(r[11] || "").trim(),
-      ccOriginal: String(r[12] || "").trim(),
-      bccOriginal: String(r[13] || "").trim(),
-      supervisor: String(r[14] || "").trim(),
-      asuntoOriginal: String(r[15] || "").trim(),
-      cuerpoOriginal: String(r[16] || "").trim(),
-    });
+// ─── CARGA DINÁMICA DE PDF.JS ───────────────────────────────────────────────────────
+async function pf_cargarPDFJS() {
+  if (window.pdfjsLib) return window.pdfjsLib;
+  await new Promise((resolve, reject) => {
+    const s = document.createElement("script");
+    s.src = PDFJS_CDN;
+    s.onload = resolve; s.onerror = reject;
+    document.head.appendChild(s);
+  });
+  if (window.pdfjsLib) {
+    window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER;
   }
-  return filas;
+  return window.pdfjsLib;
+}
+
+// ─── EXTRACCIÓN DE TEXTO DE UN PDF ──────────────────────────────────────────────────
+async function pf_extraerTextoPDF(file) {
+  const pdfjs = await pf_cargarPDFJS();
+  if (!pdfjs) throw new Error("No se pudo cargar PDF.js");
+  const buf = await file.arrayBuffer();
+  const pdf = await pdfjs.getDocument({ data: buf }).promise;
+  let textoCompleto = "";
+  for (let i = 1; i <= pdf.numPages; i++) {
+    const page = await pdf.getPage(i);
+    const content = await page.getTextContent();
+    // Reconstruir el texto preservando orden vertical y agregando espacios
+    const items = content.items.map(it => ({
+      str: it.str,
+      x: it.transform[4],
+      y: it.transform[5],
+    }));
+    // Ordenar por Y descendente (arriba primero) y X ascendente
+    items.sort((a, b) => (b.y - a.y) || (a.x - b.x));
+    // Agrupar items por línea (mismo Y aproximado)
+    const lineas = [];
+    let lineaActual = [];
+    let yPrev = null;
+    const TOL = 3;
+    for (const it of items) {
+      if (yPrev === null || Math.abs(it.y - yPrev) <= TOL) {
+        lineaActual.push(it);
+      } else {
+        if (lineaActual.length) lineas.push(lineaActual);
+        lineaActual = [it];
+      }
+      yPrev = it.y;
+    }
+    if (lineaActual.length) lineas.push(lineaActual);
+    const textoPag = lineas.map(l => l.map(x => x.str).join(" ")).join("\n");
+    textoCompleto += textoPag + "\n";
+  }
+  return textoCompleto;
+}
+
+// ─── PARSING DE LOS CAMPOS DEL PDF ──────────────────────────────────────────────────
+// Los regex están diseñados para tolerar que el PDF tenga "ruido" de la columna de la
+// derecha (RESUMEN POR PATENTE) que PDF.js suele mezclar con la columna principal.
+function pf_parsearPDF(texto) {
+  const t = texto.replace(/\u00A0/g, " ").replace(/[ \t]+/g, " ");
+
+  // EMPRESA TRANSPORTE: nombre en mayúsculas, corta al encontrar RFC/RESUMEN/PATENTE/$/etc
+  const reTransp = /EMPRESA\s+TRANSPORTE\s*:?\s*([A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑa-záéíóúñ\s\.]+?)(?=\s*(?:RFC\b|RESUMEN\b|OPERACI[ÓO]N\b|SUPERVISOR\b|PERIODO\b|MES\s+FACTURA\b|VALOR\s+UF\b|PATENTE\b|\$|\n|$))/i;
+  const mTransp = t.match(reTransp);
+  const transportista = mTransp ? mTransp[1].trim().replace(/\s+/g, " ") : "";
+
+  // RFC EMPRESA TRANSPORTE
+  const reRfc = /RFC\s+EMPRESA\s+TRANSPORTE\s*:?\s*([A-Z0-9]{10,15})/i;
+  const mRfc = t.match(reRfc);
+  const rfc = mRfc ? mRfc[1].trim().toUpperCase() : "";
+
+  // OPERACIÓN: solo el token tipo ML_MXSMX7 (letras/dígitos/_), sin texto extra a la derecha
+  const reOp = /OPERACI[ÓO]N\s*:?\s*([A-Z][A-Z0-9_]+)/i;
+  const mOp = t.match(reOp);
+  const operacion = mOp ? mOp[1].trim() : "";
+
+  // SUPERVISOR: nombre en mayúsculas, corta al encontrar patrón de patente o label
+  const reSup = /SUPERVISOR\s*:?\s*([A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑa-záéíóúñ\s\.]+?)(?=\s*(?:[A-Z]{3,}\d|PERIODO|MES|VALOR|\$|\n|$))/i;
+  const mSup = t.match(reSup);
+  const supervisorPDF = mSup ? mSup[1].trim().replace(/\s+/g, " ") : "";
+
+  // PERIODO PREFACTURADO: formato "XX DE MES AL XX DE MES"
+  const rePer = /PERIODO\s+PREFACTURADO\s*:?\s*(\d{1,2}\s+DE\s+[A-ZÁÉÍÓÚ]+\s+AL\s+\d{1,2}\s+DE\s+[A-ZÁÉÍÓÚ]+)/i;
+  const mPer = t.match(rePer);
+  const periodo = mPer ? mPer[1].trim().toUpperCase() : "";
+
+  // CECO: dentro de OPERACIÓN primero (debe coincidir con SMX7 dentro de ML_MXSMX7),
+  // luego en todo el texto como fallback
+  let ceco = "";
+  if (operacion) {
+    const m = operacion.match(REGEX_CECO);
+    if (m && m.length > 0) ceco = m[m.length - 1]; // el último match en la operación
+  }
+  if (!ceco) {
+    const m = t.match(REGEX_CECO);
+    if (m && m.length > 0) ceco = m[0];
+  }
+
+  return { transportista, rfc, operacion, supervisorPDF, periodo, ceco };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════════════
@@ -20846,15 +20891,14 @@ function ModuloPrefacturasEnvio({ usuario }) {
   useEffect(() => { cargarDatos(); }, []);
 
   const subtabs = [
-    { id: "envio",          label: "Envío masivo",     icon: "📨" },
-    { id: "transportistas", label: "Transportistas",   icon: "🚚" },
+    { id: "envio",          label: "Envío masivo",       icon: "📨" },
+    { id: "transportistas", label: "Transportistas",     icon: "🚚" },
     { id: "parametros",     label: "Parámetros / CECOs", icon: "⚙️" },
-    { id: "historial",      label: "Historial",        icon: "📋" },
+    { id: "historial",      label: "Historial",          icon: "📋" },
   ];
 
   return (
     <div style={{ padding: 0 }}>
-      {/* Sub-navegación interna */}
       <div style={{ background: "#fff", borderBottom: "1px solid #e4e7ec", padding: "12px 24px" }}>
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
           {subtabs.map(t => (
@@ -20877,7 +20921,7 @@ function ModuloPrefacturasEnvio({ usuario }) {
         <div className="loading">Cargando configuración de prefacturas...</div>
       ) : (
         <>
-          {subtab === "envio"          && <PrefEnvioMasivo transportistas={transportistas} parametros={parametros} usuario={usuario} />}
+          {subtab === "envio"          && <PrefEnvioMasivo transportistas={transportistas} parametros={parametros} usuario={usuario} onActualizarMaestros={cargarDatos} />}
           {subtab === "transportistas" && <PrefTransportistas data={transportistas} onChange={cargarDatos} />}
           {subtab === "parametros"     && <PrefParametros data={parametros} onChange={cargarDatos} />}
           {subtab === "historial"      && <PrefHistorial />}
@@ -20888,156 +20932,182 @@ function ModuloPrefacturasEnvio({ usuario }) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════════════
-// SUB-TAB 1: ENVÍO MASIVO
-// Layout: arriba la zona de drag-and-drop (ventana principal), debajo la planilla,
-// luego indicadores y tabla de cruce.
+// SUB-TAB 1: ENVÍO MASIVO — solo PDFs, lectura directa
 // ═══════════════════════════════════════════════════════════════════════════════════════
-function PrefEnvioMasivo({ transportistas, parametros, usuario }) {
-  const [pdfs, setPdfs] = useState([]);
-  const [filas, setFilas] = useState([]);
-  const [planillaNombre, setPlanillaNombre] = useState("");
-  const [cargandoPlanilla, setCargandoPlanilla] = useState(false);
+function PrefEnvioMasivo({ transportistas, parametros, usuario, onActualizarMaestros }) {
+  const [pdfsEnProceso, setPdfsEnProceso] = useState(0);
+  const [filas, setFilas] = useState([]);          // [{ idx, file, parsed, ... }]
   const [error, setError] = useState("");
   const [enviando, setEnviando] = useState(false);
   const [progreso, setProgreso] = useState({ actual: 0, total: 0 });
   const [editFila, setEditFila] = useState(null);
   const [logFinal, setLogFinal] = useState(null);
   const [arrastrando, setArrastrando] = useState(false);
+  const [modalAgregar, setModalAgregar] = useState(null); // { tipo: 'trans'|'ceco', prefill }
   const pdfInputRef = useRef(null);
-  const planillaInputRef = useRef(null);
 
-  // Lookups por CECO y por transportista
-  const paramsByCeco = useMemo(() => {
-    const m = new Map();
-    parametros.forEach(p => m.set(String(p.ceco).toUpperCase(), p));
-    return m;
-  }, [parametros]);
+  // Lookups
   const transByNombre = useMemo(() => {
     const m = new Map();
     transportistas.forEach(t => m.set(String(t.nombre).toUpperCase().trim(), t));
     return m;
   }, [transportistas]);
+  const paramsByCeco = useMemo(() => {
+    const m = new Map();
+    parametros.forEach(p => m.set(String(p.ceco).toUpperCase().trim(), p));
+    return m;
+  }, [parametros]);
 
-  // ─── Handlers de carga ───────────────────────────────────────────────────────
-  const onPdfsDrop = (fileList) => {
+  // Procesar un PDF: extraer texto + parsear + cruzar con Supabase
+  const procesarPDF = async (file, idx) => {
+    try {
+      const texto = await pf_extraerTextoPDF(file);
+      const parsed = pf_parsearPDF(texto);
+      const trans = parsed.transportista
+        ? transByNombre.get(parsed.transportista.toUpperCase().trim())
+        : null;
+      const param = parsed.ceco
+        ? paramsByCeco.get(parsed.ceco.toUpperCase().trim())
+        : null;
+
+      const vars = {
+        TRANSPORTISTA: parsed.transportista,
+        CECO: parsed.ceco,
+        PERIODO: parsed.periodo,
+        RFC: parsed.rfc,
+        OPERACION: parsed.operacion,
+        SUPERVISOR: param?.supervisor || parsed.supervisorPDF || "",
+      };
+
+      const asunto = pf_aplicarPlantilla(param?.asunto_plantilla || "", vars);
+      const cuerpo = pf_aplicarPlantilla(param?.cuerpo_plantilla || "", vars);
+
+      return {
+        idx,
+        file,
+        nombre: file.name,
+        size: file.size,
+        parsed,
+        trans,
+        param,
+        editTo: trans?.correo_to || "",
+        editCc: trans?.correo_cc || param?.correo_supervisor || "",
+        editBcc: trans?.correo_bcc || "",
+        editAsunto: asunto,
+        editCuerpo: cuerpo,
+        estadoEnvio: null,
+        motivoEnvio: "",
+        tsEnvio: null,
+        errorParseo: "",
+      };
+    } catch (e) {
+      return {
+        idx,
+        file,
+        nombre: file.name,
+        size: file.size,
+        parsed: { transportista: "", rfc: "", operacion: "", supervisorPDF: "", periodo: "", ceco: "" },
+        trans: null,
+        param: null,
+        editTo: "", editCc: "", editBcc: "",
+        editAsunto: "", editCuerpo: "",
+        estadoEnvio: null, motivoEnvio: "", tsEnvio: null,
+        errorParseo: e.message || String(e),
+      };
+    }
+  };
+
+  // Drop / selección de PDFs
+  const onPdfsDrop = async (fileList) => {
     setError("");
     const archivos = Array.from(fileList || []).filter(f => /\.pdf$/i.test(f.name) && f.size > 0);
     if (archivos.length === 0) {
       setError("No se detectaron archivos PDF válidos.");
       return;
     }
-    const nuevos = archivos.map(f => ({
-      file: f, nombre: f.name, nombreNorm: pf_normalizarNombre(f.name), size: f.size,
-    }));
-    setPdfs(prev => {
-      const map = new Map();
-      [...prev, ...nuevos].forEach(p => map.set(p.nombreNorm, p));
-      return Array.from(map.values()).sort((a, b) => a.nombre.localeCompare(b.nombre));
-    });
-  };
-
-  const onPlanilla = async (file) => {
-    if (!file) return;
-    setError("");
-    setCargandoPlanilla(true);
-    try {
-      const fs = await pf_extraerPlanilla(file);
-      if (fs.length === 0) {
-        setError("La hoja PREFACTURAS EMITIDAS no tiene filas con datos.");
-        return;
-      }
-      setPlanillaNombre(file.name);
-      // Para cada fila, resolvemos correos y plantillas DESDE SUPABASE
-      // (no usamos los del Excel — siempre tomamos la fuente de verdad)
-      setFilas(fs.map((f, i) => {
-        const trans = transByNombre.get(String(f.transportista).toUpperCase().trim());
-        const param = paramsByCeco.get(String(f.ceco).toUpperCase());
-
-        // Variables para plantillas
-        const vars = {
-          TRANSPORTISTA: f.transportista,
-          CECO: f.ceco,
-          PERIODO: f.periodo,
-          RFC: f.rfc,
-          OPERACION: f.operacion,
-          SUPERVISOR: param?.supervisor || f.supervisor || "",
-          NETO: f.neto,
-          IVA: f.iva,
-          BRUTO: f.bruto,
-          LIQUIDO: f.liquido,
-        };
-
-        const asunto = pf_aplicarPlantilla(param?.asunto_plantilla || f.asuntoOriginal || "", vars);
-        const cuerpo = pf_aplicarPlantilla(param?.cuerpo_plantilla || f.cuerpoOriginal || "", vars);
-
-        // Correos: priorizamos Supabase, si falta usamos los del Excel como fallback
-        const correoTo = trans?.correo_to || f.correoToOriginal;
-        const cc = trans?.correo_cc || f.ccOriginal;
-        const bcc = trans?.correo_bcc || f.bccOriginal;
-
-        return {
-          ...f,
-          idx: i,
-          editTo: correoTo,
-          editCc: cc,
-          editBcc: bcc,
-          editAsunto: asunto,
-          editCuerpo: cuerpo,
-          fuenteCorreoTo: trans ? "Supabase" : (f.correoToOriginal ? "Excel" : "vacío"),
-          fuenteAsunto: param?.asunto_plantilla ? "Supabase" : (f.asuntoOriginal ? "Excel" : "vacío"),
-          estadoEnvio: null,
-          motivoEnvio: "",
-          tsEnvio: null,
-        };
-      }));
-      setLogFinal(null);
-    } catch (e) {
-      setError("Error leyendo planilla: " + e.message);
-    } finally {
-      setCargandoPlanilla(false);
+    setPdfsEnProceso(archivos.length);
+    // Procesar en serie para no saturar el navegador con muchos PDFs en paralelo
+    const idxInicio = filas.length;
+    const nuevos = [];
+    for (let i = 0; i < archivos.length; i++) {
+      const fila = await procesarPDF(archivos[i], idxInicio + i);
+      nuevos.push(fila);
+      setPdfsEnProceso(archivos.length - i - 1);
     }
+    setPdfsEnProceso(0);
+    // Deduplicar por nombre de archivo
+    setFilas(prev => {
+      const map = new Map();
+      [...prev, ...nuevos].forEach(f => map.set(f.nombre, f));
+      // Re-numerar idx
+      return Array.from(map.values()).map((f, i) => ({ ...f, idx: i }));
+    });
+    setLogFinal(null);
   };
 
-  // ─── Cruce reactivo PDF ↔ planilla ───────────────────────────────────────────
-  const filasConCruce = useMemo(() => {
-    const pdfMap = new Map(pdfs.map(p => [p.nombreNorm, p]));
+  // Validación y estado de cada fila
+  const filasConEstado = useMemo(() => {
     return filas.map(f => {
-      const pdfMatch = pdfMap.get(pf_normalizarNombre(f.nombrePdf));
       const valTo = pf_limpiarLista(f.editTo);
       const valCc = pf_limpiarLista(f.editCc);
       const valBcc = pf_limpiarLista(f.editBcc);
-      const tieneTo = valTo.limpia !== "";
       const errores = [];
-      if (!pdfMatch) errores.push("PDF no encontrado");
-      if (!tieneTo) errores.push("Sin destinatario");
+      if (f.errorParseo) errores.push("Error de parseo: " + f.errorParseo);
+      if (!f.parsed.transportista) errores.push("PDF sin EMPRESA TRANSPORTE");
+      if (!f.parsed.ceco) errores.push("PDF sin CECO detectable");
+      if (f.parsed.transportista && !f.trans) errores.push("Transportista no registrado");
+      if (f.parsed.ceco && !f.param) errores.push("CECO no registrado");
+      if (!valTo.limpia) errores.push("Sin correo TO");
       else if (!valTo.valida) errores.push("TO inválido");
       if (f.editCc && !valCc.valida) errores.push("CC inválido");
       if (f.editBcc && !valBcc.valida) errores.push("BCC inválido");
-      return { ...f, pdfMatch, errores, listo: errores.length === 0 };
+      return { ...f, errores, listo: errores.length === 0 };
     });
-  }, [filas, pdfs]);
+  }, [filas]);
 
-  const totalListos = filasConCruce.filter(f => f.listo).length;
-  const totalConErrores = filasConCruce.length - totalListos;
-  const pdfsHuerfanos = useMemo(() => {
-    const nombres = new Set(filas.map(f => pf_normalizarNombre(f.nombrePdf)));
-    return pdfs.filter(p => !nombres.has(p.nombreNorm));
-  }, [pdfs, filas]);
+  const totalListos = filasConEstado.filter(f => f.listo).length;
+  const totalConErrores = filasConEstado.length - totalListos;
 
+  // Edición inline
   const guardarEdicion = (idx, campos) => {
-    setFilas(prev => prev.map((f, i) => i === idx ? { ...f, ...campos } : f));
+    setFilas(prev => prev.map(f => f.idx === idx ? { ...f, ...campos } : f));
     setEditFila(null);
   };
-  const eliminarPdf = (nombreNorm) => setPdfs(prev => prev.filter(p => p.nombreNorm !== nombreNorm));
+  const eliminarFila = (idx) => {
+    setFilas(prev => prev.filter(f => f.idx !== idx).map((f, i) => ({ ...f, idx: i })));
+  };
   const limpiarTodo = () => {
-    if (!confirm("¿Limpiar PDFs, planilla y resultados? Esta acción no se puede deshacer.")) return;
-    setPdfs([]); setFilas([]); setPlanillaNombre(""); setError(""); setLogFinal(null);
-    setProgreso({ actual: 0, total: 0 });
+    if (!confirm("¿Limpiar todos los PDFs y resultados?")) return;
+    setFilas([]); setError(""); setLogFinal(null); setProgreso({ actual: 0, total: 0 });
+  };
+
+  // Cuando se agregan transportistas/CECOs desde el modal, refrescamos y re-cruzamos
+  const onAgregarYRefrescar = async () => {
+    setModalAgregar(null);
+    await onActualizarMaestros();
+    // Re-procesar las filas existentes para que tomen los datos nuevos
+    if (filas.length > 0) {
+      const reprocesadas = [];
+      for (const f of filas) {
+        const nueva = await procesarPDF(f.file, f.idx);
+        // Preservar ediciones manuales si existían
+        reprocesadas.push({
+          ...nueva,
+          editTo: f.editTo && f.editTo !== "" ? f.editTo : nueva.editTo,
+          editCc: f.editCc && f.editCc !== "" ? f.editCc : nueva.editCc,
+          editBcc: f.editBcc && f.editBcc !== "" ? f.editBcc : nueva.editBcc,
+          estadoEnvio: f.estadoEnvio,
+          motivoEnvio: f.motivoEnvio,
+          tsEnvio: f.tsEnvio,
+        });
+      }
+      setFilas(reprocesadas);
+    }
   };
 
   // ─── Envío masivo ────────────────────────────────────────────────────────────
   const enviarMasivo = async () => {
-    const enviables = filasConCruce.filter(f => f.listo);
+    const enviables = filasConEstado.filter(f => f.listo);
     if (enviables.length === 0) {
       alert("No hay filas listas para enviar. Revisá los errores en la tabla.");
       return;
@@ -21065,22 +21135,21 @@ function PrefEnvioMasivo({ transportistas, parametros, usuario }) {
 
       let resultado = { ok: false, motivo: "", messageId: "" };
       try {
-        const pdfBase64 = await pf_fileToBase64(f.pdfMatch.file);
+        const pdfBase64 = await pf_fileToBase64(f.file);
         const payload = {
           idEnvio: `${Date.now()}-${f.idx}`,
-          transportista: f.transportista,
-          ceco: f.ceco,
-          rfc: f.rfc,
-          operacion: f.operacion,
-          periodo: f.periodo,
+          transportista: f.parsed.transportista,
+          ceco: f.parsed.ceco,
+          rfc: f.parsed.rfc,
+          operacion: f.parsed.operacion,
+          periodo: f.parsed.periodo,
           correoTo: pf_limpiarLista(f.editTo).limpia,
           cc: pf_limpiarLista(f.editCc).limpia,
           bcc: pf_limpiarLista(f.editBcc).limpia,
-          asunto: f.editAsunto || `Prefactura ${f.ceco} — ${f.periodo}`,
+          asunto: f.editAsunto || `Prefactura ${f.parsed.ceco} — ${f.parsed.periodo}`,
           cuerpo: f.editCuerpo || "",
-          nombrePdf: f.nombrePdf.endsWith(".pdf") ? f.nombrePdf : f.nombrePdf + ".pdf",
+          nombrePdf: f.nombre,
           pdfBase64,
-          montos: { neto: f.neto, iva: f.iva, bruto: f.bruto, liquido: f.liquido },
         };
         const resp = await fetch(PREFACTURAS_WEBHOOK, {
           method: "POST",
@@ -21103,21 +21172,16 @@ function PrefEnvioMasivo({ transportistas, parametros, usuario }) {
 
       const tsAhora = new Date().toISOString();
       setFilas(prev => prev.map(x => x.idx === f.idx
-        ? {
-            ...x,
-            estadoEnvio: resultado.ok ? "ok" : "fallido",
-            motivoEnvio: resultado.motivo,
-            tsEnvio: tsAhora,
-          }
+        ? { ...x, estadoEnvio: resultado.ok ? "ok" : "fallido", motivoEnvio: resultado.motivo, tsEnvio: tsAhora }
         : x));
 
       logsParaSupabase.push({
         fecha_envio: tsAhora,
-        transportista: f.transportista,
-        ceco: f.ceco,
-        periodo: f.periodo,
+        transportista: f.parsed.transportista,
+        ceco: f.parsed.ceco,
+        periodo: f.parsed.periodo,
         correo_to: pf_limpiarLista(f.editTo).limpia,
-        nombre_pdf: f.nombrePdf,
+        nombre_pdf: f.nombre,
         estado: resultado.ok ? "enviado" : "fallido",
         motivo: resultado.motivo,
         message_id: resultado.messageId,
@@ -21129,13 +21193,12 @@ function PrefEnvioMasivo({ transportistas, parametros, usuario }) {
       }
     }
 
-    // Guardar logs en Supabase (no bloquea si falla)
     try {
       if (logsParaSupabase.length > 0) {
         await sb.from("prefacturas_envios_log").insert(logsParaSupabase);
       }
     } catch (e) {
-      console.error("Error guardando log en Supabase:", e);
+      console.error("Error guardando log:", e);
     }
 
     const segs = Math.round((Date.now() - inicio) / 1000);
@@ -21144,16 +21207,14 @@ function PrefEnvioMasivo({ transportistas, parametros, usuario }) {
     setProgreso({ actual: 0, total: 0 });
   };
 
-  // ─── Descargar log Excel ────────────────────────────────────────────────────
   const descargarLog = async () => {
     const detalle = [
-      ["N°", "Transportista", "RFC", "CECO", "Operación", "Período",
-       "NETO", "IVA", "BRUTO", "LÍQUIDO", "Nombre PDF",
+      ["#", "Archivo PDF", "Transportista", "RFC", "CECO", "Operación", "Período",
        "Correo TO", "CC", "BCC", "Asunto",
        "Estado envío", "Motivo / MessageID", "Timestamp"],
-      ...filasConCruce.map(f => [
-        f.n, f.transportista, f.rfc, f.ceco, f.operacion, f.periodo,
-        f.neto, f.iva, f.bruto, f.liquido, f.nombrePdf,
+      ...filasConEstado.map((f, i) => [
+        i + 1, f.nombre,
+        f.parsed.transportista, f.parsed.rfc, f.parsed.ceco, f.parsed.operacion, f.parsed.periodo,
         f.editTo, f.editCc, f.editBcc, f.editAsunto,
         f.estadoEnvio === "ok" ? "ENVIADO" :
           f.estadoEnvio === "fallido" ? "FALLIDO" :
@@ -21166,12 +21227,10 @@ function PrefEnvioMasivo({ transportistas, parametros, usuario }) {
       ["Reporte de envío de prefacturas MX"],
       ["Fecha", new Date().toLocaleString("es-MX")],
       ["Usuario", usuario?.nombre || usuario?.email || "—"],
-      ["Planilla", planillaNombre || "—"],
-      ["PDFs cargados", pdfs.length],
-      ["Filas en planilla", filas.length],
-      ["Enviados OK", filasConCruce.filter(f => f.estadoEnvio === "ok").length],
-      ["Fallidos", filasConCruce.filter(f => f.estadoEnvio === "fallido").length],
-      ["Pendientes/Omitidos", filasConCruce.filter(f => !f.estadoEnvio).length],
+      ["PDFs cargados", filas.length],
+      ["Enviados OK", filasConEstado.filter(f => f.estadoEnvio === "ok").length],
+      ["Fallidos", filasConEstado.filter(f => f.estadoEnvio === "fallido").length],
+      ["Pendientes/Omitidos", filasConEstado.filter(f => !f.estadoEnvio).length],
     ];
     await descargarExcelMultihoja(
       [{ nombre: "Resumen", datos: resumen }, { nombre: "Detalle", datos: detalle }],
@@ -21180,12 +21239,12 @@ function PrefEnvioMasivo({ transportistas, parametros, usuario }) {
   };
 
   return (
-    <div className="pg" style={{ maxWidth: 1300 }}>
+    <div className="pg" style={{ maxWidth: 1400 }}>
       <div style={{ marginBottom: 16 }}>
         <div className="sec-title">Prefacturas · Envío Masivo</div>
         <div className="sec-sub">
-          Arrastrá los PDFs generados por la macro Excel + la planilla PREFACTURAS EMITIDAS.
-          El Brain hace el cruce automático, podés editar antes de enviar, y dispara el envío masivo vía n8n.
+          Arrastrá los PDFs generados por la macro. El Brain lee cada PDF, extrae transportista, CECO y período,
+          cruza con la base de datos y arma cada correo. Sin planillas, sin pasos intermedios.
         </div>
       </div>
 
@@ -21219,20 +21278,27 @@ function PrefEnvioMasivo({ transportistas, parametros, usuario }) {
       >
         <div style={{ fontSize: 56, marginBottom: 12 }}>📄</div>
         <div style={{ fontSize: 18, color: "#1a3a6b", fontWeight: 700, marginBottom: 6 }}>
-          {arrastrando ? "Soltá los PDFs aquí" : "Arrastrá los PDFs de prefacturas"}
+          {pdfsEnProceso > 0
+            ? `Procesando PDFs... (${pdfsEnProceso} pendientes)`
+            : arrastrando
+              ? "Soltá los PDFs aquí"
+              : "Arrastrá los PDFs de prefacturas"}
         </div>
         <div style={{ fontSize: 13, color: "#64748b" }}>
-          o hacé clic para seleccionarlos desde tu PC · sin límite de cantidad
+          {pdfsEnProceso > 0
+            ? "El Brain está leyendo cada PDF para extraer los datos."
+            : "o hacé clic para seleccionarlos desde tu PC · sin límite de cantidad"}
         </div>
-        {pdfs.length > 0 && (
-          <div style={{ marginTop: 20, padding: "10px 16px", background: "#fff",
-            border: "1px solid #1a3a6b", borderRadius: 10, display: "inline-flex",
-            alignItems: "center", gap: 12 }}>
+        {filas.length > 0 && pdfsEnProceso === 0 && (
+          <div style={{
+            marginTop: 20, padding: "10px 16px", background: "#fff",
+            border: "1px solid #1a3a6b", borderRadius: 10,
+            display: "inline-flex", alignItems: "center", gap: 12,
+          }}>
             <span style={{ fontSize: 14, color: "#1a3a6b", fontWeight: 700 }}>
-              ✓ {pdfs.length} PDF{pdfs.length === 1 ? "" : "s"} cargado{pdfs.length === 1 ? "" : "s"}
+              ✓ {filas.length} PDF{filas.length === 1 ? "" : "s"} cargado{filas.length === 1 ? "" : "s"}
             </span>
-            <button
-              onClick={e => { e.stopPropagation(); setPdfs([]); }}
+            <button onClick={e => { e.stopPropagation(); limpiarTodo(); }}
               style={{
                 background: "#fee2e2", border: "none", borderRadius: 6,
                 padding: "4px 10px", fontSize: 11, color: "#991b1b",
@@ -21247,48 +21313,19 @@ function PrefEnvioMasivo({ transportistas, parametros, usuario }) {
         />
       </div>
 
-      {/* ═══ PLANILLA ═══════════════════════════════════════════════════════ */}
-      <div className="form-card">
-        <div className="form-title">📊 Planilla PREFACTURAS EMITIDAS</div>
-        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-          <button
-            className="btn-blue"
-            onClick={() => planillaInputRef.current?.click()}
-            disabled={cargandoPlanilla}
-            style={{ padding: "9px 16px", fontSize: 13 }}>
-            {cargandoPlanilla ? "Procesando..." : (planillaNombre ? "🔄 Cambiar planilla" : "📂 Seleccionar archivo Excel")}
-          </button>
-          <input
-            ref={planillaInputRef} type="file" accept=".xlsm,.xlsx,.xls"
-            style={{ display: "none" }}
-            onChange={e => { onPlanilla(e.target.files?.[0]); e.target.value = ""; }}
-          />
-          {planillaNombre && (
-            <div style={{ fontSize: 12, color: "#475569" }}>
-              ✓ <strong>{planillaNombre}</strong> · {filas.length} fila{filas.length === 1 ? "" : "s"}
-            </div>
-          )}
-        </div>
-        <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 8 }}>
-          Subí el .xlsm completo o un .xlsx con la hoja "PREFACTURAS EMITIDAS". El Brain usará los correos
-          y plantillas desde Supabase, no desde el Excel.
-        </div>
-      </div>
-
       {/* ═══ INDICADORES ════════════════════════════════════════════════════ */}
       {filas.length > 0 && (
         <div style={{
           display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
           gap: 10, marginBottom: 14,
         }}>
-          <IndicadorPF label="Total filas" valor={filas.length} color="#1a3a6b" />
+          <IndicadorPF label="PDFs procesados" valor={filas.length} color="#1a3a6b" />
           <IndicadorPF label="Listas para enviar" valor={totalListos} color="#16a34a" />
           <IndicadorPF label="Con errores" valor={totalConErrores} color="#dc2626" />
-          <IndicadorPF label="PDFs cargados" valor={pdfs.length} color="#0891b2" />
         </div>
       )}
 
-      {/* ═══ TABLA DE CRUCE ═════════════════════════════════════════════════ */}
+      {/* ═══ TABLA ═════════════════════════════════════════════════════════ */}
       {filas.length > 0 && (
         <div className="form-card" style={{ padding: 0, overflow: "hidden" }}>
           <div style={{
@@ -21298,7 +21335,7 @@ function PrefEnvioMasivo({ transportistas, parametros, usuario }) {
           }}>
             <div className="form-title" style={{ margin: 0 }}>Revisión y envío</div>
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              {(logFinal || filasConCruce.some(f => f.estadoEnvio)) && (
+              {(logFinal || filasConEstado.some(f => f.estadoEnvio)) && (
                 <BotonDescargarExcel onClick={descargarLog} label="Descargar log Excel" />
               )}
               <button
@@ -21311,12 +21348,6 @@ function PrefEnvioMasivo({ transportistas, parametros, usuario }) {
                   : `📨 Enviar ${totalListos} correo${totalListos === 1 ? "" : "s"}`
                 }
               </button>
-              <button onClick={limpiarTodo} disabled={enviando}
-                style={{
-                  background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10,
-                  padding: "9px 14px", fontSize: 12, color: "#475569", cursor: "pointer",
-                  fontFamily: "Geist, sans-serif", fontWeight: 600,
-                }}>Limpiar todo</button>
             </div>
           </div>
 
@@ -21356,17 +21387,16 @@ function PrefEnvioMasivo({ transportistas, parametros, usuario }) {
               <thead>
                 <tr style={{ background: "#f8fafc", borderBottom: "1px solid #e4e7ec" }}>
                   <th style={pf_th()}>Estado</th>
-                  <th style={pf_th()}>Transportista</th>
+                  <th style={pf_th()}>Transportista (PDF)</th>
                   <th style={pf_th()}>CECO</th>
+                  <th style={pf_th()}>Período</th>
                   <th style={pf_th()}>Correo TO</th>
                   <th style={pf_th()}>CC</th>
-                  <th style={pf_th()}>PDF</th>
-                  <th style={pf_th("right")}>LÍQUIDO</th>
                   <th style={pf_th()}>Acción</th>
                 </tr>
               </thead>
               <tbody>
-                {filasConCruce.map((f) => (
+                {filasConEstado.map((f) => (
                   <FilaPrefactura
                     key={f.idx}
                     fila={f}
@@ -21374,6 +21404,15 @@ function PrefEnvioMasivo({ transportistas, parametros, usuario }) {
                     onEdit={() => setEditFila(f.idx)}
                     onGuardar={(campos) => guardarEdicion(f.idx, campos)}
                     onCancelar={() => setEditFila(null)}
+                    onEliminar={() => eliminarFila(f.idx)}
+                    onAgregarTransportista={() => setModalAgregar({
+                      tipo: "trans",
+                      prefill: { nombre: f.parsed.transportista, rfc: f.parsed.rfc },
+                    })}
+                    onAgregarCECO={() => setModalAgregar({
+                      tipo: "ceco",
+                      prefill: { ceco: f.parsed.ceco, supervisor: f.parsed.supervisorPDF },
+                    })}
                     enviando={enviando}
                   />
                 ))}
@@ -21383,33 +21422,34 @@ function PrefEnvioMasivo({ transportistas, parametros, usuario }) {
         </div>
       )}
 
-      {/* ═══ PDFs huérfanos ═════════════════════════════════════════════════ */}
-      {pdfsHuerfanos.length > 0 && filas.length > 0 && (
-        <div className="form-card" style={{ borderColor: "#fde68a", background: "#fffbeb" }}>
-          <div className="form-title" style={{ color: "#92400e" }}>
-            ⚠ {pdfsHuerfanos.length} PDF{pdfsHuerfanos.length === 1 ? "" : "s"} sin coincidencia en la planilla
-          </div>
-          <div style={{ fontSize: 12, color: "#92400e", marginBottom: 10 }}>
-            Estos archivos no se enviarán porque su nombre no coincide con ninguna fila de PREFACTURAS EMITIDAS:
-          </div>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-            {pdfsHuerfanos.map(p => (
-              <div key={p.nombreNorm} style={{
-                background: "#fff", border: "1px solid #fde68a", borderRadius: 6,
-                padding: "4px 10px", fontSize: 11, color: "#78350f",
-                display: "flex", alignItems: "center", gap: 6,
-              }}>
-                <span>{p.nombre}</span>
-                <button onClick={() => eliminarPdf(p.nombreNorm)}
-                  style={{
-                    background: "transparent", border: "none", cursor: "pointer",
-                    color: "#dc2626", fontSize: 13, padding: 0, lineHeight: 1,
-                  }}
-                  title="Quitar este PDF">×</button>
-              </div>
-            ))}
-          </div>
-        </div>
+      {/* Modal embebido para agregar transportista o CECO desde el envío */}
+      {modalAgregar?.tipo === "trans" && (
+        <ModalEdicionTransportista
+          inicial={{
+            nombre: modalAgregar.prefill.nombre || "",
+            rfc: modalAgregar.prefill.rfc || "",
+            estado: "Activo",
+            correo_to: "", correo_cc: "", correo_bcc: "", notas: "",
+          }}
+          esNuevo={true}
+          onCancelar={() => setModalAgregar(null)}
+          onGuardarOK={onAgregarYRefrescar}
+        />
+      )}
+      {modalAgregar?.tipo === "ceco" && (
+        <ModalEdicionParametro
+          inicial={{
+            ceco: modalAgregar.prefill.ceco || "",
+            supervisor: modalAgregar.prefill.supervisor || "",
+            correo_supervisor: "",
+            asunto_plantilla: "Prefactura {CECO} — período {PERIODO} — {OPERACION}",
+            cuerpo_plantilla: "",
+            cuenta_envio: "prefacturas@bigticket.cl",
+          }}
+          esNuevo={true}
+          onCancelar={() => setModalAgregar(null)}
+          onGuardarOK={onAgregarYRefrescar}
+        />
       )}
     </div>
   );
@@ -21445,8 +21485,9 @@ function IndicadorPF({ label, valor, color }) {
   );
 }
 
-// ─── Fila individual con edición inline ─────────────────────────────────────────
-function FilaPrefactura({ fila, enEdicion, onEdit, onGuardar, onCancelar, enviando }) {
+// ─── Fila individual ────────────────────────────────────────────────────────────
+function FilaPrefactura({ fila, enEdicion, onEdit, onGuardar, onCancelar, onEliminar,
+                         onAgregarTransportista, onAgregarCECO, enviando }) {
   const [to, setTo] = useState(fila.editTo);
   const [cc, setCc] = useState(fila.editCc);
   const [bcc, setBcc] = useState(fila.editBcc);
@@ -21464,14 +21505,14 @@ function FilaPrefactura({ fila, enEdicion, onEdit, onGuardar, onCancelar, envian
   if (fila.estadoEnvio === "ok") bgFila = "#f0fdf4";
   else if (fila.estadoEnvio === "fallido") bgFila = "#fef2f2";
   else if (fila.estadoEnvio === "enviando") bgFila = "#fffbeb";
-  else if (!fila.listo) bgFila = "#fef9c3";
+  else if (!fila.listo) bgFila = "#fef2f2";  // ROJO cuando hay error (como pediste)
 
   if (enEdicion) {
     return (
       <tr style={{ background: "#eff6ff" }}>
-        <td colSpan={8} style={{ padding: 14, borderBottom: "2px solid #1a3a6b" }}>
+        <td colSpan={7} style={{ padding: 14, borderBottom: "2px solid #1a3a6b" }}>
           <div style={{ fontSize: 12, fontWeight: 700, color: "#1a3a6b", marginBottom: 10 }}>
-            ✏️ Editando: {fila.transportista} · {fila.ceco} · {fila.periodo}
+            ✏️ Editando: {fila.parsed.transportista || fila.nombre} · {fila.parsed.ceco || "—"} · {fila.parsed.periodo || "—"}
           </div>
           <div className="two-col" style={{ marginBottom: 10 }}>
             <div>
@@ -21497,7 +21538,8 @@ function FilaPrefactura({ fila, enEdicion, onEdit, onGuardar, onCancelar, envian
             <textarea value={cuerpo} onChange={e => setCuerpo(e.target.value)} style={{ height: 140 }} />
           </div>
           <div style={{ fontSize: 11, color: "#64748b", marginBottom: 10 }}>
-            💡 Los cambios solo aplican a este envío. Para editar plantillas permanentes, andá a "Parámetros / CECOs".
+            💡 Los cambios solo aplican a este envío. Para modificar permanentemente correos o
+            plantillas, andá a las sub-tabs "Transportistas" o "Parámetros".
           </div>
           <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
             <button onClick={onCancelar}
@@ -21517,26 +21559,57 @@ function FilaPrefactura({ fila, enEdicion, onEdit, onGuardar, onCancelar, envian
     );
   }
 
+  const tieneTransNoRegistrado = fila.parsed.transportista && !fila.trans;
+  const tieneCECONoRegistrado = fila.parsed.ceco && !fila.param;
+
   return (
     <tr style={{ background: bgFila }}>
       <td style={pf_td()}><EstadoBadge fila={fila} /></td>
       <td style={pf_td()}>
-        <div style={{ fontWeight: 600 }}>{fila.transportista}</div>
-        <div style={{ fontSize: 10, color: "#94a3b8" }}>{fila.rfc}</div>
+        <div style={{ fontWeight: 600 }}>
+          {fila.parsed.transportista || <em style={{ color: "#dc2626" }}>(no detectado)</em>}
+        </div>
+        <div style={{ fontSize: 10, color: "#94a3b8" }}>{fila.parsed.rfc || "sin RFC"}</div>
+        <div style={{ fontSize: 9, color: "#94a3b8", marginTop: 2 }}>📄 {fila.nombre.length > 35 ? fila.nombre.slice(0, 32) + "..." : fila.nombre}</div>
+        {tieneTransNoRegistrado && (
+          <button onClick={onAgregarTransportista}
+            style={{
+              marginTop: 4, background: "#fef2f2", border: "1px solid #fca5a5",
+              borderRadius: 6, padding: "2px 8px", fontSize: 10, color: "#991b1b",
+              cursor: "pointer", fontWeight: 600, fontFamily: "Geist, sans-serif",
+            }}>+ Agregar a Supabase</button>
+        )}
       </td>
       <td style={pf_td()}>
-        <span style={{
-          background: "#eef2ff", color: "#1a3a6b", padding: "2px 8px",
-          borderRadius: 4, fontSize: 11, fontWeight: 600,
-        }}>{fila.ceco}</span>
+        {fila.parsed.ceco ? (
+          <>
+            <span style={{
+              background: fila.param ? "#eef2ff" : "#fef2f2",
+              color: fila.param ? "#1a3a6b" : "#991b1b",
+              padding: "2px 8px", borderRadius: 4, fontSize: 11, fontWeight: 600,
+            }}>{fila.parsed.ceco}</span>
+            {tieneCECONoRegistrado && (
+              <button onClick={onAgregarCECO}
+                style={{
+                  display: "block", marginTop: 4,
+                  background: "#fef2f2", border: "1px solid #fca5a5",
+                  borderRadius: 6, padding: "2px 8px", fontSize: 10, color: "#991b1b",
+                  cursor: "pointer", fontWeight: 600, fontFamily: "Geist, sans-serif",
+                }}>+ Agregar CECO</button>
+            )}
+          </>
+        ) : <em style={{ color: "#dc2626", fontSize: 11 }}>(no detectado)</em>}
       </td>
       <td style={pf_td()}>
-        <div style={{ wordBreak: "break-all", maxWidth: 220 }}>
+        <span style={{ fontSize: 11, color: "#475569" }}>{fila.parsed.periodo || "—"}</span>
+      </td>
+      <td style={pf_td()}>
+        <div style={{ wordBreak: "break-all", maxWidth: 240 }}>
           {fila.editTo || <em style={{ color: "#dc2626" }}>vacío</em>}
         </div>
-        <div style={{ fontSize: 9, color: "#94a3b8", marginTop: 2 }}>
-          fuente: {fila.fuenteCorreoTo}
-        </div>
+        {fila.trans && (
+          <div style={{ fontSize: 9, color: "#16a34a", marginTop: 2 }}>✓ desde Supabase</div>
+        )}
       </td>
       <td style={pf_td()}>
         <div style={{ wordBreak: "break-all", maxWidth: 200, fontSize: 11, color: "#64748b" }}>
@@ -21544,25 +21617,23 @@ function FilaPrefactura({ fila, enEdicion, onEdit, onGuardar, onCancelar, envian
         </div>
       </td>
       <td style={pf_td()}>
-        {fila.pdfMatch
-          ? <span style={{ color: "#16a34a", fontSize: 14 }} title={fila.pdfMatch.nombre}>✓</span>
-          : <span style={{ color: "#dc2626", fontSize: 14 }} title={"Falta: " + fila.nombrePdf}>✗</span>
-        }
-      </td>
-      <td style={pf_td("right")}>
-        <span style={{ fontVariantNumeric: "tabular-nums" }}>
-          ${fila.liquido.toLocaleString("es-MX")}
-        </span>
-      </td>
-      <td style={pf_td()}>
-        <button onClick={onEdit}
-          disabled={enviando || fila.estadoEnvio === "ok"}
-          style={{
-            background: "transparent", border: "1px solid #e4e7ec", borderRadius: 6,
-            padding: "4px 10px", fontSize: 11, color: "#1a3a6b", cursor: "pointer",
-            fontFamily: "Geist, sans-serif", fontWeight: 600,
-            opacity: (enviando || fila.estadoEnvio === "ok") ? 0.4 : 1,
-          }}>Editar</button>
+        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          <button onClick={onEdit}
+            disabled={enviando || fila.estadoEnvio === "ok"}
+            style={{
+              background: "transparent", border: "1px solid #e4e7ec", borderRadius: 6,
+              padding: "3px 8px", fontSize: 11, color: "#1a3a6b", cursor: "pointer",
+              fontFamily: "Geist, sans-serif", fontWeight: 600,
+              opacity: (enviando || fila.estadoEnvio === "ok") ? 0.4 : 1,
+            }}>Editar</button>
+          <button onClick={onEliminar} disabled={enviando}
+            style={{
+              background: "transparent", border: "1px solid #fca5a5", borderRadius: 6,
+              padding: "3px 8px", fontSize: 11, color: "#991b1b", cursor: "pointer",
+              fontFamily: "Geist, sans-serif", fontWeight: 600,
+              opacity: enviando ? 0.4 : 1,
+            }}>Quitar</button>
+        </div>
       </td>
     </tr>
   );
@@ -21604,9 +21675,14 @@ function EstadoBadge({ fila }) {
     return (
       <div title={fila.errores.join(" · ")}>
         <span style={{
-          background: "#fef3c7", color: "#92400e", padding: "3px 8px",
+          background: "#fee2e2", color: "#991b1b", padding: "3px 8px",
           borderRadius: 20, fontSize: 10, fontWeight: 700,
         }}>⚠ {fila.errores[0]}</span>
+        {fila.errores.length > 1 && (
+          <div style={{ fontSize: 9, color: "#991b1b", marginTop: 2 }}>
+            +{fila.errores.length - 1} error{fila.errores.length === 2 ? "" : "es"} más
+          </div>
+        )}
       </div>
     );
   }
@@ -21624,8 +21700,7 @@ function EstadoBadge({ fila }) {
 function PrefTransportistas({ data, onChange }) {
   const [busqueda, setBusqueda] = useState("");
   const [filtroEstado, setFiltroEstado] = useState("todos");
-  const [editando, setEditando] = useState(null); // null | "nuevo" | id
-  const [guardando, setGuardando] = useState(false);
+  const [editando, setEditando] = useState(null);
 
   const filtrados = useMemo(() => {
     let r = [...data];
@@ -21640,35 +21715,6 @@ function PrefTransportistas({ data, onChange }) {
     }
     return r;
   }, [data, busqueda, filtroEstado]);
-
-  const handleGuardar = async (form) => {
-    if (!form.nombre.trim()) { alert("El nombre es obligatorio."); return; }
-    setGuardando(true);
-    try {
-      const payload = {
-        nombre: form.nombre.trim(),
-        rfc: form.rfc.trim() || null,
-        estado: form.estado || "Activo",
-        correo_to: form.correo_to.trim() || null,
-        correo_cc: form.correo_cc.trim() || null,
-        correo_bcc: form.correo_bcc.trim() || null,
-        notas: form.notas.trim() || null,
-        updated_at: new Date().toISOString(),
-      };
-      if (editando === "nuevo") {
-        const { error } = await sb.from("prefacturas_transportistas_mx").insert(payload);
-        if (error) throw error;
-      } else {
-        const { error } = await sb.from("prefacturas_transportistas_mx").update(payload).eq("id", editando);
-        if (error) throw error;
-      }
-      setEditando(null);
-      await onChange();
-    } catch (e) {
-      alert("Error guardando: " + e.message);
-    }
-    setGuardando(false);
-  };
 
   const handleEliminar = async (id, nombre) => {
     if (!confirm(`¿Eliminar al transportista "${nombre}"?\n\nEsta acción no se puede deshacer.`)) return;
@@ -21697,13 +21743,11 @@ function PrefTransportistas({ data, onChange }) {
         </button>
       </div>
 
-      {/* Filtros */}
       <div className="form-card" style={{ padding: "12px 16px" }}>
         <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
           <input
             placeholder="Buscar por nombre, RFC o correo..."
-            value={busqueda}
-            onChange={e => setBusqueda(e.target.value)}
+            value={busqueda} onChange={e => setBusqueda(e.target.value)}
             style={{ flex: "1 1 280px", maxWidth: 400 }}
           />
           <select value={filtroEstado} onChange={e => setFiltroEstado(e.target.value)} style={{ width: 160 }}>
@@ -21717,7 +21761,6 @@ function PrefTransportistas({ data, onChange }) {
         </div>
       </div>
 
-      {/* Tabla */}
       <div className="form-card" style={{ padding: 0, overflow: "hidden" }}>
         <div style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
@@ -21791,22 +21834,50 @@ function PrefTransportistas({ data, onChange }) {
         </div>
       </div>
 
-      {/* Modal de edición */}
       {filaEdicion && (
         <ModalEdicionTransportista
           inicial={filaEdicion}
           esNuevo={editando === "nuevo"}
-          guardando={guardando}
-          onGuardar={handleGuardar}
+          editandoId={editando !== "nuevo" ? editando : null}
           onCancelar={() => setEditando(null)}
+          onGuardarOK={async () => { setEditando(null); await onChange(); }}
         />
       )}
     </div>
   );
 }
 
-function ModalEdicionTransportista({ inicial, esNuevo, guardando, onGuardar, onCancelar }) {
+function ModalEdicionTransportista({ inicial, esNuevo, editandoId, onCancelar, onGuardarOK }) {
   const [form, setForm] = useState(inicial);
+  const [guardando, setGuardando] = useState(false);
+
+  const handleGuardar = async () => {
+    if (!form.nombre.trim()) { alert("El nombre es obligatorio."); return; }
+    setGuardando(true);
+    try {
+      const payload = {
+        nombre: form.nombre.trim(),
+        rfc: (form.rfc || "").trim() || null,
+        estado: form.estado || "Activo",
+        correo_to: (form.correo_to || "").trim() || null,
+        correo_cc: (form.correo_cc || "").trim() || null,
+        correo_bcc: (form.correo_bcc || "").trim() || null,
+        notas: (form.notas || "").trim() || null,
+        updated_at: new Date().toISOString(),
+      };
+      if (esNuevo) {
+        const { error } = await sb.from("prefacturas_transportistas_mx").insert(payload);
+        if (error) throw error;
+      } else {
+        const { error } = await sb.from("prefacturas_transportistas_mx").update(payload).eq("id", editandoId);
+        if (error) throw error;
+      }
+      await onGuardarOK();
+    } catch (e) {
+      alert("Error guardando: " + e.message);
+    }
+    setGuardando(false);
+  };
 
   return (
     <div style={{
@@ -21866,7 +21937,7 @@ function ModalEdicionTransportista({ inicial, esNuevo, guardando, onGuardar, onC
               padding: "8px 14px", fontSize: 12, color: "#475569", cursor: "pointer",
               fontFamily: "Geist, sans-serif", fontWeight: 600,
             }}>Cancelar</button>
-          <button onClick={() => onGuardar(form)} disabled={guardando} className="btn-blue"
+          <button onClick={handleGuardar} disabled={guardando} className="btn-blue"
             style={{ padding: "8px 14px", fontSize: 12 }}>
             {guardando ? "Guardando..." : "Guardar"}
           </button>
@@ -21881,35 +21952,6 @@ function ModalEdicionTransportista({ inicial, esNuevo, guardando, onGuardar, onC
 // ═══════════════════════════════════════════════════════════════════════════════════════
 function PrefParametros({ data, onChange }) {
   const [editando, setEditando] = useState(null);
-  const [guardando, setGuardando] = useState(false);
-
-  const handleGuardar = async (form) => {
-    if (!form.ceco.trim()) { alert("El CECO es obligatorio."); return; }
-    setGuardando(true);
-    try {
-      const payload = {
-        ceco: form.ceco.trim().toUpperCase(),
-        supervisor: form.supervisor.trim() || null,
-        correo_supervisor: form.correo_supervisor.trim() || null,
-        asunto_plantilla: form.asunto_plantilla.trim() || null,
-        cuerpo_plantilla: form.cuerpo_plantilla.trim() || null,
-        cuenta_envio: form.cuenta_envio.trim() || "prefacturas@bigticket.cl",
-        updated_at: new Date().toISOString(),
-      };
-      if (editando === "nuevo") {
-        const { error } = await sb.from("prefacturas_parametros_mx").insert(payload);
-        if (error) throw error;
-      } else {
-        const { error } = await sb.from("prefacturas_parametros_mx").update(payload).eq("id", editando);
-        if (error) throw error;
-      }
-      setEditando(null);
-      await onChange();
-    } catch (e) {
-      alert("Error guardando: " + e.message);
-    }
-    setGuardando(false);
-  };
 
   const handleEliminar = async (id, ceco) => {
     if (!confirm(`¿Eliminar el CECO "${ceco}"?`)) return;
@@ -21938,7 +21980,6 @@ function PrefParametros({ data, onChange }) {
         </button>
       </div>
 
-      {/* Caja informativa de variables */}
       <div className="form-card" style={{ background: "#eff6ff", borderColor: "#bfdbfe" }}>
         <div style={{ fontSize: 13, fontWeight: 700, color: "#1a3a6b", marginBottom: 6 }}>
           💡 Variables disponibles en asunto y cuerpo
@@ -21952,11 +21993,10 @@ function PrefParametros({ data, onChange }) {
           ))}
         </div>
         <div style={{ fontSize: 11, color: "#1e40af", marginTop: 8 }}>
-          Estas variables se reemplazan automáticamente con los datos de cada prefactura antes del envío.
+          Estas variables se reemplazan automáticamente con los datos extraídos del PDF antes del envío.
         </div>
       </div>
 
-      {/* Tabla */}
       <div className="form-card" style={{ padding: 0, overflow: "hidden" }}>
         <div style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
@@ -22025,28 +22065,56 @@ function PrefParametros({ data, onChange }) {
         <ModalEdicionParametro
           inicial={filaEdicion}
           esNuevo={editando === "nuevo"}
-          guardando={guardando}
-          onGuardar={handleGuardar}
+          editandoId={editando !== "nuevo" ? editando : null}
           onCancelar={() => setEditando(null)}
+          onGuardarOK={async () => { setEditando(null); await onChange(); }}
         />
       )}
     </div>
   );
 }
 
-function ModalEdicionParametro({ inicial, esNuevo, guardando, onGuardar, onCancelar }) {
+function ModalEdicionParametro({ inicial, esNuevo, editandoId, onCancelar, onGuardarOK }) {
   const [form, setForm] = useState(inicial);
+  const [guardando, setGuardando] = useState(false);
+
   const previewVars = {
     TRANSPORTISTA: "LUIS FELIPE HIDALGO SANTIAGO",
     CECO: form.ceco || "SMX7",
     PERIODO: "27 DE ABRIL AL 03 DE MAYO",
     RFC: "HISL871105C2A",
-    OPERACION: "ML_MXSMX7",
+    OPERACION: "ML_MX" + (form.ceco || "SMX7"),
     SUPERVISOR: form.supervisor || "ROBERTO LOPEZ",
-    NETO: 3728, IVA: 596, BRUTO: 4324, LIQUIDO: 4324,
   };
   const asuntoPreview = pf_aplicarPlantilla(form.asunto_plantilla || "", previewVars);
   const cuerpoPreview = pf_aplicarPlantilla(form.cuerpo_plantilla || "", previewVars);
+
+  const handleGuardar = async () => {
+    if (!form.ceco.trim()) { alert("El CECO es obligatorio."); return; }
+    setGuardando(true);
+    try {
+      const payload = {
+        ceco: form.ceco.trim().toUpperCase(),
+        supervisor: (form.supervisor || "").trim() || null,
+        correo_supervisor: (form.correo_supervisor || "").trim() || null,
+        asunto_plantilla: (form.asunto_plantilla || "").trim() || null,
+        cuerpo_plantilla: (form.cuerpo_plantilla || "").trim() || null,
+        cuenta_envio: (form.cuenta_envio || "").trim() || "prefacturas@bigticket.cl",
+        updated_at: new Date().toISOString(),
+      };
+      if (esNuevo) {
+        const { error } = await sb.from("prefacturas_parametros_mx").insert(payload);
+        if (error) throw error;
+      } else {
+        const { error } = await sb.from("prefacturas_parametros_mx").update(payload).eq("id", editandoId);
+        if (error) throw error;
+      }
+      await onGuardarOK();
+    } catch (e) {
+      alert("Error guardando: " + e.message);
+    }
+    setGuardando(false);
+  };
 
   return (
     <div style={{
@@ -22121,7 +22189,7 @@ function ModalEdicionParametro({ inicial, esNuevo, guardando, onGuardar, onCance
               padding: "8px 14px", fontSize: 12, color: "#475569", cursor: "pointer",
               fontFamily: "Geist, sans-serif", fontWeight: 600,
             }}>Cancelar</button>
-          <button onClick={() => onGuardar(form)} disabled={guardando} className="btn-blue"
+          <button onClick={handleGuardar} disabled={guardando} className="btn-blue"
             style={{ padding: "8px 14px", fontSize: 12 }}>
             {guardando ? "Guardando..." : "Guardar"}
           </button>
@@ -22193,8 +22261,7 @@ function PrefHistorial() {
         <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
           <input
             placeholder="Buscar transportista, CECO o correo..."
-            value={busqueda}
-            onChange={e => setBusqueda(e.target.value)}
+            value={busqueda} onChange={e => setBusqueda(e.target.value)}
             style={{ flex: "1 1 280px", maxWidth: 400 }}
           />
           <select value={filtroEstado} onChange={e => setFiltroEstado(e.target.value)} style={{ width: 160 }}>
