@@ -21007,6 +21007,18 @@ function PrefEnvioMasivo({ transportistas, parametros, usuario, onActualizarMaes
         ? paramsByCeco.get(parsed.ceco.toUpperCase().trim())
         : null;
 
+      // CC: combinar el CC del transportista (si tiene) + el correo del supervisor del CECO (si tiene)
+      // Si ambos coinciden, no duplicar
+      const ccs = [];
+      if (trans?.correo_cc) ccs.push(trans.correo_cc.trim());
+      if (param?.correo_supervisor) {
+        const sup = param.correo_supervisor.trim();
+        // Evitar duplicados (case-insensitive)
+        const yaEsta = ccs.some(c => c.toLowerCase() === sup.toLowerCase());
+        if (!yaEsta) ccs.push(sup);
+      }
+      const ccCombinado = ccs.join("; ");
+
       return {
         idx,
         file,
@@ -21016,7 +21028,7 @@ function PrefEnvioMasivo({ transportistas, parametros, usuario, onActualizarMaes
         trans,
         param,
         editTo: trans?.correo_to || "",
-        editCc: trans?.correo_cc || param?.correo_supervisor || "",
+        editCc: ccCombinado,
         editBcc: trans?.correo_bcc || "",
         // editAsunto/editCuerpo NO se guardan aquí — se generan dinámicamente desde el editor del lote
         // Solo se llenan si el usuario edita manualmente esta fila puntual (override por fila)
