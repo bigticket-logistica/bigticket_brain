@@ -5369,8 +5369,6 @@ function ModuloPagos() {
   const [loading, setLoading] = useState(true);
   const [periodo, setPeriodo] = useState(""); // YYYY-MM
   const [periodos, setPeriodos] = useState([]);
-  const [periodoVigente, setPeriodoVigente] = useState("");  // 🆕 Período vigente (de certificacion_mensual)
-  const [periodosHistoricos, setPeriodosHistoricos] = useState([]); // 🆕 Períodos del histórico (de tabla histórica)
   const [vistaActiva, setVistaActiva] = useState("dashboard"); // dashboard | criticos | matriz | hallazgos | rse | empleados | vehiculos | inicial | historico
   const [tabCategoria, setTabCategoria] = useState("pc");
   const [busqueda, setBusqueda] = useState("");
@@ -5403,45 +5401,22 @@ function ModuloPagos() {
 
   const cargarPeriodos = async () => {
     try {
-      // 1) Períodos del calculador V7 (vigente + lo que esté disponible)
       const { data } = await sb.from("certronic_certificacion_mensual")
         .select("anio, mes")
         .order("anio", { ascending: false })
         .order("mes", { ascending: false });
-      const vigentes = data && data.length
+      const unicos = data && data.length
         ? [...new Set(data.map(r => `${r.anio}-${String(r.mes).padStart(2,"0")}`))]
         : [`${new Date().getFullYear()}-${String(new Date().getMonth()+1).padStart(2,"0")}`];
-
-      // 2) 🆕 Períodos de la tabla histórica (usar vista vw_historico_periodos
-      //    para evitar el límite de 1000 filas de la REST API de Supabase)
-      let historicos = [];
-      try {
-        const { data: hist } = await sb.from("vw_historico_periodos")
-          .select("periodo")
-          .order("periodo", { ascending: false });
-        if (hist && hist.length) {
-          historicos = [...new Set(hist.map(r => r.periodo.substring(0, 7)))]; // YYYY-MM
-        }
-      } catch (e) {
-        console.warn("[Pagos] No hay vista histórica disponible:", e.message);
-      }
-
-      // 3) Unir y deduplicar, ordenados descendente
-      const todosPeriodos = [...new Set([...vigentes, ...historicos])].sort().reverse();
-
-      setPeriodos(todosPeriodos);
-      setPeriodoVigente(vigentes[0] || "");
-      setPeriodosHistoricos(historicos);
-      // Por defecto, abrir en el vigente (no en el más reciente histórico)
-      setPeriodo(vigentes[0] || todosPeriodos[0]);
-
+      setPeriodos(unicos);
+      setPeriodo(unicos[0]);
       const { data: log } = await sb.from("certronic_ejecuciones_log")
         .select("*").order("fecha_ejecucion", { ascending: false }).limit(1);
       if (log && log[0]) setUltimaEjecucion(log[0]);
     } catch(e) {
       console.error("Error cargar periodos:", e);
       const p = `${new Date().getFullYear()}-${String(new Date().getMonth()+1).padStart(2,"0")}`;
-      setPeriodos([p]); setPeriodo(p); setPeriodoVigente(p);
+      setPeriodos([p]); setPeriodo(p);
     }
   };
 
@@ -5449,146 +5424,20 @@ function ModuloPagos() {
     setLoading(true);
     const [anio, mes] = periodo.split("-").map(Number);
     try {
-      // 1) Intentar carga normal desde certronic_certificacion_mensual
       const { data } = await sb.from("certronic_certificacion_mensual")
         .select("*")
         .eq("anio", anio).eq("mes", mes);
       const todos = data || [];
-
-      if (todos.length > 0) {
-        // ✅ Datos disponibles del calculador V7
-        setDatos({
-          pc: todos.filter(d => d.categoria === "PC"),
-          ryc: todos.filter(d => d.categoria === "RYC"),
-          sub: todos.filter(d => d.categoria === "SUB"),
-        });
-      } else if (periodosHistoricos.includes(periodo)) {
-        // 🆕 Modo histórico: derivar datos del histórico (V7 no corrió para este período)
-        await cargarDesdeHistorico(anio, mes);
-      } else {
-        setDatos({ pc: [], ryc: [], sub: [] });
-      }
+      setDatos({
+        pc: todos.filter(d => d.categoria === "PC"),
+        ryc: todos.filter(d => d.categoria === "RYC"),
+        sub: todos.filter(d => d.categoria === "SUB"),
+      });
     } catch(e) {
       console.error("Error cargar datos:", e);
       setDatos({ pc: [], ryc: [], sub: [] });
     }
     setLoading(false);
-  };
-
-  // 🆕 Sprint 3 Fase B.2 — Reconstruye el dashboard desde la tabla histórica
-  // cuando el calculador V7 no ha corrido para ese período.
-  const cargarDesdeHistorico = async (anio, mes) => {
-    const periodoSQL = `${anio}-${String(mes).padStart(2, "0")}-01`;
-    try {
-      // Cargar TODO el histórico de ese período (paginado por si pasa de 1000)
-      let allRows = [];
-      let from = 0;
-      const limite = 1000;
-      while (true) {
-        const { data, error } = await sb.from("certronic_estados_documentos_historico")
-          .select("planta, contratista, contratista_norm, rut, entidad, detalle, detalle_norm, identificador, documento, periodo_doc, impide_acceso, impide_pago, estado, cumple")
-          .eq("periodo", periodoSQL)
-          .range(from, from + limite - 1);
-        if (error) throw error;
-        if (!data || data.length === 0) break;
-        allRows = allRows.concat(data);
-        if (data.length < limite) break;
-        from += limite;
-      }
-
-      if (allRows.length === 0) {
-        setDatos({ pc: [], ryc: [], sub: [] });
-        return;
-      }
-
-      // Agrupar por contratista (empresa) y reconstruir métricas mínimas
-      // similares a las que devolvería el calculador V7
-      const porContratista = new Map();
-      for (const r of allRows) {
-        const key = r.contratista_norm || r.contratista;
-        if (!porContratista.has(key)) {
-          porContratista.set(key, {
-            contratista: r.contratista,
-            contratista_norm: r.contratista_norm,
-            planta: r.planta,
-            empleados: new Set(),
-            vehiculos: new Set(),
-            docs_total: 0,
-            docs_cumple: 0,
-            docs_pendientes: 0,
-            doc_f30_estado: null,
-            doc_f30_1_estado: null,
-            doc_liquidaciones_estado: null,
-            doc_cotizaciones_estado: null,
-            doc_mutualidad_estado: null,
-          });
-        }
-        const c = porContratista.get(key);
-        c.docs_total++;
-        if (r.cumple === "S") c.docs_cumple++;
-        else if (r.cumple === "N") c.docs_pendientes++;
-
-        if (r.entidad === "empleado") c.empleados.add(r.identificador);
-        else if (r.entidad === "vehiculo") c.vehiculos.add(r.identificador);
-
-        // Tomar estado de documentos clave (preferir el más malo si hay múltiples)
-        const docLower = (r.documento || "").toLowerCase();
-        if (docLower.includes("f30-1") || docLower.includes("f30 1")) {
-          c.doc_f30_1_estado = r.estado || (r.cumple === "S" ? "Presentado" : "Pendiente");
-        } else if (docLower.includes("f30")) {
-          c.doc_f30_estado = r.estado || (r.cumple === "S" ? "Presentado" : "Pendiente");
-        } else if (docLower.includes("liquidaci")) {
-          c.doc_liquidaciones_estado = r.estado || (r.cumple === "S" ? "Presentado" : "Pendiente");
-        } else if (docLower.includes("cotizaci") || docLower.includes("previred")) {
-          c.doc_cotizaciones_estado = r.estado || (r.cumple === "S" ? "Presentado" : "Pendiente");
-        } else if (docLower.includes("mutualidad") || docLower.includes("adhesi")) {
-          c.doc_mutualidad_estado = r.estado || (r.cumple === "S" ? "Presentado" : "Pendiente");
-        }
-      }
-
-      // Convertir a la estructura esperada por DashboardCertificacion
-      // No tenemos categoría exacta sin V7, así que asignamos todos a "PC" (Personal Crítico) por defecto
-      // y dejamos las otras categorías vacías. El analista puede hacer foco en PC en modo histórico.
-      const filas = [];
-      for (const [norm, c] of porContratista.entries()) {
-        const empleadosCount = c.empleados.size;
-        const vehiculosCount = c.vehiculos.size;
-        // Heurística: si tiene >1 empleado/vehículo → RYC; si solo es la empresa → PC; resto se complica.
-        // Mejor mostramos todo bajo una categoría especial "HIST" o lo dejamos en PC para no complicar.
-        const pct_avance = c.docs_total > 0 ? Math.round((c.docs_cumple / c.docs_total) * 100) : 0;
-        filas.push({
-          contratista: c.contratista,
-          contratista_norm: c.contratista_norm,
-          transporte: c.contratista, // alias usado en el dashboard
-          operacion: c.planta || "—",
-          categoria: empleadosCount > 0 || vehiculosCount > 0 ? "RYC" : "PC",
-          subcontratista_nombre: null,
-          pct_avance: pct_avance,
-          pct_retencion: pct_avance < 70 ? 25 : 0, // aproximación
-          empleados_activos: empleadosCount,
-          vehiculos_activos: vehiculosCount,
-          recurso_inhabilitado: false, // no sabemos del histórico
-          estado_final: pct_avance >= 85 ? "CERTIFICADO" : pct_avance >= 50 ? "PARCIAL" : "INCUMPLIDO",
-          // Estados de documentos clave (aproximados desde histórico)
-          doc_f30: c.doc_f30_estado,
-          doc_f30_1: c.doc_f30_1_estado,
-          doc_liquidaciones: c.doc_liquidaciones_estado,
-          doc_cotizaciones: c.doc_cotizaciones_estado,
-          doc_mutualidad: c.doc_mutualidad_estado,
-          fecha_calculo: null,
-          _modo: "historico", // flag para indicar que viene del histórico
-        });
-      }
-
-      setDatos({
-        pc: filas.filter(d => d.categoria === "PC"),
-        ryc: filas.filter(d => d.categoria === "RYC"),
-        sub: filas.filter(d => d.categoria === "SUB"),
-      });
-    } catch (e) {
-      console.error("[Pagos] Error cargando desde histórico:", e);
-      setDatos({ pc: [], ryc: [], sub: [] });
-    }
   };
 
   // ─── 🆕 OVERRIDES ────────────────────────────────────────────
@@ -6174,49 +6023,18 @@ function ModuloPagos() {
           </div>
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-          <select value={periodo} onChange={(e) => setPeriodo(e.target.value)} style={{ width: "auto", minWidth: 200 }}>
-            {periodos.map(p => {
+          <select value={periodo} onChange={(e) => setPeriodo(e.target.value)} style={{ width: "auto", minWidth: 150 }}>
+            {periodos.map((p, idx) => {
               const [a, m] = p.split("-");
               const nm = ["","Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"][parseInt(m)];
-              const esVigente = p === periodoVigente;
-              const esHistorico = periodosHistoricos.includes(p) && !esVigente;
-              const label = esVigente
-                ? `🟢 ${nm} ${a} (vigente)`
-                : esHistorico
-                  ? `📜 ${nm} ${a} (histórico)`
-                  : `${nm} ${a}`;
+              // El primero (más reciente) se marca como vigente
+              const esVigente = idx === 0;
+              const label = esVigente ? `🟢 ${nm} ${a} (vigente)` : `${nm} ${a}`;
               return <option key={p} value={p}>{label}</option>;
             })}
           </select>
         </div>
       </div>
-
-      {/* 🆕 Sprint 3 Fase B.2 — Banner cuando se navega a un período histórico */}
-      {periodo && periodosHistoricos.includes(periodo) && periodo !== periodoVigente && (
-        <div style={{
-          background: "#eef2ff", border: "1px solid #c7d2fe", borderLeft: "4px solid #4f46e5",
-          borderRadius: 6, padding: "10px 14px", marginBottom: 12, fontSize: 11.5, color: "#312e81",
-        }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-            <span style={{ fontSize: 14 }}>📜</span>
-            <div style={{ flex: 1, minWidth: 200 }}>
-              <div style={{ fontWeight: 700, marginBottom: 2, fontSize: 12 }}>
-                Estás viendo datos históricos del período {periodo}
-              </div>
-              <div style={{ fontSize: 10.5, color: "#4338ca" }}>
-                Capturado el 2026-05-08 · Datos derivados del histórico (sin recalcular V7) · Algunas métricas son aproximaciones marcadas con asterisco (*)
-              </div>
-            </div>
-            <button onClick={() => setPeriodo(periodoVigente)}
-              style={{
-                padding: "5px 12px", fontSize: 11, fontWeight: 600,
-                background: "#4f46e5", color: "#fff", border: "none", borderRadius: 4, cursor: "pointer",
-              }}>
-              Volver al vigente ({periodoVigente})
-            </button>
-          </div>
-        </div>
-      )}
 
       {/* 🆕 Banner alerta del último run del pipeline */}
       {ultimoRun && ultimoRun.tiene_errores && (() => {
