@@ -13730,14 +13730,15 @@ function ModuloCertificacionesMadre() {
 // ═══════════════════════════════════════════════════════════════════════════
 // PAGOS MADRE — wrapper con sub-tabs (Listado / Drivers / Ayudantes / Config)
 // ═══════════════════════════════════════════════════════════════════════════
-function ModuloPagosMadre() {
+function ModuloPagosMadre({ usuario }) {
   const [subtab, setSubtab] = useState("listado");
   const tabs = [
-    { id: "listado",   label: "Listado de Pagos",      desc: "Cálculo diario por contratista" },
-    { id: "info_ruta", label: "Información de Ruta",   desc: "Análisis operacional por ruta" },
-    { id: "drivers",   label: "Drivers",               desc: "Maestro de choferes MX" },
-    { id: "ayudantes", label: "Ayudantes",             desc: "Detalle diario de auxiliares" },
-    { id: "config",    label: "Configuración",         desc: "Tarifario, zonas y reglas" },
+    { id: "listado",     label: "Listado de Pagos",      desc: "Cálculo diario por contratista" },
+    { id: "info_ruta",   label: "Información de Ruta",   desc: "Análisis operacional por ruta" },
+    { id: "drivers",     label: "Drivers",               desc: "Maestro de choferes MX" },
+    { id: "ayudantes",   label: "Ayudantes",             desc: "Detalle diario de auxiliares" },
+    { id: "prefacturas", label: "Prefacturas",           desc: "Envío masivo de prefacturas MX" },
+    { id: "config",      label: "Configuración",         desc: "Tarifario, zonas y reglas" },
   ];
   return (
     <div style={{ padding: 0 }}>
@@ -13758,11 +13759,12 @@ function ModuloPagosMadre() {
           ))}
         </div>
       </div>
-      {subtab === "listado"   && <ListadoPagosDiarios />}
-      {subtab === "info_ruta" && <InformacionDeRuta />}
-      {subtab === "drivers"   && <DriversMaestroMX />}
-      {subtab === "ayudantes" && <AyudantesDetalleDia />}
-      {subtab === "config"    && <ConfiguracionPagos />}
+      {subtab === "listado"     && <ListadoPagosDiarios />}
+      {subtab === "info_ruta"   && <InformacionDeRuta />}
+      {subtab === "drivers"     && <DriversMaestroMX />}
+      {subtab === "ayudantes"   && <AyudantesDetalleDia />}
+      {subtab === "prefacturas" && <ModuloPrefacturasEnvio usuario={usuario} />}
+      {subtab === "config"      && <ConfiguracionPagos />}
     </div>
   );
 }
@@ -20694,8 +20696,1590 @@ export default function App() {
         {tab === "maestro" && <ModuloMaestro usuario={usuario} />}
         {tab === "incidencias" && <ModuloIncidencias />}
         {tab === "pnr" && <ModuloPNR />}
-        {tab === "pagos" && <ModuloPagosMadre />}
+        {tab === "pagos" && <ModuloPagosMadre usuario={usuario} />}
       </div>
     </>
+  );
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════════════════
+// MÓDULO PREFACTURAS · MX
+// ───────────────────────────────────────────────────────────────────────────────────────
+// 4 sub-tabs:
+//   • Envío masivo (default): drag-and-drop de PDFs + cruce + envío vía n8n
+//   • Transportistas: editar/agregar/eliminar transportistas con sus correos
+//   • Parámetros: configurar CECOs, supervisores, asuntos y CUERPO POR CECO
+//   • Historial: envíos pasados (persistidos en Supabase)
+//
+// Datos en Supabase (tablas creadas en setup_supabase.sql):
+//   • prefacturas_transportistas_mx
+//   • prefacturas_parametros_mx
+//   • prefacturas_envios_log
+//
+// Webhook n8n:
+//   https://bigticket2026.app.n8n.cloud/webhook/prefacturas-enviar-mx
+//
+// Plantillas con variables soportadas en asunto/cuerpo:
+//   {TRANSPORTISTA} {CECO} {PERIODO} {RFC} {OPERACION} {SUPERVISOR}
+//   {NETO} {IVA} {BRUTO} {LIQUIDO}
+// ═══════════════════════════════════════════════════════════════════════════════════════
+
+const PREFACTURAS_WEBHOOK = "https://bigticket2026.app.n8n.cloud/webhook/prefacturas-enviar-mx";
+const PAUSA_ENTRE_ENVIOS_MS = 1500;
+const VARIABLES_PLANTILLA = [
+  "TRANSPORTISTA", "CECO", "PERIODO", "RFC", "OPERACION", "SUPERVISOR",
+  "NETO", "IVA", "BRUTO", "LIQUIDO"
+];
+
+// ─── HELPERS ─────────────────────────────────────────────────────────────────────────
+function pf_correoValido(c) {
+  if (!c) return false;
+  return /^[^\s@;,]+@[^\s@;,]+\.[^\s@;,]+$/.test(String(c).trim());
+}
+function pf_limpiarLista(s) {
+  if (s == null) return { limpia: "", valida: true };
+  const partes = String(s).split(/[;,]/).map(x => x.trim()).filter(Boolean);
+  if (partes.length === 0) return { limpia: "", valida: true };
+  return { limpia: partes.join("; "), valida: partes.every(pf_correoValido) };
+}
+async function pf_cargarXLSX() {
+  if (window.XLSX) return window.XLSX;
+  await new Promise((res, rej) => {
+    const s = document.createElement("script");
+    s.src = "https://cdn.sheetjs.com/xlsx-0.20.0/package/dist/xlsx.full.min.js";
+    s.onload = res; s.onerror = rej;
+    document.head.appendChild(s);
+  });
+  return window.XLSX;
+}
+function pf_fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => {
+      const result = r.result;
+      const idx = result.indexOf(",");
+      resolve(idx >= 0 ? result.slice(idx + 1) : result);
+    };
+    r.onerror = reject;
+    r.readAsDataURL(file);
+  });
+}
+function pf_normalizarNombre(s) {
+  return String(s || "").replace(/\.pdf$/i, "").replace(/\s+/g, "_").toLowerCase().trim();
+}
+function pf_aplicarPlantilla(template, vars) {
+  if (!template) return "";
+  let out = template;
+  Object.entries(vars).forEach(([k, v]) => {
+    const val = (v == null) ? "" :
+      (typeof v === "number" ? v.toLocaleString("es-MX") : String(v));
+    out = out.replace(new RegExp("\\{" + k + "\\}", "g"), val);
+  });
+  return out;
+}
+
+// ─── EXTRAER PLANILLA PREFACTURAS EMITIDAS ───────────────────────────────────────────
+async function pf_extraerPlanilla(file) {
+  const XLSX = await pf_cargarXLSX();
+  const buf = await file.arrayBuffer();
+  const wb = XLSX.read(buf, { type: "array" });
+  const nombreHoja = wb.SheetNames.find(n =>
+    String(n).toUpperCase().includes("PREFACTURAS EMITIDAS")
+  );
+  if (!nombreHoja) throw new Error("El archivo no contiene la hoja 'PREFACTURAS EMITIDAS'.");
+  const ws = wb.Sheets[nombreHoja];
+  const todas = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null });
+  const filas = [];
+  for (let i = 2; i < todas.length; i++) {
+    const r = todas[i];
+    if (!r || r.every(c => c == null || String(c).trim() === "")) continue;
+    const nombrePdf = String(r[10] || "").trim();
+    if (!nombrePdf) continue;
+    filas.push({
+      n: r[0] ?? "",
+      transportista: String(r[1] || "").trim(),
+      rfc: String(r[2] || "").trim(),
+      ceco: String(r[3] || "").trim(),
+      operacion: String(r[4] || "").trim(),
+      periodo: String(r[5] || "").trim(),
+      neto: Number(r[6]) || 0,
+      iva: Number(r[7]) || 0,
+      bruto: Number(r[8]) || 0,
+      liquido: Number(r[9]) || 0,
+      nombrePdf,
+      correoToOriginal: String(r[11] || "").trim(),
+      ccOriginal: String(r[12] || "").trim(),
+      bccOriginal: String(r[13] || "").trim(),
+      supervisor: String(r[14] || "").trim(),
+      asuntoOriginal: String(r[15] || "").trim(),
+      cuerpoOriginal: String(r[16] || "").trim(),
+    });
+  }
+  return filas;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════════════
+// COMPONENTE ROOT: Modulo Prefacturas (4 sub-tabs)
+// ═══════════════════════════════════════════════════════════════════════════════════════
+function ModuloPrefacturasEnvio({ usuario }) {
+  const [subtab, setSubtab] = useState("envio");
+  const [transportistas, setTransportistas] = useState([]);
+  const [parametros, setParametros] = useState([]);
+  const [cargando, setCargando] = useState(true);
+
+  const cargarDatos = async () => {
+    setCargando(true);
+    try {
+      const [{ data: t }, { data: p }] = await Promise.all([
+        sb.from("prefacturas_transportistas_mx").select("*").order("nombre"),
+        sb.from("prefacturas_parametros_mx").select("*").order("ceco"),
+      ]);
+      setTransportistas(t || []);
+      setParametros(p || []);
+    } catch (e) {
+      console.error("Error cargando datos prefacturas:", e);
+    }
+    setCargando(false);
+  };
+
+  useEffect(() => { cargarDatos(); }, []);
+
+  const subtabs = [
+    { id: "envio",          label: "Envío masivo",     icon: "📨" },
+    { id: "transportistas", label: "Transportistas",   icon: "🚚" },
+    { id: "parametros",     label: "Parámetros / CECOs", icon: "⚙️" },
+    { id: "historial",      label: "Historial",        icon: "📋" },
+  ];
+
+  return (
+    <div style={{ padding: 0 }}>
+      {/* Sub-navegación interna */}
+      <div style={{ background: "#fff", borderBottom: "1px solid #e4e7ec", padding: "12px 24px" }}>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          {subtabs.map(t => (
+            <button key={t.id} onClick={() => setSubtab(t.id)}
+              style={{
+                padding: "8px 16px", borderRadius: 8,
+                border: `1px solid ${subtab === t.id ? "#1a3a6b" : "#e4e7ec"}`,
+                background: subtab === t.id ? "#1a3a6b" : "#fff",
+                color: subtab === t.id ? "#fff" : "#475569",
+                fontSize: 12, fontWeight: 600, cursor: "pointer",
+                fontFamily: "Geist, sans-serif",
+              }}>
+              {t.icon} {t.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {cargando ? (
+        <div className="loading">Cargando configuración de prefacturas...</div>
+      ) : (
+        <>
+          {subtab === "envio"          && <PrefEnvioMasivo transportistas={transportistas} parametros={parametros} usuario={usuario} />}
+          {subtab === "transportistas" && <PrefTransportistas data={transportistas} onChange={cargarDatos} />}
+          {subtab === "parametros"     && <PrefParametros data={parametros} onChange={cargarDatos} />}
+          {subtab === "historial"      && <PrefHistorial />}
+        </>
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════════════
+// SUB-TAB 1: ENVÍO MASIVO
+// Layout: arriba la zona de drag-and-drop (ventana principal), debajo la planilla,
+// luego indicadores y tabla de cruce.
+// ═══════════════════════════════════════════════════════════════════════════════════════
+function PrefEnvioMasivo({ transportistas, parametros, usuario }) {
+  const [pdfs, setPdfs] = useState([]);
+  const [filas, setFilas] = useState([]);
+  const [planillaNombre, setPlanillaNombre] = useState("");
+  const [cargandoPlanilla, setCargandoPlanilla] = useState(false);
+  const [error, setError] = useState("");
+  const [enviando, setEnviando] = useState(false);
+  const [progreso, setProgreso] = useState({ actual: 0, total: 0 });
+  const [editFila, setEditFila] = useState(null);
+  const [logFinal, setLogFinal] = useState(null);
+  const [arrastrando, setArrastrando] = useState(false);
+  const pdfInputRef = useRef(null);
+  const planillaInputRef = useRef(null);
+
+  // Lookups por CECO y por transportista
+  const paramsByCeco = useMemo(() => {
+    const m = new Map();
+    parametros.forEach(p => m.set(String(p.ceco).toUpperCase(), p));
+    return m;
+  }, [parametros]);
+  const transByNombre = useMemo(() => {
+    const m = new Map();
+    transportistas.forEach(t => m.set(String(t.nombre).toUpperCase().trim(), t));
+    return m;
+  }, [transportistas]);
+
+  // ─── Handlers de carga ───────────────────────────────────────────────────────
+  const onPdfsDrop = (fileList) => {
+    setError("");
+    const archivos = Array.from(fileList || []).filter(f => /\.pdf$/i.test(f.name) && f.size > 0);
+    if (archivos.length === 0) {
+      setError("No se detectaron archivos PDF válidos.");
+      return;
+    }
+    const nuevos = archivos.map(f => ({
+      file: f, nombre: f.name, nombreNorm: pf_normalizarNombre(f.name), size: f.size,
+    }));
+    setPdfs(prev => {
+      const map = new Map();
+      [...prev, ...nuevos].forEach(p => map.set(p.nombreNorm, p));
+      return Array.from(map.values()).sort((a, b) => a.nombre.localeCompare(b.nombre));
+    });
+  };
+
+  const onPlanilla = async (file) => {
+    if (!file) return;
+    setError("");
+    setCargandoPlanilla(true);
+    try {
+      const fs = await pf_extraerPlanilla(file);
+      if (fs.length === 0) {
+        setError("La hoja PREFACTURAS EMITIDAS no tiene filas con datos.");
+        return;
+      }
+      setPlanillaNombre(file.name);
+      // Para cada fila, resolvemos correos y plantillas DESDE SUPABASE
+      // (no usamos los del Excel — siempre tomamos la fuente de verdad)
+      setFilas(fs.map((f, i) => {
+        const trans = transByNombre.get(String(f.transportista).toUpperCase().trim());
+        const param = paramsByCeco.get(String(f.ceco).toUpperCase());
+
+        // Variables para plantillas
+        const vars = {
+          TRANSPORTISTA: f.transportista,
+          CECO: f.ceco,
+          PERIODO: f.periodo,
+          RFC: f.rfc,
+          OPERACION: f.operacion,
+          SUPERVISOR: param?.supervisor || f.supervisor || "",
+          NETO: f.neto,
+          IVA: f.iva,
+          BRUTO: f.bruto,
+          LIQUIDO: f.liquido,
+        };
+
+        const asunto = pf_aplicarPlantilla(param?.asunto_plantilla || f.asuntoOriginal || "", vars);
+        const cuerpo = pf_aplicarPlantilla(param?.cuerpo_plantilla || f.cuerpoOriginal || "", vars);
+
+        // Correos: priorizamos Supabase, si falta usamos los del Excel como fallback
+        const correoTo = trans?.correo_to || f.correoToOriginal;
+        const cc = trans?.correo_cc || f.ccOriginal;
+        const bcc = trans?.correo_bcc || f.bccOriginal;
+
+        return {
+          ...f,
+          idx: i,
+          editTo: correoTo,
+          editCc: cc,
+          editBcc: bcc,
+          editAsunto: asunto,
+          editCuerpo: cuerpo,
+          fuenteCorreoTo: trans ? "Supabase" : (f.correoToOriginal ? "Excel" : "vacío"),
+          fuenteAsunto: param?.asunto_plantilla ? "Supabase" : (f.asuntoOriginal ? "Excel" : "vacío"),
+          estadoEnvio: null,
+          motivoEnvio: "",
+          tsEnvio: null,
+        };
+      }));
+      setLogFinal(null);
+    } catch (e) {
+      setError("Error leyendo planilla: " + e.message);
+    } finally {
+      setCargandoPlanilla(false);
+    }
+  };
+
+  // ─── Cruce reactivo PDF ↔ planilla ───────────────────────────────────────────
+  const filasConCruce = useMemo(() => {
+    const pdfMap = new Map(pdfs.map(p => [p.nombreNorm, p]));
+    return filas.map(f => {
+      const pdfMatch = pdfMap.get(pf_normalizarNombre(f.nombrePdf));
+      const valTo = pf_limpiarLista(f.editTo);
+      const valCc = pf_limpiarLista(f.editCc);
+      const valBcc = pf_limpiarLista(f.editBcc);
+      const tieneTo = valTo.limpia !== "";
+      const errores = [];
+      if (!pdfMatch) errores.push("PDF no encontrado");
+      if (!tieneTo) errores.push("Sin destinatario");
+      else if (!valTo.valida) errores.push("TO inválido");
+      if (f.editCc && !valCc.valida) errores.push("CC inválido");
+      if (f.editBcc && !valBcc.valida) errores.push("BCC inválido");
+      return { ...f, pdfMatch, errores, listo: errores.length === 0 };
+    });
+  }, [filas, pdfs]);
+
+  const totalListos = filasConCruce.filter(f => f.listo).length;
+  const totalConErrores = filasConCruce.length - totalListos;
+  const pdfsHuerfanos = useMemo(() => {
+    const nombres = new Set(filas.map(f => pf_normalizarNombre(f.nombrePdf)));
+    return pdfs.filter(p => !nombres.has(p.nombreNorm));
+  }, [pdfs, filas]);
+
+  const guardarEdicion = (idx, campos) => {
+    setFilas(prev => prev.map((f, i) => i === idx ? { ...f, ...campos } : f));
+    setEditFila(null);
+  };
+  const eliminarPdf = (nombreNorm) => setPdfs(prev => prev.filter(p => p.nombreNorm !== nombreNorm));
+  const limpiarTodo = () => {
+    if (!confirm("¿Limpiar PDFs, planilla y resultados? Esta acción no se puede deshacer.")) return;
+    setPdfs([]); setFilas([]); setPlanillaNombre(""); setError(""); setLogFinal(null);
+    setProgreso({ actual: 0, total: 0 });
+  };
+
+  // ─── Envío masivo ────────────────────────────────────────────────────────────
+  const enviarMasivo = async () => {
+    const enviables = filasConCruce.filter(f => f.listo);
+    if (enviables.length === 0) {
+      alert("No hay filas listas para enviar. Revisá los errores en la tabla.");
+      return;
+    }
+    if (!confirm(
+      `Se enviarán ${enviables.length} correo(s) desde la cuenta configurada en n8n.\n\n` +
+      `${totalConErrores > 0 ? `Hay ${totalConErrores} fila(s) con errores que NO se enviarán.\n\n` : ""}` +
+      `¿Confirmás el envío?`
+    )) return;
+
+    setEnviando(true);
+    setLogFinal(null);
+    setProgreso({ actual: 0, total: enviables.length });
+
+    let okCount = 0, errCount = 0;
+    const inicio = Date.now();
+    const logsParaSupabase = [];
+
+    for (let i = 0; i < enviables.length; i++) {
+      const f = enviables[i];
+      setProgreso({ actual: i + 1, total: enviables.length });
+      setFilas(prev => prev.map(x => x.idx === f.idx
+        ? { ...x, estadoEnvio: "enviando", motivoEnvio: "", tsEnvio: null }
+        : x));
+
+      let resultado = { ok: false, motivo: "", messageId: "" };
+      try {
+        const pdfBase64 = await pf_fileToBase64(f.pdfMatch.file);
+        const payload = {
+          idEnvio: `${Date.now()}-${f.idx}`,
+          transportista: f.transportista,
+          ceco: f.ceco,
+          rfc: f.rfc,
+          operacion: f.operacion,
+          periodo: f.periodo,
+          correoTo: pf_limpiarLista(f.editTo).limpia,
+          cc: pf_limpiarLista(f.editCc).limpia,
+          bcc: pf_limpiarLista(f.editBcc).limpia,
+          asunto: f.editAsunto || `Prefactura ${f.ceco} — ${f.periodo}`,
+          cuerpo: f.editCuerpo || "",
+          nombrePdf: f.nombrePdf.endsWith(".pdf") ? f.nombrePdf : f.nombrePdf + ".pdf",
+          pdfBase64,
+          montos: { neto: f.neto, iva: f.iva, bruto: f.bruto, liquido: f.liquido },
+        };
+        const resp = await fetch(PREFACTURAS_WEBHOOK, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        let data = {};
+        try { data = await resp.json(); } catch { /* no-json */ }
+        if (resp.ok && data.ok !== false) {
+          resultado = { ok: true, motivo: data.messageId || "Enviado", messageId: data.messageId || "" };
+          okCount++;
+        } else {
+          resultado = { ok: false, motivo: data.error || `HTTP ${resp.status}`, messageId: "" };
+          errCount++;
+        }
+      } catch (e) {
+        resultado = { ok: false, motivo: "Error red: " + e.message, messageId: "" };
+        errCount++;
+      }
+
+      const tsAhora = new Date().toISOString();
+      setFilas(prev => prev.map(x => x.idx === f.idx
+        ? {
+            ...x,
+            estadoEnvio: resultado.ok ? "ok" : "fallido",
+            motivoEnvio: resultado.motivo,
+            tsEnvio: tsAhora,
+          }
+        : x));
+
+      logsParaSupabase.push({
+        fecha_envio: tsAhora,
+        transportista: f.transportista,
+        ceco: f.ceco,
+        periodo: f.periodo,
+        correo_to: pf_limpiarLista(f.editTo).limpia,
+        nombre_pdf: f.nombrePdf,
+        estado: resultado.ok ? "enviado" : "fallido",
+        motivo: resultado.motivo,
+        message_id: resultado.messageId,
+        usuario: usuario?.email || "—",
+      });
+
+      if (i < enviables.length - 1) {
+        await new Promise(r => setTimeout(r, PAUSA_ENTRE_ENVIOS_MS));
+      }
+    }
+
+    // Guardar logs en Supabase (no bloquea si falla)
+    try {
+      if (logsParaSupabase.length > 0) {
+        await sb.from("prefacturas_envios_log").insert(logsParaSupabase);
+      }
+    } catch (e) {
+      console.error("Error guardando log en Supabase:", e);
+    }
+
+    const segs = Math.round((Date.now() - inicio) / 1000);
+    setLogFinal({ ok: okCount, err: errCount, omitidos: totalConErrores, segs, fecha: new Date() });
+    setEnviando(false);
+    setProgreso({ actual: 0, total: 0 });
+  };
+
+  // ─── Descargar log Excel ────────────────────────────────────────────────────
+  const descargarLog = async () => {
+    const detalle = [
+      ["N°", "Transportista", "RFC", "CECO", "Operación", "Período",
+       "NETO", "IVA", "BRUTO", "LÍQUIDO", "Nombre PDF",
+       "Correo TO", "CC", "BCC", "Asunto",
+       "Estado envío", "Motivo / MessageID", "Timestamp"],
+      ...filasConCruce.map(f => [
+        f.n, f.transportista, f.rfc, f.ceco, f.operacion, f.periodo,
+        f.neto, f.iva, f.bruto, f.liquido, f.nombrePdf,
+        f.editTo, f.editCc, f.editBcc, f.editAsunto,
+        f.estadoEnvio === "ok" ? "ENVIADO" :
+          f.estadoEnvio === "fallido" ? "FALLIDO" :
+          f.errores.length > 0 ? "OMITIDO: " + f.errores.join(", ") : "PENDIENTE",
+        f.motivoEnvio || "",
+        f.tsEnvio ? new Date(f.tsEnvio).toLocaleString("es-MX") : "",
+      ]),
+    ];
+    const resumen = [
+      ["Reporte de envío de prefacturas MX"],
+      ["Fecha", new Date().toLocaleString("es-MX")],
+      ["Usuario", usuario?.nombre || usuario?.email || "—"],
+      ["Planilla", planillaNombre || "—"],
+      ["PDFs cargados", pdfs.length],
+      ["Filas en planilla", filas.length],
+      ["Enviados OK", filasConCruce.filter(f => f.estadoEnvio === "ok").length],
+      ["Fallidos", filasConCruce.filter(f => f.estadoEnvio === "fallido").length],
+      ["Pendientes/Omitidos", filasConCruce.filter(f => !f.estadoEnvio).length],
+    ];
+    await descargarExcelMultihoja(
+      [{ nombre: "Resumen", datos: resumen }, { nombre: "Detalle", datos: detalle }],
+      "log_prefacturas_envio_mx"
+    );
+  };
+
+  return (
+    <div className="pg" style={{ maxWidth: 1300 }}>
+      <div style={{ marginBottom: 16 }}>
+        <div className="sec-title">Prefacturas · Envío Masivo</div>
+        <div className="sec-sub">
+          Arrastrá los PDFs generados por la macro Excel + la planilla PREFACTURAS EMITIDAS.
+          El Brain hace el cruce automático, podés editar antes de enviar, y dispara el envío masivo vía n8n.
+        </div>
+      </div>
+
+      {error && (
+        <div style={{
+          background: "#fee2e2", border: "1px solid #fca5a5", color: "#991b1b",
+          padding: "10px 14px", borderRadius: 8, marginBottom: 14, fontSize: 13,
+        }}>⚠ {error}</div>
+      )}
+
+      {/* ═══ ZONA PRINCIPAL: DRAG-AND-DROP DE PDFs ═══════════════════════════ */}
+      <div
+        onDragOver={e => { e.preventDefault(); e.stopPropagation(); setArrastrando(true); }}
+        onDragLeave={e => { e.preventDefault(); e.stopPropagation(); setArrastrando(false); }}
+        onDrop={e => {
+          e.preventDefault(); e.stopPropagation();
+          setArrastrando(false);
+          onPdfsDrop(e.dataTransfer.files);
+        }}
+        onClick={() => pdfInputRef.current?.click()}
+        style={{
+          border: `3px dashed ${arrastrando ? "#F47B20" : "#1a3a6b"}`,
+          borderRadius: 16,
+          padding: "48px 24px",
+          textAlign: "center",
+          cursor: "pointer",
+          background: arrastrando ? "#fff7ed" : "#f8fafc",
+          transition: "all 0.2s",
+          marginBottom: 16,
+        }}
+      >
+        <div style={{ fontSize: 56, marginBottom: 12 }}>📄</div>
+        <div style={{ fontSize: 18, color: "#1a3a6b", fontWeight: 700, marginBottom: 6 }}>
+          {arrastrando ? "Soltá los PDFs aquí" : "Arrastrá los PDFs de prefacturas"}
+        </div>
+        <div style={{ fontSize: 13, color: "#64748b" }}>
+          o hacé clic para seleccionarlos desde tu PC · sin límite de cantidad
+        </div>
+        {pdfs.length > 0 && (
+          <div style={{ marginTop: 20, padding: "10px 16px", background: "#fff",
+            border: "1px solid #1a3a6b", borderRadius: 10, display: "inline-flex",
+            alignItems: "center", gap: 12 }}>
+            <span style={{ fontSize: 14, color: "#1a3a6b", fontWeight: 700 }}>
+              ✓ {pdfs.length} PDF{pdfs.length === 1 ? "" : "s"} cargado{pdfs.length === 1 ? "" : "s"}
+            </span>
+            <button
+              onClick={e => { e.stopPropagation(); setPdfs([]); }}
+              style={{
+                background: "#fee2e2", border: "none", borderRadius: 6,
+                padding: "4px 10px", fontSize: 11, color: "#991b1b",
+                cursor: "pointer", fontWeight: 600, fontFamily: "Geist, sans-serif",
+              }}>Quitar todos</button>
+          </div>
+        )}
+        <input
+          ref={pdfInputRef} type="file" accept=".pdf" multiple
+          style={{ display: "none" }}
+          onChange={e => { onPdfsDrop(e.target.files); e.target.value = ""; }}
+        />
+      </div>
+
+      {/* ═══ PLANILLA ═══════════════════════════════════════════════════════ */}
+      <div className="form-card">
+        <div className="form-title">📊 Planilla PREFACTURAS EMITIDAS</div>
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <button
+            className="btn-blue"
+            onClick={() => planillaInputRef.current?.click()}
+            disabled={cargandoPlanilla}
+            style={{ padding: "9px 16px", fontSize: 13 }}>
+            {cargandoPlanilla ? "Procesando..." : (planillaNombre ? "🔄 Cambiar planilla" : "📂 Seleccionar archivo Excel")}
+          </button>
+          <input
+            ref={planillaInputRef} type="file" accept=".xlsm,.xlsx,.xls"
+            style={{ display: "none" }}
+            onChange={e => { onPlanilla(e.target.files?.[0]); e.target.value = ""; }}
+          />
+          {planillaNombre && (
+            <div style={{ fontSize: 12, color: "#475569" }}>
+              ✓ <strong>{planillaNombre}</strong> · {filas.length} fila{filas.length === 1 ? "" : "s"}
+            </div>
+          )}
+        </div>
+        <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 8 }}>
+          Subí el .xlsm completo o un .xlsx con la hoja "PREFACTURAS EMITIDAS". El Brain usará los correos
+          y plantillas desde Supabase, no desde el Excel.
+        </div>
+      </div>
+
+      {/* ═══ INDICADORES ════════════════════════════════════════════════════ */}
+      {filas.length > 0 && (
+        <div style={{
+          display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+          gap: 10, marginBottom: 14,
+        }}>
+          <IndicadorPF label="Total filas" valor={filas.length} color="#1a3a6b" />
+          <IndicadorPF label="Listas para enviar" valor={totalListos} color="#16a34a" />
+          <IndicadorPF label="Con errores" valor={totalConErrores} color="#dc2626" />
+          <IndicadorPF label="PDFs cargados" valor={pdfs.length} color="#0891b2" />
+        </div>
+      )}
+
+      {/* ═══ TABLA DE CRUCE ═════════════════════════════════════════════════ */}
+      {filas.length > 0 && (
+        <div className="form-card" style={{ padding: 0, overflow: "hidden" }}>
+          <div style={{
+            padding: "12px 16px", borderBottom: "1px solid #e4e7ec",
+            display: "flex", justifyContent: "space-between", alignItems: "center",
+            flexWrap: "wrap", gap: 8,
+          }}>
+            <div className="form-title" style={{ margin: 0 }}>Revisión y envío</div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              {(logFinal || filasConCruce.some(f => f.estadoEnvio)) && (
+                <BotonDescargarExcel onClick={descargarLog} label="Descargar log Excel" />
+              )}
+              <button
+                onClick={enviarMasivo}
+                disabled={enviando || totalListos === 0}
+                className="btn-orange"
+                style={{ padding: "9px 18px", fontSize: 13 }}>
+                {enviando
+                  ? `Enviando ${progreso.actual}/${progreso.total}...`
+                  : `📨 Enviar ${totalListos} correo${totalListos === 1 ? "" : "s"}`
+                }
+              </button>
+              <button onClick={limpiarTodo} disabled={enviando}
+                style={{
+                  background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10,
+                  padding: "9px 14px", fontSize: 12, color: "#475569", cursor: "pointer",
+                  fontFamily: "Geist, sans-serif", fontWeight: 600,
+                }}>Limpiar todo</button>
+            </div>
+          </div>
+
+          {enviando && (
+            <div style={{ padding: "10px 16px", borderBottom: "1px solid #e4e7ec", background: "#fffbeb" }}>
+              <div style={{ fontSize: 12, color: "#92400e", marginBottom: 6, fontWeight: 600 }}>
+                Enviando {progreso.actual} de {progreso.total}...
+              </div>
+              <div style={{ height: 8, background: "#fef3c7", borderRadius: 4, overflow: "hidden" }}>
+                <div style={{
+                  width: `${(progreso.actual / progreso.total) * 100}%`,
+                  height: "100%", background: "#F47B20", transition: "width 0.3s",
+                }} />
+              </div>
+            </div>
+          )}
+
+          {logFinal && !enviando && (
+            <div style={{
+              padding: "10px 16px", borderBottom: "1px solid #e4e7ec",
+              background: logFinal.err === 0 ? "#f0fdf4" : "#fffbeb",
+            }}>
+              <div style={{
+                fontSize: 13, fontWeight: 600,
+                color: logFinal.err === 0 ? "#166534" : "#92400e",
+              }}>
+                {logFinal.err === 0 ? "✓" : "⚠"} Envío finalizado en {logFinal.segs}s ·{" "}
+                {logFinal.ok} enviado{logFinal.ok === 1 ? "" : "s"} ·{" "}
+                {logFinal.err} fallido{logFinal.err === 1 ? "" : "s"}
+                {logFinal.omitidos > 0 && ` · ${logFinal.omitidos} omitido${logFinal.omitidos === 1 ? "" : "s"}`}
+              </div>
+            </div>
+          )}
+
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+              <thead>
+                <tr style={{ background: "#f8fafc", borderBottom: "1px solid #e4e7ec" }}>
+                  <th style={pf_th()}>Estado</th>
+                  <th style={pf_th()}>Transportista</th>
+                  <th style={pf_th()}>CECO</th>
+                  <th style={pf_th()}>Correo TO</th>
+                  <th style={pf_th()}>CC</th>
+                  <th style={pf_th()}>PDF</th>
+                  <th style={pf_th("right")}>LÍQUIDO</th>
+                  <th style={pf_th()}>Acción</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filasConCruce.map((f) => (
+                  <FilaPrefactura
+                    key={f.idx}
+                    fila={f}
+                    enEdicion={editFila === f.idx}
+                    onEdit={() => setEditFila(f.idx)}
+                    onGuardar={(campos) => guardarEdicion(f.idx, campos)}
+                    onCancelar={() => setEditFila(null)}
+                    enviando={enviando}
+                  />
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* ═══ PDFs huérfanos ═════════════════════════════════════════════════ */}
+      {pdfsHuerfanos.length > 0 && filas.length > 0 && (
+        <div className="form-card" style={{ borderColor: "#fde68a", background: "#fffbeb" }}>
+          <div className="form-title" style={{ color: "#92400e" }}>
+            ⚠ {pdfsHuerfanos.length} PDF{pdfsHuerfanos.length === 1 ? "" : "s"} sin coincidencia en la planilla
+          </div>
+          <div style={{ fontSize: 12, color: "#92400e", marginBottom: 10 }}>
+            Estos archivos no se enviarán porque su nombre no coincide con ninguna fila de PREFACTURAS EMITIDAS:
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+            {pdfsHuerfanos.map(p => (
+              <div key={p.nombreNorm} style={{
+                background: "#fff", border: "1px solid #fde68a", borderRadius: 6,
+                padding: "4px 10px", fontSize: 11, color: "#78350f",
+                display: "flex", alignItems: "center", gap: 6,
+              }}>
+                <span>{p.nombre}</span>
+                <button onClick={() => eliminarPdf(p.nombreNorm)}
+                  style={{
+                    background: "transparent", border: "none", cursor: "pointer",
+                    color: "#dc2626", fontSize: 13, padding: 0, lineHeight: 1,
+                  }}
+                  title="Quitar este PDF">×</button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Helpers de estilo de tabla ─────────────────────────────────────────────────
+function pf_th(align = "left") {
+  return {
+    padding: "8px 10px", textAlign: align, fontSize: 10,
+    color: "#64748b", fontWeight: 600, textTransform: "uppercase",
+    letterSpacing: 0.3, whiteSpace: "nowrap",
+  };
+}
+function pf_td(align = "left") {
+  return {
+    padding: "8px 10px", textAlign: align, fontSize: 12,
+    color: "#1f2937", borderBottom: "1px solid #f1f5f9", verticalAlign: "top",
+  };
+}
+
+function IndicadorPF({ label, valor, color }) {
+  return (
+    <div style={{
+      background: "#fff", border: "0.5px solid #e4e7ec", borderRadius: 10,
+      padding: "12px 14px",
+    }}>
+      <div style={{
+        fontSize: 10, color: "#94a3b8", textTransform: "uppercase",
+        letterSpacing: 0.5, marginBottom: 4, fontWeight: 600,
+      }}>{label}</div>
+      <div style={{ fontSize: 22, fontWeight: 700, color }}>{valor}</div>
+    </div>
+  );
+}
+
+// ─── Fila individual con edición inline ─────────────────────────────────────────
+function FilaPrefactura({ fila, enEdicion, onEdit, onGuardar, onCancelar, enviando }) {
+  const [to, setTo] = useState(fila.editTo);
+  const [cc, setCc] = useState(fila.editCc);
+  const [bcc, setBcc] = useState(fila.editBcc);
+  const [asunto, setAsunto] = useState(fila.editAsunto);
+  const [cuerpo, setCuerpo] = useState(fila.editCuerpo);
+
+  useEffect(() => {
+    if (enEdicion) {
+      setTo(fila.editTo); setCc(fila.editCc); setBcc(fila.editBcc);
+      setAsunto(fila.editAsunto); setCuerpo(fila.editCuerpo);
+    }
+  }, [enEdicion, fila.editTo, fila.editCc, fila.editBcc, fila.editAsunto, fila.editCuerpo]);
+
+  let bgFila = "transparent";
+  if (fila.estadoEnvio === "ok") bgFila = "#f0fdf4";
+  else if (fila.estadoEnvio === "fallido") bgFila = "#fef2f2";
+  else if (fila.estadoEnvio === "enviando") bgFila = "#fffbeb";
+  else if (!fila.listo) bgFila = "#fef9c3";
+
+  if (enEdicion) {
+    return (
+      <tr style={{ background: "#eff6ff" }}>
+        <td colSpan={8} style={{ padding: 14, borderBottom: "2px solid #1a3a6b" }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: "#1a3a6b", marginBottom: 10 }}>
+            ✏️ Editando: {fila.transportista} · {fila.ceco} · {fila.periodo}
+          </div>
+          <div className="two-col" style={{ marginBottom: 10 }}>
+            <div>
+              <div className="field-label">Correo TO *</div>
+              <input value={to} onChange={e => setTo(e.target.value)}
+                placeholder="correo@dominio.com (separá varios con ;)" />
+            </div>
+            <div>
+              <div className="field-label">CC</div>
+              <input value={cc} onChange={e => setCc(e.target.value)} placeholder="opcional" />
+            </div>
+          </div>
+          <div className="field-row">
+            <div className="field-label">BCC</div>
+            <input value={bcc} onChange={e => setBcc(e.target.value)} placeholder="opcional" />
+          </div>
+          <div className="field-row">
+            <div className="field-label">Asunto</div>
+            <input value={asunto} onChange={e => setAsunto(e.target.value)} />
+          </div>
+          <div className="field-row">
+            <div className="field-label">Cuerpo (variables ya reemplazadas)</div>
+            <textarea value={cuerpo} onChange={e => setCuerpo(e.target.value)} style={{ height: 140 }} />
+          </div>
+          <div style={{ fontSize: 11, color: "#64748b", marginBottom: 10 }}>
+            💡 Los cambios solo aplican a este envío. Para editar plantillas permanentes, andá a "Parámetros / CECOs".
+          </div>
+          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+            <button onClick={onCancelar}
+              style={{
+                background: "#fff", border: "1px solid #e4e7ec", borderRadius: 8,
+                padding: "7px 14px", fontSize: 12, color: "#475569", cursor: "pointer",
+                fontFamily: "Geist, sans-serif", fontWeight: 600,
+              }}>Cancelar</button>
+            <button onClick={() => onGuardar({
+              editTo: to, editCc: cc, editBcc: bcc, editAsunto: asunto, editCuerpo: cuerpo,
+            })} className="btn-blue" style={{ padding: "7px 14px", fontSize: 12 }}>
+              Guardar cambios
+            </button>
+          </div>
+        </td>
+      </tr>
+    );
+  }
+
+  return (
+    <tr style={{ background: bgFila }}>
+      <td style={pf_td()}><EstadoBadge fila={fila} /></td>
+      <td style={pf_td()}>
+        <div style={{ fontWeight: 600 }}>{fila.transportista}</div>
+        <div style={{ fontSize: 10, color: "#94a3b8" }}>{fila.rfc}</div>
+      </td>
+      <td style={pf_td()}>
+        <span style={{
+          background: "#eef2ff", color: "#1a3a6b", padding: "2px 8px",
+          borderRadius: 4, fontSize: 11, fontWeight: 600,
+        }}>{fila.ceco}</span>
+      </td>
+      <td style={pf_td()}>
+        <div style={{ wordBreak: "break-all", maxWidth: 220 }}>
+          {fila.editTo || <em style={{ color: "#dc2626" }}>vacío</em>}
+        </div>
+        <div style={{ fontSize: 9, color: "#94a3b8", marginTop: 2 }}>
+          fuente: {fila.fuenteCorreoTo}
+        </div>
+      </td>
+      <td style={pf_td()}>
+        <div style={{ wordBreak: "break-all", maxWidth: 200, fontSize: 11, color: "#64748b" }}>
+          {fila.editCc || "—"}
+        </div>
+      </td>
+      <td style={pf_td()}>
+        {fila.pdfMatch
+          ? <span style={{ color: "#16a34a", fontSize: 14 }} title={fila.pdfMatch.nombre}>✓</span>
+          : <span style={{ color: "#dc2626", fontSize: 14 }} title={"Falta: " + fila.nombrePdf}>✗</span>
+        }
+      </td>
+      <td style={pf_td("right")}>
+        <span style={{ fontVariantNumeric: "tabular-nums" }}>
+          ${fila.liquido.toLocaleString("es-MX")}
+        </span>
+      </td>
+      <td style={pf_td()}>
+        <button onClick={onEdit}
+          disabled={enviando || fila.estadoEnvio === "ok"}
+          style={{
+            background: "transparent", border: "1px solid #e4e7ec", borderRadius: 6,
+            padding: "4px 10px", fontSize: 11, color: "#1a3a6b", cursor: "pointer",
+            fontFamily: "Geist, sans-serif", fontWeight: 600,
+            opacity: (enviando || fila.estadoEnvio === "ok") ? 0.4 : 1,
+          }}>Editar</button>
+      </td>
+    </tr>
+  );
+}
+
+function EstadoBadge({ fila }) {
+  if (fila.estadoEnvio === "ok") {
+    return (
+      <div title={fila.motivoEnvio + (fila.tsEnvio ? " · " + new Date(fila.tsEnvio).toLocaleTimeString("es-MX") : "")}>
+        <span style={{
+          background: "#dcfce7", color: "#166534", padding: "3px 8px",
+          borderRadius: 20, fontSize: 10, fontWeight: 700,
+        }}>✓ ENVIADO</span>
+      </div>
+    );
+  }
+  if (fila.estadoEnvio === "fallido") {
+    return (
+      <div title={fila.motivoEnvio}>
+        <span style={{
+          background: "#fee2e2", color: "#991b1b", padding: "3px 8px",
+          borderRadius: 20, fontSize: 10, fontWeight: 700,
+        }}>✗ FALLIDO</span>
+        <div style={{ fontSize: 9, color: "#991b1b", marginTop: 2, maxWidth: 160 }}>
+          {fila.motivoEnvio?.slice(0, 60)}{fila.motivoEnvio?.length > 60 ? "..." : ""}
+        </div>
+      </div>
+    );
+  }
+  if (fila.estadoEnvio === "enviando") {
+    return (
+      <span style={{
+        background: "#fef3c7", color: "#92400e", padding: "3px 8px",
+        borderRadius: 20, fontSize: 10, fontWeight: 700,
+      }}>⏳ ENVIANDO</span>
+    );
+  }
+  if (!fila.listo) {
+    return (
+      <div title={fila.errores.join(" · ")}>
+        <span style={{
+          background: "#fef3c7", color: "#92400e", padding: "3px 8px",
+          borderRadius: 20, fontSize: 10, fontWeight: 700,
+        }}>⚠ {fila.errores[0]}</span>
+      </div>
+    );
+  }
+  return (
+    <span style={{
+      background: "#dbeafe", color: "#1e40af", padding: "3px 8px",
+      borderRadius: 20, fontSize: 10, fontWeight: 700,
+    }}>LISTO</span>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════════════
+// SUB-TAB 2: TRANSPORTISTAS (CRUD)
+// ═══════════════════════════════════════════════════════════════════════════════════════
+function PrefTransportistas({ data, onChange }) {
+  const [busqueda, setBusqueda] = useState("");
+  const [filtroEstado, setFiltroEstado] = useState("todos");
+  const [editando, setEditando] = useState(null); // null | "nuevo" | id
+  const [guardando, setGuardando] = useState(false);
+
+  const filtrados = useMemo(() => {
+    let r = [...data];
+    if (filtroEstado !== "todos") r = r.filter(t => (t.estado || "").toLowerCase() === filtroEstado);
+    if (busqueda.trim()) {
+      const q = busqueda.toLowerCase();
+      r = r.filter(t =>
+        (t.nombre || "").toLowerCase().includes(q) ||
+        (t.rfc || "").toLowerCase().includes(q) ||
+        (t.correo_to || "").toLowerCase().includes(q)
+      );
+    }
+    return r;
+  }, [data, busqueda, filtroEstado]);
+
+  const handleGuardar = async (form) => {
+    if (!form.nombre.trim()) { alert("El nombre es obligatorio."); return; }
+    setGuardando(true);
+    try {
+      const payload = {
+        nombre: form.nombre.trim(),
+        rfc: form.rfc.trim() || null,
+        estado: form.estado || "Activo",
+        correo_to: form.correo_to.trim() || null,
+        correo_cc: form.correo_cc.trim() || null,
+        correo_bcc: form.correo_bcc.trim() || null,
+        notas: form.notas.trim() || null,
+        updated_at: new Date().toISOString(),
+      };
+      if (editando === "nuevo") {
+        const { error } = await sb.from("prefacturas_transportistas_mx").insert(payload);
+        if (error) throw error;
+      } else {
+        const { error } = await sb.from("prefacturas_transportistas_mx").update(payload).eq("id", editando);
+        if (error) throw error;
+      }
+      setEditando(null);
+      await onChange();
+    } catch (e) {
+      alert("Error guardando: " + e.message);
+    }
+    setGuardando(false);
+  };
+
+  const handleEliminar = async (id, nombre) => {
+    if (!confirm(`¿Eliminar al transportista "${nombre}"?\n\nEsta acción no se puede deshacer.`)) return;
+    try {
+      const { error } = await sb.from("prefacturas_transportistas_mx").delete().eq("id", id);
+      if (error) throw error;
+      await onChange();
+    } catch (e) {
+      alert("Error eliminando: " + e.message);
+    }
+  };
+
+  const filaEdicion = editando === "nuevo"
+    ? { nombre: "", rfc: "", estado: "Activo", correo_to: "", correo_cc: "", correo_bcc: "", notas: "" }
+    : (editando ? data.find(t => t.id === editando) : null);
+
+  return (
+    <div className="pg" style={{ maxWidth: 1300 }}>
+      <div style={{ marginBottom: 16, display: "flex", justifyContent: "space-between", alignItems: "flex-end", flexWrap: "wrap", gap: 10 }}>
+        <div>
+          <div className="sec-title">Transportistas MX</div>
+          <div className="sec-sub">Editá nombres, RFC y correos. Esta es la fuente de verdad para el envío.</div>
+        </div>
+        <button className="btn-orange" onClick={() => setEditando("nuevo")} style={{ padding: "9px 16px", fontSize: 13 }}>
+          + Nuevo transportista
+        </button>
+      </div>
+
+      {/* Filtros */}
+      <div className="form-card" style={{ padding: "12px 16px" }}>
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <input
+            placeholder="Buscar por nombre, RFC o correo..."
+            value={busqueda}
+            onChange={e => setBusqueda(e.target.value)}
+            style={{ flex: "1 1 280px", maxWidth: 400 }}
+          />
+          <select value={filtroEstado} onChange={e => setFiltroEstado(e.target.value)} style={{ width: 160 }}>
+            <option value="todos">Todos los estados</option>
+            <option value="activo">Activo</option>
+            <option value="inactivo">Inactivo</option>
+          </select>
+          <div style={{ fontSize: 12, color: "#64748b", marginLeft: "auto" }}>
+            {filtrados.length} de {data.length} transportistas
+          </div>
+        </div>
+      </div>
+
+      {/* Tabla */}
+      <div className="form-card" style={{ padding: 0, overflow: "hidden" }}>
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+            <thead>
+              <tr style={{ background: "#f8fafc", borderBottom: "1px solid #e4e7ec" }}>
+                <th style={pf_th()}>Nombre</th>
+                <th style={pf_th()}>RFC</th>
+                <th style={pf_th()}>Estado</th>
+                <th style={pf_th()}>Correo TO</th>
+                <th style={pf_th()}>CC</th>
+                <th style={pf_th()}>BCC</th>
+                <th style={pf_th()}>Acciones</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtrados.length === 0 ? (
+                <tr><td colSpan={7} style={{ padding: 30, textAlign: "center", color: "#94a3b8" }}>
+                  Sin resultados. Probá quitar filtros o agregar un nuevo transportista.
+                </td></tr>
+              ) : filtrados.map(t => (
+                <tr key={t.id}>
+                  <td style={pf_td()}>
+                    <div style={{ fontWeight: 600 }}>{t.nombre}</div>
+                    {t.notas && <div style={{ fontSize: 10, color: "#94a3b8" }}>{t.notas}</div>}
+                  </td>
+                  <td style={pf_td()}>
+                    <code style={{ fontSize: 11, color: "#64748b" }}>{t.rfc || "—"}</code>
+                  </td>
+                  <td style={pf_td()}>
+                    <span style={{
+                      background: (t.estado || "").toLowerCase() === "activo" ? "#dcfce7" : "#fee2e2",
+                      color: (t.estado || "").toLowerCase() === "activo" ? "#166534" : "#991b1b",
+                      padding: "2px 8px", borderRadius: 20, fontSize: 10, fontWeight: 700,
+                    }}>{t.estado || "—"}</span>
+                  </td>
+                  <td style={pf_td()}>
+                    <div style={{ wordBreak: "break-all", maxWidth: 220, fontSize: 11 }}>
+                      {t.correo_to || <em style={{ color: "#dc2626" }}>vacío</em>}
+                    </div>
+                  </td>
+                  <td style={pf_td()}>
+                    <div style={{ wordBreak: "break-all", maxWidth: 200, fontSize: 11, color: "#64748b" }}>
+                      {t.correo_cc || "—"}
+                    </div>
+                  </td>
+                  <td style={pf_td()}>
+                    <div style={{ wordBreak: "break-all", maxWidth: 200, fontSize: 11, color: "#64748b" }}>
+                      {t.correo_bcc || "—"}
+                    </div>
+                  </td>
+                  <td style={pf_td()}>
+                    <div style={{ display: "flex", gap: 6 }}>
+                      <button onClick={() => setEditando(t.id)}
+                        style={{
+                          background: "transparent", border: "1px solid #e4e7ec", borderRadius: 6,
+                          padding: "3px 8px", fontSize: 11, color: "#1a3a6b", cursor: "pointer",
+                          fontWeight: 600, fontFamily: "Geist, sans-serif",
+                        }}>Editar</button>
+                      <button onClick={() => handleEliminar(t.id, t.nombre)}
+                        style={{
+                          background: "transparent", border: "1px solid #fca5a5", borderRadius: 6,
+                          padding: "3px 8px", fontSize: 11, color: "#991b1b", cursor: "pointer",
+                          fontWeight: 600, fontFamily: "Geist, sans-serif",
+                        }}>Eliminar</button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Modal de edición */}
+      {filaEdicion && (
+        <ModalEdicionTransportista
+          inicial={filaEdicion}
+          esNuevo={editando === "nuevo"}
+          guardando={guardando}
+          onGuardar={handleGuardar}
+          onCancelar={() => setEditando(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+function ModalEdicionTransportista({ inicial, esNuevo, guardando, onGuardar, onCancelar }) {
+  const [form, setForm] = useState(inicial);
+
+  return (
+    <div style={{
+      position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)",
+      display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 20,
+    }} onClick={onCancelar}>
+      <div onClick={e => e.stopPropagation()} style={{
+        background: "#fff", borderRadius: 14, padding: 24, maxWidth: 600, width: "100%",
+        maxHeight: "90vh", overflowY: "auto",
+      }}>
+        <div style={{ fontSize: 16, fontWeight: 700, color: "#1a3a6b", marginBottom: 16 }}>
+          {esNuevo ? "Nuevo transportista" : "Editar transportista"}
+        </div>
+        <div className="field-row">
+          <div className="field-label">Nombre *</div>
+          <input value={form.nombre} onChange={e => setForm({ ...form, nombre: e.target.value })}
+            placeholder="Ej: LUIS FELIPE HIDALGO SANTIAGO" />
+        </div>
+        <div className="two-col">
+          <div className="field-row">
+            <div className="field-label">RFC</div>
+            <input value={form.rfc || ""} onChange={e => setForm({ ...form, rfc: e.target.value })}
+              placeholder="HISL871105C2A" />
+          </div>
+          <div className="field-row">
+            <div className="field-label">Estado</div>
+            <select value={form.estado || "Activo"} onChange={e => setForm({ ...form, estado: e.target.value })}>
+              <option value="Activo">Activo</option>
+              <option value="Inactivo">Inactivo</option>
+            </select>
+          </div>
+        </div>
+        <div className="field-row">
+          <div className="field-label">Correo TO *</div>
+          <input value={form.correo_to || ""} onChange={e => setForm({ ...form, correo_to: e.target.value })}
+            placeholder="correo@dominio.com" />
+        </div>
+        <div className="field-row">
+          <div className="field-label">Correo CC</div>
+          <input value={form.correo_cc || ""} onChange={e => setForm({ ...form, correo_cc: e.target.value })}
+            placeholder="opcional · separá varios con ;" />
+        </div>
+        <div className="field-row">
+          <div className="field-label">Correo BCC</div>
+          <input value={form.correo_bcc || ""} onChange={e => setForm({ ...form, correo_bcc: e.target.value })}
+            placeholder="opcional" />
+        </div>
+        <div className="field-row">
+          <div className="field-label">Notas internas</div>
+          <textarea value={form.notas || ""} onChange={e => setForm({ ...form, notas: e.target.value })}
+            placeholder="(opcional)" style={{ height: 60 }} />
+        </div>
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 14 }}>
+          <button onClick={onCancelar} disabled={guardando}
+            style={{
+              background: "#fff", border: "1px solid #e4e7ec", borderRadius: 8,
+              padding: "8px 14px", fontSize: 12, color: "#475569", cursor: "pointer",
+              fontFamily: "Geist, sans-serif", fontWeight: 600,
+            }}>Cancelar</button>
+          <button onClick={() => onGuardar(form)} disabled={guardando} className="btn-blue"
+            style={{ padding: "8px 14px", fontSize: 12 }}>
+            {guardando ? "Guardando..." : "Guardar"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════════════
+// SUB-TAB 3: PARÁMETROS / CECOs
+// ═══════════════════════════════════════════════════════════════════════════════════════
+function PrefParametros({ data, onChange }) {
+  const [editando, setEditando] = useState(null);
+  const [guardando, setGuardando] = useState(false);
+
+  const handleGuardar = async (form) => {
+    if (!form.ceco.trim()) { alert("El CECO es obligatorio."); return; }
+    setGuardando(true);
+    try {
+      const payload = {
+        ceco: form.ceco.trim().toUpperCase(),
+        supervisor: form.supervisor.trim() || null,
+        correo_supervisor: form.correo_supervisor.trim() || null,
+        asunto_plantilla: form.asunto_plantilla.trim() || null,
+        cuerpo_plantilla: form.cuerpo_plantilla.trim() || null,
+        cuenta_envio: form.cuenta_envio.trim() || "prefacturas@bigticket.cl",
+        updated_at: new Date().toISOString(),
+      };
+      if (editando === "nuevo") {
+        const { error } = await sb.from("prefacturas_parametros_mx").insert(payload);
+        if (error) throw error;
+      } else {
+        const { error } = await sb.from("prefacturas_parametros_mx").update(payload).eq("id", editando);
+        if (error) throw error;
+      }
+      setEditando(null);
+      await onChange();
+    } catch (e) {
+      alert("Error guardando: " + e.message);
+    }
+    setGuardando(false);
+  };
+
+  const handleEliminar = async (id, ceco) => {
+    if (!confirm(`¿Eliminar el CECO "${ceco}"?`)) return;
+    try {
+      const { error } = await sb.from("prefacturas_parametros_mx").delete().eq("id", id);
+      if (error) throw error;
+      await onChange();
+    } catch (e) {
+      alert("Error eliminando: " + e.message);
+    }
+  };
+
+  const filaEdicion = editando === "nuevo"
+    ? { ceco: "", supervisor: "", correo_supervisor: "", asunto_plantilla: "", cuerpo_plantilla: "", cuenta_envio: "prefacturas@bigticket.cl" }
+    : (editando ? data.find(p => p.id === editando) : null);
+
+  return (
+    <div className="pg" style={{ maxWidth: 1300 }}>
+      <div style={{ marginBottom: 16, display: "flex", justifyContent: "space-between", alignItems: "flex-end", flexWrap: "wrap", gap: 10 }}>
+        <div>
+          <div className="sec-title">Parámetros por CECO</div>
+          <div className="sec-sub">Supervisor, asunto y cuerpo del correo por cada centro de operación.</div>
+        </div>
+        <button className="btn-orange" onClick={() => setEditando("nuevo")} style={{ padding: "9px 16px", fontSize: 13 }}>
+          + Nuevo CECO
+        </button>
+      </div>
+
+      {/* Caja informativa de variables */}
+      <div className="form-card" style={{ background: "#eff6ff", borderColor: "#bfdbfe" }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: "#1a3a6b", marginBottom: 6 }}>
+          💡 Variables disponibles en asunto y cuerpo
+        </div>
+        <div style={{ fontSize: 11, color: "#1e40af", display: "flex", flexWrap: "wrap", gap: 6 }}>
+          {VARIABLES_PLANTILLA.map(v => (
+            <code key={v} style={{
+              background: "#fff", border: "1px solid #bfdbfe", borderRadius: 4,
+              padding: "2px 8px", fontFamily: "monospace",
+            }}>{"{" + v + "}"}</code>
+          ))}
+        </div>
+        <div style={{ fontSize: 11, color: "#1e40af", marginTop: 8 }}>
+          Estas variables se reemplazan automáticamente con los datos de cada prefactura antes del envío.
+        </div>
+      </div>
+
+      {/* Tabla */}
+      <div className="form-card" style={{ padding: 0, overflow: "hidden" }}>
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+            <thead>
+              <tr style={{ background: "#f8fafc", borderBottom: "1px solid #e4e7ec" }}>
+                <th style={pf_th()}>CECO</th>
+                <th style={pf_th()}>Supervisor</th>
+                <th style={pf_th()}>Correo supervisor (CC)</th>
+                <th style={pf_th()}>Asunto plantilla</th>
+                <th style={pf_th()}>Cuenta envío</th>
+                <th style={pf_th()}>Acciones</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.length === 0 ? (
+                <tr><td colSpan={6} style={{ padding: 30, textAlign: "center", color: "#94a3b8" }}>
+                  No hay CECOs configurados. Agregá uno con el botón de arriba.
+                </td></tr>
+              ) : data.map(p => (
+                <tr key={p.id}>
+                  <td style={pf_td()}>
+                    <span style={{
+                      background: "#eef2ff", color: "#1a3a6b", padding: "3px 10px",
+                      borderRadius: 4, fontSize: 12, fontWeight: 700,
+                    }}>{p.ceco}</span>
+                  </td>
+                  <td style={pf_td()}>{p.supervisor || <em style={{ color: "#94a3b8" }}>—</em>}</td>
+                  <td style={pf_td()}>
+                    <span style={{ fontSize: 11, color: "#64748b", wordBreak: "break-all" }}>
+                      {p.correo_supervisor || "—"}
+                    </span>
+                  </td>
+                  <td style={pf_td()}>
+                    <div style={{ fontSize: 11, maxWidth: 320, color: "#475569" }}>
+                      {(p.asunto_plantilla || "").slice(0, 70)}
+                      {(p.asunto_plantilla || "").length > 70 && "..."}
+                    </div>
+                  </td>
+                  <td style={pf_td()}>
+                    <span style={{ fontSize: 11, color: "#64748b" }}>{p.cuenta_envio}</span>
+                  </td>
+                  <td style={pf_td()}>
+                    <div style={{ display: "flex", gap: 6 }}>
+                      <button onClick={() => setEditando(p.id)}
+                        style={{
+                          background: "transparent", border: "1px solid #e4e7ec", borderRadius: 6,
+                          padding: "3px 8px", fontSize: 11, color: "#1a3a6b", cursor: "pointer",
+                          fontWeight: 600, fontFamily: "Geist, sans-serif",
+                        }}>Editar</button>
+                      <button onClick={() => handleEliminar(p.id, p.ceco)}
+                        style={{
+                          background: "transparent", border: "1px solid #fca5a5", borderRadius: 6,
+                          padding: "3px 8px", fontSize: 11, color: "#991b1b", cursor: "pointer",
+                          fontWeight: 600, fontFamily: "Geist, sans-serif",
+                        }}>Eliminar</button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {filaEdicion && (
+        <ModalEdicionParametro
+          inicial={filaEdicion}
+          esNuevo={editando === "nuevo"}
+          guardando={guardando}
+          onGuardar={handleGuardar}
+          onCancelar={() => setEditando(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+function ModalEdicionParametro({ inicial, esNuevo, guardando, onGuardar, onCancelar }) {
+  const [form, setForm] = useState(inicial);
+  const previewVars = {
+    TRANSPORTISTA: "LUIS FELIPE HIDALGO SANTIAGO",
+    CECO: form.ceco || "SMX7",
+    PERIODO: "27 DE ABRIL AL 03 DE MAYO",
+    RFC: "HISL871105C2A",
+    OPERACION: "ML_MXSMX7",
+    SUPERVISOR: form.supervisor || "ROBERTO LOPEZ",
+    NETO: 3728, IVA: 596, BRUTO: 4324, LIQUIDO: 4324,
+  };
+  const asuntoPreview = pf_aplicarPlantilla(form.asunto_plantilla || "", previewVars);
+  const cuerpoPreview = pf_aplicarPlantilla(form.cuerpo_plantilla || "", previewVars);
+
+  return (
+    <div style={{
+      position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)",
+      display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 20,
+    }} onClick={onCancelar}>
+      <div onClick={e => e.stopPropagation()} style={{
+        background: "#fff", borderRadius: 14, padding: 24, maxWidth: 800, width: "100%",
+        maxHeight: "90vh", overflowY: "auto",
+      }}>
+        <div style={{ fontSize: 16, fontWeight: 700, color: "#1a3a6b", marginBottom: 16 }}>
+          {esNuevo ? "Nuevo CECO" : "Editar parámetros del CECO"}
+        </div>
+        <div className="two-col">
+          <div className="field-row">
+            <div className="field-label">CECO *</div>
+            <input value={form.ceco} onChange={e => setForm({ ...form, ceco: e.target.value.toUpperCase() })}
+              placeholder="SMX7" disabled={!esNuevo} />
+            {!esNuevo && <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 2 }}>El CECO no se puede modificar después de creado.</div>}
+          </div>
+          <div className="field-row">
+            <div className="field-label">Cuenta envío</div>
+            <input value={form.cuenta_envio || ""} onChange={e => setForm({ ...form, cuenta_envio: e.target.value })}
+              placeholder="prefacturas@bigticket.cl" />
+          </div>
+        </div>
+        <div className="two-col">
+          <div className="field-row">
+            <div className="field-label">Supervisor</div>
+            <input value={form.supervisor || ""} onChange={e => setForm({ ...form, supervisor: e.target.value })}
+              placeholder="ROBERTO LOPEZ" />
+          </div>
+          <div className="field-row">
+            <div className="field-label">Correo supervisor (irá en CC del envío)</div>
+            <input value={form.correo_supervisor || ""} onChange={e => setForm({ ...form, correo_supervisor: e.target.value })}
+              placeholder="supervisor@bigticket.mx" />
+          </div>
+        </div>
+        <div className="field-row">
+          <div className="field-label">Asunto plantilla</div>
+          <input value={form.asunto_plantilla || ""} onChange={e => setForm({ ...form, asunto_plantilla: e.target.value })}
+            placeholder="Prefactura {CECO} — período {PERIODO}" />
+          {form.asunto_plantilla && (
+            <div style={{ fontSize: 10, color: "#16a34a", marginTop: 4 }}>
+              <strong>Preview:</strong> {asuntoPreview}
+            </div>
+          )}
+        </div>
+        <div className="field-row">
+          <div className="field-label">Cuerpo plantilla</div>
+          <textarea value={form.cuerpo_plantilla || ""} onChange={e => setForm({ ...form, cuerpo_plantilla: e.target.value })}
+            style={{ height: 180, fontFamily: "monospace", fontSize: 11 }}
+            placeholder="Estimado(a) {TRANSPORTISTA},&#10;&#10;Adjunto encontrará..." />
+          <div style={{ fontSize: 11, color: "#64748b", marginTop: 6 }}>
+            Variables disponibles: {VARIABLES_PLANTILLA.map(v => "{" + v + "}").join(", ")}
+          </div>
+        </div>
+        {form.cuerpo_plantilla && (
+          <div className="field-row">
+            <div className="field-label">Preview del cuerpo</div>
+            <div style={{
+              background: "#f8fafc", border: "1px solid #e4e7ec", borderRadius: 8,
+              padding: 12, fontSize: 11, whiteSpace: "pre-wrap", maxHeight: 200, overflowY: "auto",
+              color: "#1f2937",
+            }}>{cuerpoPreview}</div>
+          </div>
+        )}
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 14 }}>
+          <button onClick={onCancelar} disabled={guardando}
+            style={{
+              background: "#fff", border: "1px solid #e4e7ec", borderRadius: 8,
+              padding: "8px 14px", fontSize: 12, color: "#475569", cursor: "pointer",
+              fontFamily: "Geist, sans-serif", fontWeight: 600,
+            }}>Cancelar</button>
+          <button onClick={() => onGuardar(form)} disabled={guardando} className="btn-blue"
+            style={{ padding: "8px 14px", fontSize: 12 }}>
+            {guardando ? "Guardando..." : "Guardar"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════════════
+// SUB-TAB 4: HISTORIAL DE ENVÍOS
+// ═══════════════════════════════════════════════════════════════════════════════════════
+function PrefHistorial() {
+  const [logs, setLogs] = useState([]);
+  const [cargando, setCargando] = useState(true);
+  const [filtroEstado, setFiltroEstado] = useState("todos");
+  const [busqueda, setBusqueda] = useState("");
+  const [limite, setLimite] = useState(100);
+
+  const cargar = async () => {
+    setCargando(true);
+    try {
+      const { data } = await sb.from("prefacturas_envios_log")
+        .select("*").order("fecha_envio", { ascending: false }).limit(limite);
+      setLogs(data || []);
+    } catch (e) { console.error(e); }
+    setCargando(false);
+  };
+
+  useEffect(() => { cargar(); }, [limite]);
+
+  const filtrados = useMemo(() => {
+    let r = [...logs];
+    if (filtroEstado !== "todos") r = r.filter(l => (l.estado || "") === filtroEstado);
+    if (busqueda.trim()) {
+      const q = busqueda.toLowerCase();
+      r = r.filter(l =>
+        (l.transportista || "").toLowerCase().includes(q) ||
+        (l.ceco || "").toLowerCase().includes(q) ||
+        (l.correo_to || "").toLowerCase().includes(q)
+      );
+    }
+    return r;
+  }, [logs, filtroEstado, busqueda]);
+
+  const stats = useMemo(() => ({
+    total: logs.length,
+    ok: logs.filter(l => l.estado === "enviado").length,
+    err: logs.filter(l => l.estado === "fallido").length,
+  }), [logs]);
+
+  return (
+    <div className="pg" style={{ maxWidth: 1300 }}>
+      <div style={{ marginBottom: 16 }}>
+        <div className="sec-title">Historial de envíos</div>
+        <div className="sec-sub">Registro de todos los correos enviados desde el Brain.</div>
+      </div>
+
+      <div style={{
+        display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
+        gap: 10, marginBottom: 14,
+      }}>
+        <IndicadorPF label="Total registros" valor={stats.total} color="#1a3a6b" />
+        <IndicadorPF label="Enviados OK" valor={stats.ok} color="#16a34a" />
+        <IndicadorPF label="Fallidos" valor={stats.err} color="#dc2626" />
+      </div>
+
+      <div className="form-card" style={{ padding: "12px 16px" }}>
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <input
+            placeholder="Buscar transportista, CECO o correo..."
+            value={busqueda}
+            onChange={e => setBusqueda(e.target.value)}
+            style={{ flex: "1 1 280px", maxWidth: 400 }}
+          />
+          <select value={filtroEstado} onChange={e => setFiltroEstado(e.target.value)} style={{ width: 160 }}>
+            <option value="todos">Todos los estados</option>
+            <option value="enviado">Solo enviados</option>
+            <option value="fallido">Solo fallidos</option>
+          </select>
+          <select value={limite} onChange={e => setLimite(Number(e.target.value))} style={{ width: 130 }}>
+            <option value={100}>Últimos 100</option>
+            <option value={500}>Últimos 500</option>
+            <option value={2000}>Últimos 2000</option>
+          </select>
+          <button onClick={cargar} style={{
+            background: "#fff", border: "1px solid #e4e7ec", borderRadius: 8,
+            padding: "8px 14px", fontSize: 12, color: "#475569", cursor: "pointer",
+            fontFamily: "Geist, sans-serif", fontWeight: 600,
+          }}>🔄 Refrescar</button>
+        </div>
+      </div>
+
+      <div className="form-card" style={{ padding: 0, overflow: "hidden" }}>
+        {cargando ? (
+          <div className="loading">Cargando historial...</div>
+        ) : filtrados.length === 0 ? (
+          <div className="empty">Sin envíos registrados.</div>
+        ) : (
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+              <thead>
+                <tr style={{ background: "#f8fafc", borderBottom: "1px solid #e4e7ec" }}>
+                  <th style={pf_th()}>Fecha</th>
+                  <th style={pf_th()}>Estado</th>
+                  <th style={pf_th()}>Transportista</th>
+                  <th style={pf_th()}>CECO</th>
+                  <th style={pf_th()}>Período</th>
+                  <th style={pf_th()}>Correo</th>
+                  <th style={pf_th()}>Motivo / MessageID</th>
+                  <th style={pf_th()}>Usuario</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtrados.map(l => (
+                  <tr key={l.id}>
+                    <td style={pf_td()}>
+                      <span style={{ fontSize: 11, color: "#475569" }}>
+                        {new Date(l.fecha_envio).toLocaleString("es-MX")}
+                      </span>
+                    </td>
+                    <td style={pf_td()}>
+                      <span style={{
+                        background: l.estado === "enviado" ? "#dcfce7" : "#fee2e2",
+                        color: l.estado === "enviado" ? "#166534" : "#991b1b",
+                        padding: "3px 8px", borderRadius: 20, fontSize: 10, fontWeight: 700,
+                      }}>
+                        {l.estado === "enviado" ? "✓ ENVIADO" : "✗ FALLIDO"}
+                      </span>
+                    </td>
+                    <td style={pf_td()}>{l.transportista || "—"}</td>
+                    <td style={pf_td()}>
+                      <span style={{
+                        background: "#eef2ff", color: "#1a3a6b", padding: "2px 8px",
+                        borderRadius: 4, fontSize: 11, fontWeight: 600,
+                      }}>{l.ceco || "—"}</span>
+                    </td>
+                    <td style={pf_td()}><span style={{ fontSize: 11 }}>{l.periodo || "—"}</span></td>
+                    <td style={pf_td()}>
+                      <div style={{ wordBreak: "break-all", maxWidth: 200, fontSize: 11 }}>
+                        {l.correo_to || "—"}
+                      </div>
+                    </td>
+                    <td style={pf_td()}>
+                      <div style={{ wordBreak: "break-all", maxWidth: 260, fontSize: 10, color: "#64748b" }}>
+                        {l.motivo || l.message_id || "—"}
+                      </div>
+                    </td>
+                    <td style={pf_td()}>
+                      <span style={{ fontSize: 10, color: "#94a3b8" }}>{l.usuario || "—"}</span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
