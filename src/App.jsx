@@ -5401,7 +5401,10 @@ function ModuloPagos() {
 
   const cargarPeriodos = async () => {
     try {
-      const { data } = await sb.from("certronic_certificacion_mensual")
+      // Usar vw_certificacion_periodos en lugar de la tabla directamente
+      // para evitar el límite de 1000 filas de la REST API de Supabase.
+      // La vista devuelve solo los períodos únicos (1 fila por anio+mes).
+      const { data } = await sb.from("vw_certificacion_periodos")
         .select("anio, mes")
         .order("anio", { ascending: false })
         .order("mes", { ascending: false });
