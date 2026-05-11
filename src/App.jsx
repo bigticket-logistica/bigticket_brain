@@ -5412,17 +5412,18 @@ function ModuloPagos() {
         ? [...new Set(data.map(r => `${r.anio}-${String(r.mes).padStart(2,"0")}`))]
         : [`${new Date().getFullYear()}-${String(new Date().getMonth()+1).padStart(2,"0")}`];
 
-      // 2) 🆕 Períodos de la tabla histórica
+      // 2) 🆕 Períodos de la tabla histórica (usar vista vw_historico_periodos
+      //    para evitar el límite de 1000 filas de la REST API de Supabase)
       let historicos = [];
       try {
-        const { data: hist } = await sb.from("certronic_estados_documentos_historico")
+        const { data: hist } = await sb.from("vw_historico_periodos")
           .select("periodo")
           .order("periodo", { ascending: false });
         if (hist && hist.length) {
           historicos = [...new Set(hist.map(r => r.periodo.substring(0, 7)))]; // YYYY-MM
         }
       } catch (e) {
-        console.warn("[Pagos] No hay tabla histórica disponible:", e.message);
+        console.warn("[Pagos] No hay vista histórica disponible:", e.message);
       }
 
       // 3) Unir y deduplicar, ordenados descendente
