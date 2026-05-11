@@ -5369,7 +5369,9 @@ function ModuloPagos() {
   const [loading, setLoading] = useState(true);
   const [periodo, setPeriodo] = useState(""); // YYYY-MM
   const [periodos, setPeriodos] = useState([]);
-  const [vistaActiva, setVistaActiva] = useState("dashboard"); // dashboard | criticos | matriz | hallazgos | rse | empleados | vehiculos | inicial
+  const [periodoVigente, setPeriodoVigente] = useState("");  // 🆕 Período vigente (de certificacion_mensual)
+  const [periodosHistoricos, setPeriodosHistoricos] = useState([]); // 🆕 Períodos del histórico (de tabla histórica)
+  const [vistaActiva, setVistaActiva] = useState("dashboard"); // dashboard | criticos | matriz | hallazgos | rse | empleados | vehiculos | inicial | historico
   const [tabCategoria, setTabCategoria] = useState("pc");
   const [busqueda, setBusqueda] = useState("");
   const [filtroEstado, setFiltroEstado] = useState("todos");
@@ -5401,22 +5403,44 @@ function ModuloPagos() {
 
   const cargarPeriodos = async () => {
     try {
+      // 1) Períodos del calculador V7 (vigente + lo que esté disponible)
       const { data } = await sb.from("certronic_certificacion_mensual")
         .select("anio, mes")
         .order("anio", { ascending: false })
         .order("mes", { ascending: false });
-      const unicos = data && data.length
+      const vigentes = data && data.length
         ? [...new Set(data.map(r => `${r.anio}-${String(r.mes).padStart(2,"0")}`))]
         : [`${new Date().getFullYear()}-${String(new Date().getMonth()+1).padStart(2,"0")}`];
-      setPeriodos(unicos);
-      setPeriodo(unicos[0]);
+
+      // 2) 🆕 Períodos de la tabla histórica
+      let historicos = [];
+      try {
+        const { data: hist } = await sb.from("certronic_estados_documentos_historico")
+          .select("periodo")
+          .order("periodo", { ascending: false });
+        if (hist && hist.length) {
+          historicos = [...new Set(hist.map(r => r.periodo.substring(0, 7)))]; // YYYY-MM
+        }
+      } catch (e) {
+        console.warn("[Pagos] No hay tabla histórica disponible:", e.message);
+      }
+
+      // 3) Unir y deduplicar, ordenados descendente
+      const todosPeriodos = [...new Set([...vigentes, ...historicos])].sort().reverse();
+
+      setPeriodos(todosPeriodos);
+      setPeriodoVigente(vigentes[0] || "");
+      setPeriodosHistoricos(historicos);
+      // Por defecto, abrir en el vigente (no en el más reciente histórico)
+      setPeriodo(vigentes[0] || todosPeriodos[0]);
+
       const { data: log } = await sb.from("certronic_ejecuciones_log")
         .select("*").order("fecha_ejecucion", { ascending: false }).limit(1);
       if (log && log[0]) setUltimaEjecucion(log[0]);
     } catch(e) {
       console.error("Error cargar periodos:", e);
       const p = `${new Date().getFullYear()}-${String(new Date().getMonth()+1).padStart(2,"0")}`;
-      setPeriodos([p]); setPeriodo(p);
+      setPeriodos([p]); setPeriodo(p); setPeriodoVigente(p);
     }
   };
 
@@ -5424,20 +5448,146 @@ function ModuloPagos() {
     setLoading(true);
     const [anio, mes] = periodo.split("-").map(Number);
     try {
+      // 1) Intentar carga normal desde certronic_certificacion_mensual
       const { data } = await sb.from("certronic_certificacion_mensual")
         .select("*")
         .eq("anio", anio).eq("mes", mes);
       const todos = data || [];
-      setDatos({
-        pc: todos.filter(d => d.categoria === "PC"),
-        ryc: todos.filter(d => d.categoria === "RYC"),
-        sub: todos.filter(d => d.categoria === "SUB"),
-      });
+
+      if (todos.length > 0) {
+        // ✅ Datos disponibles del calculador V7
+        setDatos({
+          pc: todos.filter(d => d.categoria === "PC"),
+          ryc: todos.filter(d => d.categoria === "RYC"),
+          sub: todos.filter(d => d.categoria === "SUB"),
+        });
+      } else if (periodosHistoricos.includes(periodo)) {
+        // 🆕 Modo histórico: derivar datos del histórico (V7 no corrió para este período)
+        await cargarDesdeHistorico(anio, mes);
+      } else {
+        setDatos({ pc: [], ryc: [], sub: [] });
+      }
     } catch(e) {
       console.error("Error cargar datos:", e);
       setDatos({ pc: [], ryc: [], sub: [] });
     }
     setLoading(false);
+  };
+
+  // 🆕 Sprint 3 Fase B.2 — Reconstruye el dashboard desde la tabla histórica
+  // cuando el calculador V7 no ha corrido para ese período.
+  const cargarDesdeHistorico = async (anio, mes) => {
+    const periodoSQL = `${anio}-${String(mes).padStart(2, "0")}-01`;
+    try {
+      // Cargar TODO el histórico de ese período (paginado por si pasa de 1000)
+      let allRows = [];
+      let from = 0;
+      const limite = 1000;
+      while (true) {
+        const { data, error } = await sb.from("certronic_estados_documentos_historico")
+          .select("planta, contratista, contratista_norm, rut, entidad, detalle, detalle_norm, identificador, documento, periodo_doc, impide_acceso, impide_pago, estado, cumple")
+          .eq("periodo", periodoSQL)
+          .range(from, from + limite - 1);
+        if (error) throw error;
+        if (!data || data.length === 0) break;
+        allRows = allRows.concat(data);
+        if (data.length < limite) break;
+        from += limite;
+      }
+
+      if (allRows.length === 0) {
+        setDatos({ pc: [], ryc: [], sub: [] });
+        return;
+      }
+
+      // Agrupar por contratista (empresa) y reconstruir métricas mínimas
+      // similares a las que devolvería el calculador V7
+      const porContratista = new Map();
+      for (const r of allRows) {
+        const key = r.contratista_norm || r.contratista;
+        if (!porContratista.has(key)) {
+          porContratista.set(key, {
+            contratista: r.contratista,
+            contratista_norm: r.contratista_norm,
+            planta: r.planta,
+            empleados: new Set(),
+            vehiculos: new Set(),
+            docs_total: 0,
+            docs_cumple: 0,
+            docs_pendientes: 0,
+            doc_f30_estado: null,
+            doc_f30_1_estado: null,
+            doc_liquidaciones_estado: null,
+            doc_cotizaciones_estado: null,
+            doc_mutualidad_estado: null,
+          });
+        }
+        const c = porContratista.get(key);
+        c.docs_total++;
+        if (r.cumple === "S") c.docs_cumple++;
+        else if (r.cumple === "N") c.docs_pendientes++;
+
+        if (r.entidad === "empleado") c.empleados.add(r.identificador);
+        else if (r.entidad === "vehiculo") c.vehiculos.add(r.identificador);
+
+        // Tomar estado de documentos clave (preferir el más malo si hay múltiples)
+        const docLower = (r.documento || "").toLowerCase();
+        if (docLower.includes("f30-1") || docLower.includes("f30 1")) {
+          c.doc_f30_1_estado = r.estado || (r.cumple === "S" ? "Presentado" : "Pendiente");
+        } else if (docLower.includes("f30")) {
+          c.doc_f30_estado = r.estado || (r.cumple === "S" ? "Presentado" : "Pendiente");
+        } else if (docLower.includes("liquidaci")) {
+          c.doc_liquidaciones_estado = r.estado || (r.cumple === "S" ? "Presentado" : "Pendiente");
+        } else if (docLower.includes("cotizaci") || docLower.includes("previred")) {
+          c.doc_cotizaciones_estado = r.estado || (r.cumple === "S" ? "Presentado" : "Pendiente");
+        } else if (docLower.includes("mutualidad") || docLower.includes("adhesi")) {
+          c.doc_mutualidad_estado = r.estado || (r.cumple === "S" ? "Presentado" : "Pendiente");
+        }
+      }
+
+      // Convertir a la estructura esperada por DashboardCertificacion
+      // No tenemos categoría exacta sin V7, así que asignamos todos a "PC" (Personal Crítico) por defecto
+      // y dejamos las otras categorías vacías. El analista puede hacer foco en PC en modo histórico.
+      const filas = [];
+      for (const [norm, c] of porContratista.entries()) {
+        const empleadosCount = c.empleados.size;
+        const vehiculosCount = c.vehiculos.size;
+        // Heurística: si tiene >1 empleado/vehículo → RYC; si solo es la empresa → PC; resto se complica.
+        // Mejor mostramos todo bajo una categoría especial "HIST" o lo dejamos en PC para no complicar.
+        const pct_avance = c.docs_total > 0 ? Math.round((c.docs_cumple / c.docs_total) * 100) : 0;
+        filas.push({
+          contratista: c.contratista,
+          contratista_norm: c.contratista_norm,
+          transporte: c.contratista, // alias usado en el dashboard
+          operacion: c.planta || "—",
+          categoria: empleadosCount > 0 || vehiculosCount > 0 ? "RYC" : "PC",
+          subcontratista_nombre: null,
+          pct_avance: pct_avance,
+          pct_retencion: pct_avance < 70 ? 25 : 0, // aproximación
+          empleados_activos: empleadosCount,
+          vehiculos_activos: vehiculosCount,
+          recurso_inhabilitado: false, // no sabemos del histórico
+          estado_final: pct_avance >= 85 ? "CERTIFICADO" : pct_avance >= 50 ? "PARCIAL" : "INCUMPLIDO",
+          // Estados de documentos clave (aproximados desde histórico)
+          doc_f30: c.doc_f30_estado,
+          doc_f30_1: c.doc_f30_1_estado,
+          doc_liquidaciones: c.doc_liquidaciones_estado,
+          doc_cotizaciones: c.doc_cotizaciones_estado,
+          doc_mutualidad: c.doc_mutualidad_estado,
+          fecha_calculo: null,
+          _modo: "historico", // flag para indicar que viene del histórico
+        });
+      }
+
+      setDatos({
+        pc: filas.filter(d => d.categoria === "PC"),
+        ryc: filas.filter(d => d.categoria === "RYC"),
+        sub: filas.filter(d => d.categoria === "SUB"),
+      });
+    } catch (e) {
+      console.error("[Pagos] Error cargando desde histórico:", e);
+      setDatos({ pc: [], ryc: [], sub: [] });
+    }
   };
 
   // ─── 🆕 OVERRIDES ────────────────────────────────────────────
@@ -6023,15 +6173,49 @@ function ModuloPagos() {
           </div>
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-          <select value={periodo} onChange={(e) => setPeriodo(e.target.value)} style={{ width: "auto", minWidth: 130 }}>
+          <select value={periodo} onChange={(e) => setPeriodo(e.target.value)} style={{ width: "auto", minWidth: 200 }}>
             {periodos.map(p => {
               const [a, m] = p.split("-");
               const nm = ["","Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"][parseInt(m)];
-              return <option key={p} value={p}>{nm} {a}</option>;
+              const esVigente = p === periodoVigente;
+              const esHistorico = periodosHistoricos.includes(p) && !esVigente;
+              const label = esVigente
+                ? `🟢 ${nm} ${a} (vigente)`
+                : esHistorico
+                  ? `📜 ${nm} ${a} (histórico)`
+                  : `${nm} ${a}`;
+              return <option key={p} value={p}>{label}</option>;
             })}
           </select>
         </div>
       </div>
+
+      {/* 🆕 Sprint 3 Fase B.2 — Banner cuando se navega a un período histórico */}
+      {periodo && periodosHistoricos.includes(periodo) && periodo !== periodoVigente && (
+        <div style={{
+          background: "#eef2ff", border: "1px solid #c7d2fe", borderLeft: "4px solid #4f46e5",
+          borderRadius: 6, padding: "10px 14px", marginBottom: 12, fontSize: 11.5, color: "#312e81",
+        }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 14 }}>📜</span>
+            <div style={{ flex: 1, minWidth: 200 }}>
+              <div style={{ fontWeight: 700, marginBottom: 2, fontSize: 12 }}>
+                Estás viendo datos históricos del período {periodo}
+              </div>
+              <div style={{ fontSize: 10.5, color: "#4338ca" }}>
+                Capturado el 2026-05-08 · Datos derivados del histórico (sin recalcular V7) · Algunas métricas son aproximaciones marcadas con asterisco (*)
+              </div>
+            </div>
+            <button onClick={() => setPeriodo(periodoVigente)}
+              style={{
+                padding: "5px 12px", fontSize: 11, fontWeight: 600,
+                background: "#4f46e5", color: "#fff", border: "none", borderRadius: 4, cursor: "pointer",
+              }}>
+              Volver al vigente ({periodoVigente})
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* 🆕 Banner alerta del último run del pipeline */}
       {ultimoRun && ultimoRun.tiene_errores && (() => {
@@ -6085,6 +6269,7 @@ function ModuloPagos() {
           { id: "criticos", label: "Activos Críticos", n: activosCriticos.length, alert: activosCriticos.length > 0 },
           { id: "hallazgos", label: "Hallazgos", n: null },
           { id: "rse", label: "🛡️ Riesgo RSE", n: null },
+          { id: "historico", label: "📊 Histórico", n: null },
           { id: "matriz", label: "Matriz Documentos", n: null },
         ].map(t => (
           <button key={t.id} onClick={() => setVistaActiva(t.id)}
@@ -6160,6 +6345,9 @@ function ModuloPagos() {
 
           {/* ─── VISTA: RIESGO RSE (NUEVO) ─── */}
           {vistaActiva === "rse" && <DashboardRiesgoRSE />}
+
+          {/* ─── VISTA: HISTÓRICO (NUEVO - Sprint 3 Fase B.2) ─── */}
+          {vistaActiva === "historico" && <DashboardHistorico operacionAMandante={operacionAMandante} />}
 
           {/* ─── VISTA: MATRIZ ─── */}
           {vistaActiva === "matriz" && <EditorMatriz />}
@@ -8594,6 +8782,539 @@ function DetalleRiesgoRSE({ contratista }) {
             <>Sin acción requerida. Monitoreo de rutina.</>
           )}
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 🆕 DASHBOARD HISTÓRICO — Sprint 3 Fase B.2
+// 4 sub-tabs: Resumen | Heatmap | Top Deudores | Desaparecidos
+// Lee de las vistas: vw_historico_evolucion_contratista,
+// vw_deudores_historicos_actuales_resumen, vw_historico_desaparecidos,
+// vw_historico_morosos_arrastre
+// ═══════════════════════════════════════════════════════════════════════════
+function DashboardHistorico({ operacionAMandante }) {
+  const [subtab, setSubtab] = useState("resumen");
+  const [loading, setLoading] = useState(true);
+  const [evolucion, setEvolucion] = useState([]);          // por contratista × período
+  const [resumenGeneral, setResumenGeneral] = useState(null); // KPIs globales
+  const [deudoresResumen, setDeudoresResumen] = useState([]); // top deudores activos
+  const [desaparecidos, setDesaparecidos] = useState([]);
+  const [arrastrados, setArrastrados] = useState([]);
+  const [busqueda, setBusqueda] = useState("");
+
+  useEffect(() => {
+    (async () => {
+      setLoading(true);
+      try {
+        // 1) Evolución por contratista (todos los registros) - paginado
+        let allEvol = [];
+        let from = 0;
+        const limite = 1000;
+        while (true) {
+          const { data, error } = await sb.from("vw_historico_evolucion_contratista")
+            .select("contratista_norm, contratista, periodo, total_docs, docs_cumplidos, docs_pendientes, pct_cumplimiento, delta_pct_vs_mes_anterior, identificadores_unicos")
+            .order("contratista_norm", { ascending: true })
+            .order("periodo", { ascending: true })
+            .range(from, from + limite - 1);
+          if (error) throw error;
+          if (!data || data.length === 0) break;
+          allEvol = allEvol.concat(data);
+          if (data.length < limite) break;
+          from += limite;
+        }
+        setEvolucion(allEvol);
+
+        // 2) Resumen general del histórico
+        const periodosUnicos = [...new Set(allEvol.map(e => e.periodo))].sort();
+        const ultPeriodo = periodosUnicos[periodosUnicos.length - 1];
+        const primPeriodo = periodosUnicos[0];
+
+        // KPIs globales: total deudas y personas (de la vista resumen)
+        const { count: totalDeudas } = await sb.from("vw_deudores_historicos_actuales")
+          .select("*", { count: "exact", head: true });
+        const { count: totalPersonas } = await sb.from("vw_deudores_historicos_actuales_resumen")
+          .select("*", { count: "exact", head: true });
+
+        // % cumplimiento promedio por período (de evolucion)
+        const promedioPorPeriodo = {};
+        for (const p of periodosUnicos) {
+          const delPeriodo = allEvol.filter(e => e.periodo === p);
+          const sumDocs = delPeriodo.reduce((a, b) => a + (b.total_docs || 0), 0);
+          const sumCumple = delPeriodo.reduce((a, b) => a + (b.docs_cumplidos || 0), 0);
+          promedioPorPeriodo[p] = sumDocs > 0 ? (sumCumple / sumDocs * 100) : 0;
+        }
+
+        setResumenGeneral({
+          totalPeriodos: periodosUnicos.length,
+          primerPeriodo: primPeriodo,
+          ultimoPeriodo: ultPeriodo,
+          totalDeudas: totalDeudas || 0,
+          totalPersonas: totalPersonas || 0,
+          contratistasUnicos: new Set(allEvol.map(e => e.contratista_norm)).size,
+          promedioPorPeriodo,
+        });
+
+        // 3) Top deudores (resumen)
+        let allDeudores = [];
+        from = 0;
+        while (true) {
+          const { data } = await sb.from("vw_deudores_historicos_actuales_resumen")
+            .select("identificador, rut, contratista, detalle, total_deudas, meses_con_deuda, docs_distintos_adeudados, deuda_mas_antigua, deuda_mas_reciente")
+            .order("total_deudas", { ascending: false })
+            .range(from, from + limite - 1);
+          if (!data || data.length === 0) break;
+          allDeudores = allDeudores.concat(data);
+          if (data.length < limite) break;
+          from += limite;
+        }
+        setDeudoresResumen(allDeudores);
+
+        // 4) Desaparecidos
+        const { data: desapData } = await sb.from("vw_historico_desaparecidos")
+          .select("identificador, rut, contratista, detalle, entidad, ultimo_periodo_visto, docs_totales_ultimo_mes, docs_pendientes_al_irse, meses_presentes")
+          .order("docs_pendientes_al_irse", { ascending: false })
+          .limit(500);
+        setDesaparecidos(desapData || []);
+
+        // 5) Morosos arrastrados (los que llevan más meses)
+        const { data: arrData } = await sb.from("vw_historico_morosos_arrastre")
+          .select("contratista, detalle, documento, pendiente_desde, pendiente_hasta, meses_pendiente, sigue_pendiente_en_ultimo")
+          .order("meses_pendiente", { ascending: false })
+          .limit(500);
+        setArrastrados(arrData || []);
+
+      } catch (e) {
+        console.error("[Historico] Error:", e);
+      }
+      setLoading(false);
+    })();
+  }, []);
+
+  // Construir matriz para heatmap: contratista × período → pct
+  const heatmapData = useMemo(() => {
+    if (!evolucion.length) return { contratistas: [], periodos: [], celdas: {} };
+    const periodos = [...new Set(evolucion.map(e => e.periodo))].sort();
+    const contratistasMap = new Map();
+    for (const e of evolucion) {
+      const key = e.contratista_norm;
+      if (!contratistasMap.has(key)) {
+        contratistasMap.set(key, {
+          contratista_norm: key,
+          contratista: e.contratista,
+          promedio: 0,
+          totalDocs: 0,
+          totalCumple: 0,
+        });
+      }
+      const c = contratistasMap.get(key);
+      c.totalDocs += (e.total_docs || 0);
+      c.totalCumple += (e.docs_cumplidos || 0);
+    }
+    // Calcular promedio
+    for (const [k, c] of contratistasMap.entries()) {
+      c.promedio = c.totalDocs > 0 ? (c.totalCumple / c.totalDocs * 100) : 0;
+    }
+    // Celdas: { "contratista_norm|periodo": { pct, total, pendientes, delta } }
+    const celdas = {};
+    for (const e of evolucion) {
+      celdas[`${e.contratista_norm}|${e.periodo}`] = {
+        pct: parseFloat(e.pct_cumplimiento) || 0,
+        total: e.total_docs || 0,
+        pendientes: e.docs_pendientes || 0,
+        delta: e.delta_pct_vs_mes_anterior != null ? parseFloat(e.delta_pct_vs_mes_anterior) : null,
+      };
+    }
+    const contratistas = [...contratistasMap.values()].sort((a, b) => a.promedio - b.promedio);
+    return { contratistas, periodos, celdas };
+  }, [evolucion]);
+
+  // Filtrar heatmap por búsqueda
+  const heatmapFiltrado = useMemo(() => {
+    if (!busqueda) return heatmapData.contratistas;
+    const q = busqueda.toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "");
+    return heatmapData.contratistas.filter(c =>
+      (c.contratista || "").toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "").includes(q)
+    );
+  }, [heatmapData.contratistas, busqueda]);
+
+  // Top movers (mayor delta + y -) en el último período disponible
+  const topMovers = useMemo(() => {
+    if (!evolucion.length) return { mejoraron: [], empeoraron: [] };
+    const periodos = [...new Set(evolucion.map(e => e.periodo))].sort();
+    const ultimo = periodos[periodos.length - 1];
+    const conDelta = evolucion.filter(e => e.periodo === ultimo && e.delta_pct_vs_mes_anterior != null);
+    const mejoraron = [...conDelta].sort((a, b) =>
+      parseFloat(b.delta_pct_vs_mes_anterior) - parseFloat(a.delta_pct_vs_mes_anterior)
+    ).slice(0, 10);
+    const empeoraron = [...conDelta].sort((a, b) =>
+      parseFloat(a.delta_pct_vs_mes_anterior) - parseFloat(b.delta_pct_vs_mes_anterior)
+    ).slice(0, 10);
+    return { mejoraron, empeoraron, ultimo };
+  }, [evolucion]);
+
+  const fmtPeriodo = (p) => p ? p.substring(0, 7) : "—";
+
+  if (loading) {
+    return <div style={{ padding: 40, textAlign: "center", color: "#94a3b8", fontSize: 13 }}>Cargando datos históricos...</div>;
+  }
+
+  const subTabs = [
+    { id: "resumen", label: "📈 Resumen", desc: "KPIs globales + tendencia" },
+    { id: "heatmap", label: "🔥 Heatmap", desc: "Contratistas × meses" },
+    { id: "deudores", label: "🚨 Top Deudores", desc: "Activos con deudas históricas" },
+    { id: "desaparecidos", label: "👻 Desaparecidos", desc: "Pasaron y ya no están" },
+  ];
+
+  return (
+    <div style={{ padding: 0 }}>
+      {/* Header */}
+      <div style={{ background: "#fff", borderBottom: "1px solid #e4e7ec", padding: "12px 16px", marginBottom: 12 }}>
+        <div style={{ fontSize: 16, fontWeight: 700, color: "#1a3a6b", marginBottom: 8 }}>
+          📊 Análisis Histórico
+        </div>
+        <div style={{ display: "flex", gap: 0, flexWrap: "wrap", borderBottom: "1px solid #e4e7ec" }}>
+          {subTabs.map(t => (
+            <button key={t.id} onClick={() => setSubtab(t.id)}
+              style={{
+                background: "transparent", border: "none", padding: "8px 14px",
+                fontSize: 12, fontWeight: 600, cursor: "pointer",
+                color: subtab === t.id ? "#1a3a6b" : "#64748b",
+                borderBottom: subtab === t.id ? "2px solid #1a3a6b" : "2px solid transparent",
+                marginBottom: -1,
+              }}>
+              <div>{t.label}</div>
+              <div style={{ fontSize: 9.5, color: "#94a3b8", fontWeight: 400, marginTop: 1 }}>{t.desc}</div>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div style={{ padding: "0 16px 20px" }}>
+
+        {/* ───── SUB-TAB: RESUMEN ───── */}
+        {subtab === "resumen" && resumenGeneral && (
+          <div>
+            {/* Bloque info */}
+            <div style={{ background: "#eef2ff", border: "1px solid #c7d2fe", borderRadius: 6, padding: "10px 14px", marginBottom: 14, fontSize: 11, color: "#312e81" }}>
+              <strong>Histórico de {resumenGeneral.primerPeriodo?.substring(0,7)} a {resumenGeneral.ultimoPeriodo?.substring(0,7)}</strong> ·
+              Capturado el 2026-05-08 · {resumenGeneral.totalPeriodos} períodos cargados
+            </div>
+
+            {/* KPIs grandes */}
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10, marginBottom: 16 }}>
+              <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 8, padding: "12px 14px" }}>
+                <div style={{ fontSize: 10, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 600 }}>Períodos cargados</div>
+                <div style={{ fontSize: 26, fontWeight: 800, color: "#1a3a6b", marginTop: 4 }}>{resumenGeneral.totalPeriodos}</div>
+              </div>
+              <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 8, padding: "12px 14px" }}>
+                <div style={{ fontSize: 10, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 600 }}>Contratistas en histórico</div>
+                <div style={{ fontSize: 26, fontWeight: 800, color: "#1a3a6b", marginTop: 4 }}>{resumenGeneral.contratistasUnicos}</div>
+              </div>
+              <div style={{ background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: 8, padding: "12px 14px" }}>
+                <div style={{ fontSize: 10, color: "#9a3412", textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 600 }}>Deudas históricas activas</div>
+                <div style={{ fontSize: 26, fontWeight: 800, color: "#9a3412", marginTop: 4 }}>{resumenGeneral.totalDeudas.toLocaleString("es-CL")}</div>
+              </div>
+              <div style={{ background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: 8, padding: "12px 14px" }}>
+                <div style={{ fontSize: 10, color: "#9a3412", textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 600 }}>Personas con deuda</div>
+                <div style={{ fontSize: 26, fontWeight: 800, color: "#9a3412", marginTop: 4 }}>{resumenGeneral.totalPersonas.toLocaleString("es-CL")}</div>
+              </div>
+              <div style={{ background: "#f3e8ff", border: "1px solid #d8b4fe", borderRadius: 8, padding: "12px 14px" }}>
+                <div style={{ fontSize: 10, color: "#6b21a8", textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 600 }}>Desaparecidos en histórico</div>
+                <div style={{ fontSize: 26, fontWeight: 800, color: "#6b21a8", marginTop: 4 }}>{desaparecidos.length}</div>
+              </div>
+              <div style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 8, padding: "12px 14px" }}>
+                <div style={{ fontSize: 10, color: "#991b1b", textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 600 }}>Docs crónicamente pendientes</div>
+                <div style={{ fontSize: 26, fontWeight: 800, color: "#991b1b", marginTop: 4 }}>{arrastrados.filter(a => a.meses_pendiente >= 3).length}</div>
+                <div style={{ fontSize: 10, color: "#64748b", marginTop: 2 }}>≥ 3 meses sin resolver</div>
+              </div>
+            </div>
+
+            {/* Gráfico tendencia global */}
+            <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 8, padding: 16, marginBottom: 16 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: "#1a3a6b", marginBottom: 10 }}>
+                Evolución del cumplimiento global
+              </div>
+              <div style={{ display: "flex", alignItems: "flex-end", gap: 12, height: 140, padding: "0 20px" }}>
+                {Object.entries(resumenGeneral.promedioPorPeriodo).map(([periodo, pct], i, arr) => {
+                  const altura = Math.max(8, (pct / 100) * 120);
+                  const color = pct >= 85 ? "#16a34a" : pct >= 70 ? "#f59e0b" : "#dc2626";
+                  const prev = i > 0 ? arr[i-1][1] : null;
+                  const delta = prev != null ? pct - prev : null;
+                  return (
+                    <div key={periodo} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
+                      <div style={{ fontSize: 12, fontWeight: 700, color }}>{pct.toFixed(1)}%</div>
+                      {delta != null && (
+                        <div style={{ fontSize: 10, fontWeight: 600, color: delta > 0 ? "#16a34a" : delta < 0 ? "#dc2626" : "#94a3b8" }}>
+                          {delta > 0 ? "▲" : delta < 0 ? "▼" : "—"} {Math.abs(delta).toFixed(1)}
+                        </div>
+                      )}
+                      <div style={{ width: "70%", height: altura, background: color, borderRadius: "4px 4px 0 0" }} />
+                      <div style={{ fontSize: 11, color: "#64748b", marginTop: 4 }}>{periodo.substring(0,7)}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Top mejoraron / empeoraron */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+              <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 8, padding: 14 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: "#166534", marginBottom: 8 }}>
+                  ▲ Top 10 mejoraron ({topMovers.ultimo?.substring(0,7) || "—"})
+                </div>
+                <table style={{ width: "100%", fontSize: 11, borderCollapse: "collapse" }}>
+                  <thead>
+                    <tr style={{ borderBottom: "1px solid #e4e7ec" }}>
+                      <th style={{ textAlign: "left", padding: "4px 6px", color: "#64748b", fontSize: 10, fontWeight: 600 }}>Contratista</th>
+                      <th style={{ textAlign: "right", padding: "4px 6px", color: "#64748b", fontSize: 10, fontWeight: 600 }}>%</th>
+                      <th style={{ textAlign: "right", padding: "4px 6px", color: "#64748b", fontSize: 10, fontWeight: 600 }}>Δ</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {topMovers.mejoraron.map((m, i) => (
+                      <tr key={i} style={{ borderTop: "1px solid #f1f5f9" }}>
+                        <td style={{ padding: "3px 6px", fontWeight: 500 }}>{(m.contratista || "—").substring(0, 38)}</td>
+                        <td style={{ padding: "3px 6px", textAlign: "right" }}>{parseFloat(m.pct_cumplimiento).toFixed(1)}%</td>
+                        <td style={{ padding: "3px 6px", textAlign: "right", color: "#16a34a", fontWeight: 700 }}>
+                          +{parseFloat(m.delta_pct_vs_mes_anterior).toFixed(1)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 8, padding: 14 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: "#991b1b", marginBottom: 8 }}>
+                  ▼ Top 10 empeoraron ({topMovers.ultimo?.substring(0,7) || "—"})
+                </div>
+                <table style={{ width: "100%", fontSize: 11, borderCollapse: "collapse" }}>
+                  <thead>
+                    <tr style={{ borderBottom: "1px solid #e4e7ec" }}>
+                      <th style={{ textAlign: "left", padding: "4px 6px", color: "#64748b", fontSize: 10, fontWeight: 600 }}>Contratista</th>
+                      <th style={{ textAlign: "right", padding: "4px 6px", color: "#64748b", fontSize: 10, fontWeight: 600 }}>%</th>
+                      <th style={{ textAlign: "right", padding: "4px 6px", color: "#64748b", fontSize: 10, fontWeight: 600 }}>Δ</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {topMovers.empeoraron.map((m, i) => (
+                      <tr key={i} style={{ borderTop: "1px solid #f1f5f9" }}>
+                        <td style={{ padding: "3px 6px", fontWeight: 500 }}>{(m.contratista || "—").substring(0, 38)}</td>
+                        <td style={{ padding: "3px 6px", textAlign: "right" }}>{parseFloat(m.pct_cumplimiento).toFixed(1)}%</td>
+                        <td style={{ padding: "3px 6px", textAlign: "right", color: "#dc2626", fontWeight: 700 }}>
+                          {parseFloat(m.delta_pct_vs_mes_anterior).toFixed(1)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ───── SUB-TAB: HEATMAP ───── */}
+        {subtab === "heatmap" && (
+          <div>
+            <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 12, flexWrap: "wrap" }}>
+              <input type="text" placeholder="Buscar contratista..." value={busqueda} onChange={e => setBusqueda(e.target.value)}
+                style={{ flex: 1, minWidth: 240, padding: "6px 10px", fontSize: 12, border: "1px solid #e4e7ec", borderRadius: 4 }} />
+              <div style={{ fontSize: 11, color: "#64748b" }}>
+                {heatmapFiltrado.length} contratista(s) · ordenados por peor cumplimiento promedio
+              </div>
+            </div>
+            {/* Leyenda */}
+            <div style={{ display: "flex", gap: 12, marginBottom: 10, fontSize: 11, color: "#64748b" }}>
+              <span><span style={{ display: "inline-block", width: 14, height: 14, background: "#16a34a", borderRadius: 2, marginRight: 4, verticalAlign: "middle" }} />≥85%</span>
+              <span><span style={{ display: "inline-block", width: 14, height: 14, background: "#84cc16", borderRadius: 2, marginRight: 4, verticalAlign: "middle" }} />70-85%</span>
+              <span><span style={{ display: "inline-block", width: 14, height: 14, background: "#f59e0b", borderRadius: 2, marginRight: 4, verticalAlign: "middle" }} />50-70%</span>
+              <span><span style={{ display: "inline-block", width: 14, height: 14, background: "#dc2626", borderRadius: 2, marginRight: 4, verticalAlign: "middle" }} />&lt;50%</span>
+              <span><span style={{ display: "inline-block", width: 14, height: 14, background: "#f1f5f9", borderRadius: 2, marginRight: 4, verticalAlign: "middle", border: "1px solid #cbd5e1" }} />Sin datos</span>
+            </div>
+            <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, overflow: "auto", maxHeight: 600 }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+                <thead style={{ position: "sticky", top: 0, background: "#1a3a6b", color: "#fff", zIndex: 2 }}>
+                  <tr>
+                    <th style={{ padding: "8px 10px", textAlign: "left", fontSize: 11, fontWeight: 600 }}>Contratista</th>
+                    <th style={{ padding: "8px 10px", textAlign: "right", fontSize: 10, fontWeight: 600 }}>Prom.</th>
+                    {heatmapData.periodos.map(p => (
+                      <th key={p} style={{ padding: "8px 6px", textAlign: "center", fontSize: 10, fontWeight: 600, minWidth: 80 }}>
+                        {p.substring(0, 7)}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {heatmapFiltrado.slice(0, 250).map((c, i) => (
+                    <tr key={i} style={{ borderTop: "1px solid #f1f5f9" }}>
+                      <td style={{ padding: "4px 10px", fontWeight: 500, maxWidth: 280, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                        title={c.contratista}>
+                        {c.contratista}
+                      </td>
+                      <td style={{ padding: "4px 10px", textAlign: "right", fontSize: 10, color: "#64748b", fontWeight: 600 }}>
+                        {c.promedio.toFixed(1)}%
+                      </td>
+                      {heatmapData.periodos.map(p => {
+                        const celda = heatmapData.celdas[`${c.contratista_norm}|${p}`];
+                        if (!celda) {
+                          return (
+                            <td key={p} style={{ padding: 0, textAlign: "center", background: "#f1f5f9", color: "#cbd5e1", fontSize: 10 }}>
+                              —
+                            </td>
+                          );
+                        }
+                        const color = celda.pct >= 85 ? "#16a34a" : celda.pct >= 70 ? "#84cc16" : celda.pct >= 50 ? "#f59e0b" : "#dc2626";
+                        return (
+                          <td key={p}
+                            title={`${p.substring(0,7)} — ${celda.pct.toFixed(1)}% — ${celda.total} docs · ${celda.pendientes} pendientes${celda.delta != null ? ` · Δ ${celda.delta > 0 ? "+" : ""}${celda.delta.toFixed(1)}` : ""}`}
+                            style={{
+                              padding: "6px 4px", textAlign: "center",
+                              background: color, color: "#fff", fontSize: 10, fontWeight: 700, cursor: "help",
+                            }}>
+                            {celda.pct.toFixed(0)}%
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {heatmapFiltrado.length > 250 && (
+              <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 6, textAlign: "center" }}>
+                Mostrando 250 de {heatmapFiltrado.length}. Usá el buscador para filtrar.
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ───── SUB-TAB: TOP DEUDORES ───── */}
+        {subtab === "deudores" && (
+          <div>
+            <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 12, flexWrap: "wrap" }}>
+              <input type="text" placeholder="Buscar persona o contratista..." value={busqueda} onChange={e => setBusqueda(e.target.value)}
+                style={{ flex: 1, minWidth: 240, padding: "6px 10px", fontSize: 12, border: "1px solid #e4e7ec", borderRadius: 4 }} />
+              <div style={{ fontSize: 11, color: "#64748b" }}>
+                {deudoresResumen.length} personas activas con deudas históricas
+              </div>
+            </div>
+            <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, overflow: "auto", maxHeight: 640 }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+                <thead style={{ position: "sticky", top: 0, background: "#1a3a6b", color: "#fff", zIndex: 1 }}>
+                  <tr>
+                    <th style={{ padding: "8px 10px", textAlign: "left", fontSize: 10, fontWeight: 600 }}>Contratista</th>
+                    <th style={{ padding: "8px 10px", textAlign: "left", fontSize: 10, fontWeight: 600 }}>Persona/Recurso</th>
+                    <th style={{ padding: "8px 10px", textAlign: "right", fontSize: 10, fontWeight: 600 }}>Total deudas</th>
+                    <th style={{ padding: "8px 10px", textAlign: "right", fontSize: 10, fontWeight: 600 }}>Meses</th>
+                    <th style={{ padding: "8px 10px", textAlign: "right", fontSize: 10, fontWeight: 600 }}>Docs distintos</th>
+                    <th style={{ padding: "8px 10px", textAlign: "center", fontSize: 10, fontWeight: 600 }}>Más antigua</th>
+                    <th style={{ padding: "8px 10px", textAlign: "center", fontSize: 10, fontWeight: 600 }}>Más reciente</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {deudoresResumen
+                    .filter(d => {
+                      if (!busqueda) return true;
+                      const q = busqueda.toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "");
+                      const c = (d.contratista || "").toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "");
+                      const dt = (d.detalle || "").toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "");
+                      return c.includes(q) || dt.includes(q);
+                    })
+                    .slice(0, 300)
+                    .map((d, i) => (
+                      <tr key={i} style={{ borderTop: "1px solid #f1f5f9" }}>
+                        <td style={{ padding: "5px 10px", maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={d.contratista}>
+                          {(d.contratista || "—").substring(0, 35)}
+                        </td>
+                        <td style={{ padding: "5px 10px", fontWeight: 500 }}>{d.detalle || "—"}</td>
+                        <td style={{ padding: "5px 10px", textAlign: "right" }}>
+                          <span style={{
+                            background: d.total_deudas >= 30 ? "#fee2e2" : d.total_deudas >= 10 ? "#fef3c7" : "#f1f5f9",
+                            color: d.total_deudas >= 30 ? "#991b1b" : d.total_deudas >= 10 ? "#92400e" : "#475569",
+                            padding: "2px 8px", borderRadius: 10, fontWeight: 700, fontSize: 10,
+                          }}>
+                            {d.total_deudas}
+                          </span>
+                        </td>
+                        <td style={{ padding: "5px 10px", textAlign: "right", color: "#475569" }}>{d.meses_con_deuda}</td>
+                        <td style={{ padding: "5px 10px", textAlign: "right", color: "#475569" }}>{d.docs_distintos_adeudados || "—"}</td>
+                        <td style={{ padding: "5px 10px", textAlign: "center", fontSize: 10, fontFamily: "monospace", color: "#64748b" }}>
+                          {d.deuda_mas_antigua ? d.deuda_mas_antigua.substring(0,7) : "—"}
+                        </td>
+                        <td style={{ padding: "5px 10px", textAlign: "center", fontSize: 10, fontFamily: "monospace", color: "#64748b" }}>
+                          {d.deuda_mas_reciente ? d.deuda_mas_reciente.substring(0,7) : "—"}
+                        </td>
+                      </tr>
+                    ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* ───── SUB-TAB: DESAPARECIDOS ───── */}
+        {subtab === "desaparecidos" && (
+          <div>
+            <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 12, flexWrap: "wrap" }}>
+              <input type="text" placeholder="Buscar persona o contratista..." value={busqueda} onChange={e => setBusqueda(e.target.value)}
+                style={{ flex: 1, minWidth: 240, padding: "6px 10px", fontSize: 12, border: "1px solid #e4e7ec", borderRadius: 4 }} />
+              <div style={{ fontSize: 11, color: "#64748b" }}>
+                {desaparecidos.length} empleados/vehículos/contratistas que pasaron por el sistema y ya no están
+              </div>
+            </div>
+            <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, overflow: "auto", maxHeight: 640 }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+                <thead style={{ position: "sticky", top: 0, background: "#6b21a8", color: "#fff", zIndex: 1 }}>
+                  <tr>
+                    <th style={{ padding: "8px 10px", textAlign: "left", fontSize: 10, fontWeight: 600 }}>Contratista</th>
+                    <th style={{ padding: "8px 10px", textAlign: "left", fontSize: 10, fontWeight: 600 }}>Quién</th>
+                    <th style={{ padding: "8px 10px", textAlign: "center", fontSize: 10, fontWeight: 600 }}>Tipo</th>
+                    <th style={{ padding: "8px 10px", textAlign: "center", fontSize: 10, fontWeight: 600 }}>Último mes visto</th>
+                    <th style={{ padding: "8px 10px", textAlign: "right", fontSize: 10, fontWeight: 600 }}>Meses presente</th>
+                    <th style={{ padding: "8px 10px", textAlign: "right", fontSize: 10, fontWeight: 600 }}>Total docs</th>
+                    <th style={{ padding: "8px 10px", textAlign: "right", fontSize: 10, fontWeight: 600 }}>Pendientes al irse</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {desaparecidos
+                    .filter(d => {
+                      if (!busqueda) return true;
+                      const q = busqueda.toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "");
+                      const c = (d.contratista || "").toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "");
+                      const dt = (d.detalle || "").toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "");
+                      return c.includes(q) || dt.includes(q);
+                    })
+                    .slice(0, 400)
+                    .map((d, i) => (
+                      <tr key={i} style={{ borderTop: "1px solid #f1f5f9" }}>
+                        <td style={{ padding: "5px 10px", maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={d.contratista}>
+                          {(d.contratista || "—").substring(0, 35)}
+                        </td>
+                        <td style={{ padding: "5px 10px", fontWeight: 500 }}>{d.detalle || "—"}</td>
+                        <td style={{ padding: "5px 10px", textAlign: "center" }}>
+                          <span style={{
+                            fontSize: 9, padding: "1px 6px", borderRadius: 3, fontWeight: 600, textTransform: "uppercase",
+                            background: d.entidad === "empleado" ? "#dbeafe" : d.entidad === "vehiculo" ? "#fef3c7" : "#f3e8ff",
+                            color: d.entidad === "empleado" ? "#1e40af" : d.entidad === "vehiculo" ? "#92400e" : "#6b21a8",
+                          }}>{d.entidad || "—"}</span>
+                        </td>
+                        <td style={{ padding: "5px 10px", textAlign: "center", fontFamily: "monospace", fontSize: 10, color: "#64748b" }}>
+                          {d.ultimo_periodo_visto ? d.ultimo_periodo_visto.substring(0,7) : "—"}
+                        </td>
+                        <td style={{ padding: "5px 10px", textAlign: "right", color: "#475569" }}>{d.meses_presentes}</td>
+                        <td style={{ padding: "5px 10px", textAlign: "right", color: "#475569" }}>{d.docs_totales_ultimo_mes}</td>
+                        <td style={{ padding: "5px 10px", textAlign: "right", fontWeight: 700, color: d.docs_pendientes_al_irse > 0 ? "#991b1b" : "#94a3b8" }}>
+                          {d.docs_pendientes_al_irse}
+                        </td>
+                      </tr>
+                    ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
       </div>
     </div>
   );
@@ -13157,7 +13878,6 @@ function ModuloCertificacionesMadre() {
   const tabs = [
     { id: "ingresos",    label: "Certificación Nuevos Ingresos", desc: "Drivers MX (Mercado Libre)" },
     { id: "pagos",       label: "Certificación para Pagos",      desc: "Contratistas Chile (Certronic)" },
-    { id: "variaciones", label: "Variaciones Diarias",            desc: "Cambios día a día en estados" },
   ];
   return (
     <div style={{ padding: 0 }}>
@@ -13181,7 +13901,6 @@ function ModuloCertificacionesMadre() {
       </div>
       {subtab === "ingresos"    && <ModuloCertificaciones />}
       {subtab === "pagos"       && <ModuloPagos />}
-      {subtab === "variaciones" && <VariacionesDiarias />}
     </div>
   );
 }
