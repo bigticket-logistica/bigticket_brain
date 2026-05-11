@@ -20730,6 +20730,23 @@ const REGEX_CECO = /S[A-Z]{1,3}\d{1,2}/g;
 // PDF.js desde CDN
 const PDFJS_CDN = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
 const PDFJS_WORKER = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+// localStorage keys (se persiste el último asunto/cuerpo entre sesiones)
+const LS_KEY_ASUNTO = "pref_mx_ultimo_asunto";
+const LS_KEY_CUERPO = "pref_mx_ultimo_cuerpo";
+// Defaults iniciales (se usan solo si nunca se editó el cuerpo)
+const ASUNTO_DEFAULT = "Prefactura {CECO} — período {PERIODO} — {OPERACION}";
+const CUERPO_DEFAULT = `Estimado(a) {TRANSPORTISTA},
+
+Adjunto encontrará su prefactura correspondiente al período {PERIODO}, operación {CECO}.
+
+Favor emitir su factura como máximo el día jueves XX/XX a las 12:00 Hrs para que esta pueda ser procesada y pagada el mismo XX-XX. En caso contrario, su pago será reagendado para el día lunes XX-XX.
+
+En caso de presentar diferencias, favor notificar vía mail a su supervisor directo para que estas puedan ser validadas e informadas a nuestra área para reliquidación.
+
+Quedamos a sus órdenes ante cualquier consulta.
+
+Saludos cordiales,
+Equipo BigTicket MX`;
 
 // ─── HELPERS ─────────────────────────────────────────────────────────────────────────
 function pf_correoValido(c) {
@@ -20943,8 +20960,27 @@ function PrefEnvioMasivo({ transportistas, parametros, usuario, onActualizarMaes
   const [editFila, setEditFila] = useState(null);
   const [logFinal, setLogFinal] = useState(null);
   const [arrastrando, setArrastrando] = useState(false);
-  const [modalAgregar, setModalAgregar] = useState(null); // { tipo: 'trans'|'ceco', prefill }
+  const [modalAgregar, setModalAgregar] = useState(null);
   const pdfInputRef = useRef(null);
+
+  // ★ Editor de asunto/cuerpo del lote (se aplica a TODOS los envíos)
+  // Persiste en localStorage para que Esteban no tenga que reescribir cada vez
+  const [asuntoLote, setAsuntoLote] = useState(() => {
+    try { return localStorage.getItem(LS_KEY_ASUNTO) || ASUNTO_DEFAULT; }
+    catch { return ASUNTO_DEFAULT; }
+  });
+  const [cuerpoLote, setCuerpoLote] = useState(() => {
+    try { return localStorage.getItem(LS_KEY_CUERPO) || CUERPO_DEFAULT; }
+    catch { return CUERPO_DEFAULT; }
+  });
+
+  // Guardar en localStorage cuando cambian
+  useEffect(() => {
+    try { localStorage.setItem(LS_KEY_ASUNTO, asuntoLote); } catch {}
+  }, [asuntoLote]);
+  useEffect(() => {
+    try { localStorage.setItem(LS_KEY_CUERPO, cuerpoLote); } catch {}
+  }, [cuerpoLote]);
 
   // Lookups
   const transByNombre = useMemo(() => {
@@ -20959,6 +20995,7 @@ function PrefEnvioMasivo({ transportistas, parametros, usuario, onActualizarMaes
   }, [parametros]);
 
   // Procesar un PDF: extraer texto + parsear + cruzar con Supabase
+  // El asunto/cuerpo NO se aplican acá, se aplican al momento de enviar (con el editor del lote)
   const procesarPDF = async (file, idx) => {
     try {
       const texto = await pf_extraerTextoPDF(file);
@@ -20969,18 +21006,6 @@ function PrefEnvioMasivo({ transportistas, parametros, usuario, onActualizarMaes
       const param = parsed.ceco
         ? paramsByCeco.get(parsed.ceco.toUpperCase().trim())
         : null;
-
-      const vars = {
-        TRANSPORTISTA: parsed.transportista,
-        CECO: parsed.ceco,
-        PERIODO: parsed.periodo,
-        RFC: parsed.rfc,
-        OPERACION: parsed.operacion,
-        SUPERVISOR: param?.supervisor || parsed.supervisorPDF || "",
-      };
-
-      const asunto = pf_aplicarPlantilla(param?.asunto_plantilla || "", vars);
-      const cuerpo = pf_aplicarPlantilla(param?.cuerpo_plantilla || "", vars);
 
       return {
         idx,
@@ -20993,8 +21018,10 @@ function PrefEnvioMasivo({ transportistas, parametros, usuario, onActualizarMaes
         editTo: trans?.correo_to || "",
         editCc: trans?.correo_cc || param?.correo_supervisor || "",
         editBcc: trans?.correo_bcc || "",
-        editAsunto: asunto,
-        editCuerpo: cuerpo,
+        // editAsunto/editCuerpo NO se guardan aquí — se generan dinámicamente desde el editor del lote
+        // Solo se llenan si el usuario edita manualmente esta fila puntual (override por fila)
+        overrideAsunto: null,
+        overrideCuerpo: null,
         estadoEnvio: null,
         motivoEnvio: "",
         tsEnvio: null,
@@ -21010,7 +21037,7 @@ function PrefEnvioMasivo({ transportistas, parametros, usuario, onActualizarMaes
         trans: null,
         param: null,
         editTo: "", editCc: "", editBcc: "",
-        editAsunto: "", editCuerpo: "",
+        overrideAsunto: null, overrideCuerpo: null,
         estadoEnvio: null, motivoEnvio: "", tsEnvio: null,
         errorParseo: e.message || String(e),
       };
@@ -21026,7 +21053,6 @@ function PrefEnvioMasivo({ transportistas, parametros, usuario, onActualizarMaes
       return;
     }
     setPdfsEnProceso(archivos.length);
-    // Procesar en serie para no saturar el navegador con muchos PDFs en paralelo
     const idxInicio = filas.length;
     const nuevos = [];
     for (let i = 0; i < archivos.length; i++) {
@@ -21035,17 +21061,25 @@ function PrefEnvioMasivo({ transportistas, parametros, usuario, onActualizarMaes
       setPdfsEnProceso(archivos.length - i - 1);
     }
     setPdfsEnProceso(0);
-    // Deduplicar por nombre de archivo
     setFilas(prev => {
       const map = new Map();
       [...prev, ...nuevos].forEach(f => map.set(f.nombre, f));
-      // Re-numerar idx
       return Array.from(map.values()).map((f, i) => ({ ...f, idx: i }));
     });
     setLogFinal(null);
   };
 
-  // Validación y estado de cada fila
+  // Función para armar las variables y aplicar plantillas de UNA fila
+  const armarVariables = (f) => ({
+    TRANSPORTISTA: f.parsed.transportista,
+    CECO: f.parsed.ceco,
+    PERIODO: f.parsed.periodo,
+    RFC: f.parsed.rfc,
+    OPERACION: f.parsed.operacion,
+    SUPERVISOR: f.param?.supervisor || f.parsed.supervisorPDF || "",
+  });
+
+  // Validación y estado de cada fila (incluye reemplazo de variables en preview)
   const filasConEstado = useMemo(() => {
     return filas.map(f => {
       const valTo = pf_limpiarLista(f.editTo);
@@ -21061,14 +21095,20 @@ function PrefEnvioMasivo({ transportistas, parametros, usuario, onActualizarMaes
       else if (!valTo.valida) errores.push("TO inválido");
       if (f.editCc && !valCc.valida) errores.push("CC inválido");
       if (f.editBcc && !valBcc.valida) errores.push("BCC inválido");
-      return { ...f, errores, listo: errores.length === 0 };
+
+      // Preview del asunto/cuerpo aplicando variables
+      const vars = armarVariables(f);
+      const asuntoFinal = pf_aplicarPlantilla(f.overrideAsunto !== null ? f.overrideAsunto : asuntoLote, vars);
+      const cuerpoFinal = pf_aplicarPlantilla(f.overrideCuerpo !== null ? f.overrideCuerpo : cuerpoLote, vars);
+
+      return { ...f, errores, listo: errores.length === 0, asuntoFinal, cuerpoFinal };
     });
-  }, [filas]);
+  }, [filas, asuntoLote, cuerpoLote]);
 
   const totalListos = filasConEstado.filter(f => f.listo).length;
   const totalConErrores = filasConEstado.length - totalListos;
 
-  // Edición inline
+  // Edición inline (override de fila puntual)
   const guardarEdicion = (idx, campos) => {
     setFilas(prev => prev.map(f => f.idx === idx ? { ...f, ...campos } : f));
     setEditFila(null);
@@ -21077,25 +21117,29 @@ function PrefEnvioMasivo({ transportistas, parametros, usuario, onActualizarMaes
     setFilas(prev => prev.filter(f => f.idx !== idx).map((f, i) => ({ ...f, idx: i })));
   };
   const limpiarTodo = () => {
-    if (!confirm("¿Limpiar todos los PDFs y resultados?")) return;
+    if (!confirm("¿Limpiar todos los PDFs y resultados?\n\n(El asunto y cuerpo se mantienen)")) return;
     setFilas([]); setError(""); setLogFinal(null); setProgreso({ actual: 0, total: 0 });
   };
+  const restaurarPlantillaDefault = () => {
+    if (!confirm("¿Restaurar el asunto y cuerpo al valor por defecto?\n\nVas a perder cualquier cambio que hayas hecho.")) return;
+    setAsuntoLote(ASUNTO_DEFAULT);
+    setCuerpoLote(CUERPO_DEFAULT);
+  };
 
-  // Cuando se agregan transportistas/CECOs desde el modal, refrescamos y re-cruzamos
   const onAgregarYRefrescar = async () => {
     setModalAgregar(null);
     await onActualizarMaestros();
-    // Re-procesar las filas existentes para que tomen los datos nuevos
     if (filas.length > 0) {
       const reprocesadas = [];
       for (const f of filas) {
         const nueva = await procesarPDF(f.file, f.idx);
-        // Preservar ediciones manuales si existían
         reprocesadas.push({
           ...nueva,
           editTo: f.editTo && f.editTo !== "" ? f.editTo : nueva.editTo,
           editCc: f.editCc && f.editCc !== "" ? f.editCc : nueva.editCc,
           editBcc: f.editBcc && f.editBcc !== "" ? f.editBcc : nueva.editBcc,
+          overrideAsunto: f.overrideAsunto,
+          overrideCuerpo: f.overrideCuerpo,
           estadoEnvio: f.estadoEnvio,
           motivoEnvio: f.motivoEnvio,
           tsEnvio: f.tsEnvio,
@@ -21110,6 +21154,14 @@ function PrefEnvioMasivo({ transportistas, parametros, usuario, onActualizarMaes
     const enviables = filasConEstado.filter(f => f.listo);
     if (enviables.length === 0) {
       alert("No hay filas listas para enviar. Revisá los errores en la tabla.");
+      return;
+    }
+    if (!asuntoLote.trim()) {
+      alert("El asunto del correo está vacío. Escribí un asunto antes de enviar.");
+      return;
+    }
+    if (!cuerpoLote.trim()) {
+      alert("El cuerpo del correo está vacío. Escribí un cuerpo antes de enviar.");
       return;
     }
     if (!confirm(
@@ -21146,8 +21198,8 @@ function PrefEnvioMasivo({ transportistas, parametros, usuario, onActualizarMaes
           correoTo: pf_limpiarLista(f.editTo).limpia,
           cc: pf_limpiarLista(f.editCc).limpia,
           bcc: pf_limpiarLista(f.editBcc).limpia,
-          asunto: f.editAsunto || `Prefactura ${f.parsed.ceco} — ${f.parsed.periodo}`,
-          cuerpo: f.editCuerpo || "",
+          asunto: f.asuntoFinal || `Prefactura ${f.parsed.ceco} — ${f.parsed.periodo}`,
+          cuerpo: f.cuerpoFinal || "",
           nombrePdf: f.nombre,
           pdfBase64,
         };
@@ -21215,7 +21267,7 @@ function PrefEnvioMasivo({ transportistas, parametros, usuario, onActualizarMaes
       ...filasConEstado.map((f, i) => [
         i + 1, f.nombre,
         f.parsed.transportista, f.parsed.rfc, f.parsed.ceco, f.parsed.operacion, f.parsed.periodo,
-        f.editTo, f.editCc, f.editBcc, f.editAsunto,
+        f.editTo, f.editCc, f.editBcc, f.asuntoFinal,
         f.estadoEnvio === "ok" ? "ENVIADO" :
           f.estadoEnvio === "fallido" ? "FALLIDO" :
           f.errores.length > 0 ? "OMITIDO: " + f.errores.join(", ") : "PENDIENTE",
@@ -21231,6 +21283,12 @@ function PrefEnvioMasivo({ transportistas, parametros, usuario, onActualizarMaes
       ["Enviados OK", filasConEstado.filter(f => f.estadoEnvio === "ok").length],
       ["Fallidos", filasConEstado.filter(f => f.estadoEnvio === "fallido").length],
       ["Pendientes/Omitidos", filasConEstado.filter(f => !f.estadoEnvio).length],
+      [""],
+      ["Asunto utilizado"],
+      [asuntoLote],
+      [""],
+      ["Cuerpo utilizado"],
+      [cuerpoLote],
     ];
     await descargarExcelMultihoja(
       [{ nombre: "Resumen", datos: resumen }, { nombre: "Detalle", datos: detalle }],
@@ -21243,8 +21301,8 @@ function PrefEnvioMasivo({ transportistas, parametros, usuario, onActualizarMaes
       <div style={{ marginBottom: 16 }}>
         <div className="sec-title">Prefacturas · Envío Masivo</div>
         <div className="sec-sub">
-          Arrastrá los PDFs generados por la macro. El Brain lee cada PDF, extrae transportista, CECO y período,
-          cruza con la base de datos y arma cada correo. Sin planillas, sin pasos intermedios.
+          Arrastrá los PDFs generados por la macro. Ajustá el asunto y cuerpo del lote.
+          El Brain lee cada PDF, cruza con la base de datos, y envía masivamente.
         </div>
       </div>
 
@@ -21268,7 +21326,7 @@ function PrefEnvioMasivo({ transportistas, parametros, usuario, onActualizarMaes
         style={{
           border: `3px dashed ${arrastrando ? "#F47B20" : "#1a3a6b"}`,
           borderRadius: 16,
-          padding: "48px 24px",
+          padding: "40px 24px",
           textAlign: "center",
           cursor: "pointer",
           background: arrastrando ? "#fff7ed" : "#f8fafc",
@@ -21276,8 +21334,8 @@ function PrefEnvioMasivo({ transportistas, parametros, usuario, onActualizarMaes
           marginBottom: 16,
         }}
       >
-        <div style={{ fontSize: 56, marginBottom: 12 }}>📄</div>
-        <div style={{ fontSize: 18, color: "#1a3a6b", fontWeight: 700, marginBottom: 6 }}>
+        <div style={{ fontSize: 48, marginBottom: 10 }}>📄</div>
+        <div style={{ fontSize: 17, color: "#1a3a6b", fontWeight: 700, marginBottom: 6 }}>
           {pdfsEnProceso > 0
             ? `Procesando PDFs... (${pdfsEnProceso} pendientes)`
             : arrastrando
@@ -21287,15 +21345,15 @@ function PrefEnvioMasivo({ transportistas, parametros, usuario, onActualizarMaes
         <div style={{ fontSize: 13, color: "#64748b" }}>
           {pdfsEnProceso > 0
             ? "El Brain está leyendo cada PDF para extraer los datos."
-            : "o hacé clic para seleccionarlos desde tu PC · sin límite de cantidad"}
+            : "o hacé clic para seleccionarlos · sin límite de cantidad"}
         </div>
         {filas.length > 0 && pdfsEnProceso === 0 && (
           <div style={{
-            marginTop: 20, padding: "10px 16px", background: "#fff",
+            marginTop: 16, padding: "8px 14px", background: "#fff",
             border: "1px solid #1a3a6b", borderRadius: 10,
             display: "inline-flex", alignItems: "center", gap: 12,
           }}>
-            <span style={{ fontSize: 14, color: "#1a3a6b", fontWeight: 700 }}>
+            <span style={{ fontSize: 13, color: "#1a3a6b", fontWeight: 700 }}>
               ✓ {filas.length} PDF{filas.length === 1 ? "" : "s"} cargado{filas.length === 1 ? "" : "s"}
             </span>
             <button onClick={e => { e.stopPropagation(); limpiarTodo(); }}
@@ -21311,6 +21369,65 @@ function PrefEnvioMasivo({ transportistas, parametros, usuario, onActualizarMaes
           style={{ display: "none" }}
           onChange={e => { onPdfsDrop(e.target.files); e.target.value = ""; }}
         />
+      </div>
+
+      {/* ═══ ★ NUEVO: EDITOR DE ASUNTO Y CUERPO DEL LOTE ═════════════════════ */}
+      <div className="form-card">
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
+          <div className="form-title" style={{ margin: 0 }}>
+            ✉️ Asunto y cuerpo del correo
+          </div>
+          <span style={{ fontSize: 11, color: "#94a3b8", marginLeft: "auto" }}>
+            Se aplica a TODOS los envíos del lote
+          </span>
+          <button onClick={restaurarPlantillaDefault}
+            style={{
+              background: "transparent", border: "1px solid #e4e7ec", borderRadius: 6,
+              padding: "4px 10px", fontSize: 11, color: "#64748b", cursor: "pointer",
+              fontWeight: 600, fontFamily: "Geist, sans-serif",
+            }}>↺ Restaurar default</button>
+        </div>
+
+        {/* Asunto */}
+        <div className="field-row">
+          <div className="field-label">Asunto</div>
+          <input
+            value={asuntoLote}
+            onChange={e => setAsuntoLote(e.target.value)}
+            placeholder="Prefactura {CECO} — período {PERIODO}"
+            style={{ fontSize: 13 }}
+          />
+        </div>
+
+        {/* Cuerpo */}
+        <div className="field-row">
+          <div className="field-label">Cuerpo del correo</div>
+          <textarea
+            value={cuerpoLote}
+            onChange={e => setCuerpoLote(e.target.value)}
+            placeholder="Estimado(a) {TRANSPORTISTA}, ..."
+            style={{ height: 220, fontSize: 12, fontFamily: "monospace", lineHeight: 1.6, resize: "vertical" }}
+          />
+        </div>
+
+        {/* Variables disponibles */}
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center", marginTop: 8 }}>
+          <span style={{ fontSize: 11, color: "#64748b", fontWeight: 600 }}>Variables disponibles:</span>
+          {VARIABLES_PLANTILLA.map(v => (
+            <code key={v} style={{
+              background: "#eef2ff", color: "#1a3a6b", padding: "2px 8px",
+              borderRadius: 4, fontSize: 11, fontFamily: "monospace",
+            }}>{"{" + v + "}"}</code>
+          ))}
+        </div>
+
+        <div style={{
+          marginTop: 12, padding: "10px 12px", background: "#eef2ff", borderRadius: 8,
+          fontSize: 11, color: "#1a3a6b",
+        }}>
+          💡 Las variables se reemplazan automáticamente con los datos extraídos de cada PDF.
+          Tus cambios se guardan automáticamente en este navegador para la próxima vez.
+        </div>
       </div>
 
       {/* ═══ INDICADORES ════════════════════════════════════════════════════ */}
@@ -21442,8 +21559,6 @@ function PrefEnvioMasivo({ transportistas, parametros, usuario, onActualizarMaes
             ceco: modalAgregar.prefill.ceco || "",
             supervisor: modalAgregar.prefill.supervisor || "",
             correo_supervisor: "",
-            asunto_plantilla: "Prefactura {CECO} — período {PERIODO} — {OPERACION}",
-            cuerpo_plantilla: "",
             cuenta_envio: "prefacturas@bigticket.cl",
           }}
           esNuevo={true}
@@ -21491,21 +21606,23 @@ function FilaPrefactura({ fila, enEdicion, onEdit, onGuardar, onCancelar, onElim
   const [to, setTo] = useState(fila.editTo);
   const [cc, setCc] = useState(fila.editCc);
   const [bcc, setBcc] = useState(fila.editBcc);
-  const [asunto, setAsunto] = useState(fila.editAsunto);
-  const [cuerpo, setCuerpo] = useState(fila.editCuerpo);
+  // El asunto/cuerpo del lote ya están aplicados en fila.asuntoFinal/fila.cuerpoFinal
+  // Si la fila tiene override (porque el usuario ya editó manualmente), respetamos eso
+  const [asunto, setAsunto] = useState(fila.asuntoFinal);
+  const [cuerpo, setCuerpo] = useState(fila.cuerpoFinal);
 
   useEffect(() => {
     if (enEdicion) {
       setTo(fila.editTo); setCc(fila.editCc); setBcc(fila.editBcc);
-      setAsunto(fila.editAsunto); setCuerpo(fila.editCuerpo);
+      setAsunto(fila.asuntoFinal); setCuerpo(fila.cuerpoFinal);
     }
-  }, [enEdicion, fila.editTo, fila.editCc, fila.editBcc, fila.editAsunto, fila.editCuerpo]);
+  }, [enEdicion, fila.editTo, fila.editCc, fila.editBcc, fila.asuntoFinal, fila.cuerpoFinal]);
 
   let bgFila = "transparent";
   if (fila.estadoEnvio === "ok") bgFila = "#f0fdf4";
   else if (fila.estadoEnvio === "fallido") bgFila = "#fef2f2";
   else if (fila.estadoEnvio === "enviando") bgFila = "#fffbeb";
-  else if (!fila.listo) bgFila = "#fef2f2";  // ROJO cuando hay error (como pediste)
+  else if (!fila.listo) bgFila = "#fef2f2";
 
   if (enEdicion) {
     return (
@@ -21530,16 +21647,16 @@ function FilaPrefactura({ fila, enEdicion, onEdit, onGuardar, onCancelar, onElim
             <input value={bcc} onChange={e => setBcc(e.target.value)} placeholder="opcional" />
           </div>
           <div className="field-row">
-            <div className="field-label">Asunto</div>
+            <div className="field-label">Asunto (override solo para esta fila)</div>
             <input value={asunto} onChange={e => setAsunto(e.target.value)} />
           </div>
           <div className="field-row">
-            <div className="field-label">Cuerpo (variables ya reemplazadas)</div>
+            <div className="field-label">Cuerpo (override solo para esta fila · variables ya reemplazadas)</div>
             <textarea value={cuerpo} onChange={e => setCuerpo(e.target.value)} style={{ height: 140 }} />
           </div>
           <div style={{ fontSize: 11, color: "#64748b", marginBottom: 10 }}>
-            💡 Los cambios solo aplican a este envío. Para modificar permanentemente correos o
-            plantillas, andá a las sub-tabs "Transportistas" o "Parámetros".
+            💡 Estos cambios solo aplican a este envío puntual. Para cambiar el asunto/cuerpo
+            de todo el lote, editalo arriba en "Asunto y cuerpo del correo".
           </div>
           <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
             <button onClick={onCancelar}
@@ -21549,7 +21666,8 @@ function FilaPrefactura({ fila, enEdicion, onEdit, onGuardar, onCancelar, onElim
                 fontFamily: "Geist, sans-serif", fontWeight: 600,
               }}>Cancelar</button>
             <button onClick={() => onGuardar({
-              editTo: to, editCc: cc, editBcc: bcc, editAsunto: asunto, editCuerpo: cuerpo,
+              editTo: to, editCc: cc, editBcc: bcc,
+              overrideAsunto: asunto, overrideCuerpo: cuerpo,
             })} className="btn-blue" style={{ padding: "7px 14px", fontSize: 12 }}>
               Guardar cambios
             </button>
@@ -21948,7 +22066,7 @@ function ModalEdicionTransportista({ inicial, esNuevo, editandoId, onCancelar, o
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════════════
-// SUB-TAB 3: PARÁMETROS / CECOs
+// SUB-TAB 3: PARÁMETROS / CECOs (simplificado: sin plantillas, esas viven en el envío)
 // ═══════════════════════════════════════════════════════════════════════════════════════
 function PrefParametros({ data, onChange }) {
   const [editando, setEditando] = useState(null);
@@ -21965,7 +22083,7 @@ function PrefParametros({ data, onChange }) {
   };
 
   const filaEdicion = editando === "nuevo"
-    ? { ceco: "", supervisor: "", correo_supervisor: "", asunto_plantilla: "", cuerpo_plantilla: "", cuenta_envio: "prefacturas@bigticket.cl" }
+    ? { ceco: "", supervisor: "", correo_supervisor: "", cuenta_envio: "prefacturas@bigticket.cl" }
     : (editando ? data.find(p => p.id === editando) : null);
 
   return (
@@ -21973,7 +22091,10 @@ function PrefParametros({ data, onChange }) {
       <div style={{ marginBottom: 16, display: "flex", justifyContent: "space-between", alignItems: "flex-end", flexWrap: "wrap", gap: 10 }}>
         <div>
           <div className="sec-title">Parámetros por CECO</div>
-          <div className="sec-sub">Supervisor, asunto y cuerpo del correo por cada centro de operación.</div>
+          <div className="sec-sub">
+            Datos por centro de operación. El supervisor y su correo se usan automáticamente
+            en cada envío del CECO correspondiente.
+          </div>
         </div>
         <button className="btn-orange" onClick={() => setEditando("nuevo")} style={{ padding: "9px 16px", fontSize: 13 }}>
           + Nuevo CECO
@@ -21982,18 +22103,12 @@ function PrefParametros({ data, onChange }) {
 
       <div className="form-card" style={{ background: "#eff6ff", borderColor: "#bfdbfe" }}>
         <div style={{ fontSize: 13, fontWeight: 700, color: "#1a3a6b", marginBottom: 6 }}>
-          💡 Variables disponibles en asunto y cuerpo
+          💡 Sobre el asunto y cuerpo del correo
         </div>
-        <div style={{ fontSize: 11, color: "#1e40af", display: "flex", flexWrap: "wrap", gap: 6 }}>
-          {VARIABLES_PLANTILLA.map(v => (
-            <code key={v} style={{
-              background: "#fff", border: "1px solid #bfdbfe", borderRadius: 4,
-              padding: "2px 8px", fontFamily: "monospace",
-            }}>{"{" + v + "}"}</code>
-          ))}
-        </div>
-        <div style={{ fontSize: 11, color: "#1e40af", marginTop: 8 }}>
-          Estas variables se reemplazan automáticamente con los datos extraídos del PDF antes del envío.
+        <div style={{ fontSize: 12, color: "#1e40af" }}>
+          El asunto y cuerpo del correo NO se configuran aquí. Se editan directamente en la
+          sub-tab <strong>"Envío masivo"</strong> arriba de la tabla de envío, así podés ajustar
+          las fechas y detalles de cada lote sin tener que modificar la configuración permanente.
         </div>
       </div>
 
@@ -22004,15 +22119,14 @@ function PrefParametros({ data, onChange }) {
               <tr style={{ background: "#f8fafc", borderBottom: "1px solid #e4e7ec" }}>
                 <th style={pf_th()}>CECO</th>
                 <th style={pf_th()}>Supervisor</th>
-                <th style={pf_th()}>Correo supervisor (CC)</th>
-                <th style={pf_th()}>Asunto plantilla</th>
+                <th style={pf_th()}>Correo supervisor (CC automático)</th>
                 <th style={pf_th()}>Cuenta envío</th>
                 <th style={pf_th()}>Acciones</th>
               </tr>
             </thead>
             <tbody>
               {data.length === 0 ? (
-                <tr><td colSpan={6} style={{ padding: 30, textAlign: "center", color: "#94a3b8" }}>
+                <tr><td colSpan={5} style={{ padding: 30, textAlign: "center", color: "#94a3b8" }}>
                   No hay CECOs configurados. Agregá uno con el botón de arriba.
                 </td></tr>
               ) : data.map(p => (
@@ -22028,12 +22142,6 @@ function PrefParametros({ data, onChange }) {
                     <span style={{ fontSize: 11, color: "#64748b", wordBreak: "break-all" }}>
                       {p.correo_supervisor || "—"}
                     </span>
-                  </td>
-                  <td style={pf_td()}>
-                    <div style={{ fontSize: 11, maxWidth: 320, color: "#475569" }}>
-                      {(p.asunto_plantilla || "").slice(0, 70)}
-                      {(p.asunto_plantilla || "").length > 70 && "..."}
-                    </div>
                   </td>
                   <td style={pf_td()}>
                     <span style={{ fontSize: 11, color: "#64748b" }}>{p.cuenta_envio}</span>
@@ -22078,17 +22186,6 @@ function ModalEdicionParametro({ inicial, esNuevo, editandoId, onCancelar, onGua
   const [form, setForm] = useState(inicial);
   const [guardando, setGuardando] = useState(false);
 
-  const previewVars = {
-    TRANSPORTISTA: "LUIS FELIPE HIDALGO SANTIAGO",
-    CECO: form.ceco || "SMX7",
-    PERIODO: "27 DE ABRIL AL 03 DE MAYO",
-    RFC: "HISL871105C2A",
-    OPERACION: "ML_MX" + (form.ceco || "SMX7"),
-    SUPERVISOR: form.supervisor || "ROBERTO LOPEZ",
-  };
-  const asuntoPreview = pf_aplicarPlantilla(form.asunto_plantilla || "", previewVars);
-  const cuerpoPreview = pf_aplicarPlantilla(form.cuerpo_plantilla || "", previewVars);
-
   const handleGuardar = async () => {
     if (!form.ceco.trim()) { alert("El CECO es obligatorio."); return; }
     setGuardando(true);
@@ -22097,8 +22194,6 @@ function ModalEdicionParametro({ inicial, esNuevo, editandoId, onCancelar, onGua
         ceco: form.ceco.trim().toUpperCase(),
         supervisor: (form.supervisor || "").trim() || null,
         correo_supervisor: (form.correo_supervisor || "").trim() || null,
-        asunto_plantilla: (form.asunto_plantilla || "").trim() || null,
-        cuerpo_plantilla: (form.cuerpo_plantilla || "").trim() || null,
         cuenta_envio: (form.cuenta_envio || "").trim() || "prefacturas@bigticket.cl",
         updated_at: new Date().toISOString(),
       };
@@ -22122,7 +22217,7 @@ function ModalEdicionParametro({ inicial, esNuevo, editandoId, onCancelar, onGua
       display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 20,
     }} onClick={onCancelar}>
       <div onClick={e => e.stopPropagation()} style={{
-        background: "#fff", borderRadius: 14, padding: 24, maxWidth: 800, width: "100%",
+        background: "#fff", borderRadius: 14, padding: 24, maxWidth: 600, width: "100%",
         maxHeight: "90vh", overflowY: "auto",
       }}>
         <div style={{ fontSize: 16, fontWeight: 700, color: "#1a3a6b", marginBottom: 16 }}>
@@ -22141,47 +22236,22 @@ function ModalEdicionParametro({ inicial, esNuevo, editandoId, onCancelar, onGua
               placeholder="prefacturas@bigticket.cl" />
           </div>
         </div>
-        <div className="two-col">
-          <div className="field-row">
-            <div className="field-label">Supervisor</div>
-            <input value={form.supervisor || ""} onChange={e => setForm({ ...form, supervisor: e.target.value })}
-              placeholder="ROBERTO LOPEZ" />
-          </div>
-          <div className="field-row">
-            <div className="field-label">Correo supervisor (irá en CC del envío)</div>
-            <input value={form.correo_supervisor || ""} onChange={e => setForm({ ...form, correo_supervisor: e.target.value })}
-              placeholder="supervisor@bigticket.mx" />
-          </div>
+        <div className="field-row">
+          <div className="field-label">Supervisor</div>
+          <input value={form.supervisor || ""} onChange={e => setForm({ ...form, supervisor: e.target.value })}
+            placeholder="ROBERTO LOPEZ" />
         </div>
         <div className="field-row">
-          <div className="field-label">Asunto plantilla</div>
-          <input value={form.asunto_plantilla || ""} onChange={e => setForm({ ...form, asunto_plantilla: e.target.value })}
-            placeholder="Prefactura {CECO} — período {PERIODO}" />
-          {form.asunto_plantilla && (
-            <div style={{ fontSize: 10, color: "#16a34a", marginTop: 4 }}>
-              <strong>Preview:</strong> {asuntoPreview}
-            </div>
-          )}
+          <div className="field-label">Correo supervisor (irá en CC del envío)</div>
+          <input value={form.correo_supervisor || ""} onChange={e => setForm({ ...form, correo_supervisor: e.target.value })}
+            placeholder="supervisor@bigticket.mx" />
         </div>
-        <div className="field-row">
-          <div className="field-label">Cuerpo plantilla</div>
-          <textarea value={form.cuerpo_plantilla || ""} onChange={e => setForm({ ...form, cuerpo_plantilla: e.target.value })}
-            style={{ height: 180, fontFamily: "monospace", fontSize: 11 }}
-            placeholder="Estimado(a) {TRANSPORTISTA},&#10;&#10;Adjunto encontrará..." />
-          <div style={{ fontSize: 11, color: "#64748b", marginTop: 6 }}>
-            Variables disponibles: {VARIABLES_PLANTILLA.map(v => "{" + v + "}").join(", ")}
-          </div>
+        <div style={{
+          marginTop: 8, padding: "10px 12px", background: "#eff6ff", borderRadius: 8,
+          fontSize: 11, color: "#1a3a6b",
+        }}>
+          💡 El asunto y cuerpo del correo se editan en la sub-tab "Envío masivo" antes de cada lote.
         </div>
-        {form.cuerpo_plantilla && (
-          <div className="field-row">
-            <div className="field-label">Preview del cuerpo</div>
-            <div style={{
-              background: "#f8fafc", border: "1px solid #e4e7ec", borderRadius: 8,
-              padding: 12, fontSize: 11, whiteSpace: "pre-wrap", maxHeight: 200, overflowY: "auto",
-              color: "#1f2937",
-            }}>{cuerpoPreview}</div>
-          </div>
-        )}
         <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 14 }}>
           <button onClick={onCancelar} disabled={guardando}
             style={{
