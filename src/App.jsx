@@ -16535,7 +16535,7 @@ function rangoMesGlobal(mesGlobal) {
 }
 
 function IndicadoresOperacionalesMX({ usuario }) {
-  const [vista, setVista] = useState("resumen_kpi");
+  const [vista, setVista] = useState("compromiso");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [resumen, setResumen] = useState(null);
@@ -16609,14 +16609,10 @@ function IndicadoresOperacionalesMX({ usuario }) {
     return () => { alive = false; };
   }, [mesGlobal.anio, mesGlobal.mes]);
 
-  // Tabs: orden ahora con Hallazgos AL FINAL
+  // Tabs: solo Compromiso MELI e Inventario
   const tabs = [
-    { id: "resumen_kpi", label: "Resumen KPI", desc: "Día anterior · vista ejecutiva" },
+    { id: "compromiso", label: "Compromiso MELI", desc: "Operativa de mañana · SDD vs SPOT" },
     { id: "inventario", label: "Inventario", desc: "Drivers, vehículos, fantasmas" },
-    { id: "ciclo",      label: "Ciclo de aceptación", desc: "Embudo ofrecidas → ejecutadas" },
-    { id: "ventana_decisiones", label: "Ventana de Decisiones", desc: "Cambios de estado: arrepentimientos, cancelaciones, aceptaciones tarde" },
-    { id: "score",      label: "Score de compromiso", desc: "Calificación 0-100 por driver" },
-    { id: "hallazgos",  label: "Hallazgos", desc: "Lo más crítico para revisar" },
   ];
 
   if (loading) {
@@ -16685,8 +16681,8 @@ function IndicadoresOperacionalesMX({ usuario }) {
               </button>
             ))}
           </div>
-          {/* Dropdown global de mes (no aplica en Resumen KPI) */}
-          {vista !== "resumen_kpi" && (
+          {/* Dropdown global de mes (solo aplica en Inventario) */}
+          {vista === "inventario" && (
           <div style={{ display: "flex", alignItems: "center", gap: 8, paddingBottom: 8 }}>
             <span style={{ fontSize: 11, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5 }}>
               Período:
@@ -16713,12 +16709,8 @@ function IndicadoresOperacionalesMX({ usuario }) {
         </div>
       </div>
 
-      {vista === "resumen_kpi" && <PoolMeliResumenKPI />}
+      {vista === "compromiso" && <PoolMeliCompromiso />}
       {vista === "inventario" && <PoolMeliInventario drivers={drivers} vehiculos={vehiculos} resumen={resumen} setModal={setModal} setDetalle={setDetalle} mesGlobal={mesGlobal} />}
-      {vista === "ciclo"      && <PoolMeliCiclo scs={scs} resumen={resumen} setModal={setModal} mesGlobal={mesGlobal} />}
-      {vista === "ventana_decisiones" && <PoolMeliVentanaDecisiones mesGlobal={mesGlobal} />}
-      {vista === "score"      && <PoolMeliScore scores={scores} resumen={resumen} mesGlobal={mesGlobal} />}
-      {vista === "hallazgos"  && <PoolMeliHallazgos drivers={drivers} vehiculos={vehiculos} scs={scs} scores={scores} resumen={resumen} setModal={setModal} setVista={setVista} mesGlobal={mesGlobal} />}
 
       {modal && <MeliModal modal={modal} onClose={() => setModal(null)} />}
     </div>
@@ -18403,6 +18395,323 @@ function PoolMeliResumenKPI() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// COMPROMISO MELI — Vista de la operativa de mañana
+// ═══════════════════════════════════════════════════════════════════════════
+function PoolMeliCompromiso() {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [refreshKey, setRefreshKey] = useState(0);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const { data: result, error: err } = await sb.rpc("get_compromiso_meli_manana");
+        if (!alive) return;
+        if (err) throw err;
+        setData(result);
+      } catch (e) {
+        if (alive) setError(e.message || String(e));
+      } finally {
+        if (alive) setLoading(false);
+      }
+    })();
+    return () => { alive = false; };
+  }, [refreshKey]);
+
+  if (loading) {
+    return <div className="pg" style={{ padding: 60, textAlign: "center", color: "#888" }}>Cargando compromiso de mañana…</div>;
+  }
+  if (error) {
+    return <div className="pg" style={{ padding: 40, color: "#c0392b" }}>Error: {error}</div>;
+  }
+  if (!data) {
+    return <div className="pg" style={{ padding: 40, color: "#888" }}>Sin datos</div>;
+  }
+
+  const c = data.conteos || {};
+  const fechaManana = data.fecha_manana;
+  const generadoEn = data.generado_en ? new Date(data.generado_en) : null;
+
+  // Totales
+  const ofrecidasTotal = (c.ofrecidas_sdd || 0) + (c.ofrecidas_spot || 0);
+  const aceptadasTotal = (c.aceptadas_sdd || 0) + (c.aceptadas_spot || 0);
+  const rechazadasTotal = (c.rechazadas_sdd || 0) + (c.rechazadas_spot || 0);
+  const canceladasTotal = (c.canceladas_sdd || 0) + (c.canceladas_spot || 0);
+
+  // Cumplimiento = Aceptadas / (Ofrecidas - Canceladas MELI)
+  const calcularCump = (acept, ofrec, canc) => {
+    const efectivas = ofrec - canc;
+    if (efectivas <= 0) return null;
+    return (acept / efectivas) * 100;
+  };
+  const cumpTotal = calcularCump(aceptadasTotal, ofrecidasTotal, canceladasTotal);
+  const cumpSdd = calcularCump(c.aceptadas_sdd || 0, c.ofrecidas_sdd || 0, c.canceladas_sdd || 0);
+  const cumpSpot = calcularCump(c.aceptadas_spot || 0, c.ofrecidas_spot || 0, c.canceladas_spot || 0);
+  const efectTotal = ofrecidasTotal - canceladasTotal;
+  const efectSdd = (c.ofrecidas_sdd || 0) - (c.canceladas_sdd || 0);
+  const efectSpot = (c.ofrecidas_spot || 0) - (c.canceladas_spot || 0);
+
+  // Color del % según rango
+  const colorPct = (pct) => {
+    if (pct === null) return "#94a3b8";
+    if (pct >= 95) return "#047857";
+    if (pct >= 85) return "#0891b2";
+    if (pct >= 70) return "#ca8a04";
+    return "#b91c1c";
+  };
+
+  // Formato fecha larga
+  const meses = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
+  const dias = ["domingo","lunes","martes","miércoles","jueves","viernes","sábado"];
+  let fechaTexto = fechaManana;
+  if (fechaManana) {
+    const [y, m, d] = fechaManana.split("-").map(Number);
+    const fechaObj = new Date(y, m - 1, d);
+    fechaTexto = `${dias[fechaObj.getDay()]} ${d} de ${meses[m - 1]} de ${y}`;
+  }
+
+  return (
+    <div className="pg">
+      {/* Header con botón refresh */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
+        <div>
+          <div className="sec-title">Compromiso MELI</div>
+          <div className="sec-sub">
+            Operativa de mañana · {fechaTexto}
+            {generadoEn && (
+              <span style={{ color: "#94a3b8", marginLeft: 8 }}>
+                · datos al {generadoEn.toLocaleString("es-MX", { hour: "2-digit", minute: "2-digit", day: "2-digit", month: "2-digit" })}
+              </span>
+            )}
+          </div>
+        </div>
+        <button
+          onClick={() => setRefreshKey(k => k + 1)}
+          style={{
+            padding: "8px 14px", fontSize: 12, fontWeight: 600,
+            background: "#fff", color: "#1a3a6b",
+            border: "1px solid #e4e7ec", borderRadius: 6,
+            cursor: "pointer", fontFamily: "'Geist', sans-serif",
+            display: "flex", alignItems: "center", gap: 6,
+          }}
+          title="Recargar datos"
+        >
+          ↻ Refrescar
+        </button>
+      </div>
+
+      {/* TARJETAS DE % CUMPLIMIENTO */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12, marginBottom: 20 }}>
+        {/* Cumplimiento Total */}
+        <div className="form-card" style={{
+          marginBottom: 0,
+          background: "linear-gradient(135deg, #1a3a6b 0%, #0f2647 100%)",
+          color: "#fff", padding: 20,
+        }}>
+          <div style={{ fontSize: 10, fontWeight: 700, opacity: 0.8, textTransform: "uppercase", letterSpacing: 1, marginBottom: 8 }}>
+            % Cumplimiento Total
+          </div>
+          <div style={{ fontSize: 44, fontWeight: 700, lineHeight: 1, marginBottom: 8 }}>
+            {cumpTotal !== null ? `${cumpTotal.toFixed(1)}%` : "—"}
+          </div>
+          <div style={{ fontSize: 12, opacity: 0.9, marginBottom: 6 }}>
+            {aceptadasTotal} aceptadas / {efectTotal} efectivas
+          </div>
+          <div style={{ fontSize: 10, opacity: 0.7, lineHeight: 1.4 }}>
+            Fórmula: Aceptadas ÷ (Ofrecidas − Canceladas MELI)
+          </div>
+        </div>
+
+        {/* Cumplimiento SDD */}
+        <div className="form-card" style={{ marginBottom: 0, padding: 20, borderTop: `4px solid ${colorPct(cumpSdd)}` }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 1, marginBottom: 8 }}>
+            % Cumplimiento SDD
+            <span style={{ fontSize: 9, fontWeight: 600, color: "#94a3b8", marginLeft: 6, textTransform: "none", letterSpacing: 0 }}>
+              · Súper Dedicadas (flota fija)
+            </span>
+          </div>
+          <div style={{ fontSize: 44, fontWeight: 700, lineHeight: 1, marginBottom: 8, color: colorPct(cumpSdd) }}>
+            {cumpSdd !== null ? `${cumpSdd.toFixed(1)}%` : "—"}
+          </div>
+          <div style={{ fontSize: 12, color: "#334155", marginBottom: 6 }}>
+            {c.aceptadas_sdd || 0} aceptadas / {efectSdd} efectivas
+          </div>
+          <div style={{ fontSize: 10, color: "#94a3b8", lineHeight: 1.4 }}>
+            Aceptadas ÷ (Ofrecidas − Canceladas MELI)
+          </div>
+        </div>
+
+        {/* Cumplimiento SPOT */}
+        <div className="form-card" style={{ marginBottom: 0, padding: 20, borderTop: `4px solid ${colorPct(cumpSpot)}` }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 1, marginBottom: 8 }}>
+            % Cumplimiento SPOT
+            <span style={{ fontSize: 9, fontWeight: 600, color: "#94a3b8", marginLeft: 6, textTransform: "none", letterSpacing: 0 }}>
+              · Variables (flota flexible)
+            </span>
+          </div>
+          <div style={{ fontSize: 44, fontWeight: 700, lineHeight: 1, marginBottom: 8, color: colorPct(cumpSpot) }}>
+            {cumpSpot !== null ? `${cumpSpot.toFixed(1)}%` : "—"}
+          </div>
+          <div style={{ fontSize: 12, color: "#334155", marginBottom: 6 }}>
+            {c.aceptadas_spot || 0} aceptadas / {efectSpot} efectivas
+          </div>
+          <div style={{ fontSize: 10, color: "#94a3b8", lineHeight: 1.4 }}>
+            Aceptadas ÷ (Ofrecidas − Canceladas MELI)
+          </div>
+        </div>
+      </div>
+
+      {/* TARJETAS DE CONTEO POR STATUS */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 20 }}>
+        <CompromisoTarjeta
+          label="Ofrecidas"
+          sublabel="Total por MELI"
+          total={ofrecidasTotal}
+          sdd={c.ofrecidas_sdd || 0}
+          spot={c.ofrecidas_spot || 0}
+          color="#1a3a6b"
+        />
+        <CompromisoTarjeta
+          label="Aceptadas"
+          sublabel="Por nosotros"
+          total={aceptadasTotal}
+          sdd={c.aceptadas_sdd || 0}
+          spot={c.aceptadas_spot || 0}
+          color="#047857"
+        />
+        <CompromisoTarjeta
+          label="Rechazadas"
+          sublabel="Por nosotros"
+          total={rechazadasTotal}
+          sdd={c.rechazadas_sdd || 0}
+          spot={c.rechazadas_spot || 0}
+          color="#b91c1c"
+        />
+        <CompromisoTarjeta
+          label="Canceladas"
+          sublabel="Por MELI"
+          total={canceladasTotal}
+          sdd={c.canceladas_sdd || 0}
+          spot={c.canceladas_spot || 0}
+          color="#92400e"
+        />
+      </div>
+
+      {/* RANKINGS POR SC */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+        {/* Columna SDD */}
+        <div className="form-card" style={{ marginBottom: 0 }}>
+          <div className="form-title" style={{ marginBottom: 4 }}>Ranking SDD por SC</div>
+          <div style={{ fontSize: 11, color: "#64748b", marginBottom: 14 }}>Top 5 · Súper Dedicadas (compromiso obligatorio)</div>
+          <RankingBloque
+            titulo="Más aceptadas"
+            datos={data.ranking_sdd_aceptadas || []}
+            color="#047857"
+          />
+          <div style={{ height: 12 }} />
+          <RankingBloque
+            titulo="Más rechazadas"
+            datos={data.ranking_sdd_rechazadas || []}
+            color="#b91c1c"
+            emptyMsg="Sin rechazadas SDD"
+          />
+        </div>
+
+        {/* Columna SPOT */}
+        <div className="form-card" style={{ marginBottom: 0 }}>
+          <div className="form-title" style={{ marginBottom: 4 }}>Ranking SPOT por SC</div>
+          <div style={{ fontSize: 11, color: "#64748b", marginBottom: 14 }}>Top 5 · Variables (flota flexible)</div>
+          <RankingBloque
+            titulo="Más aceptadas"
+            datos={data.ranking_spot_aceptadas || []}
+            color="#047857"
+          />
+          <div style={{ height: 12 }} />
+          <RankingBloque
+            titulo="Más rechazadas"
+            datos={data.ranking_spot_rechazadas || []}
+            color="#b91c1c"
+            emptyMsg="Sin rechazadas SPOT"
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Tarjeta de conteo por status (con desglose SDD/SPOT) ───────────────────
+function CompromisoTarjeta({ label, sublabel, total, sdd, spot, color }) {
+  return (
+    <div className="form-card" style={{ marginBottom: 0, padding: 16, borderTop: `3px solid ${color}` }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5 }}>
+        {label}
+      </div>
+      <div style={{ fontSize: 10, color: "#94a3b8", marginBottom: 8 }}>{sublabel}</div>
+      <div style={{ fontSize: 36, fontWeight: 700, color, lineHeight: 1, marginBottom: 12, fontVariantNumeric: "tabular-nums" }}>
+        {total}
+      </div>
+      <div style={{ borderTop: "1px solid #f1f5f9", paddingTop: 10 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+          <span style={{ fontSize: 11, fontWeight: 600, color: "#334155" }}>SDD</span>
+          <span style={{ fontSize: 14, fontWeight: 700, color: "#0f172a", fontVariantNumeric: "tabular-nums" }}>{sdd}</span>
+        </div>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <span style={{ fontSize: 11, fontWeight: 600, color: "#334155" }}>SPOT</span>
+          <span style={{ fontSize: 14, fontWeight: 700, color: "#0f172a", fontVariantNumeric: "tabular-nums" }}>{spot}</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Bloque de ranking (lista de SCs con barra) ─────────────────────────────
+function RankingBloque({ titulo, datos, color, emptyMsg = "Sin datos" }) {
+  if (!datos || datos.length === 0) {
+    return (
+      <div>
+        <div style={{ fontSize: 11, fontWeight: 700, color, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>
+          {titulo}
+        </div>
+        <div style={{ fontSize: 12, color: "#94a3b8", fontStyle: "italic", padding: "8px 0" }}>
+          {emptyMsg}
+        </div>
+      </div>
+    );
+  }
+
+  const maxCant = Math.max(...datos.map(d => Number(d.cant) || 0));
+
+  return (
+    <div>
+      <div style={{ fontSize: 11, fontWeight: 700, color, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>
+        {titulo}
+      </div>
+      {datos.map((d, i) => {
+        const pct = maxCant > 0 ? (Number(d.cant) / maxCant) * 100 : 0;
+        return (
+          <div key={d.facility_id} style={{ marginBottom: 6 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 3 }}>
+              <span style={{ fontSize: 12, fontWeight: 600, color: "#0f172a" }}>
+                <span style={{ color: "#cbd5e1", fontFamily: "monospace", marginRight: 6 }}>#{i + 1}</span>
+                {d.facility_id}
+              </span>
+              <span style={{ fontSize: 13, fontWeight: 700, color, fontVariantNumeric: "tabular-nums" }}>{d.cant}</span>
+            </div>
+            <div style={{ height: 4, background: "#f1f5f9", borderRadius: 2, overflow: "hidden" }}>
+              <div style={{ height: "100%", width: `${pct}%`, background: color, borderRadius: 2 }} />
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
