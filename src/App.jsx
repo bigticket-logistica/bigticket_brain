@@ -16609,9 +16609,10 @@ function IndicadoresOperacionalesMX({ usuario }) {
     return () => { alive = false; };
   }, [mesGlobal.anio, mesGlobal.mes]);
 
-  // Tabs: solo Compromiso MELI e Inventario
+  // Tabs: Compromiso MELI, KPI de Operación, Inventario
   const tabs = [
     { id: "compromiso", label: "Compromiso MELI", desc: "Operativa de mañana · SDD vs SPOT" },
+    { id: "kpi_operacion", label: "KPI de Operación", desc: "NS Informe MELI vs Snapshots" },
     { id: "inventario", label: "Inventario", desc: "Drivers, vehículos, fantasmas" },
   ];
 
@@ -16710,6 +16711,7 @@ function IndicadoresOperacionalesMX({ usuario }) {
       </div>
 
       {vista === "compromiso" && <PoolMeliCompromiso />}
+      {vista === "kpi_operacion" && <PoolMeliKPIOperacion />}
       {vista === "inventario" && <PoolMeliInventario drivers={drivers} vehiculos={vehiculos} resumen={resumen} setModal={setModal} setDetalle={setDetalle} mesGlobal={mesGlobal} />}
 
       {modal && <MeliModal modal={modal} onClose={() => setModal(null)} />}
@@ -18441,13 +18443,11 @@ function PoolMeliCompromiso() {
   const fechaManana = data.fecha_manana;
   const generadoEn = data.generado_en ? new Date(data.generado_en) : null;
 
-  // Totales
   const ofrecidasTotal = (c.ofrecidas_sdd || 0) + (c.ofrecidas_spot || 0);
   const aceptadasTotal = (c.aceptadas_sdd || 0) + (c.aceptadas_spot || 0);
   const rechazadasTotal = (c.rechazadas_sdd || 0) + (c.rechazadas_spot || 0);
   const canceladasTotal = (c.canceladas_sdd || 0) + (c.canceladas_spot || 0);
 
-  // Cumplimiento = Aceptadas / (Ofrecidas - Canceladas MELI)
   const calcularCump = (acept, ofrec, canc) => {
     const efectivas = ofrec - canc;
     if (efectivas <= 0) return null;
@@ -18460,7 +18460,6 @@ function PoolMeliCompromiso() {
   const efectSdd = (c.ofrecidas_sdd || 0) - (c.canceladas_sdd || 0);
   const efectSpot = (c.ofrecidas_spot || 0) - (c.canceladas_spot || 0);
 
-  // Color del % según rango
   const colorPct = (pct) => {
     if (pct === null) return "#94a3b8";
     if (pct >= 95) return "#047857";
@@ -18469,7 +18468,6 @@ function PoolMeliCompromiso() {
     return "#b91c1c";
   };
 
-  // Formato fecha larga
   const meses = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
   const dias = ["domingo","lunes","martes","miércoles","jueves","viernes","sábado"];
   let fechaTexto = fechaManana;
@@ -18481,7 +18479,6 @@ function PoolMeliCompromiso() {
 
   return (
     <div className="pg">
-      {/* Header con botón refresh */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
         <div>
           <div className="sec-title">Compromiso MELI</div>
@@ -18509,9 +18506,7 @@ function PoolMeliCompromiso() {
         </button>
       </div>
 
-      {/* TARJETAS DE % CUMPLIMIENTO */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12, marginBottom: 20 }}>
-        {/* Cumplimiento Total */}
         <div className="form-card" style={{
           marginBottom: 0,
           background: "linear-gradient(135deg, #1a3a6b 0%, #0f2647 100%)",
@@ -18531,7 +18526,6 @@ function PoolMeliCompromiso() {
           </div>
         </div>
 
-        {/* Cumplimiento SDD */}
         <div className="form-card" style={{ marginBottom: 0, padding: 20, borderTop: `4px solid ${colorPct(cumpSdd)}` }}>
           <div style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 1, marginBottom: 8 }}>
             % Cumplimiento SDD
@@ -18550,7 +18544,6 @@ function PoolMeliCompromiso() {
           </div>
         </div>
 
-        {/* Cumplimiento SPOT */}
         <div className="form-card" style={{ marginBottom: 0, padding: 20, borderTop: `4px solid ${colorPct(cumpSpot)}` }}>
           <div style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 1, marginBottom: 8 }}>
             % Cumplimiento SPOT
@@ -18570,78 +18563,28 @@ function PoolMeliCompromiso() {
         </div>
       </div>
 
-      {/* TARJETAS DE CONTEO POR STATUS */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 20 }}>
-        <CompromisoTarjeta
-          label="Ofrecidas"
-          sublabel="Total por MELI"
-          total={ofrecidasTotal}
-          sdd={c.ofrecidas_sdd || 0}
-          spot={c.ofrecidas_spot || 0}
-          color="#1a3a6b"
-        />
-        <CompromisoTarjeta
-          label="Aceptadas"
-          sublabel="Por nosotros"
-          total={aceptadasTotal}
-          sdd={c.aceptadas_sdd || 0}
-          spot={c.aceptadas_spot || 0}
-          color="#047857"
-        />
-        <CompromisoTarjeta
-          label="Rechazadas"
-          sublabel="Por nosotros"
-          total={rechazadasTotal}
-          sdd={c.rechazadas_sdd || 0}
-          spot={c.rechazadas_spot || 0}
-          color="#b91c1c"
-        />
-        <CompromisoTarjeta
-          label="Canceladas"
-          sublabel="Por MELI"
-          total={canceladasTotal}
-          sdd={c.canceladas_sdd || 0}
-          spot={c.canceladas_spot || 0}
-          color="#92400e"
-        />
+        <CompromisoTarjeta label="Ofrecidas" sublabel="Total por MELI" total={ofrecidasTotal} sdd={c.ofrecidas_sdd || 0} spot={c.ofrecidas_spot || 0} color="#1a3a6b" />
+        <CompromisoTarjeta label="Aceptadas" sublabel="Por nosotros" total={aceptadasTotal} sdd={c.aceptadas_sdd || 0} spot={c.aceptadas_spot || 0} color="#047857" />
+        <CompromisoTarjeta label="Rechazadas" sublabel="Por nosotros" total={rechazadasTotal} sdd={c.rechazadas_sdd || 0} spot={c.rechazadas_spot || 0} color="#b91c1c" />
+        <CompromisoTarjeta label="Canceladas" sublabel="Por MELI" total={canceladasTotal} sdd={c.canceladas_sdd || 0} spot={c.canceladas_spot || 0} color="#92400e" />
       </div>
 
-      {/* RANKINGS POR SC */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-        {/* Columna SDD */}
         <div className="form-card" style={{ marginBottom: 0 }}>
           <div className="form-title" style={{ marginBottom: 4 }}>Ranking SDD por SC</div>
           <div style={{ fontSize: 11, color: "#64748b", marginBottom: 14 }}>Top 5 · Súper Dedicadas (compromiso obligatorio)</div>
-          <RankingBloque
-            titulo="Más aceptadas"
-            datos={data.ranking_sdd_aceptadas || []}
-            color="#047857"
-          />
+          <RankingBloque titulo="Más aceptadas" datos={data.ranking_sdd_aceptadas || []} color="#047857" />
           <div style={{ height: 12 }} />
-          <RankingBloque
-            titulo="Más rechazadas"
-            datos={data.ranking_sdd_rechazadas || []}
-            color="#b91c1c"
-            emptyMsg="Sin rechazadas SDD"
-          />
+          <RankingBloque titulo="Más rechazadas" datos={data.ranking_sdd_rechazadas || []} color="#b91c1c" emptyMsg="Sin rechazadas SDD" />
         </div>
 
-        {/* Columna SPOT */}
         <div className="form-card" style={{ marginBottom: 0 }}>
           <div className="form-title" style={{ marginBottom: 4 }}>Ranking SPOT por SC</div>
           <div style={{ fontSize: 11, color: "#64748b", marginBottom: 14 }}>Top 5 · Variables (flota flexible)</div>
-          <RankingBloque
-            titulo="Más aceptadas"
-            datos={data.ranking_spot_aceptadas || []}
-            color="#047857"
-          />
+          <RankingBloque titulo="Más aceptadas" datos={data.ranking_spot_aceptadas || []} color="#047857" />
           <div style={{ height: 12 }} />
-          <RankingBloque
-            titulo="Más rechazadas"
-            datos={data.ranking_spot_rechazadas || []}
-            color="#b91c1c"
-            emptyMsg="Sin rechazadas SPOT"
-          />
+          <RankingBloque titulo="Más rechazadas" datos={data.ranking_spot_rechazadas || []} color="#b91c1c" emptyMsg="Sin rechazadas SPOT" />
         </div>
       </div>
     </div>
@@ -18652,13 +18595,9 @@ function PoolMeliCompromiso() {
 function CompromisoTarjeta({ label, sublabel, total, sdd, spot, color }) {
   return (
     <div className="form-card" style={{ marginBottom: 0, padding: 16, borderTop: `3px solid ${color}` }}>
-      <div style={{ fontSize: 11, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5 }}>
-        {label}
-      </div>
+      <div style={{ fontSize: 11, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5 }}>{label}</div>
       <div style={{ fontSize: 10, color: "#94a3b8", marginBottom: 8 }}>{sublabel}</div>
-      <div style={{ fontSize: 36, fontWeight: 700, color, lineHeight: 1, marginBottom: 12, fontVariantNumeric: "tabular-nums" }}>
-        {total}
-      </div>
+      <div style={{ fontSize: 36, fontWeight: 700, color, lineHeight: 1, marginBottom: 12, fontVariantNumeric: "tabular-nums" }}>{total}</div>
       <div style={{ borderTop: "1px solid #f1f5f9", paddingTop: 10 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
           <span style={{ fontSize: 11, fontWeight: 600, color: "#334155" }}>SDD</span>
@@ -18678,23 +18617,15 @@ function RankingBloque({ titulo, datos, color, emptyMsg = "Sin datos" }) {
   if (!datos || datos.length === 0) {
     return (
       <div>
-        <div style={{ fontSize: 11, fontWeight: 700, color, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>
-          {titulo}
-        </div>
-        <div style={{ fontSize: 12, color: "#94a3b8", fontStyle: "italic", padding: "8px 0" }}>
-          {emptyMsg}
-        </div>
+        <div style={{ fontSize: 11, fontWeight: 700, color, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>{titulo}</div>
+        <div style={{ fontSize: 12, color: "#94a3b8", fontStyle: "italic", padding: "8px 0" }}>{emptyMsg}</div>
       </div>
     );
   }
-
   const maxCant = Math.max(...datos.map(d => Number(d.cant) || 0));
-
   return (
     <div>
-      <div style={{ fontSize: 11, fontWeight: 700, color, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>
-        {titulo}
-      </div>
+      <div style={{ fontSize: 11, fontWeight: 700, color, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>{titulo}</div>
       {datos.map((d, i) => {
         const pct = maxCant > 0 ? (Number(d.cant) / maxCant) * 100 : 0;
         return (
@@ -18712,6 +18643,325 @@ function RankingBloque({ titulo, datos, color, emptyMsg = "Sin datos" }) {
           </div>
         );
       })}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// KPI DE OPERACIÓN — Comparativa NS Informe MELI vs Snapshots (día anterior)
+// ═══════════════════════════════════════════════════════════════════════════
+function PoolMeliKPIOperacion() {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [refreshKey, setRefreshKey] = useState(0);
+
+  // Calcular "ayer" en hora MX
+  const fechaAyer = useMemo(() => {
+    const ahora = new Date();
+    // Aproximación: usar hora local del navegador, restar 1 día
+    const ayer = new Date(ahora);
+    ayer.setDate(ayer.getDate() - 1);
+    return ayer.toISOString().slice(0, 10);
+  }, []);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const { data: result, error: err } = await sb.rpc("get_kpi_operacion_comparativo", { p_fecha: fechaAyer });
+        if (!alive) return;
+        if (err) throw err;
+        setData(result);
+      } catch (e) {
+        if (alive) setError(e.message || String(e));
+      } finally {
+        if (alive) setLoading(false);
+      }
+    })();
+    return () => { alive = false; };
+  }, [refreshKey, fechaAyer]);
+
+  if (loading) {
+    return <div className="pg" style={{ padding: 60, textAlign: "center", color: "#888" }}>Cargando KPI de operación…</div>;
+  }
+  if (error) {
+    return <div className="pg" style={{ padding: 40, color: "#c0392b" }}>Error: {error}</div>;
+  }
+  if (!data) {
+    return <div className="pg" style={{ padding: 40, color: "#888" }}>Sin datos</div>;
+  }
+
+  const meli = data.meli || {};
+  const meliT = meli.total || {};
+  const snap = data.snap || {};
+  const snapT = snap.total || {};
+  const ranking = data.ranking_sc || [];
+  const porTipo = snap.por_tipo_ruta || [];
+  const comparativa = data.comparativa_sc || [];
+  const generadoEn = data.generado_en ? new Date(data.generado_en) : null;
+
+  const meses = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
+  const dias = ["domingo","lunes","martes","miércoles","jueves","viernes","sábado"];
+  let fechaTexto = data.fecha;
+  if (data.fecha) {
+    const [y, m, d] = data.fecha.split("-").map(Number);
+    const fechaObj = new Date(y, m - 1, d);
+    fechaTexto = `${dias[fechaObj.getDay()]} ${d} de ${meses[m - 1]} de ${y}`;
+  }
+
+  // Color del NS
+  const colorPct = (pct) => {
+    if (pct === null || pct === undefined) return "#94a3b8";
+    const v = Number(pct);
+    if (v >= 95) return "#047857";
+    if (v >= 90) return "#0891b2";
+    if (v >= 80) return "#ca8a04";
+    return "#b91c1c";
+  };
+
+  // Formato porcentaje (NS siempre debe ser 0-100)
+  const fmtPct = (v) => {
+    if (v === null || v === undefined) return "—";
+    return `${Number(v).toFixed(2)}%`;
+  };
+
+  return (
+    <div className="pg">
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
+        <div>
+          <div className="sec-title">KPI de Operación</div>
+          <div className="sec-sub">
+            Análisis comparativo · {fechaTexto}
+            {generadoEn && (
+              <span style={{ color: "#94a3b8", marginLeft: 8 }}>
+                · datos al {generadoEn.toLocaleString("es-MX", { hour: "2-digit", minute: "2-digit", day: "2-digit", month: "2-digit" })}
+              </span>
+            )}
+          </div>
+        </div>
+        <button onClick={() => setRefreshKey(k => k + 1)}
+          style={{
+            padding: "8px 14px", fontSize: 12, fontWeight: 600,
+            background: "#fff", color: "#1a3a6b",
+            border: "1px solid #e4e7ec", borderRadius: 6,
+            cursor: "pointer", fontFamily: "'Geist', sans-serif",
+          }}>
+          ↻ Refrescar
+        </button>
+      </div>
+
+      {/* BLOQUES DE NS (dos columnas lado a lado) */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 20 }}>
+        {/* BLOQUE 1: INFORME MELI */}
+        <div className="form-card" style={{ marginBottom: 0, padding: 16, borderTop: "4px solid #92400e" }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: "#92400e", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>
+            📄 Nivel de Servicio · Informe MELI
+          </div>
+          <div style={{ fontSize: 11, color: "#94a3b8", marginBottom: 14 }}>
+            {meliT.rutas || 0} rutas · {(meliT.devueltos || 0).toLocaleString()} devueltos
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            <div style={{ background: "#fffbeb", borderRadius: 8, padding: 14, border: "1px solid #fde68a" }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: "#78350f", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>
+                NS Ponderado
+              </div>
+              <div style={{ fontSize: 32, fontWeight: 700, lineHeight: 1, color: colorPct(meliT.ns_ponderado), marginBottom: 4 }}>
+                {fmtPct(meliT.ns_ponderado)}
+              </div>
+              <div style={{ fontSize: 10, color: "#78350f" }}>
+                {(meliT.entregados || 0).toLocaleString()} / {(meliT.cargados || 0).toLocaleString()}
+              </div>
+            </div>
+            <div style={{ background: "#fffbeb", borderRadius: 8, padding: 14, border: "1px solid #fde68a" }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: "#78350f", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>
+                NS Promedio por SC
+              </div>
+              <div style={{ fontSize: 32, fontWeight: 700, lineHeight: 1, color: colorPct(meli.ns_promedio_sc), marginBottom: 4 }}>
+                {fmtPct(meli.ns_promedio_sc)}
+              </div>
+              <div style={{ fontSize: 10, color: "#78350f" }}>
+                avg de cada SC
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* BLOQUE 2: SNAPSHOTS */}
+        <div className="form-card" style={{ marginBottom: 0, padding: 16, borderTop: "4px solid #047857" }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: "#047857", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>
+            📸 Nivel de Servicio · Snapshots
+          </div>
+          <div style={{ fontSize: 11, color: "#94a3b8", marginBottom: 14 }}>
+            {snapT.rutas || 0} rutas · {(snapT.devueltos || 0).toLocaleString()} devueltos
+            {snap.ambulancias_total > 0 && (
+              <span style={{ color: "#0891b2", marginLeft: 8 }}>
+                · {snap.ambulancias_total} ambulancia(s)
+              </span>
+            )}
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            <div style={{ background: "#f0fdf4", borderRadius: 8, padding: 14, border: "1px solid #bbf7d0" }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: "#065f46", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>
+                NS Ponderado
+              </div>
+              <div style={{ fontSize: 32, fontWeight: 700, lineHeight: 1, color: colorPct(snapT.ns_ponderado), marginBottom: 4 }}>
+                {fmtPct(snapT.ns_ponderado)}
+              </div>
+              <div style={{ fontSize: 10, color: "#065f46" }}>
+                {(snapT.entregados || 0).toLocaleString()} / {(snapT.cargados || 0).toLocaleString()}
+              </div>
+            </div>
+            <div style={{ background: "#f0fdf4", borderRadius: 8, padding: 14, border: "1px solid #bbf7d0" }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: "#065f46", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>
+                NS Promedio por SC
+              </div>
+              <div style={{ fontSize: 32, fontWeight: 700, lineHeight: 1, color: colorPct(snap.ns_promedio_sc), marginBottom: 4 }}>
+                {fmtPct(snap.ns_promedio_sc)}
+              </div>
+              <div style={{ fontSize: 10, color: "#065f46" }}>
+                avg de cada SC
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* RANKING SC POR PERFORMANCE (SNAPSHOTS) */}
+      <div className="form-card" style={{ marginBottom: 20 }}>
+        <div className="form-title" style={{ marginBottom: 4 }}>Ranking SC por performance del día (Snapshots)</div>
+        <div style={{ fontSize: 11, color: "#64748b", marginBottom: 14 }}>De mejor a peor NS Ponderado</div>
+        {ranking.length === 0 ? (
+          <div style={{ fontSize: 12, color: "#94a3b8", fontStyle: "italic" }}>Sin datos</div>
+        ) : (
+          ranking.map((s, i) => {
+            const maxCargados = Math.max(...ranking.map(r => Number(r.cargados) || 0));
+            const pctBar = maxCargados > 0 ? (Number(s.cargados) / maxCargados) * 100 : 0;
+            return (
+              <div key={s.sc} style={{ display: "grid", gridTemplateColumns: "30px 60px 1fr 90px 100px", gap: 12, alignItems: "center", padding: "8px 0", borderBottom: i === ranking.length - 1 ? "none" : "1px solid #f1f5f9" }}>
+                <div style={{ fontSize: 11, color: "#cbd5e1", fontFamily: "monospace" }}>#{i + 1}</div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: "#0f172a" }}>{s.sc}</div>
+                <div>
+                  <div style={{ height: 6, background: "#f1f5f9", borderRadius: 3, overflow: "hidden" }}>
+                    <div style={{ height: "100%", width: `${pctBar}%`, background: colorPct(s.ns_pond) }} />
+                  </div>
+                  <div style={{ fontSize: 10, color: "#64748b", marginTop: 3 }}>
+                    {s.rutas} rutas · {Number(s.entregados).toLocaleString()}/{Number(s.cargados).toLocaleString()}
+                    {Number(s.ambulancias) > 0 && (
+                      <span style={{ color: "#0891b2", marginLeft: 6 }}>· {s.ambulancias} amb.</span>
+                    )}
+                  </div>
+                </div>
+                <div style={{ fontSize: 11, color: "#64748b", fontVariantNumeric: "tabular-nums", textAlign: "right" }}>
+                  {Number(s.devueltos)} dev.
+                </div>
+                <div style={{ fontSize: 20, fontWeight: 700, color: colorPct(s.ns_pond), fontVariantNumeric: "tabular-nums", textAlign: "right" }}>
+                  {fmtPct(s.ns_pond)}
+                </div>
+              </div>
+            );
+          })
+        )}
+      </div>
+
+      {/* NS POR TIPO DE RUTA */}
+      <div className="form-card" style={{ marginBottom: 20 }}>
+        <div className="form-title" style={{ marginBottom: 4 }}>NS por tipo de ruta (Snapshots)</div>
+        <div style={{ fontSize: 11, color: "#64748b", marginBottom: 14 }}>BULK · UM · MIXTO · RETIRO</div>
+        {porTipo.length === 0 ? (
+          <div style={{ fontSize: 12, color: "#94a3b8", fontStyle: "italic" }}>Sin datos por tipo</div>
+        ) : (
+          <div style={{ display: "grid", gridTemplateColumns: `repeat(${Math.min(porTipo.length, 4)}, 1fr)`, gap: 10 }}>
+            {porTipo.map(t => (
+              <div key={t.tipo_ruta} style={{ background: "#f8fafc", borderRadius: 8, padding: 14, border: "1px solid #e4e7ec" }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#475569", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>
+                  {t.tipo_ruta || "—"}
+                </div>
+                <div style={{ fontSize: 26, fontWeight: 700, lineHeight: 1, color: colorPct(t.ns_pond), marginBottom: 6 }}>
+                  {fmtPct(t.ns_pond)}
+                </div>
+                <div style={{ fontSize: 11, color: "#64748b" }}>
+                  {t.rutas} rutas · {Number(t.entregados).toLocaleString()}/{Number(t.cargados).toLocaleString()}
+                </div>
+                <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 2 }}>
+                  {Number(t.devueltos)} devueltos
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* TABLA COMPARATIVA POR SC */}
+      <div className="form-card" style={{ marginBottom: 20 }}>
+        <div className="form-title" style={{ marginBottom: 4 }}>Comparativa por SC · Informe MELI vs Snapshots</div>
+        <div style={{ fontSize: 11, color: "#64748b", marginBottom: 14 }}>Ordenado por brecha de NS (mayor a menor)</div>
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+            <thead>
+              <tr style={{ borderBottom: "2px solid #e4e7ec", textAlign: "left", color: "#64748b", fontWeight: 700 }}>
+                <th style={{ padding: "8px 10px", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5 }}>SC</th>
+                <th style={{ padding: "8px 10px", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, textAlign: "center" }}>Rutas MELI/Snap</th>
+                <th style={{ padding: "8px 10px", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, textAlign: "right" }}>Cargados MELI/Snap</th>
+                <th style={{ padding: "8px 10px", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, textAlign: "right" }}>Entregados MELI/Snap</th>
+                <th style={{ padding: "8px 10px", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, textAlign: "right" }}>Devueltos MELI/Snap</th>
+                <th style={{ padding: "8px 10px", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, textAlign: "right" }}>NS MELI</th>
+                <th style={{ padding: "8px 10px", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, textAlign: "right" }}>NS Snap</th>
+                <th style={{ padding: "8px 10px", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, textAlign: "right" }}>Brecha</th>
+              </tr>
+            </thead>
+            <tbody>
+              {comparativa.map((row, i) => {
+                const brecha = Number(row.brecha_ns) || 0;
+                const colorBrecha = brecha >= 20 ? "#b91c1c" : brecha >= 5 ? "#ca8a04" : "#047857";
+                const bgBrecha = brecha >= 20 ? "#fef2f2" : brecha >= 5 ? "#fffbeb" : "#f0fdf4";
+                return (
+                  <tr key={row.sc} style={{ borderBottom: "1px solid #f1f5f9", background: i % 2 === 0 ? "#fff" : "#fafbfc" }}>
+                    <td style={{ padding: "8px 10px", fontWeight: 700, color: "#0f172a" }}>{row.sc}</td>
+                    <td style={{ padding: "8px 10px", textAlign: "center", color: "#64748b", fontVariantNumeric: "tabular-nums" }}>
+                      {row.rutas_meli ?? "—"} / {row.rutas_snap ?? "—"}
+                    </td>
+                    <td style={{ padding: "8px 10px", textAlign: "right", color: "#475569", fontVariantNumeric: "tabular-nums" }}>
+                      {row.cargados_meli ? Number(row.cargados_meli).toLocaleString() : "—"} / {row.cargados_snap ? Number(row.cargados_snap).toLocaleString() : "—"}
+                    </td>
+                    <td style={{ padding: "8px 10px", textAlign: "right", color: "#475569", fontVariantNumeric: "tabular-nums" }}>
+                      {row.entregados_meli != null ? Number(row.entregados_meli).toLocaleString() : "—"} / {row.entregados_snap != null ? Number(row.entregados_snap).toLocaleString() : "—"}
+                    </td>
+                    <td style={{ padding: "8px 10px", textAlign: "right", color: "#475569", fontVariantNumeric: "tabular-nums" }}>
+                      {row.devueltos_meli != null ? Number(row.devueltos_meli).toLocaleString() : "—"} / {row.devueltos_snap != null ? Number(row.devueltos_snap).toLocaleString() : "—"}
+                    </td>
+                    <td style={{ padding: "8px 10px", textAlign: "right", color: colorPct(row.ns_meli), fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>
+                      {row.ns_meli != null ? `${Number(row.ns_meli).toFixed(2)}%` : "—"}
+                    </td>
+                    <td style={{ padding: "8px 10px", textAlign: "right", color: colorPct(row.ns_snap), fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>
+                      {row.ns_snap != null ? `${Number(row.ns_snap).toFixed(2)}%` : "—"}
+                    </td>
+                    <td style={{ padding: "8px 10px", textAlign: "right" }}>
+                      {row.ns_meli != null && row.ns_snap != null ? (
+                        <span style={{ display: "inline-block", padding: "3px 8px", borderRadius: 4, fontSize: 11, fontWeight: 700, color: colorBrecha, background: bgBrecha, fontVariantNumeric: "tabular-nums" }}>
+                          {brecha >= 0 ? "+" : ""}{brecha.toFixed(2)} pts
+                        </span>
+                      ) : (
+                        <span style={{ fontSize: 10, color: "#94a3b8", fontStyle: "italic" }}>solo Snap</span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        {snap.ambulancias_total > 0 && (
+          <div style={{ fontSize: 11, color: "#0891b2", marginTop: 12, padding: 10, background: "#ecfeff", borderRadius: 6, border: "1px solid #a5f3fc" }}>
+            ℹ️ <strong>Información de ambulancias:</strong> {snap.ambulancias_total} paquete(s) categorizado(s) como AMBULANCIA. 
+            Son paquetes que se transfirieron a otro driver del mismo SC y fueron entregados. 
+            Siguen siendo parte del total de cargados del SC, por eso el NS no se ajusta. 
+            <span style={{ color: "#64748b" }}>(En un próximo desarrollo veremos performance por ruta y a quién se le pasaron los paquetes ambulanciados.)</span>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
