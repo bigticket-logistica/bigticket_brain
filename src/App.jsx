@@ -4543,23 +4543,477 @@ const VistaDriversMaestro = () => {
 };
 
 // ── MÓDULO MAESTRO PRINCIPAL ──────────────────────────────────────────────────
-const ModuloMaestro = ({ usuario }) => {
-  const [vista, setVista]       = useState("viajes");
-  const [fecha, setFecha]       = useState(fechaHoyOperativa());
-  const [fechaFin, setFechaFin] = useState(fechaHoyOperativa());
-  const [periodo, setPeriodo]   = useState(periodoHoyOperativo());
-  const [reloadKey, setReloadKey] = useState(0);
-  const [pais, setPais]         = useState("CL");
+// ─── VISTA SNAPSHOT SUPERVISORES (NUEVO) ─────────────────────────────────
+// Pestaña dentro de Maestro de Operaciones que replica las 4 pestañas operativas
+// del Excel `Macro_Maestros_Mexico.xlsm` con datos automáticos de MELI.
+// 4 sub-pestañas: Ingreso Maestro, Rutas Citadas, No Show, Devoluciones.
+// Solo aplica a México (las vistas SQL son MX-only).
+const VistaSnapshotSupervisores = ({ fecha, pais }) => {
+  const [subTab, setSubTab] = useState("ingreso");
+  const [scSel, setScSel]   = useState("TODOS");
+  const [filas, setFilas]   = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError]   = useState(null);
 
-  const tabs = [
-    { id: "viajes",         label: "Viajes del día" },
-    { id: "penalizaciones", label: "Penalizaciones" },
-    { id: "premios",        label: "Premios" },
-    { id: "ayudantes",      label: "Ayudantes" },
+  // Mapeo sub-pestaña → vista SQL
+  const VISTAS = {
+    ingreso:      { tabla: "vw_maestro_supervisores_auto", label: "Ingreso Maestro" },
+    rutas:        { tabla: "vw_rutas_citadas_auto",        label: "Rutas Citadas"  },
+    noshow:       { tabla: "vw_no_show_auto",              label: "No Show"        },
+    devoluciones: { tabla: "vw_devoluciones_auto",         label: "Devoluciones"   },
+  };
+
+  // Cargar datos cuando cambia fecha o subTab
+  useEffect(() => {
+    if (pais !== "MX") { setFilas([]); return; }
+
+    let cancelado = false;
+    const cargar = async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const { data, error: err } = await sb
+          .from(VISTAS[subTab].tabla)
+          .select("*")
+          .eq("fecha", fecha)
+          .limit(5000);
+        if (cancelado) return;
+        if (err) {
+          setError(err.message);
+          setFilas([]);
+        } else {
+          setFilas(data || []);
+        }
+      } catch (e) {
+        if (!cancelado) {
+          setError(e.message || String(e));
+          setFilas([]);
+        }
+      } finally {
+        if (!cancelado) setLoading(false);
+      }
+    };
+    cargar();
+    return () => { cancelado = true; };
+  }, [fecha, subTab, pais]);
+
+  // SCs disponibles dinámicos (extraídos de los datos)
+  const scsDisponibles = useMemo(() => {
+    const set = new Set();
+    filas.forEach(f => {
+      const sc = f.service_center_id || f.sc;
+      if (sc) set.add(sc);
+    });
+    return ["TODOS", ...Array.from(set).sort()];
+  }, [filas]);
+
+  // Aplicar filtro SC
+  const filasFiltradas = useMemo(() => {
+    if (scSel === "TODOS") return filas;
+    return filas.filter(f => (f.service_center_id || f.sc) === scSel);
+  }, [filas, scSel]);
+
+  // País CL: mostrar mensaje
+  if (pais !== "MX") {
+    return (
+      <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10, padding: 40, textAlign: "center" }}>
+        <div style={{ fontSize: 36, marginBottom: 12 }}>🇲🇽</div>
+        <div style={{ fontSize: 16, fontWeight: 700, color: "#1a1a1a", marginBottom: 6 }}>
+          Esta vista solo está disponible para México
+        </div>
+        <div style={{ fontSize: 13, color: "#888" }}>
+          El Maestro Supervisores Snapshot se alimenta de scrapers MELI MX (Logistic + Travel Requests).
+          <br />Para ver datos, cambiá el selector de país a 🇲🇽 México.
+        </div>
+      </div>
+    );
+  }
+
+  const subTabs = [
+    { id: "ingreso",      label: "Ingreso Maestro" },
+    { id: "rutas",        label: "Rutas Citadas"  },
+    { id: "noshow",       label: "No Show"        },
+    { id: "devoluciones", label: "Devoluciones"   },
   ];
 
   return (
-    <div className="pg" style={{ maxWidth: 1200 }}>
+    <div>
+      {/* Sub-tabs */}
+      <div style={{ display: "flex", gap: 0, marginBottom: 16, borderBottom: "1px solid #e4e7ec" }}>
+        {subTabs.map(t => (
+          <button key={t.id} onClick={() => setSubTab(t.id)}
+            style={{ padding: "8px 18px", background: "none", border: "none",
+              borderBottom: subTab === t.id ? "2px solid #3B82F6" : "2px solid transparent",
+              color: subTab === t.id ? "#3B82F6" : "#666",
+              fontSize: 12, fontWeight: 700, cursor: "pointer", marginBottom: -1 }}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Filtro SC */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
+        <span style={{ fontSize: 11, fontWeight: 700, color: "#666", textTransform: "uppercase", letterSpacing: 0.5 }}>
+          Filtrar SC:
+        </span>
+        <select value={scSel} onChange={e => setScSel(e.target.value)}
+          style={{ padding: "5px 10px", borderRadius: 4, border: "1px solid #e4e7ec",
+            fontSize: 12, fontWeight: 600, color: "#1a1a1a", background: "#fff",
+            cursor: "pointer", minWidth: 140 }}>
+          {scsDisponibles.map(sc => (
+            <option key={sc} value={sc}>{sc === "TODOS" ? "Todos los SCs" : sc}</option>
+          ))}
+        </select>
+        <span style={{ fontSize: 11, color: "#888", marginLeft: 4 }}>
+          {loading ? "Cargando..." : `${filasFiltradas.length} filas`}
+        </span>
+      </div>
+
+      {error && (
+        <div style={{ background: "#fef2f2", border: "1px solid #fca5a5", color: "#991b1b",
+          padding: 10, borderRadius: 6, fontSize: 12, marginBottom: 12 }}>
+          Error: {error}
+        </div>
+      )}
+
+      {/* Sub-componente activo */}
+      {subTab === "ingreso"      && <SnapIngresoMaestro filas={filasFiltradas} loading={loading} />}
+      {subTab === "rutas"        && <SnapRutasCitadas   filas={filasFiltradas} loading={loading} />}
+      {subTab === "noshow"       && <SnapNoShow         filas={filasFiltradas} loading={loading} />}
+      {subTab === "devoluciones" && <SnapDevoluciones   filas={filasFiltradas} loading={loading} />}
+    </div>
+  );
+};
+
+// ─── Helpers Snapshot ─────────────────────────────────────────
+const fmtNumSnap = (v) => (v == null ? "—" : Number(v).toLocaleString("es-MX"));
+const fmtPctSnap = (v) => (v == null ? "—" : `${Number(v).toFixed(1)}%`);
+const KpiSnap = ({ label, valor, color = "#1a1a1a", sub }) => (
+  <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10,
+    padding: "12px 14px", flex: 1, minWidth: 120 }}>
+    <div style={{ fontSize: 10, fontWeight: 700, color: "#888", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>
+      {label}
+    </div>
+    <div style={{ fontSize: 20, fontWeight: 800, color }}>{valor}</div>
+    {sub && <div style={{ fontSize: 10, color: "#888", marginTop: 2 }}>{sub}</div>}
+  </div>
+);
+
+// ─── Sub-componente 1: Ingreso Maestro (1 fila por viaje) ───
+const SnapIngresoMaestro = ({ filas, loading }) => {
+  const kpis = useMemo(() => {
+    const total = filas.length;
+    const cargados = filas.reduce((acc, f) => acc + (f.cargados || 0), 0);
+    const entregados = filas.reduce((acc, f) => acc + (f.entregados || 0), 0);
+    const devueltos = filas.reduce((acc, f) => acc + (f.devueltos || 0), 0);
+    const pct = cargados > 0 ? (entregados / cargados) * 100 : null;
+    const sdds = filas.filter(f => f.es_sdd === "SI").length;
+    return { total, cargados, entregados, devueltos, pct, sdds };
+  }, [filas]);
+
+  return (
+    <div>
+      {/* KPIs */}
+      <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
+        <KpiSnap label="Viajes" valor={fmtNumSnap(kpis.total)} sub={`${kpis.sdds} SDD`} />
+        <KpiSnap label="Cargados"   valor={fmtNumSnap(kpis.cargados)}   color="#3B82F6" />
+        <KpiSnap label="Entregados" valor={fmtNumSnap(kpis.entregados)} color="#16a34a" />
+        <KpiSnap label="Devueltos"  valor={fmtNumSnap(kpis.devueltos)}  color="#dc2626" />
+        <KpiSnap label="% Entrega"  valor={fmtPctSnap(kpis.pct)}
+          color={kpis.pct >= 95 ? "#16a34a" : kpis.pct >= 90 ? "#ca8a04" : "#dc2626"} />
+      </div>
+
+      {/* Tabla */}
+      <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10, overflow: "auto", maxHeight: 600 }}>
+        {loading ? (
+          <div style={{ padding: 30, textAlign: "center", color: "#888", fontSize: 13 }}>Cargando...</div>
+        ) : filas.length === 0 ? (
+          <div style={{ padding: 30, textAlign: "center", color: "#888", fontSize: 13 }}>Sin datos para esta fecha</div>
+        ) : (
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+            <thead style={{ background: "#f8fafc", position: "sticky", top: 0 }}>
+              <tr>
+                {["Fecha","ID Viaje","CECOS","Patente","Tipo Veh.","SDD","Tipo Ruta","Driver","Cargados","Entregados","Devueltos","KM Plan","Rango KM","%","Status","Obs"].map(h => (
+                  <th key={h} style={{ padding: "8px 6px", textAlign: "left", fontWeight: 700, color: "#666", borderBottom: "1px solid #e4e7ec", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.3 }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {filas.map((f, i) => (
+                <tr key={i} style={{ borderBottom: "1px solid #f1f5f9" }}>
+                  <td style={{ padding: "6px" }}>{f.fecha}</td>
+                  <td style={{ padding: "6px", fontFamily: "monospace" }}>{f.idviaje}</td>
+                  <td style={{ padding: "6px" }}>{f.cecos}</td>
+                  <td style={{ padding: "6px", fontFamily: "monospace" }}>{f.patentes}</td>
+                  <td style={{ padding: "6px" }}>{f.tipo_vehiculo}</td>
+                  <td style={{ padding: "6px", fontWeight: 700,
+                    color: f.es_sdd === "SI" ? "#16a34a" : "#888" }}>{f.es_sdd}</td>
+                  <td style={{ padding: "6px" }}>{f.tipo_ruta}</td>
+                  <td style={{ padding: "6px" }}>{f.driver_name || "—"}</td>
+                  <td style={{ padding: "6px", textAlign: "right" }}>{fmtNumSnap(f.cargados)}</td>
+                  <td style={{ padding: "6px", textAlign: "right", color: "#16a34a", fontWeight: 600 }}>{fmtNumSnap(f.entregados)}</td>
+                  <td style={{ padding: "6px", textAlign: "right", color: "#dc2626" }}>{fmtNumSnap(f.devueltos)}</td>
+                  <td style={{ padding: "6px", textAlign: "right" }}>{fmtNumSnap(f.km_planificados)}</td>
+                  <td style={{ padding: "6px" }}>{f.rango_kilometraje}</td>
+                  <td style={{ padding: "6px", textAlign: "right", fontWeight: 600,
+                    color: f.pct_visitado >= 95 ? "#16a34a" : f.pct_visitado >= 90 ? "#ca8a04" : "#dc2626" }}>
+                    {fmtPctSnap(f.pct_visitado)}
+                  </td>
+                  <td style={{ padding: "6px" }}>{f.status_final}</td>
+                  <td style={{ padding: "6px", fontSize: 10, color: "#888", maxWidth: 200 }}>{f.observaciones_auto || "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  );
+};
+
+// ─── Sub-componente 2: Rutas Citadas (SC × día) ───
+const SnapRutasCitadas = ({ filas, loading }) => {
+  const kpis = useMemo(() => {
+    const planeadas  = filas.reduce((acc, f) => acc + (f.rutas_planeadas  || 0), 0);
+    const ejecutadas = filas.reduce((acc, f) => acc + (f.rutas_ejecutadas || 0), 0);
+    const sinCerrar  = filas.reduce((acc, f) => acc + (f.rutas_sin_cerrar || 0), 0);
+    const zombis     = filas.reduce((acc, f) => acc + (f.rutas_zombi_descartadas || 0), 0);
+    return { planeadas, ejecutadas, sinCerrar, zombis, scs: filas.length };
+  }, [filas]);
+
+  return (
+    <div>
+      {/* KPIs */}
+      <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
+        <KpiSnap label="SCs"        valor={fmtNumSnap(kpis.scs)} />
+        <KpiSnap label="Planeadas"  valor={fmtNumSnap(kpis.planeadas)}  color="#3B82F6" />
+        <KpiSnap label="Ejecutadas" valor={fmtNumSnap(kpis.ejecutadas)} color="#16a34a" />
+        <KpiSnap label="Sin cerrar" valor={fmtNumSnap(kpis.sinCerrar)}  color="#ca8a04" />
+        <KpiSnap label="Zombis"     valor={fmtNumSnap(kpis.zombis)}     color="#dc2626" sub="descartadas" />
+      </div>
+
+      {/* Tabla */}
+      <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10, overflow: "auto", maxHeight: 600 }}>
+        {loading ? (
+          <div style={{ padding: 30, textAlign: "center", color: "#888", fontSize: 13 }}>Cargando...</div>
+        ) : filas.length === 0 ? (
+          <div style={{ padding: 30, textAlign: "center", color: "#888", fontSize: 13 }}>Sin datos para esta fecha</div>
+        ) : (
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+            <thead style={{ background: "#f8fafc", position: "sticky", top: 0 }}>
+              <tr>
+                {["Fecha","CECO","Planeadas","Small","Large","Ejecutadas","S.Plan","L.Plan","Small SDD","Large SDD","Sin Cerrar","Zombis"].map(h => (
+                  <th key={h} style={{ padding: "8px 6px", textAlign: "left", fontWeight: 700, color: "#666", borderBottom: "1px solid #e4e7ec", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.3 }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {filas.map((f, i) => (
+                <tr key={i} style={{ borderBottom: "1px solid #f1f5f9" }}>
+                  <td style={{ padding: "6px" }}>{f.fecha}</td>
+                  <td style={{ padding: "6px", fontWeight: 600 }}>{f.cecos}</td>
+                  <td style={{ padding: "6px", textAlign: "right", fontWeight: 700, color: "#3B82F6" }}>{fmtNumSnap(f.rutas_planeadas)}</td>
+                  <td style={{ padding: "6px", textAlign: "right" }}>{fmtNumSnap(f.small_planeadas)}</td>
+                  <td style={{ padding: "6px", textAlign: "right" }}>{fmtNumSnap(f.large_planeadas)}</td>
+                  <td style={{ padding: "6px", textAlign: "right", fontWeight: 700, color: "#16a34a" }}>{fmtNumSnap(f.rutas_ejecutadas)}</td>
+                  <td style={{ padding: "6px", textAlign: "right" }}>{fmtNumSnap(f.cant_small)}</td>
+                  <td style={{ padding: "6px", textAlign: "right" }}>{fmtNumSnap(f.cant_large)}</td>
+                  <td style={{ padding: "6px", textAlign: "right" }}>{fmtNumSnap(f.small_sdd_planeadas)}</td>
+                  <td style={{ padding: "6px", textAlign: "right" }}>{fmtNumSnap(f.large_sdd_planeadas)}</td>
+                  <td style={{ padding: "6px", textAlign: "right", color: "#ca8a04" }}>{fmtNumSnap(f.rutas_sin_cerrar)}</td>
+                  <td style={{ padding: "6px", textAlign: "right", color: "#dc2626" }}>{fmtNumSnap(f.rutas_zombi_descartadas)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  );
+};
+
+// ─── Sub-componente 3: No Show (SC × día) ───
+const SnapNoShow = ({ filas, loading }) => {
+  const kpis = useMemo(() => {
+    const totalNS = filas.reduce((acc, f) => acc + (f.cantidad_no_show || 0), 0);
+    const nsSDD   = filas.reduce((acc, f) => acc + (f.no_show_sdd   || 0), 0);
+    const nsSpot  = filas.reduce((acc, f) => acc + (f.no_show_spot  || 0), 0);
+    const trsAcc  = filas.reduce((acc, f) => acc + (f.trs_aceptados || 0), 0);
+    const rutasOp = filas.reduce((acc, f) => acc + (f.rutas_operadas || 0), 0);
+    return { totalNS, nsSDD, nsSpot, trsAcc, rutasOp, scs: filas.length };
+  }, [filas]);
+
+  return (
+    <div>
+      {/* KPIs */}
+      <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
+        <KpiSnap label="SCs con NS"      valor={fmtNumSnap(kpis.scs)} />
+        <KpiSnap label="Total NS"        valor={fmtNumSnap(kpis.totalNS)} color="#dc2626" />
+        <KpiSnap label="NS SDD"          valor={fmtNumSnap(kpis.nsSDD)}   color="#dc2626" sub="⚠️ crítico" />
+        <KpiSnap label="NS SPOT"         valor={fmtNumSnap(kpis.nsSpot)}  color="#ca8a04" />
+        <KpiSnap label="TRs aceptados"   valor={fmtNumSnap(kpis.trsAcc)}  color="#3B82F6" />
+        <KpiSnap label="Rutas operadas"  valor={fmtNumSnap(kpis.rutasOp)} color="#16a34a" />
+      </div>
+
+      {/* Tabla */}
+      <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10, overflow: "auto", maxHeight: 600 }}>
+        {loading ? (
+          <div style={{ padding: 30, textAlign: "center", color: "#888", fontSize: 13 }}>Cargando...</div>
+        ) : filas.length === 0 ? (
+          <div style={{ padding: 30, textAlign: "center", color: "#16a34a", fontSize: 13, fontWeight: 600 }}>
+            ✅ Sin No Shows en esta fecha
+          </div>
+        ) : (
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+            <thead style={{ background: "#f8fafc", position: "sticky", top: 0 }}>
+              <tr>
+                {["Fecha","CECO","Tipo","TRs Acept.","Rutas Op.","NS Total","TRs SDD","R.Op.SDD","NS SDD","TRs SPOT","R.Op.SPOT","NS SPOT"].map(h => (
+                  <th key={h} style={{ padding: "8px 6px", textAlign: "left", fontWeight: 700, color: "#666", borderBottom: "1px solid #e4e7ec", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.3 }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {filas.map((f, i) => (
+                <tr key={i} style={{ borderBottom: "1px solid #f1f5f9" }}>
+                  <td style={{ padding: "6px" }}>{f.fecha}</td>
+                  <td style={{ padding: "6px", fontWeight: 600 }}>{f.ceco}</td>
+                  <td style={{ padding: "6px" }}>
+                    <span style={{ background: "#fef2f2", color: "#991b1b", padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 700 }}>
+                      {f.tipo}
+                    </span>
+                  </td>
+                  <td style={{ padding: "6px", textAlign: "right" }}>{fmtNumSnap(f.trs_aceptados)}</td>
+                  <td style={{ padding: "6px", textAlign: "right" }}>{fmtNumSnap(f.rutas_operadas)}</td>
+                  <td style={{ padding: "6px", textAlign: "right", fontWeight: 800, color: "#dc2626" }}>{fmtNumSnap(f.cantidad_no_show)}</td>
+                  <td style={{ padding: "6px", textAlign: "right" }}>{fmtNumSnap(f.trs_aceptados_sdd)}</td>
+                  <td style={{ padding: "6px", textAlign: "right" }}>{fmtNumSnap(f.rutas_operadas_sdd)}</td>
+                  <td style={{ padding: "6px", textAlign: "right", fontWeight: 700,
+                    color: f.no_show_sdd > 0 ? "#dc2626" : "#888" }}>
+                    {fmtNumSnap(f.no_show_sdd)}
+                  </td>
+                  <td style={{ padding: "6px", textAlign: "right" }}>{fmtNumSnap(f.trs_aceptados_spot)}</td>
+                  <td style={{ padding: "6px", textAlign: "right" }}>{fmtNumSnap(f.rutas_operadas_spot)}</td>
+                  <td style={{ padding: "6px", textAlign: "right", color: f.no_show_spot > 0 ? "#ca8a04" : "#888" }}>
+                    {fmtNumSnap(f.no_show_spot)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  );
+};
+
+// ─── Sub-componente 4: Devoluciones (1 fila por paquete) ───
+const SnapDevoluciones = ({ filas, loading }) => {
+  // Conteo por motivo
+  const conteoMotivos = useMemo(() => {
+    const m = {};
+    filas.forEach(f => {
+      const k = f.motivo || "(sin mapear)";
+      m[k] = (m[k] || 0) + 1;
+    });
+    return Object.entries(m).sort((a, b) => b[1] - a[1]);
+  }, [filas]);
+
+  const totalDev = filas.length;
+  const sinMapear = filas.filter(f => !f.motivo).length;
+
+  return (
+    <div>
+      {/* KPIs */}
+      <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
+        <KpiSnap label="Total devoluciones" valor={fmtNumSnap(totalDev)} color="#dc2626" />
+        <KpiSnap label="Motivos distintos"  valor={fmtNumSnap(conteoMotivos.length)} />
+        <KpiSnap label="Sin mapear"         valor={fmtNumSnap(sinMapear)}
+          color={sinMapear > 0 ? "#ca8a04" : "#16a34a"}
+          sub={sinMapear > 0 ? "⚠️ revisar" : "✅ OK"} />
+        <KpiSnap label="Top motivo"
+          valor={conteoMotivos[0] ? conteoMotivos[0][0].slice(0, 16) : "—"}
+          sub={conteoMotivos[0] ? `${conteoMotivos[0][1]} pkts` : ""} />
+      </div>
+
+      {/* Resumen motivos */}
+      {conteoMotivos.length > 0 && (
+        <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10, padding: 12, marginBottom: 14 }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: "#888", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>
+            Distribución por motivo
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+            {conteoMotivos.map(([motivo, cant]) => (
+              <div key={motivo} style={{ background: "#f8fafc", border: "1px solid #e4e7ec", borderRadius: 6, padding: "4px 10px", fontSize: 11 }}>
+                <span style={{ fontWeight: 700, color: "#1a1a1a" }}>{motivo}</span>
+                <span style={{ marginLeft: 6, color: "#888" }}>{cant}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Tabla */}
+      <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10, overflow: "auto", maxHeight: 600 }}>
+        {loading ? (
+          <div style={{ padding: 30, textAlign: "center", color: "#888", fontSize: 13 }}>Cargando...</div>
+        ) : filas.length === 0 ? (
+          <div style={{ padding: 30, textAlign: "center", color: "#16a34a", fontSize: 13, fontWeight: 600 }}>
+            ✅ Sin devoluciones en esta fecha
+          </div>
+        ) : (
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+            <thead style={{ background: "#f8fafc", position: "sticky", top: 0 }}>
+              <tr>
+                {["Fecha","Ruta","Folio","Patente","Motivo","SC","Driver","Receptor","CP","Ciudad","Estado"].map(h => (
+                  <th key={h} style={{ padding: "8px 6px", textAlign: "left", fontWeight: 700, color: "#666", borderBottom: "1px solid #e4e7ec", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.3 }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {filas.map((f, i) => (
+                <tr key={i} style={{ borderBottom: "1px solid #f1f5f9" }}>
+                  <td style={{ padding: "6px" }}>{f.fecha}</td>
+                  <td style={{ padding: "6px", fontFamily: "monospace", fontSize: 10 }}>{f.id_viaje}</td>
+                  <td style={{ padding: "6px", fontFamily: "monospace", fontSize: 10 }}>{f.folio_guias}</td>
+                  <td style={{ padding: "6px", fontFamily: "monospace" }}>{f.patente}</td>
+                  <td style={{ padding: "6px", fontWeight: 600, color: f.motivo ? "#1a1a1a" : "#ca8a04" }}>
+                    {f.motivo || "(sin mapear)"}
+                  </td>
+                  <td style={{ padding: "6px" }}>{f.sc}</td>
+                  <td style={{ padding: "6px" }}>{f.driver_name || "—"}</td>
+                  <td style={{ padding: "6px" }}>{f.receiver_name || "—"}</td>
+                  <td style={{ padding: "6px" }}>{f.zip_code || "—"}</td>
+                  <td style={{ padding: "6px" }}>{f.city || "—"}</td>
+                  <td style={{ padding: "6px" }}>{f.state || "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  );
+};
+
+
+// ─── MÓDULO MAESTRO DE OPERACIONES (MODIFICADO) ─────────────────────────
+// Simplificado: 2 tabs (Reporte MELI + Snapshot Supervisores)
+// Selector de día único (no rango), default = D-1 (ayer)
+// Las pestañas Penalizaciones, Premios, Ayudantes se eliminaron de esta vista
+const ModuloMaestro = ({ usuario }) => {
+  const [vista, setVista]       = useState("viajes");
+  // Fecha única (no rango); default = D-1 en zona México
+  const [fecha, setFecha]       = useState(fechaOperativaOffset(-1));
+  const [reloadKey, setReloadKey] = useState(0);
+  const [pais, setPais]         = useState("MX"); // default MX para que Snapshot funcione
+
+  const tabs = [
+    { id: "viajes",   label: "Maestros de Operaciones MELI" },
+    { id: "snapshot", label: "Maestro Supervisores Snapshot" },
+  ];
+
+  return (
+    <div className="pg" style={{ maxWidth: 1400 }}>
       {/* Header */}
       <div style={{ marginBottom: 20 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14, flexWrap: "wrap", gap: 12 }}>
@@ -4581,36 +5035,37 @@ const ModuloMaestro = ({ usuario }) => {
             ))}
           </div>
         </div>
-        {(vista === "viajes" || vista === "penalizaciones" || vista === "premios" || vista === "ayudantes") && (
-          <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10, padding: "12px 16px" }}>
-            <div style={{ fontSize: 10, color: "#888", fontWeight: 800, textTransform: "uppercase", letterSpacing: 1, marginBottom: 10 }}>Período</div>
-            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
-              {[
-                { label: "Hoy", fn: () => { const h = fechaHoyOperativa(); setFecha(h); setFechaFin(h); } },
-                { label: "Ayer", fn: () => { const s = fechaOperativaOffset(-1); setFecha(s); setFechaFin(s); } },
-                { label: "Esta semana", fn: () => { const h = new Date(); const l = new Date(h); l.setDate(h.getDate()-h.getDay()+1); setFecha(l.toISOString().split("T")[0]); setFechaFin(h.toISOString().split("T")[0]); } },
-                { label: "Este mes", fn: () => { const h = new Date(); const i = new Date(h.getFullYear(), h.getMonth(), 1); setFecha(i.toISOString().split("T")[0]); setFechaFin(h.toISOString().split("T")[0]); } },
-                { label: "Mes anterior", fn: () => { const h = new Date(); const i = new Date(h.getFullYear(), h.getMonth()-1, 1); const f = new Date(h.getFullYear(), h.getMonth(), 0); setFecha(i.toISOString().split("T")[0]); setFechaFin(f.toISOString().split("T")[0]); } },
-              ].map(({ label, fn }) => (
-                <button key={label} onClick={fn}
-                  style={{ padding: "5px 14px", borderRadius: 4, border: "1px solid #e4e7ec",
-                    background: "#f8fafc", color: "#555", fontSize: 11, fontWeight: 700,
-                    cursor: "pointer" }}>
-                  {label}
-                </button>
-              ))}
-            </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <input type="date" value={fecha} onChange={e => setFecha(e.target.value)}
-                style={{ background: "#f0f2f5", border: "1px solid #e4e7ec", borderRadius: 4,
-                  padding: "6px 10px", fontSize: 12, flex: 1 }} />
-              <span style={{ color: "#888", fontSize: 12 }}>→</span>
-              <input type="date" value={fechaFin || fecha} onChange={e => setFechaFin(e.target.value)}
-                style={{ background: "#f0f2f5", border: "1px solid #e4e7ec", borderRadius: 4,
-                  padding: "6px 10px", fontSize: 12, flex: 1 }} />
-            </div>
+
+        {/* Filtro de fecha único */}
+        <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10, padding: "12px 16px" }}>
+          <div style={{ fontSize: 10, color: "#888", fontWeight: 800, textTransform: "uppercase", letterSpacing: 1, marginBottom: 10 }}>Día</div>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
+            {[
+              { label: "Hoy",       fn: () => setFecha(fechaHoyOperativa())            },
+              { label: "Ayer",      fn: () => setFecha(fechaOperativaOffset(-1))       },
+              { label: "Anteayer",  fn: () => setFecha(fechaOperativaOffset(-2))       },
+              { label: "Hace 7 d", fn: () => setFecha(fechaOperativaOffset(-7))       },
+            ].map(({ label, fn }) => (
+              <button key={label} onClick={fn}
+                style={{ padding: "5px 14px", borderRadius: 4, border: "1px solid #e4e7ec",
+                  background: "#f8fafc", color: "#555", fontSize: 11, fontWeight: 700,
+                  cursor: "pointer" }}>
+                {label}
+              </button>
+            ))}
           </div>
-        )}
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <input type="date" value={fecha} onChange={e => setFecha(e.target.value)}
+              max={fechaHoyOperativa()}
+              style={{ background: "#f0f2f5", border: "1px solid #e4e7ec", borderRadius: 4,
+                padding: "6px 10px", fontSize: 12, flex: 1, maxWidth: 200 }} />
+            <span style={{ fontSize: 11, color: "#888" }}>
+              {fecha === fechaHoyOperativa() ? "(hoy)" :
+               fecha === fechaOperativaOffset(-1) ? "(ayer)" :
+               fecha === fechaOperativaOffset(-2) ? "(anteayer)" : ""}
+            </span>
+          </div>
+        </div>
       </div>
 
       {/* Tabs */}
@@ -4628,14 +5083,11 @@ const ModuloMaestro = ({ usuario }) => {
       </div>
 
       {/* Contenido */}
-      {vista === "viajes"         && <VistaViajesMaestro key={`v-${fecha}-${fechaFin}-${pais}-${reloadKey}`} fecha={fecha} fechaFin={fechaFin || fecha} pais={pais} />}
-      {vista === "penalizaciones" && <VistaPenalizaciones key={`p-${fecha}-${fechaFin}-${pais}`} fecha={fecha} fechaFin={fechaFin || fecha} pais={pais} />}
-      {vista === "premios"        && <VistaPremios key={`pr-${fecha}-${fechaFin}-${pais}`} fecha={fecha} fechaFin={fechaFin || fecha} pais={pais} />}
-      {vista === "ayudantes"      && <VistaAyudantes key={`ay-${fecha}-${fechaFin}`} fecha={fecha} fechaFin={fechaFin || fecha} />}
+      {vista === "viajes"   && <VistaViajesMaestro key={`v-${fecha}-${pais}-${reloadKey}`} fecha={fecha} fechaFin={fecha} pais={pais} />}
+      {vista === "snapshot" && <VistaSnapshotSupervisores key={`s-${fecha}-${pais}-${reloadKey}`} fecha={fecha} pais={pais} />}
     </div>
   );
 };
-
 
 
 // ─── MÓDULO INCIDENCIAS ─────────────────────────────────────────────
