@@ -3824,7 +3824,7 @@ const KpiCardMaestro = ({ label, valor, sub, color = "#1a1a1a" }) => (
   </div>
 );
 
-const VistaViajesMaestro = ({ fecha, fechaFin, pais }) => {
+const VistaViajesMaestro = ({ fecha, fechaFin, pais, onFechaChange }) => {
   const [viajes, setViajes]     = useState([]);
   const [ayudantesMap, setAyudantesMap] = useState({});  // {id_ruta: has_helper}
   const [loading, setLoading]   = useState(true);
@@ -3833,6 +3833,86 @@ const VistaViajesMaestro = ({ fecha, fechaFin, pais }) => {
   const resetPagina = () => setPagina(1);
   const [orden, setOrden]       = useState({ col: "fecha_salida", asc: false });
   const POR_PAGINA = 20;
+
+  // ─── Refresh desde MELI (NUEVO) ───────────────────────────────────
+  const [refreshing, setRefreshing] = useState(false);
+  const [showConfirm, setShowConfirm] = useState(false);
+  const [refreshMensaje, setRefreshMensaje] = useState(null);
+
+  // Calcular fecha D-1 MX (formato YYYY-MM-DD)
+  // MX es UTC-6, así que tomamos ahora UTC y restamos 6h, luego 24h más
+  const calcularFechaD1MX = () => {
+    const ahora = new Date();
+    const ahoraMX = new Date(ahora.getTime() - 6 * 60 * 60 * 1000);
+    const ayerMX = new Date(ahoraMX.getTime() - 24 * 60 * 60 * 1000);
+    return ayerMX.toISOString().slice(0, 10);
+  };
+  const fechaD1MX = calcularFechaD1MX();
+
+  const refrescarDesdeMELI = async () => {
+    setShowConfirm(false);
+    setRefreshing(true);
+    setRefreshMensaje(null);
+    try {
+      // 1) Leer cookies de sesiones_meli
+      const { data: sesion, error: errS } = await sb
+        .from("sesiones_meli")
+        .select("cookies, actualizado_at")
+        .eq("id", "sesion_activa")
+        .single();
+      if (errS || !sesion?.cookies) {
+        throw new Error("No se pudieron leer las cookies MELI");
+      }
+      // Validar frescura <12h
+      const ageMin = (Date.now() - new Date(sesion.actualizado_at).getTime()) / 1000 / 60;
+      if (ageMin > 720) {
+        throw new Error(`Sesión MELI expirada (hace ${Math.floor(ageMin / 60)}h). Renová la sesión antes.`);
+      }
+      const cookies = typeof sesion.cookies === "string" ? JSON.parse(sesion.cookies) : sesion.cookies;
+
+      // 2) POST a /bandeja-maestros
+      const r1 = await fetch("http://162.243.90.161:3000/bandeja-maestros", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-secret": "bigticket-secret-2025",
+        },
+        body: JSON.stringify({ cookies }),
+      });
+      if (!r1.ok) {
+        const txt = await r1.text().catch(() => "");
+        throw new Error(`VPS rechazó: HTTP ${r1.status} ${txt.slice(0, 200)}`);
+      }
+
+      // 3) Polling cada 5s a /status (máx 90s = 18 intentos)
+      let success = false;
+      for (let i = 0; i < 18; i++) {
+        await new Promise(res => setTimeout(res, 5000));
+        const rs = await fetch("http://162.243.90.161:3000/status", {
+          headers: { "x-api-secret": "bigticket-secret-2025" },
+        });
+        const status = await rs.json().catch(() => ({}));
+        if (status.estado === "success") { success = true; break; }
+        if (status.estado === "error") {
+          throw new Error(`VPS reportó error: ${status.error || "desconocido"}`);
+        }
+      }
+      if (!success) {
+        throw new Error("Timeout — el scrape no terminó en 90 segundos. Reintentá en un momento.");
+      }
+
+      // 4) Cambiar calendario a D-1 y recargar
+      if (onFechaChange) onFechaChange(fechaD1MX);
+      setRefreshMensaje({ tipo: "ok", texto: `✅ Datos del ${fechaD1MX} actualizados desde MELI` });
+      // Limpiar mensaje después de 5s
+      setTimeout(() => setRefreshMensaje(null), 5000);
+    } catch (err) {
+      console.error("Error en refresh MELI:", err);
+      setRefreshMensaje({ tipo: "error", texto: `❌ ${err.message || String(err)}` });
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
   useEffect(() => { cargarViajes(); }, [fecha, fechaFin]);
 
@@ -3908,7 +3988,70 @@ const VistaViajesMaestro = ({ fecha, fechaFin, pais }) => {
     else if (orden.col === "km")            { va = a.km_recorridos || 0; vb = b.km_recorridos || 0; }
     else { va = a[orden.col] || ""; vb = b[orden.col] || ""; }
     if (va < vb) return orden.asc ? -1 : 1;
-    if (va > vb) return orden.asc ? 1 : -1;
+    if (va >
+      {/* ─── Botón Refrescar desde MELI ─── */}
+      <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 10, marginBottom: 12 }}>
+        {refreshMensaje && (
+          <span style={{
+            fontSize: 12, fontWeight: 600, padding: "6px 12px", borderRadius: 6,
+            background: refreshMensaje.tipo === "ok" ? "#dcfce7" : "#fef2f2",
+            color: refreshMensaje.tipo === "ok" ? "#166534" : "#991b1b",
+            border: `1px solid ${refreshMensaje.tipo === "ok" ? "#86efac" : "#fca5a5"}`,
+          }}>
+            {refreshMensaje.texto}
+          </span>
+        )}
+        <button onClick={() => setShowConfirm(true)} disabled={refreshing || pais !== "MX"}
+          title={pais !== "MX" ? "Solo disponible para México" : "Descarga el reporte del cierre del día anterior MX"}
+          style={{ padding: "7px 14px", borderRadius: 6, border: "1px solid #3B82F6",
+            background: refreshing ? "#9ca3af" : (pais !== "MX" ? "#cbd5e1" : "#3B82F6"),
+            color: "#fff", fontSize: 12, fontWeight: 700,
+            cursor: (refreshing || pais !== "MX") ? "not-allowed" : "pointer",
+            display: "flex", alignItems: "center", gap: 6 }}>
+          {refreshing ? "⏳ Descargando..." : "🔄 Refrescar desde MELI"}
+        </button>
+      </div>
+
+      {/* ─── Dialog de confirmación ─── */}
+      {showConfirm && (
+        <div style={{
+          position: "fixed", top: 0, left: 0, right: 0, bottom: 0,
+          background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center",
+          zIndex: 1000,
+        }} onClick={() => setShowConfirm(false)}>
+          <div onClick={e => e.stopPropagation()} style={{
+            background: "#fff", borderRadius: 12, padding: 24, maxWidth: 480, width: "90%",
+            boxShadow: "0 20px 50px rgba(0,0,0,0.3)",
+          }}>
+            <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 10 }}>
+              🔄 Refrescar datos desde MELI
+            </div>
+            <div style={{ fontSize: 13, color: "#444", lineHeight: 1.55, marginBottom: 14 }}>
+              Esto descarga el reporte del cierre del <strong>día anterior MX ({fechaD1MX})</strong> desde el portal MELI.
+              <br /><br />
+              Tarda aproximadamente <strong>~40 segundos</strong>. Mientras corre, no podés cerrar esta pestaña.
+              {fecha !== fechaD1MX && (
+                <div style={{ marginTop: 10, padding: 10, background: "#fef3c7", border: "1px solid #fbbf24", borderRadius: 6, fontSize: 12 }}>
+                  ℹ️ Estás viendo el <strong>{fecha}</strong>. Después del refresh, el calendario cambiará automáticamente a <strong>{fechaD1MX}</strong>.
+                </div>
+              )}
+            </div>
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+              <button onClick={() => setShowConfirm(false)}
+                style={{ padding: "8px 16px", borderRadius: 6, border: "1px solid #e4e7ec",
+                  background: "#fff", color: "#555", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+                Cancelar
+              </button>
+              <button onClick={refrescarDesdeMELI}
+                style={{ padding: "8px 16px", borderRadius: 6, border: "1px solid #3B82F6",
+                  background: "#3B82F6", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+                Sí, refrescar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+ vb) return orden.asc ? 1 : -1;
     return 0;
   });
 
@@ -5289,7 +5432,7 @@ const ModuloMaestro = ({ usuario }) => {
       </div>
 
       {/* Contenido */}
-      {vista === "viajes"   && <VistaViajesMaestro key={`v-${fecha}-${pais}-${reloadKey}`} fecha={fecha} fechaFin={fecha} pais={pais} />}
+      {vista === "viajes"   && <VistaViajesMaestro key={`v-${fecha}-${pais}-${reloadKey}`} fecha={fecha} fechaFin={fecha} pais={pais} onFechaChange={setFecha} />}
       {vista === "snapshot" && <VistaSnapshotSupervisores key={`s-${fecha}-${pais}-${reloadKey}`} fecha={fecha} pais={pais} />}
     </div>
   );
