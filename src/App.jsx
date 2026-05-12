@@ -3988,7 +3988,33 @@ const VistaViajesMaestro = ({ fecha, fechaFin, pais, onFechaChange }) => {
     else if (orden.col === "km")            { va = a.km_recorridos || 0; vb = b.km_recorridos || 0; }
     else { va = a[orden.col] || ""; vb = b[orden.col] || ""; }
     if (va < vb) return orden.asc ? -1 : 1;
-    if (va >
+    if (va > vb) return orden.asc ? 1 : -1;
+    return 0;
+  });
+
+  const totalPaginas = Math.ceil(ordenados.length / POR_PAGINA);
+  const paginados    = ordenados.slice((pagina - 1) * POR_PAGINA, pagina * POR_PAGINA);
+
+  const toggleOrden = (col) => {
+    setPagina(1);
+    setOrden(prev => ({ col, asc: prev.col === col ? !prev.asc : true }));
+  };
+
+  const totalCargados   = filtrados.reduce((s, v) => s + (v.paquetes_asignados || 0), 0);
+  const totalEntregados = filtrados.reduce((s, v) => s + (v.paquetes_entregados || 0), 0);
+  const totalDevueltos  = filtrados.reduce((s, v) => s + (v.paquetes_devueltos || 0), 0);
+  const efTotal         = totalCargados > 0 ? totalEntregados / totalCargados : null;
+  const kmTotal         = filtrados.reduce((s, v) => s + (v.km_recorridos || 0), 0);
+  const noVisitadosTotal = filtrados.reduce((s, v) => s + (v.tms_raw?.["No visitado"] || 0), 0);
+
+  if (loading) return (
+    <div style={{ textAlign: "center", padding: 48, color: "#888", fontSize: 13 }}>
+      Cargando viajes...
+    </div>
+  );
+
+  return (
+    <div>
       {/* ─── Botón Refrescar desde MELI ─── */}
       <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 10, marginBottom: 12 }}>
         {refreshMensaje && (
@@ -4051,33 +4077,6 @@ const VistaViajesMaestro = ({ fecha, fechaFin, pais, onFechaChange }) => {
           </div>
         </div>
       )}
- vb) return orden.asc ? 1 : -1;
-    return 0;
-  });
-
-  const totalPaginas = Math.ceil(ordenados.length / POR_PAGINA);
-  const paginados    = ordenados.slice((pagina - 1) * POR_PAGINA, pagina * POR_PAGINA);
-
-  const toggleOrden = (col) => {
-    setPagina(1);
-    setOrden(prev => ({ col, asc: prev.col === col ? !prev.asc : true }));
-  };
-
-  const totalCargados   = filtrados.reduce((s, v) => s + (v.paquetes_asignados || 0), 0);
-  const totalEntregados = filtrados.reduce((s, v) => s + (v.paquetes_entregados || 0), 0);
-  const totalDevueltos  = filtrados.reduce((s, v) => s + (v.paquetes_devueltos || 0), 0);
-  const efTotal         = totalCargados > 0 ? totalEntregados / totalCargados : null;
-  const kmTotal         = filtrados.reduce((s, v) => s + (v.km_recorridos || 0), 0);
-  const noVisitadosTotal = filtrados.reduce((s, v) => s + (v.tms_raw?.["No visitado"] || 0), 0);
-
-  if (loading) return (
-    <div style={{ textAlign: "center", padding: 48, color: "#888", fontSize: 13 }}>
-      Cargando viajes...
-    </div>
-  );
-
-  return (
-    <div>
       {/* KPIs */}
       <div style={{ display: "flex", gap: 10, marginBottom: 20, flexWrap: "wrap" }}>
         <KpiCardMaestro label="Viajes" valor={fmtNumMaestro(filtrados.length)} />
