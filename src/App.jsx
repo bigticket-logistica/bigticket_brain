@@ -4554,6 +4554,7 @@ const VistaSnapshotSupervisores = ({ fecha, pais }) => {
   const [filas, setFilas]   = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError]   = useState(null);
+  const [descargando, setDescargando] = useState(false);
 
   // Mapeo sub-pestaña → vista SQL
   const VISTAS = {
@@ -4613,6 +4614,136 @@ const VistaSnapshotSupervisores = ({ fecha, pais }) => {
     return filas.filter(f => (f.service_center_id || f.sc) === scSel);
   }, [filas, scSel]);
 
+  // ═══════════════════════════════════════════════════════════════════════
+  // DESCARGA EXCEL — Genera archivo con 4 hojas matching el Macro original
+  // SIEMPRE exporta TODOS los SCs (ignora filtro scSel) y descarga las 4 hojas
+  // independiente de la sub-pestaña activa.
+  // ═══════════════════════════════════════════════════════════════════════
+  const descargarExcel = async () => {
+    if (pais !== "MX") return;
+    setDescargando(true);
+    try {
+      // Cargar SheetJS dinámicamente desde CDN
+      if (!window.XLSX) {
+        await new Promise((resolve, reject) => {
+          const script = document.createElement("script");
+          script.src = "https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js";
+          script.onload = resolve;
+          script.onerror = reject;
+          document.head.appendChild(script);
+        });
+      }
+
+      // Cargar las 4 vistas en paralelo (siempre todas, sin filtro SC)
+      const [
+        { data: dIng, error: eIng },
+        { data: dRut, error: eRut },
+        { data: dNS,  error: eNS  },
+        { data: dDev, error: eDev },
+      ] = await Promise.all([
+        sb.from("vw_maestro_supervisores_auto").select("*").eq("fecha", fecha).limit(5000),
+        sb.from("vw_rutas_citadas_auto").select("*").eq("fecha", fecha).limit(5000),
+        sb.from("vw_no_show_auto").select("*").eq("fecha", fecha).limit(5000),
+        sb.from("vw_devoluciones_auto").select("*").eq("fecha", fecha).limit(10000),
+      ]);
+
+      if (eIng || eRut || eNS || eDev) {
+        alert("Error al cargar datos: " + (eIng?.message || eRut?.message || eNS?.message || eDev?.message));
+        setDescargando(false);
+        return;
+      }
+
+      const wb = window.XLSX.utils.book_new();
+
+      // ─── Hoja 1: Ingreso Maestro ───
+      // Columnas EXACTAS del Excel original
+      const hojaIngreso = (dIng || []).map(f => ({
+        "SERVICIO":           f.servicio || "UM",
+        "CECOS":              f.cecos,
+        "FECHA":              f.fecha,
+        "IDVIAJE":            f.idviaje,
+        "PATENTES":           f.patentes,
+        "TIPO DE VEHICULO":   f.tipo_vehiculo,
+        "CARGADOS":           f.cargados,
+        "ENTREGADOS":         f.entregados,
+        "DEVUELTOS":          f.devueltos,
+        "RANGO KILOMETRAJE":  f.rango_kilometraje,
+        "TIPO DE RUTA":       f.tipo_ruta,
+        "¿CON AYUDANTE?":     f.con_ayudante,
+        "NOMBRE DE AYUDANTE": f.nombre_ayudante || "",
+        "% VISITADO":         f.pct_visitado,
+        "OBSERVACIONES":      f.observaciones_auto || "",
+      }));
+      const wsIng = window.XLSX.utils.json_to_sheet(hojaIngreso);
+      window.XLSX.utils.book_append_sheet(wb, wsIng, "Ingreso Maestro");
+
+      // ─── Hoja 2: Rutas citadas ───
+      const hojaRutas = (dRut || []).map(f => ({
+        "FECHA":                  f.fecha,
+        "CECOS":                  f.cecos,
+        "RUTAS PLANEADAS":        f.rutas_planeadas,
+        "RUTAS_SMALL_PLANEADAS":  f.small_planeadas,
+        "RUTAS_LARGE_PLANEADAS":  f.large_planeadas,
+        "RUTAS EJECUTADAS":       f.rutas_ejecutadas,
+        "CANT SMALL":             f.cant_small,
+        "CANT LARGE":             f.cant_large,
+      }));
+      const wsRut = window.XLSX.utils.json_to_sheet(hojaRutas);
+      window.XLSX.utils.book_append_sheet(wb, wsRut, "Rutas citadas");
+
+      // ─── Hoja 3: No show y cancelaciones ───
+      // EXPANSIÓN: cada SC×día con cantidad_no_show=N genera N filas con PATENTE/TERCERO/MOTIVO en blanco
+      const hojaNS = [];
+      (dNS || []).forEach(f => {
+        const cant = f.cantidad_no_show || 0;
+        for (let i = 0; i < cant; i++) {
+          hojaNS.push({
+            "FECHA":   f.fecha,
+            "CECO":    f.ceco,
+            "PATENTE": "",
+            "TERCERO": "",
+            "TIPO":    f.tipo || "NO SHOW",
+            "MOTIVO":  "",
+          });
+        }
+      });
+      const wsNS = window.XLSX.utils.json_to_sheet(hojaNS.length > 0 ? hojaNS :
+        [{ "FECHA": "", "CECO": "", "PATENTE": "", "TERCERO": "", "TIPO": "", "MOTIVO": "" }]);
+      window.XLSX.utils.book_append_sheet(wb, wsNS, "No show y cancelaciones");
+
+      // ─── Hoja 4: Ingreso de devoluciones ───
+      const hojaDev = (dDev || []).map(f => ({
+        "ID_VIAJE":    f.id_viaje,
+        "FOLIO_GUIAS": f.folio_guias,
+        "PATENTE":     f.patente,
+        "MOTIVO":      f.motivo,
+        "COMENTARIOS": f.comentarios || "",
+      }));
+      const wsDev = window.XLSX.utils.json_to_sheet(hojaDev.length > 0 ? hojaDev :
+        [{ "ID_VIAJE": "", "FOLIO_GUIAS": "", "PATENTE": "", "MOTIVO": "", "COMENTARIOS": "" }]);
+      window.XLSX.utils.book_append_sheet(wb, wsDev, "Ingreso de devoluciones");
+
+      // Ajustar anchos de columnas (estimado)
+      const anchosIng = [10, 14, 12, 24, 12, 18, 10, 12, 10, 18, 14, 14, 22, 12, 40];
+      wsIng["!cols"] = anchosIng.map(w => ({ wch: w }));
+      const anchosRut = [12, 14, 18, 22, 22, 18, 12, 12];
+      wsRut["!cols"] = anchosRut.map(w => ({ wch: w }));
+      const anchosNS  = [12, 14, 12, 18, 14, 24];
+      wsNS["!cols"]  = anchosNS.map(w => ({ wch: w }));
+      const anchosDev = [22, 22, 12, 30, 40];
+      wsDev["!cols"] = anchosDev.map(w => ({ wch: w }));
+
+      // Generar archivo y disparar descarga
+      const nombreArchivo = `Macro_Maestros_Mexico_${fecha}.xlsx`;
+      window.XLSX.writeFile(wb, nombreArchivo);
+    } catch (err) {
+      console.error("Error descargando Excel:", err);
+      alert("Error al generar el Excel: " + (err.message || err));
+    } finally {
+      setDescargando(false);
+    }
+  };
+
   // País CL: mostrar mensaje
   if (pais !== "MX") {
     return (
@@ -4638,17 +4769,26 @@ const VistaSnapshotSupervisores = ({ fecha, pais }) => {
 
   return (
     <div>
-      {/* Sub-tabs */}
-      <div style={{ display: "flex", gap: 0, marginBottom: 16, borderBottom: "1px solid #e4e7ec" }}>
-        {subTabs.map(t => (
-          <button key={t.id} onClick={() => setSubTab(t.id)}
-            style={{ padding: "8px 18px", background: "none", border: "none",
-              borderBottom: subTab === t.id ? "2px solid #3B82F6" : "2px solid transparent",
-              color: subTab === t.id ? "#3B82F6" : "#666",
-              fontSize: 12, fontWeight: 700, cursor: "pointer", marginBottom: -1 }}>
-            {t.label}
-          </button>
-        ))}
+      {/* Header: sub-tabs + botón descargar */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 16, borderBottom: "1px solid #e4e7ec", flexWrap: "wrap", gap: 10 }}>
+        <div style={{ display: "flex", gap: 0 }}>
+          {subTabs.map(t => (
+            <button key={t.id} onClick={() => setSubTab(t.id)}
+              style={{ padding: "8px 18px", background: "none", border: "none",
+                borderBottom: subTab === t.id ? "2px solid #3B82F6" : "2px solid transparent",
+                color: subTab === t.id ? "#3B82F6" : "#666",
+                fontSize: 12, fontWeight: 700, cursor: "pointer", marginBottom: -1 }}>
+              {t.label}
+            </button>
+          ))}
+        </div>
+        <button onClick={descargarExcel} disabled={descargando}
+          style={{ padding: "7px 14px", borderRadius: 6, border: "1px solid #16a34a",
+            background: descargando ? "#9ca3af" : "#16a34a", color: "#fff",
+            fontSize: 12, fontWeight: 700, cursor: descargando ? "wait" : "pointer",
+            display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+          {descargando ? "⏳ Generando..." : "📥 Descargar Excel"}
+        </button>
       </div>
 
       {/* Filtro SC */}
@@ -4666,6 +4806,9 @@ const VistaSnapshotSupervisores = ({ fecha, pais }) => {
         </select>
         <span style={{ fontSize: 11, color: "#888", marginLeft: 4 }}>
           {loading ? "Cargando..." : `${filasFiltradas.length} filas`}
+        </span>
+        <span style={{ fontSize: 10, color: "#888", marginLeft: "auto", fontStyle: "italic" }}>
+          (El Excel descargado siempre incluye TODOS los SCs)
         </span>
       </div>
 
@@ -4843,6 +4986,25 @@ const SnapNoShow = ({ filas, loading }) => {
     return { totalNS, nsSDD, nsSpot, trsAcc, rutasOp, scs: filas.length };
   }, [filas]);
 
+  // Headers con tooltip descriptivo
+  const headers = [
+    { label: "FECHA",      tooltip: "Día operativo" },
+    { label: "CECO",       tooltip: "Service Center (ML_MX_xxx)" },
+    { label: "TIPO",       tooltip: "NO SHOW = Travel Request aceptado que no se ejecutó" },
+    { label: "TRS ACEPT.", tooltip: "Travel Requests que aceptamos a MELI para este día" },
+    { label: "RUTAS OP.",  tooltip: "Rutas que efectivamente operaron (el driver escaneó el QR en el SC)" },
+    { label: "NS TOTAL",   tooltip: "NO SHOWS totales = TRs aceptados - Rutas operadas" },
+    { label: "TRS SDD",    tooltip: "TRs aceptados de tipo SDD (Super Dedicada — entrega mismo día)" },
+    { label: "R.OP.SDD",   tooltip: "Rutas SDD que operaron" },
+    { label: "NS SDD",     tooltip: "NO SHOWS de SDD (lo más crítico para el cumplimiento con MELI)" },
+    { label: "TRS SPOT",   tooltip: "TRs aceptados tipo SPOT (operación regular, no SDD)" },
+    { label: "R.OP.SPOT",  tooltip: "Rutas SPOT que operaron" },
+    { label: "NS SPOT",    tooltip: "NO SHOWS de SPOT (impacta cumplimiento pero menos crítico que SDD)" },
+  ];
+
+  // Estilo común para cada celda: centrada
+  const tdCenter = { padding: "6px", textAlign: "center" };
+
   return (
     <div>
       {/* KPIs */}
@@ -4867,33 +5029,39 @@ const SnapNoShow = ({ filas, loading }) => {
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
             <thead style={{ background: "#f8fafc", position: "sticky", top: 0 }}>
               <tr>
-                {["Fecha","CECO","Tipo","TRs Acept.","Rutas Op.","NS Total","TRs SDD","R.Op.SDD","NS SDD","TRs SPOT","R.Op.SPOT","NS SPOT"].map(h => (
-                  <th key={h} style={{ padding: "8px 6px", textAlign: "left", fontWeight: 700, color: "#666", borderBottom: "1px solid #e4e7ec", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.3 }}>{h}</th>
+                {headers.map(h => (
+                  <th key={h.label} title={h.tooltip}
+                    style={{ padding: "8px 6px", textAlign: "center", fontWeight: 700, color: "#666",
+                      borderBottom: "1px solid #e4e7ec", fontSize: 10, textTransform: "uppercase",
+                      letterSpacing: 0.3, cursor: "help" }}>
+                    {h.label}
+                  </th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {filas.map((f, i) => (
                 <tr key={i} style={{ borderBottom: "1px solid #f1f5f9" }}>
-                  <td style={{ padding: "6px" }}>{f.fecha}</td>
-                  <td style={{ padding: "6px", fontWeight: 600 }}>{f.ceco}</td>
-                  <td style={{ padding: "6px" }}>
-                    <span style={{ background: "#fef2f2", color: "#991b1b", padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 700 }}>
+                  <td style={tdCenter}>{f.fecha}</td>
+                  <td style={{ ...tdCenter, fontWeight: 600 }}>{f.ceco}</td>
+                  <td style={tdCenter}>
+                    <span style={{ background: "#fef2f2", color: "#991b1b", padding: "2px 8px",
+                      borderRadius: 4, fontSize: 10, fontWeight: 700 }}>
                       {f.tipo}
                     </span>
                   </td>
-                  <td style={{ padding: "6px", textAlign: "right" }}>{fmtNumSnap(f.trs_aceptados)}</td>
-                  <td style={{ padding: "6px", textAlign: "right" }}>{fmtNumSnap(f.rutas_operadas)}</td>
-                  <td style={{ padding: "6px", textAlign: "right", fontWeight: 800, color: "#dc2626" }}>{fmtNumSnap(f.cantidad_no_show)}</td>
-                  <td style={{ padding: "6px", textAlign: "right" }}>{fmtNumSnap(f.trs_aceptados_sdd)}</td>
-                  <td style={{ padding: "6px", textAlign: "right" }}>{fmtNumSnap(f.rutas_operadas_sdd)}</td>
-                  <td style={{ padding: "6px", textAlign: "right", fontWeight: 700,
+                  <td style={tdCenter}>{fmtNumSnap(f.trs_aceptados)}</td>
+                  <td style={tdCenter}>{fmtNumSnap(f.rutas_operadas)}</td>
+                  <td style={{ ...tdCenter, fontWeight: 800, color: "#dc2626" }}>{fmtNumSnap(f.cantidad_no_show)}</td>
+                  <td style={tdCenter}>{fmtNumSnap(f.trs_aceptados_sdd)}</td>
+                  <td style={tdCenter}>{fmtNumSnap(f.rutas_operadas_sdd)}</td>
+                  <td style={{ ...tdCenter, fontWeight: 700,
                     color: f.no_show_sdd > 0 ? "#dc2626" : "#888" }}>
                     {fmtNumSnap(f.no_show_sdd)}
                   </td>
-                  <td style={{ padding: "6px", textAlign: "right" }}>{fmtNumSnap(f.trs_aceptados_spot)}</td>
-                  <td style={{ padding: "6px", textAlign: "right" }}>{fmtNumSnap(f.rutas_operadas_spot)}</td>
-                  <td style={{ padding: "6px", textAlign: "right", color: f.no_show_spot > 0 ? "#ca8a04" : "#888" }}>
+                  <td style={tdCenter}>{fmtNumSnap(f.trs_aceptados_spot)}</td>
+                  <td style={tdCenter}>{fmtNumSnap(f.rutas_operadas_spot)}</td>
+                  <td style={{ ...tdCenter, color: f.no_show_spot > 0 ? "#ca8a04" : "#888" }}>
                     {fmtNumSnap(f.no_show_spot)}
                   </td>
                 </tr>
