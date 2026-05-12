@@ -19078,6 +19078,106 @@ function PoolMeliKPIOperacion() {
           </div>
         )}
       </div>
+
+      {/* % VISITADOS POR SC */}
+      {(() => {
+        const vis = data.visitados || {};
+        const visTotal = vis.total || {};
+        const visPorSc = vis.por_sc || [];
+        const umbral = Number(vis.umbral) || 99.5;
+        const pctGeneral = Number(visTotal.pct_general) || 0;
+        const cumpleGeneral = pctGeneral >= umbral;
+        const scsBajo = visPorSc.filter(s => Number(s.pct_visitados) < umbral);
+
+        const colorVisitado = (pct) => {
+          const v = Number(pct);
+          if (v >= umbral) return "#047857";
+          if (v >= 98) return "#ca8a04";
+          return "#b91c1c";
+        };
+
+        return (
+          <div className="form-card" style={{ marginBottom: 20 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 20, alignItems: "stretch" }}>
+              {/* Tarjeta grande con % general */}
+              <div style={{
+                background: cumpleGeneral
+                  ? "linear-gradient(135deg, #047857 0%, #065f46 100%)"
+                  : "linear-gradient(135deg, #b91c1c 0%, #7f1d1d 100%)",
+                borderRadius: 10, padding: 20, color: "#fff",
+                display: "flex", flexDirection: "column", justifyContent: "space-between"
+              }}>
+                <div>
+                  <div style={{ fontSize: 10, fontWeight: 700, opacity: 0.85, textTransform: "uppercase", letterSpacing: 1, marginBottom: 6 }}>
+                    % Visitados General
+                  </div>
+                  <div style={{ fontSize: 12, opacity: 0.85, marginBottom: 12 }}>
+                    Paquetes que el driver fue a entregar (visitó el domicilio)
+                  </div>
+                </div>
+                <div>
+                  <div style={{ fontSize: 48, fontWeight: 700, lineHeight: 1, marginBottom: 8 }}>
+                    {pctGeneral.toFixed(2)}%
+                  </div>
+                  <div style={{ fontSize: 12, opacity: 0.9 }}>
+                    {Number(visTotal.no_visitados || 0)} no visitados de {Number(visTotal.cargados || 0).toLocaleString()} cargados
+                  </div>
+                  <div style={{ fontSize: 11, opacity: 0.85, marginTop: 8, padding: "6px 10px", background: "rgba(255,255,255,0.15)", borderRadius: 5, display: "inline-block" }}>
+                    Óptimo: ≥ {umbral}% {cumpleGeneral ? "✅" : "🔴"}
+                  </div>
+                </div>
+              </div>
+
+              {/* Ranking de SCs */}
+              <div>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}>
+                  <div className="form-title" style={{ marginBottom: 0 }}>Ranking de SCs por % Visitados</div>
+                  {scsBajo.length > 0 && (
+                    <div style={{ fontSize: 11, fontWeight: 700, color: "#b91c1c", background: "#fef2f2", padding: "3px 8px", borderRadius: 4, border: "1px solid #fecaca" }}>
+                      {scsBajo.length} SC(s) bajo el óptimo
+                    </div>
+                  )}
+                </div>
+                <div style={{ fontSize: 11, color: "#64748b", marginBottom: 14 }}>
+                  Ordenado de menor a mayor · óptimo ≥ {umbral}%
+                </div>
+
+                {scsBajo.length === 0 && (
+                  <div style={{ fontSize: 12, color: "#047857", padding: "8px 12px", background: "#f0fdf4", borderRadius: 6, border: "1px solid #bbf7d0", marginBottom: 12 }}>
+                    ✅ Todos los SCs cumplen el óptimo de {umbral}%
+                  </div>
+                )}
+
+                {visPorSc.map((s, i) => {
+                  const pct = Number(s.pct_visitados) || 0;
+                  const color = colorVisitado(pct);
+                  const cumple = pct >= umbral;
+                  // Barra: 95% como mínimo visual para que se note el contraste cerca del óptimo
+                  const barPct = Math.max(0, Math.min(100, (pct - 95) / 5 * 100));
+                  return (
+                    <div key={s.sc} style={{ display: "grid", gridTemplateColumns: "28px 60px 1fr 90px 90px", gap: 10, alignItems: "center", padding: "6px 0", borderBottom: i === visPorSc.length - 1 ? "none" : "1px solid #f1f5f9" }}>
+                      <div style={{ fontSize: 11, color: "#cbd5e1", fontFamily: "monospace" }}>#{i + 1}</div>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: "#0f172a" }}>{s.sc}</div>
+                      <div>
+                        <div style={{ height: 5, background: "#f1f5f9", borderRadius: 2, overflow: "hidden" }}>
+                          <div style={{ height: "100%", width: `${barPct}%`, background: color }} />
+                        </div>
+                        <div style={{ fontSize: 9, color: "#94a3b8", marginTop: 2 }}>escala 95–100%</div>
+                      </div>
+                      <div style={{ fontSize: 11, color: "#64748b", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
+                        {Number(s.no_visitados)} no vis. / {Number(s.cargados).toLocaleString()}
+                      </div>
+                      <div style={{ fontSize: 16, fontWeight: 700, color, fontVariantNumeric: "tabular-nums", textAlign: "right" }}>
+                        {pct.toFixed(2)}% {!cumple && "🔴"}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
