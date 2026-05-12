@@ -5086,24 +5086,58 @@ const SnapDevoluciones = ({ filas, loading }) => {
     return Object.entries(m).sort((a, b) => b[1] - a[1]);
   }, [filas]);
 
+  // Conteo por SC (NUEVO)
+  const conteoSCs = useMemo(() => {
+    const m = {};
+    filas.forEach(f => {
+      const sc = f.service_center_id || "—";
+      m[sc] = (m[sc] || 0) + 1;
+    });
+    return Object.entries(m).sort((a, b) => b[1] - a[1]);
+  }, [filas]);
+
   const totalDev = filas.length;
   const sinMapear = filas.filter(f => !f.motivo).length;
+  const scsConDev = conteoSCs.length;
 
   return (
     <div>
       {/* KPIs */}
       <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
         <KpiSnap label="Total devoluciones" valor={fmtNumSnap(totalDev)} color="#dc2626" />
+        <KpiSnap label="SCs con devoluc." valor={fmtNumSnap(scsConDev)} color="#3B82F6" />
         <KpiSnap label="Motivos distintos"  valor={fmtNumSnap(conteoMotivos.length)} />
         <KpiSnap label="Sin mapear"         valor={fmtNumSnap(sinMapear)}
           color={sinMapear > 0 ? "#ca8a04" : "#16a34a"}
           sub={sinMapear > 0 ? "⚠️ revisar" : "✅ OK"} />
+        <KpiSnap label="Top SC"
+          valor={conteoSCs[0] ? conteoSCs[0][0] : "—"}
+          color="#dc2626"
+          sub={conteoSCs[0] ? `${conteoSCs[0][1]} devoluc.` : ""} />
         <KpiSnap label="Top motivo"
           valor={conteoMotivos[0] ? conteoMotivos[0][0].slice(0, 16) : "—"}
           sub={conteoMotivos[0] ? `${conteoMotivos[0][1]} pkts` : ""} />
       </div>
 
-      {/* Resumen motivos */}
+      {/* Distribución por SC (NUEVO) */}
+      {conteoSCs.length > 0 && (
+        <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10, padding: 12, marginBottom: 10 }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: "#888", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>
+            Distribución por Service Center
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+            {conteoSCs.map(([sc, cant]) => (
+              <div key={sc} style={{ background: "#fef2f2", border: "1px solid #fca5a5",
+                borderRadius: 6, padding: "4px 10px", fontSize: 11 }}>
+                <span style={{ fontWeight: 700, color: "#991b1b" }}>{sc}</span>
+                <span style={{ marginLeft: 6, color: "#666" }}>{cant}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Distribución por motivo */}
       {conteoMotivos.length > 0 && (
         <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10, padding: 12, marginBottom: 14 }}>
           <div style={{ fontSize: 10, fontWeight: 700, color: "#888", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>
@@ -5120,7 +5154,7 @@ const SnapDevoluciones = ({ filas, loading }) => {
         </div>
       )}
 
-      {/* Tabla */}
+      {/* Tabla — SC ahora va después de Fecha (2da columna) y resaltado */}
       <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10, overflow: "auto", maxHeight: 600 }}>
         {loading ? (
           <div style={{ padding: 30, textAlign: "center", color: "#888", fontSize: 13 }}>Cargando...</div>
@@ -5132,7 +5166,7 @@ const SnapDevoluciones = ({ filas, loading }) => {
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
             <thead style={{ background: "#f8fafc", position: "sticky", top: 0 }}>
               <tr>
-                {["Fecha","Ruta","Folio","Patente","Motivo","SC","Driver","Receptor","CP","Ciudad","Estado"].map(h => (
+                {["Fecha","SC","Ruta","Folio","Patente","Motivo","Driver","Receptor","CP","Ciudad","Estado"].map(h => (
                   <th key={h} style={{ padding: "8px 6px", textAlign: "left", fontWeight: 700, color: "#666", borderBottom: "1px solid #e4e7ec", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.3 }}>{h}</th>
                 ))}
               </tr>
@@ -5141,13 +5175,18 @@ const SnapDevoluciones = ({ filas, loading }) => {
               {filas.map((f, i) => (
                 <tr key={i} style={{ borderBottom: "1px solid #f1f5f9" }}>
                   <td style={{ padding: "6px" }}>{f.fecha}</td>
+                  <td style={{ padding: "6px" }}>
+                    <span style={{ background: "#fef2f2", color: "#991b1b", padding: "2px 8px",
+                      borderRadius: 4, fontSize: 10, fontWeight: 700 }}>
+                      {f.service_center_id || "—"}
+                    </span>
+                  </td>
                   <td style={{ padding: "6px", fontFamily: "monospace", fontSize: 10 }}>{f.id_viaje}</td>
                   <td style={{ padding: "6px", fontFamily: "monospace", fontSize: 10 }}>{f.folio_guias}</td>
                   <td style={{ padding: "6px", fontFamily: "monospace" }}>{f.patente}</td>
                   <td style={{ padding: "6px", fontWeight: 600, color: f.motivo ? "#1a1a1a" : "#ca8a04" }}>
                     {f.motivo || "(sin mapear)"}
                   </td>
-                  <td style={{ padding: "6px" }}>{f.sc}</td>
                   <td style={{ padding: "6px" }}>{f.driver_name || "—"}</td>
                   <td style={{ padding: "6px" }}>{f.receiver_name || "—"}</td>
                   <td style={{ padding: "6px" }}>{f.zip_code || "—"}</td>
@@ -5162,7 +5201,6 @@ const SnapDevoluciones = ({ filas, loading }) => {
     </div>
   );
 };
-
 
 // ─── MÓDULO MAESTRO DE OPERACIONES (MODIFICADO) ─────────────────────────
 // Simplificado: 2 tabs (Reporte MELI + Snapshot Supervisores)
