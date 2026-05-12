@@ -18700,7 +18700,6 @@ function PoolMeliKPIOperacion() {
   const snapT = snap.total || {};
   const ranking = data.ranking_sc || [];
   const porTipo = snap.por_tipo_ruta || [];
-  const comparativa = data.comparativa_sc || [];
   const generadoEn = data.generado_en ? new Date(data.generado_en) : null;
 
   const meses = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
@@ -18894,71 +18893,188 @@ function PoolMeliKPIOperacion() {
         )}
       </div>
 
-      {/* TABLA COMPARATIVA POR SC */}
-      <div className="form-card" style={{ marginBottom: 20 }}>
-        <div className="form-title" style={{ marginBottom: 4 }}>Comparativa por SC · Informe MELI vs Snapshots</div>
-        <div style={{ fontSize: 11, color: "#64748b", marginBottom: 14 }}>Ordenado por brecha de NS (mayor a menor)</div>
-        <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-            <thead>
-              <tr style={{ borderBottom: "2px solid #e4e7ec", textAlign: "left", color: "#64748b", fontWeight: 700 }}>
-                <th style={{ padding: "8px 10px", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5 }}>SC</th>
-                <th style={{ padding: "8px 10px", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, textAlign: "center" }}>Rutas MELI/Snap</th>
-                <th style={{ padding: "8px 10px", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, textAlign: "right" }}>Cargados MELI/Snap</th>
-                <th style={{ padding: "8px 10px", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, textAlign: "right" }}>Entregados MELI/Snap</th>
-                <th style={{ padding: "8px 10px", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, textAlign: "right" }}>Devueltos MELI/Snap</th>
-                <th style={{ padding: "8px 10px", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, textAlign: "right" }}>NS MELI</th>
-                <th style={{ padding: "8px 10px", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, textAlign: "right" }}>NS Snap</th>
-                <th style={{ padding: "8px 10px", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, textAlign: "right" }}>Brecha</th>
-              </tr>
-            </thead>
-            <tbody>
-              {comparativa.map((row, i) => {
-                const brecha = Number(row.brecha_ns) || 0;
-                const colorBrecha = brecha >= 20 ? "#b91c1c" : brecha >= 5 ? "#ca8a04" : "#047857";
-                const bgBrecha = brecha >= 20 ? "#fef2f2" : brecha >= 5 ? "#fffbeb" : "#f0fdf4";
-                return (
-                  <tr key={row.sc} style={{ borderBottom: "1px solid #f1f5f9", background: i % 2 === 0 ? "#fff" : "#fafbfc" }}>
-                    <td style={{ padding: "8px 10px", fontWeight: 700, color: "#0f172a" }}>{row.sc}</td>
-                    <td style={{ padding: "8px 10px", textAlign: "center", color: "#64748b", fontVariantNumeric: "tabular-nums" }}>
-                      {row.rutas_meli ?? "—"} / {row.rutas_snap ?? "—"}
-                    </td>
-                    <td style={{ padding: "8px 10px", textAlign: "right", color: "#475569", fontVariantNumeric: "tabular-nums" }}>
-                      {row.cargados_meli ? Number(row.cargados_meli).toLocaleString() : "—"} / {row.cargados_snap ? Number(row.cargados_snap).toLocaleString() : "—"}
-                    </td>
-                    <td style={{ padding: "8px 10px", textAlign: "right", color: "#475569", fontVariantNumeric: "tabular-nums" }}>
-                      {row.entregados_meli != null ? Number(row.entregados_meli).toLocaleString() : "—"} / {row.entregados_snap != null ? Number(row.entregados_snap).toLocaleString() : "—"}
-                    </td>
-                    <td style={{ padding: "8px 10px", textAlign: "right", color: "#475569", fontVariantNumeric: "tabular-nums" }}>
-                      {row.devueltos_meli != null ? Number(row.devueltos_meli).toLocaleString() : "—"} / {row.devueltos_snap != null ? Number(row.devueltos_snap).toLocaleString() : "—"}
-                    </td>
-                    <td style={{ padding: "8px 10px", textAlign: "right", color: colorPct(row.ns_meli), fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>
-                      {row.ns_meli != null ? `${Number(row.ns_meli).toFixed(2)}%` : "—"}
-                    </td>
-                    <td style={{ padding: "8px 10px", textAlign: "right", color: colorPct(row.ns_snap), fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>
-                      {row.ns_snap != null ? `${Number(row.ns_snap).toFixed(2)}%` : "—"}
-                    </td>
-                    <td style={{ padding: "8px 10px", textAlign: "right" }}>
-                      {row.ns_meli != null && row.ns_snap != null ? (
-                        <span style={{ display: "inline-block", padding: "3px 8px", borderRadius: 4, fontSize: 11, fontWeight: 700, color: colorBrecha, background: bgBrecha, fontVariantNumeric: "tabular-nums" }}>
-                          {brecha >= 0 ? "+" : ""}{brecha.toFixed(2)} pts
-                        </span>
-                      ) : (
-                        <span style={{ fontSize: 10, color: "#94a3b8", fontStyle: "italic" }}>solo Snap</span>
-                      )}
-                    </td>
+      {/* ALERTA DE MOTIVOS SIN MAPEAR */}
+      {(data.motivos_sin_mapear || []).length > 0 && (
+        <div className="form-card" style={{ marginBottom: 20, background: "#fef2f2", border: "1px solid #fecaca" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+            <span style={{ fontSize: 18 }}>⚠️</span>
+            <div className="form-title" style={{ marginBottom: 0, color: "#991b1b" }}>
+              Motivos de fallida sin mapear ({data.motivos_sin_mapear.length})
+            </div>
+          </div>
+          <div style={{ fontSize: 12, color: "#7f1d1d", marginBottom: 12, lineHeight: 1.5 }}>
+            Hay substatus o incidents nuevos que no están en el catálogo <code>meli_motivos_devolucion</code>. 
+            Identificalos y agregalos para que aparezcan en el análisis.
+          </div>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+              <thead>
+                <tr style={{ borderBottom: "2px solid #fecaca", textAlign: "left", color: "#991b1b", fontWeight: 700 }}>
+                  <th style={{ padding: "8px 10px", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5 }}>Substatus</th>
+                  <th style={{ padding: "8px 10px", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5 }}>Incident Description</th>
+                  <th style={{ padding: "8px 10px", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, textAlign: "right" }}>Paquetes</th>
+                  <th style={{ padding: "8px 10px", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5 }}>SCs afectados</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.motivos_sin_mapear.map((m, i) => (
+                  <tr key={i} style={{ borderBottom: "1px solid #fee2e2" }}>
+                    <td style={{ padding: "8px 10px", fontFamily: "monospace", fontSize: 11, color: "#0f172a" }}>{m.substatus}</td>
+                    <td style={{ padding: "8px 10px", color: "#475569" }}>{m.incident_description}</td>
+                    <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 700, color: "#991b1b", fontVariantNumeric: "tabular-nums" }}>{m.paquetes}</td>
+                    <td style={{ padding: "8px 10px", color: "#64748b", fontSize: 11 }}>{m.scs_afectados}</td>
                   </tr>
-                );
-              })}
-            </tbody>
-          </table>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
+      )}
+
+      {/* ANÁLISIS DE FALLIDAS DEL DÍA */}
+      <div className="form-card" style={{ marginBottom: 20 }}>
+        <div className="form-title" style={{ marginBottom: 4 }}>Análisis de fallidas del día</div>
+        <div style={{ fontSize: 11, color: "#64748b", marginBottom: 16 }}>
+          {(data.fallidas?.total || 0)} paquetes fallidos en total · 
+          {snapT.cargados > 0 && (
+            <span> {((data.fallidas?.total || 0) / snapT.cargados * 100).toFixed(2)}% sobre cargado</span>
+          )}
+        </div>
+
+        {/* Tarjetas resumen por categoría */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12, marginBottom: 20 }}>
+          {(() => {
+            const porCat = data.fallidas?.por_categoria || [];
+            const getCat = (key) => porCat.find(c => c.categoria_operativa === key)?.paquetes || 0;
+            const devs = getCat("DEVOLUCION");
+            const ambs = getCat("AMBULANCIA");
+            const novs = getCat("NO_VISITADO");
+            const pctSobreCargado = snapT.cargados > 0 ? (devs / snapT.cargados * 100) : 0;
+            return (
+              <>
+                <div style={{ background: "#fef2f2", borderRadius: 8, padding: 16, border: "1px solid #fecaca" }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: "#991b1b", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>
+                    📦 Devoluciones reales
+                  </div>
+                  <div style={{ fontSize: 32, fontWeight: 700, color: "#b91c1c", lineHeight: 1, marginBottom: 4 }}>
+                    {devs}
+                  </div>
+                  <div style={{ fontSize: 11, color: "#7f1d1d" }}>
+                    {pctSobreCargado.toFixed(2)}% sobre cargado · cuentan en NS
+                  </div>
+                </div>
+                <div style={{ background: "#ecfeff", borderRadius: 8, padding: 16, border: "1px solid #a5f3fc" }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: "#0e7490", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>
+                    🚑 Ambulancias
+                  </div>
+                  <div style={{ fontSize: 32, fontWeight: 700, color: "#0891b2", lineHeight: 1, marginBottom: 4 }}>
+                    {ambs}
+                  </div>
+                  <div style={{ fontSize: 11, color: "#155e75" }}>
+                    Transferidos a otro driver del mismo SC · no penalizan
+                  </div>
+                </div>
+                <div style={{ background: "#fffbeb", borderRadius: 8, padding: 16, border: "1px solid #fde68a" }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: "#92400e", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>
+                    ❌ No visitados
+                  </div>
+                  <div style={{ fontSize: 32, fontWeight: 700, color: "#b45309", lineHeight: 1, marginBottom: 4 }}>
+                    {novs}
+                  </div>
+                  <div style={{ fontSize: 11, color: "#78350f" }}>
+                    No gestionados en ruta · cuentan en NS
+                  </div>
+                </div>
+              </>
+            );
+          })()}
+        </div>
+
+        {/* Dos columnas: Motivos y Devoluciones por SC */}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+          {/* Top motivos */}
+          <div>
+            <div style={{ fontSize: 12, fontWeight: 700, color: "#334155", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 12 }}>
+              Top motivos de fallida
+            </div>
+            {(() => {
+              const motivos = (data.fallidas?.por_motivo || []).filter(m => m.categoria_operativa !== "AMBULANCIA");
+              const maxPaq = motivos.length > 0 ? Math.max(...motivos.map(m => Number(m.paquetes) || 0)) : 1;
+              if (motivos.length === 0) {
+                return <div style={{ fontSize: 12, color: "#94a3b8", fontStyle: "italic" }}>Sin fallidas en el día</div>;
+              }
+              return motivos.map((m, i) => {
+                const pct = (Number(m.paquetes) / maxPaq) * 100;
+                const colorBar = m.categoria_operativa === "NO_VISITADO" ? "#b45309" : "#b91c1c";
+                return (
+                  <div key={m.motivo} style={{ marginBottom: 8 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 3 }}>
+                      <span style={{ fontSize: 12, fontWeight: 600, color: "#0f172a" }}>
+                        <span style={{ color: "#cbd5e1", fontFamily: "monospace", marginRight: 6 }}>#{i + 1}</span>
+                        {m.motivo}
+                      </span>
+                      <span style={{ fontSize: 13, fontWeight: 700, color: colorBar, fontVariantNumeric: "tabular-nums" }}>
+                        {m.paquetes}
+                      </span>
+                    </div>
+                    <div style={{ height: 5, background: "#f1f5f9", borderRadius: 2, overflow: "hidden" }}>
+                      <div style={{ height: "100%", width: `${pct}%`, background: colorBar, borderRadius: 2 }} />
+                    </div>
+                  </div>
+                );
+              });
+            })()}
+          </div>
+
+          {/* Devoluciones por SC */}
+          <div>
+            <div style={{ fontSize: 12, fontWeight: 700, color: "#334155", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 12 }}>
+              Devoluciones reales por SC
+            </div>
+            {(() => {
+              const porSc = data.fallidas?.devoluciones_por_sc || [];
+              const ambList = data.fallidas?.ambulancias_por_sc || [];
+              const ambMap = {};
+              ambList.forEach(a => { ambMap[a.sc] = a.ambulancias; });
+              if (porSc.length === 0) {
+                return <div style={{ fontSize: 12, color: "#94a3b8", fontStyle: "italic" }}>Sin devoluciones en el día</div>;
+              }
+              const maxDev = Math.max(...porSc.map(s => Number(s.devoluciones) || 0));
+              return porSc.map((s, i) => {
+                const pct = (Number(s.devoluciones) / maxDev) * 100;
+                const pctDev = Number(s.pct_devolucion) || 0;
+                const colorBar = pctDev >= 10 ? "#b91c1c" : pctDev >= 5 ? "#ca8a04" : "#64748b";
+                const amb = ambMap[s.sc] || 0;
+                return (
+                  <div key={s.sc} style={{ marginBottom: 8 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 3 }}>
+                      <span style={{ fontSize: 12, fontWeight: 600, color: "#0f172a" }}>
+                        <span style={{ color: "#cbd5e1", fontFamily: "monospace", marginRight: 6 }}>#{i + 1}</span>
+                        {s.sc}
+                        {amb > 0 && (
+                          <span style={{ fontSize: 10, color: "#0891b2", marginLeft: 6 }}>· {amb} amb.</span>
+                        )}
+                      </span>
+                      <span style={{ fontSize: 13, fontWeight: 700, color: colorBar, fontVariantNumeric: "tabular-nums" }}>
+                        {s.devoluciones} <span style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600 }}>({pctDev.toFixed(2)}%)</span>
+                      </span>
+                    </div>
+                    <div style={{ height: 5, background: "#f1f5f9", borderRadius: 2, overflow: "hidden" }}>
+                      <div style={{ height: "100%", width: `${pct}%`, background: colorBar, borderRadius: 2 }} />
+                    </div>
+                  </div>
+                );
+              });
+            })()}
+          </div>
+        </div>
+
+        {/* Banner informativo de ambulancias */}
         {snap.ambulancias_total > 0 && (
-          <div style={{ fontSize: 11, color: "#0891b2", marginTop: 12, padding: 10, background: "#ecfeff", borderRadius: 6, border: "1px solid #a5f3fc" }}>
-            ℹ️ <strong>Información de ambulancias:</strong> {snap.ambulancias_total} paquete(s) categorizado(s) como AMBULANCIA. 
-            Son paquetes que se transfirieron a otro driver del mismo SC y fueron entregados. 
-            Siguen siendo parte del total de cargados del SC, por eso el NS no se ajusta. 
-            <span style={{ color: "#64748b" }}>(En un próximo desarrollo veremos performance por ruta y a quién se le pasaron los paquetes ambulanciados.)</span>
+          <div style={{ fontSize: 11, color: "#0891b2", marginTop: 16, padding: 10, background: "#ecfeff", borderRadius: 6, border: "1px solid #a5f3fc" }}>
+            ℹ️ <strong>Sobre las ambulancias:</strong> {snap.ambulancias_total} paquete(s) fueron transferidos a otro driver del mismo SC y se entregaron. 
+            Siguen sumando al total cargado del SC, por eso el NS no se ajusta.
+            <span style={{ color: "#64748b" }}> (Próximo desarrollo: drill-down por ruta para ver driver origen → driver destino.)</span>
           </div>
         )}
       </div>
