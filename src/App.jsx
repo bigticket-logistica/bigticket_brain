@@ -3824,7 +3824,7 @@ const KpiCardMaestro = ({ label, valor, sub, color = "#1a1a1a" }) => (
   </div>
 );
 
-const VistaViajesMaestro = ({ fecha, fechaFin, pais, onFechaChange }) => {
+const VistaViajesMaestro = ({ fecha, fechaFin, pais }) => {
   const [viajes, setViajes]     = useState([]);
   const [ayudantesMap, setAyudantesMap] = useState({});  // {id_ruta: has_helper}
   const [loading, setLoading]   = useState(true);
@@ -3833,65 +3833,6 @@ const VistaViajesMaestro = ({ fecha, fechaFin, pais, onFechaChange }) => {
   const resetPagina = () => setPagina(1);
   const [orden, setOrden]       = useState({ col: "fecha_salida", asc: false });
   const POR_PAGINA = 20;
-
-  // ─── Refresh desde MELI (NUEVO) ───────────────────────────────────
-  const [refreshing, setRefreshing] = useState(false);
-  const [showConfirm, setShowConfirm] = useState(false);
-  const [refreshMensaje, setRefreshMensaje] = useState(null);
-
-  // Calcular fecha D-1 MX (formato YYYY-MM-DD)
-  // MX es UTC-6, así que tomamos ahora UTC y restamos 6h, luego 24h más
-  const calcularFechaD1MX = () => {
-    const ahora = new Date();
-    const ahoraMX = new Date(ahora.getTime() - 6 * 60 * 60 * 1000);
-    const ayerMX = new Date(ahoraMX.getTime() - 24 * 60 * 60 * 1000);
-    return ayerMX.toISOString().slice(0, 10);
-  };
-  const fechaD1MX = calcularFechaD1MX();
-
-  const refrescarDesdeMELI = async () => {
-    setShowConfirm(false);
-    setRefreshing(true);
-    setRefreshMensaje(null);
-    try {
-      // Llamar al webhook n8n (HTTPS, sin Mixed Content)
-      // El webhook hace internamente: leer cookies + validar + POST al VPS + polling
-      const r = await fetch("https://bigticket2026.app.n8n.cloud/webhook/refresh-maestros-meli", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-secret": "bigticket-secret-2025",
-        },
-        body: JSON.stringify({}),
-      });
-
-      if (!r.ok) {
-        throw new Error(`n8n respondió HTTP ${r.status}`);
-      }
-
-      const resultado = await r.json();
-
-      if (!resultado.ok) {
-        const motivos = {
-          no_autorizado: "Header de autenticación inválido",
-          sesion_expirada: "Sesión MELI expirada. Renová la sesión antes de refrescar.",
-          timeout: "El scrape no terminó a tiempo. Reintentá en un momento.",
-        };
-        throw new Error(resultado.mensaje || motivos[resultado.motivo] || "Error desconocido");
-      }
-
-      // Éxito: cambiar calendario a D-1 y recargar
-      if (onFechaChange) onFechaChange(fechaD1MX);
-      const kb = resultado.resultado?.kb ? ` (${resultado.resultado.kb} KB)` : "";
-      setRefreshMensaje({ tipo: "ok", texto: `✅ Datos del ${fechaD1MX} actualizados desde MELI${kb}` });
-      setTimeout(() => setRefreshMensaje(null), 5000);
-    } catch (err) {
-      console.error("Error en refresh MELI:", err);
-      setRefreshMensaje({ tipo: "error", texto: `❌ ${err.message || String(err)}` });
-    } finally {
-      setRefreshing(false);
-    }
-  };
 
   useEffect(() => { cargarViajes(); }, [fecha, fechaFin]);
 
@@ -3994,68 +3935,6 @@ const VistaViajesMaestro = ({ fecha, fechaFin, pais, onFechaChange }) => {
 
   return (
     <div>
-      {/* ─── Botón Refrescar desde MELI ─── */}
-      <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 10, marginBottom: 12 }}>
-        {refreshMensaje && (
-          <span style={{
-            fontSize: 12, fontWeight: 600, padding: "6px 12px", borderRadius: 6,
-            background: refreshMensaje.tipo === "ok" ? "#dcfce7" : "#fef2f2",
-            color: refreshMensaje.tipo === "ok" ? "#166534" : "#991b1b",
-            border: `1px solid ${refreshMensaje.tipo === "ok" ? "#86efac" : "#fca5a5"}`,
-          }}>
-            {refreshMensaje.texto}
-          </span>
-        )}
-        <button onClick={() => setShowConfirm(true)} disabled={refreshing || pais !== "MX"}
-          title={pais !== "MX" ? "Solo disponible para México" : "Descarga el reporte del cierre del día anterior MX"}
-          style={{ padding: "7px 14px", borderRadius: 6, border: "1px solid #3B82F6",
-            background: refreshing ? "#9ca3af" : (pais !== "MX" ? "#cbd5e1" : "#3B82F6"),
-            color: "#fff", fontSize: 12, fontWeight: 700,
-            cursor: (refreshing || pais !== "MX") ? "not-allowed" : "pointer",
-            display: "flex", alignItems: "center", gap: 6 }}>
-          {refreshing ? "⏳ Descargando..." : "🔄 Refrescar desde MELI"}
-        </button>
-      </div>
-
-      {/* ─── Dialog de confirmación ─── */}
-      {showConfirm && (
-        <div style={{
-          position: "fixed", top: 0, left: 0, right: 0, bottom: 0,
-          background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center",
-          zIndex: 1000,
-        }} onClick={() => setShowConfirm(false)}>
-          <div onClick={e => e.stopPropagation()} style={{
-            background: "#fff", borderRadius: 12, padding: 24, maxWidth: 480, width: "90%",
-            boxShadow: "0 20px 50px rgba(0,0,0,0.3)",
-          }}>
-            <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 10 }}>
-              🔄 Refrescar datos desde MELI
-            </div>
-            <div style={{ fontSize: 13, color: "#444", lineHeight: 1.55, marginBottom: 14 }}>
-              Esto descarga el reporte del cierre del <strong>día anterior MX ({fechaD1MX})</strong> desde el portal MELI.
-              <br /><br />
-              Tarda aproximadamente <strong>~40 segundos</strong>. Mientras corre, no podés cerrar esta pestaña.
-              {fecha !== fechaD1MX && (
-                <div style={{ marginTop: 10, padding: 10, background: "#fef3c7", border: "1px solid #fbbf24", borderRadius: 6, fontSize: 12 }}>
-                  ℹ️ Estás viendo el <strong>{fecha}</strong>. Después del refresh, el calendario cambiará automáticamente a <strong>{fechaD1MX}</strong>.
-                </div>
-              )}
-            </div>
-            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-              <button onClick={() => setShowConfirm(false)}
-                style={{ padding: "8px 16px", borderRadius: 6, border: "1px solid #e4e7ec",
-                  background: "#fff", color: "#555", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
-                Cancelar
-              </button>
-              <button onClick={refrescarDesdeMELI}
-                style={{ padding: "8px 16px", borderRadius: 6, border: "1px solid #3B82F6",
-                  background: "#3B82F6", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
-                Sí, refrescar
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
       {/* KPIs */}
       <div style={{ display: "flex", gap: 10, marginBottom: 20, flexWrap: "wrap" }}>
         <KpiCardMaestro label="Viajes" valor={fmtNumMaestro(filtrados.length)} />
@@ -4664,683 +4543,23 @@ const VistaDriversMaestro = () => {
 };
 
 // ── MÓDULO MAESTRO PRINCIPAL ──────────────────────────────────────────────────
-// ─── VISTA SNAPSHOT SUPERVISORES (NUEVO) ─────────────────────────────────
-// Pestaña dentro de Maestro de Operaciones que replica las 4 pestañas operativas
-// del Excel `Macro_Maestros_Mexico.xlsm` con datos automáticos de MELI.
-// 4 sub-pestañas: Ingreso Maestro, Rutas Citadas, No Show, Devoluciones.
-// Solo aplica a México (las vistas SQL son MX-only).
-const VistaSnapshotSupervisores = ({ fecha, pais }) => {
-  const [subTab, setSubTab] = useState("ingreso");
-  const [scSel, setScSel]   = useState("TODOS");
-  const [filas, setFilas]   = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError]   = useState(null);
-  const [descargando, setDescargando] = useState(false);
-
-  // Mapeo sub-pestaña → vista SQL
-  const VISTAS = {
-    ingreso:      { tabla: "vw_maestro_supervisores_auto", label: "Ingreso Maestro" },
-    rutas:        { tabla: "vw_rutas_citadas_auto",        label: "Rutas Citadas"  },
-    noshow:       { tabla: "vw_no_show_auto",              label: "No Show"        },
-    devoluciones: { tabla: "vw_devoluciones_auto",         label: "Devoluciones"   },
-  };
-
-  // Cargar datos cuando cambia fecha o subTab
-  useEffect(() => {
-    if (pais !== "MX") { setFilas([]); return; }
-
-    let cancelado = false;
-    const cargar = async () => {
-      setLoading(true);
-      setError(null);
-      try {
-        const { data, error: err } = await sb
-          .from(VISTAS[subTab].tabla)
-          .select("*")
-          .eq("fecha", fecha)
-          .limit(5000);
-        if (cancelado) return;
-        if (err) {
-          setError(err.message);
-          setFilas([]);
-        } else {
-          setFilas(data || []);
-        }
-      } catch (e) {
-        if (!cancelado) {
-          setError(e.message || String(e));
-          setFilas([]);
-        }
-      } finally {
-        if (!cancelado) setLoading(false);
-      }
-    };
-    cargar();
-    return () => { cancelado = true; };
-  }, [fecha, subTab, pais]);
-
-  // SCs disponibles dinámicos (extraídos de los datos)
-  const scsDisponibles = useMemo(() => {
-    const set = new Set();
-    filas.forEach(f => {
-      const sc = f.service_center_id || f.sc;
-      if (sc) set.add(sc);
-    });
-    return ["TODOS", ...Array.from(set).sort()];
-  }, [filas]);
-
-  // Aplicar filtro SC
-  const filasFiltradas = useMemo(() => {
-    if (scSel === "TODOS") return filas;
-    return filas.filter(f => (f.service_center_id || f.sc) === scSel);
-  }, [filas, scSel]);
-
-  // ═══════════════════════════════════════════════════════════════════════
-  // DESCARGA EXCEL — Genera archivo con 4 hojas matching el Macro original
-  // SIEMPRE exporta TODOS los SCs (ignora filtro scSel) y descarga las 4 hojas
-  // independiente de la sub-pestaña activa.
-  // ═══════════════════════════════════════════════════════════════════════
-  const descargarExcel = async () => {
-    if (pais !== "MX") return;
-    setDescargando(true);
-    try {
-      // Cargar SheetJS dinámicamente desde CDN
-      if (!window.XLSX) {
-        await new Promise((resolve, reject) => {
-          const script = document.createElement("script");
-          script.src = "https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js";
-          script.onload = resolve;
-          script.onerror = reject;
-          document.head.appendChild(script);
-        });
-      }
-
-      // Cargar las 4 vistas en paralelo (siempre todas, sin filtro SC)
-      const [
-        { data: dIng, error: eIng },
-        { data: dRut, error: eRut },
-        { data: dNS,  error: eNS  },
-        { data: dDev, error: eDev },
-      ] = await Promise.all([
-        sb.from("vw_maestro_supervisores_auto").select("*").eq("fecha", fecha).limit(5000),
-        sb.from("vw_rutas_citadas_auto").select("*").eq("fecha", fecha).limit(5000),
-        sb.from("vw_no_show_auto").select("*").eq("fecha", fecha).limit(5000),
-        sb.from("vw_devoluciones_auto").select("*").eq("fecha", fecha).limit(10000),
-      ]);
-
-      if (eIng || eRut || eNS || eDev) {
-        alert("Error al cargar datos: " + (eIng?.message || eRut?.message || eNS?.message || eDev?.message));
-        setDescargando(false);
-        return;
-      }
-
-      const wb = window.XLSX.utils.book_new();
-
-      // ─── Hoja 1: Ingreso Maestro ───
-      // Columnas EXACTAS del Excel original
-      const hojaIngreso = (dIng || []).map(f => ({
-        "SERVICIO":           f.servicio || "UM",
-        "CECOS":              f.cecos,
-        "FECHA":              f.fecha,
-        "IDVIAJE":            f.idviaje,
-        "PATENTES":           f.patentes,
-        "TIPO DE VEHICULO":   f.tipo_vehiculo,
-        "CARGADOS":           f.cargados,
-        "ENTREGADOS":         f.entregados,
-        "DEVUELTOS":          f.devueltos,
-        "RANGO KILOMETRAJE":  f.rango_kilometraje,
-        "TIPO DE RUTA":       f.tipo_ruta,
-        "¿CON AYUDANTE?":     f.con_ayudante,
-        "NOMBRE DE AYUDANTE": f.nombre_ayudante || "",
-        "% VISITADO":         f.pct_visitado,
-        "OBSERVACIONES":      f.observaciones_auto || "",
-      }));
-      const wsIng = window.XLSX.utils.json_to_sheet(hojaIngreso);
-      window.XLSX.utils.book_append_sheet(wb, wsIng, "Ingreso Maestro");
-
-      // ─── Hoja 2: Rutas citadas ───
-      const hojaRutas = (dRut || []).map(f => ({
-        "FECHA":                  f.fecha,
-        "CECOS":                  f.cecos,
-        "RUTAS PLANEADAS":        f.rutas_planeadas,
-        "RUTAS_SMALL_PLANEADAS":  f.small_planeadas,
-        "RUTAS_LARGE_PLANEADAS":  f.large_planeadas,
-        "RUTAS EJECUTADAS":       f.rutas_ejecutadas,
-        "CANT SMALL":             f.cant_small,
-        "CANT LARGE":             f.cant_large,
-      }));
-      const wsRut = window.XLSX.utils.json_to_sheet(hojaRutas);
-      window.XLSX.utils.book_append_sheet(wb, wsRut, "Rutas citadas");
-
-      // ─── Hoja 3: No show y cancelaciones ───
-      // EXPANSIÓN: cada SC×día con cantidad_no_show=N genera N filas con PATENTE/TERCERO/MOTIVO en blanco
-      const hojaNS = [];
-      (dNS || []).forEach(f => {
-        const cant = f.cantidad_no_show || 0;
-        for (let i = 0; i < cant; i++) {
-          hojaNS.push({
-            "FECHA":   f.fecha,
-            "CECO":    f.ceco,
-            "PATENTE": "",
-            "TERCERO": "",
-            "TIPO":    f.tipo || "NO SHOW",
-            "MOTIVO":  "",
-          });
-        }
-      });
-      const wsNS = window.XLSX.utils.json_to_sheet(hojaNS.length > 0 ? hojaNS :
-        [{ "FECHA": "", "CECO": "", "PATENTE": "", "TERCERO": "", "TIPO": "", "MOTIVO": "" }]);
-      window.XLSX.utils.book_append_sheet(wb, wsNS, "No show y cancelaciones");
-
-      // ─── Hoja 4: Ingreso de devoluciones ───
-      const hojaDev = (dDev || []).map(f => ({
-        "ID_VIAJE":    f.id_viaje,
-        "FOLIO_GUIAS": f.folio_guias,
-        "PATENTE":     f.patente,
-        "MOTIVO":      f.motivo,
-        "COMENTARIOS": f.comentarios || "",
-      }));
-      const wsDev = window.XLSX.utils.json_to_sheet(hojaDev.length > 0 ? hojaDev :
-        [{ "ID_VIAJE": "", "FOLIO_GUIAS": "", "PATENTE": "", "MOTIVO": "", "COMENTARIOS": "" }]);
-      window.XLSX.utils.book_append_sheet(wb, wsDev, "Ingreso de devoluciones");
-
-      // Ajustar anchos de columnas (estimado)
-      const anchosIng = [10, 14, 12, 24, 12, 18, 10, 12, 10, 18, 14, 14, 22, 12, 40];
-      wsIng["!cols"] = anchosIng.map(w => ({ wch: w }));
-      const anchosRut = [12, 14, 18, 22, 22, 18, 12, 12];
-      wsRut["!cols"] = anchosRut.map(w => ({ wch: w }));
-      const anchosNS  = [12, 14, 12, 18, 14, 24];
-      wsNS["!cols"]  = anchosNS.map(w => ({ wch: w }));
-      const anchosDev = [22, 22, 12, 30, 40];
-      wsDev["!cols"] = anchosDev.map(w => ({ wch: w }));
-
-      // Generar archivo y disparar descarga
-      const nombreArchivo = `Macro_Maestros_Mexico_${fecha}.xlsx`;
-      window.XLSX.writeFile(wb, nombreArchivo);
-    } catch (err) {
-      console.error("Error descargando Excel:", err);
-      alert("Error al generar el Excel: " + (err.message || err));
-    } finally {
-      setDescargando(false);
-    }
-  };
-
-  // País CL: mostrar mensaje
-  if (pais !== "MX") {
-    return (
-      <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10, padding: 40, textAlign: "center" }}>
-        <div style={{ fontSize: 36, marginBottom: 12 }}>🇲🇽</div>
-        <div style={{ fontSize: 16, fontWeight: 700, color: "#1a1a1a", marginBottom: 6 }}>
-          Esta vista solo está disponible para México
-        </div>
-        <div style={{ fontSize: 13, color: "#888" }}>
-          El Maestro Supervisores Snapshot se alimenta de scrapers MELI MX (Logistic + Travel Requests).
-          <br />Para ver datos, cambiá el selector de país a 🇲🇽 México.
-        </div>
-      </div>
-    );
-  }
-
-  const subTabs = [
-    { id: "ingreso",      label: "Ingreso Maestro" },
-    { id: "rutas",        label: "Rutas Citadas"  },
-    { id: "noshow",       label: "No Show"        },
-    { id: "devoluciones", label: "Devoluciones"   },
-  ];
-
-  return (
-    <div>
-      {/* Header: sub-tabs + botón descargar */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 16, borderBottom: "1px solid #e4e7ec", flexWrap: "wrap", gap: 10 }}>
-        <div style={{ display: "flex", gap: 0 }}>
-          {subTabs.map(t => (
-            <button key={t.id} onClick={() => setSubTab(t.id)}
-              style={{ padding: "8px 18px", background: "none", border: "none",
-                borderBottom: subTab === t.id ? "2px solid #3B82F6" : "2px solid transparent",
-                color: subTab === t.id ? "#3B82F6" : "#666",
-                fontSize: 12, fontWeight: 700, cursor: "pointer", marginBottom: -1 }}>
-              {t.label}
-            </button>
-          ))}
-        </div>
-        <button onClick={descargarExcel} disabled={descargando}
-          style={{ padding: "7px 14px", borderRadius: 6, border: "1px solid #16a34a",
-            background: descargando ? "#9ca3af" : "#16a34a", color: "#fff",
-            fontSize: 12, fontWeight: 700, cursor: descargando ? "wait" : "pointer",
-            display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
-          {descargando ? "⏳ Generando..." : "📥 Descargar Excel"}
-        </button>
-      </div>
-
-      {/* Filtro SC */}
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
-        <span style={{ fontSize: 11, fontWeight: 700, color: "#666", textTransform: "uppercase", letterSpacing: 0.5 }}>
-          Filtrar SC:
-        </span>
-        <select value={scSel} onChange={e => setScSel(e.target.value)}
-          style={{ padding: "5px 10px", borderRadius: 4, border: "1px solid #e4e7ec",
-            fontSize: 12, fontWeight: 600, color: "#1a1a1a", background: "#fff",
-            cursor: "pointer", minWidth: 140 }}>
-          {scsDisponibles.map(sc => (
-            <option key={sc} value={sc}>{sc === "TODOS" ? "Todos los SCs" : sc}</option>
-          ))}
-        </select>
-        <span style={{ fontSize: 11, color: "#888", marginLeft: 4 }}>
-          {loading ? "Cargando..." : `${filasFiltradas.length} filas`}
-        </span>
-        <span style={{ fontSize: 10, color: "#888", marginLeft: "auto", fontStyle: "italic" }}>
-          (El Excel descargado siempre incluye TODOS los SCs)
-        </span>
-      </div>
-
-      {error && (
-        <div style={{ background: "#fef2f2", border: "1px solid #fca5a5", color: "#991b1b",
-          padding: 10, borderRadius: 6, fontSize: 12, marginBottom: 12 }}>
-          Error: {error}
-        </div>
-      )}
-
-      {/* Sub-componente activo */}
-      {subTab === "ingreso"      && <SnapIngresoMaestro filas={filasFiltradas} loading={loading} />}
-      {subTab === "rutas"        && <SnapRutasCitadas   filas={filasFiltradas} loading={loading} />}
-      {subTab === "noshow"       && <SnapNoShow         filas={filasFiltradas} loading={loading} />}
-      {subTab === "devoluciones" && <SnapDevoluciones   filas={filasFiltradas} loading={loading} />}
-    </div>
-  );
-};
-
-// ─── Helpers Snapshot ─────────────────────────────────────────
-const fmtNumSnap = (v) => (v == null ? "—" : Number(v).toLocaleString("es-MX"));
-const fmtPctSnap = (v) => (v == null ? "—" : `${Number(v).toFixed(1)}%`);
-const KpiSnap = ({ label, valor, color = "#1a1a1a", sub }) => (
-  <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10,
-    padding: "12px 14px", flex: 1, minWidth: 120 }}>
-    <div style={{ fontSize: 10, fontWeight: 700, color: "#888", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>
-      {label}
-    </div>
-    <div style={{ fontSize: 20, fontWeight: 800, color }}>{valor}</div>
-    {sub && <div style={{ fontSize: 10, color: "#888", marginTop: 2 }}>{sub}</div>}
-  </div>
-);
-
-// ─── Sub-componente 1: Ingreso Maestro (1 fila por viaje) ───
-const SnapIngresoMaestro = ({ filas, loading }) => {
-  const kpis = useMemo(() => {
-    const total = filas.length;
-    const cargados = filas.reduce((acc, f) => acc + (f.cargados || 0), 0);
-    const entregados = filas.reduce((acc, f) => acc + (f.entregados || 0), 0);
-    const devueltos = filas.reduce((acc, f) => acc + (f.devueltos || 0), 0);
-    const pct = cargados > 0 ? (entregados / cargados) * 100 : null;
-    const sdds = filas.filter(f => f.es_sdd === "SI").length;
-    return { total, cargados, entregados, devueltos, pct, sdds };
-  }, [filas]);
-
-  return (
-    <div>
-      {/* KPIs */}
-      <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
-        <KpiSnap label="Viajes" valor={fmtNumSnap(kpis.total)} sub={`${kpis.sdds} SDD`} />
-        <KpiSnap label="Cargados"   valor={fmtNumSnap(kpis.cargados)}   color="#3B82F6" />
-        <KpiSnap label="Entregados" valor={fmtNumSnap(kpis.entregados)} color="#16a34a" />
-        <KpiSnap label="Devueltos"  valor={fmtNumSnap(kpis.devueltos)}  color="#dc2626" />
-        <KpiSnap label="% Entrega"  valor={fmtPctSnap(kpis.pct)}
-          color={kpis.pct >= 95 ? "#16a34a" : kpis.pct >= 90 ? "#ca8a04" : "#dc2626"} />
-      </div>
-
-      {/* Tabla */}
-      <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10, overflow: "auto", maxHeight: 600 }}>
-        {loading ? (
-          <div style={{ padding: 30, textAlign: "center", color: "#888", fontSize: 13 }}>Cargando...</div>
-        ) : filas.length === 0 ? (
-          <div style={{ padding: 30, textAlign: "center", color: "#888", fontSize: 13 }}>Sin datos para esta fecha</div>
-        ) : (
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
-            <thead style={{ background: "#f8fafc", position: "sticky", top: 0 }}>
-              <tr>
-                {["Fecha","ID Viaje","CECOS","Patente","Tipo Veh.","SDD","Tipo Ruta","Driver","Cargados","Entregados","Devueltos","KM Plan","Rango KM","%","Status","Obs"].map(h => (
-                  <th key={h} style={{ padding: "8px 6px", textAlign: "left", fontWeight: 700, color: "#666", borderBottom: "1px solid #e4e7ec", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.3 }}>{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {filas.map((f, i) => (
-                <tr key={i} style={{ borderBottom: "1px solid #f1f5f9" }}>
-                  <td style={{ padding: "6px" }}>{f.fecha}</td>
-                  <td style={{ padding: "6px", fontFamily: "monospace" }}>{f.idviaje}</td>
-                  <td style={{ padding: "6px" }}>{f.cecos}</td>
-                  <td style={{ padding: "6px", fontFamily: "monospace" }}>{f.patentes}</td>
-                  <td style={{ padding: "6px" }}>{f.tipo_vehiculo}</td>
-                  <td style={{ padding: "6px", fontWeight: 700,
-                    color: f.es_sdd === "SI" ? "#16a34a" : "#888" }}>{f.es_sdd}</td>
-                  <td style={{ padding: "6px" }}>{f.tipo_ruta}</td>
-                  <td style={{ padding: "6px" }}>{f.driver_name || "—"}</td>
-                  <td style={{ padding: "6px", textAlign: "right" }}>{fmtNumSnap(f.cargados)}</td>
-                  <td style={{ padding: "6px", textAlign: "right", color: "#16a34a", fontWeight: 600 }}>{fmtNumSnap(f.entregados)}</td>
-                  <td style={{ padding: "6px", textAlign: "right", color: "#dc2626" }}>{fmtNumSnap(f.devueltos)}</td>
-                  <td style={{ padding: "6px", textAlign: "right" }}>{fmtNumSnap(f.km_planificados)}</td>
-                  <td style={{ padding: "6px" }}>{f.rango_kilometraje}</td>
-                  <td style={{ padding: "6px", textAlign: "right", fontWeight: 600,
-                    color: f.pct_visitado >= 95 ? "#16a34a" : f.pct_visitado >= 90 ? "#ca8a04" : "#dc2626" }}>
-                    {fmtPctSnap(f.pct_visitado)}
-                  </td>
-                  <td style={{ padding: "6px" }}>{f.status_final}</td>
-                  <td style={{ padding: "6px", fontSize: 10, color: "#888", maxWidth: 200 }}>{f.observaciones_auto || "—"}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
-    </div>
-  );
-};
-
-// ─── Sub-componente 2: Rutas Citadas (SC × día) ───
-const SnapRutasCitadas = ({ filas, loading }) => {
-  const kpis = useMemo(() => {
-    const planeadas  = filas.reduce((acc, f) => acc + (f.rutas_planeadas  || 0), 0);
-    const ejecutadas = filas.reduce((acc, f) => acc + (f.rutas_ejecutadas || 0), 0);
-    const sinCerrar  = filas.reduce((acc, f) => acc + (f.rutas_sin_cerrar || 0), 0);
-    const zombis     = filas.reduce((acc, f) => acc + (f.rutas_zombi_descartadas || 0), 0);
-    return { planeadas, ejecutadas, sinCerrar, zombis, scs: filas.length };
-  }, [filas]);
-
-  return (
-    <div>
-      {/* KPIs */}
-      <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
-        <KpiSnap label="SCs"        valor={fmtNumSnap(kpis.scs)} />
-        <KpiSnap label="Planeadas"  valor={fmtNumSnap(kpis.planeadas)}  color="#3B82F6" />
-        <KpiSnap label="Ejecutadas" valor={fmtNumSnap(kpis.ejecutadas)} color="#16a34a" />
-        <KpiSnap label="Sin cerrar" valor={fmtNumSnap(kpis.sinCerrar)}  color="#ca8a04" />
-        <KpiSnap label="Zombis"     valor={fmtNumSnap(kpis.zombis)}     color="#dc2626" sub="descartadas" />
-      </div>
-
-      {/* Tabla */}
-      <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10, overflow: "auto", maxHeight: 600 }}>
-        {loading ? (
-          <div style={{ padding: 30, textAlign: "center", color: "#888", fontSize: 13 }}>Cargando...</div>
-        ) : filas.length === 0 ? (
-          <div style={{ padding: 30, textAlign: "center", color: "#888", fontSize: 13 }}>Sin datos para esta fecha</div>
-        ) : (
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
-            <thead style={{ background: "#f8fafc", position: "sticky", top: 0 }}>
-              <tr>
-                {["Fecha","CECO","Planeadas","Small","Large","Ejecutadas","S.Plan","L.Plan","Small SDD","Large SDD","Sin Cerrar","Zombis"].map(h => (
-                  <th key={h} style={{ padding: "8px 6px", textAlign: "left", fontWeight: 700, color: "#666", borderBottom: "1px solid #e4e7ec", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.3 }}>{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {filas.map((f, i) => (
-                <tr key={i} style={{ borderBottom: "1px solid #f1f5f9" }}>
-                  <td style={{ padding: "6px" }}>{f.fecha}</td>
-                  <td style={{ padding: "6px", fontWeight: 600 }}>{f.cecos}</td>
-                  <td style={{ padding: "6px", textAlign: "right", fontWeight: 700, color: "#3B82F6" }}>{fmtNumSnap(f.rutas_planeadas)}</td>
-                  <td style={{ padding: "6px", textAlign: "right" }}>{fmtNumSnap(f.small_planeadas)}</td>
-                  <td style={{ padding: "6px", textAlign: "right" }}>{fmtNumSnap(f.large_planeadas)}</td>
-                  <td style={{ padding: "6px", textAlign: "right", fontWeight: 700, color: "#16a34a" }}>{fmtNumSnap(f.rutas_ejecutadas)}</td>
-                  <td style={{ padding: "6px", textAlign: "right" }}>{fmtNumSnap(f.cant_small)}</td>
-                  <td style={{ padding: "6px", textAlign: "right" }}>{fmtNumSnap(f.cant_large)}</td>
-                  <td style={{ padding: "6px", textAlign: "right" }}>{fmtNumSnap(f.small_sdd_planeadas)}</td>
-                  <td style={{ padding: "6px", textAlign: "right" }}>{fmtNumSnap(f.large_sdd_planeadas)}</td>
-                  <td style={{ padding: "6px", textAlign: "right", color: "#ca8a04" }}>{fmtNumSnap(f.rutas_sin_cerrar)}</td>
-                  <td style={{ padding: "6px", textAlign: "right", color: "#dc2626" }}>{fmtNumSnap(f.rutas_zombi_descartadas)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
-    </div>
-  );
-};
-
-// ─── Sub-componente 3: No Show (SC × día) ───
-const SnapNoShow = ({ filas, loading }) => {
-  const kpis = useMemo(() => {
-    const totalNS = filas.reduce((acc, f) => acc + (f.cantidad_no_show || 0), 0);
-    const nsSDD   = filas.reduce((acc, f) => acc + (f.no_show_sdd   || 0), 0);
-    const nsSpot  = filas.reduce((acc, f) => acc + (f.no_show_spot  || 0), 0);
-    const trsAcc  = filas.reduce((acc, f) => acc + (f.trs_aceptados || 0), 0);
-    const rutasOp = filas.reduce((acc, f) => acc + (f.rutas_operadas || 0), 0);
-    return { totalNS, nsSDD, nsSpot, trsAcc, rutasOp, scs: filas.length };
-  }, [filas]);
-
-  // Headers con tooltip descriptivo
-  const headers = [
-    { label: "FECHA",      tooltip: "Día operativo" },
-    { label: "CECO",       tooltip: "Service Center (ML_MX_xxx)" },
-    { label: "TIPO",       tooltip: "NO SHOW = Travel Request aceptado que no se ejecutó" },
-    { label: "TRS ACEPT.", tooltip: "Travel Requests que aceptamos a MELI para este día" },
-    { label: "RUTAS OP.",  tooltip: "Rutas que efectivamente operaron (el driver escaneó el QR en el SC)" },
-    { label: "NS TOTAL",   tooltip: "NO SHOWS totales = TRs aceptados - Rutas operadas" },
-    { label: "TRS SDD",    tooltip: "TRs aceptados de tipo SDD (Super Dedicada — entrega mismo día)" },
-    { label: "R.OP.SDD",   tooltip: "Rutas SDD que operaron" },
-    { label: "NS SDD",     tooltip: "NO SHOWS de SDD (lo más crítico para el cumplimiento con MELI)" },
-    { label: "TRS SPOT",   tooltip: "TRs aceptados tipo SPOT (operación regular, no SDD)" },
-    { label: "R.OP.SPOT",  tooltip: "Rutas SPOT que operaron" },
-    { label: "NS SPOT",    tooltip: "NO SHOWS de SPOT (impacta cumplimiento pero menos crítico que SDD)" },
-  ];
-
-  // Estilo común para cada celda: centrada
-  const tdCenter = { padding: "6px", textAlign: "center" };
-
-  return (
-    <div>
-      {/* KPIs */}
-      <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
-        <KpiSnap label="SCs con NS"      valor={fmtNumSnap(kpis.scs)} />
-        <KpiSnap label="Total NS"        valor={fmtNumSnap(kpis.totalNS)} color="#dc2626" />
-        <KpiSnap label="NS SDD"          valor={fmtNumSnap(kpis.nsSDD)}   color="#dc2626" sub="⚠️ crítico" />
-        <KpiSnap label="NS SPOT"         valor={fmtNumSnap(kpis.nsSpot)}  color="#ca8a04" />
-        <KpiSnap label="TRs aceptados"   valor={fmtNumSnap(kpis.trsAcc)}  color="#3B82F6" />
-        <KpiSnap label="Rutas operadas"  valor={fmtNumSnap(kpis.rutasOp)} color="#16a34a" />
-      </div>
-
-      {/* Tabla */}
-      <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10, overflow: "auto", maxHeight: 600 }}>
-        {loading ? (
-          <div style={{ padding: 30, textAlign: "center", color: "#888", fontSize: 13 }}>Cargando...</div>
-        ) : filas.length === 0 ? (
-          <div style={{ padding: 30, textAlign: "center", color: "#16a34a", fontSize: 13, fontWeight: 600 }}>
-            ✅ Sin No Shows en esta fecha
-          </div>
-        ) : (
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
-            <thead style={{ background: "#f8fafc", position: "sticky", top: 0 }}>
-              <tr>
-                {headers.map(h => (
-                  <th key={h.label} title={h.tooltip}
-                    style={{ padding: "8px 6px", textAlign: "center", fontWeight: 700, color: "#666",
-                      borderBottom: "1px solid #e4e7ec", fontSize: 10, textTransform: "uppercase",
-                      letterSpacing: 0.3, cursor: "help" }}>
-                    {h.label}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {filas.map((f, i) => (
-                <tr key={i} style={{ borderBottom: "1px solid #f1f5f9" }}>
-                  <td style={tdCenter}>{f.fecha}</td>
-                  <td style={{ ...tdCenter, fontWeight: 600 }}>{f.ceco}</td>
-                  <td style={tdCenter}>
-                    <span style={{ background: "#fef2f2", color: "#991b1b", padding: "2px 8px",
-                      borderRadius: 4, fontSize: 10, fontWeight: 700 }}>
-                      {f.tipo}
-                    </span>
-                  </td>
-                  <td style={tdCenter}>{fmtNumSnap(f.trs_aceptados)}</td>
-                  <td style={tdCenter}>{fmtNumSnap(f.rutas_operadas)}</td>
-                  <td style={{ ...tdCenter, fontWeight: 800, color: "#dc2626" }}>{fmtNumSnap(f.cantidad_no_show)}</td>
-                  <td style={tdCenter}>{fmtNumSnap(f.trs_aceptados_sdd)}</td>
-                  <td style={tdCenter}>{fmtNumSnap(f.rutas_operadas_sdd)}</td>
-                  <td style={{ ...tdCenter, fontWeight: 700,
-                    color: f.no_show_sdd > 0 ? "#dc2626" : "#888" }}>
-                    {fmtNumSnap(f.no_show_sdd)}
-                  </td>
-                  <td style={tdCenter}>{fmtNumSnap(f.trs_aceptados_spot)}</td>
-                  <td style={tdCenter}>{fmtNumSnap(f.rutas_operadas_spot)}</td>
-                  <td style={{ ...tdCenter, color: f.no_show_spot > 0 ? "#ca8a04" : "#888" }}>
-                    {fmtNumSnap(f.no_show_spot)}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
-    </div>
-  );
-};
-
-// ─── Sub-componente 4: Devoluciones (1 fila por paquete) ───
-const SnapDevoluciones = ({ filas, loading }) => {
-  // Conteo por motivo
-  const conteoMotivos = useMemo(() => {
-    const m = {};
-    filas.forEach(f => {
-      const k = f.motivo || "(sin mapear)";
-      m[k] = (m[k] || 0) + 1;
-    });
-    return Object.entries(m).sort((a, b) => b[1] - a[1]);
-  }, [filas]);
-
-  // Conteo por SC (NUEVO)
-  const conteoSCs = useMemo(() => {
-    const m = {};
-    filas.forEach(f => {
-      const sc = f.service_center_id || "—";
-      m[sc] = (m[sc] || 0) + 1;
-    });
-    return Object.entries(m).sort((a, b) => b[1] - a[1]);
-  }, [filas]);
-
-  const totalDev = filas.length;
-  const sinMapear = filas.filter(f => !f.motivo).length;
-  const scsConDev = conteoSCs.length;
-
-  return (
-    <div>
-      {/* KPIs */}
-      <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
-        <KpiSnap label="Total devoluciones" valor={fmtNumSnap(totalDev)} color="#dc2626" />
-        <KpiSnap label="SCs con devoluc." valor={fmtNumSnap(scsConDev)} color="#3B82F6" />
-        <KpiSnap label="Motivos distintos"  valor={fmtNumSnap(conteoMotivos.length)} />
-        <KpiSnap label="Sin mapear"         valor={fmtNumSnap(sinMapear)}
-          color={sinMapear > 0 ? "#ca8a04" : "#16a34a"}
-          sub={sinMapear > 0 ? "⚠️ revisar" : "✅ OK"} />
-        <KpiSnap label="Top SC"
-          valor={conteoSCs[0] ? conteoSCs[0][0] : "—"}
-          color="#dc2626"
-          sub={conteoSCs[0] ? `${conteoSCs[0][1]} devoluc.` : ""} />
-        <KpiSnap label="Top motivo"
-          valor={conteoMotivos[0] ? conteoMotivos[0][0].slice(0, 16) : "—"}
-          sub={conteoMotivos[0] ? `${conteoMotivos[0][1]} pkts` : ""} />
-      </div>
-
-      {/* Distribución por SC (NUEVO) */}
-      {conteoSCs.length > 0 && (
-        <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10, padding: 12, marginBottom: 10 }}>
-          <div style={{ fontSize: 10, fontWeight: 700, color: "#888", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>
-            Distribución por Service Center
-          </div>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-            {conteoSCs.map(([sc, cant]) => (
-              <div key={sc} style={{ background: "#fef2f2", border: "1px solid #fca5a5",
-                borderRadius: 6, padding: "4px 10px", fontSize: 11 }}>
-                <span style={{ fontWeight: 700, color: "#991b1b" }}>{sc}</span>
-                <span style={{ marginLeft: 6, color: "#666" }}>{cant}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Distribución por motivo */}
-      {conteoMotivos.length > 0 && (
-        <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10, padding: 12, marginBottom: 14 }}>
-          <div style={{ fontSize: 10, fontWeight: 700, color: "#888", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>
-            Distribución por motivo
-          </div>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-            {conteoMotivos.map(([motivo, cant]) => (
-              <div key={motivo} style={{ background: "#f8fafc", border: "1px solid #e4e7ec", borderRadius: 6, padding: "4px 10px", fontSize: 11 }}>
-                <span style={{ fontWeight: 700, color: "#1a1a1a" }}>{motivo}</span>
-                <span style={{ marginLeft: 6, color: "#888" }}>{cant}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Tabla — SC ahora va después de Fecha (2da columna) y resaltado */}
-      <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10, overflow: "auto", maxHeight: 600 }}>
-        {loading ? (
-          <div style={{ padding: 30, textAlign: "center", color: "#888", fontSize: 13 }}>Cargando...</div>
-        ) : filas.length === 0 ? (
-          <div style={{ padding: 30, textAlign: "center", color: "#16a34a", fontSize: 13, fontWeight: 600 }}>
-            ✅ Sin devoluciones en esta fecha
-          </div>
-        ) : (
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
-            <thead style={{ background: "#f8fafc", position: "sticky", top: 0 }}>
-              <tr>
-                {["Fecha","SC","Ruta","Folio","Patente","Motivo","Driver","Receptor","CP","Ciudad","Estado"].map(h => (
-                  <th key={h} style={{ padding: "8px 6px", textAlign: "left", fontWeight: 700, color: "#666", borderBottom: "1px solid #e4e7ec", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.3 }}>{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {filas.map((f, i) => (
-                <tr key={i} style={{ borderBottom: "1px solid #f1f5f9" }}>
-                  <td style={{ padding: "6px" }}>{f.fecha}</td>
-                  <td style={{ padding: "6px" }}>
-                    <span style={{ background: "#fef2f2", color: "#991b1b", padding: "2px 8px",
-                      borderRadius: 4, fontSize: 10, fontWeight: 700 }}>
-                      {f.service_center_id || "—"}
-                    </span>
-                  </td>
-                  <td style={{ padding: "6px", fontFamily: "monospace", fontSize: 10 }}>{f.id_viaje}</td>
-                  <td style={{ padding: "6px", fontFamily: "monospace", fontSize: 10 }}>{f.folio_guias}</td>
-                  <td style={{ padding: "6px", fontFamily: "monospace" }}>{f.patente}</td>
-                  <td style={{ padding: "6px", fontWeight: 600, color: f.motivo ? "#1a1a1a" : "#ca8a04" }}>
-                    {f.motivo || "(sin mapear)"}
-                  </td>
-                  <td style={{ padding: "6px" }}>{f.driver_name || "—"}</td>
-                  <td style={{ padding: "6px" }}>{f.receiver_name || "—"}</td>
-                  <td style={{ padding: "6px" }}>{f.zip_code || "—"}</td>
-                  <td style={{ padding: "6px" }}>{f.city || "—"}</td>
-                  <td style={{ padding: "6px" }}>{f.state || "—"}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
-    </div>
-  );
-};
-
-// ─── MÓDULO MAESTRO DE OPERACIONES (MODIFICADO) ─────────────────────────
-// Simplificado: 2 tabs (Reporte MELI + Snapshot Supervisores)
-// Selector de día único (no rango), default = D-1 (ayer)
-// Las pestañas Penalizaciones, Premios, Ayudantes se eliminaron de esta vista
 const ModuloMaestro = ({ usuario }) => {
   const [vista, setVista]       = useState("viajes");
-  // Fecha única (no rango); default = D-1 en zona México
-  const [fecha, setFecha]       = useState(fechaOperativaOffset(-1));
+  const [fecha, setFecha]       = useState(fechaHoyOperativa());
+  const [fechaFin, setFechaFin] = useState(fechaHoyOperativa());
+  const [periodo, setPeriodo]   = useState(periodoHoyOperativo());
   const [reloadKey, setReloadKey] = useState(0);
-  const [pais, setPais]         = useState("MX"); // default MX para que Snapshot funcione
+  const [pais, setPais]         = useState("CL");
 
   const tabs = [
-    { id: "viajes",   label: "Maestros de Operaciones MELI" },
-    { id: "snapshot", label: "Maestro Supervisores Snapshot" },
+    { id: "viajes",         label: "Viajes del día" },
+    { id: "penalizaciones", label: "Penalizaciones" },
+    { id: "premios",        label: "Premios" },
+    { id: "ayudantes",      label: "Ayudantes" },
   ];
 
   return (
-    <div className="pg" style={{ maxWidth: 1400 }}>
+    <div className="pg" style={{ maxWidth: 1200 }}>
       {/* Header */}
       <div style={{ marginBottom: 20 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14, flexWrap: "wrap", gap: 12 }}>
@@ -5362,37 +4581,36 @@ const ModuloMaestro = ({ usuario }) => {
             ))}
           </div>
         </div>
-
-        {/* Filtro de fecha único */}
-        <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10, padding: "12px 16px" }}>
-          <div style={{ fontSize: 10, color: "#888", fontWeight: 800, textTransform: "uppercase", letterSpacing: 1, marginBottom: 10 }}>Día</div>
-          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
-            {[
-              { label: "Hoy",       fn: () => setFecha(fechaHoyOperativa())            },
-              { label: "Ayer",      fn: () => setFecha(fechaOperativaOffset(-1))       },
-              { label: "Anteayer",  fn: () => setFecha(fechaOperativaOffset(-2))       },
-              { label: "Hace 7 d", fn: () => setFecha(fechaOperativaOffset(-7))       },
-            ].map(({ label, fn }) => (
-              <button key={label} onClick={fn}
-                style={{ padding: "5px 14px", borderRadius: 4, border: "1px solid #e4e7ec",
-                  background: "#f8fafc", color: "#555", fontSize: 11, fontWeight: 700,
-                  cursor: "pointer" }}>
-                {label}
-              </button>
-            ))}
+        {(vista === "viajes" || vista === "penalizaciones" || vista === "premios" || vista === "ayudantes") && (
+          <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10, padding: "12px 16px" }}>
+            <div style={{ fontSize: 10, color: "#888", fontWeight: 800, textTransform: "uppercase", letterSpacing: 1, marginBottom: 10 }}>Período</div>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
+              {[
+                { label: "Hoy", fn: () => { const h = fechaHoyOperativa(); setFecha(h); setFechaFin(h); } },
+                { label: "Ayer", fn: () => { const s = fechaOperativaOffset(-1); setFecha(s); setFechaFin(s); } },
+                { label: "Esta semana", fn: () => { const h = new Date(); const l = new Date(h); l.setDate(h.getDate()-h.getDay()+1); setFecha(l.toISOString().split("T")[0]); setFechaFin(h.toISOString().split("T")[0]); } },
+                { label: "Este mes", fn: () => { const h = new Date(); const i = new Date(h.getFullYear(), h.getMonth(), 1); setFecha(i.toISOString().split("T")[0]); setFechaFin(h.toISOString().split("T")[0]); } },
+                { label: "Mes anterior", fn: () => { const h = new Date(); const i = new Date(h.getFullYear(), h.getMonth()-1, 1); const f = new Date(h.getFullYear(), h.getMonth(), 0); setFecha(i.toISOString().split("T")[0]); setFechaFin(f.toISOString().split("T")[0]); } },
+              ].map(({ label, fn }) => (
+                <button key={label} onClick={fn}
+                  style={{ padding: "5px 14px", borderRadius: 4, border: "1px solid #e4e7ec",
+                    background: "#f8fafc", color: "#555", fontSize: 11, fontWeight: 700,
+                    cursor: "pointer" }}>
+                  {label}
+                </button>
+              ))}
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <input type="date" value={fecha} onChange={e => setFecha(e.target.value)}
+                style={{ background: "#f0f2f5", border: "1px solid #e4e7ec", borderRadius: 4,
+                  padding: "6px 10px", fontSize: 12, flex: 1 }} />
+              <span style={{ color: "#888", fontSize: 12 }}>→</span>
+              <input type="date" value={fechaFin || fecha} onChange={e => setFechaFin(e.target.value)}
+                style={{ background: "#f0f2f5", border: "1px solid #e4e7ec", borderRadius: 4,
+                  padding: "6px 10px", fontSize: 12, flex: 1 }} />
+            </div>
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <input type="date" value={fecha} onChange={e => setFecha(e.target.value)}
-              max={fechaHoyOperativa()}
-              style={{ background: "#f0f2f5", border: "1px solid #e4e7ec", borderRadius: 4,
-                padding: "6px 10px", fontSize: 12, flex: 1, maxWidth: 200 }} />
-            <span style={{ fontSize: 11, color: "#888" }}>
-              {fecha === fechaHoyOperativa() ? "(hoy)" :
-               fecha === fechaOperativaOffset(-1) ? "(ayer)" :
-               fecha === fechaOperativaOffset(-2) ? "(anteayer)" : ""}
-            </span>
-          </div>
-        </div>
+        )}
       </div>
 
       {/* Tabs */}
@@ -5410,11 +4628,14 @@ const ModuloMaestro = ({ usuario }) => {
       </div>
 
       {/* Contenido */}
-      {vista === "viajes"   && <VistaViajesMaestro key={`v-${fecha}-${pais}-${reloadKey}`} fecha={fecha} fechaFin={fecha} pais={pais} onFechaChange={setFecha} />}
-      {vista === "snapshot" && <VistaSnapshotSupervisores key={`s-${fecha}-${pais}-${reloadKey}`} fecha={fecha} pais={pais} />}
+      {vista === "viajes"         && <VistaViajesMaestro key={`v-${fecha}-${fechaFin}-${pais}-${reloadKey}`} fecha={fecha} fechaFin={fechaFin || fecha} pais={pais} />}
+      {vista === "penalizaciones" && <VistaPenalizaciones key={`p-${fecha}-${fechaFin}-${pais}`} fecha={fecha} fechaFin={fechaFin || fecha} pais={pais} />}
+      {vista === "premios"        && <VistaPremios key={`pr-${fecha}-${fechaFin}-${pais}`} fecha={fecha} fechaFin={fechaFin || fecha} pais={pais} />}
+      {vista === "ayudantes"      && <VistaAyudantes key={`ay-${fecha}-${fechaFin}`} fecha={fecha} fechaFin={fechaFin || fecha} />}
     </div>
   );
 };
+
 
 
 // ─── MÓDULO INCIDENCIAS ─────────────────────────────────────────────
@@ -17388,10 +16609,11 @@ function IndicadoresOperacionalesMX({ usuario }) {
     return () => { alive = false; };
   }, [mesGlobal.anio, mesGlobal.mes]);
 
-  // Tabs: Compromiso MELI, KPI de Operación, Inventario
+  // Tabs: Compromiso MELI, KPI de Operación, Diferencias Maestros, Inventario
   const tabs = [
     { id: "compromiso", label: "Compromiso MELI", desc: "Operativa de mañana · SDD vs SPOT" },
     { id: "kpi_operacion", label: "KPI de Operación", desc: "NS Informe MELI vs Snapshots" },
+    { id: "diferencias", label: "Diferencias Maestros", desc: "Auditoría ruta por ruta · MELI vs Snapshots" },
     { id: "inventario", label: "Inventario", desc: "Drivers, vehículos, fantasmas" },
   ];
 
@@ -17491,6 +16713,7 @@ function IndicadoresOperacionalesMX({ usuario }) {
 
       {vista === "compromiso" && <PoolMeliCompromiso />}
       {vista === "kpi_operacion" && <PoolMeliKPIOperacion />}
+      {vista === "diferencias" && <PoolMeliDiferenciasMaestros />}
       {vista === "inventario" && <PoolMeliInventario drivers={drivers} vehiculos={vehiculos} resumen={resumen} setModal={setModal} setDetalle={setDetalle} mesGlobal={mesGlobal} />}
 
       {modal && <MeliModal modal={modal} onClose={() => setModal(null)} />}
@@ -19957,6 +19180,390 @@ function PoolMeliKPIOperacion() {
           </div>
         );
       })()}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// DIFERENCIAS MAESTROS — Auditoría ruta por ruta MELI vs Snapshots
+// ═══════════════════════════════════════════════════════════════════════════
+function PoolMeliDiferenciasMaestros() {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [refreshKey, setRefreshKey] = useState(0);
+
+  // Calcular ayer en hora local
+  const [fechaSel, setFechaSel] = useState(() => {
+    const ahora = new Date();
+    const ayer = new Date(ahora);
+    ayer.setDate(ayer.getDate() - 1);
+    return ayer.toISOString().slice(0, 10);
+  });
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const { data: result, error: err } = await sb.rpc("get_diferencias_maestros", { p_fecha: fechaSel });
+        if (!alive) return;
+        if (err) throw err;
+        setData(result);
+      } catch (e) {
+        if (alive) setError(e.message || String(e));
+      } finally {
+        if (alive) setLoading(false);
+      }
+    })();
+    return () => { alive = false; };
+  }, [refreshKey, fechaSel]);
+
+  if (loading) {
+    return <div className="pg" style={{ padding: 60, textAlign: "center", color: "#888" }}>Cargando diferencias entre Maestros…</div>;
+  }
+  if (error) {
+    return <div className="pg" style={{ padding: 40, color: "#c0392b" }}>Error: {error}</div>;
+  }
+  if (!data) {
+    return <div className="pg" style={{ padding: 40, color: "#888" }}>Sin datos</div>;
+  }
+
+  const resumen = data.resumen || {};
+  const porSc = data.por_sc || [];
+  const conDif = data.con_diferencias || [];
+  const soloSnap = data.solo_snapshot || [];
+  const soloMeli = data.solo_meli || [];
+  const generadoEn = data.generado_en ? new Date(data.generado_en) : null;
+
+  const totalRutas = resumen.total_rutas || 0;
+  const rutasMatch = resumen.rutas_match || 0;
+  const rutasConDif = resumen.rutas_con_diferencias || 0;
+  const rutasSoloSnap = resumen.rutas_solo_snap || 0;
+  const rutasSoloMeli = resumen.rutas_solo_meli || 0;
+  const pctMatch = totalRutas > 0 ? (rutasMatch / totalRutas * 100) : 0;
+
+  // Formato fecha
+  const meses = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
+  const dias = ["domingo","lunes","martes","miércoles","jueves","viernes","sábado"];
+  let fechaTexto = data.fecha;
+  if (data.fecha) {
+    const [y, m, d] = data.fecha.split("-").map(Number);
+    const fechaObj = new Date(y, m - 1, d);
+    fechaTexto = `${dias[fechaObj.getDay()]} ${d} de ${meses[m - 1]} de ${y}`;
+  }
+
+  const colorPctMatch = pctMatch >= 95 ? "#047857" : pctMatch >= 85 ? "#1A3A6B" : "#b91c1c";
+
+  return (
+    <div className="pg">
+      {/* Header con selector de fecha y refresh */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
+        <div>
+          <div className="sec-title">Diferencias Maestros</div>
+          <div className="sec-sub">
+            Auditoría ruta por ruta · {fechaTexto}
+            {generadoEn && (
+              <span style={{ color: "#94a3b8", marginLeft: 8 }}>
+                · generado {generadoEn.toLocaleString("es-MX", { hour: "2-digit", minute: "2-digit", day: "2-digit", month: "2-digit" })}
+              </span>
+            )}
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <input
+            type="date"
+            value={fechaSel}
+            onChange={(e) => setFechaSel(e.target.value)}
+            style={{
+              padding: "6px 10px", fontSize: 12,
+              border: "1px solid #e4e7ec", borderRadius: 6,
+              fontFamily: "'Geist', sans-serif", color: "#1a3a6b",
+            }}
+          />
+          <button
+            onClick={() => setRefreshKey(k => k + 1)}
+            style={{
+              padding: "8px 14px", fontSize: 12, fontWeight: 600,
+              background: "#fff", color: "#1a3a6b",
+              border: "1px solid #e4e7ec", borderRadius: 6,
+              cursor: "pointer", fontFamily: "'Geist', sans-serif",
+            }}
+            title="Recargar datos"
+          >
+            ↻ Refrescar
+          </button>
+        </div>
+      </div>
+
+      {/* KPIs principales */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 20 }}>
+        <div className="form-card" style={{ marginBottom: 0, padding: 16, borderTop: "3px solid #1A3A6B" }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>
+            Total de Rutas
+          </div>
+          <div style={{ fontSize: 32, fontWeight: 700, color: "#1A3A6B", lineHeight: 1, marginBottom: 4 }}>
+            {totalRutas}
+          </div>
+          <div style={{ fontSize: 10, color: "#94a3b8" }}>
+            Combinadas de ambas fuentes
+          </div>
+        </div>
+        <div className="form-card" style={{ marginBottom: 0, padding: 16, borderTop: `3px solid ${colorPctMatch}` }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>
+            % Match exacto
+          </div>
+          <div style={{ fontSize: 32, fontWeight: 700, color: colorPctMatch, lineHeight: 1, marginBottom: 4 }}>
+            {pctMatch.toFixed(1)}%
+          </div>
+          <div style={{ fontSize: 10, color: "#94a3b8" }}>
+            {rutasMatch} de {totalRutas} cuadran
+          </div>
+        </div>
+        <div className="form-card" style={{ marginBottom: 0, padding: 16, borderTop: "3px solid #F47B20" }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>
+            Con diferencias
+          </div>
+          <div style={{ fontSize: 32, fontWeight: 700, color: "#F47B20", lineHeight: 1, marginBottom: 4 }}>
+            {rutasConDif}
+          </div>
+          <div style={{ fontSize: 10, color: "#94a3b8" }}>
+            Mismo ID, números distintos
+          </div>
+        </div>
+        <div className="form-card" style={{ marginBottom: 0, padding: 16, borderTop: "3px solid #b91c1c" }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>
+            Faltantes en algún lado
+          </div>
+          <div style={{ fontSize: 32, fontWeight: 700, color: "#b91c1c", lineHeight: 1, marginBottom: 4 }}>
+            {rutasSoloSnap + rutasSoloMeli}
+          </div>
+          <div style={{ fontSize: 10, color: "#94a3b8" }}>
+            {rutasSoloSnap} solo Snap · {rutasSoloMeli} solo MELI
+          </div>
+        </div>
+      </div>
+
+      {/* Comparativa de totales (volumen agregado) */}
+      <div className="form-card" style={{ marginBottom: 20 }}>
+        <div className="form-title" style={{ marginBottom: 4 }}>Comparativa de volúmenes</div>
+        <div style={{ fontSize: 11, color: "#64748b", marginBottom: 14 }}>Totales agregados de ambas fuentes</div>
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+            <thead>
+              <tr style={{ borderBottom: "2px solid #e4e7ec", color: "#64748b", fontWeight: 700 }}>
+                <th style={{ padding: "8px 10px", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, textAlign: "left" }}>Métrica</th>
+                <th style={{ padding: "8px 10px", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, textAlign: "right" }}>Maestro MELI</th>
+                <th style={{ padding: "8px 10px", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, textAlign: "right" }}>Snapshots</th>
+                <th style={{ padding: "8px 10px", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, textAlign: "right" }}>Diferencia</th>
+              </tr>
+            </thead>
+            <tbody>
+              {[
+                { label: "Cargados", meli: resumen.total_cargados_meli, snap: resumen.total_cargados_snap },
+                { label: "Entregados", meli: resumen.total_entregados_meli, snap: resumen.total_entregados_snap },
+                { label: "Devueltos", meli: resumen.total_devueltos_meli, snap: resumen.total_devueltos_snap },
+              ].map((row, i) => {
+                const dif = (row.snap || 0) - (row.meli || 0);
+                const colorDif = dif > 0 ? "#F47B20" : dif < 0 ? "#b91c1c" : "#94a3b8";
+                return (
+                  <tr key={i} style={{ borderBottom: "1px solid #f1f5f9" }}>
+                    <td style={{ padding: "10px", fontWeight: 600, color: "#0f172a" }}>{row.label}</td>
+                    <td style={{ padding: "10px", textAlign: "right", color: "#475569", fontVariantNumeric: "tabular-nums" }}>
+                      {Number(row.meli || 0).toLocaleString()}
+                    </td>
+                    <td style={{ padding: "10px", textAlign: "right", color: "#475569", fontVariantNumeric: "tabular-nums" }}>
+                      {Number(row.snap || 0).toLocaleString()}
+                    </td>
+                    <td style={{ padding: "10px", textAlign: "right", color: colorDif, fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>
+                      {dif > 0 ? "+" : ""}{Number(dif).toLocaleString()}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Resumen por SC */}
+      <div className="form-card" style={{ marginBottom: 20 }}>
+        <div className="form-title" style={{ marginBottom: 4 }}>Estado por SC</div>
+        <div style={{ fontSize: 11, color: "#64748b", marginBottom: 14 }}>Cuántas rutas matchean, tienen diferencias o están faltantes en cada SC</div>
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+            <thead>
+              <tr style={{ borderBottom: "2px solid #e4e7ec", color: "#64748b", fontWeight: 700 }}>
+                <th style={{ padding: "8px 10px", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, textAlign: "left" }}>SC</th>
+                <th style={{ padding: "8px 10px", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, textAlign: "center" }}>Rutas</th>
+                <th style={{ padding: "8px 10px", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, textAlign: "center" }}>Match</th>
+                <th style={{ padding: "8px 10px", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, textAlign: "center" }}>Con dif.</th>
+                <th style={{ padding: "8px 10px", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, textAlign: "center" }}>Solo Snap</th>
+                <th style={{ padding: "8px 10px", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, textAlign: "center" }}>Solo MELI</th>
+                <th style={{ padding: "8px 10px", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, textAlign: "right" }}>Σ |dif| cargados</th>
+              </tr>
+            </thead>
+            <tbody>
+              {porSc.map((sc, i) => {
+                const tieneIssues = (sc.con_dif || 0) + (sc.solo_snap || 0) + (sc.solo_meli || 0) > 0;
+                return (
+                  <tr key={sc.sc} style={{ borderBottom: "1px solid #f1f5f9", background: i % 2 === 0 ? "#fff" : "#fafbfc" }}>
+                    <td style={{ padding: "8px 10px", fontWeight: 700, color: "#0f172a" }}>{sc.sc}</td>
+                    <td style={{ padding: "8px 10px", textAlign: "center", color: "#475569", fontVariantNumeric: "tabular-nums" }}>{sc.rutas}</td>
+                    <td style={{ padding: "8px 10px", textAlign: "center", color: "#047857", fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>{sc.match}</td>
+                    <td style={{ padding: "8px 10px", textAlign: "center", color: (sc.con_dif || 0) > 0 ? "#F47B20" : "#94a3b8", fontWeight: (sc.con_dif || 0) > 0 ? 700 : 400, fontVariantNumeric: "tabular-nums" }}>
+                      {sc.con_dif || 0}
+                    </td>
+                    <td style={{ padding: "8px 10px", textAlign: "center", color: (sc.solo_snap || 0) > 0 ? "#b91c1c" : "#94a3b8", fontWeight: (sc.solo_snap || 0) > 0 ? 700 : 400, fontVariantNumeric: "tabular-nums" }}>
+                      {sc.solo_snap || 0}
+                    </td>
+                    <td style={{ padding: "8px 10px", textAlign: "center", color: (sc.solo_meli || 0) > 0 ? "#b91c1c" : "#94a3b8", fontWeight: (sc.solo_meli || 0) > 0 ? 700 : 400, fontVariantNumeric: "tabular-nums" }}>
+                      {sc.solo_meli || 0}
+                    </td>
+                    <td style={{ padding: "8px 10px", textAlign: "right", color: tieneIssues ? "#F47B20" : "#94a3b8", fontWeight: tieneIssues ? 700 : 400, fontVariantNumeric: "tabular-nums" }}>
+                      {sc.total_dif_cargados || 0}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Rutas con diferencias en valores */}
+      {conDif.length > 0 && (
+        <div className="form-card" style={{ marginBottom: 20 }}>
+          <div className="form-title" style={{ marginBottom: 4 }}>Rutas con diferencias en valores</div>
+          <div style={{ fontSize: 11, color: "#64748b", marginBottom: 14 }}>
+            Mismo ID de ruta en ambas fuentes, pero los números no coinciden. Ordenado por mayor diferencia en cargados.
+          </div>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+              <thead>
+                <tr style={{ borderBottom: "2px solid #e4e7ec", color: "#64748b", fontWeight: 700 }}>
+                  <th style={{ padding: "8px 6px", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, textAlign: "left" }}>ID Ruta</th>
+                  <th style={{ padding: "8px 6px", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, textAlign: "left" }}>SC</th>
+                  <th style={{ padding: "8px 6px", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, textAlign: "left" }}>Driver</th>
+                  <th style={{ padding: "8px 6px", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, textAlign: "right" }}>Carg. MELI/Snap</th>
+                  <th style={{ padding: "8px 6px", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, textAlign: "right" }}>Δ Carg.</th>
+                  <th style={{ padding: "8px 6px", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, textAlign: "right" }}>Entr. MELI/Snap</th>
+                  <th style={{ padding: "8px 6px", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, textAlign: "right" }}>Δ Entr.</th>
+                  <th style={{ padding: "8px 6px", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, textAlign: "right" }}>Dev. MELI/Snap</th>
+                  <th style={{ padding: "8px 6px", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, textAlign: "right" }}>Δ Dev.</th>
+                </tr>
+              </thead>
+              <tbody>
+                {conDif.map((r, i) => (
+                  <tr key={r.idviaje} style={{ borderBottom: "1px solid #f1f5f9", background: i % 2 === 0 ? "#fff" : "#fafbfc" }}>
+                    <td style={{ padding: "8px 6px", fontFamily: "monospace", fontSize: 11, color: "#475569" }}>{r.idviaje}</td>
+                    <td style={{ padding: "8px 6px", fontWeight: 700, color: "#0f172a" }}>{r.sc}</td>
+                    <td style={{ padding: "8px 6px", color: "#475569" }}>{r.driver_name || "—"}</td>
+                    <td style={{ padding: "8px 6px", textAlign: "right", color: "#475569", fontVariantNumeric: "tabular-nums" }}>
+                      {r.cargados_meli ?? "—"} / {r.cargados_snap ?? "—"}
+                    </td>
+                    <td style={{ padding: "8px 6px", textAlign: "right", color: "#F47B20", fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>
+                      {r.dif_cargados > 0 ? "+" : ""}{r.dif_cargados}
+                    </td>
+                    <td style={{ padding: "8px 6px", textAlign: "right", color: "#475569", fontVariantNumeric: "tabular-nums" }}>
+                      {r.entregados_meli ?? "—"} / {r.entregados_snap ?? "—"}
+                    </td>
+                    <td style={{ padding: "8px 6px", textAlign: "right", color: r.dif_entregados !== 0 ? "#F47B20" : "#94a3b8", fontWeight: r.dif_entregados !== 0 ? 700 : 400, fontVariantNumeric: "tabular-nums" }}>
+                      {r.dif_entregados > 0 ? "+" : ""}{r.dif_entregados}
+                    </td>
+                    <td style={{ padding: "8px 6px", textAlign: "right", color: "#475569", fontVariantNumeric: "tabular-nums" }}>
+                      {r.devueltos_meli ?? "—"} / {r.devueltos_snap ?? "—"}
+                    </td>
+                    <td style={{ padding: "8px 6px", textAlign: "right", color: r.dif_devueltos !== 0 ? "#F47B20" : "#94a3b8", fontWeight: r.dif_devueltos !== 0 ? 700 : 400, fontVariantNumeric: "tabular-nums" }}>
+                      {r.dif_devueltos > 0 ? "+" : ""}{r.dif_devueltos}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Rutas solo en Snapshot (operaron sin estar en MELI) */}
+      {soloSnap.length > 0 && (
+        <div className="form-card" style={{ marginBottom: 20 }}>
+          <div className="form-title" style={{ marginBottom: 4 }}>Rutas solo en Snapshot</div>
+          <div style={{ fontSize: 11, color: "#64748b", marginBottom: 14 }}>
+            Operaron y cerraron, pero el Maestro MELI no las reporta. Posiblemente rutas reasignadas o creadas en días anteriores.
+          </div>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+              <thead>
+                <tr style={{ borderBottom: "2px solid #e4e7ec", color: "#64748b", fontWeight: 700 }}>
+                  <th style={{ padding: "8px 6px", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, textAlign: "left" }}>ID Ruta</th>
+                  <th style={{ padding: "8px 6px", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, textAlign: "left" }}>SC</th>
+                  <th style={{ padding: "8px 6px", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, textAlign: "left" }}>Driver</th>
+                  <th style={{ padding: "8px 6px", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, textAlign: "right" }}>Cargados</th>
+                  <th style={{ padding: "8px 6px", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, textAlign: "right" }}>Entregados</th>
+                  <th style={{ padding: "8px 6px", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, textAlign: "right" }}>Devueltos</th>
+                  <th style={{ padding: "8px 6px", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, textAlign: "center" }}>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {soloSnap.map((r, i) => (
+                  <tr key={r.idviaje} style={{ borderBottom: "1px solid #f1f5f9", background: i % 2 === 0 ? "#fff" : "#fafbfc" }}>
+                    <td style={{ padding: "8px 6px", fontFamily: "monospace", fontSize: 11, color: "#475569" }}>{r.idviaje}</td>
+                    <td style={{ padding: "8px 6px", fontWeight: 700, color: "#0f172a" }}>{r.sc}</td>
+                    <td style={{ padding: "8px 6px", color: "#475569" }}>{r.driver_name || "—"}</td>
+                    <td style={{ padding: "8px 6px", textAlign: "right", color: "#1A3A6B", fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>{r.cargados_snap}</td>
+                    <td style={{ padding: "8px 6px", textAlign: "right", color: "#475569", fontVariantNumeric: "tabular-nums" }}>{r.entregados_snap}</td>
+                    <td style={{ padding: "8px 6px", textAlign: "right", color: "#475569", fontVariantNumeric: "tabular-nums" }}>{r.devueltos_snap}</td>
+                    <td style={{ padding: "8px 6px", textAlign: "center", fontSize: 10, color: "#94a3b8" }}>{r.status_final || "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Rutas solo en MELI (planificadas sin operar) */}
+      {soloMeli.length > 0 && (
+        <div className="form-card" style={{ marginBottom: 20 }}>
+          <div className="form-title" style={{ marginBottom: 4 }}>Rutas solo en Maestro MELI</div>
+          <div style={{ fontSize: 11, color: "#64748b", marginBottom: 14 }}>
+            MELI las reporta pero los snapshots no las capturaron. Posibles rutas canceladas o que no salieron a operar.
+          </div>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+              <thead>
+                <tr style={{ borderBottom: "2px solid #e4e7ec", color: "#64748b", fontWeight: 700 }}>
+                  <th style={{ padding: "8px 6px", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, textAlign: "left" }}>ID Ruta</th>
+                  <th style={{ padding: "8px 6px", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, textAlign: "left" }}>SC</th>
+                  <th style={{ padding: "8px 6px", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, textAlign: "right" }}>Cargados</th>
+                  <th style={{ padding: "8px 6px", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, textAlign: "right" }}>Entregados</th>
+                  <th style={{ padding: "8px 6px", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, textAlign: "right" }}>Devueltos</th>
+                </tr>
+              </thead>
+              <tbody>
+                {soloMeli.map((r, i) => (
+                  <tr key={r.idviaje} style={{ borderBottom: "1px solid #f1f5f9", background: i % 2 === 0 ? "#fff" : "#fafbfc" }}>
+                    <td style={{ padding: "8px 6px", fontFamily: "monospace", fontSize: 11, color: "#475569" }}>{r.idviaje}</td>
+                    <td style={{ padding: "8px 6px", fontWeight: 700, color: "#0f172a" }}>{r.sc}</td>
+                    <td style={{ padding: "8px 6px", textAlign: "right", color: "#1A3A6B", fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>{r.cargados_meli}</td>
+                    <td style={{ padding: "8px 6px", textAlign: "right", color: "#475569", fontVariantNumeric: "tabular-nums" }}>{r.entregados_meli}</td>
+                    <td style={{ padding: "8px 6px", textAlign: "right", color: "#475569", fontVariantNumeric: "tabular-nums" }}>{r.devueltos_meli}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Nota explicativa */}
+      <div style={{ fontSize: 11, color: "#64748b", padding: 12, background: "#f8fafc", borderRadius: 6, border: "1px solid #e4e7ec", marginBottom: 20 }}>
+        <strong>📋 Nota:</strong> Esta pestaña audita las diferencias entre el Excel oficial de MELI (descarga del portal) y los snapshots automáticos del scraper. 
+        Los Snapshots son la fuente de verdad operativa por su mayor frecuencia de captura. 
+        Las diferencias detectadas se documentan aquí para identificar patrones, validar reportes y conciliar números con MELI cuando sea necesario.
+      </div>
     </div>
   );
 }
