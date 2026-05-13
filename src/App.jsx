@@ -3854,57 +3854,36 @@ const VistaViajesMaestro = ({ fecha, fechaFin, pais, onFechaChange }) => {
     setRefreshing(true);
     setRefreshMensaje(null);
     try {
-      // 1) Leer cookies de sesiones_meli
-      const { data: sesion, error: errS } = await sb
-        .from("sesiones_meli")
-        .select("cookies, actualizado_at")
-        .eq("id", "sesion_activa")
-        .single();
-      if (errS || !sesion?.cookies) {
-        throw new Error("No se pudieron leer las cookies MELI");
-      }
-      // Validar frescura <12h
-      const ageMin = (Date.now() - new Date(sesion.actualizado_at).getTime()) / 1000 / 60;
-      if (ageMin > 720) {
-        throw new Error(`Sesión MELI expirada (hace ${Math.floor(ageMin / 60)}h). Renová la sesión antes.`);
-      }
-      const cookies = typeof sesion.cookies === "string" ? JSON.parse(sesion.cookies) : sesion.cookies;
-
-      // 2) POST a /bandeja-maestros
-      const r1 = await fetch("http://162.243.90.161:3000/bandeja-maestros", {
+      // Llamar al webhook n8n (HTTPS, sin Mixed Content)
+      // El webhook hace internamente: leer cookies + validar + POST al VPS + polling
+      const r = await fetch("https://bigticket2026.app.n8n.cloud/webhook/refresh-maestros-meli", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "x-api-secret": "bigticket-secret-2025",
+          "x-secret": "bigticket-secret-2025",
         },
-        body: JSON.stringify({ cookies }),
+        body: JSON.stringify({}),
       });
-      if (!r1.ok) {
-        const txt = await r1.text().catch(() => "");
-        throw new Error(`VPS rechazó: HTTP ${r1.status} ${txt.slice(0, 200)}`);
+
+      if (!r.ok) {
+        throw new Error(`n8n respondió HTTP ${r.status}`);
       }
 
-      // 3) Polling cada 5s a /status (máx 90s = 18 intentos)
-      let success = false;
-      for (let i = 0; i < 18; i++) {
-        await new Promise(res => setTimeout(res, 5000));
-        const rs = await fetch("http://162.243.90.161:3000/status", {
-          headers: { "x-api-secret": "bigticket-secret-2025" },
-        });
-        const status = await rs.json().catch(() => ({}));
-        if (status.estado === "success") { success = true; break; }
-        if (status.estado === "error") {
-          throw new Error(`VPS reportó error: ${status.error || "desconocido"}`);
-        }
-      }
-      if (!success) {
-        throw new Error("Timeout — el scrape no terminó en 90 segundos. Reintentá en un momento.");
+      const resultado = await r.json();
+
+      if (!resultado.ok) {
+        const motivos = {
+          no_autorizado: "Header de autenticación inválido",
+          sesion_expirada: "Sesión MELI expirada. Renová la sesión antes de refrescar.",
+          timeout: "El scrape no terminó a tiempo. Reintentá en un momento.",
+        };
+        throw new Error(resultado.mensaje || motivos[resultado.motivo] || "Error desconocido");
       }
 
-      // 4) Cambiar calendario a D-1 y recargar
+      // Éxito: cambiar calendario a D-1 y recargar
       if (onFechaChange) onFechaChange(fechaD1MX);
-      setRefreshMensaje({ tipo: "ok", texto: `✅ Datos del ${fechaD1MX} actualizados desde MELI` });
-      // Limpiar mensaje después de 5s
+      const kb = resultado.resultado?.kb ? ` (${resultado.resultado.kb} KB)` : "";
+      setRefreshMensaje({ tipo: "ok", texto: `✅ Datos del ${fechaD1MX} actualizados desde MELI${kb}` });
       setTimeout(() => setRefreshMensaje(null), 5000);
     } catch (err) {
       console.error("Error en refresh MELI:", err);
