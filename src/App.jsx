@@ -163,7 +163,7 @@ const MODULOS_LABELS = {
   configuracion: "Configuración",
 };
 const USUARIOS = {
-  "admin@bigticket.cl": { pass: "Admin2026!", rol: "superadmin", nombre: "Super Admin" },
+  "esteban.dussaut@bigticket.cl": { pass: "esteban.2026", rol: "superadmin", nombre: "Super Admin" },
   "cert@bigticket.mx":  { pass: "Cert2026!", rol: "certificacion", nombre: "Equipo Certificación" },
   "adriana.giummarra@bigticket.cl": { pass: "adriana.2026", rol: "superadmin", nombre: "Adriana Giummarra" },
   "nicole.vargas@bigticket.cl":     { pass: "nicole.2026",  rol: "superadmin", nombre: "Nicole Vargas" },
