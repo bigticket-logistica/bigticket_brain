@@ -147,13 +147,12 @@ function BotonDescargarExcel({ onClick, disabled, label = "Descargar Excel" }) {
 }
 
 const MODULOS = {
-  superadmin: ["brain", "pool_meli_mx", "helpers", "pagos", "maestro", "certificaciones", "incidencias", "pnr", "prospeccion", "wiki", "configuracion"],
+  superadmin: ["brain", "pool_meli_mx", "pagos", "maestro", "certificaciones", "incidencias", "pnr", "prospeccion", "wiki", "configuracion"],
   certificacion: ["certificaciones"],
 };
 const MODULOS_LABELS = {
   brain: "Brain Central",
   pool_meli_mx: "Indicadores Operacionales MX",
-  helpers: "Control Helpers MX",
   certificaciones: "Certificaciones",
   prospeccion: "Prospección CRM",
   wiki: "Wiki y Procesos",
@@ -17682,11 +17681,29 @@ function PoolMeliControlHelper() {
         <span style={{ fontSize: 11, color: CH_LIGHT, flexShrink: 0 }}>{u.ks} · {fecha}</span>
         <div style={{ width: 1, height: 18, background: CH_BORDER, flexShrink: 0 }} />
         <div style={{ flex: 1, minWidth: 80, maxWidth: 140 }}><Spark vals={getSerieVals(curSerieKey)} height={28} /></div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginLeft: 'auto' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginLeft: 'auto' }}>
+          <button onClick={() => {
+            const d = new Date(); d.setDate(d.getDate() - 1);
+            setFecha(d.toISOString().split('T')[0]);
+          }} style={{
+            fontSize: 11, fontWeight: 600, padding: '5px 10px', borderRadius: 6,
+            border: `1px solid ${CH_BORDER}`, background: '#f8fafc', color: CH_MUTED,
+            cursor: 'pointer', fontFamily: "'Geist', sans-serif",
+          }}>D-1</button>
+          <button onClick={() => {
+            const now = new Date();
+            const mx = new Date(now.getTime() - 6 * 60 * 60 * 1000);
+            setFecha(mx.toISOString().split('T')[0]);
+          }} style={{
+            fontSize: 11, fontWeight: 600, padding: '5px 10px', borderRadius: 6,
+            border: `1px solid ${CH_BORDER}`, background: '#f8fafc', color: CH_MUTED,
+            cursor: 'pointer', fontFamily: "'Geist', sans-serif",
+          }}>Hoy</button>
           <input type="date" value={fecha} onChange={e => setFecha(e.target.value)} style={{
-            fontSize: 11, fontWeight: 700, padding: '4px 10px', borderRadius: 6,
-            border: `1px solid ${CH_BORDER}`, background: CH_NAVY, color: '#fff',
+            fontSize: 12, fontWeight: 600, padding: '5px 10px', borderRadius: 6,
+            border: `1px solid ${CH_BORDER}`, background: CH_CARD, color: CH_NAVY,
             fontFamily: "'Geist', sans-serif", cursor: 'pointer', outline: 'none',
+            colorScheme: 'light',
           }} />
           <div onClick={() => setDdOpen(!ddOpen)} style={{
             display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: CH_MUTED,
@@ -24211,7 +24228,6 @@ export default function App() {
         </div>
         {tab === "brain" && <BrainCentral setTab={setTab} usuario={usuario} />}
         {tab === "pool_meli_mx" && <IndicadoresOperacionalesMX usuario={usuario} />}
-        {tab === "helpers" && <ModuloHelpersMX usuario={usuario} />}
         {tab === "certificaciones" && <ModuloCertificacionesMadre />}
         {tab === "configuracion" && (
           <div className="pg" style={{ maxWidth: 700 }}>
