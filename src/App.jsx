@@ -147,12 +147,13 @@ function BotonDescargarExcel({ onClick, disabled, label = "Descargar Excel" }) {
 }
 
 const MODULOS = {
-  superadmin: ["brain", "pool_meli_mx", "pagos", "maestro", "certificaciones", "incidencias", "pnr", "prospeccion", "wiki", "configuracion"],
+  superadmin: ["brain", "pool_meli_mx", "helpers", "pagos", "maestro", "certificaciones", "incidencias", "pnr", "prospeccion", "wiki", "configuracion"],
   certificacion: ["certificaciones"],
 };
 const MODULOS_LABELS = {
   brain: "Brain Central",
   pool_meli_mx: "Indicadores Operacionales MX",
+  helpers: "Control Helpers MX",
   certificaciones: "Certificaciones",
   prospeccion: "Prospección CRM",
   wiki: "Wiki y Procesos",
@@ -17396,12 +17397,13 @@ function IndicadoresOperacionalesMX({ usuario }) {
     return () => { alive = false; };
   }, [mesGlobal.anio, mesGlobal.mes]);
 
-  // Tabs: Compromiso MELI, KPI de Operación, Diferencias Maestros, Inventario
+  // Tabs: Compromiso MELI, KPI de Operación, Diferencias Maestros, Inventario, Control Helper
   const tabs = [
     { id: "compromiso", label: "Compromiso MELI", desc: "Operativa de mañana · SDD vs SPOT" },
     { id: "kpi_operacion", label: "KPI de Operación", desc: "NS Informe MELI vs Snapshots" },
     { id: "diferencias", label: "Diferencias Maestros", desc: "Auditoría ruta por ruta · MELI vs Snapshots" },
     { id: "inventario", label: "Inventario", desc: "Drivers, vehículos, fantasmas" },
+    { id: "control_helper", label: "Control Helper", desc: "Helpers no autorizados / certificados / fantasmas" },
   ];
 
   if (loading) {
@@ -17502,11 +17504,757 @@ function IndicadoresOperacionalesMX({ usuario }) {
       {vista === "kpi_operacion" && <PoolMeliKPIOperacion />}
       {vista === "diferencias" && <PoolMeliDiferenciasMaestros />}
       {vista === "inventario" && <PoolMeliInventario drivers={drivers} vehiculos={vehiculos} resumen={resumen} setModal={setModal} setDetalle={setDetalle} mesGlobal={mesGlobal} />}
+      {vista === "control_helper" && <PoolMeliControlHelper />}
 
       {modal && <MeliModal modal={modal} onClose={() => setModal(null)} />}
     </div>
   );
 }
+
+// ════════════════════════════════════════════════════════════════════════════
+// CONTROL HELPER · Subpestaña dentro de IndicadoresOperacionalesMX
+// ════════════════════════════════════════════════════════════════════════════
+
+// ============================================================================
+// PoolMeliControlHelper · Subpestaña "Control Helper"
+// Para insertar dentro de IndicadoresOperacionalesMX
+// Estilo: Brain (Geist, #1a3a6b navy, #F47B20 naranja)
+// Lógica: HTML Control_Helpers_Mexico_8.html
+// ============================================================================
+
+function PoolMeliControlHelper() {
+  const [fecha, setFecha] = useState(() => {
+    // Fecha MX = UTC - 6
+    const now = new Date();
+    const mx = new Date(now.getTime() - 6 * 60 * 60 * 1000);
+    return mx.toISOString().split('T')[0];
+  });
+  const [universo, setUniverso] = useState('U0');
+  const [datos, setDatos] = useState([]);
+  const [serie14, setSerie14] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [drillDown, setDrillDown] = useState(null);
+  const [showDD, setShowDD] = useState(false);
+
+  // ── Cargar datos del día seleccionado + serie 14 días ────────────────────
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        // Datos del día seleccionado
+        const { data: r1, error: e1 } = await supabase
+          .from('vw_control_helper_diario')
+          .select('*')
+          .eq('fecha', fecha)
+          .order('sc');
+        if (e1) throw e1;
+
+        // Serie de 14 días para sparklines
+        const desde = new Date(fecha);
+        desde.setDate(desde.getDate() - 14);
+        const desdeStr = desde.toISOString().split('T')[0];
+        const { data: r2, error: e2 } = await supabase
+          .from('vw_control_helper_diario')
+          .select('fecha,universo')
+          .gte('fecha', desdeStr)
+          .lte('fecha', fecha);
+        if (e2) throw e2;
+
+        if (alive) {
+          setDatos(r1 || []);
+          // Agregar por día/universo
+          const porDia = {};
+          (r2 || []).forEach(r => {
+            if (!porDia[r.fecha]) porDia[r.fecha] = { U1: 0, U2: 0, U3: 0, OK: 0 };
+            if (r.universo) porDia[r.fecha][r.universo] = (porDia[r.fecha][r.universo] || 0) + 1;
+          });
+          setSerie14(Object.entries(porDia).map(([f, c]) => ({ fecha: f, ...c })).sort((a, b) => a.fecha.localeCompare(b.fecha)));
+        }
+      } catch (e) {
+        if (alive) setError(e.message || 'Error cargando datos');
+      } finally {
+        if (alive) setLoading(false);
+      }
+    })();
+    return () => { alive = false; };
+  }, [fecha]);
+
+  // ── Agregados U0 ──────────────────────────────────────────────────────────
+  const conteos = useMemo(() => {
+    const c = { total: datos.length, U1: 0, U2: 0, U3: 0, OK: 0 };
+    datos.forEach(r => {
+      if (r.universo && c[r.universo] !== undefined) c[r.universo]++;
+    });
+    return c;
+  }, [datos]);
+
+  const financiero = useMemo(() => {
+    return {
+      costo_bt: datos.reduce((s, r) => s + (r.costo_bt_cuestionable || 0), 0),
+      recuperable: datos.reduce((s, r) => s + (r.monto_recuperable_meli || 0), 0),
+      fantasmas: datos.filter(r => r.clasificacion === 'FANTASMA').length,
+      no_certificados: datos.filter(r => r.helper_cert_estado === 'NO_CERTIFICADO').length,
+    };
+  }, [datos]);
+
+  // ── Sparkline mini SVG ────────────────────────────────────────────────────
+  const Sparkline = ({ data, color = '#1a3a6b', height = 24, width = 70 }) => {
+    if (!data || data.length < 2) return <svg width={width} height={height}></svg>;
+    const max = Math.max(...data, 1);
+    const points = data.map((v, i) => 
+      `${(i / (data.length - 1)) * width},${height - (v / max) * height}`
+    ).join(' ');
+    return (
+      <svg width={width} height={height} style={{ overflow: 'visible' }}>
+        <polyline points={points} fill="none" stroke={color} strokeWidth="1.5" />
+      </svg>
+    );
+  };
+
+  // ── Tabs U0/U1/U2/U3 ──────────────────────────────────────────────────────
+  const universos = [
+    { id: 'U0', label: 'Resumen ejecutivo', icon: 'ti-layout-dashboard' },
+    { id: 'U1', label: 'No autorizadas', icon: 'ti-alert-octagon', n: conteos.U1, color: '#DC2626' },
+    { id: 'U2', label: 'Certificación', icon: 'ti-id-badge-2', n: conteos.U2, color: '#F47B20' },
+    { id: 'U3', label: 'Proceso', icon: 'ti-settings', n: conteos.U3, color: '#0EA5E9' },
+  ];
+
+  if (loading) {
+    return (
+      <div style={{ padding: 24, textAlign: 'center', color: '#64748b', fontSize: 13 }}>
+        Cargando datos del {fecha}…
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div style={{ padding: 24 }}>
+        <div style={{
+          background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 10, padding: 16
+        }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: '#991b1b', marginBottom: 6 }}>
+            No se pudo cargar Control Helper
+          </div>
+          <div style={{ fontSize: 12, color: '#7f1d1d', lineHeight: 1.6 }}>
+            {error}
+            <br /><br />
+            <strong>Probable causa:</strong> la vista <code>vw_control_helper_diario</code> aún no existe. Ver script 01_vista_control_helper.sql
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ padding: 0, fontFamily: "'Geist', sans-serif" }}>
+      
+      {/* ───── Sub-header con date picker ───── */}
+      <div style={{
+        background: '#fff', borderBottom: '1px solid #e4e7ec',
+        padding: '10px 24px', display: 'flex', alignItems: 'center', gap: 12,
+        flexWrap: 'wrap',
+      }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: '#1a3a6b' }}>
+          Control Helper
+        </div>
+        <div style={{ width: 1, height: 16, background: '#e4e7ec' }} />
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ fontSize: 11, fontWeight: 600, color: '#64748b' }}>Fecha:</span>
+          <input
+            type="date"
+            value={fecha}
+            onChange={e => setFecha(e.target.value)}
+            style={{
+              padding: '5px 10px', fontSize: 12, fontWeight: 600, borderRadius: 6,
+              border: '1px solid #cbd5e1', background: '#fff', color: '#1a3a6b',
+              fontFamily: "'Geist', sans-serif", outline: 'none', cursor: 'pointer',
+            }}
+          />
+          <button
+            onClick={() => {
+              const ayer = new Date(); ayer.setDate(ayer.getDate() - 1);
+              setFecha(ayer.toISOString().split('T')[0]);
+            }}
+            style={{
+              padding: '5px 10px', fontSize: 11, fontWeight: 600, borderRadius: 6,
+              border: '1px solid #e4e7ec', background: '#f8fafc', color: '#475569',
+              cursor: 'pointer', fontFamily: "'Geist', sans-serif",
+            }}>
+            D-1
+          </button>
+        </div>
+
+        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{
+            fontSize: 10, fontWeight: 700, padding: '3px 9px', borderRadius: 4,
+            background: '#1a1a2e', color: '#fff',
+          }}>{conteos.total} rutas</span>
+          <button
+            onClick={() => exportarCSV(datos)}
+            style={{
+              padding: '5px 10px', fontSize: 11, fontWeight: 600, borderRadius: 6,
+              border: '1px solid #e4e7ec', background: '#fff', color: '#475569',
+              cursor: 'pointer', fontFamily: "'Geist', sans-serif",
+              display: 'flex', alignItems: 'center', gap: 4,
+            }}>
+            <i className="ti ti-download" style={{ fontSize: 12 }} /> Export CSV
+          </button>
+        </div>
+      </div>
+
+      {/* ───── Tabs U0/U1/U2/U3 ───── */}
+      <div style={{
+        background: '#fff', borderBottom: '1px solid #e4e7ec',
+        padding: '0 24px', display: 'flex', gap: 2,
+      }}>
+        {universos.map(u => (
+          <button
+            key={u.id}
+            onClick={() => setUniverso(u.id)}
+            style={{
+              background: 'transparent', border: 'none', padding: '10px 14px',
+              fontSize: 12, fontWeight: 600,
+              color: universo === u.id ? '#1a3a6b' : '#64748b',
+              borderBottom: universo === u.id ? '2px solid #F47B20' : '2px solid transparent',
+              cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6,
+              fontFamily: "'Geist', sans-serif",
+            }}>
+            <i className={`ti ${u.icon}`} style={{ fontSize: 14 }} />
+            {u.label}
+            {u.n > 0 && (
+              <span style={{
+                background: u.color, color: '#fff', fontSize: 10, fontWeight: 700,
+                padding: '1px 6px', borderRadius: 9, marginLeft: 2,
+              }}>{u.n}</span>
+            )}
+          </button>
+        ))}
+      </div>
+
+      {/* ───── Contenido ───── */}
+      <div style={{ padding: 16, background: '#f0f2f5', minHeight: 400 }}>
+        {universo === 'U0' && <PanelU0 datos={datos} conteos={conteos} financiero={financiero} serie14={serie14} Sparkline={Sparkline} />}
+        {universo === 'U1' && <PanelU1 datos={datos.filter(r => r.universo === 'U1')} setDrillDown={setDrillDown} />}
+        {universo === 'U2' && <PanelU2 datos={datos.filter(r => r.helper_cert_estado === 'NO_CERTIFICADO')} setDrillDown={setDrillDown} />}
+        {universo === 'U3' && <PanelU3 datos={datos.filter(r => r.universo === 'U3')} setDrillDown={setDrillDown} />}
+      </div>
+
+      {/* ───── Drill-down modal ───── */}
+      {drillDown && (
+        <DrillDownModal data={drillDown} onClose={() => setDrillDown(null)} />
+      )}
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// PANEL U0 · RESUMEN EJECUTIVO
+// ════════════════════════════════════════════════════════════════════════════
+function PanelU0({ datos, conteos, financiero, serie14, Sparkline }) {
+  const pct = (n) => conteos.total > 0 ? Math.round(100 * n / conteos.total) : 0;
+  const u1Serie = serie14.map(d => d.U1);
+  const u2Serie = serie14.map(d => d.U2);
+  const u3Serie = serie14.map(d => d.U3);
+  const okSerie = serie14.map(d => d.OK);
+
+  return (
+    <div>
+      {/* KSTRIP · 4 cards */}
+      <div style={{
+        display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 14,
+      }}>
+        <KCard
+          label="U1 · No autorizadas"
+          value={conteos.U1}
+          sub={`${pct(conteos.U1)}% del total`}
+          color="#DC2626"
+          serie={u1Serie}
+          Sparkline={Sparkline}
+        />
+        <KCard
+          label="U2 · No certificadas"
+          value={conteos.U2}
+          sub={`${pct(conteos.U2)}% del total`}
+          color="#F47B20"
+          serie={u2Serie}
+          Sparkline={Sparkline}
+        />
+        <KCard
+          label="U3 · Proceso"
+          value={conteos.U3}
+          sub={`${pct(conteos.U3)}% del total`}
+          color="#0EA5E9"
+          serie={u3Serie}
+          Sparkline={Sparkline}
+        />
+        <KCard
+          label="OK Válidas"
+          value={conteos.OK}
+          sub={`${pct(conteos.OK)}% del total`}
+          color="#10B981"
+          serie={okSerie}
+          Sparkline={Sparkline}
+        />
+      </div>
+
+      {/* Flowbar */}
+      <div style={{
+        background: '#fff', borderRadius: 12, border: '0.5px solid #e4e7ec',
+        padding: 16, marginBottom: 14,
+      }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 10 }}>
+          Distribución de las {conteos.total} rutas
+        </div>
+        <Flowbar conteos={conteos} />
+      </div>
+
+      {/* Impacto financiero */}
+      <div style={{
+        display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 10,
+      }}>
+        <div style={{
+          background: '#fff', borderRadius: 12, border: '0.5px solid #e4e7ec', padding: 14,
+        }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8 }}>
+            🚨 Costo BT cuestionable
+          </div>
+          <div style={{ fontSize: 24, fontWeight: 800, color: '#1a1a2e', letterSpacing: -0.5 }}>
+            ${financiero.costo_bt.toLocaleString('es-MX')} <span style={{ fontSize: 12, color: '#94a3b8', fontWeight: 600 }}>MXN</span>
+          </div>
+          <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 4 }}>
+            {financiero.fantasmas} rutas fantasma × $350
+          </div>
+        </div>
+        <div style={{
+          background: '#fff', borderRadius: 12, border: '0.5px solid #e4e7ec', padding: 14,
+        }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8 }}>
+            💰 Recuperable de MELI
+          </div>
+          <div style={{ fontSize: 24, fontWeight: 800, color: '#10B981', letterSpacing: -0.5 }}>
+            ${financiero.recuperable.toLocaleString('es-MX')} <span style={{ fontSize: 12, color: '#94a3b8', fontWeight: 600 }}>MXN</span>
+          </div>
+          <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 4 }}>
+            Helpers operando sin flag en SC autorizado
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function KCard({ label, value, sub, color, serie, Sparkline }) {
+  return (
+    <div style={{
+      background: '#fff', borderRadius: 12, border: '0.5px solid #e4e7ec',
+      padding: '14px 14px 12px', display: 'flex', flexDirection: 'column',
+    }}>
+      <div style={{ fontSize: 10.5, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 8 }}>
+        {label}
+      </div>
+      <div style={{
+        display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end',
+      }}>
+        <div>
+          <div style={{ fontSize: 24, fontWeight: 800, color: '#1a1a2e', letterSpacing: -0.5, lineHeight: 1 }}>
+            {value}
+          </div>
+          <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 5 }}>{sub}</div>
+        </div>
+        <Sparkline data={serie} color={color} />
+      </div>
+    </div>
+  );
+}
+
+function Flowbar({ conteos }) {
+  if (conteos.total === 0) {
+    return <div style={{ fontSize: 12, color: '#94a3b8' }}>Sin rutas con helper involucrado.</div>;
+  }
+  const segs = [
+    { label: 'U1', n: conteos.U1, color: '#DC2626' },
+    { label: 'U2', n: conteos.U2, color: '#F47B20' },
+    { label: 'U3', n: conteos.U3, color: '#0EA5E9' },
+    { label: 'OK', n: conteos.OK, color: '#10B981' },
+  ];
+  return (
+    <div style={{
+      display: 'flex', height: 36, borderRadius: 8, overflow: 'hidden',
+      border: '0.5px solid #e4e7ec',
+    }}>
+      {segs.filter(s => s.n > 0).map(s => (
+        <div key={s.label} style={{
+          flex: s.n, background: s.color, color: '#fff',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          fontSize: 12, fontWeight: 700,
+        }}>
+          {s.label} · {s.n}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// PANEL U1 · NO AUTORIZADAS · Mapa de calor SC × Vehículo
+// ════════════════════════════════════════════════════════════════════════════
+function PanelU1({ datos, setDrillDown }) {
+  // Heatmap SC × Vehículo
+  const vehiculos = ['Small Van MLP', 'Small Van MLP SDD', 'Large Van MLP', 'Large Van MLP SDD'];
+  const scs = Array.from(new Set(datos.map(r => r.sc))).sort();
+  
+  const matriz = {};
+  scs.forEach(sc => {
+    matriz[sc] = {};
+    vehiculos.forEach(v => matriz[sc][v] = []);
+  });
+  datos.forEach(r => {
+    if (matriz[r.sc] && matriz[r.sc][r.vehiculo]) {
+      matriz[r.sc][r.vehiculo].push(r);
+    }
+  });
+
+  if (datos.length === 0) {
+    return <EmptyState mensaje="No hay rutas con helper en combinaciones no autorizadas" />;
+  }
+
+  return (
+    <div>
+      <SectionHeader 
+        title="U1 · No autorizadas"
+        subtitle="Rutas con helper declarado en SC + vehículo NO autorizado · acción: bloquear flag + negociar tarifa con MELI"
+        n={datos.length}
+        color="#DC2626"
+      />
+      <div style={{
+        background: '#fff', borderRadius: 12, border: '0.5px solid #e4e7ec', overflow: 'hidden',
+      }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead>
+            <tr>
+              <th style={thStyle}>Service Center</th>
+              {vehiculos.map(v => <th key={v} style={thStyle}>{v}</th>)}
+              <th style={thStyle}>Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            {scs.map(sc => {
+              const totalSc = vehiculos.reduce((s, v) => s + matriz[sc][v].length, 0);
+              return (
+                <tr key={sc}>
+                  <td style={tdSc}>{sc}</td>
+                  {vehiculos.map(v => {
+                    const n = matriz[sc][v].length;
+                    return (
+                      <td key={v}
+                        style={{ ...tdCell, ...heatColor(n), cursor: n > 0 ? 'pointer' : 'default' }}
+                        onClick={() => n > 0 && setDrillDown({ title: `${sc} · ${v}`, rutas: matriz[sc][v] })}>
+                        {n > 0 ? n : '·'}
+                      </td>
+                    );
+                  })}
+                  <td style={{ ...tdCell, fontWeight: 700, background: '#f8fafc' }}>{totalSc}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <Legend />
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// PANEL U2 · CERTIFICACIÓN
+// ════════════════════════════════════════════════════════════════════════════
+function PanelU2({ datos, setDrillDown }) {
+  if (datos.length === 0) {
+    return <EmptyState mensaje="Todos los helpers que operaron están certificados en padrón MELI" />;
+  }
+
+  // Agrupar por SC
+  const porSc = {};
+  datos.forEach(r => {
+    if (!porSc[r.sc]) porSc[r.sc] = [];
+    porSc[r.sc].push(r);
+  });
+
+  return (
+    <div>
+      <SectionHeader 
+        title="U2 · Certificación"
+        subtitle="Helpers que operaron pero NO están en el padrón oficial de MELI · acción: certificar o investigar"
+        n={datos.length}
+        color="#F47B20"
+      />
+      <div style={{
+        background: '#fff', borderRadius: 12, border: '0.5px solid #e4e7ec', overflow: 'hidden',
+      }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+          <thead>
+            <tr>
+              <th style={thStyle}>SC</th>
+              <th style={thStyle}>Ruta</th>
+              <th style={thStyle}>Chofer</th>
+              <th style={thStyle}>Helper detectado</th>
+              <th style={thStyle}>Paquetes</th>
+              <th style={thStyle}>% participación</th>
+              <th style={thStyle}>Vehículo</th>
+            </tr>
+          </thead>
+          <tbody>
+            {datos.map((r, i) => (
+              <tr key={i} style={{ borderBottom: '0.5px solid #f4f5f7' }}>
+                <td style={tdSc}>{r.sc}</td>
+                <td style={tdData}>
+                  <span style={{ fontFamily: 'monospace', fontSize: 11 }}>{r.id_ruta}</span>
+                </td>
+                <td style={tdData}>{r.chofer_nombre}</td>
+                <td style={{ ...tdData, fontWeight: 600 }}>{r.helpers_nombres || '—'}</td>
+                <td style={tdData}>{r.pkgs_helper} / {r.pkgs_total}</td>
+                <td style={tdData}>{r.pct_participacion_helper}%</td>
+                <td style={tdData}>
+                  <span style={{ fontSize: 11, color: '#64748b' }}>{r.vehiculo}</span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// PANEL U3 · PROCESO (fantasma + suplantación + <75% participación)
+// ════════════════════════════════════════════════════════════════════════════
+function PanelU3({ datos, setDrillDown }) {
+  if (datos.length === 0) {
+    return <EmptyState mensaje="Sin alertas de proceso" />;
+  }
+
+  const fantasmas = datos.filter(r => r.clasificacion === 'FANTASMA');
+  const suplantaciones = datos.filter(r => r.hay_suplantacion);
+  const bajaPart = datos.filter(r => r.pct_participacion_helper !== null && r.pct_participacion_helper < 75 && r.pkgs_helper > 0);
+
+  return (
+    <div>
+      <SectionHeader 
+        title="U3 · Proceso"
+        subtitle="Helpers fantasma, suplantaciones y participación insuficiente · acción: validar con supervisor"
+        n={datos.length}
+        color="#0EA5E9"
+      />
+
+      {fantasmas.length > 0 && (
+        <SubSection
+          title={`🚨 Helpers fantasma (${fantasmas.length})`}
+          subtitle="Flag activo pero solo el chofer entregó — BT pagó $350 sin contraparte"
+        >
+          <TablaRutas rutas={fantasmas} />
+        </SubSection>
+      )}
+
+      {suplantaciones.length > 0 && (
+        <SubSection
+          title={`⚠️ Suplantaciones detectadas (${suplantaciones.length})`}
+          subtitle="MELI detectó que alguien entregó con cuenta de otro"
+        >
+          <TablaRutas rutas={suplantaciones} mostrarSuplantacion />
+        </SubSection>
+      )}
+
+      {bajaPart.length > 0 && (
+        <SubSection
+          title={`📉 Baja participación del helper (${bajaPart.length})`}
+          subtitle="Helper trabajó pero entregó menos del 75% de los paquetes"
+        >
+          <TablaRutas rutas={bajaPart} mostrarPct />
+        </SubSection>
+      )}
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// COMPONENTES AUXILIARES
+// ════════════════════════════════════════════════════════════════════════════
+
+function SectionHeader({ title, subtitle, n, color }) {
+  return (
+    <div style={{ marginBottom: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
+        <div style={{ fontSize: 15, fontWeight: 700, color: '#1a3a6b' }}>{title}</div>
+        <span style={{
+          background: color, color: '#fff', fontSize: 11, fontWeight: 700,
+          padding: '2px 9px', borderRadius: 10,
+        }}>{n} rutas</span>
+      </div>
+      <div style={{ fontSize: 11, color: '#64748b' }}>{subtitle}</div>
+    </div>
+  );
+}
+
+function SubSection({ title, subtitle, children }) {
+  return (
+    <div style={{
+      background: '#fff', borderRadius: 12, border: '0.5px solid #e4e7ec',
+      padding: 14, marginBottom: 10,
+    }}>
+      <div style={{ fontSize: 12, fontWeight: 700, color: '#1a1a2e', marginBottom: 2 }}>{title}</div>
+      <div style={{ fontSize: 11, color: '#64748b', marginBottom: 10 }}>{subtitle}</div>
+      {children}
+    </div>
+  );
+}
+
+function TablaRutas({ rutas, mostrarSuplantacion, mostrarPct }) {
+  return (
+    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+      <thead>
+        <tr>
+          <th style={thStyle}>SC</th>
+          <th style={thStyle}>Ruta</th>
+          <th style={thStyle}>Chofer</th>
+          {mostrarSuplantacion && <th style={thStyle}>Quien entregó</th>}
+          {mostrarPct && <th style={thStyle}>% Participación</th>}
+          <th style={thStyle}>Vehículo</th>
+          <th style={thStyle}>Paquetes</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rutas.map((r, i) => (
+          <tr key={i} style={{ borderBottom: '0.5px solid #f4f5f7' }}>
+            <td style={tdSc}>{r.sc}</td>
+            <td style={tdData}><span style={{ fontFamily: 'monospace', fontSize: 11 }}>{r.id_ruta}</span></td>
+            <td style={tdData}>{r.chofer_nombre}</td>
+            {mostrarSuplantacion && <td style={{ ...tdData, fontWeight: 600 }}>{r.helpers_nombres}</td>}
+            {mostrarPct && <td style={tdData}><strong>{r.pct_participacion_helper}%</strong></td>}
+            <td style={tdData}><span style={{ fontSize: 11, color: '#64748b' }}>{r.vehiculo}</span></td>
+            <td style={tdData}>{r.pkgs_total}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+function EmptyState({ mensaje }) {
+  return (
+    <div style={{
+      background: '#fff', borderRadius: 12, border: '0.5px solid #e4e7ec',
+      padding: 40, textAlign: 'center',
+    }}>
+      <i className="ti ti-circle-check" style={{ fontSize: 32, color: '#10B981' }} />
+      <div style={{ fontSize: 13, color: '#64748b', marginTop: 8 }}>{mensaje}</div>
+    </div>
+  );
+}
+
+function Legend() {
+  const items = [
+    { color: '#f8fafc', label: 'Sin rutas' },
+    { color: '#FEF3C7', label: '1 ruta' },
+    { color: '#FCA5A5', label: '2-5 rutas' },
+    { color: '#DC2626', label: '6+ rutas', textColor: '#fff' },
+  ];
+  return (
+    <div style={{ display: 'flex', gap: 12, padding: '10px 4px', flexWrap: 'wrap' }}>
+      {items.map(i => (
+        <div key={i.label} style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 10, color: '#64748b' }}>
+          <div style={{ width: 14, height: 14, borderRadius: 3, background: i.color, border: '0.5px solid #e4e7ec' }} />
+          {i.label}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function DrillDownModal({ data, onClose }) {
+  return (
+    <div style={{
+      position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 1000,
+      display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20,
+    }} onClick={onClose}>
+      <div style={{
+        background: '#fff', borderRadius: 14, padding: 20, maxWidth: '90vw', maxHeight: '85vh',
+        overflow: 'auto', minWidth: 600,
+      }} onClick={e => e.stopPropagation()}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: '#1a3a6b' }}>{data.title}</div>
+          <button onClick={onClose} style={{
+            background: 'transparent', border: 'none', cursor: 'pointer', fontSize: 18, color: '#64748b',
+          }}>✕</button>
+        </div>
+        <TablaRutas rutas={data.rutas} mostrarPct />
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// HELPERS DE ESTILO
+// ════════════════════════════════════════════════════════════════════════════
+
+const thStyle = {
+  padding: '8px 10px', fontSize: 10, fontWeight: 700, textTransform: 'uppercase',
+  letterSpacing: 0.4, color: '#64748b', textAlign: 'center',
+  borderBottom: '1px solid #e4e7ec', background: '#f8fafc', whiteSpace: 'nowrap',
+};
+
+const tdCell = {
+  padding: '9px 10px', border: '0.5px solid #e5e7eb', textAlign: 'center',
+  fontSize: 12, fontWeight: 600,
+};
+
+const tdSc = {
+  ...tdCell, textAlign: 'left', fontWeight: 700, color: '#1a3a6b',
+  background: '#f8fafc', fontSize: 11,
+};
+
+const tdData = {
+  padding: '8px 10px', borderBottom: '0.5px solid #f4f5f7', fontSize: 12,
+  textAlign: 'left',
+};
+
+function heatColor(n) {
+  if (n === 0) return { background: '#f8fafc', color: '#cbd5e1' };
+  if (n === 1) return { background: '#FEF3C7', color: '#92400E' };
+  if (n <= 5) return { background: '#FCA5A5', color: '#7F1D1D' };
+  return { background: '#DC2626', color: '#fff', fontWeight: 700 };
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// EXPORT CSV
+// ════════════════════════════════════════════════════════════════════════════
+function exportarCSV(datos) {
+  if (!datos || datos.length === 0) return;
+  const headers = [
+    'fecha','id_ruta','sc','zona','vehiculo','placa',
+    'chofer_nombre','chofer_curp','helpers_nombres','helper_curp',
+    'pkgs_total','pkgs_chofer','pkgs_helper','pct_participacion_helper',
+    'clasificacion','universo','helper_cert_estado',
+    'autorizado','monto_recuperable_meli','costo_bt_cuestionable',
+  ];
+  const rows = datos.map(r => headers.map(h => {
+    const v = r[h];
+    if (v === null || v === undefined) return '';
+    if (typeof v === 'string' && v.includes(',')) return `"${v.replace(/"/g, '""')}"`;
+    return v;
+  }).join(','));
+  const csv = headers.join(',') + '\n' + rows.join('\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `control_helper_${datos[0]?.fecha || 'export'}.csv`;
+  a.click();
+}
+
 
 // ── MODAL ──────────────────────────────────────────────────────────────────
 function MeliModal({ modal, onClose }) {
@@ -22560,6 +23308,795 @@ const pm_tdStyle  = { fontSize: 12, color: "#0f172a", padding: "10px 12px" };
 const pm_tdStyleR = { ...pm_tdStyle, textAlign: "right", fontVariantNumeric: "tabular-nums" };
 
 
+// ═══════════════════════════════════════════════════════════════════════════════════════
+// MÓDULO HELPERS · MX (Control de Ayudantes Mercado Libre)
+// ───────────────────────────────────────────────────────────────────────────────────────
+// Cruza el flag has_helper de logistic_ayudantes_snapshots contra quién realmente
+// entregó los paquetes en meli_paquetes_entregados para detectar:
+//   • CORRECTO   → helper flag activo + ambos entregaron
+//   • FANTASMA   → flag activo pero solo el chofer entregó (BT paga $350 inútilmente)
+//   • RARO       → flag activo pero solo el helper entregó (chofer no entregó nada)
+//   • NO_MARCADO → helper trabajó sin flag (recuperable de MELI si es SC autorizado)
+//
+// 4 universos (U0 Resumen, U1 No autorizadas, U2 Certificación, U3 Proceso).
+// Funciona con queries directas (no requiere la vista v_helpers_clasificacion_diaria).
+// ═══════════════════════════════════════════════════════════════════════════════════════
+
+const HMX_SCS_AUTORIZADOS = ["SMX1", "SMX6", "SMX7", "SMX8", "SMX9", "SMX10", "SQR1"];
+const HMX_COSTO_HELPER = 350; // MXN por ruta
+
+function hmx_clasificar({ helper_flag, pkgs_chofer, pkgs_otro }) {
+  if (helper_flag && pkgs_otro > 0 && pkgs_chofer > 0) return "CORRECTO";
+  if (helper_flag && pkgs_otro === 0) return "FANTASMA";
+  if (helper_flag && pkgs_chofer === 0) return "RARO";
+  if (!helper_flag && pkgs_otro > 0) return "NO_MARCADO";
+  return "NORMAL";
+}
+
+function hmx_esAutorizado(sc) {
+  return HMX_SCS_AUTORIZADOS.includes(sc);
+}
+
+function ModuloHelpersMX({ usuario }) {
+  const [vista, setVista] = useState("u0");
+  const [fecha, setFecha] = useState(fechaHoyOperativa());
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [rutas, setRutas] = useState([]);
+  const [detalle, setDetalle] = useState(null);
+
+  const cargarDatos = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      // 1) Flag de helper por ruta (logistic_ayudantes_snapshots)
+      const { data: snaps, error: e1 } = await sb
+        .from("logistic_ayudantes_snapshots")
+        .select("id_ruta, has_helper, service_center_id")
+        .eq("fecha", fecha);
+      if (e1) throw e1;
+
+      // Mapa id_ruta -> { helper_flag, sc }
+      const flagMap = new Map();
+      (snaps || []).forEach(r => {
+        const prev = flagMap.get(r.id_ruta) || { helper_flag: false, sc: r.service_center_id };
+        flagMap.set(r.id_ruta, {
+          helper_flag: prev.helper_flag || !!r.has_helper,
+          sc: r.service_center_id || prev.sc,
+        });
+      });
+
+      // 2) Entregas del día (meli_paquetes_entregados)
+      const { data: pkgs, error: e2 } = await sb
+        .from("meli_paquetes_entregados")
+        .select("id_ruta, service_center_id, driver_id, driver_name, user_id_real, user_name_real")
+        .eq("fecha", fecha)
+        .not("user_id_real", "is", null);
+      if (e2) throw e2;
+
+      // Agregar por ruta
+      const rutaMap = new Map();
+      (pkgs || []).forEach(p => {
+        const id = p.id_ruta;
+        let row = rutaMap.get(id);
+        if (!row) {
+          row = {
+            id_ruta: id,
+            sc: p.service_center_id,
+            chofer: p.driver_name,
+            chofer_id: p.driver_id,
+            pkgs_chofer: 0,
+            pkgs_otro: 0,
+            ayudantes: new Set(),
+          };
+          rutaMap.set(id, row);
+        }
+        const mismoChofer = p.user_id_real === p.driver_id;
+        if (mismoChofer) row.pkgs_chofer++;
+        else {
+          row.pkgs_otro++;
+          if (p.user_name_real) row.ayudantes.add(p.user_name_real);
+        }
+      });
+
+      // 3) Unir flag + entregas
+      const todasLasRutas = new Set([...flagMap.keys(), ...rutaMap.keys()]);
+      const result = [];
+      todasLasRutas.forEach(id => {
+        const flag = flagMap.get(id) || { helper_flag: false, sc: null };
+        const entrega = rutaMap.get(id) || {
+          id_ruta: id, sc: flag.sc, chofer: null, chofer_id: null,
+          pkgs_chofer: 0, pkgs_otro: 0, ayudantes: new Set(),
+        };
+        const sc = entrega.sc || flag.sc;
+        const helper_flag = flag.helper_flag;
+        const pkgs_chofer = entrega.pkgs_chofer;
+        const pkgs_otro = entrega.pkgs_otro;
+        const clasificacion = hmx_clasificar({ helper_flag, pkgs_chofer, pkgs_otro });
+        const autorizado = hmx_esAutorizado(sc);
+        result.push({
+          id_ruta: id,
+          sc,
+          autorizado,
+          chofer: entrega.chofer,
+          chofer_id: entrega.chofer_id,
+          helper_flag,
+          pkgs_chofer,
+          pkgs_otro,
+          pkgs_total: pkgs_chofer + pkgs_otro,
+          ayudante_nombre: [...entrega.ayudantes].join(" | "),
+          clasificacion,
+          monto_recuperable_meli: (!helper_flag && pkgs_otro > 0 && autorizado) ? HMX_COSTO_HELPER : 0,
+          costo_bt_cuestionable: (helper_flag && pkgs_otro === 0) ? HMX_COSTO_HELPER : 0,
+        });
+      });
+
+      setRutas(result);
+    } catch (e) {
+      setError(e.message || "Error cargando datos");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { cargarDatos(); /* eslint-disable-next-line */ }, [fecha]);
+
+  const stats = useMemo(() => {
+    const conFlag = rutas.filter(r => r.helper_flag);
+    const correctas = conFlag.filter(r => r.clasificacion === "CORRECTO");
+    const fantasma = conFlag.filter(r => r.clasificacion === "FANTASMA");
+    const raras = conFlag.filter(r => r.clasificacion === "RARO");
+    const noMarcadas = rutas.filter(r => r.clasificacion === "NO_MARCADO");
+    const fantasmaNoAutoriz = fantasma.filter(r => !r.autorizado);
+    const fantasmaAutoriz = fantasma.filter(r => r.autorizado);
+    const recuperable = rutas.reduce((s, r) => s + r.monto_recuperable_meli, 0);
+    const costoCuestionable = rutas.reduce((s, r) => s + r.costo_bt_cuestionable, 0);
+    return {
+      total_con_flag: conFlag.length,
+      correctas: correctas.length,
+      fantasma: fantasma.length,
+      raras: raras.length,
+      no_marcadas: noMarcadas.length,
+      fantasma_no_autoriz: fantasmaNoAutoriz.length,
+      fantasma_autoriz: fantasmaAutoriz.length,
+      recuperable_meli: recuperable,
+      costo_bt_cuestionable: costoCuestionable,
+      list_correctas: correctas,
+      list_fantasma: fantasma,
+      list_raras: raras,
+      list_no_marcadas: noMarcadas,
+    };
+  }, [rutas]);
+
+  const porSC = useMemo(() => {
+    const map = new Map();
+    rutas.filter(r => r.helper_flag).forEach(r => {
+      const k = r.sc || "—";
+      let row = map.get(k);
+      if (!row) {
+        row = { sc: k, autorizado: r.autorizado, correctas: 0, fantasma: 0, raras: 0, total: 0, costo_bt: 0 };
+        map.set(k, row);
+      }
+      row.total++;
+      if (r.clasificacion === "CORRECTO") row.correctas++;
+      else if (r.clasificacion === "FANTASMA") row.fantasma++;
+      else if (r.clasificacion === "RARO") row.raras++;
+      row.costo_bt += r.costo_bt_cuestionable;
+    });
+    return [...map.values()].sort((a, b) => {
+      if (a.autorizado !== b.autorizado) return a.autorizado ? 1 : -1;
+      return b.total - a.total;
+    });
+  }, [rutas]);
+
+  const tabs = [
+    { id: "u0", label: "U0 · Resumen", desc: "Vista ejecutiva del día" },
+    { id: "u1", label: "U1 · No autorizadas", desc: "Helper en SC sin tarifa MELI" },
+    { id: "u2", label: "U2 · Desviaciones", desc: "Fantasmas en SC autorizados" },
+    { id: "u3", label: "U3 · Detalle", desc: "Listado completo de rutas" },
+  ];
+
+  return (
+    <div style={{ padding: 0 }}>
+      <div style={{ background: "#fff", borderBottom: "1px solid #e4e7ec", padding: "12px 24px" }}>
+        <div style={{ fontSize: 18, fontWeight: 700, color: "#1a3a6b", marginBottom: 4 }}>
+          Control Helpers MX
+        </div>
+        <div style={{ fontSize: 12, color: "#64748b", marginBottom: 10 }}>
+          Cruce de helpers declarados (logistic) vs entregadores reales (MELI) · operación Mercado Libre
+        </div>
+        <div style={{ display: "flex", gap: 0, borderBottom: "2px solid #e4e7ec", marginLeft: -8, flexWrap: "wrap", alignItems: "flex-end", justifyContent: "space-between" }}>
+          <div style={{ display: "flex", gap: 0, flexWrap: "wrap" }}>
+            {tabs.map(t => (
+              <button key={t.id} onClick={() => { setVista(t.id); setDetalle(null); }}
+                style={{
+                  background: "transparent", border: "none", padding: "10px 16px",
+                  fontSize: 13, fontWeight: 600, cursor: "pointer", color: vista === t.id ? "#1a3a6b" : "#64748b",
+                  borderBottom: vista === t.id ? "2px solid #1a3a6b" : "2px solid transparent",
+                  marginBottom: -2, textAlign: "left",
+                }}>
+                <div>{t.label}</div>
+                <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 400, marginTop: 2 }}>{t.desc}</div>
+              </button>
+            ))}
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, paddingBottom: 8 }}>
+            <span style={{ fontSize: 11, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5 }}>
+              Fecha:
+            </span>
+            <input type="date" value={fecha} onChange={e => setFecha(e.target.value)}
+              style={{
+                padding: "6px 10px", fontSize: 13, fontWeight: 600, borderRadius: 6,
+                border: "1px solid #cbd5e1", background: "#fff", color: "#1a3a6b",
+                cursor: "pointer", fontFamily: "'Geist', sans-serif", outline: "none",
+                width: "auto",
+              }} />
+            <button onClick={cargarDatos} disabled={loading}
+              style={{
+                padding: "6px 12px", fontSize: 12, fontWeight: 600, borderRadius: 6,
+                border: "1px solid #cbd5e1", background: "#fff", color: "#475569",
+                cursor: loading ? "wait" : "pointer", fontFamily: "'Geist', sans-serif",
+              }}>
+              {loading ? "Cargando…" : "Refrescar"}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div className="pg" style={{ paddingTop: 16 }}>
+        {error && (
+          <div className="form-card" style={{ background: "#fef2f2", border: "1px solid #fecaca", marginBottom: 16 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: "#991b1b", marginBottom: 4 }}>
+              No se pudo cargar la información
+            </div>
+            <div style={{ fontSize: 12, color: "#7f1d1d" }}>{error}</div>
+          </div>
+        )}
+
+        {loading && (
+          <div className="form-card" style={{ textAlign: "center", padding: 40, color: "#666" }}>
+            Cargando datos del {fecha}…
+          </div>
+        )}
+
+        {!loading && !error && rutas.length === 0 && (
+          <div className="form-card" style={{ textAlign: "center", padding: 40, color: "#666" }}>
+            <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 6 }}>
+              No hay rutas registradas para {fecha}
+            </div>
+            <div style={{ fontSize: 12, color: "#94a3b8" }}>
+              El scraper puede no haber capturado información todavía. Probá con otra fecha o esperá al cierre del día.
+            </div>
+          </div>
+        )}
+
+        {!loading && !error && rutas.length > 0 && (
+          <>
+            {vista === "u0" && <HelpersU0 stats={stats} porSC={porSC} fecha={fecha} onIr={setVista} />}
+            {vista === "u1" && <HelpersU1 porSC={porSC} stats={stats} rutas={rutas} setDetalle={setDetalle} detalle={detalle} />}
+            {vista === "u2" && <HelpersU2 porSC={porSC} stats={stats} rutas={rutas} setDetalle={setDetalle} detalle={detalle} />}
+            {vista === "u3" && <HelpersU3 rutas={rutas} />}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── U0 · Resumen ejecutivo ──────────────────────────────────────────────────
+function HelpersU0({ stats, porSC, fecha, onIr }) {
+  const { total_con_flag, correctas, fantasma, raras, fantasma_no_autoriz, fantasma_autoriz, recuperable_meli, costo_bt_cuestionable } = stats;
+
+  const kpis = [
+    { label: "Rutas con helper flag", valor: total_con_flag, sub: "declarados en MELI hoy", color: "#1a3a6b" },
+    { label: "Correctas", valor: correctas, sub: "helper trabajó realmente", color: "#16a34a" },
+    { label: "Fantasma", valor: fantasma, sub: `BT paga $${(costo_bt_cuestionable).toLocaleString("es-MX")} sin entrega`, color: "#c0392b" },
+    { label: "Raras", valor: raras, sub: "solo el helper entregó", color: "#F47B20" },
+  ];
+
+  return (
+    <>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12, marginBottom: 16 }}>
+        {kpis.map((k, i) => (
+          <div key={i} className="form-card" style={{ padding: 16, marginBottom: 0, borderLeft: `3px solid ${k.color}` }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: "#6b7280", textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 6 }}>
+              {k.label}
+            </div>
+            <div style={{ fontSize: 26, fontWeight: 800, color: k.color, letterSpacing: -0.5, lineHeight: 1 }}>
+              {k.valor}
+            </div>
+            <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 6 }}>{k.sub}</div>
+          </div>
+        ))}
+      </div>
+
+      {total_con_flag > 0 && (
+        <div className="form-card" style={{ marginBottom: 16 }}>
+          <div className="form-title">Distribución del día · {fecha}</div>
+          <div style={{ height: 32, display: "flex", borderRadius: 8, overflow: "hidden", marginBottom: 12, fontSize: 11, fontWeight: 700, color: "#fff" }}>
+            {correctas > 0 && (
+              <div style={{ flex: correctas, background: "#16a34a", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                {correctas} OK
+              </div>
+            )}
+            {fantasma > 0 && (
+              <div style={{ flex: fantasma, background: "#c0392b", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                {fantasma} fantasma
+              </div>
+            )}
+            {raras > 0 && (
+              <div style={{ flex: raras, background: "#F47B20", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                {raras} raras
+              </div>
+            )}
+          </div>
+          <div style={{ display: "flex", gap: 16, flexWrap: "wrap", fontSize: 11, color: "#6b7280" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+              <div style={{ width: 10, height: 10, borderRadius: 2, background: "#16a34a" }}></div>
+              <span><strong style={{ color: "#16a34a" }}>Correcto</strong> — helper y chofer entregaron</span>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+              <div style={{ width: 10, height: 10, borderRadius: 2, background: "#c0392b" }}></div>
+              <span><strong style={{ color: "#c0392b" }}>Fantasma</strong> — solo el chofer entregó · BT paga sin servicio</span>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+              <div style={{ width: 10, height: 10, borderRadius: 2, background: "#F47B20" }}></div>
+              <span><strong style={{ color: "#F47B20" }}>Raro</strong> — solo el helper entregó · investigar</span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 12, marginBottom: 16 }}>
+        <div className="form-card" style={{ padding: 16, marginBottom: 0, cursor: "pointer" }} onClick={() => onIr("u1")}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: "#6b7280", textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 6 }}>
+            U1 · No autorizadas
+          </div>
+          <div style={{ fontSize: 22, fontWeight: 800, color: "#c0392b", marginBottom: 4 }}>
+            {porSC.filter(s => !s.autorizado).reduce((a, b) => a + b.total, 0)}
+          </div>
+          <div style={{ fontSize: 11, color: "#9ca3af", marginBottom: 10 }}>
+            rutas con helper en SC sin tarifa MELI
+          </div>
+          <div style={{ fontSize: 11, fontWeight: 500, color: "#1a3a6b" }}>Ver universo →</div>
+        </div>
+
+        <div className="form-card" style={{ padding: 16, marginBottom: 0, cursor: "pointer" }} onClick={() => onIr("u2")}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: "#6b7280", textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 6 }}>
+            U2 · Desviaciones autorizados
+          </div>
+          <div style={{ fontSize: 22, fontWeight: 800, color: "#F47B20", marginBottom: 4 }}>
+            {fantasma_autoriz}
+          </div>
+          <div style={{ fontSize: 11, color: "#9ca3af", marginBottom: 10 }}>
+            fantasmas en SC con tarifa activa
+          </div>
+          <div style={{ fontSize: 11, fontWeight: 500, color: "#1a3a6b" }}>Ver universo →</div>
+        </div>
+
+        <div className="form-card" style={{ padding: 16, marginBottom: 0, cursor: "pointer" }} onClick={() => onIr("u3")}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: "#6b7280", textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 6 }}>
+            U3 · Detalle completo
+          </div>
+          <div style={{ fontSize: 22, fontWeight: 800, color: "#1a3a6b", marginBottom: 4 }}>
+            {stats.total_con_flag}
+          </div>
+          <div style={{ fontSize: 11, color: "#9ca3af", marginBottom: 10 }}>
+            rutas listadas con filtros
+          </div>
+          <div style={{ fontSize: 11, fontWeight: 500, color: "#1a3a6b" }}>Ver detalle →</div>
+        </div>
+      </div>
+
+      <div className="form-card">
+        <div className="form-title">Impacto financiero estimado · {fecha}</div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 16 }}>
+          <div>
+            <div style={{ fontSize: 11, color: "#6b7280", textTransform: "uppercase", fontWeight: 700, letterSpacing: 0.4, marginBottom: 4 }}>
+              Costo BT cuestionable
+            </div>
+            <div style={{ fontSize: 20, fontWeight: 800, color: "#c0392b" }}>
+              ${costo_bt_cuestionable.toLocaleString("es-MX")} MXN
+            </div>
+            <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 4 }}>
+              {fantasma} fantasmas × ${HMX_COSTO_HELPER}
+            </div>
+          </div>
+          <div>
+            <div style={{ fontSize: 11, color: "#6b7280", textTransform: "uppercase", fontWeight: 700, letterSpacing: 0.4, marginBottom: 4 }}>
+              Recuperable de MELI
+            </div>
+            <div style={{ fontSize: 20, fontWeight: 800, color: "#16a34a" }}>
+              ${recuperable_meli.toLocaleString("es-MX")} MXN
+            </div>
+            <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 4 }}>
+              {stats.no_marcadas} no marcadas en SC autorizado
+            </div>
+          </div>
+        </div>
+      </div>
+    </>
+  );
+}
+
+// ─── U1 · No autorizadas (PRIORIDAD) ──────────────────────────────────────────
+function HelpersU1({ porSC, stats, rutas, setDetalle, detalle }) {
+  const scsNoAut = porSC.filter(s => !s.autorizado);
+  const totalRutas = scsNoAut.reduce((a, s) => a + s.total, 0);
+  const totalFantasma = scsNoAut.reduce((a, s) => a + s.fantasma, 0);
+  const totalCosto = scsNoAut.reduce((a, s) => a + s.costo_bt, 0);
+
+  const onClickSC = (sc) => {
+    const filtradas = rutas.filter(r => r.sc === sc && r.helper_flag);
+    setDetalle({ tipo: "sc", filtro: sc, datos: filtradas });
+  };
+
+  return (
+    <>
+      <div className="form-card" style={{ background: "#fef2f2", border: "1px solid #fecaca", marginBottom: 16 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: "#991b1b", marginBottom: 4 }}>
+          ⚠ Universo crítico · Acción inmediata
+        </div>
+        <div style={{ fontSize: 12, color: "#7f1d1d", lineHeight: 1.6 }}>
+          Estas rutas tienen helper declarado en SC <strong>sin tarifa activa en MELI</strong>. BT está pagando el costo
+          completo sin posibilidad de recuperarlo. La acción no es operativa: bloquear el flag en estos SC y
+          negociar activación de tarifa con MELI.
+        </div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12, marginBottom: 16 }}>
+        <div className="form-card" style={{ padding: 14, marginBottom: 0 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: "#6b7280", textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 6 }}>SC no autorizados con flag</div>
+          <div style={{ fontSize: 22, fontWeight: 800, color: "#c0392b" }}>{scsNoAut.length}</div>
+        </div>
+        <div className="form-card" style={{ padding: 14, marginBottom: 0 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: "#6b7280", textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 6 }}>Rutas afectadas</div>
+          <div style={{ fontSize: 22, fontWeight: 800, color: "#c0392b" }}>{totalRutas}</div>
+        </div>
+        <div className="form-card" style={{ padding: 14, marginBottom: 0 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: "#6b7280", textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 6 }}>De las cuales fantasma</div>
+          <div style={{ fontSize: 22, fontWeight: 800, color: "#c0392b" }}>{totalFantasma}</div>
+        </div>
+        <div className="form-card" style={{ padding: 14, marginBottom: 0 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: "#6b7280", textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 6 }}>Costo BT del día</div>
+          <div style={{ fontSize: 22, fontWeight: 800, color: "#c0392b" }}>${totalCosto.toLocaleString("es-MX")}</div>
+        </div>
+      </div>
+
+      <div className="form-card" style={{ padding: 0, overflow: "hidden" }}>
+        <div style={{ padding: "12px 16px", borderBottom: "1px solid #e4e7ec", fontSize: 13, fontWeight: 600, color: "#1a3a6b" }}>
+          SCs no autorizados con helper declarado
+        </div>
+        {scsNoAut.length === 0 ? (
+          <div style={{ padding: 24, textAlign: "center", color: "#94a3b8", fontSize: 12 }}>
+            No hay SCs no autorizados con helper declarado hoy
+          </div>
+        ) : (
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr>
+                <th style={hmxTh}>SC</th>
+                <th style={hmxThR}>Rutas con flag</th>
+                <th style={hmxThR}>Correctas</th>
+                <th style={hmxThR}>Fantasma</th>
+                <th style={hmxThR}>Raras</th>
+                <th style={hmxThR}>Costo BT</th>
+                <th style={hmxThR}>Acción</th>
+              </tr>
+            </thead>
+            <tbody>
+              {scsNoAut.map(s => (
+                <tr key={s.sc} style={{ borderBottom: "1px solid #f4f5f7", cursor: "pointer" }}
+                  onClick={() => onClickSC(s.sc)}>
+                  <td style={{ ...hmxTd, fontWeight: 700, color: "#1a3a6b" }}>{s.sc}</td>
+                  <td style={hmxTdR}>{s.total}</td>
+                  <td style={{ ...hmxTdR, color: s.correctas > 0 ? "#16a34a" : "#cbd5e1" }}>{s.correctas}</td>
+                  <td style={{ ...hmxTdR, color: s.fantasma > 0 ? "#c0392b" : "#cbd5e1", fontWeight: s.fantasma > 0 ? 700 : 400 }}>{s.fantasma}</td>
+                  <td style={{ ...hmxTdR, color: s.raras > 0 ? "#F47B20" : "#cbd5e1" }}>{s.raras}</td>
+                  <td style={{ ...hmxTdR, fontWeight: 700, color: "#c0392b" }}>${s.costo_bt.toLocaleString("es-MX")}</td>
+                  <td style={{ ...hmxTdR, fontSize: 11, color: "#1a3a6b", fontWeight: 600 }}>Ver detalle →</td>
+                </tr>
+              ))}
+              <tr style={{ background: "#f9fafb", borderTop: "1px solid #e5e7eb", fontWeight: 700 }}>
+                <td style={{ ...hmxTd, fontWeight: 700, color: "#1a3a6b" }}>Total</td>
+                <td style={hmxTdR}>{totalRutas}</td>
+                <td style={hmxTdR}>{scsNoAut.reduce((a, s) => a + s.correctas, 0)}</td>
+                <td style={{ ...hmxTdR, color: "#c0392b" }}>{totalFantasma}</td>
+                <td style={{ ...hmxTdR, color: "#F47B20" }}>{scsNoAut.reduce((a, s) => a + s.raras, 0)}</td>
+                <td style={{ ...hmxTdR, color: "#c0392b" }}>${totalCosto.toLocaleString("es-MX")}</td>
+                <td style={hmxTdR}>—</td>
+              </tr>
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {detalle && detalle.tipo === "sc" && (
+        <DetalleRutasHelpers detalle={detalle} onClose={() => setDetalle(null)} />
+      )}
+    </>
+  );
+}
+
+// ─── U2 · Desviaciones en SC autorizados ────────────────────────────────────
+function HelpersU2({ porSC, stats, rutas, setDetalle, detalle }) {
+  const scsAut = porSC.filter(s => s.autorizado);
+
+  const onClickSC = (sc) => {
+    const filtradas = rutas.filter(r => r.sc === sc && r.helper_flag);
+    setDetalle({ tipo: "sc", filtro: sc, datos: filtradas });
+  };
+
+  return (
+    <>
+      <div className="form-card" style={{ background: "#fffbeb", border: "1px solid #fde68a", marginBottom: 16 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: "#92400e", marginBottom: 4 }}>
+          ⚠ Desviaciones en SC autorizados
+        </div>
+        <div style={{ fontSize: 12, color: "#78350f", lineHeight: 1.6 }}>
+          Rutas en SC con tarifa MELI activa donde el helper fue declarado pero solo el chofer entregó.
+          MELI sí paga la tarifa, pero el helper podría no haber operado realmente. Validar con supervisor.
+        </div>
+      </div>
+
+      <div className="form-card" style={{ padding: 0, overflow: "hidden" }}>
+        <div style={{ padding: "12px 16px", borderBottom: "1px solid #e4e7ec", fontSize: 13, fontWeight: 600, color: "#1a3a6b" }}>
+          SCs autorizados con helper declarado
+        </div>
+        {scsAut.length === 0 ? (
+          <div style={{ padding: 24, textAlign: "center", color: "#94a3b8", fontSize: 12 }}>
+            No hay SCs autorizados con helper declarado hoy
+          </div>
+        ) : (
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr>
+                <th style={hmxTh}>SC</th>
+                <th style={hmxThR}>Rutas con flag</th>
+                <th style={hmxThR}>Correctas</th>
+                <th style={hmxThR}>Fantasma</th>
+                <th style={hmxThR}>Raras</th>
+                <th style={hmxThR}>% Sano</th>
+                <th style={hmxThR}>Acción</th>
+              </tr>
+            </thead>
+            <tbody>
+              {scsAut.map(s => {
+                const pct = s.total > 0 ? Math.round((s.correctas / s.total) * 100) : 0;
+                return (
+                  <tr key={s.sc} style={{ borderBottom: "1px solid #f4f5f7", cursor: "pointer" }}
+                    onClick={() => onClickSC(s.sc)}>
+                    <td style={{ ...hmxTd, fontWeight: 700, color: "#1a3a6b" }}>{s.sc}</td>
+                    <td style={hmxTdR}>{s.total}</td>
+                    <td style={{ ...hmxTdR, color: s.correctas > 0 ? "#16a34a" : "#cbd5e1" }}>{s.correctas}</td>
+                    <td style={{ ...hmxTdR, color: s.fantasma > 0 ? "#c0392b" : "#cbd5e1", fontWeight: s.fantasma > 0 ? 700 : 400 }}>{s.fantasma}</td>
+                    <td style={{ ...hmxTdR, color: s.raras > 0 ? "#F47B20" : "#cbd5e1" }}>{s.raras}</td>
+                    <td style={{ ...hmxTdR, fontWeight: 700, color: pct >= 75 ? "#16a34a" : pct >= 50 ? "#F47B20" : "#c0392b" }}>{pct}%</td>
+                    <td style={{ ...hmxTdR, fontSize: 11, color: "#1a3a6b", fontWeight: 600 }}>Ver detalle →</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {detalle && detalle.tipo === "sc" && (
+        <DetalleRutasHelpers detalle={detalle} onClose={() => setDetalle(null)} />
+      )}
+    </>
+  );
+}
+
+// ─── U3 · Detalle completo (tabla con filtros) ────────────────────────────
+function HelpersU3({ rutas }) {
+  const [filtroClas, setFiltroClas] = useState("ALL");
+  const [filtroSC, setFiltroSC] = useState("ALL");
+  const [busqueda, setBusqueda] = useState("");
+
+  const scs = useMemo(() => [...new Set(rutas.map(r => r.sc).filter(Boolean))].sort(), [rutas]);
+
+  const filtradas = useMemo(() => {
+    let res = rutas.filter(r => r.helper_flag || r.clasificacion === "NO_MARCADO");
+    if (filtroClas !== "ALL") res = res.filter(r => r.clasificacion === filtroClas);
+    if (filtroSC !== "ALL") res = res.filter(r => r.sc === filtroSC);
+    if (busqueda.trim()) {
+      const q = busqueda.toLowerCase().trim();
+      res = res.filter(r =>
+        (r.id_ruta || "").toString().toLowerCase().includes(q) ||
+        (r.chofer || "").toLowerCase().includes(q) ||
+        (r.ayudante_nombre || "").toLowerCase().includes(q) ||
+        (r.sc || "").toLowerCase().includes(q)
+      );
+    }
+    return res.sort((a, b) => {
+      if (a.autorizado !== b.autorizado) return a.autorizado ? 1 : -1;
+      if (a.sc !== b.sc) return (a.sc || "").localeCompare(b.sc || "");
+      return (a.clasificacion || "").localeCompare(b.clasificacion || "");
+    });
+  }, [rutas, filtroClas, filtroSC, busqueda]);
+
+  const exportarCSV = () => {
+    const header = ["SC", "Tipo SC", "ID Ruta", "Chofer", "Clasificación", "Flag", "Pkgs Chofer", "Pkgs Helper", "Helper", "Recuperable MELI", "Costo BT"];
+    const rows = [header, ...filtradas.map(r => [
+      r.sc, r.autorizado ? "AUTORIZADO" : "NO_AUTORIZADO", r.id_ruta, r.chofer, r.clasificacion,
+      r.helper_flag ? "SI" : "NO", r.pkgs_chofer, r.pkgs_otro, r.ayudante_nombre || "",
+      r.monto_recuperable_meli, r.costo_bt_cuestionable,
+    ])];
+    const csv = rows.map(r => r.map(v => `"${String(v ?? "").replace(/"/g, '""')}"`).join(",")).join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `helpers_mx_${fechaHoyOperativa()}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  return (
+    <>
+      <div className="form-card" style={{ padding: 14, marginBottom: 14, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <span style={{ fontSize: 11, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.4 }}>Clasificación:</span>
+          <select value={filtroClas} onChange={e => setFiltroClas(e.target.value)}
+            style={{ width: "auto", padding: "6px 10px", fontSize: 12, borderRadius: 6, border: "1px solid #cbd5e1" }}>
+            <option value="ALL">Todas</option>
+            <option value="CORRECTO">Correctas</option>
+            <option value="FANTASMA">Fantasma</option>
+            <option value="RARO">Raras</option>
+            <option value="NO_MARCADO">No marcadas</option>
+          </select>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <span style={{ fontSize: 11, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.4 }}>SC:</span>
+          <select value={filtroSC} onChange={e => setFiltroSC(e.target.value)}
+            style={{ width: "auto", padding: "6px 10px", fontSize: 12, borderRadius: 6, border: "1px solid #cbd5e1" }}>
+            <option value="ALL">Todos</option>
+            {scs.map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
+        </div>
+        <input value={busqueda} onChange={e => setBusqueda(e.target.value)} placeholder="Buscar ruta, chofer, helper…"
+          style={{ width: 240, padding: "6px 10px", fontSize: 12, borderRadius: 6, border: "1px solid #cbd5e1" }} />
+        <div style={{ marginLeft: "auto", fontSize: 12, color: "#64748b" }}>
+          <strong>{filtradas.length}</strong> rutas
+        </div>
+        <button onClick={exportarCSV} className="btn-blue" style={{ padding: "6px 14px", fontSize: 12 }}>
+          Exportar CSV
+        </button>
+      </div>
+
+      <div className="form-card" style={{ padding: 0, overflow: "hidden" }}>
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 900 }}>
+            <thead>
+              <tr>
+                <th style={hmxTh}>SC</th>
+                <th style={hmxTh}>Tipo</th>
+                <th style={hmxTh}>ID Ruta</th>
+                <th style={hmxTh}>Chofer</th>
+                <th style={hmxTh}>Helper</th>
+                <th style={hmxTh}>Clasificación</th>
+                <th style={hmxThR}>Pkgs ch.</th>
+                <th style={hmxThR}>Pkgs h.</th>
+                <th style={hmxThR}>Recup.</th>
+                <th style={hmxThR}>Costo BT</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtradas.map((r, i) => (
+                <tr key={r.id_ruta + "_" + i} style={{ borderBottom: "1px solid #f4f5f7" }}>
+                  <td style={{ ...hmxTd, fontWeight: 700, color: "#1a3a6b" }}>{r.sc || "—"}</td>
+                  <td style={hmxTd}>
+                    <span style={{
+                      fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 4,
+                      background: r.autorizado ? "#dcfce7" : "#fee2e2",
+                      color: r.autorizado ? "#166534" : "#991b1b",
+                    }}>
+                      {r.autorizado ? "AUT" : "NO AUT"}
+                    </span>
+                  </td>
+                  <td style={{ ...hmxTd, fontFamily: "monospace", fontSize: 11 }}>{r.id_ruta}</td>
+                  <td style={{ ...hmxTd, fontSize: 11 }}>{r.chofer || "—"}</td>
+                  <td style={{ ...hmxTd, fontSize: 11 }}>{r.ayudante_nombre || "—"}</td>
+                  <td style={hmxTd}>
+                    <HelpersBadge clasificacion={r.clasificacion} />
+                  </td>
+                  <td style={hmxTdR}>{r.pkgs_chofer}</td>
+                  <td style={hmxTdR}>{r.pkgs_otro}</td>
+                  <td style={{ ...hmxTdR, color: r.monto_recuperable_meli > 0 ? "#16a34a" : "#cbd5e1", fontWeight: r.monto_recuperable_meli > 0 ? 700 : 400 }}>
+                    {r.monto_recuperable_meli > 0 ? `$${r.monto_recuperable_meli}` : "—"}
+                  </td>
+                  <td style={{ ...hmxTdR, color: r.costo_bt_cuestionable > 0 ? "#c0392b" : "#cbd5e1", fontWeight: r.costo_bt_cuestionable > 0 ? 700 : 400 }}>
+                    {r.costo_bt_cuestionable > 0 ? `$${r.costo_bt_cuestionable}` : "—"}
+                  </td>
+                </tr>
+              ))}
+              {filtradas.length === 0 && (
+                <tr>
+                  <td colSpan={10} style={{ padding: 24, textAlign: "center", color: "#94a3b8", fontSize: 12 }}>
+                    No hay rutas que coincidan con los filtros
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </>
+  );
+}
+
+// ─── Detalle de rutas por SC (drill-down) ────────────────────────────────
+function DetalleRutasHelpers({ detalle, onClose }) {
+  return (
+    <div className="form-card" style={{ marginTop: 14, padding: 0, overflow: "hidden" }}>
+      <div style={{ padding: "12px 16px", borderBottom: "1px solid #e4e7ec", background: "#f9fafb", display: "flex", alignItems: "center", gap: 8 }}>
+        <span style={{ fontSize: 13, fontWeight: 700, color: "#1a3a6b" }}>{detalle.filtro}</span>
+        <span style={{ fontSize: 11, color: "#9ca3af" }}>·</span>
+        <span style={{ fontSize: 12, color: "#64748b" }}>{detalle.datos.length} rutas</span>
+        <button onClick={onClose} style={{ marginLeft: "auto", background: "transparent", border: "none", color: "#64748b", fontSize: 12, cursor: "pointer", fontFamily: "'Geist', sans-serif" }}>
+          Cerrar ✕
+        </button>
+      </div>
+      <div style={{ overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <thead>
+            <tr>
+              <th style={hmxTh}>ID Ruta</th>
+              <th style={hmxTh}>Chofer</th>
+              <th style={hmxTh}>Helper detectado</th>
+              <th style={hmxTh}>Clasificación</th>
+              <th style={hmxThR}>Pkgs ch.</th>
+              <th style={hmxThR}>Pkgs h.</th>
+              <th style={hmxTh}>Acción sugerida</th>
+            </tr>
+          </thead>
+          <tbody>
+            {detalle.datos.map((r, i) => (
+              <tr key={r.id_ruta + "_" + i} style={{ borderBottom: "1px solid #f4f5f7" }}>
+                <td style={{ ...hmxTd, fontFamily: "monospace", fontSize: 11 }}>{r.id_ruta}</td>
+                <td style={{ ...hmxTd, fontSize: 11 }}>{r.chofer || "—"}</td>
+                <td style={{ ...hmxTd, fontSize: 11 }}>{r.ayudante_nombre || "—"}</td>
+                <td style={hmxTd}><HelpersBadge clasificacion={r.clasificacion} /></td>
+                <td style={hmxTdR}>{r.pkgs_chofer}</td>
+                <td style={hmxTdR}>{r.pkgs_otro}</td>
+                <td style={{ ...hmxTd, fontSize: 11, color: "#64748b" }}>
+                  {r.clasificacion === "FANTASMA" && (r.autorizado ? "Validar con supervisor si el helper realmente operó" : "Bloquear flag en este SC")}
+                  {r.clasificacion === "CORRECTO" && "OK · sin acción"}
+                  {r.clasificacion === "RARO" && "Investigar: ¿chofer inhabilitado?"}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ─── Badge de clasificación ─────────────────────────────────────────────
+function HelpersBadge({ clasificacion }) {
+  const cfg = {
+    CORRECTO:   { bg: "#dcfce7", color: "#166534", label: "Correcto" },
+    FANTASMA:   { bg: "#fee2e2", color: "#991b1b", label: "Fantasma" },
+    RARO:       { bg: "#ffedd5", color: "#9a3412", label: "Raro" },
+    NO_MARCADO: { bg: "#dbeafe", color: "#1e40af", label: "No marcado" },
+    NORMAL:     { bg: "#f3f4f6", color: "#6b7280", label: "Normal" },
+  }[clasificacion] || { bg: "#f3f4f6", color: "#6b7280", label: clasificacion };
+  return (
+    <span style={{ fontSize: 10, fontWeight: 700, padding: "3px 8px", borderRadius: 4, background: cfg.bg, color: cfg.color, whiteSpace: "nowrap" }}>
+      {cfg.label}
+    </span>
+  );
+}
+
+// ─── Estilos de tabla compartidos del módulo helpers ───────────────────
+const hmxTh  = { textAlign: "left", fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5, padding: "10px 12px", borderBottom: "1px solid #e4e7ec", background: "#f9fafb" };
+const hmxThR = { ...hmxTh, textAlign: "right" };
+const hmxTd  = { fontSize: 12, color: "#0f172a", padding: "10px 12px" };
+const hmxTdR = { ...hmxTd, textAlign: "right", fontVariantNumeric: "tabular-nums" };
+
+
 export default function App() {
   const [usuario, setUsuario] = useState(() => {
     try {
@@ -22604,6 +24141,7 @@ export default function App() {
         </div>
         {tab === "brain" && <BrainCentral setTab={setTab} usuario={usuario} />}
         {tab === "pool_meli_mx" && <IndicadoresOperacionalesMX usuario={usuario} />}
+        {tab === "helpers" && <ModuloHelpersMX usuario={usuario} />}
         {tab === "certificaciones" && <ModuloCertificacionesMadre />}
         {tab === "configuracion" && (
           <div className="pg" style={{ maxWidth: 700 }}>
