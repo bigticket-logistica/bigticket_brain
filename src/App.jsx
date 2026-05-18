@@ -17510,71 +17510,72 @@ function IndicadoresOperacionalesMX({ usuario }) {
     </div>
   );
 }
-
 // ════════════════════════════════════════════════════════════════════════════
 // CONTROL HELPER · Subpestaña dentro de IndicadoresOperacionalesMX
+// Estructura visual: HTML Control_Helpers_Mexico_8.html
+// Colores + fuente: Brain (Geist · #1a3a6b · #F47B20 · #f0f2f5)
+// Datos: vw_control_helper_diario (Supabase)
 // ════════════════════════════════════════════════════════════════════════════
 
-// ============================================================================
-// PoolMeliControlHelper · Subpestaña "Control Helper"
-// Para insertar dentro de IndicadoresOperacionalesMX
-// Estilo: Brain (Geist, #1a3a6b navy, #F47B20 naranja)
-// Lógica: HTML Control_Helpers_Mexico_8.html
-// ============================================================================
+// Paleta Brain
+const CH_NAVY = "#1a3a6b";
+const CH_ORANGE = "#F47B20";
+const CH_BG = "#f0f2f5";
+const CH_CARD = "#fff";
+const CH_BORDER = "#e4e7ec";
+const CH_TEXT = "#1a1a1a";
+const CH_MUTED = "#64748b";
+const CH_LIGHT = "#94a3b8";
+
+// Tonos de gravedad (manteniendo lógica HTML pero con colores más coherentes Brain)
+const CH_RED = "#dc2626";
+const CH_RED_SOFT = "#fca5a5";
+const CH_YELLOW = "#fef3c7";
+const CH_YELLOW_TEXT = "#92400e";
+const CH_GREEN = "#15803d";
+const CH_GRAY = "#9ca3af";
 
 function PoolMeliControlHelper() {
   const [fecha, setFecha] = useState(() => {
-    // Fecha MX = UTC - 6
     const now = new Date();
     const mx = new Date(now.getTime() - 6 * 60 * 60 * 1000);
     return mx.toISOString().split('T')[0];
   });
-  const [universo, setUniverso] = useState('U0');
+  const [universo, setUniverso] = useState(0);
+  const [periodo, setPeriodo] = useState(14);
   const [datos, setDatos] = useState([]);
-  const [serie14, setSerie14] = useState([]);
+  const [serie, setSerie] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [drillDown, setDrillDown] = useState(null);
-  const [showDD, setShowDD] = useState(false);
+  const [ddOpen, setDdOpen] = useState(false);
 
-  // ── Cargar datos del día seleccionado + serie 14 días ────────────────────
   useEffect(() => {
     let alive = true;
     (async () => {
-      setLoading(true);
-      setError(null);
+      setLoading(true); setError(null);
       try {
-        // Datos del día seleccionado
         const { data: r1, error: e1 } = await sb
-          .from('vw_control_helper_diario')
-          .select('*')
-          .eq('fecha', fecha)
-          .order('sc');
+          .from('vw_control_helper_diario').select('*').eq('fecha', fecha).order('sc');
         if (e1) throw e1;
-
-        // Serie de 14 días para sparklines
         const desde = new Date(fecha);
-        desde.setDate(desde.getDate() - 14);
-        const desdeStr = desde.toISOString().split('T')[0];
+        desde.setDate(desde.getDate() - 30);
         const { data: r2, error: e2 } = await sb
-          .from('vw_control_helper_diario')
-          .select('fecha,universo')
-          .gte('fecha', desdeStr)
-          .lte('fecha', fecha);
+          .from('vw_control_helper_diario').select('fecha,universo')
+          .gte('fecha', desde.toISOString().split('T')[0]).lte('fecha', fecha);
         if (e2) throw e2;
-
         if (alive) {
           setDatos(r1 || []);
-          // Agregar por día/universo
           const porDia = {};
           (r2 || []).forEach(r => {
-            if (!porDia[r.fecha]) porDia[r.fecha] = { U1: 0, U2: 0, U3: 0, OK: 0 };
+            if (!porDia[r.fecha]) porDia[r.fecha] = { U1: 0, U2: 0, U3: 0, OK: 0, total: 0 };
+            porDia[r.fecha].total++;
             if (r.universo) porDia[r.fecha][r.universo] = (porDia[r.fecha][r.universo] || 0) + 1;
           });
-          setSerie14(Object.entries(porDia).map(([f, c]) => ({ fecha: f, ...c })).sort((a, b) => a.fecha.localeCompare(b.fecha)));
+          setSerie(Object.entries(porDia).map(([f, c]) => ({ fecha: f, ...c })).sort((a, b) => a.fecha.localeCompare(b.fecha)));
         }
       } catch (e) {
-        if (alive) setError(e.message || 'Error cargando datos');
+        if (alive) setError(e.message || 'Error');
       } finally {
         if (alive) setLoading(false);
       }
@@ -17582,171 +17583,148 @@ function PoolMeliControlHelper() {
     return () => { alive = false; };
   }, [fecha]);
 
-  // ── Agregados U0 ──────────────────────────────────────────────────────────
   const conteos = useMemo(() => {
     const c = { total: datos.length, U1: 0, U2: 0, U3: 0, OK: 0 };
-    datos.forEach(r => {
-      if (r.universo && c[r.universo] !== undefined) c[r.universo]++;
-    });
+    datos.forEach(r => { if (r.universo && c[r.universo] !== undefined) c[r.universo]++; });
     return c;
   }, [datos]);
 
-  const financiero = useMemo(() => {
-    return {
-      costo_bt: datos.reduce((s, r) => s + (r.costo_bt_cuestionable || 0), 0),
-      recuperable: datos.reduce((s, r) => s + (r.monto_recuperable_meli || 0), 0),
-      fantasmas: datos.filter(r => r.clasificacion === 'FANTASMA').length,
-      no_certificados: datos.filter(r => r.helper_cert_estado === 'NO_CERTIFICADO').length,
-    };
+  const getSerieVals = (uni) => serie.slice(-periodo).map(d => d[uni] || 0);
+
+  const matrizU1 = useMemo(() => {
+    const vehiculos = ['Small Van MLP', 'Small Van MLP SDD', 'Large Van MLP', 'Large Van MLP SDD'];
+    const u1 = datos.filter(r => r.universo === 'U1');
+    const scs = [...new Set(u1.map(r => r.sc))].sort();
+    const mat = {};
+    scs.forEach(sc => { mat[sc] = {}; vehiculos.forEach(v => mat[sc][v] = []); });
+    u1.forEach(r => { if (mat[r.sc] && mat[r.sc][r.vehiculo]) mat[r.sc][r.vehiculo].push(r); });
+    return { scs, vehiculos, mat };
   }, [datos]);
 
-  // ── Sparkline mini SVG ────────────────────────────────────────────────────
-  const Sparkline = ({ data, color = '#1a3a6b', height = 24, width = 70 }) => {
-    if (!data || data.length < 2) return <svg width={width} height={height}></svg>;
-    const max = Math.max(...data, 1);
-    const points = data.map((v, i) => 
-      `${(i / (data.length - 1)) * width},${height - (v / max) * height}`
-    ).join(' ');
-    return (
-      <svg width={width} height={height} style={{ overflow: 'visible' }}>
-        <polyline points={points} fill="none" stroke={color} strokeWidth="1.5" />
-      </svg>
-    );
-  };
+  const matrizU2 = useMemo(() => {
+    const u2 = datos.filter(r => r.helper_cert_estado === 'NO_CERTIFICADO');
+    const scs = [...new Set(u2.map(r => r.sc))].sort();
+    const mat = {};
+    scs.forEach(sc => mat[sc] = []);
+    u2.forEach(r => { if (mat[r.sc]) mat[r.sc].push(r); });
+    return { scs, mat };
+  }, [datos]);
 
-  // ── Tabs U0/U1/U2/U3 ──────────────────────────────────────────────────────
-  const universos = [
-    { id: 'U0', label: 'Resumen ejecutivo', icon: 'ti-layout-dashboard' },
-    { id: 'U1', label: 'No autorizadas', icon: 'ti-alert-octagon', n: conteos.U1, color: '#DC2626' },
-    { id: 'U2', label: 'Certificación', icon: 'ti-id-badge-2', n: conteos.U2, color: '#F47B20' },
-    { id: 'U3', label: 'Proceso', icon: 'ti-settings', n: conteos.U3, color: '#0EA5E9' },
+  const matrizU3 = useMemo(() => {
+    const u3 = datos.filter(r => r.universo === 'U3');
+    const scs = [...new Set(u3.map(r => r.sc))].sort();
+    const mat = {};
+    scs.forEach(sc => mat[sc] = { fantasma: [], baja: [], sup: [], total: 0 });
+    u3.forEach(r => {
+      if (!mat[r.sc]) return;
+      if (r.clasificacion === 'FANTASMA') mat[r.sc].fantasma.push(r);
+      else if (r.hay_suplantacion) mat[r.sc].sup.push(r);
+      else if (r.pct_participacion_helper !== null && r.pct_participacion_helper < 75) mat[r.sc].baja.push(r);
+      mat[r.sc].total++;
+    });
+    return { scs, mat };
+  }, [datos]);
+
+  const UCFG = [
+    { badge: "U0", name: "Resumen ejecutivo", kv: conteos.total, ks: "rutas", icon: "ti-layout-dashboard" },
+    { badge: "U1", name: "No autorizadas", kv: conteos.U1, ks: "rutas", icon: "ti-ban" },
+    { badge: "U2", name: "Certificación", kv: conteos.U2, ks: "helpers", icon: "ti-id-badge" },
+    { badge: "U3", name: "Proceso", kv: conteos.U3, ks: "rutas", icon: "ti-route" },
   ];
 
   if (loading) {
-    return (
-      <div style={{ padding: 24, textAlign: 'center', color: '#64748b', fontSize: 13 }}>
-        Cargando datos del {fecha}…
-      </div>
-    );
+    return <div style={{ padding: 40, textAlign: 'center', color: CH_MUTED, fontSize: 13, fontFamily: "'Geist', sans-serif" }}>Cargando datos del {fecha}…</div>;
   }
-
   if (error) {
     return (
-      <div style={{ padding: 24 }}>
-        <div style={{
-          background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 10, padding: 16
-        }}>
-          <div style={{ fontSize: 13, fontWeight: 600, color: '#991b1b', marginBottom: 6 }}>
-            No se pudo cargar Control Helper
-          </div>
+      <div style={{ padding: 24, fontFamily: "'Geist', sans-serif" }}>
+        <div style={{ background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 12, padding: 16 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: '#991b1b', marginBottom: 6 }}>No se pudo cargar Control Helper</div>
           <div style={{ fontSize: 12, color: '#7f1d1d', lineHeight: 1.6 }}>
-            {error}
-            <br /><br />
-            <strong>Probable causa:</strong> la vista <code>vw_control_helper_diario</code> aún no existe. Ver script 01_vista_control_helper.sql
+            {error}<br /><br />
+            <strong>Causa probable:</strong> la vista <code>vw_control_helper_diario</code> aún no existe.
           </div>
         </div>
       </div>
     );
   }
 
+  const u = UCFG[universo];
+  const curSerieKey = universo === 0 ? 'total' : ['U1', 'U2', 'U3'][universo - 1];
+
   return (
-    <div style={{ padding: 0, fontFamily: "'Geist', sans-serif" }}>
-      
-      {/* ───── Sub-header con date picker ───── */}
-      <div style={{
-        background: '#fff', borderBottom: '1px solid #e4e7ec',
-        padding: '10px 24px', display: 'flex', alignItems: 'center', gap: 12,
-        flexWrap: 'wrap',
-      }}>
-        <div style={{ fontSize: 13, fontWeight: 700, color: '#1a3a6b' }}>
-          Control Helper
-        </div>
-        <div style={{ width: 1, height: 16, background: '#e4e7ec' }} />
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span style={{ fontSize: 11, fontWeight: 600, color: '#64748b' }}>Fecha:</span>
-          <input
-            type="date"
-            value={fecha}
-            onChange={e => setFecha(e.target.value)}
-            style={{
-              padding: '5px 10px', fontSize: 12, fontWeight: 600, borderRadius: 6,
-              border: '1px solid #cbd5e1', background: '#fff', color: '#1a3a6b',
-              fontFamily: "'Geist', sans-serif", outline: 'none', cursor: 'pointer',
-            }}
-          />
-          <button
-            onClick={() => {
-              const ayer = new Date(); ayer.setDate(ayer.getDate() - 1);
-              setFecha(ayer.toISOString().split('T')[0]);
-            }}
-            style={{
-              padding: '5px 10px', fontSize: 11, fontWeight: 600, borderRadius: 6,
-              border: '1px solid #e4e7ec', background: '#f8fafc', color: '#475569',
-              cursor: 'pointer', fontFamily: "'Geist', sans-serif",
-            }}>
-            D-1
-          </button>
-        </div>
+    <div style={{ fontFamily: "'Geist', sans-serif", background: CH_BG, color: CH_TEXT }}>
 
-        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span style={{
-            fontSize: 10, fontWeight: 700, padding: '3px 9px', borderRadius: 4,
-            background: '#1a1a2e', color: '#fff',
-          }}>{conteos.total} rutas</span>
-          <button
-            onClick={() => exportarCSV(datos)}
-            style={{
-              padding: '5px 10px', fontSize: 11, fontWeight: 600, borderRadius: 6,
-              border: '1px solid #e4e7ec', background: '#fff', color: '#475569',
-              cursor: 'pointer', fontFamily: "'Geist', sans-serif",
-              display: 'flex', alignItems: 'center', gap: 4,
-            }}>
-            <i className="ti ti-download" style={{ fontSize: 12 }} /> Export CSV
-          </button>
-        </div>
-      </div>
-
-      {/* ───── Tabs U0/U1/U2/U3 ───── */}
-      <div style={{
-        background: '#fff', borderBottom: '1px solid #e4e7ec',
-        padding: '0 24px', display: 'flex', gap: 2,
-      }}>
-        {universos.map(u => (
-          <button
-            key={u.id}
-            onClick={() => setUniverso(u.id)}
-            style={{
-              background: 'transparent', border: 'none', padding: '10px 14px',
-              fontSize: 12, fontWeight: 600,
-              color: universo === u.id ? '#1a3a6b' : '#64748b',
-              borderBottom: universo === u.id ? '2px solid #F47B20' : '2px solid transparent',
-              cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6,
-              fontFamily: "'Geist', sans-serif",
-            }}>
-            <i className={`ti ${u.icon}`} style={{ fontSize: 14 }} />
-            {u.label}
-            {u.n > 0 && (
-              <span style={{
-                background: u.color, color: '#fff', fontSize: 10, fontWeight: 700,
-                padding: '1px 6px', borderRadius: 9, marginLeft: 2,
-              }}>{u.n}</span>
-            )}
-          </button>
+      {/* TAB-BAR (U0/U1/U2/U3) */}
+      <div style={{ background: CH_CARD, borderBottom: `1px solid ${CH_BORDER}`, padding: '0 24px', display: 'flex', gap: 2 }}>
+        {UCFG.map((cfg, idx) => (
+          <div key={idx} onClick={() => setUniverso(idx)} style={{
+            padding: '10px 16px', fontSize: 12, fontWeight: 600,
+            color: universo === idx ? CH_NAVY : CH_MUTED,
+            borderBottom: universo === idx ? `2px solid ${CH_ORANGE}` : '2px solid transparent',
+            cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6,
+            whiteSpace: 'nowrap', transition: 'all .12s',
+          }}>
+            <i className={`ti ${cfg.icon}`} style={{ fontSize: 13 }} />
+            {cfg.badge} · {cfg.name}
+          </div>
         ))}
       </div>
 
-      {/* ───── Contenido ───── */}
-      <div style={{ padding: 16, background: '#f0f2f5', minHeight: 400 }}>
-        {universo === 'U0' && <PanelU0 datos={datos} conteos={conteos} financiero={financiero} serie14={serie14} Sparkline={Sparkline} />}
-        {universo === 'U1' && <PanelU1 datos={datos.filter(r => r.universo === 'U1')} setDrillDown={setDrillDown} />}
-        {universo === 'U2' && <PanelU2 datos={datos.filter(r => r.helper_cert_estado === 'NO_CERTIFICADO')} setDrillDown={setDrillDown} />}
-        {universo === 'U3' && <PanelU3 datos={datos.filter(r => r.universo === 'U3')} setDrillDown={setDrillDown} />}
+      {/* SBAR · dinámico según universo */}
+      <div style={{ background: CH_CARD, borderBottom: `1px solid ${CH_BORDER}`, padding: '0 24px', display: 'flex', alignItems: 'center', gap: 10, height: 48 }}>
+        <span style={{ fontSize: 10, fontWeight: 700, padding: '3px 9px', borderRadius: 5, color: '#fff', background: universo === 0 ? CH_MUTED : CH_NAVY, flexShrink: 0, letterSpacing: 0.3 }}>
+          {u.badge}
+        </span>
+        <span style={{ fontSize: 13, fontWeight: 600, color: CH_TEXT, flexShrink: 0 }}>{u.name}</span>
+        <div style={{ width: 1, height: 18, background: CH_BORDER, flexShrink: 0 }} />
+        <span style={{ fontSize: 16, fontWeight: 800, color: CH_TEXT, flexShrink: 0, letterSpacing: -0.3 }}>{u.kv}</span>
+        <span style={{ fontSize: 11, color: CH_LIGHT, flexShrink: 0 }}>{u.ks} · {fecha}</span>
+        <div style={{ width: 1, height: 18, background: CH_BORDER, flexShrink: 0 }} />
+        <div style={{ flex: 1, minWidth: 80, maxWidth: 140 }}><Spark vals={getSerieVals(curSerieKey)} height={28} /></div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginLeft: 'auto' }}>
+          <input type="date" value={fecha} onChange={e => setFecha(e.target.value)} style={{
+            fontSize: 11, fontWeight: 700, padding: '4px 10px', borderRadius: 6,
+            border: `1px solid ${CH_BORDER}`, background: CH_NAVY, color: '#fff',
+            fontFamily: "'Geist', sans-serif", cursor: 'pointer', outline: 'none',
+          }} />
+          <div onClick={() => setDdOpen(!ddOpen)} style={{
+            display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: CH_MUTED,
+            border: `1px solid ${CH_BORDER}`, borderRadius: 6, padding: '5px 11px',
+            cursor: 'pointer', background: CH_CARD, whiteSpace: 'nowrap',
+          }}>
+            <i className="ti ti-calendar" style={{ fontSize: 12 }} />
+            <span>Últ. {periodo} días</span>
+            <i className="ti ti-chevron-down" style={{ fontSize: 11 }} />
+          </div>
+        </div>
       </div>
 
-      {/* ───── Drill-down modal ───── */}
-      {drillDown && (
-        <DrillDownModal data={drillDown} onClose={() => setDrillDown(null)} />
+      {/* DROPDOWN PERIODO */}
+      {ddOpen && (
+        <div style={{ background: CH_CARD, borderBottom: `1px solid ${CH_BORDER}`, padding: '12px 24px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontSize: 10, fontWeight: 700, color: CH_LIGHT, textTransform: 'uppercase', letterSpacing: 0.5 }}>Período</span>
+            {[7, 14, 30].map(n => (
+              <div key={n} onClick={() => { setPeriodo(n); setDdOpen(false); }} style={{
+                fontSize: 11, fontWeight: 600, padding: '5px 12px', borderRadius: 6,
+                border: `1px solid ${periodo === n ? CH_NAVY : CH_BORDER}`,
+                cursor: 'pointer',
+                background: periodo === n ? CH_NAVY : '#f8fafc',
+                color: periodo === n ? '#fff' : CH_MUTED,
+              }}>{n} días</div>
+            ))}
+          </div>
+        </div>
       )}
+
+      {/* PANELS */}
+      <div style={{ padding: '16px 24px' }}>
+        {universo === 0 && <PanelU0 conteos={conteos} setUniverso={setUniverso} getSerieVals={getSerieVals} />}
+        {universo === 1 && <PanelU1 matriz={matrizU1} conteos={conteos} datos={datos} drillDown={drillDown} setDrillDown={setDrillDown} fecha={fecha} getSerieVals={getSerieVals} />}
+        {universo === 2 && <PanelU2 matriz={matrizU2} conteos={conteos} drillDown={drillDown} setDrillDown={setDrillDown} fecha={fecha} getSerieVals={getSerieVals} />}
+        {universo === 3 && <PanelU3 matriz={matrizU3} conteos={conteos} drillDown={drillDown} setDrillDown={setDrillDown} fecha={fecha} getSerieVals={getSerieVals} />}
+      </div>
     </div>
   );
 }
@@ -17754,217 +17732,143 @@ function PoolMeliControlHelper() {
 // ════════════════════════════════════════════════════════════════════════════
 // PANEL U0 · RESUMEN EJECUTIVO
 // ════════════════════════════════════════════════════════════════════════════
-function PanelU0({ datos, conteos, financiero, serie14, Sparkline }) {
-  const pct = (n) => conteos.total > 0 ? Math.round(100 * n / conteos.total) : 0;
-  const u1Serie = serie14.map(d => d.U1);
-  const u2Serie = serie14.map(d => d.U2);
-  const u3Serie = serie14.map(d => d.U3);
-  const okSerie = serie14.map(d => d.OK);
-
+function PanelU0({ conteos, setUniverso, getSerieVals }) {
   return (
     <div>
-      {/* KSTRIP · 4 cards */}
-      <div style={{
-        display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 14,
-      }}>
-        <KCard
-          label="U1 · No autorizadas"
-          value={conteos.U1}
-          sub={`${pct(conteos.U1)}% del total`}
-          color="#DC2626"
-          serie={u1Serie}
-          Sparkline={Sparkline}
-        />
-        <KCard
-          label="U2 · No certificadas"
-          value={conteos.U2}
-          sub={`${pct(conteos.U2)}% del total`}
-          color="#F47B20"
-          serie={u2Serie}
-          Sparkline={Sparkline}
-        />
-        <KCard
-          label="U3 · Proceso"
-          value={conteos.U3}
-          sub={`${pct(conteos.U3)}% del total`}
-          color="#0EA5E9"
-          serie={u3Serie}
-          Sparkline={Sparkline}
-        />
-        <KCard
-          label="OK Válidas"
-          value={conteos.OK}
-          sub={`${pct(conteos.OK)}% del total`}
-          color="#10B981"
-          serie={okSerie}
-          Sparkline={Sparkline}
-        />
+      {/* Flowbar segmentado */}
+      <div style={{ height: 36, display: 'flex', borderRadius: 10, overflow: 'hidden', marginBottom: 16, fontSize: 11, fontWeight: 700, color: '#fff', border: `0.5px solid ${CH_BORDER}` }}>
+        <div style={{ flex: conteos.total || 1, background: CH_GRAY, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{conteos.total} rutas</div>
+        {conteos.U1 > 0 && <div style={{ flex: conteos.U1, background: CH_RED, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>U1 · {conteos.U1}</div>}
+        {conteos.U2 > 0 && <div style={{ flex: conteos.U2, background: CH_ORANGE, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>U2 · {conteos.U2}</div>}
+        {conteos.U3 > 0 && <div style={{ flex: conteos.U3, background: '#eab308', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>U3 · {conteos.U3}</div>}
+        {conteos.OK > 0 && <div style={{ flex: conteos.OK, background: CH_GREEN, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>OK · {conteos.OK}</div>}
       </div>
 
-      {/* Flowbar */}
-      <div style={{
-        background: '#fff', borderRadius: 12, border: '0.5px solid #e4e7ec',
-        padding: 16, marginBottom: 14,
-      }}>
-        <div style={{ fontSize: 11, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 10 }}>
-          Distribución de las {conteos.total} rutas
-        </div>
-        <Flowbar conteos={conteos} />
+      {/* Leyenda de gravedad */}
+      <div style={{ display: 'flex', gap: 18, marginBottom: 16, flexWrap: 'wrap', fontSize: 11 }}>
+        <LegItem color={CH_RED} label="Gravedad crítica" desc="— impacto financiero directo · acción inmediata" />
+        <LegItem color={CH_ORANGE} label="Gravedad media" desc="— riesgo operativo · gestionar esta semana" />
+        <LegItem color="#eab308" label="Gravedad baja" desc="— proceso corregible · seguimiento conductor" labelColor="#b45309" />
       </div>
 
-      {/* Impacto financiero */}
-      <div style={{
-        display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 10,
-      }}>
-        <div style={{
-          background: '#fff', borderRadius: 12, border: '0.5px solid #e4e7ec', padding: 14,
-        }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8 }}>
-            🚨 Costo BT cuestionable
-          </div>
-          <div style={{ fontSize: 24, fontWeight: 800, color: '#1a1a2e', letterSpacing: -0.5 }}>
-            ${financiero.costo_bt.toLocaleString('es-MX')} <span style={{ fontSize: 12, color: '#94a3b8', fontWeight: 600 }}>MXN</span>
-          </div>
-          <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 4 }}>
-            {financiero.fantasmas} rutas fantasma × $350
-          </div>
-        </div>
-        <div style={{
-          background: '#fff', borderRadius: 12, border: '0.5px solid #e4e7ec', padding: 14,
-        }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8 }}>
-            💰 Recuperable de MELI
-          </div>
-          <div style={{ fontSize: 24, fontWeight: 800, color: '#10B981', letterSpacing: -0.5 }}>
-            ${financiero.recuperable.toLocaleString('es-MX')} <span style={{ fontSize: 12, color: '#94a3b8', fontWeight: 600 }}>MXN</span>
-          </div>
-          <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 4 }}>
-            Helpers operando sin flag en SC autorizado
-          </div>
-        </div>
+      {/* 4 cards U0 */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 14 }}>
+        <U0Card label="U1 · No autorizadas" val={conteos.U1} sub={`${pct(conteos.U1, conteos.total)}% del total`} action="ver universo 1" onClick={() => setUniverso(1)} serie={getSerieVals('U1')} accent={CH_RED} />
+        <U0Card label="U2 · Certificación" val={conteos.U2} sub={`${pct(conteos.U2, conteos.total)}% del total`} action="ver universo 2" onClick={() => setUniverso(2)} serie={getSerieVals('U2')} accent={CH_ORANGE} />
+        <U0Card label="U3 · Proceso" val={conteos.U3} sub={`${pct(conteos.U3, conteos.total)}% del total`} action="ver universo 3" onClick={() => setUniverso(3)} serie={getSerieVals('U3')} accent="#eab308" />
+        <U0Card label="OK · Válidas" val={conteos.OK} sub={`${pct(conteos.OK, conteos.total)}% del total`} action="—" serie={getSerieVals('OK')} accent={CH_GREEN} />
+      </div>
+
+      {/* Math note */}
+      <div style={{ background: CH_CARD, borderRadius: 12, padding: '12px 16px', fontSize: 12, color: CH_MUTED, border: `0.5px solid ${CH_BORDER}` }}>
+        <strong style={{ color: CH_NAVY }}>
+          {conteos.U1} + {conteos.U2} + {conteos.U3} + {conteos.OK} = {conteos.U1 + conteos.U2 + conteos.U3 + conteos.OK}
+        </strong>{' '}
+        rutas clasificadas {conteos.U1 + conteos.U2 + conteos.U3 + conteos.OK === conteos.total ? '✓' : `de ${conteos.total} totales`} ·  Haz clic en cualquier card para ver el drill-down
       </div>
     </div>
   );
 }
 
-function KCard({ label, value, sub, color, serie, Sparkline }) {
+function U0Card({ label, val, sub, action, onClick, serie, accent }) {
   return (
-    <div style={{
-      background: '#fff', borderRadius: 12, border: '0.5px solid #e4e7ec',
-      padding: '14px 14px 12px', display: 'flex', flexDirection: 'column',
-    }}>
-      <div style={{ fontSize: 10.5, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 8 }}>
-        {label}
-      </div>
-      <div style={{
-        display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end',
-      }}>
-        <div>
-          <div style={{ fontSize: 24, fontWeight: 800, color: '#1a1a2e', letterSpacing: -0.5, lineHeight: 1 }}>
-            {value}
-          </div>
-          <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 5 }}>{sub}</div>
-        </div>
-        <Sparkline data={serie} color={color} />
+    <div onClick={onClick} style={{
+      background: CH_CARD, border: `0.5px solid ${CH_BORDER}`, borderRadius: 12, padding: 14,
+      cursor: onClick ? 'pointer' : 'default', display: 'flex', flexDirection: 'column',
+      transition: 'all .12s', minHeight: 130,
+    }}
+      onMouseEnter={e => onClick && (e.currentTarget.style.borderColor = CH_NAVY)}
+      onMouseLeave={e => onClick && (e.currentTarget.style.borderColor = CH_BORDER)}>
+      <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: CH_MUTED, marginBottom: 8 }}>{label}</div>
+      <div style={{ fontSize: 24, fontWeight: 800, letterSpacing: -0.5, color: CH_TEXT, lineHeight: 1 }}>{val}</div>
+      <div style={{ fontSize: 11, color: CH_LIGHT, marginTop: 5, marginBottom: 10 }}>{sub}</div>
+      <div style={{ height: 1, background: CH_BORDER, marginBottom: 10 }} />
+      <Spark vals={serie} height={28} color={accent} />
+      <div style={{ height: 1, background: CH_BORDER, margin: '10px 0' }} />
+      <div style={{ fontSize: 11, fontWeight: 500, color: CH_MUTED, marginTop: 'auto', display: 'flex', alignItems: 'center', gap: 4 }}>
+        <i className="ti ti-arrow-right" style={{ fontSize: 12 }} />{action}
       </div>
     </div>
   );
 }
 
-function Flowbar({ conteos }) {
-  if (conteos.total === 0) {
-    return <div style={{ fontSize: 12, color: '#94a3b8' }}>Sin rutas con helper involucrado.</div>;
-  }
-  const segs = [
-    { label: 'U1', n: conteos.U1, color: '#DC2626' },
-    { label: 'U2', n: conteos.U2, color: '#F47B20' },
-    { label: 'U3', n: conteos.U3, color: '#0EA5E9' },
-    { label: 'OK', n: conteos.OK, color: '#10B981' },
-  ];
+function LegItem({ color, label, desc, labelColor }) {
   return (
-    <div style={{
-      display: 'flex', height: 36, borderRadius: 8, overflow: 'hidden',
-      border: '0.5px solid #e4e7ec',
-    }}>
-      {segs.filter(s => s.n > 0).map(s => (
-        <div key={s.label} style={{
-          flex: s.n, background: s.color, color: '#fff',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          fontSize: 12, fontWeight: 700,
-        }}>
-          {s.label} · {s.n}
-        </div>
-      ))}
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: CH_MUTED }}>
+      <div style={{ width: 11, height: 11, borderRadius: 3, background: color, flexShrink: 0 }} />
+      <span><strong style={{ color: labelColor || color }}>{label}</strong> {desc}</span>
     </div>
   );
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// PANEL U1 · NO AUTORIZADAS · Mapa de calor SC × Vehículo
+// PANEL U1 · NO AUTORIZADAS (mapa SC × vehículo)
 // ════════════════════════════════════════════════════════════════════════════
-function PanelU1({ datos, setDrillDown }) {
-  // Heatmap SC × Vehículo
-  const vehiculos = ['Small Van MLP', 'Small Van MLP SDD', 'Large Van MLP', 'Large Van MLP SDD'];
-  const scs = Array.from(new Set(datos.map(r => r.sc))).sort();
-  
-  const matriz = {};
-  scs.forEach(sc => {
-    matriz[sc] = {};
-    vehiculos.forEach(v => matriz[sc][v] = []);
+function PanelU1({ matriz, conteos, datos, drillDown, setDrillDown, fecha, getSerieVals }) {
+  const scsFor = ['SCQ1', 'SCY1', 'SQR1', 'STL1', 'SHP1', 'STX1', 'SVH1'];
+  const scsForOperando = [...new Set(datos.filter(r => scsFor.includes(r.sc)).map(r => r.sc))];
+  const totalForaneo = datos.filter(r => scsFor.includes(r.sc) && r.helper_flag).length;
+  const scsSinRutaLimpia = matriz.scs.filter(sc => {
+    const todas = datos.filter(r => r.sc === sc && r.helper_flag);
+    const u1 = todas.filter(r => r.universo === 'U1');
+    return todas.length > 0 && todas.length === u1.length;
   });
-  datos.forEach(r => {
-    if (matriz[r.sc] && matriz[r.sc][r.vehiculo]) {
-      matriz[r.sc][r.vehiculo].push(r);
-    }
-  });
-
-  if (datos.length === 0) {
-    return <EmptyState mensaje="No hay rutas con helper en combinaciones no autorizadas" />;
-  }
 
   return (
     <div>
-      <SectionHeader 
-        title="U1 · No autorizadas"
-        subtitle="Rutas con helper declarado en SC + vehículo NO autorizado · acción: bloquear flag + negociar tarifa con MELI"
-        n={datos.length}
-        color="#DC2626"
-      />
-      <div style={{
-        background: '#fff', borderRadius: 12, border: '0.5px solid #e4e7ec', overflow: 'hidden',
-      }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 14 }}>
+        <KCard l="SVC fuera de tarifa" v={matriz.scs.length} s={`de ${scsForOperando.length || 7} SVC foráneos`} a="universo" sk={getSerieVals('U1')} accent={CH_RED} />
+        <KCard l="Rutas no autorizadas" v={conteos.U1} s={`de ${totalForaneo || conteos.total} rutas`} a="volumen" sk={getSerieVals('U1')} accent={CH_RED} />
+        <KCard l="% universo expuesto" v={`${pct(conteos.U1, totalForaneo)}%`} s="del total foráneo" a="magnitud" sk={getSerieVals('U1')} accent={CH_RED} />
+        <KCard l="SVC sin ruta limpia" v={scsSinRutaLimpia.length} s={scsSinRutaLimpia.slice(0, 4).join('·') || '—'} a="alerta" sk={getSerieVals('U1')} accent={CH_RED} />
+      </div>
+
+      <SLabel text="Mapa de calor SVC × Vehículo" badge="Datos reales" badgeColor="blue" fecha={fecha} />
+      <div style={{ background: CH_CARD, borderRadius: 12, border: `0.5px solid ${CH_BORDER}`, overflow: 'hidden' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead>
             <tr>
-              <th style={thStyle}>Service Center</th>
-              {vehiculos.map(v => <th key={v} style={thStyle}>{v}</th>)}
-              <th style={thStyle}>Total</th>
+              <ThHm align="left">SVC</ThHm>
+              {matriz.vehiculos.map(v => <ThHm key={v}>{v.replace('Van MLP SDD', 'Van SDD')}</ThHm>)}
+              <ThHm>Total</ThHm>
             </tr>
           </thead>
           <tbody>
-            {scs.map(sc => {
-              const totalSc = vehiculos.reduce((s, v) => s + matriz[sc][v].length, 0);
-              return (
-                <tr key={sc}>
-                  <td style={tdSc}>{sc}</td>
-                  {vehiculos.map(v => {
-                    const n = matriz[sc][v].length;
-                    return (
-                      <td key={v}
-                        style={{ ...tdCell, ...heatColor(n), cursor: n > 0 ? 'pointer' : 'default' }}
-                        onClick={() => n > 0 && setDrillDown({ title: `${sc} · ${v}`, rutas: matriz[sc][v] })}>
-                        {n > 0 ? n : '·'}
-                      </td>
-                    );
-                  })}
-                  <td style={{ ...tdCell, fontWeight: 700, background: '#f8fafc' }}>{totalSc}</td>
-                </tr>
-              );
-            })}
+            {matriz.scs.length === 0 ? (
+              <tr><td colSpan={6} style={{ padding: 24, textAlign: 'center', color: CH_LIGHT, fontSize: 12 }}>Sin rutas U1 para esta fecha</td></tr>
+            ) : <>
+              {matriz.scs.map(sc => {
+                const total = matriz.vehiculos.reduce((s, v) => s + matriz.mat[sc][v].length, 0);
+                return (
+                  <tr key={sc}>
+                    <TdSn>{sc}</TdSn>
+                    {matriz.vehiculos.map(v => {
+                      const rutas = matriz.mat[sc][v];
+                      const n = rutas.length;
+                      const sel = drillDown && drillDown.uid === 1 && drillDown.svc === sc && drillDown.vehiculo === v;
+                      return <TdHeat key={v} n={n} selected={sel}
+                        onClick={() => n > 0 && setDrillDown({ uid: 1, svc: sc, vehiculo: v, n, rutas })} />;
+                    })}
+                    <TdTc>{total}</TdTc>
+                  </tr>
+                );
+              })}
+              <tr style={{ background: '#f8fafc', borderTop: `1px solid ${CH_BORDER}` }}>
+                <TdSn total>Total</TdSn>
+                {matriz.vehiculos.map(v => {
+                  const t = matriz.scs.reduce((s, sc) => s + matriz.mat[sc][v].length, 0);
+                  return <TdTotal key={v}>{t}</TdTotal>;
+                })}
+                <TdTotal strong>{conteos.U1}</TdTotal>
+              </tr>
+            </>}
           </tbody>
         </table>
+        <HmLegend hint="Clic en celda → ver rutas" />
       </div>
-      <Legend />
+
+      {drillDown && drillDown.uid === 1 && <DrillDown1 dd={drillDown} fecha={fecha} onClose={() => setDrillDown(null)} />}
+      {!drillDown && matriz.scs.length > 0 && <Hint text="Haz clic en cualquier celda coloreada para ver las rutas" />}
     </div>
   );
 }
@@ -17972,288 +17876,454 @@ function PanelU1({ datos, setDrillDown }) {
 // ════════════════════════════════════════════════════════════════════════════
 // PANEL U2 · CERTIFICACIÓN
 // ════════════════════════════════════════════════════════════════════════════
-function PanelU2({ datos, setDrillDown }) {
-  if (datos.length === 0) {
-    return <EmptyState mensaje="Todos los helpers que operaron están certificados en padrón MELI" />;
-  }
-
-  // Agrupar por SC
-  const porSc = {};
-  datos.forEach(r => {
-    if (!porSc[r.sc]) porSc[r.sc] = [];
-    porSc[r.sc].push(r);
-  });
+function PanelU2({ matriz, conteos, drillDown, setDrillDown, fecha, getSerieVals }) {
+  const scCritico = matriz.scs.length > 0 ? [...matriz.scs].sort((a, b) => matriz.mat[b].length - matriz.mat[a].length)[0] : '—';
 
   return (
     <div>
-      <SectionHeader 
-        title="U2 · Certificación"
-        subtitle="Helpers que operaron pero NO están en el padrón oficial de MELI · acción: certificar o investigar"
-        n={datos.length}
-        color="#F47B20"
-      />
-      <div style={{
-        background: '#fff', borderRadius: 12, border: '0.5px solid #e4e7ec', overflow: 'hidden',
-      }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 14 }}>
+        <KCard l="SVC autorizados" v={6} s="SMX1·6·7·8·9·10" a="universo" sk={getSerieVals('U2')} accent={CH_ORANGE} />
+        <KCard l="Helpers con problema" v={conteos.U2} s="no certificados en padrón" a="volumen" sk={getSerieVals('U2')} accent={CH_ORANGE} />
+        <KCard l="% sin certif." v={`${pct(conteos.U2, conteos.total)}%`} s="del total con helper" a="magnitud" sk={getSerieVals('U2')} accent={CH_ORANGE} />
+        <KCard l="SVC más crítico" v={scCritico} s={scCritico !== '—' ? `${matriz.mat[scCritico]?.length} helpers` : '—'} a="alerta" sk={getSerieVals('U2')} accent={CH_ORANGE} />
+      </div>
+
+      <SLabel text="Mapa de calor · Certificación" badge="RH Check pendiente · base BT" badgeColor="yellow" fecha={fecha} />
+      <div style={{ background: CH_CARD, borderRadius: 12, border: `0.5px solid ${CH_BORDER}`, overflow: 'hidden' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead>
             <tr>
-              <th style={thStyle}>SC</th>
-              <th style={thStyle}>Ruta</th>
-              <th style={thStyle}>Chofer</th>
-              <th style={thStyle}>Helper detectado</th>
-              <th style={thStyle}>Paquetes</th>
-              <th style={thStyle}>% participación</th>
-              <th style={thStyle}>Vehículo</th>
+              <ThHm align="left">SVC</ThHm>
+              <ThHm>Sin RH Check</ThHm>
+              <ThHm>Sin certif. MELI</ThHm>
+              <ThHm>Ambos pendientes</ThHm>
+              <ThHm>Helpers con problema</ThHm>
             </tr>
           </thead>
           <tbody>
-            {datos.map((r, i) => (
-              <tr key={i} style={{ borderBottom: '0.5px solid #f4f5f7' }}>
-                <td style={tdSc}>{r.sc}</td>
-                <td style={tdData}>
-                  <span style={{ fontFamily: 'monospace', fontSize: 11 }}>{r.id_ruta}</span>
-                </td>
-                <td style={tdData}>{r.chofer_nombre}</td>
-                <td style={{ ...tdData, fontWeight: 600 }}>{r.helpers_nombres || '—'}</td>
-                <td style={tdData}>{r.pkgs_helper} / {r.pkgs_total}</td>
-                <td style={tdData}>{r.pct_participacion_helper}%</td>
-                <td style={tdData}>
-                  <span style={{ fontSize: 11, color: '#64748b' }}>{r.vehiculo}</span>
-                </td>
+            {matriz.scs.length === 0 ? (
+              <tr><td colSpan={5} style={{ padding: 24, textAlign: 'center', color: CH_LIGHT, fontSize: 12 }}>Sin helpers no certificados para esta fecha</td></tr>
+            ) : <>
+              {matriz.scs.map(sc => {
+                const n = matriz.mat[sc].length;
+                const sel = drillDown && drillDown.uid === 2 && drillDown.svc === sc;
+                return (
+                  <tr key={sc}>
+                    <TdSn>{sc}</TdSn>
+                    <TdNa>—</TdNa>
+                    <TdHeat n={n} selected={sel} onClick={() => n > 0 && setDrillDown({ uid: 2, svc: sc, n, rutas: matriz.mat[sc], label: 'Sin certif. MELI' })} />
+                    <TdNa>—</TdNa>
+                    <TdTc>{n}</TdTc>
+                  </tr>
+                );
+              })}
+              <tr style={{ background: '#f8fafc', borderTop: `1px solid ${CH_BORDER}` }}>
+                <TdSn total>Total</TdSn>
+                <TdTotal>—</TdTotal>
+                <TdTotal>{conteos.U2}</TdTotal>
+                <TdTotal>—</TdTotal>
+                <TdTotal strong>{conteos.U2}</TdTotal>
               </tr>
-            ))}
+            </>}
           </tbody>
         </table>
+        <HmLegend note="Sin RH Check y Ambos pendientes requieren integración con base BT" hint="Clic en celda → ver helpers" />
       </div>
+
+      {drillDown && drillDown.uid === 2 && <DrillDown2 dd={drillDown} fecha={fecha} onClose={() => setDrillDown(null)} />}
+      {!drillDown && matriz.scs.length > 0 && <Hint text="Haz clic en cualquier celda coloreada para ver los helpers" />}
     </div>
   );
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// PANEL U3 · PROCESO (fantasma + suplantación + <75% participación)
+// PANEL U3 · PROCESO
 // ════════════════════════════════════════════════════════════════════════════
-function PanelU3({ datos, setDrillDown }) {
-  if (datos.length === 0) {
-    return <EmptyState mensaje="Sin alertas de proceso" />;
-  }
-
-  const fantasmas = datos.filter(r => r.clasificacion === 'FANTASMA');
-  const suplantaciones = datos.filter(r => r.hay_suplantacion);
-  const bajaPart = datos.filter(r => r.pct_participacion_helper !== null && r.pct_participacion_helper < 75 && r.pkgs_helper > 0);
+function PanelU3({ matriz, conteos, drillDown, setDrillDown, fecha, getSerieVals }) {
+  const totalF = matriz.scs.reduce((s, sc) => s + matriz.mat[sc].fantasma.length, 0);
+  const totalB = matriz.scs.reduce((s, sc) => s + matriz.mat[sc].baja.length, 0);
+  const totalS = matriz.scs.reduce((s, sc) => s + matriz.mat[sc].sup.length, 0);
+  const condCritica = totalF >= totalB && totalF >= totalS ? 'Fantasma' : totalB >= totalS ? '<75% partic.' : 'Suplantación';
+  const cantCritica = Math.max(totalF, totalB, totalS);
 
   return (
     <div>
-      <SectionHeader 
-        title="U3 · Proceso"
-        subtitle="Helpers fantasma, suplantaciones y participación insuficiente · acción: validar con supervisor"
-        n={datos.length}
-        color="#0EA5E9"
-      />
-
-      {fantasmas.length > 0 && (
-        <SubSection
-          title={`🚨 Helpers fantasma (${fantasmas.length})`}
-          subtitle="Flag activo pero solo el chofer entregó — BT pagó $350 sin contraparte"
-        >
-          <TablaRutas rutas={fantasmas} />
-        </SubSection>
-      )}
-
-      {suplantaciones.length > 0 && (
-        <SubSection
-          title={`⚠️ Suplantaciones detectadas (${suplantaciones.length})`}
-          subtitle="MELI detectó que alguien entregó con cuenta de otro"
-        >
-          <TablaRutas rutas={suplantaciones} mostrarSuplantacion />
-        </SubSection>
-      )}
-
-      {bajaPart.length > 0 && (
-        <SubSection
-          title={`📉 Baja participación del helper (${bajaPart.length})`}
-          subtitle="Helper trabajó pero entregó menos del 75% de los paquetes"
-        >
-          <TablaRutas rutas={bajaPart} mostrarPct />
-        </SubSection>
-      )}
-    </div>
-  );
-}
-
-// ════════════════════════════════════════════════════════════════════════════
-// COMPONENTES AUXILIARES
-// ════════════════════════════════════════════════════════════════════════════
-
-function SectionHeader({ title, subtitle, n, color }) {
-  return (
-    <div style={{ marginBottom: 12 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
-        <div style={{ fontSize: 15, fontWeight: 700, color: '#1a3a6b' }}>{title}</div>
-        <span style={{
-          background: color, color: '#fff', fontSize: 11, fontWeight: 700,
-          padding: '2px 9px', borderRadius: 10,
-        }}>{n} rutas</span>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 14 }}>
+        <KCard l="SVC con rechazadas" v={matriz.scs.length} s="operando hoy" a="universo" sk={getSerieVals('U3')} accent="#eab308" />
+        <KCard l="Rutas rechazadas" v={conteos.U3} s={`de ${conteos.total} rutas`} a="volumen" sk={getSerieVals('U3')} accent="#eab308" />
+        <KCard l="% rechazadas" v={`${pct(conteos.U3, conteos.total)}%`} s="del total" a="magnitud" sk={getSerieVals('U3')} accent="#eab308" />
+        <KCard l="Condición crítica" v={condCritica} s={`${cantCritica} rutas`} a="alerta" sk={getSerieVals('U3')} accent="#eab308" />
       </div>
-      <div style={{ fontSize: 11, color: '#64748b' }}>{subtitle}</div>
+
+      <SLabel text="Mapa de calor · Proceso" badge="QR/Móvil pendiente scrapeo" badgeColor="yellow" fecha={fecha} />
+      <div style={{ background: CH_CARD, borderRadius: 12, border: `0.5px solid ${CH_BORDER}`, overflow: 'hidden' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead>
+            <tr>
+              <ThHm align="left">SVC</ThHm>
+              <ThHm>Sin QR</ThHm>
+              <ThHm>Móvil inactivo</ThHm>
+              <ThHm>&lt;75% partic.</ThHm>
+              <ThHm>Fantasma</ThHm>
+              <ThHm>Suplantación</ThHm>
+              <ThHm>Total rechazadas</ThHm>
+            </tr>
+          </thead>
+          <tbody>
+            {matriz.scs.length === 0 ? (
+              <tr><td colSpan={7} style={{ padding: 24, textAlign: 'center', color: CH_LIGHT, fontSize: 12 }}>Sin rutas U3 para esta fecha</td></tr>
+            ) : <>
+              {matriz.scs.map(sc => {
+                const m = matriz.mat[sc];
+                return (
+                  <tr key={sc}>
+                    <TdSn>{sc}</TdSn>
+                    <TdNa>—</TdNa>
+                    <TdNa>—</TdNa>
+                    <TdHeat n={m.baja.length} selected={drillDown?.svc === sc && drillDown?.col === 'p75'}
+                      onClick={() => m.baja.length > 0 && setDrillDown({ uid: 3, svc: sc, col: 'p75', label: '<75% partic.', n: m.baja.length, rutas: m.baja })} />
+                    <TdHeat n={m.fantasma.length} selected={drillDown?.svc === sc && drillDown?.col === 'fant'}
+                      onClick={() => m.fantasma.length > 0 && setDrillDown({ uid: 3, svc: sc, col: 'fant', label: 'Fantasma', n: m.fantasma.length, rutas: m.fantasma })} />
+                    <TdHeat n={m.sup.length} selected={drillDown?.svc === sc && drillDown?.col === 'sup'}
+                      onClick={() => m.sup.length > 0 && setDrillDown({ uid: 3, svc: sc, col: 'sup', label: 'Suplantación', n: m.sup.length, rutas: m.sup })} />
+                    <TdTc>{m.total}</TdTc>
+                  </tr>
+                );
+              })}
+              <tr style={{ background: '#f8fafc', borderTop: `1px solid ${CH_BORDER}` }}>
+                <TdSn total>Total</TdSn>
+                <TdTotal>—</TdTotal>
+                <TdTotal>—</TdTotal>
+                <TdTotal>{totalB}</TdTotal>
+                <TdTotal>{totalF}</TdTotal>
+                <TdTotal>{totalS}</TdTotal>
+                <TdTotal strong>{conteos.U3}</TdTotal>
+              </tr>
+            </>}
+          </tbody>
+        </table>
+        <HmLegend note="Sin QR y Móvil inactivo requieren scrapeo adicional del portal MELI" hint="Clic en celda → ver rutas" />
+      </div>
+
+      {drillDown && drillDown.uid === 3 && <DrillDown3 dd={drillDown} fecha={fecha} onClose={() => setDrillDown(null)} />}
+      {!drillDown && matriz.scs.length > 0 && <Hint text="Haz clic en cualquier celda coloreada para ver las rutas" />}
     </div>
   );
 }
 
-function SubSection({ title, subtitle, children }) {
-  return (
-    <div style={{
-      background: '#fff', borderRadius: 12, border: '0.5px solid #e4e7ec',
-      padding: 14, marginBottom: 10,
-    }}>
-      <div style={{ fontSize: 12, fontWeight: 700, color: '#1a1a2e', marginBottom: 2 }}>{title}</div>
-      <div style={{ fontSize: 11, color: '#64748b', marginBottom: 10 }}>{subtitle}</div>
-      {children}
-    </div>
+// ════════════════════════════════════════════════════════════════════════════
+// DRILL-DOWNS
+// ════════════════════════════════════════════════════════════════════════════
+function DrillDown1({ dd, fecha, onClose }) {
+  const exportar = () => exportCH(
+    ["Ruta", "Conductor", "Helper", "SC", "Vehículo", "Razón", "Acción"],
+    dd.rutas.map(r => [r.id_ruta, r.chofer_nombre || '', r.helpers_nombres || '', r.sc, r.vehiculo, `Tarifa helper no activa — ${r.sc}`, 'Bloquear · gestionar con MELI']),
+    `BT_U1_${dd.svc}_${(dd.vehiculo || '').replace(/[^a-zA-Z0-9]/g, '_')}.csv`
   );
-}
-
-function TablaRutas({ rutas, mostrarSuplantacion, mostrarPct }) {
   return (
-    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-      <thead>
-        <tr>
-          <th style={thStyle}>SC</th>
-          <th style={thStyle}>Ruta</th>
-          <th style={thStyle}>Chofer</th>
-          {mostrarSuplantacion && <th style={thStyle}>Quien entregó</th>}
-          {mostrarPct && <th style={thStyle}>% Participación</th>}
-          <th style={thStyle}>Vehículo</th>
-          <th style={thStyle}>Paquetes</th>
-        </tr>
-      </thead>
-      <tbody>
-        {rutas.map((r, i) => (
-          <tr key={i} style={{ borderBottom: '0.5px solid #f4f5f7' }}>
-            <td style={tdSc}>{r.sc}</td>
-            <td style={tdData}><span style={{ fontFamily: 'monospace', fontSize: 11 }}>{r.id_ruta}</span></td>
-            <td style={tdData}>{r.chofer_nombre}</td>
-            {mostrarSuplantacion && <td style={{ ...tdData, fontWeight: 600 }}>{r.helpers_nombres}</td>}
-            {mostrarPct && <td style={tdData}><strong>{r.pct_participacion_helper}%</strong></td>}
-            <td style={tdData}><span style={{ fontSize: 11, color: '#64748b' }}>{r.vehiculo}</span></td>
-            <td style={tdData}>{r.pkgs_total}</td>
+    <DrillWrap dd={dd} fecha={fecha} onClose={onClose} icon="ti-map-pin" onExport={exportar}>
+      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+        <thead><tr>
+          <ThDt>Ruta ID</ThDt><ThDt>Conductor</ThDt><ThDt>Helper declarado</ThDt>
+          <ThDt>Tarifa activa</ThDt><ThDt>Razón</ThDt><ThDt>Acción</ThDt>
+        </tr></thead>
+        <tbody>{dd.rutas.map((r, i) => (
+          <tr key={i} style={{ borderBottom: `0.5px solid #f4f5f7` }}>
+            <TdDt mono>{r.id_ruta}</TdDt>
+            <TdDt bold>{r.chofer_nombre || '—'}</TdDt>
+            <TdDt>{r.helpers_nombres || '—'}</TdDt>
+            <TdDt><Pill type="red">NO</Pill></TdDt>
+            <TdDt muted>Tarifa helper no activa — {r.sc}</TdDt>
+            <TdDt action>Bloquear · gestionar con MELI</TdDt>
           </tr>
-        ))}
-      </tbody>
-    </table>
+        ))}</tbody>
+      </table>
+    </DrillWrap>
   );
 }
 
-function EmptyState({ mensaje }) {
+function DrillDown2({ dd, fecha, onClose }) {
+  const exportar = () => exportCH(
+    ["Helper", "SC", "Ruta", "CURP", "Estado", "Acción"],
+    dd.rutas.map(r => [r.helpers_nombres || '', r.sc, r.id_ruta, '—', 'NO CERTIFICADO', 'Verificar identidad · iniciar certif. MELI']),
+    `BT_U2_${dd.svc}.csv`
+  );
   return (
-    <div style={{
-      background: '#fff', borderRadius: 12, border: '0.5px solid #e4e7ec',
-      padding: 40, textAlign: 'center',
-    }}>
-      <i className="ti ti-circle-check" style={{ fontSize: 32, color: '#10B981' }} />
-      <div style={{ fontSize: 13, color: '#64748b', marginTop: 8 }}>{mensaje}</div>
-    </div>
+    <DrillWrap dd={dd} fecha={fecha} onClose={onClose} icon="ti-id-badge" onExport={exportar}>
+      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+        <thead><tr>
+          <ThDt>Helper</ThDt><ThDt>SC</ThDt><ThDt>Ruta</ThDt>
+          <ThDt>Certif. MELI</ThDt><ThDt>Acción</ThDt>
+        </tr></thead>
+        <tbody>{dd.rutas.map((r, i) => (
+          <tr key={i} style={{ borderBottom: `0.5px solid #f4f5f7` }}>
+            <TdDt bold>{r.helpers_nombres || '—'}</TdDt>
+            <TdDt mono>{r.sc}</TdDt>
+            <TdDt mono>{r.id_ruta}</TdDt>
+            <TdDt><Pill type="red">NO</Pill></TdDt>
+            <TdDt action>Verificar identidad · iniciar certif. MELI</TdDt>
+          </tr>
+        ))}</tbody>
+      </table>
+    </DrillWrap>
   );
 }
 
-function Legend() {
-  const items = [
-    { color: '#f8fafc', label: 'Sin rutas' },
-    { color: '#FEF3C7', label: '1 ruta' },
-    { color: '#FCA5A5', label: '2-5 rutas' },
-    { color: '#DC2626', label: '6+ rutas', textColor: '#fff' },
-  ];
+function DrillDown3({ dd, fecha, onClose }) {
+  const accion = dd.col === 'fant' ? 'Validar con supervisor de SC' : dd.col === 'sup' ? 'Investigar suplantación con MELI' : 'Revisar baja participación del helper';
+  const exportar = () => exportCH(
+    ["Ruta", "Conductor", "Helper", "Condición", "% partic.", "Acción"],
+    dd.rutas.map(r => [r.id_ruta, r.chofer_nombre || '', r.helpers_nombres || '—', dd.label, r.pct_participacion_helper !== null ? `${r.pct_participacion_helper}%` : '—', accion]),
+    `BT_U3_${dd.svc}_${dd.col}.csv`
+  );
   return (
-    <div style={{ display: 'flex', gap: 12, padding: '10px 4px', flexWrap: 'wrap' }}>
-      {items.map(i => (
-        <div key={i.label} style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 10, color: '#64748b' }}>
-          <div style={{ width: 14, height: 14, borderRadius: 3, background: i.color, border: '0.5px solid #e4e7ec' }} />
-          {i.label}
-        </div>
-      ))}
-    </div>
+    <DrillWrap dd={dd} fecha={fecha} onClose={onClose} icon="ti-route" onExport={exportar}>
+      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+        <thead><tr>
+          <ThDt>Ruta ID</ThDt><ThDt>Conductor</ThDt><ThDt>Helper</ThDt>
+          <ThDt>Condición</ThDt><ThDt>% partic.</ThDt><ThDt>Acción</ThDt>
+        </tr></thead>
+        <tbody>{dd.rutas.map((r, i) => (
+          <tr key={i} style={{ borderBottom: `0.5px solid #f4f5f7` }}>
+            <TdDt mono>{r.id_ruta}</TdDt>
+            <TdDt bold>{r.chofer_nombre || '—'}</TdDt>
+            <TdDt>{r.helpers_nombres || '—'}</TdDt>
+            <TdDt><Pill type="yellow">{dd.label}</Pill></TdDt>
+            <TdDt center muted>{r.pct_participacion_helper !== null ? `${r.pct_participacion_helper}%` : '—'}</TdDt>
+            <TdDt action>{accion}</TdDt>
+          </tr>
+        ))}</tbody>
+      </table>
+    </DrillWrap>
   );
 }
 
-function DrillDownModal({ data, onClose }) {
+function DrillWrap({ dd, fecha, onClose, icon, onExport, children }) {
   return (
-    <div style={{
-      position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 1000,
-      display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20,
-    }} onClick={onClose}>
+    <div style={{ marginTop: 14 }}>
       <div style={{
-        background: '#fff', borderRadius: 14, padding: 20, maxWidth: '90vw', maxHeight: '85vh',
-        overflow: 'auto', minWidth: 600,
-      }} onClick={e => e.stopPropagation()}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
-          <div style={{ fontSize: 14, fontWeight: 700, color: '#1a3a6b' }}>{data.title}</div>
-          <button onClick={onClose} style={{
-            background: 'transparent', border: 'none', cursor: 'pointer', fontSize: 18, color: '#64748b',
-          }}>✕</button>
+        display: 'flex', alignItems: 'center', gap: 8, padding: '10px 14px', background: '#f8fafc',
+        borderRadius: 12, marginBottom: 10, fontSize: 12, border: `0.5px solid ${CH_BORDER}`,
+      }}>
+        <i className={`ti ${icon}`} style={{ fontSize: 16, color: CH_NAVY }} />
+        <span style={{ fontWeight: 700, color: CH_NAVY, fontSize: 13 }}>{dd.svc}</span>
+        {(dd.vehiculo || dd.label) && (
+          <>
+            <i className="ti ti-chevron-right" style={{ fontSize: 12, color: CH_LIGHT }} />
+            <span style={{ color: CH_MUTED }}>{dd.vehiculo || dd.label}</span>
+          </>
+        )}
+        <span style={{
+          background: '#fee2e2', color: '#991b1b', padding: '3px 9px', borderRadius: 5,
+          fontSize: 10, fontWeight: 700, marginLeft: 'auto', letterSpacing: 0.3, textTransform: 'uppercase',
+        }}>{dd.n} casos</span>
+        <button onClick={onClose} style={{
+          background: 'transparent', border: 'none', cursor: 'pointer', fontSize: 16, color: CH_MUTED, padding: '0 4px',
+        }}>✕</button>
+      </div>
+      <div style={{ background: CH_CARD, borderRadius: 12, border: `0.5px solid ${CH_BORDER}`, overflow: 'hidden' }}>
+        {children}
+        <div style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          padding: '10px 14px', borderTop: `1px solid ${CH_BORDER}`, background: '#f8fafc',
+        }}>
+          <span style={{ fontSize: 10, color: CH_LIGHT, fontStyle: 'italic' }}>
+            {dd.n} casos · {dd.svc} · {dd.vehiculo || dd.label || ''} · {fecha}
+          </span>
+          <button onClick={onExport} style={{
+            display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, fontWeight: 600,
+            fontFamily: "'Geist', sans-serif", color: '#fff', border: 'none',
+            borderRadius: 6, padding: '7px 14px', cursor: 'pointer', background: CH_NAVY,
+          }}>
+            <i className="ti ti-download" style={{ fontSize: 14 }} />Exportar CSV
+          </button>
         </div>
-        <TablaRutas rutas={data.rutas} mostrarPct />
       </div>
     </div>
   );
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// HELPERS DE ESTILO
+// AUXILIARES
 // ════════════════════════════════════════════════════════════════════════════
-
-const thStyle = {
-  padding: '8px 10px', fontSize: 10, fontWeight: 700, textTransform: 'uppercase',
-  letterSpacing: 0.4, color: '#64748b', textAlign: 'center',
-  borderBottom: '1px solid #e4e7ec', background: '#f8fafc', whiteSpace: 'nowrap',
-};
-
-const tdCell = {
-  padding: '9px 10px', border: '0.5px solid #e5e7eb', textAlign: 'center',
-  fontSize: 12, fontWeight: 600,
-};
-
-const tdSc = {
-  ...tdCell, textAlign: 'left', fontWeight: 700, color: '#1a3a6b',
-  background: '#f8fafc', fontSize: 11,
-};
-
-const tdData = {
-  padding: '8px 10px', borderBottom: '0.5px solid #f4f5f7', fontSize: 12,
-  textAlign: 'left',
-};
-
-function heatColor(n) {
-  if (n === 0) return { background: '#f8fafc', color: '#cbd5e1' };
-  if (n === 1) return { background: '#FEF3C7', color: '#92400E' };
-  if (n <= 5) return { background: '#FCA5A5', color: '#7F1D1D' };
-  return { background: '#DC2626', color: '#fff', fontWeight: 700 };
+function KCard({ l, v, s, a, sk, accent }) {
+  return (
+    <div style={{ background: CH_CARD, borderRadius: 12, border: `0.5px solid ${CH_BORDER}`, padding: '14px 14px 12px', display: 'flex', flexDirection: 'column', minHeight: 130 }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color: CH_MUTED, textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 8 }}>{l}</div>
+      <div style={{ fontSize: 22, fontWeight: 800, color: CH_TEXT, letterSpacing: -0.5, lineHeight: 1 }}>{v}</div>
+      <div style={{ fontSize: 11, color: CH_LIGHT, marginTop: 5 }}>{s}</div>
+      <div style={{ height: 1, background: CH_BORDER, margin: '10px 0' }} />
+      <Spark vals={sk} height={28} color={accent} />
+      <div style={{ height: 1, background: CH_BORDER, margin: '10px 0' }} />
+      <div style={{ fontSize: 11, fontWeight: 500, color: CH_MUTED, marginTop: 'auto', display: 'flex', alignItems: 'center', gap: 4 }}>
+        <i className="ti ti-arrow-right" style={{ fontSize: 12 }} />{a}
+      </div>
+    </div>
+  );
 }
 
-// ════════════════════════════════════════════════════════════════════════════
-// EXPORT CSV
-// ════════════════════════════════════════════════════════════════════════════
-function exportarCSV(datos) {
-  if (!datos || datos.length === 0) return;
-  const headers = [
-    'fecha','id_ruta','sc','zona','vehiculo','placa',
-    'chofer_nombre','chofer_curp','helpers_nombres','helper_curp',
-    'pkgs_total','pkgs_chofer','pkgs_helper','pct_participacion_helper',
-    'clasificacion','universo','helper_cert_estado',
-    'autorizado','monto_recuperable_meli','costo_bt_cuestionable',
-  ];
-  const rows = datos.map(r => headers.map(h => {
-    const v = r[h];
-    if (v === null || v === undefined) return '';
-    if (typeof v === 'string' && v.includes(',')) return `"${v.replace(/"/g, '""')}"`;
-    return v;
-  }).join(','));
-  const csv = headers.join(',') + '\n' + rows.join('\n');
-  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+function Spark({ vals, height = 28, color }) {
+  if (!vals || vals.length < 2) return <svg width="100%" height={height} />;
+  const smooth = vals.map((x, i, a) => { const p = a[i - 1] ?? x, n = a[i + 1] ?? x; return (p + x + x + n) / 4; });
+  const w = 100, h = height, pad = 2;
+  const mn = Math.min(...smooth) - 0.5, mx = Math.max(...smooth) + 0.5;
+  const px = i => pad + (i / (smooth.length - 1)) * (w - pad * 2);
+  const py = v => h - pad - (v - mn) / (mx - mn || 1) * (h - pad * 2);
+  let d = `M${px(0).toFixed(1)},${py(smooth[0]).toFixed(1)}`;
+  for (let i = 0; i < smooth.length - 1; i++) {
+    const x1 = px(i), y1 = py(smooth[i]), x2 = px(i + 1), y2 = py(smooth[i + 1]), cx = (x1 + x2) / 2;
+    d += ` C${cx.toFixed(1)},${y1.toFixed(1)} ${cx.toFixed(1)},${y2.toFixed(1)} ${x2.toFixed(1)},${y2.toFixed(1)}`;
+  }
+  const lx = px(smooth.length - 1).toFixed(1), ly = py(smooth[smooth.length - 1]).toFixed(1);
+  const area = `${d} L${lx},${h} L${px(0).toFixed(1)},${h} Z`;
+  const stroke = color || CH_LIGHT;
+  return (
+    <svg width="100%" height={height} viewBox={`0 0 100 ${height}`} preserveAspectRatio="none">
+      <path d={area} fill={stroke} fillOpacity=".12" />
+      <path d={d} fill="none" stroke={stroke} strokeWidth="1.2" strokeLinejoin="round" strokeLinecap="round" />
+      <circle cx={lx} cy={ly} r="2" fill={stroke} />
+    </svg>
+  );
+}
+
+function SLabel({ text, badge, badgeColor, fecha }) {
+  const colors = badgeColor === 'yellow'
+    ? { bg: CH_YELLOW, color: CH_YELLOW_TEXT, border: '#fde68a' }
+    : { bg: '#dbeafe', color: '#1e40af', border: '#bfdbfe' };
+  return (
+    <div style={{ fontSize: 10.5, fontWeight: 700, color: CH_MUTED, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
+      {text}
+      <span style={{
+        background: colors.bg, color: colors.color, border: `1px solid ${colors.border}`,
+        fontSize: 9, fontWeight: 700, padding: '2px 8px', borderRadius: 5,
+        marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 4, textTransform: 'none',
+        letterSpacing: 0.2,
+      }}>
+        <i className="ti ti-database" style={{ fontSize: 10 }} />{badge} · {fecha}
+      </span>
+    </div>
+  );
+}
+
+function Hint({ text }) {
+  return (
+    <div style={{
+      textAlign: 'center', padding: 24, color: CH_LIGHT, fontSize: 12,
+      border: `1px dashed ${CH_BORDER}`, borderRadius: 12, marginTop: 12, background: '#fafafa',
+    }}>
+      <i className="ti ti-hand-click" style={{ fontSize: 24, display: 'block', marginBottom: 6, color: '#d1d5db' }} />
+      {text}
+    </div>
+  );
+}
+
+function HmLegend({ note, hint }) {
+  return (
+    <div style={{ display: 'flex', gap: 14, padding: '10px 14px 12px', flexWrap: 'wrap', alignItems: 'center' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 10, color: CH_MUTED }}>
+        <div style={{ width: 12, height: 12, borderRadius: 3, background: CH_RED }} />Crítico (6+)
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 10, color: CH_MUTED }}>
+        <div style={{ width: 12, height: 12, borderRadius: 3, background: CH_RED_SOFT }} />Medio (3–5)
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 10, color: CH_MUTED }}>
+        <div style={{ width: 12, height: 12, borderRadius: 3, background: CH_YELLOW, border: '1px solid #fde68a' }} />Bajo (1–2)
+      </div>
+      {note && <span style={{ fontSize: 10, color: CH_LIGHT, fontStyle: 'italic' }}>{note}</span>}
+      {hint && <span style={{ marginLeft: 'auto', fontSize: 10, color: CH_LIGHT }}>{hint}</span>}
+    </div>
+  );
+}
+
+// Cells
+function ThHm({ children, align }) {
+  return <th style={{
+    padding: '8px 10px', fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5,
+    color: CH_MUTED, textAlign: align || 'center', borderBottom: `1px solid ${CH_BORDER}`,
+    background: '#f8fafc', whiteSpace: 'nowrap',
+  }}>{children}</th>;
+}
+
+function TdSn({ children, total }) {
+  return <td style={{
+    padding: '9px 12px', border: `0.5px solid ${CH_BORDER}`, textAlign: 'left',
+    fontWeight: 700, color: CH_NAVY, background: '#f8fafc',
+    fontSize: total ? 12 : 11.5, borderTop: total ? `1px solid ${CH_BORDER}` : undefined,
+  }}>{children}</td>;
+}
+
+function TdHeat({ n, selected, onClick }) {
+  const cls = n === 0 ? { background: '#f8fafc', color: '#d1d5db' }
+    : n >= 6 ? { background: CH_RED, color: '#fff', fontWeight: 700 }
+    : n >= 3 ? { background: CH_RED_SOFT, color: '#7f1d1d', fontWeight: 700 }
+    : { background: CH_YELLOW, color: CH_YELLOW_TEXT, fontWeight: 600 };
+  return (
+    <td onClick={onClick} style={{
+      padding: '9px 10px', border: `0.5px solid ${CH_BORDER}`, textAlign: 'center',
+      fontSize: 12.5, cursor: n > 0 ? 'pointer' : 'default',
+      outline: selected ? `2.5px solid ${CH_ORANGE}` : undefined,
+      outlineOffset: selected ? -2 : undefined, position: 'relative',
+      ...cls,
+    }}>{n === 0 ? '0' : n}</td>
+  );
+}
+
+function TdNa({ children }) {
+  return <td style={{ padding: '9px 10px', border: `0.5px solid ${CH_BORDER}`, textAlign: 'center', background: '#f8fafc', color: '#d1d5db', fontSize: 11 }}>{children}</td>;
+}
+
+function TdTc({ children }) {
+  return <td style={{ padding: '9px 10px', border: `0.5px solid ${CH_BORDER}`, textAlign: 'center', background: '#f8fafc', fontWeight: 700, color: CH_TEXT, fontSize: 12 }}>{children}</td>;
+}
+
+function TdTotal({ children, strong }) {
+  return <td style={{ padding: '9px 10px', textAlign: 'center', background: '#f8fafc', fontWeight: 700, color: strong ? CH_NAVY : CH_TEXT, fontSize: 12 }}>{children}</td>;
+}
+
+function ThDt({ children }) {
+  return <th style={{
+    padding: '9px 12px', fontSize: 9.5, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5,
+    color: CH_MUTED, textAlign: 'left', borderBottom: `1px solid ${CH_BORDER}`, background: '#f8fafc',
+  }}>{children}</th>;
+}
+
+function TdDt({ children, mono, bold, muted, center, action }) {
+  return <td style={{
+    padding: '9px 12px', borderBottom: '0.5px solid #f4f5f7', fontSize: 12,
+    fontFamily: mono ? 'monospace' : "'Geist', sans-serif",
+    color: action ? CH_NAVY : muted ? CH_MUTED : CH_TEXT,
+    fontWeight: bold || action ? 600 : 'normal',
+    textAlign: center ? 'center' : 'left',
+  }}>{children}</td>;
+}
+
+function Pill({ children, type }) {
+  const styles = type === 'red'
+    ? { background: '#fee2e2', color: '#991b1b' }
+    : { background: '#fef3c7', color: '#92400e' };
+  return <span style={{ ...styles, fontSize: 9.5, fontWeight: 700, padding: '3px 8px', borderRadius: 5, textTransform: 'uppercase', letterSpacing: 0.3 }}>{children}</span>;
+}
+
+// Utils
+function pct(n, total) { return total > 0 ? Math.round(100 * n / total) : 0; }
+
+function exportCH(headers, rows, filename) {
+  if (!rows || rows.length === 0) return;
+  const csv = [
+    headers.join(','),
+    ...rows.map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(','))
+  ].join('\n');
+  const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = `control_helper_${datos[0]?.fecha || 'export'}.csv`;
+  a.download = filename;
   a.click();
 }
+
+
+
+
+
 
 
 // ── MODAL ──────────────────────────────────────────────────────────────────
