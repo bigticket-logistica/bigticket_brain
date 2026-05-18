@@ -17686,18 +17686,22 @@ function PoolMeliControlHelper() {
             const d = new Date(); d.setDate(d.getDate() - 1);
             setFecha(d.toISOString().split('T')[0]);
           }} style={{
-            fontSize: 11, fontWeight: 600, padding: '5px 10px', borderRadius: 6,
+            fontSize: 11, fontWeight: 600, padding: '6px 12px', borderRadius: 6,
             border: `1px solid ${CH_BORDER}`, background: '#f8fafc', color: CH_MUTED,
             cursor: 'pointer', fontFamily: "'Geist', sans-serif",
+            whiteSpace: 'nowrap', lineHeight: 1, height: 28,
+            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
           }}>D-1</button>
           <button onClick={() => {
             const now = new Date();
             const mx = new Date(now.getTime() - 6 * 60 * 60 * 1000);
             setFecha(mx.toISOString().split('T')[0]);
           }} style={{
-            fontSize: 11, fontWeight: 600, padding: '5px 10px', borderRadius: 6,
+            fontSize: 11, fontWeight: 600, padding: '6px 12px', borderRadius: 6,
             border: `1px solid ${CH_BORDER}`, background: '#f8fafc', color: CH_MUTED,
             cursor: 'pointer', fontFamily: "'Geist', sans-serif",
+            whiteSpace: 'nowrap', lineHeight: 1, height: 28,
+            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
           }}>Hoy</button>
           <input type="date" value={fecha} onChange={e => setFecha(e.target.value)} style={{
             fontSize: 12, fontWeight: 600, padding: '5px 10px', borderRadius: 6,
