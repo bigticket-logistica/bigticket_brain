@@ -17545,7 +17545,7 @@ function PoolMeliControlHelper() {
       setError(null);
       try {
         // Datos del día seleccionado
-        const { data: r1, error: e1 } = await supabase
+        const { data: r1, error: e1 } = await sb
           .from('vw_control_helper_diario')
           .select('*')
           .eq('fecha', fecha)
@@ -17556,7 +17556,7 @@ function PoolMeliControlHelper() {
         const desde = new Date(fecha);
         desde.setDate(desde.getDate() - 14);
         const desdeStr = desde.toISOString().split('T')[0];
-        const { data: r2, error: e2 } = await supabase
+        const { data: r2, error: e2 } = await sb
           .from('vw_control_helper_diario')
           .select('fecha,universo')
           .gte('fecha', desdeStr)
