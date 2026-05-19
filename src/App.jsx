@@ -17431,6 +17431,8 @@ function IndicadoresOperacionalesMX({ usuario }) {
     { id: "diferencias", label: "Diferencias Maestros", desc: "Auditoría ruta por ruta · MELI vs Snapshots" },
     { id: "inventario", label: "Inventario", desc: "Drivers, vehículos, fantasmas" },
     { id: "control_helper", label: "Control Helper", desc: "Helpers no autorizados / certificados / fantasmas" },
+    { id: "validacion_bt", label: "Validación BT", desc: "Cruce BBDD BT vs padrón MELI vs entregas reales" },
+    { id: "auditoria_padron", label: "Auditoría Padrón", desc: "Altas, bajas y cambios del padrón MELI" },
   ];
 
   if (loading) {
@@ -17532,6 +17534,8 @@ function IndicadoresOperacionalesMX({ usuario }) {
       {vista === "diferencias" && <PoolMeliDiferenciasMaestros />}
       {vista === "inventario" && <PoolMeliInventario drivers={drivers} vehiculos={vehiculos} resumen={resumen} setModal={setModal} setDetalle={setDetalle} mesGlobal={mesGlobal} />}
       {vista === "control_helper" && <PoolMeliControlHelper />}
+      {vista === "validacion_bt" && <PoolMeliValidacionBT usuario={usuario} />}
+      {vista === "auditoria_padron" && <PoolMeliAuditoriaPadron usuario={usuario} />}
 
       {modal && <MeliModal modal={modal} onClose={() => setModal(null)} />}
     </div>
@@ -18372,6 +18376,962 @@ function exportCH(headers, rows, filename) {
 
 
 
+
+
+// ════════════════════════════════════════════════════════════════════════════
+// VALIDACIÓN BT · Subpestaña dentro de IndicadoresOperacionalesMX
+// ════════════════════════════════════════════════════════════════════════════
+
+const VBT_NAVY = "#1a3a6b";
+const VBT_ORANGE = "#F47B20";
+const VBT_BG = "#f0f2f5";
+const VBT_CARD = "#fff";
+const VBT_BORDER = "#e4e7ec";
+const VBT_TEXT = "#1a1a1a";
+const VBT_MUTED = "#64748b";
+const VBT_LIGHT = "#94a3b8";
+const VBT_RED = "#dc2626";
+const VBT_YELLOW = "#fef3c7";
+const VBT_GREEN = "#15803d";
+
+function PoolMeliValidacionBT({ usuario }) {
+  const [tab, setTab] = useState(0);
+  const [bt, setBt] = useState([]);
+  const [operando, setOperando] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [filtroGrav, setFiltroGrav] = useState('TODOS');
+  const [filtroSvc, setFiltroSvc] = useState('TODOS');
+  const [busqueda, setBusqueda] = useState('');
+  const [showUpload, setShowUpload] = useState(false);
+  const [historialCurp, setHistorialCurp] = useState(null);
+  const esAdmin = usuario?.rol === 'superadmin';
+
+  const cargar = async () => {
+    setLoading(true); setError(null);
+    try {
+      const { data: r1, error: e1 } = await sb.from('vw_bt_vs_padron').select('*').order('gravedad');
+      if (e1) throw e1;
+      const { data: r2, error: e2 } = await sb.from('vw_bt_rechazados_operando').select('*').order('rutas', { ascending: false });
+      if (e2) throw e2;
+      setBt(r1 || []); setOperando(r2 || []);
+    } catch (e) { setError(e.message || 'Error'); } finally { setLoading(false); }
+  };
+
+  useEffect(() => { cargar(); }, []);
+
+  const kpis = useMemo(() => {
+    const hoy = new Date(Date.now() - 6*60*60*1000).toISOString().split('T')[0];
+    return {
+      total_bt: bt.length,
+      criticos: bt.filter(b => b.gravedad === 'CRITICO').length,
+      altos: bt.filter(b => b.gravedad === 'ALTO').length,
+      medios: bt.filter(b => b.gravedad === 'MEDIO').length,
+      en_padron: bt.filter(b => b.driver_id_padron).length,
+      no_padron: bt.filter(b => !b.driver_id_padron).length,
+      operando_personas: new Set(operando.map(o => o.curp)).size,
+      operando_rutas: operando.reduce((s, o) => s + (o.rutas || 0), 0),
+      operando_hoy: new Set(operando.filter(o => o.hasta === hoy).map(o => o.curp)).size,
+    };
+  }, [bt, operando]);
+
+  const btFiltrado = useMemo(() => {
+    let f = bt;
+    if (filtroGrav !== 'TODOS') f = f.filter(b => b.gravedad === filtroGrav);
+    if (filtroSvc !== 'TODOS') f = f.filter(b => b.svc === filtroSvc);
+    if (busqueda) {
+      const q = busqueda.toLowerCase();
+      f = f.filter(b => (b.nombre_bt || '').toLowerCase().includes(q) || (b.curp || '').toLowerCase().includes(q));
+    }
+    return f;
+  }, [bt, filtroGrav, filtroSvc, busqueda]);
+
+  const svcs = useMemo(() => [...new Set(bt.map(b => b.svc).filter(Boolean))].sort(), [bt]);
+
+  if (loading) return <div style={{ padding: 40, textAlign: 'center', color: VBT_MUTED, fontSize: 13, fontFamily: "'Geist', sans-serif" }}>Cargando datos BT…</div>;
+  if (error) return (
+    <div style={{ padding: 24, fontFamily: "'Geist', sans-serif" }}>
+      <div style={{ background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 12, padding: 16 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: '#991b1b', marginBottom: 6 }}>No se pudo cargar Validación BT</div>
+        <div style={{ fontSize: 12, color: '#7f1d1d', lineHeight: 1.6 }}>
+          {error}<br/><br/>
+          <strong>Causa probable:</strong> falta correr <code>SQL_01_validacion_bt_setup.sql</code> y <code>SQL_02_validacion_bt_carga_inicial.sql</code>
+        </div>
+      </div>
+    </div>
+  );
+
+  return (
+    <div style={{ fontFamily: "'Geist', sans-serif", background: VBT_BG, color: VBT_TEXT }}>
+      <div style={{ background: VBT_CARD, borderBottom: `1px solid ${VBT_BORDER}`, padding: '0 24px', display: 'flex', gap: 2 }}>
+        {['Resumen', 'Operando (rechazados/pendientes)', 'Listado completo'].map((label, i) => (
+          <div key={i} onClick={() => setTab(i)} style={{
+            padding: '10px 16px', fontSize: 12, fontWeight: 600,
+            color: tab === i ? VBT_NAVY : VBT_MUTED,
+            borderBottom: tab === i ? `2px solid ${VBT_ORANGE}` : '2px solid transparent',
+            cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap',
+          }}>{label}</div>
+        ))}
+        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8, paddingRight: 4 }}>
+          {esAdmin && (
+            <button onClick={() => setShowUpload(true)} style={{
+              fontSize: 11, fontWeight: 600, padding: '6px 12px', borderRadius: 6,
+              border: `1px solid ${VBT_NAVY}`, background: VBT_NAVY, color: '#fff',
+              cursor: 'pointer', fontFamily: "'Geist', sans-serif", whiteSpace: 'nowrap',
+              display: 'inline-flex', alignItems: 'center', gap: 5, height: 28, lineHeight: 1,
+            }}>
+              <i className="ti ti-upload" style={{ fontSize: 13 }} />
+              Subir Excel BT
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div style={{ padding: '16px 24px' }}>
+        {tab === 0 && <ResumenBT kpis={kpis} bt={bt} operando={operando} />}
+        {tab === 1 && <OperandoBT operando={operando} onSelectCurp={setHistorialCurp} />}
+        {tab === 2 && <ListadoBT bt={btFiltrado} svcs={svcs}
+          filtroGrav={filtroGrav} setFiltroGrav={setFiltroGrav}
+          filtroSvc={filtroSvc} setFiltroSvc={setFiltroSvc}
+          busqueda={busqueda} setBusqueda={setBusqueda}
+          totalSinFiltro={bt.length} onSelectCurp={setHistorialCurp} />}
+      </div>
+
+      {showUpload && <UploadExcelBT onClose={() => { setShowUpload(false); cargar(); }} />}
+      {historialCurp && <HistorialPersonaModal curp={historialCurp} onClose={() => setHistorialCurp(null)} />}
+    </div>
+  );
+}
+
+function ResumenBT({ kpis, bt, operando }) {
+  const porEmpresa = {};
+  operando.forEach(o => {
+    if (!porEmpresa[o.empresa]) porEmpresa[o.empresa] = { personas: new Set(), rutas: 0 };
+    porEmpresa[o.empresa].personas.add(o.curp);
+    porEmpresa[o.empresa].rutas += o.rutas || 0;
+  });
+  const empresasArr = Object.entries(porEmpresa)
+    .map(([e, v]) => ({ empresa: e, personas: v.personas.size, rutas: v.rutas }))
+    .sort((a, b) => b.rutas - a.rutas).slice(0, 8);
+  const porSvc = {};
+  operando.forEach(o => {
+    if (!porSvc[o.svc]) porSvc[o.svc] = { personas: new Set(), rutas: 0 };
+    porSvc[o.svc].personas.add(o.curp);
+    porSvc[o.svc].rutas += o.rutas || 0;
+  });
+  const svcArr = Object.entries(porSvc).map(([s, v]) => ({ svc: s, personas: v.personas.size, rutas: v.rutas })).sort((a, b) => b.rutas - a.rutas);
+
+  return (
+    <div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 14 }}>
+        <VBT_KPI l="Total BT" v={kpis.total_bt} s={`${kpis.en_padron} en padrón · ${kpis.no_padron} no`} accent={VBT_NAVY} />
+        <VBT_KPI l="🔴 Críticos" v={kpis.criticos} s="RECHAZADO en BT" accent={VBT_RED} />
+        <VBT_KPI l="🟠 Altos" v={kpis.altos} s="PENDIENTE en BT" accent={VBT_ORANGE} />
+        <VBT_KPI l="🟡 Medios" v={kpis.medios} s="Validación BT pendiente" accent="#eab308" />
+      </div>
+
+      {kpis.operando_personas > 0 && (
+        <div style={{ background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 12, padding: 16, marginBottom: 14 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: '#991b1b', marginBottom: 4, display: 'flex', alignItems: 'center', gap: 6 }}>
+            <i className="ti ti-alert-triangle" style={{ fontSize: 16 }} />
+            Universo crítico · Acción inmediata
+          </div>
+          <div style={{ fontSize: 12, color: '#7f1d1d', lineHeight: 1.5 }}>
+            <strong>{kpis.operando_personas} personas</strong> con flags activos en BT operando últimos 30 días · <strong>{kpis.operando_rutas} rutas</strong> · <strong>{kpis.operando_hoy} operando HOY</strong>
+          </div>
+        </div>
+      )}
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+        <div style={{ background: VBT_CARD, borderRadius: 12, border: `0.5px solid ${VBT_BORDER}`, overflow: 'hidden' }}>
+          <div style={{ padding: '10px 14px', borderBottom: `1px solid ${VBT_BORDER}`, background: '#f8fafc' }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: VBT_MUTED, textTransform: 'uppercase', letterSpacing: 0.5 }}>Por empresa · TOP 8 (con alerta operando)</div>
+          </div>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+            <thead><tr><VBT_ThS>Empresa</VBT_ThS><VBT_ThS>Personas</VBT_ThS><VBT_ThS>Rutas</VBT_ThS></tr></thead>
+            <tbody>
+              {empresasArr.length === 0 ? <tr><td colSpan={3} style={{ padding: 20, textAlign: 'center', color: VBT_LIGHT, fontSize: 11 }}>Sin datos</td></tr> :
+                empresasArr.map((e, i) => (
+                  <tr key={i} style={{ borderBottom: '0.5px solid #f4f5f7' }}>
+                    <VBT_TdS bold>{e.empresa || '—'}</VBT_TdS>
+                    <VBT_TdS center>{e.personas}</VBT_TdS>
+                    <VBT_TdS center strong>{e.rutas}</VBT_TdS>
+                  </tr>
+                ))}
+            </tbody>
+          </table>
+        </div>
+        <div style={{ background: VBT_CARD, borderRadius: 12, border: `0.5px solid ${VBT_BORDER}`, overflow: 'hidden' }}>
+          <div style={{ padding: '10px 14px', borderBottom: `1px solid ${VBT_BORDER}`, background: '#f8fafc' }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: VBT_MUTED, textTransform: 'uppercase', letterSpacing: 0.5 }}>Por SVC</div>
+          </div>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+            <thead><tr><VBT_ThS>SVC</VBT_ThS><VBT_ThS>Personas</VBT_ThS><VBT_ThS>Rutas</VBT_ThS></tr></thead>
+            <tbody>
+              {svcArr.length === 0 ? <tr><td colSpan={3} style={{ padding: 20, textAlign: 'center', color: VBT_LIGHT, fontSize: 11 }}>Sin datos</td></tr> :
+                svcArr.map((s, i) => (
+                  <tr key={i} style={{ borderBottom: '0.5px solid #f4f5f7' }}>
+                    <VBT_TdS bold>{s.svc || '—'}</VBT_TdS>
+                    <VBT_TdS center>{s.personas}</VBT_TdS>
+                    <VBT_TdS center strong>{s.rutas}</VBT_TdS>
+                  </tr>
+                ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function OperandoBT({ operando, onSelectCurp }) {
+  const exportar = () => {
+    const headers = ['Gravedad','CURP','Nombre','SC','Cargo','Empresa','Respuesta MELI','Validación BT','Rol','Rutas','Desde','Hasta'];
+    const rows = operando.map(o => [o.gravedad,o.curp,o.nombre_bt,o.svc,o.cargo,o.empresa,o.respuesta_meli,o.validacion_bt,o.rol,o.rutas,o.desde,o.hasta]);
+    const csv = [headers.join(','), ...rows.map(r => r.map(v => `"${String(v||'').replace(/"/g,'""')}"`).join(','))].join('\n');
+    const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = `BT_rechazados_operando_${new Date().toISOString().split('T')[0]}.csv`; a.click();
+  };
+
+  if (operando.length === 0) return (
+    <div style={{ padding: 40, textAlign: 'center', color: VBT_LIGHT, fontSize: 13, background: VBT_CARD, borderRadius: 12, border: `1px dashed ${VBT_BORDER}` }}>
+      <i className="ti ti-circle-check" style={{ fontSize: 32, color: VBT_GREEN, display: 'block', marginBottom: 8 }} />
+      Sin personas rechazadas/pendientes operando en los últimos 30 días
+    </div>
+  );
+
+  return (
+    <div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+        <div style={{ fontSize: 12, color: VBT_MUTED }}>
+          <strong>{new Set(operando.map(o=>o.curp)).size} personas</strong> con alerta operando · <strong>{operando.length} casos</strong> (rol chofer + helper)
+        </div>
+        <button onClick={exportar} style={{
+          fontSize: 11, fontWeight: 600, padding: '6px 12px', borderRadius: 6,
+          border: 'none', background: VBT_NAVY, color: '#fff', cursor: 'pointer',
+          fontFamily: "'Geist', sans-serif",
+          display: 'inline-flex', alignItems: 'center', gap: 5,
+        }}>
+          <i className="ti ti-download" style={{ fontSize: 13 }} />Exportar CSV
+        </button>
+      </div>
+      <div style={{ background: VBT_CARD, borderRadius: 12, border: `0.5px solid ${VBT_BORDER}`, overflow: 'hidden' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+          <thead>
+            <tr>
+              <VBT_ThS>Gravedad</VBT_ThS><VBT_ThS>Nombre</VBT_ThS><VBT_ThS>SC</VBT_ThS><VBT_ThS>Cargo</VBT_ThS>
+              <VBT_ThS>Respuesta MELI</VBT_ThS><VBT_ThS>Empresa</VBT_ThS><VBT_ThS>Rol</VBT_ThS><VBT_ThS>Rutas</VBT_ThS><VBT_ThS>Hasta</VBT_ThS>
+            </tr>
+          </thead>
+          <tbody>
+            {operando.map((o, i) => {
+              const bg = o.gravedad === 'CRITICO' ? '#fef2f2' : o.gravedad === 'ALTO' ? '#fffbeb' : '#eff6ff';
+              return (
+                <tr key={i} onClick={() => onSelectCurp && onSelectCurp(o.curp)}
+                    style={{ borderBottom: '0.5px solid #f4f5f7', background: bg, cursor: 'pointer' }}
+                    title="Click para ver historial completo">
+                  <VBT_TdS><VBT_Pill type={o.gravedad === 'CRITICO' ? 'red' : o.gravedad === 'ALTO' ? 'yellow' : 'blue'}>{o.gravedad}</VBT_Pill></VBT_TdS>
+                  <VBT_TdS bold>{o.nombre_bt}</VBT_TdS>
+                  <VBT_TdS mono>{o.svc}</VBT_TdS>
+                  <VBT_TdS>{o.cargo}</VBT_TdS>
+                  <VBT_TdS><VBT_Pill type={o.respuesta_meli === 'RECHAZADO' ? 'red' : 'yellow'}>{o.respuesta_meli}</VBT_Pill></VBT_TdS>
+                  <VBT_TdS muted>{o.empresa}</VBT_TdS>
+                  <VBT_TdS>{o.rol}</VBT_TdS>
+                  <VBT_TdS center strong>{o.rutas}</VBT_TdS>
+                  <VBT_TdS mono>{o.hasta}</VBT_TdS>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function ListadoBT({ bt, svcs, filtroGrav, setFiltroGrav, filtroSvc, setFiltroSvc, busqueda, setBusqueda, totalSinFiltro, onSelectCurp }) {
+  const exportar = () => {
+    const headers = ['CURP','Nombre','SC','Cargo','Empresa','Respuesta MELI','Validación BT','En padrón','Status padrón','Estado cruce','Gravedad'];
+    const rows = bt.map(b => [b.curp,b.nombre_bt,b.svc,b.cargo,b.empresa,b.respuesta_meli,b.validacion_bt,b.driver_id_padron?'SÍ':'NO',b.status_padron||'',b.estado_cruce,b.gravedad]);
+    const csv = [headers.join(','), ...rows.map(r => r.map(v => `"${String(v||'').replace(/"/g,'""')}"`).join(','))].join('\n');
+    const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = `BT_listado_${new Date().toISOString().split('T')[0]}.csv`; a.click();
+  };
+
+  return (
+    <div>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
+        <input value={busqueda} onChange={e => setBusqueda(e.target.value)} placeholder="Buscar por nombre o CURP..."
+          style={{ fontSize: 12, padding: '6px 10px', borderRadius: 6, border: `1px solid ${VBT_BORDER}`, width: 220, fontFamily: "'Geist', sans-serif", outline: 'none' }} />
+        <select value={filtroGrav} onChange={e => setFiltroGrav(e.target.value)}
+          style={{ fontSize: 12, padding: '6px 10px', borderRadius: 6, border: `1px solid ${VBT_BORDER}`, fontFamily: "'Geist', sans-serif", outline: 'none', cursor: 'pointer' }}>
+          <option value="TODOS">Todas las gravedades</option>
+          <option value="CRITICO">🔴 Crítico</option>
+          <option value="ALTO">🟠 Alto</option>
+          <option value="MEDIO">🟡 Medio</option>
+          <option value="OK">🟢 OK</option>
+        </select>
+        <select value={filtroSvc} onChange={e => setFiltroSvc(e.target.value)}
+          style={{ fontSize: 12, padding: '6px 10px', borderRadius: 6, border: `1px solid ${VBT_BORDER}`, fontFamily: "'Geist', sans-serif", outline: 'none', cursor: 'pointer' }}>
+          <option value="TODOS">Todos los SC</option>
+          {svcs.map(s => <option key={s} value={s}>{s}</option>)}
+        </select>
+        <span style={{ fontSize: 11, color: VBT_MUTED, marginLeft: 4 }}>{bt.length} / {totalSinFiltro} registros</span>
+        <button onClick={exportar} style={{
+          marginLeft: 'auto', fontSize: 11, fontWeight: 600, padding: '6px 12px', borderRadius: 6,
+          border: 'none', background: VBT_NAVY, color: '#fff', cursor: 'pointer',
+          fontFamily: "'Geist', sans-serif", display: 'inline-flex', alignItems: 'center', gap: 5,
+        }}>
+          <i className="ti ti-download" style={{ fontSize: 13 }} />Exportar CSV
+        </button>
+      </div>
+
+      <div style={{ background: VBT_CARD, borderRadius: 12, border: `0.5px solid ${VBT_BORDER}`, overflow: 'hidden', maxHeight: '60vh', overflowY: 'auto' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+          <thead style={{ position: 'sticky', top: 0, zIndex: 1 }}>
+            <tr>
+              <VBT_ThS>Grav.</VBT_ThS><VBT_ThS>CURP</VBT_ThS><VBT_ThS>Nombre</VBT_ThS><VBT_ThS>SC</VBT_ThS><VBT_ThS>Cargo</VBT_ThS>
+              <VBT_ThS>Empresa</VBT_ThS><VBT_ThS>Respuesta MELI</VBT_ThS><VBT_ThS>Padrón</VBT_ThS><VBT_ThS>Status</VBT_ThS><VBT_ThS>Hist.</VBT_ThS>
+            </tr>
+          </thead>
+          <tbody>
+            {bt.map((b, i) => (
+              <tr key={i} onClick={() => onSelectCurp && onSelectCurp(b.curp)}
+                  style={{ borderBottom: '0.5px solid #f4f5f7', cursor: 'pointer' }}
+                  title="Click para ver historial completo">
+                <VBT_TdS><VBT_Pill type={b.gravedad === 'CRITICO' ? 'red' : b.gravedad === 'ALTO' ? 'yellow' : b.gravedad === 'MEDIO' ? 'blue' : 'gray'}>{b.gravedad}</VBT_Pill></VBT_TdS>
+                <VBT_TdS mono small>{b.curp}</VBT_TdS>
+                <VBT_TdS bold>{b.nombre_bt}</VBT_TdS>
+                <VBT_TdS mono>{b.svc}</VBT_TdS>
+                <VBT_TdS>{b.cargo}</VBT_TdS>
+                <VBT_TdS muted small>{b.empresa}</VBT_TdS>
+                <VBT_TdS>{b.respuesta_meli || '—'}</VBT_TdS>
+                <VBT_TdS center>{b.driver_id_padron ? '✅' : '🚨'}</VBT_TdS>
+                <VBT_TdS mono small>{b.status_padron || '—'}</VBT_TdS>
+                <VBT_TdS center>
+                  {b.apariciones_historial > 1 ? (
+                    <span style={{ background: '#fef3c7', color: '#92400e', fontSize: 10, fontWeight: 700, padding: '2px 6px', borderRadius: 4 }}>{b.apariciones_historial}×</span>
+                  ) : <span style={{ color: VBT_LIGHT, fontSize: 10 }}>1</span>}
+                </VBT_TdS>
+              </tr>
+            ))}
+            {bt.length === 0 && (<tr><td colSpan={10} style={{ padding: 24, textAlign: 'center', color: VBT_LIGHT, fontSize: 12 }}>Sin resultados con esos filtros</td></tr>)}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function HistorialPersonaModal({ curp, onClose }) {
+  const [historial, setHistorial] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      setLoading(true);
+      try {
+        const { data, error } = await sb.from('vw_bt_historial_por_persona').select('*').eq('curp', curp).order('pos_temporal', { ascending: true });
+        if (error) throw error;
+        if (alive) setHistorial(data || []);
+      } catch (e) { if (alive) setError(e.message || 'Error'); } finally { if (alive) setLoading(false); }
+    })();
+    return () => { alive = false; };
+  }, [curp]);
+
+  const persona = historial[0] || {};
+  const empresasUnicas = [...new Set(historial.map(h => h.empresa).filter(Boolean))];
+  const cargosUnicos = [...new Set(historial.map(h => h.cargo).filter(Boolean))];
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }} onClick={onClose}>
+      <div onClick={e => e.stopPropagation()} style={{ background: '#fff', borderRadius: 14, padding: 24, minWidth: 720, maxWidth: '90vw', maxHeight: '90vh', overflowY: 'auto', fontFamily: "'Geist', sans-serif" }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 14 }}>
+          <div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: VBT_NAVY, marginBottom: 4 }}>{persona.nombre || 'Historial de la persona'}</div>
+            <div style={{ fontSize: 11, fontFamily: 'monospace', color: VBT_MUTED }}>CURP: {curp}</div>
+          </div>
+          <button onClick={onClose} style={{ background: 'transparent', border: 'none', cursor: 'pointer', fontSize: 18, color: VBT_MUTED }}>✕</button>
+        </div>
+
+        {loading && <div style={{ padding: 40, textAlign: 'center', color: VBT_MUTED, fontSize: 13 }}>Cargando historial…</div>}
+        {error && <div style={{ padding: 20, background: '#fef2f2', borderRadius: 8, fontSize: 12, color: '#991b1b' }}>{error}</div>}
+
+        {!loading && !error && (
+          <>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 14 }}>
+              <div style={{ background: '#f8fafc', borderRadius: 8, padding: 10, border: `0.5px solid ${VBT_BORDER}` }}>
+                <div style={{ fontSize: 9, fontWeight: 700, color: VBT_MUTED, textTransform: 'uppercase', letterSpacing: 0.4 }}>Apariciones</div>
+                <div style={{ fontSize: 22, fontWeight: 800, color: VBT_NAVY, marginTop: 4 }}>{historial.length}</div>
+              </div>
+              <div style={{ background: '#f8fafc', borderRadius: 8, padding: 10, border: `0.5px solid ${VBT_BORDER}` }}>
+                <div style={{ fontSize: 9, fontWeight: 700, color: VBT_MUTED, textTransform: 'uppercase', letterSpacing: 0.4 }}>Empresas</div>
+                <div style={{ fontSize: 22, fontWeight: 800, color: VBT_NAVY, marginTop: 4 }}>{empresasUnicas.length}</div>
+              </div>
+              <div style={{ background: '#f8fafc', borderRadius: 8, padding: 10, border: `0.5px solid ${VBT_BORDER}` }}>
+                <div style={{ fontSize: 9, fontWeight: 700, color: VBT_MUTED, textTransform: 'uppercase', letterSpacing: 0.4 }}>Cargos</div>
+                <div style={{ fontSize: 12, fontWeight: 700, color: VBT_TEXT, marginTop: 4 }}>{cargosUnicos.join(' / ') || '—'}</div>
+              </div>
+              <div style={{ background: '#f8fafc', borderRadius: 8, padding: 10, border: `0.5px solid ${VBT_BORDER}` }}>
+                <div style={{ fontSize: 9, fontWeight: 700, color: VBT_MUTED, textTransform: 'uppercase', letterSpacing: 0.4 }}>SC actual</div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: VBT_NAVY, fontFamily: 'monospace', marginTop: 4 }}>{persona.svc || '—'}</div>
+              </div>
+            </div>
+
+            {empresasUnicas.length > 0 && (
+              <div style={{ marginBottom: 14 }}>
+                <div style={{ fontSize: 10, fontWeight: 700, color: VBT_MUTED, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 }}>Empresas por las que pasó</div>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  {empresasUnicas.map((e, i) => (
+                    <span key={i} style={{ background: i === 0 ? VBT_NAVY : '#f1f5f9', color: i === 0 ? '#fff' : VBT_TEXT, fontSize: 11, fontWeight: 600, padding: '4px 10px', borderRadius: 6 }}>
+                      {i === 0 && '★ '}{e}
+                    </span>
+                  ))}
+                </div>
+                <div style={{ fontSize: 10, color: VBT_LIGHT, marginTop: 4 }}>★ = empresa actual</div>
+              </div>
+            )}
+
+            <div style={{ fontSize: 10, fontWeight: 700, color: VBT_MUTED, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 }}>Historial completo · {historial.length} apariciones (más reciente arriba)</div>
+            <div style={{ background: VBT_CARD, borderRadius: 10, border: `0.5px solid ${VBT_BORDER}`, overflow: 'hidden' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
+                <thead>
+                  <tr>
+                    <VBT_ThS>#</VBT_ThS><VBT_ThS>Cargo</VBT_ThS><VBT_ThS>Empresa</VBT_ThS><VBT_ThS>SC</VBT_ThS>
+                    <VBT_ThS>Respuesta MELI</VBT_ThS><VBT_ThS>H. Respuesta</VBT_ThS><VBT_ThS>F. Llegada</VBT_ThS><VBT_ThS>Validación BT</VBT_ThS>
+                  </tr>
+                </thead>
+                <tbody>
+                  {historial.map((h, i) => (
+                    <tr key={i} style={{ borderBottom: '0.5px solid #f4f5f7', background: h.es_actual ? '#eff6ff' : '#fff' }}>
+                      <VBT_TdS center bold>{h.es_actual ? '★' : h.pos_temporal}</VBT_TdS>
+                      <VBT_TdS>{h.cargo || '—'}</VBT_TdS>
+                      <VBT_TdS bold={h.es_actual}>{h.empresa || '—'}</VBT_TdS>
+                      <VBT_TdS mono>{h.svc || '—'}</VBT_TdS>
+                      <VBT_TdS>
+                        <VBT_Pill type={h.respuesta_meli === 'RECHAZADO' ? 'red' : h.respuesta_meli === 'PENDIENTE' ? 'yellow' : h.respuesta_meli === 'APROBADO' ? 'green' : 'gray'}>
+                          {h.respuesta_meli || '—'}
+                        </VBT_Pill>
+                      </VBT_TdS>
+                      <VBT_TdS mono small>{h.h_respuesta_meli ? new Date(h.h_respuesta_meli).toLocaleString('es-MX', { dateStyle: 'short', timeStyle: 'short' }) : '—'}</VBT_TdS>
+                      <VBT_TdS mono small>{h.f_llegada ? new Date(h.f_llegada).toLocaleString('es-MX', { dateStyle: 'short', timeStyle: 'short' }) : '—'}</VBT_TdS>
+                      <VBT_TdS>
+                        {h.validacion_bt ? <VBT_Pill type={h.validacion_bt === 'RECHAZADO' ? 'red' : 'yellow'}>{h.validacion_bt}</VBT_Pill> : <span style={{ color: VBT_LIGHT }}>—</span>}
+                      </VBT_TdS>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div style={{ marginTop: 12, fontSize: 10, color: VBT_LIGHT, fontStyle: 'italic' }}>★ = fila actual (la más reciente por H. Respuesta MELI)</div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function UploadExcelBT({ onClose }) {
+  const [status, setStatus] = useState('idle');
+  const [msg, setMsg] = useState('');
+  const [count, setCount] = useState({ total: 0, ok: 0 });
+  const [errores, setErrores] = useState([]);
+
+  const handleFile = async (file) => {
+    setStatus('parsing'); setMsg(`Leyendo ${file.name}...`); setErrores([]);
+    try {
+      if (!window.XLSX) {
+        await new Promise((resolve, reject) => {
+          const s = document.createElement("script");
+          s.src = "https://cdn.sheetjs.com/xlsx-0.20.0/package/dist/xlsx.full.min.js";
+          s.onload = resolve; s.onerror = reject; document.head.appendChild(s);
+        });
+      }
+      const XLSX = window.XLSX;
+      if (!XLSX) { setStatus('error'); setMsg('No se pudo cargar SheetJS.'); return; }
+
+      const data = await file.arrayBuffer();
+      const wb = XLSX.read(data, { type: 'array', cellDates: true });
+      let sheetName = wb.SheetNames.includes('DATOS') ? 'DATOS' : wb.SheetNames[0];
+      const rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { raw: false, defval: null });
+      if (rows.length === 0) { setStatus('error'); setMsg('El archivo no tiene filas'); return; }
+
+      setStatus('uploading'); setMsg(`Procesando ${rows.length} filas...`); setCount({ total: rows.length, ok: 0 });
+
+      const cleanSvc = (v) => v ? String(v).replace(/^ML_MX_/, '').trim() : null;
+      const toDate = (v) => {
+        if (!v) return null;
+        if (v instanceof Date) {
+          if (isNaN(v.getTime())) return null;
+          const y = v.getFullYear(); if (y < 2020 || y > 2100) return null;
+          return v.toISOString();
+        }
+        const s = String(v).trim();
+        if (/\d{5,}/.test(s)) return null;
+        const d = new Date(s); if (isNaN(d.getTime())) return null;
+        const y = d.getFullYear(); if (y < 2020 || y > 2100) return null;
+        return d.toISOString();
+      };
+
+      const allRows = rows.filter(r => r.CURP && String(r.CURP).trim()).map(r => ({
+        curp: String(r.CURP).trim().toUpperCase(),
+        nombre: r.Nombres || r.nombres || r.nombre || '',
+        cargo: r.CARGO || null, empresa: r.EMPRESA || null, svc: cleanSvc(r.SVC),
+        f_llegada: toDate(r['F. LLEGADA']), enviado_meli: toDate(r['ENVIADO MELI']),
+        respuesta_meli: r['RESPUESTA MELI'] || null, h_respuesta_meli: toDate(r['H. RESPUESTA MELI']),
+        validacion_bt: r['VALIDACION BIGTICKET'] || null, aviso_transporte: toDate(r['AVISO A TRANSPORTE']),
+        rfc: r.RFC || null, lc: r['L.C'] || null, ine: r.INE || null,
+        email: r.Email || null, telefono: r['Teléfono'] || r['Telefono'] || null, idv: r.IDV || null,
+        raw_json: r,
+      }));
+
+      const sortKey = (x) => {
+        const t1 = x.h_respuesta_meli ? new Date(x.h_respuesta_meli).getTime() : 0;
+        const t2 = x.f_llegada ? new Date(x.f_llegada).getTime() : 0;
+        return t1 || t2 || 0;
+      };
+      const ordenadas = [...allRows].sort((a, b) => sortKey(b) - sortKey(a));
+      const seenCurp = new Set();
+      const rowsPrincipal = [];
+      for (const r of ordenadas) {
+        if (!seenCurp.has(r.curp)) { seenCurp.add(r.curp); rowsPrincipal.push(r); }
+      }
+
+      setMsg(`Subiendo ${rowsPrincipal.length} CURPs únicos a tabla principal...`);
+      const batchSize = 50;
+      let ok = 0; const errs = [];
+      for (let i = 0; i < rowsPrincipal.length; i += batchSize) {
+        const batch = rowsPrincipal.slice(i, i + batchSize);
+        const { error } = await sb.from('bt_tripulaciones').upsert(batch, { onConflict: 'curp' });
+        if (error) errs.push(`Principal batch ${i}: ${error.message}`); else ok += batch.length;
+        setCount({ total: rowsPrincipal.length, ok });
+        setMsg(`Tabla principal: ${ok}/${rowsPrincipal.length}...`);
+      }
+
+      setMsg(`Subiendo ${allRows.length} filas al historial...`);
+      const batchId = new Date().toISOString().replace(/[^0-9]/g, '').slice(0, 14);
+      let okHist = 0;
+      for (let i = 0; i < allRows.length; i += batchSize) {
+        const batch = allRows.slice(i, i + batchSize).map(r => ({ ...r, upload_batch_id: batchId }));
+        const { error } = await sb.from('bt_tripulaciones_historial').upsert(batch, { onConflict: 'curp,empresa,respuesta_meli,h_respuesta_meli', ignoreDuplicates: true });
+        if (error) errs.push(`Historial batch ${i}: ${error.message}`); else okHist += batch.length;
+        setMsg(`Historial: ${okHist}/${allRows.length}...`);
+      }
+
+      setCount({ total: rowsPrincipal.length, ok });
+      setErrores(errs);
+      setStatus(errs.length > 0 ? 'error' : 'done');
+      setMsg(errs.length > 0
+        ? `Cargado con errores: principal ${ok}/${rowsPrincipal.length} · historial ${okHist}/${allRows.length}`
+        : `✅ ${ok} CURPs únicos cargados · ${okHist} filas en historial`);
+    } catch (e) { setStatus('error'); setMsg('Error: ' + (e.message || e)); }
+  };
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }} onClick={status === 'idle' || status === 'done' || status === 'error' ? onClose : undefined}>
+      <div onClick={e => e.stopPropagation()} style={{ background: '#fff', borderRadius: 14, padding: 24, minWidth: 500, maxWidth: 600, fontFamily: "'Geist', sans-serif" }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+          <div style={{ fontSize: 16, fontWeight: 700, color: VBT_NAVY }}>Subir BBDD BT</div>
+          <button onClick={onClose} style={{ background: 'transparent', border: 'none', cursor: 'pointer', fontSize: 18, color: VBT_MUTED }}>✕</button>
+        </div>
+
+        {status === 'idle' && (<>
+          <div style={{ fontSize: 12, color: VBT_MUTED, marginBottom: 14, lineHeight: 1.6 }}>
+            Arrastrá o seleccioná el archivo <strong>VALIDACION_TRIPULACIONES_MELI_MX.xlsx</strong>.<br/>
+            Hace UPSERT por CURP y guarda todo el historial.
+          </div>
+          <label style={{ display: 'block', padding: 30, border: `2px dashed ${VBT_BORDER}`, borderRadius: 12, textAlign: 'center', cursor: 'pointer', background: '#f8fafc' }}>
+            <i className="ti ti-cloud-upload" style={{ fontSize: 32, color: VBT_NAVY, display: 'block', marginBottom: 8 }} />
+            <div style={{ fontSize: 13, fontWeight: 600, color: VBT_NAVY }}>Click para seleccionar archivo</div>
+            <div style={{ fontSize: 11, color: VBT_MUTED, marginTop: 4 }}>.xlsx</div>
+            <input type="file" accept=".xlsx,.xls" style={{ display: 'none' }} onChange={e => e.target.files[0] && handleFile(e.target.files[0])} />
+          </label>
+        </>)}
+
+        {(status === 'parsing' || status === 'uploading') && (
+          <div style={{ padding: 20, textAlign: 'center' }}>
+            <i className="ti ti-loader-2" style={{ fontSize: 32, color: VBT_NAVY, display: 'inline-block' }} />
+            <div style={{ fontSize: 13, color: VBT_TEXT, marginTop: 12 }}>{msg}</div>
+            {count.total > 0 && (
+              <div style={{ marginTop: 10, height: 8, background: VBT_BORDER, borderRadius: 4, overflow: 'hidden' }}>
+                <div style={{ width: `${100*count.ok/count.total}%`, height: '100%', background: VBT_NAVY, transition: 'width .3s' }} />
+              </div>
+            )}
+          </div>
+        )}
+
+        {status === 'done' && (
+          <div style={{ padding: 20, textAlign: 'center' }}>
+            <i className="ti ti-circle-check" style={{ fontSize: 40, color: VBT_GREEN }} />
+            <div style={{ fontSize: 14, fontWeight: 600, color: VBT_TEXT, marginTop: 8 }}>{msg}</div>
+            <button onClick={onClose} style={{ marginTop: 14, fontSize: 12, fontWeight: 600, padding: '8px 18px', borderRadius: 6, border: 'none', background: VBT_NAVY, color: '#fff', cursor: 'pointer', fontFamily: "'Geist', sans-serif" }}>Cerrar y refrescar</button>
+          </div>
+        )}
+
+        {status === 'error' && (
+          <div style={{ padding: 20 }}>
+            <div style={{ background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 8, padding: 12, marginBottom: 12 }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: '#991b1b' }}>{msg}</div>
+              {errores.length > 0 && (<div style={{ fontSize: 11, color: '#7f1d1d', marginTop: 6, maxHeight: 100, overflowY: 'auto' }}>{errores.map((e, i) => <div key={i}>{e}</div>)}</div>)}
+            </div>
+            <button onClick={() => { setStatus('idle'); setMsg(''); setErrores([]); }} style={{ fontSize: 12, fontWeight: 600, padding: '8px 18px', borderRadius: 6, border: `1px solid ${VBT_BORDER}`, background: VBT_CARD, color: VBT_TEXT, cursor: 'pointer', fontFamily: "'Geist', sans-serif" }}>Reintentar</button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function VBT_KPI({ l, v, s, accent }) {
+  return (
+    <div style={{ background: VBT_CARD, borderRadius: 12, border: `0.5px solid ${VBT_BORDER}`, padding: 14 }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color: VBT_MUTED, textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 8 }}>{l}</div>
+      <div style={{ fontSize: 26, fontWeight: 800, color: accent || VBT_TEXT, letterSpacing: -0.5, lineHeight: 1 }}>{v}</div>
+      <div style={{ fontSize: 11, color: VBT_LIGHT, marginTop: 6 }}>{s}</div>
+    </div>
+  );
+}
+
+function VBT_ThS({ children }) {
+  return <th style={{ padding: '8px 10px', fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, color: VBT_MUTED, textAlign: 'left', borderBottom: `1px solid ${VBT_BORDER}`, background: '#f8fafc', whiteSpace: 'nowrap' }}>{children}</th>;
+}
+
+function VBT_TdS({ children, bold, muted, mono, center, strong, small }) {
+  return <td style={{ padding: '8px 10px', fontSize: small ? 11 : 12, fontFamily: mono ? 'monospace' : "'Geist', sans-serif", color: muted ? VBT_MUTED : strong ? VBT_NAVY : VBT_TEXT, fontWeight: bold || strong ? 600 : 'normal', textAlign: center ? 'center' : 'left' }}>{children}</td>;
+}
+
+function VBT_Pill({ children, type }) {
+  const c = type === 'red' ? { bg: '#fee2e2', col: '#991b1b' }
+    : type === 'yellow' ? { bg: '#fef3c7', col: '#92400e' }
+    : type === 'blue' ? { bg: '#dbeafe', col: '#1e40af' }
+    : type === 'green' ? { bg: '#d1fae5', col: '#065f46' }
+    : { bg: '#f1f5f9', col: '#475569' };
+  return <span style={{ background: c.bg, color: c.col, fontSize: 9.5, fontWeight: 700, padding: '3px 8px', borderRadius: 5, textTransform: 'uppercase', letterSpacing: 0.3, whiteSpace: 'nowrap' }}>{children}</span>;
+}
+
+
+// ════════════════════════════════════════════════════════════════════════════
+// AUDITORÍA PADRÓN MELI · Subpestaña dentro de IndicadoresOperacionalesMX
+// ════════════════════════════════════════════════════════════════════════════
+
+function PoolMeliAuditoriaPadron({ usuario }) {
+  const [fechaA, setFechaA] = useState(() => {
+    const d = new Date(Date.now() - 6*60*60*1000); d.setDate(d.getDate() - 1);
+    return d.toISOString().split('T')[0];
+  });
+  const [fechaB, setFechaB] = useState(() => new Date(Date.now() - 6*60*60*1000).toISOString().split('T')[0]);
+  const [tab, setTab] = useState(0); // 0=Altas, 1=Bajas, 2=Cambios
+  const [fechasDisp, setFechasDisp] = useState([]);
+  const [ultimoLog, setUltimoLog] = useState(null);
+  const [snapshotA, setSnapshotA] = useState([]);
+  const [snapshotB, setSnapshotB] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const esAdmin = usuario?.rol === 'superadmin';
+
+  const cargar = async () => {
+    setLoading(true); setError(null);
+    try {
+      // Última actualización (log)
+      const { data: logData } = await sb.from('meli_padron_refresh_log').select('*').order('ejecutado_at', { ascending: false }).limit(1);
+      setUltimoLog(logData && logData.length > 0 ? logData[0] : null);
+
+      // Fechas disponibles
+      const { data: fechas, error: ef } = await sb.from('meli_drivers_inventory')
+        .select('snapshot_date').order('snapshot_date', { ascending: false }).limit(60);
+      if (ef) throw ef;
+      const fechasUnicas = [...new Set((fechas || []).map(f => f.snapshot_date))];
+      setFechasDisp(fechasUnicas);
+
+      // Snapshot A (anterior)
+      const { data: snA, error: eA } = await sb.from('meli_drivers_inventory')
+        .select('driver_id,name,document_value,status,disabled,is_only_helper,email,phone')
+        .eq('snapshot_date', fechaA);
+      if (eA) throw eA;
+
+      // Snapshot B (actual)
+      const { data: snB, error: eB } = await sb.from('meli_drivers_inventory')
+        .select('driver_id,name,document_value,status,disabled,is_only_helper,email,phone')
+        .eq('snapshot_date', fechaB);
+      if (eB) throw eB;
+
+      setSnapshotA(snA || []);
+      setSnapshotB(snB || []);
+    } catch (e) { setError(e.message || 'Error'); } finally { setLoading(false); }
+  };
+
+  useEffect(() => { cargar(); }, [fechaA, fechaB]);
+
+  // Cálculos
+  const { altas, bajas, cambios, kpis } = useMemo(() => {
+    const mapA = new Map(snapshotA.map(d => [d.driver_id, d]));
+    const mapB = new Map(snapshotB.map(d => [d.driver_id, d]));
+    const altas = snapshotB.filter(d => !mapA.has(d.driver_id));
+    const bajas = snapshotA.filter(d => !mapB.has(d.driver_id));
+    const cambios = [];
+    for (const b of snapshotB) {
+      const a = mapA.get(b.driver_id);
+      if (a && (a.status !== b.status || a.disabled !== b.disabled || a.is_only_helper !== b.is_only_helper)) {
+        cambios.push({
+          driver_id: b.driver_id, name: b.name, curp: b.document_value,
+          de_status: a.status, a_status: b.status,
+          de_disabled: a.disabled, a_disabled: b.disabled,
+          de_helper: a.is_only_helper, a_helper: b.is_only_helper,
+        });
+      }
+    }
+    const kpis = {
+      total_actual: snapshotB.length,
+      total_anterior: snapshotA.length,
+      delta: snapshotB.length - snapshotA.length,
+      active: snapshotB.filter(d => d.status === 'active' && !d.disabled).length,
+      inactive: snapshotB.filter(d => d.status === 'inactive').length,
+      blocked: snapshotB.filter(d => d.status === 'blocked').length,
+      helpers_puros: snapshotB.filter(d => d.is_only_helper).length,
+    };
+    return { altas, bajas, cambios, kpis };
+  }, [snapshotA, snapshotB]);
+
+  const refrescarPadron = async () => {
+    if (!esAdmin) return;
+    if (!confirm('¿Disparar refresh del padrón MELI ahora? (Toma ~30 segundos)')) return;
+    try {
+      const r = await fetch('http://162.243.90.161:3001/scrape-padron-meli', { method: 'POST' });
+      const data = await r.json();
+      if (data.ok) {
+        alert(`✅ Padrón actualizado · ${data.count} drivers · ${(data.duration_ms/1000).toFixed(1)}s`);
+        cargar();
+      } else {
+        alert('Error: ' + (data.error || 'desconocido'));
+      }
+    } catch (e) { alert('Error de red: ' + e.message); }
+  };
+
+  const PNAVY = "#1a3a6b"; const PORANGE = "#F47B20"; const PBG = "#f0f2f5";
+  const PCARD = "#fff"; const PBORDER = "#e4e7ec"; const PTEXT = "#1a1a1a";
+  const PMUTED = "#64748b"; const PLIGHT = "#94a3b8";
+
+  // Badge última actualización
+  const renderBadge = () => {
+    if (!ultimoLog) return (
+      <div style={{ fontSize: 11, color: PLIGHT, fontStyle: 'italic' }}>
+        Sin registros de refresh aún
+      </div>
+    );
+    const fecha = new Date(ultimoLog.ejecutado_at);
+    const hace = Math.floor((Date.now() - fecha.getTime()) / (60*1000));
+    const haceTexto = hace < 60 ? `hace ${hace} min` : hace < 24*60 ? `hace ${Math.floor(hace/60)} hs` : `hace ${Math.floor(hace/(60*24))} días`;
+    const dot = ultimoLog.status === 'ok' ? '#10b981' : '#dc2626';
+    return (
+      <div style={{ fontSize: 11, color: PMUTED, display: 'flex', alignItems: 'center', gap: 6 }}>
+        <span style={{ width: 8, height: 8, borderRadius: '50%', background: dot, display: 'inline-block' }} />
+        Última actualización: <strong style={{ color: PNAVY }}>{fecha.toLocaleString('es-MX', { dateStyle: 'short', timeStyle: 'short' })}</strong>
+        <span style={{ color: PLIGHT }}>· {haceTexto} · {ultimoLog.drivers_count} drivers</span>
+      </div>
+    );
+  };
+
+  if (loading) return <div style={{ padding: 40, textAlign: 'center', color: PMUTED, fontSize: 13, fontFamily: "'Geist', sans-serif" }}>Cargando padrón…</div>;
+  if (error) return (
+    <div style={{ padding: 24, fontFamily: "'Geist', sans-serif" }}>
+      <div style={{ background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 12, padding: 16 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: '#991b1b', marginBottom: 6 }}>No se pudo cargar Auditoría Padrón</div>
+        <div style={{ fontSize: 12, color: '#7f1d1d', lineHeight: 1.6 }}>
+          {error}<br/><br/>
+          <strong>Causa probable:</strong> falta correr <code>SQL_03_padron_audit_setup.sql</code>
+        </div>
+      </div>
+    </div>
+  );
+
+  return (
+    <div style={{ fontFamily: "'Geist', sans-serif", background: PBG, color: PTEXT }}>
+      {/* HEADER · selección fechas + badge + botón refresh */}
+      <div style={{ background: PCARD, borderBottom: `1px solid ${PBORDER}`, padding: '12px 24px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: PMUTED, textTransform: 'uppercase', letterSpacing: 0.5 }}>Comparar</div>
+          <select value={fechaA} onChange={e => setFechaA(e.target.value)} style={{
+            fontSize: 12, fontWeight: 600, padding: '6px 10px', borderRadius: 6,
+            border: `1px solid ${PBORDER}`, background: PCARD, color: PNAVY,
+            fontFamily: "'Geist', sans-serif", cursor: 'pointer', outline: 'none',
+          }}>
+            {fechasDisp.map(f => <option key={f} value={f}>{f}</option>)}
+          </select>
+          <span style={{ color: PLIGHT, fontSize: 12 }}>→</span>
+          <select value={fechaB} onChange={e => setFechaB(e.target.value)} style={{
+            fontSize: 12, fontWeight: 600, padding: '6px 10px', borderRadius: 6,
+            border: `1px solid ${PBORDER}`, background: PCARD, color: PNAVY,
+            fontFamily: "'Geist', sans-serif", cursor: 'pointer', outline: 'none',
+          }}>
+            {fechasDisp.map(f => <option key={f} value={f}>{f}</option>)}
+          </select>
+          <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10 }}>
+            {renderBadge()}
+            {esAdmin && (
+              <button onClick={refrescarPadron} style={{
+                fontSize: 11, fontWeight: 600, padding: '6px 12px', borderRadius: 6,
+                border: `1px solid ${PNAVY}`, background: PNAVY, color: '#fff',
+                cursor: 'pointer', fontFamily: "'Geist', sans-serif",
+                display: 'inline-flex', alignItems: 'center', gap: 5, height: 28, lineHeight: 1, whiteSpace: 'nowrap',
+              }}>
+                <i className="ti ti-refresh" style={{ fontSize: 13 }} />Refrescar ahora
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div style={{ padding: '16px 24px' }}>
+        {/* KPIs */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 10, marginBottom: 14 }}>
+          <PKpi l="Total padrón" v={kpis.total_actual} s={`${kpis.delta >= 0 ? '+' : ''}${kpis.delta} vs ${fechaA}`} accent={PNAVY} />
+          <PKpi l="Active" v={kpis.active} s="status=active sin disabled" accent="#10b981" />
+          <PKpi l="Inactive" v={kpis.inactive} s="status=inactive" accent="#eab308" />
+          <PKpi l="Blocked" v={kpis.blocked} s="status=blocked" accent="#dc2626" />
+          <PKpi l="Helpers puros" v={kpis.helpers_puros} s="is_only_helper=true" accent={PORANGE} />
+        </div>
+
+        {/* Tab bar Altas/Bajas/Cambios */}
+        <div style={{ background: PCARD, borderRadius: 12, border: `0.5px solid ${PBORDER}`, overflow: 'hidden' }}>
+          <div style={{ display: 'flex', borderBottom: `1px solid ${PBORDER}`, background: '#f8fafc' }}>
+            {[
+              { label: 'Altas', count: altas.length, icon: 'ti-circle-plus', color: '#10b981' },
+              { label: 'Bajas', count: bajas.length, icon: 'ti-circle-minus', color: '#dc2626' },
+              { label: 'Cambios de status', count: cambios.length, icon: 'ti-edit-circle', color: PORANGE },
+            ].map((t, i) => (
+              <div key={i} onClick={() => setTab(i)} style={{
+                padding: '12px 18px', fontSize: 12, fontWeight: 600,
+                color: tab === i ? PNAVY : PMUTED, cursor: 'pointer',
+                borderBottom: tab === i ? `2px solid ${PORANGE}` : '2px solid transparent',
+                display: 'flex', alignItems: 'center', gap: 6,
+              }}>
+                <i className={`ti ${t.icon}`} style={{ fontSize: 14, color: t.color }} />
+                {t.label}
+                <span style={{
+                  background: tab === i ? PNAVY : '#e5e7eb',
+                  color: tab === i ? '#fff' : PMUTED,
+                  fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: 4,
+                }}>{t.count}</span>
+              </div>
+            ))}
+          </div>
+
+          {tab === 0 && <TablaAltasBajas data={altas} tipo="alta" />}
+          {tab === 1 && <TablaAltasBajas data={bajas} tipo="baja" />}
+          {tab === 2 && <TablaCambios data={cambios} />}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PKpi({ l, v, s, accent }) {
+  return (
+    <div style={{ background: '#fff', borderRadius: 12, border: '0.5px solid #e4e7ec', padding: 14 }}>
+      <div style={{ fontSize: 10.5, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 6 }}>{l}</div>
+      <div style={{ fontSize: 22, fontWeight: 800, color: accent || '#1a1a1a', letterSpacing: -0.5, lineHeight: 1 }}>{v}</div>
+      <div style={{ fontSize: 10, color: '#94a3b8', marginTop: 4 }}>{s}</div>
+    </div>
+  );
+}
+
+function TablaAltasBajas({ data, tipo }) {
+  if (data.length === 0) return (
+    <div style={{ padding: 40, textAlign: 'center', color: '#94a3b8', fontSize: 13 }}>
+      Sin {tipo === 'alta' ? 'altas' : 'bajas'} entre las fechas seleccionadas
+    </div>
+  );
+  return (
+    <div style={{ maxHeight: '55vh', overflowY: 'auto' }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+        <thead style={{ position: 'sticky', top: 0, zIndex: 1, background: '#f8fafc' }}>
+          <tr>
+            <ApTh>Driver ID</ApTh><ApTh>Nombre</ApTh><ApTh>CURP</ApTh>
+            <ApTh>Status</ApTh><ApTh>Helper puro</ApTh><ApTh>Email</ApTh><ApTh>Teléfono</ApTh>
+          </tr>
+        </thead>
+        <tbody>
+          {data.map((d, i) => (
+            <tr key={i} style={{ borderBottom: '0.5px solid #f4f5f7' }}>
+              <ApTd mono>{d.driver_id}</ApTd>
+              <ApTd bold>{d.name}</ApTd>
+              <ApTd mono small>{d.document_value || '—'}</ApTd>
+              <ApTd>
+                <span style={{
+                  background: d.status === 'active' ? '#d1fae5' : d.status === 'blocked' ? '#fee2e2' : '#fef3c7',
+                  color: d.status === 'active' ? '#065f46' : d.status === 'blocked' ? '#991b1b' : '#92400e',
+                  fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: 4,
+                }}>{d.status}{d.disabled ? ' / disabled' : ''}</span>
+              </ApTd>
+              <ApTd center>{d.is_only_helper ? '✅' : '—'}</ApTd>
+              <ApTd small muted>{d.email || '—'}</ApTd>
+              <ApTd mono small>{d.phone || '—'}</ApTd>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function TablaCambios({ data }) {
+  if (data.length === 0) return (
+    <div style={{ padding: 40, textAlign: 'center', color: '#94a3b8', fontSize: 13 }}>
+      Sin cambios de status entre las fechas seleccionadas
+    </div>
+  );
+  return (
+    <div style={{ maxHeight: '55vh', overflowY: 'auto' }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+        <thead style={{ position: 'sticky', top: 0, zIndex: 1, background: '#f8fafc' }}>
+          <tr>
+            <ApTh>Driver ID</ApTh><ApTh>Nombre</ApTh><ApTh>CURP</ApTh>
+            <ApTh>Status anterior</ApTh><ApTh>→</ApTh><ApTh>Status nuevo</ApTh>
+            <ApTh>Helper puro</ApTh>
+          </tr>
+        </thead>
+        <tbody>
+          {data.map((d, i) => {
+            const statusCambio = d.de_status !== d.a_status || d.de_disabled !== d.a_disabled;
+            const helperCambio = d.de_helper !== d.a_helper;
+            return (
+              <tr key={i} style={{ borderBottom: '0.5px solid #f4f5f7' }}>
+                <ApTd mono>{d.driver_id}</ApTd>
+                <ApTd bold>{d.name}</ApTd>
+                <ApTd mono small>{d.curp || '—'}</ApTd>
+                <ApTd>{statusCambio ? `${d.de_status}${d.de_disabled?' (disabled)':''}` : '—'}</ApTd>
+                <ApTd center>{statusCambio ? '→' : ''}</ApTd>
+                <ApTd>
+                  {statusCambio ? (
+                    <span style={{
+                      background: d.a_status === 'active' ? '#d1fae5' : d.a_status === 'blocked' ? '#fee2e2' : '#fef3c7',
+                      color: d.a_status === 'active' ? '#065f46' : d.a_status === 'blocked' ? '#991b1b' : '#92400e',
+                      fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: 4,
+                    }}>{d.a_status}{d.a_disabled ? ' / disabled' : ''}</span>
+                  ) : '—'}
+                </ApTd>
+                <ApTd center>{helperCambio ? `${d.de_helper?'✅':'—'} → ${d.a_helper?'✅':'—'}` : (d.a_helper ? '✅' : '—')}</ApTd>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function ApTh({ children }) {
+  return <th style={{ padding: '8px 10px', fontSize: 9, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, color: '#64748b', textAlign: 'left', borderBottom: '1px solid #e4e7ec', whiteSpace: 'nowrap' }}>{children}</th>;
+}
+
+function ApTd({ children, bold, muted, mono, center, small }) {
+  return <td style={{ padding: '8px 10px', fontSize: small ? 11 : 12, fontFamily: mono ? 'monospace' : "'Geist', sans-serif", color: muted ? '#64748b' : '#1a1a1a', fontWeight: bold ? 600 : 'normal', textAlign: center ? 'center' : 'left' }}>{children}</td>;
+}
 
 
 
