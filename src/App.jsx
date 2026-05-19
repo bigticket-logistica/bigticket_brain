@@ -26455,6 +26455,7 @@ function PrefTransportistas({ data, onChange }) {
   const [busqueda, setBusqueda] = useState("");
   const [filtroEstado, setFiltroEstado] = useState("todos");
   const [editando, setEditando] = useState(null);
+  const [mostrarImportador, setMostrarImportador] = useState(false);
 
   const filtrados = useMemo(() => {
     let r = [...data];
@@ -26512,6 +26513,14 @@ function PrefTransportistas({ data, onChange }) {
             }}
             label="Descargar Excel"
           />
+          <button onClick={() => setMostrarImportador(true)}
+            style={{
+              background: "#fff", border: "1px solid #1a3a6b", borderRadius: 8,
+              padding: "9px 16px", fontSize: 13, color: "#1a3a6b", cursor: "pointer",
+              fontFamily: "Geist, sans-serif", fontWeight: 600,
+            }}>
+            📤 Importar Excel
+          </button>
           <button className="btn-orange" onClick={() => setEditando("nuevo")} style={{ padding: "9px 16px", fontSize: 13 }}>
             + Nuevo transportista
           </button>
@@ -26616,6 +26625,15 @@ function PrefTransportistas({ data, onChange }) {
           editandoId={editando !== "nuevo" ? editando : null}
           onCancelar={() => setEditando(null)}
           onGuardarOK={async () => { setEditando(null); await onChange(); }}
+        />
+      )}
+
+      {mostrarImportador && (
+        <ModalImportadorTransportistas
+          config={CONFIG_IMPORTADOR_MX}
+          dataExistente={data}
+          onCancelar={() => setMostrarImportador(false)}
+          onImportadoOK={async () => { await onChange(); }}
         />
       )}
     </div>
@@ -28153,6 +28171,7 @@ function PrefCLTransportistas({ data, onChange }) {
   const [busqueda, setBusqueda] = useState("");
   const [filtroEstado, setFiltroEstado] = useState("todos");
   const [editando, setEditando] = useState(null);
+  const [mostrarImportador, setMostrarImportador] = useState(false);
 
   const filtrados = useMemo(() => {
     let r = [...data];
@@ -28211,6 +28230,14 @@ function PrefCLTransportistas({ data, onChange }) {
             }}
             label="Descargar Excel"
           />
+          <button onClick={() => setMostrarImportador(true)}
+            style={{
+              background: "#fff", border: "1px solid #1a3a6b", borderRadius: 8,
+              padding: "9px 16px", fontSize: 13, color: "#1a3a6b", cursor: "pointer",
+              fontFamily: "Geist, sans-serif", fontWeight: 600,
+            }}>
+            📤 Importar Excel
+          </button>
           <button className="btn-orange" onClick={() => setEditando("nuevo")} style={{ padding: "9px 16px", fontSize: 13 }}>
             + Nuevo transportista
           </button>
@@ -28311,6 +28338,15 @@ function PrefCLTransportistas({ data, onChange }) {
           editandoId={editando !== "nuevo" ? editando : null}
           onCancelar={() => setEditando(null)}
           onGuardarOK={async () => { setEditando(null); await onChange(); }}
+        />
+      )}
+
+      {mostrarImportador && (
+        <ModalImportadorTransportistas
+          config={CONFIG_IMPORTADOR_CL}
+          dataExistente={data}
+          onCancelar={() => setMostrarImportador(false)}
+          onImportadoOK={async () => { await onChange(); }}
         />
       )}
     </div>
@@ -28663,3 +28699,593 @@ function ModalEdicionParametroCL({ inicial, esNuevo, editandoId, onCancelar, onG
     </div>
   );
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════════════
+// IMPORTADOR MASIVO DE TRANSPORTISTAS — Modal genérico para MX y CL
+// ───────────────────────────────────────────────────────────────────────────────────────
+// Recibe configuración del esquema (columnas, tabla, lookup de duplicados) y maneja:
+//   1. Descarga de plantilla Excel vacía con encabezados correctos
+//   2. Drag-and-drop de Excel con datos
+//   3. Preview con 3 estados: nuevos (insertar) / duplicados (saltar) / con errores
+//   4. Inserción masiva en Supabase
+// ═══════════════════════════════════════════════════════════════════════════════════════
+
+async function pf_cargarXLSX_imp() {
+  if (window.XLSX) return window.XLSX;
+  await new Promise((res, rej) => {
+    const s = document.createElement("script");
+    s.src = "https://cdn.sheetjs.com/xlsx-0.20.0/package/dist/xlsx.full.min.js";
+    s.onload = res; s.onerror = rej;
+    document.head.appendChild(s);
+  });
+  return window.XLSX;
+}
+
+function ModalImportadorTransportistas({ config, dataExistente, onCancelar, onImportadoOK }) {
+  // config: {
+  //   pais: "MX" | "CL",
+  //   tabla: "prefacturas_transportistas_mx" | "prefacturas_transportistas_cl",
+  //   columnas: [{key, label, oblig, validador?}],
+  //   identificadorUnico: "rfc" | "rut",   // campo que define duplicado (además del nombre)
+  //   ejemploFila: { nombre: "...", rfc: "...", ... }
+  // }
+  const [arrastrando, setArrastrando] = useState(false);
+  const [analizando, setAnalizando] = useState(false);
+  const [filas, setFilas] = useState([]);  // [{ data, estado: "nuevo"|"duplicado"|"error", errores: [], duplicadoConId? }]
+  const [importando, setImportando] = useState(false);
+  const [resultado, setResultado] = useState(null);
+  const [errorGeneral, setErrorGeneral] = useState("");
+  const fileInputRef = useRef(null);
+
+  // ─── Descargar plantilla vacía ─────────────────────────────────────────────
+  const descargarPlantilla = async () => {
+    try {
+      const XLSX = await pf_cargarXLSX_imp();
+      const cabeceras = config.columnas.map(c => c.label);
+      const ejemplo = config.columnas.map(c => config.ejemploFila[c.key] || "");
+      const datos = [cabeceras, ejemplo];
+
+      const ws = XLSX.utils.aoa_to_sheet(datos);
+      // Anchos sugeridos
+      ws["!cols"] = config.columnas.map(c => ({ wch: Math.max(c.label.length + 4, 18) }));
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Transportistas");
+      XLSX.writeFile(wb, `plantilla_transportistas_${config.pais.toLowerCase()}.xlsx`);
+    } catch (e) {
+      alert("Error generando plantilla: " + e.message);
+    }
+  };
+
+  // ─── Procesar Excel cargado ────────────────────────────────────────────────
+  const procesarExcel = async (file) => {
+    setErrorGeneral("");
+    setResultado(null);
+    setAnalizando(true);
+    try {
+      const XLSX = await pf_cargarXLSX_imp();
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(buf, { type: "array" });
+      const wsName = wb.SheetNames[0];
+      const ws = wb.Sheets[wsName];
+      const filas2D = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null });
+
+      if (filas2D.length < 2) {
+        setErrorGeneral("El Excel está vacío o solo tiene la cabecera.");
+        setFilas([]);
+        setAnalizando(false);
+        return;
+      }
+
+      // Primera fila = headers
+      const headers = filas2D[0].map(h => String(h || "").trim().toLowerCase());
+
+      // Mapear cada columna del Excel a una key del esquema
+      // Acepta tanto el label como la key como nombre de columna
+      const headerToKey = {};
+      config.columnas.forEach(c => {
+        const labelLower = c.label.toLowerCase();
+        const keyLower = c.key.toLowerCase();
+        const idx = headers.findIndex(h => h === labelLower || h === keyLower);
+        if (idx >= 0) headerToKey[idx] = c.key;
+      });
+
+      // Verificar que al menos los campos obligatorios estén presentes
+      const obligs = config.columnas.filter(c => c.oblig);
+      const obligsFaltantes = obligs.filter(c => !Object.values(headerToKey).includes(c.key));
+      if (obligsFaltantes.length > 0) {
+        setErrorGeneral(`Faltan columnas obligatorias: ${obligsFaltantes.map(c => c.label).join(", ")}`);
+        setFilas([]);
+        setAnalizando(false);
+        return;
+      }
+
+      // Lookup para detectar duplicados (case-insensitive)
+      const lookupNombre = new Map();
+      const lookupId = new Map();
+      dataExistente.forEach(t => {
+        if (t.nombre) lookupNombre.set(String(t.nombre).toUpperCase().trim(), t);
+        const idVal = t[config.identificadorUnico];
+        if (idVal) lookupId.set(String(idVal).toUpperCase().trim(), t);
+      });
+
+      // Para detectar duplicados dentro del mismo Excel
+      const yaVistosNombre = new Set();
+      const yaVistosId = new Set();
+
+      const filasProcesadas = [];
+      for (let i = 1; i < filas2D.length; i++) {
+        const raw = filas2D[i];
+        // Saltar filas totalmente vacías
+        if (!raw || raw.every(c => c == null || String(c).trim() === "")) continue;
+
+        // Armar el objeto data según el esquema
+        const data = {};
+        Object.entries(headerToKey).forEach(([excelIdx, key]) => {
+          const val = raw[Number(excelIdx)];
+          data[key] = val == null ? "" : String(val).trim();
+        });
+
+        // Validar obligatorios
+        const errores = [];
+        obligs.forEach(c => {
+          if (!data[c.key] || data[c.key].trim() === "") {
+            errores.push(`Falta ${c.label}`);
+          }
+        });
+
+        // Validadores custom por columna
+        config.columnas.forEach(c => {
+          if (c.validador && data[c.key]) {
+            const err = c.validador(data[c.key]);
+            if (err) errores.push(err);
+          }
+        });
+
+        // Detectar duplicado: por nombre o por identificador único (RFC/RUT)
+        let estado = "nuevo";
+        let duplicadoConId = null;
+        let motivoDup = "";
+        const nombreUp = (data.nombre || "").toUpperCase().trim();
+        const idUp = (data[config.identificadorUnico] || "").toUpperCase().trim();
+
+        if (yaVistosNombre.has(nombreUp)) {
+          errores.push("Duplicado dentro del Excel (mismo nombre)");
+        }
+        if (idUp && yaVistosId.has(idUp)) {
+          errores.push(`Duplicado dentro del Excel (mismo ${config.identificadorUnico.toUpperCase()})`);
+        }
+
+        if (errores.length === 0) {
+          if (nombreUp && lookupNombre.has(nombreUp)) {
+            estado = "duplicado";
+            duplicadoConId = lookupNombre.get(nombreUp).id;
+            motivoDup = "Mismo nombre ya existe en Supabase";
+          } else if (idUp && lookupId.has(idUp)) {
+            estado = "duplicado";
+            duplicadoConId = lookupId.get(idUp).id;
+            motivoDup = `Mismo ${config.identificadorUnico.toUpperCase()} ya existe en Supabase`;
+          }
+        } else {
+          estado = "error";
+        }
+
+        if (nombreUp) yaVistosNombre.add(nombreUp);
+        if (idUp) yaVistosId.add(idUp);
+
+        filasProcesadas.push({
+          filaExcel: i + 1,
+          data,
+          estado,
+          errores,
+          motivoDup,
+          duplicadoConId,
+        });
+      }
+
+      setFilas(filasProcesadas);
+    } catch (e) {
+      setErrorGeneral("Error procesando Excel: " + e.message);
+      setFilas([]);
+    }
+    setAnalizando(false);
+  };
+
+  const onFileDrop = (fileList) => {
+    const archivos = Array.from(fileList || []).filter(f => /\.(xlsx|xls)$/i.test(f.name) && f.size > 0);
+    if (archivos.length === 0) {
+      setErrorGeneral("Subí un archivo Excel (.xlsx).");
+      return;
+    }
+    procesarExcel(archivos[0]);
+  };
+
+  // ─── Importar (insertar las filas "nuevas" en Supabase) ────────────────────
+  const importar = async () => {
+    const aInsertar = filas.filter(f => f.estado === "nuevo");
+    if (aInsertar.length === 0) {
+      alert("No hay registros nuevos para importar.");
+      return;
+    }
+    const omitidos = filas.length - aInsertar.length;
+    if (!confirm(
+      `Se insertarán ${aInsertar.length} transportista(s) nuevos.\n` +
+      `${omitidos > 0 ? `(Se omiten ${omitidos} duplicados/errores)\n` : ""}\n` +
+      `¿Confirmás la importación?`
+    )) return;
+
+    setImportando(true);
+    let okCount = 0, errCount = 0;
+    const erroresDetallados = [];
+    const BATCH_SIZE = 50;  // Supabase rate limit
+
+    for (let i = 0; i < aInsertar.length; i += BATCH_SIZE) {
+      const lote = aInsertar.slice(i, i + BATCH_SIZE);
+      const payloads = lote.map(f => {
+        const p = { ...f.data };
+        // Limpiar strings vacíos a null para columnas opcionales
+        config.columnas.forEach(c => {
+          if (!c.oblig && p[c.key] === "") p[c.key] = null;
+        });
+        // Estado default
+        if (!p.estado) p.estado = "Activo";
+        p.updated_at = new Date().toISOString();
+        return p;
+      });
+      try {
+        const { error } = await sb.from(config.tabla).insert(payloads);
+        if (error) {
+          errCount += lote.length;
+          erroresDetallados.push(`Lote ${Math.floor(i / BATCH_SIZE) + 1}: ${error.message}`);
+        } else {
+          okCount += lote.length;
+        }
+      } catch (e) {
+        errCount += lote.length;
+        erroresDetallados.push(`Lote ${Math.floor(i / BATCH_SIZE) + 1}: ${e.message}`);
+      }
+    }
+
+    setResultado({ ok: okCount, err: errCount, omitidos, erroresDetallados });
+    setImportando(false);
+
+    if (okCount > 0) {
+      // Refrescar la lista de transportistas en el padre
+      await onImportadoOK();
+    }
+  };
+
+  // ─── Contadores y stats ────────────────────────────────────────────────────
+  const stats = useMemo(() => ({
+    total: filas.length,
+    nuevos: filas.filter(f => f.estado === "nuevo").length,
+    duplicados: filas.filter(f => f.estado === "duplicado").length,
+    conError: filas.filter(f => f.estado === "error").length,
+  }), [filas]);
+
+  return (
+    <div style={{
+      position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)",
+      display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 20,
+    }} onClick={!importando ? onCancelar : undefined}>
+      <div onClick={e => e.stopPropagation()} style={{
+        background: "#fff", borderRadius: 14, padding: 24, maxWidth: 1100, width: "100%",
+        maxHeight: "92vh", overflowY: "auto",
+      }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 8 }}>
+          <div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: "#1a3a6b" }}>
+              Importador masivo · Transportistas {config.pais}
+            </div>
+            <div style={{ fontSize: 12, color: "#64748b", marginTop: 4 }}>
+              Subí un Excel con la nómina de transportistas. Validamos antes de insertar.
+            </div>
+          </div>
+          <button onClick={descargarPlantilla}
+            style={{
+              background: "#fff", border: "1px solid #1a3a6b", borderRadius: 8,
+              padding: "8px 14px", fontSize: 12, color: "#1a3a6b", cursor: "pointer",
+              fontFamily: "Geist, sans-serif", fontWeight: 600,
+            }}>
+            📋 Descargar plantilla
+          </button>
+        </div>
+
+        {errorGeneral && (
+          <div style={{
+            background: "#fee2e2", border: "1px solid #fca5a5", color: "#991b1b",
+            padding: "10px 14px", borderRadius: 8, marginBottom: 14, fontSize: 13,
+          }}>⚠ {errorGeneral}</div>
+        )}
+
+        {filas.length === 0 && !resultado && (
+          <>
+            {/* Drag-and-drop */}
+            <div
+              onDragOver={e => { e.preventDefault(); e.stopPropagation(); setArrastrando(true); }}
+              onDragLeave={e => { e.preventDefault(); e.stopPropagation(); setArrastrando(false); }}
+              onDrop={e => {
+                e.preventDefault(); e.stopPropagation();
+                setArrastrando(false);
+                onFileDrop(e.dataTransfer.files);
+              }}
+              onClick={() => fileInputRef.current?.click()}
+              style={{
+                border: `3px dashed ${arrastrando ? "#F47B20" : "#1a3a6b"}`,
+                borderRadius: 12, padding: "40px 24px", textAlign: "center",
+                cursor: "pointer", background: arrastrando ? "#fff7ed" : "#f8fafc",
+                marginBottom: 16, transition: "all 0.2s",
+              }}
+            >
+              <div style={{ fontSize: 40, marginBottom: 10 }}>📤</div>
+              <div style={{ fontSize: 15, color: "#1a3a6b", fontWeight: 700, marginBottom: 4 }}>
+                {analizando
+                  ? "Analizando Excel..."
+                  : arrastrando
+                    ? "Soltá el Excel aquí"
+                    : "Arrastrá el Excel de transportistas"}
+              </div>
+              <div style={{ fontSize: 12, color: "#64748b" }}>
+                o hacé clic para seleccionar · solo .xlsx
+              </div>
+              <input
+                ref={fileInputRef} type="file" accept=".xlsx,.xls"
+                style={{ display: "none" }}
+                onChange={e => { onFileDrop(e.target.files); e.target.value = ""; }}
+              />
+            </div>
+
+            {/* Instrucciones */}
+            <div style={{
+              background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 8,
+              padding: 14, fontSize: 12, color: "#1a3a6b", lineHeight: 1.6,
+            }}>
+              <div style={{ fontWeight: 700, marginBottom: 6 }}>💡 Formato esperado del Excel:</div>
+              <div>El archivo debe tener una hoja con las siguientes columnas (en la primera fila):</div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
+                {config.columnas.map(c => (
+                  <code key={c.key} style={{
+                    background: "#fff", border: "1px solid #bfdbfe", borderRadius: 4,
+                    padding: "2px 8px", fontSize: 11, fontFamily: "monospace",
+                  }}>
+                    {c.label}{c.oblig ? " *" : ""}
+                  </code>
+                ))}
+              </div>
+              <div style={{ marginTop: 8, fontSize: 11 }}>
+                * = obligatorio · Descargá la plantilla arriba para tener el formato exacto.
+              </div>
+            </div>
+          </>
+        )}
+
+        {filas.length > 0 && !resultado && (
+          <>
+            {/* Indicadores */}
+            <div style={{
+              display: "grid", gridTemplateColumns: "repeat(4, 1fr)",
+              gap: 10, marginBottom: 16,
+            }}>
+              <IndicadorImp label="Total" valor={stats.total} color="#1a3a6b" />
+              <IndicadorImp label="Nuevos" valor={stats.nuevos} color="#16a34a" />
+              <IndicadorImp label="Duplicados" valor={stats.duplicados} color="#f59e0b" />
+              <IndicadorImp label="Con errores" valor={stats.conError} color="#dc2626" />
+            </div>
+
+            {/* Tabla preview */}
+            <div style={{
+              border: "1px solid #e4e7ec", borderRadius: 8, overflow: "hidden",
+              maxHeight: "45vh", overflowY: "auto", marginBottom: 16,
+            }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+                <thead style={{ position: "sticky", top: 0, background: "#f8fafc", zIndex: 1 }}>
+                  <tr>
+                    <th style={pf_th()}>Fila</th>
+                    <th style={pf_th()}>Estado</th>
+                    {config.columnas.map(c => (
+                      <th key={c.key} style={pf_th()}>{c.label}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {filas.map(f => {
+                    let bg = "transparent";
+                    if (f.estado === "nuevo")      bg = "#f0fdf4";
+                    if (f.estado === "duplicado")  bg = "#fffbeb";
+                    if (f.estado === "error")      bg = "#fef2f2";
+                    return (
+                      <tr key={f.filaExcel} style={{ background: bg, borderTop: "1px solid #f1f5f9" }}>
+                        <td style={pf_td()}><span style={{ fontSize: 10, color: "#94a3b8" }}>#{f.filaExcel}</span></td>
+                        <td style={pf_td()}>
+                          {f.estado === "nuevo" && (
+                            <span style={{ background: "#dcfce7", color: "#166534", padding: "2px 8px", borderRadius: 20, fontSize: 10, fontWeight: 700 }}>
+                              ✓ NUEVO
+                            </span>
+                          )}
+                          {f.estado === "duplicado" && (
+                            <div title={f.motivoDup}>
+                              <span style={{ background: "#fef3c7", color: "#92400e", padding: "2px 8px", borderRadius: 20, fontSize: 10, fontWeight: 700 }}>
+                                ⊘ DUPLICADO
+                              </span>
+                              <div style={{ fontSize: 9, color: "#92400e", marginTop: 2 }}>{f.motivoDup}</div>
+                            </div>
+                          )}
+                          {f.estado === "error" && (
+                            <div title={f.errores.join(" · ")}>
+                              <span style={{ background: "#fee2e2", color: "#991b1b", padding: "2px 8px", borderRadius: 20, fontSize: 10, fontWeight: 700 }}>
+                                ✗ ERROR
+                              </span>
+                              <div style={{ fontSize: 9, color: "#991b1b", marginTop: 2, maxWidth: 200 }}>
+                                {f.errores[0]}
+                                {f.errores.length > 1 && ` (+${f.errores.length - 1})`}
+                              </div>
+                            </div>
+                          )}
+                        </td>
+                        {config.columnas.map(c => (
+                          <td key={c.key} style={{ ...pf_td(), maxWidth: 180, wordBreak: "break-all", fontSize: 11 }}>
+                            {f.data[c.key] || <em style={{ color: "#cbd5e1" }}>—</em>}
+                          </td>
+                        ))}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            <div style={{
+              fontSize: 11, color: "#64748b", marginBottom: 14, padding: "10px 12px",
+              background: "#f8fafc", borderRadius: 8,
+            }}>
+              💡 Al confirmar se insertan solo los registros marcados como <strong style={{ color: "#16a34a" }}>NUEVO</strong>.
+              Los <strong style={{ color: "#f59e0b" }}>DUPLICADOS</strong> se saltan (no se modifica nada existente).
+              Los <strong style={{ color: "#dc2626" }}>ERRORES</strong> se omiten — corregilos en el Excel y volvé a importar.
+            </div>
+          </>
+        )}
+
+        {resultado && (
+          <div style={{
+            background: resultado.err === 0 ? "#f0fdf4" : "#fffbeb",
+            border: `1px solid ${resultado.err === 0 ? "#86efac" : "#fde68a"}`,
+            borderRadius: 10, padding: 16, marginBottom: 14,
+          }}>
+            <div style={{ fontSize: 15, fontWeight: 700, color: resultado.err === 0 ? "#166534" : "#92400e", marginBottom: 8 }}>
+              {resultado.err === 0 ? "✓ Importación completada" : "⚠ Importación con errores"}
+            </div>
+            <div style={{ fontSize: 13, color: "#475569", lineHeight: 1.8 }}>
+              <div><strong style={{ color: "#16a34a" }}>{resultado.ok}</strong> registro(s) insertados correctamente</div>
+              {resultado.err > 0 && (
+                <div><strong style={{ color: "#dc2626" }}>{resultado.err}</strong> registro(s) fallaron al insertar</div>
+              )}
+              {resultado.omitidos > 0 && (
+                <div><strong style={{ color: "#f59e0b" }}>{resultado.omitidos}</strong> registro(s) omitidos (duplicados o con errores)</div>
+              )}
+            </div>
+            {resultado.erroresDetallados.length > 0 && (
+              <details style={{ marginTop: 10 }}>
+                <summary style={{ fontSize: 12, cursor: "pointer", color: "#991b1b", fontWeight: 600 }}>
+                  Ver errores detallados ({resultado.erroresDetallados.length})
+                </summary>
+                <div style={{ fontSize: 11, color: "#991b1b", marginTop: 8, lineHeight: 1.6 }}>
+                  {resultado.erroresDetallados.map((e, i) => <div key={i}>• {e}</div>)}
+                </div>
+              </details>
+            )}
+          </div>
+        )}
+
+        {/* Botones */}
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap" }}>
+          {resultado ? (
+            <button onClick={onCancelar} className="btn-blue"
+              style={{ padding: "9px 18px", fontSize: 13 }}>
+              Cerrar
+            </button>
+          ) : filas.length === 0 ? (
+            <button onClick={onCancelar}
+              style={{
+                background: "#fff", border: "1px solid #e4e7ec", borderRadius: 8,
+                padding: "9px 14px", fontSize: 12, color: "#475569", cursor: "pointer",
+                fontFamily: "Geist, sans-serif", fontWeight: 600,
+              }}>Cancelar</button>
+          ) : (
+            <>
+              <button onClick={() => { setFilas([]); setErrorGeneral(""); setResultado(null); }}
+                disabled={importando}
+                style={{
+                  background: "#fff", border: "1px solid #e4e7ec", borderRadius: 8,
+                  padding: "9px 14px", fontSize: 12, color: "#475569", cursor: "pointer",
+                  fontFamily: "Geist, sans-serif", fontWeight: 600,
+                  opacity: importando ? 0.4 : 1,
+                }}>← Subir otro Excel</button>
+              <button onClick={onCancelar} disabled={importando}
+                style={{
+                  background: "#fff", border: "1px solid #e4e7ec", borderRadius: 8,
+                  padding: "9px 14px", fontSize: 12, color: "#475569", cursor: "pointer",
+                  fontFamily: "Geist, sans-serif", fontWeight: 600,
+                  opacity: importando ? 0.4 : 1,
+                }}>Cancelar</button>
+              <button onClick={importar}
+                disabled={importando || stats.nuevos === 0}
+                className="btn-orange"
+                style={{ padding: "9px 18px", fontSize: 13 }}>
+                {importando
+                  ? "Importando..."
+                  : `📥 Confirmar e importar ${stats.nuevos} nuevo${stats.nuevos === 1 ? "" : "s"}`
+                }
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function IndicadorImp({ label, valor, color }) {
+  return (
+    <div style={{
+      background: "#fff", border: "0.5px solid #e4e7ec", borderRadius: 8,
+      padding: "10px 12px",
+    }}>
+      <div style={{
+        fontSize: 10, color: "#94a3b8", textTransform: "uppercase",
+        letterSpacing: 0.5, marginBottom: 4, fontWeight: 600,
+      }}>{label}</div>
+      <div style={{ fontSize: 20, fontWeight: 700, color }}>{valor}</div>
+    </div>
+  );
+}
+
+// ─── Configuraciones de esquema para MX y CL ────────────────────────────────
+const CONFIG_IMPORTADOR_MX = {
+  pais: "MX",
+  tabla: "prefacturas_transportistas_mx",
+  identificadorUnico: "rfc",
+  columnas: [
+    { key: "nombre",     label: "Nombre",     oblig: true },
+    { key: "rfc",        label: "RFC",        oblig: false },
+    { key: "estado",     label: "Estado",     oblig: false },  // Activo / Inactivo
+    { key: "correo_to",  label: "Correo TO",  oblig: false,
+      validador: v => v && !/^[^\s@;,]+@[^\s@;,]+\.[^\s@;,]+$/.test(v.trim()) ? "Correo TO inválido" : null },
+    { key: "correo_cc",  label: "Correo CC",  oblig: false },
+    { key: "correo_bcc", label: "Correo BCC", oblig: false },
+    { key: "notas",      label: "Notas",      oblig: false },
+  ],
+  ejemploFila: {
+    nombre: "EJEMPLO TRANSPORTISTA MX",
+    rfc: "EJM850101AAA",
+    estado: "Activo",
+    correo_to: "ejemplo@dominio.com",
+    correo_cc: "supervisor@bigticket.mx",
+    correo_bcc: "",
+    notas: "(opcional)",
+  },
+};
+
+const CONFIG_IMPORTADOR_CL = {
+  pais: "CL",
+  tabla: "prefacturas_transportistas_cl",
+  identificadorUnico: "rut",
+  columnas: [
+    { key: "nombre",    label: "Nombre",    oblig: true },
+    { key: "rut",       label: "RUT",       oblig: false,
+      validador: v => v && !/^[0-9]{1,10}-[0-9Kk]$/.test(v.trim()) ? "RUT inválido (formato: 12345678-9)" : null },
+    { key: "estado",    label: "Estado",    oblig: false },  // Activo / Bloqueado
+    { key: "correo",    label: "Correo",    oblig: false,
+      validador: v => v && !/^[^\s@;,]+@[^\s@;,]+\.[^\s@;,]+$/.test(v.trim()) ? "Correo inválido" : null },
+    { key: "contacto",  label: "Contacto",  oblig: false },
+    { key: "telefono",  label: "Teléfono",  oblig: false },
+    { key: "notas",     label: "Notas",     oblig: false },
+  ],
+  ejemploFila: {
+    nombre: "EJEMPLO TRANSPORTES SPA",
+    rut: "77123456-7",
+    estado: "Activo",
+    correo: "ejemplo@dominio.cl",
+    contacto: "Juan Pérez",
+    telefono: "+56 9 1234 5678",
+    notas: "(opcional)",
+  },
+};
