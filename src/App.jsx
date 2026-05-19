@@ -149,6 +149,7 @@ function BotonDescargarExcel({ onClick, disabled, label = "Descargar Excel" }) {
 const MODULOS = {
   superadmin: ["brain", "pool_meli_mx", "pagos", "maestro", "certificaciones", "incidencias", "pnr", "prospeccion", "wiki", "configuracion"],
   certificacion: ["certificaciones"],
+  prefacturas: ["pagos"],
 };
 const MODULOS_LABELS = {
   brain: "Brain Central",
@@ -169,6 +170,7 @@ const USUARIOS = {
   "nicole.vargas@bigticket.cl":     { pass: "nicole.2026",  rol: "superadmin", nombre: "Nicole Vargas" },
   "roberto.rayon@bigticket.mx":     { pass: "roberto.2026", rol: "superadmin", nombre: "Roberto Rayón" },
   "eduardo.stine@bigticket.cl":     { pass: "eduardo.2026", rol: "superadmin", nombre: "Eduardo Stine" },
+  "danny.calas@bigticket.cl":       { pass: "danny.2026",   rol: "prefacturas", nombre: "Danny Calas" },
 };
 const COLUMNAS = [
   { id: "pendiente", label: "Validación MELI", color: "#92400e", bg: "#fef3c7", border: "#fde68a" },
@@ -14518,7 +14520,12 @@ function ModuloCertificacionesMadre() {
 // PAGOS MADRE — wrapper con sub-tabs (Listado / Drivers / Ayudantes / Config)
 // ═══════════════════════════════════════════════════════════════════════════
 function ModuloPagosMadre({ usuario }) {
-  const [subtab, setSubtab] = useState("listado");
+  // Si el usuario tiene rol "prefacturas", solo puede acceder a la sub-tab Prefacturas.
+  // Las otras sub-tabs siguen visibles pero al hacer click muestran un mensaje de bloqueo.
+  const rolLimitadoAPrefacturas = usuario?.rol === "prefacturas";
+  const subtabsPermitidas = rolLimitadoAPrefacturas ? ["prefacturas"] : null; // null = todas
+
+  const [subtab, setSubtab] = useState(rolLimitadoAPrefacturas ? "prefacturas" : "listado");
   const tabs = [
     { id: "listado",     label: "Listado de Pagos",      desc: "Cálculo diario por contratista" },
     { id: "info_ruta",   label: "Información de Ruta",   desc: "Análisis operacional por ruta" },
@@ -14527,6 +14534,9 @@ function ModuloPagosMadre({ usuario }) {
     { id: "prefacturas", label: "Prefacturas",           desc: "Envío masivo de prefacturas MX" },
     { id: "config",      label: "Configuración",         desc: "Tarifario, zonas y reglas" },
   ];
+
+  const subtabPermitida = (id) => subtabsPermitidas === null || subtabsPermitidas.includes(id);
+
   return (
     <div style={{ padding: 0 }}>
       <div style={{ background: "#fff", borderBottom: "1px solid #e4e7ec", padding: "12px 24px" }}>
@@ -14546,12 +14556,30 @@ function ModuloPagosMadre({ usuario }) {
           ))}
         </div>
       </div>
-      {subtab === "listado"     && <ListadoPagosDiarios />}
-      {subtab === "info_ruta"   && <InformacionDeRuta />}
-      {subtab === "drivers"     && <DriversMaestroMX />}
-      {subtab === "ayudantes"   && <AyudantesDetalleDia />}
-      {subtab === "prefacturas" && <ModuloPrefacturasEnvio usuario={usuario} />}
-      {subtab === "config"      && <ConfiguracionPagos />}
+      {!subtabPermitida(subtab) ? (
+        <div style={{
+          padding: "60px 24px", textAlign: "center", background: "#fff",
+          margin: "24px", borderRadius: 12, border: "1px solid #e4e7ec",
+        }}>
+          <div style={{ fontSize: 48, marginBottom: 12 }}>🔒</div>
+          <div style={{ fontSize: 16, fontWeight: 700, color: "#1a3a6b", marginBottom: 6 }}>
+            Usuario sin credenciales para esta pestaña
+          </div>
+          <div style={{ fontSize: 13, color: "#64748b", maxWidth: 480, margin: "0 auto" }}>
+            Tu cuenta tiene acceso únicamente al módulo de <strong>Prefacturas</strong> dentro de Pagos.
+            Si necesitás acceso a otras pestañas, contactá a un administrador.
+          </div>
+        </div>
+      ) : (
+        <>
+          {subtab === "listado"     && <ListadoPagosDiarios />}
+          {subtab === "info_ruta"   && <InformacionDeRuta />}
+          {subtab === "drivers"     && <DriversMaestroMX />}
+          {subtab === "ayudantes"   && <AyudantesDetalleDia />}
+          {subtab === "prefacturas" && <ModuloPrefacturasEnvio usuario={usuario} />}
+          {subtab === "config"      && <ConfiguracionPagos />}
+        </>
+      )}
     </div>
   );
 }
@@ -25445,9 +25473,30 @@ function PrefTransportistas({ data, onChange }) {
           <div className="sec-title">Transportistas MX</div>
           <div className="sec-sub">Editá nombres, RFC y correos. Esta es la fuente de verdad para el envío.</div>
         </div>
-        <button className="btn-orange" onClick={() => setEditando("nuevo")} style={{ padding: "9px 16px", fontSize: 13 }}>
-          + Nuevo transportista
-        </button>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <BotonDescargarExcel
+            onClick={async () => {
+              const cabeceras = ["Nombre", "RFC", "Estado", "Correo TO", "CC", "BCC", "Contacto"];
+              const filas = filtrados.map(t => [
+                t.nombre || "",
+                t.rfc || "",
+                t.estado || "",
+                t.correo_to || "",
+                t.correo_cc || "",
+                t.correo_bcc || "",
+                t.notas || "",
+              ]);
+              await descargarExcelMultihoja(
+                [{ nombre: "Transportistas MX", datos: [cabeceras, ...filas] }],
+                "transportistas_mx"
+              );
+            }}
+            label="Descargar Excel"
+          />
+          <button className="btn-orange" onClick={() => setEditando("nuevo")} style={{ padding: "9px 16px", fontSize: 13 }}>
+            + Nuevo transportista
+          </button>
+        </div>
       </div>
 
       <div className="form-card" style={{ padding: "12px 16px" }}>
@@ -27123,9 +27172,30 @@ function PrefCLTransportistas({ data, onChange }) {
           <div className="sec-title">Transportistas Chile</div>
           <div className="sec-sub">Nombre, RUT, correo, contacto, teléfono y estado. Estado "Bloqueado" impide envío.</div>
         </div>
-        <button className="btn-orange" onClick={() => setEditando("nuevo")} style={{ padding: "9px 16px", fontSize: 13 }}>
-          + Nuevo transportista
-        </button>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <BotonDescargarExcel
+            onClick={async () => {
+              const cabeceras = ["Nombre", "RUT", "Estado", "Correo", "Contacto", "Teléfono", "Notas"];
+              const filas = filtrados.map(t => [
+                t.nombre || "",
+                t.rut || "",
+                t.estado || "",
+                t.correo || "",
+                t.contacto || "",
+                t.telefono || "",
+                t.notas || "",
+              ]);
+              await descargarExcelMultihoja(
+                [{ nombre: "Transportistas CL", datos: [cabeceras, ...filas] }],
+                "transportistas_cl"
+              );
+            }}
+            label="Descargar Excel"
+          />
+          <button className="btn-orange" onClick={() => setEditando("nuevo")} style={{ padding: "9px 16px", fontSize: 13 }}>
+            + Nuevo transportista
+          </button>
+        </div>
       </div>
 
       <div className="form-card" style={{ padding: "12px 16px" }}>
