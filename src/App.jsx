@@ -24460,7 +24460,7 @@ function pf_parsearPDF(texto) {
 // ═══════════════════════════════════════════════════════════════════════════════════════
 // COMPONENTE ROOT: Modulo Prefacturas (4 sub-tabs)
 // ═══════════════════════════════════════════════════════════════════════════════════════
-function ModuloPrefacturasEnvio({ usuario }) {
+function ModuloPrefacturasMX({ usuario }) {
   const [subtab, setSubtab] = useState("envio");
   const [transportistas, setTransportistas] = useState([]);
   const [parametros, setParametros] = useState([]);
@@ -24517,7 +24517,7 @@ function ModuloPrefacturasEnvio({ usuario }) {
           {subtab === "envio"          && <PrefEnvioMasivo transportistas={transportistas} parametros={parametros} usuario={usuario} onActualizarMaestros={cargarDatos} />}
           {subtab === "transportistas" && <PrefTransportistas data={transportistas} onChange={cargarDatos} />}
           {subtab === "parametros"     && <PrefParametros data={parametros} onChange={cargarDatos} />}
-          {subtab === "historial"      && <PrefHistorial />}
+          {subtab === "historial"      && <PrefHistorial pais="MX" />}
         </>
       )}
     </div>
@@ -24826,6 +24826,7 @@ function PrefEnvioMasivo({ transportistas, parametros, usuario, onActualizarMaes
         motivo: resultado.motivo,
         message_id: resultado.messageId,
         usuario: usuario?.email || "—",
+        pais: "MX",
       });
 
       if (i < enviables.length - 1) {
@@ -25860,7 +25861,7 @@ function ModalEdicionParametro({ inicial, esNuevo, editandoId, onCancelar, onGua
 // ═══════════════════════════════════════════════════════════════════════════════════════
 // SUB-TAB 4: HISTORIAL DE ENVÍOS
 // ═══════════════════════════════════════════════════════════════════════════════════════
-function PrefHistorial() {
+function PrefHistorial({ pais = "MX" }) {
   const [logs, setLogs] = useState([]);
   const [cargando, setCargando] = useState(true);
   const [filtroEstado, setFiltroEstado] = useState("todos");
@@ -25871,13 +25872,15 @@ function PrefHistorial() {
     setCargando(true);
     try {
       const { data } = await sb.from("prefacturas_envios_log")
-        .select("*").order("fecha_envio", { ascending: false }).limit(limite);
+        .select("*")
+        .eq("pais", pais)
+        .order("fecha_envio", { ascending: false }).limit(limite);
       setLogs(data || []);
     } catch (e) { console.error(e); }
     setCargando(false);
   };
 
-  useEffect(() => { cargar(); }, [limite]);
+  useEffect(() => { cargar(); }, [limite, pais]);
 
   const filtrados = useMemo(() => {
     let r = [...logs];
@@ -26004,6 +26007,1569 @@ function PrefHistorial() {
             </table>
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════════════
+// WRAPPER: ModuloPrefacturasEnvio — Selector de país (MX / CL)
+// Renderiza ModuloPrefacturasMX o ModuloPrefacturasCL según selección
+// ═══════════════════════════════════════════════════════════════════════════════════════
+function ModuloPrefacturasEnvio({ usuario }) {
+  const [pais, setPais] = useState(() => {
+    try { return localStorage.getItem("pref_pais_seleccionado") || "MX"; }
+    catch { return "MX"; }
+  });
+
+  useEffect(() => {
+    try { localStorage.setItem("pref_pais_seleccionado", pais); } catch {}
+  }, [pais]);
+
+  return (
+    <div style={{ padding: 0 }}>
+      {/* Selector de país */}
+      <div style={{
+        background: "#fff", borderBottom: "1px solid #e4e7ec", padding: "12px 24px",
+        display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap",
+      }}>
+        <span style={{ fontSize: 12, fontWeight: 600, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5 }}>
+          País:
+        </span>
+        <div style={{ display: "flex", gap: 6 }}>
+          <button onClick={() => setPais("MX")}
+            style={{
+              padding: "8px 18px", borderRadius: 8,
+              border: `1px solid ${pais === "MX" ? "#1a3a6b" : "#e4e7ec"}`,
+              background: pais === "MX" ? "#1a3a6b" : "#fff",
+              color: pais === "MX" ? "#fff" : "#475569",
+              fontSize: 13, fontWeight: 600, cursor: "pointer",
+              fontFamily: "Geist, sans-serif",
+            }}>
+            🇲🇽 México
+          </button>
+          <button onClick={() => setPais("CL")}
+            style={{
+              padding: "8px 18px", borderRadius: 8,
+              border: `1px solid ${pais === "CL" ? "#1a3a6b" : "#e4e7ec"}`,
+              background: pais === "CL" ? "#1a3a6b" : "#fff",
+              color: pais === "CL" ? "#fff" : "#475569",
+              fontSize: 13, fontWeight: 600, cursor: "pointer",
+              fontFamily: "Geist, sans-serif",
+            }}>
+            🇨🇱 Chile
+          </button>
+        </div>
+      </div>
+
+      {pais === "MX" && <ModuloPrefacturasMX usuario={usuario} />}
+      {pais === "CL" && <ModuloPrefacturasCL usuario={usuario} />}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════════════
+// MÓDULO PREFACTURAS · CL
+// ═══════════════════════════════════════════════════════════════════════════════════════
+// Webhook n8n: https://bigticket2026.app.n8n.cloud/webhook/prefacturas-enviar-cl
+//
+// Diferencias clave vs MX:
+//   • Tablas: prefacturas_transportistas_cl, prefacturas_parametros_cl
+//   • Identificador del PDF: nombre transportista (ej "ISISLINE_SPA.pdf")
+//   • Solo 1 correo TO por transportista (no hay CC/BCC separados en nómina)
+//   • CC del envío = correo_supervisor + lideres de la operación del CECO
+//   • OPERACIÓN tiene formato "CLIENTE - CENTRO_COSTO" (ej "MERCADO LIBRE - RM")
+//   • Estado "Bloqueado" → no se permite envío (NO ENVIAR)
+// ═══════════════════════════════════════════════════════════════════════════════════════
+
+const PREFACTURAS_CL_WEBHOOK = "https://bigticket2026.app.n8n.cloud/webhook/prefacturas-enviar-cl";
+const VARIABLES_PLANTILLA_CL = [
+  "TRANSPORTISTA", "RUT", "OPERACION", "CLIENTE", "CENTRO_COSTO",
+  "PERIODO", "MES_FACTURA", "SUPERVISOR", "VALOR_UF", "REGION",
+];
+const LS_KEY_ASUNTO_CL = "pref_cl_ultimo_asunto";
+const LS_KEY_CUERPO_CL = "pref_cl_ultimo_cuerpo";
+const ASUNTO_DEFAULT_CL = "PREFACTURA {OPERACION}//{MES_FACTURA}//{TRANSPORTISTA}";
+const CUERPO_DEFAULT_CL = `Estimado/a,
+
+Junto con saludar y esperando se encuentre bien, adjunto prefactura detallada en asunto correspondiente al período de {MES_FACTURA}.
+
+SE SOLICITA UTILIZAR COMO GLOSA: "PRODUCCION {MES_FACTURA}"; en caso de no referirse la glosa citada, la factura será rechazada.
+
+Favor adjuntar pdf de factura y copiar a prefacturas@bigticket.cl
+
+Sí por algún motivo hay alguna diferencia; favor hacérnosla saber completando el siguiente formulario https://app.pipefy.com/public/form/Yp603otD detallando los viajes u observaciones presentadas en el documento adjunto para que estas puedan ser validadas por su supervisor y reliquidadas en siguiente facturación.
+
+Si sus diferencias no son reportadas en el formulario mencionado anteriormente; estas no serán procesadas. Respecto al envío de facturas, esta debe ser por el mismo canal de siempre.
+Emitir Factura y envío con fecha máximo: XX-XX-2026 a las 12:00 Hrs.
+Fecha Pago: XX-XX-2026
+
+De no recibir su factura en el plazo estipulado, el pago se reprogramará con fecha XX de XXXXX 2026 o hasta el viernes más próximo posterior a la recepción de su factura y documentos de certificación pendientes [si es que aplica].
+
+RECORDAR: Para evitar retenciones y postergaciones de pago, favor tener presente que la fecha CORTE DE RECEPCION DE DOCUMENTOS DE CERTIFICACION ES EL DIA XX-XX-2026; Debe contar con toda la certificación mensual enviada EN FORMATO PDF y validada en plataforma certronic. Recuerde que una vez cargada la documentación, el equipo de certronic cuenta con 48 horas para su validación por lo que se sugiere no esperar hasta la fecha limite para evitar retenciones innecesarias.
+
+Agradeciendo desde ya su comprensión y colaboración,
+Saludos.
+Departamento Pago Transportes.
+Alonso de Córdova No. 5870, Oficina 724, Las Condes.`;
+
+// Regex para detectar OPERACIÓN en formato "CLIENTE - CECO" en el PDF Chile
+// Por ejemplo: "MERCADO LIBRE - RM", "SODIMAC - SERENA", "ROSEN - VIÑA"
+const REGEX_OPERACION_CL = /([A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑ\s]+?)\s*-\s*([A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑ\s]+)/;
+
+// ─── PARSING DE LOS CAMPOS DEL PDF CHILE ────────────────────────────────────────────
+// El PDF Chile tiene la misma estructura que MX pero con campos extras (VALOR UF, MES FACTURA)
+// y OPERACIÓN con formato "CLIENTE - CECO" en vez de "ML_MXSMX7"
+function pf_parsearPDF_CL(texto) {
+  const t = texto.replace(/\u00A0/g, " ").replace(/[ \t]+/g, " ");
+
+  // EMPRESA TRANSPORTE
+  const reTransp = /EMPRESA\s+TRANSPORTE\s*:?\s*([A-ZÁÉÍÓÚÑ0-9][A-ZÁÉÍÓÚÑa-z0-9áéíóúñ\s\.\&\-]+?)(?=\s*(?:RUT\b|RESUMEN\b|OPERACI[ÓO]N\b|SUPERVISOR\b|PERIODO\b|MES\s+FACTURA\b|VALOR\s+UF\b|PATENTE\b|CORREO\b|\$|\n|$))/i;
+  const mTransp = t.match(reTransp);
+  const transportista = mTransp ? mTransp[1].trim().replace(/\s+/g, " ") : "";
+
+  // RUT EMPRESA TRANSPORTE
+  const reRut = /RUT\s+EMPRESA\s+TRANSPORTE\s*:?\s*([0-9]{1,10}-[0-9Kk])/i;
+  const mRut = t.match(reRut);
+  const rut = mRut ? mRut[1].trim().toUpperCase() : "";
+
+  // OPERACIÓN: capturar el primer match con formato "CLIENTE - CECO"
+  // Buscamos después del label "OPERACIÓN:" para evitar falsos positivos
+  let operacion = "";
+  let cliente = "";
+  let centroCosto = "";
+  const reOpLabel = /OPERACI[ÓO]N\s*:?\s*([^\n]+?)(?=\s*(?:SUPERVISOR\b|PERIODO\b|MES\s+FACTURA\b|VALOR\s+UF\b|RESUMEN\b|CORREO\b|\$|\n|$))/i;
+  const mOpLabel = t.match(reOpLabel);
+  if (mOpLabel) {
+    const linea = mOpLabel[1].trim();
+    const mOp = linea.match(REGEX_OPERACION_CL);
+    if (mOp) {
+      cliente = mOp[1].trim().replace(/\s+/g, " ");
+      centroCosto = mOp[2].trim().replace(/\s+/g, " ");
+      operacion = `${cliente} - ${centroCosto}`;
+    } else {
+      // Si no matchea el patrón "CLIENTE - CECO", usar la línea completa
+      operacion = linea.replace(/\s+/g, " ");
+    }
+  }
+
+  // SUPERVISOR (del PDF, solo informativo — el real lo tomamos de Supabase)
+  const reSup = /SUPERVISOR\s*:?\s*([^\n]+?)(?=\s*(?:CORREO\b|PERIODO\b|MES\s+FACTURA\b|VALOR\s+UF\b|RESUMEN\b|\$|\n|$))/i;
+  const mSup = t.match(reSup);
+  const supervisorPDF = mSup ? mSup[1].trim().replace(/\s+/g, " ") : "";
+
+  // PERIODO PREFACTURADO
+  const rePer = /PERIODO\s+PREFACTURADO\s*:?\s*([^\n]+?)(?=\s*(?:MES\s+FACTURA\b|VALOR\s+UF\b|RESUMEN\b|TOTAL\b|\$|\n|$))/i;
+  const mPer = t.match(rePer);
+  const periodo = mPer ? mPer[1].trim().replace(/\s+/g, " ").toUpperCase() : "";
+
+  // MES FACTURA
+  const reMes = /MES\s+FACTURA\s*:?\s*([A-ZÁÉÍÓÚ]+(?:\s+\d{4})?)/i;
+  const mMes = t.match(reMes);
+  const mesFactura = mMes ? mMes[1].trim().toUpperCase() : "";
+
+  // VALOR UF
+  const reUf = /VALOR\s+UF\s*:?\s*\$?\s*([0-9\.\,]+)/i;
+  const mUf = t.match(reUf);
+  const valorUf = mUf ? mUf[1].trim() : "";
+
+  return {
+    transportista, rut, operacion, cliente, centroCosto,
+    supervisorPDF, periodo, mesFactura, valorUf,
+  };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════════════
+// COMPONENTE ROOT CHILE: ModuloPrefacturasCL (4 sub-tabs)
+// ═══════════════════════════════════════════════════════════════════════════════════════
+function ModuloPrefacturasCL({ usuario }) {
+  const [subtab, setSubtab] = useState("envio");
+  const [transportistas, setTransportistas] = useState([]);
+  const [parametros, setParametros] = useState([]);
+  const [cargando, setCargando] = useState(true);
+
+  const cargarDatos = async () => {
+    setCargando(true);
+    try {
+      const [{ data: t }, { data: p }] = await Promise.all([
+        sb.from("prefacturas_transportistas_cl").select("*").order("nombre"),
+        sb.from("prefacturas_parametros_cl").select("*").order("operacion"),
+      ]);
+      setTransportistas(t || []);
+      setParametros(p || []);
+    } catch (e) {
+      console.error("Error cargando datos prefacturas CL:", e);
+    }
+    setCargando(false);
+  };
+
+  useEffect(() => { cargarDatos(); }, []);
+
+  const subtabs = [
+    { id: "envio",          label: "Envío masivo",        icon: "📨" },
+    { id: "transportistas", label: "Transportistas",      icon: "🚚" },
+    { id: "parametros",     label: "Operaciones / CECOs", icon: "⚙️" },
+    { id: "historial",      label: "Historial",           icon: "📋" },
+  ];
+
+  return (
+    <div style={{ padding: 0 }}>
+      <div style={{ background: "#fff", borderBottom: "1px solid #e4e7ec", padding: "12px 24px" }}>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          {subtabs.map(t => (
+            <button key={t.id} onClick={() => setSubtab(t.id)}
+              style={{
+                padding: "8px 16px", borderRadius: 8,
+                border: `1px solid ${subtab === t.id ? "#1a3a6b" : "#e4e7ec"}`,
+                background: subtab === t.id ? "#1a3a6b" : "#fff",
+                color: subtab === t.id ? "#fff" : "#475569",
+                fontSize: 12, fontWeight: 600, cursor: "pointer",
+                fontFamily: "Geist, sans-serif",
+              }}>
+              {t.icon} {t.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {cargando ? (
+        <div className="loading">Cargando configuración de prefacturas Chile...</div>
+      ) : (
+        <>
+          {subtab === "envio"          && <PrefCLEnvioMasivo transportistas={transportistas} parametros={parametros} usuario={usuario} onActualizarMaestros={cargarDatos} />}
+          {subtab === "transportistas" && <PrefCLTransportistas data={transportistas} onChange={cargarDatos} />}
+          {subtab === "parametros"     && <PrefCLParametros data={parametros} onChange={cargarDatos} />}
+          {subtab === "historial"      && <PrefHistorial pais="CL" />}
+        </>
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════════════
+// SUB-TAB 1 CHILE: ENVÍO MASIVO
+// ═══════════════════════════════════════════════════════════════════════════════════════
+function PrefCLEnvioMasivo({ transportistas, parametros, usuario, onActualizarMaestros }) {
+  const [pdfsEnProceso, setPdfsEnProceso] = useState(0);
+  const [filas, setFilas] = useState([]);
+  const [error, setError] = useState("");
+  const [enviando, setEnviando] = useState(false);
+  const [progreso, setProgreso] = useState({ actual: 0, total: 0 });
+  const [editFila, setEditFila] = useState(null);
+  const [logFinal, setLogFinal] = useState(null);
+  const [arrastrando, setArrastrando] = useState(false);
+  const [modalAgregar, setModalAgregar] = useState(null);
+  const pdfInputRef = useRef(null);
+
+  const [asuntoLote, setAsuntoLote] = useState(() => {
+    try { return localStorage.getItem(LS_KEY_ASUNTO_CL) || ASUNTO_DEFAULT_CL; }
+    catch { return ASUNTO_DEFAULT_CL; }
+  });
+  const [cuerpoLote, setCuerpoLote] = useState(() => {
+    try { return localStorage.getItem(LS_KEY_CUERPO_CL) || CUERPO_DEFAULT_CL; }
+    catch { return CUERPO_DEFAULT_CL; }
+  });
+
+  useEffect(() => {
+    try { localStorage.setItem(LS_KEY_ASUNTO_CL, asuntoLote); } catch {}
+  }, [asuntoLote]);
+  useEffect(() => {
+    try { localStorage.setItem(LS_KEY_CUERPO_CL, cuerpoLote); } catch {}
+  }, [cuerpoLote]);
+
+  // Lookups
+  const transByNombre = useMemo(() => {
+    const m = new Map();
+    transportistas.forEach(t => m.set(String(t.nombre).toUpperCase().trim(), t));
+    return m;
+  }, [transportistas]);
+  const paramsByOp = useMemo(() => {
+    const m = new Map();
+    parametros.forEach(p => m.set(String(p.operacion).toUpperCase().trim(), p));
+    return m;
+  }, [parametros]);
+
+  const procesarPDF = async (file, idx) => {
+    try {
+      const texto = await pf_extraerTextoPDF(file);
+      const parsed = pf_parsearPDF_CL(texto);
+      const trans = parsed.transportista
+        ? transByNombre.get(parsed.transportista.toUpperCase().trim())
+        : null;
+      const param = parsed.operacion
+        ? paramsByOp.get(parsed.operacion.toUpperCase().trim())
+        : null;
+
+      // CC Chile: correo del supervisor + líderes de la operación (concatenados)
+      const ccs = [];
+      if (param?.correo_supervisor) ccs.push(param.correo_supervisor.trim());
+      if (param?.lideres) ccs.push(param.lideres.trim());
+      const ccCombinado = ccs.join("; ");
+
+      return {
+        idx,
+        file,
+        nombre: file.name,
+        size: file.size,
+        parsed,
+        trans,
+        param,
+        editTo: trans?.correo || "",
+        editCc: ccCombinado,
+        editBcc: "",
+        overrideAsunto: null,
+        overrideCuerpo: null,
+        estadoEnvio: null,
+        motivoEnvio: "",
+        tsEnvio: null,
+        errorParseo: "",
+      };
+    } catch (e) {
+      return {
+        idx,
+        file,
+        nombre: file.name,
+        size: file.size,
+        parsed: { transportista: "", rut: "", operacion: "", cliente: "", centroCosto: "",
+                  supervisorPDF: "", periodo: "", mesFactura: "", valorUf: "" },
+        trans: null,
+        param: null,
+        editTo: "", editCc: "", editBcc: "",
+        overrideAsunto: null, overrideCuerpo: null,
+        estadoEnvio: null, motivoEnvio: "", tsEnvio: null,
+        errorParseo: e.message || String(e),
+      };
+    }
+  };
+
+  const onPdfsDrop = async (fileList) => {
+    setError("");
+    const archivos = Array.from(fileList || []).filter(f => /\.pdf$/i.test(f.name) && f.size > 0);
+    if (archivos.length === 0) {
+      setError("No se detectaron archivos PDF válidos.");
+      return;
+    }
+    setPdfsEnProceso(archivos.length);
+    const idxInicio = filas.length;
+    const nuevos = [];
+    for (let i = 0; i < archivos.length; i++) {
+      const fila = await procesarPDF(archivos[i], idxInicio + i);
+      nuevos.push(fila);
+      setPdfsEnProceso(archivos.length - i - 1);
+    }
+    setPdfsEnProceso(0);
+    setFilas(prev => {
+      const map = new Map();
+      [...prev, ...nuevos].forEach(f => map.set(f.nombre, f));
+      return Array.from(map.values()).map((f, i) => ({ ...f, idx: i }));
+    });
+    setLogFinal(null);
+  };
+
+  const armarVariables = (f) => ({
+    TRANSPORTISTA: f.parsed.transportista,
+    RUT: f.parsed.rut,
+    OPERACION: f.parsed.operacion,
+    CLIENTE: f.param?.cliente || f.parsed.cliente,
+    CENTRO_COSTO: f.param?.centro_costo || f.parsed.centroCosto,
+    PERIODO: f.parsed.periodo,
+    MES_FACTURA: f.parsed.mesFactura,
+    SUPERVISOR: f.param?.supervisor || f.parsed.supervisorPDF || "",
+    VALOR_UF: f.parsed.valorUf,
+    REGION: f.param?.region || "",
+  });
+
+  const filasConEstado = useMemo(() => {
+    return filas.map(f => {
+      const valTo = pf_limpiarLista(f.editTo);
+      const valCc = pf_limpiarLista(f.editCc);
+      const valBcc = pf_limpiarLista(f.editBcc);
+      const errores = [];
+      if (f.errorParseo) errores.push("Error de parseo: " + f.errorParseo);
+      if (!f.parsed.transportista) errores.push("PDF sin EMPRESA TRANSPORTE");
+      if (!f.parsed.operacion) errores.push("PDF sin OPERACIÓN detectable");
+      if (f.parsed.transportista && !f.trans) errores.push("Transportista no registrado");
+      if (f.parsed.operacion && !f.param) errores.push("Operación no registrada");
+      if (f.trans && String(f.trans.estado || "").toLowerCase() === "bloqueado") errores.push("Transportista BLOQUEADO (NO ENVIAR)");
+      if (!valTo.limpia) errores.push("Sin correo TO");
+      else if (!valTo.valida) errores.push("TO inválido");
+      if (f.editCc && !valCc.valida) errores.push("CC inválido");
+      if (f.editBcc && !valBcc.valida) errores.push("BCC inválido");
+
+      const vars = armarVariables(f);
+      const asuntoFinal = pf_aplicarPlantilla(f.overrideAsunto !== null ? f.overrideAsunto : asuntoLote, vars);
+      const cuerpoFinal = pf_aplicarPlantilla(f.overrideCuerpo !== null ? f.overrideCuerpo : cuerpoLote, vars);
+
+      return { ...f, errores, listo: errores.length === 0, asuntoFinal, cuerpoFinal };
+    });
+  }, [filas, asuntoLote, cuerpoLote]);
+
+  const totalListos = filasConEstado.filter(f => f.listo).length;
+  const totalConErrores = filasConEstado.length - totalListos;
+
+  const guardarEdicion = (idx, campos) => {
+    setFilas(prev => prev.map(f => f.idx === idx ? { ...f, ...campos } : f));
+    setEditFila(null);
+  };
+  const eliminarFila = (idx) => {
+    setFilas(prev => prev.filter(f => f.idx !== idx).map((f, i) => ({ ...f, idx: i })));
+  };
+  const limpiarTodo = () => {
+    if (!confirm("¿Limpiar todos los PDFs y resultados?\n\n(El asunto y cuerpo se mantienen)")) return;
+    setFilas([]); setError(""); setLogFinal(null); setProgreso({ actual: 0, total: 0 });
+  };
+  const restaurarPlantillaDefault = () => {
+    if (!confirm("¿Restaurar el asunto y cuerpo al valor por defecto?\n\nVas a perder cualquier cambio que hayas hecho.")) return;
+    setAsuntoLote(ASUNTO_DEFAULT_CL);
+    setCuerpoLote(CUERPO_DEFAULT_CL);
+  };
+
+  const onAgregarYRefrescar = async () => {
+    setModalAgregar(null);
+    await onActualizarMaestros();
+    if (filas.length > 0) {
+      const reprocesadas = [];
+      for (const f of filas) {
+        const nueva = await procesarPDF(f.file, f.idx);
+        reprocesadas.push({
+          ...nueva,
+          editTo: f.editTo && f.editTo !== "" ? f.editTo : nueva.editTo,
+          editCc: f.editCc && f.editCc !== "" ? f.editCc : nueva.editCc,
+          editBcc: f.editBcc && f.editBcc !== "" ? f.editBcc : nueva.editBcc,
+          overrideAsunto: f.overrideAsunto,
+          overrideCuerpo: f.overrideCuerpo,
+          estadoEnvio: f.estadoEnvio,
+          motivoEnvio: f.motivoEnvio,
+          tsEnvio: f.tsEnvio,
+        });
+      }
+      setFilas(reprocesadas);
+    }
+  };
+
+  const enviarMasivo = async () => {
+    const enviables = filasConEstado.filter(f => f.listo);
+    if (enviables.length === 0) {
+      alert("No hay filas listas para enviar. Revisá los errores en la tabla.");
+      return;
+    }
+    if (!asuntoLote.trim()) { alert("El asunto está vacío."); return; }
+    if (!cuerpoLote.trim()) { alert("El cuerpo está vacío."); return; }
+    if (!confirm(
+      `Se enviarán ${enviables.length} correo(s) Chile desde la cuenta configurada en n8n.\n\n` +
+      `${totalConErrores > 0 ? `Hay ${totalConErrores} fila(s) con errores que NO se enviarán.\n\n` : ""}` +
+      `¿Confirmás el envío?`
+    )) return;
+
+    setEnviando(true);
+    setLogFinal(null);
+    setProgreso({ actual: 0, total: enviables.length });
+
+    let okCount = 0, errCount = 0;
+    const inicio = Date.now();
+    const logsParaSupabase = [];
+
+    for (let i = 0; i < enviables.length; i++) {
+      const f = enviables[i];
+      setProgreso({ actual: i + 1, total: enviables.length });
+      setFilas(prev => prev.map(x => x.idx === f.idx
+        ? { ...x, estadoEnvio: "enviando", motivoEnvio: "", tsEnvio: null }
+        : x));
+
+      let resultado = { ok: false, motivo: "", messageId: "" };
+      try {
+        const pdfBase64 = await pf_fileToBase64(f.file);
+        const payload = {
+          idEnvio: `${Date.now()}-${f.idx}`,
+          transportista: f.parsed.transportista,
+          rut: f.parsed.rut,
+          operacion: f.parsed.operacion,
+          cliente: f.parsed.cliente,
+          centroCosto: f.parsed.centroCosto,
+          periodo: f.parsed.periodo,
+          mesFactura: f.parsed.mesFactura,
+          valorUf: f.parsed.valorUf,
+          correoTo: pf_limpiarLista(f.editTo).limpia,
+          cc: pf_limpiarLista(f.editCc).limpia,
+          bcc: pf_limpiarLista(f.editBcc).limpia,
+          asunto: f.asuntoFinal || `PREFACTURA ${f.parsed.operacion} — ${f.parsed.mesFactura}`,
+          cuerpo: f.cuerpoFinal || "",
+          nombrePdf: f.nombre,
+          pdfBase64,
+        };
+        const resp = await fetch(PREFACTURAS_CL_WEBHOOK, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        let data = {};
+        try { data = await resp.json(); } catch { /* no-json */ }
+        if (resp.ok && data.ok !== false) {
+          resultado = { ok: true, motivo: data.messageId || "Enviado", messageId: data.messageId || "" };
+          okCount++;
+        } else {
+          resultado = { ok: false, motivo: data.error || `HTTP ${resp.status}`, messageId: "" };
+          errCount++;
+        }
+      } catch (e) {
+        resultado = { ok: false, motivo: "Error red: " + e.message, messageId: "" };
+        errCount++;
+      }
+
+      const tsAhora = new Date().toISOString();
+      setFilas(prev => prev.map(x => x.idx === f.idx
+        ? { ...x, estadoEnvio: resultado.ok ? "ok" : "fallido", motivoEnvio: resultado.motivo, tsEnvio: tsAhora }
+        : x));
+
+      logsParaSupabase.push({
+        fecha_envio: tsAhora,
+        transportista: f.parsed.transportista,
+        ceco: f.parsed.operacion,  // En Chile, "operacion" es el equivalente al CECO
+        periodo: f.parsed.periodo,
+        correo_to: pf_limpiarLista(f.editTo).limpia,
+        nombre_pdf: f.nombre,
+        estado: resultado.ok ? "enviado" : "fallido",
+        motivo: resultado.motivo,
+        message_id: resultado.messageId,
+        usuario: usuario?.email || "—",
+        pais: "CL",
+      });
+
+      if (i < enviables.length - 1) {
+        await new Promise(r => setTimeout(r, PAUSA_ENTRE_ENVIOS_MS));
+      }
+    }
+
+    try {
+      if (logsParaSupabase.length > 0) {
+        await sb.from("prefacturas_envios_log").insert(logsParaSupabase);
+      }
+    } catch (e) {
+      console.error("Error guardando log:", e);
+    }
+
+    const segs = Math.round((Date.now() - inicio) / 1000);
+    setLogFinal({ ok: okCount, err: errCount, omitidos: totalConErrores, segs, fecha: new Date() });
+    setEnviando(false);
+    setProgreso({ actual: 0, total: 0 });
+  };
+
+  const descargarLog = async () => {
+    const detalle = [
+      ["#", "Archivo PDF", "Transportista", "RUT", "Operación", "Período", "Mes Factura",
+       "Correo TO", "CC", "BCC", "Asunto",
+       "Estado envío", "Motivo / MessageID", "Timestamp"],
+      ...filasConEstado.map((f, i) => [
+        i + 1, f.nombre,
+        f.parsed.transportista, f.parsed.rut, f.parsed.operacion, f.parsed.periodo, f.parsed.mesFactura,
+        f.editTo, f.editCc, f.editBcc, f.asuntoFinal,
+        f.estadoEnvio === "ok" ? "ENVIADO" :
+          f.estadoEnvio === "fallido" ? "FALLIDO" :
+          f.errores.length > 0 ? "OMITIDO: " + f.errores.join(", ") : "PENDIENTE",
+        f.motivoEnvio || "",
+        f.tsEnvio ? new Date(f.tsEnvio).toLocaleString("es-CL") : "",
+      ]),
+    ];
+    const resumen = [
+      ["Reporte de envío de prefacturas Chile"],
+      ["Fecha", new Date().toLocaleString("es-CL")],
+      ["Usuario", usuario?.nombre || usuario?.email || "—"],
+      ["PDFs cargados", filas.length],
+      ["Enviados OK", filasConEstado.filter(f => f.estadoEnvio === "ok").length],
+      ["Fallidos", filasConEstado.filter(f => f.estadoEnvio === "fallido").length],
+      ["Pendientes/Omitidos", filasConEstado.filter(f => !f.estadoEnvio).length],
+      [""],
+      ["Asunto utilizado"],
+      [asuntoLote],
+      [""],
+      ["Cuerpo utilizado"],
+      [cuerpoLote],
+    ];
+    await descargarExcelMultihoja(
+      [{ nombre: "Resumen", datos: resumen }, { nombre: "Detalle", datos: detalle }],
+      "log_prefacturas_envio_cl"
+    );
+  };
+
+  return (
+    <div className="pg" style={{ maxWidth: 1400 }}>
+      <div style={{ marginBottom: 16 }}>
+        <div className="sec-title">Prefacturas Chile · Envío Masivo</div>
+        <div className="sec-sub">
+          Arrastrá los PDFs generados por la macro Chile. Ajustá el asunto y cuerpo del lote.
+          El Brain lee cada PDF, cruza con la base Chile, y envía masivamente.
+        </div>
+      </div>
+
+      {error && (
+        <div style={{
+          background: "#fee2e2", border: "1px solid #fca5a5", color: "#991b1b",
+          padding: "10px 14px", borderRadius: 8, marginBottom: 14, fontSize: 13,
+        }}>⚠ {error}</div>
+      )}
+
+      {/* Drag-and-drop */}
+      <div
+        onDragOver={e => { e.preventDefault(); e.stopPropagation(); setArrastrando(true); }}
+        onDragLeave={e => { e.preventDefault(); e.stopPropagation(); setArrastrando(false); }}
+        onDrop={e => {
+          e.preventDefault(); e.stopPropagation();
+          setArrastrando(false);
+          onPdfsDrop(e.dataTransfer.files);
+        }}
+        onClick={() => pdfInputRef.current?.click()}
+        style={{
+          border: `3px dashed ${arrastrando ? "#F47B20" : "#1a3a6b"}`,
+          borderRadius: 16,
+          padding: "40px 24px",
+          textAlign: "center",
+          cursor: "pointer",
+          background: arrastrando ? "#fff7ed" : "#f8fafc",
+          transition: "all 0.2s",
+          marginBottom: 16,
+        }}
+      >
+        <div style={{ fontSize: 48, marginBottom: 10 }}>📄</div>
+        <div style={{ fontSize: 17, color: "#1a3a6b", fontWeight: 700, marginBottom: 6 }}>
+          {pdfsEnProceso > 0
+            ? `Procesando PDFs... (${pdfsEnProceso} pendientes)`
+            : arrastrando
+              ? "Soltá los PDFs aquí"
+              : "Arrastrá los PDFs de prefacturas Chile"}
+        </div>
+        <div style={{ fontSize: 13, color: "#64748b" }}>
+          {pdfsEnProceso > 0
+            ? "El Brain está leyendo cada PDF para extraer los datos."
+            : "o hacé clic para seleccionarlos · sin límite de cantidad"}
+        </div>
+        {filas.length > 0 && pdfsEnProceso === 0 && (
+          <div style={{
+            marginTop: 16, padding: "8px 14px", background: "#fff",
+            border: "1px solid #1a3a6b", borderRadius: 10,
+            display: "inline-flex", alignItems: "center", gap: 12,
+          }}>
+            <span style={{ fontSize: 13, color: "#1a3a6b", fontWeight: 700 }}>
+              ✓ {filas.length} PDF{filas.length === 1 ? "" : "s"} cargado{filas.length === 1 ? "" : "s"}
+            </span>
+            <button onClick={e => { e.stopPropagation(); limpiarTodo(); }}
+              style={{
+                background: "#fee2e2", border: "none", borderRadius: 6,
+                padding: "4px 10px", fontSize: 11, color: "#991b1b",
+                cursor: "pointer", fontWeight: 600, fontFamily: "Geist, sans-serif",
+              }}>Quitar todos</button>
+          </div>
+        )}
+        <input
+          ref={pdfInputRef} type="file" accept=".pdf" multiple
+          style={{ display: "none" }}
+          onChange={e => { onPdfsDrop(e.target.files); e.target.value = ""; }}
+        />
+      </div>
+
+      {/* Editor de asunto y cuerpo del lote */}
+      <div className="form-card">
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
+          <div className="form-title" style={{ margin: 0 }}>
+            ✉️ Asunto y cuerpo del correo
+          </div>
+          <span style={{ fontSize: 11, color: "#94a3b8", marginLeft: "auto" }}>
+            Se aplica a TODOS los envíos del lote
+          </span>
+          <button onClick={restaurarPlantillaDefault}
+            style={{
+              background: "transparent", border: "1px solid #e4e7ec", borderRadius: 6,
+              padding: "4px 10px", fontSize: 11, color: "#64748b", cursor: "pointer",
+              fontWeight: 600, fontFamily: "Geist, sans-serif",
+            }}>↺ Restaurar default</button>
+        </div>
+
+        <div className="field-row">
+          <div className="field-label">Asunto</div>
+          <input
+            value={asuntoLote}
+            onChange={e => setAsuntoLote(e.target.value)}
+            placeholder="PREFACTURA {OPERACION}//{MES_FACTURA}//{TRANSPORTISTA}"
+            style={{ fontSize: 13 }}
+          />
+        </div>
+
+        <div className="field-row">
+          <div className="field-label">Cuerpo del correo</div>
+          <textarea
+            value={cuerpoLote}
+            onChange={e => setCuerpoLote(e.target.value)}
+            placeholder="Estimado/a, ..."
+            style={{ height: 320, fontSize: 12, fontFamily: "monospace", lineHeight: 1.6, resize: "vertical" }}
+          />
+        </div>
+
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center", marginTop: 8 }}>
+          <span style={{ fontSize: 11, color: "#64748b", fontWeight: 600 }}>Variables disponibles:</span>
+          {VARIABLES_PLANTILLA_CL.map(v => (
+            <code key={v} style={{
+              background: "#eef2ff", color: "#1a3a6b", padding: "2px 8px",
+              borderRadius: 4, fontSize: 11, fontFamily: "monospace",
+            }}>{"{" + v + "}"}</code>
+          ))}
+        </div>
+
+        <div style={{
+          marginTop: 12, padding: "10px 12px", background: "#eef2ff", borderRadius: 8,
+          fontSize: 11, color: "#1a3a6b",
+        }}>
+          💡 Las variables se reemplazan automáticamente con los datos extraídos de cada PDF.
+          Tus cambios se guardan automáticamente en este navegador para la próxima vez.
+        </div>
+      </div>
+
+      {filas.length > 0 && (
+        <div style={{
+          display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+          gap: 10, marginBottom: 14,
+        }}>
+          <IndicadorPF label="PDFs procesados" valor={filas.length} color="#1a3a6b" />
+          <IndicadorPF label="Listas para enviar" valor={totalListos} color="#16a34a" />
+          <IndicadorPF label="Con errores" valor={totalConErrores} color="#dc2626" />
+        </div>
+      )}
+
+      {filas.length > 0 && (
+        <div className="form-card" style={{ padding: 0, overflow: "hidden" }}>
+          <div style={{
+            padding: "12px 16px", borderBottom: "1px solid #e4e7ec",
+            display: "flex", justifyContent: "space-between", alignItems: "center",
+            flexWrap: "wrap", gap: 8,
+          }}>
+            <div className="form-title" style={{ margin: 0 }}>Revisión y envío</div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              {(logFinal || filasConEstado.some(f => f.estadoEnvio)) && (
+                <BotonDescargarExcel onClick={descargarLog} label="Descargar log Excel" />
+              )}
+              <button
+                onClick={enviarMasivo}
+                disabled={enviando || totalListos === 0}
+                className="btn-orange"
+                style={{ padding: "9px 18px", fontSize: 13 }}>
+                {enviando
+                  ? `Enviando ${progreso.actual}/${progreso.total}...`
+                  : `📨 Enviar ${totalListos} correo${totalListos === 1 ? "" : "s"}`
+                }
+              </button>
+            </div>
+          </div>
+
+          {enviando && (
+            <div style={{ padding: "10px 16px", borderBottom: "1px solid #e4e7ec", background: "#fffbeb" }}>
+              <div style={{ fontSize: 12, color: "#92400e", marginBottom: 6, fontWeight: 600 }}>
+                Enviando {progreso.actual} de {progreso.total}...
+              </div>
+              <div style={{ height: 8, background: "#fef3c7", borderRadius: 4, overflow: "hidden" }}>
+                <div style={{
+                  width: `${(progreso.actual / progreso.total) * 100}%`,
+                  height: "100%", background: "#F47B20", transition: "width 0.3s",
+                }} />
+              </div>
+            </div>
+          )}
+
+          {logFinal && !enviando && (
+            <div style={{
+              padding: "10px 16px", borderBottom: "1px solid #e4e7ec",
+              background: logFinal.err === 0 ? "#f0fdf4" : "#fffbeb",
+            }}>
+              <div style={{
+                fontSize: 13, fontWeight: 600,
+                color: logFinal.err === 0 ? "#166534" : "#92400e",
+              }}>
+                {logFinal.err === 0 ? "✓" : "⚠"} Envío finalizado en {logFinal.segs}s ·{" "}
+                {logFinal.ok} enviado{logFinal.ok === 1 ? "" : "s"} ·{" "}
+                {logFinal.err} fallido{logFinal.err === 1 ? "" : "s"}
+                {logFinal.omitidos > 0 && ` · ${logFinal.omitidos} omitido${logFinal.omitidos === 1 ? "" : "s"}`}
+              </div>
+            </div>
+          )}
+
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+              <thead>
+                <tr style={{ background: "#f8fafc", borderBottom: "1px solid #e4e7ec" }}>
+                  <th style={pf_th()}>Estado</th>
+                  <th style={pf_th()}>Transportista</th>
+                  <th style={pf_th()}>Operación</th>
+                  <th style={pf_th()}>Período / Mes</th>
+                  <th style={pf_th()}>Correo TO</th>
+                  <th style={pf_th()}>CC</th>
+                  <th style={pf_th()}>Acción</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filasConEstado.map((f) => (
+                  <FilaPrefacturaCL
+                    key={f.idx}
+                    fila={f}
+                    enEdicion={editFila === f.idx}
+                    onEdit={() => setEditFila(f.idx)}
+                    onGuardar={(campos) => guardarEdicion(f.idx, campos)}
+                    onCancelar={() => setEditFila(null)}
+                    onEliminar={() => eliminarFila(f.idx)}
+                    onAgregarTransportista={() => setModalAgregar({
+                      tipo: "trans",
+                      prefill: { nombre: f.parsed.transportista, rut: f.parsed.rut },
+                    })}
+                    onAgregarOperacion={() => setModalAgregar({
+                      tipo: "op",
+                      prefill: { operacion: f.parsed.operacion, cliente: f.parsed.cliente,
+                                 centro_costo: f.parsed.centroCosto, supervisor: f.parsed.supervisorPDF },
+                    })}
+                    enviando={enviando}
+                  />
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {modalAgregar?.tipo === "trans" && (
+        <ModalEdicionTransportistaCL
+          inicial={{
+            nombre: modalAgregar.prefill.nombre || "",
+            rut: modalAgregar.prefill.rut || "",
+            estado: "Activo",
+            correo: "", contacto: "", telefono: "", notas: "",
+          }}
+          esNuevo={true}
+          onCancelar={() => setModalAgregar(null)}
+          onGuardarOK={onAgregarYRefrescar}
+        />
+      )}
+      {modalAgregar?.tipo === "op" && (
+        <ModalEdicionParametroCL
+          inicial={{
+            operacion: modalAgregar.prefill.operacion || "",
+            cliente: modalAgregar.prefill.cliente || "",
+            centro_costo: modalAgregar.prefill.centro_costo || "",
+            supervisor: modalAgregar.prefill.supervisor || "",
+            correo_supervisor: "",
+            lideres: "",
+            region: "",
+            cuenta_envio: "prefacturas@bigticket.cl",
+          }}
+          esNuevo={true}
+          onCancelar={() => setModalAgregar(null)}
+          onGuardarOK={onAgregarYRefrescar}
+        />
+      )}
+    </div>
+  );
+}
+
+// ─── Fila individual Chile ──────────────────────────────────────────────────────
+function FilaPrefacturaCL({ fila, enEdicion, onEdit, onGuardar, onCancelar, onEliminar,
+                            onAgregarTransportista, onAgregarOperacion, enviando }) {
+  const [to, setTo] = useState(fila.editTo);
+  const [cc, setCc] = useState(fila.editCc);
+  const [bcc, setBcc] = useState(fila.editBcc);
+  const [asunto, setAsunto] = useState(fila.asuntoFinal);
+  const [cuerpo, setCuerpo] = useState(fila.cuerpoFinal);
+
+  useEffect(() => {
+    if (enEdicion) {
+      setTo(fila.editTo); setCc(fila.editCc); setBcc(fila.editBcc);
+      setAsunto(fila.asuntoFinal); setCuerpo(fila.cuerpoFinal);
+    }
+  }, [enEdicion, fila.editTo, fila.editCc, fila.editBcc, fila.asuntoFinal, fila.cuerpoFinal]);
+
+  let bgFila = "transparent";
+  if (fila.estadoEnvio === "ok") bgFila = "#f0fdf4";
+  else if (fila.estadoEnvio === "fallido") bgFila = "#fef2f2";
+  else if (fila.estadoEnvio === "enviando") bgFila = "#fffbeb";
+  else if (!fila.listo) bgFila = "#fef2f2";
+
+  if (enEdicion) {
+    return (
+      <tr style={{ background: "#eff6ff" }}>
+        <td colSpan={7} style={{ padding: 14, borderBottom: "2px solid #1a3a6b" }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: "#1a3a6b", marginBottom: 10 }}>
+            ✏️ Editando: {fila.parsed.transportista || fila.nombre} · {fila.parsed.operacion || "—"} · {fila.parsed.mesFactura || "—"}
+          </div>
+          <div className="two-col" style={{ marginBottom: 10 }}>
+            <div>
+              <div className="field-label">Correo TO *</div>
+              <input value={to} onChange={e => setTo(e.target.value)}
+                placeholder="correo@dominio.com (separá varios con ;)" />
+            </div>
+            <div>
+              <div className="field-label">CC (supervisor + líderes)</div>
+              <input value={cc} onChange={e => setCc(e.target.value)} placeholder="opcional" />
+            </div>
+          </div>
+          <div className="field-row">
+            <div className="field-label">BCC</div>
+            <input value={bcc} onChange={e => setBcc(e.target.value)} placeholder="opcional" />
+          </div>
+          <div className="field-row">
+            <div className="field-label">Asunto (override solo para esta fila)</div>
+            <input value={asunto} onChange={e => setAsunto(e.target.value)} />
+          </div>
+          <div className="field-row">
+            <div className="field-label">Cuerpo (override solo para esta fila · variables ya reemplazadas)</div>
+            <textarea value={cuerpo} onChange={e => setCuerpo(e.target.value)} style={{ height: 200 }} />
+          </div>
+          <div style={{ fontSize: 11, color: "#64748b", marginBottom: 10 }}>
+            💡 Estos cambios solo aplican a este envío puntual.
+          </div>
+          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+            <button onClick={onCancelar}
+              style={{
+                background: "#fff", border: "1px solid #e4e7ec", borderRadius: 8,
+                padding: "7px 14px", fontSize: 12, color: "#475569", cursor: "pointer",
+                fontFamily: "Geist, sans-serif", fontWeight: 600,
+              }}>Cancelar</button>
+            <button onClick={() => onGuardar({
+              editTo: to, editCc: cc, editBcc: bcc,
+              overrideAsunto: asunto, overrideCuerpo: cuerpo,
+            })} className="btn-blue" style={{ padding: "7px 14px", fontSize: 12 }}>
+              Guardar cambios
+            </button>
+          </div>
+        </td>
+      </tr>
+    );
+  }
+
+  const transNoReg = fila.parsed.transportista && !fila.trans;
+  const opNoReg = fila.parsed.operacion && !fila.param;
+  const transBloqueado = fila.trans && String(fila.trans.estado || "").toLowerCase() === "bloqueado";
+
+  return (
+    <tr style={{ background: bgFila }}>
+      <td style={pf_td()}><EstadoBadgeCL fila={fila} /></td>
+      <td style={pf_td()}>
+        <div style={{ fontWeight: 600 }}>
+          {fila.parsed.transportista || <em style={{ color: "#dc2626" }}>(no detectado)</em>}
+        </div>
+        <div style={{ fontSize: 10, color: "#94a3b8" }}>{fila.parsed.rut || "sin RUT"}</div>
+        <div style={{ fontSize: 9, color: "#94a3b8", marginTop: 2 }}>📄 {fila.nombre.length > 35 ? fila.nombre.slice(0, 32) + "..." : fila.nombre}</div>
+        {transNoReg && (
+          <button onClick={onAgregarTransportista}
+            style={{
+              marginTop: 4, background: "#fef2f2", border: "1px solid #fca5a5",
+              borderRadius: 6, padding: "2px 8px", fontSize: 10, color: "#991b1b",
+              cursor: "pointer", fontWeight: 600, fontFamily: "Geist, sans-serif",
+            }}>+ Agregar a Supabase</button>
+        )}
+        {transBloqueado && (
+          <div style={{ marginTop: 4, fontSize: 10, color: "#991b1b", fontWeight: 700 }}>
+            ⛔ BLOQUEADO en Supabase
+          </div>
+        )}
+      </td>
+      <td style={pf_td()}>
+        {fila.parsed.operacion ? (
+          <>
+            <span style={{
+              background: fila.param ? "#eef2ff" : "#fef2f2",
+              color: fila.param ? "#1a3a6b" : "#991b1b",
+              padding: "2px 8px", borderRadius: 4, fontSize: 11, fontWeight: 600,
+            }}>{fila.parsed.operacion}</span>
+            {opNoReg && (
+              <button onClick={onAgregarOperacion}
+                style={{
+                  display: "block", marginTop: 4,
+                  background: "#fef2f2", border: "1px solid #fca5a5",
+                  borderRadius: 6, padding: "2px 8px", fontSize: 10, color: "#991b1b",
+                  cursor: "pointer", fontWeight: 600, fontFamily: "Geist, sans-serif",
+                }}>+ Agregar Operación</button>
+            )}
+          </>
+        ) : <em style={{ color: "#dc2626", fontSize: 11 }}>(no detectado)</em>}
+      </td>
+      <td style={pf_td()}>
+        <span style={{ fontSize: 11, color: "#475569" }}>{fila.parsed.periodo || "—"}</span>
+        <div style={{ fontSize: 10, color: "#94a3b8" }}>{fila.parsed.mesFactura || ""}</div>
+      </td>
+      <td style={pf_td()}>
+        <div style={{ wordBreak: "break-all", maxWidth: 220 }}>
+          {fila.editTo || <em style={{ color: "#dc2626" }}>vacío</em>}
+        </div>
+        {fila.trans && (
+          <div style={{ fontSize: 9, color: "#16a34a", marginTop: 2 }}>✓ desde Supabase</div>
+        )}
+      </td>
+      <td style={pf_td()}>
+        <div style={{ wordBreak: "break-all", maxWidth: 200, fontSize: 11, color: "#64748b" }}>
+          {fila.editCc || "—"}
+        </div>
+      </td>
+      <td style={pf_td()}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          <button onClick={onEdit}
+            disabled={enviando || fila.estadoEnvio === "ok"}
+            style={{
+              background: "transparent", border: "1px solid #e4e7ec", borderRadius: 6,
+              padding: "3px 8px", fontSize: 11, color: "#1a3a6b", cursor: "pointer",
+              fontFamily: "Geist, sans-serif", fontWeight: 600,
+              opacity: (enviando || fila.estadoEnvio === "ok") ? 0.4 : 1,
+            }}>Editar</button>
+          <button onClick={onEliminar} disabled={enviando}
+            style={{
+              background: "transparent", border: "1px solid #fca5a5", borderRadius: 6,
+              padding: "3px 8px", fontSize: 11, color: "#991b1b", cursor: "pointer",
+              fontFamily: "Geist, sans-serif", fontWeight: 600,
+              opacity: enviando ? 0.4 : 1,
+            }}>Quitar</button>
+        </div>
+      </td>
+    </tr>
+  );
+}
+
+function EstadoBadgeCL({ fila }) {
+  if (fila.estadoEnvio === "ok") {
+    return (
+      <span style={{
+        background: "#dcfce7", color: "#166534", padding: "3px 8px",
+        borderRadius: 20, fontSize: 10, fontWeight: 700,
+      }}>✓ ENVIADO</span>
+    );
+  }
+  if (fila.estadoEnvio === "fallido") {
+    return (
+      <div title={fila.motivoEnvio}>
+        <span style={{
+          background: "#fee2e2", color: "#991b1b", padding: "3px 8px",
+          borderRadius: 20, fontSize: 10, fontWeight: 700,
+        }}>✗ FALLIDO</span>
+        <div style={{ fontSize: 9, color: "#991b1b", marginTop: 2, maxWidth: 160 }}>
+          {fila.motivoEnvio?.slice(0, 60)}{fila.motivoEnvio?.length > 60 ? "..." : ""}
+        </div>
+      </div>
+    );
+  }
+  if (fila.estadoEnvio === "enviando") {
+    return (
+      <span style={{
+        background: "#fef3c7", color: "#92400e", padding: "3px 8px",
+        borderRadius: 20, fontSize: 10, fontWeight: 700,
+      }}>⏳ ENVIANDO</span>
+    );
+  }
+  if (!fila.listo) {
+    return (
+      <div title={fila.errores.join(" · ")}>
+        <span style={{
+          background: "#fee2e2", color: "#991b1b", padding: "3px 8px",
+          borderRadius: 20, fontSize: 10, fontWeight: 700,
+        }}>⚠ {fila.errores[0]}</span>
+        {fila.errores.length > 1 && (
+          <div style={{ fontSize: 9, color: "#991b1b", marginTop: 2 }}>
+            +{fila.errores.length - 1} error{fila.errores.length === 2 ? "" : "es"} más
+          </div>
+        )}
+      </div>
+    );
+  }
+  return (
+    <span style={{
+      background: "#dbeafe", color: "#1e40af", padding: "3px 8px",
+      borderRadius: 20, fontSize: 10, fontWeight: 700,
+    }}>LISTO</span>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════════════
+// SUB-TAB 2 CHILE: TRANSPORTISTAS (CRUD)
+// ═══════════════════════════════════════════════════════════════════════════════════════
+function PrefCLTransportistas({ data, onChange }) {
+  const [busqueda, setBusqueda] = useState("");
+  const [filtroEstado, setFiltroEstado] = useState("todos");
+  const [editando, setEditando] = useState(null);
+
+  const filtrados = useMemo(() => {
+    let r = [...data];
+    if (filtroEstado !== "todos") r = r.filter(t => (t.estado || "").toLowerCase() === filtroEstado);
+    if (busqueda.trim()) {
+      const q = busqueda.toLowerCase();
+      r = r.filter(t =>
+        (t.nombre || "").toLowerCase().includes(q) ||
+        (t.rut || "").toLowerCase().includes(q) ||
+        (t.correo || "").toLowerCase().includes(q) ||
+        (t.contacto || "").toLowerCase().includes(q)
+      );
+    }
+    return r;
+  }, [data, busqueda, filtroEstado]);
+
+  const handleEliminar = async (id, nombre) => {
+    if (!confirm(`¿Eliminar al transportista "${nombre}"?\n\nEsta acción no se puede deshacer.`)) return;
+    try {
+      const { error } = await sb.from("prefacturas_transportistas_cl").delete().eq("id", id);
+      if (error) throw error;
+      await onChange();
+    } catch (e) {
+      alert("Error eliminando: " + e.message);
+    }
+  };
+
+  const filaEdicion = editando === "nuevo"
+    ? { nombre: "", rut: "", estado: "Activo", correo: "", contacto: "", telefono: "", notas: "" }
+    : (editando ? data.find(t => t.id === editando) : null);
+
+  return (
+    <div className="pg" style={{ maxWidth: 1300 }}>
+      <div style={{ marginBottom: 16, display: "flex", justifyContent: "space-between", alignItems: "flex-end", flexWrap: "wrap", gap: 10 }}>
+        <div>
+          <div className="sec-title">Transportistas Chile</div>
+          <div className="sec-sub">Nombre, RUT, correo, contacto, teléfono y estado. Estado "Bloqueado" impide envío.</div>
+        </div>
+        <button className="btn-orange" onClick={() => setEditando("nuevo")} style={{ padding: "9px 16px", fontSize: 13 }}>
+          + Nuevo transportista
+        </button>
+      </div>
+
+      <div className="form-card" style={{ padding: "12px 16px" }}>
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <input
+            placeholder="Buscar por nombre, RUT, correo o contacto..."
+            value={busqueda} onChange={e => setBusqueda(e.target.value)}
+            style={{ flex: "1 1 280px", maxWidth: 400 }}
+          />
+          <select value={filtroEstado} onChange={e => setFiltroEstado(e.target.value)} style={{ width: 160 }}>
+            <option value="todos">Todos los estados</option>
+            <option value="activo">Activo</option>
+            <option value="bloqueado">Bloqueado</option>
+          </select>
+          <div style={{ fontSize: 12, color: "#64748b", marginLeft: "auto" }}>
+            {filtrados.length} de {data.length} transportistas
+          </div>
+        </div>
+      </div>
+
+      <div className="form-card" style={{ padding: 0, overflow: "hidden" }}>
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+            <thead>
+              <tr style={{ background: "#f8fafc", borderBottom: "1px solid #e4e7ec" }}>
+                <th style={pf_th()}>Nombre</th>
+                <th style={pf_th()}>RUT</th>
+                <th style={pf_th()}>Estado</th>
+                <th style={pf_th()}>Correo</th>
+                <th style={pf_th()}>Contacto</th>
+                <th style={pf_th()}>Teléfono</th>
+                <th style={pf_th()}>Acciones</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtrados.length === 0 ? (
+                <tr><td colSpan={7} style={{ padding: 30, textAlign: "center", color: "#94a3b8" }}>
+                  Sin resultados.
+                </td></tr>
+              ) : filtrados.map(t => (
+                <tr key={t.id}>
+                  <td style={pf_td()}>
+                    <div style={{ fontWeight: 600 }}>{t.nombre}</div>
+                    {t.notas && <div style={{ fontSize: 10, color: "#94a3b8" }}>{t.notas}</div>}
+                  </td>
+                  <td style={pf_td()}>
+                    <code style={{ fontSize: 11, color: "#64748b" }}>{t.rut || "—"}</code>
+                  </td>
+                  <td style={pf_td()}>
+                    <span style={{
+                      background: (t.estado || "").toLowerCase() === "activo" ? "#dcfce7" : "#fee2e2",
+                      color: (t.estado || "").toLowerCase() === "activo" ? "#166534" : "#991b1b",
+                      padding: "2px 8px", borderRadius: 20, fontSize: 10, fontWeight: 700,
+                    }}>{t.estado || "—"}</span>
+                  </td>
+                  <td style={pf_td()}>
+                    <div style={{ wordBreak: "break-all", maxWidth: 220, fontSize: 11 }}>
+                      {t.correo || <em style={{ color: "#dc2626" }}>vacío</em>}
+                    </div>
+                  </td>
+                  <td style={pf_td()}>
+                    <span style={{ fontSize: 11, color: "#64748b" }}>{t.contacto || "—"}</span>
+                  </td>
+                  <td style={pf_td()}>
+                    <span style={{ fontSize: 11, color: "#64748b" }}>{t.telefono || "—"}</span>
+                  </td>
+                  <td style={pf_td()}>
+                    <div style={{ display: "flex", gap: 6 }}>
+                      <button onClick={() => setEditando(t.id)}
+                        style={{
+                          background: "transparent", border: "1px solid #e4e7ec", borderRadius: 6,
+                          padding: "3px 8px", fontSize: 11, color: "#1a3a6b", cursor: "pointer",
+                          fontWeight: 600, fontFamily: "Geist, sans-serif",
+                        }}>Editar</button>
+                      <button onClick={() => handleEliminar(t.id, t.nombre)}
+                        style={{
+                          background: "transparent", border: "1px solid #fca5a5", borderRadius: 6,
+                          padding: "3px 8px", fontSize: 11, color: "#991b1b", cursor: "pointer",
+                          fontWeight: 600, fontFamily: "Geist, sans-serif",
+                        }}>Eliminar</button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {filaEdicion && (
+        <ModalEdicionTransportistaCL
+          inicial={filaEdicion}
+          esNuevo={editando === "nuevo"}
+          editandoId={editando !== "nuevo" ? editando : null}
+          onCancelar={() => setEditando(null)}
+          onGuardarOK={async () => { setEditando(null); await onChange(); }}
+        />
+      )}
+    </div>
+  );
+}
+
+function ModalEdicionTransportistaCL({ inicial, esNuevo, editandoId, onCancelar, onGuardarOK }) {
+  const [form, setForm] = useState(inicial);
+  const [guardando, setGuardando] = useState(false);
+
+  const handleGuardar = async () => {
+    if (!form.nombre.trim()) { alert("El nombre es obligatorio."); return; }
+    setGuardando(true);
+    try {
+      const payload = {
+        nombre: form.nombre.trim(),
+        rut: (form.rut || "").trim() || null,
+        estado: form.estado || "Activo",
+        correo: (form.correo || "").trim() || null,
+        contacto: (form.contacto || "").trim() || null,
+        telefono: (form.telefono || "").trim() || null,
+        notas: (form.notas || "").trim() || null,
+        updated_at: new Date().toISOString(),
+      };
+      if (esNuevo) {
+        const { error } = await sb.from("prefacturas_transportistas_cl").insert(payload);
+        if (error) throw error;
+      } else {
+        const { error } = await sb.from("prefacturas_transportistas_cl").update(payload).eq("id", editandoId);
+        if (error) throw error;
+      }
+      await onGuardarOK();
+    } catch (e) {
+      alert("Error guardando: " + e.message);
+    }
+    setGuardando(false);
+  };
+
+  return (
+    <div style={{
+      position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)",
+      display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 20,
+    }} onClick={onCancelar}>
+      <div onClick={e => e.stopPropagation()} style={{
+        background: "#fff", borderRadius: 14, padding: 24, maxWidth: 600, width: "100%",
+        maxHeight: "90vh", overflowY: "auto",
+      }}>
+        <div style={{ fontSize: 16, fontWeight: 700, color: "#1a3a6b", marginBottom: 16 }}>
+          {esNuevo ? "Nuevo transportista Chile" : "Editar transportista"}
+        </div>
+        <div className="field-row">
+          <div className="field-label">Nombre *</div>
+          <input value={form.nombre} onChange={e => setForm({ ...form, nombre: e.target.value })}
+            placeholder="Ej: ISISLINE SPA" />
+        </div>
+        <div className="two-col">
+          <div className="field-row">
+            <div className="field-label">RUT</div>
+            <input value={form.rut || ""} onChange={e => setForm({ ...form, rut: e.target.value })}
+              placeholder="77395507-7" />
+          </div>
+          <div className="field-row">
+            <div className="field-label">Estado</div>
+            <select value={form.estado || "Activo"} onChange={e => setForm({ ...form, estado: e.target.value })}>
+              <option value="Activo">Activo</option>
+              <option value="Bloqueado">Bloqueado (NO ENVIAR)</option>
+            </select>
+          </div>
+        </div>
+        <div className="field-row">
+          <div className="field-label">Correo *</div>
+          <input value={form.correo || ""} onChange={e => setForm({ ...form, correo: e.target.value })}
+            placeholder="correo@dominio.com" />
+        </div>
+        <div className="two-col">
+          <div className="field-row">
+            <div className="field-label">Contacto</div>
+            <input value={form.contacto || ""} onChange={e => setForm({ ...form, contacto: e.target.value })}
+              placeholder="Nombre persona contacto" />
+          </div>
+          <div className="field-row">
+            <div className="field-label">Teléfono</div>
+            <input value={form.telefono || ""} onChange={e => setForm({ ...form, telefono: e.target.value })}
+              placeholder="940383148" />
+          </div>
+        </div>
+        <div className="field-row">
+          <div className="field-label">Notas internas</div>
+          <textarea value={form.notas || ""} onChange={e => setForm({ ...form, notas: e.target.value })}
+            placeholder="(opcional)" style={{ height: 60 }} />
+        </div>
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 14 }}>
+          <button onClick={onCancelar} disabled={guardando}
+            style={{
+              background: "#fff", border: "1px solid #e4e7ec", borderRadius: 8,
+              padding: "8px 14px", fontSize: 12, color: "#475569", cursor: "pointer",
+              fontFamily: "Geist, sans-serif", fontWeight: 600,
+            }}>Cancelar</button>
+          <button onClick={handleGuardar} disabled={guardando} className="btn-blue"
+            style={{ padding: "8px 14px", fontSize: 12 }}>
+            {guardando ? "Guardando..." : "Guardar"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════════════
+// SUB-TAB 3 CHILE: OPERACIONES / CECOs
+// ═══════════════════════════════════════════════════════════════════════════════════════
+function PrefCLParametros({ data, onChange }) {
+  const [editando, setEditando] = useState(null);
+  const [busqueda, setBusqueda] = useState("");
+
+  const filtrados = useMemo(() => {
+    if (!busqueda.trim()) return data;
+    const q = busqueda.toLowerCase();
+    return data.filter(p =>
+      (p.operacion || "").toLowerCase().includes(q) ||
+      (p.cliente || "").toLowerCase().includes(q) ||
+      (p.centro_costo || "").toLowerCase().includes(q) ||
+      (p.supervisor || "").toLowerCase().includes(q)
+    );
+  }, [data, busqueda]);
+
+  const handleEliminar = async (id, op) => {
+    if (!confirm(`¿Eliminar la operación "${op}"?`)) return;
+    try {
+      const { error } = await sb.from("prefacturas_parametros_cl").delete().eq("id", id);
+      if (error) throw error;
+      await onChange();
+    } catch (e) {
+      alert("Error eliminando: " + e.message);
+    }
+  };
+
+  const filaEdicion = editando === "nuevo"
+    ? { operacion: "", cliente: "", centro_costo: "", supervisor: "", correo_supervisor: "", lideres: "", region: "", cuenta_envio: "prefacturas@bigticket.cl" }
+    : (editando ? data.find(p => p.id === editando) : null);
+
+  return (
+    <div className="pg" style={{ maxWidth: 1300 }}>
+      <div style={{ marginBottom: 16, display: "flex", justifyContent: "space-between", alignItems: "flex-end", flexWrap: "wrap", gap: 10 }}>
+        <div>
+          <div className="sec-title">Operaciones / CECOs Chile</div>
+          <div className="sec-sub">Cliente + Centro de Costo, supervisor, líderes y región. Supervisor y líderes van todos en CC.</div>
+        </div>
+        <button className="btn-orange" onClick={() => setEditando("nuevo")} style={{ padding: "9px 16px", fontSize: 13 }}>
+          + Nueva operación
+        </button>
+      </div>
+
+      <div className="form-card" style={{ padding: "12px 16px" }}>
+        <input placeholder="Buscar por operación, cliente, CECO o supervisor..."
+          value={busqueda} onChange={e => setBusqueda(e.target.value)}
+          style={{ width: "100%", maxWidth: 500 }} />
+      </div>
+
+      <div className="form-card" style={{ background: "#eff6ff", borderColor: "#bfdbfe" }}>
+        <div style={{ fontSize: 12, color: "#1e40af" }}>
+          💡 El asunto y cuerpo del correo se editan en la sub-tab <strong>"Envío masivo"</strong> antes de cada lote.
+          Aquí solo se guarda la info estática por operación.
+        </div>
+      </div>
+
+      <div className="form-card" style={{ padding: 0, overflow: "hidden" }}>
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+            <thead>
+              <tr style={{ background: "#f8fafc", borderBottom: "1px solid #e4e7ec" }}>
+                <th style={pf_th()}>Operación</th>
+                <th style={pf_th()}>Cliente</th>
+                <th style={pf_th()}>CECO</th>
+                <th style={pf_th()}>Supervisor</th>
+                <th style={pf_th()}>Correo supervisor</th>
+                <th style={pf_th()}>Líderes</th>
+                <th style={pf_th()}>Región</th>
+                <th style={pf_th()}>Acciones</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtrados.length === 0 ? (
+                <tr><td colSpan={8} style={{ padding: 30, textAlign: "center", color: "#94a3b8" }}>
+                  Sin resultados.
+                </td></tr>
+              ) : filtrados.map(p => (
+                <tr key={p.id}>
+                  <td style={pf_td()}>
+                    <span style={{
+                      background: "#eef2ff", color: "#1a3a6b", padding: "3px 10px",
+                      borderRadius: 4, fontSize: 11, fontWeight: 700,
+                    }}>{p.operacion}</span>
+                  </td>
+                  <td style={pf_td()}><span style={{ fontSize: 11 }}>{p.cliente || "—"}</span></td>
+                  <td style={pf_td()}><span style={{ fontSize: 11 }}>{p.centro_costo || "—"}</span></td>
+                  <td style={pf_td()}>{p.supervisor || <em style={{ color: "#94a3b8" }}>—</em>}</td>
+                  <td style={pf_td()}>
+                    <span style={{ fontSize: 11, color: "#64748b", wordBreak: "break-all" }}>
+                      {p.correo_supervisor || "—"}
+                    </span>
+                  </td>
+                  <td style={pf_td()}>
+                    <span style={{ fontSize: 10, color: "#64748b", wordBreak: "break-all", maxWidth: 220, display: "block" }}>
+                      {p.lideres || "—"}
+                    </span>
+                  </td>
+                  <td style={pf_td()}>
+                    <span style={{ fontSize: 11, color: "#64748b" }}>{p.region || "—"}</span>
+                  </td>
+                  <td style={pf_td()}>
+                    <div style={{ display: "flex", gap: 6 }}>
+                      <button onClick={() => setEditando(p.id)}
+                        style={{
+                          background: "transparent", border: "1px solid #e4e7ec", borderRadius: 6,
+                          padding: "3px 8px", fontSize: 11, color: "#1a3a6b", cursor: "pointer",
+                          fontWeight: 600, fontFamily: "Geist, sans-serif",
+                        }}>Editar</button>
+                      <button onClick={() => handleEliminar(p.id, p.operacion)}
+                        style={{
+                          background: "transparent", border: "1px solid #fca5a5", borderRadius: 6,
+                          padding: "3px 8px", fontSize: 11, color: "#991b1b", cursor: "pointer",
+                          fontWeight: 600, fontFamily: "Geist, sans-serif",
+                        }}>Eliminar</button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {filaEdicion && (
+        <ModalEdicionParametroCL
+          inicial={filaEdicion}
+          esNuevo={editando === "nuevo"}
+          editandoId={editando !== "nuevo" ? editando : null}
+          onCancelar={() => setEditando(null)}
+          onGuardarOK={async () => { setEditando(null); await onChange(); }}
+        />
+      )}
+    </div>
+  );
+}
+
+function ModalEdicionParametroCL({ inicial, esNuevo, editandoId, onCancelar, onGuardarOK }) {
+  const [form, setForm] = useState(inicial);
+  const [guardando, setGuardando] = useState(false);
+
+  const handleGuardar = async () => {
+    if (!form.operacion.trim()) { alert("La operación es obligatoria."); return; }
+    setGuardando(true);
+    try {
+      const payload = {
+        operacion: form.operacion.trim().toUpperCase(),
+        cliente: (form.cliente || "").trim() || null,
+        centro_costo: (form.centro_costo || "").trim() || null,
+        supervisor: (form.supervisor || "").trim() || null,
+        correo_supervisor: (form.correo_supervisor || "").trim() || null,
+        lideres: (form.lideres || "").trim() || null,
+        region: (form.region || "").trim() || null,
+        cuenta_envio: (form.cuenta_envio || "").trim() || "prefacturas@bigticket.cl",
+        updated_at: new Date().toISOString(),
+      };
+      if (esNuevo) {
+        const { error } = await sb.from("prefacturas_parametros_cl").insert(payload);
+        if (error) throw error;
+      } else {
+        const { error } = await sb.from("prefacturas_parametros_cl").update(payload).eq("id", editandoId);
+        if (error) throw error;
+      }
+      await onGuardarOK();
+    } catch (e) {
+      alert("Error guardando: " + e.message);
+    }
+    setGuardando(false);
+  };
+
+  return (
+    <div style={{
+      position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)",
+      display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 20,
+    }} onClick={onCancelar}>
+      <div onClick={e => e.stopPropagation()} style={{
+        background: "#fff", borderRadius: 14, padding: 24, maxWidth: 700, width: "100%",
+        maxHeight: "90vh", overflowY: "auto",
+      }}>
+        <div style={{ fontSize: 16, fontWeight: 700, color: "#1a3a6b", marginBottom: 16 }}>
+          {esNuevo ? "Nueva operación Chile" : "Editar operación"}
+        </div>
+        <div className="field-row">
+          <div className="field-label">Operación *  <span style={{ color: "#94a3b8", fontWeight: 400 }}>(formato: CLIENTE - CECO)</span></div>
+          <input value={form.operacion} onChange={e => setForm({ ...form, operacion: e.target.value.toUpperCase() })}
+            placeholder="MERCADO LIBRE - RM" disabled={!esNuevo} />
+        </div>
+        <div className="two-col">
+          <div className="field-row">
+            <div className="field-label">Cliente</div>
+            <input value={form.cliente || ""} onChange={e => setForm({ ...form, cliente: e.target.value })}
+              placeholder="MERCADO LIBRE" />
+          </div>
+          <div className="field-row">
+            <div className="field-label">Centro de Costo</div>
+            <input value={form.centro_costo || ""} onChange={e => setForm({ ...form, centro_costo: e.target.value })}
+              placeholder="RM" />
+          </div>
+        </div>
+        <div className="two-col">
+          <div className="field-row">
+            <div className="field-label">Supervisor</div>
+            <input value={form.supervisor || ""} onChange={e => setForm({ ...form, supervisor: e.target.value })}
+              placeholder="MANUEL NEIRA | CONSTANZA SOTO" />
+          </div>
+          <div className="field-row">
+            <div className="field-label">Región</div>
+            <input value={form.region || ""} onChange={e => setForm({ ...form, region: e.target.value })}
+              placeholder="RM, V, VI, VIII, IV, XV..." />
+          </div>
+        </div>
+        <div className="field-row">
+          <div className="field-label">Correo supervisor (irá en CC)</div>
+          <input value={form.correo_supervisor || ""} onChange={e => setForm({ ...form, correo_supervisor: e.target.value })}
+            placeholder="manuel.neira@bigticket.cl; constanza.soto@bigticket.cl" />
+        </div>
+        <div className="field-row">
+          <div className="field-label">Líderes (también irán en CC · separá con ;)</div>
+          <textarea value={form.lideres || ""} onChange={e => setForm({ ...form, lideres: e.target.value })}
+            placeholder="randy.becerra@bigticket.cl; leonardo.castro@bigticket.cl"
+            style={{ height: 60 }} />
+        </div>
+        <div className="field-row">
+          <div className="field-label">Cuenta envío</div>
+          <input value={form.cuenta_envio || ""} onChange={e => setForm({ ...form, cuenta_envio: e.target.value })}
+            placeholder="prefacturas@bigticket.cl" />
+        </div>
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 14 }}>
+          <button onClick={onCancelar} disabled={guardando}
+            style={{
+              background: "#fff", border: "1px solid #e4e7ec", borderRadius: 8,
+              padding: "8px 14px", fontSize: 12, color: "#475569", cursor: "pointer",
+              fontFamily: "Geist, sans-serif", fontWeight: 600,
+            }}>Cancelar</button>
+          <button onClick={handleGuardar} disabled={guardando} className="btn-blue"
+            style={{ padding: "8px 14px", fontSize: 12 }}>
+            {guardando ? "Guardando..." : "Guardar"}
+          </button>
+        </div>
       </div>
     </div>
   );
