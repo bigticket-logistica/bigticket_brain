@@ -18405,16 +18405,27 @@ function PoolMeliValidacionBT({ usuario }) {
   const [busqueda, setBusqueda] = useState('');
   const [showUpload, setShowUpload] = useState(false);
   const [historialCurp, setHistorialCurp] = useState(null);
+  const [multiDriver, setMultiDriver] = useState([]);
+  const [multiDriverSinBt, setMultiDriverSinBt] = useState([]);
+  const [showMultiDriverModal, setShowMultiDriverModal] = useState(false);
   const esAdmin = usuario?.rol === 'superadmin';
 
   const cargar = async () => {
     setLoading(true); setError(null);
     try {
-      const { data: r1, error: e1 } = await sb.from('vw_bt_vs_padron').select('*').order('gravedad');
-      if (e1) throw e1;
-      const { data: r2, error: e2 } = await sb.from('vw_bt_rechazados_operando').select('*').order('rutas', { ascending: false });
-      if (e2) throw e2;
-      setBt(r1 || []); setOperando(r2 || []);
+      const [r1q, r2q, r3q, r4q] = await Promise.all([
+        sb.from('vw_bt_vs_padron').select('*').order('gravedad'),
+        sb.from('vw_bt_rechazados_operando').select('*').order('rutas', { ascending: false }),
+        sb.from('vw_bt_multi_driver_id').select('*'),
+        sb.from('vw_meli_multi_driver_sin_bt').select('*'),
+      ]);
+      if (r1q.error) throw r1q.error;
+      if (r2q.error) throw r2q.error;
+      // Las 2 vistas multi-ID son opcionales · si fallan (no existen) seguimos sin ellas
+      setBt(r1q.data || []);
+      setOperando(r2q.data || []);
+      setMultiDriver(r3q.error ? [] : (r3q.data || []));
+      setMultiDriverSinBt(r4q.error ? [] : (r4q.data || []));
     } catch (e) { setError(e.message || 'Error'); } finally { setLoading(false); }
   };
 
@@ -18422,18 +18433,29 @@ function PoolMeliValidacionBT({ usuario }) {
 
   const kpis = useMemo(() => {
     const hoy = new Date(Date.now() - 6*60*60*1000).toISOString().split('T')[0];
+    // Dedup por CURP para obtener PERSONAS únicas (la vista trae filas duplicadas
+    // cuando una persona tiene multi-driver_id en el padrón)
+    const personasMap = new Map();
+    for (const row of bt) {
+      if (!row.curp) continue;
+      if (!personasMap.has(row.curp)) personasMap.set(row.curp, row);
+    }
+    const personas = Array.from(personasMap.values());
     return {
-      total_bt: bt.length,
-      criticos: bt.filter(b => b.gravedad === 'CRITICO').length,
-      altos: bt.filter(b => b.gravedad === 'ALTO').length,
-      medios: bt.filter(b => b.gravedad === 'MEDIO').length,
-      en_padron: bt.filter(b => b.driver_id_padron).length,
-      no_padron: bt.filter(b => !b.driver_id_padron).length,
+      total_bt: personas.length,
+      criticos: personas.filter(b => b.gravedad === 'CRITICO').length,
+      altos: personas.filter(b => b.gravedad === 'ALTO').length,
+      medios: personas.filter(b => b.gravedad === 'MEDIO').length,
+      en_padron: personas.filter(b => b.driver_id_padron).length,
+      no_padron: personas.filter(b => !b.driver_id_padron).length,
+      multi_driver: multiDriver.length,
+      multi_driver_critico: multiDriver.filter(m => m.es_critico).length,
+      multi_driver_sin_bt: multiDriverSinBt.length,
       operando_personas: new Set(operando.map(o => o.curp)).size,
       operando_rutas: operando.reduce((s, o) => s + (o.rutas || 0), 0),
       operando_hoy: new Set(operando.filter(o => o.hasta === hoy).map(o => o.curp)).size,
     };
-  }, [bt, operando]);
+  }, [bt, operando, multiDriver, multiDriverSinBt]);
 
   const btFiltrado = useMemo(() => {
     let f = bt;
@@ -18488,7 +18510,7 @@ function PoolMeliValidacionBT({ usuario }) {
       </div>
 
       <div style={{ padding: '16px 24px' }}>
-        {tab === 0 && <ResumenBT kpis={kpis} bt={bt} operando={operando} />}
+        {tab === 0 && <ResumenBT kpis={kpis} bt={bt} operando={operando} onOpenMultiDriver={() => setShowMultiDriverModal(true)} />}
         {tab === 1 && <OperandoBT operando={operando} onSelectCurp={setHistorialCurp} />}
         {tab === 2 && <ListadoBT bt={btFiltrado} svcs={svcs}
           filtroGrav={filtroGrav} setFiltroGrav={setFiltroGrav}
@@ -18499,11 +18521,12 @@ function PoolMeliValidacionBT({ usuario }) {
 
       {showUpload && <UploadExcelBT onClose={() => { setShowUpload(false); cargar(); }} />}
       {historialCurp && <HistorialPersonaModal curp={historialCurp} onClose={() => setHistorialCurp(null)} />}
+      {showMultiDriverModal && <MultiDriverIdModal data={multiDriver} sinBt={multiDriverSinBt} onClose={() => setShowMultiDriverModal(false)} onSelectCurp={(c) => { setShowMultiDriverModal(false); setHistorialCurp(c); }} />}
     </div>
   );
 }
 
-function ResumenBT({ kpis, bt, operando }) {
+function ResumenBT({ kpis, bt, operando, onOpenMultiDriver }) {
   const porEmpresa = {};
   operando.forEach(o => {
     if (!porEmpresa[o.empresa]) porEmpresa[o.empresa] = { personas: new Set(), rutas: 0 };
@@ -18521,13 +18544,52 @@ function ResumenBT({ kpis, bt, operando }) {
   });
   const svcArr = Object.entries(porSvc).map(([s, v]) => ({ svc: s, personas: v.personas.size, rutas: v.rutas })).sort((a, b) => b.rutas - a.rutas);
 
+  // Subtítulo dinámico del tile Multi-ID
+  const multiSub = kpis.multi_driver === 0
+    ? 'Sin casos detectados'
+    : kpis.multi_driver_critico > 0
+      ? `Múltiples driver_id · ${kpis.multi_driver_critico} crítico${kpis.multi_driver_critico === 1 ? '' : 's'}`
+      : 'Múltiples driver_id · sin alertas';
+
   return (
     <div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 14 }}>
-        <VBT_KPI l="Total BT" v={kpis.total_bt} s={`${kpis.en_padron} en padrón · ${kpis.no_padron} no`} accent={VBT_NAVY} />
-        <VBT_KPI l="🔴 Críticos" v={kpis.criticos} s="RECHAZADO en BT" accent={VBT_RED} />
-        <VBT_KPI l="🟠 Altos" v={kpis.altos} s="PENDIENTE en BT" accent={VBT_ORANGE} />
-        <VBT_KPI l="🟡 Medios" v={kpis.medios} s="Validación BT pendiente" accent="#eab308" />
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 12, marginBottom: 14 }}>
+        <VBT_KPI
+          l="Total BT"
+          v={kpis.total_bt}
+          s={`${kpis.en_padron} en padrón · ${kpis.no_padron} no en MELI`}
+          accent={VBT_NAVY}
+          info="Total de personas únicas cargadas en el Excel BT (CURPs distintos). Es el universo de tripulantes que BT validó alguna vez. El subtítulo indica cuántos matchean con el padrón MELI actual y cuántos no aparecen en MELI."
+        />
+        <VBT_KPI
+          l="🔴 Críticos"
+          v={kpis.criticos}
+          s="Rechazado por MELI"
+          accent={VBT_RED}
+          info="Personas que el Excel BT marca como RECHAZADO en la columna 'Respuesta MELI'. No deberían estar operando. Si están operando, aparecen en la pestaña 'Operando (rechazados/pendientes)'."
+        />
+        <VBT_KPI
+          l="🟠 Pendientes"
+          v={kpis.altos}
+          s="Pendiente en MELI"
+          accent={VBT_ORANGE}
+          info="Personas que el Excel BT marca como PENDIENTE en la columna 'Respuesta MELI'. Falta resolución de MELI antes de que puedan operar normalmente."
+        />
+        <VBT_KPI
+          l="🟡 Alerta BT"
+          v={kpis.medios}
+          s="Validación BT marcada"
+          accent="#eab308"
+          info="Personas marcadas como RECHAZADO o PENDIENTE en la columna interna 'Validación BT' del Excel. Es una segunda capa de control que BT lleva aparte del estado de MELI."
+        />
+        <VBT_KPI
+          l="🟣 Multi-ID"
+          v={kpis.multi_driver}
+          s={multiSub}
+          accent="#6366f1"
+          info={`Personas con más de un driver_id activo simultáneamente en el padrón MELI (misma CURP, distintos IDs). Puede indicar duplicación administrativa o cambio de carrier. ${kpis.multi_driver_sin_bt > 0 ? `Además hay ${kpis.multi_driver_sin_bt} personas con multi-driver_id en MELI que no están cargadas en BT. ` : ''}Click en la tarjeta para ver el listado completo.`}
+          onClick={kpis.multi_driver > 0 ? onOpenMultiDriver : undefined}
+        />
       </div>
 
       {kpis.operando_personas > 0 && (
@@ -18987,12 +19049,53 @@ function UploadExcelBT({ onClose }) {
   );
 }
 
-function VBT_KPI({ l, v, s, accent }) {
+function VBT_KPI({ l, v, s, accent, info, onClick }) {
+  const [hovered, setHovered] = useState(false);
+  const [tooltipOpen, setTooltipOpen] = useState(false);
+  const clickable = typeof onClick === 'function';
   return (
-    <div style={{ background: VBT_CARD, borderRadius: 12, border: `0.5px solid ${VBT_BORDER}`, padding: 14 }}>
-      <div style={{ fontSize: 11, fontWeight: 700, color: VBT_MUTED, textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 8 }}>{l}</div>
+    <div
+      onClick={clickable ? onClick : undefined}
+      onMouseEnter={() => clickable && setHovered(true)}
+      onMouseLeave={() => clickable && setHovered(false)}
+      style={{
+        background: VBT_CARD,
+        borderRadius: 12,
+        border: clickable && hovered ? `1px solid ${accent || VBT_NAVY}` : `0.5px solid ${VBT_BORDER}`,
+        padding: 14,
+        cursor: clickable ? 'pointer' : 'default',
+        position: 'relative',
+        transition: 'all 120ms ease',
+        boxShadow: clickable && hovered ? `0 2px 8px ${accent ? accent + '22' : 'rgba(0,0,0,0.05)'}` : 'none',
+        transform: clickable && hovered ? 'translateY(-1px)' : 'translateY(0)',
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: VBT_MUTED, textTransform: 'uppercase', letterSpacing: 0.4 }}>{l}</div>
+        {info && (
+          <div
+            onMouseEnter={(e) => { e.stopPropagation(); setTooltipOpen(true); }}
+            onMouseLeave={(e) => { e.stopPropagation(); setTooltipOpen(false); }}
+            onClick={(e) => e.stopPropagation()}
+            style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 16, height: 16, borderRadius: '50%', border: `1px solid ${VBT_BORDER}`, color: VBT_MUTED, fontSize: 10, fontWeight: 700, cursor: 'help', fontFamily: 'serif', fontStyle: 'italic', lineHeight: 1, background: '#f8fafc' }}
+          >
+            i
+            {tooltipOpen && (
+              <div style={{ position: 'absolute', top: 'calc(100% + 8px)', right: -4, width: 260, background: '#1a1a1a', color: '#fff', fontSize: 11, lineHeight: 1.5, padding: '10px 12px', borderRadius: 8, boxShadow: '0 8px 24px rgba(0,0,0,0.25)', zIndex: 50, fontWeight: 400, fontFamily: "'Geist', sans-serif", textTransform: 'none', letterSpacing: 0, fontStyle: 'normal' }}>
+                <div style={{ position: 'absolute', top: -4, right: 8, width: 8, height: 8, background: '#1a1a1a', transform: 'rotate(45deg)' }} />
+                {info}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
       <div style={{ fontSize: 26, fontWeight: 800, color: accent || VBT_TEXT, letterSpacing: -0.5, lineHeight: 1 }}>{v}</div>
       <div style={{ fontSize: 11, color: VBT_LIGHT, marginTop: 6 }}>{s}</div>
+      {clickable && (
+        <div style={{ position: 'absolute', bottom: 8, right: 10, fontSize: 9, fontWeight: 600, color: accent || VBT_MUTED, textTransform: 'uppercase', letterSpacing: 0.5, opacity: hovered ? 1 : 0.45, transition: 'opacity 120ms' }}>
+          Ver detalle →
+        </div>
+      )}
     </div>
   );
 }
@@ -19012,6 +19115,179 @@ function VBT_Pill({ children, type }) {
     : type === 'green' ? { bg: '#d1fae5', col: '#065f46' }
     : { bg: '#f1f5f9', col: '#475569' };
   return <span style={{ background: c.bg, color: c.col, fontSize: 9.5, fontWeight: 700, padding: '3px 8px', borderRadius: 5, textTransform: 'uppercase', letterSpacing: 0.3, whiteSpace: 'nowrap' }}>{children}</span>;
+}
+
+// Modal Multi-Driver_ID: muestra personas BT con más de un driver_id activo en MELI.
+// Incluye sección secundaria con personas multi-ID que NO están en BT (huérfanos).
+function MultiDriverIdModal({ data, sinBt, onClose, onSelectCurp }) {
+  const [showSinBt, setShowSinBt] = useState(false);
+  const totalCriticos = (data || []).filter(d => d.es_critico).length;
+
+  const exportarCSV = () => {
+    const headers = ['CURP','Nombre BT','Empresa BT','SVC','Cargo','Respuesta MELI','Validación BT','# IDs','driver_ids','Nombres MELI','Carriers'];
+    const rows = (data || []).map(d => [
+      d.curp, d.nombre_bt, d.empresa_bt, d.svc, d.cargo,
+      d.respuesta_meli, d.validacion_bt, d.cantidad_driver_ids,
+      d.driver_ids, d.nombres_meli, d.carriers
+    ]);
+    const csv = [headers, ...rows].map(r => r.map(c => `"${(c ?? '').toString().replace(/"/g, '""')}"`).join(',')).join('\n');
+    const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `multi_driver_id_bt_${new Date().toISOString().split('T')[0]}.csv`; a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20, fontFamily: "'Geist', sans-serif" }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: '#fff', borderRadius: 12, width: '100%', maxWidth: 1100, maxHeight: '90vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        {/* Header */}
+        <div style={{ padding: '16px 20px', borderBottom: `1px solid ${VBT_BORDER}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'linear-gradient(135deg, #f8f7ff 0%, #fff 100%)' }}>
+          <div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: VBT_NAVY, marginBottom: 4, display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ width: 10, height: 10, borderRadius: '50%', background: '#6366f1', display: 'inline-block' }} />
+              Personas con múltiples driver_id en MELI
+            </div>
+            <div style={{ fontSize: 11.5, color: VBT_MUTED }}>
+              {(data || []).length} {((data || []).length === 1) ? 'persona' : 'personas'} en BT con 2+ driver_id activos en el padrón
+              {totalCriticos > 0 && <span style={{ color: '#991b1b', fontWeight: 600 }}> · {totalCriticos} con alerta BT</span>}
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            {(data || []).length > 0 && (
+              <button onClick={exportarCSV} style={{ fontSize: 11, fontWeight: 600, padding: '6px 12px', borderRadius: 6, border: `1px solid ${VBT_BORDER}`, background: '#fff', color: VBT_NAVY, cursor: 'pointer', fontFamily: "'Geist', sans-serif", display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                <i className="ti ti-download" style={{ fontSize: 13 }} />
+                Exportar CSV
+              </button>
+            )}
+            <button onClick={onClose} style={{ background: 'transparent', border: 'none', cursor: 'pointer', fontSize: 20, color: VBT_MUTED, padding: 0, width: 32, height: 32, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>✕</button>
+          </div>
+        </div>
+
+        {/* Cuerpo */}
+        <div style={{ overflowY: 'auto', flex: 1, padding: 20 }}>
+          {/* Tabla principal */}
+          {(!data || data.length === 0) ? (
+            <div style={{ padding: 40, textAlign: 'center', color: VBT_LIGHT, fontSize: 13 }}>
+              No hay personas BT con múltiples driver_id en este momento.
+            </div>
+          ) : (
+            <div style={{ border: `0.5px solid ${VBT_BORDER}`, borderRadius: 10, overflow: 'hidden' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                <thead>
+                  <tr>
+                    <VBT_ThS>Estado</VBT_ThS>
+                    <VBT_ThS>Nombre BT</VBT_ThS>
+                    <VBT_ThS>CURP</VBT_ThS>
+                    <VBT_ThS>Empresa BT</VBT_ThS>
+                    <VBT_ThS>SVC</VBT_ThS>
+                    <VBT_ThS>Respuesta MELI</VBT_ThS>
+                    <VBT_ThS># IDs</VBT_ThS>
+                    <VBT_ThS>driver_ids</VBT_ThS>
+                    <VBT_ThS>Carriers</VBT_ThS>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.map((d, i) => (
+                    <tr key={d.curp || i}
+                      onClick={() => onSelectCurp && onSelectCurp(d.curp)}
+                      style={{
+                        borderBottom: '0.5px solid #f4f5f7',
+                        background: d.es_critico ? '#fef2f2' : 'transparent',
+                        cursor: onSelectCurp ? 'pointer' : 'default'
+                      }}
+                      onMouseEnter={(e) => { if (onSelectCurp) e.currentTarget.style.background = d.es_critico ? '#fee2e2' : '#f8fafc'; }}
+                      onMouseLeave={(e) => { if (onSelectCurp) e.currentTarget.style.background = d.es_critico ? '#fef2f2' : 'transparent'; }}
+                    >
+                      <VBT_TdS>
+                        {d.es_critico ? (
+                          <VBT_Pill type="red">{d.respuesta_meli || 'CRÍTICO'}</VBT_Pill>
+                        ) : (
+                          <VBT_Pill type="gray">OK</VBT_Pill>
+                        )}
+                      </VBT_TdS>
+                      <VBT_TdS bold>{d.nombre_bt || '—'}</VBT_TdS>
+                      <VBT_TdS mono small>{d.curp}</VBT_TdS>
+                      <VBT_TdS muted small>{d.empresa_bt || '—'}</VBT_TdS>
+                      <VBT_TdS mono>{d.svc || '—'}</VBT_TdS>
+                      <VBT_TdS>
+                        {d.respuesta_meli === 'RECHAZADO' ? <VBT_Pill type="red">RECHAZADO</VBT_Pill>
+                          : d.respuesta_meli === 'PENDIENTE' ? <VBT_Pill type="yellow">PENDIENTE</VBT_Pill>
+                          : d.respuesta_meli === 'APROBADO' ? <VBT_Pill type="green">APROBADO</VBT_Pill>
+                          : (d.respuesta_meli || '—')}
+                      </VBT_TdS>
+                      <VBT_TdS center strong>
+                        <span style={{ background: '#eef2ff', color: '#4338ca', padding: '2px 8px', borderRadius: 10, fontSize: 11, fontWeight: 700 }}>
+                          {d.cantidad_driver_ids}
+                        </span>
+                      </VBT_TdS>
+                      <VBT_TdS mono small>{d.driver_ids}</VBT_TdS>
+                      <VBT_TdS mono small muted>{d.carriers}</VBT_TdS>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* Tip */}
+          {data && data.length > 0 && onSelectCurp && (
+            <div style={{ marginTop: 10, fontSize: 11, color: VBT_LIGHT, fontStyle: 'italic' }}>
+              Click en una fila para ver el historial completo de la persona.
+            </div>
+          )}
+
+          {/* Sección secundaria: multi-ID sin BT */}
+          {sinBt && sinBt.length > 0 && (
+            <div style={{ marginTop: 20, padding: 14, background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 10 }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer' }} onClick={() => setShowSinBt(!showSinBt)}>
+                <div>
+                  <div style={{ fontSize: 12.5, fontWeight: 700, color: '#92400e', marginBottom: 2, display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <i className="ti ti-alert-circle" style={{ fontSize: 14 }} />
+                    Además, {sinBt.length} {sinBt.length === 1 ? 'persona' : 'personas'} con multi-driver_id en MELI no están cargadas en BT
+                  </div>
+                  <div style={{ fontSize: 11, color: '#92400e', opacity: 0.85 }}>
+                    Estos casos no fueron validados por BT pero existen como múltiples perfiles en el padrón MELI. Revisar con la carrier correspondiente.
+                  </div>
+                </div>
+                <i className={`ti ti-chevron-${showSinBt ? 'up' : 'down'}`} style={{ fontSize: 16, color: '#92400e' }} />
+              </div>
+              {showSinBt && (
+                <div style={{ marginTop: 12, background: '#fff', border: `0.5px solid ${VBT_BORDER}`, borderRadius: 8, overflow: 'hidden' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11.5 }}>
+                    <thead>
+                      <tr>
+                        <VBT_ThS>CURP</VBT_ThS>
+                        <VBT_ThS>Nombres MELI</VBT_ThS>
+                        <VBT_ThS># IDs</VBT_ThS>
+                        <VBT_ThS>driver_ids</VBT_ThS>
+                        <VBT_ThS>Carriers</VBT_ThS>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {sinBt.map((p, i) => (
+                        <tr key={p.curp || i} style={{ borderBottom: '0.5px solid #f4f5f7' }}>
+                          <VBT_TdS mono small>{p.curp}</VBT_TdS>
+                          <VBT_TdS bold small>{p.nombres_meli}</VBT_TdS>
+                          <VBT_TdS center strong>
+                            <span style={{ background: '#fef3c7', color: '#92400e', padding: '2px 8px', borderRadius: 10, fontSize: 11, fontWeight: 700 }}>
+                              {p.cantidad_driver_ids}
+                            </span>
+                          </VBT_TdS>
+                          <VBT_TdS mono small>{p.driver_ids}</VBT_TdS>
+                          <VBT_TdS mono small muted>{p.carriers}</VBT_TdS>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 
