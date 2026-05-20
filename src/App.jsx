@@ -21514,7 +21514,7 @@ function PoolMeliCompromiso() {
         </div>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 20 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 12, marginBottom: 20 }}>
         <CompromisoTarjeta label="Ofrecidas" sublabel="Total por MELI" total={ofrecidasTotal} sdd={c.ofrecidas_sdd || 0} spot={c.ofrecidas_spot || 0} color="#1a3a6b" />
         <CompromisoTarjeta label="Aceptadas" sublabel="Por nosotros" total={aceptadasTotal} sdd={c.aceptadas_sdd || 0} spot={c.aceptadas_spot || 0} color="#047857" />
         <CompromisoTarjeta label="Rechazadas" sublabel="Por nosotros" total={rechazadasTotal} sdd={c.rechazadas_sdd || 0} spot={c.rechazadas_spot || 0} color="#b91c1c" />
@@ -22247,7 +22247,7 @@ function PoolMeliDiferenciasMaestros() {
       </div>
 
       {/* KPIs principales */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 20 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 12, marginBottom: 20 }}>
         <div className="form-card" style={{ marginBottom: 0, padding: 16, borderTop: "3px solid #1A3A6B" }}>
           <div style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>
             Total de Rutas
@@ -22290,6 +22290,20 @@ function PoolMeliDiferenciasMaestros() {
           </div>
           <div style={{ fontSize: 10, color: "#94a3b8" }}>
             {rutasSoloSnap} solo Snap · {rutasSoloMeli} solo MELI
+          </div>
+        </div>
+        <div className="form-card" style={{ marginBottom: 0, padding: 16, borderTop: `3px solid ${(resumen.rutas_no_operadas || 0) > 0 ? "#dc2626" : "#94a3b8"}` }}
+          title="Rutas con vehículo cargado pero que NO salieron del SC (cierre de bodega, cancelación operativa o similar). Estos paquetes NO son fallos de entrega.">
+          <div style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>
+            Rutas no operadas
+          </div>
+          <div style={{ fontSize: 32, fontWeight: 700, color: (resumen.rutas_no_operadas || 0) > 0 ? "#dc2626" : "#94a3b8", lineHeight: 1, marginBottom: 4 }}>
+            {resumen.rutas_no_operadas || 0}
+          </div>
+          <div style={{ fontSize: 10, color: "#94a3b8" }}>
+            {(resumen.paquetes_no_operados || 0) > 0
+              ? `${Number(resumen.paquetes_no_operados).toLocaleString()} paquetes no salieron`
+              : "Vehículo cargado, sin salir"}
           </div>
         </div>
       </div>
@@ -22407,7 +22421,18 @@ function PoolMeliDiferenciasMaestros() {
                 {conDif.map((r, i) => (
                   <tr key={r.idviaje} style={{ borderBottom: "1px solid #f1f5f9", background: i % 2 === 0 ? "#fff" : "#fafbfc" }}>
                     <td style={{ padding: "8px 6px", fontFamily: "monospace", fontSize: 11, color: "#475569" }}>{r.idviaje}</td>
-                    <td style={{ padding: "8px 6px", fontWeight: 700, color: "#0f172a" }}>{r.sc}</td>
+                    <td style={{ padding: "8px 6px", fontWeight: 700, color: "#0f172a" }}>
+                      {r.sc}
+                      {r.ruta_no_operada && (
+                        <span title="RUTA NO OPERADA: vehículo cargado pero no salió del SC (cierre de bodega / cancelación operativa)"
+                          style={{ marginLeft: 6, background: "#fef2f2", color: "#991b1b",
+                            padding: "2px 6px", borderRadius: 4, fontSize: 9, fontWeight: 700,
+                            border: "1px solid #fca5a5", cursor: "help",
+                            display: "inline-block", whiteSpace: "nowrap" }}>
+                          🚫 NO OPERADA
+                        </span>
+                      )}
+                    </td>
                     <td style={{ padding: "8px 6px", color: "#475569" }}>{r.driver_name || "—"}</td>
                     <td style={{ padding: "8px 6px", textAlign: "right", color: "#475569", fontVariantNumeric: "tabular-nums" }}>
                       {r.cargados_meli ?? "—"} / {r.cargados_snap ?? "—"}
@@ -22459,7 +22484,18 @@ function PoolMeliDiferenciasMaestros() {
                 {soloSnap.map((r, i) => (
                   <tr key={r.idviaje} style={{ borderBottom: "1px solid #f1f5f9", background: i % 2 === 0 ? "#fff" : "#fafbfc" }}>
                     <td style={{ padding: "8px 6px", fontFamily: "monospace", fontSize: 11, color: "#475569" }}>{r.idviaje}</td>
-                    <td style={{ padding: "8px 6px", fontWeight: 700, color: "#0f172a" }}>{r.sc}</td>
+                    <td style={{ padding: "8px 6px", fontWeight: 700, color: "#0f172a" }}>
+                      {r.sc}
+                      {r.ruta_no_operada && (
+                        <span title="RUTA NO OPERADA: vehículo cargado pero no salió del SC (cierre de bodega / cancelación operativa)"
+                          style={{ marginLeft: 6, background: "#fef2f2", color: "#991b1b",
+                            padding: "2px 6px", borderRadius: 4, fontSize: 9, fontWeight: 700,
+                            border: "1px solid #fca5a5", cursor: "help",
+                            display: "inline-block", whiteSpace: "nowrap" }}>
+                          🚫 NO OPERADA
+                        </span>
+                      )}
+                    </td>
                     <td style={{ padding: "8px 6px", color: "#475569" }}>{r.driver_name || "—"}</td>
                     <td style={{ padding: "8px 6px", textAlign: "right", color: "#1A3A6B", fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>{r.cargados_snap}</td>
                     <td style={{ padding: "8px 6px", textAlign: "right", color: "#475569", fontVariantNumeric: "tabular-nums" }}>{r.entregados_snap}</td>
@@ -22495,7 +22531,18 @@ function PoolMeliDiferenciasMaestros() {
                 {soloMeli.map((r, i) => (
                   <tr key={r.idviaje} style={{ borderBottom: "1px solid #f1f5f9", background: i % 2 === 0 ? "#fff" : "#fafbfc" }}>
                     <td style={{ padding: "8px 6px", fontFamily: "monospace", fontSize: 11, color: "#475569" }}>{r.idviaje}</td>
-                    <td style={{ padding: "8px 6px", fontWeight: 700, color: "#0f172a" }}>{r.sc}</td>
+                    <td style={{ padding: "8px 6px", fontWeight: 700, color: "#0f172a" }}>
+                      {r.sc}
+                      {r.ruta_no_operada && (
+                        <span title="RUTA NO OPERADA: vehículo cargado pero no salió del SC (cierre de bodega / cancelación operativa)"
+                          style={{ marginLeft: 6, background: "#fef2f2", color: "#991b1b",
+                            padding: "2px 6px", borderRadius: 4, fontSize: 9, fontWeight: 700,
+                            border: "1px solid #fca5a5", cursor: "help",
+                            display: "inline-block", whiteSpace: "nowrap" }}>
+                          🚫 NO OPERADA
+                        </span>
+                      )}
+                    </td>
                     <td style={{ padding: "8px 6px", textAlign: "right", color: "#1A3A6B", fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>{r.cargados_meli}</td>
                     <td style={{ padding: "8px 6px", textAlign: "right", color: "#475569", fontVariantNumeric: "tabular-nums" }}>{r.entregados_meli}</td>
                     <td style={{ padding: "8px 6px", textAlign: "right", color: "#475569", fontVariantNumeric: "tabular-nums" }}>{r.devueltos_meli}</td>
@@ -22512,6 +22559,10 @@ function PoolMeliDiferenciasMaestros() {
         <strong>📋 Nota:</strong> Esta pestaña audita las diferencias entre el Excel oficial de MELI (descarga del portal) y los snapshots automáticos del scraper. 
         Los Snapshots son la fuente de verdad operativa por su mayor frecuencia de captura. 
         Las diferencias detectadas se documentan aquí para identificar patrones, validar reportes y conciliar números con MELI cuando sea necesario.
+        <br /><br />
+        <strong>🚫 Rutas no operadas:</strong> rutas con vehículo cargado pero que nunca salieron del SC (cierre de bodega, cancelación operativa, problema mecánico, etc.). 
+        MELI las reporta con todos los paquetes como "devueltos", pero NO son fallos de entrega — son paquetes que se quedaron en bodega y se reasignan al día siguiente.
+        Estos paquetes NO aparecen en <code>meli_paquetes_fallidos</code> porque MELI no genera eventos individuales con substatus de fallo.
       </div>
     </div>
   );
