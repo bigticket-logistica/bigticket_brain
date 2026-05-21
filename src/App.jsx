@@ -17633,12 +17633,24 @@ function PoolMeliControlHelper() {
   }, [datos]);
 
   const matrizU2 = useMemo(() => {
-    const u2 = datos.filter(r => r.helper_cert_estado === 'NO_CERTIFICADO');
+    // U2 ahora incluye NO_CERTIFICADO (fantasma) Y BT_RECHAZADO (crítico operando)
+    const u2 = datos.filter(r => r.universo === 'U2');
     const scs = [...new Set(u2.map(r => r.sc))].sort();
     const mat = {};
-    scs.forEach(sc => mat[sc] = []);
-    u2.forEach(r => { if (mat[r.sc]) mat[r.sc].push(r); });
-    return { scs, mat };
+    scs.forEach(sc => mat[sc] = { noCert: [], btRech: [], total: 0 });
+    u2.forEach(r => {
+      if (!mat[r.sc]) return;
+      if (r.helper_cert_estado === 'NO_CERTIFICADO') mat[r.sc].noCert.push(r);
+      else if (r.helper_cert_estado === 'BT_RECHAZADO') mat[r.sc].btRech.push(r);
+      mat[r.sc].total++;
+    });
+    const totals = {
+      noCert: datos.filter(r => r.helper_cert_estado === 'NO_CERTIFICADO').length,
+      btRech: datos.filter(r => r.helper_cert_estado === 'BT_RECHAZADO').length,
+      sinBt: datos.filter(r => r.helper_cert_estado === 'SIN_BT').length,
+      certOk: datos.filter(r => r.helper_cert_estado === 'OK').length,
+    };
+    return { scs, mat, totals };
   }, [datos]);
 
   const matrizU3 = useMemo(() => {
@@ -17930,57 +17942,71 @@ function PanelU1({ matriz, conteos, datos, drillDown, setDrillDown, fecha, getSe
 // PANEL U2 · CERTIFICACIÓN
 // ════════════════════════════════════════════════════════════════════════════
 function PanelU2({ matriz, conteos, drillDown, setDrillDown, fecha, getSerieVals }) {
-  const scCritico = matriz.scs.length > 0 ? [...matriz.scs].sort((a, b) => matriz.mat[b].length - matriz.mat[a].length)[0] : '—';
+  const t = matriz.totals;
 
   return (
     <div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 14 }}>
-        <KCard l="SVC autorizados" v={6} s="SMX1·6·7·8·9·10" a="universo" sk={getSerieVals('U2')} accent={CH_ORANGE} />
-        <KCard l="Helpers con problema" v={conteos.U2} s="no certificados en padrón" a="volumen" sk={getSerieVals('U2')} accent={CH_ORANGE} />
-        <KCard l="% sin certif." v={`${pct(conteos.U2, conteos.total)}%`} s="del total con helper" a="magnitud" sk={getSerieVals('U2')} accent={CH_ORANGE} />
-        <KCard l="SVC más crítico" v={scCritico} s={scCritico !== '—' ? `${matriz.mat[scCritico]?.length} helpers` : '—'} a="alerta" sk={getSerieVals('U2')} accent={CH_ORANGE} />
+        <KCard l="🚨 BT Rechazados" v={t.btRech} s="MELI activo + BT rechazó" a="alerta crítica" sk={getSerieVals('U2')} accent="#991b1b" />
+        <KCard l="🚨 No certificados" v={t.noCert} s="helpers fantasma" a="investigar" sk={getSerieVals('U2')} accent="#9f1239" />
+        <KCard l="🟡 Sin validar BT" v={t.sinBt} s="MELI activo · falta BT" a="informativo" sk={getSerieVals('U3')} accent="#92400e" />
+        <KCard l="✅ Certificados OK" v={t.certOk} s="MELI activo + BT aprobado" a="normal" sk={getSerieVals('OK')} accent="#065f46" />
       </div>
 
-      <SLabel text="Mapa de calor · Certificación" badge="RH Check pendiente · base BT" badgeColor="yellow" fecha={fecha} />
+      {/* BANNER WARNING para NO_CERTIFICADO */}
+      {t.noCert > 0 && (
+        <div style={{
+          background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 12,
+          padding: '12px 16px', marginBottom: 14, fontSize: 12, color: '#7f1d1d',
+        }}>
+          <div style={{ fontWeight: 700, marginBottom: 4, fontSize: 13 }}>
+            ⚠️ {t.noCert} helper{t.noCert > 1 ? 's' : ''} no identificado{t.noCert > 1 ? 's' : ''} · investigar manualmente
+          </div>
+          <div style={{ lineHeight: 1.5, color: '#991b1b' }}>
+            MELI capturó nombres que no coinciden con el padrón ni con BBDD BT.
+            Revisa el nombre raw en la tabla y verifica si es alias, error de escaneo, o helper fantasma real.
+          </div>
+        </div>
+      )}
+
+      <SLabel text="Helpers críticos por SC · MELI + BT" badge="cruce padrón MELI + BBDD BT" badgeColor="orange" fecha={fecha} />
       <div style={{ background: CH_CARD, borderRadius: 12, border: `0.5px solid ${CH_BORDER}`, overflow: 'hidden' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead>
             <tr>
               <ThHm align="left">SVC</ThHm>
-              <ThHm>Sin RH Check</ThHm>
-              <ThHm>Sin certif. MELI</ThHm>
-              <ThHm>Ambos pendientes</ThHm>
-              <ThHm>Helpers con problema</ThHm>
+              <ThHm>🚨 BT Rechazado</ThHm>
+              <ThHm>🚨 No certificado</ThHm>
+              <ThHm>Total críticos</ThHm>
             </tr>
           </thead>
           <tbody>
             {matriz.scs.length === 0 ? (
-              <tr><td colSpan={5} style={{ padding: 24, textAlign: 'center', color: CH_LIGHT, fontSize: 12 }}>Sin helpers no certificados para esta fecha</td></tr>
+              <tr><td colSpan={4} style={{ padding: 24, textAlign: 'center', color: CH_LIGHT, fontSize: 12 }}>Sin helpers críticos para esta fecha</td></tr>
             ) : <>
               {matriz.scs.map(sc => {
-                const n = matriz.mat[sc].length;
-                const sel = drillDown && drillDown.uid === 2 && drillDown.svc === sc;
+                const cell = matriz.mat[sc];
+                const selRech = drillDown && drillDown.uid === 2 && drillDown.svc === sc && drillDown.col === 'btRech';
+                const selNoCert = drillDown && drillDown.uid === 2 && drillDown.svc === sc && drillDown.col === 'noCert';
                 return (
                   <tr key={sc}>
                     <TdSn>{sc}</TdSn>
-                    <TdNa>—</TdNa>
-                    <TdHeat n={n} selected={sel} onClick={() => n > 0 && setDrillDown({ uid: 2, svc: sc, n, rutas: matriz.mat[sc], label: 'Sin certif. MELI' })} />
-                    <TdNa>—</TdNa>
-                    <TdTc>{n}</TdTc>
+                    <TdHeat n={cell.btRech.length} selected={selRech} onClick={() => cell.btRech.length > 0 && setDrillDown({ uid: 2, svc: sc, col: 'btRech', n: cell.btRech.length, rutas: cell.btRech, label: 'BT Rechazado' })} />
+                    <TdHeat n={cell.noCert.length} selected={selNoCert} onClick={() => cell.noCert.length > 0 && setDrillDown({ uid: 2, svc: sc, col: 'noCert', n: cell.noCert.length, rutas: cell.noCert, label: 'No certificado' })} />
+                    <TdTc>{cell.total}</TdTc>
                   </tr>
                 );
               })}
               <tr style={{ background: '#f8fafc', borderTop: `1px solid ${CH_BORDER}` }}>
                 <TdSn total>Total</TdSn>
-                <TdTotal>—</TdTotal>
-                <TdTotal>{conteos.U2}</TdTotal>
-                <TdTotal>—</TdTotal>
+                <TdTotal>{t.btRech}</TdTotal>
+                <TdTotal>{t.noCert}</TdTotal>
                 <TdTotal strong>{conteos.U2}</TdTotal>
               </tr>
             </>}
           </tbody>
         </table>
-        <HmLegend note="Sin RH Check y Ambos pendientes requieren integración con base BT" hint="Clic en celda → ver helpers" />
+        <HmLegend note="Clic en celda para ver detalle del helper" hint="Score < 0.7 → match dudoso · revisar nombre raw" />
       </div>
 
       {drillDown && drillDown.uid === 2 && <DrillDown2 dd={drillDown} fecha={fecha} onClose={() => setDrillDown(null)} />}
@@ -18096,27 +18122,66 @@ function DrillDown1({ dd, fecha, onClose }) {
 }
 
 function DrillDown2({ dd, fecha, onClose }) {
+  const isBtRech = dd.col === 'btRech';
+  const titulo = isBtRech ? 'BT Rechazado' : 'No certificado';
+  const icon = isBtRech ? 'ti-shield-x' : 'ti-id-badge';
+  const accionTxt = isBtRech
+    ? '🔴 BT lo rechazó · NO debería operar · contactar SC inmediato'
+    : '🔴 No identificado · investigar si es helper fantasma o alias';
+
   const exportar = () => exportCH(
-    ["Helper", "SC", "Ruta", "CURP", "Estado", "Acción"],
-    dd.rutas.map(r => [r.helpers_nombres || '', r.sc, r.id_ruta, '—', 'NO CERTIFICADO', 'Verificar identidad · iniciar certif. MELI']),
-    `BT_U2_${dd.svc}.csv`
+    ["Helper MELI", "SC", "Ruta", "Nombre padrón", "CURP", "Estado BT", "Score", "Acción"],
+    dd.rutas.map(r => [
+      r.helpers_nombres || '—',
+      r.sc,
+      r.id_ruta,
+      r.helper_name_padron || '—',
+      r.helper_curp || '—',
+      r.helper_respuesta_bt || '—',
+      r.helper_match_score != null ? r.helper_match_score : '—',
+      isBtRech ? 'Contactar SC inmediato' : 'Verificar identidad',
+    ]),
+    `BT_U2_${dd.col}_${dd.svc}.csv`
   );
+
   return (
-    <DrillWrap dd={dd} fecha={fecha} onClose={onClose} icon="ti-id-badge" onExport={exportar}>
+    <DrillWrap dd={dd} fecha={fecha} onClose={onClose} icon={icon} onExport={exportar}>
       <table style={{ width: '100%', borderCollapse: 'collapse' }}>
         <thead><tr>
-          <ThDt>Helper</ThDt><ThDt>SC</ThDt><ThDt>Ruta</ThDt>
-          <ThDt>Certif. MELI</ThDt><ThDt>Acción</ThDt>
+          <ThDt>Nombre MELI (raw)</ThDt>
+          <ThDt>SC</ThDt>
+          <ThDt>Ruta</ThDt>
+          {isBtRech && <ThDt>Match padrón</ThDt>}
+          {isBtRech && <ThDt>CURP</ThDt>}
+          <ThDt>Score</ThDt>
+          <ThDt>Estado</ThDt>
+          <ThDt>Acción</ThDt>
         </tr></thead>
-        <tbody>{dd.rutas.map((r, i) => (
-          <tr key={i} style={{ borderBottom: `0.5px solid #f4f5f7` }}>
-            <TdDt bold>{r.helpers_nombres || '—'}</TdDt>
-            <TdDt mono>{r.sc}</TdDt>
-            <TdDt mono>{r.id_ruta}</TdDt>
-            <TdDt><Pill type="red">NO</Pill></TdDt>
-            <TdDt action>Verificar identidad · iniciar certif. MELI</TdDt>
-          </tr>
-        ))}</tbody>
+        <tbody>{dd.rutas.map((r, i) => {
+          const score = r.helper_match_score;
+          const scoreLow = score != null && score < 0.7;
+          return (
+            <tr key={i} style={{ borderBottom: `0.5px solid #f4f5f7` }}>
+              <TdDt bold>{r.helpers_nombres || '—'}</TdDt>
+              <TdDt mono>{r.sc}</TdDt>
+              <TdDt mono>{r.id_ruta}</TdDt>
+              {isBtRech && <TdDt>{r.helper_name_padron || '—'}</TdDt>}
+              {isBtRech && <TdDt mono>{r.helper_curp || '—'}</TdDt>}
+              <TdDt center>
+                {score != null ? (
+                  <span style={{
+                    fontFamily: 'monospace', fontSize: 11, fontWeight: 600,
+                    color: scoreLow ? '#9a3412' : '#065f46',
+                  }}>{score.toFixed(3)}</span>
+                ) : <span style={{ color: CH_LIGHT }}>—</span>}
+              </TdDt>
+              <TdDt>
+                {isBtRech ? <Pill type="red">RECHAZADO</Pill> : <Pill type="rose">NO IDENTIFICADO</Pill>}
+              </TdDt>
+              <TdDt action>{accionTxt}</TdDt>
+            </tr>
+          );
+        })}</tbody>
       </table>
     </DrillWrap>
   );
@@ -18351,9 +18416,15 @@ function TdDt({ children, mono, bold, muted, center, action }) {
 }
 
 function Pill({ children, type }) {
-  const styles = type === 'red'
-    ? { background: '#fee2e2', color: '#991b1b' }
-    : { background: '#fef3c7', color: '#92400e' };
+  const palette = {
+    red:    { background: '#fee2e2', color: '#991b1b' },
+    orange: { background: '#fed7aa', color: '#9a3412' },
+    yellow: { background: '#fef3c7', color: '#92400e' },
+    rose:   { background: '#fce7f3', color: '#9f1239' },
+    gray:   { background: '#f3f4f6', color: '#374151' },
+    green:  { background: '#d1fae5', color: '#065f46' },
+  };
+  const styles = palette[type] || palette.yellow;
   return <span style={{ ...styles, fontSize: 9.5, fontWeight: 700, padding: '3px 8px', borderRadius: 5, textTransform: 'uppercase', letterSpacing: 0.3 }}>{children}</span>;
 }
 
