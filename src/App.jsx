@@ -5007,7 +5007,7 @@ const SnapIngresoMaestro = ({ filas, loading }) => {
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
             <thead style={{ background: "#f8fafc", position: "sticky", top: 0 }}>
               <tr>
-                {["Fecha","ID Viaje","CECOS","Patente","Tipo Veh.","SDD","Tipo Ruta","Driver","Cargados","Entregados","Devueltos","KM Plan","Rango KM","%","Status","Helper","Obs"].map(h => (
+                {["Fecha","ID Viaje","CECOS","Patente","Tipo Veh.","SDD","Tipo Ruta","Driver","Cargados","Entregados","Devueltos","KM Plan","Rango KM","%","Status","Obs"].map(h => (
                   <th key={h} style={{ padding: "8px 6px", textAlign: "left", fontWeight: 700, color: "#666", borderBottom: "1px solid #e4e7ec", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.3 }}>{h}</th>
                 ))}
               </tr>
@@ -5034,15 +5034,6 @@ const SnapIngresoMaestro = ({ filas, loading }) => {
                     {fmtPctSnap(f.pct_visitado)}
                   </td>
                   <td style={{ padding: "6px" }}>{f.status_final}</td>
-                  <td style={{ padding: "6px", textAlign: "center" }}>
-                    {f.con_ayudante === "SI" ? (
-                      <span style={{ background: "#dcfce7", color: "#15803d", fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 10, letterSpacing: 0.3 }}>SÍ</span>
-                    ) : f.con_ayudante === "NO" ? (
-                      <span style={{ background: "#f1f5f9", color: "#64748b", fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 10, letterSpacing: 0.3 }}>NO</span>
-                    ) : (
-                      <span style={{ color: "#cbd5e1", fontSize: 11 }}>—</span>
-                    )}
-                  </td>
                   <td style={{ padding: "6px", fontSize: 10, color: "#888", maxWidth: 200 }}>{f.observaciones_auto || "—"}</td>
                 </tr>
               ))}
@@ -21681,31 +21672,104 @@ function RankingBloque({ titulo, datos, color, emptyMsg = "Sin datos" }) {
 // ═══════════════════════════════════════════════════════════════════════════
 // KPI DE OPERACIÓN — Comparativa NS Informe MELI vs Snapshots (día anterior)
 // ═══════════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════
+// KPI DE OPERACIÓN — DASHBOARD STYLE (reemplazo completo)
+// Ubicación original: líneas ~21675 a ~22206 en App.jsx
+// Reemplaza la function PoolMeliKPIOperacion() entera por esta versión.
+//
+// FUENTES DE DATOS:
+//   • get_kpi_operacion_comparativo(p_fecha)         — actual (KPIs del día)
+//   • get_compromiso_meli_manana()                   — actual (Servicios ofertados)
+//   • get_kpi_operacion_historico(p_desde, p_hasta)  — PENDIENTE (sparklines + deltas + rankings)
+//                                                       Debe devolver un array de filas
+//                                                       { fecha, ns_pond_meli, ns_pond_snap,
+//                                                         ns_prom_sc_meli, ns_prom_sc_snap,
+//                                                         pct_visitados, rutas, cargados,
+//                                                         entregados, devueltos, ambulancias,
+//                                                         no_visitados, pnr_del_dia,
+//                                                         rankings: {sc, ns_pond, vs, r, carg, ent, dev, pnr, amb}[] }
+//
+// Si get_kpi_operacion_historico no existe aún, todo el dashboard funciona:
+// los sparklines quedan vacíos y los rankings ▲/▼ usan únicamente los datos del día.
+// ═══════════════════════════════════════════════════════════════════════════
+
 function PoolMeliKPIOperacion() {
-  const [data, setData] = useState(null);
+  const [data, setData] = useState(null);            // KPIs del día (comparativo)
+  const [compromiso, setCompromiso] = useState(null); // Compromiso MELI (Confirmados/SDD/SPOT)
+  const [historico, setHistorico] = useState([]);    // Array de filas por día (puede quedar vacío)
+  const [pnrCasos, setPnrCasos] = useState([]);      // Casos PNR del período actual
+  const [rutaToSc, setRutaToSc] = useState({});      // Mapeo id_ruta → service_center_id
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [periodo, setPeriodo] = useState(1); // 1, 7, 15, 30 días
 
-  // Calcular "ayer" en hora MX
+  // ═══ Fecha ancla (ayer en hora MX) ═══════════════════════════════════════
   const fechaAyer = useMemo(() => {
-    const ahora = new Date();
-    // Aproximación: usar hora local del navegador, restar 1 día
-    const ayer = new Date(ahora);
-    ayer.setDate(ayer.getDate() - 1);
-    return ayer.toISOString().slice(0, 10);
+    const ayerMX = fechaOperativaOffset(-1); // helper global ya existente
+    return ayerMX;
   }, []);
 
+  // ═══ Carga de datos ══════════════════════════════════════════════════════
   useEffect(() => {
     let alive = true;
     (async () => {
       setLoading(true);
       setError(null);
       try {
-        const { data: result, error: err } = await sb.rpc("get_kpi_operacion_comparativo", { p_fecha: fechaAyer });
+        // Calcular ventana del histórico (máx 30 días desde fechaAyer hacia atrás)
+        const fechaHasta = fechaAyer;
+        const desde = new Date(fechaAyer);
+        desde.setDate(desde.getDate() - 29); // 30 días incluyendo fechaAyer
+        const fechaDesde = desde.toISOString().slice(0, 10);
+
+        // 1) Obtener el período PNR más reciente (formato YYYY-MM por convención del módulo PNR)
+        let periodoPnrActual = null;
+        try {
+          const { data: periodosPnr } = await sb.from("pnr_casos")
+            .select("periodo")
+            .not("periodo", "is", null)
+            .order("periodo", { ascending: false })
+            .limit(1);
+          if (periodosPnr && periodosPnr.length > 0) {
+            periodoPnrActual = periodosPnr[0].periodo;
+          }
+        } catch { /* sin datos PNR es OK */ }
+
+        // 2) Llamadas en paralelo
+        const calls = [
+          sb.rpc("get_kpi_operacion_comparativo", { p_fecha: fechaAyer }),
+          sb.rpc("get_compromiso_meli_manana"),
+          sb.rpc("get_kpi_operacion_historico", { p_desde: fechaDesde, p_hasta: fechaHasta }),
+          // Casos PNR del período actual
+          periodoPnrActual
+            ? sb.from("pnr_casos").select("*").eq("periodo", periodoPnrActual).order("fecha_caso", { ascending: false })
+            : Promise.resolve({ data: [], error: null }),
+          // Viajes del rango histórico para mapear id_ruta → service_center_id
+          sb.from("viajes")
+            .select("id_ruta, service_center_id")
+            .eq("pais", "MX")
+            .gte("fecha_salida", fechaDesde + "T00:00:00Z")
+            .lte("fecha_salida", fechaHasta + "T23:59:59Z")
+            .limit(10000),
+        ];
+        const [rKpi, rComp, rHist, rPnr, rViajes] = await Promise.all(calls);
+
         if (!alive) return;
-        if (err) throw err;
-        setData(result);
+        if (rKpi.error) throw rKpi.error;
+        setData(rKpi.data);
+        setCompromiso(rComp.error ? null : rComp.data);
+        setHistorico(rHist.error ? [] : (Array.isArray(rHist.data) ? rHist.data : []));
+        setPnrCasos(rPnr.error ? [] : (rPnr.data || []));
+
+        // Construir mapa id_ruta → service_center_id (último valor gana)
+        const mapa = {};
+        (rViajes.data || []).forEach(v => {
+          if (v.id_ruta != null && v.service_center_id) {
+            mapa[String(v.id_ruta)] = v.service_center_id;
+          }
+        });
+        setRutaToSc(mapa);
       } catch (e) {
         if (alive) setError(e.message || String(e));
       } finally {
@@ -21715,501 +21779,1004 @@ function PoolMeliKPIOperacion() {
     return () => { alive = false; };
   }, [refreshKey, fechaAyer]);
 
+  // ═══ Hooks (deben ir antes de cualquier early return) ════════════════════
+  // Histórico filtrado al período activo
+  const histPeriodo = useMemo(() => {
+    if (!historico || historico.length === 0) return [];
+    return historico.slice(-periodo);
+  }, [historico, periodo]);
+
+  // Período anterior (para curva punteada de comparación)
+  const histPrev = useMemo(() => {
+    if (!historico || historico.length === 0) return [];
+    const start = Math.max(0, historico.length - periodo * 2);
+    const end = historico.length - periodo;
+    return historico.slice(start, end);
+  }, [historico, periodo]);
+
+  // Ranking del día unificado (NS + Visitados)
+  const rankingsDia = useMemo(() => {
+    if (!data) return [];
+    const ranking = data.ranking_sc || [];
+    const visPorSc = data.visitados?.por_sc || [];
+    const m = {};
+    ranking.forEach(r => {
+      m[r.sc] = {
+        sc: r.sc,
+        ns_pond: Number(r.ns_pond) || 0,
+        rutas: Number(r.rutas) || 0,
+        cargados: Number(r.cargados) || 0,
+        entregados: Number(r.entregados) || 0,
+        devueltos: Number(r.devueltos) || 0,
+        ambulancias: Number(r.ambulancias) || 0,
+        pct_visitados: null,
+        no_visitados: 0,
+      };
+    });
+    visPorSc.forEach(v => {
+      if (!m[v.sc]) m[v.sc] = { sc: v.sc, ns_pond: 0, rutas: 0, cargados: 0, entregados: 0, devueltos: 0, ambulancias: 0 };
+      m[v.sc].pct_visitados = Number(v.pct_visitados) || 0;
+      m[v.sc].no_visitados = Number(v.no_visitados) || 0;
+      if (!m[v.sc].cargados) m[v.sc].cargados = Number(v.cargados) || 0;
+    });
+    return Object.values(m);
+  }, [data]);
+
+  // ═══ Procesamiento de casos PNR ══════════════════════════════════════════
+  // Clasificación de estados:
+  //   ABIERTOS  = "Esperando comprobante" + "Comprobante cargado" + "Pendiente de revision" + "Sin comprobante cargado"
+  //   A_COBRO   = "Con penalidad"
+  //   CERRADOS  = "Anulado"
+  const pnrStats = useMemo(() => {
+    const ESTADOS_ABIERTOS = ["Esperando comprobante", "Comprobante cargado", "Pendiente de revision", "Sin comprobante cargado"];
+    const ESTADO_COBRO = "Con penalidad";
+    const ESTADO_CERRADO = "Anulado";
+
+    const total = pnrCasos.length;
+    let abiertos = 0, aCobro = 0, cerrados = 0;
+    let valorAbiertos = 0, valorACobro = 0, valorTotal = 0;
+    const desglose = {
+      "Esperando comprobante": 0,
+      "Comprobante cargado": 0,
+      "Pendiente de revision": 0,
+      "Sin comprobante cargado": 0,
+      "Con penalidad": 0,
+      "Anulado": 0,
+    };
+
+    // Casos del día (D-1)
+    const casosHoy = pnrCasos.filter(c => {
+      if (!c.fecha_caso) return false;
+      // fecha_caso es timestamp ISO → comparar solo la parte YYYY-MM-DD
+      return String(c.fecha_caso).slice(0, 10) === fechaAyer;
+    });
+
+    // Por SC (usando mapeo ruta → service_center_id)
+    const porSC = {};
+    pnrCasos.forEach(c => {
+      const v = Number(c.valor_compra) || 0;
+      valorTotal += v;
+      const est = c.estado;
+      if (desglose[est] !== undefined) desglose[est]++;
+      if (ESTADOS_ABIERTOS.includes(est)) { abiertos++; valorAbiertos += v; }
+      else if (est === ESTADO_COBRO) { aCobro++; valorACobro += v; }
+      else if (est === ESTADO_CERRADO) { cerrados++; }
+
+      // SC: buscar en el mapa por id_ruta (PNR.ruta debería matchear con viajes.id_ruta)
+      const scId = rutaToSc[String(c.ruta)] || "SIN_SC";
+      if (!porSC[scId]) {
+        porSC[scId] = {
+          sc: scId, total: 0, abiertos: 0, aCobro: 0, cerrados: 0, valor: 0, valorACobro: 0,
+          esperando: 0, cargado: 0, pendiente: 0, sinComprobante: 0,
+        };
+      }
+      porSC[scId].total++;
+      porSC[scId].valor += v;
+      if (est === "Esperando comprobante") porSC[scId].esperando++;
+      else if (est === "Comprobante cargado") porSC[scId].cargado++;
+      else if (est === "Pendiente de revision") porSC[scId].pendiente++;
+      else if (est === "Sin comprobante cargado") porSC[scId].sinComprobante++;
+      else if (est === ESTADO_COBRO) { porSC[scId].aCobro++; porSC[scId].valorACobro += v; }
+      else if (est === ESTADO_CERRADO) porSC[scId].cerrados++;
+      if (ESTADOS_ABIERTOS.includes(est)) porSC[scId].abiertos++;
+    });
+
+    // Serie histórica diaria (últimos 30 días contando casos por fecha_caso)
+    const serieDiaria = {};
+    pnrCasos.forEach(c => {
+      if (!c.fecha_caso) return;
+      const f = String(c.fecha_caso).slice(0, 10);
+      serieDiaria[f] = (serieDiaria[f] || 0) + 1;
+    });
+    // Generar array de 30 días terminando en fechaAyer
+    const sparkSerie = [];
+    const base = new Date(fechaAyer + "T00:00:00");
+    for (let i = 29; i >= 0; i--) {
+      const d = new Date(base);
+      d.setDate(d.getDate() - i);
+      const key = d.toISOString().slice(0, 10);
+      sparkSerie.push(serieDiaria[key] || 0);
+    }
+
+    return {
+      total, abiertos, aCobro, cerrados,
+      valorTotal, valorAbiertos, valorACobro,
+      desglose,
+      casosHoy: casosHoy.length,
+      porSC: Object.values(porSC).sort((a, b) => b.total - a.total),
+      sparkSerie,
+    };
+  }, [pnrCasos, rutaToSc, fechaAyer]);
+
   if (loading) {
-    return <div className="pg" style={{ padding: 60, textAlign: "center", color: "#888" }}>Cargando KPI de operación…</div>;
+    return <div className="pg" style={{ padding: 60, textAlign: "center", color: "#888", fontFamily: "'Geist', sans-serif" }}>Cargando KPI de operación…</div>;
   }
   if (error) {
-    return <div className="pg" style={{ padding: 40, color: "#c0392b" }}>Error: {error}</div>;
+    return <div className="pg" style={{ padding: 40, color: "#c0392b", fontFamily: "'Geist', sans-serif" }}>Error: {error}</div>;
   }
   if (!data) {
-    return <div className="pg" style={{ padding: 40, color: "#888" }}>Sin datos</div>;
+    return <div className="pg" style={{ padding: 40, color: "#888", fontFamily: "'Geist', sans-serif" }}>Sin datos</div>;
   }
 
+  // ═══ Extracción de datos del día (RPC comparativo) ═══════════════════════
   const meli = data.meli || {};
   const meliT = meli.total || {};
   const snap = data.snap || {};
   const snapT = snap.total || {};
   const ranking = data.ranking_sc || [];
-  const porTipo = snap.por_tipo_ruta || [];
+  const vis = data.visitados || {};
+  const visTotal = vis.total || {};
+  const visPorSc = vis.por_sc || [];
+  const umbralVis = Number(vis.umbral) || 99.5;
   const generadoEn = data.generado_en ? new Date(data.generado_en) : null;
 
+  // Foco operativo
+  const porCat = data.fallidas?.por_categoria || [];
+  const getCat = (k) => porCat.find(c => c.categoria_operativa === k)?.paquetes || 0;
+  const devueltosTotal = getCat("DEVOLUCION");
+  const ambulanciasTotal = getCat("AMBULANCIA");
+  const noVisitadosTotal = getCat("NO_VISITADO");
+  const pctDev = snapT.cargados > 0 ? (devueltosTotal / snapT.cargados * 100) : 0;
+  const pctNoVis = snapT.cargados > 0 ? (noVisitadosTotal / snapT.cargados * 100) : 0;
+
+  // Compromiso MELI (servicios ofertados)
+  const c = compromiso?.conteos || {};
+  const ofrecidasTotal = (c.ofrecidas_sdd || 0) + (c.ofrecidas_spot || 0);
+  const aceptadasTotal = (c.aceptadas_sdd || 0) + (c.aceptadas_spot || 0);
+  const canceladasTotal = (c.canceladas_sdd || 0) + (c.canceladas_spot || 0);
+  const rechazadasTotal = (c.rechazadas_sdd || 0) + (c.rechazadas_spot || 0);
+  const efectivasTotal = ofrecidasTotal - canceladasTotal;
+  const calcPct = (a, ef) => ef > 0 ? (a / ef) * 100 : null;
+  const pctConfirmadosTotal = calcPct(aceptadasTotal, efectivasTotal);
+  const pctSDD = calcPct(c.aceptadas_sdd || 0, (c.ofrecidas_sdd || 0) - (c.canceladas_sdd || 0));
+  const pctSPOT = calcPct(c.aceptadas_spot || 0, (c.ofrecidas_spot || 0) - (c.canceladas_spot || 0));
+
+  // ═══ Fecha texto formateada ══════════════════════════════════════════════
   const meses = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
   const dias = ["domingo","lunes","martes","miércoles","jueves","viernes","sábado"];
   let fechaTexto = data.fecha;
   if (data.fecha) {
     const [y, m, d] = data.fecha.split("-").map(Number);
-    const fechaObj = new Date(y, m - 1, d);
-    fechaTexto = `${dias[fechaObj.getDay()]} ${d} de ${meses[m - 1]} de ${y}`;
+    const fObj = new Date(y, m - 1, d);
+    fechaTexto = `${dias[fObj.getDay()]} ${d} de ${meses[m - 1]} de ${y}`;
   }
 
-  // Color del NS
-  const colorPct = (pct) => {
-    if (pct === null || pct === undefined) return "#94a3b8";
-    const v = Number(pct);
-    if (v >= 95) return "#047857";
-    if (v >= 90) return "#0891b2";
-    if (v >= 80) return "#ca8a04";
-    return "#b91c1c";
+  // ═══ Helpers de color (paleta BRAIN) ═════════════════════════════════════
+  // Cumplimiento NS (meta 98.5%)
+  const cumpleNS = (pct) => pct != null && Number(pct) >= 98.5;
+  const cumpleVis = (pct) => pct != null && Number(pct) >= umbralVis;
+  const cumpleDev = (pct) => pct != null && Number(pct) < 2;
+  const cumpleNoVis = (pct) => pct != null && Number(pct) <= 0.5;
+
+  // Badges: usa paleta de severidad del Brain (verde #16a34a / naranja #F47B20 / rojo #c0392b)
+  const badge = (tipo, txt) => {
+    const styles = {
+      ok:   { bg: "#dcfce7", color: "#166534" },
+      warn: { bg: "#fef3c7", color: "#92400e" },
+      bad:  { bg: "#fee2e2", color: "#991b1b" },
+    };
+    const s = styles[tipo] || styles.warn;
+    return (
+      <span style={{
+        fontSize: 9, fontWeight: 600, padding: "2px 7px", borderRadius: 4,
+        textTransform: "uppercase", whiteSpace: "nowrap", letterSpacing: 0.3,
+        background: s.bg, color: s.color, fontFamily: "'Geist', sans-serif",
+      }}>{txt}</span>
+    );
   };
 
-  // Formato porcentaje (NS siempre debe ser 0-100)
-  const fmtPct = (v) => {
-    if (v === null || v === undefined) return "—";
-    return `${Number(v).toFixed(2)}%`;
+  // Color de borde izquierdo según severidad (Brain colors)
+  const borderColors = { bad: "#c0392b", warn: "#F47B20", ok: "#16a34a" };
+
+  // ═══ Procesado de histórico ══════════════════════════════════════════════
+  // (los useMemo de histPeriodo/histPrev/rankingsDia se calculan arriba, antes de los returns)
+
+  // Extrae serie por campo
+  const serie = (rows, campo) => rows.map(r => Number(r[campo]) || 0);
+
+  // Delta vs período anterior (mismo n)
+  const computeDelta = (campo) => {
+    if (histPeriodo.length < 3 || histPrev.length < 3) return null;
+    const avg = arr => arr.reduce((s, v) => s + v, 0) / arr.length;
+    const curr = serie(histPeriodo, campo);
+    const prev = serie(histPrev, campo);
+    return avg(curr) - avg(prev);
+  };
+
+  const labelPeriodo = periodo === 1 ? "ayer"
+                     : periodo === 7 ? "sem. anterior"
+                     : periodo === 15 ? "15D anteriores"
+                     : "mes anterior";
+
+  // (rankingsDia se calcula arriba como useMemo, antes de los returns)
+
+  // top3/bot3 por métrica. lower=true → menos es mejor.
+  const buildRank = (campo, fmt, lower = false) => {
+    if (rankingsDia.length === 0) return { top3: "—", bot3: "—" };
+    const valid = rankingsDia.filter(r => r[campo] != null);
+    if (valid.length === 0) return { top3: "—", bot3: "—" };
+    const sorted = [...valid].sort((a, b) => lower ? a[campo] - b[campo] : b[campo] - a[campo]);
+    const top3 = sorted.slice(0, 3).map(s => `${s.sc} ${fmt(s[campo])}`).join(" · ");
+    const bot3 = [...sorted].reverse().slice(0, 3).map(s => `${s.sc} ${fmt(s[campo])}`).join(" · ");
+    return { top3, bot3 };
+  };
+
+  const fmtPct1 = x => `${Number(x).toFixed(1)}%`;
+  const fmtPct2 = x => `${Number(x).toFixed(2)}%`;
+  const fmtInt = x => `${Math.round(Number(x))}`;
+  const fmtNum = x => Number(x).toLocaleString();
+  const fmtZero = x => Number(x) === 0 ? "0 ✓" : `${x}`;
+
+  // ═══ Estilos inline reutilizables (paleta Brain) ═════════════════════════
+  const S = {
+    NAVY: "#1a3a6b",
+    ORANGE: "#F47B20",
+    BG: "#f0f2f5",
+    BORDER: "#e4e7ec",
+    TEXT_MAIN: "#1a1a1a",
+    TEXT_SEC: "#666",
+    TEXT_MUTED: "#94a3b8",
+    TEXT_LBL: "#64748b",
+    OK: "#16a34a",
+    WARN: "#F47B20",
+    BAD: "#c0392b",
+    INFO: "#1a3a6b",
   };
 
   return (
-    <div className="pg">
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
+    <div style={{ fontFamily: "'Geist', sans-serif", background: S.BG, paddingBottom: 40 }}>
+      {/* ═══ CONTEXT BAR ═══ */}
+      <div style={{
+        background: "#fff", borderBottom: `1px solid ${S.BORDER}`,
+        padding: "10px 24px", display: "flex", alignItems: "center",
+        justifyContent: "space-between", gap: 12, flexWrap: "wrap",
+      }}>
         <div>
-          <div className="sec-title">KPI de Operación</div>
-          <div className="sec-sub">
-            Análisis comparativo · {fechaTexto}
+          <div style={{ fontSize: 14, fontWeight: 700, color: S.NAVY }}>KPI de Operación</div>
+          <div style={{ fontSize: 11, color: S.TEXT_LBL, marginTop: 2 }}>
+            {fechaTexto}
             {generadoEn && (
-              <span style={{ color: "#94a3b8", marginLeft: 8 }}>
+              <span style={{ color: S.TEXT_MUTED, marginLeft: 8 }}>
                 · datos al {generadoEn.toLocaleString("es-MX", { hour: "2-digit", minute: "2-digit", day: "2-digit", month: "2-digit" })}
               </span>
             )}
-          </div>
-        </div>
-        <button onClick={() => setRefreshKey(k => k + 1)}
-          style={{
-            padding: "8px 14px", fontSize: 12, fontWeight: 600,
-            background: "#fff", color: "#1a3a6b",
-            border: "1px solid #e4e7ec", borderRadius: 6,
-            cursor: "pointer", fontFamily: "'Geist', sans-serif",
-          }}>
-          ↻ Refrescar
-        </button>
-      </div>
-
-      {/* BLOQUES DE NS (dos columnas lado a lado) */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 20 }}>
-        {/* BLOQUE 1: INFORME MELI */}
-        <div className="form-card" style={{ marginBottom: 0, padding: 16, borderTop: "4px solid #92400e" }}>
-          <div style={{ fontSize: 12, fontWeight: 700, color: "#92400e", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>
-            📄 Nivel de Servicio · Informe MELI
-          </div>
-          <div style={{ fontSize: 11, color: "#94a3b8", marginBottom: 14 }}>
-            {meliT.rutas || 0} rutas · {(meliT.devueltos || 0).toLocaleString()} devueltos
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-            <div style={{ background: "#fffbeb", borderRadius: 8, padding: 14, border: "1px solid #fde68a" }}>
-              <div style={{ fontSize: 10, fontWeight: 700, color: "#78350f", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>
-                NS Ponderado
-              </div>
-              <div style={{ fontSize: 32, fontWeight: 700, lineHeight: 1, color: colorPct(meliT.ns_ponderado), marginBottom: 4 }}>
-                {fmtPct(meliT.ns_ponderado)}
-              </div>
-              <div style={{ fontSize: 10, color: "#78350f" }}>
-                {(meliT.entregados || 0).toLocaleString()} / {(meliT.cargados || 0).toLocaleString()}
-              </div>
-            </div>
-            <div style={{ background: "#fffbeb", borderRadius: 8, padding: 14, border: "1px solid #fde68a" }}>
-              <div style={{ fontSize: 10, fontWeight: 700, color: "#78350f", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>
-                NS Promedio por SC
-              </div>
-              <div style={{ fontSize: 32, fontWeight: 700, lineHeight: 1, color: colorPct(meli.ns_promedio_sc), marginBottom: 4 }}>
-                {fmtPct(meli.ns_promedio_sc)}
-              </div>
-              <div style={{ fontSize: 10, color: "#78350f" }}>
-                avg de cada SC
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* BLOQUE 2: SNAPSHOTS */}
-        <div className="form-card" style={{ marginBottom: 0, padding: 16, borderTop: "4px solid #047857" }}>
-          <div style={{ fontSize: 12, fontWeight: 700, color: "#047857", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>
-            📸 Nivel de Servicio · Snapshots
-          </div>
-          <div style={{ fontSize: 11, color: "#94a3b8", marginBottom: 14 }}>
-            {snapT.rutas || 0} rutas · {(snapT.devueltos || 0).toLocaleString()} devueltos
-            {snap.ambulancias_total > 0 && (
-              <span style={{ color: "#0891b2", marginLeft: 8 }}>
-                · {snap.ambulancias_total} ambulancia(s)
+            {historico.length === 0 && (
+              <span style={{ color: S.WARN, marginLeft: 8 }}>
+                · histórico no disponible (sparklines vacíos)
               </span>
             )}
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-            <div style={{ background: "#f0fdf4", borderRadius: 8, padding: 14, border: "1px solid #bbf7d0" }}>
-              <div style={{ fontSize: 10, fontWeight: 700, color: "#065f46", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>
-                NS Ponderado
-              </div>
-              <div style={{ fontSize: 32, fontWeight: 700, lineHeight: 1, color: colorPct(snapT.ns_ponderado), marginBottom: 4 }}>
-                {fmtPct(snapT.ns_ponderado)}
-              </div>
-              <div style={{ fontSize: 10, color: "#065f46" }}>
-                {(snapT.entregados || 0).toLocaleString()} / {(snapT.cargados || 0).toLocaleString()}
-              </div>
-            </div>
-            <div style={{ background: "#f0fdf4", borderRadius: 8, padding: 14, border: "1px solid #bbf7d0" }}>
-              <div style={{ fontSize: 10, fontWeight: 700, color: "#065f46", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>
-                NS Promedio por SC
-              </div>
-              <div style={{ fontSize: 32, fontWeight: 700, lineHeight: 1, color: colorPct(snap.ns_promedio_sc), marginBottom: 4 }}>
-                {fmtPct(snap.ns_promedio_sc)}
-              </div>
-              <div style={{ fontSize: 10, color: "#065f46" }}>
-                avg de cada SC
-              </div>
-            </div>
-          </div>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <span style={{ fontSize: 10, color: S.TEXT_MUTED, fontWeight: 500, marginRight: 4 }}>Período:</span>
+          {[1, 7, 15, 30].map(n => (
+            <button key={n} onClick={() => setPeriodo(n)}
+              style={{
+                fontSize: 11, fontWeight: 600, padding: "5px 12px",
+                borderRadius: 6, border: `1px solid ${periodo === n ? S.NAVY : S.BORDER}`,
+                background: periodo === n ? S.NAVY : "#fff",
+                color: periodo === n ? "#fff" : "#475569",
+                cursor: "pointer", fontFamily: "'Geist', sans-serif",
+              }}>D-{n}</button>
+          ))}
+          <button onClick={() => setRefreshKey(k => k + 1)}
+            style={{
+              marginLeft: 8, fontSize: 11, fontWeight: 600, padding: "5px 10px",
+              background: "#fff", color: S.NAVY, border: `1px solid ${S.BORDER}`,
+              borderRadius: 6, cursor: "pointer", fontFamily: "'Geist', sans-serif",
+            }}>↻ Refrescar</button>
         </div>
       </div>
 
-      {/* RANKING SC POR PERFORMANCE (SNAPSHOTS) */}
-      <div className="form-card" style={{ marginBottom: 20 }}>
-        <div className="form-title" style={{ marginBottom: 4 }}>Ranking SC por performance del día (Snapshots)</div>
-        <div style={{ fontSize: 11, color: "#64748b", marginBottom: 14 }}>De mejor a peor NS Ponderado</div>
-        {ranking.length === 0 ? (
-          <div style={{ fontSize: 12, color: "#94a3b8", fontStyle: "italic" }}>Sin datos</div>
-        ) : (
-          ranking.map((s, i) => {
-            const maxCargados = Math.max(...ranking.map(r => Number(r.cargados) || 0));
-            const pctBar = maxCargados > 0 ? (Number(s.cargados) / maxCargados) * 100 : 0;
-            return (
-              <div key={s.sc} style={{ display: "grid", gridTemplateColumns: "30px 60px 1fr 90px 100px", gap: 12, alignItems: "center", padding: "8px 0", borderBottom: i === ranking.length - 1 ? "none" : "1px solid #f1f5f9" }}>
-                <div style={{ fontSize: 11, color: "#cbd5e1", fontFamily: "monospace" }}>#{i + 1}</div>
-                <div style={{ fontSize: 13, fontWeight: 700, color: "#0f172a" }}>{s.sc}</div>
-                <div>
-                  <div style={{ height: 6, background: "#f1f5f9", borderRadius: 3, overflow: "hidden" }}>
-                    <div style={{ height: "100%", width: `${pctBar}%`, background: colorPct(s.ns_pond) }} />
-                  </div>
-                  <div style={{ fontSize: 10, color: "#64748b", marginTop: 3 }}>
-                    {s.rutas} rutas · {Number(s.entregados).toLocaleString()}/{Number(s.cargados).toLocaleString()}
-                    {Number(s.ambulancias) > 0 && (
-                      <span style={{ color: "#0891b2", marginLeft: 6 }}>· {s.ambulancias} amb.</span>
-                    )}
-                  </div>
-                </div>
-                <div style={{ fontSize: 11, color: "#64748b", fontVariantNumeric: "tabular-nums", textAlign: "right" }}>
-                  {Number(s.devueltos)} dev.
-                </div>
-                <div style={{ fontSize: 20, fontWeight: 700, color: colorPct(s.ns_pond), fontVariantNumeric: "tabular-nums", textAlign: "right" }}>
-                  {fmtPct(s.ns_pond)}
-                </div>
-              </div>
-            );
-          })
-        )}
-      </div>
+      {/* ═══ MAIN ═══ */}
+      <div style={{ padding: "20px 24px", maxWidth: 1600, margin: "0 auto" }}>
 
-      {/* NS POR TIPO DE RUTA */}
-      <div className="form-card" style={{ marginBottom: 20 }}>
-        <div className="form-title" style={{ marginBottom: 4 }}>NS por tipo de ruta (Snapshots)</div>
-        <div style={{ fontSize: 11, color: "#64748b", marginBottom: 14 }}>BULK · UM · MIXTO · RETIRO</div>
-        {porTipo.length === 0 ? (
-          <div style={{ fontSize: 12, color: "#94a3b8", fontStyle: "italic" }}>Sin datos por tipo</div>
-        ) : (
-          <div style={{ display: "grid", gridTemplateColumns: `repeat(${Math.min(porTipo.length, 4)}, 1fr)`, gap: 10 }}>
-            {porTipo.map(t => (
-              <div key={t.tipo_ruta} style={{ background: "#f8fafc", borderRadius: 8, padding: 14, border: "1px solid #e4e7ec" }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: "#475569", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>
-                  {t.tipo_ruta || "—"}
-                </div>
-                <div style={{ fontSize: 26, fontWeight: 700, lineHeight: 1, color: colorPct(t.ns_pond), marginBottom: 6 }}>
-                  {fmtPct(t.ns_pond)}
-                </div>
-                <div style={{ fontSize: 11, color: "#64748b" }}>
-                  {t.rutas} rutas · {Number(t.entregados).toLocaleString()}/{Number(t.cargados).toLocaleString()}
-                </div>
-                <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 2 }}>
-                  {Number(t.devueltos)} devueltos
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
+        {/* ① NIVEL DE SERVICIO */}
+        <GrupoTitulo icon="trend" titulo="Nivel de servicio" />
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 10, marginBottom: 28 }}>
+          {/* NS Ponderado */}
+          <CardNS
+            S={S}
+            label="NS Ponderado"
+            tipo={cumpleNS(meliT.ns_ponderado) ? "ok" : "bad"}
+            badgeTxt={cumpleNS(meliT.ns_ponderado) ? "Cumple" : "No cumple"}
+            valorMeli={meliT.ns_ponderado}
+            valorSnap={snapT.ns_ponderado}
+            subtitle={`${fmtNum(meliT.entregados || 0)} / ${fmtNum(meliT.cargados || 0)}`}
+            meta={98.5}
+            sparkSerieMeli={serie(histPeriodo, "ns_pond_meli")}
+            sparkSerieSnap={serie(histPeriodo, "ns_pond_snap")}
+            sparkPrev={serie(histPrev, "ns_pond_meli")}
+            sparkAllVals={serie(historico, "ns_pond_meli")}
+            delta={computeDelta("ns_pond_meli")}
+            deltaLabel={labelPeriodo}
+            deltaUnit="pp"
+            lower={false}
+            ranking={buildRank("ns_pond", fmtPct1)}
+            zmMin={93} zmMax={100}
+          />
+          {/* NS Promedio SC */}
+          <CardNS
+            S={S}
+            label="NS Promedio SC"
+            tipo={cumpleNS(meli.ns_promedio_sc) ? "ok" : "bad"}
+            badgeTxt={cumpleNS(meli.ns_promedio_sc) ? "Cumple" : `${rankingsDia.filter(r => r.ns_pond > 0 && r.ns_pond < 98.5).length} SCs no cumplen`}
+            valorMeli={meli.ns_promedio_sc}
+            valorSnap={snap.ns_promedio_sc}
+            subtitle={`avg ${snapT.rutas || 0} rutas / ${rankingsDia.length} SCs`}
+            meta={98.5}
+            sparkSerieMeli={serie(histPeriodo, "ns_prom_sc_meli")}
+            sparkSerieSnap={serie(histPeriodo, "ns_prom_sc_snap")}
+            sparkPrev={serie(histPrev, "ns_prom_sc_meli")}
+            sparkAllVals={serie(historico, "ns_prom_sc_meli")}
+            delta={computeDelta("ns_prom_sc_meli")}
+            deltaLabel={labelPeriodo}
+            deltaUnit="pp"
+            lower={false}
+            ranking={buildRank("ns_pond", fmtPct1)}
+            zmMin={93} zmMax={100}
+          />
+          {/* % Visitados */}
+          <CardSingle
+            S={S}
+            label="% Visitados"
+            tipo={cumpleVis(visTotal.pct_general) ? "ok" : "bad"}
+            badgeTxt={cumpleVis(visTotal.pct_general) ? "Cumple" : "No cumple"}
+            valor={visTotal.pct_general}
+            valorFmt={v => v != null ? `${Number(v).toFixed(2)}%` : "—"}
+            subtitle={`${Number(visTotal.no_visitados || 0)} no visitado(s) · óptimo ${umbralVis}%`}
+            meta={umbralVis}
+            sparkSerie={serie(histPeriodo, "pct_visitados")}
+            sparkPrev={serie(histPrev, "pct_visitados")}
+            sparkAllVals={serie(historico, "pct_visitados")}
+            delta={computeDelta("pct_visitados")}
+            deltaLabel={labelPeriodo}
+            deltaUnit="pp"
+            lower={false}
+            ranking={buildRank("pct_visitados", v => v != null ? fmtPct1(v) : "—")}
+            zmMin={98} zmMax={100}
+            zoom
+          />
+        </div>
 
-      {/* ALERTA DE MOTIVOS SIN MAPEAR */}
-      {(data.motivos_sin_mapear || []).length > 0 && (
-        <div className="form-card" style={{ marginBottom: 20, background: "#fef2f2", border: "1px solid #fecaca" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-            <span style={{ fontSize: 18 }}>⚠️</span>
-            <div className="form-title" style={{ marginBottom: 0, color: "#991b1b" }}>
-              Motivos de fallida sin mapear ({data.motivos_sin_mapear.length})
+        {/* ② VOLUMEN DEL NEGOCIO */}
+        <GrupoTitulo icon="box" titulo="Volumen del negocio" />
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 10, marginBottom: 28 }}>
+          <CardVolumen
+            S={S}
+            label="Rutas"
+            valor={snapT.rutas || 0}
+            subtitle={`${rankingsDia.length} SCs operando`}
+            sparkSerie={serie(histPeriodo, "rutas")}
+            sparkPrev={serie(histPrev, "rutas")}
+            sparkAllVals={serie(historico, "rutas")}
+            delta={computeDelta("rutas")}
+            deltaLabel={labelPeriodo}
+            deltaUnit=""
+            ranking={buildRank("rutas", fmtInt)}
+          />
+          <CardVolumen
+            S={S}
+            label="Cargados"
+            valor={fmtNum(snapT.cargados || 0)}
+            subtitle="paquetes operados"
+            sparkSerie={serie(histPeriodo, "cargados")}
+            sparkPrev={serie(histPrev, "cargados")}
+            sparkAllVals={serie(historico, "cargados")}
+            delta={computeDelta("cargados")}
+            deltaLabel={labelPeriodo}
+            deltaUnit=""
+            ranking={buildRank("cargados", fmtNum)}
+          />
+          <CardVolumen
+            S={S}
+            label="Entregados"
+            valor={fmtNum(snapT.entregados || 0)}
+            subtitle={`${(snapT.ns_ponderado || 0).toFixed(2)}% efectividad${ambulanciasTotal > 0 ? ` · incl. ${ambulanciasTotal} amb.` : ""}`}
+            sparkSerie={serie(histPeriodo, "entregados")}
+            sparkPrev={serie(histPrev, "entregados")}
+            sparkAllVals={serie(historico, "entregados")}
+            delta={computeDelta("entregados")}
+            deltaLabel={labelPeriodo}
+            deltaUnit=""
+            ranking={buildRank("entregados", fmtNum)}
+          />
+        </div>
+
+        {/* ③ FOCO OPERATIVO */}
+        <GrupoTitulo icon="alert" titulo="Foco operativo" />
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 10, marginBottom: 28 }}>
+          <CardFoco
+            S={S}
+            label="Devueltos"
+            tipo={cumpleDev(pctDev) ? "ok" : "bad"}
+            badgeTxt={cumpleDev(pctDev) ? "Cumple" : "No cumple"}
+            valor={devueltosTotal}
+            subtitle={`${pctDev.toFixed(2)}% · meta <2%`}
+            sparkSerie={serie(histPeriodo, "devueltos")}
+            sparkPrev={serie(histPrev, "devueltos")}
+            sparkAllVals={serie(historico, "devueltos")}
+            delta={computeDelta("devueltos")}
+            deltaLabel={labelPeriodo}
+            deltaUnit=""
+            lower={true}
+            ranking={buildRank("devueltos", fmtInt, true)}
+          />
+          <CardFoco
+            S={S}
+            label="PNR del día"
+            tipo={pnrStats.aCobro > 0 ? "bad" : pnrStats.abiertos > 0 ? "warn" : "ok"}
+            badgeTxt={
+              pnrStats.aCobro > 0 ? `${pnrStats.aCobro} a cobro` :
+              pnrStats.abiertos > 0 ? `${pnrStats.abiertos} abiertos` : "Sin PNR"
+            }
+            valor={pnrStats.casosHoy}
+            subtitle={`${pnrStats.total} acumulados · $${Math.round(pnrStats.valorTotal).toLocaleString("es-MX")} en riesgo`}
+            sparkSerie={pnrStats.sparkSerie.slice(-periodo)}
+            sparkPrev={pnrStats.sparkSerie.slice(Math.max(0, 30 - periodo * 2), 30 - periodo)}
+            sparkAllVals={pnrStats.sparkSerie}
+            delta={(() => {
+              const s = pnrStats.sparkSerie;
+              if (s.length < periodo * 2) return null;
+              const avg = a => a.reduce((x, v) => x + v, 0) / a.length;
+              return avg(s.slice(-periodo)) - avg(s.slice(-periodo * 2, -periodo));
+            })()}
+            deltaLabel={labelPeriodo}
+            deltaUnit=""
+            lower={true}
+            ranking={(() => {
+              if (pnrStats.porSC.length === 0) return { top3: "—", bot3: "—" };
+              // Filtramos SIN_SC para el ranking
+              const conSC = pnrStats.porSC.filter(s => s.sc !== "SIN_SC");
+              if (conSC.length === 0) return { top3: "—", bot3: "—" };
+              // ▲ menos casos (mejor) · ▼ más casos (peor)
+              const asc = [...conSC].sort((a, b) => a.total - b.total);
+              const top3 = asc.slice(0, 3).map(s => `${s.sc} ${s.total}`).join(" · ");
+              const bot3 = [...asc].reverse().slice(0, 3).map(s => `${s.sc} ${s.total}`).join(" · ");
+              return { top3, bot3 };
+            })()}
+          />
+          <CardFoco
+            S={S}
+            label="Ambulancias"
+            tipo={ambulanciasTotal === 0 ? "ok" : "warn"}
+            badgeTxt={ambulanciasTotal === 0 ? "Sin amb." : `${ambulanciasTotal} amb.`}
+            valor={ambulanciasTotal}
+            subtitle="Rutas con refuerzo"
+            sparkSerie={serie(histPeriodo, "ambulancias")}
+            sparkPrev={serie(histPrev, "ambulancias")}
+            sparkAllVals={serie(historico, "ambulancias")}
+            delta={computeDelta("ambulancias")}
+            deltaLabel={labelPeriodo}
+            deltaUnit=""
+            lower={true}
+            ranking={buildRank("ambulancias", x => Number(x) === 0 ? "0 ✓" : `${x}`, true)}
+          />
+          <CardFoco
+            S={S}
+            label="No visitados"
+            tipo={cumpleNoVis(pctNoVis) ? "ok" : "bad"}
+            badgeTxt={cumpleNoVis(pctNoVis) ? "Cumple" : "No cumple"}
+            valor={`${pctNoVis.toFixed(2)}%`}
+            subtitle={`${noVisitadosTotal} paquete(s) · meta ≤0.5%`}
+            sparkSerie={serie(histPeriodo, "no_visitados")}
+            sparkPrev={serie(histPrev, "no_visitados")}
+            sparkAllVals={serie(historico, "no_visitados")}
+            delta={computeDelta("no_visitados")}
+            deltaLabel={labelPeriodo}
+            deltaUnit=""
+            lower={true}
+            ranking={buildRank("no_visitados", fmtInt, true)}
+          />
+        </div>
+
+        {/* ③.b DETALLE PNR — Solo si hay casos */}
+        {pnrStats.total > 0 && (
+          <>
+            <GrupoTitulo icon="clipboard" titulo="Detalle PNR por estado y SC" />
+
+            {/* Resumen general 4 cards */}
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 10, marginBottom: 10 }}>
+              <CardWrap S={S} tipo={null}>
+                <CardHeader label="Total PNR" S={S} />
+                <div style={{ fontSize: 24, fontWeight: 700, color: "#111827", letterSpacing: -0.5, lineHeight: 1, marginBottom: 3 }}>
+                  {pnrStats.total}
+                </div>
+                <div style={{ fontSize: 11, color: "#9CA3AF" }}>
+                  ${Math.round(pnrStats.valorTotal).toLocaleString("es-MX")} en riesgo
+                </div>
+              </CardWrap>
+
+              <CardWrap S={S} tipo="warn">
+                <CardHeader label="Abiertos" tipo="warn" badgeTxt="en gestión" S={S} />
+                <div style={{ fontSize: 24, fontWeight: 700, color: "#111827", letterSpacing: -0.5, lineHeight: 1, marginBottom: 3 }}>
+                  {pnrStats.abiertos}
+                </div>
+                <div style={{ fontSize: 11, color: "#9CA3AF" }}>
+                  ${Math.round(pnrStats.valorAbiertos).toLocaleString("es-MX")}
+                </div>
+              </CardWrap>
+
+              <CardWrap S={S} tipo={pnrStats.aCobro > 0 ? "bad" : "ok"}>
+                <CardHeader label="A cobro" tipo={pnrStats.aCobro > 0 ? "bad" : "ok"} badgeTxt={pnrStats.aCobro > 0 ? "Con penalidad" : "Sin penalidad"} S={S} />
+                <div style={{ fontSize: 24, fontWeight: 700, color: pnrStats.aCobro > 0 ? "#c0392b" : "#111827", letterSpacing: -0.5, lineHeight: 1, marginBottom: 3 }}>
+                  {pnrStats.aCobro}
+                </div>
+                <div style={{ fontSize: 11, color: "#9CA3AF" }}>
+                  ${Math.round(pnrStats.valorACobro).toLocaleString("es-MX")} a pagar
+                </div>
+              </CardWrap>
+
+              <CardWrap S={S} tipo="ok">
+                <CardHeader label="Cerrados" tipo="ok" badgeTxt="Anulado" S={S} />
+                <div style={{ fontSize: 24, fontWeight: 700, color: "#111827", letterSpacing: -0.5, lineHeight: 1, marginBottom: 3 }}>
+                  {pnrStats.cerrados}
+                </div>
+                <div style={{ fontSize: 11, color: "#9CA3AF" }}>
+                  archivados
+                </div>
+              </CardWrap>
             </div>
-          </div>
-          <div style={{ fontSize: 12, color: "#7f1d1d", marginBottom: 12, lineHeight: 1.5 }}>
-            Hay substatus o incidents nuevos que no están en el catálogo <code>meli_motivos_devolucion</code>. 
-            Identificalos y agregalos para que aparezcan en el análisis.
-          </div>
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-              <thead>
-                <tr style={{ borderBottom: "2px solid #fecaca", textAlign: "left", color: "#991b1b", fontWeight: 700 }}>
-                  <th style={{ padding: "8px 10px", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5 }}>Substatus</th>
-                  <th style={{ padding: "8px 10px", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5 }}>Incident Description</th>
-                  <th style={{ padding: "8px 10px", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, textAlign: "right" }}>Paquetes</th>
-                  <th style={{ padding: "8px 10px", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5 }}>SCs afectados</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.motivos_sin_mapear.map((m, i) => (
-                  <tr key={i} style={{ borderBottom: "1px solid #fee2e2" }}>
-                    <td style={{ padding: "8px 10px", fontFamily: "monospace", fontSize: 11, color: "#0f172a" }}>{m.substatus}</td>
-                    <td style={{ padding: "8px 10px", color: "#475569" }}>{m.incident_description}</td>
-                    <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 700, color: "#991b1b", fontVariantNumeric: "tabular-nums" }}>{m.paquetes}</td>
-                    <td style={{ padding: "8px 10px", color: "#64748b", fontSize: 11 }}>{m.scs_afectados}</td>
-                  </tr>
+
+            {/* Desglose de estados (todos los 6) */}
+            <div style={{ background: "#fff", border: `0.5px solid ${S.BORDER}`, borderRadius: 12, padding: 14, marginBottom: 10 }}>
+              <div style={{ fontSize: 11, fontWeight: 600, color: "#6B7280", textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 12 }}>
+                Desglose por estado
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(6, minmax(0, 1fr))", gap: 8 }}>
+                {[
+                  { k: "Esperando comprobante", color: "#92400e", bg: "#fef3c7" },
+                  { k: "Comprobante cargado", color: "#1e40af", bg: "#dbeafe" },
+                  { k: "Pendiente de revision", color: "#6b21a8", bg: "#f3e8ff" },
+                  { k: "Sin comprobante cargado", color: "#c0392b", bg: "#fee2e2" },
+                  { k: "Con penalidad", color: "#991b1b", bg: "#fee2e2" },
+                  { k: "Anulado", color: "#475569", bg: "#f1f5f9" },
+                ].map(({ k, color, bg }) => (
+                  <div key={k} style={{ padding: "10px 12px", background: bg, borderRadius: 8 }}>
+                    <div style={{ fontSize: 10, fontWeight: 600, color, textTransform: "uppercase", letterSpacing: 0.3, marginBottom: 4, lineHeight: 1.2, minHeight: 24 }}>
+                      {k}
+                    </div>
+                    <div style={{ fontSize: 22, fontWeight: 700, color, lineHeight: 1 }}>
+                      {pnrStats.desglose[k] || 0}
+                    </div>
+                  </div>
                 ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-      {/* ANÁLISIS DE FALLIDAS DEL DÍA */}
-      <div className="form-card" style={{ marginBottom: 20 }}>
-        <div className="form-title" style={{ marginBottom: 4 }}>Análisis de fallidas del día</div>
-        <div style={{ fontSize: 11, color: "#64748b", marginBottom: 16 }}>
-          {(data.fallidas?.total || 0)} paquetes fallidos en total · 
-          {snapT.cargados > 0 && (
-            <span> {((data.fallidas?.total || 0) / snapT.cargados * 100).toFixed(2)}% sobre cargado</span>
-          )}
-        </div>
-
-        {/* Tarjetas resumen por categoría */}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12, marginBottom: 20 }}>
-          {(() => {
-            const porCat = data.fallidas?.por_categoria || [];
-            const getCat = (key) => porCat.find(c => c.categoria_operativa === key)?.paquetes || 0;
-            const devs = getCat("DEVOLUCION");
-            const ambs = getCat("AMBULANCIA");
-            const novs = getCat("NO_VISITADO");
-            const pctSobreCargado = snapT.cargados > 0 ? (devs / snapT.cargados * 100) : 0;
-            return (
-              <>
-                <div style={{ background: "#fef2f2", borderRadius: 8, padding: 16, border: "1px solid #fecaca" }}>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: "#991b1b", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>
-                    📦 Devoluciones reales
-                  </div>
-                  <div style={{ fontSize: 32, fontWeight: 700, color: "#b91c1c", lineHeight: 1, marginBottom: 4 }}>
-                    {devs}
-                  </div>
-                  <div style={{ fontSize: 11, color: "#7f1d1d" }}>
-                    {pctSobreCargado.toFixed(2)}% sobre cargado · cuentan en NS
-                  </div>
-                </div>
-                <div style={{ background: "#ecfeff", borderRadius: 8, padding: 16, border: "1px solid #a5f3fc" }}>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: "#0e7490", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>
-                    🚑 Ambulancias
-                  </div>
-                  <div style={{ fontSize: 32, fontWeight: 700, color: "#0891b2", lineHeight: 1, marginBottom: 4 }}>
-                    {ambs}
-                  </div>
-                  <div style={{ fontSize: 11, color: "#155e75" }}>
-                    Transferidos a otro driver del mismo SC · no penalizan
-                  </div>
-                </div>
-                <div style={{ background: "#fffbeb", borderRadius: 8, padding: 16, border: "1px solid #fde68a" }}>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: "#92400e", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>
-                    ❌ No visitados
-                  </div>
-                  <div style={{ fontSize: 32, fontWeight: 700, color: "#b45309", lineHeight: 1, marginBottom: 4 }}>
-                    {novs}
-                  </div>
-                  <div style={{ fontSize: 11, color: "#78350f" }}>
-                    No gestionados en ruta · cuentan en NS
-                  </div>
-                </div>
-              </>
-            );
-          })()}
-        </div>
-
-        {/* Dos columnas: Motivos y Devoluciones por SC */}
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
-          {/* Top motivos */}
-          <div>
-            <div style={{ fontSize: 12, fontWeight: 700, color: "#334155", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 12 }}>
-              Top motivos de fallida
-            </div>
-            {(() => {
-              const motivos = (data.fallidas?.por_motivo || []).filter(m => m.categoria_operativa !== "AMBULANCIA");
-              const maxPaq = motivos.length > 0 ? Math.max(...motivos.map(m => Number(m.paquetes) || 0)) : 1;
-              if (motivos.length === 0) {
-                return <div style={{ fontSize: 12, color: "#94a3b8", fontStyle: "italic" }}>Sin fallidas en el día</div>;
-              }
-              return motivos.map((m, i) => {
-                const pct = (Number(m.paquetes) / maxPaq) * 100;
-                const colorBar = m.categoria_operativa === "NO_VISITADO" ? "#b45309" : "#b91c1c";
-                return (
-                  <div key={m.motivo} style={{ marginBottom: 8 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 3 }}>
-                      <span style={{ fontSize: 12, fontWeight: 600, color: "#0f172a" }}>
-                        <span style={{ color: "#cbd5e1", fontFamily: "monospace", marginRight: 6 }}>#{i + 1}</span>
-                        {m.motivo}
-                      </span>
-                      <span style={{ fontSize: 13, fontWeight: 700, color: colorBar, fontVariantNumeric: "tabular-nums" }}>
-                        {m.paquetes}
-                      </span>
-                    </div>
-                    <div style={{ height: 5, background: "#f1f5f9", borderRadius: 2, overflow: "hidden" }}>
-                      <div style={{ height: "100%", width: `${pct}%`, background: colorBar, borderRadius: 2 }} />
-                    </div>
-                  </div>
-                );
-              });
-            })()}
-          </div>
-
-          {/* Devoluciones por SC */}
-          <div>
-            <div style={{ fontSize: 12, fontWeight: 700, color: "#334155", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 12 }}>
-              Devoluciones reales por SC
-            </div>
-            {(() => {
-              const porSc = data.fallidas?.devoluciones_por_sc || [];
-              const ambList = data.fallidas?.ambulancias_por_sc || [];
-              const ambMap = {};
-              ambList.forEach(a => { ambMap[a.sc] = a.ambulancias; });
-              if (porSc.length === 0) {
-                return <div style={{ fontSize: 12, color: "#94a3b8", fontStyle: "italic" }}>Sin devoluciones en el día</div>;
-              }
-              const maxDev = Math.max(...porSc.map(s => Number(s.devoluciones) || 0));
-              return porSc.map((s, i) => {
-                const pct = (Number(s.devoluciones) / maxDev) * 100;
-                const pctDev = Number(s.pct_devolucion) || 0;
-                const colorBar = pctDev >= 10 ? "#b91c1c" : pctDev >= 5 ? "#ca8a04" : "#64748b";
-                const amb = ambMap[s.sc] || 0;
-                return (
-                  <div key={s.sc} style={{ marginBottom: 8 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 3 }}>
-                      <span style={{ fontSize: 12, fontWeight: 600, color: "#0f172a" }}>
-                        <span style={{ color: "#cbd5e1", fontFamily: "monospace", marginRight: 6 }}>#{i + 1}</span>
-                        {s.sc}
-                        {amb > 0 && (
-                          <span style={{ fontSize: 10, color: "#0891b2", marginLeft: 6 }}>· {amb} amb.</span>
-                        )}
-                      </span>
-                      <span style={{ fontSize: 13, fontWeight: 700, color: colorBar, fontVariantNumeric: "tabular-nums" }}>
-                        {s.devoluciones} <span style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600 }}>({pctDev.toFixed(2)}%)</span>
-                      </span>
-                    </div>
-                    <div style={{ height: 5, background: "#f1f5f9", borderRadius: 2, overflow: "hidden" }}>
-                      <div style={{ height: "100%", width: `${pct}%`, background: colorBar, borderRadius: 2 }} />
-                    </div>
-                  </div>
-                );
-              });
-            })()}
-          </div>
-        </div>
-
-        {/* Banner informativo de ambulancias */}
-        {snap.ambulancias_total > 0 && (
-          <div style={{ fontSize: 11, color: "#0891b2", marginTop: 16, padding: 10, background: "#ecfeff", borderRadius: 6, border: "1px solid #a5f3fc" }}>
-            ℹ️ <strong>Sobre las ambulancias:</strong> {snap.ambulancias_total} paquete(s) fueron transferidos a otro driver del mismo SC y se entregaron. 
-            Siguen sumando al total cargado del SC, por eso el NS no se ajusta.
-            <span style={{ color: "#64748b" }}> (Próximo desarrollo: drill-down por ruta para ver driver origen → driver destino.)</span>
-          </div>
-        )}
-      </div>
-
-      {/* % VISITADOS POR SC */}
-      {(() => {
-        const vis = data.visitados || {};
-        const visTotal = vis.total || {};
-        const visPorSc = vis.por_sc || [];
-        const umbral = Number(vis.umbral) || 99.5;
-        const pctGeneral = Number(visTotal.pct_general) || 0;
-        const cumpleGeneral = pctGeneral >= umbral;
-        const scsBajo = visPorSc.filter(s => Number(s.pct_visitados) < umbral);
-
-        const colorVisitado = (pct) => {
-          const v = Number(pct);
-          if (v >= umbral) return "#047857";
-          if (v >= 98) return "#ca8a04";
-          return "#b91c1c";
-        };
-
-        return (
-          <div className="form-card" style={{ marginBottom: 20 }}>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 20, alignItems: "stretch" }}>
-              {/* Tarjeta grande con % general */}
-              <div style={{
-                background: cumpleGeneral
-                  ? "linear-gradient(135deg, #047857 0%, #065f46 100%)"
-                  : "linear-gradient(135deg, #b91c1c 0%, #7f1d1d 100%)",
-                borderRadius: 10, padding: 20, color: "#fff",
-                display: "flex", flexDirection: "column", justifyContent: "space-between"
-              }}>
-                <div>
-                  <div style={{ fontSize: 10, fontWeight: 700, opacity: 0.85, textTransform: "uppercase", letterSpacing: 1, marginBottom: 6 }}>
-                    % Visitados General
-                  </div>
-                  <div style={{ fontSize: 12, opacity: 0.85, marginBottom: 12 }}>
-                    Paquetes que el driver fue a entregar (visitó el domicilio)
-                  </div>
-                </div>
-                <div>
-                  <div style={{ fontSize: 48, fontWeight: 700, lineHeight: 1, marginBottom: 8 }}>
-                    {pctGeneral.toFixed(2)}%
-                  </div>
-                  <div style={{ fontSize: 12, opacity: 0.9 }}>
-                    {Number(visTotal.no_visitados || 0)} no visitados de {Number(visTotal.cargados || 0).toLocaleString()} cargados
-                  </div>
-                  <div style={{ fontSize: 11, opacity: 0.85, marginTop: 8, padding: "6px 10px", background: "rgba(255,255,255,0.15)", borderRadius: 5, display: "inline-block" }}>
-                    Óptimo: ≥ {umbral}% {cumpleGeneral ? "✅" : "🔴"}
-                  </div>
-                </div>
               </div>
+            </div>
 
-              {/* Ranking de SCs */}
-              <div>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}>
-                  <div className="form-title" style={{ marginBottom: 0 }}>Ranking de SCs por % Visitados</div>
-                  {scsBajo.length > 0 && (
-                    <div style={{ fontSize: 11, fontWeight: 700, color: "#b91c1c", background: "#fef2f2", padding: "3px 8px", borderRadius: 4, border: "1px solid #fecaca" }}>
-                      {scsBajo.length} SC(s) bajo el óptimo
-                    </div>
+            {/* Tabla detallada por SC */}
+            <div style={{ background: "#fff", border: `0.5px solid ${S.BORDER}`, borderRadius: 12, padding: 14, marginBottom: 28, overflow: "auto" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 12 }}>
+                <div style={{ fontSize: 11, fontWeight: 600, color: "#6B7280", textTransform: "uppercase", letterSpacing: 0.4 }}>
+                  Detalle por SC
+                </div>
+                <div style={{ fontSize: 10, color: "#9CA3AF" }}>
+                  {pnrStats.porSC.length} SC con casos
+                  {pnrStats.porSC.some(s => s.sc === "SIN_SC") && (
+                    <span style={{ color: "#F47B20", marginLeft: 8 }}>
+                      · {pnrStats.porSC.find(s => s.sc === "SIN_SC")?.total || 0} casos sin mapeo de ruta
+                    </span>
                   )}
                 </div>
-                <div style={{ fontSize: 11, color: "#64748b", marginBottom: 14 }}>
-                  Ordenado de menor a mayor · óptimo ≥ {umbral}%
-                </div>
-
-                {scsBajo.length === 0 && (
-                  <div style={{ fontSize: 12, color: "#047857", padding: "8px 12px", background: "#f0fdf4", borderRadius: 6, border: "1px solid #bbf7d0", marginBottom: 12 }}>
-                    ✅ Todos los SCs cumplen el óptimo de {umbral}%
-                  </div>
-                )}
-
-                {visPorSc.map((s, i) => {
-                  const pct = Number(s.pct_visitados) || 0;
-                  const color = colorVisitado(pct);
-                  const cumple = pct >= umbral;
-                  // Barra: 95% como mínimo visual para que se note el contraste cerca del óptimo
-                  const barPct = Math.max(0, Math.min(100, (pct - 95) / 5 * 100));
-                  return (
-                    <div key={s.sc} style={{ display: "grid", gridTemplateColumns: "28px 60px 1fr 90px 90px", gap: 10, alignItems: "center", padding: "6px 0", borderBottom: i === visPorSc.length - 1 ? "none" : "1px solid #f1f5f9" }}>
-                      <div style={{ fontSize: 11, color: "#cbd5e1", fontFamily: "monospace" }}>#{i + 1}</div>
-                      <div style={{ fontSize: 12, fontWeight: 700, color: "#0f172a" }}>{s.sc}</div>
-                      <div>
-                        <div style={{ height: 5, background: "#f1f5f9", borderRadius: 2, overflow: "hidden" }}>
-                          <div style={{ height: "100%", width: `${barPct}%`, background: color }} />
-                        </div>
-                        <div style={{ fontSize: 9, color: "#94a3b8", marginTop: 2 }}>escala 95–100%</div>
-                      </div>
-                      <div style={{ fontSize: 11, color: "#64748b", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
-                        {Number(s.no_visitados)} no vis. / {Number(s.cargados).toLocaleString()}
-                      </div>
-                      <div style={{ fontSize: 16, fontWeight: 700, color, fontVariantNumeric: "tabular-nums", textAlign: "right" }}>
-                        {pct.toFixed(2)}% {!cumple && "🔴"}
-                      </div>
-                    </div>
-                  );
-                })}
               </div>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, fontFamily: "'Geist', sans-serif" }}>
+                <thead>
+                  <tr style={{ borderBottom: `1px solid ${S.BORDER}`, textAlign: "left" }}>
+                    <th style={{ padding: "8px 10px", fontSize: 10, color: "#6B7280", textTransform: "uppercase", letterSpacing: 0.4, fontWeight: 600 }}>SC</th>
+                    <th style={{ padding: "8px 10px", fontSize: 10, color: "#6B7280", textTransform: "uppercase", letterSpacing: 0.4, fontWeight: 600, textAlign: "right" }}>Total</th>
+                    <th style={{ padding: "8px 10px", fontSize: 10, color: "#92400e", textTransform: "uppercase", letterSpacing: 0.4, fontWeight: 600, textAlign: "right" }}>Esperando</th>
+                    <th style={{ padding: "8px 10px", fontSize: 10, color: "#1e40af", textTransform: "uppercase", letterSpacing: 0.4, fontWeight: 600, textAlign: "right" }}>Cargado</th>
+                    <th style={{ padding: "8px 10px", fontSize: 10, color: "#6b21a8", textTransform: "uppercase", letterSpacing: 0.4, fontWeight: 600, textAlign: "right" }}>Pendiente</th>
+                    <th style={{ padding: "8px 10px", fontSize: 10, color: "#c0392b", textTransform: "uppercase", letterSpacing: 0.4, fontWeight: 600, textAlign: "right" }}>Sin comp.</th>
+                    <th style={{ padding: "8px 10px", fontSize: 10, color: "#991b1b", textTransform: "uppercase", letterSpacing: 0.4, fontWeight: 600, textAlign: "right" }}>A cobro</th>
+                    <th style={{ padding: "8px 10px", fontSize: 10, color: "#475569", textTransform: "uppercase", letterSpacing: 0.4, fontWeight: 600, textAlign: "right" }}>Anulado</th>
+                    <th style={{ padding: "8px 10px", fontSize: 10, color: "#6B7280", textTransform: "uppercase", letterSpacing: 0.4, fontWeight: 600, textAlign: "right" }}>$ Riesgo</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {pnrStats.porSC.map((s, i) => (
+                    <tr key={s.sc} style={{ borderBottom: i === pnrStats.porSC.length - 1 ? "none" : `1px solid ${S.BORDER}` }}>
+                      <td style={{ padding: "8px 10px", fontWeight: 700, color: s.sc === "SIN_SC" ? "#F47B20" : "#1a3a6b" }}>
+                        {s.sc === "SIN_SC" ? "— Sin mapeo" : s.sc}
+                      </td>
+                      <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 700, color: "#111827", fontVariantNumeric: "tabular-nums" }}>{s.total}</td>
+                      <td style={{ padding: "8px 10px", textAlign: "right", color: s.esperando > 0 ? "#92400e" : "#cbd5e1", fontVariantNumeric: "tabular-nums" }}>{s.esperando || "—"}</td>
+                      <td style={{ padding: "8px 10px", textAlign: "right", color: s.cargado > 0 ? "#1e40af" : "#cbd5e1", fontVariantNumeric: "tabular-nums" }}>{s.cargado || "—"}</td>
+                      <td style={{ padding: "8px 10px", textAlign: "right", color: s.pendiente > 0 ? "#6b21a8" : "#cbd5e1", fontVariantNumeric: "tabular-nums" }}>{s.pendiente || "—"}</td>
+                      <td style={{ padding: "8px 10px", textAlign: "right", color: s.sinComprobante > 0 ? "#c0392b" : "#cbd5e1", fontVariantNumeric: "tabular-nums" }}>{s.sinComprobante || "—"}</td>
+                      <td style={{ padding: "8px 10px", textAlign: "right", color: s.aCobro > 0 ? "#991b1b" : "#cbd5e1", fontWeight: s.aCobro > 0 ? 700 : 400, fontVariantNumeric: "tabular-nums" }}>{s.aCobro || "—"}</td>
+                      <td style={{ padding: "8px 10px", textAlign: "right", color: s.cerrados > 0 ? "#475569" : "#cbd5e1", fontVariantNumeric: "tabular-nums" }}>{s.cerrados || "—"}</td>
+                      <td style={{ padding: "8px 10px", textAlign: "right", color: "#1a3a6b", fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>
+                        ${Math.round(s.valor).toLocaleString("es-MX")}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
-          </div>
+          </>
+        )}
+
+        {/* ④ SERVICIOS OFERTADOS */}
+        {compromiso && (
+          <>
+            <GrupoTitulo icon="award" titulo="Servicios ofertados · semana en curso" />
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 10, marginBottom: 28 }}>
+              <CardCompromiso
+                S={S}
+                label="Confirmados · Mié lock"
+                tipo={pctConfirmadosTotal >= 95 ? "ok" : pctConfirmadosTotal >= 80 ? "warn" : "bad"}
+                badgeTxt={pctConfirmadosTotal != null ? `${pctConfirmadosTotal.toFixed(0)}%` : "—"}
+                valor={aceptadasTotal}
+                subtitle={`de ${efectivasTotal} efectivos · ${ofrecidasTotal} ofertados`}
+                footer={`efectivos = ofertados − canc. MELI (${canceladasTotal})`}
+              />
+              <CardCompromiso
+                S={S}
+                label="SDD · Súper dedicadas"
+                tipo={pctSDD === 100 ? "ok" : pctSDD >= 95 ? "warn" : "bad"}
+                badgeTxt={pctSDD != null ? `${pctSDD.toFixed(0)}%` : "—"}
+                valor={`${c.aceptadas_sdd || 0}/${(c.ofrecidas_sdd || 0) - (c.canceladas_sdd || 0)}`}
+                subtitle="Flota fija · deadline Mié"
+                footer="Compromiso irrenunciable"
+                footerIcon="lock"
+              />
+              <CardCompromiso
+                S={S}
+                label="SPOT · Variables"
+                tipo={pctSPOT >= 90 ? "ok" : pctSPOT >= 70 ? "warn" : "bad"}
+                badgeTxt={pctSPOT != null ? `${pctSPOT.toFixed(1)}%` : "—"}
+                valor={`${c.aceptadas_spot || 0}/${(c.ofrecidas_spot || 0) - (c.canceladas_spot || 0)}`}
+                subtitle={`${c.rechazadas_spot || 0} rechazados · ${c.canceladas_spot || 0} canc. MELI`}
+                footer="Ver análisis de compromiso"
+              />
+            </div>
+          </>
+        )}
+
+        <div style={{ textAlign: "center", fontSize: 10, color: S.TEXT_MUTED, padding: "12px 0 24px" }}>
+          Bigticket · KPI de Operación · Pool MELI MX · {fechaTexto}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SUBCOMPONENTES
+// ═══════════════════════════════════════════════════════════════════════════
+
+function GrupoTitulo({ icon, titulo }) {
+  const icons = {
+    trend: <path d="M3 17 L8 12 L13 15 L18 9 L21 12 M3 3 L3 21 M3 21 L21 21" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" fill="none" stroke="#6B7280" />,
+    box:   <g fill="none" stroke="#6B7280" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><line x1="12" y1="12" x2="12" y2="21"/><polyline points="4 7.5 12 12 20 7.5"/></g>,
+    alert: <g fill="none" stroke="#6B7280" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></g>,
+    award: <g fill="none" stroke="#6B7280" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></g>,
+    clipboard: <g fill="none" stroke="#6B7280" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><line x1="9" y1="12" x2="15" y2="12"/><line x1="9" y1="16" x2="13" y2="16"/></g>,
+  };
+  return (
+    <div style={{
+      display: "flex", alignItems: "center", gap: 10,
+      fontSize: 14, fontWeight: 600, color: "#6B7280",
+      textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 12,
+    }}>
+      <svg width="14" height="14" viewBox="0 0 24 24">{icons[icon]}</svg>
+      <span>{titulo}</span>
+      <span style={{ flex: 1, height: 0.5, background: "#e4e7ec" }}></span>
+    </div>
+  );
+}
+
+// ─── CARD GENÉRICA (estructura visual común) ──────────────────────────────
+function CardWrap({ S, tipo, children, height }) {
+  const borderColors = { bad: "#c0392b", warn: "#F47B20", ok: "#16a34a" };
+  const bc = tipo ? borderColors[tipo] : null;
+  return (
+    <div style={{
+      background: "#fff",
+      border: `0.5px solid ${S.BORDER}`,
+      borderRadius: bc ? "0 12px 12px 0" : 12,
+      borderLeft: bc ? `3px solid ${bc}` : `0.5px solid ${S.BORDER}`,
+      padding: 14, display: "flex", flexDirection: "column",
+      minHeight: height || "auto",
+    }}>{children}</div>
+  );
+}
+
+function CardHeader({ label, tipo, badgeTxt, S }) {
+  const styles = {
+    ok:   { bg: "#dcfce7", color: "#166534" },
+    warn: { bg: "#fef3c7", color: "#92400e" },
+    bad:  { bg: "#fee2e2", color: "#991b1b" },
+  };
+  const st = badgeTxt && tipo ? styles[tipo] : null;
+  return (
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 5 }}>
+      <span style={{ fontSize: 10, fontWeight: 600, color: "#6B7280", textTransform: "uppercase", letterSpacing: 0.4 }}>
+        {label}
+      </span>
+      {st && (
+        <span style={{
+          fontSize: 9, fontWeight: 600, padding: "2px 7px", borderRadius: 4,
+          textTransform: "uppercase", whiteSpace: "nowrap",
+          background: st.bg, color: st.color,
+        }}>{badgeTxt}</span>
+      )}
+    </div>
+  );
+}
+
+// ─── ZOOM BAR (barra de meta) ─────────────────────────────────────────────
+function ZoomBar({ valor, meta, zmMin, zmMax, lower = false, S }) {
+  if (valor == null || meta == null) return null;
+  const v = Number(valor);
+  const range = zmMax - zmMin;
+  const valPct = Math.max(0, Math.min(100, ((v - zmMin) / range) * 100));
+  const metaPct = Math.max(0, Math.min(100, ((meta - zmMin) / range) * 100));
+  const deltaPp = v - meta;
+  const cumple = lower ? v <= meta : v >= meta;
+  return (
+    <div style={{ marginBottom: 4 }}>
+      <div style={{ position: "relative", height: 16, marginBottom: 2 }}>
+        <span style={{
+          position: "absolute", left: `${metaPct}%`, transform: "translateX(-50%)",
+          fontSize: 9, color: "#374151", fontWeight: 600, whiteSpace: "nowrap",
+          background: "#fff", padding: "0 2px", lineHeight: 1,
+        }}>meta {meta}%</span>
+      </div>
+      <div style={{ position: "relative", height: 6, marginBottom: 4 }}>
+        <div style={{ position: "absolute", inset: 0, background: "#F3F4F6", borderRadius: 3 }}></div>
+        <div style={{ position: "absolute", left: 0, top: 0, height: "100%", width: `${valPct}%`, background: "#9CA3AF", borderRadius: 3 }}></div>
+        <div style={{ position: "absolute", left: `${metaPct}%`, top: -5, width: 2, height: 16, background: "#111827", borderRadius: 1, zIndex: 2 }}></div>
+        <div style={{
+          position: "absolute", left: `${valPct}%`, top: "50%",
+          width: 10, height: 10, borderRadius: "50%", background: "#374151",
+          border: "2px solid #fff", transform: "translateX(-50%) translateY(-50%)",
+          zIndex: 3, boxShadow: "0 0 0 1px #D1D5DB",
+        }}></div>
+      </div>
+      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 9, color: "#9CA3AF" }}>
+        <span>{zmMin}%</span><span>{zmMax}%</span>
+      </div>
+      <div style={{ fontSize: 11, fontWeight: 500, color: "#6B7280", marginTop: 4 }}>
+        {Math.abs(deltaPp).toFixed(2)} pp {cumple ? "sobre" : "para alcanzar"} la meta
+      </div>
+    </div>
+  );
+}
+
+// ─── SPARKLINE SVG (Catmull-Rom) ──────────────────────────────────────────
+function Sparkline({ vals, allVals, meta, prevVals, height = 52, color = "#9CA3AF", secondaryVals = null }) {
+  // Si no hay suficientes datos, mostrar área vacía con leyenda sutil
+  if (!vals || vals.length < 3) {
+    return (
+      <svg width="100%" height={height} viewBox={`0 0 400 ${height}`} preserveAspectRatio="none" style={{ overflow: "visible" }}>
+        <text x="200" y={height / 2 + 4} textAnchor="middle" fontSize="9" fill="#cbd5e1" fontFamily="'Geist', sans-serif">
+          {(vals?.length || 0) === 0 ? "sin histórico" : "datos insuficientes"}
+        </text>
+      </svg>
+    );
+  }
+
+  const W = 400, H = height, pad = 4;
+  const ref = [...(allVals && allVals.length ? allVals : vals)];
+  if (meta != null) ref.push(meta);
+  if (prevVals?.length) ref.push(...prevVals);
+  if (secondaryVals?.length) ref.push(...secondaryVals);
+  const dMin = Math.min(...ref), dMax = Math.max(...ref);
+  const padY = Math.max((dMax - dMin) * 0.10, 0.15);
+  const yMin = dMin - padY, yMax = dMax + padY;
+  const py = v => H - pad - ((v - yMin) / (yMax - yMin)) * (H - pad * 2);
+
+  function buildPath(data) {
+    const smF = Math.min(data.length / 30, 0.5);
+    const sm = data.map((v, i, a) => {
+      const p = a[i - 1] ?? v, n2 = a[i + 1] ?? v;
+      return v + ((p + n2) / 2 - v) * smF;
+    });
+    const xs = sm.map((_, i) => pad + (i / (sm.length - 1)) * (W - pad * 2));
+    const ys = sm.map(v => py(v));
+    const N = xs.length, t = 0.45;
+    let d = `M${xs[0].toFixed(1)},${ys[0].toFixed(1)}`;
+    for (let i = 0; i < N - 1; i++) {
+      const x0 = xs[i > 0 ? i - 1 : 0], y0 = ys[i > 0 ? i - 1 : 0];
+      const x1 = xs[i], y1 = ys[i], x2 = xs[i + 1], y2 = ys[i + 1];
+      const x3 = xs[i < N - 2 ? i + 2 : N - 1], y3 = ys[i < N - 2 ? i + 2 : N - 1];
+      const cp1x = x1 + (x2 - x0) * t / 3, cp1y = y1 + (y2 - y0) * t / 3;
+      const cp2x = x2 - (x3 - x1) * t / 3, cp2y = y2 - (y3 - y1) * t / 3;
+      d += ` C${cp1x.toFixed(1)},${cp1y.toFixed(1)} ${cp2x.toFixed(1)},${cp2y.toFixed(1)} ${x2.toFixed(1)},${y2.toFixed(1)}`;
+    }
+    return { d, lx: xs[N - 1].toFixed(1), ly: ys[N - 1].toFixed(1), x0: xs[0].toFixed(1) };
+  }
+
+  return (
+    <svg width="100%" height={H} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none">
+      {meta != null && (
+        <line x1={pad} y1={py(meta).toFixed(1)} x2={W - pad} y2={py(meta).toFixed(1)}
+              stroke="#E5E7EB" strokeWidth="1" strokeDasharray="5,4" />
+      )}
+      {prevVals?.length >= 3 && (() => {
+        const { d } = buildPath(prevVals);
+        return <path d={d} fill="none" stroke="#D1D5DB" strokeWidth="1.5" strokeDasharray="4,3" strokeLinejoin="round" strokeLinecap="round" />;
+      })()}
+      {secondaryVals?.length >= 3 && (() => {
+        const { d } = buildPath(secondaryVals);
+        return <path d={d} fill="none" stroke="#1a3a6b" strokeWidth="1.3" strokeDasharray="2,3" strokeLinejoin="round" strokeLinecap="round" opacity="0.55" />;
+      })()}
+      {(() => {
+        const { d, lx, ly, x0 } = buildPath(vals);
+        return (
+          <>
+            <path d={`${d} L${lx},${H} L${x0},${H} Z`} fill={color} fillOpacity="0.1" />
+            <path d={d} fill="none" stroke={color} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
+            <circle cx={lx} cy={ly} r="3.5" fill="#6B7280" />
+          </>
         );
       })()}
+    </svg>
+  );
+}
+
+// ─── DELTA TEXT ───────────────────────────────────────────────────────────
+function DeltaText({ delta, lower, label, unit }) {
+  if (delta == null) return <div style={{ fontSize: 11, color: "#9CA3AF", marginTop: 4, minHeight: 16 }}></div>;
+  const better = lower ? delta < 0 : delta > 0;
+  const worse = lower ? delta > 0 : delta < 0;
+  const arrow = better ? "↑" : worse ? "↓" : "→";
+  const sign = delta > 0 ? "+" : "";
+  const val = `${sign}${delta.toFixed(2)}${unit ? " " + unit : ""}`;
+  const color = better ? "#16a34a" : worse ? "#c0392b" : "#9CA3AF";
+  return (
+    <div style={{ fontSize: 11, color, marginTop: 4, minHeight: 16 }}>
+      {arrow} {val} vs {label}
     </div>
+  );
+}
+
+// ─── RANKING ▲▼ ───────────────────────────────────────────────────────────
+function RankingBlock({ top3, bot3 }) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 5, marginTop: "auto" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "14px 1fr", gap: 5, alignItems: "start" }}>
+        <span style={{ color: "#16a34a", fontSize: 11, fontWeight: 600, paddingTop: 1 }}>▲</span>
+        <span style={{ fontSize: 11, color: "#9CA3AF", lineHeight: 1.5 }}>{top3}</span>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "14px 1fr", gap: 5, alignItems: "start" }}>
+        <span style={{ color: "#c0392b", fontSize: 11, fontWeight: 600, paddingTop: 1 }}>▼</span>
+        <span style={{ fontSize: 11, color: "#9CA3AF", lineHeight: 1.5 }}>{bot3}</span>
+      </div>
+    </div>
+  );
+}
+
+// ─── DIVISOR ──────────────────────────────────────────────────────────────
+const Div = () => <div style={{ height: 0.5, background: "#F0F0F0", margin: "8px 0" }}></div>;
+
+// ─── CARD NS (dos valores apilados: MELI + SNAPSHOTS) ─────────────────────
+function CardNS({ S, label, tipo, badgeTxt, valorMeli, valorSnap, subtitle, meta,
+                  sparkSerieMeli, sparkSerieSnap, sparkPrev, sparkAllVals,
+                  delta, deltaLabel, deltaUnit, lower, ranking, zmMin, zmMax }) {
+  const fmt = v => v != null ? `${Number(v).toFixed(2)}%` : "—";
+  return (
+    <CardWrap S={S} tipo={tipo}>
+      <CardHeader label={label} tipo={tipo} badgeTxt={badgeTxt} S={S} />
+      {/* Dos valores apilados */}
+      <div style={{ marginBottom: 3 }}>
+        <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
+          <span style={{ fontSize: 9, fontWeight: 700, color: "#92400e", textTransform: "uppercase", letterSpacing: 0.4 }}>📄 MELI</span>
+          <span style={{ fontSize: 22, fontWeight: 700, color: "#111827", letterSpacing: -0.5, lineHeight: 1 }}>{fmt(valorMeli)}</span>
+        </div>
+        <div style={{ display: "flex", alignItems: "baseline", gap: 6, marginTop: 4 }}>
+          <span style={{ fontSize: 9, fontWeight: 700, color: "#047857", textTransform: "uppercase", letterSpacing: 0.4 }}>📸 SNAP</span>
+          <span style={{ fontSize: 16, fontWeight: 700, color: "#475569", letterSpacing: -0.3, lineHeight: 1 }}>{fmt(valorSnap)}</span>
+        </div>
+      </div>
+      <div style={{ fontSize: 11, color: "#9CA3AF", marginBottom: 10, marginTop: 4 }}>{subtitle}</div>
+      <ZoomBar valor={valorMeli} meta={meta} zmMin={zmMin} zmMax={zmMax} lower={lower} S={S} />
+      <Sparkline
+        vals={sparkSerieMeli}
+        secondaryVals={sparkSerieSnap}
+        allVals={sparkAllVals}
+        meta={meta}
+        prevVals={sparkPrev}
+        height={72}
+      />
+      <DeltaText delta={delta} lower={lower} label={deltaLabel} unit={deltaUnit} />
+      <Div />
+      <RankingBlock {...ranking} />
+    </CardWrap>
+  );
+}
+
+// ─── CARD SINGLE (un solo valor + zoom bar opcional) ──────────────────────
+function CardSingle({ S, label, tipo, badgeTxt, valor, valorFmt, subtitle, meta,
+                      sparkSerie, sparkPrev, sparkAllVals,
+                      delta, deltaLabel, deltaUnit, lower, ranking, zmMin, zmMax, zoom }) {
+  return (
+    <CardWrap S={S} tipo={tipo}>
+      <CardHeader label={label} tipo={tipo} badgeTxt={badgeTxt} S={S} />
+      <div style={{ fontSize: 24, fontWeight: 700, color: "#111827", letterSpacing: -0.5, lineHeight: 1, marginBottom: 3 }}>
+        {valorFmt ? valorFmt(valor) : valor}
+      </div>
+      <div style={{ fontSize: 11, color: "#9CA3AF", marginBottom: 10 }}>{subtitle}</div>
+      {zoom && <ZoomBar valor={valor} meta={meta} zmMin={zmMin} zmMax={zmMax} lower={lower} S={S} />}
+      <Sparkline vals={sparkSerie} allVals={sparkAllVals} meta={meta} prevVals={sparkPrev} height={72} />
+      <DeltaText delta={delta} lower={lower} label={deltaLabel} unit={deltaUnit} />
+      <Div />
+      <RankingBlock {...ranking} />
+    </CardWrap>
+  );
+}
+
+// ─── CARD VOLUMEN (sin borde lateral, sparkline 52px) ─────────────────────
+function CardVolumen({ S, label, valor, subtitle, sparkSerie, sparkPrev, sparkAllVals,
+                       delta, deltaLabel, deltaUnit, ranking }) {
+  return (
+    <CardWrap S={S} tipo={null}>
+      <CardHeader label={label} S={S} />
+      <div style={{ fontSize: 24, fontWeight: 700, color: "#111827", letterSpacing: -0.5, lineHeight: 1, marginBottom: 3 }}>{valor}</div>
+      <div style={{ fontSize: 11, color: "#9CA3AF", marginBottom: 10 }}>{subtitle}</div>
+      <Sparkline vals={sparkSerie} allVals={sparkAllVals} prevVals={sparkPrev} height={52} />
+      <DeltaText delta={delta} lower={false} label={deltaLabel} unit={deltaUnit} />
+      <Div />
+      <RankingBlock {...ranking} />
+    </CardWrap>
+  );
+}
+
+// ─── CARD FOCO OPERATIVO (badge + sparkline lower=true) ───────────────────
+function CardFoco({ S, label, tipo, badgeTxt, valor, subtitle, sparkSerie, sparkPrev, sparkAllVals,
+                    delta, deltaLabel, deltaUnit, lower, ranking }) {
+  return (
+    <CardWrap S={S} tipo={tipo}>
+      <CardHeader label={label} tipo={tipo} badgeTxt={badgeTxt} S={S} />
+      <div style={{ fontSize: 24, fontWeight: 700, color: "#111827", letterSpacing: -0.5, lineHeight: 1, marginBottom: 3 }}>{valor}</div>
+      <div style={{ fontSize: 11, color: "#9CA3AF", marginBottom: 10 }}>{subtitle}</div>
+      <Sparkline vals={sparkSerie} allVals={sparkAllVals} prevVals={sparkPrev} height={52} />
+      <DeltaText delta={delta} lower={lower} label={deltaLabel} unit={deltaUnit} />
+      <Div />
+      <RankingBlock {...ranking} />
+    </CardWrap>
+  );
+}
+
+// ─── CARD COMPROMISO (sin sparkline ni ranking, footer pequeño) ───────────
+function CardCompromiso({ S, label, tipo, badgeTxt, valor, subtitle, footer, footerIcon }) {
+  return (
+    <CardWrap S={S} tipo={tipo}>
+      <CardHeader label={label} tipo={tipo} badgeTxt={badgeTxt} S={S} />
+      <div style={{ fontSize: 24, fontWeight: 700, color: "#111827", letterSpacing: -0.5, lineHeight: 1, marginBottom: 3 }}>{valor}</div>
+      <div style={{ fontSize: 11, color: "#9CA3AF", marginBottom: 10 }}>{subtitle}</div>
+      <Div />
+      <div style={{ fontSize: 11, color: "#6B7280", display: "flex", alignItems: "center", gap: 4, marginTop: "auto" }}>
+        {footerIcon === "lock" && (
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#16a34a" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+          </svg>
+        )}
+        {footer}
+      </div>
+    </CardWrap>
   );
 }
 
