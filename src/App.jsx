@@ -5007,7 +5007,7 @@ const SnapIngresoMaestro = ({ filas, loading }) => {
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
             <thead style={{ background: "#f8fafc", position: "sticky", top: 0 }}>
               <tr>
-                {["Fecha","ID Viaje","CECOS","Patente","Tipo Veh.","SDD","Tipo Ruta","Driver","Cargados","Entregados","Devueltos","KM Plan","Rango KM","%","Status","Helper","Nombre Helper","Obs"].map(h => (
+                {["Fecha","ID Viaje","CECOS","Patente","Tipo Veh.","SDD","Tipo Ruta","Driver","Cargados","Entregados","Devueltos","KM Plan","Rango KM","%","Status","Obs"].map(h => (
                   <th key={h} style={{ padding: "8px 6px", textAlign: "left", fontWeight: 700, color: "#666", borderBottom: "1px solid #e4e7ec", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.3 }}>{h}</th>
                 ))}
               </tr>
@@ -5034,25 +5034,6 @@ const SnapIngresoMaestro = ({ filas, loading }) => {
                     {fmtPctSnap(f.pct_visitado)}
                   </td>
                   <td style={{ padding: "6px" }}>{f.status_final}</td>
-                  <td style={{ padding: "6px", textAlign: "center" }}>
-                    {f.con_ayudante === "SI" ? (
-                      <span style={{ background: "#dcfce7", color: "#15803d", fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 10, letterSpacing: 0.3 }}>SÍ</span>
-                    ) : f.con_ayudante === "NO" ? (
-                      <span style={{ background: "#f1f5f9", color: "#64748b", fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 10, letterSpacing: 0.3 }}>NO</span>
-                    ) : (
-                      <span style={{ color: "#cbd5e1", fontSize: 11 }}>—</span>
-                    )}
-                  </td>
-                  <td style={{ padding: "6px", fontSize: 10.5, maxWidth: 320, lineHeight: 1.4,
-                    color: !f.nombre_ayudante ? "#cbd5e1"
-                      : f.nombre_ayudante.includes("⚠️ Chofer //") ? "#dc2626"
-                      : f.nombre_ayudante.includes("⚠️ Investigar") ? "#b45309"
-                      : f.nombre_ayudante.startsWith("📵") ? "#64748b"
-                      : f.nombre_ayudante.startsWith("⚪") ? "#94a3b8"
-                      : "#1a1a1a",
-                    fontStyle: (f.nombre_ayudante && (f.nombre_ayudante.startsWith("📵") || f.nombre_ayudante.startsWith("⚪"))) ? "italic" : "normal" }}>
-                    {f.nombre_ayudante || (f.con_ayudante === "SI" ? "—" : "")}
-                  </td>
                   <td style={{ padding: "6px", fontSize: 10, color: "#888", maxWidth: 200 }}>{f.observaciones_auto || "—"}</td>
                 </tr>
               ))}
@@ -21716,12 +21697,14 @@ function PoolMeliKPIOperacion() {
   const [data, setData] = useState(null);            // KPIs del día (comparativo)
   const [compromiso, setCompromiso] = useState(null); // Compromiso MELI (Confirmados/SDD/SPOT)
   const [historico, setHistorico] = useState([]);    // Array de filas por día (puede quedar vacío)
+  const [rankingHistorico, setRankingHistorico] = useState([]); // Ranking promediado por SC del período
   const [pnrCasos, setPnrCasos] = useState([]);      // Casos PNR del período actual
   const [rutaToSc, setRutaToSc] = useState({});      // Mapeo id_ruta → service_center_id
   const [loading, setLoading] = useState(true);
+  const [loadingRanking, setLoadingRanking] = useState(false);
   const [error, setError] = useState(null);
   const [refreshKey, setRefreshKey] = useState(0);
-  const [periodo, setPeriodo] = useState(1); // 1, 7, 15, 30 días
+  const [periodo, setPeriodo] = useState(1); // 1, 7, 15, 22 días
 
   // ═══ Fecha ancla (ayer en hora MX) ═══════════════════════════════════════
   const fechaAyer = useMemo(() => {
@@ -21798,23 +21781,78 @@ function PoolMeliKPIOperacion() {
     return () => { alive = false; };
   }, [refreshKey, fechaAyer]);
 
+  // ═══ Carga del ranking promediado del período (se ejecuta al cambiar período) ═══
+  useEffect(() => {
+    if (periodo === 1) {
+      // En D-1 usamos el ranking del día (data.ranking_sc + visitados.por_sc)
+      setRankingHistorico([]);
+      return;
+    }
+    let alive = true;
+    (async () => {
+      setLoadingRanking(true);
+      try {
+        const fechaHasta = fechaAyer;
+        const desde = new Date(fechaAyer);
+        desde.setDate(desde.getDate() - (periodo - 1));
+        const fechaDesde = desde.toISOString().slice(0, 10);
+
+        const { data: rData, error: rErr } = await sb.rpc(
+          "get_kpi_operacion_ranking_historico",
+          { p_desde: fechaDesde, p_hasta: fechaHasta }
+        );
+        if (!alive) return;
+        if (rErr) {
+          // RPC no existe aún o falló → caemos al ranking del día
+          setRankingHistorico([]);
+        } else {
+          setRankingHistorico(Array.isArray(rData) ? rData : []);
+        }
+      } catch {
+        if (alive) setRankingHistorico([]);
+      } finally {
+        if (alive) setLoadingRanking(false);
+      }
+    })();
+    return () => { alive = false; };
+  }, [periodo, fechaAyer, refreshKey]);
+
   // ═══ Hooks (deben ir antes de cualquier early return) ════════════════════
-  // Histórico filtrado al período activo
+  // Histórico filtrado al período activo.
+  // En D-1 mostramos igual los últimos 7 días en el sparkline (con dot grande en el último)
+  // pero el valor grande arriba sigue siendo del día actual.
   const histPeriodo = useMemo(() => {
     if (!historico || historico.length === 0) return [];
-    return historico.slice(-periodo);
+    const ventana = periodo === 1 ? 7 : periodo;
+    return historico.slice(-ventana);
   }, [historico, periodo]);
 
   // Período anterior (para curva punteada de comparación)
   const histPrev = useMemo(() => {
     if (!historico || historico.length === 0) return [];
-    const start = Math.max(0, historico.length - periodo * 2);
-    const end = historico.length - periodo;
+    const ventana = periodo === 1 ? 7 : periodo;
+    const start = Math.max(0, historico.length - ventana * 2);
+    const end = historico.length - ventana;
     return historico.slice(start, end);
   }, [historico, periodo]);
 
-  // Ranking del día unificado (NS + Visitados)
+  // Ranking unificado: si hay ranking histórico (período > 1), usar ese; sino, ranking del día
   const rankingsDia = useMemo(() => {
+    // Si hay ranking del período seleccionado, usarlo directamente
+    if (rankingHistorico && rankingHistorico.length > 0) {
+      return rankingHistorico.map(r => ({
+        sc: r.sc,
+        ns_pond: Number(r.ns_pond) || 0,
+        rutas: Math.round(Number(r.rutas) || 0),
+        cargados: Number(r.cargados) || 0,
+        entregados: Number(r.entregados) || 0,
+        devueltos: Number(r.devueltos) || 0,
+        ambulancias: Number(r.ambulancias) || 0,
+        pct_visitados: r.pct_visitados != null ? Number(r.pct_visitados) : null,
+        no_visitados: Number(r.no_visitados) || 0,
+      }));
+    }
+    // Fallback: ranking del día (data.ranking_sc + visitados.por_sc)
     if (!data) return [];
     const ranking = data.ranking_sc || [];
     const visPorSc = data.visitados?.por_sc || [];
@@ -21839,7 +21877,7 @@ function PoolMeliKPIOperacion() {
       if (!m[v.sc].cargados) m[v.sc].cargados = Number(v.cargados) || 0;
     });
     return Object.values(m);
-  }, [data]);
+  }, [data, rankingHistorico]);
 
   // ═══ Procesamiento de casos PNR ══════════════════════════════════════════
   // Clasificación de estados:
@@ -22013,8 +22051,18 @@ function PoolMeliKPIOperacion() {
   // Extrae serie por campo
   const serie = (rows, campo) => rows.map(r => Number(r[campo]) || 0);
 
-  // Delta vs período anterior (mismo n)
+  // Delta vs período anterior
+  //  • En D-1: comparar último día (ayer) vs penúltimo (anteayer)
+  //  • En D-7/D-15/D-22: comparar avg del período actual vs avg del período anterior
   const computeDelta = (campo) => {
+    if (periodo === 1) {
+      // Necesitamos los 2 últimos puntos del histórico completo
+      if (!historico || historico.length < 2) return null;
+      const ult = Number(historico[historico.length - 1]?.[campo]);
+      const pen = Number(historico[historico.length - 2]?.[campo]);
+      if (isNaN(ult) || isNaN(pen)) return null;
+      return ult - pen;
+    }
     if (histPeriodo.length < 3 || histPrev.length < 3) return null;
     const avg = arr => arr.reduce((s, v) => s + v, 0) / arr.length;
     const curr = serie(histPeriodo, campo);
@@ -22025,7 +22073,7 @@ function PoolMeliKPIOperacion() {
   const labelPeriodo = periodo === 1 ? "ayer"
                      : periodo === 7 ? "sem. anterior"
                      : periodo === 15 ? "15D anteriores"
-                     : "mes anterior";
+                     : "período anterior";
 
   // (rankingsDia se calcula arriba como useMemo, antes de los returns)
 
@@ -22088,7 +22136,7 @@ function PoolMeliKPIOperacion() {
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <span style={{ fontSize: 10, color: S.TEXT_MUTED, fontWeight: 500, marginRight: 4 }}>Período:</span>
-          {[1, 7, 15, 30].map(n => (
+          {[1, 7, 15, 22].map(n => (
             <button key={n} onClick={() => setPeriodo(n)}
               style={{
                 fontSize: 11, fontWeight: 600, padding: "5px 12px",
