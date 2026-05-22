@@ -5007,7 +5007,7 @@ const SnapIngresoMaestro = ({ filas, loading }) => {
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
             <thead style={{ background: "#f8fafc", position: "sticky", top: 0 }}>
               <tr>
-                {["Fecha","ID Viaje","CECOS","Patente","Tipo Veh.","SDD","Tipo Ruta","Driver","Cargados","Entregados","Devueltos","KM Plan","Rango KM","%","Status","Obs"].map(h => (
+                {["Fecha","ID Viaje","CECOS","Patente","Tipo Veh.","SDD","Tipo Ruta","Driver","Cargados","Entregados","Devueltos","KM Plan","Rango KM","%","Status","Helper","Obs"].map(h => (
                   <th key={h} style={{ padding: "8px 6px", textAlign: "left", fontWeight: 700, color: "#666", borderBottom: "1px solid #e4e7ec", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.3 }}>{h}</th>
                 ))}
               </tr>
@@ -5034,6 +5034,15 @@ const SnapIngresoMaestro = ({ filas, loading }) => {
                     {fmtPctSnap(f.pct_visitado)}
                   </td>
                   <td style={{ padding: "6px" }}>{f.status_final}</td>
+                  <td style={{ padding: "6px", textAlign: "center" }}>
+                    {f.con_ayudante === "SI" ? (
+                      <span style={{ background: "#dcfce7", color: "#15803d", fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 10, letterSpacing: 0.3 }}>SÍ</span>
+                    ) : f.con_ayudante === "NO" ? (
+                      <span style={{ background: "#f1f5f9", color: "#64748b", fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 10, letterSpacing: 0.3 }}>NO</span>
+                    ) : (
+                      <span style={{ color: "#cbd5e1", fontSize: 11 }}>—</span>
+                    )}
+                  </td>
                   <td style={{ padding: "6px", fontSize: 10, color: "#888", maxWidth: 200 }}>{f.observaciones_auto || "—"}</td>
                 </tr>
               ))}
