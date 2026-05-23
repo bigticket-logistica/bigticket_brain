@@ -4802,6 +4802,8 @@ const VistaSnapshotSupervisores = ({ fecha, pais }) => {
         "TIPO DE RUTA":       f.tipo_ruta,
         "¿CON AYUDANTE?":     f.con_ayudante,
         "NOMBRE DE AYUDANTE": f.nombre_ayudante || "",
+        "% HELPER":           f.pct_helper != null ? f.pct_helper : "",
+        "ALERTAS HELPER":     (f.alertas_helper || []).join(" · "),
         "% VISITADO":         f.pct_visitado,
         "OBSERVACIONES":      f.observaciones_auto || "",
       }));
@@ -5007,7 +5009,7 @@ const SnapIngresoMaestro = ({ filas, loading }) => {
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
             <thead style={{ background: "#f8fafc", position: "sticky", top: 0 }}>
               <tr>
-                {["Fecha","ID Viaje","CECOS","Patente","Tipo Veh.","SDD","Tipo Ruta","Driver","Cargados","Entregados","Devueltos","KM Plan","Rango KM","%","Status","Obs"].map(h => (
+                {["Fecha","ID Viaje","CECOS","Patente","Tipo Veh.","SDD","Tipo Ruta","Driver","Helper","Nombre Helper","% Helper","Alertas","Cargados","Entregados","Devueltos","KM Plan","Rango KM","%","Status","Obs"].map(h => (
                   <th key={h} style={{ padding: "8px 6px", textAlign: "left", fontWeight: 700, color: "#666", borderBottom: "1px solid #e4e7ec", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.3 }}>{h}</th>
                 ))}
               </tr>
@@ -5024,6 +5026,50 @@ const SnapIngresoMaestro = ({ filas, loading }) => {
                     color: f.es_sdd === "SI" ? "#16a34a" : "#888" }}>{f.es_sdd}</td>
                   <td style={{ padding: "6px" }}>{f.tipo_ruta}</td>
                   <td style={{ padding: "6px" }}>{f.driver_name || "—"}</td>
+                  <td style={{ padding: "6px", fontWeight: 700,
+                    color: f.con_ayudante === "SI" ? "#16a34a" : "#888" }}>{f.con_ayudante || "—"}</td>
+                  <td style={{ padding: "6px", fontSize: 10, maxWidth: 280, color: "#1a1a1a" }}>
+                    {(() => {
+                      const nh = f.nombre_ayudante || "—";
+                      if (nh === "—") return "—";
+                      if (nh.startsWith("📵")) return <span style={{ color: "#475569", fontStyle: "italic" }}>{nh}</span>;
+                      if (nh.startsWith("⚪")) return <span style={{ color: "#94a3b8", fontStyle: "italic" }}>{nh}</span>;
+                      if (nh.includes("⚠️ Chofer")) return <span style={{ color: "#dc2626" }}>{nh}</span>;
+                      if (nh.includes("⚠️ Investigar")) return <span style={{ color: "#b45309" }}>{nh}</span>;
+                      return nh;
+                    })()}
+                  </td>
+                  <td style={{ padding: "6px", textAlign: "right", fontWeight: 700 }}>
+                    {f.con_ayudante === "SI" && f.pct_helper != null ? (
+                      <span style={{
+                        background: f.pct_helper >= 90 ? "#fee2e2" : f.pct_helper >= 60 ? "#fef3c7" : f.pct_helper > 0 ? "#dcfce7" : "#f1f5f9",
+                        color: f.pct_helper >= 90 ? "#dc2626" : f.pct_helper >= 60 ? "#b45309" : f.pct_helper > 0 ? "#15803d" : "#64748b",
+                        padding: "2px 8px", borderRadius: 6, fontSize: 10, display: "inline-block", minWidth: 36, textAlign: "center"
+                      }}>{f.pct_helper}%</span>
+                    ) : (
+                      <span style={{ color: "#cbd5e1" }}>—</span>
+                    )}
+                  </td>
+                  <td style={{ padding: "6px", fontSize: 10 }}>
+                    {f.alertas_helper && f.alertas_helper.length > 0 ? (
+                      <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                        {f.alertas_helper.map((a, idx) => {
+                          const isRojo = a.includes("Helper >90") || a.includes("Multi-ID");
+                          const isNaranja = a.includes("Investigar") || a.includes("3+ personas");
+                          const isGris = a.includes("invisible");
+                          return (
+                            <span key={idx} style={{
+                              background: isRojo ? "#fee2e2" : isNaranja ? "#fef3c7" : isGris ? "#f1f5f9" : "#e0e7ff",
+                              color: isRojo ? "#dc2626" : isNaranja ? "#b45309" : isGris ? "#475569" : "#4338ca",
+                              padding: "1px 6px", borderRadius: 4, fontSize: 9, fontWeight: 600, whiteSpace: "nowrap"
+                            }}>{a}</span>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <span style={{ color: "#cbd5e1" }}>—</span>
+                    )}
+                  </td>
                   <td style={{ padding: "6px", textAlign: "right" }}>{fmtNumSnap(f.cargados)}</td>
                   <td style={{ padding: "6px", textAlign: "right", color: "#16a34a", fontWeight: 600 }}>{fmtNumSnap(f.entregados)}</td>
                   <td style={{ padding: "6px", textAlign: "right", color: "#dc2626" }}>{fmtNumSnap(f.devueltos)}</td>
