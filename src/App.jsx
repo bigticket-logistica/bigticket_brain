@@ -17653,6 +17653,7 @@ function PoolMeliControlHelper() {
   const [periodo, setPeriodo] = useState(14);
   const [datos, setDatos] = useState([]);
   const [serie, setSerie] = useState([]);
+  const [maestroByRuta, setMaestroByRuta] = useState({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [drillDown, setDrillDown] = useState(null);
@@ -17672,8 +17673,18 @@ function PoolMeliControlHelper() {
           .from('vw_control_helper_diario').select('fecha,universo')
           .gte('fecha', desde.toISOString().split('T')[0]).lte('fecha', fecha);
         if (e2) throw e2;
+        // Query extra al Maestro Supervisores para enriquecer drilldowns
+        const { data: r3, error: e3 } = await sb
+          .from('vw_maestro_supervisores_auto')
+          .select('idviaje,nombre_ayudante,pct_helper,pct_por_persona,ids_personas,alertas_helper,servicio,con_ayudante,pct_visitado,observaciones_auto')
+          .eq('fecha', fecha);
+        if (e3) console.warn('Maestro no disponible:', e3.message);
         if (alive) {
           setDatos(r1 || []);
+          // Index por id_ruta para lookup O(1)
+          const idx = {};
+          (r3 || []).forEach(m => { if (m.idviaje) idx[m.idviaje] = m; });
+          setMaestroByRuta(idx);
           const porDia = {};
           (r2 || []).forEach(r => {
             if (!porDia[r.fecha]) porDia[r.fecha] = { U1: 0, U2: 0, U3: 0, OK: 0, total: 0 };
@@ -17731,18 +17742,31 @@ function PoolMeliControlHelper() {
   }, [datos]);
 
   const matrizU3 = useMemo(() => {
+    // U3 ahora tiene 4 sub-categorías reales según helper_cert_estado y match_score
     const u3 = datos.filter(r => r.universo === 'U3');
     const scs = [...new Set(u3.map(r => r.sc))].sort();
     const mat = {};
-    scs.forEach(sc => mat[sc] = { fantasma: [], baja: [], sup: [], total: 0 });
+    scs.forEach(sc => mat[sc] = { sinBt: [], btPend: [], meliInact: [], matchDudoso: [], total: 0 });
     u3.forEach(r => {
       if (!mat[r.sc]) return;
-      if (r.clasificacion === 'FANTASMA') mat[r.sc].fantasma.push(r);
-      else if (r.hay_suplantacion) mat[r.sc].sup.push(r);
-      else if (r.pct_participacion_helper !== null && r.pct_participacion_helper < 75) mat[r.sc].baja.push(r);
+      if (r.helper_cert_estado === 'SIN_BT') mat[r.sc].sinBt.push(r);
+      else if (r.helper_cert_estado === 'BT_PENDIENTE') mat[r.sc].btPend.push(r);
+      else if (r.helper_cert_estado === 'MELI_INACTIVE') mat[r.sc].meliInact.push(r);
+      else if (r.helper_match_score !== null && r.helper_match_score < 0.7) mat[r.sc].matchDudoso.push(r);
       mat[r.sc].total++;
     });
-    return { scs, mat };
+    const totals = {
+      sinBt: u3.filter(r => r.helper_cert_estado === 'SIN_BT').length,
+      btPend: u3.filter(r => r.helper_cert_estado === 'BT_PENDIENTE').length,
+      meliInact: u3.filter(r => r.helper_cert_estado === 'MELI_INACTIVE').length,
+      matchDudoso: u3.filter(r =>
+        r.helper_match_score !== null && r.helper_match_score < 0.7
+        && r.helper_cert_estado !== 'SIN_BT'
+        && r.helper_cert_estado !== 'BT_PENDIENTE'
+        && r.helper_cert_estado !== 'MELI_INACTIVE'
+      ).length,
+    };
+    return { scs, mat, totals };
   }, [datos]);
 
   const UCFG = [
@@ -17864,8 +17888,8 @@ function PoolMeliControlHelper() {
       <div style={{ padding: '16px 24px' }}>
         {universo === 0 && <PanelU0 conteos={conteos} setUniverso={setUniverso} getSerieVals={getSerieVals} />}
         {universo === 1 && <PanelU1 matriz={matrizU1} conteos={conteos} datos={datos} drillDown={drillDown} setDrillDown={setDrillDown} fecha={fecha} getSerieVals={getSerieVals} />}
-        {universo === 2 && <PanelU2 matriz={matrizU2} conteos={conteos} drillDown={drillDown} setDrillDown={setDrillDown} fecha={fecha} getSerieVals={getSerieVals} />}
-        {universo === 3 && <PanelU3 matriz={matrizU3} conteos={conteos} drillDown={drillDown} setDrillDown={setDrillDown} fecha={fecha} getSerieVals={getSerieVals} />}
+        {universo === 2 && <PanelU2 matriz={matrizU2} conteos={conteos} drillDown={drillDown} setDrillDown={setDrillDown} fecha={fecha} getSerieVals={getSerieVals} maestroByRuta={maestroByRuta} />}
+        {universo === 3 && <PanelU3 matriz={matrizU3} conteos={conteos} drillDown={drillDown} setDrillDown={setDrillDown} fecha={fecha} getSerieVals={getSerieVals} maestroByRuta={maestroByRuta} />}
       </div>
     </div>
   );
@@ -18018,7 +18042,7 @@ function PanelU1({ matriz, conteos, datos, drillDown, setDrillDown, fecha, getSe
 // ════════════════════════════════════════════════════════════════════════════
 // PANEL U2 · CERTIFICACIÓN
 // ════════════════════════════════════════════════════════════════════════════
-function PanelU2({ matriz, conteos, drillDown, setDrillDown, fecha, getSerieVals }) {
+function PanelU2({ matriz, conteos, drillDown, setDrillDown, fecha, getSerieVals, maestroByRuta }) {
   const t = matriz.totals;
 
   return (
@@ -18086,7 +18110,7 @@ function PanelU2({ matriz, conteos, drillDown, setDrillDown, fecha, getSerieVals
         <HmLegend note="Clic en celda para ver detalle del helper" hint="Score < 0.7 → match dudoso · revisar nombre raw" />
       </div>
 
-      {drillDown && drillDown.uid === 2 && <DrillDown2 dd={drillDown} fecha={fecha} onClose={() => setDrillDown(null)} />}
+      {drillDown && drillDown.uid === 2 && <DrillDown2 dd={drillDown} fecha={fecha} onClose={() => setDrillDown(null)} maestroByRuta={maestroByRuta} />}
       {!drillDown && matriz.scs.length > 0 && <Hint text="Haz clic en cualquier celda coloreada para ver los helpers" />}
     </div>
   );
@@ -18095,74 +18119,84 @@ function PanelU2({ matriz, conteos, drillDown, setDrillDown, fecha, getSerieVals
 // ════════════════════════════════════════════════════════════════════════════
 // PANEL U3 · PROCESO
 // ════════════════════════════════════════════════════════════════════════════
-function PanelU3({ matriz, conteos, drillDown, setDrillDown, fecha, getSerieVals }) {
-  const totalF = matriz.scs.reduce((s, sc) => s + matriz.mat[sc].fantasma.length, 0);
-  const totalB = matriz.scs.reduce((s, sc) => s + matriz.mat[sc].baja.length, 0);
-  const totalS = matriz.scs.reduce((s, sc) => s + matriz.mat[sc].sup.length, 0);
-  const condCritica = totalF >= totalB && totalF >= totalS ? 'Fantasma' : totalB >= totalS ? '<75% partic.' : 'Suplantación';
-  const cantCritica = Math.max(totalF, totalB, totalS);
+function PanelU3({ matriz, conteos, drillDown, setDrillDown, fecha, getSerieVals, maestroByRuta }) {
+  const t = matriz.totals;
+  const scPrincipal = matriz.scs.length > 0
+    ? [...matriz.scs].sort((a, b) => matriz.mat[b].total - matriz.mat[a].total)[0]
+    : '—';
 
   return (
     <div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 14 }}>
-        <KCard l="SVC con rechazadas" v={matriz.scs.length} s="operando hoy" a="universo" sk={getSerieVals('U3')} accent="#eab308" />
-        <KCard l="Rutas rechazadas" v={conteos.U3} s={`de ${conteos.total} rutas`} a="volumen" sk={getSerieVals('U3')} accent="#eab308" />
-        <KCard l="% rechazadas" v={`${pct(conteos.U3, conteos.total)}%`} s="del total" a="magnitud" sk={getSerieVals('U3')} accent="#eab308" />
-        <KCard l="Condición crítica" v={condCritica} s={`${cantCritica} rutas`} a="alerta" sk={getSerieVals('U3')} accent="#eab308" />
+        <KCard l="🟡 Sin validar BT" v={t.sinBt} s="MELI activo · falta cargar BT" a="acción RH" sk={getSerieVals('U3')} accent="#92400e" />
+        <KCard l="🟠 BT pendiente" v={t.btPend} s="MELI activo · BT en revisión" a="esperar BT" sk={getSerieVals('U3')} accent="#9a3412" />
+        <KCard l="⚪ MELI inactivo" v={t.meliInact} s="no activo en padrón" a="verificar" sk={getSerieVals('U3')} accent="#374151" />
+        <KCard l="🔍 Match dudoso" v={t.matchDudoso} s="score < 0.7" a="revisar nombre" sk={getSerieVals('U3')} accent="#a16207" />
       </div>
 
-      <SLabel text="Mapa de calor · Proceso" badge="QR/Móvil pendiente scrapeo" badgeColor="yellow" fecha={fecha} />
+      <div style={{
+        background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 12,
+        padding: '12px 16px', marginBottom: 14, fontSize: 12, color: '#78350f',
+      }}>
+        <div style={{ fontWeight: 700, marginBottom: 4, fontSize: 13 }}>
+          🟡 {conteos.U3} warning{conteos.U3 !== 1 ? 's' : ''} · revisar pendientes operativos
+        </div>
+        <div style={{ lineHeight: 1.5 }}>
+          Estos helpers están operando pero no cumplen los 3 requisitos para "OK" (MELI activo + BT aprobado + score ≥ 0.7).
+          {scPrincipal !== '—' && ` SC con más casos: ${scPrincipal}.`}
+        </div>
+      </div>
+
+      <SLabel text="Warnings por SC · estado de cada helper" badge="acción operativa" badgeColor="yellow" fecha={fecha} />
       <div style={{ background: CH_CARD, borderRadius: 12, border: `0.5px solid ${CH_BORDER}`, overflow: 'hidden' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead>
             <tr>
               <ThHm align="left">SVC</ThHm>
-              <ThHm>Sin QR</ThHm>
-              <ThHm>Móvil inactivo</ThHm>
-              <ThHm>&lt;75% partic.</ThHm>
-              <ThHm>Fantasma</ThHm>
-              <ThHm>Suplantación</ThHm>
-              <ThHm>Total rechazadas</ThHm>
+              <ThHm>🟡 Sin BT</ThHm>
+              <ThHm>🟠 BT pend.</ThHm>
+              <ThHm>⚪ MELI inact.</ThHm>
+              <ThHm>🔍 Match dudoso</ThHm>
+              <ThHm>Total</ThHm>
             </tr>
           </thead>
           <tbody>
             {matriz.scs.length === 0 ? (
-              <tr><td colSpan={7} style={{ padding: 24, textAlign: 'center', color: CH_LIGHT, fontSize: 12 }}>Sin rutas U3 para esta fecha</td></tr>
+              <tr><td colSpan={6} style={{ padding: 24, textAlign: 'center', color: CH_LIGHT, fontSize: 12 }}>Sin warnings para esta fecha</td></tr>
             ) : <>
               {matriz.scs.map(sc => {
                 const m = matriz.mat[sc];
+                const selSinBt = drillDown?.uid === 3 && drillDown?.svc === sc && drillDown?.col === 'sinBt';
+                const selBtPend = drillDown?.uid === 3 && drillDown?.svc === sc && drillDown?.col === 'btPend';
+                const selMeliInact = drillDown?.uid === 3 && drillDown?.svc === sc && drillDown?.col === 'meliInact';
+                const selMatch = drillDown?.uid === 3 && drillDown?.svc === sc && drillDown?.col === 'matchDudoso';
                 return (
                   <tr key={sc}>
                     <TdSn>{sc}</TdSn>
-                    <TdNa>—</TdNa>
-                    <TdNa>—</TdNa>
-                    <TdHeat n={m.baja.length} selected={drillDown?.svc === sc && drillDown?.col === 'p75'}
-                      onClick={() => m.baja.length > 0 && setDrillDown({ uid: 3, svc: sc, col: 'p75', label: '<75% partic.', n: m.baja.length, rutas: m.baja })} />
-                    <TdHeat n={m.fantasma.length} selected={drillDown?.svc === sc && drillDown?.col === 'fant'}
-                      onClick={() => m.fantasma.length > 0 && setDrillDown({ uid: 3, svc: sc, col: 'fant', label: 'Fantasma', n: m.fantasma.length, rutas: m.fantasma })} />
-                    <TdHeat n={m.sup.length} selected={drillDown?.svc === sc && drillDown?.col === 'sup'}
-                      onClick={() => m.sup.length > 0 && setDrillDown({ uid: 3, svc: sc, col: 'sup', label: 'Suplantación', n: m.sup.length, rutas: m.sup })} />
+                    <TdHeat n={m.sinBt.length} selected={selSinBt} onClick={() => m.sinBt.length > 0 && setDrillDown({ uid: 3, svc: sc, col: 'sinBt', label: 'Sin BT', n: m.sinBt.length, rutas: m.sinBt })} />
+                    <TdHeat n={m.btPend.length} selected={selBtPend} onClick={() => m.btPend.length > 0 && setDrillDown({ uid: 3, svc: sc, col: 'btPend', label: 'BT pendiente', n: m.btPend.length, rutas: m.btPend })} />
+                    <TdHeat n={m.meliInact.length} selected={selMeliInact} onClick={() => m.meliInact.length > 0 && setDrillDown({ uid: 3, svc: sc, col: 'meliInact', label: 'MELI inactivo', n: m.meliInact.length, rutas: m.meliInact })} />
+                    <TdHeat n={m.matchDudoso.length} selected={selMatch} onClick={() => m.matchDudoso.length > 0 && setDrillDown({ uid: 3, svc: sc, col: 'matchDudoso', label: 'Match dudoso', n: m.matchDudoso.length, rutas: m.matchDudoso })} />
                     <TdTc>{m.total}</TdTc>
                   </tr>
                 );
               })}
               <tr style={{ background: '#f8fafc', borderTop: `1px solid ${CH_BORDER}` }}>
                 <TdSn total>Total</TdSn>
-                <TdTotal>—</TdTotal>
-                <TdTotal>—</TdTotal>
-                <TdTotal>{totalB}</TdTotal>
-                <TdTotal>{totalF}</TdTotal>
-                <TdTotal>{totalS}</TdTotal>
+                <TdTotal>{t.sinBt}</TdTotal>
+                <TdTotal>{t.btPend}</TdTotal>
+                <TdTotal>{t.meliInact}</TdTotal>
+                <TdTotal>{t.matchDudoso}</TdTotal>
                 <TdTotal strong>{conteos.U3}</TdTotal>
               </tr>
             </>}
           </tbody>
         </table>
-        <HmLegend note="Sin QR y Móvil inactivo requieren scrapeo adicional del portal MELI" hint="Clic en celda → ver rutas" />
+        <HmLegend note="Sin BT y BT pendiente requieren acción de RH · MELI inactivo verificar con coordinador" hint="Clic en celda → ver helpers con % por persona y alertas del Maestro" />
       </div>
 
-      {drillDown && drillDown.uid === 3 && <DrillDown3 dd={drillDown} fecha={fecha} onClose={() => setDrillDown(null)} />}
-      {!drillDown && matriz.scs.length > 0 && <Hint text="Haz clic en cualquier celda coloreada para ver las rutas" />}
+      {drillDown && drillDown.uid === 3 && <DrillDown3 dd={drillDown} fecha={fecha} onClose={() => setDrillDown(null)} maestroByRuta={maestroByRuta} />}
+      {!drillDown && matriz.scs.length > 0 && <Hint text="Haz clic en cualquier celda coloreada para ver los helpers" />}
     </div>
   );
 }
@@ -18198,7 +18232,7 @@ function DrillDown1({ dd, fecha, onClose }) {
   );
 }
 
-function DrillDown2({ dd, fecha, onClose }) {
+function DrillDown2({ dd, fecha, onClose, maestroByRuta = {} }) {
   const isBtRech = dd.col === 'btRech';
   const titulo = isBtRech ? 'BT Rechazado' : 'No certificado';
   const icon = isBtRech ? 'ti-shield-x' : 'ti-id-badge';
@@ -18207,17 +18241,23 @@ function DrillDown2({ dd, fecha, onClose }) {
     : '🔴 No identificado · investigar si es helper fantasma o alias';
 
   const exportar = () => exportCH(
-    ["Helper MELI", "SC", "Ruta", "Nombre padrón", "CURP", "Estado BT", "Score", "Acción"],
-    dd.rutas.map(r => [
-      r.helpers_nombres || '—',
-      r.sc,
-      r.id_ruta,
-      r.helper_name_padron || '—',
-      r.helper_curp || '—',
-      r.helper_respuesta_bt || '—',
-      r.helper_match_score != null ? r.helper_match_score : '—',
-      isBtRech ? 'Contactar SC inmediato' : 'Verificar identidad',
-    ]),
+    ["Helper MELI", "SC", "Ruta", "Nombre padrón", "CURP", "% Helper", "% por persona", "Alertas Maestro", "Estado BT", "Score", "Acción"],
+    dd.rutas.map(r => {
+      const m = maestroByRuta[r.id_ruta] || {};
+      return [
+        r.helpers_nombres || '—',
+        r.sc,
+        r.id_ruta,
+        r.helper_name_padron || '—',
+        r.helper_curp || '—',
+        m.pct_helper != null ? `${m.pct_helper}%` : '—',
+        m.pct_por_persona || '—',
+        (m.alertas_helper || []).join(' · '),
+        r.helper_respuesta_bt || '—',
+        r.helper_match_score != null ? r.helper_match_score : '—',
+        isBtRech ? 'Contactar SC inmediato' : 'Verificar identidad',
+      ];
+    }),
     `BT_U2_${dd.col}_${dd.svc}.csv`
   );
 
@@ -18230,6 +18270,9 @@ function DrillDown2({ dd, fecha, onClose }) {
           <ThDt>Ruta</ThDt>
           {isBtRech && <ThDt>Match padrón</ThDt>}
           {isBtRech && <ThDt>CURP</ThDt>}
+          <ThDt>% Helper</ThDt>
+          <ThDt>% por persona</ThDt>
+          <ThDt>Alertas Maestro</ThDt>
           <ThDt>Score</ThDt>
           <ThDt>Estado</ThDt>
           <ThDt>Acción</ThDt>
@@ -18237,6 +18280,9 @@ function DrillDown2({ dd, fecha, onClose }) {
         <tbody>{dd.rutas.map((r, i) => {
           const score = r.helper_match_score;
           const scoreLow = score != null && score < 0.7;
+          const m = maestroByRuta[r.id_ruta] || {};
+          const pctHelper = m.pct_helper;
+          const pctHigh = pctHelper != null && pctHelper > 90;
           return (
             <tr key={i} style={{ borderBottom: `0.5px solid #f4f5f7` }}>
               <TdDt bold>{r.helpers_nombres || '—'}</TdDt>
@@ -18244,6 +18290,22 @@ function DrillDown2({ dd, fecha, onClose }) {
               <TdDt mono>{r.id_ruta}</TdDt>
               {isBtRech && <TdDt>{r.helper_name_padron || '—'}</TdDt>}
               {isBtRech && <TdDt mono>{r.helper_curp || '—'}</TdDt>}
+              <TdDt center>
+                {pctHelper != null ? (
+                  <span style={{
+                    fontFamily: 'monospace', fontSize: 11, fontWeight: 700,
+                    color: pctHigh ? '#dc2626' : '#1a1a1a',
+                  }}>{pctHelper}%</span>
+                ) : <span style={{ color: CH_LIGHT }}>—</span>}
+              </TdDt>
+              <TdDt>
+                {m.pct_por_persona ? (
+                  <span style={{ fontFamily: 'monospace', fontSize: 10, color: CH_MUTED }}>{m.pct_por_persona}</span>
+                ) : <span style={{ color: CH_LIGHT }}>—</span>}
+              </TdDt>
+              <TdDt>
+                <AlertasInline alertas={m.alertas_helper} />
+              </TdDt>
               <TdDt center>
                 {score != null ? (
                   <span style={{
@@ -18264,32 +18326,137 @@ function DrillDown2({ dd, fecha, onClose }) {
   );
 }
 
-function DrillDown3({ dd, fecha, onClose }) {
-  const accion = dd.col === 'fant' ? 'Validar con supervisor de SC' : dd.col === 'sup' ? 'Investigar suplantación con MELI' : 'Revisar baja participación del helper';
+function DrillDown3({ dd, fecha, onClose, maestroByRuta = {} }) {
+  // Configuración por subcategoría
+  const config = {
+    sinBt: {
+      pill: 'yellow', pillTxt: 'SIN BT',
+      accion: 'RH cargar en BBDD BT',
+      icon: 'ti-file-x',
+    },
+    btPend: {
+      pill: 'orange', pillTxt: 'BT PENDIENTE',
+      accion: 'Esperar respuesta de BT',
+      icon: 'ti-clock',
+    },
+    meliInact: {
+      pill: 'gray', pillTxt: 'MELI INACTIVE',
+      accion: 'Verificar status con coordinador',
+      icon: 'ti-user-off',
+    },
+    matchDudoso: {
+      pill: 'yellow', pillTxt: 'SCORE BAJO',
+      accion: 'Verificar identidad · revisar nombre raw',
+      icon: 'ti-search',
+    },
+  };
+  const cfg = config[dd.col] || config.sinBt;
+
   const exportar = () => exportCH(
-    ["Ruta", "Conductor", "Helper", "Condición", "% partic.", "Acción"],
-    dd.rutas.map(r => [r.id_ruta, r.chofer_nombre || '', r.helpers_nombres || '—', dd.label, r.pct_participacion_helper !== null ? `${r.pct_participacion_helper}%` : '—', accion]),
-    `BT_U3_${dd.svc}_${dd.col}.csv`
+    ["Helper MELI", "SC", "Ruta", "Match padrón", "CURP", "Status MELI", "% Helper", "% por persona", "Alertas Maestro", "BT", "Score", "Acción"],
+    dd.rutas.map(r => {
+      const m = maestroByRuta[r.id_ruta] || {};
+      return [
+        r.helpers_nombres || '—',
+        r.sc,
+        r.id_ruta,
+        r.helper_name_padron || '—',
+        r.helper_curp || '—',
+        r.helper_status_padron || '—',
+        m.pct_helper != null ? `${m.pct_helper}%` : '—',
+        m.pct_por_persona || '—',
+        (m.alertas_helper || []).join(' · '),
+        r.helper_respuesta_bt || '—',
+        r.helper_match_score != null ? r.helper_match_score : '—',
+        cfg.accion,
+      ];
+    }),
+    `BT_U3_${dd.col}_${dd.svc}.csv`
   );
+
   return (
-    <DrillWrap dd={dd} fecha={fecha} onClose={onClose} icon="ti-route" onExport={exportar}>
+    <DrillWrap dd={dd} fecha={fecha} onClose={onClose} icon={cfg.icon} onExport={exportar}>
       <table style={{ width: '100%', borderCollapse: 'collapse' }}>
         <thead><tr>
-          <ThDt>Ruta ID</ThDt><ThDt>Conductor</ThDt><ThDt>Helper</ThDt>
-          <ThDt>Condición</ThDt><ThDt>% partic.</ThDt><ThDt>Acción</ThDt>
+          <ThDt>Nombre MELI (raw)</ThDt>
+          <ThDt>SC</ThDt>
+          <ThDt>Ruta</ThDt>
+          <ThDt>Match padrón</ThDt>
+          {dd.col !== 'sinBt' && <ThDt>CURP</ThDt>}
+          {dd.col === 'meliInact' && <ThDt>Status MELI</ThDt>}
+          <ThDt>% Helper</ThDt>
+          <ThDt>% por persona</ThDt>
+          <ThDt>Alertas Maestro</ThDt>
+          <ThDt>Score</ThDt>
+          <ThDt>Estado</ThDt>
+          <ThDt>Acción</ThDt>
         </tr></thead>
-        <tbody>{dd.rutas.map((r, i) => (
-          <tr key={i} style={{ borderBottom: `0.5px solid #f4f5f7` }}>
-            <TdDt mono>{r.id_ruta}</TdDt>
-            <TdDt bold>{r.chofer_nombre || '—'}</TdDt>
-            <TdDt>{r.helpers_nombres || '—'}</TdDt>
-            <TdDt><Pill type="yellow">{dd.label}</Pill></TdDt>
-            <TdDt center muted>{r.pct_participacion_helper !== null ? `${r.pct_participacion_helper}%` : '—'}</TdDt>
-            <TdDt action>{accion}</TdDt>
-          </tr>
-        ))}</tbody>
+        <tbody>{dd.rutas.map((r, i) => {
+          const score = r.helper_match_score;
+          const scoreLow = score != null && score < 0.7;
+          const m = maestroByRuta[r.id_ruta] || {};
+          const pctHelper = m.pct_helper;
+          const pctHigh = pctHelper != null && pctHelper > 90;
+          return (
+            <tr key={i} style={{ borderBottom: `0.5px solid #f4f5f7` }}>
+              <TdDt bold>{r.helpers_nombres || '—'}</TdDt>
+              <TdDt mono>{r.sc}</TdDt>
+              <TdDt mono>{r.id_ruta}</TdDt>
+              <TdDt>{r.helper_name_padron || '—'}</TdDt>
+              {dd.col !== 'sinBt' && <TdDt mono>{r.helper_curp || '—'}</TdDt>}
+              {dd.col === 'meliInact' && <TdDt>{r.helper_status_padron || '—'}</TdDt>}
+              <TdDt center>
+                {pctHelper != null ? (
+                  <span style={{
+                    fontFamily: 'monospace', fontSize: 11, fontWeight: 700,
+                    color: pctHigh ? '#dc2626' : '#1a1a1a',
+                  }}>{pctHelper}%</span>
+                ) : <span style={{ color: CH_LIGHT }}>—</span>}
+              </TdDt>
+              <TdDt>
+                {m.pct_por_persona ? (
+                  <span style={{ fontFamily: 'monospace', fontSize: 10, color: CH_MUTED }}>{m.pct_por_persona}</span>
+                ) : <span style={{ color: CH_LIGHT }}>—</span>}
+              </TdDt>
+              <TdDt>
+                <AlertasInline alertas={m.alertas_helper} />
+              </TdDt>
+              <TdDt center>
+                {score != null ? (
+                  <span style={{
+                    fontFamily: 'monospace', fontSize: 11, fontWeight: 600,
+                    color: scoreLow ? '#9a3412' : '#065f46',
+                  }}>{score.toFixed(3)}</span>
+                ) : <span style={{ color: CH_LIGHT }}>—</span>}
+              </TdDt>
+              <TdDt><Pill type={cfg.pill}>{cfg.pillTxt}</Pill></TdDt>
+              <TdDt action>{cfg.accion}</TdDt>
+            </tr>
+          );
+        })}</tbody>
       </table>
     </DrillWrap>
+  );
+}
+
+// Componente helper: pills inline con paleta del Maestro Supervisores
+function AlertasInline({ alertas }) {
+  if (!alertas || alertas.length === 0) return <span style={{ color: CH_LIGHT }}>—</span>;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+      {alertas.map((a, idx) => {
+        const isRojo = a.includes('Helper >90') || a.includes('Multi-ID');
+        const isNaranja = a.includes('Investigar') || a.includes('3+ personas');
+        const isGris = a.includes('invisible');
+        return (
+          <span key={idx} style={{
+            background: isRojo ? '#fee2e2' : isNaranja ? '#fef3c7' : isGris ? '#f1f5f9' : '#e0e7ff',
+            color: isRojo ? '#dc2626' : isNaranja ? '#b45309' : isGris ? '#475569' : '#4338ca',
+            padding: '1px 6px', borderRadius: 4, fontSize: 9, fontWeight: 600, whiteSpace: 'nowrap',
+          }}>{a}</span>
+        );
+      })}
+    </div>
   );
 }
 
