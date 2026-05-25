@@ -4804,6 +4804,9 @@ const VistaSnapshotSupervisores = ({ fecha, pais }) => {
         "NOMBRE DE AYUDANTE": f.nombre_ayudante || "",
         "% HELPER":           f.pct_helper != null ? f.pct_helper : "",
         "ALERTAS HELPER":     (f.alertas_helper || []).join(" · "),
+        "NOMBRES ENTREGARON": f.nombres_entregados || "",
+        "% POR PERSONA":      f.pcts_entregados || "",
+        "IDs POR PERSONA":    f.ids_entregados || "",
         "% VISITADO":         f.pct_visitado,
         "OBSERVACIONES":      f.observaciones_auto || "",
       }));
