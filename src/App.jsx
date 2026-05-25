@@ -7049,6 +7049,7 @@ function DashboardInicial() {
   const [docs, setDocs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [snapshotUsado, setSnapshotUsado] = useState(null);
+  const [snapshotDetalle, setSnapshotDetalle] = useState(null);
   const [busqueda, setBusqueda] = useState("");
   const [filtroEstado, setFiltroEstado] = useState("todos"); // todos | verde | amarillo | rojo
 
@@ -7057,7 +7058,7 @@ function DashboardInicial() {
     (async () => {
       setLoading(true);
       try {
-        // 1. Snapshot más reciente
+        // 1. Snapshot más reciente de empleados_docs (la fuente de los DOC_CONTRATISTA)
         const { data: snap } = await sb.from("certronic_empleados_docs")
           .select("fecha_snapshot")
           .order("fecha_snapshot", { ascending: false })
@@ -7087,17 +7088,29 @@ function DashboardInicial() {
           from += limite;
         }
 
-        // 3. Cargar mapping token → contratista (de empleados_detalle)
-        const { data: detalles } = await sb.from("certronic_empleados_detalle")
-          .select("token_certronic, contratista, planta")
-          .eq("fecha_snapshot", fechaSnap);
+        // 3. 🆕 Buscar el snapshot MÁS RECIENTE de empleados_detalle INDEPENDIENTEMENTE
+        //    No asumir que tiene la misma fecha que empleados_docs.
+        //    El scraper de detalle puede fallar/atrasarse mientras docs sí se actualiza.
+        const { data: snapDet } = await sb.from("certronic_empleados_detalle")
+          .select("fecha_snapshot")
+          .order("fecha_snapshot", { ascending: false })
+          .limit(1);
+        const fechaSnapDet = snapDet && snapDet[0] ? snapDet[0].fecha_snapshot : null;
+        if (!cancel) setSnapshotDetalle(fechaSnapDet);
+
+        // Cargar mapping token → contratista (de empleados_detalle, con su snapshot independiente)
         const tokenAContratista = new Map();
         const tokenAPlanta = new Map();
-        for (const d of detalles || []) {
-          if (d.contratista) tokenAContratista.set(d.token_certronic, d.contratista);
-          if (d.planta) tokenAPlanta.set(d.token_certronic, d.planta);
+        if (fechaSnapDet) {
+          const { data: detalles } = await sb.from("certronic_empleados_detalle")
+            .select("token_certronic, contratista, planta")
+            .eq("fecha_snapshot", fechaSnapDet);
+          for (const d of detalles || []) {
+            if (d.contratista) tokenAContratista.set(d.token_certronic, d.contratista);
+            if (d.planta) tokenAPlanta.set(d.token_certronic, d.planta);
+          }
         }
-        
+
         if (!cancel) setDocs(resultado.map(r => ({
           ...r,
           contratista: tokenAContratista.get(r.token_certronic) || "(sin contratista)",
@@ -7226,6 +7239,16 @@ function DashboardInicial() {
             {contratistas.length} contratistas · Snapshot: {snapshotUsado || "—"} · 
             {todosDocsUnicos.length} tipos de documento detectados
           </div>
+          {/* 🆕 Warning si los dos snapshots están desincronizados */}
+          {snapshotDetalle && snapshotUsado && snapshotDetalle !== snapshotUsado && (
+            <div style={{
+              marginTop: 6, padding: "6px 10px", fontSize: 10.5,
+              background: "#fef3c7", border: "1px solid #fde68a", borderRadius: 4,
+              color: "#92400e", display: "inline-block",
+            }}>
+              ⚠️ <strong>Desincronización detectada:</strong> documentos del <strong>{snapshotUsado}</strong> pero mapping de contratistas del <strong>{snapshotDetalle}</strong>. Algunos contratistas nuevos pueden aparecer como "(sin contratista)" hasta que el próximo scraper completo se ejecute.
+            </div>
+          )}
         </div>
         <BotonDescargarExcel onClick={() => {
           // Hoja 1: matriz contratista x doc
