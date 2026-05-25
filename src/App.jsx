@@ -4803,10 +4803,9 @@ const VistaSnapshotSupervisores = ({ fecha, pais }) => {
         "¿CON AYUDANTE?":     f.con_ayudante,
         "NOMBRE DE AYUDANTE": f.nombre_ayudante || "",
         "% HELPER":           f.pct_helper != null ? f.pct_helper : "",
+        "% POR PERSONA":      f.pct_por_persona || "",
+        "IDs PERSONAS":       f.ids_personas || "",
         "ALERTAS HELPER":     (f.alertas_helper || []).join(" · "),
-        "NOMBRES ENTREGARON": f.nombres_entregados || "",
-        "% POR PERSONA":      f.pcts_entregados || "",
-        "IDs POR PERSONA":    f.ids_entregados || "",
         "% VISITADO":         f.pct_visitado,
         "OBSERVACIONES":      f.observaciones_auto || "",
       }));
@@ -5012,7 +5011,7 @@ const SnapIngresoMaestro = ({ filas, loading }) => {
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
             <thead style={{ background: "#f8fafc", position: "sticky", top: 0 }}>
               <tr>
-                {["Fecha","ID Viaje","CECOS","Patente","Tipo Veh.","SDD","Tipo Ruta","Driver","Helper","Nombre Helper","% Helper","Alertas","Cargados","Entregados","Devueltos","KM Plan","Rango KM","%","Status","Obs"].map(h => (
+                {["Fecha","ID Viaje","CECOS","Patente","Tipo Veh.","SDD","Tipo Ruta","Driver","Helper","Nombre Helper","% Helper","% por Persona","IDs Personas","Alertas","Cargados","Entregados","Devueltos","KM Plan","Rango KM","%","Status","Obs"].map(h => (
                   <th key={h} style={{ padding: "8px 6px", textAlign: "left", fontWeight: 700, color: "#666", borderBottom: "1px solid #e4e7ec", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.3 }}>{h}</th>
                 ))}
               </tr>
@@ -5052,6 +5051,12 @@ const SnapIngresoMaestro = ({ filas, loading }) => {
                     ) : (
                       <span style={{ color: "#cbd5e1" }}>—</span>
                     )}
+                  </td>
+                  <td style={{ padding: "6px", fontSize: 10, fontFamily: "monospace", color: "#1a1a1a", whiteSpace: "nowrap" }}>
+                    {f.pct_por_persona ? f.pct_por_persona : <span style={{ color: "#cbd5e1" }}>—</span>}
+                  </td>
+                  <td style={{ padding: "6px", fontSize: 9, fontFamily: "monospace", color: "#64748b", maxWidth: 200, wordBreak: "break-all" }}>
+                    {f.ids_personas ? f.ids_personas : <span style={{ color: "#cbd5e1" }}>—</span>}
                   </td>
                   <td style={{ padding: "6px", fontSize: 10 }}>
                     {f.alertas_helper && f.alertas_helper.length > 0 ? (
