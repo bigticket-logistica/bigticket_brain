@@ -17675,17 +17675,20 @@ function PoolMeliControlHelper() {
         dAyer.setDate(dAyer.getDate() - 1);
         const fechaAyer = dAyer.toISOString().split('T')[0];
         const { data: r2, error: e2 } = await sb
-          .from('vw_control_helper_diario').select('fecha,universo')
+          .from('vw_control_helper_diario').select('fecha,universo,id_ruta,es_chofer')
           .eq('fecha', fechaAyer);
         if (e2) throw e2;
         if (alive) {
           setDatos(r1 || []);
-          // Conteos día anterior para comparación
+          // Conteos día anterior · solo helpers (es_chofer=false) y rutas únicas para total
           const ayer = { U1: 0, U2: 0, U3: 0, OK: 0, total: 0 };
+          const rutasAyer = new Set();
           (r2 || []).forEach(r => {
-            ayer.total++;
+            rutasAyer.add(r.id_ruta);
+            if (r.es_chofer) return; // choferes no entran en universo
             if (r.universo) ayer[r.universo] = (ayer[r.universo] || 0) + 1;
           });
+          ayer.total = rutasAyer.size;
           setSerie([{ fecha: fechaAyer, ...ayer }]);
         }
       } catch (e) {
@@ -17699,17 +17702,18 @@ function PoolMeliControlHelper() {
 
   const conteos = useMemo(() => {
     const c = {
-      total: datos.length,              // helpers totales (= rutas en single-helper · más en multi)
-      rutasDistintas: 0,                // rutas únicas (más fiel al concepto de "rutas con helper")
-      rutasMulti: 0,                    // rutas que tienen 2+ helpers
-      helpersExtras: 0,                 // helpers adicionales (rutasMulti × cant - rutasMulti)
+      total: 0,                          // ⭐ rutas únicas
+      personasTotal: datos.length,       // todas las filas (chofer + helpers)
+      choferesEscaneando: 0,             // filas con es_chofer = true
+      helpersOperando: 0,                // filas con es_chofer = false
+      rutasMulti: 0,
       U1: 0, U2: 0, U3: 0, OK: 0,
-      // Match score
-      scoreExcelente: 0,  // >= 0.9
-      scoreBueno: 0,      // 0.7 - 0.9
-      scoreMedio: 0,      // 0.5 - 0.7
-      sinPadron: 0,       // NO_EN_PADRON
-      // BT
+      // Match score (solo helpers)
+      scoreExcelente: 0,
+      scoreBueno: 0,
+      scoreMedio: 0,
+      sinPadron: 0,
+      // BT (solo helpers)
       btAprobado: 0,
       btRechazado: 0,
       btPendiente: 0,
@@ -17719,6 +17723,14 @@ function PoolMeliControlHelper() {
     const rutasSet = new Set();
     const rutasCount = {};
     datos.forEach(r => {
+      rutasSet.add(r.id_ruta);
+      rutasCount[r.id_ruta] = (rutasCount[r.id_ruta] || 0) + 1;
+      if (r.es_chofer) {
+        c.choferesEscaneando++;
+        return; // chofer no se evalúa en universo/cobertura
+      }
+      // Solo helpers reales (es_chofer = false)
+      c.helpersOperando++;
       if (r.universo && c[r.universo] !== undefined) c[r.universo]++;
       const s = r.helper_match_score_padron;
       if (s == null) c.sinPadron++;
@@ -17731,12 +17743,9 @@ function PoolMeliControlHelper() {
       else if (eb === 'BT_PENDIENTE') c.btPendiente++;
       else if (eb === 'NO_EN_BT') c.noEnBt++;
       else if (eb === 'SIN_CURP_PARA_BUSCAR') c.sinCurpParaBt++;
-      rutasSet.add(r.id_ruta);
-      rutasCount[r.id_ruta] = (rutasCount[r.id_ruta] || 0) + 1;
     });
-    c.rutasDistintas = rutasSet.size;
-    c.rutasMulti = Object.values(rutasCount).filter(n => n > 1).length;
-    c.helpersExtras = c.total - c.rutasDistintas;
+    c.total = rutasSet.size;
+    c.rutasMulti = Object.values(rutasCount).filter(n => n > 2).length;  // 2+ helpers reales
     return c;
   }, [datos]);
 
@@ -17916,7 +17925,7 @@ function PanelU0({ conteos, setUniverso, getAyer, ayerCount }) {
   const cobBt = conteos.btAprobado + conteos.btRechazado + conteos.btPendiente; // con respuesta BT
   return (
     <div>
-      {/* Banner aclaratorio del nuevo filtro */}
+      {/* Banner aclaratorio · desglose rutas vs personas */}
       <div style={{
         background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 12,
         padding: '10px 14px', marginBottom: 14, fontSize: 11, color: '#1e40af',
@@ -17924,11 +17933,11 @@ function PanelU0({ conteos, setUniverso, getAyer, ayerCount }) {
       }}>
         <i className="ti ti-info-circle" style={{ fontSize: 14 }} />
         <span>
-          <strong>{conteos.rutasDistintas} rutas</strong> con helper declarado por MELI ·{' '}
-          <strong>{conteos.total} instancias</strong> de helper operando
-          {conteos.rutasMulti > 0 && (
-            <> · {conteos.rutasMulti} ruta{conteos.rutasMulti > 1 ? 's' : ''} llevaron 2+ ayudantes</>
-          )}
+          <strong>{conteos.total} rutas</strong> con helper declarado por MELI ·{' '}
+          <strong>{conteos.personasTotal} personas</strong> entregaron paquetes ·{' '}
+          <strong>{conteos.helpersOperando} helpers</strong> reales ·{' '}
+          <strong>{conteos.choferesEscaneando} choferes</strong> también escanearon
+          {conteos.rutasMulti > 0 && <> · {conteos.rutasMulti} ruta{conteos.rutasMulti > 1 ? 's' : ''} con 2+ helpers</>}
         </span>
       </div>
 
@@ -17961,7 +17970,7 @@ function PanelU0({ conteos, setUniverso, getAyer, ayerCount }) {
         <strong style={{ color: CH_NAVY }}>
           {conteos.U1} + {conteos.U2} + {conteos.U3} + {conteos.OK} = {conteos.U1 + conteos.U2 + conteos.U3 + conteos.OK}
         </strong>{' '}
-        helpers clasificados {conteos.U1 + conteos.U2 + conteos.U3 + conteos.OK === conteos.total ? '✓' : `de ${conteos.total} totales`} ·  Haz clic en cualquier card para ver el drill-down
+        helpers clasificados {conteos.U1 + conteos.U2 + conteos.U3 + conteos.OK === conteos.helpersOperando ? '✓' : `de ${conteos.helpersOperando} helpers`} ·  Haz clic en cualquier card para ver el drill-down
       </div>
     </div>
   );
@@ -18252,23 +18261,48 @@ function PanelU3({ matriz, conteos, drillDown, setDrillDown, fecha, getAyer }) {
 // ════════════════════════════════════════════════════════════════════════════
 function DrillDown1({ dd, fecha, onClose }) {
   const exportar = () => exportCH(
-    ["Ruta", "Conductor", "Helper", "SC", "Vehículo", "Razón", "Acción"],
-    dd.rutas.map(r => [r.id_ruta, r.chofer_nombre || '', r.helpers_nombres || '', r.sc, r.vehiculo, `Tarifa helper no activa — ${r.sc}`, 'Bloquear · gestionar con MELI']),
+    ["Driver (chofer)", "Driver ID", "Ruta", "SC", "Vehículo", "Helper", "Helper ID", "Match Padrón MELI", "Match BT", "% Helper", "Razón", "Acción"],
+    dd.rutas.map(r => [
+      r.chofer_nombre || '—',
+      r.chofer_user_id || '—',
+      r.id_ruta,
+      r.sc,
+      r.vehiculo || '—',
+      r.helper_nombre_limpio || '—',
+      r.helper_ids_personas || '—',
+      r.helper_estado_padron || '—',
+      r.helper_estado_bt || '—',
+      r.helper_pct || '—',
+      `Tarifa helper no activa — ${r.sc}`,
+      'Bloquear · gestionar con MELI',
+    ]),
     `BT_U1_${dd.svc}_${(dd.vehiculo || '').replace(/[^a-zA-Z0-9]/g, '_')}.csv`
   );
   return (
     <DrillWrap dd={dd} fecha={fecha} onClose={onClose} icon="ti-map-pin" onExport={exportar}>
       <table style={{ width: '100%', borderCollapse: 'collapse' }}>
         <thead><tr>
-          <ThDt>Ruta ID</ThDt><ThDt>Conductor</ThDt><ThDt>Helper declarado</ThDt>
-          <ThDt>Tarifa activa</ThDt><ThDt>Razón</ThDt><ThDt>Acción</ThDt>
+          <ThDt>Driver</ThDt>
+          <ThDt>Ruta</ThDt>
+          <ThDt>SC</ThDt>
+          <ThDt>Helper</ThDt>
+          <ThDt>Match Padrón MELI</ThDt>
+          <ThDt>Match BT</ThDt>
+          <ThDt>% Helper</ThDt>
+          <ThDt>Razón</ThDt>
+          <ThDt>Acción</ThDt>
         </tr></thead>
         <tbody>{dd.rutas.map((r, i) => (
-          <tr key={i} style={{ borderBottom: `0.5px solid #f4f5f7` }}>
+          <tr key={i} style={{ borderBottom: `0.5px solid #f4f5f7`, verticalAlign: 'top' }}>
+            <TdDt><DriverCell r={r} /></TdDt>
             <TdDt mono>{r.id_ruta}</TdDt>
-            <TdDt bold>{r.chofer_nombre || '—'}</TdDt>
-            <TdDt>{r.helpers_nombres || '—'}</TdDt>
-            <TdDt><Pill type="red">NO</Pill></TdDt>
+            <TdDt mono>{r.sc}</TdDt>
+            <TdDt>
+              <NombreHelper limpio={r.helper_nombre_limpio} raw={r.helpers_nombres} idx={r.helper_idx} count={r.helper_count} esChofer={r.es_chofer} />
+            </TdDt>
+            <TdDt><PadronCell r={r} /></TdDt>
+            <TdDt><BtCell r={r} /></TdDt>
+            <TdDt center><PctHelperCell pct={r.helper_pct} /></TdDt>
             <TdDt muted>Tarifa helper no activa — {r.sc}</TdDt>
             <TdDt action>Bloquear · gestionar con MELI</TdDt>
           </tr>
@@ -18286,27 +18320,28 @@ function DrillDown2({ dd, fecha, onClose }) {
     : '🔴 No identificado · investigar si es helper fantasma o alias';
 
   const exportar = () => exportCH(
-    ["Helper (limpio)", "Helper (raw)", "ID Persona", "SC", "Ruta",
-     "Match Padrón MELI", "Nombre padrón", "CURP padrón", "Status MELI", "Score padrón",
+    ["Driver (chofer)", "Driver ID", "Ruta", "SC",
+     "Helper", "Helper Raw", "Helper ID",
+     "Match Padrón MELI", "Nombre padrón", "CURP padrón", "Score padrón",
      "Match BT", "Nombre BT", "Respuesta BT", "Empresa BT",
-     "% Helper", "% por persona", "Alertas Maestro", "Acción"],
+     "% Helper", "Alertas Maestro", "Acción"],
     dd.rutas.map(r => [
+      r.chofer_nombre || '—',
+      r.chofer_user_id || '—',
+      r.id_ruta,
+      r.sc,
       r.helper_nombre_limpio || '—',
       r.helpers_nombres || '—',
       r.helper_ids_personas || '—',
-      r.sc,
-      r.id_ruta,
       r.helper_estado_padron || '—',
       r.helper_name_padron || '—',
       r.helper_curp_padron || '—',
-      r.helper_status_padron || '—',
       r.helper_match_score_padron != null ? r.helper_match_score_padron : '—',
       r.helper_estado_bt || '—',
       r.helper_nombre_bt || '—',
       r.helper_respuesta_bt || '—',
       r.helper_empresa_bt || '—',
-      r.helper_pct != null ? `${r.helper_pct}%` : '—',
-      r.helper_pct_por_persona || '—',
+      r.helper_pct || '—',
       (r.helper_alertas || []).join(' · '),
       isBtRech ? 'Contactar SC inmediato' : 'Verificar identidad',
     ]),
@@ -18317,37 +18352,32 @@ function DrillDown2({ dd, fecha, onClose }) {
     <DrillWrap dd={dd} fecha={fecha} onClose={onClose} icon={icon} onExport={exportar}>
       <table style={{ width: '100%', borderCollapse: 'collapse' }}>
         <thead><tr>
-          <ThDt>Helper</ThDt>
-          <ThDt>ID Persona</ThDt>
-          <ThDt>SC</ThDt>
+          <ThDt>Driver</ThDt>
           <ThDt>Ruta</ThDt>
+          <ThDt>SC</ThDt>
+          <ThDt>Helper</ThDt>
           <ThDt>Match Padrón MELI</ThDt>
           <ThDt>Match BT</ThDt>
           <ThDt>% Helper</ThDt>
-          <ThDt>% por persona</ThDt>
           <ThDt>Alertas Maestro</ThDt>
           <ThDt>Acción</ThDt>
         </tr></thead>
         <tbody>{dd.rutas.map((r, i) => (
           <tr key={i} style={{ borderBottom: `0.5px solid #f4f5f7`, verticalAlign: 'top' }}>
-            <TdDt>
-              <NombreHelper limpio={r.helper_nombre_limpio} raw={r.helpers_nombres} idx={r.helper_idx} count={r.helper_count} />
-            </TdDt>
-            <TdDt mono>
-              {r.helper_ids_personas ? (
-                <span style={{ fontSize: 10, color: CH_MUTED }}>{r.helper_ids_personas}</span>
-              ) : <span style={{ color: CH_LIGHT }}>—</span>}
-            </TdDt>
-            <TdDt mono>{r.sc}</TdDt>
+            <TdDt><DriverCell r={r} /></TdDt>
             <TdDt mono>{r.id_ruta}</TdDt>
+            <TdDt mono>{r.sc}</TdDt>
+            <TdDt>
+              <NombreHelper limpio={r.helper_nombre_limpio} raw={r.helpers_nombres} idx={r.helper_idx} count={r.helper_count} esChofer={r.es_chofer} />
+              {r.helper_ids_personas && (
+                <div style={{ fontFamily: 'monospace', fontSize: 9, color: CH_LIGHT, marginTop: 2 }}>
+                  id: {r.helper_ids_personas}
+                </div>
+              )}
+            </TdDt>
             <TdDt><PadronCell r={r} /></TdDt>
             <TdDt><BtCell r={r} /></TdDt>
             <TdDt center><PctHelperCell pct={r.helper_pct} /></TdDt>
-            <TdDt>
-              {r.helper_pct_por_persona ? (
-                <span style={{ fontFamily: 'monospace', fontSize: 10, color: CH_MUTED }}>{r.helper_pct_por_persona}</span>
-              ) : <span style={{ color: CH_LIGHT }}>—</span>}
-            </TdDt>
             <TdDt>
               <AlertasInline alertas={r.helper_alertas} />
             </TdDt>
@@ -18369,27 +18399,28 @@ function DrillDown3({ dd, fecha, onClose }) {
   const cfg = config[dd.col] || config.sinBt;
 
   const exportar = () => exportCH(
-    ["Helper (limpio)", "Helper (raw)", "ID Persona", "SC", "Ruta",
-     "Match Padrón MELI", "Nombre padrón", "CURP padrón", "Status MELI", "Score padrón",
+    ["Driver (chofer)", "Driver ID", "Ruta", "SC",
+     "Helper", "Helper Raw", "Helper ID",
+     "Match Padrón MELI", "Nombre padrón", "CURP padrón", "Score padrón",
      "Match BT", "Nombre BT", "Respuesta BT", "Empresa BT",
-     "% Helper", "% por persona", "Alertas Maestro", "Acción"],
+     "% Helper", "Alertas Maestro", "Acción"],
     dd.rutas.map(r => [
+      r.chofer_nombre || '—',
+      r.chofer_user_id || '—',
+      r.id_ruta,
+      r.sc,
       r.helper_nombre_limpio || '—',
       r.helpers_nombres || '—',
       r.helper_ids_personas || '—',
-      r.sc,
-      r.id_ruta,
       r.helper_estado_padron || '—',
       r.helper_name_padron || '—',
       r.helper_curp_padron || '—',
-      r.helper_status_padron || '—',
       r.helper_match_score_padron != null ? r.helper_match_score_padron : '—',
       r.helper_estado_bt || '—',
       r.helper_nombre_bt || '—',
       r.helper_respuesta_bt || '—',
       r.helper_empresa_bt || '—',
-      r.helper_pct != null ? `${r.helper_pct}%` : '—',
-      r.helper_pct_por_persona || '—',
+      r.helper_pct || '—',
       (r.helper_alertas || []).join(' · '),
       cfg.accion,
     ]),
@@ -18400,37 +18431,32 @@ function DrillDown3({ dd, fecha, onClose }) {
     <DrillWrap dd={dd} fecha={fecha} onClose={onClose} icon={cfg.icon} onExport={exportar}>
       <table style={{ width: '100%', borderCollapse: 'collapse' }}>
         <thead><tr>
-          <ThDt>Helper</ThDt>
-          <ThDt>ID Persona</ThDt>
-          <ThDt>SC</ThDt>
+          <ThDt>Driver</ThDt>
           <ThDt>Ruta</ThDt>
+          <ThDt>SC</ThDt>
+          <ThDt>Helper</ThDt>
           <ThDt>Match Padrón MELI</ThDt>
           <ThDt>Match BT</ThDt>
           <ThDt>% Helper</ThDt>
-          <ThDt>% por persona</ThDt>
           <ThDt>Alertas Maestro</ThDt>
           <ThDt>Acción</ThDt>
         </tr></thead>
         <tbody>{dd.rutas.map((r, i) => (
           <tr key={i} style={{ borderBottom: `0.5px solid #f4f5f7`, verticalAlign: 'top' }}>
-            <TdDt>
-              <NombreHelper limpio={r.helper_nombre_limpio} raw={r.helpers_nombres} idx={r.helper_idx} count={r.helper_count} />
-            </TdDt>
-            <TdDt mono>
-              {r.helper_ids_personas ? (
-                <span style={{ fontSize: 10, color: CH_MUTED }}>{r.helper_ids_personas}</span>
-              ) : <span style={{ color: CH_LIGHT }}>—</span>}
-            </TdDt>
-            <TdDt mono>{r.sc}</TdDt>
+            <TdDt><DriverCell r={r} /></TdDt>
             <TdDt mono>{r.id_ruta}</TdDt>
+            <TdDt mono>{r.sc}</TdDt>
+            <TdDt>
+              <NombreHelper limpio={r.helper_nombre_limpio} raw={r.helpers_nombres} idx={r.helper_idx} count={r.helper_count} esChofer={r.es_chofer} />
+              {r.helper_ids_personas && (
+                <div style={{ fontFamily: 'monospace', fontSize: 9, color: CH_LIGHT, marginTop: 2 }}>
+                  id: {r.helper_ids_personas}
+                </div>
+              )}
+            </TdDt>
             <TdDt><PadronCell r={r} /></TdDt>
             <TdDt><BtCell r={r} /></TdDt>
             <TdDt center><PctHelperCell pct={r.helper_pct} /></TdDt>
-            <TdDt>
-              {r.helper_pct_por_persona ? (
-                <span style={{ fontFamily: 'monospace', fontSize: 10, color: CH_MUTED }}>{r.helper_pct_por_persona}</span>
-              ) : <span style={{ color: CH_LIGHT }}>—</span>}
-            </TdDt>
             <TdDt>
               <AlertasInline alertas={r.helper_alertas} />
             </TdDt>
@@ -18678,10 +18704,39 @@ function Pill({ children, type }) {
   return <span style={{ ...styles, fontSize: 9.5, fontWeight: 700, padding: '3px 8px', borderRadius: 5, textTransform: 'uppercase', letterSpacing: 0.3 }}>{children}</span>;
 }
 
+// ── Componente: celda Driver (chofer) con nombre + user_id ──
+function DriverCell({ r }) {
+  if (!r.chofer_nombre) return <span style={{ color: CH_LIGHT }}>—</span>;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+      <span style={{ fontWeight: 600, fontSize: 11 }}>{r.chofer_nombre}</span>
+      {r.chofer_user_id && (
+        <span style={{ fontSize: 9, color: CH_LIGHT, fontFamily: 'monospace' }}>
+          id: {r.chofer_user_id}
+        </span>
+      )}
+    </div>
+  );
+}
+
 // ── Componente: nombre limpio del Maestro + raw debajo si difiere ──
-function NombreHelper({ limpio, raw, idx, count }) {
+function NombreHelper({ limpio, raw, idx, count, esChofer }) {
   if (!limpio && !raw) return <span style={{ color: CH_LIGHT }}>—</span>;
   const showMulti = count > 1;
+  // Pill rol DRIVER/HELPER
+  const rolPill = esChofer === true ? (
+    <span style={{
+      background: '#d1fae5', color: '#065f46',
+      fontSize: 9, fontWeight: 700, padding: '1px 5px', borderRadius: 4,
+      whiteSpace: 'nowrap', marginRight: 4,
+    }}>🚛 DRIVER</span>
+  ) : esChofer === false ? (
+    <span style={{
+      background: '#dbeafe', color: '#1e40af',
+      fontSize: 9, fontWeight: 700, padding: '1px 5px', borderRadius: 4,
+      whiteSpace: 'nowrap', marginRight: 4,
+    }}>👤 HELPER</span>
+  ) : null;
   const multiPill = showMulti && (
     <span style={{
       background: '#ede9fe', color: '#5b21b6',
@@ -18689,13 +18744,15 @@ function NombreHelper({ limpio, raw, idx, count }) {
       whiteSpace: 'nowrap', marginLeft: 4,
     }}>{idx} de {count}</span>
   );
-  if (!limpio) return (
-    <span style={{ fontWeight: 600, fontSize: 11 }}>{raw}{multiPill}</span>
-  );
-  const rawDiferente = raw && raw.toLowerCase().trim() !== limpio.toLowerCase().trim();
+  const nombreMostrado = limpio || raw;
+  const rawDiferente = limpio && raw && raw.toLowerCase().trim() !== limpio.toLowerCase().trim();
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-      <span style={{ fontWeight: 600, fontSize: 11 }}>{limpio}{multiPill}</span>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+      <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 2 }}>
+        {rolPill}
+        <span style={{ fontWeight: 600, fontSize: 11 }}>{nombreMostrado}</span>
+        {multiPill}
+      </div>
       {rawDiferente && (
         <span style={{ fontSize: 9, color: CH_LIGHT, fontStyle: 'italic', fontFamily: 'monospace' }}>
           raw: {raw}
