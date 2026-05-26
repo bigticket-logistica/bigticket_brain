@@ -18279,6 +18279,9 @@ function PanelU3({ matriz, conteos, datos, drillDown, setDrillDown, fecha, getAy
 function DrillDown1({ dd, datos, fecha, onClose }) {
   // ⭐ v9: expandir a tripulación completa de las rutas afectadas
   const filas = expandirTripulacion(dd.rutas, datos);
+  // ⭐ v9.2: pre-calcular cuántas filas tiene cada ruta para usar rowSpan
+  const rutaCount = {};
+  filas.forEach(r => { rutaCount[r.id_ruta] = (rutaCount[r.id_ruta] || 0) + 1; });
 
   const exportar = () => exportCH(
     ["Disparador", "Driver (chofer)", "Driver ID", "Ruta", "SC", "Vehículo",
@@ -18333,13 +18336,14 @@ function DrillDown1({ dd, datos, fecha, onClose }) {
         </tr></thead>
         <tbody>{filas.map((r, i) => {
           const esPrimeraDeRuta = i === 0 || filas[i - 1].id_ruta !== r.id_ruta;
+          const span = rutaCount[r.id_ruta];
           return (
             <DrillRow key={`${r.id_ruta}-${r.helper_idx}-${i}`} r={r} esPrimeraDeRuta={esPrimeraDeRuta && i > 0}>
-              <TdDt><DriverCell r={r} /></TdDt>
-              <TdDt mono>{r.id_ruta}</TdDt>
-              <TdDt mono>{r.sc}</TdDt>
+              {esPrimeraDeRuta && <TdDt rowSpan={span}><DriverCell r={r} /></TdDt>}
+              {esPrimeraDeRuta && <TdDt mono rowSpan={span}>{r.id_ruta}</TdDt>}
+              {esPrimeraDeRuta && <TdDt mono rowSpan={span}>{r.sc}</TdDt>}
               <TdDt>
-                <NombreHelper limpio={r.helper_nombre_limpio} raw={r.helpers_nombres} idx={r.helper_idx} count={r.helper_count} esChofer={r.es_chofer} />
+                <NombreHelper limpio={r.helper_nombre_limpio} raw={r.helpers_nombres} idx={r.helper_idx} count={r.helper_count} esChofer={r.es_chofer} esDisparador={r._esDisparador} />
                 {r.helper_ids_personas && (
                   <div style={{ fontFamily: 'monospace', fontSize: 9, color: CH_LIGHT, marginTop: 2 }}>
                     id: {r.helper_ids_personas}
@@ -18370,6 +18374,9 @@ function DrillDown2({ dd, datos, fecha, onClose }) {
 
   // ⭐ v9: expandir a tripulación completa de las rutas afectadas
   const filas = expandirTripulacion(dd.rutas, datos);
+  // ⭐ v9.2: pre-calcular cuántas filas tiene cada ruta para usar rowSpan
+  const rutaCount = {};
+  filas.forEach(r => { rutaCount[r.id_ruta] = (rutaCount[r.id_ruta] || 0) + 1; });
 
   const exportar = () => exportCH(
     ["Disparador", "Driver (chofer)", "Driver ID", "Ruta", "SC",
@@ -18420,14 +18427,15 @@ function DrillDown2({ dd, datos, fecha, onClose }) {
           <ThDt>Acción</ThDt>
         </tr></thead>
         <tbody>{filas.map((r, i) => {
-          const esPrimeraDeRuta = i > 0 && filas[i - 1].id_ruta !== r.id_ruta;
+          const esPrimeraDeRuta = i === 0 || filas[i - 1].id_ruta !== r.id_ruta;
+          const span = rutaCount[r.id_ruta];
           return (
-            <DrillRow key={`${r.id_ruta}-${r.helper_idx}-${i}`} r={r} esPrimeraDeRuta={esPrimeraDeRuta}>
-              <TdDt><DriverCell r={r} /></TdDt>
-              <TdDt mono>{r.id_ruta}</TdDt>
-              <TdDt mono>{r.sc}</TdDt>
+            <DrillRow key={`${r.id_ruta}-${r.helper_idx}-${i}`} r={r} esPrimeraDeRuta={esPrimeraDeRuta && i > 0}>
+              {esPrimeraDeRuta && <TdDt rowSpan={span}><DriverCell r={r} /></TdDt>}
+              {esPrimeraDeRuta && <TdDt mono rowSpan={span}>{r.id_ruta}</TdDt>}
+              {esPrimeraDeRuta && <TdDt mono rowSpan={span}>{r.sc}</TdDt>}
               <TdDt>
-                <NombreHelper limpio={r.helper_nombre_limpio} raw={r.helpers_nombres} idx={r.helper_idx} count={r.helper_count} esChofer={r.es_chofer} />
+                <NombreHelper limpio={r.helper_nombre_limpio} raw={r.helpers_nombres} idx={r.helper_idx} count={r.helper_count} esChofer={r.es_chofer} esDisparador={r._esDisparador} />
                 {r.helper_ids_personas && (
                   <div style={{ fontFamily: 'monospace', fontSize: 9, color: CH_LIGHT, marginTop: 2 }}>
                     id: {r.helper_ids_personas}
@@ -18460,6 +18468,9 @@ function DrillDown3({ dd, datos, fecha, onClose }) {
 
   // ⭐ v9: expandir a tripulación completa de las rutas afectadas
   const filas = expandirTripulacion(dd.rutas, datos);
+  // ⭐ v9.2: pre-calcular cuántas filas tiene cada ruta para usar rowSpan
+  const rutaCount = {};
+  filas.forEach(r => { rutaCount[r.id_ruta] = (rutaCount[r.id_ruta] || 0) + 1; });
 
   const exportar = () => exportCH(
     ["Disparador", "Driver (chofer)", "Driver ID", "Ruta", "SC",
@@ -18510,14 +18521,15 @@ function DrillDown3({ dd, datos, fecha, onClose }) {
           <ThDt>Acción</ThDt>
         </tr></thead>
         <tbody>{filas.map((r, i) => {
-          const esPrimeraDeRuta = i > 0 && filas[i - 1].id_ruta !== r.id_ruta;
+          const esPrimeraDeRuta = i === 0 || filas[i - 1].id_ruta !== r.id_ruta;
+          const span = rutaCount[r.id_ruta];
           return (
-            <DrillRow key={`${r.id_ruta}-${r.helper_idx}-${i}`} r={r} esPrimeraDeRuta={esPrimeraDeRuta}>
-              <TdDt><DriverCell r={r} /></TdDt>
-              <TdDt mono>{r.id_ruta}</TdDt>
-              <TdDt mono>{r.sc}</TdDt>
+            <DrillRow key={`${r.id_ruta}-${r.helper_idx}-${i}`} r={r} esPrimeraDeRuta={esPrimeraDeRuta && i > 0}>
+              {esPrimeraDeRuta && <TdDt rowSpan={span}><DriverCell r={r} /></TdDt>}
+              {esPrimeraDeRuta && <TdDt mono rowSpan={span}>{r.id_ruta}</TdDt>}
+              {esPrimeraDeRuta && <TdDt mono rowSpan={span}>{r.sc}</TdDt>}
               <TdDt>
-                <NombreHelper limpio={r.helper_nombre_limpio} raw={r.helpers_nombres} idx={r.helper_idx} count={r.helper_count} esChofer={r.es_chofer} />
+                <NombreHelper limpio={r.helper_nombre_limpio} raw={r.helpers_nombres} idx={r.helper_idx} count={r.helper_count} esChofer={r.es_chofer} esDisparador={r._esDisparador} />
                 {r.helper_ids_personas && (
                   <div style={{ fontFamily: 'monospace', fontSize: 9, color: CH_LIGHT, marginTop: 2 }}>
                     id: {r.helper_ids_personas}
@@ -18554,14 +18566,17 @@ function DrillWrap({ dd, fecha, onClose, icon, onExport, children }) {
             <span style={{ color: CH_MUTED }}>{dd.vehiculo || dd.label}</span>
           </>
         )}
-        {/* Mini-leyenda del resaltado · ⭐ v9 */}
+        {/* Mini-leyenda del resaltado · ⭐ v9.2 */}
         <span style={{
           marginLeft: 12, display: 'inline-flex', alignItems: 'center', gap: 5,
           fontSize: 10, color: CH_MUTED,
         }}>
-          <span style={{ display: 'inline-block', width: 3, height: 12, background: CH_ORANGE, borderRadius: 1 }} />
-          Disparadora
-          <span style={{ marginLeft: 6, color: CH_LIGHT }}>· otras filas = tripulación de la misma ruta</span>
+          <span style={{
+            background: '#fed7aa', color: '#9a3412',
+            fontSize: 9, fontWeight: 700, padding: '1px 5px', borderRadius: 4,
+            whiteSpace: 'nowrap',
+          }}>⭐ CASO</span>
+          <span style={{ color: CH_LIGHT }}>= persona que cumple el filtro · resto = tripulación de la misma ruta</span>
         </span>
         <span style={{
           background: '#fee2e2', color: '#991b1b', padding: '3px 9px', borderRadius: 5,
@@ -18761,13 +18776,14 @@ function ThDt({ children }) {
   }}>{children}</th>;
 }
 
-function TdDt({ children, mono, bold, muted, center, action }) {
-  return <td style={{
+function TdDt({ children, mono, bold, muted, center, action, rowSpan }) {
+  return <td rowSpan={rowSpan} style={{
     padding: '9px 12px', borderBottom: '0.5px solid #f4f5f7', fontSize: 12,
     fontFamily: mono ? 'monospace' : "'Geist', sans-serif",
     color: action ? CH_NAVY : muted ? CH_MUTED : CH_TEXT,
     fontWeight: bold || action ? 600 : 'normal',
     textAlign: center ? 'center' : 'left',
+    verticalAlign: rowSpan ? 'top' : 'baseline',
   }}>{children}</td>;
 }
 
@@ -18811,15 +18827,14 @@ function expandirTripulacion(filasDisparadoras, datos) {
 }
 
 // ── Componente: fila de drilldown con resaltado de disparadora ──
-// ⭐ v9: la fila disparadora (la que cumple el filtro) se resalta con un
-// indicador visual sutil para distinguirla de las filas de contexto
+// ⭐ v9.2: con rowSpan en Driver/Ruta/SC, el border-left no se ve bien.
+// El resaltado se hace con fondo + indicador ⭐ en la celda Persona (ver NombreHelper)
 function DrillRow({ r, esPrimeraDeRuta, children }) {
   const esDisp = r._esDisparador;
   return (
     <tr style={{
       borderBottom: `0.5px solid #f4f5f7`,
       borderTop: esPrimeraDeRuta ? `2px solid ${CH_BORDER}` : undefined,
-      borderLeft: esDisp ? `3px solid ${CH_ORANGE}` : `3px solid transparent`,
       background: esDisp ? '#fffaf2' : 'transparent',
       verticalAlign: 'top',
     }}>
@@ -18844,7 +18859,7 @@ function DriverCell({ r }) {
 }
 
 // ── Componente: nombre limpio del Maestro + raw debajo si difiere ──
-function NombreHelper({ limpio, raw, idx, count, esChofer }) {
+function NombreHelper({ limpio, raw, idx, count, esChofer, esDisparador }) {
   if (!limpio && !raw) return <span style={{ color: CH_LIGHT }}>—</span>;
   const showMulti = count > 1;
   // Pill rol DRIVER/HELPER
@@ -18861,6 +18876,14 @@ function NombreHelper({ limpio, raw, idx, count, esChofer }) {
       whiteSpace: 'nowrap', marginRight: 4,
     }}>👤 HELPER</span>
   ) : null;
+  // ⭐ v9.2: pill de disparadora (la persona que cumple el filtro del drilldown)
+  const dispPill = esDisparador ? (
+    <span style={{
+      background: '#fed7aa', color: '#9a3412',
+      fontSize: 9, fontWeight: 700, padding: '1px 5px', borderRadius: 4,
+      whiteSpace: 'nowrap', marginRight: 4,
+    }}>⭐ CASO</span>
+  ) : null;
   const multiPill = showMulti && (
     <span style={{
       background: '#ede9fe', color: '#5b21b6',
@@ -18873,6 +18896,7 @@ function NombreHelper({ limpio, raw, idx, count, esChofer }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
       <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 2 }}>
+        {dispPill}
         {rolPill}
         <span style={{ fontWeight: 600, fontSize: 11 }}>{nombreMostrado}</span>
         {multiPill}
