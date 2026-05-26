@@ -17918,8 +17918,8 @@ function PoolMeliControlHelper() {
       <div style={{ padding: '16px 24px' }}>
         {universo === 0 && <PanelU0 conteos={conteos} setUniverso={setUniverso} getAyer={getAyer} ayerCount={ayerCount} />}
         {universo === 1 && <PanelU1 matriz={matrizU1} conteos={conteos} datos={datos} drillDown={drillDown} setDrillDown={setDrillDown} fecha={fecha} getSerieVals={getSerieVals} />}
-        {universo === 2 && <PanelU2 matriz={matrizU2} conteos={conteos} drillDown={drillDown} setDrillDown={setDrillDown} fecha={fecha} getAyer={getAyer} />}
-        {universo === 3 && <PanelU3 matriz={matrizU3} conteos={conteos} drillDown={drillDown} setDrillDown={setDrillDown} fecha={fecha} getAyer={getAyer} />}
+        {universo === 2 && <PanelU2 matriz={matrizU2} conteos={conteos} datos={datos} drillDown={drillDown} setDrillDown={setDrillDown} fecha={fecha} getAyer={getAyer} />}
+        {universo === 3 && <PanelU3 matriz={matrizU3} conteos={conteos} datos={datos} drillDown={drillDown} setDrillDown={setDrillDown} fecha={fecha} getAyer={getAyer} />}
       </div>
     </div>
   );
@@ -18105,7 +18105,7 @@ function PanelU1({ matriz, conteos, datos, drillDown, setDrillDown, fecha, getSe
         <HmLegend hint="Clic en celda → ver rutas" />
       </div>
 
-      {drillDown && drillDown.uid === 1 && <DrillDown1 dd={drillDown} fecha={fecha} onClose={() => setDrillDown(null)} />}
+      {drillDown && drillDown.uid === 1 && <DrillDown1 dd={drillDown} datos={datos} fecha={fecha} onClose={() => setDrillDown(null)} />}
       {!drillDown && matriz.scs.length > 0 && <Hint text="Haz clic en cualquier celda coloreada para ver las rutas" />}
     </div>
   );
@@ -18114,7 +18114,7 @@ function PanelU1({ matriz, conteos, datos, drillDown, setDrillDown, fecha, getSe
 // ════════════════════════════════════════════════════════════════════════════
 // PANEL U2 · CERTIFICACIÓN
 // ════════════════════════════════════════════════════════════════════════════
-function PanelU2({ matriz, conteos, drillDown, setDrillDown, fecha, getAyer }) {
+function PanelU2({ matriz, conteos, datos, drillDown, setDrillDown, fecha, getAyer }) {
   const t = matriz.totals;
 
   return (
@@ -18182,7 +18182,7 @@ function PanelU2({ matriz, conteos, drillDown, setDrillDown, fecha, getAyer }) {
         <HmLegend note="Clic en celda para ver detalle del helper" hint="Score < 0.7 → match dudoso · revisar nombre raw" />
       </div>
 
-      {drillDown && drillDown.uid === 2 && <DrillDown2 dd={drillDown} fecha={fecha} onClose={() => setDrillDown(null)} />}
+      {drillDown && drillDown.uid === 2 && <DrillDown2 dd={drillDown} datos={datos} fecha={fecha} onClose={() => setDrillDown(null)} />}
       {!drillDown && matriz.scs.length > 0 && <Hint text="Haz clic en cualquier celda coloreada para ver los helpers" />}
     </div>
   );
@@ -18191,7 +18191,7 @@ function PanelU2({ matriz, conteos, drillDown, setDrillDown, fecha, getAyer }) {
 // ════════════════════════════════════════════════════════════════════════════
 // PANEL U3 · PROCESO
 // ════════════════════════════════════════════════════════════════════════════
-function PanelU3({ matriz, conteos, drillDown, setDrillDown, fecha, getAyer }) {
+function PanelU3({ matriz, conteos, datos, drillDown, setDrillDown, fecha, getAyer }) {
   const t = matriz.totals;
   const scPrincipal = matriz.scs.length > 0
     ? [...matriz.scs].sort((a, b) => matriz.mat[b].total - matriz.mat[a].total)[0]
@@ -18267,7 +18267,7 @@ function PanelU3({ matriz, conteos, drillDown, setDrillDown, fecha, getAyer }) {
         <HmLegend note="Sin BT y BT pendiente requieren acción de RH · MELI inactivo verificar con coordinador" hint="Clic en celda → ver helpers" />
       </div>
 
-      {drillDown && drillDown.uid === 3 && <DrillDown3 dd={drillDown} fecha={fecha} onClose={() => setDrillDown(null)} />}
+      {drillDown && drillDown.uid === 3 && <DrillDown3 dd={drillDown} datos={datos} fecha={fecha} onClose={() => setDrillDown(null)} />}
       {!drillDown && matriz.scs.length > 0 && <Hint text="Haz clic en cualquier celda coloreada para ver los helpers" />}
     </div>
   );
@@ -18276,22 +18276,20 @@ function PanelU3({ matriz, conteos, drillDown, setDrillDown, fecha, getAyer }) {
 // ════════════════════════════════════════════════════════════════════════════
 // DRILL-DOWNS
 // ════════════════════════════════════════════════════════════════════════════
-function DrillDown1({ dd, fecha, onClose }) {
-  // ⭐ v9: ordenar agrupado por ruta, driver primero dentro de cada ruta
-  const filas = [...(dd.rutas || [])].sort((a, b) => {
-    if (a.id_ruta !== b.id_ruta) return Number(a.id_ruta) - Number(b.id_ruta);
-    if (a.es_chofer !== b.es_chofer) return a.es_chofer ? -1 : 1;
-    return (a.helper_idx || 0) - (b.helper_idx || 0);
-  });
+function DrillDown1({ dd, datos, fecha, onClose }) {
+  // ⭐ v9: expandir a tripulación completa de las rutas afectadas
+  const filas = expandirTripulacion(dd.rutas, datos);
 
   const exportar = () => exportCH(
-    ["Driver (chofer)", "Driver ID", "Ruta", "SC", "Vehículo",
+    ["Disparador", "Driver (chofer)", "Driver ID", "Ruta", "SC", "Vehículo",
      "Es chofer", "Persona", "Persona Raw", "Persona ID",
      "Match Padrón MELI", "Nombre padrón", "CURP padrón", "Score padrón",
      "Match BT", "Nombre BT", "Respuesta BT", "Empresa BT",
+     "Universo persona", "Cert estado",
      "% Persona", "% Participación helper ruta", "Alertas Maestro",
      "Razón", "Acción"],
     filas.map(r => [
+      r._esDisparador ? '⭐ SÍ' : '',
       r.chofer_nombre || '—',
       r.chofer_user_id || '—',
       r.id_ruta,
@@ -18309,6 +18307,8 @@ function DrillDown1({ dd, fecha, onClose }) {
       r.helper_nombre_bt || '—',
       r.helper_respuesta_bt || '—',
       r.helper_empresa_bt || '—',
+      r.universo || '—',
+      r.helper_cert_estado || '—',
       r.helper_pct || '—',
       r.pct_participacion_helper != null ? r.pct_participacion_helper : '—',
       (r.helper_alertas || []).join(' · '),
@@ -18332,15 +18332,9 @@ function DrillDown1({ dd, fecha, onClose }) {
           <ThDt>Acción</ThDt>
         </tr></thead>
         <tbody>{filas.map((r, i) => {
-          // Resaltar la primera fila de cada ruta con borde superior visible
           const esPrimeraDeRuta = i === 0 || filas[i - 1].id_ruta !== r.id_ruta;
           return (
-            <tr key={`${r.id_ruta}-${r.helper_idx}-${i}`}
-                style={{
-                  borderBottom: `0.5px solid #f4f5f7`,
-                  borderTop: esPrimeraDeRuta && i > 0 ? `2px solid ${CH_BORDER}` : undefined,
-                  verticalAlign: 'top'
-                }}>
+            <DrillRow key={`${r.id_ruta}-${r.helper_idx}-${i}`} r={r} esPrimeraDeRuta={esPrimeraDeRuta && i > 0}>
               <TdDt><DriverCell r={r} /></TdDt>
               <TdDt mono>{r.id_ruta}</TdDt>
               <TdDt mono>{r.sc}</TdDt>
@@ -18359,7 +18353,7 @@ function DrillDown1({ dd, fecha, onClose }) {
                 <AlertasInline alertas={r.helper_alertas} />
               </TdDt>
               <TdDt action>🚫 No autorizada · gestionar con MELI</TdDt>
-            </tr>
+            </DrillRow>
           );
         })}</tbody>
       </table>
@@ -18367,24 +18361,30 @@ function DrillDown1({ dd, fecha, onClose }) {
   );
 }
 
-function DrillDown2({ dd, fecha, onClose }) {
+function DrillDown2({ dd, datos, fecha, onClose }) {
   const isBtRech = dd.col === 'btRech';
   const icon = isBtRech ? 'ti-shield-x' : 'ti-id-badge';
   const accionTxt = isBtRech
     ? '🔴 BT lo rechazó · NO debería operar · contactar SC inmediato'
     : '🔴 No identificado · investigar si es helper fantasma o alias';
 
+  // ⭐ v9: expandir a tripulación completa de las rutas afectadas
+  const filas = expandirTripulacion(dd.rutas, datos);
+
   const exportar = () => exportCH(
-    ["Driver (chofer)", "Driver ID", "Ruta", "SC",
-     "Helper", "Helper Raw", "Helper ID",
+    ["Disparador", "Driver (chofer)", "Driver ID", "Ruta", "SC",
+     "Es chofer", "Helper", "Helper Raw", "Helper ID",
      "Match Padrón MELI", "Nombre padrón", "CURP padrón", "Score padrón",
      "Match BT", "Nombre BT", "Respuesta BT", "Empresa BT",
+     "Universo persona", "Cert estado",
      "% Helper", "Alertas Maestro", "Acción"],
-    dd.rutas.map(r => [
+    filas.map(r => [
+      r._esDisparador ? '⭐ SÍ' : '',
       r.chofer_nombre || '—',
       r.chofer_user_id || '—',
       r.id_ruta,
       r.sc,
+      r.es_chofer ? 'SÍ (driver)' : 'NO (helper)',
       r.helper_nombre_limpio || '—',
       r.helpers_nombres || '—',
       r.helper_ids_personas || '—',
@@ -18396,9 +18396,11 @@ function DrillDown2({ dd, fecha, onClose }) {
       r.helper_nombre_bt || '—',
       r.helper_respuesta_bt || '—',
       r.helper_empresa_bt || '—',
+      r.universo || '—',
+      r.helper_cert_estado || '—',
       r.helper_pct || '—',
       (r.helper_alertas || []).join(' · '),
-      isBtRech ? 'Contactar SC inmediato' : 'Verificar identidad',
+      r._esDisparador ? (isBtRech ? 'Contactar SC inmediato' : 'Verificar identidad') : 'Contexto · misma ruta',
     ]),
     `BT_U2_${dd.col}_${dd.svc}.csv`
   );
@@ -18410,41 +18412,44 @@ function DrillDown2({ dd, fecha, onClose }) {
           <ThDt>Driver</ThDt>
           <ThDt>Ruta</ThDt>
           <ThDt>SC</ThDt>
-          <ThDt>Helper</ThDt>
+          <ThDt>Persona que entregó</ThDt>
           <ThDt>Match Padrón MELI</ThDt>
           <ThDt>Match BT</ThDt>
-          <ThDt>% Helper</ThDt>
+          <ThDt>% Persona</ThDt>
           <ThDt>Alertas Maestro</ThDt>
           <ThDt>Acción</ThDt>
         </tr></thead>
-        <tbody>{dd.rutas.map((r, i) => (
-          <tr key={i} style={{ borderBottom: `0.5px solid #f4f5f7`, verticalAlign: 'top' }}>
-            <TdDt><DriverCell r={r} /></TdDt>
-            <TdDt mono>{r.id_ruta}</TdDt>
-            <TdDt mono>{r.sc}</TdDt>
-            <TdDt>
-              <NombreHelper limpio={r.helper_nombre_limpio} raw={r.helpers_nombres} idx={r.helper_idx} count={r.helper_count} esChofer={r.es_chofer} />
-              {r.helper_ids_personas && (
-                <div style={{ fontFamily: 'monospace', fontSize: 9, color: CH_LIGHT, marginTop: 2 }}>
-                  id: {r.helper_ids_personas}
-                </div>
-              )}
-            </TdDt>
-            <TdDt><PadronCell r={r} /></TdDt>
-            <TdDt><BtCell r={r} /></TdDt>
-            <TdDt center><PctHelperCell pct={r.helper_pct} /></TdDt>
-            <TdDt>
-              <AlertasInline alertas={r.helper_alertas} />
-            </TdDt>
-            <TdDt action>{accionTxt}</TdDt>
-          </tr>
-        ))}</tbody>
+        <tbody>{filas.map((r, i) => {
+          const esPrimeraDeRuta = i > 0 && filas[i - 1].id_ruta !== r.id_ruta;
+          return (
+            <DrillRow key={`${r.id_ruta}-${r.helper_idx}-${i}`} r={r} esPrimeraDeRuta={esPrimeraDeRuta}>
+              <TdDt><DriverCell r={r} /></TdDt>
+              <TdDt mono>{r.id_ruta}</TdDt>
+              <TdDt mono>{r.sc}</TdDt>
+              <TdDt>
+                <NombreHelper limpio={r.helper_nombre_limpio} raw={r.helpers_nombres} idx={r.helper_idx} count={r.helper_count} esChofer={r.es_chofer} />
+                {r.helper_ids_personas && (
+                  <div style={{ fontFamily: 'monospace', fontSize: 9, color: CH_LIGHT, marginTop: 2 }}>
+                    id: {r.helper_ids_personas}
+                  </div>
+                )}
+              </TdDt>
+              <TdDt><PadronCell r={r} /></TdDt>
+              <TdDt><BtCell r={r} /></TdDt>
+              <TdDt center><PctHelperCell pct={r.helper_pct} /></TdDt>
+              <TdDt>
+                <AlertasInline alertas={r.helper_alertas} />
+              </TdDt>
+              <TdDt action>{r._esDisparador ? accionTxt : <span style={{ color: CH_LIGHT, fontSize: 10, fontStyle: 'italic' }}>contexto · misma ruta</span>}</TdDt>
+            </DrillRow>
+          );
+        })}</tbody>
       </table>
     </DrillWrap>
   );
 }
 
-function DrillDown3({ dd, fecha, onClose }) {
+function DrillDown3({ dd, datos, fecha, onClose }) {
   const config = {
     sinBt: { pill: 'yellow', pillTxt: 'SIN BT', accion: 'RH cargar en BBDD BT', icon: 'ti-file-x' },
     btPend: { pill: 'orange', pillTxt: 'BT PENDIENTE', accion: 'Esperar respuesta de BT', icon: 'ti-clock' },
@@ -18453,17 +18458,23 @@ function DrillDown3({ dd, fecha, onClose }) {
   };
   const cfg = config[dd.col] || config.sinBt;
 
+  // ⭐ v9: expandir a tripulación completa de las rutas afectadas
+  const filas = expandirTripulacion(dd.rutas, datos);
+
   const exportar = () => exportCH(
-    ["Driver (chofer)", "Driver ID", "Ruta", "SC",
-     "Helper", "Helper Raw", "Helper ID",
+    ["Disparador", "Driver (chofer)", "Driver ID", "Ruta", "SC",
+     "Es chofer", "Helper", "Helper Raw", "Helper ID",
      "Match Padrón MELI", "Nombre padrón", "CURP padrón", "Score padrón",
      "Match BT", "Nombre BT", "Respuesta BT", "Empresa BT",
+     "Universo persona", "Cert estado",
      "% Helper", "Alertas Maestro", "Acción"],
-    dd.rutas.map(r => [
+    filas.map(r => [
+      r._esDisparador ? '⭐ SÍ' : '',
       r.chofer_nombre || '—',
       r.chofer_user_id || '—',
       r.id_ruta,
       r.sc,
+      r.es_chofer ? 'SÍ (driver)' : 'NO (helper)',
       r.helper_nombre_limpio || '—',
       r.helpers_nombres || '—',
       r.helper_ids_personas || '—',
@@ -18475,9 +18486,11 @@ function DrillDown3({ dd, fecha, onClose }) {
       r.helper_nombre_bt || '—',
       r.helper_respuesta_bt || '—',
       r.helper_empresa_bt || '—',
+      r.universo || '—',
+      r.helper_cert_estado || '—',
       r.helper_pct || '—',
       (r.helper_alertas || []).join(' · '),
-      cfg.accion,
+      r._esDisparador ? cfg.accion : 'Contexto · misma ruta',
     ]),
     `BT_U3_${dd.col}_${dd.svc}.csv`
   );
@@ -18489,35 +18502,38 @@ function DrillDown3({ dd, fecha, onClose }) {
           <ThDt>Driver</ThDt>
           <ThDt>Ruta</ThDt>
           <ThDt>SC</ThDt>
-          <ThDt>Helper</ThDt>
+          <ThDt>Persona que entregó</ThDt>
           <ThDt>Match Padrón MELI</ThDt>
           <ThDt>Match BT</ThDt>
-          <ThDt>% Helper</ThDt>
+          <ThDt>% Persona</ThDt>
           <ThDt>Alertas Maestro</ThDt>
           <ThDt>Acción</ThDt>
         </tr></thead>
-        <tbody>{dd.rutas.map((r, i) => (
-          <tr key={i} style={{ borderBottom: `0.5px solid #f4f5f7`, verticalAlign: 'top' }}>
-            <TdDt><DriverCell r={r} /></TdDt>
-            <TdDt mono>{r.id_ruta}</TdDt>
-            <TdDt mono>{r.sc}</TdDt>
-            <TdDt>
-              <NombreHelper limpio={r.helper_nombre_limpio} raw={r.helpers_nombres} idx={r.helper_idx} count={r.helper_count} esChofer={r.es_chofer} />
-              {r.helper_ids_personas && (
-                <div style={{ fontFamily: 'monospace', fontSize: 9, color: CH_LIGHT, marginTop: 2 }}>
-                  id: {r.helper_ids_personas}
-                </div>
-              )}
-            </TdDt>
-            <TdDt><PadronCell r={r} /></TdDt>
-            <TdDt><BtCell r={r} /></TdDt>
-            <TdDt center><PctHelperCell pct={r.helper_pct} /></TdDt>
-            <TdDt>
-              <AlertasInline alertas={r.helper_alertas} />
-            </TdDt>
-            <TdDt action>{cfg.accion}</TdDt>
-          </tr>
-        ))}</tbody>
+        <tbody>{filas.map((r, i) => {
+          const esPrimeraDeRuta = i > 0 && filas[i - 1].id_ruta !== r.id_ruta;
+          return (
+            <DrillRow key={`${r.id_ruta}-${r.helper_idx}-${i}`} r={r} esPrimeraDeRuta={esPrimeraDeRuta}>
+              <TdDt><DriverCell r={r} /></TdDt>
+              <TdDt mono>{r.id_ruta}</TdDt>
+              <TdDt mono>{r.sc}</TdDt>
+              <TdDt>
+                <NombreHelper limpio={r.helper_nombre_limpio} raw={r.helpers_nombres} idx={r.helper_idx} count={r.helper_count} esChofer={r.es_chofer} />
+                {r.helper_ids_personas && (
+                  <div style={{ fontFamily: 'monospace', fontSize: 9, color: CH_LIGHT, marginTop: 2 }}>
+                    id: {r.helper_ids_personas}
+                  </div>
+                )}
+              </TdDt>
+              <TdDt><PadronCell r={r} /></TdDt>
+              <TdDt><BtCell r={r} /></TdDt>
+              <TdDt center><PctHelperCell pct={r.helper_pct} /></TdDt>
+              <TdDt>
+                <AlertasInline alertas={r.helper_alertas} />
+              </TdDt>
+              <TdDt action>{r._esDisparador ? cfg.accion : <span style={{ color: CH_LIGHT, fontSize: 10, fontStyle: 'italic' }}>contexto · misma ruta</span>}</TdDt>
+            </DrillRow>
+          );
+        })}</tbody>
       </table>
     </DrillWrap>
   );
@@ -18538,6 +18554,15 @@ function DrillWrap({ dd, fecha, onClose, icon, onExport, children }) {
             <span style={{ color: CH_MUTED }}>{dd.vehiculo || dd.label}</span>
           </>
         )}
+        {/* Mini-leyenda del resaltado · ⭐ v9 */}
+        <span style={{
+          marginLeft: 12, display: 'inline-flex', alignItems: 'center', gap: 5,
+          fontSize: 10, color: CH_MUTED,
+        }}>
+          <span style={{ display: 'inline-block', width: 3, height: 12, background: CH_ORANGE, borderRadius: 1 }} />
+          Disparadora
+          <span style={{ marginLeft: 6, color: CH_LIGHT }}>· otras filas = tripulación de la misma ruta</span>
+        </span>
         <span style={{
           background: '#fee2e2', color: '#991b1b', padding: '3px 9px', borderRadius: 5,
           fontSize: 10, fontWeight: 700, marginLeft: 'auto', letterSpacing: 0.3, textTransform: 'uppercase',
@@ -18757,6 +18782,50 @@ function Pill({ children, type }) {
   };
   const styles = palette[type] || palette.yellow;
   return <span style={{ ...styles, fontSize: 9.5, fontWeight: 700, padding: '3px 8px', borderRadius: 5, textTransform: 'uppercase', letterSpacing: 0.3 }}>{children}</span>;
+}
+
+// ── Helper: expandir filas disparadoras a tripulación completa de las rutas ──
+// ⭐ v9: cuando hacés click en una celda del heatmap, querés ver no solo a las
+// personas que cumplen el filtro, sino a TODA la tripulación de esas rutas
+// (driver + helpers), marcando cuáles fueron las disparadoras.
+function expandirTripulacion(filasDisparadoras, datos) {
+  if (!filasDisparadoras || filasDisparadoras.length === 0) return [];
+  // Identificar disparadoras por (id_ruta + helper_idx) que es la clave única de cada fila
+  const disparadorKey = new Set(
+    filasDisparadoras.map(r => `${r.id_ruta}::${r.helper_idx ?? ''}`)
+  );
+  const rutaIds = new Set(filasDisparadoras.map(r => r.id_ruta));
+  // Tomar TODAS las filas de las rutas afectadas
+  const todasFilas = datos.filter(r => rutaIds.has(r.id_ruta));
+  // Marcar disparadoras + ordenar por ruta, driver primero, luego helpers por idx
+  const conFlag = todasFilas.map(r => ({
+    ...r,
+    _esDisparador: disparadorKey.has(`${r.id_ruta}::${r.helper_idx ?? ''}`),
+  }));
+  conFlag.sort((a, b) => {
+    if (a.id_ruta !== b.id_ruta) return Number(a.id_ruta) - Number(b.id_ruta);
+    if (a.es_chofer !== b.es_chofer) return a.es_chofer ? -1 : 1;
+    return (a.helper_idx || 0) - (b.helper_idx || 0);
+  });
+  return conFlag;
+}
+
+// ── Componente: fila de drilldown con resaltado de disparadora ──
+// ⭐ v9: la fila disparadora (la que cumple el filtro) se resalta con un
+// indicador visual sutil para distinguirla de las filas de contexto
+function DrillRow({ r, esPrimeraDeRuta, children }) {
+  const esDisp = r._esDisparador;
+  return (
+    <tr style={{
+      borderBottom: `0.5px solid #f4f5f7`,
+      borderTop: esPrimeraDeRuta ? `2px solid ${CH_BORDER}` : undefined,
+      borderLeft: esDisp ? `3px solid ${CH_ORANGE}` : `3px solid transparent`,
+      background: esDisp ? '#fffaf2' : 'transparent',
+      verticalAlign: 'top',
+    }}>
+      {children}
+    </tr>
+  );
 }
 
 // ── Componente: celda Driver (chofer) con nombre + user_id ──
