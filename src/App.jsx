@@ -17932,79 +17932,15 @@ function PanelU0({ conteos, setUniverso, getAyer, ayerCount }) {
         </span>
       </div>
 
-      {/* Flowbar segmentado */}
+      {/* Flowbar segmentado · solo categorías (el total ya está en el banner azul) */}
       <div style={{ height: 36, display: 'flex', borderRadius: 10, overflow: 'hidden', marginBottom: 16, fontSize: 11, fontWeight: 700, color: '#fff', border: `0.5px solid ${CH_BORDER}` }}>
-        <div style={{ flex: conteos.total || 1, background: CH_GRAY, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{conteos.total} helpers</div>
-        {conteos.U1 > 0 && <div style={{ flex: conteos.U1, background: CH_RED, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>U1 · {conteos.U1}</div>}
-        {conteos.U2 > 0 && <div style={{ flex: conteos.U2, background: CH_ORANGE, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>U2 · {conteos.U2}</div>}
-        {conteos.U3 > 0 && <div style={{ flex: conteos.U3, background: '#eab308', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>U3 · {conteos.U3}</div>}
-        {conteos.OK > 0 && <div style={{ flex: conteos.OK, background: CH_GREEN, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>OK · {conteos.OK}</div>}
+        {conteos.U1 > 0 && <div style={{ flex: Math.max(conteos.U1, conteos.total * 0.08), background: CH_RED, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>U1 · {conteos.U1}</div>}
+        {conteos.U2 > 0 && <div style={{ flex: Math.max(conteos.U2, conteos.total * 0.08), background: CH_ORANGE, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>U2 · {conteos.U2}</div>}
+        {conteos.U3 > 0 && <div style={{ flex: Math.max(conteos.U3, conteos.total * 0.08), background: '#eab308', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>U3 · {conteos.U3}</div>}
+        {conteos.OK > 0 && <div style={{ flex: Math.max(conteos.OK, conteos.total * 0.08), background: CH_GREEN, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>OK · {conteos.OK}</div>}
       </div>
 
       {/* Cobertura de cruces */}
-      <div style={{
-        background: '#f8fafc', border: `0.5px solid ${CH_BORDER}`, borderRadius: 12,
-        padding: '12px 16px', marginBottom: 16, fontSize: 12,
-      }}>
-        <div style={{ fontWeight: 700, color: CH_NAVY, fontSize: 12, marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6 }}>
-          <i className="ti ti-link" style={{ fontSize: 14 }} />
-          <span>Cobertura de cruces · ¿qué tan identificados están los helpers?</span>
-        </div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10 }}>
-          <div style={{ background: '#fff', borderRadius: 8, padding: '8px 12px', border: '0.5px solid #d1fae5' }}>
-            <div style={{ fontSize: 18, fontWeight: 700, color: '#065f46' }}>{conteos.scoreExcelente}</div>
-            <div style={{ fontSize: 10, color: CH_MUTED, lineHeight: 1.4 }}>
-              <strong style={{ color: '#065f46' }}>✅ Match excelente</strong><br />
-              Padrón MELI · score ≥ 0.9
-            </div>
-          </div>
-          <div style={{ background: '#fff', borderRadius: 8, padding: '8px 12px', border: '0.5px solid #bbf7d0' }}>
-            <div style={{ fontSize: 18, fontWeight: 700, color: '#15803d' }}>{conteos.scoreBueno}</div>
-            <div style={{ fontSize: 10, color: CH_MUTED, lineHeight: 1.4 }}>
-              <strong style={{ color: '#15803d' }}>👍 Match bueno</strong><br />
-              Padrón MELI · score 0.7-0.9
-            </div>
-          </div>
-          <div style={{ background: '#fff', borderRadius: 8, padding: '8px 12px', border: '0.5px solid #fed7aa' }}>
-            <div style={{ fontSize: 18, fontWeight: 700, color: '#9a3412' }}>{conteos.scoreMedio}</div>
-            <div style={{ fontSize: 10, color: CH_MUTED, lineHeight: 1.4 }}>
-              <strong style={{ color: '#9a3412' }}>🔍 Match dudoso</strong><br />
-              Padrón MELI · score 0.5-0.7
-            </div>
-          </div>
-          <div style={{ background: '#fff', borderRadius: 8, padding: '8px 12px', border: '0.5px solid #fecaca' }}>
-            <div style={{ fontSize: 18, fontWeight: 700, color: '#991b1b' }}>{conteos.sinPadron}</div>
-            <div style={{ fontSize: 10, color: CH_MUTED, lineHeight: 1.4 }}>
-              <strong style={{ color: '#991b1b' }}>❌ Sin padrón</strong><br />
-              No identificado en MELI
-            </div>
-          </div>
-        </div>
-        {/* Cobertura BT */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 10, marginTop: 10 }}>
-          <div style={{ background: '#fff', borderRadius: 8, padding: '8px 12px', border: '0.5px solid #d1fae5' }}>
-            <div style={{ fontSize: 16, fontWeight: 700, color: '#065f46' }}>{conteos.btAprobado}</div>
-            <div style={{ fontSize: 10, color: CH_MUTED }}>✅ BT Aprobado</div>
-          </div>
-          <div style={{ background: '#fff', borderRadius: 8, padding: '8px 12px', border: '0.5px solid #fecaca' }}>
-            <div style={{ fontSize: 16, fontWeight: 700, color: '#991b1b' }}>{conteos.btRechazado}</div>
-            <div style={{ fontSize: 10, color: CH_MUTED }}>🔴 BT Rechazado</div>
-          </div>
-          <div style={{ background: '#fff', borderRadius: 8, padding: '8px 12px', border: '0.5px solid #fed7aa' }}>
-            <div style={{ fontSize: 16, fontWeight: 700, color: '#9a3412' }}>{conteos.btPendiente}</div>
-            <div style={{ fontSize: 10, color: CH_MUTED }}>🟠 BT Pendiente</div>
-          </div>
-          <div style={{ background: '#fff', borderRadius: 8, padding: '8px 12px', border: '0.5px solid #fef3c7' }}>
-            <div style={{ fontSize: 16, fontWeight: 700, color: '#92400e' }}>{conteos.noEnBt}</div>
-            <div style={{ fontSize: 10, color: CH_MUTED }}>🟡 No en BT</div>
-          </div>
-          <div style={{ background: '#fff', borderRadius: 8, padding: '8px 12px', border: '0.5px solid #e5e7eb' }}>
-            <div style={{ fontSize: 16, fontWeight: 700, color: '#374151' }}>{conteos.sinCurpParaBt}</div>
-            <div style={{ fontSize: 10, color: CH_MUTED }}>⚪ Sin CURP</div>
-          </div>
-        </div>
-      </div>
-
       {/* Leyenda de gravedad */}
       <div style={{ display: 'flex', gap: 18, marginBottom: 16, flexWrap: 'wrap', fontSize: 11 }}>
         <LegItem color={CH_RED} label="Gravedad crítica" desc="— impacto financiero directo · acción inmediata" />
