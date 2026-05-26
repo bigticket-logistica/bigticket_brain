@@ -17650,7 +17650,7 @@ function PoolMeliControlHelper() {
     return mx.toISOString().split('T')[0];
   });
   const [universo, setUniverso] = useState(0);
-  const [periodo, setPeriodo] = useState(14);
+  const [periodo, setPeriodo] = useState(7);
   const [datos, setDatos] = useState([]);
   const [serie, setSerie] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -17667,7 +17667,7 @@ function PoolMeliControlHelper() {
           .from('vw_control_helper_diario').select('*').eq('fecha', fecha).order('sc');
         if (e1) throw e1;
         const desde = new Date(fecha);
-        desde.setDate(desde.getDate() - 30);
+        desde.setDate(desde.getDate() - 7);
         const { data: r2, error: e2 } = await sb
           .from('vw_control_helper_diario').select('fecha,universo')
           .gte('fecha', desde.toISOString().split('T')[0]).lte('fecha', fecha);
@@ -17887,7 +17887,7 @@ function PoolMeliControlHelper() {
         <div style={{ background: CH_CARD, borderBottom: `1px solid ${CH_BORDER}`, padding: '12px 24px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <span style={{ fontSize: 10, fontWeight: 700, color: CH_LIGHT, textTransform: 'uppercase', letterSpacing: 0.5 }}>Período</span>
-            {[7, 14, 30].map(n => (
+            {[3, 7].map(n => (
               <div key={n} onClick={() => { setPeriodo(n); setDdOpen(false); }} style={{
                 fontSize: 11, fontWeight: 600, padding: '5px 12px', borderRadius: 6,
                 border: `1px solid ${periodo === n ? CH_NAVY : CH_BORDER}`,
