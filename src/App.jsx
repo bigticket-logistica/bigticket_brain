@@ -17653,7 +17653,6 @@ function PoolMeliControlHelper() {
   const [periodo, setPeriodo] = useState(14);
   const [datos, setDatos] = useState([]);
   const [serie, setSerie] = useState([]);
-  const [maestroByRuta, setMaestroByRuta] = useState({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [drillDown, setDrillDown] = useState(null);
@@ -17673,18 +17672,8 @@ function PoolMeliControlHelper() {
           .from('vw_control_helper_diario').select('fecha,universo')
           .gte('fecha', desde.toISOString().split('T')[0]).lte('fecha', fecha);
         if (e2) throw e2;
-        // Query extra al Maestro Supervisores para enriquecer drilldowns
-        const { data: r3, error: e3 } = await sb
-          .from('vw_maestro_supervisores_auto')
-          .select('idviaje,nombre_ayudante,pct_helper,pct_por_persona,ids_personas,alertas_helper,servicio,con_ayudante,pct_visitado,observaciones_auto')
-          .eq('fecha', fecha);
-        if (e3) console.warn('Maestro no disponible:', e3.message);
         if (alive) {
           setDatos(r1 || []);
-          // Index por id_ruta para lookup O(1)
-          const idx = {};
-          (r3 || []).forEach(m => { if (m.idviaje) idx[m.idviaje] = m; });
-          setMaestroByRuta(idx);
           const porDia = {};
           (r2 || []).forEach(r => {
             if (!porDia[r.fecha]) porDia[r.fecha] = { U1: 0, U2: 0, U3: 0, OK: 0, total: 0 };
@@ -17703,8 +17692,35 @@ function PoolMeliControlHelper() {
   }, [fecha]);
 
   const conteos = useMemo(() => {
-    const c = { total: datos.length, U1: 0, U2: 0, U3: 0, OK: 0 };
-    datos.forEach(r => { if (r.universo && c[r.universo] !== undefined) c[r.universo]++; });
+    const c = {
+      total: datos.length,
+      U1: 0, U2: 0, U3: 0, OK: 0,
+      // Match score
+      scoreExcelente: 0,  // >= 0.9
+      scoreBueno: 0,      // 0.7 - 0.9
+      scoreMedio: 0,      // 0.5 - 0.7
+      sinPadron: 0,       // NO_EN_PADRON
+      // BT
+      btAprobado: 0,
+      btRechazado: 0,
+      btPendiente: 0,
+      noEnBt: 0,
+      sinCurpParaBt: 0,
+    };
+    datos.forEach(r => {
+      if (r.universo && c[r.universo] !== undefined) c[r.universo]++;
+      const s = r.helper_match_score_padron;
+      if (s == null) c.sinPadron++;
+      else if (s >= 0.9) c.scoreExcelente++;
+      else if (s >= 0.7) c.scoreBueno++;
+      else c.scoreMedio++;
+      const eb = r.helper_estado_bt;
+      if (eb === 'BT_APROBADO') c.btAprobado++;
+      else if (eb === 'BT_RECHAZADO') c.btRechazado++;
+      else if (eb === 'BT_PENDIENTE') c.btPendiente++;
+      else if (eb === 'NO_EN_BT') c.noEnBt++;
+      else if (eb === 'SIN_CURP_PARA_BUSCAR') c.sinCurpParaBt++;
+    });
     return c;
   }, [datos]);
 
@@ -17752,7 +17768,7 @@ function PoolMeliControlHelper() {
       if (r.helper_cert_estado === 'SIN_BT') mat[r.sc].sinBt.push(r);
       else if (r.helper_cert_estado === 'BT_PENDIENTE') mat[r.sc].btPend.push(r);
       else if (r.helper_cert_estado === 'MELI_INACTIVE') mat[r.sc].meliInact.push(r);
-      else if (r.helper_match_score !== null && r.helper_match_score < 0.7) mat[r.sc].matchDudoso.push(r);
+      else if (r.helper_estado_padron === 'MATCH_DUDOSO') mat[r.sc].matchDudoso.push(r);
       mat[r.sc].total++;
     });
     const totals = {
@@ -17760,7 +17776,7 @@ function PoolMeliControlHelper() {
       btPend: u3.filter(r => r.helper_cert_estado === 'BT_PENDIENTE').length,
       meliInact: u3.filter(r => r.helper_cert_estado === 'MELI_INACTIVE').length,
       matchDudoso: u3.filter(r =>
-        r.helper_match_score !== null && r.helper_match_score < 0.7
+        r.helper_estado_padron === 'MATCH_DUDOSO'
         && r.helper_cert_estado !== 'SIN_BT'
         && r.helper_cert_estado !== 'BT_PENDIENTE'
         && r.helper_cert_estado !== 'MELI_INACTIVE'
@@ -17888,8 +17904,8 @@ function PoolMeliControlHelper() {
       <div style={{ padding: '16px 24px' }}>
         {universo === 0 && <PanelU0 conteos={conteos} setUniverso={setUniverso} getSerieVals={getSerieVals} />}
         {universo === 1 && <PanelU1 matriz={matrizU1} conteos={conteos} datos={datos} drillDown={drillDown} setDrillDown={setDrillDown} fecha={fecha} getSerieVals={getSerieVals} />}
-        {universo === 2 && <PanelU2 matriz={matrizU2} conteos={conteos} drillDown={drillDown} setDrillDown={setDrillDown} fecha={fecha} getSerieVals={getSerieVals} maestroByRuta={maestroByRuta} />}
-        {universo === 3 && <PanelU3 matriz={matrizU3} conteos={conteos} drillDown={drillDown} setDrillDown={setDrillDown} fecha={fecha} getSerieVals={getSerieVals} maestroByRuta={maestroByRuta} />}
+        {universo === 2 && <PanelU2 matriz={matrizU2} conteos={conteos} drillDown={drillDown} setDrillDown={setDrillDown} fecha={fecha} getSerieVals={getSerieVals} />}
+        {universo === 3 && <PanelU3 matriz={matrizU3} conteos={conteos} drillDown={drillDown} setDrillDown={setDrillDown} fecha={fecha} getSerieVals={getSerieVals} />}
       </div>
     </div>
   );
@@ -17899,8 +17915,24 @@ function PoolMeliControlHelper() {
 // PANEL U0 · RESUMEN EJECUTIVO
 // ════════════════════════════════════════════════════════════════════════════
 function PanelU0({ conteos, setUniverso, getSerieVals }) {
+  // Sólo rutas con helper declarado (filtro fundamental de la vista)
+  const cobPad = conteos.total - conteos.sinPadron;     // identificados en padrón
+  const cobBt = conteos.btAprobado + conteos.btRechazado + conteos.btPendiente; // con respuesta BT
   return (
     <div>
+      {/* Banner aclaratorio del nuevo filtro */}
+      <div style={{
+        background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 12,
+        padding: '10px 14px', marginBottom: 14, fontSize: 11, color: '#1e40af',
+        display: 'flex', alignItems: 'center', gap: 8,
+      }}>
+        <i className="ti ti-info-circle" style={{ fontSize: 14 }} />
+        <span>
+          Mostrando solo rutas con helper <strong>declarado por MELI</strong> ({conteos.total} rutas).
+          Los casos de "alguien escaneó sin declararse como ayudante" quedan fuera del scope.
+        </span>
+      </div>
+
       {/* Flowbar segmentado */}
       <div style={{ height: 36, display: 'flex', borderRadius: 10, overflow: 'hidden', marginBottom: 16, fontSize: 11, fontWeight: 700, color: '#fff', border: `0.5px solid ${CH_BORDER}` }}>
         <div style={{ flex: conteos.total || 1, background: CH_GRAY, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{conteos.total} rutas</div>
@@ -17908,6 +17940,70 @@ function PanelU0({ conteos, setUniverso, getSerieVals }) {
         {conteos.U2 > 0 && <div style={{ flex: conteos.U2, background: CH_ORANGE, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>U2 · {conteos.U2}</div>}
         {conteos.U3 > 0 && <div style={{ flex: conteos.U3, background: '#eab308', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>U3 · {conteos.U3}</div>}
         {conteos.OK > 0 && <div style={{ flex: conteos.OK, background: CH_GREEN, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>OK · {conteos.OK}</div>}
+      </div>
+
+      {/* Cobertura de cruces */}
+      <div style={{
+        background: '#f8fafc', border: `0.5px solid ${CH_BORDER}`, borderRadius: 12,
+        padding: '12px 16px', marginBottom: 16, fontSize: 12,
+      }}>
+        <div style={{ fontWeight: 700, color: CH_NAVY, fontSize: 12, marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6 }}>
+          <i className="ti ti-link" style={{ fontSize: 14 }} />
+          <span>Cobertura de cruces · ¿qué tan identificados están los helpers?</span>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10 }}>
+          <div style={{ background: '#fff', borderRadius: 8, padding: '8px 12px', border: '0.5px solid #d1fae5' }}>
+            <div style={{ fontSize: 18, fontWeight: 700, color: '#065f46' }}>{conteos.scoreExcelente}</div>
+            <div style={{ fontSize: 10, color: CH_MUTED, lineHeight: 1.4 }}>
+              <strong style={{ color: '#065f46' }}>✅ Match excelente</strong><br />
+              Padrón MELI · score ≥ 0.9
+            </div>
+          </div>
+          <div style={{ background: '#fff', borderRadius: 8, padding: '8px 12px', border: '0.5px solid #bbf7d0' }}>
+            <div style={{ fontSize: 18, fontWeight: 700, color: '#15803d' }}>{conteos.scoreBueno}</div>
+            <div style={{ fontSize: 10, color: CH_MUTED, lineHeight: 1.4 }}>
+              <strong style={{ color: '#15803d' }}>👍 Match bueno</strong><br />
+              Padrón MELI · score 0.7-0.9
+            </div>
+          </div>
+          <div style={{ background: '#fff', borderRadius: 8, padding: '8px 12px', border: '0.5px solid #fed7aa' }}>
+            <div style={{ fontSize: 18, fontWeight: 700, color: '#9a3412' }}>{conteos.scoreMedio}</div>
+            <div style={{ fontSize: 10, color: CH_MUTED, lineHeight: 1.4 }}>
+              <strong style={{ color: '#9a3412' }}>🔍 Match dudoso</strong><br />
+              Padrón MELI · score 0.5-0.7
+            </div>
+          </div>
+          <div style={{ background: '#fff', borderRadius: 8, padding: '8px 12px', border: '0.5px solid #fecaca' }}>
+            <div style={{ fontSize: 18, fontWeight: 700, color: '#991b1b' }}>{conteos.sinPadron}</div>
+            <div style={{ fontSize: 10, color: CH_MUTED, lineHeight: 1.4 }}>
+              <strong style={{ color: '#991b1b' }}>❌ Sin padrón</strong><br />
+              No identificado en MELI
+            </div>
+          </div>
+        </div>
+        {/* Cobertura BT */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 10, marginTop: 10 }}>
+          <div style={{ background: '#fff', borderRadius: 8, padding: '8px 12px', border: '0.5px solid #d1fae5' }}>
+            <div style={{ fontSize: 16, fontWeight: 700, color: '#065f46' }}>{conteos.btAprobado}</div>
+            <div style={{ fontSize: 10, color: CH_MUTED }}>✅ BT Aprobado</div>
+          </div>
+          <div style={{ background: '#fff', borderRadius: 8, padding: '8px 12px', border: '0.5px solid #fecaca' }}>
+            <div style={{ fontSize: 16, fontWeight: 700, color: '#991b1b' }}>{conteos.btRechazado}</div>
+            <div style={{ fontSize: 10, color: CH_MUTED }}>🔴 BT Rechazado</div>
+          </div>
+          <div style={{ background: '#fff', borderRadius: 8, padding: '8px 12px', border: '0.5px solid #fed7aa' }}>
+            <div style={{ fontSize: 16, fontWeight: 700, color: '#9a3412' }}>{conteos.btPendiente}</div>
+            <div style={{ fontSize: 10, color: CH_MUTED }}>🟠 BT Pendiente</div>
+          </div>
+          <div style={{ background: '#fff', borderRadius: 8, padding: '8px 12px', border: '0.5px solid #fef3c7' }}>
+            <div style={{ fontSize: 16, fontWeight: 700, color: '#92400e' }}>{conteos.noEnBt}</div>
+            <div style={{ fontSize: 10, color: CH_MUTED }}>🟡 No en BT</div>
+          </div>
+          <div style={{ background: '#fff', borderRadius: 8, padding: '8px 12px', border: '0.5px solid #e5e7eb' }}>
+            <div style={{ fontSize: 16, fontWeight: 700, color: '#374151' }}>{conteos.sinCurpParaBt}</div>
+            <div style={{ fontSize: 10, color: CH_MUTED }}>⚪ Sin CURP</div>
+          </div>
+        </div>
       </div>
 
       {/* Leyenda de gravedad */}
@@ -18042,7 +18138,7 @@ function PanelU1({ matriz, conteos, datos, drillDown, setDrillDown, fecha, getSe
 // ════════════════════════════════════════════════════════════════════════════
 // PANEL U2 · CERTIFICACIÓN
 // ════════════════════════════════════════════════════════════════════════════
-function PanelU2({ matriz, conteos, drillDown, setDrillDown, fecha, getSerieVals, maestroByRuta }) {
+function PanelU2({ matriz, conteos, drillDown, setDrillDown, fecha, getSerieVals }) {
   const t = matriz.totals;
 
   return (
@@ -18110,7 +18206,7 @@ function PanelU2({ matriz, conteos, drillDown, setDrillDown, fecha, getSerieVals
         <HmLegend note="Clic en celda para ver detalle del helper" hint="Score < 0.7 → match dudoso · revisar nombre raw" />
       </div>
 
-      {drillDown && drillDown.uid === 2 && <DrillDown2 dd={drillDown} fecha={fecha} onClose={() => setDrillDown(null)} maestroByRuta={maestroByRuta} />}
+      {drillDown && drillDown.uid === 2 && <DrillDown2 dd={drillDown} fecha={fecha} onClose={() => setDrillDown(null)} />}
       {!drillDown && matriz.scs.length > 0 && <Hint text="Haz clic en cualquier celda coloreada para ver los helpers" />}
     </div>
   );
@@ -18119,7 +18215,7 @@ function PanelU2({ matriz, conteos, drillDown, setDrillDown, fecha, getSerieVals
 // ════════════════════════════════════════════════════════════════════════════
 // PANEL U3 · PROCESO
 // ════════════════════════════════════════════════════════════════════════════
-function PanelU3({ matriz, conteos, drillDown, setDrillDown, fecha, getSerieVals, maestroByRuta }) {
+function PanelU3({ matriz, conteos, drillDown, setDrillDown, fecha, getSerieVals }) {
   const t = matriz.totals;
   const scPrincipal = matriz.scs.length > 0
     ? [...matriz.scs].sort((a, b) => matriz.mat[b].total - matriz.mat[a].total)[0]
@@ -18192,10 +18288,10 @@ function PanelU3({ matriz, conteos, drillDown, setDrillDown, fecha, getSerieVals
             </>}
           </tbody>
         </table>
-        <HmLegend note="Sin BT y BT pendiente requieren acción de RH · MELI inactivo verificar con coordinador" hint="Clic en celda → ver helpers con % por persona y alertas del Maestro" />
+        <HmLegend note="Sin BT y BT pendiente requieren acción de RH · MELI inactivo verificar con coordinador" hint="Clic en celda → ver helpers" />
       </div>
 
-      {drillDown && drillDown.uid === 3 && <DrillDown3 dd={drillDown} fecha={fecha} onClose={() => setDrillDown(null)} maestroByRuta={maestroByRuta} />}
+      {drillDown && drillDown.uid === 3 && <DrillDown3 dd={drillDown} fecha={fecha} onClose={() => setDrillDown(null)} />}
       {!drillDown && matriz.scs.length > 0 && <Hint text="Haz clic en cualquier celda coloreada para ver los helpers" />}
     </div>
   );
@@ -18232,32 +18328,38 @@ function DrillDown1({ dd, fecha, onClose }) {
   );
 }
 
-function DrillDown2({ dd, fecha, onClose, maestroByRuta = {} }) {
+function DrillDown2({ dd, fecha, onClose }) {
   const isBtRech = dd.col === 'btRech';
-  const titulo = isBtRech ? 'BT Rechazado' : 'No certificado';
   const icon = isBtRech ? 'ti-shield-x' : 'ti-id-badge';
   const accionTxt = isBtRech
     ? '🔴 BT lo rechazó · NO debería operar · contactar SC inmediato'
     : '🔴 No identificado · investigar si es helper fantasma o alias';
 
   const exportar = () => exportCH(
-    ["Helper MELI", "SC", "Ruta", "Nombre padrón", "CURP", "% Helper", "% por persona", "Alertas Maestro", "Estado BT", "Score", "Acción"],
-    dd.rutas.map(r => {
-      const m = maestroByRuta[r.id_ruta] || {};
-      return [
-        r.helpers_nombres || '—',
-        r.sc,
-        r.id_ruta,
-        r.helper_name_padron || '—',
-        r.helper_curp || '—',
-        m.pct_helper != null ? `${m.pct_helper}%` : '—',
-        m.pct_por_persona || '—',
-        (m.alertas_helper || []).join(' · '),
-        r.helper_respuesta_bt || '—',
-        r.helper_match_score != null ? r.helper_match_score : '—',
-        isBtRech ? 'Contactar SC inmediato' : 'Verificar identidad',
-      ];
-    }),
+    ["Helper (limpio)", "Helper (raw)", "ID Persona", "SC", "Ruta",
+     "Match Padrón MELI", "Nombre padrón", "CURP padrón", "Status MELI", "Score padrón",
+     "Match BT", "Nombre BT", "Respuesta BT", "Empresa BT",
+     "% Helper", "% por persona", "Alertas Maestro", "Acción"],
+    dd.rutas.map(r => [
+      r.helper_nombre_limpio || '—',
+      r.helpers_nombres || '—',
+      r.helper_ids_personas || '—',
+      r.sc,
+      r.id_ruta,
+      r.helper_estado_padron || '—',
+      r.helper_name_padron || '—',
+      r.helper_curp_padron || '—',
+      r.helper_status_padron || '—',
+      r.helper_match_score_padron != null ? r.helper_match_score_padron : '—',
+      r.helper_estado_bt || '—',
+      r.helper_nombre_bt || '—',
+      r.helper_respuesta_bt || '—',
+      r.helper_empresa_bt || '—',
+      r.helper_pct != null ? `${r.helper_pct}%` : '—',
+      r.helper_pct_por_persona || '—',
+      (r.helper_alertas || []).join(' · '),
+      isBtRech ? 'Contactar SC inmediato' : 'Verificar identidad',
+    ]),
     `BT_U2_${dd.col}_${dd.svc}.csv`
   );
 
@@ -18265,112 +18367,82 @@ function DrillDown2({ dd, fecha, onClose, maestroByRuta = {} }) {
     <DrillWrap dd={dd} fecha={fecha} onClose={onClose} icon={icon} onExport={exportar}>
       <table style={{ width: '100%', borderCollapse: 'collapse' }}>
         <thead><tr>
-          <ThDt>Nombre MELI (raw)</ThDt>
+          <ThDt>Helper</ThDt>
+          <ThDt>ID Persona</ThDt>
           <ThDt>SC</ThDt>
           <ThDt>Ruta</ThDt>
-          {isBtRech && <ThDt>Match padrón</ThDt>}
-          {isBtRech && <ThDt>CURP</ThDt>}
+          <ThDt>Match Padrón MELI</ThDt>
+          <ThDt>Match BT</ThDt>
           <ThDt>% Helper</ThDt>
           <ThDt>% por persona</ThDt>
           <ThDt>Alertas Maestro</ThDt>
-          <ThDt>Score</ThDt>
-          <ThDt>Estado</ThDt>
           <ThDt>Acción</ThDt>
         </tr></thead>
-        <tbody>{dd.rutas.map((r, i) => {
-          const score = r.helper_match_score;
-          const scoreLow = score != null && score < 0.7;
-          const m = maestroByRuta[r.id_ruta] || {};
-          const pctHelper = m.pct_helper;
-          const pctHigh = pctHelper != null && pctHelper > 90;
-          return (
-            <tr key={i} style={{ borderBottom: `0.5px solid #f4f5f7` }}>
-              <TdDt bold>{r.helpers_nombres || '—'}</TdDt>
-              <TdDt mono>{r.sc}</TdDt>
-              <TdDt mono>{r.id_ruta}</TdDt>
-              {isBtRech && <TdDt>{r.helper_name_padron || '—'}</TdDt>}
-              {isBtRech && <TdDt mono>{r.helper_curp || '—'}</TdDt>}
-              <TdDt center>
-                {pctHelper != null ? (
-                  <span style={{
-                    fontFamily: 'monospace', fontSize: 11, fontWeight: 700,
-                    color: pctHigh ? '#dc2626' : '#1a1a1a',
-                  }}>{pctHelper}%</span>
-                ) : <span style={{ color: CH_LIGHT }}>—</span>}
-              </TdDt>
-              <TdDt>
-                {m.pct_por_persona ? (
-                  <span style={{ fontFamily: 'monospace', fontSize: 10, color: CH_MUTED }}>{m.pct_por_persona}</span>
-                ) : <span style={{ color: CH_LIGHT }}>—</span>}
-              </TdDt>
-              <TdDt>
-                <AlertasInline alertas={m.alertas_helper} />
-              </TdDt>
-              <TdDt center>
-                {score != null ? (
-                  <span style={{
-                    fontFamily: 'monospace', fontSize: 11, fontWeight: 600,
-                    color: scoreLow ? '#9a3412' : '#065f46',
-                  }}>{score.toFixed(3)}</span>
-                ) : <span style={{ color: CH_LIGHT }}>—</span>}
-              </TdDt>
-              <TdDt>
-                {isBtRech ? <Pill type="red">RECHAZADO</Pill> : <Pill type="rose">NO IDENTIFICADO</Pill>}
-              </TdDt>
-              <TdDt action>{accionTxt}</TdDt>
-            </tr>
-          );
-        })}</tbody>
+        <tbody>{dd.rutas.map((r, i) => (
+          <tr key={i} style={{ borderBottom: `0.5px solid #f4f5f7`, verticalAlign: 'top' }}>
+            <TdDt>
+              <NombreHelper limpio={r.helper_nombre_limpio} raw={r.helpers_nombres} />
+            </TdDt>
+            <TdDt mono>
+              {r.helper_ids_personas ? (
+                <span style={{ fontSize: 10, color: CH_MUTED }}>{r.helper_ids_personas}</span>
+              ) : <span style={{ color: CH_LIGHT }}>—</span>}
+            </TdDt>
+            <TdDt mono>{r.sc}</TdDt>
+            <TdDt mono>{r.id_ruta}</TdDt>
+            <TdDt><PadronCell r={r} /></TdDt>
+            <TdDt><BtCell r={r} /></TdDt>
+            <TdDt center><PctHelperCell pct={r.helper_pct} /></TdDt>
+            <TdDt>
+              {r.helper_pct_por_persona ? (
+                <span style={{ fontFamily: 'monospace', fontSize: 10, color: CH_MUTED }}>{r.helper_pct_por_persona}</span>
+              ) : <span style={{ color: CH_LIGHT }}>—</span>}
+            </TdDt>
+            <TdDt>
+              <AlertasInline alertas={r.helper_alertas} />
+            </TdDt>
+            <TdDt action>{accionTxt}</TdDt>
+          </tr>
+        ))}</tbody>
       </table>
     </DrillWrap>
   );
 }
 
-function DrillDown3({ dd, fecha, onClose, maestroByRuta = {} }) {
-  // Configuración por subcategoría
+function DrillDown3({ dd, fecha, onClose }) {
   const config = {
-    sinBt: {
-      pill: 'yellow', pillTxt: 'SIN BT',
-      accion: 'RH cargar en BBDD BT',
-      icon: 'ti-file-x',
-    },
-    btPend: {
-      pill: 'orange', pillTxt: 'BT PENDIENTE',
-      accion: 'Esperar respuesta de BT',
-      icon: 'ti-clock',
-    },
-    meliInact: {
-      pill: 'gray', pillTxt: 'MELI INACTIVE',
-      accion: 'Verificar status con coordinador',
-      icon: 'ti-user-off',
-    },
-    matchDudoso: {
-      pill: 'yellow', pillTxt: 'SCORE BAJO',
-      accion: 'Verificar identidad · revisar nombre raw',
-      icon: 'ti-search',
-    },
+    sinBt: { pill: 'yellow', pillTxt: 'SIN BT', accion: 'RH cargar en BBDD BT', icon: 'ti-file-x' },
+    btPend: { pill: 'orange', pillTxt: 'BT PENDIENTE', accion: 'Esperar respuesta de BT', icon: 'ti-clock' },
+    meliInact: { pill: 'gray', pillTxt: 'MELI INACTIVE', accion: 'Verificar status con coordinador', icon: 'ti-user-off' },
+    matchDudoso: { pill: 'yellow', pillTxt: 'SCORE BAJO', accion: 'Verificar identidad · revisar nombre raw', icon: 'ti-search' },
   };
   const cfg = config[dd.col] || config.sinBt;
 
   const exportar = () => exportCH(
-    ["Helper MELI", "SC", "Ruta", "Match padrón", "CURP", "Status MELI", "% Helper", "% por persona", "Alertas Maestro", "BT", "Score", "Acción"],
-    dd.rutas.map(r => {
-      const m = maestroByRuta[r.id_ruta] || {};
-      return [
-        r.helpers_nombres || '—',
-        r.sc,
-        r.id_ruta,
-        r.helper_name_padron || '—',
-        r.helper_curp || '—',
-        r.helper_status_padron || '—',
-        m.pct_helper != null ? `${m.pct_helper}%` : '—',
-        m.pct_por_persona || '—',
-        (m.alertas_helper || []).join(' · '),
-        r.helper_respuesta_bt || '—',
-        r.helper_match_score != null ? r.helper_match_score : '—',
-        cfg.accion,
-      ];
-    }),
+    ["Helper (limpio)", "Helper (raw)", "ID Persona", "SC", "Ruta",
+     "Match Padrón MELI", "Nombre padrón", "CURP padrón", "Status MELI", "Score padrón",
+     "Match BT", "Nombre BT", "Respuesta BT", "Empresa BT",
+     "% Helper", "% por persona", "Alertas Maestro", "Acción"],
+    dd.rutas.map(r => [
+      r.helper_nombre_limpio || '—',
+      r.helpers_nombres || '—',
+      r.helper_ids_personas || '—',
+      r.sc,
+      r.id_ruta,
+      r.helper_estado_padron || '—',
+      r.helper_name_padron || '—',
+      r.helper_curp_padron || '—',
+      r.helper_status_padron || '—',
+      r.helper_match_score_padron != null ? r.helper_match_score_padron : '—',
+      r.helper_estado_bt || '—',
+      r.helper_nombre_bt || '—',
+      r.helper_respuesta_bt || '—',
+      r.helper_empresa_bt || '—',
+      r.helper_pct != null ? `${r.helper_pct}%` : '—',
+      r.helper_pct_por_persona || '—',
+      (r.helper_alertas || []).join(' · '),
+      cfg.accion,
+    ]),
     `BT_U3_${dd.col}_${dd.svc}.csv`
   );
 
@@ -18378,85 +18450,45 @@ function DrillDown3({ dd, fecha, onClose, maestroByRuta = {} }) {
     <DrillWrap dd={dd} fecha={fecha} onClose={onClose} icon={cfg.icon} onExport={exportar}>
       <table style={{ width: '100%', borderCollapse: 'collapse' }}>
         <thead><tr>
-          <ThDt>Nombre MELI (raw)</ThDt>
+          <ThDt>Helper</ThDt>
+          <ThDt>ID Persona</ThDt>
           <ThDt>SC</ThDt>
           <ThDt>Ruta</ThDt>
-          <ThDt>Match padrón</ThDt>
-          {dd.col !== 'sinBt' && <ThDt>CURP</ThDt>}
-          {dd.col === 'meliInact' && <ThDt>Status MELI</ThDt>}
+          <ThDt>Match Padrón MELI</ThDt>
+          <ThDt>Match BT</ThDt>
           <ThDt>% Helper</ThDt>
           <ThDt>% por persona</ThDt>
           <ThDt>Alertas Maestro</ThDt>
-          <ThDt>Score</ThDt>
-          <ThDt>Estado</ThDt>
           <ThDt>Acción</ThDt>
         </tr></thead>
-        <tbody>{dd.rutas.map((r, i) => {
-          const score = r.helper_match_score;
-          const scoreLow = score != null && score < 0.7;
-          const m = maestroByRuta[r.id_ruta] || {};
-          const pctHelper = m.pct_helper;
-          const pctHigh = pctHelper != null && pctHelper > 90;
-          return (
-            <tr key={i} style={{ borderBottom: `0.5px solid #f4f5f7` }}>
-              <TdDt bold>{r.helpers_nombres || '—'}</TdDt>
-              <TdDt mono>{r.sc}</TdDt>
-              <TdDt mono>{r.id_ruta}</TdDt>
-              <TdDt>{r.helper_name_padron || '—'}</TdDt>
-              {dd.col !== 'sinBt' && <TdDt mono>{r.helper_curp || '—'}</TdDt>}
-              {dd.col === 'meliInact' && <TdDt>{r.helper_status_padron || '—'}</TdDt>}
-              <TdDt center>
-                {pctHelper != null ? (
-                  <span style={{
-                    fontFamily: 'monospace', fontSize: 11, fontWeight: 700,
-                    color: pctHigh ? '#dc2626' : '#1a1a1a',
-                  }}>{pctHelper}%</span>
-                ) : <span style={{ color: CH_LIGHT }}>—</span>}
-              </TdDt>
-              <TdDt>
-                {m.pct_por_persona ? (
-                  <span style={{ fontFamily: 'monospace', fontSize: 10, color: CH_MUTED }}>{m.pct_por_persona}</span>
-                ) : <span style={{ color: CH_LIGHT }}>—</span>}
-              </TdDt>
-              <TdDt>
-                <AlertasInline alertas={m.alertas_helper} />
-              </TdDt>
-              <TdDt center>
-                {score != null ? (
-                  <span style={{
-                    fontFamily: 'monospace', fontSize: 11, fontWeight: 600,
-                    color: scoreLow ? '#9a3412' : '#065f46',
-                  }}>{score.toFixed(3)}</span>
-                ) : <span style={{ color: CH_LIGHT }}>—</span>}
-              </TdDt>
-              <TdDt><Pill type={cfg.pill}>{cfg.pillTxt}</Pill></TdDt>
-              <TdDt action>{cfg.accion}</TdDt>
-            </tr>
-          );
-        })}</tbody>
+        <tbody>{dd.rutas.map((r, i) => (
+          <tr key={i} style={{ borderBottom: `0.5px solid #f4f5f7`, verticalAlign: 'top' }}>
+            <TdDt>
+              <NombreHelper limpio={r.helper_nombre_limpio} raw={r.helpers_nombres} />
+            </TdDt>
+            <TdDt mono>
+              {r.helper_ids_personas ? (
+                <span style={{ fontSize: 10, color: CH_MUTED }}>{r.helper_ids_personas}</span>
+              ) : <span style={{ color: CH_LIGHT }}>—</span>}
+            </TdDt>
+            <TdDt mono>{r.sc}</TdDt>
+            <TdDt mono>{r.id_ruta}</TdDt>
+            <TdDt><PadronCell r={r} /></TdDt>
+            <TdDt><BtCell r={r} /></TdDt>
+            <TdDt center><PctHelperCell pct={r.helper_pct} /></TdDt>
+            <TdDt>
+              {r.helper_pct_por_persona ? (
+                <span style={{ fontFamily: 'monospace', fontSize: 10, color: CH_MUTED }}>{r.helper_pct_por_persona}</span>
+              ) : <span style={{ color: CH_LIGHT }}>—</span>}
+            </TdDt>
+            <TdDt>
+              <AlertasInline alertas={r.helper_alertas} />
+            </TdDt>
+            <TdDt action>{cfg.accion}</TdDt>
+          </tr>
+        ))}</tbody>
       </table>
     </DrillWrap>
-  );
-}
-
-// Componente helper: pills inline con paleta del Maestro Supervisores
-function AlertasInline({ alertas }) {
-  if (!alertas || alertas.length === 0) return <span style={{ color: CH_LIGHT }}>—</span>;
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-      {alertas.map((a, idx) => {
-        const isRojo = a.includes('Helper >90') || a.includes('Multi-ID');
-        const isNaranja = a.includes('Investigar') || a.includes('3+ personas');
-        const isGris = a.includes('invisible');
-        return (
-          <span key={idx} style={{
-            background: isRojo ? '#fee2e2' : isNaranja ? '#fef3c7' : isGris ? '#f1f5f9' : '#e0e7ff',
-            color: isRojo ? '#dc2626' : isNaranja ? '#b45309' : isGris ? '#475569' : '#4338ca',
-            padding: '1px 6px', borderRadius: 4, fontSize: 9, fontWeight: 600, whiteSpace: 'nowrap',
-          }}>{a}</span>
-        );
-      })}
-    </div>
   );
 }
 
@@ -18670,6 +18702,137 @@ function Pill({ children, type }) {
   };
   const styles = palette[type] || palette.yellow;
   return <span style={{ ...styles, fontSize: 9.5, fontWeight: 700, padding: '3px 8px', borderRadius: 5, textTransform: 'uppercase', letterSpacing: 0.3 }}>{children}</span>;
+}
+
+// ── Componente: nombre limpio del Maestro + raw debajo si difiere ──
+function NombreHelper({ limpio, raw }) {
+  if (!limpio && !raw) return <span style={{ color: CH_LIGHT }}>—</span>;
+  if (!limpio) return <span style={{ fontWeight: 600, fontSize: 11 }}>{raw}</span>;
+  const rawDiferente = raw && raw.toLowerCase().trim() !== limpio.toLowerCase().trim();
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+      <span style={{ fontWeight: 600, fontSize: 11 }}>{limpio}</span>
+      {rawDiferente && (
+        <span style={{ fontSize: 9, color: CH_LIGHT, fontStyle: 'italic', fontFamily: 'monospace' }}>
+          raw: {raw}
+        </span>
+      )}
+    </div>
+  );
+}
+
+// ── Componente: pills inline con alertas del Maestro Supervisores ──
+function AlertasInline({ alertas }) {
+  if (!alertas || alertas.length === 0) return <span style={{ color: CH_LIGHT }}>—</span>;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+      {alertas.map((a, idx) => {
+        const isRojo = a.includes('Helper >90') || a.includes('Multi-ID');
+        const isNaranja = a.includes('Investigar') || a.includes('3+ personas');
+        const isGris = a.includes('invisible');
+        return (
+          <span key={idx} style={{
+            background: isRojo ? '#fee2e2' : isNaranja ? '#fef3c7' : isGris ? '#f1f5f9' : '#e0e7ff',
+            color: isRojo ? '#dc2626' : isNaranja ? '#b45309' : isGris ? '#475569' : '#4338ca',
+            padding: '1px 6px', borderRadius: 4, fontSize: 9, fontWeight: 600, whiteSpace: 'nowrap',
+          }}>{a}</span>
+        );
+      })}
+    </div>
+  );
+}
+
+// ── Componente: celda Match Padrón MELI (independiente) ──
+function PadronCell({ r }) {
+  const e = r.helper_estado_padron;
+  const score = r.helper_match_score_padron;
+  if (e === 'NO_EN_PADRON') {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+        <Pill type="rose">❌ NO EN PADRÓN</Pill>
+        <span style={{ fontSize: 9, color: CH_LIGHT, fontStyle: 'italic' }}>fantasma · investigar</span>
+      </div>
+    );
+  }
+  const scoreColor = score >= 0.9 ? '#065f46' : score >= 0.7 ? '#15803d' : '#9a3412';
+  const pillType =
+    e === 'EN_PADRON_ACTIVO' ? 'green' :
+    e === 'EN_PADRON_INACTIVO' ? 'gray' :
+    e === 'MATCH_DUDOSO' ? 'orange' : 'yellow';
+  const pillLabel =
+    e === 'EN_PADRON_ACTIVO' ? '✅ ACTIVO' :
+    e === 'EN_PADRON_INACTIVO' ? '⚪ INACTIVO' :
+    e === 'MATCH_DUDOSO' ? '🔍 DUDOSO' : e;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+      <Pill type={pillType}>{pillLabel}</Pill>
+      {r.helper_name_padron && (
+        <span style={{ fontSize: 10, color: CH_MUTED }}>{r.helper_name_padron}</span>
+      )}
+      {score != null && (
+        <span style={{ fontSize: 9, fontFamily: 'monospace', color: scoreColor, fontWeight: 600 }}>
+          score: {Number(score).toFixed(3)}
+        </span>
+      )}
+      {r.helper_curp_padron && (
+        <span style={{ fontSize: 9, fontFamily: 'monospace', color: CH_LIGHT }}>
+          {r.helper_curp_padron}
+        </span>
+      )}
+    </div>
+  );
+}
+
+// ── Componente: celda Match BBDD BT (independiente) ──
+function BtCell({ r }) {
+  const e = r.helper_estado_bt;
+  if (e === 'SIN_CURP_PARA_BUSCAR') {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+        <Pill type="gray">⚪ SIN CURP</Pill>
+        <span style={{ fontSize: 9, color: CH_LIGHT, fontStyle: 'italic' }}>no encontrado en padrón</span>
+      </div>
+    );
+  }
+  if (e === 'NO_EN_BT') {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+        <Pill type="yellow">🟡 NO EN BT</Pill>
+        <span style={{ fontSize: 9, color: CH_LIGHT, fontStyle: 'italic' }}>cargar en BBDD BT</span>
+      </div>
+    );
+  }
+  const pillType =
+    e === 'BT_APROBADO' ? 'green' :
+    e === 'BT_RECHAZADO' ? 'red' :
+    e === 'BT_PENDIENTE' ? 'orange' : 'gray';
+  const pillLabel =
+    e === 'BT_APROBADO' ? '✅ APROBADO' :
+    e === 'BT_RECHAZADO' ? '🔴 RECHAZADO' :
+    e === 'BT_PENDIENTE' ? '🟠 PENDIENTE' : e;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+      <Pill type={pillType}>{pillLabel}</Pill>
+      {r.helper_nombre_bt && (
+        <span style={{ fontSize: 10, color: CH_MUTED }}>{r.helper_nombre_bt}</span>
+      )}
+      {r.helper_empresa_bt && (
+        <span style={{ fontSize: 9, color: CH_LIGHT, fontStyle: 'italic' }}>{r.helper_empresa_bt}</span>
+      )}
+    </div>
+  );
+}
+
+// ── Componente: celda % Helper con color según severidad ──
+function PctHelperCell({ pct }) {
+  if (pct == null) return <span style={{ color: CH_LIGHT }}>—</span>;
+  const high = pct > 90;
+  return (
+    <span style={{
+      fontFamily: 'monospace', fontSize: 11, fontWeight: 700,
+      color: high ? '#dc2626' : '#1a1a1a',
+    }}>{pct}%</span>
+  );
 }
 
 // Utils
