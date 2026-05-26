@@ -18423,8 +18423,6 @@ function DrillDown2({ dd, datos, fecha, onClose }) {
           <ThDt>Match Padrón MELI</ThDt>
           <ThDt>Match BT</ThDt>
           <ThDt>% Persona</ThDt>
-          <ThDt>Alertas Maestro</ThDt>
-          <ThDt>Acción</ThDt>
         </tr></thead>
         <tbody>{filas.map((r, i) => {
           const esPrimeraDeRuta = i === 0 || filas[i - 1].id_ruta !== r.id_ruta;
@@ -18445,10 +18443,6 @@ function DrillDown2({ dd, datos, fecha, onClose }) {
               <TdDt><PadronCell r={r} /></TdDt>
               <TdDt><BtCell r={r} /></TdDt>
               <TdDt center><PctHelperCell pct={r.helper_pct} /></TdDt>
-              <TdDt>
-                <AlertasInline alertas={r.helper_alertas} />
-              </TdDt>
-              <TdDt action>{r._esDisparador ? accionTxt : <span style={{ color: CH_LIGHT, fontSize: 10, fontStyle: 'italic' }}>contexto · misma ruta</span>}</TdDt>
             </DrillRow>
           );
         })}</tbody>
