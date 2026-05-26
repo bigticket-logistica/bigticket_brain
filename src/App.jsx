@@ -18517,8 +18517,6 @@ function DrillDown3({ dd, datos, fecha, onClose }) {
           <ThDt>Match Padrón MELI</ThDt>
           <ThDt>Match BT</ThDt>
           <ThDt>% Persona</ThDt>
-          <ThDt>Alertas Maestro</ThDt>
-          <ThDt>Acción</ThDt>
         </tr></thead>
         <tbody>{filas.map((r, i) => {
           const esPrimeraDeRuta = i === 0 || filas[i - 1].id_ruta !== r.id_ruta;
@@ -18539,10 +18537,6 @@ function DrillDown3({ dd, datos, fecha, onClose }) {
               <TdDt><PadronCell r={r} /></TdDt>
               <TdDt><BtCell r={r} /></TdDt>
               <TdDt center><PctHelperCell pct={r.helper_pct} /></TdDt>
-              <TdDt>
-                <AlertasInline alertas={r.helper_alertas} />
-              </TdDt>
-              <TdDt action>{r._esDisparador ? cfg.accion : <span style={{ color: CH_LIGHT, fontSize: 10, fontStyle: 'italic' }}>contexto · misma ruta</span>}</TdDt>
             </DrillRow>
           );
         })}</tbody>
@@ -18892,20 +18886,14 @@ function NombreHelper({ limpio, raw, idx, count, esChofer, esDisparador }) {
     }}>{idx} de {count}</span>
   );
   const nombreMostrado = limpio || raw;
-  const rawDiferente = limpio && raw && raw.toLowerCase().trim() !== limpio.toLowerCase().trim();
+  // ⭐ v9.3: el raw del Maestro es a nivel ruta (mezcla todas las personas)
+  // y solo confunde — se oculta siempre. Si hace falta investigar, está en el CSV exportado.
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-      <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 2 }}>
-        {dispPill}
-        {rolPill}
-        <span style={{ fontWeight: 600, fontSize: 11 }}>{nombreMostrado}</span>
-        {multiPill}
-      </div>
-      {rawDiferente && (
-        <span style={{ fontSize: 9, color: CH_LIGHT, fontStyle: 'italic', fontFamily: 'monospace' }}>
-          raw: {raw}
-        </span>
-      )}
+    <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 2 }}>
+      {dispPill}
+      {rolPill}
+      <span style={{ fontWeight: 600, fontSize: 11 }}>{nombreMostrado}</span>
+      {multiPill}
     </div>
   );
 }
