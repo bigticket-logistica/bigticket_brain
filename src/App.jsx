@@ -17722,16 +17722,22 @@ function PoolMeliControlHelper() {
     };
     const rutasSet = new Set();
     const rutasCount = {};
+    const rutasU1Set = new Set(); // ⭐ v9: U1 cuenta rutas únicas (incluye al chofer)
     datos.forEach(r => {
       rutasSet.add(r.id_ruta);
       rutasCount[r.id_ruta] = (rutasCount[r.id_ruta] || 0) + 1;
+      // ⭐ v9: U1 se cuenta a nivel ruta — el chofer también pertenece a U1
+      if (r.universo === 'U1') rutasU1Set.add(r.id_ruta);
       if (r.es_chofer) {
         c.choferesEscaneando++;
-        return; // chofer no se evalúa en universo/cobertura
+        return; // chofer no se evalúa en U2/U3/OK ni en cobertura padrón/BT
       }
       // Solo helpers reales (es_chofer = false)
       c.helpersOperando++;
-      if (r.universo && c[r.universo] !== undefined) c[r.universo]++;
+      if (r.universo === 'U2') c.U2++;
+      else if (r.universo === 'U3') c.U3++;
+      else if (r.universo === 'OK') c.OK++;
+      // U1 NO se cuenta acá: ya se contó arriba a nivel ruta
       const s = r.helper_match_score_padron;
       if (s == null) c.sinPadron++;
       else if (s >= 0.9) c.scoreExcelente++;
@@ -17745,6 +17751,7 @@ function PoolMeliControlHelper() {
       else if (eb === 'SIN_CURP_PARA_BUSCAR') c.sinCurpParaBt++;
     });
     c.total = rutasSet.size;
+    c.U1 = rutasU1Set.size; // ⭐ v9: rutas únicas no autorizadas
     c.rutasMulti = Object.values(rutasCount).filter(n => n > 2).length;  // 2+ helpers reales
     return c;
   }, [datos]);
@@ -17759,6 +17766,8 @@ function PoolMeliControlHelper() {
   const getSerieVals = (uni) => [ayerCount[uni] || 0, conteos[uni] || 0];
 
   const matrizU1 = useMemo(() => {
+    // ⭐ v9: U1 ahora incluye filas de chofer Y helpers (toda ruta no autorizada)
+    // Las filas del drilldown muestran a todos los que entregaron en la ruta U1
     const vehiculos = ['Small Van MLP', 'Small Van MLP SDD', 'Large Van MLP', 'Large Van MLP SDD'];
     const u1 = datos.filter(r => r.universo === 'U1');
     const scs = [...new Set(u1.map(r => r.sc))].sort();
@@ -18028,11 +18037,14 @@ function LegItem({ color, label, desc, labelColor }) {
 function PanelU1({ matriz, conteos, datos, drillDown, setDrillDown, fecha, getSerieVals }) {
   const scsFor = ['SCQ1', 'SCY1', 'SQR1', 'STL1', 'SHP1', 'STX1', 'SVH1'];
   const scsForOperando = [...new Set(datos.filter(r => scsFor.includes(r.sc)).map(r => r.sc))];
-  const totalForaneo = datos.filter(r => scsFor.includes(r.sc) && r.helper_flag).length;
+  // ⭐ v9: contar RUTAS únicas — datos tiene 1 fila por persona
+  const totalForaneo = new Set(
+    datos.filter(r => scsFor.includes(r.sc) && r.helper_flag).map(r => r.id_ruta)
+  ).size;
   const scsSinRutaLimpia = matriz.scs.filter(sc => {
-    const todas = datos.filter(r => r.sc === sc && r.helper_flag);
-    const u1 = todas.filter(r => r.universo === 'U1');
-    return todas.length > 0 && todas.length === u1.length;
+    const rutasTodas = new Set(datos.filter(r => r.sc === sc && r.helper_flag).map(r => r.id_ruta));
+    const rutasU1 = new Set(datos.filter(r => r.sc === sc && r.universo === 'U1').map(r => r.id_ruta));
+    return rutasTodas.size > 0 && rutasTodas.size === rutasU1.size;
   });
 
   return (
@@ -18059,13 +18071,16 @@ function PanelU1({ matriz, conteos, datos, drillDown, setDrillDown, fecha, getSe
               <tr><td colSpan={6} style={{ padding: 24, textAlign: 'center', color: CH_LIGHT, fontSize: 12 }}>Sin rutas U1 para esta fecha</td></tr>
             ) : <>
               {matriz.scs.map(sc => {
-                const total = matriz.vehiculos.reduce((s, v) => s + matriz.mat[sc][v].length, 0);
+                // ⭐ v9: contar RUTAS únicas (no filas, que incluyen driver+helpers)
+                const total = matriz.vehiculos.reduce(
+                  (s, v) => s + new Set(matriz.mat[sc][v].map(r => r.id_ruta)).size, 0
+                );
                 return (
                   <tr key={sc}>
                     <TdSn>{sc}</TdSn>
                     {matriz.vehiculos.map(v => {
                       const rutas = matriz.mat[sc][v];
-                      const n = rutas.length;
+                      const n = new Set(rutas.map(r => r.id_ruta)).size; // ⭐ v9: rutas únicas
                       const sel = drillDown && drillDown.uid === 1 && drillDown.svc === sc && drillDown.vehiculo === v;
                       return <TdHeat key={v} n={n} selected={sel}
                         onClick={() => n > 0 && setDrillDown({ uid: 1, svc: sc, vehiculo: v, n, rutas })} />;
@@ -18077,7 +18092,9 @@ function PanelU1({ matriz, conteos, datos, drillDown, setDrillDown, fecha, getSe
               <tr style={{ background: '#f8fafc', borderTop: `1px solid ${CH_BORDER}` }}>
                 <TdSn total>Total</TdSn>
                 {matriz.vehiculos.map(v => {
-                  const t = matriz.scs.reduce((s, sc) => s + matriz.mat[sc][v].length, 0);
+                  const t = matriz.scs.reduce(
+                    (s, sc) => s + new Set(matriz.mat[sc][v].map(r => r.id_ruta)).size, 0
+                  );
                   return <TdTotal key={v}>{t}</TdTotal>;
                 })}
                 <TdTotal strong>{conteos.U1}</TdTotal>
@@ -18260,20 +18277,42 @@ function PanelU3({ matriz, conteos, drillDown, setDrillDown, fecha, getAyer }) {
 // DRILL-DOWNS
 // ════════════════════════════════════════════════════════════════════════════
 function DrillDown1({ dd, fecha, onClose }) {
+  // ⭐ v9: ordenar agrupado por ruta, driver primero dentro de cada ruta
+  const filas = [...(dd.rutas || [])].sort((a, b) => {
+    if (a.id_ruta !== b.id_ruta) return Number(a.id_ruta) - Number(b.id_ruta);
+    if (a.es_chofer !== b.es_chofer) return a.es_chofer ? -1 : 1;
+    return (a.helper_idx || 0) - (b.helper_idx || 0);
+  });
+
   const exportar = () => exportCH(
-    ["Driver (chofer)", "Driver ID", "Ruta", "SC", "Vehículo", "Helper", "Helper ID", "Match Padrón MELI", "Match BT", "% Helper", "Razón", "Acción"],
-    dd.rutas.map(r => [
+    ["Driver (chofer)", "Driver ID", "Ruta", "SC", "Vehículo",
+     "Es chofer", "Persona", "Persona Raw", "Persona ID",
+     "Match Padrón MELI", "Nombre padrón", "CURP padrón", "Score padrón",
+     "Match BT", "Nombre BT", "Respuesta BT", "Empresa BT",
+     "% Persona", "% Participación helper ruta", "Alertas Maestro",
+     "Razón", "Acción"],
+    filas.map(r => [
       r.chofer_nombre || '—',
       r.chofer_user_id || '—',
       r.id_ruta,
       r.sc,
       r.vehiculo || '—',
+      r.es_chofer ? 'SÍ (driver)' : 'NO (helper)',
       r.helper_nombre_limpio || '—',
+      r.helpers_nombres || '—',
       r.helper_ids_personas || '—',
       r.helper_estado_padron || '—',
+      r.helper_name_padron || '—',
+      r.helper_curp_padron || '—',
+      r.helper_match_score_padron != null ? r.helper_match_score_padron : '—',
       r.helper_estado_bt || '—',
+      r.helper_nombre_bt || '—',
+      r.helper_respuesta_bt || '—',
+      r.helper_empresa_bt || '—',
       r.helper_pct || '—',
-      `Tarifa helper no activa — ${r.sc}`,
+      r.pct_participacion_helper != null ? r.pct_participacion_helper : '—',
+      (r.helper_alertas || []).join(' · '),
+      `Tarifa helper NO autorizada — ${r.sc} · ${r.vehiculo || ''}`,
       'Bloquear · gestionar con MELI',
     ]),
     `BT_U1_${dd.svc}_${(dd.vehiculo || '').replace(/[^a-zA-Z0-9]/g, '_')}.csv`
@@ -18285,28 +18324,44 @@ function DrillDown1({ dd, fecha, onClose }) {
           <ThDt>Driver</ThDt>
           <ThDt>Ruta</ThDt>
           <ThDt>SC</ThDt>
-          <ThDt>Helper</ThDt>
+          <ThDt>Persona que entregó</ThDt>
           <ThDt>Match Padrón MELI</ThDt>
           <ThDt>Match BT</ThDt>
-          <ThDt>% Helper</ThDt>
-          <ThDt>Razón</ThDt>
+          <ThDt>% Persona</ThDt>
+          <ThDt>Alertas Maestro</ThDt>
           <ThDt>Acción</ThDt>
         </tr></thead>
-        <tbody>{dd.rutas.map((r, i) => (
-          <tr key={i} style={{ borderBottom: `0.5px solid #f4f5f7`, verticalAlign: 'top' }}>
-            <TdDt><DriverCell r={r} /></TdDt>
-            <TdDt mono>{r.id_ruta}</TdDt>
-            <TdDt mono>{r.sc}</TdDt>
-            <TdDt>
-              <NombreHelper limpio={r.helper_nombre_limpio} raw={r.helpers_nombres} idx={r.helper_idx} count={r.helper_count} esChofer={r.es_chofer} />
-            </TdDt>
-            <TdDt><PadronCell r={r} /></TdDt>
-            <TdDt><BtCell r={r} /></TdDt>
-            <TdDt center><PctHelperCell pct={r.helper_pct} /></TdDt>
-            <TdDt muted>Tarifa helper no activa — {r.sc}</TdDt>
-            <TdDt action>Bloquear · gestionar con MELI</TdDt>
-          </tr>
-        ))}</tbody>
+        <tbody>{filas.map((r, i) => {
+          // Resaltar la primera fila de cada ruta con borde superior visible
+          const esPrimeraDeRuta = i === 0 || filas[i - 1].id_ruta !== r.id_ruta;
+          return (
+            <tr key={`${r.id_ruta}-${r.helper_idx}-${i}`}
+                style={{
+                  borderBottom: `0.5px solid #f4f5f7`,
+                  borderTop: esPrimeraDeRuta && i > 0 ? `2px solid ${CH_BORDER}` : undefined,
+                  verticalAlign: 'top'
+                }}>
+              <TdDt><DriverCell r={r} /></TdDt>
+              <TdDt mono>{r.id_ruta}</TdDt>
+              <TdDt mono>{r.sc}</TdDt>
+              <TdDt>
+                <NombreHelper limpio={r.helper_nombre_limpio} raw={r.helpers_nombres} idx={r.helper_idx} count={r.helper_count} esChofer={r.es_chofer} />
+                {r.helper_ids_personas && (
+                  <div style={{ fontFamily: 'monospace', fontSize: 9, color: CH_LIGHT, marginTop: 2 }}>
+                    id: {r.helper_ids_personas}
+                  </div>
+                )}
+              </TdDt>
+              <TdDt><PadronCell r={r} /></TdDt>
+              <TdDt><BtCell r={r} /></TdDt>
+              <TdDt center><PctHelperCell pct={r.helper_pct} /></TdDt>
+              <TdDt>
+                <AlertasInline alertas={r.helper_alertas} />
+              </TdDt>
+              <TdDt action>🚫 No autorizada · gestionar con MELI</TdDt>
+            </tr>
+          );
+        })}</tbody>
       </table>
     </DrillWrap>
   );
