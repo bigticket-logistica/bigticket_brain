@@ -17645,8 +17645,11 @@ const CH_GRAY = "#9ca3af";
 
 function PoolMeliControlHelper() {
   const [fecha, setFecha] = useState(() => {
+    // Default: ayer (D-1) · los datos se completan al final de la jornada operativa
+    // con los snapshots y paquetes entregados
     const now = new Date();
     const mx = new Date(now.getTime() - 6 * 60 * 60 * 1000);
+    mx.setDate(mx.getDate() - 1);
     return mx.toISOString().split('T')[0];
   });
   const [universo, setUniverso] = useState(0);
@@ -17696,7 +17699,10 @@ function PoolMeliControlHelper() {
 
   const conteos = useMemo(() => {
     const c = {
-      total: datos.length,
+      total: datos.length,              // helpers totales (= rutas en single-helper · más en multi)
+      rutasDistintas: 0,                // rutas únicas (más fiel al concepto de "rutas con helper")
+      rutasMulti: 0,                    // rutas que tienen 2+ helpers
+      helpersExtras: 0,                 // helpers adicionales (rutasMulti × cant - rutasMulti)
       U1: 0, U2: 0, U3: 0, OK: 0,
       // Match score
       scoreExcelente: 0,  // >= 0.9
@@ -17710,6 +17716,8 @@ function PoolMeliControlHelper() {
       noEnBt: 0,
       sinCurpParaBt: 0,
     };
+    const rutasSet = new Set();
+    const rutasCount = {};
     datos.forEach(r => {
       if (r.universo && c[r.universo] !== undefined) c[r.universo]++;
       const s = r.helper_match_score_padron;
@@ -17723,7 +17731,12 @@ function PoolMeliControlHelper() {
       else if (eb === 'BT_PENDIENTE') c.btPendiente++;
       else if (eb === 'NO_EN_BT') c.noEnBt++;
       else if (eb === 'SIN_CURP_PARA_BUSCAR') c.sinCurpParaBt++;
+      rutasSet.add(r.id_ruta);
+      rutasCount[r.id_ruta] = (rutasCount[r.id_ruta] || 0) + 1;
     });
+    c.rutasDistintas = rutasSet.size;
+    c.rutasMulti = Object.values(rutasCount).filter(n => n > 1).length;
+    c.helpersExtras = c.total - c.rutasDistintas;
     return c;
   }, [datos]);
 
@@ -17911,14 +17924,17 @@ function PanelU0({ conteos, setUniverso, getAyer, ayerCount }) {
       }}>
         <i className="ti ti-info-circle" style={{ fontSize: 14 }} />
         <span>
-          Mostrando solo rutas con helper <strong>declarado por MELI</strong> ({conteos.total} rutas).
-          Los casos de "alguien escaneó sin declararse como ayudante" quedan fuera del scope.
+          <strong>{conteos.rutasDistintas} rutas</strong> con helper declarado por MELI ·{' '}
+          <strong>{conteos.total} instancias</strong> de helper operando
+          {conteos.rutasMulti > 0 && (
+            <> · {conteos.rutasMulti} ruta{conteos.rutasMulti > 1 ? 's' : ''} llevaron 2+ ayudantes</>
+          )}
         </span>
       </div>
 
       {/* Flowbar segmentado */}
       <div style={{ height: 36, display: 'flex', borderRadius: 10, overflow: 'hidden', marginBottom: 16, fontSize: 11, fontWeight: 700, color: '#fff', border: `0.5px solid ${CH_BORDER}` }}>
-        <div style={{ flex: conteos.total || 1, background: CH_GRAY, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{conteos.total} rutas</div>
+        <div style={{ flex: conteos.total || 1, background: CH_GRAY, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{conteos.total} helpers</div>
         {conteos.U1 > 0 && <div style={{ flex: conteos.U1, background: CH_RED, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>U1 · {conteos.U1}</div>}
         {conteos.U2 > 0 && <div style={{ flex: conteos.U2, background: CH_ORANGE, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>U2 · {conteos.U2}</div>}
         {conteos.U3 > 0 && <div style={{ flex: conteos.U3, background: '#eab308', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>U3 · {conteos.U3}</div>}
@@ -18009,7 +18025,7 @@ function PanelU0({ conteos, setUniverso, getAyer, ayerCount }) {
         <strong style={{ color: CH_NAVY }}>
           {conteos.U1} + {conteos.U2} + {conteos.U3} + {conteos.OK} = {conteos.U1 + conteos.U2 + conteos.U3 + conteos.OK}
         </strong>{' '}
-        rutas clasificadas {conteos.U1 + conteos.U2 + conteos.U3 + conteos.OK === conteos.total ? '✓' : `de ${conteos.total} totales`} ·  Haz clic en cualquier card para ver el drill-down
+        helpers clasificados {conteos.U1 + conteos.U2 + conteos.U3 + conteos.OK === conteos.total ? '✓' : `de ${conteos.total} totales`} ·  Haz clic en cualquier card para ver el drill-down
       </div>
     </div>
   );
@@ -18379,7 +18395,7 @@ function DrillDown2({ dd, fecha, onClose }) {
         <tbody>{dd.rutas.map((r, i) => (
           <tr key={i} style={{ borderBottom: `0.5px solid #f4f5f7`, verticalAlign: 'top' }}>
             <TdDt>
-              <NombreHelper limpio={r.helper_nombre_limpio} raw={r.helpers_nombres} />
+              <NombreHelper limpio={r.helper_nombre_limpio} raw={r.helpers_nombres} idx={r.helper_idx} count={r.helper_count} />
             </TdDt>
             <TdDt mono>
               {r.helper_ids_personas ? (
@@ -18462,7 +18478,7 @@ function DrillDown3({ dd, fecha, onClose }) {
         <tbody>{dd.rutas.map((r, i) => (
           <tr key={i} style={{ borderBottom: `0.5px solid #f4f5f7`, verticalAlign: 'top' }}>
             <TdDt>
-              <NombreHelper limpio={r.helper_nombre_limpio} raw={r.helpers_nombres} />
+              <NombreHelper limpio={r.helper_nombre_limpio} raw={r.helpers_nombres} idx={r.helper_idx} count={r.helper_count} />
             </TdDt>
             <TdDt mono>
               {r.helper_ids_personas ? (
@@ -18727,13 +18743,23 @@ function Pill({ children, type }) {
 }
 
 // ── Componente: nombre limpio del Maestro + raw debajo si difiere ──
-function NombreHelper({ limpio, raw }) {
+function NombreHelper({ limpio, raw, idx, count }) {
   if (!limpio && !raw) return <span style={{ color: CH_LIGHT }}>—</span>;
-  if (!limpio) return <span style={{ fontWeight: 600, fontSize: 11 }}>{raw}</span>;
+  const showMulti = count > 1;
+  const multiPill = showMulti && (
+    <span style={{
+      background: '#ede9fe', color: '#5b21b6',
+      fontSize: 9, fontWeight: 700, padding: '1px 5px', borderRadius: 4,
+      whiteSpace: 'nowrap', marginLeft: 4,
+    }}>{idx} de {count}</span>
+  );
+  if (!limpio) return (
+    <span style={{ fontWeight: 600, fontSize: 11 }}>{raw}{multiPill}</span>
+  );
   const rawDiferente = raw && raw.toLowerCase().trim() !== limpio.toLowerCase().trim();
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-      <span style={{ fontWeight: 600, fontSize: 11 }}>{limpio}</span>
+      <span style={{ fontWeight: 600, fontSize: 11 }}>{limpio}{multiPill}</span>
       {rawDiferente && (
         <span style={{ fontSize: 9, color: CH_LIGHT, fontStyle: 'italic', fontFamily: 'monospace' }}>
           raw: {raw}
