@@ -17502,14 +17502,14 @@ function IndicadoresOperacionalesMX({ usuario }) {
   }, [mesGlobal.anio, mesGlobal.mes]);
 
   // Tabs: Compromiso MELI, KPI de Operación, Diferencias Maestros, Inventario, Control Helper
+  // Nota: pestañas "validacion_bt" y "auditoria_padron" ocultas del menú (código y renders
+  // condicionales abajo quedan intactos por si se reactivan)
   const tabs = [
     { id: "compromiso", label: "Compromiso MELI", desc: "Operativa de mañana · SDD vs SPOT" },
     { id: "kpi_operacion", label: "KPI de Operación", desc: "NS Informe MELI vs Snapshots" },
     { id: "diferencias", label: "Diferencias Maestros", desc: "Auditoría ruta por ruta · MELI vs Snapshots" },
     { id: "inventario", label: "Inventario", desc: "Drivers, vehículos, fantasmas" },
     { id: "control_helper", label: "Control Helper", desc: "Helpers no autorizados / certificados / fantasmas" },
-    { id: "validacion_bt", label: "Validación BT", desc: "Cruce BBDD BT vs padrón MELI vs entregas reales" },
-    { id: "auditoria_padron", label: "Auditoría Padrón", desc: "Altas, bajas y cambios del padrón MELI" },
   ];
 
   if (loading) {
