@@ -17663,24 +17663,27 @@ function PoolMeliControlHelper() {
     (async () => {
       setLoading(true); setError(null);
       try {
+        // Día consultado
         const { data: r1, error: e1 } = await sb
           .from('vw_control_helper_diario').select('*').eq('fecha', fecha).order('sc');
         if (e1) throw e1;
-        const desde = new Date(fecha);
-        desde.setDate(desde.getDate() - 7);
+        // Día anterior (para calcular delta vs ayer)
+        const dAyer = new Date(fecha);
+        dAyer.setDate(dAyer.getDate() - 1);
+        const fechaAyer = dAyer.toISOString().split('T')[0];
         const { data: r2, error: e2 } = await sb
           .from('vw_control_helper_diario').select('fecha,universo')
-          .gte('fecha', desde.toISOString().split('T')[0]).lte('fecha', fecha);
+          .eq('fecha', fechaAyer);
         if (e2) throw e2;
         if (alive) {
           setDatos(r1 || []);
-          const porDia = {};
+          // Conteos día anterior para comparación
+          const ayer = { U1: 0, U2: 0, U3: 0, OK: 0, total: 0 };
           (r2 || []).forEach(r => {
-            if (!porDia[r.fecha]) porDia[r.fecha] = { U1: 0, U2: 0, U3: 0, OK: 0, total: 0 };
-            porDia[r.fecha].total++;
-            if (r.universo) porDia[r.fecha][r.universo] = (porDia[r.fecha][r.universo] || 0) + 1;
+            ayer.total++;
+            if (r.universo) ayer[r.universo] = (ayer[r.universo] || 0) + 1;
           });
-          setSerie(Object.entries(porDia).map(([f, c]) => ({ fecha: f, ...c })).sort((a, b) => a.fecha.localeCompare(b.fecha)));
+          setSerie([{ fecha: fechaAyer, ...ayer }]);
         }
       } catch (e) {
         if (alive) setError(e.message || 'Error');
@@ -17724,7 +17727,14 @@ function PoolMeliControlHelper() {
     return c;
   }, [datos]);
 
-  const getSerieVals = (uni) => serie.slice(-periodo).map(d => d[uni] || 0);
+  // Conteo del día anterior para mostrar deltas
+  const ayerCount = useMemo(() => {
+    const ayer = serie[0] || { U1: 0, U2: 0, U3: 0, OK: 0, total: 0 };
+    return ayer;
+  }, [serie]);
+  const getAyer = (uni) => ayerCount[uni] || 0;
+  // Backward compat para PanelU1 si todavía usa sparkline
+  const getSerieVals = (uni) => [ayerCount[uni] || 0, conteos[uni] || 0];
 
   const matrizU1 = useMemo(() => {
     const vehiculos = ['Small Van MLP', 'Small Van MLP SDD', 'Large Van MLP', 'Large Van MLP SDD'];
@@ -17870,42 +17880,15 @@ function PoolMeliControlHelper() {
             fontFamily: "'Geist', sans-serif", cursor: 'pointer', outline: 'none',
             colorScheme: 'light',
           }} />
-          <div onClick={() => setDdOpen(!ddOpen)} style={{
-            display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: CH_MUTED,
-            border: `1px solid ${CH_BORDER}`, borderRadius: 6, padding: '5px 11px',
-            cursor: 'pointer', background: CH_CARD, whiteSpace: 'nowrap',
-          }}>
-            <i className="ti ti-calendar" style={{ fontSize: 12 }} />
-            <span>Últ. {periodo} días</span>
-            <i className="ti ti-chevron-down" style={{ fontSize: 11 }} />
-          </div>
         </div>
       </div>
 
-      {/* DROPDOWN PERIODO */}
-      {ddOpen && (
-        <div style={{ background: CH_CARD, borderBottom: `1px solid ${CH_BORDER}`, padding: '12px 24px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{ fontSize: 10, fontWeight: 700, color: CH_LIGHT, textTransform: 'uppercase', letterSpacing: 0.5 }}>Período</span>
-            {[3, 7].map(n => (
-              <div key={n} onClick={() => { setPeriodo(n); setDdOpen(false); }} style={{
-                fontSize: 11, fontWeight: 600, padding: '5px 12px', borderRadius: 6,
-                border: `1px solid ${periodo === n ? CH_NAVY : CH_BORDER}`,
-                cursor: 'pointer',
-                background: periodo === n ? CH_NAVY : '#f8fafc',
-                color: periodo === n ? '#fff' : CH_MUTED,
-              }}>{n} días</div>
-            ))}
-          </div>
-        </div>
-      )}
-
       {/* PANELS */}
       <div style={{ padding: '16px 24px' }}>
-        {universo === 0 && <PanelU0 conteos={conteos} setUniverso={setUniverso} getSerieVals={getSerieVals} />}
+        {universo === 0 && <PanelU0 conteos={conteos} setUniverso={setUniverso} getAyer={getAyer} ayerCount={ayerCount} />}
         {universo === 1 && <PanelU1 matriz={matrizU1} conteos={conteos} datos={datos} drillDown={drillDown} setDrillDown={setDrillDown} fecha={fecha} getSerieVals={getSerieVals} />}
-        {universo === 2 && <PanelU2 matriz={matrizU2} conteos={conteos} drillDown={drillDown} setDrillDown={setDrillDown} fecha={fecha} getSerieVals={getSerieVals} />}
-        {universo === 3 && <PanelU3 matriz={matrizU3} conteos={conteos} drillDown={drillDown} setDrillDown={setDrillDown} fecha={fecha} getSerieVals={getSerieVals} />}
+        {universo === 2 && <PanelU2 matriz={matrizU2} conteos={conteos} drillDown={drillDown} setDrillDown={setDrillDown} fecha={fecha} getAyer={getAyer} />}
+        {universo === 3 && <PanelU3 matriz={matrizU3} conteos={conteos} drillDown={drillDown} setDrillDown={setDrillDown} fecha={fecha} getAyer={getAyer} />}
       </div>
     </div>
   );
@@ -17914,7 +17897,7 @@ function PoolMeliControlHelper() {
 // ════════════════════════════════════════════════════════════════════════════
 // PANEL U0 · RESUMEN EJECUTIVO
 // ════════════════════════════════════════════════════════════════════════════
-function PanelU0({ conteos, setUniverso, getSerieVals }) {
+function PanelU0({ conteos, setUniverso, getAyer, ayerCount }) {
   // Sólo rutas con helper declarado (filtro fundamental de la vista)
   const cobPad = conteos.total - conteos.sinPadron;     // identificados en padrón
   const cobBt = conteos.btAprobado + conteos.btRechazado + conteos.btPendiente; // con respuesta BT
@@ -18015,10 +17998,10 @@ function PanelU0({ conteos, setUniverso, getSerieVals }) {
 
       {/* 4 cards U0 */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 14 }}>
-        <U0Card label="U1 · No autorizadas" val={conteos.U1} sub={`${pct(conteos.U1, conteos.total)}% del total`} action="ver universo 1" onClick={() => setUniverso(1)} serie={getSerieVals('U1')} accent={CH_RED} />
-        <U0Card label="U2 · Certificación" val={conteos.U2} sub={`${pct(conteos.U2, conteos.total)}% del total`} action="ver universo 2" onClick={() => setUniverso(2)} serie={getSerieVals('U2')} accent={CH_ORANGE} />
-        <U0Card label="U3 · Proceso" val={conteos.U3} sub={`${pct(conteos.U3, conteos.total)}% del total`} action="ver universo 3" onClick={() => setUniverso(3)} serie={getSerieVals('U3')} accent="#eab308" />
-        <U0Card label="OK · Válidas" val={conteos.OK} sub={`${pct(conteos.OK, conteos.total)}% del total`} action="—" serie={getSerieVals('OK')} accent={CH_GREEN} />
+        <U0Card label="U1 · No autorizadas" val={conteos.U1} sub={`${pct(conteos.U1, conteos.total)}% del total`} action="ver universo 1" onClick={() => setUniverso(1)} delta={conteos.U1 - getAyer('U1')} accent={CH_RED} />
+        <U0Card label="U2 · Certificación" val={conteos.U2} sub={`${pct(conteos.U2, conteos.total)}% del total`} action="ver universo 2" onClick={() => setUniverso(2)} delta={conteos.U2 - getAyer('U2')} accent={CH_ORANGE} />
+        <U0Card label="U3 · Proceso" val={conteos.U3} sub={`${pct(conteos.U3, conteos.total)}% del total`} action="ver universo 3" onClick={() => setUniverso(3)} delta={conteos.U3 - getAyer('U3')} accent="#eab308" />
+        <U0Card label="OK · Válidas" val={conteos.OK} sub={`${pct(conteos.OK, conteos.total)}% del total`} action="—" delta={conteos.OK - getAyer('OK')} accent={CH_GREEN} />
       </div>
 
       {/* Math note */}
@@ -18032,7 +18015,18 @@ function PanelU0({ conteos, setUniverso, getSerieVals }) {
   );
 }
 
-function U0Card({ label, val, sub, action, onClick, serie, accent }) {
+function U0Card({ label, val, sub, action, onClick, delta, accent }) {
+  // Color del delta según si subió/bajó (depende del contexto)
+  // Para U1/U2/U3 (rechazos): subir es malo (rojo), bajar es bueno (verde)
+  // Para OK: subir es bueno (verde), bajar es malo (rojo)
+  const isOK = label.includes('OK');
+  const subio = delta > 0;
+  const bajo = delta < 0;
+  const deltaColor = delta === 0 ? '#9ca3af'
+    : (isOK ? (subio ? '#10b981' : '#ef4444') : (subio ? '#ef4444' : '#10b981'));
+  const deltaIcon = delta === 0 ? '—' : (subio ? '▲' : '▼');
+  const deltaText = delta === 0 ? 'igual ayer' : `${Math.abs(delta)} vs ayer`;
+
   return (
     <div onClick={onClick} style={{
       background: CH_CARD, border: `0.5px solid ${CH_BORDER}`, borderRadius: 12, padding: 14,
@@ -18045,7 +18039,11 @@ function U0Card({ label, val, sub, action, onClick, serie, accent }) {
       <div style={{ fontSize: 24, fontWeight: 800, letterSpacing: -0.5, color: CH_TEXT, lineHeight: 1 }}>{val}</div>
       <div style={{ fontSize: 11, color: CH_LIGHT, marginTop: 5, marginBottom: 10 }}>{sub}</div>
       <div style={{ height: 1, background: CH_BORDER, marginBottom: 10 }} />
-      <Spark vals={serie} height={28} color={accent} />
+      {/* Delta vs ayer */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 0' }}>
+        <span style={{ fontSize: 13, fontWeight: 700, color: deltaColor }}>{deltaIcon}</span>
+        <span style={{ fontSize: 12, fontWeight: 600, color: deltaColor }}>{deltaText}</span>
+      </div>
       <div style={{ height: 1, background: CH_BORDER, margin: '10px 0' }} />
       <div style={{ fontSize: 11, fontWeight: 500, color: CH_MUTED, marginTop: 'auto', display: 'flex', alignItems: 'center', gap: 4 }}>
         <i className="ti ti-arrow-right" style={{ fontSize: 12 }} />{action}
@@ -18138,16 +18136,16 @@ function PanelU1({ matriz, conteos, datos, drillDown, setDrillDown, fecha, getSe
 // ════════════════════════════════════════════════════════════════════════════
 // PANEL U2 · CERTIFICACIÓN
 // ════════════════════════════════════════════════════════════════════════════
-function PanelU2({ matriz, conteos, drillDown, setDrillDown, fecha, getSerieVals }) {
+function PanelU2({ matriz, conteos, drillDown, setDrillDown, fecha, getAyer }) {
   const t = matriz.totals;
 
   return (
     <div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 14 }}>
-        <KCard l="🚨 BT Rechazados" v={t.btRech} s="MELI activo + BT rechazó" a="alerta crítica" sk={getSerieVals('U2')} accent="#991b1b" />
-        <KCard l="🚨 No certificados" v={t.noCert} s="helpers fantasma" a="investigar" sk={getSerieVals('U2')} accent="#9f1239" />
-        <KCard l="🟡 Sin validar BT" v={t.sinBt} s="MELI activo · falta BT" a="informativo" sk={getSerieVals('U3')} accent="#92400e" />
-        <KCard l="✅ Certificados OK" v={t.certOk} s="MELI activo + BT aprobado" a="normal" sk={getSerieVals('OK')} accent="#065f46" />
+        <KCard l="🚨 BT Rechazados" v={t.btRech} s="MELI activo + BT rechazó" a="alerta crítica" delta={conteos.U2 - getAyer('U2')} deltaIsBad={true} />
+        <KCard l="🚨 No certificados" v={t.noCert} s="helpers fantasma" a="investigar" delta={null} />
+        <KCard l="🟡 Sin validar BT" v={t.sinBt} s="MELI activo · falta BT" a="informativo" delta={null} />
+        <KCard l="✅ Certificados OK" v={t.certOk} s="MELI activo + BT aprobado" a="normal" delta={conteos.OK - getAyer('OK')} deltaIsBad={false} />
       </div>
 
       {/* BANNER WARNING para NO_CERTIFICADO */}
@@ -18215,7 +18213,7 @@ function PanelU2({ matriz, conteos, drillDown, setDrillDown, fecha, getSerieVals
 // ════════════════════════════════════════════════════════════════════════════
 // PANEL U3 · PROCESO
 // ════════════════════════════════════════════════════════════════════════════
-function PanelU3({ matriz, conteos, drillDown, setDrillDown, fecha, getSerieVals }) {
+function PanelU3({ matriz, conteos, drillDown, setDrillDown, fecha, getAyer }) {
   const t = matriz.totals;
   const scPrincipal = matriz.scs.length > 0
     ? [...matriz.scs].sort((a, b) => matriz.mat[b].total - matriz.mat[a].total)[0]
@@ -18224,10 +18222,10 @@ function PanelU3({ matriz, conteos, drillDown, setDrillDown, fecha, getSerieVals
   return (
     <div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 14 }}>
-        <KCard l="🟡 Sin validar BT" v={t.sinBt} s="MELI activo · falta cargar BT" a="acción RH" sk={getSerieVals('U3')} accent="#92400e" />
-        <KCard l="🟠 BT pendiente" v={t.btPend} s="MELI activo · BT en revisión" a="esperar BT" sk={getSerieVals('U3')} accent="#9a3412" />
-        <KCard l="⚪ MELI inactivo" v={t.meliInact} s="no activo en padrón" a="verificar" sk={getSerieVals('U3')} accent="#374151" />
-        <KCard l="🔍 Match dudoso" v={t.matchDudoso} s="score < 0.7" a="revisar nombre" sk={getSerieVals('U3')} accent="#a16207" />
+        <KCard l="🟡 Sin validar BT" v={t.sinBt} s="MELI activo · falta cargar BT" a="acción RH" delta={null} />
+        <KCard l="🟠 BT pendiente" v={t.btPend} s="MELI activo · BT en revisión" a="esperar BT" delta={null} />
+        <KCard l="⚪ MELI inactivo" v={t.meliInact} s="no activo en padrón" a="verificar" delta={null} />
+        <KCard l="🔍 Match dudoso" v={t.matchDudoso} s="score < 0.7" a="revisar nombre" delta={null} />
       </div>
 
       <div style={{
@@ -18540,14 +18538,38 @@ function DrillWrap({ dd, fecha, onClose, icon, onExport, children }) {
 // ════════════════════════════════════════════════════════════════════════════
 // AUXILIARES
 // ════════════════════════════════════════════════════════════════════════════
-function KCard({ l, v, s, a, sk, accent }) {
+function KCard({ l, v, s, a, sk, accent, delta, deltaIsBad }) {
+  // Si recibe delta numérico, mostrar comparación con ayer
+  // deltaIsBad: si true, subir es malo (rojo) · si false, subir es bueno (verde)
+  const showDelta = delta !== undefined && delta !== null;
+  let deltaColor = '#9ca3af', deltaIcon = '—', deltaText = 'igual ayer';
+  if (showDelta) {
+    const subio = delta > 0;
+    const bajo = delta < 0;
+    if (subio) {
+      deltaColor = deltaIsBad ? '#ef4444' : '#10b981';
+      deltaIcon = '▲';
+      deltaText = `${delta} vs ayer`;
+    } else if (bajo) {
+      deltaColor = deltaIsBad ? '#10b981' : '#ef4444';
+      deltaIcon = '▼';
+      deltaText = `${Math.abs(delta)} vs ayer`;
+    }
+  }
   return (
     <div style={{ background: CH_CARD, borderRadius: 12, border: `0.5px solid ${CH_BORDER}`, padding: '14px 14px 12px', display: 'flex', flexDirection: 'column', minHeight: 130 }}>
       <div style={{ fontSize: 11, fontWeight: 700, color: CH_MUTED, textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 8 }}>{l}</div>
       <div style={{ fontSize: 22, fontWeight: 800, color: CH_TEXT, letterSpacing: -0.5, lineHeight: 1 }}>{v}</div>
       <div style={{ fontSize: 11, color: CH_LIGHT, marginTop: 5 }}>{s}</div>
       <div style={{ height: 1, background: CH_BORDER, margin: '10px 0' }} />
-      <Spark vals={sk} height={28} color={accent} />
+      {showDelta ? (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 0' }}>
+          <span style={{ fontSize: 13, fontWeight: 700, color: deltaColor }}>{deltaIcon}</span>
+          <span style={{ fontSize: 12, fontWeight: 600, color: deltaColor }}>{deltaText}</span>
+        </div>
+      ) : (
+        <Spark vals={sk} height={28} color={accent} />
+      )}
       <div style={{ height: 1, background: CH_BORDER, margin: '10px 0' }} />
       <div style={{ fontSize: 11, fontWeight: 500, color: CH_MUTED, marginTop: 'auto', display: 'flex', alignItems: 'center', gap: 4 }}>
         <i className="ti ti-arrow-right" style={{ fontSize: 12 }} />{a}
