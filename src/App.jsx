@@ -4691,7 +4691,7 @@ const VistaSnapshotSupervisores = ({ fecha, pais }) => {
   const VISTAS = {
     ingreso:      { tabla: "vw_maestro_supervisores_auto", label: "Ingreso Maestro" },
     rutas:        { tabla: "vw_rutas_citadas_auto",        label: "Rutas Citadas"  },
-    noshow:       { tabla: "vw_no_show_auto",              label: "No Show"        },
+    noshow:       { tabla: "vw_rostering_vs_operativo",    label: "No Show"        },
     devoluciones: { tabla: "vw_devoluciones_auto",         label: "Devoluciones"   },
   };
 
@@ -5160,100 +5160,232 @@ const SnapRutasCitadas = ({ filas, loading }) => {
   );
 };
 
-// ─── Sub-componente 3: No Show (SC × día) ───
+// ─── Sub-componente 3: No Show · Rostering vs Operativo ───
+// Fuente: vw_rostering_vs_operativo (1 fila por driver+fecha)
+// Detecta: NO SHOW · PARCIAL · CAMBIO PLACA · OK
 const SnapNoShow = ({ filas, loading }) => {
+  const [filtroCat, setFiltroCat] = useState("INCIDENTES");
+
+  // ─── KPIs agregados ───
   const kpis = useMemo(() => {
-    const totalNS = filas.reduce((acc, f) => acc + (f.cantidad_no_show || 0), 0);
-    const nsSDD   = filas.reduce((acc, f) => acc + (f.no_show_sdd   || 0), 0);
-    const nsSpot  = filas.reduce((acc, f) => acc + (f.no_show_spot  || 0), 0);
-    const trsAcc  = filas.reduce((acc, f) => acc + (f.trs_aceptados || 0), 0);
-    const rutasOp = filas.reduce((acc, f) => acc + (f.rutas_operadas || 0), 0);
-    return { totalNS, nsSDD, nsSpot, trsAcc, rutasOp, scs: filas.length };
+    const total = filas.length;
+    const ok = filas.filter(f => f.categoria === "OK").length;
+    const noShow = filas.filter(f => f.categoria === "NO_SHOW").length;
+    const parcial = filas.filter(f => f.categoria === "PARCIAL").length;
+    const cambio = filas.filter(f => f.categoria === "CAMBIO_PLACA").length;
+    const scs = new Set(filas.map(f => f.facility)).size;
+    const totalCargados = filas.reduce((a, f) => a + (f.total_cargados || 0), 0);
+    const totalEntregados = filas.reduce((a, f) => a + (f.total_entregados || 0), 0);
+    const pctEntregado = totalCargados > 0 ? (totalEntregados / totalCargados * 100) : 0;
+    return { total, ok, noShow, parcial, cambio, scs, totalCargados, totalEntregados, pctEntregado };
   }, [filas]);
 
-  // Headers con tooltip descriptivo
-  const headers = [
-    { label: "FECHA",      tooltip: "Día operativo" },
-    { label: "CECO",       tooltip: "Service Center (ML_MX_xxx)" },
-    { label: "TIPO",       tooltip: "NO SHOW = Travel Request aceptado que no se ejecutó" },
-    { label: "TRS ACEPT.", tooltip: "Travel Requests que aceptamos a MELI para este día" },
-    { label: "RUTAS OP.",  tooltip: "Rutas que efectivamente operaron (el driver escaneó el QR en el SC)" },
-    { label: "NS TOTAL",   tooltip: "NO SHOWS totales = TRs aceptados - Rutas operadas" },
-    { label: "TRS SDD",    tooltip: "TRs aceptados de tipo SDD (Super Dedicada — entrega mismo día)" },
-    { label: "R.OP.SDD",   tooltip: "Rutas SDD que operaron" },
-    { label: "NS SDD",     tooltip: "NO SHOWS de SDD (lo más crítico para el cumplimiento con MELI)" },
-    { label: "TRS SPOT",   tooltip: "TRs aceptados tipo SPOT (operación regular, no SDD)" },
-    { label: "R.OP.SPOT",  tooltip: "Rutas SPOT que operaron" },
-    { label: "NS SPOT",    tooltip: "NO SHOWS de SPOT (impacta cumplimiento pero menos crítico que SDD)" },
-  ];
+  // ─── Resumen por SC ───
+  const porSC = useMemo(() => {
+    const mp = {};
+    filas.forEach(f => {
+      const sc = f.facility;
+      if (!mp[sc]) mp[sc] = { sc, total: 0, ok: 0, noShow: 0, parcial: 0, cambio: 0 };
+      mp[sc].total++;
+      if (f.categoria === "OK") mp[sc].ok++;
+      else if (f.categoria === "NO_SHOW") mp[sc].noShow++;
+      else if (f.categoria === "PARCIAL") mp[sc].parcial++;
+      else if (f.categoria === "CAMBIO_PLACA") mp[sc].cambio++;
+    });
+    return Object.values(mp)
+      .map(r => ({ ...r, pctOk: r.total > 0 ? r.ok / r.total * 100 : 0 }))
+      .sort((a, b) => (b.noShow + b.parcial + b.cambio) - (a.noShow + a.parcial + a.cambio) || a.sc.localeCompare(b.sc));
+  }, [filas]);
 
-  // Estilo común para cada celda: centrada
+  // ─── Filas filtradas por categoría ───
+  const filasFiltradas = useMemo(() => {
+    if (filtroCat === "TODOS") return filas;
+    if (filtroCat === "INCIDENTES") return filas.filter(f => f.categoria !== "OK");
+    return filas.filter(f => f.categoria === filtroCat);
+  }, [filas, filtroCat]);
+
+  // ─── Orden: NO_SHOW > CAMBIO_PLACA > PARCIAL > OK, después SC + driver ───
+  const filasOrdenadas = useMemo(() => {
+    const orden = { NO_SHOW: 1, CAMBIO_PLACA: 2, PARCIAL: 3, OK: 4, OTRO: 5 };
+    return [...filasFiltradas].sort((a, b) => {
+      const oa = orden[a.categoria] || 9;
+      const ob = orden[b.categoria] || 9;
+      if (oa !== ob) return oa - ob;
+      if (a.facility !== b.facility) return a.facility.localeCompare(b.facility);
+      return (a.driver_name || "").localeCompare(b.driver_name || "");
+    });
+  }, [filasFiltradas]);
+
   const tdCenter = { padding: "6px", textAlign: "center" };
+  const tdLeft = { padding: "6px 10px", textAlign: "left" };
+
+  const colorCategoria = (cat) => {
+    if (cat === "OK") return { bg: "#dcfce7", text: "#15803d", label: "✅ OK" };
+    if (cat === "NO_SHOW") return { bg: "#fee2e2", text: "#dc2626", label: "🚨 NO SHOW" };
+    if (cat === "PARCIAL") return { bg: "#fef3c7", text: "#b45309", label: "⚠️ PARCIAL" };
+    if (cat === "CAMBIO_PLACA") return { bg: "#dbeafe", text: "#1d4ed8", label: "🔄 CAMBIO PLACA" };
+    return { bg: "#f1f5f9", text: "#475569", label: cat };
+  };
 
   return (
     <div>
-      {/* KPIs */}
+      {/* ─── KPIs ─── */}
       <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
-        <KpiSnap label="SCs con NS"      valor={fmtNumSnap(kpis.scs)} />
-        <KpiSnap label="Total NS"        valor={fmtNumSnap(kpis.totalNS)} color="#dc2626" />
-        <KpiSnap label="NS SDD"          valor={fmtNumSnap(kpis.nsSDD)}   color="#dc2626" sub="⚠️ crítico" />
-        <KpiSnap label="NS SPOT"         valor={fmtNumSnap(kpis.nsSpot)}  color="#ca8a04" />
-        <KpiSnap label="TRs aceptados"   valor={fmtNumSnap(kpis.trsAcc)}  color="#3B82F6" />
-        <KpiSnap label="Rutas operadas"  valor={fmtNumSnap(kpis.rutasOp)} color="#16a34a" />
+        <KpiSnap label="Drivers planif." valor={fmtNumSnap(kpis.total)} sub={`${kpis.scs} SCs`} />
+        <KpiSnap label="✅ Operó OK" valor={fmtNumSnap(kpis.ok)} color="#15803d"
+          sub={kpis.total > 0 ? `${(kpis.ok / kpis.total * 100).toFixed(0)}%` : "—"} />
+        <KpiSnap label="🚨 NO SHOW" valor={fmtNumSnap(kpis.noShow)} color="#dc2626"
+          sub={kpis.total > 0 ? `${(kpis.noShow / kpis.total * 100).toFixed(0)}%` : "—"} />
+        <KpiSnap label="⚠️ Parcial" valor={fmtNumSnap(kpis.parcial)} color="#b45309"
+          sub="Operó 1 de N placas" />
+        <KpiSnap label="🔄 Cambio placa" valor={fmtNumSnap(kpis.cambio)} color="#1d4ed8"
+          sub="Otra placa" />
+        <KpiSnap label="% Entrega" valor={`${kpis.pctEntregado.toFixed(1)}%`} color="#3B82F6"
+          sub={`${fmtNumSnap(kpis.totalEntregados)}/${fmtNumSnap(kpis.totalCargados)}`} />
       </div>
 
-      {/* Tabla */}
+      {/* ─── Mini-grid por SC ─── */}
+      {porSC.length > 0 && (
+        <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10, padding: 12, marginBottom: 14 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: "#64748b", textTransform: "uppercase",
+            letterSpacing: 0.5, marginBottom: 8 }}>
+            Cumplimiento por Service Center
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 8 }}>
+            {porSC.map(sc => {
+              const incidentes = sc.noShow + sc.parcial + sc.cambio;
+              const borderColor = incidentes > 0 ? "#fecaca" : "#bbf7d0";
+              const bgColor = incidentes > 0 ? "#fef2f2" : "#f0fdf4";
+              return (
+                <div key={sc.sc} style={{
+                  background: bgColor, border: `1px solid ${borderColor}`, borderRadius: 8,
+                  padding: 8, fontSize: 11
+                }}>
+                  <div style={{ fontWeight: 700, fontSize: 13, color: "#1a3a6b", marginBottom: 4 }}>
+                    {sc.sc}
+                  </div>
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap", fontSize: 10 }}>
+                    <span style={{ color: "#15803d" }}>✅ {sc.ok}</span>
+                    {sc.noShow > 0 && <span style={{ color: "#dc2626", fontWeight: 700 }}>🚨 {sc.noShow}</span>}
+                    {sc.parcial > 0 && <span style={{ color: "#b45309", fontWeight: 700 }}>⚠️ {sc.parcial}</span>}
+                    {sc.cambio > 0 && <span style={{ color: "#1d4ed8", fontWeight: 700 }}>🔄 {sc.cambio}</span>}
+                    <span style={{ color: "#64748b", marginLeft: "auto" }}>{sc.pctOk.toFixed(0)}%</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* ─── Filtros por categoría ─── */}
+      <div style={{ display: "flex", gap: 6, marginBottom: 10, flexWrap: "wrap" }}>
+        {[
+          { id: "INCIDENTES", label: "Solo incidentes", color: "#dc2626" },
+          { id: "NO_SHOW", label: `🚨 NO SHOW (${kpis.noShow})`, color: "#dc2626" },
+          { id: "PARCIAL", label: `⚠️ Parcial (${kpis.parcial})`, color: "#b45309" },
+          { id: "CAMBIO_PLACA", label: `🔄 Cambio placa (${kpis.cambio})`, color: "#1d4ed8" },
+          { id: "OK", label: `✅ OK (${kpis.ok})`, color: "#15803d" },
+          { id: "TODOS", label: `Todos (${kpis.total})`, color: "#1a3a6b" },
+        ].map(b => (
+          <button key={b.id} onClick={() => setFiltroCat(b.id)} style={{
+            padding: "6px 12px",
+            background: filtroCat === b.id ? b.color : "#fff",
+            color: filtroCat === b.id ? "#fff" : b.color,
+            border: `1px solid ${b.color}`,
+            borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: "pointer"
+          }}>
+            {b.label}
+          </button>
+        ))}
+      </div>
+
+      {/* ─── Tabla principal ─── */}
       <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10, overflow: "auto", maxHeight: 600 }}>
         {loading ? (
           <div style={{ padding: 30, textAlign: "center", color: "#888", fontSize: 13 }}>Cargando...</div>
-        ) : filas.length === 0 ? (
-          <div style={{ padding: 30, textAlign: "center", color: "#16a34a", fontSize: 13, fontWeight: 600 }}>
-            ✅ Sin No Shows en esta fecha
+        ) : filasOrdenadas.length === 0 ? (
+          <div style={{ padding: 30, textAlign: "center",
+            color: filtroCat === "INCIDENTES" || filtroCat === "TODOS" ? "#16a34a" : "#888",
+            fontSize: 13, fontWeight: 600 }}>
+            {filtroCat === "INCIDENTES" || filtroCat === "TODOS"
+              ? "✅ Sin incidentes en esta fecha"
+              : "Sin registros con ese filtro"}
           </div>
         ) : (
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
-            <thead style={{ background: "#f8fafc", position: "sticky", top: 0 }}>
+            <thead style={{ background: "#f8fafc", position: "sticky", top: 0, zIndex: 1 }}>
               <tr>
-                {headers.map(h => (
-                  <th key={h.label} title={h.tooltip}
+                {[
+                  { l: "SC", t: "Service Center" },
+                  { l: "Driver", t: "Nombre del conductor (padrón MELI)" },
+                  { l: "Driver ID", t: "ID interno MELI" },
+                  { l: "Placas planificadas", t: "Placas asignadas en el rostering" },
+                  { l: "Placas operadas", t: "Placas que efectivamente operaron (del snapshot)" },
+                  { l: "Cargados", t: "Paquetes cargados al vehículo" },
+                  { l: "Entregados", t: "Paquetes entregados" },
+                  { l: "% Entrega", t: "% de paquetes entregados sobre cargados" },
+                  { l: "Estado", t: "Diagnóstico del cumplimiento" },
+                ].map(h => (
+                  <th key={h.l} title={h.t}
                     style={{ padding: "8px 6px", textAlign: "center", fontWeight: 700, color: "#666",
                       borderBottom: "1px solid #e4e7ec", fontSize: 10, textTransform: "uppercase",
                       letterSpacing: 0.3, cursor: "help" }}>
-                    {h.label}
+                    {h.l}
                   </th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {filas.map((f, i) => (
-                <tr key={i} style={{ borderBottom: "1px solid #f1f5f9" }}>
-                  <td style={tdCenter}>{f.fecha}</td>
-                  <td style={{ ...tdCenter, fontWeight: 600 }}>{f.ceco}</td>
-                  <td style={tdCenter}>
-                    <span style={{ background: "#fef2f2", color: "#991b1b", padding: "2px 8px",
-                      borderRadius: 4, fontSize: 10, fontWeight: 700 }}>
-                      {f.tipo}
-                    </span>
-                  </td>
-                  <td style={tdCenter}>{fmtNumSnap(f.trs_aceptados)}</td>
-                  <td style={tdCenter}>{fmtNumSnap(f.rutas_operadas)}</td>
-                  <td style={{ ...tdCenter, fontWeight: 800, color: "#dc2626" }}>{fmtNumSnap(f.cantidad_no_show)}</td>
-                  <td style={tdCenter}>{fmtNumSnap(f.trs_aceptados_sdd)}</td>
-                  <td style={tdCenter}>{fmtNumSnap(f.rutas_operadas_sdd)}</td>
-                  <td style={{ ...tdCenter, fontWeight: 700,
-                    color: f.no_show_sdd > 0 ? "#dc2626" : "#888" }}>
-                    {fmtNumSnap(f.no_show_sdd)}
-                  </td>
-                  <td style={tdCenter}>{fmtNumSnap(f.trs_aceptados_spot)}</td>
-                  <td style={tdCenter}>{fmtNumSnap(f.rutas_operadas_spot)}</td>
-                  <td style={{ ...tdCenter, color: f.no_show_spot > 0 ? "#ca8a04" : "#888" }}>
-                    {fmtNumSnap(f.no_show_spot)}
-                  </td>
-                </tr>
-              ))}
+              {filasOrdenadas.map((f, i) => {
+                const c = colorCategoria(f.categoria);
+                return (
+                  <tr key={i} style={{ borderBottom: "1px solid #f1f5f9",
+                    background: i % 2 === 0 ? "#fff" : "#fafbfc" }}>
+                    <td style={{ ...tdCenter, fontWeight: 700, color: "#1a3a6b" }}>{f.facility}</td>
+                    <td style={tdLeft}>{f.driver_name || "—"}</td>
+                    <td style={{ ...tdCenter, color: "#94a3b8", fontSize: 10, fontFamily: "monospace" }}>
+                      {f.driver_id || "—"}
+                    </td>
+                    <td style={{ ...tdLeft, fontFamily: "monospace", fontSize: 10 }}>
+                      {f.placas_planificadas_detalle || "—"}
+                    </td>
+                    <td style={{ ...tdLeft, fontFamily: "monospace", fontSize: 10,
+                      color: f.categoria === "NO_SHOW" ? "#dc2626" : "#1a1a1a" }}>
+                      {f.placas_operadas_detalle || (
+                        <span style={{ color: "#dc2626", fontWeight: 700 }}>— sin operar —</span>
+                      )}
+                    </td>
+                    <td style={{ ...tdCenter, fontWeight: 600 }}>{fmtNumSnap(f.total_cargados)}</td>
+                    <td style={{ ...tdCenter, color: "#16a34a", fontWeight: 600 }}>
+                      {fmtNumSnap(f.total_entregados)}
+                    </td>
+                    <td style={{ ...tdCenter, fontWeight: 700,
+                      color: f.pct_entregado >= 95 ? "#16a34a" :
+                             f.pct_entregado >= 80 ? "#ca8a04" :
+                             f.pct_entregado != null ? "#dc2626" : "#cbd5e1" }}>
+                      {f.pct_entregado != null ? `${Number(f.pct_entregado).toFixed(1)}%` : "—"}
+                    </td>
+                    <td style={tdCenter}>
+                      <span style={{
+                        background: c.bg, color: c.text,
+                        padding: "3px 8px", borderRadius: 4,
+                        fontSize: 10, fontWeight: 700, whiteSpace: "nowrap"
+                      }}>
+                        {c.label}
+                      </span>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         )}
+      </div>
+
+      {/* ─── Pie informativo ─── */}
+      <div style={{ marginTop: 8, fontSize: 10, color: "#94a3b8", textAlign: "right" }}>
+        Fuente: vw_rostering_vs_operativo · Rostering MELI (capturas AM 06:00 + PM 23:30) × Snapshot operativo 23:59
       </div>
     </div>
   );
