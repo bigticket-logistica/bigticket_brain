@@ -4774,7 +4774,7 @@ const VistaSnapshotSupervisores = ({ fecha, pais }) => {
       ] = await Promise.all([
         sb.from("vw_maestro_supervisores_auto").select("*").eq("fecha", fecha).limit(5000),
         sb.from("vw_rutas_citadas_auto").select("*").eq("fecha", fecha).limit(5000),
-        sb.from("vw_no_show_auto").select("*").eq("fecha", fecha).limit(5000),
+        sb.from("vw_rostering_vs_operativo").select("*").eq("fecha", fecha).limit(5000),
         sb.from("vw_devoluciones_auto").select("*").eq("fecha", fecha).limit(10000),
       ]);
 
@@ -4826,25 +4826,48 @@ const VistaSnapshotSupervisores = ({ fecha, pais }) => {
       const wsRut = window.XLSX.utils.json_to_sheet(hojaRutas);
       window.XLSX.utils.book_append_sheet(wb, wsRut, "Rutas citadas");
 
-      // ─── Hoja 3: No show y cancelaciones ───
-      // EXPANSIÓN: cada SC×día con cantidad_no_show=N genera N filas con PATENTE/TERCERO/MOTIVO en blanco
-      const hojaNS = [];
-      (dNS || []).forEach(f => {
-        const cant = f.cantidad_no_show || 0;
-        for (let i = 0; i < cant; i++) {
-          hojaNS.push({
-            "FECHA":   f.fecha,
-            "CECO":    f.ceco,
-            "PATENTE": "",
-            "TERCERO": "",
-            "TIPO":    f.tipo || "NO SHOW",
-            "MOTIVO":  "",
-          });
-        }
-      });
+      // ─── Hoja 3: No Show · Rostering vs Operativo ───
+      // 1 fila por driver+fecha con su diagnóstico (NO SHOW / PARCIAL / CAMBIO PLACA / OK)
+      // Orden: NO_SHOW > CAMBIO_PLACA > PARCIAL > OK, después SC + driver
+      const ordenCat = { NO_SHOW: 1, CAMBIO_PLACA: 2, PARCIAL: 3, OK: 4, OTRO: 5 };
+      const labelCat = {
+        NO_SHOW:      "🚨 NO SHOW",
+        CAMBIO_PLACA: "🔄 CAMBIO PLACA",
+        PARCIAL:      "⚠️ PARCIAL",
+        OK:           "✅ OK",
+      };
+      const hojaNS = [...(dNS || [])]
+        .sort((a, b) => {
+          const oa = ordenCat[a.categoria] || 9;
+          const ob = ordenCat[b.categoria] || 9;
+          if (oa !== ob) return oa - ob;
+          if (a.facility !== b.facility) return (a.facility || "").localeCompare(b.facility || "");
+          return (a.driver_name || "").localeCompare(b.driver_name || "");
+        })
+        .map(f => ({
+          "FECHA":                f.fecha,
+          "SC":                   f.facility,
+          "DRIVER":               f.driver_name || "",
+          "DRIVER_ID":            f.driver_id || "",
+          "CURP":                 f.driver_curp || "",
+          "ESTADO":               labelCat[f.categoria] || f.categoria || "",
+          "PLACAS_PLANIFICADAS":  f.placas_planificadas_detalle || "",
+          "PLACAS_OPERADAS":      f.placas_operadas_detalle || "— sin operar —",
+          "CARGADOS":             f.total_cargados || 0,
+          "ENTREGADOS":           f.total_entregados || 0,
+          "DEVUELTOS":            f.total_devueltos || 0,
+          "PCT_ENTREGA":          f.pct_entregado != null ? Number(f.pct_entregado) : null,
+          "SERVICIOS":            f.servicios_detalle || "",
+          "PRIMER_ETA":           f.primer_eta || "",
+          "ULTIMO_ETA":           f.ultimo_eta || "",
+          "DIAGNOSTICO":          f.diagnostico || "",
+        }));
       const wsNS = window.XLSX.utils.json_to_sheet(hojaNS.length > 0 ? hojaNS :
-        [{ "FECHA": "", "CECO": "", "PATENTE": "", "TERCERO": "", "TIPO": "", "MOTIVO": "" }]);
-      window.XLSX.utils.book_append_sheet(wb, wsNS, "No show y cancelaciones");
+        [{ "FECHA": "", "SC": "", "DRIVER": "", "DRIVER_ID": "", "CURP": "", "ESTADO": "",
+           "PLACAS_PLANIFICADAS": "", "PLACAS_OPERADAS": "", "CARGADOS": "", "ENTREGADOS": "",
+           "DEVUELTOS": "", "PCT_ENTREGA": "", "SERVICIOS": "", "PRIMER_ETA": "", "ULTIMO_ETA": "",
+           "DIAGNOSTICO": "" }]);
+      window.XLSX.utils.book_append_sheet(wb, wsNS, "Rostering vs Operativo");
 
       // ─── Hoja 4: Ingreso de devoluciones ───
       const hojaDev = (dDev || []).map(f => ({
