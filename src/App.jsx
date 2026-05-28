@@ -14756,10 +14756,15 @@ function ModuloCertificacionesMadre() {
 
 function TorreTresPilares() {
   // ─── Estado ───
+  // Calcula "ayer" en huso horario LOCAL del navegador (no UTC).
+  // toISOString() convierte a UTC y puede saltar 1 día cuando estás en MX (UTC-6) a la tarde.
   const ayer = (() => {
     const d = new Date();
     d.setDate(d.getDate() - 1);
-    return d.toISOString().slice(0, 10);
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, "0");
+    const dd = String(d.getDate()).padStart(2, "0");
+    return `${yyyy}-${mm}-${dd}`;
   })();
 
   const [fecha, setFecha] = useState(ayer);
