@@ -18425,22 +18425,23 @@ function TorreRosteringHoy() {
   const meta = resumen?.meta || {};
   const porSc = resumen?.por_sc || [];
 
-  // SDD críticas y pending SDD para sección de alerta
-  const sddAlertas = filas.filter(f =>
-    (f.estado === "0_SDD_CRITICO") ||
-    (f.estado === "1_PENDING_SIN_RESPUESTA" && f.flota === "SDD")
-  );
+  // SDD críticas para sección de alerta principal
+  const sddAlertas = filas.filter(f => f.estado === "0_SDD_CRITICO");
 
-  // Filas por SC (excluyendo rejected/cancel/otro que no requieren acción)
+  // Filas por SC (excluyendo cancel/otro que no requieren acción)
   const filasOperativas = filas.filter(f =>
-    f.estado && !["9_REJECTED", "5_CANCEL_MELI", "99_OTRO"].includes(f.estado)
+    f.estado && !["5_CANCEL_MELI", "99_OTRO"].includes(f.estado)
   );
   const scsConDatos = [...new Set(filasOperativas.map(f => f.sc).filter(Boolean))];
 
-  // Ordenar SCs por urgencia: más vencido/en riesgo primero
+  // Ordenar SCs por urgencia: más SDD/no_show/vencido primero
   const urgenciaSc = (sc) => {
     const s = porSc.find(x => x.sc === sc) || {};
-    return (s.sdd_critico || 0) * 1000 + (s.vencido || 0) * 100 + (s.pending || 0) * 10 + (s.en_riesgo || 0);
+    return (s.sdd_critico || 0) * 10000
+         + (s.no_show || 0) * 1000
+         + (s.vencido || 0) * 100
+         + (s.en_riesgo || 0) * 10
+         + (s.no_salio || 0);
   };
   const scsOrdenadas = scsConDatos.sort((a, b) => urgenciaSc(b) - urgenciaSc(a));
 
@@ -18465,15 +18466,17 @@ function TorreRosteringHoy() {
         </button>
       </div>
 
-      {/* KPIs en franja */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 10, marginBottom: 16 }}>
-        <KpiBox label="✅ OK"           value={totales.ok || 0}              color="#047857" bg="#d1fae5" />
+      {/* KPIs en franja · v2.1 con nuevos estados */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 10, marginBottom: 16 }}>
+        <KpiBox label="🟢 Operando"     value={totales.operando || 0}        color="#047857" bg="#d1fae5"
+                detalle={`SDD: ${totales.sdd_operando || 0}`} />
         <KpiBox label="🆘 SDD crítico"  value={totales.sdd_critico || 0}     color="#7f1d1d" bg="#fecaca" />
-        <KpiBox label="🚨 Pending"      value={totales.pending || 0}         color="#92400e" bg="#fef3c7"
-                detalle={`SDD ${totales.pending_sdd || 0} · Var ${totales.pending_variable || 0}`} />
+        <KpiBox label="🚨 NO SHOW"      value={totales.no_show || 0}         color="#b91c1c" bg="#fee2e2"
+                detalle="ETA+1h sin salir" />
         <KpiBox label="🔴 Vencido"      value={totales.vencido || 0}         color="#b91c1c" bg="#fee2e2" />
-        <KpiBox label="🟠 En riesgo"    value={totales.en_riesgo || 0}       color="#c2410c" bg="#ffedd5"
-                detalle={`<2h: ${totales.riesgo_critico_2h || 0}`} />
+        <KpiBox label="🟠 En riesgo"    value={totales.en_riesgo || 0}       color="#c2410c" bg="#ffedd5" />
+        <KpiBox label="🟡 No salió"      value={totales.no_salio || 0}        color="#ca8a04" bg="#fef9c3"
+                detalle="dentro de plazo" />
         <KpiBox label="⚠️ Duplicados"   value={resumen?.duplicados?.total_duplicados || 0} color="#0891b2" bg="#cffafe"
                 detalle={`con SDD: ${resumen?.duplicados?.dup_con_sdd || 0}`} />
       </div>
@@ -18544,12 +18547,12 @@ function TorreRosteringHoy() {
                 <span style={{ fontSize: 14, fontWeight: 700, color: "#1a3a6b" }}>{sc}</span>
                 <span style={{ fontSize: 11, color: "#64748b" }}>{filasSc.length} rutas</span>
               </div>
-              <div style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 11 }}>
+              <div style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 11, flexWrap: "wrap", justifyContent: "flex-end" }}>
                 {statsSc.sdd_critico > 0 && (
                   <Badge color="#7f1d1d" bg="#fecaca" label={`SDD ${statsSc.sdd_critico}`} />
                 )}
-                {statsSc.pending > 0 && (
-                  <Badge color="#92400e" bg="#fef3c7" label={`Pending ${statsSc.pending}`} />
+                {statsSc.no_show > 0 && (
+                  <Badge color="#b91c1c" bg="#fee2e2" label={`NoShow ${statsSc.no_show}`} />
                 )}
                 {statsSc.vencido > 0 && (
                   <Badge color="#b91c1c" bg="#fee2e2" label={`Vencido ${statsSc.vencido}`} />
@@ -18557,7 +18560,10 @@ function TorreRosteringHoy() {
                 {statsSc.en_riesgo > 0 && (
                   <Badge color="#c2410c" bg="#ffedd5" label={`Riesgo ${statsSc.en_riesgo}`} />
                 )}
-                <Badge color="#047857" bg="#d1fae5" label={`OK ${statsSc.ok || 0}`} />
+                {statsSc.no_salio > 0 && (
+                  <Badge color="#ca8a04" bg="#fef9c3" label={`NoSalió ${statsSc.no_salio}`} />
+                )}
+                <Badge color="#047857" bg="#d1fae5" label={`Op ${statsSc.operando || 0}`} />
                 <span style={{ color: "#64748b", fontSize: 14, marginLeft: 4 }}>
                   {expandido ? "▼" : "▶"}
                 </span>
@@ -18667,14 +18673,14 @@ function Badge({ color, bg, label }) {
 }
 
 const ESTADOS_INFO = {
-  "0_SDD_CRITICO":           { emoji: "🆘", color: "#7f1d1d" },
-  "1_PENDING_SIN_RESPUESTA": { emoji: "🚨", color: "#92400e" },
-  "2_VENCIDO":               { emoji: "🔴", color: "#b91c1c" },
-  "3_EN_RIESGO":             { emoji: "🟠", color: "#c2410c" },
-  "4_OK":                    { emoji: "🟢", color: "#047857" },
-  "5_CANCEL_MELI":           { emoji: "⚪", color: "#94a3b8" },
-  "9_REJECTED":              { emoji: "⚫", color: "#475569" },
-  "99_OTRO":                 { emoji: "❓", color: "#94a3b8" },
+  "0_SDD_CRITICO":           { emoji: "🆘", color: "#7f1d1d", label: "SDD crítico" },
+  "2_VENCIDO":               { emoji: "🔴", color: "#b91c1c", label: "Vencido" },
+  "3_EN_RIESGO":             { emoji: "🟠", color: "#c2410c", label: "En riesgo" },
+  "4A_OPERANDO":             { emoji: "🟢", color: "#047857", label: "Operando" },
+  "4B_NO_SALIO":             { emoji: "🟡", color: "#ca8a04", label: "No salió aún" },
+  "5_CANCEL_MELI":           { emoji: "⚪", color: "#94a3b8", label: "Cancel MELI" },
+  "6_NO_SHOW":               { emoji: "🚨", color: "#b91c1c", label: "NO SHOW" },
+  "99_OTRO":                 { emoji: "❓", color: "#94a3b8", label: "Otro" },
 };
 
 // ════════════════════════════════════════════════════════════════════════════
