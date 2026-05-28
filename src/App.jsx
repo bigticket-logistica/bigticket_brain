@@ -18191,6 +18191,7 @@ function IndicadoresOperacionalesMX({ usuario }) {
     { id: "diferencias", label: "Diferencias Maestros", desc: "Auditoría ruta por ruta · MELI vs Snapshots" },
     { id: "inventario", label: "Inventario", desc: "Drivers, vehículos, fantasmas" },
     { id: "control_helper", label: "Control Helper", desc: "Helpers no autorizados / certificados / fantasmas" },
+    { id: "torre_rostering_hoy", label: "Torre Rostering HOY", desc: "Operativo en vivo · cronómetros + alertas SDD" },
   ];
 
   if (loading) {
@@ -18292,6 +18293,7 @@ function IndicadoresOperacionalesMX({ usuario }) {
       {vista === "diferencias" && <PoolMeliDiferenciasMaestros />}
       {vista === "inventario" && <PoolMeliInventario drivers={drivers} vehiculos={vehiculos} resumen={resumen} setModal={setModal} setDetalle={setDetalle} mesGlobal={mesGlobal} />}
       {vista === "control_helper" && <PoolMeliControlHelper />}
+      {vista === "torre_rostering_hoy" && <TorreRosteringHoy />}
       {vista === "validacion_bt" && <PoolMeliValidacionBT usuario={usuario} />}
       {vista === "auditoria_padron" && <PoolMeliAuditoriaPadron usuario={usuario} />}
 
@@ -18299,6 +18301,382 @@ function IndicadoresOperacionalesMX({ usuario }) {
     </div>
   );
 }
+// ════════════════════════════════════════════════════════════════════════════
+// TORRE CONTROL ROSTERING HOY · Pool MELI MX
+// Sub-tab dentro de IndicadoresOperacionalesMX
+//
+// Lee de:
+//  - get_torre_rostering_hoy_resumen() · RPC con totales + por_sc + duplicados
+//  - vw_torre_rostering_hoy · listado detallado por travel
+//  - vw_torre_rostering_duplicados · drivers/placas repetidos
+//
+// Lógica visual:
+//  - Sección crítica SDD al inicio (siempre visible si hay SDD)
+//  - KPIs en franja
+//  - Lista de SCs ordenadas por urgencia (vencido + en riesgo)
+//  - Cada SC: alertas de duplicados arriba + tabla de rutas
+//  - Cronómetro en vivo hacia lockDate (se actualiza cada minuto)
+//  - Botón refrescar manual + auto-refresh cada 5 min
+// ════════════════════════════════════════════════════════════════════════════
+
+function TorreRosteringHoy() {
+  const [resumen, setResumen] = React.useState(null);
+  const [filas, setFilas] = React.useState([]);
+  const [duplicados, setDuplicados] = React.useState([]);
+  const [loading, setLoading] = React.useState(true);
+  const [error, setError] = React.useState(null);
+  const [tick, setTick] = React.useState(0); // para refrescar cronómetros
+  const [scExpandido, setScExpandido] = React.useState(new Set()); // SCs colapsadas/expandidas
+
+  // Cargar todos los datos
+  const cargar = React.useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const [resResumen, resFilas, resDups] = await Promise.all([
+        sb.rpc("get_torre_rostering_hoy_resumen"),
+        sb.from("vw_torre_rostering_hoy").select("*").order("sc").order("travel_id"),
+        sb.from("vw_torre_rostering_duplicados").select("*"),
+      ]);
+      if (resResumen.error) throw resResumen.error;
+      if (resFilas.error) throw resFilas.error;
+      if (resDups.error) throw resDups.error;
+      setResumen(resResumen.data || null);
+      setFilas(resFilas.data || []);
+      setDuplicados(resDups.data || []);
+      // Por default todas las SCs expandidas
+      const scsConDatos = new Set((resFilas.data || []).map(f => f.sc).filter(Boolean));
+      setScExpandido(scsConDatos);
+    } catch (e) {
+      setError(e.message || String(e));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  React.useEffect(() => { cargar(); }, [cargar]);
+
+  // Tick cada 60s para actualizar cronómetros y refrescar datos cada 5 min
+  React.useEffect(() => {
+    const timerTick = setInterval(() => setTick(t => t + 1), 60_000);
+    const timerRefresh = setInterval(() => cargar(), 5 * 60_000);
+    return () => { clearInterval(timerTick); clearInterval(timerRefresh); };
+  }, [cargar]);
+
+  // Helper: minutos restantes hasta lockDate (recalcula en cada tick)
+  const minutosHasta = (lockdateStr) => {
+    if (!lockdateStr) return null;
+    const target = new Date(lockdateStr).getTime();
+    const ahora = Date.now();
+    return Math.round((target - ahora) / 60000);
+  };
+
+  // Helper: formatear cronómetro
+  const formatCrono = (min) => {
+    if (min === null || min === undefined) return "—";
+    const abs = Math.abs(min);
+    const h = Math.floor(abs / 60);
+    const m = abs % 60;
+    const sign = min < 0 ? "-" : "";
+    if (h === 0) return `${sign}${m}m`;
+    return `${sign}${h}h ${m}m`;
+  };
+
+  // Helper: color del cronómetro
+  const colorCrono = (min) => {
+    if (min === null || min === undefined) return "#94a3b8";
+    if (min < 0) return "#b91c1c";       // rojo vencido
+    if (min < 60) return "#dc2626";       // rojo intenso (< 1h)
+    if (min < 240) return "#d97706";      // naranja (1-4h)
+    return "#047857";                     // verde (> 4h)
+  };
+
+  const toggleSc = (sc) => {
+    setScExpandido(prev => {
+      const next = new Set(prev);
+      if (next.has(sc)) next.delete(sc); else next.add(sc);
+      return next;
+    });
+  };
+
+  if (loading && !resumen) {
+    return (
+      <div style={{ padding: 40, textAlign: "center", color: "#64748b" }}>
+        Cargando Torre Control Rostering…
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div style={{ padding: 20 }}>
+        <div style={{ background: "#fef2f2", border: "1px solid #fecaca", padding: 16, borderRadius: 8 }}>
+          <div style={{ fontWeight: 600, color: "#991b1b", marginBottom: 6 }}>Error cargando Torre</div>
+          <div style={{ fontSize: 12, color: "#7f1d1d" }}>{error}</div>
+          <div style={{ fontSize: 11, color: "#7f1d1d", marginTop: 8 }}>
+            Verificá que las vistas <code>vw_torre_rostering_hoy</code> y <code>vw_torre_rostering_duplicados</code> existan en Supabase.
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const totales = resumen?.totales || {};
+  const meta = resumen?.meta || {};
+  const porSc = resumen?.por_sc || [];
+
+  // SDD críticas y pending SDD para sección de alerta
+  const sddAlertas = filas.filter(f =>
+    (f.estado === "0_SDD_CRITICO") ||
+    (f.estado === "1_PENDING_SIN_RESPUESTA" && f.flota === "SDD")
+  );
+
+  // Filas por SC (excluyendo rejected/cancel/otro que no requieren acción)
+  const filasOperativas = filas.filter(f =>
+    f.estado && !["9_REJECTED", "5_CANCEL_MELI", "99_OTRO"].includes(f.estado)
+  );
+  const scsConDatos = [...new Set(filasOperativas.map(f => f.sc).filter(Boolean))];
+
+  // Ordenar SCs por urgencia: más vencido/en riesgo primero
+  const urgenciaSc = (sc) => {
+    const s = porSc.find(x => x.sc === sc) || {};
+    return (s.sdd_critico || 0) * 1000 + (s.vencido || 0) * 100 + (s.pending || 0) * 10 + (s.en_riesgo || 0);
+  };
+  const scsOrdenadas = scsConDatos.sort((a, b) => urgenciaSc(b) - urgenciaSc(a));
+
+  return (
+    <div style={{ padding: 20, fontFamily: "'Geist', sans-serif" }}>
+      {/* Header */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 16 }}>
+        <div>
+          <div style={{ fontSize: 18, fontWeight: 700, color: "#1a3a6b" }}>Torre Control Rostering HOY</div>
+          <div style={{ fontSize: 12, color: "#64748b" }}>
+            Fecha operativa: <strong>{meta.fecha || "—"}</strong>
+            {" · "}Última captura: <strong>{meta.captura_hora || "—"}</strong>
+            {" · "}Total travels: <strong>{totales.total_travels || 0}</strong>
+          </div>
+        </div>
+        <button onClick={cargar}
+          style={{
+            padding: "6px 14px", borderRadius: 6, border: "1px solid #1a3a6b",
+            background: "#fff", color: "#1a3a6b", fontWeight: 600, fontSize: 12, cursor: "pointer"
+          }}>
+          🔄 Refrescar
+        </button>
+      </div>
+
+      {/* KPIs en franja */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 10, marginBottom: 16 }}>
+        <KpiBox label="✅ OK"           value={totales.ok || 0}              color="#047857" bg="#d1fae5" />
+        <KpiBox label="🆘 SDD crítico"  value={totales.sdd_critico || 0}     color="#7f1d1d" bg="#fecaca" />
+        <KpiBox label="🚨 Pending"      value={totales.pending || 0}         color="#92400e" bg="#fef3c7"
+                detalle={`SDD ${totales.pending_sdd || 0} · Var ${totales.pending_variable || 0}`} />
+        <KpiBox label="🔴 Vencido"      value={totales.vencido || 0}         color="#b91c1c" bg="#fee2e2" />
+        <KpiBox label="🟠 En riesgo"    value={totales.en_riesgo || 0}       color="#c2410c" bg="#ffedd5"
+                detalle={`<2h: ${totales.riesgo_critico_2h || 0}`} />
+        <KpiBox label="⚠️ Duplicados"   value={resumen?.duplicados?.total_duplicados || 0} color="#0891b2" bg="#cffafe"
+                detalle={`con SDD: ${resumen?.duplicados?.dup_con_sdd || 0}`} />
+      </div>
+
+      {/* Sección crítica SDD */}
+      {sddAlertas.length > 0 && (
+        <div style={{
+          background: "#fef2f2", border: "2px solid #b91c1c", borderRadius: 8,
+          padding: 14, marginBottom: 16
+        }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: "#7f1d1d", marginBottom: 10 }}>
+            🆘 ALERTA CRÍTICA · {sddAlertas.length} ruta{sddAlertas.length !== 1 ? "s" : ""} SDD sin rostering
+          </div>
+          <table style={{ width: "100%", fontSize: 12, borderCollapse: "collapse" }}>
+            <thead>
+              <tr style={{ borderBottom: "1px solid #fecaca", color: "#991b1b" }}>
+                <th style={{ textAlign: "left", padding: "4px 8px", fontWeight: 600 }}>SC</th>
+                <th style={{ textAlign: "left", padding: "4px 8px", fontWeight: 600 }}>Vehículo</th>
+                <th style={{ textAlign: "left", padding: "4px 8px", fontWeight: 600 }}>Travel ID</th>
+                <th style={{ textAlign: "left", padding: "4px 8px", fontWeight: 600 }}>Estado Pilar 1</th>
+                <th style={{ textAlign: "right", padding: "4px 8px", fontWeight: 600 }}>Hora carga</th>
+                <th style={{ textAlign: "right", padding: "4px 8px", fontWeight: 600 }}>⏰ Hasta lockDate</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sddAlertas.map(f => {
+                const min = minutosHasta(f.lockdate_str);
+                return (
+                  <tr key={f.travel_id} style={{ borderBottom: "1px solid #fee2e2" }}>
+                    <td style={{ padding: "5px 8px", fontWeight: 700, color: "#7f1d1d" }}>{f.sc}</td>
+                    <td style={{ padding: "5px 8px", color: "#7f1d1d" }}>{f.vehiculo}</td>
+                    <td style={{ padding: "5px 8px", fontFamily: "monospace", color: "#7f1d1d" }}>{f.travel_id}</td>
+                    <td style={{ padding: "5px 8px", color: "#7f1d1d" }}>
+                      {f.travel_status === "pending" ? "🚨 PENDING (responder)" : "ACEPTADO sin rostear"}
+                    </td>
+                    <td style={{ padding: "5px 8px", textAlign: "right", color: "#7f1d1d" }}>{f.eta_visible || "—"}</td>
+                    <td style={{ padding: "5px 8px", textAlign: "right", fontWeight: 700, color: colorCrono(min) }}>
+                      {formatCrono(min)}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* Sección por SC */}
+      {scsOrdenadas.map(sc => {
+        const filasSc = filasOperativas.filter(f => f.sc === sc);
+        const dupsSc = duplicados.filter(d => d.sc === sc);
+        const expandido = scExpandido.has(sc);
+        const statsSc = porSc.find(x => x.sc === sc) || {};
+
+        return (
+          <div key={sc} style={{
+            background: "#fff", border: "1px solid #e4e7ec", borderRadius: 8,
+            marginBottom: 12, overflow: "hidden"
+          }}>
+            {/* Header SC */}
+            <div onClick={() => toggleSc(sc)}
+              style={{
+                padding: "10px 14px", background: "#f8fafc", cursor: "pointer",
+                display: "flex", justifyContent: "space-between", alignItems: "center",
+                borderBottom: expandido ? "1px solid #e4e7ec" : "none"
+              }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                <span style={{ fontSize: 14, fontWeight: 700, color: "#1a3a6b" }}>{sc}</span>
+                <span style={{ fontSize: 11, color: "#64748b" }}>{filasSc.length} rutas</span>
+              </div>
+              <div style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 11 }}>
+                {statsSc.sdd_critico > 0 && (
+                  <Badge color="#7f1d1d" bg="#fecaca" label={`SDD ${statsSc.sdd_critico}`} />
+                )}
+                {statsSc.pending > 0 && (
+                  <Badge color="#92400e" bg="#fef3c7" label={`Pending ${statsSc.pending}`} />
+                )}
+                {statsSc.vencido > 0 && (
+                  <Badge color="#b91c1c" bg="#fee2e2" label={`Vencido ${statsSc.vencido}`} />
+                )}
+                {statsSc.en_riesgo > 0 && (
+                  <Badge color="#c2410c" bg="#ffedd5" label={`Riesgo ${statsSc.en_riesgo}`} />
+                )}
+                <Badge color="#047857" bg="#d1fae5" label={`OK ${statsSc.ok || 0}`} />
+                <span style={{ color: "#64748b", fontSize: 14, marginLeft: 4 }}>
+                  {expandido ? "▼" : "▶"}
+                </span>
+              </div>
+            </div>
+
+            {/* Alertas de duplicados */}
+            {expandido && dupsSc.length > 0 && (
+              <div style={{ padding: "10px 14px", background: "#fffbeb", borderBottom: "1px solid #fef3c7" }}>
+                <div style={{ fontSize: 12, fontWeight: 600, color: "#92400e", marginBottom: 6 }}>
+                  ⚠️ {dupsSc.length} duplicado{dupsSc.length !== 1 ? "s" : ""} detectado{dupsSc.length !== 1 ? "s" : ""}
+                </div>
+                {dupsSc.map((d, i) => (
+                  <div key={i} style={{ fontSize: 11, color: "#7c2d12", marginBottom: 3 }}>
+                    {d.incluye_sdd && <span style={{ color: "#b91c1c", fontWeight: 700 }}>[SDD] </span>}
+                    <strong>{d.tipo === "driver_duplicado" ? "Driver" : "Placa"}</strong>
+                    {" "}<code style={{ background: "#fef3c7", padding: "1px 6px", borderRadius: 3 }}>{d.valor}</code>
+                    {" "}en <strong>{d.rutas}</strong> rutas: {(d.travel_ids || []).join(", ")}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Tabla de rutas */}
+            {expandido && (
+              <table style={{ width: "100%", fontSize: 11, borderCollapse: "collapse" }}>
+                <thead>
+                  <tr style={{ background: "#fafbfc", borderBottom: "1px solid #e4e7ec" }}>
+                    <th style={{ textAlign: "left", padding: "6px 10px", fontWeight: 600, color: "#475569" }}>Estado</th>
+                    <th style={{ textAlign: "left", padding: "6px 10px", fontWeight: 600, color: "#475569" }}>Travel</th>
+                    <th style={{ textAlign: "left", padding: "6px 10px", fontWeight: 600, color: "#475569" }}>Vehículo</th>
+                    <th style={{ textAlign: "left", padding: "6px 10px", fontWeight: 600, color: "#475569" }}>Flota</th>
+                    <th style={{ textAlign: "left", padding: "6px 10px", fontWeight: 600, color: "#475569" }}>Driver</th>
+                    <th style={{ textAlign: "left", padding: "6px 10px", fontWeight: 600, color: "#475569" }}>Placa</th>
+                    <th style={{ textAlign: "center", padding: "6px 10px", fontWeight: 600, color: "#475569" }}>ETA</th>
+                    <th style={{ textAlign: "right", padding: "6px 10px", fontWeight: 600, color: "#475569" }}>⏰ lockDate</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filasSc.map(f => {
+                    const min = minutosHasta(f.lockdate_str);
+                    const estadoInfo = ESTADOS_INFO[f.estado] || { emoji: "❓", color: "#94a3b8" };
+                    return (
+                      <tr key={f.travel_id} style={{ borderBottom: "0.5px solid #f1f5f9" }}>
+                        <td style={{ padding: "5px 10px" }}>
+                          <span style={{ fontSize: 13 }}>{estadoInfo.emoji}</span>
+                        </td>
+                        <td style={{ padding: "5px 10px", fontFamily: "monospace", fontSize: 10, color: "#64748b" }}>
+                          {f.travel_id}
+                        </td>
+                        <td style={{ padding: "5px 10px", color: "#475569" }}>{f.vehiculo || "—"}</td>
+                        <td style={{ padding: "5px 10px" }}>
+                          <span style={{
+                            fontSize: 10, fontWeight: 600,
+                            color: f.flota === "SDD" ? "#1e40af" : "#475569"
+                          }}>
+                            {f.flota || "—"}
+                          </span>
+                        </td>
+                        <td style={{ padding: "5px 10px", color: f.driver_name ? "#1a3a6b" : "#b91c1c", fontWeight: f.driver_name ? 500 : 700 }}>
+                          {f.driver_name || "🔴 SIN ASIGNAR"}
+                        </td>
+                        <td style={{ padding: "5px 10px", fontFamily: "monospace", color: f.vehicle_plate ? "#1a3a6b" : "#b91c1c", fontWeight: f.vehicle_plate ? 500 : 700 }}>
+                          {f.vehicle_plate || "🔴 SIN PLACA"}
+                        </td>
+                        <td style={{ padding: "5px 10px", textAlign: "center", color: "#64748b" }}>
+                          {f.eta_visible || "—"}
+                        </td>
+                        <td style={{ padding: "5px 10px", textAlign: "right", fontWeight: 600, color: colorCrono(min) }}>
+                          {formatCrono(min)}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
+          </div>
+        );
+      })}
+
+      {/* Tick invisible para forzar recálculo de cronómetros */}
+      <div style={{ display: "none" }}>{tick}</div>
+    </div>
+  );
+}
+
+// ─── Componentes auxiliares ─────────────────────────────────────────────────
+
+function KpiBox({ label, value, color, bg, detalle }) {
+  return (
+    <div style={{ background: bg, padding: "10px 12px", borderRadius: 6, border: `1px solid ${color}22` }}>
+      <div style={{ fontSize: 10, fontWeight: 600, color, marginBottom: 4 }}>{label}</div>
+      <div style={{ fontSize: 22, fontWeight: 800, color }}>{value}</div>
+      {detalle && <div style={{ fontSize: 9, color, opacity: 0.7, marginTop: 2 }}>{detalle}</div>}
+    </div>
+  );
+}
+
+function Badge({ color, bg, label }) {
+  return (
+    <span style={{
+      background: bg, color, padding: "2px 8px", borderRadius: 10,
+      fontSize: 10, fontWeight: 700, whiteSpace: "nowrap"
+    }}>{label}</span>
+  );
+}
+
+const ESTADOS_INFO = {
+  "0_SDD_CRITICO":           { emoji: "🆘", color: "#7f1d1d" },
+  "1_PENDING_SIN_RESPUESTA": { emoji: "🚨", color: "#92400e" },
+  "2_VENCIDO":               { emoji: "🔴", color: "#b91c1c" },
+  "3_EN_RIESGO":             { emoji: "🟠", color: "#c2410c" },
+  "4_OK":                    { emoji: "🟢", color: "#047857" },
+  "5_CANCEL_MELI":           { emoji: "⚪", color: "#94a3b8" },
+  "9_REJECTED":              { emoji: "⚫", color: "#475569" },
+  "99_OTRO":                 { emoji: "❓", color: "#94a3b8" },
+};
+
 // ════════════════════════════════════════════════════════════════════════════
 // CONTROL HELPER · Subpestaña dentro de IndicadoresOperacionalesMX
 // Estructura visual: HTML Control_Helpers_Mexico_8.html
