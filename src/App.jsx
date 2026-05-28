@@ -18206,19 +18206,28 @@ function IndicadoresOperacionalesMX({ usuario }) {
     );
   }
 
-  if (error) {
+  // Tabs que NO dependen del loader pesado del wrapper
+  const tabsIndependientes = ["torre_rostering_hoy", "compromiso", "control_helper"];
+  if (error && !tabsIndependientes.includes(vista)) {
     return (
       <div className="pg">
         <div className="sec-title">Indicadores Operacionales MX</div>
         <div className="sec-sub">Pool Mercado Libre · Bigticket México</div>
-        <div className="form-card" style={{ background: "#fef2f2", border: "1px solid #fecaca" }}>
+        <div className="form-card" style={{ background: "#fef2f2", border: "1px solid #fecaca", marginBottom: 12 }}>
           <div style={{ fontSize: 13, fontWeight: 600, color: "#991b1b", marginBottom: 6 }}>
-            No se pudo cargar la información
+            No se pudo cargar la información del módulo
           </div>
           <div style={{ fontSize: 12, color: "#7f1d1d", lineHeight: 1.6 }}>
             {error}
             <br /><br />
-            <strong>Causa probable:</strong> las vistas <code>vw_meli_*</code> aún no fueron creadas en Supabase.
+            <strong>Causa probable:</strong> timeout en alguna RPC pesada. Probá las tabs:
+            {" "}<button onClick={() => setVista("torre_rostering_hoy")}
+                 style={{background:"none",border:"none",color:"#1a3a6b",fontWeight:600,cursor:"pointer",padding:0,textDecoration:"underline"}}>Torre Rostering HOY</button>,
+            {" "}<button onClick={() => setVista("compromiso")}
+                 style={{background:"none",border:"none",color:"#1a3a6b",fontWeight:600,cursor:"pointer",padding:0,textDecoration:"underline"}}>Compromiso MELI</button> o
+            {" "}<button onClick={() => setVista("control_helper")}
+                 style={{background:"none",border:"none",color:"#1a3a6b",fontWeight:600,cursor:"pointer",padding:0,textDecoration:"underline"}}>Control Helper</button>
+            {" "}que no requieren los datos pesados.
           </div>
         </div>
       </div>
