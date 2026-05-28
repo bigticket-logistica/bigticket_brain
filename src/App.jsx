@@ -18425,23 +18425,29 @@ function TorreRosteringHoy() {
   const meta = resumen?.meta || {};
   const porSc = resumen?.por_sc || [];
 
-  // SDD críticas para sección de alerta principal
-  const sddAlertas = filas.filter(f => f.estado === "0_SDD_CRITICO");
+  // SDD en alerta principal · hard (vencidas) + incompletas (rescatables)
+  const sddAlertas = filas.filter(f =>
+    f.estado === "A_NO_SHOW_HARD_SDD" || f.estado === "C_INCOMPLETO_SDD"
+  );
+  // NO_SHOW HARD totales (SDD + Variable) · alerta separada
+  const noShowHardAlertas = filas.filter(f =>
+    f.estado === "A_NO_SHOW_HARD_SDD" || f.estado === "B_NO_SHOW_HARD_VARIABLE"
+  );
 
-  // Filas por SC (excluyendo cancel/otro que no requieren acción)
+  // Filas por SC (excluyendo cancel/otro)
   const filasOperativas = filas.filter(f =>
-    f.estado && !["5_CANCEL_MELI", "99_OTRO"].includes(f.estado)
+    f.estado && !["Z_CANCEL_MELI", "Z_OTRO"].includes(f.estado)
   );
   const scsConDatos = [...new Set(filasOperativas.map(f => f.sc).filter(Boolean))];
 
-  // Ordenar SCs por urgencia: más SDD/no_show/vencido primero
+  // Ordenar SCs por urgencia: NO_SHOW_HARD_SDD > NO_SHOW_HARD_VAR > INCOMPLETO_SDD > INCOMPLETO_VAR
   const urgenciaSc = (sc) => {
     const s = porSc.find(x => x.sc === sc) || {};
-    return (s.sdd_critico || 0) * 10000
-         + (s.no_show || 0) * 1000
-         + (s.vencido || 0) * 100
-         + (s.en_riesgo || 0) * 10
-         + (s.no_salio || 0);
+    return (s.no_show_hard_sdd || 0) * 100000
+         + (s.no_show_hard_variable || 0) * 10000
+         + (s.incompleto_sdd || 0) * 1000
+         + (s.incompleto_variable || 0) * 100
+         + (s.rostereado_sin_p3 || 0);
   };
   const scsOrdenadas = scsConDatos.sort((a, b) => urgenciaSc(b) - urgenciaSc(a));
 
@@ -18466,18 +18472,31 @@ function TorreRosteringHoy() {
         </button>
       </div>
 
-      {/* KPIs en franja · v2.1 con nuevos estados */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 10, marginBottom: 16 }}>
-        <KpiBox label="🟢 Operando"     value={totales.operando || 0}        color="#047857" bg="#d1fae5"
+      {/* KPIs en franja · v3 · 6 boxes operativos */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 10, marginBottom: 16 }}>
+        <KpiBox label="🆘 NO SHOW HARD SDD"
+                value={totales.no_show_hard_sdd || 0}
+                color="#7f1d1d" bg="#fecaca"
+                detalle="multa SDD segura" />
+        <KpiBox label="🚨 NO SHOW HARD"
+                value={totales.no_show_hard_variable || 0}
+                color="#b91c1c" bg="#fee2e2"
+                detalle="multa variable" />
+        <KpiBox label="🆘 Incompleto SDD"
+                value={totales.incompleto_sdd || 0}
+                color="#dc2626" bg="#fee2e2"
+                detalle="rescatable" />
+        <KpiBox label="🟠 Incompleto"
+                value={totales.incompleto_variable || 0}
+                color="#c2410c" bg="#ffedd5"
+                detalle="rescatable" />
+        <KpiBox label="🟢 Operando"
+                value={totales.operando || 0}
+                color="#047857" bg="#d1fae5"
                 detalle={`SDD: ${totales.sdd_operando || 0}`} />
-        <KpiBox label="🆘 SDD crítico"  value={totales.sdd_critico || 0}     color="#7f1d1d" bg="#fecaca" />
-        <KpiBox label="🚨 NO SHOW"      value={totales.no_show || 0}         color="#b91c1c" bg="#fee2e2"
-                detalle="ETA+1h sin salir" />
-        <KpiBox label="🔴 Vencido"      value={totales.vencido || 0}         color="#b91c1c" bg="#fee2e2" />
-        <KpiBox label="🟠 En riesgo"    value={totales.en_riesgo || 0}       color="#c2410c" bg="#ffedd5" />
-        <KpiBox label="🟡 No salió"      value={totales.no_salio || 0}        color="#ca8a04" bg="#fef9c3"
-                detalle="dentro de plazo" />
-        <KpiBox label="⚠️ Duplicados"   value={resumen?.duplicados?.total_duplicados || 0} color="#0891b2" bg="#cffafe"
+        <KpiBox label="⚠️ Duplicados"
+                value={resumen?.duplicados?.total_duplicados || 0}
+                color="#0891b2" bg="#cffafe"
                 detalle={`con SDD: ${resumen?.duplicados?.dup_con_sdd || 0}`} />
       </div>
 
@@ -18548,20 +18567,20 @@ function TorreRosteringHoy() {
                 <span style={{ fontSize: 11, color: "#64748b" }}>{filasSc.length} rutas</span>
               </div>
               <div style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 11, flexWrap: "wrap", justifyContent: "flex-end" }}>
-                {statsSc.sdd_critico > 0 && (
-                  <Badge color="#7f1d1d" bg="#fecaca" label={`SDD ${statsSc.sdd_critico}`} />
+                {statsSc.no_show_hard_sdd > 0 && (
+                  <Badge color="#7f1d1d" bg="#fecaca" label={`HardSDD ${statsSc.no_show_hard_sdd}`} />
                 )}
-                {statsSc.no_show > 0 && (
-                  <Badge color="#b91c1c" bg="#fee2e2" label={`NoShow ${statsSc.no_show}`} />
+                {statsSc.no_show_hard_variable > 0 && (
+                  <Badge color="#b91c1c" bg="#fee2e2" label={`Hard ${statsSc.no_show_hard_variable}`} />
                 )}
-                {statsSc.vencido > 0 && (
-                  <Badge color="#b91c1c" bg="#fee2e2" label={`Vencido ${statsSc.vencido}`} />
+                {statsSc.incompleto_sdd > 0 && (
+                  <Badge color="#dc2626" bg="#fee2e2" label={`IncSDD ${statsSc.incompleto_sdd}`} />
                 )}
-                {statsSc.en_riesgo > 0 && (
-                  <Badge color="#c2410c" bg="#ffedd5" label={`Riesgo ${statsSc.en_riesgo}`} />
+                {statsSc.incompleto_variable > 0 && (
+                  <Badge color="#c2410c" bg="#ffedd5" label={`Inc ${statsSc.incompleto_variable}`} />
                 )}
-                {statsSc.no_salio > 0 && (
-                  <Badge color="#ca8a04" bg="#fef9c3" label={`NoSalió ${statsSc.no_salio}`} />
+                {statsSc.rostereado_sin_p3 > 0 && (
+                  <Badge color="#ca8a04" bg="#fef9c3" label={`Rost ${statsSc.rostereado_sin_p3}`} />
                 )}
                 <Badge color="#047857" bg="#d1fae5" label={`Op ${statsSc.operando || 0}`} />
                 <span style={{ color: "#64748b", fontSize: 14, marginLeft: 4 }}>
@@ -18673,14 +18692,14 @@ function Badge({ color, bg, label }) {
 }
 
 const ESTADOS_INFO = {
-  "0_SDD_CRITICO":           { emoji: "🆘", color: "#7f1d1d", label: "SDD crítico" },
-  "2_VENCIDO":               { emoji: "🔴", color: "#b91c1c", label: "Vencido" },
-  "3_EN_RIESGO":             { emoji: "🟠", color: "#c2410c", label: "En riesgo" },
-  "4A_OPERANDO":             { emoji: "🟢", color: "#047857", label: "Operando" },
-  "4B_NO_SALIO":             { emoji: "🟡", color: "#ca8a04", label: "No salió aún" },
-  "5_CANCEL_MELI":           { emoji: "⚪", color: "#94a3b8", label: "Cancel MELI" },
-  "6_NO_SHOW":               { emoji: "🚨", color: "#b91c1c", label: "NO SHOW" },
-  "99_OTRO":                 { emoji: "❓", color: "#94a3b8", label: "Otro" },
+  "A_NO_SHOW_HARD_SDD":      { emoji: "🆘", color: "#7f1d1d", label: "NO SHOW HARD SDD" },
+  "B_NO_SHOW_HARD_VARIABLE": { emoji: "🚨", color: "#b91c1c", label: "NO SHOW HARD" },
+  "C_INCOMPLETO_SDD":        { emoji: "🆘", color: "#dc2626", label: "Incompleto SDD" },
+  "D_INCOMPLETO_VARIABLE":   { emoji: "🟠", color: "#c2410c", label: "Incompleto" },
+  "E_OPERANDO":              { emoji: "🟢", color: "#047857", label: "Operando" },
+  "F_ROSTEREADO_SIN_P3":     { emoji: "🟡", color: "#ca8a04", label: "Rostereado (sin P3)" },
+  "Z_CANCEL_MELI":           { emoji: "⚪", color: "#94a3b8", label: "Cancel MELI" },
+  "Z_OTRO":                  { emoji: "❓", color: "#94a3b8", label: "Otro" },
 };
 
 // ════════════════════════════════════════════════════════════════════════════
