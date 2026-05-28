@@ -14816,6 +14816,8 @@ function TorreTresPilares() {
     { id: "7_PARCIAL",                     label: "Parcial",            color: "#7c2d12", bg: "#fed7aa",  desc: "Operó solo algunas placas asignadas" },
     { id: "8_PENDING_ROSTEREADO",          label: "Pending rostereado", color: "#9333ea", bg: "#f3e8ff",  desc: "MELI rostereó sin BT aceptar · revisar" },
     { id: "9_REJECTED_LIMPIO",             label: "Rechazado limpio",   color: "#475569", bg: "#f1f5f9",  desc: "BT rechazó · sin penalidad" },
+    { id: "10_PENDING_SIN_RESPUESTA",      label: "⚠️ Pending sin respuesta", color: "#b45309", bg: "#fef3c7", desc: "BT no aceptó ni rechazó a tiempo" },
+    { id: "97_FALTA_SCRAPER_PM",           label: "⚠️ Falta scraper PM", color: "#9f1239", bg: "#ffe4e6",  desc: "No se capturó rostering PM · alerta crítica" },
     { id: "99_OTRO",                       label: "Otro",               color: "#475569", bg: "#f1f5f9",  desc: "Caso no clasificado · investigar" },
   ];
 
@@ -14886,6 +14888,7 @@ function TorreTresPilares() {
       "Travel ID", "Request ID",
       "Travel Status", "Assignment Status", "Categoría P3",
       "Driver", "CURP", "Placa",
+      "Driver AM", "Placa AM", "Cambio intradía",
       "Placas planif", "Placas operadas",
       "Cargados", "Entregados", "% Entrega",
       "Diagnóstico P3",
@@ -14895,6 +14898,7 @@ function TorreTresPilares() {
       f.travel_id, f.request_id || "",
       f.travel_status || "", f.assignment_status || "", f.categoria_p3 || "",
       f.driver_name || "", f.driver_curp || "", f.vehicle_plate || "",
+      f.driver_id_am || "", f.vehicle_plate_am || "", f.cambio_intradia || "",
       f.placas_planificadas || 0, f.placas_operadas || 0,
       f.total_cargados || 0, f.total_entregados || 0, f.pct_entregado || 0,
       f.diagnostico_p3 || "",
@@ -15141,6 +15145,7 @@ function TorreTresPilares() {
                 <th style={{ padding: "8px 6px", textAlign: "right", fontWeight: 600, color: "#b45309" }}>Cancel MELI</th>
                 <th style={{ padding: "8px 6px", textAlign: "right", fontWeight: 600, color: "#7c2d12" }}>Cambio placa</th>
                 <th style={{ padding: "8px 6px", textAlign: "right", fontWeight: 600, color: "#7c2d12" }}>Parcial</th>
+                <th style={{ padding: "8px 6px", textAlign: "right", fontWeight: 600, color: "#0891b2" }} title="Cambios entre rostering AM y PM">Cambio intradía</th>
                 <th style={{ padding: "8px 6px", textAlign: "right", fontWeight: 600, color: "#9333ea" }}>Pending Rost</th>
                 <th style={{ padding: "8px 6px", textAlign: "right", fontWeight: 600, color: "#1e40af" }}>Rech SDD</th>
                 <th style={{ padding: "8px 6px", textAlign: "right", fontWeight: 600, color: "#475569" }}>Rech SPOT</th>
@@ -15165,6 +15170,7 @@ function TorreTresPilares() {
                   <td style={{ padding: "6px 6px", textAlign: "right", color: s.cancel_meli > 0 ? "#b45309" : "#94a3b8" }}>{s.cancel_meli}</td>
                   <td style={{ padding: "6px 6px", textAlign: "right", color: (s.cambio_placa || 0) > 0 ? "#7c2d12" : "#94a3b8" }}>{s.cambio_placa || 0}</td>
                   <td style={{ padding: "6px 6px", textAlign: "right", color: (s.parcial || 0) > 0 ? "#7c2d12" : "#94a3b8" }}>{s.parcial || 0}</td>
+                  <td style={{ padding: "6px 6px", textAlign: "right", color: (s.cambios_intradia || 0) > 0 ? "#0891b2" : "#94a3b8", fontWeight: (s.cambios_intradia || 0) > 0 ? 600 : 400 }} title="Driver/placa/status cambió entre AM y PM">{s.cambios_intradia || 0}</td>
                   <td style={{ padding: "6px 6px", textAlign: "right", color: s.pending_rost > 0 ? "#9333ea" : "#94a3b8", fontWeight: s.pending_rost > 0 ? 700 : 400 }}>{s.pending_rost}</td>
                   <td style={{ padding: "6px 6px", textAlign: "right", color: (s.rejected_sdd || 0) > 0 ? "#1e40af" : "#94a3b8", fontWeight: (s.rejected_sdd || 0) > 0 ? 600 : 400 }}>{s.rejected_sdd || 0}</td>
                   <td style={{ padding: "6px 6px", textAlign: "right", color: (s.rejected_spot || 0) > 0 ? "#475569" : "#94a3b8" }}>{s.rejected_spot || 0}</td>
@@ -15207,12 +15213,13 @@ function TorreTresPilares() {
                 <th style={{ padding: "8px 6px", textAlign: "left", fontWeight: 600, color: "#64748b" }}>Driver</th>
                 <th style={{ padding: "8px 6px", textAlign: "left", fontWeight: 600, color: "#64748b" }}>Placa</th>
                 <th style={{ padding: "8px 6px", textAlign: "right", fontWeight: 600, color: "#64748b" }}>% Entrega</th>
+                <th style={{ padding: "8px 6px", textAlign: "left", fontWeight: 600, color: "#0891b2" }} title="Cambio entre AM y PM">Cambio AM→PM</th>
                 <th style={{ padding: "8px 6px", textAlign: "left", fontWeight: 600, color: "#64748b" }}>Diagnóstico</th>
               </tr>
             </thead>
             <tbody>
               {filasMostrar.length === 0 && (
-                <tr><td colSpan={9} style={{ padding: 40, textAlign: "center", color: "#94a3b8" }}>Sin filas que mostrar</td></tr>
+                <tr><td colSpan={10} style={{ padding: 40, textAlign: "center", color: "#94a3b8" }}>Sin filas que mostrar</td></tr>
               )}
               {filasMostrar.map((f, i) => {
                 const b = BUCKETS.find(bb => bb.id === f.bucket);
@@ -15244,6 +15251,9 @@ function TorreTresPilares() {
                     <td style={{ padding: "6px 6px", textAlign: "right", color: "#475569" }}>
                       {f.pct_entregado !== null && f.pct_entregado !== undefined ? `${Number(f.pct_entregado).toFixed(1)}%` : "—"}
                     </td>
+                    <td style={{ padding: "6px 6px", fontSize: 10 }}>{f.cambio_intradia ? (
+                      <span style={{ background: "#cffafe", color: "#155e75", padding: "1px 6px", borderRadius: 4, fontSize: 9, fontWeight: 600 }}>{f.cambio_intradia}</span>
+                    ) : <span style={{ color: "#cbd5e1" }}>—</span>}</td>
                     <td style={{ padding: "6px 6px", color: "#64748b", fontSize: 10 }}>{f.diagnostico_p3 || "—"}</td>
                   </tr>
                 );
