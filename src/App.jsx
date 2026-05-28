@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo, Fragment } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback, Fragment } from "react";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const SUPABASE_URL = "https://psvdtgjvognbmxfvqbaa.supabase.co";
@@ -18320,16 +18320,16 @@ function IndicadoresOperacionalesMX({ usuario }) {
 // ════════════════════════════════════════════════════════════════════════════
 
 function TorreRosteringHoy() {
-  const [resumen, setResumen] = React.useState(null);
-  const [filas, setFilas] = React.useState([]);
-  const [duplicados, setDuplicados] = React.useState([]);
-  const [loading, setLoading] = React.useState(true);
-  const [error, setError] = React.useState(null);
-  const [tick, setTick] = React.useState(0); // para refrescar cronómetros
-  const [scExpandido, setScExpandido] = React.useState(new Set()); // SCs colapsadas/expandidas
+  const [resumen, setResumen] = useState(null);
+  const [filas, setFilas] = useState([]);
+  const [duplicados, setDuplicados] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [tick, setTick] = useState(0); // para refrescar cronómetros
+  const [scExpandido, setScExpandido] = useState(new Set()); // SCs colapsadas/expandidas
 
   // Cargar todos los datos
-  const cargar = React.useCallback(async () => {
+  const cargar = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
@@ -18354,10 +18354,10 @@ function TorreRosteringHoy() {
     }
   }, []);
 
-  React.useEffect(() => { cargar(); }, [cargar]);
+  useEffect(() => { cargar(); }, [cargar]);
 
   // Tick cada 60s para actualizar cronómetros y refrescar datos cada 5 min
-  React.useEffect(() => {
+  useEffect(() => {
     const timerTick = setInterval(() => setTick(t => t + 1), 60_000);
     const timerRefresh = setInterval(() => cargar(), 5 * 60_000);
     return () => { clearInterval(timerTick); clearInterval(timerRefresh); };
