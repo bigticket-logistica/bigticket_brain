@@ -14808,9 +14808,9 @@ function TorreTresPilares() {
   // ─── Definición de buckets (orden + colores + descripciones) ───
   const BUCKETS = [
     { id: "1_OK",                          label: "Operó OK",           color: "#047857", bg: "#d1fae5",  desc: "Cadena completa cumplida" },
-    { id: "2_RF1_ACEPTADA_SIN_ROSTERING",  label: "🚨 RF1 sin rostering", color: "#b91c1c", bg: "#fee2e2", desc: "Aceptado pero no asignado · multa MELI" },
+    { id: "2A_RF1_VENCIDO",             label: "🚨 RF1 vencido",      color: "#b91c1c", bg: "#fee2e2", desc: "Aceptado sin asignar · lockDate venció · multa MELI" },
+    { id: "2B_RF1_EVITADO",             label: "✅ RF1 evitado",          color: "#047857", bg: "#d1fae5", desc: "Draft AM rescatado a done PM · victoria operativa" },
     { id: "3_RF2_NO_SHOW",                 label: "🚨 RF2 NO SHOW",     color: "#b91c1c", bg: "#fee2e2",  desc: "Driver no salió · BT cobra al transporte" },
-    { id: "4_CANCEL_MELI_TARDIA",          label: "Cancel MELI tardía", color: "#b45309", bg: "#fef3c7",  desc: "Draft sin driver · MELI paga igual" },
     { id: "5_CANCEL_MELI_POST_ASIGNACION", label: "Cancel MELI post",   color: "#b45309", bg: "#fef3c7",  desc: "Asignado y luego cancelado por MELI" },
     { id: "6_CAMBIO_PLACA",                label: "Cambio de placa",    color: "#7c2d12", bg: "#fed7aa",  desc: "Operó con placa distinta" },
     { id: "7_PARCIAL",                     label: "Parcial",            color: "#7c2d12", bg: "#fed7aa",  desc: "Operó solo algunas placas asignadas" },
