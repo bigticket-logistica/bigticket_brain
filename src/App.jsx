@@ -14749,6 +14749,507 @@ function ModuloCertificacionesMadre() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// TORRE DE CONTROL DE PAGOS · 3 PILARES
+// Brain Control Helper MX · v1.0 · 27-may-2026
+// Fuente: vw_torre_3_pilares · get_torre_3_pilares · get_torre_resumen
+// ═══════════════════════════════════════════════════════════════════════════
+
+function TorreTresPilares() {
+  // ─── Estado ───
+  const ayer = (() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 1);
+    return d.toISOString().slice(0, 10);
+  })();
+
+  const [fecha, setFecha] = useState(ayer);
+  const [scFiltro, setScFiltro] = useState("");
+  const [resumen, setResumen] = useState(null);
+  const [filas, setFilas] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [bucketSeleccionado, setBucketSeleccionado] = useState(null);
+
+  // ─── Carga ───
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const [resumenRes, filasRes] = await Promise.all([
+          sb.rpc("get_torre_resumen", { fecha_desde: fecha, fecha_hasta: fecha }),
+          sb.rpc("get_torre_3_pilares", {
+            fecha_desde: fecha,
+            fecha_hasta: fecha,
+            sc_filtro: scFiltro || null,
+          }),
+        ]);
+        if (!alive) return;
+        if (resumenRes.error) throw resumenRes.error;
+        if (filasRes.error) throw filasRes.error;
+        setResumen(resumenRes.data);
+        setFilas(filasRes.data || []);
+      } catch (e) {
+        if (alive) setError(e.message || String(e));
+      } finally {
+        if (alive) setLoading(false);
+      }
+    })();
+    return () => { alive = false; };
+  }, [fecha, scFiltro, refreshKey]);
+
+  // ─── Definición de buckets (orden + colores + descripciones) ───
+  const BUCKETS = [
+    { id: "1_OK",                          label: "Operó OK",           color: "#047857", bg: "#d1fae5",  desc: "Cadena completa cumplida" },
+    { id: "2_RF1_ACEPTADA_SIN_ROSTERING",  label: "🚨 RF1 sin rostering", color: "#b91c1c", bg: "#fee2e2", desc: "Aceptado pero no asignado · multa MELI" },
+    { id: "3_RF2_NO_SHOW",                 label: "🚨 RF2 NO SHOW",     color: "#b91c1c", bg: "#fee2e2",  desc: "Driver no salió · BT cobra al transporte" },
+    { id: "4_CANCEL_MELI_TARDIA",          label: "Cancel MELI tardía", color: "#b45309", bg: "#fef3c7",  desc: "Draft sin driver · MELI paga igual" },
+    { id: "5_CANCEL_MELI_POST_ASIGNACION", label: "Cancel MELI post",   color: "#b45309", bg: "#fef3c7",  desc: "Asignado y luego cancelado por MELI" },
+    { id: "6_CAMBIO_PLACA",                label: "Cambio de placa",    color: "#7c2d12", bg: "#fed7aa",  desc: "Operó con placa distinta" },
+    { id: "7_PARCIAL",                     label: "Parcial",            color: "#7c2d12", bg: "#fed7aa",  desc: "Operó solo algunas placas asignadas" },
+    { id: "8_PENDING_ROSTEREADO",          label: "Pending rostereado", color: "#9333ea", bg: "#f3e8ff",  desc: "MELI rostereó sin BT aceptar · revisar" },
+    { id: "9_REJECTED_LIMPIO",             label: "Rechazado limpio",   color: "#475569", bg: "#f1f5f9",  desc: "BT rechazó · sin penalidad" },
+    { id: "99_OTRO",                       label: "Otro",               color: "#475569", bg: "#f1f5f9",  desc: "Caso no clasificado · investigar" },
+  ];
+
+  // ─── KPIs derivados ───
+  const kpis = useMemo(() => {
+    if (!resumen?.totales) return null;
+    const t = resumen.totales;
+    const total = t.total_travels || 0;
+    const aceptadas = t.pilar1_aceptadas || 0;
+    const asignadas = t.pilar2_asignadas || 0;
+    const ok = t.ok || 0;
+    return {
+      total, aceptadas, asignadas, ok,
+      rf1: t.rf1 || 0,
+      rf2: t.rf2_noshow || 0,
+      cancelTardia: t.cancel_meli_tardia || 0,
+      cancelPost: t.cancel_meli_post || 0,
+      cambioPlaca: t.cambio_placa || 0,
+      parcial: t.parcial || 0,
+      pendingRost: t.pending_rostereado || 0,
+      rejected: t.rejected || 0,
+      otro: t.otro || 0,
+      sddOk: t.sdd_ok || 0,
+      variableOk: t.variable_ok || 0,
+      pctAsignacion: aceptadas > 0 ? (asignadas / aceptadas * 100) : null,
+      pctOperacion: asignadas > 0 ? (ok / asignadas * 100) : null,
+      pctCadena: aceptadas > 0 ? (ok / aceptadas * 100) : null,
+    };
+  }, [resumen]);
+
+  // ─── Conteos por bucket ───
+  const conteos = useMemo(() => {
+    const m = {};
+    BUCKETS.forEach(b => m[b.id] = 0);
+    filas.forEach(f => {
+      if (m[f.bucket] !== undefined) m[f.bucket]++;
+      else m["99_OTRO"]++;
+    });
+    return m;
+  }, [filas]);
+
+  // ─── Filas filtradas por bucket clickeado ───
+  const filasMostrar = useMemo(() => {
+    if (!bucketSeleccionado) return filas.filter(f => f.bucket !== "9_REJECTED_LIMPIO");
+    return filas.filter(f => f.bucket === bucketSeleccionado);
+  }, [filas, bucketSeleccionado]);
+
+  // ─── SCs únicas para el selector ───
+  const scsDisponibles = useMemo(() => {
+    const s = new Set();
+    filas.forEach(f => { if (f.sc) s.add(f.sc); });
+    return [...s].sort();
+  }, [filas]);
+
+  // ─── Color para % ───
+  const colorPct = (pct) => {
+    if (pct === null || pct === undefined) return "#94a3b8";
+    if (pct >= 95) return "#047857";
+    if (pct >= 85) return "#0891b2";
+    if (pct >= 70) return "#ca8a04";
+    return "#b91c1c";
+  };
+
+  // ─── Descarga Excel ───
+  const descargarExcel = async () => {
+    const headers = [
+      "Fecha", "SC", "Vehículo", "Flota", "Bucket",
+      "Travel ID", "Request ID",
+      "Travel Status", "Assignment Status", "Categoría P3",
+      "Driver", "CURP", "Placa",
+      "Placas planif", "Placas operadas",
+      "Cargados", "Entregados", "% Entrega",
+      "Diagnóstico P3",
+    ];
+    const datos = [headers, ...filas.map(f => [
+      f.fecha, f.sc || "", f.vehiculo || "", f.flota || "", f.bucket,
+      f.travel_id, f.request_id || "",
+      f.travel_status || "", f.assignment_status || "", f.categoria_p3 || "",
+      f.driver_name || "", f.driver_curp || "", f.vehicle_plate || "",
+      f.placas_planificadas || 0, f.placas_operadas || 0,
+      f.total_cargados || 0, f.total_entregados || 0, f.pct_entregado || 0,
+      f.diagnostico_p3 || "",
+    ])];
+    const porSC = [["SC", "OK", "RF1", "RF2 NoShow", "Cancel MELI", "Pending Rost", "Total"]];
+    (resumen?.por_sc || []).forEach(s => {
+      porSC.push([s.sc, s.ok, s.rf1, s.rf2, s.cancel_meli, s.pending_rost, s.total]);
+    });
+    await descargarExcelMultihoja(
+      [
+        { nombre: "Detalle", datos },
+        { nombre: "Por SC", datos: porSC },
+      ],
+      `torre_3pilares_${fecha}`
+    );
+  };
+
+  // ─── Formato fecha legible ───
+  const meses = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
+  const dias = ["domingo","lunes","martes","miércoles","jueves","viernes","sábado"];
+  let fechaTexto = fecha;
+  if (fecha) {
+    const [y, m, d] = fecha.split("-").map(Number);
+    const fobj = new Date(y, m - 1, d);
+    fechaTexto = `${dias[fobj.getDay()]} ${d} de ${meses[m - 1]} de ${y}`;
+  }
+
+  if (loading) {
+    return <div className="pg" style={{ padding: 60, textAlign: "center", color: "#888" }}>Cargando Torre de Control de Pagos…</div>;
+  }
+  if (error) {
+    return <div className="pg" style={{ padding: 40, color: "#c0392b" }}>Error: {error}</div>;
+  }
+
+  return (
+    <div className="pg">
+
+      {/* ─── HEADER ─── */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16, flexWrap: "wrap", gap: 12 }}>
+        <div>
+          <div className="sec-title">Torre de Control de Pagos</div>
+          <div className="sec-sub">
+            3 Pilares · Compromiso MELI × Rostering × Operación · {fechaTexto}
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <label style={{ fontSize: 11, color: "#64748b", fontWeight: 600 }}>Fecha</label>
+          <input
+            type="date"
+            value={fecha}
+            max={ayer}
+            onChange={(e) => { setFecha(e.target.value); setBucketSeleccionado(null); }}
+            style={{
+              padding: "6px 10px", fontSize: 12,
+              border: "1px solid #e4e7ec", borderRadius: 6,
+              fontFamily: "'Geist', sans-serif",
+            }}
+          />
+          <select
+            value={scFiltro}
+            onChange={(e) => { setScFiltro(e.target.value); setBucketSeleccionado(null); }}
+            style={{
+              padding: "6px 10px", fontSize: 12,
+              border: "1px solid #e4e7ec", borderRadius: 6,
+              fontFamily: "'Geist', sans-serif", minWidth: 120,
+            }}
+          >
+            <option value="">Todas las SCs</option>
+            {scsDisponibles.map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
+          <button
+            onClick={() => setRefreshKey(k => k + 1)}
+            style={{
+              padding: "6px 12px", fontSize: 12, fontWeight: 600,
+              background: "#fff", color: "#1a3a6b",
+              border: "1px solid #e4e7ec", borderRadius: 6, cursor: "pointer",
+              fontFamily: "'Geist', sans-serif",
+            }}
+            title="Recargar"
+          >↻ Refrescar</button>
+          <button
+            onClick={descargarExcel}
+            disabled={filas.length === 0}
+            style={{
+              padding: "6px 12px", fontSize: 12, fontWeight: 600,
+              background: filas.length === 0 ? "#f1f5f9" : "#1a3a6b",
+              color: filas.length === 0 ? "#94a3b8" : "#fff",
+              border: "none", borderRadius: 6,
+              cursor: filas.length === 0 ? "not-allowed" : "pointer",
+              fontFamily: "'Geist', sans-serif",
+            }}
+          >⬇ Excel</button>
+        </div>
+      </div>
+
+      {/* ─── 3 PILARES · TARJETAS GRANDES ─── */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12, marginBottom: 16 }}>
+        {/* Pilar 1 */}
+        <div className="form-card" style={{ marginBottom: 0, padding: 20, borderTop: "4px solid #1a3a6b" }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: "#1a3a6b", textTransform: "uppercase", letterSpacing: 1, marginBottom: 8 }}>
+            Pilar 1 · Compromiso
+          </div>
+          <div style={{ fontSize: 36, fontWeight: 700, lineHeight: 1, marginBottom: 8, color: "#1a3a6b" }}>
+            {kpis?.aceptadas ?? 0}
+          </div>
+          <div style={{ fontSize: 12, color: "#334155", marginBottom: 4 }}>
+            Aceptadas por BT
+          </div>
+          <div style={{ fontSize: 10, color: "#94a3b8", lineHeight: 1.4 }}>
+            De {kpis?.total ?? 0} travels totales · MELI ofreció + BT respondió
+          </div>
+        </div>
+
+        {/* Pilar 2 */}
+        <div className="form-card" style={{ marginBottom: 0, padding: 20, borderTop: `4px solid ${colorPct(kpis?.pctAsignacion)}` }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 1, marginBottom: 8 }}>
+            Pilar 2 · Rostering
+          </div>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 8 }}>
+            <div style={{ fontSize: 36, fontWeight: 700, lineHeight: 1, color: "#1a3a6b" }}>
+              {kpis?.asignadas ?? 0}
+            </div>
+            <div style={{ fontSize: 18, fontWeight: 600, color: colorPct(kpis?.pctAsignacion) }}>
+              {kpis?.pctAsignacion !== null ? `${kpis.pctAsignacion.toFixed(1)}%` : "—"}
+            </div>
+          </div>
+          <div style={{ fontSize: 12, color: "#334155", marginBottom: 4 }}>
+            Asignadas (done con driver+placa)
+          </div>
+          <div style={{ fontSize: 10, color: "#94a3b8", lineHeight: 1.4 }}>
+            Cobertura del compromiso · captura AM rostering MELI
+          </div>
+        </div>
+
+        {/* Pilar 3 */}
+        <div className="form-card" style={{ marginBottom: 0, padding: 20, borderTop: `4px solid ${colorPct(kpis?.pctOperacion)}` }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 1, marginBottom: 8 }}>
+            Pilar 3 · Ejecución
+          </div>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 8 }}>
+            <div style={{ fontSize: 36, fontWeight: 700, lineHeight: 1, color: "#1a3a6b" }}>
+              {kpis?.ok ?? 0}
+            </div>
+            <div style={{ fontSize: 18, fontWeight: 600, color: colorPct(kpis?.pctOperacion) }}>
+              {kpis?.pctOperacion !== null ? `${kpis.pctOperacion.toFixed(1)}%` : "—"}
+            </div>
+          </div>
+          <div style={{ fontSize: 12, color: "#334155", marginBottom: 4 }}>
+            Operaron OK
+          </div>
+          <div style={{ fontSize: 10, color: "#94a3b8", lineHeight: 1.4 }}>
+            Cadena completa · driver+placa salió y entregó · SDD: {kpis?.sddOk ?? 0} · Var: {kpis?.variableOk ?? 0}
+          </div>
+        </div>
+      </div>
+
+      {/* ─── % CADENA TOTAL ─── */}
+      <div className="form-card" style={{
+        marginBottom: 16, padding: 16,
+        background: "linear-gradient(135deg, #1a3a6b 0%, #0f2647 100%)",
+        color: "#fff",
+      }}>
+        <div style={{ display: "grid", gridTemplateColumns: "auto 1fr auto", gap: 20, alignItems: "center" }}>
+          <div>
+            <div style={{ fontSize: 10, fontWeight: 700, opacity: 0.8, textTransform: "uppercase", letterSpacing: 1, marginBottom: 4 }}>
+              % Cadena cumplida
+            </div>
+            <div style={{ fontSize: 42, fontWeight: 700, lineHeight: 1 }}>
+              {kpis?.pctCadena !== null ? `${kpis.pctCadena.toFixed(1)}%` : "—"}
+            </div>
+          </div>
+          <div style={{ fontSize: 12, opacity: 0.9, lineHeight: 1.6 }}>
+            De {kpis?.aceptadas ?? 0} compromisos, {kpis?.ok ?? 0} se cumplieron en los 3 Pilares.
+            <br/>
+            <span style={{ opacity: 0.7 }}>Fórmula: Operadas OK ÷ Aceptadas BT</span>
+          </div>
+          <div style={{ textAlign: "right" }}>
+            <div style={{ fontSize: 10, opacity: 0.7, marginBottom: 2 }}>Red flags</div>
+            <div style={{ fontSize: 24, fontWeight: 700 }}>{(kpis?.rf1 ?? 0) + (kpis?.rf2 ?? 0)}</div>
+            <div style={{ fontSize: 10, opacity: 0.8 }}>RF1: {kpis?.rf1 ?? 0} · RF2: {kpis?.rf2 ?? 0}</div>
+          </div>
+        </div>
+      </div>
+
+      {/* ─── 9 BUCKETS · GRID ─── */}
+      <div style={{ marginBottom: 6, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div className="form-title" style={{ marginBottom: 0 }}>Distribución por bucket</div>
+        {bucketSeleccionado && (
+          <button
+            onClick={() => setBucketSeleccionado(null)}
+            style={{
+              padding: "4px 10px", fontSize: 11, fontWeight: 600,
+              background: "#fff", color: "#1a3a6b",
+              border: "1px solid #e4e7ec", borderRadius: 6, cursor: "pointer",
+            }}
+          >× Limpiar filtro</button>
+        )}
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 8, marginBottom: 20 }}>
+        {BUCKETS.map(b => {
+          const n = conteos[b.id] || 0;
+          const seleccionado = bucketSeleccionado === b.id;
+          return (
+            <div
+              key={b.id}
+              onClick={() => setBucketSeleccionado(seleccionado ? null : b.id)}
+              style={{
+                background: n > 0 ? b.bg : "#fafafa",
+                border: seleccionado ? `2px solid ${b.color}` : `0.5px solid #e4e7ec`,
+                borderRadius: 12, padding: 12, cursor: "pointer",
+                opacity: n === 0 ? 0.5 : 1,
+                transition: "all 0.15s",
+              }}
+              title={b.desc}
+            >
+              <div style={{ fontSize: 11, fontWeight: 700, color: b.color, marginBottom: 4, lineHeight: 1.3 }}>
+                {b.label}
+              </div>
+              <div style={{ fontSize: 28, fontWeight: 700, color: b.color, lineHeight: 1 }}>
+                {n}
+              </div>
+              <div style={{ fontSize: 9, color: "#64748b", marginTop: 4, lineHeight: 1.3 }}>
+                {b.desc}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* ─── RANKING POR SC ─── */}
+      <div className="form-card" style={{ marginBottom: 20 }}>
+        <div className="form-title" style={{ marginBottom: 4 }}>Ranking por Service Center</div>
+        <div style={{ fontSize: 11, color: "#64748b", marginBottom: 14 }}>
+          Click en una SC para filtrar el detalle abajo
+        </div>
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+            <thead>
+              <tr style={{ borderBottom: "2px solid #e4e7ec" }}>
+                <th style={{ padding: "8px 6px", textAlign: "left", fontWeight: 600, color: "#64748b" }}>SC</th>
+                <th style={{ padding: "8px 6px", textAlign: "right", fontWeight: 600, color: "#047857" }}>OK</th>
+                <th style={{ padding: "8px 6px", textAlign: "right", fontWeight: 600, color: "#b91c1c" }}>RF1</th>
+                <th style={{ padding: "8px 6px", textAlign: "right", fontWeight: 600, color: "#b91c1c" }}>RF2 NoShow</th>
+                <th style={{ padding: "8px 6px", textAlign: "right", fontWeight: 600, color: "#b45309" }}>Cancel MELI</th>
+                <th style={{ padding: "8px 6px", textAlign: "right", fontWeight: 600, color: "#9333ea" }}>Pending Rost</th>
+                <th style={{ padding: "8px 6px", textAlign: "right", fontWeight: 600, color: "#1a3a6b" }}>Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(resumen?.por_sc || []).map(s => (
+                <tr
+                  key={s.sc}
+                  onClick={() => { setScFiltro(s.sc === scFiltro ? "" : s.sc); setBucketSeleccionado(null); }}
+                  style={{
+                    borderBottom: "0.5px solid #f1f5f9",
+                    background: s.sc === scFiltro ? "#fef3c7" : "transparent",
+                    cursor: "pointer",
+                  }}
+                >
+                  <td style={{ padding: "6px 6px", fontWeight: 600 }}>{s.sc}</td>
+                  <td style={{ padding: "6px 6px", textAlign: "right", color: s.ok > 0 ? "#047857" : "#94a3b8" }}>{s.ok}</td>
+                  <td style={{ padding: "6px 6px", textAlign: "right", color: s.rf1 > 0 ? "#b91c1c" : "#94a3b8", fontWeight: s.rf1 > 0 ? 700 : 400 }}>{s.rf1}</td>
+                  <td style={{ padding: "6px 6px", textAlign: "right", color: s.rf2 > 0 ? "#b91c1c" : "#94a3b8", fontWeight: s.rf2 > 0 ? 700 : 400 }}>{s.rf2}</td>
+                  <td style={{ padding: "6px 6px", textAlign: "right", color: s.cancel_meli > 0 ? "#b45309" : "#94a3b8" }}>{s.cancel_meli}</td>
+                  <td style={{ padding: "6px 6px", textAlign: "right", color: s.pending_rost > 0 ? "#9333ea" : "#94a3b8", fontWeight: s.pending_rost > 0 ? 700 : 400 }}>{s.pending_rost}</td>
+                  <td style={{ padding: "6px 6px", textAlign: "right", fontWeight: 600 }}>{s.total}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* ─── DETALLE ─── */}
+      <div className="form-card" style={{ marginBottom: 20 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+          <div>
+            <div className="form-title" style={{ marginBottom: 4 }}>
+              Detalle
+              {bucketSeleccionado && (
+                <span style={{ fontSize: 12, fontWeight: 500, color: "#64748b", marginLeft: 8 }}>
+                  · {BUCKETS.find(b => b.id === bucketSeleccionado)?.label}
+                </span>
+              )}
+            </div>
+            <div style={{ fontSize: 11, color: "#64748b" }}>
+              {filasMostrar.length} filas
+              {!bucketSeleccionado && " (excluyendo Rechazados limpios)"}
+              {scFiltro && ` · filtro: ${scFiltro}`}
+            </div>
+          </div>
+        </div>
+        <div style={{ overflowX: "auto", maxHeight: 480, overflowY: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+            <thead style={{ position: "sticky", top: 0, background: "#fff", boxShadow: "0 1px 0 #e4e7ec" }}>
+              <tr>
+                <th style={{ padding: "8px 6px", textAlign: "left", fontWeight: 600, color: "#64748b" }}>Bucket</th>
+                <th style={{ padding: "8px 6px", textAlign: "left", fontWeight: 600, color: "#64748b" }}>SC</th>
+                <th style={{ padding: "8px 6px", textAlign: "left", fontWeight: 600, color: "#64748b" }}>Vehículo</th>
+                <th style={{ padding: "8px 6px", textAlign: "left", fontWeight: 600, color: "#64748b" }}>Flota</th>
+                <th style={{ padding: "8px 6px", textAlign: "right", fontWeight: 600, color: "#64748b" }}>Travel ID</th>
+                <th style={{ padding: "8px 6px", textAlign: "left", fontWeight: 600, color: "#64748b" }}>Driver</th>
+                <th style={{ padding: "8px 6px", textAlign: "left", fontWeight: 600, color: "#64748b" }}>Placa</th>
+                <th style={{ padding: "8px 6px", textAlign: "right", fontWeight: 600, color: "#64748b" }}>% Entrega</th>
+                <th style={{ padding: "8px 6px", textAlign: "left", fontWeight: 600, color: "#64748b" }}>Diagnóstico</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filasMostrar.length === 0 && (
+                <tr><td colSpan={9} style={{ padding: 40, textAlign: "center", color: "#94a3b8" }}>Sin filas que mostrar</td></tr>
+              )}
+              {filasMostrar.map((f, i) => {
+                const b = BUCKETS.find(bb => bb.id === f.bucket);
+                return (
+                  <tr key={`${f.travel_id}-${i}`} style={{ borderBottom: "0.5px solid #f1f5f9" }}>
+                    <td style={{ padding: "6px 6px" }}>
+                      <span style={{
+                        background: b?.bg || "#f1f5f9", color: b?.color || "#475569",
+                        padding: "2px 6px", borderRadius: 4, fontSize: 10, fontWeight: 600,
+                        whiteSpace: "nowrap",
+                      }}>
+                        {b?.label || f.bucket}
+                      </span>
+                    </td>
+                    <td style={{ padding: "6px 6px", fontWeight: 600 }}>{f.sc || "—"}</td>
+                    <td style={{ padding: "6px 6px", color: "#475569" }}>{f.vehiculo || "—"}</td>
+                    <td style={{ padding: "6px 6px" }}>
+                      {f.flota && (
+                        <span style={{
+                          background: f.flota === "SDD" ? "#dbeafe" : "#f1f5f9",
+                          color: f.flota === "SDD" ? "#1e40af" : "#475569",
+                          padding: "1px 6px", borderRadius: 4, fontSize: 10, fontWeight: 600,
+                        }}>{f.flota}</span>
+                      )}
+                    </td>
+                    <td style={{ padding: "6px 6px", textAlign: "right", fontFamily: "monospace", color: "#64748b" }}>{f.travel_id}</td>
+                    <td style={{ padding: "6px 6px", color: "#334155" }}>{f.driver_name || "—"}</td>
+                    <td style={{ padding: "6px 6px", fontFamily: "monospace", color: "#475569" }}>{f.vehicle_plate || "—"}</td>
+                    <td style={{ padding: "6px 6px", textAlign: "right", color: "#475569" }}>
+                      {f.pct_entregado !== null && f.pct_entregado !== undefined ? `${Number(f.pct_entregado).toFixed(1)}%` : "—"}
+                    </td>
+                    <td style={{ padding: "6px 6px", color: "#64748b", fontSize: 10 }}>{f.diagnostico_p3 || "—"}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* ─── FOOTER · fuente ─── */}
+      <div style={{ fontSize: 10, color: "#94a3b8", textAlign: "center", marginTop: 4 }}>
+        Fuente: vw_torre_3_pilares · meli_travel_requests × meli_rostering_planificado × vw_rostering_vs_operativo
+      </div>
+
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // PAGOS MADRE — wrapper con sub-tabs (Listado / Drivers / Ayudantes / Config)
 // ═══════════════════════════════════════════════════════════════════════════
 function ModuloPagosMadre({ usuario }) {
@@ -14761,6 +15262,7 @@ function ModuloPagosMadre({ usuario }) {
   const tabs = [
     { id: "listado",     label: "Listado de Pagos",      desc: "Cálculo diario por contratista" },
     { id: "info_ruta",   label: "Información de Ruta",   desc: "Análisis operacional por ruta" },
+    { id: "torre_3p",    label: "Torre de Control Pagos", desc: "3 Pilares · MELI vs Operación" },
     { id: "drivers",     label: "Drivers",               desc: "Maestro de choferes MX" },
     { id: "ayudantes",   label: "Ayudantes",             desc: "Detalle diario de auxiliares" },
     { id: "prefacturas", label: "Prefacturas",           desc: "Envío masivo de prefacturas MX" },
@@ -14806,6 +15308,7 @@ function ModuloPagosMadre({ usuario }) {
         <>
           {subtab === "listado"     && <ListadoPagosDiarios />}
           {subtab === "info_ruta"   && <InformacionDeRuta />}
+          {subtab === "torre_3p"    && <TorreTresPilares />}
           {subtab === "drivers"     && <DriversMaestroMX />}
           {subtab === "ayudantes"   && <AyudantesDetalleDia />}
           {subtab === "prefacturas" && <ModuloPrefacturasEnvio usuario={usuario} />}
