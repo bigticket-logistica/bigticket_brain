@@ -15302,6 +15302,250 @@ function TorreTresPilares() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// PESTAÑA "AMBULANCIAS" · dentro de Pagos
+// ───────────────────────────────────────────────────────────────────────────
+// Traspasos internos de paquetes ruta→ruta (rescates). Por defecto muestra el
+// día anterior. Calendario para elegir fecha, filtro por SC y export a Excel.
+// Lee la vista vw_ambulancias_diario (creada con base_ambulancias.sql).
+// ═══════════════════════════════════════════════════════════════════════════
+function PoolMeliAmbulancias() {
+  const [fecha, setFecha] = useState(fechaOperativaOffset(-1)); // ayer por defecto
+  const [filas, setFilas] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [scFiltro, setScFiltro] = useState("TODOS");
+
+  // ─── Carga del día seleccionado ─────────────────────────────────────────
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      setLoading(true); setError(null);
+      try {
+        const { data, error } = await sb
+          .from("vw_ambulancias_diario")
+          .select("*")
+          .eq("fecha", fecha)
+          .order("paquetes_traspasados", { ascending: false })
+          .limit(5000);
+        if (!alive) return;
+        if (error) throw error;
+        setFilas(data || []);
+      } catch (e) {
+        if (alive) setError(e.message || String(e));
+      } finally {
+        if (alive) setLoading(false);
+      }
+    })();
+    return () => { alive = false; };
+  }, [fecha]);
+
+  const scsDisponibles = useMemo(() => {
+    const set = new Set(filas.map(f => f.service_center_id).filter(Boolean));
+    return ["TODOS", ...Array.from(set).sort()];
+  }, [filas]);
+
+  const filasFiltradas = useMemo(() =>
+    filas.filter(f => scFiltro === "TODOS" || f.service_center_id === scFiltro),
+    [filas, scFiltro]);
+
+  const kpis = useMemo(() => {
+    const traspasos = filasFiltradas.length;
+    const paquetes = filasFiltradas.reduce((s, f) => s + (f.paquetes_traspasados || 0), 0);
+    const conReceptor = filasFiltradas.filter(f => f.receptor_conocido).length;
+    const swaps = filasFiltradas.filter(f => f.patron === "swap_reciproco").length;
+    const sinReceptor = filasFiltradas
+      .filter(f => !f.receptor_conocido)
+      .reduce((s, f) => s + (f.paquetes_traspasados || 0), 0);
+    return { traspasos, paquetes, conReceptor, swaps, sinReceptor };
+  }, [filasFiltradas]);
+
+  function ambEtiquetaPatron(p) {
+    if (p === "swap_reciproco") return "Swap recíproco";
+    if (p === "rescate_masivo") return "Rescate masivo";
+    return "Rescate";
+  }
+  function ambColorPatron(p) {
+    if (p === "swap_reciproco") return { bg: "#eef2ff", fg: "#3730a3" };
+    if (p === "rescate_masivo") return { bg: "#fee2e2", fg: "#991b1b" };
+    return { bg: "#fef3c7", fg: "#92400e" };
+  }
+
+  const exportarExcel = async () => {
+    const headers = [
+      "Fecha", "SC",
+      "Ruta origen", "ENTREGÓ (driver)", "Patente origen",
+      "Ruta destino", "RECIBIÓ (driver)", "Patente destino", "Receptor conocido",
+      "Paquetes", "Patrón", "Hora inicio MX", "Hora fin MX", "Zona",
+    ];
+    const datos = filasFiltradas.map(f => [
+      f.fecha, f.service_center_id,
+      f.ruta_origen, f.driver_origen || "—", f.patente_origen || "—",
+      f.ruta_destino, f.driver_destino || "—", f.patente_destino || "—",
+      f.receptor_conocido ? "Sí" : "No",
+      f.paquetes_traspasados, ambEtiquetaPatron(f.patron),
+      f.hora_inicio_mx, f.hora_fin_mx, f.ciudades || "—",
+    ]);
+    const resumen = [
+      ["Reporte", "Ambulancias · Entrega → Recibe"],
+      ["Fecha", fecha], ["SC", scFiltro],
+      [""],
+      ["Traspasos", kpis.traspasos], ["Paquetes traspasados", kpis.paquetes],
+      ["Traspasos con receptor identificado", kpis.conReceptor],
+      ["Swaps recíprocos", kpis.swaps],
+      ["Paquetes sin receptor identificado (punto ciego)", kpis.sinReceptor],
+    ];
+    await descargarExcelMultihoja(
+      [{ nombre: "Resumen", datos: resumen }, { nombre: "Detalle", datos: [headers, ...datos] }],
+      `ambulancias_${fecha}`
+    );
+  };
+
+  // Bloque "persona": nombre + (ruta · patente). Reusado para origen y destino.
+  const ambPersona = ({ nombre, ruta, patente, desconocido }) => {
+    if (desconocido) {
+      return (
+        <div>
+          <div style={{ fontSize: 12, fontWeight: 600, color: "#c0392b" }}>Receptor desconocido</div>
+          <div style={{ fontSize: 10.5, color: "#94a3b8" }}>ruta {ruta} · no scrapeada</div>
+        </div>
+      );
+    }
+    return (
+      <div>
+        <div style={{ fontSize: 12, fontWeight: 600, color: "#1a1a1a" }}>{nombre || "—"}</div>
+        <div style={{ fontSize: 10.5, color: "#94a3b8", fontVariantNumeric: "tabular-nums" }}>
+          ruta {ruta}{patente ? ` · ${patente}` : ""}
+        </div>
+      </div>
+    );
+  };
+
+  const thAmb = (align) => ({
+    padding: "8px 12px", fontSize: 10, color: "#6B7280", textTransform: "uppercase",
+    letterSpacing: 0.4, fontWeight: 600, textAlign: align,
+  });
+
+  return (
+    <div className="pg">
+      <div className="sec-title">Ambulancias</div>
+      <div className="sec-sub">Traspasos internos de paquetes ruta→ruta · quién entregó → quién recibió · conteo deduplicado</div>
+
+      {/* Filtros */}
+      <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 8, padding: 14, marginBottom: 14 }}>
+        <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>Fecha de operación</div>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
+          {[
+            { l: "Ayer", fn: () => setFecha(fechaOperativaOffset(-1)) },
+            { l: "Hoy", fn: () => setFecha(fechaHoyOperativa()) },
+            { l: "-2 días", fn: () => setFecha(fechaOperativaOffset(-2)) },
+            { l: "-3 días", fn: () => setFecha(fechaOperativaOffset(-3)) },
+            { l: "-7 días", fn: () => setFecha(fechaOperativaOffset(-7)) },
+          ].map(({ l, fn }) => (
+            <button key={l} onClick={fn} style={{ padding: "5px 12px", borderRadius: 4, border: "1px solid #e4e7ec", background: "#f8fafc", color: "#475569", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>{l}</button>
+          ))}
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <input type="date" value={fecha} onChange={e => setFecha(e.target.value)}
+            style={{ background: "#f8fafc", border: "1px solid #e4e7ec", borderRadius: 4, padding: "6px 10px", fontSize: 12 }} />
+          <select value={scFiltro} onChange={e => setScFiltro(e.target.value)}
+            style={{ background: "#f8fafc", border: "1px solid #e4e7ec", borderRadius: 4, padding: "6px 10px", fontSize: 12, fontWeight: 600, color: "#1a3a6b", cursor: "pointer" }}>
+            {scsDisponibles.map(sc => (
+              <option key={sc} value={sc}>{sc === "TODOS" ? "Todos los SC" : sc}</option>
+            ))}
+          </select>
+          <button onClick={exportarExcel} disabled={loading || filasFiltradas.length === 0}
+            style={{ padding: "8px 14px", borderRadius: 4, border: "1px solid #1a3a6b", background: "#1a3a6b", color: "#fff", fontSize: 12, fontWeight: 600, cursor: filasFiltradas.length === 0 ? "not-allowed" : "pointer", opacity: filasFiltradas.length === 0 ? 0.5 : 1 }}>
+            ↓ Exportar Excel
+          </button>
+        </div>
+      </div>
+
+      {error && (
+        <div style={{ background: "#fef2f2", border: "1px solid #fecaca", color: "#991b1b", padding: "10px 14px", borderRadius: 8, marginBottom: 14, fontSize: 13 }}>⚠ {error}</div>
+      )}
+
+      {loading ? (
+        <div style={{ textAlign: "center", padding: 40, color: "#666", fontSize: 13 }}>Cargando ambulancias…</div>
+      ) : (
+        <>
+          {/* KPIs */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 10, marginBottom: 14 }}>
+            {[
+              { label: "Traspasos", valor: kpis.traspasos, sub: "ruta → ruta", color: "#1a1a1a" },
+              { label: "Paquetes movidos", valor: kpis.paquetes, sub: "deduplicados", color: "#1a3a6b" },
+              { label: "Con receptor", valor: kpis.conReceptor, sub: "identificamos quién recibió", color: "#16a34a" },
+              { label: "Swaps recíprocos", valor: kpis.swaps, sub: "rebalanceo entre hermanas", color: "#1a1a1a" },
+              { label: "Sin receptor", valor: kpis.sinReceptor, sub: "pkgs · ruta sin scrapear", color: kpis.sinReceptor > 0 ? "#c0392b" : "#16a34a" },
+            ].map((k) => (
+              <div key={k.label} style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 12, padding: "12px 14px" }}>
+                <div style={{ fontSize: 10, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.4, fontWeight: 700 }}>{k.label}</div>
+                <div style={{ fontSize: 24, fontWeight: 800, color: k.color, marginTop: 4, fontVariantNumeric: "tabular-nums" }}>{Number(k.valor).toLocaleString("es-MX")}</div>
+                <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 2 }}>{k.sub}</div>
+              </div>
+            ))}
+          </div>
+
+          {filasFiltradas.length === 0 ? (
+            <div style={{ textAlign: "center", padding: 40, color: "#94a3b8", fontSize: 13, background: "#fff", border: "1px solid #e4e7ec", borderRadius: 12 }}>
+              Sin ambulancias para esta fecha y filtro.
+            </div>
+          ) : (
+            <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 12, overflow: "hidden" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                <thead>
+                  <tr style={{ background: "#f8fafc", borderBottom: "1px solid #e4e7ec" }}>
+                    <th style={thAmb("left")}>SC</th>
+                    <th style={thAmb("left")}>Entregó (origen)</th>
+                    <th style={thAmb("center")}>Paquetes</th>
+                    <th style={thAmb("left")}>Recibió (destino)</th>
+                    <th style={thAmb("left")}>Hora MX</th>
+                    <th style={thAmb("left")}>Zona</th>
+                    <th style={thAmb("left")}>Patrón</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filasFiltradas.map((f, i) => {
+                    const cp = ambColorPatron(f.patron);
+                    return (
+                      <tr key={`${f.ruta_origen}-${f.ruta_destino}-${i}`}
+                        style={{ borderBottom: i === filasFiltradas.length - 1 ? "none" : "1px solid #e4e7ec" }}>
+                        <td style={{ padding: "10px 12px", fontWeight: 700, color: "#1a3a6b" }}>{f.service_center_id || "—"}</td>
+                        <td style={{ padding: "10px 12px" }}>{ambPersona({ nombre: f.driver_origen, ruta: f.ruta_origen, patente: f.patente_origen })}</td>
+                        <td style={{ padding: "10px 12px", textAlign: "center", whiteSpace: "nowrap" }}>
+                          <span style={{ display: "inline-block", minWidth: 30, padding: "3px 10px", borderRadius: 14, background: "#1a3a6b", color: "#fff", fontWeight: 800, fontSize: 13, fontVariantNumeric: "tabular-nums" }}>{f.paquetes_traspasados}</span>
+                          <div style={{ fontSize: 14, color: "#94a3b8", lineHeight: 1, marginTop: 2 }}>→</div>
+                        </td>
+                        <td style={{ padding: "10px 12px" }}>{ambPersona({ nombre: f.driver_destino, ruta: f.ruta_destino, patente: f.patente_destino, desconocido: !f.receptor_conocido })}</td>
+                        <td style={{ padding: "10px 12px", color: "#666", fontVariantNumeric: "tabular-nums" }}>
+                          {f.hora_inicio_mx}{f.hora_fin_mx && f.hora_fin_mx !== f.hora_inicio_mx ? `–${f.hora_fin_mx}` : ""}
+                        </td>
+                        <td style={{ padding: "10px 12px", color: "#666", maxWidth: 200, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
+                          title={`${f.ciudades || ""}${f.num_cps > 1 ? " · " + f.num_cps + " CP" : ""}`}>
+                          {f.ciudades || "—"}{f.num_cps > 1 && <span style={{ color: "#94a3b8" }}> · {f.num_cps} CP</span>}
+                        </td>
+                        <td style={{ padding: "10px 12px" }}>
+                          <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 10, background: cp.bg, color: cp.fg, textTransform: "uppercase", letterSpacing: 0.3 }}>{ambEtiquetaPatron(f.patron)}</span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {kpis.sinReceptor > 0 && (
+            <div style={{ marginTop: 10, fontSize: 11, color: "#64748b", lineHeight: 1.6, background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10, padding: "10px 14px" }}>
+              <strong style={{ color: "#c0392b" }}>Sin receptor:</strong> {kpis.sinReceptor} paquetes llegaron a rutas de rescate que aún no scrapeamos, por eso no aparece quién recibió ni su patente. Para cerrarlo hay que capturar esas rutas destino en snapshots.
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // PAGOS MADRE — wrapper con sub-tabs (Listado / Drivers / Ayudantes / Config)
 // ═══════════════════════════════════════════════════════════════════════════
 function ModuloPagosMadre({ usuario }) {
@@ -15317,6 +15561,7 @@ function ModuloPagosMadre({ usuario }) {
     { id: "torre_3p",    label: "Torre de Control Pagos", desc: "3 Pilares · MELI vs Operación" },
     { id: "drivers",     label: "Drivers",               desc: "Maestro de choferes MX" },
     { id: "ayudantes",   label: "Ayudantes",             desc: "Detalle diario de auxiliares" },
+    { id: "ambulancias", label: "Ambulancias",           desc: "Traspasos internos ruta→ruta" },
     { id: "prefacturas", label: "Prefacturas",           desc: "Envío masivo de prefacturas MX" },
     { id: "config",      label: "Configuración",         desc: "Tarifario, zonas y reglas" },
   ];
@@ -15363,6 +15608,7 @@ function ModuloPagosMadre({ usuario }) {
           {subtab === "torre_3p"    && <TorreTresPilares />}
           {subtab === "drivers"     && <DriversMaestroMX />}
           {subtab === "ayudantes"   && <AyudantesDetalleDia />}
+          {subtab === "ambulancias" && <PoolMeliAmbulancias />}
           {subtab === "prefacturas" && <ModuloPrefacturasEnvio usuario={usuario} />}
           {subtab === "config"      && <ConfiguracionPagos />}
         </>
