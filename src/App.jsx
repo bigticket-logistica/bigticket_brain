@@ -14906,7 +14906,7 @@ function TorreTresPilares() {
     ])];
     const porSC = [["SC", "OK", "RF1", "RF2 NoShow", "Cancel MELI", "Pending Rost", "Total"]];
     (resumen?.por_sc || []).forEach(s => {
-      porSC.push([s.sc, s.ok, s.rf1, s.rf2, s.cancel_meli, s.pending_rost, s.total]);
+      porSC.push([s.sc, s.ok, s.rf1_vencido || 0, s.rf2, s.cancel_meli, s.pending_rost, s.total]);
     });
     await descargarExcelMultihoja(
       [
@@ -15133,7 +15133,7 @@ function TorreTresPilares() {
       <div className="form-card" style={{ marginBottom: 20 }}>
         <div className="form-title" style={{ marginBottom: 4 }}>Ranking por Service Center</div>
         <div style={{ fontSize: 11, color: "#64748b", marginBottom: 14 }}>
-          Click en una SC para filtrar el detalle abajo
+          Click en una SC para filtrar el detalle abajo · pasa el cursor sobre cada columna para ver su definición
         </div>
         <div style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
@@ -15165,15 +15165,15 @@ function TorreTresPilares() {
                   }}
                 >
                   <td style={{ padding: "6px 6px", fontWeight: 600 }}>{s.sc}</td>
-                  <td style={{ padding: "6px 6px", textAlign: "center", color: s.ok > 0 ? "#047857" : "#94a3b8" }}>{s.ok}</td>
-                  <td style={{ padding: "6px 6px", textAlign: "center", color: s.rf1 > 0 ? "#b91c1c" : "#94a3b8", fontWeight: s.rf1 > 0 ? 700 : 400 }}>{s.rf1}</td>
-                  <td style={{ padding: "6px 6px", textAlign: "center", color: s.rf2 > 0 ? "#b91c1c" : "#94a3b8", fontWeight: s.rf2 > 0 ? 700 : 400 }}>{s.rf2}</td>
-                  <td style={{ padding: "6px 6px", textAlign: "center", color: s.cancel_meli > 0 ? "#b45309" : "#94a3b8" }}>{s.cancel_meli}</td>
-                  <td style={{ padding: "6px 6px", textAlign: "center", color: (s.cambio_placa || 0) > 0 ? "#7c2d12" : "#94a3b8" }}>{s.cambio_placa || 0}</td>
-                  <td style={{ padding: "6px 6px", textAlign: "center", color: (s.parcial || 0) > 0 ? "#7c2d12" : "#94a3b8" }}>{s.parcial || 0}</td>
-                  <td style={{ padding: "6px 6px", textAlign: "center", color: s.pending_rost > 0 ? "#9333ea" : "#94a3b8", fontWeight: s.pending_rost > 0 ? 700 : 400 }}>{s.pending_rost}</td>
-                  <td style={{ padding: "6px 6px", textAlign: "center", color: (s.rejected_sdd || 0) > 0 ? "#1e40af" : "#94a3b8", fontWeight: (s.rejected_sdd || 0) > 0 ? 600 : 400 }}>{s.rejected_sdd || 0}</td>
-                  <td style={{ padding: "6px 6px", textAlign: "center", color: (s.rejected_spot || 0) > 0 ? "#475569" : "#94a3b8" }}>{s.rejected_spot || 0}</td>
+                  <td style={{ padding: "6px 6px", textAlign: "center", color: s.ok > 0 ? "#047857" : "#94a3b8" }} title="Rutas que cumplieron la cadena completa: aceptado + rosterizado + operado">{s.ok}</td>
+                  <td style={{ padding: "6px 6px", textAlign: "center", color: (s.rf1_vencido || 0) > 0 ? "#b91c1c" : "#94a3b8", fontWeight: (s.rf1_vencido || 0) > 0 ? 700 : 400 }} title="Aceptado por BT pero NO rosterizado a tiempo · multa MELI">{s.rf1_vencido || 0}</td>
+                  <td style={{ padding: "6px 6px", textAlign: "center", color: s.rf2 > 0 ? "#b91c1c" : "#94a3b8", fontWeight: s.rf2 > 0 ? 700 : 400 }} title="Rosterizado completo pero driver NO salió · BT cobra al transporte">{s.rf2}</td>
+                  <td style={{ padding: "6px 6px", textAlign: "center", color: s.cancel_meli > 0 ? "#b45309" : "#94a3b8" }} title="MELI canceló la ruta DESPUÉS de que BT la rosterizó · no es culpa BT">{s.cancel_meli}</td>
+                  <td style={{ padding: "6px 6px", textAlign: "center", color: (s.cambio_placa || 0) > 0 ? "#7c2d12" : "#94a3b8" }} title="Operó con placa distinta a la rosterizada">{s.cambio_placa || 0}</td>
+                  <td style={{ padding: "6px 6px", textAlign: "center", color: (s.parcial || 0) > 0 ? "#7c2d12" : "#94a3b8" }} title="Operó pero entregó solo parte de los envíos">{s.parcial || 0}</td>
+                  <td style={{ padding: "6px 6px", textAlign: "center", color: s.pending_rost > 0 ? "#9333ea" : "#94a3b8", fontWeight: s.pending_rost > 0 ? 700 : 400 }} title="MELI rosterió la ruta pero BT nunca confirmó aceptación">{s.pending_rost}</td>
+                  <td style={{ padding: "6px 6px", textAlign: "center", color: (s.rejected_sdd || 0) > 0 ? "#1e40af" : "#94a3b8", fontWeight: (s.rejected_sdd || 0) > 0 ? 600 : 400 }} title="Rechazos SDD limpios (BT rechazó antes del plazo)">{s.rejected_sdd || 0}</td>
+                  <td style={{ padding: "6px 6px", textAlign: "center", color: (s.rejected_spot || 0) > 0 ? "#475569" : "#94a3b8" }} title="Rechazos Variable/SPOT limpios">{s.rejected_spot || 0}</td>
                   <td style={{ padding: "6px 6px", textAlign: "center", fontWeight: 700, color: "#1a3a6b", borderLeft: "2px solid #e4e7ec" }}>{s.total}</td>
                   <td style={{ padding: "6px 6px", textAlign: "center", color: (s.cambios_intradia || 0) > 0 ? "#0891b2" : "#94a3b8", fontWeight: (s.cambios_intradia || 0) > 0 ? 600 : 400, borderLeft: "2px dashed #cbd5e1", fontStyle: "italic" }} title="Métrica aparte: no suma al total">{s.cambios_intradia || 0}</td>
                 </tr>
