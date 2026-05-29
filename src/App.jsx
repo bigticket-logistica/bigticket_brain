@@ -15139,18 +15139,18 @@ function TorreTresPilares() {
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
             <thead>
               <tr style={{ borderBottom: "2px solid #e4e7ec" }}>
-                <th style={{ padding: "8px 6px", textAlign: "left",  fontWeight: 600, color: "#64748b" }}>SC</th>
-                <th style={{ padding: "8px 6px", textAlign: "right", fontWeight: 600, color: "#047857" }}>OK</th>
-                <th style={{ padding: "8px 6px", textAlign: "right", fontWeight: 600, color: "#b91c1c" }}>RF1</th>
-                <th style={{ padding: "8px 6px", textAlign: "right", fontWeight: 600, color: "#b91c1c" }}>RF2 NoShow</th>
-                <th style={{ padding: "8px 6px", textAlign: "right", fontWeight: 600, color: "#b45309" }}>Cancel MELI</th>
-                <th style={{ padding: "8px 6px", textAlign: "right", fontWeight: 600, color: "#7c2d12" }}>Cambio placa</th>
-                <th style={{ padding: "8px 6px", textAlign: "right", fontWeight: 600, color: "#7c2d12" }}>Parcial</th>
-                <th style={{ padding: "8px 6px", textAlign: "right", fontWeight: 600, color: "#0891b2" }} title="Cambios entre rostering AM y PM">Cambio intradía</th>
-                <th style={{ padding: "8px 6px", textAlign: "right", fontWeight: 600, color: "#9333ea" }}>Pending Rost</th>
-                <th style={{ padding: "8px 6px", textAlign: "right", fontWeight: 600, color: "#1e40af" }}>Rech SDD</th>
-                <th style={{ padding: "8px 6px", textAlign: "right", fontWeight: 600, color: "#475569" }}>Rech SPOT</th>
-                <th style={{ padding: "8px 6px", textAlign: "right", fontWeight: 600, color: "#1a3a6b" }}>Total</th>
+                <th style={{ padding: "8px 6px", textAlign: "left",   fontWeight: 600, color: "#64748b" }}>SC</th>
+                <th style={{ padding: "8px 6px", textAlign: "center", fontWeight: 600, color: "#047857" }}>OK</th>
+                <th style={{ padding: "8px 6px", textAlign: "center", fontWeight: 600, color: "#b91c1c" }}>RF1</th>
+                <th style={{ padding: "8px 6px", textAlign: "center", fontWeight: 600, color: "#b91c1c" }}>RF2 NoShow</th>
+                <th style={{ padding: "8px 6px", textAlign: "center", fontWeight: 600, color: "#b45309" }}>Cancel MELI</th>
+                <th style={{ padding: "8px 6px", textAlign: "center", fontWeight: 600, color: "#7c2d12" }}>Cambio placa</th>
+                <th style={{ padding: "8px 6px", textAlign: "center", fontWeight: 600, color: "#7c2d12" }}>Parcial</th>
+                <th style={{ padding: "8px 6px", textAlign: "center", fontWeight: 600, color: "#9333ea" }}>Pending Rost</th>
+                <th style={{ padding: "8px 6px", textAlign: "center", fontWeight: 600, color: "#1e40af" }}>Rech SDD</th>
+                <th style={{ padding: "8px 6px", textAlign: "center", fontWeight: 600, color: "#475569" }}>Rech SPOT</th>
+                <th style={{ padding: "8px 6px", textAlign: "center", fontWeight: 700, color: "#1a3a6b", borderLeft: "2px solid #e4e7ec" }}>Total</th>
+                <th style={{ padding: "8px 6px", textAlign: "center", fontWeight: 600, color: "#0891b2", borderLeft: "2px dashed #cbd5e1" }} title="Cambios entre primera y última captura del día · métrica aparte, no suma al total">ℹ Cambio intradía</th>
               </tr>
             </thead>
             <tbody>
@@ -15165,17 +15165,17 @@ function TorreTresPilares() {
                   }}
                 >
                   <td style={{ padding: "6px 6px", fontWeight: 600 }}>{s.sc}</td>
-                  <td style={{ padding: "6px 6px", textAlign: "right", color: s.ok > 0 ? "#047857" : "#94a3b8" }}>{s.ok}</td>
-                  <td style={{ padding: "6px 6px", textAlign: "right", color: s.rf1 > 0 ? "#b91c1c" : "#94a3b8", fontWeight: s.rf1 > 0 ? 700 : 400 }}>{s.rf1}</td>
-                  <td style={{ padding: "6px 6px", textAlign: "right", color: s.rf2 > 0 ? "#b91c1c" : "#94a3b8", fontWeight: s.rf2 > 0 ? 700 : 400 }}>{s.rf2}</td>
-                  <td style={{ padding: "6px 6px", textAlign: "right", color: s.cancel_meli > 0 ? "#b45309" : "#94a3b8" }}>{s.cancel_meli}</td>
-                  <td style={{ padding: "6px 6px", textAlign: "right", color: (s.cambio_placa || 0) > 0 ? "#7c2d12" : "#94a3b8" }}>{s.cambio_placa || 0}</td>
-                  <td style={{ padding: "6px 6px", textAlign: "right", color: (s.parcial || 0) > 0 ? "#7c2d12" : "#94a3b8" }}>{s.parcial || 0}</td>
-                  <td style={{ padding: "6px 6px", textAlign: "right", color: (s.cambios_intradia || 0) > 0 ? "#0891b2" : "#94a3b8", fontWeight: (s.cambios_intradia || 0) > 0 ? 600 : 400 }} title="Driver/placa/status cambió entre AM y PM">{s.cambios_intradia || 0}</td>
-                  <td style={{ padding: "6px 6px", textAlign: "right", color: s.pending_rost > 0 ? "#9333ea" : "#94a3b8", fontWeight: s.pending_rost > 0 ? 700 : 400 }}>{s.pending_rost}</td>
-                  <td style={{ padding: "6px 6px", textAlign: "right", color: (s.rejected_sdd || 0) > 0 ? "#1e40af" : "#94a3b8", fontWeight: (s.rejected_sdd || 0) > 0 ? 600 : 400 }}>{s.rejected_sdd || 0}</td>
-                  <td style={{ padding: "6px 6px", textAlign: "right", color: (s.rejected_spot || 0) > 0 ? "#475569" : "#94a3b8" }}>{s.rejected_spot || 0}</td>
-                  <td style={{ padding: "6px 6px", textAlign: "right", fontWeight: 700, color: "#1a3a6b" }}>{s.total}</td>
+                  <td style={{ padding: "6px 6px", textAlign: "center", color: s.ok > 0 ? "#047857" : "#94a3b8" }}>{s.ok}</td>
+                  <td style={{ padding: "6px 6px", textAlign: "center", color: s.rf1 > 0 ? "#b91c1c" : "#94a3b8", fontWeight: s.rf1 > 0 ? 700 : 400 }}>{s.rf1}</td>
+                  <td style={{ padding: "6px 6px", textAlign: "center", color: s.rf2 > 0 ? "#b91c1c" : "#94a3b8", fontWeight: s.rf2 > 0 ? 700 : 400 }}>{s.rf2}</td>
+                  <td style={{ padding: "6px 6px", textAlign: "center", color: s.cancel_meli > 0 ? "#b45309" : "#94a3b8" }}>{s.cancel_meli}</td>
+                  <td style={{ padding: "6px 6px", textAlign: "center", color: (s.cambio_placa || 0) > 0 ? "#7c2d12" : "#94a3b8" }}>{s.cambio_placa || 0}</td>
+                  <td style={{ padding: "6px 6px", textAlign: "center", color: (s.parcial || 0) > 0 ? "#7c2d12" : "#94a3b8" }}>{s.parcial || 0}</td>
+                  <td style={{ padding: "6px 6px", textAlign: "center", color: s.pending_rost > 0 ? "#9333ea" : "#94a3b8", fontWeight: s.pending_rost > 0 ? 700 : 400 }}>{s.pending_rost}</td>
+                  <td style={{ padding: "6px 6px", textAlign: "center", color: (s.rejected_sdd || 0) > 0 ? "#1e40af" : "#94a3b8", fontWeight: (s.rejected_sdd || 0) > 0 ? 600 : 400 }}>{s.rejected_sdd || 0}</td>
+                  <td style={{ padding: "6px 6px", textAlign: "center", color: (s.rejected_spot || 0) > 0 ? "#475569" : "#94a3b8" }}>{s.rejected_spot || 0}</td>
+                  <td style={{ padding: "6px 6px", textAlign: "center", fontWeight: 700, color: "#1a3a6b", borderLeft: "2px solid #e4e7ec" }}>{s.total}</td>
+                  <td style={{ padding: "6px 6px", textAlign: "center", color: (s.cambios_intradia || 0) > 0 ? "#0891b2" : "#94a3b8", fontWeight: (s.cambios_intradia || 0) > 0 ? 600 : 400, borderLeft: "2px dashed #cbd5e1", fontStyle: "italic" }} title="Métrica aparte: no suma al total">{s.cambios_intradia || 0}</td>
                 </tr>
               ))}
             </tbody>
@@ -15185,7 +15185,7 @@ function TorreTresPilares() {
 
       {/* ─── DETALLE ─── */}
       <div className="form-card" style={{ marginBottom: 20 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 10 }}>
           <div>
             <div className="form-title" style={{ marginBottom: 4 }}>
               Detalle
@@ -15200,6 +15200,34 @@ function TorreTresPilares() {
               {!bucketSeleccionado && " (excluyendo Rechazados limpios)"}
               {scFiltro && ` · filtro: ${scFiltro}`}
             </div>
+          </div>
+          {/* Filtro SC propio del detalle */}
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <label style={{ fontSize: 11, color: "#64748b", fontWeight: 600 }}>Filtrar SC:</label>
+            <select
+              value={scFiltro || ""}
+              onChange={(e) => { setScFiltro(e.target.value); setBucketSeleccionado(null); }}
+              style={{
+                padding: "5px 10px", fontSize: 12, borderRadius: 6,
+                border: "1px solid #cbd5e1", background: "#fff",
+                color: "#1a3a6b", fontWeight: 600, cursor: "pointer", minWidth: 110
+              }}>
+              <option value="">Todas las SCs</option>
+              {(resumen?.por_sc || []).map(s => (
+                <option key={s.sc} value={s.sc}>{s.sc}</option>
+              ))}
+            </select>
+            {scFiltro && (
+              <button
+                onClick={() => { setScFiltro(""); setBucketSeleccionado(null); }}
+                style={{
+                  padding: "5px 10px", fontSize: 11, borderRadius: 6,
+                  border: "1px solid #b91c1c", background: "#fff",
+                  color: "#b91c1c", fontWeight: 600, cursor: "pointer"
+                }}>
+                ✕ Limpiar
+              </button>
+            )}
           </div>
         </div>
         <div style={{ overflowX: "auto", maxHeight: 480, overflowY: "auto" }}>
