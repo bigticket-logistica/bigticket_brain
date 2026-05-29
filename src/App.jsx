@@ -15314,6 +15314,7 @@ function PoolMeliAmbulancias() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [scFiltro, setScFiltro] = useState("TODOS");
+  const [infoPatron, setInfoPatron] = useState(false); // tooltip de la columna Patrón
 
   // ─── Carga del día seleccionado ─────────────────────────────────────────
   useEffect(() => {
@@ -15401,8 +15402,9 @@ function PoolMeliAmbulancias() {
   };
 
   // Bloque "persona": nombre + (ruta · patente). Reusado para origen y destino.
-  const ambPersona = ({ nombre, ruta, patente, desconocido }) => {
-    if (desconocido) {
+  const ambPersona = ({ nombre, ruta, patente, origenDato, fechaDato }) => {
+    // Solo es "desconocido" si no hay nombre de ninguna fuente
+    if (!nombre) {
       return (
         <div>
           <div style={{ fontSize: 12, fontWeight: 600, color: "#c0392b" }}>Receptor desconocido</div>
@@ -15410,9 +15412,26 @@ function PoolMeliAmbulancias() {
         </div>
       );
     }
+    // Si el dato es histórico (no del día), lo marcamos como estimado
+    const esEstimado = origenDato === "historico";
+    let fechaTxt = "";
+    if (esEstimado && fechaDato) {
+      try {
+        const d = new Date(fechaDato + "T12:00:00");
+        fechaTxt = ` ${d.toLocaleDateString("es-MX", { day: "2-digit", month: "2-digit" })}`;
+      } catch { /* noop */ }
+    }
     return (
       <div>
-        <div style={{ fontSize: 12, fontWeight: 600, color: "#1a1a1a" }}>{nombre || "—"}</div>
+        <div style={{ fontSize: 12, fontWeight: 600, color: "#1a1a1a" }}>
+          {nombre}
+          {esEstimado && (
+            <span title={`Último driver conocido de esta ruta${fechaTxt ? " (" + fechaTxt.trim() + ")" : ""}. La ruta de rescate no se scrapea, este dato es el más reciente disponible.`}
+              style={{ marginLeft: 6, fontSize: 9, fontWeight: 700, padding: "1px 5px", borderRadius: 8, background: "#fef3c7", color: "#92400e", textTransform: "uppercase", letterSpacing: 0.3 }}>
+              est.{fechaTxt}
+            </span>
+          )}
+        </div>
         <div style={{ fontSize: 10.5, color: "#94a3b8", fontVariantNumeric: "tabular-nums" }}>
           ruta {ruta}{patente ? ` · ${patente}` : ""}
         </div>
@@ -15500,7 +15519,39 @@ function PoolMeliAmbulancias() {
                     <th style={thAmb("left")}>Recibió (destino)</th>
                     <th style={thAmb("left")}>Hora MX</th>
                     <th style={thAmb("left")}>Zona</th>
-                    <th style={thAmb("left")}>Patrón</th>
+                    <th style={{ ...thAmb("left"), position: "relative" }}>
+                      Patrón
+                      <span
+                        onMouseEnter={() => setInfoPatron(true)}
+                        onMouseLeave={() => setInfoPatron(false)}
+                        style={{
+                          display: "inline-flex", alignItems: "center", justifyContent: "center",
+                          width: 14, height: 14, marginLeft: 5, borderRadius: "50%",
+                          border: "1px solid #94a3b8", color: "#64748b", fontSize: 9,
+                          fontWeight: 700, cursor: "help", verticalAlign: "middle",
+                          textTransform: "none", letterSpacing: 0,
+                        }}>i</span>
+                      {infoPatron && (
+                        <div style={{
+                          position: "absolute", top: "100%", left: 0, zIndex: 20, marginTop: 4,
+                          width: 300, background: "#fff", border: "1px solid #e4e7ec",
+                          borderRadius: 8, boxShadow: "0 4px 16px rgba(0,0,0,0.12)",
+                          padding: "10px 12px", textTransform: "none", letterSpacing: 0,
+                          fontWeight: 400, color: "#1a1a1a", fontSize: 11, lineHeight: 1.5,
+                        }}>
+                          <div style={{ fontWeight: 700, color: "#1a3a6b", marginBottom: 6, fontSize: 11 }}>¿Qué significa cada patrón?</div>
+                          <div style={{ marginBottom: 6 }}>
+                            <span style={{ fontWeight: 700, color: "#991b1b" }}>Rescate masivo</span>: traspaso en un solo sentido de muchos paquetes (≥30) hacia una ruta de rescate dedicada. Una ruta que no dio abasto y mandó su carga a otra.
+                          </div>
+                          <div style={{ marginBottom: 6 }}>
+                            <span style={{ fontWeight: 700, color: "#92400e" }}>Rescate</span>: traspaso en un solo sentido de pocos paquetes (&lt;30) a otra ruta.
+                          </div>
+                          <div>
+                            <span style={{ fontWeight: 700, color: "#3730a3" }}>Swap recíproco</span>: rebalanceo entre rutas hermanas del mismo SC el mismo día; se pasan paquetes en ambos sentidos (A→B y B→A).
+                          </div>
+                        </div>
+                      )}
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
@@ -15515,7 +15566,7 @@ function PoolMeliAmbulancias() {
                           <span style={{ display: "inline-block", minWidth: 30, padding: "3px 10px", borderRadius: 14, background: "#1a3a6b", color: "#fff", fontWeight: 800, fontSize: 13, fontVariantNumeric: "tabular-nums" }}>{f.paquetes_traspasados}</span>
                           <div style={{ fontSize: 14, color: "#94a3b8", lineHeight: 1, marginTop: 2 }}>→</div>
                         </td>
-                        <td style={{ padding: "10px 12px" }}>{ambPersona({ nombre: f.driver_destino, ruta: f.ruta_destino, patente: f.patente_destino, desconocido: !f.receptor_conocido })}</td>
+                        <td style={{ padding: "10px 12px" }}>{ambPersona({ nombre: f.driver_destino, ruta: f.ruta_destino, patente: f.patente_destino, origenDato: f.receptor_origen_dato, fechaDato: f.receptor_fecha_dato })}</td>
                         <td style={{ padding: "10px 12px", color: "#666", fontVariantNumeric: "tabular-nums" }}>
                           {f.hora_inicio_mx}{f.hora_fin_mx && f.hora_fin_mx !== f.hora_inicio_mx ? `–${f.hora_fin_mx}` : ""}
                         </td>
