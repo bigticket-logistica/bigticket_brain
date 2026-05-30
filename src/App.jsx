@@ -14801,6 +14801,9 @@ function TorreTresPilares() {
   const [error, setError] = useState(null);
   const [refreshKey, setRefreshKey] = useState(0);
   const [bucketSeleccionado, setBucketSeleccionado] = useState(null);
+  const [excelDesde, setExcelDesde] = useState(ayer);
+  const [excelHasta, setExcelHasta] = useState(ayer);
+  const [excelBusy, setExcelBusy] = useState(false);
 
   // ─── Carga ───
   useEffect(() => {
@@ -14909,37 +14912,56 @@ function TorreTresPilares() {
 
   // ─── Descarga Excel ───
   const descargarExcel = async () => {
-    const headers = [
-      "Fecha", "SC", "Vehículo", "Flota", "Bucket",
-      "Travel ID", "Request ID",
-      "Travel Status", "Assignment Status", "Categoría P3",
-      "Driver", "CURP", "Placa",
-      "Driver AM", "Placa AM", "Cambio intradía",
-      "Placas planif", "Placas operadas",
-      "Cargados", "Entregados", "% Entrega",
-      "Diagnóstico P3",
-    ];
-    const datos = [headers, ...filas.map(f => [
-      f.fecha, f.sc || "", f.vehiculo || "", f.flota || "", f.bucket,
-      f.travel_id, f.request_id || "",
-      f.travel_status || "", f.assignment_status || "", f.categoria_p3 || "",
-      f.driver_name || "", f.driver_curp || "", f.vehicle_plate || "",
-      f.driver_id_am || "", f.vehicle_plate_am || "", f.cambio_intradia || "",
-      f.placas_planificadas || 0, f.placas_operadas || 0,
-      f.total_cargados || 0, f.total_entregados || 0, f.pct_entregado || 0,
-      f.diagnostico_p3 || "",
-    ])];
-    const porSC = [["SC", "OK", "RF1", "RF2 NoShow", "Cancel MELI", "Pending Rost", "Total"]];
-    (resumen?.por_sc || []).forEach(s => {
-      porSC.push([s.sc, s.ok, s.rf1_vencido || 0, s.rf2, s.cancel_meli, s.pending_rost, s.total]);
-    });
-    await descargarExcelMultihoja(
-      [
-        { nombre: "Detalle", datos },
-        { nombre: "Por SC", datos: porSC },
-      ],
-      `torre_3pilares_${fecha}`
-    );
+    if (!excelDesde || !excelHasta) { alert("Elegí el rango de fechas para el Excel."); return; }
+    const desde = excelDesde <= excelHasta ? excelDesde : excelHasta;
+    const hasta = excelHasta >= excelDesde ? excelHasta : excelDesde;
+    setExcelBusy(true);
+    try {
+      // Traer TODO el rango desde las RPC (no solo el día en pantalla)
+      const [resR, filR] = await Promise.all([
+        sb.rpc("get_torre_resumen", { fecha_desde: desde, fecha_hasta: hasta }),
+        sb.rpc("get_torre_3_pilares", { fecha_desde: desde, fecha_hasta: hasta, sc_filtro: scFiltro || null }),
+      ]);
+      if (resR.error) throw resR.error;
+      if (filR.error) throw filR.error;
+      const filasR = filR.data || [];
+      const resumenR = resR.data;
+      const headers = [
+        "Fecha", "SC", "Vehículo", "Flota", "Bucket",
+        "Travel ID", "Request ID",
+        "Travel Status", "Assignment Status", "Categoría P3",
+        "Driver", "CURP", "Placa",
+        "Driver AM", "Placa AM", "Cambio intradía",
+        "Placas planif", "Placas operadas",
+        "Cargados", "Entregados", "% Entrega",
+        "Diagnóstico P3",
+      ];
+      const datos = [headers, ...filasR.map(f => [
+        f.fecha, f.sc || "", f.vehiculo || "", f.flota || "", f.bucket,
+        f.travel_id, f.request_id || "",
+        f.travel_status || "", f.assignment_status || "", f.categoria_p3 || "",
+        f.driver_name || "", f.driver_curp || "", f.vehicle_plate || "",
+        f.driver_id_am || "", f.vehicle_plate_am || "", f.cambio_intradia || "",
+        f.placas_planificadas || 0, f.placas_operadas || 0,
+        f.total_cargados || 0, f.total_entregados || 0, f.pct_entregado || 0,
+        f.diagnostico_p3 || "",
+      ])];
+      const porSC = [["SC", "OK", "RF1", "RF2 NoShow", "Cancel MELI", "Pending Rost", "Total"]];
+      (resumenR?.por_sc || []).forEach(x => {
+        porSC.push([x.sc, x.ok, x.rf1_vencido || 0, x.rf2, x.cancel_meli, x.pending_rost, x.total]);
+      });
+      await descargarExcelMultihoja(
+        [
+          { nombre: "Detalle", datos },
+          { nombre: "Por SC", datos: porSC },
+        ],
+        `torre_3pilares_${desde === hasta ? desde : desde + "_a_" + hasta}`
+      );
+    } catch (e) {
+      alert("Error al generar el Excel: " + (e.message || e));
+    } finally {
+      setExcelBusy(false);
+    }
   };
 
   // ─── Formato fecha legible ───
@@ -15005,18 +15027,24 @@ function TorreTresPilares() {
             }}
             title="Recargar"
           >↻ Refrescar</button>
+          <span style={{ fontSize: 11, fontWeight: 600, color: "#64748b" }}>Excel:</span>
+          <input type="date" value={excelDesde} onChange={e => setExcelDesde(e.target.value)}
+            style={{ padding: "5px 8px", fontSize: 12, border: "1px solid #e4e7ec", borderRadius: 6, fontFamily: "'Geist', sans-serif" }} />
+          <span style={{ fontSize: 11, color: "#888" }}>a</span>
+          <input type="date" value={excelHasta} onChange={e => setExcelHasta(e.target.value)}
+            style={{ padding: "5px 8px", fontSize: 12, border: "1px solid #e4e7ec", borderRadius: 6, fontFamily: "'Geist', sans-serif" }} />
           <button
             onClick={descargarExcel}
-            disabled={filas.length === 0}
+            disabled={excelBusy}
             style={{
               padding: "6px 12px", fontSize: 12, fontWeight: 600,
-              background: filas.length === 0 ? "#f1f5f9" : "#1a3a6b",
-              color: filas.length === 0 ? "#94a3b8" : "#fff",
+              background: excelBusy ? "#9ca3af" : "#1a3a6b",
+              color: "#fff",
               border: "none", borderRadius: 6,
-              cursor: filas.length === 0 ? "not-allowed" : "pointer",
+              cursor: excelBusy ? "wait" : "pointer",
               fontFamily: "'Geist', sans-serif",
             }}
-          >⬇ Excel</button>
+          >{excelBusy ? "Generando…" : "⬇ Excel"}</button>
         </div>
       </div>
 
@@ -15340,6 +15368,9 @@ function PoolMeliAmbulancias() {
   const [error, setError] = useState(null);
   const [scFiltro, setScFiltro] = useState("TODOS");
   const [infoPatron, setInfoPatron] = useState(false); // tooltip de la columna Patrón
+  const [excelDesde, setExcelDesde] = useState(fechaOperativaOffset(-1));
+  const [excelHasta, setExcelHasta] = useState(fechaOperativaOffset(-1));
+  const [excelBusy, setExcelBusy] = useState(false);
 
   // ─── Carga del día seleccionado ─────────────────────────────────────────
   useEffect(() => {
@@ -15397,33 +15428,56 @@ function PoolMeliAmbulancias() {
   }
 
   const exportarExcel = async () => {
-    const headers = [
-      "Fecha", "SC",
-      "Ruta origen", "ENTREGÓ (driver)", "Patente origen",
-      "Ruta destino", "RECIBIÓ (driver)", "Patente destino", "Receptor conocido",
-      "Paquetes", "Patrón", "Hora inicio MX", "Hora fin MX", "Zona",
-    ];
-    const datos = filasFiltradas.map(f => [
-      f.fecha, f.service_center_id,
-      f.ruta_origen, f.driver_origen || "—", f.patente_origen || "—",
-      f.ruta_destino, f.driver_destino || "—", f.patente_destino || "—",
-      f.receptor_conocido ? "Sí" : "No",
-      f.paquetes_traspasados, ambEtiquetaPatron(f.patron),
-      f.hora_inicio_mx, f.hora_fin_mx, f.ciudades || "—",
-    ]);
-    const resumen = [
-      ["Reporte", "Ambulancias · Entrega → Recibe"],
-      ["Fecha", fecha], ["SC", scFiltro],
-      [""],
-      ["Traspasos", kpis.traspasos], ["Paquetes traspasados", kpis.paquetes],
-      ["Traspasos con receptor identificado", kpis.conReceptor],
-      ["Swaps recíprocos", kpis.swaps],
-      ["Paquetes sin receptor identificado (punto ciego)", kpis.sinReceptor],
-    ];
-    await descargarExcelMultihoja(
-      [{ nombre: "Resumen", datos: resumen }, { nombre: "Detalle", datos: [headers, ...datos] }],
-      `ambulancias_${fecha}`
-    );
+    if (!excelDesde || !excelHasta) { alert("Elegí el rango de fechas para el Excel."); return; }
+    const desde = excelDesde <= excelHasta ? excelDesde : excelHasta;
+    const hasta = excelHasta >= excelDesde ? excelHasta : excelDesde;
+    setExcelBusy(true);
+    try {
+      // Traer TODO el rango desde la vista (no solo el día en pantalla)
+      const { data, error } = await sb
+        .from("vw_ambulancias_diario")
+        .select("*")
+        .gte("fecha", desde).lte("fecha", hasta)
+        .order("fecha")
+        .order("paquetes_traspasados", { ascending: false })
+        .limit(100000);
+      if (error) throw error;
+      const rango = (data || []).filter(f => scFiltro === "TODOS" || f.service_center_id === scFiltro);
+
+      const headers = [
+        "Fecha", "SC",
+        "Ruta origen", "ENTREGÓ (driver)", "Patente origen",
+        "Ruta destino", "RECIBIÓ (driver)", "Patente destino", "Receptor conocido",
+        "Paquetes", "Patrón", "Hora inicio MX", "Hora fin MX", "Zona",
+      ];
+      const datos = rango.map(f => [
+        f.fecha, f.service_center_id,
+        f.ruta_origen, f.driver_origen || "—", f.patente_origen || "—",
+        f.ruta_destino, f.driver_destino || "—", f.patente_destino || "—",
+        f.receptor_conocido ? "Sí" : "No",
+        f.paquetes_traspasados, ambEtiquetaPatron(f.patron),
+        f.hora_inicio_mx, f.hora_fin_mx, f.ciudades || "—",
+      ]);
+      const totalPkgs = rango.reduce((acc, f) => acc + (f.paquetes_traspasados || 0), 0);
+      const conReceptor = rango.filter(f => f.receptor_conocido).length;
+      const swaps = rango.filter(f => f.patron === "swap_reciproco").length;
+      const resumen = [
+        ["Reporte", "Ambulancias · Entrega → Recibe"],
+        ["Desde", desde], ["Hasta", hasta], ["SC", scFiltro],
+        [""],
+        ["Traspasos", rango.length], ["Paquetes traspasados", totalPkgs],
+        ["Traspasos con receptor identificado", conReceptor],
+        ["Swaps recíprocos", swaps],
+      ];
+      await descargarExcelMultihoja(
+        [{ nombre: "Resumen", datos: resumen }, { nombre: "Detalle", datos: [headers, ...datos] }],
+        `ambulancias_${desde === hasta ? desde : desde + "_a_" + hasta}`
+      );
+    } catch (e) {
+      alert("Error al generar el Excel: " + (e.message || e));
+    } finally {
+      setExcelBusy(false);
+    }
   };
 
   // Bloque "persona": nombre + (ruta · patente). Reusado para origen y destino.
@@ -15497,9 +15551,15 @@ function PoolMeliAmbulancias() {
               <option key={sc} value={sc}>{sc === "TODOS" ? "Todos los SC" : sc}</option>
             ))}
           </select>
-          <button onClick={exportarExcel} disabled={loading || filasFiltradas.length === 0}
-            style={{ padding: "8px 14px", borderRadius: 4, border: "1px solid #1a3a6b", background: "#1a3a6b", color: "#fff", fontSize: 12, fontWeight: 600, cursor: filasFiltradas.length === 0 ? "not-allowed" : "pointer", opacity: filasFiltradas.length === 0 ? 0.5 : 1 }}>
-            ↓ Exportar Excel
+          <span style={{ fontSize: 11, fontWeight: 600, color: "#64748b", marginLeft: 4 }}>Excel rango:</span>
+          <input type="date" value={excelDesde} onChange={e => setExcelDesde(e.target.value)}
+            style={{ background: "#f8fafc", border: "1px solid #e4e7ec", borderRadius: 4, padding: "6px 10px", fontSize: 12 }} />
+          <span style={{ fontSize: 11, color: "#888" }}>a</span>
+          <input type="date" value={excelHasta} onChange={e => setExcelHasta(e.target.value)}
+            style={{ background: "#f8fafc", border: "1px solid #e4e7ec", borderRadius: 4, padding: "6px 10px", fontSize: 12 }} />
+          <button onClick={exportarExcel} disabled={excelBusy}
+            style={{ padding: "8px 14px", borderRadius: 4, border: "1px solid #1a3a6b", background: excelBusy ? "#9ca3af" : "#1a3a6b", color: "#fff", fontSize: 12, fontWeight: 600, cursor: excelBusy ? "wait" : "pointer" }}>
+            {excelBusy ? "Generando…" : "↓ Exportar Excel"}
           </button>
         </div>
       </div>
@@ -23484,6 +23544,9 @@ function PoolMeliCompromiso() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [excelDesde, setExcelDesde] = useState(fechaOperativaOffset(-7));
+  const [excelHasta, setExcelHasta] = useState(fechaHoyOperativa());
+  const [excelHistBusy, setExcelHistBusy] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -23552,6 +23615,93 @@ function PoolMeliCompromiso() {
     fechaTexto = `${dias[fechaObj.getDay()]} ${d} de ${meses[m - 1]} de ${y}`;
   }
 
+  // Export Excel de la foto de compromiso (un día: la operativa de mañana). Incluye la fecha.
+  const exportarExcel = async () => {
+    const fmt = (x) => (x != null ? Number(x.toFixed(1)) : "—");
+    const resumenSheet = [
+      ["Reporte", "Compromiso MELI · Operativa de mañana"],
+      ["Fecha operativa", fechaManana || ""],
+      ["Generado", generadoEn ? generadoEn.toLocaleString("es-MX") : ""],
+      [""],
+      ["Métrica", "SDD", "SPOT", "Total"],
+      ["Ofrecidas", c.ofrecidas_sdd || 0, c.ofrecidas_spot || 0, ofrecidasTotal],
+      ["Aceptadas", c.aceptadas_sdd || 0, c.aceptadas_spot || 0, aceptadasTotal],
+      ["Rechazadas", c.rechazadas_sdd || 0, c.rechazadas_spot || 0, rechazadasTotal],
+      ["Canceladas MELI", c.canceladas_sdd || 0, c.canceladas_spot || 0, canceladasTotal],
+      ["Efectivas (ofrec − canc)", efectSdd, efectSpot, efectTotal],
+      ["% Cumplimiento", fmt(cumpSdd), fmt(cumpSpot), fmt(cumpTotal)],
+    ];
+    const rk = (titulo, arr) => {
+      const rows = [[titulo], ["SC / Facility", "Cantidad"]];
+      (arr || []).forEach(x => rows.push([x.facility_id || "", Number(x.cant) || 0]));
+      return rows;
+    };
+    const rankingSheet = [
+      ...rk("SDD · Más aceptadas", data.ranking_sdd_aceptadas), [""],
+      ...rk("SDD · Más rechazadas", data.ranking_sdd_rechazadas), [""],
+      ...rk("SPOT · Más aceptadas", data.ranking_spot_aceptadas), [""],
+      ...rk("SPOT · Más rechazadas", data.ranking_spot_rechazadas),
+    ];
+    await descargarExcelMultihoja(
+      [{ nombre: "Compromiso", datos: resumenSheet }, { nombre: "Rankings", datos: rankingSheet }],
+      `compromiso_meli_${fechaManana || "manana"}`
+    );
+  };
+
+  // Export Excel por RANGO desde la tabla histórica (se llena a diario con snapshot_compromiso_meli)
+  const exportarHistorico = async () => {
+    if (!excelDesde || !excelHasta) { alert("Elegí el rango de fechas."); return; }
+    const desde = excelDesde <= excelHasta ? excelDesde : excelHasta;
+    const hasta = excelHasta >= excelDesde ? excelHasta : excelDesde;
+    setExcelHistBusy(true);
+    try {
+      const { data: hist, error: err } = await sb
+        .from("compromiso_meli_historico")
+        .select("*")
+        .gte("fecha_operativa", desde).lte("fecha_operativa", hasta)
+        .order("fecha_operativa")
+        .limit(100000);
+      if (err) throw err;
+      const rows = hist || [];
+      if (rows.length === 0) {
+        alert("No hay histórico guardado en ese rango todavía. La tabla se llena a diario con snapshot_compromiso_meli().");
+        setExcelHistBusy(false);
+        return;
+      }
+      const cumpl = (acept, ofrec, canc) => {
+        const ef = (ofrec || 0) - (canc || 0);
+        return ef > 0 ? Number(((acept || 0) / ef * 100).toFixed(1)) : "";
+      };
+      const headers = [
+        "FECHA OPERATIVA",
+        "OFRECIDAS SDD", "ACEPTADAS SDD", "RECHAZADAS SDD", "CANCELADAS SDD", "% CUMPL SDD",
+        "OFRECIDAS SPOT", "ACEPTADAS SPOT", "RECHAZADAS SPOT", "CANCELADAS SPOT", "% CUMPL SPOT",
+        "OFRECIDAS TOTAL", "ACEPTADAS TOTAL", "% CUMPL TOTAL",
+        "GENERADO EN",
+      ];
+      const datos = rows.map(r => {
+        const ofrecT = (r.ofrecidas_sdd || 0) + (r.ofrecidas_spot || 0);
+        const aceptT = (r.aceptadas_sdd || 0) + (r.aceptadas_spot || 0);
+        const cancT  = (r.canceladas_sdd || 0) + (r.canceladas_spot || 0);
+        return [
+          r.fecha_operativa,
+          r.ofrecidas_sdd || 0, r.aceptadas_sdd || 0, r.rechazadas_sdd || 0, r.canceladas_sdd || 0, cumpl(r.aceptadas_sdd, r.ofrecidas_sdd, r.canceladas_sdd),
+          r.ofrecidas_spot || 0, r.aceptadas_spot || 0, r.rechazadas_spot || 0, r.canceladas_spot || 0, cumpl(r.aceptadas_spot, r.ofrecidas_spot, r.canceladas_spot),
+          ofrecT, aceptT, cumpl(aceptT, ofrecT, cancT),
+          r.generado_en ? new Date(r.generado_en).toLocaleString("es-MX") : "",
+        ];
+      });
+      await descargarExcelMultihoja(
+        [{ nombre: "Compromiso histórico", datos: [headers, ...datos] }],
+        `compromiso_meli_${desde === hasta ? desde : desde + "_a_" + hasta}`
+      );
+    } catch (e) {
+      alert("Error al generar el histórico: " + (e.message || e));
+    } finally {
+      setExcelHistBusy(false);
+    }
+  };
+
   return (
     <div className="pg">
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
@@ -23566,19 +23716,48 @@ function PoolMeliCompromiso() {
             )}
           </div>
         </div>
-        <button
-          onClick={() => setRefreshKey(k => k + 1)}
-          style={{
-            padding: "8px 14px", fontSize: 12, fontWeight: 600,
-            background: "#fff", color: "#1a3a6b",
-            border: "1px solid #e4e7ec", borderRadius: 6,
-            cursor: "pointer", fontFamily: "'Geist', sans-serif",
-            display: "flex", alignItems: "center", gap: 6,
-          }}
-          title="Recargar datos"
-        >
-          ↻ Refrescar
-        </button>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+          <span style={{ fontSize: 11, fontWeight: 600, color: "#64748b" }}>Histórico:</span>
+          <input type="date" value={excelDesde} onChange={e => setExcelDesde(e.target.value)}
+            style={{ padding: "6px 8px", fontSize: 12, border: "1px solid #e4e7ec", borderRadius: 6, fontFamily: "'Geist', sans-serif" }} />
+          <span style={{ fontSize: 11, color: "#888" }}>a</span>
+          <input type="date" value={excelHasta} onChange={e => setExcelHasta(e.target.value)}
+            style={{ padding: "6px 8px", fontSize: 12, border: "1px solid #e4e7ec", borderRadius: 6, fontFamily: "'Geist', sans-serif" }} />
+          <button
+            onClick={exportarHistorico}
+            disabled={excelHistBusy}
+            style={{
+              padding: "8px 14px", fontSize: 12, fontWeight: 600,
+              background: excelHistBusy ? "#9ca3af" : "#1a3a6b", color: "#fff",
+              border: "none", borderRadius: 6,
+              cursor: excelHistBusy ? "wait" : "pointer", fontFamily: "'Geist', sans-serif",
+              display: "flex", alignItems: "center", gap: 6,
+            }}
+            title="Excel por rango desde la tabla histórica (se llena a diario)"
+          >{excelHistBusy ? "Generando…" : "⬇ Histórico"}</button>
+          <button
+            onClick={exportarExcel}
+            style={{
+              padding: "8px 14px", fontSize: 12, fontWeight: 600,
+              background: "#fff", color: "#1a3a6b",
+              border: "1px solid #e4e7ec", borderRadius: 6,
+              cursor: "pointer", fontFamily: "'Geist', sans-serif",
+              display: "flex", alignItems: "center", gap: 6,
+            }}
+            title="Excel de la foto de mañana (un día)"
+          >⬇ Mañana</button>
+          <button
+            onClick={() => setRefreshKey(k => k + 1)}
+            style={{
+              padding: "8px 14px", fontSize: 12, fontWeight: 600,
+              background: "#fff", color: "#1a3a6b",
+              border: "1px solid #e4e7ec", borderRadius: 6,
+              cursor: "pointer", fontFamily: "'Geist', sans-serif",
+              display: "flex", alignItems: "center", gap: 6,
+            }}
+            title="Recargar datos"
+          >↻ Refrescar</button>
+        </div>
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12, marginBottom: 20 }}>
