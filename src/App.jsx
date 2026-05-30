@@ -4687,6 +4687,10 @@ const VistaSnapshotSupervisores = ({ fecha, pais }) => {
   const [loading, setLoading] = useState(false);
   const [error, setError]   = useState(null);
   const [descargando, setDescargando] = useState(false);
+  // Rango de fechas para la descarga Excel (por defecto = la fecha que se ve).
+  // El componente se remonta al cambiar `fecha`, así que se resetea solo a la fecha vista.
+  const [excelDesde, setExcelDesde] = useState(fecha);
+  const [excelHasta, setExcelHasta] = useState(fecha);
 
   // Mapeo sub-pestaña → vista SQL
   const VISTAS = {
@@ -4753,6 +4757,7 @@ const VistaSnapshotSupervisores = ({ fecha, pais }) => {
   // ═══════════════════════════════════════════════════════════════════════
   const descargarExcel = async () => {
     if (pais !== "MX") return;
+    if (!excelDesde || !excelHasta) { alert("Elegí el rango de fechas para el Excel."); return; }
     setDescargando(true);
     try {
       // Cargar SheetJS dinámicamente desde CDN
@@ -4766,17 +4771,21 @@ const VistaSnapshotSupervisores = ({ fecha, pais }) => {
         });
       }
 
-      // Cargar las 4 vistas en paralelo (siempre todas, sin filtro SC)
+      // Normalizar el rango por si lo invierten (desde > hasta)
+      const desde = excelDesde <= excelHasta ? excelDesde : excelHasta;
+      const hasta = excelHasta >= excelDesde ? excelHasta : excelDesde;
+
+      // Cargar las 4 vistas en paralelo POR RANGO (siempre todas, sin filtro SC)
       const [
         { data: dIng, error: eIng },
         { data: dRut, error: eRut },
         { data: dNS,  error: eNS  },
         { data: dDev, error: eDev },
       ] = await Promise.all([
-        sb.from("vw_maestro_supervisores_auto").select("*").eq("fecha", fecha).limit(5000),
-        sb.from("vw_rutas_citadas_auto").select("*").eq("fecha", fecha).limit(5000),
-        sb.from("vw_rostering_vs_operativo").select("*").eq("fecha", fecha).limit(5000),
-        sb.from("vw_devoluciones_auto").select("*").eq("fecha", fecha).limit(10000),
+        sb.from("vw_maestro_supervisores_auto").select("*").gte("fecha", desde).lte("fecha", hasta).order("fecha").limit(100000),
+        sb.from("vw_rutas_citadas_auto").select("*").gte("fecha", desde).lte("fecha", hasta).order("fecha").limit(100000),
+        sb.from("vw_rostering_vs_operativo").select("*").gte("fecha", desde).lte("fecha", hasta).order("fecha").limit(100000),
+        sb.from("vw_devoluciones_auto").select("*").gte("fecha", desde).lte("fecha", hasta).order("fecha").limit(100000),
       ]);
 
       if (eIng || eRut || eNS || eDev) {
@@ -4872,14 +4881,22 @@ const VistaSnapshotSupervisores = ({ fecha, pais }) => {
 
       // ─── Hoja 4: Ingreso de devoluciones ───
       const hojaDev = (dDev || []).map(f => ({
+        "FECHA":       f.fecha,
+        "SC":          f.service_center_id || "",
         "ID_VIAJE":    f.id_viaje,
         "FOLIO_GUIAS": f.folio_guias,
         "PATENTE":     f.patente,
         "MOTIVO":      f.motivo,
+        "DRIVER":      f.driver_name || "",
+        "RECEPTOR":    f.receiver_name || "",
+        "CP":          f.zip_code || "",
+        "CIUDAD":      f.city || "",
+        "ESTADO":      f.state || "",
         "COMENTARIOS": f.comentarios || "",
       }));
       const wsDev = window.XLSX.utils.json_to_sheet(hojaDev.length > 0 ? hojaDev :
-        [{ "ID_VIAJE": "", "FOLIO_GUIAS": "", "PATENTE": "", "MOTIVO": "", "COMENTARIOS": "" }]);
+        [{ "FECHA": "", "SC": "", "ID_VIAJE": "", "FOLIO_GUIAS": "", "PATENTE": "", "MOTIVO": "",
+           "DRIVER": "", "RECEPTOR": "", "CP": "", "CIUDAD": "", "ESTADO": "", "COMENTARIOS": "" }]);
       window.XLSX.utils.book_append_sheet(wb, wsDev, "Ingreso de devoluciones");
 
       // Ajustar anchos de columnas (estimado)
@@ -4889,11 +4906,11 @@ const VistaSnapshotSupervisores = ({ fecha, pais }) => {
       wsRut["!cols"] = anchosRut.map(w => ({ wch: w }));
       const anchosNS  = [12, 14, 12, 18, 14, 24];
       wsNS["!cols"]  = anchosNS.map(w => ({ wch: w }));
-      const anchosDev = [22, 22, 12, 30, 40];
+      const anchosDev = [12, 8, 22, 22, 12, 24, 18, 18, 8, 16, 10, 30];
       wsDev["!cols"] = anchosDev.map(w => ({ wch: w }));
 
       // Generar archivo y disparar descarga
-      const nombreArchivo = `Macro_Maestros_Mexico_${fecha}.xlsx`;
+      const nombreArchivo = `Macro_Maestros_Mexico_${desde === hasta ? desde : desde + "_a_" + hasta}.xlsx`;
       window.XLSX.writeFile(wb, nombreArchivo);
     } catch (err) {
       console.error("Error descargando Excel:", err);
@@ -4941,13 +4958,21 @@ const VistaSnapshotSupervisores = ({ fecha, pais }) => {
             </button>
           ))}
         </div>
-        <button onClick={descargarExcel} disabled={descargando}
-          style={{ padding: "7px 14px", borderRadius: 6, border: "1px solid #16a34a",
-            background: descargando ? "#9ca3af" : "#16a34a", color: "#fff",
-            fontSize: 12, fontWeight: 700, cursor: descargando ? "wait" : "pointer",
-            display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
-          {descargando ? "⏳ Generando..." : "📥 Descargar Excel"}
-        </button>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
+          <span style={{ fontSize: 10, fontWeight: 700, color: "#666", textTransform: "uppercase", letterSpacing: 0.5 }}>Excel · rango:</span>
+          <input type="date" value={excelDesde} onChange={e => setExcelDesde(e.target.value)}
+            style={{ padding: "5px 8px", borderRadius: 4, border: "1px solid #e4e7ec", fontSize: 12, color: "#1a1a1a" }} />
+          <span style={{ fontSize: 11, color: "#888" }}>a</span>
+          <input type="date" value={excelHasta} onChange={e => setExcelHasta(e.target.value)}
+            style={{ padding: "5px 8px", borderRadius: 4, border: "1px solid #e4e7ec", fontSize: 12, color: "#1a1a1a" }} />
+          <button onClick={descargarExcel} disabled={descargando}
+            style={{ padding: "7px 14px", borderRadius: 6, border: "1px solid #16a34a",
+              background: descargando ? "#9ca3af" : "#16a34a", color: "#fff",
+              fontSize: 12, fontWeight: 700, cursor: descargando ? "wait" : "pointer",
+              display: "flex", alignItems: "center", gap: 6 }}>
+            {descargando ? "⏳ Generando..." : "📥 Descargar Excel"}
+          </button>
+        </div>
       </div>
 
       {/* Filtro SC */}
