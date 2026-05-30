@@ -15027,24 +15027,16 @@ function TorreTresPilares() {
             }}
             title="Recargar"
           >↻ Refrescar</button>
-          <span style={{ fontSize: 11, fontWeight: 600, color: "#64748b" }}>Excel:</span>
+          <span style={{ fontSize: 10, fontWeight: 700, color: "#666", textTransform: "uppercase", letterSpacing: 0.5 }}>Excel · rango:</span>
           <input type="date" value={excelDesde} onChange={e => setExcelDesde(e.target.value)}
-            style={{ padding: "5px 8px", fontSize: 12, border: "1px solid #e4e7ec", borderRadius: 6, fontFamily: "'Geist', sans-serif" }} />
+            style={{ padding: "5px 8px", borderRadius: 4, border: "1px solid #e4e7ec", fontSize: 12, color: "#1a1a1a" }} />
           <span style={{ fontSize: 11, color: "#888" }}>a</span>
           <input type="date" value={excelHasta} onChange={e => setExcelHasta(e.target.value)}
-            style={{ padding: "5px 8px", fontSize: 12, border: "1px solid #e4e7ec", borderRadius: 6, fontFamily: "'Geist', sans-serif" }} />
-          <button
-            onClick={descargarExcel}
-            disabled={excelBusy}
-            style={{
-              padding: "6px 12px", fontSize: 12, fontWeight: 600,
-              background: excelBusy ? "#9ca3af" : "#1a3a6b",
-              color: "#fff",
-              border: "none", borderRadius: 6,
-              cursor: excelBusy ? "wait" : "pointer",
-              fontFamily: "'Geist', sans-serif",
-            }}
-          >{excelBusy ? "Generando…" : "⬇ Excel"}</button>
+            style={{ padding: "5px 8px", borderRadius: 4, border: "1px solid #e4e7ec", fontSize: 12, color: "#1a1a1a" }} />
+          <button onClick={descargarExcel} disabled={excelBusy}
+            style={{ padding: "7px 14px", borderRadius: 6, border: "1px solid #16a34a", background: excelBusy ? "#9ca3af" : "#16a34a", color: "#fff", fontSize: 12, fontWeight: 700, cursor: excelBusy ? "wait" : "pointer", display: "flex", alignItems: "center", gap: 6, fontFamily: "'Geist', sans-serif" }}>
+            {excelBusy ? "⏳ Generando..." : "📥 Descargar Excel"}
+          </button>
         </div>
       </div>
 
@@ -15551,15 +15543,15 @@ function PoolMeliAmbulancias() {
               <option key={sc} value={sc}>{sc === "TODOS" ? "Todos los SC" : sc}</option>
             ))}
           </select>
-          <span style={{ fontSize: 11, fontWeight: 600, color: "#64748b", marginLeft: 4 }}>Excel rango:</span>
+          <span style={{ fontSize: 10, fontWeight: 700, color: "#666", textTransform: "uppercase", letterSpacing: 0.5 }}>Excel · rango:</span>
           <input type="date" value={excelDesde} onChange={e => setExcelDesde(e.target.value)}
-            style={{ background: "#f8fafc", border: "1px solid #e4e7ec", borderRadius: 4, padding: "6px 10px", fontSize: 12 }} />
+            style={{ padding: "5px 8px", borderRadius: 4, border: "1px solid #e4e7ec", fontSize: 12, color: "#1a1a1a" }} />
           <span style={{ fontSize: 11, color: "#888" }}>a</span>
           <input type="date" value={excelHasta} onChange={e => setExcelHasta(e.target.value)}
-            style={{ background: "#f8fafc", border: "1px solid #e4e7ec", borderRadius: 4, padding: "6px 10px", fontSize: 12 }} />
+            style={{ padding: "5px 8px", borderRadius: 4, border: "1px solid #e4e7ec", fontSize: 12, color: "#1a1a1a" }} />
           <button onClick={exportarExcel} disabled={excelBusy}
-            style={{ padding: "8px 14px", borderRadius: 4, border: "1px solid #1a3a6b", background: excelBusy ? "#9ca3af" : "#1a3a6b", color: "#fff", fontSize: 12, fontWeight: 600, cursor: excelBusy ? "wait" : "pointer" }}>
-            {excelBusy ? "Generando…" : "↓ Exportar Excel"}
+            style={{ padding: "7px 14px", borderRadius: 6, border: "1px solid #16a34a", background: excelBusy ? "#9ca3af" : "#16a34a", color: "#fff", fontSize: 12, fontWeight: 700, cursor: excelBusy ? "wait" : "pointer", display: "flex", alignItems: "center", gap: 6 }}>
+            {excelBusy ? "⏳ Generando..." : "📥 Descargar Excel"}
           </button>
         </div>
       </div>
@@ -23717,24 +23709,16 @@ function PoolMeliCompromiso() {
           </div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
-          <span style={{ fontSize: 11, fontWeight: 600, color: "#64748b" }}>Histórico:</span>
+          <span style={{ fontSize: 10, fontWeight: 700, color: "#666", textTransform: "uppercase", letterSpacing: 0.5 }}>Excel · rango:</span>
           <input type="date" value={excelDesde} onChange={e => setExcelDesde(e.target.value)}
-            style={{ padding: "6px 8px", fontSize: 12, border: "1px solid #e4e7ec", borderRadius: 6, fontFamily: "'Geist', sans-serif" }} />
+            style={{ padding: "5px 8px", borderRadius: 4, border: "1px solid #e4e7ec", fontSize: 12, color: "#1a1a1a" }} />
           <span style={{ fontSize: 11, color: "#888" }}>a</span>
           <input type="date" value={excelHasta} onChange={e => setExcelHasta(e.target.value)}
-            style={{ padding: "6px 8px", fontSize: 12, border: "1px solid #e4e7ec", borderRadius: 6, fontFamily: "'Geist', sans-serif" }} />
-          <button
-            onClick={exportarHistorico}
-            disabled={excelHistBusy}
-            style={{
-              padding: "8px 14px", fontSize: 12, fontWeight: 600,
-              background: excelHistBusy ? "#9ca3af" : "#1a3a6b", color: "#fff",
-              border: "none", borderRadius: 6,
-              cursor: excelHistBusy ? "wait" : "pointer", fontFamily: "'Geist', sans-serif",
-              display: "flex", alignItems: "center", gap: 6,
-            }}
+            style={{ padding: "5px 8px", borderRadius: 4, border: "1px solid #e4e7ec", fontSize: 12, color: "#1a1a1a" }} />
+          <button onClick={exportarHistorico} disabled={excelHistBusy}
+            style={{ padding: "7px 14px", borderRadius: 6, border: "1px solid #16a34a", background: excelHistBusy ? "#9ca3af" : "#16a34a", color: "#fff", fontSize: 12, fontWeight: 700, cursor: excelHistBusy ? "wait" : "pointer", display: "flex", alignItems: "center", gap: 6, fontFamily: "'Geist', sans-serif" }}
             title="Excel por rango desde la tabla histórica (se llena a diario)"
-          >{excelHistBusy ? "Generando…" : "⬇ Histórico"}</button>
+          >{excelHistBusy ? "⏳ Generando..." : "📥 Descargar Excel"}</button>
           <button
             onClick={exportarExcel}
             style={{
