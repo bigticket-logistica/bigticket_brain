@@ -15362,6 +15362,98 @@ function TorreTresPilares() {
 //   - bitacora_diaria_sc (declarado_*, conciliacion_d1_confirmada_at, *_estado_justif)
 // ════════════════════════════════════════════════════════════════════════════
 
+// ── Subcomponente: muestra el consolidado D-1 completo (textos + fotos) ──────
+// El bucket de fotos es privado; generamos URLs firmadas (1h) para verlas.
+const BUCKET_BITACORA = "bitacora-cancelaciones-meli";
+
+function FotoLink({ path }) {
+  const [url, setUrl] = useState(null);
+  const [err, setErr] = useState(false);
+  useEffect(() => {
+    let cancel = false;
+    (async () => {
+      try {
+        const { data, error } = await sb.storage.from(BUCKET_BITACORA).createSignedUrl(path, 3600);
+        if (cancel) return;
+        if (error || !data?.signedUrl) setErr(true);
+        else setUrl(data.signedUrl);
+      } catch { if (!cancel) setErr(true); }
+    })();
+    return () => { cancel = true; };
+  }, [path]);
+
+  const nombre = String(path).split("/").pop();
+  const esPdf = /\.pdf$/i.test(nombre);
+  if (err) return <span style={{ fontSize: 11, color: "#dc2626" }}>⚠ {nombre} (no disponible)</span>;
+  if (!url) return <span style={{ fontSize: 11, color: "#9ca3af" }}>Cargando {nombre}…</span>;
+  return (
+    <a href={url} target="_blank" rel="noopener noreferrer"
+      style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, color: "#1e3a5f", textDecoration: "none", border: "1px solid #d1d5db", borderRadius: 5, padding: "3px 8px", marginRight: 6, marginBottom: 4, background: "#fff" }}>
+      {esPdf ? "📄" : "🖼"} {nombre.length > 22 ? nombre.slice(0, 22) + "…" : nombre}
+    </a>
+  );
+}
+
+function DetalleD1Completo({ row }) {
+  // Recolectar todos los adjuntos por ítem
+  const adj = (row.justificaciones_adjuntos && typeof row.justificaciones_adjuntos === "object") ? row.justificaciones_adjuntos : {};
+  const fotosCancel = Array.isArray(row.declarado_cancelaciones_fotos) ? row.declarado_cancelaciones_fotos : [];
+
+  const items = [
+    { key: "ayudantes", nombre: "Ayudantes", justif: row.ayudantes_justificacion, estado: row.ayudantes_estado_justif },
+    { key: "ambulancias", nombre: "Ambulancias", justif: row.ambulancias_justificacion, estado: row.ambulancias_estado_justif },
+    { key: "cancelaciones", nombre: "Cancelaciones", justif: row.cancelaciones_justificacion, estado: row.cancelaciones_estado_justif },
+    { key: "noshow", nombre: "No Show", justif: row.noshow_justificacion, estado: row.noshow_estado_justif },
+    { key: "pnr", nombre: "PNR", justif: row.pnr_justificacion, estado: row.pnr_estado_justif },
+  ];
+
+  // Helper: arma la lista de adjuntos de un ítem
+  function adjuntosDe(key) {
+    const arr = [];
+    if (Array.isArray(adj[key])) for (const a of adj[key]) if (a?.path) arr.push(a.path);
+    if (key === "cancelaciones") for (const f of fotosCancel) if (f?.path) arr.push(f.path);
+    return arr;
+  }
+
+  // ¿Hay algo que mostrar?
+  const hayContenido = items.some((it) => (it.justif && it.justif.trim()) || adjuntosDe(it.key).length > 0);
+
+  return (
+    <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid #e5e7eb" }}>
+      <div style={{ fontSize: 12, fontWeight: 700, color: "#374151", marginBottom: 8 }}>
+        📋 Justificaciones y adjuntos cargados (D-1)
+      </div>
+      {!hayContenido ? (
+        <div style={{ fontSize: 12, color: "#9ca3af" }}>El supervisor no cargó justificaciones ni adjuntos para este día.</div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {items.map((it) => {
+            const fotos = adjuntosDe(it.key);
+            const tieneTexto = it.justif && it.justif.trim();
+            if (!tieneTexto && fotos.length === 0) return null;
+            return (
+              <div key={it.key} style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 6, padding: 10 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#1f2937", marginBottom: 4 }}>{it.nombre}</div>
+                {tieneTexto && (
+                  <div style={{ fontSize: 12, color: "#4b5563", whiteSpace: "pre-wrap", marginBottom: fotos.length ? 6 : 0 }}>
+                    💬 {it.justif}
+                  </div>
+                )}
+                {fotos.length > 0 && (
+                  <div style={{ display: "flex", flexWrap: "wrap" }}>
+                    {fotos.map((p, i) => <FotoLink key={i} path={p} />)}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
 function PanelControlSupervisores() {
   const [fecha, setFecha] = useState(() => {
     // Hoy en MX (UTC-6)
@@ -15592,6 +15684,11 @@ function PanelControlSupervisores() {
                               )}
                             </div>
                           </div>
+
+                          {/* ─── Consolidado D-1 completo: justificaciones + fotos ─── */}
+                          {bitAyer[s.sc] && (
+                            <DetalleD1Completo row={bitAyer[s.sc]} />
+                          )}
                           {/* Contacto (para el WhatsApp futuro) */}
                           <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px solid #e5e7eb", fontSize: 11, color: "#6b7280" }}>
                             📧 {s.email || "sin email"} · 📱 {s.telefono || "sin teléfono cargado"}
