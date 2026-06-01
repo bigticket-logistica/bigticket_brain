@@ -160,7 +160,7 @@ const MODULOS_LABELS = {
   maestro: "Maestro Operaciones",
   incidencias: "Incidencias",
   pnr: "PNR",
-  pagos: "Administracion",
+  pagos: "Pagos",
   configuracion: "Configuración",
 };
 const USUARIOS = {
@@ -15389,8 +15389,8 @@ function PanelControlSupervisores() {
       const [supsR, hoyR, ayerR] = await Promise.all([
         sb.from("vw_supervisores_panel")
           .select("nombre, email, telefono, scs_asignados, rol"),
-        sb.from("bitacora_diaria_sc").select("*").eq("fecha", fecha),
-        sb.from("bitacora_diaria_sc").select("*").eq("fecha", fechaAyer),
+        sb.from("vw_bitacora_panel").select("*").eq("fecha", fecha),
+        sb.from("vw_bitacora_panel").select("*").eq("fecha", fechaAyer),
       ]);
       if (supsR.error) throw supsR.error;
 
