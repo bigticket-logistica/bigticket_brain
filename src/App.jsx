@@ -15365,6 +15365,9 @@ function TorreTresPilares() {
 // ── Subcomponente: rutas con helper del SC/fecha + aprobar/rechazar ──────────
 // El jefe aprueba o rechaza cada helper. La decisión se guarda en
 // aprobaciones_helper y luego el sistema de pagos la cruza por SC+fecha+travel_id.
+// SCs foráneos: en estos, helper en Small Van se considera bloqueado.
+const SCS_FORANEOS_BRAIN = new Set(["SCY1","SCQ1","SQR1","SHP1","STL1","STX1","SVH1","SPB1","SPY1"]);
+
 function RutasHelperAprobar({ scId, fecha, decididoPor }) {
   const [rutas, setRutas] = useState([]);
   const [justifPorRuta, setJustifPorRuta] = useState({}); // travel_id → justificación del supervisor
@@ -15377,24 +15380,44 @@ function RutasHelperAprobar({ scId, fecha, decididoPor }) {
     (async () => {
       setLoading(true);
       try {
-        const [rutasR, aprobR, bitR] = await Promise.all([
-          // Rutas con helper del día (de historico_rutas_sc)
-          sb.from("historico_rutas_sc")
-            .select("travel_id, vehicle_plate, driver_name, vehiculo, cluster, has_helper, helper_bloqueado")
-            .eq("service_center_id", scId).eq("fecha", fecha).eq("has_helper", true),
-          // Decisiones ya tomadas
+        // FUENTE: logistic_ayudantes_snapshots — tomamos el ÚLTIMO snapshot por
+        // id_ruta (hora_snapshot más reciente = cierre del día, dato definitivo).
+        // Los snapshots conservan +30 días, así que no necesitamos cron ni tabla extra.
+        let lista = [];
+        const snapR = await sb.from("logistic_ayudantes_snapshots")
+          .select("id_ruta, placa, driver_name, vehiculo_descripcion, cluster, has_helper, hora_snapshot")
+          .eq("service_center_id", scId).eq("fecha", fecha)
+          .order("hora_snapshot", { ascending: false });
+        if (cancel) return;
+        const vistas = new Set();
+        for (const r of snapR.data || []) {
+          if (!r.id_ruta || vistas.has(r.id_ruta)) continue;
+          vistas.add(r.id_ruta); // primer match = más reciente = cierre
+          if (r.has_helper !== true) continue;
+          const vehLower = String(r.vehiculo_descripcion || "").toLowerCase();
+          const bloqueada = SCS_FORANEOS_BRAIN.has(scId) && vehLower.includes("small van");
+          lista.push({
+            travel_id: r.id_ruta,
+            vehicle_plate: r.placa || null,
+            driver_name: r.driver_name || null,
+            vehiculo: r.vehiculo_descripcion || null,
+            cluster: r.cluster || null,
+            helper_bloqueado: bloqueada,
+          });
+        }
+
+        // Decisiones ya tomadas + justificaciones del supervisor (siempre)
+        const [aprobR, bitR] = await Promise.all([
           sb.from("aprobaciones_helper")
             .select("travel_id, decision")
             .eq("service_center_id", scId).eq("fecha", fecha),
-          // Justificaciones del supervisor (del detalle declarado)
           sb.from("vw_bitacora_panel")
             .select("declarado_ayudantes_detalle")
             .eq("service_center_id", scId).eq("fecha", fecha).maybeSingle(),
         ]);
         if (cancel) return;
 
-        const lista = (rutasR.data || []).sort((a, b) => {
-          // bloqueadas primero
+        lista.sort((a, b) => {
           if (!!a.helper_bloqueado !== !!b.helper_bloqueado) return a.helper_bloqueado ? -1 : 1;
           return String(a.travel_id).localeCompare(String(b.travel_id));
         });
@@ -15460,7 +15483,7 @@ function RutasHelperAprobar({ scId, fecha, decididoPor }) {
   return (
     <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid #e5e7eb" }}>
       <div style={{ fontSize: 12, fontWeight: 700, color: "#374151", marginBottom: 8 }}>
-        🧑‍🔧 Rutas con ayudante — aprobar pago ({rutas.length})
+        🧑‍🔧 Rutas con ayudante del D-1 ({fecha}) — aprobar pago ({rutas.length})
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         {rutas.map((r) => {
@@ -15854,8 +15877,8 @@ function PanelControlSupervisores() {
                             <DetalleD1Completo row={bitAyer[s.sc]} />
                           )}
 
-                          {/* ─── Rutas con helper: aprobar/rechazar pago ─── */}
-                          <RutasHelperAprobar scId={s.sc} fecha={fecha} decididoPor={null} />
+                          {/* ─── Rutas con helper del D-1: aprobar/rechazar pago ─── */}
+                          <RutasHelperAprobar scId={s.sc} fecha={fechaAyer} decididoPor={null} />
 
                           {/* Contacto (para el WhatsApp futuro) */}
                           <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px solid #e5e7eb", fontSize: 11, color: "#6b7280" }}>
