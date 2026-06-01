@@ -15362,6 +15362,170 @@ function TorreTresPilares() {
 //   - bitacora_diaria_sc (declarado_*, conciliacion_d1_confirmada_at, *_estado_justif)
 // ════════════════════════════════════════════════════════════════════════════
 
+// ── Subcomponente: rutas con helper del SC/fecha + aprobar/rechazar ──────────
+// El jefe aprueba o rechaza cada helper. La decisión se guarda en
+// aprobaciones_helper y luego el sistema de pagos la cruza por SC+fecha+travel_id.
+function RutasHelperAprobar({ scId, fecha, decididoPor }) {
+  const [rutas, setRutas] = useState([]);
+  const [justifPorRuta, setJustifPorRuta] = useState({}); // travel_id → justificación del supervisor
+  const [decisiones, setDecisiones] = useState({}); // travel_id → 'aprobado' | 'rechazado'
+  const [loading, setLoading] = useState(true);
+  const [guardando, setGuardando] = useState(null); // travel_id en curso
+
+  useEffect(() => {
+    let cancel = false;
+    (async () => {
+      setLoading(true);
+      try {
+        const [rutasR, aprobR, bitR] = await Promise.all([
+          // Rutas con helper del día (de historico_rutas_sc)
+          sb.from("historico_rutas_sc")
+            .select("travel_id, vehicle_plate, driver_name, vehiculo, cluster, has_helper, helper_bloqueado")
+            .eq("service_center_id", scId).eq("fecha", fecha).eq("has_helper", true),
+          // Decisiones ya tomadas
+          sb.from("aprobaciones_helper")
+            .select("travel_id, decision")
+            .eq("service_center_id", scId).eq("fecha", fecha),
+          // Justificaciones del supervisor (del detalle declarado)
+          sb.from("vw_bitacora_panel")
+            .select("declarado_ayudantes_detalle")
+            .eq("service_center_id", scId).eq("fecha", fecha).maybeSingle(),
+        ]);
+        if (cancel) return;
+
+        const lista = (rutasR.data || []).sort((a, b) => {
+          // bloqueadas primero
+          if (!!a.helper_bloqueado !== !!b.helper_bloqueado) return a.helper_bloqueado ? -1 : 1;
+          return String(a.travel_id).localeCompare(String(b.travel_id));
+        });
+        setRutas(lista);
+
+        const dec = {};
+        for (const a of aprobR.data || []) dec[String(a.travel_id)] = a.decision;
+        setDecisiones(dec);
+
+        // Mapear justificaciones por id_ruta
+        const det = bitR.data?.declarado_ayudantes_detalle;
+        const jmap = {};
+        if (Array.isArray(det)) {
+          for (const d of det) {
+            if (d && typeof d === "object" && d.id_ruta != null && d.justificacion) {
+              jmap[String(d.id_ruta)] = d.justificacion;
+            }
+          }
+        }
+        setJustifPorRuta(jmap);
+      } catch (e) {
+        console.error("Error cargando rutas helper:", e);
+      } finally {
+        if (!cancel) setLoading(false);
+      }
+    })();
+    return () => { cancel = true; };
+  }, [scId, fecha]);
+
+  async function decidir(ruta, decision) {
+    const tid = String(ruta.travel_id);
+    setGuardando(tid);
+    try {
+      const payload = {
+        service_center_id: scId,
+        fecha,
+        travel_id: ruta.travel_id,
+        vehicle_plate: ruta.vehicle_plate || null,
+        driver_name: ruta.driver_name || null,
+        vehiculo: ruta.vehiculo || null,
+        cluster: ruta.cluster || null,
+        bloqueada: !!ruta.helper_bloqueado,
+        decision,
+        decidido_por: decididoPor || null,
+        decidido_at: new Date().toISOString(),
+      };
+      const { error } = await sb
+        .from("aprobaciones_helper")
+        .upsert(payload, { onConflict: "service_center_id,fecha,travel_id" });
+      if (error) throw error;
+      setDecisiones((prev) => ({ ...prev, [tid]: decision }));
+    } catch (e) {
+      console.error("Error guardando decisión:", e);
+      alert("No se pudo guardar la decisión: " + (e.message || e));
+    } finally {
+      setGuardando(null);
+    }
+  }
+
+  if (loading) return <div style={{ fontSize: 12, color: "#9ca3af", padding: 8 }}>Cargando rutas con helper…</div>;
+  if (rutas.length === 0) return <div style={{ fontSize: 12, color: "#9ca3af", padding: 8 }}>Sin rutas con helper este día.</div>;
+
+  return (
+    <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid #e5e7eb" }}>
+      <div style={{ fontSize: 12, fontWeight: 700, color: "#374151", marginBottom: 8 }}>
+        🧑‍🔧 Rutas con ayudante — aprobar pago ({rutas.length})
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {rutas.map((r) => {
+          const tid = String(r.travel_id);
+          const dec = decisiones[tid];
+          const justif = justifPorRuta[tid];
+          const enCurso = guardando === tid;
+          return (
+            <div key={tid} style={{
+              background: "#fff",
+              border: `1px solid ${dec === "aprobado" ? "#86efac" : dec === "rechazado" ? "#fca5a5" : "#e5e7eb"}`,
+              borderRadius: 6, padding: 10,
+              display: "flex", alignItems: "flex-start", gap: 12, flexWrap: "wrap",
+            }}>
+              <div style={{ flex: 1, minWidth: 200 }}>
+                <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                  <span style={{ fontFamily: "monospace", fontWeight: 700, fontSize: 12 }}>{r.travel_id}</span>
+                  {r.cluster && <span style={{ fontSize: 9, background: "#e2e8f0", color: "#475569", padding: "1px 6px", borderRadius: 3, fontWeight: 700 }}>{r.cluster}</span>}
+                  {r.helper_bloqueado && <span style={{ fontSize: 9, background: "#fee2e2", color: "#b91c1c", padding: "1px 6px", borderRadius: 3, fontWeight: 700 }}>⚠ BLOQUEADA</span>}
+                </div>
+                <div style={{ fontSize: 11, color: "#4b5563", marginTop: 2 }}>
+                  {r.vehicle_plate && <span style={{ fontFamily: "monospace", fontWeight: 600 }}>{r.vehicle_plate}</span>}
+                  {r.vehicle_plate && r.driver_name && " · "}
+                  {r.driver_name || ""}
+                  {r.vehiculo && <span style={{ color: "#9ca3af" }}> · {r.vehiculo}</span>}
+                </div>
+                {justif && (
+                  <div style={{ marginTop: 6, padding: 6, background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: 4, fontSize: 11, color: "#1f2937", whiteSpace: "pre-wrap" }}>
+                    💬 {justif}
+                  </div>
+                )}
+              </div>
+              <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                <button
+                  onClick={() => decidir(r, "aprobado")}
+                  disabled={enCurso}
+                  style={{
+                    padding: "6px 12px", fontSize: 12, fontWeight: 700, borderRadius: 6, cursor: enCurso ? "wait" : "pointer",
+                    border: dec === "aprobado" ? "2px solid #16a34a" : "1px solid #d1d5db",
+                    background: dec === "aprobado" ? "#16a34a" : "#fff",
+                    color: dec === "aprobado" ? "#fff" : "#16a34a",
+                  }}>
+                  ✓ Aprobar
+                </button>
+                <button
+                  onClick={() => decidir(r, "rechazado")}
+                  disabled={enCurso}
+                  style={{
+                    padding: "6px 12px", fontSize: 12, fontWeight: 700, borderRadius: 6, cursor: enCurso ? "wait" : "pointer",
+                    border: dec === "rechazado" ? "2px solid #dc2626" : "1px solid #d1d5db",
+                    background: dec === "rechazado" ? "#dc2626" : "#fff",
+                    color: dec === "rechazado" ? "#fff" : "#dc2626",
+                  }}>
+                  ✗ Rechazar
+                </button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+
 // ── Subcomponente: muestra el consolidado D-1 completo (textos + fotos) ──────
 // El bucket de fotos es privado; generamos URLs firmadas (1h) para verlas.
 const BUCKET_BITACORA = "bitacora-cancelaciones-meli";
@@ -15689,6 +15853,10 @@ function PanelControlSupervisores() {
                           {bitAyer[s.sc] && (
                             <DetalleD1Completo row={bitAyer[s.sc]} />
                           )}
+
+                          {/* ─── Rutas con helper: aprobar/rechazar pago ─── */}
+                          <RutasHelperAprobar scId={s.sc} fecha={fecha} decididoPor={null} />
+
                           {/* Contacto (para el WhatsApp futuro) */}
                           <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px solid #e5e7eb", fontSize: 11, color: "#6b7280" }}>
                             📧 {s.email || "sin email"} · 📱 {s.telefono || "sin teléfono cargado"}
