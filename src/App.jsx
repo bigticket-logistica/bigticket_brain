@@ -15387,9 +15387,8 @@ function PanelControlSupervisores() {
     setError(null);
     try {
       const [supsR, hoyR, ayerR] = await Promise.all([
-        sb.from("supervisores_bt")
-          .select("nombre, email, telefono, scs_asignados, rol, activo")
-          .eq("activo", true),
+        sb.from("vw_supervisores_panel")
+          .select("nombre, email, telefono, scs_asignados, rol"),
         sb.from("bitacora_diaria_sc").select("*").eq("fecha", fecha),
         sb.from("bitacora_diaria_sc").select("*").eq("fecha", fechaAyer),
       ]);
