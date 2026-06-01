@@ -160,7 +160,7 @@ const MODULOS_LABELS = {
   maestro: "Maestro Operaciones",
   incidencias: "Incidencias",
   pnr: "PNR",
-  pagos: "Administración",
+  pagos: "Administracion",
   configuracion: "Configuración",
 };
 const USUARIOS = {
