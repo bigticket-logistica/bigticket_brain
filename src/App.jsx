@@ -160,7 +160,7 @@ const MODULOS_LABELS = {
   maestro: "Maestro Operaciones",
   incidencias: "Incidencias",
   pnr: "PNR",
-  pagos: "Pagos",
+  pagos: "Administración",
   configuracion: "Configuración",
 };
 const USUARIOS = {
@@ -15346,6 +15346,289 @@ function TorreTresPilares() {
   );
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// PANEL DE CONTROL · SUPERVISORES   (vista: "panel_supervisores")
+// ════════════════════════════════════════════════════════════════════════════
+// Para el jefe de supervisores. Muestra, por SC, el estado de cumplimiento:
+//   - HOY: cuántos de los 5 ítems declaró el supervisor en la bitácora
+//   - D-1: estado de la conciliación del día anterior (confirmada/parcial/pendiente)
+//   - Difs sin justificar: diferencias detectadas sin justificación
+//
+// Tabla con filas expandibles (click en un SC = detalle de qué falta) + selector
+// de fecha para revisar días pasados. SOLO LECTURA (WhatsApp se agrega después).
+//
+// Fuentes (sin SQL nuevo):
+//   - supervisores_bt   (scs_asignados, nombre, telefono)
+//   - bitacora_diaria_sc (declarado_*, conciliacion_d1_confirmada_at, *_estado_justif)
+// ════════════════════════════════════════════════════════════════════════════
+
+function PanelControlSupervisores() {
+  const [fecha, setFecha] = useState(() => {
+    // Hoy en MX (UTC-6)
+    const mx = new Date(Date.now() - 6 * 60 * 60 * 1000);
+    return mx.toISOString().split("T")[0];
+  });
+  const [supervisores, setSupervisores] = useState([]);
+  const [bitHoy, setBitHoy] = useState({});   // {scId: row}
+  const [bitAyer, setBitAyer] = useState({});  // {scId: row}
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [expandido, setExpandido] = useState(new Set());
+
+  // Fecha anterior (D-1) respecto a la seleccionada
+  const fechaAyer = useMemo(() => {
+    const d = new Date(fecha + "T12:00:00");
+    d.setDate(d.getDate() - 1);
+    return d.toISOString().split("T")[0];
+  }, [fecha]);
+
+  const cargar = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const [supsR, hoyR, ayerR] = await Promise.all([
+        sb.from("supervisores_bt")
+          .select("nombre, email, telefono, scs_asignados, rol, activo")
+          .eq("activo", true),
+        sb.from("bitacora_diaria_sc").select("*").eq("fecha", fecha),
+        sb.from("bitacora_diaria_sc").select("*").eq("fecha", fechaAyer),
+      ]);
+      if (supsR.error) throw supsR.error;
+
+      // Armar lista plana: 1 entrada por SC (un supervisor puede tener varios)
+      const lista = [];
+      for (const s of supsR.data || []) {
+        const scs = Array.isArray(s.scs_asignados) ? s.scs_asignados : [];
+        for (const sc of scs) {
+          lista.push({ sc: String(sc), nombre: s.nombre, email: s.email, telefono: s.telefono, rol: s.rol });
+        }
+      }
+      lista.sort((a, b) => a.sc.localeCompare(b.sc));
+
+      const idxHoy = {};
+      for (const r of hoyR.data || []) idxHoy[r.service_center_id] = r;
+      const idxAyer = {};
+      for (const r of ayerR.data || []) idxAyer[r.service_center_id] = r;
+
+      setSupervisores(lista);
+      setBitHoy(idxHoy);
+      setBitAyer(idxAyer);
+    } catch (e) {
+      setError(e.message || String(e));
+    } finally {
+      setLoading(false);
+    }
+  }, [fecha, fechaAyer]);
+
+  useEffect(() => { cargar(); }, [cargar]);
+
+  // ─── Cálculo de estado HOY: cuántos de los 5 ítems declaró ──────────
+  function estadoHoy(row) {
+    if (!row) return { completados: 0, total: 5, items: itemsVacios() };
+    const items = {
+      ayudantes: row.declarado_ayudantes_si_no !== null && row.declarado_ayudantes_si_no !== undefined,
+      ambulancias: row.declarado_ambulancias_si_no !== null && row.declarado_ambulancias_si_no !== undefined,
+      cancelaciones: row.declarado_cancelaciones_si_no !== null && row.declarado_cancelaciones_si_no !== undefined,
+      noshow: row.declarado_noshow_si_no !== null && row.declarado_noshow_si_no !== undefined,
+      pnr: row.declarado_pnr_si_no !== null && row.declarado_pnr_si_no !== undefined,
+    };
+    const completados = Object.values(items).filter(Boolean).length;
+    return { completados, total: 5, items };
+  }
+  function itemsVacios() {
+    return { ayudantes: false, ambulancias: false, cancelaciones: false, noshow: false, pnr: false };
+  }
+
+  // ─── Cálculo de estado D-1: conciliación de ayer ────────────────────
+  function estadoD1(row) {
+    if (!row) return { estado: "sin_datos", label: "Sin datos", color: "#9ca3af", confirmada: false, difsSinJustif: 0 };
+    const confirmada = !!row.conciliacion_d1_confirmada_at;
+    // Diferencias sin justificar: estados de justificación en 'pendiente'
+    const estadosJustif = [
+      row.ayudantes_estado_justif, row.ambulancias_estado_justif,
+      row.cancelaciones_estado_justif, row.noshow_estado_justif, row.pnr_estado_justif,
+    ];
+    const difsSinJustif = estadosJustif.filter((e) => e === "pendiente").length;
+
+    if (confirmada) return { estado: "ok", label: "Confirmada", color: "#16a34a", confirmada, difsSinJustif };
+    if (difsSinJustif > 0) return { estado: "pendiente", label: "Pendiente", color: "#dc2626", confirmada, difsSinJustif };
+    // Tiene datos pero ni confirmó ni tiene difs pendientes → parcial
+    return { estado: "parcial", label: "Parcial", color: "#d97706", confirmada, difsSinJustif };
+  }
+
+  function toggle(sc) {
+    setExpandido((prev) => {
+      const n = new Set(prev);
+      if (n.has(sc)) n.delete(sc); else n.add(sc);
+      return n;
+    });
+  }
+
+  // ─── Totales para el resumen ────────────────────────────────────────
+  const totales = useMemo(() => {
+    let completaronHoy = 0, conciliaronD1 = 0;
+    for (const s of supervisores) {
+      const eh = estadoHoy(bitHoy[s.sc]);
+      if (eh.completados === 5) completaronHoy++;
+      const ed = estadoD1(bitAyer[s.sc]);
+      if (ed.estado === "ok") conciliaronD1++;
+    }
+    return { completaronHoy, conciliaronD1, total: supervisores.length };
+  }, [supervisores, bitHoy, bitAyer]);
+
+  const NOMBRES_ITEMS = {
+    ayudantes: "Ayudantes", ambulancias: "Ambulancias",
+    cancelaciones: "Cancelaciones", noshow: "No Show", pnr: "PNR",
+  };
+
+  return (
+    <div className="pg">
+      <div className="sec-title">Panel de Control · Supervisores</div>
+      <div className="sec-sub">Estado de cumplimiento de bitácora y conciliación D-1 por SC</div>
+
+      {/* Barra de control: fecha + refrescar */}
+      <div className="form-card" style={{ marginBottom: 12, display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <label style={{ fontSize: 13, fontWeight: 600, color: "#374151" }}>Fecha:</label>
+          <input type="date" value={fecha} onChange={(e) => setFecha(e.target.value)}
+            style={{ padding: "6px 10px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }} />
+        </div>
+        <button onClick={cargar}
+          style={{ padding: "6px 14px", background: "#1e3a5f", color: "#fff", border: "none", borderRadius: 6, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+          🔄 Refrescar
+        </button>
+        <div style={{ marginLeft: "auto", fontSize: 13, color: "#374151" }}>
+          <strong>{totales.completaronHoy}/{totales.total}</strong> completaron Hoy ·{" "}
+          <strong>{totales.conciliaronD1}/{totales.total}</strong> conciliaron D-1
+        </div>
+      </div>
+
+      {error && (
+        <div className="form-card" style={{ background: "#fef2f2", border: "1px solid #fecaca", marginBottom: 12 }}>
+          <div style={{ fontSize: 13, color: "#991b1b" }}>Error: {error}</div>
+        </div>
+      )}
+
+      {loading ? (
+        <div className="form-card" style={{ textAlign: "center", padding: 40, color: "#666" }}>
+          Cargando estados…
+        </div>
+      ) : (
+        <div className="form-card" style={{ padding: 0, overflow: "hidden" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+            <thead>
+              <tr style={{ background: "#f8fafc", borderBottom: "2px solid #e5e7eb" }}>
+                <th style={thPanel()}>SC</th>
+                <th style={thPanel()}>Supervisor</th>
+                <th style={thPanel("center")}>Hoy ({fecha})</th>
+                <th style={thPanel("center")}>D-1 ({fechaAyer})</th>
+                <th style={thPanel("center")}>Difs sin justif.</th>
+                <th style={thPanel("center")}>Detalle</th>
+              </tr>
+            </thead>
+            <tbody>
+              {supervisores.map((s) => {
+                const eh = estadoHoy(bitHoy[s.sc]);
+                const ed = estadoD1(bitAyer[s.sc]);
+                const abierto = expandido.has(s.sc);
+                const hoyColor = eh.completados === 5 ? "#16a34a" : eh.completados === 0 ? "#dc2626" : "#d97706";
+                return (
+                  <Fragment key={s.sc}>
+                    <tr style={{ borderBottom: "1px solid #f1f5f9", cursor: "pointer" }} onClick={() => toggle(s.sc)}>
+                      <td style={{ ...tdPanel(), fontFamily: "monospace", fontWeight: 700 }}>{s.sc}</td>
+                      <td style={tdPanel()}>{s.nombre || "—"}</td>
+                      <td style={{ ...tdPanel("center"), fontWeight: 700, color: hoyColor }}>
+                        {eh.completados === 5 ? "✅" : eh.completados === 0 ? "❌" : "🟡"} {eh.completados}/5
+                      </td>
+                      <td style={{ ...tdPanel("center"), fontWeight: 700, color: ed.color }}>
+                        {ed.estado === "ok" ? "✅" : ed.estado === "pendiente" ? "🔴" : ed.estado === "parcial" ? "🟡" : "⚪"} {ed.label}
+                      </td>
+                      <td style={{ ...tdPanel("center"), fontWeight: 700, color: ed.difsSinJustif > 0 ? "#dc2626" : "#9ca3af" }}>
+                        {ed.difsSinJustif}
+                      </td>
+                      <td style={tdPanel("center")}>
+                        <span style={{ fontSize: 11, color: "#6b7280" }}>{abierto ? "▲ cerrar" : "▼ ver"}</span>
+                      </td>
+                    </tr>
+                    {abierto && (
+                      <tr style={{ background: "#fafbfc" }}>
+                        <td colSpan={6} style={{ padding: 14 }}>
+                          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+                            {/* Detalle HOY */}
+                            <div>
+                              <div style={{ fontSize: 12, fontWeight: 700, color: "#374151", marginBottom: 6 }}>
+                                Bitácora de HOY ({fecha})
+                              </div>
+                              {Object.entries(NOMBRES_ITEMS).map(([key, nombre]) => (
+                                <div key={key} style={{ fontSize: 12, padding: "3px 0", display: "flex", gap: 8 }}>
+                                  <span style={{ color: eh.items[key] ? "#16a34a" : "#dc2626" }}>
+                                    {eh.items[key] ? "✓" : "✗"}
+                                  </span>
+                                  <span style={{ color: "#4b5563" }}>{nombre}</span>
+                                  <span style={{ marginLeft: "auto", color: "#9ca3af" }}>
+                                    {eh.items[key] ? "declarado" : "sin declarar"}
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                            {/* Detalle D-1 */}
+                            <div>
+                              <div style={{ fontSize: 12, fontWeight: 700, color: "#374151", marginBottom: 6 }}>
+                                Conciliación D-1 ({fechaAyer})
+                              </div>
+                              {!bitAyer[s.sc] ? (
+                                <div style={{ fontSize: 12, color: "#9ca3af" }}>No completó la bitácora del día anterior.</div>
+                              ) : (
+                                <>
+                                  <div style={{ fontSize: 12, padding: "3px 0", color: "#4b5563" }}>
+                                    Estado: <strong style={{ color: ed.color }}>{ed.label}</strong>
+                                  </div>
+                                  <div style={{ fontSize: 12, padding: "3px 0", color: "#4b5563" }}>
+                                    Confirmada: {ed.confirmada ? `Sí (${fmtHora(bitAyer[s.sc].conciliacion_d1_confirmada_at)})` : "No"}
+                                  </div>
+                                  <div style={{ fontSize: 12, padding: "3px 0", color: "#4b5563" }}>
+                                    Diferencias sin justificar: <strong style={{ color: ed.difsSinJustif > 0 ? "#dc2626" : "#16a34a" }}>{ed.difsSinJustif}</strong>
+                                  </div>
+                                </>
+                              )}
+                            </div>
+                          </div>
+                          {/* Contacto (para el WhatsApp futuro) */}
+                          <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px solid #e5e7eb", fontSize: 11, color: "#6b7280" }}>
+                            📧 {s.email || "sin email"} · 📱 {s.telefono || "sin teléfono cargado"}
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                );
+              })}
+              {supervisores.length === 0 && (
+                <tr><td colSpan={6} style={{ padding: 30, textAlign: "center", color: "#9ca3af" }}>No hay supervisores activos.</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Helpers de estilo del panel
+function thPanel(align = "left") {
+  return { padding: "10px 12px", textAlign: align, fontSize: 12, fontWeight: 700, color: "#374151" };
+}
+function tdPanel(align = "left") {
+  return { padding: "10px 12px", textAlign: align, color: "#1f2937" };
+}
+function fmtHora(iso) {
+  if (!iso) return "—";
+  try {
+    return new Date(iso).toLocaleString("es-MX", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit", timeZone: "America/Mexico_City" });
+  } catch { return "—"; }
+}
+
+
 // ═══════════════════════════════════════════════════════════════════════════
 // PESTAÑA "AMBULANCIAS" · dentro de Pagos
 // ───────────────────────────────────────────────────────────────────────────
@@ -15690,6 +15973,7 @@ function ModuloPagosMadre({ usuario }) {
     { id: "drivers",     label: "Drivers",               desc: "Maestro de choferes MX" },
     { id: "ayudantes",   label: "Ayudantes",             desc: "Detalle diario de auxiliares" },
     { id: "ambulancias", label: "Ambulancias",           desc: "Traspasos internos ruta→ruta" },
+    { id: "supervisores", label: "Panel Supervisores",   desc: "Control de bitácora y D-1 por SC" },
     { id: "prefacturas", label: "Prefacturas",           desc: "Envío masivo de prefacturas MX" },
     { id: "config",      label: "Configuración",         desc: "Tarifario, zonas y reglas" },
   ];
@@ -15737,6 +16021,7 @@ function ModuloPagosMadre({ usuario }) {
           {subtab === "drivers"     && <DriversMaestroMX />}
           {subtab === "ayudantes"   && <AyudantesDetalleDia />}
           {subtab === "ambulancias" && <PoolMeliAmbulancias />}
+          {subtab === "supervisores" && <PanelControlSupervisores />}
           {subtab === "prefacturas" && <ModuloPrefacturasEnvio usuario={usuario} />}
           {subtab === "config"      && <ConfiguracionPagos />}
         </>
