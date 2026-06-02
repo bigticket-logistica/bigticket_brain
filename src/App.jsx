@@ -16666,6 +16666,7 @@ function ListadoPagosDiarios() {
   const [resumenCalculo, setResumenCalculo] = useState(null);
   const [filtroEstado, setFiltroEstado] = useState("todas"); // todas | pagadas | no_pagadas | con_alerta
   const [avisoRecalc, setAvisoRecalc] = useState(null); // N aprobaciones modificadas tras el último cálculo
+  const [guardandoTarifado, setGuardandoTarifado] = useState(false);
   const [orderBy, setOrderBy] = useState("driver_name"); // columna por la que ordenar
   const [orderDir, setOrderDir] = useState("asc");
 
@@ -16920,6 +16921,48 @@ function ListadoPagosDiarios() {
     URL.revokeObjectURL(url);
   };
 
+  // Guarda los viajes tarificados del día en tarifado_mx (append-only, no sobreescribe)
+  const guardarTarifado = async () => {
+    if (pagos.length === 0) { alert("No hay pagos calculados para guardar. Calculá el día primero."); return; }
+    let yaGuardado = 0;
+    try {
+      const { count } = await sb.from("tarifado_mx").select("id", { count: "exact", head: true }).eq("fecha", fecha);
+      yaGuardado = count || 0;
+    } catch (e) { /* tabla puede no existir aún */ }
+    const msg = yaGuardado > 0
+      ? `Este día (${fecha}) ya tiene ${yaGuardado} registros en tarifado_mx.\n\nGuardar suma una copia nueva (no borra las anteriores). ¿Continuar?`
+      : `Se guardarán ${pagos.length} viajes tarificados del ${fecha} en tarifado_mx (no se sobreescribe nada). ¿Continuar?`;
+    if (!confirm(msg)) return;
+    setGuardandoTarifado(true);
+    try {
+      const corridaId = (typeof crypto !== "undefined" && crypto.randomUUID) ? crypto.randomUUID() : `${fecha}-${Date.now()}`;
+      const guardadoAt = new Date().toISOString();
+      const cols = ["fecha","id_ruta","driver_id","driver_name","vehiculo_raw","tipologia","placa",
+        "service_center_id","zona","km_recorridos","tramo_km","ciclo","envios_despachados","envios_entregados",
+        "ns_pct","ns_no_visitado","pct_visitado","ns_categoria","factor_ns","tarifa_base","ajuste_ns",
+        "tiene_auxiliar","auxiliar_estado","monto_auxiliar","pago_bruto","descuentos_externos","pago_neto",
+        "semana_pago","tiene_tarifa_especial","ruta_no_operada","observaciones"];
+      const rows = pagos.map(p => {
+        const r = { corrida_id: corridaId, guardado_at: guardadoAt };
+        for (const c of cols) r[c] = (p[c] !== undefined ? p[c] : null);
+        return r;
+      });
+      let ok = 0, primerError = null;
+      for (let i = 0; i < rows.length; i += 100) {
+        const chunk = rows.slice(i, i + 100);
+        const { error } = await sb.from("tarifado_mx").insert(chunk);
+        if (error) { primerError = error.message; break; }
+        ok += chunk.length;
+      }
+      if (primerError) throw new Error(primerError);
+      alert(`Guardado en tarifado_mx: ${ok} viajes del ${fecha}.\nCorrida: ${corridaId}`);
+    } catch (e) {
+      console.error(e);
+      alert("Error guardando en tarifado_mx:\n\n" + e.message);
+    }
+    setGuardandoTarifado(false);
+  };
+
   return (
     <div className="pg" style={{ maxWidth: 1600 }}>
       <div style={{ marginBottom: 16 }}>
@@ -16953,6 +16996,10 @@ function ListadoPagosDiarios() {
           <button onClick={calcularDia} disabled={calculando}
             style={{ padding: "8px 16px", borderRadius: 4, border: "none", background: calculando ? "#94a3b8" : "#F47B20", color: "#fff", fontSize: 12, fontWeight: 600, cursor: calculando ? "wait" : "pointer" }}>
             {calculando ? "Calculando..." : pagos.length > 0 ? "Recalcular día" : "Calcular pagos del día"}
+          </button>
+          <button onClick={guardarTarifado} disabled={guardandoTarifado || pagos.length === 0}
+            style={{ padding: "8px 14px", borderRadius: 4, border: "none", background: (guardandoTarifado || pagos.length === 0) ? "#94a3b8" : "#16a34a", color: "#fff", fontSize: 12, fontWeight: 600, cursor: (guardandoTarifado || pagos.length === 0) ? "not-allowed" : "pointer" }}>
+            {guardandoTarifado ? "Guardando..." : "Guardar en tarifado"}
           </button>
         </div>
       </div>
