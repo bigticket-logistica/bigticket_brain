@@ -14804,6 +14804,9 @@ function TorreTresPilares() {
   const [excelDesde, setExcelDesde] = useState(ayer);
   const [excelHasta, setExcelHasta] = useState(ayer);
   const [excelBusy, setExcelBusy] = useState(false);
+  // ▶ Historial expandido por travel_id
+  const [travelExpandido, setTravelExpandido] = useState(null);
+  const [historial, setHistorial] = useState({});
 
   // ─── Carga ───
   useEffect(() => {
@@ -14833,6 +14836,27 @@ function TorreTresPilares() {
     })();
     return () => { alive = false; };
   }, [fecha, scFiltro, refreshKey]);
+
+  // ▶ Toggle expandir + cargar historial del travel
+  const toggleHistorial = useCallback(async (travelId) => {
+    if (travelExpandido === travelId) {
+      setTravelExpandido(null);
+      return;
+    }
+    setTravelExpandido(travelId);
+    if (historial[travelId]?.data) return;
+    setHistorial(prev => ({ ...prev, [travelId]: { loading: true } }));
+    try {
+      const { data, error } = await sb.rpc("get_historial_travel", {
+        p_travel_id: travelId,
+        p_fecha: fecha,
+      });
+      if (error) throw error;
+      setHistorial(prev => ({ ...prev, [travelId]: { loading: false, data: data || [] } }));
+    } catch (e) {
+      setHistorial(prev => ({ ...prev, [travelId]: { loading: false, error: e.message || String(e) } }));
+    }
+  }, [travelExpandido, historial, fecha]);
 
   // ─── Definición de buckets (orden + colores + descripciones) ───
   const BUCKETS = [
@@ -15279,6 +15303,7 @@ function TorreTresPilares() {
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
             <thead style={{ position: "sticky", top: 0, background: "#fff", boxShadow: "0 1px 0 #e4e7ec" }}>
               <tr>
+                <th style={{ padding: "8px 4px", textAlign: "center", fontWeight: 600, color: "#64748b", width: 24 }} title="Click en cada fila para ver historial"></th>
                 <th style={{ padding: "8px 6px", textAlign: "left", fontWeight: 600, color: "#64748b" }}>Bucket</th>
                 <th style={{ padding: "8px 6px", textAlign: "left", fontWeight: 600, color: "#64748b" }}>SC</th>
                 <th style={{ padding: "8px 6px", textAlign: "left", fontWeight: 600, color: "#64748b" }}>Vehículo</th>
@@ -15293,43 +15318,131 @@ function TorreTresPilares() {
             </thead>
             <tbody>
               {filasMostrar.length === 0 && (
-                <tr><td colSpan={10} style={{ padding: 40, textAlign: "center", color: "#94a3b8" }}>Sin filas que mostrar</td></tr>
+                <tr><td colSpan={11} style={{ padding: 40, textAlign: "center", color: "#94a3b8" }}>Sin filas que mostrar</td></tr>
               )}
               {filasMostrar.map((f, i) => {
                 const b = BUCKETS.find(bb => bb.id === f.bucket);
+                const isExpanded = travelExpandido === f.travel_id;
+                const hist = historial[f.travel_id];
                 return (
-                  <tr key={`${f.travel_id}-${i}`} style={{ borderBottom: "0.5px solid #f1f5f9" }}>
-                    <td style={{ padding: "6px 6px" }}>
-                      <span style={{
-                        background: b?.bg || "#f1f5f9", color: b?.color || "#475569",
-                        padding: "2px 6px", borderRadius: 4, fontSize: 10, fontWeight: 600,
-                        whiteSpace: "nowrap",
-                      }}>
-                        {b?.label || f.bucket}
-                      </span>
-                    </td>
-                    <td style={{ padding: "6px 6px", fontWeight: 600 }}>{f.sc || "—"}</td>
-                    <td style={{ padding: "6px 6px", color: "#475569" }}>{f.vehiculo || "—"}</td>
-                    <td style={{ padding: "6px 6px" }}>
-                      {f.flota && (
+                  <Fragment key={`${f.travel_id}-${i}`}>
+                    <tr style={{
+                      borderBottom: "0.5px solid #f1f5f9",
+                      background: isExpanded ? "#f0f9ff" : "transparent",
+                      cursor: "pointer"
+                    }} onClick={() => toggleHistorial(f.travel_id)}>
+                      <td style={{ padding: "6px 4px", textAlign: "center", color: "#64748b", fontSize: 11, userSelect: "none" }}>
+                        {isExpanded ? "▼" : "▶"}
+                      </td>
+                      <td style={{ padding: "6px 6px" }}>
                         <span style={{
-                          background: f.flota === "SDD" ? "#dbeafe" : "#f1f5f9",
-                          color: f.flota === "SDD" ? "#1e40af" : "#475569",
-                          padding: "1px 6px", borderRadius: 4, fontSize: 10, fontWeight: 600,
-                        }}>{f.flota}</span>
-                      )}
-                    </td>
-                    <td style={{ padding: "6px 6px", textAlign: "right", fontFamily: "monospace", color: "#64748b" }}>{f.travel_id}</td>
-                    <td style={{ padding: "6px 6px", color: "#334155" }}>{f.driver_name || "—"}</td>
-                    <td style={{ padding: "6px 6px", fontFamily: "monospace", color: "#475569" }}>{f.vehicle_plate || "—"}</td>
-                    <td style={{ padding: "6px 6px", textAlign: "right", color: "#475569" }}>
-                      {f.pct_entregado !== null && f.pct_entregado !== undefined ? `${Number(f.pct_entregado).toFixed(1)}%` : "—"}
-                    </td>
-                    <td style={{ padding: "6px 6px", fontSize: 10 }}>{f.cambio_intradia ? (
-                      <span style={{ background: "#cffafe", color: "#155e75", padding: "1px 6px", borderRadius: 4, fontSize: 9, fontWeight: 600 }}>{f.cambio_intradia}</span>
-                    ) : <span style={{ color: "#cbd5e1" }}>—</span>}</td>
-                    <td style={{ padding: "6px 6px", color: "#64748b", fontSize: 10 }}>{f.diagnostico_p3 || "—"}</td>
-                  </tr>
+                          background: b?.bg || "#f1f5f9", color: b?.color || "#475569",
+                          padding: "2px 6px", borderRadius: 4, fontSize: 10, fontWeight: 600,
+                          whiteSpace: "nowrap",
+                        }}>
+                          {b?.label || f.bucket}
+                        </span>
+                      </td>
+                      <td style={{ padding: "6px 6px", fontWeight: 600 }}>{f.sc || "—"}</td>
+                      <td style={{ padding: "6px 6px", color: "#475569" }}>{f.vehiculo || "—"}</td>
+                      <td style={{ padding: "6px 6px" }}>
+                        {f.flota && (
+                          <span style={{
+                            background: f.flota === "SDD" ? "#dbeafe" : "#f1f5f9",
+                            color: f.flota === "SDD" ? "#1e40af" : "#475569",
+                            padding: "1px 6px", borderRadius: 4, fontSize: 10, fontWeight: 600,
+                          }}>{f.flota}</span>
+                        )}
+                      </td>
+                      <td style={{ padding: "6px 6px", textAlign: "right", fontFamily: "monospace", color: "#64748b" }}>{f.travel_id}</td>
+                      <td style={{ padding: "6px 6px", color: "#334155" }}>{f.driver_name || "—"}</td>
+                      <td style={{ padding: "6px 6px", fontFamily: "monospace", color: "#475569" }}>{f.vehicle_plate || "—"}</td>
+                      <td style={{ padding: "6px 6px", textAlign: "right", color: "#475569" }}>
+                        {f.pct_entregado !== null && f.pct_entregado !== undefined ? `${Number(f.pct_entregado).toFixed(1)}%` : "—"}
+                      </td>
+                      <td style={{ padding: "6px 6px", fontSize: 10 }}>{f.cambio_intradia ? (
+                        <span style={{ background: "#cffafe", color: "#155e75", padding: "1px 6px", borderRadius: 4, fontSize: 9, fontWeight: 600 }}>{f.cambio_intradia}</span>
+                      ) : <span style={{ color: "#cbd5e1" }}>—</span>}</td>
+                      <td style={{ padding: "6px 6px", color: "#64748b", fontSize: 10 }}>{f.diagnostico_p3 || "—"}</td>
+                    </tr>
+                    {isExpanded && (
+                      <tr>
+                        <td colSpan={11} style={{ padding: 0, background: "#f8fafc", borderBottom: "1px solid #e4e7ec" }}>
+                          <div style={{ padding: "12px 20px" }}>
+                            <div style={{ fontSize: 11, fontWeight: 600, color: "#1a3a6b", marginBottom: 8 }}>
+                              🕐 Historial del travel {f.travel_id} · {f.sc} · {fecha}
+                            </div>
+                            {hist?.loading && (
+                              <div style={{ fontSize: 11, color: "#64748b", padding: 8 }}>Cargando historial…</div>
+                            )}
+                            {hist?.error && (
+                              <div style={{ fontSize: 11, color: "#b91c1c", padding: 8 }}>Error: {hist.error}</div>
+                            )}
+                            {hist?.data && hist.data.length === 0 && (
+                              <div style={{ fontSize: 11, color: "#94a3b8", padding: 8 }}>Sin capturas registradas para este travel</div>
+                            )}
+                            {hist?.data && hist.data.length > 0 && (
+                              <div style={{ overflowX: "auto" }}>
+                                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 10 }}>
+                                  <thead>
+                                    <tr style={{ borderBottom: "1px solid #cbd5e1", background: "#fff" }}>
+                                      <th style={{ padding: "6px 6px", textAlign: "left", fontWeight: 600, color: "#64748b" }}>Captura</th>
+                                      <th style={{ padding: "6px 6px", textAlign: "left", fontWeight: 600, color: "#64748b" }}>Hora MX</th>
+                                      <th style={{ padding: "6px 6px", textAlign: "left", fontWeight: 600, color: "#64748b" }}>Driver</th>
+                                      <th style={{ padding: "6px 6px", textAlign: "left", fontWeight: 600, color: "#64748b" }}>Placa</th>
+                                      <th style={{ padding: "6px 6px", textAlign: "left", fontWeight: 600, color: "#64748b" }}>Assign</th>
+                                      <th style={{ padding: "6px 6px", textAlign: "left", fontWeight: 600, color: "#64748b" }}>Travel St</th>
+                                      <th style={{ padding: "6px 6px", textAlign: "center", fontWeight: 600, color: "#64748b" }}>Lock</th>
+                                      <th style={{ padding: "6px 6px", textAlign: "right", fontWeight: 600, color: "#64748b" }} title="Minutos hasta lockDate">Min lock</th>
+                                      <th style={{ padding: "6px 6px", textAlign: "left", fontWeight: 600, color: "#0891b2" }}>Cambios</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {hist.data.map((h, hi) => (
+                                      <tr key={hi} style={{
+                                        borderBottom: "0.5px solid #e4e7ec",
+                                        background: h.cambio_vs_anterior ? "#fef9c3" : "transparent"
+                                      }}>
+                                        <td style={{ padding: "4px 6px", fontWeight: 600, color: "#1a3a6b" }}>{h.captura}</td>
+                                        <td style={{ padding: "4px 6px", fontFamily: "monospace", color: "#64748b" }}>{h.hora_mx}</td>
+                                        <td style={{ padding: "4px 6px", color: "#334155" }}>{h.driver_name || "—"}</td>
+                                        <td style={{ padding: "4px 6px", fontFamily: "monospace", color: "#475569" }}>{h.vehicle_plate || "—"}</td>
+                                        <td style={{ padding: "4px 6px" }}>
+                                          {h.assignment_status === "done" && <span style={{ background: "#d1fae5", color: "#047857", padding: "1px 5px", borderRadius: 3, fontSize: 9, fontWeight: 600 }}>done</span>}
+                                          {h.assignment_status === "draft" && <span style={{ background: "#fef3c7", color: "#b45309", padding: "1px 5px", borderRadius: 3, fontSize: 9, fontWeight: 600 }}>draft</span>}
+                                          {!h.assignment_status && <span style={{ color: "#cbd5e1" }}>—</span>}
+                                        </td>
+                                        <td style={{ padding: "4px 6px" }}>
+                                          {h.travel_status === "finished" && <span style={{ background: "#dbeafe", color: "#1e40af", padding: "1px 5px", borderRadius: 3, fontSize: 9, fontWeight: 600 }}>finished</span>}
+                                          {h.travel_status === "started" && <span style={{ background: "#d1fae5", color: "#047857", padding: "1px 5px", borderRadius: 3, fontSize: 9, fontWeight: 600 }}>started</span>}
+                                          {h.travel_status === "created" && <span style={{ background: "#f1f5f9", color: "#475569", padding: "1px 5px", borderRadius: 3, fontSize: 9, fontWeight: 600 }}>created</span>}
+                                          {h.travel_status === "canceled" && <span style={{ background: "#fee2e2", color: "#b91c1c", padding: "1px 5px", borderRadius: 3, fontSize: 9, fontWeight: 600 }}>canceled</span>}
+                                          {!h.travel_status && <span style={{ color: "#cbd5e1" }}>—</span>}
+                                        </td>
+                                        <td style={{ padding: "4px 6px", textAlign: "center" }}>
+                                          {h.locked ? "🔒" : ""}
+                                        </td>
+                                        <td style={{
+                                          padding: "4px 6px", textAlign: "right", fontFamily: "monospace",
+                                          color: h.min_a_lockdate < 0 ? "#b91c1c" : h.min_a_lockdate < 60 ? "#c2410c" : "#64748b",
+                                          fontWeight: h.min_a_lockdate < 60 ? 600 : 400
+                                        }}>
+                                          {h.min_a_lockdate !== null && h.min_a_lockdate !== undefined ? `${h.min_a_lockdate}'` : "—"}
+                                        </td>
+                                        <td style={{ padding: "4px 6px", color: "#1a3a6b", fontWeight: 600, fontSize: 10 }}>
+                                          {h.cambio_vs_anterior || ""}
+                                        </td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
                 );
               })}
             </tbody>
