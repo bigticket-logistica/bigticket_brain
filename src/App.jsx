@@ -15181,10 +15181,20 @@ function TorreTresPilares() {
                 borderRadius: 12, padding: 12, cursor: "pointer",
                 opacity: n === 0 ? 0.5 : 1,
                 transition: "all 0.15s",
+                position: "relative",
               }}
-              title={b.desc}
+              title={b.longDesc || b.desc}
             >
-              <div style={{ fontSize: 11, fontWeight: 700, color: b.color, marginBottom: 4, lineHeight: 1.3 }}>
+              {/* ⓘ ícono de info en esquina superior derecha */}
+              <span
+                style={{
+                  position: "absolute", top: 6, right: 8,
+                  fontSize: 13, color: b.color, opacity: 0.55, fontWeight: 600,
+                  cursor: "help",
+                }}
+                title={b.longDesc || b.desc}
+              >ⓘ</span>
+              <div style={{ fontSize: 11, fontWeight: 700, color: b.color, marginBottom: 4, lineHeight: 1.3, paddingRight: 20 }}>
                 {b.label}
               </div>
               <div style={{ fontSize: 28, fontWeight: 700, color: b.color, lineHeight: 1 }}>
@@ -15379,7 +15389,46 @@ function TorreTresPilares() {
                               <div style={{ fontSize: 11, color: "#b91c1c", padding: 8 }}>Error: {hist.error}</div>
                             )}
                             {hist?.data && hist.data.length === 0 && (
-                              <div style={{ fontSize: 11, color: "#94a3b8", padding: 8 }}>Sin capturas registradas para este travel</div>
+                              <div style={{
+                                padding: 12,
+                                background: "#fef9c3",
+                                border: "1px solid #fde68a",
+                                borderRadius: 8,
+                                fontSize: 11,
+                                color: "#78350f",
+                                lineHeight: 1.5,
+                              }}>
+                                <div style={{ fontWeight: 700, marginBottom: 6, color: "#92400e" }}>
+                                  ⚠️ Sin historial de rostering
+                                </div>
+                                <div style={{ marginBottom: 6 }}>
+                                  Este travel NO aparece en <code style={{ background: "#fff", padding: "1px 4px", borderRadius: 3, fontSize: 10 }}>meli_rostering_planificado</code> en ninguna de las 18 capturas del día.
+                                </div>
+                                <div style={{ marginBottom: 6 }}>
+                                  <strong>Interpretación:</strong> BT aceptó el travel (P1) pero NUNCA completó el rostering. No se asignó driver ni placa.
+                                </div>
+                                <div style={{ fontSize: 10, color: "#78350f" }}>
+                                  Datos disponibles:
+                                  <ul style={{ marginTop: 4, marginBottom: 0, paddingLeft: 18 }}>
+                                    <li>Travel ID: <strong>{f.travel_id}</strong></li>
+                                    <li>SC: <strong>{f.sc || "—"}</strong></li>
+                                    <li>Vehículo: <strong>{f.vehiculo || "—"}</strong></li>
+                                    <li>Flota: <strong>{f.flota || "—"}</strong></li>
+                                    <li>Estado P1: <strong>{f.travel_status || "—"}</strong></li>
+                                    {f.lockdate_str && <li>lockDate: <strong>{f.lockdate_str}</strong></li>}
+                                  </ul>
+                                </div>
+                                {f.bucket === "2A_RF1_VENCIDO" && (
+                                  <div style={{ marginTop: 8, padding: 6, background: "#fee2e2", borderRadius: 4, color: "#991b1b", fontWeight: 600 }}>
+                                    🚨 RF1 vencido = multa MELI segura por no completar el rostering antes del lockDate.
+                                  </div>
+                                )}
+                                {f.bucket === "4_CANCEL_MELI_PRE_ASIGNACION" && (
+                                  <div style={{ marginTop: 8, padding: 6, background: "#f1f5f9", borderRadius: 4, color: "#475569", fontWeight: 600 }}>
+                                    ⚪ MELI canceló antes de que BT asignara. Sin impacto operativo.
+                                  </div>
+                                )}
+                              </div>
                             )}
                             {hist?.data && hist.data.length > 0 && (
                               <div style={{ overflowX: "auto" }}>
