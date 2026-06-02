@@ -15703,6 +15703,151 @@ function TorreControlSC({ scId, fecha }) {
   );
 }
 
+// ── Patentes nuevas del SC (operaron HOY y no están en la flota) ─────────────
+// Replica la lógica del portal del supervisor: detecta desde el último snapshot,
+// normaliza prefijos, y permite al jefe registrarlas a flota_vehiculos_bt.
+function semanaISOBrain(d) {
+  const date = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  const dayNum = (date.getUTCDay() + 6) % 7;
+  date.setUTCDate(date.getUTCDate() - dayNum + 3);
+  const firstThursday = new Date(Date.UTC(date.getUTCFullYear(), 0, 4));
+  const firstDayNum = (firstThursday.getUTCDay() + 6) % 7;
+  firstThursday.setUTCDate(firstThursday.getUTCDate() - firstDayNum + 3);
+  return 1 + Math.round((date - firstThursday) / (7 * 24 * 60 * 60 * 1000));
+}
+
+function PatentesNuevasSC({ scId, decididoPor }) {
+  const [placas, setPlacas] = useState([]); // {placa, chofer, empresa, guardando, guardada, error}
+  const [loading, setLoading] = useState(true);
+  const [abierto, setAbierto] = useState(false);
+
+  const normPlaca = (p) => String(p || "").trim().toUpperCase().replace(/^(SDD|MLP|SPOT)-/, "");
+
+  const cargar = useCallback(async () => {
+    setLoading(true);
+    try {
+      const fecha = fechaOperativaOffset(0); // HOY MX
+      const [snapR, flotaR] = await Promise.all([
+        sb.from("logistic_ayudantes_snapshots")
+          .select("id_ruta, placa, driver_name, hora_snapshot")
+          .eq("service_center_id", scId).eq("fecha", fecha)
+          .order("hora_snapshot", { ascending: false }),
+        sb.from("flota_vehiculos_bt")
+          .select("placa, activo")
+          .eq("service_center_id", scId).eq("activo", true),
+      ]);
+      const placasFlota = new Set((flotaR.data || []).map((f) => normPlaca(f.placa)));
+      const choferPorPlaca = new Map();
+      const operaron = new Set();
+      const vistas = new Set();
+      for (const r of snapR.data || []) {
+        if (r.id_ruta && vistas.has(r.id_ruta)) continue;
+        if (r.id_ruta) vistas.add(r.id_ruta);
+        const norm = normPlaca(r.placa);
+        if (!norm) continue;
+        operaron.add(norm);
+        if (r.driver_name && !choferPorPlaca.has(norm)) choferPorPlaca.set(norm, r.driver_name);
+      }
+      const nuevas = [...operaron]
+        .filter((p) => !placasFlota.has(p))
+        .map((p) => ({ placa: p, chofer: choferPorPlaca.get(p) || "", empresa: "", guardando: false, guardada: false, error: null }));
+      setPlacas(nuevas);
+    } catch (e) {
+      console.error("Error patentes nuevas SC:", e);
+      setPlacas([]);
+    } finally {
+      setLoading(false);
+    }
+  }, [scId]);
+
+  useEffect(() => { cargar(); }, [cargar]);
+
+  function actualizar(idx, campo, valor) {
+    setPlacas((prev) => prev.map((p, i) => (i === idx ? { ...p, [campo]: valor } : p)));
+  }
+
+  async function registrar(idx) {
+    const it = placas[idx];
+    if (!it.empresa.trim()) { actualizar(idx, "error", "Indicá la empresa"); return; }
+    actualizar(idx, "guardando", true);
+    actualizar(idx, "error", null);
+    try {
+      const sem = semanaISOBrain(new Date());
+      const payload = {
+        placa: it.placa,
+        service_center_id: scId,
+        numero_semana: sem,
+        empresa_transporte: it.empresa.trim(),
+        flota_tipo: "PLANTA",
+        responsable_carga: decididoPor || "Panel Consolidaciones",
+        fecha_carga: new Date().toISOString(),
+        es_compartida_entre_scs: false,
+        tripulacion: [{ cargo: "CHOFER", nombre: it.chofer.trim(), curp: null }],
+        activo: true,
+      };
+      const { error } = await sb.from("flota_vehiculos_bt")
+        .upsert(payload, { onConflict: "placa,service_center_id,numero_semana" });
+      if (error) throw error;
+      actualizar(idx, "guardada", true);
+    } catch (e) {
+      console.error("Error registrando placa:", e);
+      actualizar(idx, "error", e.message || "No se pudo guardar");
+    } finally {
+      actualizar(idx, "guardando", false);
+    }
+  }
+
+  if (loading) return <div style={{ fontSize: 12, color: "#9ca3af", padding: 8 }}>Cargando patentes nuevas…</div>;
+  if (placas.length === 0) return null; // sin patentes nuevas, no mostrar nada
+
+  return (
+    <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid #e5e7eb" }}>
+      <button onClick={() => setAbierto((v) => !v)}
+        style={{ display: "flex", alignItems: "center", gap: 8, background: "none", border: "none", cursor: "pointer", padding: 0, fontSize: 12, fontWeight: 700, color: "#b91c1c" }}>
+        <span>{abierto ? "▼" : "▶"}</span>
+        ⚠️ Patentes nuevas detectadas hoy
+        <span style={{ fontSize: 10, fontWeight: 600, color: "#9ca3af" }}>({placas.length})</span>
+      </button>
+      {abierto && (
+        <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 8 }}>
+          <div style={{ fontSize: 11, color: "#6b7280" }}>
+            Operaron hoy en {scId} pero no están en el inventario de flota. Registralas para incorporarlas.
+          </div>
+          {placas.map((it, idx) => (
+            <div key={it.placa} style={{ background: "#fff", border: "1px solid #fecaca", borderRadius: 6, padding: 10 }}>
+              <div style={{ fontFamily: "monospace", fontWeight: 700, fontSize: 13, marginBottom: 6 }}>{it.placa}</div>
+              {it.guardada ? (
+                <div style={{ fontSize: 12, color: "#16a34a", fontWeight: 600 }}>✓ Registrada en la flota</div>
+              ) : (
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end" }}>
+                  <div style={{ flex: 1, minWidth: 150 }}>
+                    <div style={{ fontSize: 10, color: "#6b7280", marginBottom: 2 }}>Chofer {it.chofer && "(sugerido)"}</div>
+                    <input value={it.chofer} onChange={(e) => actualizar(idx, "chofer", e.target.value)}
+                      placeholder="Nombre del chofer" disabled={it.guardando}
+                      style={{ width: "100%", padding: "5px 8px", borderRadius: 5, border: "1px solid #d1d5db", fontSize: 12 }} />
+                  </div>
+                  <div style={{ flex: 1, minWidth: 150 }}>
+                    <div style={{ fontSize: 10, color: "#6b7280", marginBottom: 2 }}>Empresa que presta servicio</div>
+                    <input value={it.empresa} onChange={(e) => actualizar(idx, "empresa", e.target.value)}
+                      placeholder="Razón social del transportista" disabled={it.guardando}
+                      style={{ width: "100%", padding: "5px 8px", borderRadius: 5, border: "1px solid #d1d5db", fontSize: 12 }} />
+                  </div>
+                  <button onClick={() => registrar(idx)} disabled={it.guardando}
+                    style={{ padding: "6px 12px", background: "#1e3a5f", color: "#fff", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: it.guardando ? "wait" : "pointer" }}>
+                    {it.guardando ? "Guardando…" : "Registrar a la flota"}
+                  </button>
+                </div>
+              )}
+              {it.error && <div style={{ fontSize: 11, color: "#dc2626", marginTop: 4 }}>{it.error}</div>}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
 // ── Ambulancias del SC (del D-1) ─────────────────────────────────────────────
 function AmbulanciasSC({ scId, fecha }) {
   const [ambulancias, setAmbulancias] = useState([]);
@@ -16247,6 +16392,9 @@ function PanelControlSupervisores() {
 
                           {/* ─── Ambulancias del SC (D-1) ─── */}
                           <AmbulanciasSC scId={s.sc} fecha={fechaAyer} />
+
+                          {/* ─── Patentes nuevas del SC (hoy) ─── */}
+                          <PatentesNuevasSC scId={s.sc} decididoPor={null} />
 
                           {/* Contacto (para el WhatsApp futuro) */}
                           <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px solid #e5e7eb", fontSize: 11, color: "#6b7280" }}>
