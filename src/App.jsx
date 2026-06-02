@@ -16425,14 +16425,33 @@ function calcularSemanaPago(fechaStr) {
   return `${d.getFullYear()}-W${String(week).padStart(2, "0")}`;
 }
 
+// SC foráneos: helper en small van bloqueado por defecto (no se paga)
+const SC_FORANEOS = new Set(["SCY1","SCQ1","SQR1","SHP1","STL1","STX1","SVH1","SPB1","SPY1"]);
+
+// Matriz de ajuste por % visitado × NS (reemplaza a matriz_ns)
+// visitado < 90% → no paga | visitado 99.5–100% premia +5% solo si NS > 99.5%
+// visitado 90–99.49% castiga -3% solo si NS < 95% | resto neutro
+function calcularAjusteVisitadoNS(pctVisitado, nsPct) {
+  if (pctVisitado == null) return { pct: 0, categoria: "SIN_VISITADO", noPaga: false };
+  const vis = Number(pctVisitado);
+  const ns = Number(nsPct) || 0;
+  if (vis < 90) return { pct: 0, categoria: "NO_PAGO_VIS<90%", noPaga: true };
+  if (vis >= 99.5) {
+    if (ns > 99.5) return { pct: 5, categoria: "PREMIO_+5%", noPaga: false };
+    return { pct: 0, categoria: "NEUTRO", noPaga: false };
+  }
+  if (ns < 95) return { pct: -3, categoria: "CASTIGO_-3%", noPaga: false };
+  return { pct: 0, categoria: "NEUTRO", noPaga: false };
+}
+
 // ─── Motor de cálculo principal ────────────────────────────────────────────
 // Toma todos los inputs y devuelve los registros listos para INSERT en
 // maestro_jornada_mx
-function calcularPagos({ viajes, snapshots, scZonas, matrizPrecios, especiales, matrizNS, matrizAux }) {
+function calcularPagos({ maestro, snapshots, scZonas, especiales, matrizPrecios, aprobaciones, calculadoAt }) {
   const errores = [];
   const filas = [];
 
-  // Index snapshots por id_ruta
+  // Index snapshots por id_ruta (para Bloque D + cruce de medianoche)
   const snapsPorRuta = {};
   for (const s of snapshots) {
     const k = String(s.id_ruta);
@@ -16440,30 +16459,40 @@ function calcularPagos({ viajes, snapshots, scZonas, matrizPrecios, especiales, 
     snapsPorRuta[k].push(s);
   }
 
+  // Index aprobaciones de helper por travel_id
+  const aprobPorRuta = {};
+  for (const a of (aprobaciones || [])) aprobPorRuta[String(a.travel_id)] = a;
+
   // Index sc_zonas
   const zonaPorSC = {};
   for (const z of scZonas) zonaPorSC[z.service_center_id] = z.zona;
 
-  for (const v of viajes) {
-    const tms = v.tms_raw || {};
-    const idRuta = String(tms["Id de la ruta"] || "");
-    const driverName = tms["Nombre del transportista"] || v.observaciones || "Sin nombre";
-    const driverIdML = tms["Id del transportista"] ? Number(tms["Id del transportista"]) : null;
-    const sc = tms["Service center"] || null;
-    const vehiculoRaw = tms["Vehículo"] || null;
-    const placa = tms["Placa"] || tms["Patente"] || null;
-    const ciclo = tms["Ciclo"] || null;
-    const km = Number(tms["Kilómetros recorridos"] || v.km_recorridos || 0);
-    const nsPct = Number(tms["Entrega exitosa"] || v.eficiencia_pct || 0);
-    const noVisitado = Number(tms["No visitado"] || 0);
-    const enviosDespachados = Number(tms["Envíos despachados"] || v.paquetes_asignados || 0);
-    const enviosEntregados = Number(tms["Envíos entregados"] || v.paquetes_entregados || 0);
+  for (const m of maestro) {
+    const idRuta = String(m.idviaje || "");
+    const driverName = m.driver_name || "Sin nombre";
+    const driverIdML = m.driver_id != null ? Number(m.driver_id) : null;
+    const sc = m.service_center_id || null;
+    const vehiculoRaw = m.tipo_vehiculo || null;
+    const placa = m.patentes || null;
+    const ciclo = m.cluster_meli || null;
 
-    const fechaSalida = v.fecha_salida ? String(v.fecha_salida).slice(0, 10) : null;
+    // Km: reales según MELI con fallback a planificado
+    const km = Number(m.km_meli != null ? m.km_meli : (m.km_planificados || 0));
+
+    // NS = entregados / cargados (equivalente a "Entrega exitosa")
+    const cargados = Number(m.cargados || 0);
+    const entregados = Number(m.entregados || 0);
+    const nsPct = cargados > 0 ? (entregados / cargados * 100) : 0;
+
+    // % visitado (segunda variable de premio/castigo)
+    const pctVisitado = m.pct_visitado != null ? Number(m.pct_visitado) : null;
+    const noVisitado = pctVisitado != null ? (100 - pctVisitado) : null;
+
+    const fechaSalida = m.fecha ? String(m.fecha).slice(0, 10) : null;
 
     // Validaciones
-    if (!idRuta) { errores.push({ tms_id: v.tms_id, motivo: "Sin Id de la ruta en tms_raw" }); continue; }
-    if (!sc) { errores.push({ tms_id: v.tms_id, motivo: "Sin Service center" }); continue; }
+    if (!idRuta) { errores.push({ tms_id: m.idviaje, motivo: "Sin idviaje en el Maestro Supervisores" }); continue; }
+    if (!sc) { errores.push({ tms_id: m.idviaje, motivo: "Sin service_center_id" }); continue; }
 
     const tipologia = parsearTipologia(vehiculoRaw);
     const zona = zonaPorSC[sc] || null;
@@ -16472,121 +16501,111 @@ function calcularPagos({ viajes, snapshots, scZonas, matrizPrecios, especiales, 
     const obs = [];
     if (!tipologia) obs.push(`Tipología no reconocida: "${vehiculoRaw}"`);
     if (!zona) obs.push(`SC no mapeado en sc_zonas_mx: ${sc}`);
+    if (pctVisitado == null) obs.push("Sin % visitado en el snapshot");
+    if (m.km_meli == null) obs.push("Km MELI ausente — se usó km planificado");
+    if (m.status_final && m.status_final !== "close") obs.push(`Status no cerrado: ${m.status_final} — revisar`);
 
-    // Tarifa
+    // Tarifa base
     let tarifaInfo = { monto: 0, fuente: "SIN_TARIFA" };
     if (tipologia && zona) {
       tarifaInfo = buscarTarifa(driverName, tipologia, zona, tramo, especiales, matrizPrecios);
-      if (tarifaInfo.fuente === "SIN_TARIFA") {
-        obs.push(`Sin tarifa para ${tipologia} / ${zona} / ${tramo}`);
-      }
+      if (tarifaInfo.fuente === "SIN_TARIFA") obs.push(`Sin tarifa para ${tipologia} / ${zona} / ${tramo}`);
     }
     const tarifaBase = tarifaInfo.monto;
     const tieneTarifaEspecial = tarifaInfo.fuente === "ESPECIAL";
 
-    // Factor NS
-    const ns = aplicarMatrizNS(nsPct, matrizNS);
-    const factorNS = 1 + (ns.porcentaje / 100);
-    const ajusteNS = tarifaBase * (ns.porcentaje / 100);
+    // Ajuste por matriz visitado × NS (reemplaza a matriz_ns)
+    const ajuste = calcularAjusteVisitadoNS(pctVisitado, nsPct);
+    const noPaga = ajuste.noPaga;
+    const factorNS = 1 + (ajuste.pct / 100);
+    const ajusteNS = tarifaBase * (ajuste.pct / 100);
 
-    // Auxiliar
-    const snapsRuta = snapsPorRuta[idRuta] || [];
-    const aux = consolidarAuxiliar(snapsRuta);
-    let auxiliarEstado = aux.estado;
+    // ── Helper: gatillo = con_ayudante del Maestro Supervisores ──
+    // Bloqueo estructural (SC foráneo + small van) gana siempre; sino paga
+    // $300 solo con aprobación explícita (bloqueada=false).
+    const tieneHelper = String(m.con_ayudante || "").toUpperCase() === "SI";
+    let auxiliarEstado = "SIN_HELPER";
     let montoAux = 0;
+    if (tieneHelper) {
+      const esForaneo = SC_FORANEOS.has(sc);
+      const esSmallVan = tipologia === "SMALL VAN";
+      const aprob = aprobPorRuta[idRuta] || null;
+      if (esForaneo && esSmallVan) {
+        auxiliarEstado = "BLOQUEADO_ESTRUCTURAL";
+        montoAux = 0;
+        obs.push("Helper bloqueado: SC foráneo + Small Van (no se paga)");
+      } else if (!aprob) {
+        auxiliarEstado = "SIN_APROBACION";
+        montoAux = 0;
+        obs.push("Helper sin aprobación registrada — revisar");
+      } else if (aprob.bloqueada === true) {
+        auxiliarEstado = "BLOQUEADO_ANALISTA";
+        montoAux = 0;
+        obs.push(`Helper bloqueado por analista${aprob.decision ? `: ${aprob.decision}` : ""}`);
+      } else {
+        auxiliarEstado = "APROBADO";
+        montoAux = 300;
+      }
+    }
 
-    // Extraer datos del raw_json del último snapshot disponible
-    // (orden: pre_cierre > fin_tarde > tarde > media_manana > inicio)
-    // Sacamos: timestamps + loyalty + performance + retrasos + incidentes
+    // ── Bloque D: métricas del raw_json (desde snapshots) ──
+    const snapsRuta = snapsPorRuta[idRuta] || [];
     let initDateUnix = null, finalDateUnix = null;
-    let loyaltyTier = null;
-    let performanceScore = null;
-    let tieneRetrasoInicial = false;
-    let cantidadIncidentes = 0;
-    let stemOutMinutos = null;
+    let loyaltyTier = null, performanceScore = null;
+    let tieneRetrasoInicial = false, cantidadIncidentes = 0, stemOutMinutos = null;
     if (snapsRuta.length > 0) {
       const ordenados = [...snapsRuta].sort((a, b) =>
         new Date(b.hora_snapshot || 0) - new Date(a.hora_snapshot || 0)
       );
-      // Primero buscamos los timestamps
       for (const s of ordenados) {
         const rj = s.raw_json || {};
         if (!initDateUnix && rj.initDate) initDateUnix = Number(rj.initDate);
         if (!finalDateUnix && rj.finalDate) finalDateUnix = Number(rj.finalDate);
         if (initDateUnix && finalDateUnix) break;
       }
-      // Métricas operacionales: tomamos el último snapshot que las tenga
       for (const s of ordenados) {
         const rj = s.raw_json || {};
         if (loyaltyTier === null && rj.driver?.loyalty?.name) loyaltyTier = rj.driver.loyalty.name;
         if (performanceScore === null && rj.routePerformanceScore) performanceScore = rj.routePerformanceScore;
         if (rj.flags?.hasInitialDelay === true) tieneRetrasoInicial = true;
-        if (Array.isArray(rj.incidentTypes) && rj.incidentTypes.length > cantidadIncidentes) {
-          cantidadIncidentes = rj.incidentTypes.length;
-        }
-        if (stemOutMinutos === null && rj.timingData?.stemOut != null) {
-          stemOutMinutos = Number(rj.timingData.stemOut);
-        }
+        if (Array.isArray(rj.incidentTypes) && rj.incidentTypes.length > cantidadIncidentes) cantidadIncidentes = rj.incidentTypes.length;
+        if (stemOutMinutos === null && rj.timingData?.stemOut != null) stemOutMinutos = Number(rj.timingData.stemOut);
         if (loyaltyTier && performanceScore && stemOutMinutos !== null) break;
       }
     }
+    if (performanceScore === null && m.performance_score) performanceScore = m.performance_score;
 
-    // Detectar cruce de medianoche con timestamps exactos (zona MX)
-    // Si la fecha local MX de initDate ≠ fecha local MX de finalDate → cruzó medianoche
+    // Cruce de medianoche
     let cruzaMedianoche = false;
     let duracionMinutos = null;
     if (initDateUnix && finalDateUnix) {
       duracionMinutos = Math.round((finalDateUnix - initDateUnix) / 60);
-      const fechaInicioMX = new Intl.DateTimeFormat("en-CA", {
-        timeZone: "America/Mexico_City", year: "numeric", month: "2-digit", day: "2-digit"
-      }).format(new Date(initDateUnix * 1000));
-      const fechaFinMX = new Intl.DateTimeFormat("en-CA", {
-        timeZone: "America/Mexico_City", year: "numeric", month: "2-digit", day: "2-digit"
-      }).format(new Date(finalDateUnix * 1000));
-      if (fechaInicioMX !== fechaFinMX) {
+      const fIni = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Mexico_City", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(initDateUnix * 1000));
+      const fFin = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Mexico_City", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(finalDateUnix * 1000));
+      if (fIni !== fFin) {
         cruzaMedianoche = true;
-        const horas = Math.floor(duracionMinutos / 60);
-        const mins = duracionMinutos % 60;
-        obs.push(`Ruta cruzó medianoche: ${fechaInicioMX} → ${fechaFinMX} (duración ${horas}h ${mins}min)`);
+        const h = Math.floor(duracionMinutos / 60), mm = duracionMinutos % 60;
+        obs.push(`Ruta cruzó medianoche: ${fIni} → ${fFin} (duración ${h}h ${mm}min)`);
       }
     } else if (snapsRuta.length > 0 && fechaSalida) {
-      // Fallback: detección por fechas de snapshots (si no hay raw_json con timestamps)
       const fechasSnap = [...new Set(snapsRuta.map(s => s.fecha))];
-      const otrasFechas = fechasSnap.filter(f => f !== fechaSalida);
-      if (otrasFechas.length > 0) {
+      if (fechasSnap.filter(f => f !== fechaSalida).length > 0) {
         cruzaMedianoche = true;
         obs.push(`Ruta cruzó medianoche (estimado por snapshots): fechas ${fechasSnap.join(", ")}`);
       }
     }
 
-    if (aux.estado === "OK" || aux.estado === "MID_ROUTE") {
-      // Verificar matriz de autorización
-      const autorizacion = aplicarMatrizAyudantes(sc, tipologia, zona, matrizAux);
-      if (autorizacion.autorizado) {
-        montoAux = autorizacion.monto;
-        if (aux.estado === "MID_ROUTE") {
-          auxiliarEstado = "MID_ROUTE_REVISION";
-          obs.push("Helper sin estar al inicio — pago $300 con flag de revisión");
-        }
-      } else {
-        montoAux = 0;
-        auxiliarEstado = "NO_AUTORIZADO";
-        obs.push(`Tuvo helper pero matriz NO autoriza para ${sc}/${tipologia}/${zona}`);
-      }
-    }
+    // Ruta no operada: NO se descarta; se marca para que el analista decida
+    const rutaNoOperada = !!m.ruta_no_operada;
+    if (rutaNoOperada) obs.push(`🚫 NO OPERADA${m.motivo_no_operada ? `: ${m.motivo_no_operada}` : ""} — revisar antes de pagar`);
 
-    // ⭐ REGLA CRÍTICA: Si no_visitado > 10% → no se paga el viaje (todo en 0)
-    // Conservamos los valores calculados como informativos para auditoría
-    const descartadoPorNV = noVisitado > 10;
-    if (descartadoPorNV) {
-      obs.push(`NO PAGADO: no_visitado ${noVisitado}% supera umbral 10%`);
-    }
+    // Descarte por visitado < 90% (reemplaza al viejo no_visitado > 10%)
+    if (noPaga) obs.push(`NO PAGADO: visitado ${pctVisitado != null ? pctVisitado.toFixed(2) : "?"}% < 90%`);
 
-    // Pago bruto / neto
-    const pagoBruto = descartadoPorNV ? 0 : (tarifaBase + ajusteNS + montoAux);
-    const descuentos = 0; // por ahora
+    const pagoBruto = noPaga ? 0 : (tarifaBase + ajusteNS + montoAux);
+    const descuentos = 0;
     const pagoNeto = pagoBruto - descuentos;
-    const nsCategoriaFinal = descartadoPorNV ? "NO_PAGO_NV>10%" : ns.categoria;
+    const nsCategoriaFinal = ajuste.categoria;
 
     filas.push({
       fecha: fechaSalida,
@@ -16601,30 +16620,31 @@ function calcularPagos({ viajes, snapshots, scZonas, matrizPrecios, especiales, 
       km_recorridos: km,
       tramo_km: tramo,
       ciclo,
-      envios_despachados: enviosDespachados,
-      envios_entregados: enviosEntregados,
+      envios_despachados: cargados,
+      envios_entregados: entregados,
       ns_pct: nsPct,
       ns_no_visitado: noVisitado,
+      pct_visitado: pctVisitado,
       ns_categoria: nsCategoriaFinal,
       factor_ns: factorNS,
       tarifa_base: tarifaBase,
       ajuste_ns: ajusteNS,
-      tiene_auxiliar: aux.conHelper > 0,
+      tiene_auxiliar: tieneHelper,
       auxiliar_estado: auxiliarEstado,
-      auxiliar_snapshots_total: aux.conHelper,
-      monto_auxiliar: descartadoPorNV ? 0 : montoAux,
+      auxiliar_snapshots_total: tieneHelper ? Number(m.cantidad_personas || 0) : 0,
+      monto_auxiliar: noPaga ? 0 : montoAux,
       pago_bruto: pagoBruto,
       descuentos_externos: descuentos,
       pago_neto: pagoNeto,
       semana_pago: calcularSemanaPago(fechaSalida),
       tiene_tarifa_especial: tieneTarifaEspecial,
+      ruta_no_operada: rutaNoOperada,
+      calculado_at: calculadoAt,
       observaciones: obs.length > 0 ? obs.join(" | ") : null,
-      // Datos temporales (Bloque D — auditoría operacional)
       hora_inicio_ruta: initDateUnix ? new Date(initDateUnix * 1000).toISOString() : null,
       hora_fin_ruta: finalDateUnix ? new Date(finalDateUnix * 1000).toISOString() : null,
       duracion_minutos: duracionMinutos,
       cruza_medianoche: cruzaMedianoche,
-      // Métricas operacionales del raw_json
       loyalty_tier: loyaltyTier,
       performance_score: performanceScore,
       tiene_retraso_inicial: tieneRetrasoInicial,
@@ -16645,6 +16665,7 @@ function ListadoPagosDiarios() {
   const [busqueda, setBusqueda] = useState("");
   const [resumenCalculo, setResumenCalculo] = useState(null);
   const [filtroEstado, setFiltroEstado] = useState("todas"); // todas | pagadas | no_pagadas | con_alerta
+  const [avisoRecalc, setAvisoRecalc] = useState(null); // N aprobaciones modificadas tras el último cálculo
   const [orderBy, setOrderBy] = useState("driver_name"); // columna por la que ordenar
   const [orderDir, setOrderDir] = useState("asc");
 
@@ -16654,6 +16675,7 @@ function ListadoPagosDiarios() {
     (async () => {
       setLoading(true);
       setResumenCalculo(null);
+      setAvisoRecalc(null);
       try {
         const { data, error } = await sb.from("maestro_jornada_mx")
           .select("*")
@@ -16663,6 +16685,20 @@ function ListadoPagosDiarios() {
         if (cancel) return;
         if (error) throw error;
         setPagos(data || []);
+
+        // Aviso de recálculo: ¿aprobaciones de helper modificadas tras el último cálculo?
+        let aviso = null;
+        if ((data || []).length > 0) {
+          const { data: aprob } = await sb.from("aprobaciones_helper")
+            .select("decidido_at").eq("fecha", fecha).not("decidido_at", "is", null);
+          const maxCalc = (data || []).reduce((mx, p) => {
+            const ts = p.calculado_at ? new Date(p.calculado_at).getTime() : 0;
+            return ts > mx ? ts : mx;
+          }, 0);
+          const modificadas = (aprob || []).filter(a => new Date(a.decidido_at).getTime() > maxCalc).length;
+          if (modificadas > 0) aviso = modificadas;
+        }
+        if (!cancel) setAvisoRecalc(aviso);
       } catch (e) {
         console.error("Error cargando pagos:", e);
         if (!cancel) setPagos([]);
@@ -16673,7 +16709,7 @@ function ListadoPagosDiarios() {
   }, [fecha]);
 
   const calcularDia = async () => {
-    if (!confirm(`¿Calcular pagos del ${fecha}?\n\nEsto leerá los viajes y snapshots de ese día y guardará el resultado en maestro_jornada_mx.`)) return;
+    if (!confirm(`¿Calcular pagos del ${fecha}?\n\nLeerá el Maestro Supervisores (snapshot de cierre) y las aprobaciones de helper de ese día, y guardará el resultado en maestro_jornada_mx.`)) return;
     setCalculando(true);
     setResumenCalculo(null);
 
@@ -16690,34 +16726,35 @@ function ListadoPagosDiarios() {
       const fechaSnapDesde = fechaPrev.toISOString().slice(0, 10);
       const fechaSnapHasta = fechaFin; // ya es +1 día
 
-      const [vRes, sRes, zRes, mpRes, eRes, nsRes, maRes] = await Promise.all([
-        sb.from("viajes").select("*").eq("pais", "MX").gte("fecha_salida", fechaInicio).lt("fecha_salida", fechaFin).limit(5000),
+      const calculadoAt = new Date().toISOString();
+
+      const [mRes, sRes, zRes, mpRes, eRes, apRes] = await Promise.all([
+        sb.from("vw_maestro_supervisores_auto").select("*").eq("fecha", fecha).limit(5000),
         sb.from("logistic_ayudantes_snapshots").select("*").gte("fecha", fechaSnapDesde).lte("fecha", fechaSnapHasta).limit(30000),
         sb.from("sc_zonas_mx").select("service_center_id, zona"),
         sb.from("matriz_precios").select("*").eq("activo", true),
         sb.from("tarifas_especiales_mx").select("*"),
-        sb.from("matriz_ns").select("*").eq("activo", true),
-        sb.from("matriz_ayudantes_autorizados").select("*"),
+        sb.from("aprobaciones_helper").select("*").eq("fecha", fecha),
       ]);
 
-      if (vRes.error) throw new Error("viajes: " + vRes.error.message);
+      if (mRes.error) throw new Error("maestro supervisores: " + mRes.error.message);
       if (sRes.error) throw new Error("snapshots: " + sRes.error.message);
 
-      const viajes = vRes.data || [];
-      if (viajes.length === 0) {
-        alert(`No hay viajes MX para ${fecha}. Verifique que el informe Logistic se haya cargado.`);
+      const maestro = mRes.data || [];
+      if (maestro.length === 0) {
+        alert(`No hay datos del Maestro Supervisores para ${fecha}. Verifique que el snapshot de cierre se haya capturado.`);
         setCalculando(false);
         return;
       }
 
       const { filas, errores } = calcularPagos({
-        viajes,
+        maestro,
         snapshots: sRes.data || [],
         scZonas: zRes.data || [],
-        matrizPrecios: mpRes.data || [],
         especiales: eRes.data || [],
-        matrizNS: nsRes.data || [],
-        matrizAux: maRes.data || [],
+        matrizPrecios: mpRes.data || [],
+        aprobaciones: apRes.data || [],
+        calculadoAt,
       });
 
       const { error: delError } = await sb.from("maestro_jornada_mx").delete().eq("fecha", fecha);
@@ -16757,7 +16794,7 @@ function ListadoPagosDiarios() {
       }
 
       setResumenCalculo({
-        viajes_procesados: viajes.length,
+        viajes_procesados: maestro.length,
         registros_calculados: filas.length,
         registros_insertados: insertados,
         errores: errores.length,
@@ -16812,8 +16849,8 @@ function ListadoPagosDiarios() {
     }
 
     // Filtro por estado
-    if (filtroEstado === "pagadas") res = res.filter(p => p.ns_categoria !== "NO_PAGO_NV>10%");
-    else if (filtroEstado === "no_pagadas") res = res.filter(p => p.ns_categoria === "NO_PAGO_NV>10%");
+    if (filtroEstado === "pagadas") res = res.filter(p => p.ns_categoria !== "NO_PAGO_VIS<90%");
+    else if (filtroEstado === "no_pagadas") res = res.filter(p => p.ns_categoria === "NO_PAGO_VIS<90%");
     else if (filtroEstado === "con_alerta") res = res.filter(p => !!p.observaciones);
 
     // Ordenamiento
@@ -16840,8 +16877,9 @@ function ListadoPagosDiarios() {
       ajusteNS: filasFiltradas.reduce((s, p) => s + Number(p.ajuste_ns || 0), 0),
       auxiliar: filasFiltradas.reduce((s, p) => s + Number(p.monto_auxiliar || 0), 0),
       pagoNeto: filasFiltradas.reduce((s, p) => s + Number(p.pago_neto || 0), 0),
-      noPagadas: filasFiltradas.filter(p => p.ns_categoria === "NO_PAGO_NV>10%").length,
+      noPagadas: filasFiltradas.filter(p => p.ns_categoria === "NO_PAGO_VIS<90%").length,
       alertas: filasFiltradas.filter(p => !!p.observaciones).length,
+      noOperadas: filasFiltradas.filter(p => p.ruta_no_operada).length,
     };
   }, [filasFiltradas]);
 
@@ -16857,14 +16895,14 @@ function ListadoPagosDiarios() {
     if (filasFiltradas.length === 0) { alert("No hay datos para exportar"); return; }
     const headers = [
       "Fecha","Chofer","Patente","Vehículo","Tipología","SC","Zona","ID Ruta","Ciclo",
-      "Km","Envíos despachados","Envíos entregados","NS%","No visitado %","Categoría NS",
+      "Km","Envíos despachados","Envíos entregados","NS%","% Visitado","No visitado %","Categoría NS",
       "Tarifa base","Ajuste NS","Estado auxiliar","Snapshots con helper","$ Auxiliar",
       "Pago bruto","Pago neto","Observaciones"
     ];
     const rows = filasFiltradas.map(p => [
       p.fecha, p.driver_name, p.placa, p.vehiculo_raw, p.tipologia, p.service_center_id, p.zona,
       p.id_ruta, p.ciclo, p.km_recorridos, p.envios_despachados, p.envios_entregados,
-      p.ns_pct, p.ns_no_visitado, p.ns_categoria, p.tarifa_base, p.ajuste_ns,
+      p.ns_pct, p.pct_visitado, p.ns_no_visitado, p.ns_categoria, p.tarifa_base, p.ajuste_ns,
       p.auxiliar_estado, p.auxiliar_snapshots_total, p.monto_auxiliar,
       p.pago_bruto, p.pago_neto, (p.observaciones || "").replace(/[\r\n]+/g, " ")
     ]);
@@ -16886,7 +16924,7 @@ function ListadoPagosDiarios() {
     <div className="pg" style={{ maxWidth: 1600 }}>
       <div style={{ marginBottom: 16 }}>
         <div className="sec-title">Listado de Pagos Diarios</div>
-        <div className="sec-sub">Cálculo por ruta · alimenta la app de choferes · fuente maestro_jornada_mx</div>
+        <div className="sec-sub">Cálculo por ruta · fuente Maestro Supervisores (snapshot de cierre) · alimenta la app de choferes</div>
       </div>
 
       {/* Filtros y botones */}
@@ -16924,7 +16962,7 @@ function ListadoPagosDiarios() {
         <div style={{ background: "#ecfdf5", border: "1px solid #a7f3d0", borderRadius: 8, padding: 12, marginBottom: 14, fontSize: 12 }}>
           <div style={{ fontWeight: 600, color: "#065f46", marginBottom: 6 }}>Cálculo completado</div>
           <div style={{ color: "#047857" }}>
-            {resumenCalculo.viajes_procesados} viajes procesados · {resumenCalculo.registros_insertados} registros guardados en maestro_jornada_mx
+            {resumenCalculo.viajes_procesados} rutas procesadas · {resumenCalculo.registros_insertados} registros guardados en maestro_jornada_mx
             {resumenCalculo.errores > 0 && ` · ${resumenCalculo.errores} viajes con error`}
           </div>
           {resumenCalculo.detalle_errores && resumenCalculo.detalle_errores.length > 0 && (
@@ -16937,6 +16975,19 @@ function ListadoPagosDiarios() {
               </div>
             </details>
           )}
+        </div>
+      )}
+
+      {avisoRecalc && (
+        <div style={{ background: "#fff7ed", border: "1px solid #fdba74", borderRadius: 8, padding: 12, marginBottom: 14, fontSize: 12, display: "flex", alignItems: "center", gap: 10 }}>
+          <span style={{ fontSize: 18 }}>⚠️</span>
+          <div style={{ flex: 1, color: "#9a3412" }}>
+            <b>{avisoRecalc}</b> {avisoRecalc === 1 ? "aprobación de helper fue modificada" : "aprobaciones de helper fueron modificadas"} después del último cálculo de este día. Recalculá para reflejar los cambios en el pago.
+          </div>
+          <button onClick={calcularDia} disabled={calculando}
+            style={{ padding: "6px 14px", borderRadius: 4, border: "none", background: "#ea580c", color: "#fff", fontSize: 12, fontWeight: 600, cursor: calculando ? "wait" : "pointer" }}>
+            Recalcular
+          </button>
         </div>
       )}
 
@@ -16970,7 +17021,7 @@ function ListadoPagosDiarios() {
           <div style={{ background: "#fee2e2", border: "1px solid #fca5a5", borderRadius: 6, padding: "12px 14px" }}>
             <div style={{ fontSize: 10, color: "#991b1b", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>Rutas no pagadas</div>
             <div style={{ fontSize: 22, fontWeight: 700, color: "#991b1b", marginTop: 2 }}>{totales.noPagadas}</div>
-            <div style={{ fontSize: 9, color: "#991b1b", marginTop: 2 }}>no_visitado &gt; 10%</div>
+            <div style={{ fontSize: 9, color: "#991b1b", marginTop: 2 }}>visitado &lt; 90%</div>
           </div>
         )}
         {totales.alertas > 0 && (
@@ -16979,14 +17030,21 @@ function ListadoPagosDiarios() {
             <div style={{ fontSize: 22, fontWeight: 700, color: "#92400e", marginTop: 2 }}>{totales.alertas}</div>
           </div>
         )}
+        {totales.noOperadas > 0 && (
+          <div style={{ background: "#f5f3ff", border: "1px solid #c4b5fd", borderRadius: 6, padding: "12px 14px" }}>
+            <div style={{ fontSize: 10, color: "#5b21b6", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>Rutas no operadas</div>
+            <div style={{ fontSize: 22, fontWeight: 700, color: "#5b21b6", marginTop: 2 }}>{totales.noOperadas}</div>
+            <div style={{ fontSize: 9, color: "#5b21b6", marginTop: 2 }}>🚫 revisar antes de pagar</div>
+          </div>
+        )}
       </div>
 
       {/* Filtros de estado */}
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
         {[
           { id: "todas", l: `Todas (${pagos.length})` },
-          { id: "pagadas", l: `Pagadas (${pagos.filter(p => p.ns_categoria !== "NO_PAGO_NV>10%").length})` },
-          { id: "no_pagadas", l: `No pagadas (${pagos.filter(p => p.ns_categoria === "NO_PAGO_NV>10%").length})` },
+          { id: "pagadas", l: `Pagadas (${pagos.filter(p => p.ns_categoria !== "NO_PAGO_VIS<90%").length})` },
+          { id: "no_pagadas", l: `No pagadas (${pagos.filter(p => p.ns_categoria === "NO_PAGO_VIS<90%").length})` },
           { id: "con_alerta", l: `Con alertas (${pagos.filter(p => !!p.observaciones).length})` },
         ].map(({ id, l }) => (
           <button key={id} onClick={() => setFiltroEstado(id)}
@@ -17007,7 +17065,7 @@ function ListadoPagosDiarios() {
         ) : pagos.length === 0 ? (
           <div style={{ padding: 40, textAlign: "center", color: "#94a3b8" }}>
             <div style={{ fontWeight: 600, marginBottom: 6, color: "#475569" }}>Sin pagos calculados para {fecha}</div>
-            <div style={{ fontSize: 11 }}>Apretá "Calcular pagos del día" para procesar viajes y snapshots de esa fecha.</div>
+            <div style={{ fontSize: 11 }}>Apretá "Calcular pagos del día" para procesar el Maestro Supervisores de esa fecha.</div>
           </div>
         ) : filasFiltradas.length === 0 ? (
           <div style={{ padding: 30, textAlign: "center", color: "#94a3b8" }}>Ningún registro coincide con los filtros</div>
@@ -17032,7 +17090,7 @@ function ListadoPagosDiarios() {
             </thead>
             <tbody>
               {filasFiltradas.map((r, i) => {
-                const noPagada = r.ns_categoria === "NO_PAGO_NV>10%";
+                const noPagada = r.ns_categoria === "NO_PAGO_VIS<90%";
                 const tieneAlerta = !!r.observaciones && !noPagada;
                 return (
                   <tr key={r.id || i} style={{ borderBottom: "1px solid #f0f0f0", background: noPagada ? "#fef2f2" : tieneAlerta ? "#fffbeb" : undefined }}>
@@ -17050,8 +17108,9 @@ function ListadoPagosDiarios() {
                     <td style={{ ...tdStyle(), textAlign: "right" }}>{Number(r.km_recorridos || 0).toFixed(1)}</td>
                     <td style={{ ...tdStyle(), textAlign: "right" }}>
                       <div>{fmtPct(r.ns_pct)}</div>
+                      <div style={{ fontSize: 9, color: "#64748b" }}>Vis {r.pct_visitado != null ? fmtPct(r.pct_visitado) : "—"}</div>
                       <div style={{ fontSize: 9, color: noPagada ? "#991b1b" : "#94a3b8", fontWeight: noPagada ? 600 : 400 }}>
-                        {noPagada ? `NV ${r.ns_no_visitado}%` : r.ns_categoria}
+                        {r.ns_categoria}
                       </div>
                     </td>
                     <td style={{ ...tdStyle(), textAlign: "right", textDecoration: noPagada ? "line-through" : undefined, color: noPagada ? "#94a3b8" : undefined }}>
@@ -17126,12 +17185,16 @@ const Th = ({ children, onClick, right, center }) => (
 
 const badgeAux = (estado) => {
   const map = {
-    "OK":                   { bg: "#dcfce7", co: "#166534" },
-    "MID_ROUTE_REVISION":   { bg: "#fef3c7", co: "#92400e" },
-    "MID_ROUTE":            { bg: "#fef3c7", co: "#92400e" },
-    "SOSPECHOSO":           { bg: "#fee2e2", co: "#991b1b" },
-    "NO_AUTORIZADO":        { bg: "#fee2e2", co: "#991b1b" },
-    "SIN_HELPER":           { bg: "#f1f5f9", co: "#64748b" },
+    "APROBADO":              { bg: "#dcfce7", co: "#166534" },
+    "OK":                    { bg: "#dcfce7", co: "#166534" },
+    "MID_ROUTE_REVISION":    { bg: "#fef3c7", co: "#92400e" },
+    "MID_ROUTE":             { bg: "#fef3c7", co: "#92400e" },
+    "SIN_APROBACION":        { bg: "#fef3c7", co: "#92400e" },
+    "BLOQUEADO_ESTRUCTURAL": { bg: "#fee2e2", co: "#991b1b" },
+    "BLOQUEADO_ANALISTA":    { bg: "#fee2e2", co: "#991b1b" },
+    "SOSPECHOSO":            { bg: "#fee2e2", co: "#991b1b" },
+    "NO_AUTORIZADO":         { bg: "#fee2e2", co: "#991b1b" },
+    "SIN_HELPER":            { bg: "#f1f5f9", co: "#64748b" },
   };
   const m = map[estado] || map["SIN_HELPER"];
   return { padding: "2px 6px", borderRadius: 3, fontWeight: 600, background: m.bg, color: m.co };
