@@ -18573,7 +18573,8 @@ function ConfiguracionPagos() {
       </div>
       <div style={{ display: "flex", gap: 6, marginBottom: 16, flexWrap: "wrap" }}>
         {[
-          { id: "tarifario", l: "Tarifario Base" },
+          { id: "tarifario", l: "Tarifario (por pagar)" },
+          { id: "por_cobrar", l: "Por cobrar MELI" },
           { id: "especiales", l: "Tarifas Especiales" },
           { id: "zonas", l: "Mapeo SC ↔ Zonas" },
           { id: "auxiliares", l: "Matriz Auxiliares" },
@@ -18588,10 +18589,107 @@ function ConfiguracionPagos() {
         ))}
       </div>
       {subtab === "tarifario" && <ConfigTarifario />}
+      {subtab === "por_cobrar" && <ConfigPorCobrarMeli />}
       {subtab === "especiales" && <ConfigTarifasEspeciales />}
       {subtab === "zonas" && <ConfigZonas />}
       {subtab === "auxiliares" && <ConfigMatrizAuxiliares />}
       {subtab === "ns" && <ConfigReglasNS />}
+    </div>
+  );
+}
+
+// ─── Config: Tarifas por Cobrar a MELI (editable) ──────────────────────────
+function ConfigPorCobrarMeli() {
+  const [data, setData] = useState([]);
+  const [edits, setEdits] = useState({});
+  const [loading, setLoading] = useState(true);
+  const [guardando, setGuardando] = useState(false);
+  const [msg, setMsg] = useState(null);
+
+  useEffect(() => { cargar(); }, []);
+  const cargar = async () => {
+    setLoading(true);
+    try {
+      const { data: d } = await sb.from("tarifas_cobrar_meli_mx").select("*");
+      setData(d || []);
+      const m = {};
+      for (const r of (d || [])) m[`${r.categoria}|${r.zonificacion}|${r.tramo_km}`] = String(r.tarifa_mxn);
+      setEdits(m);
+    } catch (e) { console.error(e); }
+    setLoading(false);
+  };
+
+  const categorias = ["LARGE VAN", "SMALL VAN", "CAR", "CANCELACION"];
+  const zonas = ["L1", "L2", "L3", "L4"];
+  const tramos = ["0-100", "101-150", "151-200", "201-250", "251+"];
+
+  const setCell = (cat, z, tr, val) => setEdits(prev => ({ ...prev, [`${cat}|${z}|${tr}`]: val }));
+
+  const guardar = async () => {
+    setGuardando(true); setMsg(null);
+    try {
+      const rows = [];
+      for (const cat of categorias) for (const z of zonas) for (const tr of tramos) {
+        const v = edits[`${cat}|${z}|${tr}`];
+        if (v !== undefined && v !== "" && !isNaN(Number(v))) {
+          rows.push({ categoria: cat, zonificacion: z, tramo_km: tr, tarifa_mxn: Number(v), activo: true });
+        }
+      }
+      const { error } = await sb.from("tarifas_cobrar_meli_mx").upsert(rows, { onConflict: "categoria,zonificacion,tramo_km" });
+      if (error) throw error;
+      setMsg({ ok: true, txt: `Guardado: ${rows.length} tarifas por cobrar.` });
+      cargar();
+    } catch (e) {
+      console.error(e);
+      setMsg({ ok: false, txt: "Error al guardar: " + (e.message || e) });
+    }
+    setGuardando(false);
+  };
+
+  if (loading) return <div style={{ textAlign: "center", padding: 40, color: "#94a3b8" }}>Cargando...</div>;
+
+  return (
+    <div>
+      <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: 14, marginBottom: 14, display: "flex", alignItems: "center", gap: 12 }}>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: "#1a3a6b", marginBottom: 4 }}>Tarifas por Cobrar a MELI</div>
+          <div style={{ fontSize: 11, color: "#94a3b8" }}>Lo que MELI nos paga · categoría × zona × tramo km · MXN · editable</div>
+        </div>
+        <button onClick={guardar} disabled={guardando}
+          style={{ padding: "8px 16px", borderRadius: 4, border: "none", background: guardando ? "#94a3b8" : "#16a34a", color: "#fff", fontSize: 12, fontWeight: 600, cursor: guardando ? "wait" : "pointer" }}>
+          {guardando ? "Guardando..." : "Guardar cambios"}
+        </button>
+      </div>
+      {msg && (
+        <div style={{ background: msg.ok ? "#ecfdf5" : "#fef2f2", border: `1px solid ${msg.ok ? "#a7f3d0" : "#fca5a5"}`, color: msg.ok ? "#065f46" : "#991b1b", borderRadius: 6, padding: 10, marginBottom: 14, fontSize: 12 }}>{msg.txt}</div>
+      )}
+      <div style={{ fontSize: 11, color: "#94a3b8", marginBottom: 10 }}>Dejá una celda vacía si esa combinación no aplica (ej. CAR solo opera 0-100).</div>
+      {zonas.map(z => (
+        <div key={z} style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: 14, marginBottom: 14 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#1a3a6b", marginBottom: 10 }}>Zona {z}</div>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+            <thead>
+              <tr style={{ background: "#f8fafc", borderBottom: "1px solid #e4e7ec" }}>
+                <th style={{ padding: "6px 10px", textAlign: "left", fontSize: 10, color: "#64748b", fontWeight: 600 }}>Categoría</th>
+                {tramos.map(tr => <th key={tr} style={{ padding: "6px 10px", textAlign: "right", fontSize: 10, color: "#64748b", fontWeight: 600 }}>{tr} km</th>)}
+              </tr>
+            </thead>
+            <tbody>
+              {categorias.map(cat => (
+                <tr key={cat} style={{ borderBottom: "1px solid #f0f0f0" }}>
+                  <td style={{ padding: "6px 10px", fontWeight: 600 }}>{cat}</td>
+                  {tramos.map(tr => (
+                    <td key={tr} style={{ padding: "4px 6px", textAlign: "right" }}>
+                      <input type="number" value={edits[`${cat}|${z}|${tr}`] ?? ""} onChange={e => setCell(cat, z, tr, e.target.value)}
+                        style={{ width: 74, textAlign: "right", border: "1px solid #e4e7ec", borderRadius: 4, padding: "4px 6px", fontSize: 12 }} />
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ))}
     </div>
   );
 }
