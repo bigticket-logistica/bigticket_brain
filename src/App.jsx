@@ -18588,12 +18588,119 @@ function ConfiguracionPagos() {
           </button>
         ))}
       </div>
-      {subtab === "tarifario" && <ConfigTarifario />}
+      {subtab === "tarifario" && <ConfigPorPagar />}
       {subtab === "por_cobrar" && <ConfigPorCobrarMeli />}
       {subtab === "especiales" && <ConfigTarifasEspeciales />}
       {subtab === "zonas" && <ConfigZonas />}
       {subtab === "auxiliares" && <ConfigMatrizAuxiliares />}
       {subtab === "ns" && <ConfigReglasNS />}
+    </div>
+  );
+}
+
+// ─── Config: Tarifario por Pagar (editable, tabla viva matriz_precios) ──────
+function ConfigPorPagar() {
+  const [data, setData] = useState([]);
+  const [edits, setEdits] = useState({});
+  const [orig, setOrig] = useState({});
+  const [loading, setLoading] = useState(true);
+  const [guardando, setGuardando] = useState(false);
+  const [msg, setMsg] = useState(null);
+
+  const tramos = ["0-100", "101-150", "151-200", "201-250", "251+"];
+  const categorias = Array.from(new Set(["LARGE VAN", "SMALL VAN", "CAR", ...data.map(d => d.tipo_vehiculo)].filter(Boolean)));
+  const zonas = Array.from(new Set(["L1", "L2", "L3", "L4", ...data.map(d => d.zonificacion)].filter(Boolean)));
+
+  useEffect(() => { cargar(); }, []);
+  const cargar = async () => {
+    setLoading(true);
+    try {
+      const { data: d } = await sb.from("matriz_precios").select("*");
+      setData(d || []);
+      const m = {};
+      for (const r of (d || [])) m[`${r.tipo_vehiculo}|${r.zonificacion}|${r.tramo_km}`] = String(r.tarifa_mxn);
+      setEdits(m); setOrig(m);
+    } catch (e) { console.error(e); }
+    setLoading(false);
+  };
+
+  const setCell = (cat, z, tr, val) => setEdits(prev => ({ ...prev, [`${cat}|${z}|${tr}`]: val }));
+
+  const guardar = async () => {
+    setGuardando(true); setMsg(null);
+    try {
+      let updates = 0, inserts = 0;
+      for (const cat of categorias) for (const z of zonas) for (const tr of tramos) {
+        const k = `${cat}|${z}|${tr}`;
+        const v = edits[k];
+        if (v === undefined || v === "" || isNaN(Number(v))) continue;
+        const num = Number(v);
+        if (orig[k] !== undefined) {
+          if (String(num) !== orig[k]) {
+            const { error } = await sb.from("matriz_precios").update({ tarifa_mxn: num })
+              .eq("tipo_vehiculo", cat).eq("zonificacion", z).eq("tramo_km", tr);
+            if (error) throw error;
+            updates++;
+          }
+        } else {
+          const { error } = await sb.from("matriz_precios")
+            .insert({ tipo_vehiculo: cat, zonificacion: z, tramo_km: tr, tarifa_mxn: num, activo: true });
+          if (error) throw error;
+          inserts++;
+        }
+      }
+      setMsg({ ok: true, txt: `Guardado: ${updates} actualizadas, ${inserts} nuevas.` });
+      cargar();
+    } catch (e) {
+      console.error(e);
+      setMsg({ ok: false, txt: "Error al guardar: " + (e.message || e) });
+    }
+    setGuardando(false);
+  };
+
+  if (loading) return <div style={{ textAlign: "center", padding: 40, color: "#94a3b8" }}>Cargando...</div>;
+
+  return (
+    <div>
+      <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: 14, marginBottom: 14, display: "flex", alignItems: "center", gap: 12 }}>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: "#1a3a6b", marginBottom: 4 }}>Tarifario por Pagar (costo)</div>
+          <div style={{ fontSize: 11, color: "#94a3b8" }}>Lo que le pagamos al chofer · tabla viva matriz_precios · MXN · editable</div>
+        </div>
+        <button onClick={guardar} disabled={guardando}
+          style={{ padding: "8px 16px", borderRadius: 4, border: "none", background: guardando ? "#94a3b8" : "#16a34a", color: "#fff", fontSize: 12, fontWeight: 600, cursor: guardando ? "wait" : "pointer" }}>
+          {guardando ? "Guardando..." : "Guardar cambios"}
+        </button>
+      </div>
+      {msg && (
+        <div style={{ background: msg.ok ? "#ecfdf5" : "#fef2f2", border: `1px solid ${msg.ok ? "#a7f3d0" : "#fca5a5"}`, color: msg.ok ? "#065f46" : "#991b1b", borderRadius: 6, padding: 10, marginBottom: 14, fontSize: 12 }}>{msg.txt}</div>
+      )}
+      {zonas.map(z => (
+        <div key={z} style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: 14, marginBottom: 14 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#1a3a6b", marginBottom: 10 }}>Zona {z}</div>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+            <thead>
+              <tr style={{ background: "#f8fafc", borderBottom: "1px solid #e4e7ec" }}>
+                <th style={{ padding: "6px 10px", textAlign: "left", fontSize: 10, color: "#64748b", fontWeight: 600 }}>Categoría</th>
+                {tramos.map(tr => <th key={tr} style={{ padding: "6px 10px", textAlign: "right", fontSize: 10, color: "#64748b", fontWeight: 600 }}>{tr} km</th>)}
+              </tr>
+            </thead>
+            <tbody>
+              {categorias.map(cat => (
+                <tr key={cat} style={{ borderBottom: "1px solid #f0f0f0" }}>
+                  <td style={{ padding: "6px 10px", fontWeight: 600 }}>{cat}</td>
+                  {tramos.map(tr => (
+                    <td key={tr} style={{ padding: "4px 6px", textAlign: "right" }}>
+                      <input type="number" value={edits[`${cat}|${z}|${tr}`] ?? ""} onChange={e => setCell(cat, z, tr, e.target.value)}
+                        style={{ width: 74, textAlign: "right", border: "1px solid #e4e7ec", borderRadius: 4, padding: "4px 6px", fontSize: 12 }} />
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ))}
     </div>
   );
 }
