@@ -15732,7 +15732,7 @@ function PatentesNuevasSC({ scId, decididoPor }) {
           .select("id_ruta, placa, driver_name, hora_snapshot")
           .eq("service_center_id", scId).eq("fecha", fecha)
           .order("hora_snapshot", { ascending: false }),
-        sb.from("flota_vehiculos_bt")
+        sb.from("vw_flota_panel")
           .select("placa, activo")
           .eq("service_center_id", scId).eq("activo", true),
       ]);
