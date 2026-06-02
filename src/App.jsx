@@ -15530,14 +15530,18 @@ function TorreTresPilares() {
 // ── Torre de Control del SC (resumen + detalle ruta por ruta del D-1) ────────
 const BUCKETS_LABELS = {
   "1_OK": "OK",
-  "2_RF1_VENCIDO": "RF1 vencido",
+  "2A_RF1_VENCIDO": "RF1 vencido",
+  "2B_RF1_EVITADO": "RF1 evitado",
   "3_RF2_NO_SHOW": "RF2 No Show",
-  "4_CANCEL_MELI": "Cancel MELI",
-  "5_CAMBIO_PLACA": "Cambio placa",
-  "6_PARCIAL": "Parcial",
-  "7_PENDING_ROST": "Pending Rost",
-  "8_REJECTED_SDD": "Rech SDD",
-  "9_REJECTED_SPOT": "Rech SPOT",
+  "5_CANCEL_MELI_POST_ASIGNACION": "Cancel MELI",
+  "4_CANCEL_MELI_PRE_ASIGNACION": "Cancel MELI pre",
+  "6_CAMBIO_PLACA": "Cambio placa",
+  "7_PARCIAL": "Parcial",
+  "8_PENDING_ROSTEREADO": "Pending Rost",
+  "9_REJECTED_LIMPIO": "Rechazado",
+  "10_PENDING_SIN_RESPUESTA": "Pending sin respuesta",
+  "97_FALTA_SCRAPER_PM": "Falta scraper PM",
+  "99_OTRO": "Otro",
 };
 function colorBucket(bucket) {
   if (!bucket) return "#64748b";
@@ -15587,24 +15591,29 @@ function TorreControlSC({ scId, fecha }) {
     </div>
   );
 
-  // Cada chip mapea a uno o más buckets (para filtrar el detalle al clickear)
+  // Cada chip mapea a uno o más buckets reales (para filtrar el detalle al clickear)
   const chips = resumen ? [
     { id: "ok",        label: "OK",            val: resumen.ok,                          color: "#047857", buckets: ["1_OK"] },
-    { id: "rf1",       label: "RF1 venc",      val: resumen.rf1_vencido || 0,            color: "#b91c1c", buckets: ["2_RF1_VENCIDO"] },
+    { id: "rf1",       label: "RF1 venc",      val: resumen.rf1_vencido || 0,            color: "#b91c1c", buckets: ["2A_RF1_VENCIDO"] },
     { id: "rf2",       label: "RF2 NoShow",    val: resumen.rf2,                         color: "#b91c1c", buckets: ["3_RF2_NO_SHOW"] },
-    { id: "cancel",    label: "Cancel MELI",   val: resumen.cancel_meli,                 color: "#b45309", buckets: ["4_CANCEL_MELI"] },
-    { id: "cambio",    label: "Cambio placa",  val: resumen.cambio_placa || 0,           color: "#7c2d12", buckets: ["5_CAMBIO_PLACA"] },
-    { id: "parcial",   label: "Parcial",       val: resumen.parcial || 0,                color: "#7c2d12", buckets: ["6_PARCIAL"] },
-    { id: "pending",   label: "Pending Rost",  val: resumen.pending_rost,                color: "#9333ea", buckets: ["7_PENDING_ROST"] },
-    { id: "rechazado", label: "Rechazado",     val: (resumen.rejected_sdd || 0) + (resumen.rejected_spot || 0), color: "#475569", buckets: ["8_REJECTED_SDD", "9_REJECTED_SPOT"] },
-    { id: "intradia",  label: "Cambios intradía", val: resumen.cambios_intradia || 0,    color: "#0891b2", buckets: null }, // métrica aparte, no filtra
+    { id: "cancel",    label: "Cancel MELI",   val: resumen.cancel_meli,                 color: "#b45309", buckets: ["5_CANCEL_MELI_POST_ASIGNACION"] },
+    { id: "cambio",    label: "Cambio placa",  val: resumen.cambio_placa || 0,           color: "#7c2d12", buckets: ["6_CAMBIO_PLACA"] },
+    { id: "parcial",   label: "Parcial",       val: resumen.parcial || 0,                color: "#7c2d12", buckets: ["7_PARCIAL"] },
+    { id: "pending",   label: "Pending Rost",  val: resumen.pending_rost,                color: "#9333ea", buckets: ["8_PENDING_ROSTEREADO"] },
+    { id: "rechazado", label: "Rechazado",     val: (resumen.rejected_sdd || 0) + (resumen.rejected_spot || 0), color: "#475569", buckets: ["9_REJECTED_LIMPIO"] },
+    { id: "intradia",  label: "Cambios intradía", val: resumen.cambios_intradia || 0,    color: "#0891b2", buckets: null, esIntradia: true },
   ] : [];
 
   // Filas filtradas según el chip seleccionado
   const chipActivo = chips.find((c) => c.id === bucketSel);
-  const filasMostrar = (chipActivo && chipActivo.buckets)
-    ? filas.filter((f) => chipActivo.buckets.includes(f.bucket))
-    : filas;
+  let filasMostrar = filas;
+  if (chipActivo) {
+    if (chipActivo.esIntradia) {
+      filasMostrar = filas.filter((f) => f.cambio_intradia && String(f.cambio_intradia).trim() !== "");
+    } else if (chipActivo.buckets) {
+      filasMostrar = filas.filter((f) => chipActivo.buckets.includes(f.bucket));
+    }
+  }
 
   return (
     <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid #e5e7eb" }}>
@@ -15622,7 +15631,7 @@ function TorreControlSC({ scId, fecha }) {
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
             {chips.map((c) => {
               const sel = bucketSel === c.id;
-              const clickable = c.buckets && c.val > 0;
+              const clickable = (c.buckets || c.esIntradia) && c.val > 0;
               return (
                 <span key={c.id}
                   onClick={() => { if (clickable) setBucketSel(sel ? null : c.id); }}
@@ -15648,7 +15657,7 @@ function TorreControlSC({ scId, fecha }) {
 
           {/* Detalle ruta por ruta (filtrado por chip) */}
           <div style={{ fontSize: 10, color: "#9ca3af", marginBottom: 4 }}>
-            {chipActivo && chipActivo.buckets ? `Mostrando: ${chipActivo.label} (${filasMostrar.length})` : `Todas las rutas (${filasMostrar.length})`}
+            {chipActivo ? `Mostrando: ${chipActivo.label} (${filasMostrar.length})` : `Todas las rutas (${filasMostrar.length})`}
           </div>
           <div style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 10 }}>
