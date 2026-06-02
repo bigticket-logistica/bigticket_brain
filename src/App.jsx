@@ -15591,18 +15591,23 @@ function TorreControlSC({ scId, fecha }) {
     </div>
   );
 
+  // Conteo real por bucket desde las filas (más confiable que el resumen)
+  const cuentaBucket = (bucketsArr) => filas.filter((f) => bucketsArr.includes(f.bucket)).length;
+  const cuentaIntradia = filas.filter((f) => f.cambio_intradia && String(f.cambio_intradia).trim() !== "").length;
+
   // Cada chip mapea a uno o más buckets reales (para filtrar el detalle al clickear)
-  const chips = resumen ? [
-    { id: "ok",        label: "OK",            val: resumen.ok,                          color: "#047857", buckets: ["1_OK"] },
-    { id: "rf1",       label: "RF1 venc",      val: resumen.rf1_vencido || 0,            color: "#b91c1c", buckets: ["2A_RF1_VENCIDO"] },
-    { id: "rf2",       label: "RF2 NoShow",    val: resumen.rf2,                         color: "#b91c1c", buckets: ["3_RF2_NO_SHOW"] },
-    { id: "cancel",    label: "Cancel MELI",   val: resumen.cancel_meli,                 color: "#b45309", buckets: ["5_CANCEL_MELI_POST_ASIGNACION"] },
-    { id: "cambio",    label: "Cambio placa",  val: resumen.cambio_placa || 0,           color: "#7c2d12", buckets: ["6_CAMBIO_PLACA"] },
-    { id: "parcial",   label: "Parcial",       val: resumen.parcial || 0,                color: "#7c2d12", buckets: ["7_PARCIAL"] },
-    { id: "pending",   label: "Pending Rost",  val: resumen.pending_rost,                color: "#9333ea", buckets: ["8_PENDING_ROSTEREADO"] },
-    { id: "rechazado", label: "Rechazado",     val: (resumen.rejected_sdd || 0) + (resumen.rejected_spot || 0), color: "#475569", buckets: ["9_REJECTED_LIMPIO"] },
-    { id: "intradia",  label: "Cambios intradía", val: resumen.cambios_intradia || 0,    color: "#0891b2", buckets: null, esIntradia: true },
-  ] : [];
+  const chips = filas.length > 0 ? [
+    { id: "ok",        label: "OK",            color: "#047857", buckets: ["1_OK"] },
+    { id: "rf1",       label: "RF1 venc",      color: "#b91c1c", buckets: ["2A_RF1_VENCIDO"] },
+    { id: "rf1ev",     label: "RF1 evitado",   color: "#047857", buckets: ["2B_RF1_EVITADO"] },
+    { id: "rf2",       label: "RF2 NoShow",    color: "#b91c1c", buckets: ["3_RF2_NO_SHOW"] },
+    { id: "cancel",    label: "Cancel MELI",   color: "#b45309", buckets: ["4_CANCEL_MELI_PRE_ASIGNACION", "5_CANCEL_MELI_POST_ASIGNACION"] },
+    { id: "cambio",    label: "Cambio placa",  color: "#7c2d12", buckets: ["6_CAMBIO_PLACA"] },
+    { id: "parcial",   label: "Parcial",       color: "#7c2d12", buckets: ["7_PARCIAL"] },
+    { id: "pending",   label: "Pending Rost",  color: "#9333ea", buckets: ["8_PENDING_ROSTEREADO"] },
+    { id: "rechazado", label: "Rechazado",     color: "#475569", buckets: ["9_REJECTED_LIMPIO"] },
+    { id: "intradia",  label: "Cambios intradía", color: "#0891b2", buckets: null, esIntradia: true },
+  ].map((c) => ({ ...c, val: c.esIntradia ? cuentaIntradia : cuentaBucket(c.buckets) })) : [];
 
   // Filas filtradas según el chip seleccionado
   const chipActivo = chips.find((c) => c.id === bucketSel);
@@ -15622,7 +15627,7 @@ function TorreControlSC({ scId, fecha }) {
         style={{ display: "flex", alignItems: "center", gap: 8, background: "none", border: "none", cursor: "pointer", padding: 0, fontSize: 12, fontWeight: 700, color: "#374151" }}>
         <span>{abierto ? "▼" : "▶"}</span>
         📊 Torre de Control · {scId}
-        {resumen && <span style={{ fontSize: 10, fontWeight: 600, color: "#9ca3af" }}>({resumen.total} rutas)</span>}
+        {filas.length > 0 && <span style={{ fontSize: 10, fontWeight: 600, color: "#9ca3af" }}>({filas.length} rutas)</span>}
       </button>
 
       {abierto && (
@@ -15646,13 +15651,11 @@ function TorreControlSC({ scId, fecha }) {
                 </span>
               );
             })}
-            {resumen && (
-              <span onClick={() => setBucketSel(null)}
-                style={{ fontSize: 11, padding: "3px 9px", borderRadius: 5, fontWeight: 700, background: bucketSel ? "#e5e7eb" : "#1a3a6b", color: bucketSel ? "#374151" : "#fff", cursor: "pointer" }}
-                title="Ver todas">
-                Total: {resumen.total}
-              </span>
-            )}
+            <span onClick={() => setBucketSel(null)}
+              style={{ fontSize: 11, padding: "3px 9px", borderRadius: 5, fontWeight: 700, background: bucketSel ? "#e5e7eb" : "#1a3a6b", color: bucketSel ? "#374151" : "#fff", cursor: "pointer" }}
+              title="Ver todas">
+              Total: {filas.length}
+            </span>
           </div>
 
           {/* Detalle ruta por ruta (filtrado por chip) */}
