@@ -16853,6 +16853,7 @@ function ListadoPagosDiarios() {
     if (filtroEstado === "pagadas") res = res.filter(p => p.ns_categoria !== "NO_PAGO_VIS<90%");
     else if (filtroEstado === "no_pagadas") res = res.filter(p => p.ns_categoria === "NO_PAGO_VIS<90%");
     else if (filtroEstado === "con_alerta") res = res.filter(p => !!p.observaciones);
+    else if (filtroEstado === "no_operadas") res = res.filter(p => p.ruta_no_operada);
 
     // Ordenamiento
     res.sort((a, b) => {
@@ -16881,6 +16882,12 @@ function ListadoPagosDiarios() {
       noPagadas: filasFiltradas.filter(p => p.ns_categoria === "NO_PAGO_VIS<90%").length,
       alertas: filasFiltradas.filter(p => !!p.observaciones).length,
       noOperadas: filasFiltradas.filter(p => p.ruta_no_operada).length,
+      pagoMeli: filasFiltradas.reduce((s, p) => s + Number(p.pago_meli || 0), 0),
+      margenPct: (() => {
+        const pm = filasFiltradas.reduce((s, p) => s + Number(p.pago_meli || 0), 0);
+        const pn = filasFiltradas.reduce((s, p) => s + Number(p.pago_neto || 0), 0);
+        return pm > 0 ? ((pm - pn) / pm * 100) : null;
+      })(),
     };
   }, [filasFiltradas]);
 
@@ -17077,13 +17084,11 @@ function ListadoPagosDiarios() {
             <div style={{ fontSize: 22, fontWeight: 700, color: "#92400e", marginTop: 2 }}>{totales.alertas}</div>
           </div>
         )}
-        {totales.noOperadas > 0 && (
-          <div style={{ background: "#f5f3ff", border: "1px solid #c4b5fd", borderRadius: 6, padding: "12px 14px" }}>
-            <div style={{ fontSize: 10, color: "#5b21b6", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>Rutas no operadas</div>
-            <div style={{ fontSize: 22, fontWeight: 700, color: "#5b21b6", marginTop: 2 }}>{totales.noOperadas}</div>
-            <div style={{ fontSize: 9, color: "#5b21b6", marginTop: 2 }}>🚫 revisar antes de pagar</div>
-          </div>
-        )}
+        <div style={{ background: "#f5f3ff", border: "1px solid #c4b5fd", borderRadius: 6, padding: "12px 14px" }}>
+          <div style={{ fontSize: 10, color: "#5b21b6", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>Rutas sin movimiento</div>
+          <div style={{ fontSize: 22, fontWeight: 700, color: "#5b21b6", marginTop: 2 }}>{totales.noOperadas}</div>
+          <div style={{ fontSize: 9, color: "#5b21b6", marginTop: 2 }}>🚫 no operadas · revisar</div>
+        </div>
       </div>
 
       {/* Filtros de estado */}
@@ -17093,6 +17098,7 @@ function ListadoPagosDiarios() {
           { id: "pagadas", l: `Pagadas (${pagos.filter(p => p.ns_categoria !== "NO_PAGO_VIS<90%").length})` },
           { id: "no_pagadas", l: `No pagadas (${pagos.filter(p => p.ns_categoria === "NO_PAGO_VIS<90%").length})` },
           { id: "con_alerta", l: `Con alertas (${pagos.filter(p => !!p.observaciones).length})` },
+          { id: "no_operadas", l: `Sin movimiento (${pagos.filter(p => p.ruta_no_operada).length})` },
         ].map(({ id, l }) => (
           <button key={id} onClick={() => setFiltroEstado(id)}
             style={{ padding: "5px 12px", borderRadius: 4,
@@ -17132,13 +17138,16 @@ function ListadoPagosDiarios() {
                 <Th onClick={() => toggleOrder("auxiliar_estado")} center>Aux{ordIcon("auxiliar_estado")}</Th>
                 <Th onClick={() => toggleOrder("monto_auxiliar")} right>$Aux{ordIcon("monto_auxiliar")}</Th>
                 <Th onClick={() => toggleOrder("pago_neto")} right>Pago neto{ordIcon("pago_neto")}</Th>
-                <Th>Obs</Th>
+                <Th right>Pago MELI</Th>
+                <Th right>% Margen</Th>
               </tr>
             </thead>
             <tbody>
               {filasFiltradas.map((r, i) => {
                 const noPagada = r.ns_categoria === "NO_PAGO_VIS<90%";
                 const tieneAlerta = !!r.observaciones && !noPagada;
+                const pagoMeli = r.pago_meli != null ? Number(r.pago_meli) : null;
+                const margenPct = (pagoMeli != null && pagoMeli > 0) ? ((pagoMeli - Number(r.pago_neto)) / pagoMeli * 100) : null;
                 return (
                   <tr key={r.id || i} style={{ borderBottom: "1px solid #f0f0f0", background: noPagada ? "#fef2f2" : tieneAlerta ? "#fffbeb" : undefined }}>
                     <td style={tdStyle(true)}>{r.driver_name || "—"}</td>
@@ -17176,8 +17185,11 @@ function ListadoPagosDiarios() {
                     <td style={{ ...tdStyle(), textAlign: "right", fontWeight: 700, color: noPagada ? "#991b1b" : "#16a34a", fontSize: 12 }}>
                       {noPagada ? "$0" : fmtMXN(r.pago_neto)}
                     </td>
-                    <td style={{ ...tdStyle(), fontSize: 10, color: noPagada ? "#991b1b" : "#92400e", fontWeight: noPagada ? 600 : 400, maxWidth: 220 }}>
-                      {r.observaciones || ""}
+                    <td style={{ ...tdStyle(), textAlign: "right", color: "#475569" }}>
+                      {pagoMeli != null ? fmtMXN(pagoMeli) : "—"}
+                    </td>
+                    <td style={{ ...tdStyle(), textAlign: "right", fontWeight: 600, color: margenPct == null ? "#94a3b8" : (margenPct >= 0 ? "#16a34a" : "#dc2626") }}>
+                      {margenPct != null ? `${margenPct.toFixed(1)}%` : "—"}
                     </td>
                   </tr>
                 );
@@ -17195,7 +17207,8 @@ function ListadoPagosDiarios() {
                   <td style={tdStyle()}></td>
                   <td style={{ ...tdStyle(), textAlign: "right", color: "#1a3a6b" }}>{fmtMXN(totales.auxiliar)}</td>
                   <td style={{ ...tdStyle(), textAlign: "right", color: "#16a34a", fontSize: 13 }}>{fmtMXN(totales.pagoNeto)}</td>
-                  <td style={tdStyle()}></td>
+                  <td style={{ ...tdStyle(), textAlign: "right", color: "#1a3a6b" }}>{totales.pagoMeli > 0 ? fmtMXN(totales.pagoMeli) : "—"}</td>
+                  <td style={{ ...tdStyle(), textAlign: "right", color: "#1a3a6b" }}>{totales.margenPct != null ? `${totales.margenPct.toFixed(1)}%` : "—"}</td>
                 </tr>
               )}
             </tbody>
