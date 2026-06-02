@@ -15527,6 +15527,201 @@ function TorreTresPilares() {
 // ── Subcomponente: rutas con helper del SC/fecha + aprobar/rechazar ──────────
 // El jefe aprueba o rechaza cada helper. La decisión se guarda en
 // aprobaciones_helper y luego el sistema de pagos la cruza por SC+fecha+travel_id.
+// ── Torre de Control del SC (resumen + detalle ruta por ruta del D-1) ────────
+const BUCKETS_LABELS = {
+  "1_OK": "OK",
+  "2_RF1_VENCIDO": "RF1 vencido",
+  "3_RF2_NO_SHOW": "RF2 No Show",
+  "4_CANCEL_MELI": "Cancel MELI",
+  "5_CAMBIO_PLACA": "Cambio placa",
+  "6_PARCIAL": "Parcial",
+  "7_PENDING_ROST": "Pending Rost",
+  "8_REJECTED_SDD": "Rech SDD",
+  "9_REJECTED_SPOT": "Rech SPOT",
+};
+function colorBucket(bucket) {
+  if (!bucket) return "#64748b";
+  if (bucket.includes("OK")) return "#047857";
+  if (bucket.includes("NO_SHOW") || bucket.includes("RF2")) return "#b91c1c";
+  if (bucket.includes("CANCEL")) return "#b45309";
+  if (bucket.includes("CAMBIO") || bucket.includes("PARCIAL")) return "#7c2d12";
+  if (bucket.includes("PENDING")) return "#9333ea";
+  if (bucket.includes("REJECTED")) return "#475569";
+  return "#64748b";
+}
+
+function TorreControlSC({ scId, fecha }) {
+  const [resumen, setResumen] = useState(null);
+  const [filas, setFilas] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [verDetalle, setVerDetalle] = useState(false);
+
+  useEffect(() => {
+    let cancel = false;
+    (async () => {
+      setLoading(true);
+      try {
+        const [resR, filR] = await Promise.all([
+          sb.rpc("get_torre_resumen", { fecha_desde: fecha, fecha_hasta: fecha }),
+          sb.rpc("get_torre_3_pilares", { fecha_desde: fecha, fecha_hasta: fecha, sc_filtro: scId }),
+        ]);
+        if (cancel) return;
+        const porSc = (resR.data?.por_sc || []).find((x) => x.sc === scId) || null;
+        setResumen(porSc);
+        setFilas(filR.data || []);
+      } catch (e) {
+        console.error("Error torre SC:", e);
+      } finally {
+        if (!cancel) setLoading(false);
+      }
+    })();
+    return () => { cancel = true; };
+  }, [scId, fecha]);
+
+  if (loading) return <div style={{ fontSize: 12, color: "#9ca3af", padding: 8 }}>Cargando torre de control…</div>;
+  if (!resumen && filas.length === 0) return <div style={{ fontSize: 12, color: "#9ca3af", padding: 8 }}>Sin datos de torre para este día.</div>;
+
+  const chips = resumen ? [
+    { label: "OK", val: resumen.ok, color: "#047857" },
+    { label: "RF1 venc", val: resumen.rf1_vencido || 0, color: "#b91c1c" },
+    { label: "RF2 NoShow", val: resumen.rf2, color: "#b91c1c" },
+    { label: "Cancel MELI", val: resumen.cancel_meli, color: "#b45309" },
+    { label: "Cambio placa", val: resumen.cambio_placa || 0, color: "#7c2d12" },
+    { label: "Parcial", val: resumen.parcial || 0, color: "#7c2d12" },
+    { label: "Pending Rost", val: resumen.pending_rost, color: "#9333ea" },
+    { label: "Cambios intradía", val: resumen.cambios_intradia || 0, color: "#0891b2" },
+  ] : [];
+
+  return (
+    <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid #e5e7eb" }}>
+      <div style={{ fontSize: 12, fontWeight: 700, color: "#374151", marginBottom: 8 }}>
+        📊 Torre de Control · {scId} ({fecha})
+      </div>
+      {/* Resumen en chips */}
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
+        {chips.map((c) => (
+          <span key={c.label} style={{
+            fontSize: 11, padding: "3px 9px", borderRadius: 5, fontWeight: 700,
+            background: c.val > 0 ? "#fff" : "#f8fafc",
+            color: c.val > 0 ? c.color : "#cbd5e1",
+            border: `1px solid ${c.val > 0 ? c.color + "44" : "#e5e7eb"}`,
+          }}>
+            {c.label}: {c.val}
+          </span>
+        ))}
+        {resumen && (
+          <span style={{ fontSize: 11, padding: "3px 9px", borderRadius: 5, fontWeight: 700, background: "#1a3a6b", color: "#fff" }}>
+            Total: {resumen.total}
+          </span>
+        )}
+      </div>
+      {/* Toggle detalle ruta por ruta */}
+      <button onClick={() => setVerDetalle((v) => !v)}
+        style={{ fontSize: 11, color: "#1e3a5f", background: "none", border: "none", cursor: "pointer", fontWeight: 600, padding: 0 }}>
+        {verDetalle ? "▲ ocultar detalle" : `▼ ver detalle ruta por ruta (${filas.length})`}
+      </button>
+      {verDetalle && (
+        <div style={{ marginTop: 8, overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 10 }}>
+            <thead>
+              <tr style={{ background: "#f8fafc", borderBottom: "1px solid #e5e7eb" }}>
+                <th style={{ padding: "5px 6px", textAlign: "left" }}>Ruta</th>
+                <th style={{ padding: "5px 6px", textAlign: "left" }}>Estado</th>
+                <th style={{ padding: "5px 6px", textAlign: "left" }}>Chofer</th>
+                <th style={{ padding: "5px 6px", textAlign: "left" }}>Placa</th>
+                <th style={{ padding: "5px 6px", textAlign: "center" }}>Carg.</th>
+                <th style={{ padding: "5px 6px", textAlign: "center" }}>Entr.</th>
+                <th style={{ padding: "5px 6px", textAlign: "center" }}>%</th>
+                <th style={{ padding: "5px 6px", textAlign: "left" }}>Cambio intradía</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filas.map((f, i) => (
+                <tr key={i} style={{ borderBottom: "0.5px solid #f1f5f9" }}>
+                  <td style={{ padding: "4px 6px", fontFamily: "monospace" }}>{f.travel_id}</td>
+                  <td style={{ padding: "4px 6px", fontWeight: 700, color: colorBucket(f.bucket) }}>
+                    {BUCKETS_LABELS[f.bucket] || f.bucket}
+                  </td>
+                  <td style={{ padding: "4px 6px" }}>{f.driver_name || "—"}</td>
+                  <td style={{ padding: "4px 6px", fontFamily: "monospace" }}>{f.vehicle_plate || "—"}</td>
+                  <td style={{ padding: "4px 6px", textAlign: "center" }}>{f.total_cargados || 0}</td>
+                  <td style={{ padding: "4px 6px", textAlign: "center" }}>{f.total_entregados || 0}</td>
+                  <td style={{ padding: "4px 6px", textAlign: "center" }}>{f.pct_entregado != null ? f.pct_entregado + "%" : "—"}</td>
+                  <td style={{ padding: "4px 6px", color: f.cambio_intradia ? "#0891b2" : "#cbd5e1" }}>{f.cambio_intradia || "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Ambulancias del SC (del D-1) ─────────────────────────────────────────────
+function AmbulanciasSC({ scId, fecha }) {
+  const [ambulancias, setAmbulancias] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancel = false;
+    (async () => {
+      setLoading(true);
+      try {
+        const { data } = await sb.from("vw_ambulancias_diario")
+          .select("ruta_origen, driver_origen, patente_origen, ruta_destino, driver_destino, patente_destino, paquetes_traspasados, patron, hora_inicio_mx, hora_fin_mx, ciudades, receptor_conocido")
+          .eq("service_center_id", scId).eq("fecha", fecha);
+        if (cancel) return;
+        setAmbulancias(data || []);
+      } catch (e) {
+        console.error("Error ambulancias SC:", e);
+      } finally {
+        if (!cancel) setLoading(false);
+      }
+    })();
+    return () => { cancel = true; };
+  }, [scId, fecha]);
+
+  if (loading) return <div style={{ fontSize: 12, color: "#9ca3af", padding: 8 }}>Cargando ambulancias…</div>;
+  if (ambulancias.length === 0) return (
+    <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid #e5e7eb" }}>
+      <div style={{ fontSize: 12, fontWeight: 700, color: "#374151", marginBottom: 6 }}>🚑 Ambulancias ({fecha})</div>
+      <div style={{ fontSize: 12, color: "#9ca3af" }}>Sin ambulancias registradas este día.</div>
+    </div>
+  );
+
+  return (
+    <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid #e5e7eb" }}>
+      <div style={{ fontSize: 12, fontWeight: 700, color: "#374151", marginBottom: 8 }}>
+        🚑 Ambulancias · {scId} ({ambulancias.length})
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        {ambulancias.map((a, i) => (
+          <div key={i} style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 6, padding: 9, fontSize: 11 }}>
+            <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginBottom: 3 }}>
+              <span style={{ fontSize: 9, background: "#fee2e2", color: "#b91c1c", padding: "1px 6px", borderRadius: 3, fontWeight: 700 }}>{a.patron || "rescate"}</span>
+              <span style={{ fontWeight: 700, color: "#374151" }}>{a.paquetes_traspasados || 0} paquetes traspasados</span>
+              {a.ciudades && <span style={{ color: "#9ca3af" }}>· {a.ciudades}</span>}
+            </div>
+            <div style={{ color: "#4b5563" }}>
+              <strong>Origen:</strong> {a.driver_origen || "—"} ({a.patente_origen || "—"}) · ruta {a.ruta_origen || "—"}
+            </div>
+            <div style={{ color: "#4b5563" }}>
+              <strong>Destino:</strong> {a.driver_destino || "—"} ({a.patente_destino || "—"}) · ruta {a.ruta_destino || "—"}
+            </div>
+            {(a.hora_inicio_mx || a.hora_fin_mx) && (
+              <div style={{ color: "#9ca3af", marginTop: 2 }}>
+                {a.hora_inicio_mx || "?"} → {a.hora_fin_mx || "?"} (MX)
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+
 // SCs foráneos: en estos, helper en Small Van se considera bloqueado.
 const SCS_FORANEOS_BRAIN = new Set(["SCY1","SCQ1","SQR1","SHP1","STL1","STX1","SVH1","SPB1","SPY1"]);
 
@@ -15912,8 +16107,8 @@ function PanelControlSupervisores() {
 
   return (
     <div className="pg">
-      <div className="sec-title">Panel de Control · Supervisores</div>
-      <div className="sec-sub">Estado de cumplimiento de bitácora y conciliación D-1 por SC</div>
+      <div className="sec-title">Consolidaciones por SC</div>
+      <div className="sec-sub">Torre de control, rutas con helper, ambulancias y bitácora del supervisor · por SC</div>
 
       {/* Barra de control: fecha + refrescar */}
       <div className="form-card" style={{ marginBottom: 12, display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
@@ -16030,6 +16225,12 @@ function PanelControlSupervisores() {
 
                           {/* ─── Rutas con helper del D-1: aprobar/rechazar pago ─── */}
                           <RutasHelperAprobar scId={s.sc} fecha={fechaAyer} decididoPor={null} />
+
+                          {/* ─── Torre de Control del SC (D-1) ─── */}
+                          <TorreControlSC scId={s.sc} fecha={fechaAyer} />
+
+                          {/* ─── Ambulancias del SC (D-1) ─── */}
+                          <AmbulanciasSC scId={s.sc} fecha={fechaAyer} />
 
                           {/* Contacto (para el WhatsApp futuro) */}
                           <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px solid #e5e7eb", fontSize: 11, color: "#6b7280" }}>
@@ -16411,7 +16612,7 @@ function ModuloPagosMadre({ usuario }) {
     { id: "drivers",     label: "Drivers",               desc: "Maestro de choferes MX" },
     { id: "ayudantes",   label: "Ayudantes",             desc: "Detalle diario de auxiliares" },
     { id: "ambulancias", label: "Ambulancias",           desc: "Traspasos internos ruta→ruta" },
-    { id: "supervisores", label: "Panel Supervisores",   desc: "Control de bitácora y D-1 por SC" },
+    { id: "supervisores", label: "Consolidaciones",   desc: "Consolidado por SC: torre, helpers, ambulancias y bitácora" },
     { id: "prefacturas", label: "Prefacturas",           desc: "Envío masivo de prefacturas MX" },
     { id: "config",      label: "Configuración",         desc: "Tarifario, zonas y reglas" },
   ];
