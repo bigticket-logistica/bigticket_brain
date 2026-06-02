@@ -16667,6 +16667,9 @@ function ListadoPagosDiarios() {
   const [filtroEstado, setFiltroEstado] = useState("todas"); // todas | pagadas | no_pagadas | con_alerta
   const [avisoRecalc, setAvisoRecalc] = useState(null); // N aprobaciones modificadas tras el último cálculo
   const [guardandoTarifado, setGuardandoTarifado] = useState(false);
+  const topScrollRef = useRef(null);
+  const tableWrapRef = useRef(null);
+  const [tablaWidth, setTablaWidth] = useState(1400);
   const [orderBy, setOrderBy] = useState("driver_name"); // columna por la que ordenar
   const [orderDir, setOrderDir] = useState("asc");
 
@@ -16928,7 +16931,7 @@ function ListadoPagosDiarios() {
     URL.revokeObjectURL(url);
   };
 
-  // Guarda los viajes tarificados del día en tarifado_mx (append-only, no sobreescribe)
+  // Guarda los viajes tarificados del día en tarifado_mx (reemplaza el guardado previo del día = consolidado final)
   const guardarTarifado = async () => {
     if (pagos.length === 0) { alert("No hay pagos calculados para guardar. Calculá el día primero."); return; }
     let yaGuardado = 0;
@@ -16937,8 +16940,8 @@ function ListadoPagosDiarios() {
       yaGuardado = count || 0;
     } catch (e) { /* tabla puede no existir aún */ }
     const msg = yaGuardado > 0
-      ? `Este día (${fecha}) ya tiene ${yaGuardado} registros en tarifado_mx.\n\nGuardar suma una copia nueva (no borra las anteriores). ¿Continuar?`
-      : `Se guardarán ${pagos.length} viajes tarificados del ${fecha} en tarifado_mx (no se sobreescribe nada). ¿Continuar?`;
+      ? `Este día (${fecha}) ya tiene un guardado previo (${yaGuardado} registros).\n\nSe reemplazará por el cálculo actual (${pagos.length} viajes). ¿Continuar?`
+      : `Se guardarán ${pagos.length} viajes tarificados del ${fecha} en tarifado_mx. ¿Continuar?`;
     if (!confirm(msg)) return;
     setGuardandoTarifado(true);
     try {
@@ -16954,6 +16957,10 @@ function ListadoPagosDiarios() {
         for (const c of cols) r[c] = (p[c] !== undefined ? p[c] : null);
         return r;
       });
+      // Reemplaza el guardado previo del día (consolidado final = último guardado)
+      const { error: delErr } = await sb.from("tarifado_mx").delete().eq("fecha", fecha);
+      if (delErr) throw new Error("No se pudo limpiar el guardado previo: " + delErr.message);
+
       let ok = 0, primerError = null;
       for (let i = 0; i < rows.length; i += 100) {
         const chunk = rows.slice(i, i + 100);
@@ -16962,13 +16969,20 @@ function ListadoPagosDiarios() {
         ok += chunk.length;
       }
       if (primerError) throw new Error(primerError);
-      alert(`Guardado en tarifado_mx: ${ok} viajes del ${fecha}.\nCorrida: ${corridaId}`);
+      alert(`Guardado en tarifado_mx: ${ok} viajes del ${fecha}. Reemplaza el guardado anterior (consolidado vigente del día).`);
     } catch (e) {
       console.error(e);
       alert("Error guardando en tarifado_mx:\n\n" + e.message);
     }
     setGuardandoTarifado(false);
   };
+
+  // Sincroniza la barra de scroll horizontal superior con la tabla
+  const onTopScroll = () => { if (tableWrapRef.current && topScrollRef.current) tableWrapRef.current.scrollLeft = topScrollRef.current.scrollLeft; };
+  const onTableScroll = () => { if (tableWrapRef.current && topScrollRef.current) topScrollRef.current.scrollLeft = tableWrapRef.current.scrollLeft; };
+  useEffect(() => {
+    if (tableWrapRef.current) setTablaWidth(tableWrapRef.current.scrollWidth);
+  }, [filasFiltradas, loading, pagos]);
 
   return (
     <div className="pg" style={{ maxWidth: 1600 }}>
@@ -17111,8 +17125,13 @@ function ListadoPagosDiarios() {
         ))}
       </div>
 
+      {/* Barra de scroll horizontal superior (sincronizada con la tabla) */}
+      <div ref={topScrollRef} onScroll={onTopScroll} style={{ overflowX: "auto", overflowY: "hidden", marginBottom: 4 }}>
+        <div style={{ width: tablaWidth, height: 1 }} />
+      </div>
+
       {/* Tabla principal — vista por RUTA */}
-      <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, overflow: "auto" }}>
+      <div ref={tableWrapRef} onScroll={onTableScroll} style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, overflow: "auto" }}>
         {loading ? (
           <div style={{ padding: 30, textAlign: "center", color: "#94a3b8" }}>Cargando datos del {fecha}...</div>
         ) : pagos.length === 0 ? (
