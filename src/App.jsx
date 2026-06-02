@@ -15369,75 +15369,62 @@ function TorreTresPilares() {
 const SCS_FORANEOS_BRAIN = new Set(["SCY1","SCQ1","SQR1","SHP1","STL1","STX1","SVH1","SPB1","SPY1"]);
 
 function RutasHelperAprobar({ scId, fecha, decididoPor }) {
-  const [rutas, setRutas] = useState([]);
-  const [justifPorRuta, setJustifPorRuta] = useState({}); // travel_id → justificación del supervisor
+  const [rutas, setRutas] = useState([]); // agrupado por id_ruta
   const [decisiones, setDecisiones] = useState({}); // travel_id → 'aprobado' | 'rechazado'
   const [loading, setLoading] = useState(true);
-  const [guardando, setGuardando] = useState(null); // travel_id en curso
+  const [guardando, setGuardando] = useState(null);
 
   useEffect(() => {
     let cancel = false;
     (async () => {
       setLoading(true);
       try {
-        // FUENTE: logistic_ayudantes_snapshots — tomamos el ÚLTIMO snapshot por
-        // id_ruta (hora_snapshot más reciente = cierre del día, dato definitivo).
-        // Los snapshots conservan +30 días, así que no necesitamos cron ni tabla extra.
-        let lista = [];
-        const snapR = await sb.from("logistic_ayudantes_snapshots")
-          .select("id_ruta, placa, driver_name, vehiculo_descripcion, cluster, has_helper, hora_snapshot")
-          .eq("service_center_id", scId).eq("fecha", fecha)
-          .order("hora_snapshot", { ascending: false });
-        if (cancel) return;
-        const vistas = new Set();
-        for (const r of snapR.data || []) {
-          if (!r.id_ruta || vistas.has(r.id_ruta)) continue;
-          vistas.add(r.id_ruta); // primer match = más reciente = cierre
-          if (r.has_helper !== true) continue;
-          const vehLower = String(r.vehiculo_descripcion || "").toLowerCase();
-          const bloqueada = SCS_FORANEOS_BRAIN.has(scId) && vehLower.includes("small van");
-          lista.push({
-            travel_id: r.id_ruta,
-            vehicle_plate: r.placa || null,
-            driver_name: r.driver_name || null,
-            vehiculo: r.vehiculo_descripcion || null,
-            cluster: r.cluster || null,
-            helper_bloqueado: bloqueada,
-          });
-        }
-
-        // Decisiones ya tomadas + justificaciones del supervisor (siempre)
-        const [aprobR, bitR] = await Promise.all([
+        const [chR, aprobR] = await Promise.all([
+          // Detalle de helpers desde vw_control_helper_diario (nombres, %, monto, zona)
+          sb.from("vw_control_helper_diario")
+            .select("id_ruta, sc, cluster, vehiculo, placa, zona, helper_flag, es_chofer, chofer_nombre, helper_nombre_limpio, helper_pct, helper_idx, helper_count, pkgs_helper, pkgs_total, monto_mxn, autorizado")
+            .eq("sc", scId).eq("fecha", fecha).eq("helper_flag", true)
+            .order("id_ruta", { ascending: true }).order("helper_idx", { ascending: true }),
           sb.from("aprobaciones_helper")
             .select("travel_id, decision")
             .eq("service_center_id", scId).eq("fecha", fecha),
-          sb.from("vw_bitacora_panel")
-            .select("declarado_ayudantes_detalle")
-            .eq("service_center_id", scId).eq("fecha", fecha).maybeSingle(),
         ]);
         if (cancel) return;
 
-        lista.sort((a, b) => {
-          if (!!a.helper_bloqueado !== !!b.helper_bloqueado) return a.helper_bloqueado ? -1 : 1;
-          return String(a.travel_id).localeCompare(String(b.travel_id));
+        // Agrupar por id_ruta
+        const porRuta = new Map();
+        for (const f of chR.data || []) {
+          if (!porRuta.has(f.id_ruta)) {
+            const vehLower = String(f.vehiculo || "").toLowerCase();
+            const esForanea = String(f.zona || "").toLowerCase().includes("foran");
+            const bloqueada = esForanea && vehLower.includes("small van");
+            porRuta.set(f.id_ruta, {
+              id_ruta: f.id_ruta,
+              cluster: f.cluster,
+              vehiculo: f.vehiculo,
+              placa: f.placa,
+              zona: f.zona,
+              monto_mxn: f.monto_mxn,
+              bloqueada,
+              personas: [],
+            });
+          }
+          porRuta.get(f.id_ruta).personas.push({
+            nombre: f.es_chofer ? f.chofer_nombre : f.helper_nombre_limpio,
+            es_chofer: f.es_chofer,
+            pct: f.helper_pct,
+            pkgs: f.pkgs_helper,
+          });
+        }
+        const lista = [...porRuta.values()].sort((a, b) => {
+          if (!!a.bloqueada !== !!b.bloqueada) return a.bloqueada ? -1 : 1;
+          return String(a.id_ruta).localeCompare(String(b.id_ruta));
         });
         setRutas(lista);
 
         const dec = {};
         for (const a of aprobR.data || []) dec[String(a.travel_id)] = a.decision;
         setDecisiones(dec);
-
-        // Mapear justificaciones por id_ruta
-        const det = bitR.data?.declarado_ayudantes_detalle;
-        const jmap = {};
-        if (Array.isArray(det)) {
-          for (const d of det) {
-            if (d && typeof d === "object" && d.id_ruta != null && d.justificacion) {
-              jmap[String(d.id_ruta)] = d.justificacion;
-            }
-          }
-        }
-        setJustifPorRuta(jmap);
       } catch (e) {
         console.error("Error cargando rutas helper:", e);
       } finally {
@@ -15448,24 +15435,23 @@ function RutasHelperAprobar({ scId, fecha, decididoPor }) {
   }, [scId, fecha]);
 
   async function decidir(ruta, decision) {
-    const tid = String(ruta.travel_id);
+    const tid = String(ruta.id_ruta);
     setGuardando(tid);
     try {
       const payload = {
         service_center_id: scId,
         fecha,
-        travel_id: ruta.travel_id,
-        vehicle_plate: ruta.vehicle_plate || null,
-        driver_name: ruta.driver_name || null,
+        travel_id: ruta.id_ruta,
+        vehicle_plate: ruta.placa || null,
+        driver_name: (ruta.personas.find((p) => p.es_chofer) || {}).nombre || null,
         vehiculo: ruta.vehiculo || null,
         cluster: ruta.cluster || null,
-        bloqueada: !!ruta.helper_bloqueado,
+        bloqueada: !!ruta.bloqueada,
         decision,
         decidido_por: decididoPor || null,
         decidido_at: new Date().toISOString(),
       };
-      const { error } = await sb
-        .from("aprobaciones_helper")
+      const { error } = await sb.from("aprobaciones_helper")
         .upsert(payload, { onConflict: "service_center_id,fecha,travel_id" });
       if (error) throw error;
       setDecisiones((prev) => ({ ...prev, [tid]: decision }));
@@ -15487,59 +15473,66 @@ function RutasHelperAprobar({ scId, fecha, decididoPor }) {
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         {rutas.map((r) => {
-          const tid = String(r.travel_id);
+          const tid = String(r.id_ruta);
           const dec = decisiones[tid];
-          const justif = justifPorRuta[tid];
           const enCurso = guardando === tid;
+          // Filosofía 1: bloqueada sin decisión = se muestra como rechazada por defecto
+          const rechazadoVisual = dec === "rechazado" || (r.bloqueada && !dec);
+          const aprobadoVisual = dec === "aprobado";
           return (
             <div key={tid} style={{
               background: "#fff",
-              border: `1px solid ${dec === "aprobado" ? "#86efac" : dec === "rechazado" ? "#fca5a5" : "#e5e7eb"}`,
+              border: `1px solid ${aprobadoVisual ? "#86efac" : rechazadoVisual ? "#fca5a5" : "#e5e7eb"}`,
               borderRadius: 6, padding: 10,
-              display: "flex", alignItems: "flex-start", gap: 12, flexWrap: "wrap",
             }}>
-              <div style={{ flex: 1, minWidth: 200 }}>
-                <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-                  <span style={{ fontFamily: "monospace", fontWeight: 700, fontSize: 12 }}>{r.travel_id}</span>
-                  {r.cluster && <span style={{ fontSize: 9, background: "#e2e8f0", color: "#475569", padding: "1px 6px", borderRadius: 3, fontWeight: 700 }}>{r.cluster}</span>}
-                  {r.helper_bloqueado && <span style={{ fontSize: 9, background: "#fee2e2", color: "#b91c1c", padding: "1px 6px", borderRadius: 3, fontWeight: 700 }}>⚠ BLOQUEADA</span>}
-                </div>
-                <div style={{ fontSize: 11, color: "#4b5563", marginTop: 2 }}>
-                  {r.vehicle_plate && <span style={{ fontFamily: "monospace", fontWeight: 600 }}>{r.vehicle_plate}</span>}
-                  {r.vehicle_plate && r.driver_name && " · "}
-                  {r.driver_name || ""}
-                  {r.vehiculo && <span style={{ color: "#9ca3af" }}> · {r.vehiculo}</span>}
-                </div>
-                {justif && (
-                  <div style={{ marginTop: 6, padding: 6, background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: 4, fontSize: 11, color: "#1f2937", whiteSpace: "pre-wrap" }}>
-                    💬 {justif}
+              <div style={{ display: "flex", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
+                <div style={{ flex: 1, minWidth: 220 }}>
+                  <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                    <span style={{ fontFamily: "monospace", fontWeight: 700, fontSize: 12 }}>{r.id_ruta}</span>
+                    {r.cluster && <span style={{ fontSize: 9, background: "#e2e8f0", color: "#475569", padding: "1px 6px", borderRadius: 3, fontWeight: 700 }}>{r.cluster}</span>}
+                    {r.bloqueada && <span style={{ fontSize: 9, background: "#fee2e2", color: "#b91c1c", padding: "1px 6px", borderRadius: 3, fontWeight: 700 }}>⚠ BLOQUEADA</span>}
+                    {r.monto_mxn != null && <span style={{ fontSize: 9, background: "#dcfce7", color: "#166534", padding: "1px 6px", borderRadius: 3, fontWeight: 700 }}>${r.monto_mxn} MXN</span>}
                   </div>
-                )}
+                  <div style={{ fontSize: 10, color: "#9ca3af", marginTop: 2 }}>
+                    {r.placa && <span style={{ fontFamily: "monospace" }}>{r.placa}</span>}
+                    {r.vehiculo && <span> · {r.vehiculo}</span>}
+                    {r.zona && <span> · {r.zona}</span>}
+                  </div>
+                  {/* Personas: chofer + helpers con su % */}
+                  <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 3 }}>
+                    {r.personas.map((p, i) => (
+                      <div key={i} style={{ fontSize: 11, color: "#4b5563", display: "flex", gap: 6, alignItems: "center" }}>
+                        <span style={{ fontSize: 9, background: p.es_chofer ? "#dbeafe" : "#fef3c7", color: p.es_chofer ? "#1e40af" : "#92400e", padding: "1px 6px", borderRadius: 3, fontWeight: 700 }}>
+                          {p.es_chofer ? "CHOFER" : "HELPER"}
+                        </span>
+                        <span style={{ fontWeight: 600 }}>{p.nombre || "—"}</span>
+                        {p.pct && <span style={{ marginLeft: "auto", fontWeight: 700, color: "#374151" }}>{p.pct}</span>}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                  <button onClick={() => decidir(r, "aprobado")} disabled={enCurso}
+                    style={{
+                      padding: "6px 12px", fontSize: 12, fontWeight: 700, borderRadius: 6, cursor: enCurso ? "wait" : "pointer",
+                      border: aprobadoVisual ? "2px solid #16a34a" : "1px solid #d1d5db",
+                      background: aprobadoVisual ? "#16a34a" : "#fff",
+                      color: aprobadoVisual ? "#fff" : "#16a34a",
+                    }}>✓ Aprobar</button>
+                  <button onClick={() => decidir(r, "rechazado")} disabled={enCurso}
+                    style={{
+                      padding: "6px 12px", fontSize: 12, fontWeight: 700, borderRadius: 6, cursor: enCurso ? "wait" : "pointer",
+                      border: rechazadoVisual ? "2px solid #dc2626" : "1px solid #d1d5db",
+                      background: rechazadoVisual ? "#dc2626" : "#fff",
+                      color: rechazadoVisual ? "#fff" : "#dc2626",
+                    }}>✗ Rechazar</button>
+                </div>
               </div>
-              <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                <button
-                  onClick={() => decidir(r, "aprobado")}
-                  disabled={enCurso}
-                  style={{
-                    padding: "6px 12px", fontSize: 12, fontWeight: 700, borderRadius: 6, cursor: enCurso ? "wait" : "pointer",
-                    border: dec === "aprobado" ? "2px solid #16a34a" : "1px solid #d1d5db",
-                    background: dec === "aprobado" ? "#16a34a" : "#fff",
-                    color: dec === "aprobado" ? "#fff" : "#16a34a",
-                  }}>
-                  ✓ Aprobar
-                </button>
-                <button
-                  onClick={() => decidir(r, "rechazado")}
-                  disabled={enCurso}
-                  style={{
-                    padding: "6px 12px", fontSize: 12, fontWeight: 700, borderRadius: 6, cursor: enCurso ? "wait" : "pointer",
-                    border: dec === "rechazado" ? "2px solid #dc2626" : "1px solid #d1d5db",
-                    background: dec === "rechazado" ? "#dc2626" : "#fff",
-                    color: dec === "rechazado" ? "#fff" : "#dc2626",
-                  }}>
-                  ✗ Rechazar
-                </button>
-              </div>
+              {r.bloqueada && !dec && (
+                <div style={{ marginTop: 8, fontSize: 10, color: "#b91c1c", fontStyle: "italic" }}>
+                  ⚠ Bloqueada por defecto (Small Van foránea) — no se paga salvo que apruebes.
+                </div>
+              )}
             </div>
           );
         })}
@@ -15548,10 +15541,6 @@ function RutasHelperAprobar({ scId, fecha, decididoPor }) {
   );
 }
 
-
-// ── Subcomponente: muestra el consolidado D-1 completo (textos + fotos) ──────
-// El bucket de fotos es privado; generamos URLs firmadas (1h) para verlas.
-const BUCKET_BITACORA = "bitacora-cancelaciones-meli";
 
 function FotoLink({ path }) {
   const [url, setUrl] = useState(null);
