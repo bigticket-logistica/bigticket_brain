@@ -16122,8 +16122,7 @@ function PanelControlSupervisores() {
           🔄 Refrescar
         </button>
         <div style={{ marginLeft: "auto", fontSize: 13, color: "#374151" }}>
-          <strong>{totales.completaronHoy}/{totales.total}</strong> completaron Hoy ·{" "}
-          <strong>{totales.conciliaronD1}/{totales.total}</strong> conciliaron D-1
+          <strong>{totales.completaronHoy}/{totales.total}</strong> completaron Hoy
         </div>
       </div>
 
@@ -16145,8 +16144,6 @@ function PanelControlSupervisores() {
                 <th style={thPanel()}>SC</th>
                 <th style={thPanel()}>Supervisor</th>
                 <th style={thPanel("center")}>Hoy ({fecha})</th>
-                <th style={thPanel("center")}>D-1 ({fechaAyer})</th>
-                <th style={thPanel("center")}>Difs sin justif.</th>
                 <th style={thPanel("center")}>Detalle</th>
               </tr>
             </thead>
@@ -16164,19 +16161,13 @@ function PanelControlSupervisores() {
                       <td style={{ ...tdPanel("center"), fontWeight: 700, color: hoyColor }}>
                         {eh.completados === 5 ? "✅" : eh.completados === 0 ? "❌" : "🟡"} {eh.completados}/5
                       </td>
-                      <td style={{ ...tdPanel("center"), fontWeight: 700, color: ed.color }}>
-                        {ed.estado === "ok" ? "✅" : ed.estado === "pendiente" ? "🔴" : ed.estado === "parcial" ? "🟡" : "⚪"} {ed.label}
-                      </td>
-                      <td style={{ ...tdPanel("center"), fontWeight: 700, color: ed.difsSinJustif > 0 ? "#dc2626" : "#9ca3af" }}>
-                        {ed.difsSinJustif}
-                      </td>
                       <td style={tdPanel("center")}>
                         <span style={{ fontSize: 11, color: "#6b7280" }}>{abierto ? "▲ cerrar" : "▼ ver"}</span>
                       </td>
                     </tr>
                     {abierto && (
                       <tr style={{ background: "#fafbfc" }}>
-                        <td colSpan={6} style={{ padding: 14 }}>
+                        <td colSpan={4} style={{ padding: 14 }}>
                           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
                             {/* Detalle HOY */}
                             <div>
@@ -16243,7 +16234,7 @@ function PanelControlSupervisores() {
                 );
               })}
               {supervisores.length === 0 && (
-                <tr><td colSpan={6} style={{ padding: 30, textAlign: "center", color: "#9ca3af" }}>No hay supervisores activos.</td></tr>
+                <tr><td colSpan={4} style={{ padding: 30, textAlign: "center", color: "#9ca3af" }}>No hay supervisores activos.</td></tr>
               )}
             </tbody>
           </table>
