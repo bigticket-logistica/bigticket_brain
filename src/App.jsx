@@ -16434,23 +16434,29 @@ const AUX_COBRAR_MELI = 350;
 // Matriz de ajuste por % visitado × NS (reemplaza a matriz_ns)
 // visitado < 90% → no paga | visitado 99.5–100% premia +5% solo si NS > 99.5%
 // visitado 90–99.49% castiga -3% solo si NS < 95% | resto neutro
-function calcularAjusteVisitadoNS(pctVisitado, nsPct) {
+function calcularAjusteVisitadoNS(pctVisitado, nsPct, cfg) {
+  const visMin    = (cfg && cfg.vis_min_pago   != null) ? cfg.vis_min_pago   : 90;
+  const visPremio = (cfg && cfg.vis_premio_min != null) ? cfg.vis_premio_min : 99.5;
+  const nsPremio  = (cfg && cfg.ns_premio_min  != null) ? cfg.ns_premio_min  : 99.5;
+  const nsCastigo = (cfg && cfg.ns_castigo_max != null) ? cfg.ns_castigo_max : 95;
+  const premioPct = (cfg && cfg.ns_premio_pct  != null) ? cfg.ns_premio_pct  : 5;
+  const castPct   = (cfg && cfg.ns_castigo_pct != null) ? cfg.ns_castigo_pct : 3;
   if (pctVisitado == null) return { pct: 0, categoria: "SIN_VISITADO", noPaga: false };
   const vis = Number(pctVisitado);
   const ns = Number(nsPct) || 0;
-  if (vis < 90) return { pct: 0, categoria: "NO_PAGO_VIS<90%", noPaga: true };
-  if (vis >= 99.5) {
-    if (ns > 99.5) return { pct: 5, categoria: "PREMIO_+5%", noPaga: false };
+  if (vis < visMin) return { pct: 0, categoria: "NO_PAGO_VIS<90%", noPaga: true };
+  if (vis >= visPremio) {
+    if (ns > nsPremio) return { pct: premioPct, categoria: "PREMIO_+5%", noPaga: false };
     return { pct: 0, categoria: "NEUTRO", noPaga: false };
   }
-  if (ns < 95) return { pct: -3, categoria: "CASTIGO_-3%", noPaga: false };
+  if (ns < nsCastigo) return { pct: -castPct, categoria: "CASTIGO_-3%", noPaga: false };
   return { pct: 0, categoria: "NEUTRO", noPaga: false };
 }
 
 // ─── Motor de cálculo principal ────────────────────────────────────────────
 // Toma todos los inputs y devuelve los registros listos para INSERT en
 // maestro_jornada_mx
-function calcularPagos({ maestro, snapshots, scZonas, especiales, matrizPrecios, aprobaciones, tarifasCobrar, calculadoAt }) {
+function calcularPagos({ maestro, snapshots, scZonas, especiales, matrizPrecios, aprobaciones, tarifasCobrar, cfg, calculadoAt }) {
   const errores = [];
   const filas = [];
 
@@ -16522,7 +16528,7 @@ function calcularPagos({ maestro, snapshots, scZonas, especiales, matrizPrecios,
     const tieneTarifaEspecial = tarifaInfo.fuente === "ESPECIAL";
 
     // Ajuste por matriz visitado × NS (reemplaza a matriz_ns)
-    const ajuste = calcularAjusteVisitadoNS(pctVisitado, nsPct);
+    const ajuste = calcularAjusteVisitadoNS(pctVisitado, nsPct, cfg);
     const noPaga = ajuste.noPaga;
     const factorNS = 1 + (ajuste.pct / 100);
     const ajusteNS = tarifaBase * (ajuste.pct / 100);
@@ -16542,7 +16548,7 @@ function calcularPagos({ maestro, snapshots, scZonas, especiales, matrizPrecios,
       const decision = (aprob && aprob.decision) ? String(aprob.decision).toLowerCase() : null;
       if (decision === "aprobado") {
         auxiliarEstado = "APROBADO";
-        montoAux = 300;
+        montoAux = (cfg && cfg.aux_por_pagar != null) ? cfg.aux_por_pagar : 300;
       } else if (decision === "rechazado") {
         auxiliarEstado = "RECHAZADO";
         montoAux = 0;
@@ -16622,7 +16628,7 @@ function calcularPagos({ maestro, snapshots, scZonas, especiales, matrizPrecios,
     let pagoMeli = null;
     if (tipologia && zona) {
       const baseCobrar = cobrarIdx[`${tipologia}|${zona}|${tramo}`];
-      if (baseCobrar != null) pagoMeli = baseCobrar + (tieneHelper ? AUX_COBRAR_MELI : 0);
+      if (baseCobrar != null) pagoMeli = baseCobrar + (tieneHelper ? ((cfg && cfg.aux_por_cobrar != null) ? cfg.aux_por_cobrar : AUX_COBRAR_MELI) : 0);
     }
 
     filas.push({
@@ -16751,7 +16757,7 @@ function ListadoPagosDiarios() {
 
       const calculadoAt = new Date().toISOString();
 
-      const [mRes, sRes, zRes, mpRes, eRes, apRes, tcRes] = await Promise.all([
+      const [mRes, sRes, zRes, mpRes, eRes, apRes, tcRes, cfgRes] = await Promise.all([
         sb.from("vw_maestro_supervisores_auto").select("*").eq("fecha", fecha).limit(5000),
         sb.from("logistic_ayudantes_snapshots").select("*").gte("fecha", fechaSnapDesde).lte("fecha", fechaSnapHasta).limit(30000),
         sb.from("sc_zonas_mx").select("service_center_id, zona"),
@@ -16759,6 +16765,7 @@ function ListadoPagosDiarios() {
         sb.from("tarifas_especiales_mx").select("*"),
         sb.from("aprobaciones_helper").select("*").eq("fecha", fecha),
         sb.from("tarifas_cobrar_meli_mx").select("*").eq("activo", true),
+        sb.from("config_pagos_mx").select("*"),
       ]);
 
       if (mRes.error) throw new Error("maestro supervisores: " + mRes.error.message);
@@ -16771,6 +16778,9 @@ function ListadoPagosDiarios() {
         return;
       }
 
+      const cfg = {};
+      for (const c of (cfgRes.data || [])) cfg[c.clave] = Number(c.valor);
+
       const { filas, errores } = calcularPagos({
         maestro,
         snapshots: sRes.data || [],
@@ -16779,6 +16789,7 @@ function ListadoPagosDiarios() {
         matrizPrecios: mpRes.data || [],
         aprobaciones: apRes.data || [],
         tarifasCobrar: tcRes.data || [],
+        cfg,
         calculadoAt,
       });
 
@@ -18866,57 +18877,108 @@ function ConfigTarifario() {
 
 // ─── Config: Tarifas Especiales ────────────────────────────────────────────
 function ConfigTarifasEspeciales() {
-  const [data, setData] = useState([]);
+  const [rows, setRows] = useState([]);
+  const [deletedIds, setDeletedIds] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [guardando, setGuardando] = useState(false);
+  const [msg, setMsg] = useState(null);
+
+  const TIPOS = ["Large Van", "Small Van", "Car"];
+  const ZONAS = ["L1", "L2", "L3", "L4"];
+  const TRAMOS = ["0-100", "101-150", "151-200", "201-250", "251+"];
 
   useEffect(() => { cargar(); }, []);
   const cargar = async () => {
     setLoading(true);
     try {
       const { data: d } = await sb.from("tarifas_especiales_mx").select("*").order("driver_name").order("zona").order("tramo_km");
-      setData(d || []);
+      setRows((d || []).map(r => ({ id: r.id, driver_name: r.driver_name || "", tipologia: r.tipologia || "Large Van", zona: r.zona || "L1", tramo_km: r.tramo_km || "0-100", monto: r.monto != null ? String(r.monto) : "" })));
+      setDeletedIds([]);
     } catch (e) { console.error(e); }
     setLoading(false);
   };
 
+  const setField = (i, f, v) => setRows(prev => prev.map((r, idx) => idx === i ? { ...r, [f]: v } : r));
+  const addRow = () => setRows(prev => [...prev, { driver_name: "", tipologia: "Large Van", zona: "L1", tramo_km: "0-100", monto: "" }]);
+  const delRow = (i) => setRows(prev => {
+    const r = prev[i];
+    if (r.id != null) setDeletedIds(d => [...d, r.id]);
+    return prev.filter((_, idx) => idx !== i);
+  });
+
+  const guardar = async () => {
+    for (const r of rows) {
+      if (!r.driver_name.trim()) { setMsg({ ok: false, txt: "Hay una regla sin chofer." }); return; }
+      if (r.monto === "" || isNaN(Number(r.monto))) { setMsg({ ok: false, txt: `Monto inválido para ${r.driver_name}.` }); return; }
+    }
+    setGuardando(true); setMsg(null);
+    try {
+      let upd = 0, ins = 0, del = 0;
+      for (const id of deletedIds) {
+        const { error } = await sb.from("tarifas_especiales_mx").delete().eq("id", id);
+        if (error) throw error; del++;
+      }
+      for (const r of rows) {
+        const payload = { driver_name: r.driver_name.trim(), tipologia: r.tipologia, zona: r.zona, tramo_km: r.tramo_km, monto: Number(r.monto) };
+        if (r.id != null) {
+          const { error } = await sb.from("tarifas_especiales_mx").update(payload).eq("id", r.id);
+          if (error) throw error; upd++;
+        } else {
+          const { error } = await sb.from("tarifas_especiales_mx").insert(payload);
+          if (error) throw error; ins++;
+        }
+      }
+      setMsg({ ok: true, txt: `Guardado: ${upd} actualizadas, ${ins} nuevas, ${del} eliminadas.` });
+      cargar();
+    } catch (e) {
+      console.error(e);
+      setMsg({ ok: false, txt: "Error al guardar: " + (e.message || e) });
+    }
+    setGuardando(false);
+  };
+
   if (loading) return <div style={{ textAlign: "center", padding: 40, color: "#94a3b8" }}>Cargando...</div>;
 
-  const drivers = [...new Set(data.map(d => d.driver_name))];
+  const inp = { border: "1px solid #e4e7ec", borderRadius: 4, padding: "5px 7px", fontSize: 12 };
 
   return (
     <div>
-      <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: 14, marginBottom: 14 }}>
-        <div style={{ fontSize: 14, fontWeight: 700, color: "#1a3a6b", marginBottom: 4 }}>Tarifas Especiales por Chofer</div>
-        <div style={{ fontSize: 11, color: "#94a3b8" }}>{drivers.length} choferes con tarifa custom · {data.length} reglas totales</div>
+      <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: 14, marginBottom: 14, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <div style={{ flex: 1, minWidth: 240 }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: "#1a3a6b", marginBottom: 4 }}>Tarifas Especiales por Chofer</div>
+          <div style={{ fontSize: 11, color: "#94a3b8" }}>Override de tarifa por chofer · gana sobre el tarifario general · {rows.length} reglas · editable</div>
+        </div>
+        <button onClick={addRow} style={{ padding: "8px 14px", borderRadius: 4, border: "1px solid #1a3a6b", background: "#fff", color: "#1a3a6b", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>+ Agregar regla</button>
+        <button onClick={guardar} disabled={guardando} style={{ padding: "8px 16px", borderRadius: 4, border: "none", background: guardando ? "#94a3b8" : "#16a34a", color: "#fff", fontSize: 12, fontWeight: 600, cursor: guardando ? "wait" : "pointer" }}>{guardando ? "Guardando..." : "Guardar cambios"}</button>
       </div>
-      {drivers.map(driver => {
-        const tarifas = data.filter(d => d.driver_name === driver);
-        return (
-          <div key={driver} style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: 14, marginBottom: 14 }}>
-            <div style={{ fontSize: 13, fontWeight: 700, color: "#1a3a6b", marginBottom: 10 }}>{driver}</div>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-              <thead>
-                <tr style={{ background: "#f8fafc", borderBottom: "1px solid #e4e7ec" }}>
-                  <th style={{ padding: "6px 10px", textAlign: "left", fontSize: 10, color: "#64748b", fontWeight: 600 }}>Tipología</th>
-                  <th style={{ padding: "6px 10px", textAlign: "center", fontSize: 10, color: "#64748b", fontWeight: 600 }}>Zona</th>
-                  <th style={{ padding: "6px 10px", textAlign: "center", fontSize: 10, color: "#64748b", fontWeight: 600 }}>Tramo km</th>
-                  <th style={{ padding: "6px 10px", textAlign: "right", fontSize: 10, color: "#64748b", fontWeight: 600 }}>Monto</th>
-                </tr>
-              </thead>
-              <tbody>
-                {tarifas.map(t => (
-                  <tr key={t.id} style={{ borderBottom: "1px solid #f0f0f0" }}>
-                    <td style={{ padding: "6px 10px" }}>{t.tipologia}</td>
-                    <td style={{ padding: "6px 10px", textAlign: "center" }}>{t.zona || "—"}</td>
-                    <td style={{ padding: "6px 10px", textAlign: "center" }}>{t.tramo_km}</td>
-                    <td style={{ padding: "6px 10px", textAlign: "right", fontWeight: 600 }}>${t.monto.toLocaleString("es-MX")}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        );
-      })}
+      {msg && (<div style={{ background: msg.ok ? "#ecfdf5" : "#fef2f2", border: `1px solid ${msg.ok ? "#a7f3d0" : "#fca5a5"}`, color: msg.ok ? "#065f46" : "#991b1b", borderRadius: 6, padding: 10, marginBottom: 14, fontSize: 12 }}>{msg.txt}</div>)}
+      <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: 14, overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, minWidth: 720 }}>
+          <thead>
+            <tr style={{ background: "#f8fafc", borderBottom: "1px solid #e4e7ec" }}>
+              <th style={{ padding: "6px 10px", textAlign: "left", fontSize: 10, color: "#64748b", fontWeight: 600 }}>Chofer</th>
+              <th style={{ padding: "6px 10px", textAlign: "left", fontSize: 10, color: "#64748b", fontWeight: 600 }}>Tipología</th>
+              <th style={{ padding: "6px 10px", textAlign: "center", fontSize: 10, color: "#64748b", fontWeight: 600 }}>Zona</th>
+              <th style={{ padding: "6px 10px", textAlign: "center", fontSize: 10, color: "#64748b", fontWeight: 600 }}>Tramo km</th>
+              <th style={{ padding: "6px 10px", textAlign: "right", fontSize: 10, color: "#64748b", fontWeight: 600 }}>Monto MXN</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.length === 0 && (<tr><td colSpan={6} style={{ padding: 20, textAlign: "center", color: "#94a3b8" }}>Sin tarifas especiales. Agregá una con "+ Agregar regla".</td></tr>)}
+            {rows.map((r, i) => (
+              <tr key={r.id ?? `new-${i}`} style={{ borderBottom: "1px solid #f0f0f0" }}>
+                <td style={{ padding: "4px 6px" }}><input value={r.driver_name} onChange={e => setField(i, "driver_name", e.target.value)} placeholder="Nombre del chofer" style={{ ...inp, width: 220 }} /></td>
+                <td style={{ padding: "4px 6px" }}><select value={r.tipologia} onChange={e => setField(i, "tipologia", e.target.value)} style={inp}>{TIPOS.map(x => <option key={x} value={x}>{x}</option>)}</select></td>
+                <td style={{ padding: "4px 6px", textAlign: "center" }}><select value={r.zona} onChange={e => setField(i, "zona", e.target.value)} style={inp}>{ZONAS.map(z => <option key={z} value={z}>{z}</option>)}</select></td>
+                <td style={{ padding: "4px 6px", textAlign: "center" }}><select value={r.tramo_km} onChange={e => setField(i, "tramo_km", e.target.value)} style={inp}>{TRAMOS.map(tr => <option key={tr} value={tr}>{tr}</option>)}</select></td>
+                <td style={{ padding: "4px 6px", textAlign: "right" }}><input type="number" value={r.monto} onChange={e => setField(i, "monto", e.target.value)} style={{ ...inp, width: 90, textAlign: "right" }} /></td>
+                <td style={{ padding: "4px 6px", textAlign: "center" }}><button onClick={() => delRow(i)} style={{ padding: "4px 8px", borderRadius: 4, border: "1px solid #fca5a5", background: "#fff", color: "#dc2626", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>Eliminar</button></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
@@ -19270,115 +19332,135 @@ function ConfigZonas() {
 
 // ─── Config: Matriz Auxiliares ─────────────────────────────────────────────
 function ConfigMatrizAuxiliares() {
-  const [data, setData] = useState([]);
+  const [cfg, setCfg] = useState({});
   const [loading, setLoading] = useState(true);
+  const [guardando, setGuardando] = useState(false);
+  const [msg, setMsg] = useState(null);
 
   useEffect(() => { cargar(); }, []);
   const cargar = async () => {
     setLoading(true);
     try {
-      const { data: m } = await sb.from("matriz_ayudantes_autorizados").select("*").order("prioridad", { ascending: false });
-      setData(m || []);
+      const { data } = await sb.from("config_pagos_mx").select("*");
+      const m = {}; for (const c of (data || [])) m[c.clave] = String(c.valor);
+      setCfg(m);
     } catch (e) { console.error(e); }
     setLoading(false);
   };
-
+  const set = (k, v) => setCfg(p => ({ ...p, [k]: v }));
+  const guardar = async () => {
+    setGuardando(true); setMsg(null);
+    try {
+      const rows = [
+        { clave: "aux_por_pagar", valor: Number(cfg.aux_por_pagar), descripcion: "Monto que se paga al chofer por helper aprobado" },
+        { clave: "aux_por_cobrar", valor: Number(cfg.aux_por_cobrar), descripcion: "Monto que MELI nos paga por ruta con helper" },
+      ];
+      for (const r of rows) if (isNaN(r.valor)) { setMsg({ ok: false, txt: "Montos inválidos." }); setGuardando(false); return; }
+      const { error } = await sb.from("config_pagos_mx").upsert(rows, { onConflict: "clave" });
+      if (error) throw error;
+      setMsg({ ok: true, txt: "Montos de auxiliar guardados." });
+      cargar();
+    } catch (e) { setMsg({ ok: false, txt: "Error: " + (e.message || e) }); }
+    setGuardando(false);
+  };
   if (loading) return <div style={{ textAlign: "center", padding: 40, color: "#94a3b8" }}>Cargando...</div>;
-
+  const inp = { border: "1px solid #e4e7ec", borderRadius: 4, padding: "8px 10px", fontSize: 14, width: 120, textAlign: "right" };
   return (
     <div>
       <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: 14, marginBottom: 14 }}>
-        <div style={{ fontSize: 14, fontWeight: 700, color: "#1a3a6b", marginBottom: 4 }}>Matriz de Auxiliares Autorizados</div>
-        <div style={{ fontSize: 11, color: "#94a3b8" }}>Define qué SC + vehículo + zona pueden cobrar el ayudante de $300 MXN</div>
+        <div style={{ fontSize: 14, fontWeight: 700, color: "#1a3a6b", marginBottom: 4 }}>Montos de Auxiliar (Helper)</div>
+        <div style={{ fontSize: 11, color: "#94a3b8" }}>Lo que se le paga al chofer y lo que MELI nos paga por ruta con helper · alimenta el cálculo</div>
       </div>
-      <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: 14 }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-          <thead>
-            <tr style={{ background: "#f8fafc", borderBottom: "1px solid #e4e7ec" }}>
-              <th style={{ padding: "8px 10px", textAlign: "left", fontSize: 10, color: "#64748b", fontWeight: 600 }}>SC</th>
-              <th style={{ padding: "8px 10px", textAlign: "left", fontSize: 10, color: "#64748b", fontWeight: 600 }}>Vehículo</th>
-              <th style={{ padding: "8px 10px", textAlign: "left", fontSize: 10, color: "#64748b", fontWeight: 600 }}>Zona</th>
-              <th style={{ padding: "8px 10px", textAlign: "center", fontSize: 10, color: "#64748b", fontWeight: 600 }}>Estado</th>
-              <th style={{ padding: "8px 10px", textAlign: "right", fontSize: 10, color: "#64748b", fontWeight: 600 }}>Monto</th>
-              <th style={{ padding: "8px 10px", textAlign: "left", fontSize: 10, color: "#64748b", fontWeight: 600 }}>Observaciones</th>
-            </tr>
-          </thead>
-          <tbody>
-            {data.map(r => (
-              <tr key={r.id} style={{ borderBottom: "1px solid #f0f0f0" }}>
-                <td style={{ padding: "8px 10px" }}>{r.service_center_id || <span style={{ color: "#94a3b8" }}>TODOS</span>}</td>
-                <td style={{ padding: "8px 10px" }}>{r.vehiculo_tipo || <span style={{ color: "#94a3b8" }}>TODOS</span>}</td>
-                <td style={{ padding: "8px 10px" }}>{r.zona || <span style={{ color: "#94a3b8" }}>TODAS</span>}</td>
-                <td style={{ padding: "8px 10px", textAlign: "center" }}>
-                  <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 4, background: r.autorizado ? "#dcfce7" : "#fee2e2", color: r.autorizado ? "#166534" : "#991b1b", fontWeight: 600 }}>
-                    {r.autorizado ? "AUTORIZADO" : "NO AUTORIZADO"}
-                  </span>
-                </td>
-                <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 600, color: r.autorizado ? "#16a34a" : "#94a3b8" }}>${r.monto}</td>
-                <td style={{ padding: "8px 10px", color: "#64748b", fontSize: 11 }}>{r.observaciones || "—"}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      {msg && (<div style={{ background: msg.ok ? "#ecfdf5" : "#fef2f2", border: `1px solid ${msg.ok ? "#a7f3d0" : "#fca5a5"}`, color: msg.ok ? "#065f46" : "#991b1b", borderRadius: 6, padding: 10, marginBottom: 14, fontSize: 12 }}>{msg.txt}</div>)}
+      <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: 18, display: "flex", gap: 30, flexWrap: "wrap", alignItems: "flex-end" }}>
+        <div>
+          <div style={{ fontSize: 11, color: "#64748b", fontWeight: 600, marginBottom: 6 }}>Por pagar al chofer (MXN)</div>
+          <input type="number" value={cfg.aux_por_pagar ?? ""} onChange={e => set("aux_por_pagar", e.target.value)} style={inp} />
+        </div>
+        <div>
+          <div style={{ fontSize: 11, color: "#64748b", fontWeight: 600, marginBottom: 6 }}>Por cobrar a MELI (MXN)</div>
+          <input type="number" value={cfg.aux_por_cobrar ?? ""} onChange={e => set("aux_por_cobrar", e.target.value)} style={inp} />
+        </div>
+        <button onClick={guardar} disabled={guardando} style={{ padding: "9px 18px", borderRadius: 4, border: "none", background: guardando ? "#94a3b8" : "#16a34a", color: "#fff", fontSize: 13, fontWeight: 600, cursor: guardando ? "wait" : "pointer" }}>{guardando ? "Guardando..." : "Guardar"}</button>
       </div>
+      <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 10 }}>El auxiliar se paga solo si el helper queda APROBADO; se cobra a MELI cuando la ruta tuvo helper. Recalculá el día para aplicar cambios.</div>
     </div>
   );
 }
 
 // ─── Config: Reglas NS ─────────────────────────────────────────────────────
 function ConfigReglasNS() {
+  const [cfg, setCfg] = useState({});
+  const [loading, setLoading] = useState(true);
+  const [guardando, setGuardando] = useState(false);
+  const [msg, setMsg] = useState(null);
+
+  const campos = [
+    { k: "vis_min_pago", l: "Visitado mínimo para pagar (%)", h: "Debajo de esto, no se paga" },
+    { k: "vis_premio_min", l: "Visitado para banda premio (%)", h: "Desde esto entra a banda alta" },
+    { k: "ns_premio_min", l: "NS mínimo para premio (%)", h: "NS estrictamente mayor a esto" },
+    { k: "ns_castigo_max", l: "NS máximo para castigo (%)", h: "NS menor a esto castiga" },
+    { k: "ns_premio_pct", l: "Premio (%)", h: "Se suma a la tarifa" },
+    { k: "ns_castigo_pct", l: "Castigo (%)", h: "Se resta de la tarifa" },
+  ];
+
+  useEffect(() => { cargar(); }, []);
+  const cargar = async () => {
+    setLoading(true);
+    try {
+      const { data } = await sb.from("config_pagos_mx").select("*");
+      const m = {}; for (const c of (data || [])) m[c.clave] = String(c.valor);
+      setCfg(m);
+    } catch (e) { console.error(e); }
+    setLoading(false);
+  };
+  const set = (k, v) => setCfg(p => ({ ...p, [k]: v }));
+  const guardar = async () => {
+    setGuardando(true); setMsg(null);
+    try {
+      const rows = campos.map(c => ({ clave: c.k, valor: Number(cfg[c.k]), descripcion: c.l }));
+      for (const r of rows) if (isNaN(r.valor)) { setMsg({ ok: false, txt: "Hay un valor inválido." }); setGuardando(false); return; }
+      const { error } = await sb.from("config_pagos_mx").upsert(rows, { onConflict: "clave" });
+      if (error) throw error;
+      setMsg({ ok: true, txt: "Reglas NS guardadas." });
+      cargar();
+    } catch (e) { setMsg({ ok: false, txt: "Error: " + (e.message || e) }); }
+    setGuardando(false);
+  };
+  if (loading) return <div style={{ textAlign: "center", padding: 40, color: "#94a3b8" }}>Cargando...</div>;
+  const inp = { border: "1px solid #e4e7ec", borderRadius: 4, padding: "7px 9px", fontSize: 13, width: 90, textAlign: "right" };
+  const g = (k, d) => (cfg[k] !== undefined && cfg[k] !== "") ? Number(cfg[k]) : d;
   return (
     <div>
-      <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: 14, marginBottom: 14 }}>
-        <div style={{ fontSize: 14, fontWeight: 700, color: "#1a3a6b", marginBottom: 4 }}>Reglas de Nivel de Servicio (NS)</div>
-        <div style={{ fontSize: 11, color: "#94a3b8" }}>Premio o multa según el rendimiento del chofer</div>
+      <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: 14, marginBottom: 14, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <div style={{ flex: 1, minWidth: 240 }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: "#1a3a6b", marginBottom: 4 }}>Reglas de Ajuste (Visitado × NS)</div>
+          <div style={{ fontSize: 11, color: "#94a3b8" }}>Premio/castigo sobre la tarifa según % visitado y nivel de servicio · alimenta el cálculo</div>
+        </div>
+        <button onClick={guardar} disabled={guardando} style={{ padding: "8px 16px", borderRadius: 4, border: "none", background: guardando ? "#94a3b8" : "#16a34a", color: "#fff", fontSize: 12, fontWeight: 600, cursor: guardando ? "wait" : "pointer" }}>{guardando ? "Guardando..." : "Guardar"}</button>
+      </div>
+      {msg && (<div style={{ background: msg.ok ? "#ecfdf5" : "#fef2f2", border: `1px solid ${msg.ok ? "#a7f3d0" : "#fca5a5"}`, color: msg.ok ? "#065f46" : "#991b1b", borderRadius: 6, padding: 10, marginBottom: 14, fontSize: 12 }}>{msg.txt}</div>)}
+      <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: 18, display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 16, marginBottom: 14 }}>
+        {campos.map(c => (
+          <div key={c.k}>
+            <div style={{ fontSize: 11, color: "#64748b", fontWeight: 600, marginBottom: 4 }}>{c.l}</div>
+            <input type="number" value={cfg[c.k] ?? ""} onChange={e => set(c.k, e.target.value)} style={inp} />
+            <div style={{ fontSize: 9, color: "#94a3b8", marginTop: 3 }}>{c.h}</div>
+          </div>
+        ))}
       </div>
       <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: 14 }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-          <thead>
-            <tr style={{ background: "#f8fafc", borderBottom: "1px solid #e4e7ec" }}>
-              <th style={{ padding: "10px", textAlign: "left", fontSize: 11, color: "#475569", fontWeight: 600 }}>Categoría</th>
-              <th style={{ padding: "10px", textAlign: "left", fontSize: 11, color: "#475569", fontWeight: 600 }}>Condición</th>
-              <th style={{ padding: "10px", textAlign: "right", fontSize: 11, color: "#475569", fontWeight: 600 }}>Ajuste</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr style={{ borderBottom: "1px solid #f0f0f0" }}>
-              <td style={{ padding: "10px" }}>
-                <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 4, background: "#dcfce7", color: "#166534", fontWeight: 600 }}>Excelente</span>
-              </td>
-              <td style={{ padding: "10px", color: "#64748b" }}>NS ≥ 99.5% Y No visitado &lt; 0.5%</td>
-              <td style={{ padding: "10px", textAlign: "right", fontWeight: 700, color: "#16a34a" }}>+5%</td>
-            </tr>
-            <tr style={{ borderBottom: "1px solid #f0f0f0" }}>
-              <td style={{ padding: "10px" }}>
-                <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 4, background: "#f1f5f9", color: "#475569", fontWeight: 600 }}>Aceptable</span>
-              </td>
-              <td style={{ padding: "10px", color: "#64748b" }}>NS entre 95% y 99.49%</td>
-              <td style={{ padding: "10px", textAlign: "right", fontWeight: 700, color: "#475569" }}>0%</td>
-            </tr>
-            <tr style={{ borderBottom: "1px solid #f0f0f0" }}>
-              <td style={{ padding: "10px" }}>
-                <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 4, background: "#fed7aa", color: "#9a3412", fontWeight: 600 }}>Deficiente</span>
-              </td>
-              <td style={{ padding: "10px", color: "#64748b" }}>NS &lt; 95%</td>
-              <td style={{ padding: "10px", textAlign: "right", fontWeight: 700, color: "#F47B20" }}>-3%</td>
-            </tr>
-            <tr style={{ borderBottom: "1px solid #f0f0f0" }}>
-              <td style={{ padding: "10px" }}>
-                <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 4, background: "#fee2e2", color: "#991b1b", fontWeight: 600 }}>Crítico</span>
-              </td>
-              <td style={{ padding: "10px", color: "#64748b" }}>No visitado &gt; 10%</td>
-              <td style={{ padding: "10px", textAlign: "right", fontWeight: 700, color: "#c0392b" }}>NO PAGO</td>
-            </tr>
-          </tbody>
-        </table>
+        <div style={{ fontSize: 12, fontWeight: 700, color: "#1a3a6b", marginBottom: 8 }}>Matriz resultante (lo que aplica el cálculo)</div>
+        <div style={{ fontSize: 12, color: "#475569", lineHeight: 1.9 }}>
+          <div>· Visitado &lt; {g("vis_min_pago", 90)}% → <b style={{ color: "#991b1b" }}>NO PAGA</b></div>
+          <div>· Visitado ≥ {g("vis_premio_min", 99.5)}% y NS &gt; {g("ns_premio_min", 99.5)}% → <b style={{ color: "#16a34a" }}>+{g("ns_premio_pct", 5)}%</b></div>
+          <div>· Visitado entre {g("vis_min_pago", 90)}% y {g("vis_premio_min", 99.5)}% y NS &lt; {g("ns_castigo_max", 95)}% → <b style={{ color: "#dc2626" }}>−{g("ns_castigo_pct", 3)}%</b></div>
+          <div>· Cualquier otro caso pagable → <b>0%</b></div>
+        </div>
       </div>
     </div>
   );
 }
-
-
 
 // ═══════════════════════════════════════════════════════════════════════════
 // INDICADORES OPERACIONALES MX — Pool Mercado Libre
