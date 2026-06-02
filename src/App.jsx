@@ -15554,7 +15554,8 @@ function TorreControlSC({ scId, fecha }) {
   const [resumen, setResumen] = useState(null);
   const [filas, setFilas] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [verDetalle, setVerDetalle] = useState(false);
+  const [abierto, setAbierto] = useState(false);          // colapsado por defecto
+  const [bucketSel, setBucketSel] = useState(null);       // chip seleccionado para filtrar
 
   useEffect(() => {
     let cancel = false;
@@ -15579,79 +15580,111 @@ function TorreControlSC({ scId, fecha }) {
   }, [scId, fecha]);
 
   if (loading) return <div style={{ fontSize: 12, color: "#9ca3af", padding: 8 }}>Cargando torre de control…</div>;
-  if (!resumen && filas.length === 0) return <div style={{ fontSize: 12, color: "#9ca3af", padding: 8 }}>Sin datos de torre para este día.</div>;
+  if (!resumen && filas.length === 0) return (
+    <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid #e5e7eb" }}>
+      <div style={{ fontSize: 12, fontWeight: 700, color: "#374151" }}>📊 Torre de Control · {scId}</div>
+      <div style={{ fontSize: 12, color: "#9ca3af", marginTop: 4 }}>Sin datos de torre para este día.</div>
+    </div>
+  );
 
+  // Cada chip mapea a uno o más buckets (para filtrar el detalle al clickear)
   const chips = resumen ? [
-    { label: "OK", val: resumen.ok, color: "#047857" },
-    { label: "RF1 venc", val: resumen.rf1_vencido || 0, color: "#b91c1c" },
-    { label: "RF2 NoShow", val: resumen.rf2, color: "#b91c1c" },
-    { label: "Cancel MELI", val: resumen.cancel_meli, color: "#b45309" },
-    { label: "Cambio placa", val: resumen.cambio_placa || 0, color: "#7c2d12" },
-    { label: "Parcial", val: resumen.parcial || 0, color: "#7c2d12" },
-    { label: "Pending Rost", val: resumen.pending_rost, color: "#9333ea" },
-    { label: "Cambios intradía", val: resumen.cambios_intradia || 0, color: "#0891b2" },
+    { id: "ok",        label: "OK",            val: resumen.ok,                          color: "#047857", buckets: ["1_OK"] },
+    { id: "rf1",       label: "RF1 venc",      val: resumen.rf1_vencido || 0,            color: "#b91c1c", buckets: ["2_RF1_VENCIDO"] },
+    { id: "rf2",       label: "RF2 NoShow",    val: resumen.rf2,                         color: "#b91c1c", buckets: ["3_RF2_NO_SHOW"] },
+    { id: "cancel",    label: "Cancel MELI",   val: resumen.cancel_meli,                 color: "#b45309", buckets: ["4_CANCEL_MELI"] },
+    { id: "cambio",    label: "Cambio placa",  val: resumen.cambio_placa || 0,           color: "#7c2d12", buckets: ["5_CAMBIO_PLACA"] },
+    { id: "parcial",   label: "Parcial",       val: resumen.parcial || 0,                color: "#7c2d12", buckets: ["6_PARCIAL"] },
+    { id: "pending",   label: "Pending Rost",  val: resumen.pending_rost,                color: "#9333ea", buckets: ["7_PENDING_ROST"] },
+    { id: "rechazado", label: "Rechazado",     val: (resumen.rejected_sdd || 0) + (resumen.rejected_spot || 0), color: "#475569", buckets: ["8_REJECTED_SDD", "9_REJECTED_SPOT"] },
+    { id: "intradia",  label: "Cambios intradía", val: resumen.cambios_intradia || 0,    color: "#0891b2", buckets: null }, // métrica aparte, no filtra
   ] : [];
+
+  // Filas filtradas según el chip seleccionado
+  const chipActivo = chips.find((c) => c.id === bucketSel);
+  const filasMostrar = (chipActivo && chipActivo.buckets)
+    ? filas.filter((f) => chipActivo.buckets.includes(f.bucket))
+    : filas;
 
   return (
     <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid #e5e7eb" }}>
-      <div style={{ fontSize: 12, fontWeight: 700, color: "#374151", marginBottom: 8 }}>
-        📊 Torre de Control · {scId} ({fecha})
-      </div>
-      {/* Resumen en chips */}
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
-        {chips.map((c) => (
-          <span key={c.label} style={{
-            fontSize: 11, padding: "3px 9px", borderRadius: 5, fontWeight: 700,
-            background: c.val > 0 ? "#fff" : "#f8fafc",
-            color: c.val > 0 ? c.color : "#cbd5e1",
-            border: `1px solid ${c.val > 0 ? c.color + "44" : "#e5e7eb"}`,
-          }}>
-            {c.label}: {c.val}
-          </span>
-        ))}
-        {resumen && (
-          <span style={{ fontSize: 11, padding: "3px 9px", borderRadius: 5, fontWeight: 700, background: "#1a3a6b", color: "#fff" }}>
-            Total: {resumen.total}
-          </span>
-        )}
-      </div>
-      {/* Toggle detalle ruta por ruta */}
-      <button onClick={() => setVerDetalle((v) => !v)}
-        style={{ fontSize: 11, color: "#1e3a5f", background: "none", border: "none", cursor: "pointer", fontWeight: 600, padding: 0 }}>
-        {verDetalle ? "▲ ocultar detalle" : `▼ ver detalle ruta por ruta (${filas.length})`}
+      {/* Encabezado colapsable */}
+      <button onClick={() => setAbierto((v) => !v)}
+        style={{ display: "flex", alignItems: "center", gap: 8, background: "none", border: "none", cursor: "pointer", padding: 0, fontSize: 12, fontWeight: 700, color: "#374151" }}>
+        <span>{abierto ? "▼" : "▶"}</span>
+        📊 Torre de Control · {scId}
+        {resumen && <span style={{ fontSize: 10, fontWeight: 600, color: "#9ca3af" }}>({resumen.total} rutas)</span>}
       </button>
-      {verDetalle && (
-        <div style={{ marginTop: 8, overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 10 }}>
-            <thead>
-              <tr style={{ background: "#f8fafc", borderBottom: "1px solid #e5e7eb" }}>
-                <th style={{ padding: "5px 6px", textAlign: "left" }}>Ruta</th>
-                <th style={{ padding: "5px 6px", textAlign: "left" }}>Estado</th>
-                <th style={{ padding: "5px 6px", textAlign: "left" }}>Chofer</th>
-                <th style={{ padding: "5px 6px", textAlign: "left" }}>Placa</th>
-                <th style={{ padding: "5px 6px", textAlign: "center" }}>Carg.</th>
-                <th style={{ padding: "5px 6px", textAlign: "center" }}>Entr.</th>
-                <th style={{ padding: "5px 6px", textAlign: "center" }}>%</th>
-                <th style={{ padding: "5px 6px", textAlign: "left" }}>Cambio intradía</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filas.map((f, i) => (
-                <tr key={i} style={{ borderBottom: "0.5px solid #f1f5f9" }}>
-                  <td style={{ padding: "4px 6px", fontFamily: "monospace" }}>{f.travel_id}</td>
-                  <td style={{ padding: "4px 6px", fontWeight: 700, color: colorBucket(f.bucket) }}>
-                    {BUCKETS_LABELS[f.bucket] || f.bucket}
-                  </td>
-                  <td style={{ padding: "4px 6px" }}>{f.driver_name || "—"}</td>
-                  <td style={{ padding: "4px 6px", fontFamily: "monospace" }}>{f.vehicle_plate || "—"}</td>
-                  <td style={{ padding: "4px 6px", textAlign: "center" }}>{f.total_cargados || 0}</td>
-                  <td style={{ padding: "4px 6px", textAlign: "center" }}>{f.total_entregados || 0}</td>
-                  <td style={{ padding: "4px 6px", textAlign: "center" }}>{f.pct_entregado != null ? f.pct_entregado + "%" : "—"}</td>
-                  <td style={{ padding: "4px 6px", color: f.cambio_intradia ? "#0891b2" : "#cbd5e1" }}>{f.cambio_intradia || "—"}</td>
+
+      {abierto && (
+        <div style={{ marginTop: 8 }}>
+          {/* Chips clickeables */}
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
+            {chips.map((c) => {
+              const sel = bucketSel === c.id;
+              const clickable = c.buckets && c.val > 0;
+              return (
+                <span key={c.id}
+                  onClick={() => { if (clickable) setBucketSel(sel ? null : c.id); }}
+                  style={{
+                    fontSize: 11, padding: "3px 9px", borderRadius: 5, fontWeight: 700,
+                    cursor: clickable ? "pointer" : "default",
+                    background: sel ? c.color : (c.val > 0 ? "#fff" : "#f8fafc"),
+                    color: sel ? "#fff" : (c.val > 0 ? c.color : "#cbd5e1"),
+                    border: `1px solid ${sel ? c.color : (c.val > 0 ? c.color + "44" : "#e5e7eb")}`,
+                  }}>
+                  {c.label}: {c.val}
+                </span>
+              );
+            })}
+            {resumen && (
+              <span onClick={() => setBucketSel(null)}
+                style={{ fontSize: 11, padding: "3px 9px", borderRadius: 5, fontWeight: 700, background: bucketSel ? "#e5e7eb" : "#1a3a6b", color: bucketSel ? "#374151" : "#fff", cursor: "pointer" }}
+                title="Ver todas">
+                Total: {resumen.total}
+              </span>
+            )}
+          </div>
+
+          {/* Detalle ruta por ruta (filtrado por chip) */}
+          <div style={{ fontSize: 10, color: "#9ca3af", marginBottom: 4 }}>
+            {chipActivo && chipActivo.buckets ? `Mostrando: ${chipActivo.label} (${filasMostrar.length})` : `Todas las rutas (${filasMostrar.length})`}
+          </div>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 10 }}>
+              <thead>
+                <tr style={{ background: "#f8fafc", borderBottom: "1px solid #e5e7eb" }}>
+                  <th style={{ padding: "5px 6px", textAlign: "left" }}>Ruta</th>
+                  <th style={{ padding: "5px 6px", textAlign: "left" }}>Estado</th>
+                  <th style={{ padding: "5px 6px", textAlign: "left" }}>Chofer</th>
+                  <th style={{ padding: "5px 6px", textAlign: "left" }}>Placa</th>
+                  <th style={{ padding: "5px 6px", textAlign: "center" }}>Carg.</th>
+                  <th style={{ padding: "5px 6px", textAlign: "center" }}>Entr.</th>
+                  <th style={{ padding: "5px 6px", textAlign: "center" }}>%</th>
+                  <th style={{ padding: "5px 6px", textAlign: "left" }}>Cambio intradía</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {filasMostrar.map((f, i) => (
+                  <tr key={i} style={{ borderBottom: "0.5px solid #f1f5f9" }}>
+                    <td style={{ padding: "4px 6px", fontFamily: "monospace" }}>{f.travel_id}</td>
+                    <td style={{ padding: "4px 6px", fontWeight: 700, color: colorBucket(f.bucket) }}>
+                      {BUCKETS_LABELS[f.bucket] || f.bucket}
+                    </td>
+                    <td style={{ padding: "4px 6px" }}>{f.driver_name || "—"}</td>
+                    <td style={{ padding: "4px 6px", fontFamily: "monospace" }}>{f.vehicle_plate || "—"}</td>
+                    <td style={{ padding: "4px 6px", textAlign: "center" }}>{f.total_cargados || 0}</td>
+                    <td style={{ padding: "4px 6px", textAlign: "center" }}>{f.total_entregados || 0}</td>
+                    <td style={{ padding: "4px 6px", textAlign: "center" }}>{f.pct_entregado != null ? f.pct_entregado + "%" : "—"}</td>
+                    <td style={{ padding: "4px 6px", color: f.cambio_intradia ? "#0891b2" : "#cbd5e1" }}>{f.cambio_intradia || "—"}</td>
+                  </tr>
+                ))}
+                {filasMostrar.length === 0 && (
+                  <tr><td colSpan={8} style={{ padding: 12, textAlign: "center", color: "#9ca3af" }}>Sin rutas en este estado.</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
     </div>
@@ -15730,6 +15763,7 @@ function RutasHelperAprobar({ scId, fecha, decididoPor }) {
   const [decisiones, setDecisiones] = useState({}); // travel_id → 'aprobado' | 'rechazado'
   const [loading, setLoading] = useState(true);
   const [guardando, setGuardando] = useState(null);
+  const [abierto, setAbierto] = useState(false); // colapsado por defecto
 
   useEffect(() => {
     let cancel = false;
@@ -15825,10 +15859,14 @@ function RutasHelperAprobar({ scId, fecha, decididoPor }) {
 
   return (
     <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid #e5e7eb" }}>
-      <div style={{ fontSize: 12, fontWeight: 700, color: "#374151", marginBottom: 8 }}>
-        🧑‍🔧 Rutas con ayudante del D-1 ({fecha}) — aprobar pago ({rutas.length})
-      </div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      <button onClick={() => setAbierto((v) => !v)}
+        style={{ display: "flex", alignItems: "center", gap: 8, background: "none", border: "none", cursor: "pointer", padding: 0, fontSize: 12, fontWeight: 700, color: "#374151" }}>
+        <span>{abierto ? "▼" : "▶"}</span>
+        🧑‍🔧 Rutas con ayudante del D-1 — aprobar pago
+        <span style={{ fontSize: 10, fontWeight: 600, color: "#9ca3af" }}>({rutas.length})</span>
+      </button>
+      {abierto && (
+      <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 8 }}>
         {rutas.map((r) => {
           const tid = String(r.id_ruta);
           const dec = decisiones[tid];
@@ -15894,6 +15932,7 @@ function RutasHelperAprobar({ scId, fecha, decididoPor }) {
           );
         })}
       </div>
+      )}
     </div>
   );
 }
@@ -16168,7 +16207,7 @@ function PanelControlSupervisores() {
                     {abierto && (
                       <tr style={{ background: "#fafbfc" }}>
                         <td colSpan={4} style={{ padding: 14 }}>
-                          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+                          <div>
                             {/* Detalle HOY */}
                             <div>
                               <div style={{ fontSize: 12, fontWeight: 700, color: "#374151", marginBottom: 6 }}>
@@ -16186,33 +16225,7 @@ function PanelControlSupervisores() {
                                 </div>
                               ))}
                             </div>
-                            {/* Detalle D-1 */}
-                            <div>
-                              <div style={{ fontSize: 12, fontWeight: 700, color: "#374151", marginBottom: 6 }}>
-                                Conciliación D-1 ({fechaAyer})
-                              </div>
-                              {!bitAyer[s.sc] ? (
-                                <div style={{ fontSize: 12, color: "#9ca3af" }}>No completó la bitácora del día anterior.</div>
-                              ) : (
-                                <>
-                                  <div style={{ fontSize: 12, padding: "3px 0", color: "#4b5563" }}>
-                                    Estado: <strong style={{ color: ed.color }}>{ed.label}</strong>
-                                  </div>
-                                  <div style={{ fontSize: 12, padding: "3px 0", color: "#4b5563" }}>
-                                    Confirmada: {ed.confirmada ? `Sí (${fmtHora(bitAyer[s.sc].conciliacion_d1_confirmada_at)})` : "No"}
-                                  </div>
-                                  <div style={{ fontSize: 12, padding: "3px 0", color: "#4b5563" }}>
-                                    Diferencias sin justificar: <strong style={{ color: ed.difsSinJustif > 0 ? "#dc2626" : "#16a34a" }}>{ed.difsSinJustif}</strong>
-                                  </div>
-                                </>
-                              )}
-                            </div>
                           </div>
-
-                          {/* ─── Consolidado D-1 completo: justificaciones + fotos ─── */}
-                          {bitAyer[s.sc] && (
-                            <DetalleD1Completo row={bitAyer[s.sc]} />
-                          )}
 
                           {/* ─── Rutas con helper del D-1: aprobar/rechazar pago ─── */}
                           <RutasHelperAprobar scId={s.sc} fecha={fechaAyer} decididoPor={null} />
