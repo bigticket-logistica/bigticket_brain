@@ -15922,23 +15922,23 @@ function PaquetesHelper({ idRuta, helperNombre, fecha }) {
     let cancel = false;
     (async () => {
       try {
-        let q = sb.from("vw_entregas_por_helper")
-          .select("paquete, hora_entrega, city, state, lat, lng, suplantacion, helper_nombre")
+        // Traemos TODOS los paquetes de la ruta (sin filtrar por nombre, que no
+        // coincide entre el nombre limpio y el crudo). Luego agrupamos por persona.
+        const { data } = await sb.from("vw_entregas_por_helper")
+          .select("paquete, hora_entrega, city, state, lat, lng, suplantacion, helper_nombre, chofer")
           .eq("id_ruta", idRuta).eq("fecha", fecha)
           .order("hora_entrega", { ascending: true });
-        if (helperNombre) q = q.eq("helper_nombre", helperNombre);
-        const { data } = await q;
         if (!cancel) setPaquetes(data || []);
       } catch (e) {
-        console.error("Error paquetes helper:", e);
+        console.error("Error paquetes ruta:", e);
         if (!cancel) setPaquetes([]);
       }
     })();
     return () => { cancel = true; };
-  }, [idRuta, helperNombre, fecha]);
+  }, [idRuta, fecha]);
 
   if (paquetes === undefined) return <div style={{ fontSize: 10, color: "#9ca3af", padding: "4px 8px" }}>Cargando paquetes…</div>;
-  if (paquetes.length === 0) return <div style={{ fontSize: 10, color: "#9ca3af", padding: "4px 8px" }}>Sin paquetes registrados para este helper.</div>;
+  if (paquetes.length === 0) return <div style={{ fontSize: 10, color: "#9ca3af", padding: "4px 8px" }}>Sin paquetes registrados para esta ruta.</div>;
 
   const horaMX = (ts) => {
     try {
@@ -15946,40 +15946,58 @@ function PaquetesHelper({ idRuta, helperNombre, fecha }) {
     } catch { return "—"; }
   };
 
+  // Agrupar paquetes por helper_nombre (quién lo entregó)
+  const porPersona = new Map();
+  for (const p of paquetes) {
+    const key = p.helper_nombre || "(sin helper)";
+    if (!porPersona.has(key)) porPersona.set(key, []);
+    porPersona.get(key).push(p);
+  }
+  const grupos = [...porPersona.entries()].sort((a, b) => b[1].length - a[1].length);
+
   return (
     <div style={{ margin: "4px 0 4px 20px", padding: 8, background: "#f8fafc", borderRadius: 6, border: "1px solid #e5e7eb" }}>
-      <div style={{ fontSize: 10, fontWeight: 700, color: "#374151", marginBottom: 4 }}>
-        {paquetes.length} paquete(s) entregado(s)
+      <div style={{ fontSize: 10, fontWeight: 700, color: "#374151", marginBottom: 6 }}>
+        {paquetes.length} paquete(s) entregado(s) en la ruta · {grupos.length} persona(s)
       </div>
-      <div style={{ overflowX: "auto", maxHeight: 240, overflowY: "auto" }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 10 }}>
-          <thead>
-            <tr style={{ background: "#fff", borderBottom: "1px solid #e5e7eb", position: "sticky", top: 0 }}>
-              <th style={{ padding: "4px 6px", textAlign: "left" }}>#</th>
-              <th style={{ padding: "4px 6px", textAlign: "left" }}>Paquete</th>
-              <th style={{ padding: "4px 6px", textAlign: "center" }}>Hora (MX)</th>
-              <th style={{ padding: "4px 6px", textAlign: "left" }}>Ciudad</th>
-              <th style={{ padding: "4px 6px", textAlign: "center" }}>Ubicación</th>
-            </tr>
-          </thead>
-          <tbody>
-            {paquetes.map((p, i) => (
-              <tr key={i} style={{ borderBottom: "0.5px solid #f1f5f9" }}>
-                <td style={{ padding: "3px 6px", color: "#9ca3af" }}>{i + 1}</td>
-                <td style={{ padding: "3px 6px", fontFamily: "monospace" }}>{p.paquete}</td>
-                <td style={{ padding: "3px 6px", textAlign: "center" }}>{horaMX(p.hora_entrega)}</td>
-                <td style={{ padding: "3px 6px" }}>{p.city || "—"}{p.state ? `, ${p.state}` : ""}</td>
-                <td style={{ padding: "3px 6px", textAlign: "center" }}>
-                  {p.lat && p.lng ? (
-                    <a href={`https://www.google.com/maps?q=${p.lat},${p.lng}`} target="_blank" rel="noreferrer"
-                      style={{ color: "#1e3a5f", textDecoration: "underline" }}>📍 mapa</a>
-                  ) : "—"}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      {grupos.map(([persona, pks], gi) => (
+        <div key={gi} style={{ marginBottom: 10 }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: "#1e3a5f", marginBottom: 3, display: "flex", gap: 6, alignItems: "center" }}>
+            <span style={{ fontSize: 9, background: "#fef3c7", color: "#92400e", padding: "1px 6px", borderRadius: 3 }}>HELPER</span>
+            {persona}
+            <span style={{ color: "#9ca3af", fontWeight: 600 }}>· {pks.length} paquete(s)</span>
+          </div>
+          <div style={{ overflowX: "auto", maxHeight: 200, overflowY: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 10 }}>
+              <thead>
+                <tr style={{ background: "#fff", borderBottom: "1px solid #e5e7eb", position: "sticky", top: 0 }}>
+                  <th style={{ padding: "4px 6px", textAlign: "left" }}>#</th>
+                  <th style={{ padding: "4px 6px", textAlign: "left" }}>Paquete</th>
+                  <th style={{ padding: "4px 6px", textAlign: "center" }}>Hora (MX)</th>
+                  <th style={{ padding: "4px 6px", textAlign: "left" }}>Ciudad</th>
+                  <th style={{ padding: "4px 6px", textAlign: "center" }}>Ubicación</th>
+                </tr>
+              </thead>
+              <tbody>
+                {pks.map((p, i) => (
+                  <tr key={i} style={{ borderBottom: "0.5px solid #f1f5f9" }}>
+                    <td style={{ padding: "3px 6px", color: "#9ca3af" }}>{i + 1}</td>
+                    <td style={{ padding: "3px 6px", fontFamily: "monospace" }}>{p.paquete}</td>
+                    <td style={{ padding: "3px 6px", textAlign: "center" }}>{horaMX(p.hora_entrega)}</td>
+                    <td style={{ padding: "3px 6px" }}>{p.city || "—"}{p.state ? `, ${p.state}` : ""}</td>
+                    <td style={{ padding: "3px 6px", textAlign: "center" }}>
+                      {p.lat && p.lng ? (
+                        <a href={`https://www.google.com/maps?q=${p.lat},${p.lng}`} target="_blank" rel="noreferrer"
+                          style={{ color: "#1e3a5f", textDecoration: "underline" }}>📍 mapa</a>
+                      ) : "—"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
@@ -16124,27 +16142,23 @@ function RutasHelperAprobar({ scId, fecha, decididoPor }) {
                   {/* Personas: chofer + helpers con su % */}
                   <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 3 }}>
                     {r.personas.map((p, i) => (
-                      <div key={i}>
-                        <div style={{ fontSize: 11, color: "#4b5563", display: "flex", gap: 6, alignItems: "center" }}>
-                          <span style={{ fontSize: 9, background: p.es_chofer ? "#dbeafe" : "#fef3c7", color: p.es_chofer ? "#1e40af" : "#92400e", padding: "1px 6px", borderRadius: 3, fontWeight: 700 }}>
-                            {p.es_chofer ? "CHOFER" : "HELPER"}
-                          </span>
-                          {!p.es_chofer ? (
-                            <button onClick={() => setHelperAbierto(helperAbierto === `${r.id_ruta}_${i}` ? null : `${r.id_ruta}_${i}`)}
-                              style={{ fontWeight: 600, color: "#1e3a5f", background: "none", border: "none", cursor: "pointer", padding: 0, textDecoration: "underline", fontSize: 11 }}>
-                              {p.nombre || "—"} {helperAbierto === `${r.id_ruta}_${i}` ? "▲" : "▼ ver paquetes"}
-                            </button>
-                          ) : (
-                            <span style={{ fontWeight: 600 }}>{p.nombre || "—"}</span>
-                          )}
-                          {p.pct && <span style={{ marginLeft: "auto", fontWeight: 700, color: "#374151" }}>{p.pct}</span>}
-                        </div>
-                        {!p.es_chofer && helperAbierto === `${r.id_ruta}_${i}` && (
-                          <PaquetesHelper idRuta={r.id_ruta} helperNombre={p.nombre} fecha={fecha} />
-                        )}
+                      <div key={i} style={{ fontSize: 11, color: "#4b5563", display: "flex", gap: 6, alignItems: "center" }}>
+                        <span style={{ fontSize: 9, background: p.es_chofer ? "#dbeafe" : "#fef3c7", color: p.es_chofer ? "#1e40af" : "#92400e", padding: "1px 6px", borderRadius: 3, fontWeight: 700 }}>
+                          {p.es_chofer ? "CHOFER" : "HELPER"}
+                        </span>
+                        <span style={{ fontWeight: 600 }}>{p.nombre || "—"}</span>
+                        {p.pct && <span style={{ marginLeft: "auto", fontWeight: 700, color: "#374151" }}>{p.pct}</span>}
                       </div>
                     ))}
                   </div>
+                  {/* Ver paquetes entregados (toda la ruta, agrupado por persona) */}
+                  <button onClick={() => setHelperAbierto(helperAbierto === r.id_ruta ? null : r.id_ruta)}
+                    style={{ marginTop: 6, fontSize: 11, color: "#1e3a5f", background: "none", border: "none", cursor: "pointer", fontWeight: 600, padding: 0, textDecoration: "underline" }}>
+                    {helperAbierto === r.id_ruta ? "▲ ocultar paquetes" : "▼ ver paquetes entregados"}
+                  </button>
+                  {helperAbierto === r.id_ruta && (
+                    <PaquetesHelper idRuta={r.id_ruta} fecha={fecha} />
+                  )}
                 </div>
                 <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                   <button onClick={() => decidir(r, "aprobado")} disabled={enCurso}
