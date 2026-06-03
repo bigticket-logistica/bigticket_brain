@@ -16278,6 +16278,7 @@ function PanelControlSupervisores() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [expandido, setExpandido] = useState(new Set());
+  const [filtroSc, setFiltroSc] = useState("");  // "" = todos
 
   // Fecha anterior (D-1) respecto a la seleccionada
   const fechaAyer = useMemo(() => {
@@ -16396,6 +16397,14 @@ function PanelControlSupervisores() {
           <input type="date" value={fecha} onChange={(e) => setFecha(e.target.value)}
             style={{ padding: "6px 10px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }} />
         </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <label style={{ fontSize: 13, fontWeight: 600, color: "#374151" }}>SC:</label>
+          <select value={filtroSc} onChange={(e) => setFiltroSc(e.target.value)}
+            style={{ padding: "6px 10px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }}>
+            <option value="">Todos</option>
+            {supervisores.map((s) => <option key={s.sc} value={s.sc}>{s.sc}</option>)}
+          </select>
+        </div>
         <button onClick={cargar}
           style={{ padding: "6px 14px", background: "#1e3a5f", color: "#fff", border: "none", borderRadius: 6, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
           🔄 Refrescar
@@ -16427,7 +16436,7 @@ function PanelControlSupervisores() {
               </tr>
             </thead>
             <tbody>
-              {supervisores.map((s) => {
+              {supervisores.filter((s) => !filtroSc || s.sc === filtroSc).map((s) => {
                 const eh = estadoHoy(bitHoy[s.sc]);
                 const ed = estadoD1(bitAyer[s.sc]);
                 const abierto = expandido.has(s.sc);
