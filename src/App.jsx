@@ -16098,8 +16098,10 @@ function RutasHelperAprobar({ scId, fecha, decididoPor }) {
 // ── Formulario inicial del supervisor (contenido completo, del día elegido) ──
 function FormularioInicialSC({ scId, fecha }) {
   const [row, setRow] = useState(undefined); // undefined=cargando, null=sin datos
+  const [verAyudantes, setVerAyudantes] = useState(false);
   useEffect(() => {
     let cancel = false;
+    setVerAyudantes(false);
     (async () => {
       try {
         const { data } = await sb.from("vw_bitacora_panel")
@@ -16115,39 +16117,8 @@ function FormularioInicialSC({ scId, fecha }) {
 
   const siNo = (v) => v === true ? "Sí" : v === false ? "No" : "—";
   const cnt = (arr) => Array.isArray(arr) ? arr.length : 0;
-
-  const items = [
-    {
-      nombre: "1 · Ayudantes",
-      declarado: siNo(row.declarado_ayudantes_si_no),
-      detalle: cnt(row.declarado_ayudantes_detalle) > 0 ? `${cnt(row.declarado_ayudantes_detalle)} ruta(s) con ayudante declaradas` : null,
-      justif: row.ayudantes_justificacion,
-    },
-    {
-      nombre: "2 · Ambulancias",
-      declarado: siNo(row.declarado_ambulancias_si_no),
-      detalle: cnt(row.declarado_ambulancias_detalle) > 0 ? `${cnt(row.declarado_ambulancias_detalle)} ambulancia(s) declaradas` : null,
-      justif: row.ambulancias_justificacion,
-    },
-    {
-      nombre: "3 · Cancelaciones MELI",
-      declarado: siNo(row.declarado_cancelaciones_si_no),
-      detalle: cnt(row.declarado_cancelaciones_fotos) > 0 ? `${cnt(row.declarado_cancelaciones_fotos)} foto(s) adjuntas` : null,
-      justif: row.cancelaciones_justificacion,
-    },
-    {
-      nombre: "4 · No Show",
-      declarado: siNo(row.declarado_noshow_si_no),
-      detalle: cnt(row.declarado_noshow_patentes) > 0 ? `Patentes: ${(row.declarado_noshow_patentes || []).map((p) => (typeof p === "string" ? p : p.placa || p.patente || "")).filter(Boolean).join(", ")}` : null,
-      justif: row.noshow_justificacion,
-    },
-    {
-      nombre: "5 · PNR",
-      declarado: siNo(row.declarado_pnr_si_no),
-      detalle: row.declarado_pnr_si_no === true ? `${row.declarado_pnr_casos_abiertos ?? "?"} abierto(s) de ${row.declarado_pnr_cantidad_total ?? "?"} total` : null,
-      justif: row.pnr_justificacion,
-    },
-  ];
+  const ayudantes = Array.isArray(row.declarado_ayudantes_detalle) ? row.declarado_ayudantes_detalle : [];
+  const noshowPatentes = Array.isArray(row.declarado_noshow_patentes) ? row.declarado_noshow_patentes : [];
 
   return (
     <div>
@@ -16156,22 +16127,77 @@ function FormularioInicialSC({ scId, fecha }) {
         {row.estado_dia && <span style={{ fontSize: 10, fontWeight: 600, color: "#9ca3af", marginLeft: 6 }}>· {row.estado_dia}</span>}
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-        {items.map((it, i) => (
-          <div key={i} style={{ fontSize: 12, padding: "5px 8px", background: "#fff", border: "1px solid #eef0f3", borderRadius: 5 }}>
-            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-              <span style={{ fontWeight: 600, color: "#374151" }}>{it.nombre}</span>
-              <span style={{
-                marginLeft: "auto", fontWeight: 700,
-                color: it.declarado === "Sí" ? "#b45309" : it.declarado === "No" ? "#16a34a" : "#9ca3af",
-              }}>{it.declarado}</span>
-            </div>
-            {it.detalle && <div style={{ fontSize: 11, color: "#4b5563", marginTop: 2 }}>{it.detalle}</div>}
-            {it.justif && it.justif.trim() && (
-              <div style={{ fontSize: 11, color: "#6b7280", marginTop: 2, fontStyle: "italic" }}>💬 {it.justif}</div>
+
+        {/* 1 · Ayudantes con detalle expandible */}
+        <div style={{ fontSize: 12, padding: "5px 8px", background: "#fff", border: "1px solid #eef0f3", borderRadius: 5 }}>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <span style={{ fontWeight: 600, color: "#374151" }}>1 · Ayudantes</span>
+            {ayudantes.length > 0 && (
+              <button onClick={() => setVerAyudantes((v) => !v)}
+                style={{ fontSize: 10, color: "#1e3a5f", background: "none", border: "none", cursor: "pointer", fontWeight: 600, padding: 0 }}>
+                {verAyudantes ? "▲ ocultar" : `▼ ver ${ayudantes.length} ruta(s)`}
+              </button>
             )}
+            <span style={{ marginLeft: "auto", fontWeight: 700, color: declColor(siNo(row.declarado_ayudantes_si_no)) }}>{siNo(row.declarado_ayudantes_si_no)}</span>
           </div>
-        ))}
+          {verAyudantes && ayudantes.length > 0 && (
+            <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 3 }}>
+              {ayudantes.map((a, i) => (
+                <div key={i} style={{ fontSize: 11, color: "#4b5563", padding: "3px 6px", background: "#f8fafc", borderRadius: 4, display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+                  <span style={{ fontFamily: "monospace", fontWeight: 700 }}>{a.placa}</span>
+                  {a.cluster && <span style={{ fontSize: 9, background: "#e2e8f0", color: "#475569", padding: "0 5px", borderRadius: 3, fontWeight: 700 }}>{a.cluster}</span>}
+                  <span>{a.chofer || "—"}</span>
+                  {a.vehiculo && <span style={{ color: "#9ca3af" }}>· {a.vehiculo}</span>}
+                  {a.bloqueada && <span style={{ fontSize: 9, background: "#fee2e2", color: "#b91c1c", padding: "0 5px", borderRadius: 3, fontWeight: 700 }}>BLOQUEADA</span>}
+                </div>
+              ))}
+            </div>
+          )}
+          {row.ayudantes_justificacion?.trim() && <div style={{ fontSize: 11, color: "#6b7280", marginTop: 2, fontStyle: "italic" }}>💬 {row.ayudantes_justificacion}</div>}
+        </div>
+
+        {/* 2 · Ambulancias */}
+        <ItemSimple nombre="2 · Ambulancias" valor={siNo(row.declarado_ambulancias_si_no)}
+          detalle={cnt(row.declarado_ambulancias_detalle) > 0 ? `${cnt(row.declarado_ambulancias_detalle)} ambulancia(s) declaradas` : null}
+          justif={row.ambulancias_justificacion} />
+
+        {/* 3 · Cancelaciones */}
+        <ItemSimple nombre="3 · Cancelaciones MELI" valor={siNo(row.declarado_cancelaciones_si_no)}
+          detalle={cnt(row.declarado_cancelaciones_fotos) > 0 ? `${cnt(row.declarado_cancelaciones_fotos)} foto(s) adjuntas` : null}
+          justif={row.cancelaciones_justificacion} />
+
+        {/* 4 · No Show con patentes */}
+        <ItemSimple nombre="4 · No Show" valor={siNo(row.declarado_noshow_si_no)}
+          detalle={noshowPatentes.length > 0 ? `Patentes: ${noshowPatentes.map((p) => (typeof p === "string" ? p : p.placa || p.patente || "")).filter(Boolean).join(", ")}` : null}
+          justif={row.noshow_justificacion} />
+
+        {/* 5 · PNR */}
+        <ItemSimple nombre="5 · PNR"
+          valor={siNo(row.declarado_pnr_si_no)}
+          detalle={row.declarado_pnr_si_no === true
+            ? ((row.declarado_pnr_casos_abiertos != null || row.declarado_pnr_cantidad_total != null)
+                ? `${row.declarado_pnr_casos_abiertos ?? 0} abierto(s) de ${row.declarado_pnr_cantidad_total ?? 0} total`
+                : "Declaró PNR (sin cantidades)")
+            : null}
+          justif={row.pnr_justificacion} />
       </div>
+    </div>
+  );
+}
+
+function declColor(v) {
+  return v === "Sí" ? "#b45309" : v === "No" ? "#16a34a" : "#9ca3af";
+}
+
+function ItemSimple({ nombre, valor, detalle, justif }) {
+  return (
+    <div style={{ fontSize: 12, padding: "5px 8px", background: "#fff", border: "1px solid #eef0f3", borderRadius: 5 }}>
+      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        <span style={{ fontWeight: 600, color: "#374151" }}>{nombre}</span>
+        <span style={{ marginLeft: "auto", fontWeight: 700, color: declColor(valor) }}>{valor}</span>
+      </div>
+      {detalle && <div style={{ fontSize: 11, color: "#4b5563", marginTop: 2 }}>{detalle}</div>}
+      {justif && justif.trim() && <div style={{ fontSize: 11, color: "#6b7280", marginTop: 2, fontStyle: "italic" }}>💬 {justif}</div>}
     </div>
   );
 }
