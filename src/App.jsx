@@ -16019,7 +16019,7 @@ function RutasHelperAprobar({ scId, fecha, decididoPor }) {
       <button onClick={() => setAbierto((v) => !v)}
         style={{ display: "flex", alignItems: "center", gap: 8, background: "none", border: "none", cursor: "pointer", padding: 0, fontSize: 12, fontWeight: 700, color: "#374151" }}>
         <span>{abierto ? "▼" : "▶"}</span>
-        🧑‍🔧 Rutas con ayudante del D-1 — aprobar pago
+        🧑‍🔧 Rutas con ayudante — aprobar pago
         <span style={{ fontSize: 10, fontWeight: 600, color: "#9ca3af" }}>({rutas.length})</span>
       </button>
       {abierto && (
@@ -16321,6 +16321,7 @@ function PanelControlSupervisores() {
   const [error, setError] = useState(null);
   const [expandido, setExpandido] = useState(new Set());
   const [filtroSc, setFiltroSc] = useState("");  // "" = todos
+  const [filtroEvento, setFiltroEvento] = useState("todos");  // todos|bitacora|helper|torre|ambulancias|patentes
 
   // Fecha anterior (D-1) respecto a la seleccionada
   const fechaAyer = useMemo(() => {
@@ -16447,6 +16448,18 @@ function PanelControlSupervisores() {
             {supervisores.map((s) => <option key={s.sc} value={s.sc}>{s.sc}</option>)}
           </select>
         </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <label style={{ fontSize: 13, fontWeight: 600, color: "#374151" }}>Evento:</label>
+          <select value={filtroEvento} onChange={(e) => setFiltroEvento(e.target.value)}
+            style={{ padding: "6px 10px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }}>
+            <option value="todos">Todos</option>
+            <option value="bitacora">Bitácora del supervisor</option>
+            <option value="helper">Rutas con helper</option>
+            <option value="torre">Torre de Control</option>
+            <option value="ambulancias">Ambulancias</option>
+            <option value="patentes">Patentes nuevas</option>
+          </select>
+        </div>
         <button onClick={cargar}
           style={{ padding: "6px 14px", background: "#1e3a5f", color: "#fff", border: "none", borderRadius: 6, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
           🔄 Refrescar
@@ -16498,20 +16511,30 @@ function PanelControlSupervisores() {
                     {abierto && (
                       <tr style={{ background: "#fafbfc" }}>
                         <td colSpan={4} style={{ padding: 14 }}>
-                          {/* Formulario inicial del supervisor (contenido completo, fecha elegida) */}
-                          <FormularioInicialSC scId={s.sc} fecha={fecha} />
+                          {/* Formulario inicial del supervisor (del día elegido) */}
+                          {(filtroEvento === "todos" || filtroEvento === "bitacora") && (
+                            <FormularioInicialSC scId={s.sc} fecha={fecha} />
+                          )}
 
-                          {/* ─── Rutas con helper del D-1: aprobar/rechazar pago ─── */}
-                          <RutasHelperAprobar scId={s.sc} fecha={fechaAyer} decididoPor={null} />
+                          {/* ─── Rutas con helper (mismo día) ─── */}
+                          {(filtroEvento === "todos" || filtroEvento === "helper") && (
+                            <RutasHelperAprobar scId={s.sc} fecha={fecha} decididoPor={null} />
+                          )}
 
-                          {/* ─── Torre de Control del SC (D-1) ─── */}
-                          <TorreControlSC scId={s.sc} fecha={fechaAyer} />
+                          {/* ─── Torre de Control del SC (mismo día) ─── */}
+                          {(filtroEvento === "todos" || filtroEvento === "torre") && (
+                            <TorreControlSC scId={s.sc} fecha={fecha} />
+                          )}
 
-                          {/* ─── Ambulancias del SC (D-1) ─── */}
-                          <AmbulanciasSC scId={s.sc} fecha={fechaAyer} />
+                          {/* ─── Ambulancias del SC (mismo día) ─── */}
+                          {(filtroEvento === "todos" || filtroEvento === "ambulancias") && (
+                            <AmbulanciasSC scId={s.sc} fecha={fecha} />
+                          )}
 
                           {/* ─── Patentes nuevas del SC (hoy) ─── */}
-                          <PatentesNuevasSC scId={s.sc} decididoPor={null} />
+                          {(filtroEvento === "todos" || filtroEvento === "patentes") && (
+                            <PatentesNuevasSC scId={s.sc} decididoPor={null} />
+                          )}
 
                           {/* Contacto (para el WhatsApp futuro) */}
                           <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px solid #e5e7eb", fontSize: 11, color: "#6b7280" }}>
