@@ -16119,6 +16119,7 @@ function FormularioInicialSC({ scId, fecha }) {
   const cnt = (arr) => Array.isArray(arr) ? arr.length : 0;
   const ayudantes = Array.isArray(row.declarado_ayudantes_detalle) ? row.declarado_ayudantes_detalle : [];
   const noshowPatentes = Array.isArray(row.declarado_noshow_patentes) ? row.declarado_noshow_patentes : [];
+  const adj = (row.justificaciones_adjuntos && typeof row.justificaciones_adjuntos === "object") ? row.justificaciones_adjuntos : {};
 
   return (
     <div>
@@ -16154,22 +16155,30 @@ function FormularioInicialSC({ scId, fecha }) {
             </div>
           )}
           {row.ayudantes_justificacion?.trim() && <div style={{ fontSize: 11, color: "#6b7280", marginTop: 2, fontStyle: "italic" }}>💬 {row.ayudantes_justificacion}</div>}
+          {Array.isArray(adj.ayudantes) && adj.ayudantes.length > 0 && (
+            <div style={{ display: "flex", flexWrap: "wrap", marginTop: 4 }}>
+              {adj.ayudantes.map((f, i) => <FotoLink key={i} path={typeof f === "string" ? f : f?.path} />)}
+            </div>
+          )}
         </div>
 
         {/* 2 · Ambulancias */}
         <ItemSimple nombre="2 · Ambulancias" valor={siNo(row.declarado_ambulancias_si_no)}
           detalle={cnt(row.declarado_ambulancias_detalle) > 0 ? `${cnt(row.declarado_ambulancias_detalle)} ambulancia(s) declaradas` : null}
-          justif={row.ambulancias_justificacion} />
+          justif={row.ambulancias_justificacion}
+          fotos={adj.ambulancias} />
 
         {/* 3 · Cancelaciones */}
         <ItemSimple nombre="3 · Cancelaciones MELI" valor={siNo(row.declarado_cancelaciones_si_no)}
           detalle={cnt(row.declarado_cancelaciones_fotos) > 0 ? `${cnt(row.declarado_cancelaciones_fotos)} foto(s) adjuntas` : null}
-          justif={row.cancelaciones_justificacion} />
+          justif={row.cancelaciones_justificacion}
+          fotos={[...(Array.isArray(row.declarado_cancelaciones_fotos) ? row.declarado_cancelaciones_fotos : []), ...(adj.cancelaciones || [])]} />
 
         {/* 4 · No Show con patentes */}
         <ItemSimple nombre="4 · No Show" valor={siNo(row.declarado_noshow_si_no)}
           detalle={noshowPatentes.length > 0 ? `Patentes: ${noshowPatentes.map((p) => (typeof p === "string" ? p : p.placa || p.patente || "")).filter(Boolean).join(", ")}` : null}
-          justif={row.noshow_justificacion} />
+          justif={row.noshow_justificacion}
+          fotos={adj.noshow} />
 
         {/* 5 · PNR */}
         <ItemSimple nombre="5 · PNR"
@@ -16179,7 +16188,8 @@ function FormularioInicialSC({ scId, fecha }) {
                 ? `${row.declarado_pnr_casos_abiertos ?? 0} abierto(s) de ${row.declarado_pnr_cantidad_total ?? 0} total`
                 : "Declaró PNR (sin cantidades)")
             : null}
-          justif={row.pnr_justificacion} />
+          justif={row.pnr_justificacion}
+          fotos={adj.pnr} />
       </div>
     </div>
   );
@@ -16189,7 +16199,8 @@ function declColor(v) {
   return v === "Sí" ? "#b45309" : v === "No" ? "#16a34a" : "#9ca3af";
 }
 
-function ItemSimple({ nombre, valor, detalle, justif }) {
+function ItemSimple({ nombre, valor, detalle, justif, fotos }) {
+  const paths = Array.isArray(fotos) ? fotos.map((f) => (typeof f === "string" ? f : f?.path)).filter(Boolean) : [];
   return (
     <div style={{ fontSize: 12, padding: "5px 8px", background: "#fff", border: "1px solid #eef0f3", borderRadius: 5 }}>
       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
@@ -16198,6 +16209,11 @@ function ItemSimple({ nombre, valor, detalle, justif }) {
       </div>
       {detalle && <div style={{ fontSize: 11, color: "#4b5563", marginTop: 2 }}>{detalle}</div>}
       {justif && justif.trim() && <div style={{ fontSize: 11, color: "#6b7280", marginTop: 2, fontStyle: "italic" }}>💬 {justif}</div>}
+      {paths.length > 0 && (
+        <div style={{ display: "flex", flexWrap: "wrap", marginTop: 4 }}>
+          {paths.map((p, i) => <FotoLink key={i} path={p} />)}
+        </div>
+      )}
     </div>
   );
 }
