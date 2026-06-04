@@ -16010,6 +16010,9 @@ function RutasHelperAprobar({ scId, fecha, decididoPor }) {
   const [guardando, setGuardando] = useState(null);
   const [abierto, setAbierto] = useState(false); // colapsado por defecto
   const [helperAbierto, setHelperAbierto] = useState(null); // "{idRuta}_{idx}" del helper expandido
+  const [motivos, setMotivos] = useState({}); // travel_id → motivo de rechazo
+  const [notificando, setNotificando] = useState(null); // travel_id en proceso de notificar
+  const [notificados, setNotificados] = useState({}); // travel_id → true si ya se notificó
 
   useEffect(() => {
     let cancel = false;
@@ -16023,7 +16026,7 @@ function RutasHelperAprobar({ scId, fecha, decididoPor }) {
             .eq("sc", scId).eq("fecha", fecha).eq("helper_flag", true)
             .order("id_ruta", { ascending: true }).order("helper_idx", { ascending: true }),
           sb.from("aprobaciones_helper")
-            .select("travel_id, decision")
+            .select("travel_id, decision, motivo_rechazo, notificado_at")
             .eq("service_center_id", scId).eq("fecha", fecha),
         ]);
         if (cancel) return;
@@ -16060,8 +16063,16 @@ function RutasHelperAprobar({ scId, fecha, decididoPor }) {
         setRutas(lista);
 
         const dec = {};
-        for (const a of aprobR.data || []) dec[String(a.travel_id)] = a.decision;
+        const mot = {};
+        const notif = {};
+        for (const a of aprobR.data || []) {
+          dec[String(a.travel_id)] = a.decision;
+          if (a.motivo_rechazo) mot[String(a.travel_id)] = a.motivo_rechazo;
+          if (a.notificado_at) notif[String(a.travel_id)] = true;
+        }
         setDecisiones(dec);
+        setMotivos(mot);
+        setNotificados(notif);
       } catch (e) {
         console.error("Error cargando rutas helper:", e);
       } finally {
@@ -16085,6 +16096,7 @@ function RutasHelperAprobar({ scId, fecha, decididoPor }) {
         cluster: ruta.cluster || null,
         bloqueada: !!ruta.bloqueada,
         decision,
+        motivo_rechazo: decision === "rechazado" ? (motivos[tid] || null) : null,
         decidido_por: decididoPor || null,
         decidido_at: new Date().toISOString(),
       };
@@ -16097,6 +16109,54 @@ function RutasHelperAprobar({ scId, fecha, decididoPor }) {
       alert("No se pudo guardar la decisión: " + (e.message || e));
     } finally {
       setGuardando(null);
+    }
+  }
+
+  // URL del webhook de n8n (path: notificar-rechazo-helper)
+  const WEBHOOK_RECHAZO = "https://bigticket2026.app.n8n.cloud/webhook/notificar-rechazo-helper";
+
+  async function notificar(ruta) {
+    const tid = String(ruta.id_ruta);
+    setNotificando(tid);
+    try {
+      // Buscar el supervisor del SC (nombre, email, teléfono)
+      const { data: sup } = await sb.from("vw_supervisores_panel")
+        .select("nombre, email, telefono, scs_asignados")
+        .contains("scs_asignados", JSON.stringify([scId])).limit(1).maybeSingle();
+
+      const helper = ruta.personas.find((p) => !p.es_chofer);
+      const chofer = ruta.personas.find((p) => p.es_chofer);
+
+      const payload = {
+        sc: scId,
+        fecha,
+        helper_nombre: helper ? helper.nombre : "",
+        chofer: chofer ? chofer.nombre : "",
+        ruta: String(ruta.id_ruta),
+        motivo: motivos[tid] || "",
+        supervisor_nombre: sup?.nombre || "",
+        supervisor_email: sup?.email || "",
+        supervisor_telefono: sup?.telefono || "",
+      };
+
+      const resp = await fetch(WEBHOOK_RECHAZO, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!resp.ok) throw new Error("El webhook respondió " + resp.status);
+
+      // Registrar la notificación en la base
+      await sb.from("aprobaciones_helper")
+        .update({ notificado_at: new Date().toISOString() })
+        .eq("service_center_id", scId).eq("fecha", fecha).eq("travel_id", ruta.id_ruta);
+
+      setNotificados((prev) => ({ ...prev, [tid]: true }));
+    } catch (e) {
+      console.error("Error notificando:", e);
+      alert("No se pudo enviar la notificación: " + (e.message || e));
+    } finally {
+      setNotificando(null);
     }
   }
 
@@ -16180,6 +16240,29 @@ function RutasHelperAprobar({ scId, fecha, decididoPor }) {
               {r.bloqueada && !dec && (
                 <div style={{ marginTop: 8, fontSize: 10, color: "#b91c1c", fontStyle: "italic" }}>
                   ⚠ Bloqueada por defecto (Small Van foránea) — no se paga salvo que apruebes.
+                </div>
+              )}
+              {/* Si está rechazado: motivo opcional + botón notificar */}
+              {rechazadoVisual && (
+                <div style={{ marginTop: 8, padding: 8, background: "#fef2f2", borderRadius: 6, border: "1px solid #fecaca" }}>
+                  <textarea
+                    value={motivos[tid] || ""}
+                    onChange={(e) => setMotivos((prev) => ({ ...prev, [tid]: e.target.value }))}
+                    placeholder="Motivo del rechazo (opcional)…"
+                    rows={2}
+                    style={{ width: "100%", fontSize: 12, padding: "6px 8px", borderRadius: 5, border: "1px solid #d1d5db", resize: "vertical", boxSizing: "border-box" }}
+                  />
+                  <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 6 }}>
+                    <button onClick={() => notificar(r)} disabled={notificando === tid || notificados[tid]}
+                      style={{
+                        padding: "6px 12px", fontSize: 12, fontWeight: 700, borderRadius: 6,
+                        cursor: (notificando === tid || notificados[tid]) ? "default" : "pointer",
+                        border: "none", background: notificados[tid] ? "#16a34a" : "#1e3a5f", color: "#fff",
+                      }}>
+                      {notificados[tid] ? "✓ Notificado" : notificando === tid ? "Enviando…" : "📲 Notificar (WhatsApp + correo)"}
+                    </button>
+                    <span style={{ fontSize: 10, color: "#9ca3af" }}>Avisa al supervisor del SC</span>
+                  </div>
                 </div>
               )}
             </div>
