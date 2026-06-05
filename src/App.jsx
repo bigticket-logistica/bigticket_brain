@@ -15915,6 +15915,18 @@ function AmbulanciasSC({ scId, fecha }) {
 // SCs foráneos: en estos, helper en Small Van se considera bloqueado.
 const SCS_FORANEOS_BRAIN = new Set(["SCY1","SCQ1","SQR1","SHP1","STL1","STX1","SVH1","SPB1","SPY1"]);
 
+// Formatea un ISO timestamp a fecha y hora en zona México
+function fmtFechaHoraMX(iso) {
+  if (!iso) return "—";
+  try {
+    return new Intl.DateTimeFormat("es-MX", {
+      timeZone: "America/Mexico_City",
+      day: "2-digit", month: "2-digit", year: "numeric",
+      hour: "2-digit", minute: "2-digit", hour12: false,
+    }).format(new Date(iso)) + " hrs";
+  } catch { return iso; }
+}
+
 // ── Detalle de paquetes entregados por un helper (vw_entregas_por_helper) ────
 function PaquetesHelper({ idRuta, helperNombre, fecha }) {
   const [paquetes, setPaquetes] = useState(undefined);
@@ -16068,7 +16080,7 @@ function RutasHelperAprobar({ scId, fecha, decididoPor }) {
         for (const a of aprobR.data || []) {
           dec[String(a.travel_id)] = a.decision;
           if (a.motivo_rechazo) mot[String(a.travel_id)] = a.motivo_rechazo;
-          if (a.notificado_at) notif[String(a.travel_id)] = true;
+          if (a.notificado_at) notif[String(a.travel_id)] = a.notificado_at;
         }
         setDecisiones(dec);
         setMotivos(mot);
@@ -16146,12 +16158,13 @@ function RutasHelperAprobar({ scId, fecha, decididoPor }) {
       });
       if (!resp.ok) throw new Error("El webhook respondió " + resp.status);
 
+      const ahoraISO = new Date().toISOString();
       // Registrar la notificación en la base
       await sb.from("aprobaciones_helper")
-        .update({ notificado_at: new Date().toISOString() })
+        .update({ notificado_at: ahoraISO })
         .eq("service_center_id", scId).eq("fecha", fecha).eq("travel_id", ruta.id_ruta);
 
-      setNotificados((prev) => ({ ...prev, [tid]: true }));
+      setNotificados((prev) => ({ ...prev, [tid]: ahoraISO }));
     } catch (e) {
       console.error("Error notificando:", e);
       alert("No se pudo enviar la notificación: " + (e.message || e));
@@ -16242,28 +16255,46 @@ function RutasHelperAprobar({ scId, fecha, decididoPor }) {
                   ⚠ Bloqueada por defecto (Small Van foránea) — no se paga salvo que apruebes.
                 </div>
               )}
-              {/* Si está rechazado: motivo opcional + botón notificar */}
+              {/* Si está rechazado */}
               {rechazadoVisual && (
-                <div style={{ marginTop: 8, padding: 8, background: "#fef2f2", borderRadius: 6, border: "1px solid #fecaca" }}>
-                  <textarea
-                    value={motivos[tid] || ""}
-                    onChange={(e) => setMotivos((prev) => ({ ...prev, [tid]: e.target.value }))}
-                    placeholder="Motivo del rechazo (opcional)…"
-                    rows={2}
-                    style={{ width: "100%", fontSize: 12, padding: "6px 8px", borderRadius: 5, border: "1px solid #d1d5db", resize: "vertical", boxSizing: "border-box" }}
-                  />
-                  <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 6 }}>
-                    <button onClick={() => notificar(r)} disabled={notificando === tid || notificados[tid]}
-                      style={{
-                        padding: "6px 12px", fontSize: 12, fontWeight: 700, borderRadius: 6,
-                        cursor: (notificando === tid || notificados[tid]) ? "default" : "pointer",
-                        border: "none", background: notificados[tid] ? "#16a34a" : "#1e3a5f", color: "#fff",
-                      }}>
-                      {notificados[tid] ? "✓ Notificado" : notificando === tid ? "Enviando…" : "📲 Notificar (WhatsApp + correo)"}
-                    </button>
-                    <span style={{ fontSize: 10, color: "#9ca3af" }}>Avisa al supervisor del SC</span>
+                notificados[tid] ? (
+                  /* Ya se notificó: mostrar el registro de lo enviado */
+                  <div style={{ marginTop: 8, padding: 8, background: "#f0fdf4", borderRadius: 6, border: "1px solid #bbf7d0" }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: "#16a34a", marginBottom: 4 }}>
+                      ✓ Rechazo notificado al supervisor
+                    </div>
+                    {motivos[tid] && motivos[tid].trim() && (
+                      <div style={{ fontSize: 12, color: "#374151", marginBottom: 3 }}>
+                        <strong>Motivo enviado:</strong> {motivos[tid]}
+                      </div>
+                    )}
+                    <div style={{ fontSize: 10, color: "#6b7280" }}>
+                      📲 Enviado el {fmtFechaHoraMX(notificados[tid])}
+                    </div>
                   </div>
-                </div>
+                ) : (
+                  /* Aún no notificado: campo de motivo + botón */
+                  <div style={{ marginTop: 8, padding: 8, background: "#fef2f2", borderRadius: 6, border: "1px solid #fecaca" }}>
+                    <textarea
+                      value={motivos[tid] || ""}
+                      onChange={(e) => setMotivos((prev) => ({ ...prev, [tid]: e.target.value }))}
+                      placeholder="Motivo del rechazo (opcional)…"
+                      rows={2}
+                      style={{ width: "100%", fontSize: 12, padding: "6px 8px", borderRadius: 5, border: "1px solid #d1d5db", resize: "vertical", boxSizing: "border-box" }}
+                    />
+                    <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 6 }}>
+                      <button onClick={() => notificar(r)} disabled={notificando === tid}
+                        style={{
+                          padding: "6px 12px", fontSize: 12, fontWeight: 700, borderRadius: 6,
+                          cursor: notificando === tid ? "wait" : "pointer",
+                          border: "none", background: "#1e3a5f", color: "#fff",
+                        }}>
+                        {notificando === tid ? "Enviando…" : "📲 Notificar (WhatsApp + correo)"}
+                      </button>
+                      <span style={{ fontSize: 10, color: "#9ca3af" }}>Avisa al supervisor del SC</span>
+                    </div>
+                  </div>
+                )
               )}
             </div>
           );
