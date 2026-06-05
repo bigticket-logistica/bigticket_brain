@@ -16159,9 +16159,10 @@ function RutasHelperAprobar({ scId, fecha, decididoPor }) {
       if (!resp.ok) throw new Error("El webhook respondió " + resp.status);
 
       const ahoraISO = new Date().toISOString();
-      // Registrar la notificación en la base
+      // Registrar la notificación Y el motivo en la base (así el motivo siempre
+      // queda guardado, sin importar si se escribió antes o después de rechazar)
       await sb.from("aprobaciones_helper")
-        .update({ notificado_at: ahoraISO })
+        .update({ notificado_at: ahoraISO, motivo_rechazo: motivos[tid] || null })
         .eq("service_center_id", scId).eq("fecha", fecha).eq("travel_id", ruta.id_ruta);
 
       setNotificados((prev) => ({ ...prev, [tid]: ahoraISO }));
@@ -16278,6 +16279,28 @@ function RutasHelperAprobar({ scId, fecha, decididoPor }) {
                     <textarea
                       value={motivos[tid] || ""}
                       onChange={(e) => setMotivos((prev) => ({ ...prev, [tid]: e.target.value }))}
+                      onBlur={(e) => {
+                        // Guardar el motivo en la base al salir del campo. Usamos upsert
+                        // por si la fila aún no existe (motivo escrito antes de rechazar).
+                        const txt = e.target.value;
+                        const choferRow = r.personas.find((p) => p.es_chofer);
+                        sb.from("aprobaciones_helper")
+                          .upsert({
+                            service_center_id: scId,
+                            fecha,
+                            travel_id: r.id_ruta,
+                            vehicle_plate: r.placa || null,
+                            driver_name: choferRow ? choferRow.nombre : null,
+                            vehiculo: r.vehiculo || null,
+                            cluster: r.cluster || null,
+                            bloqueada: !!r.bloqueada,
+                            decision: "rechazado",
+                            motivo_rechazo: txt || null,
+                            decidido_por: decididoPor || null,
+                            decidido_at: new Date().toISOString(),
+                          }, { onConflict: "service_center_id,fecha,travel_id" })
+                          .then(() => {}, (err) => console.error("Error guardando motivo:", err));
+                      }}
                       placeholder="Motivo del rechazo (opcional)…"
                       rows={2}
                       style={{ width: "100%", fontSize: 12, padding: "6px 8px", borderRadius: 5, border: "1px solid #d1d5db", resize: "vertical", boxSizing: "border-box" }}
