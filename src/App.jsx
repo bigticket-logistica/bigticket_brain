@@ -30489,6 +30489,132 @@ const hmxTdR = { ...hmxTd, textAlign: "right", fontVariantNumeric: "tabular-nums
 // MÓDULO MANTENCIONES · Cuidado de Activo
 // Pestaña madre con sub-tabs. v1: Verificador de neumáticos (emula la imagen).
 // ───────────────────────────────────────────────────────────────────────────
+function FichaVehiculo() {
+  const [patente, setPatente] = useState("");
+  const [cargando, setCargando] = useState(false);
+  const [error, setError] = useState("");
+  const [data, setData] = useState(null);
+
+  async function buscar() {
+    const p = patente.trim().toUpperCase();
+    if (!p) { setError("Ingresá una patente."); return; }
+    setCargando(true); setError(""); setData(null);
+    try {
+      const { data: veh } = await sb.from("ca_vehiculos")
+        .select("patente,ceco,tipo_vehiculo,modelo,marca,anio,soap,rev_tecnica,permiso_circulacion,status").eq("patente", p).maybeSingle();
+      if (!veh) { setError(`La patente ${p} no está en la flota.`); setCargando(false); return; }
+
+      const { data: odo } = await sb.from("ca_odometros")
+        .select("odometro,fecha_lectura").eq("patente", p)
+        .order("fecha_lectura", { ascending:false }).limit(1).maybeSingle();
+
+      const [mant, rep, sin, otr] = await Promise.all([
+        sb.from("ca_mantenciones").select("fecha_servicio,servicio_efectuado,item,taller,odometro,costo").eq("patente", p),
+        sb.from("ca_reparaciones").select("fecha_servicio,servicio_efectuado,item,taller,odometro,costo").eq("patente", p),
+        sb.from("ca_siniestros").select("fecha_servicio,item,taller,odometro,costo,precio_reparacion_total").eq("patente", p),
+        sb.from("ca_otros").select("fecha_servicio,servicio_efectuado,item,taller,km_al_momento,costo").eq("patente", p),
+      ]);
+
+      const ev = [];
+      (mant.data||[]).forEach(r => ev.push({ tipo:"Mantención", color:"#1a3a6b", bg:"#eef2ff", fecha:r.fecha_servicio, desc:r.servicio_efectuado||r.item, taller:r.taller, odometro:r.odometro, costo:Number(r.costo)||0 }));
+      (rep.data||[]).forEach(r => ev.push({ tipo:"Reparación", color:"#0369a1", bg:"#e0f2fe", fecha:r.fecha_servicio, desc:r.servicio_efectuado||r.item, taller:r.taller, odometro:r.odometro, costo:Number(r.costo)||0 }));
+      (sin.data||[]).forEach(r => ev.push({ tipo:"Siniestro", color:"#c0392b", bg:"#fee2e2", fecha:r.fecha_servicio, desc:r.item, taller:r.taller, odometro:r.odometro, costo:Number(r.precio_reparacion_total)||Number(r.costo)||0 }));
+      (otr.data||[]).forEach(r => ev.push({ tipo:"Otro", color:"#92400e", bg:"#fef3c7", fecha:r.fecha_servicio, desc:r.servicio_efectuado||r.item, taller:r.taller, odometro:r.km_al_momento, costo:Number(r.costo)||0 }));
+      ev.sort((a,b) => new Date(b.fecha||0) - new Date(a.fecha||0));
+
+      const tot = (arr) => arr.reduce((s,e)=>s+e.costo,0);
+      const resumen = {
+        total: tot(ev), n: ev.length,
+        mant: tot(ev.filter(e=>e.tipo==="Mantención")),
+        rep: tot(ev.filter(e=>e.tipo==="Reparación")),
+        sin: tot(ev.filter(e=>e.tipo==="Siniestro")),
+      };
+      setData({ veh, km: odo ? Number(odo.odometro) : null, fechaOdo: odo?.fecha_lectura, ev, resumen });
+    } catch (e) { setError("Error: " + e.message); }
+    setCargando(false);
+  }
+
+  const clp = (n) => "$" + (Number(n)||0).toLocaleString("es-CL");
+  const fch = (f) => f ? new Date(f).toLocaleDateString("es-CL") : "—";
+  const venc = (f) => {
+    if (!f) return { txt:"—", color:"#94a3b8" };
+    const dias = Math.floor((new Date(f) - Date.now())/86400000);
+    if (dias < 0) return { txt:`Vencida (${fch(f)})`, color:"#c0392b" };
+    if (dias < 30) return { txt:`Vence en ${dias}d (${fch(f)})`, color:"#d97706" };
+    return { txt:fch(f), color:"#166534" };
+  };
+
+  return (
+    <div style={{ maxWidth:900 }}>
+      <div className="form-card">
+        <div style={{ display:"flex", gap:12, alignItems:"flex-end", flexWrap:"wrap" }}>
+          <div style={{ flex:"1 1 220px" }}>
+            <Label>Patente</Label>
+            <Input value={patente} onChange={e=>setPatente(e.target.value.toUpperCase())} placeholder="Ej: SLCY14" />
+          </div>
+          <Btn onClick={buscar} color="#1a3a6b">{cargando ? "Buscando…" : "Buscar"}</Btn>
+        </div>
+        {error && <div style={{ marginTop:14, padding:"10px 14px", background:"#fee2e2", color:"#c0392b", borderRadius:8, fontSize:13 }}>{error}</div>}
+      </div>
+
+      {data && (() => {
+        const soap = venc(data.veh.soap), rt = venc(data.veh.rev_tecnica);
+        return (
+        <>
+          <div className="form-card">
+            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", flexWrap:"wrap", gap:10 }}>
+              <div>
+                <div style={{ fontSize:18, fontWeight:700, color:"#1a1a1a" }}>{data.veh.patente}</div>
+                <div style={{ fontSize:13, color:"#666" }}>{data.veh.marca} {data.veh.modelo} · {data.veh.anio || "—"} · {data.veh.ceco}</div>
+              </div>
+              <span style={{ fontSize:11, fontWeight:700, padding:"4px 12px", borderRadius:20, background:data.veh.status==="ACTIVO"?"#dcfce7":"#f1f5f9", color:data.veh.status==="ACTIVO"?"#166534":"#64748b" }}>{data.veh.status}</span>
+            </div>
+            <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))", gap:12, marginTop:16 }}>
+              <div><Label>KM actual</Label><div style={{ fontSize:15, fontWeight:700 }}>{data.km!=null?data.km.toLocaleString("es-CL")+" km":"—"}</div></div>
+              <div><Label>SOAP</Label><div style={{ fontSize:13, fontWeight:600, color:soap.color }}>{soap.txt}</div></div>
+              <div><Label>Revisión técnica</Label><div style={{ fontSize:13, fontWeight:600, color:rt.color }}>{rt.txt}</div></div>
+              <div><Label>Tipo</Label><div style={{ fontSize:13, fontWeight:600 }}>{data.veh.tipo_vehiculo}</div></div>
+            </div>
+          </div>
+
+          <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))", gap:12, marginBottom:16 }}>
+            <KPI label="Gasto total" valor={clp(data.resumen.total)} color="#1a3a6b" />
+            <KPI label="Eventos" valor={data.resumen.n} sub="en el historial" color="#0369a1" />
+            <KPI label="Mantenciones" valor={clp(data.resumen.mant)} color="#1a3a6b" />
+            <KPI label="Reparaciones" valor={clp(data.resumen.rep)} color="#0369a1" />
+            <KPI label="Siniestros" valor={clp(data.resumen.sin)} color="#c0392b" />
+          </div>
+
+          <div className="form-card">
+            <div className="form-title">Historial unificado ({data.ev.length})</div>
+            {data.ev.length===0 ? (
+              <div style={{ fontSize:13, color:"#94a3b8", padding:"10px 0" }}>Sin eventos registrados.</div>
+            ) : (
+              <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+                {data.ev.map((e,i) => (
+                  <div key={i} style={{ display:"flex", gap:12, alignItems:"center", padding:"10px 12px", border:"1px solid #f1f5f9", borderRadius:8, borderLeft:`3px solid ${e.color}` }}>
+                    <div style={{ minWidth:90 }}>
+                      <span style={{ fontSize:10, fontWeight:700, padding:"3px 8px", borderRadius:6, background:e.bg, color:e.color }}>{e.tipo}</span>
+                    </div>
+                    <div style={{ minWidth:80, fontSize:12, color:"#666" }}>{fch(e.fecha)}</div>
+                    <div style={{ flex:1, fontSize:13, color:"#1a1a1a" }}>
+                      {e.desc || "—"}
+                      <span style={{ color:"#94a3b8", fontSize:11 }}>{e.taller?` · ${e.taller}`:""}{e.odometro?` · ${Number(e.odometro).toLocaleString("es-CL")} km`:""}</span>
+                    </div>
+                    <div style={{ fontWeight:700, fontSize:13, color:"#1a1a1a", whiteSpace:"nowrap" }}>{clp(e.costo)}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </>
+        );
+      })()}
+    </div>
+  );
+}
+
+
 function ModuloMantencionesMadre({ usuario }) {
   const [sub, setSub] = useState("verificador");
   const tabs = [
@@ -30513,7 +30639,7 @@ function ModuloMantencionesMadre({ usuario }) {
         ))}
       </div>
       {sub === "verificador" && <VerificadorNeumaticos usuario={usuario} />}
-      {sub === "ficha"       && <MantPlaceholder titulo="Ficha 360° del vehículo" />}
+      {sub === "ficha"       && <FichaVehiculo />}
       {sub === "proyeccion"  && <MantPlaceholder titulo="Proyección de km y costos" />}
       {sub === "costos"      && <MantPlaceholder titulo="Costos por vehículo / flota" />}
       {sub === "bitacora"    && <MantPlaceholder titulo="Bitácora de solicitudes" />}
