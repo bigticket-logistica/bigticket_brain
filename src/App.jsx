@@ -147,7 +147,7 @@ function BotonDescargarExcel({ onClick, disabled, label = "Descargar Excel" }) {
 }
 
 const MODULOS = {
-  superadmin: ["brain", "pool_meli_mx", "pagos", "maestro", "certificaciones", "incidencias", "pnr", "prospeccion", "wiki", "configuracion"],
+  superadmin: ["brain", "pool_meli_mx", "pagos", "maestro", "mantenciones", "certificaciones", "incidencias", "pnr", "prospeccion", "wiki", "configuracion"],
   certificacion: ["certificaciones"],
   prefacturas: ["pagos"],
 };
@@ -158,6 +158,7 @@ const MODULOS_LABELS = {
   prospeccion: "Prospección CRM",
   wiki: "Wiki y Procesos",
   maestro: "Maestro Operaciones",
+  mantenciones: "Mantenciones",
   incidencias: "Incidencias",
   pnr: "PNR",
   pagos: "Pagos",
@@ -30484,6 +30485,217 @@ const hmxTd  = { fontSize: 12, color: "#0f172a", padding: "10px 12px" };
 const hmxTdR = { ...hmxTd, textAlign: "right", fontVariantNumeric: "tabular-nums" };
 
 
+// ═══════════════════════════════════════════════════════════════════════════
+// MÓDULO MANTENCIONES · Cuidado de Activo
+// Pestaña madre con sub-tabs. v1: Verificador de neumáticos (emula la imagen).
+// ───────────────────────────────────────────────────────────────────────────
+function ModuloMantencionesMadre({ usuario }) {
+  const [sub, setSub] = useState("verificador");
+  const tabs = [
+    { id: "verificador", label: "Verificador Neumáticos" },
+    { id: "ficha",       label: "Ficha Vehículo" },
+    { id: "proyeccion",  label: "Proyección" },
+    { id: "costos",      label: "Costos" },
+    { id: "bitacora",    label: "Bitácora" },
+  ];
+  return (
+    <div className="pg">
+      <div className="sec-title">Mantenciones · Cuidado de Activo</div>
+      <div className="sec-sub">Control de protocolo de flota — Bigticket</div>
+      <div style={{ display:"flex", gap:4, borderBottom:"1px solid #e4e7ec", marginBottom:20, overflowX:"auto" }}>
+        {tabs.map(t => (
+          <button key={t.id} onClick={()=>setSub(t.id)} style={{
+            padding:"10px 16px", background:"none", border:"none",
+            borderBottom: sub===t.id ? "2px solid #1a3a6b" : "2px solid transparent",
+            color: sub===t.id ? "#1a3a6b" : "#64748b", fontSize:13, fontWeight:700,
+            cursor:"pointer", whiteSpace:"nowrap", marginBottom:-1, fontFamily:"'Geist',sans-serif"
+          }}>{t.label}</button>
+        ))}
+      </div>
+      {sub === "verificador" && <VerificadorNeumaticos usuario={usuario} />}
+      {sub === "ficha"       && <MantPlaceholder titulo="Ficha 360° del vehículo" />}
+      {sub === "proyeccion"  && <MantPlaceholder titulo="Proyección de km y costos" />}
+      {sub === "costos"      && <MantPlaceholder titulo="Costos por vehículo / flota" />}
+      {sub === "bitacora"    && <MantPlaceholder titulo="Bitácora de solicitudes" />}
+    </div>
+  );
+}
+
+function MantPlaceholder({ titulo }) {
+  return (
+    <div className="form-card" style={{ textAlign:"center", padding:40, color:"#94a3b8" }}>
+      <div style={{ fontSize:15, fontWeight:700, color:"#475569", marginBottom:6 }}>{titulo}</div>
+      <div style={{ fontSize:13 }}>En construcción — próxima iteración.</div>
+    </div>
+  );
+}
+
+function VerificadorNeumaticos({ usuario }) {
+  const [patente, setPatente] = useState("");
+  const [cargando, setCargando] = useState(false);
+  const [error, setError] = useState("");
+  const [info, setInfo] = useState(null);
+  const [generando, setGenerando] = useState(false);
+  const [msg, setMsg] = useState("");
+
+  async function verificar() {
+    const p = patente.trim().toUpperCase();
+    if (!p) { setError("Ingresá una patente."); return; }
+    setCargando(true); setError(""); setInfo(null); setMsg("");
+    try {
+      const { data: veh } = await sb.from("ca_vehiculos")
+        .select("patente,ceco,tipo_vehiculo,modelo").eq("patente", p).maybeSingle();
+      if (!veh) { setError(`La patente ${p} no está en la flota.`); setCargando(false); return; }
+
+      const { data: prot } = await sb.from("ca_protocolo_vida_util")
+        .select("neumatico,neumatico_alerta").eq("modelo", veh.modelo).maybeSingle();
+      if (!prot || !prot.neumatico) { setError(`No hay protocolo de neumáticos para el modelo ${veh.modelo}.`); setCargando(false); return; }
+
+      const { data: odo } = await sb.from("ca_odometros")
+        .select("odometro,fecha_lectura").eq("patente", p)
+        .order("fecha_lectura", { ascending:false }).limit(1).maybeSingle();
+      const kmActual = odo ? Number(odo.odometro) : null;
+      if (kmActual == null) { setError(`No hay lectura de odómetro para ${p}.`); setCargando(false); return; }
+
+      const { data: reps } = await sb.from("ca_reparaciones")
+        .select("odometro,fecha_servicio").eq("patente", p)
+        .ilike("servicio_efectuado", "%neumat%")
+        .order("odometro", { ascending:false }).limit(1);
+      const ultima = reps && reps.length ? reps[0] : null;
+      const kmUltima = ultima ? Number(ultima.odometro) : null;
+
+      const limiteOffset = Number(prot.neumatico);
+      const alertaOffset = prot.neumatico_alerta != null ? Number(prot.neumatico_alerta) : Math.round(limiteOffset * 0.8);
+
+      const recorrido = kmUltima != null ? kmActual - kmUltima : null;
+      const kmAlerta  = kmUltima != null ? kmUltima + alertaOffset : null;
+      const kmLimite  = kmUltima != null ? kmUltima + limiteOffset : null;
+      const kmRestantes = kmLimite != null ? kmLimite - kmActual : null;
+      let estado = "sin_compra";
+      if (recorrido != null) {
+        estado = recorrido >= limiteOffset ? "supera_limite" : recorrido >= alertaOffset ? "alerta" : "ok";
+      }
+
+      setInfo({ veh, kmActual, kmUltima, limiteOffset, alertaOffset, recorrido, kmAlerta, kmLimite, kmRestantes, estado });
+    } catch (e) {
+      setError("Error consultando: " + e.message);
+    }
+    setCargando(false);
+  }
+
+  async function generarSolicitud() {
+    if (!info) return;
+    setGenerando(true); setMsg("");
+    const { veh, kmActual, kmUltima, limiteOffset, alertaOffset, recorrido, kmAlerta, kmLimite, kmRestantes, estado } = info;
+    const cl = (n) => n == null ? "—" : Number(n).toLocaleString("es-CL");
+    const just = `Vehículo ${veh.patente} (${veh.modelo}, ${veh.ceco}): recorrió ${cl(recorrido)} km desde la última compra de neumáticos (odómetro ${cl(kmUltima)} km). Umbral de alerta del protocolo: ${cl(alertaOffset)} km; límite máximo: ${cl(limiteOffset)} km. Km actual: ${cl(kmActual)} km. Se solicita autorización de compra de neumáticos.`;
+    try {
+      const { error } = await sb.from("ca_solicitudes").insert({
+        patente: veh.patente, ceco: veh.ceco, tipo_vehiculo: veh.tipo_vehiculo, modelo: veh.modelo,
+        componente: "neumaticos", km_ultima_compra: kmUltima, km_actual: kmActual, km_recorridos: recorrido,
+        km_alerta: kmAlerta, km_limite: kmLimite, km_restantes: kmRestantes, estado_protocolo: estado,
+        justificacion: just, solicitante: usuario?.nombre || null, status: "pendiente",
+      });
+      if (error) throw error;
+      setMsg("✅ Solicitud generada y enviada a Finanzas.");
+    } catch (e) {
+      setMsg("❌ Error al generar: " + e.message);
+    }
+    setGenerando(false);
+  }
+
+  const fmt = (n) => n == null ? "—" : Number(n).toLocaleString("es-CL") + " km";
+  const estadoCfg = {
+    ok:            { txt:"En protocolo",      color:"#166534", bg:"#dcfce7", ico:"✓" },
+    alerta:        { txt:"En alerta",          color:"#92400e", bg:"#fef3c7", ico:"⚠" },
+    supera_limite: { txt:"Supera límite",      color:"#c0392b", bg:"#fee2e2", ico:"⚠" },
+    sin_compra:    { txt:"Sin compra previa",  color:"#475569", bg:"#f1f5f9", ico:"•" },
+  };
+  const tipos = ["AUTO","CAMIONETA","CAMION"];
+
+  return (
+    <div style={{ maxWidth:760 }}>
+      <div style={{ background:"#1a3a6b", color:"#fff", borderRadius:"14px 14px 0 0", padding:"16px 20px", display:"flex", alignItems:"center", gap:10 }}>
+        <span style={{ fontSize:18 }}>🚚</span>
+        <span style={{ fontSize:15, fontWeight:700 }}>Verificador de estado de neumáticos — Bigticket</span>
+      </div>
+      <div style={{ background:"#fff", border:"1px solid #e4e7ec", borderTop:"none", borderRadius:"0 0 14px 14px", padding:20, marginBottom:16 }}>
+        <div style={{ display:"flex", gap:12, alignItems:"flex-end", flexWrap:"wrap" }}>
+          <div style={{ flex:"1 1 220px" }}>
+            <Label>Patente</Label>
+            <Input value={patente} onChange={e=>setPatente(e.target.value.toUpperCase())} placeholder="Ej: SLCY14" />
+          </div>
+          <Btn onClick={verificar} color="#1a3a6b">{cargando ? "Verificando…" : "Verificar"}</Btn>
+        </div>
+
+        {error && <div style={{ marginTop:14, padding:"10px 14px", background:"#fee2e2", color:"#c0392b", borderRadius:8, fontSize:13 }}>{error}</div>}
+
+        {info && (() => {
+          const cfg = estadoCfg[info.estado];
+          const pct = info.recorrido != null ? Math.min(100, Math.max(0, (info.recorrido / info.limiteOffset) * 100)) : 0;
+          const pctAlerta = Math.min(100, (info.alertaOffset / info.limiteOffset) * 100);
+          const barColor = info.estado==="supera_limite" ? "#dc2626" : info.estado==="alerta" ? "#d97706" : "#16a34a";
+          return (
+          <div style={{ marginTop:18 }}>
+            <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))", gap:12, marginBottom:18 }}>
+              <div><Label>Centro de costo</Label><div style={{ fontSize:14, fontWeight:600 }}>{info.veh.ceco || "—"}</div></div>
+              <div><Label>Modelo</Label><div style={{ fontSize:14, fontWeight:600 }}>{info.veh.modelo}</div></div>
+              <div>
+                <Label>Tipo de vehículo</Label>
+                <div style={{ display:"flex", gap:4 }}>
+                  {tipos.map(t => {
+                    const on = (info.veh.tipo_vehiculo||"").toUpperCase() === t;
+                    return <span key={t} style={{ fontSize:11, fontWeight:700, padding:"4px 8px", borderRadius:6, background:on?"#1a3a6b":"#f1f5f9", color:on?"#fff":"#94a3b8" }}>{t}</span>;
+                  })}
+                </div>
+              </div>
+            </div>
+
+            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 }}>
+              <div style={{ fontSize:14, fontWeight:700, color:"#1a1a1a" }}>{info.veh.modelo} {info.veh.patente} — {info.veh.ceco}</div>
+              <span style={{ fontSize:12, fontWeight:700, padding:"5px 12px", borderRadius:20, background:cfg.bg, color:cfg.color }}>{cfg.ico} {cfg.txt}</span>
+            </div>
+            <div style={{ fontSize:12, color:"#666", marginBottom:10 }}>
+              KM última compra: {info.kmUltima!=null?info.kmUltima.toLocaleString("es-CL"):"—"} → KM actual: {info.kmActual.toLocaleString("es-CL")}
+            </div>
+
+            <div style={{ display:"flex", justifyContent:"space-between", fontSize:11, color:"#94a3b8", marginBottom:4 }}>
+              <span>0 km</span><span>Alerta: {info.alertaOffset.toLocaleString("es-CL")}</span><span>Límite: {info.limiteOffset.toLocaleString("es-CL")}</span>
+            </div>
+            <div style={{ position:"relative", height:14, background:"#f1f5f9", borderRadius:8, overflow:"hidden", marginBottom:4 }}>
+              <div style={{ position:"absolute", left:0, top:0, height:"100%", width:`${pct}%`, background:barColor, transition:"width .4s" }} />
+              <div style={{ position:"absolute", left:`${pctAlerta}%`, top:0, height:"100%", width:2, background:"#64748b" }} />
+            </div>
+            <div style={{ display:"flex", justifyContent:"space-between", fontSize:12, marginBottom:18 }}>
+              <span style={{ color:"#666" }}>Recorrido desde última compra:</span>
+              <span style={{ fontWeight:700, color:"#1a1a1a" }}>{info.recorrido!=null?info.recorrido.toLocaleString("es-CL"):"—"} km recorridos</span>
+            </div>
+
+            <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))", gap:12, marginBottom:18 }}>
+              <KPI label="KM de alerta" valor={fmt(info.kmAlerta)} color="#d97706" />
+              <KPI label="KM límite máximo" valor={fmt(info.kmLimite)} color="#dc2626" />
+              <KPI label="KM restantes al límite" valor={fmt(info.kmRestantes)} color={info.kmRestantes!=null && info.kmRestantes<0 ? "#dc2626" : "#1a3a6b"} />
+            </div>
+
+            <div style={{ borderTop:"1px solid #e4e7ec", paddingTop:16 }}>
+              {(info.estado==="alerta" || info.estado==="supera_limite") ? (
+                <Btn onClick={generarSolicitud} color="#1a3a6b">{generando ? "Generando…" : "Generar solicitud para finanzas"}</Btn>
+              ) : info.estado==="sin_compra" ? (
+                <div style={{ fontSize:13, color:"#92400e" }}>Sin compra de neumáticos registrada — no se puede calcular recorrido. Cargá la última compra en reparaciones.</div>
+              ) : (
+                <div style={{ fontSize:13, color:"#166534" }}>✓ Dentro de protocolo — no corresponde compra. Consulta registrada.</div>
+              )}
+              {msg && <div style={{ marginTop:12, fontSize:13, fontWeight:600 }}>{msg}</div>}
+            </div>
+          </div>
+          );
+        })()}
+      </div>
+    </div>
+  );
+}
+
+
 export default function App() {
   const [usuario, setUsuario] = useState(() => {
     try {
@@ -30566,6 +30778,7 @@ export default function App() {
         )}
         {tab === "wiki" && <ModuloWiki usuario={usuario} />}
         {tab === "maestro" && <ModuloMaestro usuario={usuario} />}
+        {tab === "mantenciones" && <ModuloMantencionesMadre usuario={usuario} />}
         {tab === "incidencias" && <ModuloIncidencias />}
         {tab === "pnr" && <ModuloPNR />}
         {tab === "pagos" && <ModuloPagosMadre usuario={usuario} />}
