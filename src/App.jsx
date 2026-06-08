@@ -5573,14 +5573,13 @@ const SnapDevoluciones = ({ filas, loading }) => {
 // Selector de día único (no rango), default = D-1 (ayer)
 // Las pestañas Penalizaciones, Premios, Ayudantes se eliminaron de esta vista
 const ModuloMaestro = ({ usuario }) => {
-  const [vista, setVista]       = useState("viajes");
+  const [vista, setVista]       = useState("snapshot");
   // Fecha única (no rango); default = D-1 en zona México
   const [fecha, setFecha]       = useState(fechaOperativaOffset(-1));
   const [reloadKey, setReloadKey] = useState(0);
   const [pais, setPais]         = useState("MX"); // default MX para que Snapshot funcione
 
   const tabs = [
-    { id: "viajes",   label: "Maestros de Operaciones MELI" },
     { id: "snapshot", label: "Maestro Supervisores Snapshot" },
   ];
 
@@ -20585,7 +20584,6 @@ function IndicadoresOperacionalesMX({ usuario }) {
   const tabs = [
     { id: "compromiso", label: "Compromiso MELI", desc: "Operativa de mañana · SDD vs SPOT" },
     { id: "kpi_operacion", label: "KPI de Operación", desc: "NS Informe MELI vs Snapshots" },
-    { id: "diferencias", label: "Diferencias Maestros", desc: "Auditoría ruta por ruta · MELI vs Snapshots" },
     { id: "inventario", label: "Inventario", desc: "Drivers, vehículos, fantasmas" },
     { id: "control_helper", label: "Control Helper", desc: "Helpers no autorizados / certificados / fantasmas" },
     { id: "torre_rostering_hoy", label: "Torre Rostering HOY", desc: "Operativo en vivo · cronómetros + alertas SDD" },
