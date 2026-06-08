@@ -30615,12 +30615,133 @@ function FichaVehiculo() {
 }
 
 
+function TableroAlertas() {
+  const [rows, setRows] = useState(null);
+  const [cargando, setCargando] = useState(false);
+  const [error, setError] = useState("");
+  const [fComp, setFComp] = useState("todos");
+  const [fEstado, setFEstado] = useState("criticos");
+
+  async function cargar() {
+    setCargando(true); setError("");
+    try {
+      const { data, error } = await sb.from("vw_ca_alertas").select("*");
+      if (error) throw error;
+      setRows(data || []);
+    } catch (e) { setError("Error: " + e.message); }
+    setCargando(false);
+  }
+  useEffect(() => { cargar(); }, []);
+
+  const cfg = {
+    supera_limite: { txt:"Supera límite", color:"#c0392b", bg:"#fee2e2", ico:"🔴", ord:0 },
+    alerta:        { txt:"Alerta",        color:"#92400e", bg:"#fef3c7", ico:"🟡", ord:1 },
+    ok:            { txt:"OK",            color:"#166534", bg:"#dcfce7", ico:"🟢", ord:2 },
+    sin_dato:      { txt:"Sin dato",      color:"#64748b", bg:"#f1f5f9", ico:"⚪", ord:3 },
+  };
+  const comps = ["todos","neumatico","frenos","amortiguadores","direccion","embrague"];
+  const all = rows || [];
+  const resumen = {
+    supera: all.filter(r=>r.estado==="supera_limite").length,
+    alerta: all.filter(r=>r.estado==="alerta").length,
+    ok:     all.filter(r=>r.estado==="ok").length,
+    sin:    all.filter(r=>r.estado==="sin_dato").length,
+  };
+
+  let vis = all.filter(r => fComp==="todos" || r.componente===fComp);
+  if (fEstado==="criticos") vis = vis.filter(r=>r.estado==="supera_limite"||r.estado==="alerta");
+  else if (fEstado!=="todos") vis = vis.filter(r=>r.estado===fEstado);
+  vis = [...vis].sort((a,b) => {
+    const oa=cfg[a.estado]?.ord??9, ob=cfg[b.estado]?.ord??9;
+    if (oa!==ob) return oa-ob;
+    const da=a.dias_al_limite==null?1e9:Number(a.dias_al_limite), db=b.dias_al_limite==null?1e9:Number(b.dias_al_limite);
+    return da-db;
+  });
+
+  const cl = (n)=> n==null?"—":Number(n).toLocaleString("es-CL");
+
+  return (
+    <div>
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))", gap:12, marginBottom:16 }}>
+        <KPI label="🔴 Supera límite" valor={resumen.supera} color="#c0392b" />
+        <KPI label="🟡 En alerta"     valor={resumen.alerta} color="#d97706" />
+        <KPI label="🟢 En protocolo"  valor={resumen.ok} color="#166534" />
+        <KPI label="⚪ Sin dato"       valor={resumen.sin} sub="sin servicio registrado" color="#64748b" />
+      </div>
+
+      <div className="form-card">
+        <div style={{ display:"flex", gap:16, flexWrap:"wrap", alignItems:"flex-end", marginBottom:14 }}>
+          <div style={{ minWidth:170 }}>
+            <Label>Componente</Label>
+            <Select value={fComp} onChange={e=>setFComp(e.target.value)}>
+              {comps.map(c => <option key={c} value={c}>{c==="todos"?"Todos":c.charAt(0).toUpperCase()+c.slice(1)}</option>)}
+            </Select>
+          </div>
+          <div style={{ minWidth:170 }}>
+            <Label>Estado</Label>
+            <Select value={fEstado} onChange={e=>setFEstado(e.target.value)}>
+              <option value="criticos">Solo críticos (🔴+🟡)</option>
+              <option value="supera_limite">🔴 Supera límite</option>
+              <option value="alerta">🟡 Alerta</option>
+              <option value="ok">🟢 OK</option>
+              <option value="todos">Todos</option>
+            </Select>
+          </div>
+          <Btn onClick={cargar} color="#1a3a6b" outline>{cargando?"Cargando…":"Refrescar"}</Btn>
+          <div style={{ fontSize:12, color:"#94a3b8", marginLeft:"auto" }}>{vis.length} resultado(s)</div>
+        </div>
+
+        {error && <div style={{ padding:"10px 14px", background:"#fee2e2", color:"#c0392b", borderRadius:8, fontSize:13 }}>{error}</div>}
+
+        {!error && (
+          <div style={{ overflowX:"auto" }}>
+            <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
+              <thead>
+                <tr style={{ borderBottom:"2px solid #e4e7ec", textAlign:"left", color:"#64748b", fontSize:11, textTransform:"uppercase", letterSpacing:.4 }}>
+                  <th style={{ padding:"8px 6px" }}>Estado</th>
+                  <th style={{ padding:"8px 6px" }}>Patente</th>
+                  <th style={{ padding:"8px 6px" }}>Modelo</th>
+                  <th style={{ padding:"8px 6px" }}>Componente</th>
+                  <th style={{ padding:"8px 6px", textAlign:"right" }}>Recorrido / Límite</th>
+                  <th style={{ padding:"8px 6px", textAlign:"right" }}>km/día (30d)</th>
+                  <th style={{ padding:"8px 6px", textAlign:"right" }}>Días al límite</th>
+                </tr>
+              </thead>
+              <tbody>
+                {vis.map((r,i) => {
+                  const c = cfg[r.estado] || cfg.sin_dato;
+                  const dias = r.dias_al_limite;
+                  const diasTxt = r.estado==="supera_limite" ? "Vencido" : dias==null ? "—" : `${cl(dias)} días`;
+                  const diasColor = r.estado==="supera_limite" ? "#c0392b" : (dias!=null && Number(dias)<=30) ? "#d97706" : "#475569";
+                  return (
+                    <tr key={i} style={{ borderBottom:"1px solid #f1f5f9" }}>
+                      <td style={{ padding:"8px 6px" }}><span style={{ fontSize:11, fontWeight:700, padding:"3px 8px", borderRadius:6, background:c.bg, color:c.color, whiteSpace:"nowrap" }}>{c.ico} {c.txt}</span></td>
+                      <td style={{ padding:"8px 6px", fontWeight:700 }}>{r.patente}</td>
+                      <td style={{ padding:"8px 6px", color:"#666" }}>{r.modelo}</td>
+                      <td style={{ padding:"8px 6px", textTransform:"capitalize" }}>{r.componente}</td>
+                      <td style={{ padding:"8px 6px", textAlign:"right" }}>{cl(r.recorrido)} / {cl(r.limite)}</td>
+                      <td style={{ padding:"8px 6px", textAlign:"right", color:"#666" }}>{cl(r.km_dia_30)}</td>
+                      <td style={{ padding:"8px 6px", textAlign:"right", fontWeight:700, color:diasColor }}>{diasTxt}</td>
+                    </tr>
+                  );
+                })}
+                {vis.length===0 && <tr><td colSpan={7} style={{ padding:"20px", textAlign:"center", color:"#94a3b8" }}>Sin resultados con estos filtros.</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+
 function ModuloMantencionesMadre({ usuario }) {
   const [sub, setSub] = useState("verificador");
   const tabs = [
     { id: "verificador", label: "Verificador Neumáticos" },
     { id: "ficha",       label: "Ficha Vehículo" },
-    { id: "proyeccion",  label: "Proyección" },
+    { id: "proyeccion",  label: "Alertas Flota" },
     { id: "costos",      label: "Costos" },
     { id: "bitacora",    label: "Bitácora" },
   ];
@@ -30640,7 +30761,7 @@ function ModuloMantencionesMadre({ usuario }) {
       </div>
       {sub === "verificador" && <VerificadorNeumaticos usuario={usuario} />}
       {sub === "ficha"       && <FichaVehiculo />}
-      {sub === "proyeccion"  && <MantPlaceholder titulo="Proyección de km y costos" />}
+      {sub === "proyeccion"  && <TableroAlertas />}
       {sub === "costos"      && <MantPlaceholder titulo="Costos por vehículo / flota" />}
       {sub === "bitacora"    && <MantPlaceholder titulo="Bitácora de solicitudes" />}
     </div>
