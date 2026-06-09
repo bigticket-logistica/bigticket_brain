@@ -30968,6 +30968,7 @@ function FlujoCaja() {
   const [cargando, setCargando] = useState(false);
   const [error, setError] = useState("");
   const [horizonte, setHorizonte] = useState(30);
+  const [precios, setPrecios] = useState({});
 
   async function cargar() {
     setCargando(true); setError("");
@@ -30975,6 +30976,9 @@ function FlujoCaja() {
       const { data, error } = await sb.from("vw_ca_flujo").select("*");
       if (error) throw error;
       setRows(data || []);
+      const { data: pm } = await sb.from("ca_precios_mercado").select("componente,modelo,precio_clp");
+      const mapa = {}; (pm||[]).forEach(p => { mapa[`${p.componente}|${p.modelo}`] = p.precio_clp!=null?Number(p.precio_clp):null; });
+      setPrecios(mapa);
     } catch (e) { setError("Error: " + e.message); }
     setCargando(false);
   }
@@ -30989,7 +30993,9 @@ function FlujoCaja() {
     const recorrido = r.recorrido!=null?Number(r.recorrido):null;
     const limite = Number(r.limite);
     const kmDia = r.km_dia_30!=null?Number(r.km_dia_30):null;
-    const costo = r.costo_estimado!=null?Number(r.costo_estimado):null;
+    let costo = r.costo_estimado!=null?Number(r.costo_estimado):null;
+    let costoFuente = r.costo_fuente;
+    if (costo==null) { const pm = precios[`${r.componente}|${r.modelo}`]; if (pm!=null) { costo = pm; costoFuente = "mercado"; } }
     if (recorrido==null) continue;
     let clase = null, diasCruce = null;
     if (r.estado==="supera_limite") { clase="inmediato"; diasCruce=0; }
@@ -31000,7 +31006,7 @@ function FlujoCaja() {
         diasCruce = Math.max(0, Math.round((limite - recorrido)/kmDia));
       }
     }
-    if (clase) items.push({ ...r, costo, clase, diasCruce });
+    if (clase) items.push({ ...r, costo, costo_fuente: costoFuente, clase, diasCruce });
   }
   items.sort((a,b) => (a.clase===b.clase ? (a.diasCruce-b.diasCruce) : (a.clase==="inmediato"?-1:1)));
 
