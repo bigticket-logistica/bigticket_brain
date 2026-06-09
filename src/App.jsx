@@ -17851,9 +17851,26 @@ function ListadoPagosDiarios() {
   const [guardandoTarifado, setGuardandoTarifado] = useState(false);
   const topScrollRef = useRef(null);
   const tableWrapRef = useRef(null);
-  const [tablaWidth, setTablaWidth] = useState(1400);
+  const [tablaWidth, setTablaWidth] = useState(1560);
   const [orderBy, setOrderBy] = useState("driver_name"); // columna por la que ordenar
   const [orderDir, setOrderDir] = useState("asc");
+  const [empresaMap, setEmpresaMap] = useState({}); // placa normalizada -> empresa (Terceros)
+
+  // Carga el mapa placa->empresa desde flota_terceros_mx (semana mas reciente gana)
+  useEffect(() => {
+    let cancel = false;
+    (async () => {
+      try {
+        const { data } = await sb.from("flota_terceros_mx").select("placa, empresa_transporte, semana").limit(50000);
+        if (cancel) return;
+        const ord = (data || []).slice().sort((a, b) => (b.semana || 0) - (a.semana || 0));
+        const m = {};
+        for (const r of ord) { const k = normalizarPlaca(r.placa); if (k && !(k in m) && r.empresa_transporte) m[k] = r.empresa_transporte; }
+        setEmpresaMap(m);
+      } catch (e) { /* terceros opcional */ }
+    })();
+    return () => { cancel = true; };
+  }, []);
 
   // Carga al montar y al cambiar fecha
   useEffect(() => {
@@ -18406,11 +18423,12 @@ function ListadoPagosDiarios() {
         ) : filasFiltradas.length === 0 ? (
           <div style={{ padding: 30, textAlign: "center", color: "#94a3b8" }}>Ningún registro coincide con los filtros</div>
         ) : (
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11, minWidth: 1400 }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11, minWidth: 1560 }}>
             <thead>
               <tr style={{ background: "#f8fafc", borderBottom: "1px solid #e4e7ec", position: "sticky", top: 0 }}>
                 <Th onClick={() => toggleOrder("driver_name")}>Chofer{ordIcon("driver_name")}</Th>
                 <Th onClick={() => toggleOrder("placa")}>Patente{ordIcon("placa")}</Th>
+                <Th>Empresa</Th>
                 <Th onClick={() => toggleOrder("tipologia")}>Vehículo{ordIcon("tipologia")}</Th>
                 <Th onClick={() => toggleOrder("service_center_id")} center>SC · Zona{ordIcon("service_center_id")}</Th>
                 <Th onClick={() => toggleOrder("id_ruta")}>ID Ruta{ordIcon("id_ruta")}</Th>
@@ -18436,6 +18454,9 @@ function ListadoPagosDiarios() {
                   <tr key={r.id || i} style={{ borderBottom: "1px solid #f0f0f0", background: noPagada ? "#fef2f2" : tieneAlerta ? "#fffbeb" : undefined }}>
                     <td style={tdStyle(true)}>{r.driver_name || "—"}</td>
                     <td style={{ ...tdStyle(), fontFamily: "monospace", fontSize: 10 }}>{r.placa || "—"}</td>
+                    <td style={{ ...tdStyle(), fontSize: 10, color: "#475569", maxWidth: 170, whiteSpace: "normal", lineHeight: 1.25 }}>
+                      {empresaMap[normalizarPlaca(r.placa)] || "—"}
+                    </td>
                     <td style={tdStyle()}>
                       <div style={{ fontSize: 10, color: "#475569" }}>{r.tipologia || "?"}</div>
                       <div style={{ fontSize: 9, color: "#94a3b8", marginTop: 1 }}>{r.vehiculo_raw || ""}</div>
@@ -18483,7 +18504,7 @@ function ListadoPagosDiarios() {
               {/* Fila de totales */}
               {filasFiltradas.length > 0 && (
                 <tr style={{ background: "#f1f5f9", borderTop: "2px solid #cbd5e1", fontWeight: 700 }}>
-                  <td colSpan={8} style={{ ...tdStyle(), textAlign: "right", color: "#1a3a6b" }}>
+                  <td colSpan={9} style={{ ...tdStyle(), textAlign: "right", color: "#1a3a6b" }}>
                     TOTAL · {filasFiltradas.length} rutas · {totales.choferes} choferes
                   </td>
                   <td style={{ ...tdStyle(), textAlign: "right", color: "#1a3a6b" }}>{fmtMXN(totales.tarifaBase)}</td>
