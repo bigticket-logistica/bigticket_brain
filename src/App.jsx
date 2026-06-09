@@ -30963,12 +30963,126 @@ function VerificadorComponentes({ usuario }) {
 }
 
 
+function FlujoCaja() {
+  const [rows, setRows] = useState(null);
+  const [cargando, setCargando] = useState(false);
+  const [error, setError] = useState("");
+  const [horizonte, setHorizonte] = useState(30);
+
+  async function cargar() {
+    setCargando(true); setError("");
+    try {
+      const { data, error } = await sb.from("vw_ca_flujo").select("*");
+      if (error) throw error;
+      setRows(data || []);
+    } catch (e) { setError("Error: " + e.message); }
+    setCargando(false);
+  }
+  useEffect(() => { cargar(); }, []);
+
+  const all = rows || [];
+  const compLabel = { neumatico:"Neumáticos", frenos:"Frenos", amortiguadores:"Amortiguadores", direccion:"Dirección", embrague:"Embrague" };
+
+  // clasificar cada par vehículo-componente según el horizonte
+  const items = [];
+  for (const r of all) {
+    const recorrido = r.recorrido!=null?Number(r.recorrido):null;
+    const limite = Number(r.limite);
+    const kmDia = r.km_dia_30!=null?Number(r.km_dia_30):null;
+    const costo = r.costo_estimado!=null?Number(r.costo_estimado):null;
+    if (recorrido==null) continue;
+    let clase = null, diasCruce = null;
+    if (r.estado==="supera_limite") { clase="inmediato"; diasCruce=0; }
+    else if (kmDia && kmDia>0) {
+      const proyectado = recorrido + kmDia*horizonte;
+      if (proyectado >= limite) {
+        clase="proyectado";
+        diasCruce = Math.max(0, Math.round((limite - recorrido)/kmDia));
+      }
+    }
+    if (clase) items.push({ ...r, costo, clase, diasCruce });
+  }
+  items.sort((a,b) => (a.clase===b.clase ? (a.diasCruce-b.diasCruce) : (a.clase==="inmediato"?-1:1)));
+
+  const sum = (arr) => arr.reduce((s,e)=>s+(e.costo||0),0);
+  const inmediatos = items.filter(i=>i.clase==="inmediato");
+  const proyectados = items.filter(i=>i.clase==="proyectado");
+  const sinCosto = items.filter(i=>i.costo==null).length;
+  const clp = (n)=> n==null?"s/d":"$"+Number(n).toLocaleString("es-CL");
+
+  return (
+    <div>
+      <div className="form-card" style={{ display:"flex", gap:16, alignItems:"flex-end", flexWrap:"wrap" }}>
+        <div style={{ minWidth:160 }}>
+          <Label>Horizonte</Label>
+          <Select value={horizonte} onChange={e=>setHorizonte(Number(e.target.value))}>
+            <option value={30}>Próximos 30 días</option>
+            <option value={60}>Próximos 60 días</option>
+            <option value={90}>Próximos 90 días</option>
+          </Select>
+        </div>
+        <Btn onClick={cargar} color="#1a3a6b" outline>{cargando?"Cargando…":"Refrescar"}</Btn>
+        <div style={{ fontSize:11, color:"#94a3b8", marginLeft:"auto", maxWidth:280 }}>
+          Costo por componente×modelo (fallback global). "s/d" = sin historial de precio.
+        </div>
+      </div>
+
+      {error && <div style={{ padding:"10px 14px", background:"#fee2e2", color:"#c0392b", borderRadius:8, fontSize:13, marginBottom:16 }}>{error}</div>}
+
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))", gap:12, marginBottom:16 }}>
+        <KPI label="Caja total estimada" valor={clp(sum(items))} sub={`${items.length} cambios`} color="#1a3a6b" />
+        <KPI label="🔴 Gasto inmediato" valor={clp(sum(inmediatos))} sub={`${inmediatos.length} ya vencidos`} color="#c0392b" />
+        <KPI label="🟡 Proyectado" valor={clp(sum(proyectados))} sub={`en ${horizonte} días`} color="#d97706" />
+        {sinCosto>0 && <KPI label="Sin costo histórico" valor={sinCosto} sub="usar precio de mercado" color="#64748b" />}
+      </div>
+
+      <div className="form-card">
+        <div className="form-title">Detalle de cambios — {horizonte} días</div>
+        <div style={{ overflowX:"auto" }}>
+          <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
+            <thead>
+              <tr style={{ borderBottom:"2px solid #e4e7ec", textAlign:"left", color:"#64748b", fontSize:11, textTransform:"uppercase", letterSpacing:.4 }}>
+                <th style={{ padding:"8px 6px" }}>Cuándo</th>
+                <th style={{ padding:"8px 6px" }}>Patente</th>
+                <th style={{ padding:"8px 6px" }}>Modelo</th>
+                <th style={{ padding:"8px 6px" }}>Componente</th>
+                <th style={{ padding:"8px 6px", textAlign:"right" }}>Días al cruce</th>
+                <th style={{ padding:"8px 6px", textAlign:"right" }}>Costo estimado</th>
+                <th style={{ padding:"8px 6px" }}>Fuente</th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.map((r,i) => (
+                <tr key={i} style={{ borderBottom:"1px solid #f1f5f9" }}>
+                  <td style={{ padding:"8px 6px" }}>
+                    <span style={{ fontSize:11, fontWeight:700, padding:"3px 8px", borderRadius:6, background:r.clase==="inmediato"?"#fee2e2":"#fef3c7", color:r.clase==="inmediato"?"#c0392b":"#92400e" }}>
+                      {r.clase==="inmediato"?"🔴 Ya":"🟡 Proyectado"}
+                    </span>
+                  </td>
+                  <td style={{ padding:"8px 6px", fontWeight:700 }}>{r.patente}</td>
+                  <td style={{ padding:"8px 6px", color:"#666" }}>{r.modelo}</td>
+                  <td style={{ padding:"8px 6px" }}>{compLabel[r.componente]||r.componente}</td>
+                  <td style={{ padding:"8px 6px", textAlign:"right" }}>{r.clase==="inmediato"?"Vencido":`${r.diasCruce} d`}</td>
+                  <td style={{ padding:"8px 6px", textAlign:"right", fontWeight:700, color:r.costo==null?"#94a3b8":"#1a1a1a" }}>{clp(r.costo)}</td>
+                  <td style={{ padding:"8px 6px", fontSize:11, color:"#94a3b8" }}>{r.costo_fuente||"—"}</td>
+                </tr>
+              ))}
+              {items.length===0 && <tr><td colSpan={7} style={{ padding:"20px", textAlign:"center", color:"#94a3b8" }}>Sin cambios proyectados en este horizonte.</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
 function ModuloMantencionesMadre({ usuario }) {
   const [sub, setSub] = useState("verificador");
   const tabs = [
     { id: "verificador", label: "Verificador de Componentes" },
     { id: "ficha",       label: "Ficha Vehículo" },
-    { id: "costos",      label: "Costos" },
+    { id: "costos",      label: "Flujo de Caja" },
     { id: "bitacora",    label: "Bitácora" },
   ];
   return (
@@ -30987,7 +31101,7 @@ function ModuloMantencionesMadre({ usuario }) {
       </div>
       {sub === "verificador" && <VerificadorComponentes usuario={usuario} />}
       {sub === "ficha"       && <FichaVehiculo usuario={usuario} />}
-      {sub === "costos"      && <MantPlaceholder titulo="Costos por vehículo / flota" />}
+      {sub === "costos"      && <FlujoCaja />}
       {sub === "bitacora"    && <MantPlaceholder titulo="Bitácora de solicitudes" />}
     </div>
   );
