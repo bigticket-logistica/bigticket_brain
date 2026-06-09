@@ -161,7 +161,7 @@ const MODULOS_LABELS = {
   mantenciones: "Mantenciones",
   incidencias: "Incidencias",
   pnr: "PNR",
-  pagos: "Pagos",
+  pagos: "Administración",
   configuracion: "Configuración",
 };
 const USUARIOS = {
@@ -14055,7 +14055,7 @@ function BrainCentral({ setTab, usuario }) {
   };
 
   const modulos = [
-    { id: "pagos", label: "Pagos", angle: 270, target: "pagos", ...stats.pagos },
+    { id: "pagos", label: "Administración", angle: 270, target: "pagos", ...stats.pagos },
     { id: "maestro", label: "Maestro Op.", angle: 330, target: "maestro", ...stats.maestro },
     { id: "incidencias", label: "Incidencias", angle: 30, target: "incidencias", ...stats.incidencias },
     { id: "certificaciones", label: "Certificaciones", angle: 90, target: "certificaciones", ...stats.certificaciones },
@@ -17214,6 +17214,172 @@ function PoolMeliAmbulancias() {
 // ═══════════════════════════════════════════════════════════════════════════
 // PAGOS MADRE — wrapper con sub-tabs (Listado / Drivers / Ayudantes / Config)
 // ═══════════════════════════════════════════════════════════════════════════
+function TercerosMX() {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [busqueda, setBusqueda] = useState("");
+  const [semanaFiltro, setSemanaFiltro] = useState("");
+  const [cargando, setCargando] = useState(false);
+  const [msg, setMsg] = useState(null);
+  const fileRef = useRef(null);
+
+  useEffect(() => { cargar(); }, []);
+  const cargar = async () => {
+    setLoading(true);
+    try {
+      const { data } = await sb.from("flota_terceros_mx").select("*").order("semana", { ascending: false }).order("placa").limit(50000);
+      setRows(data || []);
+    } catch (e) { console.error(e); }
+    setLoading(false);
+  };
+
+  const semanas = Array.from(new Set(rows.map(r => r.semana).filter(v => v != null))).sort((a, b) => b - a);
+  const filtradas = rows.filter(r => {
+    if (semanaFiltro && String(r.semana) !== String(semanaFiltro)) return false;
+    if (!busqueda) return true;
+    const q = busqueda.toLowerCase();
+    return [r.placa, r.empresa_transporte, r.operacion, r.nombre_trabajador, r.curp_trabajador].some(v => String(v || "").toLowerCase().includes(q));
+  });
+  const empresas = new Set(filtradas.map(r => r.empresa_transporte).filter(Boolean));
+  const placas = new Set(filtradas.map(r => r.placa).filter(Boolean));
+
+  const cargarExcel = async (file) => {
+    if (!file) return;
+    setCargando(true); setMsg(null);
+    try {
+      if (!window.XLSX) {
+        await new Promise((res, rej) => { const s = document.createElement("script"); s.src = "https://cdn.sheetjs.com/xlsx-0.20.0/package/dist/xlsx.full.min.js"; s.onload = res; s.onerror = rej; document.head.appendChild(s); });
+      }
+      const XLSX = window.XLSX;
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      const wb = XLSX.read(bytes, { type: "array", cellDates: true });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const aoa = XLSX.utils.sheet_to_json(ws, { header: 1, blankrows: false });
+      if (aoa.length < 2) { setMsg({ ok: false, txt: "El archivo no tiene filas de datos." }); setCargando(false); return; }
+      const norm = s => String(s || "").trim().toUpperCase();
+      const head = aoa[0].map(norm);
+      const col = (name) => head.indexOf(norm(name));
+      const ix = {
+        semana: col("SEMANA"), responsable: col("RESPONSABLE"), fecha: col("FECHA_HORA_ENVIO"),
+        operacion: col("OPERACION"), placa: col("PLACA"), tipo: col("TIPO VEHICULO"),
+        empresa: col("EMPRESA TRANSPORTE"), cargo: col("CARGO"), nombre: col("NOMBRE TRABAJADOR"),
+        curp: col("CURP TRABAJADOR"), flota: col("FLOTA (PLANTA - BACK UP)"), idlog: col("ID LOGISTIC"),
+        valid: col("VALIDACIÓN MELI"), placaInf: col("PLACA INFORMADA"),
+      };
+      if (ix.placa < 0 || ix.empresa < 0) { setMsg({ ok: false, txt: "No encontré las columnas PLACA / EMPRESA TRANSPORTE. ¿Es el formato del inventario de flota?" }); setCargando(false); return; }
+      const get = (row, i) => (i >= 0 && row[i] != null && row[i] !== "") ? row[i] : null;
+      const toIso = v => { if (v == null) return null; if (v instanceof Date) return v.toISOString(); const d = new Date(v); return isNaN(d.getTime()) ? null : d.toISOString(); };
+      const data = [];
+      for (let r = 1; r < aoa.length; r++) {
+        const row = aoa[r];
+        if (!row || row.length === 0) continue;
+        const placa = get(row, ix.placa);
+        if (!placa) continue;
+        data.push({
+          semana: (ix.semana >= 0 && row[ix.semana] != null && row[ix.semana] !== "") ? parseInt(row[ix.semana], 10) : null,
+          responsable: get(row, ix.responsable),
+          fecha_hora_envio: toIso(get(row, ix.fecha)),
+          operacion: get(row, ix.operacion),
+          placa: normalizarPlaca(placa),
+          tipo_vehiculo: get(row, ix.tipo),
+          empresa_transporte: get(row, ix.empresa),
+          cargo: get(row, ix.cargo),
+          nombre_trabajador: get(row, ix.nombre),
+          curp_trabajador: get(row, ix.curp),
+          flota: get(row, ix.flota),
+          id_logistic: get(row, ix.idlog) != null ? String(get(row, ix.idlog)) : null,
+          validacion_meli: get(row, ix.valid),
+          placa_informada: get(row, ix.placaInf) != null ? String(get(row, ix.placaInf)) : null,
+        });
+      }
+      if (data.length === 0) { setMsg({ ok: false, txt: "No encontré filas con placa." }); setCargando(false); return; }
+      const semanasFile = Array.from(new Set(data.map(d => d.semana).filter(v => v != null)));
+      if (!confirm(`Se cargarán ${data.length} filas${semanasFile.length ? ` de la semana ${semanasFile.join(", ")}` : ""}.\n\nSe reemplazará lo que haya de esa(s) semana(s). ¿Continuar?`)) { setCargando(false); return; }
+      for (const sem of semanasFile) {
+        const { error } = await sb.from("flota_terceros_mx").delete().eq("semana", sem);
+        if (error) throw error;
+      }
+      let ok = 0;
+      for (let i = 0; i < data.length; i += 200) {
+        const chunk = data.slice(i, i + 200);
+        const { error } = await sb.from("flota_terceros_mx").insert(chunk);
+        if (error) throw error;
+        ok += chunk.length;
+      }
+      setMsg({ ok: true, txt: `Cargadas ${ok} filas${semanasFile.length ? ` (semana ${semanasFile.join(", ")})` : ""}.` });
+      cargar();
+    } catch (e) {
+      console.error(e);
+      setMsg({ ok: false, txt: "Error al cargar: " + (e.message || e) });
+    }
+    setCargando(false);
+    if (fileRef.current) fileRef.current.value = "";
+  };
+
+  if (loading) return <div style={{ textAlign: "center", padding: 40, color: "#94a3b8" }}>Cargando...</div>;
+
+  return (
+    <div style={{ padding: 24 }}>
+      <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: 14, marginBottom: 14, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <div style={{ flex: 1, minWidth: 240 }}>
+          <div style={{ fontSize: 15, fontWeight: 700, color: "#1a3a6b", marginBottom: 4 }}>Terceros — Empresas por Patente</div>
+          <div style={{ fontSize: 11, color: "#94a3b8" }}>Base de patentes y empresas subcontratadas · alimenta el pago por empresa</div>
+        </div>
+        <input ref={fileRef} type="file" accept=".xlsx,.xls" style={{ display: "none" }} onChange={e => cargarExcel(e.target.files && e.target.files[0])} />
+        <button onClick={() => fileRef.current && fileRef.current.click()} disabled={cargando}
+          style={{ padding: "9px 16px", borderRadius: 4, border: "none", background: cargando ? "#94a3b8" : "#16a34a", color: "#fff", fontSize: 12, fontWeight: 600, cursor: cargando ? "wait" : "pointer" }}>
+          {cargando ? "Cargando..." : "Cargar Excel"}
+        </button>
+      </div>
+      {msg && (<div style={{ background: msg.ok ? "#ecfdf5" : "#fef2f2", border: `1px solid ${msg.ok ? "#a7f3d0" : "#fca5a5"}`, color: msg.ok ? "#065f46" : "#991b1b", borderRadius: 6, padding: 10, marginBottom: 14, fontSize: 12 }}>{msg.txt}</div>)}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: 10, marginBottom: 14 }}>
+        {[["Filas", filtradas.length], ["Patentes", placas.size], ["Empresas", empresas.size], ["Semanas", semanas.length]].map(([l, v]) => (
+          <div key={l} style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: "12px 14px" }}>
+            <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>{l}</div>
+            <div style={{ fontSize: 22, fontWeight: 700, color: "#1a3a6b", marginTop: 2 }}>{v}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
+        <select value={semanaFiltro} onChange={e => setSemanaFiltro(e.target.value)} style={{ border: "1px solid #e4e7ec", borderRadius: 4, padding: "7px 10px", fontSize: 12 }}>
+          <option value="">Todas las semanas</option>
+          {semanas.map(s => <option key={s} value={s}>Semana {s}</option>)}
+        </select>
+        <input type="text" placeholder="Buscar placa / empresa / SC / trabajador..." value={busqueda} onChange={e => setBusqueda(e.target.value)}
+          style={{ border: "1px solid #e4e7ec", borderRadius: 4, padding: "7px 10px", fontSize: 12, flex: 1, minWidth: 240 }} />
+      </div>
+      <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, overflow: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, minWidth: 1000 }}>
+          <thead>
+            <tr style={{ background: "#f8fafc", borderBottom: "1px solid #e4e7ec" }}>
+              {["Sem", "Placa", "Empresa", "SC", "Tipo", "Cargo", "Trabajador", "Flota", "Validación MELI"].map(h => (
+                <th key={h} style={{ padding: "8px 10px", textAlign: "left", fontSize: 10, color: "#64748b", fontWeight: 600, whiteSpace: "nowrap" }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {filtradas.length === 0 && (<tr><td colSpan={9} style={{ padding: 24, textAlign: "center", color: "#94a3b8" }}>Sin datos. Cargá un Excel con el inventario de flota.</td></tr>)}
+            {filtradas.slice(0, 2000).map(r => (
+              <tr key={r.id} style={{ borderBottom: "1px solid #f0f0f0" }}>
+                <td style={{ padding: "6px 10px" }}>{r.semana}</td>
+                <td style={{ padding: "6px 10px", fontWeight: 600 }}>{r.placa}</td>
+                <td style={{ padding: "6px 10px" }}>{r.empresa_transporte}</td>
+                <td style={{ padding: "6px 10px" }}>{r.operacion}</td>
+                <td style={{ padding: "6px 10px" }}>{r.tipo_vehiculo}</td>
+                <td style={{ padding: "6px 10px" }}>{r.cargo}</td>
+                <td style={{ padding: "6px 10px" }}>{r.nombre_trabajador}</td>
+                <td style={{ padding: "6px 10px" }}>{r.flota}</td>
+                <td style={{ padding: "6px 10px" }}>{r.validacion_meli}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {filtradas.length > 2000 && (<div style={{ padding: 10, fontSize: 11, color: "#94a3b8", textAlign: "center" }}>Mostrando 2000 de {filtradas.length} filas. Usá los filtros para acotar.</div>)}
+      </div>
+    </div>
+  );
+}
+
 function ModuloPagosMadre({ usuario }) {
   // Si el usuario tiene rol "prefacturas", solo puede acceder a la sub-tab Prefacturas.
   // Las otras sub-tabs siguen visibles pero al hacer click muestran un mensaje de bloqueo.
@@ -17225,7 +17391,7 @@ function ModuloPagosMadre({ usuario }) {
     { id: "listado",     label: "Listado de Pagos",      desc: "Cálculo diario por contratista" },
     { id: "info_ruta",   label: "Información de Ruta",   desc: "Análisis operacional por ruta" },
     { id: "torre_3p",    label: "Torre de Control Pagos", desc: "3 Pilares · MELI vs Operación" },
-    { id: "drivers",     label: "Drivers",               desc: "Maestro de choferes MX" },
+    { id: "terceros",    label: "Terceros",              desc: "Empresas subcontratadas por patente" },
     { id: "ayudantes",   label: "Ayudantes",             desc: "Detalle diario de auxiliares" },
     { id: "ambulancias", label: "Ambulancias",           desc: "Traspasos internos ruta→ruta" },
     { id: "supervisores", label: "Consolidaciones",   desc: "Consolidado por SC: torre, helpers, ambulancias y bitácora" },
@@ -17238,7 +17404,7 @@ function ModuloPagosMadre({ usuario }) {
   return (
     <div style={{ padding: 0 }}>
       <div style={{ background: "#fff", borderBottom: "1px solid #e4e7ec", padding: "12px 24px" }}>
-        <div style={{ fontSize: 18, fontWeight: 700, color: "#1a3a6b", marginBottom: 10 }}>Pagos</div>
+        <div style={{ fontSize: 18, fontWeight: 700, color: "#1a3a6b", marginBottom: 10 }}>Administración</div>
         <div style={{ display: "flex", gap: 0, borderBottom: "2px solid #e4e7ec", marginLeft: -8, flexWrap: "wrap" }}>
           {tabs.map(t => (
             <button key={t.id} onClick={() => setSubtab(t.id)}
@@ -17273,7 +17439,7 @@ function ModuloPagosMadre({ usuario }) {
           {subtab === "listado"     && <ListadoPagosDiarios />}
           {subtab === "info_ruta"   && <InformacionDeRuta />}
           {subtab === "torre_3p"    && <TorreTresPilares />}
-          {subtab === "drivers"     && <DriversMaestroMX />}
+          {subtab === "terceros"    && <TercerosMX />}
           {subtab === "ayudantes"   && <AyudantesDetalleDia />}
           {subtab === "ambulancias" && <PoolMeliAmbulancias />}
           {subtab === "supervisores" && <PanelControlSupervisores />}
@@ -17301,6 +17467,13 @@ function parsearTipologia(vehiculoRaw) {
   if (v.includes("SMALL VAN")) return "SMALL VAN";
   if (v.includes("CAR")) return "CAR";
   return null;
+}
+
+// Normaliza la patente: sin espacios, mayúsculas y sin prefijo SDD-
+function normalizarPlaca(p) {
+  if (!p) return null;
+  const s = String(p).trim().toUpperCase().replace(/^SDD-/, "");
+  return s || null;
 }
 
 // Convierte tipología a la forma usada en tarifas_especiales_mx (Title Case)
@@ -17465,7 +17638,7 @@ function calcularPagos({ maestro, snapshots, scZonas, especiales, matrizPrecios,
     const driverIdML = m.driver_id != null ? Number(m.driver_id) : null;
     const sc = m.service_center_id || null;
     const vehiculoRaw = m.tipo_vehiculo || null;
-    const placa = m.patentes || null;
+    const placa = normalizarPlaca(m.patentes);
     const ciclo = m.cluster_meli || null;
 
     // Km: reales según MELI con fallback a planificado
