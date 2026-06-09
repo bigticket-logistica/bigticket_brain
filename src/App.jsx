@@ -31077,6 +31077,159 @@ function FlujoCaja() {
 }
 
 
+function Bitacora({ usuario }) {
+  const [sols, setSols] = useState(null);
+  const [cargando, setCargando] = useState(false);
+  const [error, setError] = useState("");
+  const [fEstado, setFEstado] = useState("pendiente");
+  const [accion, setAccion] = useState(null);
+  const [hist, setHist] = useState(null);
+  const [verHist, setVerHist] = useState(false);
+
+  async function cargar() {
+    setCargando(true); setError("");
+    try {
+      const { data, error } = await sb.from("ca_solicitudes").select("*").order("creado_en", { ascending:false });
+      if (error) throw error;
+      setSols(data || []);
+    } catch (e) { setError("Error: " + e.message); }
+    setCargando(false);
+  }
+  useEffect(() => { cargar(); }, []);
+
+  async function cambiarEstado(id, nuevo) {
+    setAccion(id);
+    try {
+      const { error } = await sb.from("ca_solicitudes").update({ status: nuevo }).eq("id", id);
+      if (error) throw error;
+      await cargar();
+    } catch (e) { setError("Error al actualizar: " + e.message); }
+    setAccion(null);
+  }
+
+  async function toggleHist() {
+    if (hist) { setVerHist(!verHist); return; }
+    try {
+      const { data } = await sb.from("ca_bitacora").select("*").order("fecha_solicitud", { ascending:false });
+      setHist(data || []); setVerHist(true);
+    } catch (e) { setError("Error histórico: " + e.message); }
+  }
+
+  const all = sols || [];
+  const cfg = {
+    pendiente: { txt:"Pendiente", color:"#92400e", bg:"#fef3c7" },
+    aprobada:  { txt:"Aprobada",  color:"#166534", bg:"#dcfce7" },
+    rechazada: { txt:"Rechazada", color:"#c0392b", bg:"#fee2e2" },
+  };
+  const resumen = {
+    pendiente: all.filter(s=>s.status==="pendiente").length,
+    aprobada:  all.filter(s=>s.status==="aprobada").length,
+    rechazada: all.filter(s=>s.status==="rechazada").length,
+  };
+  const vis = fEstado==="todas" ? all : all.filter(s=>s.status===fEstado);
+  const compLabel = { neumaticos:"Neumáticos", neumatico:"Neumáticos", frenos:"Frenos", amortiguadores:"Amortiguadores", direccion:"Dirección", embrague:"Embrague" };
+  const cl = (n)=> n==null?"—":Number(n).toLocaleString("es-CL");
+  const fch = (f)=> f?new Date(f).toLocaleDateString("es-CL"):"—";
+
+  return (
+    <div>
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))", gap:12, marginBottom:16 }}>
+        <KPI label="🟡 Pendientes" valor={resumen.pendiente} color="#d97706" />
+        <KPI label="🟢 Aprobadas"  valor={resumen.aprobada} color="#166534" />
+        <KPI label="🔴 Rechazadas" valor={resumen.rechazada} color="#c0392b" />
+      </div>
+
+      <div className="form-card">
+        <div style={{ display:"flex", gap:16, alignItems:"flex-end", marginBottom:14, flexWrap:"wrap" }}>
+          <div style={{ minWidth:180 }}>
+            <Label>Estado</Label>
+            <Select value={fEstado} onChange={e=>setFEstado(e.target.value)}>
+              <option value="pendiente">Pendientes</option>
+              <option value="aprobada">Aprobadas</option>
+              <option value="rechazada">Rechazadas</option>
+              <option value="todas">Todas</option>
+            </Select>
+          </div>
+          <Btn onClick={cargar} color="#1a3a6b" outline>{cargando?"Cargando…":"Refrescar"}</Btn>
+          <div style={{ fontSize:12, color:"#94a3b8", marginLeft:"auto" }}>{vis.length} solicitud(es)</div>
+        </div>
+
+        {error && <div style={{ padding:"10px 14px", background:"#fee2e2", color:"#c0392b", borderRadius:8, fontSize:13, marginBottom:10 }}>{error}</div>}
+
+        <div style={{ overflowX:"auto" }}>
+          <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
+            <thead>
+              <tr style={{ borderBottom:"2px solid #e4e7ec", textAlign:"left", color:"#64748b", fontSize:11, textTransform:"uppercase", letterSpacing:.4 }}>
+                <th style={{ padding:"8px 6px" }}>Fecha</th>
+                <th style={{ padding:"8px 6px" }}>Patente</th>
+                <th style={{ padding:"8px 6px" }}>Componente</th>
+                <th style={{ padding:"8px 6px", textAlign:"right" }}>Recorrido / Límite</th>
+                <th style={{ padding:"8px 6px" }}>Solicitante</th>
+                <th style={{ padding:"8px 6px" }}>Estado</th>
+                <th style={{ padding:"8px 6px" }}>Acciones</th>
+              </tr>
+            </thead>
+            <tbody>
+              {vis.map((s) => {
+                const c = cfg[s.status] || cfg.pendiente;
+                return (
+                  <tr key={s.id} style={{ borderBottom:"1px solid #f1f5f9" }}>
+                    <td style={{ padding:"8px 6px", whiteSpace:"nowrap" }}>{fch(s.creado_en)}</td>
+                    <td style={{ padding:"8px 6px", fontWeight:700 }}>{s.patente} <span style={{ fontSize:11, color:"#94a3b8" }}>{s.ceco}</span></td>
+                    <td style={{ padding:"8px 6px" }} title={s.justificacion||""}>{compLabel[s.componente]||s.componente} <span style={{ cursor:"help", color:"#0369a1", fontSize:11 }}>ⓘ</span></td>
+                    <td style={{ padding:"8px 6px", textAlign:"right" }}>{cl(s.km_recorridos)} / {cl(s.km_limite!=null && s.km_ultima_compra!=null ? s.km_limite - s.km_ultima_compra : null)}</td>
+                    <td style={{ padding:"8px 6px", color:"#666" }}>{s.solicitante||"—"}</td>
+                    <td style={{ padding:"8px 6px" }}><span style={{ fontSize:11, fontWeight:700, padding:"3px 8px", borderRadius:6, background:c.bg, color:c.color }}>{c.txt}</span></td>
+                    <td style={{ padding:"8px 6px" }}>
+                      {s.status==="pendiente" ? (
+                        <div style={{ display:"flex", gap:6 }}>
+                          <button onClick={()=>cambiarEstado(s.id,"aprobada")} disabled={accion===s.id} style={{ fontSize:11, fontWeight:700, padding:"4px 10px", borderRadius:6, border:"none", background:"#166534", color:"#fff", cursor:"pointer" }}>{accion===s.id?"…":"Aprobar"}</button>
+                          <button onClick={()=>cambiarEstado(s.id,"rechazada")} disabled={accion===s.id} style={{ fontSize:11, fontWeight:700, padding:"4px 10px", borderRadius:6, border:"1px solid #c0392b", background:"#fff", color:"#c0392b", cursor:"pointer" }}>Rechazar</button>
+                        </div>
+                      ) : (
+                        <button onClick={()=>cambiarEstado(s.id,"pendiente")} style={{ fontSize:11, padding:"4px 10px", borderRadius:6, border:"1px solid #d0d5dd", background:"#fff", color:"#666", cursor:"pointer" }}>Reabrir</button>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+              {vis.length===0 && <tr><td colSpan={7} style={{ padding:"20px", textAlign:"center", color:"#94a3b8" }}>Sin solicitudes con este filtro.</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div style={{ marginTop:8 }}>
+        <Btn onClick={toggleHist} color="#64748b" outline small>{verHist?"Ocultar":"Ver"} histórico Excel (bitácora)</Btn>
+      </div>
+      {verHist && hist && (
+        <div className="form-card" style={{ marginTop:12 }}>
+          <div className="form-title">Histórico bitácora (Excel) — {hist.length}</div>
+          <div style={{ overflowX:"auto" }}>
+            <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12 }}>
+              <thead><tr style={{ borderBottom:"2px solid #e4e7ec", textAlign:"left", color:"#64748b", fontSize:10, textTransform:"uppercase" }}>
+                <th style={{ padding:"6px" }}>Patente</th><th style={{ padding:"6px" }}>Solicitud</th><th style={{ padding:"6px" }}>Necesidad</th><th style={{ padding:"6px", textAlign:"right" }}>Monto</th><th style={{ padding:"6px" }}>Status</th>
+              </tr></thead>
+              <tbody>
+                {hist.map((h,i)=>(
+                  <tr key={i} style={{ borderBottom:"1px solid #f1f5f9" }}>
+                    <td style={{ padding:"6px", fontWeight:600 }}>{h.patente}</td>
+                    <td style={{ padding:"6px" }}>{fch(h.fecha_solicitud)}</td>
+                    <td style={{ padding:"6px", color:"#666" }}>{h.necesidad_operativa||"—"}</td>
+                    <td style={{ padding:"6px", textAlign:"right" }}>{h.monto_presupuesto?("$"+cl(h.monto_presupuesto)):"—"}</td>
+                    <td style={{ padding:"6px" }}>{h.status_solicitud||"—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
 function ModuloMantencionesMadre({ usuario }) {
   const [sub, setSub] = useState("verificador");
   const tabs = [
@@ -31102,7 +31255,7 @@ function ModuloMantencionesMadre({ usuario }) {
       {sub === "verificador" && <VerificadorComponentes usuario={usuario} />}
       {sub === "ficha"       && <FichaVehiculo usuario={usuario} />}
       {sub === "costos"      && <FlujoCaja />}
-      {sub === "bitacora"    && <MantPlaceholder titulo="Bitácora de solicitudes" />}
+      {sub === "bitacora"    && <Bitacora usuario={usuario} />}
     </div>
   );
 }
