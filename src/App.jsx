@@ -18003,6 +18003,11 @@ function ListadoPagosDiarios() {
         );
       }
 
+      // Refrescar el snapshot por empresa (pagos_terceros_diario) del día calculado
+      try {
+        await sb.rpc("refrescar_pagos_terceros_diario", { p_fecha: fecha });
+      } catch (e) { console.error("refrescar pagos_terceros_diario:", e); }
+
       setResumenCalculo({
         viajes_procesados: maestro.length,
         registros_calculados: filas.length,
