@@ -30580,7 +30580,7 @@ function FichaVehiculo({ usuario }) {
     setCargando(true); setError(""); setData(null);
     try {
       const { data: veh } = await sb.from("ca_vehiculos")
-        .select("patente,ceco,tipo_vehiculo,modelo,marca,anio,soap,rev_tecnica,permiso_circulacion,status").eq("patente", p).maybeSingle();
+        .select("patente,ceco,tipo_vehiculo,modelo,marca,anio,soap,rev_tecnica,permiso_circulacion,status,supervisor").eq("patente", p).maybeSingle();
       if (!veh) { setError(`La patente ${p} no está en la flota.`); setCargando(false); return; }
 
       const { data: odo } = await sb.from("ca_odometros")
@@ -30646,7 +30646,7 @@ function FichaVehiculo({ usuario }) {
             <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", flexWrap:"wrap", gap:10 }}>
               <div>
                 <div style={{ fontSize:18, fontWeight:700, color:"#1a1a1a" }}>{data.veh.patente}</div>
-                <div style={{ fontSize:13, color:"#666" }}>{data.veh.marca} {data.veh.modelo} · {data.veh.anio || "—"} · {data.veh.ceco}</div>
+                <div style={{ fontSize:13, color:"#666" }}>{data.veh.marca} {data.veh.modelo} · {data.veh.anio || "—"} · CECO: {data.veh.ceco} · Supervisor: {data.veh.supervisor||"—"}</div>
               </div>
               <div style={{ display:"flex", alignItems:"center", gap:10 }}>
                 <span style={{ fontSize:11, fontWeight:700, padding:"4px 12px", borderRadius:20, background:data.veh.status==="ACTIVO"?"#dcfce7":"#f1f5f9", color:data.veh.status==="ACTIVO"?"#166534":"#64748b" }}>{data.veh.status}</span>
@@ -30840,7 +30840,7 @@ function VerificadorComponentes({ usuario }) {
     if (!p) { setError("Ingresá una patente."); return; }
     setCargando(true); setError(""); setInfo(null); setMsg("");
     try {
-      const { data: veh } = await sb.from("ca_vehiculos").select("patente,ceco,tipo_vehiculo,modelo").eq("patente", p).maybeSingle();
+      const { data: veh } = await sb.from("ca_vehiculos").select("patente,ceco,tipo_vehiculo,modelo,supervisor").eq("patente", p).maybeSingle();
       if (!veh) { setError(`La patente ${p} no está en la flota.`); setCargando(false); return; }
       const { data: row } = await sb.from("vw_ca_alertas").select("*").eq("patente", p).eq("componente", componente).maybeSingle();
       if (!row) { setError(`No hay protocolo de ${compLabels[componente]} para el modelo ${veh.modelo}.`); setCargando(false); return; }
@@ -30919,7 +30919,10 @@ function VerificadorComponentes({ usuario }) {
             return (
             <div style={{ marginTop:18 }}>
               <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 }}>
-                <div style={{ fontSize:14, fontWeight:700 }}>{compLabels[componente]} · {info.veh.modelo} {info.veh.patente} — {info.veh.ceco}</div>
+                <div>
+                  <div style={{ fontSize:14, fontWeight:700 }}>{compLabels[componente]} · {info.veh.modelo} {info.veh.patente}</div>
+                  <div style={{ fontSize:12, color:"#666", marginTop:2 }}>CECO: {info.veh.ceco||"—"} · Supervisor: {info.veh.supervisor||"—"}</div>
+                </div>
                 <span style={{ fontSize:12, fontWeight:700, padding:"5px 12px", borderRadius:20, background:cfg.bg, color:cfg.color }}>{cfg.ico} {cfg.txt}</span>
               </div>
               <div style={{ fontSize:12, color:"#666", marginBottom:10 }}>Último servicio: {kmServ!=null?kmServ.toLocaleString("es-CL"):"—"} → KM actual: {kmActual.toLocaleString("es-CL")}{r.dias_al_limite!=null?` · ~${Number(r.dias_al_limite).toLocaleString("es-CL")} días al límite`:""}</div>
@@ -31236,6 +31239,156 @@ function Bitacora({ usuario }) {
 }
 
 
+function MantenedorSupervisores() {
+  const [veh, setVeh] = useState(null);
+  const [sup, setSup] = useState(null);
+  const [error, setError] = useState("");
+  const [okMsg, setOkMsg] = useState("");
+  const [cargando, setCargando] = useState(false);
+  const [filtro, setFiltro] = useState("");
+  const [vEd, setVEd] = useState({});
+  const [sEd, setSEd] = useState({});
+  const [guardando, setGuardando] = useState(null);
+  const [nuevo, setNuevo] = useState({ nombre:"", correo:"", telefono:"", cargo:"", recibe_global:false });
+
+  async function cargar() {
+    setCargando(true); setError(""); setOkMsg("");
+    try {
+      const [{ data: v, error: ev }, { data: s, error: es }] = await Promise.all([
+        sb.from("ca_vehiculos").select("patente,modelo,ceco,supervisor,status").order("patente"),
+        sb.from("ca_supervisores").select("nombre,correo,telefono,cargo,recibe_global").order("recibe_global").order("nombre"),
+      ]);
+      if (ev) throw ev; if (es) throw es;
+      setVeh(v||[]); setSup(s||[]);
+      const ve={}; (v||[]).forEach(r=>{ ve[r.patente]={ ceco:r.ceco||"", supervisor:r.supervisor||"" }; }); setVEd(ve);
+      const se={}; (s||[]).forEach(r=>{ se[r.nombre]={ correo:r.correo||"", telefono:r.telefono||"", cargo:r.cargo||"", recibe_global:!!r.recibe_global }; }); setSEd(se);
+    } catch(e){ setError("Error: "+e.message); }
+    setCargando(false);
+  }
+  useEffect(()=>{ cargar(); }, []);
+
+  async function guardarVeh(patente) {
+    setGuardando("v:"+patente); setOkMsg(""); setError("");
+    try {
+      const e = vEd[patente];
+      const { error } = await sb.from("ca_vehiculos").update({ ceco:e.ceco||null, supervisor:e.supervisor||null }).eq("patente", patente);
+      if (error) throw error;
+      setOkMsg(`✅ ${patente} actualizado`);
+    } catch(e){ setError("Error: "+e.message); }
+    setGuardando(null);
+  }
+  async function guardarSup(nombre) {
+    setGuardando("s:"+nombre); setOkMsg(""); setError("");
+    try {
+      const e = sEd[nombre];
+      const { error } = await sb.from("ca_supervisores").update({ correo:e.correo||null, telefono:e.telefono||null, cargo:e.cargo||null, recibe_global:!!e.recibe_global }).eq("nombre", nombre);
+      if (error) throw error;
+      setOkMsg(`✅ ${nombre} actualizado`);
+    } catch(e){ setError("Error: "+e.message); }
+    setGuardando(null);
+  }
+  async function agregarSup() {
+    if (!nuevo.nombre.trim()) { setError("El nombre es obligatorio."); return; }
+    setGuardando("nuevo"); setOkMsg(""); setError("");
+    try {
+      const { error } = await sb.from("ca_supervisores").insert({ nombre:nuevo.nombre.trim().toUpperCase(), correo:nuevo.correo||null, telefono:nuevo.telefono||null, cargo:nuevo.cargo||null, recibe_global:!!nuevo.recibe_global });
+      if (error) throw error;
+      setNuevo({ nombre:"", correo:"", telefono:"", cargo:"", recibe_global:false });
+      await cargar(); setOkMsg("✅ Supervisor agregado");
+    } catch(e){ setError("Error: "+e.message); }
+    setGuardando(null);
+  }
+
+  const F = (filtro||"").toUpperCase();
+  const vehs = (veh||[]).filter(r => !F || r.patente.includes(F) || (r.supervisor||"").toUpperCase().includes(F) || (r.ceco||"").toUpperCase().includes(F));
+  const supOptions = (sup||[]).map(s=>s.nombre);
+  const th = { padding:"8px 6px", textAlign:"left", color:"#64748b", fontSize:11, textTransform:"uppercase", letterSpacing:.4 };
+  const td = { padding:"6px", borderBottom:"1px solid #f1f5f9" };
+  const inp = { width:"100%", padding:"5px 8px", border:"1px solid #d0d5dd", borderRadius:6, fontSize:13, boxSizing:"border-box" };
+
+  return (
+    <div>
+      {error && <div style={{ padding:"10px 14px", background:"#fee2e2", color:"#c0392b", borderRadius:8, fontSize:13, marginBottom:12 }}>{error}</div>}
+      {okMsg && <div style={{ padding:"10px 14px", background:"#dcfce7", color:"#166534", borderRadius:8, fontSize:13, marginBottom:12 }}>{okMsg}</div>}
+
+      <div className="form-card">
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:10, marginBottom:12 }}>
+          <div className="form-title" style={{ margin:0 }}>Asignación por patente — Supervisor y CECO</div>
+          <Input value={filtro} onChange={e=>setFiltro(e.target.value)} placeholder="Filtrar patente / supervisor / CECO" style={{ maxWidth:280 }} />
+        </div>
+        <div style={{ overflowX:"auto" }}>
+          <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
+            <thead><tr style={{ borderBottom:"2px solid #e4e7ec" }}>
+              <th style={th}>Patente</th><th style={th}>Modelo</th><th style={{...th, minWidth:150}}>CECO</th><th style={{...th, minWidth:220}}>Supervisor</th><th style={th}></th>
+            </tr></thead>
+            <tbody>
+              {vehs.map(r => {
+                const e = vEd[r.patente] || { ceco:"", supervisor:"" };
+                return (
+                  <tr key={r.patente}>
+                    <td style={{...td, fontWeight:700}}>{r.patente}</td>
+                    <td style={{...td, color:"#666"}}>{r.modelo}</td>
+                    <td style={td}><input style={inp} value={e.ceco} onChange={ev=>setVEd(p=>({...p,[r.patente]:{...p[r.patente],ceco:ev.target.value}}))} /></td>
+                    <td style={td}>
+                      <select style={inp} value={e.supervisor} onChange={ev=>setVEd(p=>({...p,[r.patente]:{...p[r.patente],supervisor:ev.target.value}}))}>
+                        <option value="">(sin asignar)</option>
+                        {supOptions.map(n=><option key={n} value={n}>{n}</option>)}
+                      </select>
+                    </td>
+                    <td style={td}><button onClick={()=>guardarVeh(r.patente)} disabled={guardando==="v:"+r.patente} style={{ fontSize:11, fontWeight:700, padding:"5px 12px", borderRadius:6, border:"none", background:"#1a3a6b", color:"#fff", cursor:"pointer" }}>{guardando==="v:"+r.patente?"…":"Guardar"}</button></td>
+                  </tr>
+                );
+              })}
+              {vehs.length===0 && <tr><td colSpan={5} style={{ padding:20, textAlign:"center", color:"#94a3b8" }}>{cargando?"Cargando…":"Sin resultados."}</td></tr>}
+            </tbody>
+          </table>
+        </div>
+        <div style={{ fontSize:12, color:"#94a3b8", marginTop:8 }}>{vehs.length} vehículo(s)</div>
+      </div>
+
+      <div className="form-card" style={{ marginTop:16 }}>
+        <div className="form-title">Supervisores — correo, teléfono y rol</div>
+        <div style={{ fontSize:12, color:"#666", marginBottom:10 }}>El teléfono se usa para WhatsApp. "Recibe todas" = gerencia/finanzas que recibe todas las alertas (escalamiento).</div>
+        <div style={{ overflowX:"auto" }}>
+          <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
+            <thead><tr style={{ borderBottom:"2px solid #e4e7ec" }}>
+              <th style={th}>Nombre</th><th style={th}>Cargo</th><th style={th}>Correo</th><th style={th}>Teléfono</th><th style={{...th, textAlign:"center"}}>Recibe todas</th><th style={th}></th>
+            </tr></thead>
+            <tbody>
+              {(sup||[]).map(r => {
+                const e = sEd[r.nombre] || { correo:"", telefono:"", cargo:"", recibe_global:false };
+                return (
+                  <tr key={r.nombre} style={{ background: e.recibe_global ? "#f0f9ff" : "transparent" }}>
+                    <td style={{...td, fontWeight:600}}>{r.nombre}</td>
+                    <td style={td}><input style={inp} value={e.cargo} onChange={ev=>setSEd(p=>({...p,[r.nombre]:{...p[r.nombre],cargo:ev.target.value}}))} /></td>
+                    <td style={td}><input style={inp} value={e.correo} onChange={ev=>setSEd(p=>({...p,[r.nombre]:{...p[r.nombre],correo:ev.target.value}}))} /></td>
+                    <td style={td}><input style={inp} value={e.telefono} onChange={ev=>setSEd(p=>({...p,[r.nombre]:{...p[r.nombre],telefono:ev.target.value}}))} placeholder="+569..." /></td>
+                    <td style={{...td, textAlign:"center"}}><input type="checkbox" checked={!!e.recibe_global} onChange={ev=>setSEd(p=>({...p,[r.nombre]:{...p[r.nombre],recibe_global:ev.target.checked}}))} /></td>
+                    <td style={td}><button onClick={()=>guardarSup(r.nombre)} disabled={guardando==="s:"+r.nombre} style={{ fontSize:11, fontWeight:700, padding:"5px 12px", borderRadius:6, border:"none", background:"#1a3a6b", color:"#fff", cursor:"pointer" }}>{guardando==="s:"+r.nombre?"…":"Guardar"}</button></td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+
+        <div style={{ borderTop:"1px solid #e4e7ec", marginTop:14, paddingTop:14 }}>
+          <div style={{ fontSize:13, fontWeight:700, marginBottom:8 }}>Agregar supervisor</div>
+          <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))", gap:8, alignItems:"end" }}>
+            <div><Label>Nombre</Label><Input value={nuevo.nombre} onChange={e=>setNuevo({...nuevo,nombre:e.target.value})} /></div>
+            <div><Label>Cargo</Label><Input value={nuevo.cargo} onChange={e=>setNuevo({...nuevo,cargo:e.target.value})} /></div>
+            <div><Label>Correo</Label><Input value={nuevo.correo} onChange={e=>setNuevo({...nuevo,correo:e.target.value})} /></div>
+            <div><Label>Teléfono</Label><Input value={nuevo.telefono} onChange={e=>setNuevo({...nuevo,telefono:e.target.value})} placeholder="+569..." /></div>
+            <label style={{ fontSize:12, display:"flex", alignItems:"center", gap:6 }}><input type="checkbox" checked={nuevo.recibe_global} onChange={e=>setNuevo({...nuevo,recibe_global:e.target.checked})} /> Recibe todas</label>
+            <Btn onClick={agregarSup} color="#166534">{guardando==="nuevo"?"…":"Agregar"}</Btn>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
 function ModuloMantencionesMadre({ usuario }) {
   const [sub, setSub] = useState("verificador");
   const tabs = [
@@ -31243,6 +31396,7 @@ function ModuloMantencionesMadre({ usuario }) {
     { id: "ficha",       label: "Ficha Vehículo" },
     { id: "costos",      label: "Flujo de Caja" },
     { id: "bitacora",    label: "Bitácora" },
+    { id: "supervisores", label: "Supervisores" },
   ];
   return (
     <div className="pg">
@@ -31262,6 +31416,7 @@ function ModuloMantencionesMadre({ usuario }) {
       {sub === "ficha"       && <FichaVehiculo usuario={usuario} />}
       {sub === "costos"      && <FlujoCaja />}
       {sub === "bitacora"    && <Bitacora usuario={usuario} />}
+      {sub === "supervisores" && <MantenedorSupervisores />}
     </div>
   );
 }
