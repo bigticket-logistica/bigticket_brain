@@ -30489,11 +30489,90 @@ const hmxTdR = { ...hmxTd, textAlign: "right", fontVariantNumeric: "tabular-nums
 // MÓDULO MANTENCIONES · Cuidado de Activo
 // Pestaña madre con sub-tabs. v1: Verificador de neumáticos (emula la imagen).
 // ───────────────────────────────────────────────────────────────────────────
-function FichaVehiculo() {
+function FormRegistrarEvento({ patente, onGuardado, onCerrar, usuario }) {
+  const [tipo, setTipo] = useState("reparacion");
+  const [componente, setComponente] = useState("");
+  const [fecha, setFecha] = useState(new Date().toISOString().slice(0,10));
+  const [descripcion, setDescripcion] = useState("");
+  const [item, setItem] = useState("");
+  const [taller, setTaller] = useState("");
+  const [odometro, setOdometro] = useState("");
+  const [costo, setCosto] = useState("");
+  const [archivo, setArchivo] = useState(null);
+  const [guardando, setGuardando] = useState(false);
+  const [err, setErr] = useState("");
+
+  const tipos = [["reparacion","Reparación / Compra"],["mantencion","Mantención"],["siniestro","Siniestro"],["otro","Otro"]];
+  const comps = [["","(ninguno)"],["neumatico","Neumáticos"],["frenos","Frenos"],["amortiguadores","Amortiguadores"],["direccion","Dirección"],["embrague","Embrague"]];
+
+  async function guardar() {
+    if (!fecha) { setErr("La fecha es obligatoria."); return; }
+    if (!descripcion && !item) { setErr("Poné una descripción o ítem."); return; }
+    setGuardando(true); setErr("");
+    try {
+      let adjunto_url = null;
+      if (archivo) {
+        const ext = (archivo.name.split(".").pop() || "pdf").toLowerCase();
+        const path = `${patente}/${Date.now()}.${ext}`;
+        const { error: upErr } = await sb.storage.from("ca-adjuntos").upload(path, archivo, { upsert: false });
+        if (upErr) throw new Error("Subida PDF: " + upErr.message);
+        const { data: pub } = sb.storage.from("ca-adjuntos").getPublicUrl(path);
+        adjunto_url = pub?.publicUrl || null;
+      }
+      const { error } = await sb.from("ca_eventos").insert({
+        patente, tipo, componente: componente || null, fecha_servicio: fecha,
+        descripcion: descripcion || null, item: item || null, taller: taller || null,
+        odometro: odometro ? Number(odometro) : null, costo: costo ? Number(costo) : null,
+        adjunto_url, registrado_por: usuario?.nombre || null,
+      });
+      if (error) throw error;
+      onGuardado && onGuardado();
+    } catch (e) { setErr(e.message); }
+    setGuardando(false);
+  }
+
+  return (
+    <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.4)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:1000, padding:20 }}>
+      <div style={{ background:"#fff", borderRadius:14, padding:24, maxWidth:560, width:"100%", maxHeight:"90vh", overflowY:"auto" }}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16 }}>
+          <div style={{ fontSize:16, fontWeight:700, color:"#1a3a6b" }}>Registrar evento · {patente}</div>
+          <button onClick={onCerrar} style={{ background:"none", border:"none", fontSize:20, cursor:"pointer", color:"#94a3b8" }}>×</button>
+        </div>
+
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+          <div><Label>Tipo de evento</Label><Select value={tipo} onChange={e=>setTipo(e.target.value)}>{tipos.map(([k,v])=><option key={k} value={k}>{v}</option>)}</Select></div>
+          <div><Label>Componente (resetea contador)</Label><Select value={componente} onChange={e=>setComponente(e.target.value)}>{comps.map(([k,v])=><option key={k} value={k}>{v}</option>)}</Select></div>
+          <div><Label>Fecha</Label><Input type="date" value={fecha} onChange={e=>setFecha(e.target.value)} /></div>
+          <div><Label>Odómetro (km)</Label><Input type="number" value={odometro} onChange={e=>setOdometro(e.target.value)} placeholder="Ej: 70010" /></div>
+          <div><Label>Taller</Label><Input value={taller} onChange={e=>setTaller(e.target.value)} placeholder="Taller" /></div>
+          <div><Label>Costo ($)</Label><Input type="number" value={costo} onChange={e=>setCosto(e.target.value)} placeholder="Ej: 350000" /></div>
+        </div>
+        <div style={{ marginTop:12 }}><Label>Ítem</Label><Input value={item} onChange={e=>setItem(e.target.value)} placeholder="Ej: Compra de neumáticos traseros" /></div>
+        <div style={{ marginTop:12 }}><Label>Descripción</Label><Textarea value={descripcion} onChange={e=>setDescripcion(e.target.value)} rows={2} placeholder="Detalle del trabajo / compra" /></div>
+        <div style={{ marginTop:12 }}>
+          <Label>Adjunto PDF (factura/orden)</Label>
+          <input type="file" accept="application/pdf,image/*" onChange={e=>setArchivo(e.target.files?.[0]||null)} style={{ fontSize:12 }} />
+          {archivo && <span style={{ fontSize:11, color:"#666", marginLeft:8 }}>{archivo.name}</span>}
+        </div>
+
+        {err && <div style={{ marginTop:12, padding:"10px 14px", background:"#fee2e2", color:"#c0392b", borderRadius:8, fontSize:13 }}>{err}</div>}
+
+        <div style={{ display:"flex", gap:10, justifyContent:"flex-end", marginTop:18 }}>
+          <Btn onClick={onCerrar} color="#94a3b8" outline>Cancelar</Btn>
+          <Btn onClick={guardar} color="#1a3a6b">{guardando?"Guardando…":"Guardar evento"}</Btn>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+function FichaVehiculo({ usuario }) {
   const [patente, setPatente] = useState("");
   const [cargando, setCargando] = useState(false);
   const [error, setError] = useState("");
   const [data, setData] = useState(null);
+  const [mostrarForm, setMostrarForm] = useState(false);
 
   async function buscar() {
     const p = patente.trim().toUpperCase();
@@ -30508,11 +30587,12 @@ function FichaVehiculo() {
         .select("odometro,fecha_lectura").eq("patente", p)
         .order("fecha_lectura", { ascending:false }).limit(1).maybeSingle();
 
-      const [mant, rep, sin, otr] = await Promise.all([
+      const [mant, rep, sin, otr, eve] = await Promise.all([
         sb.from("ca_mantenciones").select("fecha_servicio,servicio_efectuado,item,taller,odometro,costo").eq("patente", p),
         sb.from("ca_reparaciones").select("fecha_servicio,servicio_efectuado,item,taller,odometro,costo").eq("patente", p),
         sb.from("ca_siniestros").select("fecha_servicio,item,taller,odometro,costo,precio_reparacion_total").eq("patente", p),
         sb.from("ca_otros").select("fecha_servicio,servicio_efectuado,item,taller,km_al_momento,costo").eq("patente", p),
+        sb.from("ca_eventos").select("fecha_servicio,tipo,componente,descripcion,item,taller,odometro,costo,adjunto_url").eq("patente", p),
       ]);
 
       const ev = [];
@@ -30520,6 +30600,7 @@ function FichaVehiculo() {
       (rep.data||[]).forEach(r => ev.push({ tipo:"Reparación", color:"#0369a1", bg:"#e0f2fe", fecha:r.fecha_servicio, desc:r.servicio_efectuado||r.item, taller:r.taller, odometro:r.odometro, costo:Number(r.costo)||0 }));
       (sin.data||[]).forEach(r => ev.push({ tipo:"Siniestro", color:"#c0392b", bg:"#fee2e2", fecha:r.fecha_servicio, desc:r.item, taller:r.taller, odometro:r.odometro, costo:Number(r.precio_reparacion_total)||Number(r.costo)||0 }));
       (otr.data||[]).forEach(r => ev.push({ tipo:"Otro", color:"#92400e", bg:"#fef3c7", fecha:r.fecha_servicio, desc:r.servicio_efectuado||r.item, taller:r.taller, odometro:r.km_al_momento, costo:Number(r.costo)||0 }));
+      (eve.data||[]).forEach(r => { const tc=({mantencion:["Mantención","#1a3a6b","#eef2ff"],reparacion:["Reparación","#0369a1","#e0f2fe"],siniestro:["Siniestro","#c0392b","#fee2e2"],otro:["Otro","#92400e","#fef3c7"]})[r.tipo]||["Evento","#475569","#f1f5f9"]; ev.push({ tipo:tc[0]+(r.componente?` · ${r.componente}`:""), color:tc[1], bg:tc[2], fecha:r.fecha_servicio, desc:r.descripcion||r.item, taller:r.taller, odometro:r.odometro, costo:Number(r.costo)||0, adjunto:r.adjunto_url }); });
       ev.sort((a,b) => new Date(b.fecha||0) - new Date(a.fecha||0));
 
       const tot = (arr) => arr.reduce((s,e)=>s+e.costo,0);
@@ -30567,7 +30648,11 @@ function FichaVehiculo() {
                 <div style={{ fontSize:18, fontWeight:700, color:"#1a1a1a" }}>{data.veh.patente}</div>
                 <div style={{ fontSize:13, color:"#666" }}>{data.veh.marca} {data.veh.modelo} · {data.veh.anio || "—"} · {data.veh.ceco}</div>
               </div>
-              <span style={{ fontSize:11, fontWeight:700, padding:"4px 12px", borderRadius:20, background:data.veh.status==="ACTIVO"?"#dcfce7":"#f1f5f9", color:data.veh.status==="ACTIVO"?"#166534":"#64748b" }}>{data.veh.status}</span>
+              <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+                <span style={{ fontSize:11, fontWeight:700, padding:"4px 12px", borderRadius:20, background:data.veh.status==="ACTIVO"?"#dcfce7":"#f1f5f9", color:data.veh.status==="ACTIVO"?"#166534":"#64748b" }}>{data.veh.status}</span>
+                <Btn onClick={()=>setMostrarForm(true)} color="#1a3a6b" small>+ Registrar evento</Btn>
+              </div>
+              {mostrarForm && <FormRegistrarEvento patente={data.veh.patente} usuario={usuario} onCerrar={()=>setMostrarForm(false)} onGuardado={()=>{ setMostrarForm(false); buscar(); }} />}
             </div>
             <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))", gap:12, marginTop:16 }}>
               <div><Label>KM actual</Label><div style={{ fontSize:15, fontWeight:700 }}>{data.km!=null?data.km.toLocaleString("es-CL")+" km":"—"}</div></div>
@@ -30601,7 +30686,10 @@ function FichaVehiculo() {
                       {e.desc || "—"}
                       <span style={{ color:"#94a3b8", fontSize:11 }}>{e.taller?` · ${e.taller}`:""}{e.odometro?` · ${Number(e.odometro).toLocaleString("es-CL")} km`:""}</span>
                     </div>
-                    <div style={{ fontWeight:700, fontSize:13, color:"#1a1a1a", whiteSpace:"nowrap" }}>{clp(e.costo)}</div>
+                    <div style={{ display:"flex", flexDirection:"column", alignItems:"flex-end", gap:2, whiteSpace:"nowrap" }}>
+                      <span style={{ fontWeight:700, fontSize:13, color:"#1a1a1a" }}>{clp(e.costo)}</span>
+                      {e.adjunto && <a href={e.adjunto} target="_blank" rel="noreferrer" style={{ fontSize:10, color:"#0369a1" }}>📎 PDF</a>}
+                    </div>
                   </div>
                 ))}
               </div>
@@ -30736,12 +30824,150 @@ function TableroAlertas() {
 }
 
 
+function VerificadorComponentes({ usuario }) {
+  const [componente, setComponente] = useState("neumatico");
+  const [patente, setPatente] = useState("");
+  const [cargando, setCargando] = useState(false);
+  const [error, setError] = useState("");
+  const [info, setInfo] = useState(null);
+  const [generando, setGenerando] = useState(false);
+  const [msg, setMsg] = useState("");
+
+  const compLabels = { neumatico:"Neumáticos", frenos:"Frenos", amortiguadores:"Amortiguadores", direccion:"Dirección", embrague:"Embrague" };
+
+  async function verificar() {
+    const p = patente.trim().toUpperCase();
+    if (!p) { setError("Ingresá una patente."); return; }
+    setCargando(true); setError(""); setInfo(null); setMsg("");
+    try {
+      const { data: veh } = await sb.from("ca_vehiculos").select("patente,ceco,tipo_vehiculo,modelo").eq("patente", p).maybeSingle();
+      if (!veh) { setError(`La patente ${p} no está en la flota.`); setCargando(false); return; }
+      const { data: row } = await sb.from("vw_ca_alertas").select("*").eq("patente", p).eq("componente", componente).maybeSingle();
+      if (!row) { setError(`No hay protocolo de ${compLabels[componente]} para el modelo ${veh.modelo}.`); setCargando(false); return; }
+      setInfo({ veh, row });
+    } catch (e) { setError("Error: " + e.message); }
+    setCargando(false);
+  }
+
+  async function generarSolicitud() {
+    if (!info) return;
+    setGenerando(true); setMsg("");
+    const { veh, row } = info;
+    const num = (x) => x == null ? null : Number(x);
+    const kmActual = num(row.km_actual), kmServ = num(row.km_ultimo_servicio), recorrido = num(row.recorrido);
+    const alerta = num(row.alerta), limite = num(row.limite);
+    const kmAlerta = kmServ!=null?kmServ+alerta:null, kmLimite = kmServ!=null?kmServ+limite:null;
+    const kmRest = kmLimite!=null?kmLimite-kmActual:null;
+    const cl = (n) => n==null?"—":Number(n).toLocaleString("es-CL");
+    const just = `Vehículo ${veh.patente} (${veh.modelo}, ${veh.ceco}) · ${compLabels[componente]}: recorrió ${cl(recorrido)} km desde el último servicio (odómetro ${cl(kmServ)} km). Umbral de alerta: ${cl(alerta)} km; límite: ${cl(limite)} km. Km actual: ${cl(kmActual)} km. Se solicita autorización de cambio/compra.`;
+    try {
+      const { error } = await sb.from("ca_solicitudes").insert({
+        patente:veh.patente, ceco:veh.ceco, tipo_vehiculo:veh.tipo_vehiculo, modelo:veh.modelo,
+        componente, km_ultima_compra:kmServ, km_actual:kmActual, km_recorridos:recorrido,
+        km_alerta:kmAlerta, km_limite:kmLimite, km_restantes:kmRest, estado_protocolo:row.estado,
+        justificacion:just, solicitante: usuario?.nombre||null, status:"pendiente",
+      });
+      if (error) throw error;
+      setMsg("✅ Solicitud generada y enviada a Finanzas.");
+    } catch (e) { setMsg("❌ Error: " + e.message); }
+    setGenerando(false);
+  }
+
+  const fmt = (n) => n==null?"—":Number(n).toLocaleString("es-CL")+" km";
+  const estadoCfg = {
+    ok:            { txt:"En protocolo",     color:"#166534", bg:"#dcfce7", ico:"✓" },
+    alerta:        { txt:"En alerta",         color:"#92400e", bg:"#fef3c7", ico:"⚠" },
+    supera_limite: { txt:"Supera límite",     color:"#c0392b", bg:"#fee2e2", ico:"⚠" },
+    sin_dato:      { txt:"Sin servicio previo",color:"#475569", bg:"#f1f5f9", ico:"•" },
+  };
+
+  return (
+    <div>
+      <div style={{ maxWidth:760, marginBottom:28 }}>
+        <div style={{ background:"#1a3a6b", color:"#fff", borderRadius:"14px 14px 0 0", padding:"16px 20px", display:"flex", alignItems:"center", gap:10 }}>
+          <span style={{ fontSize:18 }}>🔧</span>
+          <span style={{ fontSize:15, fontWeight:700 }}>Verificador de Componentes — Bigticket</span>
+        </div>
+        <div style={{ background:"#fff", border:"1px solid #e4e7ec", borderTop:"none", borderRadius:"0 0 14px 14px", padding:20 }}>
+          <div style={{ display:"flex", gap:12, alignItems:"flex-end", flexWrap:"wrap" }}>
+            <div style={{ flex:"1 1 180px" }}>
+              <Label>Componente</Label>
+              <Select value={componente} onChange={e=>{ setComponente(e.target.value); setInfo(null); }}>
+                {Object.entries(compLabels).map(([k,v]) => <option key={k} value={k}>{v}</option>)}
+              </Select>
+            </div>
+            <div style={{ flex:"1 1 180px" }}>
+              <Label>Patente</Label>
+              <Input value={patente} onChange={e=>setPatente(e.target.value.toUpperCase())} placeholder="Ej: SLCY14" />
+            </div>
+            <Btn onClick={verificar} color="#1a3a6b">{cargando?"Verificando…":"Verificar"}</Btn>
+          </div>
+
+          {error && <div style={{ marginTop:14, padding:"10px 14px", background:"#fee2e2", color:"#c0392b", borderRadius:8, fontSize:13 }}>{error}</div>}
+
+          {info && (() => {
+            const r = info.row;
+            const recorrido = r.recorrido!=null?Number(r.recorrido):null;
+            const alerta = Number(r.alerta), limite = Number(r.limite);
+            const kmActual = Number(r.km_actual), kmServ = r.km_ultimo_servicio!=null?Number(r.km_ultimo_servicio):null;
+            const kmAlerta = kmServ!=null?kmServ+alerta:null, kmLimite = kmServ!=null?kmServ+limite:null;
+            const kmRest = kmLimite!=null?kmLimite-kmActual:null;
+            const cfg = estadoCfg[r.estado] || estadoCfg.sin_dato;
+            const pct = recorrido!=null?Math.min(100,Math.max(0,(recorrido/limite)*100)):0;
+            const pctAl = Math.min(100,(alerta/limite)*100);
+            const barColor = r.estado==="supera_limite"?"#dc2626":r.estado==="alerta"?"#d97706":"#16a34a";
+            return (
+            <div style={{ marginTop:18 }}>
+              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 }}>
+                <div style={{ fontSize:14, fontWeight:700 }}>{compLabels[componente]} · {info.veh.modelo} {info.veh.patente} — {info.veh.ceco}</div>
+                <span style={{ fontSize:12, fontWeight:700, padding:"5px 12px", borderRadius:20, background:cfg.bg, color:cfg.color }}>{cfg.ico} {cfg.txt}</span>
+              </div>
+              <div style={{ fontSize:12, color:"#666", marginBottom:10 }}>Último servicio: {kmServ!=null?kmServ.toLocaleString("es-CL"):"—"} → KM actual: {kmActual.toLocaleString("es-CL")}{r.dias_al_limite!=null?` · ~${Number(r.dias_al_limite).toLocaleString("es-CL")} días al límite`:""}</div>
+              <div style={{ display:"flex", justifyContent:"space-between", fontSize:11, color:"#94a3b8", marginBottom:4 }}>
+                <span>0 km</span><span>Alerta: {alerta.toLocaleString("es-CL")}</span><span>Límite: {limite.toLocaleString("es-CL")}</span>
+              </div>
+              <div style={{ position:"relative", height:14, background:"#f1f5f9", borderRadius:8, overflow:"hidden", marginBottom:4 }}>
+                <div style={{ position:"absolute", left:0, top:0, height:"100%", width:`${pct}%`, background:barColor, transition:"width .4s" }} />
+                <div style={{ position:"absolute", left:`${pctAl}%`, top:0, height:"100%", width:2, background:"#64748b" }} />
+              </div>
+              <div style={{ display:"flex", justifyContent:"space-between", fontSize:12, marginBottom:18 }}>
+                <span style={{ color:"#666" }}>Recorrido desde último servicio:</span>
+                <span style={{ fontWeight:700 }}>{recorrido!=null?recorrido.toLocaleString("es-CL"):"—"} km</span>
+              </div>
+              <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))", gap:12, marginBottom:18 }}>
+                <KPI label="KM de alerta" valor={fmt(kmAlerta)} color="#d97706" />
+                <KPI label="KM límite máximo" valor={fmt(kmLimite)} color="#dc2626" />
+                <KPI label="KM restantes al límite" valor={fmt(kmRest)} color={kmRest!=null&&kmRest<0?"#dc2626":"#1a3a6b"} />
+              </div>
+              <div style={{ borderTop:"1px solid #e4e7ec", paddingTop:16 }}>
+                {(r.estado==="alerta"||r.estado==="supera_limite") ? (
+                  <Btn onClick={generarSolicitud} color="#1a3a6b">{generando?"Generando…":"Generar solicitud para finanzas"}</Btn>
+                ) : r.estado==="sin_dato" ? (
+                  <div style={{ fontSize:13, color:"#92400e" }}>Sin servicio previo registrado de {compLabels[componente].toLowerCase()} — no se puede calcular recorrido.</div>
+                ) : (
+                  <div style={{ fontSize:13, color:"#166534" }}>✓ Dentro de protocolo — no corresponde cambio. Consulta registrada.</div>
+                )}
+                {msg && <div style={{ marginTop:12, fontSize:13, fontWeight:600 }}>{msg}</div>}
+              </div>
+            </div>
+            );
+          })()}
+        </div>
+      </div>
+
+      <div style={{ fontSize:15, fontWeight:700, color:"#1a3a6b", marginBottom:4 }}>Panorama de la flota</div>
+      <div style={{ fontSize:12, color:"#666", marginBottom:14 }}>Estado de todos los componentes de la flota</div>
+      <TableroAlertas />
+    </div>
+  );
+}
+
+
 function ModuloMantencionesMadre({ usuario }) {
   const [sub, setSub] = useState("verificador");
   const tabs = [
-    { id: "verificador", label: "Verificador Neumáticos" },
+    { id: "verificador", label: "Verificador de Componentes" },
     { id: "ficha",       label: "Ficha Vehículo" },
-    { id: "proyeccion",  label: "Alertas Flota" },
     { id: "costos",      label: "Costos" },
     { id: "bitacora",    label: "Bitácora" },
   ];
@@ -30759,9 +30985,8 @@ function ModuloMantencionesMadre({ usuario }) {
           }}>{t.label}</button>
         ))}
       </div>
-      {sub === "verificador" && <VerificadorNeumaticos usuario={usuario} />}
-      {sub === "ficha"       && <FichaVehiculo />}
-      {sub === "proyeccion"  && <TableroAlertas />}
+      {sub === "verificador" && <VerificadorComponentes usuario={usuario} />}
+      {sub === "ficha"       && <FichaVehiculo usuario={usuario} />}
       {sub === "costos"      && <MantPlaceholder titulo="Costos por vehículo / flota" />}
       {sub === "bitacora"    && <MantPlaceholder titulo="Bitácora de solicitudes" />}
     </div>
