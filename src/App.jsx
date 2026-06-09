@@ -17663,6 +17663,11 @@ function calcularPagos({ maestro, snapshots, scZonas, especiales, matrizPrecios,
 // ─── Componente principal: Vista por RUTA ─────────────────────────────────
 function ListadoPagosDiarios() {
   const [fecha, setFecha] = useState(fechaOperativaOffset(-1)); // ayer por defecto
+  const [excelOpen, setExcelOpen] = useState(false);
+  const [excelMode, setExcelMode] = useState("dia"); // dia | rango
+  const [excelDesde, setExcelDesde] = useState("");
+  const [excelHasta, setExcelHasta] = useState("");
+  const [excelBusy, setExcelBusy] = useState(false);
   const [pagos, setPagos] = useState([]);
   const [loading, setLoading] = useState(true);
   const [calculando, setCalculando] = useState(false);
@@ -17942,6 +17947,43 @@ function ListadoPagosDiarios() {
     URL.revokeObjectURL(url);
   };
 
+  // Exportar a Excel (un día o un rango) desde maestro_jornada_mx
+  const abrirExcel = () => { setExcelDesde(fecha); setExcelHasta(fecha); setExcelMode("dia"); setExcelOpen(true); };
+  const exportarExcel = async () => {
+    const desde = excelDesde;
+    const hasta = excelMode === "dia" ? excelDesde : excelHasta;
+    if (!desde || !hasta) { alert("Elegí la(s) fecha(s)."); return; }
+    if (desde > hasta) { alert("La fecha \"desde\" no puede ser mayor que \"hasta\"."); return; }
+    setExcelBusy(true);
+    try {
+      const { data, error } = await sb.from("maestro_jornada_mx").select("*")
+        .gte("fecha", desde).lte("fecha", hasta).order("fecha").order("driver_name").limit(50000);
+      if (error) throw error;
+      const filas = data || [];
+      if (filas.length === 0) { alert(`No hay pagos guardados entre ${desde} y ${hasta}.`); setExcelBusy(false); return; }
+      const headers = [
+        "Fecha","Chofer","Patente","Vehículo","Tipología","SC","Zona","ID Ruta","Ciclo",
+        "Km","Envíos despachados","Envíos entregados","NS%","% Visitado","No visitado %","Categoría NS",
+        "Tarifa base","Ajuste NS","Estado auxiliar","Snapshots con helper","$ Auxiliar",
+        "Pago bruto","Pago neto","Pago MELI","Observaciones"
+      ];
+      const aoa = [headers, ...filas.map(p => [
+        p.fecha, p.driver_name, p.placa, p.vehiculo_raw, p.tipologia, p.service_center_id, p.zona,
+        p.id_ruta, p.ciclo, p.km_recorridos, p.envios_despachados, p.envios_entregados,
+        p.ns_pct, p.pct_visitado, p.ns_no_visitado, p.ns_categoria, p.tarifa_base, p.ajuste_ns,
+        p.auxiliar_estado, p.auxiliar_snapshots_total, p.monto_auxiliar,
+        p.pago_bruto, p.pago_neto, p.pago_meli, (p.observaciones || "").replace(/[\r\n]+/g, " ")
+      ])];
+      const nombre = desde === hasta ? `pagos_${desde}` : `pagos_${desde}_a_${hasta}`;
+      await descargarExcelMultihoja([{ nombre: "Pagos", datos: aoa }], nombre);
+      setExcelOpen(false);
+    } catch (e) {
+      console.error(e);
+      alert("Error al exportar Excel: " + (e.message || e));
+    }
+    setExcelBusy(false);
+  };
+
   // Guarda los viajes tarificados del día en tarifado_mx (reemplaza el guardado previo del día = consolidado final)
   const guardarTarifado = async () => {
     if (pagos.length === 0) { alert("No hay pagos calculados para guardar. Calculá el día primero."); return; }
@@ -18025,6 +18067,10 @@ function ListadoPagosDiarios() {
             style={{ padding: "8px 14px", borderRadius: 4, border: "1px solid #e4e7ec", background: "#fff", color: "#475569", fontSize: 12, fontWeight: 600, cursor: filasFiltradas.length === 0 ? "not-allowed" : "pointer", opacity: filasFiltradas.length === 0 ? 0.5 : 1 }}>
             Exportar CSV
           </button>
+          <button onClick={abrirExcel}
+            style={{ padding: "8px 14px", borderRadius: 4, border: "1px solid #16a34a", background: "#fff", color: "#16a34a", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+            Exportar Excel
+          </button>
           <button onClick={calcularDia} disabled={calculando}
             style={{ padding: "8px 16px", borderRadius: 4, border: "none", background: calculando ? "#94a3b8" : "#F47B20", color: "#fff", fontSize: 12, fontWeight: 600, cursor: calculando ? "wait" : "pointer" }}>
             {calculando ? "Calculando..." : pagos.length > 0 ? "Recalcular día" : "Calcular pagos del día"}
@@ -18035,6 +18081,40 @@ function ListadoPagosDiarios() {
           </button>
         </div>
       </div>
+
+      {excelOpen && (
+        <div onClick={() => !excelBusy && setExcelOpen(false)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 8, padding: 22, width: 380, maxWidth: "90vw", boxShadow: "0 10px 40px rgba(0,0,0,0.2)" }}>
+            <div style={{ fontSize: 15, fontWeight: 700, color: "#1a3a6b", marginBottom: 4 }}>Exportar a Excel</div>
+            <div style={{ fontSize: 11, color: "#94a3b8", marginBottom: 16 }}>Descarga los pagos guardados de un día o un rango de fechas.</div>
+            <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+              <button onClick={() => setExcelMode("dia")} style={{ flex: 1, padding: "8px", borderRadius: 4, border: `1px solid ${excelMode === "dia" ? "#1a3a6b" : "#e4e7ec"}`, background: excelMode === "dia" ? "#1a3a6b" : "#fff", color: excelMode === "dia" ? "#fff" : "#475569", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Un día</button>
+              <button onClick={() => setExcelMode("rango")} style={{ flex: 1, padding: "8px", borderRadius: 4, border: `1px solid ${excelMode === "rango" ? "#1a3a6b" : "#e4e7ec"}`, background: excelMode === "rango" ? "#1a3a6b" : "#fff", color: excelMode === "rango" ? "#fff" : "#475569", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Rango de fechas</button>
+            </div>
+            {excelMode === "dia" ? (
+              <div style={{ marginBottom: 18 }}>
+                <div style={{ fontSize: 11, color: "#64748b", fontWeight: 600, marginBottom: 4 }}>Fecha</div>
+                <input type="date" value={excelDesde} onChange={e => setExcelDesde(e.target.value)} style={{ width: "100%", border: "1px solid #e4e7ec", borderRadius: 4, padding: "8px 10px", fontSize: 13, boxSizing: "border-box" }} />
+              </div>
+            ) : (
+              <div style={{ display: "flex", gap: 10, marginBottom: 18 }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 11, color: "#64748b", fontWeight: 600, marginBottom: 4 }}>Desde</div>
+                  <input type="date" value={excelDesde} onChange={e => setExcelDesde(e.target.value)} style={{ width: "100%", border: "1px solid #e4e7ec", borderRadius: 4, padding: "8px 10px", fontSize: 13, boxSizing: "border-box" }} />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 11, color: "#64748b", fontWeight: 600, marginBottom: 4 }}>Hasta</div>
+                  <input type="date" value={excelHasta} onChange={e => setExcelHasta(e.target.value)} style={{ width: "100%", border: "1px solid #e4e7ec", borderRadius: 4, padding: "8px 10px", fontSize: 13, boxSizing: "border-box" }} />
+                </div>
+              </div>
+            )}
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+              <button onClick={() => setExcelOpen(false)} disabled={excelBusy} style={{ padding: "8px 16px", borderRadius: 4, border: "1px solid #e4e7ec", background: "#fff", color: "#475569", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Cancelar</button>
+              <button onClick={exportarExcel} disabled={excelBusy} style={{ padding: "8px 16px", borderRadius: 4, border: "none", background: excelBusy ? "#94a3b8" : "#16a34a", color: "#fff", fontSize: 12, fontWeight: 600, cursor: excelBusy ? "wait" : "pointer" }}>{excelBusy ? "Generando..." : "Descargar Excel"}</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Resumen del último cálculo */}
       {resumenCalculo && (
