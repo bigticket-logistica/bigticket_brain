@@ -17258,13 +17258,19 @@ function PoolMeliAmbulancias() {
 // PAGOS MADRE — wrapper con sub-tabs (Listado / Drivers / Ayudantes / Config)
 // ═══════════════════════════════════════════════════════════════════════════
 function TercerosMX() {
+  const [tab, setTab] = useState("inventario");
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [busqueda, setBusqueda] = useState("");
-  const [semanaFiltro, setSemanaFiltro] = useState("");
   const [cargando, setCargando] = useState(false);
   const [msg, setMsg] = useState(null);
+  const [expandida, setExpandida] = useState(null);
+  const [busca, setBusca] = useState("");
   const fileRef = useRef(null);
+  const semanaObjetivoRef = useRef(null);
+
+  const [cambios, setCambios] = useState([]);
+  const [loadingCambios, setLoadingCambios] = useState(false);
+  const [cargoVariaciones, setCargoVariaciones] = useState(false);
 
   useEffect(() => { cargar(); }, []);
   const cargar = async () => {
@@ -17276,18 +17282,40 @@ function TercerosMX() {
     setLoading(false);
   };
 
-  const semanas = Array.from(new Set(rows.map(r => r.semana).filter(v => v != null))).sort((a, b) => b - a);
-  const filtradas = rows.filter(r => {
-    if (semanaFiltro && String(r.semana) !== String(semanaFiltro)) return false;
-    if (!busqueda) return true;
-    const q = busqueda.toLowerCase();
-    return [r.placa, r.empresa_transporte, r.operacion, r.nombre_trabajador, r.curp_trabajador].some(v => String(v || "").toLowerCase().includes(q));
-  });
-  const empresas = new Set(filtradas.map(r => r.empresa_transporte).filter(Boolean));
-  const placas = new Set(filtradas.map(r => r.placa).filter(Boolean));
+  const cargarVariaciones = async () => {
+    setLoadingCambios(true);
+    try {
+      const { data } = await sb.from("vw_flota_cambios_empresa").select("*").limit(10000);
+      setCambios(data || []);
+    } catch (e) { console.error(e); setCambios([]); }
+    setLoadingCambios(false);
+    setCargoVariaciones(true);
+  };
+  useEffect(() => { if (tab === "variaciones" && !cargoVariaciones) cargarVariaciones(); }, [tab]);
+
+  const porSemana = {};
+  for (const r of rows) {
+    const s = r.semana != null ? Number(r.semana) : null;
+    if (s == null) continue;
+    if (!porSemana[s]) porSemana[s] = { filas: 0, placas: new Set(), empresas: new Set(), responsable: null, fecha: null };
+    const g = porSemana[s];
+    g.filas++;
+    if (r.placa) g.placas.add(r.placa);
+    if (r.empresa_transporte) g.empresas.add(r.empresa_transporte);
+    if (!g.responsable && r.responsable) g.responsable = r.responsable;
+    if (r.fecha_hora_envio && (!g.fecha || r.fecha_hora_envio > g.fecha)) g.fecha = r.fecha_hora_envio;
+  }
+
+  const semActual = semanaInventario(new Date().toISOString().slice(0, 10));
+  const conDatos = Object.keys(porSemana).map(Number);
+  const hasta = Math.max((semActual || 24) + 1, conDatos.length ? Math.max.apply(null, conDatos) : 24);
+  const lineas = [];
+  for (let s = 24; s <= hasta; s++) lineas.push(s);
+  lineas.sort((a, b) => b - a);
 
   const cargarExcel = async (file) => {
     if (!file) return;
+    const objetivo = semanaObjetivoRef.current;
     setCargando(true); setMsg(null);
     try {
       if (!window.XLSX) {
@@ -17337,7 +17365,10 @@ function TercerosMX() {
       }
       if (data.length === 0) { setMsg({ ok: false, txt: "No encontré filas con placa." }); setCargando(false); return; }
       const semanasFile = Array.from(new Set(data.map(d => d.semana).filter(v => v != null)));
-      if (!confirm(`Se cargarán ${data.length} filas${semanasFile.length ? ` de la semana ${semanasFile.join(", ")}` : ""}.\n\nSe reemplazará lo que haya de esa(s) semana(s). ¿Continuar?`)) { setCargando(false); return; }
+      if (objetivo != null && semanasFile.length && !semanasFile.includes(objetivo)) {
+        if (!confirm("Estás cargando en la línea de la semana " + objetivo + " (" + etiquetaSemanaInventario(objetivo) + "), pero el Excel trae la semana " + semanasFile.join(", ") + ".\n\nSe respetará la SEMANA del Excel. ¿Continuar igual?")) { setCargando(false); if (fileRef.current) fileRef.current.value = ""; semanaObjetivoRef.current = null; return; }
+      }
+      if (!confirm("Se cargarán " + data.length + " filas" + (semanasFile.length ? " de la semana " + semanasFile.join(", ") : "") + ".\n\nSe reemplazará lo que haya de esa(s) semana(s). ¿Continuar?")) { setCargando(false); semanaObjetivoRef.current = null; return; }
       for (const sem of semanasFile) {
         const { error } = await sb.from("flota_terceros_mx").delete().eq("semana", sem);
         if (error) throw error;
@@ -17349,76 +17380,149 @@ function TercerosMX() {
         if (error) throw error;
         ok += chunk.length;
       }
-      setMsg({ ok: true, txt: `Cargadas ${ok} filas${semanasFile.length ? ` (semana ${semanasFile.join(", ")})` : ""}.` });
+      setMsg({ ok: true, txt: "Cargadas " + ok + " filas" + (semanasFile.length ? " (semana " + semanasFile.join(", ") + ")" : "") + "." });
       cargar();
     } catch (e) {
       console.error(e);
       setMsg({ ok: false, txt: "Error al cargar: " + (e.message || e) });
     }
     setCargando(false);
+    semanaObjetivoRef.current = null;
     if (fileRef.current) fileRef.current.value = "";
   };
 
   if (loading) return <div style={{ textAlign: "center", padding: 40, color: "#94a3b8" }}>Cargando...</div>;
 
+  const detalleSemana = (s) => {
+    const q = busca.trim().toLowerCase();
+    return rows.filter(r => Number(r.semana) === s && (!q || [r.placa, r.empresa_transporte, r.operacion, r.cargo, r.nombre_trabajador, r.curp_trabajador].some(v => String(v || "").toLowerCase().includes(q))));
+  };
+
+  const cambiosOrden = cambios.slice().sort((a, b) => (b.semana_cambio || 0) - (a.semana_cambio || 0) || String(a.placa_norm).localeCompare(String(b.placa_norm)));
+
   return (
     <div style={{ padding: 24 }}>
-      <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: 14, marginBottom: 14, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-        <div style={{ flex: 1, minWidth: 240 }}>
-          <div style={{ fontSize: 15, fontWeight: 700, color: "#1a3a6b", marginBottom: 4 }}>Terceros — Empresas por Patente</div>
-          <div style={{ fontSize: 11, color: "#94a3b8" }}>Base de patentes y empresas subcontratadas · alimenta el pago por empresa</div>
-        </div>
-        <input ref={fileRef} type="file" accept=".xlsx,.xls" style={{ display: "none" }} onChange={e => cargarExcel(e.target.files && e.target.files[0])} />
-        <button onClick={() => fileRef.current && fileRef.current.click()} disabled={cargando}
-          style={{ padding: "9px 16px", borderRadius: 4, border: "none", background: cargando ? "#94a3b8" : "#16a34a", color: "#fff", fontSize: 12, fontWeight: 600, cursor: cargando ? "wait" : "pointer" }}>
-          {cargando ? "Cargando..." : "Cargar Excel"}
-        </button>
+      <input ref={fileRef} type="file" accept=".xlsx,.xls" style={{ display: "none" }} onChange={e => cargarExcel(e.target.files && e.target.files[0])} />
+
+      <div style={{ marginBottom: 14 }}>
+        <div style={{ fontSize: 15, fontWeight: 700, color: "#1a3a6b" }}>Terceros — Inventario de flota por semana</div>
+        <div style={{ fontSize: 11, color: "#94a3b8" }}>El inventario de cada semana operada alimenta la empresa por patente en el Listado de Pagos</div>
       </div>
-      {msg && (<div style={{ background: msg.ok ? "#ecfdf5" : "#fef2f2", border: `1px solid ${msg.ok ? "#a7f3d0" : "#fca5a5"}`, color: msg.ok ? "#065f46" : "#991b1b", borderRadius: 6, padding: 10, marginBottom: 14, fontSize: 12 }}>{msg.txt}</div>)}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: 10, marginBottom: 14 }}>
-        {[["Filas", filtradas.length], ["Patentes", placas.size], ["Empresas", empresas.size], ["Semanas", semanas.length]].map(([l, v]) => (
-          <div key={l} style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: "12px 14px" }}>
-            <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>{l}</div>
-            <div style={{ fontSize: 22, fontWeight: 700, color: "#1a3a6b", marginTop: 2 }}>{v}</div>
-          </div>
+
+      <div style={{ display: "flex", gap: 6, marginBottom: 14, borderBottom: "1px solid #e4e7ec" }}>
+        {[["inventario", "Inventario de Flota"], ["variaciones", "Variaciones"]].map(([id, lbl]) => (
+          <button key={id} onClick={() => setTab(id)}
+            style={{ padding: "8px 16px", border: "none", borderBottom: tab === id ? "2px solid #1a3a6b" : "2px solid transparent", background: "none", color: tab === id ? "#1a3a6b" : "#94a3b8", fontSize: 13, fontWeight: 600, cursor: "pointer", marginBottom: -1 }}>
+            {lbl}
+          </button>
         ))}
       </div>
-      <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
-        <select value={semanaFiltro} onChange={e => setSemanaFiltro(e.target.value)} style={{ border: "1px solid #e4e7ec", borderRadius: 4, padding: "7px 10px", fontSize: 12 }}>
-          <option value="">Todas las semanas</option>
-          {semanas.map(s => <option key={s} value={s}>Semana {s}</option>)}
-        </select>
-        <input type="text" placeholder="Buscar placa / empresa / SC / trabajador..." value={busqueda} onChange={e => setBusqueda(e.target.value)}
-          style={{ border: "1px solid #e4e7ec", borderRadius: 4, padding: "7px 10px", fontSize: 12, flex: 1, minWidth: 240 }} />
-      </div>
-      <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, overflow: "auto" }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, minWidth: 1000 }}>
-          <thead>
-            <tr style={{ background: "#f8fafc", borderBottom: "1px solid #e4e7ec" }}>
-              {["Sem", "Placa", "Empresa", "SC", "Tipo", "Cargo", "Trabajador", "Flota", "Validación MELI"].map(h => (
-                <th key={h} style={{ padding: "8px 10px", textAlign: "left", fontSize: 10, color: "#64748b", fontWeight: 600, whiteSpace: "nowrap" }}>{h}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {filtradas.length === 0 && (<tr><td colSpan={9} style={{ padding: 24, textAlign: "center", color: "#94a3b8" }}>Sin datos. Cargá un Excel con el inventario de flota.</td></tr>)}
-            {filtradas.slice(0, 2000).map(r => (
-              <tr key={r.id} style={{ borderBottom: "1px solid #f0f0f0" }}>
-                <td style={{ padding: "6px 10px" }}>{r.semana}</td>
-                <td style={{ padding: "6px 10px", fontWeight: 600 }}>{r.placa}</td>
-                <td style={{ padding: "6px 10px" }}>{r.empresa_transporte}</td>
-                <td style={{ padding: "6px 10px" }}>{r.operacion}</td>
-                <td style={{ padding: "6px 10px" }}>{r.tipo_vehiculo}</td>
-                <td style={{ padding: "6px 10px" }}>{r.cargo}</td>
-                <td style={{ padding: "6px 10px" }}>{r.nombre_trabajador}</td>
-                <td style={{ padding: "6px 10px" }}>{r.flota}</td>
-                <td style={{ padding: "6px 10px" }}>{r.validacion_meli}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        {filtradas.length > 2000 && (<div style={{ padding: 10, fontSize: 11, color: "#94a3b8", textAlign: "center" }}>Mostrando 2000 de {filtradas.length} filas. Usá los filtros para acotar.</div>)}
-      </div>
+
+      {msg && (<div style={{ background: msg.ok ? "#ecfdf5" : "#fef2f2", border: "1px solid " + (msg.ok ? "#a7f3d0" : "#fca5a5"), color: msg.ok ? "#065f46" : "#991b1b", borderRadius: 6, padding: 10, marginBottom: 14, fontSize: 12 }}>{msg.txt}</div>)}
+
+      {tab === "inventario" && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {lineas.map(s => {
+            const g = porSemana[s];
+            const cargado = !!g && g.placas.size > 0;
+            const esActual = semanaInventarioEsActual(s);
+            const abierta = expandida === s;
+            return (
+              <div key={s} style={{ background: "#fff", border: "1px solid " + (cargado ? "#e4e7ec" : "#fde68a"), borderRadius: 8, overflow: "hidden" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px" }}>
+                  <div style={{ width: 10, height: 10, borderRadius: "50%", background: cargado ? "#16a34a" : "#f59e0b", flexShrink: 0 }} />
+                  <div style={{ flex: 1, minWidth: 200 }}>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: "#1a3a6b" }}>
+                      Semana {etiquetaSemanaInventario(s)}
+                      {esActual && <span style={{ marginLeft: 8, fontSize: 9, fontWeight: 700, color: "#1d4ed8", background: "#dbeafe", padding: "2px 6px", borderRadius: 10, textTransform: "uppercase" }}>En curso</span>}
+                      <span style={{ marginLeft: 8, fontSize: 10, color: "#94a3b8", fontWeight: 500 }}>· sem {s}</span>
+                    </div>
+                    <div style={{ fontSize: 11, color: cargado ? "#16a34a" : "#b45309", marginTop: 2 }}>
+                      {cargado
+                        ? "\u2713 Cargado · " + g.placas.size + " patentes · " + g.empresas.size + " empresas" + (g.fecha ? " · subido " + new Date(g.fecha).toLocaleDateString("es-MX") : "")
+                        : "Pendiente de carga"}
+                    </div>
+                  </div>
+                  {cargado && (
+                    <button onClick={() => setExpandida(abierta ? null : s)}
+                      style={{ padding: "7px 12px", borderRadius: 4, border: "1px solid #e4e7ec", background: "#fff", color: "#475569", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>
+                      {abierta ? "Ocultar" : "Ver detalle"}
+                    </button>
+                  )}
+                  <button onClick={() => { semanaObjetivoRef.current = s; fileRef.current && fileRef.current.click(); }} disabled={cargando}
+                    style={{ padding: "7px 14px", borderRadius: 4, border: "none", background: cargando ? "#94a3b8" : (cargado ? "#475569" : "#16a34a"), color: "#fff", fontSize: 11, fontWeight: 600, cursor: cargando ? "wait" : "pointer", whiteSpace: "nowrap" }}>
+                    {cargado ? "Reemplazar Excel" : "Cargar Excel"}
+                  </button>
+                </div>
+                {abierta && cargado && (
+                  <div style={{ borderTop: "1px solid #f0f0f0", padding: "10px 16px", background: "#fbfcfe" }}>
+                    <input type="text" placeholder="Buscar placa / empresa / SC / trabajador..." value={busca} onChange={e => setBusca(e.target.value)}
+                      style={{ border: "1px solid #e4e7ec", borderRadius: 4, padding: "6px 10px", fontSize: 12, width: "100%", maxWidth: 360, marginBottom: 10 }} />
+                    <div style={{ overflow: "auto", border: "1px solid #e4e7ec", borderRadius: 6 }}>
+                      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, minWidth: 820 }}>
+                        <thead>
+                          <tr style={{ background: "#f8fafc", borderBottom: "1px solid #e4e7ec" }}>
+                            {["Placa", "Empresa", "SC", "Tipo", "Cargo", "Trabajador", "Validación MELI"].map(h => (
+                              <th key={h} style={{ padding: "8px 10px", textAlign: "left", fontSize: 10, color: "#64748b", fontWeight: 600, whiteSpace: "nowrap" }}>{h}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {detalleSemana(s).slice(0, 2000).map(r => (
+                            <tr key={r.id} style={{ borderBottom: "1px solid #f0f0f0" }}>
+                              <td style={{ padding: "6px 10px", fontWeight: 600 }}>{r.placa}</td>
+                              <td style={{ padding: "6px 10px" }}>{r.empresa_transporte}</td>
+                              <td style={{ padding: "6px 10px" }}>{r.operacion}</td>
+                              <td style={{ padding: "6px 10px" }}>{r.tipo_vehiculo}</td>
+                              <td style={{ padding: "6px 10px" }}>{r.cargo}</td>
+                              <td style={{ padding: "6px 10px" }}>{r.nombre_trabajador}</td>
+                              <td style={{ padding: "6px 10px" }}>{r.validacion_meli}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {tab === "variaciones" && (
+        <div>
+          <div style={{ fontSize: 11, color: "#94a3b8", marginBottom: 10 }}>
+            Patentes que cambiaron de empresa entre una semana y la siguiente. Se actualiza al cargar una semana nueva.
+          </div>
+          {loadingCambios && <div style={{ textAlign: "center", padding: 30, color: "#94a3b8" }}>Cargando variaciones...</div>}
+          {!loadingCambios && (
+            <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, overflow: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, minWidth: 760 }}>
+                <thead>
+                  <tr style={{ background: "#f8fafc", borderBottom: "1px solid #e4e7ec" }}>
+                    {["Placa", "De (semana)", "A (semana)", "Empresa anterior", "Empresa nueva"].map(h => (
+                      <th key={h} style={{ padding: "8px 10px", textAlign: "left", fontSize: 10, color: "#64748b", fontWeight: 600, whiteSpace: "nowrap" }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {cambiosOrden.length === 0 && (<tr><td colSpan={5} style={{ padding: 24, textAlign: "center", color: "#94a3b8" }}>Sin variaciones registradas. Aparecerán cuando cargues una semana nueva y una placa cambie de empresa.</td></tr>)}
+                  {cambiosOrden.map((c, i) => (
+                    <tr key={i} style={{ borderBottom: "1px solid #f0f0f0" }}>
+                      <td style={{ padding: "6px 10px", fontWeight: 600 }}>{c.placa_norm}</td>
+                      <td style={{ padding: "6px 10px", color: "#64748b" }}>{c.semana_previa != null ? etiquetaSemanaInventario(c.semana_previa) : "\u2014"}</td>
+                      <td style={{ padding: "6px 10px", color: "#64748b" }}>{c.semana_cambio != null ? etiquetaSemanaInventario(c.semana_cambio) : "\u2014"}</td>
+                      <td style={{ padding: "6px 10px", color: "#991b1b" }}>{c.empresa_previa}</td>
+                      <td style={{ padding: "6px 10px", color: "#065f46", fontWeight: 600 }}>{c.empresa_actual}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -17517,6 +17621,35 @@ function normalizarPlaca(p) {
   if (!p) return null;
   const s = String(p).trim().toUpperCase().replace(/^SDD-/, "");
   return s || null;
+}
+
+// === Modelo de semanas de inventario de flota (Terceros) ===
+// Ancla: semana 24 = lunes 2026-06-01 a domingo 2026-06-07. 25 = 8-14 jun, etc.
+function _fechaUtcSem(iso) { return new Date(String(iso).slice(0, 10) + "T12:00:00Z"); }
+function semanaInventario(fechaIso) {
+  if (!fechaIso) return null;
+  const d = _fechaUtcSem(fechaIso);
+  if (isNaN(d.getTime())) return null;
+  const off = (d.getUTCDay() + 6) % 7;
+  const lunes = new Date(d.getTime() - off * 86400000);
+  const ancla = _fechaUtcSem("2026-06-01");
+  return 24 + Math.round((lunes.getTime() - ancla.getTime()) / (7 * 86400000));
+}
+function rangoSemanaInventario(sem) {
+  const ancla = _fechaUtcSem("2026-06-01");
+  const inicio = new Date(ancla.getTime() + (Number(sem) - 24) * 7 * 86400000);
+  const fin = new Date(inicio.getTime() + 6 * 86400000);
+  return { inicio, fin };
+}
+function etiquetaSemanaInventario(sem) {
+  const M = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
+  const { inicio, fin } = rangoSemanaInventario(sem);
+  const di = inicio.getUTCDate(), mi = M[inicio.getUTCMonth()];
+  const df = fin.getUTCDate(), mf = M[fin.getUTCMonth()];
+  return mi === mf ? (di + "\u2013" + df + " " + mi) : (di + " " + mi + " \u2013 " + df + " " + mf);
+}
+function semanaInventarioEsActual(sem) {
+  return semanaInventario(new Date().toISOString().slice(0, 10)) === Number(sem);
 }
 
 // Convierte tipología a la forma usada en tarifas_especiales_mx (Title Case)
@@ -17897,9 +18030,10 @@ function ListadoPagosDiarios() {
   const [tablaWidth, setTablaWidth] = useState(1560);
   const [orderBy, setOrderBy] = useState("driver_name"); // columna por la que ordenar
   const [orderDir, setOrderDir] = useState("asc");
-  const [empresaMap, setEmpresaMap] = useState({}); // placa normalizada -> empresa (Terceros)
+  const [empresaMap, setEmpresaMap] = useState({}); // placa -> empresa (ultima semana, fallback)
+  const [empresaPorSemana, setEmpresaPorSemana] = useState({}); // { semana: { placaNorm: empresa } }
 
-  // Carga el mapa placa->empresa desde flota_terceros_mx (semana mas reciente gana)
+  // Carga el mapa placa->empresa. empresaPorSemana resuelve por semana de inventario; empresaMap es el fallback.
   useEffect(() => {
     let cancel = false;
     (async () => {
@@ -17907,13 +18041,34 @@ function ListadoPagosDiarios() {
         const { data } = await sb.from("flota_terceros_mx").select("placa, empresa_transporte, semana").limit(50000);
         if (cancel) return;
         const ord = (data || []).slice().sort((a, b) => (b.semana || 0) - (a.semana || 0));
-        const m = {};
-        for (const r of ord) { const k = normalizarPlaca(r.placa); if (k && !(k in m) && r.empresa_transporte) m[k] = r.empresa_transporte; }
-        setEmpresaMap(m);
+        const flat = {};
+        const porSem = {};
+        for (const r of ord) {
+          const k = normalizarPlaca(r.placa);
+          if (!k || !r.empresa_transporte) continue;
+          if (!(k in flat)) flat[k] = r.empresa_transporte;
+          const s = r.semana != null ? Number(r.semana) : null;
+          if (s != null) { porSem[s] = porSem[s] || {}; if (!(k in porSem[s])) porSem[s][k] = r.empresa_transporte; }
+        }
+        setEmpresaMap(flat);
+        setEmpresaPorSemana(porSem);
       } catch (e) { /* terceros opcional */ }
     })();
     return () => { cancel = true; };
   }, []);
+
+  // Empresa de una placa segun la SEMANA de la fecha de la ruta (fallback: ultima semana cargada <= esa).
+  const resolverEmpresaSemana = (placa, fechaRuta) => {
+    const k = normalizarPlaca(placa);
+    if (!k) return null;
+    const sem = semanaInventario(fechaRuta);
+    if (sem != null && empresaPorSemana[sem] && empresaPorSemana[sem][k]) return empresaPorSemana[sem][k];
+    if (sem != null) {
+      const semsDesc = Object.keys(empresaPorSemana).map(Number).filter(s => s <= sem).sort((a, b) => b - a);
+      for (const s of semsDesc) { if (empresaPorSemana[s][k]) return empresaPorSemana[s][k]; }
+    }
+    return empresaMap[k] || null;
+  };
 
   // Carga al montar y al cambiar fecha
   useEffect(() => {
@@ -18503,7 +18658,7 @@ function ListadoPagosDiarios() {
                     <td style={tdStyle(true)}>{r.driver_name || "—"}</td>
                     <td style={{ ...tdStyle(), fontFamily: "monospace", fontSize: 10 }}>{r.placa || "—"}</td>
                     <td style={{ ...tdStyle(), fontSize: 10, color: "#475569", maxWidth: 170, whiteSpace: "normal", lineHeight: 1.25 }}>
-                      {empresaMap[normalizarPlaca(r.placa)] || "—"}
+                      {resolverEmpresaSemana(r.placa, r.fecha || fecha) || "—"}
                     </td>
                     <td style={tdStyle()}>
                       <div style={{ fontSize: 10, color: "#475569" }}>{r.tipologia || "?"}</div>
