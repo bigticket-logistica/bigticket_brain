@@ -16481,10 +16481,7 @@ function FormularioInicialSC({ scId, fecha }) {
           fotos={adj.ambulancias} />
 
         {/* 3 · Cancelaciones */}
-        <ItemSimple nombre="3 · Cancelaciones MELI" valor={siNo(row.declarado_cancelaciones_si_no)}
-          detalle={cnt(row.declarado_cancelaciones_fotos) > 0 ? `${cnt(row.declarado_cancelaciones_fotos)} foto(s) adjuntas` : null}
-          justif={row.cancelaciones_justificacion}
-          fotos={[...(Array.isArray(row.declarado_cancelaciones_fotos) ? row.declarado_cancelaciones_fotos : []), ...(adj.cancelaciones || [])]} />
+        <ItemCancelaciones row={row} adjCancelaciones={adj.cancelaciones || []} />
 
         {/* 4 · No Show con patentes */}
         <ItemSimple nombre="4 · No Show" valor={siNo(row.declarado_noshow_si_no)}
@@ -16509,6 +16506,52 @@ function FormularioInicialSC({ scId, fecha }) {
 
 function declColor(v) {
   return v === "Sí" ? "#b45309" : v === "No" ? "#16a34a" : "#9ca3af";
+}
+
+function ItemCancelaciones({ row, adjCancelaciones }) {
+  const siNoVal = row.declarado_cancelaciones_si_no;
+  const detalle = Array.isArray(row.declarado_cancelaciones_detalle) ? row.declarado_cancelaciones_detalle : [];
+  const fotosViejas = Array.isArray(row.declarado_cancelaciones_fotos) ? row.declarado_cancelaciones_fotos : [];
+  const valorTxt = siNoVal === true ? "SI" : siNoVal === false ? "NO" : "—";
+
+  return (
+    <div style={{ fontSize: 12, padding: "5px 8px", background: "#fff", border: "1px solid #eef0f3", borderRadius: 5 }}>
+      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        <span style={{ fontWeight: 600, color: "#374151" }}>3 · Cancelaciones MELI</span>
+        <span style={{ marginLeft: "auto", fontWeight: 700, color: declColor(valorTxt) }}>{valorTxt}</span>
+      </div>
+      {row.cancelaciones_justificacion && row.cancelaciones_justificacion.trim() && (
+        <div style={{ fontSize: 11, color: "#6b7280", marginTop: 2, fontStyle: "italic" }}>💬 {row.cancelaciones_justificacion}</div>
+      )}
+      {/* Detalle nuevo: una fila por cancelacion con patente + prueba */}
+      {detalle.length > 0 && (
+        <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 5 }}>
+          <div style={{ fontSize: 11, color: "#4b5563", fontWeight: 600 }}>{detalle.length} cancelación(es):</div>
+          {detalle.map((d, i) => (
+            <div key={i} style={{ display: "flex", gap: 8, alignItems: "center", padding: "4px 8px", background: "#f8fafc", borderRadius: 5, border: "1px solid #eef0f3" }}>
+              <span style={{ fontSize: 9, background: "#fee2e2", color: "#b91c1c", padding: "1px 6px", borderRadius: 3, fontWeight: 700 }}>{i + 1}</span>
+              <span style={{ fontFamily: "monospace", fontWeight: 700, fontSize: 12, color: "#1e3a5f" }}>{d.patente || "(sin patente)"}</span>
+              <div style={{ marginLeft: "auto" }}>
+                {d.foto?.path ? <FotoLink path={d.foto.path} /> : <span style={{ fontSize: 10, color: "#9ca3af" }}>sin prueba</span>}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      {/* Fallback: bitacoras viejas sin detalle, muestra las fotos sueltas */}
+      {detalle.length === 0 && (fotosViejas.length > 0 || adjCancelaciones.length > 0) && (
+        <div style={{ marginTop: 4 }}>
+          <div style={{ fontSize: 11, color: "#4b5563", marginBottom: 2 }}>{fotosViejas.length} foto(s) adjuntas</div>
+          <div style={{ display: "flex", flexWrap: "wrap" }}>
+            {[...fotosViejas, ...adjCancelaciones].map((f, i) => {
+              const p = typeof f === "string" ? f : f?.path;
+              return p ? <FotoLink key={i} path={p} /> : null;
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 function ItemSimple({ nombre, valor, detalle, justif, fotos }) {
