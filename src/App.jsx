@@ -17623,6 +17623,15 @@ function normalizarPlaca(p) {
   return s || null;
 }
 
+// Tipo de ruta inferido para una fila de pagos, por prefijo de patente (SDD-/SPOT-/MLP-).
+// maestro_jornada_mx no guarda es_sdd/tipo_ruta; el unico indicio en la fila es la placa.
+function tipoRutaDeFila(placa) {
+  const s = String(placa || "").trim().toUpperCase();
+  if (s.startsWith("SDD-")) return "SDD";
+  if (s.startsWith("SPOT-") || s.startsWith("MLP-")) return "SPOT";
+  return null;
+}
+
 // === Modelo de semanas de inventario de flota (Terceros) ===
 // Ancla: semana 24 = lunes 2026-06-01 a domingo 2026-06-07. 25 = 8-14 jun, etc.
 function _fechaUtcSem(iso) { return new Date(String(iso).slice(0, 10) + "T12:00:00Z"); }
@@ -18032,6 +18041,7 @@ function ListadoPagosDiarios() {
   const [orderDir, setOrderDir] = useState("asc");
   const [empresaMap, setEmpresaMap] = useState({}); // placa -> empresa (ultima semana, fallback)
   const [empresaPorSemana, setEmpresaPorSemana] = useState({}); // { semana: { placaNorm: empresa } }
+  const [bonificaciones, setBonificaciones] = useState([]); // bonificaciones activas (Configuracion)
 
   // Carga el mapa placa->empresa. empresaPorSemana resuelve por semana de inventario; empresaMap es el fallback.
   useEffect(() => {
@@ -18068,6 +18078,40 @@ function ListadoPagosDiarios() {
       for (const s of semsDesc) { if (empresaPorSemana[s][k]) return empresaPorSemana[s][k]; }
     }
     return empresaMap[k] || null;
+  };
+
+  // Carga las bonificaciones activas (Configuracion -> Bonificaciones)
+  useEffect(() => {
+    let cancel = false;
+    (async () => {
+      try {
+        const { data } = await sb.from("bonificaciones_mx").select("*").eq("activo", true);
+        if (!cancel) setBonificaciones(data || []);
+      } catch (e) { /* bonificaciones opcional */ }
+    })();
+    return () => { cancel = true; };
+  }, []);
+
+  // Mejor bonificacion (mayor %) que aplica a una fila de pagos, o null.
+  const bonoDeFila = (r) => {
+    if (!bonificaciones.length) return null;
+    const fr = r.fecha || fecha;
+    const sc = r.service_center_id || "";
+    const km = Number(r.km_recorridos || 0);
+    const tipo = tipoRutaDeFila(r.placa);
+    let mejor = null;
+    for (const b of bonificaciones) {
+      if (b.activo === false) continue;
+      if (b.fecha_desde && fr < b.fecha_desde) continue;
+      if (b.fecha_hasta && fr > b.fecha_hasta) continue;
+      const scs = Array.isArray(b.scs) ? b.scs : [];
+      if (scs.length && !scs.includes(sc)) continue;
+      if (b.tipo_ruta && b.tipo_ruta !== "AMBOS" && tipo !== b.tipo_ruta) continue;
+      if (b.km_min != null && b.km_min !== "" && km < Number(b.km_min)) continue;
+      if (b.km_max != null && b.km_max !== "" && km > Number(b.km_max)) continue;
+      if (!mejor || Number(b.pct_aumento || 0) > Number(mejor.pct_aumento || 0)) mejor = b;
+    }
+    return mejor;
   };
 
   // Carga al montar y al cambiar fecha
@@ -18640,6 +18684,7 @@ function ListadoPagosDiarios() {
                 <Th onClick={() => toggleOrder("pct_visitado")} right>Visitado{ordIcon("pct_visitado")}</Th>
                 <Th onClick={() => toggleOrder("tarifa_base")} right>Tarifa{ordIcon("tarifa_base")}</Th>
                 <Th onClick={() => toggleOrder("ajuste_ns")} right>±NS{ordIcon("ajuste_ns")}</Th>
+                <Th right>Bonif.</Th>
                 <Th onClick={() => toggleOrder("auxiliar_estado")} center>Aux{ordIcon("auxiliar_estado")}</Th>
                 <Th onClick={() => toggleOrder("monto_auxiliar")} right>$Aux{ordIcon("monto_auxiliar")}</Th>
                 <Th onClick={() => toggleOrder("pago_neto")} right>Pago neto{ordIcon("pago_neto")}</Th>
@@ -18686,6 +18731,19 @@ function ListadoPagosDiarios() {
                     <td style={{ ...tdStyle(), textAlign: "right", color: noPagada ? "#94a3b8" : (Number(r.ajuste_ns) >= 0 ? "#16a34a" : "#dc2626"), textDecoration: noPagada ? "line-through" : undefined }}>
                       {Number(r.ajuste_ns) >= 0 ? "+" : ""}{fmtMXN(r.ajuste_ns)}
                     </td>
+                    {(() => {
+                      const b = bonoDeFila(r);
+                      if (!b) return <td style={{ ...tdStyle(), textAlign: "right", color: "#94a3b8" }}>—</td>;
+                      const pct = Number(b.pct_aumento || 0);
+                      const monto = Number(r.tarifa_base || 0) * pct / 100;
+                      return (
+                        <td style={{ ...tdStyle(), textAlign: "right" }}>
+                          <div style={{ fontWeight: 700, color: "#7c3aed" }}>+{pct}%</div>
+                          <div style={{ fontSize: 8, color: "#94a3b8", maxWidth: 110, whiteSpace: "normal", lineHeight: 1.2 }}>{b.nombre}</div>
+                          <div style={{ fontSize: 9, color: "#7c3aed" }}>+{fmtMXN(monto)}</div>
+                        </td>
+                      );
+                    })()}
                     <td style={{ ...tdStyle(), textAlign: "center", fontSize: 9 }}>
                       <span style={{ ...badgeAux(r.auxiliar_estado) }}>{r.auxiliar_estado}</span>
                     </td>
@@ -18714,6 +18772,7 @@ function ListadoPagosDiarios() {
                   <td style={{ ...tdStyle(), textAlign: "right", color: totales.ajusteNS >= 0 ? "#16a34a" : "#dc2626" }}>
                     {totales.ajusteNS >= 0 ? "+" : ""}{fmtMXN(totales.ajusteNS)}
                   </td>
+                  <td style={tdStyle()}></td>
                   <td style={tdStyle()}></td>
                   <td style={{ ...tdStyle(), textAlign: "right", color: "#1a3a6b" }}>{fmtMXN(totales.auxiliar)}</td>
                   <td style={{ ...tdStyle(), textAlign: "right", color: "#16a34a", fontSize: 13 }}>{fmtMXN(totales.pagoNeto)}</td>
@@ -20046,6 +20105,7 @@ function ConfiguracionPagos() {
           { id: "zonas", l: "Mapeo SC ↔ Zonas" },
           { id: "auxiliares", l: "Matriz Auxiliares" },
           { id: "ns", l: "Reglas NS" },
+          { id: "bonificaciones", l: "Bonificaciones" },
         ].map(t => (
           <button key={t.id} onClick={() => setSubtab(t.id)}
             style={{ padding: "7px 14px", borderRadius: 4, border: `1px solid ${subtab === t.id ? "#1a3a6b" : "#e4e7ec"}`,
@@ -20061,6 +20121,7 @@ function ConfiguracionPagos() {
       {subtab === "zonas" && <ConfigZonas />}
       {subtab === "auxiliares" && <ConfigMatrizAuxiliares />}
       {subtab === "ns" && <ConfigReglasNS />}
+      {subtab === "bonificaciones" && <ConfigBonificaciones />}
     </div>
   );
 }
@@ -20913,6 +20974,244 @@ function ConfigReglasNS() {
           <div>· Visitado entre {g("vis_min_pago", 90)}% y {g("vis_premio_min", 99.5)}% y NS &lt; {g("ns_castigo_max", 95)}% → <b style={{ color: "#dc2626" }}>−{g("ns_castigo_pct", 3)}%</b></div>
           <div>· Cualquier otro caso pagable → <b>0%</b></div>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Config: Bonificaciones especiales de pago (CRUD bonificaciones_mx) ───────
+function ConfigBonificaciones() {
+  const SCS_OPERATIVOS = ["SMX1", "SMX6", "SMX7", "SMX8", "SMX9", "SMX10", "SHP1", "SQR1", "SVH1", "SPY1", "STL1", "STX1", "SCY1", "SCQ1"];
+  const VACIA = { nombre: "", fecha_desde: "", fecha_hasta: "", scs: [], tipo_ruta: "AMBOS", km_min: "", km_max: "", pct_aumento: "", activo: true };
+  const [lista, setLista] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [editando, setEditando] = useState(null); // objeto borrador (nuevo o existente) o null
+  const [guardando, setGuardando] = useState(false);
+  const [msg, setMsg] = useState(null);
+
+  useEffect(() => { cargar(); }, []);
+  const cargar = async () => {
+    setLoading(true);
+    try {
+      const { data, error } = await sb.from("bonificaciones_mx").select("*").order("id", { ascending: false });
+      if (error) throw error;
+      setLista(data || []);
+    } catch (e) { setMsg({ ok: false, txt: "Error cargando: " + (e.message || e) }); }
+    setLoading(false);
+  };
+
+  const nuevo = () => { setMsg(null); setEditando({ ...VACIA }); };
+  const editar = (b) => {
+    setMsg(null);
+    setEditando({
+      id: b.id,
+      nombre: b.nombre || "",
+      fecha_desde: b.fecha_desde || "",
+      fecha_hasta: b.fecha_hasta || "",
+      scs: Array.isArray(b.scs) ? b.scs : [],
+      tipo_ruta: b.tipo_ruta || "AMBOS",
+      km_min: b.km_min ?? "",
+      km_max: b.km_max ?? "",
+      pct_aumento: b.pct_aumento ?? "",
+      activo: b.activo !== false,
+    });
+  };
+  const cancelar = () => { setEditando(null); setMsg(null); };
+  const set = (k, v) => setEditando(p => ({ ...p, [k]: v }));
+  const toggleSC = (sc) => setEditando(p => {
+    const tiene = (p.scs || []).includes(sc);
+    return { ...p, scs: tiene ? p.scs.filter(x => x !== sc) : [...(p.scs || []), sc] };
+  });
+
+  const guardar = async () => {
+    if (!editando) return;
+    const e = editando;
+    if (!e.nombre || !e.nombre.trim()) { setMsg({ ok: false, txt: "Falta el nombre de la bonificacion." }); return; }
+    if (e.fecha_desde && e.fecha_hasta && e.fecha_hasta < e.fecha_desde) { setMsg({ ok: false, txt: "La fecha hasta es anterior a la fecha desde." }); return; }
+    const kmMin = e.km_min === "" ? null : Number(e.km_min);
+    const kmMax = e.km_max === "" ? null : Number(e.km_max);
+    if (kmMin != null && kmMax != null && kmMax < kmMin) { setMsg({ ok: false, txt: "El KM maximo es menor que el minimo." }); return; }
+    const pct = e.pct_aumento === "" ? 0 : Number(e.pct_aumento);
+    if (isNaN(pct)) { setMsg({ ok: false, txt: "El % de aumento es invalido." }); return; }
+    setGuardando(true); setMsg(null);
+    try {
+      const payload = {
+        nombre: e.nombre.trim(),
+        fecha_desde: e.fecha_desde || null,
+        fecha_hasta: e.fecha_hasta || null,
+        scs: e.scs || [],
+        tipo_ruta: e.tipo_ruta || "AMBOS",
+        km_min: kmMin,
+        km_max: kmMax,
+        pct_aumento: pct,
+        activo: e.activo !== false,
+      };
+      let error;
+      if (e.id) ({ error } = await sb.from("bonificaciones_mx").update(payload).eq("id", e.id));
+      else ({ error } = await sb.from("bonificaciones_mx").insert(payload));
+      if (error) throw error;
+      setMsg({ ok: true, txt: e.id ? "Bonificacion actualizada." : "Bonificacion creada." });
+      setEditando(null);
+      cargar();
+    } catch (err) { setMsg({ ok: false, txt: "Error: " + (err.message || err) }); }
+    setGuardando(false);
+  };
+
+  const toggleActivo = async (b) => {
+    try {
+      const { error } = await sb.from("bonificaciones_mx").update({ activo: !b.activo }).eq("id", b.id);
+      if (error) throw error;
+      cargar();
+    } catch (err) { setMsg({ ok: false, txt: "Error: " + (err.message || err) }); }
+  };
+  const eliminar = async (b) => {
+    if (!confirm(`Eliminar la bonificacion "${b.nombre}"?`)) return;
+    try {
+      const { error } = await sb.from("bonificaciones_mx").delete().eq("id", b.id);
+      if (error) throw error;
+      cargar();
+    } catch (err) { setMsg({ ok: false, txt: "Error: " + (err.message || err) }); }
+  };
+
+  const inp = { border: "1px solid #e4e7ec", borderRadius: 4, padding: "7px 9px", fontSize: 13, width: "100%", boxSizing: "border-box" };
+  const lbl = { fontSize: 11, color: "#64748b", fontWeight: 600, marginBottom: 4 };
+  const fmtRango = (b) => {
+    if (!b.fecha_desde && !b.fecha_hasta) return "Sin límite de fechas";
+    return `${b.fecha_desde || "…"} → ${b.fecha_hasta || "…"}`;
+  };
+  const fmtKm = (b) => {
+    if (b.km_min == null && b.km_max == null) return "Cualquier KM";
+    return `${b.km_min ?? "0"} – ${b.km_max ?? "∞"} km`;
+  };
+
+  if (loading) return <div style={{ textAlign: "center", padding: 40, color: "#94a3b8" }}>Cargando...</div>;
+
+  return (
+    <div>
+      <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: 14, marginBottom: 14, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <div style={{ flex: 1, minWidth: 240 }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: "#1a3a6b", marginBottom: 4 }}>Bonificaciones especiales de pago</div>
+          <div style={{ fontSize: 11, color: "#94a3b8" }}>Aumentos por SC, tipo de ruta y rango de KM, activables por toggle o rango de fechas · se muestran como columna en Listado de Pagos</div>
+        </div>
+        {!editando && <button onClick={nuevo} style={{ padding: "8px 16px", borderRadius: 4, border: "none", background: "#1a3a6b", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>+ Nueva bonificación</button>}
+      </div>
+
+      {msg && (<div style={{ background: msg.ok ? "#ecfdf5" : "#fef2f2", border: `1px solid ${msg.ok ? "#a7f3d0" : "#fca5a5"}`, color: msg.ok ? "#065f46" : "#991b1b", borderRadius: 6, padding: 10, marginBottom: 14, fontSize: 12 }}>{msg.txt}</div>)}
+
+      {editando && (
+        <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: 18, marginBottom: 14 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#1a3a6b", marginBottom: 14 }}>{editando.id ? "Editar bonificación" : "Nueva bonificación"}</div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 14, marginBottom: 14 }}>
+            <div style={{ gridColumn: "1 / -1" }}>
+              <div style={lbl}>Nombre de la bonificación</div>
+              <input type="text" value={editando.nombre} onChange={ev => set("nombre", ev.target.value)} placeholder="Ej. Premio rutas largas SMX1" style={inp} />
+            </div>
+            <div>
+              <div style={lbl}>Fecha desde</div>
+              <input type="date" value={editando.fecha_desde} onChange={ev => set("fecha_desde", ev.target.value)} style={inp} />
+              <div style={{ fontSize: 9, color: "#94a3b8", marginTop: 3 }}>Vacío = sin límite</div>
+            </div>
+            <div>
+              <div style={lbl}>Fecha hasta</div>
+              <input type="date" value={editando.fecha_hasta} onChange={ev => set("fecha_hasta", ev.target.value)} style={inp} />
+              <div style={{ fontSize: 9, color: "#94a3b8", marginTop: 3 }}>Vacío = sin límite</div>
+            </div>
+            <div>
+              <div style={lbl}>Tipo de ruta</div>
+              <select value={editando.tipo_ruta} onChange={ev => set("tipo_ruta", ev.target.value)} style={inp}>
+                <option value="AMBOS">Ambos (SDD y SPOT)</option>
+                <option value="SDD">SDD</option>
+                <option value="SPOT">SPOT</option>
+              </select>
+            </div>
+            <div>
+              <div style={lbl}>% de aumento</div>
+              <input type="number" step="0.1" value={editando.pct_aumento} onChange={ev => set("pct_aumento", ev.target.value)} placeholder="5" style={inp} />
+            </div>
+            <div>
+              <div style={lbl}>KM mínimo</div>
+              <input type="number" step="0.1" value={editando.km_min} onChange={ev => set("km_min", ev.target.value)} placeholder="0" style={inp} />
+              <div style={{ fontSize: 9, color: "#94a3b8", marginTop: 3 }}>Vacío = sin mínimo</div>
+            </div>
+            <div>
+              <div style={lbl}>KM máximo</div>
+              <input type="number" step="0.1" value={editando.km_max} onChange={ev => set("km_max", ev.target.value)} placeholder="∞" style={inp} />
+              <div style={{ fontSize: 9, color: "#94a3b8", marginTop: 3 }}>Vacío = sin máximo</div>
+            </div>
+          </div>
+
+          <div style={{ marginBottom: 14 }}>
+            <div style={lbl}>Service Centers donde aplica <span style={{ color: "#94a3b8", fontWeight: 400 }}>(ninguno seleccionado = todos)</span></div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 4 }}>
+              {SCS_OPERATIVOS.map(sc => {
+                const on = (editando.scs || []).includes(sc);
+                return (
+                  <button key={sc} onClick={() => toggleSC(sc)}
+                    style={{ padding: "5px 11px", borderRadius: 14, border: `1px solid ${on ? "#1a3a6b" : "#e4e7ec"}`, background: on ? "#1a3a6b" : "#fff", color: on ? "#fff" : "#475569", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>
+                    {sc}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
+            <label style={{ display: "flex", alignItems: "center", gap: 7, cursor: "pointer", fontSize: 12, color: "#475569", fontWeight: 600 }}>
+              <input type="checkbox" checked={editando.activo !== false} onChange={ev => set("activo", ev.target.checked)} />
+              Activa
+            </label>
+            <div style={{ flex: 1 }} />
+            <button onClick={cancelar} disabled={guardando} style={{ padding: "8px 16px", borderRadius: 4, border: "1px solid #e4e7ec", background: "#fff", color: "#475569", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Cancelar</button>
+            <button onClick={guardar} disabled={guardando} style={{ padding: "8px 16px", borderRadius: 4, border: "none", background: guardando ? "#94a3b8" : "#16a34a", color: "#fff", fontSize: 12, fontWeight: 600, cursor: guardando ? "wait" : "pointer" }}>{guardando ? "Guardando..." : "Guardar"}</button>
+          </div>
+        </div>
+      )}
+
+      <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, overflow: "hidden" }}>
+        {lista.length === 0 ? (
+          <div style={{ textAlign: "center", padding: 32, color: "#94a3b8", fontSize: 13 }}>Sin bonificaciones. Creá la primera con “+ Nueva bonificación”.</div>
+        ) : (
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+            <thead>
+              <tr style={{ background: "#f8fafc", borderBottom: "1px solid #e4e7ec", textAlign: "left", color: "#475569" }}>
+                <th style={{ padding: "9px 12px", fontWeight: 600 }}>Estado</th>
+                <th style={{ padding: "9px 12px", fontWeight: 600 }}>Nombre</th>
+                <th style={{ padding: "9px 12px", fontWeight: 600 }}>Vigencia</th>
+                <th style={{ padding: "9px 12px", fontWeight: 600 }}>Tipo</th>
+                <th style={{ padding: "9px 12px", fontWeight: 600 }}>KM</th>
+                <th style={{ padding: "9px 12px", fontWeight: 600 }}>SCs</th>
+                <th style={{ padding: "9px 12px", fontWeight: 600, textAlign: "right" }}>%</th>
+                <th style={{ padding: "9px 12px", fontWeight: 600, textAlign: "right" }}>Acciones</th>
+              </tr>
+            </thead>
+            <tbody>
+              {lista.map(b => (
+                <tr key={b.id} style={{ borderBottom: "1px solid #f0f0f0", opacity: b.activo ? 1 : 0.55 }}>
+                  <td style={{ padding: "9px 12px" }}>
+                    <button onClick={() => toggleActivo(b)} title="Activar / desactivar"
+                      style={{ width: 40, height: 22, borderRadius: 11, border: "none", cursor: "pointer", position: "relative", background: b.activo ? "#16a34a" : "#cbd5e1", transition: "background .15s" }}>
+                      <span style={{ position: "absolute", top: 2, left: b.activo ? 20 : 2, width: 18, height: 18, borderRadius: "50%", background: "#fff", transition: "left .15s" }} />
+                    </button>
+                  </td>
+                  <td style={{ padding: "9px 12px", fontWeight: 600, color: "#1a3a6b" }}>{b.nombre}</td>
+                  <td style={{ padding: "9px 12px", color: "#475569" }}>{fmtRango(b)}</td>
+                  <td style={{ padding: "9px 12px" }}>
+                    <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 4, background: "#ede9fe", color: "#6d28d9" }}>{b.tipo_ruta}</span>
+                  </td>
+                  <td style={{ padding: "9px 12px", color: "#475569" }}>{fmtKm(b)}</td>
+                  <td style={{ padding: "9px 12px", color: "#475569", maxWidth: 220 }}>
+                    {(Array.isArray(b.scs) && b.scs.length) ? b.scs.join(", ") : <span style={{ color: "#94a3b8" }}>Todos</span>}
+                  </td>
+                  <td style={{ padding: "9px 12px", textAlign: "right", fontWeight: 700, color: "#7c3aed" }}>+{Number(b.pct_aumento || 0)}%</td>
+                  <td style={{ padding: "9px 12px", textAlign: "right", whiteSpace: "nowrap" }}>
+                    <button onClick={() => editar(b)} style={{ padding: "5px 10px", marginRight: 6, borderRadius: 4, border: "1px solid #e4e7ec", background: "#fff", color: "#1a3a6b", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>Editar</button>
+                    <button onClick={() => eliminar(b)} style={{ padding: "5px 10px", borderRadius: 4, border: "1px solid #fca5a5", background: "#fff", color: "#dc2626", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>Eliminar</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </div>
     </div>
   );
