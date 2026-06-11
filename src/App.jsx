@@ -19549,7 +19549,7 @@ function AyudantesDetalleDia() {
     setLoading(true);
     try {
       const [snaps, ents] = await Promise.all([
-        fetchAll("logistic_ayudantes_snapshots", "id_ruta,service_center_id,cluster,driver_id,driver_name,vehiculo_descripcion,placa,is_assignable,momento_dia,hora_snapshot,has_helper"),
+        fetchAll("logistic_ayudantes_snapshots", "id_ruta,service_center_id,cluster,driver_id,driver_name,vehiculo_descripcion,placa,is_assignable,momento_dia,hora_snapshot,has_helper,entregados,total_envios"),
         fetchAll("meli_paquetes_entregados", "id_ruta,service_center_id,driver_id,driver_name,user_id_real,user_name_real"),
       ]);
       setSnapshots(snaps);
@@ -19589,6 +19589,17 @@ function AyudantesDetalleDia() {
     return m;
   }, [snapshots]);
 
+  // ── Entregados esperados por ruta (máximo entre snapshots = cierre) ──
+  const entregadosEsperados = useMemo(() => {
+    const m = {};
+    for (const s of snapshots) {
+      const k = String(s.id_ruta);
+      const e = Number(s.entregados) || 0;
+      if (!m[k] || e > m[k]) m[k] = e;
+    }
+    return m;
+  }, [snapshots]);
+
   // ── Detalle de entregas por ruta: driver vs helpers con % ──
   const detalleEntregas = useMemo(() => {
     const rutas = {};
@@ -19616,6 +19627,12 @@ function AyudantesDetalleDia() {
       // Solo rutas con helper: por entregas (alguien ≠ driver entregó) o por snapshot
       if (helperRows.length === 0 && !tieneSnapHelper) continue;
 
+      // Cruce contra snapshot: entregados esperados vs capturados (cobertura)
+      const esperado = entregadosEsperados[String(r.id_ruta)] || null;
+      const cobertura = esperado ? Math.round((r.total / esperado) * 100) : null;
+      let estadoFila = helperRows.length > 0 ? "OK" : "SOLO_DRIVER";
+      if (esperado && cobertura !== null && cobertura < 95) estadoFila = "INCOMPLETO";
+
       filas.push({
         id_ruta: r.id_ruta,
         sc: r.sc,
@@ -19626,8 +19643,10 @@ function AyudantesDetalleDia() {
           nombre: limpiarNombre(h.nombre), user_id: h.user_id, paquetes: h.paquetes, pct: pct(h.paquetes),
         })),
         total: r.total,
+        esperado,
+        cobertura,
         sinRegistro: r.sinRegistro,
-        estado: helperRows.length > 0 ? "OK" : "SOLO_DRIVER",
+        estado: estadoFila,
       });
     }
 
@@ -19636,7 +19655,8 @@ function AyudantesDetalleDia() {
       if (!rutasConDataEntregas.has(k)) {
         filas.push({
           id_ruta: s.id_ruta, sc: s.sc, driver_name: s.driver_name,
-          driver_paq: null, driver_pct: null, helpers: [], total: 0, sinRegistro: 0,
+          driver_paq: null, driver_pct: null, helpers: [], total: 0,
+          esperado: entregadosEsperados[k] || null, cobertura: 0, sinRegistro: 0,
           estado: "SIN_DETALLE",
         });
       }
@@ -19654,32 +19674,33 @@ function AyudantesDetalleDia() {
         );
       })
       .sort((a, b) => {
-        const ord = { SIN_DETALLE: 0, SOLO_DRIVER: 1, OK: 2 };
+        const ord = { SIN_DETALLE: 0, INCOMPLETO: 1, SOLO_DRIVER: 2, OK: 3 };
         if (ord[a.estado] !== ord[b.estado]) return ord[a.estado] - ord[b.estado];
         if ((a.sc || "") !== (b.sc || "")) return (a.sc || "").localeCompare(b.sc || "");
         return a.id_ruta - b.id_ruta;
       });
-  }, [entregas, rutasSnapHelper, busqueda]);
+  }, [entregas, rutasSnapHelper, entregadosEsperados, busqueda]);
 
   // ── Salud del flujo ──
   const salud = useMemo(() => {
     const conHelperSnap = Object.keys(rutasSnapHelper).length;
     const sinDetalle = detalleEntregas.filter(f => f.estado === "SIN_DETALLE").length;
+    const incompletas = detalleEntregas.filter(f => f.estado === "INCOMPLETO").length;
     const soloDriver = detalleEntregas.filter(f => f.estado === "SOLO_DRIVER").length;
     if (entregas.length === 0) return {
       nivel: "error", color: "#dc2626", bg: "#fef2f2", borde: "#fecaca",
       titulo: "❌ Flujo de entregas NO ejecutado o fallido",
       detalle: `No hay paquetes entregados cargados para ${fecha}. ${conHelperSnap} ruta(s) con helper según snapshots quedan sin detalle. Ejecuta el flujo con el botón.`,
     };
-    if (sinDetalle > 0) return {
+    if (sinDetalle > 0 || incompletas > 0) return {
       nivel: "warn", color: "#b45309", bg: "#fffbeb", borde: "#fde68a",
-      titulo: `⚠️ Flujo incompleto: ${sinDetalle} ruta(s) con helper sin detalle de entregas`,
-      detalle: `Se cargaron ${entregas.length.toLocaleString("es-MX")} paquetes, pero ${sinDetalle} ruta(s) marcadas con helper en snapshots no tienen entregas registradas${soloDriver > 0 ? ` (y ${soloDriver} solo muestran entregas del driver)` : ""}. Re-ejecuta el flujo del día.`,
+      titulo: `⚠️ Flujo incompleto: ${sinDetalle} ruta(s) sin detalle · ${incompletas} con captura parcial`,
+      detalle: `Se cargaron ${entregas.length.toLocaleString("es-MX")} paquetes. ${sinDetalle} ruta(s) con helper no tienen entregas registradas y ${incompletas} tienen menos paquetes capturados que los entregados según el snapshot de cierre (cobertura <95%)${soloDriver > 0 ? `; ${soloDriver} solo muestran entregas del driver` : ""}. Los % de esas rutas NO son confiables — re-ejecuta el flujo del día.`,
     };
     return {
       nivel: "ok", color: "#166534", bg: "#f0fdf4", borde: "#86efac",
       titulo: "✅ Flujo de entregas completo",
-      detalle: `${entregas.length.toLocaleString("es-MX")} paquetes cargados · ${detalleEntregas.length} ruta(s) con helper con detalle${soloDriver > 0 ? ` · ${soloDriver} con entregas solo del driver (revisar)` : ""}.`,
+      detalle: `${entregas.length.toLocaleString("es-MX")} paquetes cargados · ${detalleEntregas.length} ruta(s) con helper, todas con cobertura ≥95% contra el snapshot de cierre${soloDriver > 0 ? ` · ${soloDriver} con entregas solo del driver (revisar)` : ""}.`,
     };
   }, [entregas, detalleEntregas, rutasSnapHelper, fecha]);
 
@@ -19805,7 +19826,7 @@ function AyudantesDetalleDia() {
   // ── Excel: vista entregas ──
   const descargarExcelEntregas = () => {
     if (detalleEntregas.length === 0) return;
-    const headers = ["Fecha", "SC", "ID Ruta", "Chofer", "% Entrega Chofer", "Paq. Chofer", "Ayudante(s)", "% Entrega Ayudante(s)", "Paq. Ayudante(s)", "Total Paquetes", "Sin Registro", "Estado"];
+    const headers = ["Fecha", "SC", "ID Ruta", "Chofer", "% Entrega Chofer", "Paq. Chofer", "Ayudante(s)", "% Entrega Ayudante(s)", "Paq. Ayudante(s)", "Paq. Capturados", "Paq. Esperados (snapshot)", "Cobertura %", "Sin Registro", "Estado"];
     const data = detalleEntregas.map(f => [
       fecha, f.sc, f.id_ruta, f.driver_name || "",
       f.driver_pct == null ? "—" : `${f.driver_pct}%`,
@@ -19813,11 +19834,11 @@ function AyudantesDetalleDia() {
       f.helpers.map(h => h.nombre).join(" // ") || "—",
       f.helpers.map(h => `${h.pct}%`).join(" // ") || "—",
       f.helpers.map(h => h.paquetes).join(" // ") || "—",
-      f.total, f.sinRegistro,
-      f.estado === "OK" ? "OK" : f.estado === "SOLO_DRIVER" ? "Solo driver" : "Sin detalle",
+      f.total, f.esperado ?? "—", f.cobertura != null ? `${f.cobertura}%` : "—", f.sinRegistro,
+      f.estado === "OK" ? "OK" : f.estado === "INCOMPLETO" ? `Incompleto (${f.cobertura}%)` : f.estado === "SOLO_DRIVER" ? "Solo driver" : "Sin detalle",
     ]);
     const ws = window.XLSX.utils.aoa_to_sheet([headers, ...data]);
-    ws["!cols"] = [10, 8, 12, 26, 14, 10, 40, 18, 14, 12, 10, 12].map(w => ({ wch: w }));
+    ws["!cols"] = [10, 8, 12, 26, 14, 10, 40, 18, 14, 12, 14, 11, 10, 16].map(w => ({ wch: w }));
     const wb = window.XLSX.utils.book_new();
     window.XLSX.utils.book_append_sheet(wb, ws, "Entregas Helper");
     window.XLSX.writeFile(wb, `Ayudantes_Entregas_MX_${fecha}.xlsx`);
@@ -19969,6 +19990,11 @@ function AyudantesDetalleDia() {
               <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase" }}>Con detalle OK</div>
               <div style={{ fontSize: 22, fontWeight: 700, color: "#16a34a", marginTop: 2 }}>{detalleEntregas.filter(f => f.estado === "OK").length}</div>
             </div>
+            <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderLeft: "3px solid #b45309", borderRadius: 6, padding: "12px 14px" }}>
+              <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase" }}>Captura incompleta</div>
+              <div style={{ fontSize: 22, fontWeight: 700, color: "#b45309", marginTop: 2 }}>{detalleEntregas.filter(f => f.estado === "INCOMPLETO").length}</div>
+              <div style={{ fontSize: 10, color: "#94a3b8" }}>cobertura &lt;95% vs snapshot</div>
+            </div>
             <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderLeft: "3px solid #F47B20", borderRadius: 6, padding: "12px 14px" }}>
               <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase" }}>Solo driver</div>
               <div style={{ fontSize: 22, fontWeight: 700, color: "#F47B20", marginTop: 2 }}>{detalleEntregas.filter(f => f.estado === "SOLO_DRIVER").length}</div>
@@ -20011,11 +20037,13 @@ function AyudantesDetalleDia() {
                   {detalleEntregas.map((f, i) => {
                     const estiloEstado = f.estado === "OK"
                       ? { bg: "#dcfce7", color: "#16a34a", txt: "OK" }
-                      : f.estado === "SOLO_DRIVER"
-                        ? { bg: "#fed7aa", color: "#b45309", txt: "SOLO DRIVER" }
-                        : { bg: "#fee2e2", color: "#dc2626", txt: "SIN DETALLE" };
+                      : f.estado === "INCOMPLETO"
+                        ? { bg: "#fef3c7", color: "#b45309", txt: `INCOMPLETO ${f.cobertura}%` }
+                        : f.estado === "SOLO_DRIVER"
+                          ? { bg: "#fed7aa", color: "#b45309", txt: "SOLO DRIVER" }
+                          : { bg: "#fee2e2", color: "#dc2626", txt: "SIN DETALLE" };
                     return (
-                      <tr key={i} style={{ borderBottom: "1px solid #f0f0f0", background: f.estado === "SIN_DETALLE" ? "#fef2f2" : "transparent" }}>
+                      <tr key={i} style={{ borderBottom: "1px solid #f0f0f0", background: f.estado === "SIN_DETALLE" ? "#fef2f2" : f.estado === "INCOMPLETO" ? "#fffbeb" : "transparent" }}>
                         <td style={{ padding: "8px", color: "#64748b", fontSize: 11 }}>{fecha}</td>
                         <td style={{ padding: "8px", fontWeight: 500 }}>{f.sc || "—"}</td>
                         <td style={{ padding: "8px", fontFamily: "monospace", color: "#64748b", fontSize: 11 }}>{f.id_ruta}</td>
@@ -20040,7 +20068,12 @@ function AyudantesDetalleDia() {
                           ) : <span style={{ color: "#94a3b8" }}>—</span>}
                         </td>
                         <td style={{ padding: "8px", textAlign: "center", color: "#475569" }}>
-                          {f.total > 0 ? f.total : "—"}
+                          <span style={{ fontWeight: f.estado === "INCOMPLETO" ? 700 : 400, color: f.estado === "INCOMPLETO" ? "#b45309" : "#475569" }}>
+                            {f.total > 0 ? f.total : "—"}{f.esperado ? ` / ${f.esperado}` : ""}
+                          </span>
+                          {f.esperado && f.cobertura !== null && (
+                            <div style={{ fontSize: 9, color: f.cobertura >= 95 ? "#16a34a" : "#b45309" }}>cobertura {f.cobertura}%</div>
+                          )}
                           {f.sinRegistro > 0 && <div style={{ fontSize: 9, color: "#b45309" }}>{f.sinRegistro} sin registro</div>}
                         </td>
                         <td style={{ padding: "8px", textAlign: "center" }}>
