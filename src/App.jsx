@@ -19508,29 +19508,205 @@ function DriversMaestroMX() {
 // ═══════════════════════════════════════════════════════════════════════════
 // AYUDANTES — DETALLE DEL DÍA con tickets, hora exacta y descarga Excel
 // ═══════════════════════════════════════════════════════════════════════════
+// ⚠️ REEMPLAZAR con la URL real del webhook n8n (workflow "Helpers MX · RERUN webhook")
+const N8N_WEBHOOK_RERUN_HELPERS = "https://REEMPLAZAR.app.n8n.cloud/webhook/rerun-helpers-mx";
+
 function AyudantesDetalleDia() {
+  // ── Fecha por defecto: día anterior (operativo MX) ──
+  const fechaAyerOperativa = () => {
+    try {
+      const d = new Date(fechaHoyOperativa() + "T12:00:00");
+      d.setDate(d.getDate() - 1);
+      return d.toISOString().slice(0, 10);
+    } catch { return new Date(Date.now() - 86400000).toISOString().slice(0, 10); }
+  };
+
+  const [vista, setVista] = useState("entregas"); // "entregas" | "matriz"
   const [snapshots, setSnapshots] = useState([]);
+  const [entregas, setEntregas] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [fecha, setFecha] = useState(fechaHoyOperativa());
+  const [fecha, setFecha] = useState(fechaAyerOperativa());
   const [busqueda, setBusqueda] = useState("");
   const [filtroAsignable, setFiltroAsignable] = useState("asignables"); // "asignables" | "no_asignables" | "todas"
+  const [disparando, setDisparando] = useState(false);
+  const [msgFlujo, setMsgFlujo] = useState("");
 
   useEffect(() => { cargar(); }, [fecha]);
+
+  // Lectura paginada (Supabase REST corta en 1000 filas)
+  const fetchAll = async (tabla, select) => {
+    const out = [];
+    for (let desde = 0; desde < 20000; desde += 1000) {
+      const { data, error } = await sb.from(tabla).select(select).eq("fecha", fecha).range(desde, desde + 999);
+      if (error) throw error;
+      out.push(...(data || []));
+      if (!data || data.length < 1000) break;
+    }
+    return out;
+  };
 
   const cargar = async () => {
     setLoading(true);
     try {
-      const { data } = await sb.from("logistic_ayudantes_snapshots")
-        .select("*")
-        .eq("fecha", fecha)
-        .order("hora_snapshot", { ascending: true })
-        .limit(5000);
-      setSnapshots(data || []);
-    } catch (e) { console.error(e); }
+      const [snaps, ents] = await Promise.all([
+        fetchAll("logistic_ayudantes_snapshots", "id_ruta,service_center_id,cluster,driver_id,driver_name,vehiculo_descripcion,placa,is_assignable,momento_dia,hora_snapshot,has_helper"),
+        fetchAll("meli_paquetes_entregados", "id_ruta,service_center_id,driver_id,driver_name,user_id_real,user_name_real"),
+      ]);
+      setSnapshots(snaps);
+      setEntregas(ents);
+    } catch (e) { console.error(e); setSnapshots([]); setEntregas([]); }
     setLoading(false);
   };
 
-  // Hora exacta de cada momento del día (lo más temprano de cada uno)
+  // ── Helpers de nombres (MELI duplica: "Pedro Jehonatan Pedro Jehonatan Garduño Lopez") ──
+  const normTokens = (s) => (s || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z\s]/g, " ").split(/\s+/).filter(Boolean);
+  const esMismaPersona = (userName, driverName) => {
+    const u = new Set(normTokens(userName));
+    const d = normTokens(driverName);
+    if (d.length === 0 || u.size === 0) return false;
+    const hits = d.filter(t => u.has(t)).length;
+    return hits >= Math.min(2, d.length);
+  };
+  const limpiarNombre = (s) => {
+    const t = (s || "").trim().split(/\s+/);
+    for (let k = Math.floor(t.length / 2); k >= 1; k--) {
+      const a = t.slice(0, k).join(" ").toLowerCase();
+      const b = t.slice(k, 2 * k).join(" ").toLowerCase();
+      if (a === b) return t.slice(k).join(" ");
+    }
+    return t.join(" ");
+  };
+
+  // ── Rutas con helper según snapshots (para detectar gaps del flujo de entregas) ──
+  const rutasSnapHelper = useMemo(() => {
+    const m = {};
+    for (const s of snapshots) {
+      if (s.has_helper) {
+        const k = String(s.id_ruta);
+        if (!m[k]) m[k] = { id_ruta: s.id_ruta, sc: s.service_center_id, driver_name: s.driver_name, placa: s.placa };
+      }
+    }
+    return m;
+  }, [snapshots]);
+
+  // ── Detalle de entregas por ruta: driver vs helpers con % ──
+  const detalleEntregas = useMemo(() => {
+    const rutas = {};
+    for (const p of entregas) {
+      const k = String(p.id_ruta);
+      if (!rutas[k]) rutas[k] = { id_ruta: p.id_ruta, sc: p.service_center_id, driver_name: p.driver_name, total: 0, sinRegistro: 0, personas: {} };
+      rutas[k].total++;
+      if (p.user_id_real == null) { rutas[k].sinRegistro++; continue; }
+      const uk = String(p.user_id_real);
+      if (!rutas[k].personas[uk]) rutas[k].personas[uk] = { user_id: p.user_id_real, nombre: p.user_name_real, paquetes: 0 };
+      rutas[k].personas[uk].paquetes++;
+    }
+
+    const filas = [];
+    const rutasConDataEntregas = new Set(Object.keys(rutas));
+
+    for (const r of Object.values(rutas)) {
+      const personas = Object.values(r.personas);
+      const driverRows = personas.filter(p => esMismaPersona(p.nombre, r.driver_name));
+      const helperRows = personas.filter(p => !esMismaPersona(p.nombre, r.driver_name));
+      const pct = (n) => r.total > 0 ? Math.round((n / r.total) * 1000) / 10 : 0;
+      const driverPaq = driverRows.reduce((a, p) => a + p.paquetes, 0);
+      const tieneSnapHelper = !!rutasSnapHelper[String(r.id_ruta)];
+
+      // Solo rutas con helper: por entregas (alguien ≠ driver entregó) o por snapshot
+      if (helperRows.length === 0 && !tieneSnapHelper) continue;
+
+      filas.push({
+        id_ruta: r.id_ruta,
+        sc: r.sc,
+        driver_name: r.driver_name,
+        driver_paq: driverPaq,
+        driver_pct: pct(driverPaq),
+        helpers: helperRows.sort((a, b) => b.paquetes - a.paquetes).map(h => ({
+          nombre: limpiarNombre(h.nombre), user_id: h.user_id, paquetes: h.paquetes, pct: pct(h.paquetes),
+        })),
+        total: r.total,
+        sinRegistro: r.sinRegistro,
+        estado: helperRows.length > 0 ? "OK" : "SOLO_DRIVER",
+      });
+    }
+
+    // Rutas que el snapshot marca con helper pero SIN data de entregas → gap del flujo
+    for (const [k, s] of Object.entries(rutasSnapHelper)) {
+      if (!rutasConDataEntregas.has(k)) {
+        filas.push({
+          id_ruta: s.id_ruta, sc: s.sc, driver_name: s.driver_name,
+          driver_paq: null, driver_pct: null, helpers: [], total: 0, sinRegistro: 0,
+          estado: "SIN_DETALLE",
+        });
+      }
+    }
+
+    return filas
+      .filter(f => {
+        if (!busqueda) return true;
+        const q = busqueda.toLowerCase();
+        return (
+          (f.driver_name || "").toLowerCase().includes(q) ||
+          (f.sc || "").toLowerCase().includes(q) ||
+          String(f.id_ruta).includes(busqueda) ||
+          f.helpers.some(h => (h.nombre || "").toLowerCase().includes(q))
+        );
+      })
+      .sort((a, b) => {
+        const ord = { SIN_DETALLE: 0, SOLO_DRIVER: 1, OK: 2 };
+        if (ord[a.estado] !== ord[b.estado]) return ord[a.estado] - ord[b.estado];
+        if ((a.sc || "") !== (b.sc || "")) return (a.sc || "").localeCompare(b.sc || "");
+        return a.id_ruta - b.id_ruta;
+      });
+  }, [entregas, rutasSnapHelper, busqueda]);
+
+  // ── Salud del flujo ──
+  const salud = useMemo(() => {
+    const conHelperSnap = Object.keys(rutasSnapHelper).length;
+    const sinDetalle = detalleEntregas.filter(f => f.estado === "SIN_DETALLE").length;
+    const soloDriver = detalleEntregas.filter(f => f.estado === "SOLO_DRIVER").length;
+    if (entregas.length === 0) return {
+      nivel: "error", color: "#dc2626", bg: "#fef2f2", borde: "#fecaca",
+      titulo: "❌ Flujo de entregas NO ejecutado o fallido",
+      detalle: `No hay paquetes entregados cargados para ${fecha}. ${conHelperSnap} ruta(s) con helper según snapshots quedan sin detalle. Ejecuta el flujo con el botón.`,
+    };
+    if (sinDetalle > 0) return {
+      nivel: "warn", color: "#b45309", bg: "#fffbeb", borde: "#fde68a",
+      titulo: `⚠️ Flujo incompleto: ${sinDetalle} ruta(s) con helper sin detalle de entregas`,
+      detalle: `Se cargaron ${entregas.length.toLocaleString("es-MX")} paquetes, pero ${sinDetalle} ruta(s) marcadas con helper en snapshots no tienen entregas registradas${soloDriver > 0 ? ` (y ${soloDriver} solo muestran entregas del driver)` : ""}. Re-ejecuta el flujo del día.`,
+    };
+    return {
+      nivel: "ok", color: "#166534", bg: "#f0fdf4", borde: "#86efac",
+      titulo: "✅ Flujo de entregas completo",
+      detalle: `${entregas.length.toLocaleString("es-MX")} paquetes cargados · ${detalleEntregas.length} ruta(s) con helper con detalle${soloDriver > 0 ? ` · ${soloDriver} con entregas solo del driver (revisar)` : ""}.`,
+    };
+  }, [entregas, detalleEntregas, rutasSnapHelper, fecha]);
+
+  // ── Disparar flujo n8n del día ──
+  const ejecutarFlujo = async () => {
+    if (N8N_WEBHOOK_RERUN_HELPERS.includes("REEMPLAZAR")) {
+      setMsgFlujo("❌ Falta configurar la URL del webhook n8n (constante N8N_WEBHOOK_RERUN_HELPERS).");
+      return;
+    }
+    if (!window.confirm(`¿Ejecutar el flujo de entregas helper para ${fecha}?\n\nEl barrido recorre ruta por ruta en el VPS y demora aprox. 45–90 minutos. Requiere sesión MELI vigente (extensión Don B Sync).`)) return;
+    setDisparando(true);
+    setMsgFlujo("");
+    try {
+      const r = await fetch(N8N_WEBHOOK_RERUN_HELPERS, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fecha }),
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      setMsgFlujo(`✅ Flujo disparado ${new Date().toLocaleTimeString("es-CL", { hour: "2-digit", minute: "2-digit" })} hrs para el día ${fecha}. Corre en segundo plano y demora aprox. 45–90 min según rutas. Vuelve a esta vista más tarde y presiona ↻ Refrescar.`);
+    } catch (e) {
+      setMsgFlujo(`❌ No se pudo disparar el flujo: ${e.message}. Revisa que el workflow webhook esté activo en n8n y que la sesión MELI esté vigente.`);
+    }
+    setDisparando(false);
+  };
+
+  // ════════ Lo siguiente alimenta la vista MATRIZ (snapshots, lógica original) ════════
   const horasMomentos = useMemo(() => {
     const m = {};
     for (const s of snapshots) {
@@ -19539,7 +19715,6 @@ function AyudantesDetalleDia() {
     return m;
   }, [snapshots]);
 
-  // Consolidar por id_ruta
   const consolidados = useMemo(() => {
     const m = {};
     for (const s of snapshots) {
@@ -19562,15 +19737,12 @@ function AyudantesDetalleDia() {
       m[k].snapshots_horas[s.momento_dia] = s.hora_snapshot;
       m[k].total_snapshots++;
       if (s.has_helper) m[k].snapshots_con_helper++;
-      // Si en algún snapshot fue asignable, marcamos como asignable
       if (s.is_assignable) m[k].is_assignable = true;
     }
     return Object.values(m)
       .filter(c => {
-        // Filtro asignable
         if (filtroAsignable === "asignables" && !c.is_assignable) return false;
         if (filtroAsignable === "no_asignables" && c.is_assignable) return false;
-        // Filtro búsqueda
         if (!busqueda) return true;
         return (
           (c.driver_name || "").toLowerCase().includes(busqueda.toLowerCase()) ||
@@ -19585,7 +19757,6 @@ function AyudantesDetalleDia() {
       });
   }, [snapshots, busqueda, filtroAsignable]);
 
-  // Conteos para mostrar en filtros
   const todasRutas = useMemo(() => {
     const m = {};
     for (const s of snapshots) {
@@ -19598,11 +19769,9 @@ function AyudantesDetalleDia() {
 
   const conteoAsignables = todasRutas.filter(r => r.is_assignable).length;
   const conteoNoAsignables = todasRutas.filter(r => !r.is_assignable).length;
-
   const totalConHelper = consolidados.filter(c => c.snapshots_con_helper >= 3).length;
   const totalSospechosos = consolidados.filter(c => c.snapshots_con_helper >= 1 && c.snapshots_con_helper < 3).length;
 
-  // Formatear hora a hora local Chile
   const formatHora = (h) => {
     if (!h) return "—";
     try {
@@ -19617,7 +19786,6 @@ function AyudantesDetalleDia() {
     } catch { return "—"; }
   };
 
-  // Renderizar ticket o vacío
   const renderTicket = (h, hora) => {
     if (h === true) return (
       <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
@@ -19634,10 +19802,31 @@ function AyudantesDetalleDia() {
     return <span style={{ color: "#e2e8f0", fontSize: 14 }}>·</span>;
   };
 
-  // Descargar Excel
+  // ── Excel: vista entregas ──
+  const descargarExcelEntregas = () => {
+    if (detalleEntregas.length === 0) return;
+    const headers = ["Fecha", "SC", "ID Ruta", "Chofer", "% Entrega Chofer", "Paq. Chofer", "Ayudante(s)", "% Entrega Ayudante(s)", "Paq. Ayudante(s)", "Total Paquetes", "Sin Registro", "Estado"];
+    const data = detalleEntregas.map(f => [
+      fecha, f.sc, f.id_ruta, f.driver_name || "",
+      f.driver_pct == null ? "—" : `${f.driver_pct}%`,
+      f.driver_paq == null ? "—" : f.driver_paq,
+      f.helpers.map(h => h.nombre).join(" // ") || "—",
+      f.helpers.map(h => `${h.pct}%`).join(" // ") || "—",
+      f.helpers.map(h => h.paquetes).join(" // ") || "—",
+      f.total, f.sinRegistro,
+      f.estado === "OK" ? "OK" : f.estado === "SOLO_DRIVER" ? "Solo driver" : "Sin detalle",
+    ]);
+    const ws = window.XLSX.utils.aoa_to_sheet([headers, ...data]);
+    ws["!cols"] = [10, 8, 12, 26, 14, 10, 40, 18, 14, 12, 10, 12].map(w => ({ wch: w }));
+    const wb = window.XLSX.utils.book_new();
+    window.XLSX.utils.book_append_sheet(wb, ws, "Entregas Helper");
+    window.XLSX.writeFile(wb, `Ayudantes_Entregas_MX_${fecha}.xlsx`);
+  };
+
+  // ── Excel: vista matriz (original) ──
   const descargarExcel = () => {
     if (consolidados.length === 0) return;
-    
+
     const headers = [
       "Fecha", "Service Center", "Cluster", "ID Ruta", "Driver ID", "Driver",
       "Placa", "Vehículo",
@@ -19648,9 +19837,9 @@ function AyudantesDetalleDia() {
       "Pre Cierre", "Hora PC (Chile)", "Hora PC (México)",
       "Total Snapshots", "Snapshots con Helper", "Estado", "Pago Auxiliar"
     ];
-    
+
     const formatHelper = (h) => h === true ? "Sí" : h === false ? "No" : "—";
-    
+
     const data = consolidados.map(c => {
       const estado = c.snapshots_con_helper >= 3 ? "OK" : c.snapshots_con_helper >= 1 ? "SOSPECHOSO" : "SIN_HELPER";
       const pago = estado === "OK" ? 300 : 0;
@@ -19674,14 +19863,11 @@ function AyudantesDetalleDia() {
         pago,
       ];
     });
-    
+
     const ws = window.XLSX.utils.aoa_to_sheet([headers, ...data]);
-    
-    // Anchos de columna
     const widths = [10, 14, 10, 12, 12, 24, 14, 18, 12, 12, 12, 14, 12, 12, 10, 12, 12, 12, 12, 12, 12, 12, 12, 10, 14, 14, 12];
     ws["!cols"] = widths.map(w => ({ wch: w }));
-    
-    // Hoja resumen
+
     const resumen = [
       ["RESUMEN AYUDANTES MX"],
       [""],
@@ -19702,205 +19888,355 @@ function AyudantesDetalleDia() {
     ];
     const wsResumen = window.XLSX.utils.aoa_to_sheet(resumen);
     wsResumen["!cols"] = [{ wch: 40 }, { wch: 30 }];
-    
+
     const wb = window.XLSX.utils.book_new();
     window.XLSX.utils.book_append_sheet(wb, wsResumen, "Resumen");
     window.XLSX.utils.book_append_sheet(wb, ws, "Detalle");
     window.XLSX.writeFile(wb, `Ayudantes_MX_${fecha}.xlsx`);
   };
 
+  const pctBadge = (pct) => {
+    if (pct == null) return <span style={{ color: "#94a3b8" }}>—</span>;
+    const color = pct >= 50 ? "#16a34a" : pct >= 20 ? "#1a3a6b" : "#64748b";
+    return <span style={{ fontWeight: 700, color }}>{pct}%</span>;
+  };
+
   return (
     <div className="pg" style={{ maxWidth: 1400 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, flexWrap: "wrap", gap: 12 }}>
         <div>
-          <div className="sec-title">Ayudantes — Detalle del Día</div>
-          <div className="sec-sub">Captura automática 5x al día desde la plataforma de Logistic</div>
+          <div className="sec-title">Ayudantes — Entregas del Día</div>
+          <div className="sec-sub">Quién entregó cada ruta con helper: driver vs ayudante(s), con su % de entrega</div>
         </div>
-        <div style={{ display: "flex", gap: 8 }}>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <div style={{ display: "flex", gap: 2, background: "#f1f5f9", borderRadius: 6, padding: 2 }}>
+            <button onClick={() => setVista("entregas")}
+              style={{ padding: "6px 12px", borderRadius: 4, border: "none", fontSize: 12, fontWeight: 600, cursor: "pointer",
+                background: vista === "entregas" ? "#1a3a6b" : "transparent", color: vista === "entregas" ? "#fff" : "#475569" }}>
+              Entregas
+            </button>
+            <button onClick={() => setVista("matriz")}
+              style={{ padding: "6px 12px", borderRadius: 4, border: "none", fontSize: 12, fontWeight: 600, cursor: "pointer",
+                background: vista === "matriz" ? "#1a3a6b" : "transparent", color: vista === "matriz" ? "#fff" : "#475569" }}>
+              Matriz snapshots
+            </button>
+          </div>
           <input type="date" value={fecha} onChange={e => setFecha(e.target.value)}
             style={{ background: "#fff", border: "1px solid #cbd5e1", borderRadius: 4, padding: "7px 10px", fontSize: 12 }} />
-          <button onClick={descargarExcel} disabled={consolidados.length === 0}
-            style={{ padding: "8px 14px", background: "#16a34a", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 600, color: "#fff", cursor: consolidados.length === 0 ? "not-allowed" : "pointer", opacity: consolidados.length === 0 ? 0.5 : 1 }}>
+          <button onClick={cargar} title="Refrescar datos"
+            style={{ padding: "8px 12px", background: "#fff", border: "1px solid #cbd5e1", borderRadius: 6, fontSize: 12, fontWeight: 600, color: "#475569", cursor: "pointer" }}>
+            ↻ Refrescar
+          </button>
+          <button onClick={vista === "entregas" ? descargarExcelEntregas : descargarExcel}
+            disabled={vista === "entregas" ? detalleEntregas.length === 0 : consolidados.length === 0}
+            style={{ padding: "8px 14px", background: "#16a34a", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 600, color: "#fff",
+              cursor: (vista === "entregas" ? detalleEntregas.length === 0 : consolidados.length === 0) ? "not-allowed" : "pointer",
+              opacity: (vista === "entregas" ? detalleEntregas.length === 0 : consolidados.length === 0) ? 0.5 : 1 }}>
             Descargar Excel
           </button>
         </div>
       </div>
 
-      {/* Resumen de horas de los snapshots */}
-      <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: "12px 14px", marginBottom: 14 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, flexWrap: "wrap", gap: 8 }}>
-          <div>
-            <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase" }}>Snapshots del día (zona México)</div>
-            <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 2 }}>
-              Se ejecutan automáticamente 5 veces al día. Horario operativo: México.
-            </div>
+      {/* ── Salud del flujo + botón de ejecución ── */}
+      <div style={{ background: salud.bg, border: `1px solid ${salud.borde}`, borderRadius: 6, padding: "12px 14px", marginBottom: 14 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+          <div style={{ flex: 1, minWidth: 280 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: salud.color }}>{salud.titulo}</div>
+            <div style={{ fontSize: 11, color: "#475569", marginTop: 3 }}>{salud.detalle}</div>
           </div>
-          <div style={{ fontSize: 11, color: "#475569" }}>
-            <strong>{Object.keys(horasMomentos).length}/5</strong> ejecutados
-          </div>
-        </div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 10 }}>
-          {[
-            { id: "inicio",       l: "Inicio",       e: "07:00 MX · 09:00 CL" },
-            { id: "media_manana", l: "Media mañana", e: "11:00 MX · 13:00 CL" },
-            { id: "tarde",        l: "Tarde",        e: "15:00 MX · 17:00 CL" },
-            { id: "fin_tarde",    l: "Fin tarde",    e: "19:00 MX · 21:00 CL" },
-            { id: "pre_cierre",   l: "Pre cierre",   e: "23:00 MX · 01:00 CL+1" },
-          ].map(m => {
-            const hora = horasMomentos[m.id];
-            const ejecutado = !!hora;
-            return (
-              <div key={m.id} style={{
-                padding: "8px 10px",
-                borderRadius: 4,
-                background: ejecutado ? "#f0fdf4" : "#f8fafc",
-                border: `1px solid ${ejecutado ? "#86efac" : "#e4e7ec"}`,
-              }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
-                  <span style={{ width: 8, height: 8, borderRadius: "50%", background: ejecutado ? "#16a34a" : "#cbd5e1" }} />
-                  <span style={{ fontSize: 12, fontWeight: 600, color: ejecutado ? "#166534" : "#475569" }}>{m.l}</span>
-                </div>
-                {ejecutado ? (
-                  <div style={{ fontSize: 11, color: "#1f2937", paddingLeft: 14 }}>
-                    <div><strong>{formatHora(hora)}</strong> Chile · {formatHoraMx(hora)} MX</div>
-                  </div>
-                ) : (
-                  <div style={{ fontSize: 11, color: "#94a3b8", paddingLeft: 14 }}>
-                    Programado: {m.e}
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* KPIs */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 10, marginBottom: 14 }}>
-        <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderLeft: "3px solid #1a3a6b", borderRadius: 6, padding: "12px 14px" }}>
-          <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase" }}>Total rutas</div>
-          <div style={{ fontSize: 22, fontWeight: 700, color: "#1a3a6b", marginTop: 2 }}>{consolidados.length}</div>
-        </div>
-        <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderLeft: "3px solid #16a34a", borderRadius: 6, padding: "12px 14px" }}>
-          <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase" }}>Confirmados</div>
-          <div style={{ fontSize: 22, fontWeight: 700, color: "#16a34a", marginTop: 2 }}>{totalConHelper}</div>
-          <div style={{ fontSize: 10, color: "#94a3b8" }}>≥3 snapshots con helper</div>
-        </div>
-        <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderLeft: "3px solid #F47B20", borderRadius: 6, padding: "12px 14px" }}>
-          <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase" }}>Sospechosos</div>
-          <div style={{ fontSize: 22, fontWeight: 700, color: "#F47B20", marginTop: 2 }}>{totalSospechosos}</div>
-          <div style={{ fontSize: 10, color: "#94a3b8" }}>1-2 snapshots</div>
-        </div>
-        <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderLeft: "3px solid #16a34a", borderRadius: 6, padding: "12px 14px" }}>
-          <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase" }}>Pago auxiliares</div>
-          <div style={{ fontSize: 22, fontWeight: 700, color: "#16a34a", marginTop: 2 }}>${(totalConHelper * 300).toLocaleString("es-MX")}</div>
-          <div style={{ fontSize: 10, color: "#94a3b8" }}>$300 × {totalConHelper} rutas</div>
-        </div>
-      </div>
-
-      {/* Filtros */}
-      <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap", alignItems: "center" }}>
-        <div style={{ display: "flex", gap: 4 }}>
-          <button onClick={() => setFiltroAsignable("asignables")}
-            style={{ padding: "7px 14px", borderRadius: 4, border: `1px solid ${filtroAsignable === "asignables" ? "#1a3a6b" : "#e4e7ec"}`,
-              background: filtroAsignable === "asignables" ? "#1a3a6b" : "#fff",
-              color: filtroAsignable === "asignables" ? "#fff" : "#475569",
-              fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
-            Asignadas ({conteoAsignables})
-          </button>
-          <button onClick={() => setFiltroAsignable("no_asignables")}
-            style={{ padding: "7px 14px", borderRadius: 4, border: `1px solid ${filtroAsignable === "no_asignables" ? "#1a3a6b" : "#e4e7ec"}`,
-              background: filtroAsignable === "no_asignables" ? "#1a3a6b" : "#fff",
-              color: filtroAsignable === "no_asignables" ? "#fff" : "#475569",
-              fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
-            Sin asignar ({conteoNoAsignables})
-          </button>
-          <button onClick={() => setFiltroAsignable("todas")}
-            style={{ padding: "7px 14px", borderRadius: 4, border: `1px solid ${filtroAsignable === "todas" ? "#1a3a6b" : "#e4e7ec"}`,
-              background: filtroAsignable === "todas" ? "#1a3a6b" : "#fff",
-              color: filtroAsignable === "todas" ? "#fff" : "#475569",
-              fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
-            Todas ({conteoAsignables + conteoNoAsignables})
+          <button onClick={ejecutarFlujo} disabled={disparando}
+            style={{ padding: "9px 16px", background: disparando ? "#94a3b8" : "#F47B20", border: "none", borderRadius: 6,
+              fontSize: 12, fontWeight: 700, color: "#fff", cursor: disparando ? "wait" : "pointer", whiteSpace: "nowrap" }}>
+            {disparando ? "Disparando..." : `▶ Ejecutar flujo del ${fecha}`}
           </button>
         </div>
-        <input type="text" placeholder="Buscar por driver, placa, SC o ID ruta..." value={busqueda} onChange={e => setBusqueda(e.target.value)}
-          style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 4, padding: "7px 10px", fontSize: 12, flex: 1, minWidth: 240 }} />
-      </div>
-
-      {/* Tabla */}
-      <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, overflow: "auto" }}>
-        {loading ? (
-          <div style={{ padding: 30, textAlign: "center", color: "#94a3b8" }}>Cargando...</div>
-        ) : consolidados.length === 0 ? (
-          <div style={{ padding: 40, textAlign: "center", color: "#94a3b8", fontSize: 13 }}>
-            Sin datos para esta fecha. Los snapshots se capturan automáticamente 5 veces al día.
+        {msgFlujo && (
+          <div style={{ marginTop: 10, padding: "8px 10px", background: "#fff", border: "1px solid #e4e7ec", borderRadius: 4, fontSize: 12, color: "#1f2937" }}>
+            {msgFlujo}
           </div>
-        ) : (
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-            <thead>
-              <tr style={{ background: "#f8fafc", borderBottom: "1px solid #e4e7ec" }}>
-                <th style={{ padding: "10px 8px", textAlign: "left", fontSize: 10, fontWeight: 600, color: "#475569" }}>SC</th>
-                <th style={{ padding: "10px 8px", textAlign: "left", fontSize: 10, fontWeight: 600, color: "#475569" }}>Cluster</th>
-                <th style={{ padding: "10px 8px", textAlign: "left", fontSize: 10, fontWeight: 600, color: "#475569" }}>ID Ruta</th>
-                <th style={{ padding: "10px 8px", textAlign: "left", fontSize: 10, fontWeight: 600, color: "#475569" }}>Placa</th>
-                <th style={{ padding: "10px 8px", textAlign: "left", fontSize: 10, fontWeight: 600, color: "#475569" }}>Driver</th>
-                <th style={{ padding: "10px 8px", textAlign: "left", fontSize: 10, fontWeight: 600, color: "#475569" }}>Vehículo</th>
-                {[
-                  { id: "inicio", l: "Inicio" },
-                  { id: "media_manana", l: "Media mañana" },
-                  { id: "tarde", l: "Tarde" },
-                  { id: "fin_tarde", l: "Fin tarde" },
-                  { id: "pre_cierre", l: "Pre cierre" },
-                ].map(m => (
-                  <th key={m.id} style={{ padding: "10px 4px", textAlign: "center", fontSize: 10, fontWeight: 600, color: "#475569", minWidth: 90 }}>
-                    <div>{m.l}</div>
-                    {horasMomentos[m.id] ? (
-                      <div style={{ fontSize: 9, color: "#94a3b8", fontWeight: 400, marginTop: 2, lineHeight: 1.3 }}>
-                        <div>{formatHora(horasMomentos[m.id])} CL</div>
-                        <div>{formatHoraMx(horasMomentos[m.id])} MX</div>
-                      </div>
-                    ) : (
-                      <div style={{ fontSize: 9, color: "#cbd5e1", fontWeight: 400, marginTop: 2 }}>—</div>
-                    )}
-                  </th>
-                ))}
-                <th style={{ padding: "10px 8px", textAlign: "center", fontSize: 10, fontWeight: 600, color: "#475569" }}>Estado</th>
-                <th style={{ padding: "10px 8px", textAlign: "right", fontSize: 10, fontWeight: 600, color: "#475569" }}>Pago</th>
-              </tr>
-            </thead>
-            <tbody>
-              {consolidados.map((c, i) => {
-                const estado = c.snapshots_con_helper >= 3 ? "OK" : c.snapshots_con_helper >= 1 ? "SOSPECHOSO" : "SIN_HELPER";
-                const colorEstado = estado === "OK" ? "#16a34a" : estado === "SOSPECHOSO" ? "#F47B20" : "#94a3b8";
-                const bgEstado = estado === "OK" ? "#dcfce7" : estado === "SOSPECHOSO" ? "#fed7aa" : "#f1f5f9";
-                return (
-                  <tr key={i} style={{ borderBottom: "1px solid #f0f0f0" }}>
-                    <td style={{ padding: "8px", fontWeight: 500 }}>{c.service_center_id}</td>
-                    <td style={{ padding: "8px" }}>{c.cluster}</td>
-                    <td style={{ padding: "8px", fontFamily: "monospace", color: "#64748b", fontSize: 11 }}>{c.id_ruta}</td>
-                    <td style={{ padding: "8px", fontSize: 11 }}>{c.placa || "—"}</td>
-                    <td style={{ padding: "8px", fontWeight: 500 }}>{c.driver_name || "—"}</td>
-                    <td style={{ padding: "8px", color: "#64748b", fontSize: 11 }}>{c.vehiculo_descripcion}</td>
-                    <td style={{ padding: "8px 4px", textAlign: "center" }}>{renderTicket(c.snapshots.inicio, c.snapshots_horas.inicio)}</td>
-                    <td style={{ padding: "8px 4px", textAlign: "center" }}>{renderTicket(c.snapshots.media_manana, c.snapshots_horas.media_manana)}</td>
-                    <td style={{ padding: "8px 4px", textAlign: "center" }}>{renderTicket(c.snapshots.tarde, c.snapshots_horas.tarde)}</td>
-                    <td style={{ padding: "8px 4px", textAlign: "center" }}>{renderTicket(c.snapshots.fin_tarde, c.snapshots_horas.fin_tarde)}</td>
-                    <td style={{ padding: "8px 4px", textAlign: "center" }}>{renderTicket(c.snapshots.pre_cierre, c.snapshots_horas.pre_cierre)}</td>
-                    <td style={{ padding: "8px", textAlign: "center" }}>
-                      <span style={{ fontSize: 9, padding: "2px 6px", borderRadius: 4, background: bgEstado, color: colorEstado, fontWeight: 600 }}>
-                        {estado}
-                      </span>
-                    </td>
-                    <td style={{ padding: "8px", textAlign: "right", fontWeight: 600, color: estado === "OK" ? "#16a34a" : "#94a3b8" }}>
-                      {estado === "OK" ? "$300" : "—"}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
         )}
       </div>
+
+      {vista === "entregas" && (
+        <>
+          {/* KPIs vista entregas */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 10, marginBottom: 14 }}>
+            <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderLeft: "3px solid #1a3a6b", borderRadius: 6, padding: "12px 14px" }}>
+              <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase" }}>Rutas con helper</div>
+              <div style={{ fontSize: 22, fontWeight: 700, color: "#1a3a6b", marginTop: 2 }}>{detalleEntregas.length}</div>
+            </div>
+            <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderLeft: "3px solid #16a34a", borderRadius: 6, padding: "12px 14px" }}>
+              <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase" }}>Con detalle OK</div>
+              <div style={{ fontSize: 22, fontWeight: 700, color: "#16a34a", marginTop: 2 }}>{detalleEntregas.filter(f => f.estado === "OK").length}</div>
+            </div>
+            <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderLeft: "3px solid #F47B20", borderRadius: 6, padding: "12px 14px" }}>
+              <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase" }}>Solo driver</div>
+              <div style={{ fontSize: 22, fontWeight: 700, color: "#F47B20", marginTop: 2 }}>{detalleEntregas.filter(f => f.estado === "SOLO_DRIVER").length}</div>
+              <div style={{ fontSize: 10, color: "#94a3b8" }}>helper en snapshot, sin entregas</div>
+            </div>
+            <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderLeft: "3px solid #dc2626", borderRadius: 6, padding: "12px 14px" }}>
+              <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase" }}>Sin detalle</div>
+              <div style={{ fontSize: 22, fontWeight: 700, color: "#dc2626", marginTop: 2 }}>{detalleEntregas.filter(f => f.estado === "SIN_DETALLE").length}</div>
+              <div style={{ fontSize: 10, color: "#94a3b8" }}>gap del flujo · re-ejecutar</div>
+            </div>
+          </div>
+
+          <input type="text" placeholder="Buscar por driver, ayudante, SC o ID ruta..." value={busqueda} onChange={e => setBusqueda(e.target.value)}
+            style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 4, padding: "7px 10px", fontSize: 12, width: "100%", marginBottom: 14, boxSizing: "border-box" }} />
+
+          {/* Tabla entregas */}
+          <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, overflow: "auto" }}>
+            {loading ? (
+              <div style={{ padding: 30, textAlign: "center", color: "#94a3b8" }}>Cargando...</div>
+            ) : detalleEntregas.length === 0 ? (
+              <div style={{ padding: 40, textAlign: "center", color: "#94a3b8", fontSize: 13 }}>
+                Sin rutas con helper para esta fecha (o el flujo de entregas no ha corrido).
+              </div>
+            ) : (
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                <thead>
+                  <tr style={{ background: "#f8fafc", borderBottom: "1px solid #e4e7ec" }}>
+                    <th style={{ padding: "10px 8px", textAlign: "left", fontSize: 10, fontWeight: 600, color: "#475569" }}>Fecha</th>
+                    <th style={{ padding: "10px 8px", textAlign: "left", fontSize: 10, fontWeight: 600, color: "#475569" }}>SC</th>
+                    <th style={{ padding: "10px 8px", textAlign: "left", fontSize: 10, fontWeight: 600, color: "#475569" }}>ID Ruta</th>
+                    <th style={{ padding: "10px 8px", textAlign: "left", fontSize: 10, fontWeight: 600, color: "#475569" }}>Chofer</th>
+                    <th style={{ padding: "10px 8px", textAlign: "center", fontSize: 10, fontWeight: 600, color: "#475569" }}>% Entrega</th>
+                    <th style={{ padding: "10px 8px", textAlign: "left", fontSize: 10, fontWeight: 600, color: "#475569" }}>Ayudante(s)</th>
+                    <th style={{ padding: "10px 8px", textAlign: "center", fontSize: 10, fontWeight: 600, color: "#475569" }}>% Entrega</th>
+                    <th style={{ padding: "10px 8px", textAlign: "center", fontSize: 10, fontWeight: 600, color: "#475569" }}>Total Paq.</th>
+                    <th style={{ padding: "10px 8px", textAlign: "center", fontSize: 10, fontWeight: 600, color: "#475569" }}>Estado</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {detalleEntregas.map((f, i) => {
+                    const estiloEstado = f.estado === "OK"
+                      ? { bg: "#dcfce7", color: "#16a34a", txt: "OK" }
+                      : f.estado === "SOLO_DRIVER"
+                        ? { bg: "#fed7aa", color: "#b45309", txt: "SOLO DRIVER" }
+                        : { bg: "#fee2e2", color: "#dc2626", txt: "SIN DETALLE" };
+                    return (
+                      <tr key={i} style={{ borderBottom: "1px solid #f0f0f0", background: f.estado === "SIN_DETALLE" ? "#fef2f2" : "transparent" }}>
+                        <td style={{ padding: "8px", color: "#64748b", fontSize: 11 }}>{fecha}</td>
+                        <td style={{ padding: "8px", fontWeight: 500 }}>{f.sc || "—"}</td>
+                        <td style={{ padding: "8px", fontFamily: "monospace", color: "#64748b", fontSize: 11 }}>{f.id_ruta}</td>
+                        <td style={{ padding: "8px", fontWeight: 500 }}>{f.driver_name || "—"}</td>
+                        <td style={{ padding: "8px", textAlign: "center" }}>
+                          {pctBadge(f.driver_pct)}
+                          {f.driver_paq != null && <div style={{ fontSize: 9, color: "#94a3b8" }}>{f.driver_paq} paq.</div>}
+                        </td>
+                        <td style={{ padding: "8px" }}>
+                          {f.helpers.length > 0
+                            ? f.helpers.map(h => h.nombre).join(" // ")
+                            : <span style={{ color: "#94a3b8", fontSize: 11 }}>{f.estado === "SIN_DETALLE" ? "Sin datos de entrega" : "—"}</span>}
+                        </td>
+                        <td style={{ padding: "8px", textAlign: "center" }}>
+                          {f.helpers.length > 0 ? (
+                            <>
+                              <span>{f.helpers.map((h, j) => (
+                                <span key={j}>{j > 0 && <span style={{ color: "#cbd5e1" }}> // </span>}{pctBadge(h.pct)}</span>
+                              ))}</span>
+                              <div style={{ fontSize: 9, color: "#94a3b8" }}>{f.helpers.map(h => `${h.paquetes} paq.`).join(" // ")}</div>
+                            </>
+                          ) : <span style={{ color: "#94a3b8" }}>—</span>}
+                        </td>
+                        <td style={{ padding: "8px", textAlign: "center", color: "#475569" }}>
+                          {f.total > 0 ? f.total : "—"}
+                          {f.sinRegistro > 0 && <div style={{ fontSize: 9, color: "#b45309" }}>{f.sinRegistro} sin registro</div>}
+                        </td>
+                        <td style={{ padding: "8px", textAlign: "center" }}>
+                          <span style={{ fontSize: 9, padding: "2px 6px", borderRadius: 4, background: estiloEstado.bg, color: estiloEstado.color, fontWeight: 600 }}>
+                            {estiloEstado.txt}
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </>
+      )}
+
+      {vista === "matriz" && (
+        <>
+          {/* Resumen de horas de los snapshots */}
+          <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: "12px 14px", marginBottom: 14 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, flexWrap: "wrap", gap: 8 }}>
+              <div>
+                <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase" }}>Snapshots del día (zona México)</div>
+                <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 2 }}>
+                  Se ejecutan automáticamente 5 veces al día. Horario operativo: México.
+                </div>
+              </div>
+              <div style={{ fontSize: 11, color: "#475569" }}>
+                <strong>{Object.keys(horasMomentos).length}/5</strong> ejecutados
+              </div>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 10 }}>
+              {[
+                { id: "inicio",       l: "Inicio",       e: "07:00 MX · 09:00 CL" },
+                { id: "media_manana", l: "Media mañana", e: "11:00 MX · 13:00 CL" },
+                { id: "tarde",        l: "Tarde",        e: "15:00 MX · 17:00 CL" },
+                { id: "fin_tarde",    l: "Fin tarde",    e: "19:00 MX · 21:00 CL" },
+                { id: "pre_cierre",   l: "Pre cierre",   e: "23:00 MX · 01:00 CL+1" },
+              ].map(m => {
+                const hora = horasMomentos[m.id];
+                const ejecutado = !!hora;
+                return (
+                  <div key={m.id} style={{
+                    padding: "8px 10px",
+                    borderRadius: 4,
+                    background: ejecutado ? "#f0fdf4" : "#f8fafc",
+                    border: `1px solid ${ejecutado ? "#86efac" : "#e4e7ec"}`,
+                  }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+                      <span style={{ width: 8, height: 8, borderRadius: "50%", background: ejecutado ? "#16a34a" : "#cbd5e1" }} />
+                      <span style={{ fontSize: 12, fontWeight: 600, color: ejecutado ? "#166534" : "#475569" }}>{m.l}</span>
+                    </div>
+                    {ejecutado ? (
+                      <div style={{ fontSize: 11, color: "#1f2937", paddingLeft: 14 }}>
+                        <div><strong>{formatHora(hora)}</strong> Chile · {formatHoraMx(hora)} MX</div>
+                      </div>
+                    ) : (
+                      <div style={{ fontSize: 11, color: "#94a3b8", paddingLeft: 14 }}>
+                        Programado: {m.e}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* KPIs */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 10, marginBottom: 14 }}>
+            <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderLeft: "3px solid #1a3a6b", borderRadius: 6, padding: "12px 14px" }}>
+              <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase" }}>Total rutas</div>
+              <div style={{ fontSize: 22, fontWeight: 700, color: "#1a3a6b", marginTop: 2 }}>{consolidados.length}</div>
+            </div>
+            <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderLeft: "3px solid #16a34a", borderRadius: 6, padding: "12px 14px" }}>
+              <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase" }}>Confirmados</div>
+              <div style={{ fontSize: 22, fontWeight: 700, color: "#16a34a", marginTop: 2 }}>{totalConHelper}</div>
+              <div style={{ fontSize: 10, color: "#94a3b8" }}>≥3 snapshots con helper</div>
+            </div>
+            <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderLeft: "3px solid #F47B20", borderRadius: 6, padding: "12px 14px" }}>
+              <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase" }}>Sospechosos</div>
+              <div style={{ fontSize: 22, fontWeight: 700, color: "#F47B20", marginTop: 2 }}>{totalSospechosos}</div>
+              <div style={{ fontSize: 10, color: "#94a3b8" }}>1-2 snapshots</div>
+            </div>
+            <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderLeft: "3px solid #16a34a", borderRadius: 6, padding: "12px 14px" }}>
+              <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase" }}>Pago auxiliares</div>
+              <div style={{ fontSize: 22, fontWeight: 700, color: "#16a34a", marginTop: 2 }}>${(totalConHelper * 300).toLocaleString("es-MX")}</div>
+              <div style={{ fontSize: 10, color: "#94a3b8" }}>$300 × {totalConHelper} rutas</div>
+            </div>
+          </div>
+
+          {/* Filtros */}
+          <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap", alignItems: "center" }}>
+            <div style={{ display: "flex", gap: 4 }}>
+              <button onClick={() => setFiltroAsignable("asignables")}
+                style={{ padding: "7px 14px", borderRadius: 4, border: `1px solid ${filtroAsignable === "asignables" ? "#1a3a6b" : "#e4e7ec"}`,
+                  background: filtroAsignable === "asignables" ? "#1a3a6b" : "#fff",
+                  color: filtroAsignable === "asignables" ? "#fff" : "#475569",
+                  fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+                Asignadas ({conteoAsignables})
+              </button>
+              <button onClick={() => setFiltroAsignable("no_asignables")}
+                style={{ padding: "7px 14px", borderRadius: 4, border: `1px solid ${filtroAsignable === "no_asignables" ? "#1a3a6b" : "#e4e7ec"}`,
+                  background: filtroAsignable === "no_asignables" ? "#1a3a6b" : "#fff",
+                  color: filtroAsignable === "no_asignables" ? "#fff" : "#475569",
+                  fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+                Sin asignar ({conteoNoAsignables})
+              </button>
+              <button onClick={() => setFiltroAsignable("todas")}
+                style={{ padding: "7px 14px", borderRadius: 4, border: `1px solid ${filtroAsignable === "todas" ? "#1a3a6b" : "#e4e7ec"}`,
+                  background: filtroAsignable === "todas" ? "#1a3a6b" : "#fff",
+                  color: filtroAsignable === "todas" ? "#fff" : "#475569",
+                  fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+                Todas ({conteoAsignables + conteoNoAsignables})
+              </button>
+            </div>
+            <input type="text" placeholder="Buscar por driver, placa, SC o ID ruta..." value={busqueda} onChange={e => setBusqueda(e.target.value)}
+              style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 4, padding: "7px 10px", fontSize: 12, flex: 1, minWidth: 240 }} />
+          </div>
+
+          {/* Tabla */}
+          <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, overflow: "auto" }}>
+            {loading ? (
+              <div style={{ padding: 30, textAlign: "center", color: "#94a3b8" }}>Cargando...</div>
+            ) : consolidados.length === 0 ? (
+              <div style={{ padding: 40, textAlign: "center", color: "#94a3b8", fontSize: 13 }}>
+                Sin datos para esta fecha. Los snapshots se capturan automáticamente 5 veces al día.
+              </div>
+            ) : (
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                <thead>
+                  <tr style={{ background: "#f8fafc", borderBottom: "1px solid #e4e7ec" }}>
+                    <th style={{ padding: "10px 8px", textAlign: "left", fontSize: 10, fontWeight: 600, color: "#475569" }}>SC</th>
+                    <th style={{ padding: "10px 8px", textAlign: "left", fontSize: 10, fontWeight: 600, color: "#475569" }}>Cluster</th>
+                    <th style={{ padding: "10px 8px", textAlign: "left", fontSize: 10, fontWeight: 600, color: "#475569" }}>ID Ruta</th>
+                    <th style={{ padding: "10px 8px", textAlign: "left", fontSize: 10, fontWeight: 600, color: "#475569" }}>Placa</th>
+                    <th style={{ padding: "10px 8px", textAlign: "left", fontSize: 10, fontWeight: 600, color: "#475569" }}>Driver</th>
+                    <th style={{ padding: "10px 8px", textAlign: "left", fontSize: 10, fontWeight: 600, color: "#475569" }}>Vehículo</th>
+                    {[
+                      { id: "inicio", l: "Inicio" },
+                      { id: "media_manana", l: "Media mañana" },
+                      { id: "tarde", l: "Tarde" },
+                      { id: "fin_tarde", l: "Fin tarde" },
+                      { id: "pre_cierre", l: "Pre cierre" },
+                    ].map(m => (
+                      <th key={m.id} style={{ padding: "10px 4px", textAlign: "center", fontSize: 10, fontWeight: 600, color: "#475569", minWidth: 90 }}>
+                        <div>{m.l}</div>
+                        {horasMomentos[m.id] ? (
+                          <div style={{ fontSize: 9, color: "#94a3b8", fontWeight: 400, marginTop: 2, lineHeight: 1.3 }}>
+                            <div>{formatHora(horasMomentos[m.id])} CL</div>
+                            <div>{formatHoraMx(horasMomentos[m.id])} MX</div>
+                          </div>
+                        ) : (
+                          <div style={{ fontSize: 9, color: "#cbd5e1", fontWeight: 400, marginTop: 2 }}>—</div>
+                        )}
+                      </th>
+                    ))}
+                    <th style={{ padding: "10px 8px", textAlign: "center", fontSize: 10, fontWeight: 600, color: "#475569" }}>Estado</th>
+                    <th style={{ padding: "10px 8px", textAlign: "right", fontSize: 10, fontWeight: 600, color: "#475569" }}>Pago</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {consolidados.map((c, i) => {
+                    const estado = c.snapshots_con_helper >= 3 ? "OK" : c.snapshots_con_helper >= 1 ? "SOSPECHOSO" : "SIN_HELPER";
+                    const colorEstado = estado === "OK" ? "#16a34a" : estado === "SOSPECHOSO" ? "#F47B20" : "#94a3b8";
+                    const bgEstado = estado === "OK" ? "#dcfce7" : estado === "SOSPECHOSO" ? "#fed7aa" : "#f1f5f9";
+                    return (
+                      <tr key={i} style={{ borderBottom: "1px solid #f0f0f0" }}>
+                        <td style={{ padding: "8px", fontWeight: 500 }}>{c.service_center_id}</td>
+                        <td style={{ padding: "8px" }}>{c.cluster}</td>
+                        <td style={{ padding: "8px", fontFamily: "monospace", color: "#64748b", fontSize: 11 }}>{c.id_ruta}</td>
+                        <td style={{ padding: "8px", fontSize: 11 }}>{c.placa || "—"}</td>
+                        <td style={{ padding: "8px", fontWeight: 500 }}>{c.driver_name || "—"}</td>
+                        <td style={{ padding: "8px", color: "#64748b", fontSize: 11 }}>{c.vehiculo_descripcion}</td>
+                        <td style={{ padding: "8px 4px", textAlign: "center" }}>{renderTicket(c.snapshots.inicio, c.snapshots_horas.inicio)}</td>
+                        <td style={{ padding: "8px 4px", textAlign: "center" }}>{renderTicket(c.snapshots.media_manana, c.snapshots_horas.media_manana)}</td>
+                        <td style={{ padding: "8px 4px", textAlign: "center" }}>{renderTicket(c.snapshots.tarde, c.snapshots_horas.tarde)}</td>
+                        <td style={{ padding: "8px 4px", textAlign: "center" }}>{renderTicket(c.snapshots.fin_tarde, c.snapshots_horas.fin_tarde)}</td>
+                        <td style={{ padding: "8px 4px", textAlign: "center" }}>{renderTicket(c.snapshots.pre_cierre, c.snapshots_horas.pre_cierre)}</td>
+                        <td style={{ padding: "8px", textAlign: "center" }}>
+                          <span style={{ fontSize: 9, padding: "2px 6px", borderRadius: 4, background: bgEstado, color: colorEstado, fontWeight: 600 }}>
+                            {estado}
+                          </span>
+                        </td>
+                        <td style={{ padding: "8px", textAlign: "right", fontWeight: 600, color: estado === "OK" ? "#16a34a" : "#94a3b8" }}>
+                          {estado === "OK" ? "$300" : "—"}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -36006,4 +36342,3 @@ const CONFIG_IMPORTADOR_CL = {
     notas: "(opcional)",
   },
 };
-  
