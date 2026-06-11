@@ -4810,6 +4810,7 @@ const VistaSnapshotSupervisores = ({ fecha, pais }) => {
         "ENTREGADOS":         f.entregados,
         "DEVUELTOS":          f.devueltos,
         "RANGO KILOMETRAJE":  f.rango_kilometraje,
+        "KM REAL MELI":       f.km_recorridos_meli != null ? f.km_recorridos_meli : "",
         "TIPO DE RUTA":       f.tipo_ruta,
         "¿CON AYUDANTE?":     f.con_ayudante,
         "NOMBRE DE AYUDANTE": f.nombre_ayudante || "",
@@ -4818,6 +4819,8 @@ const VistaSnapshotSupervisores = ({ fecha, pais }) => {
         "IDs PERSONAS":       f.ids_personas || "",
         "ALERTAS HELPER":     (f.alertas_helper || []).join(" · "),
         "% VISITADO":         f.pct_visitado,
+        "% NO VISITADO REAL": f.pct_no_visitado_real != null ? f.pct_no_visitado_real : "",
+        "NO VISITADOS REAL":  f.no_visitados_real != null ? f.no_visitados_real : "",
         "OBSERVACIONES":      f.observaciones_auto || "",
       }));
       const wsIng = window.XLSX.utils.json_to_sheet(hojaIngreso);
@@ -5061,7 +5064,7 @@ const SnapIngresoMaestro = ({ filas, loading }) => {
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
             <thead style={{ background: "#f8fafc", position: "sticky", top: 0 }}>
               <tr>
-                {["Fecha","ID Viaje","CECOS","Patente","Tipo Veh.","SDD","Tipo Ruta","Driver","Helper","Nombre Helper","% Helper","% por Persona","IDs Personas","Alertas","Cargados","Entregados","Devueltos","KM Plan","Rango KM","%","Status","Obs"].map(h => (
+                {["Fecha","ID Viaje","CECOS","Patente","Tipo Veh.","SDD","Tipo Ruta","Driver","Helper","Nombre Helper","% Helper","% por Persona","IDs Personas","Alertas","Cargados","Entregados","Devueltos","KM Plan","KM Real","Rango KM","%","% No Vis. Real","Status","Obs"].map(h => (
                   <th key={h} style={{ padding: "8px 6px", textAlign: "left", fontWeight: 700, color: "#666", borderBottom: "1px solid #e4e7ec", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.3 }}>{h}</th>
                 ))}
               </tr>
@@ -5132,10 +5135,17 @@ const SnapIngresoMaestro = ({ filas, loading }) => {
                   <td style={{ padding: "6px", textAlign: "right", color: "#16a34a", fontWeight: 600 }}>{fmtNumSnap(f.entregados)}</td>
                   <td style={{ padding: "6px", textAlign: "right", color: "#dc2626" }}>{fmtNumSnap(f.devueltos)}</td>
                   <td style={{ padding: "6px", textAlign: "right" }}>{fmtNumSnap(f.km_planificados)}</td>
+                  <td style={{ padding: "6px", textAlign: "right", color: "#0369a1", fontWeight: 600 }}>
+                    {f.km_recorridos_meli != null ? fmtNumSnap(f.km_recorridos_meli) : "—"}
+                  </td>
                   <td style={{ padding: "6px" }}>{f.rango_kilometraje}</td>
                   <td style={{ padding: "6px", textAlign: "right", fontWeight: 600,
                     color: f.pct_visitado >= 95 ? "#16a34a" : f.pct_visitado >= 90 ? "#ca8a04" : "#dc2626" }}>
                     {fmtPctSnap(f.pct_visitado)}
+                  </td>
+                  <td style={{ padding: "6px", textAlign: "right", fontWeight: 700,
+                    color: f.pct_no_visitado_real == null ? "#cbd5e1" : f.pct_no_visitado_real <= 0.5 ? "#16a34a" : f.pct_no_visitado_real <= 5 ? "#ca8a04" : "#dc2626" }}>
+                    {f.pct_no_visitado_real != null ? fmtPctSnap(f.pct_no_visitado_real) : "—"}
                   </td>
                   <td style={{ padding: "6px" }}>{f.status_final}</td>
                   <td style={{ padding: "6px", fontSize: 10, color: "#888", maxWidth: 200 }}>{f.observaciones_auto || "—"}</td>
@@ -18175,14 +18185,14 @@ function ListadoPagosDiarios() {
     if (filasFiltradas.length === 0) { alert("No hay datos para exportar"); return; }
     const headers = [
       "Fecha","Chofer","Patente","Vehículo","Tipología","SC","Zona","ID Ruta","Ciclo",
-      "Km","Km Real","Envíos despachados","Envíos entregados","NS%","% Visitado","% Visitado Real","No visitado %","Categoría NS",
+      "Km","Km Real","Envíos despachados","Envíos entregados","NS%","% Visitado","% Visitado Real","% No Visitado Real","No visitado %","Categoría NS",
       "Tarifa base","Ajuste NS","Estado auxiliar","Snapshots con helper","$ Auxiliar",
       "Pago bruto","Pago neto","Pago MELI","Observaciones"
     ];
     const rows = filasFiltradas.map(p => [
       p.fecha, p.driver_name, p.placa, p.vehiculo_raw, p.tipologia, p.service_center_id, p.zona,
       p.id_ruta, p.ciclo, p.km_recorridos, p.km_recorridos_meli, p.envios_despachados, p.envios_entregados,
-      p.ns_pct, p.pct_visitado, p.pct_visitado_real, p.ns_no_visitado, p.ns_categoria, p.tarifa_base, p.ajuste_ns,
+      p.ns_pct, p.pct_visitado, p.pct_visitado_real, (p.pct_visitado_real != null ? Math.round((100 - Number(p.pct_visitado_real)) * 100) / 100 : ""), p.ns_no_visitado, p.ns_categoria, p.tarifa_base, p.ajuste_ns,
       p.auxiliar_estado, p.auxiliar_snapshots_total, p.monto_auxiliar,
       p.pago_bruto, p.pago_neto, p.pago_meli, (p.observaciones || "").replace(/[\r\n]+/g, " ")
     ]);
@@ -18216,14 +18226,14 @@ function ListadoPagosDiarios() {
       if (filas.length === 0) { alert(`No hay pagos guardados entre ${desde} y ${hasta}.`); setExcelBusy(false); return; }
       const headers = [
         "Fecha","Chofer","Patente","Vehículo","Tipología","SC","Zona","ID Ruta","Ciclo",
-        "Km","Km Real","Envíos despachados","Envíos entregados","NS%","% Visitado","% Visitado Real","No visitado %","Categoría NS",
+        "Km","Km Real","Envíos despachados","Envíos entregados","NS%","% Visitado","% Visitado Real","% No Visitado Real","No visitado %","Categoría NS",
         "Tarifa base","Ajuste NS","Estado auxiliar","Snapshots con helper","$ Auxiliar",
         "Pago bruto","Pago neto","Pago MELI","Observaciones"
       ];
       const aoa = [headers, ...filas.map(p => [
         p.fecha, p.driver_name, p.placa, p.vehiculo_raw, p.tipologia, p.service_center_id, p.zona,
         p.id_ruta, p.ciclo, p.km_recorridos, p.km_recorridos_meli, p.envios_despachados, p.envios_entregados,
-        p.ns_pct, p.pct_visitado, p.pct_visitado_real, p.ns_no_visitado, p.ns_categoria, p.tarifa_base, p.ajuste_ns,
+        p.ns_pct, p.pct_visitado, p.pct_visitado_real, (p.pct_visitado_real != null ? Math.round((100 - Number(p.pct_visitado_real)) * 100) / 100 : ""), p.ns_no_visitado, p.ns_categoria, p.tarifa_base, p.ajuste_ns,
         p.auxiliar_estado, p.auxiliar_snapshots_total, p.monto_auxiliar,
         p.pago_bruto, p.pago_neto, p.pago_meli, (p.observaciones || "").replace(/[\r\n]+/g, " ")
       ])];
