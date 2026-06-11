@@ -19577,11 +19577,12 @@ function AyudantesDetalleDia() {
     return t.join(" ");
   };
 
-  // ── Rutas con helper según snapshots (para detectar gaps del flujo de entregas) ──
+  // ── Rutas con helper AL CIERRE según snapshots (universo oficial de la vista) ──
+  const MOMENTOS_CIERRE = ["pre_cierre", "cierre_dia", "post_cierre"];
   const rutasSnapHelper = useMemo(() => {
     const m = {};
     for (const s of snapshots) {
-      if (s.has_helper) {
+      if (s.has_helper && MOMENTOS_CIERRE.includes(s.momento_dia)) {
         const k = String(s.id_ruta);
         if (!m[k]) m[k] = { id_ruta: s.id_ruta, sc: s.service_center_id, driver_name: s.driver_name, placa: s.placa };
       }
@@ -19624,8 +19625,8 @@ function AyudantesDetalleDia() {
       const driverPaq = driverRows.reduce((a, p) => a + p.paquetes, 0);
       const tieneSnapHelper = !!rutasSnapHelper[String(r.id_ruta)];
 
-      // Solo rutas con helper: por entregas (alguien ≠ driver entregó) o por snapshot
-      if (helperRows.length === 0 && !tieneSnapHelper) continue;
+      // Universo oficial: solo rutas con helper flag al CIERRE (mismo criterio del scraper)
+      if (!tieneSnapHelper) continue;
 
       // Cruce contra snapshot: entregados esperados vs capturados (cobertura)
       const esperado = entregadosEsperados[String(r.id_ruta)] || null;
@@ -19927,7 +19928,7 @@ function AyudantesDetalleDia() {
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, flexWrap: "wrap", gap: 12 }}>
         <div>
           <div className="sec-title">Ayudantes — Entregas del Día</div>
-          <div className="sec-sub">Quién entregó cada ruta con helper: driver vs ayudante(s), con su % de entrega</div>
+          <div className="sec-sub">Rutas con helper al cierre: driver vs ayudante(s) con su % de entrega, validado contra el snapshot</div>
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           <div style={{ display: "flex", gap: 2, background: "#f1f5f9", borderRadius: 6, padding: 2 }}>
