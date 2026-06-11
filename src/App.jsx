@@ -17258,19 +17258,13 @@ function PoolMeliAmbulancias() {
 // PAGOS MADRE — wrapper con sub-tabs (Listado / Drivers / Ayudantes / Config)
 // ═══════════════════════════════════════════════════════════════════════════
 function TercerosMX() {
-  const [tab, setTab] = useState("inventario");
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [busqueda, setBusqueda] = useState("");
+  const [semanaFiltro, setSemanaFiltro] = useState("");
   const [cargando, setCargando] = useState(false);
   const [msg, setMsg] = useState(null);
-  const [expandida, setExpandida] = useState(null);
-  const [busca, setBusca] = useState("");
   const fileRef = useRef(null);
-  const semanaObjetivoRef = useRef(null);
-
-  const [cambios, setCambios] = useState([]);
-  const [loadingCambios, setLoadingCambios] = useState(false);
-  const [cargoVariaciones, setCargoVariaciones] = useState(false);
 
   useEffect(() => { cargar(); }, []);
   const cargar = async () => {
@@ -17282,40 +17276,18 @@ function TercerosMX() {
     setLoading(false);
   };
 
-  const cargarVariaciones = async () => {
-    setLoadingCambios(true);
-    try {
-      const { data } = await sb.from("vw_flota_cambios_empresa").select("*").limit(10000);
-      setCambios(data || []);
-    } catch (e) { console.error(e); setCambios([]); }
-    setLoadingCambios(false);
-    setCargoVariaciones(true);
-  };
-  useEffect(() => { if (tab === "variaciones" && !cargoVariaciones) cargarVariaciones(); }, [tab]);
-
-  const porSemana = {};
-  for (const r of rows) {
-    const s = r.semana != null ? Number(r.semana) : null;
-    if (s == null) continue;
-    if (!porSemana[s]) porSemana[s] = { filas: 0, placas: new Set(), empresas: new Set(), responsable: null, fecha: null };
-    const g = porSemana[s];
-    g.filas++;
-    if (r.placa) g.placas.add(r.placa);
-    if (r.empresa_transporte) g.empresas.add(r.empresa_transporte);
-    if (!g.responsable && r.responsable) g.responsable = r.responsable;
-    if (r.fecha_hora_envio && (!g.fecha || r.fecha_hora_envio > g.fecha)) g.fecha = r.fecha_hora_envio;
-  }
-
-  const semActual = semanaInventario(new Date().toISOString().slice(0, 10));
-  const conDatos = Object.keys(porSemana).map(Number);
-  const hasta = Math.max((semActual || 24) + 1, conDatos.length ? Math.max.apply(null, conDatos) : 24);
-  const lineas = [];
-  for (let s = 24; s <= hasta; s++) lineas.push(s);
-  lineas.sort((a, b) => b - a);
+  const semanas = Array.from(new Set(rows.map(r => r.semana).filter(v => v != null))).sort((a, b) => b - a);
+  const filtradas = rows.filter(r => {
+    if (semanaFiltro && String(r.semana) !== String(semanaFiltro)) return false;
+    if (!busqueda) return true;
+    const q = busqueda.toLowerCase();
+    return [r.placa, r.empresa_transporte, r.operacion, r.nombre_trabajador, r.curp_trabajador].some(v => String(v || "").toLowerCase().includes(q));
+  });
+  const empresas = new Set(filtradas.map(r => r.empresa_transporte).filter(Boolean));
+  const placas = new Set(filtradas.map(r => r.placa).filter(Boolean));
 
   const cargarExcel = async (file) => {
     if (!file) return;
-    const objetivo = semanaObjetivoRef.current;
     setCargando(true); setMsg(null);
     try {
       if (!window.XLSX) {
@@ -17365,10 +17337,7 @@ function TercerosMX() {
       }
       if (data.length === 0) { setMsg({ ok: false, txt: "No encontré filas con placa." }); setCargando(false); return; }
       const semanasFile = Array.from(new Set(data.map(d => d.semana).filter(v => v != null)));
-      if (objetivo != null && semanasFile.length && !semanasFile.includes(objetivo)) {
-        if (!confirm("Estás cargando en la línea de la semana " + objetivo + " (" + etiquetaSemanaInventario(objetivo) + "), pero el Excel trae la semana " + semanasFile.join(", ") + ".\n\nSe respetará la SEMANA del Excel. ¿Continuar igual?")) { setCargando(false); if (fileRef.current) fileRef.current.value = ""; semanaObjetivoRef.current = null; return; }
-      }
-      if (!confirm("Se cargarán " + data.length + " filas" + (semanasFile.length ? " de la semana " + semanasFile.join(", ") : "") + ".\n\nSe reemplazará lo que haya de esa(s) semana(s). ¿Continuar?")) { setCargando(false); semanaObjetivoRef.current = null; return; }
+      if (!confirm(`Se cargarán ${data.length} filas${semanasFile.length ? ` de la semana ${semanasFile.join(", ")}` : ""}.\n\nSe reemplazará lo que haya de esa(s) semana(s). ¿Continuar?`)) { setCargando(false); return; }
       for (const sem of semanasFile) {
         const { error } = await sb.from("flota_terceros_mx").delete().eq("semana", sem);
         if (error) throw error;
@@ -17380,149 +17349,76 @@ function TercerosMX() {
         if (error) throw error;
         ok += chunk.length;
       }
-      setMsg({ ok: true, txt: "Cargadas " + ok + " filas" + (semanasFile.length ? " (semana " + semanasFile.join(", ") + ")" : "") + "." });
+      setMsg({ ok: true, txt: `Cargadas ${ok} filas${semanasFile.length ? ` (semana ${semanasFile.join(", ")})` : ""}.` });
       cargar();
     } catch (e) {
       console.error(e);
       setMsg({ ok: false, txt: "Error al cargar: " + (e.message || e) });
     }
     setCargando(false);
-    semanaObjetivoRef.current = null;
     if (fileRef.current) fileRef.current.value = "";
   };
 
   if (loading) return <div style={{ textAlign: "center", padding: 40, color: "#94a3b8" }}>Cargando...</div>;
 
-  const detalleSemana = (s) => {
-    const q = busca.trim().toLowerCase();
-    return rows.filter(r => Number(r.semana) === s && (!q || [r.placa, r.empresa_transporte, r.operacion, r.cargo, r.nombre_trabajador, r.curp_trabajador].some(v => String(v || "").toLowerCase().includes(q))));
-  };
-
-  const cambiosOrden = cambios.slice().sort((a, b) => (b.semana_cambio || 0) - (a.semana_cambio || 0) || String(a.placa_norm).localeCompare(String(b.placa_norm)));
-
   return (
     <div style={{ padding: 24 }}>
-      <input ref={fileRef} type="file" accept=".xlsx,.xls" style={{ display: "none" }} onChange={e => cargarExcel(e.target.files && e.target.files[0])} />
-
-      <div style={{ marginBottom: 14 }}>
-        <div style={{ fontSize: 15, fontWeight: 700, color: "#1a3a6b" }}>Terceros — Inventario de flota por semana</div>
-        <div style={{ fontSize: 11, color: "#94a3b8" }}>El inventario de cada semana operada alimenta la empresa por patente en el Listado de Pagos</div>
+      <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: 14, marginBottom: 14, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <div style={{ flex: 1, minWidth: 240 }}>
+          <div style={{ fontSize: 15, fontWeight: 700, color: "#1a3a6b", marginBottom: 4 }}>Terceros — Empresas por Patente</div>
+          <div style={{ fontSize: 11, color: "#94a3b8" }}>Base de patentes y empresas subcontratadas · alimenta el pago por empresa</div>
+        </div>
+        <input ref={fileRef} type="file" accept=".xlsx,.xls" style={{ display: "none" }} onChange={e => cargarExcel(e.target.files && e.target.files[0])} />
+        <button onClick={() => fileRef.current && fileRef.current.click()} disabled={cargando}
+          style={{ padding: "9px 16px", borderRadius: 4, border: "none", background: cargando ? "#94a3b8" : "#16a34a", color: "#fff", fontSize: 12, fontWeight: 600, cursor: cargando ? "wait" : "pointer" }}>
+          {cargando ? "Cargando..." : "Cargar Excel"}
+        </button>
       </div>
-
-      <div style={{ display: "flex", gap: 6, marginBottom: 14, borderBottom: "1px solid #e4e7ec" }}>
-        {[["inventario", "Inventario de Flota"], ["variaciones", "Variaciones"]].map(([id, lbl]) => (
-          <button key={id} onClick={() => setTab(id)}
-            style={{ padding: "8px 16px", border: "none", borderBottom: tab === id ? "2px solid #1a3a6b" : "2px solid transparent", background: "none", color: tab === id ? "#1a3a6b" : "#94a3b8", fontSize: 13, fontWeight: 600, cursor: "pointer", marginBottom: -1 }}>
-            {lbl}
-          </button>
+      {msg && (<div style={{ background: msg.ok ? "#ecfdf5" : "#fef2f2", border: `1px solid ${msg.ok ? "#a7f3d0" : "#fca5a5"}`, color: msg.ok ? "#065f46" : "#991b1b", borderRadius: 6, padding: 10, marginBottom: 14, fontSize: 12 }}>{msg.txt}</div>)}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: 10, marginBottom: 14 }}>
+        {[["Filas", filtradas.length], ["Patentes", placas.size], ["Empresas", empresas.size], ["Semanas", semanas.length]].map(([l, v]) => (
+          <div key={l} style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: "12px 14px" }}>
+            <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>{l}</div>
+            <div style={{ fontSize: 22, fontWeight: 700, color: "#1a3a6b", marginTop: 2 }}>{v}</div>
+          </div>
         ))}
       </div>
-
-      {msg && (<div style={{ background: msg.ok ? "#ecfdf5" : "#fef2f2", border: "1px solid " + (msg.ok ? "#a7f3d0" : "#fca5a5"), color: msg.ok ? "#065f46" : "#991b1b", borderRadius: 6, padding: 10, marginBottom: 14, fontSize: 12 }}>{msg.txt}</div>)}
-
-      {tab === "inventario" && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          {lineas.map(s => {
-            const g = porSemana[s];
-            const cargado = !!g && g.placas.size > 0;
-            const esActual = semanaInventarioEsActual(s);
-            const abierta = expandida === s;
-            return (
-              <div key={s} style={{ background: "#fff", border: "1px solid " + (cargado ? "#e4e7ec" : "#fde68a"), borderRadius: 8, overflow: "hidden" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px" }}>
-                  <div style={{ width: 10, height: 10, borderRadius: "50%", background: cargado ? "#16a34a" : "#f59e0b", flexShrink: 0 }} />
-                  <div style={{ flex: 1, minWidth: 200 }}>
-                    <div style={{ fontSize: 14, fontWeight: 700, color: "#1a3a6b" }}>
-                      Semana {etiquetaSemanaInventario(s)}
-                      {esActual && <span style={{ marginLeft: 8, fontSize: 9, fontWeight: 700, color: "#1d4ed8", background: "#dbeafe", padding: "2px 6px", borderRadius: 10, textTransform: "uppercase" }}>En curso</span>}
-                      <span style={{ marginLeft: 8, fontSize: 10, color: "#94a3b8", fontWeight: 500 }}>· sem {s}</span>
-                    </div>
-                    <div style={{ fontSize: 11, color: cargado ? "#16a34a" : "#b45309", marginTop: 2 }}>
-                      {cargado
-                        ? "\u2713 Cargado · " + g.placas.size + " patentes · " + g.empresas.size + " empresas" + (g.fecha ? " · subido " + new Date(g.fecha).toLocaleDateString("es-MX") : "")
-                        : "Pendiente de carga"}
-                    </div>
-                  </div>
-                  {cargado && (
-                    <button onClick={() => setExpandida(abierta ? null : s)}
-                      style={{ padding: "7px 12px", borderRadius: 4, border: "1px solid #e4e7ec", background: "#fff", color: "#475569", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>
-                      {abierta ? "Ocultar" : "Ver detalle"}
-                    </button>
-                  )}
-                  <button onClick={() => { semanaObjetivoRef.current = s; fileRef.current && fileRef.current.click(); }} disabled={cargando}
-                    style={{ padding: "7px 14px", borderRadius: 4, border: "none", background: cargando ? "#94a3b8" : (cargado ? "#475569" : "#16a34a"), color: "#fff", fontSize: 11, fontWeight: 600, cursor: cargando ? "wait" : "pointer", whiteSpace: "nowrap" }}>
-                    {cargado ? "Reemplazar Excel" : "Cargar Excel"}
-                  </button>
-                </div>
-                {abierta && cargado && (
-                  <div style={{ borderTop: "1px solid #f0f0f0", padding: "10px 16px", background: "#fbfcfe" }}>
-                    <input type="text" placeholder="Buscar placa / empresa / SC / trabajador..." value={busca} onChange={e => setBusca(e.target.value)}
-                      style={{ border: "1px solid #e4e7ec", borderRadius: 4, padding: "6px 10px", fontSize: 12, width: "100%", maxWidth: 360, marginBottom: 10 }} />
-                    <div style={{ overflow: "auto", border: "1px solid #e4e7ec", borderRadius: 6 }}>
-                      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, minWidth: 820 }}>
-                        <thead>
-                          <tr style={{ background: "#f8fafc", borderBottom: "1px solid #e4e7ec" }}>
-                            {["Placa", "Empresa", "SC", "Tipo", "Cargo", "Trabajador", "Validación MELI"].map(h => (
-                              <th key={h} style={{ padding: "8px 10px", textAlign: "left", fontSize: 10, color: "#64748b", fontWeight: 600, whiteSpace: "nowrap" }}>{h}</th>
-                            ))}
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {detalleSemana(s).slice(0, 2000).map(r => (
-                            <tr key={r.id} style={{ borderBottom: "1px solid #f0f0f0" }}>
-                              <td style={{ padding: "6px 10px", fontWeight: 600 }}>{r.placa}</td>
-                              <td style={{ padding: "6px 10px" }}>{r.empresa_transporte}</td>
-                              <td style={{ padding: "6px 10px" }}>{r.operacion}</td>
-                              <td style={{ padding: "6px 10px" }}>{r.tipo_vehiculo}</td>
-                              <td style={{ padding: "6px 10px" }}>{r.cargo}</td>
-                              <td style={{ padding: "6px 10px" }}>{r.nombre_trabajador}</td>
-                              <td style={{ padding: "6px 10px" }}>{r.validacion_meli}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      {tab === "variaciones" && (
-        <div>
-          <div style={{ fontSize: 11, color: "#94a3b8", marginBottom: 10 }}>
-            Patentes que cambiaron de empresa entre una semana y la siguiente. Se actualiza al cargar una semana nueva.
-          </div>
-          {loadingCambios && <div style={{ textAlign: "center", padding: 30, color: "#94a3b8" }}>Cargando variaciones...</div>}
-          {!loadingCambios && (
-            <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, overflow: "auto" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, minWidth: 760 }}>
-                <thead>
-                  <tr style={{ background: "#f8fafc", borderBottom: "1px solid #e4e7ec" }}>
-                    {["Placa", "De (semana)", "A (semana)", "Empresa anterior", "Empresa nueva"].map(h => (
-                      <th key={h} style={{ padding: "8px 10px", textAlign: "left", fontSize: 10, color: "#64748b", fontWeight: 600, whiteSpace: "nowrap" }}>{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {cambiosOrden.length === 0 && (<tr><td colSpan={5} style={{ padding: 24, textAlign: "center", color: "#94a3b8" }}>Sin variaciones registradas. Aparecerán cuando cargues una semana nueva y una placa cambie de empresa.</td></tr>)}
-                  {cambiosOrden.map((c, i) => (
-                    <tr key={i} style={{ borderBottom: "1px solid #f0f0f0" }}>
-                      <td style={{ padding: "6px 10px", fontWeight: 600 }}>{c.placa_norm}</td>
-                      <td style={{ padding: "6px 10px", color: "#64748b" }}>{c.semana_previa != null ? etiquetaSemanaInventario(c.semana_previa) : "\u2014"}</td>
-                      <td style={{ padding: "6px 10px", color: "#64748b" }}>{c.semana_cambio != null ? etiquetaSemanaInventario(c.semana_cambio) : "\u2014"}</td>
-                      <td style={{ padding: "6px 10px", color: "#991b1b" }}>{c.empresa_previa}</td>
-                      <td style={{ padding: "6px 10px", color: "#065f46", fontWeight: 600 }}>{c.empresa_actual}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-      )}
+      <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
+        <select value={semanaFiltro} onChange={e => setSemanaFiltro(e.target.value)} style={{ border: "1px solid #e4e7ec", borderRadius: 4, padding: "7px 10px", fontSize: 12 }}>
+          <option value="">Todas las semanas</option>
+          {semanas.map(s => <option key={s} value={s}>Semana {s}</option>)}
+        </select>
+        <input type="text" placeholder="Buscar placa / empresa / SC / trabajador..." value={busqueda} onChange={e => setBusqueda(e.target.value)}
+          style={{ border: "1px solid #e4e7ec", borderRadius: 4, padding: "7px 10px", fontSize: 12, flex: 1, minWidth: 240 }} />
+      </div>
+      <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, overflow: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, minWidth: 1000 }}>
+          <thead>
+            <tr style={{ background: "#f8fafc", borderBottom: "1px solid #e4e7ec" }}>
+              {["Sem", "Placa", "Empresa", "SC", "Tipo", "Cargo", "Trabajador", "Flota", "Validación MELI"].map(h => (
+                <th key={h} style={{ padding: "8px 10px", textAlign: "left", fontSize: 10, color: "#64748b", fontWeight: 600, whiteSpace: "nowrap" }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {filtradas.length === 0 && (<tr><td colSpan={9} style={{ padding: 24, textAlign: "center", color: "#94a3b8" }}>Sin datos. Cargá un Excel con el inventario de flota.</td></tr>)}
+            {filtradas.slice(0, 2000).map(r => (
+              <tr key={r.id} style={{ borderBottom: "1px solid #f0f0f0" }}>
+                <td style={{ padding: "6px 10px" }}>{r.semana}</td>
+                <td style={{ padding: "6px 10px", fontWeight: 600 }}>{r.placa}</td>
+                <td style={{ padding: "6px 10px" }}>{r.empresa_transporte}</td>
+                <td style={{ padding: "6px 10px" }}>{r.operacion}</td>
+                <td style={{ padding: "6px 10px" }}>{r.tipo_vehiculo}</td>
+                <td style={{ padding: "6px 10px" }}>{r.cargo}</td>
+                <td style={{ padding: "6px 10px" }}>{r.nombre_trabajador}</td>
+                <td style={{ padding: "6px 10px" }}>{r.flota}</td>
+                <td style={{ padding: "6px 10px" }}>{r.validacion_meli}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {filtradas.length > 2000 && (<div style={{ padding: 10, fontSize: 11, color: "#94a3b8", textAlign: "center" }}>Mostrando 2000 de {filtradas.length} filas. Usá los filtros para acotar.</div>)}
+      </div>
     </div>
   );
 }
@@ -17621,44 +17517,6 @@ function normalizarPlaca(p) {
   if (!p) return null;
   const s = String(p).trim().toUpperCase().replace(/^SDD-/, "");
   return s || null;
-}
-
-// Tipo de ruta inferido para una fila de pagos, por prefijo de patente (SDD-/SPOT-/MLP-).
-// maestro_jornada_mx no guarda es_sdd/tipo_ruta; el unico indicio en la fila es la placa.
-function tipoRutaDeFila(placa) {
-  const s = String(placa || "").trim().toUpperCase();
-  if (s.startsWith("SDD-")) return "SDD";
-  if (s.startsWith("SPOT-") || s.startsWith("MLP-")) return "SPOT";
-  return null;
-}
-
-// === Modelo de semanas de inventario de flota (Terceros) ===
-// Ancla: semana 24 = lunes 2026-06-01 a domingo 2026-06-07. 25 = 8-14 jun, etc.
-function _fechaUtcSem(iso) { return new Date(String(iso).slice(0, 10) + "T12:00:00Z"); }
-function semanaInventario(fechaIso) {
-  if (!fechaIso) return null;
-  const d = _fechaUtcSem(fechaIso);
-  if (isNaN(d.getTime())) return null;
-  const off = (d.getUTCDay() + 6) % 7;
-  const lunes = new Date(d.getTime() - off * 86400000);
-  const ancla = _fechaUtcSem("2026-06-01");
-  return 24 + Math.round((lunes.getTime() - ancla.getTime()) / (7 * 86400000));
-}
-function rangoSemanaInventario(sem) {
-  const ancla = _fechaUtcSem("2026-06-01");
-  const inicio = new Date(ancla.getTime() + (Number(sem) - 24) * 7 * 86400000);
-  const fin = new Date(inicio.getTime() + 6 * 86400000);
-  return { inicio, fin };
-}
-function etiquetaSemanaInventario(sem) {
-  const M = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
-  const { inicio, fin } = rangoSemanaInventario(sem);
-  const di = inicio.getUTCDate(), mi = M[inicio.getUTCMonth()];
-  const df = fin.getUTCDate(), mf = M[fin.getUTCMonth()];
-  return mi === mf ? (di + "\u2013" + df + " " + mi) : (di + " " + mi + " \u2013 " + df + " " + mf);
-}
-function semanaInventarioEsActual(sem) {
-  return semanaInventario(new Date().toISOString().slice(0, 10)) === Number(sem);
 }
 
 // Convierte tipología a la forma usada en tarifas_especiales_mx (Title Case)
@@ -17829,6 +17687,12 @@ function calcularPagos({ maestro, snapshots, scZonas, especiales, matrizPrecios,
     // Km: reales según MELI con fallback a planificado
     const km = Number(m.km_meli != null ? m.km_meli : (m.km_planificados || 0));
 
+    // Datos REALES de MELI (vienen de la vista; SOLO informativos, no afectan el calculo)
+    const kmRealMeli = m.km_recorridos_meli != null ? Number(m.km_recorridos_meli) : null;
+    const pctVisitadoReal = m.pct_no_visitado_real != null
+      ? Math.round((100 - Number(m.pct_no_visitado_real)) * 100) / 100
+      : null;
+
     // NS = entregados / cargados (equivalente a "Entrega exitosa")
     const cargados = Number(m.cargados || 0);
     const entregados = Number(m.entregados || 0);
@@ -17979,6 +17843,7 @@ function calcularPagos({ maestro, snapshots, scZonas, especiales, matrizPrecios,
       service_center_id: sc,
       zona,
       km_recorridos: km,
+      km_recorridos_meli: kmRealMeli,
       tramo_km: tramo,
       ciclo,
       envios_despachados: cargados,
@@ -17986,6 +17851,7 @@ function calcularPagos({ maestro, snapshots, scZonas, especiales, matrizPrecios,
       ns_pct: nsPct,
       ns_no_visitado: noVisitado,
       pct_visitado: pctVisitado,
+      pct_visitado_real: pctVisitadoReal,
       ns_categoria: nsCategoriaFinal,
       factor_ns: factorNS,
       tarifa_base: tarifaBase,
@@ -18039,11 +17905,9 @@ function ListadoPagosDiarios() {
   const [tablaWidth, setTablaWidth] = useState(1560);
   const [orderBy, setOrderBy] = useState("driver_name"); // columna por la que ordenar
   const [orderDir, setOrderDir] = useState("asc");
-  const [empresaMap, setEmpresaMap] = useState({}); // placa -> empresa (ultima semana, fallback)
-  const [empresaPorSemana, setEmpresaPorSemana] = useState({}); // { semana: { placaNorm: empresa } }
-  const [bonificaciones, setBonificaciones] = useState([]); // bonificaciones activas (Configuracion)
+  const [empresaMap, setEmpresaMap] = useState({}); // placa normalizada -> empresa (Terceros)
 
-  // Carga el mapa placa->empresa. empresaPorSemana resuelve por semana de inventario; empresaMap es el fallback.
+  // Carga el mapa placa->empresa desde flota_terceros_mx (semana mas reciente gana)
   useEffect(() => {
     let cancel = false;
     (async () => {
@@ -18051,68 +17915,13 @@ function ListadoPagosDiarios() {
         const { data } = await sb.from("flota_terceros_mx").select("placa, empresa_transporte, semana").limit(50000);
         if (cancel) return;
         const ord = (data || []).slice().sort((a, b) => (b.semana || 0) - (a.semana || 0));
-        const flat = {};
-        const porSem = {};
-        for (const r of ord) {
-          const k = normalizarPlaca(r.placa);
-          if (!k || !r.empresa_transporte) continue;
-          if (!(k in flat)) flat[k] = r.empresa_transporte;
-          const s = r.semana != null ? Number(r.semana) : null;
-          if (s != null) { porSem[s] = porSem[s] || {}; if (!(k in porSem[s])) porSem[s][k] = r.empresa_transporte; }
-        }
-        setEmpresaMap(flat);
-        setEmpresaPorSemana(porSem);
+        const m = {};
+        for (const r of ord) { const k = normalizarPlaca(r.placa); if (k && !(k in m) && r.empresa_transporte) m[k] = r.empresa_transporte; }
+        setEmpresaMap(m);
       } catch (e) { /* terceros opcional */ }
     })();
     return () => { cancel = true; };
   }, []);
-
-  // Empresa de una placa segun la SEMANA de la fecha de la ruta (fallback: ultima semana cargada <= esa).
-  const resolverEmpresaSemana = (placa, fechaRuta) => {
-    const k = normalizarPlaca(placa);
-    if (!k) return null;
-    const sem = semanaInventario(fechaRuta);
-    if (sem != null && empresaPorSemana[sem] && empresaPorSemana[sem][k]) return empresaPorSemana[sem][k];
-    if (sem != null) {
-      const semsDesc = Object.keys(empresaPorSemana).map(Number).filter(s => s <= sem).sort((a, b) => b - a);
-      for (const s of semsDesc) { if (empresaPorSemana[s][k]) return empresaPorSemana[s][k]; }
-    }
-    return empresaMap[k] || null;
-  };
-
-  // Carga las bonificaciones activas (Configuracion -> Bonificaciones)
-  useEffect(() => {
-    let cancel = false;
-    (async () => {
-      try {
-        const { data } = await sb.from("bonificaciones_mx").select("*").eq("activo", true);
-        if (!cancel) setBonificaciones(data || []);
-      } catch (e) { /* bonificaciones opcional */ }
-    })();
-    return () => { cancel = true; };
-  }, []);
-
-  // Mejor bonificacion (mayor %) que aplica a una fila de pagos, o null.
-  const bonoDeFila = (r) => {
-    if (!bonificaciones.length) return null;
-    const fr = r.fecha || fecha;
-    const sc = r.service_center_id || "";
-    const km = Number(r.km_recorridos || 0);
-    const tipo = tipoRutaDeFila(r.placa);
-    let mejor = null;
-    for (const b of bonificaciones) {
-      if (b.activo === false) continue;
-      if (b.fecha_desde && fr < b.fecha_desde) continue;
-      if (b.fecha_hasta && fr > b.fecha_hasta) continue;
-      const scs = Array.isArray(b.scs) ? b.scs : [];
-      if (scs.length && !scs.includes(sc)) continue;
-      if (b.tipo_ruta && b.tipo_ruta !== "AMBOS" && tipo !== b.tipo_ruta) continue;
-      if (b.km_min != null && b.km_min !== "" && km < Number(b.km_min)) continue;
-      if (b.km_max != null && b.km_max !== "" && km > Number(b.km_max)) continue;
-      if (!mejor || Number(b.pct_aumento || 0) > Number(mejor.pct_aumento || 0)) mejor = b;
-    }
-    return mejor;
-  };
 
   // Carga al montar y al cambiar fecha
   useEffect(() => {
@@ -18680,11 +18489,12 @@ function ListadoPagosDiarios() {
                 <Th onClick={() => toggleOrder("service_center_id")} center>SC · Zona{ordIcon("service_center_id")}</Th>
                 <Th onClick={() => toggleOrder("id_ruta")}>ID Ruta{ordIcon("id_ruta")}</Th>
                 <Th onClick={() => toggleOrder("km_recorridos")} right>Km{ordIcon("km_recorridos")}</Th>
+                <Th onClick={() => toggleOrder("km_recorridos_meli")} right>Km Real{ordIcon("km_recorridos_meli")}</Th>
                 <Th onClick={() => toggleOrder("ns_pct")} right>NS%{ordIcon("ns_pct")}</Th>
                 <Th onClick={() => toggleOrder("pct_visitado")} right>Visitado{ordIcon("pct_visitado")}</Th>
+                <Th onClick={() => toggleOrder("pct_visitado_real")} right>Visit. Real{ordIcon("pct_visitado_real")}</Th>
                 <Th onClick={() => toggleOrder("tarifa_base")} right>Tarifa{ordIcon("tarifa_base")}</Th>
                 <Th onClick={() => toggleOrder("ajuste_ns")} right>±NS{ordIcon("ajuste_ns")}</Th>
-                <Th right>Bonif.</Th>
                 <Th onClick={() => toggleOrder("auxiliar_estado")} center>Aux{ordIcon("auxiliar_estado")}</Th>
                 <Th onClick={() => toggleOrder("monto_auxiliar")} right>$Aux{ordIcon("monto_auxiliar")}</Th>
                 <Th onClick={() => toggleOrder("pago_neto")} right>Pago neto{ordIcon("pago_neto")}</Th>
@@ -18703,7 +18513,7 @@ function ListadoPagosDiarios() {
                     <td style={tdStyle(true)}>{r.driver_name || "—"}</td>
                     <td style={{ ...tdStyle(), fontFamily: "monospace", fontSize: 10 }}>{r.placa || "—"}</td>
                     <td style={{ ...tdStyle(), fontSize: 10, color: "#475569", maxWidth: 170, whiteSpace: "normal", lineHeight: 1.25 }}>
-                      {resolverEmpresaSemana(r.placa, r.fecha || fecha) || "—"}
+                      {empresaMap[normalizarPlaca(r.placa)] || "—"}
                     </td>
                     <td style={tdStyle()}>
                       <div style={{ fontSize: 10, color: "#475569" }}>{r.tipologia || "?"}</div>
@@ -18715,6 +18525,9 @@ function ListadoPagosDiarios() {
                     </td>
                     <td style={{ ...tdStyle(), fontFamily: "monospace", fontSize: 10 }}>{r.id_ruta}</td>
                     <td style={{ ...tdStyle(), textAlign: "right" }}>{Number(r.km_recorridos || 0).toFixed(1)}</td>
+                    <td style={{ ...tdStyle(), textAlign: "right", color: "#0369a1", fontWeight: 600 }}>
+                      {r.km_recorridos_meli != null ? Number(r.km_recorridos_meli).toFixed(1) : "\u2014"}
+                    </td>
                     <td style={{ ...tdStyle(), textAlign: "right" }}>
                       <div>{fmtPct(r.ns_pct)}</div>
                       <div style={{ fontSize: 9, color: noPagada ? "#991b1b" : "#94a3b8", fontWeight: noPagada ? 600 : 400 }}>
@@ -18724,6 +18537,9 @@ function ListadoPagosDiarios() {
                     <td style={{ ...tdStyle(), textAlign: "right", color: noPagada ? "#991b1b" : "#475569", fontWeight: noPagada ? 600 : 400 }}>
                       {r.pct_visitado != null ? fmtPct(r.pct_visitado) : "—"}
                     </td>
+                    <td style={{ ...tdStyle(), textAlign: "right", color: "#0369a1", fontWeight: 600 }}>
+                      {r.pct_visitado_real != null ? fmtPct(r.pct_visitado_real) : "—"}
+                    </td>
                     <td style={{ ...tdStyle(), textAlign: "right", textDecoration: noPagada ? "line-through" : undefined, color: noPagada ? "#94a3b8" : undefined }}>
                       {fmtMXN(r.tarifa_base)}
                       {r.tiene_tarifa_especial && <div style={{ fontSize: 8, color: "#7c3aed", fontWeight: 600 }}>ESP</div>}
@@ -18731,19 +18547,6 @@ function ListadoPagosDiarios() {
                     <td style={{ ...tdStyle(), textAlign: "right", color: noPagada ? "#94a3b8" : (Number(r.ajuste_ns) >= 0 ? "#16a34a" : "#dc2626"), textDecoration: noPagada ? "line-through" : undefined }}>
                       {Number(r.ajuste_ns) >= 0 ? "+" : ""}{fmtMXN(r.ajuste_ns)}
                     </td>
-                    {(() => {
-                      const b = bonoDeFila(r);
-                      if (!b) return <td style={{ ...tdStyle(), textAlign: "right", color: "#94a3b8" }}>—</td>;
-                      const pct = Number(b.pct_aumento || 0);
-                      const monto = Number(r.tarifa_base || 0) * pct / 100;
-                      return (
-                        <td style={{ ...tdStyle(), textAlign: "right" }}>
-                          <div style={{ fontWeight: 700, color: "#7c3aed" }}>+{pct}%</div>
-                          <div style={{ fontSize: 8, color: "#94a3b8", maxWidth: 110, whiteSpace: "normal", lineHeight: 1.2 }}>{b.nombre}</div>
-                          <div style={{ fontSize: 9, color: "#7c3aed" }}>+{fmtMXN(monto)}</div>
-                        </td>
-                      );
-                    })()}
                     <td style={{ ...tdStyle(), textAlign: "center", fontSize: 9 }}>
                       <span style={{ ...badgeAux(r.auxiliar_estado) }}>{r.auxiliar_estado}</span>
                     </td>
@@ -18765,14 +18568,13 @@ function ListadoPagosDiarios() {
               {/* Fila de totales */}
               {filasFiltradas.length > 0 && (
                 <tr style={{ background: "#f1f5f9", borderTop: "2px solid #cbd5e1", fontWeight: 700 }}>
-                  <td colSpan={9} style={{ ...tdStyle(), textAlign: "right", color: "#1a3a6b" }}>
+                  <td colSpan={11} style={{ ...tdStyle(), textAlign: "right", color: "#1a3a6b" }}>
                     TOTAL · {filasFiltradas.length} rutas · {totales.choferes} choferes
                   </td>
                   <td style={{ ...tdStyle(), textAlign: "right", color: "#1a3a6b" }}>{fmtMXN(totales.tarifaBase)}</td>
                   <td style={{ ...tdStyle(), textAlign: "right", color: totales.ajusteNS >= 0 ? "#16a34a" : "#dc2626" }}>
                     {totales.ajusteNS >= 0 ? "+" : ""}{fmtMXN(totales.ajusteNS)}
                   </td>
-                  <td style={tdStyle()}></td>
                   <td style={tdStyle()}></td>
                   <td style={{ ...tdStyle(), textAlign: "right", color: "#1a3a6b" }}>{fmtMXN(totales.auxiliar)}</td>
                   <td style={{ ...tdStyle(), textAlign: "right", color: "#16a34a", fontSize: 13 }}>{fmtMXN(totales.pagoNeto)}</td>
@@ -20105,7 +19907,6 @@ function ConfiguracionPagos() {
           { id: "zonas", l: "Mapeo SC ↔ Zonas" },
           { id: "auxiliares", l: "Matriz Auxiliares" },
           { id: "ns", l: "Reglas NS" },
-          { id: "bonificaciones", l: "Bonificaciones" },
         ].map(t => (
           <button key={t.id} onClick={() => setSubtab(t.id)}
             style={{ padding: "7px 14px", borderRadius: 4, border: `1px solid ${subtab === t.id ? "#1a3a6b" : "#e4e7ec"}`,
@@ -20121,7 +19922,6 @@ function ConfiguracionPagos() {
       {subtab === "zonas" && <ConfigZonas />}
       {subtab === "auxiliares" && <ConfigMatrizAuxiliares />}
       {subtab === "ns" && <ConfigReglasNS />}
-      {subtab === "bonificaciones" && <ConfigBonificaciones />}
     </div>
   );
 }
@@ -20974,244 +20774,6 @@ function ConfigReglasNS() {
           <div>· Visitado entre {g("vis_min_pago", 90)}% y {g("vis_premio_min", 99.5)}% y NS &lt; {g("ns_castigo_max", 95)}% → <b style={{ color: "#dc2626" }}>−{g("ns_castigo_pct", 3)}%</b></div>
           <div>· Cualquier otro caso pagable → <b>0%</b></div>
         </div>
-      </div>
-    </div>
-  );
-}
-
-// ─── Config: Bonificaciones especiales de pago (CRUD bonificaciones_mx) ───────
-function ConfigBonificaciones() {
-  const SCS_OPERATIVOS = ["SMX1", "SMX6", "SMX7", "SMX8", "SMX9", "SMX10", "SHP1", "SQR1", "SVH1", "SPY1", "STL1", "STX1", "SCY1", "SCQ1"];
-  const VACIA = { nombre: "", fecha_desde: "", fecha_hasta: "", scs: [], tipo_ruta: "AMBOS", km_min: "", km_max: "", pct_aumento: "", activo: true };
-  const [lista, setLista] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [editando, setEditando] = useState(null); // objeto borrador (nuevo o existente) o null
-  const [guardando, setGuardando] = useState(false);
-  const [msg, setMsg] = useState(null);
-
-  useEffect(() => { cargar(); }, []);
-  const cargar = async () => {
-    setLoading(true);
-    try {
-      const { data, error } = await sb.from("bonificaciones_mx").select("*").order("id", { ascending: false });
-      if (error) throw error;
-      setLista(data || []);
-    } catch (e) { setMsg({ ok: false, txt: "Error cargando: " + (e.message || e) }); }
-    setLoading(false);
-  };
-
-  const nuevo = () => { setMsg(null); setEditando({ ...VACIA }); };
-  const editar = (b) => {
-    setMsg(null);
-    setEditando({
-      id: b.id,
-      nombre: b.nombre || "",
-      fecha_desde: b.fecha_desde || "",
-      fecha_hasta: b.fecha_hasta || "",
-      scs: Array.isArray(b.scs) ? b.scs : [],
-      tipo_ruta: b.tipo_ruta || "AMBOS",
-      km_min: b.km_min ?? "",
-      km_max: b.km_max ?? "",
-      pct_aumento: b.pct_aumento ?? "",
-      activo: b.activo !== false,
-    });
-  };
-  const cancelar = () => { setEditando(null); setMsg(null); };
-  const set = (k, v) => setEditando(p => ({ ...p, [k]: v }));
-  const toggleSC = (sc) => setEditando(p => {
-    const tiene = (p.scs || []).includes(sc);
-    return { ...p, scs: tiene ? p.scs.filter(x => x !== sc) : [...(p.scs || []), sc] };
-  });
-
-  const guardar = async () => {
-    if (!editando) return;
-    const e = editando;
-    if (!e.nombre || !e.nombre.trim()) { setMsg({ ok: false, txt: "Falta el nombre de la bonificacion." }); return; }
-    if (e.fecha_desde && e.fecha_hasta && e.fecha_hasta < e.fecha_desde) { setMsg({ ok: false, txt: "La fecha hasta es anterior a la fecha desde." }); return; }
-    const kmMin = e.km_min === "" ? null : Number(e.km_min);
-    const kmMax = e.km_max === "" ? null : Number(e.km_max);
-    if (kmMin != null && kmMax != null && kmMax < kmMin) { setMsg({ ok: false, txt: "El KM maximo es menor que el minimo." }); return; }
-    const pct = e.pct_aumento === "" ? 0 : Number(e.pct_aumento);
-    if (isNaN(pct)) { setMsg({ ok: false, txt: "El % de aumento es invalido." }); return; }
-    setGuardando(true); setMsg(null);
-    try {
-      const payload = {
-        nombre: e.nombre.trim(),
-        fecha_desde: e.fecha_desde || null,
-        fecha_hasta: e.fecha_hasta || null,
-        scs: e.scs || [],
-        tipo_ruta: e.tipo_ruta || "AMBOS",
-        km_min: kmMin,
-        km_max: kmMax,
-        pct_aumento: pct,
-        activo: e.activo !== false,
-      };
-      let error;
-      if (e.id) ({ error } = await sb.from("bonificaciones_mx").update(payload).eq("id", e.id));
-      else ({ error } = await sb.from("bonificaciones_mx").insert(payload));
-      if (error) throw error;
-      setMsg({ ok: true, txt: e.id ? "Bonificacion actualizada." : "Bonificacion creada." });
-      setEditando(null);
-      cargar();
-    } catch (err) { setMsg({ ok: false, txt: "Error: " + (err.message || err) }); }
-    setGuardando(false);
-  };
-
-  const toggleActivo = async (b) => {
-    try {
-      const { error } = await sb.from("bonificaciones_mx").update({ activo: !b.activo }).eq("id", b.id);
-      if (error) throw error;
-      cargar();
-    } catch (err) { setMsg({ ok: false, txt: "Error: " + (err.message || err) }); }
-  };
-  const eliminar = async (b) => {
-    if (!confirm(`Eliminar la bonificacion "${b.nombre}"?`)) return;
-    try {
-      const { error } = await sb.from("bonificaciones_mx").delete().eq("id", b.id);
-      if (error) throw error;
-      cargar();
-    } catch (err) { setMsg({ ok: false, txt: "Error: " + (err.message || err) }); }
-  };
-
-  const inp = { border: "1px solid #e4e7ec", borderRadius: 4, padding: "7px 9px", fontSize: 13, width: "100%", boxSizing: "border-box" };
-  const lbl = { fontSize: 11, color: "#64748b", fontWeight: 600, marginBottom: 4 };
-  const fmtRango = (b) => {
-    if (!b.fecha_desde && !b.fecha_hasta) return "Sin límite de fechas";
-    return `${b.fecha_desde || "…"} → ${b.fecha_hasta || "…"}`;
-  };
-  const fmtKm = (b) => {
-    if (b.km_min == null && b.km_max == null) return "Cualquier KM";
-    return `${b.km_min ?? "0"} – ${b.km_max ?? "∞"} km`;
-  };
-
-  if (loading) return <div style={{ textAlign: "center", padding: 40, color: "#94a3b8" }}>Cargando...</div>;
-
-  return (
-    <div>
-      <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: 14, marginBottom: 14, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-        <div style={{ flex: 1, minWidth: 240 }}>
-          <div style={{ fontSize: 14, fontWeight: 700, color: "#1a3a6b", marginBottom: 4 }}>Bonificaciones especiales de pago</div>
-          <div style={{ fontSize: 11, color: "#94a3b8" }}>Aumentos por SC, tipo de ruta y rango de KM, activables por toggle o rango de fechas · se muestran como columna en Listado de Pagos</div>
-        </div>
-        {!editando && <button onClick={nuevo} style={{ padding: "8px 16px", borderRadius: 4, border: "none", background: "#1a3a6b", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>+ Nueva bonificación</button>}
-      </div>
-
-      {msg && (<div style={{ background: msg.ok ? "#ecfdf5" : "#fef2f2", border: `1px solid ${msg.ok ? "#a7f3d0" : "#fca5a5"}`, color: msg.ok ? "#065f46" : "#991b1b", borderRadius: 6, padding: 10, marginBottom: 14, fontSize: 12 }}>{msg.txt}</div>)}
-
-      {editando && (
-        <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: 18, marginBottom: 14 }}>
-          <div style={{ fontSize: 13, fontWeight: 700, color: "#1a3a6b", marginBottom: 14 }}>{editando.id ? "Editar bonificación" : "Nueva bonificación"}</div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 14, marginBottom: 14 }}>
-            <div style={{ gridColumn: "1 / -1" }}>
-              <div style={lbl}>Nombre de la bonificación</div>
-              <input type="text" value={editando.nombre} onChange={ev => set("nombre", ev.target.value)} placeholder="Ej. Premio rutas largas SMX1" style={inp} />
-            </div>
-            <div>
-              <div style={lbl}>Fecha desde</div>
-              <input type="date" value={editando.fecha_desde} onChange={ev => set("fecha_desde", ev.target.value)} style={inp} />
-              <div style={{ fontSize: 9, color: "#94a3b8", marginTop: 3 }}>Vacío = sin límite</div>
-            </div>
-            <div>
-              <div style={lbl}>Fecha hasta</div>
-              <input type="date" value={editando.fecha_hasta} onChange={ev => set("fecha_hasta", ev.target.value)} style={inp} />
-              <div style={{ fontSize: 9, color: "#94a3b8", marginTop: 3 }}>Vacío = sin límite</div>
-            </div>
-            <div>
-              <div style={lbl}>Tipo de ruta</div>
-              <select value={editando.tipo_ruta} onChange={ev => set("tipo_ruta", ev.target.value)} style={inp}>
-                <option value="AMBOS">Ambos (SDD y SPOT)</option>
-                <option value="SDD">SDD</option>
-                <option value="SPOT">SPOT</option>
-              </select>
-            </div>
-            <div>
-              <div style={lbl}>% de aumento</div>
-              <input type="number" step="0.1" value={editando.pct_aumento} onChange={ev => set("pct_aumento", ev.target.value)} placeholder="5" style={inp} />
-            </div>
-            <div>
-              <div style={lbl}>KM mínimo</div>
-              <input type="number" step="0.1" value={editando.km_min} onChange={ev => set("km_min", ev.target.value)} placeholder="0" style={inp} />
-              <div style={{ fontSize: 9, color: "#94a3b8", marginTop: 3 }}>Vacío = sin mínimo</div>
-            </div>
-            <div>
-              <div style={lbl}>KM máximo</div>
-              <input type="number" step="0.1" value={editando.km_max} onChange={ev => set("km_max", ev.target.value)} placeholder="∞" style={inp} />
-              <div style={{ fontSize: 9, color: "#94a3b8", marginTop: 3 }}>Vacío = sin máximo</div>
-            </div>
-          </div>
-
-          <div style={{ marginBottom: 14 }}>
-            <div style={lbl}>Service Centers donde aplica <span style={{ color: "#94a3b8", fontWeight: 400 }}>(ninguno seleccionado = todos)</span></div>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 4 }}>
-              {SCS_OPERATIVOS.map(sc => {
-                const on = (editando.scs || []).includes(sc);
-                return (
-                  <button key={sc} onClick={() => toggleSC(sc)}
-                    style={{ padding: "5px 11px", borderRadius: 14, border: `1px solid ${on ? "#1a3a6b" : "#e4e7ec"}`, background: on ? "#1a3a6b" : "#fff", color: on ? "#fff" : "#475569", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>
-                    {sc}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
-            <label style={{ display: "flex", alignItems: "center", gap: 7, cursor: "pointer", fontSize: 12, color: "#475569", fontWeight: 600 }}>
-              <input type="checkbox" checked={editando.activo !== false} onChange={ev => set("activo", ev.target.checked)} />
-              Activa
-            </label>
-            <div style={{ flex: 1 }} />
-            <button onClick={cancelar} disabled={guardando} style={{ padding: "8px 16px", borderRadius: 4, border: "1px solid #e4e7ec", background: "#fff", color: "#475569", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Cancelar</button>
-            <button onClick={guardar} disabled={guardando} style={{ padding: "8px 16px", borderRadius: 4, border: "none", background: guardando ? "#94a3b8" : "#16a34a", color: "#fff", fontSize: 12, fontWeight: 600, cursor: guardando ? "wait" : "pointer" }}>{guardando ? "Guardando..." : "Guardar"}</button>
-          </div>
-        </div>
-      )}
-
-      <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, overflow: "hidden" }}>
-        {lista.length === 0 ? (
-          <div style={{ textAlign: "center", padding: 32, color: "#94a3b8", fontSize: 13 }}>Sin bonificaciones. Creá la primera con “+ Nueva bonificación”.</div>
-        ) : (
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-            <thead>
-              <tr style={{ background: "#f8fafc", borderBottom: "1px solid #e4e7ec", textAlign: "left", color: "#475569" }}>
-                <th style={{ padding: "9px 12px", fontWeight: 600 }}>Estado</th>
-                <th style={{ padding: "9px 12px", fontWeight: 600 }}>Nombre</th>
-                <th style={{ padding: "9px 12px", fontWeight: 600 }}>Vigencia</th>
-                <th style={{ padding: "9px 12px", fontWeight: 600 }}>Tipo</th>
-                <th style={{ padding: "9px 12px", fontWeight: 600 }}>KM</th>
-                <th style={{ padding: "9px 12px", fontWeight: 600 }}>SCs</th>
-                <th style={{ padding: "9px 12px", fontWeight: 600, textAlign: "right" }}>%</th>
-                <th style={{ padding: "9px 12px", fontWeight: 600, textAlign: "right" }}>Acciones</th>
-              </tr>
-            </thead>
-            <tbody>
-              {lista.map(b => (
-                <tr key={b.id} style={{ borderBottom: "1px solid #f0f0f0", opacity: b.activo ? 1 : 0.55 }}>
-                  <td style={{ padding: "9px 12px" }}>
-                    <button onClick={() => toggleActivo(b)} title="Activar / desactivar"
-                      style={{ width: 40, height: 22, borderRadius: 11, border: "none", cursor: "pointer", position: "relative", background: b.activo ? "#16a34a" : "#cbd5e1", transition: "background .15s" }}>
-                      <span style={{ position: "absolute", top: 2, left: b.activo ? 20 : 2, width: 18, height: 18, borderRadius: "50%", background: "#fff", transition: "left .15s" }} />
-                    </button>
-                  </td>
-                  <td style={{ padding: "9px 12px", fontWeight: 600, color: "#1a3a6b" }}>{b.nombre}</td>
-                  <td style={{ padding: "9px 12px", color: "#475569" }}>{fmtRango(b)}</td>
-                  <td style={{ padding: "9px 12px" }}>
-                    <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 4, background: "#ede9fe", color: "#6d28d9" }}>{b.tipo_ruta}</span>
-                  </td>
-                  <td style={{ padding: "9px 12px", color: "#475569" }}>{fmtKm(b)}</td>
-                  <td style={{ padding: "9px 12px", color: "#475569", maxWidth: 220 }}>
-                    {(Array.isArray(b.scs) && b.scs.length) ? b.scs.join(", ") : <span style={{ color: "#94a3b8" }}>Todos</span>}
-                  </td>
-                  <td style={{ padding: "9px 12px", textAlign: "right", fontWeight: 700, color: "#7c3aed" }}>+{Number(b.pct_aumento || 0)}%</td>
-                  <td style={{ padding: "9px 12px", textAlign: "right", whiteSpace: "nowrap" }}>
-                    <button onClick={() => editar(b)} style={{ padding: "5px 10px", marginRight: 6, borderRadius: 4, border: "1px solid #e4e7ec", background: "#fff", color: "#1a3a6b", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>Editar</button>
-                    <button onClick={() => eliminar(b)} style={{ padding: "5px 10px", borderRadius: 4, border: "1px solid #fca5a5", background: "#fff", color: "#dc2626", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>Eliminar</button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
       </div>
     </div>
   );
