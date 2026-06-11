@@ -17729,7 +17729,7 @@ function calcularPagos({ maestro, snapshots, scZonas, especiales, matrizPrecios,
     if (!tipologia) obs.push(`Tipología no reconocida: "${vehiculoRaw}"`);
     if (!zona) obs.push(`SC no mapeado en sc_zonas_mx: ${sc}`);
     if (pctVisitado == null) obs.push("Sin % visitado en el snapshot");
-    if (m.km_meli == null) obs.push("Km MELI ausente — se usó km planificado");
+    // km_meli (TMS) esta deprecado: el km de pago es el planificado por diseño y el real va en su columna. Ya no genera alerta.
     if (m.status_final && m.status_final !== "close") obs.push(`Status no cerrado: ${m.status_final} — revisar`);
 
     // Tarifa base
@@ -36006,3 +36006,4 @@ const CONFIG_IMPORTADOR_CL = {
     notas: "(opcional)",
   },
 };
+  
