@@ -18175,14 +18175,14 @@ function ListadoPagosDiarios() {
     if (filasFiltradas.length === 0) { alert("No hay datos para exportar"); return; }
     const headers = [
       "Fecha","Chofer","Patente","Vehículo","Tipología","SC","Zona","ID Ruta","Ciclo",
-      "Km","Envíos despachados","Envíos entregados","NS%","% Visitado","No visitado %","Categoría NS",
+      "Km","Km Real","Envíos despachados","Envíos entregados","NS%","% Visitado","% Visitado Real","No visitado %","Categoría NS",
       "Tarifa base","Ajuste NS","Estado auxiliar","Snapshots con helper","$ Auxiliar",
       "Pago bruto","Pago neto","Pago MELI","Observaciones"
     ];
     const rows = filasFiltradas.map(p => [
       p.fecha, p.driver_name, p.placa, p.vehiculo_raw, p.tipologia, p.service_center_id, p.zona,
-      p.id_ruta, p.ciclo, p.km_recorridos, p.envios_despachados, p.envios_entregados,
-      p.ns_pct, p.pct_visitado, p.ns_no_visitado, p.ns_categoria, p.tarifa_base, p.ajuste_ns,
+      p.id_ruta, p.ciclo, p.km_recorridos, p.km_recorridos_meli, p.envios_despachados, p.envios_entregados,
+      p.ns_pct, p.pct_visitado, p.pct_visitado_real, p.ns_no_visitado, p.ns_categoria, p.tarifa_base, p.ajuste_ns,
       p.auxiliar_estado, p.auxiliar_snapshots_total, p.monto_auxiliar,
       p.pago_bruto, p.pago_neto, p.pago_meli, (p.observaciones || "").replace(/[\r\n]+/g, " ")
     ]);
@@ -18216,14 +18216,14 @@ function ListadoPagosDiarios() {
       if (filas.length === 0) { alert(`No hay pagos guardados entre ${desde} y ${hasta}.`); setExcelBusy(false); return; }
       const headers = [
         "Fecha","Chofer","Patente","Vehículo","Tipología","SC","Zona","ID Ruta","Ciclo",
-        "Km","Envíos despachados","Envíos entregados","NS%","% Visitado","No visitado %","Categoría NS",
+        "Km","Km Real","Envíos despachados","Envíos entregados","NS%","% Visitado","% Visitado Real","No visitado %","Categoría NS",
         "Tarifa base","Ajuste NS","Estado auxiliar","Snapshots con helper","$ Auxiliar",
         "Pago bruto","Pago neto","Pago MELI","Observaciones"
       ];
       const aoa = [headers, ...filas.map(p => [
         p.fecha, p.driver_name, p.placa, p.vehiculo_raw, p.tipologia, p.service_center_id, p.zona,
-        p.id_ruta, p.ciclo, p.km_recorridos, p.envios_despachados, p.envios_entregados,
-        p.ns_pct, p.pct_visitado, p.ns_no_visitado, p.ns_categoria, p.tarifa_base, p.ajuste_ns,
+        p.id_ruta, p.ciclo, p.km_recorridos, p.km_recorridos_meli, p.envios_despachados, p.envios_entregados,
+        p.ns_pct, p.pct_visitado, p.pct_visitado_real, p.ns_no_visitado, p.ns_categoria, p.tarifa_base, p.ajuste_ns,
         p.auxiliar_estado, p.auxiliar_snapshots_total, p.monto_auxiliar,
         p.pago_bruto, p.pago_neto, p.pago_meli, (p.observaciones || "").replace(/[\r\n]+/g, " ")
       ])];
