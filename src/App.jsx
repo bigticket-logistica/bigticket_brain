@@ -17692,6 +17692,9 @@ function calcularPagos({ maestro, snapshots, scZonas, especiales, matrizPrecios,
     const pctVisitadoReal = m.pct_no_visitado_real != null
       ? Math.round((100 - Number(m.pct_no_visitado_real)) * 100) / 100
       : null;
+    // GATE DE PAGO: usa el visitado REAL (MELI route-detail) cuando existe;
+    // si no hay dato real, cae al visitado del maestro (comportamiento previo).
+    const pctVisitadoGate = pctVisitadoReal != null ? pctVisitadoReal : null;
 
     // NS = entregados / cargados (equivalente a "Entrega exitosa")
     const cargados = Number(m.cargados || 0);
@@ -17729,7 +17732,8 @@ function calcularPagos({ maestro, snapshots, scZonas, especiales, matrizPrecios,
     const tieneTarifaEspecial = tarifaInfo.fuente === "ESPECIAL";
 
     // Ajuste por matriz visitado × NS (reemplaza a matriz_ns)
-    const ajuste = calcularAjusteVisitadoNS(pctVisitado, nsPct, cfg);
+    const pctVisitadoEfectivo = pctVisitadoGate != null ? pctVisitadoGate : pctVisitado;
+    const ajuste = calcularAjusteVisitadoNS(pctVisitadoEfectivo, nsPct, cfg);
     const noPaga = ajuste.noPaga;
     const factorNS = 1 + (ajuste.pct / 100);
     const ajusteNS = tarifaBase * (ajuste.pct / 100);
@@ -17817,7 +17821,10 @@ function calcularPagos({ maestro, snapshots, scZonas, especiales, matrizPrecios,
     if (rutaNoOperada) obs.push(`🚫 NO OPERADA${m.motivo_no_operada ? `: ${m.motivo_no_operada}` : ""} — revisar antes de pagar`);
 
     // Descarte por visitado < 90% (reemplaza al viejo no_visitado > 10%)
-    if (noPaga) obs.push(`NO PAGADO: visitado ${pctVisitado != null ? pctVisitado.toFixed(2) : "?"}% < 90%`);
+    if (noPaga) obs.push(`NO PAGADO: visitado ${pctVisitadoEfectivo != null ? pctVisitadoEfectivo.toFixed(2) : "?"}% < 90% (${pctVisitadoGate != null ? "REAL MELI" : "maestro"})`);
+    if (pctVisitadoGate != null && pctVisitado != null && Math.abs(pctVisitadoGate - pctVisitado) >= 5) {
+      obs.push(`Visitado maestro ${pctVisitado.toFixed(1)}% vs real ${pctVisitadoGate.toFixed(1)}% — gate usó el REAL`);
+    }
 
     const pagoBruto = noPaga ? 0 : (tarifaBase + ajusteNS + montoAux);
     const descuentos = 0;
