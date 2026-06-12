@@ -17672,7 +17672,9 @@ function tipologiaTitleCase(t) {
 
 // Determina el tramo de km
 function determinarTramoKm(km) {
-  const k = Number(km) || 0;
+  // Trunca hacia abajo (piso): 100.05 -> 100, 100.9 -> 100, 101.0 -> 101.
+  // El tramo se fija con el km PLANIFICADO (el real es solo informativo).
+  const k = Math.floor(Number(km) || 0);
   if (k <= 100) return "0-100";
   if (k <= 150) return "101-150";
   if (k <= 200) return "151-200";
@@ -17975,7 +17977,7 @@ function calcularPagos({ maestro, snapshots, scZonas, especiales, matrizPrecios,
     let montoBono = 0;
     let bonoAplicado = null;
     if (!noPaga && Array.isArray(bonificaciones) && bonificaciones.length) {
-      const tipoR = tipoRutaDeFila(m.placa);
+      const tipoR = tipoRutaDeFila(placa);
       const kmR = Number(km || 0);
       let mejor = null;
       for (const b of bonificaciones) {
@@ -18066,10 +18068,11 @@ function calcularPagos({ maestro, snapshots, scZonas, especiales, matrizPrecios,
 
 // ─── Componente principal: Vista por RUTA ─────────────────────────────────
 function tipoRutaDeFila(placa) {
+  // Regla de negocio: SDD = placa con prefijo "SDD-". Todo lo demás = SPOT
+  // (otros prefijos o sin prefijo). Una placa vacía/nula no clasifica.
   const s = String(placa || "").trim().toUpperCase();
-  if (s.startsWith("SDD-")) return "SDD";
-  if (s.startsWith("SPOT-") || s.startsWith("MLP-")) return "SPOT";
-  return null;
+  if (!s) return null;
+  return s.startsWith("SDD-") ? "SDD" : "SPOT";
 }
 
 function ConfigBonificaciones() {
