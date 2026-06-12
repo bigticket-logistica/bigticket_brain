@@ -17297,6 +17297,619 @@ function semanaInventarioEsActual(sem) {
   return semanaInventario(new Date().toISOString().slice(0, 10)) === Number(sem);
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// CONCILIACIÓN SEMANAL TERCEROS — agrupa los viajes pagados de la semana
+// (maestro_jornada_mx) por empresa tercero (flota_terceros_mx de esa semana).
+// RPCs: get_conciliacion_terceros_resumen / get_conciliacion_terceros_detalle.
+// Placas sin inventario caen en la tarjeta "SIN EMPRESA ASOCIADA", donde el
+// analista las asigna (inserta en flota_terceros_mx) o crea la empresa nueva
+// (empresas_terceros_mx, que alimenta el header del PDF: RFC, supervisor, etc).
+// ═══════════════════════════════════════════════════════════════════════════
+const SIN_EMPRESA = "SIN EMPRESA ASOCIADA";
+const EMPRESA_FORM_VACIA = { id: null, nombre: "", rfc: "", supervisor: "", telefono: "", email_envio: "", direccion: "" };
+
+function ConciliacionTercerosMX({ usuario }) {
+  const [semana, setSemana] = useState(() => {
+    const s = semanaInventario(fechaOperativaOffset(0));
+    return s != null ? s - 1 : 24; // por defecto: la última semana cerrada (lun-dom anterior)
+  });
+  const [resumen, setResumen] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [expandida, setExpandida] = useState(null);          // nombre de empresa abierta
+  const [detalles, setDetalles] = useState({});              // empresa -> filas
+  const [loadingDetalle, setLoadingDetalle] = useState(false);
+  const [empresasMaster, setEmpresasMaster] = useState([]);  // empresas_terceros_mx
+  const [formEmpresa, setFormEmpresa] = useState(null);      // null = modal cerrado
+  const [guardandoEmpresa, setGuardandoEmpresa] = useState(false);
+  const [asignacionSel, setAsignacionSel] = useState({});    // placa -> empresa elegida
+  const [asignando, setAsignando] = useState(null);          // placa en proceso
+  const [cerrando, setCerrando] = useState(null);            // empresa en proceso de cierre
+  const [msg, setMsg] = useState(null);
+
+  const normEmp = (s) => String(s || "").trim().toUpperCase();
+  const fmtMon = (v) => "$ " + Math.round(Number(v || 0)).toLocaleString("es-CL");
+  const fmtPct = (v) => (v == null ? "—" : Number(v).toLocaleString("es-CL", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + "%");
+  const fmtKm = (v) => (v == null ? "—" : Number(v).toLocaleString("es-CL", { maximumFractionDigits: 1 }));
+  const fmtFactor = (v) => Number(v || 0).toLocaleString("es-CL", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const fmtFechaDDMM = (iso) => { const s = String(iso || "").slice(0, 10); const [y, m, d] = s.split("-"); return d && m && y ? `${d}-${m}-${y}` : s; };
+
+  const masterPorNorm = useMemo(() => {
+    const m = {};
+    for (const e of empresasMaster) m[normEmp(e.nombre)] = e;
+    return m;
+  }, [empresasMaster]);
+
+  const cargarResumen = async (sem) => {
+    setLoading(true); setMsg(null);
+    try {
+      const { data, error } = await sb.rpc("get_conciliacion_terceros_resumen", { p_semana: sem });
+      if (error) throw error;
+      setResumen(data || []);
+    } catch (e) {
+      console.error("resumen conciliación:", e);
+      setMsg({ ok: false, txt: "Error cargando resumen: " + (e.message || e) });
+      setResumen([]);
+    }
+    setLoading(false);
+  };
+
+  const cargarEmpresasMaster = async () => {
+    try {
+      const { data } = await sb.from("empresas_terceros_mx").select("*").eq("activo", true).order("nombre");
+      setEmpresasMaster(data || []);
+    } catch (e) { console.error("empresas_terceros_mx:", e); }
+  };
+
+  useEffect(() => { cargarResumen(semana); setExpandida(null); setDetalles({}); setAsignacionSel({}); }, [semana]);
+  useEffect(() => { cargarEmpresasMaster(); }, []);
+
+  const cargarDetalle = async (empresa) => {
+    if (detalles[empresa]) return;
+    setLoadingDetalle(true);
+    try {
+      const { data, error } = await sb.rpc("get_conciliacion_terceros_detalle", { p_semana: semana, p_empresa: empresa });
+      if (error) throw error;
+      setDetalles(prev => ({ ...prev, [empresa]: data || [] }));
+    } catch (e) {
+      console.error("detalle conciliación:", e);
+      setMsg({ ok: false, txt: "Error cargando detalle de " + empresa + ": " + (e.message || e) });
+    }
+    setLoadingDetalle(false);
+  };
+
+  const toggleEmpresa = (empresa) => {
+    if (expandida === empresa) { setExpandida(null); return; }
+    setExpandida(empresa);
+    cargarDetalle(empresa);
+  };
+
+  const refrescarTodo = async () => {
+    setDetalles({}); setAsignacionSel({});
+    await Promise.all([cargarResumen(semana), cargarEmpresasMaster()]);
+  };
+
+  // ── Asignación de placa a empresa (inserta en flota_terceros_mx, semana actual) ──
+  const asignarPlaca = async (placa, filasPlaca) => {
+    const eleccion = asignacionSel[placa];
+    if (!eleccion) return alert("Elegí una empresa para la placa " + placa);
+    if (eleccion === "__nueva__") { setFormEmpresa({ ...EMPRESA_FORM_VACIA }); return; }
+    if (!confirm(`¿Asignar la placa ${placa} a "${eleccion}" para la semana ${semana} (${etiquetaSemanaInventario(semana)})?`)) return;
+    setAsignando(placa);
+    try {
+      const sc = (filasPlaca && filasPlaca[0] && filasPlaca[0].service_center_id) || null;
+      const { error } = await sb.from("flota_terceros_mx").insert({
+        semana,
+        placa: normalizarPlaca(placa),
+        empresa_transporte: eleccion,
+        operacion: sc ? "ML_MX_" + sc : null,
+        responsable: (usuario && (usuario.nombre || usuario.email)) || "Brain - Conciliación",
+        fecha_hora_envio: new Date().toISOString(),
+      });
+      if (error) throw error;
+      setMsg({ ok: true, txt: `Placa ${placa} asignada a ${eleccion} (semana ${semana}).` });
+      await refrescarTodo();
+    } catch (e) {
+      console.error("asignar placa:", e);
+      setMsg({ ok: false, txt: "Error asignando placa: " + (e.message || e) });
+    }
+    setAsignando(null);
+  };
+
+  // ── Crear / editar empresa (empresas_terceros_mx) ──
+  const guardarEmpresa = async () => {
+    const f = formEmpresa;
+    if (!f || !f.nombre.trim()) return alert("La razón social es obligatoria.");
+    if (!f.rfc.trim()) return alert("El RFC es obligatorio (va en el header del PDF).");
+    setGuardandoEmpresa(true);
+    try {
+      const payload = {
+        nombre: f.nombre.trim(),
+        rfc: f.rfc.trim() || null,
+        supervisor: f.supervisor.trim() || null,
+        telefono: f.telefono.trim() || null,
+        email_envio: f.email_envio.trim() || null,
+        direccion: f.direccion.trim() || null,
+        updated_at: new Date().toISOString(),
+      };
+      let error;
+      if (f.id) ({ error } = await sb.from("empresas_terceros_mx").update(payload).eq("id", f.id));
+      else ({ error } = await sb.from("empresas_terceros_mx").insert(payload));
+      if (error) throw error;
+      setMsg({ ok: true, txt: `Empresa "${f.nombre.trim()}" guardada.` });
+      setFormEmpresa(null);
+      await cargarEmpresasMaster();
+      await cargarResumen(semana);
+    } catch (e) {
+      console.error("guardar empresa:", e);
+      alert("Error guardando empresa: " + (e.message || e));
+    }
+    setGuardandoEmpresa(false);
+  };
+
+  // ── Cerrar / reabrir conciliación (congela detalle en conciliaciones_terceros) ──
+  const cerrarConciliacion = async (empresa) => {
+    const r = resumen.find(x => x.empresa === empresa);
+    const det = detalles[empresa];
+    if (!r || !det) return alert("Abrí primero el detalle de la empresa antes de cerrar.");
+    if (!confirm(`¿Cerrar la conciliación de "${empresa}" — semana ${semana} (${etiquetaSemanaInventario(semana)})?\n\nNeto: ${fmtMon(r.total_neto)} · Bruto: ${fmtMon(r.total_bruto)} · ${r.n_viajes} viajes (${r.n_no_pago} no pago).\n\nEl detalle queda congelado para el PDF y el envío.`)) return;
+    setCerrando(empresa);
+    try {
+      const master = masterPorNorm[normEmp(empresa)] || null;
+      const lunes = rangoSemanaInventario(semana).inicio.toISOString().slice(0, 10);
+      const ahora = new Date().toISOString();
+      const { error } = await sb.from("conciliaciones_terceros").upsert({
+        empresa_id: master ? master.id : null,
+        empresa_nombre: empresa,
+        semana,
+        semana_inicio: lunes,
+        estado: "cerrada",
+        total_neto: r.total_neto,
+        iva_16: r.iva_16,
+        total_bruto: r.total_bruto,
+        liquido_pago: r.total_bruto,
+        n_viajes: r.n_viajes,
+        n_no_pago: r.n_no_pago,
+        detalle: det,
+        generado_at: ahora,
+        cerrado_at: ahora,
+        cerrado_por: (usuario && (usuario.nombre || usuario.email)) || "Brain",
+      }, { onConflict: "empresa_nombre,semana" });
+      if (error) throw error;
+      setMsg({ ok: true, txt: `Conciliación de ${empresa} cerrada (semana ${semana}).` });
+      await cargarResumen(semana);
+    } catch (e) {
+      console.error("cerrar conciliación:", e);
+      setMsg({ ok: false, txt: "Error cerrando conciliación: " + (e.message || e) });
+    }
+    setCerrando(null);
+  };
+
+  const reabrirConciliacion = async (empresa) => {
+    if (!confirm(`¿Reabrir la conciliación de "${empresa}" — semana ${semana}? Volverá a estado borrador.`)) return;
+    try {
+      const { error } = await sb.from("conciliaciones_terceros")
+        .update({ estado: "borrador" }).eq("empresa_nombre", empresa).eq("semana", semana);
+      if (error) throw error;
+      await cargarResumen(semana);
+    } catch (e) { alert("Error reabriendo: " + (e.message || e)); }
+  };
+
+  // ── PDF (ventana de impresión; mismo template que usará el endpoint del VPS) ──
+  const generarPDF = (empresa) => {
+    const det = detalles[empresa];
+    const r = resumen.find(x => x.empresa === empresa);
+    if (!det || !r) return alert("Abrí primero el detalle de la empresa.");
+    const master = masterPorNorm[normEmp(empresa)] || {};
+    const { inicio, fin } = rangoSemanaInventario(semana);
+    const MESES = ["ENERO","FEBRERO","MARZO","ABRIL","MAYO","JUNIO","JULIO","AGOSTO","SEPTIEMBRE","OCTUBRE","NOVIEMBRE","DICIEMBRE"];
+    const periodo = `${String(inicio.getUTCDate()).padStart(2,"0")} DE ${MESES[inicio.getUTCMonth()]} AL ${String(fin.getUTCDate()).padStart(2,"0")} DE ${MESES[fin.getUTCMonth()]}`;
+    const mesFactura = MESES[fin.getUTCMonth()].toLowerCase() + "-" + String(fin.getUTCFullYear()).slice(2);
+    const scs = [...new Set(det.map(d => d.service_center_id).filter(Boolean))];
+    const operacion = scs.length === 1 ? "ML_MX_" + scs[0] : "ML_MX (" + scs.join(", ") + ")";
+
+    // Resumen por patente
+    const porPatente = {};
+    for (const d of det) {
+      const p = d.placa || "—";
+      if (!porPatente[p]) porPatente[p] = { entregados: 0, neto: 0 };
+      porPatente[p].entregados += Number(d.entregado || 0);
+      porPatente[p].neto += Number(d.monto || 0);
+    }
+    const noPagos = det.filter(d => d.es_no_pago);
+
+    const filasDetalle = det.map(d => `
+      <tr>
+        <td>${fmtFechaDDMM(d.fecha)}</td>
+        <td>${d.placa || ""}</td>
+        <td>${d.id_ruta || ""}</td>
+        <td style="text-align:left">${d.driver_name || ""}</td>
+        <td>${d.tiene_auxiliar ? "SI" : "NO"}</td>
+        <td>${d.service_center_id || ""}</td>
+        <td>${d.cargado ?? ""}</td>
+        <td>${d.entregado ?? ""}</td>
+        <td>${fmtPct(d.pct_entrega)}</td>
+        <td>${fmtKm(d.km_pago)}</td>
+        <td>${fmtFactor(d.factor_ns)}</td>
+        <td style="text-align:right">${d.es_no_pago ? "$ -" : fmtMon(d.monto)}</td>
+      </tr>`).join("");
+
+    const filasPatente = Object.entries(porPatente).map(([p, v]) => `
+      <tr><td>${p}</td><td>${v.entregados}</td><td style="text-align:right">${fmtMon(v.neto)}</td></tr>`).join("");
+
+    const obsHtml = noPagos.length ? `
+      <div class="obs">
+        <div class="obs-title">OBSERVACIONES — RUTAS NO PAGADAS (VISITA &lt; 90%)</div>
+        ${noPagos.map(d => `<div class="obs-row">${fmtFechaDDMM(d.fecha)} · ${d.placa} · Ruta ${d.id_ruta} · ${d.driver_name || ""} — ${d.motivo_no_pago || "NO PAGADO"} (cargado ${d.cargado}, entregado ${d.entregado}, entrega ${fmtPct(d.pct_entrega)})</div>`).join("")}
+      </div>` : "";
+
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Prefactura ${empresa} ${periodo}</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; font-family: Arial, Helvetica, sans-serif; }
+  body { padding: 28px 32px; color:#1a1a1a; font-size:11px; }
+  .head { display:flex; justify-content:space-between; align-items:flex-start; background:#F47B20; color:#fff; padding:14px 18px; border-radius:4px; }
+  .head h1 { font-size:26px; letter-spacing:1px; }
+  .head .sub { font-size:9px; margin-top:4px; line-height:1.5; font-weight:600; }
+  .logo { font-size:26px; font-weight:800; font-style:italic; }
+  .logo small { display:block; font-size:8px; letter-spacing:2px; font-style:normal; text-align:right; }
+  .cols { display:flex; justify-content:space-between; gap:24px; margin-top:16px; }
+  table { border-collapse:collapse; }
+  .info td { border:1px solid #cdd3dc; padding:4px 8px; font-size:10px; }
+  .info td.k { background:#e8ebf0; font-weight:700; width:170px; }
+  .info td.v { background:#f5f6f8; min-width:230px; }
+  .pat th { background:#404040; color:#fff; padding:4px 10px; font-size:9px; }
+  .pat td { border:1px solid #cdd3dc; padding:4px 10px; text-align:center; font-size:10px; }
+  .pat .tt { background:#595959; color:#fff; font-weight:700; text-align:center; padding:4px 10px; font-size:10px; }
+  .tot { margin-top:14px; }
+  .tot td { border:1px solid #cdd3dc; padding:4px 8px; font-size:10px; }
+  .tot td.k { background:#e8ebf0; font-weight:700; width:170px; }
+  .tot td.v { background:#f5f6f8; text-align:right; width:110px; font-weight:700; }
+  .det { margin-top:22px; width:100%; }
+  .det-title { font-weight:800; font-size:10px; margin-bottom:4px; color:#1a3a6b; }
+  .det th { background:#F47B20; color:#fff; padding:5px 6px; font-size:9px; }
+  .det td { padding:4px 6px; text-align:center; border-bottom:1px solid #eef0f3; font-size:10px; }
+  .obs { margin-top:18px; border:1px solid #fca5a5; background:#fef2f2; border-radius:4px; padding:10px 12px; }
+  .obs-title { font-weight:800; font-size:10px; color:#991b1b; margin-bottom:6px; }
+  .obs-row { font-size:10px; color:#7f1d1d; padding:2px 0; }
+  @media print { body { padding: 10mm 12mm; } .noprint { display:none; } }
+  .noprint { margin-top:24px; }
+  .noprint button { padding:8px 18px; background:#1a3a6b; color:#fff; border:none; border-radius:6px; font-size:13px; cursor:pointer; }
+</style></head><body>
+  <div class="head">
+    <div>
+      <h1>PREFACTURA</h1>
+      <div class="sub">ADMINISTRADORA DE SERVICIOS BIGTICKET MX S.A DE C.V<br/>
+      Servicios de mensajería y paquetería local<br/>
+      RFC: ASB250618323 // DIRECCION: Juan Vázquez de Mella 481, Miguel Hidalgo // CODIGO POSTAL: 11510 // REGIMEN: General de Ley de Personas Morales</div>
+    </div>
+    <div class="logo">bigticket<small>LOGÍSTICA Y TRANSPORTE</small></div>
+  </div>
+
+  <div class="cols">
+    <div>
+      <table class="info">
+        <tr><td class="k">EMPRESA TRANSPORTE:</td><td class="v">${empresa}</td></tr>
+        <tr><td class="k">RFC EMPRESA TRANSPORTE:</td><td class="v">${master.rfc || "—"}</td></tr>
+        <tr><td class="k">OPERACIÓN:</td><td class="v">${operacion}</td></tr>
+        <tr><td class="k">SUPERVISOR:</td><td class="v">${master.supervisor || "—"}</td></tr>
+        <tr><td class="k">PERIODO PREFACTURADO:</td><td class="v">${periodo}</td></tr>
+        <tr><td class="k">MES FACTURA:</td><td class="v">${mesFactura}</td></tr>
+        <tr><td class="k">VALOR UF:</td><td class="v">N/A</td></tr>
+      </table>
+      <table class="tot">
+        <tr><td class="k">TOTAL NETO A FACTURAR</td><td class="v">${fmtMon(r.total_neto)}</td></tr>
+        <tr><td class="k">IVA 16%</td><td class="v">${fmtMon(r.iva_16)}</td></tr>
+        <tr><td class="k">BRUTO FACTURA</td><td class="v">${fmtMon(r.total_bruto)}</td></tr>
+      </table>
+      <table class="tot">
+        <tr><td class="k">TOTAL COBROS</td><td class="v"></td></tr>
+        <tr><td class="k">LÍQUIDO PAGO</td><td class="v">${fmtMon(r.total_bruto)}</td></tr>
+      </table>
+    </div>
+    <div>
+      <table class="pat">
+        <tr><td class="tt" colspan="3">RESUMEN POR PATENTE:</td></tr>
+        <tr><th>PATENTE</th><th>ENTREGADOS</th><th>NETO PATENTE</th></tr>
+        ${filasPatente}
+      </table>
+    </div>
+  </div>
+
+  <div class="det-title" style="margin-top:22px">DETALLE DE VIAJES:</div>
+  <table class="det">
+    <tr><th>FECHA</th><th>PATENTE</th><th>ID RUTA</th><th>CONDUCTOR</th><th>AUXILIAR</th><th>SECTOR</th><th>CARGADO</th><th>ENTREGADO</th><th>%</th><th>KM PAGO</th><th>FACTOR</th><th>MONTO</th></tr>
+    ${filasDetalle}
+  </table>
+  ${obsHtml}
+  <div class="noprint"><button onclick="window.print()">Imprimir / Guardar PDF</button></div>
+</body></html>`;
+
+    const w = window.open("", "_blank");
+    if (!w) return alert("El navegador bloqueó la ventana emergente. Habilitá pop-ups para generar el PDF.");
+    w.document.write(html);
+    w.document.close();
+  };
+
+  // ── Render ──
+  const chipEstado = (estado) => {
+    const map = {
+      sin_generar: { bg: "#f1f5f9", fg: "#64748b", txt: "Sin generar" },
+      borrador:    { bg: "#fef9c3", fg: "#854d0e", txt: "Borrador" },
+      cerrada:     { bg: "#dcfce7", fg: "#166534", txt: "Cerrada" },
+      enviada:     { bg: "#dbeafe", fg: "#1e40af", txt: "Enviada" },
+    };
+    const c = map[estado] || map.sin_generar;
+    return <span style={{ background: c.bg, color: c.fg, fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 10 }}>{c.txt}</span>;
+  };
+
+  const opcionesEmpresas = useMemo(() => {
+    const set = new Set(empresasMaster.map(e => e.nombre));
+    for (const r of resumen) if (r.empresa && r.empresa !== SIN_EMPRESA) set.add(r.empresa);
+    return [...set].sort((a, b) => a.localeCompare(b));
+  }, [empresasMaster, resumen]);
+
+  const totalSemana = resumen.reduce((s, r) => s + Number(r.total_neto || 0), 0);
+  const totalViajes = resumen.reduce((s, r) => s + Number(r.n_viajes || 0), 0);
+  const sinEmpresa = resumen.find(r => r.empresa === SIN_EMPRESA);
+
+  const renderDetalleTabla = (det) => (
+    <div style={{ overflowX: "auto", marginTop: 10 }}>
+      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+        <thead>
+          <tr style={{ background: "#1a3a6b", color: "#fff" }}>
+            {["Fecha", "Patente", "ID Ruta", "Conductor", "Aux", "SC", "Cargado", "Entregado", "% Entrega", "% Visita", "KM Pago", "KM Real", "Factor", "Monto"].map(h => (
+              <th key={h} style={{ padding: "6px 8px", fontSize: 10, textAlign: h === "Conductor" ? "left" : "center", whiteSpace: "nowrap" }}>{h}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {det.map((d, i) => (
+            <tr key={i} style={{ borderBottom: "1px solid #eef0f3", background: d.es_no_pago ? "#fef2f2" : (i % 2 ? "#fafbfc" : "#fff") }}>
+              <td style={{ padding: "5px 8px", textAlign: "center", whiteSpace: "nowrap" }}>{fmtFechaDDMM(d.fecha)}</td>
+              <td style={{ padding: "5px 8px", textAlign: "center", fontWeight: 700 }}>{d.placa}</td>
+              <td style={{ padding: "5px 8px", textAlign: "center" }}>{d.id_ruta}</td>
+              <td style={{ padding: "5px 8px" }}>{d.driver_name}</td>
+              <td style={{ padding: "5px 8px", textAlign: "center" }}>{d.tiene_auxiliar ? "SI" : "NO"}</td>
+              <td style={{ padding: "5px 8px", textAlign: "center" }}>{d.service_center_id}</td>
+              <td style={{ padding: "5px 8px", textAlign: "center" }}>{d.cargado}</td>
+              <td style={{ padding: "5px 8px", textAlign: "center" }}>{d.entregado}</td>
+              <td style={{ padding: "5px 8px", textAlign: "center" }}>{fmtPct(d.pct_entrega)}</td>
+              <td style={{ padding: "5px 8px", textAlign: "center", fontWeight: 600, color: Number(d.pct_visitado_gate) < 90 ? "#dc2626" : "#16a34a" }}>{fmtPct(d.pct_visitado_gate)}</td>
+              <td style={{ padding: "5px 8px", textAlign: "center" }}>{fmtKm(d.km_pago)}</td>
+              <td style={{ padding: "5px 8px", textAlign: "center", color: "#94a3b8" }}>{fmtKm(d.km_real_meli)}</td>
+              <td style={{ padding: "5px 8px", textAlign: "center" }}>{fmtFactor(d.factor_ns)}</td>
+              <td style={{ padding: "5px 8px", textAlign: "right", fontWeight: 700, color: d.es_no_pago ? "#dc2626" : "#1a1a1a" }}>{d.es_no_pago ? "$ -" : fmtMon(d.monto)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+
+  return (
+    <div style={{ padding: 24 }}>
+      {/* Header + selector de semana */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 12, marginBottom: 14 }}>
+        <div>
+          <div style={{ fontSize: 15, fontWeight: 700, color: "#1a3a6b" }}>Conciliación Semanal Terceros</div>
+          <div style={{ fontSize: 11, color: "#94a3b8" }}>Viajes del Listado de Pagos agrupados por empresa según el inventario de flota de la semana · pagos, no pagos y PDF de prefactura</div>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <button onClick={() => setSemana(s => s - 1)} style={{ padding: "6px 10px", border: "1px solid #e4e7ec", background: "#fff", borderRadius: 6, cursor: "pointer", fontWeight: 700 }}>‹</button>
+          <div style={{ textAlign: "center", minWidth: 150 }}>
+            <div style={{ fontSize: 13, fontWeight: 800, color: "#1a3a6b" }}>Semana {semana}</div>
+            <div style={{ fontSize: 11, color: "#64748b" }}>{etiquetaSemanaInventario(semana)} · lun–dom</div>
+          </div>
+          <button onClick={() => setSemana(s => s + 1)} style={{ padding: "6px 10px", border: "1px solid #e4e7ec", background: "#fff", borderRadius: 6, cursor: "pointer", fontWeight: 700 }}>›</button>
+          <button onClick={refrescarTodo} style={{ marginLeft: 6, padding: "6px 12px", border: "1px solid #1a3a6b", background: "#fff", color: "#1a3a6b", borderRadius: 6, cursor: "pointer", fontSize: 12, fontWeight: 700 }}>↻ Refrescar</button>
+        </div>
+      </div>
+
+      {msg && (
+        <div style={{ background: msg.ok ? "#ecfdf5" : "#fef2f2", border: "1px solid " + (msg.ok ? "#a7f3d0" : "#fca5a5"), color: msg.ok ? "#065f46" : "#991b1b", borderRadius: 6, padding: 10, marginBottom: 14, fontSize: 12 }}>{msg.txt}</div>
+      )}
+
+      {/* KPIs de la semana */}
+      {!loading && resumen.length > 0 && (
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
+          {[
+            { label: "Empresas", valor: resumen.filter(r => r.empresa !== SIN_EMPRESA).length, color: "#1a3a6b" },
+            { label: "Viajes", valor: totalViajes.toLocaleString("es-MX"), color: "#3B82F6" },
+            { label: "Neto semana", valor: fmtMon(totalSemana), color: "#16a34a" },
+            { label: "Placas sin empresa", valor: sinEmpresa ? sinEmpresa.n_placas : 0, color: sinEmpresa ? "#F47B20" : "#94a3b8" },
+          ].map(k => (
+            <div key={k.label} style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10, padding: "10px 18px", minWidth: 140 }}>
+              <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 700, textTransform: "uppercase" }}>{k.label}</div>
+              <div style={{ fontSize: 20, fontWeight: 800, color: k.color }}>{k.valor}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {loading && <div style={{ textAlign: "center", padding: 40, color: "#94a3b8" }}>Cargando conciliación de la semana {semana}...</div>}
+      {!loading && resumen.length === 0 && (
+        <div style={{ textAlign: "center", padding: 40, color: "#94a3b8", background: "#fff", borderRadius: 10, border: "1px solid #e4e7ec" }}>
+          No hay viajes calculados en el Listado de Pagos para la semana {semana} ({etiquetaSemanaInventario(semana)}).<br />
+          <span style={{ fontSize: 11 }}>Verificá que los días de la semana estén calculados en "Listado de Pagos".</span>
+        </div>
+      )}
+
+      {/* Tarjetas por empresa */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        {resumen.map(r => {
+          const esSinEmpresa = r.empresa === SIN_EMPRESA;
+          const abierta = expandida === r.empresa;
+          const det = detalles[r.empresa];
+          const master = masterPorNorm[normEmp(r.empresa)];
+          const faltanDatos = !esSinEmpresa && (!master || !master.rfc || !master.email_envio);
+
+          // Agrupar por placa (para la tarjeta Sin Empresa)
+          const porPlaca = {};
+          if (esSinEmpresa && det) {
+            for (const d of det) {
+              const p = d.placa || "—";
+              if (!porPlaca[p]) porPlaca[p] = [];
+              porPlaca[p].push(d);
+            }
+          }
+
+          return (
+            <div key={r.empresa} style={{
+              background: "#fff", borderRadius: 10, overflow: "hidden",
+              border: esSinEmpresa ? "2px solid #F47B20" : "1px solid #e4e7ec",
+            }}>
+              {/* Fila resumen */}
+              <div onClick={() => toggleEmpresa(r.empresa)} style={{ display: "flex", alignItems: "center", gap: 14, padding: "12px 16px", cursor: "pointer", flexWrap: "wrap", background: esSinEmpresa ? "#fff7ed" : "#fff" }}>
+                <div style={{ flex: "1 1 260px", minWidth: 220 }}>
+                  <div style={{ fontSize: 13, fontWeight: 800, color: esSinEmpresa ? "#c2410c" : "#1a3a6b", display: "flex", alignItems: "center", gap: 8 }}>
+                    {esSinEmpresa ? "⚠️ " + r.empresa : r.empresa}
+                    {!esSinEmpresa && chipEstado(r.estado_conciliacion)}
+                  </div>
+                  <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 2 }}>
+                    {esSinEmpresa
+                      ? `${r.n_placas} placas operaron sin empresa en el inventario de la semana — asignalas para incluirlas en una conciliación`
+                      : (master ? `RFC ${master.rfc || "—"} · ${master.supervisor || "sin supervisor"} · ${master.email_envio || "sin correo"}` : "Empresa sin datos de facturación cargados")}
+                    {faltanDatos && <span style={{ color: "#d97706", fontWeight: 700 }}> · ⚠ completar datos para el PDF</span>}
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: 18, alignItems: "center", flexWrap: "wrap" }}>
+                  <div style={{ textAlign: "center" }}><div style={{ fontSize: 10, color: "#94a3b8" }}>Placas</div><div style={{ fontWeight: 800 }}>{r.n_placas}</div></div>
+                  <div style={{ textAlign: "center" }}><div style={{ fontSize: 10, color: "#94a3b8" }}>Viajes</div><div style={{ fontWeight: 800 }}>{r.n_viajes}</div></div>
+                  <div style={{ textAlign: "center" }}><div style={{ fontSize: 10, color: "#94a3b8" }}>No pago</div><div style={{ fontWeight: 800, color: r.n_no_pago > 0 ? "#dc2626" : "#94a3b8" }}>{r.n_no_pago}</div></div>
+                  <div style={{ textAlign: "center" }}><div style={{ fontSize: 10, color: "#94a3b8" }}>Neto</div><div style={{ fontWeight: 800, color: "#16a34a" }}>{fmtMon(r.total_neto)}</div></div>
+                  <div style={{ textAlign: "center" }}><div style={{ fontSize: 10, color: "#94a3b8" }}>Bruto (IVA 16%)</div><div style={{ fontWeight: 800 }}>{fmtMon(r.total_bruto)}</div></div>
+                  <div style={{ fontSize: 16, color: "#94a3b8" }}>{abierta ? "▾" : "▸"}</div>
+                </div>
+              </div>
+
+              {/* Detalle expandido */}
+              {abierta && (
+                <div style={{ borderTop: "1px solid #eef0f3", padding: "14px 16px", background: "#fafbfc" }}>
+                  {!det && loadingDetalle && <div style={{ color: "#94a3b8", fontSize: 12, padding: 12 }}>Cargando detalle...</div>}
+
+                  {det && !esSinEmpresa && (
+                    <>
+                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 4 }}>
+                        <button onClick={(e) => { e.stopPropagation(); generarPDF(r.empresa); }}
+                          style={{ padding: "7px 14px", background: "#F47B20", color: "#fff", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+                          📄 Generar PDF Prefactura
+                        </button>
+                        {(r.estado_conciliacion === "sin_generar" || r.estado_conciliacion === "borrador") ? (
+                          <button onClick={(e) => { e.stopPropagation(); cerrarConciliacion(r.empresa); }} disabled={cerrando === r.empresa}
+                            style={{ padding: "7px 14px", background: "#1a3a6b", color: "#fff", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer", opacity: cerrando === r.empresa ? 0.6 : 1 }}>
+                            {cerrando === r.empresa ? "Cerrando..." : "🔒 Cerrar conciliación"}
+                          </button>
+                        ) : (
+                          <button onClick={(e) => { e.stopPropagation(); reabrirConciliacion(r.empresa); }}
+                            style={{ padding: "7px 14px", background: "#fff", color: "#1a3a6b", border: "1px solid #1a3a6b", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+                            Reabrir
+                          </button>
+                        )}
+                        <button onClick={(e) => {
+                          e.stopPropagation();
+                          setFormEmpresa(master
+                            ? { id: master.id, nombre: master.nombre, rfc: master.rfc || "", supervisor: master.supervisor || "", telefono: master.telefono || "", email_envio: master.email_envio || "", direccion: master.direccion || "" }
+                            : { ...EMPRESA_FORM_VACIA, nombre: r.empresa });
+                        }}
+                          style={{ padding: "7px 14px", background: "#fff", color: "#475569", border: "1px solid #e4e7ec", borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+                          ✏️ {master ? "Editar datos empresa" : "Completar datos empresa"}
+                        </button>
+                      </div>
+                      {renderDetalleTabla(det)}
+                      {det.some(d => d.es_no_pago) && (
+                        <div style={{ marginTop: 12, border: "1px solid #fca5a5", background: "#fef2f2", borderRadius: 8, padding: "10px 12px" }}>
+                          <div style={{ fontSize: 11, fontWeight: 800, color: "#991b1b", marginBottom: 6 }}>OBSERVACIONES — RUTAS NO PAGADAS (VISITA &lt; 90%)</div>
+                          {det.filter(d => d.es_no_pago).map((d, i) => (
+                            <div key={i} style={{ fontSize: 11, color: "#7f1d1d", padding: "2px 0" }}>
+                              {fmtFechaDDMM(d.fecha)} · {d.placa} · Ruta {d.id_ruta} · {d.driver_name} — {d.motivo_no_pago || "NO PAGADO"} (cargado {d.cargado}, entregado {d.entregado})
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </>
+                  )}
+
+                  {det && esSinEmpresa && (
+                    <>
+                      <div style={{ fontSize: 12, color: "#7c2d12", marginBottom: 10 }}>
+                        Asigná cada placa a una empresa: se insertará en el inventario de flota de la <strong>semana {semana}</strong>. Si la empresa no existe, creala con sus datos de facturación.
+                      </div>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                        {Object.entries(porPlaca).map(([placa, filas]) => {
+                          const neto = filas.reduce((s, f) => s + Number(f.monto || 0), 0);
+                          const scs = [...new Set(filas.map(f => f.service_center_id).filter(Boolean))];
+                          return (
+                            <div key={placa} style={{ display: "flex", alignItems: "center", gap: 12, background: "#fff", border: "1px solid #fed7aa", borderRadius: 8, padding: "8px 12px", flexWrap: "wrap" }}>
+                              <div style={{ minWidth: 90, fontWeight: 800, color: "#1a3a6b" }}>{placa}</div>
+                              <div style={{ fontSize: 11, color: "#64748b", flex: "1 1 200px" }}>
+                                {filas.length} viaje{filas.length !== 1 ? "s" : ""} · SC {scs.join(", ") || "—"} · Neto {fmtMon(neto)} · {[...new Set(filas.map(f => f.driver_name).filter(Boolean))].slice(0, 2).join(", ")}
+                              </div>
+                              <select value={asignacionSel[placa] || ""} onClick={e => e.stopPropagation()}
+                                onChange={e => setAsignacionSel(prev => ({ ...prev, [placa]: e.target.value }))}
+                                style={{ padding: "6px 8px", border: "1px solid #e4e7ec", borderRadius: 6, fontSize: 12, minWidth: 220 }}>
+                                <option value="">— Elegir empresa —</option>
+                                {opcionesEmpresas.map(n => <option key={n} value={n}>{n}</option>)}
+                                <option value="__nueva__">＋ Nueva empresa...</option>
+                              </select>
+                              <button onClick={(e) => { e.stopPropagation(); asignarPlaca(placa, filas); }} disabled={asignando === placa}
+                                style={{ padding: "6px 14px", background: "#F47B20", color: "#fff", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer", opacity: asignando === placa ? 0.6 : 1 }}>
+                                {asignando === placa ? "Asignando..." : "Asignar"}
+                              </button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                      <div style={{ marginTop: 14 }}>
+                        <div style={{ fontSize: 11, fontWeight: 800, color: "#1a3a6b", marginBottom: 4 }}>Viajes de estas placas en la semana:</div>
+                        {renderDetalleTabla(det)}
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Modal nueva/editar empresa */}
+      {formEmpresa && (
+        <div onClick={() => !guardandoEmpresa && setFormEmpresa(null)}
+          style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 12, padding: 22, width: 460, maxWidth: "100%", maxHeight: "90vh", overflowY: "auto" }}>
+            <div style={{ fontSize: 15, fontWeight: 800, color: "#1a3a6b", marginBottom: 4 }}>{formEmpresa.id ? "Editar empresa" : "Nueva empresa tercero"}</div>
+            <div style={{ fontSize: 11, color: "#94a3b8", marginBottom: 14 }}>Estos datos alimentan el header del PDF de prefactura y el envío automático.</div>
+            {[
+              { k: "nombre", label: "Razón social *", ph: "JUAN JOSE MENESES OLVERA" },
+              { k: "rfc", label: "RFC *", ph: "MEOJ8311229H4" },
+              { k: "supervisor", label: "Supervisor", ph: "MELISSA HERNANDEZ" },
+              { k: "telefono", label: "Teléfono (E.164)", ph: "+5215512345678" },
+              { k: "email_envio", label: "Correo de envío", ph: "facturacion@empresa.mx" },
+              { k: "direccion", label: "Dirección", ph: "Calle, número, colonia, CP" },
+            ].map(f => (
+              <div key={f.k} style={{ marginBottom: 10 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#475569", marginBottom: 3 }}>{f.label}</div>
+                <input value={formEmpresa[f.k]} placeholder={f.ph}
+                  onChange={e => setFormEmpresa(prev => ({ ...prev, [f.k]: e.target.value }))}
+                  disabled={f.k === "nombre" && !!formEmpresa.id}
+                  style={{ width: "100%", padding: "8px 10px", border: "1px solid #e4e7ec", borderRadius: 6, fontSize: 13, boxSizing: "border-box", background: (f.k === "nombre" && formEmpresa.id) ? "#f1f5f9" : "#fff" }} />
+              </div>
+            ))}
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 16 }}>
+              <button onClick={() => setFormEmpresa(null)} disabled={guardandoEmpresa}
+                style={{ padding: "8px 16px", background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, fontSize: 13, cursor: "pointer", color: "#475569" }}>Cancelar</button>
+              <button onClick={guardarEmpresa} disabled={guardandoEmpresa}
+                style={{ padding: "8px 16px", background: "#1a3a6b", color: "#fff", border: "none", borderRadius: 6, fontSize: 13, fontWeight: 700, cursor: "pointer", opacity: guardandoEmpresa ? 0.6 : 1 }}>
+                {guardandoEmpresa ? "Guardando..." : "Guardar empresa"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
 function TercerosMX() {
   const [tab, setTab] = useState("inventario");
   const [rows, setRows] = useState([]);
@@ -17579,6 +18192,7 @@ function ModuloPagosMadre({ usuario }) {
     { id: "info_ruta",   label: "Información de Ruta",   desc: "Análisis operacional por ruta" },
     { id: "torre_3p",    label: "Torre de Control Pagos", desc: "3 Pilares · MELI vs Operación" },
     { id: "terceros",    label: "Terceros",              desc: "Empresas subcontratadas por patente" },
+    { id: "conciliacion", label: "Conciliación Terceros", desc: "Conciliación semanal por empresa" },
     { id: "ayudantes",   label: "Ayudantes",             desc: "Detalle diario de auxiliares" },
     { id: "ambulancias", label: "Ambulancias",           desc: "Traspasos internos ruta→ruta" },
     { id: "supervisores", label: "Consolidaciones",   desc: "Consolidado por SC: torre, helpers, ambulancias y bitácora" },
@@ -17627,6 +18241,7 @@ function ModuloPagosMadre({ usuario }) {
           {subtab === "info_ruta"   && <InformacionDeRuta />}
           {subtab === "torre_3p"    && <TorreTresPilares />}
           {subtab === "terceros"    && <TercerosMX />}
+          {subtab === "conciliacion" && <ConciliacionTercerosMX usuario={usuario} />}
           {subtab === "ayudantes"   && <AyudantesDetalleDia />}
           {subtab === "ambulancias" && <PoolMeliAmbulancias />}
           {subtab === "supervisores" && <PanelControlSupervisores />}
@@ -36854,3 +37469,4 @@ const CONFIG_IMPORTADOR_CL = {
     notas: "(opcional)",
   },
 };
+                     
