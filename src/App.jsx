@@ -17293,6 +17293,10 @@ function etiquetaSemanaInventario(sem) {
   return mi === mf ? (di + "\u2013" + df + " " + mi) : (di + " " + mi + " \u2013 " + df + " " + mf);
 }
 
+function semanaInventarioEsActual(sem) {
+  return semanaInventario(new Date().toISOString().slice(0, 10)) === Number(sem);
+}
+
 function TercerosMX() {
   const [tab, setTab] = useState("inventario");
   const [rows, setRows] = useState([]);
@@ -17791,7 +17795,7 @@ function calcularAjusteVisitadoNS(pctVisitado, nsPct, cfg) {
 // ─── Motor de cálculo principal ────────────────────────────────────────────
 // Toma todos los inputs y devuelve los registros listos para INSERT en
 // maestro_jornada_mx
-function calcularPagos({ maestro, snapshots, scZonas, especiales, matrizPrecios, aprobaciones, tarifasCobrar, cfg, calculadoAt }) {
+function calcularPagos({ maestro, snapshots, scZonas, especiales, matrizPrecios, aprobaciones, tarifasCobrar, cfg, calculadoAt, bonificaciones }) {
   const errores = [];
   const filas = [];
 
@@ -17966,7 +17970,33 @@ function calcularPagos({ maestro, snapshots, scZonas, especiales, matrizPrecios,
       obs.push(`Visitado maestro ${pctVisitado.toFixed(1)}% vs real ${pctVisitadoGate.toFixed(1)}% — gate usó el REAL`);
     }
 
-    const pagoBruto = noPaga ? 0 : (tarifaBase + ajusteNS + montoAux);
+    // BONIFICACION: % extra sobre la TARIFA BASE. Solo si la ruta paga (NO_PAGO queda en 0).
+    // Se acumula con el ajuste NS (ambos calculados sobre la base): pago = base + ajusteNS + bono + aux.
+    let montoBono = 0;
+    let bonoAplicado = null;
+    if (!noPaga && Array.isArray(bonificaciones) && bonificaciones.length) {
+      const tipoR = tipoRutaDeFila(m.placa);
+      const kmR = Number(km || 0);
+      let mejor = null;
+      for (const b of bonificaciones) {
+        if (b.activo === false) continue;
+        if (b.fecha_desde && fechaSalida && fechaSalida < b.fecha_desde) continue;
+        if (b.fecha_hasta && fechaSalida && fechaSalida > b.fecha_hasta) continue;
+        const scs = Array.isArray(b.scs) ? b.scs : [];
+        if (scs.length && !scs.includes(sc)) continue;
+        if (b.tipo_ruta && b.tipo_ruta !== "AMBOS" && tipoR !== b.tipo_ruta) continue;
+        if (b.km_min != null && b.km_min !== "" && kmR < Number(b.km_min)) continue;
+        if (b.km_max != null && b.km_max !== "" && kmR > Number(b.km_max)) continue;
+        if (!mejor || Number(b.pct_aumento || 0) > Number(mejor.pct_aumento || 0)) mejor = b;
+      }
+      if (mejor) {
+        montoBono = tarifaBase * (Number(mejor.pct_aumento || 0) / 100);
+        bonoAplicado = mejor;
+        obs.push(`Bonificación "${mejor.nombre}" +${Number(mejor.pct_aumento || 0)}% sobre base = +${Math.round(montoBono)}`);
+      }
+    }
+
+    const pagoBruto = noPaga ? 0 : (tarifaBase + ajusteNS + montoBono + montoAux);
     const descuentos = 0;
     const pagoNeto = pagoBruto - descuentos;
     const nsCategoriaFinal = ajuste.categoria;
@@ -18003,6 +18033,9 @@ function calcularPagos({ maestro, snapshots, scZonas, especiales, matrizPrecios,
       factor_ns: factorNS,
       tarifa_base: tarifaBase,
       ajuste_ns: ajusteNS,
+      monto_bonificacion: noPaga ? 0 : montoBono,
+      bonificacion_nombre: bonoAplicado ? bonoAplicado.nombre : null,
+      bonificacion_pct: bonoAplicado ? Number(bonoAplicado.pct_aumento || 0) : 0,
       tiene_auxiliar: tieneHelper,
       auxiliar_estado: auxiliarEstado,
       auxiliar_snapshots_total: tieneHelper ? Number(m.cantidad_personas || 0) : 0,
@@ -18442,6 +18475,7 @@ function ListadoPagosDiarios() {
         tarifasCobrar: tcRes.data || [],
         cfg,
         calculadoAt,
+        bonificaciones,
       });
 
       const { error: delError } = await sb.from("maestro_jornada_mx").delete().eq("fecha", fecha);
@@ -18975,14 +19009,13 @@ function ListadoPagosDiarios() {
                       {Number(r.ajuste_ns) >= 0 ? "+" : ""}{fmtMXN(r.ajuste_ns)}
                     </td>
                     {(() => {
-                      const b = bonoDeFila(r);
-                      if (!b) return <td style={{ ...tdStyle(), textAlign: "right", color: "#94a3b8" }}>—</td>;
-                      const pct = Number(b.pct_aumento || 0);
-                      const monto = Number(r.tarifa_base || 0) * pct / 100;
+                      const pct = Number(r.bonificacion_pct || 0);
+                      if (!pct || !r.bonificacion_nombre) return <td style={{ ...tdStyle(), textAlign: "right", color: "#94a3b8" }}>—</td>;
+                      const monto = Number(r.monto_bonificacion || 0);
                       return (
                         <td style={{ ...tdStyle(), textAlign: "right" }}>
                           <div style={{ fontWeight: 700, color: "#7c3aed" }}>+{pct}%</div>
-                          <div style={{ fontSize: 8, color: "#94a3b8", maxWidth: 110, whiteSpace: "normal", lineHeight: 1.2 }}>{b.nombre}</div>
+                          <div style={{ fontSize: 8, color: "#94a3b8", maxWidth: 110, whiteSpace: "normal", lineHeight: 1.2 }}>{r.bonificacion_nombre}</div>
                           <div style={{ fontSize: 9, color: "#7c3aed" }}>+{fmtMXN(monto)}</div>
                         </td>
                       );
