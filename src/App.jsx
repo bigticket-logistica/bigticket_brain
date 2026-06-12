@@ -19933,7 +19933,7 @@ function DriversMaestroMX() {
 // AYUDANTES — DETALLE DEL DÍA con tickets, hora exacta y descarga Excel
 // ═══════════════════════════════════════════════════════════════════════════
 // ⚠️ REEMPLAZAR con la URL real del webhook n8n (workflow "Helpers MX · RERUN webhook")
-const N8N_WEBHOOK_RERUN_HELPERS = "https://REEMPLAZAR.app.n8n.cloud/webhook/rerun-helpers-mx";
+const N8N_WEBHOOK_RERUN_HELPERS = "https://bigticket2026.app.n8n.cloud/webhook/rerun-helpers-mx";
 
 function AyudantesDetalleDia() {
   // ── Fecha por defecto: día anterior (operativo MX) ──
@@ -20129,23 +20129,37 @@ function AyudantesDetalleDia() {
     };
   }, [entregas, detalleEntregas, rutasSnapHelper, fecha]);
 
-  // ── Disparar flujo n8n del día ──
+  // ── Disparar flujo n8n: SELECTIVO (solo incompletas) o día completo ──
   const ejecutarFlujo = async () => {
     if (N8N_WEBHOOK_RERUN_HELPERS.includes("REEMPLAZAR")) {
       setMsgFlujo("❌ Falta configurar la URL del webhook n8n (constante N8N_WEBHOOK_RERUN_HELPERS).");
       return;
     }
-    if (!window.confirm(`¿Ejecutar el flujo de entregas helper para ${fecha}?\n\nEl barrido recorre ruta por ruta en el VPS y demora aprox. 45–90 minutos. Requiere sesión MELI vigente (extensión Don B Sync).`)) return;
+    // Rutas a reparar: las marcadas INCOMPLETO o SIN_DETALLE en esta vista
+    const rutasReparar = detalleEntregas
+      .filter(f => f.estado === "INCOMPLETO" || f.estado === "SIN_DETALLE")
+      .map(f => f.id_ruta);
+    const esSelectivo = rutasReparar.length > 0;
+    const minutos = esSelectivo ? Math.max(5, Math.round(rutasReparar.length * 2)) : null;
+
+    const confirmacion = esSelectivo
+      ? `¿Reparar ${rutasReparar.length} ruta(s) incompleta(s) del ${fecha}?\n\nEl barrido recorrerá SOLO esas rutas (~${minutos} min). Requiere sesión MELI vigente (extensión Don B Sync).`
+      : `No hay rutas incompletas para ${fecha} — todo está al 100%.\n\n¿Ejecutar igualmente el barrido del día COMPLETO? (~45–90 min)`;
+    if (!window.confirm(confirmacion)) return;
+
     setDisparando(true);
     setMsgFlujo("");
     try {
+      const payload = esSelectivo ? { fecha, id_rutas: rutasReparar } : { fecha };
       const r = await fetch(N8N_WEBHOOK_RERUN_HELPERS, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fecha }),
+        body: JSON.stringify(payload),
       });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      setMsgFlujo(`✅ Flujo disparado ${new Date().toLocaleTimeString("es-CL", { hour: "2-digit", minute: "2-digit" })} hrs para el día ${fecha}. Corre en segundo plano y demora aprox. 45–90 min según rutas. Vuelve a esta vista más tarde y presiona ↻ Refrescar.`);
+      setMsgFlujo(esSelectivo
+        ? `✅ Reparación disparada ${new Date().toLocaleTimeString("es-CL", { hour: "2-digit", minute: "2-digit" })} hrs · ${rutasReparar.length} ruta(s) del ${fecha} (~${minutos} min). Vuelve más tarde y presiona ↻ Refrescar.`
+        : `✅ Barrido del día completo disparado ${new Date().toLocaleTimeString("es-CL", { hour: "2-digit", minute: "2-digit" })} hrs para ${fecha} (~45–90 min). Vuelve más tarde y presiona ↻ Refrescar.`);
     } catch (e) {
       setMsgFlujo(`❌ No se pudo disparar el flujo: ${e.message}. Revisa que el workflow webhook esté activo en n8n y que la sesión MELI esté vigente.`);
     }
@@ -20393,7 +20407,9 @@ function AyudantesDetalleDia() {
           <button onClick={ejecutarFlujo} disabled={disparando}
             style={{ padding: "9px 16px", background: disparando ? "#94a3b8" : "#F47B20", border: "none", borderRadius: 6,
               fontSize: 12, fontWeight: 700, color: "#fff", cursor: disparando ? "wait" : "pointer", whiteSpace: "nowrap" }}>
-            {disparando ? "Disparando..." : `▶ Ejecutar flujo del ${fecha}`}
+            {disparando ? "Disparando..." : (detalleEntregas.some(f => f.estado === "INCOMPLETO" || f.estado === "SIN_DETALLE")
+              ? `▶ Reparar ${detalleEntregas.filter(f => f.estado === "INCOMPLETO" || f.estado === "SIN_DETALLE").length} incompletas del ${fecha}`
+              : `▶ Ejecutar flujo del ${fecha}`)}
           </button>
         </div>
         {msgFlujo && (
