@@ -4710,11 +4710,26 @@ const VistaSnapshotSupervisores = ({ fecha, pais }) => {
       setLoading(true);
       setError(null);
       try {
-        const { data, error: err } = await sb
-          .from(VISTAS[subTab].tabla)
-          .select("*")
-          .eq("fecha", fecha)
-          .limit(5000);
+        let data, err;
+        if (subTab === "rutas" || subTab === "noshow") {
+          // Ambas pestañas se alimentan de la Torre de Control de Pagos (3 pilares).
+          // Traemos TODOS los buckets del día; cada sub-componente filtra los suyos.
+          const res = await sb.rpc("get_torre_3_pilares", {
+            fecha_desde: fecha,
+            fecha_hasta: fecha,
+            sc_filtro: null,
+          });
+          data = res.data;
+          err  = res.error;
+        } else {
+          const res = await sb
+            .from(VISTAS[subTab].tabla)
+            .select("*")
+            .eq("fecha", fecha)
+            .limit(5000);
+          data = res.data;
+          err  = res.error;
+        }
         if (cancelado) return;
         if (err) {
           setError(err.message);
@@ -5159,59 +5174,88 @@ const SnapIngresoMaestro = ({ filas, loading }) => {
   );
 };
 
-// ─── Sub-componente 2: Rutas Citadas (SC × día) ───
+// ─── Buckets de la Torre · criterio de negocio en UN solo lugar ───
+// "Rutas Citadas = lo aceptado por BT" → se muestra TODO menos lo de abajo.
+// Si querés que el cancel POST-asignación (5) cuente como citado, sacalo de la lista.
+const BUCKETS_NO_CITADAS = [
+  "4_CANCEL_MELI_PRE_ASIGNACION",   // MELI canceló antes de que BT lo tomara
+  "5_CANCEL_MELI_POST_ASIGNACION",  // MELI canceló después (BT sí lo había aceptado) ← swing vote
+  "9_REJECTED_LIMPIO",              // BT rechazó
+];
+const BUCKET_RF1 = "2A_RF1_VENCIDO"; // No rosterizó a tiempo
+const BUCKET_RF2 = "3_RF2_NO_SHOW";  // Rosterizó y no salió
+
+// ─── Sub-componente 2: Rutas Citadas · aceptado por BT, por SC (Torre 3 pilares) ───
 const SnapRutasCitadas = ({ filas, loading }) => {
-  const kpis = useMemo(() => {
-    const planeadas  = filas.reduce((acc, f) => acc + (f.rutas_planeadas  || 0), 0);
-    const ejecutadas = filas.reduce((acc, f) => acc + (f.rutas_ejecutadas || 0), 0);
-    const sinCerrar  = filas.reduce((acc, f) => acc + (f.rutas_sin_cerrar || 0), 0);
-    const zombis     = filas.reduce((acc, f) => acc + (f.rutas_zombi_descartadas || 0), 0);
-    return { planeadas, ejecutadas, sinCerrar, zombis, scs: filas.length };
+  const { porSC, kpis } = useMemo(() => {
+    const citadas = filas.filter(f => !BUCKETS_NO_CITADAS.includes(f.bucket));
+
+    const mp = {};
+    citadas.forEach(f => {
+      const sc = f.sc || "—";
+      if (!mp[sc]) mp[sc] = { sc, citadas: 0, small: 0, large: 0 };
+      mp[sc].citadas++;
+      const v = (f.vehiculo || "").toLowerCase();
+      if (v.includes("large")) mp[sc].large++;
+      else mp[sc].small++;
+    });
+
+    const porSC = Object.values(mp).sort((a, b) => b.citadas - a.citadas || a.sc.localeCompare(b.sc));
+    const total = citadas.length;
+
+    const cancelMeli = filas.filter(f =>
+      f.bucket === "4_CANCEL_MELI_PRE_ASIGNACION" || f.bucket === "5_CANCEL_MELI_POST_ASIGNACION").length;
+    const rechazadas = filas.filter(f => f.bucket === "9_REJECTED_LIMPIO").length;
+
+    return { porSC, kpis: { total, scs: porSC.length, cancelMeli, rechazadas } };
   }, [filas]);
 
   return (
     <div>
       {/* KPIs */}
       <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
-        <KpiSnap label="SCs"        valor={fmtNumSnap(kpis.scs)} />
-        <KpiSnap label="Planeadas"  valor={fmtNumSnap(kpis.planeadas)}  color="#3B82F6" />
-        <KpiSnap label="Ejecutadas" valor={fmtNumSnap(kpis.ejecutadas)} color="#16a34a" />
-        <KpiSnap label="Sin cerrar" valor={fmtNumSnap(kpis.sinCerrar)}  color="#ca8a04" />
-        <KpiSnap label="Zombis"     valor={fmtNumSnap(kpis.zombis)}     color="#dc2626" sub="descartadas" />
+        <KpiSnap label="Rutas citadas" valor={fmtNumSnap(kpis.total)} color="#1a3a6b" sub={`${kpis.scs} SCs`} />
+        <KpiSnap label="SCs"            valor={fmtNumSnap(kpis.scs)} />
+        <KpiSnap label="Cancel MELI"    valor={fmtNumSnap(kpis.cancelMeli)} color="#b45309" sub="descontadas" />
+        <KpiSnap label="Rechazadas BT"  valor={fmtNumSnap(kpis.rechazadas)} color="#475569" sub="descontadas" />
       </div>
 
-      {/* Tabla */}
+      {/* Tabla por SC */}
       <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10, overflow: "auto", maxHeight: 600 }}>
         {loading ? (
           <div style={{ padding: 30, textAlign: "center", color: "#888", fontSize: 13 }}>Cargando...</div>
-        ) : filas.length === 0 ? (
-          <div style={{ padding: 30, textAlign: "center", color: "#888", fontSize: 13 }}>Sin datos para esta fecha</div>
+        ) : porSC.length === 0 ? (
+          <div style={{ padding: 30, textAlign: "center", color: "#888", fontSize: 13 }}>Sin rutas citadas para esta fecha</div>
         ) : (
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
-            <thead style={{ background: "#f8fafc", position: "sticky", top: 0 }}>
+            <thead style={{ background: "#f8fafc", position: "sticky", top: 0, zIndex: 1 }}>
               <tr>
-                {["Fecha","CECO","Planeadas","Small","Large","Ejecutadas","S.Plan","L.Plan","Small SDD","Large SDD","Sin Cerrar","Zombis"].map(h => (
-                  <th key={h} style={{ padding: "8px 6px", textAlign: "left", fontWeight: 700, color: "#666", borderBottom: "1px solid #e4e7ec", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.3 }}>{h}</th>
+                {[
+                  { l: "SC",      a: "left"  },
+                  { l: "Citadas", a: "right" },
+                  { l: "Small",   a: "right" },
+                  { l: "Large",   a: "right" },
+                ].map(h => (
+                  <th key={h.l} style={{ padding: "8px 6px", textAlign: h.a, fontWeight: 700, color: "#666",
+                    borderBottom: "1px solid #e4e7ec", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.3 }}>{h.l}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {filas.map((f, i) => (
-                <tr key={i} style={{ borderBottom: "1px solid #f1f5f9" }}>
-                  <td style={{ padding: "6px" }}>{f.fecha}</td>
-                  <td style={{ padding: "6px", fontWeight: 600 }}>{f.cecos}</td>
-                  <td style={{ padding: "6px", textAlign: "right", fontWeight: 700, color: "#3B82F6" }}>{fmtNumSnap(f.rutas_planeadas)}</td>
-                  <td style={{ padding: "6px", textAlign: "right" }}>{fmtNumSnap(f.small_planeadas)}</td>
-                  <td style={{ padding: "6px", textAlign: "right" }}>{fmtNumSnap(f.large_planeadas)}</td>
-                  <td style={{ padding: "6px", textAlign: "right", fontWeight: 700, color: "#16a34a" }}>{fmtNumSnap(f.rutas_ejecutadas)}</td>
-                  <td style={{ padding: "6px", textAlign: "right" }}>{fmtNumSnap(f.cant_small)}</td>
-                  <td style={{ padding: "6px", textAlign: "right" }}>{fmtNumSnap(f.cant_large)}</td>
-                  <td style={{ padding: "6px", textAlign: "right" }}>{fmtNumSnap(f.small_sdd_planeadas)}</td>
-                  <td style={{ padding: "6px", textAlign: "right" }}>{fmtNumSnap(f.large_sdd_planeadas)}</td>
-                  <td style={{ padding: "6px", textAlign: "right", color: "#ca8a04" }}>{fmtNumSnap(f.rutas_sin_cerrar)}</td>
-                  <td style={{ padding: "6px", textAlign: "right", color: "#dc2626" }}>{fmtNumSnap(f.rutas_zombi_descartadas)}</td>
+              {porSC.map((s, i) => (
+                <tr key={i} style={{ borderBottom: "1px solid #f1f5f9", background: i % 2 === 0 ? "#fff" : "#fafbfc" }}>
+                  <td style={{ padding: "6px 10px", fontWeight: 700, color: "#1a3a6b" }}>{s.sc}</td>
+                  <td style={{ padding: "6px", textAlign: "right", fontWeight: 700, color: "#1a3a6b" }}>{fmtNumSnap(s.citadas)}</td>
+                  <td style={{ padding: "6px", textAlign: "right" }}>{fmtNumSnap(s.small)}</td>
+                  <td style={{ padding: "6px", textAlign: "right" }}>{fmtNumSnap(s.large)}</td>
                 </tr>
               ))}
+              <tr style={{ borderTop: "2px solid #e4e7ec", background: "#f8fafc", fontWeight: 700 }}>
+                <td style={{ padding: "6px 10px", color: "#1a3a6b" }}>TOTAL</td>
+                <td style={{ padding: "6px", textAlign: "right", color: "#1a3a6b" }}>{fmtNumSnap(kpis.total)}</td>
+                <td style={{ padding: "6px", textAlign: "right" }}>{fmtNumSnap(porSC.reduce((a, s) => a + s.small, 0))}</td>
+                <td style={{ padding: "6px", textAlign: "right" }}>{fmtNumSnap(porSC.reduce((a, s) => a + s.large, 0))}</td>
+              </tr>
             </tbody>
           </table>
         )}
@@ -5220,232 +5264,137 @@ const SnapRutasCitadas = ({ filas, loading }) => {
   );
 };
 
-// ─── Sub-componente 3: No Show · Rostering vs Operativo ───
-// Fuente: vw_rostering_vs_operativo (1 fila por driver+fecha)
-// Detecta: NO SHOW · PARCIAL · CAMBIO PLACA · OK
+// ─── Sub-componente 3: No Show · RF1 + RF2 por SC (Torre 3 pilares) ───
+// Fuente: get_torre_3_pilares · RF1 = aceptado y no rosterizado a tiempo · RF2 = rosterizado y no salió
 const SnapNoShow = ({ filas, loading }) => {
-  const [filtroCat, setFiltroCat] = useState("INCIDENTES");
+  const { porSC, detalle, kpis } = useMemo(() => {
+    const noShow = filas.filter(f => f.bucket === BUCKET_RF1 || f.bucket === BUCKET_RF2);
 
-  // ─── KPIs agregados ───
-  const kpis = useMemo(() => {
-    const total = filas.length;
-    const ok = filas.filter(f => f.categoria === "OK").length;
-    const noShow = filas.filter(f => f.categoria === "NO_SHOW").length;
-    const parcial = filas.filter(f => f.categoria === "PARCIAL").length;
-    const cambio = filas.filter(f => f.categoria === "CAMBIO_PLACA").length;
-    const scs = new Set(filas.map(f => f.facility)).size;
-    const totalCargados = filas.reduce((a, f) => a + (f.total_cargados || 0), 0);
-    const totalEntregados = filas.reduce((a, f) => a + (f.total_entregados || 0), 0);
-    const pctEntregado = totalCargados > 0 ? (totalEntregados / totalCargados * 100) : 0;
-    return { total, ok, noShow, parcial, cambio, scs, totalCargados, totalEntregados, pctEntregado };
-  }, [filas]);
-
-  // ─── Resumen por SC ───
-  const porSC = useMemo(() => {
+    // Resumen por SC con columnas RF1 / RF2
     const mp = {};
-    filas.forEach(f => {
-      const sc = f.facility;
-      if (!mp[sc]) mp[sc] = { sc, total: 0, ok: 0, noShow: 0, parcial: 0, cambio: 0 };
-      mp[sc].total++;
-      if (f.categoria === "OK") mp[sc].ok++;
-      else if (f.categoria === "NO_SHOW") mp[sc].noShow++;
-      else if (f.categoria === "PARCIAL") mp[sc].parcial++;
-      else if (f.categoria === "CAMBIO_PLACA") mp[sc].cambio++;
+    noShow.forEach(f => {
+      const sc = f.sc || "—";
+      if (!mp[sc]) mp[sc] = { sc, rf1: 0, rf2: 0 };
+      if (f.bucket === BUCKET_RF1) mp[sc].rf1++;
+      else if (f.bucket === BUCKET_RF2) mp[sc].rf2++;
     });
-    return Object.values(mp)
-      .map(r => ({ ...r, pctOk: r.total > 0 ? r.ok / r.total * 100 : 0 }))
-      .sort((a, b) => (b.noShow + b.parcial + b.cambio) - (a.noShow + a.parcial + a.cambio) || a.sc.localeCompare(b.sc));
+    const porSC = Object.values(mp)
+      .map(r => ({ ...r, total: r.rf1 + r.rf2 }))
+      .sort((a, b) => b.total - a.total || a.sc.localeCompare(b.sc));
+
+    // Detalle ruta por ruta (RF1 primero, luego RF2; después SC)
+    const detalle = [...noShow].sort((a, b) => {
+      const oa = a.bucket === BUCKET_RF1 ? 1 : 2;
+      const ob = b.bucket === BUCKET_RF1 ? 1 : 2;
+      if (oa !== ob) return oa - ob;
+      return (a.sc || "").localeCompare(b.sc || "");
+    });
+
+    const rf1 = noShow.filter(f => f.bucket === BUCKET_RF1).length;
+    const rf2 = noShow.filter(f => f.bucket === BUCKET_RF2).length;
+    return { porSC, detalle, kpis: { rf1, rf2, total: rf1 + rf2, scs: porSC.length } };
   }, [filas]);
 
-  // ─── Filas filtradas por categoría ───
-  const filasFiltradas = useMemo(() => {
-    if (filtroCat === "TODOS") return filas;
-    if (filtroCat === "INCIDENTES") return filas.filter(f => f.categoria !== "OK");
-    return filas.filter(f => f.categoria === filtroCat);
-  }, [filas, filtroCat]);
-
-  // ─── Orden: NO_SHOW > CAMBIO_PLACA > PARCIAL > OK, después SC + driver ───
-  const filasOrdenadas = useMemo(() => {
-    const orden = { NO_SHOW: 1, CAMBIO_PLACA: 2, PARCIAL: 3, OK: 4, OTRO: 5 };
-    return [...filasFiltradas].sort((a, b) => {
-      const oa = orden[a.categoria] || 9;
-      const ob = orden[b.categoria] || 9;
-      if (oa !== ob) return oa - ob;
-      if (a.facility !== b.facility) return a.facility.localeCompare(b.facility);
-      return (a.driver_name || "").localeCompare(b.driver_name || "");
-    });
-  }, [filasFiltradas]);
-
-  const tdCenter = { padding: "6px", textAlign: "center" };
-  const tdLeft = { padding: "6px 10px", textAlign: "left" };
-
-  const colorCategoria = (cat) => {
-    if (cat === "OK") return { bg: "#dcfce7", text: "#15803d", label: "✅ OK" };
-    if (cat === "NO_SHOW") return { bg: "#fee2e2", text: "#dc2626", label: "🚨 NO SHOW" };
-    if (cat === "PARCIAL") return { bg: "#fef3c7", text: "#b45309", label: "⚠️ PARCIAL" };
-    if (cat === "CAMBIO_PLACA") return { bg: "#dbeafe", text: "#1d4ed8", label: "🔄 CAMBIO PLACA" };
-    return { bg: "#f1f5f9", text: "#475569", label: cat };
-  };
+  const tdC = { padding: "6px", textAlign: "center" };
+  const tdL = { padding: "6px 10px", textAlign: "left" };
 
   return (
     <div>
-      {/* ─── KPIs ─── */}
+      {/* KPIs */}
       <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
-        <KpiSnap label="Drivers planif." valor={fmtNumSnap(kpis.total)} sub={`${kpis.scs} SCs`} />
-        <KpiSnap label="✅ Operó OK" valor={fmtNumSnap(kpis.ok)} color="#15803d"
-          sub={kpis.total > 0 ? `${(kpis.ok / kpis.total * 100).toFixed(0)}%` : "—"} />
-        <KpiSnap label="🚨 NO SHOW" valor={fmtNumSnap(kpis.noShow)} color="#dc2626"
-          sub={kpis.total > 0 ? `${(kpis.noShow / kpis.total * 100).toFixed(0)}%` : "—"} />
-        <KpiSnap label="⚠️ Parcial" valor={fmtNumSnap(kpis.parcial)} color="#b45309"
-          sub="Operó 1 de N placas" />
-        <KpiSnap label="🔄 Cambio placa" valor={fmtNumSnap(kpis.cambio)} color="#1d4ed8"
-          sub="Otra placa" />
-        <KpiSnap label="% Entrega" valor={`${kpis.pctEntregado.toFixed(1)}%`} color="#3B82F6"
-          sub={`${fmtNumSnap(kpis.totalEntregados)}/${fmtNumSnap(kpis.totalCargados)}`} />
+        <KpiSnap label="No Show total" valor={fmtNumSnap(kpis.total)} color="#b91c1c" sub={`${kpis.scs} SCs`} />
+        <KpiSnap label="🚨 RF1"        valor={fmtNumSnap(kpis.rf1)} color="#b91c1c" sub="aceptado · no rosterizó" />
+        <KpiSnap label="🚨 RF2"        valor={fmtNumSnap(kpis.rf2)} color="#b91c1c" sub="rosterizó · no salió" />
       </div>
 
-      {/* ─── Mini-grid por SC ─── */}
-      {porSC.length > 0 && (
-        <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10, padding: 12, marginBottom: 14 }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: "#64748b", textTransform: "uppercase",
-            letterSpacing: 0.5, marginBottom: 8 }}>
-            Cumplimiento por Service Center
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 8 }}>
-            {porSC.map(sc => {
-              const incidentes = sc.noShow + sc.parcial + sc.cambio;
-              const borderColor = incidentes > 0 ? "#fecaca" : "#bbf7d0";
-              const bgColor = incidentes > 0 ? "#fef2f2" : "#f0fdf4";
-              return (
-                <div key={sc.sc} style={{
-                  background: bgColor, border: `1px solid ${borderColor}`, borderRadius: 8,
-                  padding: 8, fontSize: 11
-                }}>
-                  <div style={{ fontWeight: 700, fontSize: 13, color: "#1a3a6b", marginBottom: 4 }}>
-                    {sc.sc}
-                  </div>
-                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap", fontSize: 10 }}>
-                    <span style={{ color: "#15803d" }}>✅ {sc.ok}</span>
-                    {sc.noShow > 0 && <span style={{ color: "#dc2626", fontWeight: 700 }}>🚨 {sc.noShow}</span>}
-                    {sc.parcial > 0 && <span style={{ color: "#b45309", fontWeight: 700 }}>⚠️ {sc.parcial}</span>}
-                    {sc.cambio > 0 && <span style={{ color: "#1d4ed8", fontWeight: 700 }}>🔄 {sc.cambio}</span>}
-                    <span style={{ color: "#64748b", marginLeft: "auto" }}>{sc.pctOk.toFixed(0)}%</span>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {/* ─── Filtros por categoría ─── */}
-      <div style={{ display: "flex", gap: 6, marginBottom: 10, flexWrap: "wrap" }}>
-        {[
-          { id: "INCIDENTES", label: "Solo incidentes", color: "#dc2626" },
-          { id: "NO_SHOW", label: `🚨 NO SHOW (${kpis.noShow})`, color: "#dc2626" },
-          { id: "PARCIAL", label: `⚠️ Parcial (${kpis.parcial})`, color: "#b45309" },
-          { id: "CAMBIO_PLACA", label: `🔄 Cambio placa (${kpis.cambio})`, color: "#1d4ed8" },
-          { id: "OK", label: `✅ OK (${kpis.ok})`, color: "#15803d" },
-          { id: "TODOS", label: `Todos (${kpis.total})`, color: "#1a3a6b" },
-        ].map(b => (
-          <button key={b.id} onClick={() => setFiltroCat(b.id)} style={{
-            padding: "6px 12px",
-            background: filtroCat === b.id ? b.color : "#fff",
-            color: filtroCat === b.id ? "#fff" : b.color,
-            border: `1px solid ${b.color}`,
-            borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: "pointer"
-          }}>
-            {b.label}
-          </button>
-        ))}
-      </div>
-
-      {/* ─── Tabla principal ─── */}
-      <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10, overflow: "auto", maxHeight: 600 }}>
+      {/* Resumen por SC: RF1 | RF2 | Total */}
+      <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10, overflow: "auto", maxHeight: 320, marginBottom: 16 }}>
         {loading ? (
           <div style={{ padding: 30, textAlign: "center", color: "#888", fontSize: 13 }}>Cargando...</div>
-        ) : filasOrdenadas.length === 0 ? (
-          <div style={{ padding: 30, textAlign: "center",
-            color: filtroCat === "INCIDENTES" || filtroCat === "TODOS" ? "#16a34a" : "#888",
-            fontSize: 13, fontWeight: 600 }}>
-            {filtroCat === "INCIDENTES" || filtroCat === "TODOS"
-              ? "✅ Sin incidentes en esta fecha"
-              : "Sin registros con ese filtro"}
-          </div>
+        ) : porSC.length === 0 ? (
+          <div style={{ padding: 30, textAlign: "center", color: "#16a34a", fontSize: 13, fontWeight: 600 }}>✅ Sin No Show en esta fecha</div>
         ) : (
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
             <thead style={{ background: "#f8fafc", position: "sticky", top: 0, zIndex: 1 }}>
               <tr>
                 {[
-                  { l: "SC", t: "Service Center" },
-                  { l: "Driver", t: "Nombre del conductor (padrón MELI)" },
-                  { l: "Driver ID", t: "ID interno MELI" },
-                  { l: "Placas planificadas", t: "Placas asignadas en el rostering" },
-                  { l: "Placas operadas", t: "Placas que efectivamente operaron (del snapshot)" },
-                  { l: "Cargados", t: "Paquetes cargados al vehículo" },
-                  { l: "Entregados", t: "Paquetes entregados" },
-                  { l: "% Entrega", t: "% de paquetes entregados sobre cargados" },
-                  { l: "Estado", t: "Diagnóstico del cumplimiento" },
+                  { l: "SC",    a: "left",   t: "Service Center" },
+                  { l: "RF1",   a: "center", t: "Aceptado por BT pero no rosterizado a tiempo · multa MELI" },
+                  { l: "RF2",   a: "center", t: "Rosterizado completo pero el driver no salió · BT cobra al transporte" },
+                  { l: "Total", a: "center", t: "RF1 + RF2" },
                 ].map(h => (
-                  <th key={h.l} title={h.t}
-                    style={{ padding: "8px 6px", textAlign: "center", fontWeight: 700, color: "#666",
-                      borderBottom: "1px solid #e4e7ec", fontSize: 10, textTransform: "uppercase",
-                      letterSpacing: 0.3, cursor: "help" }}>
-                    {h.l}
-                  </th>
+                  <th key={h.l} title={h.t} style={{ padding: "8px 6px", textAlign: h.a, fontWeight: 700, color: "#666",
+                    borderBottom: "1px solid #e4e7ec", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.3, cursor: "help" }}>{h.l}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {filasOrdenadas.map((f, i) => {
-                const c = colorCategoria(f.categoria);
-                return (
-                  <tr key={i} style={{ borderBottom: "1px solid #f1f5f9",
-                    background: i % 2 === 0 ? "#fff" : "#fafbfc" }}>
-                    <td style={{ ...tdCenter, fontWeight: 700, color: "#1a3a6b" }}>{f.facility}</td>
-                    <td style={tdLeft}>{f.driver_name || "—"}</td>
-                    <td style={{ ...tdCenter, color: "#94a3b8", fontSize: 10, fontFamily: "monospace" }}>
-                      {f.driver_id || "—"}
-                    </td>
-                    <td style={{ ...tdLeft, fontFamily: "monospace", fontSize: 10 }}>
-                      {f.placas_planificadas_detalle || "—"}
-                    </td>
-                    <td style={{ ...tdLeft, fontFamily: "monospace", fontSize: 10,
-                      color: f.categoria === "NO_SHOW" ? "#dc2626" : "#1a1a1a" }}>
-                      {f.placas_operadas_detalle || (
-                        <span style={{ color: "#dc2626", fontWeight: 700 }}>— sin operar —</span>
-                      )}
-                    </td>
-                    <td style={{ ...tdCenter, fontWeight: 600 }}>{fmtNumSnap(f.total_cargados)}</td>
-                    <td style={{ ...tdCenter, color: "#16a34a", fontWeight: 600 }}>
-                      {fmtNumSnap(f.total_entregados)}
-                    </td>
-                    <td style={{ ...tdCenter, fontWeight: 700,
-                      color: f.pct_entregado >= 95 ? "#16a34a" :
-                             f.pct_entregado >= 80 ? "#ca8a04" :
-                             f.pct_entregado != null ? "#dc2626" : "#cbd5e1" }}>
-                      {f.pct_entregado != null ? `${Number(f.pct_entregado).toFixed(1)}%` : "—"}
-                    </td>
-                    <td style={tdCenter}>
-                      <span style={{
-                        background: c.bg, color: c.text,
-                        padding: "3px 8px", borderRadius: 4,
-                        fontSize: 10, fontWeight: 700, whiteSpace: "nowrap"
-                      }}>
-                        {c.label}
-                      </span>
-                    </td>
-                  </tr>
-                );
-              })}
+              {porSC.map((s, i) => (
+                <tr key={i} style={{ borderBottom: "1px solid #f1f5f9", background: i % 2 === 0 ? "#fff" : "#fafbfc" }}>
+                  <td style={{ ...tdL, fontWeight: 700, color: "#1a3a6b" }}>{s.sc}</td>
+                  <td style={{ ...tdC, color: s.rf1 > 0 ? "#b91c1c" : "#94a3b8", fontWeight: s.rf1 > 0 ? 700 : 400 }}>{s.rf1}</td>
+                  <td style={{ ...tdC, color: s.rf2 > 0 ? "#b91c1c" : "#94a3b8", fontWeight: s.rf2 > 0 ? 700 : 400 }}>{s.rf2}</td>
+                  <td style={{ ...tdC, fontWeight: 700, color: "#1a3a6b" }}>{s.total}</td>
+                </tr>
+              ))}
+              <tr style={{ borderTop: "2px solid #e4e7ec", background: "#f8fafc", fontWeight: 700 }}>
+                <td style={{ ...tdL, color: "#1a3a6b" }}>TOTAL</td>
+                <td style={{ ...tdC, color: "#b91c1c" }}>{kpis.rf1}</td>
+                <td style={{ ...tdC, color: "#b91c1c" }}>{kpis.rf2}</td>
+                <td style={{ ...tdC, color: "#1a3a6b" }}>{kpis.total}</td>
+              </tr>
             </tbody>
           </table>
         )}
       </div>
 
+      {/* Detalle ruta por ruta */}
+      {detalle.length > 0 && (
+        <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10, overflow: "auto", maxHeight: 360 }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+            <thead style={{ background: "#f8fafc", position: "sticky", top: 0, zIndex: 1 }}>
+              <tr>
+                {[
+                  { l: "Tipo",          a: "center" },
+                  { l: "SC",            a: "left"   },
+                  { l: "Driver",        a: "left"   },
+                  { l: "Placa planif.", a: "left"   },
+                  { l: "Placa operada", a: "left"   },
+                  { l: "Travel",        a: "center" },
+                ].map(h => (
+                  <th key={h.l} style={{ padding: "8px 6px", textAlign: h.a, fontWeight: 700, color: "#666",
+                    borderBottom: "1px solid #e4e7ec", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.3 }}>{h.l}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {detalle.map((f, i) => {
+                const esRF1 = f.bucket === BUCKET_RF1;
+                return (
+                  <tr key={i} style={{ borderBottom: "1px solid #f1f5f9", background: i % 2 === 0 ? "#fff" : "#fafbfc" }}>
+                    <td style={tdC}>
+                      <span style={{ background: "#fee2e2", color: "#b91c1c", padding: "2px 8px", borderRadius: 6, fontWeight: 700, fontSize: 10 }}>
+                        {esRF1 ? "RF1" : "RF2"}
+                      </span>
+                    </td>
+                    <td style={{ ...tdL, fontWeight: 700, color: "#1a3a6b" }}>{f.sc}</td>
+                    <td style={tdL}>{f.driver_name || "—"}</td>
+                    <td style={{ ...tdL, fontFamily: "monospace", fontSize: 10 }}>{f.placas_planificadas || "—"}</td>
+                    <td style={{ ...tdL, fontFamily: "monospace", fontSize: 10, color: "#b91c1c" }}>
+                      {f.placas_operadas || "— sin operar —"}
+                    </td>
+                    <td style={{ ...tdC, color: "#94a3b8", fontSize: 10, fontFamily: "monospace" }}>{f.travel_id || "—"}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
       {/* ─── Pie informativo ─── */}
       <div style={{ marginTop: 8, fontSize: 10, color: "#94a3b8", textAlign: "right" }}>
-        Fuente: vw_rostering_vs_operativo · Rostering MELI (capturas AM 06:00 + PM 23:30) × Snapshot operativo 23:59
+        Fuente: get_torre_3_pilares · RF1 (aceptado · no rosterizó) + RF2 (rosterizó · no salió)
       </div>
     </div>
   );
