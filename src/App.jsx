@@ -17299,45 +17299,50 @@ function semanaInventarioEsActual(sem) {
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CONCILIACIÓN SEMANAL TERCEROS — agrupa los viajes pagados de la semana
-// (maestro_jornada_mx) por empresa tercero (flota_terceros_mx de esa semana).
-// RPCs: get_conciliacion_terceros_resumen / get_conciliacion_terceros_detalle.
-// Placas sin inventario caen en la tarjeta "SIN EMPRESA ASOCIADA", donde el
-// analista las asigna (inserta en flota_terceros_mx) o crea la empresa nueva
-// (empresas_terceros_mx, que alimenta el header del PDF: RFC, supervisor, etc).
+// (maestro_jornada_mx) por empresa tercero (flota_terceros_mx de esa semana)
+// y, dentro de cada empresa, POR SERVICE CENTER. Cada combinación empresa+SC
+// genera su propia prefactura PDF y su propio cierre de conciliación.
+// Fuente de empresas: prefacturas_transportistas_mx (RFC + correos TO/CC/BCC),
+// la MISMA que usa el envío masivo de prefacturas.
+// Supervisor del PDF: prefacturas_parametros_mx (por CECO/SC).
+// RPCs: get_conciliacion_terceros_resumen(p_semana)
+//       get_conciliacion_terceros_detalle(p_semana, p_empresa, p_sc)
 // ═══════════════════════════════════════════════════════════════════════════
 const SIN_EMPRESA = "SIN EMPRESA ASOCIADA";
-const EMPRESA_FORM_VACIA = { id: null, nombre: "", rfc: "", supervisor: "", telefono: "", email_envio: "", direccion: "" };
+const TRANSP_FORM_VACIO = { id: null, nombre: "", rfc: "", estado: "Activo", correo_to: "", correo_cc: "", correo_bcc: "", notas: "" };
 
 function ConciliacionTercerosMX({ usuario }) {
   const [semana, setSemana] = useState(() => {
     const s = semanaInventario(fechaOperativaOffset(0));
-    return s != null ? s - 1 : 24; // por defecto: la última semana cerrada (lun-dom anterior)
+    return s != null ? s - 1 : 24; // por defecto: última semana cerrada
   });
-  const [resumen, setResumen] = useState([]);
+  const [resumen, setResumen] = useState([]);          // 1 fila por empresa+SC
   const [loading, setLoading] = useState(true);
-  const [expandida, setExpandida] = useState(null);          // nombre de empresa abierta
-  const [detalles, setDetalles] = useState({});              // empresa -> filas
+  const [expandida, setExpandida] = useState(null);    // nombre de empresa abierta
+  const [detalles, setDetalles] = useState({});        // empresa -> filas (todos los SC)
   const [loadingDetalle, setLoadingDetalle] = useState(false);
-  const [empresasMaster, setEmpresasMaster] = useState([]);  // empresas_terceros_mx
-  const [formEmpresa, setFormEmpresa] = useState(null);      // null = modal cerrado
-  const [guardandoEmpresa, setGuardandoEmpresa] = useState(false);
-  const [asignacionSel, setAsignacionSel] = useState({});    // placa -> empresa elegida
-  const [asignando, setAsignando] = useState(null);          // placa en proceso
-  const [cerrando, setCerrando] = useState(null);            // empresa en proceso de cierre
+  const [transportistas, setTransportistas] = useState([]); // prefacturas_transportistas_mx
+  const [parametros, setParametros] = useState([]);         // prefacturas_parametros_mx
+  const [formTransp, setFormTransp] = useState(null);  // null = modal cerrado
+  const [guardandoTransp, setGuardandoTransp] = useState(false);
+  const [asignacionSel, setAsignacionSel] = useState({}); // placa -> empresa
+  const [asignando, setAsignando] = useState(null);
+  const [cerrando, setCerrando] = useState(null);      // "empresa||SC" en proceso
   const [msg, setMsg] = useState(null);
 
-  const normEmp = (s) => String(s || "").trim().toUpperCase();
+  const norm = (s) => String(s || "").trim().toUpperCase();
   const fmtMon = (v) => "$ " + Math.round(Number(v || 0)).toLocaleString("es-CL");
   const fmtPct = (v) => (v == null ? "—" : Number(v).toLocaleString("es-CL", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + "%");
   const fmtKm = (v) => (v == null ? "—" : Number(v).toLocaleString("es-CL", { maximumFractionDigits: 1 }));
   const fmtFactor = (v) => Number(v || 0).toLocaleString("es-CL", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const fmtFechaDDMM = (iso) => { const s = String(iso || "").slice(0, 10); const [y, m, d] = s.split("-"); return d && m && y ? `${d}-${m}-${y}` : s; };
 
-  const masterPorNorm = useMemo(() => {
-    const m = {};
-    for (const e of empresasMaster) m[normEmp(e.nombre)] = e;
-    return m;
-  }, [empresasMaster]);
+  const transpPorNorm = useMemo(() => {
+    const m = {}; for (const t of transportistas) m[norm(t.nombre)] = t; return m;
+  }, [transportistas]);
+  const paramPorSC = useMemo(() => {
+    const m = {}; for (const p of parametros) m[norm(p.ceco)] = p; return m;
+  }, [parametros]);
 
   const cargarResumen = async (sem) => {
     setLoading(true); setMsg(null);
@@ -17353,21 +17358,26 @@ function ConciliacionTercerosMX({ usuario }) {
     setLoading(false);
   };
 
-  const cargarEmpresasMaster = async () => {
+  const cargarMaestros = async () => {
     try {
-      const { data } = await sb.from("empresas_terceros_mx").select("*").eq("activo", true).order("nombre");
-      setEmpresasMaster(data || []);
-    } catch (e) { console.error("empresas_terceros_mx:", e); }
+      const [t, p] = await Promise.all([
+        sb.from("prefacturas_transportistas_mx").select("*").order("nombre"),
+        sb.from("prefacturas_parametros_mx").select("*").order("ceco"),
+      ]);
+      setTransportistas(t.data || []);
+      setParametros(p.data || []);
+    } catch (e) { console.error("maestros prefacturas:", e); }
   };
 
   useEffect(() => { cargarResumen(semana); setExpandida(null); setDetalles({}); setAsignacionSel({}); }, [semana]);
-  useEffect(() => { cargarEmpresasMaster(); }, []);
+  useEffect(() => { cargarMaestros(); }, []);
 
   const cargarDetalle = async (empresa) => {
     if (detalles[empresa]) return;
     setLoadingDetalle(true);
     try {
-      const { data, error } = await sb.rpc("get_conciliacion_terceros_detalle", { p_semana: semana, p_empresa: empresa });
+      // p_sc = null -> trae todos los SC de la empresa; agrupamos en cliente
+      const { data, error } = await sb.rpc("get_conciliacion_terceros_detalle", { p_semana: semana, p_empresa: empresa, p_sc: null });
       if (error) throw error;
       setDetalles(prev => ({ ...prev, [empresa]: data || [] }));
     } catch (e) {
@@ -17379,28 +17389,47 @@ function ConciliacionTercerosMX({ usuario }) {
 
   const toggleEmpresa = (empresa) => {
     if (expandida === empresa) { setExpandida(null); return; }
-    setExpandida(empresa);
-    cargarDetalle(empresa);
+    setExpandida(empresa); cargarDetalle(empresa);
   };
 
   const refrescarTodo = async () => {
     setDetalles({}); setAsignacionSel({});
-    await Promise.all([cargarResumen(semana), cargarEmpresasMaster()]);
+    await Promise.all([cargarResumen(semana), cargarMaestros()]);
   };
 
-  // ── Asignación de placa a empresa (inserta en flota_terceros_mx, semana actual) ──
+  // ── Agregar las filas de empresa+SC del resumen en un objeto por empresa ──
+  const empresasAgrupadas = useMemo(() => {
+    const out = {}; // empresa -> { filasSC:[], totalNeto, totalBruto, nViajes, nNoPago, nPlacas:Set }
+    for (const r of resumen) {
+      if (!out[r.empresa]) out[r.empresa] = { empresa: r.empresa, filasSC: [], totalNeto: 0, totalBruto: 0, totalIva: 0, nViajes: 0, nNoPago: 0, placas: new Set(), rfc: r.rfc, correo_to: r.correo_to };
+      const g = out[r.empresa];
+      g.filasSC.push(r);
+      g.totalNeto += Number(r.total_neto || 0);
+      g.totalBruto += Number(r.total_bruto || 0);
+      g.totalIva += Number(r.iva_16 || 0);
+      g.nViajes += Number(r.n_viajes || 0);
+      g.nNoPago += Number(r.n_no_pago || 0);
+    }
+    // n_placas a nivel empresa: sumamos placas distintas (aprox: suma de SC, puede repetir placa entre SC)
+    for (const g of Object.values(out)) g.nPlacas = g.filasSC.reduce((s, f) => s + Number(f.n_placas || 0), 0);
+    const arr = Object.values(out);
+    arr.sort((a, b) => (a.empresa === SIN_EMPRESA ? -1 : b.empresa === SIN_EMPRESA ? 1 : b.totalNeto - a.totalNeto));
+    return arr;
+  }, [resumen]);
+
+  const claveCierre = (empresa, sc) => `${empresa}||${sc}`;
+
+  // ── Asignar placa a transportista (inserta en flota_terceros_mx) ──
   const asignarPlaca = async (placa, filasPlaca) => {
     const eleccion = asignacionSel[placa];
-    if (!eleccion) return alert("Elegí una empresa para la placa " + placa);
-    if (eleccion === "__nueva__") { setFormEmpresa({ ...EMPRESA_FORM_VACIA }); return; }
+    if (!eleccion) return alert("Elegí un transportista para la placa " + placa);
+    if (eleccion === "__nueva__") { setFormTransp({ ...TRANSP_FORM_VACIO }); return; }
     if (!confirm(`¿Asignar la placa ${placa} a "${eleccion}" para la semana ${semana} (${etiquetaSemanaInventario(semana)})?`)) return;
     setAsignando(placa);
     try {
       const sc = (filasPlaca && filasPlaca[0] && filasPlaca[0].service_center_id) || null;
       const { error } = await sb.from("flota_terceros_mx").insert({
-        semana,
-        placa: normalizarPlaca(placa),
-        empresa_transporte: eleccion,
+        semana, placa: normalizarPlaca(placa), empresa_transporte: eleccion,
         operacion: sc ? "ML_MX_" + sc : null,
         responsable: (usuario && (usuario.nombre || usuario.email)) || "Brain - Conciliación",
         fecha_hora_envio: new Date().toISOString(),
@@ -17415,67 +17444,51 @@ function ConciliacionTercerosMX({ usuario }) {
     setAsignando(null);
   };
 
-  // ── Crear / editar empresa (empresas_terceros_mx) ──
-  const guardarEmpresa = async () => {
-    const f = formEmpresa;
+  // ── Crear / editar transportista (prefacturas_transportistas_mx) ──
+  const guardarTransp = async () => {
+    const f = formTransp;
     if (!f || !f.nombre.trim()) return alert("La razón social es obligatoria.");
     if (!f.rfc.trim()) return alert("El RFC es obligatorio (va en el header del PDF).");
-    setGuardandoEmpresa(true);
+    setGuardandoTransp(true);
     try {
       const payload = {
-        nombre: f.nombre.trim(),
-        rfc: f.rfc.trim() || null,
-        supervisor: f.supervisor.trim() || null,
-        telefono: f.telefono.trim() || null,
-        email_envio: f.email_envio.trim() || null,
-        direccion: f.direccion.trim() || null,
-        updated_at: new Date().toISOString(),
+        nombre: f.nombre.trim(), rfc: f.rfc.trim() || null, estado: f.estado || "Activo",
+        correo_to: f.correo_to.trim() || null, correo_cc: f.correo_cc.trim() || null,
+        correo_bcc: f.correo_bcc.trim() || null, notas: f.notas.trim() || null,
       };
       let error;
-      if (f.id) ({ error } = await sb.from("empresas_terceros_mx").update(payload).eq("id", f.id));
-      else ({ error } = await sb.from("empresas_terceros_mx").insert(payload));
+      if (f.id) ({ error } = await sb.from("prefacturas_transportistas_mx").update(payload).eq("id", f.id));
+      else ({ error } = await sb.from("prefacturas_transportistas_mx").insert(payload));
       if (error) throw error;
-      setMsg({ ok: true, txt: `Empresa "${f.nombre.trim()}" guardada.` });
-      setFormEmpresa(null);
-      await cargarEmpresasMaster();
+      setMsg({ ok: true, txt: `Transportista "${f.nombre.trim()}" guardado.` });
+      setFormTransp(null);
+      await cargarMaestros();
       await cargarResumen(semana);
     } catch (e) {
-      console.error("guardar empresa:", e);
-      alert("Error guardando empresa: " + (e.message || e));
+      console.error("guardar transportista:", e);
+      alert("Error guardando transportista: " + (e.message || e));
     }
-    setGuardandoEmpresa(false);
+    setGuardandoTransp(false);
   };
 
-  // ── Cerrar / reabrir conciliación (congela detalle en conciliaciones_terceros) ──
-  const cerrarConciliacion = async (empresa) => {
-    const r = resumen.find(x => x.empresa === empresa);
-    const det = detalles[empresa];
-    if (!r || !det) return alert("Abrí primero el detalle de la empresa antes de cerrar.");
-    if (!confirm(`¿Cerrar la conciliación de "${empresa}" — semana ${semana} (${etiquetaSemanaInventario(semana)})?\n\nNeto: ${fmtMon(r.total_neto)} · Bruto: ${fmtMon(r.total_bruto)} · ${r.n_viajes} viajes (${r.n_no_pago} no pago).\n\nEl detalle queda congelado para el PDF y el envío.`)) return;
-    setCerrando(empresa);
+  // ── Cerrar / reabrir conciliación por empresa+SC ──
+  const cerrarConciliacion = async (empresa, sc, rSC, filasSC) => {
+    if (!filasSC || !filasSC.length) return alert("Sin viajes para cerrar en " + sc + ".");
+    if (!confirm(`¿Cerrar la conciliación de "${empresa}" — ${sc} — semana ${semana} (${etiquetaSemanaInventario(semana)})?\n\nNeto: ${fmtMon(rSC.total_neto)} · Bruto: ${fmtMon(rSC.total_bruto)} · ${rSC.n_viajes} viajes (${rSC.n_no_pago} no pago).\n\nEl detalle queda congelado para el PDF y el envío.`)) return;
+    setCerrando(claveCierre(empresa, sc));
     try {
-      const master = masterPorNorm[normEmp(empresa)] || null;
       const lunes = rangoSemanaInventario(semana).inicio.toISOString().slice(0, 10);
       const ahora = new Date().toISOString();
       const { error } = await sb.from("conciliaciones_terceros").upsert({
-        empresa_id: master ? master.id : null,
-        empresa_nombre: empresa,
-        semana,
-        semana_inicio: lunes,
+        empresa_nombre: empresa, service_center: sc, semana, semana_inicio: lunes,
         estado: "cerrada",
-        total_neto: r.total_neto,
-        iva_16: r.iva_16,
-        total_bruto: r.total_bruto,
-        liquido_pago: r.total_bruto,
-        n_viajes: r.n_viajes,
-        n_no_pago: r.n_no_pago,
-        detalle: det,
-        generado_at: ahora,
-        cerrado_at: ahora,
+        total_neto: rSC.total_neto, iva_16: rSC.iva_16, total_bruto: rSC.total_bruto, liquido_pago: rSC.total_bruto,
+        n_viajes: rSC.n_viajes, n_no_pago: rSC.n_no_pago,
+        detalle: filasSC, generado_at: ahora, cerrado_at: ahora,
         cerrado_por: (usuario && (usuario.nombre || usuario.email)) || "Brain",
-      }, { onConflict: "empresa_nombre,semana" });
+      }, { onConflict: "empresa_nombre,service_center,semana" });
       if (error) throw error;
-      setMsg({ ok: true, txt: `Conciliación de ${empresa} cerrada (semana ${semana}).` });
+      setMsg({ ok: true, txt: `Conciliación de ${empresa} · ${sc} cerrada (semana ${semana}).` });
       await cargarResumen(semana);
     } catch (e) {
       console.error("cerrar conciliación:", e);
@@ -17484,65 +17497,54 @@ function ConciliacionTercerosMX({ usuario }) {
     setCerrando(null);
   };
 
-  const reabrirConciliacion = async (empresa) => {
-    if (!confirm(`¿Reabrir la conciliación de "${empresa}" — semana ${semana}? Volverá a estado borrador.`)) return;
+  const reabrirConciliacion = async (empresa, sc) => {
+    if (!confirm(`¿Reabrir la conciliación de "${empresa}" · ${sc} — semana ${semana}? Volverá a borrador.`)) return;
     try {
       const { error } = await sb.from("conciliaciones_terceros")
-        .update({ estado: "borrador" }).eq("empresa_nombre", empresa).eq("semana", semana);
+        .update({ estado: "borrador" })
+        .eq("empresa_nombre", empresa).eq("service_center", sc).eq("semana", semana);
       if (error) throw error;
       await cargarResumen(semana);
     } catch (e) { alert("Error reabriendo: " + (e.message || e)); }
   };
 
-  // ── PDF (ventana de impresión; mismo template que usará el endpoint del VPS) ──
-  const generarPDF = (empresa) => {
-    const det = detalles[empresa];
-    const r = resumen.find(x => x.empresa === empresa);
-    if (!det || !r) return alert("Abrí primero el detalle de la empresa.");
-    const master = masterPorNorm[normEmp(empresa)] || {};
+  // ── PDF por empresa + SC (mismo template que portará el endpoint del VPS) ──
+  const generarPDF = (empresa, sc, filasSC, rSC) => {
+    if (!filasSC || !filasSC.length) return alert("Sin viajes para " + empresa + " en " + sc + ".");
+    const t = transpPorNorm[norm(empresa)] || {};
+    const par = paramPorSC[norm(sc)] || {};
     const { inicio, fin } = rangoSemanaInventario(semana);
-    const MESES = ["ENERO","FEBRERO","MARZO","ABRIL","MAYO","JUNIO","JULIO","AGOSTO","SEPTIEMBRE","OCTUBRE","NOVIEMBRE","DICIEMBRE"];
-    const periodo = `${String(inicio.getUTCDate()).padStart(2,"0")} DE ${MESES[inicio.getUTCMonth()]} AL ${String(fin.getUTCDate()).padStart(2,"0")} DE ${MESES[fin.getUTCMonth()]}`;
+    const MESES = ["ENERO", "FEBRERO", "MARZO", "ABRIL", "MAYO", "JUNIO", "JULIO", "AGOSTO", "SEPTIEMBRE", "OCTUBRE", "NOVIEMBRE", "DICIEMBRE"];
+    const periodo = `${String(inicio.getUTCDate()).padStart(2, "0")} DE ${MESES[inicio.getUTCMonth()]} AL ${String(fin.getUTCDate()).padStart(2, "0")} DE ${MESES[fin.getUTCMonth()]}`;
     const mesFactura = MESES[fin.getUTCMonth()].toLowerCase() + "-" + String(fin.getUTCFullYear()).slice(2);
-    const scs = [...new Set(det.map(d => d.service_center_id).filter(Boolean))];
-    const operacion = scs.length === 1 ? "ML_MX_" + scs[0] : "ML_MX (" + scs.join(", ") + ")";
+    const operacion = "ML_MX_" + sc;
 
-    // Resumen por patente
     const porPatente = {};
-    for (const d of det) {
+    for (const d of filasSC) {
       const p = d.placa || "—";
       if (!porPatente[p]) porPatente[p] = { entregados: 0, neto: 0 };
       porPatente[p].entregados += Number(d.entregado || 0);
       porPatente[p].neto += Number(d.monto || 0);
     }
-    const noPagos = det.filter(d => d.es_no_pago);
+    const noPagos = filasSC.filter(d => d.es_no_pago);
 
-    const filasDetalle = det.map(d => `
+    const filasDetalle = filasSC.map(d => `
       <tr>
-        <td>${fmtFechaDDMM(d.fecha)}</td>
-        <td>${d.placa || ""}</td>
-        <td>${d.id_ruta || ""}</td>
-        <td style="text-align:left">${d.driver_name || ""}</td>
-        <td>${d.tiene_auxiliar ? "SI" : "NO"}</td>
-        <td>${d.service_center_id || ""}</td>
-        <td>${d.cargado ?? ""}</td>
-        <td>${d.entregado ?? ""}</td>
-        <td>${fmtPct(d.pct_entrega)}</td>
-        <td>${fmtKm(d.km_pago)}</td>
-        <td>${fmtFactor(d.factor_ns)}</td>
+        <td>${fmtFechaDDMM(d.fecha)}</td><td>${d.placa || ""}</td><td>${d.id_ruta || ""}</td>
+        <td style="text-align:left">${d.driver_name || ""}</td><td>${d.tiene_auxiliar ? "SI" : "NO"}</td>
+        <td>${d.service_center_id || ""}</td><td>${d.cargado ?? ""}</td><td>${d.entregado ?? ""}</td>
+        <td>${fmtPct(d.pct_entrega)}</td><td>${fmtKm(d.km_pago)}</td><td>${fmtFactor(d.factor_ns)}</td>
         <td style="text-align:right">${d.es_no_pago ? "$ -" : fmtMon(d.monto)}</td>
       </tr>`).join("");
-
     const filasPatente = Object.entries(porPatente).map(([p, v]) => `
       <tr><td>${p}</td><td>${v.entregados}</td><td style="text-align:right">${fmtMon(v.neto)}</td></tr>`).join("");
-
     const obsHtml = noPagos.length ? `
       <div class="obs">
         <div class="obs-title">OBSERVACIONES — RUTAS NO PAGADAS (VISITA &lt; 90%)</div>
         ${noPagos.map(d => `<div class="obs-row">${fmtFechaDDMM(d.fecha)} · ${d.placa} · Ruta ${d.id_ruta} · ${d.driver_name || ""} — ${d.motivo_no_pago || "NO PAGADO"} (cargado ${d.cargado}, entregado ${d.entregado}, entrega ${fmtPct(d.pct_entrega)})</div>`).join("")}
       </div>` : "";
 
-    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Prefactura ${empresa} ${periodo}</title>
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Prefactura ${empresa} ${sc} ${periodo}</title>
 <style>
   * { margin:0; padding:0; box-sizing:border-box; font-family: Arial, Helvetica, sans-serif; }
   body { padding: 28px 32px; color:#1a1a1a; font-size:11px; }
@@ -17571,8 +17573,7 @@ function ConciliacionTercerosMX({ usuario }) {
   .obs-title { font-weight:800; font-size:10px; color:#991b1b; margin-bottom:6px; }
   .obs-row { font-size:10px; color:#7f1d1d; padding:2px 0; }
   @media print { body { padding: 10mm 12mm; } .noprint { display:none; } }
-  .noprint { margin-top:24px; }
-  .noprint button { padding:8px 18px; background:#1a3a6b; color:#fff; border:none; border-radius:6px; font-size:13px; cursor:pointer; }
+  .noprint { margin-top:24px; } .noprint button { padding:8px 18px; background:#1a3a6b; color:#fff; border:none; border-radius:6px; font-size:13px; cursor:pointer; }
 </style></head><body>
   <div class="head">
     <div>
@@ -17583,26 +17584,25 @@ function ConciliacionTercerosMX({ usuario }) {
     </div>
     <div class="logo">bigticket<small>LOGÍSTICA Y TRANSPORTE</small></div>
   </div>
-
   <div class="cols">
     <div>
       <table class="info">
         <tr><td class="k">EMPRESA TRANSPORTE:</td><td class="v">${empresa}</td></tr>
-        <tr><td class="k">RFC EMPRESA TRANSPORTE:</td><td class="v">${master.rfc || "—"}</td></tr>
+        <tr><td class="k">RFC EMPRESA TRANSPORTE:</td><td class="v">${t.rfc || "—"}</td></tr>
         <tr><td class="k">OPERACIÓN:</td><td class="v">${operacion}</td></tr>
-        <tr><td class="k">SUPERVISOR:</td><td class="v">${master.supervisor || "—"}</td></tr>
+        <tr><td class="k">SUPERVISOR:</td><td class="v">${par.supervisor || "—"}</td></tr>
         <tr><td class="k">PERIODO PREFACTURADO:</td><td class="v">${periodo}</td></tr>
         <tr><td class="k">MES FACTURA:</td><td class="v">${mesFactura}</td></tr>
         <tr><td class="k">VALOR UF:</td><td class="v">N/A</td></tr>
       </table>
       <table class="tot">
-        <tr><td class="k">TOTAL NETO A FACTURAR</td><td class="v">${fmtMon(r.total_neto)}</td></tr>
-        <tr><td class="k">IVA 16%</td><td class="v">${fmtMon(r.iva_16)}</td></tr>
-        <tr><td class="k">BRUTO FACTURA</td><td class="v">${fmtMon(r.total_bruto)}</td></tr>
+        <tr><td class="k">TOTAL NETO A FACTURAR</td><td class="v">${fmtMon(rSC.total_neto)}</td></tr>
+        <tr><td class="k">IVA 16%</td><td class="v">${fmtMon(rSC.iva_16)}</td></tr>
+        <tr><td class="k">BRUTO FACTURA</td><td class="v">${fmtMon(rSC.total_bruto)}</td></tr>
       </table>
       <table class="tot">
         <tr><td class="k">TOTAL COBROS</td><td class="v"></td></tr>
-        <tr><td class="k">LÍQUIDO PAGO</td><td class="v">${fmtMon(r.total_bruto)}</td></tr>
+        <tr><td class="k">LÍQUIDO PAGO</td><td class="v">${fmtMon(rSC.total_bruto)}</td></tr>
       </table>
     </div>
     <div>
@@ -17613,8 +17613,7 @@ function ConciliacionTercerosMX({ usuario }) {
       </table>
     </div>
   </div>
-
-  <div class="det-title" style="margin-top:22px">DETALLE DE VIAJES:</div>
+  <div class="det-title" style="margin-top:22px">DETALLE DE VIAJES — ${operacion}:</div>
   <table class="det">
     <tr><th>FECHA</th><th>PATENTE</th><th>ID RUTA</th><th>CONDUCTOR</th><th>AUXILIAR</th><th>SECTOR</th><th>CARGADO</th><th>ENTREGADO</th><th>%</th><th>KM PAGO</th><th>FACTOR</th><th>MONTO</th></tr>
     ${filasDetalle}
@@ -17622,36 +17621,34 @@ function ConciliacionTercerosMX({ usuario }) {
   ${obsHtml}
   <div class="noprint"><button onclick="window.print()">Imprimir / Guardar PDF</button></div>
 </body></html>`;
-
     const w = window.open("", "_blank");
     if (!w) return alert("El navegador bloqueó la ventana emergente. Habilitá pop-ups para generar el PDF.");
-    w.document.write(html);
-    w.document.close();
+    w.document.write(html); w.document.close();
   };
 
-  // ── Render ──
+  // ── Helpers de render ──
   const chipEstado = (estado) => {
     const map = {
       sin_generar: { bg: "#f1f5f9", fg: "#64748b", txt: "Sin generar" },
-      borrador:    { bg: "#fef9c3", fg: "#854d0e", txt: "Borrador" },
-      cerrada:     { bg: "#dcfce7", fg: "#166534", txt: "Cerrada" },
-      enviada:     { bg: "#dbeafe", fg: "#1e40af", txt: "Enviada" },
+      borrador: { bg: "#fef9c3", fg: "#854d0e", txt: "Borrador" },
+      cerrada: { bg: "#dcfce7", fg: "#166534", txt: "Cerrada" },
+      enviada: { bg: "#dbeafe", fg: "#1e40af", txt: "Enviada" },
     };
     const c = map[estado] || map.sin_generar;
     return <span style={{ background: c.bg, color: c.fg, fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 10 }}>{c.txt}</span>;
   };
 
-  const opcionesEmpresas = useMemo(() => {
-    const set = new Set(empresasMaster.map(e => e.nombre));
+  const opcionesTransp = useMemo(() => {
+    const set = new Set(transportistas.map(t => t.nombre));
     for (const r of resumen) if (r.empresa && r.empresa !== SIN_EMPRESA) set.add(r.empresa);
     return [...set].sort((a, b) => a.localeCompare(b));
-  }, [empresasMaster, resumen]);
+  }, [transportistas, resumen]);
 
   const totalSemana = resumen.reduce((s, r) => s + Number(r.total_neto || 0), 0);
   const totalViajes = resumen.reduce((s, r) => s + Number(r.n_viajes || 0), 0);
-  const sinEmpresa = resumen.find(r => r.empresa === SIN_EMPRESA);
+  const sinEmpresaG = empresasAgrupadas.find(g => g.empresa === SIN_EMPRESA);
 
-  const renderDetalleTabla = (det) => (
+  const renderTablaDetalle = (filas) => (
     <div style={{ overflowX: "auto", marginTop: 10 }}>
       <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
         <thead>
@@ -17662,7 +17659,7 @@ function ConciliacionTercerosMX({ usuario }) {
           </tr>
         </thead>
         <tbody>
-          {det.map((d, i) => (
+          {filas.map((d, i) => (
             <tr key={i} style={{ borderBottom: "1px solid #eef0f3", background: d.es_no_pago ? "#fef2f2" : (i % 2 ? "#fafbfc" : "#fff") }}>
               <td style={{ padding: "5px 8px", textAlign: "center", whiteSpace: "nowrap" }}>{fmtFechaDDMM(d.fecha)}</td>
               <td style={{ padding: "5px 8px", textAlign: "center", fontWeight: 700 }}>{d.placa}</td>
@@ -17691,7 +17688,7 @@ function ConciliacionTercerosMX({ usuario }) {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 12, marginBottom: 14 }}>
         <div>
           <div style={{ fontSize: 15, fontWeight: 700, color: "#1a3a6b" }}>Conciliación Semanal Terceros</div>
-          <div style={{ fontSize: 11, color: "#94a3b8" }}>Viajes del Listado de Pagos agrupados por empresa según el inventario de flota de la semana · pagos, no pagos y PDF de prefactura</div>
+          <div style={{ fontSize: 11, color: "#94a3b8" }}>Viajes del Listado de Pagos agrupados por empresa y separados por SC · una prefactura PDF por cada empresa + SC</div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <button onClick={() => setSemana(s => s - 1)} style={{ padding: "6px 10px", border: "1px solid #e4e7ec", background: "#fff", borderRadius: 6, cursor: "pointer", fontWeight: 700 }}>‹</button>
@@ -17708,16 +17705,16 @@ function ConciliacionTercerosMX({ usuario }) {
         <div style={{ background: msg.ok ? "#ecfdf5" : "#fef2f2", border: "1px solid " + (msg.ok ? "#a7f3d0" : "#fca5a5"), color: msg.ok ? "#065f46" : "#991b1b", borderRadius: 6, padding: 10, marginBottom: 14, fontSize: 12 }}>{msg.txt}</div>
       )}
 
-      {/* KPIs de la semana */}
       {!loading && resumen.length > 0 && (
         <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
           {[
-            { label: "Empresas", valor: resumen.filter(r => r.empresa !== SIN_EMPRESA).length, color: "#1a3a6b" },
+            { label: "Empresas", valor: empresasAgrupadas.filter(g => g.empresa !== SIN_EMPRESA).length, color: "#1a3a6b" },
+            { label: "Prefacturas (empresa+SC)", valor: resumen.filter(r => r.empresa !== SIN_EMPRESA).length, color: "#7c3aed" },
             { label: "Viajes", valor: totalViajes.toLocaleString("es-MX"), color: "#3B82F6" },
             { label: "Neto semana", valor: fmtMon(totalSemana), color: "#16a34a" },
-            { label: "Placas sin empresa", valor: sinEmpresa ? sinEmpresa.n_placas : 0, color: sinEmpresa ? "#F47B20" : "#94a3b8" },
+            { label: "Placas sin empresa", valor: sinEmpresaG ? sinEmpresaG.nPlacas : 0, color: sinEmpresaG ? "#F47B20" : "#94a3b8" },
           ].map(k => (
-            <div key={k.label} style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10, padding: "10px 18px", minWidth: 140 }}>
+            <div key={k.label} style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10, padding: "10px 18px", minWidth: 130 }}>
               <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 700, textTransform: "uppercase" }}>{k.label}</div>
               <div style={{ fontSize: 20, fontWeight: 800, color: k.color }}>{k.valor}</div>
             </div>
@@ -17728,55 +17725,51 @@ function ConciliacionTercerosMX({ usuario }) {
       {loading && <div style={{ textAlign: "center", padding: 40, color: "#94a3b8" }}>Cargando conciliación de la semana {semana}...</div>}
       {!loading && resumen.length === 0 && (
         <div style={{ textAlign: "center", padding: 40, color: "#94a3b8", background: "#fff", borderRadius: 10, border: "1px solid #e4e7ec" }}>
-          No hay viajes calculados en el Listado de Pagos para la semana {semana} ({etiquetaSemanaInventario(semana)}).<br />
-          <span style={{ fontSize: 11 }}>Verificá que los días de la semana estén calculados en "Listado de Pagos".</span>
+          No hay viajes calculados en el Listado de Pagos para la semana {semana} ({etiquetaSemanaInventario(semana)}).
         </div>
       )}
 
       {/* Tarjetas por empresa */}
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-        {resumen.map(r => {
-          const esSinEmpresa = r.empresa === SIN_EMPRESA;
-          const abierta = expandida === r.empresa;
-          const det = detalles[r.empresa];
-          const master = masterPorNorm[normEmp(r.empresa)];
-          const faltanDatos = !esSinEmpresa && (!master || !master.rfc || !master.email_envio);
+        {empresasAgrupadas.map(g => {
+          const esSinEmpresa = g.empresa === SIN_EMPRESA;
+          const abierta = expandida === g.empresa;
+          const det = detalles[g.empresa];
+          const t = transpPorNorm[norm(g.empresa)];
+          const faltanDatos = !esSinEmpresa && (!t || !t.rfc || !t.correo_to);
 
-          // Agrupar por placa (para la tarjeta Sin Empresa)
+          // Agrupar detalle por SC (y, dentro de Sin Empresa, por placa)
+          const detPorSC = {};
           const porPlaca = {};
-          if (esSinEmpresa && det) {
+          if (det) {
             for (const d of det) {
-              const p = d.placa || "—";
-              if (!porPlaca[p]) porPlaca[p] = [];
-              porPlaca[p].push(d);
+              const k = d.service_center_id || "SIN SC";
+              (detPorSC[k] = detPorSC[k] || []).push(d);
+              if (esSinEmpresa) { const p = d.placa || "—"; (porPlaca[p] = porPlaca[p] || []).push(d); }
             }
           }
 
           return (
-            <div key={r.empresa} style={{
-              background: "#fff", borderRadius: 10, overflow: "hidden",
-              border: esSinEmpresa ? "2px solid #F47B20" : "1px solid #e4e7ec",
-            }}>
-              {/* Fila resumen */}
-              <div onClick={() => toggleEmpresa(r.empresa)} style={{ display: "flex", alignItems: "center", gap: 14, padding: "12px 16px", cursor: "pointer", flexWrap: "wrap", background: esSinEmpresa ? "#fff7ed" : "#fff" }}>
+            <div key={g.empresa} style={{ background: "#fff", borderRadius: 10, overflow: "hidden", border: esSinEmpresa ? "2px solid #F47B20" : "1px solid #e4e7ec" }}>
+              {/* Fila resumen empresa */}
+              <div onClick={() => toggleEmpresa(g.empresa)} style={{ display: "flex", alignItems: "center", gap: 14, padding: "12px 16px", cursor: "pointer", flexWrap: "wrap", background: esSinEmpresa ? "#fff7ed" : "#fff" }}>
                 <div style={{ flex: "1 1 260px", minWidth: 220 }}>
-                  <div style={{ fontSize: 13, fontWeight: 800, color: esSinEmpresa ? "#c2410c" : "#1a3a6b", display: "flex", alignItems: "center", gap: 8 }}>
-                    {esSinEmpresa ? "⚠️ " + r.empresa : r.empresa}
-                    {!esSinEmpresa && chipEstado(r.estado_conciliacion)}
+                  <div style={{ fontSize: 13, fontWeight: 800, color: esSinEmpresa ? "#c2410c" : "#1a3a6b", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                    {esSinEmpresa ? "⚠️ " + g.empresa : g.empresa}
+                    {!esSinEmpresa && <span style={{ fontSize: 11, fontWeight: 600, color: "#7c3aed", background: "#f3e8ff", padding: "1px 7px", borderRadius: 8 }}>{g.filasSC.length} SC</span>}
                   </div>
                   <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 2 }}>
                     {esSinEmpresa
-                      ? `${r.n_placas} placas operaron sin empresa en el inventario de la semana — asignalas para incluirlas en una conciliación`
-                      : (master ? `RFC ${master.rfc || "—"} · ${master.supervisor || "sin supervisor"} · ${master.email_envio || "sin correo"}` : "Empresa sin datos de facturación cargados")}
+                      ? `${g.nPlacas} placas operaron sin empresa en el inventario — asignalas para incluirlas en una conciliación`
+                      : (t ? `RFC ${t.rfc || "—"} · ${t.correo_to || "sin correo"}` : "Transportista no registrado en Prefacturas")}
                     {faltanDatos && <span style={{ color: "#d97706", fontWeight: 700 }}> · ⚠ completar datos para el PDF</span>}
                   </div>
                 </div>
                 <div style={{ display: "flex", gap: 18, alignItems: "center", flexWrap: "wrap" }}>
-                  <div style={{ textAlign: "center" }}><div style={{ fontSize: 10, color: "#94a3b8" }}>Placas</div><div style={{ fontWeight: 800 }}>{r.n_placas}</div></div>
-                  <div style={{ textAlign: "center" }}><div style={{ fontSize: 10, color: "#94a3b8" }}>Viajes</div><div style={{ fontWeight: 800 }}>{r.n_viajes}</div></div>
-                  <div style={{ textAlign: "center" }}><div style={{ fontSize: 10, color: "#94a3b8" }}>No pago</div><div style={{ fontWeight: 800, color: r.n_no_pago > 0 ? "#dc2626" : "#94a3b8" }}>{r.n_no_pago}</div></div>
-                  <div style={{ textAlign: "center" }}><div style={{ fontSize: 10, color: "#94a3b8" }}>Neto</div><div style={{ fontWeight: 800, color: "#16a34a" }}>{fmtMon(r.total_neto)}</div></div>
-                  <div style={{ textAlign: "center" }}><div style={{ fontSize: 10, color: "#94a3b8" }}>Bruto (IVA 16%)</div><div style={{ fontWeight: 800 }}>{fmtMon(r.total_bruto)}</div></div>
+                  <div style={{ textAlign: "center" }}><div style={{ fontSize: 10, color: "#94a3b8" }}>Viajes</div><div style={{ fontWeight: 800 }}>{g.nViajes}</div></div>
+                  <div style={{ textAlign: "center" }}><div style={{ fontSize: 10, color: "#94a3b8" }}>No pago</div><div style={{ fontWeight: 800, color: g.nNoPago > 0 ? "#dc2626" : "#94a3b8" }}>{g.nNoPago}</div></div>
+                  <div style={{ textAlign: "center" }}><div style={{ fontSize: 10, color: "#94a3b8" }}>Neto</div><div style={{ fontWeight: 800, color: "#16a34a" }}>{fmtMon(g.totalNeto)}</div></div>
+                  <div style={{ textAlign: "center" }}><div style={{ fontSize: 10, color: "#94a3b8" }}>Bruto</div><div style={{ fontWeight: 800 }}>{fmtMon(g.totalBruto)}</div></div>
                   <div style={{ fontSize: 16, color: "#94a3b8" }}>{abierta ? "▾" : "▸"}</div>
                 </div>
               </div>
@@ -17786,52 +17779,71 @@ function ConciliacionTercerosMX({ usuario }) {
                 <div style={{ borderTop: "1px solid #eef0f3", padding: "14px 16px", background: "#fafbfc" }}>
                   {!det && loadingDetalle && <div style={{ color: "#94a3b8", fontSize: 12, padding: 12 }}>Cargando detalle...</div>}
 
+                  {/* Empresa normal: una sección por SC */}
                   {det && !esSinEmpresa && (
                     <>
-                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 4 }}>
-                        <button onClick={(e) => { e.stopPropagation(); generarPDF(r.empresa); }}
-                          style={{ padding: "7px 14px", background: "#F47B20", color: "#fff", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
-                          📄 Generar PDF Prefactura
-                        </button>
-                        {(r.estado_conciliacion === "sin_generar" || r.estado_conciliacion === "borrador") ? (
-                          <button onClick={(e) => { e.stopPropagation(); cerrarConciliacion(r.empresa); }} disabled={cerrando === r.empresa}
-                            style={{ padding: "7px 14px", background: "#1a3a6b", color: "#fff", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer", opacity: cerrando === r.empresa ? 0.6 : 1 }}>
-                            {cerrando === r.empresa ? "Cerrando..." : "🔒 Cerrar conciliación"}
-                          </button>
-                        ) : (
-                          <button onClick={(e) => { e.stopPropagation(); reabrirConciliacion(r.empresa); }}
-                            style={{ padding: "7px 14px", background: "#fff", color: "#1a3a6b", border: "1px solid #1a3a6b", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
-                            Reabrir
-                          </button>
-                        )}
+                      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
                         <button onClick={(e) => {
                           e.stopPropagation();
-                          setFormEmpresa(master
-                            ? { id: master.id, nombre: master.nombre, rfc: master.rfc || "", supervisor: master.supervisor || "", telefono: master.telefono || "", email_envio: master.email_envio || "", direccion: master.direccion || "" }
-                            : { ...EMPRESA_FORM_VACIA, nombre: r.empresa });
+                          setFormTransp(t
+                            ? { id: t.id, nombre: t.nombre, rfc: t.rfc || "", estado: t.estado || "Activo", correo_to: t.correo_to || "", correo_cc: t.correo_cc || "", correo_bcc: t.correo_bcc || "", notas: t.notas || "" }
+                            : { ...TRANSP_FORM_VACIO, nombre: g.empresa });
                         }}
-                          style={{ padding: "7px 14px", background: "#fff", color: "#475569", border: "1px solid #e4e7ec", borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
-                          ✏️ {master ? "Editar datos empresa" : "Completar datos empresa"}
+                          style={{ padding: "6px 12px", background: "#fff", color: "#475569", border: "1px solid #e4e7ec", borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+                          ✏️ {t ? "Editar datos transportista" : "Registrar transportista"}
                         </button>
                       </div>
-                      {renderDetalleTabla(det)}
-                      {det.some(d => d.es_no_pago) && (
-                        <div style={{ marginTop: 12, border: "1px solid #fca5a5", background: "#fef2f2", borderRadius: 8, padding: "10px 12px" }}>
-                          <div style={{ fontSize: 11, fontWeight: 800, color: "#991b1b", marginBottom: 6 }}>OBSERVACIONES — RUTAS NO PAGADAS (VISITA &lt; 90%)</div>
-                          {det.filter(d => d.es_no_pago).map((d, i) => (
-                            <div key={i} style={{ fontSize: 11, color: "#7f1d1d", padding: "2px 0" }}>
-                              {fmtFechaDDMM(d.fecha)} · {d.placa} · Ruta {d.id_ruta} · {d.driver_name} — {d.motivo_no_pago || "NO PAGADO"} (cargado {d.cargado}, entregado {d.entregado})
+                      {g.filasSC.map(rSC => {
+                        const filasSC = detPorSC[rSC.service_center] || [];
+                        const clave = claveCierre(g.empresa, rSC.service_center);
+                        const noPagosSC = filasSC.filter(d => d.es_no_pago);
+                        return (
+                          <div key={rSC.service_center} style={{ border: "1px solid #e4e7ec", borderRadius: 8, marginBottom: 12, overflow: "hidden" }}>
+                            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, background: "#eef2f7", padding: "8px 12px" }}>
+                              <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                                <span style={{ fontWeight: 800, color: "#1a3a6b", fontSize: 13 }}>SC {rSC.service_center}</span>
+                                {chipEstado(rSC.estado_conciliacion)}
+                                <span style={{ fontSize: 11, color: "#64748b" }}>
+                                  Sup: {rSC.supervisor || "—"} · {rSC.n_viajes} viajes · {rSC.n_no_pago} no pago · Neto {fmtMon(rSC.total_neto)} · Bruto {fmtMon(rSC.total_bruto)}
+                                </span>
+                              </div>
+                              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                                <button onClick={(e) => { e.stopPropagation(); generarPDF(g.empresa, rSC.service_center, filasSC, rSC); }}
+                                  style={{ padding: "6px 12px", background: "#F47B20", color: "#fff", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>📄 PDF {rSC.service_center}</button>
+                                {(rSC.estado_conciliacion === "sin_generar" || rSC.estado_conciliacion === "borrador") ? (
+                                  <button onClick={(e) => { e.stopPropagation(); cerrarConciliacion(g.empresa, rSC.service_center, rSC, filasSC); }} disabled={cerrando === clave}
+                                    style={{ padding: "6px 12px", background: "#1a3a6b", color: "#fff", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer", opacity: cerrando === clave ? 0.6 : 1 }}>
+                                    {cerrando === clave ? "Cerrando..." : "🔒 Cerrar"}</button>
+                                ) : (
+                                  <button onClick={(e) => { e.stopPropagation(); reabrirConciliacion(g.empresa, rSC.service_center); }}
+                                    style={{ padding: "6px 12px", background: "#fff", color: "#1a3a6b", border: "1px solid #1a3a6b", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Reabrir</button>
+                                )}
+                              </div>
                             </div>
-                          ))}
-                        </div>
-                      )}
+                            <div style={{ padding: "4px 12px 12px" }}>
+                              {renderTablaDetalle(filasSC)}
+                              {noPagosSC.length > 0 && (
+                                <div style={{ marginTop: 10, border: "1px solid #fca5a5", background: "#fef2f2", borderRadius: 8, padding: "8px 12px" }}>
+                                  <div style={{ fontSize: 11, fontWeight: 800, color: "#991b1b", marginBottom: 6 }}>OBSERVACIONES — RUTAS NO PAGADAS (VISITA &lt; 90%)</div>
+                                  {noPagosSC.map((d, i) => (
+                                    <div key={i} style={{ fontSize: 11, color: "#7f1d1d", padding: "2px 0" }}>
+                                      {fmtFechaDDMM(d.fecha)} · {d.placa} · Ruta {d.id_ruta} · {d.driver_name} — {d.motivo_no_pago || "NO PAGADO"} (cargado {d.cargado}, entregado {d.entregado})
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
                     </>
                   )}
 
+                  {/* Sin Empresa: asignación por placa */}
                   {det && esSinEmpresa && (
                     <>
                       <div style={{ fontSize: 12, color: "#7c2d12", marginBottom: 10 }}>
-                        Asigná cada placa a una empresa: se insertará en el inventario de flota de la <strong>semana {semana}</strong>. Si la empresa no existe, creala con sus datos de facturación.
+                        Asigná cada placa a un transportista: se insertará en el inventario de flota de la <strong>semana {semana}</strong>. Si no existe, crealo (queda en la base de Prefacturas → Transportistas).
                       </div>
                       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                         {Object.entries(porPlaca).map(([placa, filas]) => {
@@ -17846,9 +17858,9 @@ function ConciliacionTercerosMX({ usuario }) {
                               <select value={asignacionSel[placa] || ""} onClick={e => e.stopPropagation()}
                                 onChange={e => setAsignacionSel(prev => ({ ...prev, [placa]: e.target.value }))}
                                 style={{ padding: "6px 8px", border: "1px solid #e4e7ec", borderRadius: 6, fontSize: 12, minWidth: 220 }}>
-                                <option value="">— Elegir empresa —</option>
-                                {opcionesEmpresas.map(n => <option key={n} value={n}>{n}</option>)}
-                                <option value="__nueva__">＋ Nueva empresa...</option>
+                                <option value="">— Elegir transportista —</option>
+                                {opcionesTransp.map(n => <option key={n} value={n}>{n}</option>)}
+                                <option value="__nueva__">＋ Nuevo transportista...</option>
                               </select>
                               <button onClick={(e) => { e.stopPropagation(); asignarPlaca(placa, filas); }} disabled={asignando === placa}
                                 style={{ padding: "6px 14px", background: "#F47B20", color: "#fff", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer", opacity: asignando === placa ? 0.6 : 1 }}>
@@ -17860,7 +17872,7 @@ function ConciliacionTercerosMX({ usuario }) {
                       </div>
                       <div style={{ marginTop: 14 }}>
                         <div style={{ fontSize: 11, fontWeight: 800, color: "#1a3a6b", marginBottom: 4 }}>Viajes de estas placas en la semana:</div>
-                        {renderDetalleTabla(det)}
+                        {renderTablaDetalle(det)}
                       </div>
                     </>
                   )}
@@ -17871,35 +17883,35 @@ function ConciliacionTercerosMX({ usuario }) {
         })}
       </div>
 
-      {/* Modal nueva/editar empresa */}
-      {formEmpresa && (
-        <div onClick={() => !guardandoEmpresa && setFormEmpresa(null)}
+      {/* Modal nuevo/editar transportista */}
+      {formTransp && (
+        <div onClick={() => !guardandoTransp && setFormTransp(null)}
           style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}>
           <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 12, padding: 22, width: 460, maxWidth: "100%", maxHeight: "90vh", overflowY: "auto" }}>
-            <div style={{ fontSize: 15, fontWeight: 800, color: "#1a3a6b", marginBottom: 4 }}>{formEmpresa.id ? "Editar empresa" : "Nueva empresa tercero"}</div>
-            <div style={{ fontSize: 11, color: "#94a3b8", marginBottom: 14 }}>Estos datos alimentan el header del PDF de prefactura y el envío automático.</div>
+            <div style={{ fontSize: 15, fontWeight: 800, color: "#1a3a6b", marginBottom: 4 }}>{formTransp.id ? "Editar transportista" : "Nuevo transportista"}</div>
+            <div style={{ fontSize: 11, color: "#94a3b8", marginBottom: 14 }}>Se guarda en la base de Prefacturas (la misma que usa el envío masivo). Alimenta el header del PDF y los destinatarios.</div>
             {[
               { k: "nombre", label: "Razón social *", ph: "JUAN JOSE MENESES OLVERA" },
               { k: "rfc", label: "RFC *", ph: "MEOJ8311229H4" },
-              { k: "supervisor", label: "Supervisor", ph: "MELISSA HERNANDEZ" },
-              { k: "telefono", label: "Teléfono (E.164)", ph: "+5215512345678" },
-              { k: "email_envio", label: "Correo de envío", ph: "facturacion@empresa.mx" },
-              { k: "direccion", label: "Dirección", ph: "Calle, número, colonia, CP" },
+              { k: "correo_to", label: "Correo TO (destino)", ph: "facturacion@empresa.mx" },
+              { k: "correo_cc", label: "Correo CC", ph: "(opcional)" },
+              { k: "correo_bcc", label: "Correo BCC", ph: "(opcional)" },
+              { k: "notas", label: "Notas", ph: "(opcional)" },
             ].map(f => (
               <div key={f.k} style={{ marginBottom: 10 }}>
                 <div style={{ fontSize: 11, fontWeight: 700, color: "#475569", marginBottom: 3 }}>{f.label}</div>
-                <input value={formEmpresa[f.k]} placeholder={f.ph}
-                  onChange={e => setFormEmpresa(prev => ({ ...prev, [f.k]: e.target.value }))}
-                  disabled={f.k === "nombre" && !!formEmpresa.id}
-                  style={{ width: "100%", padding: "8px 10px", border: "1px solid #e4e7ec", borderRadius: 6, fontSize: 13, boxSizing: "border-box", background: (f.k === "nombre" && formEmpresa.id) ? "#f1f5f9" : "#fff" }} />
+                <input value={formTransp[f.k]} placeholder={f.ph}
+                  onChange={e => setFormTransp(prev => ({ ...prev, [f.k]: e.target.value }))}
+                  disabled={f.k === "nombre" && !!formTransp.id}
+                  style={{ width: "100%", padding: "8px 10px", border: "1px solid #e4e7ec", borderRadius: 6, fontSize: 13, boxSizing: "border-box", background: (f.k === "nombre" && formTransp.id) ? "#f1f5f9" : "#fff" }} />
               </div>
             ))}
             <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 16 }}>
-              <button onClick={() => setFormEmpresa(null)} disabled={guardandoEmpresa}
+              <button onClick={() => setFormTransp(null)} disabled={guardandoTransp}
                 style={{ padding: "8px 16px", background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, fontSize: 13, cursor: "pointer", color: "#475569" }}>Cancelar</button>
-              <button onClick={guardarEmpresa} disabled={guardandoEmpresa}
-                style={{ padding: "8px 16px", background: "#1a3a6b", color: "#fff", border: "none", borderRadius: 6, fontSize: 13, fontWeight: 700, cursor: "pointer", opacity: guardandoEmpresa ? 0.6 : 1 }}>
-                {guardandoEmpresa ? "Guardando..." : "Guardar empresa"}
+              <button onClick={guardarTransp} disabled={guardandoTransp}
+                style={{ padding: "8px 16px", background: "#1a3a6b", color: "#fff", border: "none", borderRadius: 6, fontSize: 13, fontWeight: 700, cursor: "pointer", opacity: guardandoTransp ? 0.6 : 1 }}>
+                {guardandoTransp ? "Guardando..." : "Guardar"}
               </button>
             </div>
           </div>
@@ -37469,4 +37481,3 @@ const CONFIG_IMPORTADOR_CL = {
     notas: "(opcional)",
   },
 };
-                     
