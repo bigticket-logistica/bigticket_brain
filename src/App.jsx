@@ -4710,26 +4710,11 @@ const VistaSnapshotSupervisores = ({ fecha, pais }) => {
       setLoading(true);
       setError(null);
       try {
-        let data, err;
-        if (subTab === "rutas" || subTab === "noshow") {
-          // Ambas pestañas se alimentan de la Torre de Control de Pagos (3 pilares).
-          // Traemos TODOS los buckets del día; cada sub-componente filtra los suyos.
-          const res = await sb.rpc("get_torre_3_pilares", {
-            fecha_desde: fecha,
-            fecha_hasta: fecha,
-            sc_filtro: null,
-          });
-          data = res.data;
-          err  = res.error;
-        } else {
-          const res = await sb
-            .from(VISTAS[subTab].tabla)
-            .select("*")
-            .eq("fecha", fecha)
-            .limit(5000);
-          data = res.data;
-          err  = res.error;
-        }
+        const { data, error: err } = await sb
+          .from(VISTAS[subTab].tabla)
+          .select("*")
+          .eq("fecha", fecha)
+          .limit(5000);
         if (cancelado) return;
         if (err) {
           setError(err.message);
@@ -5174,88 +5159,59 @@ const SnapIngresoMaestro = ({ filas, loading }) => {
   );
 };
 
-// ─── Buckets de la Torre · criterio de negocio en UN solo lugar ───
-// "Rutas Citadas = lo aceptado por BT" → se muestra TODO menos lo de abajo.
-// Si querés que el cancel POST-asignación (5) cuente como citado, sacalo de la lista.
-const BUCKETS_NO_CITADAS = [
-  "4_CANCEL_MELI_PRE_ASIGNACION",   // MELI canceló antes de que BT lo tomara
-  "5_CANCEL_MELI_POST_ASIGNACION",  // MELI canceló después (BT sí lo había aceptado) ← swing vote
-  "9_REJECTED_LIMPIO",              // BT rechazó
-];
-const BUCKET_RF1 = "2A_RF1_VENCIDO"; // No rosterizó a tiempo
-const BUCKET_RF2 = "3_RF2_NO_SHOW";  // Rosterizó y no salió
-
-// ─── Sub-componente 2: Rutas Citadas · aceptado por BT, por SC (Torre 3 pilares) ───
+// ─── Sub-componente 2: Rutas Citadas (SC × día) ───
 const SnapRutasCitadas = ({ filas, loading }) => {
-  const { porSC, kpis } = useMemo(() => {
-    const citadas = filas.filter(f => !BUCKETS_NO_CITADAS.includes(f.bucket));
-
-    const mp = {};
-    citadas.forEach(f => {
-      const sc = f.sc || "—";
-      if (!mp[sc]) mp[sc] = { sc, citadas: 0, small: 0, large: 0 };
-      mp[sc].citadas++;
-      const v = (f.vehiculo || "").toLowerCase();
-      if (v.includes("large")) mp[sc].large++;
-      else mp[sc].small++;
-    });
-
-    const porSC = Object.values(mp).sort((a, b) => b.citadas - a.citadas || a.sc.localeCompare(b.sc));
-    const total = citadas.length;
-
-    const cancelMeli = filas.filter(f =>
-      f.bucket === "4_CANCEL_MELI_PRE_ASIGNACION" || f.bucket === "5_CANCEL_MELI_POST_ASIGNACION").length;
-    const rechazadas = filas.filter(f => f.bucket === "9_REJECTED_LIMPIO").length;
-
-    return { porSC, kpis: { total, scs: porSC.length, cancelMeli, rechazadas } };
+  const kpis = useMemo(() => {
+    const planeadas  = filas.reduce((acc, f) => acc + (f.rutas_planeadas  || 0), 0);
+    const ejecutadas = filas.reduce((acc, f) => acc + (f.rutas_ejecutadas || 0), 0);
+    const sinCerrar  = filas.reduce((acc, f) => acc + (f.rutas_sin_cerrar || 0), 0);
+    const zombis     = filas.reduce((acc, f) => acc + (f.rutas_zombi_descartadas || 0), 0);
+    return { planeadas, ejecutadas, sinCerrar, zombis, scs: filas.length };
   }, [filas]);
 
   return (
     <div>
       {/* KPIs */}
       <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
-        <KpiSnap label="Rutas citadas" valor={fmtNumSnap(kpis.total)} color="#1a3a6b" sub={`${kpis.scs} SCs`} />
-        <KpiSnap label="SCs"            valor={fmtNumSnap(kpis.scs)} />
-        <KpiSnap label="Cancel MELI"    valor={fmtNumSnap(kpis.cancelMeli)} color="#b45309" sub="descontadas" />
-        <KpiSnap label="Rechazadas BT"  valor={fmtNumSnap(kpis.rechazadas)} color="#475569" sub="descontadas" />
+        <KpiSnap label="SCs"        valor={fmtNumSnap(kpis.scs)} />
+        <KpiSnap label="Planeadas"  valor={fmtNumSnap(kpis.planeadas)}  color="#3B82F6" />
+        <KpiSnap label="Ejecutadas" valor={fmtNumSnap(kpis.ejecutadas)} color="#16a34a" />
+        <KpiSnap label="Sin cerrar" valor={fmtNumSnap(kpis.sinCerrar)}  color="#ca8a04" />
+        <KpiSnap label="Zombis"     valor={fmtNumSnap(kpis.zombis)}     color="#dc2626" sub="descartadas" />
       </div>
 
-      {/* Tabla por SC */}
+      {/* Tabla */}
       <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10, overflow: "auto", maxHeight: 600 }}>
         {loading ? (
           <div style={{ padding: 30, textAlign: "center", color: "#888", fontSize: 13 }}>Cargando...</div>
-        ) : porSC.length === 0 ? (
-          <div style={{ padding: 30, textAlign: "center", color: "#888", fontSize: 13 }}>Sin rutas citadas para esta fecha</div>
+        ) : filas.length === 0 ? (
+          <div style={{ padding: 30, textAlign: "center", color: "#888", fontSize: 13 }}>Sin datos para esta fecha</div>
         ) : (
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
-            <thead style={{ background: "#f8fafc", position: "sticky", top: 0, zIndex: 1 }}>
+            <thead style={{ background: "#f8fafc", position: "sticky", top: 0 }}>
               <tr>
-                {[
-                  { l: "SC",      a: "left"  },
-                  { l: "Citadas", a: "right" },
-                  { l: "Small",   a: "right" },
-                  { l: "Large",   a: "right" },
-                ].map(h => (
-                  <th key={h.l} style={{ padding: "8px 6px", textAlign: h.a, fontWeight: 700, color: "#666",
-                    borderBottom: "1px solid #e4e7ec", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.3 }}>{h.l}</th>
+                {["Fecha","CECO","Planeadas","Small","Large","Ejecutadas","S.Plan","L.Plan","Small SDD","Large SDD","Sin Cerrar","Zombis"].map(h => (
+                  <th key={h} style={{ padding: "8px 6px", textAlign: "left", fontWeight: 700, color: "#666", borderBottom: "1px solid #e4e7ec", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.3 }}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {porSC.map((s, i) => (
-                <tr key={i} style={{ borderBottom: "1px solid #f1f5f9", background: i % 2 === 0 ? "#fff" : "#fafbfc" }}>
-                  <td style={{ padding: "6px 10px", fontWeight: 700, color: "#1a3a6b" }}>{s.sc}</td>
-                  <td style={{ padding: "6px", textAlign: "right", fontWeight: 700, color: "#1a3a6b" }}>{fmtNumSnap(s.citadas)}</td>
-                  <td style={{ padding: "6px", textAlign: "right" }}>{fmtNumSnap(s.small)}</td>
-                  <td style={{ padding: "6px", textAlign: "right" }}>{fmtNumSnap(s.large)}</td>
+              {filas.map((f, i) => (
+                <tr key={i} style={{ borderBottom: "1px solid #f1f5f9" }}>
+                  <td style={{ padding: "6px" }}>{f.fecha}</td>
+                  <td style={{ padding: "6px", fontWeight: 600 }}>{f.cecos}</td>
+                  <td style={{ padding: "6px", textAlign: "right", fontWeight: 700, color: "#3B82F6" }}>{fmtNumSnap(f.rutas_planeadas)}</td>
+                  <td style={{ padding: "6px", textAlign: "right" }}>{fmtNumSnap(f.small_planeadas)}</td>
+                  <td style={{ padding: "6px", textAlign: "right" }}>{fmtNumSnap(f.large_planeadas)}</td>
+                  <td style={{ padding: "6px", textAlign: "right", fontWeight: 700, color: "#16a34a" }}>{fmtNumSnap(f.rutas_ejecutadas)}</td>
+                  <td style={{ padding: "6px", textAlign: "right" }}>{fmtNumSnap(f.cant_small)}</td>
+                  <td style={{ padding: "6px", textAlign: "right" }}>{fmtNumSnap(f.cant_large)}</td>
+                  <td style={{ padding: "6px", textAlign: "right" }}>{fmtNumSnap(f.small_sdd_planeadas)}</td>
+                  <td style={{ padding: "6px", textAlign: "right" }}>{fmtNumSnap(f.large_sdd_planeadas)}</td>
+                  <td style={{ padding: "6px", textAlign: "right", color: "#ca8a04" }}>{fmtNumSnap(f.rutas_sin_cerrar)}</td>
+                  <td style={{ padding: "6px", textAlign: "right", color: "#dc2626" }}>{fmtNumSnap(f.rutas_zombi_descartadas)}</td>
                 </tr>
               ))}
-              <tr style={{ borderTop: "2px solid #e4e7ec", background: "#f8fafc", fontWeight: 700 }}>
-                <td style={{ padding: "6px 10px", color: "#1a3a6b" }}>TOTAL</td>
-                <td style={{ padding: "6px", textAlign: "right", color: "#1a3a6b" }}>{fmtNumSnap(kpis.total)}</td>
-                <td style={{ padding: "6px", textAlign: "right" }}>{fmtNumSnap(porSC.reduce((a, s) => a + s.small, 0))}</td>
-                <td style={{ padding: "6px", textAlign: "right" }}>{fmtNumSnap(porSC.reduce((a, s) => a + s.large, 0))}</td>
-              </tr>
             </tbody>
           </table>
         )}
@@ -5264,137 +5220,232 @@ const SnapRutasCitadas = ({ filas, loading }) => {
   );
 };
 
-// ─── Sub-componente 3: No Show · RF1 + RF2 por SC (Torre 3 pilares) ───
-// Fuente: get_torre_3_pilares · RF1 = aceptado y no rosterizado a tiempo · RF2 = rosterizado y no salió
+// ─── Sub-componente 3: No Show · Rostering vs Operativo ───
+// Fuente: vw_rostering_vs_operativo (1 fila por driver+fecha)
+// Detecta: NO SHOW · PARCIAL · CAMBIO PLACA · OK
 const SnapNoShow = ({ filas, loading }) => {
-  const { porSC, detalle, kpis } = useMemo(() => {
-    const noShow = filas.filter(f => f.bucket === BUCKET_RF1 || f.bucket === BUCKET_RF2);
+  const [filtroCat, setFiltroCat] = useState("INCIDENTES");
 
-    // Resumen por SC con columnas RF1 / RF2
-    const mp = {};
-    noShow.forEach(f => {
-      const sc = f.sc || "—";
-      if (!mp[sc]) mp[sc] = { sc, rf1: 0, rf2: 0 };
-      if (f.bucket === BUCKET_RF1) mp[sc].rf1++;
-      else if (f.bucket === BUCKET_RF2) mp[sc].rf2++;
-    });
-    const porSC = Object.values(mp)
-      .map(r => ({ ...r, total: r.rf1 + r.rf2 }))
-      .sort((a, b) => b.total - a.total || a.sc.localeCompare(b.sc));
-
-    // Detalle ruta por ruta (RF1 primero, luego RF2; después SC)
-    const detalle = [...noShow].sort((a, b) => {
-      const oa = a.bucket === BUCKET_RF1 ? 1 : 2;
-      const ob = b.bucket === BUCKET_RF1 ? 1 : 2;
-      if (oa !== ob) return oa - ob;
-      return (a.sc || "").localeCompare(b.sc || "");
-    });
-
-    const rf1 = noShow.filter(f => f.bucket === BUCKET_RF1).length;
-    const rf2 = noShow.filter(f => f.bucket === BUCKET_RF2).length;
-    return { porSC, detalle, kpis: { rf1, rf2, total: rf1 + rf2, scs: porSC.length } };
+  // ─── KPIs agregados ───
+  const kpis = useMemo(() => {
+    const total = filas.length;
+    const ok = filas.filter(f => f.categoria === "OK").length;
+    const noShow = filas.filter(f => f.categoria === "NO_SHOW").length;
+    const parcial = filas.filter(f => f.categoria === "PARCIAL").length;
+    const cambio = filas.filter(f => f.categoria === "CAMBIO_PLACA").length;
+    const scs = new Set(filas.map(f => f.facility)).size;
+    const totalCargados = filas.reduce((a, f) => a + (f.total_cargados || 0), 0);
+    const totalEntregados = filas.reduce((a, f) => a + (f.total_entregados || 0), 0);
+    const pctEntregado = totalCargados > 0 ? (totalEntregados / totalCargados * 100) : 0;
+    return { total, ok, noShow, parcial, cambio, scs, totalCargados, totalEntregados, pctEntregado };
   }, [filas]);
 
-  const tdC = { padding: "6px", textAlign: "center" };
-  const tdL = { padding: "6px 10px", textAlign: "left" };
+  // ─── Resumen por SC ───
+  const porSC = useMemo(() => {
+    const mp = {};
+    filas.forEach(f => {
+      const sc = f.facility;
+      if (!mp[sc]) mp[sc] = { sc, total: 0, ok: 0, noShow: 0, parcial: 0, cambio: 0 };
+      mp[sc].total++;
+      if (f.categoria === "OK") mp[sc].ok++;
+      else if (f.categoria === "NO_SHOW") mp[sc].noShow++;
+      else if (f.categoria === "PARCIAL") mp[sc].parcial++;
+      else if (f.categoria === "CAMBIO_PLACA") mp[sc].cambio++;
+    });
+    return Object.values(mp)
+      .map(r => ({ ...r, pctOk: r.total > 0 ? r.ok / r.total * 100 : 0 }))
+      .sort((a, b) => (b.noShow + b.parcial + b.cambio) - (a.noShow + a.parcial + a.cambio) || a.sc.localeCompare(b.sc));
+  }, [filas]);
+
+  // ─── Filas filtradas por categoría ───
+  const filasFiltradas = useMemo(() => {
+    if (filtroCat === "TODOS") return filas;
+    if (filtroCat === "INCIDENTES") return filas.filter(f => f.categoria !== "OK");
+    return filas.filter(f => f.categoria === filtroCat);
+  }, [filas, filtroCat]);
+
+  // ─── Orden: NO_SHOW > CAMBIO_PLACA > PARCIAL > OK, después SC + driver ───
+  const filasOrdenadas = useMemo(() => {
+    const orden = { NO_SHOW: 1, CAMBIO_PLACA: 2, PARCIAL: 3, OK: 4, OTRO: 5 };
+    return [...filasFiltradas].sort((a, b) => {
+      const oa = orden[a.categoria] || 9;
+      const ob = orden[b.categoria] || 9;
+      if (oa !== ob) return oa - ob;
+      if (a.facility !== b.facility) return a.facility.localeCompare(b.facility);
+      return (a.driver_name || "").localeCompare(b.driver_name || "");
+    });
+  }, [filasFiltradas]);
+
+  const tdCenter = { padding: "6px", textAlign: "center" };
+  const tdLeft = { padding: "6px 10px", textAlign: "left" };
+
+  const colorCategoria = (cat) => {
+    if (cat === "OK") return { bg: "#dcfce7", text: "#15803d", label: "✅ OK" };
+    if (cat === "NO_SHOW") return { bg: "#fee2e2", text: "#dc2626", label: "🚨 NO SHOW" };
+    if (cat === "PARCIAL") return { bg: "#fef3c7", text: "#b45309", label: "⚠️ PARCIAL" };
+    if (cat === "CAMBIO_PLACA") return { bg: "#dbeafe", text: "#1d4ed8", label: "🔄 CAMBIO PLACA" };
+    return { bg: "#f1f5f9", text: "#475569", label: cat };
+  };
 
   return (
     <div>
-      {/* KPIs */}
+      {/* ─── KPIs ─── */}
       <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
-        <KpiSnap label="No Show total" valor={fmtNumSnap(kpis.total)} color="#b91c1c" sub={`${kpis.scs} SCs`} />
-        <KpiSnap label="🚨 RF1"        valor={fmtNumSnap(kpis.rf1)} color="#b91c1c" sub="aceptado · no rosterizó" />
-        <KpiSnap label="🚨 RF2"        valor={fmtNumSnap(kpis.rf2)} color="#b91c1c" sub="rosterizó · no salió" />
+        <KpiSnap label="Drivers planif." valor={fmtNumSnap(kpis.total)} sub={`${kpis.scs} SCs`} />
+        <KpiSnap label="✅ Operó OK" valor={fmtNumSnap(kpis.ok)} color="#15803d"
+          sub={kpis.total > 0 ? `${(kpis.ok / kpis.total * 100).toFixed(0)}%` : "—"} />
+        <KpiSnap label="🚨 NO SHOW" valor={fmtNumSnap(kpis.noShow)} color="#dc2626"
+          sub={kpis.total > 0 ? `${(kpis.noShow / kpis.total * 100).toFixed(0)}%` : "—"} />
+        <KpiSnap label="⚠️ Parcial" valor={fmtNumSnap(kpis.parcial)} color="#b45309"
+          sub="Operó 1 de N placas" />
+        <KpiSnap label="🔄 Cambio placa" valor={fmtNumSnap(kpis.cambio)} color="#1d4ed8"
+          sub="Otra placa" />
+        <KpiSnap label="% Entrega" valor={`${kpis.pctEntregado.toFixed(1)}%`} color="#3B82F6"
+          sub={`${fmtNumSnap(kpis.totalEntregados)}/${fmtNumSnap(kpis.totalCargados)}`} />
       </div>
 
-      {/* Resumen por SC: RF1 | RF2 | Total */}
-      <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10, overflow: "auto", maxHeight: 320, marginBottom: 16 }}>
+      {/* ─── Mini-grid por SC ─── */}
+      {porSC.length > 0 && (
+        <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10, padding: 12, marginBottom: 14 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: "#64748b", textTransform: "uppercase",
+            letterSpacing: 0.5, marginBottom: 8 }}>
+            Cumplimiento por Service Center
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 8 }}>
+            {porSC.map(sc => {
+              const incidentes = sc.noShow + sc.parcial + sc.cambio;
+              const borderColor = incidentes > 0 ? "#fecaca" : "#bbf7d0";
+              const bgColor = incidentes > 0 ? "#fef2f2" : "#f0fdf4";
+              return (
+                <div key={sc.sc} style={{
+                  background: bgColor, border: `1px solid ${borderColor}`, borderRadius: 8,
+                  padding: 8, fontSize: 11
+                }}>
+                  <div style={{ fontWeight: 700, fontSize: 13, color: "#1a3a6b", marginBottom: 4 }}>
+                    {sc.sc}
+                  </div>
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap", fontSize: 10 }}>
+                    <span style={{ color: "#15803d" }}>✅ {sc.ok}</span>
+                    {sc.noShow > 0 && <span style={{ color: "#dc2626", fontWeight: 700 }}>🚨 {sc.noShow}</span>}
+                    {sc.parcial > 0 && <span style={{ color: "#b45309", fontWeight: 700 }}>⚠️ {sc.parcial}</span>}
+                    {sc.cambio > 0 && <span style={{ color: "#1d4ed8", fontWeight: 700 }}>🔄 {sc.cambio}</span>}
+                    <span style={{ color: "#64748b", marginLeft: "auto" }}>{sc.pctOk.toFixed(0)}%</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* ─── Filtros por categoría ─── */}
+      <div style={{ display: "flex", gap: 6, marginBottom: 10, flexWrap: "wrap" }}>
+        {[
+          { id: "INCIDENTES", label: "Solo incidentes", color: "#dc2626" },
+          { id: "NO_SHOW", label: `🚨 NO SHOW (${kpis.noShow})`, color: "#dc2626" },
+          { id: "PARCIAL", label: `⚠️ Parcial (${kpis.parcial})`, color: "#b45309" },
+          { id: "CAMBIO_PLACA", label: `🔄 Cambio placa (${kpis.cambio})`, color: "#1d4ed8" },
+          { id: "OK", label: `✅ OK (${kpis.ok})`, color: "#15803d" },
+          { id: "TODOS", label: `Todos (${kpis.total})`, color: "#1a3a6b" },
+        ].map(b => (
+          <button key={b.id} onClick={() => setFiltroCat(b.id)} style={{
+            padding: "6px 12px",
+            background: filtroCat === b.id ? b.color : "#fff",
+            color: filtroCat === b.id ? "#fff" : b.color,
+            border: `1px solid ${b.color}`,
+            borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: "pointer"
+          }}>
+            {b.label}
+          </button>
+        ))}
+      </div>
+
+      {/* ─── Tabla principal ─── */}
+      <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10, overflow: "auto", maxHeight: 600 }}>
         {loading ? (
           <div style={{ padding: 30, textAlign: "center", color: "#888", fontSize: 13 }}>Cargando...</div>
-        ) : porSC.length === 0 ? (
-          <div style={{ padding: 30, textAlign: "center", color: "#16a34a", fontSize: 13, fontWeight: 600 }}>✅ Sin No Show en esta fecha</div>
+        ) : filasOrdenadas.length === 0 ? (
+          <div style={{ padding: 30, textAlign: "center",
+            color: filtroCat === "INCIDENTES" || filtroCat === "TODOS" ? "#16a34a" : "#888",
+            fontSize: 13, fontWeight: 600 }}>
+            {filtroCat === "INCIDENTES" || filtroCat === "TODOS"
+              ? "✅ Sin incidentes en esta fecha"
+              : "Sin registros con ese filtro"}
+          </div>
         ) : (
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
             <thead style={{ background: "#f8fafc", position: "sticky", top: 0, zIndex: 1 }}>
               <tr>
                 {[
-                  { l: "SC",    a: "left",   t: "Service Center" },
-                  { l: "RF1",   a: "center", t: "Aceptado por BT pero no rosterizado a tiempo · multa MELI" },
-                  { l: "RF2",   a: "center", t: "Rosterizado completo pero el driver no salió · BT cobra al transporte" },
-                  { l: "Total", a: "center", t: "RF1 + RF2" },
+                  { l: "SC", t: "Service Center" },
+                  { l: "Driver", t: "Nombre del conductor (padrón MELI)" },
+                  { l: "Driver ID", t: "ID interno MELI" },
+                  { l: "Placas planificadas", t: "Placas asignadas en el rostering" },
+                  { l: "Placas operadas", t: "Placas que efectivamente operaron (del snapshot)" },
+                  { l: "Cargados", t: "Paquetes cargados al vehículo" },
+                  { l: "Entregados", t: "Paquetes entregados" },
+                  { l: "% Entrega", t: "% de paquetes entregados sobre cargados" },
+                  { l: "Estado", t: "Diagnóstico del cumplimiento" },
                 ].map(h => (
-                  <th key={h.l} title={h.t} style={{ padding: "8px 6px", textAlign: h.a, fontWeight: 700, color: "#666",
-                    borderBottom: "1px solid #e4e7ec", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.3, cursor: "help" }}>{h.l}</th>
+                  <th key={h.l} title={h.t}
+                    style={{ padding: "8px 6px", textAlign: "center", fontWeight: 700, color: "#666",
+                      borderBottom: "1px solid #e4e7ec", fontSize: 10, textTransform: "uppercase",
+                      letterSpacing: 0.3, cursor: "help" }}>
+                    {h.l}
+                  </th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {porSC.map((s, i) => (
-                <tr key={i} style={{ borderBottom: "1px solid #f1f5f9", background: i % 2 === 0 ? "#fff" : "#fafbfc" }}>
-                  <td style={{ ...tdL, fontWeight: 700, color: "#1a3a6b" }}>{s.sc}</td>
-                  <td style={{ ...tdC, color: s.rf1 > 0 ? "#b91c1c" : "#94a3b8", fontWeight: s.rf1 > 0 ? 700 : 400 }}>{s.rf1}</td>
-                  <td style={{ ...tdC, color: s.rf2 > 0 ? "#b91c1c" : "#94a3b8", fontWeight: s.rf2 > 0 ? 700 : 400 }}>{s.rf2}</td>
-                  <td style={{ ...tdC, fontWeight: 700, color: "#1a3a6b" }}>{s.total}</td>
-                </tr>
-              ))}
-              <tr style={{ borderTop: "2px solid #e4e7ec", background: "#f8fafc", fontWeight: 700 }}>
-                <td style={{ ...tdL, color: "#1a3a6b" }}>TOTAL</td>
-                <td style={{ ...tdC, color: "#b91c1c" }}>{kpis.rf1}</td>
-                <td style={{ ...tdC, color: "#b91c1c" }}>{kpis.rf2}</td>
-                <td style={{ ...tdC, color: "#1a3a6b" }}>{kpis.total}</td>
-              </tr>
-            </tbody>
-          </table>
-        )}
-      </div>
-
-      {/* Detalle ruta por ruta */}
-      {detalle.length > 0 && (
-        <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10, overflow: "auto", maxHeight: 360 }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
-            <thead style={{ background: "#f8fafc", position: "sticky", top: 0, zIndex: 1 }}>
-              <tr>
-                {[
-                  { l: "Tipo",          a: "center" },
-                  { l: "SC",            a: "left"   },
-                  { l: "Driver",        a: "left"   },
-                  { l: "Placa planif.", a: "left"   },
-                  { l: "Placa operada", a: "left"   },
-                  { l: "Travel",        a: "center" },
-                ].map(h => (
-                  <th key={h.l} style={{ padding: "8px 6px", textAlign: h.a, fontWeight: 700, color: "#666",
-                    borderBottom: "1px solid #e4e7ec", fontSize: 10, textTransform: "uppercase", letterSpacing: 0.3 }}>{h.l}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {detalle.map((f, i) => {
-                const esRF1 = f.bucket === BUCKET_RF1;
+              {filasOrdenadas.map((f, i) => {
+                const c = colorCategoria(f.categoria);
                 return (
-                  <tr key={i} style={{ borderBottom: "1px solid #f1f5f9", background: i % 2 === 0 ? "#fff" : "#fafbfc" }}>
-                    <td style={tdC}>
-                      <span style={{ background: "#fee2e2", color: "#b91c1c", padding: "2px 8px", borderRadius: 6, fontWeight: 700, fontSize: 10 }}>
-                        {esRF1 ? "RF1" : "RF2"}
+                  <tr key={i} style={{ borderBottom: "1px solid #f1f5f9",
+                    background: i % 2 === 0 ? "#fff" : "#fafbfc" }}>
+                    <td style={{ ...tdCenter, fontWeight: 700, color: "#1a3a6b" }}>{f.facility}</td>
+                    <td style={tdLeft}>{f.driver_name || "—"}</td>
+                    <td style={{ ...tdCenter, color: "#94a3b8", fontSize: 10, fontFamily: "monospace" }}>
+                      {f.driver_id || "—"}
+                    </td>
+                    <td style={{ ...tdLeft, fontFamily: "monospace", fontSize: 10 }}>
+                      {f.placas_planificadas_detalle || "—"}
+                    </td>
+                    <td style={{ ...tdLeft, fontFamily: "monospace", fontSize: 10,
+                      color: f.categoria === "NO_SHOW" ? "#dc2626" : "#1a1a1a" }}>
+                      {f.placas_operadas_detalle || (
+                        <span style={{ color: "#dc2626", fontWeight: 700 }}>— sin operar —</span>
+                      )}
+                    </td>
+                    <td style={{ ...tdCenter, fontWeight: 600 }}>{fmtNumSnap(f.total_cargados)}</td>
+                    <td style={{ ...tdCenter, color: "#16a34a", fontWeight: 600 }}>
+                      {fmtNumSnap(f.total_entregados)}
+                    </td>
+                    <td style={{ ...tdCenter, fontWeight: 700,
+                      color: f.pct_entregado >= 95 ? "#16a34a" :
+                             f.pct_entregado >= 80 ? "#ca8a04" :
+                             f.pct_entregado != null ? "#dc2626" : "#cbd5e1" }}>
+                      {f.pct_entregado != null ? `${Number(f.pct_entregado).toFixed(1)}%` : "—"}
+                    </td>
+                    <td style={tdCenter}>
+                      <span style={{
+                        background: c.bg, color: c.text,
+                        padding: "3px 8px", borderRadius: 4,
+                        fontSize: 10, fontWeight: 700, whiteSpace: "nowrap"
+                      }}>
+                        {c.label}
                       </span>
                     </td>
-                    <td style={{ ...tdL, fontWeight: 700, color: "#1a3a6b" }}>{f.sc}</td>
-                    <td style={tdL}>{f.driver_name || "—"}</td>
-                    <td style={{ ...tdL, fontFamily: "monospace", fontSize: 10 }}>{f.placas_planificadas || "—"}</td>
-                    <td style={{ ...tdL, fontFamily: "monospace", fontSize: 10, color: "#b91c1c" }}>
-                      {f.placas_operadas || "— sin operar —"}
-                    </td>
-                    <td style={{ ...tdC, color: "#94a3b8", fontSize: 10, fontFamily: "monospace" }}>{f.travel_id || "—"}</td>
                   </tr>
                 );
               })}
             </tbody>
           </table>
-        </div>
-      )}
+        )}
+      </div>
 
       {/* ─── Pie informativo ─── */}
       <div style={{ marginTop: 8, fontSize: 10, color: "#94a3b8", textAlign: "right" }}>
-        Fuente: get_torre_3_pilares · RF1 (aceptado · no rosterizó) + RF2 (rosterizó · no salió)
+        Fuente: vw_rostering_vs_operativo · Rostering MELI (capturas AM 06:00 + PM 23:30) × Snapshot operativo 23:59
       </div>
     </div>
   );
@@ -18157,6 +18208,7 @@ function ModuloPagosMadre({ usuario }) {
     { id: "ayudantes",   label: "Ayudantes",             desc: "Detalle diario de auxiliares" },
     { id: "ambulancias", label: "Ambulancias",           desc: "Traspasos internos ruta→ruta" },
     { id: "supervisores", label: "Consolidaciones",   desc: "Consolidado por SC: torre, helpers, ambulancias y bitácora" },
+    { id: "padron_meli", label: "Padrón MELI",         desc: "Conductores y vehículos · altas, bajas y cambios diarios" },
     { id: "prefacturas", label: "Prefacturas",           desc: "Envío masivo de prefacturas MX" },
     { id: "config",      label: "Configuración",         desc: "Tarifario, zonas y reglas" },
   ];
@@ -18206,6 +18258,7 @@ function ModuloPagosMadre({ usuario }) {
           {subtab === "ayudantes"   && <AyudantesDetalleDia />}
           {subtab === "ambulancias" && <PoolMeliAmbulancias />}
           {subtab === "supervisores" && <PanelControlSupervisores />}
+          {subtab === "padron_meli" && <PadronMeliAdmin usuario={usuario} />}
           {subtab === "prefacturas" && <ModuloPrefacturasEnvio usuario={usuario} />}
           {subtab === "config"      && <ConfiguracionPagos />}
         </>
@@ -22359,8 +22412,8 @@ function IndicadoresOperacionalesMX({ usuario }) {
   }, [mesGlobal.anio, mesGlobal.mes]);
 
   // Tabs: Compromiso MELI, KPI de Operación, Diferencias Maestros, Inventario, Control Helper
-  // Nota: pestañas "validacion_bt" y "auditoria_padron" ocultas del menú (código y renders
-  // condicionales abajo quedan intactos por si se reactivan)
+  // Nota: pestaña "validacion_bt" oculta del menú (render condicional abajo queda intacto).
+  // El Padrón MELI (altas/bajas/cambios) se movió a Administración → "Padrón MELI".
   const tabs = [
     { id: "compromiso", label: "Compromiso MELI", desc: "Operativa de mañana · SDD vs SPOT" },
     { id: "kpi_operacion", label: "KPI de Operación", desc: "NS Informe MELI vs Snapshots" },
@@ -22479,7 +22532,6 @@ function IndicadoresOperacionalesMX({ usuario }) {
       {vista === "control_helper" && <PoolMeliControlHelper />}
       {vista === "torre_rostering_hoy" && <TorreRosteringHoy />}
       {vista === "validacion_bt" && <PoolMeliValidacionBT usuario={usuario} />}
-      {vista === "auditoria_padron" && <PoolMeliAuditoriaPadron usuario={usuario} />}
 
       {modal && <MeliModal modal={modal} onClose={() => setModal(null)} />}
     </div>
@@ -25248,236 +25300,530 @@ function MultiDriverIdModal({ data, sinBt, onClose, onSelectCurp }) {
 // El padrón se actualiza solo · cron diario 08:00 MX (14:00 UTC)
 // ════════════════════════════════════════════════════════════════════════════
 
-function PoolMeliAuditoriaPadron({ usuario }) {
-  const [fechaA, setFechaA] = useState(null);
-  const [fechaB, setFechaB] = useState(null);
-  const [tab, setTab] = useState(0); // 0=Altas, 1=Bajas, 2=Cambios carrier
+// ════════════════════════════════════════════════════════════════════════════
+// PADRÓN MELI · Administración
+// Conductores y vehículos · data completa, altas/bajas diarias, placas SDD
+// repetidas y cambios por día. Fuente: meli_drivers_master / meli_vehicles_master
+// (snapshot diario 08:00 MX · 14:00 UTC). Diffs vía RPC get_*_padron_diff.
+// ════════════════════════════════════════════════════════════════════════════
+const PADRON_CFG = {
+  drivers: {
+    tabla: "meli_drivers_master",
+    rpcDiff: "get_drivers_padron_diff",
+    llave: "driver_id",
+    label: "conductores",
+    icono: "ti-user",
+    selectData: "driver_id,nombre,first_name,last_name,document_type,document_value,status,disabled,is_only_helper,carrier_id,email,phone,fecha_snapshot,created_at",
+    cols: ["driver_id", "nombre", "document_value", "status", "disabled", "is_only_helper", "carrier_id", "email", "phone", "first_name", "last_name", "created_at"],
+    diffCols: [
+      { k: "driver_id", l: "Driver ID", mono: true },
+      { k: "nombre", l: "Nombre", bold: true },
+      { k: "document_value", l: "CURP", mono: true, small: true },
+      { k: "status", l: "Status", badge: true },
+      { k: "carrier_id", l: "Carrier", mono: true, small: true },
+      { k: "detalle", l: "Detalle", muted: true },
+    ],
+    cambioTipos: ["cambio_status", "cambio_disabled", "cambio_carrier"],
+    tieneRepetidas: false,
+  },
+  vehiculos: {
+    tabla: "meli_vehicles_master",
+    rpcDiff: "get_vehiculos_padron_diff",
+    llave: "vehicle_id",
+    label: "vehículos",
+    icono: "ti-truck",
+    selectData: "vehicle_id,placa,tipo_nombre,tipo_id,capacidad,es_sdd,is_traction,status,carrier_id,amount_plate,fecha_snapshot,created_at",
+    cols: ["vehicle_id", "placa", "tipo_nombre", "capacidad", "es_sdd", "is_traction", "status", "carrier_id", "amount_plate", "created_at"],
+    diffCols: [
+      { k: "vehicle_id", l: "Vehicle ID", mono: true },
+      { k: "placa", l: "Placa", bold: true, mono: true },
+      { k: "tipo_nombre", l: "Tipo", small: true },
+      { k: "capacidad", l: "Cap.", mono: true, small: true },
+      { k: "status", l: "Status", badge: true },
+      { k: "detalle", l: "Detalle", muted: true },
+    ],
+    cambioTipos: ["cambio_tipo", "cambio_status"],
+    tieneRepetidas: true,
+  },
+};
+
+// CSV genérico
+function padronCsv(headers, rows, filename) {
+  const csv = [headers.join(",")].concat(
+    rows.map(r => r.map(v => `"${String(v == null ? "" : v).replace(/"/g, '""')}"`).join(","))
+  ).join("\n");
+  const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `${filename}_${new Date().toISOString().split("T")[0]}.csv`;
+  a.click();
+}
+
+function padronFmt(v) {
+  if (v === null || v === undefined || v === "") return "—";
+  if (typeof v === "boolean") return v ? "Sí" : "No";
+  return String(v);
+}
+
+function PadronMeliAdmin({ usuario }) {
+  const [mundo, setMundo] = useState("drivers"); // drivers (principal) | vehiculos
+  return (
+    <div style={{ fontFamily: "'Geist', sans-serif", background: "#f0f2f5", minHeight: "60vh" }}>
+      <div style={{ background: "#fff", borderBottom: "1px solid #e4e7ec", padding: "10px 24px", display: "flex", gap: 8, alignItems: "center" }}>
+        <span style={{ fontSize: 11, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5, marginRight: 4 }}>Padrón MELI</span>
+        {[
+          { id: "drivers", label: "Conductores", icon: "ti-user" },
+          { id: "vehiculos", label: "Vehículos", icon: "ti-truck" },
+        ].map(m => (
+          <button key={m.id} onClick={() => setMundo(m.id)} style={{
+            border: "none", cursor: "pointer", padding: "7px 16px", borderRadius: 8,
+            fontSize: 13, fontWeight: 700, fontFamily: "'Geist', sans-serif",
+            background: mundo === m.id ? "#1a3a6b" : "#eef2f7",
+            color: mundo === m.id ? "#fff" : "#64748b",
+            display: "inline-flex", alignItems: "center", gap: 6,
+          }}>
+            <i className={`ti ${m.icon}`} style={{ fontSize: 15 }} />{m.label}
+          </button>
+        ))}
+      </div>
+      <PadronMundo key={mundo} tipo={mundo} />
+    </div>
+  );
+}
+
+function PadronMundo({ tipo }) {
+  const cfg = PADRON_CFG[tipo];
+  const [vista, setVista] = useState("data"); // data | altasbajas | repetidas | cambios
   const [fechasDisp, setFechasDisp] = useState([]);
-  const [snapshotA, setSnapshotA] = useState([]);
-  const [snapshotB, setSnapshotB] = useState([]);
-  const [carriersMap, setCarriersMap] = useState({});
+  const [fechaSel, setFechaSel] = useState(null);       // data + repetidas
+  const [fechaA, setFechaA] = useState(null);           // altas/bajas A
+  const [fechaB, setFechaB] = useState(null);           // altas/bajas B
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [busqueda, setBusqueda] = useState("");
 
-  // 1) Cargar fechas disponibles + setear defaults
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      try {
-        const { data, error } = await sb
-          .from('meli_drivers_master')
-          .select('fecha_snapshot')
-          .order('fecha_snapshot', { ascending: false })
-          .limit(2000);
-        if (error) throw error;
-        const fechasUnicas = [...new Set((data || []).map(f => f.fecha_snapshot))];
-        if (!alive) return;
-        setFechasDisp(fechasUnicas);
-        if (fechasUnicas.length >= 2) {
-          setFechaB(fechasUnicas[0]); // más reciente
-          setFechaA(fechasUnicas[1]); // anterior
-        } else if (fechasUnicas.length === 1) {
-          setFechaB(fechasUnicas[0]);
-          setFechaA(fechasUnicas[0]);
-        }
-      } catch (e) {
-        if (alive) setError(e.message || 'Error cargando fechas');
-        if (alive) setLoading(false);
-      }
-    })();
-    return () => { alive = false; };
-  }, []);
+  const [dataRows, setDataRows] = useState([]);
+  const [diffRows, setDiffRows] = useState([]);
+  const [repRows, setRepRows] = useState([]);
+  const [cambiosDia, setCambiosDia] = useState([]);   // [{fecha, altas, bajas, cambios, rows}]
+  const [diaDetalle, setDiaDetalle] = useState(null); // fecha seleccionada en "cambios"
 
-  // 2) Cargar snapshots A y B cuando se eligen las fechas
+  // 1) Fechas disponibles
   useEffect(() => {
-    if (!fechaA || !fechaB) return;
     let alive = true;
     (async () => {
       setLoading(true); setError(null);
       try {
-        const { data: snA, error: eA } = await sb
-          .from('meli_drivers_master')
-          .select('driver_id,nombre,document_value,status,carrier_id')
-          .eq('fecha_snapshot', fechaA);
-        if (eA) throw eA;
-        const { data: snB, error: eB } = await sb
-          .from('meli_drivers_master')
-          .select('driver_id,nombre,document_value,status,carrier_id')
-          .eq('fecha_snapshot', fechaB);
-        if (eB) throw eB;
-
-        // Cargar nombres de carriers si existe la tabla
-        const carrierIds = [...new Set([
-          ...(snA || []).map(d => d.carrier_id),
-          ...(snB || []).map(d => d.carrier_id),
-        ].filter(Boolean))];
-        let cmap = {};
-        if (carrierIds.length > 0) {
-          try {
-            const { data: cdata } = await sb
-              .from('meli_carriers')
-              .select('carrier_id,nombre')
-              .in('carrier_id', carrierIds);
-            if (cdata) cdata.forEach(c => { cmap[c.carrier_id] = c.nombre; });
-          } catch (_) { /* tabla puede no existir · OK */ }
-        }
-
-        if (alive) {
-          setSnapshotA(snA || []);
-          setSnapshotB(snB || []);
-          setCarriersMap(cmap);
-        }
+        const { data, error } = await sb
+          .from(cfg.tabla)
+          .select("fecha_snapshot")
+          .order("fecha_snapshot", { ascending: false })
+          .limit(5000);
+        if (error) throw error;
+        const fechas = [...new Set((data || []).map(f => f.fecha_snapshot))];
+        if (!alive) return;
+        setFechasDisp(fechas);
+        setFechaSel(fechas[0] || null);
+        setFechaB(fechas[0] || null);
+        setFechaA(fechas[1] || fechas[0] || null);
       } catch (e) {
-        if (alive) setError(e.message || 'Error');
+        if (alive) { setError(e.message || "Error cargando fechas"); }
       } finally {
         if (alive) setLoading(false);
       }
     })();
     return () => { alive = false; };
-  }, [fechaA, fechaB]);
+  }, [tipo]);
 
-  // 3) Cálculos
-  const { altas, bajas, cambiosCarrier, kpis } = useMemo(() => {
-    const mapA = new Map(snapshotA.map(d => [d.driver_id, d]));
-    const mapB = new Map(snapshotB.map(d => [d.driver_id, d]));
-    const altas = snapshotB.filter(d => !mapA.has(d.driver_id));
-    const bajas = snapshotA.filter(d => !mapB.has(d.driver_id));
-    const cambiosCarrier = [];
-    for (const b of snapshotB) {
-      const a = mapA.get(b.driver_id);
-      if (a && a.carrier_id !== b.carrier_id) {
-        cambiosCarrier.push({
-          driver_id: b.driver_id, nombre: b.nombre, curp: b.document_value,
-          carrier_anterior: a.carrier_id, carrier_actual: b.carrier_id,
-          status: b.status,
+  // 2) Data completa del snapshot seleccionado
+  useEffect(() => {
+    if (vista !== "data" || !fechaSel) return;
+    let alive = true;
+    (async () => {
+      setLoading(true); setError(null);
+      try {
+        const { data, error } = await sb
+          .from(cfg.tabla).select(cfg.selectData)
+          .eq("fecha_snapshot", fechaSel).limit(5000);
+        if (error) throw error;
+        if (alive) setDataRows(data || []);
+      } catch (e) { if (alive) setError(e.message || "Error"); }
+      finally { if (alive) setLoading(false); }
+    })();
+    return () => { alive = false; };
+  }, [vista, fechaSel, tipo]);
+
+  // 3) Altas / bajas / cambios entre A y B
+  useEffect(() => {
+    if (vista !== "altasbajas" || !fechaA || !fechaB) return;
+    let alive = true;
+    (async () => {
+      setLoading(true); setError(null);
+      try {
+        const { data, error } = await sb.rpc(cfg.rpcDiff, { fecha_a: fechaA, fecha_b: fechaB });
+        if (error) throw error;
+        if (alive) setDiffRows(data || []);
+      } catch (e) { if (alive) setError(e.message || "Error"); }
+      finally { if (alive) setLoading(false); }
+    })();
+    return () => { alive = false; };
+  }, [vista, fechaA, fechaB, tipo]);
+
+  // 4) Placas repetidas SDD (solo vehículos)
+  useEffect(() => {
+    if (vista !== "repetidas" || !cfg.tieneRepetidas || !fechaSel) return;
+    let alive = true;
+    (async () => {
+      setLoading(true); setError(null);
+      try {
+        const { data, error } = await sb
+          .from(cfg.tabla)
+          .select("vehicle_id,placa,tipo_nombre,capacidad,es_sdd")
+          .eq("fecha_snapshot", fechaSel).limit(5000);
+        if (error) throw error;
+        const norm = p => String(p || "").replace(/^SDD-/, "");
+        const baseTipo = t => String(t || "").replace(/\s*SDD$/i, "").trim();
+        const grupos = {};
+        (data || []).forEach(r => {
+          const k = norm(r.placa);
+          (grupos[k] = grupos[k] || []).push(r);
         });
-      }
-    }
-    const kpis = {
-      total_actual: snapshotB.length,
-      total_anterior: snapshotA.length,
-      delta: snapshotB.length - snapshotA.length,
-      altas: altas.length,
-      bajas: bajas.length,
-      cambios: cambiosCarrier.length,
-    };
-    return { altas, bajas, cambiosCarrier, kpis };
-  }, [snapshotA, snapshotB]);
+        const out = Object.keys(grupos).filter(k => grupos[k].length > 1).map(k => {
+          const items = grupos[k].sort((a, b) => (a.es_sdd === b.es_sdd ? 0 : a.es_sdd ? 1 : -1));
+          const tiposBase = new Set(items.map(i => baseTipo(i.tipo_nombre)));
+          return {
+            placa_norm: k,
+            variantes: items.length,
+            mismo_tipo: tiposBase.size === 1,
+            detalle: items.map(i => `${i.placa} = ${i.tipo_nombre}`).join("  |  "),
+            items,
+          };
+        }).sort((a, b) => (a.mismo_tipo === b.mismo_tipo ? a.placa_norm.localeCompare(b.placa_norm) : a.mismo_tipo ? 1 : -1));
+        if (alive) setRepRows(out);
+      } catch (e) { if (alive) setError(e.message || "Error"); }
+      finally { if (alive) setLoading(false); }
+    })();
+    return () => { alive = false; };
+  }, [vista, fechaSel, tipo]);
 
-  const PNAVY = "#1a3a6b"; const PORANGE = "#F47B20"; const PBG = "#f0f2f5";
-  const PCARD = "#fff"; const PBORDER = "#e4e7ec"; const PTEXT = "#1a1a1a";
-  const PMUTED = "#64748b"; const PLIGHT = "#94a3b8";
+  // 5) Cambios por día (últimos 30 pares consecutivos)
+  useEffect(() => {
+    if (vista !== "cambios" || fechasDisp.length < 2) return;
+    let alive = true;
+    (async () => {
+      setLoading(true); setError(null); setDiaDetalle(null);
+      try {
+        const asc = [...fechasDisp].sort();
+        const pares = [];
+        for (let i = 1; i < asc.length; i++) pares.push([asc[i - 1], asc[i]]);
+        const ultimos = pares.slice(-30);
+        const res = await Promise.all(ultimos.map(([a, b]) =>
+          sb.rpc(cfg.rpcDiff, { fecha_a: a, fecha_b: b })
+            .then(r => ({ a, b, rows: r.data || [] }))
+        ));
+        const filas = res.map(({ a, b, rows }) => ({
+          fecha: b, prev: a,
+          altas: rows.filter(x => x.tipo_cambio === "alta").length,
+          bajas: rows.filter(x => x.tipo_cambio === "baja").length,
+          cambios: rows.filter(x => cfg.cambioTipos.includes(x.tipo_cambio)).length,
+          rows,
+        })).sort((x, y) => (x.fecha < y.fecha ? 1 : -1));
+        if (alive) setCambiosDia(filas);
+      } catch (e) { if (alive) setError(e.message || "Error"); }
+      finally { if (alive) setLoading(false); }
+    })();
+    return () => { alive = false; };
+  }, [vista, fechasDisp, tipo]);
 
-  const formatCarrier = (id) => {
-    if (!id) return '—';
-    const nombre = carriersMap[id];
-    return nombre ? `${nombre} (${id})` : `${id}`;
+  // ── derivados ──
+  const altas = useMemo(() => diffRows.filter(r => r.tipo_cambio === "alta"), [diffRows]);
+  const bajas = useMemo(() => diffRows.filter(r => r.tipo_cambio === "baja"), [diffRows]);
+  const cambios = useMemo(() => diffRows.filter(r => cfg.cambioTipos.includes(r.tipo_cambio)), [diffRows, tipo]);
+
+  const dataFiltrada = useMemo(() => {
+    if (!busqueda.trim()) return dataRows;
+    const q = busqueda.toLowerCase().trim();
+    return dataRows.filter(r => cfg.cols.some(c => String(r[c] ?? "").toLowerCase().includes(q)));
+  }, [dataRows, busqueda, tipo]);
+
+  const PNAVY = "#1a3a6b", PMUTED = "#64748b", PLIGHT = "#94a3b8", PBORDER = "#e4e7ec", PORANGE = "#F47B20";
+
+  const subTabs = [
+    { id: "data", label: "Data completa", icon: "ti-table" },
+    { id: "altasbajas", label: "Altas y bajas", icon: "ti-arrows-diff" },
+    ...(cfg.tieneRepetidas ? [{ id: "repetidas", label: "Placas repetidas (SDD)", icon: "ti-copy" }] : []),
+    { id: "cambios", label: "Cambios por día", icon: "ti-history" },
+  ];
+
+  const selStyle = {
+    fontSize: 12, fontWeight: 600, padding: "6px 10px", borderRadius: 6,
+    border: `1px solid ${PBORDER}`, background: "#fff", color: PNAVY,
+    fontFamily: "'Geist', sans-serif", cursor: "pointer", outline: "none",
   };
 
-  // Badge de última actualización
-  const renderBadge = () => {
-    if (fechasDisp.length === 0) {
-      return <span style={{ fontSize: 11, color: PLIGHT, fontStyle: 'italic' }}>Sin snapshots</span>;
-    }
-    const ultima = fechasDisp[0];
-    const fechaDate = new Date(ultima + 'T14:00:00Z'); // cron corre 14:00 UTC
-    const hace = Math.floor((Date.now() - fechaDate.getTime()) / (60 * 1000));
-    const haceTexto = hace < 60 ? `hace ${hace} min`
-      : hace < 24 * 60 ? `hace ${Math.floor(hace / 60)} hs`
-      : `hace ${Math.floor(hace / (24 * 60))} días`;
-    return (
-      <div style={{ fontSize: 11, color: PMUTED, display: 'flex', alignItems: 'center', gap: 6 }}>
-        <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#10b981', display: 'inline-block' }} />
-        Última actualización: <strong style={{ color: PNAVY }}>{ultima}</strong>
-        <span style={{ color: PLIGHT }}>· {haceTexto} · {kpis.total_actual} drivers</span>
-        <span style={{ color: PLIGHT, fontStyle: 'italic', marginLeft: 4 }}>· cron diario 08:00 MX</span>
+  return (
+    <div>
+      {/* Sub-tabs de vista */}
+      <div style={{ background: "#fff", borderBottom: `1px solid ${PBORDER}`, padding: "0 24px", display: "flex", gap: 0, flexWrap: "wrap" }}>
+        {subTabs.map(t => (
+          <button key={t.id} onClick={() => setVista(t.id)} style={{
+            background: "transparent", border: "none", padding: "11px 16px", cursor: "pointer",
+            fontSize: 12.5, fontWeight: 600, color: vista === t.id ? PNAVY : PMUTED,
+            borderBottom: vista === t.id ? `2px solid ${PORANGE}` : "2px solid transparent",
+            display: "inline-flex", alignItems: "center", gap: 6,
+          }}>
+            <i className={`ti ${t.icon}`} style={{ fontSize: 14 }} />{t.label}
+          </button>
+        ))}
       </div>
-    );
-  };
 
-  if (loading) return <div style={{ padding: 40, textAlign: 'center', color: PMUTED, fontSize: 13, fontFamily: "'Geist', sans-serif" }}>Cargando padrón…</div>;
-  if (error) return (
-    <div style={{ padding: 24, fontFamily: "'Geist', sans-serif" }}>
-      <div style={{ background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 12, padding: 16 }}>
-        <div style={{ fontSize: 13, fontWeight: 600, color: '#991b1b', marginBottom: 6 }}>No se pudo cargar Auditoría Padrón</div>
-        <div style={{ fontSize: 12, color: '#7f1d1d', lineHeight: 1.6 }}>
-          {error}<br /><br />
-          <strong>Causa probable:</strong> falta tener snapshots en <code>meli_drivers_master</code> o falta la vista <code>vw_meli_drivers_latest</code>.
+      {/* Toolbar de fechas según vista */}
+      <div style={{ background: "#fff", borderBottom: `1px solid ${PBORDER}`, padding: "10px 24px", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        {(vista === "data" || vista === "repetidas") && (
+          <>
+            <span style={{ fontSize: 11, fontWeight: 700, color: PMUTED, textTransform: "uppercase", letterSpacing: 0.5 }}>Snapshot</span>
+            <select value={fechaSel || ""} onChange={e => setFechaSel(e.target.value)} style={selStyle}>
+              {fechasDisp.map(f => <option key={f} value={f}>{f}</option>)}
+            </select>
+          </>
+        )}
+        {vista === "altasbajas" && (
+          <>
+            <span style={{ fontSize: 11, fontWeight: 700, color: PMUTED, textTransform: "uppercase", letterSpacing: 0.5 }}>Comparar</span>
+            <select value={fechaA || ""} onChange={e => setFechaA(e.target.value)} style={selStyle}>
+              {fechasDisp.map(f => <option key={f} value={f}>{f}</option>)}
+            </select>
+            <span style={{ color: PLIGHT }}>→</span>
+            <select value={fechaB || ""} onChange={e => setFechaB(e.target.value)} style={selStyle}>
+              {fechasDisp.map(f => <option key={f} value={f}>{f}</option>)}
+            </select>
+          </>
+        )}
+        <div style={{ marginLeft: "auto", fontSize: 11, color: PMUTED, display: "flex", alignItems: "center", gap: 6 }}>
+          <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#10b981", display: "inline-block" }} />
+          Última: <strong style={{ color: PNAVY }}>{fechasDisp[0] || "—"}</strong>
+          <span style={{ color: PLIGHT }}>· cron 08:00 MX</span>
         </div>
+      </div>
+
+      <div style={{ padding: "16px 24px" }}>
+        {error && (
+          <div style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 10, padding: 14, marginBottom: 12, fontSize: 12, color: "#991b1b" }}>
+            {error}
+          </div>
+        )}
+        {loading ? (
+          <div style={{ padding: 40, textAlign: "center", color: PMUTED, fontSize: 13 }}>Cargando padrón de {cfg.label}…</div>
+        ) : (
+          <>
+            {/* ── DATA COMPLETA ── */}
+            {vista === "data" && (
+              <div>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
+                  <input value={busqueda} onChange={e => setBusqueda(e.target.value)} placeholder={`Buscar en ${dataRows.length} ${cfg.label}…`}
+                    style={{ flex: 1, maxWidth: 360, padding: "7px 10px", border: `1px solid #d0d5dd`, borderRadius: 6, fontSize: 12, fontFamily: "'Geist', sans-serif" }} />
+                  <span style={{ fontSize: 12, color: PMUTED }}>{dataFiltrada.length} de {dataRows.length}</span>
+                  <button onClick={() => padronCsv(cfg.cols, dataFiltrada.map(r => cfg.cols.map(c => padronFmt(r[c]))), `padron_${tipo}`)}
+                    style={{ marginLeft: "auto", fontSize: 11, fontWeight: 600, padding: "6px 11px", borderRadius: 6, border: "none", background: PNAVY, color: "#fff", cursor: "pointer", fontFamily: "'Geist', sans-serif", display: "inline-flex", alignItems: "center", gap: 5 }}>
+                    <i className="ti ti-download" style={{ fontSize: 12 }} />Exportar CSV
+                  </button>
+                </div>
+                <div style={{ background: "#fff", borderRadius: 12, border: `0.5px solid ${PBORDER}`, overflow: "hidden" }}>
+                  <div style={{ maxHeight: "62vh", overflow: "auto" }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                      <thead style={{ position: "sticky", top: 0, zIndex: 1, background: "#f8fafc" }}>
+                        <tr>{cfg.cols.map(c => <ApTh key={c}>{c}</ApTh>)}</tr>
+                      </thead>
+                      <tbody>
+                        {dataFiltrada.length === 0 && (
+                          <tr><td colSpan={cfg.cols.length} style={{ padding: 30, textAlign: "center", color: PLIGHT }}>Sin resultados</td></tr>
+                        )}
+                        {dataFiltrada.map((r, i) => (
+                          <tr key={i} style={{ borderBottom: "0.5px solid #f4f5f7" }}>
+                            {cfg.cols.map(c => (
+                              <ApTd key={c} mono={["driver_id", "vehicle_id", "carrier_id", "document_value", "placa", "tipo_id", "amount_plate"].includes(c)} small>
+                                {c === "status" ? (
+                                  <span style={{ background: r[c] === "active" ? "#d1fae5" : "#fef3c7", color: r[c] === "active" ? "#065f46" : "#92400e", fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 4 }}>{padronFmt(r[c])}</span>
+                                ) : padronFmt(r[c])}
+                              </ApTd>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* ── ALTAS Y BAJAS ── */}
+            {vista === "altasbajas" && (
+              <div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, marginBottom: 14 }}>
+                  <PKpi l="➕ Altas" v={altas.length} s={`nuevos en ${fechaB}`} accent="#10b981" />
+                  <PKpi l="➖ Bajas" v={bajas.length} s={`removidos vs ${fechaA}`} accent="#dc2626" />
+                  <PKpi l="🔄 Cambios" v={cambios.length} s="status / tipo / carrier" accent={PORANGE} />
+                </div>
+                <PadronDiffTabla titulo="Altas" rows={altas} cols={cfg.diffCols} tipo={tipo} archivo={`altas_${tipo}`} vacio="Sin altas entre las fechas" />
+                <div style={{ height: 14 }} />
+                <PadronDiffTabla titulo="Bajas" rows={bajas} cols={cfg.diffCols} tipo={tipo} archivo={`bajas_${tipo}`} vacio="Sin bajas entre las fechas" />
+                {cambios.length > 0 && (
+                  <>
+                    <div style={{ height: 14 }} />
+                    <PadronDiffTabla titulo="Cambios" rows={cambios} cols={cfg.diffCols} tipo={tipo} archivo={`cambios_${tipo}`} vacio="Sin cambios" />
+                  </>
+                )}
+              </div>
+            )}
+
+            {/* ── PLACAS REPETIDAS SDD ── */}
+            {vista === "repetidas" && cfg.tieneRepetidas && (
+              <div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, marginBottom: 14 }}>
+                  <PKpi l="Placas con doble registro" v={repRows.length} s="normal + SDD el mismo día" accent={PNAVY} />
+                  <PKpi l="Mismo tipo base" v={repRows.filter(r => r.mismo_tipo).length} s="solo difieren en SDD" accent="#10b981" />
+                  <PKpi l="⚠️ Tipo distinto" v={repRows.filter(r => !r.mismo_tipo).length} s="normal vs SDD difieren" accent="#dc2626" />
+                </div>
+                <div style={{ background: "#fff", borderRadius: 12, border: `0.5px solid ${PBORDER}`, overflow: "hidden" }}>
+                  <div style={{ padding: "8px 14px", borderBottom: `1px solid ${PBORDER}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <div style={{ fontSize: 11, color: PMUTED }}>{repRows.length} placas con variante normal + SDD · snapshot {fechaSel}</div>
+                    <button onClick={() => padronCsv(["placa", "variantes", "mismo_tipo_base", "detalle"], repRows.map(r => [r.placa_norm, r.variantes, r.mismo_tipo ? "Sí" : "No", r.detalle]), "placas_repetidas_sdd")}
+                      style={{ fontSize: 11, fontWeight: 600, padding: "5px 10px", borderRadius: 6, border: "none", background: PNAVY, color: "#fff", cursor: "pointer", fontFamily: "'Geist', sans-serif", display: "inline-flex", alignItems: "center", gap: 5 }}>
+                      <i className="ti ti-download" style={{ fontSize: 12 }} />Exportar CSV
+                    </button>
+                  </div>
+                  <div style={{ maxHeight: "58vh", overflow: "auto" }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                      <thead style={{ position: "sticky", top: 0, zIndex: 1, background: "#f8fafc" }}>
+                        <tr><ApTh>Placa</ApTh><ApTh>Variantes</ApTh><ApTh>Tipo base</ApTh><ApTh>Detalle (placa = tipo)</ApTh></tr>
+                      </thead>
+                      <tbody>
+                        {repRows.length === 0 && (
+                          <tr><td colSpan={4} style={{ padding: 30, textAlign: "center", color: PLIGHT }}>Sin placas repetidas en este snapshot</td></tr>
+                        )}
+                        {repRows.map((r, i) => (
+                          <tr key={i} style={{ borderBottom: "0.5px solid #f4f5f7", background: r.mismo_tipo ? "transparent" : "#fff7ed" }}>
+                            <ApTd mono bold>{r.placa_norm}</ApTd>
+                            <ApTd center>{r.variantes}</ApTd>
+                            <ApTd>
+                              <span style={{ background: r.mismo_tipo ? "#d1fae5" : "#fee2e2", color: r.mismo_tipo ? "#065f46" : "#991b1b", fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 4 }}>
+                                {r.mismo_tipo ? "Mismo" : "DISTINTO"}
+                              </span>
+                            </ApTd>
+                            <ApTd small>{r.detalle}</ApTd>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+                <div style={{ marginTop: 10, fontSize: 11, color: PLIGHT, fontStyle: "italic" }}>
+                  ℹ️ Las marcadas <strong style={{ color: "#991b1b" }}>DISTINTO</strong> tienen la variante SDD con un tipo base diferente al normal (ej. Large vs Small) — conviene revisarlas en MELI.
+                </div>
+              </div>
+            )}
+
+            {/* ── CAMBIOS POR DÍA ── */}
+            {vista === "cambios" && (
+              <div>
+                <div style={{ background: "#fff", borderRadius: 12, border: `0.5px solid ${PBORDER}`, overflow: "hidden", marginBottom: 14 }}>
+                  <div style={{ padding: "8px 14px", borderBottom: `1px solid ${PBORDER}`, fontSize: 11, color: PMUTED }}>
+                    Cambios día a día (cada fila compara contra el snapshot anterior disponible) · clic en una fila para ver el detalle
+                  </div>
+                  <div style={{ maxHeight: "40vh", overflow: "auto" }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                      <thead style={{ position: "sticky", top: 0, zIndex: 1, background: "#f8fafc" }}>
+                        <tr><ApTh>Día</ApTh><ApTh>vs</ApTh><ApTh>➕ Altas</ApTh><ApTh>➖ Bajas</ApTh><ApTh>🔄 Cambios</ApTh></tr>
+                      </thead>
+                      <tbody>
+                        {cambiosDia.length === 0 && (
+                          <tr><td colSpan={5} style={{ padding: 30, textAlign: "center", color: PLIGHT }}>Sin historial suficiente</td></tr>
+                        )}
+                        {cambiosDia.map((d, i) => (
+                          <tr key={i} onClick={() => setDiaDetalle(diaDetalle === d.fecha ? null : d.fecha)}
+                            style={{ borderBottom: "0.5px solid #f4f5f7", cursor: "pointer", background: diaDetalle === d.fecha ? "#eff6ff" : "transparent" }}>
+                            <ApTd mono bold>{d.fecha}</ApTd>
+                            <ApTd mono small muted>{d.prev}</ApTd>
+                            <ApTd center><span style={{ color: d.altas ? "#059669" : PLIGHT, fontWeight: 700 }}>{d.altas}</span></ApTd>
+                            <ApTd center><span style={{ color: d.bajas ? "#dc2626" : PLIGHT, fontWeight: 700 }}>{d.bajas}</span></ApTd>
+                            <ApTd center><span style={{ color: d.cambios ? PORANGE : PLIGHT, fontWeight: 700 }}>{d.cambios}</span></ApTd>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+                {diaDetalle && (() => {
+                  const d = cambiosDia.find(x => x.fecha === diaDetalle);
+                  if (!d) return null;
+                  const det = d.rows;
+                  return (
+                    <div>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: PNAVY, marginBottom: 8 }}>
+                        Detalle {d.prev} → {d.fecha}
+                      </div>
+                      <PadronDiffTabla titulo="Altas" rows={det.filter(r => r.tipo_cambio === "alta")} cols={cfg.diffCols} tipo={tipo} archivo={`altas_${tipo}_${d.fecha}`} vacio="Sin altas" />
+                      <div style={{ height: 12 }} />
+                      <PadronDiffTabla titulo="Bajas" rows={det.filter(r => r.tipo_cambio === "baja")} cols={cfg.diffCols} tipo={tipo} archivo={`bajas_${tipo}_${d.fecha}`} vacio="Sin bajas" />
+                      <div style={{ height: 12 }} />
+                      <PadronDiffTabla titulo="Cambios" rows={det.filter(r => cfg.cambioTipos.includes(r.tipo_cambio))} cols={cfg.diffCols} tipo={tipo} archivo={`cambios_${tipo}_${d.fecha}`} vacio="Sin cambios" />
+                    </div>
+                  );
+                })()}
+              </div>
+            )}
+          </>
+        )}
       </div>
     </div>
   );
+}
 
+// Tabla genérica para resultados de diff (altas / bajas / cambios)
+function PadronDiffTabla({ titulo, rows, cols, tipo, archivo, vacio }) {
+  const color = titulo === "Altas" ? "#10b981" : titulo === "Bajas" ? "#dc2626" : "#F47B20";
+  const exportar = () => padronCsv(
+    cols.map(c => c.l),
+    rows.map(r => cols.map(c => r[c.k] == null ? "" : r[c.k])),
+    archivo
+  );
   return (
-    <div style={{ fontFamily: "'Geist', sans-serif", background: PBG, color: PTEXT }}>
-      {/* HEADER · selección fechas + badge */}
-      <div style={{ background: PCARD, borderBottom: `1px solid ${PBORDER}`, padding: '12px 24px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: PMUTED, textTransform: 'uppercase', letterSpacing: 0.5 }}>Comparar</div>
-          <select value={fechaA || ''} onChange={e => setFechaA(e.target.value)} style={{
-            fontSize: 12, fontWeight: 600, padding: '6px 10px', borderRadius: 6,
-            border: `1px solid ${PBORDER}`, background: PCARD, color: PNAVY,
-            fontFamily: "'Geist', sans-serif", cursor: 'pointer', outline: 'none',
-          }}>
-            {fechasDisp.map(f => <option key={f} value={f}>{f}</option>)}
-          </select>
-          <span style={{ color: PLIGHT, fontSize: 12 }}>→</span>
-          <select value={fechaB || ''} onChange={e => setFechaB(e.target.value)} style={{
-            fontSize: 12, fontWeight: 600, padding: '6px 10px', borderRadius: 6,
-            border: `1px solid ${PBORDER}`, background: PCARD, color: PNAVY,
-            fontFamily: "'Geist', sans-serif", cursor: 'pointer', outline: 'none',
-          }}>
-            {fechasDisp.map(f => <option key={f} value={f}>{f}</option>)}
-          </select>
-          <div style={{ marginLeft: 'auto' }}>{renderBadge()}</div>
+    <div style={{ background: "#fff", borderRadius: 12, border: "0.5px solid #e4e7ec", overflow: "hidden" }}>
+      <div style={{ padding: "8px 14px", borderBottom: "1px solid #e4e7ec", display: "flex", justifyContent: "space-between", alignItems: "center", background: "#f8fafc" }}>
+        <div style={{ fontSize: 12, fontWeight: 700, color: "#1a3a6b", display: "inline-flex", alignItems: "center", gap: 6 }}>
+          <span style={{ width: 8, height: 8, borderRadius: "50%", background: color, display: "inline-block" }} />
+          {titulo} <span style={{ color: "#94a3b8", fontWeight: 600 }}>({rows.length})</span>
         </div>
+        {rows.length > 0 && (
+          <button onClick={exportar} style={{ fontSize: 11, fontWeight: 600, padding: "5px 10px", borderRadius: 6, border: "none", background: "#1a3a6b", color: "#fff", cursor: "pointer", fontFamily: "'Geist', sans-serif", display: "inline-flex", alignItems: "center", gap: 5 }}>
+            <i className="ti ti-download" style={{ fontSize: 12 }} />CSV
+          </button>
+        )}
       </div>
-
-      <div style={{ padding: '16px 24px' }}>
-        {/* KPIs */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 10, marginBottom: 14 }}>
-          <PKpi l="Total padrón (B)" v={kpis.total_actual} s={`${kpis.delta >= 0 ? '+' : ''}${kpis.delta} vs ${fechaA}`} accent={PNAVY} />
-          <PKpi l="Total padrón (A)" v={kpis.total_anterior} s={`snapshot ${fechaA}`} accent={PMUTED} />
-          <PKpi l="➕ Altas" v={kpis.altas} s={`nuevos en ${fechaB}`} accent="#10b981" />
-          <PKpi l="➖ Bajas" v={kpis.bajas} s={`removidos vs ${fechaA}`} accent="#dc2626" />
-          <PKpi l="🔄 Cambios carrier" v={kpis.cambios} s="cambiaron de empresa" accent={PORANGE} />
+      {rows.length === 0 ? (
+        <div style={{ padding: 24, textAlign: "center", color: "#94a3b8", fontSize: 12 }}>{vacio}</div>
+      ) : (
+        <div style={{ maxHeight: "48vh", overflow: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+            <thead style={{ position: "sticky", top: 0, zIndex: 1, background: "#f8fafc" }}>
+              <tr>{cols.map(c => <ApTh key={c.k}>{c.l}</ApTh>)}</tr>
+            </thead>
+            <tbody>
+              {rows.map((r, i) => (
+                <tr key={i} style={{ borderBottom: "0.5px solid #f4f5f7" }}>
+                  {cols.map(c => (
+                    <ApTd key={c.k} mono={c.mono} bold={c.bold} small={c.small} muted={c.muted}>
+                      {c.badge ? (
+                        <span style={{ background: r[c.k] === "active" ? "#d1fae5" : "#fef3c7", color: r[c.k] === "active" ? "#065f46" : "#92400e", fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 4 }}>{padronFmt(r[c.k])}</span>
+                      ) : padronFmt(r[c.k])}
+                    </ApTd>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
-
-        {/* Tab bar Altas/Bajas/Cambios */}
-        <div style={{ background: PCARD, borderRadius: 12, border: `0.5px solid ${PBORDER}`, overflow: 'hidden' }}>
-          <div style={{ display: 'flex', borderBottom: `1px solid ${PBORDER}`, background: '#f8fafc' }}>
-            {[
-              { label: 'Altas', count: altas.length, icon: 'ti-circle-plus', color: '#10b981' },
-              { label: 'Bajas', count: bajas.length, icon: 'ti-circle-minus', color: '#dc2626' },
-              { label: 'Cambios de carrier', count: cambiosCarrier.length, icon: 'ti-arrows-exchange', color: PORANGE },
-            ].map((t, i) => (
-              <div key={i} onClick={() => setTab(i)} style={{
-                padding: '12px 18px', fontSize: 12, fontWeight: 600,
-                color: tab === i ? PNAVY : PMUTED, cursor: 'pointer',
-                borderBottom: tab === i ? `2px solid ${PORANGE}` : '2px solid transparent',
-                display: 'flex', alignItems: 'center', gap: 6,
-              }}>
-                <i className={`ti ${t.icon}`} style={{ fontSize: 14, color: t.color }} />
-                {t.label}
-                <span style={{
-                  background: tab === i ? PNAVY : '#e5e7eb',
-                  color: tab === i ? '#fff' : PMUTED,
-                  fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: 4,
-                }}>{t.count}</span>
-              </div>
-            ))}
-          </div>
-
-          {tab === 0 && <TablaAltasBajas data={altas} tipo="alta" formatCarrier={formatCarrier} />}
-          {tab === 1 && <TablaAltasBajas data={bajas} tipo="baja" formatCarrier={formatCarrier} />}
-          {tab === 2 && <TablaCambiosCarrier data={cambiosCarrier} formatCarrier={formatCarrier} />}
-        </div>
-
-        {/* Nota informativa */}
-        <div style={{ marginTop: 12, fontSize: 11, color: PLIGHT, fontStyle: 'italic', textAlign: 'center' }}>
-          ℹ️ El padrón MELI se actualiza automáticamente todos los días a las 08:00 AM México · 14:00 UTC
-        </div>
-      </div>
+      )}
     </div>
   );
 }
