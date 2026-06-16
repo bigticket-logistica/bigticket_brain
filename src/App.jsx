@@ -14491,6 +14491,9 @@ function ConciliacionTercerosMX({ usuario }) {
   const [cobrosPorSC, setCobrosPorSC] = useState({});   // empresa -> { sc: cobros }
   const [formLinea, setFormLinea] = useState(null);     // alta de línea (ajuste/viaje) o null
   const [guardandoEdit, setGuardandoEdit] = useState(null); // clave empresa||sc en proceso
+  const [seleccion, setSeleccion] = useState(() => new Set()); // claves cerradas marcadas para envío masivo
+  const [enviando, setEnviando] = useState(null);              // clave o "__lote__"
+  const [modalEnvio, setModalEnvio] = useState(null);          // confirmación de envío individual
 
   const norm = (s) => String(s || "").trim().toUpperCase();
   const fmtMon = (v) => "$ " + Math.round(Number(v || 0)).toLocaleString("es-CL");
@@ -14784,9 +14787,8 @@ function ConciliacionTercerosMX({ usuario }) {
   };
 
   // ── PDF por empresa + SC (mismo template que portará el endpoint del VPS) ──
-  const generarPDF = (empresa, sc, filasSC, rSC) => {
-    if (!filasSC || !filasSC.length) return alert("Sin viajes para " + empresa + " en " + sc + ".");
-    const tot = recalcSC(filasSC, cobrosDe(empresa, sc));
+  const construirPrefactura = (empresa, sc, filasSC, rSC, cobrosOverride) => {
+    const tot = recalcSC(filasSC, cobrosOverride != null ? cobrosOverride : cobrosDe(empresa, sc));
     const t = transpPorNorm[norm(empresa)] || {};
     const par = paramPorSC[norm(sc)] || {};
     const { inicio, fin } = rangoSemanaInventario(semana);
@@ -14908,9 +14910,91 @@ function ConciliacionTercerosMX({ usuario }) {
   ${obsHtml}
   <div class="noprint"><button onclick="window.print()">Imprimir / Guardar PDF</button></div>
 </body></html>`;
+    const nombrePdf = `Prefactura_${String(empresa).replace(/[^A-Za-z0-9]+/g, "_")}_${sc}_${periodo.replace(/ /g, "_")}.pdf`;
+    return { html, periodo, operacion, mesFactura, tot, nombrePdf, t, par };
+  };
+
+  const generarPDF = (empresa, sc, filasSC, rSC) => {
+    if (!filasSC || !filasSC.length) return alert("Sin viajes para " + empresa + " en " + sc + ".");
+    const { html } = construirPrefactura(empresa, sc, filasSC, rSC);
     const w = window.open("", "_blank");
     if (!w) return alert("El navegador bloqueó la ventana emergente. Habilitá pop-ups para generar el PDF.");
     w.document.write(html); w.document.close();
+  };
+
+  // ── Envío por correo: webhook n8n -> VPS genera PDF -> SMTP ──
+  const WEBHOOK_ENVIO_MX = "https://bigticket2026.app.n8n.cloud/webhook/prefacturas-conciliacion-mx";
+
+  const enviarUno = async (empresa, sc, filasSC, rSC, opts) => {
+    const { html, periodo, operacion, nombrePdf, t, tot } = construirPrefactura(empresa, sc, filasSC, rSC, opts && opts.cobros);
+    const correoTo = ((opts && opts.to) || t.correo_to || "").trim();
+    const cc = ((opts && opts.cc) || t.correo_cc || "").trim();
+    const bcc = (t.correo_bcc || "").trim();
+    if (!correoTo) throw new Error("Sin correo destino para " + empresa + " · " + sc);
+    const asunto = (opts && opts.asunto) || `Prefactura ${empresa} — ${sc} — ${periodo}`;
+    const cuerpo = (opts && opts.cuerpo) || `Estimados,\n\nAdjuntamos la prefactura de ${operacion} por el período ${periodo}.\nBruto a facturar: ${fmtMon(tot.bruto)}.\n\nSaludos,\nEquipo BigTicket MX`;
+    const resp = await fetch(WEBHOOK_ENVIO_MX, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ idEnvio: `${empresa}|${sc}|${semana}|${Date.now()}`, transportista: empresa, ceco: sc, rfc: t.rfc || "", operacion, periodo, correoTo, cc, bcc, asunto, cuerpo, nombrePdf, html }),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok || data.ok !== true) throw new Error((data && data.error) || ("Error HTTP " + resp.status));
+    await sb.from("conciliaciones_terceros").update({
+      estado: "enviada", enviado_at: new Date().toISOString(),
+      enviado_por: (usuario && (usuario.nombre || usuario.email)) || "Brain",
+      message_id: data.messageId || null, correo_to: correoTo, correo_cc: cc, asunto, cuerpo, nombre_pdf: nombrePdf,
+    }).eq("empresa_nombre", empresa).eq("service_center", sc).eq("semana", semana);
+    return data.messageId;
+  };
+
+  const abrirEnvio = (empresa, sc, filasSC, rSC) => {
+    const t = transpPorNorm[norm(empresa)] || {};
+    const { periodo, operacion, tot } = construirPrefactura(empresa, sc, filasSC, rSC);
+    setModalEnvio({ empresa, sc, filasSC, rSC, to: t.correo_to || "", cc: t.correo_cc || "",
+      asunto: `Prefactura ${empresa} — ${sc} — ${periodo}`,
+      cuerpo: `Estimados,\n\nAdjuntamos la prefactura de ${operacion} por el período ${periodo}.\nBruto a facturar: ${fmtMon(tot.bruto)}.\n\nSaludos,\nEquipo BigTicket MX` });
+  };
+
+  const confirmarEnvioModal = async () => {
+    const m = modalEnvio; if (!m) return;
+    if (!m.to.trim()) return alert("Falta el correo destino (To).");
+    const clave = claveCierre(m.empresa, m.sc); setEnviando(clave);
+    try {
+      await enviarUno(m.empresa, m.sc, m.filasSC, m.rSC, { to: m.to, cc: m.cc, asunto: m.asunto, cuerpo: m.cuerpo });
+      setModalEnvio(null);
+      setMsg({ ok: true, txt: `Prefactura enviada: ${m.empresa} · ${m.sc} → ${m.to}` });
+      await cargarResumen(semana);
+    } catch (e) { console.error("enviar prefactura:", e); setMsg({ ok: false, txt: `Error enviando ${m.empresa}: ` + (e.message || e) }); }
+    setEnviando(null);
+  };
+
+  const toggleSeleccion = (empresa, sc) => {
+    const clave = claveCierre(empresa, sc);
+    setSeleccion(prev => { const n = new Set(prev); if (n.has(clave)) n.delete(clave); else n.add(clave); return n; });
+  };
+
+  const enviarSeleccionados = async () => {
+    if (!seleccion.size) return;
+    const { data: rows, error } = await sb.from("conciliaciones_terceros").select("*").eq("semana", semana);
+    if (error) { setMsg({ ok: false, txt: "Error leyendo conciliaciones: " + error.message }); return; }
+    const porClave = {}; for (const r of (rows || [])) porClave[claveCierre(r.empresa_nombre, r.service_center)] = r;
+    const items = [...seleccion].map(cl => {
+      const r = porClave[cl]; if (!r) return null;
+      const tt = transpPorNorm[norm(r.empresa_nombre)] || {};
+      return { empresa: r.empresa_nombre, sc: r.service_center, detalle: Array.isArray(r.detalle) ? r.detalle : [], cobros: Number(r.total_cobros || 0), to: tt.correo_to || "" };
+    }).filter(Boolean);
+    const txt = items.map(i => `• ${i.empresa} · ${i.sc} → ${i.to || "SIN CORREO"}`).join("\n");
+    if (!confirm(`¿Enviar ${items.length} prefactura(s)?\n\n${txt}`)) return;
+    setEnviando("__lote__");
+    let ok = 0, fail = 0; const errores = [];
+    for (const it of items) {
+      if (!it.to) { fail++; errores.push(`${it.empresa}·${it.sc}: sin correo`); continue; }
+      if (!it.detalle.length) { fail++; errores.push(`${it.empresa}·${it.sc}: sin detalle congelado`); continue; }
+      try { await enviarUno(it.empresa, it.sc, it.detalle, null, { cobros: it.cobros }); ok++; }
+      catch (e) { fail++; errores.push(`${it.empresa}·${it.sc}: ${e.message || e}`); }
+    }
+    setEnviando(null); setSeleccion(new Set()); await cargarResumen(semana);
+    setMsg({ ok: fail === 0, txt: `Envío masivo: ${ok} enviada(s), ${fail} con error.` + (errores.length ? " — " + errores.join(" | ") : "") });
   };
 
   // ── Helpers de render ──
@@ -15047,6 +15131,17 @@ function ConciliacionTercerosMX({ usuario }) {
         <div style={{ background: msg.ok ? "#ecfdf5" : "#fef2f2", border: "1px solid " + (msg.ok ? "#a7f3d0" : "#fca5a5"), color: msg.ok ? "#065f46" : "#991b1b", borderRadius: 6, padding: 10, marginBottom: 14, fontSize: 12 }}>{msg.txt}</div>
       )}
 
+      {seleccion.size > 0 && (
+        <div style={{ display: "flex", alignItems: "center", gap: 12, background: "#ecfdf5", border: "1px solid #a7f3d0", borderRadius: 8, padding: "10px 14px", marginBottom: 14, flexWrap: "wrap" }}>
+          <span style={{ fontSize: 13, fontWeight: 700, color: "#065f46" }}>{seleccion.size} prefactura(s) seleccionada(s)</span>
+          <button onClick={enviarSeleccionados} disabled={enviando === "__lote__"}
+            style={{ padding: "7px 16px", background: "#16a34a", color: "#fff", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer", opacity: enviando === "__lote__" ? 0.6 : 1 }}>
+            {enviando === "__lote__" ? "Enviando..." : "📧 Enviar seleccionados"}</button>
+          <button onClick={() => setSeleccion(new Set())}
+            style={{ padding: "7px 14px", background: "#fff", color: "#475569", border: "1px solid #e4e7ec", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Limpiar</button>
+        </div>
+      )}
+
       {!loading && resumen.length > 0 && (
         <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
           {[
@@ -15146,7 +15241,7 @@ function ConciliacionTercerosMX({ usuario }) {
                                 <span style={{ fontWeight: 800, color: "#1a3a6b", fontSize: 13 }}>SC {rSC.service_center}</span>
                                 {chipEstado(rSC.estado_conciliacion)}
                                 <span style={{ fontSize: 11, color: "#64748b" }}>
-                                  Sup: {rSC.supervisor || "—"} · {rSC.n_viajes} viajes · {rSC.n_no_pago} no pago · Neto {fmtMon(rSC.neto_guardado != null ? rSC.neto_guardado : rSC.total_neto)} · Bruto {fmtMon(rSC.bruto_guardado != null ? rSC.bruto_guardado : rSC.total_bruto)}{rSC.tiene_ajustes ? " · ✏️ ajustada" : ""}
+                                  Sup: {rSC.supervisor || "—"} · {rSC.n_viajes} viajes · {rSC.n_no_pago} no pago · Neto {fmtMon(rSC.neto_guardado != null ? rSC.neto_guardado : rSC.total_neto)} · Bruto {fmtMon(rSC.bruto_guardado != null ? rSC.bruto_guardado : rSC.total_bruto)}{rSC.tiene_ajustes ? " · ✏️ ajustada" : ""}{rSC.enviado_at ? " · 📤 " + new Date(rSC.enviado_at).toLocaleDateString("es-CL") : ""}
                                 </span>
                               </div>
                               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -15159,6 +15254,16 @@ function ConciliacionTercerosMX({ usuario }) {
                                 ) : (
                                   <button onClick={(e) => { e.stopPropagation(); reabrirConciliacion(g.empresa, rSC.service_center); }}
                                     style={{ padding: "6px 12px", background: "#fff", color: "#1a3a6b", border: "1px solid #1a3a6b", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Reabrir</button>
+                                )}
+                                {(rSC.estado_conciliacion === "cerrada" || rSC.estado_conciliacion === "enviada") && (
+                                  <>
+                                    <label onClick={e => e.stopPropagation()} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11, color: "#475569", cursor: "pointer" }}>
+                                      <input type="checkbox" checked={seleccion.has(clave)} onChange={() => toggleSeleccion(g.empresa, rSC.service_center)} /> sel.
+                                    </label>
+                                    <button onClick={(e) => { e.stopPropagation(); abrirEnvio(g.empresa, rSC.service_center, filasSC, rSC); }} disabled={enviando === clave}
+                                      style={{ padding: "6px 12px", background: rSC.estado_conciliacion === "enviada" ? "#fff" : "#16a34a", color: rSC.estado_conciliacion === "enviada" ? "#16a34a" : "#fff", border: rSC.estado_conciliacion === "enviada" ? "1px solid #16a34a" : "none", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer", opacity: enviando === clave ? 0.6 : 1 }}>
+                                      {enviando === clave ? "Enviando..." : (rSC.estado_conciliacion === "enviada" ? "📧 Reenviar" : "📧 Enviar")}</button>
+                                  </>
                                 )}
                               </div>
                             </div>
@@ -15227,6 +15332,28 @@ function ConciliacionTercerosMX({ usuario }) {
       </div>
 
       {/* Modal nuevo/editar transportista */}
+      {modalEnvio && (
+        <div onClick={() => enviando ? null : setModalEnvio(null)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 12, padding: 22, width: 560, maxWidth: "100%", maxHeight: "90vh", overflowY: "auto" }}>
+            <div style={{ fontSize: 15, fontWeight: 800, color: "#1a3a6b", marginBottom: 4 }}>📧 Enviar prefactura</div>
+            <div style={{ fontSize: 12, color: "#64748b", marginBottom: 14 }}>{modalEnvio.empresa} · SC {modalEnvio.sc}</div>
+            <label style={{ fontSize: 12, fontWeight: 700, color: "#475569" }}>Para (correo_to)</label>
+            <input value={modalEnvio.to} onChange={e => setModalEnvio({ ...modalEnvio, to: e.target.value })} style={{ width: "100%", padding: "8px 10px", border: "1px solid #e4e7ec", borderRadius: 6, fontSize: 13, marginBottom: 10, boxSizing: "border-box" }} />
+            <label style={{ fontSize: 12, fontWeight: 700, color: "#475569" }}>Con copia (correo_cc)</label>
+            <input value={modalEnvio.cc} onChange={e => setModalEnvio({ ...modalEnvio, cc: e.target.value })} style={{ width: "100%", padding: "8px 10px", border: "1px solid #e4e7ec", borderRadius: 6, fontSize: 13, marginBottom: 10, boxSizing: "border-box" }} />
+            <label style={{ fontSize: 12, fontWeight: 700, color: "#475569" }}>Asunto</label>
+            <input value={modalEnvio.asunto} onChange={e => setModalEnvio({ ...modalEnvio, asunto: e.target.value })} style={{ width: "100%", padding: "8px 10px", border: "1px solid #e4e7ec", borderRadius: 6, fontSize: 13, marginBottom: 10, boxSizing: "border-box" }} />
+            <label style={{ fontSize: 12, fontWeight: 700, color: "#475569" }}>Cuerpo</label>
+            <textarea value={modalEnvio.cuerpo} onChange={e => setModalEnvio({ ...modalEnvio, cuerpo: e.target.value })} rows={6} style={{ width: "100%", padding: "8px 10px", border: "1px solid #e4e7ec", borderRadius: 6, fontSize: 13, marginBottom: 4, fontFamily: "inherit", resize: "vertical", boxSizing: "border-box" }} />
+            <div style={{ fontSize: 11, color: "#94a3b8", marginBottom: 14 }}>El PDF se genera automáticamente en el servidor y se adjunta. Solo las conciliaciones cerradas pueden enviarse.</div>
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+              <button onClick={() => setModalEnvio(null)} disabled={!!enviando} style={{ padding: "8px 16px", background: "#fff", color: "#475569", border: "1px solid #e4e7ec", borderRadius: 6, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>Cancelar</button>
+              <button onClick={confirmarEnvioModal} disabled={!!enviando} style={{ padding: "8px 18px", background: "#16a34a", color: "#fff", border: "none", borderRadius: 6, fontSize: 13, fontWeight: 700, cursor: "pointer", opacity: enviando ? 0.6 : 1 }}>{enviando ? "Enviando..." : "Enviar ahora"}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {formTransp && (
         <div onClick={() => !guardandoTransp && setFormTransp(null)}
           style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}>
@@ -35112,4 +35239,3 @@ const CONFIG_IMPORTADOR_CL = {
     notas: "(opcional)",
   },
 };
-              
