@@ -16165,7 +16165,7 @@ function calcularAjusteVisitadoNS(pctVisitado, nsPct, cfg) {
 // ─── Motor de cálculo principal ────────────────────────────────────────────
 // Toma todos los inputs y devuelve los registros listos para INSERT en
 // maestro_jornada_mx
-function calcularPagos({ maestro, snapshots, scZonas, especiales, matrizPrecios, aprobaciones, tarifasCobrar, cfg, calculadoAt, bonificaciones, placaEmpresa }) {
+function calcularPagos({ maestro, snapshots, scZonas, especiales, matrizPrecios, aprobaciones, tarifasCobrar, cfg, calculadoAt, bonificaciones, placaEmpresa, traspasosPorRuta = {} }) {
   const errores = [];
   const filas = [];
 
@@ -16213,7 +16213,9 @@ function calcularPagos({ maestro, snapshots, scZonas, especiales, matrizPrecios,
     // NS = entregados / cargados (equivalente a "Entrega exitosa")
     const cargados = Number(m.cargados || 0);
     const entregados = Number(m.entregados || 0);
-    const nsPct = cargados > 0 ? (entregados / cargados * 100) : 0;
+    const traspasado = Number((traspasosPorRuta && traspasosPorRuta[idRuta]) || 0);  // paquetes que esta ruta (origen) traspasó a otras (ambulancias)
+    const cargadosNS = Math.max(0, cargados - traspasado);  // total ajustado: se restan los traspasados al origen
+    const nsPct = cargadosNS > 0 ? (entregados / cargadosNS * 100) : 0;  // NS se calcula sobre el total ajustado
 
     // % visitado (segunda variable de premio/castigo)
     const pctVisitado = m.pct_visitado != null ? Number(m.pct_visitado) : null;
@@ -16339,6 +16341,7 @@ function calcularPagos({ maestro, snapshots, scZonas, especiales, matrizPrecios,
     // Descarte por visitado < 90% (reemplaza al viejo no_visitado > 10%)
     if (ajuste.noPaga) obs.push(`NO PAGADO: visitado ${pctVisitadoEfectivo != null ? pctVisitadoEfectivo.toFixed(2) : "?"}% < 90% (${pctVisitadoGate != null ? "REAL MELI" : "maestro"})`);
     if (noPagaNS0) obs.push("NO PAGADO: NS 0% (sin entregas)");
+    if (traspasado > 0) obs.push(`🔄 TRASPASO: ${traspasado} paquete(s) traspasados — total ajustado ${cargadosNS} de ${cargados}; NS recalculado sobre ${cargadosNS}`);
     if (pctVisitadoGate != null && pctVisitado != null && Math.abs(pctVisitadoGate - pctVisitado) >= 5) {
       obs.push(`Visitado maestro ${pctVisitado.toFixed(1)}% vs real ${pctVisitadoGate.toFixed(1)}% — gate usó el REAL`);
     }
@@ -16396,7 +16399,7 @@ function calcularPagos({ maestro, snapshots, scZonas, especiales, matrizPrecios,
       km_recorridos_meli: kmRealMeli,
       tramo_km: tramo,
       ciclo,
-      envios_despachados: cargados,
+      envios_despachados: cargadosNS,  // total ajustado (cargados - traspasados); el warning queda en observaciones
       envios_entregados: entregados,
       ns_pct: nsPct,
       ns_no_visitado: noVisitado,
@@ -16851,6 +16854,16 @@ function ListadoPagosDiarios() {
         const pl = normalizarPlaca(f.placa);
         if (pl && !(pl in placaEmpresa) && f.empresa_transporte) placaEmpresa[pl] = f.empresa_transporte;
       }
+      // Traspasos de paquetes (ambulancias) del día: ruta_origen -> total traspasado
+      const traspasosPorRuta = {};
+      try {
+        const { data: amb } = await sb.from("vw_ambulancias_diario")
+          .select("ruta_origen, paquetes_traspasados").eq("fecha", fecha);
+        for (const a of (amb || [])) {
+          const k = String(a.ruta_origen);
+          traspasosPorRuta[k] = (traspasosPorRuta[k] || 0) + Number(a.paquetes_traspasados || 0);
+        }
+      } catch (e) { console.error("traspasos ambulancias:", e); }
       const { filas, errores } = calcularPagos({
         maestro,
         snapshots: sRes.data || [],
@@ -16863,6 +16876,7 @@ function ListadoPagosDiarios() {
         calculadoAt,
         bonificaciones,
         placaEmpresa,
+        traspasosPorRuta,
       });
 
       const { error: delError } = await sb.from("maestro_jornada_mx").delete().eq("fecha", fecha);
