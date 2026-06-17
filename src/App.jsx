@@ -15794,19 +15794,28 @@ function aplicarMatrizNS(nsPct, matrizNS) {
   return { categoria: "Sin categoría", porcentaje: 0, tipo: "neutro" };
 }
 
-// Busca tarifa: primero en tarifas_especiales_mx, sino en matriz_precios
-function buscarTarifa(driverName, tipologia, zona, tramo, especiales, matrizPrecios) {
-  // 1) Tarifa especial por driver
-  const tipTitleCase = tipologiaTitleCase(tipologia);
-  const especial = especiales.find(e =>
-    e.driver_name === driverName &&
-    e.tipologia === tipTitleCase &&
-    e.zona === zona &&
-    e.tramo_km === tramo
-  );
-  if (especial) return { monto: Number(especial.monto), fuente: "ESPECIAL" };
+// Normaliza nombre de empresa para cruzar tarifa especial (mayúsculas, sin acentos)
+function normEmpresaTarifa(s) {
+  return String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase().trim();
+}
 
-  // 2) Matriz precios general
+// Busca tarifa: primero ESPECIAL por EMPRESA (patente->empresa), sino matriz general.
+// Cruza por empresa + tipología + zona + tramo + vigencia (fecha de la ruta).
+function buscarTarifa(empresaRuta, tipologia, zona, tramo, fecha, especiales, matrizPrecios) {
+  const tipTitleCase = tipologiaTitleCase(tipologia);
+  const empNorm = normEmpresaTarifa(empresaRuta);
+  if (empNorm) {
+    const especial = (especiales || []).find(e =>
+      normEmpresaTarifa(e.empresa || e.driver_name) === empNorm &&
+      e.tipologia === tipTitleCase &&
+      e.zona === zona &&
+      e.tramo_km === tramo &&
+      (!e.vigente_desde || !fecha || String(e.vigente_desde).slice(0, 10) <= fecha) &&
+      (!e.vigente_hasta || !fecha || String(e.vigente_hasta).slice(0, 10) >= fecha)
+    );
+    if (especial) return { monto: Number(especial.monto), fuente: "ESPECIAL" };
+  }
+
   const general = matrizPrecios.find(m =>
     m.tipo_vehiculo === tipologia &&
     m.zonificacion === zona &&
@@ -15896,7 +15905,7 @@ function calcularAjusteVisitadoNS(pctVisitado, nsPct, cfg) {
 // ─── Motor de cálculo principal ────────────────────────────────────────────
 // Toma todos los inputs y devuelve los registros listos para INSERT en
 // maestro_jornada_mx
-function calcularPagos({ maestro, snapshots, scZonas, especiales, matrizPrecios, aprobaciones, tarifasCobrar, cfg, calculadoAt, bonificaciones }) {
+function calcularPagos({ maestro, snapshots, scZonas, especiales, matrizPrecios, aprobaciones, tarifasCobrar, cfg, calculadoAt, bonificaciones, placaEmpresa }) {
   const errores = [];
   const filas = [];
 
@@ -15970,7 +15979,8 @@ function calcularPagos({ maestro, snapshots, scZonas, especiales, matrizPrecios,
     // Tarifa base
     let tarifaInfo = { monto: 0, fuente: "SIN_TARIFA" };
     if (tipologia && zona) {
-      tarifaInfo = buscarTarifa(driverName, tipologia, zona, tramo, especiales, matrizPrecios);
+      const empresaRuta = (placaEmpresa || {})[placa] || null;
+      tarifaInfo = buscarTarifa(empresaRuta, tipologia, zona, tramo, fechaSalida, especiales, matrizPrecios);
       if (tarifaInfo.fuente === "SIN_TARIFA") obs.push(`Sin tarifa para ${tipologia} / ${zona} / ${tramo}`);
     }
     const tarifaBase = tarifaInfo.monto;
@@ -16148,6 +16158,7 @@ function calcularPagos({ maestro, snapshots, scZonas, especiales, matrizPrecios,
       semana_pago: calcularSemanaPago(fechaSalida),
       tiene_tarifa_especial: tieneTarifaEspecial,
       ruta_no_operada: rutaNoOperada,
+      status_final: m.status_final || null,
       calculado_at: calculadoAt,
       observaciones: obs.length > 0 ? obs.join(" | ") : null,
       hora_inicio_ruta: initDateUnix ? new Date(initDateUnix * 1000).toISOString() : null,
@@ -16548,7 +16559,7 @@ function ListadoPagosDiarios() {
 
       const calculadoAt = new Date().toISOString();
 
-      const [mRes, sRes, zRes, mpRes, eRes, apRes, tcRes, cfgRes] = await Promise.all([
+      const [mRes, sRes, zRes, mpRes, eRes, apRes, tcRes, cfgRes, fRes] = await Promise.all([
         sb.from("vw_maestro_supervisores_auto").select("*").eq("fecha", fecha).limit(5000),
         sb.from("logistic_ayudantes_snapshots").select("*").gte("fecha", fechaSnapDesde).lte("fecha", fechaSnapHasta).limit(30000),
         sb.from("sc_zonas_mx").select("service_center_id, zona"),
@@ -16557,6 +16568,7 @@ function ListadoPagosDiarios() {
         sb.from("aprobaciones_helper").select("*").eq("fecha", fecha),
         sb.from("tarifas_cobrar_meli_mx").select("*").eq("activo", true),
         sb.from("config_pagos_mx").select("*"),
+        sb.from("flota_terceros_mx").select("placa, empresa_transporte, fecha_hora_envio").order("fecha_hora_envio", { ascending: false }).limit(20000),
       ]);
 
       if (mRes.error) throw new Error("maestro supervisores: " + mRes.error.message);
@@ -16572,6 +16584,11 @@ function ListadoPagosDiarios() {
       const cfg = {};
       for (const c of (cfgRes.data || [])) cfg[c.clave] = Number(c.valor);
 
+      const placaEmpresa = {};
+      for (const f of (fRes.data || [])) {
+        const pl = normalizarPlaca(f.placa);
+        if (pl && !(pl in placaEmpresa) && f.empresa_transporte) placaEmpresa[pl] = f.empresa_transporte;
+      }
       const { filas, errores } = calcularPagos({
         maestro,
         snapshots: sRes.data || [],
@@ -16583,6 +16600,7 @@ function ListadoPagosDiarios() {
         cfg,
         calculadoAt,
         bonificaciones,
+        placaEmpresa,
       });
 
       const { error: delError } = await sb.from("maestro_jornada_mx").delete().eq("fecha", fecha);
@@ -17123,6 +17141,7 @@ function ListadoPagosDiarios() {
                 <Th onClick={() => toggleOrder("tipologia")}>Vehículo{ordIcon("tipologia")}</Th>
                 <Th onClick={() => toggleOrder("service_center_id")} center>SC · Zona{ordIcon("service_center_id")}</Th>
                 <Th onClick={() => toggleOrder("id_ruta")}>ID Ruta{ordIcon("id_ruta")}</Th>
+                <Th onClick={() => toggleOrder("status_final")} center>Estado{ordIcon("status_final")}</Th>
                 <Th onClick={() => toggleOrder("km_recorridos")} right>Km{ordIcon("km_recorridos")}</Th>
                 <Th onClick={() => toggleOrder("km_recorridos_meli")} right>Km Real{ordIcon("km_recorridos_meli")}</Th>
                 <Th onClick={() => toggleOrder("ns_pct")} right>NS%{ordIcon("ns_pct")}</Th>
@@ -17159,6 +17178,14 @@ function ListadoPagosDiarios() {
                       <span style={{ fontSize: 9, padding: "1px 6px", borderRadius: 3, background: "#e0e7ff", color: "#3730a3", fontWeight: 600 }}>{r.zona || "?"}</span>
                     </td>
                     <td style={{ ...tdStyle(), fontFamily: "monospace", fontSize: 10 }}>{r.id_ruta}</td>
+                    <td style={{ ...tdStyle(), textAlign: "center", fontSize: 10 }}>{(() => {
+                      const s = (r.status_final || "").toLowerCase();
+                      if (!s) return <span style={{ color: "#cbd5e1" }}>—</span>;
+                      if (s.startsWith("close") || s.includes("cerr")) return <span style={{ color: "#16a34a", fontWeight: 600 }}>Cerrada</span>;
+                      if (s.includes("pend")) return <span style={{ color: "#dc2626", fontWeight: 600 }}>Pendiente</span>;
+                      if (s.startsWith("open") || s.includes("abier") || s.includes("progress") || s.includes("ruta")) return <span style={{ color: "#ca8a04", fontWeight: 600 }}>Abierta</span>;
+                      return <span style={{ color: "#7c3aed", fontWeight: 600 }}>{r.status_final}</span>;
+                    })()}</td>
                     <td style={{ ...tdStyle(), textAlign: "right" }}>{Number(r.km_recorridos || 0).toFixed(1)}</td>
                     <td style={{ ...tdStyle(), textAlign: "right", color: "#0369a1", fontWeight: 600 }}>
                       {r.km_recorridos_meli != null ? Number(r.km_recorridos_meli).toFixed(1) : "\u2014"}
@@ -19233,7 +19260,7 @@ function ConfigTarifasEspeciales() {
   const [guardando, setGuardando] = useState(false);
   const [msg, setMsg] = useState(null);
 
-  const TIPOS = ["Large Van", "Small Van", "Car"];
+  const TIPOS = ["Large Van", "Small Van", "Car", "Cancelacion"];
   const ZONAS = ["L1", "L2", "L3", "L4"];
   const TRAMOS = ["0-100", "101-150", "151-200", "201-250", "251+"];
 
@@ -19241,15 +19268,15 @@ function ConfigTarifasEspeciales() {
   const cargar = async () => {
     setLoading(true);
     try {
-      const { data: d } = await sb.from("tarifas_especiales_mx").select("*").order("driver_name").order("zona").order("tramo_km");
-      setRows((d || []).map(r => ({ id: r.id, driver_name: r.driver_name || "", tipologia: r.tipologia || "Large Van", zona: r.zona || "L1", tramo_km: r.tramo_km || "0-100", monto: r.monto != null ? String(r.monto) : "" })));
+      const { data: d } = await sb.from("tarifas_especiales_mx").select("*").order("empresa").order("zona").order("tramo_km");
+      setRows((d || []).map(r => ({ id: r.id, empresa: r.empresa || r.driver_name || "", tipologia: r.tipologia || "Large Van", zona: r.zona || "L1", tramo_km: r.tramo_km || "0-100", monto: r.monto != null ? String(r.monto) : "" })));
       setDeletedIds([]);
     } catch (e) { console.error(e); }
     setLoading(false);
   };
 
   const setField = (i, f, v) => setRows(prev => prev.map((r, idx) => idx === i ? { ...r, [f]: v } : r));
-  const addRow = () => setRows(prev => [...prev, { driver_name: "", tipologia: "Large Van", zona: "L1", tramo_km: "0-100", monto: "" }]);
+  const addRow = () => setRows(prev => [...prev, { empresa: "", tipologia: "Large Van", zona: "L1", tramo_km: "0-100", monto: "" }]);
   const delRow = (i) => setRows(prev => {
     const r = prev[i];
     if (r.id != null) setDeletedIds(d => [...d, r.id]);
@@ -19258,8 +19285,8 @@ function ConfigTarifasEspeciales() {
 
   const guardar = async () => {
     for (const r of rows) {
-      if (!r.driver_name.trim()) { setMsg({ ok: false, txt: "Hay una regla sin chofer." }); return; }
-      if (r.monto === "" || isNaN(Number(r.monto))) { setMsg({ ok: false, txt: `Monto inválido para ${r.driver_name}.` }); return; }
+      if (!r.empresa.trim()) { setMsg({ ok: false, txt: "Hay una regla sin empresa." }); return; }
+      if (r.monto === "" || isNaN(Number(r.monto))) { setMsg({ ok: false, txt: `Monto inválido para ${r.empresa}.` }); return; }
     }
     setGuardando(true); setMsg(null);
     try {
@@ -19269,7 +19296,7 @@ function ConfigTarifasEspeciales() {
         if (error) throw error; del++;
       }
       for (const r of rows) {
-        const payload = { driver_name: r.driver_name.trim(), tipologia: r.tipologia, zona: r.zona, tramo_km: r.tramo_km, monto: Number(r.monto) };
+        const payload = { empresa: r.empresa.trim(), driver_name: r.empresa.trim(), tipologia: r.tipologia, zona: r.zona, tramo_km: r.tramo_km, monto: Number(r.monto) };
         if (r.id != null) {
           const { error } = await sb.from("tarifas_especiales_mx").update(payload).eq("id", r.id);
           if (error) throw error; upd++;
@@ -19295,8 +19322,8 @@ function ConfigTarifasEspeciales() {
     <div>
       <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: 14, marginBottom: 14, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
         <div style={{ flex: 1, minWidth: 240 }}>
-          <div style={{ fontSize: 14, fontWeight: 700, color: "#1a3a6b", marginBottom: 4 }}>Tarifas Especiales por Chofer</div>
-          <div style={{ fontSize: 11, color: "#94a3b8" }}>Override de tarifa por chofer · gana sobre el tarifario general · {rows.length} reglas · editable</div>
+          <div style={{ fontSize: 14, fontWeight: 700, color: "#1a3a6b", marginBottom: 4 }}>Tarifas Especiales por Empresa</div>
+          <div style={{ fontSize: 11, color: "#94a3b8" }}>Override de tarifa por empresa (patente → empresa) · gana sobre el tarifario general · {rows.length} reglas · editable</div>
         </div>
         <button onClick={addRow} style={{ padding: "8px 14px", borderRadius: 4, border: "1px solid #1a3a6b", background: "#fff", color: "#1a3a6b", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>+ Agregar regla</button>
         <button onClick={guardar} disabled={guardando} style={{ padding: "8px 16px", borderRadius: 4, border: "none", background: guardando ? "#94a3b8" : "#16a34a", color: "#fff", fontSize: 12, fontWeight: 600, cursor: guardando ? "wait" : "pointer" }}>{guardando ? "Guardando..." : "Guardar cambios"}</button>
@@ -19306,7 +19333,7 @@ function ConfigTarifasEspeciales() {
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, minWidth: 720 }}>
           <thead>
             <tr style={{ background: "#f8fafc", borderBottom: "1px solid #e4e7ec" }}>
-              <th style={{ padding: "6px 10px", textAlign: "left", fontSize: 10, color: "#64748b", fontWeight: 600 }}>Chofer</th>
+              <th style={{ padding: "6px 10px", textAlign: "left", fontSize: 10, color: "#64748b", fontWeight: 600 }}>Empresa</th>
               <th style={{ padding: "6px 10px", textAlign: "left", fontSize: 10, color: "#64748b", fontWeight: 600 }}>Tipología</th>
               <th style={{ padding: "6px 10px", textAlign: "center", fontSize: 10, color: "#64748b", fontWeight: 600 }}>Zona</th>
               <th style={{ padding: "6px 10px", textAlign: "center", fontSize: 10, color: "#64748b", fontWeight: 600 }}>Tramo km</th>
@@ -19318,7 +19345,7 @@ function ConfigTarifasEspeciales() {
             {rows.length === 0 && (<tr><td colSpan={6} style={{ padding: 20, textAlign: "center", color: "#94a3b8" }}>Sin tarifas especiales. Agregá una con "+ Agregar regla".</td></tr>)}
             {rows.map((r, i) => (
               <tr key={r.id ?? `new-${i}`} style={{ borderBottom: "1px solid #f0f0f0" }}>
-                <td style={{ padding: "4px 6px" }}><input value={r.driver_name} onChange={e => setField(i, "driver_name", e.target.value)} placeholder="Nombre del chofer" style={{ ...inp, width: 220 }} /></td>
+                <td style={{ padding: "4px 6px" }}><input value={r.empresa} onChange={e => setField(i, "empresa", e.target.value)} placeholder="Nombre EXACTO de la empresa (flota)" style={{ ...inp, width: 260 }} /></td>
                 <td style={{ padding: "4px 6px" }}><select value={r.tipologia} onChange={e => setField(i, "tipologia", e.target.value)} style={inp}>{TIPOS.map(x => <option key={x} value={x}>{x}</option>)}</select></td>
                 <td style={{ padding: "4px 6px", textAlign: "center" }}><select value={r.zona} onChange={e => setField(i, "zona", e.target.value)} style={inp}>{ZONAS.map(z => <option key={z} value={z}>{z}</option>)}</select></td>
                 <td style={{ padding: "4px 6px", textAlign: "center" }}><select value={r.tramo_km} onChange={e => setField(i, "tramo_km", e.target.value)} style={inp}>{TRAMOS.map(tr => <option key={tr} value={tr}>{tr}</option>)}</select></td>
