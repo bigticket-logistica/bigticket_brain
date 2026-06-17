@@ -147,7 +147,7 @@ function BotonDescargarExcel({ onClick, disabled, label = "Descargar Excel" }) {
 }
 
 const MODULOS = {
-  superadmin: ["brain", "pool_meli_mx", "pagos", "maestro", "mantenciones", "certificaciones", "pnr", "configuracion"],
+  superadmin: ["brain", "pool_meli_mx", "pagos", "mantenciones", "certificaciones", "pnr", "configuracion"],
   certificacion: ["certificaciones"],
   prefacturas: ["pagos"],
 };
@@ -11226,7 +11226,6 @@ function BrainCentral({ setTab, usuario }) {
 
   const modulos = [
     { id: "pagos", label: "Administración", angle: 270, target: "pagos", ...stats.pagos },
-    { id: "maestro", label: "Maestro Op.", angle: 0, target: "maestro", ...stats.maestro },
     { id: "certificaciones", label: "Certificaciones", angle: 90, target: "certificaciones", ...stats.certificaciones },
     { id: "pnr", label: "PNR", angle: 180, target: "pnr", ...stats.pnr },
   ];
