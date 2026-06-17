@@ -14872,14 +14872,38 @@ function ConciliacionTercerosMX({ usuario }) {
   };
   const descargarPlantillaAjustes = async () => {
     if (!(await asegurarXLSX())) { alert("No se pudo cargar la librería de Excel."); return; }
-    const ws = window.XLSX.utils.aoa_to_sheet([
+    setMsg({ ok: true, txt: "Generando plantilla con el detalle de la semana…" });
+    // Hoja "Ajustes" (la que se llena y se importa) — va PRIMERA
+    const wsAjustes = window.XLSX.utils.aoa_to_sheet([
       ["empresa", "service_center", "tipo", "concepto", "monto"],
       ["RAQUEL VELAZQUEZ GONZALEZ", "SMX8", "descuento", "Daño paquete ruta 142986216 (08-jun)", 500],
       ["MICHAEL YTZURIT ZAMUDIO IBARRA", "SCY1", "cargo", "Bono extra acordado", 800],
     ]);
+    // Hoja "Detalle" (referencia, mismas columnas que el PDF) — detalle de toda la semana
+    const empresasU = [...new Set((resumen || []).map(r => r.empresa || r.empresa_nombre).filter(Boolean))];
+    const filasDet = [];
+    for (const emp of empresasU) {
+      try {
+        const { data } = await sb.rpc("get_conciliacion_terceros_detalle", { p_semana: semana, p_empresa: emp, p_sc: null });
+        for (const d of (data || [])) {
+          filasDet.push([
+            emp, d.service_center_id || "", fmtFechaDDMM(d.fecha), d.placa || "", d.id_ruta || "",
+            d.driver_name || "", d.tiene_auxiliar ? "SI" : "NO",
+            Number(d.cargado || 0), Number(d.entregado || 0),
+            d.pct_entrega != null ? Number(d.pct_entrega) : "", d.pct_visitado_gate != null ? Number(d.pct_visitado_gate) : "",
+            d.km_pago != null ? Number(d.km_pago) : "", d.factor_ns != null ? Number(d.factor_ns) : "",
+            Number(d.monto_bonificacion || 0), Number(d.monto || 0),
+          ]);
+        }
+      } catch (e) { console.error("detalle plantilla", emp, e); }
+    }
+    const headerDet = ["Empresa","SC","Fecha","Patente","ID Ruta","Conductor","Aux","Cargado","Entregado","% Entrega","% Visita","KM Pago","Factor","Bonif.","Monto"];
+    const wsDet = window.XLSX.utils.aoa_to_sheet([headerDet, ...filasDet]);
     const wb = window.XLSX.utils.book_new();
-    window.XLSX.utils.book_append_sheet(wb, ws, "Ajustes");
-    window.XLSX.writeFile(wb, "plantilla_ajustes_conciliacion.xlsx");
+    window.XLSX.utils.book_append_sheet(wb, wsAjustes, "Ajustes");
+    window.XLSX.utils.book_append_sheet(wb, wsDet, "Detalle");
+    window.XLSX.writeFile(wb, `plantilla_ajustes_conciliacion_sem${semana}.xlsx`);
+    setMsg({ ok: true, txt: `Plantilla lista: ${filasDet.length} líneas en la hoja "Detalle" (referencia) + hoja "Ajustes" para llenar e importar.` });
   };
 
   const onArchivoAjustes = async (e) => {
@@ -14888,7 +14912,8 @@ function ConciliacionTercerosMX({ usuario }) {
       if (!(await asegurarXLSX())) { setMsg({ ok: false, txt: "No se pudo cargar la librería de Excel." }); return; }
       const buf = await file.arrayBuffer();
       const wb = window.XLSX.read(buf, { type: "array" });
-      const ws = wb.Sheets[wb.SheetNames[0]];
+      const sheetName = wb.SheetNames.includes("Ajustes") ? "Ajustes" : wb.SheetNames[0];
+      const ws = wb.Sheets[sheetName];
       const json = window.XLSX.utils.sheet_to_json(ws, { defval: "" });
       const validKeys = new Map();
       for (const r of resumen) validKeys.set(`${norm(r.empresa_nombre)}||${norm(r.service_center)}`, { empresa: r.empresa_nombre, sc: r.service_center });
@@ -16197,6 +16222,7 @@ function calcularPagos({ maestro, snapshots, scZonas, especiales, matrizPrecios,
     const vehiculoRaw = m.tipo_vehiculo || null;
     const placa = normalizarPlaca(m.patentes);
     const ciclo = m.cluster_meli || null;
+    const esSDD = (m.es_sdd === "SI" || m.es_sdd === true);  // SDD/SPOT lo da la vista (es_sdd, desde tipo_vehiculo_meli "...SDD")
 
     // Km: reales según MELI con fallback a planificado
     const km = Number(m.km_meli != null ? m.km_meli : (m.km_planificados || 0));
@@ -16350,8 +16376,8 @@ function calcularPagos({ maestro, snapshots, scZonas, especiales, matrizPrecios,
     // Se acumula con el ajuste NS (ambos calculados sobre la base): pago = base + ajusteNS + bono + aux.
     let montoBono = 0;
     let bonoAplicado = null;
-    if (!noPaga && Array.isArray(bonificaciones) && bonificaciones.length) {
-      const tipoR = tipoRutaPorVehiculo(m.tipo_vehiculo);  // SDD/SPOT por TIPO DE VEHÍCULO MELI ("...SDD" => SDD)
+    if (!noPaga && !esSDD && Array.isArray(bonificaciones) && bonificaciones.length) {  // los bonos NO aplican a rutas SDD
+      const tipoR = esSDD ? "SDD" : "SPOT";  // (aquí siempre SPOT por la guarda de arriba)
       const kmR = Number(km || 0);
       let mejor = null;
       for (const b of bonificaciones) {
@@ -16391,6 +16417,8 @@ function calcularPagos({ maestro, snapshots, scZonas, especiales, matrizPrecios,
       driver_id: driverIdML,
       driver_name: driverName,
       vehiculo_raw: vehiculoRaw,
+      tipo_vehiculo_meli: m.tipo_vehiculo_meli || null,
+      tipo_ruta_sdd: esSDD ? "SDD" : "SPOT",
       tipologia,
       placa,
       service_center_id: sc,
@@ -17035,13 +17063,13 @@ function ListadoPagosDiarios() {
   const exportarCSV = () => {
     if (filasFiltradas.length === 0) { alert("No hay datos para exportar"); return; }
     const headers = [
-      "Fecha","Chofer","Patente","Vehículo","Tipología","SC","Zona","ID Ruta","Ciclo",
+      "Fecha","Chofer","Patente","Vehículo","Tipología","Tipo Ruta","SC","Zona","ID Ruta","Ciclo",
       "Km","Km Real","Envíos despachados","Envíos entregados","NS%","% Visitado Real","% No Visitado Real","No visitado %","Categoría NS",
       "Tarifa base","Ajuste NS","Estado auxiliar","Snapshots con helper","$ Auxiliar",
       "Pago bruto","Pago neto","Pago MELI","Observaciones"
     ];
     const rows = filasFiltradas.map(p => [
-      p.fecha, p.driver_name, p.placa, p.vehiculo_raw, p.tipologia, p.service_center_id, p.zona,
+      p.fecha, p.driver_name, p.placa, p.vehiculo_raw, p.tipologia, p.tipo_ruta_sdd || "SPOT", p.service_center_id, p.zona,
       p.id_ruta, p.ciclo, p.km_recorridos, p.km_recorridos_meli, p.envios_despachados, p.envios_entregados,
       p.ns_pct, p.pct_visitado_real, (p.pct_visitado_real != null ? Math.round((100 - Number(p.pct_visitado_real)) * 100) / 100 : ""), p.ns_no_visitado, p.ns_categoria, p.tarifa_base, p.ajuste_ns,
       p.auxiliar_estado, p.auxiliar_snapshots_total, p.monto_auxiliar,
@@ -17089,13 +17117,13 @@ function ListadoPagosDiarios() {
       const filas = data || [];
       if (filas.length === 0) { alert(`No hay pagos guardados entre ${desde} y ${hasta}.`); setExcelBusy(false); return; }
       const headers = [
-        "Fecha","Chofer","Patente","Vehículo","Tipología","SC","Zona","ID Ruta","Ciclo",
+        "Fecha","Chofer","Patente","Vehículo","Tipología","Tipo Ruta","SC","Zona","ID Ruta","Ciclo",
         "Km","Km Real","Envíos despachados","Envíos entregados","NS%","% Visitado Real","% No Visitado Real","No visitado %","Categoría NS",
         "Tarifa base","Ajuste NS","Estado auxiliar","Snapshots con helper","$ Auxiliar",
         "Pago bruto","Pago neto","Pago MELI","Observaciones"
       ];
       const aoa = [headers, ...filas.map(p => [
-        p.fecha, p.driver_name, p.placa, p.vehiculo_raw, p.tipologia, p.service_center_id, p.zona,
+        p.fecha, p.driver_name, p.placa, p.vehiculo_raw, p.tipologia, p.tipo_ruta_sdd || "SPOT", p.service_center_id, p.zona,
         p.id_ruta, p.ciclo, p.km_recorridos, p.km_recorridos_meli, p.envios_despachados, p.envios_entregados,
         p.ns_pct, p.pct_visitado_real, (p.pct_visitado_real != null ? Math.round((100 - Number(p.pct_visitado_real)) * 100) / 100 : ""), p.ns_no_visitado, p.ns_categoria, p.tarifa_base, p.ajuste_ns,
         p.auxiliar_estado, p.auxiliar_snapshots_total, p.monto_auxiliar,
@@ -17127,7 +17155,7 @@ function ListadoPagosDiarios() {
     try {
       const corridaId = (typeof crypto !== "undefined" && crypto.randomUUID) ? crypto.randomUUID() : `${fecha}-${Date.now()}`;
       const guardadoAt = new Date().toISOString();
-      const cols = ["fecha","id_ruta","driver_id","driver_name","vehiculo_raw","tipologia","placa",
+      const cols = ["fecha","id_ruta","driver_id","driver_name","vehiculo_raw","tipo_ruta_sdd","tipologia","placa",
         "service_center_id","zona","km_recorridos","tramo_km","ciclo","envios_despachados","envios_entregados",
         "ns_pct","ns_no_visitado","pct_visitado","ns_categoria","factor_ns","tarifa_base","ajuste_ns",
         "tiene_auxiliar","auxiliar_estado","monto_auxiliar","pago_bruto","descuentos_externos","pago_neto",
@@ -17422,6 +17450,7 @@ function ListadoPagosDiarios() {
                 <Th onClick={() => toggleOrder("placa")}>Patente{ordIcon("placa")}</Th>
                 <Th>Empresa</Th>
                 <Th onClick={() => toggleOrder("tipologia")}>Vehículo{ordIcon("tipologia")}</Th>
+                <Th center>Tipo Ruta</Th>
                 <Th onClick={() => toggleOrder("service_center_id")} center>SC · Zona{ordIcon("service_center_id")}</Th>
                 <Th onClick={() => toggleOrder("id_ruta")}>ID Ruta{ordIcon("id_ruta")}</Th>
                 <Th onClick={() => toggleOrder("status_final")} center>Estado{ordIcon("status_final")}</Th>
@@ -17456,6 +17485,9 @@ function ListadoPagosDiarios() {
                     <td style={tdStyle()}>
                       <div style={{ fontSize: 10, color: "#475569" }}>{r.tipologia || "?"}</div>
                       <div style={{ fontSize: 9, color: "#94a3b8", marginTop: 1 }}>{r.vehiculo_raw || ""}</div>
+                    </td>
+                    <td style={{ ...tdStyle(), textAlign: "center" }}>
+                      <span style={{ fontSize: 9, fontWeight: 700, padding: "1px 6px", borderRadius: 3, background: r.tipo_ruta_sdd === "SDD" ? "#fde68a" : "#e5e7eb", color: r.tipo_ruta_sdd === "SDD" ? "#92400e" : "#475569" }}>{r.tipo_ruta_sdd || "SPOT"}</span>
                     </td>
                     <td style={{ ...tdStyle(), textAlign: "center" }}>
                       <div style={{ fontWeight: 700, color: "#1a3a6b" }}>{r.service_center_id}</div>
