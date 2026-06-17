@@ -14494,6 +14494,10 @@ function ConciliacionTercerosMX({ usuario }) {
   const [enviando, setEnviando] = useState(null);              // clave o "__lote__"
   const [modalEnvio, setModalEnvio] = useState(null);          // confirmación de envío individual
   const [repRows, setRepRows] = useState(null);                // rutas con ID repetido en la semana
+  const [consolidadas, setConsolidadas] = useState(() => new Set()); // claves empresa||sc||id_ruta ya consolidadas
+  const [importOpen, setImportOpen] = useState(false);
+  const [importRows, setImportRows] = useState(null);
+  const [importBusy, setImportBusy] = useState(false);
   const [repBusy, setRepBusy] = useState(false);
   const [consolidando, setConsolidando] = useState(null);      // id_ruta | "__todas__"
 
@@ -14536,7 +14540,7 @@ function ConciliacionTercerosMX({ usuario }) {
     } catch (e) { console.error("maestros prefacturas:", e); }
   };
 
-  useEffect(() => { cargarResumen(semana); cargarRepetidas(semana); setExpandida(null); setDetalles({}); setAsignacionSel({}); }, [semana]);
+  useEffect(() => { cargarResumen(semana); setConsolidadas(new Set()); cargarRepetidas(semana); setExpandida(null); setDetalles({}); setAsignacionSel({}); }, [semana]);
   useEffect(() => { cargarMaestros(); }, []);
 
   const cargarDetalle = async (empresa) => {
@@ -14791,12 +14795,26 @@ function ConciliacionTercerosMX({ usuario }) {
   // ── PDF por empresa + SC (mismo template que portará el endpoint del VPS) ──
   // ── Rutas con ID repetido (multi-día) — detección y consolidación ──
   const cargarRepetidas = async (sem) => {
+    const s = sem != null ? sem : semana;
     setRepBusy(true);
     try {
-      const { data, error } = await sb.rpc("get_rutas_repetidas_semana", { p_semana: sem != null ? sem : semana });
+      const [{ data, error }, { data: conc }] = await Promise.all([
+        sb.rpc("get_rutas_repetidas_semana", { p_semana: s }),
+        sb.from("conciliaciones_terceros").select("empresa_nombre, service_center, detalle").eq("semana", s),
+      ]);
       if (error) throw error;
-      setRepRows(data || []);
-    } catch (e) { console.error("rutas repetidas semana:", e); setRepRows([]); }
+      const rep = data || [];
+      // Marcar como consolidada si en el detalle GUARDADO de esa empresa+SC queda <=1 día de la ruta
+      const cons = new Set();
+      for (const r of rep) {
+        const row = (conc || []).find(c => c.empresa_nombre === r.empresa && c.service_center === r.service_center);
+        if (row && Array.isArray(row.detalle)) {
+          const dias = new Set(row.detalle.filter(d => String(d.id_ruta) === String(r.id_ruta)).map(d => String(d.fecha)));
+          if (dias.size <= 1) cons.add(`${r.empresa}||${r.service_center}||${r.id_ruta}`);
+        }
+      }
+      setRepRows(rep); setConsolidadas(cons);
+    } catch (e) { console.error("rutas repetidas semana:", e); setRepRows([]); setConsolidadas(new Set()); }
     setRepBusy(false);
   };
 
@@ -14844,6 +14862,94 @@ function ConciliacionTercerosMX({ usuario }) {
     }
     await cargarResumen(semana); await cargarRepetidas(semana); setConsolidando(null);
     setMsg({ ok: fail === 0, txt: `Consolidación masiva: ${ok} ok, ${fail} con error.` + (errores.length ? " — " + errores.join(" | ") : "") });
+  };
+  // ── Importador masivo de ajustes (cargos / descuentos / otros) a prefacturas ──
+  const descargarPlantillaAjustes = () => {
+    const ws = XLSX.utils.aoa_to_sheet([
+      ["empresa", "service_center", "tipo", "concepto", "monto"],
+      ["RAQUEL VELAZQUEZ GONZALEZ", "SMX8", "descuento", "Daño paquete ruta 142986216 (08-jun)", 500],
+      ["MICHAEL YTZURIT ZAMUDIO IBARRA", "SCY1", "cargo", "Bono extra acordado", 800],
+    ]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Ajustes");
+    XLSX.writeFile(wb, "plantilla_ajustes_conciliacion.xlsx");
+  };
+
+  const onArchivoAjustes = async (e) => {
+    const file = e.target.files && e.target.files[0]; if (!file) return;
+    try {
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(buf, { type: "array" });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const json = XLSX.utils.sheet_to_json(ws, { defval: "" });
+      const validKeys = new Map();
+      for (const r of resumen) validKeys.set(`${norm(r.empresa_nombre)}||${norm(r.service_center)}`, { empresa: r.empresa_nombre, sc: r.service_center });
+      const rows = json.map((raw) => {
+        const get = (keys) => { for (const k of Object.keys(raw)) { if (keys.includes(String(k).toLowerCase().trim())) return raw[k]; } return ""; };
+        const empresa = String(get(["empresa"]) || "").trim();
+        const sc = String(get(["service_center", "sc", "service center", "centro"]) || "").trim();
+        const tipoRaw = String(get(["tipo"]) || "").toLowerCase().trim();
+        const concepto = String(get(["concepto", "detalle", "glosa"]) || "").trim();
+        const montoNum = Number(String(get(["monto", "importe", "valor"])).replace(/[^0-9.\-]/g, ""));
+        const tipo = tipoRaw.startsWith("desc") ? "descuento" : tipoRaw.startsWith("carg") ? "cargo" : tipoRaw.startsWith("otro") ? "otro" : "";
+        const match = validKeys.get(`${norm(empresa)}||${norm(sc)}`);
+        let error = "";
+        if (!empresa || !sc) error = "Falta empresa o SC";
+        else if (!match) error = "Empresa+SC no existe en esta semana";
+        else if (!tipo) error = "Tipo inválido (cargo/descuento/otro)";
+        else if (!concepto) error = "Falta concepto";
+        else if (!montoNum || isNaN(montoNum) || montoNum <= 0) error = "Monto inválido (>0)";
+        const montoFirmado = tipo === "descuento" ? -Math.abs(montoNum) : Math.abs(montoNum);
+        return { empresa: match ? match.empresa : empresa, sc: match ? match.sc : sc, tipo, concepto, montoFirmado, error, valido: !error };
+      });
+      setImportRows(rows);
+    } catch (err) { console.error("parse import:", err); setMsg({ ok: false, txt: "No se pudo leer el Excel: " + (err.message || err) }); }
+    e.target.value = "";
+  };
+
+  const _aplicarAjustesGrupo = async (empresa, sc, items) => {
+    const { data: row } = await sb.from("conciliaciones_terceros")
+      .select("detalle, estado").eq("empresa_nombre", empresa).eq("service_center", sc).eq("semana", semana).maybeSingle();
+    let filas;
+    if (row && Array.isArray(row.detalle) && row.detalle.length) {
+      if (row.estado === "enviada") throw new Error("ya enviada; reábrela antes de importar");
+      filas = row.detalle.map(d => ({ ...d, _id: d._id || lineaId(d) }));
+    } else {
+      const { data, error } = await sb.rpc("get_conciliacion_terceros_detalle", { p_semana: semana, p_empresa: empresa, p_sc: sc });
+      if (error) throw error;
+      filas = (data || []).map(d => ({ ...d, _id: lineaId(d), origen: "motor" }));
+    }
+    const nuevas = items.map((a, idx) => ({
+      _id: `imp|${Date.now()}|${idx}|${Math.random().toString(36).slice(2, 6)}`, origen: "ajuste", es_manual: true, importado: true,
+      service_center_id: sc, fecha: null, placa: "AJUSTE", id_ruta: "—", driver_name: a.concepto,
+      tiene_auxiliar: false, cargado: null, entregado: null, pct_entrega: null, pct_visitado_gate: null,
+      km_pago: null, km_real_meli: null, factor_ns: null, monto: a.montoFirmado,
+      monto_bonificacion: 0, bonificacion_nombre: null, bonificacion_pct: 0, tiene_bonificacion: false,
+      es_no_pago: false, motivo_no_pago: null,
+    }));
+    const filasSC = [...filas.filter(d => (d.service_center_id || "SIN SC") === sc), ...nuevas];
+    await guardarBorradorSC(empresa, sc, filasSC, cobrosDe(empresa, sc));
+    for (const n of nuevas) await auditarAjuste(empresa, sc, "agregar", "ajuste", n, `Importado: ${n.driver_name} (${n.monto})`);
+    if (detalles[empresa]) setDetalles(prev => ({ ...prev, [empresa]: [...(prev[empresa] || []), ...nuevas] }));
+    return nuevas.length;
+  };
+
+  const aplicarImport = async () => {
+    const validos = (importRows || []).filter(r => r.valido);
+    if (!validos.length) return;
+    if (!confirm(`¿Aplicar ${validos.length} ajuste(s) a las prefacturas de la semana? Quedan como líneas en borrador y auditadas.`)) return;
+    setImportBusy(true);
+    const grupos = {};
+    for (const r of validos) { const k = `${r.empresa}||${r.sc}`; (grupos[k] = grupos[k] || { empresa: r.empresa, sc: r.sc, items: [] }).items.push(r); }
+    let ok = 0, fail = 0; const errores = [];
+    for (const k of Object.keys(grupos)) {
+      const g = grupos[k];
+      try { await _aplicarAjustesGrupo(g.empresa, g.sc, g.items); ok += g.items.length; }
+      catch (e) { fail += g.items.length; errores.push(`${g.empresa}·${g.sc}: ${e.message || e}`); }
+    }
+    await cargarResumen(semana);
+    setImportBusy(false); setImportRows(null); setImportOpen(false);
+    setMsg({ ok: fail === 0, txt: `Importación: ${ok} ajuste(s) aplicados, ${fail} con error.` + (errores.length ? " — " + errores.join(" | ") : "") });
   };
   const construirPrefactura = (empresa, sc, filasSC, rSC, cobrosOverride) => {
     const tot = recalcSC(filasSC, cobrosOverride != null ? cobrosOverride : cobrosDe(empresa, sc));
@@ -15189,11 +15295,57 @@ function ConciliacionTercerosMX({ usuario }) {
         <div style={{ background: msg.ok ? "#ecfdf5" : "#fef2f2", border: "1px solid " + (msg.ok ? "#a7f3d0" : "#fca5a5"), color: msg.ok ? "#065f46" : "#991b1b", borderRadius: 6, padding: 10, marginBottom: 14, fontSize: 12 }}>{msg.txt}</div>
       )}
 
+      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 10 }}>
+        <button onClick={() => { setImportRows(null); setImportOpen(true); }} style={{ padding: "8px 16px", background: "#1a3a6b", color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>📥 Importar ajustes (Excel)</button>
+      </div>
+
+      {importOpen && (
+        <div onClick={() => !importBusy && setImportOpen(false)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 12, padding: 20, width: "min(900px, 94vw)", maxHeight: "88vh", overflow: "auto" }}>
+            <div style={{ fontSize: 16, fontWeight: 800, color: "#1a3a6b", marginBottom: 4 }}>Importar ajustes a prefacturas</div>
+            <div style={{ fontSize: 12, color: "#64748b", marginBottom: 12 }}>Carga masiva de cargos, descuentos u otros a la semana abierta. Columnas: <b>empresa, service_center, tipo, concepto, monto</b>. Tipo: cargo (+), descuento (−), otro (+).</div>
+            <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 14, flexWrap: "wrap" }}>
+              <button onClick={descargarPlantillaAjustes} style={{ padding: "6px 12px", background: "#fff", color: "#1a3a6b", border: "1px solid #1a3a6b", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>⬇ Descargar plantilla</button>
+              <input type="file" accept=".xlsx,.xls" onChange={onArchivoAjustes} style={{ fontSize: 12 }} />
+            </div>
+            {importRows && (
+              <>
+                <div style={{ fontSize: 12, marginBottom: 8 }}><b>{importRows.filter(r => r.valido).length}</b> válido(s) · <b style={{ color: "#dc2626" }}>{importRows.filter(r => !r.valido).length}</b> con error</div>
+                <div style={{ overflowX: "auto", maxHeight: "44vh", overflowY: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+                    <thead><tr style={{ background: "#f1f5f9" }}>
+                      {["", "Empresa", "SC", "Tipo", "Concepto", "Monto", "Observación"].map((h, hi) => (<th key={hi} style={{ padding: "5px 8px", textAlign: "left", borderBottom: "1px solid #e2e8f0", whiteSpace: "nowrap" }}>{h}</th>))}
+                    </tr></thead>
+                    <tbody>
+                      {importRows.map((r, i) => (
+                        <tr key={i} style={{ borderBottom: "1px solid #f1f5f9", background: r.valido ? undefined : "#fef2f2" }}>
+                          <td style={{ padding: "4px 8px" }}>{r.valido ? "✓" : "✗"}</td>
+                          <td style={{ padding: "4px 8px" }}>{r.empresa}</td>
+                          <td style={{ padding: "4px 8px" }}>{r.sc}</td>
+                          <td style={{ padding: "4px 8px" }}>{r.tipo || "—"}</td>
+                          <td style={{ padding: "4px 8px" }}>{r.concepto}</td>
+                          <td style={{ padding: "4px 8px", textAlign: "right", color: r.montoFirmado < 0 ? "#dc2626" : "#16a34a", fontWeight: 700 }}>{r.montoFirmado < 0 ? "−" : "+"}{fmtMon(Math.abs(r.montoFirmado))}</td>
+                          <td style={{ padding: "4px 8px", color: "#dc2626", fontSize: 10 }}>{r.error || ""}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 16 }}>
+              <button onClick={() => !importBusy && setImportOpen(false)} style={{ padding: "8px 16px", background: "#fff", color: "#64748b", border: "1px solid #cbd5e1", borderRadius: 6, fontSize: 13, cursor: "pointer" }}>Cerrar</button>
+              <button onClick={aplicarImport} disabled={importBusy || !importRows || !importRows.some(r => r.valido)} style={{ padding: "8px 16px", background: (importBusy || !importRows || !importRows.some(r => r.valido)) ? "#94a3b8" : "#16a34a", color: "#fff", border: "none", borderRadius: 6, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>{importBusy ? "Aplicando..." : `Aplicar ${importRows ? importRows.filter(r => r.valido).length : 0} ajuste(s)`}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {repRows && repRows.length > 0 && (
         <div style={{ background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 10, padding: 14, marginBottom: 14 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 8 }}>
             <span style={{ fontSize: 14, fontWeight: 800, color: "#92400e" }}>🔁 Rutas con ID repetido en la semana</span>
-            <span style={{ fontSize: 12, color: "#b45309" }}>{repRows.length} ruta(s) · posible doble pago · sobre-pago {fmtMon(repRows.reduce((s, r) => s + Number(r.sobre_pago || 0), 0))}</span>
+            <span style={{ fontSize: 12, color: "#b45309" }}>{repRows.filter(r => !consolidadas.has(`${r.empresa}||${r.service_center}||${r.id_ruta}`)).length} pendiente(s) · sobre-pago {fmtMon(repRows.filter(r => !consolidadas.has(`${r.empresa}||${r.service_center}||${r.id_ruta}`)).reduce((s, r) => s + Number(r.sobre_pago || 0), 0))}{consolidadas.size > 0 ? ` · ${consolidadas.size} ya consolidada(s)` : ""}</span>
             <button onClick={consolidarTodas} disabled={!!consolidando} style={{ marginLeft: "auto", padding: "6px 14px", background: consolidando ? "#94a3b8" : "#92400e", color: "#fff", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>{consolidando === "__todas__" ? "Consolidando..." : "Consolidar todas (dejar 1er día)"}</button>
           </div>
           <div style={{ overflowX: "auto" }}>
@@ -15204,8 +15356,10 @@ function ConciliacionTercerosMX({ usuario }) {
                 ))}
               </tr></thead>
               <tbody>
-                {repRows.map((r, i) => (
-                  <tr key={r.id_ruta + "_" + i} style={{ borderBottom: "1px solid #fef3c7" }}>
+                {repRows.map((r, i) => {
+                  const cons = consolidadas.has(`${r.empresa}||${r.service_center}||${r.id_ruta}`);
+                  return (
+                  <tr key={r.id_ruta + "_" + i} style={{ borderBottom: "1px solid #fef3c7", background: cons ? "#f0fdf4" : undefined }}>
                     <td style={{ padding: "5px 8px" }}>{r.empresa}</td>
                     <td style={{ padding: "5px 8px" }}>{r.service_center}</td>
                     <td style={{ padding: "5px 8px", fontFamily: "monospace" }}>{r.id_ruta}</td>
@@ -15213,12 +15367,15 @@ function ConciliacionTercerosMX({ usuario }) {
                     <td style={{ padding: "5px 8px", fontSize: 10, color: "#78350f" }}>{r.fechas}</td>
                     <td style={{ padding: "5px 8px", textAlign: "right" }}>{fmtMon(r.pago_primer_dia)}</td>
                     <td style={{ padding: "5px 8px", textAlign: "right", fontWeight: 700 }}>{fmtMon(r.pago_total)}</td>
-                    <td style={{ padding: "5px 8px", textAlign: "right", color: "#b91c1c", fontWeight: 700 }}>{fmtMon(r.sobre_pago)}</td>
+                    <td style={{ padding: "5px 8px", textAlign: "right", color: cons ? "#94a3b8" : "#b91c1c", fontWeight: 700, textDecoration: cons ? "line-through" : undefined }}>{fmtMon(r.sobre_pago)}</td>
                     <td style={{ padding: "5px 8px", textAlign: "right" }}>
-                      <button onClick={() => consolidarRuta(r)} disabled={!!consolidando} style={{ padding: "4px 10px", background: "#fff", color: "#92400e", border: "1px solid #d97706", borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>{consolidando === String(r.id_ruta) ? "..." : "Consolidar"}</button>
+                      {cons
+                        ? <span style={{ color: "#16a34a", fontWeight: 700, fontSize: 11 }}>✓ Consolidada</span>
+                        : <button onClick={() => consolidarRuta(r)} disabled={!!consolidando} style={{ padding: "4px 10px", background: "#fff", color: "#92400e", border: "1px solid #d97706", borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>{consolidando === String(r.id_ruta) ? "..." : "Consolidar"}</button>}
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -17249,6 +17406,7 @@ function ListadoPagosDiarios() {
                 <Th onClick={() => toggleOrder("pago_neto")} right>Pago neto{ordIcon("pago_neto")}</Th>
                 <Th right>Pago MELI</Th>
                 <Th right>% Margen</Th>
+                <Th>Observaciones</Th>
               </tr>
             </thead>
             <tbody>
@@ -17328,6 +17486,9 @@ function ListadoPagosDiarios() {
                     <td style={{ ...tdStyle(), textAlign: "right", fontWeight: 600, color: margenPct == null ? "#94a3b8" : (margenPct >= 0 ? "#16a34a" : "#dc2626") }}>
                       {margenPct != null ? `${margenPct.toFixed(1)}%` : "—"}
                     </td>
+                    <td style={{ ...tdStyle(), fontSize: 10, color: noPagada ? "#991b1b" : (r.observaciones ? "#92400e" : "#cbd5e1"), maxWidth: 260, whiteSpace: "normal", lineHeight: 1.3 }} title={r.observaciones || ""}>
+                      {r.observaciones || "—"}
+                    </td>
                   </tr>
                 );
               })}
@@ -17347,6 +17508,7 @@ function ListadoPagosDiarios() {
                   <td style={{ ...tdStyle(), textAlign: "right", color: "#16a34a", fontSize: 13 }}>{fmtMXN(totales.pagoNeto)}</td>
                   <td style={{ ...tdStyle(), textAlign: "right", color: "#1a3a6b" }}>{totales.pagoMeli > 0 ? fmtMXN(totales.pagoMeli) : "—"}</td>
                   <td style={{ ...tdStyle(), textAlign: "right", color: "#1a3a6b" }}>{totales.margenPct != null ? `${totales.margenPct.toFixed(1)}%` : "—"}</td>
+                  <td style={tdStyle()}></td>
                 </tr>
               )}
             </tbody>
