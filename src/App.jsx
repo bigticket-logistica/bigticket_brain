@@ -14902,6 +14902,14 @@ function ConciliacionTercerosMX({ usuario }) {
       const json = window.XLSX.utils.sheet_to_json(ws, { defval: "" });
       const validKeys = new Map();
       for (const r of resumen) validKeys.set(`${norm(r.empresa_nombre)}||${norm(r.service_center)}`, { empresa: r.empresa_nombre, sc: r.service_center });
+      // Resuelve empresa+SC: 1) resumen de la semana; 2) maestro de transportistas + CECO válido (para reliquidar viajes de semanas pasadas en empresas que no operaron esta semana)
+      const resolverEmpresaSC = (emp, scc) => {
+        const k = `${norm(emp)}||${norm(scc)}`;
+        if (validKeys.has(k)) return validKeys.get(k);
+        const tt = transpPorNorm[norm(emp)]; const pp = paramPorSC[norm(scc)];
+        if (tt && pp) return { empresa: tt.nombre, sc: pp.ceco || scc };
+        return null;
+      };
       const numOrNull = (v) => { if (v === "" || v == null) return null; const n = Number(String(v).replace(/[^0-9.\-]/g, "")); return isNaN(n) ? null : n; };
       const parseFecha = (v) => {
         if (v === "" || v == null) return null;
@@ -14945,10 +14953,10 @@ function ConciliacionTercerosMX({ usuario }) {
         const bonif = numOrNull(get(["bonif", "bonif.", "bonificacion", "bonificación", "monto_bonificacion"]));
         let tipo = tipoRaw.startsWith("viaj") ? "viaje" : tipoRaw.startsWith("desc") ? "descuento" : tipoRaw.startsWith("carg") ? "cargo" : tipoRaw.startsWith("otro") ? "otro" : "";
         if (!tipo && placa) tipo = "viaje";
-        const match = validKeys.get(`${norm(empresa)}||${norm(sc)}`);
+        const match = resolverEmpresaSC(empresa, sc);
         let error = "";
         if (!empresa || !sc) error = "Falta empresa o SC";
-        else if (!match) error = "Empresa+SC no existe en esta semana";
+        else if (!match) error = "Empresa no registrada o SC inválido (revisa nombre exacto y CECO)";
         else if (!tipo) error = "Tipo inválido (viaje/cargo/descuento)";
         else if (isNaN(montoNum) || montoNum === 0) error = "Monto inválido (≠ 0)";
         else if (tipo === "viaje" && !placa) error = "Viaje sin patente";
