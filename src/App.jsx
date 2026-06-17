@@ -14501,6 +14501,12 @@ function ConciliacionTercerosMX({ usuario }) {
   const [importBusy, setImportBusy] = useState(false);
   const [repBusy, setRepBusy] = useState(false);
   const [consolidando, setConsolidando] = useState(null);      // id_ruta | "__todas__"
+  const [asuntoLote, setAsuntoLote] = useState(() => { try { return localStorage.getItem("conc_mx_asunto") || ASUNTO_DEFAULT; } catch { return ASUNTO_DEFAULT; } });
+  const [cuerpoLote, setCuerpoLote] = useState(() => { try { return localStorage.getItem("conc_mx_cuerpo") || CUERPO_DEFAULT; } catch { return CUERPO_DEFAULT; } });
+  const [editorCorreoOpen, setEditorCorreoOpen] = useState(false);
+  useEffect(() => { try { localStorage.setItem("conc_mx_asunto", asuntoLote); } catch {} }, [asuntoLote]);
+  useEffect(() => { try { localStorage.setItem("conc_mx_cuerpo", cuerpoLote); } catch {} }, [cuerpoLote]);
+  const aplicarVarsCorreo = (txt, empresa, sc, periodo, operacion) => String(txt || "").replace(/\{TRANSPORTISTA\}/g, empresa || "").replace(/\{CECO\}/g, sc || "").replace(/\{PERIODO\}/g, periodo || "").replace(/\{OPERACION\}/g, operacion || "");
 
   const norm = (s) => String(s || "").trim().toUpperCase();
   const fmtMon = (v) => "$ " + Math.round(Number(v || 0)).toLocaleString("es-CL");
@@ -15162,8 +15168,8 @@ function ConciliacionTercerosMX({ usuario }) {
     const cc = ((opts && opts.cc) || t.correo_cc || "").trim();
     const bcc = (t.correo_bcc || "").trim();
     if (!correoTo) throw new Error("Sin correo destino para " + empresa + " · " + sc);
-    const asunto = (opts && opts.asunto) || `Prefactura ${empresa} — ${sc} — ${periodo}`;
-    const cuerpo = (opts && opts.cuerpo) || `Estimados,\n\nAdjuntamos la prefactura de ${operacion} por el período ${periodo}.\nBruto a facturar: ${fmtMon(tot.bruto)}.\n\nSaludos,\nEquipo BigTicket MX`;
+    const asunto = (opts && opts.asunto) || aplicarVarsCorreo(asuntoLote, empresa, sc, periodo, operacion);
+    const cuerpo = (opts && opts.cuerpo) || aplicarVarsCorreo(cuerpoLote, empresa, sc, periodo, operacion);
     const resp = await fetch(WEBHOOK_ENVIO_MX, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ idEnvio: `${empresa}|${sc}|${semana}|${Date.now()}`, transportista: empresa, ceco: sc, rfc: t.rfc || "", operacion, periodo, correoTo, cc, bcc, asunto, cuerpo, nombrePdf, html }),
@@ -15182,8 +15188,8 @@ function ConciliacionTercerosMX({ usuario }) {
     const t = transpPorNorm[norm(empresa)] || {};
     const { periodo, operacion, tot } = construirPrefactura(empresa, sc, filasSC, rSC);
     setModalEnvio({ empresa, sc, filasSC, rSC, to: t.correo_to || "", cc: t.correo_cc || "",
-      asunto: `Prefactura ${empresa} — ${sc} — ${periodo}`,
-      cuerpo: `Estimados,\n\nAdjuntamos la prefactura de ${operacion} por el período ${periodo}.\nBruto a facturar: ${fmtMon(tot.bruto)}.\n\nSaludos,\nEquipo BigTicket MX` });
+      asunto: aplicarVarsCorreo(asuntoLote, empresa, sc, periodo, operacion),
+      cuerpo: aplicarVarsCorreo(cuerpoLote, empresa, sc, periodo, operacion) });
   };
 
   const confirmarEnvioModal = async () => {
@@ -15355,8 +15361,24 @@ function ConciliacionTercerosMX({ usuario }) {
           </div>
           <button onClick={() => setSemana(s => s + 1)} style={{ padding: "6px 10px", border: "1px solid #e4e7ec", background: "#fff", borderRadius: 6, cursor: "pointer", fontWeight: 700 }}>›</button>
           <button onClick={refrescarTodo} style={{ marginLeft: 6, padding: "6px 12px", border: "1px solid #1a3a6b", background: "#fff", color: "#1a3a6b", borderRadius: 6, cursor: "pointer", fontSize: 12, fontWeight: 700 }}>↻ Refrescar</button>
+          <button onClick={() => setEditorCorreoOpen(o => !o)} style={{ padding: "6px 12px", border: "1px solid #1a3a6b", background: editorCorreoOpen ? "#1a3a6b" : "#fff", color: editorCorreoOpen ? "#fff" : "#1a3a6b", borderRadius: 6, cursor: "pointer", fontSize: 12, fontWeight: 700 }}>✉️ Cuerpo del correo</button>
         </div>
       </div>
+
+      {editorCorreoOpen && (
+        <div style={{ border: "1px solid #e4e7ec", background: "#f8fafc", borderRadius: 10, padding: 14, marginBottom: 14 }}>
+          <div style={{ fontSize: 13, fontWeight: 800, color: "#1a3a6b", marginBottom: 2 }}>✉️ Cuerpo del correo (se aplica a TODAS las empresas y SC)</div>
+          <div style={{ fontSize: 11, color: "#64748b", marginBottom: 10 }}>Variables que se reemplazan por empresa/SC al enviar: <code>{"{TRANSPORTISTA}"}</code> = empresa · <code>{"{CECO}"}</code> = SC · <code>{"{PERIODO}"}</code> = semana · <code>{"{OPERACION}"}</code>. Las fechas XX/XX se editan a mano. El correo destino se define por empresa en su ficha.</div>
+          <div style={{ fontSize: 11, fontWeight: 700, color: "#475569", marginBottom: 4 }}>Asunto</div>
+          <input value={asuntoLote} onChange={e => setAsuntoLote(e.target.value)} style={{ width: "100%", padding: "8px 10px", border: "1px solid #e4e7ec", borderRadius: 6, fontSize: 13, marginBottom: 10, boxSizing: "border-box" }} />
+          <div style={{ fontSize: 11, fontWeight: 700, color: "#475569", marginBottom: 4 }}>Cuerpo</div>
+          <textarea value={cuerpoLote} onChange={e => setCuerpoLote(e.target.value)} rows={12} style={{ width: "100%", padding: "8px 10px", border: "1px solid #e4e7ec", borderRadius: 6, fontSize: 13, fontFamily: "inherit", resize: "vertical", boxSizing: "border-box" }} />
+          <div style={{ display: "flex", justifyContent: "space-between", marginTop: 10 }}>
+            <button onClick={() => { setAsuntoLote(ASUNTO_DEFAULT); setCuerpoLote(CUERPO_DEFAULT); }} style={{ padding: "6px 12px", background: "#fff", color: "#64748b", border: "1px solid #cbd5e1", borderRadius: 6, fontSize: 12, cursor: "pointer" }}>↺ Restaurar plantilla</button>
+            <button onClick={() => setEditorCorreoOpen(false)} style={{ padding: "6px 12px", background: "#1a3a6b", color: "#fff", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Listo</button>
+          </div>
+        </div>
+      )}
 
       {msg && (
         <div style={{ background: msg.ok ? "#ecfdf5" : "#fef2f2", border: "1px solid " + (msg.ok ? "#a7f3d0" : "#fca5a5"), color: msg.ok ? "#065f46" : "#991b1b", borderRadius: 6, padding: 10, marginBottom: 14, fontSize: 12 }}>{msg.txt}</div>
