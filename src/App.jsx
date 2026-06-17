@@ -17069,7 +17069,7 @@ function ListadoPagosDiarios() {
       "Pago bruto","Pago neto","Pago MELI","Observaciones"
     ];
     const rows = filasFiltradas.map(p => [
-      p.fecha, p.driver_name, p.placa, p.vehiculo_raw, p.tipologia, p.tipo_ruta_sdd || "SPOT", p.service_center_id, p.zona,
+      p.fecha, p.driver_name, p.placa, p.vehiculo_raw, p.tipologia, p.tipo_ruta_sdd || "", p.service_center_id, p.zona,
       p.id_ruta, p.ciclo, p.km_recorridos, p.km_recorridos_meli, p.envios_despachados, p.envios_entregados,
       p.ns_pct, p.pct_visitado_real, (p.pct_visitado_real != null ? Math.round((100 - Number(p.pct_visitado_real)) * 100) / 100 : ""), p.ns_no_visitado, p.ns_categoria, p.tarifa_base, p.ajuste_ns,
       p.auxiliar_estado, p.auxiliar_snapshots_total, p.monto_auxiliar,
@@ -17123,7 +17123,7 @@ function ListadoPagosDiarios() {
         "Pago bruto","Pago neto","Pago MELI","Observaciones"
       ];
       const aoa = [headers, ...filas.map(p => [
-        p.fecha, p.driver_name, p.placa, p.vehiculo_raw, p.tipologia, p.tipo_ruta_sdd || "SPOT", p.service_center_id, p.zona,
+        p.fecha, p.driver_name, p.placa, p.vehiculo_raw, p.tipologia, p.tipo_ruta_sdd || "", p.service_center_id, p.zona,
         p.id_ruta, p.ciclo, p.km_recorridos, p.km_recorridos_meli, p.envios_despachados, p.envios_entregados,
         p.ns_pct, p.pct_visitado_real, (p.pct_visitado_real != null ? Math.round((100 - Number(p.pct_visitado_real)) * 100) / 100 : ""), p.ns_no_visitado, p.ns_categoria, p.tarifa_base, p.ajuste_ns,
         p.auxiliar_estado, p.auxiliar_snapshots_total, p.monto_auxiliar,
@@ -17487,7 +17487,7 @@ function ListadoPagosDiarios() {
                       <div style={{ fontSize: 9, color: "#94a3b8", marginTop: 1 }}>{r.vehiculo_raw || ""}</div>
                     </td>
                     <td style={{ ...tdStyle(), textAlign: "center" }}>
-                      <span style={{ fontSize: 9, fontWeight: 700, padding: "1px 6px", borderRadius: 3, background: r.tipo_ruta_sdd === "SDD" ? "#fde68a" : "#e5e7eb", color: r.tipo_ruta_sdd === "SDD" ? "#92400e" : "#475569" }}>{r.tipo_ruta_sdd || "SPOT"}</span>
+                      <span style={{ fontSize: 9, fontWeight: 700, padding: "1px 6px", borderRadius: 3, background: r.tipo_ruta_sdd === "SDD" ? "#fde68a" : r.tipo_ruta_sdd === "SPOT" ? "#e5e7eb" : "#f1f5f9", color: r.tipo_ruta_sdd === "SDD" ? "#92400e" : r.tipo_ruta_sdd === "SPOT" ? "#475569" : "#94a3b8" }}>{r.tipo_ruta_sdd || "—"}</span>
                     </td>
                     <td style={{ ...tdStyle(), textAlign: "center" }}>
                       <div style={{ fontWeight: 700, color: "#1a3a6b" }}>{r.service_center_id}</div>
