@@ -14865,7 +14865,13 @@ function ConciliacionTercerosMX({ usuario }) {
     setMsg({ ok: fail === 0, txt: `Consolidación masiva: ${ok} ok, ${fail} con error.` + (errores.length ? " — " + errores.join(" | ") : "") });
   };
   // ── Importador masivo de ajustes (cargos / descuentos / otros) a prefacturas ──
-  const descargarPlantillaAjustes = () => {
+  const asegurarXLSX = async () => {
+    if (window.XLSX) return true;
+    await new Promise((res) => { const s = document.createElement("script"); s.src = "https://cdn.sheetjs.com/xlsx-0.20.0/package/dist/xlsx.full.min.js"; s.onload = res; s.onerror = res; document.head.appendChild(s); });
+    return !!window.XLSX;
+  };
+  const descargarPlantillaAjustes = async () => {
+    if (!(await asegurarXLSX())) { alert("No se pudo cargar la librería de Excel."); return; }
     const ws = window.XLSX.utils.aoa_to_sheet([
       ["empresa", "service_center", "tipo", "concepto", "monto"],
       ["RAQUEL VELAZQUEZ GONZALEZ", "SMX8", "descuento", "Daño paquete ruta 142986216 (08-jun)", 500],
@@ -14879,6 +14885,7 @@ function ConciliacionTercerosMX({ usuario }) {
   const onArchivoAjustes = async (e) => {
     const file = e.target.files && e.target.files[0]; if (!file) return;
     try {
+      if (!(await asegurarXLSX())) { setMsg({ ok: false, txt: "No se pudo cargar la librería de Excel." }); return; }
       const buf = await file.arrayBuffer();
       const wb = window.XLSX.read(buf, { type: "array" });
       const ws = wb.Sheets[wb.SheetNames[0]];
