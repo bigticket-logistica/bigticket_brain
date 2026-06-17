@@ -16351,7 +16351,7 @@ function calcularPagos({ maestro, snapshots, scZonas, especiales, matrizPrecios,
     let montoBono = 0;
     let bonoAplicado = null;
     if (!noPaga && Array.isArray(bonificaciones) && bonificaciones.length) {
-      const tipoR = tipoRutaDeFila(placa);
+      const tipoR = tipoRutaPorVehiculo(m.tipo_vehiculo);  // SDD/SPOT por TIPO DE VEHÍCULO MELI ("...SDD" => SDD)
       const kmR = Number(km || 0);
       let mejor = null;
       for (const b of bonificaciones) {
@@ -16442,6 +16442,13 @@ function calcularPagos({ maestro, snapshots, scZonas, especiales, matrizPrecios,
 }
 
 // ─── Componente principal: Vista por RUTA ─────────────────────────────────
+function tipoRutaPorVehiculo(vehiculoRaw) {
+  // SDD/SPOT se determina por el TIPO DE VEHÍCULO MELI:
+  // si el tipo contiene "SDD" (ej. "Large Van MLP SDD") => SDD; si no (ej. "Small Van MLP") => SPOT.
+  if (!vehiculoRaw) return null;
+  return String(vehiculoRaw).toUpperCase().includes("SDD") ? "SDD" : "SPOT";
+}
+
 function tipoRutaDeFila(placa) {
   // Regla de negocio: SDD = placa con prefijo "SDD-". Todo lo demás = SPOT
   // (otros prefijos o sin prefijo). Una placa vacía/nula no clasifica.
