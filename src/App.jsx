@@ -14872,38 +14872,17 @@ function ConciliacionTercerosMX({ usuario }) {
   };
   const descargarPlantillaAjustes = async () => {
     if (!(await asegurarXLSX())) { alert("No se pudo cargar la librería de Excel."); return; }
-    setMsg({ ok: true, txt: "Generando plantilla con el detalle de la semana…" });
-    // Hoja "Ajustes" (la que se llena y se importa) — va PRIMERA
-    const wsAjustes = window.XLSX.utils.aoa_to_sheet([
-      ["empresa", "service_center", "tipo", "concepto", "monto"],
-      ["RAQUEL VELAZQUEZ GONZALEZ", "SMX8", "descuento", "Daño paquete ruta 142986216 (08-jun)", 500],
-      ["MICHAEL YTZURIT ZAMUDIO IBARRA", "SCY1", "cargo", "Bono extra acordado", 800],
+    // Una sola hoja "Ajustes" con TODOS los campos del PDF. tipo = viaje | cargo | descuento.
+    // En viaje el signo del MONTO manda (positivo = paga/suma, negativo = cobra/resta).
+    const ws = window.XLSX.utils.aoa_to_sheet([
+      ["tipo","empresa","service_center","fecha","patente","id_ruta","conductor","aux","cargado","entregado","pct_entrega","pct_visita","km_pago","factor","bonif","concepto","monto"],
+      ["viaje","RAQUEL VELAZQUEZ GONZALEZ","SMX8","05-06-2026","ABC-123","142986216","Juan Perez","NO",120,118,98.3,99.1,150,1,0,"Reliquidación sem 23",2200],
+      ["viaje","RAQUEL VELAZQUEZ GONZALEZ","SMX8","06-06-2026","ABC-124","142986300","Juan Perez","NO",100,0,0,0,0,0,0,"Cobro ruta no operada sem 23",-1800],
+      ["descuento","MICHAEL YTZURIT ZAMUDIO IBARRA","SCY1","","","","","","","","","","","","","Daño paquete",500],
     ]);
-    // Hoja "Detalle" (referencia, mismas columnas que el PDF) — detalle de toda la semana
-    const empresasU = [...new Set((resumen || []).map(r => r.empresa || r.empresa_nombre).filter(Boolean))];
-    const filasDet = [];
-    for (const emp of empresasU) {
-      try {
-        const { data } = await sb.rpc("get_conciliacion_terceros_detalle", { p_semana: semana, p_empresa: emp, p_sc: null });
-        for (const d of (data || [])) {
-          filasDet.push([
-            emp, d.service_center_id || "", fmtFechaDDMM(d.fecha), d.placa || "", d.id_ruta || "",
-            d.driver_name || "", d.tiene_auxiliar ? "SI" : "NO",
-            Number(d.cargado || 0), Number(d.entregado || 0),
-            d.pct_entrega != null ? Number(d.pct_entrega) : "", d.pct_visitado_gate != null ? Number(d.pct_visitado_gate) : "",
-            d.km_pago != null ? Number(d.km_pago) : "", d.factor_ns != null ? Number(d.factor_ns) : "",
-            Number(d.monto_bonificacion || 0), Number(d.monto || 0),
-          ]);
-        }
-      } catch (e) { console.error("detalle plantilla", emp, e); }
-    }
-    const headerDet = ["Empresa","SC","Fecha","Patente","ID Ruta","Conductor","Aux","Cargado","Entregado","% Entrega","% Visita","KM Pago","Factor","Bonif.","Monto"];
-    const wsDet = window.XLSX.utils.aoa_to_sheet([headerDet, ...filasDet]);
     const wb = window.XLSX.utils.book_new();
-    window.XLSX.utils.book_append_sheet(wb, wsAjustes, "Ajustes");
-    window.XLSX.utils.book_append_sheet(wb, wsDet, "Detalle");
-    window.XLSX.writeFile(wb, `plantilla_ajustes_conciliacion_sem${semana}.xlsx`);
-    setMsg({ ok: true, txt: `Plantilla lista: ${filasDet.length} líneas en la hoja "Detalle" (referencia) + hoja "Ajustes" para llenar e importar.` });
+    window.XLSX.utils.book_append_sheet(wb, ws, "Ajustes");
+    window.XLSX.writeFile(wb, `plantilla_importacion_conciliacion_sem${semana}.xlsx`);
   };
 
   const onArchivoAjustes = async (e) => {
@@ -14917,24 +14896,69 @@ function ConciliacionTercerosMX({ usuario }) {
       const json = window.XLSX.utils.sheet_to_json(ws, { defval: "" });
       const validKeys = new Map();
       for (const r of resumen) validKeys.set(`${norm(r.empresa_nombre)}||${norm(r.service_center)}`, { empresa: r.empresa_nombre, sc: r.service_center });
-      const rows = json.map((raw) => {
+      const numOrNull = (v) => { if (v === "" || v == null) return null; const n = Number(String(v).replace(/[^0-9.\-]/g, "")); return isNaN(n) ? null : n; };
+      const parseFecha = (v) => {
+        if (v === "" || v == null) return null;
+        if (typeof v === "number") { const d = new Date(Math.round((v - 25569) * 86400000)); return isNaN(d) ? null : d.toISOString().slice(0, 10); }
+        const s = String(v).trim();
+        let mm = s.match(/^(\d{4})-(\d{2})-(\d{2})/); if (mm) return `${mm[1]}-${mm[2]}-${mm[3]}`;
+        mm = s.match(/^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{4})/); if (mm) return `${mm[3]}-${String(mm[2]).padStart(2,"0")}-${String(mm[1]).padStart(2,"0")}`;
+        return s.slice(0, 10);
+      };
+      const idCache = {};
+      const idRutasDe = async (empresa, sc) => {
+        const key = `${empresa}||${sc}`; if (idCache[key]) return idCache[key];
+        let filas = [];
+        try {
+          const { data: r2 } = await sb.from("conciliaciones_terceros").select("detalle").eq("empresa_nombre", empresa).eq("service_center", sc).eq("semana", semana).maybeSingle();
+          if (r2 && Array.isArray(r2.detalle) && r2.detalle.length) filas = r2.detalle;
+          else { const { data } = await sb.rpc("get_conciliacion_terceros_detalle", { p_semana: semana, p_empresa: empresa, p_sc: sc }); filas = data || []; }
+        } catch (er) { console.error("idRutasDe", er); }
+        const set = new Set(filas.map(d => String(d.id_ruta || "").trim()).filter(Boolean)); idCache[key] = set; return set;
+      };
+      const seen = new Set();
+      const rows = [];
+      for (const raw of json) {
         const get = (keys) => { for (const k of Object.keys(raw)) { if (keys.includes(String(k).toLowerCase().trim())) return raw[k]; } return ""; };
         const empresa = String(get(["empresa"]) || "").trim();
         const sc = String(get(["service_center", "sc", "service center", "centro"]) || "").trim();
         const tipoRaw = String(get(["tipo"]) || "").toLowerCase().trim();
         const concepto = String(get(["concepto", "detalle", "glosa"]) || "").trim();
         const montoNum = Number(String(get(["monto", "importe", "valor"])).replace(/[^0-9.\-]/g, ""));
-        const tipo = tipoRaw.startsWith("desc") ? "descuento" : tipoRaw.startsWith("carg") ? "cargo" : tipoRaw.startsWith("otro") ? "otro" : "";
+        const placa = String(get(["patente", "placa"]) || "").trim().toUpperCase();
+        const idRuta = String(get(["id_ruta", "id ruta", "ruta", "idruta"]) || "").trim();
+        const conductor = String(get(["conductor", "chofer", "driver", "driver_name"]) || "").trim();
+        const auxRaw = String(get(["aux", "auxiliar", "ayudante"]) || "").trim().toLowerCase();
+        const fecha = parseFecha(get(["fecha", "date"]));
+        const cargado = numOrNull(get(["cargado", "cargados"]));
+        const entregado = numOrNull(get(["entregado", "entregados"]));
+        const pctEntrega = numOrNull(get(["pct_entrega", "% entrega", "%entrega", "entrega"]));
+        const pctVisita = numOrNull(get(["pct_visita", "% visita", "%visita", "visita", "% visitado", "pct_visitado"]));
+        const kmPago = numOrNull(get(["km_pago", "km pago", "kmpago", "km"]));
+        const factor = numOrNull(get(["factor", "factor_ns"]));
+        const bonif = numOrNull(get(["bonif", "bonif.", "bonificacion", "bonificación", "monto_bonificacion"]));
+        let tipo = tipoRaw.startsWith("viaj") ? "viaje" : tipoRaw.startsWith("desc") ? "descuento" : tipoRaw.startsWith("carg") ? "cargo" : tipoRaw.startsWith("otro") ? "otro" : "";
+        if (!tipo && placa) tipo = "viaje";
         const match = validKeys.get(`${norm(empresa)}||${norm(sc)}`);
         let error = "";
         if (!empresa || !sc) error = "Falta empresa o SC";
         else if (!match) error = "Empresa+SC no existe en esta semana";
-        else if (!tipo) error = "Tipo inválido (cargo/descuento/otro)";
-        else if (!concepto) error = "Falta concepto";
-        else if (!montoNum || isNaN(montoNum) || montoNum <= 0) error = "Monto inválido (>0)";
-        const montoFirmado = tipo === "descuento" ? -Math.abs(montoNum) : Math.abs(montoNum);
-        return { empresa: match ? match.empresa : empresa, sc: match ? match.sc : sc, tipo, concepto, montoFirmado, error, valido: !error };
-      });
+        else if (!tipo) error = "Tipo inválido (viaje/cargo/descuento)";
+        else if (isNaN(montoNum) || montoNum === 0) error = "Monto inválido (≠ 0)";
+        else if (tipo === "viaje" && !placa) error = "Viaje sin patente";
+        else if ((tipo === "cargo" || tipo === "descuento" || tipo === "otro") && !concepto) error = "Falta concepto";
+        if (!error && tipo === "viaje" && idRuta && match) {
+          const k2 = `${match.empresa}||${match.sc}||${idRuta}`;
+          if (seen.has(k2)) error = `Ruta ${idRuta} duplicada en el archivo`;
+          else { const set = await idRutasDe(match.empresa, match.sc); if (set.has(idRuta)) error = `Ruta ${idRuta} ya existe en la conciliación`; else seen.add(k2); }
+        }
+        const montoFirmado = tipo === "descuento" ? -Math.abs(montoNum) : tipo === "viaje" ? montoNum : Math.abs(montoNum);
+        const conceptoShow = tipo === "viaje" ? (concepto || `Ruta ${idRuta || "?"} · ${placa || ""}${conductor ? " · " + conductor : ""}`) : concepto;
+        rows.push({ kind: tipo === "viaje" ? "viaje" : "ajuste", tipo, empresa: match ? match.empresa : empresa, sc: match ? match.sc : sc,
+          fecha, placa, id_ruta: idRuta, driver_name: conductor, aux: ["si","sí","s","1","true","x"].includes(auxRaw),
+          cargado, entregado, pct_entrega: pctEntrega, pct_visitado_gate: pctVisita, km_pago: kmPago, factor_ns: factor,
+          monto_bonificacion: bonif != null ? bonif : 0, concepto: conceptoShow, montoFirmado, error, valido: !error });
+      }
       setImportRows(rows);
     } catch (err) { console.error("parse import:", err); setMsg({ ok: false, txt: "No se pudo leer el Excel: " + (err.message || err) }); }
     e.target.value = "";
@@ -14952,17 +14976,27 @@ function ConciliacionTercerosMX({ usuario }) {
       if (error) throw error;
       filas = (data || []).map(d => ({ ...d, _id: lineaId(d), origen: "motor" }));
     }
-    const nuevas = items.map((a, idx) => ({
-      _id: `imp|${Date.now()}|${idx}|${Math.random().toString(36).slice(2, 6)}`, origen: "ajuste", es_manual: true, importado: true,
-      service_center_id: sc, fecha: null, placa: "AJUSTE", id_ruta: "—", driver_name: a.concepto,
-      tiene_auxiliar: false, cargado: null, entregado: null, pct_entrega: null, pct_visitado_gate: null,
-      km_pago: null, km_real_meli: null, factor_ns: null, monto: a.montoFirmado,
-      monto_bonificacion: 0, bonificacion_nombre: null, bonificacion_pct: 0, tiene_bonificacion: false,
-      es_no_pago: false, motivo_no_pago: null,
-    }));
+    const nuevas = items.map((a, idx) => {
+      const _id = `imp|${Date.now()}|${idx}|${Math.random().toString(36).slice(2, 6)}`;
+      const baseLn = { _id, es_manual: true, importado: true, service_center_id: sc,
+        km_real_meli: null, bonificacion_nombre: null, bonificacion_pct: 0, tiene_bonificacion: false,
+        es_no_pago: false, motivo_no_pago: null };
+      if (a.kind === "viaje") {
+        return { ...baseLn, origen: "viaje", fecha: a.fecha || null,
+          placa: (a.placa || "").toUpperCase(), id_ruta: a.id_ruta || "", driver_name: a.driver_name || "",
+          tiene_auxiliar: !!a.aux,
+          cargado: a.cargado != null ? Number(a.cargado) : null, entregado: a.entregado != null ? Number(a.entregado) : null,
+          pct_entrega: a.pct_entrega != null ? Number(a.pct_entrega) : null, pct_visitado_gate: a.pct_visitado_gate != null ? Number(a.pct_visitado_gate) : null,
+          km_pago: a.km_pago != null ? Number(a.km_pago) : null, factor_ns: a.factor_ns != null ? Number(a.factor_ns) : null,
+          monto_bonificacion: a.monto_bonificacion != null ? Number(a.monto_bonificacion) : 0, monto: a.montoFirmado };
+      }
+      return { ...baseLn, origen: "ajuste", fecha: null, placa: "AJUSTE", id_ruta: "—", driver_name: a.concepto,
+        tiene_auxiliar: false, cargado: null, entregado: null, pct_entrega: null, pct_visitado_gate: null,
+        km_pago: null, factor_ns: null, monto: a.montoFirmado, monto_bonificacion: 0 };
+    });
     const filasSC = [...filas.filter(d => (d.service_center_id || "SIN SC") === sc), ...nuevas];
     await guardarBorradorSC(empresa, sc, filasSC, cobrosDe(empresa, sc));
-    for (const n of nuevas) await auditarAjuste(empresa, sc, "agregar", "ajuste", n, `Importado: ${n.driver_name} (${n.monto})`);
+    for (const n of nuevas) await auditarAjuste(empresa, sc, "agregar", n.origen, n, `Importado (${n.origen}): ${n.driver_name || n.id_ruta} (${n.monto})`);
     if (detalles[empresa]) setDetalles(prev => ({ ...prev, [empresa]: [...(prev[empresa] || []), ...nuevas] }));
     return nuevas.length;
   };
@@ -14970,7 +15004,7 @@ function ConciliacionTercerosMX({ usuario }) {
   const aplicarImport = async () => {
     const validos = (importRows || []).filter(r => r.valido);
     if (!validos.length) return;
-    if (!confirm(`¿Aplicar ${validos.length} ajuste(s) a las prefacturas de la semana? Quedan como líneas en borrador y auditadas.`)) return;
+    if (!confirm(`¿Aplicar ${validos.length} línea(s) (viajes / cargos / descuentos) a las prefacturas de la semana? Quedan en borrador y auditadas.`)) return;
     setImportBusy(true);
     const grupos = {};
     for (const r of validos) { const k = `${r.empresa}||${r.sc}`; (grupos[k] = grupos[k] || { empresa: r.empresa, sc: r.sc, items: [] }).items.push(r); }
@@ -15368,7 +15402,7 @@ function ConciliacionTercerosMX({ usuario }) {
             )}
             <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 16 }}>
               <button onClick={() => !importBusy && setImportOpen(false)} style={{ padding: "8px 16px", background: "#fff", color: "#64748b", border: "1px solid #cbd5e1", borderRadius: 6, fontSize: 13, cursor: "pointer" }}>Cerrar</button>
-              <button onClick={aplicarImport} disabled={importBusy || !importRows || !importRows.some(r => r.valido)} style={{ padding: "8px 16px", background: (importBusy || !importRows || !importRows.some(r => r.valido)) ? "#94a3b8" : "#16a34a", color: "#fff", border: "none", borderRadius: 6, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>{importBusy ? "Aplicando..." : `Aplicar ${importRows ? importRows.filter(r => r.valido).length : 0} ajuste(s)`}</button>
+              <button onClick={aplicarImport} disabled={importBusy || !importRows || !importRows.some(r => r.valido)} style={{ padding: "8px 16px", background: (importBusy || !importRows || !importRows.some(r => r.valido)) ? "#94a3b8" : "#16a34a", color: "#fff", border: "none", borderRadius: 6, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>{importBusy ? "Aplicando..." : `Aplicar ${importRows ? importRows.filter(r => r.valido).length : 0} línea(s)`}</button>
             </div>
           </div>
         </div>
