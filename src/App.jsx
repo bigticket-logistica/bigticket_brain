@@ -14865,23 +14865,23 @@ function ConciliacionTercerosMX({ usuario }) {
   };
   // ── Importador masivo de ajustes (cargos / descuentos / otros) a prefacturas ──
   const descargarPlantillaAjustes = () => {
-    const ws = XLSX.utils.aoa_to_sheet([
+    const ws = window.XLSX.utils.aoa_to_sheet([
       ["empresa", "service_center", "tipo", "concepto", "monto"],
       ["RAQUEL VELAZQUEZ GONZALEZ", "SMX8", "descuento", "Daño paquete ruta 142986216 (08-jun)", 500],
       ["MICHAEL YTZURIT ZAMUDIO IBARRA", "SCY1", "cargo", "Bono extra acordado", 800],
     ]);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Ajustes");
-    XLSX.writeFile(wb, "plantilla_ajustes_conciliacion.xlsx");
+    const wb = window.XLSX.utils.book_new();
+    window.XLSX.utils.book_append_sheet(wb, ws, "Ajustes");
+    window.XLSX.writeFile(wb, "plantilla_ajustes_conciliacion.xlsx");
   };
 
   const onArchivoAjustes = async (e) => {
     const file = e.target.files && e.target.files[0]; if (!file) return;
     try {
       const buf = await file.arrayBuffer();
-      const wb = XLSX.read(buf, { type: "array" });
+      const wb = window.XLSX.read(buf, { type: "array" });
       const ws = wb.Sheets[wb.SheetNames[0]];
-      const json = XLSX.utils.sheet_to_json(ws, { defval: "" });
+      const json = window.XLSX.utils.sheet_to_json(ws, { defval: "" });
       const validKeys = new Map();
       for (const r of resumen) validKeys.set(`${norm(r.empresa_nombre)}||${norm(r.service_center)}`, { empresa: r.empresa_nombre, sc: r.service_center });
       const rows = json.map((raw) => {
