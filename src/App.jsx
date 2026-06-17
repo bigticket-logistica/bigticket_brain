@@ -16415,6 +16415,11 @@ function ListadoPagosDiarios() {
   const [fecha, setFecha] = useState(fechaOperativaOffset(-1)); // ayer por defecto
   const [excelOpen, setExcelOpen] = useState(false);
   const [excelMode, setExcelMode] = useState("dia"); // dia | rango
+  const [dupRows, setDupRows] = useState(null);  // null=no analizado, []=sin repetidos
+  const [dupBusy, setDupBusy] = useState(false);
+  const [dupOpen, setDupOpen] = useState(false);
+  const [dupDesde, setDupDesde] = useState("");
+  const [dupHasta, setDupHasta] = useState("");
   const [excelDesde, setExcelDesde] = useState("");
   const [excelHasta, setExcelHasta] = useState("");
   const [excelBusy, setExcelBusy] = useState(false);
@@ -16730,14 +16735,14 @@ function ListadoPagosDiarios() {
     if (filasFiltradas.length === 0) { alert("No hay datos para exportar"); return; }
     const headers = [
       "Fecha","Chofer","Patente","Vehículo","Tipología","SC","Zona","ID Ruta","Ciclo",
-      "Km","Km Real","Envíos despachados","Envíos entregados","NS%","% Visitado","% Visitado Real","% No Visitado Real","No visitado %","Categoría NS",
+      "Km","Km Real","Envíos despachados","Envíos entregados","NS%","% Visitado Real","% No Visitado Real","No visitado %","Categoría NS",
       "Tarifa base","Ajuste NS","Estado auxiliar","Snapshots con helper","$ Auxiliar",
       "Pago bruto","Pago neto","Pago MELI","Observaciones"
     ];
     const rows = filasFiltradas.map(p => [
       p.fecha, p.driver_name, p.placa, p.vehiculo_raw, p.tipologia, p.service_center_id, p.zona,
       p.id_ruta, p.ciclo, p.km_recorridos, p.km_recorridos_meli, p.envios_despachados, p.envios_entregados,
-      p.ns_pct, p.pct_visitado, p.pct_visitado_real, (p.pct_visitado_real != null ? Math.round((100 - Number(p.pct_visitado_real)) * 100) / 100 : ""), p.ns_no_visitado, p.ns_categoria, p.tarifa_base, p.ajuste_ns,
+      p.ns_pct, p.pct_visitado_real, (p.pct_visitado_real != null ? Math.round((100 - Number(p.pct_visitado_real)) * 100) / 100 : ""), p.ns_no_visitado, p.ns_categoria, p.tarifa_base, p.ajuste_ns,
       p.auxiliar_estado, p.auxiliar_snapshots_total, p.monto_auxiliar,
       p.pago_bruto, p.pago_neto, p.pago_meli, (p.observaciones || "").replace(/[\r\n]+/g, " ")
     ]);
@@ -16756,6 +16761,19 @@ function ListadoPagosDiarios() {
   };
 
   // Exportar a Excel (un día o un rango) desde maestro_jornada_mx
+  // ── Detección de rutas con id repetido en varios días (posible doble pago) ──
+  const analizarDuplicados = async () => {
+    const desde = dupDesde || fechaOperativaOffset(-13);
+    const hasta = dupHasta || fecha;
+    setDupDesde(desde); setDupHasta(hasta); setDupBusy(true); setDupOpen(true);
+    try {
+      const { data, error } = await sb.rpc("get_rutas_repetidas", { p_desde: desde, p_hasta: hasta });
+      if (error) throw error;
+      setDupRows(data || []);
+    } catch (e) { console.error("rutas repetidas:", e); alert("Error analizando duplicados: " + (e.message || e)); }
+    setDupBusy(false);
+  };
+
   const abrirExcel = () => { setExcelDesde(fecha); setExcelHasta(fecha); setExcelMode("dia"); setExcelOpen(true); };
   const exportarExcel = async () => {
     const desde = excelDesde;
@@ -16771,14 +16789,14 @@ function ListadoPagosDiarios() {
       if (filas.length === 0) { alert(`No hay pagos guardados entre ${desde} y ${hasta}.`); setExcelBusy(false); return; }
       const headers = [
         "Fecha","Chofer","Patente","Vehículo","Tipología","SC","Zona","ID Ruta","Ciclo",
-        "Km","Km Real","Envíos despachados","Envíos entregados","NS%","% Visitado","% Visitado Real","% No Visitado Real","No visitado %","Categoría NS",
+        "Km","Km Real","Envíos despachados","Envíos entregados","NS%","% Visitado Real","% No Visitado Real","No visitado %","Categoría NS",
         "Tarifa base","Ajuste NS","Estado auxiliar","Snapshots con helper","$ Auxiliar",
         "Pago bruto","Pago neto","Pago MELI","Observaciones"
       ];
       const aoa = [headers, ...filas.map(p => [
         p.fecha, p.driver_name, p.placa, p.vehiculo_raw, p.tipologia, p.service_center_id, p.zona,
         p.id_ruta, p.ciclo, p.km_recorridos, p.km_recorridos_meli, p.envios_despachados, p.envios_entregados,
-        p.ns_pct, p.pct_visitado, p.pct_visitado_real, (p.pct_visitado_real != null ? Math.round((100 - Number(p.pct_visitado_real)) * 100) / 100 : ""), p.ns_no_visitado, p.ns_categoria, p.tarifa_base, p.ajuste_ns,
+        p.ns_pct, p.pct_visitado_real, (p.pct_visitado_real != null ? Math.round((100 - Number(p.pct_visitado_real)) * 100) / 100 : ""), p.ns_no_visitado, p.ns_categoria, p.tarifa_base, p.ajuste_ns,
         p.auxiliar_estado, p.auxiliar_snapshots_total, p.monto_auxiliar,
         p.pago_bruto, p.pago_neto, p.pago_meli, (p.observaciones || "").replace(/[\r\n]+/g, " ")
       ])];
@@ -16888,6 +16906,61 @@ function ListadoPagosDiarios() {
             {guardandoTarifado ? "Guardando..." : "Guardar en tarifado"}
           </button>
         </div>
+      </div>
+
+      {/* Tarjeta: rutas con ID repetido en varios días (posible doble pago) */}
+      <div style={{ background: "#fff", border: "1px solid #fde68a", borderRadius: 8, padding: 14, marginBottom: 14 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <span style={{ fontSize: 13, fontWeight: 800, color: "#92400e" }}>🔁 Rutas con ID repetido en varios días</span>
+          <span style={{ fontSize: 11, color: "#94a3b8" }}>Posible doble pago: el mismo id de viaje aparece en más de una fecha</span>
+          <span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
+            <input type="date" value={dupDesde || fechaOperativaOffset(-13)} onChange={e => setDupDesde(e.target.value)} style={{ border: "1px solid #e4e7ec", borderRadius: 4, padding: "5px 8px", fontSize: 12 }} />
+            <span style={{ fontSize: 11, color: "#94a3b8" }}>a</span>
+            <input type="date" value={dupHasta || fecha} onChange={e => setDupHasta(e.target.value)} style={{ border: "1px solid #e4e7ec", borderRadius: 4, padding: "5px 8px", fontSize: 12 }} />
+            <button onClick={analizarDuplicados} disabled={dupBusy} style={{ padding: "6px 14px", borderRadius: 4, border: "none", background: dupBusy ? "#94a3b8" : "#F47B20", color: "#fff", fontSize: 12, fontWeight: 700, cursor: dupBusy ? "wait" : "pointer" }}>{dupBusy ? "Analizando..." : "Analizar"}</button>
+          </span>
+        </div>
+        {dupRows && dupOpen && (
+          <div style={{ marginTop: 12 }}>
+            {dupRows.length === 0 ? (
+              <div style={{ fontSize: 12, color: "#16a34a", fontWeight: 600 }}>✓ No se encontraron rutas con ID repetido en el rango.</div>
+            ) : (
+              <>
+                <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 10 }}>
+                  <div style={{ fontSize: 12, color: "#92400e" }}><b>{dupRows.length}</b> ruta(s) repetida(s)</div>
+                  <div style={{ fontSize: 12, color: "#b91c1c" }}>Sobre-pago potencial: <b>{fmtMXN(dupRows.reduce((s, r) => s + Number(r.sobre_pago || 0), 0))}</b></div>
+                </div>
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+                    <thead><tr style={{ background: "#fffbeb", color: "#92400e" }}>
+                      {["ID Ruta", "SC", "Chofer", "Patente", "Días", "Fechas", "Cargado", "Entregado", "Pago 1er día", "Pago total", "Sobre-pago"].map(h => (
+                        <th key={h} style={{ padding: "6px 8px", textAlign: "left", borderBottom: "1px solid #fde68a", whiteSpace: "nowrap" }}>{h}</th>
+                      ))}
+                    </tr></thead>
+                    <tbody>
+                      {dupRows.map((r, i) => (
+                        <tr key={r.id_ruta + "_" + i} style={{ borderBottom: "1px solid #f3f4f6" }}>
+                          <td style={{ padding: "5px 8px", fontFamily: "monospace" }}>{r.id_ruta}</td>
+                          <td style={{ padding: "5px 8px" }}>{r.service_center_id}</td>
+                          <td style={{ padding: "5px 8px" }}>{r.driver_name}</td>
+                          <td style={{ padding: "5px 8px", fontFamily: "monospace" }}>{r.placa}</td>
+                          <td style={{ padding: "5px 8px", textAlign: "center", fontWeight: 700 }}>{r.dias}</td>
+                          <td style={{ padding: "5px 8px", fontSize: 10, color: "#475569" }}>{r.fechas}</td>
+                          <td style={{ padding: "5px 8px", textAlign: "center" }}>{r.cargados}</td>
+                          <td style={{ padding: "5px 8px", textAlign: "center" }}>{r.entregados}</td>
+                          <td style={{ padding: "5px 8px", textAlign: "right" }}>{fmtMXN(r.pago_primer_dia)}</td>
+                          <td style={{ padding: "5px 8px", textAlign: "right", fontWeight: 700 }}>{fmtMXN(r.pago_total)}</td>
+                          <td style={{ padding: "5px 8px", textAlign: "right", color: "#b91c1c", fontWeight: 700 }}>{fmtMXN(r.sobre_pago)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 8 }}>El analista decide. La consolidación (dejar solo el primer día) se hace en Conciliación Terceros.</div>
+              </>
+            )}
+          </div>
+        )}
       </div>
 
       {excelOpen && (
@@ -17053,8 +17126,7 @@ function ListadoPagosDiarios() {
                 <Th onClick={() => toggleOrder("km_recorridos")} right>Km{ordIcon("km_recorridos")}</Th>
                 <Th onClick={() => toggleOrder("km_recorridos_meli")} right>Km Real{ordIcon("km_recorridos_meli")}</Th>
                 <Th onClick={() => toggleOrder("ns_pct")} right>NS%{ordIcon("ns_pct")}</Th>
-                <Th onClick={() => toggleOrder("pct_visitado")} right>Visitado{ordIcon("pct_visitado")}</Th>
-                <Th onClick={() => toggleOrder("pct_visitado_real")} right>Visit. Real{ordIcon("pct_visitado_real")}</Th>
+                <Th onClick={() => toggleOrder("pct_visitado_real")} right>% Visitado{ordIcon("pct_visitado_real")}</Th>
                 <Th onClick={() => toggleOrder("tarifa_base")} right>Tarifa{ordIcon("tarifa_base")}</Th>
                 <Th onClick={() => toggleOrder("ajuste_ns")} right>±NS{ordIcon("ajuste_ns")}</Th>
                 <Th right>Bonif.</Th>
@@ -17098,9 +17170,6 @@ function ListadoPagosDiarios() {
                       </div>
                     </td>
                     <td style={{ ...tdStyle(), textAlign: "right", color: noPagada ? "#991b1b" : "#475569", fontWeight: noPagada ? 600 : 400 }}>
-                      {r.pct_visitado != null ? fmtPct(r.pct_visitado) : "—"}
-                    </td>
-                    <td style={{ ...tdStyle(), textAlign: "right", color: "#0369a1", fontWeight: 600 }}>
                       {r.pct_visitado_real != null ? fmtPct(r.pct_visitado_real) : "—"}
                     </td>
                     <td style={{ ...tdStyle(), textAlign: "right", textDecoration: noPagada ? "line-through" : undefined, color: noPagada ? "#94a3b8" : undefined }}>
