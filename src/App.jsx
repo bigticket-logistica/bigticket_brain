@@ -14494,6 +14494,9 @@ function ConciliacionTercerosMX({ usuario }) {
   const [seleccion, setSeleccion] = useState(() => new Set()); // claves cerradas marcadas para envío masivo
   const [enviando, setEnviando] = useState(null);              // clave o "__lote__"
   const [modalEnvio, setModalEnvio] = useState(null);          // confirmación de envío individual
+  const [repRows, setRepRows] = useState(null);                // rutas con ID repetido en la semana
+  const [repBusy, setRepBusy] = useState(false);
+  const [consolidando, setConsolidando] = useState(null);      // id_ruta | "__todas__"
 
   const norm = (s) => String(s || "").trim().toUpperCase();
   const fmtMon = (v) => "$ " + Math.round(Number(v || 0)).toLocaleString("es-CL");
@@ -14534,7 +14537,7 @@ function ConciliacionTercerosMX({ usuario }) {
     } catch (e) { console.error("maestros prefacturas:", e); }
   };
 
-  useEffect(() => { cargarResumen(semana); setExpandida(null); setDetalles({}); setAsignacionSel({}); }, [semana]);
+  useEffect(() => { cargarResumen(semana); cargarRepetidas(semana); setExpandida(null); setDetalles({}); setAsignacionSel({}); }, [semana]);
   useEffect(() => { cargarMaestros(); }, []);
 
   const cargarDetalle = async (empresa) => {
@@ -14787,6 +14790,62 @@ function ConciliacionTercerosMX({ usuario }) {
   };
 
   // ── PDF por empresa + SC (mismo template que portará el endpoint del VPS) ──
+  // ── Rutas con ID repetido (multi-día) — detección y consolidación ──
+  const cargarRepetidas = async (sem) => {
+    setRepBusy(true);
+    try {
+      const { data, error } = await sb.rpc("get_rutas_repetidas_semana", { p_semana: sem != null ? sem : semana });
+      if (error) throw error;
+      setRepRows(data || []);
+    } catch (e) { console.error("rutas repetidas semana:", e); setRepRows([]); }
+    setRepBusy(false);
+  };
+
+  const _consolidarNucleo = async (rep) => {
+    const empresa = rep.empresa, sc = rep.service_center, idRuta = String(rep.id_ruta);
+    const { data: row } = await sb.from("conciliaciones_terceros")
+      .select("detalle, estado").eq("empresa_nombre", empresa).eq("service_center", sc).eq("semana", semana).maybeSingle();
+    let filas;
+    if (row && Array.isArray(row.detalle) && row.detalle.length) {
+      if (row.estado === "enviada") throw new Error("ya enviada; reábrela antes de consolidar");
+      filas = row.detalle.map(d => ({ ...d, _id: d._id || lineaId(d) }));
+    } else {
+      const { data, error } = await sb.rpc("get_conciliacion_terceros_detalle", { p_semana: semana, p_empresa: empresa, p_sc: sc });
+      if (error) throw error;
+      filas = (data || []).map(d => ({ ...d, _id: lineaId(d), origen: "motor" }));
+    }
+    const mismas = filas.filter(d => String(d.id_ruta) === idRuta).sort((a, b) => String(a.fecha || "").localeCompare(String(b.fecha || "")));
+    if (mismas.length <= 1) return 0;
+    const quitar = mismas.slice(1);
+    const quitarIds = new Set(quitar.map(lineaId));
+    const filasSC = filas.filter(d => !quitarIds.has(lineaId(d)) && (d.service_center_id || "SIN SC") === sc);
+    await guardarBorradorSC(empresa, sc, filasSC, cobrosDe(empresa, sc));
+    for (const q of quitar) await auditarAjuste(empresa, sc, "eliminar", q.origen || "motor", q, `Consolidación ruta multi-ID ${idRuta}: queda 1er día (${mismas[0].fecha})`);
+    if (detalles[empresa]) setDetalles(prev => ({ ...prev, [empresa]: (prev[empresa] || []).filter(d => !quitarIds.has(lineaId(d))) }));
+    return quitar.length;
+  };
+
+  const consolidarRuta = async (rep) => {
+    setConsolidando(String(rep.id_ruta));
+    try {
+      const n = await _consolidarNucleo(rep);
+      await cargarResumen(semana); await cargarRepetidas(semana);
+      setMsg({ ok: true, txt: n > 0 ? `Ruta ${rep.id_ruta} consolidada en ${rep.empresa} · ${rep.service_center}: se quitaron ${n} día(s) repetido(s).` : `Ruta ${rep.id_ruta} ya estaba consolidada.` });
+    } catch (e) { console.error("consolidar ruta:", e); setMsg({ ok: false, txt: `Error consolidando ${rep.id_ruta}: ` + (e.message || e) }); }
+    setConsolidando(null);
+  };
+
+  const consolidarTodas = async () => {
+    if (!repRows || !repRows.length) return;
+    if (!confirm(`¿Consolidar ${repRows.length} ruta(s) repetida(s)? Se deja el pago del 1er día de cada una y se quitan los días repetidos (queda auditado).`)) return;
+    setConsolidando("__todas__");
+    let ok = 0, fail = 0; const errores = [];
+    for (const rep of repRows) {
+      try { await _consolidarNucleo(rep); ok++; } catch (e) { fail++; errores.push(`${rep.id_ruta}: ${e.message || e}`); }
+    }
+    await cargarResumen(semana); await cargarRepetidas(semana); setConsolidando(null);
+    setMsg({ ok: fail === 0, txt: `Consolidación masiva: ${ok} ok, ${fail} con error.` + (errores.length ? " — " + errores.join(" | ") : "") });
+  };
   const construirPrefactura = (empresa, sc, filasSC, rSC, cobrosOverride) => {
     const tot = recalcSC(filasSC, cobrosOverride != null ? cobrosOverride : cobrosDe(empresa, sc));
     const t = transpPorNorm[norm(empresa)] || {};
@@ -15129,6 +15188,43 @@ function ConciliacionTercerosMX({ usuario }) {
 
       {msg && (
         <div style={{ background: msg.ok ? "#ecfdf5" : "#fef2f2", border: "1px solid " + (msg.ok ? "#a7f3d0" : "#fca5a5"), color: msg.ok ? "#065f46" : "#991b1b", borderRadius: 6, padding: 10, marginBottom: 14, fontSize: 12 }}>{msg.txt}</div>
+      )}
+
+      {repRows && repRows.length > 0 && (
+        <div style={{ background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 10, padding: 14, marginBottom: 14 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 8 }}>
+            <span style={{ fontSize: 14, fontWeight: 800, color: "#92400e" }}>🔁 Rutas con ID repetido en la semana</span>
+            <span style={{ fontSize: 12, color: "#b45309" }}>{repRows.length} ruta(s) · posible doble pago · sobre-pago {fmtMon(repRows.reduce((s, r) => s + Number(r.sobre_pago || 0), 0))}</span>
+            <button onClick={consolidarTodas} disabled={!!consolidando} style={{ marginLeft: "auto", padding: "6px 14px", background: consolidando ? "#94a3b8" : "#92400e", color: "#fff", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>{consolidando === "__todas__" ? "Consolidando..." : "Consolidar todas (dejar 1er día)"}</button>
+          </div>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+              <thead><tr style={{ color: "#92400e" }}>
+                {["Empresa", "SC", "ID Ruta", "Días", "Fechas", "Pago 1er día", "Pago total", "Sobre-pago", ""].map((h, hi) => (
+                  <th key={hi} style={{ padding: "5px 8px", textAlign: "left", borderBottom: "1px solid #fde68a", whiteSpace: "nowrap" }}>{h}</th>
+                ))}
+              </tr></thead>
+              <tbody>
+                {repRows.map((r, i) => (
+                  <tr key={r.id_ruta + "_" + i} style={{ borderBottom: "1px solid #fef3c7" }}>
+                    <td style={{ padding: "5px 8px" }}>{r.empresa}</td>
+                    <td style={{ padding: "5px 8px" }}>{r.service_center}</td>
+                    <td style={{ padding: "5px 8px", fontFamily: "monospace" }}>{r.id_ruta}</td>
+                    <td style={{ padding: "5px 8px", textAlign: "center", fontWeight: 700 }}>{r.dias}</td>
+                    <td style={{ padding: "5px 8px", fontSize: 10, color: "#78350f" }}>{r.fechas}</td>
+                    <td style={{ padding: "5px 8px", textAlign: "right" }}>{fmtMon(r.pago_primer_dia)}</td>
+                    <td style={{ padding: "5px 8px", textAlign: "right", fontWeight: 700 }}>{fmtMon(r.pago_total)}</td>
+                    <td style={{ padding: "5px 8px", textAlign: "right", color: "#b91c1c", fontWeight: 700 }}>{fmtMon(r.sobre_pago)}</td>
+                    <td style={{ padding: "5px 8px", textAlign: "right" }}>
+                      <button onClick={() => consolidarRuta(r)} disabled={!!consolidando} style={{ padding: "4px 10px", background: "#fff", color: "#92400e", border: "1px solid #d97706", borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>{consolidando === String(r.id_ruta) ? "..." : "Consolidar"}</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div style={{ fontSize: 10, color: "#b45309", marginTop: 8 }}>"Consolidar" deja el pago del 1er día y quita los días repetidos (queda auditado). Si la conciliación estaba cerrada, vuelve a borrador para revisarla y cerrarla de nuevo.</div>
+        </div>
       )}
 
       {seleccion.size > 0 && (
