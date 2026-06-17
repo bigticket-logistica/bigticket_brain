@@ -147,7 +147,7 @@ function BotonDescargarExcel({ onClick, disabled, label = "Descargar Excel" }) {
 }
 
 const MODULOS = {
-  superadmin: ["brain", "pool_meli_mx", "pagos", "mantenciones", "certificaciones", "pnr", "configuracion"],
+  superadmin: ["brain", "pool_meli_mx", "pagos", "maestro", "mantenciones", "certificaciones", "pnr", "configuracion"],
   certificacion: ["certificaciones"],
   prefacturas: ["pagos"],
 };
@@ -11226,6 +11226,7 @@ function BrainCentral({ setTab, usuario }) {
 
   const modulos = [
     { id: "pagos", label: "Administración", angle: 270, target: "pagos", ...stats.pagos },
+    { id: "maestro", label: "Maestro Op.", angle: 0, target: "maestro", ...stats.maestro },
     { id: "certificaciones", label: "Certificaciones", angle: 90, target: "certificaciones", ...stats.certificaciones },
     { id: "pnr", label: "PNR", angle: 180, target: "pnr", ...stats.pnr },
   ];
@@ -16241,7 +16242,8 @@ function calcularPagos({ maestro, snapshots, scZonas, especiales, matrizPrecios,
     // Ajuste por matriz visitado × NS (reemplaza a matriz_ns)
     const pctVisitadoEfectivo = pctVisitadoGate != null ? pctVisitadoGate : pctVisitado;
     const ajuste = calcularAjusteVisitadoNS(pctVisitadoEfectivo, nsPct, cfg);
-    const noPaga = ajuste.noPaga;
+    const noPagaNS0 = nsPct <= 0;  // Regla: nivel de servicio 0 => sin pago
+    const noPaga = ajuste.noPaga || noPagaNS0;
     const factorNS = 1 + (ajuste.pct / 100);
     const ajusteNS = tarifaBase * (ajuste.pct / 100);
 
@@ -16328,7 +16330,8 @@ function calcularPagos({ maestro, snapshots, scZonas, especiales, matrizPrecios,
     if (rutaNoOperada) obs.push(`🚫 NO OPERADA${m.motivo_no_operada ? `: ${m.motivo_no_operada}` : ""} — revisar antes de pagar`);
 
     // Descarte por visitado < 90% (reemplaza al viejo no_visitado > 10%)
-    if (noPaga) obs.push(`NO PAGADO: visitado ${pctVisitadoEfectivo != null ? pctVisitadoEfectivo.toFixed(2) : "?"}% < 90% (${pctVisitadoGate != null ? "REAL MELI" : "maestro"})`);
+    if (ajuste.noPaga) obs.push(`NO PAGADO: visitado ${pctVisitadoEfectivo != null ? pctVisitadoEfectivo.toFixed(2) : "?"}% < 90% (${pctVisitadoGate != null ? "REAL MELI" : "maestro"})`);
+    if (noPagaNS0) obs.push("NO PAGADO: NS 0% (sin entregas)");
     if (pctVisitadoGate != null && pctVisitado != null && Math.abs(pctVisitadoGate - pctVisitado) >= 5) {
       obs.push(`Visitado maestro ${pctVisitado.toFixed(1)}% vs real ${pctVisitadoGate.toFixed(1)}% — gate usó el REAL`);
     }
