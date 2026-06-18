@@ -15066,6 +15066,32 @@ function ConciliacionTercerosMX({ usuario }) {
     setImportBusy(false); setImportRows(null); setImportOpen(false);
     setMsg({ ok: fail === 0, txt: `Importación: ${ok} ajuste(s) aplicados, ${fail} con error.` + (errores.length ? " — " + errores.join(" | ") : "") });
   };
+  const quitarImportados = async () => {
+    if (!confirm(`¿Quitar TODAS las líneas importadas por Excel de la semana ${semana} (viajes y ajustes)?\n\nLas líneas del cálculo normal (motor) se conservan. Esto no se puede deshacer.`)) return;
+    setImportBusy(true);
+    try {
+      const { data: concs } = await sb.from("conciliaciones_terceros").select("*").eq("semana", semana);
+      let quitadas = 0, afectadas = 0;
+      for (const c of (concs || [])) {
+        const det = Array.isArray(c.detalle) ? c.detalle : [];
+        const limpio = det.filter(d => !(d && (d.importado === true || String(d._id || "").startsWith("imp|"))));
+        const nQuit = det.length - limpio.length;
+        if (!nQuit) continue;
+        quitadas += nQuit; afectadas++;
+        if (limpio.length === 0) {
+          await sb.from("conciliaciones_terceros").delete().eq("empresa_nombre", c.empresa_nombre).eq("service_center", c.service_center).eq("semana", semana);
+        } else {
+          await guardarBorradorSC(c.empresa_nombre, c.service_center, limpio, Number(c.total_cobros || 0));
+        }
+        await auditarAjuste(c.empresa_nombre, c.service_center, "quitar_importados", "importado", null, `Quitó ${nQuit} línea(s) importada(s)`);
+      }
+      setDetalles({});
+      await cargarResumen(semana);
+      setImportOpen(false); setImportRows(null);
+      setMsg({ ok: true, txt: `Se quitaron ${quitadas} línea(s) importada(s) en ${afectadas} prefactura(s) de la semana ${semana}.` });
+    } catch (e) { console.error("quitar importados:", e); setMsg({ ok: false, txt: "Error quitando importadas: " + (e.message || e) }); }
+    setImportBusy(false);
+  };
   const construirPrefactura = (empresa, sc, filasSC, rSC, cobrosOverride) => {
     const tot = recalcSC(filasSC, cobrosOverride != null ? cobrosOverride : cobrosDe(empresa, sc));
     const t = transpPorNorm[norm(empresa)] || {};
@@ -15437,6 +15463,7 @@ function ConciliacionTercerosMX({ usuario }) {
             <div style={{ fontSize: 12, color: "#64748b", marginBottom: 12 }}>Carga viajes, cargos o descuentos a la semana abierta. El <b>signo del monto manda</b> (+ suma, − resta, 0 también). Los avisos (ruta repetida, empresa nueva) <b>NO bloquean</b>: el analista decide. Empresa no registrada se crea como prefactura nueva.</div>
             <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 14, flexWrap: "wrap" }}>
               <button onClick={descargarPlantillaAjustes} style={{ padding: "6px 12px", background: "#fff", color: "#1a3a6b", border: "1px solid #1a3a6b", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>⬇ Descargar plantilla</button>
+              <button onClick={quitarImportados} disabled={importBusy} style={{ padding: "6px 12px", background: "#fff", color: "#b91c1c", border: "1px solid #fca5a5", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>🗑 Quitar líneas importadas (semana)</button>
               <input type="file" accept=".xlsx,.xls" onChange={onArchivoAjustes} style={{ fontSize: 12 }} />
             </div>
             {importRows && (
