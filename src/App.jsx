@@ -14476,6 +14476,8 @@ function ConciliacionTercerosMX({ usuario }) {
     return s != null ? s - 1 : 24; // por defecto: última semana cerrada
   });
   const [resumen, setResumen] = useState([]);          // 1 fila por empresa+SC
+  const [ajustesEmp, setAjustesEmp] = useState({});    // norm(empresa) -> n ajustes (líneas origen="ajuste")
+  const [ajustesSC, setAjustesSC] = useState({});      // norm(empresa)||norm(sc) -> n ajustes
   const [loading, setLoading] = useState(true);
   const [expandida, setExpandida] = useState(null);    // nombre de empresa abierta
   const [detalles, setDetalles] = useState({});        // empresa -> filas (todos los SC)
@@ -14528,6 +14530,18 @@ function ConciliacionTercerosMX({ usuario }) {
       const { data, error } = await sb.rpc("get_conciliacion_terceros_resumen", { p_semana: sem });
       if (error) throw error;
       setResumen(data || []);
+      // Conteo de ajustes (líneas origen="ajuste") por empresa y por SC, desde el detalle guardado
+      try {
+        const { data: concs } = await sb.from("conciliaciones_terceros").select("empresa_nombre, service_center, detalle").eq("semana", sem);
+        const mapE = {}, mapS = {};
+        for (const c of (concs || [])) {
+          const nA = Array.isArray(c.detalle) ? c.detalle.filter(d => d && d.origen === "ajuste").length : 0;
+          if (!nA) continue;
+          mapE[norm(c.empresa_nombre)] = (mapE[norm(c.empresa_nombre)] || 0) + nA;
+          mapS[`${norm(c.empresa_nombre)}||${norm(c.service_center)}`] = nA;
+        }
+        setAjustesEmp(mapE); setAjustesSC(mapS);
+      } catch (er) { console.error("conteo ajustes:", er); setAjustesEmp({}); setAjustesSC({}); }
     } catch (e) {
       console.error("resumen conciliación:", e);
       setMsg({ ok: false, txt: "Error cargando resumen: " + (e.message || e) });
@@ -15560,6 +15574,7 @@ function ConciliacionTercerosMX({ usuario }) {
                 <div style={{ display: "flex", gap: 18, alignItems: "center", flexWrap: "wrap" }}>
                   <div style={{ textAlign: "center" }}><div style={{ fontSize: 10, color: "#94a3b8" }}>Viajes</div><div style={{ fontWeight: 800 }}>{g.nViajes}</div></div>
                   <div style={{ textAlign: "center" }}><div style={{ fontSize: 10, color: "#94a3b8" }}>No pago</div><div style={{ fontWeight: 800, color: g.nNoPago > 0 ? "#dc2626" : "#94a3b8" }}>{g.nNoPago}</div></div>
+                  <div style={{ textAlign: "center" }}><div style={{ fontSize: 10, color: "#94a3b8" }}>Ajustes</div><div style={{ fontWeight: 800, color: (ajustesEmp[norm(g.empresa)] || 0) > 0 ? "#a16207" : "#94a3b8" }}>{ajustesEmp[norm(g.empresa)] || 0}</div></div>
                   <div style={{ textAlign: "center" }}><div style={{ fontSize: 10, color: "#94a3b8" }}>Neto</div><div style={{ fontWeight: 800, color: "#16a34a" }}>{fmtMon(g.totalNeto)}</div></div>
                   <div style={{ textAlign: "center" }}><div style={{ fontSize: 10, color: "#94a3b8" }}>Bruto</div><div style={{ fontWeight: 800 }}>{fmtMon(g.totalBruto)}</div></div>
                   <div style={{ fontSize: 16, color: "#94a3b8" }}>{abierta ? "▾" : "▸"}</div>
@@ -15596,7 +15611,7 @@ function ConciliacionTercerosMX({ usuario }) {
                                 <span style={{ fontWeight: 800, color: "#1a3a6b", fontSize: 13 }}>SC {rSC.service_center}</span>
                                 {chipEstado(rSC.estado_conciliacion)}
                                 <span style={{ fontSize: 11, color: "#64748b" }}>
-                                  Sup: {rSC.supervisor || "—"} · {rSC.n_viajes} viajes · {rSC.n_no_pago} no pago · Neto {fmtMon(rSC.neto_guardado != null ? rSC.neto_guardado : rSC.total_neto)} · Bruto {fmtMon(rSC.bruto_guardado != null ? rSC.bruto_guardado : rSC.total_bruto)}{rSC.tiene_ajustes ? " · ✏️ ajustada" : ""}{rSC.enviado_at ? " · 📤 " + new Date(rSC.enviado_at).toLocaleDateString("es-CL") : ""}
+                                  Sup: {rSC.supervisor || "—"} · {rSC.n_viajes} viajes · {rSC.n_no_pago} no pago{(ajustesSC[`${norm(g.empresa)}||${norm(rSC.service_center)}`] || 0) > 0 ? ` · ${ajustesSC[`${norm(g.empresa)}||${norm(rSC.service_center)}`]} ajuste(s)` : ""} · Neto {fmtMon(rSC.neto_guardado != null ? rSC.neto_guardado : rSC.total_neto)} · Bruto {fmtMon(rSC.bruto_guardado != null ? rSC.bruto_guardado : rSC.total_bruto)}{rSC.tiene_ajustes ? " · ✏️ ajustada" : ""}{rSC.enviado_at ? " · 📤 " + new Date(rSC.enviado_at).toLocaleDateString("es-CL") : ""}
                                 </span>
                               </div>
                               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
