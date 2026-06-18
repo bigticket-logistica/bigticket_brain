@@ -14896,7 +14896,7 @@ function ConciliacionTercerosMX({ usuario }) {
     try {
       if (!(await asegurarXLSX())) { setMsg({ ok: false, txt: "No se pudo cargar la librería de Excel." }); return; }
       const buf = await file.arrayBuffer();
-      const wb = window.XLSX.read(buf, { type: "array" });
+      const wb = window.XLSX.read(buf, { type: "array", cellDates: true });
       const sheetName = wb.SheetNames.includes("Ajustes") ? "Ajustes" : wb.SheetNames[0];
       const ws = wb.Sheets[sheetName];
       const json = window.XLSX.utils.sheet_to_json(ws, { defval: "" });
@@ -14911,12 +14911,14 @@ function ConciliacionTercerosMX({ usuario }) {
         return null;
       };
       const numOrNull = (v) => { if (v === "" || v == null) return null; const n = Number(String(v).replace(/[^0-9.\-]/g, "")); return isNaN(n) ? null : n; };
+      const _pad = (n) => String(n).padStart(2, "0");
       const parseFecha = (v) => {
-        if (v === "" || v == null) return null;
-        if (typeof v === "number") { const d = new Date(Math.round((v - 25569) * 86400000)); return isNaN(d) ? null : d.toISOString().slice(0, 10); }
+        if (v === "" || v == null || v === "-") return null;
+        if (v instanceof Date && !isNaN(v)) return `${v.getFullYear()}-${_pad(v.getMonth() + 1)}-${_pad(v.getDate())}`;  // Date (cellDates) -> ISO sin corrimiento de zona
+        if (typeof v === "number") { const d = new Date(Math.round((v - 25569) * 86400000)); return isNaN(d) ? null : `${d.getUTCFullYear()}-${_pad(d.getUTCMonth() + 1)}-${_pad(d.getUTCDate())}`; }
         const s = String(v).trim();
-        let mm = s.match(/^(\d{4})-(\d{2})-(\d{2})/); if (mm) return `${mm[1]}-${mm[2]}-${mm[3]}`;
-        mm = s.match(/^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{4})/); if (mm) return `${mm[3]}-${String(mm[2]).padStart(2,"0")}-${String(mm[1]).padStart(2,"0")}`;
+        let mm = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/); if (mm) return `${mm[1]}-${_pad(mm[2])}-${_pad(mm[3])}`;  // ISO
+        mm = s.match(/^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{2,4})/); if (mm) { let y = mm[3]; if (y.length === 2) y = "20" + y; return `${y}-${_pad(mm[2])}-${_pad(mm[1])}`; }  // dd-mm-aaaa (o dd/mm/aa)
         return s.slice(0, 10);
       };
       const idCache = {};
@@ -14966,7 +14968,7 @@ function ConciliacionTercerosMX({ usuario }) {
           if (seen.has(k2)) error = `Ruta ${idRuta} duplicada en el archivo`;
           else { const set = await idRutasDe(match.empresa, match.sc); if (set.has(idRuta)) error = `Ruta ${idRuta} ya existe en la conciliación`; else seen.add(k2); }
         }
-        const montoFirmado = tipo === "descuento" ? -Math.abs(montoNum) : tipo === "viaje" ? montoNum : Math.abs(montoNum);
+        const montoFirmado = montoNum;  // el signo lo pone el analista: + suma, − resta (sin forzar por tipo)
         const conceptoShow = tipo === "viaje" ? (concepto || `Ruta ${idRuta || "?"} · ${placa || ""}${conductor ? " · " + conductor : ""}`) : concepto;
         rows.push({ kind: tipo === "viaje" ? "viaje" : "ajuste", tipo, empresa: match ? match.empresa : empresa, sc: match ? match.sc : sc,
           fecha, placa, id_ruta: idRuta, driver_name: conductor, aux: ["si","sí","s","1","true","x"].includes(auxRaw),
@@ -15004,9 +15006,13 @@ function ConciliacionTercerosMX({ usuario }) {
           km_pago: a.km_pago != null ? Number(a.km_pago) : null, factor_ns: a.factor_ns != null ? Number(a.factor_ns) : null,
           monto_bonificacion: a.monto_bonificacion != null ? Number(a.monto_bonificacion) : 0, monto: a.montoFirmado };
       }
-      return { ...baseLn, origen: "ajuste", fecha: null, placa: "AJUSTE", id_ruta: "—", driver_name: a.concepto,
-        tiene_auxiliar: false, cargado: null, entregado: null, pct_entrega: null, pct_visitado_gate: null,
-        km_pago: null, factor_ns: null, monto: a.montoFirmado, monto_bonificacion: 0 };
+      return { ...baseLn, origen: "ajuste", fecha: a.fecha || null,
+        placa: (a.placa || "").toUpperCase() || "AJUSTE", id_ruta: a.id_ruta || "—", driver_name: a.concepto,
+        tiene_auxiliar: !!a.aux,
+        cargado: a.cargado != null ? Number(a.cargado) : null, entregado: a.entregado != null ? Number(a.entregado) : null,
+        pct_entrega: a.pct_entrega != null ? Number(a.pct_entrega) : null, pct_visitado_gate: a.pct_visitado_gate != null ? Number(a.pct_visitado_gate) : null,
+        km_pago: a.km_pago != null ? Number(a.km_pago) : null, factor_ns: a.factor_ns != null ? Number(a.factor_ns) : null,
+        monto: a.montoFirmado, monto_bonificacion: a.monto_bonificacion != null ? Number(a.monto_bonificacion) : 0 };
     });
     const filasSC = [...filas.filter(d => (d.service_center_id || "SIN SC") === sc), ...nuevas];
     await guardarBorradorSC(empresa, sc, filasSC, cobrosDe(empresa, sc));
