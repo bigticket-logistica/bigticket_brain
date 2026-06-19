@@ -15848,6 +15848,7 @@ function ConciliacionTercerosMX({ usuario }) {
         <button onClick={abrirTodo} disabled={cerrando === "__abrir__"} style={{ padding: "8px 16px", background: cerrando === "__abrir__" ? "#94a3b8" : "#fff", color: cerrando === "__abrir__" ? "#fff" : "#9a3412", border: "1px solid #fdba74", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>{cerrando === "__abrir__" ? "Abriendo..." : "🔓 Abrir todo"}</button>
         <button onClick={cerrarTodo} disabled={cerrando === "__todo__"} style={{ padding: "8px 16px", background: cerrando === "__todo__" ? "#94a3b8" : "#166534", color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>{cerrando === "__todo__" ? "Cerrando..." : "🔒 Cerrar todo"}</button>
         <button onClick={enviarTodo} disabled={enviando === "__todo__"} style={{ padding: "8px 16px", background: enviando === "__todo__" ? "#94a3b8" : "#1e40af", color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>{enviando === "__todo__" ? "Enviando..." : "📧 Enviar todo"}</button>
+        <button onClick={() => generarReporteCierre({})} title="Genera y envía el informe consolidado de la semana a los destinatarios de arriba" style={{ padding: "8px 16px", background: "#fff", color: "#1a3a6b", border: "1px solid #1a3a6b", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>📄 Reporte</button>
         <button onClick={() => { setImportRows(null); setImportOpen(true); }} style={{ padding: "8px 16px", background: "#1a3a6b", color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>📥 Importar ajustes (Excel)</button>
         </div>
       </div>
@@ -16001,6 +16002,7 @@ function ConciliacionTercerosMX({ usuario }) {
                     {esSinEmpresa ? "⚠️ " + g.empresa : g.empresa}
                     {!esSinEmpresa && <span style={{ fontSize: 11, fontWeight: 600, color: "#7c3aed", background: "#f3e8ff", padding: "1px 7px", borderRadius: 8 }}>{g.filasSC.length} SC</span>}
                     {!esSinEmpresa && saldoEmpresa(g.empresa) < 0 && <span style={{ fontSize: 11, fontWeight: 800, color: "#9a3412", background: "#ffedd5", padding: "1px 7px", borderRadius: 8 }}>⚠️ Saldo pendiente {fmtMon(saldoEmpresa(g.empresa))}</span>}
+                    {!esSinEmpresa && g.totalNeto < 0 && <span style={{ fontSize: 11, fontWeight: 800, color: "#9a3412", background: "#fee2e2", padding: "1px 7px", borderRadius: 8 }}>⚠️ Negativo → irá a pendiente</span>}
                   </div>
                   <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 2 }}>
                     {esSinEmpresa
