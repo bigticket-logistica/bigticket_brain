@@ -14559,6 +14559,7 @@ function ConciliacionTercerosMX({ usuario }) {
   const [cerrando, setCerrando] = useState(null);      // "empresa||SC" en proceso
   const [msg, setMsg] = useState(null);
   const [cobrosPorSC, setCobrosPorSC] = useState({});   // empresa -> { sc: cobros }
+  const [saldosPorSC, setSaldosPorSC] = useState({});   // "empresa||sc" -> { pendiente, semanaOrigen } (arrastre de negativos)
   const [formLinea, setFormLinea] = useState(null);     // alta de línea (ajuste/viaje) o null
   const [guardandoEdit, setGuardandoEdit] = useState(null); // clave empresa||sc en proceso
   const [seleccion, setSeleccion] = useState(() => new Set()); // claves cerradas marcadas para envío masivo
@@ -14618,6 +14619,15 @@ function ConciliacionTercerosMX({ usuario }) {
               estado_conciliacion: c.estado || "borrador", tiene_ajustes: !!c.tiene_ajustes, supervisor: null,
               rfc: tt.rfc || "", correo_to: tt.correo_to || "", enviado_at: c.enviado_at || null });
           }
+        }
+        // Arrastre de negativos: mostrar empresas con saldo pendiente aunque no tengan viajes esta semana
+        const saldoMap = await cargarSaldos(sem);
+        const have2 = new Set([...base, ...extra].map(r => `${norm(r.empresa)}||${norm(r.service_center)}`));
+        for (const k in saldoMap) {
+          if (have2.has(k)) continue;
+          const sObj = saldoMap[k]; const tt = transpPorNorm[norm(sObj.empresa)] || {};
+          extra.push({ empresa: sObj.empresa, service_center: sObj.sc, n_viajes: 0, n_no_pago: 0, total_neto: 0, total_bruto: 0, neto_guardado: 0, bruto_guardado: 0,
+            estado_conciliacion: "pendiente_conciliacion", tiene_ajustes: false, supervisor: null, rfc: tt.rfc || "", correo_to: tt.correo_to || "", enviado_at: null, _soloSaldo: true });
         }
         setAjustesEmp(mapE); setAjustesSC(mapS);
         if (extra.length) setResumen([...base, ...extra]);
@@ -14715,6 +14725,42 @@ function ConciliacionTercerosMX({ usuario }) {
     return { neto, iva, bruto, cobros: c, liquido, nViajes: (filas||[]).length, nNoPago: (filas||[]).filter(d => d.es_no_pago).length };
   };
   const cobrosDe = (empresa, sc) => Number((cobrosPorSC[empresa] || {})[sc] || 0);
+  const saldoPrevioDe = (empresa, sc) => Number((saldosPorSC[`${norm(empresa)}||${norm(sc)}`] || {}).pendiente || 0);
+  const saldoEmpresa = (empresa) => Object.entries(saldosPorSC).reduce((s, [k, v]) => s + (k.startsWith(norm(empresa) + "||") ? Number(v.pendiente || 0) : 0), 0);
+  const cargarSaldos = async (sem) => {
+    try {
+      const { data } = await sb.from("saldos_pendientes_terceros").select("*");
+      const map = {};
+      for (const row of (data || [])) {
+        const det = (row.detalle && typeof row.detalle === "object") ? row.detalle : {};
+        const aplic = det.aplicaciones || {}; const liq = Number(det.liquidado_hasta || 0);
+        let prev = 0; for (const w in aplic) { const ww = Number(w); if (ww > liq && ww < sem) prev += Number(aplic[w] || 0); }
+        prev = Math.round(prev * 100) / 100;
+        if (prev < 0) map[`${norm(row.empresa_nombre)}||${norm(row.service_center)}`] = { pendiente: prev, semanaOrigen: row.semana_origen, empresa: row.empresa_nombre, sc: row.service_center };
+      }
+      setSaldosPorSC(map); return map;
+    } catch (e) { console.error("cargar saldos:", e); setSaldosPorSC({}); return {}; }
+  };
+  const persistirSaldoCierre = async (empresa, sc, netoViajes) => {
+    try {
+      const { data: row } = await sb.from("saldos_pendientes_terceros").select("*").eq("empresa_nombre", empresa).eq("service_center", sc).maybeSingle();
+      const det = (row && row.detalle && typeof row.detalle === "object") ? row.detalle : {};
+      const aplic = { ...(det.aplicaciones || {}) }; const liq = Number(det.liquidado_hasta || 0);
+      aplic[String(semana)] = Number(netoViajes || 0);
+      let prev = 0; for (const w in aplic) { const ww = Number(w); if (ww > liq && ww < semana) prev += Number(aplic[w] || 0); }
+      const neteado = Math.round((prev + Number(netoViajes || 0)) * 100) / 100;
+      const lunes = rangoSemanaInventario(semana).inicio.toISOString().slice(0, 10);
+      const dom = rangoSemanaInventario(semana).fin.toISOString().slice(0, 10);
+      let estado, saldoPend, nuevoLiq = liq, semConc = null, concAt = null, semOrigen;
+      if (neteado >= 0) { estado = "conciliado"; saldoPend = 0; nuevoLiq = semana; semConc = semana; concAt = new Date().toISOString(); semOrigen = (row && row.semana_origen) || semana; }
+      else { estado = "pendiente"; saldoPend = neteado; semOrigen = (row && row.semana_origen) ? Math.min(row.semana_origen, semana) : semana; }
+      const payload = { empresa_nombre: empresa, service_center: sc, semana_origen: semOrigen, semana_inicio_orig: lunes, semana_fin_orig: dom,
+        monto_original: (row && row.monto_original != null) ? row.monto_original : neteado, saldo_pendiente: saldoPend, estado,
+        semana_conciliacion: semConc, detalle: { aplicaciones: aplic, liquidado_hasta: nuevoLiq }, conciliado_at: concAt };
+      if (row) await sb.from("saldos_pendientes_terceros").update(payload).eq("id", row.id);
+      else await sb.from("saldos_pendientes_terceros").insert(payload);
+    } catch (e) { console.error("persistir saldo cierre:", e); }
+  };
   const inpEdit = (w) => ({ width: w, padding: "6px 8px", border: "1px solid #e4e7ec", borderRadius: 6, fontSize: 12 });
 
   const auditarAjuste = async (empresa, sc, accion, origen_linea, linea, motivo) => {
@@ -14870,7 +14916,12 @@ function ConciliacionTercerosMX({ usuario }) {
   // ── Cerrar / reabrir conciliación por empresa+SC ──
   const cerrarConciliacion = async (empresa, sc, rSC, filasSC) => {
     if (!filasSC || !filasSC.length) return alert("Sin viajes para cerrar en " + sc + ".");
-    const tot = recalcSC(filasSC, cobrosDe(empresa, sc));
+    const _base = recalcSC(filasSC, cobrosDe(empresa, sc));
+    const _prev = saldoPrevioDe(empresa, sc);
+    const _neteado = Math.round((_base.neto + _prev) * 100) / 100;
+    const _neg = _neteado < 0;
+    const tot = { neto: _neteado, netoViajes: _base.neto, iva: _neg ? 0 : Math.round(_neteado * 0.16 * 100) / 100, bruto: _neg ? _neteado : Math.round(_neteado * 1.16 * 100) / 100, cobros: _base.cobros, nViajes: _base.nViajes, nNoPago: _base.nNoPago, negativo: _neg, saldoPrevio: _prev };
+    tot.liquido = Math.round((tot.bruto - tot.cobros) * 100) / 100;
     if (!confirm(`¿Cerrar la conciliación de "${empresa}" — ${sc} — semana ${semana} (${etiquetaSemanaInventario(semana)})?\n\nNeto: ${fmtMon(tot.neto)} · Bruto: ${fmtMon(tot.bruto)} · Cobros: ${fmtMon(tot.cobros)} · Líquido: ${fmtMon(tot.liquido)} · ${tot.nViajes} viajes (${tot.nNoPago} no pago).\n\nEl detalle queda congelado para el PDF y el envío.`)) return;
     setCerrando(claveCierre(empresa, sc));
     try {
@@ -14878,14 +14929,15 @@ function ConciliacionTercerosMX({ usuario }) {
       const ahora = new Date().toISOString();
       const { error } = await sb.from("conciliaciones_terceros").upsert({
         empresa_nombre: empresa, service_center: sc, semana, semana_inicio: lunes,
-        estado: "cerrada",
+        estado: tot.negativo ? "pendiente_conciliacion" : "cerrada",
         total_neto: tot.neto, iva_16: tot.iva, total_bruto: tot.bruto, liquido_pago: tot.liquido, total_cobros: tot.cobros,
         n_viajes: tot.nViajes, n_no_pago: tot.nNoPago,
         detalle: filasSC, tiene_ajustes: (filasSC.some(d => d.es_manual) || filasSC.length !== Number(rSC.n_viajes || 0)), generado_at: ahora, cerrado_at: ahora,
         cerrado_por: (usuario && (usuario.nombre || usuario.email)) || "Brain",
       }, { onConflict: "empresa_nombre,service_center,semana" });
       if (error) throw error;
-      await logEvento(empresa, sc, "cerrar", tot, { estado: "cerrada" });
+      if (tot.saldoPrevio < 0 || tot.netoViajes < 0) await persistirSaldoCierre(empresa, sc, tot.netoViajes);
+      await logEvento(empresa, sc, tot.negativo ? "cerrar_pendiente" : "cerrar", tot, { estado: tot.negativo ? "pendiente_conciliacion" : "cerrada" });
       setMsg({ ok: true, txt: `Conciliación de ${empresa} · ${sc} cerrada (semana ${semana}).` });
       await cargarResumen(semana);
     } catch (e) {
@@ -15390,32 +15442,45 @@ function ConciliacionTercerosMX({ usuario }) {
     const { data: row } = await sb.from("conciliaciones_terceros").select("*").eq("empresa_nombre", empresa).eq("service_center", sc).eq("semana", semana).maybeSingle();
     if (row && Array.isArray(row.detalle) && row.detalle.length) { filas = row.detalle; cobros = Number(row.total_cobros || 0); }
     else { const { data } = await sb.rpc("get_conciliacion_terceros_detalle", { p_semana: semana, p_empresa: empresa, p_sc: sc }); filas = data || []; cobros = cobrosDe(empresa, sc); }
-    if (!filas.length) return { skip: true };
-    const tot = recalcSC(filas, cobros);
+    const prev = saldoPrevioDe(empresa, sc);
+    if (!filas.length && prev === 0) return { skip: true };
+    const base = recalcSC(filas, cobros);
+    const netoViajes = base.neto;
+    const neteado = Math.round((netoViajes + prev) * 100) / 100;
+    const negativo = neteado < 0;
+    const iva = negativo ? 0 : Math.round(neteado * 0.16 * 100) / 100;
+    const bruto = negativo ? neteado : Math.round(neteado * 1.16 * 100) / 100;
+    const liquido = Math.round((bruto - base.cobros) * 100) / 100;
+    const estado = negativo ? "pendiente_conciliacion" : "cerrada";
     const lunes = rangoSemanaInventario(semana).inicio.toISOString().slice(0, 10);
     const ahora = new Date().toISOString();
     const { error } = await sb.from("conciliaciones_terceros").upsert({
-      empresa_nombre: empresa, service_center: sc, semana, semana_inicio: lunes, estado: "cerrada",
-      total_neto: tot.neto, iva_16: tot.iva, total_bruto: tot.bruto, liquido_pago: tot.liquido, total_cobros: tot.cobros,
-      n_viajes: tot.nViajes, n_no_pago: tot.nNoPago, detalle: filas, tiene_ajustes: true,
+      empresa_nombre: empresa, service_center: sc, semana, semana_inicio: lunes, estado,
+      total_neto: neteado, iva_16: iva, total_bruto: bruto, liquido_pago: liquido, total_cobros: base.cobros,
+      n_viajes: base.nViajes, n_no_pago: base.nNoPago, detalle: filas, tiene_ajustes: true,
       generado_at: ahora, cerrado_at: ahora, cerrado_por: (usuario && (usuario.nombre || usuario.email)) || "Brain",
     }, { onConflict: "empresa_nombre,service_center,semana" });
     if (error) throw error;
-    await logEvento(empresa, sc, "cerrar", tot, { estado: "cerrada", detalle: { masivo: true } });
-    return { ok: true, neto: tot.neto, liquido: tot.liquido };
+    if (prev < 0 || netoViajes < 0) await persistirSaldoCierre(empresa, sc, netoViajes);
+    await logEvento(empresa, sc, negativo ? "cerrar_pendiente" : "cerrar", { neto: neteado, bruto, liquido, nViajes: base.nViajes }, { estado, detalle: { masivo: true, saldoPrevio: prev, netoViajes } });
+    return { ok: true, negativo, neteado, liquido };
   };
   const cerrarTodo = async () => {
     const items = resumen.filter(r => r.empresa && r.empresa !== SIN_EMPRESA && Number(r.n_viajes || 0) > 0 && r.estado_conciliacion !== "enviada").map(r => ({ empresa: r.empresa, sc: r.service_center }));
     if (!items.length) return alert("No hay prefacturas para cerrar en la semana " + semana + ".");
-    if (!confirm(`\u26A0\uFE0F CERRAR TODO \u2014 semana ${semana} (${etiquetaSemanaInventario(semana)})\n\nVas a CERRAR ${items.length} prefactura(s). El detalle queda CONGELADO para PDF/env\u00edo.\nNo se env\u00edan correos (eso es \"Enviar todo\").\n\n\u00bfContinuar?`)) return;
+    if (!confirm(`\u26A0\uFE0F CERRAR TODO \u2014 semana ${semana} (${etiquetaSemanaInventario(semana)})\n\nVas a CERRAR ${items.length} prefactura(s). El detalle queda CONGELADO para PDF/env\u00edo.\nNo se env\u00edan correos a transportistas (eso es \"Enviar todo\"), pero S\u00cd se enviar\u00e1 el informe de cierre al equipo interno.\n\n\u00bfContinuar?`)) return;
     setCerrando("__todo__");
-    let ok = 0, fail = 0, skip = 0; const errores = [];
+    let ok = 0, fail = 0, skip = 0; const errores = [], pendientes = [];
     for (const it of items) {
-      try { const r = await cerrarUno(it.empresa, it.sc); if (r && r.skip) skip++; else ok++; }
+      try { const r = await cerrarUno(it.empresa, it.sc);
+        if (r && r.skip) skip++;
+        else { ok++; if (r && r.negativo) pendientes.push({ e: it.empresa, sc: it.sc, n: r.neteado }); } }
       catch (e) { fail++; errores.push(`${it.empresa}\u00b7${it.sc}: ${e.message || e}`); }
     }
     setCerrando(null); await cargarResumen(semana);
-    setMsg({ ok: fail === 0, txt: `Cierre masivo: ${ok} cerrada(s)${skip ? `, ${skip} sin viajes` : ""}, ${fail} con error.` + (errores.length ? " \u2014 " + errores.join(" | ") : "") });
+    if (pendientes.length) alert(`Quedan estas empresas con saldo negativo (se consolidar\u00e1n en los siguientes pagos):\n\n${pendientes.map(p => `\u2022 ${p.e} \u00b7 ${p.sc}  (${fmtMon(p.n)})`).join("\n")}\n\nSe guardaron como "pendiente de conciliaci\u00f3n" y NO se enviar\u00e1n.`);
+    setMsg({ ok: fail === 0, txt: `Cierre masivo: ${ok} cerrada(s)${pendientes.length ? `, ${pendientes.length} pendiente(s) de conciliaci\u00f3n` : ""}${skip ? `, ${skip} sin viajes` : ""}, ${fail} con error.` + (errores.length ? " \u2014 " + errores.join(" | ") : "") });
+    if (fail === 0 && ok > 0) { try { await generarReporteCierre({}); } catch (e) { console.error("reporte cierre:", e); } }
   };
   const enviarTodo = async () => {
     const { data: rows, error } = await sb.from("conciliaciones_terceros").select("*").eq("semana", semana);
@@ -15438,12 +15503,69 @@ function ConciliacionTercerosMX({ usuario }) {
     setMsg({ ok: fail === 0, txt: `Env\u00edo masivo: ${ok} enviada(s), ${negativas.length} negativa(s) retenida(s), ${fail} con error.` + (errores.length ? " \u2014 " + errores.join(" | ") : "") });
   };
 
+  // ── Reporte de cierre consolidado (Excel) → correo automático al equipo ──
+  const WEBHOOK_REPORTE_MX = "https://bigticket2026.app.n8n.cloud/webhook/reporte-cierre-mx";
+  const REPORTE_CIERRE_TO = "esteban.dussaut@bigticket.cl,alejandra.degollada@bigticket.cl,nicole.vargas@bigticket.cl,yaritza.medina@bigticket.cl,eduardo.stine@bigticket.cl,adriana.giummarra@bigticket.cl";
+  const CUERPO_REPORTE_CIERRE = "Estimados,\n\nEl motivo de este correo es para adjuntar el informe de cierre de prefacturas de la semana.\n\n\nSaludos cordiales";
+  const fmtPeriodoReporte = (ini, fin) => {
+    const M = ["ENE","FEB","MAR","ABR","MAY","JUN","JUL","AGO","SEP","OCT","NOV","DIC"];
+    const f = (d) => { const [y, mo, da] = d.toISOString().slice(0, 10).split("-"); return `${da} ${M[(+mo) - 1]}${y.slice(2)}`; };
+    return `${f(ini)} AL ${f(fin)}`;
+  };
+  const generarReporteCierre = async (opts) => {
+    const silent = !!(opts && opts.silent);
+    const { data: rows, error } = await sb.from("conciliaciones_terceros").select("*").eq("semana", semana);
+    if (error) { if (!silent) setMsg({ ok: false, txt: "Error leyendo conciliaciones para el reporte: " + error.message }); return null; }
+    const cerradas = (rows || []).filter(r => r.estado === "cerrada" || r.estado === "enviada");
+    if (!cerradas.length) { if (!silent) setMsg({ ok: false, txt: "No hay prefacturas cerradas para generar el reporte." }); return null; }
+    if (!(await asegurarXLSX())) { if (!silent) setMsg({ ok: false, txt: "No se pudo cargar la librería de Excel." }); return null; }
+    const { inicio, fin } = rangoSemanaInventario(semana);
+    const periodo = fmtPeriodoReporte(inicio, fin);
+    cerradas.sort((a, b) => String(a.service_center || "").localeCompare(String(b.service_center || "")) || String(a.empresa_nombre || "").localeCompare(String(b.empresa_nombre || "")));
+    const aoa = [["PERIODO DE PAGO", "CLIENTE", "OPERACIÓN", "TRANSPORTE", "RFC", "NETO", "IVA", "BRUTO"]];
+    let tNeto = 0, tIva = 0, tBruto = 0;
+    for (const r of cerradas) {
+      const tt = transpPorNorm[norm(r.empresa_nombre)] || {};
+      const neto = Number(r.total_neto || 0), iva = Number(r.iva_16 || 0), bruto = Number(r.total_bruto || 0);
+      tNeto += neto; tIva += iva; tBruto += bruto;
+      aoa.push([periodo, "MERCADO LIBRE", `ML_MX_${r.service_center || ""}`, r.empresa_nombre, tt.rfc || "", neto, iva, bruto]);
+    }
+    aoa.push(["", "", "", "TOTAL", "", tNeto, tIva, tBruto]);
+    const ws = window.XLSX.utils.aoa_to_sheet(aoa);
+    ws["!cols"] = [{ wch: 22 }, { wch: 14 }, { wch: 14 }, { wch: 36 }, { wch: 16 }, { wch: 13 }, { wch: 12 }, { wch: 13 }];
+    const wb = window.XLSX.utils.book_new();
+    window.XLSX.utils.book_append_sheet(wb, ws, "Cierre");
+    const b64 = window.XLSX.write(wb, { type: "base64", bookType: "xlsx" });
+    const nombreArchivo = `Cierre_prefacturas_sem${semana}_${periodo.replace(/\s+/g, "_")}.xlsx`;
+    const to = (opts && opts.to) || REPORTE_CIERRE_TO;
+    let enviado = false, messageId = null, errEnvio = "";
+    try {
+      const resp = await fetch(WEBHOOK_REPORTE_MX, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ semana, periodo, to, cc: "", asunto: `Informe de cierre de prefacturas — ${periodo}`, cuerpo: CUERPO_REPORTE_CIERRE, nombreArchivo, xlsxBase64: b64 }),
+      });
+      const data = await resp.json().catch(() => ({}));
+      enviado = resp.ok && data.ok === true; messageId = data.messageId || null;
+      if (!enviado) errEnvio = (data && data.error) || ("HTTP " + resp.status);
+    } catch (e) { errEnvio = e.message || String(e); }
+    try {
+      await sb.from("reportes_cierre").insert({
+        semana, periodo, generado_por: (usuario && (usuario.nombre || usuario.email)) || "Brain",
+        destinatarios: to, n_prefacturas: cerradas.length, total_neto: tNeto, total_iva: tIva, total_bruto: tBruto,
+        nombre_archivo: nombreArchivo, archivo_base64: b64, enviado, message_id: messageId,
+      });
+    } catch (e) { console.error("guardar reporte_cierre:", e); }
+    try { await logEvento("(REPORTE)", "-", "reporte_cierre", { neto: tNeto, bruto: tBruto, liquido: tBruto, nViajes: cerradas.length }, { detalle: { enviado, destinatarios: to, nombreArchivo } }); } catch (e) {}
+    if (!silent) setMsg({ ok: enviado, txt: enviado ? `Informe de cierre (${cerradas.length} prefacturas, ${periodo}) enviado a: ${to}` : `Informe generado y guardado, pero el envío falló: ${errEnvio}. Podés reintentar desde Historial de Pago.` });
+    return { enviado, nombreArchivo, b64, n: cerradas.length, periodo, totales: { tNeto, tIva, tBruto } };
+  };
   // ── Helpers de render ──
   const chipEstado = (estado) => {
     const map = {
       sin_generar: { bg: "#f1f5f9", fg: "#64748b", txt: "Sin generar" },
       borrador: { bg: "#fef9c3", fg: "#854d0e", txt: "Borrador" },
       cerrada: { bg: "#dcfce7", fg: "#166534", txt: "Cerrada" },
+      pendiente_conciliacion: { bg: "#ffedd5", fg: "#9a3412", txt: "Pend. conciliación" },
       enviada: { bg: "#dbeafe", fg: "#1e40af", txt: "Enviada" },
     };
     const c = map[estado] || map.sin_generar;
@@ -15742,6 +15864,7 @@ function ConciliacionTercerosMX({ usuario }) {
                   <div style={{ fontSize: 13, fontWeight: 800, color: esSinEmpresa ? "#c2410c" : "#1a3a6b", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                     {esSinEmpresa ? "⚠️ " + g.empresa : g.empresa}
                     {!esSinEmpresa && <span style={{ fontSize: 11, fontWeight: 600, color: "#7c3aed", background: "#f3e8ff", padding: "1px 7px", borderRadius: 8 }}>{g.filasSC.length} SC</span>}
+                    {!esSinEmpresa && saldoEmpresa(g.empresa) < 0 && <span style={{ fontSize: 11, fontWeight: 800, color: "#9a3412", background: "#ffedd5", padding: "1px 7px", borderRadius: 8 }}>⚠️ Saldo pendiente {fmtMon(saldoEmpresa(g.empresa))}</span>}
                   </div>
                   <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 2 }}>
                     {esSinEmpresa
