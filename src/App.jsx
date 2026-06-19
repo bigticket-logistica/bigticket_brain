@@ -13607,6 +13607,16 @@ function FormularioInicialSC({ scId, fecha }) {
         📝 Formulario del supervisor ({fecha})
         {row.estado_dia && <span style={{ fontSize: 10, fontWeight: 600, color: "#9ca3af", marginLeft: 6 }}>· {row.estado_dia}</span>}
       </div>
+      {/* Jornada SIN OPERACIÓN — color especial + motivo del supervisor */}
+      {row.sin_operacion === true && (
+        <div style={{ background: "#fff7ed", border: "2px solid #f59e0b", borderRadius: 8, padding: "10px 12px", marginBottom: 8 }}>
+          <div style={{ fontSize: 13, fontWeight: 800, color: "#92400e" }}>🚫 JORNADA SIN OPERACIÓN</div>
+          <div style={{ fontSize: 11, color: "#b45309", marginTop: 2 }}>El supervisor marcó este día como sin operación. Los 5 ítems no aplican.</div>
+          {row.sin_operacion_motivo && String(row.sin_operacion_motivo).trim()
+            ? <div style={{ fontSize: 12, color: "#7c2d12", marginTop: 6, fontStyle: "italic", whiteSpace: "pre-wrap" }}>💬 {row.sin_operacion_motivo}</div>
+            : <div style={{ fontSize: 11, color: "#dc2626", fontWeight: 600, marginTop: 6 }}>(sin motivo cargado)</div>}
+        </div>
+      )}
       <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
 
         {/* 1 · Ayudantes con detalle expandible */}
@@ -13949,7 +13959,7 @@ function PanelControlSupervisores() {
 
   // ─── Cálculo de estado HOY: cuántos de los 5 ítems declaró ──────────
   function estadoHoy(row) {
-    if (!row) return { completados: 0, total: 5, items: itemsVacios() };
+    if (!row) return { completados: 0, total: 5, items: itemsVacios(), sinOperacion: false, motivo: "" };
     const items = {
       ayudantes: row.declarado_ayudantes_si_no !== null && row.declarado_ayudantes_si_no !== undefined,
       ambulancias: row.declarado_ambulancias_si_no !== null && row.declarado_ambulancias_si_no !== undefined,
@@ -13958,7 +13968,7 @@ function PanelControlSupervisores() {
       pnr: row.declarado_pnr_si_no !== null && row.declarado_pnr_si_no !== undefined,
     };
     const completados = Object.values(items).filter(Boolean).length;
-    return { completados, total: 5, items };
+    return { completados, total: 5, items, sinOperacion: row.sin_operacion === true, motivo: row.sin_operacion_motivo || "" };
   }
   function itemsVacios() {
     return { ayudantes: false, ambulancias: false, cancelaciones: false, noshow: false, pnr: false };
@@ -13994,7 +14004,7 @@ function PanelControlSupervisores() {
     let completaronHoy = 0, conciliaronD1 = 0;
     for (const s of supervisores) {
       const eh = estadoHoy(bitHoy[s.sc]);
-      if (eh.completados === 5) completaronHoy++;
+      if (eh.completados === 5 || eh.sinOperacion) completaronHoy++;
       const ed = estadoD1(bitAyer[s.sc]);
       if (ed.estado === "ok") conciliaronD1++;
     }
@@ -14073,14 +14083,17 @@ function PanelControlSupervisores() {
                 const eh = estadoHoy(bitHoy[s.sc]);
                 const ed = estadoD1(bitAyer[s.sc]);
                 const abierto = expandido.has(s.sc);
-                const hoyColor = eh.completados === 5 ? "#16a34a" : eh.completados === 0 ? "#dc2626" : "#d97706";
+                const sinOp = eh.sinOperacion;
+                const hoyColor = sinOp ? "#b45309" : eh.completados === 5 ? "#16a34a" : eh.completados === 0 ? "#dc2626" : "#d97706";
                 return (
                   <Fragment key={s.sc}>
-                    <tr style={{ borderBottom: "1px solid #f1f5f9", cursor: "pointer" }} onClick={() => toggle(s.sc)}>
+                    <tr style={{ borderBottom: "1px solid #f1f5f9", cursor: "pointer", background: sinOp ? "#fff7ed" : undefined }} onClick={() => toggle(s.sc)}>
                       <td style={{ ...tdPanel(), fontFamily: "monospace", fontWeight: 700 }}>{s.sc}</td>
                       <td style={tdPanel()}>{s.nombre || "—"}</td>
                       <td style={{ ...tdPanel("center"), fontWeight: 700, color: hoyColor }}>
-                        {eh.completados === 5 ? "✅" : eh.completados === 0 ? "❌" : "🟡"} {eh.completados}/5
+                        {sinOp
+                          ? "🚫 Sin op."
+                          : `${eh.completados === 5 ? "✅" : eh.completados === 0 ? "❌" : "🟡"} ${eh.completados}/5`}
                       </td>
                       <td style={tdPanel("center")}>
                         <span style={{ fontSize: 11, color: "#6b7280" }}>{abierto ? "▲ cerrar" : "▼ ver"}</span>
