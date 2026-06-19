@@ -14670,6 +14670,7 @@ function ConciliacionTercerosMX({ usuario }) {
   const [msg, setMsg] = useState(null);
   const [cobrosPorSC, setCobrosPorSC] = useState({});   // empresa -> { sc: cobros }
   const [saldosPorSC, setSaldosPorSC] = useState({});   // "empresa||sc" -> { pendiente, semanaOrigen } (arrastre de negativos)
+  const [placasViejas, setPlacasViejas] = useState({}); // placa -> primera semana que apareció sin empresa (anteriores)
   const [formLinea, setFormLinea] = useState(null);     // alta de línea (ajuste/viaje) o null
   const [guardandoEdit, setGuardandoEdit] = useState(null); // clave empresa||sc en proceso
   const [seleccion, setSeleccion] = useState(() => new Set()); // claves cerradas marcadas para envío masivo
@@ -14732,6 +14733,7 @@ function ConciliacionTercerosMX({ usuario }) {
         }
         // Arrastre de negativos: mostrar empresas con saldo pendiente aunque no tengan viajes esta semana
         const saldoMap = await cargarSaldos(sem);
+        await cargarPlacasViejas(sem);
         const have2 = new Set([...base, ...extra].map(r => `${norm(r.empresa)}||${norm(r.service_center)}`));
         for (const k in saldoMap) {
           if (have2.has(k)) continue;
@@ -14870,6 +14872,30 @@ function ConciliacionTercerosMX({ usuario }) {
       if (row) await sb.from("saldos_pendientes_terceros").update(payload).eq("id", row.id);
       else await sb.from("saldos_pendientes_terceros").insert(payload);
     } catch (e) { console.error("persistir saldo cierre:", e); }
+  };
+  const cargarPlacasViejas = async (sem) => {
+    try {
+      const { data } = await sb.from("placas_sin_empresa").select("placa, semana").lt("semana", sem);
+      const map = {}; for (const r of (data || [])) { if (!map[r.placa] || r.semana < map[r.placa]) map[r.placa] = r.semana; }
+      setPlacasViejas(map);
+    } catch (e) { console.error("placas viejas:", e); setPlacasViejas({}); }
+  };
+  const guardarPlacasSinEmpresa = async () => {
+    try {
+      const { data } = await sb.rpc("get_conciliacion_terceros_detalle", { p_semana: semana, p_empresa: SIN_EMPRESA, p_sc: null });
+      const filas = data || []; if (!filas.length) return;
+      const porP = {}; for (const f of filas) { const p = f.placa || "\u2014"; (porP[p] = porP[p] || []).push(f); }
+      const lunes = rangoSemanaInventario(semana).inicio.toISOString().slice(0, 10);
+      const dom = rangoSemanaInventario(semana).fin.toISOString().slice(0, 10);
+      for (const placa in porP) {
+        const fl = porP[placa]; const neto = fl.reduce((s, f) => s + Number(f.monto || 0), 0);
+        const payload = { placa, semana, semana_inicio: lunes, semana_fin: dom, n_viajes: fl.length, neto, estado: "sin_empresa",
+          detalle: { scs: [...new Set(fl.map(f => f.service_center_id).filter(Boolean))], conductores: [...new Set(fl.map(f => f.driver_name).filter(Boolean))] } };
+        const { data: ex } = await sb.from("placas_sin_empresa").select("id").eq("placa", placa).eq("semana", semana).maybeSingle();
+        if (ex) await sb.from("placas_sin_empresa").update(payload).eq("id", ex.id);
+        else await sb.from("placas_sin_empresa").insert(payload);
+      }
+    } catch (e) { console.error("guardar placas sin empresa:", e); }
   };
   const inpEdit = (w) => ({ width: w, padding: "6px 8px", border: "1px solid #e4e7ec", borderRadius: 6, fontSize: 12 });
 
@@ -15587,6 +15613,7 @@ function ConciliacionTercerosMX({ usuario }) {
         else { ok++; if (r && r.negativo) pendientes.push({ e: it.empresa, sc: it.sc, n: r.neteado }); } }
       catch (e) { fail++; errores.push(`${it.empresa}\u00b7${it.sc}: ${e.message || e}`); }
     }
+    await guardarPlacasSinEmpresa();
     setCerrando(null); await cargarResumen(semana);
     if (pendientes.length) alert(`Quedan estas empresas con saldo negativo (se consolidar\u00e1n en los siguientes pagos):\n\n${pendientes.map(p => `\u2022 ${p.e} \u00b7 ${p.sc}  (${fmtMon(p.n)})`).join("\n")}\n\nSe guardaron como "pendiente de conciliaci\u00f3n" y NO se enviar\u00e1n.`);
     setMsg({ ok: fail === 0, txt: `Cierre masivo: ${ok} cerrada(s)${pendientes.length ? `, ${pendientes.length} pendiente(s) de conciliaci\u00f3n` : ""}${skip ? `, ${skip} sin viajes` : ""}, ${fail} con error.` + (errores.length ? " \u2014 " + errores.join(" | ") : "") });
@@ -16000,6 +16027,7 @@ function ConciliacionTercerosMX({ usuario }) {
                 <div style={{ flex: "1 1 260px", minWidth: 220 }}>
                   <div style={{ fontSize: 13, fontWeight: 800, color: esSinEmpresa ? "#c2410c" : "#1a3a6b", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                     {esSinEmpresa ? "⚠️ " + g.empresa : g.empresa}
+                    {esSinEmpresa && det && Object.keys(porPlaca).some(p => placasViejas[p]) && <span style={{ fontSize: 11, fontWeight: 700, color: "#9a3412", background: "#ffedd5", padding: "1px 7px", borderRadius: 8 }}>⚠️ {Object.keys(porPlaca).filter(p => placasViejas[p]).length} de semanas anteriores</span>}
                     {!esSinEmpresa && <span style={{ fontSize: 11, fontWeight: 600, color: "#7c3aed", background: "#f3e8ff", padding: "1px 7px", borderRadius: 8 }}>{g.filasSC.length} SC</span>}
                     {!esSinEmpresa && saldoEmpresa(g.empresa) < 0 && <span style={{ fontSize: 11, fontWeight: 800, color: "#9a3412", background: "#ffedd5", padding: "1px 7px", borderRadius: 8 }}>⚠️ Saldo pendiente {fmtMon(saldoEmpresa(g.empresa))}</span>}
                     {!esSinEmpresa && g.totalNeto < 0 && <span style={{ fontSize: 11, fontWeight: 800, color: "#9a3412", background: "#fee2e2", padding: "1px 7px", borderRadius: 8 }}>⚠️ Negativo → irá a pendiente</span>}
@@ -16110,6 +16138,7 @@ function ConciliacionTercerosMX({ usuario }) {
                           return (
                             <div key={placa} style={{ display: "flex", alignItems: "center", gap: 12, background: "#fff", border: "1px solid #fed7aa", borderRadius: 8, padding: "8px 12px", flexWrap: "wrap" }}>
                               <div style={{ minWidth: 90, fontWeight: 800, color: "#1a3a6b" }}>{placa}</div>
+                              {placasViejas[placa] && <span style={{ fontSize: 10, fontWeight: 700, color: "#9a3412", background: "#ffedd5", padding: "1px 6px", borderRadius: 8 }}>⚠️ desde sem {placasViejas[placa]}</span>}
                               <div style={{ fontSize: 11, color: "#64748b", flex: "1 1 200px" }}>
                                 {filas.length} viaje{filas.length !== 1 ? "s" : ""} · SC {scs.join(", ") || "—"} · Neto {fmtMon(neto)} · {[...new Set(filas.map(f => f.driver_name).filter(Boolean))].slice(0, 2).join(", ")}
                               </div>
