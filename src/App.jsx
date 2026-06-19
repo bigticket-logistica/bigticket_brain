@@ -14726,6 +14726,18 @@ function ConciliacionTercerosMX({ usuario }) {
       });
     } catch (e) { console.error("auditar ajuste:", e); }
   };
+  // Historial de ciclo de vida de la prefactura (crear/cerrar/reabrir/enviar/recalcular)
+  const logEvento = async (empresa, sc, evento, tot, extra) => {
+    try {
+      await sb.from("conciliaciones_terceros_historial").insert({
+        empresa_nombre: empresa, service_center: sc, semana, evento,
+        usuario: (usuario && (usuario.nombre || usuario.email)) || "Brain",
+        total_neto: tot ? tot.neto : null, total_bruto: tot ? tot.bruto : null,
+        liquido_pago: tot ? tot.liquido : null, n_viajes: tot ? tot.nViajes : null,
+        estado: (extra && extra.estado) || null, detalle_evento: (extra && extra.detalle) || null,
+      });
+    } catch (e) { console.error("log historial:", e); }
+  };
 
   const guardarBorradorSC = async (empresa, sc, filasSCnuevas, cobros) => {
     const lunes = rangoSemanaInventario(semana).inicio.toISOString().slice(0, 10);
@@ -14873,6 +14885,7 @@ function ConciliacionTercerosMX({ usuario }) {
         cerrado_por: (usuario && (usuario.nombre || usuario.email)) || "Brain",
       }, { onConflict: "empresa_nombre,service_center,semana" });
       if (error) throw error;
+      await logEvento(empresa, sc, "cerrar", tot, { estado: "cerrada" });
       setMsg({ ok: true, txt: `Conciliación de ${empresa} · ${sc} cerrada (semana ${semana}).` });
       await cargarResumen(semana);
     } catch (e) {
@@ -14886,9 +14899,10 @@ function ConciliacionTercerosMX({ usuario }) {
     if (!confirm(`¿Reabrir la conciliación de "${empresa}" · ${sc} — semana ${semana}? Volverá a borrador.`)) return;
     try {
       const { error } = await sb.from("conciliaciones_terceros")
-        .update({ estado: "borrador" })
+        .update({ estado: "borrador", abierto_at: new Date().toISOString(), abierto_por: (usuario && (usuario.nombre || usuario.email)) || "Brain" })
         .eq("empresa_nombre", empresa).eq("service_center", sc).eq("semana", semana);
       if (error) throw error;
+      await logEvento(empresa, sc, "reabrir", null, { estado: "borrador" });
       await cargarResumen(semana);
     } catch (e) { alert("Error reabriendo: " + (e.message || e)); }
   };
@@ -15317,6 +15331,7 @@ function ConciliacionTercerosMX({ usuario }) {
       enviado_por: (usuario && (usuario.nombre || usuario.email)) || "Brain",
       message_id: data.messageId || null, correo_to: correoTo, correo_cc: cc, asunto, cuerpo, nombre_pdf: nombrePdf,
     }).eq("empresa_nombre", empresa).eq("service_center", sc).eq("semana", semana);
+    await logEvento(empresa, sc, "enviar", tot, { estado: "enviada", detalle: { message_id: data.messageId || null, correo_to: correoTo } });
     return data.messageId;
   };
 
@@ -15368,6 +15383,59 @@ function ConciliacionTercerosMX({ usuario }) {
     }
     setEnviando(null); setSeleccion(new Set()); await cargarResumen(semana);
     setMsg({ ok: fail === 0, txt: `Envío masivo: ${ok} enviada(s), ${fail} con error.` + (errores.length ? " — " + errores.join(" | ") : "") });
+  };
+  // ── Cierre / envío MASIVO (toda la semana) ──
+  const cerrarUno = async (empresa, sc) => {
+    let filas = null, cobros = 0;
+    const { data: row } = await sb.from("conciliaciones_terceros").select("*").eq("empresa_nombre", empresa).eq("service_center", sc).eq("semana", semana).maybeSingle();
+    if (row && Array.isArray(row.detalle) && row.detalle.length) { filas = row.detalle; cobros = Number(row.total_cobros || 0); }
+    else { const { data } = await sb.rpc("get_conciliacion_terceros_detalle", { p_semana: semana, p_empresa: empresa, p_sc: sc }); filas = data || []; cobros = cobrosDe(empresa, sc); }
+    if (!filas.length) return { skip: true };
+    const tot = recalcSC(filas, cobros);
+    const lunes = rangoSemanaInventario(semana).inicio.toISOString().slice(0, 10);
+    const ahora = new Date().toISOString();
+    const { error } = await sb.from("conciliaciones_terceros").upsert({
+      empresa_nombre: empresa, service_center: sc, semana, semana_inicio: lunes, estado: "cerrada",
+      total_neto: tot.neto, iva_16: tot.iva, total_bruto: tot.bruto, liquido_pago: tot.liquido, total_cobros: tot.cobros,
+      n_viajes: tot.nViajes, n_no_pago: tot.nNoPago, detalle: filas, tiene_ajustes: true,
+      generado_at: ahora, cerrado_at: ahora, cerrado_por: (usuario && (usuario.nombre || usuario.email)) || "Brain",
+    }, { onConflict: "empresa_nombre,service_center,semana" });
+    if (error) throw error;
+    await logEvento(empresa, sc, "cerrar", tot, { estado: "cerrada", detalle: { masivo: true } });
+    return { ok: true, neto: tot.neto, liquido: tot.liquido };
+  };
+  const cerrarTodo = async () => {
+    const items = resumen.filter(r => r.empresa && r.empresa !== SIN_EMPRESA && Number(r.n_viajes || 0) > 0 && r.estado_conciliacion !== "enviada").map(r => ({ empresa: r.empresa, sc: r.service_center }));
+    if (!items.length) return alert("No hay prefacturas para cerrar en la semana " + semana + ".");
+    if (!confirm(`\u26A0\uFE0F CERRAR TODO \u2014 semana ${semana} (${etiquetaSemanaInventario(semana)})\n\nVas a CERRAR ${items.length} prefactura(s). El detalle queda CONGELADO para PDF/env\u00edo.\nNo se env\u00edan correos (eso es \"Enviar todo\").\n\n\u00bfContinuar?`)) return;
+    setCerrando("__todo__");
+    let ok = 0, fail = 0, skip = 0; const errores = [];
+    for (const it of items) {
+      try { const r = await cerrarUno(it.empresa, it.sc); if (r && r.skip) skip++; else ok++; }
+      catch (e) { fail++; errores.push(`${it.empresa}\u00b7${it.sc}: ${e.message || e}`); }
+    }
+    setCerrando(null); await cargarResumen(semana);
+    setMsg({ ok: fail === 0, txt: `Cierre masivo: ${ok} cerrada(s)${skip ? `, ${skip} sin viajes` : ""}, ${fail} con error.` + (errores.length ? " \u2014 " + errores.join(" | ") : "") });
+  };
+  const enviarTodo = async () => {
+    const { data: rows, error } = await sb.from("conciliaciones_terceros").select("*").eq("semana", semana);
+    if (error) { setMsg({ ok: false, txt: "Error leyendo conciliaciones: " + error.message }); return; }
+    const cerradas = (rows || []).filter(r => r.estado === "cerrada");
+    const negativas = cerradas.filter(r => Number(r.liquido_pago || 0) < 0);
+    const enviables = cerradas.filter(r => Number(r.liquido_pago || 0) >= 0);
+    if (!enviables.length) return alert("No hay prefacturas cerradas (no negativas) para enviar. Primero cerr\u00e1 todo.");
+    const sinCorreo = enviables.filter(r => !((transpPorNorm[norm(r.empresa_nombre)] || {}).correo_to));
+    if (!confirm(`\uD83D\uDCE7 ENVIAR TODO \u2014 semana ${semana}\n\nSe enviar\u00e1n ${enviables.length} prefactura(s) cerradas.\n${negativas.length ? `\u26A0\uFE0F ${negativas.length} negativa(s) NO se env\u00edan (quedan para arrastre).\n` : ""}${sinCorreo.length ? `\u26A0\uFE0F ${sinCorreo.length} sin correo (se omiten).\n` : ""}\n\u00bfContinuar?`)) return;
+    setEnviando("__todo__");
+    let ok = 0, fail = 0; const errores = [];
+    for (const r of enviables) {
+      const tt = transpPorNorm[norm(r.empresa_nombre)] || {};
+      if (!tt.correo_to) { fail++; errores.push(`${r.empresa_nombre}\u00b7${r.service_center}: sin correo`); continue; }
+      try { await enviarUno(r.empresa_nombre, r.service_center, Array.isArray(r.detalle) ? r.detalle : [], null, { cobros: Number(r.total_cobros || 0) }); ok++; }
+      catch (e) { fail++; errores.push(`${r.empresa_nombre}\u00b7${r.service_center}: ${e.message || e}`); }
+    }
+    setEnviando(null); await cargarResumen(semana);
+    setMsg({ ok: fail === 0, txt: `Env\u00edo masivo: ${ok} enviada(s), ${negativas.length} negativa(s) retenida(s), ${fail} con error.` + (errores.length ? " \u2014 " + errores.join(" | ") : "") });
   };
 
   // ── Helpers de render ──
@@ -15520,7 +15588,9 @@ function ConciliacionTercerosMX({ usuario }) {
         <div style={{ background: msg.ok ? "#ecfdf5" : "#fef2f2", border: "1px solid " + (msg.ok ? "#a7f3d0" : "#fca5a5"), color: msg.ok ? "#065f46" : "#991b1b", borderRadius: 6, padding: 10, marginBottom: 14, fontSize: 12 }}>{msg.txt}</div>
       )}
 
-      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 10 }}>
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginBottom: 10 }}>
+        <button onClick={cerrarTodo} disabled={cerrando === "__todo__"} style={{ padding: "8px 16px", background: cerrando === "__todo__" ? "#94a3b8" : "#166534", color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>{cerrando === "__todo__" ? "Cerrando..." : "🔒 Cerrar todo"}</button>
+        <button onClick={enviarTodo} disabled={enviando === "__todo__"} style={{ padding: "8px 16px", background: enviando === "__todo__" ? "#94a3b8" : "#1e40af", color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>{enviando === "__todo__" ? "Enviando..." : "📧 Enviar todo"}</button>
         <button onClick={() => { setImportRows(null); setImportOpen(true); }} style={{ padding: "8px 16px", background: "#1a3a6b", color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>📥 Importar ajustes (Excel)</button>
       </div>
 
