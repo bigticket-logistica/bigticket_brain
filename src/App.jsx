@@ -14586,12 +14586,12 @@ function HistorialPagoMX({ usuario }) {
     <div style={{ padding: 24 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16, flexWrap: "wrap" }}>
         <div style={{ fontSize: 18, fontWeight: 800, color: "#1a3a6b" }}>Historial de Pago</div>
-        <button onClick={() => setSemana(s => s - 1)} style={{ padding: "6px 10px", border: "1px solid #e4e7ec", background: "#fff", borderRadius: 6, cursor: "pointer", fontWeight: 700 }}>\u2039</button>
+        <button onClick={() => setSemana(s => s - 1)} style={{ padding: "6px 10px", border: "1px solid #e4e7ec", background: "#fff", borderRadius: 6, cursor: "pointer", fontWeight: 700 }}>‹</button>
         <div style={{ textAlign: "center" }}><div style={{ fontWeight: 800, color: "#1a3a6b" }}>Semana {semana}</div><div style={{ fontSize: 11, color: "#64748b" }}>{etiquetaSemanaInventario(semana)}</div></div>
-        <button onClick={() => setSemana(s => s + 1)} style={{ padding: "6px 10px", border: "1px solid #e4e7ec", background: "#fff", borderRadius: 6, cursor: "pointer", fontWeight: 700 }}>\u203A</button>
-        <button onClick={() => cargar(semana)} style={{ padding: "6px 12px", border: "1px solid #1a3a6b", background: "#fff", color: "#1a3a6b", borderRadius: 6, cursor: "pointer", fontWeight: 700, fontSize: 12 }}>\u21BB Actualizar</button>
+        <button onClick={() => setSemana(s => s + 1)} style={{ padding: "6px 10px", border: "1px solid #e4e7ec", background: "#fff", borderRadius: 6, cursor: "pointer", fontWeight: 700 }}>›</button>
+        <button onClick={() => cargar(semana)} style={{ padding: "6px 12px", border: "1px solid #1a3a6b", background: "#fff", color: "#1a3a6b", borderRadius: 6, cursor: "pointer", fontWeight: 700, fontSize: 12 }}>↻ Actualizar</button>
       </div>
-      {loading ? <div style={{ color: "#64748b" }}>Cargando\u2026</div> : (
+      {loading ? <div style={{ color: "#64748b" }}>Cargando…</div> : (
         <>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 18 }}>
             {card("Creadas", d.prefacturas.length, "#1a3a6b")}
@@ -14610,7 +14610,7 @@ function HistorialPagoMX({ usuario }) {
                 <td style={tdS}>{fmtDT(rc.generado_at)}</td><td style={tdS}>{rc.generado_por || "\u2014"}</td><td style={tdS}>{rc.n_prefacturas}</td>
                 <td style={{ ...tdS, textAlign: "right" }}>{fmtMon(rc.total_bruto)}</td><td style={tdS}>{rc.enviado ? "\u2705" : "\u26A0\uFE0F no"}</td>
                 <td style={{ ...tdS, fontSize: 10, color: "#64748b", maxWidth: 240, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{rc.destinatarios}</td>
-                <td style={tdS}><button onClick={() => descargarReporte(rc)} style={btn}>\u2B07 Descargar</button></td>
+                <td style={tdS}><button onClick={() => descargarReporte(rc)} style={btn}>⬇ Descargar</button></td>
               </tr>))}</tbody></table>
             )}
           </Seccion>
