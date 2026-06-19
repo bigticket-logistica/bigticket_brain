@@ -13642,11 +13642,8 @@ function FormularioInicialSC({ scId, fecha }) {
           )}
         </div>
 
-        {/* 2 · Ambulancias */}
-        <ItemSimple nombre="2 · Ambulancias" valor={siNo(row.declarado_ambulancias_si_no)}
-          detalle={cnt(row.declarado_ambulancias_detalle) > 0 ? `${cnt(row.declarado_ambulancias_detalle)} ambulancia(s) declaradas` : null}
-          justif={row.ambulancias_justificacion}
-          fotos={adj.ambulancias} />
+        {/* 2 · Ambulancias (detalle completo: patente a pagar, justificación y fotos) */}
+        <ItemAmbulancias row={row} />
 
         {/* 3 · Cancelaciones */}
         <ItemCancelaciones row={row} adjCancelaciones={adj.cancelaciones || []} />
@@ -13676,6 +13673,59 @@ function declColor(v) {
   return v === "Sí" ? "#b45309" : v === "No" ? "#16a34a" : "#9ca3af";
 }
 
+function ItemAmbulancias({ row }) {
+  const siNoVal = row.declarado_ambulancias_si_no;
+  const detalle = Array.isArray(row.declarado_ambulancias_detalle) ? row.declarado_ambulancias_detalle : [];
+  const valorTxt = siNoVal === true ? "Sí" : siNoVal === false ? "No" : "—";
+
+  return (
+    <div style={{ fontSize: 12, padding: "5px 8px", background: "#fff", border: "1px solid #eef0f3", borderRadius: 5 }}>
+      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        <span style={{ fontWeight: 600, color: "#374151" }}>2 · Ambulancias</span>
+        <span style={{ marginLeft: "auto", fontWeight: 700, color: declColor(valorTxt) }}>{valorTxt}</span>
+      </div>
+      {/* Texto general del ítem (compat. bitácoras viejas) */}
+      {row.ambulancias_justificacion && row.ambulancias_justificacion.trim() && (
+        <div style={{ fontSize: 11, color: "#6b7280", marginTop: 2, fontStyle: "italic" }}>💬 {row.ambulancias_justificacion}</div>
+      )}
+      {/* Detalle por ruta: patente que paga + ruta/placa + chofer + justificación + fotos */}
+      {detalle.length > 0 && (
+        <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 6 }}>
+          <div style={{ fontSize: 11, color: "#4b5563", fontWeight: 600 }}>{detalle.length} ambulancia(s):</div>
+          {detalle.map((d, i) => {
+            const adjuntos = Array.isArray(d.adjuntos)
+              ? d.adjuntos.map((a) => (typeof a === "string" ? a : a?.path)).filter(Boolean)
+              : [];
+            return (
+              <div key={i} style={{ padding: "6px 8px", background: "#f8fafc", borderRadius: 5, border: "1px solid #eef0f3" }}>
+                <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                  <span style={{ fontSize: 9, background: "#dbeafe", color: "#1e3a5f", padding: "1px 6px", borderRadius: 3, fontWeight: 700 }}>{i + 1}</span>
+                  {d.patente_ambulancia
+                    ? <span style={{ fontSize: 10, background: "#fef3c7", color: "#92400e", padding: "1px 6px", borderRadius: 3, fontWeight: 700 }}>💰 paga: <span style={{ fontFamily: "monospace" }}>{d.patente_ambulancia}</span></span>
+                    : <span style={{ fontSize: 10, color: "#dc2626", fontWeight: 600 }}>(sin patente a pagar)</span>}
+                  {d.id_ruta && <span style={{ fontSize: 10, color: "#6b7280" }}>ruta {d.id_ruta}</span>}
+                  {d.placa && <span style={{ fontFamily: "monospace", fontWeight: 600, fontSize: 11, color: "#374151" }}>{d.placa}</span>}
+                  {d.cluster && <span style={{ fontSize: 9, background: "#e2e8f0", color: "#475569", padding: "0 5px", borderRadius: 3, fontWeight: 700 }}>{d.cluster}</span>}
+                  {d.chofer && <span style={{ fontSize: 11, color: "#4b5563" }}>· {d.chofer}</span>}
+                </div>
+                {d.justificacion && String(d.justificacion).trim()
+                  ? <div style={{ fontSize: 11, color: "#6b7280", marginTop: 3, fontStyle: "italic" }}>💬 {d.justificacion}</div>
+                  : <div style={{ fontSize: 10, color: "#dc2626", marginTop: 3 }}>(sin justificación)</div>}
+                {adjuntos.length > 0
+                  ? <div style={{ display: "flex", flexWrap: "wrap", marginTop: 4 }}>{adjuntos.map((p, j) => <FotoLink key={j} path={p} />)}</div>
+                  : <div style={{ fontSize: 10, color: "#dc2626", marginTop: 3 }}>(sin foto/PDF)</div>}
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {detalle.length === 0 && siNoVal === true && (
+        <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 3 }}>Declaró ambulancias pero sin detalle cargado.</div>
+      )}
+    </div>
+  );
+}
+
 function ItemCancelaciones({ row, adjCancelaciones }) {
   const siNoVal = row.declarado_cancelaciones_si_no;
   const detalle = Array.isArray(row.declarado_cancelaciones_detalle) ? row.declarado_cancelaciones_detalle : [];
@@ -13696,12 +13746,17 @@ function ItemCancelaciones({ row, adjCancelaciones }) {
         <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 5 }}>
           <div style={{ fontSize: 11, color: "#4b5563", fontWeight: 600 }}>{detalle.length} cancelación(es):</div>
           {detalle.map((d, i) => (
-            <div key={i} style={{ display: "flex", gap: 8, alignItems: "center", padding: "4px 8px", background: "#f8fafc", borderRadius: 5, border: "1px solid #eef0f3" }}>
-              <span style={{ fontSize: 9, background: "#fee2e2", color: "#b91c1c", padding: "1px 6px", borderRadius: 3, fontWeight: 700 }}>{i + 1}</span>
-              <span style={{ fontFamily: "monospace", fontWeight: 700, fontSize: 12, color: "#1e3a5f" }}>{d.patente || "(sin patente)"}</span>
-              <div style={{ marginLeft: "auto" }}>
-                {d.foto?.path ? <FotoLink path={d.foto.path} /> : <span style={{ fontSize: 10, color: "#9ca3af" }}>sin prueba</span>}
+            <div key={i} style={{ padding: "4px 8px", background: "#f8fafc", borderRadius: 5, border: "1px solid #eef0f3" }}>
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <span style={{ fontSize: 9, background: "#fee2e2", color: "#b91c1c", padding: "1px 6px", borderRadius: 3, fontWeight: 700 }}>{i + 1}</span>
+                <span style={{ fontFamily: "monospace", fontWeight: 700, fontSize: 12, color: "#1e3a5f" }}>{d.patente || "(sin patente)"}</span>
+                <div style={{ marginLeft: "auto" }}>
+                  {d.foto?.path ? <FotoLink path={d.foto.path} /> : <span style={{ fontSize: 10, color: "#9ca3af" }}>sin prueba</span>}
+                </div>
               </div>
+              {d.justificacion && String(d.justificacion).trim()
+                ? <div style={{ fontSize: 11, color: "#6b7280", marginTop: 3, fontStyle: "italic" }}>💬 {d.justificacion}</div>
+                : <div style={{ fontSize: 10, color: "#dc2626", marginTop: 3 }}>(sin justificación)</div>}
             </div>
           ))}
         </div>
@@ -13953,7 +14008,7 @@ function PanelControlSupervisores() {
 
   return (
     <div className="pg">
-      <div className="sec-title">Consolidaciones por SC</div>
+      <div className="sec-title">Consolidaciones Bitácora por SC</div>
       <div className="sec-sub">Torre de control, rutas con helper, ambulancias y bitácora del supervisor · por SC</div>
 
       {/* Barra de control: fecha + refrescar */}
@@ -16088,7 +16143,7 @@ function ModuloPagosMadre({ usuario }) {
     { id: "conciliacion", label: "Conciliación Terceros", desc: "Conciliación semanal por empresa" },
     { id: "ayudantes",   label: "Ayudantes",             desc: "Detalle diario de auxiliares" },
     { id: "ambulancias", label: "Ambulancias",           desc: "Traspasos internos ruta→ruta" },
-    { id: "supervisores", label: "Consolidaciones",   desc: "Consolidado por SC: torre, helpers, ambulancias y bitácora" },
+    { id: "supervisores", label: "Consolidaciones Bitácora",   desc: "Consolidado por SC: torre, helpers, ambulancias y bitácora" },
     { id: "padron_meli", label: "Padrón MELI",         desc: "Conductores y vehículos · altas, bajas y cambios diarios" },
     { id: "prefacturas", label: "Prefacturas",           desc: "Envío masivo de prefacturas MX" },
     { id: "config",      label: "Configuración",         desc: "Tarifario, zonas y reglas" },
