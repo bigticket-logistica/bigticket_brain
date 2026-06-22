@@ -17381,6 +17381,28 @@ function ListadoPagosDiarios() {
   const [bonificaciones, setBonificaciones] = useState([]);
   const [orderDir, setOrderDir] = useState("asc");
   const [empresaMap, setEmpresaMap] = useState({}); // placa normalizada -> empresa (Terceros)
+  const [reglasAlerta, setReglasAlerta] = useState([]); // reglas configurables de alerta
+  useEffect(() => { sb.from("config_alertas_pago").select("*").order("orden").then(({ data }) => setReglasAlerta(data || [])).catch(() => {}); }, []);
+  const valorCampoAlerta = (p, campo) => {
+    if (campo === "empresa_asignada") return (empresaMap[normalizarPlaca(p.placa)] || "");
+    return p[campo];
+  };
+  const cumpleReglaAlerta = (p, r) => {
+    const v = valorCampoAlerta(p, r.campo); const val = r.valor;
+    switch (r.operador) {
+      case "menor": return v != null && v !== "" && Number(v) < Number(val);
+      case "mayor": return v != null && v !== "" && Number(v) > Number(val);
+      case "igual": return String(v != null ? v : "") === String(val != null ? val : "");
+      case "distinto": return String(v != null ? v : "") !== String(val != null ? val : "");
+      case "vacio": return v == null || v === "" || v === false;
+      case "no_vacio": return !(v == null || v === "" || v === false);
+      case "verdadero": return v === true || v === "true" || v === 1 || v === "1";
+      case "falso": return !(v === true || v === "true" || v === 1 || v === "1");
+      default: return false;
+    }
+  };
+  const alertasDe = (p) => (reglasAlerta || []).filter(r => r.activa && cumpleReglaAlerta(p, r));
+  const tieneAlerta = (p) => alertasDe(p).length > 0;
 
   // Carga el mapa placa->empresa desde flota_terceros_mx (semana mas reciente gana)
   useEffect(() => {
@@ -17645,7 +17667,7 @@ function ListadoPagosDiarios() {
     // Filtro por estado
     if (filtroEstado === "pagadas") res = res.filter(p => p.ns_categoria !== "NO_PAGO_VIS<90%");
     else if (filtroEstado === "no_pagadas") res = res.filter(p => p.ns_categoria === "NO_PAGO_VIS<90%");
-    else if (filtroEstado === "con_alerta") res = res.filter(p => !!p.observaciones);
+    else if (filtroEstado === "con_alerta") res = res.filter(p => tieneAlerta(p));
     else if (filtroEstado === "no_operadas") res = res.filter(p => p.ruta_no_operada);
 
     // Ordenamiento
@@ -17660,7 +17682,7 @@ function ListadoPagosDiarios() {
     });
 
     return res;
-  }, [pagos, busqueda, filtroEstado, orderBy, orderDir]);
+  }, [pagos, busqueda, filtroEstado, orderBy, orderDir, reglasAlerta, empresaMap]);
 
   // Totales
   const totales = useMemo(() => {
@@ -17673,7 +17695,7 @@ function ListadoPagosDiarios() {
       auxiliar: filasFiltradas.reduce((s, p) => s + Number(p.monto_auxiliar || 0), 0),
       pagoNeto: filasFiltradas.reduce((s, p) => s + Number(p.pago_neto || 0), 0),
       noPagadas: filasFiltradas.filter(p => p.ns_categoria === "NO_PAGO_VIS<90%").length,
-      alertas: filasFiltradas.filter(p => !!p.observaciones).length,
+      alertas: filasFiltradas.filter(p => tieneAlerta(p)).length,
       noOperadas: filasFiltradas.filter(p => p.ruta_no_operada).length,
       pagoMeli: filasFiltradas.reduce((s, p) => s + Number(p.pago_meli || 0), 0),
       margenPct: (() => {
@@ -18026,9 +18048,11 @@ function ListadoPagosDiarios() {
           </div>
         )}
         {totales.alertas > 0 && (
-          <div style={{ background: "#fef3c7", border: "1px solid #fcd34d", borderRadius: 6, padding: "12px 14px" }}>
-            <div style={{ fontSize: 10, color: "#92400e", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>Con alertas</div>
+          <div onClick={() => setFiltroEstado(filtroEstado === "con_alerta" ? "todas" : "con_alerta")} title="Ver solo las lineas con alerta"
+            style={{ background: "#fef3c7", border: `2px solid ${filtroEstado === "con_alerta" ? "#d97706" : "#fcd34d"}`, borderRadius: 6, padding: "12px 14px", cursor: "pointer" }}>
+            <div style={{ fontSize: 10, color: "#92400e", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>Con alertas {filtroEstado === "con_alerta" ? "(filtrando)" : ""}</div>
             <div style={{ fontSize: 22, fontWeight: 700, color: "#92400e", marginTop: 2 }}>{totales.alertas}</div>
+            <div style={{ fontSize: 9, color: "#92400e", marginTop: 2 }}>clic para filtrar</div>
           </div>
         )}
         <div style={{ background: "#f5f3ff", border: "1px solid #c4b5fd", borderRadius: 6, padding: "12px 14px" }}>
@@ -18044,7 +18068,7 @@ function ListadoPagosDiarios() {
           { id: "todas", l: `Todas (${pagos.length})` },
           { id: "pagadas", l: `Pagadas (${pagos.filter(p => p.ns_categoria !== "NO_PAGO_VIS<90%").length})` },
           { id: "no_pagadas", l: `No pagadas (${pagos.filter(p => p.ns_categoria === "NO_PAGO_VIS<90%").length})` },
-          { id: "con_alerta", l: `Con alertas (${pagos.filter(p => !!p.observaciones).length})` },
+          { id: "con_alerta", l: `Con alertas (${pagos.filter(p => tieneAlerta(p)).length})` },
           { id: "no_operadas", l: `Sin movimiento (${pagos.filter(p => p.ruta_no_operada).length})` },
         ].map(({ id, l }) => (
           <button key={id} onClick={() => setFiltroEstado(id)}
@@ -18059,7 +18083,7 @@ function ListadoPagosDiarios() {
       </div>
 
       {/* Barra de scroll horizontal superior (sincronizada con la tabla) */}
-      <div ref={topScrollRef} onScroll={onTopScroll} style={{ overflowX: "auto", overflowY: "hidden", marginBottom: 4 }}>
+      <div ref={topScrollRef} onScroll={onTopScroll} style={{ overflowX: "auto", overflowY: "hidden", marginBottom: 4, position: "sticky", top: 0, zIndex: 20, background: "#f8fafc", paddingTop: 4, paddingBottom: 2, borderBottom: "1px solid #e4e7ec" }}>
         <div style={{ width: tablaWidth, height: 1 }} />
       </div>
 
@@ -19918,6 +19942,83 @@ function AyudantesDetalleDia() {
 // ═══════════════════════════════════════════════════════════════════════════
 // CONFIGURACIÓN DE PAGOS — sub-tabs
 // ═══════════════════════════════════════════════════════════════════════════
+function ConfigAlertas() {
+  const CAMPOS = [
+    { v: "observaciones", l: "Observaciones (texto)" },
+    { v: "ns_pct", l: "NS %" },
+    { v: "pct_visitado_real", l: "Visitado %" },
+    { v: "ruta_no_operada", l: "Ruta no operada (s\u00ed/no)" },
+    { v: "empresa_asignada", l: "Empresa asignada" },
+    { v: "tarifa_base", l: "Tarifa base" },
+    { v: "pago_meli", l: "Pago MELI" },
+    { v: "ns_categoria", l: "Categor\u00eda NS" },
+  ];
+  const OPERADORES = [
+    { v: "menor", l: "menor que (<)" }, { v: "mayor", l: "mayor que (>)" },
+    { v: "igual", l: "igual a (=)" }, { v: "distinto", l: "distinto de" },
+    { v: "vacio", l: "vac\u00edo / sin valor" }, { v: "no_vacio", l: "tiene valor" },
+    { v: "verdadero", l: "es s\u00ed / verdadero" }, { v: "falso", l: "es no / falso" },
+  ];
+  const necesitaValor = (op) => ["menor", "mayor", "igual", "distinto"].includes(op);
+  const [reglas, setReglas] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [guardando, setGuardando] = useState(null);
+  const cargar = async () => { setLoading(true); try { const { data } = await sb.from("config_alertas_pago").select("*").order("orden"); setReglas(data || []); } catch (e) { console.error(e); } setLoading(false); };
+  useEffect(() => { cargar(); }, []);
+  const setCampo = (i, k, v) => setReglas(rs => rs.map((r, idx) => idx === i ? { ...r, [k]: v } : r));
+  const agregar = () => setReglas(rs => [...rs, { nombre: "", campo: "ns_pct", operador: "menor", valor: "", color: "#f59e0b", activa: true, orden: rs.length + 1 }]);
+  const guardar = async (i) => {
+    const r = reglas[i]; if (!r.nombre || !r.nombre.trim()) return alert("Pon\u00e9 un nombre a la regla.");
+    setGuardando(i);
+    try {
+      const payload = { nombre: r.nombre.trim(), campo: r.campo, operador: r.operador, valor: necesitaValor(r.operador) ? (r.valor || null) : null, color: r.color || "#f59e0b", activa: !!r.activa, orden: Number(r.orden || 0) };
+      if (r.id) await sb.from("config_alertas_pago").update(payload).eq("id", r.id);
+      else await sb.from("config_alertas_pago").insert(payload);
+      await cargar();
+    } catch (e) { alert("Error guardando: " + (e.message || e)); }
+    setGuardando(null);
+  };
+  const eliminar = async (i) => {
+    const r = reglas[i];
+    if (r.id) { if (!confirm(`\u00bfEliminar la regla "${r.nombre}"?`)) return; try { await sb.from("config_alertas_pago").delete().eq("id", r.id); } catch (e) { alert("Error: " + (e.message || e)); return; } }
+    setReglas(rs => rs.filter((_, idx) => idx !== i));
+    if (r.id) await cargar();
+  };
+  const inp = { padding: "5px 8px", border: "1px solid #e4e7ec", borderRadius: 6, fontSize: 12, width: "100%" };
+  const th = { textAlign: "left", padding: "8px", fontSize: 10, color: "#64748b", textTransform: "uppercase", borderBottom: "1px solid #e4e7ec" };
+  const td = { padding: "6px 8px", borderBottom: "1px solid #f1f5f9", verticalAlign: "middle" };
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
+        <div style={{ fontSize: 12, color: "#64748b", maxWidth: 720 }}>Reglas que marcan una l\u00ednea del Listado de Pagos como <b>alerta</b>. El analista las usa para revisar y (pr\u00f3ximamente) pausar pagos. Una l\u00ednea con alerta es la que cumple <b>cualquiera</b> de las reglas activas.</div>
+        <button onClick={agregar} style={{ padding: "7px 14px", background: "#1a3a6b", color: "#fff", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>+ Agregar regla</button>
+      </div>
+      {loading ? <div style={{ color: "#94a3b8", padding: 20 }}>Cargando\u2026</div> : (
+        <div style={{ border: "1px solid #e4e7ec", borderRadius: 8, overflow: "hidden", background: "#fff" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+            <thead><tr>{["Activa", "Nombre", "Campo", "Operador", "Valor", "Color", ""].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
+            <tbody>
+              {reglas.length === 0 ? <tr><td colSpan={7} style={{ padding: 20, color: "#94a3b8", textAlign: "center" }}>Sin reglas. Agreg\u00e1 una.</td></tr> : reglas.map((r, i) => (
+                <tr key={r.id || ("n" + i)}>
+                  <td style={{ ...td, textAlign: "center" }}><input type="checkbox" checked={!!r.activa} onChange={e => setCampo(i, "activa", e.target.checked)} /></td>
+                  <td style={td}><input value={r.nombre || ""} onChange={e => setCampo(i, "nombre", e.target.value)} placeholder="Nombre de la alerta" style={inp} /></td>
+                  <td style={td}><select value={r.campo} onChange={e => setCampo(i, "campo", e.target.value)} style={inp}>{CAMPOS.map(c => <option key={c.v} value={c.v}>{c.l}</option>)}</select></td>
+                  <td style={td}><select value={r.operador} onChange={e => setCampo(i, "operador", e.target.value)} style={inp}>{OPERADORES.map(o => <option key={o.v} value={o.v}>{o.l}</option>)}</select></td>
+                  <td style={td}><input value={r.valor || ""} onChange={e => setCampo(i, "valor", e.target.value)} disabled={!necesitaValor(r.operador)} placeholder={necesitaValor(r.operador) ? "valor" : "\u2014"} style={{ ...inp, background: necesitaValor(r.operador) ? "#fff" : "#f1f5f9" }} /></td>
+                  <td style={{ ...td, textAlign: "center" }}><input type="color" value={r.color || "#f59e0b"} onChange={e => setCampo(i, "color", e.target.value)} style={{ width: 32, height: 28, border: "none", background: "none", cursor: "pointer" }} /></td>
+                  <td style={{ ...td, whiteSpace: "nowrap" }}>
+                    <button onClick={() => guardar(i)} disabled={guardando === i} style={{ padding: "5px 10px", background: "#166534", color: "#fff", border: "none", borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: "pointer", marginRight: 6 }}>{guardando === i ? "\u2026" : "Guardar"}</button>
+                    <button onClick={() => eliminar(i)} style={{ padding: "5px 10px", background: "#fee2e2", color: "#b91c1c", border: "none", borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>Eliminar</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
 function ConfiguracionPagos() {
   const [subtab, setSubtab] = useState("tarifario");
   return (
@@ -19935,6 +20036,7 @@ function ConfiguracionPagos() {
           { id: "auxiliares", l: "Matriz Auxiliares" },
           { id: "bonificaciones", l: "Bonificaciones" },
           { id: "ns", l: "Reglas NS" },
+          { id: "alertas", l: "Alertas" },
         ].map(t => (
           <button key={t.id} onClick={() => setSubtab(t.id)}
             style={{ padding: "7px 14px", borderRadius: 4, border: `1px solid ${subtab === t.id ? "#1a3a6b" : "#e4e7ec"}`,
@@ -19951,6 +20053,7 @@ function ConfiguracionPagos() {
       {subtab === "auxiliares" && <ConfigMatrizAuxiliares />}
       {subtab === "bonificaciones" && <ConfigBonificaciones />}
       {subtab === "ns" && <ConfigReglasNS />}
+      {subtab === "alertas" && <ConfigAlertas />}
     </div>
   );
 }
