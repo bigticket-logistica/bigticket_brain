@@ -15863,7 +15863,7 @@ function ConciliacionTercerosMX({ usuario }) {
     return [...set].sort((a, b) => a.localeCompare(b));
   }, [transportistas, resumen]);
 
-  const totalSemana = resumen.reduce((s, r) => s + Number(r.total_neto || 0), 0);
+  const totalSemana = Math.round(empresasAgrupadas.reduce((s, g) => { const esSin = g.empresa === SIN_EMPRESA; return s + g.filasSC.reduce((a, rSC) => a + netoSCneteado(g.empresa, rSC, esSin), 0); }, 0) * 100) / 100;
   const totalViajes = resumen.reduce((s, r) => s + Number(r.n_viajes || 0), 0);
   const sinEmpresaG = empresasAgrupadas.find(g => g.empresa === SIN_EMPRESA);
 
