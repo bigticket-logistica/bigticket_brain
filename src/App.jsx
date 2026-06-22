@@ -14843,6 +14843,13 @@ function ConciliacionTercerosMX({ usuario }) {
   const saldoPrevioDe = (empresa, sc) => Number((saldosPorSC[`${norm(empresa)}||${norm(sc)}`] || {}).pendiente || 0);
   const saldoEmpresa = (empresa) => Object.entries(saldosPorSC).reduce((s, [k, v]) => s + (k.startsWith(norm(empresa) + "||") ? Number(v.pendiente || 0) : 0), 0);
   const saldoInfoDe = (empresa, sc) => saldosPorSC[`${norm(empresa)}||${norm(sc)}`] || null;
+  const netoSCneteado = (empresa, rSC, esSin) => {
+    const nv = Number(rSC.neto_guardado != null ? rSC.neto_guardado : rSC.total_neto) || 0;
+    if (esSin) return nv;
+    const prev = saldoPrevioDe(empresa, rSC.service_center);
+    const man = lineasManualesDe(empresa, rSC.service_center).reduce((a, d) => a + Number(d.monto || 0), 0);
+    return Math.round((nv + prev + man) * 100) / 100;
+  };
   const lineasManualesDe = (empresa, sc) => (aplicManual[`${norm(empresa)}||${norm(sc)}`] || []).map(a => ({ _saldo: true, _manual: true, _id: "saldoM|" + a.origenSC, _origenSC: a.origenSC, _origenKey: a.origenKey, _origenSem: a.origenSem, origen: "saldo_manual", fecha: null, placa: "\u2014", id_ruta: "", driver_name: `Saldo aplicado de ${a.origenSC} (sem ${a.origenSem})`, service_center_id: sc, tiene_auxiliar: false, cargado: null, entregado: null, monto: Number(a.monto || 0), es_no_pago: false }));
   const filasConSaldoLine = (empresa, sc, filas) => {
     const arr = (filas || []).filter(d => !(d._saldo && !d._manual)); // quita la l\u00ednea auto; conserva manuales ya guardadas
@@ -16045,6 +16052,8 @@ function ConciliacionTercerosMX({ usuario }) {
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
         {empresasAgrupadas.map(g => {
           const esSinEmpresa = g.empresa === SIN_EMPRESA;
+          const _netoE = Math.round(g.filasSC.reduce((s, rSC) => s + netoSCneteado(g.empresa, rSC, esSinEmpresa), 0) * 100) / 100;
+          const _brutoE = Math.round(g.filasSC.reduce((s, rSC) => { const n = netoSCneteado(g.empresa, rSC, esSinEmpresa); return s + (n < 0 ? n : Math.round(n * 1.16 * 100) / 100); }, 0) * 100) / 100;
           const abierta = expandida === g.empresa;
           const det = detalles[g.empresa];
           const t = transpPorNorm[norm(g.empresa)];
@@ -16071,7 +16080,7 @@ function ConciliacionTercerosMX({ usuario }) {
                     {esSinEmpresa && det && Object.keys(porPlaca).some(p => placasViejas[p]) && <span style={{ fontSize: 11, fontWeight: 700, color: "#9a3412", background: "#ffedd5", padding: "1px 7px", borderRadius: 8 }}>⚠️ {Object.keys(porPlaca).filter(p => placasViejas[p]).length} de semanas anteriores</span>}
                     {!esSinEmpresa && <span style={{ fontSize: 11, fontWeight: 600, color: "#7c3aed", background: "#f3e8ff", padding: "1px 7px", borderRadius: 8 }}>{g.filasSC.length} SC</span>}
                     {!esSinEmpresa && saldoEmpresa(g.empresa) < 0 && <span style={{ fontSize: 11, fontWeight: 800, color: "#9a3412", background: "#ffedd5", padding: "1px 7px", borderRadius: 8 }}>⚠️ Saldo pendiente {fmtMon(saldoEmpresa(g.empresa))}</span>}
-                    {!esSinEmpresa && g.totalNeto < 0 && <span style={{ fontSize: 11, fontWeight: 800, color: "#9a3412", background: "#fee2e2", padding: "1px 7px", borderRadius: 8 }}>⚠️ Negativo → irá a pendiente</span>}
+                    {!esSinEmpresa && _netoE < 0 && <span style={{ fontSize: 11, fontWeight: 800, color: "#9a3412", background: "#fee2e2", padding: "1px 7px", borderRadius: 8 }}>⚠️ Negativo → irá a pendiente</span>}
                   </div>
                   <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 2 }}>
                     {esSinEmpresa
@@ -16084,8 +16093,8 @@ function ConciliacionTercerosMX({ usuario }) {
                   <div style={{ textAlign: "center" }}><div style={{ fontSize: 10, color: "#94a3b8" }}>Viajes</div><div style={{ fontWeight: 800 }}>{g.nViajes}</div></div>
                   <div style={{ textAlign: "center" }}><div style={{ fontSize: 10, color: "#94a3b8" }}>No pago</div><div style={{ fontWeight: 800, color: g.nNoPago > 0 ? "#dc2626" : "#94a3b8" }}>{g.nNoPago}</div></div>
                   <div style={{ textAlign: "center" }}><div style={{ fontSize: 10, color: "#94a3b8" }}>Ajustes</div><div style={{ fontWeight: 800, color: (ajustesEmp[norm(g.empresa)] || 0) > 0 ? "#a16207" : "#94a3b8" }}>{ajustesEmp[norm(g.empresa)] || 0}</div></div>
-                  <div style={{ textAlign: "center" }}><div style={{ fontSize: 10, color: "#94a3b8" }}>Neto</div><div style={{ fontWeight: 800, color: "#16a34a" }}>{fmtMon(g.totalNeto)}</div></div>
-                  <div style={{ textAlign: "center" }}><div style={{ fontSize: 10, color: "#94a3b8" }}>Bruto</div><div style={{ fontWeight: 800 }}>{fmtMon(g.totalBruto)}</div></div>
+                  <div style={{ textAlign: "center" }}><div style={{ fontSize: 10, color: "#94a3b8" }}>Neto</div><div style={{ fontWeight: 800, color: _netoE < 0 ? "#9a3412" : "#16a34a" }}>{fmtMon(_netoE)}</div></div>
+                  <div style={{ textAlign: "center" }}><div style={{ fontSize: 10, color: "#94a3b8" }}>Bruto</div><div style={{ fontWeight: 800 }}>{fmtMon(_brutoE)}</div></div>
                   <div style={{ fontSize: 16, color: "#94a3b8" }}>{abierta ? "▾" : "▸"}</div>
                 </div>
               </div>
@@ -16261,7 +16270,7 @@ function ConciliacionTercerosMX({ usuario }) {
       )}
 
       {formTransp && (
-        <div onClick={() => !guardandoTransp && setFormTransp(null)}
+        <div onMouseDown={e => { if (e.target === e.currentTarget && !guardandoTransp) setFormTransp(null); }}
           style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}>
           <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 12, padding: 22, width: 460, maxWidth: "100%", maxHeight: "90vh", overflowY: "auto" }}>
             <div style={{ fontSize: 15, fontWeight: 800, color: "#1a3a6b", marginBottom: 4 }}>{formTransp.id ? "Editar transportista" : "Nuevo transportista"}</div>
