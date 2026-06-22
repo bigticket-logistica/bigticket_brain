@@ -14875,6 +14875,24 @@ function ConciliacionTercerosMX({ usuario }) {
   const saldoPrevioDe = (empresa, sc) => Number((saldosPorSC[`${norm(empresa)}||${norm(sc)}`] || {}).pendiente || 0);
   const saldoEmpresa = (empresa) => Object.entries(saldosPorSC).reduce((s, [k, v]) => s + (k.startsWith(norm(empresa) + "||") ? Number(v.pendiente || 0) : 0), 0);
   const saldoInfoDe = (empresa, sc) => saldosPorSC[`${norm(empresa)}||${norm(sc)}`] || null;
+  const consolidarSaldoManual = async (empresa, sc) => {
+    const si = saldoInfoDe(empresa, sc); const monto = si ? si.pendiente : 0;
+    const motivo = window.prompt(`Consolidar (eliminar) el saldo de ${empresa} \u00b7 ${sc}: ${fmtMon(monto)}.\n\nQueda cerrado por acuerdo: deja de arrastrarse y ya no afecta los netos.\n\nMotivo del acuerdo:`, "");
+    if (motivo === null) return;
+    try {
+      const { data: row } = await sb.from("saldos_pendientes_terceros").select("*").eq("empresa_nombre", empresa).eq("service_center", sc).maybeSingle();
+      if (!row) { alert("No se encontr\u00f3 el saldo en la base."); return; }
+      const det = (row.detalle && typeof row.detalle === "object") ? row.detalle : {};
+      det.liquidado_hasta = semana; det.consolidado_manual = true; det.motivo_consolidacion = motivo || ""; det.consolidado_por = (usuario && (usuario.nombre || usuario.email)) || "Brain";
+      const { error } = await sb.from("saldos_pendientes_terceros").update({ estado: "consolidado", saldo_pendiente: 0, semana_conciliacion: semana, conciliado_at: new Date().toISOString(), detalle: det }).eq("id", row.id);
+      if (error) throw error;
+      // borrar la prefactura negativa (pendiente_conciliacion) de esta semana si existe
+      await sb.from("conciliaciones_terceros").delete().eq("empresa_nombre", empresa).eq("service_center", sc).eq("semana", semana).eq("estado", "pendiente_conciliacion");
+      try { await logEvento(empresa, sc, "consolidar_saldo", { neto: monto }, { estado: "consolidado", detalle: { manual: true, motivo } }); } catch (e) {}
+      setMsg({ ok: true, txt: `Saldo de ${empresa} \u00b7 ${sc} consolidado (${fmtMon(monto)}). Ya no se arrastra ni suma.` });
+      await cargarResumen(semana);
+    } catch (e) { alert("Error consolidando: " + (e.message || e)); }
+  };
   const netoSCneteado = (empresa, rSC, esSin) => {
     const det = detalles[empresa];
     if (det) {
@@ -16238,6 +16256,7 @@ function ConciliacionTercerosMX({ usuario }) {
                                   <div style={{ fontSize: 11, color: "#7c2d12", marginTop: 4 }}>{`Originado en la semana ${si.semanaOrigen}. Se descontar\u00e1 autom\u00e1ticamente cuando este SC tenga viajes; el IVA se calcula sobre el neto resultante (viajes \u2212 saldo). Mientras siga negativo no genera factura ni IVA.`}</div>
                                   {comp.length > 0 && <div style={{ fontSize: 11, color: "#7c2d12", marginTop: 4 }}>{`Composici\u00f3n: ${comp.map(x => `sem ${x.w}: ${fmtMon(x.m)}`).join("  \u00b7  ")}`}</div>}
                                   {netoSemana !== 0 && <div style={{ fontSize: 11, color: neteado < 0 ? "#9a3412" : "#166534", marginTop: 4, fontWeight: 700 }}>{`Con los viajes de esta semana (${fmtMon(netoSemana)}): neto resultante ${fmtMon(neteado)}${neteado < 0 ? " \u2192 sigue pendiente" : " \u2192 se concilia y se paga"}.`}</div>}
+                                  <div style={{ marginTop: 8 }}><button onClick={(e) => { e.stopPropagation(); consolidarSaldoManual(g.empresa, rSC.service_center); }} title="Dar por cerrado por acuerdo: elimina el saldo de la base y deja de arrastrarse/sumar" style={{ fontSize: 11, fontWeight: 700, color: "#fff", background: "#b91c1c", border: "none", borderRadius: 6, padding: "5px 12px", cursor: "pointer" }}>\uD83D\uDDD1 Consolidar (eliminar saldo por acuerdo)</button></div>
                                 </div>);
                               })()}
                               {!esSinEmpresa && (rSC.estado_conciliacion === "sin_generar" || rSC.estado_conciliacion === "borrador") && saldosOtrosSC(g.empresa, rSC.service_center).length > 0 && (
