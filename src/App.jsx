@@ -17403,6 +17403,32 @@ function ListadoPagosDiarios() {
   };
   const alertasDe = (p) => (reglasAlerta || []).filter(r => r.activa && cumpleReglaAlerta(p, r));
   const tieneAlerta = (p) => alertasDe(p).length > 0;
+  const [pausaModal, setPausaModal] = useState(null); // { r }
+  const [pausaMotivo, setPausaMotivo] = useState("");
+  const [pausando, setPausando] = useState(false);
+  const _quienPausa = () => { try { return (typeof usuario !== "undefined" && usuario && (usuario.nombre || usuario.email)) || "Brain"; } catch (e) { return "Brain"; } };
+  const confirmarPausa = async () => {
+    const r = pausaModal && pausaModal.r; if (!r) return;
+    if (!pausaMotivo.trim()) return alert("Escrib\u00ed el motivo de la pausa.");
+    setPausando(true);
+    try {
+      const ahora = new Date().toISOString(); const por = _quienPausa();
+      const { error } = await sb.from("maestro_jornada_mx").update({ pausado: true, pausa_motivo: pausaMotivo.trim(), pausa_por: por, pausa_at: ahora, liberado_at: null, liberado_por: null }).eq("id", r.id);
+      if (error) throw error;
+      setPagos(ps => ps.map(p => p.id === r.id ? { ...p, pausado: true, pausa_motivo: pausaMotivo.trim(), pausa_por: por, pausa_at: ahora } : p));
+      setPausaModal(null); setPausaMotivo("");
+    } catch (e) { alert("Error pausando: " + (e.message || e)); }
+    setPausando(false);
+  };
+  const reanudarPago = async (r) => {
+    if (!confirm(`\u00bfReanudar (liberar) el pago de ${r.driver_name || r.placa} \u00b7 ruta ${r.id_ruta}?`)) return;
+    try {
+      const ahora = new Date().toISOString(); const por = _quienPausa();
+      const { error } = await sb.from("maestro_jornada_mx").update({ pausado: false, liberado_at: ahora, liberado_por: por }).eq("id", r.id);
+      if (error) throw error;
+      setPagos(ps => ps.map(p => p.id === r.id ? { ...p, pausado: false, liberado_at: ahora, liberado_por: por } : p));
+    } catch (e) { alert("Error reanudando: " + (e.message || e)); }
+  };
 
   // Carga el mapa placa->empresa desde flota_terceros_mx (semana mas reciente gana)
   useEffect(() => {
@@ -17669,6 +17695,7 @@ function ListadoPagosDiarios() {
     else if (filtroEstado === "no_pagadas") res = res.filter(p => p.ns_categoria === "NO_PAGO_VIS<90%");
     else if (filtroEstado === "con_alerta") res = res.filter(p => tieneAlerta(p));
     else if (filtroEstado === "no_operadas") res = res.filter(p => p.ruta_no_operada);
+    else if (filtroEstado === "pausadas") res = res.filter(p => p.pausado);
 
     // Ordenamiento
     res.sort((a, b) => {
@@ -17697,6 +17724,7 @@ function ListadoPagosDiarios() {
       noPagadas: filasFiltradas.filter(p => p.ns_categoria === "NO_PAGO_VIS<90%").length,
       alertas: filasFiltradas.filter(p => tieneAlerta(p)).length,
       noOperadas: filasFiltradas.filter(p => p.ruta_no_operada).length,
+      pausadas: filasFiltradas.filter(p => p.pausado).length,
       pagoMeli: filasFiltradas.reduce((s, p) => s + Number(p.pago_meli || 0), 0),
       margenPct: (() => {
         const pm = filasFiltradas.reduce((s, p) => s + Number(p.pago_meli || 0), 0);
@@ -18055,6 +18083,14 @@ function ListadoPagosDiarios() {
             <div style={{ fontSize: 9, color: "#92400e", marginTop: 2 }}>clic para filtrar</div>
           </div>
         )}
+        {pagos.filter(p => p.pausado).length > 0 && (
+          <div onClick={() => setFiltroEstado(filtroEstado === "pausadas" ? "todas" : "pausadas")} title="Ver solo pagos pausados"
+            style={{ background: "#fff7ed", border: `2px solid ${filtroEstado === "pausadas" ? "#c2410c" : "#fdba74"}`, borderRadius: 6, padding: "12px 14px", cursor: "pointer" }}>
+            <div style={{ fontSize: 10, color: "#9a3412", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>Pagos pausados {filtroEstado === "pausadas" ? "(filtrando)" : ""}</div>
+            <div style={{ fontSize: 22, fontWeight: 700, color: "#9a3412", marginTop: 2 }}>{pagos.filter(p => p.pausado).length}</div>
+            <div style={{ fontSize: 9, color: "#9a3412", marginTop: 2 }}>\u23F8 clic para filtrar</div>
+          </div>
+        )}
         <div style={{ background: "#f5f3ff", border: "1px solid #c4b5fd", borderRadius: 6, padding: "12px 14px" }}>
           <div style={{ fontSize: 10, color: "#5b21b6", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>Rutas sin movimiento</div>
           <div style={{ fontSize: 22, fontWeight: 700, color: "#5b21b6", marginTop: 2 }}>{totales.noOperadas}</div>
@@ -18070,6 +18106,7 @@ function ListadoPagosDiarios() {
           { id: "no_pagadas", l: `No pagadas (${pagos.filter(p => p.ns_categoria === "NO_PAGO_VIS<90%").length})` },
           { id: "con_alerta", l: `Con alertas (${pagos.filter(p => tieneAlerta(p)).length})` },
           { id: "no_operadas", l: `Sin movimiento (${pagos.filter(p => p.ruta_no_operada).length})` },
+          { id: "pausadas", l: `Pausadas (${pagos.filter(p => p.pausado).length})` },
         ].map(({ id, l }) => (
           <button key={id} onClick={() => setFiltroEstado(id)}
             style={{ padding: "5px 12px", borderRadius: 4,
@@ -18082,13 +18119,29 @@ function ListadoPagosDiarios() {
         ))}
       </div>
 
+      {pausaModal && (
+        <div onMouseDown={e => { if (e.target === e.currentTarget && !pausando) setPausaModal(null); }}
+          style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}>
+          <div style={{ background: "#fff", borderRadius: 12, padding: 22, width: 460, maxWidth: "100%" }}>
+            <div style={{ fontSize: 15, fontWeight: 800, color: "#9a3412", marginBottom: 4 }}>\u23F8 Pausar pago</div>
+            <div style={{ fontSize: 12, color: "#475569", marginBottom: 12 }}>{`${pausaModal.r.driver_name || ""} \u00b7 ${pausaModal.r.placa || ""} \u00b7 ruta ${pausaModal.r.id_ruta || ""}`}</div>
+            <label style={{ fontSize: 12, fontWeight: 700, color: "#475569", display: "block", marginBottom: 6 }}>Motivo de la pausa (se guarda) *</label>
+            <textarea value={pausaMotivo} onChange={e => setPausaMotivo(e.target.value)} rows={4} placeholder="\u00bfPor qu\u00e9 se pausa este pago?" style={{ width: "100%", padding: "8px 10px", border: "1px solid #e4e7ec", borderRadius: 8, fontSize: 13, resize: "vertical", boxSizing: "border-box" }} />
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 14 }}>
+              <button onClick={() => { setPausaModal(null); setPausaMotivo(""); }} disabled={pausando} style={{ padding: "8px 16px", background: "#fff", color: "#475569", border: "1px solid #e4e7ec", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>Cancelar</button>
+              <button onClick={confirmarPausa} disabled={pausando} style={{ padding: "8px 16px", background: "#c2410c", color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>{pausando ? "Pausando\u2026" : "Pausar pago"}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Barra de scroll horizontal superior (sincronizada con la tabla) */}
       <div ref={topScrollRef} onScroll={onTopScroll} style={{ overflowX: "auto", overflowY: "hidden", marginBottom: 4, position: "sticky", top: 0, zIndex: 20, background: "#f8fafc", paddingTop: 4, paddingBottom: 2, borderBottom: "1px solid #e4e7ec" }}>
         <div style={{ width: tablaWidth, height: 1 }} />
       </div>
 
       {/* Tabla principal — vista por RUTA */}
-      <div ref={tableWrapRef} onScroll={onTableScroll} style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, overflow: "auto" }}>
+      <div ref={tableWrapRef} onScroll={onTableScroll} style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, overflow: "auto", maxHeight: "72vh" }}>
         {loading ? (
           <div style={{ padding: 30, textAlign: "center", color: "#94a3b8" }}>Cargando datos del {fecha}...</div>
         ) : pagos.length === 0 ? (
@@ -18099,7 +18152,7 @@ function ListadoPagosDiarios() {
         ) : filasFiltradas.length === 0 ? (
           <div style={{ padding: 30, textAlign: "center", color: "#94a3b8" }}>Ningún registro coincide con los filtros</div>
         ) : (
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11, minWidth: 1560 }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11, minWidth: 1660 }}>
             <thead>
               <tr style={{ background: "#f8fafc", borderBottom: "1px solid #e4e7ec", position: "sticky", top: 0 }}>
                 <Th onClick={() => toggleOrder("driver_name")}>Chofer{ordIcon("driver_name")}</Th>
@@ -18123,12 +18176,13 @@ function ListadoPagosDiarios() {
                 <Th right>Pago MELI</Th>
                 <Th right>% Margen</Th>
                 <Th>Observaciones</Th>
+                <Th center>Pago</Th>
               </tr>
             </thead>
             <tbody>
               {filasFiltradas.map((r, i) => {
                 const noPagada = r.ns_categoria === "NO_PAGO_VIS<90%";
-                const tieneAlerta = !!r.observaciones && !noPagada;
+                const tieneAlerta = alertasDe(r).length > 0 && !noPagada;
                 const pagoMeli = r.pago_meli != null ? Number(r.pago_meli) : null;
                 const margenPct = (pagoMeli != null && pagoMeli > 0) ? ((pagoMeli - Number(r.pago_neto)) / pagoMeli * 100) : null;
                 return (
@@ -18208,6 +18262,16 @@ function ListadoPagosDiarios() {
                     <td style={{ ...tdStyle(), fontSize: 10, color: noPagada ? "#991b1b" : (r.observaciones ? "#92400e" : "#cbd5e1"), maxWidth: 260, whiteSpace: "normal", lineHeight: 1.3 }} title={r.observaciones || ""}>
                       {r.observaciones || "—"}
                     </td>
+                    <td style={{ ...tdStyle(), textAlign: "center", whiteSpace: "nowrap" }}>
+                      {r.pausado ? (
+                        <div>
+                          <span title={r.pausa_motivo || ""} style={{ display: "inline-block", fontSize: 10, fontWeight: 800, color: "#92400e", background: "#fef3c7", border: "1px solid #fcd34d", borderRadius: 6, padding: "2px 6px" }}>\u23F8 Pausado</span>
+                          <button onClick={() => reanudarPago(r)} style={{ display: "block", margin: "4px auto 0", fontSize: 10, fontWeight: 700, color: "#166534", background: "#fff", border: "1px solid #166534", borderRadius: 6, padding: "2px 8px", cursor: "pointer" }}>Reanudar</button>
+                        </div>
+                      ) : (
+                        <button onClick={() => { setPausaMotivo(""); setPausaModal({ r }); }} disabled={!r.id} title={r.id ? "Pausar el pago de esta ruta" : "Sin id, no se puede pausar"} style={{ fontSize: 10, fontWeight: 700, color: "#b45309", background: "#fff", border: "1px solid #fcd34d", borderRadius: 6, padding: "3px 8px", cursor: r.id ? "pointer" : "not-allowed" }}>\u23F8 Pausar</button>
+                      )}
+                    </td>
                   </tr>
                 );
               })}
@@ -18227,6 +18291,7 @@ function ListadoPagosDiarios() {
                   <td style={{ ...tdStyle(), textAlign: "right", color: "#16a34a", fontSize: 13 }}>{fmtMXN(totales.pagoNeto)}</td>
                   <td style={{ ...tdStyle(), textAlign: "right", color: "#1a3a6b" }}>{totales.pagoMeli > 0 ? fmtMXN(totales.pagoMeli) : "—"}</td>
                   <td style={{ ...tdStyle(), textAlign: "right", color: "#1a3a6b" }}>{totales.margenPct != null ? `${totales.margenPct.toFixed(1)}%` : "—"}</td>
+                  <td style={tdStyle()}></td>
                   <td style={tdStyle()}></td>
                 </tr>
               )}
