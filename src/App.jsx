@@ -19122,14 +19122,31 @@ function AyudantesDetalleDia() {
     return t.join(" ");
   };
 
-  // ── Rutas con helper AL CIERRE según snapshots (universo oficial de la vista) ──
-  const MOMENTOS_CIERRE = ["pre_cierre", "cierre_dia", "post_cierre"];
+  // ── Rutas con helper según snapshots (universo oficial de la vista) ──
+  // Prioridad de momentos del día (de inicio a cierre). Por ruta se toma el
+  // snapshot MÁS TARDÍO disponible: si hubo cierre se usa el cierre; si el flujo
+  // de snapshots se cortó esa noche (p.ej. solo llegó a fin_tarde), cae al último
+  // momento capturado en vez de dejar la vista en 0.
+  const PRIORIDAD_MOMENTOS = ["inicio", "media_manana", "tarde", "fin_tarde", "pre_cierre", "cierre_dia", "post_cierre"];
+  const rangoMomento = (md) => {
+    const i = PRIORIDAD_MOMENTOS.indexOf(md);
+    return i === -1 ? -1 : i;
+  };
   const rutasSnapHelper = useMemo(() => {
-    const m = {};
+    // Por ruta, quedarse con el snapshot del momento más tardío
+    const ultimoPorRuta = {};
     for (const s of snapshots) {
-      if (s.has_helper && MOMENTOS_CIERRE.includes(s.momento_dia)) {
-        const k = String(s.id_ruta);
-        if (!m[k]) m[k] = { id_ruta: s.id_ruta, sc: s.service_center_id, driver_name: s.driver_name, placa: s.placa };
+      const k = String(s.id_ruta);
+      const r = rangoMomento(s.momento_dia);
+      if (r < 0) continue;
+      if (!ultimoPorRuta[k] || r > ultimoPorRuta[k].rango) {
+        ultimoPorRuta[k] = { rango: r, snap: s };
+      }
+    }
+    const m = {};
+    for (const [k, { snap: s }] of Object.entries(ultimoPorRuta)) {
+      if (s.has_helper) {
+        m[k] = { id_ruta: s.id_ruta, sc: s.service_center_id, driver_name: s.driver_name, placa: s.placa };
       }
     }
     return m;
