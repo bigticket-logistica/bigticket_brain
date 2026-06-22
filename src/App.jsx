@@ -14786,11 +14786,6 @@ function ConciliacionTercerosMX({ usuario }) {
           for (const c of editados) for (const ln of c.detalle) filas.push({ ...ln, _id: ln._id || lineaId(ln), origen: ln.origen || "motor" });
         }
       }
-      // Línea visible del saldo arrastrado (mismo SC). Es solo visual: recalcSC la ignora y el cierre la aplica vía prev.
-      Object.keys(saldosPorSC).filter(k => k.startsWith(norm(empresa) + "||")).forEach(k => {
-        const si = saldosPorSC[k]; if (!si || !(si.pendiente < 0)) return;
-        filas.push({ _saldo: true, _id: "saldo|" + si.sc, origen: "saldo", fecha: null, placa: "\u2014", id_ruta: "", driver_name: `Saldo conciliaci\u00f3n arrastrado (sem ${si.semanaOrigen})`, service_center_id: si.sc, tiene_auxiliar: false, cargado: null, entregado: null, monto: Number(si.pendiente || 0), es_no_pago: false });
-      });
       setDetalles(prev => ({ ...prev, [empresa]: filas }));
     } catch (e) {
       console.error("detalle conciliación:", e);
@@ -14834,13 +14829,12 @@ function ConciliacionTercerosMX({ usuario }) {
   // ── Edición de líneas: capa de ajuste sobre el detalle del motor ──
   const lineaId = (d) => d._id || `m|${String(d.fecha||"").slice(0,10)}|${d.placa||""}|${d.id_ruta||""}|${d.service_center_id||""}`;
   const recalcSC = (filas, cobros) => {
-    const reales = (filas || []).filter(d => !d._saldo);
-    const neto = reales.reduce((s, d) => s + Number(d.monto || 0), 0);
+    const neto = (filas || []).reduce((s, d) => s + Number(d.monto || 0), 0);
     const iva = Math.round(neto * 0.16 * 100) / 100;
     const bruto = Math.round(neto * 1.16 * 100) / 100;
     const c = Number(cobros || 0);
     const liquido = Math.round((bruto - c) * 100) / 100;
-    return { neto, iva, bruto, cobros: c, liquido, nViajes: reales.length, nNoPago: reales.filter(d => d.es_no_pago).length };
+    return { neto, iva, bruto, cobros: c, liquido, nViajes: (filas||[]).length, nNoPago: (filas||[]).filter(d => d.es_no_pago).length };
   };
   const cobrosDe = (empresa, sc) => Number((cobrosPorSC[empresa] || {})[sc] || 0);
   const saldoPrevioDe = (empresa, sc) => Number((saldosPorSC[`${norm(empresa)}||${norm(sc)}`] || {}).pendiente || 0);
@@ -14934,7 +14928,7 @@ function ConciliacionTercerosMX({ usuario }) {
     const { error } = await sb.from("conciliaciones_terceros").upsert({
       empresa_nombre: empresa, service_center: sc, semana, semana_inicio: lunes, estado: "borrador",
       total_neto: tot.neto, iva_16: tot.iva, total_bruto: tot.bruto, total_cobros: tot.cobros, liquido_pago: tot.liquido,
-      n_viajes: tot.nViajes, n_no_pago: tot.nNoPago, detalle: filasSCnuevas.filter(d => !d._saldo), tiene_ajustes: true,
+      n_viajes: tot.nViajes, n_no_pago: tot.nNoPago, detalle: filasSCnuevas, tiene_ajustes: true,
       generado_at: new Date().toISOString(),
     }, { onConflict: "empresa_nombre,service_center,semana" });
     if (error) throw error;
@@ -15075,7 +15069,7 @@ function ConciliacionTercerosMX({ usuario }) {
         estado: tot.negativo ? "pendiente_conciliacion" : "cerrada",
         total_neto: tot.neto, iva_16: tot.iva, total_bruto: tot.bruto, liquido_pago: tot.liquido, total_cobros: tot.cobros,
         n_viajes: tot.nViajes, n_no_pago: tot.nNoPago,
-        detalle: filasSC.filter(d => !d._saldo), tiene_ajustes: (filasSC.some(d => d.es_manual) || filasSC.filter(d => !d._saldo).length !== Number(rSC.n_viajes || 0)), generado_at: ahora, cerrado_at: ahora,
+        detalle: filasSC, tiene_ajustes: (filasSC.some(d => d.es_manual) || filasSC.length !== Number(rSC.n_viajes || 0)), generado_at: ahora, cerrado_at: ahora,
         cerrado_por: (usuario && (usuario.nombre || usuario.email)) || "Brain",
       }, { onConflict: "empresa_nombre,service_center,semana" });
       if (error) throw error;
@@ -15600,7 +15594,7 @@ function ConciliacionTercerosMX({ usuario }) {
     const { error } = await sb.from("conciliaciones_terceros").upsert({
       empresa_nombre: empresa, service_center: sc, semana, semana_inicio: lunes, estado,
       total_neto: neteado, iva_16: iva, total_bruto: bruto, liquido_pago: liquido, total_cobros: base.cobros,
-      n_viajes: base.nViajes, n_no_pago: base.nNoPago, detalle: filas.filter(d => !d._saldo), tiene_ajustes: true,
+      n_viajes: base.nViajes, n_no_pago: base.nNoPago, detalle: filas, tiene_ajustes: true,
       generado_at: ahora, cerrado_at: ahora, cerrado_por: (usuario && (usuario.nombre || usuario.email)) || "Brain",
     }, { onConflict: "empresa_nombre,service_center,semana" });
     if (error) throw error;
@@ -15810,7 +15804,7 @@ function ConciliacionTercerosMX({ usuario }) {
         </thead>
         <tbody>
           {filas.map((d, i) => (
-            <tr key={i} style={{ borderBottom: "1px solid #eef0f3", background: d._saldo ? "#fff7ed" : (d.es_manual ? "#eff6ff" : (d.es_no_pago ? "#fef2f2" : (i % 2 ? "#fafbfc" : "#fff"))) }}>
+            <tr key={i} style={{ borderBottom: "1px solid #eef0f3", background: d.es_manual ? "#eff6ff" : (d.es_no_pago ? "#fef2f2" : (i % 2 ? "#fafbfc" : "#fff")) }}>
               <td style={{ padding: "5px 8px", textAlign: "center", whiteSpace: "nowrap" }}>{fmtFechaDDMM(d.fecha)}</td>
               <td style={{ padding: "5px 8px", textAlign: "center", fontWeight: 700 }}>{d.placa}</td>
               <td style={{ padding: "5px 8px", textAlign: "center" }}>{d.id_ruta}</td>
@@ -15825,8 +15819,8 @@ function ConciliacionTercerosMX({ usuario }) {
               <td style={{ padding: "5px 8px", textAlign: "center", color: "#94a3b8" }}>{fmtKm(d.km_real_meli)}</td>
               <td style={{ padding: "5px 8px", textAlign: "center" }}>{fmtFactor(d.factor_ns)}</td>
               <td style={{ padding: "5px 8px", textAlign: "center", whiteSpace: "nowrap" }}>{(d.tiene_bonificacion || Number(d.monto_bonificacion || 0) > 0) ? <span style={{ color: "#16a34a", fontWeight: 600 }}>{"+" + fmtMon(d.monto_bonificacion)}</span> : <span style={{ color: "#cbd5e1" }}>—</span>}</td>
-              <td style={{ padding: "5px 8px", textAlign: "right", fontWeight: 700, color: d._saldo ? "#9a3412" : (d.es_no_pago ? "#dc2626" : "#1a1a1a") }}>{d.es_no_pago ? "$ -" : fmtMon(d.monto)}</td>
-              {opts.editable && (d._saldo ? <td style={{ padding: "5px 8px" }} /> : <td style={{ padding: "5px 8px", textAlign: "center" }}><button onClick={(e) => { e.stopPropagation(); eliminarLinea(opts.empresa, opts.sc, d); }} title="Eliminar línea" style={{ background: "#fee2e2", color: "#b91c1c", border: "none", borderRadius: 6, padding: "2px 8px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>🗑</button></td>)}
+              <td style={{ padding: "5px 8px", textAlign: "right", fontWeight: 700, color: d.es_no_pago ? "#dc2626" : "#1a1a1a" }}>{d.es_no_pago ? "$ -" : fmtMon(d.monto)}</td>
+              {opts.editable && (<td style={{ padding: "5px 8px", textAlign: "center" }}><button onClick={(e) => { e.stopPropagation(); eliminarLinea(opts.empresa, opts.sc, d); }} title="Eliminar línea" style={{ background: "#fee2e2", color: "#b91c1c", border: "none", borderRadius: 6, padding: "2px 8px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>🗑</button></td>)}
             </tr>
           ))}
         </tbody>
@@ -16086,7 +16080,7 @@ function ConciliacionTercerosMX({ usuario }) {
                                 <span style={{ fontWeight: 800, color: "#1a3a6b", fontSize: 13 }}>SC {rSC.service_center}</span>
                                 {chipEstado(rSC.estado_conciliacion)}
                                 <span style={{ fontSize: 11, color: "#64748b" }}>
-                                  Sup: {rSC.supervisor || "—"} · {rSC.n_viajes} viajes · {rSC.n_no_pago} no pago{(ajustesSC[`${norm(g.empresa)}||${norm(rSC.service_center)}`] || 0) > 0 ? ` · ${ajustesSC[`${norm(g.empresa)}||${norm(rSC.service_center)}`]} ajuste(s)` : ""} · Neto {fmtMon(rSC.neto_guardado != null ? rSC.neto_guardado : rSC.total_neto)} · Bruto {fmtMon(rSC.bruto_guardado != null ? rSC.bruto_guardado : rSC.total_bruto)}{rSC.tiene_ajustes ? " · ✏️ ajustada" : ""}{rSC.enviado_at ? " · 📤 " + new Date(rSC.enviado_at).toLocaleDateString("es-CL") : ""}{saldoPrevioDe(g.empresa, rSC.service_center) < 0 ? (() => { const prev = saldoPrevioDe(g.empresa, rSC.service_center); const nv = Number(rSC.neto_guardado != null ? rSC.neto_guardado : rSC.total_neto) || 0; const net = Math.round((nv + prev) * 100) / 100; const br = net < 0 ? net : Math.round(net * 1.16 * 100) / 100; return ` · ⚠️ Saldo ${fmtMon(prev)} · A pagar: neto ${fmtMon(net)} / bruto ${fmtMon(br)}`; })() : ""}
+                                  Sup: {rSC.supervisor || "—"} · {rSC.n_viajes} viajes · {rSC.n_no_pago} no pago{(ajustesSC[`${norm(g.empresa)}||${norm(rSC.service_center)}`] || 0) > 0 ? ` · ${ajustesSC[`${norm(g.empresa)}||${norm(rSC.service_center)}`]} ajuste(s)` : ""} · Neto {fmtMon(rSC.neto_guardado != null ? rSC.neto_guardado : rSC.total_neto)} · Bruto {fmtMon(rSC.bruto_guardado != null ? rSC.bruto_guardado : rSC.total_bruto)}{rSC.tiene_ajustes ? " · ✏️ ajustada" : ""}{rSC.enviado_at ? " · 📤 " + new Date(rSC.enviado_at).toLocaleDateString("es-CL") : ""}{saldoPrevioDe(g.empresa, rSC.service_center) < 0 ? ` · ⚠️ Saldo arrastrado ${fmtMon(saldoPrevioDe(g.empresa, rSC.service_center))}` : ""}
                                 </span>
                               </div>
                               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -19128,14 +19122,31 @@ function AyudantesDetalleDia() {
     return t.join(" ");
   };
 
-  // ── Rutas con helper AL CIERRE según snapshots (universo oficial de la vista) ──
-  const MOMENTOS_CIERRE = ["pre_cierre", "cierre_dia", "post_cierre"];
+  // ── Rutas con helper según snapshots (universo oficial de la vista) ──
+  // Prioridad de momentos del día (de inicio a cierre). Por ruta se toma el
+  // snapshot MÁS TARDÍO disponible: si hubo cierre se usa el cierre; si el flujo
+  // de snapshots se cortó esa noche (p.ej. solo llegó a fin_tarde), cae al último
+  // momento capturado en vez de dejar la vista en 0.
+  const PRIORIDAD_MOMENTOS = ["inicio", "media_manana", "tarde", "fin_tarde", "pre_cierre", "cierre_dia", "post_cierre"];
+  const rangoMomento = (md) => {
+    const i = PRIORIDAD_MOMENTOS.indexOf(md);
+    return i === -1 ? -1 : i;
+  };
   const rutasSnapHelper = useMemo(() => {
-    const m = {};
+    // Por ruta, quedarse con el snapshot del momento más tardío
+    const ultimoPorRuta = {};
     for (const s of snapshots) {
-      if (s.has_helper && MOMENTOS_CIERRE.includes(s.momento_dia)) {
-        const k = String(s.id_ruta);
-        if (!m[k]) m[k] = { id_ruta: s.id_ruta, sc: s.service_center_id, driver_name: s.driver_name, placa: s.placa };
+      const k = String(s.id_ruta);
+      const r = rangoMomento(s.momento_dia);
+      if (r < 0) continue;
+      if (!ultimoPorRuta[k] || r > ultimoPorRuta[k].rango) {
+        ultimoPorRuta[k] = { rango: r, snap: s };
+      }
+    }
+    const m = {};
+    for (const [k, { snap: s }] of Object.entries(ultimoPorRuta)) {
+      if (s.has_helper) {
+        m[k] = { id_ruta: s.id_ruta, sc: s.service_center_id, driver_name: s.driver_name, placa: s.placa };
       }
     }
     return m;
