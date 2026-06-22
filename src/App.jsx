@@ -15051,6 +15051,31 @@ function ConciliacionTercerosMX({ usuario }) {
     setGuardandoEdit(null);
   };
 
+  const editarMontoLinea = async (empresa, sc, linea) => {
+    const actual = Number(linea.monto || 0);
+    const raw = window.prompt(`Nuevo monto para ${linea.placa || ""} · ${fmtFechaDDMM(linea.fecha)} · ruta ${linea.id_ruta || "—"} (actual ${fmtMon(actual)}):`, String(actual));
+    if (raw === null) return;
+    const nuevo = Number(String(raw).replace(/[^0-9.-]/g, ""));
+    if (isNaN(nuevo)) { alert("El monto debe ser numérico."); return; }
+    const motivo = window.prompt(`Motivo del ajuste de monto (${fmtMon(actual)} → ${fmtMon(nuevo)}):`, "");
+    if (motivo === null) return;
+    const clave = claveCierre(empresa, sc); setGuardandoEdit(clave);
+    try {
+      const id = lineaId(linea);
+      const todas = (detalles[empresa] || []).map(d => {
+        if (lineaId(d) !== id) return d;
+        return { ...d, monto: nuevo, es_no_pago: false, _editado: true, monto_original: (d.monto_original != null ? d.monto_original : actual), motivo_edicion: (motivo || "").trim(), editado_por: (usuario && (usuario.nombre || usuario.email)) || "Brain", editado_at: new Date().toISOString() };
+      });
+      const filasSC = todas.filter(d => (d.service_center_id || "SIN SC") === sc);
+      await guardarBorradorSC(empresa, sc, filasSC, cobrosDe(empresa, sc));
+      await auditarAjuste(empresa, sc, "editar_monto", linea.origen || "motor", { ...linea, monto: nuevo, monto_anterior: actual }, (motivo || "").trim());
+      setDetalles(prev => ({ ...prev, [empresa]: todas }));
+      await cargarResumen(semana);
+      setMsg({ ok: true, txt: `Monto editado en ${empresa} · ${sc}: ${fmtMon(actual)} → ${fmtMon(nuevo)}.` });
+    } catch (e) { console.error("editar monto:", e); setMsg({ ok: false, txt: "Error editando monto: " + (e.message || e) }); }
+    setGuardandoEdit(null);
+  };
+
   const abrirAgregarLinea = (empresa, sc, tipo) => setFormLinea({ empresa, sc, tipo, fecha: "", placa: "", id_ruta: "", driver_name: "", cargado: "", entregado: "", km_pago: "", concepto: "", monto: "" });
 
   const guardarLineaNueva = async () => {
@@ -15922,8 +15947,8 @@ function ConciliacionTercerosMX({ usuario }) {
               <td style={{ padding: "5px 8px", textAlign: "center", color: "#94a3b8" }}>{fmtKm(d.km_real_meli)}</td>
               <td style={{ padding: "5px 8px", textAlign: "center" }}>{fmtFactor(d.factor_ns)}</td>
               <td style={{ padding: "5px 8px", textAlign: "center", whiteSpace: "nowrap" }}>{(d.tiene_bonificacion || Number(d.monto_bonificacion || 0) > 0) ? <span style={{ color: "#16a34a", fontWeight: 600 }}>{"+" + fmtMon(d.monto_bonificacion)}</span> : <span style={{ color: "#cbd5e1" }}>—</span>}</td>
-              <td style={{ padding: "5px 8px", textAlign: "right", fontWeight: 700, color: d._saldo ? "#9a3412" : (d.es_no_pago ? "#dc2626" : "#1a1a1a") }}>{d.es_no_pago ? "$ -" : fmtMon(d.monto)}</td>
-              {opts.editable && (d._saldo ? <td style={{ padding: "5px 8px" }} /> : <td style={{ padding: "5px 8px", textAlign: "center" }}><button onClick={(e) => { e.stopPropagation(); eliminarLinea(opts.empresa, opts.sc, d); }} title="Eliminar línea" style={{ background: "#fee2e2", color: "#b91c1c", border: "none", borderRadius: 6, padding: "2px 8px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>🗑</button></td>)}
+              <td style={{ padding: "5px 8px", textAlign: "right", fontWeight: 700, color: d._saldo ? "#9a3412" : (d.es_no_pago ? "#dc2626" : "#1a1a1a") }} title={d._editado ? `Editado: ${fmtMon(d.monto_original)} → ${fmtMon(d.monto)}${d.motivo_edicion ? " · " + d.motivo_edicion : ""}` : undefined}>{d.es_no_pago ? "$ -" : fmtMon(d.monto)}{d._editado ? " ✏️" : ""}</td>
+              {opts.editable && (d._saldo ? <td style={{ padding: "5px 8px" }} /> : <td style={{ padding: "5px 8px", textAlign: "center", whiteSpace: "nowrap" }}><button onClick={(e) => { e.stopPropagation(); editarMontoLinea(opts.empresa, opts.sc, d); }} title="Editar monto de este viaje" style={{ background: "#dbeafe", color: "#1d4ed8", border: "none", borderRadius: 6, padding: "2px 8px", fontSize: 12, fontWeight: 700, cursor: "pointer", marginRight: 4 }}>✏️</button><button onClick={(e) => { e.stopPropagation(); eliminarLinea(opts.empresa, opts.sc, d); }} title="Eliminar línea" style={{ background: "#fee2e2", color: "#b91c1c", border: "none", borderRadius: 6, padding: "2px 8px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>🗑</button></td>)}
             </tr>
           ))}
         </tbody>
