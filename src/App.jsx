@@ -11262,6 +11262,9 @@ function BrainCentral({ setTab, usuario }) {
 
       <div style={{
         position: "relative", borderRadius: 18, padding: 14, overflow: "hidden", border: "1px solid #0c1b3a",
+        // Se limita el ancho según el alto de pantalla para que el cerebro entero
+        // quepa sin scroll al ser la pantalla principal (con el nav arriba).
+        maxWidth: "calc((100vh - 290px) * 1.34)", margin: "0 auto",
         boxShadow: "0 18px 50px -18px rgba(2,8,23,.55)",
         background: "radial-gradient(ellipse 70% 42% at 50% 88%, rgba(110,165,235,.30), transparent 60%), radial-gradient(ellipse 90% 70% at 50% 30%, rgba(38,72,135,.42), transparent 65%), linear-gradient(180deg,#060d22 0%,#050a1b 55%,#02050f 100%)",
       }}>
