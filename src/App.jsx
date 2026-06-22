@@ -8317,7 +8317,7 @@ function ModalDetalleContratista({ fila, onCerrar, docsPorCategoria, renderIcono
         let recursosFinales = Array.from(recursosMap.values());
         // Si es SUB, filtrar solo el subcontratista específico
         if (esSub && fila.subcontratista_nombre) {
-          const norm = (s) => (s || "").toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "").trim();
+          const norm = (s) => (s || "").toLowerCase().normalize("NFKD").replace(/[̀-ͯ]/g, "").trim();
           const target = norm(fila.subcontratista_nombre);
           recursosFinales = recursosFinales.filter(r => norm(r.recurso_nombre).includes(target) || target.includes(norm(r.recurso_nombre)));
         }
@@ -9070,7 +9070,7 @@ function RecursosContratista({ transporte, categoria, subcontratistaNombre }) {
         let recursosFinales = Array.from(recursosMap.values());
         if (categoria === "SUB" && subcontratistaNombre) {
           // Match flexible: ignorar mayúsculas/acentos
-          const norm = (s) => (s || "").toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "").trim();
+          const norm = (s) => (s || "").toLowerCase().normalize("NFKD").replace(/[̀-ͯ]/g, "").trim();
           const target = norm(subcontratistaNombre);
           recursosFinales = recursosFinales.filter(r => norm(r.recurso_nombre).includes(target) || target.includes(norm(r.recurso_nombre)));
         }
@@ -14869,7 +14869,7 @@ function ConciliacionTercerosMX({ usuario }) {
   };
   const lineasManualesDe = (empresa, sc) => (aplicManual[`${norm(empresa)}||${norm(sc)}`] || []).map(a => ({ _saldo: true, _manual: true, _id: "saldoM|" + a.origenSC, _origenSC: a.origenSC, _origenKey: a.origenKey, _origenSem: a.origenSem, origen: "saldo_manual", fecha: null, placa: "\u2014", id_ruta: "", driver_name: `Saldo aplicado de ${a.origenSC} (sem ${a.origenSem})`, service_center_id: sc, tiene_auxiliar: false, cargado: null, entregado: null, monto: Number(a.monto || 0), es_no_pago: false }));
   const filasConSaldoLine = (empresa, sc, filas) => {
-    const arr = (filas || []).filter(d => !(d._saldo && !d._manual)); // quita la l\u00ednea auto; conserva manuales ya guardadas
+    const arr = (filas || []).filter(d => !(d._saldo && !d._manual)); // quita la línea auto; conserva manuales ya guardadas
     const prev = saldoPrevioDe(empresa, sc);
     if (prev < 0 && !arr.some(d => d._saldo && !d._manual)) {
       const si = saldoInfoDe(empresa, sc);
@@ -15680,7 +15680,7 @@ function ConciliacionTercerosMX({ usuario }) {
     }
     await guardarPlacasSinEmpresa();
     setCerrando(null); await cargarResumen(semana);
-    if (pendientes.length) alert(`Quedan estas empresas con saldo negativo (se consolidar\u00e1n en los siguientes pagos):\n\n${pendientes.map(p => `\u2022 ${p.e} \u00b7 ${p.sc}  (${fmtMon(p.n)})`).join("\n")}\n\nSe guardaron como "pendiente de conciliaci\u00f3n" y NO se enviar\u00e1n.`);
+    if (pendientes.length) alert(`Quedan estas empresas con saldo negativo (se consolidarán en los siguientes pagos):\n\n${pendientes.map(p => `• ${p.e} · ${p.sc}  (${fmtMon(p.n)})`).join("\n")}\n\nSe guardaron como "pendiente de conciliación" y NO se enviarán.`);
     setMsg({ ok: fail === 0, txt: `Cierre masivo: ${ok} cerrada(s)${pendientes.length ? `, ${pendientes.length} pendiente(s) de conciliaci\u00f3n` : ""}${skip ? `, ${skip} sin viajes` : ""}, ${fail} con error.` + (errores.length ? " \u2014 " + errores.join(" | ") : "") });
     if (fail === 0 && ok > 0) { try { await generarReporteCierre({}); } catch (e) { console.error("reporte cierre:", e); } }
   };
@@ -15991,7 +15991,7 @@ function ConciliacionTercerosMX({ usuario }) {
       {pausados.length > 0 && (
         <div style={{ background: "#fff7ed", border: "1px solid #fdba74", borderRadius: 10, padding: 14, marginBottom: 14 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 8 }}>
-            <span style={{ fontSize: 14, fontWeight: 800, color: "#9a3412" }}>\u23F8 Pagos pausados (pendientes de liberar)</span>
+            <span style={{ fontSize: 14, fontWeight: 800, color: "#9a3412" }}>⏸ Pagos pausados (pendientes de liberar)</span>
             <span style={{ fontSize: 12, color: "#b45309" }}>{pausados.length} ruta(s) \u00b7 se mantienen hasta liberarse</span>
           </div>
           <div style={{ overflowX: "auto" }}>
@@ -16012,7 +16012,7 @@ function ConciliacionTercerosMX({ usuario }) {
               ))}</tbody>
             </table>
           </div>
-          <div style={{ fontSize: 10, color: "#b45309", marginTop: 8 }}>Estas rutas tienen el pago retenido desde el Listado de Pagos. Mientras no se liberen, siguen apareciendo ac\u00e1 semana a semana. "Activar" libera el pago.</div>
+          <div style={{ fontSize: 10, color: "#b45309", marginTop: 8 }}>Estas rutas tienen el pago retenido desde el Listado de Pagos. Mientras no se liberen, siguen apareciendo acá semana a semana. "Activar" libera el pago.</div>
         </div>
       )}
 
@@ -18135,7 +18135,7 @@ function ListadoPagosDiarios() {
             style={{ background: "#fff7ed", border: `2px solid ${filtroEstado === "pausadas" ? "#c2410c" : "#fdba74"}`, borderRadius: 6, padding: "12px 14px", cursor: "pointer" }}>
             <div style={{ fontSize: 10, color: "#9a3412", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>Pagos pausados {filtroEstado === "pausadas" ? "(filtrando)" : ""}</div>
             <div style={{ fontSize: 22, fontWeight: 700, color: "#9a3412", marginTop: 2 }}>{pagos.filter(p => p.pausado).length}</div>
-            <div style={{ fontSize: 9, color: "#9a3412", marginTop: 2 }}>\u23F8 clic para filtrar</div>
+            <div style={{ fontSize: 9, color: "#9a3412", marginTop: 2 }}>⏸ clic para filtrar</div>
           </div>
         )}
         <div style={{ background: "#f5f3ff", border: "1px solid #c4b5fd", borderRadius: 6, padding: "12px 14px" }}>
@@ -18170,10 +18170,10 @@ function ListadoPagosDiarios() {
         <div onMouseDown={e => { if (e.target === e.currentTarget && !pausando) setPausaModal(null); }}
           style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}>
           <div style={{ background: "#fff", borderRadius: 12, padding: 22, width: 460, maxWidth: "100%" }}>
-            <div style={{ fontSize: 15, fontWeight: 800, color: "#9a3412", marginBottom: 4 }}>\u23F8 Pausar pago</div>
+            <div style={{ fontSize: 15, fontWeight: 800, color: "#9a3412", marginBottom: 4 }}>⏸ Pausar pago</div>
             <div style={{ fontSize: 12, color: "#475569", marginBottom: 12 }}>{`${pausaModal.r.driver_name || ""} \u00b7 ${pausaModal.r.placa || ""} \u00b7 ruta ${pausaModal.r.id_ruta || ""}`}</div>
             <label style={{ fontSize: 12, fontWeight: 700, color: "#475569", display: "block", marginBottom: 6 }}>Motivo de la pausa (se guarda) *</label>
-            <textarea value={pausaMotivo} onChange={e => setPausaMotivo(e.target.value)} rows={4} placeholder="\u00bfPor qu\u00e9 se pausa este pago?" style={{ width: "100%", padding: "8px 10px", border: "1px solid #e4e7ec", borderRadius: 8, fontSize: 13, resize: "vertical", boxSizing: "border-box" }} />
+            <textarea value={pausaMotivo} onChange={e => setPausaMotivo(e.target.value)} rows={4} placeholder="¿Por qué se pausa este pago?" style={{ width: "100%", padding: "8px 10px", border: "1px solid #e4e7ec", borderRadius: 8, fontSize: 13, resize: "vertical", boxSizing: "border-box" }} />
             <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 14 }}>
               <button onClick={() => { setPausaModal(null); setPausaMotivo(""); }} disabled={pausando} style={{ padding: "8px 16px", background: "#fff", color: "#475569", border: "1px solid #e4e7ec", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>Cancelar</button>
               <button onClick={confirmarPausa} disabled={pausando} style={{ padding: "8px 16px", background: "#c2410c", color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>{pausando ? "Pausando\u2026" : "Pausar pago"}</button>
@@ -18312,11 +18312,11 @@ function ListadoPagosDiarios() {
                     <td style={{ ...tdStyle(), textAlign: "center", whiteSpace: "nowrap" }}>
                       {r.pausado ? (
                         <div>
-                          <span title={r.pausa_motivo || ""} style={{ display: "inline-block", fontSize: 10, fontWeight: 800, color: "#92400e", background: "#fef3c7", border: "1px solid #fcd34d", borderRadius: 6, padding: "2px 6px" }}>\u23F8 Pausado</span>
+                          <span title={r.pausa_motivo || ""} style={{ display: "inline-block", fontSize: 10, fontWeight: 800, color: "#92400e", background: "#fef3c7", border: "1px solid #fcd34d", borderRadius: 6, padding: "2px 6px" }}>⏸ Pausado</span>
                           <button onClick={() => reanudarPago(r)} style={{ display: "block", margin: "4px auto 0", fontSize: 10, fontWeight: 700, color: "#166534", background: "#fff", border: "1px solid #166534", borderRadius: 6, padding: "2px 8px", cursor: "pointer" }}>Reanudar</button>
                         </div>
                       ) : (
-                        <button onClick={() => { setPausaMotivo(""); setPausaModal({ r }); }} disabled={!r.id} title={r.id ? "Pausar el pago de esta ruta" : "Sin id, no se puede pausar"} style={{ fontSize: 10, fontWeight: 700, color: "#b45309", background: "#fff", border: "1px solid #fcd34d", borderRadius: 6, padding: "3px 8px", cursor: r.id ? "pointer" : "not-allowed" }}>\u23F8 Pausar</button>
+                        <button onClick={() => { setPausaMotivo(""); setPausaModal({ r }); }} disabled={!r.id} title={r.id ? "Pausar el pago de esta ruta" : "Sin id, no se puede pausar"} style={{ fontSize: 10, fontWeight: 700, color: "#b45309", background: "#fff", border: "1px solid #fcd34d", borderRadius: 6, padding: "3px 8px", cursor: r.id ? "pointer" : "not-allowed" }}>⏸ Pausar</button>
                       )}
                     </td>
                   </tr>
@@ -19302,7 +19302,7 @@ function AyudantesDetalleDia() {
   };
 
   // ── Helpers de nombres (MELI duplica: "Pedro Jehonatan Pedro Jehonatan Garduño Lopez") ──
-  const normTokens = (s) => (s || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z\s]/g, " ").split(/\s+/).filter(Boolean);
+  const normTokens = (s) => (s || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z\s]/g, " ").split(/\s+/).filter(Boolean);
   const esMismaPersona = (userName, driverName) => {
     const u = new Set(normTokens(userName));
     const d = normTokens(driverName);
@@ -20090,20 +20090,20 @@ function PagosPausados({ usuario }) {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10, marginBottom: 14 }}>
         <div>
           <div className="sec-title">Pagos pausados</div>
-          <div className="sec-sub">Rutas con el pago retenido por el analista \u00b7 por d\u00eda \u00b7 con su motivo. Desde aqu\u00ed se pueden activar (liberar).</div>
+          <div className="sec-sub">Rutas con el pago retenido por el analista · por día · con su motivo. Desde aquí se pueden activar (liberar).</div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
           <label style={{ fontSize: 12, color: "#475569", display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
             <input type="checkbox" checked={incluirLiberados} onChange={e => setIncluirLiberados(e.target.checked)} /> incluir liberados
           </label>
-          <button onClick={cargar} style={{ padding: "7px 14px", border: "1px solid #1a3a6b", background: "#fff", color: "#1a3a6b", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>\u21BB Actualizar</button>
+          <button onClick={cargar} style={{ padding: "7px 14px", border: "1px solid #1a3a6b", background: "#fff", color: "#1a3a6b", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>↻ Actualizar</button>
           <div style={{ background: "#fff7ed", border: "1px solid #fdba74", borderRadius: 6, padding: "8px 14px" }}>
             <div style={{ fontSize: 10, color: "#9a3412", fontWeight: 700, textTransform: "uppercase" }}>Pausados</div>
             <div style={{ fontSize: 20, fontWeight: 800, color: "#9a3412" }}>{pausCount}</div>
           </div>
         </div>
       </div>
-      {loading ? <div style={{ color: "#94a3b8", padding: 20 }}>Cargando\u2026</div> : dias.length === 0 ? (
+      {loading ? <div style={{ color: "#94a3b8", padding: 20 }}>Cargando…</div> : dias.length === 0 ? (
         <div style={{ padding: 30, textAlign: "center", color: "#94a3b8", border: "1px solid #e4e7ec", borderRadius: 8, background: "#fff" }}>No hay pagos pausados.</div>
       ) : dias.map(dia => (
         <div key={dia} style={{ marginBottom: 16 }}>
@@ -20121,7 +20121,7 @@ function PagosPausados({ usuario }) {
                   <td style={{ ...td, maxWidth: 280, whiteSpace: "normal", color: "#92400e" }}>{r.pausa_motivo || "\u2014"}</td>
                   <td style={td}>{r.pausa_por || "\u2014"}</td>
                   <td style={{ ...td, fontSize: 10, color: "#64748b" }}>{fmtDT(r.pausa_at)}</td>
-                  <td style={td}>{r.pausado ? <span style={{ fontSize: 10, fontWeight: 800, color: "#92400e", background: "#fef3c7", border: "1px solid #fcd34d", borderRadius: 6, padding: "2px 6px" }}>\u23F8 Pausado</span> : <span style={{ fontSize: 10, fontWeight: 800, color: "#166534", background: "#dcfce7", borderRadius: 6, padding: "2px 6px" }}>\u2713 Liberado</span>}</td>
+                  <td style={td}>{r.pausado ? <span style={{ fontSize: 10, fontWeight: 800, color: "#92400e", background: "#fef3c7", border: "1px solid #fcd34d", borderRadius: 6, padding: "2px 6px" }}>⏸ Pausado</span> : <span style={{ fontSize: 10, fontWeight: 800, color: "#166534", background: "#dcfce7", borderRadius: 6, padding: "2px 6px" }}>✓ Liberado</span>}</td>
                   <td style={td}>{r.pausado && <button onClick={() => activar(r)} style={{ fontSize: 11, fontWeight: 700, color: "#fff", background: "#166534", border: "none", borderRadius: 6, padding: "4px 12px", cursor: "pointer" }}>Activar pago</button>}</td>
                 </tr>
               ))}</tbody>
@@ -20180,15 +20180,15 @@ function ConfigAlertas() {
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
-        <div style={{ fontSize: 12, color: "#64748b", maxWidth: 720 }}>Reglas que marcan una l\u00ednea del Listado de Pagos como <b>alerta</b>. El analista las usa para revisar y (pr\u00f3ximamente) pausar pagos. Una l\u00ednea con alerta es la que cumple <b>cualquiera</b> de las reglas activas.</div>
+        <div style={{ fontSize: 12, color: "#64748b", maxWidth: 720 }}>Reglas que marcan una línea del Listado de Pagos como <b>alerta</b>. El analista las usa para revisar y (próximamente) pausar pagos. Una línea con alerta es la que cumple <b>cualquiera</b> de las reglas activas.</div>
         <button onClick={agregar} style={{ padding: "7px 14px", background: "#1a3a6b", color: "#fff", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>+ Agregar regla</button>
       </div>
-      {loading ? <div style={{ color: "#94a3b8", padding: 20 }}>Cargando\u2026</div> : (
+      {loading ? <div style={{ color: "#94a3b8", padding: 20 }}>Cargando…</div> : (
         <div style={{ border: "1px solid #e4e7ec", borderRadius: 8, overflow: "hidden", background: "#fff" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
             <thead><tr>{["Activa", "Nombre", "Campo", "Operador", "Valor", "Color", ""].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
             <tbody>
-              {reglas.length === 0 ? <tr><td colSpan={7} style={{ padding: 20, color: "#94a3b8", textAlign: "center" }}>Sin reglas. Agreg\u00e1 una.</td></tr> : reglas.map((r, i) => (
+              {reglas.length === 0 ? <tr><td colSpan={7} style={{ padding: 20, color: "#94a3b8", textAlign: "center" }}>Sin reglas. Agregá una.</td></tr> : reglas.map((r, i) => (
                 <tr key={r.id || ("n" + i)}>
                   <td style={{ ...td, textAlign: "center" }}><input type="checkbox" checked={!!r.activa} onChange={e => setCampo(i, "activa", e.target.checked)} /></td>
                   <td style={td}><input value={r.nombre || ""} onChange={e => setCampo(i, "nombre", e.target.value)} placeholder="Nombre de la alerta" style={inp} /></td>
