@@ -14786,6 +14786,11 @@ function ConciliacionTercerosMX({ usuario }) {
           for (const c of editados) for (const ln of c.detalle) filas.push({ ...ln, _id: ln._id || lineaId(ln), origen: ln.origen || "motor" });
         }
       }
+      filas = filas.filter(f => !f._saldo);
+      Object.keys(saldosPorSC).filter(k => k.startsWith(norm(empresa) + "||")).forEach(k => {
+        const si = saldosPorSC[k]; if (!si || !(si.pendiente < 0)) return;
+        filas.push({ _saldo: true, _id: "saldo|" + si.sc, origen: "saldo", fecha: null, placa: "\u2014", id_ruta: "", driver_name: `Saldo conciliaci\u00f3n arrastrado (sem ${si.semanaOrigen})`, service_center_id: si.sc, tiene_auxiliar: false, cargado: null, entregado: null, monto: Number(si.pendiente || 0), es_no_pago: false });
+      });
       setDetalles(prev => ({ ...prev, [empresa]: filas }));
     } catch (e) {
       console.error("detalle conciliación:", e);
@@ -14829,17 +14834,28 @@ function ConciliacionTercerosMX({ usuario }) {
   // ── Edición de líneas: capa de ajuste sobre el detalle del motor ──
   const lineaId = (d) => d._id || `m|${String(d.fecha||"").slice(0,10)}|${d.placa||""}|${d.id_ruta||""}|${d.service_center_id||""}`;
   const recalcSC = (filas, cobros) => {
-    const neto = (filas || []).reduce((s, d) => s + Number(d.monto || 0), 0);
-    const iva = Math.round(neto * 0.16 * 100) / 100;
-    const bruto = Math.round(neto * 1.16 * 100) / 100;
+    const reales = (filas || []).filter(d => !d._saldo);
+    const neto = Math.round((filas || []).reduce((s, d) => s + Number(d.monto || 0), 0) * 100) / 100;
+    const neg = neto < 0;
+    const iva = neg ? 0 : Math.round(neto * 0.16 * 100) / 100;
+    const bruto = neg ? neto : Math.round(neto * 1.16 * 100) / 100;
     const c = Number(cobros || 0);
     const liquido = Math.round((bruto - c) * 100) / 100;
-    return { neto, iva, bruto, cobros: c, liquido, nViajes: (filas||[]).length, nNoPago: (filas||[]).filter(d => d.es_no_pago).length };
+    return { neto, iva, bruto, cobros: c, liquido, negativo: neg, nViajes: reales.length, nNoPago: reales.filter(d => d.es_no_pago).length };
   };
   const cobrosDe = (empresa, sc) => Number((cobrosPorSC[empresa] || {})[sc] || 0);
   const saldoPrevioDe = (empresa, sc) => Number((saldosPorSC[`${norm(empresa)}||${norm(sc)}`] || {}).pendiente || 0);
   const saldoEmpresa = (empresa) => Object.entries(saldosPorSC).reduce((s, [k, v]) => s + (k.startsWith(norm(empresa) + "||") ? Number(v.pendiente || 0) : 0), 0);
   const saldoInfoDe = (empresa, sc) => saldosPorSC[`${norm(empresa)}||${norm(sc)}`] || null;
+  const filasConSaldoLine = (empresa, sc, filas) => {
+    const arr = (filas || []).filter(d => !d._saldo);
+    const prev = saldoPrevioDe(empresa, sc);
+    if (prev < 0) {
+      const si = saldoInfoDe(empresa, sc);
+      arr.push({ _saldo: true, _id: "saldo|" + sc, origen: "saldo", fecha: null, placa: "\u2014", id_ruta: "", driver_name: `Saldo conciliaci\u00f3n arrastrado (sem ${si ? si.semanaOrigen : ""})`, service_center_id: sc, tiene_auxiliar: false, cargado: null, entregado: null, monto: prev, es_no_pago: false });
+    }
+    return arr;
+  };
   const cargarSaldos = async (sem) => {
     try {
       const { data } = await sb.from("saldos_pendientes_terceros").select("*");
@@ -15053,12 +15069,10 @@ function ConciliacionTercerosMX({ usuario }) {
   // ── Cerrar / reabrir conciliación por empresa+SC ──
   const cerrarConciliacion = async (empresa, sc, rSC, filasSC) => {
     if (!filasSC || !filasSC.length) return alert("Sin viajes para cerrar en " + sc + ".");
-    const _base = recalcSC(filasSC, cobrosDe(empresa, sc));
-    const _prev = saldoPrevioDe(empresa, sc);
-    const _neteado = Math.round((_base.neto + _prev) * 100) / 100;
-    const _neg = _neteado < 0;
-    const tot = { neto: _neteado, netoViajes: _base.neto, iva: _neg ? 0 : Math.round(_neteado * 0.16 * 100) / 100, bruto: _neg ? _neteado : Math.round(_neteado * 1.16 * 100) / 100, cobros: _base.cobros, nViajes: _base.nViajes, nNoPago: _base.nNoPago, negativo: _neg, saldoPrevio: _prev };
-    tot.liquido = Math.round((tot.bruto - tot.cobros) * 100) / 100;
+    const filasFull = filasConSaldoLine(empresa, sc, filasSC);
+    const tot = recalcSC(filasFull, cobrosDe(empresa, sc));
+    tot.saldoPrevio = saldoPrevioDe(empresa, sc);
+    tot.netoViajes = Math.round(filasFull.filter(d => !d._saldo).reduce((s, d) => s + Number(d.monto || 0), 0) * 100) / 100;
     if (!confirm(`¿Cerrar la conciliación de "${empresa}" — ${sc} — semana ${semana} (${etiquetaSemanaInventario(semana)})?\n\nNeto: ${fmtMon(tot.neto)} · Bruto: ${fmtMon(tot.bruto)} · Cobros: ${fmtMon(tot.cobros)} · Líquido: ${fmtMon(tot.liquido)} · ${tot.nViajes} viajes (${tot.nNoPago} no pago).\n\nEl detalle queda congelado para el PDF y el envío.`)) return;
     setCerrando(claveCierre(empresa, sc));
     try {
@@ -15069,7 +15083,7 @@ function ConciliacionTercerosMX({ usuario }) {
         estado: tot.negativo ? "pendiente_conciliacion" : "cerrada",
         total_neto: tot.neto, iva_16: tot.iva, total_bruto: tot.bruto, liquido_pago: tot.liquido, total_cobros: tot.cobros,
         n_viajes: tot.nViajes, n_no_pago: tot.nNoPago,
-        detalle: filasSC, tiene_ajustes: (filasSC.some(d => d.es_manual) || filasSC.length !== Number(rSC.n_viajes || 0)), generado_at: ahora, cerrado_at: ahora,
+        detalle: filasFull, tiene_ajustes: (filasFull.some(d => d.es_manual) || filasFull.filter(d => !d._saldo).length !== Number(rSC.n_viajes || 0)), generado_at: ahora, cerrado_at: ahora,
         cerrado_por: (usuario && (usuario.nombre || usuario.email)) || "Brain",
       }, { onConflict: "empresa_nombre,service_center,semana" });
       if (error) throw error;
@@ -15581,26 +15595,23 @@ function ConciliacionTercerosMX({ usuario }) {
     else { const { data } = await sb.rpc("get_conciliacion_terceros_detalle", { p_semana: semana, p_empresa: empresa, p_sc: sc }); filas = data || []; cobros = cobrosDe(empresa, sc); }
     const prev = saldoPrevioDe(empresa, sc);
     if (!filas.length && prev === 0) return { skip: true };
-    const base = recalcSC(filas, cobros);
-    const netoViajes = base.neto;
-    const neteado = Math.round((netoViajes + prev) * 100) / 100;
-    const negativo = neteado < 0;
-    const iva = negativo ? 0 : Math.round(neteado * 0.16 * 100) / 100;
-    const bruto = negativo ? neteado : Math.round(neteado * 1.16 * 100) / 100;
-    const liquido = Math.round((bruto - base.cobros) * 100) / 100;
+    const filasFull = filasConSaldoLine(empresa, sc, filas);
+    const tot = recalcSC(filasFull, cobros);
+    const netoViajes = Math.round(filasFull.filter(d => !d._saldo).reduce((s, d) => s + Number(d.monto || 0), 0) * 100) / 100;
+    const negativo = tot.negativo;
     const estado = negativo ? "pendiente_conciliacion" : "cerrada";
     const lunes = rangoSemanaInventario(semana).inicio.toISOString().slice(0, 10);
     const ahora = new Date().toISOString();
     const { error } = await sb.from("conciliaciones_terceros").upsert({
       empresa_nombre: empresa, service_center: sc, semana, semana_inicio: lunes, estado,
-      total_neto: neteado, iva_16: iva, total_bruto: bruto, liquido_pago: liquido, total_cobros: base.cobros,
-      n_viajes: base.nViajes, n_no_pago: base.nNoPago, detalle: filas, tiene_ajustes: true,
+      total_neto: tot.neto, iva_16: tot.iva, total_bruto: tot.bruto, liquido_pago: tot.liquido, total_cobros: tot.cobros,
+      n_viajes: tot.nViajes, n_no_pago: tot.nNoPago, detalle: filasFull, tiene_ajustes: true,
       generado_at: ahora, cerrado_at: ahora, cerrado_por: (usuario && (usuario.nombre || usuario.email)) || "Brain",
     }, { onConflict: "empresa_nombre,service_center,semana" });
     if (error) throw error;
     if (prev < 0 || netoViajes < 0) await persistirSaldoCierre(empresa, sc, netoViajes);
-    await logEvento(empresa, sc, negativo ? "cerrar_pendiente" : "cerrar", { neto: neteado, bruto, liquido, nViajes: base.nViajes }, { estado, detalle: { masivo: true, saldoPrevio: prev, netoViajes } });
-    return { ok: true, negativo, neteado, liquido };
+    await logEvento(empresa, sc, negativo ? "cerrar_pendiente" : "cerrar", { neto: tot.neto, bruto: tot.bruto, liquido: tot.liquido, nViajes: tot.nViajes }, { estado, detalle: { masivo: true, saldoPrevio: prev, netoViajes } });
+    return { ok: true, negativo, neteado: tot.neto, liquido: tot.liquido };
   };
   const cerrarTodo = async () => {
     const items = resumen.filter(r => r.empresa && r.empresa !== SIN_EMPRESA && Number(r.n_viajes || 0) > 0 && r.estado_conciliacion !== "enviada").map(r => ({ empresa: r.empresa, sc: r.service_center }));
@@ -15804,7 +15815,7 @@ function ConciliacionTercerosMX({ usuario }) {
         </thead>
         <tbody>
           {filas.map((d, i) => (
-            <tr key={i} style={{ borderBottom: "1px solid #eef0f3", background: d.es_manual ? "#eff6ff" : (d.es_no_pago ? "#fef2f2" : (i % 2 ? "#fafbfc" : "#fff")) }}>
+            <tr key={i} style={{ borderBottom: "1px solid #eef0f3", background: d._saldo ? "#fff7ed" : (d.es_manual ? "#eff6ff" : (d.es_no_pago ? "#fef2f2" : (i % 2 ? "#fafbfc" : "#fff"))) }}>
               <td style={{ padding: "5px 8px", textAlign: "center", whiteSpace: "nowrap" }}>{fmtFechaDDMM(d.fecha)}</td>
               <td style={{ padding: "5px 8px", textAlign: "center", fontWeight: 700 }}>{d.placa}</td>
               <td style={{ padding: "5px 8px", textAlign: "center" }}>{d.id_ruta}</td>
@@ -15819,8 +15830,8 @@ function ConciliacionTercerosMX({ usuario }) {
               <td style={{ padding: "5px 8px", textAlign: "center", color: "#94a3b8" }}>{fmtKm(d.km_real_meli)}</td>
               <td style={{ padding: "5px 8px", textAlign: "center" }}>{fmtFactor(d.factor_ns)}</td>
               <td style={{ padding: "5px 8px", textAlign: "center", whiteSpace: "nowrap" }}>{(d.tiene_bonificacion || Number(d.monto_bonificacion || 0) > 0) ? <span style={{ color: "#16a34a", fontWeight: 600 }}>{"+" + fmtMon(d.monto_bonificacion)}</span> : <span style={{ color: "#cbd5e1" }}>—</span>}</td>
-              <td style={{ padding: "5px 8px", textAlign: "right", fontWeight: 700, color: d.es_no_pago ? "#dc2626" : "#1a1a1a" }}>{d.es_no_pago ? "$ -" : fmtMon(d.monto)}</td>
-              {opts.editable && (<td style={{ padding: "5px 8px", textAlign: "center" }}><button onClick={(e) => { e.stopPropagation(); eliminarLinea(opts.empresa, opts.sc, d); }} title="Eliminar línea" style={{ background: "#fee2e2", color: "#b91c1c", border: "none", borderRadius: 6, padding: "2px 8px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>🗑</button></td>)}
+              <td style={{ padding: "5px 8px", textAlign: "right", fontWeight: 700, color: d._saldo ? "#9a3412" : (d.es_no_pago ? "#dc2626" : "#1a1a1a") }}>{d.es_no_pago ? "$ -" : fmtMon(d.monto)}</td>
+              {opts.editable && (d._saldo ? <td style={{ padding: "5px 8px" }} /> : <td style={{ padding: "5px 8px", textAlign: "center" }}><button onClick={(e) => { e.stopPropagation(); eliminarLinea(opts.empresa, opts.sc, d); }} title="Eliminar línea" style={{ background: "#fee2e2", color: "#b91c1c", border: "none", borderRadius: 6, padding: "2px 8px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>🗑</button></td>)}
             </tr>
           ))}
         </tbody>
@@ -16080,7 +16091,7 @@ function ConciliacionTercerosMX({ usuario }) {
                                 <span style={{ fontWeight: 800, color: "#1a3a6b", fontSize: 13 }}>SC {rSC.service_center}</span>
                                 {chipEstado(rSC.estado_conciliacion)}
                                 <span style={{ fontSize: 11, color: "#64748b" }}>
-                                  Sup: {rSC.supervisor || "—"} · {rSC.n_viajes} viajes · {rSC.n_no_pago} no pago{(ajustesSC[`${norm(g.empresa)}||${norm(rSC.service_center)}`] || 0) > 0 ? ` · ${ajustesSC[`${norm(g.empresa)}||${norm(rSC.service_center)}`]} ajuste(s)` : ""} · Neto {fmtMon(rSC.neto_guardado != null ? rSC.neto_guardado : rSC.total_neto)} · Bruto {fmtMon(rSC.bruto_guardado != null ? rSC.bruto_guardado : rSC.total_bruto)}{rSC.tiene_ajustes ? " · ✏️ ajustada" : ""}{rSC.enviado_at ? " · 📤 " + new Date(rSC.enviado_at).toLocaleDateString("es-CL") : ""}{saldoPrevioDe(g.empresa, rSC.service_center) < 0 ? ` · ⚠️ Saldo arrastrado ${fmtMon(saldoPrevioDe(g.empresa, rSC.service_center))}` : ""}
+                                  Sup: {rSC.supervisor || "—"} · {rSC.n_viajes} viajes · {rSC.n_no_pago} no pago{(ajustesSC[`${norm(g.empresa)}||${norm(rSC.service_center)}`] || 0) > 0 ? ` · ${ajustesSC[`${norm(g.empresa)}||${norm(rSC.service_center)}`]} ajuste(s)` : ""} · Neto {fmtMon(rSC.neto_guardado != null ? rSC.neto_guardado : rSC.total_neto)} · Bruto {fmtMon(rSC.bruto_guardado != null ? rSC.bruto_guardado : rSC.total_bruto)}{rSC.tiene_ajustes ? " · ✏️ ajustada" : ""}{rSC.enviado_at ? " · 📤 " + new Date(rSC.enviado_at).toLocaleDateString("es-CL") : ""}{saldoPrevioDe(g.empresa, rSC.service_center) < 0 ? (() => { const prev = saldoPrevioDe(g.empresa, rSC.service_center); const nv = Number(rSC.neto_guardado != null ? rSC.neto_guardado : rSC.total_neto) || 0; const net = Math.round((nv + prev) * 100) / 100; const br = net < 0 ? net : Math.round(net * 1.16 * 100) / 100; return ` · ⚠️ Saldo ${fmtMon(prev)} · A pagar: neto ${fmtMon(net)} / bruto ${fmtMon(br)}`; })() : ""}
                                 </span>
                               </div>
                               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -16111,7 +16122,7 @@ function ConciliacionTercerosMX({ usuario }) {
                                 const si = saldoInfoDe(g.empresa, rSC.service_center);
                                 if (!si || !(si.pendiente < 0)) return null;
                                 const comp = Object.entries(si.aplicaciones || {}).map(([w, m]) => ({ w: Number(w), m: Number(m) })).filter(x => x.w > (si.liquidadoHasta || 0) && x.w < semana).sort((a, b) => a.w - b.w);
-                                const netoSemana = (filasSC || []).reduce((s, f) => s + Number(f.monto || 0), 0);
+                                const netoSemana = (filasSC || []).filter(f => !f._saldo).reduce((s, f) => s + Number(f.monto || 0), 0);
                                 const neteado = Math.round((netoSemana + si.pendiente) * 100) / 100;
                                 return (<div style={{ marginBottom: 10, border: "1px solid #fdba74", background: "#fff7ed", borderRadius: 8, padding: "8px 12px" }}>
                                   <div style={{ fontSize: 12, fontWeight: 800, color: "#9a3412" }}>{`\u26A0\uFE0F Saldo pendiente de conciliaci\u00f3n: ${fmtMon(si.pendiente)}`}</div>
