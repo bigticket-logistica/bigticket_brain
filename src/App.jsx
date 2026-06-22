@@ -14672,6 +14672,23 @@ function ConciliacionTercerosMX({ usuario }) {
   const [saldosPorSC, setSaldosPorSC] = useState({});   // "empresa||sc" -> { pendiente, semanaOrigen } (arrastre de negativos)
   const [placasViejas, setPlacasViejas] = useState({}); // placa -> primera semana que apareció sin empresa (anteriores)
   const [aplicManual, setAplicManual] = useState({}); // "empresa||scDestino" -> [{ origenSC, origenSem, monto, origenKey }] (saldos de otro SC aplicados a mano)
+  const [pausados, setPausados] = useState([]); // rutas con pago pausado (Listado de Pagos), pendientes de liberar
+  const cargarPausados = async () => {
+    try {
+      const { data } = await sb.from("maestro_jornada_mx").select("id, fecha, driver_name, placa, id_ruta, service_center_id, pago_neto, pausa_motivo, pausa_por, pausa_at").eq("pausado", true).order("fecha", { ascending: false }).limit(3000);
+      setPausados(data || []);
+    } catch (e) { console.error("pausados concil:", e); setPausados([]); }
+  };
+  useEffect(() => { cargarPausados(); }, []);
+  const activarPausado = async (r) => {
+    if (!confirm(`\u00bfActivar (liberar) el pago de ${r.driver_name || r.placa} \u00b7 ruta ${r.id_ruta} del ${r.fecha}?`)) return;
+    try {
+      const por = (usuario && (usuario.nombre || usuario.email)) || "Brain";
+      const { error } = await sb.from("maestro_jornada_mx").update({ pausado: false, liberado_at: new Date().toISOString(), liberado_por: por }).eq("id", r.id);
+      if (error) throw error;
+      cargarPausados();
+    } catch (e) { alert("Error activando: " + (e.message || e)); }
+  };
   const [formLinea, setFormLinea] = useState(null);     // alta de línea (ajuste/viaje) o null
   const [guardandoEdit, setGuardandoEdit] = useState(null); // clave empresa||sc en proceso
   const [seleccion, setSeleccion] = useState(() => new Set()); // claves cerradas marcadas para envío masivo
@@ -15971,6 +15988,34 @@ function ConciliacionTercerosMX({ usuario }) {
         </div>
       )}
 
+      {pausados.length > 0 && (
+        <div style={{ background: "#fff7ed", border: "1px solid #fdba74", borderRadius: 10, padding: 14, marginBottom: 14 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 8 }}>
+            <span style={{ fontSize: 14, fontWeight: 800, color: "#9a3412" }}>\u23F8 Pagos pausados (pendientes de liberar)</span>
+            <span style={{ fontSize: 12, color: "#b45309" }}>{pausados.length} ruta(s) \u00b7 se mantienen hasta liberarse</span>
+          </div>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, background: "#fff" }}>
+              <thead><tr>{["Fecha", "Chofer", "Patente", "SC", "Ruta", "Pago neto", "Motivo", "Pausado por", ""].map(h => <th key={h} style={{ textAlign: "left", padding: "6px 8px", fontSize: 10, color: "#92400e", textTransform: "uppercase" }}>{h}</th>)}</tr></thead>
+              <tbody>{pausados.map(r => (
+                <tr key={r.id} style={{ borderTop: "1px solid #fde68a" }}>
+                  <td style={{ padding: "6px 8px" }}>{r.fecha}</td>
+                  <td style={{ padding: "6px 8px" }}>{r.driver_name || "\u2014"}</td>
+                  <td style={{ padding: "6px 8px", fontFamily: "monospace" }}>{r.placa || "\u2014"}</td>
+                  <td style={{ padding: "6px 8px" }}>{r.service_center_id || "\u2014"}</td>
+                  <td style={{ padding: "6px 8px", fontFamily: "monospace", fontSize: 10 }}>{r.id_ruta || "\u2014"}</td>
+                  <td style={{ padding: "6px 8px", textAlign: "right" }}>{fmtMon(r.pago_neto)}</td>
+                  <td style={{ padding: "6px 8px", maxWidth: 260, whiteSpace: "normal", color: "#92400e" }}>{r.pausa_motivo || "\u2014"}</td>
+                  <td style={{ padding: "6px 8px" }}>{r.pausa_por || "\u2014"}</td>
+                  <td style={{ padding: "6px 8px" }}><button onClick={() => activarPausado(r)} style={{ fontSize: 11, fontWeight: 700, color: "#fff", background: "#166534", border: "none", borderRadius: 6, padding: "4px 12px", cursor: "pointer" }}>Activar</button></td>
+                </tr>
+              ))}</tbody>
+            </table>
+          </div>
+          <div style={{ fontSize: 10, color: "#b45309", marginTop: 8 }}>Estas rutas tienen el pago retenido desde el Listado de Pagos. Mientras no se liberen, siguen apareciendo ac\u00e1 semana a semana. "Activar" libera el pago.</div>
+        </div>
+      )}
+
       {repRows && repRows.length > 0 && (
         <div style={{ background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 10, padding: 14, marginBottom: 14 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 8 }}>
@@ -16586,6 +16631,7 @@ function ModuloPagosMadre({ usuario }) {
   const [subtab, setSubtab] = useState(rolLimitadoAPrefacturas ? "prefacturas" : "listado");
   const tabs = [
     { id: "listado",     label: "Listado de Pagos",      desc: "Cálculo diario por contratista" },
+    { id: "pagos_pausados", label: "Pagos pausados",     desc: "Rutas con el pago retenido · por día y motivo" },
     { id: "info_ruta",   label: "Información de Ruta",   desc: "Análisis operacional por ruta" },
     { id: "torre_3p",    label: "Torre de Control Pagos", desc: "3 Pilares · MELI vs Operación" },
     { id: "terceros",    label: "Terceros",              desc: "Empresas subcontratadas por patente" },
@@ -16637,6 +16683,7 @@ function ModuloPagosMadre({ usuario }) {
       ) : (
         <>
           {subtab === "listado"     && <ListadoPagosDiarios />}
+          {subtab === "pagos_pausados" && <PagosPausados usuario={usuario} />}
           {subtab === "info_ruta"   && <InformacionDeRuta />}
           {subtab === "torre_3p"    && <TorreTresPilares />}
           {subtab === "terceros"    && <TercerosMX />}
@@ -20007,6 +20054,84 @@ function AyudantesDetalleDia() {
 // ═══════════════════════════════════════════════════════════════════════════
 // CONFIGURACIÓN DE PAGOS — sub-tabs
 // ═══════════════════════════════════════════════════════════════════════════
+function PagosPausados({ usuario }) {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [incluirLiberados, setIncluirLiberados] = useState(false);
+  const fmtMon = (v) => "$ " + Math.round(Number(v || 0)).toLocaleString("es-CL");
+  const fmtDT = (s) => { if (!s) return "\u2014"; try { return new Date(s).toLocaleString("es-MX", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }); } catch (e) { return String(s).slice(0, 16); } };
+  const cargar = async () => {
+    setLoading(true);
+    try {
+      let q = sb.from("maestro_jornada_mx").select("id, fecha, driver_name, placa, id_ruta, service_center_id, pago_neto, pausado, pausa_motivo, pausa_por, pausa_at, liberado_at, liberado_por").order("fecha", { ascending: false }).order("driver_name").limit(8000);
+      q = incluirLiberados ? q.or("pausado.eq.true,liberado_at.not.is.null") : q.eq("pausado", true);
+      const { data } = await q;
+      setRows(data || []);
+    } catch (e) { console.error("pagos pausados:", e); setRows([]); }
+    setLoading(false);
+  };
+  useEffect(() => { cargar(); }, [incluirLiberados]);
+  const activar = async (r) => {
+    if (!confirm(`\u00bfActivar (liberar) el pago de ${r.driver_name || r.placa} \u00b7 ruta ${r.id_ruta} del ${r.fecha}?`)) return;
+    try {
+      const por = (usuario && (usuario.nombre || usuario.email)) || "Brain";
+      const { error } = await sb.from("maestro_jornada_mx").update({ pausado: false, liberado_at: new Date().toISOString(), liberado_por: por }).eq("id", r.id);
+      if (error) throw error;
+      cargar();
+    } catch (e) { alert("Error activando: " + (e.message || e)); }
+  };
+  const porDia = {}; for (const r of rows) (porDia[r.fecha] = porDia[r.fecha] || []).push(r);
+  const dias = Object.keys(porDia).sort().reverse();
+  const pausCount = rows.filter(r => r.pausado).length;
+  const th = { textAlign: "left", padding: "6px 8px", fontSize: 10, color: "#64748b", textTransform: "uppercase", borderBottom: "1px solid #e4e7ec" };
+  const td = { padding: "6px 8px", borderBottom: "1px solid #f1f5f9", fontSize: 12 };
+  return (
+    <div className="pg" style={{ maxWidth: 1200 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10, marginBottom: 14 }}>
+        <div>
+          <div className="sec-title">Pagos pausados</div>
+          <div className="sec-sub">Rutas con el pago retenido por el analista \u00b7 por d\u00eda \u00b7 con su motivo. Desde aqu\u00ed se pueden activar (liberar).</div>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+          <label style={{ fontSize: 12, color: "#475569", display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+            <input type="checkbox" checked={incluirLiberados} onChange={e => setIncluirLiberados(e.target.checked)} /> incluir liberados
+          </label>
+          <button onClick={cargar} style={{ padding: "7px 14px", border: "1px solid #1a3a6b", background: "#fff", color: "#1a3a6b", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>\u21BB Actualizar</button>
+          <div style={{ background: "#fff7ed", border: "1px solid #fdba74", borderRadius: 6, padding: "8px 14px" }}>
+            <div style={{ fontSize: 10, color: "#9a3412", fontWeight: 700, textTransform: "uppercase" }}>Pausados</div>
+            <div style={{ fontSize: 20, fontWeight: 800, color: "#9a3412" }}>{pausCount}</div>
+          </div>
+        </div>
+      </div>
+      {loading ? <div style={{ color: "#94a3b8", padding: 20 }}>Cargando\u2026</div> : dias.length === 0 ? (
+        <div style={{ padding: 30, textAlign: "center", color: "#94a3b8", border: "1px solid #e4e7ec", borderRadius: 8, background: "#fff" }}>No hay pagos pausados.</div>
+      ) : dias.map(dia => (
+        <div key={dia} style={{ marginBottom: 16 }}>
+          <div style={{ fontSize: 13, fontWeight: 800, color: "#1a3a6b", marginBottom: 6 }}>{dia} \u00b7 {porDia[dia].length} ruta(s)</div>
+          <div style={{ border: "1px solid #e4e7ec", borderRadius: 8, overflow: "hidden", background: "#fff" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead><tr>{["Chofer", "Patente", "SC", "Ruta", "Pago neto", "Motivo", "Pausado por", "Cuando", "Estado", ""].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
+              <tbody>{porDia[dia].map(r => (
+                <tr key={r.id} style={{ background: r.pausado ? "#fffbeb" : "#f0fdf4" }}>
+                  <td style={td}>{r.driver_name || "\u2014"}</td>
+                  <td style={{ ...td, fontFamily: "monospace" }}>{r.placa || "\u2014"}</td>
+                  <td style={td}>{r.service_center_id || "\u2014"}</td>
+                  <td style={{ ...td, fontFamily: "monospace", fontSize: 10 }}>{r.id_ruta || "\u2014"}</td>
+                  <td style={{ ...td, textAlign: "right" }}>{fmtMon(r.pago_neto)}</td>
+                  <td style={{ ...td, maxWidth: 280, whiteSpace: "normal", color: "#92400e" }}>{r.pausa_motivo || "\u2014"}</td>
+                  <td style={td}>{r.pausa_por || "\u2014"}</td>
+                  <td style={{ ...td, fontSize: 10, color: "#64748b" }}>{fmtDT(r.pausa_at)}</td>
+                  <td style={td}>{r.pausado ? <span style={{ fontSize: 10, fontWeight: 800, color: "#92400e", background: "#fef3c7", border: "1px solid #fcd34d", borderRadius: 6, padding: "2px 6px" }}>\u23F8 Pausado</span> : <span style={{ fontSize: 10, fontWeight: 800, color: "#166534", background: "#dcfce7", borderRadius: 6, padding: "2px 6px" }}>\u2713 Liberado</span>}</td>
+                  <td style={td}>{r.pausado && <button onClick={() => activar(r)} style={{ fontSize: 11, fontWeight: 700, color: "#fff", background: "#166534", border: "none", borderRadius: 6, padding: "4px 12px", cursor: "pointer" }}>Activar pago</button>}</td>
+                </tr>
+              ))}</tbody>
+            </table>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
 function ConfigAlertas() {
   const CAMPOS = [
     { v: "observaciones", l: "Observaciones (texto)" },
