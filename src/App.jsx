@@ -14671,6 +14671,7 @@ function ConciliacionTercerosMX({ usuario }) {
   const [cobrosPorSC, setCobrosPorSC] = useState({});   // empresa -> { sc: cobros }
   const [saldosPorSC, setSaldosPorSC] = useState({});   // "empresa||sc" -> { pendiente, semanaOrigen } (arrastre de negativos)
   const [placasViejas, setPlacasViejas] = useState({}); // placa -> primera semana que apareció sin empresa (anteriores)
+  const [aplicManual, setAplicManual] = useState({}); // "empresa||scDestino" -> [{ origenSC, origenSem, monto, origenKey }] (saldos de otro SC aplicados a mano)
   const [formLinea, setFormLinea] = useState(null);     // alta de línea (ajuste/viaje) o null
   const [guardandoEdit, setGuardandoEdit] = useState(null); // clave empresa||sc en proceso
   const [seleccion, setSeleccion] = useState(() => new Set()); // claves cerradas marcadas para envío masivo
@@ -14786,11 +14787,6 @@ function ConciliacionTercerosMX({ usuario }) {
           for (const c of editados) for (const ln of c.detalle) filas.push({ ...ln, _id: ln._id || lineaId(ln), origen: ln.origen || "motor" });
         }
       }
-      filas = filas.filter(f => !f._saldo);
-      Object.keys(saldosPorSC).filter(k => k.startsWith(norm(empresa) + "||")).forEach(k => {
-        const si = saldosPorSC[k]; if (!si || !(si.pendiente < 0)) return;
-        filas.push({ _saldo: true, _id: "saldo|" + si.sc, origen: "saldo", fecha: null, placa: "\u2014", id_ruta: "", driver_name: `Saldo conciliaci\u00f3n arrastrado (sem ${si.semanaOrigen})`, service_center_id: si.sc, tiene_auxiliar: false, cargado: null, entregado: null, monto: Number(si.pendiente || 0), es_no_pago: false });
-      });
       setDetalles(prev => ({ ...prev, [empresa]: filas }));
     } catch (e) {
       console.error("detalle conciliación:", e);
@@ -14847,14 +14843,37 @@ function ConciliacionTercerosMX({ usuario }) {
   const saldoPrevioDe = (empresa, sc) => Number((saldosPorSC[`${norm(empresa)}||${norm(sc)}`] || {}).pendiente || 0);
   const saldoEmpresa = (empresa) => Object.entries(saldosPorSC).reduce((s, [k, v]) => s + (k.startsWith(norm(empresa) + "||") ? Number(v.pendiente || 0) : 0), 0);
   const saldoInfoDe = (empresa, sc) => saldosPorSC[`${norm(empresa)}||${norm(sc)}`] || null;
+  const lineasManualesDe = (empresa, sc) => (aplicManual[`${norm(empresa)}||${norm(sc)}`] || []).map(a => ({ _saldo: true, _manual: true, _id: "saldoM|" + a.origenSC, _origenSC: a.origenSC, _origenKey: a.origenKey, _origenSem: a.origenSem, origen: "saldo_manual", fecha: null, placa: "\u2014", id_ruta: "", driver_name: `Saldo aplicado de ${a.origenSC} (sem ${a.origenSem})`, service_center_id: sc, tiene_auxiliar: false, cargado: null, entregado: null, monto: Number(a.monto || 0), es_no_pago: false }));
   const filasConSaldoLine = (empresa, sc, filas) => {
-    const arr = (filas || []).filter(d => !d._saldo);
+    const arr = (filas || []).filter(d => !(d._saldo && !d._manual)); // quita la l\u00ednea auto; conserva manuales ya guardadas
     const prev = saldoPrevioDe(empresa, sc);
-    if (prev < 0) {
+    if (prev < 0 && !arr.some(d => d._saldo && !d._manual)) {
       const si = saldoInfoDe(empresa, sc);
       arr.push({ _saldo: true, _id: "saldo|" + sc, origen: "saldo", fecha: null, placa: "\u2014", id_ruta: "", driver_name: `Saldo conciliaci\u00f3n arrastrado (sem ${si ? si.semanaOrigen : ""})`, service_center_id: sc, tiene_auxiliar: false, cargado: null, entregado: null, monto: prev, es_no_pago: false });
     }
+    const have = new Set(arr.filter(d => d._manual).map(d => d._origenSC));
+    for (const ln of lineasManualesDe(empresa, sc)) if (!have.has(ln._origenSC)) arr.push(ln);
     return arr;
+  };
+  const saldosOtrosSC = (empresa, sc) => Object.keys(saldosPorSC).filter(k => k.startsWith(norm(empresa) + "||")).map(k => saldosPorSC[k]).filter(si => si && si.pendiente < 0 && norm(si.sc) !== norm(sc));
+  const aplicadoManual = (empresa, sc, origenSC) => (aplicManual[`${norm(empresa)}||${norm(sc)}`] || []).some(a => a.origenSC === origenSC);
+  const aplicarSaldoManual = (empresa, sc, origenSC) => {
+    const si = saldoInfoDe(empresa, origenSC); if (!si || !(si.pendiente < 0)) return;
+    const tk = `${norm(empresa)}||${norm(sc)}`;
+    setAplicManual(prev => ({ ...prev, [tk]: [...((prev[tk] || []).filter(a => a.origenSC !== origenSC)), { origenSC, origenSem: si.semanaOrigen, monto: si.pendiente, origenKey: `${norm(empresa)}||${norm(origenSC)}` }] }));
+  };
+  const quitarSaldoManual = (empresa, sc, origenSC) => {
+    const tk = `${norm(empresa)}||${norm(sc)}`;
+    setAplicManual(prev => ({ ...prev, [tk]: (prev[tk] || []).filter(a => a.origenSC !== origenSC) }));
+  };
+  const conciliarSaldoManual = async (empresa, origenSC, targetSC) => {
+    try {
+      const { data: row } = await sb.from("saldos_pendientes_terceros").select("*").eq("empresa_nombre", empresa).eq("service_center", origenSC).maybeSingle();
+      if (!row) return;
+      const det = (row.detalle && typeof row.detalle === "object") ? row.detalle : {};
+      det.liquidado_hasta = semana; det.aplicado_a = { sc: targetSC, sem: semana };
+      await sb.from("saldos_pendientes_terceros").update({ estado: "conciliado", saldo_pendiente: 0, semana_conciliacion: semana, conciliado_at: new Date().toISOString(), detalle: det }).eq("id", row.id);
+    } catch (e) { console.error("conciliar saldo manual:", e); }
   };
   const cargarSaldos = async (sem) => {
     try {
@@ -15087,7 +15106,12 @@ function ConciliacionTercerosMX({ usuario }) {
         cerrado_por: (usuario && (usuario.nombre || usuario.email)) || "Brain",
       }, { onConflict: "empresa_nombre,service_center,semana" });
       if (error) throw error;
-      if (tot.saldoPrevio < 0 || tot.netoViajes < 0) await persistirSaldoCierre(empresa, sc, tot.netoViajes);
+      const _manualLines = filasFull.filter(d => d._manual);
+      const _manualSum = Math.round(_manualLines.reduce((s, d) => s + Number(d.monto || 0), 0) * 100) / 100;
+      const _netoParaSaldo = Math.round((tot.netoViajes + _manualSum) * 100) / 100;
+      if (tot.saldoPrevio < 0 || _netoParaSaldo < 0) await persistirSaldoCierre(empresa, sc, _netoParaSaldo);
+      for (const ml of _manualLines) await conciliarSaldoManual(empresa, ml._origenSC, sc);
+      if (_manualLines.length) setAplicManual(prev => { const cp = { ...prev }; delete cp[`${norm(empresa)}||${norm(sc)}`]; return cp; });
       await logEvento(empresa, sc, tot.negativo ? "cerrar_pendiente" : "cerrar", tot, { estado: tot.negativo ? "pendiente_conciliacion" : "cerrada" });
       setMsg({ ok: true, txt: `Conciliación de ${empresa} · ${sc} cerrada (semana ${semana}).` });
       await cargarResumen(semana);
@@ -15609,7 +15633,12 @@ function ConciliacionTercerosMX({ usuario }) {
       generado_at: ahora, cerrado_at: ahora, cerrado_por: (usuario && (usuario.nombre || usuario.email)) || "Brain",
     }, { onConflict: "empresa_nombre,service_center,semana" });
     if (error) throw error;
-    if (prev < 0 || netoViajes < 0) await persistirSaldoCierre(empresa, sc, netoViajes);
+    const _manualLines = filasFull.filter(d => d._manual);
+    const _manualSum = Math.round(_manualLines.reduce((s, d) => s + Number(d.monto || 0), 0) * 100) / 100;
+    const _netoParaSaldo = Math.round((netoViajes + _manualSum) * 100) / 100;
+    if (prev < 0 || _netoParaSaldo < 0) await persistirSaldoCierre(empresa, sc, _netoParaSaldo);
+    for (const ml of _manualLines) await conciliarSaldoManual(empresa, ml._origenSC, sc);
+    if (_manualLines.length) setAplicManual(prev => { const cp = { ...prev }; delete cp[`${norm(empresa)}||${norm(sc)}`]; return cp; });
     await logEvento(empresa, sc, negativo ? "cerrar_pendiente" : "cerrar", { neto: tot.neto, bruto: tot.bruto, liquido: tot.liquido, nViajes: tot.nViajes }, { estado, detalle: { masivo: true, saldoPrevio: prev, netoViajes } });
     return { ok: true, negativo, neteado: tot.neto, liquido: tot.liquido };
   };
@@ -16081,7 +16110,7 @@ function ConciliacionTercerosMX({ usuario }) {
                         </button>
                       </div>
                       {g.filasSC.map(rSC => {
-                        const filasSC = detPorSC[rSC.service_center] || [];
+                        const filasSC = filasConSaldoLine(g.empresa, rSC.service_center, detPorSC[rSC.service_center] || []);
                         const clave = claveCierre(g.empresa, rSC.service_center);
                         const noPagosSC = filasSC.filter(d => d.es_no_pago);
                         return (
@@ -16091,7 +16120,7 @@ function ConciliacionTercerosMX({ usuario }) {
                                 <span style={{ fontWeight: 800, color: "#1a3a6b", fontSize: 13 }}>SC {rSC.service_center}</span>
                                 {chipEstado(rSC.estado_conciliacion)}
                                 <span style={{ fontSize: 11, color: "#64748b" }}>
-                                  Sup: {rSC.supervisor || "—"} · {rSC.n_viajes} viajes · {rSC.n_no_pago} no pago{(ajustesSC[`${norm(g.empresa)}||${norm(rSC.service_center)}`] || 0) > 0 ? ` · ${ajustesSC[`${norm(g.empresa)}||${norm(rSC.service_center)}`]} ajuste(s)` : ""} · Neto {fmtMon(rSC.neto_guardado != null ? rSC.neto_guardado : rSC.total_neto)} · Bruto {fmtMon(rSC.bruto_guardado != null ? rSC.bruto_guardado : rSC.total_bruto)}{rSC.tiene_ajustes ? " · ✏️ ajustada" : ""}{rSC.enviado_at ? " · 📤 " + new Date(rSC.enviado_at).toLocaleDateString("es-CL") : ""}{saldoPrevioDe(g.empresa, rSC.service_center) < 0 ? (() => { const prev = saldoPrevioDe(g.empresa, rSC.service_center); const nv = Number(rSC.neto_guardado != null ? rSC.neto_guardado : rSC.total_neto) || 0; const net = Math.round((nv + prev) * 100) / 100; const br = net < 0 ? net : Math.round(net * 1.16 * 100) / 100; return ` · ⚠️ Saldo ${fmtMon(prev)} · A pagar: neto ${fmtMon(net)} / bruto ${fmtMon(br)}`; })() : ""}
+                                  Sup: {rSC.supervisor || "—"} · {rSC.n_viajes} viajes · {rSC.n_no_pago} no pago{(ajustesSC[`${norm(g.empresa)}||${norm(rSC.service_center)}`] || 0) > 0 ? ` · ${ajustesSC[`${norm(g.empresa)}||${norm(rSC.service_center)}`]} ajuste(s)` : ""} · Neto {fmtMon(rSC.neto_guardado != null ? rSC.neto_guardado : rSC.total_neto)} · Bruto {fmtMon(rSC.bruto_guardado != null ? rSC.bruto_guardado : rSC.total_bruto)}{rSC.tiene_ajustes ? " · ✏️ ajustada" : ""}{rSC.enviado_at ? " · 📤 " + new Date(rSC.enviado_at).toLocaleDateString("es-CL") : ""}{(() => { const prev = saldoPrevioDe(g.empresa, rSC.service_center); const man = lineasManualesDe(g.empresa, rSC.service_center).reduce((s, d) => s + Number(d.monto || 0), 0); if (!(prev < 0) && !(man < 0)) return ""; const nv = Number(rSC.neto_guardado != null ? rSC.neto_guardado : rSC.total_neto) || 0; const net = Math.round((nv + prev + man) * 100) / 100; const br = net < 0 ? net : Math.round(net * 1.16 * 100) / 100; const partes = []; if (prev < 0) partes.push(`Saldo ${fmtMon(prev)}`); if (man < 0) partes.push(`Aplicado ${fmtMon(man)}`); return ` · ⚠️ ${partes.join(" · ")} · A pagar: neto ${fmtMon(net)} / bruto ${fmtMon(br)}`; })()}
                                 </span>
                               </div>
                               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -16131,6 +16160,19 @@ function ConciliacionTercerosMX({ usuario }) {
                                   {netoSemana !== 0 && <div style={{ fontSize: 11, color: neteado < 0 ? "#9a3412" : "#166534", marginTop: 4, fontWeight: 700 }}>{`Con los viajes de esta semana (${fmtMon(netoSemana)}): neto resultante ${fmtMon(neteado)}${neteado < 0 ? " \u2192 sigue pendiente" : " \u2192 se concilia y se paga"}.`}</div>}
                                 </div>);
                               })()}
+                              {!esSinEmpresa && (rSC.estado_conciliacion === "sin_generar" || rSC.estado_conciliacion === "borrador") && saldosOtrosSC(g.empresa, rSC.service_center).length > 0 && (
+                                <div style={{ marginBottom: 10, border: "1px dashed #fdba74", background: "#fffbeb", borderRadius: 8, padding: "8px 12px" }}>
+                                  <div style={{ fontSize: 11, fontWeight: 800, color: "#9a3412", marginBottom: 6 }}>{`Saldos de otros SC de ${g.empresa} \u2014 aplicar a este cobro:`}</div>
+                                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                                    {saldosOtrosSC(g.empresa, rSC.service_center).map(si => {
+                                      const ap = aplicadoManual(g.empresa, rSC.service_center, si.sc);
+                                      return (<button key={si.sc} onClick={(e) => { e.stopPropagation(); ap ? quitarSaldoManual(g.empresa, rSC.service_center, si.sc) : aplicarSaldoManual(g.empresa, rSC.service_center, si.sc); }}
+                                        style={{ padding: "5px 10px", borderRadius: 6, border: ap ? "1px solid #9a3412" : "1px solid #fdba74", background: ap ? "#9a3412" : "#fff", color: ap ? "#fff" : "#9a3412", fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+                                        {ap ? `\u2713 Aplicado ${si.sc} (${fmtMon(si.pendiente)}) \u2014 quitar` : `Aplicar saldo de ${si.sc} aqu\u00ed (${fmtMon(si.pendiente)})`}</button>);
+                                    })}
+                                  </div>
+                                </div>
+                              )}
                               {renderTablaDetalle(filasSC, { editable: (rSC.estado_conciliacion === "sin_generar" || rSC.estado_conciliacion === "borrador"), empresa: g.empresa, sc: rSC.service_center })}
                               {(rSC.estado_conciliacion === "sin_generar" || rSC.estado_conciliacion === "borrador") && renderEditorSC(g.empresa, rSC)}
                               {noPagosSC.length > 0 && (
