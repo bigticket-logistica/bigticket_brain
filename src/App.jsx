@@ -170,7 +170,7 @@ const USUARIOS = {
   "alejandra.degollada@bigticket.cl":     { pass: "alejandra.2026", rol: "superadmin", nombre: "Alejandra Degollada" },
   "eduardo.stine@bigticket.cl":     { pass: "eduardo.2026", rol: "superadmin", nombre: "Eduardo Stine" },
   "danny.calas@bigticket.cl":       { pass: "danny.2026",   rol: "prefacturas", nombre: "Danny Calas" },
-  "roberto.sanmartin@bigticket.cl":       { pass: "roberto.2026",   rol: "prefacturas", nombre: "Roberto SanMartin" },
+  "roberto.sanmartin@bigticket.cl":       { pass: "robertosn.2026",   rol: "prefacturas", nombre: "Roberto San Martin" },
 };
 const COLUMNAS = [
   { id: "pendiente", label: "Validación MELI", color: "#92400e", bg: "#fef3c7", border: "#fde68a" },
@@ -24435,7 +24435,7 @@ function PadronDriversData({ fecha }) {
                 const abierto = expandidos.has(r.driver_id);
                 const inf = r.infraction_status || {};
                 return (
-                  <React.Fragment key={r.driver_id ?? i}>
+                  <Fragment key={r.driver_id ?? i}>
                     <tr
                       onClick={() => r.tiene_infraccion && toggleExpand(r.driver_id)}
                       style={{ borderBottom: abierto ? "none" : "0.5px solid #f4f5f7", cursor: r.tiene_infraccion ? "pointer" : "default", background: abierto ? "#fffbeb" : "transparent" }}>
@@ -24475,7 +24475,7 @@ function PadronDriversData({ fecha }) {
                         </td>
                       </tr>
                     )}
-                  </React.Fragment>
+                  </Fragment>
                 );
               })}
             </tbody>
