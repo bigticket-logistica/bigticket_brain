@@ -170,6 +170,7 @@ const USUARIOS = {
   "alejandra.degollada@bigticket.cl":     { pass: "alejandra.2026", rol: "superadmin", nombre: "Alejandra Degollada" },
   "eduardo.stine@bigticket.cl":     { pass: "eduardo.2026", rol: "superadmin", nombre: "Eduardo Stine" },
   "danny.calas@bigticket.cl":       { pass: "danny.2026",   rol: "prefacturas", nombre: "Danny Calas" },
+  "roberto.sanmartin@bigticket.cl":       { pass: "roberto.2026",   rol: "prefacturas", nombre: "Roberto SanMartin" },
 };
 const COLUMNAS = [
   { id: "pendiente", label: "Validación MELI", color: "#92400e", bg: "#fef3c7", border: "#fde68a" },
@@ -24263,6 +24264,231 @@ function padronFmt(v) {
   return String(v);
 }
 
+// ── Helper de etiqueta de infracción para el padrón de conductores ──────────
+function padronInfraccionLabel(key) {
+  if (!key) return "Infracción";
+  const map = {
+    driver_advertencia: "Advertencia",
+    driver_suspension: "Suspensión",
+    driver_bloqueo: "Bloqueo",
+  };
+  return map[key] || String(key).replace(/^driver_/, "").replace(/_/g, " ");
+}
+
+// ── DATA COMPLETA · Conductores (cruza master del día con meli_drivers_detalle)
+function PadronDriversData({ fecha }) {
+  const [masterRows, setMasterRows] = useState([]);
+  const [detalleMap, setDetalleMap] = useState(new Map());
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [busqueda, setBusqueda] = useState("");
+  const [soloInfractores, setSoloInfractores] = useState(false);
+  const [expandidos, setExpandidos] = useState(new Set());
+
+  const PNAVY = "#1a3a6b", PMUTED = "#64748b", PLIGHT = "#94a3b8", PBORDER = "#e4e7ec";
+
+  useEffect(() => {
+    if (!fecha) return;
+    let alive = true;
+    (async () => {
+      setLoading(true); setError(null); setExpandidos(new Set());
+      try {
+        // Snapshot del día (universo operativo) + detalle enriquecido (1 fila por driver)
+        const [mRes, dRes] = await Promise.all([
+          sb.from("meli_drivers_master")
+            .select("driver_id,nombre,first_name,last_name,document_value,status")
+            .eq("fecha_snapshot", fecha).limit(5000),
+          sb.from("meli_drivers_detalle")
+            .select("driver_id,first_name,last_name,document_value,email,phone,creation_date,status,tiene_infraccion,infraction_status,esta_bloqueado,blocking_reason")
+            .limit(5000),
+        ]);
+        if (mRes.error) throw mRes.error;
+        if (dRes.error) throw dRes.error;
+        const map = new Map((dRes.data || []).map(d => [Number(d.driver_id), d]));
+        if (alive) { setMasterRows(mRes.data || []); setDetalleMap(map); }
+      } catch (e) { if (alive) setError(e.message || "Error"); }
+      finally { if (alive) setLoading(false); }
+    })();
+    return () => { alive = false; };
+  }, [fecha]);
+
+  // Merge master + detalle por driver_id
+  const rows = useMemo(() => {
+    return masterRows.map(m => {
+      const d = detalleMap.get(Number(m.driver_id)) || null;
+      const nombre = (d && (d.first_name || d.last_name))
+        ? `${d.first_name || ""} ${d.last_name || ""}`.trim()
+        : (m.first_name || m.last_name) ? `${m.first_name || ""} ${m.last_name || ""}`.trim()
+        : (m.nombre || "—");
+      return {
+        driver_id: m.driver_id,
+        nombre_completo: nombre || "—",
+        curp: m.document_value || (d && d.document_value) || "—",
+        creation_date: d ? d.creation_date : null,
+        email: d ? d.email : null,
+        phone: d ? d.phone : null,
+        status: m.status || (d && d.status) || "—",
+        tiene_infraccion: !!(d && d.tiene_infraccion),
+        infraction_status: d ? d.infraction_status : null,
+        esta_bloqueado: !!(d && d.esta_bloqueado),
+        blocking_reason: d ? d.blocking_reason : null,
+        enriquecido: !!d,
+      };
+    });
+  }, [masterRows, detalleMap]);
+
+  const kpis = useMemo(() => ({
+    total: rows.length,
+    infractores: rows.filter(r => r.tiene_infraccion).length,
+    conEmail: rows.filter(r => r.email).length,
+    conTel: rows.filter(r => r.phone).length,
+  }), [rows]);
+
+  const filtradas = useMemo(() => {
+    let res = rows;
+    if (soloInfractores) res = res.filter(r => r.tiene_infraccion);
+    const q = busqueda.toLowerCase().trim();
+    if (q) {
+      res = res.filter(r =>
+        [r.driver_id, r.nombre_completo, r.curp, r.email, r.phone]
+          .some(v => String(v ?? "").toLowerCase().includes(q))
+      );
+    }
+    return res;
+  }, [rows, busqueda, soloInfractores]);
+
+  const toggleExpand = (id) => {
+    setExpandidos(prev => {
+      const n = new Set(prev);
+      n.has(id) ? n.delete(id) : n.add(id);
+      return n;
+    });
+  };
+
+  const exportar = () => {
+    const headers = ["ID conductor", "Nombre completo", "CURP", "Fecha de creación (MX)", "Correo", "Teléfono", "Estado", "Infracción"];
+    const filas = filtradas.map(r => {
+      const inf = r.tiene_infraccion && r.infraction_status
+        ? `${padronInfraccionLabel(r.infraction_status.key)} ${r.infraction_status.date || ""}`.trim()
+        : "";
+      return [r.driver_id, r.nombre_completo, r.curp, fmtFechaHoraMX(r.creation_date), r.email || "", r.phone || "", r.status, inf];
+    });
+    padronCsv(headers, filas, "padron_conductores");
+  };
+
+  if (loading) return <div style={{ padding: 40, textAlign: "center", color: PMUTED, fontSize: 13 }}>Cargando conductores…</div>;
+  if (error) return <div style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 10, padding: 14, fontSize: 12, color: "#991b1b" }}>{error}</div>;
+
+  const COLS = 8;
+
+  return (
+    <div>
+      {/* KPIs */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10, marginBottom: 12 }}>
+        <PKpi l="Total conductores" v={kpis.total} s={`snapshot ${fecha || "—"}`} accent={PNAVY} />
+        <PKpi l="⚠️ Con infracción" v={kpis.infractores} s="advertencias / sanciones" accent="#d97706" />
+        <PKpi l="Con correo" v={kpis.conEmail} s={`${kpis.total ? Math.round(100 * kpis.conEmail / kpis.total) : 0}% del padrón`} accent="#10b981" />
+        <PKpi l="Con teléfono" v={kpis.conTel} s={`${kpis.total ? Math.round(100 * kpis.conTel / kpis.total) : 0}% del padrón`} accent="#10b981" />
+      </div>
+
+      {/* Toolbar */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10, flexWrap: "wrap" }}>
+        <input value={busqueda} onChange={e => setBusqueda(e.target.value)} placeholder={`Buscar por nombre, CURP, correo, teléfono o ID…`}
+          style={{ flex: 1, minWidth: 240, maxWidth: 400, padding: "7px 10px", border: `1px solid #d0d5dd`, borderRadius: 6, fontSize: 12, fontFamily: "'Geist', sans-serif" }} />
+        <button onClick={() => setSoloInfractores(v => !v)} style={{
+          fontSize: 12, fontWeight: 700, padding: "7px 12px", borderRadius: 8, cursor: "pointer",
+          border: soloInfractores ? "none" : `1px solid ${PBORDER}`,
+          background: soloInfractores ? "#d97706" : "#fff",
+          color: soloInfractores ? "#fff" : PMUTED,
+          fontFamily: "'Geist', sans-serif", display: "inline-flex", alignItems: "center", gap: 6,
+        }}>
+          <i className="ti ti-alert-triangle" style={{ fontSize: 14 }} />
+          {soloInfractores ? `Mostrando infractores (${kpis.infractores})` : "Solo infractores"}
+        </button>
+        <span style={{ fontSize: 12, color: PMUTED }}>{filtradas.length} de {rows.length}</span>
+        <button onClick={exportar} style={{ marginLeft: "auto", fontSize: 11, fontWeight: 600, padding: "6px 11px", borderRadius: 6, border: "none", background: PNAVY, color: "#fff", cursor: "pointer", fontFamily: "'Geist', sans-serif", display: "inline-flex", alignItems: "center", gap: 5 }}>
+          <i className="ti ti-download" style={{ fontSize: 12 }} />Exportar CSV
+        </button>
+      </div>
+
+      {/* Tabla */}
+      <div style={{ background: "#fff", borderRadius: 12, border: `0.5px solid ${PBORDER}`, overflow: "hidden" }}>
+        <div style={{ maxHeight: "60vh", overflow: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+            <thead style={{ position: "sticky", top: 0, zIndex: 1, background: "#f8fafc" }}>
+              <tr>
+                <ApTh>ID conductor</ApTh>
+                <ApTh>Nombre completo</ApTh>
+                <ApTh>CURP</ApTh>
+                <ApTh>Fecha de creación (MX)</ApTh>
+                <ApTh>Correo</ApTh>
+                <ApTh>Teléfono</ApTh>
+                <ApTh>Estado</ApTh>
+                <ApTh>Infracción</ApTh>
+              </tr>
+            </thead>
+            <tbody>
+              {filtradas.length === 0 && (
+                <tr><td colSpan={COLS} style={{ padding: 30, textAlign: "center", color: PLIGHT }}>Sin resultados</td></tr>
+              )}
+              {filtradas.map((r, i) => {
+                const abierto = expandidos.has(r.driver_id);
+                const inf = r.infraction_status || {};
+                return (
+                  <React.Fragment key={r.driver_id ?? i}>
+                    <tr
+                      onClick={() => r.tiene_infraccion && toggleExpand(r.driver_id)}
+                      style={{ borderBottom: abierto ? "none" : "0.5px solid #f4f5f7", cursor: r.tiene_infraccion ? "pointer" : "default", background: abierto ? "#fffbeb" : "transparent" }}>
+                      <ApTd mono>{r.driver_id}</ApTd>
+                      <ApTd bold>{r.nombre_completo}</ApTd>
+                      <ApTd mono small>{r.curp}</ApTd>
+                      <ApTd small>{fmtFechaHoraMX(r.creation_date)}</ApTd>
+                      <ApTd small>{r.email || <span style={{ color: PLIGHT }}>—</span>}</ApTd>
+                      <ApTd mono small>{r.phone || <span style={{ color: PLIGHT }}>—</span>}</ApTd>
+                      <ApTd>
+                        <span style={{ background: r.status === "active" ? "#d1fae5" : "#fef3c7", color: r.status === "active" ? "#065f46" : "#92400e", fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 4 }}>{r.status}</span>
+                      </ApTd>
+                      <ApTd>
+                        {r.tiene_infraccion ? (
+                          <span style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "#fef3c7", color: "#92400e", fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 4 }}>
+                            <i className="ti ti-alert-triangle" style={{ fontSize: 12 }} />
+                            {padronInfraccionLabel(inf.key)}
+                            <i className={`ti ${abierto ? "ti-chevron-up" : "ti-chevron-down"}`} style={{ fontSize: 12 }} />
+                          </span>
+                        ) : (
+                          <span style={{ color: PLIGHT }}>—</span>
+                        )}
+                      </ApTd>
+                    </tr>
+                    {abierto && r.tiene_infraccion && (
+                      <tr style={{ borderBottom: "0.5px solid #f4f5f7", background: "#fffbeb" }}>
+                        <td colSpan={COLS} style={{ padding: "10px 16px 14px 16px" }}>
+                          <div style={{ display: "flex", flexWrap: "wrap", gap: 24, fontSize: 12, color: "#1a1a1a" }}>
+                            <div><span style={{ color: PMUTED, fontWeight: 700, fontSize: 10, textTransform: "uppercase", letterSpacing: 0.4, display: "block", marginBottom: 2 }}>Tipo</span>{padronInfraccionLabel(inf.key)}</div>
+                            <div><span style={{ color: PMUTED, fontWeight: 700, fontSize: 10, textTransform: "uppercase", letterSpacing: 0.4, display: "block", marginBottom: 2 }}>Fecha infracción</span>{inf.date || "—"}</div>
+                            <div><span style={{ color: PMUTED, fontWeight: 700, fontSize: 10, textTransform: "uppercase", letterSpacing: 0.4, display: "block", marginBottom: 2 }}>Clasificación</span>{inf.sentenceType || "—"}</div>
+                            <div><span style={{ color: PMUTED, fontWeight: 700, fontSize: 10, textTransform: "uppercase", letterSpacing: 0.4, display: "block", marginBottom: 2 }}>Clave MELI</span><code style={{ fontSize: 11 }}>{inf.key || "—"}</code></div>
+                            {r.esta_bloqueado && (
+                              <div><span style={{ color: "#991b1b", fontWeight: 700, fontSize: 10, textTransform: "uppercase", letterSpacing: 0.4, display: "block", marginBottom: 2 }}>🔒 Bloqueado</span>{JSON.stringify(r.blocking_reason)}</div>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </React.Fragment>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div style={{ marginTop: 10, fontSize: 11, color: PLIGHT, fontStyle: "italic" }}>
+        ℹ️ Contacto, fecha de creación e infracciones provienen del detalle de MELI (tabla de enriquecimiento). Conductores sin estos datos aún no fueron enriquecidos o MELI no los expone. Clic en una fila con <strong style={{ color: "#92400e" }}>infracción</strong> para ver el detalle.
+      </div>
+    </div>
+  );
+}
+
 function PadronMeliAdmin({ usuario }) {
   const [mundo, setMundo] = useState("drivers"); // drivers (principal) | vehiculos
   return (
@@ -24335,7 +24561,7 @@ function PadronMundo({ tipo }) {
 
   // 2) Data completa del snapshot seleccionado
   useEffect(() => {
-    if (vista !== "data" || !fechaSel) return;
+    if (vista !== "data" || !fechaSel || tipo === "drivers") return;
     let alive = true;
     (async () => {
       setLoading(true); setError(null);
@@ -24516,6 +24742,9 @@ function PadronMundo({ tipo }) {
           <>
             {/* ── DATA COMPLETA ── */}
             {vista === "data" && (
+              tipo === "drivers" ? (
+                <PadronDriversData fecha={fechaSel} />
+              ) : (
               <div>
                 <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
                   <input value={busqueda} onChange={e => setBusqueda(e.target.value)} placeholder={`Buscar en ${dataRows.length} ${cfg.label}…`}
@@ -24552,6 +24781,7 @@ function PadronMundo({ tipo }) {
                   </div>
                 </div>
               </div>
+              )
             )}
 
             {/* ── ALTAS Y BAJAS ── */}
