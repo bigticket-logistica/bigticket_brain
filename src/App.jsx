@@ -24817,6 +24817,236 @@ function PadronRechazados() {
   );
 }
 
+// ── SUB-MUNDO LIMPIEZA · embudo de actividad (vw_padron_embudo) + alertas ────
+function PadronLimpieza() {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [busqueda, setBusqueda] = useState("");
+  const [filtroEsc, setFiltroEsc] = useState(null); // escalón seleccionado del embudo
+  const PNAVY = "#1a3a6b", PMUTED = "#64748b", PLIGHT = "#94a3b8", PBORDER = "#e4e7ec";
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      setLoading(true); setError(null);
+      try {
+        const { data, error } = await sb.from("vw_padron_embudo").select("*").limit(5000);
+        if (error) throw error;
+        if (alive) setRows(data || []);
+      } catch (e) { if (alive) setError(e.message || "Error"); }
+      finally { if (alive) setLoading(false); }
+    })();
+    return () => { alive = false; };
+  }, []);
+
+  // Definición del embudo (orden y etiquetas)
+  const ESCALONES = [
+    { id: "ayer",  label: "Operó ayer/hoy",   color: "#10b981" },
+    { id: "7d",    label: "Últimos 7 días",   color: "#22c55e" },
+    { id: "15d",   label: "Últimos 15 días",  color: "#84cc16" },
+    { id: "30d",   label: "Últimos 30 días",  color: "#eab308" },
+    { id: "45d",   label: "Últimos 45 días",  color: "#f59e0b" },
+    { id: "60d",   label: "Últimos 60 días",  color: "#f97316" },
+    { id: "mas60", label: "Inactivo +60 días", color: "#ef4444" },
+    { id: "nunca", label: "Nunca operó",      color: "#991b1b" },
+  ];
+
+  const conteos = useMemo(() => {
+    const c = {};
+    ESCALONES.forEach(e => c[e.id] = 0);
+    rows.forEach(r => { if (c[r.escalon] != null) c[r.escalon]++; });
+    return c;
+  }, [rows]);
+
+  const alertas = useMemo(() => ({
+    a7:  rows.filter(r => r.alerta === "alerta_7").length,
+    a15: rows.filter(r => r.alerta === "alerta_15").length,
+    a30: rows.filter(r => r.alerta === "alerta_30").length,
+    dep: rows.filter(r => r.alerta === "depurar").length,
+  }), [rows]);
+
+  const maxC = useMemo(() => Math.max(1, ...ESCALONES.map(e => conteos[e.id] || 0)), [conteos]);
+
+  const filtradas = useMemo(() => {
+    let res = rows;
+    if (filtroEsc) res = res.filter(r => r.escalon === filtroEsc);
+    const q = busqueda.toLowerCase().trim();
+    if (q) res = res.filter(r => [r.driver_id, r.nombre].some(v => String(v ?? "").toLowerCase().includes(q)));
+    // orden: más inactivos primero (nunca arriba, luego por días desc)
+    const rank = { nunca: 999, mas60: 998 };
+    return [...res].sort((a, b) => {
+      const ra = rank[a.escalon] ?? (a.dias_sin_operar || 0);
+      const rb = rank[b.escalon] ?? (b.dias_sin_operar || 0);
+      return rb - ra;
+    });
+  }, [rows, busqueda, filtroEsc]);
+
+  const escMeta = (id) => ESCALONES.find(e => e.id === id) || { label: id, color: PMUTED };
+
+  const exportar = () => {
+    const headers = ["driver_id", "Nombre", "Estado", "Escalón", "Último viaje", "Días sin operar", "Total viajes", "Alerta"];
+    const filas = filtradas.map(r => [r.driver_id, r.nombre || "", r.status, escMeta(r.escalon).label,
+      r.ultimo_viaje || "", r.dias_sin_operar ?? "", r.total_viajes,
+      r.alerta === "depurar" ? "DEPURAR" : r.alerta === "alerta_30" ? "+30 días" :
+      r.alerta === "alerta_15" ? "+15 días" : r.alerta === "alerta_7" ? "+7 días" : "OK"]);
+    padronCsv(headers, filas, "padron_limpieza");
+  };
+
+  // Descarga un Excel con TODOS los conductores, una hoja por escalón + resumen
+  const descargarExcelPorEscalon = async () => {
+    const H = ["ID conductor", "Nombre", "Estado", "Último viaje", "Días sin operar", "Total viajes"];
+    const filaDe = r => [r.driver_id, r.nombre || "(sin nombre)", r.status, r.ultimo_viaje || "—",
+      r.dias_sin_operar != null ? r.dias_sin_operar : "nunca", r.total_viajes || 0];
+
+    // Hoja resumen (embudo)
+    const resumen = [["Escalón", "Conductores", "% del padrón"]];
+    ESCALONES.forEach(e => {
+      const n = conteos[e.id] || 0;
+      resumen.push([e.label, n, (total ? Math.round(100 * n / total) : 0) + "%"]);
+    });
+    resumen.push(["", "", ""]);
+    resumen.push(["TOTAL PADRÓN", total, "100%"]);
+    resumen.push(["Candidatos a depurar (nunca + +60d)", depurar, ""]);
+    resumen.push(["Activos (≤60 días)", activos, ""]);
+
+    const hojas = [{ nombre: "Resumen embudo", datos: resumen }];
+
+    // Una hoja por escalón (ordenado del más activo al más inactivo)
+    ESCALONES.forEach(e => {
+      const grupo = rows
+        .filter(r => r.escalon === e.id)
+        .sort((a, b) => (b.dias_sin_operar || 0) - (a.dias_sin_operar || 0));
+      const datos = [H, ...grupo.map(filaDe)];
+      if (grupo.length === 0) datos.push(["(sin conductores en este escalón)", "", "", "", "", ""]);
+      // nombre de hoja: Excel no admite > 31 chars ni ciertos símbolos
+      const nombreHoja = `${e.label} (${grupo.length})`.replace(/[\\/?*:\[\]]/g, "").slice(0, 31);
+      hojas.push({ nombre: nombreHoja, datos });
+    });
+
+    await descargarExcelMultihoja(hojas, "padron_limpieza_por_escalon");
+  };
+
+  if (loading) return <div style={{ padding: 40, textAlign: "center", color: PMUTED, fontSize: 13 }}>Cargando embudo…</div>;
+  if (error) return <div style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 10, padding: 14, fontSize: 12, color: "#991b1b" }}>{error}</div>;
+
+  const total = rows.length;
+  const activos = (conteos.ayer || 0) + (conteos["7d"] || 0) + (conteos["15d"] || 0) + (conteos["30d"] || 0) + (conteos["45d"] || 0) + (conteos["60d"] || 0);
+  const depurar = (conteos.nunca || 0) + (conteos.mas60 || 0);
+
+  return (
+    <div style={{ padding: 20 }}>
+      {/* KPIs + alertas */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10, marginBottom: 14 }}>
+        <PKpi l="Padrón total" v={total} s="conductores en snapshot" accent={PNAVY} />
+        <PKpi l="Activos (≤60 días)" v={activos} s="operaron en el período" accent="#10b981" />
+        <PKpi l="⚠️ Candidatos a depurar" v={depurar} s="nunca operó o +60 días" accent="#ef4444" />
+        <PKpi l="Alerta +30 días" v={alertas.a30} s="sin operar (revisar)" accent="#f59e0b" />
+      </div>
+
+      {/* EMBUDO */}
+      <div style={{ background: "#fff", border: `1px solid ${PBORDER}`, borderRadius: 12, padding: "16px 18px", marginBottom: 14 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: PNAVY, marginBottom: 12 }}>Embudo de actividad
+          <span style={{ fontWeight: 400, color: PLIGHT, fontSize: 11, marginLeft: 8 }}>· clic en un escalón para filtrar la tabla</span>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {ESCALONES.map(e => {
+            const n = conteos[e.id] || 0;
+            const pct = Math.round((n / maxC) * 100);
+            const sel = filtroEsc === e.id;
+            return (
+              <div key={e.id} onClick={() => setFiltroEsc(sel ? null : e.id)}
+                style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", opacity: filtroEsc && !sel ? 0.5 : 1 }}>
+                <div style={{ width: 130, fontSize: 12, fontWeight: sel ? 800 : 600, color: sel ? e.color : PMUTED, textAlign: "right", flexShrink: 0 }}>{e.label}</div>
+                <div style={{ flex: 1, background: "#f1f5f9", borderRadius: 6, height: 26, position: "relative", overflow: "hidden" }}>
+                  <div style={{ width: `${Math.max(pct, n > 0 ? 4 : 0)}%`, height: "100%", background: e.color, borderRadius: 6, transition: "width .3s", display: "flex", alignItems: "center", justifyContent: "flex-end", paddingRight: 8 }}>
+                    {pct > 12 && <span style={{ color: "#fff", fontSize: 11, fontWeight: 800 }}>{n}</span>}
+                  </div>
+                  {pct <= 12 && <span style={{ position: "absolute", left: `calc(${Math.max(pct,4)}% + 6px)`, top: 5, fontSize: 11, fontWeight: 800, color: e.color }}>{n}</span>}
+                </div>
+                <div style={{ width: 42, fontSize: 11, color: PLIGHT, textAlign: "left", flexShrink: 0 }}>{total ? Math.round(100*n/total) : 0}%</div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Banda de alertas de limpieza */}
+      <div style={{ display: "flex", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
+        {[
+          { k: "alerta_7",  label: "+7 días sin operar",  n: alertas.a7,  c: "#eab308" },
+          { k: "alerta_15", label: "+15 días sin operar", n: alertas.a15, c: "#f59e0b" },
+          { k: "alerta_30", label: "+30 días sin operar", n: alertas.a30, c: "#f97316" },
+          { k: "depurar",   label: "Nunca operó",         n: alertas.dep, c: "#ef4444" },
+        ].map(a => (
+          <div key={a.k} style={{ flex: 1, minWidth: 140, background: "#fff", border: `1px solid ${PBORDER}`, borderLeft: `4px solid ${a.c}`, borderRadius: 8, padding: "8px 12px" }}>
+            <div style={{ fontSize: 20, fontWeight: 800, color: a.c }}>{a.n}</div>
+            <div style={{ fontSize: 11, color: PMUTED }}>{a.label}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Toolbar */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10, flexWrap: "wrap" }}>
+        <input value={busqueda} onChange={e => setBusqueda(e.target.value)} placeholder="Buscar por nombre o ID…"
+          style={{ flex: 1, minWidth: 220, maxWidth: 360, padding: "7px 10px", border: "1px solid #d0d5dd", borderRadius: 6, fontSize: 12, fontFamily: "'Geist', sans-serif" }} />
+        {filtroEsc && (
+          <button onClick={() => setFiltroEsc(null)} style={{ fontSize: 12, fontWeight: 700, padding: "7px 12px", borderRadius: 8, cursor: "pointer", border: "none", background: escMeta(filtroEsc).color, color: "#fff", fontFamily: "'Geist', sans-serif", display: "inline-flex", alignItems: "center", gap: 6 }}>
+            {escMeta(filtroEsc).label} <i className="ti ti-x" style={{ fontSize: 13 }} />
+          </button>
+        )}
+        <span style={{ fontSize: 12, color: PMUTED }}>{filtradas.length} de {total}</span>
+        <button onClick={descargarExcelPorEscalon} style={{ marginLeft: "auto", fontSize: 11, fontWeight: 700, padding: "6px 12px", borderRadius: 6, border: "none", background: "#1f7a4d", color: "#fff", cursor: "pointer", fontFamily: "'Geist', sans-serif", display: "inline-flex", alignItems: "center", gap: 5 }}>
+          <i className="ti ti-file-spreadsheet" style={{ fontSize: 13 }} />Excel por escalón
+        </button>
+        <button onClick={exportar} style={{ fontSize: 11, fontWeight: 600, padding: "6px 11px", borderRadius: 6, border: `1px solid ${PBORDER}`, background: "#fff", color: PMUTED, cursor: "pointer", fontFamily: "'Geist', sans-serif", display: "inline-flex", alignItems: "center", gap: 5 }}>
+          <i className="ti ti-download" style={{ fontSize: 12 }} />CSV vista
+        </button>
+      </div>
+
+      {/* Tabla */}
+      <div style={{ background: "#fff", borderRadius: 12, border: `0.5px solid ${PBORDER}`, overflow: "hidden" }}>
+        <div style={{ maxHeight: "50vh", overflow: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+            <thead style={{ position: "sticky", top: 0, zIndex: 1, background: "#f8fafc" }}>
+              <tr>
+                <ApTh>ID conductor</ApTh><ApTh>Nombre</ApTh><ApTh>Escalón</ApTh>
+                <ApTh>Último viaje</ApTh><ApTh>Días sin operar</ApTh><ApTh>Total viajes</ApTh>
+              </tr>
+            </thead>
+            <tbody>
+              {filtradas.length === 0 && (
+                <tr><td colSpan={6} style={{ padding: 30, textAlign: "center", color: PLIGHT }}>Sin resultados</td></tr>
+              )}
+              {filtradas.map((r, i) => {
+                const meta = escMeta(r.escalon);
+                const depurar = r.escalon === "nunca" || r.escalon === "mas60";
+                return (
+                  <tr key={r.driver_id ?? i} style={{ borderBottom: "0.5px solid #f4f5f7", background: depurar ? "#fef2f2" : "transparent" }}>
+                    <ApTd mono>{r.driver_id}</ApTd>
+                    <ApTd bold>{r.nombre || <span style={{ color: PLIGHT }}>(sin nombre)</span>}</ApTd>
+                    <ApTd>
+                      <span style={{ background: meta.color + "22", color: meta.color, fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 4 }}>{meta.label}</span>
+                    </ApTd>
+                    <ApTd center small>{r.ultimo_viaje || <span style={{ color: PLIGHT }}>—</span>}</ApTd>
+                    <ApTd center>{r.dias_sin_operar != null
+                      ? <span style={{ fontWeight: depurar ? 800 : 400, color: depurar ? "#ef4444" : "inherit" }}>{r.dias_sin_operar}</span>
+                      : <span style={{ color: "#ef4444", fontWeight: 800 }}>nunca</span>}</ApTd>
+                    <ApTd center>{r.total_viajes || <span style={{ color: PLIGHT }}>0</span>}</ApTd>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div style={{ marginTop: 10, fontSize: 11, color: PLIGHT, fontStyle: "italic" }}>
+        ℹ️ Combina histórico cargado + operación diaria. Filas en rojo = candidatos a depurar (nunca operó o +60 días sin operar). Ventanas relativas a hoy; se actualiza solo con los viajes diarios.
+      </div>
+    </div>
+  );
+}
+
 function PadronMeliAdmin({ usuario }) {
   const [mundo, setMundo] = useState("drivers"); // drivers (principal) | vehiculos
   return (
@@ -24828,6 +25058,7 @@ function PadronMeliAdmin({ usuario }) {
           { id: "vehiculos", label: "Vehículos", icon: "ti-truck" },
           { id: "cursos", label: "Cursos", icon: "ti-school" },
           { id: "rechazados", label: "Rechazados", icon: "ti-user-x" },
+          { id: "limpieza", label: "Limpieza", icon: "ti-filter" },
         ].map(m => (
           <button key={m.id} onClick={() => setMundo(m.id)} style={{
             border: "none", cursor: "pointer", padding: "7px 16px", borderRadius: 8,
@@ -24842,6 +25073,7 @@ function PadronMeliAdmin({ usuario }) {
       </div>
       {mundo === "cursos" ? <PadronCursos key="cursos" />
         : mundo === "rechazados" ? <PadronRechazados key="rechazados" />
+        : mundo === "limpieza" ? <PadronLimpieza key="limpieza" />
         : <PadronMundo key={mundo} tipo={mundo} />}
     </div>
   );
