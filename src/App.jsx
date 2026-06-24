@@ -24489,6 +24489,334 @@ function PadronDriversData({ fecha }) {
   );
 }
 
+// ── SUB-MUNDO CURSOS · lee vw_cursos_actividad ──────────────────────────────
+function PadronCursos() {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [busqueda, setBusqueda] = useState("");
+  const [soloOperan, setSoloOperan] = useState(false);
+  const PNAVY = "#1a3a6b", PMUTED = "#64748b", PLIGHT = "#94a3b8", PBORDER = "#e4e7ec";
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      setLoading(true); setError(null);
+      try {
+        const { data, error } = await sb.from("vw_cursos_actividad").select("*").limit(5000);
+        if (error) throw error;
+        if (alive) setRows(data || []);
+      } catch (e) { if (alive) setError(e.message || "Error"); }
+      finally { if (alive) setLoading(false); }
+    })();
+    return () => { alive = false; };
+  }, []);
+
+  const kpis = useMemo(() => ({
+    total: rows.length,
+    operan: rows.filter(r => r.opera_hoy).length,
+    sin_op: rows.filter(r => !r.opera_hoy).length,
+  }), [rows]);
+
+  const filtradas = useMemo(() => {
+    let res = rows;
+    if (soloOperan) res = res.filter(r => r.opera_hoy);
+    const q = busqueda.toLowerCase().trim();
+    if (q) res = res.filter(r =>
+      [r.driver_id, r.nombre, r.email, r.telefono, r.curp].some(v => String(v ?? "").toLowerCase().includes(q)));
+    return res;
+  }, [rows, busqueda, soloOperan]);
+
+  const exportar = () => {
+    const headers = ["ID conductor", "Nombre", "Curso", "Estado", "Correo", "Teléfono", "CURP", "Opera hoy"];
+    const filas = filtradas.map(r => [r.driver_id, r.nombre, r.course_name, r.status,
+      r.email || "", r.telefono || "", r.curp || "", r.opera_hoy ? "Sí" : "No"]);
+    padronCsv(headers, filas, "cursos_pendientes");
+  };
+
+  if (loading) return <div style={{ padding: 40, textAlign: "center", color: PMUTED, fontSize: 13 }}>Cargando cursos…</div>;
+  if (error) return <div style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 10, padding: 14, fontSize: 12, color: "#991b1b" }}>{error}</div>;
+
+  return (
+    <div style={{ padding: 20 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, marginBottom: 12 }}>
+        <PKpi l="Cursos pendientes" v={kpis.total} s='"Cómo hacer entregas con la app"' accent={PNAVY} />
+        <PKpi l="Operan hoy" v={kpis.operan} s="en el padrón operativo · accionables" accent="#d97706" />
+        <PKpi l="No operan hoy" v={kpis.sin_op} s="pendientes fuera de operación" accent={PLIGHT} />
+      </div>
+
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10, flexWrap: "wrap" }}>
+        <input value={busqueda} onChange={e => setBusqueda(e.target.value)} placeholder="Buscar por nombre, ID, correo, teléfono…"
+          style={{ flex: 1, minWidth: 240, maxWidth: 400, padding: "7px 10px", border: "1px solid #d0d5dd", borderRadius: 6, fontSize: 12, fontFamily: "'Geist', sans-serif" }} />
+        <button onClick={() => setSoloOperan(v => !v)} style={{
+          fontSize: 12, fontWeight: 700, padding: "7px 12px", borderRadius: 8, cursor: "pointer",
+          border: soloOperan ? "none" : `1px solid ${PBORDER}`,
+          background: soloOperan ? "#d97706" : "#fff", color: soloOperan ? "#fff" : PMUTED,
+          fontFamily: "'Geist', sans-serif",
+        }}>{soloOperan ? `Mostrando operativos (${kpis.operan})` : "Solo los que operan hoy"}</button>
+        <span style={{ fontSize: 12, color: PMUTED }}>{filtradas.length} de {rows.length}</span>
+        <button onClick={exportar} style={{ marginLeft: "auto", fontSize: 11, fontWeight: 600, padding: "6px 11px", borderRadius: 6, border: "none", background: PNAVY, color: "#fff", cursor: "pointer", fontFamily: "'Geist', sans-serif", display: "inline-flex", alignItems: "center", gap: 5 }}>
+          <i className="ti ti-download" style={{ fontSize: 12 }} />Exportar CSV
+        </button>
+      </div>
+
+      <div style={{ background: "#fff", borderRadius: 12, border: `0.5px solid ${PBORDER}`, overflow: "hidden" }}>
+        <div style={{ maxHeight: "60vh", overflow: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+            <thead style={{ position: "sticky", top: 0, zIndex: 1, background: "#f8fafc" }}>
+              <tr>
+                <ApTh>ID conductor</ApTh><ApTh>Nombre</ApTh><ApTh>Curso</ApTh>
+                <ApTh>Estado</ApTh><ApTh>Correo</ApTh><ApTh>Teléfono</ApTh><ApTh>Opera hoy</ApTh>
+              </tr>
+            </thead>
+            <tbody>
+              {filtradas.length === 0 && (
+                <tr><td colSpan={7} style={{ padding: 30, textAlign: "center", color: PLIGHT }}>Sin resultados</td></tr>
+              )}
+              {filtradas.map((r, i) => (
+                <tr key={r.driver_id ?? i} style={{ borderBottom: "0.5px solid #f4f5f7" }}>
+                  <ApTd mono>{r.driver_id}</ApTd>
+                  <ApTd bold>{r.nombre || "—"}</ApTd>
+                  <ApTd small>{r.course_name}</ApTd>
+                  <ApTd>
+                    <span style={{ background: "#fef3c7", color: "#92400e", fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 4 }}>
+                      {r.status === "urgent" ? "Urgente" : r.status}
+                    </span>
+                  </ApTd>
+                  <ApTd small>{r.email || <span style={{ color: PLIGHT }}>—</span>}</ApTd>
+                  <ApTd mono small>{r.telefono || <span style={{ color: PLIGHT }}>—</span>}</ApTd>
+                  <ApTd center>
+                    {r.opera_hoy
+                      ? <span style={{ background: "#d1fae5", color: "#065f46", fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 4 }}>Opera</span>
+                      : <span style={{ color: PLIGHT }}>—</span>}
+                  </ApTd>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div style={{ marginTop: 10, fontSize: 11, color: PLIGHT, fontStyle: "italic" }}>
+        ℹ️ Cursos pendientes capturados desde el hub de capacitación de MELI. "Opera hoy" = aparece en el último snapshot del padrón operativo.
+      </div>
+    </div>
+  );
+}
+
+// ── SUB-MUNDO RECHAZADOS · carga Excel -> Supabase -> vw_rechazados_actividad ─
+function PadronRechazados() {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [busqueda, setBusqueda] = useState("");
+  const [soloActivos, setSoloActivos] = useState(false);
+  const [cargando, setCargando] = useState(false);
+  const [msg, setMsg] = useState(null);
+  const fileRef = useRef(null);
+  const PNAVY = "#1a3a6b", PMUTED = "#64748b", PLIGHT = "#94a3b8", PBORDER = "#e4e7ec";
+
+  async function cargar() {
+    setLoading(true); setError(null);
+    try {
+      const { data, error } = await sb.from("vw_rechazados_actividad").select("*").limit(5000);
+      if (error) throw error;
+      setRows(data || []);
+    } catch (e) { setError(e.message || "Error"); }
+    finally { setLoading(false); }
+  }
+  useEffect(() => { cargar(); }, []);
+
+  // Parsea fechas tipo Excel a ISO (o null)
+  function aFecha(v) {
+    if (v == null || v === "") return null;
+    if (v instanceof Date) return v.toISOString();
+    const d = new Date(v);
+    return isNaN(d.getTime()) ? null : d.toISOString();
+  }
+
+  async function onArchivo(e) {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    setCargando(true); setMsg(null); setError(null);
+    try {
+      // Asegurar SheetJS
+      if (!window.XLSX) {
+        await new Promise((res, rej) => {
+          const s = document.createElement("script");
+          s.src = "https://cdn.sheetjs.com/xlsx-0.20.0/package/dist/xlsx.full.min.js";
+          s.onload = res; s.onerror = rej; document.head.appendChild(s);
+        });
+      }
+      const XLSX = window.XLSX;
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(buf, { type: "array", cellDates: true });
+      const hoja = wb.Sheets["DATOS"] || wb.Sheets[wb.SheetNames[0]];
+      const arr = XLSX.utils.sheet_to_json(hoja, { defval: null });
+
+      // Mapeo por nombre de columna (formato estable del reporte)
+      const norm = s => String(s ?? "").trim();
+      const filas = arr.map(r => ({
+        svc:            norm(r["SVC"]),
+        nombre:         norm(r["Nombres"]),
+        cargo:          norm(r["CARGO"]),
+        empresa:        norm(r["EMPRESA"]),
+        fecha_llegada:  aFecha(r["F. LLEGADA"]),
+        enviado_meli:   aFecha(r["ENVIADO MELI"]),
+        respuesta_meli: norm(r["RESPUESTA MELI"]).toUpperCase(),
+        respuesta_at:   aFecha(r["H. RESPUESTA MELI"]),
+        validacion_bt:  norm(r["VALIDACION BIGTICKET"]),
+        rfc:            norm(r["RFC"]),
+        curp:           norm(r["CURP"]).toUpperCase(),
+        email:          norm(r["Email"]),
+        telefono:       norm(r["Teléfono"]),
+        lote:           new Date().toISOString().slice(0, 10),
+      })).filter(f => f.curp || f.nombre);
+
+      if (filas.length === 0) throw new Error("No se encontraron filas en la hoja DATOS. ¿El archivo tiene el formato esperado?");
+
+      // REEMPLAZAR: borrar todo e insertar lo nuevo
+      const { error: eDel } = await sb.from("meli_validacion_tripulaciones").delete().neq("id", -1);
+      if (eDel) throw new Error("No pude limpiar la tabla: " + eDel.message);
+      for (let i = 0; i < filas.length; i += 200) {
+        const { error: eIns } = await sb.from("meli_validacion_tripulaciones").insert(filas.slice(i, i + 200));
+        if (eIns) throw new Error("Error al insertar: " + eIns.message);
+      }
+      const rech = filas.filter(f => f.respuesta_meli === "RECHAZADO").length;
+      setMsg(`✓ Cargadas ${filas.length} filas (${rech} rechazados). Cruzando con el padrón…`);
+      await cargar();
+      setMsg(`✓ Carga completa: ${filas.length} filas · ${rech} rechazados. Tabla actualizada.`);
+    } catch (err) {
+      setError(err.message || "Error al procesar el archivo");
+    } finally {
+      setCargando(false);
+      if (fileRef.current) fileRef.current.value = "";
+    }
+  }
+
+  const kpis = useMemo(() => ({
+    total: rows.length,
+    con_act: rows.filter(r => r.viajes_30d > 0).length,
+    ayer: rows.filter(r => r.viajes_ayer > 0).length,
+    semana: rows.filter(r => r.viajes_7d > 0).length,
+  }), [rows]);
+
+  const filtradas = useMemo(() => {
+    let res = rows;
+    if (soloActivos) res = res.filter(r => r.viajes_30d > 0);
+    const q = busqueda.toLowerCase().trim();
+    if (q) res = res.filter(r =>
+      [r.curp, r.driver_id, r.nombre, r.empresa, r.sc_ultimo, r.supervisor_ultimo].some(v => String(v ?? "").toLowerCase().includes(q)));
+    // orden: viajes_30d desc
+    return [...res].sort((a, b) => (b.viajes_30d || 0) - (a.viajes_30d || 0));
+  }, [rows, busqueda, soloActivos]);
+
+  const exportar = () => {
+    const headers = ["CURP", "ID conductor", "Nombre", "Empresa", "SC último", "Supervisor último",
+      "Último viaje", "Viajes ayer", "Viajes 7d", "Viajes 15d", "Viajes 30d"];
+    const filas = filtradas.map(r => [r.curp, r.driver_id ?? "", r.nombre || "", r.empresa || "",
+      r.sc_ultimo || "", r.supervisor_ultimo || "", r.ultimo_viaje || "",
+      r.viajes_ayer, r.viajes_7d, r.viajes_15d, r.viajes_30d]);
+    padronCsv(headers, filas, "rechazados_meli");
+  };
+
+  return (
+    <div style={{ padding: 20 }}>
+      {/* Barra de carga */}
+      <div style={{ background: "#fff", border: `1px solid ${PBORDER}`, borderRadius: 10, padding: "12px 16px", marginBottom: 14, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <div style={{ flex: 1, minWidth: 220 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: PNAVY }}>Validación de tripulaciones</div>
+          <div style={{ fontSize: 11, color: PMUTED }}>Cargá el Excel de validación. Reemplaza la carga anterior y vuelve a cruzar con el padrón.</div>
+        </div>
+        <input ref={fileRef} type="file" accept=".xlsx,.xls" onChange={onArchivo} style={{ display: "none" }} id="rech-file" />
+        <button onClick={() => fileRef.current && fileRef.current.click()} disabled={cargando} style={{
+          fontSize: 12, fontWeight: 700, padding: "9px 16px", borderRadius: 8, border: "none",
+          background: cargando ? "#94a3b8" : "#F47B20", color: "#fff", cursor: cargando ? "default" : "pointer",
+          fontFamily: "'Geist', sans-serif", display: "inline-flex", alignItems: "center", gap: 6,
+        }}>
+          <i className={`ti ${cargando ? "ti-loader-2" : "ti-upload"}`} style={{ fontSize: 15 }} />
+          {cargando ? "Procesando…" : "Cargar Excel"}
+        </button>
+      </div>
+      {msg && <div style={{ background: "#ecfdf5", border: "1px solid #a7f3d0", borderRadius: 8, padding: "8px 12px", fontSize: 12, color: "#065f46", marginBottom: 12 }}>{msg}</div>}
+      {error && <div style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 8, padding: "8px 12px", fontSize: 12, color: "#991b1b", marginBottom: 12 }}>{error}</div>}
+
+      {/* KPIs */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10, marginBottom: 12 }}>
+        <PKpi l="Rechazados (total)" v={kpis.total} s="con CURP en el padrón" accent={PNAVY} />
+        <PKpi l="Con actividad 30d" v={kpis.con_act} s="rechazados que operaron" accent="#d97706" />
+        <PKpi l="⚠️ Operaron ayer" v={kpis.ayer} s="rechazados en ruta ayer" accent="#c0392b" />
+        <PKpi l="Operaron 7 días" v={kpis.semana} s="actividad reciente" accent="#d97706" />
+      </div>
+
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10, flexWrap: "wrap" }}>
+        <input value={busqueda} onChange={e => setBusqueda(e.target.value)} placeholder="Buscar por CURP, nombre, empresa, SC, supervisor…"
+          style={{ flex: 1, minWidth: 240, maxWidth: 400, padding: "7px 10px", border: "1px solid #d0d5dd", borderRadius: 6, fontSize: 12, fontFamily: "'Geist', sans-serif" }} />
+        <button onClick={() => setSoloActivos(v => !v)} style={{
+          fontSize: 12, fontWeight: 700, padding: "7px 12px", borderRadius: 8, cursor: "pointer",
+          border: soloActivos ? "none" : `1px solid ${PBORDER}`,
+          background: soloActivos ? "#c0392b" : "#fff", color: soloActivos ? "#fff" : PMUTED,
+          fontFamily: "'Geist', sans-serif",
+        }}>{soloActivos ? `Solo con viajes (${kpis.con_act})` : "Solo con viajes"}</button>
+        <span style={{ fontSize: 12, color: PMUTED }}>{filtradas.length} de {rows.length}</span>
+        <button onClick={exportar} style={{ marginLeft: "auto", fontSize: 11, fontWeight: 600, padding: "6px 11px", borderRadius: 6, border: "none", background: PNAVY, color: "#fff", cursor: "pointer", fontFamily: "'Geist', sans-serif", display: "inline-flex", alignItems: "center", gap: 5 }}>
+          <i className="ti ti-download" style={{ fontSize: 12 }} />Exportar CSV
+        </button>
+      </div>
+
+      {loading ? (
+        <div style={{ padding: 40, textAlign: "center", color: PMUTED, fontSize: 13 }}>Cargando…</div>
+      ) : rows.length === 0 ? (
+        <div style={{ background: "#fff", border: `1px dashed ${PBORDER}`, borderRadius: 10, padding: 40, textAlign: "center", color: PLIGHT, fontSize: 13 }}>
+          No hay datos de validación cargados. Usá "Cargar Excel" para subir el archivo de tripulaciones.
+        </div>
+      ) : (
+        <div style={{ background: "#fff", borderRadius: 12, border: `0.5px solid ${PBORDER}`, overflow: "hidden" }}>
+          <div style={{ maxHeight: "55vh", overflow: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+              <thead style={{ position: "sticky", top: 0, zIndex: 1, background: "#f8fafc" }}>
+                <tr>
+                  <ApTh>CURP</ApTh><ApTh>ID</ApTh><ApTh>Nombre</ApTh><ApTh>Empresa</ApTh>
+                  <ApTh>SC último</ApTh><ApTh>Supervisor último</ApTh><ApTh>Último viaje</ApTh>
+                  <ApTh>Ayer</ApTh><ApTh>7d</ApTh><ApTh>15d</ApTh><ApTh>30d</ApTh>
+                </tr>
+              </thead>
+              <tbody>
+                {filtradas.length === 0 && (
+                  <tr><td colSpan={11} style={{ padding: 30, textAlign: "center", color: PLIGHT }}>Sin resultados</td></tr>
+                )}
+                {filtradas.map((r, i) => {
+                  const ayer = r.viajes_ayer > 0, sem = r.viajes_7d > 0;
+                  const bg = ayer ? "#fbeceb" : sem ? "#fffbeb" : "transparent";
+                  return (
+                    <tr key={(r.curp || "") + (r.driver_id || i)} style={{ borderBottom: "0.5px solid #f4f5f7", background: bg }}>
+                      <ApTd mono small>{r.curp}</ApTd>
+                      <ApTd mono>{r.driver_id || <span style={{ color: PLIGHT }}>—</span>}</ApTd>
+                      <ApTd bold>{r.nombre || "—"}</ApTd>
+                      <ApTd small>{r.empresa || <span style={{ color: PLIGHT }}>—</span>}</ApTd>
+                      <ApTd center small>{r.sc_ultimo || <span style={{ color: PLIGHT }}>—</span>}</ApTd>
+                      <ApTd small>{r.supervisor_ultimo || <span style={{ color: PLIGHT }}>—</span>}</ApTd>
+                      <ApTd center small>{r.ultimo_viaje || <span style={{ color: PLIGHT }}>—</span>}</ApTd>
+                      <ApTd center>{r.viajes_ayer > 0
+                        ? <span style={{ color: "#c0392b", fontWeight: 800 }}>{r.viajes_ayer}</span>
+                        : <span style={{ color: PLIGHT }}>0</span>}</ApTd>
+                      <ApTd center>{r.viajes_7d || <span style={{ color: PLIGHT }}>0</span>}</ApTd>
+                      <ApTd center>{r.viajes_15d || <span style={{ color: PLIGHT }}>0</span>}</ApTd>
+                      <ApTd center bold>{r.viajes_30d || <span style={{ color: PLIGHT }}>0</span>}</ApTd>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+      <div style={{ marginTop: 10, fontSize: 11, color: PLIGHT, fontStyle: "italic" }}>
+        🔴 Fila roja = rechazado que operó <strong>ayer</strong> · 🟡 ámbar = operó en los últimos 7 días. El cruce es por CURP contra el padrón enriquecido; ventanas relativas a hoy.
+      </div>
+    </div>
+  );
+}
+
 function PadronMeliAdmin({ usuario }) {
   const [mundo, setMundo] = useState("drivers"); // drivers (principal) | vehiculos
   return (
@@ -24498,6 +24826,8 @@ function PadronMeliAdmin({ usuario }) {
         {[
           { id: "drivers", label: "Conductores", icon: "ti-user" },
           { id: "vehiculos", label: "Vehículos", icon: "ti-truck" },
+          { id: "cursos", label: "Cursos", icon: "ti-school" },
+          { id: "rechazados", label: "Rechazados", icon: "ti-user-x" },
         ].map(m => (
           <button key={m.id} onClick={() => setMundo(m.id)} style={{
             border: "none", cursor: "pointer", padding: "7px 16px", borderRadius: 8,
@@ -24510,7 +24840,9 @@ function PadronMeliAdmin({ usuario }) {
           </button>
         ))}
       </div>
-      <PadronMundo key={mundo} tipo={mundo} />
+      {mundo === "cursos" ? <PadronCursos key="cursos" />
+        : mundo === "rechazados" ? <PadronRechazados key="rechazados" />
+        : <PadronMundo key={mundo} tipo={mundo} />}
     </div>
   );
 }
