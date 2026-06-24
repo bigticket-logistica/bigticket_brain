@@ -24265,6 +24265,17 @@ function padronFmt(v) {
 }
 
 // ── Helper de etiqueta de infracción para el padrón de conductores ──────────
+// Rol del conductor (desde is_only_helper del detalle MELI)
+function padronRolMeta(isOnlyHelper) {
+  if (isOnlyHelper === true)  return { label: "Helper", color: "#F47B20", bg: "#fff3e6" };
+  if (isOnlyHelper === false) return { label: "Driver", color: "#1a3a6b", bg: "#e8edf5" };
+  return { label: "Sin dato", color: "#94a3b8", bg: "#f1f5f9" };
+}
+function PadronRolBadge({ value }) {
+  const m = padronRolMeta(value);
+  return <span style={{ background: m.bg, color: m.color, fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 4 }}>{m.label}</span>;
+}
+
 function padronInfraccionLabel(key) {
   if (!key) return "Infracción";
   const map = {
@@ -24299,7 +24310,7 @@ function PadronDriversData({ fecha }) {
             .select("driver_id,nombre,first_name,last_name,document_value,status")
             .eq("fecha_snapshot", fecha).limit(5000),
           sb.from("meli_drivers_detalle")
-            .select("driver_id,first_name,last_name,document_value,email,phone,creation_date,status,tiene_infraccion,infraction_status,esta_bloqueado,blocking_reason")
+            .select("driver_id,first_name,last_name,document_value,email,phone,creation_date,status,tiene_infraccion,infraction_status,esta_bloqueado,blocking_reason,is_only_helper")
             .limit(5000),
         ]);
         if (mRes.error) throw mRes.error;
@@ -24328,6 +24339,7 @@ function PadronDriversData({ fecha }) {
         email: d ? d.email : null,
         phone: d ? d.phone : null,
         status: m.status || (d && d.status) || "—",
+        is_only_helper: d ? d.is_only_helper : null,
         tiene_infraccion: !!(d && d.tiene_infraccion),
         infraction_status: d ? d.infraction_status : null,
         esta_bloqueado: !!(d && d.esta_bloqueado),
@@ -24379,7 +24391,7 @@ function PadronDriversData({ fecha }) {
   if (loading) return <div style={{ padding: 40, textAlign: "center", color: PMUTED, fontSize: 13 }}>Cargando conductores…</div>;
   if (error) return <div style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 10, padding: 14, fontSize: 12, color: "#991b1b" }}>{error}</div>;
 
-  const COLS = 8;
+  const COLS = 9;
 
   return (
     <div>
@@ -24424,6 +24436,7 @@ function PadronDriversData({ fecha }) {
                 <ApTh>Correo</ApTh>
                 <ApTh>Teléfono</ApTh>
                 <ApTh>Estado</ApTh>
+                <ApTh>Rol</ApTh>
                 <ApTh>Infracción</ApTh>
               </tr>
             </thead>
@@ -24448,6 +24461,7 @@ function PadronDriversData({ fecha }) {
                       <ApTd>
                         <span style={{ background: r.status === "active" ? "#d1fae5" : "#fef3c7", color: r.status === "active" ? "#065f46" : "#92400e", fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 4 }}>{r.status}</span>
                       </ApTd>
+                      <ApTd><PadronRolBadge value={r.is_only_helper} /></ApTd>
                       <ApTd>
                         {r.tiene_infraccion ? (
                           <span style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "#fef3c7", color: "#92400e", fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 4 }}>
@@ -24566,12 +24580,12 @@ function PadronCursos() {
             <thead style={{ position: "sticky", top: 0, zIndex: 1, background: "#f8fafc" }}>
               <tr>
                 <ApTh>ID conductor</ApTh><ApTh>Nombre</ApTh><ApTh>Curso</ApTh>
-                <ApTh>Estado</ApTh><ApTh>Correo</ApTh><ApTh>Teléfono</ApTh><ApTh>Opera hoy</ApTh>
+                <ApTh>Estado</ApTh><ApTh>Rol</ApTh><ApTh>Correo</ApTh><ApTh>Teléfono</ApTh><ApTh>Opera hoy</ApTh>
               </tr>
             </thead>
             <tbody>
               {filtradas.length === 0 && (
-                <tr><td colSpan={7} style={{ padding: 30, textAlign: "center", color: PLIGHT }}>Sin resultados</td></tr>
+                <tr><td colSpan={8} style={{ padding: 30, textAlign: "center", color: PLIGHT }}>Sin resultados</td></tr>
               )}
               {filtradas.map((r, i) => (
                 <tr key={r.driver_id ?? i} style={{ borderBottom: "0.5px solid #f4f5f7" }}>
@@ -24583,6 +24597,7 @@ function PadronCursos() {
                       {r.status === "urgent" ? "Urgente" : r.status}
                     </span>
                   </ApTd>
+                  <ApTd><PadronRolBadge value={r.is_only_helper} /></ApTd>
                   <ApTd small>{r.email || <span style={{ color: PLIGHT }}>—</span>}</ApTd>
                   <ApTd mono small>{r.telefono || <span style={{ color: PLIGHT }}>—</span>}</ApTd>
                   <ApTd center>
@@ -24775,14 +24790,14 @@ function PadronRechazados() {
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
               <thead style={{ position: "sticky", top: 0, zIndex: 1, background: "#f8fafc" }}>
                 <tr>
-                  <ApTh>CURP</ApTh><ApTh>ID</ApTh><ApTh>Nombre</ApTh><ApTh>Empresa</ApTh>
+                  <ApTh>CURP</ApTh><ApTh>ID</ApTh><ApTh>Nombre</ApTh><ApTh>Empresa</ApTh><ApTh>Rol</ApTh>
                   <ApTh>SC último</ApTh><ApTh>Supervisor último</ApTh><ApTh>Último viaje</ApTh>
                   <ApTh>Ayer</ApTh><ApTh>7d</ApTh><ApTh>15d</ApTh><ApTh>30d</ApTh>
                 </tr>
               </thead>
               <tbody>
                 {filtradas.length === 0 && (
-                  <tr><td colSpan={11} style={{ padding: 30, textAlign: "center", color: PLIGHT }}>Sin resultados</td></tr>
+                  <tr><td colSpan={12} style={{ padding: 30, textAlign: "center", color: PLIGHT }}>Sin resultados</td></tr>
                 )}
                 {filtradas.map((r, i) => {
                   const ayer = r.viajes_ayer > 0, sem = r.viajes_7d > 0;
@@ -24793,6 +24808,7 @@ function PadronRechazados() {
                       <ApTd mono>{r.driver_id || <span style={{ color: PLIGHT }}>—</span>}</ApTd>
                       <ApTd bold>{r.nombre || "—"}</ApTd>
                       <ApTd small>{r.empresa || <span style={{ color: PLIGHT }}>—</span>}</ApTd>
+                      <ApTd><PadronRolBadge value={r.is_only_helper} /></ApTd>
                       <ApTd center small>{r.sc_ultimo || <span style={{ color: PLIGHT }}>—</span>}</ApTd>
                       <ApTd small>{r.supervisor_ultimo || <span style={{ color: PLIGHT }}>—</span>}</ApTd>
                       <ApTd center small>{r.ultimo_viaje || <span style={{ color: PLIGHT }}>—</span>}</ApTd>
@@ -25010,13 +25026,13 @@ function PadronLimpieza() {
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
             <thead style={{ position: "sticky", top: 0, zIndex: 1, background: "#f8fafc" }}>
               <tr>
-                <ApTh>ID conductor</ApTh><ApTh>Nombre</ApTh><ApTh>Escalón</ApTh>
+                <ApTh>ID conductor</ApTh><ApTh>Nombre</ApTh><ApTh>Rol</ApTh><ApTh>Escalón</ApTh>
                 <ApTh>Último viaje</ApTh><ApTh>Días sin operar</ApTh><ApTh>Total viajes</ApTh>
               </tr>
             </thead>
             <tbody>
               {filtradas.length === 0 && (
-                <tr><td colSpan={6} style={{ padding: 30, textAlign: "center", color: PLIGHT }}>Sin resultados</td></tr>
+                <tr><td colSpan={7} style={{ padding: 30, textAlign: "center", color: PLIGHT }}>Sin resultados</td></tr>
               )}
               {filtradas.map((r, i) => {
                 const meta = escMeta(r.escalon);
@@ -25025,6 +25041,7 @@ function PadronLimpieza() {
                   <tr key={r.driver_id ?? i} style={{ borderBottom: "0.5px solid #f4f5f7", background: depurar ? "#fef2f2" : "transparent" }}>
                     <ApTd mono>{r.driver_id}</ApTd>
                     <ApTd bold>{r.nombre || <span style={{ color: PLIGHT }}>(sin nombre)</span>}</ApTd>
+                    <ApTd><PadronRolBadge value={r.is_only_helper} /></ApTd>
                     <ApTd>
                       <span style={{ background: meta.color + "22", color: meta.color, fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 4 }}>{meta.label}</span>
                     </ApTd>
