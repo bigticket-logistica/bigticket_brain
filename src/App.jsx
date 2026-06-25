@@ -24265,6 +24265,17 @@ function padronFmt(v) {
 }
 
 // ── Helper de etiqueta de infracción para el padrón de conductores ──────────
+// Rol del conductor (desde is_only_helper del detalle MELI)
+function padronRolMeta(isOnlyHelper) {
+  if (isOnlyHelper === true)  return { label: "Helper", color: "#F47B20", bg: "#fff3e6" };
+  if (isOnlyHelper === false) return { label: "Driver", color: "#1a3a6b", bg: "#e8edf5" };
+  return { label: "Sin dato", color: "#94a3b8", bg: "#f1f5f9" };
+}
+function PadronRolBadge({ value }) {
+  const m = padronRolMeta(value);
+  return <span style={{ background: m.bg, color: m.color, fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 4 }}>{m.label}</span>;
+}
+
 function padronInfraccionLabel(key) {
   if (!key) return "Infracción";
   const map = {
@@ -24299,7 +24310,7 @@ function PadronDriversData({ fecha }) {
             .select("driver_id,nombre,first_name,last_name,document_value,status")
             .eq("fecha_snapshot", fecha).limit(5000),
           sb.from("meli_drivers_detalle")
-            .select("driver_id,first_name,last_name,document_value,email,phone,creation_date,status,tiene_infraccion,infraction_status,esta_bloqueado,blocking_reason")
+            .select("driver_id,first_name,last_name,document_value,email,phone,creation_date,status,tiene_infraccion,infraction_status,esta_bloqueado,blocking_reason,is_only_helper")
             .limit(5000),
         ]);
         if (mRes.error) throw mRes.error;
@@ -24328,6 +24339,7 @@ function PadronDriversData({ fecha }) {
         email: d ? d.email : null,
         phone: d ? d.phone : null,
         status: m.status || (d && d.status) || "—",
+        is_only_helper: d ? d.is_only_helper : null,
         tiene_infraccion: !!(d && d.tiene_infraccion),
         infraction_status: d ? d.infraction_status : null,
         esta_bloqueado: !!(d && d.esta_bloqueado),
@@ -24379,7 +24391,7 @@ function PadronDriversData({ fecha }) {
   if (loading) return <div style={{ padding: 40, textAlign: "center", color: PMUTED, fontSize: 13 }}>Cargando conductores…</div>;
   if (error) return <div style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 10, padding: 14, fontSize: 12, color: "#991b1b" }}>{error}</div>;
 
-  const COLS = 8;
+  const COLS = 9;
 
   return (
     <div>
@@ -24424,6 +24436,7 @@ function PadronDriversData({ fecha }) {
                 <ApTh>Correo</ApTh>
                 <ApTh>Teléfono</ApTh>
                 <ApTh>Estado</ApTh>
+                <ApTh>Rol</ApTh>
                 <ApTh>Infracción</ApTh>
               </tr>
             </thead>
@@ -24448,6 +24461,7 @@ function PadronDriversData({ fecha }) {
                       <ApTd>
                         <span style={{ background: r.status === "active" ? "#d1fae5" : "#fef3c7", color: r.status === "active" ? "#065f46" : "#92400e", fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 4 }}>{r.status}</span>
                       </ApTd>
+                      <ApTd><PadronRolBadge value={r.is_only_helper} /></ApTd>
                       <ApTd>
                         {r.tiene_infraccion ? (
                           <span style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "#fef3c7", color: "#92400e", fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 4 }}>
@@ -24489,6 +24503,567 @@ function PadronDriversData({ fecha }) {
   );
 }
 
+// ── SUB-MUNDO CURSOS · lee vw_cursos_actividad ──────────────────────────────
+function PadronCursos() {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [busqueda, setBusqueda] = useState("");
+  const [soloOperan, setSoloOperan] = useState(false);
+  const PNAVY = "#1a3a6b", PMUTED = "#64748b", PLIGHT = "#94a3b8", PBORDER = "#e4e7ec";
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      setLoading(true); setError(null);
+      try {
+        const { data, error } = await sb.from("vw_cursos_actividad").select("*").limit(5000);
+        if (error) throw error;
+        if (alive) setRows(data || []);
+      } catch (e) { if (alive) setError(e.message || "Error"); }
+      finally { if (alive) setLoading(false); }
+    })();
+    return () => { alive = false; };
+  }, []);
+
+  const kpis = useMemo(() => ({
+    total: rows.length,
+    operan: rows.filter(r => r.opera_hoy).length,
+    sin_op: rows.filter(r => !r.opera_hoy).length,
+  }), [rows]);
+
+  const filtradas = useMemo(() => {
+    let res = rows;
+    if (soloOperan) res = res.filter(r => r.opera_hoy);
+    const q = busqueda.toLowerCase().trim();
+    if (q) res = res.filter(r =>
+      [r.driver_id, r.nombre, r.email, r.telefono, r.curp].some(v => String(v ?? "").toLowerCase().includes(q)));
+    return res;
+  }, [rows, busqueda, soloOperan]);
+
+  const exportar = () => {
+    const headers = ["ID conductor", "Nombre", "Curso", "Estado", "Correo", "Teléfono", "CURP", "Opera hoy"];
+    const filas = filtradas.map(r => [r.driver_id, r.nombre, r.course_name, r.status,
+      r.email || "", r.telefono || "", r.curp || "", r.opera_hoy ? "Sí" : "No"]);
+    padronCsv(headers, filas, "cursos_pendientes");
+  };
+
+  if (loading) return <div style={{ padding: 40, textAlign: "center", color: PMUTED, fontSize: 13 }}>Cargando cursos…</div>;
+  if (error) return <div style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 10, padding: 14, fontSize: 12, color: "#991b1b" }}>{error}</div>;
+
+  return (
+    <div style={{ padding: 20 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, marginBottom: 12 }}>
+        <PKpi l="Cursos pendientes" v={kpis.total} s='"Cómo hacer entregas con la app"' accent={PNAVY} />
+        <PKpi l="Operan hoy" v={kpis.operan} s="en el padrón operativo · accionables" accent="#d97706" />
+        <PKpi l="No operan hoy" v={kpis.sin_op} s="pendientes fuera de operación" accent={PLIGHT} />
+      </div>
+
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10, flexWrap: "wrap" }}>
+        <input value={busqueda} onChange={e => setBusqueda(e.target.value)} placeholder="Buscar por nombre, ID, correo, teléfono…"
+          style={{ flex: 1, minWidth: 240, maxWidth: 400, padding: "7px 10px", border: "1px solid #d0d5dd", borderRadius: 6, fontSize: 12, fontFamily: "'Geist', sans-serif" }} />
+        <button onClick={() => setSoloOperan(v => !v)} style={{
+          fontSize: 12, fontWeight: 700, padding: "7px 12px", borderRadius: 8, cursor: "pointer",
+          border: soloOperan ? "none" : `1px solid ${PBORDER}`,
+          background: soloOperan ? "#d97706" : "#fff", color: soloOperan ? "#fff" : PMUTED,
+          fontFamily: "'Geist', sans-serif",
+        }}>{soloOperan ? `Mostrando operativos (${kpis.operan})` : "Solo los que operan hoy"}</button>
+        <span style={{ fontSize: 12, color: PMUTED }}>{filtradas.length} de {rows.length}</span>
+        <button onClick={exportar} style={{ marginLeft: "auto", fontSize: 11, fontWeight: 600, padding: "6px 11px", borderRadius: 6, border: "none", background: PNAVY, color: "#fff", cursor: "pointer", fontFamily: "'Geist', sans-serif", display: "inline-flex", alignItems: "center", gap: 5 }}>
+          <i className="ti ti-download" style={{ fontSize: 12 }} />Exportar CSV
+        </button>
+      </div>
+
+      <div style={{ background: "#fff", borderRadius: 12, border: `0.5px solid ${PBORDER}`, overflow: "hidden" }}>
+        <div style={{ maxHeight: "60vh", overflow: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+            <thead style={{ position: "sticky", top: 0, zIndex: 1, background: "#f8fafc" }}>
+              <tr>
+                <ApTh>ID conductor</ApTh><ApTh>Nombre</ApTh><ApTh>Curso</ApTh>
+                <ApTh>Estado</ApTh><ApTh>Rol</ApTh><ApTh>Correo</ApTh><ApTh>Teléfono</ApTh><ApTh>Opera hoy</ApTh>
+              </tr>
+            </thead>
+            <tbody>
+              {filtradas.length === 0 && (
+                <tr><td colSpan={8} style={{ padding: 30, textAlign: "center", color: PLIGHT }}>Sin resultados</td></tr>
+              )}
+              {filtradas.map((r, i) => (
+                <tr key={r.driver_id ?? i} style={{ borderBottom: "0.5px solid #f4f5f7" }}>
+                  <ApTd mono>{r.driver_id}</ApTd>
+                  <ApTd bold>{r.nombre || "—"}</ApTd>
+                  <ApTd small>{r.course_name}</ApTd>
+                  <ApTd>
+                    <span style={{ background: "#fef3c7", color: "#92400e", fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 4 }}>
+                      {r.status === "urgent" ? "Urgente" : r.status}
+                    </span>
+                  </ApTd>
+                  <ApTd><PadronRolBadge value={r.is_only_helper} /></ApTd>
+                  <ApTd small>{r.email || <span style={{ color: PLIGHT }}>—</span>}</ApTd>
+                  <ApTd mono small>{r.telefono || <span style={{ color: PLIGHT }}>—</span>}</ApTd>
+                  <ApTd center>
+                    {r.opera_hoy
+                      ? <span style={{ background: "#d1fae5", color: "#065f46", fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 4 }}>Opera</span>
+                      : <span style={{ color: PLIGHT }}>—</span>}
+                  </ApTd>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div style={{ marginTop: 10, fontSize: 11, color: PLIGHT, fontStyle: "italic" }}>
+        ℹ️ Cursos pendientes capturados desde el hub de capacitación de MELI. "Opera hoy" = aparece en el último snapshot del padrón operativo.
+      </div>
+    </div>
+  );
+}
+
+// ── SUB-MUNDO RECHAZADOS · carga Excel -> Supabase -> vw_rechazados_actividad ─
+function PadronRechazados() {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [busqueda, setBusqueda] = useState("");
+  const [soloActivos, setSoloActivos] = useState(false);
+  const [cargando, setCargando] = useState(false);
+  const [msg, setMsg] = useState(null);
+  const fileRef = useRef(null);
+  const PNAVY = "#1a3a6b", PMUTED = "#64748b", PLIGHT = "#94a3b8", PBORDER = "#e4e7ec";
+
+  async function cargar() {
+    setLoading(true); setError(null);
+    try {
+      const { data, error } = await sb.from("vw_rechazados_actividad").select("*").limit(5000);
+      if (error) throw error;
+      setRows(data || []);
+    } catch (e) { setError(e.message || "Error"); }
+    finally { setLoading(false); }
+  }
+  useEffect(() => { cargar(); }, []);
+
+  // Parsea fechas tipo Excel a ISO (o null)
+  function aFecha(v) {
+    if (v == null || v === "") return null;
+    if (v instanceof Date) return v.toISOString();
+    const d = new Date(v);
+    return isNaN(d.getTime()) ? null : d.toISOString();
+  }
+
+  async function onArchivo(e) {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    setCargando(true); setMsg(null); setError(null);
+    try {
+      // Asegurar SheetJS
+      if (!window.XLSX) {
+        await new Promise((res, rej) => {
+          const s = document.createElement("script");
+          s.src = "https://cdn.sheetjs.com/xlsx-0.20.0/package/dist/xlsx.full.min.js";
+          s.onload = res; s.onerror = rej; document.head.appendChild(s);
+        });
+      }
+      const XLSX = window.XLSX;
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(buf, { type: "array", cellDates: true });
+      const hoja = wb.Sheets["DATOS"] || wb.Sheets[wb.SheetNames[0]];
+      const arr = XLSX.utils.sheet_to_json(hoja, { defval: null });
+
+      // Mapeo por nombre de columna (formato estable del reporte)
+      const norm = s => String(s ?? "").trim();
+      const filas = arr.map(r => ({
+        svc:            norm(r["SVC"]),
+        nombre:         norm(r["Nombres"]),
+        cargo:          norm(r["CARGO"]),
+        empresa:        norm(r["EMPRESA"]),
+        fecha_llegada:  aFecha(r["F. LLEGADA"]),
+        enviado_meli:   aFecha(r["ENVIADO MELI"]),
+        respuesta_meli: norm(r["RESPUESTA MELI"]).toUpperCase(),
+        respuesta_at:   aFecha(r["H. RESPUESTA MELI"]),
+        validacion_bt:  norm(r["VALIDACION BIGTICKET"]),
+        rfc:            norm(r["RFC"]),
+        curp:           norm(r["CURP"]).toUpperCase(),
+        email:          norm(r["Email"]),
+        telefono:       norm(r["Teléfono"]),
+        lote:           new Date().toISOString().slice(0, 10),
+      })).filter(f => f.curp || f.nombre);
+
+      if (filas.length === 0) throw new Error("No se encontraron filas en la hoja DATOS. ¿El archivo tiene el formato esperado?");
+
+      // REEMPLAZAR: borrar todo e insertar lo nuevo
+      const { error: eDel } = await sb.from("meli_validacion_tripulaciones").delete().neq("id", -1);
+      if (eDel) throw new Error("No pude limpiar la tabla: " + eDel.message);
+      for (let i = 0; i < filas.length; i += 200) {
+        const { error: eIns } = await sb.from("meli_validacion_tripulaciones").insert(filas.slice(i, i + 200));
+        if (eIns) throw new Error("Error al insertar: " + eIns.message);
+      }
+      const rech = filas.filter(f => f.respuesta_meli === "RECHAZADO").length;
+      setMsg(`✓ Cargadas ${filas.length} filas (${rech} rechazados). Cruzando con el padrón…`);
+      await cargar();
+      setMsg(`✓ Carga completa: ${filas.length} filas · ${rech} rechazados. Tabla actualizada.`);
+    } catch (err) {
+      setError(err.message || "Error al procesar el archivo");
+    } finally {
+      setCargando(false);
+      if (fileRef.current) fileRef.current.value = "";
+    }
+  }
+
+  const kpis = useMemo(() => ({
+    total: rows.length,
+    con_act: rows.filter(r => r.viajes_30d > 0).length,
+    ayer: rows.filter(r => r.viajes_ayer > 0).length,
+    semana: rows.filter(r => r.viajes_7d > 0).length,
+  }), [rows]);
+
+  const filtradas = useMemo(() => {
+    let res = rows;
+    if (soloActivos) res = res.filter(r => r.viajes_30d > 0);
+    const q = busqueda.toLowerCase().trim();
+    if (q) res = res.filter(r =>
+      [r.curp, r.driver_id, r.nombre, r.empresa, r.sc_ultimo, r.supervisor_ultimo].some(v => String(v ?? "").toLowerCase().includes(q)));
+    // orden: viajes_30d desc
+    return [...res].sort((a, b) => (b.viajes_30d || 0) - (a.viajes_30d || 0));
+  }, [rows, busqueda, soloActivos]);
+
+  const exportar = () => {
+    const headers = ["CURP", "ID conductor", "Nombre", "Empresa", "SC último", "Supervisor último",
+      "Último viaje", "Viajes ayer", "Viajes 7d", "Viajes 15d", "Viajes 30d"];
+    const filas = filtradas.map(r => [r.curp, r.driver_id ?? "", r.nombre || "", r.empresa || "",
+      r.sc_ultimo || "", r.supervisor_ultimo || "", r.ultimo_viaje || "",
+      r.viajes_ayer, r.viajes_7d, r.viajes_15d, r.viajes_30d]);
+    padronCsv(headers, filas, "rechazados_meli");
+  };
+
+  return (
+    <div style={{ padding: 20 }}>
+      {/* Barra de carga */}
+      <div style={{ background: "#fff", border: `1px solid ${PBORDER}`, borderRadius: 10, padding: "12px 16px", marginBottom: 14, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <div style={{ flex: 1, minWidth: 220 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: PNAVY }}>Validación de tripulaciones</div>
+          <div style={{ fontSize: 11, color: PMUTED }}>Cargá el Excel de validación. Reemplaza la carga anterior y vuelve a cruzar con el padrón.</div>
+        </div>
+        <input ref={fileRef} type="file" accept=".xlsx,.xls" onChange={onArchivo} style={{ display: "none" }} id="rech-file" />
+        <button onClick={() => fileRef.current && fileRef.current.click()} disabled={cargando} style={{
+          fontSize: 12, fontWeight: 700, padding: "9px 16px", borderRadius: 8, border: "none",
+          background: cargando ? "#94a3b8" : "#F47B20", color: "#fff", cursor: cargando ? "default" : "pointer",
+          fontFamily: "'Geist', sans-serif", display: "inline-flex", alignItems: "center", gap: 6,
+        }}>
+          <i className={`ti ${cargando ? "ti-loader-2" : "ti-upload"}`} style={{ fontSize: 15 }} />
+          {cargando ? "Procesando…" : "Cargar Excel"}
+        </button>
+      </div>
+      {msg && <div style={{ background: "#ecfdf5", border: "1px solid #a7f3d0", borderRadius: 8, padding: "8px 12px", fontSize: 12, color: "#065f46", marginBottom: 12 }}>{msg}</div>}
+      {error && <div style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 8, padding: "8px 12px", fontSize: 12, color: "#991b1b", marginBottom: 12 }}>{error}</div>}
+
+      {/* KPIs */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10, marginBottom: 12 }}>
+        <PKpi l="Rechazados (total)" v={kpis.total} s="con CURP en el padrón" accent={PNAVY} />
+        <PKpi l="Con actividad 30d" v={kpis.con_act} s="rechazados que operaron" accent="#d97706" />
+        <PKpi l="⚠️ Operaron ayer" v={kpis.ayer} s="rechazados en ruta ayer" accent="#c0392b" />
+        <PKpi l="Operaron 7 días" v={kpis.semana} s="actividad reciente" accent="#d97706" />
+      </div>
+
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10, flexWrap: "wrap" }}>
+        <input value={busqueda} onChange={e => setBusqueda(e.target.value)} placeholder="Buscar por CURP, nombre, empresa, SC, supervisor…"
+          style={{ flex: 1, minWidth: 240, maxWidth: 400, padding: "7px 10px", border: "1px solid #d0d5dd", borderRadius: 6, fontSize: 12, fontFamily: "'Geist', sans-serif" }} />
+        <button onClick={() => setSoloActivos(v => !v)} style={{
+          fontSize: 12, fontWeight: 700, padding: "7px 12px", borderRadius: 8, cursor: "pointer",
+          border: soloActivos ? "none" : `1px solid ${PBORDER}`,
+          background: soloActivos ? "#c0392b" : "#fff", color: soloActivos ? "#fff" : PMUTED,
+          fontFamily: "'Geist', sans-serif",
+        }}>{soloActivos ? `Solo con viajes (${kpis.con_act})` : "Solo con viajes"}</button>
+        <span style={{ fontSize: 12, color: PMUTED }}>{filtradas.length} de {rows.length}</span>
+        <button onClick={exportar} style={{ marginLeft: "auto", fontSize: 11, fontWeight: 600, padding: "6px 11px", borderRadius: 6, border: "none", background: PNAVY, color: "#fff", cursor: "pointer", fontFamily: "'Geist', sans-serif", display: "inline-flex", alignItems: "center", gap: 5 }}>
+          <i className="ti ti-download" style={{ fontSize: 12 }} />Exportar CSV
+        </button>
+      </div>
+
+      {loading ? (
+        <div style={{ padding: 40, textAlign: "center", color: PMUTED, fontSize: 13 }}>Cargando…</div>
+      ) : rows.length === 0 ? (
+        <div style={{ background: "#fff", border: `1px dashed ${PBORDER}`, borderRadius: 10, padding: 40, textAlign: "center", color: PLIGHT, fontSize: 13 }}>
+          No hay datos de validación cargados. Usá "Cargar Excel" para subir el archivo de tripulaciones.
+        </div>
+      ) : (
+        <div style={{ background: "#fff", borderRadius: 12, border: `0.5px solid ${PBORDER}`, overflow: "hidden" }}>
+          <div style={{ maxHeight: "55vh", overflow: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+              <thead style={{ position: "sticky", top: 0, zIndex: 1, background: "#f8fafc" }}>
+                <tr>
+                  <ApTh>CURP</ApTh><ApTh>ID</ApTh><ApTh>Nombre</ApTh><ApTh>Empresa</ApTh><ApTh>Rol</ApTh>
+                  <ApTh>SC último</ApTh><ApTh>Supervisor último</ApTh><ApTh>Último viaje</ApTh>
+                  <ApTh>Ayer</ApTh><ApTh>7d</ApTh><ApTh>15d</ApTh><ApTh>30d</ApTh>
+                </tr>
+              </thead>
+              <tbody>
+                {filtradas.length === 0 && (
+                  <tr><td colSpan={12} style={{ padding: 30, textAlign: "center", color: PLIGHT }}>Sin resultados</td></tr>
+                )}
+                {filtradas.map((r, i) => {
+                  const ayer = r.viajes_ayer > 0, sem = r.viajes_7d > 0;
+                  const bg = ayer ? "#fbeceb" : sem ? "#fffbeb" : "transparent";
+                  return (
+                    <tr key={(r.curp || "") + (r.driver_id || i)} style={{ borderBottom: "0.5px solid #f4f5f7", background: bg }}>
+                      <ApTd mono small>{r.curp}</ApTd>
+                      <ApTd mono>{r.driver_id || <span style={{ color: PLIGHT }}>—</span>}</ApTd>
+                      <ApTd bold>{r.nombre || "—"}</ApTd>
+                      <ApTd small>{r.empresa || <span style={{ color: PLIGHT }}>—</span>}</ApTd>
+                      <ApTd><PadronRolBadge value={r.is_only_helper} /></ApTd>
+                      <ApTd center small>{r.sc_ultimo || <span style={{ color: PLIGHT }}>—</span>}</ApTd>
+                      <ApTd small>{r.supervisor_ultimo || <span style={{ color: PLIGHT }}>—</span>}</ApTd>
+                      <ApTd center small>{r.ultimo_viaje || <span style={{ color: PLIGHT }}>—</span>}</ApTd>
+                      <ApTd center>{r.viajes_ayer > 0
+                        ? <span style={{ color: "#c0392b", fontWeight: 800 }}>{r.viajes_ayer}</span>
+                        : <span style={{ color: PLIGHT }}>0</span>}</ApTd>
+                      <ApTd center>{r.viajes_7d || <span style={{ color: PLIGHT }}>0</span>}</ApTd>
+                      <ApTd center>{r.viajes_15d || <span style={{ color: PLIGHT }}>0</span>}</ApTd>
+                      <ApTd center bold>{r.viajes_30d || <span style={{ color: PLIGHT }}>0</span>}</ApTd>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+      <div style={{ marginTop: 10, fontSize: 11, color: PLIGHT, fontStyle: "italic" }}>
+        🔴 Fila roja = rechazado que operó <strong>ayer</strong> · 🟡 ámbar = operó en los últimos 7 días. El cruce es por CURP contra el padrón enriquecido; ventanas relativas a hoy.
+      </div>
+    </div>
+  );
+}
+
+// ── SUB-MUNDO LIMPIEZA · embudo de actividad (vw_padron_embudo) + alertas ────
+function PadronLimpieza() {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [busqueda, setBusqueda] = useState("");
+  const [filtroEsc, setFiltroEsc] = useState(null); // escalón seleccionado del embudo
+  const PNAVY = "#1a3a6b", PMUTED = "#64748b", PLIGHT = "#94a3b8", PBORDER = "#e4e7ec";
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      setLoading(true); setError(null);
+      try {
+        const { data, error } = await sb.from("vw_padron_embudo").select("*").limit(5000);
+        if (error) throw error;
+        if (alive) setRows(data || []);
+      } catch (e) { if (alive) setError(e.message || "Error"); }
+      finally { if (alive) setLoading(false); }
+    })();
+    return () => { alive = false; };
+  }, []);
+
+  // Definición del embudo (orden y etiquetas)
+  const ESCALONES = [
+    { id: "ayer",  label: "Operó ayer/hoy",   color: "#10b981" },
+    { id: "7d",    label: "Últimos 7 días",   color: "#22c55e" },
+    { id: "15d",   label: "Últimos 15 días",  color: "#84cc16" },
+    { id: "30d",   label: "Últimos 30 días",  color: "#eab308" },
+    { id: "45d",   label: "Últimos 45 días",  color: "#f59e0b" },
+    { id: "60d",   label: "Últimos 60 días",  color: "#f97316" },
+    { id: "mas60", label: "Inactivo +60 días", color: "#ef4444" },
+    { id: "nunca", label: "Nunca operó",      color: "#991b1b" },
+  ];
+
+  const conteos = useMemo(() => {
+    const c = {};
+    ESCALONES.forEach(e => c[e.id] = 0);
+    rows.forEach(r => { if (c[r.escalon] != null) c[r.escalon]++; });
+    return c;
+  }, [rows]);
+
+  const alertas = useMemo(() => ({
+    a7:  rows.filter(r => r.alerta === "alerta_7").length,
+    a15: rows.filter(r => r.alerta === "alerta_15").length,
+    a30: rows.filter(r => r.alerta === "alerta_30").length,
+    dep: rows.filter(r => r.alerta === "depurar").length,
+  }), [rows]);
+
+  const maxC = useMemo(() => Math.max(1, ...ESCALONES.map(e => conteos[e.id] || 0)), [conteos]);
+
+  const filtradas = useMemo(() => {
+    let res = rows;
+    if (filtroEsc) res = res.filter(r => r.escalon === filtroEsc);
+    const q = busqueda.toLowerCase().trim();
+    if (q) res = res.filter(r => [r.driver_id, r.nombre].some(v => String(v ?? "").toLowerCase().includes(q)));
+    // orden: más inactivos primero (nunca arriba, luego por días desc)
+    const rank = { nunca: 999, mas60: 998 };
+    return [...res].sort((a, b) => {
+      const ra = rank[a.escalon] ?? (a.dias_sin_operar || 0);
+      const rb = rank[b.escalon] ?? (b.dias_sin_operar || 0);
+      return rb - ra;
+    });
+  }, [rows, busqueda, filtroEsc]);
+
+  const escMeta = (id) => ESCALONES.find(e => e.id === id) || { label: id, color: PMUTED };
+
+  const exportar = () => {
+    const headers = ["driver_id", "Nombre", "Estado", "Escalón", "Último viaje", "Días sin operar", "Total viajes", "Alerta"];
+    const filas = filtradas.map(r => [r.driver_id, r.nombre || "", r.status, escMeta(r.escalon).label,
+      r.ultimo_viaje || "", r.dias_sin_operar ?? "", r.total_viajes,
+      r.alerta === "depurar" ? "DEPURAR" : r.alerta === "alerta_30" ? "+30 días" :
+      r.alerta === "alerta_15" ? "+15 días" : r.alerta === "alerta_7" ? "+7 días" : "OK"]);
+    padronCsv(headers, filas, "padron_limpieza");
+  };
+
+  // Descarga un Excel con TODOS los conductores, una hoja por escalón + resumen
+  const descargarExcelPorEscalon = async () => {
+    const H = ["ID conductor", "Nombre", "Estado", "Último viaje", "Días sin operar", "Total viajes"];
+    const filaDe = r => [r.driver_id, r.nombre || "(sin nombre)", r.status, r.ultimo_viaje || "—",
+      r.dias_sin_operar != null ? r.dias_sin_operar : "nunca", r.total_viajes || 0];
+
+    // Hoja resumen (embudo)
+    const resumen = [["Escalón", "Conductores", "% del padrón"]];
+    ESCALONES.forEach(e => {
+      const n = conteos[e.id] || 0;
+      resumen.push([e.label, n, (total ? Math.round(100 * n / total) : 0) + "%"]);
+    });
+    resumen.push(["", "", ""]);
+    resumen.push(["TOTAL PADRÓN", total, "100%"]);
+    resumen.push(["Candidatos a depurar (nunca + +60d)", depurar, ""]);
+    resumen.push(["Activos (≤60 días)", activos, ""]);
+
+    const hojas = [{ nombre: "Resumen embudo", datos: resumen }];
+
+    // Una hoja por escalón (ordenado del más activo al más inactivo)
+    ESCALONES.forEach(e => {
+      const grupo = rows
+        .filter(r => r.escalon === e.id)
+        .sort((a, b) => (b.dias_sin_operar || 0) - (a.dias_sin_operar || 0));
+      const datos = [H, ...grupo.map(filaDe)];
+      if (grupo.length === 0) datos.push(["(sin conductores en este escalón)", "", "", "", "", ""]);
+      // nombre de hoja: Excel no admite > 31 chars ni ciertos símbolos
+      const nombreHoja = `${e.label} (${grupo.length})`.replace(/[\\/?*:\[\]]/g, "").slice(0, 31);
+      hojas.push({ nombre: nombreHoja, datos });
+    });
+
+    await descargarExcelMultihoja(hojas, "padron_limpieza_por_escalon");
+  };
+
+  if (loading) return <div style={{ padding: 40, textAlign: "center", color: PMUTED, fontSize: 13 }}>Cargando embudo…</div>;
+  if (error) return <div style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 10, padding: 14, fontSize: 12, color: "#991b1b" }}>{error}</div>;
+
+  const total = rows.length;
+  const activos = (conteos.ayer || 0) + (conteos["7d"] || 0) + (conteos["15d"] || 0) + (conteos["30d"] || 0) + (conteos["45d"] || 0) + (conteos["60d"] || 0);
+  const depurar = (conteos.nunca || 0) + (conteos.mas60 || 0);
+
+  return (
+    <div style={{ padding: 20 }}>
+      {/* KPIs + alertas */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10, marginBottom: 14 }}>
+        <PKpi l="Padrón total" v={total} s="conductores en snapshot" accent={PNAVY} />
+        <PKpi l="Activos (≤60 días)" v={activos} s="operaron en el período" accent="#10b981" />
+        <PKpi l="⚠️ Candidatos a depurar" v={depurar} s="nunca operó o +60 días" accent="#ef4444" />
+        <PKpi l="Alerta +30 días" v={alertas.a30} s="sin operar (revisar)" accent="#f59e0b" />
+      </div>
+
+      {/* EMBUDO */}
+      <div style={{ background: "#fff", border: `1px solid ${PBORDER}`, borderRadius: 12, padding: "16px 18px", marginBottom: 14 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: PNAVY, marginBottom: 12 }}>Embudo de actividad
+          <span style={{ fontWeight: 400, color: PLIGHT, fontSize: 11, marginLeft: 8 }}>· clic en un escalón para filtrar la tabla</span>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {ESCALONES.map(e => {
+            const n = conteos[e.id] || 0;
+            const pct = Math.round((n / maxC) * 100);
+            const sel = filtroEsc === e.id;
+            return (
+              <div key={e.id} onClick={() => setFiltroEsc(sel ? null : e.id)}
+                style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", opacity: filtroEsc && !sel ? 0.5 : 1 }}>
+                <div style={{ width: 130, fontSize: 12, fontWeight: sel ? 800 : 600, color: sel ? e.color : PMUTED, textAlign: "right", flexShrink: 0 }}>{e.label}</div>
+                <div style={{ flex: 1, background: "#f1f5f9", borderRadius: 6, height: 26, position: "relative", overflow: "hidden" }}>
+                  <div style={{ width: `${Math.max(pct, n > 0 ? 4 : 0)}%`, height: "100%", background: e.color, borderRadius: 6, transition: "width .3s", display: "flex", alignItems: "center", justifyContent: "flex-end", paddingRight: 8 }}>
+                    {pct > 12 && <span style={{ color: "#fff", fontSize: 11, fontWeight: 800 }}>{n}</span>}
+                  </div>
+                  {pct <= 12 && <span style={{ position: "absolute", left: `calc(${Math.max(pct,4)}% + 6px)`, top: 5, fontSize: 11, fontWeight: 800, color: e.color }}>{n}</span>}
+                </div>
+                <div style={{ width: 42, fontSize: 11, color: PLIGHT, textAlign: "left", flexShrink: 0 }}>{total ? Math.round(100*n/total) : 0}%</div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Banda de alertas de limpieza */}
+      <div style={{ display: "flex", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
+        {[
+          { k: "alerta_7",  label: "+7 días sin operar",  n: alertas.a7,  c: "#eab308" },
+          { k: "alerta_15", label: "+15 días sin operar", n: alertas.a15, c: "#f59e0b" },
+          { k: "alerta_30", label: "+30 días sin operar", n: alertas.a30, c: "#f97316" },
+          { k: "depurar",   label: "Nunca operó",         n: alertas.dep, c: "#ef4444" },
+        ].map(a => (
+          <div key={a.k} style={{ flex: 1, minWidth: 140, background: "#fff", border: `1px solid ${PBORDER}`, borderLeft: `4px solid ${a.c}`, borderRadius: 8, padding: "8px 12px" }}>
+            <div style={{ fontSize: 20, fontWeight: 800, color: a.c }}>{a.n}</div>
+            <div style={{ fontSize: 11, color: PMUTED }}>{a.label}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Toolbar */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10, flexWrap: "wrap" }}>
+        <input value={busqueda} onChange={e => setBusqueda(e.target.value)} placeholder="Buscar por nombre o ID…"
+          style={{ flex: 1, minWidth: 220, maxWidth: 360, padding: "7px 10px", border: "1px solid #d0d5dd", borderRadius: 6, fontSize: 12, fontFamily: "'Geist', sans-serif" }} />
+        {filtroEsc && (
+          <button onClick={() => setFiltroEsc(null)} style={{ fontSize: 12, fontWeight: 700, padding: "7px 12px", borderRadius: 8, cursor: "pointer", border: "none", background: escMeta(filtroEsc).color, color: "#fff", fontFamily: "'Geist', sans-serif", display: "inline-flex", alignItems: "center", gap: 6 }}>
+            {escMeta(filtroEsc).label} <i className="ti ti-x" style={{ fontSize: 13 }} />
+          </button>
+        )}
+        <span style={{ fontSize: 12, color: PMUTED }}>{filtradas.length} de {total}</span>
+        <button onClick={descargarExcelPorEscalon} style={{ marginLeft: "auto", fontSize: 11, fontWeight: 700, padding: "6px 12px", borderRadius: 6, border: "none", background: "#1f7a4d", color: "#fff", cursor: "pointer", fontFamily: "'Geist', sans-serif", display: "inline-flex", alignItems: "center", gap: 5 }}>
+          <i className="ti ti-file-spreadsheet" style={{ fontSize: 13 }} />Excel por escalón
+        </button>
+        <button onClick={exportar} style={{ fontSize: 11, fontWeight: 600, padding: "6px 11px", borderRadius: 6, border: `1px solid ${PBORDER}`, background: "#fff", color: PMUTED, cursor: "pointer", fontFamily: "'Geist', sans-serif", display: "inline-flex", alignItems: "center", gap: 5 }}>
+          <i className="ti ti-download" style={{ fontSize: 12 }} />CSV vista
+        </button>
+      </div>
+
+      {/* Tabla */}
+      <div style={{ background: "#fff", borderRadius: 12, border: `0.5px solid ${PBORDER}`, overflow: "hidden" }}>
+        <div style={{ maxHeight: "50vh", overflow: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+            <thead style={{ position: "sticky", top: 0, zIndex: 1, background: "#f8fafc" }}>
+              <tr>
+                <ApTh>ID conductor</ApTh><ApTh>Nombre</ApTh><ApTh>Rol</ApTh><ApTh>Escalón</ApTh>
+                <ApTh>Último viaje</ApTh><ApTh>Días sin operar</ApTh><ApTh>Total viajes</ApTh>
+              </tr>
+            </thead>
+            <tbody>
+              {filtradas.length === 0 && (
+                <tr><td colSpan={7} style={{ padding: 30, textAlign: "center", color: PLIGHT }}>Sin resultados</td></tr>
+              )}
+              {filtradas.map((r, i) => {
+                const meta = escMeta(r.escalon);
+                const depurar = r.escalon === "nunca" || r.escalon === "mas60";
+                return (
+                  <tr key={r.driver_id ?? i} style={{ borderBottom: "0.5px solid #f4f5f7", background: depurar ? "#fef2f2" : "transparent" }}>
+                    <ApTd mono>{r.driver_id}</ApTd>
+                    <ApTd bold>{r.nombre || <span style={{ color: PLIGHT }}>(sin nombre)</span>}</ApTd>
+                    <ApTd><PadronRolBadge value={r.is_only_helper} /></ApTd>
+                    <ApTd>
+                      <span style={{ background: meta.color + "22", color: meta.color, fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 4 }}>{meta.label}</span>
+                    </ApTd>
+                    <ApTd center small>{r.ultimo_viaje || <span style={{ color: PLIGHT }}>—</span>}</ApTd>
+                    <ApTd center>{r.dias_sin_operar != null
+                      ? <span style={{ fontWeight: depurar ? 800 : 400, color: depurar ? "#ef4444" : "inherit" }}>{r.dias_sin_operar}</span>
+                      : <span style={{ color: "#ef4444", fontWeight: 800 }}>nunca</span>}</ApTd>
+                    <ApTd center>{r.total_viajes || <span style={{ color: PLIGHT }}>0</span>}</ApTd>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div style={{ marginTop: 10, fontSize: 11, color: PLIGHT, fontStyle: "italic" }}>
+        ℹ️ Combina histórico cargado + operación diaria. Filas en rojo = candidatos a depurar (nunca operó o +60 días sin operar). Ventanas relativas a hoy; se actualiza solo con los viajes diarios.
+      </div>
+    </div>
+  );
+}
+
 function PadronMeliAdmin({ usuario }) {
   const [mundo, setMundo] = useState("drivers"); // drivers (principal) | vehiculos
   return (
@@ -24498,6 +25073,9 @@ function PadronMeliAdmin({ usuario }) {
         {[
           { id: "drivers", label: "Conductores", icon: "ti-user" },
           { id: "vehiculos", label: "Vehículos", icon: "ti-truck" },
+          { id: "cursos", label: "Cursos", icon: "ti-school" },
+          { id: "rechazados", label: "Rechazados", icon: "ti-user-x" },
+          { id: "limpieza", label: "Limpieza", icon: "ti-filter" },
         ].map(m => (
           <button key={m.id} onClick={() => setMundo(m.id)} style={{
             border: "none", cursor: "pointer", padding: "7px 16px", borderRadius: 8,
@@ -24510,7 +25088,10 @@ function PadronMeliAdmin({ usuario }) {
           </button>
         ))}
       </div>
-      <PadronMundo key={mundo} tipo={mundo} />
+      {mundo === "cursos" ? <PadronCursos key="cursos" />
+        : mundo === "rechazados" ? <PadronRechazados key="rechazados" />
+        : mundo === "limpieza" ? <PadronLimpieza key="limpieza" />
+        : <PadronMundo key={mundo} tipo={mundo} />}
     </div>
   );
 }
@@ -32953,56 +33534,6 @@ export default function App() {
 
 const PREFACTURAS_WEBHOOK = "https://bigticket2026.app.n8n.cloud/webhook/prefacturas-enviar-mx";
 const PAUSA_ENTRE_ENVIOS_MS = 1500;
-
-// ─── Reintento con timeout para envíos de prefacturas (Brain → n8n) ───
-const REINTENTOS_MAX = 3;           // intentos totales por correo
-const REINTENTO_BACKOFF_MS = 2000;  // espera base entre intentos: 2s, luego 4s
-const ENVIO_TIMEOUT_MS = 60000;     // corta una request colgada a los 60s
-
-async function pf_postConReintento(url, payload) {
-  let ultimoMotivo = "";
-  for (let intento = 1; intento <= REINTENTOS_MAX; intento++) {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), ENVIO_TIMEOUT_MS);
-    try {
-      const resp = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-        signal: ctrl.signal,
-      });
-      clearTimeout(timer);
-
-      let data = {};
-      try { data = await resp.json(); } catch { /* no-json */ }
-
-      if (resp.ok && data.ok !== false) {
-        return {
-          ok: true,
-          messageId: data.messageId || "",
-          motivo: (data.messageId || "Enviado") + (intento > 1 ? ` (intento ${intento})` : ""),
-        };
-      }
-
-      ultimoMotivo = data.error || `HTTP ${resp.status}`;
-      // 4xx (salvo 429) = problema de datos: no tiene sentido reintentar
-      if (resp.status >= 400 && resp.status < 500 && resp.status !== 429) {
-        return { ok: false, messageId: "", motivo: ultimoMotivo };
-      }
-      // 5xx / 429 = transitorio → cae al backoff y reintenta
-    } catch (e) {
-      clearTimeout(timer);
-      ultimoMotivo = e?.name === "AbortError"
-        ? `Timeout tras ${Math.round(ENVIO_TIMEOUT_MS / 1000)}s`
-        : "Error red: " + (e?.message || e?.name || "sin detalle");
-    }
-
-    if (intento < REINTENTOS_MAX) {
-      await new Promise(r => setTimeout(r, REINTENTO_BACKOFF_MS * intento));
-    }
-  }
-  return { ok: false, messageId: "", motivo: `${ultimoMotivo} (tras ${REINTENTOS_MAX} intentos)` };
-}
 const VARIABLES_PLANTILLA = [
   "TRANSPORTISTA", "CECO", "PERIODO", "RFC", "OPERACION", "SUPERVISOR",
 ];
@@ -35225,7 +35756,7 @@ function PrefCLEnvioMasivo({ transportistas, parametros, usuario, onActualizarMa
       try {
         const pdfBase64 = await pf_fileToBase64(f.file);
         const payload = {
-          idEnvio: `cl-${inicio}-${f.idx}`,  // estable por fila y lote: permite dedupe en n8n
+          idEnvio: `${Date.now()}-${f.idx}`,
           transportista: f.parsed.transportista,
           rut: f.parsed.rut,
           operacion: f.parsed.operacion,
@@ -35242,11 +35773,22 @@ function PrefCLEnvioMasivo({ transportistas, parametros, usuario, onActualizarMa
           nombrePdf: f.nombre,
           pdfBase64,
         };
-        resultado = await pf_postConReintento(PREFACTURAS_CL_WEBHOOK, payload);
-        if (resultado.ok) okCount++; else errCount++;
+        const resp = await fetch(PREFACTURAS_CL_WEBHOOK, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        let data = {};
+        try { data = await resp.json(); } catch { /* no-json */ }
+        if (resp.ok && data.ok !== false) {
+          resultado = { ok: true, motivo: data.messageId || "Enviado", messageId: data.messageId || "" };
+          okCount++;
+        } else {
+          resultado = { ok: false, motivo: data.error || `HTTP ${resp.status}`, messageId: "" };
+          errCount++;
+        }
       } catch (e) {
-        // fallo al leer el PDF (no es de red) -> no se reintenta
-        resultado = { ok: false, motivo: "Error PDF: " + (e?.message || "sin detalle"), messageId: "" };
+        resultado = { ok: false, motivo: "Error red: " + e.message, messageId: "" };
         errCount++;
       }
 
@@ -36937,4 +37479,3 @@ const CONFIG_IMPORTADOR_CL = {
     notas: "(opcional)",
   },
 };
-            
