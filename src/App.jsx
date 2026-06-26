@@ -14674,6 +14674,7 @@ function ConciliacionTercerosMX({ usuario }) {
   const [loading, setLoading] = useState(true);
   const [expandida, setExpandida] = useState(null);    // nombre de empresa abierta
   const [detalles, setDetalles] = useState({});        // empresa -> filas (todos los SC)
+  const [auxMap, setAuxMap] = useState({});            // id_ruta -> { decision, motivo } (aprobaciones_helper)
   const [loadingDetalle, setLoadingDetalle] = useState(false);
   const [transportistas, setTransportistas] = useState([]); // prefacturas_transportistas_mx
   const [parametros, setParametros] = useState([]);         // prefacturas_parametros_mx
@@ -14797,7 +14798,7 @@ function ConciliacionTercerosMX({ usuario }) {
     } catch (e) { console.error("maestros prefacturas:", e); }
   };
 
-  useEffect(() => { cargarResumen(semana); setConsolidadas(new Set()); cargarRepetidas(semana); setExpandida(null); setDetalles({}); setAsignacionSel({}); }, [semana]);
+  useEffect(() => { cargarResumen(semana); setConsolidadas(new Set()); cargarRepetidas(semana); cargarAux(semana); setExpandida(null); setDetalles({}); setAsignacionSel({}); }, [semana]);
   useEffect(() => { cargarMaestros(); }, []);
 
   const cargarDetalle = async (empresa) => {
@@ -15225,6 +15226,16 @@ function ConciliacionTercerosMX({ usuario }) {
 
   // ── PDF por empresa + SC (mismo template que portará el endpoint del VPS) ──
   // ── Rutas con ID repetido (multi-día) — detección y consolidación ──
+  const cargarAux = async (sem) => {
+    try {
+      const lunes = rangoSemanaInventario(sem).inicio.toISOString().slice(0, 10);
+      const dom = rangoSemanaInventario(sem).fin.toISOString().slice(0, 10);
+      const { data } = await sb.from("aprobaciones_helper").select("travel_id, decision, motivo_rechazo").gte("fecha", lunes).lte("fecha", dom);
+      const m = {};
+      for (const a of data || []) m[String(a.travel_id)] = { decision: a.decision, motivo: a.motivo_rechazo || null };
+      setAuxMap(m);
+    } catch (e) { console.error("aux conciliación:", e); setAuxMap({}); }
+  };
   const cargarRepetidas = async (sem) => {
     const s = sem != null ? sem : semana;
     setRepBusy(true);
@@ -15518,7 +15529,7 @@ function ConciliacionTercerosMX({ usuario }) {
     const filasDetalle = filasSC.map(d => `
       <tr>
         <td>${fmtFechaDDMM(d.fecha)}</td><td>${d.placa || ""}</td><td>${d.id_ruta || ""}</td>
-        <td style="text-align:left">${d.driver_name || ""}</td><td>${d.tiene_auxiliar ? "SI" : "NO"}</td>
+        <td style="text-align:left">${d.driver_name || ""}</td><td>${(() => { const a = auxMap[String(d.id_ruta)]; if (a && a.decision === "rechazado") return '<span style="color:#b91c1c;font-weight:700">RECHAZADO</span>'; if (a && a.decision === "aprobado") return '<span style="color:#166534;font-weight:700">APROBADO</span>'; if (d.tiene_auxiliar) return "SI"; return "—"; })()}</td>
         <td>${d.service_center_id || ""}</td><td>${d.cargado ?? ""}</td><td>${d.entregado ?? ""}</td>
         <td>${fmtPct(d.pct_entrega)}</td><td>${fmtKm(d.km_pago)}</td><td>${fmtFactor(d.factor_ns)}</td>
         <td style="color:#166534;font-weight:600">${(d.tiene_bonificacion || Number(d.monto_bonificacion||0) > 0) ? ("+" + fmtMon(d.monto_bonificacion)) : "—"}</td>
@@ -15530,6 +15541,12 @@ function ConciliacionTercerosMX({ usuario }) {
       <div class="obs">
         <div class="obs-title">OBSERVACIONES — RUTAS NO PAGADAS (VISITA &lt; 90%)</div>
         ${noPagos.map(d => `<div class="obs-row">${fmtFechaDDMM(d.fecha)} · ${d.placa} · Ruta ${d.id_ruta} · ${d.driver_name || ""} — ${d.motivo_no_pago || "NO PAGADO"} (cargado ${d.cargado}, entregado ${d.entregado}, entrega ${fmtPct(d.pct_entrega)})</div>`).join("")}
+      </div>` : "";
+    const auxRech = filasSC.filter(d => { const a = auxMap[String(d.id_ruta)]; return a && a.decision === "rechazado"; });
+    const obsAuxHtml = auxRech.length ? `
+      <div class="obs">
+        <div class="obs-title">AUXILIARES RECHAZADOS — NO INCLUIDOS EN EL PAGO</div>
+        ${auxRech.map(d => { const a = auxMap[String(d.id_ruta)]; return `<div class="obs-row">${fmtFechaDDMM(d.fecha)} · ${d.placa} · Ruta ${d.id_ruta} · ${d.driver_name || ""} — ${(a && a.motivo) || "Sin motivo registrado"}</div>`; }).join("")}
       </div>` : "";
 
     const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Prefactura ${empresa} ${sc} ${periodo}</title>
@@ -15611,6 +15628,7 @@ function ConciliacionTercerosMX({ usuario }) {
   </table>
   ${bonoHtml}
   ${obsHtml}
+  ${obsAuxHtml}
   <div class="noprint"><button onclick="window.print()">Imprimir / Guardar PDF</button></div>
 </body></html>`;
     const nombrePdf = `Prefactura_${String(empresa).replace(/[^A-Za-z0-9]+/g, "_")}_${sc}_${periodo.replace(/ /g, "_")}.pdf`;
@@ -15938,7 +15956,7 @@ function ConciliacionTercerosMX({ usuario }) {
               <td style={{ padding: "5px 8px", textAlign: "center", fontWeight: 700 }}>{d.placa}</td>
               <td style={{ padding: "5px 8px", textAlign: "center" }}>{d.id_ruta}</td>
               <td style={{ padding: "5px 8px" }}>{d.driver_name}</td>
-              <td style={{ padding: "5px 8px", textAlign: "center" }}>{d.tiene_auxiliar ? "SI" : "NO"}</td>
+              <td style={{ padding: "5px 8px", textAlign: "center" }}>{(() => { const a = auxMap[String(d.id_ruta)]; if (a && a.decision === "rechazado") return <span style={{ fontSize: 10, fontWeight: 800, color: "#b91c1c", background: "#fee2e2", borderRadius: 6, padding: "2px 6px" }}>Rechazado</span>; if (a && a.decision === "aprobado") return <span style={{ fontSize: 10, fontWeight: 800, color: "#166534", background: "#dcfce7", borderRadius: 6, padding: "2px 6px" }}>Aprobado</span>; if (d.tiene_auxiliar) return <span style={{ fontSize: 10, fontWeight: 700, color: "#475569" }}>Sí</span>; return <span style={{ color: "#cbd5e1" }}>—</span>; })()}</td>
               <td style={{ padding: "5px 8px", textAlign: "center" }}>{d.service_center_id}</td>
               <td style={{ padding: "5px 8px", textAlign: "center" }}>{d.cargado}</td>
               <td style={{ padding: "5px 8px", textAlign: "center" }}>{d.entregado}</td>
@@ -16237,6 +16255,7 @@ function ConciliacionTercerosMX({ usuario }) {
                         const _brutoBaseSC = _detLoaded ? Math.round(_netoViajesSC * 1.16 * 100) / 100 : (rSC.bruto_guardado != null ? rSC.bruto_guardado : rSC.total_bruto);
                         const clave = claveCierre(g.empresa, rSC.service_center);
                         const noPagosSC = filasSC.filter(d => d.es_no_pago);
+                        const auxRechazadosSC = filasSC.filter(d => { const a = auxMap[String(d.id_ruta)]; return a && a.decision === "rechazado"; });
                         return (
                           <div key={rSC.service_center} style={{ border: "1px solid #e4e7ec", borderRadius: 8, marginBottom: 12, overflow: "hidden" }}>
                             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, background: "#eef2f7", padding: "8px 12px" }}>
@@ -16308,6 +16327,16 @@ function ConciliacionTercerosMX({ usuario }) {
                                       {fmtFechaDDMM(d.fecha)} · {d.placa} · Ruta {d.id_ruta} · {d.driver_name} — {d.motivo_no_pago || "NO PAGADO"} (cargado {d.cargado}, entregado {d.entregado})
                                     </div>
                                   ))}
+                                </div>
+                              )}
+                              {auxRechazadosSC.length > 0 && (
+                                <div style={{ marginTop: 10, border: "1px solid #fca5a5", background: "#fef2f2", borderRadius: 8, padding: "8px 12px" }}>
+                                  <div style={{ fontSize: 11, fontWeight: 800, color: "#991b1b", marginBottom: 6 }}>AUXILIARES RECHAZADOS — MOTIVO</div>
+                                  {auxRechazadosSC.map((d, i) => { const a = auxMap[String(d.id_ruta)]; return (
+                                    <div key={i} style={{ fontSize: 11, color: "#7f1d1d", padding: "2px 0" }}>
+                                      {fmtFechaDDMM(d.fecha)} · {d.placa} · Ruta {d.id_ruta} · {d.driver_name} — {(a && a.motivo) || "Sin motivo registrado"}
+                                    </div>
+                                  ); })}
                                 </div>
                               )}
                             </div>
