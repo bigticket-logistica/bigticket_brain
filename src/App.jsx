@@ -14669,7 +14669,7 @@ function ConciliacionTercerosMX({ usuario }) {
     return s != null ? s - 1 : 24; // por defecto: última semana cerrada
   });
   const [resumen, setResumen] = useState([]);          // 1 fila por empresa+SC
-  const [ajustesEmp, setAjustesEmp] = useState({});    // norm(empresa) -> n ajustes (líneas origen="ajuste")
+  const [ajustesEmp, setAjustesEmp] = useState({});    // norm(empresa) -> n cambios (ediciones + importados + ajustes)
   const [ajustesSC, setAjustesSC] = useState({});      // norm(empresa)||norm(sc) -> n ajustes
   const [loading, setLoading] = useState(true);
   const [expandida, setExpandida] = useState(null);    // nombre de empresa abierta
@@ -14754,7 +14754,7 @@ function ConciliacionTercerosMX({ usuario }) {
         const extra = [];
         for (const c of (concs || [])) {
           const det = Array.isArray(c.detalle) ? c.detalle : [];
-          const nA = det.filter(d => d && d.origen === "ajuste").length;
+          const nA = det.filter(d => d && !d._saldo && (d._editado || d.es_manual || d.origen === "ajuste")).length;
           if (nA) { mapE[norm(c.empresa_nombre)] = (mapE[norm(c.empresa_nombre)] || 0) + nA; mapS[`${norm(c.empresa_nombre)}||${norm(c.service_center)}`] = nA; }
           const k = `${norm(c.empresa_nombre)}||${norm(c.service_center)}`;
           if (!have.has(k)) {
