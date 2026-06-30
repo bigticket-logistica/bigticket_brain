@@ -16792,9 +16792,15 @@ function ModuloPagosMadre({ usuario }) {
 // ─── Helpers de cálculo ────────────────────────────────────────────────────
 
 // Parsea el campo "Vehículo" del tms_raw a una de: LARGE VAN | SMALL VAN | CAR
-function parsearTipologia(vehiculoRaw) {
+function parsearTipologia(vehiculoRaw, categorias) {
   if (!vehiculoRaw) return null;
   const v = String(vehiculoRaw).toUpperCase();
+  // Match contra las categorías configuradas en matriz_precios (las más largas primero,
+  // para evitar colisiones de substring tipo "CAR" dentro de "CARGO").
+  if (categorias && categorias.length) {
+    const cats = Array.from(new Set(categorias.filter(Boolean).map(c => String(c).toUpperCase()))).sort((a, b) => b.length - a.length);
+    for (const c of cats) if (v.includes(c)) return c;
+  }
   if (v.includes("LARGE VAN")) return "LARGE VAN";
   if (v.includes("SMALL VAN")) return "SMALL VAN";
   if (v.includes("CAR")) return "CAR";
@@ -16822,8 +16828,13 @@ function determinarTramoKm(km, rangos) {
   // Si recibe los rangos configurados (desde matriz_precios), los usa; si no, cae a los 5 fijos.
   const k = Math.floor(Number(km) || 0);
   if (rangos && rangos.length) {
-    const r = rangos.find(x => k >= x.min && k <= x.max);
-    if (r) return r.label;
+    const matches = rangos.filter(x => k >= x.min && k <= x.max);
+    if (matches.length) {
+      // Si varios rangos se solapan, gana el más específico:
+      // primero el de cota superior más baja (acotado > abierto "N+"), luego el más angosto.
+      matches.sort((a, b) => (a.max - b.max) || ((a.max - a.min) - (b.max - b.min)));
+      return matches[0].label;
+    }
     return rangos[rangos.length - 1].label;
   }
   if (k <= 100) return "0-100";
@@ -16978,6 +16989,7 @@ function calcularPagos({ maestro, snapshots, scZonas, especiales, matrizPrecios,
   for (const c of (tarifasCobrar || [])) cobrarIdx[`${c.categoria}|${c.zonificacion}|${c.tramo_km}`] = Number(c.tarifa_mxn);
 
   // Rangos de km dinámicos: derivados de los tramo_km configurados en matriz_precios (pagar).
+  const categoriasMatriz = Array.from(new Set((matrizPrecios || []).map(m => m.tipo_vehiculo).filter(Boolean)));
   const rangosKm = (() => {
     const labels = Array.from(new Set((matrizPrecios || []).map(m => m.tramo_km).filter(Boolean)));
     const parsed = labels.map(L => {
@@ -17033,7 +17045,7 @@ function calcularPagos({ maestro, snapshots, scZonas, especiales, matrizPrecios,
     if (!idRuta) { errores.push({ tms_id: m.idviaje, motivo: "Sin idviaje en el Maestro Supervisores" }); continue; }
     if (!sc) { errores.push({ tms_id: m.idviaje, motivo: "Sin service_center_id" }); continue; }
 
-    const tipologia = parsearTipologia(vehiculoRaw);
+    const tipologia = parsearTipologia(vehiculoRaw, categoriasMatriz);
     const zona = zonaPorSC[sc] || null;
     const tramo = determinarTramoKm(km, rangosKm);
 
@@ -37624,3 +37636,4 @@ const CONFIG_IMPORTADOR_CL = {
     notas: "(opcional)",
   },
 };
+              
