@@ -16816,10 +16816,16 @@ function tipologiaTitleCase(t) {
 }
 
 // Determina el tramo de km
-function determinarTramoKm(km) {
+function determinarTramoKm(km, rangos) {
   // Trunca hacia abajo (piso): 100.05 -> 100, 100.9 -> 100, 101.0 -> 101.
   // El tramo se fija con el km PLANIFICADO (el real es solo informativo).
+  // Si recibe los rangos configurados (desde matriz_precios), los usa; si no, cae a los 5 fijos.
   const k = Math.floor(Number(km) || 0);
+  if (rangos && rangos.length) {
+    const r = rangos.find(x => k >= x.min && k <= x.max);
+    if (r) return r.label;
+    return rangos[rangos.length - 1].label;
+  }
   if (k <= 100) return "0-100";
   if (k <= 150) return "101-150";
   if (k <= 200) return "151-200";
@@ -16971,6 +16977,19 @@ function calcularPagos({ maestro, snapshots, scZonas, especiales, matrizPrecios,
   const cobrarIdx = {};
   for (const c of (tarifasCobrar || [])) cobrarIdx[`${c.categoria}|${c.zonificacion}|${c.tramo_km}`] = Number(c.tarifa_mxn);
 
+  // Rangos de km dinámicos: derivados de los tramo_km configurados en matriz_precios (pagar).
+  const rangosKm = (() => {
+    const labels = Array.from(new Set((matrizPrecios || []).map(m => m.tramo_km).filter(Boolean)));
+    const parsed = labels.map(L => {
+      const s = String(L).trim();
+      if (s.endsWith("+")) return { min: parseInt(s, 10) || 0, max: Infinity, label: s };
+      const p = s.split("-"); const a = parseInt(p[0], 10); const b = parseInt(p[1], 10);
+      return { min: isNaN(a) ? 0 : a, max: isNaN(b) ? Infinity : b, label: s };
+    }).filter(r => Number.isFinite(r.min));
+    parsed.sort((x, y) => x.min - y.min);
+    return parsed;
+  })();
+
   // Index sc_zonas
   const zonaPorSC = {};
   for (const z of scZonas) zonaPorSC[z.service_center_id] = z.zona;
@@ -17016,7 +17035,7 @@ function calcularPagos({ maestro, snapshots, scZonas, especiales, matrizPrecios,
 
     const tipologia = parsearTipologia(vehiculoRaw);
     const zona = zonaPorSC[sc] || null;
-    const tramo = determinarTramoKm(km);
+    const tramo = determinarTramoKm(km, rangosKm);
 
     const obs = [];
     if (!tipologia) obs.push(`Tipología no reconocida: "${vehiculoRaw}"`);
@@ -20339,9 +20358,19 @@ function ConfigPorPagar() {
   const [guardando, setGuardando] = useState(false);
   const [msg, setMsg] = useState(null);
 
-  const tramos = ["0-100", "101-150", "151-200", "201-250", "251+"];
-  const categorias = Array.from(new Set(["LARGE VAN", "SMALL VAN", "CAR", ...data.map(d => d.tipo_vehiculo)].filter(Boolean)));
-  const zonas = Array.from(new Set(["L1", "L2", "L3", "L4", ...data.map(d => d.zonificacion)].filter(Boolean)));
+  const [extraCats, setExtraCats] = useState([]);
+  const [extraTramos, setExtraTramos] = useState([]);
+  const [extraZonas, setExtraZonas] = useState([]);
+  const [newCat, setNewCat] = useState("");
+  const [newTramo, setNewTramo] = useState("");
+  const [newZona, setNewZona] = useState("");
+  const parseMinKm = (s) => { const x = String(s).trim(); return x.endsWith("+") ? (parseInt(x, 10) || 0) : (parseInt(x.split("-")[0], 10) || 0); };
+  const tramos = Array.from(new Set(["0-100", "101-150", "151-200", "201-250", "251+", ...data.map(d => d.tramo_km), ...extraTramos].filter(Boolean))).sort((a, b) => parseMinKm(a) - parseMinKm(b));
+  const categorias = Array.from(new Set(["LARGE VAN", "SMALL VAN", "CAR", ...data.map(d => d.tipo_vehiculo), ...extraCats].filter(Boolean)));
+  const zonas = Array.from(new Set(["L1", "L2", "L3", "L4", ...data.map(d => d.zonificacion), ...extraZonas].filter(Boolean)));
+  const agregarCat = () => { const v = newCat.trim().toUpperCase(); if (!v) return; if (categorias.includes(v)) { setMsg({ ok: false, txt: "Esa categoría ya existe." }); return; } setExtraCats(p => [...p, v]); setNewCat(""); setMsg(null); };
+  const agregarZona = () => { const v = newZona.trim().toUpperCase(); if (!v) return; if (zonas.includes(v)) { setMsg({ ok: false, txt: "Esa zona ya existe." }); return; } setExtraZonas(p => [...p, v]); setNewZona(""); setMsg(null); };
+  const agregarTramo = () => { const v = newTramo.trim().replace(/\s+/g, ""); if (!/^\d+-\d+$/.test(v) && !/^\d+\+$/.test(v)) { setMsg({ ok: false, txt: 'Rango inválido. Usá "151-200" o "251+".' }); return; } if (tramos.includes(v)) { setMsg({ ok: false, txt: "Ese rango ya existe." }); return; } setExtraTramos(p => [...p, v]); setNewTramo(""); setMsg(null); };
 
   useEffect(() => { cargar(); }, []);
   const cargar = async () => {
@@ -20404,6 +20433,30 @@ function ConfigPorPagar() {
           {guardando ? "Guardando..." : "Guardar cambios"}
         </button>
       </div>
+      <div style={{ background: "#f8fafc", border: "1px dashed #cbd5e1", borderRadius: 6, padding: 12, marginBottom: 14, display: "flex", gap: 16, flexWrap: "wrap", alignItems: "flex-end" }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          <span style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase" }}>Nueva categoría</span>
+          <div style={{ display: "flex", gap: 6 }}>
+            <input value={newCat} onChange={e => setNewCat(e.target.value)} placeholder="Ej: MOTO" style={{ border: "1px solid #e4e7ec", borderRadius: 4, padding: "5px 8px", fontSize: 12 }} />
+            <button onClick={agregarCat} style={{ padding: "5px 10px", borderRadius: 4, border: "1px solid #1a3a6b", background: "#fff", color: "#1a3a6b", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>+ Categoría</button>
+          </div>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          <span style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase" }}>Nuevo rango de km</span>
+          <div style={{ display: "flex", gap: 6 }}>
+            <input value={newTramo} onChange={e => setNewTramo(e.target.value)} placeholder="Ej: 251-300 o 301+" style={{ border: "1px solid #e4e7ec", borderRadius: 4, padding: "5px 8px", fontSize: 12 }} />
+            <button onClick={agregarTramo} style={{ padding: "5px 10px", borderRadius: 4, border: "1px solid #1a3a6b", background: "#fff", color: "#1a3a6b", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>+ Rango</button>
+          </div>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          <span style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase" }}>Nueva zona</span>
+          <div style={{ display: "flex", gap: 6 }}>
+            <input value={newZona} onChange={e => setNewZona(e.target.value)} placeholder="Ej: L5" style={{ border: "1px solid #e4e7ec", borderRadius: 4, padding: "5px 8px", fontSize: 12 }} />
+            <button onClick={agregarZona} style={{ padding: "5px 10px", borderRadius: 4, border: "1px solid #1a3a6b", background: "#fff", color: "#1a3a6b", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>+ Zona</button>
+          </div>
+        </div>
+        <div style={{ fontSize: 10, color: "#94a3b8", flexBasis: "100%" }}>Agregá la categoría/rango/zona, completá sus valores en la tabla y apretá "Guardar cambios". Se guarda en matriz_precios y el motor de pago lo toma automáticamente.</div>
+      </div>
       {msg && (
         <div style={{ background: msg.ok ? "#ecfdf5" : "#fef2f2", border: `1px solid ${msg.ok ? "#a7f3d0" : "#fca5a5"}`, color: msg.ok ? "#065f46" : "#991b1b", borderRadius: 6, padding: 10, marginBottom: 14, fontSize: 12 }}>{msg.txt}</div>
       )}
@@ -20458,9 +20511,19 @@ function ConfigPorCobrarMeli() {
     setLoading(false);
   };
 
-  const categorias = ["LARGE VAN", "SMALL VAN", "CAR", "CANCELACION"];
-  const zonas = ["L1", "L2", "L3", "L4"];
-  const tramos = ["0-100", "101-150", "151-200", "201-250", "251+"];
+  const [extraCats, setExtraCats] = useState([]);
+  const [extraTramos, setExtraTramos] = useState([]);
+  const [extraZonas, setExtraZonas] = useState([]);
+  const [newCat, setNewCat] = useState("");
+  const [newTramo, setNewTramo] = useState("");
+  const [newZona, setNewZona] = useState("");
+  const parseMinKm = (s) => { const x = String(s).trim(); return x.endsWith("+") ? (parseInt(x, 10) || 0) : (parseInt(x.split("-")[0], 10) || 0); };
+  const categorias = Array.from(new Set(["LARGE VAN", "SMALL VAN", "CAR", "CANCELACION", ...data.map(d => d.categoria), ...extraCats].filter(Boolean)));
+  const zonas = Array.from(new Set(["L1", "L2", "L3", "L4", ...data.map(d => d.zonificacion), ...extraZonas].filter(Boolean)));
+  const tramos = Array.from(new Set(["0-100", "101-150", "151-200", "201-250", "251+", ...data.map(d => d.tramo_km), ...extraTramos].filter(Boolean))).sort((a, b) => parseMinKm(a) - parseMinKm(b));
+  const agregarCat = () => { const v = newCat.trim().toUpperCase(); if (!v) return; if (categorias.includes(v)) { setMsg({ ok: false, txt: "Esa categoría ya existe." }); return; } setExtraCats(p => [...p, v]); setNewCat(""); setMsg(null); };
+  const agregarZona = () => { const v = newZona.trim().toUpperCase(); if (!v) return; if (zonas.includes(v)) { setMsg({ ok: false, txt: "Esa zona ya existe." }); return; } setExtraZonas(p => [...p, v]); setNewZona(""); setMsg(null); };
+  const agregarTramo = () => { const v = newTramo.trim().replace(/\s+/g, ""); if (!/^\d+-\d+$/.test(v) && !/^\d+\+$/.test(v)) { setMsg({ ok: false, txt: 'Rango inválido. Usá "151-200" o "251+".' }); return; } if (tramos.includes(v)) { setMsg({ ok: false, txt: "Ese rango ya existe." }); return; } setExtraTramos(p => [...p, v]); setNewTramo(""); setMsg(null); };
 
   const setCell = (cat, z, tr, val) => setEdits(prev => ({ ...prev, [`${cat}|${z}|${tr}`]: val }));
 
@@ -20503,6 +20566,30 @@ function ConfigPorCobrarMeli() {
         <div style={{ background: msg.ok ? "#ecfdf5" : "#fef2f2", border: `1px solid ${msg.ok ? "#a7f3d0" : "#fca5a5"}`, color: msg.ok ? "#065f46" : "#991b1b", borderRadius: 6, padding: 10, marginBottom: 14, fontSize: 12 }}>{msg.txt}</div>
       )}
       <div style={{ fontSize: 11, color: "#94a3b8", marginBottom: 10 }}>Dejá una celda vacía si esa combinación no aplica (ej. CAR solo opera 0-100).</div>
+      <div style={{ background: "#f8fafc", border: "1px dashed #cbd5e1", borderRadius: 6, padding: 12, marginBottom: 14, display: "flex", gap: 16, flexWrap: "wrap", alignItems: "flex-end" }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          <span style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase" }}>Nueva categoría</span>
+          <div style={{ display: "flex", gap: 6 }}>
+            <input value={newCat} onChange={e => setNewCat(e.target.value)} placeholder="Ej: MOTO" style={{ border: "1px solid #e4e7ec", borderRadius: 4, padding: "5px 8px", fontSize: 12 }} />
+            <button onClick={agregarCat} style={{ padding: "5px 10px", borderRadius: 4, border: "1px solid #1a3a6b", background: "#fff", color: "#1a3a6b", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>+ Categoría</button>
+          </div>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          <span style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase" }}>Nuevo rango de km</span>
+          <div style={{ display: "flex", gap: 6 }}>
+            <input value={newTramo} onChange={e => setNewTramo(e.target.value)} placeholder="Ej: 251-300 o 301+" style={{ border: "1px solid #e4e7ec", borderRadius: 4, padding: "5px 8px", fontSize: 12 }} />
+            <button onClick={agregarTramo} style={{ padding: "5px 10px", borderRadius: 4, border: "1px solid #1a3a6b", background: "#fff", color: "#1a3a6b", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>+ Rango</button>
+          </div>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          <span style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase" }}>Nueva zona</span>
+          <div style={{ display: "flex", gap: 6 }}>
+            <input value={newZona} onChange={e => setNewZona(e.target.value)} placeholder="Ej: L5" style={{ border: "1px solid #e4e7ec", borderRadius: 4, padding: "5px 8px", fontSize: 12 }} />
+            <button onClick={agregarZona} style={{ padding: "5px 10px", borderRadius: 4, border: "1px solid #1a3a6b", background: "#fff", color: "#1a3a6b", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>+ Zona</button>
+          </div>
+        </div>
+        <div style={{ fontSize: 10, color: "#94a3b8", flexBasis: "100%" }}>Se guarda en tarifas_cobrar_meli_mx. Completá los valores de la nueva fila/columna y apretá "Guardar cambios".</div>
+      </div>
       {zonas.map(z => (
         <div key={z} style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: 14, marginBottom: 14 }}>
           <div style={{ fontSize: 13, fontWeight: 700, color: "#1a3a6b", marginBottom: 10 }}>Zona {z}</div>
@@ -37490,3 +37577,4 @@ const CONFIG_IMPORTADOR_CL = {
     notas: "(opcional)",
   },
 };
+    
