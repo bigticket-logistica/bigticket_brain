@@ -20404,8 +20404,11 @@ function ConfigPorPagar() {
             updates++;
           }
         } else {
+          const _km = String(tr).trim().endsWith("+")
+            ? { mn: parseInt(tr, 10) || 0, mx: null }
+            : (() => { const p = String(tr).split("-"); const b = parseInt(p[1], 10); return { mn: parseInt(p[0], 10) || 0, mx: isNaN(b) ? null : b }; })();
           const { error } = await sb.from("matriz_precios")
-            .insert({ tipo_vehiculo: cat, zonificacion: z, tramo_km: tr, tarifa_mxn: num, activo: true });
+            .insert({ tipo_vehiculo: cat, zonificacion: z, tramo_km: tr, km_min: _km.mn, km_max: _km.mx, tarifa_mxn: num, activo: true });
           if (error) throw error;
           inserts++;
         }
