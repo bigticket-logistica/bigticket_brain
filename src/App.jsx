@@ -20418,6 +20418,12 @@ function ConfigPorPagar() {
     }
     setGuardando(false);
   };
+  const baseCats = ["LARGE VAN", "SMALL VAN", "CAR"];
+  const baseZonas = ["L1", "L2", "L3", "L4"];
+  const baseTramos = ["0-100", "101-150", "151-200", "201-250", "251+"];
+  const eliminarCat = async (cat) => { if (!confirm(`¿Eliminar la categoría "${cat}"? Se borran sus tarifas guardadas y el motor deja de usarla.`)) return; try { const { error } = await sb.from("matriz_precios").delete().eq("tipo_vehiculo", cat); if (error) throw error; setExtraCats(p => p.filter(x => x !== cat)); setMsg({ ok: true, txt: `Categoría "${cat}" eliminada.` }); cargar(); } catch (e) { setMsg({ ok: false, txt: "Error: " + (e.message || e) }); } };
+  const eliminarTramo = async (tr) => { if (!confirm(`¿Eliminar el rango "${tr}"? Se borran sus tarifas guardadas.`)) return; try { const { error } = await sb.from("matriz_precios").delete().eq("tramo_km", tr); if (error) throw error; setExtraTramos(p => p.filter(x => x !== tr)); setMsg({ ok: true, txt: `Rango "${tr}" eliminado.` }); cargar(); } catch (e) { setMsg({ ok: false, txt: "Error: " + (e.message || e) }); } };
+  const eliminarZona = async (z) => { if (!confirm(`¿Eliminar la zona "${z}"? Se borran sus tarifas guardadas.`)) return; try { const { error } = await sb.from("matriz_precios").delete().eq("zonificacion", z); if (error) throw error; setExtraZonas(p => p.filter(x => x !== z)); setMsg({ ok: true, txt: `Zona "${z}" eliminada.` }); cargar(); } catch (e) { setMsg({ ok: false, txt: "Error: " + (e.message || e) }); } };
 
   if (loading) return <div style={{ textAlign: "center", padding: 40, color: "#94a3b8" }}>Cargando...</div>;
 
@@ -20456,6 +20462,22 @@ function ConfigPorPagar() {
           </div>
         </div>
         <div style={{ fontSize: 10, color: "#94a3b8", flexBasis: "100%" }}>Agregá la categoría/rango/zona, completá sus valores en la tabla y apretá "Guardar cambios". Se guarda en matriz_precios y el motor de pago lo toma automáticamente.</div>
+        {(() => {
+          const cC = categorias.filter(c => !baseCats.includes(c));
+          const cT = tramos.filter(x => !baseTramos.includes(x));
+          const cZ = zonas.filter(z => !baseZonas.includes(z));
+          if (!cC.length && !cT.length && !cZ.length) return null;
+          const chip = { display: "inline-flex", alignItems: "center", gap: 4, background: "#fff", border: "1px solid #cbd5e1", borderRadius: 12, padding: "3px 8px", fontSize: 11, color: "#334155" };
+          const cbtn = { border: "none", background: "transparent", color: "#dc2626", cursor: "pointer", fontWeight: 700, fontSize: 12, lineHeight: 1, padding: 0 };
+          return (
+            <div style={{ flexBasis: "100%", borderTop: "1px solid #e2e8f0", paddingTop: 10, marginTop: 4, display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
+              <span style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", marginRight: 4 }}>Creados (✕ para eliminar):</span>
+              {cC.map(c => <span key={"c" + c} style={chip}>{c}<button onClick={() => eliminarCat(c)} title="Eliminar categoría" style={cbtn}>✕</button></span>)}
+              {cT.map(x => <span key={"t" + x} style={chip}>{x} km<button onClick={() => eliminarTramo(x)} title="Eliminar rango" style={cbtn}>✕</button></span>)}
+              {cZ.map(z => <span key={"z" + z} style={chip}>Zona {z}<button onClick={() => eliminarZona(z)} title="Eliminar zona" style={cbtn}>✕</button></span>)}
+            </div>
+          );
+        })()}
       </div>
       {msg && (
         <div style={{ background: msg.ok ? "#ecfdf5" : "#fef2f2", border: `1px solid ${msg.ok ? "#a7f3d0" : "#fca5a5"}`, color: msg.ok ? "#065f46" : "#991b1b", borderRadius: 6, padding: 10, marginBottom: 14, fontSize: 12 }}>{msg.txt}</div>
@@ -20547,6 +20569,12 @@ function ConfigPorCobrarMeli() {
     }
     setGuardando(false);
   };
+  const baseCats = ["LARGE VAN", "SMALL VAN", "CAR", "CANCELACION"];
+  const baseZonas = ["L1", "L2", "L3", "L4"];
+  const baseTramos = ["0-100", "101-150", "151-200", "201-250", "251+"];
+  const eliminarCat = async (cat) => { if (!confirm(`¿Eliminar la categoría "${cat}"? Se borran sus tarifas guardadas y el motor deja de usarla.`)) return; try { const { error } = await sb.from("tarifas_cobrar_meli_mx").delete().eq("categoria", cat); if (error) throw error; setExtraCats(p => p.filter(x => x !== cat)); setMsg({ ok: true, txt: `Categoría "${cat}" eliminada.` }); cargar(); } catch (e) { setMsg({ ok: false, txt: "Error: " + (e.message || e) }); } };
+  const eliminarTramo = async (tr) => { if (!confirm(`¿Eliminar el rango "${tr}"? Se borran sus tarifas guardadas.`)) return; try { const { error } = await sb.from("tarifas_cobrar_meli_mx").delete().eq("tramo_km", tr); if (error) throw error; setExtraTramos(p => p.filter(x => x !== tr)); setMsg({ ok: true, txt: `Rango "${tr}" eliminado.` }); cargar(); } catch (e) { setMsg({ ok: false, txt: "Error: " + (e.message || e) }); } };
+  const eliminarZona = async (z) => { if (!confirm(`¿Eliminar la zona "${z}"? Se borran sus tarifas guardadas.`)) return; try { const { error } = await sb.from("tarifas_cobrar_meli_mx").delete().eq("zonificacion", z); if (error) throw error; setExtraZonas(p => p.filter(x => x !== z)); setMsg({ ok: true, txt: `Zona "${z}" eliminada.` }); cargar(); } catch (e) { setMsg({ ok: false, txt: "Error: " + (e.message || e) }); } };
 
   if (loading) return <div style={{ textAlign: "center", padding: 40, color: "#94a3b8" }}>Cargando...</div>;
 
@@ -20589,6 +20617,22 @@ function ConfigPorCobrarMeli() {
           </div>
         </div>
         <div style={{ fontSize: 10, color: "#94a3b8", flexBasis: "100%" }}>Se guarda en tarifas_cobrar_meli_mx. Completá los valores de la nueva fila/columna y apretá "Guardar cambios".</div>
+        {(() => {
+          const cC = categorias.filter(c => !baseCats.includes(c));
+          const cT = tramos.filter(x => !baseTramos.includes(x));
+          const cZ = zonas.filter(z => !baseZonas.includes(z));
+          if (!cC.length && !cT.length && !cZ.length) return null;
+          const chip = { display: "inline-flex", alignItems: "center", gap: 4, background: "#fff", border: "1px solid #cbd5e1", borderRadius: 12, padding: "3px 8px", fontSize: 11, color: "#334155" };
+          const cbtn = { border: "none", background: "transparent", color: "#dc2626", cursor: "pointer", fontWeight: 700, fontSize: 12, lineHeight: 1, padding: 0 };
+          return (
+            <div style={{ flexBasis: "100%", borderTop: "1px solid #e2e8f0", paddingTop: 10, marginTop: 4, display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
+              <span style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", marginRight: 4 }}>Creados (✕ para eliminar):</span>
+              {cC.map(c => <span key={"c" + c} style={chip}>{c}<button onClick={() => eliminarCat(c)} title="Eliminar categoría" style={cbtn}>✕</button></span>)}
+              {cT.map(x => <span key={"t" + x} style={chip}>{x} km<button onClick={() => eliminarTramo(x)} title="Eliminar rango" style={cbtn}>✕</button></span>)}
+              {cZ.map(z => <span key={"z" + z} style={chip}>Zona {z}<button onClick={() => eliminarZona(z)} title="Eliminar zona" style={cbtn}>✕</button></span>)}
+            </div>
+          );
+        })()}
       </div>
       {zonas.map(z => (
         <div key={z} style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: 14, marginBottom: 14 }}>
@@ -37577,4 +37621,3 @@ const CONFIG_IMPORTADOR_CL = {
     notas: "(opcional)",
   },
 };
-    
