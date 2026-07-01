@@ -13699,21 +13699,32 @@ function FormularioInicialSC({ scId, fecha }) {
 
 // ── Item 6 · Confirmación de Terceros (vista analista, solo lectura) ──
 // Reutiliza la RPC get_terceros_confirmacion_sc (la misma que usa la Bitácora
-// del supervisor). El sello confirmado_bitacora_at solo es reconstruible de
-// forma fiable para el día de hoy (en el modelo de confirmación diaria se
-// resella cada jornada y el rostering es del día actual); por eso, para días
-// pasados se avisa que el detalle diario aún no se historiza.
+// del supervisor) y suma get_terceros_cambios_dia para mostrar WARNINGS:
+//   ⚠ Empresa nueva registrada por "Otros" (no certificada)
+//   ⚠ Cambio de empresa: Empresa A → Empresa B (y traslados de SC)
+// El detalle placa-a-placa solo es reconstruible para HOY, pero los
+// movimientos (cambios/altas) sí se consultan para cualquier fecha porque
+// quedan historizados en placas_terceros_pagos (vigente_desde/reemplaza_a).
 function ItemTercerosBitacora({ scId, fecha }) {
   const hoyMX = useMemo(() => {
     const mx = new Date(Date.now() - 6 * 60 * 60 * 1000);
     return mx.toISOString().split("T")[0];
   }, []);
   const esHoy = fecha === hoyMX;
-  const [filas, setFilas] = useState(undefined); // undefined=cargando
+  const [filas, setFilas] = useState(undefined);     // undefined=cargando (solo hoy)
+  const [cambios, setCambios] = useState([]);        // movimientos del día (cualquier fecha)
 
   useEffect(() => {
-    if (!esHoy) { setFilas(null); return; }
     let cancel = false;
+    // Movimientos del día: funciona para hoy Y para fechas pasadas
+    (async () => {
+      try {
+        const { data, error } = await sb.rpc("get_terceros_cambios_dia", { p_sc: scId, p_fecha: fecha });
+        if (error) throw error;
+        if (!cancel) setCambios(Array.isArray(data) ? data : []);
+      } catch (e) { if (!cancel) setCambios([]); }
+    })();
+    if (!esHoy) { setFilas(null); return () => { cancel = true; }; }
     setFilas(undefined);
     (async () => {
       try {
@@ -13723,17 +13734,61 @@ function ItemTercerosBitacora({ scId, fecha }) {
       } catch (e) { if (!cancel) setFilas([]); }
     })();
     return () => { cancel = true; };
-  }, [scId, hoyMX, esHoy]);
+  }, [scId, fecha, hoyMX, esHoy]);
+
+  // Índice de movimientos por placa normalizada (para pintar el warning en su fila)
+  const cambiosPorPlaca = useMemo(() => {
+    const m = {};
+    for (const c of cambios) {
+      const k = String(c.placa || "").toUpperCase().trim();
+      (m[k] = m[k] || []).push(c);
+    }
+    return m;
+  }, [cambios]);
 
   const total = Array.isArray(filas) ? filas.length : 0;
   const confirmadas = Array.isArray(filas) ? filas.filter((f) => f.confirmado_hoy).length : 0;
   const completo = total > 0 && confirmadas === total;
   const resumenColor = total === 0 ? "#9ca3af" : completo ? "#16a34a" : confirmadas === 0 ? "#dc2626" : "#d97706";
+  const nWarn = cambios.length;
+
+  const WarningChip = ({ c }) => {
+    const esCambio = c.empresa_anterior &&
+      String(c.empresa_anterior).toUpperCase().trim() !== String(c.empresa_nueva || "").toUpperCase().trim();
+    return (
+      <div style={{ fontSize: 10.5, marginTop: 3, padding: "3px 8px", borderRadius: 4, lineHeight: 1.5,
+                    background: c.es_empresa_nueva ? "#fef2f2" : "#fffbeb",
+                    border: `1px solid ${c.es_empresa_nueva ? "#fecaca" : "#fde68a"}`,
+                    color: c.es_empresa_nueva ? "#b91c1c" : "#92400e" }}>
+        {esCambio && (
+          <span>⚠ Cambio de empresa: <strong>{c.empresa_anterior}</strong> → <strong>{c.empresa_nueva}</strong></span>
+        )}
+        {!esCambio && c.es_empresa_nueva && (
+          <span>⚠ Empresa nueva registrada: <strong>{c.empresa_nueva}</strong>{c.rfc ? ` (RFC ${c.rfc})` : ""}</span>
+        )}
+        {!esCambio && !c.es_empresa_nueva && c.es_cambio_sc && (
+          <span>⚠ Traslado de SC: <strong>{c.sc_anterior}</strong> → este SC ({c.empresa_nueva})</span>
+        )}
+        {esCambio && c.es_empresa_nueva && (
+          <span style={{ marginLeft: 6, fontWeight: 800 }}>· empresa NUEVA no certificada</span>
+        )}
+        {c.es_cambio_sc && esCambio && (
+          <span style={{ marginLeft: 6 }}>· venía de {c.sc_anterior}</span>
+        )}
+        {c.supervisor && <span style={{ marginLeft: 6, color: "#9ca3af" }}>({c.supervisor})</span>}
+      </div>
+    );
+  };
 
   return (
     <div style={{ fontSize: 12, padding: "5px 8px", background: "#fff", border: "1px solid #eef0f3", borderRadius: 5 }}>
       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
         <span style={{ fontWeight: 600, color: "#374151" }}>6 · Confirmación de Terceros</span>
+        {nWarn > 0 && (
+          <span style={{ fontSize: 10, fontWeight: 800, background: "#fffbeb", border: "1px solid #fde68a", color: "#92400e", padding: "1px 7px", borderRadius: 9 }}>
+            ⚠ {nWarn} movimiento{nWarn === 1 ? "" : "s"}
+          </span>
+        )}
         <span style={{ marginLeft: "auto", fontWeight: 700, color: resumenColor }}>
           {!esHoy ? "—" : filas === undefined ? "…" : `${confirmadas}/${total}`}
         </span>
@@ -13742,6 +13797,18 @@ function ItemTercerosBitacora({ scId, fecha }) {
       {!esHoy && (
         <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 4, fontStyle: "italic" }}>
           El detalle diario de Terceros solo está disponible para el día de hoy.
+        </div>
+      )}
+
+      {/* Para fechas pasadas: al menos los movimientos del día (sí quedan historizados) */}
+      {!esHoy && cambios.length > 0 && (
+        <div style={{ marginTop: 4 }}>
+          {cambios.map((c, i) => (
+            <div key={i} style={{ display: "flex", gap: 6, alignItems: "flex-start" }}>
+              <span style={{ fontFamily: "monospace", fontWeight: 700, fontSize: 11, marginTop: 5 }}>{c.placa}</span>
+              <div style={{ flex: 1 }}><WarningChip c={c} /></div>
+            </div>
+          ))}
         </div>
       )}
 
@@ -13757,17 +13824,21 @@ function ItemTercerosBitacora({ scId, fecha }) {
         <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 3 }}>
           {filas.map((f, i) => {
             const certificada = !f.es_pendiente;
+            const warns = cambiosPorPlaca[String(f.placa || "").toUpperCase().trim()] || [];
             return (
-              <div key={i} style={{ fontSize: 11, color: "#4b5563", padding: "3px 6px", background: "#f8fafc", borderRadius: 4, display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
-                <span style={{ fontFamily: "monospace", fontWeight: 700 }}>{f.placa}</span>
-                <span>{f.empresa_actual || "— sin empresa —"}</span>
-                {f.rfc && <span style={{ fontSize: 9, background: "#e2e8f0", color: "#475569", padding: "0 5px", borderRadius: 3, fontWeight: 700 }}>RFC {f.rfc}</span>}
-                <span style={{ fontSize: 9, padding: "0 5px", borderRadius: 3, fontWeight: 700, background: certificada ? "#dcfce7" : "#fee2e2", color: certificada ? "#166534" : "#b91c1c" }}>
-                  {certificada ? "Certificada" : "No certificada"}
-                </span>
-                <span style={{ marginLeft: "auto", fontWeight: 700, color: f.confirmado_hoy ? "#16a34a" : "#9ca3af" }}>
-                  {f.confirmado_hoy ? "✓ confirmada" : "pendiente"}
-                </span>
+              <div key={i} style={{ fontSize: 11, color: "#4b5563", padding: "3px 6px", background: warns.length ? "#fffdf5" : "#f8fafc", borderRadius: 4 }}>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+                  <span style={{ fontFamily: "monospace", fontWeight: 700 }}>{f.placa}</span>
+                  <span>{f.empresa_actual || "— sin empresa —"}</span>
+                  {f.rfc && <span style={{ fontSize: 9, background: "#e2e8f0", color: "#475569", padding: "0 5px", borderRadius: 3, fontWeight: 700 }}>RFC {f.rfc}</span>}
+                  <span style={{ fontSize: 9, padding: "0 5px", borderRadius: 3, fontWeight: 700, background: certificada ? "#dcfce7" : "#fee2e2", color: certificada ? "#166534" : "#b91c1c" }}>
+                    {certificada ? "Certificada" : "No certificada"}
+                  </span>
+                  <span style={{ marginLeft: "auto", fontWeight: 700, color: f.confirmado_hoy ? "#16a34a" : "#9ca3af" }}>
+                    {f.confirmado_hoy ? "✓ confirmada" : "pendiente"}
+                  </span>
+                </div>
+                {warns.map((c, k) => <WarningChip key={k} c={c} />)}
               </div>
             );
           })}
