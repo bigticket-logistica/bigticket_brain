@@ -13626,7 +13626,7 @@ function FormularioInicialSC({ scId, fecha }) {
       {row.sin_operacion === true && (
         <div style={{ background: "#fff7ed", border: "2px solid #f59e0b", borderRadius: 8, padding: "10px 12px", marginBottom: 8 }}>
           <div style={{ fontSize: 13, fontWeight: 800, color: "#92400e" }}>🚫 JORNADA SIN OPERACIÓN</div>
-          <div style={{ fontSize: 11, color: "#b45309", marginTop: 2 }}>El supervisor marcó este día como sin operación. Los 5 ítems no aplican.</div>
+          <div style={{ fontSize: 11, color: "#b45309", marginTop: 2 }}>El supervisor marcó este día como sin operación. Los ítems no aplican.</div>
           {row.sin_operacion_motivo && String(row.sin_operacion_motivo).trim()
             ? <div style={{ fontSize: 12, color: "#7c2d12", marginTop: 6, fontStyle: "italic", whiteSpace: "pre-wrap" }}>💬 {row.sin_operacion_motivo}</div>
             : <div style={{ fontSize: 11, color: "#dc2626", fontWeight: 600, marginTop: 6 }}>(sin motivo cargado)</div>}
@@ -14008,6 +14008,8 @@ function PanelControlSupervisores() {
   const [expandido, setExpandido] = useState(new Set());
   const [filtroSc, setFiltroSc] = useState("");  // "" = todos
   const [filtroEvento, setFiltroEvento] = useState("todos");  // todos|bitacora|helper|torre|ambulancias|patentes
+  const [terceros6, setTerceros6] = useState({});   // {scId: {total, confirmadas, completo}}
+  const [t6Activo, setT6Activo] = useState(false);  // true solo cuando la fecha seleccionada es HOY (MX)
 
   // Fecha anterior (D-1) respecto a la seleccionada
   const fechaAyer = useMemo(() => {
@@ -14043,6 +14045,27 @@ function PanelControlSupervisores() {
       const idxAyer = {};
       for (const r of ayerR.data || []) idxAyer[r.service_center_id] = r;
 
+      // ── Item 6 · Confirmación de Terceros (solo HOY: el rostering es del día actual) ──
+      const mxHoy = new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString().split("T")[0];
+      const esHoy = fecha === mxHoy;
+      const t6Idx = {};
+      if (esHoy) {
+        const scsUnicos = Array.from(new Set(lista.map((x) => x.sc)));
+        const res = await Promise.all(scsUnicos.map(async (sc) => {
+          try {
+            const { data, error } = await sb.rpc("get_terceros_confirmacion_sc", { p_sc: sc, p_fecha: mxHoy });
+            if (error) throw error;
+            const fs = Array.isArray(data) ? data : [];
+            const total = fs.length;
+            const confirmadas = fs.filter((f) => f.confirmado_hoy).length;
+            return { sc, t: { total, confirmadas, completo: total === 0 || confirmadas === total } };
+          } catch { return { sc, t: null }; }
+        }));
+        for (const r of res) if (r.t) t6Idx[r.sc] = r.t;
+      }
+
+      setTerceros6(t6Idx);
+      setT6Activo(esHoy);
       setSupervisores(lista);
       setBitHoy(idxHoy);
       setBitAyer(idxAyer);
@@ -14070,6 +14093,12 @@ function PanelControlSupervisores() {
   }
   function itemsVacios() {
     return { ayudantes: false, ambulancias: false, cancelaciones: false, noshow: false, pnr: false };
+  }
+
+  // Item 6 (terceros) de un SC: null = no aplica (fecha pasada o sin datos)
+  function item6De(sc) {
+    if (!t6Activo) return null;
+    return terceros6[sc] || null;
   }
 
   // ─── Cálculo de estado D-1: conciliación de ayer ────────────────────
@@ -14102,12 +14131,15 @@ function PanelControlSupervisores() {
     let completaronHoy = 0, conciliaronD1 = 0;
     for (const s of supervisores) {
       const eh = estadoHoy(bitHoy[s.sc]);
-      if (eh.completados === 5 || eh.sinOperacion) completaronHoy++;
+      const t6 = item6De(s.sc);
+      const totalItems = t6 ? 6 : 5;
+      const done = eh.completados + (t6 && t6.completo ? 1 : 0);
+      if (done === totalItems || eh.sinOperacion) completaronHoy++;
       const ed = estadoD1(bitAyer[s.sc]);
       if (ed.estado === "ok") conciliaronD1++;
     }
     return { completaronHoy, conciliaronD1, total: supervisores.length };
-  }, [supervisores, bitHoy, bitAyer]);
+  }, [supervisores, bitHoy, bitAyer, terceros6, t6Activo]);
 
   const NOMBRES_ITEMS = {
     ayudantes: "Ayudantes", ambulancias: "Ambulancias",
@@ -14182,7 +14214,10 @@ function PanelControlSupervisores() {
                 const ed = estadoD1(bitAyer[s.sc]);
                 const abierto = expandido.has(s.sc);
                 const sinOp = eh.sinOperacion;
-                const hoyColor = sinOp ? "#b45309" : eh.completados === 5 ? "#16a34a" : eh.completados === 0 ? "#dc2626" : "#d97706";
+                const t6 = item6De(s.sc);
+                const totalItems = t6 ? 6 : 5;
+                const completadosItems = eh.completados + (t6 && t6.completo ? 1 : 0);
+                const hoyColor = sinOp ? "#b45309" : completadosItems === totalItems ? "#16a34a" : completadosItems === 0 ? "#dc2626" : "#d97706";
                 return (
                   <Fragment key={s.sc}>
                     <tr style={{ borderBottom: "1px solid #f1f5f9", cursor: "pointer", background: sinOp ? "#fff7ed" : undefined }} onClick={() => toggle(s.sc)}>
@@ -14191,7 +14226,7 @@ function PanelControlSupervisores() {
                       <td style={{ ...tdPanel("center"), fontWeight: 700, color: hoyColor }}>
                         {sinOp
                           ? "🚫 Sin op."
-                          : `${eh.completados === 5 ? "✅" : eh.completados === 0 ? "❌" : "🟡"} ${eh.completados}/5`}
+                          : `${completadosItems === totalItems ? "✅" : completadosItems === 0 ? "❌" : "🟡"} ${completadosItems}/${totalItems}`}
                       </td>
                       <td style={tdPanel("center")}>
                         <span style={{ fontSize: 11, color: "#6b7280" }}>{abierto ? "▲ cerrar" : "▼ ver"}</span>
