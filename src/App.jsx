@@ -13689,7 +13689,90 @@ function FormularioInicialSC({ scId, fecha }) {
             : null}
           justif={row.pnr_justificacion}
           fotos={adj.pnr} />
+
+        {/* 6 · Confirmación de Terceros (data completada por el supervisor) */}
+        <ItemTercerosBitacora scId={scId} fecha={fecha} />
       </div>
+    </div>
+  );
+}
+
+// ── Item 6 · Confirmación de Terceros (vista analista, solo lectura) ──
+// Reutiliza la RPC get_terceros_confirmacion_sc (la misma que usa la Bitácora
+// del supervisor). El sello confirmado_bitacora_at solo es reconstruible de
+// forma fiable para el día de hoy (en el modelo de confirmación diaria se
+// resella cada jornada y el rostering es del día actual); por eso, para días
+// pasados se avisa que el detalle diario aún no se historiza.
+function ItemTercerosBitacora({ scId, fecha }) {
+  const hoyMX = useMemo(() => {
+    const mx = new Date(Date.now() - 6 * 60 * 60 * 1000);
+    return mx.toISOString().split("T")[0];
+  }, []);
+  const esHoy = fecha === hoyMX;
+  const [filas, setFilas] = useState(undefined); // undefined=cargando
+
+  useEffect(() => {
+    if (!esHoy) { setFilas(null); return; }
+    let cancel = false;
+    setFilas(undefined);
+    (async () => {
+      try {
+        const { data, error } = await sb.rpc("get_terceros_confirmacion_sc", { p_sc: scId, p_fecha: hoyMX });
+        if (error) throw error;
+        if (!cancel) setFilas(Array.isArray(data) ? data : []);
+      } catch (e) { if (!cancel) setFilas([]); }
+    })();
+    return () => { cancel = true; };
+  }, [scId, hoyMX, esHoy]);
+
+  const total = Array.isArray(filas) ? filas.length : 0;
+  const confirmadas = Array.isArray(filas) ? filas.filter((f) => f.confirmado_hoy).length : 0;
+  const completo = total > 0 && confirmadas === total;
+  const resumenColor = total === 0 ? "#9ca3af" : completo ? "#16a34a" : confirmadas === 0 ? "#dc2626" : "#d97706";
+
+  return (
+    <div style={{ fontSize: 12, padding: "5px 8px", background: "#fff", border: "1px solid #eef0f3", borderRadius: 5 }}>
+      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        <span style={{ fontWeight: 600, color: "#374151" }}>6 · Confirmación de Terceros</span>
+        <span style={{ marginLeft: "auto", fontWeight: 700, color: resumenColor }}>
+          {!esHoy ? "—" : filas === undefined ? "…" : `${confirmadas}/${total}`}
+        </span>
+      </div>
+
+      {!esHoy && (
+        <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 4, fontStyle: "italic" }}>
+          El detalle diario de Terceros solo está disponible para el día de hoy.
+        </div>
+      )}
+
+      {esHoy && filas === undefined && (
+        <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 4 }}>Cargando terceros…</div>
+      )}
+
+      {esHoy && Array.isArray(filas) && filas.length === 0 && (
+        <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 4 }}>Sin placas rosterizadas hoy para este SC.</div>
+      )}
+
+      {esHoy && Array.isArray(filas) && filas.length > 0 && (
+        <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 3 }}>
+          {filas.map((f, i) => {
+            const certificada = !f.es_pendiente;
+            return (
+              <div key={i} style={{ fontSize: 11, color: "#4b5563", padding: "3px 6px", background: "#f8fafc", borderRadius: 4, display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+                <span style={{ fontFamily: "monospace", fontWeight: 700 }}>{f.placa}</span>
+                <span>{f.empresa_actual || "— sin empresa —"}</span>
+                {f.rfc && <span style={{ fontSize: 9, background: "#e2e8f0", color: "#475569", padding: "0 5px", borderRadius: 3, fontWeight: 700 }}>RFC {f.rfc}</span>}
+                <span style={{ fontSize: 9, padding: "0 5px", borderRadius: 3, fontWeight: 700, background: certificada ? "#dcfce7" : "#fee2e2", color: certificada ? "#166534" : "#b91c1c" }}>
+                  {certificada ? "Certificada" : "No certificada"}
+                </span>
+                <span style={{ marginLeft: "auto", fontWeight: 700, color: f.confirmado_hoy ? "#16a34a" : "#9ca3af" }}>
+                  {f.confirmado_hoy ? "✓ confirmada" : "pendiente"}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
