@@ -13689,9 +13689,6 @@ function FormularioInicialSC({ scId, fecha }) {
             : null}
           justif={row.pnr_justificacion}
           fotos={adj.pnr} />
-
-        {/* 6 · Confirmación de Terceros (data completada por el supervisor) */}
-        <ItemTercerosBitacora scId={scId} fecha={fecha} />
       </div>
     </div>
   );
@@ -14365,6 +14362,13 @@ function PanelControlSupervisores() {
                           {/* Formulario inicial del supervisor (del día elegido) */}
                           {(filtroEvento === "todos" || filtroEvento === "bitacora") && (
                             <FormularioInicialSC scId={s.sc} fecha={fecha} />
+                          )}
+
+                          {/* ─── 6 · Confirmación de Terceros (independiente del formulario) ─── */}
+                          {(filtroEvento === "todos" || filtroEvento === "bitacora") && (
+                            <div style={{ marginTop: 8 }}>
+                              <ItemTercerosBitacora scId={s.sc} fecha={fecha} />
+                            </div>
                           )}
 
                           {/* ─── Rutas con helper (mismo día) ─── */}
