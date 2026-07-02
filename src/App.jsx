@@ -14340,6 +14340,28 @@ function PanelControlSupervisores() {
                     {abierto && (
                       <tr style={{ background: "#fafbfc" }}>
                         <td key={tick} colSpan={4} style={{ padding: 14 }}>
+                          {/* Checklist de los 6 ítems: deja claro cuál está completado */}
+                          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 12 }}>
+                            {[
+                              { n: "1 · Ayudantes", ok: sinOp || eh.items.ayudantes },
+                              { n: "2 · Ambulancias", ok: sinOp || eh.items.ambulancias },
+                              { n: "3 · Cancelaciones MELI", ok: sinOp || eh.items.cancelaciones },
+                              { n: "4 · No Show", ok: sinOp || eh.items.noshow },
+                              { n: "5 · PNR", ok: sinOp || eh.items.pnr },
+                              { n: "6 · Confirmación de Terceros", ok: !!(t6 && t6.completo), na: !t6 },
+                            ].map((it, k) => (
+                              <span key={k} style={{
+                                fontSize: 11, fontWeight: 600, padding: "3px 9px", borderRadius: 14,
+                                border: `1px solid ${it.na ? "#e5e7eb" : it.ok ? "#bbf7d0" : "#fecaca"}`,
+                                background: it.na ? "#f9fafb" : it.ok ? "#f0fdf4" : "#fef2f2",
+                                color: it.na ? "#9ca3af" : it.ok ? "#166534" : "#b91c1c",
+                              }}>
+                                {it.na ? "—" : it.ok ? "✓" : "○"} {it.n}
+                                {it.n.startsWith("6") && t6 && ` (${t6.confirmadas}/${t6.total})`}
+                              </span>
+                            ))}
+                          </div>
+
                           {/* Formulario inicial del supervisor (del día elegido) */}
                           {(filtroEvento === "todos" || filtroEvento === "bitacora") && (
                             <FormularioInicialSC scId={s.sc} fecha={fecha} />
@@ -16933,7 +16955,11 @@ function ModuloPagosMadre({ usuario }) {
   const rolLimitadoAPrefacturas = usuario?.rol === "prefacturas";
   const subtabsPermitidas = rolLimitadoAPrefacturas ? ["prefacturas"] : null; // null = todas
 
-  const [subtab, setSubtab] = useState(rolLimitadoAPrefacturas ? "prefacturas" : "listado");
+  const [subtab, setSubtabState] = useState(() => {
+    if (rolLimitadoAPrefacturas) return "prefacturas";
+    try { return localStorage.getItem("bt_nav_subtab_pagos") || "listado"; } catch { return "listado"; }
+  });
+  const setSubtab = (t) => { try { localStorage.setItem("bt_nav_subtab_pagos", t); } catch {} setSubtabState(t); };
   const tabs = [
     { id: "listado",     label: "Listado de Pagos",      desc: "Cálculo diario por contratista" },
     { id: "pagos_pausados", label: "Pagos pausados",     desc: "Rutas con el pago retenido · por día y motivo" },
@@ -33817,7 +33843,10 @@ export default function App() {
       return guardado ? JSON.parse(guardado) : null;
     } catch { return null; }
   });
-  const [tab, setTab] = useState("brain");
+  const [tab, setTabState] = useState(() => {
+    try { return localStorage.getItem("bt_nav_tab") || "brain"; } catch { return "brain"; }
+  });
+  const setTab = (t) => { try { localStorage.setItem("bt_nav_tab", t); } catch {} setTabState(t); };
 
   const handleLogin = (u) => {
     localStorage.setItem("bt_usuario", JSON.stringify(u));
@@ -33825,6 +33854,7 @@ export default function App() {
   };
   const handleLogout = () => {
     localStorage.removeItem("bt_usuario");
+    try { localStorage.removeItem("bt_nav_tab"); localStorage.removeItem("bt_nav_subtab_pagos"); } catch {}
     setUsuario(null);
   };
 
