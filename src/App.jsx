@@ -13698,25 +13698,27 @@ function FormularioInicialSC({ scId, fecha }) {
 }
 
 // ── Item 6 · Confirmación de Terceros (vista analista, solo lectura) ──
-// Reutiliza la RPC get_terceros_confirmacion_sc (la misma que usa la Bitácora
-// del supervisor) y suma get_terceros_cambios_dia para mostrar WARNINGS:
-//   ⚠ Empresa nueva registrada por "Otros" (no certificada)
-//   ⚠ Cambio de empresa: Empresa A → Empresa B (y traslados de SC)
-// El detalle placa-a-placa solo es reconstruible para HOY, pero los
-// movimientos (cambios/altas) sí se consultan para cualquier fecha porque
-// quedan historizados en placas_terceros_pagos (vigente_desde/reemplaza_a).
+// HOY: usa get_terceros_confirmacion_sc (rostering del día, X/Y en vivo).
+// FECHAS PASADAS (desde 2026-07-01): usa get_terceros_confirmacion_historico,
+// que lee el log diario terceros_confirmaciones_dia (se listan las placas
+// confirmadas ese día; las que quedaron sin confirmar no se historizan).
+// En ambos casos se muestran los WARNINGS de get_terceros_cambios_dia:
+// empresa nueva ("Otros"), cambio Empresa A → Empresa B y traslados de SC.
+const TERCEROS_HISTORICO_DESDE = "2026-07-01";
+
 function ItemTercerosBitacora({ scId, fecha }) {
   const hoyMX = useMemo(() => {
     const mx = new Date(Date.now() - 6 * 60 * 60 * 1000);
     return mx.toISOString().split("T")[0];
   }, []);
   const esHoy = fecha === hoyMX;
-  const [filas, setFilas] = useState(undefined);     // undefined=cargando (solo hoy)
-  const [cambios, setCambios] = useState([]);        // movimientos del día (cualquier fecha)
+  const hayHistorico = !esHoy && fecha >= TERCEROS_HISTORICO_DESDE && fecha < hoyMX;
+  const [filas, setFilas] = useState(undefined);   // undefined=cargando
+  const [cambios, setCambios] = useState([]);      // movimientos del día
 
   useEffect(() => {
     let cancel = false;
-    // Movimientos del día: funciona para hoy Y para fechas pasadas
+    // Movimientos del día (cualquier fecha)
     (async () => {
       try {
         const { data, error } = await sb.rpc("get_terceros_cambios_dia", { p_sc: scId, p_fecha: fecha });
@@ -13724,19 +13726,21 @@ function ItemTercerosBitacora({ scId, fecha }) {
         if (!cancel) setCambios(Array.isArray(data) ? data : []);
       } catch (e) { if (!cancel) setCambios([]); }
     })();
-    if (!esHoy) { setFilas(null); return () => { cancel = true; }; }
+    // Detalle placa a placa
+    if (!esHoy && !hayHistorico) { setFilas(null); return () => { cancel = true; }; }
     setFilas(undefined);
     (async () => {
       try {
-        const { data, error } = await sb.rpc("get_terceros_confirmacion_sc", { p_sc: scId, p_fecha: hoyMX });
+        const rpc = esHoy ? "get_terceros_confirmacion_sc" : "get_terceros_confirmacion_historico";
+        const { data, error } = await sb.rpc(rpc, { p_sc: scId, p_fecha: fecha });
         if (error) throw error;
         if (!cancel) setFilas(Array.isArray(data) ? data : []);
       } catch (e) { if (!cancel) setFilas([]); }
     })();
     return () => { cancel = true; };
-  }, [scId, fecha, hoyMX, esHoy]);
+  }, [scId, fecha, esHoy, hayHistorico]);
 
-  // Índice de movimientos por placa normalizada (para pintar el warning en su fila)
+  // Índice de movimientos por placa (para pintar el warning en su fila)
   const cambiosPorPlaca = useMemo(() => {
     const m = {};
     for (const c of cambios) {
@@ -13780,6 +13784,27 @@ function ItemTercerosBitacora({ scId, fecha }) {
     );
   };
 
+  const FilaPlaca = ({ f }) => {
+    const certificada = !f.es_pendiente;
+    const warns = cambiosPorPlaca[String(f.placa || "").toUpperCase().trim()] || [];
+    return (
+      <div style={{ fontSize: 11, color: "#4b5563", padding: "3px 6px", background: warns.length ? "#fffdf5" : "#f8fafc", borderRadius: 4 }}>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+          <span style={{ fontFamily: "monospace", fontWeight: 700 }}>{f.placa}</span>
+          <span>{f.empresa_actual || "— sin empresa —"}</span>
+          {f.rfc && <span style={{ fontSize: 9, background: "#e2e8f0", color: "#475569", padding: "0 5px", borderRadius: 3, fontWeight: 700 }}>RFC {f.rfc}</span>}
+          <span style={{ fontSize: 9, padding: "0 5px", borderRadius: 3, fontWeight: 700, background: certificada ? "#dcfce7" : "#fee2e2", color: certificada ? "#166534" : "#b91c1c" }}>
+            {certificada ? "Certificada" : "No certificada"}
+          </span>
+          <span style={{ marginLeft: "auto", fontWeight: 700, color: f.confirmado_hoy ? "#16a34a" : "#9ca3af" }}>
+            {f.confirmado_hoy ? "✓ confirmada" : "pendiente"}
+          </span>
+        </div>
+        {warns.map((c, k) => <WarningChip key={k} c={c} />)}
+      </div>
+    );
+  };
+
   return (
     <div style={{ fontSize: 12, padding: "5px 8px", background: "#fff", border: "1px solid #eef0f3", borderRadius: 5 }}>
       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
@@ -13790,58 +13815,52 @@ function ItemTercerosBitacora({ scId, fecha }) {
           </span>
         )}
         <span style={{ marginLeft: "auto", fontWeight: 700, color: resumenColor }}>
-          {!esHoy ? "—" : filas === undefined ? "…" : `${confirmadas}/${total}`}
+          {filas === undefined ? "…"
+            : esHoy ? `${confirmadas}/${total}`
+            : hayHistorico ? (total > 0 ? `${total} ✓` : "—")
+            : "—"}
         </span>
       </div>
 
-      {!esHoy && (
+      {!esHoy && !hayHistorico && (
         <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 4, fontStyle: "italic" }}>
-          El detalle diario de Terceros solo está disponible para el día de hoy.
+          El detalle de Terceros está disponible desde el {TERCEROS_HISTORICO_DESDE}.
         </div>
       )}
 
-      {/* Para fechas pasadas: al menos los movimientos del día (sí quedan historizados) */}
-      {!esHoy && cambios.length > 0 && (
-        <div style={{ marginTop: 4 }}>
-          {cambios.map((c, i) => (
+      {hayHistorico && Array.isArray(filas) && (
+        <div style={{ fontSize: 10.5, color: "#9ca3af", marginTop: 4, fontStyle: "italic" }}>
+          Fecha pasada: se listan las placas confirmadas ese día (las no confirmadas no se historizan).
+        </div>
+      )}
+
+      {(esHoy || hayHistorico) && filas === undefined && (
+        <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 4 }}>Cargando terceros…</div>
+      )}
+
+      {(esHoy || hayHistorico) && Array.isArray(filas) && filas.length === 0 && (
+        <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 4 }}>
+          {esHoy ? "Sin placas rosterizadas hoy para este SC." : "Sin confirmaciones registradas ese día para este SC."}
+        </div>
+      )}
+
+      {(esHoy || hayHistorico) && Array.isArray(filas) && filas.length > 0 && (
+        <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 3 }}>
+          {filas.map((f, i) => <FilaPlaca key={i} f={f} />)}
+        </div>
+      )}
+
+      {/* Movimientos de placas que no aparecen en la lista de arriba */}
+      {Array.isArray(filas) && cambios.filter((c) => !(filas || []).some((f) =>
+        String(f.placa || "").toUpperCase().trim() === String(c.placa || "").toUpperCase().trim())).length > 0 && (
+        <div style={{ marginTop: 6 }}>
+          {cambios.filter((c) => !(filas || []).some((f) =>
+            String(f.placa || "").toUpperCase().trim() === String(c.placa || "").toUpperCase().trim())).map((c, i) => (
             <div key={i} style={{ display: "flex", gap: 6, alignItems: "flex-start" }}>
               <span style={{ fontFamily: "monospace", fontWeight: 700, fontSize: 11, marginTop: 5 }}>{c.placa}</span>
               <div style={{ flex: 1 }}><WarningChip c={c} /></div>
             </div>
           ))}
-        </div>
-      )}
-
-      {esHoy && filas === undefined && (
-        <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 4 }}>Cargando terceros…</div>
-      )}
-
-      {esHoy && Array.isArray(filas) && filas.length === 0 && (
-        <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 4 }}>Sin placas rosterizadas hoy para este SC.</div>
-      )}
-
-      {esHoy && Array.isArray(filas) && filas.length > 0 && (
-        <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 3 }}>
-          {filas.map((f, i) => {
-            const certificada = !f.es_pendiente;
-            const warns = cambiosPorPlaca[String(f.placa || "").toUpperCase().trim()] || [];
-            return (
-              <div key={i} style={{ fontSize: 11, color: "#4b5563", padding: "3px 6px", background: warns.length ? "#fffdf5" : "#f8fafc", borderRadius: 4 }}>
-                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
-                  <span style={{ fontFamily: "monospace", fontWeight: 700 }}>{f.placa}</span>
-                  <span>{f.empresa_actual || "— sin empresa —"}</span>
-                  {f.rfc && <span style={{ fontSize: 9, background: "#e2e8f0", color: "#475569", padding: "0 5px", borderRadius: 3, fontWeight: 700 }}>RFC {f.rfc}</span>}
-                  <span style={{ fontSize: 9, padding: "0 5px", borderRadius: 3, fontWeight: 700, background: certificada ? "#dcfce7" : "#fee2e2", color: certificada ? "#166534" : "#b91c1c" }}>
-                    {certificada ? "Certificada" : "No certificada"}
-                  </span>
-                  <span style={{ marginLeft: "auto", fontWeight: 700, color: f.confirmado_hoy ? "#16a34a" : "#9ca3af" }}>
-                    {f.confirmado_hoy ? "✓ confirmada" : "pendiente"}
-                  </span>
-                </div>
-                {warns.map((c, k) => <WarningChip key={k} c={c} />)}
-              </div>
-            );
-          })}
         </div>
       )}
     </div>
@@ -14081,6 +14100,8 @@ function PanelControlSupervisores() {
   const [filtroEvento, setFiltroEvento] = useState("todos");  // todos|bitacora|helper|torre|ambulancias|patentes
   const [terceros6, setTerceros6] = useState({});   // {scId: {total, confirmadas, completo}}
   const [t6Activo, setT6Activo] = useState(false);  // true solo cuando la fecha seleccionada es HOY (MX)
+  const [refrescando, setRefrescando] = useState(false); // refresh silencioso (no desmonta la tabla)
+  const [tick, setTick] = useState(0);              // fuerza recarga de los detalles expandidos
 
   // Fecha anterior (D-1) respecto a la seleccionada
   const fechaAyer = useMemo(() => {
@@ -14089,8 +14110,9 @@ function PanelControlSupervisores() {
     return d.toISOString().split("T")[0];
   }, [fecha]);
 
-  const cargar = useCallback(async () => {
-    setLoading(true);
+  const cargar = useCallback(async (silencioso = false) => {
+    if (silencioso) setRefrescando(true);
+    else setLoading(true);
     setError(null);
     try {
       const [supsR, hoyR, ayerR] = await Promise.all([
@@ -14144,6 +14166,7 @@ function PanelControlSupervisores() {
       setError(e.message || String(e));
     } finally {
       setLoading(false);
+      setRefrescando(false);
     }
   }, [fecha, fechaAyer]);
 
@@ -14249,9 +14272,9 @@ function PanelControlSupervisores() {
             <option value="patentes">Patentes nuevas</option>
           </select>
         </div>
-        <button onClick={cargar}
-          style={{ padding: "6px 14px", background: "#1e3a5f", color: "#fff", border: "none", borderRadius: 6, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
-          🔄 Refrescar
+        <button onClick={() => { setTick((t) => t + 1); cargar(true); }} disabled={refrescando}
+          style={{ padding: "6px 14px", background: "#1e3a5f", color: "#fff", border: "none", borderRadius: 6, fontSize: 13, fontWeight: 600, cursor: refrescando ? "wait" : "pointer", opacity: refrescando ? 0.7 : 1 }}>
+          {refrescando ? "⏳ Actualizando…" : "🔄 Refrescar"}
         </button>
         <div style={{ marginLeft: "auto", fontSize: 13, color: "#374151" }}>
           <strong>{totales.completaronHoy}/{totales.total}</strong> completaron Hoy
@@ -14305,7 +14328,7 @@ function PanelControlSupervisores() {
                     </tr>
                     {abierto && (
                       <tr style={{ background: "#fafbfc" }}>
-                        <td colSpan={4} style={{ padding: 14 }}>
+                        <td key={tick} colSpan={4} style={{ padding: 14 }}>
                           {/* Formulario inicial del supervisor (del día elegido) */}
                           {(filtroEvento === "todos" || filtroEvento === "bitacora") && (
                             <FormularioInicialSC scId={s.sc} fecha={fecha} />
