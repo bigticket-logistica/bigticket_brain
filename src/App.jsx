@@ -14973,6 +14973,8 @@ function ConciliacionTercerosMX({ usuario }) {
   useEffect(() => { try { localStorage.setItem("conc_mx_asunto", asuntoLote); } catch {} }, [asuntoLote]);
   useEffect(() => { try { localStorage.setItem("conc_mx_cuerpo", cuerpoLote); } catch {} }, [cuerpoLote]);
   const aplicarVarsCorreo = (txt, empresa, sc, periodo, operacion) => String(txt || "").replace(/\{TRANSPORTISTA\}/g, empresa || "").replace(/\{CECO\}/g, sc || "").replace(/\{PERIODO\}/g, periodo || "").replace(/\{OPERACION\}/g, operacion || "");
+  const LINK_APELACION = "https://app.pipefy.com/public/form/lQ0yfPPn";
+  const conApelacion = (txt) => { const s = String(txt || ""); return s.includes(LINK_APELACION) ? s : s + "\r\n\r\nPara apelar o reportar diferencias en esta prefactura, complete el siguiente formulario de apelación:\r\n" + LINK_APELACION; };
 
   const norm = (s) => String(s || "").trim().toUpperCase();
   const fmtMon = (v) => "$ " + Math.round(Number(v || 0)).toLocaleString("es-CL");
@@ -15871,6 +15873,7 @@ function ConciliacionTercerosMX({ usuario }) {
   </table>
   ${bonoHtml}
   ${obsHtml}
+  <div style="margin-top:22px;padding:12px 14px;border:1px solid #d9dde3;border-radius:6px;background:#f7f8fa;font-size:11px;color:#333333">Para apelar o reportar diferencias en esta prefactura, complete el formulario de apelación: <a href="https://app.pipefy.com/public/form/lQ0yfPPn" style="color:#1a3a6b;font-weight:bold;text-decoration:none">https://app.pipefy.com/public/form/lQ0yfPPn</a></div>
   <div class="noprint"><button onclick="window.print()">Imprimir / Guardar PDF</button></div>
 </body></html>`;
     const nombrePdf = `Prefactura_${String(empresa).replace(/[^A-Za-z0-9]+/g, "_")}_${sc}_${periodo.replace(/ /g, "_")}.pdf`;
@@ -15895,7 +15898,7 @@ function ConciliacionTercerosMX({ usuario }) {
     const bcc = (t.correo_bcc || "").trim();
     if (!correoTo) throw new Error("Sin correo destino para " + empresa + " · " + sc);
     const asunto = (opts && opts.asunto) || aplicarVarsCorreo(asuntoLote, empresa, sc, periodo, operacion);
-    const cuerpo = (opts && opts.cuerpo) || aplicarVarsCorreo(cuerpoLote, empresa, sc, periodo, operacion);
+    const cuerpo = conApelacion((opts && opts.cuerpo) || aplicarVarsCorreo(cuerpoLote, empresa, sc, periodo, operacion));
     const resp = await fetch(WEBHOOK_ENVIO_MX, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ idEnvio: `${empresa}|${sc}|${semana}|${Date.now()}`, transportista: empresa, ceco: sc, rfc: t.rfc || "", operacion, periodo, correoTo, cc, bcc, asunto, cuerpo, nombrePdf, html }),
@@ -15916,7 +15919,7 @@ function ConciliacionTercerosMX({ usuario }) {
     const { periodo, operacion, tot } = construirPrefactura(empresa, sc, filasSC, rSC);
     setModalEnvio({ empresa, sc, filasSC, rSC, to: t.correo_to || "", cc: t.correo_cc || "",
       asunto: aplicarVarsCorreo(asuntoLote, empresa, sc, periodo, operacion),
-      cuerpo: aplicarVarsCorreo(cuerpoLote, empresa, sc, periodo, operacion) });
+      cuerpo: conApelacion(aplicarVarsCorreo(cuerpoLote, empresa, sc, periodo, operacion)) });
   };
 
   const confirmarEnvioModal = async () => {
