@@ -14138,27 +14138,38 @@ function PanelControlSupervisores() {
       const idxAyer = {};
       for (const r of ayerR.data || []) idxAyer[r.service_center_id] = r;
 
-      // ── Item 6 · Confirmación de Terceros (solo HOY: el rostering es del día actual) ──
+      // ── Item 6 · Confirmación de Terceros ──────────────────────────
+      // HOY: get_terceros_confirmacion_sc (rostering en vivo → X/Y exacto).
+      // FECHA PASADA: get_terceros_resumen_dia (log diario). No conocemos el
+      // total rosterizado histórico, así que se cuenta como completo cuando
+      // hay al menos una confirmación registrada ese día para el SC.
       const mxHoy = new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString().split("T")[0];
       const esHoy = fecha === mxHoy;
       const t6Idx = {};
-      if (esHoy) {
-        const scsUnicos = Array.from(new Set(lista.map((x) => x.sc)));
-        const res = await Promise.all(scsUnicos.map(async (sc) => {
-          try {
+      const scsUnicos = Array.from(new Set(lista.map((x) => x.sc)));
+      const res = await Promise.all(scsUnicos.map(async (sc) => {
+        try {
+          if (esHoy) {
             const { data, error } = await sb.rpc("get_terceros_confirmacion_sc", { p_sc: sc, p_fecha: mxHoy });
             if (error) throw error;
             const fs = Array.isArray(data) ? data : [];
             const total = fs.length;
             const confirmadas = fs.filter((f) => f.confirmado_hoy).length;
             return { sc, t: { total, confirmadas, completo: total === 0 || confirmadas === total } };
-          } catch { return { sc, t: null }; }
-        }));
-        for (const r of res) if (r.t) t6Idx[r.sc] = r.t;
-      }
+          } else {
+            const { data, error } = await sb.rpc("get_terceros_resumen_dia", { p_sc: sc, p_fecha: fecha });
+            if (error) throw error;
+            const row = Array.isArray(data) ? data[0] : data;
+            const confirmadas = Number(row?.confirmadas || 0);
+            if (!row?.tiene_datos) return { sc, t: null };
+            return { sc, t: { total: confirmadas, confirmadas, completo: true } };
+          }
+        } catch { return { sc, t: null }; }
+      }));
+      for (const r of res) if (r.t) t6Idx[r.sc] = r.t;
 
       setTerceros6(t6Idx);
-      setT6Activo(esHoy);
+      setT6Activo(true); // el resumen aplica tanto para hoy como para fechas pasadas con datos
       setSupervisores(lista);
       setBitHoy(idxHoy);
       setBitAyer(idxAyer);
@@ -14189,7 +14200,7 @@ function PanelControlSupervisores() {
     return { ayudantes: false, ambulancias: false, cancelaciones: false, noshow: false, pnr: false };
   }
 
-  // Item 6 (terceros) de un SC: null = no aplica (fecha pasada o sin datos)
+  // Item 6 (terceros) de un SC: null = sin datos (fecha sin confirmaciones)
   function item6De(sc) {
     if (!t6Activo) return null;
     return terceros6[sc] || null;
