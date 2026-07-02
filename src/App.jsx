@@ -33973,6 +33973,9 @@ Favor emitir su factura como máximo el día jueves XX/XX a las 12:00 Hrs para q
 
 En caso de presentar diferencias, favor notificar vía mail a su supervisor directo para que estas puedan ser validadas e informadas a nuestra área para reliquidación.
 
+También puede apelar o reportar diferencias de esta prefactura completando el siguiente formulario de apelación:
+https://app.pipefy.com/public/form/lQ0yfPPn
+
 Quedamos a sus órdenes ante cualquier consulta.
 
 Saludos cordiales,
