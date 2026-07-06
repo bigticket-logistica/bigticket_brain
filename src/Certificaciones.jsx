@@ -2,10 +2,12 @@ import { useState, useEffect } from "react";
 import { sb, BIGGY_IMG } from "./shared";
 
 const COLUMNAS = [
-  { id: "recepcion",       label: "Etapa 1: Recepción Documental", color: "#1a3a6b", bg: "#eef2ff", border: "#c7d2fe" },
-  { id: "validacion_meli", label: "Validación MELI",               color: "#92400e", bg: "#fef3c7", border: "#fde68a" },
-  { id: "aprobado",        label: "Aprobado",                      color: "#166534", bg: "#dcfce7", border: "#86efac" },
-  { id: "rechazado",       label: "Rechazado",                     color: "#c0392b", bg: "#fee2e2", border: "#fca5a5" },
+  { id: "recepcion",           label: "Etapa 1: Recepción Documental", color: "#1a3a6b", bg: "#eef2ff", border: "#c7d2fe" },
+  { id: "prevalidacion_biggy", label: "Etapa 2: Pre Validación Biggy",  color: "#c2410c", bg: "#fff7ed", border: "#fed7aa" },
+  { id: "validacion_meli",     label: "Etapa 3: Validación MELI",       color: "#92400e", bg: "#fef3c7", border: "#fde68a" },
+  { id: "validacion_nubarium", label: "Etapa 4: Validación Nubarium",   color: "#0369a1", bg: "#e0f2fe", border: "#7dd3fc" },
+  { id: "aceptado",            label: "Aceptado",                       color: "#166534", bg: "#dcfce7", border: "#86efac" },
+  { id: "rechazado",           label: "Rechazado",                      color: "#c0392b", bg: "#fee2e2", border: "#fca5a5" },
 ];
 
 // ─── VISOR DOCUMENTO ────────────────────────────────────────────────
@@ -338,61 +340,7 @@ Responde con este JSON exacto:
     }
   };
 
-  // ── Validación de documentos ──────────────────────────────────────
-  const [validando, setValidando] = useState(false);
-  const [validacion, setValidacion] = useState(
-    candidato.validacion_curp ? {
-      resumen: {
-        curp_formato:  candidato.validacion_curp,
-        rfc_formato:   candidato.validacion_rfc,
-        nombre_curp:   candidato.validacion_nombre,
-        curp_renapo:   candidato.validacion_renapo,
-        rfc_sat:       candidato.validacion_sat,
-        antecedentes:  candidato.validacion_antecedentes,
-        listas_negras: candidato.validacion_listas_negras,
-        edad:          candidato.edad_calculada ? `${candidato.edad_calculada} años` : '—',
-        sexo:          candidato.sexo_curp || '—',
-        estado_nac:    candidato.estado_nacimiento_curp || '—',
-        fecha_nac:     candidato.fecha_nacimiento_curp || '—',
-      },
-      alertas: candidato.alertas_validacion ? (() => { try { return JSON.parse(candidato.alertas_validacion); } catch(e) { return []; } })() : [],
-    } : null
-  );
-
-  const validarProspecto = async () => {
-    setValidando(true);
-    try {
-      const resp = await fetch("https://bigticket2026.app.n8n.cloud/webhook/validar-prospecto", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          id: candidato.id,
-          curp: candidato.curp_validado || candidato.curp,
-          rfc: candidato.rfc,
-          nombre: candidato.nombre,
-        })
-      });
-      if (!resp.ok) throw new Error(`Error ${resp.status}`);
-      const data = await resp.json();
-      setValidacion(data);
-      onActualizar({ ...candidato,
-        validacion_curp:          data.resumen?.curp_formato,
-        validacion_rfc:           data.resumen?.rfc_formato,
-        validacion_nombre:        data.resumen?.nombre_curp,
-        validacion_renapo:        data.resumen?.curp_renapo,
-        validacion_sat:           data.resumen?.rfc_sat,
-        validacion_antecedentes:  data.resumen?.antecedentes,
-        validacion_listas_negras: data.resumen?.listas_negras,
-        edad_calculada:           data.curp_data?.edad,
-        sexo_curp:                data.curp_data?.sexo,
-        estado_nacimiento_curp:   data.curp_data?.estado_nacimiento,
-        fecha_nacimiento_curp:    data.curp_data?.fecha_nacimiento,
-      });
-    } catch(e) { alert("Error al validar: " + e.message); }
-    finally { setValidando(false); }
-  };
-
-  const estadoBadge = { pendiente: "badge-pendiente", enviado: "badge-enviado", aprobado: "badge-aprobado", rechazado: "badge-rechazado" };
+  const estadoBadge = { pendiente: "badge-pendiente", enviado: "badge-enviado", aprobado: "badge-aprobado", aceptado: "badge-aprobado", rechazado: "badge-rechazado" };
 
   return (
     <div>
@@ -406,113 +354,6 @@ Responde con este JSON exacto:
       </div>
 
       <div className="pg-detail">
-        {/* ── Validación de identidad ──────────────────────────── */}
-        <div className="form-card" style={{ marginBottom: 16 }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
-            <div className="form-title" style={{ margin: 0 }}>🔍 Validación de identidad</div>
-            <button className="btn-blue" onClick={validarProspecto} disabled={validando}
-              style={{ padding: "7px 14px", fontSize: 12 }}>
-              {validando ? "Validando..." : validacion ? "🔄 Re-validar" : "🔍 Validar ahora"}
-            </button>
-          </div>
-
-          {!validacion && !validando && (
-            <div style={{ textAlign: "center", padding: "20px", color: "#888", fontSize: 13 }}>
-              <div style={{ fontSize: 32, marginBottom: 8 }}>🔍</div>
-              Haz clic en "Validar ahora" para verificar CURP, RFC y nombre contra registros oficiales
-            </div>
-          )}
-
-          {validando && (
-            <div style={{ textAlign: "center", padding: "20px" }}>
-              <div className="biggy-typing"><span /><span /><span /></div>
-              <div style={{ fontSize: 12, color: "#888", marginTop: 8 }}>Consultando RENAPO y SAT...</div>
-            </div>
-          )}
-
-          {validacion && !validando && (
-            <div>
-              {/* Fuente Verifik */}
-              <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 12 }}>
-                <div style={{ fontSize: 10, color: "#888" }}>Fuente:</div>
-                <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 20, background: "#eef2ff", color: "#1a3a6b", border: "0.5px solid #c7d2fe" }}>
-                  🔐 Verifik · RENAPO · SAT · RNPCP
-                </span>
-              </div>
-              {/* Grid 6 chips */}
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, marginBottom: 14 }}>
-                {[
-                  { label: "CURP formato",      valor: validacion.resumen?.curp_formato },
-                  { label: "CURP en RENAPO",    valor: validacion.resumen?.curp_renapo },
-                  { label: "Nombre vs RENAPO",  valor: validacion.resumen?.nombre_curp },
-                  { label: "RFC formato",        valor: validacion.resumen?.rfc_formato },
-                  { label: "RFC en SAT",         valor: validacion.resumen?.rfc_sat },
-                  { label: "Antecedentes penales", valor: validacion.resumen?.antecedentes },
-                ].map(({ label, valor }) => {
-                  const esOk  = valor?.startsWith("✅");
-                  const esErr = valor?.startsWith("❌") || valor?.startsWith("🚨");
-                  const esWarn= !esOk && !esErr;
-                  return (
-                    <div key={label} style={{
-                      background: esOk ? "#f0fdf4" : esErr ? "#fef2f2" : "#fefce8",
-                      border: `0.5px solid ${esOk ? "#86efac" : esErr ? "#fca5a5" : "#fde68a"}`,
-                      borderRadius: 10, padding: "10px 12px"
-                    }}>
-                      <div style={{ fontSize: 10, color: "#888", marginBottom: 4 }}>{label}</div>
-                      <div style={{ fontSize: 11, fontWeight: 700, color: esOk ? "#166534" : esErr ? "#c0392b" : "#92400e" }}>{valor || "—"}</div>
-                    </div>
-                  );
-                })}
-              </div>
-              <div style={{ background: "#f8f9fb", borderRadius: 10, padding: "12px 14px", marginBottom: 14 }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: "#555", marginBottom: 8 }}>DATOS EXTRAÍDOS DEL CURP</div>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8 }}>
-                  {[
-                    { label: "Fecha nacimiento", valor: validacion.resumen?.fecha_nac },
-                    { label: "Edad",             valor: validacion.resumen?.edad },
-                    { label: "Sexo",             valor: validacion.resumen?.sexo },
-                    { label: "Estado nacimiento",valor: validacion.resumen?.estado_nac },
-                  ].map(({ label, valor }) => (
-                    <div key={label}>
-                      <div style={{ fontSize: 10, color: "#888" }}>{label}</div>
-                      <div style={{ fontSize: 12, fontWeight: 600, color: "#1a1a1a" }}>{valor || "—"}</div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-              {validacion.alertas?.length > 0 ? (
-                <div>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: "#c0392b", marginBottom: 8 }}>⚠️ ALERTAS DETECTADAS</div>
-                  {validacion.alertas.map((a, i) => (
-                    <div key={i} style={{ display: "flex", gap: 10, alignItems: "flex-start", marginBottom: 6,
-                      background: a.nivel === "ALTA" ? "#fef2f2" : a.nivel === "MEDIA" ? "#fefce8" : "#f0f9ff",
-                      border: `0.5px solid ${a.nivel === "ALTA" ? "#fca5a5" : a.nivel === "MEDIA" ? "#fde68a" : "#bae6fd"}`,
-                      borderRadius: 8, padding: "8px 12px" }}>
-                      <span style={{ fontSize: 10, fontWeight: 800, padding: "2px 8px", borderRadius: 10, whiteSpace: "nowrap",
-                        background: a.nivel === "ALTA" ? "#fee2e2" : a.nivel === "MEDIA" ? "#fef3c7" : "#e0f2fe",
-                        color: a.nivel === "ALTA" ? "#c0392b" : a.nivel === "MEDIA" ? "#92400e" : "#0369a1" }}>
-                        {a.nivel}
-                      </span>
-                      <div style={{ flex: 1 }}>
-                        <div style={{ fontSize: 11, fontWeight: 700 }}>{a.campo}</div>
-                        <div style={{ fontSize: 11, color: "#555" }}>{a.detalle}</div>
-                        {a.declarado && <div style={{ fontSize: 10, color: "#888", marginTop: 2 }}>
-                          Declarado: <b>{a.declarado}</b> · Encontrado: <b>{a.encontrado}</b>
-                        </div>}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div style={{ background: "#f0fdf4", border: "0.5px solid #86efac", borderRadius: 10,
-                  padding: "10px 14px", fontSize: 12, color: "#166534", fontWeight: 600, textAlign: "center" }}>
-                  ✅ Sin alertas — documentos consistentes
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-
         {/* Biggy análisis automático */}
         <BiggyChatBubble analizando={analizando} analisis={analisis} score={score} recomendacion={recomendacion} alertas={alertas} onReanalizar={analizarConClaude} />
 
@@ -592,8 +433,13 @@ Responde con este JSON exacto:
             </div>
           )}
           {candidato.estado === "aprobado" && (
+            <div style={{ background: "#e0f2fe", borderRadius: 10, padding: "12px", textAlign: "center", fontSize: 13, color: "#0369a1", fontWeight: 700 }}>
+              ✅ Aprobado por Mercado Libre — pasa a Validación Nubarium
+            </div>
+          )}
+          {candidato.estado === "aceptado" && (
             <div style={{ background: "#dcfce7", borderRadius: 10, padding: "12px", textAlign: "center", fontSize: 13, color: "#166534", fontWeight: 700 }}>
-              ✅ Conductor aprobado por Mercado Libre
+              ✅ Aceptado — validado por MELI y Nubarium
             </div>
           )}
           {candidato.estado === "rechazado" && (
@@ -620,8 +466,16 @@ const TIPO_CFG = {
 };
 
 // Mapeo estado crudo → etapa del Kanban (columna)
-const ETAPA_MX   = { pendiente: "recepcion", enviado: "validacion_meli", aprobado: "aprobado", rechazado: "rechazado" };
-const ETAPA_CERT = { enviado: "recepcion", en_validacion: "validacion_meli", validado: "aprobado", con_alertas: "aprobado", certificado: "aprobado", rechazado: "rechazado" };
+const ETAPA_MX   = { pendiente: "recepcion", enviado: "validacion_meli", aprobado: "validacion_nubarium", aceptado: "aceptado", rechazado: "rechazado" };
+const ETAPA_CERT = { enviado: "recepcion", en_validacion: "validacion_meli", validado: "aceptado", con_alertas: "aceptado", certificado: "aceptado", rechazado: "rechazado" };
+
+// Etapa de un prospecto (Fuente A). "pendiente" se divide: sin análisis de Biggy → Recepción;
+// con análisis cacheado → Etapa 2 (Pre Validación Biggy).
+function etapaProspeccion(row) {
+  const base = ETAPA_MX[row.estado] || "recepcion";
+  if (base === "recepcion" && row.claude_analisis) return "prevalidacion_biggy";
+  return base;
+}
 
 // PostgREST devuelve el embed 1:1 como objeto o como array de 1 — normalizamos.
 const _one = (x) => Array.isArray(x) ? (x[0] || null) : (x || null);
@@ -637,7 +491,7 @@ function normalizarProspeccion(row) {
     tipo,
     titulo: row.nombre || "Sin nombre",
     sc:     row.svc || "—",
-    etapa:  ETAPA_MX[row.estado] || "recepcion",
+    etapa:  etapaProspeccion(row),
     estado_raw: row.estado,
     raw: row,
   };
