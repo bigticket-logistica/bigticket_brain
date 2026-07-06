@@ -173,10 +173,10 @@ const USUARIOS = {
   "roberto.sanmartin@bigticket.cl":       { pass: "robertosn.2026",   rol: "prefacturas", nombre: "Roberto San Martin" },
 };
 const COLUMNAS = [
-  { id: "pendiente", label: "Validación MELI", color: "#92400e", bg: "#fef3c7", border: "#fde68a" },
-  { id: "enviado",   label: "Enviado a Meli",  color: "#1e40af", bg: "#dbeafe", border: "#93c5fd" },
-  { id: "aprobado",  label: "Aprobado",        color: "#166534", bg: "#dcfce7", border: "#86efac" },
-  { id: "rechazado", label: "Rechazado",       color: "#c0392b", bg: "#fee2e2", border: "#fca5a5" },
+  { id: "recepcion",       label: "Etapa 1: Recepción Documental", color: "#1a3a6b", bg: "#eef2ff", border: "#c7d2fe" },
+  { id: "validacion_meli", label: "Validación MELI",               color: "#92400e", bg: "#fef3c7", border: "#fde68a" },
+  { id: "aprobado",        label: "Aprobado",                      color: "#166534", bg: "#dcfce7", border: "#86efac" },
+  { id: "rechazado",       label: "Rechazado",                     color: "#c0392b", bg: "#fee2e2", border: "#fca5a5" },
 ];
 
 const css = `
@@ -867,51 +867,168 @@ Responde con este JSON exacto:
   );
 }
 
+const FUENTE_CFG = {
+  prospeccion: { label: "Prospección",  icon: "🎯", bg: "#ede9fe", color: "#6d28d9", border: "#c4b5fd" },
+  portal_cert: { label: "Portal Cert.", icon: "🏢", bg: "#e0f2fe", color: "#0369a1", border: "#7dd3fc" },
+};
+
+// Chip de TIPO
+const TIPO_CFG = {
+  conductor: { label: "Driver",   icon: "🚗", bg: "#eff6ff", color: "#1d4ed8", border: "#bfdbfe" },
+  ayudante:  { label: "Ayudante", icon: "🧰", bg: "#f0fdf4", color: "#166534", border: "#bbf7d0" },
+  vehiculo:  { label: "Vehículo", icon: "🚚", bg: "#fff7ed", color: "#c2410c", border: "#fed7aa" },
+};
+
+// Mapeo estado crudo → etapa del Kanban (columna)
+const ETAPA_MX   = { pendiente: "recepcion", enviado: "validacion_meli", aprobado: "aprobado", rechazado: "rechazado" };
+const ETAPA_CERT = { enviado: "recepcion", en_validacion: "validacion_meli", validado: "aprobado", con_alertas: "aprobado", certificado: "aprobado", rechazado: "rechazado" };
+
+// PostgREST devuelve el embed 1:1 como objeto o como array de 1 — normalizamos.
+const _one = (x) => Array.isArray(x) ? (x[0] || null) : (x || null);
+
+// Fuente A · certificaciones_mx (Prospección) — sólo personas, sin placa
+function normalizarProspeccion(row) {
+  const puesto = (row.puesto || "").toLowerCase();
+  const tipo = (puesto === "ayudante" || puesto === "auxiliar") ? "ayudante" : "conductor";
+  return {
+    key:    `mx-${row.id}`,
+    id:     row.id,
+    fuente: "prospeccion",
+    tipo,
+    titulo: row.nombre || "Sin nombre",
+    sc:     row.svc || "—",
+    etapa:  ETAPA_MX[row.estado] || "recepcion",
+    estado_raw: row.estado,
+    raw: row,
+  };
+}
+
+// Fuente B · certificaciones + detalle (Portal de Prospección interno)
+function normalizarPortalCert(row) {
+  const cond = _one(row.certificacion_conductor);
+  const veh  = _one(row.certificacion_vehiculo);
+  const ter  = _one(row.terceros);
+  const esVeh = row.tipo === "vehiculo";
+  return {
+    key:    `cert-${row.id}`,
+    id:     row.id,
+    fuente: "portal_cert",
+    tipo:   row.tipo || "conductor",
+    titulo: esVeh ? (veh?.placa || "Sin placa") : (cond?.nombre || ter?.nombre || "Sin nombre"),
+    sc:     row.service_center || ter?.service_center || "—",
+    etapa:  ETAPA_CERT[row.estado] || "recepcion",
+    estado_raw: row.estado,
+    raw: { ...row, _conductor: cond, _vehiculo: veh, _tercero: ter },
+  };
+}
+
+// Resumen de postulación (read-only) para tarjetas del Portal de Certificación.
+// DetalleCandidato (certificaciones_mx) sigue intacto para la otra fuente.
+function DetalleCertificacion({ cert, onVolver }) {
+  const cond = cert._conductor;
+  const veh  = cert._vehiculo;
+  const ter  = cert._tercero;
+  const esVeh = cert.tipo === "vehiculo";
+  const titulo = esVeh ? (veh?.placa || "Sin placa") : (cond?.nombre || ter?.nombre || "Sin nombre");
+  const tc = TIPO_CFG[cert.tipo] || TIPO_CFG.conductor;
+
+  const campos = esVeh ? [
+    ["Placa", veh?.placa], ["VIN", veh?.vin], ["Marca", veh?.marca], ["Modelo", veh?.modelo],
+    ["Año", veh?.anio], ["Clase", veh?.clase], ["Entidad emplacamiento", veh?.entidad_emplaco],
+    ["REPUVE ID", veh?.repuve_id], ["Estatus robo", veh?.estatus_robo],
+    ["Registrado", veh ? (veh.registrado ? "Sí" : "No") : "—"],
+  ] : [
+    ["Nombre", cond?.nombre], ["CURP", cond?.curp], ["RFC", cond?.rfc],
+    ["Teléfono", cond?.telefono], ["Email", cond?.email],
+    ["Licencia N°", cond?.licencia_numero], ["Licencia estado", cond?.licencia_estado],
+    ["Licencia vigencia", cond?.licencia_vigencia],
+  ];
+
+  return (
+    <div>
+      <div style={{ background: "#fff", borderBottom: "0.5px solid #e4e7ec", padding: "12px 20px", display: "flex", alignItems: "center", gap: 12, position: "sticky", top: 0, zIndex: 9 }}>
+        <button className="btn-back" onClick={onVolver}>← Volver</button>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 15, fontWeight: 700 }}>{titulo}</div>
+          <div style={{ fontSize: 12, color: "#888" }}>{cert.service_center || ter?.service_center || "—"} · {tc.label}</div>
+        </div>
+        <span style={{ fontSize: 10, fontWeight: 700, padding: "3px 10px", borderRadius: 20, background: FUENTE_CFG.portal_cert.bg, color: FUENTE_CFG.portal_cert.color, border: `1px solid ${FUENTE_CFG.portal_cert.border}` }}>
+          {FUENTE_CFG.portal_cert.icon} {FUENTE_CFG.portal_cert.label}
+        </span>
+      </div>
+
+      <div className="pg-detail">
+        <div className="form-card" style={{ marginBottom: 16 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+            <span style={{ fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 20, background: tc.bg, color: tc.color, border: `1px solid ${tc.border}` }}>
+              {tc.icon} {tc.label}
+            </span>
+            <span className={`badge`} style={{ fontSize: 11 }}>{(cert.estado || "—").toUpperCase()}</span>
+          </div>
+          {ter?.nombre && (
+            <div style={{ fontSize: 12, color: "#555", marginTop: 6 }}>
+              Empresa transportista: <b>{ter.nombre}</b>
+            </div>
+          )}
+        </div>
+
+        <div className="form-card">
+          <div className="form-title">Resumen de postulación</div>
+          <div className="three-col">
+            {campos.map(([l, v]) => (
+              <div key={l} style={{ padding: "8px 0", borderBottom: "1px solid #f4f5f7" }}>
+                <div style={{ fontSize: 10, color: "#888", fontWeight: 700, textTransform: "uppercase", marginBottom: 2 }}>{l}</div>
+                <div style={{ fontSize: 13, fontWeight: 600, wordBreak: "break-all" }}>{v || "—"}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div style={{ background: "#f0f9ff", border: "1px solid #bae6fd", borderRadius: 10, padding: "12px 16px", fontSize: 12, color: "#0369a1" }}>
+          Validación MELI y Nubarium se conectan en el siguiente paso del rediseño.
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── KANBAN ──────────────────────────────────────────────────────────
 function KanbanBoard({ items, onCardClick }) {
   return (
     <div className="kanban-board">
       {COLUMNAS.map(col => {
-        const cards = items.filter(i => i.estado === col.id);
+        const cards = items.filter(i => i.etapa === col.id);
         return (
           <div key={col.id} className="kanban-col">
             <div className="kanban-col-header" style={{ background: col.bg, border: `1px solid ${col.border}` }}>
               <span style={{ fontSize: 13, fontWeight: 700, color: col.color }}>{col.label}</span>
               <span style={{ fontSize: 11, fontWeight: 700, color: col.color, background: "rgba(255,255,255,0.6)", borderRadius: 20, padding: "2px 8px" }}>{cards.length}</span>
             </div>
-            {cards.length === 0 && <div style={{ textAlign: "center", padding: "20px 10px", fontSize: 12, color: "#bbb" }}>Sin candidatos</div>}
-            {cards.map(card => (
-              <div key={card.id} className="kanban-card" onClick={() => onCardClick(card)}>
-                <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 6 }}>
-                  <div style={{ width: 32, height: 32, borderRadius: "50%", background: "#1a3a6b", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontWeight: 700, fontSize: 13, flexShrink: 0 }}>
-                    {card.nombre?.charAt(0)?.toUpperCase() || "?"}
-                  </div>
-                  {card.claude_score_global && (
-                    <span style={{ fontSize: 11, background: card.claude_score_global >= 7 ? "#dcfce7" : card.claude_score_global >= 4 ? "#fef3c7" : "#fee2e2", color: card.claude_score_global >= 7 ? "#166534" : card.claude_score_global >= 4 ? "#92400e" : "#c0392b", padding: "2px 8px", borderRadius: 10, fontWeight: 700 }}>
-                      Biggy: {card.claude_score_global}/10
+            {cards.length === 0 && <div style={{ textAlign: "center", padding: "20px 10px", fontSize: 12, color: "#bbb" }}>Sin postulaciones</div>}
+            {cards.map(card => {
+              const fc = FUENTE_CFG[card.fuente] || FUENTE_CFG.prospeccion;
+              const tc = TIPO_CFG[card.tipo] || TIPO_CFG.conductor;
+              const esVeh = card.tipo === "vehiculo";
+              return (
+                <div key={card.key} className="kanban-card" onClick={() => onCardClick(card)}>
+                  <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 8 }}>
+                    <div style={{ width: 32, height: 32, borderRadius: "50%", background: "#1a3a6b", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontWeight: 700, fontSize: 14, flexShrink: 0 }}>
+                      {esVeh ? "🚚" : (card.titulo?.charAt(0)?.toUpperCase() || "?")}
+                    </div>
+                    <span style={{ fontSize: 9, fontWeight: 700, padding: "2px 6px", borderRadius: 6, flexShrink: 0, background: fc.bg, color: fc.color, border: `1px solid ${fc.border}` }}>
+                      {fc.icon} {fc.label}
                     </span>
-                  )}
-                </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 2 }}>
-                  <div style={{ fontSize: 13, fontWeight: 600, color: "#1a1a1a", flex: 1 }}>{card.nombre || "Sin nombre"}</div>
-                  <span style={{
-                    fontSize: 9, fontWeight: 700, padding: "2px 6px", borderRadius: 6, flexShrink: 0,
-                    background: card.origen === "crm" ? "#ede9fe" : "#e0f2fe",
-                    color: card.origen === "crm" ? "#6d28d9" : "#0369a1",
-                    border: card.origen === "crm" ? "1px solid #c4b5fd" : "1px solid #7dd3fc",
-                  }}>
-                    {card.origen === "crm" ? "🎯 CRM" : "⚙️ Pipefy"}
-                  </span>
-                </div>
-                <div style={{ fontSize: 11, color: "#888" }}>{card.svc || "—"} · {card.puesto || "—"}</div>
-                <div style={{ fontSize: 10, color: "#aaa", marginTop: 4 }}>CURP: {card.curp?.substring(0, 10) || "—"}...</div>
-                {card.claude_recomendacion && (
-                  <div style={{ marginTop: 6, fontSize: 10, fontWeight: 700, color: card.claude_recomendacion === "APROBAR" ? "#166534" : card.claude_recomendacion === "RECHAZAR" ? "#c0392b" : "#92400e" }}>
-                    {card.claude_recomendacion === "APROBAR" ? "✅" : card.claude_recomendacion === "RECHAZAR" ? "❌" : "⚠️"} {card.claude_recomendacion}
                   </div>
-                )}
-              </div>
-            ))}
+                  <div style={{ fontSize: 13, fontWeight: 600, color: "#1a1a1a", marginBottom: 8, wordBreak: "break-word" }}>{card.titulo}</div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                    <span style={{ fontSize: 9, fontWeight: 700, padding: "2px 8px", borderRadius: 20, background: tc.bg, color: tc.color, border: `1px solid ${tc.border}` }}>
+                      {tc.icon} {tc.label}
+                    </span>
+                    <span style={{ fontSize: 10, color: "#888", fontWeight: 600 }}>📍 {card.sc}</span>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         );
       })}
@@ -923,41 +1040,35 @@ function KanbanBoard({ items, onCardClick }) {
 function ModuloCertificaciones() {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [sincronizando, setSincronizando] = useState(false);
-  const [sincronizandoCRM, setSincronizandoCRM] = useState(false);
-
-  // ✅ Auto-sync CRM cada vez que carga el módulo
-  useEffect(() => { autoSyncCRM(); }, []);
   const [selected, setSelected] = useState(null);
   const [vista, setVista] = useState("kanban");
 
-  useEffect(() => { cargar(); }, []);
+  useEffect(() => { (async () => { await autoSyncCRM(); await cargar(); })(); }, []);
 
   const cargar = async () => {
     setLoading(true);
-    const { data } = await sb.from("certificaciones_mx").select("*").order("created_at", { ascending: false });
-    setItems(data || []);
-    setLoading(false);
-  };
-
-  const sincronizarPipefy = async () => {
-    setSincronizando(true);
     try {
-      await fetch("https://bigticket2026.app.n8n.cloud/webhook/sync-pipefy-cert", {
-        method: "POST", mode: "no-cors",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pipe_id: PIPE_ID, fase: "Validación MELI" })
-      });
-      await new Promise(r => setTimeout(r, 4000));
-      await cargar();
-      alert("✅ Sincronización completada");
-    } catch (e) { alert("Error: " + e.message); }
-    finally { setSincronizando(false); }
+      const [rp, rc] = await Promise.all([
+        sb.from("certificaciones_mx").select("*").order("created_at", { ascending: false }),
+        sb.from("certificaciones")
+          .select("*, certificacion_conductor(*), certificacion_vehiculo(*), terceros(nombre, service_center)")
+          .order("created_at", { ascending: false }),
+      ]);
+      const cardsA = (rp.data || []).map(normalizarProspeccion);
+      const cardsB = (rc.data || []).map(normalizarPortalCert);
+      // Portal primero para que lo más nuevo del rediseño quede visible arriba
+      setItems([...cardsB, ...cardsA]);
+    } catch (e) {
+      console.error("Error cargando certificaciones:", e.message);
+      setItems([]);
+    } finally {
+      setLoading(false);
+    }
   };
 
+  // Fuente A: jala prospectos del CRM/onboarding a certificaciones_mx
   const autoSyncCRM = async () => {
     try {
-      // 1. Onboardings completos de México con documentos
       const { data: onboardings, error: errOnb } = await sb
         .from("onboarding_terceros")
         .select("*, leads(id, nombre, etapa, curp, email, telefono, zona, region_estado)")
@@ -965,28 +1076,18 @@ function ModuloCertificaciones() {
         .not("url_ine", "is", null)
         .not("url_curp", "is", null)
         .not("url_rfc", "is", null);
-
       if (errOnb || !onboardings) return;
 
-      // 2. Solo los que están en etapa "Entrevistas y Validaciones"
-      const enValidacion = onboardings.filter(o =>
-        o.leads?.etapa === "Entrevistas y Validaciones"
-      );
+      const enValidacion = onboardings.filter(o => o.leads?.etapa === "Entrevistas y Validaciones");
       if (enValidacion.length === 0) return;
 
-      // 3. IDs ya existentes en certificaciones_mx
       const { data: existentes } = await sb
-        .from("certificaciones_mx")
-        .select("lead_crm_id")
-        .not("lead_crm_id", "is", null);
-
+        .from("certificaciones_mx").select("lead_crm_id").not("lead_crm_id", "is", null);
       const idsExistentes = (existentes || []).map(e => e.lead_crm_id);
 
-      // 4. Solo nuevos
       const nuevos = enValidacion.filter(o => !idsExistentes.includes(o.lead_id));
       if (nuevos.length === 0) return;
 
-      // 5. Insertar en certificaciones_mx
       const registros = nuevos.map(o => ({
         lead_crm_id:  o.lead_id,
         nombre:       o.nombre       || o.leads?.nombre    || "",
@@ -1014,23 +1115,28 @@ function ModuloCertificaciones() {
     }
   };
 
-  if (selected) return (
-    <DetalleCandidato
-      candidato={selected}
-      onVolver={() => setSelected(null)}
-      onActualizar={(updated) => {
-        setItems(items.map(i => i.id === updated.id ? updated : i));
-        setSelected(updated);
-      }}
-    />
-  );
+  if (selected) {
+    if (selected.fuente === "portal_cert") {
+      return <DetalleCertificacion cert={selected.raw} onVolver={() => setSelected(null)} />;
+    }
+    return (
+      <DetalleCandidato
+        candidato={selected.raw}
+        onVolver={() => setSelected(null)}
+        onActualizar={(updated) => {
+          const rn = normalizarProspeccion(updated);
+          setItems(items.map(i => i.key === rn.key ? rn : i));
+          setSelected(rn);
+        }}
+      />
+    );
+  }
 
   const conteo = {
-    total: items.length,
-    pendiente: items.filter(i => i.estado === "pendiente").length,
-    enviado: items.filter(i => i.estado === "enviado").length,
-    aprobado: items.filter(i => i.estado === "aprobado").length,
-    rechazado: items.filter(i => i.estado === "rechazado").length,
+    total:       items.length,
+    recepcion:   items.filter(i => i.etapa === "recepcion").length,
+    prospeccion: items.filter(i => i.fuente === "prospeccion").length,
+    portal:      items.filter(i => i.fuente === "portal_cert").length,
   };
 
   return (
@@ -1038,7 +1144,7 @@ function ModuloCertificaciones() {
       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 20, flexWrap: "wrap", gap: 12 }}>
         <div>
           <div className="sec-title">Certificaciones MX 🇲🇽</div>
-          <div className="sec-sub">Candidatos en fase "Validación MELI" — Pipefy</div>
+          <div className="sec-sub">Recepción documental — Prospección + Portal de Certificación</div>
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
           <img src={BIGGY_IMG} alt="Biggy" style={{ width: 32, height: 32, borderRadius: "50%", objectFit: "cover", border: "2px solid #F47B20" }} />
@@ -1051,17 +1157,12 @@ function ModuloCertificaciones() {
               </button>
             ))}
           </div>
-          <button className="btn-orange" onClick={sincronizarPipefy} disabled={sincronizando}>
-            {sincronizando ? "Sincronizando..." : "🔄 Sincronizar Pipefy"}
-          </button>
-
         </div>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(5,1fr)", gap: 10, marginBottom: 20 }}>
-        {[["Total", conteo.total, "#1a3a6b"], ["Pendientes", conteo.pendiente, "#92400e"],
-          ["Enviados", conteo.enviado, "#1e40af"], ["Aprobados", conteo.aprobado, "#166534"],
-          ["Rechazados", conteo.rechazado, "#c0392b"]
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 10, marginBottom: 20 }}>
+        {[["Total", conteo.total, "#1a3a6b"], ["Etapa 1 · Recepción", conteo.recepcion, "#1a3a6b"],
+          ["🎯 Prospección", conteo.prospeccion, "#6d28d9"], ["🏢 Portal Cert.", conteo.portal, "#0369a1"]
         ].map(([l, v, c]) => (
           <div key={l} style={{ background: "#fff", border: "0.5px solid #e4e7ec", borderRadius: 10, padding: "12px", textAlign: "center" }}>
             <div style={{ fontSize: 22, fontWeight: 800, color: c }}>{v}</div>
@@ -1073,44 +1174,39 @@ function ModuloCertificaciones() {
       {loading ? <div className="loading">Cargando...</div> : items.length === 0 ? (
         <div className="empty">
           <div style={{ fontSize: 32, marginBottom: 12 }}>📋</div>
-          <div style={{ fontWeight: 600, marginBottom: 8 }}>Sin candidatos</div>
-          <div style={{ fontSize: 12 }}>Sincroniza desde Pipefy para cargar candidatos</div>
+          <div style={{ fontWeight: 600, marginBottom: 8 }}>Sin postulaciones</div>
+          <div style={{ fontSize: 12 }}>Aún no hay ingresos desde Prospección ni desde el Portal de Certificación</div>
         </div>
       ) : vista === "kanban" ? (
         <KanbanBoard items={items} onCardClick={setSelected} />
       ) : (
         <div>
-          {items.map(item => (
-            <div key={item.id} style={{ background: "#fff", border: "0.5px solid #e4e7ec", borderRadius: 10, padding: "14px 16px", marginBottom: 8, display: "flex", alignItems: "center", gap: 12, cursor: "pointer" }}
-              onClick={() => setSelected(item)}>
-              <div style={{ width: 40, height: 40, borderRadius: "50%", background: "#1a3a6b", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontWeight: 700, fontSize: 15, flexShrink: 0 }}>
-                {item.nombre?.charAt(0)?.toUpperCase() || "?"}
-              </div>
-              <div style={{ flex: 1 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <div style={{ fontSize: 14, fontWeight: 600 }}>{item.nombre}</div>
-                  <span style={{
-                    fontSize: 9, fontWeight: 700, padding: "2px 6px", borderRadius: 6,
-                    background: item.origen === "crm" ? "#ede9fe" : "#e0f2fe",
-                    color: item.origen === "crm" ? "#6d28d9" : "#0369a1",
-                    border: item.origen === "crm" ? "1px solid #c4b5fd" : "1px solid #7dd3fc",
-                  }}>
-                    {item.origen === "crm" ? "🎯 CRM" : "⚙️ Pipefy"}
-                  </span>
+          {items.map(card => {
+            const fc = FUENTE_CFG[card.fuente] || FUENTE_CFG.prospeccion;
+            const tc = TIPO_CFG[card.tipo] || TIPO_CFG.conductor;
+            const esVeh = card.tipo === "vehiculo";
+            return (
+              <div key={card.key} style={{ background: "#fff", border: "0.5px solid #e4e7ec", borderRadius: 10, padding: "14px 16px", marginBottom: 8, display: "flex", alignItems: "center", gap: 12, cursor: "pointer" }}
+                onClick={() => setSelected(card)}>
+                <div style={{ width: 40, height: 40, borderRadius: "50%", background: "#1a3a6b", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontWeight: 700, fontSize: 15, flexShrink: 0 }}>
+                  {esVeh ? "🚚" : (card.titulo?.charAt(0)?.toUpperCase() || "?")}
                 </div>
-                <div style={{ fontSize: 12, color: "#888" }}>{item.svc} · {item.puesto} · {item.curp}</div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                    <div style={{ fontSize: 14, fontWeight: 600 }}>{card.titulo}</div>
+                    <span style={{ fontSize: 9, fontWeight: 700, padding: "2px 6px", borderRadius: 6, background: fc.bg, color: fc.color, border: `1px solid ${fc.border}` }}>
+                      {fc.icon} {fc.label}
+                    </span>
+                    <span style={{ fontSize: 9, fontWeight: 700, padding: "2px 8px", borderRadius: 20, background: tc.bg, color: tc.color, border: `1px solid ${tc.border}` }}>
+                      {tc.icon} {tc.label}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>📍 {card.sc}</div>
+                </div>
+                <span style={{ color: "#888", fontSize: 18 }}>›</span>
               </div>
-              {item.claude_recomendacion && (
-                <span style={{ fontSize: 11, fontWeight: 700, padding: "3px 10px", borderRadius: 20,
-                  background: item.claude_recomendacion === "APROBAR" ? "#dcfce7" : item.claude_recomendacion === "RECHAZAR" ? "#fee2e2" : "#fef3c7",
-                  color: item.claude_recomendacion === "APROBAR" ? "#166534" : item.claude_recomendacion === "RECHAZAR" ? "#c0392b" : "#92400e" }}>
-                  {item.claude_recomendacion === "APROBAR" ? "✅" : item.claude_recomendacion === "RECHAZAR" ? "❌" : "⚠️"} {item.claude_recomendacion}
-                </span>
-              )}
-              <span className={`badge badge-${item.estado}`}>{item.estado?.toUpperCase()}</span>
-              <span style={{ color: "#888", fontSize: 18 }}>›</span>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>
@@ -14973,8 +15069,6 @@ function ConciliacionTercerosMX({ usuario }) {
   useEffect(() => { try { localStorage.setItem("conc_mx_asunto", asuntoLote); } catch {} }, [asuntoLote]);
   useEffect(() => { try { localStorage.setItem("conc_mx_cuerpo", cuerpoLote); } catch {} }, [cuerpoLote]);
   const aplicarVarsCorreo = (txt, empresa, sc, periodo, operacion) => String(txt || "").replace(/\{TRANSPORTISTA\}/g, empresa || "").replace(/\{CECO\}/g, sc || "").replace(/\{PERIODO\}/g, periodo || "").replace(/\{OPERACION\}/g, operacion || "");
-  const LINK_APELACION = "https://app.pipefy.com/public/form/lQ0yfPPn";
-  const conApelacion = (txt) => { const s = String(txt || ""); return s.includes(LINK_APELACION) ? s : s + "\r\n\r\nPara apelar o reportar diferencias en esta prefactura, complete el siguiente formulario de apelación:\r\n" + LINK_APELACION; };
 
   const norm = (s) => String(s || "").trim().toUpperCase();
   const fmtMon = (v) => "$ " + Math.round(Number(v || 0)).toLocaleString("es-CL");
@@ -15873,7 +15967,6 @@ function ConciliacionTercerosMX({ usuario }) {
   </table>
   ${bonoHtml}
   ${obsHtml}
-  <div style="margin-top:22px;padding:12px 14px;border:1px solid #d9dde3;border-radius:6px;background:#f7f8fa;font-size:11px;color:#333333">Para apelar o reportar diferencias en esta prefactura, complete el formulario de apelación: <a href="https://app.pipefy.com/public/form/lQ0yfPPn" style="color:#1a3a6b;font-weight:bold;text-decoration:none">https://app.pipefy.com/public/form/lQ0yfPPn</a></div>
   <div class="noprint"><button onclick="window.print()">Imprimir / Guardar PDF</button></div>
 </body></html>`;
     const nombrePdf = `Prefactura_${String(empresa).replace(/[^A-Za-z0-9]+/g, "_")}_${sc}_${periodo.replace(/ /g, "_")}.pdf`;
@@ -15898,7 +15991,7 @@ function ConciliacionTercerosMX({ usuario }) {
     const bcc = (t.correo_bcc || "").trim();
     if (!correoTo) throw new Error("Sin correo destino para " + empresa + " · " + sc);
     const asunto = (opts && opts.asunto) || aplicarVarsCorreo(asuntoLote, empresa, sc, periodo, operacion);
-    const cuerpo = conApelacion((opts && opts.cuerpo) || aplicarVarsCorreo(cuerpoLote, empresa, sc, periodo, operacion));
+    const cuerpo = (opts && opts.cuerpo) || aplicarVarsCorreo(cuerpoLote, empresa, sc, periodo, operacion);
     const resp = await fetch(WEBHOOK_ENVIO_MX, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ idEnvio: `${empresa}|${sc}|${semana}|${Date.now()}`, transportista: empresa, ceco: sc, rfc: t.rfc || "", operacion, periodo, correoTo, cc, bcc, asunto, cuerpo, nombrePdf, html }),
@@ -15919,7 +16012,7 @@ function ConciliacionTercerosMX({ usuario }) {
     const { periodo, operacion, tot } = construirPrefactura(empresa, sc, filasSC, rSC);
     setModalEnvio({ empresa, sc, filasSC, rSC, to: t.correo_to || "", cc: t.correo_cc || "",
       asunto: aplicarVarsCorreo(asuntoLote, empresa, sc, periodo, operacion),
-      cuerpo: conApelacion(aplicarVarsCorreo(cuerpoLote, empresa, sc, periodo, operacion)) });
+      cuerpo: aplicarVarsCorreo(cuerpoLote, empresa, sc, periodo, operacion) });
   };
 
   const confirmarEnvioModal = async () => {
@@ -33972,9 +34065,6 @@ Adjunto encontrará su prefactura correspondiente al período {PERIODO}, operaci
 Favor emitir su factura como máximo el día jueves XX/XX a las 12:00 Hrs para que esta pueda ser procesada y pagada el mismo XX-XX. En caso contrario, su pago será reagendado para el día lunes XX-XX.
 
 En caso de presentar diferencias, favor notificar vía mail a su supervisor directo para que estas puedan ser validadas e informadas a nuestra área para reliquidación.
-
-También puede apelar o reportar diferencias de esta prefactura completando el siguiente formulario de apelación:
-https://app.pipefy.com/public/form/lQ0yfPPn
 
 Quedamos a sus órdenes ante cualquier consulta.
 
