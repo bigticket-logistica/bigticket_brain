@@ -71,3 +71,68 @@ export const KpiCardMaestro = ({ label, valor, sub, color = "#1a1a1a" }) => (
 
 // Utils
 export function pct(n, total) { return total > 0 ? Math.round(100 * n / total) : 0; }
+
+// === Excel export helpers (promovidos desde el monolito para Pool MELI MX) ===
+export const cargarSheetJS = () => new Promise((resolve, reject) => {
+  if (window.XLSX) return resolve(window.XLSX);
+  const s = document.createElement('script');
+  s.src = 'https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js';
+  s.onload = () => resolve(window.XLSX);
+  s.onerror = reject;
+  document.head.appendChild(s);
+});
+
+export async function descargarExcelMeli(filas, nombreArchivo, nombreHoja = "Datos") {
+  if (!filas || filas.length === 0) {
+    alert("No hay datos para descargar");
+    return;
+  }
+  try {
+    const XLSX = await cargarSheetJS();
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.json_to_sheet(filas);
+    XLSX.utils.book_append_sheet(wb, ws, nombreHoja.slice(0, 31));
+    XLSX.writeFile(wb, `${nombreArchivo}.xlsx`);
+  } catch (e) {
+    console.error("Error descargando Excel:", e);
+    alert("No se pudo descargar el Excel: " + (e.message || e));
+  }
+}
+
+export async function descargarExcelMultihoja(hojas, nombreArchivo) {
+  if (!window.XLSX) {
+    // Cargar la librería si no existe
+    await new Promise((resolve, reject) => {
+      const s = document.createElement("script");
+      s.src = "https://cdn.sheetjs.com/xlsx-0.20.0/package/dist/xlsx.full.min.js";
+      s.onload = resolve;
+      s.onerror = reject;
+      document.head.appendChild(s);
+    });
+  }
+  const XLSX = window.XLSX;
+  if (!XLSX) {
+    alert("No se pudo cargar la librería de Excel. Revisá tu conexión a internet.");
+    return;
+  }
+  const wb = XLSX.utils.book_new();
+  for (const h of hojas) {
+    const ws = XLSX.utils.aoa_to_sheet(h.datos);
+    // Anchos de columna automáticos basados en el contenido
+    if (h.datos.length > 0) {
+      const colWidths = h.datos[0].map((_, colIdx) => {
+        let max = 8;
+        for (const row of h.datos) {
+          const v = row[colIdx];
+          if (v != null) max = Math.max(max, String(v).length);
+        }
+        return { wch: Math.min(max + 2, 60) };
+      });
+      ws["!cols"] = colWidths;
+    }
+    XLSX.utils.book_append_sheet(wb, ws, (h.nombre || "Hoja").slice(0, 31));
+  }
+  const fechaStr = new Date().toLocaleDateString("es-CL").replace(/\//g, "-");
+  XLSX.writeFile(wb, `${nombreArchivo}_${fechaStr}.xlsx`);
+}
+
