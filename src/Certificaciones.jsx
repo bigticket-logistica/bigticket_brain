@@ -10,6 +10,12 @@ const COLUMNAS = [
   { id: "rechazado",           label: "Rechazado",                      color: "#c0392b", bg: "#fee2e2", border: "#fca5a5" },
 ];
 
+// Etiquetas cortas para los KPIs del header (coinciden con las columnas)
+const ETAPA_CORTA = {
+  recepcion: "Etapa 1 · Recepción", prevalidacion_biggy: "Etapa 2 · Biggy", validacion_meli: "Etapa 3 · MELI",
+  validacion_nubarium: "Etapa 4 · Nubarium", aceptado: "Aceptado", rechazado: "Rechazado",
+};
+
 // ─── VISOR DOCUMENTO ────────────────────────────────────────────────
 function VisorDoc({ url, label }) {
   const [ampliado, setAmpliado] = useState(false);
@@ -607,11 +613,30 @@ function KanbanBoard({ items, onCardClick, onMover, onEliminar }) {
   const dragKey = useRef(null);
   const didDrag = useRef(false);
   const [overCol, setOverCol] = useState(null);
+  const topRef = useRef(null);
+  const boardRef = useRef(null);
+  const [contentW, setContentW] = useState(0);
+
+  useEffect(() => {
+    const medir = () => { if (boardRef.current) setContentW(boardRef.current.scrollWidth); };
+    medir();
+    window.addEventListener("resize", medir);
+    return () => window.removeEventListener("resize", medir);
+  }, [items]);
+
+  const syncFromTop   = () => { if (boardRef.current && topRef.current) boardRef.current.scrollLeft = topRef.current.scrollLeft; };
+  const syncFromBoard = () => { if (boardRef.current && topRef.current) topRef.current.scrollLeft = boardRef.current.scrollLeft; };
 
   return (
-    <div className="kanban-board" style={{ display: "flex", gap: 12, alignItems: "flex-start", overflowX: "auto", paddingBottom: 10 }}>
-      {COLUMNAS.map(col => {
-        const cards = items.filter(i => i.etapa === col.id);
+    <div>
+      {/* Barra de scroll horizontal superior, pegajosa: acompaña al bajar la pantalla */}
+      <div ref={topRef} onScroll={syncFromTop}
+        style={{ position: "sticky", top: 0, zIndex: 5, overflowX: "auto", overflowY: "hidden", height: 14, background: "#eef1f5", border: "0.5px solid #e4e7ec", borderRadius: 7, marginBottom: 8 }}>
+        <div style={{ width: contentW, height: 1 }} />
+      </div>
+      <div ref={boardRef} className="kanban-board" onScroll={syncFromBoard} style={{ display: "flex", gap: 12, alignItems: "flex-start", overflowX: "auto", paddingBottom: 10 }}>
+        {COLUMNAS.map(col => {
+          const cards = items.filter(i => i.etapa === col.id);
         return (
           <div key={col.id} className="kanban-col"
             onDragOver={(e) => { e.preventDefault(); if (overCol !== col.id) setOverCol(col.id); }}
@@ -666,6 +691,7 @@ function KanbanBoard({ items, onCardClick, onMover, onEliminar }) {
           </div>
         );
       })}
+      </div>
     </div>
   );
 }
@@ -866,15 +892,19 @@ function ModuloCertificaciones() {
         )}
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 10, marginBottom: 20 }}>
-        {[["Total", conteo.total, "#1a3a6b"], ["Etapa 1 · Recepción", conteo.recepcion, "#1a3a6b"],
-          ["🎯 Prospección", conteo.prospeccion, "#6d28d9"], ["🏢 Portal Cert.", conteo.portal, "#0369a1"]
+      {/* KPIs por etapa — coinciden 1:1 con las columnas del tablero (Σ etapas = Total) */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(128px, 1fr))", gap: 10, marginBottom: 8 }}>
+        {[["Total", itemsFiltrados.length, "#1a3a6b"],
+          ...COLUMNAS.map(c => [ETAPA_CORTA[c.id] || c.label, itemsFiltrados.filter(i => i.etapa === c.id).length, c.color])
         ].map(([l, v, c]) => (
           <div key={l} style={{ background: "#fff", border: "0.5px solid #e4e7ec", borderRadius: 10, padding: "12px", textAlign: "center" }}>
             <div style={{ fontSize: 22, fontWeight: 800, color: c }}>{v}</div>
             <div style={{ fontSize: 10, color: "#888", marginTop: 2 }}>{l}</div>
           </div>
         ))}
+      </div>
+      <div style={{ fontSize: 11, color: "#888", marginBottom: 20 }}>
+        Por fuente: 🎯 Prospección <b>{conteo.prospeccion}</b> · 🏢 Portal Cert. <b>{conteo.portal}</b>
       </div>
 
       {loading ? <div className="loading">Cargando...</div> : itemsFiltrados.length === 0 ? (
