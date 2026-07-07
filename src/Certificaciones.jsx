@@ -628,13 +628,17 @@ function KanbanBoard({ items, onCardClick, onMover, onEliminar }) {
   const syncFromBoard = () => { if (boardRef.current && topRef.current) topRef.current.scrollLeft = boardRef.current.scrollLeft; };
 
   return (
-    <div>
-      {/* Barra de scroll horizontal superior, pegajosa: acompaña al bajar la pantalla */}
+    <div style={{ position: "relative" }}>
+      {/* Barra de scroll horizontal SUPERIOR — sincronizada con el tablero. Como el tablero
+          hace su propio scroll interno (abajo), esta barra siempre queda visible arriba. */}
       <div ref={topRef} onScroll={syncFromTop}
-        style={{ position: "sticky", top: 0, zIndex: 5, overflowX: "auto", overflowY: "hidden", height: 14, background: "#eef1f5", border: "0.5px solid #e4e7ec", borderRadius: 7, marginBottom: 8 }}>
+        style={{ overflowX: "auto", overflowY: "hidden", height: 14, background: "#eef1f5", border: "0.5px solid #e4e7ec", borderRadius: 7, marginBottom: 8 }}>
         <div style={{ width: contentW, height: 1 }} />
       </div>
-      <div ref={boardRef} className="kanban-board" onScroll={syncFromBoard} style={{ display: "flex", gap: 12, alignItems: "flex-start", overflowX: "auto", paddingBottom: 10 }}>
+      {/* Tablero acotado al viewport: el scroll vertical y horizontal ocurre AQUÍ dentro,
+          así la barra de arriba y los encabezados de columna no se van al bajar. */}
+      <div ref={boardRef} className="kanban-board" onScroll={syncFromBoard}
+        style={{ display: "flex", gap: 12, alignItems: "flex-start", overflowX: "auto", overflowY: "auto", maxHeight: "calc(100vh - 300px)", minHeight: 360, paddingBottom: 10 }}>
         {COLUMNAS.map(col => {
           const cards = items.filter(i => i.etapa === col.id);
         return (
@@ -642,8 +646,8 @@ function KanbanBoard({ items, onCardClick, onMover, onEliminar }) {
             onDragOver={(e) => { e.preventDefault(); if (overCol !== col.id) setOverCol(col.id); }}
             onDragLeave={() => setOverCol(prev => prev === col.id ? null : prev)}
             onDrop={() => { setOverCol(null); const k = dragKey.current; dragKey.current = null; if (k) onMover(k, col.id); }}
-            style={{ flex: "1 1 0", minWidth: 205, ...(overCol === col.id ? { outline: `2px dashed ${col.color}`, outlineOffset: -4, borderRadius: 10 } : {}) }}>
-            <div className="kanban-col-header" style={{ background: col.bg, border: `1px solid ${col.border}` }}>
+            style={{ flex: "1 1 0", minWidth: 205, alignSelf: "stretch", ...(overCol === col.id ? { outline: `2px dashed ${col.color}`, outlineOffset: -4, borderRadius: 10 } : {}) }}>
+            <div className="kanban-col-header" style={{ background: col.bg, border: `1px solid ${col.border}`, position: "sticky", top: 0, zIndex: 2 }}>
               <span style={{ fontSize: 13, fontWeight: 700, color: col.color }}>{col.label}</span>
               <span style={{ fontSize: 11, fontWeight: 700, color: col.color, background: "rgba(255,255,255,0.6)", borderRadius: 20, padding: "2px 8px" }}>{cards.length}</span>
             </div>
