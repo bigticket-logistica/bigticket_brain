@@ -609,7 +609,7 @@ function KanbanBoard({ items, onCardClick, onMover, onEliminar }) {
   const [overCol, setOverCol] = useState(null);
 
   return (
-    <div className="kanban-board">
+    <div className="kanban-board" style={{ display: "flex", gap: 12, alignItems: "flex-start", overflowX: "auto", paddingBottom: 10 }}>
       {COLUMNAS.map(col => {
         const cards = items.filter(i => i.etapa === col.id);
         return (
@@ -617,7 +617,7 @@ function KanbanBoard({ items, onCardClick, onMover, onEliminar }) {
             onDragOver={(e) => { e.preventDefault(); if (overCol !== col.id) setOverCol(col.id); }}
             onDragLeave={() => setOverCol(prev => prev === col.id ? null : prev)}
             onDrop={() => { setOverCol(null); const k = dragKey.current; dragKey.current = null; if (k) onMover(k, col.id); }}
-            style={overCol === col.id ? { outline: `2px dashed ${col.color}`, outlineOffset: -4, borderRadius: 10 } : undefined}>
+            style={{ flex: "1 1 0", minWidth: 205, ...(overCol === col.id ? { outline: `2px dashed ${col.color}`, outlineOffset: -4, borderRadius: 10 } : {}) }}>
             <div className="kanban-col-header" style={{ background: col.bg, border: `1px solid ${col.border}` }}>
               <span style={{ fontSize: 13, fontWeight: 700, color: col.color }}>{col.label}</span>
               <span style={{ fontSize: 11, fontWeight: 700, color: col.color, background: "rgba(255,255,255,0.6)", borderRadius: 20, padding: "2px 8px" }}>{cards.length}</span>
