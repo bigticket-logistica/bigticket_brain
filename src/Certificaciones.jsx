@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { sb, BIGGY_IMG } from "./shared";
 
 const COLUMNAS = [
@@ -492,6 +492,8 @@ function normalizarProspeccion(row) {
     titulo: row.nombre || "Sin nombre",
     sc:     row.svc || "—",
     etapa:  etapaProspeccion(row),
+    score:  row.claude_score_global ?? null,
+    rec:    row.claude_recomendacion || null,
     estado_raw: row.estado,
     raw: row,
   };
@@ -587,13 +589,35 @@ function DetalleCertificacion({ cert, onVolver }) {
 }
 
 // ─── KANBAN ──────────────────────────────────────────────────────────
-function KanbanBoard({ items, onCardClick }) {
+// Badge de nota Biggy con semáforo (verde ≥7, amarillo ≥4, rojo <4)
+function NotaBiggy({ score }) {
+  if (score === null || score === undefined) return null;
+  const bg  = score >= 7 ? "#dcfce7" : score >= 4 ? "#fef3c7" : "#fee2e2";
+  const col = score >= 7 ? "#166534" : score >= 4 ? "#92400e" : "#c0392b";
+  const bd  = score >= 7 ? "#86efac" : score >= 4 ? "#fde68a" : "#fca5a5";
+  return (
+    <span title="Nota de Biggy" style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 10, fontWeight: 800, padding: "2px 8px", borderRadius: 20, background: bg, color: col, border: `1px solid ${bd}` }}>
+      <img src={BIGGY_IMG} alt="" style={{ width: 12, height: 12, borderRadius: "50%", objectFit: "cover" }} />
+      {score}/10
+    </span>
+  );
+}
+
+function KanbanBoard({ items, onCardClick, onMover, onEliminar }) {
+  const dragKey = useRef(null);
+  const didDrag = useRef(false);
+  const [overCol, setOverCol] = useState(null);
+
   return (
     <div className="kanban-board">
       {COLUMNAS.map(col => {
         const cards = items.filter(i => i.etapa === col.id);
         return (
-          <div key={col.id} className="kanban-col">
+          <div key={col.id} className="kanban-col"
+            onDragOver={(e) => { e.preventDefault(); if (overCol !== col.id) setOverCol(col.id); }}
+            onDragLeave={() => setOverCol(prev => prev === col.id ? null : prev)}
+            onDrop={() => { setOverCol(null); const k = dragKey.current; dragKey.current = null; if (k) onMover(k, col.id); }}
+            style={overCol === col.id ? { outline: `2px dashed ${col.color}`, outlineOffset: -4, borderRadius: 10 } : undefined}>
             <div className="kanban-col-header" style={{ background: col.bg, border: `1px solid ${col.border}` }}>
               <span style={{ fontSize: 13, fontWeight: 700, color: col.color }}>{col.label}</span>
               <span style={{ fontSize: 11, fontWeight: 700, color: col.color, background: "rgba(255,255,255,0.6)", borderRadius: 20, padding: "2px 8px" }}>{cards.length}</span>
@@ -603,9 +627,19 @@ function KanbanBoard({ items, onCardClick }) {
               const fc = FUENTE_CFG[card.fuente] || FUENTE_CFG.prospeccion;
               const tc = TIPO_CFG[card.tipo] || TIPO_CFG.conductor;
               const esVeh = card.tipo === "vehiculo";
+              const esRechazo = col.id === "rechazado";
               return (
-                <div key={card.key} className="kanban-card" onClick={() => onCardClick(card)}>
-                  <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 8 }}>
+                <div key={card.key} className="kanban-card"
+                  draggable
+                  onDragStart={() => { dragKey.current = card.key; didDrag.current = false; }}
+                  onDrag={() => { didDrag.current = true; }}
+                  onDragEnd={() => { dragKey.current = null; }}
+                  onClick={() => { if (didDrag.current) { didDrag.current = false; return; } onCardClick(card); }}
+                  style={{ position: "relative", cursor: "grab" }}>
+                  {/* eliminar (solo front) */}
+                  <button title="Quitar del tablero" onClick={(e) => { e.stopPropagation(); onEliminar(card); }}
+                    style={{ position: "absolute", top: 6, right: 6, width: 20, height: 20, lineHeight: "18px", textAlign: "center", borderRadius: "50%", border: "1px solid #e4e7ec", background: "#fff", color: "#c0392b", fontSize: 12, cursor: "pointer", padding: 0 }}>✕</button>
+                  <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 8, paddingRight: 22 }}>
                     <div style={{ width: 32, height: 32, borderRadius: "50%", background: "#1a3a6b", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontWeight: 700, fontSize: 14, flexShrink: 0 }}>
                       {esVeh ? "🚚" : (card.titulo?.charAt(0)?.toUpperCase() || "?")}
                     </div>
@@ -613,13 +647,19 @@ function KanbanBoard({ items, onCardClick }) {
                       {fc.icon} {fc.label}
                     </span>
                   </div>
-                  <div style={{ fontSize: 13, fontWeight: 600, color: "#1a1a1a", marginBottom: 8, wordBreak: "break-word" }}>{card.titulo}</div>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: "#1a1a1a", marginBottom: 6, wordBreak: "break-word" }}>{card.titulo}</div>
+                  <div style={{ fontSize: 9, color: "#aab", fontWeight: 600, marginBottom: 8, fontFamily: "monospace" }}>{card.key}</div>
                   <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
                     <span style={{ fontSize: 9, fontWeight: 700, padding: "2px 8px", borderRadius: 20, background: tc.bg, color: tc.color, border: `1px solid ${tc.border}` }}>
                       {tc.icon} {tc.label}
                     </span>
                     <span style={{ fontSize: 10, color: "#888", fontWeight: 600 }}>📍 {card.sc}</span>
+                    <NotaBiggy score={card.score} />
+                    {card.rec && <span style={{ fontSize: 9, color: "#888" }}>{card.rec}</span>}
                   </div>
+                  {esRechazo && card.raw?.respuesta_meli && (
+                    <div style={{ fontSize: 10, color: "#c0392b", marginTop: 6 }}>❌ {card.raw.respuesta_meli}</div>
+                  )}
                 </div>
               );
             })}
@@ -636,6 +676,9 @@ function ModuloCertificaciones() {
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState(null);
   const [vista, setVista] = useState("kanban");
+  const [busqueda, setBusqueda] = useState("");
+  const [filtroFuente, setFiltroFuente] = useState("todas");
+  const [filtroTipo, setFiltroTipo] = useState("todos");
 
   useEffect(() => { (async () => { await autoSyncCRM(); await cargar(); })(); }, []);
 
@@ -709,6 +752,35 @@ function ModuloCertificaciones() {
     }
   };
 
+  // Etapa del Kanban → estado persistido (Fuente A / certificaciones_mx)
+  const ESTADO_POR_ETAPA = {
+    recepcion: "pendiente", prevalidacion_biggy: "pendiente", validacion_meli: "enviado",
+    validacion_nubarium: "aprobado", aceptado: "aceptado", rechazado: "rechazado",
+  };
+
+  // Mover tarjeta de columna manualmente (con confirmación)
+  const moverTarjeta = async (cardKey, targetEtapa) => {
+    const card = items.find(i => i.key === cardKey);
+    if (!card || card.etapa === targetEtapa) return;
+    const col = COLUMNAS.find(c => c.id === targetEtapa);
+    if (!confirm(`¿Mover "${card.titulo}" a "${col?.label || targetEtapa}"?`)) return;
+    setItems(prev => prev.map(i => i.key === cardKey ? { ...i, etapa: targetEtapa } : i));
+    // Persiste solo la Fuente A; el Portal (Fuente B) se mueve solo en el tablero
+    if (card.fuente === "prospeccion") {
+      const estado = ESTADO_POR_ETAPA[targetEtapa];
+      if (estado) {
+        const { error } = await sb.from("certificaciones_mx").update({ estado, updated_at: new Date().toISOString() }).eq("id", card.id);
+        if (error) { alert("No se pudo guardar el movimiento: " + error.message); await cargar(); }
+      }
+    }
+  };
+
+  // Quitar tarjeta del tablero (SOLO front, no borra de la BBDD)
+  const eliminarTarjeta = (card) => {
+    if (!confirm(`¿Quitar "${card.titulo}" del tablero?\n\nSolo se oculta de la vista — NO se elimina de la base de datos.`)) return;
+    setItems(prev => prev.filter(i => i.key !== card.key));
+  };
+
   if (selected) {
     if (selected.fuente === "portal_cert") {
       return <DetalleCertificacion cert={selected.raw} onVolver={() => setSelected(null)} />;
@@ -726,11 +798,23 @@ function ModuloCertificaciones() {
     );
   }
 
+  // Buscador + filtros
+  const q = busqueda.trim().toLowerCase();
+  const itemsFiltrados = items.filter(i => {
+    if (filtroFuente !== "todas" && i.fuente !== filtroFuente) return false;
+    if (filtroTipo !== "todos" && i.tipo !== filtroTipo) return false;
+    if (!q) return true;
+    const r = i.raw || {};
+    const campos = [i.titulo, i.sc, i.key, r.curp, r.rfc, r.email, r.telefono, r.svc]
+      .filter(Boolean).join(" ").toLowerCase();
+    return campos.includes(q);
+  });
+
   const conteo = {
-    total:       items.length,
-    recepcion:   items.filter(i => i.etapa === "recepcion").length,
-    prospeccion: items.filter(i => i.fuente === "prospeccion").length,
-    portal:      items.filter(i => i.fuente === "portal_cert").length,
+    total:       itemsFiltrados.length,
+    recepcion:   itemsFiltrados.filter(i => i.etapa === "recepcion").length,
+    prospeccion: itemsFiltrados.filter(i => i.fuente === "prospeccion").length,
+    portal:      itemsFiltrados.filter(i => i.fuente === "portal_cert").length,
   };
 
   return (
@@ -754,6 +838,34 @@ function ModuloCertificaciones() {
         </div>
       </div>
 
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 14 }}>
+        <input
+          value={busqueda}
+          onChange={(e) => setBusqueda(e.target.value)}
+          placeholder="🔍 Buscar por nombre, SC, CURP, RFC, email…"
+          style={{ flex: 1, minWidth: 220, background: "#fff", border: "0.5px solid #e4e7ec", borderRadius: 8, padding: "9px 12px", fontSize: 13, fontFamily: "'Geist',sans-serif" }}
+        />
+        <select value={filtroFuente} onChange={(e) => setFiltroFuente(e.target.value)}
+          style={{ background: "#fff", border: "0.5px solid #e4e7ec", borderRadius: 8, padding: "9px 12px", fontSize: 12, fontFamily: "'Geist',sans-serif", color: "#333" }}>
+          <option value="todas">Todas las fuentes</option>
+          <option value="prospeccion">🎯 Prospección</option>
+          <option value="portal_cert">🏢 Portal Cert.</option>
+        </select>
+        <select value={filtroTipo} onChange={(e) => setFiltroTipo(e.target.value)}
+          style={{ background: "#fff", border: "0.5px solid #e4e7ec", borderRadius: 8, padding: "9px 12px", fontSize: 12, fontFamily: "'Geist',sans-serif", color: "#333" }}>
+          <option value="todos">Todos los tipos</option>
+          <option value="conductor">🚗 Driver</option>
+          <option value="ayudante">🧰 Ayudante</option>
+          <option value="vehiculo">🚚 Vehículo</option>
+        </select>
+        {(q || filtroFuente !== "todas" || filtroTipo !== "todos") && (
+          <button onClick={() => { setBusqueda(""); setFiltroFuente("todas"); setFiltroTipo("todos"); }}
+            style={{ background: "#f4f5f7", border: "0.5px solid #e4e7ec", borderRadius: 8, padding: "9px 12px", fontSize: 12, cursor: "pointer", color: "#666" }}>
+            Limpiar
+          </button>
+        )}
+      </div>
+
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 10, marginBottom: 20 }}>
         {[["Total", conteo.total, "#1a3a6b"], ["Etapa 1 · Recepción", conteo.recepcion, "#1a3a6b"],
           ["🎯 Prospección", conteo.prospeccion, "#6d28d9"], ["🏢 Portal Cert.", conteo.portal, "#0369a1"]
@@ -765,17 +877,17 @@ function ModuloCertificaciones() {
         ))}
       </div>
 
-      {loading ? <div className="loading">Cargando...</div> : items.length === 0 ? (
+      {loading ? <div className="loading">Cargando...</div> : itemsFiltrados.length === 0 ? (
         <div className="empty">
           <div style={{ fontSize: 32, marginBottom: 12 }}>📋</div>
-          <div style={{ fontWeight: 600, marginBottom: 8 }}>Sin postulaciones</div>
-          <div style={{ fontSize: 12 }}>Aún no hay ingresos desde Prospección ni desde el Portal de Certificación</div>
+          <div style={{ fontWeight: 600, marginBottom: 8 }}>{items.length === 0 ? "Sin postulaciones" : "Sin resultados"}</div>
+          <div style={{ fontSize: 12 }}>{items.length === 0 ? "Aún no hay ingresos desde Prospección ni desde el Portal de Certificación" : "Ninguna tarjeta coincide con la búsqueda o los filtros"}</div>
         </div>
       ) : vista === "kanban" ? (
-        <KanbanBoard items={items} onCardClick={setSelected} />
+        <KanbanBoard items={itemsFiltrados} onCardClick={setSelected} onMover={moverTarjeta} onEliminar={eliminarTarjeta} />
       ) : (
         <div>
-          {items.map(card => {
+          {itemsFiltrados.map(card => {
             const fc = FUENTE_CFG[card.fuente] || FUENTE_CFG.prospeccion;
             const tc = TIPO_CFG[card.tipo] || TIPO_CFG.conductor;
             const esVeh = card.tipo === "vehiculo";
@@ -794,9 +906,12 @@ function ModuloCertificaciones() {
                     <span style={{ fontSize: 9, fontWeight: 700, padding: "2px 8px", borderRadius: 20, background: tc.bg, color: tc.color, border: `1px solid ${tc.border}` }}>
                       {tc.icon} {tc.label}
                     </span>
+                    <NotaBiggy score={card.score} />
                   </div>
-                  <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>📍 {card.sc}</div>
+                  <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>📍 {card.sc} · <span style={{ fontFamily: "monospace", color: "#aab" }}>{card.key}</span></div>
                 </div>
+                <button title="Quitar del tablero" onClick={(e) => { e.stopPropagation(); eliminarTarjeta(card); }}
+                  style={{ width: 24, height: 24, borderRadius: "50%", border: "1px solid #e4e7ec", background: "#fff", color: "#c0392b", fontSize: 13, cursor: "pointer", padding: 0, flexShrink: 0 }}>✕</button>
                 <span style={{ color: "#888", fontSize: 18 }}>›</span>
               </div>
             );
