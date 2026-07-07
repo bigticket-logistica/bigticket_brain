@@ -372,6 +372,9 @@ function DetalleCandidato({ candidato, onVolver, onActualizar }) {
   const [score, setScore] = useState(candidato.claude_score_global || null);
   const [recomendacion, setRecomendacion] = useState(candidato.claude_recomendacion || null);
   const [alertas, setAlertas] = useState(candidato.claude_alertas || []);
+  const [decidiendo, setDecidiendo] = useState(false);
+  const [rechazando, setRechazando] = useState(false);
+  const [motivo, setMotivo] = useState("");
 
   // ✅ Análisis automático: corre si no hay analisis local cargado
   useEffect(() => {
@@ -510,6 +513,23 @@ Responde con este JSON exacto:
     }
   };
 
+  const decidir = async (nuevoEstado, motivoTxt = "") => {
+    setDecidiendo(true);
+    const now = new Date().toISOString();
+    try {
+      const patch = { estado: nuevoEstado, decidido_at: now };
+      if (nuevoEstado === "rechazado") patch.motivo_rechazo = motivoTxt;
+      await sb.from("certificaciones_mx").update(patch).eq("id", candidato.id);
+      onActualizar({ ...candidato, ...patch });
+    } catch (e) {
+      alert("Error al guardar la decisión: " + e.message);
+    } finally {
+      setDecidiendo(false);
+      setRechazando(false);
+      setMotivo("");
+    }
+  };
+
   const estadoBadge = { pendiente: "badge-pendiente", enviado: "badge-enviado", aprobado: "badge-aprobado", aceptado: "badge-aprobado", rechazado: "badge-rechazado" };
 
   return (
@@ -606,8 +626,39 @@ Responde con este JSON exacto:
             </div>
           )}
           {candidato.estado === "aprobado" && (
-            <div style={{ background: "#e0f2fe", borderRadius: 10, padding: "12px", textAlign: "center", fontSize: 13, color: "#0369a1", fontWeight: 700 }}>
-              ✅ Aprobado por Mercado Libre — pasa a Validación Nubarium
+            <div>
+              <div style={{ background: "#e0f2fe", borderRadius: 10, padding: "12px", textAlign: "center", fontSize: 13, color: "#0369a1", fontWeight: 700, marginBottom: 12 }}>
+                ✅ Aprobado por Mercado Libre — revisa el informe Nubarium y decide
+              </div>
+              {!rechazando ? (
+                <div style={{ display: "flex", gap: 10 }}>
+                  <button onClick={() => decidir("aceptado")} disabled={decidiendo}
+                    style={{ flex: 1, background: "#16a34a", color: "#fff", border: "none", borderRadius: 10, padding: "12px", fontSize: 14, fontWeight: 700, cursor: "pointer", opacity: decidiendo ? 0.6 : 1 }}>
+                    {decidiendo ? "Guardando..." : "✓ Aceptar certificación"}
+                  </button>
+                  <button onClick={() => setRechazando(true)} disabled={decidiendo}
+                    style={{ flex: 1, background: "#fff", color: "#dc2626", border: "1.5px solid #fca5a5", borderRadius: 10, padding: "12px", fontSize: 14, fontWeight: 700, cursor: "pointer" }}>
+                    ✕ Rechazar
+                  </button>
+                </div>
+              ) : (
+                <div style={{ background: "#fef2f2", border: "1px solid #fca5a5", borderRadius: 10, padding: 14 }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: "#c0392b", marginBottom: 8 }}>Motivo del rechazo (obligatorio)</div>
+                  <textarea value={motivo} onChange={(e) => setMotivo(e.target.value)} rows={3} autoFocus
+                    placeholder="Ej.: CURP no coincide con el INE / RFC en lista 69-B / documento ilegible…"
+                    style={{ width: "100%", boxSizing: "border-box", border: "1px solid #e4e7ec", borderRadius: 8, padding: "8px 10px", fontSize: 13, fontFamily: "inherit", resize: "vertical", marginBottom: 10 }} />
+                  <div style={{ display: "flex", gap: 10 }}>
+                    <button onClick={() => { if (!motivo.trim()) { alert("El motivo es obligatorio."); return; } decidir("rechazado", motivo.trim()); }} disabled={decidiendo}
+                      style={{ flex: 1, background: "#dc2626", color: "#fff", border: "none", borderRadius: 10, padding: "10px", fontSize: 13, fontWeight: 700, cursor: "pointer", opacity: decidiendo ? 0.6 : 1 }}>
+                      {decidiendo ? "Guardando..." : "Confirmar rechazo"}
+                    </button>
+                    <button onClick={() => { setRechazando(false); setMotivo(""); }} disabled={decidiendo}
+                      style={{ background: "#fff", color: "#555", border: "1px solid #e4e7ec", borderRadius: 10, padding: "10px 16px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+                      Cancelar
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
           {candidato.estado === "aceptado" && (
@@ -617,7 +668,7 @@ Responde con este JSON exacto:
           )}
           {candidato.estado === "rechazado" && (
             <div style={{ background: "#fee2e2", borderRadius: 10, padding: "12px", textAlign: "center", fontSize: 13, color: "#c0392b", fontWeight: 700 }}>
-              ❌ Certificación rechazada — {candidato.respuesta_meli}
+              ❌ Certificación rechazada — {candidato.motivo_rechazo || candidato.respuesta_meli}
             </div>
           )}
         </div>
