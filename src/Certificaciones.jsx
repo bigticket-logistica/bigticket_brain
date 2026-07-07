@@ -200,6 +200,170 @@ function ComparativaDatos({ candidato, analisis }) {
   );
 }
 
+// ─── VALIDACIÓN NUBARIUM (Etapa 4) — informe crudo; el analista decide ───
+const SEM = {
+  ok:   { dot: "#16a34a", bg: "#dcfce7", border: "#86efac", label: "OK" },
+  warn: { dot: "#d97706", bg: "#fef3c7", border: "#fde68a", label: "Revisar" },
+  bad:  { dot: "#dc2626", bg: "#fee2e2", border: "#fca5a5", label: "Alerta" },
+  none: { dot: "#9ca3af", bg: "#f3f4f6", border: "#e5e7eb", label: "—" },
+};
+const normNub = (s) => (s || "").toString().toUpperCase().replace(/\s+/g, " ").trim();
+
+function SeccionNubarium({ titulo, sem, children }) {
+  const c = SEM[sem] || SEM.none;
+  return (
+    <div style={{ border: `1px solid ${c.border}`, background: c.bg, borderRadius: 10, padding: "10px 12px", marginBottom: 10 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+        <span style={{ width: 10, height: 10, borderRadius: "50%", background: c.dot, flexShrink: 0 }} />
+        <span style={{ fontSize: 12, fontWeight: 700, color: "#1a1a1a" }}>{titulo}</span>
+        <span style={{ marginLeft: "auto", fontSize: 9, fontWeight: 700, color: c.dot, textTransform: "uppercase" }}>{c.label}</span>
+      </div>
+      <div style={{ fontSize: 12, color: "#333", lineHeight: 1.7 }}>{children}</div>
+    </div>
+  );
+}
+function CampoN({ l, v }) {
+  return (
+    <div style={{ display: "flex", gap: 6 }}>
+      <span style={{ color: "#888", minWidth: 120, flexShrink: 0 }}>{l}</span>
+      <span style={{ fontWeight: 600, wordBreak: "break-word" }}>{v || "—"}</span>
+    </div>
+  );
+}
+
+function ValidacionNubarium({ candidato, onActualizar }) {
+  const [corriendo, setCorriendo] = useState(false);
+  const [reporte, setReporte] = useState(candidato.nubarium_reporte || null);
+  const [err, setErr] = useState(null);
+
+  const urlAB64 = async (url) => {
+    const resp = await fetch(url);
+    const blob = await resp.blob();
+    return await new Promise((res, rej) => {
+      const rd = new FileReader();
+      rd.onloadend = () => res(String(rd.result).split(",")[1] || "");
+      rd.onerror = rej;
+      rd.readAsDataURL(blob);
+    });
+  };
+
+  const correr = async () => {
+    if (!candidato.curp && !candidato.rfc) { setErr("Faltan CURP y RFC declarados."); return; }
+    setCorriendo(true); setErr(null);
+    try {
+      let ine_b64 = "";
+      if (candidato.url_ine) { try { ine_b64 = await urlAB64(candidato.url_ine); } catch (e) { /* sigue sin INE */ } }
+      const resp = await fetch("https://bigticket2026.app.n8n.cloud/webhook/nubarium-persona", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: candidato.id, curp: candidato.curp, rfc: candidato.rfc, ine_b64 }),
+      });
+      const txt = await resp.text();
+      if (!txt || !txt.trim()) throw new Error("Nubarium devolvió respuesta vacía.");
+      const rep = JSON.parse(txt);
+      setReporte(rep);
+      onActualizar({ ...candidato, nubarium_reporte: rep });
+    } catch (e) {
+      setErr("No se pudo correr Nubarium: " + e.message);
+    } finally {
+      setCorriendo(false);
+    }
+  };
+
+  const r = reporte || {};
+  const c = r.curp || {}, f = r.rfc || {}, b = r.antecedentes_69b || {}, i = r.ine || {};
+  const semCurp = c._error ? "warn" : (c.estatus === "OK" && c.estatusCurp === "RCN") ? "ok" : c.estatus === "ERROR" ? "bad" : c.estatus ? "warn" : "none";
+  const semRfc  = f._error ? "warn" : f.estatus === "OK" ? "ok" : f.estatus === "ERROR" ? "bad" : f.estatus ? "warn" : "none";
+  const situ    = normNub(b.situacion);
+  const sem69   = b._error ? "warn" : (situ === "DEFINITIVO" || situ === "PRESUNTO") ? "bad" : b.estatus === "OK" ? "ok" : b.estatus ? "warn" : "none";
+  const curpOcrMatch = i.curp && candidato.curp && normNub(i.curp) === normNub(candidato.curp);
+  const semIne  = i._error ? "warn" : (i.nombres || i.curp) ? ((curpOcrMatch || !candidato.curp) ? "ok" : "warn") : "none";
+
+  return (
+    <div className="form-card">
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+        <div className="form-title" style={{ margin: 0 }}>🔎 Validación Nubarium <span style={{ fontSize: 11, fontWeight: 500, color: "#888" }}>· RENAPO · SAT · INE · 69-B</span></div>
+        <button className="btn-blue" onClick={correr} disabled={corriendo} style={{ fontSize: 12, padding: "7px 14px" }}>
+          {corriendo ? "Consultando..." : reporte ? "🔄 Re-correr" : "▶ Correr Nubarium"}
+        </button>
+      </div>
+
+      {err && <div style={{ background: "#fee2e2", color: "#c0392b", borderRadius: 8, padding: "10px 12px", fontSize: 12, marginBottom: 10 }}>{err}</div>}
+
+      {!reporte && !corriendo && (
+        <div style={{ background: "#f0f9ff", border: "1px solid #bae6fd", borderRadius: 10, padding: "14px 16px", fontSize: 12, color: "#555" }}>
+          Genera el informe oficial (CURP en RENAPO, RFC en SAT, OCR del INE y lista negra 69-B). El informe es de apoyo — <strong>la decisión de Aceptar o Rechazar la tomas tú</strong> moviendo la tarjeta.
+        </div>
+      )}
+
+      {reporte && (
+        <div>
+          {r.generado_at && <div style={{ fontSize: 10, color: "#aab", marginBottom: 10 }}>Generado {new Date(r.generado_at).toLocaleString("es-CL")}</div>}
+
+          <SeccionNubarium titulo="CURP · RENAPO" sem={semCurp}>
+            {c.estatus === "OK" ? (
+              <>
+                <CampoN l="Nombre" v={`${c.nombre || ""} ${c.apellidoPaterno || ""} ${c.apellidoMaterno || ""}`.trim()} />
+                <CampoN l="CURP" v={c.curp} />
+                <CampoN l="Nacimiento" v={`${c.fechaNacimiento || "—"} · ${c.sexo || ""}`} />
+                <CampoN l="Entidad" v={c.estadoNacimiento} />
+                <CampoN l="Estatus CURP" v={c.estatusCurp} />
+                {c.datosDocProbatorio && <CampoN l="Acta" v={`No. ${c.datosDocProbatorio.numActa || "—"} · ${c.datosDocProbatorio.entidadRegistro || ""} ${c.datosDocProbatorio.anioReg || ""}`} />}
+              </>
+            ) : (
+              <CampoN l="Resultado" v={c.mensaje || (c._error ? "Sin respuesta del servicio" : "No validado")} />
+            )}
+          </SeccionNubarium>
+
+          <SeccionNubarium titulo="RFC · SAT" sem={semRfc}>
+            {f.estatus === "OK" ? (
+              <>
+                <CampoN l="Resultado" v={f.mensaje} />
+                <CampoN l="Tipo persona" v={f.tipoPersona === "F" ? "Física" : f.tipoPersona === "M" ? "Moral" : f.tipoPersona} />
+                <CampoN l="Nota" v={f.informacionAdicional} />
+              </>
+            ) : (
+              <CampoN l="Resultado" v={f.mensaje || (f._error ? "Sin respuesta del servicio" : "No validado")} />
+            )}
+          </SeccionNubarium>
+
+          <SeccionNubarium titulo="Antecedentes fiscales · Lista 69-B SAT" sem={sem69}>
+            {b.estatus === "OK" ? (
+              situ ? (
+                <>
+                  <CampoN l="Situación" v={b.situacion} />
+                  <CampoN l="Contribuyente" v={b.nombreContribuyente} />
+                  <CampoN l="Oficio definitivo" v={b.numeroFechaOficioDefinitivo} />
+                  <CampoN l="Publicación DOF" v={b.publicacionDofDefinitivo} />
+                </>
+              ) : (
+                <CampoN l="Resultado" v="Sin coincidencias en lista negra 69-B" />
+              )
+            ) : (
+              <CampoN l="Resultado" v={b.mensaje || (b._error ? "Sin respuesta del servicio" : "No consultado")} />
+            )}
+          </SeccionNubarium>
+
+          <SeccionNubarium titulo="INE · OCR" sem={semIne}>
+            {(i.nombres || i.curp) ? (
+              <>
+                <CampoN l="Nombre OCR" v={`${i.nombres || ""} ${i.primerApellido || ""} ${i.segundoApellido || ""}`.trim()} />
+                <CampoN l="CURP OCR" v={<span>{i.curp} {candidato.curp ? (curpOcrMatch ? "✅" : "⚠️ ≠ declarada") : ""}</span>} />
+                <CampoN l="Clave elector" v={i.claveElector} />
+                <CampoN l="Vigencia" v={i.vigencia} />
+                <CampoN l="Domicilio" v={[i.calle, i.colonia, i.ciudad].filter(Boolean).join(", ")} />
+                <CampoN l="Sección" v={i.seccion} />
+              </>
+            ) : (
+              <CampoN l="Resultado" v={i._error ? "Sin respuesta del servicio (¿se envió la imagen del INE?)" : "Sin datos"} />
+            )}
+          </SeccionNubarium>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── DETALLE CANDIDATO ───────────────────────────────────────────────
 function DetalleCandidato({ candidato, onVolver, onActualizar }) {
   const [analizando, setAnalizando] = useState(false);
@@ -381,6 +545,9 @@ Responde con este JSON exacto:
 
         {/* Comparativa de datos */}
         <ComparativaDatos candidato={candidato} analisis={analisis} />
+
+        {/* Validación Nubarium (Etapa 4) */}
+        <ValidacionNubarium candidato={candidato} onActualizar={onActualizar} />
 
         {/* Documentos */}
         <div className="form-card">
