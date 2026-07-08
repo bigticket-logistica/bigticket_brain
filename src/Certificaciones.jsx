@@ -551,6 +551,9 @@ Responde con este JSON exacto:
 
   const estadoBadge = { pendiente: "badge-pendiente", enviado: "badge-enviado", aprobado: "badge-aprobado", aceptado: "badge-aprobado", rechazado: "badge-rechazado" };
 
+  const tieneAnalisis = !!(analisis || candidato.claude_analisis);
+  const enEtapa1 = candidato.estado === "pendiente" && !tieneAnalisis;
+
   return (
     <div>
       <div style={{ background: "#fff", borderBottom: "0.5px solid #e4e7ec", padding: "12px 20px", display: "flex", alignItems: "center", gap: 12, position: "sticky", top: 0, zIndex: 9 }}>
@@ -594,8 +597,8 @@ Responde con este JSON exacto:
           </div>
         </div>
 
-        {/* Comparativa de datos */}
-        <ComparativaDatos candidato={candidato} analisis={analisis} />
+        {/* Comparativa de datos (solo cuando ya hay análisis) */}
+        {tieneAnalisis && <ComparativaDatos candidato={candidato} analisis={analisis} />}
 
         {/* Validación Nubarium — solo en Etapa 4 (aprobado por MELI) */}
         {candidato.estado === "aprobado" && (
@@ -619,7 +622,8 @@ Responde con este JSON exacto:
           </div>
         </div>
 
-        {/* Estado certificación */}
+        {/* Certificación MELI — oculto en Etapa 1 (aún no pre-validado por Biggy) */}
+        {!enEtapa1 && (
         <div className="form-card">
           <div className="form-title">Certificación Mercado Libre</div>
           <div className="two-col" style={{ marginBottom: 16 }}>
@@ -705,6 +709,7 @@ Responde con este JSON exacto:
             </div>
           )}
         </div>
+        )}
       </div>
     </div>
   );
@@ -795,8 +800,9 @@ function normalizarPortalCert(row) {
 
 // Resumen de postulación (read-only) para tarjetas del Portal de Certificación.
 // DetalleCandidato (certificaciones_mx) sigue intacto para la otra fuente.
-function DetalleCertificacion({ cert, onVolver }) {
+function DetalleCertificacion({ cert, onVolver, onPasarEtapa2 }) {
   const [docsCert, setDocsCert] = useState(null);
+  const enEtapa1 = (ETAPA_CERT[cert.estado] || "recepcion") === "recepcion";
   const fcFuente = cert.origen === "app_terceros" ? ORIGEN_CFG.app_terceros : FUENTE_CFG.portal_cert;
   useEffect(() => {
     let cancel = false;
@@ -851,22 +857,26 @@ function DetalleCertificacion({ cert, onVolver }) {
       </div>
 
       <div className="pg-detail">
-        <div className="form-card" style={{ marginBottom: 16 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-            <span style={{ fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 20, background: tc.bg, color: tc.color, border: `1px solid ${tc.border}` }}>
-              {tc.icon} {tc.label}
-            </span>
-            <span className={`badge`} style={{ fontSize: 11 }}>{(cert.estado || "—").toUpperCase()}</span>
-          </div>
-          {ter?.nombre && (
-            <div style={{ fontSize: 12, color: "#555", marginTop: 6 }}>
-              Empresa transportista: <b>{ter.nombre}</b>
+        {/* Etapa 1: pasar a Pre Validación Biggy (mismo patrón que Prospección) */}
+        {enEtapa1 && (
+          <div className="form-card" style={{ background: "#fff4ec", border: "1px solid #fbd9c0" }}>
+            <div style={{ fontSize: 13, color: "#7c3a12", lineHeight: 1.6, marginBottom: 12 }}>
+              Esta postulación está en <b>Etapa 1 · Recepción</b>. Revisa la información y los documentos; cuando estés listo, pásala a <b>Pre Validación Biggy</b>.
             </div>
-          )}
-        </div>
+            <button className="btn-orange" onClick={onPasarEtapa2} style={{ width: "100%" }}>
+              ▶ Pasar a Etapa 2 · Pre Validación Biggy
+            </button>
+          </div>
+        )}
+
+        {ter?.nombre && (
+          <div className="form-card">
+            <div style={{ fontSize: 12, color: "#555" }}>Empresa transportista: <b>{ter.nombre}</b></div>
+          </div>
+        )}
 
         <div className="form-card">
-          <div className="form-title">Resumen de postulación</div>
+          <div className="form-title">{esVeh ? "Datos del vehículo" : "Datos del candidato"}</div>
           <div className="three-col">
             {campos.map(([l, v]) => (
               <div key={l} style={{ padding: "8px 0", borderBottom: "1px solid #f4f5f7" }}>
@@ -884,16 +894,12 @@ function DetalleCertificacion({ cert, onVolver }) {
           ) : docsCert.length === 0 ? (
             <div style={{ fontSize: 12, color: "#888" }}>Sin documentos cargados.</div>
           ) : (
-            <div className="three-col">
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(130px,1fr))", gap: 12 }}>
               {docsCert.map((d) => (
                 <VisorDoc key={d.tipo_documento} url={d.url} label={DOC_LABEL[d.tipo_documento] || d.tipo_documento} />
               ))}
             </div>
           )}
-        </div>
-
-        <div style={{ background: "#f0f9ff", border: "1px solid #bae6fd", borderRadius: 10, padding: "12px 16px", fontSize: 12, color: "#0369a1" }}>
-          Validación MELI y Nubarium se conectan en el siguiente paso del rediseño.
         </div>
       </div>
     </div>
@@ -1144,7 +1150,11 @@ function ModuloCertificaciones() {
 
   if (selected) {
     if (selected.fuente === "portal_cert") {
-      return <DetalleCertificacion cert={selected.raw} onVolver={() => setSelected(null)} />;
+      return <DetalleCertificacion cert={selected.raw} onVolver={() => setSelected(null)}
+        onPasarEtapa2={() => {
+          setItems(prev => prev.map(i => i.key === selected.key ? { ...i, etapa: "prevalidacion_biggy" } : i));
+          setSelected(null);
+        }} />;
     }
     return (
       <DetalleCandidato
