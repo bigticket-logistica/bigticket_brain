@@ -3068,6 +3068,7 @@ function PoolMeliCompromiso() {
   const [scraping, setScraping] = useState(false);
   const [scrapeMsg, setScrapeMsg] = useState(null);
   const [fechaVista, setFechaVista] = useState(""); // "" = operativa de mañana (vivo); YYYY-MM-DD = histórico
+  const [recalc, setRecalc] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -3076,19 +3077,38 @@ function PoolMeliCompromiso() {
       setError(null);
       try {
         if (fechaVista) {
-          // Histórico: leer el payload guardado del día elegido (misma forma que la RPC)
+          // Histórico: usa payload si existe; si no (filas viejas del job diario), reconstruye desde columnas
           const { data: rows, error: err } = await sb
             .from("compromiso_meli_historico")
-            .select("payload, fecha_operativa")
+            .select("payload, rankings, fecha_operativa, generado_en, capturado_en, ofrecidas_sdd, ofrecidas_spot, aceptadas_sdd, aceptadas_spot, rechazadas_sdd, rechazadas_spot, canceladas_sdd, canceladas_spot")
             .eq("fecha_operativa", fechaVista)
             .limit(1);
           if (!alive) return;
           if (err) throw err;
-          if (!rows || rows.length === 0 || !rows[0].payload) {
+          if (!rows || rows.length === 0) {
             setData(null);
             setError(`No hay snapshot guardado para ${fechaVista}. La foto histórica se guarda a diario; probá otra fecha.`);
           } else {
-            setData(rows[0].payload);
+            const row = rows[0];
+            let foto = row.payload;
+            if (!foto) {
+              const rk = row.rankings || {};
+              foto = {
+                fecha_manana: row.fecha_operativa,
+                generado_en: row.generado_en || row.capturado_en,
+                conteos: {
+                  ofrecidas_sdd: row.ofrecidas_sdd || 0, ofrecidas_spot: row.ofrecidas_spot || 0,
+                  aceptadas_sdd: row.aceptadas_sdd || 0, aceptadas_spot: row.aceptadas_spot || 0,
+                  rechazadas_sdd: row.rechazadas_sdd || 0, rechazadas_spot: row.rechazadas_spot || 0,
+                  canceladas_sdd: row.canceladas_sdd || 0, canceladas_spot: row.canceladas_spot || 0,
+                },
+                ranking_sdd_aceptadas: rk.sdd_aceptadas || [],
+                ranking_sdd_rechazadas: rk.sdd_rechazadas || [],
+                ranking_spot_aceptadas: rk.spot_aceptadas || [],
+                ranking_spot_rechazadas: rk.spot_rechazadas || [],
+              };
+            }
+            setData(foto);
           }
         } else {
           const { data: result, error: err } = await sb.rpc("get_compromiso_meli_manana");
@@ -3126,6 +3146,23 @@ function PoolMeliCompromiso() {
       setScrapeMsg({ tipo: "err", texto: "Error de red al contactar el actualizador: " + (e.message || String(e)) });
     } finally {
       setScraping(false);
+    }
+  };
+
+  const recalcularDia = async () => {
+    if (!fechaVista) return;
+    setRecalc(true);
+    setScrapeMsg(null);
+    try {
+      const { data: result, error: err } = await sb.rpc("get_compromiso_meli_por_fecha", { p_fecha: fechaVista });
+      if (err) throw err;
+      if (!result) throw new Error("Sin datos para esa fecha en meli_travel_requests");
+      setData(result);
+      setScrapeMsg({ tipo: "ok", texto: "Recalculado desde el crudo de MELI para " + fechaVista + "." });
+    } catch (e) {
+      setScrapeMsg({ tipo: "err", texto: "No se pudo recalcular: " + (e.message || String(e)) });
+    } finally {
+      setRecalc(false);
     }
   };
 
@@ -3350,6 +3387,11 @@ function PoolMeliCompromiso() {
             <button onClick={() => setFechaVista("")}
               style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid #1a3a6b", background: "#1a3a6b", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "'Geist', sans-serif" }}>
               ← Volver a mañana (en vivo)
+            </button>
+            <button onClick={recalcularDia} disabled={recalc}
+              style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid #F47B20", background: recalc ? "#f0a875" : "#F47B20", color: "#fff", fontSize: 12, fontWeight: 700, cursor: recalc ? "wait" : "pointer", fontFamily: "'Geist', sans-serif" }}
+              title="Recalcula el total del día desde los datos crudos de MELI (meli_travel_requests)">
+              {recalc ? "⏳ Recalculando…" : "🔁 Recalcular este día (crudo MELI)"}
             </button>
           </>
         ) : (
