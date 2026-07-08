@@ -806,6 +806,8 @@ function normalizarPortalCert(row) {
     titulo: esVeh ? (veh?.placa || "Sin placa") : (cond?.nombre || ter?.nombre || "Sin nombre"),
     sc:     row.service_center || ter?.service_center || "—",
     etapa:  row.etapa_kanban || ETAPA_CERT[row.estado] || "recepcion",
+    score:  row.claude_score_global ?? null,
+    rec:    row.claude_recomendacion || null,
     estado_raw: row.estado,
     raw: { ...row, _conductor: cond, _vehiculo: veh, _tercero: ter },
   };
@@ -813,7 +815,7 @@ function normalizarPortalCert(row) {
 
 // Resumen de postulación (read-only) para tarjetas del Portal de Certificación.
 // DetalleCandidato (certificaciones_mx) sigue intacto para la otra fuente.
-function DetalleCertificacion({ cert, etapa, onVolver, onPasarEtapa2, onMoverA }) {
+function DetalleCertificacion({ cert, etapa, onVolver, onPasarEtapa2, onMoverA, onAnalizado }) {
   const [docsCert, setDocsCert] = useState(null);
   const [analizando, setAnalizando] = useState(false);
   const [analisis, setAnalisis] = useState(cert.claude_analisis || null);
@@ -879,6 +881,7 @@ function DetalleCertificacion({ cert, etapa, onVolver, onPasarEtapa2, onMoverA }
         claude_recomendacion: parsed.recomendacion, claude_alertas: parsed.alertas || [], claude_reviewed_at: new Date().toISOString(),
       }).eq("id", cert.id);
       if (errSave) console.error("No se pudo guardar el análisis (certificaciones):", errSave.message);
+      if (onAnalizado) onAnalizado(parsed);
     } catch (e) {
       setAnalisis({ _error: true, resumen: "No se pudo conectar con el servicio de análisis." });
     } finally { setAnalizando(false); }
@@ -1252,7 +1255,11 @@ function ModuloCertificaciones() {
     if (selected.fuente === "portal_cert") {
       return <DetalleCertificacion cert={selected.raw} etapa={selected.etapa} onVolver={() => setSelected(null)}
         onPasarEtapa2={() => moverYCerrar(selected, "prevalidacion_biggy")}
-        onMoverA={(etapa) => moverYCerrar(selected, etapa)} />;
+        onMoverA={(etapa) => moverYCerrar(selected, etapa)}
+        onAnalizado={(parsed) => setItems(prev => prev.map(i => i.key === selected.key ? {
+          ...i, score: parsed.score_global, rec: parsed.recomendacion,
+          raw: { ...i.raw, claude_analisis: parsed, claude_score_global: parsed.score_global, claude_recomendacion: parsed.recomendacion, claude_alertas: parsed.alertas || [] },
+        } : i))} />;
     }
     return (
       <DetalleCandidato
