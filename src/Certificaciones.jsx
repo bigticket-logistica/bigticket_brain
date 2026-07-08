@@ -822,6 +822,7 @@ function DetalleCertificacion({ cert, etapa, onVolver, onPasarEtapa2, onMoverA, 
   const [score, setScore] = useState(cert.claude_score_global || null);
   const [recomendacion, setRecomendacion] = useState(cert.claude_recomendacion || null);
   const [alertas, setAlertas] = useState(cert.claude_alertas || []);
+  const [enviando, setEnviando] = useState(false);
 
   const etapaActual = etapa || cert.etapa_kanban || ETAPA_CERT[cert.estado] || "recepcion";
   const enEtapa1 = etapaActual === "recepcion";
@@ -892,6 +893,32 @@ function DetalleCertificacion({ cert, etapa, onVolver, onPasarEtapa2, onMoverA, 
     if (docsCert && !enEtapa1 && !esVeh && !analisis && !analizando) analizarCert(docsCert);
   }, [docsCert]);
 
+  // Envío a MELI (mismo formulario pre-rellenado que Prospección). Solo conductores/ayudantes.
+  const enviarCertAMeli = async () => {
+    if (!confirm(`¿Enviar a MELI la certificación de ${cond?.nombre || "este conductor"}?`)) return;
+    setEnviando(true);
+    try {
+      const encode = (v) => encodeURIComponent(v || "");
+      const valorLicencia = cert.tipo === "ayudante" ? "Auxiliar" : (cond?.licencia_numero || "");
+      const svcFinal = (cert.service_center || ter?.service_center || "").split("_").pop();
+      const url = [
+        "https://docs.google.com/forms/d/e/1FAIpQLSfKqWuSMBNwRcp-bJpqiSU8ZAFAPCGB3qTkfiMT2jk_8PVGzw/viewform",
+        `?entry.1418110277=${encode((cond?.nombre || "").toUpperCase())}`,
+        `&entry.715792240=${encode(cond?.curp)}`,
+        `&entry.1927588691=Last+mile`,
+        `&entry.1391555266=Big+Ticket`,
+        `&entry.1422784112=${encode(svcFinal)}`,
+        `&entry.1912583612=${encode(valorLicencia)}`,
+        `&entry.137537185=MLP`,
+      ].join("");
+      window.open(url, "_blank");
+      await sb.from("certificaciones").update({ fecha_envio_meli: new Date().toISOString() }).eq("id", cert.id);
+      cert.fecha_envio_meli = new Date().toISOString();
+      alert("✅ Formulario abierto con los datos pre-rellenados.\n\nVerifica que estés con la cuenta certificacionbigticketmx@gmail.com y haz clic en Enviar.\n\nLa resolución por correo moverá la tarjeta sola a Etapa 4 o Rechazado.");
+    } catch (e) { alert("Error al enviar: " + e.message); }
+    finally { setEnviando(false); }
+  };
+
   const campos = esVeh ? [
     ["Placa", veh?.placa], ["VIN", veh?.vin], ["Marca", veh?.marca], ["Modelo", veh?.modelo],
     ["Año", veh?.anio], ["Clase", veh?.clase], ["Entidad emplacamiento", veh?.entidad_emplaco],
@@ -952,6 +979,48 @@ function DetalleCertificacion({ cert, etapa, onVolver, onPasarEtapa2, onMoverA, 
                 ▶ Pasar a Validación MELI
               </button>
             )}
+          </div>
+        )}
+
+        {/* Etapa 3 · Validación MELI (conductores): datos del formulario + envío */}
+        {!enEtapa1 && !esVeh && etapaActual === "validacion_meli" && (
+          <div className="form-card" style={{ border: "1px solid #d6def0", background: "#eef2f7" }}>
+            <div className="form-title" style={{ color: "#1a3a6b" }}>Datos a enviar al formulario MELI</div>
+            <div className="three-col" style={{ marginBottom: 12 }}>
+              {[
+                ["Nombre", (cond?.nombre || "").toUpperCase()], ["CURP", cond?.curp],
+                ["Empresa", "Big Ticket"], ["Servicio", "Last mile"],
+                ["SVC", (cert.service_center || ter?.service_center || "").split("_").pop()],
+                ["Puesto/Licencia", cert.tipo === "ayudante" ? "Auxiliar" : (cond?.licencia_numero || "")],
+                ["Tipo", "MLP"],
+              ].map(([l, v]) => (
+                <div key={l} style={{ padding: "6px 0" }}>
+                  <div style={{ fontSize: 10, color: "#888", fontWeight: 700, textTransform: "uppercase" }}>{l}</div>
+                  <div style={{ fontSize: 13, fontWeight: 600, wordBreak: "break-all" }}>{v || "—"}</div>
+                </div>
+              ))}
+            </div>
+            {cert.fecha_envio_meli ? (
+              <div style={{ fontSize: 13, color: "#1a3a6b", background: "#fff", padding: "10px 12px", borderRadius: 8, border: "1px solid #d6def0" }}>
+                ⏳ <b>Enviado a MELI.</b> Esperando la resolución por correo — la tarjeta se moverá sola a <b>Etapa 4</b> (aprobado) o <b>Rechazado</b>.
+              </div>
+            ) : (
+              <button className="btn-orange" onClick={enviarCertAMeli} disabled={enviando} style={{ width: "100%" }}>
+                {enviando ? "Abriendo…" : "Enviar certificación a Mercado Libre"}
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* Resultado de MELI */}
+        {!enEtapa1 && !esVeh && etapaActual === "validacion_nubarium" && (
+          <div className="form-card" style={{ background: "#eafaf0", border: "1px solid #b7e4c7" }}>
+            <div style={{ fontSize: 13, color: "#166534" }}>✅ <b>Aprobado por MELI.</b> {cert.respuesta_meli || ""} — Ahora en <b>Etapa 4 · Nubarium</b>.</div>
+          </div>
+        )}
+        {etapaActual === "rechazado" && (
+          <div className="form-card" style={{ background: "#fdecec", border: "1px solid #f5c2c2" }}>
+            <div style={{ fontSize: 13, color: "#991b1b" }}>✕ <b>Rechazado.</b> {cert.respuesta_meli || cert.motivo_rechazo || ""}</div>
           </div>
         )}
 
