@@ -405,7 +405,7 @@ function DetalleCandidato({ candidato, onVolver, onActualizar, onPasarEtapa2 }) 
   // Biggy corre automático al abrir SOLO si la tarjeta ya está en Etapa 2+ y no tiene análisis.
   // En Etapa 1 (recepción) NO corre — ahí solo se visualiza.
   useEffect(() => {
-    if (etapaProspeccion(candidato) !== "recepcion" && !analisis && !analizando) {
+    if (etapaProspeccion(candidato) !== "recepcion" && !candidato.claude_analisis && !analisis && !analizando) {
       analizarConClaude();
     }
   }, [candidato.id]);
@@ -481,13 +481,14 @@ Responde con este JSON exacto:
       setRecomendacion(parsed.recomendacion);
       setAlertas(parsed.alertas || []);
 
-      await sb.from("certificaciones_mx").update({
+      const { error: errSave } = await sb.from("certificaciones_mx").update({
         claude_analisis: parsed,
         claude_score_global: parsed.score_global,
         claude_recomendacion: parsed.recomendacion,
         claude_alertas: parsed.alertas || [],
         claude_reviewed_at: new Date().toISOString(),
       }).eq("id", candidato.id);
+      if (errSave) { console.error("No se pudo guardar el análisis Biggy:", errSave.message); alert("El análisis se generó pero NO se pudo guardar: " + errSave.message + "\n\n(¿faltan las columnas claude_* en certificaciones_mx?)"); }
 
       onActualizar({ ...candidato, claude_analisis: parsed, claude_score_global: parsed.score_global, claude_recomendacion: parsed.recomendacion, claude_alertas: parsed.alertas || [] });
     } catch (e) {
@@ -873,10 +874,11 @@ function DetalleCertificacion({ cert, etapa, onVolver, onPasarEtapa2, onMoverA }
       const parsed = JSON.parse(txt).analisis;
       if (!parsed) throw new Error("sin análisis");
       setAnalisis(parsed); setScore(parsed.score_global); setRecomendacion(parsed.recomendacion); setAlertas(parsed.alertas || []);
-      await sb.from("certificaciones").update({
+      const { error: errSave } = await sb.from("certificaciones").update({
         claude_analisis: parsed, claude_score_global: parsed.score_global,
         claude_recomendacion: parsed.recomendacion, claude_alertas: parsed.alertas || [], claude_reviewed_at: new Date().toISOString(),
       }).eq("id", cert.id);
+      if (errSave) console.error("No se pudo guardar el análisis (certificaciones):", errSave.message);
     } catch (e) {
       setAnalisis({ _error: true, resumen: "No se pudo conectar con el servicio de análisis." });
     } finally { setAnalizando(false); }
@@ -1259,7 +1261,7 @@ function ModuloCertificaciones() {
         onPasarEtapa2={() => moverYCerrar(selected, "prevalidacion_biggy")}
         onActualizar={(updated) => {
           const rn = normalizarProspeccion(updated);
-          setItems(items.map(i => i.key === rn.key ? rn : i));
+          setItems(prev => prev.map(i => i.key === rn.key ? rn : i));
           setSelected(rn);
         }}
       />
