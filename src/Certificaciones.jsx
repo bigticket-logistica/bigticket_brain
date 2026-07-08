@@ -251,12 +251,13 @@ function ValidacionNubarium({ candidato, onActualizar }) {
     if (!candidato.curp && !candidato.rfc) { setErr("Faltan CURP y RFC declarados."); return; }
     setCorriendo(true); setErr(null);
     try {
-      let ine_b64 = "";
-      if (candidato.url_ine) { try { ine_b64 = await urlAB64(candidato.url_ine); } catch (e) { /* sigue sin INE */ } }
+      let ine_b64 = "", ine_reverso_b64 = "";
+      if (candidato.url_ine)   { try { ine_b64         = await urlAB64(candidato.url_ine);   } catch (e) { /* sigue sin INE */ } }
+      if (candidato.url_ine_2) { try { ine_reverso_b64 = await urlAB64(candidato.url_ine_2); } catch (e) { /* sigue sin reverso */ } }
       const resp = await fetch("https://bigticket2026.app.n8n.cloud/webhook/nubarium-persona", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: candidato.id, curp: candidato.curp, rfc: candidato.rfc, ine_b64 }),
+        body: JSON.stringify({ id: candidato.id, curp: candidato.curp, rfc: candidato.rfc, ine_b64, ine_reverso_b64 }),
       });
       const txt = await resp.text();
       if (!txt || !txt.trim()) throw new Error("Nubarium devolvió respuesta vacía.");
@@ -271,13 +272,23 @@ function ValidacionNubarium({ candidato, onActualizar }) {
   };
 
   const r = reporte || {};
-  const c = r.curp || {}, f = r.rfc || {}, b = r.antecedentes_69b || {}, i = r.ine || {};
+  const c = r.curp || {}, f = r.rfc || {}, b = r.antecedentes_69b || {}, i = r.ine || {}, ln = r.ine_lista_nominal || {};
   const semCurp = c._error ? "warn" : (c.estatus === "OK" && c.estatusCurp === "RCN") ? "ok" : c.estatus === "ERROR" ? "bad" : c.estatus ? "warn" : "none";
   const semRfc  = f._error ? "warn" : f.estatus === "OK" ? "ok" : f.estatus === "ERROR" ? "bad" : f.estatus ? "warn" : "none";
   const situ    = normNub(b.situacion);
   const sem69   = b._error ? "warn" : (situ === "DEFINITIVO" || situ === "PRESUNTO") ? "bad" : b.estatus === "OK" ? "ok" : b.estatus ? "warn" : "none";
   const curpOcrMatch = i.curp && candidato.curp && normNub(i.curp) === normNub(candidato.curp);
   const semIne  = i._error ? "warn" : (i.nombres || i.curp) ? ((curpOcrMatch || !candidato.curp) ? "ok" : "warn") : "none";
+  const msgLN = normNub(ln.mensaje);
+  let semLN = "none";
+  if (ln._error) semLN = "warn";
+  else if (ln.estatus === "ERROR") semLN = "bad";
+  else if (ln.estatus === "OK") {
+    if (msgLN.includes("NO VIGENTE") || msgLN.includes("BAJA") || msgLN.includes("EXPIR") || msgLN.includes("NO EXIST")) semLN = "bad";
+    else if (msgLN.includes("ROBO") || msgLN.includes("EXTRAV") || msgLN.includes("SUSPEN")) semLN = "warn";
+    else if (msgLN.includes("VIGENTE")) semLN = "ok";
+    else semLN = "warn";
+  } else if (ln.estatus) semLN = "warn";
 
   return (
     <div className="form-card">
@@ -356,6 +367,19 @@ function ValidacionNubarium({ candidato, onActualizar }) {
               </>
             ) : (
               <CampoN l="Resultado" v={i._error ? "Sin respuesta del servicio (¿se envió la imagen del INE?)" : "Sin datos"} />
+            )}
+          </SeccionNubarium>
+
+          <SeccionNubarium titulo="INE · Lista Nominal (vigencia oficial)" sem={semLN}>
+            {ln.estatus === "OK" ? (
+              <>
+                <CampoN l="Estado" v={ln.mensaje} />
+                <CampoN l="Clave elector" v={ln.claveElector} />
+                <CampoN l="Vigencia" v={ln.vigencia} />
+                <CampoN l="Emisión / Registro" v={`${ln.anioEmision || "—"} · reg. ${ln.anioRegistro || "—"} · núm. ${ln.numeroEmision ?? "—"}`} />
+              </>
+            ) : (
+              <CampoN l="Resultado" v={ln.mensaje || (ln._error ? "No se pudo validar (¿faltó el reverso del INE para leer el CIC?)" : "No consultado")} />
             )}
           </SeccionNubarium>
         </div>
