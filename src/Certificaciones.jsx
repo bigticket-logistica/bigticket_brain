@@ -402,6 +402,14 @@ function DetalleCandidato({ candidato, onVolver, onActualizar }) {
   const [rechazando, setRechazando] = useState(false);
   const [motivo, setMotivo] = useState("");
 
+  // Biggy corre automático al abrir SOLO si la tarjeta ya está en Etapa 2+ y no tiene análisis.
+  // En Etapa 1 (recepción) NO corre — ahí solo se visualiza.
+  useEffect(() => {
+    if (etapaProspeccion(candidato) !== "recepcion" && !analisis && !analizando) {
+      analizarConClaude();
+    }
+  }, [candidato.id]);
+
   const analizarConClaude = async () => {
     setAnalizando(true);
     try {
@@ -552,7 +560,8 @@ Responde con este JSON exacto:
   const estadoBadge = { pendiente: "badge-pendiente", enviado: "badge-enviado", aprobado: "badge-aprobado", aceptado: "badge-aprobado", rechazado: "badge-rechazado" };
 
   const tieneAnalisis = !!(analisis || candidato.claude_analisis);
-  const enEtapa1 = candidato.estado === "pendiente" && !tieneAnalisis;
+  const etapaActual = etapaProspeccion(candidato);
+  const enEtapa1 = etapaActual === "recepcion";
 
   return (
     <div>
@@ -566,11 +575,9 @@ Responde con este JSON exacto:
       </div>
 
       <div className="pg-detail">
-        {/* Etapa 1: solo visualización + botón para pasar a Pre Validación Biggy.
-            Al pasar, Biggy (Claude Vision) analiza los documentos. */}
-        {(analisis || analizando) ? (
-          <BiggyChatBubble analizando={analizando} analisis={analisis} score={score} recomendacion={recomendacion} alertas={alertas} onReanalizar={analizarConClaude} />
-        ) : (
+        {/* Etapa 1: solo visualización + botón para pasar a Biggy.
+            Etapa 2+: Biggy corre automático (ver useEffect). */}
+        {enEtapa1 ? (
           <div className="form-card" style={{ background: "#fff4ec", border: "1px solid #fbd9c0" }}>
             <div style={{ fontSize: 13, color: "#7c3a12", lineHeight: 1.6, marginBottom: 12 }}>
               Este postulante está en <b>Etapa 1 · Recepción</b>. Revisa la información y los documentos; cuando estés listo, pásalo a <b>Pre Validación Biggy</b> para que Claude analice los documentos.
@@ -579,6 +586,8 @@ Responde con este JSON exacto:
               {analizando ? "Analizando..." : "▶ Pasar a Etapa 2 · Pre Validación Biggy"}
             </button>
           </div>
+        ) : (
+          <BiggyChatBubble analizando={analizando} analisis={analisis} score={score} recomendacion={recomendacion} alertas={alertas} onReanalizar={analizarConClaude} />
         )}
 
         {/* Datos del candidato */}
@@ -1305,5 +1314,3 @@ function ModuloCertificaciones() {
 }
 
 export default ModuloCertificaciones;
-
-///
