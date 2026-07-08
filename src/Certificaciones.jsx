@@ -2,12 +2,12 @@ import { useState, useEffect, useRef } from "react";
 import { sb, BIGGY_IMG } from "./shared";
 
 const COLUMNAS = [
-  { id: "recepcion",           label: "Etapa 1: Recepción Documental", color: "#1a3a6b", bg: "#eef2ff", border: "#c7d2fe" },
-  { id: "prevalidacion_biggy", label: "Etapa 2: Pre Validación Biggy",  color: "#c2410c", bg: "#fff7ed", border: "#fed7aa" },
-  { id: "validacion_meli",     label: "Etapa 3: Validación MELI",       color: "#92400e", bg: "#fef3c7", border: "#fde68a" },
-  { id: "validacion_nubarium", label: "Etapa 4: Validación Nubarium",   color: "#0369a1", bg: "#e0f2fe", border: "#7dd3fc" },
-  { id: "aceptado",            label: "Aceptado",                       color: "#166534", bg: "#dcfce7", border: "#86efac" },
-  { id: "rechazado",           label: "Rechazado",                      color: "#c0392b", bg: "#fee2e2", border: "#fca5a5" },
+  { id: "recepcion",           label: "Etapa 1: Recepción Documental", color: "#1a3a6b", bg: "#eef2f7", border: "#d6def0" },
+  { id: "prevalidacion_biggy", label: "Etapa 2: Pre Validación Biggy",  color: "#F47B20", bg: "#fff4ec", border: "#fbd9c0" },
+  { id: "validacion_meli",     label: "Etapa 3: Validación MELI",       color: "#1a3a6b", bg: "#eef2f7", border: "#d6def0" },
+  { id: "validacion_nubarium", label: "Etapa 4: Validación Nubarium",   color: "#1a3a6b", bg: "#eef2f7", border: "#d6def0" },
+  { id: "aceptado",            label: "Aceptado",                       color: "#166534", bg: "#e8f5ec", border: "#b7e0c2" },
+  { id: "rechazado",           label: "Rechazado",                      color: "#c0392b", bg: "#fbeaea", border: "#f0c4c4" },
 ];
 
 // Etiquetas cortas para los KPIs del header (coinciden con las columnas)
@@ -402,13 +402,6 @@ function DetalleCandidato({ candidato, onVolver, onActualizar }) {
   const [rechazando, setRechazando] = useState(false);
   const [motivo, setMotivo] = useState("");
 
-  // ✅ Análisis automático: corre si no hay analisis local cargado
-  useEffect(() => {
-    if (!analisis && !analizando) {
-      analizarConClaude();
-    }
-  }, [candidato.id]);
-
   const analizarConClaude = async () => {
     setAnalizando(true);
     try {
@@ -570,8 +563,20 @@ Responde con este JSON exacto:
       </div>
 
       <div className="pg-detail">
-        {/* Biggy análisis automático */}
-        <BiggyChatBubble analizando={analizando} analisis={analisis} score={score} recomendacion={recomendacion} alertas={alertas} onReanalizar={analizarConClaude} />
+        {/* Etapa 1: solo visualización + botón para pasar a Pre Validación Biggy.
+            Al pasar, Biggy (Claude Vision) analiza los documentos. */}
+        {(analisis || analizando) ? (
+          <BiggyChatBubble analizando={analizando} analisis={analisis} score={score} recomendacion={recomendacion} alertas={alertas} onReanalizar={analizarConClaude} />
+        ) : (
+          <div className="form-card" style={{ background: "#fff4ec", border: "1px solid #fbd9c0" }}>
+            <div style={{ fontSize: 13, color: "#7c3a12", lineHeight: 1.6, marginBottom: 12 }}>
+              Este postulante está en <b>Etapa 1 · Recepción</b>. Revisa la información y los documentos; cuando estés listo, pásalo a <b>Pre Validación Biggy</b> para que Claude analice los documentos.
+            </div>
+            <button className="btn-orange" onClick={analizarConClaude} disabled={analizando} style={{ width: "100%" }}>
+              {analizando ? "Analizando..." : "▶ Pasar a Etapa 2 · Pre Validación Biggy"}
+            </button>
+          </div>
+        )}
 
         {/* Datos del candidato */}
         <div className="form-card">
@@ -592,8 +597,10 @@ Responde con este JSON exacto:
         {/* Comparativa de datos */}
         <ComparativaDatos candidato={candidato} analisis={analisis} />
 
-        {/* Validación Nubarium (Etapa 4) */}
-        <ValidacionNubarium candidato={candidato} onActualizar={onActualizar} />
+        {/* Validación Nubarium — solo en Etapa 4 (aprobado por MELI) */}
+        {candidato.estado === "aprobado" && (
+          <ValidacionNubarium candidato={candidato} onActualizar={onActualizar} />
+        )}
 
         {/* Documentos */}
         <div className="form-card">
@@ -704,13 +711,13 @@ Responde con este JSON exacto:
 }
 
 const FUENTE_CFG = {
-  prospeccion: { label: "Prospección",  icon: "🎯", bg: "#ede9fe", color: "#6d28d9", border: "#c4b5fd" },
-  portal_cert: { label: "Portal Cert.", icon: "🏢", bg: "#e0f2fe", color: "#0369a1", border: "#7dd3fc" },
+  prospeccion: { label: "Prospección",  icon: "🎯", bg: "#eef2f7", color: "#1a3a6b", border: "#d6def0" },
+  portal_cert: { label: "Portal Cert.", icon: "🏢", bg: "#fff4ec", color: "#F47B20", border: "#fbd9c0" },
 };
 
 // Distintivo cuando la certificación nace de la app del tercero
 const ORIGEN_CFG = {
-  app_terceros: { label: "App Terceros", icon: "📱", bg: "#ecfdf5", color: "#047857", border: "#6ee7b7" },
+  app_terceros: { label: "App Terceros", icon: "📱", bg: "#eef1f5", color: "#334155", border: "#cbd5e1" },
 };
 // Badge de fuente para una tarjeta, distinguiendo el origen app.
 function fuenteBadge(card) {
@@ -727,9 +734,9 @@ const DOC_LABEL = {
 
 // Chip de TIPO
 const TIPO_CFG = {
-  conductor: { label: "Driver",   icon: "🚗", bg: "#eff6ff", color: "#1d4ed8", border: "#bfdbfe" },
-  ayudante:  { label: "Ayudante", icon: "🧰", bg: "#f0fdf4", color: "#166534", border: "#bbf7d0" },
-  vehiculo:  { label: "Vehículo", icon: "🚚", bg: "#fff7ed", color: "#c2410c", border: "#fed7aa" },
+  conductor: { label: "Driver",   icon: "🚗", bg: "#f1f3f5", color: "#334155", border: "#dee2e6" },
+  ayudante:  { label: "Ayudante", icon: "🧰", bg: "#f1f3f5", color: "#334155", border: "#dee2e6" },
+  vehiculo:  { label: "Vehículo", icon: "🚚", bg: "#f1f3f5", color: "#334155", border: "#dee2e6" },
 };
 
 // Mapeo estado crudo → etapa del Kanban (columna)
@@ -975,8 +982,7 @@ function KanbanBoard({ items, onCardClick, onMover, onEliminar }) {
                       {fc.icon} {fc.label}
                     </span>
                   </div>
-                  <div style={{ fontSize: 13, fontWeight: 600, color: "#1a1a1a", marginBottom: 6, wordBreak: "break-word" }}>{card.titulo}</div>
-                  <div style={{ fontSize: 9, color: "#aab", fontWeight: 600, marginBottom: 8, fontFamily: "monospace" }}>{card.key}</div>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: "#1a1a1a", marginBottom: 8, wordBreak: "break-word" }}>{card.titulo}</div>
                   <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
                     <span style={{ fontSize: 9, fontWeight: 700, padding: "2px 8px", borderRadius: 20, background: tc.bg, color: tc.color, border: `1px solid ${tc.border}` }}>
                       {tc.icon} {tc.label}
@@ -1087,6 +1093,28 @@ function ModuloCertificaciones() {
     validacion_nubarium: "aprobado", aceptado: "aceptado", rechazado: "rechazado",
   };
 
+  // Dispara Biggy (Claude Vision) sobre un prospecto (Fuente A) y cachea el análisis.
+  const analizarProspecto = async (card) => {
+    try {
+      const resp = await fetch("https://bigticket2026.app.n8n.cloud/webhook/analizar-documentos", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...card.raw }),
+      });
+      const txt = await resp.text();
+      if (!txt || !txt.trim()) return;
+      const parsed = JSON.parse(txt).analisis;
+      if (!parsed) return;
+      await sb.from("certificaciones_mx").update({
+        claude_analisis: parsed, claude_score_global: parsed.score_global,
+        claude_recomendacion: parsed.recomendacion, claude_alertas: parsed.alertas || [],
+        claude_reviewed_at: new Date().toISOString(),
+      }).eq("id", card.id);
+      setItems(prev => prev.map(i => i.key === card.key ? {
+        ...i, score: parsed.score_global, rec: parsed.recomendacion,
+        raw: { ...i.raw, claude_analisis: parsed, claude_score_global: parsed.score_global, claude_recomendacion: parsed.recomendacion, claude_alertas: parsed.alertas || [] },
+      } : i));
+    } catch (e) { console.error("Análisis al mover:", e.message); }
+  };
+
   // Mover tarjeta de columna manualmente (con confirmación)
   const moverTarjeta = async (cardKey, targetEtapa) => {
     const card = items.find(i => i.key === cardKey);
@@ -1099,7 +1127,11 @@ function ModuloCertificaciones() {
       const estado = ESTADO_POR_ETAPA[targetEtapa];
       if (estado) {
         const { error } = await sb.from("certificaciones_mx").update({ estado, updated_at: new Date().toISOString() }).eq("id", card.id);
-        if (error) { alert("No se pudo guardar el movimiento: " + error.message); await cargar(); }
+        if (error) { alert("No se pudo guardar el movimiento: " + error.message); await cargar(); return; }
+      }
+      // Al entrar a Etapa 2, Biggy analiza los documentos (si aún no lo hizo)
+      if (targetEtapa === "prevalidacion_biggy" && !card.raw?.claude_analisis) {
+        analizarProspecto(card);
       }
     }
   };
@@ -1241,7 +1273,7 @@ function ModuloCertificaciones() {
                     </span>
                     <NotaBiggy score={card.score} />
                   </div>
-                  <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>📍 {card.sc} · <span style={{ fontFamily: "monospace", color: "#aab" }}>{card.key}</span></div>
+                  <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>📍 {card.sc}</div>
                 </div>
                 <button title="Quitar del tablero" onClick={(e) => { e.stopPropagation(); eliminarTarjeta(card); }}
                   style={{ width: 24, height: 24, borderRadius: "50%", border: "1px solid #e4e7ec", background: "#fff", color: "#c0392b", fontSize: 13, cursor: "pointer", padding: 0, flexShrink: 0 }}>✕</button>
