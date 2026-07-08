@@ -109,11 +109,11 @@ function IndicadoresOperacionalesMX({ usuario }) {
   // Nota: pestaña "validacion_bt" oculta del menú (render condicional abajo queda intacto).
   // El Padrón MELI (altas/bajas/cambios) se movió a Administración → "Padrón MELI".
   const tabs = [
-    { id: "compromiso", label: "Compromiso MELI", desc: "Operativa de mañana · SDD vs SPOT" },
+    { id: "compromiso", label: "Torre de Control Compromiso", desc: "Compromiso MELI · SDD vs SPOT" },
+    { id: "torre_rostering_hoy", label: "Torre de Control Rostering Hoy", desc: "Operativo en vivo · cronómetros + alertas SDD" },
     { id: "kpi_operacion", label: "KPI de Operación", desc: "NS Informe MELI vs Snapshots" },
     { id: "inventario", label: "Inventario", desc: "Drivers, vehículos, fantasmas" },
     { id: "control_helper", label: "Control Helper", desc: "Helpers no autorizados / certificados / fantasmas" },
-    { id: "torre_rostering_hoy", label: "Torre Rostering HOY", desc: "Operativo en vivo · cronómetros + alertas SDD" },
   ];
 
   if (loading) {
@@ -144,9 +144,9 @@ function IndicadoresOperacionalesMX({ usuario }) {
             <br /><br />
             <strong>Causa probable:</strong> timeout en alguna RPC pesada. Probá las tabs:
             {" "}<button onClick={() => setVista("torre_rostering_hoy")}
-                 style={{background:"none",border:"none",color:"#1a3a6b",fontWeight:600,cursor:"pointer",padding:0,textDecoration:"underline"}}>Torre Rostering HOY</button>,
+                 style={{background:"none",border:"none",color:"#1a3a6b",fontWeight:600,cursor:"pointer",padding:0,textDecoration:"underline"}}>Torre de Control Rostering Hoy</button>,
             {" "}<button onClick={() => setVista("compromiso")}
-                 style={{background:"none",border:"none",color:"#1a3a6b",fontWeight:600,cursor:"pointer",padding:0,textDecoration:"underline"}}>Compromiso MELI</button> o
+                 style={{background:"none",border:"none",color:"#1a3a6b",fontWeight:600,cursor:"pointer",padding:0,textDecoration:"underline"}}>Torre de Control Compromiso</button> o
             {" "}<button onClick={() => setVista("control_helper")}
                  style={{background:"none",border:"none",color:"#1a3a6b",fontWeight:600,cursor:"pointer",padding:0,textDecoration:"underline"}}>Control Helper</button>
             {" "}que no requieren los datos pesados.
@@ -3050,6 +3050,13 @@ function PoolMeliKpi({ label, value, sublabel, color = "#1a3a6b", danger = false
   );
 }
 
+// ── Actualizar desde MELI: dispara el scrape via webhook n8n (proxy seguro) ──
+// El webhook lee las cookies vigentes de sesiones_meli, dispara el scraper en
+// el VPS y espera a que termine. El token va en header para que el webhook no
+// quede publico. Si lo rotas, cambialo aca y en el nodo IF del workflow n8n.
+const N8N_REFRESH_URL = "https://bigticket2026.app.n8n.cloud/webhook/refrescar-compromiso-meli";
+const N8N_REFRESH_TOKEN = "bt_meli_r3fr3sh_9f4c2a7e8b1d6350";
+
 function PoolMeliCompromiso() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -3058,6 +3065,9 @@ function PoolMeliCompromiso() {
   const [excelDesde, setExcelDesde] = useState(fechaOperativaOffset(-7));
   const [excelHasta, setExcelHasta] = useState(fechaHoyOperativa());
   const [excelHistBusy, setExcelHistBusy] = useState(false);
+  const [scraping, setScraping] = useState(false);
+  const [scrapeMsg, setScrapeMsg] = useState(null);
+  const [fechaVista, setFechaVista] = useState(""); // "" = operativa de mañana (vivo); YYYY-MM-DD = histórico
 
   useEffect(() => {
     let alive = true;
@@ -3065,24 +3075,77 @@ function PoolMeliCompromiso() {
       setLoading(true);
       setError(null);
       try {
-        const { data: result, error: err } = await sb.rpc("get_compromiso_meli_manana");
-        if (!alive) return;
-        if (err) throw err;
-        setData(result);
+        if (fechaVista) {
+          // Histórico: leer el payload guardado del día elegido (misma forma que la RPC)
+          const { data: rows, error: err } = await sb
+            .from("compromiso_meli_historico")
+            .select("payload, fecha_operativa")
+            .eq("fecha_operativa", fechaVista)
+            .limit(1);
+          if (!alive) return;
+          if (err) throw err;
+          if (!rows || rows.length === 0 || !rows[0].payload) {
+            setData(null);
+            setError(`No hay snapshot guardado para ${fechaVista}. La foto histórica se guarda a diario; probá otra fecha.`);
+          } else {
+            setData(rows[0].payload);
+          }
+        } else {
+          const { data: result, error: err } = await sb.rpc("get_compromiso_meli_manana");
+          if (!alive) return;
+          if (err) throw err;
+          setData(result);
+        }
       } catch (e) {
-        if (alive) setError(e.message || String(e));
+        if (alive) { setData(null); setError(e.message || String(e)); }
       } finally {
         if (alive) setLoading(false);
       }
     })();
     return () => { alive = false; };
-  }, [refreshKey]);
+  }, [refreshKey, fechaVista]);
+
+  const actualizarDesdeMeli = async () => {
+    setScraping(true);
+    setScrapeMsg(null);
+    try {
+      const resp = await fetch(N8N_REFRESH_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-brain-token": N8N_REFRESH_TOKEN },
+        body: JSON.stringify({ origen: "compromiso-meli" }),
+      });
+      let j = null;
+      try { j = await resp.json(); } catch (_) { j = null; }
+      if (j && j.ok) {
+        setScrapeMsg({ tipo: "ok", texto: j.mensaje || "Datos actualizados desde MELI." });
+        setRefreshKey(k => k + 1);
+      } else {
+        setScrapeMsg({ tipo: "err", texto: (j && (j.mensaje || j.error)) || ("No se pudo actualizar (HTTP " + resp.status + ").") });
+      }
+    } catch (e) {
+      setScrapeMsg({ tipo: "err", texto: "Error de red al contactar el actualizador: " + (e.message || String(e)) });
+    } finally {
+      setScraping(false);
+    }
+  };
 
   if (loading) {
-    return <div className="pg" style={{ padding: 60, textAlign: "center", color: "#888" }}>Cargando compromiso de mañana…</div>;
+    return <div className="pg" style={{ padding: 60, textAlign: "center", color: "#888" }}>Cargando compromiso…</div>;
   }
   if (error) {
-    return <div className="pg" style={{ padding: 40, color: "#c0392b" }}>Error: {error}</div>;
+    return (
+      <div className="pg" style={{ padding: 40, color: "#c0392b" }}>
+        Error: {error}
+        {fechaVista && (
+          <div style={{ marginTop: 16 }}>
+            <button onClick={() => setFechaVista("")}
+              style={{ padding: "8px 14px", borderRadius: 6, border: "1px solid #1a3a6b", background: "#1a3a6b", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "'Geist', sans-serif" }}>
+              ← Volver a la operativa de mañana
+            </button>
+          </div>
+        )}
+      </div>
+    );
   }
   if (!data) {
     return <div className="pg" style={{ padding: 40, color: "#888" }}>Sin datos</div>;
@@ -3217,9 +3280,9 @@ function PoolMeliCompromiso() {
     <div className="pg">
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
         <div>
-          <div className="sec-title">Compromiso MELI</div>
+          <div className="sec-title">Torre de Control Compromiso</div>
           <div className="sec-sub">
-            Operativa de mañana · {fechaTexto}
+            {fechaVista ? "Histórico" : "Operativa de mañana"} · {fechaTexto}
             {generadoEn && (
               <span style={{ color: "#94a3b8", marginLeft: 8 }}>
                 · datos al {generadoEn.toLocaleString("es-MX", { hour: "2-digit", minute: "2-digit", day: "2-digit", month: "2-digit" })}
@@ -3260,8 +3323,48 @@ function PoolMeliCompromiso() {
             }}
             title="Recargar datos"
           >↻ Refrescar</button>
+          {!fechaVista && (
+          <button
+            onClick={actualizarDesdeMeli}
+            disabled={scraping}
+            style={{
+              padding: "8px 14px", fontSize: 12, fontWeight: 700,
+              background: scraping ? "#f0a875" : "#F47B20", color: "#fff",
+              border: "1px solid #F47B20", borderRadius: 6,
+              cursor: scraping ? "wait" : "pointer", fontFamily: "'Geist', sans-serif",
+              display: "flex", alignItems: "center", gap: 6,
+            }}
+            title="Vuelve a scrapear MELI con las cookies vigentes y recarga (~30s)"
+          >{scraping ? "⏳ Consultando MELI…" : "🔄 Actualizar desde MELI"}</button>
+          )}
         </div>
       </div>
+
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16, padding: "10px 14px", background: "#f8fafc", border: "1px solid #e4e7ec", borderRadius: 8, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 11, fontWeight: 700, color: "#1a3a6b", textTransform: "uppercase", letterSpacing: 0.5 }}>Ver operativa de:</span>
+        <input type="date" value={fechaVista} max={fechaHoyOperativa()} onChange={e => setFechaVista(e.target.value)}
+          style={{ padding: "6px 10px", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: 13, color: "#1a1a1a", fontFamily: "'Geist', sans-serif" }} />
+        {fechaVista ? (
+          <>
+            <span style={{ fontSize: 12, fontWeight: 600, color: "#F47B20" }}>📅 Viendo histórico</span>
+            <button onClick={() => setFechaVista("")}
+              style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid #1a3a6b", background: "#1a3a6b", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "'Geist', sans-serif" }}>
+              ← Volver a mañana (en vivo)
+            </button>
+          </>
+        ) : (
+          <span style={{ fontSize: 12, fontWeight: 600, color: "#047857" }}>🟢 Operativa de mañana (en vivo)</span>
+        )}
+      </div>
+
+      {scrapeMsg && (
+        <div style={{
+          marginBottom: 16, padding: "10px 14px", borderRadius: 6, fontSize: 13, fontWeight: 600,
+          background: scrapeMsg.tipo === "ok" ? "#ecfdf5" : "#fef2f2",
+          color: scrapeMsg.tipo === "ok" ? "#065f46" : "#991b1b",
+          border: "1px solid " + (scrapeMsg.tipo === "ok" ? "#a7f3d0" : "#fecaca"),
+        }}>{scrapeMsg.texto}</div>
+      )}
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12, marginBottom: 20 }}>
         <div className="form-card" style={{
