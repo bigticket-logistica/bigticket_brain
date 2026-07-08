@@ -5,7 +5,7 @@ const COLUMNAS = [
   { id: "recepcion",           label: "Etapa 1: Recepción Documental", color: "#1a3a6b", bg: "#eef2f7", border: "#d6def0" },
   { id: "prevalidacion_biggy", label: "Etapa 2: Pre Validación Biggy",  color: "#F47B20", bg: "#fff4ec", border: "#fbd9c0" },
   { id: "validacion_meli",     label: "Etapa 3: Validación MELI",       color: "#1a3a6b", bg: "#eef2f7", border: "#d6def0" },
-  { id: "validacion_nubarium", label: "Etapa 4: Validación Nubarium",   color: "#1a3a6b", bg: "#eef2f7", border: "#d6def0" },
+  { id: "validacion_nubarium", label: "Etapa 4: Nubarium / REPUVE",       color: "#1a3a6b", bg: "#eef2f7", border: "#d6def0" },
   { id: "aceptado",            label: "Aceptado",                       color: "#166534", bg: "#e8f5ec", border: "#b7e0c2" },
   { id: "rechazado",           label: "Rechazado",                      color: "#c0392b", bg: "#fbeaea", border: "#f0c4c4" },
 ];
@@ -13,7 +13,7 @@ const COLUMNAS = [
 // Etiquetas cortas para los KPIs del header (coinciden con las columnas)
 const ETAPA_CORTA = {
   recepcion: "Etapa 1 · Recepción", prevalidacion_biggy: "Etapa 2 · Biggy", validacion_meli: "Etapa 3 · MELI",
-  validacion_nubarium: "Etapa 4 · Nubarium", aceptado: "Aceptado", rechazado: "Rechazado",
+  validacion_nubarium: "Etapa 4 · Nubarium/REPUVE", aceptado: "Aceptado", rechazado: "Rechazado",
 };
 
 // ─── VISOR DOCUMENTO ────────────────────────────────────────────────
@@ -391,7 +391,7 @@ function ValidacionNubarium({ candidato, onActualizar }) {
 }
 
 // ─── DETALLE CANDIDATO ───────────────────────────────────────────────
-function DetalleCandidato({ candidato, onVolver, onActualizar }) {
+function DetalleCandidato({ candidato, onVolver, onActualizar, onPasarEtapa2 }) {
   const [analizando, setAnalizando] = useState(false);
   const [enviando, setEnviando] = useState(false);
   const [analisis, setAnalisis] = useState(candidato.claude_analisis || null);
@@ -580,10 +580,10 @@ Responde con este JSON exacto:
         {enEtapa1 ? (
           <div className="form-card" style={{ background: "#fff4ec", border: "1px solid #fbd9c0" }}>
             <div style={{ fontSize: 13, color: "#7c3a12", lineHeight: 1.6, marginBottom: 12 }}>
-              Este postulante está en <b>Etapa 1 · Recepción</b>. Revisa la información y los documentos; cuando estés listo, pásalo a <b>Pre Validación Biggy</b> para que Claude analice los documentos.
+              Este postulante está en <b>Etapa 1 · Recepción</b>. Revisa la información y los documentos; al pasarlo a <b>Etapa 2</b>, Biggy hará la pre-validación <b>automáticamente al abrir la tarjeta</b>.
             </div>
-            <button className="btn-orange" onClick={analizarConClaude} disabled={analizando} style={{ width: "100%" }}>
-              {analizando ? "Analizando..." : "▶ Pasar a Etapa 2 · Pre Validación Biggy"}
+            <button className="btn-orange" onClick={onPasarEtapa2} style={{ width: "100%" }}>
+              ▶ Pasar a Etapa 2 · Pre Validación Biggy
             </button>
           </div>
         ) : (
@@ -812,10 +812,25 @@ function normalizarPortalCert(row) {
 
 // Resumen de postulación (read-only) para tarjetas del Portal de Certificación.
 // DetalleCandidato (certificaciones_mx) sigue intacto para la otra fuente.
-function DetalleCertificacion({ cert, onVolver, onPasarEtapa2 }) {
+function DetalleCertificacion({ cert, etapa, onVolver, onPasarEtapa2, onMoverA }) {
   const [docsCert, setDocsCert] = useState(null);
-  const enEtapa1 = (ETAPA_CERT[cert.estado] || "recepcion") === "recepcion";
+  const [analizando, setAnalizando] = useState(false);
+  const [analisis, setAnalisis] = useState(cert.claude_analisis || null);
+  const [score, setScore] = useState(cert.claude_score_global || null);
+  const [recomendacion, setRecomendacion] = useState(cert.claude_recomendacion || null);
+  const [alertas, setAlertas] = useState(cert.claude_alertas || []);
+
+  const etapaActual = etapa || cert.etapa_kanban || ETAPA_CERT[cert.estado] || "recepcion";
+  const enEtapa1 = etapaActual === "recepcion";
+  const enEtapa2 = etapaActual === "prevalidacion_biggy";
+  const esVeh = cert.tipo === "vehiculo";
+  const cond = cert._conductor;
+  const veh  = cert._vehiculo;
+  const ter  = cert._tercero;
+  const titulo = esVeh ? (veh?.placa || "Sin placa") : (cond?.nombre || ter?.nombre || "Sin nombre");
+  const tc = TIPO_CFG[cert.tipo] || TIPO_CFG.conductor;
   const fcFuente = cert.origen === "app_terceros" ? ORIGEN_CFG.app_terceros : FUENTE_CFG.portal_cert;
+
   useEffect(() => {
     let cancel = false;
     (async () => {
@@ -836,12 +851,41 @@ function DetalleCertificacion({ cert, onVolver, onPasarEtapa2 }) {
     })();
     return () => { cancel = true; };
   }, [cert.id]);
-  const cond = cert._conductor;
-  const veh  = cert._vehiculo;
-  const ter  = cert._tercero;
-  const esVeh = cert.tipo === "vehiculo";
-  const titulo = esVeh ? (veh?.placa || "Sin placa") : (cond?.nombre || ter?.nombre || "Sin nombre");
-  const tc = TIPO_CFG[cert.tipo] || TIPO_CFG.conductor;
+
+  // Biggy (Claude Vision) para conductores/ayudantes de App/Portal.
+  // Reusa el mismo webhook mapeando los documentos del portal a los campos esperados.
+  const analizarCert = async (docs) => {
+    const urlDe = (t) => (docs.find(d => d.tipo_documento === t)?.url) || "";
+    setAnalizando(true);
+    try {
+      const payload = {
+        id: cert.id,
+        nombre: cond?.nombre || ter?.nombre || "", curp: cond?.curp || "", rfc: cond?.rfc || "",
+        ine: "", licencia: cond?.licencia_numero || "", puesto: cert.tipo === "ayudante" ? "Ayudante" : "Driver",
+        url_curp: urlDe("curp"), url_ine: urlDe("ine"), url_ine_2: urlDe("ine_reverso"),
+        url_licencia: urlDe("licencia"), url_rfc: urlDe("rfc"),
+      };
+      const resp = await fetch("https://bigticket2026.app.n8n.cloud/webhook/analizar-documentos", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+      });
+      const txt = await resp.text();
+      if (!txt || !txt.trim()) throw new Error("respuesta vacía");
+      const parsed = JSON.parse(txt).analisis;
+      if (!parsed) throw new Error("sin análisis");
+      setAnalisis(parsed); setScore(parsed.score_global); setRecomendacion(parsed.recomendacion); setAlertas(parsed.alertas || []);
+      await sb.from("certificaciones").update({
+        claude_analisis: parsed, claude_score_global: parsed.score_global,
+        claude_recomendacion: parsed.recomendacion, claude_alertas: parsed.alertas || [], claude_reviewed_at: new Date().toISOString(),
+      }).eq("id", cert.id);
+    } catch (e) {
+      setAnalisis({ _error: true, resumen: "No se pudo conectar con el servicio de análisis." });
+    } finally { setAnalizando(false); }
+  };
+
+  // Auto-Biggy al abrir en Etapa 2+ (solo personas), si no hay análisis cacheado.
+  useEffect(() => {
+    if (docsCert && !enEtapa1 && !esVeh && !analisis && !analizando) analizarCert(docsCert);
+  }, [docsCert]);
 
   const campos = esVeh ? [
     ["Placa", veh?.placa], ["VIN", veh?.vin], ["Marca", veh?.marca], ["Modelo", veh?.modelo],
@@ -869,15 +913,40 @@ function DetalleCertificacion({ cert, onVolver, onPasarEtapa2 }) {
       </div>
 
       <div className="pg-detail">
-        {/* Etapa 1: pasar a Pre Validación Biggy (mismo patrón que Prospección) */}
+        {/* Etapa 1: solo mover a Etapa 2 (Biggy corre al ABRIR en Etapa 2) */}
         {enEtapa1 && (
           <div className="form-card" style={{ background: "#fff4ec", border: "1px solid #fbd9c0" }}>
             <div style={{ fontSize: 13, color: "#7c3a12", lineHeight: 1.6, marginBottom: 12 }}>
-              Esta postulación está en <b>Etapa 1 · Recepción</b>. Revisa la información y los documentos; cuando estés listo, pásala a <b>Pre Validación Biggy</b>.
+              Esta postulación está en <b>Etapa 1 · Recepción</b>. Al pasarla a <b>Etapa 2</b>, Biggy hará la pre-validación <b>automáticamente al abrir la tarjeta</b>.
             </div>
             <button className="btn-orange" onClick={onPasarEtapa2} style={{ width: "100%" }}>
               ▶ Pasar a Etapa 2 · Pre Validación Biggy
             </button>
+          </div>
+        )}
+
+        {/* Etapa 2+: Biggy para personas; vehículos usarán su Vision propia (track REPUVE) */}
+        {!enEtapa1 && !esVeh && (
+          <BiggyChatBubble analizando={analizando} analisis={analisis} score={score} recomendacion={recomendacion} alertas={alertas} onReanalizar={() => docsCert && analizarCert(docsCert)} />
+        )}
+        {!enEtapa1 && esVeh && (
+          <div className="form-card" style={{ background: "#eef2f7", border: "1px solid #d6def0" }}>
+            <div style={{ fontSize: 13, color: "#1a3a6b" }}>Vehículo en <b>{ETAPA_CORTA[etapaActual] || etapaActual}</b>. La validación por Claude Vision (fotos vs modelo declarado) se conecta con el track <b>REPUVE</b>.</div>
+          </div>
+        )}
+
+        {/* Etapa 2 → siguiente: MELI (persona) / REPUVE (vehículo, sin pasar por MELI) */}
+        {enEtapa2 && (
+          <div className="form-card">
+            {esVeh ? (
+              <button className="btn-orange" onClick={() => onMoverA("validacion_nubarium")} style={{ width: "100%" }}>
+                ▶ Pasar a Validación REPUVE
+              </button>
+            ) : (
+              <button className="btn-orange" onClick={() => onMoverA("validacion_meli")} style={{ width: "100%" }}>
+                ▶ Pasar a Validación MELI
+              </button>
+            )}
           </div>
         )}
 
@@ -1044,8 +1113,8 @@ function ModuloCertificaciones() {
           .select("*, certificacion_conductor(*), certificacion_vehiculo(*), terceros(nombre, service_center)")
           .order("created_at", { ascending: false }),
       ]);
-      const cardsA = (rp.data || []).map(normalizarProspeccion);
-      const cardsB = (rc.data || []).map(normalizarPortalCert);
+      const cardsA = (rp.data || []).filter(r => !r.oculto_kanban).map(normalizarProspeccion);
+      const cardsB = (rc.data || []).filter(r => !r.oculto_kanban).map(normalizarPortalCert);
       // Portal primero para que lo más nuevo del rediseño quede visible arriba
       setItems([...cardsB, ...cardsA]);
     } catch (e) {
@@ -1139,43 +1208,55 @@ function ModuloCertificaciones() {
     if (!card || card.etapa === targetEtapa) return;
     const col = COLUMNAS.find(c => c.id === targetEtapa);
     if (!confirm(`¿Mover "${card.titulo}" a "${col?.label || targetEtapa}"?`)) return;
-    setItems(prev => prev.map(i => i.key === cardKey ? { ...i, etapa: targetEtapa } : i));
-    // Persiste la etapa en ambas fuentes (para que no se revierta al refrescar)
+    setItems(prev => prev.map(i => i.key === cardKey ? { ...i, etapa: targetEtapa, raw: { ...i.raw, etapa_kanban: targetEtapa, ...(card.fuente === "prospeccion" && ESTADO_POR_ETAPA[targetEtapa] ? { estado: ESTADO_POR_ETAPA[targetEtapa] } : {}) } } : i));
+    // Persiste la etapa en ambas fuentes (para que no se revierta al refrescar).
+    // NO se dispara Biggy aquí: la Pre Validación corre al ABRIR la tarjeta en Etapa 2.
     if (card.fuente === "prospeccion") {
       const patch = { etapa_kanban: targetEtapa, updated_at: new Date().toISOString() };
       const estado = ESTADO_POR_ETAPA[targetEtapa];
       if (estado) patch.estado = estado;
       const { error } = await sb.from("certificaciones_mx").update(patch).eq("id", card.id);
       if (error) { alert("No se pudo guardar el movimiento: " + error.message); await cargar(); return; }
-      // Al entrar a Etapa 2, Biggy analiza los documentos (si aún no lo hizo)
-      if (targetEtapa === "prevalidacion_biggy" && !card.raw?.claude_analisis) {
-        analizarProspecto(card);
-      }
     } else if (card.fuente === "portal_cert") {
       const { error } = await sb.from("certificaciones").update({ etapa_kanban: targetEtapa }).eq("id", card.id);
       if (error) { alert("No se pudo guardar el movimiento: " + error.message); await cargar(); return; }
     }
   };
 
-  // Quitar tarjeta del tablero (SOLO front, no borra de la BBDD)
-  const eliminarTarjeta = (card) => {
-    if (!confirm(`¿Quitar "${card.titulo}" del tablero?\n\nSolo se oculta de la vista — NO se elimina de la base de datos.`)) return;
+  // Mover la tarjeta seleccionada a una etapa y volver al tablero (usado por los botones del detalle)
+  const moverYCerrar = async (card, targetEtapa) => {
+    const patchRaw = { etapa_kanban: targetEtapa };
+    if (card.fuente === "prospeccion") {
+      const estado = ESTADO_POR_ETAPA[targetEtapa];
+      if (estado) patchRaw.estado = estado;
+      await sb.from("certificaciones_mx").update({ ...patchRaw, updated_at: new Date().toISOString() }).eq("id", card.id);
+    } else {
+      await sb.from("certificaciones").update({ etapa_kanban: targetEtapa }).eq("id", card.id);
+    }
+    setItems(prev => prev.map(i => i.key === card.key ? { ...i, etapa: targetEtapa, raw: { ...i.raw, ...patchRaw } } : i));
+    setSelected(null);
+  };
+
+  // Quitar tarjeta del tablero — persistido (no reaparece al refrescar)
+  const eliminarTarjeta = async (card) => {
+    if (!confirm(`¿Quitar "${card.titulo}" del tablero?\n\nSe oculta del tablero (no se borra la fila de la base de datos).`)) return;
     setItems(prev => prev.filter(i => i.key !== card.key));
+    const tabla = card.fuente === "prospeccion" ? "certificaciones_mx" : "certificaciones";
+    const { error } = await sb.from(tabla).update({ oculto_kanban: true }).eq("id", card.id);
+    if (error) { alert("No se pudo ocultar: " + error.message); await cargar(); }
   };
 
   if (selected) {
     if (selected.fuente === "portal_cert") {
-      return <DetalleCertificacion cert={selected.raw} onVolver={() => setSelected(null)}
-        onPasarEtapa2={async () => {
-          setItems(prev => prev.map(i => i.key === selected.key ? { ...i, etapa: "prevalidacion_biggy" } : i));
-          await sb.from("certificaciones").update({ etapa_kanban: "prevalidacion_biggy" }).eq("id", selected.id);
-          setSelected(null);
-        }} />;
+      return <DetalleCertificacion cert={selected.raw} etapa={selected.etapa} onVolver={() => setSelected(null)}
+        onPasarEtapa2={() => moverYCerrar(selected, "prevalidacion_biggy")}
+        onMoverA={(etapa) => moverYCerrar(selected, etapa)} />;
     }
     return (
       <DetalleCandidato
         candidato={selected.raw}
         onVolver={() => setSelected(null)}
+        onPasarEtapa2={() => moverYCerrar(selected, "prevalidacion_biggy")}
         onActualizar={(updated) => {
           const rn = normalizarProspeccion(updated);
           setItems(items.map(i => i.key === rn.key ? rn : i));
