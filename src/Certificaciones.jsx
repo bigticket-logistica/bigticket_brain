@@ -1099,6 +1099,12 @@ function ModuloCertificaciones() {
     validacion_nubarium: "aprobado", aceptado: "aceptado", rechazado: "rechazado",
   };
 
+  // Etapa del Kanban -> estado persistido para Portal/App (Fuente B / tabla certificaciones)
+  const ESTADO_CERT_POR_ETAPA = {
+    recepcion: "enviado", prevalidacion_biggy: "en_validacion", validacion_meli: "en_validacion",
+    validacion_nubarium: "en_validacion", aceptado: "certificado", rechazado: "rechazado",
+  };
+
   // Dispara Biggy (Claude Vision) sobre un prospecto (Fuente A) y cachea el análisis.
   const analizarProspecto = async (card) => {
     try {
@@ -1138,6 +1144,16 @@ function ModuloCertificaciones() {
       // Al entrar a Etapa 2, Biggy analiza los documentos (si aún no lo hizo)
       if (targetEtapa === "prevalidacion_biggy" && !card.raw?.claude_analisis) {
         analizarProspecto(card);
+      }
+    }
+    // Portal web / App Terceros (Fuente B): persiste el estado en certificaciones y avisa a la app.
+    if (card.fuente === "portal_cert") {
+      const estado = ESTADO_CERT_POR_ETAPA[targetEtapa];
+      if (estado) {
+        const { error } = await sb.from("certificaciones").update({ estado }).eq("id", card.id);
+        if (error) { alert("No se pudo guardar el movimiento: " + error.message); await cargar(); return; }
+        await sb.from("certificacion_eventos").insert({ certificacion_id: card.id, estado_nuevo: estado, nota: "Movida en el tablero del Brain", actor: "brain" });
+        setItems(prev => prev.map(i => i.key === cardKey ? { ...i, estado_raw: estado, raw: { ...i.raw, estado } } : i));
       }
     }
   };
