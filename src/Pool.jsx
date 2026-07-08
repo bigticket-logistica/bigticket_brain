@@ -3154,11 +3154,11 @@ function PoolMeliCompromiso() {
     setRecalc(true);
     setScrapeMsg(null);
     try {
-      const { data: result, error: err } = await sb.rpc("get_compromiso_meli_por_fecha", { p_fecha: fechaVista });
+      const { data: result, error: err } = await sb.rpc("recalcular_y_guardar_compromiso", { p_fecha: fechaVista });
       if (err) throw err;
       if (!result) throw new Error("Sin datos para esa fecha en meli_travel_requests");
       setData(result);
-      setScrapeMsg({ tipo: "ok", texto: "Recalculado desde el crudo de MELI para " + fechaVista + "." });
+      setScrapeMsg({ tipo: "ok", texto: "Recalculado y guardado desde el crudo de MELI para " + fechaVista + "." });
     } catch (e) {
       setScrapeMsg({ tipo: "err", texto: "No se pudo recalcular: " + (e.message || String(e)) });
     } finally {
@@ -3391,7 +3391,7 @@ function PoolMeliCompromiso() {
             <button onClick={recalcularDia} disabled={recalc}
               style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid #F47B20", background: recalc ? "#f0a875" : "#F47B20", color: "#fff", fontSize: 12, fontWeight: 700, cursor: recalc ? "wait" : "pointer", fontFamily: "'Geist', sans-serif" }}
               title="Recalcula el total del día desde los datos crudos de MELI (meli_travel_requests)">
-              {recalc ? "⏳ Recalculando…" : "🔁 Recalcular este día (crudo MELI)"}
+              {recalc ? "⏳ Recalculando…" : "🔁 Recalcular y guardar (crudo MELI)"}
             </button>
           </>
         ) : (
