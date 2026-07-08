@@ -3080,7 +3080,7 @@ function PoolMeliCompromiso() {
           // Histórico: usa payload si existe; si no (filas viejas del job diario), reconstruye desde columnas
           const { data: rows, error: err } = await sb
             .from("compromiso_meli_historico")
-            .select("payload, rankings, fecha_operativa, generado_en, capturado_en, ofrecidas_sdd, ofrecidas_spot, aceptadas_sdd, aceptadas_spot, rechazadas_sdd, rechazadas_spot, canceladas_sdd, canceladas_spot")
+            .select("payload, rankings, fecha_operativa, generado_en, capturado_en, ofrecidas_sdd, ofrecidas_spot, aceptadas_sdd, aceptadas_spot, rechazadas_sdd, rechazadas_spot, canceladas_sdd, canceladas_spot, pendientes_sdd, pendientes_spot")
             .eq("fecha_operativa", fechaVista)
             .limit(1);
           if (!alive) return;
@@ -3101,6 +3101,7 @@ function PoolMeliCompromiso() {
                   aceptadas_sdd: row.aceptadas_sdd || 0, aceptadas_spot: row.aceptadas_spot || 0,
                   rechazadas_sdd: row.rechazadas_sdd || 0, rechazadas_spot: row.rechazadas_spot || 0,
                   canceladas_sdd: row.canceladas_sdd || 0, canceladas_spot: row.canceladas_spot || 0,
+                  pendientes_sdd: row.pendientes_sdd || 0, pendientes_spot: row.pendientes_spot || 0,
                 },
                 ranking_sdd_aceptadas: rk.sdd_aceptadas || [],
                 ranking_sdd_rechazadas: rk.sdd_rechazadas || [],
@@ -3196,6 +3197,7 @@ function PoolMeliCompromiso() {
   const aceptadasTotal = (c.aceptadas_sdd || 0) + (c.aceptadas_spot || 0);
   const rechazadasTotal = (c.rechazadas_sdd || 0) + (c.rechazadas_spot || 0);
   const canceladasTotal = (c.canceladas_sdd || 0) + (c.canceladas_spot || 0);
+  const pendientesTotal = (c.pendientes_sdd || 0) + (c.pendientes_spot || 0);
 
   const calcularCump = (acept, ofrec, canc) => {
     const efectivas = ofrec - canc;
@@ -3236,6 +3238,7 @@ function PoolMeliCompromiso() {
       [""],
       ["Métrica", "SDD", "SPOT", "Total"],
       ["Ofrecidas", c.ofrecidas_sdd || 0, c.ofrecidas_spot || 0, ofrecidasTotal],
+      ["Para responder", c.pendientes_sdd || 0, c.pendientes_spot || 0, pendientesTotal],
       ["Aceptadas", c.aceptadas_sdd || 0, c.aceptadas_spot || 0, aceptadasTotal],
       ["Rechazadas", c.rechazadas_sdd || 0, c.rechazadas_spot || 0, rechazadasTotal],
       ["Canceladas MELI", c.canceladas_sdd || 0, c.canceladas_spot || 0, canceladasTotal],
@@ -3467,6 +3470,7 @@ function PoolMeliCompromiso() {
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 12, marginBottom: 20 }}>
         <CompromisoTarjeta label="Ofrecidas" sublabel="Total por MELI" total={ofrecidasTotal} sdd={c.ofrecidas_sdd || 0} spot={c.ofrecidas_spot || 0} color="#1a3a6b" />
+        <CompromisoTarjeta label="Para responder" sublabel="Pendientes" total={pendientesTotal} sdd={c.pendientes_sdd || 0} spot={c.pendientes_spot || 0} color="#ca8a04" />
         <CompromisoTarjeta label="Aceptadas" sublabel="Por nosotros" total={aceptadasTotal} sdd={c.aceptadas_sdd || 0} spot={c.aceptadas_spot || 0} color="#047857" />
         <CompromisoTarjeta label="Rechazadas" sublabel="Por nosotros" total={rechazadasTotal} sdd={c.rechazadas_sdd || 0} spot={c.rechazadas_spot || 0} color="#b91c1c" />
         <CompromisoTarjeta label="Canceladas" sublabel="Por MELI" total={canceladasTotal} sdd={c.canceladas_sdd || 0} spot={c.canceladas_spot || 0} color="#92400e" />
