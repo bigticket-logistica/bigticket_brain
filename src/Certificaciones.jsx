@@ -752,8 +752,11 @@ const ETAPA_CERT = { enviado: "recepcion", en_validacion: "validacion_meli", val
 // con análisis cacheado → Etapa 2 (Pre Validación Biggy).
 function etapaProspeccion(row) {
   const base = ETAPA_MX[row.estado] || "recepcion";
-  if (base === "recepcion" && row.claude_analisis) return "prevalidacion_biggy";
-  return base;
+  // estados definidos (enviado/aprobado/aceptado/rechazado) mandan → automatización
+  if (base !== "recepcion") return base;
+  // estado "pendiente" → Etapa 1 vs 2: usa el movimiento manual guardado si existe
+  if (row.etapa_kanban === "recepcion" || row.etapa_kanban === "prevalidacion_biggy") return row.etapa_kanban;
+  return row.claude_analisis ? "prevalidacion_biggy" : "recepcion";
 }
 
 // PostgREST devuelve el embed 1:1 como objeto o como array de 1 — normalizamos.
@@ -792,7 +795,7 @@ function normalizarPortalCert(row) {
     tipo:   row.tipo || "conductor",
     titulo: esVeh ? (veh?.placa || "Sin placa") : (cond?.nombre || ter?.nombre || "Sin nombre"),
     sc:     row.service_center || ter?.service_center || "—",
-    etapa:  ETAPA_CERT[row.estado] || "recepcion",
+    etapa:  row.etapa_kanban || ETAPA_CERT[row.estado] || "recepcion",
     estado_raw: row.estado,
     raw: { ...row, _conductor: cond, _vehiculo: veh, _tercero: ter },
   };
@@ -1099,12 +1102,6 @@ function ModuloCertificaciones() {
     validacion_nubarium: "aprobado", aceptado: "aceptado", rechazado: "rechazado",
   };
 
-  // Etapa del Kanban -> estado persistido para Portal/App (Fuente B / tabla certificaciones)
-  const ESTADO_CERT_POR_ETAPA = {
-    recepcion: "enviado", prevalidacion_biggy: "en_validacion", validacion_meli: "en_validacion",
-    validacion_nubarium: "en_validacion", aceptado: "certificado", rechazado: "rechazado",
-  };
-
   // Dispara Biggy (Claude Vision) sobre un prospecto (Fuente A) y cachea el análisis.
   const analizarProspecto = async (card) => {
     try {
@@ -1134,27 +1131,20 @@ function ModuloCertificaciones() {
     const col = COLUMNAS.find(c => c.id === targetEtapa);
     if (!confirm(`¿Mover "${card.titulo}" a "${col?.label || targetEtapa}"?`)) return;
     setItems(prev => prev.map(i => i.key === cardKey ? { ...i, etapa: targetEtapa } : i));
-    // Persiste solo la Fuente A; el Portal (Fuente B) se mueve solo en el tablero
+    // Persiste la etapa en ambas fuentes (para que no se revierta al refrescar)
     if (card.fuente === "prospeccion") {
+      const patch = { etapa_kanban: targetEtapa, updated_at: new Date().toISOString() };
       const estado = ESTADO_POR_ETAPA[targetEtapa];
-      if (estado) {
-        const { error } = await sb.from("certificaciones_mx").update({ estado, updated_at: new Date().toISOString() }).eq("id", card.id);
-        if (error) { alert("No se pudo guardar el movimiento: " + error.message); await cargar(); return; }
-      }
+      if (estado) patch.estado = estado;
+      const { error } = await sb.from("certificaciones_mx").update(patch).eq("id", card.id);
+      if (error) { alert("No se pudo guardar el movimiento: " + error.message); await cargar(); return; }
       // Al entrar a Etapa 2, Biggy analiza los documentos (si aún no lo hizo)
       if (targetEtapa === "prevalidacion_biggy" && !card.raw?.claude_analisis) {
         analizarProspecto(card);
       }
-    }
-    // Portal web / App Terceros (Fuente B): persiste el estado en certificaciones y avisa a la app.
-    if (card.fuente === "portal_cert") {
-      const estado = ESTADO_CERT_POR_ETAPA[targetEtapa];
-      if (estado) {
-        const { error } = await sb.from("certificaciones").update({ estado }).eq("id", card.id);
-        if (error) { alert("No se pudo guardar el movimiento: " + error.message); await cargar(); return; }
-        await sb.from("certificacion_eventos").insert({ certificacion_id: card.id, estado_nuevo: estado, nota: "Movida en el tablero del Brain", actor: "brain" });
-        setItems(prev => prev.map(i => i.key === cardKey ? { ...i, estado_raw: estado, raw: { ...i.raw, estado } } : i));
-      }
+    } else if (card.fuente === "portal_cert") {
+      const { error } = await sb.from("certificaciones").update({ etapa_kanban: targetEtapa }).eq("id", card.id);
+      if (error) { alert("No se pudo guardar el movimiento: " + error.message); await cargar(); return; }
     }
   };
 
@@ -1167,8 +1157,9 @@ function ModuloCertificaciones() {
   if (selected) {
     if (selected.fuente === "portal_cert") {
       return <DetalleCertificacion cert={selected.raw} onVolver={() => setSelected(null)}
-        onPasarEtapa2={() => {
+        onPasarEtapa2={async () => {
           setItems(prev => prev.map(i => i.key === selected.key ? { ...i, etapa: "prevalidacion_biggy" } : i));
+          await sb.from("certificaciones").update({ etapa_kanban: "prevalidacion_biggy" }).eq("id", selected.id);
           setSelected(null);
         }} />;
     }
@@ -1314,3 +1305,5 @@ function ModuloCertificaciones() {
 }
 
 export default ModuloCertificaciones;
+
+///
