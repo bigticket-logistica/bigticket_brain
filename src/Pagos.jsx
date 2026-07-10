@@ -9485,22 +9485,47 @@ function PadronRechazados() {
     }
   }
 
+  // Dedup por CURP: la vista trae filas repetidas cuando una persona tiene
+  // más de un driver_id en el padrón (universos MELI rostering vs operación).
+  // Colapsamos a una fila por persona tomando el máximo de actividad.
+  const rowsUnicas = useMemo(() => {
+    const m = new Map();
+    for (const r of rows) {
+      const k = String(r.curp ?? "").toUpperCase().trim();
+      const prev = m.get(k);
+      if (!prev) { m.set(k, { ...r }); continue; }
+      prev.viajes_ayer = Math.max(prev.viajes_ayer || 0, r.viajes_ayer || 0);
+      prev.viajes_7d   = Math.max(prev.viajes_7d   || 0, r.viajes_7d   || 0);
+      prev.viajes_15d  = Math.max(prev.viajes_15d  || 0, r.viajes_15d  || 0);
+      prev.viajes_30d  = Math.max(prev.viajes_30d  || 0, r.viajes_30d  || 0);
+      prev.esta_en_padron = prev.esta_en_padron || r.esta_en_padron;
+      if (!prev.driver_id && r.driver_id) prev.driver_id = r.driver_id;
+      if (r.ultimo_viaje && (!prev.ultimo_viaje || r.ultimo_viaje > prev.ultimo_viaje)) {
+        prev.ultimo_viaje = r.ultimo_viaje;
+        prev.sc_ultimo = r.sc_ultimo;
+        prev.supervisor_ultimo = r.supervisor_ultimo;
+      }
+    }
+    return [...m.values()];
+  }, [rows]);
+
   const kpis = useMemo(() => ({
-    total: rows.length,
-    con_act: rows.filter(r => r.viajes_30d > 0).length,
-    ayer: rows.filter(r => r.viajes_ayer > 0).length,
-    semana: rows.filter(r => r.viajes_7d > 0).length,
-  }), [rows]);
+    total: rowsUnicas.length,
+    en_padron: rowsUnicas.filter(r => r.esta_en_padron).length,
+    con_act: rowsUnicas.filter(r => r.viajes_30d > 0).length,
+    ayer: rowsUnicas.filter(r => r.viajes_ayer > 0).length,
+    semana: rowsUnicas.filter(r => r.viajes_7d > 0).length,
+  }), [rowsUnicas]);
 
   const filtradas = useMemo(() => {
-    let res = rows;
+    let res = rowsUnicas;
     if (soloActivos) res = res.filter(r => r.viajes_30d > 0);
     const q = busqueda.toLowerCase().trim();
     if (q) res = res.filter(r =>
       [r.curp, r.driver_id, r.nombre, r.empresa, r.sc_ultimo, r.supervisor_ultimo].some(v => String(v ?? "").toLowerCase().includes(q)));
     // orden: viajes_30d desc
     return [...res].sort((a, b) => (b.viajes_30d || 0) - (a.viajes_30d || 0));
-  }, [rows, busqueda, soloActivos]);
+  }, [rowsUnicas, busqueda, soloActivos]);
 
   const exportar = () => {
     const headers = ["CURP", "ID conductor", "Nombre", "Empresa", "SC último", "Supervisor último",
@@ -9534,7 +9559,7 @@ function PadronRechazados() {
 
       {/* KPIs */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10, marginBottom: 12 }}>
-        <PKpi l="Rechazados (total)" v={kpis.total} s="con CURP en el padrón" accent={PNAVY} />
+        <PKpi l="Rechazados (total)" v={kpis.total} s={`únicos por CURP · ${kpis.en_padron} en el padrón`} accent={PNAVY} />
         <PKpi l="Con actividad 30d" v={kpis.con_act} s="rechazados que operaron" accent="#d97706" />
         <PKpi l="⚠️ Operaron ayer" v={kpis.ayer} s="rechazados en ruta ayer" accent="#c0392b" />
         <PKpi l="Operaron 7 días" v={kpis.semana} s="actividad reciente" accent="#d97706" />
@@ -9549,7 +9574,7 @@ function PadronRechazados() {
           background: soloActivos ? "#c0392b" : "#fff", color: soloActivos ? "#fff" : PMUTED,
           fontFamily: "'Geist', sans-serif",
         }}>{soloActivos ? `Solo con viajes (${kpis.con_act})` : "Solo con viajes"}</button>
-        <span style={{ fontSize: 12, color: PMUTED }}>{filtradas.length} de {rows.length}</span>
+        <span style={{ fontSize: 12, color: PMUTED }}>{filtradas.length} de {rowsUnicas.length}</span>
         <button onClick={exportar} style={{ marginLeft: "auto", fontSize: 11, fontWeight: 600, padding: "6px 11px", borderRadius: 6, border: "none", background: PNAVY, color: "#fff", cursor: "pointer", fontFamily: "'Geist', sans-serif", display: "inline-flex", alignItems: "center", gap: 5 }}>
           <i className="ti ti-download" style={{ fontSize: 12 }} />Exportar CSV
         </button>
@@ -9557,7 +9582,7 @@ function PadronRechazados() {
 
       {loading ? (
         <div style={{ padding: 40, textAlign: "center", color: PMUTED, fontSize: 13 }}>Cargando…</div>
-      ) : rows.length === 0 ? (
+      ) : rowsUnicas.length === 0 ? (
         <div style={{ background: "#fff", border: `1px dashed ${PBORDER}`, borderRadius: 10, padding: 40, textAlign: "center", color: PLIGHT, fontSize: 13 }}>
           No hay datos de validación cargados. Usá "Cargar Excel" para subir el archivo de tripulaciones.
         </div>
