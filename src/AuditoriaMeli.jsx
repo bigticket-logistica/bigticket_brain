@@ -55,13 +55,18 @@ function describirCambio(a) {
 }
 
 // ─── Badge de plataforma ───────────────────────────────────────────────
+// Orígenes reales de una acción crítica hoy: la app Android (marca
+// 'android_app') o la extensión Chrome (que NO setea plataforma → llega
+// null). Por eso null/desconocido se interpreta como "Web". Si algún día
+// se agrega un tercer origen, deberá setear su propio 'plataforma'.
 function BadgePlataforma({ p }) {
   const map = {
     android_app:      { label: "App",    bg: "#e8f5ec", color: "#166534" },
-    chrome_desktop:   { label: "Chrome", bg: "#eef2f7", color: "#1a3a6b" },
-    chrome_extension: { label: "Chrome", bg: "#eef2f7", color: "#1a3a6b" },
+    chrome_desktop:   { label: "Web",    bg: "#eef2f7", color: "#1a3a6b" },
+    chrome_extension: { label: "Web",    bg: "#eef2f7", color: "#1a3a6b" },
   };
-  const s = map[p] || { label: p || "—", bg: "#f3f4f6", color: "#666" };
+  // null / vacío / valor no mapeado → Web (extensión Chrome)
+  const s = map[p] || { label: "Web", bg: "#eef2f7", color: "#1a3a6b" };
   return (
     <span style={{ background: s.bg, color: s.color, borderRadius: 20, padding: "2px 9px", fontSize: 10, fontWeight: 700 }}>
       {s.label}
