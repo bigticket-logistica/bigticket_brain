@@ -57,8 +57,9 @@ function describirCambio(a) {
 // ─── Badge de plataforma ───────────────────────────────────────────────
 function BadgePlataforma({ p }) {
   const map = {
-    android_app:    { label: "App", bg: "#e8f5ec", color: "#166534" },
-    chrome_desktop: { label: "Chrome", bg: "#eef2f7", color: "#1a3a6b" },
+    android_app:      { label: "App",    bg: "#e8f5ec", color: "#166534" },
+    chrome_desktop:   { label: "Chrome", bg: "#eef2f7", color: "#1a3a6b" },
+    chrome_extension: { label: "Chrome", bg: "#eef2f7", color: "#1a3a6b" },
   };
   const s = map[p] || { label: p || "—", bg: "#f3f4f6", color: "#666" };
   return (
@@ -66,6 +67,25 @@ function BadgePlataforma({ p }) {
       {s.label}
     </span>
   );
+}
+
+// ─── Estado de una sesión web según antigüedad del último refresco ──────
+function estadoSesion(minutos) {
+  if (minutos == null) return { label: "—", icon: "•", color: "#666", bg: "#f3f4f6" };
+  if (minutos <= 60)   return { label: "Activo ahora", icon: "🟢", color: "#166534", bg: "#e8f5ec" };
+  if (minutos <= 360)  return { label: "Reciente",     icon: "🟢", color: "#166534", bg: "#e8f5ec" };
+  if (minutos <= 720)  return { label: ">6h sin login", icon: "🟡", color: "#b45309", bg: "#fef3c7" };
+  return { label: "Expirado", icon: "🔴", color: "#c0392b", bg: "#fbeaea" };
+}
+
+// ─── Antigüedad legible ("hace 17 min", "hace 2 h") ────────────────────
+function haceCuanto(minutos) {
+  if (minutos == null) return "—";
+  if (minutos < 1)   return "hace <1 min";
+  if (minutos < 60)  return `hace ${Math.round(minutos)} min`;
+  const horas = minutos / 60;
+  if (horas < 24)    return `hace ${horas.toFixed(1)} h`;
+  return `hace ${Math.round(horas / 24)} d`;
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -180,7 +200,7 @@ function ModuloAuditoriaMeli() {
         <div style={{ textAlign: "center", padding: "40px 0", color: "#888", fontSize: 13 }}>Cargando…</div>
       )}
 
-      {/* ── Vistas ── */}
+      {/* ── Vistas (BLOQUE SUPERIOR: acciones críticas) ── */}
       {!cargando && !error && vista === "listado" && (
         <VistaListado
           acciones={accionesFiltradas}
@@ -190,6 +210,136 @@ function ModuloAuditoriaMeli() {
       )}
       {!cargando && !error && vista === "ranking" && (
         <VistaRanking acciones={acciones} fecha={fecha} />
+      )}
+
+      {/* ── BLOQUE INFERIOR: conexiones vía web (extensión) ── */}
+      <BloqueSesionesWeb />
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  BLOQUE INFERIOR · SESIONES WEB (EXTENSIÓN "Don B")
+//  Lee sesiones_meli: quién tiene sesión activa por extensión y hace cuánto
+//  refrescó sus cookies. Es ESTADO DE CONEXIÓN, no acciones.
+// ═══════════════════════════════════════════════════════════════════════
+function BloqueSesionesWeb() {
+  const [sesiones, setSesiones] = useState([]);
+  const [cargando, setCargando] = useState(false);
+  const [error, setError] = useState(null);
+  const [refrescadoEn, setRefrescadoEn] = useState(null);
+
+  const cargar = async () => {
+    setCargando(true);
+    setError(null);
+    try {
+      // Solo filas por-usuario (id "lm_user_<ldap>"), no la sesion_activa agregada
+      const { data, error: err } = await sb
+        .from("sesiones_meli")
+        .select("id, usuario_id, cantidad_cookies, actualizado_at")
+        .like("id", "lm_user_%")
+        .order("actualizado_at", { ascending: false });
+      if (err) throw err;
+      setSesiones(data || []);
+      setRefrescadoEn(new Date());
+    } catch (e) {
+      setError(e.message || String(e));
+    } finally {
+      setCargando(false);
+    }
+  };
+
+  // Carga inicial + autorefresco cada 60 s (el estado de conexión cambia solo)
+  useEffect(() => {
+    cargar();
+    const t = setInterval(cargar, 60000);
+    return () => clearInterval(t);
+  }, []);
+
+  // Minutos desde el último refresco de cookies de cada sesión
+  const ahora = Date.now();
+  const filas = sesiones.map(s => {
+    const min = s.actualizado_at
+      ? (ahora - new Date(s.actualizado_at).getTime()) / 60000
+      : null;
+    return { ...s, minutos: min };
+  });
+
+  const activos = filas.filter(f => f.minutos != null && f.minutos <= 60).length;
+
+  return (
+    <div style={{ marginTop: 28 }}>
+      {/* Encabezado del bloque */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10, marginBottom: 12 }}>
+        <div>
+          <div style={{ fontSize: 14, fontWeight: 700, color: "#1a3a6b" }}>
+            🌐 Conexiones vía web (extensión)
+          </div>
+          <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>
+            Supervisores con sesión de MELI activa a través de la extensión — usuario y último refresco de cookies
+          </div>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <span style={{ background: "#e8f5ec", color: "#166534", borderRadius: 20, padding: "3px 11px", fontSize: 11, fontWeight: 700 }}>
+            {activos} activo{activos === 1 ? "" : "s"} ahora
+          </span>
+          <button onClick={cargar} disabled={cargando}
+            style={{ background: "#f4f5f7", border: "0.5px solid #e4e7ec", borderRadius: 8, padding: "7px 12px", fontSize: 12, cursor: cargando ? "default" : "pointer", color: "#666", fontFamily: "'Geist',sans-serif" }}>
+            {cargando ? "Actualizando…" : "↻ Actualizar"}
+          </button>
+        </div>
+      </div>
+
+      {error && (
+        <div style={{ background: "#fbeaea", border: "1px solid #f0c4c4", borderRadius: 8, padding: "12px 16px", color: "#c0392b", fontSize: 13, marginBottom: 14 }}>
+          Error cargando sesiones: {error}
+        </div>
+      )}
+
+      {!error && filas.length === 0 && !cargando ? (
+        <div style={{ textAlign: "center", padding: "34px 0", color: "#aaa", fontSize: 13, background: "#fff", border: "0.5px solid #e4e7ec", borderRadius: 12 }}>
+          Ninguna sesión web registrada todavía.
+        </div>
+      ) : (
+        <div style={{ background: "#fff", border: "0.5px solid #e4e7ec", borderRadius: 12, overflow: "hidden" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+            <thead>
+              <tr style={{ background: "#1a3a6b", color: "#fff", textAlign: "left" }}>
+                <th style={thStyle}>Usuario</th>
+                <th style={{ ...thStyle, textAlign: "center" }}>Cookies</th>
+                <th style={thStyle}>Último login (MX)</th>
+                <th style={thStyle}>Antigüedad</th>
+                <th style={{ ...thStyle, textAlign: "center" }}>Estado</th>
+                <th style={{ ...thStyle, textAlign: "center" }}>Origen</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filas.map((f, i) => {
+                const est = estadoSesion(f.minutos);
+                return (
+                  <tr key={f.id || f.usuario_id || i} style={{ borderTop: "0.5px solid #eef0f3" }}>
+                    <td style={{ ...tdStyle, fontWeight: 600, color: "#1a1a1a" }}>{f.usuario_id || "—"}</td>
+                    <td style={{ ...tdStyle, textAlign: "center", color: "#444" }}>{f.cantidad_cookies ?? "—"}</td>
+                    <td style={{ ...tdStyle, color: "#666", whiteSpace: "nowrap" }}>{fmtFechaHora(f.actualizado_at)}</td>
+                    <td style={{ ...tdStyle, color: "#666" }}>{haceCuanto(f.minutos)}</td>
+                    <td style={{ ...tdStyle, textAlign: "center" }}>
+                      <span style={{ background: est.bg, color: est.color, borderRadius: 20, padding: "2px 9px", fontSize: 10.5, fontWeight: 700, whiteSpace: "nowrap" }}>
+                        {est.icon} {est.label}
+                      </span>
+                    </td>
+                    <td style={{ ...tdStyle, textAlign: "center" }}><BadgePlataforma p="chrome_extension" /></td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {refrescadoEn && (
+        <div style={{ fontSize: 11, color: "#aaa", marginTop: 8, textAlign: "right" }}>
+          Actualizado {fmtFechaHora(refrescadoEn.toISOString())} · se refresca solo cada minuto
+        </div>
       )}
     </div>
   );
