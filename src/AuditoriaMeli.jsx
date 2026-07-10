@@ -69,13 +69,35 @@ function BadgePlataforma({ p }) {
   );
 }
 
-// ─── Estado de una sesión web según antigüedad del último refresco ──────
-function estadoSesion(minutos) {
-  if (minutos == null) return { label: "—", icon: "•", color: "#666", bg: "#f3f4f6" };
-  if (minutos <= 60)   return { label: "Activo ahora", icon: "🟢", color: "#166534", bg: "#e8f5ec" };
-  if (minutos <= 360)  return { label: "Reciente",     icon: "🟢", color: "#166534", bg: "#e8f5ec" };
-  if (minutos <= 720)  return { label: ">6h sin login", icon: "🟡", color: "#b45309", bg: "#fef3c7" };
-  return { label: "Expirado", icon: "🔴", color: "#c0392b", bg: "#fbeaea" };
+// ─── ¿Las cookies de esta fila contienen una sesión MELI viva? ─────────
+// Señal determinística: la cookie 'session_id' solo existe mientras la
+// sesión está autenticada. Al cerrar sesión desaparece (aunque lm_user_id
+// sobreviva un rato). No dependemos de la CANTIDAD de cookies (poco fiable:
+// vivo=32 vs cerrado=30), sino de la PRESENCIA de session_id.
+function tieneSesionViva(cookiesRaw) {
+  if (!cookiesRaw) return false;
+  let texto;
+  if (typeof cookiesRaw === "string") {
+    texto = cookiesRaw;
+  } else {
+    try { texto = JSON.stringify(cookiesRaw); } catch { return false; }
+  }
+  // Coincide con {"name":"session_id" tolerando espacios tras los dos puntos
+  return /"name"\s*:\s*"session_id"/.test(texto);
+}
+
+// ─── Estado de una sesión web: primero validez, luego frescura ─────────
+// Regla:
+//   - Sin session_id            → Sesión cerrada (rojo), sin importar la hora.
+//   - Con session_id + reciente → Activo / Reciente (verde).
+//   - Con session_id + viejo    → expirada por tiempo (amarillo/rojo).
+function estadoSesion(minutos, viva) {
+  if (!viva) return { label: "Sesión cerrada", icon: "🔴", color: "#c0392b", bg: "#fbeaea", activo: false };
+  if (minutos == null) return { label: "—", icon: "•", color: "#666", bg: "#f3f4f6", activo: false };
+  if (minutos <= 60)   return { label: "Activo ahora", icon: "🟢", color: "#166534", bg: "#e8f5ec", activo: true };
+  if (minutos <= 360)  return { label: "Reciente",     icon: "🟢", color: "#166534", bg: "#e8f5ec", activo: true };
+  if (minutos <= 720)  return { label: ">6h sin refresco", icon: "🟡", color: "#b45309", bg: "#fef3c7", activo: false };
+  return { label: "Expirado", icon: "🔴", color: "#c0392b", bg: "#fbeaea", activo: false };
 }
 
 // ─── Antigüedad legible ("hace 17 min", "hace 2 h") ────────────────────
@@ -233,10 +255,10 @@ function BloqueSesionesWeb() {
     setCargando(true);
     setError(null);
     try {
-      // Solo filas por-usuario (id "lm_user_<ldap>"), no la sesion_activa agregada
+      // Traemos también 'cookies' para verificar session_id (sesión viva).
       const { data, error: err } = await sb
         .from("sesiones_meli")
-        .select("id, usuario_id, cantidad_cookies, actualizado_at")
+        .select("id, usuario_id, cantidad_cookies, actualizado_at, cookies")
         .like("id", "lm_user_%")
         .order("actualizado_at", { ascending: false });
       if (err) throw err;
@@ -256,16 +278,18 @@ function BloqueSesionesWeb() {
     return () => clearInterval(t);
   }, []);
 
-  // Minutos desde el último refresco de cookies de cada sesión
+  // Enriquecer cada fila con minutos, validez de sesión y estado
   const ahora = Date.now();
   const filas = sesiones.map(s => {
     const min = s.actualizado_at
       ? (ahora - new Date(s.actualizado_at).getTime()) / 60000
       : null;
-    return { ...s, minutos: min };
+    const viva = tieneSesionViva(s.cookies);
+    return { ...s, minutos: min, viva, estado: estadoSesion(min, viva) };
   });
 
-  const activos = filas.filter(f => f.minutos != null && f.minutos <= 60).length;
+  const activos = filas.filter(f => f.estado.activo).length;
+  const cerrados = filas.filter(f => !f.viva).length;
 
   return (
     <div style={{ marginTop: 28 }}>
@@ -276,13 +300,18 @@ function BloqueSesionesWeb() {
             🌐 Conexiones vía web (extensión)
           </div>
           <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>
-            Supervisores con sesión de MELI activa a través de la extensión — usuario y último refresco de cookies
+            Estado de sesión MELI de cada supervisor con la extensión — "Activo" solo si la sesión sigue autenticada
           </div>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <span style={{ background: "#e8f5ec", color: "#166534", borderRadius: 20, padding: "3px 11px", fontSize: 11, fontWeight: 700 }}>
-            {activos} activo{activos === 1 ? "" : "s"} ahora
+            {activos} activo{activos === 1 ? "" : "s"}
           </span>
+          {cerrados > 0 && (
+            <span style={{ background: "#fbeaea", color: "#c0392b", borderRadius: 20, padding: "3px 11px", fontSize: 11, fontWeight: 700 }}>
+              {cerrados} cerrada{cerrados === 1 ? "" : "s"}
+            </span>
+          )}
           <button onClick={cargar} disabled={cargando}
             style={{ background: "#f4f5f7", border: "0.5px solid #e4e7ec", borderRadius: 8, padding: "7px 12px", fontSize: 12, cursor: cargando ? "default" : "pointer", color: "#666", fontFamily: "'Geist',sans-serif" }}>
             {cargando ? "Actualizando…" : "↻ Actualizar"}
@@ -307,40 +336,38 @@ function BloqueSesionesWeb() {
               <tr style={{ background: "#1a3a6b", color: "#fff", textAlign: "left" }}>
                 <th style={thStyle}>Usuario</th>
                 <th style={{ ...thStyle, textAlign: "center" }}>Cookies</th>
-                <th style={thStyle}>Último login (MX)</th>
+                <th style={thStyle}>Último refresco (MX)</th>
                 <th style={thStyle}>Antigüedad</th>
                 <th style={{ ...thStyle, textAlign: "center" }}>Estado</th>
                 <th style={{ ...thStyle, textAlign: "center" }}>Origen</th>
               </tr>
             </thead>
             <tbody>
-              {filas.map((f, i) => {
-                const est = estadoSesion(f.minutos);
-                return (
-                  <tr key={f.id || f.usuario_id || i} style={{ borderTop: "0.5px solid #eef0f3" }}>
-                    <td style={{ ...tdStyle, fontWeight: 600, color: "#1a1a1a" }}>{f.usuario_id || "—"}</td>
-                    <td style={{ ...tdStyle, textAlign: "center", color: "#444" }}>{f.cantidad_cookies ?? "—"}</td>
-                    <td style={{ ...tdStyle, color: "#666", whiteSpace: "nowrap" }}>{fmtFechaHora(f.actualizado_at)}</td>
-                    <td style={{ ...tdStyle, color: "#666" }}>{haceCuanto(f.minutos)}</td>
-                    <td style={{ ...tdStyle, textAlign: "center" }}>
-                      <span style={{ background: est.bg, color: est.color, borderRadius: 20, padding: "2px 9px", fontSize: 10.5, fontWeight: 700, whiteSpace: "nowrap" }}>
-                        {est.icon} {est.label}
-                      </span>
-                    </td>
-                    <td style={{ ...tdStyle, textAlign: "center" }}><BadgePlataforma p="chrome_extension" /></td>
-                  </tr>
-                );
-              })}
+              {filas.map((f, i) => (
+                <tr key={f.id || f.usuario_id || i} style={{ borderTop: "0.5px solid #eef0f3" }}>
+                  <td style={{ ...tdStyle, fontWeight: 600, color: "#1a1a1a" }}>{f.usuario_id || "—"}</td>
+                  <td style={{ ...tdStyle, textAlign: "center", color: "#444" }}>{f.cantidad_cookies ?? "—"}</td>
+                  <td style={{ ...tdStyle, color: "#666", whiteSpace: "nowrap" }}>{fmtFechaHora(f.actualizado_at)}</td>
+                  <td style={{ ...tdStyle, color: "#666" }}>{haceCuanto(f.minutos)}</td>
+                  <td style={{ ...tdStyle, textAlign: "center" }}>
+                    <span style={{ background: f.estado.bg, color: f.estado.color, borderRadius: 20, padding: "2px 9px", fontSize: 10.5, fontWeight: 700, whiteSpace: "nowrap" }}>
+                      {f.estado.icon} {f.estado.label}
+                    </span>
+                  </td>
+                  <td style={{ ...tdStyle, textAlign: "center" }}><BadgePlataforma p="chrome_extension" /></td>
+                </tr>
+              ))}
             </tbody>
           </table>
         </div>
       )}
 
-      {refrescadoEn && (
-        <div style={{ fontSize: 11, color: "#aaa", marginTop: 8, textAlign: "right" }}>
-          Actualizado {fmtFechaHora(refrescadoEn.toISOString())} · se refresca solo cada minuto
-        </div>
-      )}
+      <div style={{ fontSize: 11, color: "#aaa", marginTop: 8, display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 6 }}>
+        <span>El estado "Activo" requiere que la cookie de sesión siga presente, no solo que el refresco sea reciente.</span>
+        {refrescadoEn && (
+          <span>Consultado {fmtFechaHora(refrescadoEn.toISOString())} (MX) · se refresca solo cada minuto</span>
+        )}
+      </div>
     </div>
   );
 }
