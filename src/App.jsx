@@ -4,6 +4,7 @@ import ModuloMaestro from "./maestro";
 import { fechaHoyOperativa, fechaOperativaOffset, pct, Input, KpiCardMaestro, BadgeEstadoMaestro } from "./shared";
 import ModuloPNR from "./PNR";
 import ModuloCertificaciones from "./Certificaciones";
+import ModuloAuditoriaMeli from "./AuditoriaMeli";
 import { sb, BIGGY_IMG } from "./shared";
 import ModuloPoolMeliMX from "./Pool";
 import { descargarExcelMeli, descargarExcelMultihoja } from "./shared";
@@ -87,7 +88,7 @@ function BotonDescargarExcel({ onClick, disabled, label = "Descargar Excel" }) {
 }
 
 const MODULOS = {
-  superadmin: ["brain", "pool_meli_mx", "pagos", "maestro", "mantenciones", "certificaciones", "pnr", "configuracion"],
+  superadmin: ["brain", "pool_meli_mx", "pagos", "maestro", "mantenciones", "certificaciones", "pnr", "auditoria_meli", "configuracion"],
   certificacion: ["certificaciones"],
   prefacturas: ["pagos"],
 };
@@ -98,6 +99,7 @@ const MODULOS_LABELS = {
   maestro: "Maestro Operaciones",
   mantenciones: "Mantenciones",
   pnr: "PNR",
+  auditoria_meli: "Auditoría MELI",
   pagos: "Administración",
   configuracion: "Configuración",
 };
@@ -15645,6 +15647,7 @@ export default function App() {
         {tab === "maestro" && <ModuloMaestro usuario={usuario} />}
         {tab === "mantenciones" && <ModuloMantencionesMadre usuario={usuario} />}
         {tab === "pnr" && <ModuloPNR />}
+        {tab === "auditoria_meli" && <ModuloAuditoriaMeli />}
         {tab === "pagos" && <ModuloPagosMadre usuario={usuario} />}
       </div>
     </>
