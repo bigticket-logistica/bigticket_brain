@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, Fragment } from "react";
 import { sb, fechaHoyOperativa } from "./shared";
 
 // ─── Etiquetas legibles para cada categoría de acción crítica ──────────
@@ -71,6 +71,96 @@ function BadgePlataforma({ p }) {
     <span style={{ background: s.bg, color: s.color, borderRadius: 20, padding: "2px 9px", fontSize: 10, fontWeight: 700 }}>
       {s.label}
     </span>
+  );
+}
+
+// ─── Interpretar el http_status: ¿la acción tuvo éxito o falló? ────────
+// Es lo más valioso del detalle: distingue "hizo el cambio y funcionó" de
+// "lo intentó y MELI lo rechazó". Puede venir como http_status a nivel raíz
+// o dentro de payload_shape según cómo lo guardó cada origen.
+function statusInfo(a) {
+  const ps = a.payload_shape || {};
+  const code = a.http_status ?? a.status_code ?? ps.http_status ?? ps.status_code ?? null;
+  if (code == null) return { code: null, label: "Sin estado registrado", color: "#666", bg: "#f3f4f6" };
+  const n = Number(code);
+  if (n >= 200 && n < 300) return { code: n, label: `Éxito (${n})`, color: "#166534", bg: "#e8f5ec" };
+  if (n >= 400 && n < 500) return { code: n, label: `Rechazado por MELI (${n})`, color: "#c0392b", bg: "#fbeaea" };
+  if (n >= 500)            return { code: n, label: `Error del servidor (${n})`, color: "#b45309", bg: "#fef3c7" };
+  return { code: n, label: `Código ${n}`, color: "#666", bg: "#f3f4f6" };
+}
+
+// ─── Fila auxiliar del detalle: etiqueta + valor ───────────────────────
+function LineaDetalle({ etiqueta, children }) {
+  if (children == null || children === "" ) return null;
+  return (
+    <div style={{ display: "flex", gap: 10, padding: "3px 0", fontSize: 12 }}>
+      <span style={{ minWidth: 130, color: "#888", fontWeight: 600 }}>{etiqueta}</span>
+      <span style={{ color: "#333", wordBreak: "break-word" }}>{children}</span>
+    </div>
+  );
+}
+
+// ─── Detalle expandible de una acción crítica ──────────────────────────
+// No muestra "antes/después" (la captura guarda el request enviado, no el
+// estado previo). Muestra lo que SÍ existe: qué se envió, a qué endpoint,
+// y sobre todo si tuvo éxito (http_status).
+function DetalleAccion({ a }) {
+  const ps = a.payload_shape || {};
+  const st = statusInfo(a);
+
+  // Campos específicos según la categoría
+  const filasCategoria = [];
+  if (a.categoria === "modificacion_vehiculo") {
+    if (a.vehicle_id) filasCategoria.push(["ID de vehículo", String(a.vehicle_id)]);
+    const mmv = [ps.brand, ps.model, ps.year, ps.version].filter(Boolean).join(" · ");
+    if (mmv) filasCategoria.push(["Vehículo", mmv]);
+    if (ps.vehicleType != null) filasCategoria.push(["Tipo de vehículo", String(ps.vehicleType)]);
+    if (ps.vehicleDescription) filasCategoria.push(["Descripción", ps.vehicleDescription]);
+    if (Array.isArray(ps.campos) && ps.campos.length)
+      filasCategoria.push(["Campos enviados", ps.campos.join(", ")]);
+  } else if (a.categoria === "aceptacion_ruta" || a.categoria === "rechazo_ruta") {
+    const ids = Array.isArray(a.request_ids) ? a.request_ids
+              : Array.isArray(ps.request_ids) ? ps.request_ids : [];
+    if (ids.length) filasCategoria.push(["Rutas", ids.join(", ")]);
+    filasCategoria.push(["Cantidad de rutas", String(ids.length || ps.request_count || 0)]);
+    const motivo = a.reason || ps.reason;
+    if (motivo) filasCategoria.push(["Motivo", motivo]);
+    if (ps.step_type) filasCategoria.push(["Etapa", ps.step_type]);
+  } else if (a.categoria === "alta_padron") {
+    if (a.correo || ps.correo) filasCategoria.push(["Correo del operador", a.correo || ps.correo]);
+  } else if (a.categoria === "baja_conductor") {
+    if (a.driver_id) filasCategoria.push(["ID de conductor", String(a.driver_id)]);
+  }
+
+  return (
+    <div style={{ background: "#fafbfc", padding: "14px 18px", borderTop: "0.5px solid #eef0f3" }}>
+      {/* Estado de la acción — lo más importante */}
+      <div style={{ marginBottom: 10 }}>
+        <span style={{ background: st.bg, color: st.color, borderRadius: 6, padding: "4px 10px", fontSize: 12, fontWeight: 700 }}>
+          {st.code != null && (st.code >= 200 && st.code < 300 ? "✅ " : st.code >= 400 ? "⛔ " : "⚠️ ")}
+          {st.label}
+        </span>
+      </div>
+
+      {/* Detalle específico de la categoría */}
+      <div style={{ marginBottom: 8 }}>
+        {filasCategoria.length === 0 ? (
+          <div style={{ fontSize: 12, color: "#aaa" }}>Sin detalle adicional registrado para esta acción.</div>
+        ) : (
+          filasCategoria.map(([et, val]) => <LineaDetalle key={et} etiqueta={et}>{val}</LineaDetalle>)
+        )}
+      </div>
+
+      {/* Metadatos técnicos */}
+      <div style={{ marginTop: 8, paddingTop: 8, borderTop: "0.5px dashed #e4e7ec" }}>
+        <LineaDetalle etiqueta="Método">{a.metodo || "—"}</LineaDetalle>
+        <LineaDetalle etiqueta="Endpoint">
+          <span style={{ fontFamily: "monospace", fontSize: 11, color: "#555" }}>{a.endpoint || "—"}</span>
+        </LineaDetalle>
+        <LineaDetalle etiqueta="Origen">{a.plataforma === "android_app" ? "App Android" : "Web (extensión)"}</LineaDetalle>
+        <LineaDetalle etiqueta="Registrado">{fmtFechaHora(a.ocurrido_at)} (hora MX)</LineaDetalle>
+      </div>
+    </div>
   );
 }
 
@@ -378,9 +468,13 @@ function BloqueSesionesWeb() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-//  VISTA 1 · LISTADO
+//  VISTA 1 · LISTADO (con detalle expandible por fila)
 // ═══════════════════════════════════════════════════════════════════════
 function VistaListado({ acciones, filtroCat, setFiltroCat }) {
+  const [abierta, setAbierta] = useState(null); // id de la fila expandida
+
+  const toggle = (id) => setAbierta(prev => (prev === id ? null : id));
+
   return (
     <>
       {/* Filtro por tipo de cambio */}
@@ -393,6 +487,7 @@ function VistaListado({ acciones, filtroCat, setFiltroCat }) {
           ))}
         </select>
         <span style={{ fontSize: 12, color: "#888" }}>{acciones.length} acción{acciones.length === 1 ? "" : "es"}</span>
+        <span style={{ fontSize: 11, color: "#aaa" }}>· clic en una fila para ver el detalle</span>
       </div>
 
       {acciones.length === 0 ? (
@@ -404,6 +499,7 @@ function VistaListado({ acciones, filtroCat, setFiltroCat }) {
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
             <thead>
               <tr style={{ background: "#1a3a6b", color: "#fff", textAlign: "left" }}>
+                <th style={{ ...thStyle, width: 34 }}></th>
                 <th style={thStyle}>Quién</th>
                 <th style={thStyle}>Tipo de cambio</th>
                 <th style={thStyle}>Qué modificó</th>
@@ -414,20 +510,36 @@ function VistaListado({ acciones, filtroCat, setFiltroCat }) {
             <tbody>
               {acciones.map((a, i) => {
                 const info = catInfo(a.categoria);
+                const id = a.id || i;
+                const estaAbierta = abierta === id;
                 return (
-                  <tr key={a.id || i} style={{ borderTop: "0.5px solid #eef0f3" }}>
-                    <td style={tdStyle}>
-                      <span style={{ fontWeight: 600, color: "#1a1a1a" }}>
-                        {a.supervisor_email || a.ldap || "—"}
-                      </span>
-                    </td>
-                    <td style={tdStyle}>
-                      <span style={{ color: info.color, fontWeight: 600 }}>{info.icon} {info.label}</span>
-                    </td>
-                    <td style={{ ...tdStyle, color: "#444" }}>{describirCambio(a)}</td>
-                    <td style={{ ...tdStyle, color: "#666", whiteSpace: "nowrap" }}>{fmtFechaHora(a.ocurrido_at)}</td>
-                    <td style={{ ...tdStyle, textAlign: "center" }}><BadgePlataforma p={a.plataforma} /></td>
-                  </tr>
+                  <Fragment key={id}>
+                    <tr
+                      onClick={() => toggle(id)}
+                      style={{ borderTop: "0.5px solid #eef0f3", cursor: "pointer", background: estaAbierta ? "#f4f7fb" : "transparent" }}>
+                      <td style={{ ...tdStyle, textAlign: "center", color: "#999", userSelect: "none" }}>
+                        <span style={{ display: "inline-block", transition: "transform .15s", transform: estaAbierta ? "rotate(90deg)" : "rotate(0deg)" }}>▸</span>
+                      </td>
+                      <td style={tdStyle}>
+                        <span style={{ fontWeight: 600, color: "#1a1a1a" }}>
+                          {a.supervisor_email || a.ldap || "—"}
+                        </span>
+                      </td>
+                      <td style={tdStyle}>
+                        <span style={{ color: info.color, fontWeight: 600 }}>{info.icon} {info.label}</span>
+                      </td>
+                      <td style={{ ...tdStyle, color: "#444" }}>{describirCambio(a)}</td>
+                      <td style={{ ...tdStyle, color: "#666", whiteSpace: "nowrap" }}>{fmtFechaHora(a.ocurrido_at)}</td>
+                      <td style={{ ...tdStyle, textAlign: "center" }}><BadgePlataforma p={a.plataforma} /></td>
+                    </tr>
+                    {estaAbierta && (
+                      <tr>
+                        <td colSpan={6} style={{ padding: 0 }}>
+                          <DetalleAccion a={a} />
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
                 );
               })}
             </tbody>
