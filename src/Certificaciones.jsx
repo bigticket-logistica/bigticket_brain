@@ -6,6 +6,7 @@ const COLUMNAS = [
   { id: "prevalidacion_biggy", label: "Etapa 2: Pre Validación Biggy",  color: "#F47B20", bg: "#fff4ec", border: "#fbd9c0" },
   { id: "validacion_meli",     label: "Etapa 3: Validación MELI",       color: "#1a3a6b", bg: "#eef2f7", border: "#d6def0" },
   { id: "validacion_nubarium", label: "Etapa 4: Nubarium / REPUVE",       color: "#1a3a6b", bg: "#eef2f7", border: "#d6def0" },
+  { id: "firma_contrato",      label: "Etapa 5: Firma de Contrato",     color: "#7c3aed", bg: "#f5f0fe", border: "#ddd0f7" },
   { id: "aceptado",            label: "Aceptado",                       color: "#166534", bg: "#e8f5ec", border: "#b7e0c2" },
   { id: "rechazado",           label: "Rechazado",                      color: "#c0392b", bg: "#fbeaea", border: "#f0c4c4" },
 ];
@@ -13,7 +14,7 @@ const COLUMNAS = [
 // Etiquetas cortas para los KPIs del header (coinciden con las columnas)
 const ETAPA_CORTA = {
   recepcion: "Etapa 1 · Recepción", prevalidacion_biggy: "Etapa 2 · Biggy", validacion_meli: "Etapa 3 · MELI",
-  validacion_nubarium: "Etapa 4 · Nubarium/REPUVE", aceptado: "Aceptado", rechazado: "Rechazado",
+  validacion_nubarium: "Etapa 4 · Nubarium/REPUVE", firma_contrato: "Etapa 5 · Firma", aceptado: "Aceptado", rechazado: "Rechazado",
 };
 
 // ─── VISOR DOCUMENTO ────────────────────────────────────────────────
@@ -391,6 +392,116 @@ function ValidacionNubarium({ candidato, onActualizar }) {
 }
 
 // ─── DETALLE CANDIDATO ───────────────────────────────────────────────
+// ─── ETAPA 5 · FIRMA DE CONTRATO (MIFIEL) ───────────────────────────
+// Mismo componente para ambas fuentes (regla: todas las tarjetas iguales).
+// ⚠️ Cambiar a "production" al salir del sandbox de MIFIEL.
+const MIFIEL_ENV = "sandbox";
+
+function SeccionFirmaContrato({ registro, tabla, datos, onActualizado }) {
+  const [enviando, setEnviando] = useState(false);
+  const [firmandoBT, setFirmandoBT] = useState(false);
+  const docId = registro.mifiel_documento_id;
+
+  // Carga el script del widget de MIFIEL solo cuando se abre la firma embebida
+  useEffect(() => {
+    if (!firmandoBT || document.querySelector("script[data-mifiel-widget]")) return;
+    const s = document.createElement("script");
+    s.type = "module";
+    s.src = "https://app.mifiel.com/widget-component/index.js";
+    s.setAttribute("data-mifiel-widget", "1");
+    document.head.appendChild(s);
+  }, [firmandoBT]);
+
+  const enviarAFirma = async () => {
+    if (!datos.email) { alert("El prospecto no tiene email registrado — es necesario para enviar el contrato a firma."); return; }
+    if (!confirm(`¿Generar el contrato de ${datos.nombre} y enviarlo a firma digital?`)) return;
+    setEnviando(true);
+    try {
+      const resp = await fetch("https://bigticket2026.app.n8n.cloud/webhook/mifiel-crear-contrato", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tabla, id: registro.id, ...datos }),
+      });
+      const txt = await resp.text();
+      if (!resp.ok || !txt || !txt.trim()) throw new Error("el servicio de contratos no respondió");
+      const r = JSON.parse(txt);
+      if (!r.documento_id) throw new Error(r.error || "respuesta sin documento_id");
+      const patch = {
+        mifiel_documento_id: r.documento_id,
+        mifiel_widget_conductor: r.widget_conductor || null,
+        mifiel_widget_bigticket: r.widget_bigticket || null,
+        contrato_enviado_at: new Date().toISOString(),
+      };
+      const { error } = await sb.from(tabla).update(patch).eq("id", registro.id);
+      if (error) alert("El contrato se creó en MIFIEL pero no se pudo guardar la referencia: " + error.message);
+      onActualizado(patch);
+    } catch (e) {
+      alert("No se pudo enviar a firma: " + e.message);
+    } finally { setEnviando(false); }
+  };
+
+  const ChipFirma = ({ label, listo }) => (
+    <span style={{ fontSize: 11, fontWeight: 700, padding: "4px 10px", borderRadius: 20,
+      background: listo ? "#e8f5ec" : "#fff", color: listo ? "#166534" : "#7c3aed",
+      border: `1px solid ${listo ? "#b7e0c2" : "#ddd0f7"}` }}>
+      {listo ? "✓" : "⏳"} {label}
+    </span>
+  );
+
+  return (
+    <div className="form-card" style={{ border: "1px solid #ddd0f7", background: "#f5f0fe" }}>
+      <div className="form-title" style={{ color: "#7c3aed" }}>✍️ Etapa 5 · Firma de Contrato</div>
+
+      {!docId ? (
+        <>
+          <div style={{ fontSize: 13, color: "#4c1d95", lineHeight: 1.6, marginBottom: 12 }}>
+            Validado por todos los entes. El Brain generará el contrato con los datos del prospecto
+            y lo enviará a firma digital (e.firma) de <b>ambas partes</b>: el prestador y Bigticket.
+          </div>
+          <div className="three-col" style={{ marginBottom: 12 }}>
+            {[["Nombre", datos.nombre], ["CURP", datos.curp], ["RFC", datos.rfc],
+              ["Email", datos.email], ["Puesto", datos.puesto], ["SC", datos.sc]].map(([l, v]) => (
+              <div key={l} style={{ padding: "6px 0" }}>
+                <div style={{ fontSize: 10, color: "#888", fontWeight: 700, textTransform: "uppercase" }}>{l}</div>
+                <div style={{ fontSize: 13, fontWeight: 600, wordBreak: "break-all" }}>{v || "—"}</div>
+              </div>
+            ))}
+          </div>
+          <button onClick={enviarAFirma} disabled={enviando}
+            style={{ width: "100%", background: "#7c3aed", color: "#fff", border: "none", borderRadius: 10,
+              padding: "12px", fontSize: 14, fontWeight: 700, cursor: "pointer", opacity: enviando ? 0.6 : 1 }}>
+            {enviando ? "Generando contrato…" : "📄 Generar contrato y enviar a firma"}
+          </button>
+        </>
+      ) : (
+        <>
+          <div style={{ fontSize: 13, color: "#4c1d95", marginBottom: 10 }}>
+            Contrato enviado a firma{registro.contrato_enviado_at ? ` el ${new Date(registro.contrato_enviado_at).toLocaleString("es-CL")}` : ""}.
+            La tarjeta pasará sola a <b>Aceptado</b> cuando ambas firmas estén completas.
+          </div>
+          <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
+            <ChipFirma label={`Prestador: ${datos.nombre || "—"}`} listo={!!registro.mifiel_firmado_conductor} />
+            <ChipFirma label="Bigticket" listo={!!registro.mifiel_firmado_bigticket} />
+          </div>
+
+          {!registro.mifiel_firmado_bigticket && registro.mifiel_widget_bigticket && (
+            !firmandoBT ? (
+              <button onClick={() => setFirmandoBT(true)}
+                style={{ width: "100%", background: "#fff", color: "#7c3aed", border: "1.5px solid #ddd0f7",
+                  borderRadius: 10, padding: "11px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
+                ✍️ Firmar como Bigticket (aquí, sin salir del Brain)
+              </button>
+            ) : (
+              <div style={{ background: "#fff", borderRadius: 10, border: "1px solid #ddd0f7", padding: 8, minHeight: 620 }}>
+                <mifiel-widget id={registro.mifiel_widget_bigticket} environment={MIFIEL_ENV}></mifiel-widget>
+              </div>
+            )
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 function DetalleCandidato({ candidato, onVolver, onActualizar, onPasarEtapa2 }) {
   const [analizando, setAnalizando] = useState(false);
   const [enviando, setEnviando] = useState(false);
@@ -558,7 +669,7 @@ Responde con este JSON exacto:
     }
   };
 
-  const estadoBadge = { pendiente: "badge-pendiente", enviado: "badge-enviado", aprobado: "badge-aprobado", aceptado: "badge-aprobado", rechazado: "badge-rechazado" };
+  const estadoBadge = { pendiente: "badge-pendiente", enviado: "badge-enviado", aprobado: "badge-aprobado", en_firma: "badge-enviado", aceptado: "badge-aprobado", rechazado: "badge-rechazado" };
 
   const tieneAnalisis = !!(analisis || candidato.claude_analisis);
   const etapaActual = etapaProspeccion(candidato);
@@ -679,9 +790,9 @@ Responde con este JSON exacto:
               </div>
               {!rechazando ? (
                 <div style={{ display: "flex", gap: 10 }}>
-                  <button onClick={() => decidir("aceptado")} disabled={decidiendo}
+                  <button onClick={() => decidir("en_firma")} disabled={decidiendo}
                     style={{ flex: 1, background: "#16a34a", color: "#fff", border: "none", borderRadius: 10, padding: "12px", fontSize: 14, fontWeight: 700, cursor: "pointer", opacity: decidiendo ? 0.6 : 1 }}>
-                    {decidiendo ? "Guardando..." : "✓ Aceptar certificación"}
+                    {decidiendo ? "Guardando..." : "✓ Aceptar → Firma de Contrato"}
                   </button>
                   <button onClick={() => setRechazando(true)} disabled={decidiendo}
                     style={{ flex: 1, background: "#fff", color: "#dc2626", border: "1.5px solid #fca5a5", borderRadius: 10, padding: "12px", fontSize: 14, fontWeight: 700, cursor: "pointer" }}>
@@ -710,7 +821,7 @@ Responde con este JSON exacto:
           )}
           {candidato.estado === "aceptado" && (
             <div style={{ background: "#dcfce7", borderRadius: 10, padding: "12px", textAlign: "center", fontSize: 13, color: "#166534", fontWeight: 700 }}>
-              ✅ Aceptado — validado por MELI y Nubarium
+              ✅ Aceptado — validado por MELI y Nubarium, contrato firmado
             </div>
           )}
           {candidato.estado === "rechazado" && (
@@ -719,6 +830,13 @@ Responde con este JSON exacto:
             </div>
           )}
         </div>
+        )}
+
+        {candidato.estado === "en_firma" && (
+          <SeccionFirmaContrato registro={candidato} tabla="certificaciones_mx"
+            datos={{ nombre: candidato.nombre, curp: candidato.curp_validado || candidato.curp, rfc: candidato.rfc,
+              email: candidato.email, puesto: candidato.puesto || "Driver", sc: candidato.svc, placa: null }}
+            onActualizado={(patch) => onActualizar({ ...candidato, ...patch })} />
         )}
       </div>
     </div>
@@ -755,7 +873,7 @@ const TIPO_CFG = {
 };
 
 // Mapeo estado crudo → etapa del Kanban (columna)
-const ETAPA_MX   = { pendiente: "recepcion", enviado: "validacion_meli", aprobado: "validacion_nubarium", aceptado: "aceptado", rechazado: "rechazado" };
+const ETAPA_MX   = { pendiente: "recepcion", enviado: "validacion_meli", aprobado: "validacion_nubarium", en_firma: "firma_contrato", aceptado: "aceptado", rechazado: "rechazado" };
 const ETAPA_CERT = { enviado: "recepcion", en_validacion: "validacion_meli", validado: "aceptado", con_alertas: "aceptado", certificado: "aceptado", rechazado: "rechazado" };
 
 // Etapa de un prospecto (Fuente A). "pendiente" se divide: sin análisis de Biggy → Recepción;
@@ -1024,6 +1142,13 @@ function DetalleCertificacion({ cert, etapa, onVolver, onPasarEtapa2, onMoverA, 
           </div>
         )}
 
+        {etapaActual === "firma_contrato" && !esVeh && (
+          <SeccionFirmaContrato registro={cert} tabla="certificaciones"
+            datos={{ nombre: cond?.nombre || ter?.nombre, curp: cond?.curp, rfc: cond?.rfc, email: cond?.email,
+              puesto: cert.tipo === "ayudante" ? "Ayudante" : "Driver", sc: cert.service_center || ter?.service_center, placa: null }}
+            onActualizado={(patch) => { Object.assign(cert, patch); setDocsCert(d => d ? [...d] : d); }} />
+        )}
+
         {ter?.nombre && (
           <div className="form-card">
             <div style={{ fontSize: 12, color: "#555" }}>Empresa transportista: <b>{ter.nombre}</b></div>
@@ -1251,7 +1376,7 @@ function ModuloCertificaciones() {
   // Etapa del Kanban → estado persistido (Fuente A / certificaciones_mx)
   const ESTADO_POR_ETAPA = {
     recepcion: "pendiente", prevalidacion_biggy: "pendiente", validacion_meli: "enviado",
-    validacion_nubarium: "aprobado", aceptado: "aceptado", rechazado: "rechazado",
+    validacion_nubarium: "aprobado", firma_contrato: "en_firma", aceptado: "aceptado", rechazado: "rechazado",
   };
 
   // Dispara Biggy (Claude Vision) sobre un prospecto (Fuente A) y cachea el análisis.
