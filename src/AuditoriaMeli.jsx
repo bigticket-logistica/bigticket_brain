@@ -24,6 +24,22 @@ function fmtFechaHora(iso) {
   } catch { return iso; }
 }
 
+// ─── Traducción de motivos de rechazo (reason) a español legible ───────
+// MELI los envía como códigos técnicos. Traducimos los conocidos y dejamos
+// el código crudo como fallback para no perder información en los nuevos.
+const MOTIVOS = {
+  vehicle_unavailable: "Vehículo no disponible",
+  driver_unavailable:  "Conductor no disponible",
+  no_driver:           "Sin conductor asignado",
+  no_vehicle:          "Sin vehículo asignado",
+  capacity_exceeded:   "Capacidad excedida",
+  out_of_zone:         "Fuera de zona",
+  schedule_conflict:   "Conflicto de horario",
+  operational_issue:   "Problema operativo",
+  other:               "Otro motivo",
+};
+const motivoLegible = (r) => (r ? (MOTIVOS[r] || r) : null);
+
 // ─── "Qué modificó": resumen legible según la categoría ────────────────
 function describirCambio(a) {
   const ps = a.payload_shape || {};
@@ -38,8 +54,9 @@ function describirCambio(a) {
   }
   if (a.categoria === "rechazo_ruta") {
     const n = Array.isArray(a.request_ids) ? a.request_ids.length : 0;
-    const motivo = a.reason ? ` · ${a.reason}` : "";
-    return `${n} ruta${n === 1 ? "" : "s"}${motivo}`;
+    const motivoRaw = a.reason || (a.payload_shape && a.payload_shape.reason);
+    const motivo = motivoRaw ? ` · ${motivoLegible(motivoRaw)}` : "";
+    return `${n || (a.payload_shape && a.payload_shape.request_count) || 0} ruta${n === 1 ? "" : "s"}${motivo}`;
   }
   if (a.categoria === "aceptacion_ruta") {
     const n = Array.isArray(a.request_ids) ? a.request_ids.length : 0;
@@ -123,7 +140,7 @@ function DetalleAccion({ a }) {
               : Array.isArray(ps.request_ids) ? ps.request_ids : [];
     if (ids.length) filasCategoria.push(["Rutas", ids.join(", ")]);
     filasCategoria.push(["Cantidad de rutas", String(ids.length || ps.request_count || 0)]);
-    const motivo = a.reason || ps.reason;
+    const motivo = motivoLegible(a.reason || ps.reason);
     if (motivo) filasCategoria.push(["Motivo", motivo]);
     if (ps.step_type) filasCategoria.push(["Etapa", ps.step_type]);
   } else if (a.categoria === "alta_padron") {
@@ -329,8 +346,129 @@ function ModuloAuditoriaMeli() {
         <VistaRanking acciones={acciones} fecha={fecha} />
       )}
 
-      {/* ── BLOQUE INFERIOR: conexiones vía web (extensión) ── */}
+      {/* ── BLOQUE INFERIOR 1: conexiones vía web (extensión) ── */}
       <BloqueSesionesWeb />
+
+      {/* ── BLOQUE INFERIOR 2: conexiones vía app (celular) ── */}
+      <BloqueConexionesApp />
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  BLOQUE · CONEXIONES VÍA APP (celular Android)
+//  Lee conexiones_app: heartbeat que la app reporta al abrirse / volver.
+//  Una fila por supervisor. "Activo" = latido reciente. No hay session_id
+//  aquí (la app no maneja cookies); el estado es solo por frescura de tiempo.
+// ═══════════════════════════════════════════════════════════════════════
+function BloqueConexionesApp() {
+  const [conexiones, setConexiones] = useState([]);
+  const [cargando, setCargando] = useState(false);
+  const [error, setError] = useState(null);
+  const [consultadoEn, setConsultadoEn] = useState(null);
+
+  const cargar = async () => {
+    setCargando(true);
+    setError(null);
+    try {
+      const { data, error: err } = await sb
+        .from("conexiones_app")
+        .select("ldap, plataforma, ultimo_latido_at")
+        .order("ultimo_latido_at", { ascending: false });
+      if (err) throw err;
+      setConexiones(data || []);
+      setConsultadoEn(new Date());
+    } catch (e) {
+      setError(e.message || String(e));
+    } finally {
+      setCargando(false);
+    }
+  };
+
+  useEffect(() => {
+    cargar();
+    const t = setInterval(cargar, 60000);
+    return () => clearInterval(t);
+  }, []);
+
+  const ahora = Date.now();
+  const filas = conexiones.map(c => {
+    const min = c.ultimo_latido_at
+      ? (ahora - new Date(c.ultimo_latido_at).getTime()) / 60000
+      : null;
+    // Sin cookies/session_id en la app: estado solo por tiempo. Marcamos
+    // 'viva=true' para reutilizar estadoSesion con su lógica de frescura.
+    return { ...c, minutos: min, estado: estadoSesion(min, true) };
+  });
+
+  const activos = filas.filter(f => f.estado.activo).length;
+
+  return (
+    <div style={{ marginTop: 28 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10, marginBottom: 12 }}>
+        <div>
+          <div style={{ fontSize: 14, fontWeight: 700, color: "#1a3a6b" }}>
+            📱 Conexiones vía app (celular)
+          </div>
+          <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>
+            Supervisores que han abierto la app — se reporta al abrir y al volver a ella
+          </div>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ background: "#e8f5ec", color: "#166534", borderRadius: 20, padding: "3px 11px", fontSize: 11, fontWeight: 700 }}>
+            {activos} activo{activos === 1 ? "" : "s"}
+          </span>
+          <button onClick={cargar} disabled={cargando}
+            style={{ background: "#f4f5f7", border: "0.5px solid #e4e7ec", borderRadius: 8, padding: "7px 12px", fontSize: 12, cursor: cargando ? "default" : "pointer", color: "#666", fontFamily: "'Geist',sans-serif" }}>
+            {cargando ? "Actualizando…" : "↻ Actualizar"}
+          </button>
+        </div>
+      </div>
+
+      {error && (
+        <div style={{ background: "#fbeaea", border: "1px solid #f0c4c4", borderRadius: 8, padding: "12px 16px", color: "#c0392b", fontSize: 13, marginBottom: 14 }}>
+          Error cargando conexiones de app: {error}
+        </div>
+      )}
+
+      {!error && filas.length === 0 && !cargando ? (
+        <div style={{ textAlign: "center", padding: "34px 0", color: "#aaa", fontSize: 13, background: "#fff", border: "0.5px solid #e4e7ec", borderRadius: 12 }}>
+          Ninguna conexión de app registrada todavía.
+        </div>
+      ) : (
+        <div style={{ background: "#fff", border: "0.5px solid #e4e7ec", borderRadius: 12, overflow: "hidden" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+            <thead>
+              <tr style={{ background: "#1a3a6b", color: "#fff", textAlign: "left" }}>
+                <th style={thStyle}>Usuario</th>
+                <th style={thStyle}>Último uso (MX)</th>
+                <th style={thStyle}>Antigüedad</th>
+                <th style={{ ...thStyle, textAlign: "center" }}>Estado</th>
+                <th style={{ ...thStyle, textAlign: "center" }}>Origen</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filas.map((f, i) => (
+                <tr key={f.ldap || i} style={{ borderTop: "0.5px solid #eef0f3" }}>
+                  <td style={{ ...tdStyle, fontWeight: 600, color: "#1a1a1a" }}>{f.ldap || "—"}</td>
+                  <td style={{ ...tdStyle, color: "#666", whiteSpace: "nowrap" }}>{fmtFechaHora(f.ultimo_latido_at)}</td>
+                  <td style={{ ...tdStyle, color: "#666" }}>{haceCuanto(f.minutos)}</td>
+                  <td style={{ ...tdStyle, textAlign: "center" }}>
+                    <span style={{ background: f.estado.bg, color: f.estado.color, borderRadius: 20, padding: "2px 9px", fontSize: 10.5, fontWeight: 700, whiteSpace: "nowrap" }}>
+                      {f.estado.icon} {f.estado.label}
+                    </span>
+                  </td>
+                  <td style={{ ...tdStyle, textAlign: "center" }}><BadgePlataforma p="android_app" /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <div style={{ fontSize: 11, color: "#aaa", marginTop: 8, textAlign: "right" }}>
+        {consultadoEn && `Consultado ${fmtFechaHora(consultadoEn.toISOString())} (MX) · se refresca solo cada minuto`}
+      </div>
     </div>
   );
 }
