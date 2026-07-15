@@ -1878,7 +1878,8 @@ function ModuloCertificaciones() {
 
       const registros = nuevos.map(o => ({
         lead_crm_id:  o.lead_id,
-        nombre:       o.nombre       || o.leads?.nombre    || "",
+        nombre:       ([o.nombre, o.apellidos].filter(Boolean).join(" ").replace(/\s+/g, " ").trim())
+                        || (o.leads?.nombre || "").trim(),
         curp:         o.curp         || o.leads?.curp      || "",
         rfc:          o.rfc          || "",
         ine:          o.rut          || "",
@@ -1888,6 +1889,7 @@ function ModuloCertificaciones() {
         email:        o.email        || o.leads?.email     || "",
         telefono:     o.telefono     || o.leads?.telefono  || "",
         url_ine:      o.url_ine      || "",
+        url_ine_2:    o.url_ine_2    || "",
         url_curp:     o.url_curp     || "",
         url_rfc:      o.url_rfc      || "",
         url_licencia: o.url_licencia || "",
