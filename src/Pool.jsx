@@ -1,6 +1,232 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { descargarExcelMeli, descargarExcelMultihoja, fechaHoyOperativa, fechaOperativaOffset, pct, sb } from "./shared";
 
+// ═══════════════════════════════════════════════════════════════════
+//  TAREAS DEL JEFE DE SUPERVISORES — Alta Operacional (Etapa 7)
+//  Lista tareas alta_operacional (SLA 24 h), minuta del supervisor
+//  precargada, items del contrato → contrato_operacional (alimenta
+//  el PDF de la Etapa 8) vía RPC completar_alta_operacional.
+// ═══════════════════════════════════════════════════════════════════
+const ITEMS_VACIO = {
+  cantidad_vehiculos: "", tipo_vehiculos: "", cantidad_choferes: "",
+  cantidad_ayudantes: "", horario: "", fecha_inicio: "",
+  esquema_tarifa: "", clausulas_especiales: "", comentarios: "",
+};
+const ESQUEMAS_TARIFA = ["Tarifa por parada", "Tarifa fija diaria", "Tarifa por ruta", "Mixta", "Otro"];
+
+function fmtSLAJefe(ms) {
+  const neg = ms < 0;
+  const t = Math.abs(ms);
+  const h = Math.floor(t / 3600000);
+  const m = Math.floor((t % 3600000) / 60000);
+  const s = Math.floor((t % 60000) / 1000);
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${neg ? "-" : ""}${pad(h)}:${pad(m)}:${pad(s)}`;
+}
+
+function TareasJefeOperaciones() {
+  const [tareas, setTareas] = useState(null);
+  const [minutas, setMinutas] = useState({});   // minuta del supervisor por tarea id
+  const [items, setItems] = useState({});       // borrador de items por tarea id
+  const [busyId, setBusyId] = useState(null);
+  const [verHistorial, setVerHistorial] = useState(false);
+  const [ahora, setAhora] = useState(Date.now());
+
+  useEffect(() => {
+    const t = setInterval(() => setAhora(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
+
+  const cargar = async () => {
+    const { data } = await sb.from("tareas_supervisor").select("*")
+      .eq("tipo_tarea", "alta_operacional")
+      .order("created_at", { ascending: false }).limit(200);
+    const ts = data || [];
+    setTareas(ts);
+    // Minutas del supervisor para precargar
+    const pend = ts.filter((t) => t.estado === "pendiente");
+    if (pend.length) {
+      const { data: ms } = await sb.from("minutas_entrevista").select("*")
+        .in("registro_id", pend.map((t) => t.registro_id))
+        .order("created_at", { ascending: false });
+      const map = {};
+      pend.forEach((t) => {
+        const m = (ms || []).find((x) => x.registro_id === t.registro_id && x.fuente === t.fuente);
+        if (m) map[t.id] = m;
+      });
+      setMinutas(map);
+      // Precarga de items desde la minuta (solo si aún no hay borrador)
+      setItems((prev) => {
+        const nx = { ...prev };
+        pend.forEach((t) => {
+          if (!nx[t.id]) {
+            const m = map[t.id];
+            nx[t.id] = m ? {
+              ...ITEMS_VACIO,
+              tipo_vehiculos: m.tipo_vehiculo || "",
+              cantidad_choferes: m.cantidad_choferes ?? "",
+              cantidad_ayudantes: m.cantidad_ayudantes ?? "",
+              cantidad_vehiculos: m.cantidad_choferes ?? "",
+              horario: m.horario || "",
+            } : { ...ITEMS_VACIO };
+          }
+        });
+        return nx;
+      });
+    }
+  };
+  useEffect(() => { cargar(); }, []);
+
+  const setCampo = (id, campo, valor) =>
+    setItems((prev) => ({ ...prev, [id]: { ...(prev[id] || ITEMS_VACIO), [campo]: valor } }));
+
+  const completos = (it) =>
+    String(it.cantidad_vehiculos) !== "" && it.tipo_vehiculos && String(it.cantidad_choferes) !== "" &&
+    String(it.cantidad_ayudantes) !== "" && it.horario.trim() && it.fecha_inicio && it.esquema_tarifa;
+
+  const completar = async (t) => {
+    const it = items[t.id] || ITEMS_VACIO;
+    if (!completos(it)) { alert("Completa todos los items del contrato: vehículos, tipo, choferes, ayudantes, horario, fecha de inicio y esquema de tarifa."); return; }
+    if (!confirm(`¿Guardar los items del contrato de ${t.titulo || "este prospecto"}? Alimentarán el contrato de la Etapa 8.`)) return;
+    setBusyId(t.id);
+    try {
+      const { data, error } = await sb.rpc("completar_alta_operacional", {
+        p_tarea_id: t.id, p_datos: it,
+        p_email: (window.__PERFIL_EMAIL || "jefe.supervisores@bigticket.mx"),
+        p_nombre: (window.__PERFIL_NOMBRE || "Jefe de Supervisores"),
+      });
+      if (error) throw new Error(error.message);
+      if (data && data.ok === false) throw new Error(data.error || "no se pudo completar");
+      await cargar();
+    } catch (e) { alert("Error: " + e.message); }
+    finally { setBusyId(null); }
+  };
+
+  const pendientes = (tareas || []).filter((t) => t.estado === "pendiente");
+  const resueltas = (tareas || []).filter((t) => t.estado !== "pendiente");
+
+  const inputStyle = { width: "100%", boxSizing: "border-box", border: "1px solid #e4e7ec", borderRadius: 8, padding: "9px 11px", fontSize: 13, fontFamily: "'Geist',sans-serif", background: "#fff" };
+  const lbl = { fontSize: 10, fontWeight: 700, color: "#888", textTransform: "uppercase", marginBottom: 4, display: "block" };
+
+  const SlaBadge = ({ t }) => {
+    const ms = new Date(t.sla_vence_at).getTime() - ahora;
+    const vencida = ms < 0;
+    const critica = !vencida && ms < 4 * 3600000;
+    const color = vencida ? "#c0392b" : critica ? "#F47B20" : "#1a3a6b";
+    const bg = vencida ? "#fbeaea" : critica ? "#fff4ec" : "#eef2f7";
+    return (
+      <div style={{ textAlign: "center", flexShrink: 0 }}>
+        <div style={{ fontSize: 10, fontWeight: 700, color: "#888", textTransform: "uppercase", marginBottom: 2 }}>
+          {vencida ? "SLA vencido hace" : "SLA vence en"}
+        </div>
+        <div style={{ fontSize: 18, fontWeight: 800, fontFamily: "monospace", fontVariantNumeric: "tabular-nums",
+          color, background: bg, borderRadius: 8, padding: "4px 10px", border: `1px solid ${color}33` }}>
+          {fmtSLAJefe(ms)}
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div>
+      {tareas === null ? (
+        <div style={{ background: "#fff", border: "0.5px solid #e4e7ec", borderRadius: 12, padding: 24, textAlign: "center", color: "#888", fontSize: 13 }}>Cargando tareas…</div>
+      ) : pendientes.length === 0 ? (
+        <div style={{ background: "#fff", border: "0.5px solid #e4e7ec", borderRadius: 12, padding: 32, textAlign: "center" }}>
+          <div style={{ fontSize: 30, marginBottom: 8 }}>✅</div>
+          <div style={{ fontWeight: 700, marginBottom: 4 }}>Sin altas operacionales pendientes</div>
+          <div style={{ fontSize: 12, color: "#888" }}>Cuando un prospecto llegue a Solicitud de Alta, aparecerá aquí su tarea (SLA 24 h) para completar los items del contrato.</div>
+        </div>
+      ) : pendientes.map((t) => {
+        const m = minutas[t.id];
+        const it = items[t.id] || ITEMS_VACIO;
+        return (
+          <div key={t.id} style={{ background: "#fff", border: "0.5px solid #e4e7ec", borderLeft: "4px solid #0f766e", borderRadius: 12, padding: 18, marginBottom: 12 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
+              <div style={{ flex: 1, minWidth: 220 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 3 }}>
+                  <span style={{ fontSize: 15, fontWeight: 800 }}>🏗 Alta Operacional</span>
+                  <span style={{ background: "#1a3a6b", color: "#fff", borderRadius: 6, padding: "3px 9px", fontSize: 11, fontWeight: 700 }}>{t.sc || "SIN SC"}</span>
+                </div>
+                <div style={{ fontSize: 13, fontWeight: 700 }}>{t.titulo || "Prospecto sin nombre"}</div>
+                <div style={{ fontSize: 12, color: "#888" }}>{t.puesto || "—"} · entrevista aprobada el {new Date(t.created_at).toLocaleString("es-MX", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}</div>
+              </div>
+              <SlaBadge t={t} />
+            </div>
+
+            {/* Minuta del supervisor (precargada, solo lectura) */}
+            <div style={{ marginTop: 12, background: "#f6fbfd", border: "1px solid #c9e8f0", borderRadius: 10, padding: "12px 14px", fontSize: 12, color: "#155e70" }}>
+              <b>📋 Minuta del supervisor:</b>{" "}
+              {m ? `${m.tipo_vehiculo || "—"} · ${m.cantidad_choferes ?? "—"} chofer(es) · ${m.cantidad_ayudantes ?? "—"} ayudante(s) · ${m.horario || "—"} · ${m.zona_operacion || "—"} · ${m.experiencia || "—"}${m.comentarios ? ` · "${m.comentarios}"` : ""}`
+                : "sin minuta registrada"}
+            </div>
+
+            {/* Items del contrato */}
+            <div style={{ marginTop: 12, background: "#f4faf8", border: "1px solid #c4e6df", borderRadius: 10, padding: 14 }}>
+              <div style={{ fontSize: 12, fontWeight: 800, color: "#0f766e", marginBottom: 10, textTransform: "uppercase", letterSpacing: ".4px" }}>
+                🏗 Items del contrato (alimentan el PDF de la Etapa 8)
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 10 }}>
+                <div><span style={lbl}>Cantidad de vehículos *</span>
+                  <input type="number" min="0" value={it.cantidad_vehiculos} onChange={(e) => setCampo(t.id, "cantidad_vehiculos", e.target.value)} style={inputStyle} /></div>
+                <div><span style={lbl}>Tipo de vehículos *</span>
+                  <input value={it.tipo_vehiculos} onChange={(e) => setCampo(t.id, "tipo_vehiculos", e.target.value)} placeholder="Ej. Small Van" style={inputStyle} /></div>
+                <div><span style={lbl}>Cantidad de choferes *</span>
+                  <input type="number" min="0" value={it.cantidad_choferes} onChange={(e) => setCampo(t.id, "cantidad_choferes", e.target.value)} style={inputStyle} /></div>
+                <div><span style={lbl}>Cantidad de ayudantes *</span>
+                  <input type="number" min="0" value={it.cantidad_ayudantes} onChange={(e) => setCampo(t.id, "cantidad_ayudantes", e.target.value)} style={inputStyle} /></div>
+                <div><span style={lbl}>Horario de operación *</span>
+                  <input value={it.horario} onChange={(e) => setCampo(t.id, "horario", e.target.value)} placeholder="Ej. L-S 08:00-18:00" style={inputStyle} /></div>
+                <div><span style={lbl}>Fecha de inicio *</span>
+                  <input type="date" value={it.fecha_inicio} onChange={(e) => setCampo(t.id, "fecha_inicio", e.target.value)} style={inputStyle} /></div>
+                <div><span style={lbl}>Esquema de tarifa *</span>
+                  <select value={it.esquema_tarifa} onChange={(e) => setCampo(t.id, "esquema_tarifa", e.target.value)} style={inputStyle}>
+                    <option value="">Selecciona…</option>
+                    {ESQUEMAS_TARIFA.map((x) => <option key={x} value={x}>{x}</option>)}
+                  </select></div>
+              </div>
+              <div style={{ marginTop: 10 }}>
+                <span style={lbl}>Cláusulas especiales (opcional)</span>
+                <input value={it.clausulas_especiales} onChange={(e) => setCampo(t.id, "clausulas_especiales", e.target.value)} placeholder="Condiciones particulares para el contrato" style={inputStyle} />
+              </div>
+              <div style={{ marginTop: 10 }}>
+                <span style={lbl}>Comentarios</span>
+                <textarea value={it.comentarios} onChange={(e) => setCampo(t.id, "comentarios", e.target.value)} rows={2}
+                  placeholder="Observaciones del Jefe de Supervisores" style={{ ...inputStyle, resize: "vertical" }} />
+              </div>
+            </div>
+
+            <button onClick={() => completar(t)} disabled={busyId === t.id}
+              style={{ width: "100%", marginTop: 10, background: "#0f766e", color: "#fff", border: "none", borderRadius: 8, padding: "12px", fontSize: 13, fontWeight: 700, cursor: "pointer", opacity: busyId === t.id ? 0.6 : 1 }}>
+              {busyId === t.id ? "Guardando…" : "✓ Completar items del contrato"}
+            </button>
+          </div>
+        );
+      })}
+
+      {resueltas.length > 0 && (
+        <div style={{ marginTop: 18 }}>
+          <button onClick={() => setVerHistorial(!verHistorial)}
+            style={{ background: "transparent", border: "none", color: "#1a3a6b", fontSize: 13, fontWeight: 700, cursor: "pointer", padding: 0, fontFamily: "'Geist',sans-serif" }}>
+            {verHistorial ? "▾" : "▸"} Historial ({resueltas.length})
+          </button>
+          {verHistorial && resueltas.map((t) => (
+            <div key={t.id} style={{ background: "#fff", border: "0.5px solid #e4e7ec", borderRadius: 10, padding: 14, marginTop: 8, opacity: 0.85 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", fontSize: 13 }}>
+                <span style={{ fontWeight: 700 }}>🏗 {t.titulo || "—"}</span>
+                <span style={{ background: "#1a3a6b", color: "#fff", borderRadius: 6, padding: "2px 8px", fontSize: 10, fontWeight: 700 }}>{t.sc || "—"}</span>
+                <span style={{ fontSize: 11, fontWeight: 700, padding: "3px 10px", borderRadius: 20, color: "#166534", background: "#e8f5ec" }}>✓ Completada</span>
+                <span style={{ fontSize: 11, color: "#888" }}>{t.resuelto_at ? new Date(t.resuelto_at).toLocaleString("es-MX", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : ""} · {t.resuelto_por || ""}</span>
+              </div>
+              {t.comentario && <div style={{ fontSize: 12, color: "#555", marginTop: 6 }}>💬 {t.comentario}</div>}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function IndicadoresOperacionalesMX({ usuario }) {
   const [vista, setVista] = useState("compromiso");
 
@@ -16,6 +242,7 @@ function IndicadoresOperacionalesMX({ usuario }) {
     { id: "torre_d1", label: "Torre Control D-1", desc: "3 Pilares · MELI × Rostering × Operación" },
     { id: "kpi_operacion", label: "KPI de Operación", desc: "NS Informe MELI vs Snapshots" },
     { id: "control_helper", label: "Control Helper", desc: "Helpers no autorizados / certificados / fantasmas" },
+    { id: "tareas", label: "📋 Tareas", desc: "Altas operacionales · SLA 24 h" },
   ];
 
 
@@ -58,6 +285,7 @@ function IndicadoresOperacionalesMX({ usuario }) {
       {vista === "torre_rostering_hoy" && <TorreRosteringHoy />}
       {vista === "torre_d1" && <TorreTresPilares />}
       {vista === "validacion_bt" && <PoolMeliValidacionBT usuario={usuario} />}
+      {vista === "tareas" && <div style={{ padding: 24 }}><TareasJefeOperaciones /></div>}
 
     </div>
   );
