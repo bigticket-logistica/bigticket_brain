@@ -397,20 +397,23 @@ function ValidacionNubarium({ candidato, onActualizar }) {
 // ⚠️ Cambiar a "production" al salir del sandbox de MIFIEL.
 const MIFIEL_ENV = "sandbox";
 
+// Carga el script del widget de MIFIEL una sola vez (compartido por Etapa 5 y Gestionador)
+function cargarScriptMifiel() {
+  if (document.querySelector("script[data-mifiel-widget]")) return;
+  const s = document.createElement("script");
+  s.type = "module";
+  s.src = "https://app.mifiel.com/widget-component/index.js";
+  s.setAttribute("data-mifiel-widget", "1");
+  document.head.appendChild(s);
+}
+
 function SeccionFirmaContrato({ registro, tabla, datos, onActualizado }) {
   const [enviando, setEnviando] = useState(false);
   const [firmandoBT, setFirmandoBT] = useState(false);
   const docId = registro.mifiel_documento_id;
 
   // Carga el script del widget de MIFIEL solo cuando se abre la firma embebida
-  useEffect(() => {
-    if (!firmandoBT || document.querySelector("script[data-mifiel-widget]")) return;
-    const s = document.createElement("script");
-    s.type = "module";
-    s.src = "https://app.mifiel.com/widget-component/index.js";
-    s.setAttribute("data-mifiel-widget", "1");
-    document.head.appendChild(s);
-  }, [firmandoBT]);
+  useEffect(() => { if (firmandoBT) cargarScriptMifiel(); }, [firmandoBT]);
 
   const enviarAFirma = async () => {
     if (!datos.email) { alert("El prospecto no tiene email registrado — es necesario para enviar el contrato a firma."); return; }
@@ -1292,11 +1295,375 @@ function KanbanBoard({ items, onCardClick, onMover, onEliminar }) {
 }
 
 // ─── MÓDULO CERTIFICACIONES ──────────────────────────────────────────
+// ─── GESTIONADOR DE CONTRATOS ────────────────────────────────────────
+// Documentos de firma independientes del ingreso: contratos, anexos,
+// bajas de vehículo, etc. El analista sube el PDF, lo envía a firma
+// (MIFIEL) y el tercero lo firma desde su portal.
+const TIPO_DOC_GESTION = {
+  contrato:      { label: "Contrato",         color: "#1a3a6b", bg: "#eef2f7" },
+  anexo:         { label: "Anexo",            color: "#F47B20", bg: "#fff4ec" },
+  baja_vehiculo: { label: "Baja de vehículo", color: "#c0392b", bg: "#fbeaea" },
+  otro:          { label: "Otro",             color: "#555555", bg: "#f0f0f0" },
+};
+const ESTADO_DOC_GESTION = {
+  borrador: { label: "Borrador",         color: "#555555", bg: "#f0f0f0" },
+  enviado:  { label: "Enviado a firma",  color: "#7c3aed", bg: "#f5f0fe" },
+  firmado:  { label: "Firmado ✓",        color: "#166534", bg: "#e8f5ec" },
+};
+
+function GestionadorContratos() {
+  const [docs, setDocs] = useState(null);
+  const [terceros, setTerceros] = useState([]);
+  const [nuevo, setNuevo] = useState(false);
+  const [firmandoBT, setFirmandoBT] = useState(null); // id del doc con widget abierto
+  const [f, setF] = useState({ tercero_id: "", titulo: "", tipo: "contrato", descripcion: "", archivo: null });
+  const [guardando, setGuardando] = useState(false);
+  const [enviandoId, setEnviandoId] = useState(null);
+
+  const cargar = async () => {
+    const { data } = await sb.from("contratos_gestion")
+      .select("*, terceros(nombre, email_portal)")
+      .order("created_at", { ascending: false });
+    setDocs(data || []);
+  };
+  useEffect(() => {
+    cargar();
+    (async () => {
+      const { data } = await sb.from("terceros").select("id, nombre, email_portal").order("nombre");
+      setTerceros(data || []);
+    })();
+  }, []);
+  useEffect(() => { if (firmandoBT) cargarScriptMifiel(); }, [firmandoBT]);
+
+  const crear = async () => {
+    if (!f.tercero_id || !f.titulo.trim() || !f.archivo) {
+      alert("Faltan datos: empresa, título y el PDF del documento son obligatorios."); return;
+    }
+    setGuardando(true);
+    try {
+      const { data: row, error } = await sb.from("contratos_gestion")
+        .insert({ tercero_id: f.tercero_id, titulo: f.titulo.trim(), tipo: f.tipo, descripcion: f.descripcion || null, estado: "borrador" })
+        .select("id").single();
+      if (error) throw new Error(error.message);
+      const path = `gestion_contratos/${row.id}/${f.archivo.name.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
+      const { error: eUp } = await sb.storage.from("proceso_certificacion_bt").upload(path, f.archivo, { contentType: "application/pdf" });
+      if (eUp) throw new Error("subiendo PDF: " + eUp.message);
+      await sb.from("contratos_gestion").update({ archivo_path: path }).eq("id", row.id);
+      setNuevo(false);
+      setF({ tercero_id: "", titulo: "", tipo: "contrato", descripcion: "", archivo: null });
+      await cargar();
+    } catch (e) { alert("No se pudo crear: " + e.message); }
+    finally { setGuardando(false); }
+  };
+
+  const enviarAFirma = async (doc) => {
+    const emailTercero = doc.terceros?.email_portal;
+    if (!emailTercero) { alert("La empresa no tiene email registrado (email_portal) — es necesario para la firma."); return; }
+    if (!doc.archivo_path) { alert("El documento no tiene PDF adjunto."); return; }
+    if (!confirm(`¿Enviar "${doc.titulo}" a firma digital de ${doc.terceros?.nombre}?`)) return;
+    setEnviandoId(doc.id);
+    try {
+      const { data: sg, error: eSg } = await sb.storage.from("proceso_certificacion_bt").createSignedUrl(doc.archivo_path, 604800);
+      if (eSg || !sg?.signedUrl) throw new Error("no se pudo generar la URL del PDF");
+      const resp = await fetch("https://bigticket2026.app.n8n.cloud/webhook/mifiel-contrato-gestion", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: doc.id, titulo: doc.titulo, archivo_url: sg.signedUrl,
+          firmante_nombre: doc.terceros?.nombre || "Tercero", firmante_email: emailTercero,
+        }),
+      });
+      const txt = await resp.text();
+      if (!resp.ok || !txt || !txt.trim()) throw new Error("el servicio de firma no respondió");
+      const r = JSON.parse(txt);
+      if (!r.documento_id) throw new Error(r.error || "respuesta sin documento_id");
+      const { error } = await sb.from("contratos_gestion").update({
+        estado: "enviado", mifiel_documento_id: r.documento_id,
+        mifiel_widget_tercero: r.widget_tercero || null, mifiel_widget_bigticket: r.widget_bigticket || null,
+        enviado_at: new Date().toISOString(),
+      }).eq("id", doc.id);
+      if (error) alert("Se envió a MIFIEL pero no se pudo guardar la referencia: " + error.message);
+      await cargar();
+    } catch (e) { alert("No se pudo enviar a firma: " + e.message); }
+    finally { setEnviandoId(null); }
+  };
+
+  const eliminarDoc = async (doc) => {
+    if (doc.estado !== "borrador") { alert("Solo se pueden eliminar documentos en borrador."); return; }
+    if (!confirm(`¿Eliminar el borrador "${doc.titulo}"?`)) return;
+    await sb.from("contratos_gestion").delete().eq("id", doc.id);
+    await cargar();
+  };
+
+  const Pill = ({ cfg, label }) => (
+    <span style={{ fontSize: 10, fontWeight: 700, padding: "3px 10px", borderRadius: 20, background: cfg.bg, color: cfg.color, border: `1px solid ${cfg.color}22` }}>
+      {label || cfg.label}
+    </span>
+  );
+  const ChipFirma = ({ label, listo }) => (
+    <span style={{ fontSize: 10, fontWeight: 700, padding: "3px 8px", borderRadius: 20,
+      background: listo ? "#e8f5ec" : "#fff", color: listo ? "#166534" : "#7c3aed",
+      border: `1px solid ${listo ? "#b7e0c2" : "#ddd0f7"}` }}>
+      {listo ? "✓" : "⏳"} {label}
+    </span>
+  );
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, flexWrap: "wrap", gap: 10 }}>
+        <div style={{ fontSize: 12, color: "#888" }}>
+          Contratos, anexos, bajas y otros documentos de firma — independientes del proceso de ingreso.
+        </div>
+        <button className="btn-orange" onClick={() => setNuevo(!nuevo)} style={{ padding: "9px 16px" }}>
+          {nuevo ? "Cancelar" : "➕ Nuevo documento"}
+        </button>
+      </div>
+
+      {nuevo && (
+        <div className="form-card" style={{ border: "1px solid #fbd9c0", background: "#fff9f4", marginBottom: 16 }}>
+          <div className="form-title" style={{ color: "#F47B20" }}>Nuevo documento de firma</div>
+          <div className="three-col" style={{ marginBottom: 10 }}>
+            <div>
+              <div style={{ fontSize: 10, color: "#888", fontWeight: 700, textTransform: "uppercase", marginBottom: 4 }}>Empresa *</div>
+              <select value={f.tercero_id} onChange={e => setF({ ...f, tercero_id: e.target.value })}
+                style={{ width: "100%", background: "#fff", border: "0.5px solid #e4e7ec", borderRadius: 8, padding: "9px 10px", fontSize: 13, fontFamily: "'Geist',sans-serif" }}>
+                <option value="">Selecciona…</option>
+                {terceros.map(t => <option key={t.id} value={t.id}>{t.nombre}</option>)}
+              </select>
+            </div>
+            <div>
+              <div style={{ fontSize: 10, color: "#888", fontWeight: 700, textTransform: "uppercase", marginBottom: 4 }}>Tipo *</div>
+              <select value={f.tipo} onChange={e => setF({ ...f, tipo: e.target.value })}
+                style={{ width: "100%", background: "#fff", border: "0.5px solid #e4e7ec", borderRadius: 8, padding: "9px 10px", fontSize: 13, fontFamily: "'Geist',sans-serif" }}>
+                {Object.entries(TIPO_DOC_GESTION).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+              </select>
+            </div>
+            <div>
+              <div style={{ fontSize: 10, color: "#888", fontWeight: 700, textTransform: "uppercase", marginBottom: 4 }}>Título *</div>
+              <input value={f.titulo} onChange={e => setF({ ...f, titulo: e.target.value })} placeholder="Ej. Anexo de tarifas 2026"
+                style={{ width: "100%", background: "#fff", border: "0.5px solid #e4e7ec", borderRadius: 8, padding: "9px 10px", fontSize: 13, fontFamily: "'Geist',sans-serif", boxSizing: "border-box" }} />
+            </div>
+          </div>
+          <div style={{ marginBottom: 10 }}>
+            <div style={{ fontSize: 10, color: "#888", fontWeight: 700, textTransform: "uppercase", marginBottom: 4 }}>Descripción (opcional)</div>
+            <input value={f.descripcion} onChange={e => setF({ ...f, descripcion: e.target.value })} placeholder="Notas internas o contexto para el tercero"
+              style={{ width: "100%", background: "#fff", border: "0.5px solid #e4e7ec", borderRadius: 8, padding: "9px 10px", fontSize: 13, fontFamily: "'Geist',sans-serif", boxSizing: "border-box" }} />
+          </div>
+          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            <label style={{ display: "inline-flex", alignItems: "center", gap: 8, background: "#fff", border: "1px dashed #F47B20", borderRadius: 8, padding: "9px 14px", fontSize: 13, cursor: "pointer", color: f.archivo ? "#166534" : "#F47B20", fontWeight: 600 }}>
+              📎 {f.archivo ? `✓ ${f.archivo.name}` : "Adjuntar PDF *"}
+              <input type="file" accept="application/pdf" style={{ display: "none" }}
+                onChange={e => setF({ ...f, archivo: e.target.files[0] || null })} />
+            </label>
+            <button className="btn-orange" onClick={crear} disabled={guardando} style={{ padding: "10px 18px" }}>
+              {guardando ? "Guardando…" : "Crear borrador"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {docs === null ? <div className="loading">Cargando…</div> : docs.length === 0 ? (
+        <div className="empty">
+          <div style={{ fontSize: 32, marginBottom: 12 }}>📑</div>
+          <div style={{ fontWeight: 600, marginBottom: 8 }}>Sin documentos</div>
+          <div style={{ fontSize: 12 }}>Crea un contrato, anexo o baja y envíalo a firma digital del tercero</div>
+        </div>
+      ) : docs.map(doc => {
+        const tc = TIPO_DOC_GESTION[doc.tipo] || TIPO_DOC_GESTION.otro;
+        const ec = ESTADO_DOC_GESTION[doc.estado] || ESTADO_DOC_GESTION.borrador;
+        const firmado = doc.estado === "firmado";
+        return (
+          <div key={doc.id} style={{ background: "#fff", border: "0.5px solid #e4e7ec", borderRadius: 10, padding: "14px 16px", marginBottom: 10 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              <div style={{ flex: 1, minWidth: 220 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                  <span style={{ fontSize: 14, fontWeight: 700 }}>{doc.titulo}</span>
+                  <Pill cfg={tc} />
+                  <Pill cfg={ec} />
+                </div>
+                <div style={{ fontSize: 12, color: "#888", marginTop: 3 }}>
+                  🏢 {doc.terceros?.nombre || "—"}
+                  {doc.descripcion ? ` · ${doc.descripcion}` : ""}
+                  {doc.enviado_at ? ` · enviado ${new Date(doc.enviado_at).toLocaleDateString("es-MX")}` : ""}
+                </div>
+              </div>
+              {doc.estado !== "borrador" && (
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  <ChipFirma label="Tercero" listo={!!doc.firmado_tercero || firmado} />
+                  <ChipFirma label="Bigticket" listo={!!doc.firmado_bigticket || firmado} />
+                </div>
+              )}
+              {doc.estado === "borrador" && (
+                <>
+                  <button className="btn-orange" onClick={() => enviarAFirma(doc)} disabled={enviandoId === doc.id} style={{ padding: "8px 14px" }}>
+                    {enviandoId === doc.id ? "Enviando…" : "✍️ Enviar a firma"}
+                  </button>
+                  <button title="Eliminar borrador" onClick={() => eliminarDoc(doc)}
+                    style={{ width: 28, height: 28, borderRadius: "50%", border: "1px solid #e4e7ec", background: "#fff", color: "#c0392b", fontSize: 13, cursor: "pointer", padding: 0 }}>✕</button>
+                </>
+              )}
+              {doc.estado === "enviado" && !doc.firmado_bigticket && doc.mifiel_widget_bigticket && (
+                <button onClick={() => setFirmandoBT(firmandoBT === doc.id ? null : doc.id)}
+                  style={{ background: "#fff", color: "#7c3aed", border: "1.5px solid #ddd0f7", borderRadius: 8, padding: "8px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+                  {firmandoBT === doc.id ? "Cerrar" : "✍️ Firmar como Bigticket"}
+                </button>
+              )}
+            </div>
+            {firmandoBT === doc.id && (
+              <div style={{ marginTop: 12, border: "1px solid #ddd0f7", borderRadius: 10, padding: 8, minHeight: 620, background: "#fff" }}>
+                <mifiel-widget id={doc.mifiel_widget_bigticket} environment={MIFIEL_ENV}></mifiel-widget>
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ─── MENSAJES DE TERCEROS ────────────────────────────────────────────
+// Consultas que dejan las empresas desde su portal; el analista responde aquí.
+function MensajesTerceros() {
+  const [convos, setConvos] = useState(null);
+  const [terceros, setTerceros] = useState([]);
+  const [sel, setSel] = useState(null);       // { tercero_id, nombre }
+  const [msgs, setMsgs] = useState(null);
+  const [texto, setTexto] = useState("");
+  const [nuevoPara, setNuevoPara] = useState("");
+
+  const cargarConvos = async () => {
+    const { data } = await sb.from("mensajes_terceros")
+      .select("tercero_id, autor, mensaje, leido, created_at, terceros(nombre)")
+      .order("created_at", { ascending: false }).limit(500);
+    const porEmpresa = {};
+    (data || []).forEach(m => {
+      const t = Array.isArray(m.terceros) ? m.terceros[0] : m.terceros;
+      if (!porEmpresa[m.tercero_id]) {
+        porEmpresa[m.tercero_id] = { tercero_id: m.tercero_id, nombre: t?.nombre || "—", ultimo: m.mensaje, fecha: m.created_at, no_leidos: 0 };
+      }
+      if (m.autor === "tercero" && !m.leido) porEmpresa[m.tercero_id].no_leidos++;
+    });
+    setConvos(Object.values(porEmpresa));
+  };
+  useEffect(() => {
+    cargarConvos();
+    (async () => {
+      const { data } = await sb.from("terceros").select("id, nombre").order("nombre");
+      setTerceros(data || []);
+    })();
+  }, []);
+
+  const abrir = async (c) => {
+    setSel(c); setMsgs(null);
+    const { data } = await sb.from("mensajes_terceros")
+      .select("*").eq("tercero_id", c.tercero_id).order("created_at", { ascending: true });
+    setMsgs(data || []);
+    // marcar como leídos los mensajes del tercero
+    await sb.from("mensajes_terceros").update({ leido: true })
+      .eq("tercero_id", c.tercero_id).eq("autor", "tercero").eq("leido", false);
+    cargarConvos();
+  };
+
+  const enviar = async () => {
+    const t = texto.trim();
+    if (!t || !sel) return;
+    setTexto("");
+    const fila = { tercero_id: sel.tercero_id, autor: "bigticket", mensaje: t };
+    const { data, error } = await sb.from("mensajes_terceros").insert(fila).select("*").single();
+    if (error) { alert("No se pudo enviar: " + error.message); setTexto(t); return; }
+    setMsgs(prev => [...(prev || []), data]);
+    cargarConvos();
+  };
+
+  const iniciarConversacion = () => {
+    if (!nuevoPara) return;
+    const t = terceros.find(x => x.id === nuevoPara);
+    if (t) abrir({ tercero_id: t.id, nombre: t.nombre });
+    setNuevoPara("");
+  };
+
+  return (
+    <div style={{ display: "flex", gap: 14, alignItems: "stretch", flexWrap: "wrap" }}>
+      {/* Lista de conversaciones */}
+      <div style={{ flex: "0 0 300px", minWidth: 260, background: "#fff", border: "0.5px solid #e4e7ec", borderRadius: 12, overflow: "hidden", display: "flex", flexDirection: "column" }}>
+        <div style={{ padding: "12px 14px", borderBottom: "0.5px solid #e4e7ec" }}>
+          <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>💬 Conversaciones</div>
+          <div style={{ display: "flex", gap: 6 }}>
+            <select value={nuevoPara} onChange={e => setNuevoPara(e.target.value)}
+              style={{ flex: 1, background: "#fff", border: "0.5px solid #e4e7ec", borderRadius: 8, padding: "7px 8px", fontSize: 12, fontFamily: "'Geist',sans-serif" }}>
+              <option value="">Nueva conversación…</option>
+              {terceros.map(t => <option key={t.id} value={t.id}>{t.nombre}</option>)}
+            </select>
+            <button onClick={iniciarConversacion} disabled={!nuevoPara}
+              style={{ background: "#1a3a6b", color: "#fff", border: "none", borderRadius: 8, padding: "7px 12px", fontSize: 12, cursor: "pointer", opacity: nuevoPara ? 1 : 0.5 }}>+</button>
+          </div>
+        </div>
+        <div style={{ overflowY: "auto", flex: 1, maxHeight: 520 }}>
+          {convos === null ? <div style={{ padding: 14, fontSize: 12, color: "#888" }}>Cargando…</div>
+          : convos.length === 0 ? <div style={{ padding: 14, fontSize: 12, color: "#888" }}>Sin mensajes aún. Cuando una empresa escriba desde su portal, aparecerá aquí.</div>
+          : convos.map(c => (
+            <div key={c.tercero_id} onClick={() => abrir(c)}
+              style={{ padding: "11px 14px", borderBottom: "0.5px solid #f0f1f3", cursor: "pointer", background: sel?.tercero_id === c.tercero_id ? "#eef2f7" : "#fff" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 6 }}>
+                <span style={{ fontSize: 13, fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.nombre}</span>
+                {c.no_leidos > 0 && (
+                  <span style={{ background: "#F47B20", color: "#fff", fontSize: 10, fontWeight: 700, borderRadius: 10, padding: "1px 7px", flexShrink: 0 }}>{c.no_leidos}</span>
+                )}
+              </div>
+              <div style={{ fontSize: 11, color: "#888", marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.ultimo}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Hilo */}
+      <div style={{ flex: 1, minWidth: 320, background: "#fff", border: "0.5px solid #e4e7ec", borderRadius: 12, display: "flex", flexDirection: "column", minHeight: 420 }}>
+        {!sel ? (
+          <div className="empty" style={{ margin: "auto" }}>
+            <div style={{ fontSize: 32, marginBottom: 12 }}>💬</div>
+            <div style={{ fontWeight: 600 }}>Selecciona una conversación</div>
+            <div style={{ fontSize: 12, marginTop: 6 }}>o inicia una nueva con cualquier empresa</div>
+          </div>
+        ) : (
+          <>
+            <div style={{ padding: "12px 16px", borderBottom: "0.5px solid #e4e7ec", fontWeight: 700, fontSize: 14 }}>🏢 {sel.nombre}</div>
+            <div style={{ flex: 1, overflowY: "auto", padding: 16, maxHeight: 440 }}>
+              {msgs === null ? <div style={{ fontSize: 12, color: "#888" }}>Cargando…</div>
+              : msgs.length === 0 ? <div style={{ fontSize: 12, color: "#888" }}>Sin mensajes. Escribe el primero abajo.</div>
+              : msgs.map(m => (
+                <div key={m.id} style={{ display: "flex", justifyContent: m.autor === "bigticket" ? "flex-end" : "flex-start", marginBottom: 8 }}>
+                  <div style={{ maxWidth: "72%", padding: "9px 13px", borderRadius: 12, fontSize: 13, lineHeight: 1.5,
+                    background: m.autor === "bigticket" ? "#1a3a6b" : "#f4f5f7",
+                    color: m.autor === "bigticket" ? "#fff" : "#222",
+                    borderBottomRightRadius: m.autor === "bigticket" ? 4 : 12,
+                    borderBottomLeftRadius: m.autor === "bigticket" ? 12 : 4 }}>
+                    {m.mensaje}
+                    <div style={{ fontSize: 9, opacity: 0.6, marginTop: 4, textAlign: "right" }}>
+                      {new Date(m.created_at).toLocaleString("es-MX", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div style={{ display: "flex", gap: 8, padding: 12, borderTop: "0.5px solid #e4e7ec" }}>
+              <input value={texto} onChange={e => setTexto(e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); enviar(); } }}
+                placeholder="Escribe tu respuesta…"
+                style={{ flex: 1, background: "#f8f9fa", border: "0.5px solid #e4e7ec", borderRadius: 10, padding: "10px 12px", fontSize: 13, fontFamily: "'Geist',sans-serif" }} />
+              <button className="btn-orange" onClick={enviar} disabled={!texto.trim()} style={{ padding: "10px 18px" }}>Enviar</button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function ModuloCertificaciones() {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState(null);
   const [vista, setVista] = useState("kanban");
+  const [seccion, setSeccion] = useState("certificaciones"); // certificaciones | contratos | mensajes
   const [busqueda, setBusqueda] = useState("");
   const [filtroFuente, setFiltroFuente] = useState("todas");
   const [filtroTipo, setFiltroTipo] = useState("todos");
@@ -1490,25 +1857,45 @@ function ModuloCertificaciones() {
 
   return (
     <div className="pg">
-      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 20, flexWrap: "wrap", gap: 12 }}>
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 14, flexWrap: "wrap", gap: 12 }}>
         <div>
           <div className="sec-title">Certificaciones MX 🇲🇽</div>
           <div className="sec-sub">Recepción documental — Prospección + Portal de Certificación</div>
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
           <img src={BIGGY_IMG} alt="Biggy" style={{ width: 32, height: 32, borderRadius: "50%", objectFit: "cover", border: "2px solid #F47B20" }} />
-          <div style={{ display: "flex", background: "#fff", borderRadius: 8, border: "0.5px solid #e4e7ec", overflow: "hidden" }}>
-            {[["kanban", "Kanban"], ["lista", "Lista"]].map(([v, l]) => (
-              <button key={v} onClick={() => setVista(v)}
-                style={{ padding: "7px 14px", border: "none", cursor: "pointer", fontSize: 12, fontFamily: "'Geist',sans-serif",
-                  background: vista === v ? "#1a3a6b" : "#fff", color: vista === v ? "#fff" : "#666", fontWeight: vista === v ? 600 : 400 }}>
-                {l}
-              </button>
-            ))}
-          </div>
+          {seccion === "certificaciones" && (
+            <div style={{ display: "flex", background: "#fff", borderRadius: 8, border: "0.5px solid #e4e7ec", overflow: "hidden" }}>
+              {[["kanban", "Kanban"], ["lista", "Lista"]].map(([v, l]) => (
+                <button key={v} onClick={() => setVista(v)}
+                  style={{ padding: "7px 14px", border: "none", cursor: "pointer", fontSize: 12, fontFamily: "'Geist',sans-serif",
+                    background: vista === v ? "#1a3a6b" : "#fff", color: vista === v ? "#fff" : "#666", fontWeight: vista === v ? 600 : 400 }}>
+                  {l}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       </div>
 
+      {/* Pestañas de sección */}
+      <div style={{ display: "flex", gap: 4, marginBottom: 18, borderBottom: "1px solid #e4e7ec" }}>
+        {[["certificaciones", "📋 Certificaciones"], ["contratos", "📑 Gestionador de Contratos"], ["mensajes", "💬 Mensajes"]].map(([v, l]) => (
+          <button key={v} onClick={() => { setSeccion(v); setSelected(null); }}
+            style={{ padding: "10px 16px", border: "none", cursor: "pointer", fontSize: 13, fontFamily: "'Geist',sans-serif",
+              background: "transparent", fontWeight: seccion === v ? 700 : 400,
+              color: seccion === v ? "#1a3a6b" : "#888",
+              borderBottom: seccion === v ? "2.5px solid #F47B20" : "2.5px solid transparent", marginBottom: -1 }}>
+            {l}
+          </button>
+        ))}
+      </div>
+
+      {seccion === "contratos" && <GestionadorContratos />}
+      {seccion === "mensajes" && <MensajesTerceros />}
+
+      {seccion === "certificaciones" && (
+      <>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 14 }}>
         <input
           value={busqueda}
@@ -1592,6 +1979,8 @@ function ModuloCertificaciones() {
             );
           })}
         </div>
+      )}
+      </>
       )}
     </div>
   );
