@@ -2,19 +2,20 @@ import { useState, useEffect, useRef } from "react";
 import { sb, BIGGY_IMG } from "./shared";
 
 const COLUMNAS = [
-  { id: "recepcion",           label: "Etapa 1: Recepción Documental", color: "#1a3a6b", bg: "#eef2f7", border: "#d6def0" },
-  { id: "prevalidacion_biggy", label: "Etapa 2: Pre Validación Biggy",  color: "#F47B20", bg: "#fff4ec", border: "#fbd9c0" },
-  { id: "validacion_meli",     label: "Etapa 3: Validación MELI",       color: "#1a3a6b", bg: "#eef2f7", border: "#d6def0" },
-  { id: "validacion_nubarium", label: "Etapa 4: Nubarium / REPUVE",       color: "#1a3a6b", bg: "#eef2f7", border: "#d6def0" },
-  { id: "firma_contrato",      label: "Etapa 5: Firma de Contrato",     color: "#7c3aed", bg: "#f5f0fe", border: "#ddd0f7" },
+  { id: "recepcion",           label: "Etapa 1: Recepción Documental",  color: "#1a3a6b", bg: "#eef2f7", border: "#d6def0" },
+  { id: "llamada_supervisor",  label: "Etapa 2: Llamada de Supervisor", color: "#0e7490", bg: "#e8f6f9", border: "#c9e8f0" },
+  { id: "prevalidacion_biggy", label: "Etapa 3: Pre Validación Biggy",  color: "#F47B20", bg: "#fff4ec", border: "#fbd9c0" },
+  { id: "validacion_meli",     label: "Etapa 4: Validación MELI",       color: "#1a3a6b", bg: "#eef2f7", border: "#d6def0" },
+  { id: "validacion_nubarium", label: "Etapa 5: Nubarium / REPUVE",       color: "#1a3a6b", bg: "#eef2f7", border: "#d6def0" },
+  { id: "firma_contrato",      label: "Etapa 6: Firma de Contrato",     color: "#7c3aed", bg: "#f5f0fe", border: "#ddd0f7" },
   { id: "aceptado",            label: "Aceptado",                       color: "#166534", bg: "#e8f5ec", border: "#b7e0c2" },
   { id: "rechazado",           label: "Rechazado",                      color: "#c0392b", bg: "#fbeaea", border: "#f0c4c4" },
 ];
 
 // Etiquetas cortas para los KPIs del header (coinciden con las columnas)
 const ETAPA_CORTA = {
-  recepcion: "Etapa 1 · Recepción", prevalidacion_biggy: "Etapa 2 · Biggy", validacion_meli: "Etapa 3 · MELI",
-  validacion_nubarium: "Etapa 4 · Nubarium/REPUVE", firma_contrato: "Etapa 5 · Firma", aceptado: "Aceptado", rechazado: "Rechazado",
+  recepcion: "Etapa 1 · Recepción", llamada_supervisor: "Etapa 2 · Llamada Sup.", prevalidacion_biggy: "Etapa 3 · Biggy", validacion_meli: "Etapa 4 · MELI",
+  validacion_nubarium: "Etapa 5 · Nubarium/REPUVE", firma_contrato: "Etapa 6 · Firma", aceptado: "Aceptado", rechazado: "Rechazado",
 };
 
 // ─── VISOR DOCUMENTO ────────────────────────────────────────────────
@@ -519,7 +520,7 @@ function DetalleCandidato({ candidato, onVolver, onActualizar, onPasarEtapa2 }) 
   // Biggy corre automático al abrir SOLO si la tarjeta ya está en Etapa 2+ y no tiene análisis.
   // En Etapa 1 (recepción) NO corre — ahí solo se visualiza.
   useEffect(() => {
-    if (etapaProspeccion(candidato) !== "recepcion" && !candidato.claude_analisis && !analisis && !analizando) {
+    if (!["recepcion", "llamada_supervisor"].includes(etapaProspeccion(candidato)) && !candidato.claude_analisis && !analisis && !analizando) {
       analizarConClaude();
     }
   }, [candidato.id]);
@@ -677,6 +678,7 @@ Responde con este JSON exacto:
   const tieneAnalisis = !!(analisis || candidato.claude_analisis);
   const etapaActual = etapaProspeccion(candidato);
   const enEtapa1 = etapaActual === "recepcion";
+  const enLlamada = etapaActual === "llamada_supervisor";
 
   return (
     <div>
@@ -690,19 +692,33 @@ Responde con este JSON exacto:
       </div>
 
       <div className="pg-detail">
-        {/* Etapa 1: solo visualización + botón para pasar a Biggy.
-            Etapa 2+: Biggy corre automático (ver useEffect). */}
+        {/* Etapa 1: visualización + botón a Llamada de Supervisor (auto a los 30 s).
+            Etapa 2: espera de decisión del supervisor. Etapa 3+: Biggy corre automático. */}
         {enEtapa1 ? (
           <div className="form-card" style={{ background: "#fff4ec", border: "1px solid #fbd9c0" }}>
             <div style={{ fontSize: 13, color: "#7c3a12", lineHeight: 1.6, marginBottom: 12 }}>
-              Este postulante está en <b>Etapa 1 · Recepción</b>. Revisa la información y los documentos; al pasarlo a <b>Etapa 2</b>, Biggy hará la pre-validación <b>automáticamente al abrir la tarjeta</b>.
+              Este postulante está en <b>Etapa 1 · Recepción</b>. A los 30 segundos pasa solo a <b>Etapa 2 · Llamada de Supervisor</b> (se genera la tarea en la Bitácora), o puedes pasarlo ahora:
             </div>
             <button className="btn-orange" onClick={onPasarEtapa2} style={{ width: "100%" }}>
-              ▶ Pasar a Etapa 2 · Pre Validación Biggy
+              ▶ Pasar a Etapa 2 · Llamada de Supervisor
             </button>
+          </div>
+        ) : enLlamada ? (
+          <div className="form-card" style={{ background: "#e8f6f9", border: "1px solid #c9e8f0" }}>
+            <div style={{ fontSize: 13, color: "#0e7490", lineHeight: 1.6 }}>
+              📞 <b>Etapa 2 · Llamada de Supervisor.</b> Hay una tarea pendiente en la Bitácora del Supervisor (SLA 48 h).
+              Si el supervisor acepta, la tarjeta pasa sola a <b>Pre Validación Biggy</b> con su comentario; si rechaza, pasa a <b>Rechazado</b>.
+            </div>
           </div>
         ) : (
           <BiggyChatBubble analizando={analizando} analisis={analisis} score={score} recomendacion={recomendacion} alertas={alertas} onReanalizar={analizarConClaude} />
+        )}
+
+        {candidato.comentario_supervisor && !enEtapa1 && !enLlamada && (
+          <div className="form-card" style={{ background: "#e8f6f9", border: "1px solid #c9e8f0" }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: "#0e7490", marginBottom: 4 }}>📞 Comentario del supervisor</div>
+            <div style={{ fontSize: 13, color: "#155e70", lineHeight: 1.5 }}>{candidato.comentario_supervisor}</div>
+          </div>
         )}
 
         {/* Datos del candidato */}
@@ -746,8 +762,8 @@ Responde con este JSON exacto:
           </div>
         </div>
 
-        {/* Certificación MELI — oculto en Etapa 1 (aún no pre-validado por Biggy) */}
-        {!enEtapa1 && (
+        {/* Certificación MELI — oculto en Etapas 1 y 2 (aún no pre-validado por Biggy) */}
+        {!enEtapa1 && !enLlamada && (
         <div className="form-card">
           <div className="form-title">Certificación Mercado Libre</div>
           <div className="two-col" style={{ marginBottom: 16 }}>
@@ -947,6 +963,7 @@ function DetalleCertificacion({ cert, etapa, onVolver, onPasarEtapa2, onMoverA, 
 
   const etapaActual = etapa || cert.etapa_kanban || ETAPA_CERT[cert.estado] || "recepcion";
   const enEtapa1 = etapaActual === "recepcion";
+  const enLlamada = etapaActual === "llamada_supervisor";
   const enEtapa2 = etapaActual === "prevalidacion_biggy";
   const esVeh = cert.tipo === "vehiculo";
   const cond = cert._conductor;
@@ -1011,7 +1028,7 @@ function DetalleCertificacion({ cert, etapa, onVolver, onPasarEtapa2, onMoverA, 
 
   // Auto-Biggy al abrir en Etapa 2+ (solo personas), si no hay análisis cacheado.
   useEffect(() => {
-    if (docsCert && !enEtapa1 && !esVeh && !analisis && !analizando) analizarCert(docsCert);
+    if (docsCert && !enEtapa1 && !enLlamada && !esVeh && !analisis && !analizando) analizarCert(docsCert);
   }, [docsCert]);
 
   // Envío a MELI (mismo formulario pre-rellenado que Prospección). Solo conductores/ayudantes.
@@ -1070,16 +1087,34 @@ function DetalleCertificacion({ cert, etapa, onVolver, onPasarEtapa2, onMoverA, 
         {enEtapa1 && (
           <div className="form-card" style={{ background: "#fff4ec", border: "1px solid #fbd9c0" }}>
             <div style={{ fontSize: 13, color: "#7c3a12", lineHeight: 1.6, marginBottom: 12 }}>
-              Esta postulación está en <b>Etapa 1 · Recepción</b>. Al pasarla a <b>Etapa 2</b>, Biggy hará la pre-validación <b>automáticamente al abrir la tarjeta</b>.
+              {esVeh
+                ? <>Este vehículo está en <b>Etapa 1 · Recepción</b>. Los vehículos no requieren llamada: pasan directo a <b>Pre Validación Biggy</b> y luego a REPUVE.</>
+                : <>Esta postulación está en <b>Etapa 1 · Recepción</b>. A los 30 segundos pasa sola a <b>Etapa 2 · Llamada de Supervisor</b> (se genera la tarea en la Bitácora), o puedes pasarla ahora:</>}
             </div>
             <button className="btn-orange" onClick={onPasarEtapa2} style={{ width: "100%" }}>
-              ▶ Pasar a Etapa 2 · Pre Validación Biggy
+              {esVeh ? "▶ Pasar a Etapa 3 · Pre Validación Biggy" : "▶ Pasar a Etapa 2 · Llamada de Supervisor"}
             </button>
           </div>
         )}
 
-        {/* Etapa 2+: Biggy para personas; vehículos usarán su Vision propia (track REPUVE) */}
-        {!enEtapa1 && !esVeh && (
+        {enLlamada && !esVeh && (
+          <div className="form-card" style={{ background: "#e8f6f9", border: "1px solid #c9e8f0" }}>
+            <div style={{ fontSize: 13, color: "#0e7490", lineHeight: 1.6 }}>
+              📞 <b>Etapa 2 · Llamada de Supervisor.</b> Hay una tarea pendiente en la Bitácora del Supervisor (SLA 48 h).
+              Si el supervisor acepta, la tarjeta pasa sola a <b>Pre Validación Biggy</b> con su comentario; si rechaza, pasa a <b>Rechazado</b>.
+            </div>
+          </div>
+        )}
+
+        {cert.comentario_supervisor && !enEtapa1 && !enLlamada && (
+          <div className="form-card" style={{ background: "#e8f6f9", border: "1px solid #c9e8f0" }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: "#0e7490", marginBottom: 4 }}>📞 Comentario del supervisor</div>
+            <div style={{ fontSize: 13, color: "#155e70", lineHeight: 1.5 }}>{cert.comentario_supervisor}</div>
+          </div>
+        )}
+
+        {/* Etapa 3+: Biggy para personas; vehículos usarán su Vision propia (track REPUVE) */}
+        {!enEtapa1 && !enLlamada && !esVeh && (
           <BiggyChatBubble analizando={analizando} analisis={analisis} score={score} recomendacion={recomendacion} alertas={alertas} onReanalizar={() => docsCert && analizarCert(docsCert)} />
         )}
         {!enEtapa1 && esVeh && (
@@ -1742,7 +1777,7 @@ function ModuloCertificaciones() {
 
   // Etapa del Kanban → estado persistido (Fuente A / certificaciones_mx)
   const ESTADO_POR_ETAPA = {
-    recepcion: "pendiente", prevalidacion_biggy: "pendiente", validacion_meli: "enviado",
+    recepcion: "pendiente", llamada_supervisor: "pendiente", prevalidacion_biggy: "pendiente", validacion_meli: "enviado",
     validacion_nubarium: "aprobado", firma_contrato: "en_firma", aceptado: "aceptado", rechazado: "rechazado",
   };
 
@@ -1815,7 +1850,7 @@ function ModuloCertificaciones() {
   if (selected) {
     if (selected.fuente === "portal_cert") {
       return <DetalleCertificacion cert={selected.raw} etapa={selected.etapa} onVolver={() => setSelected(null)}
-        onPasarEtapa2={() => moverYCerrar(selected, "prevalidacion_biggy")}
+        onPasarEtapa2={() => moverYCerrar(selected, selected.tipo === "vehiculo" ? "prevalidacion_biggy" : "llamada_supervisor")}
         onMoverA={(etapa) => moverYCerrar(selected, etapa)}
         onAnalizado={(parsed) => setItems(prev => prev.map(i => i.key === selected.key ? {
           ...i, score: parsed.score_global, rec: parsed.recomendacion,
@@ -1826,7 +1861,7 @@ function ModuloCertificaciones() {
       <DetalleCandidato
         candidato={selected.raw}
         onVolver={() => setSelected(null)}
-        onPasarEtapa2={() => moverYCerrar(selected, "prevalidacion_biggy")}
+        onPasarEtapa2={() => moverYCerrar(selected, "llamada_supervisor")}
         onActualizar={(updated) => {
           const rn = normalizarProspeccion(updated);
           setItems(prev => prev.map(i => i.key === rn.key ? rn : i));
