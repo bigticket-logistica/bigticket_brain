@@ -395,6 +395,92 @@ function ValidacionNubarium({ candidato, onActualizar }) {
 }
 
 // ─── DETALLE CANDIDATO ───────────────────────────────────────────────
+// ─── ETAPA 7 · SOLICITUD DE ALTA ────────────────────────────────────
+// Resumen ejecutivo de todo el proceso + creación de empresa con
+// credenciales del portal (vía n8n). Al enviar, la tarjeta pasa a Firma.
+function ResumenSolicitudAlta({ fuente, registro, datos, onEnviado }) {
+  const [minuta, setMinuta] = useState(null);
+  const [itemsOp, setItemsOp] = useState(null);
+  const [tareaAlta, setTareaAlta] = useState(null);
+  const [enviando, setEnviando] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      const [rm, rc, rt] = await Promise.all([
+        sb.from("minutas_entrevista").select("*").eq("fuente", fuente).eq("registro_id", registro.id)
+          .order("created_at", { ascending: false }).limit(1).maybeSingle(),
+        sb.from("contrato_operacional").select("*").eq("fuente", fuente).eq("registro_id", registro.id).maybeSingle(),
+        sb.from("tareas_supervisor").select("estado, sla_vence_at").eq("fuente", fuente)
+          .eq("registro_id", registro.id).eq("tipo_tarea", "alta_operacional").maybeSingle(),
+      ]);
+      setMinuta(rm.data || false);
+      setItemsOp(rc.data || false);
+      setTareaAlta(rt.data || false);
+    })();
+  }, [registro.id]);
+
+  const crearEmpresa = async () => {
+    if (!datos.email) { alert("El prospecto no tiene email registrado — es necesario para crear su acceso al portal."); return; }
+    if (itemsOp === false && !confirm("El Jefe de Supervisores aún NO completa los items del contrato (tarea Alta Operacional pendiente).\n\n¿Crear la empresa y enviar credenciales de todas formas?")) return;
+    if (!confirm(`¿Crear la empresa de ${datos.nombre} y enviarle las credenciales del portal a ${datos.email}?`)) return;
+    setEnviando(true);
+    try {
+      const resp = await fetch("https://bigticket2026.app.n8n.cloud/webhook/crear-empresa-terceros", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fuente, id: registro.id, nombre: datos.nombre, rfc: datos.rfc || "", email: datos.email }),
+      });
+      const txt = await resp.text();
+      if (!resp.ok || !txt || !txt.trim()) throw new Error("el servicio no respondió");
+      const r = JSON.parse(txt);
+      if (!r.ok) throw new Error(r.error || "no se pudo crear la empresa");
+      const tabla = fuente === "certificaciones_mx" ? "certificaciones_mx" : "certificaciones";
+      const patch = fuente === "certificaciones_mx"
+        ? { estado: "en_firma", etapa_kanban: "firma_contrato" }
+        : { etapa_kanban: "firma_contrato" };
+      await sb.from(tabla).update(patch).eq("id", registro.id);
+      alert("✅ Empresa creada y credenciales enviadas por correo.\nLa tarjeta pasa a Etapa 8 · Firma de Contrato.");
+      onEnviado(patch);
+    } catch (e) { alert("No se pudo completar: " + e.message); }
+    finally { setEnviando(false); }
+  };
+
+  const Fila = ({ k, v }) => (
+    <div style={{ display: "flex", gap: 10, padding: "7px 0", borderBottom: "1px solid #f0f4f3", fontSize: 13 }}>
+      <span style={{ flex: "0 0 190px", color: "#888", fontWeight: 600 }}>{k}</span>
+      <span style={{ flex: 1, fontWeight: 600 }}>{v || "—"}</span>
+    </div>
+  );
+
+  return (
+    <div className="form-card" style={{ background: "#e7f5f2", border: "1px solid #c4e6df" }}>
+      <div className="form-title" style={{ color: "#0f766e" }}>📄 Etapa 7 · Solicitud de Alta — Resumen del proceso</div>
+
+      <Fila k="🤖 Nota Biggy" v={registro.claude_score_global != null ? `${registro.claude_score_global}/10 · ${registro.claude_recomendacion || ""}` : null} />
+      <Fila k="🛒 Validación MELI" v={registro.respuesta_meli || (registro.fecha_respuesta_meli ? "Aprobado" : null)} />
+      <Fila k="🪪 Validación Nubarium" v={registro.nubarium_reporte ? `Informe generado${registro.nubarium_reviewed_at ? " el " + new Date(registro.nubarium_reviewed_at).toLocaleDateString("es-MX") : ""}` : null} />
+      <Fila k="📞 Nota del supervisor" v={registro.comentario_supervisor} />
+      <Fila k="🗣 Entrevista Operaciones" v={registro.comentario_entrevista} />
+      {minuta === null ? <Fila k="📋 Minuta de entrevista" v="Cargando…" /> : minuta && (
+        <Fila k="📋 Minuta de entrevista" v={`${minuta.tipo_vehiculo || "—"} · ${minuta.cantidad_choferes ?? "—"} chofer(es) · ${minuta.cantidad_ayudantes ?? "—"} ayudante(s) · ${minuta.horario || "—"} · ${minuta.zona_operacion || "—"}`} />
+      )}
+      <Fila k="🏗 Items del contrato (Jefe)" v={
+        itemsOp === null ? "Cargando…"
+        : itemsOp ? `${itemsOp.cantidad_vehiculos ?? "—"} vehículo(s) ${itemsOp.tipo_vehiculos || ""} · inicio ${itemsOp.fecha_inicio || "—"} · ${itemsOp.esquema_tarifa || "—"}`
+        : (tareaAlta && tareaAlta.estado === "pendiente" ? "⏳ Pendiente — tarea Alta Operacional en Indicadores (SLA 24 h)" : "Sin completar")
+      } />
+
+      <button onClick={crearEmpresa} disabled={enviando}
+        style={{ width: "100%", marginTop: 14, background: "#0f766e", color: "#fff", border: "none", borderRadius: 10,
+          padding: "12px", fontSize: 14, fontWeight: 700, cursor: "pointer", opacity: enviando ? 0.6 : 1 }}>
+        {enviando ? "Creando empresa…" : "🏢 Crear empresa y enviar credenciales del portal"}
+      </button>
+      <div style={{ fontSize: 11, color: "#0f766e", marginTop: 8, textAlign: "center" }}>
+        Crea la empresa en Terceros (se une al motor de Pagos), genera su acceso y envía el link del portal con las credenciales. La tarjeta pasa a <b>Etapa 8 · Firma de Contrato</b>.
+      </div>
+    </div>
+  );
+}
+
 // ─── ETAPA 5 · FIRMA DE CONTRATO (MIFIEL) ───────────────────────────
 // Mismo componente para ambas fuentes (regla: todas las tarjetas iguales).
 // ⚠️ Cambiar a "production" al salir del sandbox de MIFIEL.
@@ -862,11 +948,9 @@ Responde con este JSON exacto:
           </div>
         )}
         {candidato.estado === "alta_solicitada" && (
-          <div className="form-card" style={{ background: "#e7f5f2", border: "1px solid #c4e6df" }}>
-            <div style={{ fontSize: 13, color: "#0f766e", lineHeight: 1.6 }}>
-              📄 <b>Etapa 7 · Solicitud de Alta.</b> Entrevista aprobada por Operaciones — minuta registrada.
-            </div>
-          </div>
+          <ResumenSolicitudAlta fuente="certificaciones_mx" registro={candidato}
+            datos={{ nombre: candidato.nombre, rfc: candidato.rfc, email: candidato.email }}
+            onEnviado={(patch) => onActualizar({ ...candidato, ...patch })} />
         )}
         {candidato.comentario_entrevista && ["alta_solicitada", "en_firma", "aceptado"].includes(candidato.estado) && (
           <div className="form-card" style={{ background: "#e8f6f9", border: "1px solid #c9e8f0" }}>
@@ -1212,12 +1296,10 @@ function DetalleCertificacion({ cert, etapa, onVolver, onPasarEtapa2, onMoverA, 
             </div>
           </div>
         )}
-        {etapaActual === "solicitud_alta" && (
-          <div className="form-card" style={{ background: "#e7f5f2", border: "1px solid #c4e6df" }}>
-            <div style={{ fontSize: 13, color: "#0f766e", lineHeight: 1.6 }}>
-              📄 <b>Etapa 7 · Solicitud de Alta.</b> Entrevista aprobada por Operaciones — minuta registrada.
-            </div>
-          </div>
+        {etapaActual === "solicitud_alta" && !esVeh && (
+          <ResumenSolicitudAlta fuente="certificaciones" registro={cert}
+            datos={{ nombre: cond?.nombre || ter?.nombre, rfc: cond?.rfc, email: cond?.email }}
+            onEnviado={(patch) => { Object.assign(cert, patch); if (onMoverA) onMoverA("firma_contrato"); }} />
         )}
         {cert.comentario_entrevista && ["solicitud_alta", "firma_contrato", "aceptado"].includes(etapaActual) && (
           <div className="form-card" style={{ background: "#e8f6f9", border: "1px solid #c9e8f0" }}>
