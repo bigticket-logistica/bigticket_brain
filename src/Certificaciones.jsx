@@ -901,8 +901,8 @@ function etapaProspeccion(row) {
   const base = ETAPA_MX[row.estado] || "recepcion";
   // estados definidos (enviado/aprobado/aceptado/rechazado) mandan → automatización
   if (base !== "recepcion") return base;
-  // estado "pendiente" → Etapa 1 vs 2: usa el movimiento manual guardado si existe
-  if (row.etapa_kanban === "recepcion" || row.etapa_kanban === "prevalidacion_biggy") return row.etapa_kanban;
+  // estado "pendiente" → Etapas 1/2/3: usa el movimiento guardado si existe
+  if (["recepcion", "llamada_supervisor", "prevalidacion_biggy"].includes(row.etapa_kanban)) return row.etapa_kanban;
   return row.claude_analisis ? "prevalidacion_biggy" : "recepcion";
 }
 
