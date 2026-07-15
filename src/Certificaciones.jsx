@@ -7,7 +7,9 @@ const COLUMNAS = [
   { id: "prevalidacion_biggy", label: "Etapa 3: Pre Validación Biggy",  color: "#F47B20", bg: "#fff4ec", border: "#fbd9c0" },
   { id: "validacion_meli",     label: "Etapa 4: Validación MELI",       color: "#1a3a6b", bg: "#eef2f7", border: "#d6def0" },
   { id: "validacion_nubarium", label: "Etapa 5: Nubarium / REPUVE",       color: "#1a3a6b", bg: "#eef2f7", border: "#d6def0" },
-  { id: "firma_contrato",      label: "Etapa 6: Firma de Contrato",     color: "#7c3aed", bg: "#f5f0fe", border: "#ddd0f7" },
+  { id: "entrevista_operaciones", label: "Etapa 6: Entrevista con Operaciones", color: "#0e7490", bg: "#e8f6f9", border: "#c9e8f0" },
+  { id: "solicitud_alta",      label: "Etapa 7: Solicitud de Alta",     color: "#0f766e", bg: "#e7f5f2", border: "#c4e6df" },
+  { id: "firma_contrato",      label: "Etapa 8: Firma de Contrato",     color: "#7c3aed", bg: "#f5f0fe", border: "#ddd0f7" },
   { id: "aceptado",            label: "Aceptado",                       color: "#166534", bg: "#e8f5ec", border: "#b7e0c2" },
   { id: "rechazado",           label: "Rechazado",                      color: "#c0392b", bg: "#fbeaea", border: "#f0c4c4" },
 ];
@@ -15,7 +17,7 @@ const COLUMNAS = [
 // Etiquetas cortas para los KPIs del header (coinciden con las columnas)
 const ETAPA_CORTA = {
   recepcion: "Etapa 1 · Recepción", llamada_supervisor: "Etapa 2 · Llamada Sup.", prevalidacion_biggy: "Etapa 3 · Biggy", validacion_meli: "Etapa 4 · MELI",
-  validacion_nubarium: "Etapa 5 · Nubarium/REPUVE", firma_contrato: "Etapa 6 · Firma", aceptado: "Aceptado", rechazado: "Rechazado",
+  validacion_nubarium: "Etapa 5 · Nubarium/REPUVE", entrevista_operaciones: "Etapa 6 · Entrevista", solicitud_alta: "Etapa 7 · Sol. de Alta", firma_contrato: "Etapa 8 · Firma", aceptado: "Aceptado", rechazado: "Rechazado",
 };
 
 // ─── VISOR DOCUMENTO ────────────────────────────────────────────────
@@ -660,7 +662,7 @@ Responde con este JSON exacto:
     setDecidiendo(true);
     const now = new Date().toISOString();
     try {
-      const patch = { estado: nuevoEstado, decidido_at: now };
+      const patch = { estado: nuevoEstado, decidido_at: now, etapa_kanban: ETAPA_MX[nuevoEstado] || null };
       if (nuevoEstado === "rechazado") patch.motivo_rechazo = motivoTxt;
       await sb.from("certificaciones_mx").update(patch).eq("id", candidato.id);
       onActualizar({ ...candidato, ...patch });
@@ -673,7 +675,7 @@ Responde con este JSON exacto:
     }
   };
 
-  const estadoBadge = { pendiente: "badge-pendiente", enviado: "badge-enviado", aprobado: "badge-aprobado", en_firma: "badge-enviado", aceptado: "badge-aprobado", rechazado: "badge-rechazado" };
+  const estadoBadge = { pendiente: "badge-pendiente", enviado: "badge-enviado", aprobado: "badge-aprobado", en_entrevista: "badge-enviado", alta_solicitada: "badge-enviado", en_firma: "badge-enviado", aceptado: "badge-aprobado", rechazado: "badge-rechazado" };
 
   const tieneAnalisis = !!(analisis || candidato.claude_analisis);
   const etapaActual = etapaProspeccion(candidato);
@@ -809,9 +811,9 @@ Responde con este JSON exacto:
               </div>
               {!rechazando ? (
                 <div style={{ display: "flex", gap: 10 }}>
-                  <button onClick={() => decidir("en_firma")} disabled={decidiendo}
+                  <button onClick={() => decidir("en_entrevista")} disabled={decidiendo}
                     style={{ flex: 1, background: "#16a34a", color: "#fff", border: "none", borderRadius: 10, padding: "12px", fontSize: 14, fontWeight: 700, cursor: "pointer", opacity: decidiendo ? 0.6 : 1 }}>
-                    {decidiendo ? "Guardando..." : "✓ Aceptar → Firma de Contrato"}
+                    {decidiendo ? "Guardando..." : "✓ Aceptar → Entrevista con Operaciones"}
                   </button>
                   <button onClick={() => setRechazando(true)} disabled={decidiendo}
                     style={{ flex: 1, background: "#fff", color: "#dc2626", border: "1.5px solid #fca5a5", borderRadius: 10, padding: "12px", fontSize: 14, fontWeight: 700, cursor: "pointer" }}>
@@ -849,6 +851,28 @@ Responde con este JSON exacto:
             </div>
           )}
         </div>
+        )}
+
+        {candidato.estado === "en_entrevista" && (
+          <div className="form-card" style={{ background: "#e8f6f9", border: "1px solid #c9e8f0" }}>
+            <div style={{ fontSize: 13, color: "#0e7490", lineHeight: 1.6 }}>
+              🗣 <b>Etapa 6 · Entrevista con Operaciones.</b> Se generó la tarea <b>"Entrevista Prospección"</b> en la Bitácora del Supervisor (SLA 72 h).
+              El supervisor llenará la minuta de entrevista: si aprueba, la tarjeta pasa a <b>Solicitud de Alta</b>; si rechaza, a <b>Rechazado</b>.
+            </div>
+          </div>
+        )}
+        {candidato.estado === "alta_solicitada" && (
+          <div className="form-card" style={{ background: "#e7f5f2", border: "1px solid #c4e6df" }}>
+            <div style={{ fontSize: 13, color: "#0f766e", lineHeight: 1.6 }}>
+              📄 <b>Etapa 7 · Solicitud de Alta.</b> Entrevista aprobada por Operaciones — minuta registrada.
+            </div>
+          </div>
+        )}
+        {candidato.comentario_entrevista && ["alta_solicitada", "en_firma", "aceptado"].includes(candidato.estado) && (
+          <div className="form-card" style={{ background: "#e8f6f9", border: "1px solid #c9e8f0" }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: "#0e7490", marginBottom: 4 }}>🗣 Comentario de la entrevista (Operaciones)</div>
+            <div style={{ fontSize: 13, color: "#155e70", lineHeight: 1.5 }}>{candidato.comentario_entrevista}</div>
+          </div>
         )}
 
         {candidato.estado === "en_firma" && (
@@ -892,7 +916,7 @@ const TIPO_CFG = {
 };
 
 // Mapeo estado crudo → etapa del Kanban (columna)
-const ETAPA_MX   = { pendiente: "recepcion", enviado: "validacion_meli", aprobado: "validacion_nubarium", en_firma: "firma_contrato", aceptado: "aceptado", rechazado: "rechazado" };
+const ETAPA_MX   = { pendiente: "recepcion", enviado: "validacion_meli", aprobado: "validacion_nubarium", en_entrevista: "entrevista_operaciones", alta_solicitada: "solicitud_alta", en_firma: "firma_contrato", aceptado: "aceptado", rechazado: "rechazado" };
 const ETAPA_CERT = { enviado: "recepcion", en_validacion: "validacion_meli", validado: "aceptado", con_alertas: "aceptado", certificado: "aceptado", rechazado: "rechazado" };
 
 // Etapa de un prospecto (Fuente A). "pendiente" se divide: sin análisis de Biggy → Recepción;
@@ -1177,6 +1201,28 @@ function DetalleCertificacion({ cert, etapa, onVolver, onPasarEtapa2, onMoverA, 
         {etapaActual === "rechazado" && (
           <div className="form-card" style={{ background: "#fdecec", border: "1px solid #f5c2c2" }}>
             <div style={{ fontSize: 13, color: "#991b1b" }}>✕ <b>Rechazado.</b> {cert.respuesta_meli || cert.motivo_rechazo || ""}</div>
+          </div>
+        )}
+
+        {etapaActual === "entrevista_operaciones" && !esVeh && (
+          <div className="form-card" style={{ background: "#e8f6f9", border: "1px solid #c9e8f0" }}>
+            <div style={{ fontSize: 13, color: "#0e7490", lineHeight: 1.6 }}>
+              🗣 <b>Etapa 6 · Entrevista con Operaciones.</b> Tarea <b>"Entrevista Prospección"</b> en la Bitácora del Supervisor (SLA 72 h).
+              Si aprueba la minuta, pasa a <b>Solicitud de Alta</b>; si rechaza, a <b>Rechazado</b>.
+            </div>
+          </div>
+        )}
+        {etapaActual === "solicitud_alta" && (
+          <div className="form-card" style={{ background: "#e7f5f2", border: "1px solid #c4e6df" }}>
+            <div style={{ fontSize: 13, color: "#0f766e", lineHeight: 1.6 }}>
+              📄 <b>Etapa 7 · Solicitud de Alta.</b> Entrevista aprobada por Operaciones — minuta registrada.
+            </div>
+          </div>
+        )}
+        {cert.comentario_entrevista && ["solicitud_alta", "firma_contrato", "aceptado"].includes(etapaActual) && (
+          <div className="form-card" style={{ background: "#e8f6f9", border: "1px solid #c9e8f0" }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: "#0e7490", marginBottom: 4 }}>🗣 Comentario de la entrevista (Operaciones)</div>
+            <div style={{ fontSize: 13, color: "#155e70", lineHeight: 1.5 }}>{cert.comentario_entrevista}</div>
           </div>
         )}
 
@@ -1778,7 +1824,7 @@ function ModuloCertificaciones() {
   // Etapa del Kanban → estado persistido (Fuente A / certificaciones_mx)
   const ESTADO_POR_ETAPA = {
     recepcion: "pendiente", llamada_supervisor: "pendiente", prevalidacion_biggy: "pendiente", validacion_meli: "enviado",
-    validacion_nubarium: "aprobado", firma_contrato: "en_firma", aceptado: "aceptado", rechazado: "rechazado",
+    validacion_nubarium: "aprobado", entrevista_operaciones: "en_entrevista", solicitud_alta: "alta_solicitada", firma_contrato: "en_firma", aceptado: "aceptado", rechazado: "rechazado",
   };
 
   // Dispara Biggy (Claude Vision) sobre un prospecto (Fuente A) y cachea el análisis.
