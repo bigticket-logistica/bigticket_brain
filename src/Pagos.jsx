@@ -4480,7 +4480,8 @@ function ConciliacionTercerosMX({ usuario }) {
             ) : (
               <Fragment>
                 {trasp.grupos.map((g, gi) => {
-                  const movibles = g.filas.filter(d => (g.estados[d.service_center_id || "SIN SC"] || "borrador") !== "enviada");
+                  const esDestino = !!trasp.destino && norm(g.empresa) === norm(trasp.destino);
+                  const movibles = esDestino ? [] : g.filas.filter(d => (g.estados[d.service_center_id || "SIN SC"] || "borrador") !== "enviada");
                   const todasSel = movibles.length > 0 && movibles.every(d => trasp.sel.has(claveTrasp(g.empresa, d)));
                   const totG = Math.round(g.filas.reduce((a, d) => a + Number(d.monto || 0), 0) * 100) / 100;
                   return (
@@ -4490,6 +4491,7 @@ function ConciliacionTercerosMX({ usuario }) {
                           <input type="checkbox" checked={todasSel} disabled={!movibles.length} onChange={e => toggleTraspGrupo(g, e.target.checked)} />
                           {g.empresa}
                         </label>
+                        {esDestino ? <span style={{ background: "#ecfdf5", color: "#065f46", border: "1px solid #a7f3d0", borderRadius: 6, padding: "2px 8px", fontSize: 10, fontWeight: 800 }}>⬅ EMPRESA DESTINO — recibe los viajes</span> : null}
                         <span style={{ fontSize: 11, color: "#64748b" }}>{g.filas.length} viaje(s) · {fmtMon(totG)}</span>
                       </div>
                       {g.filas.length === 0 ? (
@@ -4509,7 +4511,7 @@ function ConciliacionTercerosMX({ usuario }) {
                               const k = claveTrasp(g.empresa, d);
                               return (
                                 <tr key={di} style={{ borderBottom: "1px solid #f1f5f9", background: trasp.sel.has(k) ? "#fff1f2" : undefined, opacity: bloqueada ? 0.55 : 1 }}>
-                                  <td style={{ padding: "5px 8px", width: 26 }}><input type="checkbox" checked={trasp.sel.has(k)} disabled={bloqueada} onChange={() => toggleTrasp(k)} title={bloqueada ? "Prefactura enviada: reabrila para poder traspasar" : "Marcar para traspasar"} /></td>
+                                  <td style={{ padding: "5px 8px", width: 26 }}><input type="checkbox" checked={trasp.sel.has(k)} disabled={bloqueada || esDestino} onChange={() => toggleTrasp(k)} title={esDestino ? "Esta empresa es el destino: sus viajes no se mueven" : bloqueada ? "Prefactura enviada: reabrila para poder traspasar" : "Marcar para traspasar"} /></td>
                                   <td style={{ padding: "5px 8px", whiteSpace: "nowrap" }}>{fmtFechaDDMM(d.fecha)}</td>
                                   <td style={{ padding: "5px 8px" }}>{sc}</td>
                                   <td style={{ padding: "5px 8px", fontFamily: "monospace" }}>{d.id_ruta}</td>
