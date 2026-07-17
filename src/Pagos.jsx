@@ -4434,6 +4434,7 @@ function ConciliacionTercerosMX({ usuario }) {
         <div style={{ background: "#fff1f2", border: "1px solid #fecdd3", borderRadius: 10, padding: 14, marginBottom: 14 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 8 }}>
             <span style={{ fontSize: 14, fontWeight: 800, color: "#9f1239" }}>🚚 Placas en 2+ empresas (misma semana)</span>
+            <span style={{ background: "#9f1239", color: "#fff", borderRadius: 6, padding: "2px 8px", fontSize: 10, fontWeight: 800 }}>TRASPASADOR v3</span>
             <span style={{ fontSize: 12, color: "#be123c" }}>{traspRows.length} placa(s) · {traspRows.filter(r => r.repartida).length} con viajes repartidos entre empresas</span>
             <button onClick={() => cargarTraspasos(semana)} disabled={traspBusy} style={{ marginLeft: "auto", padding: "6px 14px", background: "#fff", color: "#9f1239", border: "1px solid #fda4af", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>{traspBusy ? "Analizando..." : "↻ Reanalizar"}</button>
           </div>
@@ -4473,7 +4474,7 @@ function ConciliacionTercerosMX({ usuario }) {
       {trasp && (
         <div onClick={() => !traspasando && setTrasp(null)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}>
           <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 12, padding: 20, width: "min(1000px, 94vw)", maxHeight: "88vh", overflow: "auto" }}>
-            <div style={{ fontSize: 16, fontWeight: 800, color: "#1a3a6b", marginBottom: 2 }}>🚚 Traspasador de viajes — placa {trasp.placa}</div>
+            <div style={{ fontSize: 16, fontWeight: 800, color: "#1a3a6b", marginBottom: 2, display: "flex", alignItems: "center", gap: 8 }}>🚚 Traspasador de viajes — placa {trasp.placa} <span style={{ background: "#1a3a6b", color: "#fff", borderRadius: 6, padding: "2px 8px", fontSize: 10, fontWeight: 800 }}>v3</span></div>
             <div style={{ fontSize: 12, color: "#64748b", marginBottom: 14 }}>Semana {semana} ({etiquetaSemanaInventario(semana)}). Marcá los viajes a mover y elegí la empresa destino: se <b>restan</b> del origen y se <b>suman</b> al destino. Los viajes de prefacturas <b>enviadas</b> no se pueden mover (reabrilas primero).</div>
             {trasp.cargando ? (
               <div style={{ padding: 30, textAlign: "center", color: "#94a3b8", fontSize: 13 }}>Cargando viajes de la placa...</div>
