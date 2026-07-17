@@ -1827,6 +1827,7 @@ function ModuloCertificaciones() {
   const [selected, setSelected] = useState(null);
   const [vista, setVista] = useState("kanban");
   const [seccion, setSeccion] = useState("certificaciones"); // certificaciones | contratos | mensajes
+  const [flujo, setFlujo] = useState("ingresos"); // ingresos (Fuente A · Prospección) | terceros (Fuente B · App/Portal)
   const [busqueda, setBusqueda] = useState("");
   const [filtroFuente, setFiltroFuente] = useState("todas");
   const [filtroTipo, setFiltroTipo] = useState("todos");
@@ -2001,10 +2002,19 @@ function ModuloCertificaciones() {
     );
   }
 
+  // Separación de flujos: Nuevos Ingresos (Prospección) vs Vehículos y Personas (App/Portal)
+  const itemsFlujo = items.filter(i => flujo === "ingresos" ? i.fuente === "prospeccion" : i.fuente === "portal_cert");
+  const nIngresos = items.filter(i => i.fuente === "prospeccion").length;
+  const nTerceros = items.filter(i => i.fuente === "portal_cert").length;
+
   // Buscador + filtros
   const q = busqueda.trim().toLowerCase();
-  const itemsFiltrados = items.filter(i => {
-    if (filtroFuente !== "todas" && i.fuente !== filtroFuente) return false;
+  const itemsFiltrados = itemsFlujo.filter(i => {
+    if (flujo === "terceros" && filtroFuente !== "todas") {
+      const esApp = (i.raw?.origen === "app_terceros");
+      if (filtroFuente === "app" && !esApp) return false;
+      if (filtroFuente === "portal" && esApp) return false;
+    }
     if (filtroTipo !== "todos" && i.tipo !== filtroTipo) return false;
     if (!q) return true;
     const r = i.raw || {};
@@ -2014,10 +2024,9 @@ function ModuloCertificaciones() {
   });
 
   const conteo = {
-    total:       itemsFiltrados.length,
-    recepcion:   itemsFiltrados.filter(i => i.etapa === "recepcion").length,
-    prospeccion: itemsFiltrados.filter(i => i.fuente === "prospeccion").length,
-    portal:      itemsFiltrados.filter(i => i.fuente === "portal_cert").length,
+    total:  itemsFiltrados.length,
+    app:    itemsFiltrados.filter(i => i.raw?.origen === "app_terceros").length,
+    portal: itemsFiltrados.filter(i => i.raw?.origen !== "app_terceros").length,
   };
 
   return (
@@ -2061,6 +2070,20 @@ function ModuloCertificaciones() {
 
       {seccion === "certificaciones" && (
       <>
+      {/* Flujos separados: Fuente A (Prospección) y Fuente B (App/Portal) */}
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
+        {[["ingresos", "🎯 Certificación Nuevos Ingresos", nIngresos],
+          ["terceros", "🚚 Certificación Vehículos y Personas", nTerceros]].map(([v, l, n]) => (
+          <button key={v} onClick={() => { setFlujo(v); setSelected(null); setFiltroFuente("todas"); setFiltroTipo("todos"); }}
+            style={{ padding: "10px 18px", borderRadius: 10, cursor: "pointer", fontSize: 13, fontFamily: "'Geist',sans-serif",
+              fontWeight: flujo === v ? 700 : 500,
+              background: flujo === v ? "#1a3a6b" : "#fff",
+              color: flujo === v ? "#fff" : "#555",
+              border: flujo === v ? "1.5px solid #1a3a6b" : "1px solid #e4e7ec" }}>
+            {l} <span style={{ opacity: 0.75, fontWeight: 400 }}>({n})</span>
+          </button>
+        ))}
+      </div>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 14 }}>
         <input
           value={busqueda}
@@ -2068,18 +2091,20 @@ function ModuloCertificaciones() {
           placeholder="🔍 Buscar por nombre, SC, CURP, RFC, email…"
           style={{ flex: 1, minWidth: 220, background: "#fff", border: "0.5px solid #e4e7ec", borderRadius: 8, padding: "9px 12px", fontSize: 13, fontFamily: "'Geist',sans-serif" }}
         />
-        <select value={filtroFuente} onChange={(e) => setFiltroFuente(e.target.value)}
-          style={{ background: "#fff", border: "0.5px solid #e4e7ec", borderRadius: 8, padding: "9px 12px", fontSize: 12, fontFamily: "'Geist',sans-serif", color: "#333" }}>
-          <option value="todas">Todas las fuentes</option>
-          <option value="prospeccion">🎯 Prospección</option>
-          <option value="portal_cert">🏢 Portal Cert.</option>
-        </select>
+        {flujo === "terceros" && (
+          <select value={filtroFuente} onChange={(e) => setFiltroFuente(e.target.value)}
+            style={{ background: "#fff", border: "0.5px solid #e4e7ec", borderRadius: 8, padding: "9px 12px", fontSize: 12, fontFamily: "'Geist',sans-serif", color: "#333" }}>
+            <option value="todas">App y Portal</option>
+            <option value="app">📱 App Terceros</option>
+            <option value="portal">🏢 Portal web</option>
+          </select>
+        )}
         <select value={filtroTipo} onChange={(e) => setFiltroTipo(e.target.value)}
           style={{ background: "#fff", border: "0.5px solid #e4e7ec", borderRadius: 8, padding: "9px 12px", fontSize: 12, fontFamily: "'Geist',sans-serif", color: "#333" }}>
           <option value="todos">Todos los tipos</option>
           <option value="conductor">🚗 Driver</option>
           <option value="ayudante">🧰 Ayudante</option>
-          <option value="vehiculo">🚚 Vehículo</option>
+          {flujo === "terceros" && <option value="vehiculo">🚚 Vehículo</option>}
         </select>
         {(q || filtroFuente !== "todas" || filtroTipo !== "todos") && (
           <button onClick={() => { setBusqueda(""); setFiltroFuente("todas"); setFiltroTipo("todos"); }}
@@ -2100,15 +2125,19 @@ function ModuloCertificaciones() {
           </div>
         ))}
       </div>
-      <div style={{ fontSize: 11, color: "#888", marginBottom: 20 }}>
-        Por fuente: 🎯 Prospección <b>{conteo.prospeccion}</b> · 🏢 Portal Cert. <b>{conteo.portal}</b>
-      </div>
+      {flujo === "terceros" && (
+        <div style={{ fontSize: 11, color: "#888", marginBottom: 20 }}>
+          Por origen: 📱 App Terceros <b>{conteo.app}</b> · 🏢 Portal web <b>{conteo.portal}</b>
+        </div>
+      )}
 
       {loading ? <div className="loading">Cargando...</div> : itemsFiltrados.length === 0 ? (
         <div className="empty">
           <div style={{ fontSize: 32, marginBottom: 12 }}>📋</div>
-          <div style={{ fontWeight: 600, marginBottom: 8 }}>{items.length === 0 ? "Sin postulaciones" : "Sin resultados"}</div>
-          <div style={{ fontSize: 12 }}>{items.length === 0 ? "Aún no hay ingresos desde Prospección ni desde el Portal de Certificación" : "Ninguna tarjeta coincide con la búsqueda o los filtros"}</div>
+          <div style={{ fontWeight: 600, marginBottom: 8 }}>{itemsFlujo.length === 0 ? (flujo === "ingresos" ? "Sin postulaciones" : "Sin certificaciones") : "Sin resultados"}</div>
+          <div style={{ fontSize: 12 }}>{itemsFlujo.length === 0
+            ? (flujo === "ingresos" ? "Aún no hay postulaciones desde el Portal de Prospección" : "Aún no hay certificaciones desde la App ni el Portal de Terceros")
+            : "Ninguna tarjeta coincide con la búsqueda o los filtros"}</div>
         </div>
       ) : vista === "kanban" ? (
         <KanbanBoard items={itemsFiltrados} onCardClick={setSelected} onMover={moverTarjeta} onEliminar={eliminarTarjeta} />
