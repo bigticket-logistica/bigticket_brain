@@ -14,6 +14,12 @@ const COLUMNAS = [
   { id: "rechazado",           label: "Rechazado",                      color: "#c0392b", bg: "#fbeaea", border: "#f0c4c4" },
 ];
 
+// Flujo B (Vehículos y Personas · App/Portal): la empresa YA existe, por lo que
+// no aplican Llamada de Supervisor (E2), Entrevista (E6), Solicitud de Alta (E7)
+// ni Firma de Contrato (E8). Tras Nubarium/REPUVE la tarjeta pasa a Aceptado/Rechazado.
+const ETAPAS_SOLO_INGRESOS = ["llamada_supervisor", "entrevista_operaciones", "solicitud_alta", "firma_contrato"];
+const COLUMNAS_B = COLUMNAS.filter(c => !ETAPAS_SOLO_INGRESOS.includes(c.id));
+
 // Etiquetas cortas para los KPIs del header (coinciden con las columnas)
 const ETAPA_CORTA = {
   recepcion: "Etapa 1 · Recepción", llamada_supervisor: "Etapa 2 · Llamada Sup.", prevalidacion_biggy: "Etapa 3 · Biggy", validacion_meli: "Etapa 4 · MELI",
@@ -1367,7 +1373,7 @@ function NotaBiggy({ score }) {
   );
 }
 
-function KanbanBoard({ items, onCardClick, onMover, onEliminar }) {
+function KanbanBoard({ items, columnas = COLUMNAS, onCardClick, onMover, onEliminar }) {
   const dragKey = useRef(null);
   const didDrag = useRef(false);
   const [overCol, setOverCol] = useState(null);
@@ -1397,7 +1403,7 @@ function KanbanBoard({ items, onCardClick, onMover, onEliminar }) {
           así la barra de arriba y los encabezados de columna no se van al bajar. */}
       <div ref={boardRef} className="kanban-board" onScroll={syncFromBoard}
         style={{ display: "flex", gap: 12, alignItems: "flex-start", overflowX: "auto", overflowY: "auto", maxHeight: "calc(100vh - 300px)", minHeight: 360, paddingBottom: 10 }}>
-        {COLUMNAS.map(col => {
+        {columnas.map(col => {
           const cards = items.filter(i => i.etapa === col.id);
         return (
           <div key={col.id} className="kanban-col"
@@ -2003,6 +2009,7 @@ function ModuloCertificaciones() {
   }
 
   // Separación de flujos: Nuevos Ingresos (Prospección) vs Vehículos y Personas (App/Portal)
+  const colsFlujo = flujo === "terceros" ? COLUMNAS_B : COLUMNAS;
   const itemsFlujo = items.filter(i => flujo === "ingresos" ? i.fuente === "prospeccion" : i.fuente === "portal_cert");
   const nIngresos = items.filter(i => i.fuente === "prospeccion").length;
   const nTerceros = items.filter(i => i.fuente === "portal_cert").length;
@@ -2117,7 +2124,7 @@ function ModuloCertificaciones() {
       {/* KPIs por etapa — coinciden 1:1 con las columnas del tablero (Σ etapas = Total) */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(128px, 1fr))", gap: 10, marginBottom: 8 }}>
         {[["Total", itemsFiltrados.length, "#1a3a6b"],
-          ...COLUMNAS.map(c => [ETAPA_CORTA[c.id] || c.label, itemsFiltrados.filter(i => i.etapa === c.id).length, c.color])
+          ...colsFlujo.map(c => [ETAPA_CORTA[c.id] || c.label, itemsFiltrados.filter(i => i.etapa === c.id).length, c.color])
         ].map(([l, v, c]) => (
           <div key={l} style={{ background: "#fff", border: "0.5px solid #e4e7ec", borderRadius: 10, padding: "12px", textAlign: "center" }}>
             <div style={{ fontSize: 22, fontWeight: 800, color: c }}>{v}</div>
@@ -2140,7 +2147,7 @@ function ModuloCertificaciones() {
             : "Ninguna tarjeta coincide con la búsqueda o los filtros"}</div>
         </div>
       ) : vista === "kanban" ? (
-        <KanbanBoard items={itemsFiltrados} onCardClick={setSelected} onMover={moverTarjeta} onEliminar={eliminarTarjeta} />
+        <KanbanBoard items={itemsFiltrados} columnas={colsFlujo} onCardClick={setSelected} onMover={moverTarjeta} onEliminar={eliminarTarjeta} />
       ) : (
         <div>
           {itemsFiltrados.map(card => {
