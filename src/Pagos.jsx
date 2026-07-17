@@ -2688,7 +2688,7 @@ function HistorialPagoMX({ usuario }) {
   const porEstado = (st) => d.prefacturas.filter(r => (r.estado || "borrador") === st).length;
   const totNeto = d.prefacturas.reduce((s, r) => s + Number(r.total_neto || 0), 0);
   const totBruto = d.prefacturas.reduce((s, r) => s + Number(r.total_bruto || 0), 0);
-  const evLabel = { crear: "Creada", recalcular: "Recalculada", editar: "Editada", cerrar: "Cerrada", cerrar_pendiente: "Cerrada (pendiente)", reabrir: "Reabierta", enviar: "Enviada", quitar_importados: "Quit\u00f3 importados", reporte_cierre: "Reporte de cierre" };
+  const evLabel = { crear: "Creada", recalcular: "Recalculada", editar: "Editada", cerrar: "Cerrada", cerrar_pendiente: "Cerrada (pendiente)", reabrir: "Reabierta", enviar: "Enviada", quitar_importados: "Quit\u00f3 importados", reporte_cierre: "Reporte de cierre", traspaso_salida: "Traspaso (salida)", traspaso_entrada: "Traspaso (entrada)" };
   const tbl = { width: "100%", borderCollapse: "collapse", fontSize: 12, background: "#fff" };
   const th = { textAlign: "left", padding: "6px 8px", color: "#64748b", fontSize: 10, textTransform: "uppercase", borderBottom: "1px solid #e4e7ec" };
   const tdS = { padding: "6px 8px", borderBottom: "1px solid #f1f5f9" };
@@ -2818,6 +2818,10 @@ function ConciliacionTercerosMX({ usuario }) {
   const [importBusy, setImportBusy] = useState(false);
   const [repBusy, setRepBusy] = useState(false);
   const [consolidando, setConsolidando] = useState(null);      // id_ruta | "__todas__"
+  const [traspRows, setTraspRows] = useState(null);            // placas en 2+ empresas en la semana
+  const [traspBusy, setTraspBusy] = useState(false);
+  const [trasp, setTrasp] = useState(null);                    // modal traspasador { placa, cargando, grupos, sel, destino }
+  const [traspasando, setTraspasando] = useState(false);
   const [asuntoLote, setAsuntoLote] = useState(() => { try { return localStorage.getItem("conc_mx_asunto") || ASUNTO_DEFAULT; } catch { return ASUNTO_DEFAULT; } });
   const [cuerpoLote, setCuerpoLote] = useState(() => { try { return localStorage.getItem("conc_mx_cuerpo") || CUERPO_DEFAULT; } catch { return CUERPO_DEFAULT; } });
   const [editorCorreoOpen, setEditorCorreoOpen] = useState(false);
@@ -2898,7 +2902,7 @@ function ConciliacionTercerosMX({ usuario }) {
     } catch (e) { console.error("maestros prefacturas:", e); }
   };
 
-  useEffect(() => { cargarResumen(semana); setConsolidadas(new Set()); cargarRepetidas(semana); cargarAux(semana); setExpandida(null); setDetalles({}); setAsignacionSel({}); }, [semana]);
+  useEffect(() => { cargarResumen(semana); setConsolidadas(new Set()); cargarRepetidas(semana); cargarAux(semana); setExpandida(null); setDetalles({}); setAsignacionSel({}); setTrasp(null); setTraspRows(null); cargarTraspasos(semana); }, [semana]);
   useEffect(() => { cargarMaestros(); }, []);
 
   const cargarDetalle = async (empresa) => {
@@ -3405,6 +3409,198 @@ function ConciliacionTercerosMX({ usuario }) {
     await cargarResumen(semana); await cargarRepetidas(semana); setConsolidando(null);
     setMsg({ ok: fail === 0, txt: `Consolidación masiva: ${ok} ok, ${fail} con error.` + (errores.length ? " — " + errores.join(" | ") : "") });
   };
+  // ── Placas en 2+ empresas (misma semana) — alertador y traspasador de viajes ──
+  const esLineaViajeTraspaso = (d) => !!(d && !d._saldo && d.placa && String(d.placa).toUpperCase() !== "AJUSTE" && ["ajuste", "cargo", "descuento"].indexOf(String(d.origen || "")) === -1);
+
+  // Lee las filas vigentes de una empresa (motor + SC editados), SIN tocar el estado local
+  const leerFilasEmpresa = async (empresa) => {
+    const { data, error } = await sb.rpc("get_conciliacion_terceros_detalle", { p_semana: semana, p_empresa: empresa, p_sc: null });
+    if (error) throw error;
+    let filas = (data || []).map(d => ({ ...d, _id: lineaId(d), origen: d.origen || "motor" }));
+    const { data: conc } = await sb.from("conciliaciones_terceros").select("service_center, estado, detalle").eq("empresa_nombre", empresa).eq("semana", semana);
+    const estados = {};
+    for (const c of conc || []) estados[c.service_center] = c.estado || "borrador";
+    const editados = (conc || []).filter(c => Array.isArray(c.detalle) && c.detalle.length);
+    if (editados.length) {
+      const scs = new Set(editados.map(c => c.service_center));
+      filas = filas.filter(f => !scs.has(f.service_center_id || "SIN SC"));
+      for (const c of editados) for (const ln of c.detalle) filas.push({ ...ln, _id: ln._id || lineaId(ln), origen: ln.origen || "motor" });
+    }
+    return { filas, estados };
+  };
+
+  // Filas + estado + cobros de una empresa+SC puntual (el detalle guardado manda; si no hay, motor)
+  const leerFilasSC = async (empresa, sc) => {
+    const { data: row } = await sb.from("conciliaciones_terceros").select("detalle, estado, total_cobros")
+      .eq("empresa_nombre", empresa).eq("service_center", sc).eq("semana", semana).maybeSingle();
+    const cobros = row && row.total_cobros != null ? Number(row.total_cobros) : cobrosDe(empresa, sc);
+    const estado = (row && row.estado) || "borrador";
+    if (row && Array.isArray(row.detalle) && row.detalle.length) {
+      return { filas: row.detalle.map(d => ({ ...d, _id: d._id || lineaId(d) })), estado, cobros };
+    }
+    const { data, error } = await sb.rpc("get_conciliacion_terceros_detalle", { p_semana: semana, p_empresa: empresa, p_sc: sc });
+    if (error) throw error;
+    return { filas: (data || []).map(d => ({ ...d, _id: lineaId(d), origen: d.origen || "motor" })), estado, cobros };
+  };
+
+  const cargarTraspasos = async (sem) => {
+    const s = sem != null ? sem : semana;
+    setTraspBusy(true);
+    try {
+      const cand = {}; // placa -> Set(empresas)
+      const add = (placa, empresa) => {
+        const p = normalizarPlaca(placa); const e = String(empresa || "").trim();
+        if (!p || !e || e === SIN_EMPRESA) return;
+        if (!cand[p]) cand[p] = new Set();
+        cand[p].add(e);
+      };
+      // (a) placas asignadas a 2+ empresas en flota_terceros_mx (raíz del conflicto)
+      const { data: fl } = await sb.from("flota_terceros_mx").select("placa, empresa_transporte").eq("semana", s);
+      const porFlota = {};
+      for (const f of fl || []) {
+        const p = normalizarPlaca(f.placa); const e = String(f.empresa_transporte || "").trim();
+        if (!p || !e) continue;
+        if (!porFlota[p]) porFlota[p] = new Set();
+        porFlota[p].add(e);
+      }
+      for (const p in porFlota) if (porFlota[p].size > 1) for (const e of porFlota[p]) add(p, e);
+      // (b) placas que quedaron bajo 2+ empresas en las conciliaciones guardadas de la semana
+      const { data: concs } = await sb.from("conciliaciones_terceros").select("empresa_nombre, detalle").eq("semana", s);
+      const porConc = {};
+      for (const c of concs || []) {
+        if (!Array.isArray(c.detalle)) continue;
+        for (const d of c.detalle) {
+          if (!esLineaViajeTraspaso(d)) continue;
+          const p = normalizarPlaca(d.placa); if (!p) continue;
+          if (!porConc[p]) porConc[p] = new Set();
+          porConc[p].add(String(c.empresa_nombre).trim());
+        }
+      }
+      for (const p in porConc) if (porConc[p].size > 1) for (const e of porConc[p]) add(p, e);
+      const placas = Object.keys(cand).filter(p => cand[p].size > 1).sort();
+      if (!placas.length) { setTraspRows([]); setTraspBusy(false); return; }
+      // (c) conteo real de viajes/montos por empresa (motor + editados), solo empresas involucradas
+      const empresasInv = new Set(); for (const p of placas) for (const e of cand[p]) empresasInv.add(e);
+      const filasPorEmp = {};
+      for (const e of empresasInv) {
+        try { filasPorEmp[e] = (await leerFilasEmpresa(e)).filas; }
+        catch (er) { console.error("detalle " + e + ":", er); filasPorEmp[e] = []; }
+      }
+      const rows = [];
+      for (const p of placas) {
+        const grupos = [];
+        for (const e of cand[p]) {
+          const fs = (filasPorEmp[e] || []).filter(d => esLineaViajeTraspaso(d) && normalizarPlaca(d.placa) === p);
+          grupos.push({
+            empresa: e, nViajes: fs.length,
+            monto: Math.round(fs.reduce((a, d) => a + Number(d.monto || 0), 0) * 100) / 100,
+            scs: [...new Set(fs.map(d => d.service_center_id || "SIN SC"))],
+          });
+        }
+        grupos.sort((a, b) => b.nViajes - a.nViajes);
+        rows.push({ placa: p, empresas: [...cand[p]], grupos, repartida: grupos.filter(g => g.nViajes > 0).length > 1 });
+      }
+      rows.sort((a, b) => (b.repartida ? 1 : 0) - (a.repartida ? 1 : 0) || a.placa.localeCompare(b.placa));
+      setTraspRows(rows);
+    } catch (e) { console.error("placas multi-empresa:", e); setTraspRows([]); }
+    setTraspBusy(false);
+  };
+
+  const abrirTraspasador = async (al) => {
+    setTrasp({ placa: al.placa, cargando: true, grupos: [], sel: new Set(), destino: "" });
+    try {
+      const grupos = [];
+      for (const e of al.empresas) {
+        const { filas, estados } = await leerFilasEmpresa(e);
+        const fs = filas.filter(d => esLineaViajeTraspaso(d) && normalizarPlaca(d.placa) === al.placa)
+          .sort((a, b) => String(a.fecha || "").localeCompare(String(b.fecha || "")) || String(a.id_ruta || "").localeCompare(String(b.id_ruta || "")));
+        grupos.push({ empresa: e, filas: fs, estados });
+      }
+      setTrasp(t => (t && t.placa === al.placa) ? { ...t, cargando: false, grupos } : t);
+    } catch (e) {
+      console.error("abrir traspasador:", e);
+      setMsg({ ok: false, txt: "Error cargando los viajes de la placa: " + (e.message || e) });
+      setTrasp(null);
+    }
+  };
+
+  const claveTrasp = (empresa, d) => `${empresa}||${d.service_center_id || "SIN SC"}||${lineaId(d)}`;
+  const toggleTrasp = (k) => setTrasp(t => { if (!t) return t; const s = new Set(t.sel); if (s.has(k)) s.delete(k); else s.add(k); return { ...t, sel: s }; });
+  const toggleTraspGrupo = (g, marcar) => setTrasp(t => {
+    if (!t) return t;
+    const s = new Set(t.sel);
+    for (const d of g.filas) {
+      if ((g.estados[d.service_center_id || "SIN SC"] || "borrador") === "enviada") continue;
+      const k = claveTrasp(g.empresa, d);
+      if (marcar) s.add(k); else s.delete(k);
+    }
+    return { ...t, sel: s };
+  });
+
+  const ejecutarTraspaso = async () => {
+    const t = trasp; if (!t || traspasando) return;
+    const destino = String(t.destino || "").trim();
+    if (!destino) { alert("Elegí la empresa destino del traspaso."); return; }
+    const sel = [];
+    for (const g of t.grupos) for (const d of g.filas) if (t.sel.has(claveTrasp(g.empresa, d))) sel.push({ empresa: g.empresa, sc: d.service_center_id || "SIN SC", linea: d });
+    if (!sel.length) { alert("Marcá al menos un viaje para traspasar."); return; }
+    const utiles = sel.filter(x => norm(x.empresa) !== norm(destino));
+    if (!utiles.length) { alert("Los viajes seleccionados ya están en " + destino + "."); return; }
+    const montoTot = Math.round(utiles.reduce((a, x) => a + Number(x.linea.monto || 0), 0) * 100) / 100;
+    if (!confirm(`¿Traspasar ${utiles.length} viaje(s) de la placa ${t.placa} a "${destino}" (semana ${semana})?\n\nMonto que se mueve: ${fmtMon(montoTot)}. Se resta de la(s) empresa(s) de origen y se suma a ${destino}.\n\nQueda auditado y las prefacturas afectadas vuelven a borrador (PDF y correo salen con el detalle nuevo).`)) return;
+    setTraspasando(true);
+    try {
+      const por = (usuario && (usuario.nombre || usuario.email)) || "Brain";
+      const at = new Date().toISOString();
+      // 1) restar de las prefacturas de origen (agrupado por empresa+SC)
+      const porOrigen = {};
+      for (const x of utiles) { const k = `${x.empresa}||${x.sc}`; if (!porOrigen[k]) porOrigen[k] = { empresa: x.empresa, sc: x.sc, lineas: [] }; porOrigen[k].lineas.push(x.linea); }
+      const movidas = [];
+      for (const k in porOrigen) {
+        const o = porOrigen[k];
+        const { filas, estado, cobros } = await leerFilasSC(o.empresa, o.sc);
+        if (estado === "enviada") throw new Error(`la prefactura de ${o.empresa} · ${o.sc} ya fue enviada; reabrila antes de traspasar`);
+        const ids = new Set(o.lineas.map(lineaId));
+        const salen = filas.filter(d => ids.has(lineaId(d)));
+        if (salen.length !== o.lineas.length) throw new Error(`en ${o.empresa} · ${o.sc} no se encontraron todas las líneas seleccionadas (¿se editó la prefactura?); refrescá y volvé a intentar`);
+        const quedan = filas.filter(d => !ids.has(lineaId(d)));
+        await guardarBorradorSC(o.empresa, o.sc, quedan, cobros);
+        for (const q of salen) {
+          movidas.push({ linea: q, de: o.empresa });
+          await auditarAjuste(o.empresa, o.sc, "traspaso_salida", q.origen || "motor", q, `Traspaso a ${destino} (placa ${t.placa} en 2+ empresas)`);
+        }
+        await logEvento(o.empresa, o.sc, "traspaso_salida", recalcSC(quedan, cobros), { detalle: { placa: t.placa, a: destino, n: salen.length } });
+      }
+      // 2) sumar a la prefactura destino (cada viaje conserva su SC)
+      const porSC = {};
+      for (const m of movidas) { const sc = m.linea.service_center_id || "SIN SC"; if (!porSC[sc]) porSC[sc] = []; porSC[sc].push(m); }
+      for (const sc in porSC) {
+        const { filas, estado, cobros } = await leerFilasSC(destino, sc);
+        if (estado === "enviada") throw new Error(`la prefactura de ${destino} · ${sc} ya fue enviada; reabrila antes de traspasar`);
+        const yaIds = new Set(filas.map(lineaId));
+        const nuevas = porSC[sc].filter(m => !yaIds.has(lineaId(m.linea)))
+          .map(m => ({ ...m.linea, traspaso: { de: m.de, a: destino, at, por } }));
+        await guardarBorradorSC(destino, sc, [...filas, ...nuevas], cobros);
+        for (const n of nuevas) await auditarAjuste(destino, sc, "traspaso_entrada", n.origen || "motor", n, `Viaje recibido por traspaso desde ${n.traspaso.de} (placa ${t.placa})`);
+        await logEvento(destino, sc, "traspaso_entrada", recalcSC([...filas, ...nuevas], cobros), { detalle: { placa: t.placa, n: nuevas.length } });
+      }
+      // 3) refrescar estado local y resumen
+      const afectadas = new Set([destino]); for (const m of movidas) afectadas.add(m.de);
+      setDetalles(prev => { const nx = { ...prev }; for (const e of afectadas) delete nx[e]; return nx; });
+      if (expandida && afectadas.has(expandida)) {
+        try { const r = await leerFilasEmpresa(expandida); setDetalles(prev => ({ ...prev, [expandida]: r.filas })); } catch (er) { console.error("recarga detalle:", er); }
+      }
+      setTrasp(null);
+      await cargarResumen(semana); await cargarTraspasos(semana);
+      setMsg({ ok: true, txt: `Traspaso listo: ${movidas.length} viaje(s) de la placa ${t.placa} ahora en ${destino}. Las prefacturas afectadas quedaron en borrador para revisar y cerrar.` });
+    } catch (e) {
+      console.error("traspaso:", e);
+      setMsg({ ok: false, txt: "Error en el traspaso: " + (e.message || e) });
+      await cargarResumen(semana); await cargarTraspasos(semana);
+    }
+    setTraspasando(false);
+  };
+
   // ── Importador masivo de ajustes (cargos / descuentos / otros) a prefacturas ──
   const asegurarXLSX = async () => {
     if (window.XLSX) return true;
@@ -4046,7 +4242,7 @@ function ConciliacionTercerosMX({ usuario }) {
           {filas.map((d, i) => (
             <tr key={i} style={{ borderBottom: "1px solid #eef0f3", background: d._saldo ? "#fff7ed" : (d.es_manual ? "#eff6ff" : (d.es_no_pago ? "#fef2f2" : (i % 2 ? "#fafbfc" : "#fff"))) }}>
               <td style={{ padding: "5px 8px", textAlign: "center", whiteSpace: "nowrap" }}>{fmtFechaDDMM(d.fecha)}</td>
-              <td style={{ padding: "5px 8px", textAlign: "center", fontWeight: 700 }}>{d.placa}</td>
+              <td style={{ padding: "5px 8px", textAlign: "center", fontWeight: 700 }} title={d.traspaso ? `Traspasado desde ${d.traspaso.de} (${String(d.traspaso.at || "").slice(0, 10)})` : undefined}>{d.placa}{d.traspaso ? " 🔁" : ""}</td>
               <td style={{ padding: "5px 8px", textAlign: "center" }}>{d.id_ruta}</td>
               <td style={{ padding: "5px 8px" }}>{d.driver_name}</td>
               <td style={{ padding: "5px 8px", textAlign: "center" }}>{(() => { const a = auxMap[String(d.id_ruta)]; return (a && String(a.decision).toLowerCase() === "aprobado") ? "Si" : "No"; })()}</td>
@@ -4231,6 +4427,128 @@ function ConciliacionTercerosMX({ usuario }) {
             </table>
           </div>
           <div style={{ fontSize: 10, color: "#b45309", marginTop: 8 }}>"Consolidar" deja el pago del 1er día y quita los días repetidos (queda auditado). Si la conciliación estaba cerrada, vuelve a borrador para revisarla y cerrarla de nuevo.</div>
+        </div>
+      )}
+
+      {traspRows && traspRows.length > 0 && (
+        <div style={{ background: "#fff1f2", border: "1px solid #fecdd3", borderRadius: 10, padding: 14, marginBottom: 14 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 8 }}>
+            <span style={{ fontSize: 14, fontWeight: 800, color: "#9f1239" }}>🚚 Placas en 2+ empresas (misma semana)</span>
+            <span style={{ fontSize: 12, color: "#be123c" }}>{traspRows.length} placa(s) · {traspRows.filter(r => r.repartida).length} con viajes repartidos entre empresas</span>
+            <button onClick={() => cargarTraspasos(semana)} disabled={traspBusy} style={{ marginLeft: "auto", padding: "6px 14px", background: "#fff", color: "#9f1239", border: "1px solid #fda4af", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>{traspBusy ? "Analizando..." : "↻ Reanalizar"}</button>
+          </div>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+              <thead><tr style={{ color: "#9f1239" }}>
+                {["Placa", "Empresas involucradas", "Situación", ""].map((h, hi) => (
+                  <th key={hi} style={{ padding: "5px 8px", textAlign: "left", borderBottom: "1px solid #fecdd3", whiteSpace: "nowrap" }}>{h}</th>
+                ))}
+              </tr></thead>
+              <tbody>
+                {traspRows.map((r, i) => (
+                  <tr key={r.placa + "_" + i} style={{ borderBottom: "1px solid #ffe4e6" }}>
+                    <td style={{ padding: "6px 8px", fontWeight: 800, fontFamily: "monospace", whiteSpace: "nowrap" }}>{r.placa}</td>
+                    <td style={{ padding: "6px 8px" }}>
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                        {r.grupos.map((g, gi) => (
+                          <span key={gi} style={{ background: g.nViajes > 0 ? "#fff" : "#fff7f7", border: "1px solid #fecdd3", borderRadius: 6, padding: "3px 8px", fontSize: 11 }}>
+                            <b>{g.empresa}</b> · {g.nViajes} viaje(s) · {fmtMon(g.monto)}{g.scs.length ? " · " + g.scs.join(", ") : ""}
+                          </span>
+                        ))}
+                      </div>
+                    </td>
+                    <td style={{ padding: "6px 8px", fontSize: 11, fontWeight: 600, color: r.repartida ? "#b91c1c" : "#9a3412", whiteSpace: "nowrap" }}>{r.repartida ? "Viajes repartidos entre empresas" : "Doble asignación en flota (viajes en una sola)"}</td>
+                    <td style={{ padding: "6px 8px", textAlign: "right" }}>
+                      <button onClick={() => abrirTraspasador(r)} style={{ padding: "4px 10px", background: "#fff", color: "#9f1239", border: "1px solid #e11d48", borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>Traspasar viajes</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div style={{ fontSize: 10, color: "#be123c", marginTop: 8 }}>El traspasador mueve viajes de una empresa a otra: se restan del origen y se suman al destino (detalle, totales, PDF, correo y reporte). Queda auditado en la base y las prefacturas afectadas vuelven a borrador. La doble asignación en flota se corrige reasignando la placa.</div>
+        </div>
+      )}
+
+      {trasp && (
+        <div onClick={() => !traspasando && setTrasp(null)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 12, padding: 20, width: "min(1000px, 94vw)", maxHeight: "88vh", overflow: "auto" }}>
+            <div style={{ fontSize: 16, fontWeight: 800, color: "#1a3a6b", marginBottom: 2 }}>🚚 Traspasador de viajes — placa {trasp.placa}</div>
+            <div style={{ fontSize: 12, color: "#64748b", marginBottom: 14 }}>Semana {semana} ({etiquetaSemanaInventario(semana)}). Marcá los viajes a mover y elegí la empresa destino: se <b>restan</b> del origen y se <b>suman</b> al destino. Los viajes de prefacturas <b>enviadas</b> no se pueden mover (reabrilas primero).</div>
+            {trasp.cargando ? (
+              <div style={{ padding: 30, textAlign: "center", color: "#94a3b8", fontSize: 13 }}>Cargando viajes de la placa...</div>
+            ) : (
+              <Fragment>
+                {trasp.grupos.map((g, gi) => {
+                  const movibles = g.filas.filter(d => (g.estados[d.service_center_id || "SIN SC"] || "borrador") !== "enviada");
+                  const todasSel = movibles.length > 0 && movibles.every(d => trasp.sel.has(claveTrasp(g.empresa, d)));
+                  const totG = Math.round(g.filas.reduce((a, d) => a + Number(d.monto || 0), 0) * 100) / 100;
+                  return (
+                    <div key={gi} style={{ border: "1px solid #e4e7ec", borderRadius: 10, marginBottom: 12, overflow: "hidden" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", background: "#f8fafc", borderBottom: "1px solid #e4e7ec", flexWrap: "wrap" }}>
+                        <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: movibles.length ? "pointer" : "default", fontSize: 13, fontWeight: 800, color: "#1a3a6b" }}>
+                          <input type="checkbox" checked={todasSel} disabled={!movibles.length} onChange={e => toggleTraspGrupo(g, e.target.checked)} />
+                          {g.empresa}
+                        </label>
+                        <span style={{ fontSize: 11, color: "#64748b" }}>{g.filas.length} viaje(s) · {fmtMon(totG)}</span>
+                      </div>
+                      {g.filas.length === 0 ? (
+                        <div style={{ padding: 12, fontSize: 12, color: "#94a3b8" }}>Sin viajes de esta placa en esta empresa (solo doble asignación en flota).</div>
+                      ) : (
+                        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+                          <thead><tr style={{ color: "#64748b", background: "#fafbfc" }}>
+                            {["", "Fecha", "SC", "ID Ruta", "Conductor", "Prefactura", "Monto"].map((h, hi) => (
+                              <th key={hi} style={{ padding: "5px 8px", textAlign: hi === 6 ? "right" : "left", borderBottom: "1px solid #eef0f3", whiteSpace: "nowrap", fontSize: 10 }}>{h}</th>
+                            ))}
+                          </tr></thead>
+                          <tbody>
+                            {g.filas.map((d, di) => {
+                              const sc = d.service_center_id || "SIN SC";
+                              const est = g.estados[sc] || "borrador";
+                              const bloqueada = est === "enviada";
+                              const k = claveTrasp(g.empresa, d);
+                              return (
+                                <tr key={di} style={{ borderBottom: "1px solid #f1f5f9", background: trasp.sel.has(k) ? "#fff1f2" : undefined, opacity: bloqueada ? 0.55 : 1 }}>
+                                  <td style={{ padding: "5px 8px", width: 26 }}><input type="checkbox" checked={trasp.sel.has(k)} disabled={bloqueada} onChange={() => toggleTrasp(k)} title={bloqueada ? "Prefactura enviada: reabrila para poder traspasar" : "Marcar para traspasar"} /></td>
+                                  <td style={{ padding: "5px 8px", whiteSpace: "nowrap" }}>{fmtFechaDDMM(d.fecha)}</td>
+                                  <td style={{ padding: "5px 8px" }}>{sc}</td>
+                                  <td style={{ padding: "5px 8px", fontFamily: "monospace" }}>{d.id_ruta}</td>
+                                  <td style={{ padding: "5px 8px" }}>{d.driver_name}{d.traspaso ? <span title={"Ya traspasado desde " + d.traspaso.de}> 🔁</span> : null}</td>
+                                  <td style={{ padding: "5px 8px", fontSize: 10, fontWeight: 700, color: est === "enviada" ? "#7c3aed" : est === "cerrada" ? "#166534" : "#9a3412" }}>{est}</td>
+                                  <td style={{ padding: "5px 8px", textAlign: "right", fontWeight: 700, color: d.es_no_pago ? "#dc2626" : "#1a1a1a" }}>{d.es_no_pago ? "$ -" : fmtMon(d.monto)}</td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      )}
+                    </div>
+                  );
+                })}
+                {(() => {
+                  const selArr = [];
+                  for (const g of trasp.grupos) for (const d of g.filas) if (trasp.sel.has(claveTrasp(g.empresa, d))) selArr.push({ empresa: g.empresa, linea: d });
+                  const utiles = selArr.filter(x => norm(x.empresa) !== norm(trasp.destino || ""));
+                  const monto = Math.round(utiles.reduce((a, x) => a + Number(x.linea.monto || 0), 0) * 100) / 100;
+                  const opcionesDestino = [...new Set([...transportistas.map(tt => tt.nombre), ...trasp.grupos.map(g => g.empresa)])].filter(Boolean).sort();
+                  return (
+                    <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", borderTop: "1px solid #e4e7ec", paddingTop: 12 }}>
+                      <span style={{ fontSize: 12, fontWeight: 700, color: "#475569" }}>Destino:</span>
+                      <select value={trasp.destino} onChange={e => setTrasp(tt => ({ ...tt, destino: e.target.value }))} style={{ padding: "6px 8px", border: "1px solid #e4e7ec", borderRadius: 6, fontSize: 12, minWidth: 240 }}>
+                        <option value="">— Elegir empresa destino —</option>
+                        {opcionesDestino.map(n => <option key={n} value={n}>{n}</option>)}
+                      </select>
+                      <span style={{ fontSize: 12, color: "#64748b" }}>{selArr.length} seleccionado(s){trasp.destino ? ` · se mueven ${utiles.length} · ${fmtMon(monto)}` : ""}</span>
+                      <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+                        <button onClick={() => setTrasp(null)} disabled={traspasando} style={{ padding: "8px 14px", background: "#fff", color: "#64748b", border: "1px solid #cbd5e1", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Cancelar</button>
+                        <button onClick={ejecutarTraspaso} disabled={traspasando || !trasp.destino || !utiles.length} style={{ padding: "8px 16px", background: (traspasando || !trasp.destino || !utiles.length) ? "#94a3b8" : "#9f1239", color: "#fff", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 800, cursor: "pointer" }}>{traspasando ? "Traspasando..." : "Traspasar seleccionados →"}</button>
+                      </div>
+                    </div>
+                  );
+                })()}
+              </Fragment>
+            )}
+          </div>
         </div>
       )}
 
