@@ -4479,6 +4479,11 @@ function ConciliacionTercerosMX({ usuario }) {
               <div style={{ padding: 30, textAlign: "center", color: "#94a3b8", fontSize: 13 }}>Cargando viajes de la placa...</div>
             ) : (
               <Fragment>
+                {trasp.grupos.some(g => g.filas.length > 0) && trasp.grupos.every(g => g.filas.every(d => (g.estados[d.service_center_id || "SIN SC"] || "borrador") === "enviada")) && (
+                  <div style={{ background: "#fffbeb", border: "1px solid #fde68a", color: "#92400e", borderRadius: 8, padding: "10px 12px", fontSize: 12, marginBottom: 12 }}>
+                    ⚠ Todas las prefacturas de esta placa ya fueron <b>enviadas</b>, por eso no hay viajes seleccionables. Usá <b>🔓 Reabrir</b> en cada empresa: vuelven a borrador, traspasás, y después cerrás y reenviás con el detalle nuevo.
+                  </div>
+                )}
                 {trasp.grupos.map((g, gi) => {
                   const esDestino = !!trasp.destino && norm(g.empresa) === norm(trasp.destino);
                   const movibles = esDestino ? [] : g.filas.filter(d => (g.estados[d.service_center_id || "SIN SC"] || "borrador") !== "enviada");
@@ -4493,6 +4498,17 @@ function ConciliacionTercerosMX({ usuario }) {
                         </label>
                         {esDestino ? <span style={{ background: "#ecfdf5", color: "#065f46", border: "1px solid #a7f3d0", borderRadius: 6, padding: "2px 8px", fontSize: 10, fontWeight: 800 }}>⬅ EMPRESA DESTINO — recibe los viajes</span> : null}
                         <span style={{ fontSize: 11, color: "#64748b" }}>{g.filas.length} viaje(s) · {fmtMon(totG)}</span>
+                        {[...new Set(g.filas.map(d => d.service_center_id || "SIN SC"))].map(scx => {
+                          const estx = g.estados[scx] || "borrador";
+                          if (estx !== "enviada") return null;
+                          return (
+                            <span key={scx} style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 10 }}>
+                              <span style={{ background: "#f5f3ff", color: "#7c3aed", border: "1px solid #ddd6fe", borderRadius: 6, padding: "2px 8px", fontWeight: 800 }}>{scx}: ENVIADA</span>
+                              <button onClick={async () => { await reabrirConciliacion(g.empresa, scx); abrirTraspasador({ placa: trasp.placa, empresas: trasp.grupos.map(x => x.empresa) }); }}
+                                style={{ padding: "3px 10px", background: "#fff", color: "#9a3412", border: "1px solid #fdba74", borderRadius: 6, fontSize: 10, fontWeight: 700, cursor: "pointer" }}>🔓 Reabrir</button>
+                            </span>
+                          );
+                        })}
                       </div>
                       {g.filas.length === 0 ? (
                         <div style={{ padding: 12, fontSize: 12, color: "#94a3b8" }}>Sin viajes de esta placa en esta empresa (solo doble asignación en flota).</div>
