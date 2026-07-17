@@ -3507,7 +3507,8 @@ function ConciliacionTercerosMX({ usuario }) {
   };
 
   const abrirTraspasador = async (al) => {
-    setTrasp({ placa: al.placa, cargando: true, grupos: [], sel: new Set(), destino: "" });
+    console.log("[traspasador] abrir placa", al && al.placa, al && al.empresas);
+    setTrasp({ placa: al.placa, cargando: true, grupos: [], sel: new Set(), destino: "", error: null });
     try {
       const grupos = [];
       for (const e of al.empresas) {
@@ -3519,8 +3520,7 @@ function ConciliacionTercerosMX({ usuario }) {
       setTrasp(t => (t && t.placa === al.placa) ? { ...t, cargando: false, grupos } : t);
     } catch (e) {
       console.error("abrir traspasador:", e);
-      setMsg({ ok: false, txt: "Error cargando los viajes de la placa: " + (e.message || e) });
-      setTrasp(null);
+      setTrasp(t => (t && t.placa === al.placa) ? { ...t, cargando: false, error: String((e && e.message) || e) } : t);
     }
   };
 
@@ -4434,7 +4434,7 @@ function ConciliacionTercerosMX({ usuario }) {
         <div style={{ background: "#fff1f2", border: "1px solid #fecdd3", borderRadius: 10, padding: 14, marginBottom: 14 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 8 }}>
             <span style={{ fontSize: 14, fontWeight: 800, color: "#9f1239" }}>🚚 Placas en 2+ empresas (misma semana)</span>
-            <span style={{ background: "#9f1239", color: "#fff", borderRadius: 6, padding: "2px 8px", fontSize: 10, fontWeight: 800 }}>TRASPASADOR v3</span>
+            <span style={{ background: "#9f1239", color: "#fff", borderRadius: 6, padding: "2px 8px", fontSize: 10, fontWeight: 800 }}>TRASPASADOR v4</span>
             <span style={{ fontSize: 12, color: "#be123c" }}>{traspRows.length} placa(s) · {traspRows.filter(r => r.repartida).length} con viajes repartidos entre empresas</span>
             <button onClick={() => cargarTraspasos(semana)} disabled={traspBusy} style={{ marginLeft: "auto", padding: "6px 14px", background: "#fff", color: "#9f1239", border: "1px solid #fda4af", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>{traspBusy ? "Analizando..." : "↻ Reanalizar"}</button>
           </div>
@@ -4460,7 +4460,7 @@ function ConciliacionTercerosMX({ usuario }) {
                     </td>
                     <td style={{ padding: "6px 8px", fontSize: 11, fontWeight: 600, color: r.repartida ? "#b91c1c" : "#9a3412", whiteSpace: "nowrap" }}>{r.repartida ? "Viajes repartidos entre empresas" : "Doble asignación en flota (viajes en una sola)"}</td>
                     <td style={{ padding: "6px 8px", textAlign: "right" }}>
-                      <button onClick={() => abrirTraspasador(r)} style={{ padding: "4px 10px", background: "#fff", color: "#9f1239", border: "1px solid #e11d48", borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>Traspasar viajes</button>
+                      <button onClick={() => (trasp && trasp.placa === r.placa) ? setTrasp(null) : abrirTraspasador(r)} style={{ padding: "4px 10px", background: (trasp && trasp.placa === r.placa) ? "#9f1239" : "#fff", color: (trasp && trasp.placa === r.placa) ? "#fff" : "#9f1239", border: "1px solid #e11d48", borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>{(trasp && trasp.placa === r.placa) ? "✕ Cerrar traspasador" : "Traspasar viajes ▾"}</button>
                     </td>
                   </tr>
                 ))}
@@ -4472,11 +4472,12 @@ function ConciliacionTercerosMX({ usuario }) {
       )}
 
       {trasp && (
-        <div onClick={() => !traspasando && setTrasp(null)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}>
-          <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 12, padding: 20, width: "min(1000px, 94vw)", maxHeight: "88vh", overflow: "auto" }}>
-            <div style={{ fontSize: 16, fontWeight: 800, color: "#1a3a6b", marginBottom: 2, display: "flex", alignItems: "center", gap: 8 }}>🚚 Traspasador de viajes — placa {trasp.placa} <span style={{ background: "#1a3a6b", color: "#fff", borderRadius: 6, padding: "2px 8px", fontSize: 10, fontWeight: 800 }}>v3</span></div>
+        <div style={{ background: "#fff", border: "2px solid #9f1239", borderRadius: 12, padding: 20, marginBottom: 14, boxShadow: "0 4px 14px rgba(159,18,57,0.12)" }}>
+            <div style={{ fontSize: 16, fontWeight: 800, color: "#1a3a6b", marginBottom: 2, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>🚚 Traspasador de viajes — placa {trasp.placa} <span style={{ background: "#1a3a6b", color: "#fff", borderRadius: 6, padding: "2px 8px", fontSize: 10, fontWeight: 800 }}>v4</span><button onClick={() => !traspasando && setTrasp(null)} style={{ marginLeft: "auto", padding: "4px 12px", background: "#fff", color: "#64748b", border: "1px solid #cbd5e1", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>✕ Cerrar</button></div>
             <div style={{ fontSize: 12, color: "#64748b", marginBottom: 14 }}>Semana {semana} ({etiquetaSemanaInventario(semana)}). Marcá los viajes a mover y elegí la empresa destino: se <b>restan</b> del origen y se <b>suman</b> al destino. Los viajes de prefacturas <b>enviadas</b> no se pueden mover (reabrilas primero).</div>
-            {trasp.cargando ? (
+            {trasp.error ? (
+              <div style={{ background: "#fef2f2", border: "1px solid #fca5a5", color: "#991b1b", borderRadius: 8, padding: 12, fontSize: 12 }}>Error cargando los viajes: {trasp.error}. Probá "Reanalizar" y volvé a abrir; si persiste, revisá la consola (F12).</div>
+            ) : trasp.cargando ? (
               <div style={{ padding: 30, textAlign: "center", color: "#94a3b8", fontSize: 13 }}>Cargando viajes de la placa...</div>
             ) : (
               <Fragment>
@@ -4567,7 +4568,6 @@ function ConciliacionTercerosMX({ usuario }) {
                 })()}
               </Fragment>
             )}
-          </div>
         </div>
       )}
 
