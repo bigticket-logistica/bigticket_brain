@@ -6321,14 +6321,32 @@ function ListadoPagosDiarios() {
       if (error) throw error;
       const filas = data || [];
       if (filas.length === 0) { alert(`No hay pagos guardados entre ${desde} y ${hasta}.`); setExcelBusy(false); return; }
+      // Empresa por placa según la semana de cada viaje (flota_terceros_mx); si la placa
+      // está en 2+ empresas esa semana se muestran todas ("A / B"); fallback: mapa global
+      let empSem = {};
+      try {
+        const semanasRango = [...new Set(filas.map(p => semanaInventario(p.fecha)).filter(s => s != null))];
+        if (semanasRango.length) {
+          const { data: fl } = await sb.from("flota_terceros_mx").select("semana, placa, empresa_transporte").in("semana", semanasRango).limit(50000);
+          const acc = {};
+          for (const f of fl || []) {
+            const e = String(f.empresa_transporte || "").trim(); if (!e) continue;
+            const k = f.semana + "||" + normalizarPlaca(f.placa);
+            if (!acc[k]) acc[k] = new Set();
+            acc[k].add(e);
+          }
+          for (const k in acc) empSem[k] = [...acc[k]].join(" / ");
+        }
+      } catch (e2) { console.error("empresa por semana:", e2); }
+      const empresaDe = (p) => empSem[semanaInventario(p.fecha) + "||" + normalizarPlaca(p.placa)] || empresaMap[normalizarPlaca(p.placa)] || "";
       const headers = [
-        "Fecha","Chofer","Patente","Vehículo","Tipología","Tipo Ruta","SC","Zona","ID Ruta","Ciclo",
+        "Fecha","Chofer","Patente","Empresa","Vehículo","Tipología","Tipo Ruta","SC","Zona","ID Ruta","Ciclo",
         "Km","Km Real","Envíos despachados","Envíos entregados","NS%","% Visitado Real","% No Visitado Real","No visitado %","Categoría NS",
         "Tarifa base","Ajuste NS","Estado auxiliar","Snapshots con helper","$ Auxiliar",
         "Pago bruto","Pago neto","Pago MELI","Observaciones"
       ];
       const aoa = [headers, ...filas.map(p => [
-        p.fecha, p.driver_name, p.placa, p.vehiculo_raw, p.tipologia, p.tipo_ruta_sdd || "", p.service_center_id, p.zona,
+        p.fecha, p.driver_name, p.placa, empresaDe(p), p.vehiculo_raw, p.tipologia, p.tipo_ruta_sdd || "", p.service_center_id, p.zona,
         p.id_ruta, p.ciclo, p.km_recorridos, p.km_recorridos_meli, p.envios_despachados, p.envios_entregados,
         p.ns_pct, p.pct_visitado_real, (p.pct_visitado_real != null ? Math.round((100 - Number(p.pct_visitado_real)) * 100) / 100 : ""), p.ns_no_visitado, p.ns_categoria, p.tarifa_base, p.ajuste_ns,
         p.auxiliar_estado, p.auxiliar_snapshots_total, p.monto_auxiliar,
