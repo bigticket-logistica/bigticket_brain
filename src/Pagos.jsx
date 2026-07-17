@@ -5904,10 +5904,16 @@ function ListadoPagosDiarios() {
   const [bonificaciones, setBonificaciones] = useState([]);
   const [orderDir, setOrderDir] = useState("asc");
   const [empresaMap, setEmpresaMap] = useState({}); // placa normalizada -> empresa (Terceros)
+  const [empresaMapSem, setEmpresaMapSem] = useState({}); // placa normalizada -> empresa(s) de la semana del día visible
   const [reglasAlerta, setReglasAlerta] = useState([]); // reglas configurables de alerta
   useEffect(() => { sb.from("config_alertas_pago").select("*").order("orden").then(({ data }) => setReglasAlerta(data || [])).catch(() => {}); }, []);
+  // Empresa de una fila: asignación de la semana operada; fallback: mapa global (más reciente)
+  const empresaDeFila = (p) => {
+    const k = normalizarPlaca(p && p.placa);
+    return empresaMapSem[k] || empresaMap[k] || "";
+  };
   const valorCampoAlerta = (p, campo) => {
-    if (campo === "empresa_asignada") return (empresaMap[normalizarPlaca(p.placa)] || "");
+    if (campo === "empresa_asignada") return empresaDeFila(p);
     return p[campo];
   };
   const cumpleReglaAlerta = (p, r) => {
@@ -5968,6 +5974,31 @@ function ListadoPagosDiarios() {
     })();
     return () => { cancel = true; };
   }, []);
+
+  // Carga el mapa placa->empresa de la SEMANA del día visible (mismo criterio que el Excel);
+  // si la placa está en 2+ empresas esa semana se muestran todas ("A / B")
+  useEffect(() => {
+    let cancel = false;
+    const sem = semanaInventario(fecha);
+    if (sem == null) { setEmpresaMapSem({}); return; }
+    (async () => {
+      try {
+        const { data } = await sb.from("flota_terceros_mx").select("placa, empresa_transporte").eq("semana", sem).limit(50000);
+        if (cancel) return;
+        const acc = {};
+        for (const r of data || []) {
+          const k = normalizarPlaca(r.placa); const e = String(r.empresa_transporte || "").trim();
+          if (!k || !e) continue;
+          if (!acc[k]) acc[k] = new Set();
+          acc[k].add(e);
+        }
+        const m = {};
+        for (const k in acc) m[k] = [...acc[k]].join(" / ");
+        setEmpresaMapSem(m);
+      } catch (e) { if (!cancel) setEmpresaMapSem({}); }
+    })();
+    return () => { cancel = true; };
+  }, [fecha]);
 
   // Carga las bonificaciones activas (Configuracion -> Bonificaciones)
   useEffect(() => {
@@ -6232,7 +6263,7 @@ function ListadoPagosDiarios() {
     });
 
     return res;
-  }, [pagos, busqueda, filtroEstado, orderBy, orderDir, reglasAlerta, empresaMap]);
+  }, [pagos, busqueda, filtroEstado, orderBy, orderDir, reglasAlerta, empresaMap, empresaMapSem]);
 
   // Totales
   const totales = useMemo(() => {
@@ -6731,7 +6762,7 @@ function ListadoPagosDiarios() {
                     <td style={tdStyle(true)}>{r.driver_name || "—"}</td>
                     <td style={{ ...tdStyle(), fontFamily: "monospace", fontSize: 10 }}>{r.placa || "—"}</td>
                     <td style={{ ...tdStyle(), fontSize: 10, color: "#475569", maxWidth: 170, whiteSpace: "normal", lineHeight: 1.25 }}>
-                      {empresaMap[normalizarPlaca(r.placa)] || "—"}
+                      {empresaDeFila(r) || "—"}
                     </td>
                     <td style={tdStyle()}>
                       <div style={{ fontSize: 10, color: "#475569" }}>{r.tipologia || "?"}</div>
