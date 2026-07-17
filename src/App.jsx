@@ -9315,7 +9315,7 @@ function DetalleVariacionContratista({ contratista, fechaHoy, fechaAyer }) {
 function ModuloCertificacionesMadre() {
   const [subtab, setSubtab] = useState("ingresos");
   const tabs = [
-    { id: "ingresos",    label: "Certificación Nuevos Ingresos", desc: "Drivers MX (Mercado Libre)" },
+    { id: "ingresos",    label: "Proceso de Certificaciones MX", desc: "Drivers MX (Mercado Libre)" },
     { id: "pagos",       label: "Certificación para Pagos",      desc: "Contratistas Chile (Certronic)" },
   ];
   return (
