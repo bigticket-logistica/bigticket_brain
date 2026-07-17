@@ -1202,21 +1202,12 @@ function DetalleCertificacion({ cert, etapa, onVolver, onPasarEtapa2, onMoverA, 
           <div className="form-card" style={{ background: "#fff4ec", border: "1px solid #fbd9c0" }}>
             <div style={{ fontSize: 13, color: "#7c3a12", lineHeight: 1.6, marginBottom: 12 }}>
               {esVeh
-                ? <>Este vehículo está en <b>Etapa 1 · Recepción</b>. Los vehículos no requieren llamada: pasan directo a <b>Pre Validación Biggy</b> y luego a REPUVE.</>
-                : <>Esta postulación está en <b>Etapa 1 · Recepción</b>. A los 30 segundos pasa sola a <b>Etapa 2 · Llamada de Supervisor</b> (se genera la tarea en la Bitácora), o puedes pasarla ahora:</>}
+                ? <>Este vehículo está en <b>Etapa 1 · Recepción</b>. Sigue a <b>Pre Validación Biggy</b> y luego a <b>REPUVE</b>.</>
+                : <>Esta certificación está en <b>Etapa 1 · Recepción</b>. En este flujo la empresa ya existe: no hay llamada de supervisor — sigue directo a <b>Pre Validación Biggy</b>.</>}
             </div>
             <button className="btn-orange" onClick={onPasarEtapa2} style={{ width: "100%" }}>
-              {esVeh ? "▶ Pasar a Etapa 3 · Pre Validación Biggy" : "▶ Pasar a Etapa 2 · Llamada de Supervisor"}
+              ▶ Pasar a Pre Validación Biggy
             </button>
-          </div>
-        )}
-
-        {enLlamada && !esVeh && (
-          <div className="form-card" style={{ background: "#e8f6f9", border: "1px solid #c9e8f0" }}>
-            <div style={{ fontSize: 13, color: "#0e7490", lineHeight: 1.6 }}>
-              📞 <b>Etapa 2 · Llamada de Supervisor.</b> Hay una tarea pendiente en la Bitácora del Supervisor (SLA 48 h).
-              Si el supervisor acepta, la tarjeta pasa sola a <b>Pre Validación Biggy</b> con su comentario; si rechaza, pasa a <b>Rechazado</b>.
-            </div>
           </div>
         )}
 
@@ -1285,40 +1276,23 @@ function DetalleCertificacion({ cert, etapa, onVolver, onPasarEtapa2, onMoverA, 
         {/* Resultado de MELI */}
         {!enEtapa1 && !esVeh && etapaActual === "validacion_nubarium" && (
           <div className="form-card" style={{ background: "#eafaf0", border: "1px solid #b7e4c7" }}>
-            <div style={{ fontSize: 13, color: "#166534" }}>✅ <b>Aprobado por MELI.</b> {cert.respuesta_meli || ""} — Ahora en <b>Etapa 4 · Nubarium</b>.</div>
+            <div style={{ fontSize: 13, color: "#166534", marginBottom: 12 }}>✅ <b>Aprobado por MELI.</b> {cert.respuesta_meli || ""} — Ahora en <b>Validación Nubarium</b>. Al validar sus documentos oficiales, la certificación queda lista.</div>
+            <button className="btn-orange" onClick={() => onMoverA("aceptado")} style={{ width: "100%" }}>
+              ✓ Certificación validada → Aceptado
+            </button>
+          </div>
+        )}
+        {esVeh && etapaActual === "validacion_nubarium" && (
+          <div className="form-card">
+            <button className="btn-orange" onClick={() => onMoverA("aceptado")} style={{ width: "100%" }}>
+              ✓ REPUVE validado → Aceptado
+            </button>
           </div>
         )}
         {etapaActual === "rechazado" && (
           <div className="form-card" style={{ background: "#fdecec", border: "1px solid #f5c2c2" }}>
             <div style={{ fontSize: 13, color: "#991b1b" }}>✕ <b>Rechazado.</b> {cert.respuesta_meli || cert.motivo_rechazo || ""}</div>
           </div>
-        )}
-
-        {etapaActual === "entrevista_operaciones" && !esVeh && (
-          <div className="form-card" style={{ background: "#e8f6f9", border: "1px solid #c9e8f0" }}>
-            <div style={{ fontSize: 13, color: "#0e7490", lineHeight: 1.6 }}>
-              🗣 <b>Etapa 6 · Entrevista con Operaciones.</b> Tarea <b>"Entrevista Prospección"</b> en la Bitácora del Supervisor (SLA 72 h).
-              Si aprueba la minuta, pasa a <b>Solicitud de Alta</b>; si rechaza, a <b>Rechazado</b>.
-            </div>
-          </div>
-        )}
-        {etapaActual === "solicitud_alta" && !esVeh && (
-          <ResumenSolicitudAlta fuente="certificaciones" registro={cert}
-            datos={{ nombre: cond?.nombre || ter?.nombre, rfc: cond?.rfc, email: cond?.email }}
-            onEnviado={(patch) => { Object.assign(cert, patch); if (onMoverA) onMoverA("firma_contrato"); }} />
-        )}
-        {cert.comentario_entrevista && ["solicitud_alta", "firma_contrato", "aceptado"].includes(etapaActual) && (
-          <div className="form-card" style={{ background: "#e8f6f9", border: "1px solid #c9e8f0" }}>
-            <div style={{ fontSize: 12, fontWeight: 700, color: "#0e7490", marginBottom: 4 }}>🗣 Comentario de la entrevista (Operaciones)</div>
-            <div style={{ fontSize: 13, color: "#155e70", lineHeight: 1.5 }}>{cert.comentario_entrevista}</div>
-          </div>
-        )}
-
-        {etapaActual === "firma_contrato" && !esVeh && (
-          <SeccionFirmaContrato registro={cert} tabla="certificaciones"
-            datos={{ nombre: cond?.nombre || ter?.nombre, curp: cond?.curp, rfc: cond?.rfc, email: cond?.email,
-              puesto: cert.tipo === "ayudante" ? "Ayudante" : "Driver", sc: cert.service_center || ter?.service_center, placa: null }}
-            onActualizado={(patch) => { Object.assign(cert, patch); setDocsCert(d => d ? [...d] : d); }} />
         )}
 
         {ter?.nombre && (
@@ -1987,7 +1961,7 @@ function ModuloCertificaciones() {
   if (selected) {
     if (selected.fuente === "portal_cert") {
       return <DetalleCertificacion cert={selected.raw} etapa={selected.etapa} onVolver={() => setSelected(null)}
-        onPasarEtapa2={() => moverYCerrar(selected, selected.tipo === "vehiculo" ? "prevalidacion_biggy" : "llamada_supervisor")}
+        onPasarEtapa2={() => moverYCerrar(selected, "prevalidacion_biggy")}
         onMoverA={(etapa) => moverYCerrar(selected, etapa)}
         onAnalizado={(parsed) => setItems(prev => prev.map(i => i.key === selected.key ? {
           ...i, score: parsed.score_global, rec: parsed.recomendacion,
