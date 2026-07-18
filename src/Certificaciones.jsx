@@ -1454,6 +1454,233 @@ const ESTADO_DOC_GESTION = {
   firmado:  { label: "Firmado ✓",        color: "#166534", bg: "#e8f5ec" },
 };
 
+// ─── 🗂 DOCUMENTACIÓN TERCEROS · archivador digital por empresa ──────
+// Carga masiva (drag & drop / selección múltiple, imágenes comprimidas)
+// al bucket privado `archivador_empresas`, indexado en `documentos_empresa`.
+// El Portal de Terceros lee este mismo archivador (solo su empresa).
+const DOC_CATEGORIAS = [
+  { id: "contratos", label: "📑 Contratos" },
+  { id: "seguros",   label: "🛡 Seguros" },
+  { id: "vehiculos", label: "🚚 Vehículos" },
+  { id: "personal",  label: "👤 Personal" },
+  { id: "anexos",    label: "📎 Anexos" },
+  { id: "otros",     label: "🗃 Otros" },
+];
+const docCatLabel = (id) => (DOC_CATEGORIAS.find(c => c.id === id) || {}).label || id;
+const fmtBytes = (b) => {
+  if (b == null) return "—";
+  if (b < 1024) return b + " B";
+  if (b < 1048576) return (b / 1024).toFixed(0) + " KB";
+  return (b / 1048576).toFixed(1) + " MB";
+};
+// Comprime imágenes a JPEG máx. 1400px (documentos fotográficos legibles y livianos)
+function comprimirImagenDoc(file) {
+  return new Promise((resolve) => {
+    if (!/^image\//.test(file.type) || file.type === "image/gif") return resolve(file);
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new window.Image();
+      img.onload = () => {
+        const MAX = 1400;
+        let w = img.width, h = img.height;
+        if (w <= MAX && h <= MAX && file.size < 600000) return resolve(file);
+        if (w > h && w > MAX) { h = Math.round(h * MAX / w); w = MAX; }
+        else if (h >= w && h > MAX) { w = Math.round(w * MAX / h); h = MAX; }
+        const c = document.createElement("canvas");
+        c.width = w; c.height = h;
+        c.getContext("2d").drawImage(img, 0, 0, w, h);
+        c.toBlob((blob) => resolve(blob && blob.size < file.size
+          ? new File([blob], file.name.replace(/\.\w+$/, "") + ".jpg", { type: "image/jpeg" })
+          : file), "image/jpeg", 0.72);
+      };
+      img.onerror = () => resolve(file);
+      img.src = reader.result;
+    };
+    reader.onerror = () => resolve(file);
+    reader.readAsDataURL(file);
+  });
+}
+
+function DocumentacionTerceros() {
+  const [empresas, setEmpresas] = useState(null);
+  const [terceroId, setTerceroId] = useState("");
+  const [categoria, setCategoria] = useState("contratos");
+  const [referencia, setReferencia] = useState("");
+  const [cola, setCola] = useState([]);          // { nombre, tamano, estado: en_cola|subiendo|ok|error, msg }
+  const [subiendo, setSubiendo] = useState(false);
+  const [arrastrando, setArrastrando] = useState(false);
+  const [docs, setDocs] = useState(null);
+  const [filtroCat, setFiltroCat] = useState("todas");
+  const fileRef = useRef(null);
+
+  useEffect(() => {
+    (async () => {
+      const { data } = await sb.from("terceros").select("id, nombre, rfc").order("nombre");
+      setEmpresas(data || []);
+    })();
+  }, []);
+
+  const cargarDocs = async (tid) => {
+    if (!tid) { setDocs(null); return; }
+    setDocs(null);
+    const { data } = await sb.from("documentos_empresa")
+      .select("*").eq("tercero_id", tid).order("created_at", { ascending: false });
+    setDocs(data || []);
+  };
+  useEffect(() => { cargarDocs(terceroId); }, [terceroId]);
+
+  const subirArchivos = async (files) => {
+    if (!terceroId) { alert("Selecciona primero la empresa a la que pertenecen los archivos."); return; }
+    const lista = Array.from(files || []);
+    if (!lista.length) return;
+    const emp = empresas.find(e => e.id === terceroId);
+    setSubiendo(true);
+    setCola(lista.map(f => ({ nombre: f.name, tamano: f.size, estado: "en_cola", msg: "" })));
+    for (let i = 0; i < lista.length; i++) {
+      setCola(p => p.map((x, ix) => ix === i ? { ...x, estado: "subiendo" } : x));
+      try {
+        const archivo = await comprimirImagenDoc(lista[i]);
+        const limpio = archivo.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+        const path = `${terceroId}/${categoria}/${Date.now()}_${limpio}`;
+        const { error: eUp } = await sb.storage.from("archivador_empresas")
+          .upload(path, archivo, { contentType: archivo.type || "application/octet-stream", upsert: false });
+        if (eUp) throw new Error(eUp.message);
+        const { error: eIns } = await sb.from("documentos_empresa").insert({
+          tercero_id: terceroId, categoria, nombre_archivo: lista[i].name,
+          storage_path: path, mime_type: archivo.type || null, tamano_bytes: archivo.size,
+          referencia: referencia.trim() || null,
+          subido_por: window.__PERFIL_EMAIL || "", origen: "brain",
+        });
+        if (eIns) throw new Error("índice: " + eIns.message);
+        setCola(p => p.map((x, ix) => ix === i ? { ...x, estado: "ok", tamano: archivo.size } : x));
+      } catch (e) {
+        setCola(p => p.map((x, ix) => ix === i ? { ...x, estado: "error", msg: e.message } : x));
+      }
+    }
+    setSubiendo(false);
+    await cargarDocs(terceroId);
+  };
+
+  const descargar = async (doc) => {
+    const { data, error } = await sb.storage.from("archivador_empresas").createSignedUrl(doc.storage_path, 300);
+    if (error || !data?.signedUrl) { alert("No se pudo generar el enlace: " + (error?.message || "")); return; }
+    window.open(data.signedUrl, "_blank");
+  };
+
+  const eliminar = async (doc) => {
+    if (!confirm(`¿Eliminar "${doc.nombre_archivo}" del archivador?\n\nSe borra el archivo y su registro. Esta acción no se puede deshacer.`)) return;
+    const { error: eSt } = await sb.storage.from("archivador_empresas").remove([doc.storage_path]);
+    if (eSt) { alert("No se pudo borrar el archivo: " + eSt.message); return; }
+    await sb.from("documentos_empresa").delete().eq("id", doc.id);
+    setDocs(p => (p || []).filter(d => d.id !== doc.id));
+  };
+
+  const emp = (empresas || []).find(e => e.id === terceroId);
+  const docsFiltrados = (docs || []).filter(d => filtroCat === "todas" || d.categoria === filtroCat);
+  const totalBytes = (docs || []).reduce((s, d) => s + (d.tamano_bytes || 0), 0);
+  const inp = { background: "#fff", border: "0.5px solid #e4e7ec", borderRadius: 8, padding: "9px 12px", fontSize: 13, fontFamily: "'Geist',sans-serif" };
+
+  return (
+    <div className="pg">
+      <div style={{ marginBottom: 14 }}>
+        <div className="sec-title">🗂 Documentación Terceros</div>
+        <div className="sec-sub">Archivador digital por empresa — contratos, seguros, fotos de unidades, anexos. Las empresas ven su carpeta desde el Portal de Terceros.</div>
+      </div>
+
+      {/* Selección + carga masiva */}
+      <div className="form-card">
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
+          <select value={terceroId} onChange={(e) => setTerceroId(e.target.value)} style={{ ...inp, flex: 2, minWidth: 240 }}>
+            <option value="">— Selecciona la empresa —</option>
+            {(empresas || []).map(e => <option key={e.id} value={e.id}>{e.nombre} · {e.rfc || "sin RFC"}</option>)}
+          </select>
+          <select value={categoria} onChange={(e) => setCategoria(e.target.value)} style={{ ...inp, flex: 1, minWidth: 150 }}>
+            {DOC_CATEGORIAS.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
+          </select>
+          <input value={referencia} onChange={(e) => setReferencia(e.target.value)}
+            placeholder="Referencia opcional (placa, persona…)" style={{ ...inp, flex: 1, minWidth: 180 }} />
+        </div>
+
+        <input ref={fileRef} type="file" multiple style={{ display: "none" }} onChange={(e) => { subirArchivos(e.target.files); e.target.value = ""; }} />
+        <div
+          onDragOver={(e) => { e.preventDefault(); setArrastrando(true); }}
+          onDragLeave={() => setArrastrando(false)}
+          onDrop={(e) => { e.preventDefault(); setArrastrando(false); subirArchivos(e.dataTransfer.files); }}
+          onClick={() => fileRef.current && fileRef.current.click()}
+          style={{ border: `2px dashed ${arrastrando ? "#F47B20" : "#1a3a6b"}`, background: arrastrando ? "#fff4ec" : "#eef2f7",
+            borderRadius: 12, padding: "28px 16px", textAlign: "center", cursor: "pointer", transition: "all .15s" }}>
+          <div style={{ fontSize: 26, marginBottom: 6 }}>📁</div>
+          <div style={{ fontWeight: 700, fontSize: 14, color: "#1a3a6b" }}>Arrastra aquí los archivos o haz clic para elegirlos</div>
+          <div style={{ fontSize: 12, color: "#888", marginTop: 4 }}>Carga masiva · PDF, imágenes (se comprimen solas), Office, lo que sea · quedan en {emp ? <b>{emp.nombre}</b> : "la empresa seleccionada"} → {docCatLabel(categoria)}</div>
+        </div>
+
+        {cola.length > 0 && (
+          <div style={{ marginTop: 12 }}>
+            {cola.map((c, i) => (
+              <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 4px", borderBottom: "1px solid #f4f5f7", fontSize: 12.5 }}>
+                <span style={{ width: 20, textAlign: "center" }}>
+                  {c.estado === "ok" ? "✅" : c.estado === "error" ? "❌" : c.estado === "subiendo" ? "⏳" : "·"}
+                </span>
+                <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.nombre}</span>
+                <span style={{ color: "#888", fontFamily: "monospace" }}>{fmtBytes(c.tamano)}</span>
+                {c.msg && <span style={{ color: "#c0392b", fontSize: 11 }}>{c.msg}</span>}
+              </div>
+            ))}
+            <div style={{ fontSize: 11, color: "#888", marginTop: 6 }}>
+              {subiendo ? "Subiendo…" : `Listo: ${cola.filter(c => c.estado === "ok").length}/${cola.length} archivo(s) cargado(s).`}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Explorador del archivador de la empresa */}
+      {terceroId && (
+        <div className="form-card">
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
+            <div className="form-title" style={{ margin: 0 }}>Archivador de {emp?.nombre || "la empresa"}</div>
+            <span style={{ fontSize: 11, color: "#888" }}>{(docs || []).length} archivo(s) · {fmtBytes(totalBytes)}</span>
+            <select value={filtroCat} onChange={(e) => setFiltroCat(e.target.value)} style={{ ...inp, marginLeft: "auto", fontSize: 12 }}>
+              <option value="todas">Todas las categorías</option>
+              {DOC_CATEGORIAS.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
+            </select>
+          </div>
+          {docs === null ? <div className="loading">Cargando archivador…</div>
+          : docsFiltrados.length === 0 ? (
+            <div style={{ textAlign: "center", padding: "24px 10px", color: "#888", fontSize: 13 }}>
+              {(docs || []).length === 0 ? "Esta empresa aún no tiene documentos en su archivador." : "Sin archivos en esta categoría."}
+            </div>
+          ) : (
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+              <thead>
+                <tr style={{ textAlign: "left", color: "#888", fontSize: 10.5, textTransform: "uppercase" }}>
+                  <th style={{ padding: "6px 4px" }}>Archivo</th><th>Categoría</th><th>Referencia</th><th>Tamaño</th><th>Subido</th><th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {docsFiltrados.map(d => (
+                  <tr key={d.id} style={{ borderTop: "1px solid #f4f5f7" }}>
+                    <td style={{ padding: "8px 4px", fontWeight: 600, maxWidth: 320, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {/^image\//.test(d.mime_type || "") ? "🖼" : (d.mime_type || "").includes("pdf") ? "📄" : "📎"} {d.nombre_archivo}
+                    </td>
+                    <td>{docCatLabel(d.categoria)}</td>
+                    <td style={{ color: "#555" }}>{d.referencia || "—"}</td>
+                    <td style={{ fontFamily: "monospace", color: "#555" }}>{fmtBytes(d.tamano_bytes)}</td>
+                    <td style={{ fontSize: 11.5, color: "#888" }}>{new Date(d.created_at).toLocaleDateString("es-MX", { day: "2-digit", month: "2-digit", year: "2-digit" })} · {d.subido_por || "—"}</td>
+                    <td style={{ whiteSpace: "nowrap", textAlign: "right" }}>
+                      <button onClick={() => descargar(d)} style={{ border: "1px solid #d6def0", background: "#eef2f7", color: "#1a3a6b", borderRadius: 6, padding: "5px 10px", fontSize: 11.5, fontWeight: 700, cursor: "pointer", marginRight: 6 }}>Ver / Descargar</button>
+                      <button onClick={() => eliminar(d)} style={{ border: "none", background: "none", color: "#c0392b", fontSize: 11.5, fontWeight: 700, cursor: "pointer" }}>Eliminar</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function GestionadorContratos() {
   const [docs, setDocs] = useState(null);
   const [terceros, setTerceros] = useState([]);
@@ -2035,7 +2262,7 @@ function ModuloCertificaciones() {
 
       {/* Pestañas de sección */}
       <div style={{ display: "flex", gap: 4, marginBottom: 18, borderBottom: "1px solid #e4e7ec" }}>
-        {[["certificaciones", "📋 Certificaciones"], ["contratos", "📑 Gestionador de Contratos"], ["mensajes", "💬 Mensajes"]].map(([v, l]) => (
+        {[["certificaciones", "📋 Certificaciones"], ["contratos", "📑 Gestionador de Contratos"], ["documentacion", "🗂 Documentación Terceros"], ["mensajes", "💬 Mensajes"]].map(([v, l]) => (
           <button key={v} onClick={() => { setSeccion(v); setSelected(null); }}
             style={{ padding: "10px 16px", border: "none", cursor: "pointer", fontSize: 13, fontFamily: "'Geist',sans-serif",
               background: "transparent", fontWeight: seccion === v ? 700 : 400,
@@ -2047,6 +2274,7 @@ function ModuloCertificaciones() {
       </div>
 
       {seccion === "contratos" && <GestionadorContratos />}
+      {seccion === "documentacion" && <DocumentacionTerceros />}
       {seccion === "mensajes" && <MensajesTerceros />}
 
       {seccion === "certificaciones" && (
