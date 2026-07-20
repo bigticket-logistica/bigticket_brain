@@ -4830,7 +4830,16 @@ function ConciliacionTercerosMX({ usuario }) {
             <label style={{ fontSize: 12, fontWeight: 700, color: "#475569" }}>Para (correo_to)</label>
             <input value={modalEnvio.to} onChange={e => setModalEnvio({ ...modalEnvio, to: e.target.value })} style={{ width: "100%", padding: "8px 10px", border: "1px solid #e4e7ec", borderRadius: 6, fontSize: 13, marginBottom: 10, boxSizing: "border-box" }} />
             <label style={{ fontSize: 12, fontWeight: 700, color: "#475569" }}>Con copia (correo_cc)</label>
-            <input value={modalEnvio.cc} onChange={e => setModalEnvio({ ...modalEnvio, cc: e.target.value })} style={{ width: "100%", padding: "8px 10px", border: "1px solid #e4e7ec", borderRadius: 6, fontSize: 13, marginBottom: 10, boxSizing: "border-box" }} />
+            <input value={modalEnvio.cc} onChange={e => setModalEnvio({ ...modalEnvio, cc: e.target.value })} style={{ width: "100%", padding: "8px 10px", border: "1px solid #e4e7ec", borderRadius: 6, fontSize: 13, marginBottom: 2, boxSizing: "border-box" }} />
+            {(() => {
+              const supx = String(((paramPorSC[norm(modalEnvio.sc)] || {}).correo_supervisor) || "").trim();
+              const supNombre = String(((paramPorSC[norm(modalEnvio.sc)] || {}).supervisor) || "").trim();
+              return supx ? (
+                <div style={{ fontSize: 11, color: "#166534", marginBottom: 10 }}>✓ Incluye al supervisor de {modalEnvio.sc}{supNombre ? ` (${supNombre})` : ""}: {supx}</div>
+              ) : (
+                <div style={{ fontSize: 11, color: "#b45309", marginBottom: 10 }}>⚠ El SC {modalEnvio.sc} no tiene correo de supervisor cargado en Parámetros MX — el CC va solo con los de la ficha del transportista.</div>
+              );
+            })()}
             <label style={{ fontSize: 12, fontWeight: 700, color: "#475569" }}>Asunto</label>
             <input value={modalEnvio.asunto} onChange={e => setModalEnvio({ ...modalEnvio, asunto: e.target.value })} style={{ width: "100%", padding: "8px 10px", border: "1px solid #e4e7ec", borderRadius: 6, fontSize: 13, marginBottom: 10, boxSizing: "border-box" }} />
             <label style={{ fontSize: 12, fontWeight: 700, color: "#475569" }}>Cuerpo</label>
