@@ -502,22 +502,169 @@ function cargarScriptMifiel() {
   document.head.appendChild(s);
 }
 
+// ═══ GENERADOR DE CONTRATO · plantilla ContratoTransportista v1.0 ═══
+// El Brain llena la plantilla (Storage: plantillas/contrato_transportista_v1.pdf)
+// con pdf-lib en el navegador: Hoja de Firmas (pág 11) + Anexo A (pág 13).
+// Coordenadas validadas visualmente contra la plantilla (origen abajo-izq, pts).
+const CONTRATO_COORDS = {
+  plantilla: "plantillas/contrato_transportista_v1.pdf",
+  pagFirmas: 10, pagAnexoA: 12,
+  firmas: {
+    dia: { x: 188, y: 318.5, s: 9 }, mes: { x: 228, y: 318.5, s: 9 }, anio: { x: 330, y: 318.5, s: 9 },
+    nombre: { x: 421, y: 279, s: 8 }, rfc: { x: 338, y: 268.5, s: 8.5 }, rep: { x: 424, y: 258, s: 8.5 },
+    chkMoral: { x: 372.5, y: 206.3 }, chkFisica: { x: 553.9, y: 206.3 },
+    col: 311.7, tNombre: 194.8, tRfc: 182.8, tDomicilio: 170.7, tRep: 158.7, tCorreo: 146.6, tRepse: 134.6,
+  },
+  anexoA: {
+    col: 311.7, nombre: 602.9, rfc: 590.8, rep: 578.8, correo: 566.7,
+    chkMeli: { x: 371.7, y: 555.6 }, chkOtro: { x: 406.8, y: 555.6 },
+    chkB2bSi: { x: 322.1, y: 545.3 }, chkB2bNo: { x: 350.5, y: 545.3 },
+    fechaInicio: 534.1, vigencia: 522.0,
+    modX: 223.0, modY: { SDD: 458.3, Spot: 415.5, Backup: 377.3 },
+    filasY: [293.0, 243.1, 193.2], ayudanteY: [301.0, 251.1, 201.2],
+    svcX: 100, cantX: 292, ayuSiX: 350.2, ayuNoX: 375.0, obsX: 512,
+  },
+};
+
+function cargarPdfLib() {
+  return new Promise((resolve, reject) => {
+    if (window.PDFLib) return resolve(window.PDFLib);
+    let s = document.querySelector("script[data-pdf-lib]");
+    if (!s) {
+      s = document.createElement("script");
+      s.src = "https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js";
+      s.setAttribute("data-pdf-lib", "1");
+      document.head.appendChild(s);
+    }
+    s.addEventListener("load", () => resolve(window.PDFLib));
+    s.addEventListener("error", () => reject(new Error("no se pudo cargar pdf-lib")));
+  });
+}
+
+const MESES_ES = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
+
+// Genera el contrato lleno y lo sube a Storage. Devuelve { path, url }.
+async function generarContratoPDF({ tabla, registro, datos }) {
+  // 1) Fuentes de datos: items del Jefe (obligatorios) + minuta del supervisor
+  const { data: cos } = await sb.from("contrato_operacional")
+    .select("*").eq("fuente", tabla).eq("registro_id", registro.id).limit(1);
+  const co = cos && cos[0];
+  if (!co) throw new Error("no existe el alta operacional de este prospecto — el Jefe de Operaciones debe completar su tarea (Etapa Solicitud de Alta) antes de generar el contrato");
+  const { data: ms } = await sb.from("minutas_entrevista")
+    .select("*").eq("fuente", tabla).eq("registro_id", registro.id)
+    .order("created_at", { ascending: false }).limit(1);
+  const m = (ms && ms[0]) || {};
+  const mf = m.datos?.fields || {}, mr = m.datos?.radio || {}, mm = m.datos?.multi || {};
+
+  // 2) Consolidación (Jefe manda; minuta y tarjeta respaldan)
+  const nombre    = mf.p_nombre || datos.nombre || "";
+  const rfc       = co.rfc_razon_social || mf.p_rfc || datos.rfc || "";
+  const rep       = mf.p_decide || datos.nombre || "";
+  const correo    = mf.p_correo || datos.email || "";
+  const domicilio = co.domicilio_fiscal || mf.p_domicilio || "";
+  const repse     = co.repse || mf.p_repse || "—";
+  const esMoral   = (mr.p_figura || "").startsWith("Moral");
+  const b2b       = co.back_to_back || "No";
+  const tarifa    = co.tarifa_aplicable || "Tabla vigente";
+  const vigencia  = co.vigencia_particular || "12 meses renovables";
+  const fechaIni  = co.fecha_inicio || mf.op_inicio || "";
+  const modelos   = (mm.op_modelo && mm.op_modelo.length) ? mm.op_modelo : ["SDD"];
+  const ayudante  = mr.op_ayudante === "Sí" ? "Sí" : "No";
+  const svc       = (co.sc || registro.svc || "").split("_").pop().toUpperCase();
+
+  // Líneas operativas: unidades de la minuta agrupadas por tipo (máx. 3)
+  let lineas = [];
+  const vehs = Array.isArray(m.vehiculos) ? m.vehiculos : [];
+  if (vehs.length) {
+    const porTipo = {};
+    vehs.forEach(v => { const t = v.tipo || "Sin tipo"; porTipo[t] = (porTipo[t] || 0) + 1; });
+    lineas = Object.entries(porTipo).slice(0, 3).map(([tipo, n]) => ({ tipo, n }));
+  } else {
+    lineas = [{ tipo: co.tipo_vehiculos || "—", n: co.cantidad_vehiculos || "" }];
+  }
+
+  // 3) Llenar la plantilla
+  const PDFLib = await cargarPdfLib();
+  const { data: plantilla, error: eDl } = await sb.storage
+    .from("proceso_certificacion_bt").download(CONTRATO_COORDS.plantilla);
+  if (eDl || !plantilla) throw new Error("no se pudo descargar la plantilla del contrato (Storage: " + CONTRATO_COORDS.plantilla + ")");
+  const pdf = await PDFLib.PDFDocument.load(await plantilla.arrayBuffer());
+  const font = await pdf.embedFont(PDFLib.StandardFonts.Helvetica);
+  const bold = await pdf.embedFont(PDFLib.StandardFonts.HelveticaBold);
+  const pF = pdf.getPage(CONTRATO_COORDS.pagFirmas);
+  const pA = pdf.getPage(CONTRATO_COORDS.pagAnexoA);
+  const negro = PDFLib.rgb(0.1, 0.1, 0.12);
+  const T = (pg, x, y, txt, s = 8.5) => { if (txt) pg.drawText(String(txt), { x, y, size: s, font, color: negro }); };
+  const X = (pg, c) => pg.drawText("X", { x: c.x, y: c.y, size: 9, font: bold, color: negro });
+
+  const F = CONTRATO_COORDS.firmas, A = CONTRATO_COORDS.anexoA;
+  const hoy = new Date();
+  T(pF, F.dia.x, F.dia.y, String(hoy.getDate()).padStart(2, "0"), F.dia.s);
+  T(pF, F.mes.x, F.mes.y, MESES_ES[hoy.getMonth()], F.mes.s);
+  T(pF, F.anio.x, F.anio.y, String(hoy.getFullYear()).slice(-2), F.anio.s);
+  T(pF, F.nombre.x, F.nombre.y, nombre, F.nombre.s);
+  T(pF, F.rfc.x, F.rfc.y, rfc, F.rfc.s);
+  T(pF, F.rep.x, F.rep.y, rep, F.rep.s);
+  X(pF, esMoral ? F.chkMoral : F.chkFisica);
+  T(pF, F.col, F.tNombre, nombre); T(pF, F.col, F.tRfc, rfc);
+  T(pF, F.col, F.tDomicilio, domicilio, 7);
+  T(pF, F.col, F.tRep, rep); T(pF, F.col, F.tCorreo, correo); T(pF, F.col, F.tRepse, repse);
+
+  T(pA, A.col, A.nombre, nombre); T(pA, A.col, A.rfc, rfc);
+  T(pA, A.col, A.rep, rep); T(pA, A.col, A.correo, correo);
+  X(pA, A.chkMeli);
+  X(pA, b2b === "Sí" ? A.chkB2bSi : A.chkB2bNo);
+  T(pA, A.col, A.fechaInicio, fechaIni); T(pA, A.col, A.vigencia, vigencia);
+  modelos.forEach(mo => { if (A.modY[mo]) pA.drawText("X", { x: A.modX, y: A.modY[mo], size: 9, font: bold, color: negro }); });
+  lineas.forEach((l, i) => {
+    T(pA, A.svcX, A.filasY[i], svc, 8);
+    T(pA, A.cantX, A.filasY[i], String(l.n), 8);
+    pA.drawText("X", { x: ayudante === "Sí" ? A.ayuSiX : A.ayuNoX, y: A.ayudanteY[i], size: 9, font: bold, color: negro });
+    T(pA, A.obsX, A.filasY[i] + 4, l.tipo, 6.5);
+    T(pA, A.obsX, A.filasY[i] - 3, tarifa, 6.5);
+  });
+
+  // 4) Subir a Storage y devolver enlace firmado
+  const bytes = await pdf.save();
+  const path = `contratos_generados/${tabla}/${registro.id}.pdf`;
+  const { error: eUp } = await sb.storage.from("proceso_certificacion_bt")
+    .upload(path, new Blob([bytes], { type: "application/pdf" }), { contentType: "application/pdf", upsert: true });
+  if (eUp) throw new Error("no se pudo guardar el contrato generado: " + eUp.message);
+  const { data: su } = await sb.storage.from("proceso_certificacion_bt").createSignedUrl(path, 3600);
+  return { path, url: su?.signedUrl || null, firmante_nombre: rep || nombre, firmante_email: correo, nombre };
+}
+
 function SeccionFirmaContrato({ registro, tabla, datos, onActualizado }) {
   const [enviando, setEnviando] = useState(false);
+  const [generando, setGenerando] = useState(false);
+  const [contratoGen, setContratoGen] = useState(null);   // { path, url, firmante_nombre, firmante_email }
   const [firmandoBT, setFirmandoBT] = useState(false);
   const docId = registro.mifiel_documento_id;
+
+  const generarContrato = async () => {
+    setGenerando(true);
+    try {
+      const r = await generarContratoPDF({ tabla, registro, datos });
+      setContratoGen(r);
+    } catch (e) { alert("No se pudo generar el contrato: " + e.message); }
+    finally { setGenerando(false); }
+  };
 
   // Carga el script del widget de MIFIEL solo cuando se abre la firma embebida
   useEffect(() => { if (firmandoBT) cargarScriptMifiel(); }, [firmandoBT]);
 
   const enviarAFirma = async () => {
-    if (!datos.email) { alert("El prospecto no tiene email registrado — es necesario para enviar el contrato a firma."); return; }
-    if (!confirm(`¿Generar el contrato de ${datos.nombre} y enviarlo a firma digital?`)) return;
+    if (!contratoGen?.url) { alert("Primero genera el contrato para revisarlo."); return; }
+    const emailFirmante = contratoGen.firmante_email || datos.email;
+    if (!emailFirmante) { alert("El prospecto no tiene email registrado — es necesario para enviar el contrato a firma."); return; }
+    if (!confirm(`¿Enviar el contrato de ${datos.nombre} a firma digital de ambas partes?`)) return;
     setEnviando(true);
     try {
       const resp = await fetch("https://bigticket2026.app.n8n.cloud/webhook/mifiel-crear-contrato", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ tabla, id: registro.id, ...datos }),
+        body: JSON.stringify({ tabla, id: registro.id, archivo_url: contratoGen.url,
+          firmante_nombre: contratoGen.firmante_nombre || datos.nombre, firmante_email: emailFirmante,
+          nombre: datos.nombre }),
       });
       const txt = await resp.text();
       if (!resp.ok || !txt || !txt.trim()) throw new Error("el servicio de contratos no respondió");
@@ -564,11 +711,31 @@ function SeccionFirmaContrato({ registro, tabla, datos, onActualizado }) {
               </div>
             ))}
           </div>
-          <button onClick={enviarAFirma} disabled={enviando}
-            style={{ width: "100%", background: "#7c3aed", color: "#fff", border: "none", borderRadius: 10,
-              padding: "12px", fontSize: 14, fontWeight: 700, cursor: "pointer", opacity: enviando ? 0.6 : 1 }}>
-            {enviando ? "Generando contrato…" : "📄 Generar contrato y enviar a firma"}
-          </button>
+          {!contratoGen ? (
+            <button onClick={generarContrato} disabled={generando}
+              style={{ width: "100%", background: "#7c3aed", color: "#fff", border: "none", borderRadius: 10,
+                padding: "12px", fontSize: 14, fontWeight: 700, cursor: "pointer", opacity: generando ? 0.6 : 1 }}>
+              {generando ? "Generando contrato…" : "📄 Generar contrato (plantilla oficial + datos)"}
+            </button>
+          ) : (
+            <>
+              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 10,
+                background: "#fff", border: "1px solid #ddd0f7", borderRadius: 10, padding: "10px 12px" }}>
+                <span style={{ fontSize: 13, fontWeight: 700, color: "#4c1d95" }}>✅ Contrato generado</span>
+                <a href={contratoGen.url} target="_blank" rel="noreferrer"
+                  style={{ fontSize: 12.5, fontWeight: 700, color: "#7c3aed" }}>📄 Revisar PDF (Hoja de Firmas y Anexo A)</a>
+                <button onClick={generarContrato} disabled={generando}
+                  style={{ marginLeft: "auto", border: "none", background: "none", color: "#7c3aed", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+                  {generando ? "Regenerando…" : "↻ Regenerar"}
+                </button>
+              </div>
+              <button onClick={enviarAFirma} disabled={enviando}
+                style={{ width: "100%", background: "#7c3aed", color: "#fff", border: "none", borderRadius: 10,
+                  padding: "12px", fontSize: 14, fontWeight: 700, cursor: "pointer", opacity: enviando ? 0.6 : 1 }}>
+                {enviando ? "Enviando a MIFIEL…" : "✍️ Enviar a firma digital (ambas partes)"}
+              </button>
+            </>
+          )}
         </>
       ) : (
         <>
