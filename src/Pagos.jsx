@@ -2824,6 +2824,7 @@ function ConciliacionTercerosMX({ usuario }) {
   const [traspasando, setTraspasando] = useState(false);
   const [traslado, setTraslado] = useState(null);              // { empresa, sc, linea, destino } — traslado manual de UN viaje
   const [trasladando, setTrasladando] = useState(false);
+  const [sincronizando, setSincronizando] = useState(null);   // clave empresa||sc en resync con motor
   const [asuntoLote, setAsuntoLote] = useState(() => { try { return localStorage.getItem("conc_mx_asunto") || ASUNTO_DEFAULT; } catch { return ASUNTO_DEFAULT; } });
   const [cuerpoLote, setCuerpoLote] = useState(() => { try { return localStorage.getItem("conc_mx_cuerpo") || CUERPO_DEFAULT; } catch { return CUERPO_DEFAULT; } });
   const [editorCorreoOpen, setEditorCorreoOpen] = useState(false);
@@ -3601,6 +3602,118 @@ function ConciliacionTercerosMX({ usuario }) {
       await cargarResumen(semana); await cargarTraspasos(semana);
     }
     setTraspasando(false);
+  };
+
+  // ── Re-sincronizar una prefactura congelada con el Motor de pagos ──
+  // El detalle guardado manda sobre el motor; si el día se recalculó DESPUÉS de congelar
+  // (aux aprobado, ajuste NS, viajes nuevos), la prefactura queda desactualizada.
+  // Este botón trae los montos y viajes nuevos del motor RESPETANDO el trabajo manual:
+  // líneas editadas a mano (✏️), manuales, importadas, traspasadas, eliminadas y saldos no se tocan.
+  const sincronizarConMotor = async (empresa, sc) => {
+    const clave = claveCierre(empresa, sc);
+    if (sincronizando) return;
+    setSincronizando(clave);
+    try {
+      // 1) motor vigente para esta empresa+SC
+      const { data: mot, error } = await sb.rpc("get_conciliacion_terceros_detalle", { p_semana: semana, p_empresa: empresa, p_sc: sc });
+      if (error) throw error;
+      const motor = (mot || []).map(d => ({ ...d, _id: lineaId(d), origen: "motor" }));
+      const motorPorId = {}; for (const d of motor) motorPorId[lineaId(d)] = d;
+      // 2) detalle congelado
+      const { filas, estado } = await leerFilasSC(empresa, sc);
+      if (estado === "enviada") throw new Error("la prefactura ya fue enviada; reabrila antes de sincronizar");
+      // 3) exclusiones: líneas eliminadas o traspasadas a otra empresa (decisiones del analista)
+      const { data: ajs } = await sb.from("conciliacion_terceros_ajustes").select("accion, linea")
+        .eq("empresa_nombre", empresa).eq("service_center", sc).eq("semana", semana).in("accion", ["eliminar", "traspaso_salida"]);
+      const excluidas = new Set((ajs || []).filter(x => x.linea).map(x => lineaId(x.linea)));
+      // 4) diff
+      const idsGuardadas = new Set(filas.map(lineaId));
+      const cambios = [];      // { antes, despues, linea }
+      const respetadasEdit = [];
+      const nuevasFilas = filas.map(d => {
+        if (d._saldo || d.traspaso) return d;
+        const org = String(d.origen || "motor");
+        if (org !== "motor") return d;                    // manuales / importadas / cargos / descuentos
+        const m = motorPorId[lineaId(d)];
+        if (!m) return d;                                  // ya no está en el motor: se informa, no se toca
+        const mMonto = Number(m.monto || 0), dMonto = Number(d.monto || 0);
+        const igualNoPago = !!m.es_no_pago === !!d.es_no_pago;
+        if (mMonto === dMonto && igualNoPago) return d;
+        if (d._editado) { respetadasEdit.push(d); return d; } // el analista fijó el monto a mano
+        cambios.push({ antes: dMonto, despues: mMonto, linea: d });
+        return { ...m, _id: lineaId(m), origen: "motor", resync: { antes: dMonto, at: new Date().toISOString() } };
+      });
+      const yaNoEnMotor = filas.filter(d => !d._saldo && !d.traspaso && String(d.origen || "motor") === "motor" && !motorPorId[lineaId(d)]);
+      const altas = motor.filter(d => !idsGuardadas.has(lineaId(d)) && !excluidas.has(lineaId(d)));
+      if (!cambios.length && !altas.length) {
+        setMsg({ ok: true, txt: `${empresa} · ${sc} ya está al día con el motor.${respetadasEdit.length ? ` (${respetadasEdit.length} línea(s) editadas a mano se respetan.)` : ""}` });
+        setSincronizando(null); return;
+      }
+      // ── Forense: POR QUÉ difiere cada línea ──
+      // Momento del congelamiento (primer evento/ajuste de esta prefactura) + desglose actual del motor
+      let congeladaTxt = "";
+      const mjPor = {}; // `${fecha}|${id_ruta}` -> fila maestro
+      try {
+        const [{ data: h1 }, { data: a1 }] = await Promise.all([
+          sb.from("conciliaciones_terceros_historial").select("evento, usuario, creado_at").eq("empresa_nombre", empresa).eq("service_center", sc).eq("semana", semana).order("creado_at", { ascending: true }).limit(1),
+          sb.from("conciliacion_terceros_ajustes").select("accion, usuario, created_at").eq("empresa_nombre", empresa).eq("service_center", sc).eq("semana", semana).order("created_at", { ascending: true }).limit(1),
+        ]);
+        const cand = [];
+        if (h1 && h1[0] && h1[0].creado_at) cand.push({ at: h1[0].creado_at, que: h1[0].evento, quien: h1[0].usuario });
+        if (a1 && a1[0] && a1[0].created_at) cand.push({ at: a1[0].created_at, que: a1[0].accion, quien: a1[0].usuario });
+        cand.sort((x, y) => String(x.at).localeCompare(String(y.at)));
+        if (cand[0]) congeladaTxt = `Prefactura congelada el ${new Date(cand[0].at).toLocaleString("es-CL")} (${cand[0].que}, ${cand[0].quien || "?"}).`;
+        const rutasDiff = [...new Set([...cambios.map(c => c.linea.id_ruta), ...altas.map(d => d.id_ruta)])].filter(Boolean);
+        if (rutasDiff.length) {
+          const rg = rangoSemanaInventario(semana);
+          const { data: mj } = await sb.from("maestro_jornada_mx")
+            .select("id_ruta, fecha, tarifa_base, ajuste_ns, monto_auxiliar, auxiliar_estado, pago_neto, calculado_at")
+            .in("id_ruta", rutasDiff).gte("fecha", rg.ini).lte("fecha", rg.fin).limit(2000);
+          for (const m of mj || []) mjPor[`${String(m.fecha).slice(0, 10)}|${m.id_ruta}`] = m;
+        }
+      } catch (e2) { console.error("forense resync:", e2); }
+      const causaDif = (antes, despues, ln) => {
+        const m = mjPor[`${String(ln.fecha || "").slice(0, 10)}|${ln.id_ruta}`];
+        if (!m) return "";
+        const dif = Math.round((despues - antes) * 100) / 100;
+        const aux = Number(m.monto_auxiliar || 0), ns = Number(m.ajuste_ns || 0);
+        if (aux && Math.abs(dif - aux) < 0.01 && String(m.auxiliar_estado || "").toUpperCase() === "APROBADO") return " ← auxiliar aprobado después del congelamiento";
+        if (aux && Math.abs(dif + aux) < 0.01) return " ← auxiliar quitado/rechazado tras el congelamiento";
+        if (ns && Math.abs(Math.abs(dif) - Math.abs(ns)) < 0.01) return " ← ajuste NS aplicado en recálculo posterior";
+        return m.calculado_at ? ` ← recálculo del día (${new Date(m.calculado_at).toLocaleString("es-CL")})` : " ← recálculo del día";
+      };
+      const causaAlta = (ln) => {
+        const m = mjPor[`${String(ln.fecha || "").slice(0, 10)}|${ln.id_ruta}`];
+        return m && m.calculado_at ? ` ← entró al motor el ${new Date(m.calculado_at).toLocaleString("es-CL")} (posterior al congelamiento)` : " ← no existía al congelar";
+      };
+      const deltaCambios = Math.round(cambios.reduce((s, c) => s + (c.despues - c.antes), 0) * 100) / 100;
+      const totalAltas = Math.round(altas.reduce((s, d) => s + Number(d.monto || 0), 0) * 100) / 100;
+      const resumenTxt = [
+        cambios.length ? `• ${cambios.length} monto(s) se actualizan (${deltaCambios >= 0 ? "+" : ""}${fmtMon(deltaCambios)}):\n${cambios.slice(0, 12).map(c => `   ${c.linea.id_ruta || "—"}: ${fmtMon(c.antes)} → ${fmtMon(c.despues)}${causaDif(c.antes, c.despues, c.linea)}`).join("\n")}${cambios.length > 12 ? `\n   ...y ${cambios.length - 12} más` : ""}` : null,
+        altas.length ? `• ${altas.length} viaje(s) del motor se agregan (${fmtMon(totalAltas)}):\n${altas.slice(0, 12).map(d => `   ${d.id_ruta || "—"} · ${fmtFechaDDMM(d.fecha)} · ${fmtMon(d.monto)}${causaAlta(d)}`).join("\n")}${altas.length > 12 ? `\n   ...y ${altas.length - 12} más` : ""}` : null,
+        respetadasEdit.length ? `• ${respetadasEdit.length} línea(s) editadas a mano NO se tocan` : null,
+        excluidas.size ? `• ${excluidas.size} línea(s) eliminadas/traspasadas NO se reponen` : null,
+        yaNoEnMotor.length ? `• ${yaNoEnMotor.length} línea(s) están en la prefactura pero ya no en el motor (revisar)` : null,
+      ].filter(Boolean).join("\n");
+      if (!confirm(`Sincronizar ${empresa} · ${sc} (semana ${semana}) con el Motor de pagos:\n${congeladaTxt ? congeladaTxt + "\n" : ""}\n${resumenTxt}\n\nLa prefactura vuelve a borrador y cada cambio queda auditado. ¿Continuar?`)) { setSincronizando(null); return; }
+      // 5) aplicar
+      const finales = [...nuevasFilas, ...altas.map(d => ({ ...d, _id: lineaId(d), origen: "motor" }))];
+      await guardarBorradorSC(empresa, sc, finales, cobrosDe(empresa, sc));
+      for (const c of cambios) await auditarAjuste(empresa, sc, "resync_monto", "motor", c.linea, `Motor: ${fmtMon(c.antes)} → ${fmtMon(c.despues)}${causaDif(c.antes, c.despues, c.linea)}`);
+      for (const d of altas) await auditarAjuste(empresa, sc, "resync_alta", "motor", d, "Viaje agregado desde el motor" + causaAlta(d));
+      await logEvento(empresa, sc, "recalcular", recalcSC(finales, cobrosDe(empresa, sc)), { detalle: { montos_actualizados: cambios.length, viajes_agregados: altas.length, delta: deltaCambios, altas_total: totalAltas } });
+      // 6) refrescar
+      setDetalles(prev => { const nx = { ...prev }; delete nx[empresa]; return nx; });
+      if (expandida && norm(expandida) === norm(empresa)) {
+        try { const rr = await leerFilasEmpresa(empresa); setDetalles(prev => ({ ...prev, [empresa]: rr.filas })); } catch (er) { console.error(er); }
+      }
+      await cargarResumen(semana);
+      setMsg({ ok: true, txt: `${empresa} · ${sc} sincronizada: ${cambios.length} monto(s) actualizados y ${altas.length} viaje(s) agregados (${deltaCambios >= 0 ? "+" : ""}${fmtMon(Math.round((deltaCambios + totalAltas) * 100) / 100)} neto). Quedó en borrador para revisar y cerrar.` });
+    } catch (e) {
+      console.error("sincronizar con motor:", e);
+      setMsg({ ok: false, txt: "Error sincronizando: " + (e.message || e) });
+    }
+    setSincronizando(null);
   };
 
   // ── Traslado manual de UN viaje a otra empresa (botón ⇄ en el detalle) ──
@@ -4756,6 +4869,12 @@ function ConciliacionTercerosMX({ usuario }) {
                               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                                 <button onClick={(e) => { e.stopPropagation(); generarPDF(g.empresa, rSC.service_center, filasSC, rSC); }}
                                   style={{ padding: "6px 12px", background: "#F47B20", color: "#fff", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>📄 PDF {rSC.service_center}</button>
+                                {rSC.tiene_ajustes && rSC.estado_conciliacion !== "enviada" && (
+                                  <button onClick={(e) => { e.stopPropagation(); sincronizarConMotor(g.empresa, rSC.service_center); }} disabled={sincronizando === clave}
+                                    title="La prefactura está congelada: trae del Motor de pagos los montos recalculados y los viajes nuevos, sin tocar ediciones manuales, importados, traspasos ni eliminados"
+                                    style={{ padding: "6px 12px", background: "#fff", color: "#0e7490", border: "1px solid #67e8f9", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer", opacity: sincronizando === clave ? 0.6 : 1 }}>
+                                    {sincronizando === clave ? "Sincronizando..." : "🔄 Sincronizar con motor"}</button>
+                                )}
                                 {(rSC.estado_conciliacion === "sin_generar" || rSC.estado_conciliacion === "borrador") ? (
                                   <button onClick={(e) => { e.stopPropagation(); cerrarConciliacion(g.empresa, rSC.service_center, rSC, filasSC); }} disabled={cerrando === clave}
                                     style={{ padding: "6px 12px", background: "#1a3a6b", color: "#fff", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer", opacity: cerrando === clave ? 0.6 : 1 }}>
