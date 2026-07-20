@@ -769,8 +769,13 @@ function AnalisisVehiculoBiggy({ cert, veh, docs, onActualizado }) {
   const analizar = async () => {
     setAnalizando(true);
     try {
-      // Fotos del vehículo desde certificacion_documentos → URLs firmadas
-      const fotos = (docs || []).filter(d => /jpe?g|png|webp/i.test(d.storage_path || ""));
+      // Fotos DEL VEHÍCULO desde certificacion_documentos → URLs firmadas.
+      // Se excluyen documentos de identidad/papeles (INE, licencia, tarjeta de
+      // circulación, comprobantes) para que Biggy analice solo la unidad.
+      const esImagen = d => /jpe?g|png|webp/i.test(d.storage_path || "");
+      const esPapel = d => /ine|licencia|circulacion|tarjeta|comprobante|curp|rfc/i.test(`${d.tipo_documento || ""} ${d.storage_path || ""}`);
+      let fotos = (docs || []).filter(d => esImagen(d) && !esPapel(d));
+      if (!fotos.length) fotos = (docs || []).filter(esImagen);   // fallback si el tipado no distingue
       if (!fotos.length) throw new Error("este vehículo no tiene fotos cargadas en su certificación");
       const urls = [];
       for (const f of fotos.slice(0, 4)) {
@@ -831,9 +836,35 @@ function AnalisisVehiculoBiggy({ cert, veh, docs, onActualizado }) {
 // Fotos capturadas por el supervisor en la entrevista (sección C). El veredicto
 // se guarda dentro del jsonb de la minuta (vehiculos[i].vision). En Etapa 5,
 // las placas de estas unidades pasan por REPUVE (Nubarium).
-function VehiculosMinutaBiggy({ candidato }) {
+function VehiculosMinutaBiggy({ candidato, etapa }) {
   const [minuta, setMinuta] = useState(undefined);   // undefined=cargando · null=sin minuta
   const [analizandoIdx, setAnalizandoIdx] = useState(null);
+  const [repuveIdx, setRepuveIdx] = useState(null);
+  const enNubarium = etapa === "validacion_nubarium";
+
+  const validarRepuve = async (i) => {
+    const v = (Array.isArray(minuta?.vehiculos) ? minuta.vehiculos : [])[i];
+    if (!v?.placa) { alert("Esta unidad no tiene placa registrada en la minuta."); return; }
+    setRepuveIdx(i);
+    try {
+      const resp = await fetch("https://bigticket2026.app.n8n.cloud/webhook/validar-repuve", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ certificacion_id: candidato.id, placa: v.placa, vin: null }),
+      });
+      const txt = await resp.text();
+      if (!resp.ok || !txt.trim()) throw new Error("el flujo REPUVE no respondió (¿activo en n8n? ¿acceso Nubarium?)");
+      const r = JSON.parse(txt);
+      const nuevos = minuta.vehiculos.map((x, ix) => ix === i ? { ...x, repuve: {
+        registrado: r.registrado ?? null, estatus_robo: r.estatus_robo ?? null,
+        marca: r.marca ?? null, modelo: r.modelo ?? null, anio: r.anio ?? null,
+        entidad: r.entidad_emplaco ?? null, at: new Date().toISOString(),
+      } } : x);
+      const { error } = await sb.from("minutas_entrevista").update({ vehiculos: nuevos }).eq("id", minuta.id);
+      if (error) throw new Error("guardando REPUVE: " + error.message);
+      setMinuta({ ...minuta, vehiculos: nuevos });
+    } catch (e) { alert("No se pudo validar en REPUVE: " + e.message); }
+    finally { setRepuveIdx(null); }
+  };
 
   useEffect(() => {
     (async () => {
@@ -852,7 +883,12 @@ function VehiculosMinutaBiggy({ candidato }) {
     setAnalizandoIdx(i);
     try {
       const v = vehs[i];
-      const paths = Object.values(v.fotos || {});
+      // Prioridad: las 4 fotos más informativas de la unidad (frente, posterior,
+      // laterales, placa); interior/odómetro/tarjeta quedan fuera del análisis.
+      const ORDEN_SLOTS = ["frente", "posterior", "lat_izq", "lat_der", "placa"];
+      const f = v.fotos || {};
+      const paths = [...ORDEN_SLOTS.filter(s => f[s]).map(s => f[s]),
+                     ...Object.keys(f).filter(s => !ORDEN_SLOTS.includes(s) && s !== "tarjeta").map(s => f[s])];
       if (!paths.length) throw new Error("esta unidad no tiene fotos en la minuta");
       const urls = [];
       for (const p of paths.slice(0, 4)) {
@@ -910,10 +946,30 @@ function VehiculosMinutaBiggy({ candidato }) {
                 <div style={{ fontSize: 12, color: col[2], lineHeight: 1.5, fontStyle: "italic" }}>"{vi.comentario}"</div>
               </div>
             )}
+            {enNubarium && (
+              <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                {v.repuve ? (
+                  <span style={{ fontSize: 12, fontWeight: 700, borderRadius: 8, padding: "7px 12px",
+                    background: (String(v.repuve.estatus_robo || "").toUpperCase().includes("ROBO") && !String(v.repuve.estatus_robo || "").toUpperCase().includes("SIN")) ? "#fee2e2" : "#eafaf0",
+                    color: (String(v.repuve.estatus_robo || "").toUpperCase().includes("ROBO") && !String(v.repuve.estatus_robo || "").toUpperCase().includes("SIN")) ? "#c0392b" : "#166534",
+                    border: "1px solid currentColor" }}>
+                    {(String(v.repuve.estatus_robo || "").toUpperCase().includes("ROBO") && !String(v.repuve.estatus_robo || "").toUpperCase().includes("SIN")) ? "⛔ CON REPORTE DE ROBO" : "✅ REPUVE"}
+                    {" · registrado: "}{v.repuve.registrado === true ? "Sí" : v.repuve.registrado === false ? "No" : "—"}
+                    {v.repuve.estatus_robo ? ` · ${v.repuve.estatus_robo}` : ""}
+                  </span>
+                ) : null}
+                <button onClick={() => validarRepuve(i)} disabled={repuveIdx !== null}
+                  style={{ marginLeft: "auto", background: v.repuve ? "#fff" : "#b45309", color: v.repuve ? "#b45309" : "#fff",
+                    border: "1.5px solid #b45309", borderRadius: 8, padding: "8px 14px", fontSize: 12, fontWeight: 700,
+                    cursor: "pointer", opacity: repuveIdx === i ? 0.6 : 1, fontFamily: "'Geist',sans-serif" }}>
+                  {repuveIdx === i ? "Consultando…" : v.repuve ? "↻ Re-consultar REPUVE" : "🔎 Validar REPUVE (placa)"}
+                </button>
+              </div>
+            )}
           </div>
         );
       })}
-      <div style={{ fontSize: 11, color: "#888" }}>En la Etapa 5, las placas de estas unidades se validan contra <b>REPUVE</b> (reporte de robo) vía Nubarium.</div>
+      {!enNubarium && <div style={{ fontSize: 11, color: "#888" }}>En la Etapa 5, cada unidad tendrá su botón de validación <b>REPUVE</b> (reporte de robo) vía Nubarium.</div>}
     </div>
   );
 }
@@ -1340,7 +1396,7 @@ Responde con este JSON exacto:
           <BiggyChatBubble analizando={analizando} analisis={analisis} score={score} recomendacion={recomendacion} alertas={alertas} onReanalizar={analizarConClaude} />
         )}
 
-        {!enEtapa1 && !enLlamada && <VehiculosMinutaBiggy candidato={candidato} />}
+        {!enEtapa1 && !enLlamada && <VehiculosMinutaBiggy candidato={candidato} etapa={candidato.etapa_kanban} />}
 
         {candidato.comentario_supervisor && !enEtapa1 && !enLlamada && (
           <div className="form-card" style={{ background: "#e8f6f9", border: "1px solid #c9e8f0" }}>
