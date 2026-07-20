@@ -11,6 +11,9 @@ const ITEMS_VACIO = {
   cantidad_vehiculos: "", tipo_vehiculos: "", cantidad_choferes: "",
   cantidad_ayudantes: "", horario: "", fecha_inicio: "",
   esquema_tarifa: "", clausulas_especiales: "", comentarios: "",
+  // Datos del contrato (Hoja de Firmas + Anexo A)
+  rfc_razon_social: "", domicilio_fiscal: "", repse: "",
+  back_to_back: "", vigencia_particular: "", tarifa_aplicable: "",
 };
 const ESQUEMAS_TARIFA = ["Tarifa por parada", "Tarifa fija diaria", "Tarifa por ruta", "Mixta", "Otro"];
 
@@ -66,8 +69,12 @@ function TareasJefeOperaciones() {
               tipo_vehiculos: m.tipo_vehiculo || "",
               cantidad_choferes: m.cantidad_choferes ?? "",
               cantidad_ayudantes: m.cantidad_ayudantes ?? "",
-              cantidad_vehiculos: m.cantidad_choferes ?? "",
+              cantidad_vehiculos: Array.isArray(m.vehiculos) ? (m.vehiculos.length || "") : "",
               horario: m.horario || "",
+              fecha_inicio: m.datos?.fields?.op_inicio || "",
+              rfc_razon_social: m.datos?.fields?.p_rfc || "",
+              domicilio_fiscal: m.datos?.fields?.p_domicilio || "",
+              repse: m.datos?.fields?.p_repse || "",
             } : { ...ITEMS_VACIO };
           }
         });
@@ -82,11 +89,12 @@ function TareasJefeOperaciones() {
 
   const completos = (it) =>
     String(it.cantidad_vehiculos) !== "" && it.tipo_vehiculos && String(it.cantidad_choferes) !== "" &&
-    String(it.cantidad_ayudantes) !== "" && it.horario.trim() && it.fecha_inicio && it.esquema_tarifa;
+    String(it.cantidad_ayudantes) !== "" && it.horario.trim() && it.fecha_inicio && it.esquema_tarifa &&
+    it.rfc_razon_social.trim() && it.domicilio_fiscal.trim() && it.back_to_back && it.tarifa_aplicable;
 
   const completar = async (t) => {
     const it = items[t.id] || ITEMS_VACIO;
-    if (!completos(it)) { alert("Completa todos los items del contrato: vehículos, tipo, choferes, ayudantes, horario, fecha de inicio y esquema de tarifa."); return; }
+    if (!completos(it)) { alert("Completa todos los items marcados con *: operación (vehículos, choferes, horario, fecha, tarifa) y datos del contrato (RFC de la razón social, domicilio fiscal, back-to-back y tarifa aplicable)."); return; }
     if (!confirm(`¿Guardar los items del contrato de ${t.titulo || "este prospecto"}? Alimentarán el contrato de la Etapa 8.`)) return;
     setBusyId(t.id);
     try {
@@ -184,6 +192,29 @@ function TareasJefeOperaciones() {
                     <option value="">Selecciona…</option>
                     {ESQUEMAS_TARIFA.map((x) => <option key={x} value={x}>{x}</option>)}
                   </select></div>
+              </div>
+              <div style={{ fontSize: 12, fontWeight: 800, color: "#0f766e", margin: "16px 0 10px", textTransform: "uppercase", letterSpacing: ".4px" }}>
+                📄 Datos del contrato · Hoja de Firmas y Anexo A
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10 }}>
+                <div><span style={lbl}>RFC de la razón social *</span>
+                  <input value={it.rfc_razon_social} onChange={(e) => setCampo(t.id, "rfc_razon_social", e.target.value.toUpperCase())} placeholder="El del contrato" style={{ ...inputStyle, fontFamily: "monospace" }} /></div>
+                <div><span style={lbl}>REPSE (si aplica)</span>
+                  <input value={it.repse} onChange={(e) => setCampo(t.id, "repse", e.target.value)} placeholder="N.º registro o vacío" style={{ ...inputStyle, fontFamily: "monospace" }} /></div>
+                <div><span style={lbl}>Operación back-to-back *</span>
+                  <select value={it.back_to_back} onChange={(e) => setCampo(t.id, "back_to_back", e.target.value)} style={inputStyle}>
+                    <option value="">Selecciona…</option><option>Sí</option><option>No</option>
+                  </select></div>
+                <div><span style={lbl}>Tarifa aplicable *</span>
+                  <select value={it.tarifa_aplicable} onChange={(e) => setCampo(t.id, "tarifa_aplicable", e.target.value)} style={inputStyle}>
+                    <option value="">Selecciona…</option><option>Tabla vigente</option><option>Especial</option>
+                  </select></div>
+                <div><span style={lbl}>Vigencia particular</span>
+                  <input value={it.vigencia_particular} onChange={(e) => setCampo(t.id, "vigencia_particular", e.target.value)} placeholder="Vacío = 12 meses renovables" style={inputStyle} /></div>
+              </div>
+              <div style={{ marginTop: 10 }}>
+                <span style={lbl}>Domicilio fiscal del transportista *</span>
+                <input value={it.domicilio_fiscal} onChange={(e) => setCampo(t.id, "domicilio_fiscal", e.target.value)} placeholder="Calle, número, colonia, municipio, CP, estado" style={inputStyle} />
               </div>
               <div style={{ marginTop: 10 }}>
                 <span style={lbl}>Cláusulas especiales (opcional)</span>
