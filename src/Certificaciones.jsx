@@ -826,6 +826,98 @@ function AnalisisVehiculoBiggy({ cert, veh, docs, onActualizado }) {
   );
 }
 
+
+// ─── 🚚 Vehículos declarados en la MINUTA (Fuente A) · Biggy Vision por unidad ───
+// Fotos capturadas por el supervisor en la entrevista (sección C). El veredicto
+// se guarda dentro del jsonb de la minuta (vehiculos[i].vision). En Etapa 5,
+// las placas de estas unidades pasan por REPUVE (Nubarium).
+function VehiculosMinutaBiggy({ candidato }) {
+  const [minuta, setMinuta] = useState(undefined);   // undefined=cargando · null=sin minuta
+  const [analizandoIdx, setAnalizandoIdx] = useState(null);
+
+  useEffect(() => {
+    (async () => {
+      const { data } = await sb.from("minutas_entrevista")
+        .select("id, vehiculos").eq("fuente", "certificaciones_mx").eq("registro_id", candidato.id)
+        .order("created_at", { ascending: false }).limit(1);
+      setMinuta((data && data[0]) || null);
+    })();
+  }, [candidato.id]);
+
+  if (minuta === undefined || minuta === null) return null;
+  const vehs = Array.isArray(minuta.vehiculos) ? minuta.vehiculos : [];
+  if (!vehs.length) return null;
+
+  const analizar = async (i) => {
+    setAnalizandoIdx(i);
+    try {
+      const v = vehs[i];
+      const paths = Object.values(v.fotos || {});
+      if (!paths.length) throw new Error("esta unidad no tiene fotos en la minuta");
+      const urls = [];
+      for (const p of paths.slice(0, 4)) {
+        const { data } = await sb.storage.from("proceso_certificacion_bt").createSignedUrl(p, 600);
+        if (data?.signedUrl) urls.push(data.signedUrl);
+      }
+      if (!urls.length) throw new Error("no se pudieron generar los enlaces de las fotos");
+      const resp = await fetch("https://bigticket2026.app.n8n.cloud/webhook/analizar-vehiculo", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fuente: "certificacion", id: candidato.id, foto_urls: urls,
+          placa: v.placa || null, modelo_declarado: [v.marca, v.tipo].filter(Boolean).join(" ") || null }),
+      });
+      const txt = await resp.text();
+      if (!resp.ok || !txt.trim()) throw new Error("Biggy Vision no respondió");
+      const r = JSON.parse(txt);
+      const nuevos = vehs.map((x, ix) => ix === i ? { ...x, vision: {
+        veredicto: r.veredicto, score: r.score, comentario: r.comentario,
+        placa_detectada: r.placa_detectada, coincide_placa: r.coincide_placa, at: new Date().toISOString(),
+      } } : x);
+      const { error } = await sb.from("minutas_entrevista").update({ vehiculos: nuevos }).eq("id", minuta.id);
+      if (error) throw new Error("guardando veredicto: " + error.message);
+      setMinuta({ ...minuta, vehiculos: nuevos });
+    } catch (e) { alert("No se pudo analizar la unidad: " + e.message); }
+    finally { setAnalizandoIdx(null); }
+  };
+
+  return (
+    <div className="form-card" style={{ background: "#eef2f7", border: "1px solid #d6def0" }}>
+      <div className="form-title" style={{ color: "#1a3a6b" }}>🚚 Vehículos de la minuta · Biggy Vision por unidad</div>
+      {vehs.map((v, i) => {
+        const nFotos = Object.keys(v.fotos || {}).length;
+        const vi = v.vision;
+        const col = vi?.veredicto === "Aprobado" ? ["#dcfce7", "#86efac", "#166534"]
+          : vi?.veredicto === "Revisar" ? ["#fef3c7", "#fcd34d", "#92400e"] : ["#fee2e2", "#fca5a5", "#c0392b"];
+        return (
+          <div key={i} style={{ background: "#fff", border: "1px solid #d6def0", borderRadius: 10, padding: "12px 14px", marginBottom: 10 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: vi ? 8 : 0 }}>
+              <span style={{ fontWeight: 800, color: "#fff", background: "#1a3a6b", borderRadius: 8, minWidth: 28, height: 28, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12 }}>{i + 1}</span>
+              <span style={{ fontFamily: "monospace", fontWeight: 700, letterSpacing: ".06em" }}>{(v.placa || "SIN PLACA").toUpperCase()}</span>
+              <span style={{ fontSize: 12, color: "#555" }}>{[v.tipo, v.marca].filter(Boolean).join(" · ") || "—"} · {nFotos} foto(s)</span>
+              <button onClick={() => analizar(i)} disabled={analizandoIdx !== null || !nFotos}
+                style={{ marginLeft: "auto", background: vi ? "#fff" : "#1a3a6b", color: vi ? "#1a3a6b" : "#fff",
+                  border: "1.5px solid #1a3a6b", borderRadius: 8, padding: "8px 14px", fontSize: 12, fontWeight: 700,
+                  cursor: nFotos ? "pointer" : "not-allowed", opacity: analizandoIdx === i ? 0.6 : 1, fontFamily: "'Geist',sans-serif" }}>
+                {analizandoIdx === i ? "Analizando…" : vi ? "↻ Re-analizar" : "🔍 Analizar con Biggy Vision"}
+              </button>
+            </div>
+            {vi && (
+              <div style={{ background: col[0], border: `1px solid ${col[1]}`, borderRadius: 8, padding: "10px 12px" }}>
+                <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 4, flexWrap: "wrap" }}>
+                  <span style={{ fontWeight: 800, color: col[2], fontSize: 13 }}>{vi.veredicto === "Aprobado" ? "✅" : vi.veredicto === "Revisar" ? "⚠️" : "❌"} {vi.veredicto}</span>
+                  {vi.placa_detectada && <span style={{ fontSize: 11.5, color: col[2] }}>placa en foto: <b style={{ fontFamily: "monospace" }}>{vi.placa_detectada}</b>{vi.coincide_placa === false && " · ⚠️ NO coincide"}</span>}
+                  {vi.score != null && <span style={{ fontWeight: 800, color: col[2], marginLeft: "auto", fontSize: 13 }}>{vi.score}/100</span>}
+                </div>
+                <div style={{ fontSize: 12, color: col[2], lineHeight: 1.5, fontStyle: "italic" }}>"{vi.comentario}"</div>
+              </div>
+            )}
+          </div>
+        );
+      })}
+      <div style={{ fontSize: 11, color: "#888" }}>En la Etapa 5, las placas de estas unidades se validan contra <b>REPUVE</b> (reporte de robo) vía Nubarium.</div>
+    </div>
+  );
+}
+
 function SeccionFirmaContrato({ registro, tabla, datos, onActualizado }) {
   const [enviando, setEnviando] = useState(false);
   const [generando, setGenerando] = useState(false);
@@ -1186,6 +1278,8 @@ Responde con este JSON exacto:
         ) : (
           <BiggyChatBubble analizando={analizando} analisis={analisis} score={score} recomendacion={recomendacion} alertas={alertas} onReanalizar={analizarConClaude} />
         )}
+
+        {!enEtapa1 && !enLlamada && <VehiculosMinutaBiggy candidato={candidato} />}
 
         {candidato.comentario_supervisor && !enEtapa1 && !enLlamada && (
           <div className="form-card" style={{ background: "#e8f6f9", border: "1px solid #c9e8f0" }}>
@@ -1611,7 +1705,7 @@ function DetalleCertificacion({ cert, etapa, onVolver, onPasarEtapa2, onMoverA, 
           <div className="form-card">
             {esVeh ? (
               <button className="btn-orange" onClick={() => onMoverA("validacion_nubarium")} style={{ width: "100%" }}>
-                ▶ Pasar a Validación REPUVE
+                ▶ Pasar a Etapa 5 · Validación Nubarium (REPUVE: placa y reporte de robo)
               </button>
             ) : (
               <button className="btn-orange" onClick={() => onMoverA("validacion_meli")} style={{ width: "100%" }}>
