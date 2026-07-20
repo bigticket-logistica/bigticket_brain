@@ -14,7 +14,11 @@ const ITEMS_VACIO = {
   // Datos del contrato (Hoja de Firmas + Anexo A)
   rfc_razon_social: "", domicilio_fiscal: "", repse: "",
   back_to_back: "", vigencia_particular: "", tarifa_aplicable: "",
+  modelos: [],   // SDD / Spot / Backup (Anexo A · tabla de modelos)
+  backup_aplica: "", backup_svc: "", backup_dias: "", backup_tipo: "",
+  backup_costo_cliente: "", backup_aprobador: "",
 };
+const MODELOS_OP = ["SDD", "Spot", "Backup"];
 const ESQUEMAS_TARIFA = ["Tarifa por parada", "Tarifa fija diaria", "Tarifa por ruta", "Mixta", "Otro"];
 
 function fmtSLAJefe(ms) {
@@ -75,6 +79,9 @@ function TareasJefeOperaciones() {
               rfc_razon_social: m.datos?.fields?.p_rfc || "",
               domicilio_fiscal: m.datos?.fields?.p_domicilio || "",
               repse: m.datos?.fields?.p_repse || "",
+              modelos: Array.isArray(m.datos?.multi?.op_modelo) ? m.datos.multi.op_modelo : [],
+              backup_aplica: (m.datos?.multi?.op_modelo || []).includes("Backup") ? "Sí" : "",
+              backup_svc: (m.datos?.multi?.op_modelo || []).includes("Backup") ? (t.sc || "") : "",
             } : { ...ITEMS_VACIO };
           }
         });
@@ -90,7 +97,10 @@ function TareasJefeOperaciones() {
   const completos = (it) =>
     String(it.cantidad_vehiculos) !== "" && it.tipo_vehiculos && String(it.cantidad_choferes) !== "" &&
     String(it.cantidad_ayudantes) !== "" && it.horario.trim() && it.fecha_inicio && it.esquema_tarifa &&
-    it.rfc_razon_social.trim() && it.domicilio_fiscal.trim() && it.back_to_back && it.tarifa_aplicable;
+    it.rfc_razon_social.trim() && it.domicilio_fiscal.trim() && it.back_to_back && it.tarifa_aplicable &&
+    (it.modelos || []).length > 0 &&
+    (!(it.modelos || []).includes("Backup") ||
+      (it.backup_aplica && it.backup_svc.trim() && it.backup_dias.trim() && it.backup_tipo && it.backup_costo_cliente && it.backup_aprobador));
 
   const completar = async (t) => {
     const it = items[t.id] || ITEMS_VACIO;
@@ -99,7 +109,8 @@ function TareasJefeOperaciones() {
     setBusyId(t.id);
     try {
       const { data, error } = await sb.rpc("completar_alta_operacional", {
-        p_tarea_id: t.id, p_datos: it,
+        p_tarea_id: t.id,
+        p_datos: { ...it, modelos_operativos: (it.modelos || []).join("/") },
         p_email: (window.__PERFIL_EMAIL || "jefe.supervisores@bigticket.mx"),
         p_nombre: (window.__PERFIL_NOMBRE || "Jefe de Supervisores"),
       });
@@ -212,6 +223,49 @@ function TareasJefeOperaciones() {
                 <div><span style={lbl}>Vigencia particular</span>
                   <input value={it.vigencia_particular} onChange={(e) => setCampo(t.id, "vigencia_particular", e.target.value)} placeholder="Vacío = 12 meses renovables" style={inputStyle} /></div>
               </div>
+              <div style={{ marginTop: 10 }}>
+                <span style={lbl}>Modelos operativos (Anexo A) *</span>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  {MODELOS_OP.map((mo) => {
+                    const on = (it.modelos || []).includes(mo);
+                    return (
+                      <span key={mo} onClick={() => setCampo(t.id, "modelos", on ? it.modelos.filter((x) => x !== mo) : [...(it.modelos || []), mo])}
+                        style={{ cursor: "pointer", userSelect: "none", borderRadius: 999, padding: "7px 16px", fontSize: 13,
+                          border: `1.5px solid ${on ? "#0f766e" : "#dfe3e8"}`, background: on ? "#0f766e" : "#fff",
+                          color: on ? "#fff" : "#555", fontWeight: on ? 700 : 400 }}>{mo}</span>
+                    );
+                  })}
+                </div>
+              </div>
+              {(it.modelos || []).includes("Backup") && (
+                <div style={{ marginTop: 12, background: "#fff8f0", border: "1px solid #f5d9b8", borderRadius: 10, padding: 12 }}>
+                  <div style={{ fontSize: 11.5, fontWeight: 800, color: "#b45309", marginBottom: 10, textTransform: "uppercase", letterSpacing: ".4px" }}>
+                    🛟 Backup Operativo (A.2) — requiere aprobación interna
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 10 }}>
+                    <div><span style={lbl}>¿Aplica Backup? *</span>
+                      <select value={it.backup_aplica} onChange={(e) => setCampo(t.id, "backup_aplica", e.target.value)} style={inputStyle}>
+                        <option value="">Selecciona…</option><option>Sí</option><option>No</option>
+                      </select></div>
+                    <div><span style={lbl}>SVC del backup *</span>
+                      <input value={it.backup_svc} onChange={(e) => setCampo(t.id, "backup_svc", e.target.value.toUpperCase())} placeholder="Ej. SMX8" style={{ ...inputStyle, fontFamily: "monospace" }} /></div>
+                    <div><span style={lbl}>Días y horario de disponibilidad *</span>
+                      <input value={it.backup_dias} onChange={(e) => setCampo(t.id, "backup_dias", e.target.value)} placeholder="Ej. L-S 07:00-15:00" style={inputStyle} /></div>
+                    <div><span style={lbl}>Tipo de vehículo *</span>
+                      <select value={it.backup_tipo} onChange={(e) => setCampo(t.id, "backup_tipo", e.target.value)} style={inputStyle}>
+                        <option value="">Selecciona…</option><option>Large Van</option><option>Small Van</option><option>Car</option>
+                      </select></div>
+                    <div><span style={lbl}>Costo reconocido por Cliente *</span>
+                      <select value={it.backup_costo_cliente} onChange={(e) => setCampo(t.id, "backup_costo_cliente", e.target.value)} style={inputStyle}>
+                        <option value="">Selecciona…</option><option>Sí</option><option>No</option><option>Costo propio BigTicket</option>
+                      </select></div>
+                    <div><span style={lbl}>Aprobador interno *</span>
+                      <select value={it.backup_aprobador} onChange={(e) => setCampo(t.id, "backup_aprobador", e.target.value)} style={inputStyle}>
+                        <option value="">Selecciona…</option><option>Operaciones</option><option>Gerencia</option><option>Finanzas</option>
+                      </select></div>
+                  </div>
+                </div>
+              )}
               <div style={{ marginTop: 10 }}>
                 <span style={lbl}>Domicilio fiscal del transportista *</span>
                 <input value={it.domicilio_fiscal} onChange={(e) => setCampo(t.id, "domicilio_fiscal", e.target.value)} placeholder="Calle, número, colonia, municipio, CP, estado" style={inputStyle} />

@@ -502,13 +502,13 @@ function cargarScriptMifiel() {
   document.head.appendChild(s);
 }
 
-// ═══ GENERADOR DE CONTRATO · plantilla ContratoTransportista v1.0 ═══
-// El Brain llena la plantilla (Storage: plantillas/contrato_transportista_v1.pdf)
-// con pdf-lib en el navegador: Hoja de Firmas (pág 11) + Anexo A (pág 13).
-// Coordenadas validadas visualmente contra la plantilla (origen abajo-izq, pts).
+// ═══ GENERADOR DE CONTRATO v2 · plantilla ContratoTransportista v1.0 ═══
+// Consolida los datos (Jefe > minuta > tarjeta), el ANALISTA los revisa y
+// puede editarlos manualmente, y el Brain llena la plantilla con pdf-lib:
+// Hoja de Firmas (pág 11) + Anexo A (pág 13) + Backup A.2 (pág 14).
 const CONTRATO_COORDS = {
   plantilla: "plantillas/contrato_transportista_v1.pdf",
-  pagFirmas: 10, pagAnexoA: 12,
+  pagFirmas: 10, pagAnexoA: 12, pagA2: 13,
   firmas: {
     dia: { x: 188, y: 318.5, s: 9 }, mes: { x: 228, y: 318.5, s: 9 }, anio: { x: 330, y: 318.5, s: 9 },
     nombre: { x: 421, y: 279, s: 8 }, rfc: { x: 338, y: 268.5, s: 8.5 }, rep: { x: 424, y: 258, s: 8.5 },
@@ -523,6 +523,14 @@ const CONTRATO_COORDS = {
     modX: 223.0, modY: { SDD: 458.3, Spot: 415.5, Backup: 377.3 },
     filasY: [293.0, 243.1, 193.2], ayudanteY: [301.0, 251.1, 201.2],
     svcX: 100, cantX: 292, ayuSiX: 350.2, ayuNoX: 375.0, obsX: 512,
+  },
+  a2: {
+    col: 311.7,
+    chkSi: { x: 322.1, y: 529.2 }, chkNo: { x: 350.5, y: 529.2 },
+    transportista: 517.7, svc: 505.6, dias: 493.6,
+    chkLarge: { x: 355.4, y: 482.8 }, chkSmall: { x: 413.1, y: 482.8 }, chkCar: { x: 444.3, y: 482.8 },
+    chkCostoSi: { x: 322.1, y: 451.9 }, chkCostoNo: { x: 350.5, y: 451.9 }, chkCostoPropio: { x: 458.0, y: 451.9 },
+    chkAprOper: { x: 364.9, y: 441.6 }, chkAprGer: { x: 418.3, y: 441.6 }, chkAprFin: { x: 470.9, y: 441.6 },
   },
 };
 
@@ -543,47 +551,53 @@ function cargarPdfLib() {
 
 const MESES_ES = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
 
-// Genera el contrato lleno y lo sube a Storage. Devuelve { path, url }.
-async function generarContratoPDF({ tabla, registro, datos }) {
-  // 1) Fuentes de datos: items del Jefe (obligatorios) + minuta del supervisor
+// Consolida las fuentes en un objeto EDITABLE por el analista.
+async function consolidarDatosContrato({ tabla, registro, datos }) {
   const { data: cos } = await sb.from("contrato_operacional")
     .select("*").eq("fuente", tabla).eq("registro_id", registro.id).limit(1);
   const co = cos && cos[0];
-  if (!co) throw new Error("no existe el alta operacional de este prospecto — el Jefe de Operaciones debe completar su tarea (Etapa Solicitud de Alta) antes de generar el contrato");
+  if (!co) throw new Error("no existe el alta operacional de este prospecto — el Jefe de Operaciones debe completar su tarea (Solicitud de Alta) antes de generar el contrato");
   const { data: ms } = await sb.from("minutas_entrevista")
     .select("*").eq("fuente", tabla).eq("registro_id", registro.id)
     .order("created_at", { ascending: false }).limit(1);
   const m = (ms && ms[0]) || {};
   const mf = m.datos?.fields || {}, mr = m.datos?.radio || {}, mm = m.datos?.multi || {};
 
-  // 2) Consolidación (Jefe manda; minuta y tarjeta respaldan)
-  const nombre    = mf.p_nombre || datos.nombre || "";
-  const rfc       = co.rfc_razon_social || mf.p_rfc || datos.rfc || "";
-  const rep       = mf.p_decide || datos.nombre || "";
-  const correo    = mf.p_correo || datos.email || "";
-  const domicilio = co.domicilio_fiscal || mf.p_domicilio || "";
-  const repse     = co.repse || mf.p_repse || "—";
-  const esMoral   = (mr.p_figura || "").startsWith("Moral");
-  const b2b       = co.back_to_back || "No";
-  const tarifa    = co.tarifa_aplicable || "Tabla vigente";
-  const vigencia  = co.vigencia_particular || "12 meses renovables";
-  const fechaIni  = co.fecha_inicio || mf.op_inicio || "";
-  const modelos   = (mm.op_modelo && mm.op_modelo.length) ? mm.op_modelo : ["SDD"];
-  const ayudante  = mr.op_ayudante === "Sí" ? "Sí" : "No";
-  const svc       = (co.sc || registro.svc || "").split("_").pop().toUpperCase();
-
-  // Líneas operativas: unidades de la minuta agrupadas por tipo (máx. 3)
   let lineas = [];
   const vehs = Array.isArray(m.vehiculos) ? m.vehiculos : [];
   if (vehs.length) {
     const porTipo = {};
     vehs.forEach(v => { const t = v.tipo || "Sin tipo"; porTipo[t] = (porTipo[t] || 0) + 1; });
-    lineas = Object.entries(porTipo).slice(0, 3).map(([tipo, n]) => ({ tipo, n }));
+    lineas = Object.entries(porTipo).slice(0, 3).map(([tipo, n]) => ({ tipo, n: String(n) }));
   } else {
-    lineas = [{ tipo: co.tipo_vehiculos || "—", n: co.cantidad_vehiculos || "" }];
+    lineas = [{ tipo: co.tipo_vehiculos || "", n: String(co.cantidad_vehiculos || "") }];
   }
 
-  // 3) Llenar la plantilla
+  return {
+    nombre:    mf.p_nombre || datos.nombre || "",
+    rfc:       co.rfc_razon_social || mf.p_rfc || datos.rfc || "",
+    rep:       mf.p_decide || datos.nombre || "",
+    correo:    mf.p_correo || datos.email || "",
+    domicilio: co.domicilio_fiscal || mf.p_domicilio || "",
+    repse:     co.repse || mf.p_repse || "",
+    figura:    (mr.p_figura || "").startsWith("Moral") ? "Moral" : "Física",
+    b2b:       co.back_to_back || "No",
+    tarifa:    co.tarifa_aplicable || "Tabla vigente",
+    vigencia:  co.vigencia_particular || "12 meses renovables",
+    fechaIni:  co.fecha_inicio || mf.op_inicio || "",
+    modelos:   (co.modelos_operativos ? co.modelos_operativos.split("/") : null) || mm.op_modelo || ["SDD"],
+    ayudante:  mr.op_ayudante === "Sí" ? "Sí" : "No",
+    svc:       ((co.sc || registro.svc || "").split("_").pop() || "").toUpperCase(),
+    lineas,
+    backup: {
+      aplica: co.backup_aplica || "", svc: co.backup_svc || "", dias: co.backup_dias || "",
+      tipo: co.backup_tipo || "", costo: co.backup_costo_cliente || "", aprobador: co.backup_aprobador || "",
+    },
+  };
+}
+
+// Llena la plantilla con los datos (posiblemente editados) y sube a Storage.
+async function generarContratoPDFDesde(D, { tabla, registro }) {
   const PDFLib = await cargarPdfLib();
   const { data: plantilla, error: eDl } = await sb.storage
     .from("proceso_certificacion_bt").download(CONTRATO_COORDS.plantilla);
@@ -591,60 +605,189 @@ async function generarContratoPDF({ tabla, registro, datos }) {
   const pdf = await PDFLib.PDFDocument.load(await plantilla.arrayBuffer());
   const font = await pdf.embedFont(PDFLib.StandardFonts.Helvetica);
   const bold = await pdf.embedFont(PDFLib.StandardFonts.HelveticaBold);
+  const negro = PDFLib.rgb(0.1, 0.1, 0.12);
   const pF = pdf.getPage(CONTRATO_COORDS.pagFirmas);
   const pA = pdf.getPage(CONTRATO_COORDS.pagAnexoA);
-  const negro = PDFLib.rgb(0.1, 0.1, 0.12);
+  const p2 = pdf.getPage(CONTRATO_COORDS.pagA2);
   const T = (pg, x, y, txt, s = 8.5) => { if (txt) pg.drawText(String(txt), { x, y, size: s, font, color: negro }); };
-  const X = (pg, c) => pg.drawText("X", { x: c.x, y: c.y, size: 9, font: bold, color: negro });
+  const X = (pg, c) => { if (c) pg.drawText("X", { x: c.x, y: c.y, size: 9, font: bold, color: negro }); };
 
-  const F = CONTRATO_COORDS.firmas, A = CONTRATO_COORDS.anexoA;
+  const F = CONTRATO_COORDS.firmas, A = CONTRATO_COORDS.anexoA, B = CONTRATO_COORDS.a2;
   const hoy = new Date();
   T(pF, F.dia.x, F.dia.y, String(hoy.getDate()).padStart(2, "0"), F.dia.s);
   T(pF, F.mes.x, F.mes.y, MESES_ES[hoy.getMonth()], F.mes.s);
   T(pF, F.anio.x, F.anio.y, String(hoy.getFullYear()).slice(-2), F.anio.s);
-  T(pF, F.nombre.x, F.nombre.y, nombre, F.nombre.s);
-  T(pF, F.rfc.x, F.rfc.y, rfc, F.rfc.s);
-  T(pF, F.rep.x, F.rep.y, rep, F.rep.s);
-  X(pF, esMoral ? F.chkMoral : F.chkFisica);
-  T(pF, F.col, F.tNombre, nombre); T(pF, F.col, F.tRfc, rfc);
-  T(pF, F.col, F.tDomicilio, domicilio, 7);
-  T(pF, F.col, F.tRep, rep); T(pF, F.col, F.tCorreo, correo); T(pF, F.col, F.tRepse, repse);
+  T(pF, F.nombre.x, F.nombre.y, D.nombre, F.nombre.s);
+  T(pF, F.rfc.x, F.rfc.y, D.rfc, F.rfc.s);
+  T(pF, F.rep.x, F.rep.y, D.rep, F.rep.s);
+  X(pF, D.figura === "Moral" ? F.chkMoral : F.chkFisica);
+  T(pF, F.col, F.tNombre, D.nombre); T(pF, F.col, F.tRfc, D.rfc);
+  T(pF, F.col, F.tDomicilio, D.domicilio, 7);
+  T(pF, F.col, F.tRep, D.rep); T(pF, F.col, F.tCorreo, D.correo); T(pF, F.col, F.tRepse, D.repse || "—");
 
-  T(pA, A.col, A.nombre, nombre); T(pA, A.col, A.rfc, rfc);
-  T(pA, A.col, A.rep, rep); T(pA, A.col, A.correo, correo);
+  T(pA, A.col, A.nombre, D.nombre); T(pA, A.col, A.rfc, D.rfc);
+  T(pA, A.col, A.rep, D.rep); T(pA, A.col, A.correo, D.correo);
   X(pA, A.chkMeli);
-  X(pA, b2b === "Sí" ? A.chkB2bSi : A.chkB2bNo);
-  T(pA, A.col, A.fechaInicio, fechaIni); T(pA, A.col, A.vigencia, vigencia);
-  modelos.forEach(mo => { if (A.modY[mo]) pA.drawText("X", { x: A.modX, y: A.modY[mo], size: 9, font: bold, color: negro }); });
-  lineas.forEach((l, i) => {
-    T(pA, A.svcX, A.filasY[i], svc, 8);
-    T(pA, A.cantX, A.filasY[i], String(l.n), 8);
-    pA.drawText("X", { x: ayudante === "Sí" ? A.ayuSiX : A.ayuNoX, y: A.ayudanteY[i], size: 9, font: bold, color: negro });
-    T(pA, A.obsX, A.filasY[i] + 4, l.tipo, 6.5);
-    T(pA, A.obsX, A.filasY[i] - 3, tarifa, 6.5);
+  X(pA, D.b2b === "Sí" ? A.chkB2bSi : A.chkB2bNo);
+  T(pA, A.col, A.fechaInicio, D.fechaIni); T(pA, A.col, A.vigencia, D.vigencia);
+  (D.modelos || []).forEach(mo => { if (A.modY[mo]) X(pA, { x: A.modX, y: A.modY[mo] }); });
+  (D.lineas || []).slice(0, 3).forEach((l, i) => {
+    if (!l.tipo && !l.n) return;
+    T(pA, A.svcX, A.filasY[i], D.svc, 8);
+    T(pA, A.cantX, A.filasY[i], l.n, 8);
+    X(pA, { x: D.ayudante === "Sí" ? A.ayuSiX : A.ayuNoX, y: A.ayudanteY[i] });
+    T(pA, A.obsX, A.filasY[i] + 9, l.tipo, 6.5);
+    T(pA, A.obsX, A.filasY[i] + 1, (D.modelos || []).join("/"), 6.5);
+    T(pA, A.obsX, A.filasY[i] - 7, D.tarifa, 6.5);
   });
 
-  // 4) Subir a Storage y devolver enlace firmado
+  // A.2 Backup Operativo (solo si el modelo Backup está en juego)
+  const bk = D.backup || {};
+  if ((D.modelos || []).includes("Backup") || bk.aplica) {
+    X(p2, bk.aplica === "Sí" ? B.chkSi : B.chkNo);
+    if (bk.aplica === "Sí") {
+      T(p2, B.col, B.transportista, D.nombre);
+      T(p2, B.col, B.svc, bk.svc);
+      T(p2, B.col, B.dias, bk.dias);
+      X(p2, bk.tipo === "Large Van" ? B.chkLarge : bk.tipo === "Small Van" ? B.chkSmall : bk.tipo === "Car" ? B.chkCar : null);
+      X(p2, bk.costo === "Sí" ? B.chkCostoSi : bk.costo === "No" ? B.chkCostoNo : bk.costo ? B.chkCostoPropio : null);
+      X(p2, bk.aprobador === "Operaciones" ? B.chkAprOper : bk.aprobador === "Gerencia" ? B.chkAprGer : bk.aprobador === "Finanzas" ? B.chkAprFin : null);
+    }
+  }
+
   const bytes = await pdf.save();
   const path = `contratos_generados/${tabla}/${registro.id}.pdf`;
   const { error: eUp } = await sb.storage.from("proceso_certificacion_bt")
     .upload(path, new Blob([bytes], { type: "application/pdf" }), { contentType: "application/pdf", upsert: true });
   if (eUp) throw new Error("no se pudo guardar el contrato generado: " + eUp.message);
   const { data: su } = await sb.storage.from("proceso_certificacion_bt").createSignedUrl(path, 3600);
-  return { path, url: su?.signedUrl || null, firmante_nombre: rep || nombre, firmante_email: correo, nombre };
+  return { path, url: su?.signedUrl || null };
+}
+
+// ── Formulario de revisión manual del ANALISTA (a nivel de módulo:
+//    identidad estable para que los inputs no pierdan el foco) ──
+const CG_INP = { width: "100%", boxSizing: "border-box", border: "1px solid #ddd0f7", borderRadius: 8, padding: "8px 10px", fontSize: 12.5, fontFamily: "'Geist',sans-serif", background: "#fff" };
+const CG_LBL = { fontSize: 9.5, fontWeight: 700, color: "#7c6f96", textTransform: "uppercase", letterSpacing: ".04em", marginBottom: 3, display: "block" };
+function CGField({ label, children }) {
+  return (<div><span style={CG_LBL}>{label}</span>{children}</div>);
+}
+function EditorContrato({ D, setD, generando, onGenerar }) {
+  const S = (k, v) => setD((p) => ({ ...p, [k]: v }));
+  const SB_ = (k, v) => setD((p) => ({ ...p, backup: { ...p.backup, [k]: v } }));
+  const SL = (i, k, v) => setD((p) => ({ ...p, lineas: p.lineas.map((l, ix) => ix === i ? { ...l, [k]: v } : l) }));
+  const grid = { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 10 };
+  return (
+    <div style={{ background: "#fff", border: "1px solid #ddd0f7", borderRadius: 10, padding: 14, marginBottom: 12 }}>
+      <div style={{ fontSize: 12, fontWeight: 800, color: "#7c3aed", marginBottom: 10, textTransform: "uppercase", letterSpacing: ".4px" }}>
+        Revisión del analista · datos que se estamparán en el contrato
+      </div>
+      <div style={grid}>
+        <CGField label="Nombre / Razón social"><input style={CG_INP} value={D.nombre} onChange={(e) => S("nombre", e.target.value)} /></CGField>
+        <CGField label="RFC de la razón social"><input style={{ ...CG_INP, fontFamily: "monospace" }} value={D.rfc} onChange={(e) => S("rfc", e.target.value.toUpperCase())} /></CGField>
+        <CGField label="Figura jurídica">
+          <select style={CG_INP} value={D.figura} onChange={(e) => S("figura", e.target.value)}>
+            <option>Moral</option><option>Física</option>
+          </select></CGField>
+        <CGField label="Representante / Titular (firmante)"><input style={CG_INP} value={D.rep} onChange={(e) => S("rep", e.target.value)} /></CGField>
+        <CGField label="Correo del firmante"><input style={CG_INP} value={D.correo} onChange={(e) => S("correo", e.target.value)} /></CGField>
+        <CGField label="REPSE (si aplica)"><input style={{ ...CG_INP, fontFamily: "monospace" }} value={D.repse} onChange={(e) => S("repse", e.target.value)} /></CGField>
+      </div>
+      <div style={{ marginTop: 10 }}>
+        <CGField label="Domicilio fiscal"><input style={CG_INP} value={D.domicilio} onChange={(e) => S("domicilio", e.target.value)} /></CGField>
+      </div>
+      <div style={{ ...grid, marginTop: 10 }}>
+        <CGField label="Operación back-to-back">
+          <select style={CG_INP} value={D.b2b} onChange={(e) => S("b2b", e.target.value)}><option>Sí</option><option>No</option></select></CGField>
+        <CGField label="Tarifa aplicable">
+          <select style={CG_INP} value={D.tarifa} onChange={(e) => S("tarifa", e.target.value)}><option>Tabla vigente</option><option>Especial</option></select></CGField>
+        <CGField label="Fecha inicio operación"><input type="date" style={CG_INP} value={D.fechaIni} onChange={(e) => S("fechaIni", e.target.value)} /></CGField>
+        <CGField label="Vigencia particular"><input style={CG_INP} value={D.vigencia} onChange={(e) => S("vigencia", e.target.value)} /></CGField>
+        <CGField label="¿Opera con ayudante?">
+          <select style={CG_INP} value={D.ayudante} onChange={(e) => S("ayudante", e.target.value)}><option>Sí</option><option>No</option></select></CGField>
+        <CGField label="SVC de las líneas"><input style={{ ...CG_INP, fontFamily: "monospace" }} value={D.svc} onChange={(e) => S("svc", e.target.value.toUpperCase())} /></CGField>
+      </div>
+      <div style={{ marginTop: 10 }}>
+        <span style={CG_LBL}>Modelos operativos (Anexo A)</span>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {["SDD", "Spot", "Backup"].map((mo) => {
+            const on = (D.modelos || []).includes(mo);
+            return (
+              <span key={mo} onClick={() => S("modelos", on ? D.modelos.filter((x) => x !== mo) : [...(D.modelos || []), mo])}
+                style={{ cursor: "pointer", userSelect: "none", borderRadius: 999, padding: "6px 14px", fontSize: 12.5,
+                  border: `1.5px solid ${on ? "#7c3aed" : "#ddd0f7"}`, background: on ? "#7c3aed" : "#fff",
+                  color: on ? "#fff" : "#555", fontWeight: on ? 700 : 400 }}>{mo}</span>
+            );
+          })}
+        </div>
+      </div>
+      <div style={{ marginTop: 10 }}>
+        <span style={CG_LBL}>Líneas operativas (Anexo A · máx. 3)</span>
+        {(D.lineas || []).map((l, i) => (
+          <div key={i} style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 6 }}>
+            <span style={{ fontSize: 12, fontWeight: 700, color: "#7c3aed", width: 16 }}>{i + 1}</span>
+            <select style={{ ...CG_INP, flex: 2 }} value={l.tipo} onChange={(e) => SL(i, "tipo", e.target.value)}>
+              <option value="">— Tipo —</option><option>Large Van</option><option>Medium Van</option><option>Small Van</option><option>Car</option>
+            </select>
+            <input type="number" min="0" placeholder="Cant." style={{ ...CG_INP, flex: 1, fontFamily: "monospace" }} value={l.n} onChange={(e) => SL(i, "n", e.target.value)} />
+            <button onClick={() => setD((p) => ({ ...p, lineas: p.lineas.filter((_, ix) => ix !== i) }))}
+              style={{ border: "none", background: "none", color: "#c0392b", fontSize: 11.5, fontWeight: 700, cursor: "pointer" }}>Quitar</button>
+          </div>
+        ))}
+        {(D.lineas || []).length < 3 && (
+          <button onClick={() => setD((p) => ({ ...p, lineas: [...(p.lineas || []), { tipo: "", n: "" }] }))}
+            style={{ border: "1.5px dashed #ddd0f7", background: "#faf7ff", color: "#7c3aed", borderRadius: 8, padding: "7px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "'Geist',sans-serif" }}>
+            + Agregar línea
+          </button>
+        )}
+      </div>
+      {(D.modelos || []).includes("Backup") && (
+        <div style={{ marginTop: 12, background: "#fff8f0", border: "1px solid #f5d9b8", borderRadius: 10, padding: 12 }}>
+          <div style={{ fontSize: 10.5, fontWeight: 800, color: "#b45309", marginBottom: 8, textTransform: "uppercase" }}>🛟 Backup Operativo (A.2)</div>
+          <div style={grid}>
+            <CGField label="¿Aplica?"><select style={CG_INP} value={D.backup.aplica} onChange={(e) => SB_("aplica", e.target.value)}><option value="">—</option><option>Sí</option><option>No</option></select></CGField>
+            <CGField label="SVC"><input style={{ ...CG_INP, fontFamily: "monospace" }} value={D.backup.svc} onChange={(e) => SB_("svc", e.target.value.toUpperCase())} /></CGField>
+            <CGField label="Días y horario"><input style={CG_INP} value={D.backup.dias} onChange={(e) => SB_("dias", e.target.value)} /></CGField>
+            <CGField label="Tipo de vehículo"><select style={CG_INP} value={D.backup.tipo} onChange={(e) => SB_("tipo", e.target.value)}><option value="">—</option><option>Large Van</option><option>Small Van</option><option>Car</option></select></CGField>
+            <CGField label="Costo reconocido por Cliente"><select style={CG_INP} value={D.backup.costo} onChange={(e) => SB_("costo", e.target.value)}><option value="">—</option><option>Sí</option><option>No</option><option>Costo propio BigTicket</option></select></CGField>
+            <CGField label="Aprobador interno"><select style={CG_INP} value={D.backup.aprobador} onChange={(e) => SB_("aprobador", e.target.value)}><option value="">—</option><option>Operaciones</option><option>Gerencia</option><option>Finanzas</option></select></CGField>
+          </div>
+        </div>
+      )}
+      <button onClick={onGenerar} disabled={generando}
+        style={{ width: "100%", marginTop: 12, background: "#7c3aed", color: "#fff", border: "none", borderRadius: 10,
+          padding: "12px", fontSize: 13.5, fontWeight: 700, cursor: "pointer", opacity: generando ? 0.6 : 1, fontFamily: "'Geist',sans-serif" }}>
+        {generando ? "Generando PDF…" : "📄 Generar PDF del contrato con estos datos"}
+      </button>
+    </div>
+  );
 }
 
 function SeccionFirmaContrato({ registro, tabla, datos, onActualizado }) {
   const [enviando, setEnviando] = useState(false);
   const [generando, setGenerando] = useState(false);
-  const [contratoGen, setContratoGen] = useState(null);   // { path, url, firmante_nombre, firmante_email }
+  const [D, setD] = useState(null);               // datos consolidados EDITABLES por el analista
+  const [contratoGen, setContratoGen] = useState(null);   // { path, url }
   const [firmandoBT, setFirmandoBT] = useState(false);
   const docId = registro.mifiel_documento_id;
 
-  const generarContrato = async () => {
+  // Paso 1: consolidar datos (Jefe > minuta > tarjeta) y abrir el editor
+  const prepararContrato = async () => {
     setGenerando(true);
     try {
-      const r = await generarContratoPDF({ tabla, registro, datos });
+      const d = await consolidarDatosContrato({ tabla, registro, datos });
+      setD(d); setContratoGen(null);
+    } catch (e) { alert("No se pudo preparar el contrato: " + e.message); }
+    finally { setGenerando(false); }
+  };
+
+  // Paso 2: generar el PDF con los datos revisados/editados
+  const generarContrato = async () => {
+    if (!D.nombre.trim() || !D.rfc.trim() || !D.domicilio.trim()) {
+      alert("Nombre, RFC y domicilio fiscal son obligatorios para el contrato."); return;
+    }
+    setGenerando(true);
+    try {
+      const r = await generarContratoPDFDesde(D, { tabla, registro });
       setContratoGen(r);
     } catch (e) { alert("No se pudo generar el contrato: " + e.message); }
     finally { setGenerando(false); }
@@ -655,7 +798,7 @@ function SeccionFirmaContrato({ registro, tabla, datos, onActualizado }) {
 
   const enviarAFirma = async () => {
     if (!contratoGen?.url) { alert("Primero genera el contrato para revisarlo."); return; }
-    const emailFirmante = contratoGen.firmante_email || datos.email;
+    const emailFirmante = (D && D.correo) || datos.email;
     if (!emailFirmante) { alert("El prospecto no tiene email registrado — es necesario para enviar el contrato a firma."); return; }
     if (!confirm(`¿Enviar el contrato de ${datos.nombre} a firma digital de ambas partes?`)) return;
     setEnviando(true);
@@ -663,8 +806,8 @@ function SeccionFirmaContrato({ registro, tabla, datos, onActualizado }) {
       const resp = await fetch("https://bigticket2026.app.n8n.cloud/webhook/mifiel-crear-contrato", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ tabla, id: registro.id, archivo_url: contratoGen.url,
-          firmante_nombre: contratoGen.firmante_nombre || datos.nombre, firmante_email: emailFirmante,
-          nombre: datos.nombre }),
+          firmante_nombre: (D && (D.rep || D.nombre)) || datos.nombre, firmante_email: emailFirmante,
+          nombre: (D && D.nombre) || datos.nombre }),
       });
       const txt = await resp.text();
       if (!resp.ok || !txt || !txt.trim()) throw new Error("el servicio de contratos no respondió");
@@ -711,29 +854,34 @@ function SeccionFirmaContrato({ registro, tabla, datos, onActualizado }) {
               </div>
             ))}
           </div>
-          {!contratoGen ? (
-            <button onClick={generarContrato} disabled={generando}
+          {!D ? (
+            <button onClick={prepararContrato} disabled={generando}
               style={{ width: "100%", background: "#7c3aed", color: "#fff", border: "none", borderRadius: 10,
                 padding: "12px", fontSize: 14, fontWeight: 700, cursor: "pointer", opacity: generando ? 0.6 : 1 }}>
-              {generando ? "Generando contrato…" : "📄 Generar contrato (plantilla oficial + datos)"}
+              {generando ? "Consolidando datos…" : "📄 Preparar contrato (revisión del analista)"}
             </button>
           ) : (
             <>
-              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 10,
-                background: "#fff", border: "1px solid #ddd0f7", borderRadius: 10, padding: "10px 12px" }}>
-                <span style={{ fontSize: 13, fontWeight: 700, color: "#4c1d95" }}>✅ Contrato generado</span>
-                <a href={contratoGen.url} target="_blank" rel="noreferrer"
-                  style={{ fontSize: 12.5, fontWeight: 700, color: "#7c3aed" }}>📄 Revisar PDF (Hoja de Firmas y Anexo A)</a>
-                <button onClick={generarContrato} disabled={generando}
-                  style={{ marginLeft: "auto", border: "none", background: "none", color: "#7c3aed", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
-                  {generando ? "Regenerando…" : "↻ Regenerar"}
-                </button>
-              </div>
-              <button onClick={enviarAFirma} disabled={enviando}
-                style={{ width: "100%", background: "#7c3aed", color: "#fff", border: "none", borderRadius: 10,
-                  padding: "12px", fontSize: 14, fontWeight: 700, cursor: "pointer", opacity: enviando ? 0.6 : 1 }}>
-                {enviando ? "Enviando a MIFIEL…" : "✍️ Enviar a firma digital (ambas partes)"}
-              </button>
+              {!contratoGen && <EditorContrato D={D} setD={setD} generando={generando} onGenerar={generarContrato} />}
+              {contratoGen && (
+                <>
+                  <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 10,
+                    background: "#fff", border: "1px solid #ddd0f7", borderRadius: 10, padding: "10px 12px" }}>
+                    <span style={{ fontSize: 13, fontWeight: 700, color: "#4c1d95" }}>✅ Contrato generado</span>
+                    <a href={contratoGen.url} target="_blank" rel="noreferrer"
+                      style={{ fontSize: 12.5, fontWeight: 700, color: "#7c3aed" }}>📄 Revisar PDF (Hoja de Firmas, Anexo A y A.2)</a>
+                    <button onClick={() => setContratoGen(null)}
+                      style={{ marginLeft: "auto", border: "none", background: "none", color: "#7c3aed", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+                      ✏️ Editar datos y regenerar
+                    </button>
+                  </div>
+                  <button onClick={enviarAFirma} disabled={enviando}
+                    style={{ width: "100%", background: "#7c3aed", color: "#fff", border: "none", borderRadius: 10,
+                      padding: "12px", fontSize: 14, fontWeight: 700, cursor: "pointer", opacity: enviando ? 0.6 : 1 }}>
+                    {enviando ? "Enviando a MIFIEL…" : "✍️ Enviar a firma digital (ambas partes)"}
+                  </button>
+                </>
+              )}
             </>
           )}
         </>
