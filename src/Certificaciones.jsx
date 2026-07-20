@@ -918,6 +918,67 @@ function VehiculosMinutaBiggy({ candidato }) {
   );
 }
 
+
+// ─── 🔎 Validación REPUVE (Etapa 5 · Nubarium) — placa y reporte de robo ───
+function ValidacionRepuve({ cert, veh, onMoverA, onVehActualizado }) {
+  const [validando, setValidando] = useState(false);
+
+  const ejecutar = async () => {
+    if (!veh?.placa) { alert("Este vehículo no tiene placa registrada."); return; }
+    setValidando(true);
+    try {
+      const resp = await fetch("https://bigticket2026.app.n8n.cloud/webhook/validar-repuve", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ certificacion_id: cert.id, placa: veh.placa, vin: veh.vin || null }),
+      });
+      const txt = await resp.text();
+      if (!resp.ok || !txt.trim()) throw new Error("el flujo REPUVE no respondió (¿está activo en n8n? ¿acceso Nubarium restablecido?)");
+      // Releer la fila para reflejar lo guardado
+      const { data } = await sb.from("certificacion_vehiculo").select("*").eq("certificacion_id", cert.id).limit(1);
+      if (data && data[0]) onVehActualizado(data[0]);
+    } catch (e) { alert("No se pudo validar en REPUVE: " + e.message); }
+    finally { setValidando(false); }
+  };
+
+  const yaValidado = veh?.repuve_raw || veh?.estatus_robo || veh?.repuve_id;
+  const conRobo = (veh?.estatus_robo || "").toString().toUpperCase().includes("ROBO") &&
+                  !(veh?.estatus_robo || "").toString().toUpperCase().includes("SIN");
+  return (
+    <div className="form-card" style={{ background: "#fff8f0", border: "1px solid #f5d9b8" }}>
+      <div className="form-title" style={{ color: "#b45309" }}>🔎 Etapa 5 · Validación Nubarium (REPUVE)</div>
+      <div style={{ fontSize: 13, color: "#7a5a2f", marginBottom: 10 }}>
+        Consulta la placa <b style={{ fontFamily: "monospace" }}>{(veh?.placa || "—").toUpperCase()}</b> en el Registro
+        Público Vehicular: existencia, datos oficiales y <b>reporte de robo</b>.
+      </div>
+      {yaValidado && (
+        <div style={{ background: conRobo ? "#fee2e2" : "#eafaf0", border: `1px solid ${conRobo ? "#fca5a5" : "#b7e4c7"}`, borderRadius: 8, padding: "10px 12px", marginBottom: 10, fontSize: 12.5, color: conRobo ? "#c0392b" : "#166534" }}>
+        <b>{conRobo ? "⛔ CON REPORTE DE ROBO" : "✅ Consulta REPUVE registrada"}</b>
+          {" · "}Registrado: <b>{veh.registrado === true ? "Sí" : veh.registrado === false ? "No" : "—"}</b>
+          {veh.estatus_robo ? <> · Estatus: <b>{String(veh.estatus_robo)}</b></> : null}
+          {veh.marca ? <> · {[veh.marca, veh.modelo, veh.anio].filter(Boolean).join(" ")}</> : null}
+          {veh.entidad_emplaco ? <> · {veh.entidad_emplaco}</> : null}
+        </div>
+      )}
+      <button onClick={ejecutar} disabled={validando}
+        style={{ width: "100%", background: yaValidado ? "#fff" : "#b45309", color: yaValidado ? "#b45309" : "#fff",
+          border: "1.5px solid #b45309", borderRadius: 8, padding: "11px", fontSize: 13, fontWeight: 700,
+          cursor: "pointer", opacity: validando ? 0.6 : 1, marginBottom: 10, fontFamily: "'Geist',sans-serif" }}>
+        {validando ? "Consultando REPUVE…" : yaValidado ? "↻ Re-consultar REPUVE" : "🔎 Ejecutar validación REPUVE"}
+      </button>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <button onClick={() => onMoverA("aceptado")} disabled={!yaValidado || conRobo}
+          style={{ flex: 1, minWidth: 160, background: "#16a34a", color: "#fff", border: "none", borderRadius: 8, padding: "11px", fontSize: 13, fontWeight: 700, cursor: yaValidado && !conRobo ? "pointer" : "not-allowed", opacity: yaValidado && !conRobo ? 1 : 0.45 }}>
+          ✓ Certificado → Aceptado
+        </button>
+        <button onClick={() => { if (confirm("¿Rechazar este vehículo?")) onMoverA("rechazado"); }}
+          style={{ flex: 1, minWidth: 160, background: "#fff", color: "#c0392b", border: "1.5px solid #f0c4c4", borderRadius: 8, padding: "11px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
+          ✕ Rechazar vehículo
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function SeccionFirmaContrato({ registro, tabla, datos, onActualizado }) {
   const [enviando, setEnviando] = useState(false);
   const [generando, setGenerando] = useState(false);
@@ -1755,11 +1816,8 @@ function DetalleCertificacion({ cert, etapa, onVolver, onPasarEtapa2, onMoverA, 
           </div>
         )}
         {esVeh && etapaActual === "validacion_nubarium" && (
-          <div className="form-card">
-            <button className="btn-orange" onClick={() => onMoverA("aceptado")} style={{ width: "100%" }}>
-              ✓ REPUVE validado → Aceptado
-            </button>
-          </div>
+          <ValidacionRepuve cert={cert} veh={veh} onMoverA={onMoverA}
+            onVehActualizado={(v) => { cert._vehiculo = v; setDocsCert(d => d ? [...d] : d); }} />
         )}
         {etapaActual === "rechazado" && (
           <div className="form-card" style={{ background: "#fdecec", border: "1px solid #f5c2c2" }}>
