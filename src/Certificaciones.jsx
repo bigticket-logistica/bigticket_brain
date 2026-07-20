@@ -762,6 +762,70 @@ function EditorContrato({ D, setD, generando, onGenerar }) {
   );
 }
 
+
+// ─── 🔍 Biggy Vision Vehicular (Fuente B): fotos vs placa declarada ───
+function AnalisisVehiculoBiggy({ cert, veh, docs, onActualizado }) {
+  const [analizando, setAnalizando] = useState(false);
+  const analizar = async () => {
+    setAnalizando(true);
+    try {
+      // Fotos del vehículo desde certificacion_documentos → URLs firmadas
+      const fotos = (docs || []).filter(d => /jpe?g|png|webp/i.test(d.storage_path || ""));
+      if (!fotos.length) throw new Error("este vehículo no tiene fotos cargadas en su certificación");
+      const urls = [];
+      for (const f of fotos.slice(0, 4)) {
+        const { data } = await sb.storage.from("proceso_certificacion_bt").createSignedUrl(f.storage_path, 600);
+        if (data?.signedUrl) urls.push(data.signedUrl);
+      }
+      if (!urls.length) throw new Error("no se pudieron generar los enlaces de las fotos");
+      const resp = await fetch("https://bigticket2026.app.n8n.cloud/webhook/analizar-vehiculo", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fuente: "certificacion", id: cert.id, foto_urls: urls,
+          placa: veh?.placa || null, modelo_declarado: [veh?.marca, veh?.modelo].filter(Boolean).join(" ") || null }),
+      });
+      const txt = await resp.text();
+      if (!resp.ok || !txt.trim()) throw new Error("Biggy Vision no respondió");
+      const r = JSON.parse(txt);
+      onActualizado({ vehiculo_veredicto: r.veredicto, vehiculo_score: r.score,
+        vehiculo_comentario: r.comentario, vehiculo_placa_detectada: r.placa_detectada,
+        vehiculo_analizado_at: new Date().toISOString() });
+    } catch (e) { alert("No se pudo analizar el vehículo: " + e.message); }
+    finally { setAnalizando(false); }
+  };
+
+  const v = cert.vehiculo_veredicto;
+  const colores = v === "Aprobado" ? ["#dcfce7", "#86efac", "#166534"] : v === "Revisar" ? ["#fef3c7", "#fcd34d", "#92400e"] : ["#fee2e2", "#fca5a5", "#c0392b"];
+  return (
+    <div className="form-card" style={{ background: "#eef2f7", border: "1px solid #d6def0" }}>
+      <div className="form-title" style={{ color: "#1a3a6b" }}>🔍 Biggy Vision Vehicular</div>
+      {v ? (
+        <div style={{ background: colores[0], border: `1px solid ${colores[1]}`, borderRadius: 10, padding: "12px 14px", marginBottom: 10 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6, flexWrap: "wrap" }}>
+            <span style={{ fontWeight: 800, color: colores[2] }}>{v === "Aprobado" ? "✅" : v === "Revisar" ? "⚠️" : "❌"} {v}</span>
+            {cert.vehiculo_score != null && <span style={{ fontWeight: 800, color: colores[2], marginLeft: "auto" }}>{cert.vehiculo_score}/100</span>}
+          </div>
+          {cert.vehiculo_placa_detectada && (
+            <div style={{ fontSize: 12, color: colores[2], marginBottom: 4 }}>
+              Placa detectada en foto: <b style={{ fontFamily: "monospace" }}>{cert.vehiculo_placa_detectada}</b>
+              {veh?.placa && <> · declarada: <b style={{ fontFamily: "monospace" }}>{veh.placa}</b></>}
+            </div>
+          )}
+          <div style={{ fontSize: 12.5, color: colores[2], lineHeight: 1.55, fontStyle: "italic" }}>"{cert.vehiculo_comentario}"</div>
+        </div>
+      ) : (
+        <div style={{ fontSize: 13, color: "#1a3a6b", marginBottom: 10 }}>
+          Biggy analiza las fotos del vehículo contra la placa y el modelo declarados. El track <b>REPUVE</b> (Nubarium) valida después los datos oficiales.
+        </div>
+      )}
+      <button onClick={analizar} disabled={analizando}
+        style={{ width: "100%", background: v ? "#fff" : "#1a3a6b", color: v ? "#1a3a6b" : "#fff",
+          border: "1.5px solid #1a3a6b", borderRadius: 8, padding: "11px", fontSize: 13, fontWeight: 700, cursor: "pointer", opacity: analizando ? 0.6 : 1, fontFamily: "'Geist',sans-serif" }}>
+        {analizando ? "Biggy analizando fotos…" : v ? "↻ Re-analizar con Biggy Vision" : "🔍 Analizar fotos con Biggy Vision"}
+      </button>
+    </div>
+  );
+}
+
 function SeccionFirmaContrato({ registro, tabla, datos, onActualizado }) {
   const [enviando, setEnviando] = useState(false);
   const [generando, setGenerando] = useState(false);
@@ -1538,9 +1602,8 @@ function DetalleCertificacion({ cert, etapa, onVolver, onPasarEtapa2, onMoverA, 
           <BiggyChatBubble analizando={analizando} analisis={analisis} score={score} recomendacion={recomendacion} alertas={alertas} onReanalizar={() => docsCert && analizarCert(docsCert)} />
         )}
         {!enEtapa1 && esVeh && (
-          <div className="form-card" style={{ background: "#eef2f7", border: "1px solid #d6def0" }}>
-            <div style={{ fontSize: 13, color: "#1a3a6b" }}>Vehículo en <b>{ETAPA_CORTA[etapaActual] || etapaActual}</b>. La validación por Claude Vision (fotos vs modelo declarado) se conecta con el track <b>REPUVE</b>.</div>
-          </div>
+          <AnalisisVehiculoBiggy cert={cert} veh={veh} docs={docsCert}
+            onActualizado={(patch) => { Object.assign(cert, patch); sb.from("certificaciones").update(patch).eq("id", cert.id); setDocsCert(d => d ? [...d] : d); }} />
         )}
 
         {/* Etapa 2 → siguiente: MELI (persona) / REPUVE (vehículo, sin pasar por MELI) */}
