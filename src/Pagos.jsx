@@ -4869,7 +4869,7 @@ function ConciliacionTercerosMX({ usuario }) {
                               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                                 <button onClick={(e) => { e.stopPropagation(); generarPDF(g.empresa, rSC.service_center, filasSC, rSC); }}
                                   style={{ padding: "6px 12px", background: "#F47B20", color: "#fff", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>📄 PDF {rSC.service_center}</button>
-                                {rSC.tiene_ajustes && rSC.estado_conciliacion !== "enviada" && (
+                                {rSC.estado_conciliacion && rSC.estado_conciliacion !== "sin_generar" && rSC.estado_conciliacion !== "enviada" && (
                                   <button onClick={(e) => { e.stopPropagation(); sincronizarConMotor(g.empresa, rSC.service_center); }} disabled={sincronizando === clave}
                                     title="La prefactura está congelada: trae del Motor de pagos los montos recalculados y los viajes nuevos, sin tocar ediciones manuales, importados, traspasos ni eliminados"
                                     style={{ padding: "6px 12px", background: "#fff", color: "#0e7490", border: "1px solid #67e8f9", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer", opacity: sincronizando === clave ? 0.6 : 1 }}>
