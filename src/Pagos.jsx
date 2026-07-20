@@ -2822,6 +2822,8 @@ function ConciliacionTercerosMX({ usuario }) {
   const [traspBusy, setTraspBusy] = useState(false);
   const [trasp, setTrasp] = useState(null);                    // modal traspasador { placa, cargando, grupos, sel, destino }
   const [traspasando, setTraspasando] = useState(false);
+  const [traslado, setTraslado] = useState(null);              // { empresa, sc, linea, destino } — traslado manual de UN viaje
+  const [trasladando, setTrasladando] = useState(false);
   const [asuntoLote, setAsuntoLote] = useState(() => { try { return localStorage.getItem("conc_mx_asunto") || ASUNTO_DEFAULT; } catch { return ASUNTO_DEFAULT; } });
   const [cuerpoLote, setCuerpoLote] = useState(() => { try { return localStorage.getItem("conc_mx_cuerpo") || CUERPO_DEFAULT; } catch { return CUERPO_DEFAULT; } });
   const [editorCorreoOpen, setEditorCorreoOpen] = useState(false);
@@ -3601,6 +3603,51 @@ function ConciliacionTercerosMX({ usuario }) {
     setTraspasando(false);
   };
 
+  // ── Traslado manual de UN viaje a otra empresa (botón ⇄ en el detalle) ──
+  const trasladarLineaManual = async () => {
+    const m = traslado; if (!m || trasladando) return;
+    const destino = String(m.destino || "").trim();
+    if (!destino) { alert("Elegí la empresa destino."); return; }
+    if (norm(destino) === norm(m.empresa)) { alert("El viaje ya está en " + m.empresa + "."); return; }
+    const d = m.linea; const sc = d.service_center_id || "SIN SC";
+    if (!confirm(`¿Trasladar este viaje a "${destino}"?\n\n${fmtFechaDDMM(d.fecha)} · Ruta ${d.id_ruta || "—"} · ${d.driver_name || ""} · placa ${d.placa || "—"}\nMonto: ${d.es_no_pago ? "$ 0 (no pago)" : fmtMon(d.monto)}\n\nSe resta de ${m.empresa} · ${sc} y se suma a ${destino} · ${sc}. Ambas prefacturas vuelven a borrador y el movimiento queda auditado.`)) return;
+    setTrasladando(true);
+    try {
+      const por = (usuario && (usuario.nombre || usuario.email)) || "Brain";
+      const at = new Date().toISOString();
+      const id = lineaId(d);
+      // Leer y validar AMBOS lados antes de escribir (evita quedar a medias)
+      const o = await leerFilasSC(m.empresa, sc);
+      if (o.estado === "enviada") throw new Error(`la prefactura de ${m.empresa} · ${sc} ya fue enviada; reabrila antes de trasladar`);
+      const dst = await leerFilasSC(destino, sc);
+      if (dst.estado === "enviada") throw new Error(`la prefactura de ${destino} · ${sc} ya fue enviada; reabrila antes de trasladar`);
+      const salen = o.filas.filter(x => lineaId(x) === id);
+      if (!salen.length) throw new Error("no se encontró la línea en la prefactura (¿se editó?); refrescá e intentá de nuevo");
+      const quedan = o.filas.filter(x => lineaId(x) !== id);
+      await guardarBorradorSC(m.empresa, sc, quedan, o.cobros);
+      await auditarAjuste(m.empresa, sc, "traspaso_salida", salen[0].origen || "motor", salen[0], `Traslado manual a ${destino}`);
+      await logEvento(m.empresa, sc, "traspaso_salida", recalcSC(quedan, o.cobros), { detalle: { id_ruta: d.id_ruta, placa: d.placa, a: destino, manual: true } });
+      const ya = new Set(dst.filas.map(lineaId));
+      const nuevas = ya.has(id) ? [] : [{ ...salen[0], traspaso: { de: m.empresa, a: destino, at, por, manual: true } }];
+      await guardarBorradorSC(destino, sc, [...dst.filas, ...nuevas], dst.cobros);
+      if (nuevas.length) {
+        await auditarAjuste(destino, sc, "traspaso_entrada", nuevas[0].origen || "motor", nuevas[0], `Viaje recibido por traslado manual desde ${m.empresa}`);
+        await logEvento(destino, sc, "traspaso_entrada", recalcSC([...dst.filas, ...nuevas], dst.cobros), { detalle: { id_ruta: d.id_ruta, placa: d.placa, de: m.empresa, manual: true } });
+      }
+      setDetalles(prev => { const nx = { ...prev }; delete nx[m.empresa]; delete nx[destino]; return nx; });
+      if (expandida && (norm(expandida) === norm(m.empresa) || norm(expandida) === norm(destino))) {
+        try { const rr = await leerFilasEmpresa(expandida); setDetalles(prev => ({ ...prev, [expandida]: rr.filas })); } catch (er) { console.error("recarga detalle:", er); }
+      }
+      setTraslado(null);
+      await cargarResumen(semana); await cargarTraspasos(semana);
+      setMsg({ ok: true, txt: `Viaje ${d.id_ruta || ""} trasladado de ${m.empresa} a ${destino}. Ambas prefacturas quedaron en borrador.` });
+    } catch (e) {
+      console.error("traslado manual:", e);
+      setMsg({ ok: false, txt: "Error en el traslado: " + (e.message || e) });
+    }
+    setTrasladando(false);
+  };
+
   // ── Importador masivo de ajustes (cargos / descuentos / otros) a prefacturas ──
   const asegurarXLSX = async () => {
     if (window.XLSX) return true;
@@ -4267,7 +4314,7 @@ function ConciliacionTercerosMX({ usuario }) {
               <td style={{ padding: "5px 8px", textAlign: "center" }}>{fmtFactor(d.factor_ns)}</td>
               <td style={{ padding: "5px 8px", textAlign: "center", whiteSpace: "nowrap" }}>{(d.tiene_bonificacion || Number(d.monto_bonificacion || 0) > 0) ? <span style={{ color: "#16a34a", fontWeight: 600 }}>{"+" + fmtMon(d.monto_bonificacion)}</span> : <span style={{ color: "#cbd5e1" }}>—</span>}</td>
               <td style={{ padding: "5px 8px", textAlign: "right", fontWeight: 700, color: d._saldo ? "#9a3412" : (d.es_no_pago ? "#dc2626" : "#1a1a1a") }} title={d._editado ? `Editado: ${fmtMon(d.monto_original)} → ${fmtMon(d.monto)}${d.motivo_edicion ? " · " + d.motivo_edicion : ""}` : undefined}>{d.es_no_pago ? "$ -" : fmtMon(d.monto)}{d._editado ? " ✏️" : ""}</td>
-              {opts.editable && (d._saldo ? <td style={{ padding: "5px 8px" }} /> : <td style={{ padding: "5px 8px", textAlign: "center", whiteSpace: "nowrap" }}><button onClick={(e) => { e.stopPropagation(); editarMontoLinea(opts.empresa, opts.sc, d); }} title="Editar monto de este viaje" style={{ background: "#dbeafe", color: "#1d4ed8", border: "none", borderRadius: 6, padding: "2px 8px", fontSize: 12, fontWeight: 700, cursor: "pointer", marginRight: 4 }}>✏️</button><button onClick={(e) => { e.stopPropagation(); eliminarLinea(opts.empresa, opts.sc, d); }} title="Eliminar línea" style={{ background: "#fee2e2", color: "#b91c1c", border: "none", borderRadius: 6, padding: "2px 8px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>🗑</button></td>)}
+              {opts.editable && (d._saldo ? <td style={{ padding: "5px 8px" }} /> : <td style={{ padding: "5px 8px", textAlign: "center", whiteSpace: "nowrap" }}><button onClick={(e) => { e.stopPropagation(); editarMontoLinea(opts.empresa, opts.sc, d); }} title="Editar monto de este viaje" style={{ background: "#dbeafe", color: "#1d4ed8", border: "none", borderRadius: 6, padding: "2px 8px", fontSize: 12, fontWeight: 700, cursor: "pointer", marginRight: 4 }}>✏️</button><button onClick={(e) => { e.stopPropagation(); setTraslado({ empresa: opts.empresa, sc: opts.sc, linea: d, destino: "" }); }} title="Trasladar este viaje a otra empresa" style={{ background: "#ffe4e6", color: "#9f1239", border: "none", borderRadius: 6, padding: "2px 8px", fontSize: 12, fontWeight: 700, cursor: "pointer", marginRight: 4 }}>⇄</button><button onClick={(e) => { e.stopPropagation(); eliminarLinea(opts.empresa, opts.sc, d); }} title="Eliminar línea" style={{ background: "#fee2e2", color: "#b91c1c", border: "none", borderRadius: 6, padding: "2px 8px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>🗑</button></td>)}
             </tr>
           ))}
         </tbody>
@@ -4853,6 +4900,33 @@ function ConciliacionTercerosMX({ usuario }) {
         </div>
       )}
 
+      {traslado && (
+        <div onClick={() => !trasladando && setTraslado(null)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 12, padding: 20, width: "min(480px, 92vw)" }}>
+            <div style={{ fontSize: 15, fontWeight: 800, color: "#1a3a6b", marginBottom: 4 }}>⇄ Trasladar viaje a otra empresa</div>
+            <div style={{ fontSize: 12, color: "#64748b", marginBottom: 12 }}>Se resta de la prefactura de origen y se suma a la de destino (mismo SC). Queda auditado y ambas vuelven a borrador.</div>
+            <div style={{ background: "#f8fafc", border: "1px solid #e4e7ec", borderRadius: 8, padding: 10, fontSize: 12, marginBottom: 12 }}>
+              <div><b>{traslado.linea.driver_name || "—"}</b> · placa {traslado.linea.placa || "—"}</div>
+              <div style={{ color: "#64748b" }}>{fmtFechaDDMM(traslado.linea.fecha)} · Ruta {traslado.linea.id_ruta || "—"} · SC {traslado.sc}</div>
+              <div style={{ marginTop: 4 }}>Monto: <b>{traslado.linea.es_no_pago ? "$ - (no pago)" : fmtMon(traslado.linea.monto)}</b></div>
+              <div style={{ color: "#64748b" }}>Empresa actual: <b>{traslado.empresa}</b></div>
+            </div>
+            <label style={{ fontSize: 12, fontWeight: 700, color: "#475569" }}>Empresa destino</label>
+            <select value={traslado.destino} onChange={e => setTraslado(t => ({ ...t, destino: e.target.value }))}
+              style={{ width: "100%", padding: "8px 10px", border: "1px solid #e4e7ec", borderRadius: 6, fontSize: 13, marginTop: 4, marginBottom: 14, boxSizing: "border-box" }}>
+              <option value="">— Elegir transportista —</option>
+              {transportistas.filter(tt => norm(tt.nombre) !== norm(traslado.empresa)).map(tt => <option key={tt.id || tt.nombre} value={tt.nombre}>{tt.nombre}</option>)}
+            </select>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+              <button onClick={() => setTraslado(null)} disabled={trasladando}
+                style={{ padding: "8px 16px", background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, fontSize: 13, cursor: "pointer", color: "#475569" }}>Cancelar</button>
+              <button onClick={trasladarLineaManual} disabled={trasladando || !traslado.destino}
+                style={{ padding: "8px 16px", background: (trasladando || !traslado.destino) ? "#94a3b8" : "#9f1239", color: "#fff", border: "none", borderRadius: 6, fontSize: 13, fontWeight: 800, cursor: "pointer" }}>{trasladando ? "Trasladando..." : "Trasladar →"}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {formTransp && (
         <div onMouseDown={e => { if (e.target === e.currentTarget && !guardandoTransp) setFormTransp(null); }}
           style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}>
@@ -4875,6 +4949,26 @@ function ConciliacionTercerosMX({ usuario }) {
                   style={{ width: "100%", padding: "8px 10px", border: "1px solid #e4e7ec", borderRadius: 6, fontSize: 13, boxSizing: "border-box", background: (f.k === "nombre" && formTransp.id) ? "#f1f5f9" : "#fff" }} />
               </div>
             ))}
+            {(() => {
+              const scsEmp = [...new Set(resumen.filter(rx => norm(rx.empresa || "") === norm(formTransp.nombre || "")).map(rx => rx.service_center).filter(Boolean))];
+              return (
+                <div style={{ background: "#f0f9ff", border: "1px solid #bae6fd", borderRadius: 8, padding: 10, marginBottom: 10 }}>
+                  <div style={{ fontSize: 11, fontWeight: 800, color: "#0c4a6e", marginBottom: 4 }}>👤 Supervisores en copia (por SC · semana {semana})</div>
+                  {scsEmp.length === 0 ? (
+                    <div style={{ fontSize: 11, color: "#64748b" }}>Esta empresa no tiene prefacturas esta semana. El supervisor se suma al CC según el SC de cada prefactura (se edita en Parámetros MX, no aquí).</div>
+                  ) : scsEmp.map(scx => {
+                    const px = paramPorSC[norm(scx)] || {};
+                    const cx = String(px.correo_supervisor || "").trim();
+                    return (
+                      <div key={scx} style={{ fontSize: 11, color: cx ? "#166534" : "#b45309", marginBottom: 2 }}>
+                        {cx ? "✓" : "⚠"} <b>{scx}</b>: {px.supervisor || "sin nombre"} · {cx || "sin correo — completar en Parámetros MX"}
+                      </div>
+                    );
+                  })}
+                  <div style={{ fontSize: 10, color: "#0369a1", marginTop: 4 }}>Estos correos se agregan automáticamente al CC en cada envío, además de los de esta ficha.</div>
+                </div>
+              );
+            })()}
             <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 16 }}>
               <button onClick={() => setFormTransp(null)} disabled={guardandoTransp}
                 style={{ padding: "8px 16px", background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, fontSize: 13, cursor: "pointer", color: "#475569" }}>Cancelar</button>
