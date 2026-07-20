@@ -3935,10 +3935,21 @@ function ConciliacionTercerosMX({ usuario }) {
   // ── Envío por correo: webhook n8n -> VPS genera PDF -> SMTP ──
   const WEBHOOK_ENVIO_MX = "https://bigticket2026.app.n8n.cloud/webhook/prefacturas-conciliacion-mx";
 
+  // CC combinado: correo_cc de la ficha del transportista + correo del supervisor del SC
+  // (prefacturas_parametros_mx), sin duplicados — mismo criterio que Prefacturas MX/Chile
+  const ccConSupervisor = (empresa, sc, ccBase) => {
+    const ccs = [];
+    const base = String(ccBase != null ? ccBase : ((transpPorNorm[norm(empresa)] || {}).correo_cc || "")).trim();
+    if (base) for (const c of base.split(/[;,]/)) { const cx = c.trim(); if (cx && !ccs.some(y => y.toLowerCase() === cx.toLowerCase())) ccs.push(cx); }
+    const sup = String(((paramPorSC[norm(sc)] || {}).correo_supervisor) || "").trim();
+    if (sup && !ccs.some(c => c.toLowerCase() === sup.toLowerCase())) ccs.push(sup);
+    return ccs.join("; ");
+  };
+
   const enviarUno = async (empresa, sc, filasSC, rSC, opts) => {
     const { html, periodo, operacion, nombrePdf, t, tot } = construirPrefactura(empresa, sc, filasSC, rSC, opts && opts.cobros);
     const correoTo = ((opts && opts.to) || t.correo_to || "").trim();
-    const cc = ((opts && opts.cc) || t.correo_cc || "").trim();
+    const cc = (opts && opts.cc != null) ? String(opts.cc).trim() : ccConSupervisor(empresa, sc);
     const bcc = (t.correo_bcc || "").trim();
     if (!correoTo) throw new Error("Sin correo destino para " + empresa + " · " + sc);
     const asunto = (opts && opts.asunto) || aplicarVarsCorreo(asuntoLote, empresa, sc, periodo, operacion);
@@ -3961,7 +3972,7 @@ function ConciliacionTercerosMX({ usuario }) {
   const abrirEnvio = (empresa, sc, filasSC, rSC) => {
     const t = transpPorNorm[norm(empresa)] || {};
     const { periodo, operacion, tot } = construirPrefactura(empresa, sc, filasSC, rSC);
-    setModalEnvio({ empresa, sc, filasSC, rSC, to: t.correo_to || "", cc: t.correo_cc || "",
+    setModalEnvio({ empresa, sc, filasSC, rSC, to: t.correo_to || "", cc: ccConSupervisor(empresa, sc),
       asunto: aplicarVarsCorreo(asuntoLote, empresa, sc, periodo, operacion),
       cuerpo: aplicarVarsCorreo(cuerpoLote, empresa, sc, periodo, operacion) });
   };
