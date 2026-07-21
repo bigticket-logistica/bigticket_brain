@@ -207,7 +207,7 @@ function GestorDocsCert({ cert, docs, onRecargar, cambios, resaltar, avisoSinInd
         // El doc vivía solo en Storage: se registra el nuevo y se retira el archivo viejo
         const { error: eIns } = await insDocCert({ certificacion_id: cert.id, tipo_documento: tipo, storage_path: path, subido_por: "analista_brain" });
         if (eIns) throw new Error("El archivo subió pero no se registró: " + eIns.message);
-        try { await sb.storage.from("proceso_certificacion_bt").remove([d.storage_path]); } catch (e) { /* queda huérfano, inofensivo */ }
+        try { await quitarDeStorageCert(d.storage_path); } catch (e) { console.warn("Versión anterior no retirada:", e.message); }
       } else {
         const { error: eUpd } = await updDocCert(d.id,
           { storage_path: path, updated_at: new Date().toISOString(), subido_por: "analista_brain" },
@@ -223,8 +223,9 @@ function GestorDocsCert({ cert, docs, onRecargar, cambios, resaltar, avisoSinInd
     if (!confirm(`¿Eliminar ${docEtiquetaCert(d.tipo_documento)}? Esta acción no se puede deshacer.`)) return;
     setBusy(d.id);
     try {
-      const { error: eRm } = await sb.storage.from("proceso_certificacion_bt").remove([d.storage_path]);
-      if (eRm && d._virtual) throw new Error(eRm.message); // virtual: Storage es su único registro
+      // Primero el archivo (con fallback a papelera/ si protect_delete bloquea el DELETE);
+      // si no se logra retirar del bucket, se aborta — o el merge desde Storage lo reviviría.
+      await quitarDeStorageCert(d.storage_path);
       if (!d._virtual) {
         const { error: eDel } = await sb.from("certificacion_documentos").delete().eq("id", d.id);
         if (eDel) throw new Error(eDel.message);
@@ -2211,6 +2212,15 @@ async function updDocCert(id, patch, patchMin) {
   }
   return r;
 }
+// Elimina un objeto del bucket de certificación. El trigger protect_delete puede
+// bloquear el DELETE incluso vía Storage API — en ese caso se MUEVE a papelera/
+// (move = rename/UPDATE, no dispara el trigger) para que desaparezca del listado.
+async function quitarDeStorageCert(path) {
+  const { data: rm, error: eRm } = await sb.storage.from("proceso_certificacion_bt").remove([path]);
+  if (!eRm && Array.isArray(rm) && rm.length > 0) return;
+  const { error: eMv } = await sb.storage.from("proceso_certificacion_bt").move(path, `papelera/${path}`);
+  if (eMv) throw new Error((eRm?.message || "delete bloqueado (protect_delete)") + " · papelera: " + eMv.message);
+}
 
 // Chip de TIPO
 const TIPO_CFG = {
@@ -2308,7 +2318,7 @@ function DetalleCertificacion({ cert, etapa, onVolver, onPasarEtapa2, onMoverA, 
     const req = ++docsReq.current;
     try {
       const { data } = await sb.from("certificacion_documentos")
-        .select("*").eq("certificacion_id", cert.id).order("created_at", { ascending: true });
+        .select("*").eq("certificacion_id", cert.id); // sin .order: la tabla puede no tener created_at (se ordena en cliente)
       let rows = data || [];
       let sinIndexar = 0;
 
