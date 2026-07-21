@@ -153,12 +153,29 @@ function GestorDocsProspecto({ candidato, onActualizar }) {
 
 // Fuente B · filas de certificacion_documentos, bucket privado proceso_certificacion_bt.
 // Muestra fecha de carga/reemplazo y permite gestionar también lo que subió la empresa desde su portal.
-function GestorDocsCert({ cert, docs, onRecargar }) {
+function GestorDocsCert({ cert, docs, onRecargar, cambios, resaltar }) {
   const [busy, setBusy] = useState(null);
   const [nuevoTipo, setNuevoTipo] = useState("otro");
   const fileReemRef = useRef(null);
   const fileNuevoRef = useRef(null);
   const ctxRef = useRef(null);
+
+  // Mientras la tarjeta tenga "cambios pendientes", se resalta el documento que
+  // la empresa cargó/reemplazó: match duro por doc_id (logs nuevos) o, para logs
+  // viejos sin doc_id, por tipo + cercanía de hora (±10 min) con la carga.
+  const marcaDe = (d) => {
+    if (!resaltar) return null;
+    const tDoc = new Date(d.updated_at || d.created_at).getTime();
+    for (const c of (cambios || [])) {
+      if (c.tipo !== "documento" || c.accion === "eliminado") continue;
+      const porId = c.doc_id && c.doc_id === d.id;
+      const porTiempo = !c.doc_id && c.campo
+        && docTipoLimpioCert(c.campo) === docTipoLimpioCert(d.tipo_documento)
+        && Math.abs(new Date(c.at).getTime() - tDoc) < 10 * 60 * 1000;
+      if (porId || porTiempo) return c.accion === "reemplazado" ? "♻ Actualizado" : "🆕 Nuevo";
+    }
+    return null;
+  };
 
   const basePath = () => `${cert.tercero_id || "brain"}/${cert.id}`;
 
@@ -214,21 +231,29 @@ function GestorDocsCert({ cert, docs, onRecargar }) {
         <div style={{ fontSize: 12, color: "#888", marginBottom: 10 }}>Sin documentos cargados.</div>
       ) : (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(150px,1fr))", gap: 12 }}>
-          {docs.map((d) => (
-            <div key={d.id}>
-              <VisorDoc url={d.url} label={docEtiquetaCert(d.tipo_documento)} />
-              <div style={{ fontSize: 10, color: "#98a2b3", textAlign: "center", marginTop: 3, lineHeight: 1.5 }}>
-                Cargado {fmtFH(d.created_at)}{d.updated_at ? ` · reempl. ${fmtFH(d.updated_at)}` : ""}{d.subido_por ? ` · ${d.subido_por}` : ""}
+          {docs.map((d) => {
+            const marca = marcaDe(d);
+            return (
+              <div key={d.id} style={marca ? { border: "2px solid #F47B20", borderRadius: 12, padding: 6, background: "#fff8f2" } : undefined}>
+                {marca && (
+                  <div style={{ fontSize: 10, fontWeight: 800, color: "#fff", background: "#F47B20", borderRadius: 6, padding: "2px 8px", textAlign: "center", marginBottom: 5 }}>
+                    {marca} — revisar
+                  </div>
+                )}
+                <VisorDoc url={d.url} label={docEtiquetaCert(d.tipo_documento)} />
+                <div style={{ fontSize: 10, color: "#98a2b3", textAlign: "center", marginTop: 3, lineHeight: 1.5 }}>
+                  Cargado {fmtFH(d.created_at)}{d.updated_at ? ` · reempl. ${fmtFH(d.updated_at)}` : ""}{d.subido_por ? ` · ${d.subido_por}` : ""}
+                </div>
+                <div style={{ display: "flex", gap: 6, justifyContent: "center", marginTop: 5, flexWrap: "wrap" }}>
+                  <button disabled={busy === d.id} style={_btnDoc}
+                    onClick={() => { ctxRef.current = d; if (fileReemRef.current) fileReemRef.current.click(); }}>
+                    {busy === d.id ? "…" : "Reemplazar"}
+                  </button>
+                  <button disabled={busy === d.id} onClick={() => eliminar(d)} style={_btnDocRojo}>Eliminar</button>
+                </div>
               </div>
-              <div style={{ display: "flex", gap: 6, justifyContent: "center", marginTop: 5, flexWrap: "wrap" }}>
-                <button disabled={busy === d.id} style={_btnDoc}
-                  onClick={() => { ctxRef.current = d; if (fileReemRef.current) fileReemRef.current.click(); }}>
-                  {busy === d.id ? "…" : "Reemplazar"}
-                </button>
-                <button disabled={busy === d.id} onClick={() => eliminar(d)} style={_btnDocRojo}>Eliminar</button>
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
       <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 14, flexWrap: "wrap", borderTop: "1px solid #f0f2f5", paddingTop: 12 }}>
@@ -2318,10 +2343,19 @@ function DetalleCertificacion({ cert, etapa, onVolver, onPasarEtapa2, onMoverA, 
                 <li key={i} style={{ fontSize: 12.5, color: "#8a4a0f", marginBottom: 4 }}>
                   <b>{new Date(c.at).toLocaleString("es-MX", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}</b>
                   {" · "}📎 {docEtiquetaCert(c.campo)}: {c.accion}{c.por ? ` (${c.por})` : ""}
+                  {c.storage_path && (
+                    <button onClick={async () => {
+                      const { data: sg } = await sb.storage.from("proceso_certificacion_bt").createSignedUrl(c.storage_path, 600);
+                      if (sg?.signedUrl) window.open(sg.signedUrl, "_blank");
+                      else alert("No se pudo abrir — el archivo pudo haber sido reemplazado o eliminado después.");
+                    }} style={{ marginLeft: 8, background: "#fff", color: "#b45309", border: "1px solid #e8c48f", borderRadius: 6, padding: "2px 8px", fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "'Geist',sans-serif" }}>
+                      👁 Ver documento
+                    </button>
+                  )}
                 </li>
               ))}
             </ul>
-            <div style={{ fontSize: 11.5, color: "#8a6a3f", marginTop: 8 }}>Revisa los documentos actualizados — si corresponde, re-corre el análisis de Biggy o la validación de la etapa.</div>
+            <div style={{ fontSize: 11.5, color: "#8a6a3f", marginTop: 8 }}>Los documentos nuevos o reemplazados aparecen <b>resaltados en naranja</b> abajo en la sección Documentos — revísalos y, si corresponde, re-corre el análisis de Biggy o la validación de la etapa.</div>
           </div>
         )}
 
@@ -2418,7 +2452,8 @@ function DetalleCertificacion({ cert, etapa, onVolver, onPasarEtapa2, onMoverA, 
           </div>
         </div>
 
-        <GestorDocsCert cert={cert} docs={docsCert} onRecargar={cargarDocsCert} />
+        <GestorDocsCert cert={cert} docs={docsCert} onRecargar={cargarDocsCert}
+          cambios={cert.cambios_prospecto} resaltar={!!cert.cambios_pendientes} />
       </div>
     </div>
   );
