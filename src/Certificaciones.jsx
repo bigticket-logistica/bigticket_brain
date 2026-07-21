@@ -76,6 +76,179 @@ function VisorDoc({ url, label }) {
   );
 }
 
+// ─── GESTIÓN DE DOCUMENTOS (Ver / Reemplazar / Eliminar / Cargar) ───
+const _btnDoc = { background: "#fff", border: "1px solid #d0d5dd", borderRadius: 8, padding: "5px 10px", fontSize: 11.5, fontWeight: 700, cursor: "pointer", color: "#344054", fontFamily: "'Geist',sans-serif" };
+const _btnDocRojo = { background: "#fff", border: "1px solid #f0c4c4", borderRadius: 8, padding: "5px 10px", fontSize: 11.5, fontWeight: 700, cursor: "pointer", color: "#c0392b", fontFamily: "'Geist',sans-serif" };
+
+// Fuente A · columnas url_* de certificaciones_mx, bucket público documentos-terceros.
+// El analista puede reemplazar, eliminar o cargar lo mismo que el prospecto ve en su portal.
+const DOCS_PROSPECTO = [
+  ["url_curp", "CURP"], ["url_ine", "INE (delantera)"], ["url_ine_2", "INE (trasera)"],
+  ["url_licencia", "Licencia"], ["url_rfc", "RFC"],
+];
+function GestorDocsProspecto({ candidato, onActualizar }) {
+  const [busy, setBusy] = useState(null);
+  const fileRef = useRef(null);
+  const ctxRef = useRef(null);
+
+  const elegir = (col) => { ctxRef.current = col; if (fileRef.current) fileRef.current.click(); };
+
+  const subir = async (col, file) => {
+    setBusy(col);
+    try {
+      const ext = (file.name.split(".").pop() || "jpg").toLowerCase();
+      const campo = col.replace("url_", "");
+      const path = `prospeccion/${candidato.id}/${campo}_${Date.now()}.${ext}`;
+      const { error: eUp } = await sb.storage.from("documentos-terceros").upload(path, file, { upsert: true });
+      if (eUp) throw new Error(eUp.message);
+      const { data: pu } = sb.storage.from("documentos-terceros").getPublicUrl(path);
+      const url = pu?.publicUrl || "";
+      if (!url) throw new Error("No se obtuvo la URL pública del documento");
+      const { error: eUpd } = await sb.from("certificaciones_mx").update({ [col]: url }).eq("id", candidato.id);
+      if (eUpd) throw new Error("El archivo subió pero no se registró: " + eUpd.message);
+      onActualizar({ ...candidato, [col]: url });
+    } catch (e) { alert("No se pudo cargar: " + e.message); }
+    finally { setBusy(null); }
+  };
+
+  const eliminar = async (col, label) => {
+    if (!confirm(`¿Eliminar ${label}? El prospecto podrá volver a cargarlo desde el portal.`)) return;
+    setBusy(col);
+    try {
+      const url = candidato[col] || "";
+      const resto = url.split("/documentos-terceros/")[1];
+      if (resto) {
+        try { await sb.storage.from("documentos-terceros").remove([decodeURIComponent(resto.split("?")[0])]); }
+        catch (e) { /* el objeto puede no existir en Storage — se limpia igual la columna */ }
+      }
+      const { error: eUpd } = await sb.from("certificaciones_mx").update({ [col]: null }).eq("id", candidato.id);
+      if (eUpd) throw new Error(eUpd.message);
+      onActualizar({ ...candidato, [col]: null });
+    } catch (e) { alert("No se pudo eliminar: " + e.message); }
+    finally { setBusy(null); }
+  };
+
+  return (
+    <>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(150px,1fr))", gap: 12 }}>
+        {DOCS_PROSPECTO.map(([col, label]) => (
+          <div key={col}>
+            <VisorDoc url={candidato[col]} label={label} />
+            <div style={{ display: "flex", gap: 6, justifyContent: "center", marginTop: 6, flexWrap: "wrap" }}>
+              <button disabled={busy === col} onClick={() => elegir(col)} style={_btnDoc}>
+                {busy === col ? "…" : (candidato[col] ? "Reemplazar" : "📎 Cargar")}
+              </button>
+              {candidato[col] && (
+                <button disabled={busy === col} onClick={() => eliminar(col, label)} style={_btnDocRojo}>Eliminar</button>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+      <input ref={fileRef} type="file" accept="image/*,application/pdf" style={{ display: "none" }}
+        onChange={(e) => { const f = e.target.files[0]; e.target.value = ""; const col = ctxRef.current; ctxRef.current = null; if (f && col) subir(col, f); }} />
+    </>
+  );
+}
+
+// Fuente B · filas de certificacion_documentos, bucket privado proceso_certificacion_bt.
+// Muestra fecha de carga/reemplazo y permite gestionar también lo que subió la empresa desde su portal.
+function GestorDocsCert({ cert, docs, onRecargar }) {
+  const [busy, setBusy] = useState(null);
+  const [nuevoTipo, setNuevoTipo] = useState("otro");
+  const fileReemRef = useRef(null);
+  const fileNuevoRef = useRef(null);
+  const ctxRef = useRef(null);
+
+  const basePath = () => `${cert.tercero_id || "brain"}/${cert.id}`;
+
+  const reemplazar = async (d, file) => {
+    setBusy(d.id);
+    try {
+      const ext = (file.name.split(".").pop() || "jpg").toLowerCase();
+      const path = `${basePath()}/${docTipoLimpioCert(d.tipo_documento)}_${Date.now()}.${ext}`;
+      const { error: eUp } = await sb.storage.from("proceso_certificacion_bt").upload(path, file, { upsert: true });
+      if (eUp) throw new Error(eUp.message);
+      const { error: eUpd } = await sb.from("certificacion_documentos")
+        .update({ storage_path: path, updated_at: new Date().toISOString(), subido_por: "analista_brain" }).eq("id", d.id);
+      if (eUpd) throw new Error("El archivo subió pero no se registró: " + eUpd.message);
+      await onRecargar();
+    } catch (e) { alert("No se pudo reemplazar: " + e.message); }
+    finally { setBusy(null); }
+  };
+
+  const eliminar = async (d) => {
+    if (!confirm(`¿Eliminar ${docEtiquetaCert(d.tipo_documento)}? Esta acción no se puede deshacer.`)) return;
+    setBusy(d.id);
+    try {
+      try { await sb.storage.from("proceso_certificacion_bt").remove([d.storage_path]); }
+      catch (e) { /* el objeto puede no existir — se elimina igual el registro */ }
+      const { error: eDel } = await sb.from("certificacion_documentos").delete().eq("id", d.id);
+      if (eDel) throw new Error(eDel.message);
+      await onRecargar();
+    } catch (e) { alert("No se pudo eliminar: " + e.message); }
+    finally { setBusy(null); }
+  };
+
+  const cargarNuevo = async (file) => {
+    setBusy("nuevo");
+    try {
+      const ext = (file.name.split(".").pop() || "jpg").toLowerCase();
+      const path = `${basePath()}/${nuevoTipo}_${Date.now()}.${ext}`;
+      const { error: eUp } = await sb.storage.from("proceso_certificacion_bt").upload(path, file, { upsert: true });
+      if (eUp) throw new Error(eUp.message);
+      const { error: eIns } = await sb.from("certificacion_documentos")
+        .insert({ certificacion_id: cert.id, tipo_documento: nuevoTipo, storage_path: path, subido_por: "analista_brain" });
+      if (eIns) throw new Error("El archivo subió pero no se registró: " + eIns.message);
+      await onRecargar();
+    } catch (e) { alert("No se pudo cargar: " + e.message); }
+    finally { setBusy(null); }
+  };
+
+  return (
+    <div className="form-card">
+      <div className="form-title">Documentos</div>
+      {docs === null ? (
+        <div style={{ fontSize: 12, color: "#888" }}>Cargando documentos…</div>
+      ) : docs.length === 0 ? (
+        <div style={{ fontSize: 12, color: "#888", marginBottom: 10 }}>Sin documentos cargados.</div>
+      ) : (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(150px,1fr))", gap: 12 }}>
+          {docs.map((d) => (
+            <div key={d.id}>
+              <VisorDoc url={d.url} label={docEtiquetaCert(d.tipo_documento)} />
+              <div style={{ fontSize: 10, color: "#98a2b3", textAlign: "center", marginTop: 3, lineHeight: 1.5 }}>
+                Cargado {fmtFH(d.created_at)}{d.updated_at ? ` · reempl. ${fmtFH(d.updated_at)}` : ""}{d.subido_por ? ` · ${d.subido_por}` : ""}
+              </div>
+              <div style={{ display: "flex", gap: 6, justifyContent: "center", marginTop: 5, flexWrap: "wrap" }}>
+                <button disabled={busy === d.id} style={_btnDoc}
+                  onClick={() => { ctxRef.current = d; if (fileReemRef.current) fileReemRef.current.click(); }}>
+                  {busy === d.id ? "…" : "Reemplazar"}
+                </button>
+                <button disabled={busy === d.id} onClick={() => eliminar(d)} style={_btnDocRojo}>Eliminar</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 14, flexWrap: "wrap", borderTop: "1px solid #f0f2f5", paddingTop: 12 }}>
+        <select value={nuevoTipo} onChange={(e) => setNuevoTipo(e.target.value)}
+          style={{ padding: "7px 10px", borderRadius: 8, border: "1px solid #e4e7ec", fontSize: 12, fontFamily: "'Geist',sans-serif" }}>
+          {TIPOS_DOC_CERT.map((t) => <option key={t} value={t}>{DOC_LABEL[t] || t}</option>)}
+        </select>
+        <button className="btn-orange" disabled={busy === "nuevo"} style={{ fontSize: 12, padding: "8px 14px" }}
+          onClick={() => { if (fileNuevoRef.current) fileNuevoRef.current.click(); }}>
+          {busy === "nuevo" ? "Subiendo…" : "📎 Cargar documento nuevo"}
+        </button>
+      </div>
+      <input ref={fileReemRef} type="file" accept="image/*,application/pdf" style={{ display: "none" }}
+        onChange={(e) => { const f = e.target.files[0]; e.target.value = ""; const d = ctxRef.current; ctxRef.current = null; if (f && d) reemplazar(d, f); }} />
+      <input ref={fileNuevoRef} type="file" accept="image/*,application/pdf" style={{ display: "none" }}
+        onChange={(e) => { const f = e.target.files[0]; e.target.value = ""; if (f) cargarNuevo(f); }} />
+    </div>
+  );
+}
+
 // ─── BIGGY MESSENGER ────────────────────────────────────────────────
 function BiggyChatBubble({ analizando, analisis, score, recomendacion, alertas, onReanalizar }) {
   const colorRec = { APROBAR: { bg: "#dcfce7", color: "#166534", border: "#86efac" }, REVISAR: { bg: "#fef3c7", color: "#92400e", border: "#fde68a" }, RECHAZAR: { bg: "#fee2e2", color: "#c0392b", border: "#fca5a5" } };
@@ -1653,7 +1826,7 @@ Responde con este JSON exacto:
           <ValidacionNubarium candidato={candidato} onActualizar={onActualizar} />
         )}
 
-        {/* Documentos */}
+        {/* Documentos — el analista puede ver, reemplazar, eliminar y cargar (mismas columnas url_* que el portal) */}
         <div className="form-card">
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
             <div className="form-title" style={{ margin: 0 }}>Documentos</div>
@@ -1661,13 +1834,7 @@ Responde con este JSON exacto:
               {analizando ? "Analizando..." : "🔄 Re-analizar"}
             </button>
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(130px,1fr))", gap: 12 }}>
-            <VisorDoc url={candidato.url_curp}     label="CURP" />
-            <VisorDoc url={candidato.url_ine}      label="INE (delantera)" />
-            <VisorDoc url={candidato.url_ine_2}    label="INE (trasera)" />
-            <VisorDoc url={candidato.url_licencia} label="Licencia" />
-            <VisorDoc url={candidato.url_rfc}      label="RFC" />
-          </div>
+          <GestorDocsProspecto candidato={candidato} onActualizar={onActualizar} />
         </div>
 
         {/* Certificación MELI — oculto en Etapas 1 y 2 (aún no pre-validado por Biggy) */}
@@ -1806,11 +1973,17 @@ function fuenteBadge(card) {
 }
 // Etiquetas legibles de los documentos guardados en certificacion_documentos
 const DOC_LABEL = {
-  ine: "INE (frente)", ine_reverso: "INE (reverso)", curp: "CURP", licencia: "Licencia",
-  tarjeta_circulacion: "Tarjeta de circulación", comprobante: "Comprobante",
+  ine: "INE (frente)", ine_reverso: "INE (reverso)", curp: "CURP", rfc: "RFC", licencia: "Licencia",
+  tarjeta_circulacion: "Tarjeta de circulación", comprobante: "Comprobante", poliza_seguro: "Póliza de seguro",
   foto_frente: "Foto — frente", foto_trasera: "Foto — trasera",
   foto_lado_izq: "Foto — lado izquierdo", foto_lado_der: "Foto — lado derecho", otro: "Otro",
 };
+// Documentos antiguos del portal quedaron con sufijo _timestamp en el tipo — se limpia solo para mostrar/matchear.
+const docTipoLimpioCert = (t) => String(t || "").replace(/_\d{10,}$/, "");
+const docEtiquetaCert = (t) => DOC_LABEL[docTipoLimpioCert(t)] || docTipoLimpioCert(t).replace(/_/g, " ");
+const fmtFH = (x) => x ? new Date(x).toLocaleString("es-MX", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : "";
+// Tipos disponibles al cargar un documento nuevo desde el Brain (Fuente B)
+const TIPOS_DOC_CERT = ["ine", "ine_reverso", "curp", "rfc", "licencia", "foto_frente", "foto_trasera", "foto_lado_izq", "foto_lado_der", "tarjeta_circulacion", "poliza_seguro", "comprobante", "otro"];
 
 // Chip de TIPO
 const TIPO_CFG = {
@@ -1901,31 +2074,31 @@ function DetalleCertificacion({ cert, etapa, onVolver, onPasarEtapa2, onMoverA, 
   const tc = TIPO_CFG[cert.tipo] || TIPO_CFG.conductor;
   const fcFuente = cert.origen === "app_terceros" ? ORIGEN_CFG.app_terceros : FUENTE_CFG.portal_cert;
 
-  useEffect(() => {
-    let cancel = false;
-    (async () => {
-      try {
-        const { data } = await sb.from("certificacion_documentos")
-          .select("tipo_documento, storage_path").eq("certificacion_id", cert.id);
-        const rows = data || [];
-        const conUrl = await Promise.all(rows.map(async (d) => {
-          let url = "";
-          try {
-            const { data: sg } = await sb.storage.from("proceso_certificacion_bt").createSignedUrl(d.storage_path, 3600);
-            url = sg?.signedUrl || "";
-          } catch (e) { /* documento sin URL */ }
-          return { ...d, url };
-        }));
-        if (!cancel) setDocsCert(conUrl);
-      } catch (e) { if (!cancel) setDocsCert([]); }
-    })();
-    return () => { cancel = true; };
-  }, [cert.id]);
+  const docsReq = useRef(0);
+  const cargarDocsCert = async () => {
+    const req = ++docsReq.current;
+    try {
+      const { data } = await sb.from("certificacion_documentos")
+        .select("*").eq("certificacion_id", cert.id).order("created_at", { ascending: true });
+      const rows = data || [];
+      const conUrl = await Promise.all(rows.map(async (d) => {
+        let url = "";
+        try {
+          const { data: sg } = await sb.storage.from("proceso_certificacion_bt").createSignedUrl(d.storage_path, 3600);
+          url = sg?.signedUrl || "";
+        } catch (e) { /* documento sin URL */ }
+        return { ...d, url };
+      }));
+      if (req === docsReq.current) setDocsCert(conUrl);
+    } catch (e) { if (req === docsReq.current) setDocsCert([]); }
+  };
+  useEffect(() => { setDocsCert(null); cargarDocsCert(); }, [cert.id]);
 
   // Biggy (Claude Vision) para conductores/ayudantes de App/Portal.
   // Reusa el mismo webhook mapeando los documentos del portal a los campos esperados.
   const analizarCert = async (docs) => {
-    const urlDe = (t) => (docs.find(d => d.tipo_documento === t)?.url) || "";
+    // Matchea por tipo LIMPIO (docs viejos tienen sufijo _timestamp) y prefiere la carga más reciente
+    const urlDe = (t) => { const r = [...docs].reverse().find(d => docTipoLimpioCert(d.tipo_documento) === t); return r?.url || ""; };
     setAnalizando(true);
     try {
       const payload = {
@@ -2052,7 +2225,7 @@ function DetalleCertificacion({ cert, etapa, onVolver, onPasarEtapa2, onMoverA, 
               {(cert.cambios_prospecto || []).slice(-8).reverse().map((c, i) => (
                 <li key={i} style={{ fontSize: 12.5, color: "#8a4a0f", marginBottom: 4 }}>
                   <b>{new Date(c.at).toLocaleString("es-MX", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}</b>
-                  {" · "}📎 {c.campo}: {c.accion}{c.por ? ` (${c.por})` : ""}
+                  {" · "}📎 {docEtiquetaCert(c.campo)}: {c.accion}{c.por ? ` (${c.por})` : ""}
                 </li>
               ))}
             </ul>
@@ -2150,20 +2323,7 @@ function DetalleCertificacion({ cert, etapa, onVolver, onPasarEtapa2, onMoverA, 
           </div>
         </div>
 
-        <div className="form-card">
-          <div className="form-title">Documentos</div>
-          {docsCert === null ? (
-            <div style={{ fontSize: 12, color: "#888" }}>Cargando documentos…</div>
-          ) : docsCert.length === 0 ? (
-            <div style={{ fontSize: 12, color: "#888" }}>Sin documentos cargados.</div>
-          ) : (
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(130px,1fr))", gap: 12 }}>
-              {docsCert.map((d) => (
-                <VisorDoc key={d.tipo_documento} url={d.url} label={DOC_LABEL[d.tipo_documento] || d.tipo_documento} />
-              ))}
-            </div>
-          )}
-        </div>
+        <GestorDocsCert cert={cert} docs={docsCert} onRecargar={cargarDocsCert} />
       </div>
     </div>
   );
