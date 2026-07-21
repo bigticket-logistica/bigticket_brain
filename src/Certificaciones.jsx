@@ -1060,6 +1060,110 @@ function ValidacionRepuve({ cert, veh, onMoverA, onVehActualizado }) {
   );
 }
 
+
+// ─── 📣 Notificar documentación fallida (WhatsApp / Email) · Etapa Pre-validación Biggy ───
+// Los items observados por Biggy se seleccionan y se avisan al tercero por el canal elegido.
+function NotificarDocsFallidas({ nombre, telefonoInicial, emailInicial, alertas }) {
+  const [abierto, setAbierto] = useState(false);
+  const [sel, setSel] = useState({});            // índice de alerta → seleccionada
+  const [extra, setExtra] = useState("");        // observación adicional manual
+  const [tel, setTel] = useState(telefonoInicial || "");
+  const [mail, setMail] = useState(emailInicial || "");
+  const [canal, setCanal] = useState("ambos");   // whatsapp | email | ambos
+  const [enviando, setEnviando] = useState(false);
+  const [enviadoAt, setEnviadoAt] = useState(null);
+
+  const items = () => {
+    const l = (alertas || []).filter((_, i) => sel[i]);
+    if (extra.trim()) l.push(extra.trim());
+    return l;
+  };
+
+  const enviar = async () => {
+    const lista = items();
+    if (!lista.length) { alert("Selecciona al menos un documento/observación a notificar."); return; }
+    const necesitaTel = canal !== "email", necesitaMail = canal !== "whatsapp";
+    if (necesitaTel && !tel.trim()) { alert("Falta el teléfono (WhatsApp) del tercero."); return; }
+    if (necesitaMail && !mail.trim()) { alert("Falta el correo del tercero."); return; }
+    if (!confirm(`¿Enviar la notificación por ${canal === "ambos" ? "WhatsApp y correo" : canal} a ${nombre}?`)) return;
+    setEnviando(true);
+    try {
+      const resp = await fetch("https://bigticket2026.app.n8n.cloud/webhook/notificar-doc-fallida", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ canal, nombre, telefono: tel.trim(), email: mail.trim(), items: lista }),
+      });
+      const txt = await resp.text();
+      if (!resp.ok || !txt.trim()) throw new Error("el servicio de notificación no respondió");
+      const r = JSON.parse(txt);
+      if (r.ok === false) throw new Error(r.error || "envío rechazado");
+      setEnviadoAt(new Date());
+      setAbierto(false);
+    } catch (e) { alert("No se pudo notificar: " + e.message); }
+    finally { setEnviando(false); }
+  };
+
+  return (
+    <div className="form-card" style={{ background: "#fdf6ee", border: "1px solid #f0ddc4" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <div style={{ flex: 1, minWidth: 220 }}>
+          <div className="form-title" style={{ color: "#b45309", marginBottom: 2 }}>📣 Notificar documentación fallida</div>
+          <div style={{ fontSize: 12, color: "#8a6a3f" }}>Avisa al tercero por WhatsApp y/o correo qué documentos debe corregir o reponer.</div>
+        </div>
+        {enviadoAt && <span style={{ fontSize: 12, fontWeight: 700, color: "#166534", background: "#e8f5ec", border: "1px solid #b7e0c2", borderRadius: 20, padding: "5px 12px" }}>✓ Notificado {enviadoAt.toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit" })}</span>}
+        <button onClick={() => setAbierto(!abierto)}
+          style={{ background: abierto ? "#fff" : "#b45309", color: abierto ? "#b45309" : "#fff", border: "1.5px solid #b45309", borderRadius: 8, padding: "9px 16px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: "'Geist',sans-serif" }}>
+          {abierto ? "Cerrar" : "Notificar"}
+        </button>
+      </div>
+      {abierto && (
+        <div style={{ marginTop: 12 }}>
+          {(alertas || []).length > 0 ? (
+            <div style={{ marginBottom: 10 }}>
+              <div style={{ fontSize: 10.5, fontWeight: 800, color: "#8a6a3f", textTransform: "uppercase", marginBottom: 6 }}>Items observados por Biggy — marca los que se notificarán</div>
+              {(alertas || []).map((a, i) => (
+                <label key={i} style={{ display: "flex", gap: 8, alignItems: "flex-start", padding: "6px 8px", borderRadius: 8, background: sel[i] ? "#fff4e0" : "transparent", cursor: "pointer", fontSize: 12.5, color: "#5a4630" }}>
+                  <input type="checkbox" checked={!!sel[i]} onChange={() => setSel(s => ({ ...s, [i]: !s[i] }))} style={{ marginTop: 2 }} />
+                  <span>{typeof a === "string" ? a : (a.detalle || a.mensaje || JSON.stringify(a))}</span>
+                </label>
+              ))}
+            </div>
+          ) : (
+            <div style={{ fontSize: 12, color: "#8a6a3f", marginBottom: 10 }}>Biggy no registró alertas — escribe abajo la observación a notificar.</div>
+          )}
+          <textarea value={extra} onChange={(e) => setExtra(e.target.value)} rows={2}
+            placeholder="Observación adicional (opcional) — ej. 'La INE está borrosa, súbela de nuevo por el portal'"
+            style={{ width: "100%", boxSizing: "border-box", border: "1px solid #f0ddc4", borderRadius: 8, padding: "8px 10px", fontSize: 12.5, fontFamily: "'Geist',sans-serif", background: "#fff", resize: "vertical", marginBottom: 10 }} />
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10, marginBottom: 10 }}>
+            <div>
+              <div style={{ fontSize: 10, fontWeight: 800, color: "#8a6a3f", textTransform: "uppercase", marginBottom: 4 }}>📱 WhatsApp del tercero</div>
+              <input value={tel} onChange={(e) => setTel(e.target.value)} placeholder="+52 1 55 ..." inputMode="tel"
+                style={{ width: "100%", boxSizing: "border-box", border: "1px solid #f0ddc4", borderRadius: 8, padding: "8px 10px", fontSize: 12.5, fontFamily: "monospace", background: "#fff" }} />
+            </div>
+            <div>
+              <div style={{ fontSize: 10, fontWeight: 800, color: "#8a6a3f", textTransform: "uppercase", marginBottom: 4 }}>✉️ Correo del tercero</div>
+              <input value={mail} onChange={(e) => setMail(e.target.value)} placeholder="correo@…" inputMode="email"
+                style={{ width: "100%", boxSizing: "border-box", border: "1px solid #f0ddc4", borderRadius: 8, padding: "8px 10px", fontSize: 12.5, fontFamily: "monospace", background: "#fff" }} />
+            </div>
+            <div>
+              <div style={{ fontSize: 10, fontWeight: 800, color: "#8a6a3f", textTransform: "uppercase", marginBottom: 4 }}>Canal</div>
+              <select value={canal} onChange={(e) => setCanal(e.target.value)}
+                style={{ width: "100%", boxSizing: "border-box", border: "1px solid #f0ddc4", borderRadius: 8, padding: "8px 10px", fontSize: 12.5, fontFamily: "'Geist',sans-serif", background: "#fff" }}>
+                <option value="ambos">WhatsApp + Correo</option>
+                <option value="whatsapp">Solo WhatsApp</option>
+                <option value="email">Solo Correo</option>
+              </select>
+            </div>
+          </div>
+          <button onClick={enviar} disabled={enviando}
+            style={{ width: "100%", background: "#b45309", color: "#fff", border: "none", borderRadius: 8, padding: "11px", fontSize: 13, fontWeight: 700, cursor: "pointer", opacity: enviando ? 0.6 : 1, fontFamily: "'Geist',sans-serif" }}>
+            {enviando ? "Enviando…" : `📣 Enviar notificación (${items().length} item${items().length === 1 ? "" : "s"})`}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function SeccionFirmaContrato({ registro, tabla, datos, onActualizado }) {
   const [enviando, setEnviando] = useState(false);
   const [generando, setGenerando] = useState(false);
@@ -1419,6 +1523,10 @@ Responde con este JSON exacto:
           </div>
         ) : (
           <BiggyChatBubble analizando={analizando} analisis={analisis} score={score} recomendacion={recomendacion} alertas={alertas} onReanalizar={analizarConClaude} />
+        )}
+
+        {candidato.etapa_kanban === "prevalidacion_biggy" && (
+          <NotificarDocsFallidas nombre={candidato.nombre} telefonoInicial={candidato.telefono} emailInicial={candidato.email} alertas={alertas} />
         )}
 
         {!enEtapa1 && !enLlamada && <VehiculosMinutaBiggy candidato={candidato} etapa={candidato.etapa_kanban} />}
@@ -1836,6 +1944,9 @@ function DetalleCertificacion({ cert, etapa, onVolver, onPasarEtapa2, onMoverA, 
         {/* Etapa 3+: Biggy para personas; vehículos usarán su Vision propia (track REPUVE) */}
         {!enEtapa1 && !enLlamada && !esVeh && (
           <BiggyChatBubble analizando={analizando} analisis={analisis} score={score} recomendacion={recomendacion} alertas={alertas} onReanalizar={() => docsCert && analizarCert(docsCert)} />
+        )}
+        {etapaActual === "prevalidacion_biggy" && (
+          <NotificarDocsFallidas nombre={cert.nombre_display || cert.nombre} telefonoInicial={cert.telefono || cert.raw?.telefono || ""} emailInicial={cert.email || cert.raw?.email || cert.raw?.correo || ""} alertas={alertas} />
         )}
         {!enEtapa1 && esVeh && (
           <AnalisisVehiculoBiggy cert={cert} veh={veh} docs={docsCert}
