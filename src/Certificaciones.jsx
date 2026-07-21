@@ -1440,7 +1440,7 @@ function ValidacionRepuve({ cert, veh, onMoverA, onVehActualizado }) {
 
 // ─── 📣 Notificar documentación fallida (WhatsApp / Email) · Etapa Pre-validación Biggy ───
 // Los items observados por Biggy se seleccionan y se avisan al tercero por el canal elegido.
-function NotificarDocsFallidas({ nombre, telefonoInicial, emailInicial, alertas, fuente, registroId }) {
+function NotificarDocsFallidas({ nombre, telefonoInicial, emailInicial, alertas, fuente, registroId, terceroId }) {
   const [abierto, setAbierto] = useState(false);
   const [historial, setHistorial] = useState([]);
   const [verHist, setVerHist] = useState(false);
@@ -1461,6 +1461,28 @@ function NotificarDocsFallidas({ nombre, telefonoInicial, emailInicial, alertas,
   const [canal, setCanal] = useState("ambos");   // whatsapp | email | ambos
   const [enviando, setEnviando] = useState(false);
   const [enviadoAt, setEnviadoAt] = useState(null);
+
+  // Fuente B: si la tarjeta no trae contacto, se toma del Perfil de Empresa
+  // (perfiles_empresa.fono_contacto / correo_contacto); fallback: email del portal.
+  useEffect(() => {
+    (async () => {
+      if (!terceroId) return;
+      if ((telefonoInicial || "").trim() && (emailInicial || "").trim()) return;
+      try {
+        const { data: perfil } = await sb.from("perfiles_empresa")
+          .select("fono_contacto, correo_contacto").eq("tercero_id", terceroId).maybeSingle();
+        if (perfil) {
+          if (perfil.fono_contacto) setTel((t) => t.trim() ? t : perfil.fono_contacto);
+          if (perfil.correo_contacto) setMail((m) => m.trim() ? m : perfil.correo_contacto);
+        }
+        if (!(perfil && perfil.correo_contacto)) {
+          const { data: t } = await sb.from("terceros").select("email_portal").eq("id", terceroId).limit(1);
+          const ep = t && t[0] && t[0].email_portal;
+          if (ep) setMail((m) => m.trim() ? m : ep);
+        }
+      } catch (e) { console.warn("Prefill contacto empresa:", e?.message || e); }
+    })();
+  }, [terceroId]);
 
   // Convierte una alerta de Biggy (objeto o string) a texto legible para el mensaje
   const alertaATexto = (a) => {
@@ -1567,8 +1589,10 @@ function NotificarDocsFallidas({ nombre, telefonoInicial, emailInicial, alertas,
               <div style={{ fontSize: 10.5, fontWeight: 800, color: "#8a6a3f", textTransform: "uppercase", marginBottom: 6 }}>Items observados por Biggy — marca los que se notificarán</div>
               {(alertas || []).map((a, i) => (
                 <label key={i} style={{ display: "flex", gap: 10, alignItems: "flex-start", justifyContent: "flex-start", textAlign: "left", width: "100%", boxSizing: "border-box", padding: "7px 10px", borderRadius: 8, background: sel[i] ? "#fff4e0" : "transparent", cursor: "pointer", fontSize: 12.5, color: "#5a4630", marginBottom: 2 }}>
-                  <input type="checkbox" checked={!!sel[i]} onChange={() => setSel(s => ({ ...s, [i]: !s[i] }))} style={{ marginTop: 2, flexShrink: 0 }} />
-                  <span style={{ flex: 1, textAlign: "left", lineHeight: 1.5 }}>{typeof a === "string" ? a : (a.detalle || a.mensaje || JSON.stringify(a))}</span>
+                  {/* width/height explícitos: el CSS global del Brain pone width:100% a los input y desarma el flex */}
+                  <input type="checkbox" checked={!!sel[i]} onChange={() => setSel(s => ({ ...s, [i]: !s[i] }))}
+                    style={{ width: 16, height: 16, minWidth: 16, maxWidth: 16, flex: "0 0 16px", margin: "2px 0 0 0", padding: 0, accentColor: "#b45309" }} />
+                  <span style={{ flex: "1 1 auto", minWidth: 0, textAlign: "left", lineHeight: 1.5 }}>{typeof a === "string" ? a : (a.detalle || a.mensaje || JSON.stringify(a))}</span>
                 </label>
               ))}
             </div>
@@ -2525,7 +2549,7 @@ function DetalleCertificacion({ cert, etapa, onVolver, onPasarEtapa2, onMoverA, 
         )}
 
         {etapaActual === "prevalidacion_biggy" && (
-          <NotificarDocsFallidas nombre={cert.nombre_display || cert.nombre} telefonoInicial={cert.telefono || cert.raw?.telefono || ""} emailInicial={cert.email || cert.raw?.email || cert.raw?.correo || ""} alertas={alertas} fuente="certificaciones" registroId={cert.id} />
+          <NotificarDocsFallidas nombre={cert.nombre_display || cert.nombre} telefonoInicial={cert.telefono || cert.raw?.telefono || ""} emailInicial={cert.email || cert.raw?.email || cert.raw?.correo || ""} alertas={alertas} fuente="certificaciones" registroId={cert.id} terceroId={cert.tercero_id} />
         )}
         {!enEtapa1 && esVeh && (
           <AnalisisVehiculoBiggy cert={cert} veh={veh} docs={docsCert}
