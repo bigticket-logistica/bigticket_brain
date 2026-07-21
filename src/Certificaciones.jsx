@@ -152,13 +152,29 @@ function GestorDocsProspecto({ candidato, onActualizar }) {
 }
 
 // Fuente B · filas de certificacion_documentos, bucket privado proceso_certificacion_bt.
-// Muestra fecha de carga/reemplazo y permite gestionar también lo que subió la empresa desde su portal.
+// Diseño de "slots" como en Fuente A: los documentos esperados según el tipo de
+// certificación aparecen SIEMPRE (con botón Cargar si están vacíos); lo demás
+// queda en "Otros documentos" con la opción "Usar como…" para recategorizar lo
+// que el tercero subió (p. ej. un "Otro" que en realidad es la INE corregida).
+const SLOTS_CERT_PERSONA  = ["ine", "ine_reverso", "curp", "rfc", "licencia"];
+const SLOTS_CERT_VEHICULO = ["foto_frente", "foto_trasera", "foto_lado_izq", "foto_lado_der", "tarjeta_circulacion"];
+
 function GestorDocsCert({ cert, docs, onRecargar, cambios, resaltar }) {
   const [busy, setBusy] = useState(null);
   const [nuevoTipo, setNuevoTipo] = useState("otro");
   const fileReemRef = useRef(null);
   const fileNuevoRef = useRef(null);
   const ctxRef = useRef(null);
+
+  const esVeh = cert.tipo === "vehiculo";
+  const slots = esVeh ? SLOTS_CERT_VEHICULO : SLOTS_CERT_PERSONA;
+
+  // El documento MÁS RECIENTE de cada tipo ocupa el slot (docs viene en orden asc);
+  // versiones anteriores y tipos fuera de los slots van a "Otros documentos".
+  const docDeSlot = {};
+  (docs || []).forEach((d) => { docDeSlot[docTipoLimpioCert(d.tipo_documento)] = d; });
+  const idsEnSlots = new Set(slots.map((s) => docDeSlot[s]?.id).filter(Boolean));
+  const extras = (docs || []).filter((d) => !idsEnSlots.has(d.id));
 
   // Mientras la tarjeta tenga "cambios pendientes", se resalta el documento que
   // la empresa cargó/reemplazó: match duro por doc_id (logs nuevos) o, para logs
@@ -207,19 +223,68 @@ function GestorDocsCert({ cert, docs, onRecargar, cambios, resaltar }) {
     finally { setBusy(null); }
   };
 
-  const cargarNuevo = async (file) => {
-    setBusy("nuevo");
+  const cargarConTipo = async (tipo, file) => {
+    setBusy(`carga-${tipo}`);
     try {
       const ext = (file.name.split(".").pop() || "jpg").toLowerCase();
-      const path = `${basePath()}/${nuevoTipo}_${Date.now()}.${ext}`;
+      const path = `${basePath()}/${tipo}_${Date.now()}.${ext}`;
       const { error: eUp } = await sb.storage.from("proceso_certificacion_bt").upload(path, file, { upsert: true });
       if (eUp) throw new Error(eUp.message);
       const { error: eIns } = await sb.from("certificacion_documentos")
-        .insert({ certificacion_id: cert.id, tipo_documento: nuevoTipo, storage_path: path, subido_por: "analista_brain" });
+        .insert({ certificacion_id: cert.id, tipo_documento: tipo, storage_path: path, subido_por: "analista_brain" });
       if (eIns) throw new Error("El archivo subió pero no se registró: " + eIns.message);
       await onRecargar();
     } catch (e) { alert("No se pudo cargar: " + e.message); }
     finally { setBusy(null); }
+  };
+
+  // Recategoriza un documento (p. ej. "Otro" del portal → "INE (frente)").
+  // Al cambiar el tipo, pasa a ocupar el slot oficial y Biggy lo toma en el próximo análisis.
+  const usarComo = async (d, tipo) => {
+    if (!tipo) return;
+    setBusy(d.id);
+    try {
+      const { error } = await sb.from("certificacion_documentos")
+        .update({ tipo_documento: tipo, updated_at: new Date().toISOString(), subido_por: "analista_brain" }).eq("id", d.id);
+      if (error) throw new Error(error.message);
+      await onRecargar();
+    } catch (e) { alert("No se pudo recategorizar: " + e.message); }
+    finally { setBusy(null); }
+  };
+
+  const pedirReemplazo = (d) => { ctxRef.current = { d }; if (fileReemRef.current) fileReemRef.current.click(); };
+  const pedirCarga = (tipo) => { ctxRef.current = { tipo }; if (fileNuevoRef.current) fileNuevoRef.current.click(); };
+
+  const fichaDoc = (d, esExtra) => {
+    const marca = marcaDe(d);
+    return (
+      <div key={d.id} style={marca ? { border: "2px solid #F47B20", borderRadius: 12, padding: 6, background: "#fff8f2" } : undefined}>
+        {marca && (
+          <div style={{ fontSize: 10, fontWeight: 800, color: "#fff", background: "#F47B20", borderRadius: 6, padding: "2px 8px", textAlign: "center", marginBottom: 5 }}>
+            {marca} — revisar
+          </div>
+        )}
+        <VisorDoc url={d.url} label={docEtiquetaCert(d.tipo_documento)} />
+        <div style={{ fontSize: 10, color: "#98a2b3", textAlign: "center", marginTop: 3, lineHeight: 1.5 }}>
+          Cargado {fmtFH(d.created_at)}{d.updated_at ? ` · reempl. ${fmtFH(d.updated_at)}` : ""}{d.subido_por ? ` · ${d.subido_por}` : ""}
+        </div>
+        <div style={{ display: "flex", gap: 6, justifyContent: "center", marginTop: 5, flexWrap: "wrap" }}>
+          <button disabled={busy === d.id} style={_btnDoc} onClick={() => pedirReemplazo(d)}>
+            {busy === d.id ? "…" : "Reemplazar"}
+          </button>
+          <button disabled={busy === d.id} onClick={() => eliminar(d)} style={_btnDocRojo}>Eliminar</button>
+        </div>
+        {esExtra && (
+          <div style={{ display: "flex", justifyContent: "center", marginTop: 5 }}>
+            <select value="" disabled={busy === d.id} onChange={(e) => usarComo(d, e.target.value)}
+              style={{ padding: "4px 8px", borderRadius: 8, border: "1px solid #d6def0", fontSize: 11, color: "#1a3a6b", fontWeight: 700, fontFamily: "'Geist',sans-serif", background: "#eef2f7" }}>
+              <option value="">Usar como…</option>
+              {TIPOS_DOC_CERT.filter((t) => t !== "otro").map((t) => <option key={t} value={t}>{DOC_LABEL[t] || t}</option>)}
+            </select>
+          </div>
+        )}
+      </div>
+    );
   };
 
   return (
@@ -227,49 +292,50 @@ function GestorDocsCert({ cert, docs, onRecargar, cambios, resaltar }) {
       <div className="form-title">Documentos</div>
       {docs === null ? (
         <div style={{ fontSize: 12, color: "#888" }}>Cargando documentos…</div>
-      ) : docs.length === 0 ? (
-        <div style={{ fontSize: 12, color: "#888", marginBottom: 10 }}>Sin documentos cargados.</div>
       ) : (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(150px,1fr))", gap: 12 }}>
-          {docs.map((d) => {
-            const marca = marcaDe(d);
-            return (
-              <div key={d.id} style={marca ? { border: "2px solid #F47B20", borderRadius: 12, padding: 6, background: "#fff8f2" } : undefined}>
-                {marca && (
-                  <div style={{ fontSize: 10, fontWeight: 800, color: "#fff", background: "#F47B20", borderRadius: 6, padding: "2px 8px", textAlign: "center", marginBottom: 5 }}>
-                    {marca} — revisar
+        <>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(150px,1fr))", gap: 12 }}>
+            {slots.map((s) => {
+              const d = docDeSlot[s];
+              if (d) return fichaDoc(d, false);
+              return (
+                <div key={s}>
+                  <VisorDoc url={null} label={DOC_LABEL[s] || s} />
+                  <div style={{ display: "flex", justifyContent: "center", marginTop: 6 }}>
+                    <button disabled={busy === `carga-${s}`} style={_btnDoc} onClick={() => pedirCarga(s)}>
+                      {busy === `carga-${s}` ? "Subiendo…" : "📎 Cargar"}
+                    </button>
                   </div>
-                )}
-                <VisorDoc url={d.url} label={docEtiquetaCert(d.tipo_documento)} />
-                <div style={{ fontSize: 10, color: "#98a2b3", textAlign: "center", marginTop: 3, lineHeight: 1.5 }}>
-                  Cargado {fmtFH(d.created_at)}{d.updated_at ? ` · reempl. ${fmtFH(d.updated_at)}` : ""}{d.subido_por ? ` · ${d.subido_por}` : ""}
                 </div>
-                <div style={{ display: "flex", gap: 6, justifyContent: "center", marginTop: 5, flexWrap: "wrap" }}>
-                  <button disabled={busy === d.id} style={_btnDoc}
-                    onClick={() => { ctxRef.current = d; if (fileReemRef.current) fileReemRef.current.click(); }}>
-                    {busy === d.id ? "…" : "Reemplazar"}
-                  </button>
-                  <button disabled={busy === d.id} onClick={() => eliminar(d)} style={_btnDocRojo}>Eliminar</button>
-                </div>
+              );
+            })}
+          </div>
+          {extras.length > 0 && (
+            <>
+              <div style={{ fontSize: 11, fontWeight: 800, color: "#667085", textTransform: "uppercase", margin: "16px 0 8px" }}>
+                Otros documentos cargados (del portal o versiones anteriores)
               </div>
-            );
-          })}
-        </div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(150px,1fr))", gap: 12 }}>
+                {extras.map((d) => fichaDoc(d, true))}
+              </div>
+            </>
+          )}
+        </>
       )}
       <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 14, flexWrap: "wrap", borderTop: "1px solid #f0f2f5", paddingTop: 12 }}>
         <select value={nuevoTipo} onChange={(e) => setNuevoTipo(e.target.value)}
           style={{ padding: "7px 10px", borderRadius: 8, border: "1px solid #e4e7ec", fontSize: 12, fontFamily: "'Geist',sans-serif" }}>
           {TIPOS_DOC_CERT.map((t) => <option key={t} value={t}>{DOC_LABEL[t] || t}</option>)}
         </select>
-        <button className="btn-orange" disabled={busy === "nuevo"} style={{ fontSize: 12, padding: "8px 14px" }}
-          onClick={() => { if (fileNuevoRef.current) fileNuevoRef.current.click(); }}>
-          {busy === "nuevo" ? "Subiendo…" : "📎 Cargar documento nuevo"}
+        <button className="btn-orange" disabled={busy === `carga-${nuevoTipo}`} style={{ fontSize: 12, padding: "8px 14px" }}
+          onClick={() => pedirCarga(nuevoTipo)}>
+          {busy === `carga-${nuevoTipo}` ? "Subiendo…" : "📎 Cargar documento nuevo"}
         </button>
       </div>
       <input ref={fileReemRef} type="file" accept="image/*,application/pdf" style={{ display: "none" }}
-        onChange={(e) => { const f = e.target.files[0]; e.target.value = ""; const d = ctxRef.current; ctxRef.current = null; if (f && d) reemplazar(d, f); }} />
+        onChange={(e) => { const f = e.target.files[0]; e.target.value = ""; const ctx = ctxRef.current; ctxRef.current = null; if (f && ctx && ctx.d) reemplazar(ctx.d, f); }} />
       <input ref={fileNuevoRef} type="file" accept="image/*,application/pdf" style={{ display: "none" }}
-        onChange={(e) => { const f = e.target.files[0]; e.target.value = ""; if (f) cargarNuevo(f); }} />
+        onChange={(e) => { const f = e.target.files[0]; e.target.value = ""; const ctx = ctxRef.current; ctxRef.current = null; if (f && ctx && ctx.tipo) cargarConTipo(ctx.tipo, f); }} />
     </div>
   );
 }
@@ -2197,7 +2263,35 @@ function DetalleCertificacion({ cert, etapa, onVolver, onPasarEtapa2, onMoverA, 
     try {
       const { data } = await sb.from("certificacion_documentos")
         .select("*").eq("certificacion_id", cert.id).order("created_at", { ascending: true });
-      const rows = data || [];
+      let rows = data || [];
+
+      // RE-INDEXACIÓN desde Storage: el portal viejo subía el archivo pero el insert
+      // a certificacion_documentos podía fallar en silencio → archivos huérfanos en
+      // el bucket sin fila en la tabla (tarjeta "Sin documentos" y Biggy sin insumos).
+      // Solo corre cuando la tarjeta NO tiene ninguna fila (el escenario roto), para
+      // no resucitar versiones antiguas ya reemplazadas. Igual que la indexación
+      // automática del Archivador: crea las filas faltantes infiriendo el tipo del
+      // nombre del archivo (ine.jpg → ine, otro_1784....png → otro).
+      if (rows.length === 0 && cert.tercero_id) {
+        try {
+          const carpeta = `${cert.tercero_id}/${cert.id}`;
+          const { data: files } = await sb.storage.from("proceso_certificacion_bt").list(carpeta, { limit: 200 });
+          const huerfanos = (files || []).filter((f) => f.name && f.id);
+          if (huerfanos.length) {
+            const nuevos = huerfanos.map((f) => ({
+              certificacion_id: cert.id,
+              tipo_documento: docTipoLimpioCert(f.name.replace(/\.[^.]+$/, "")) || "otro",
+              storage_path: `${carpeta}/${f.name}`,
+              subido_por: "reindex_brain",
+              ...(f.created_at ? { created_at: f.created_at } : {}),
+            }));
+            const { data: ins, error: eIns } = await sb.from("certificacion_documentos").insert(nuevos).select("*");
+            if (!eIns && ins?.length) rows = ins;
+            else if (eIns) console.warn("Re-index certificacion_documentos:", eIns.message);
+          }
+        } catch (e) { console.warn("Re-index Storage:", e?.message || e); }
+      }
+
       const conUrl = await Promise.all(rows.map(async (d) => {
         let url = "";
         try {
