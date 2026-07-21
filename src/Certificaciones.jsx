@@ -1440,7 +1440,7 @@ function ValidacionRepuve({ cert, veh, onMoverA, onVehActualizado }) {
 
 // ─── 📣 Notificar documentación fallida (WhatsApp / Email) · Etapa Pre-validación Biggy ───
 // Los items observados por Biggy se seleccionan y se avisan al tercero por el canal elegido.
-function NotificarDocsFallidas({ nombre, telefonoInicial, emailInicial, alertas, fuente, registroId, terceroId }) {
+function NotificarDocsFallidas({ nombre, telefonoInicial, emailInicial, alertas, fuente, registroId, terceroId, empresa, titulo }) {
   const [abierto, setAbierto] = useState(false);
   const [historial, setHistorial] = useState([]);
   const [verHist, setVerHist] = useState(false);
@@ -1511,9 +1511,14 @@ function NotificarDocsFallidas({ nombre, telefonoInicial, emailInicial, alertas,
     if (!confirm(`¿Enviar la notificación por ${canal === "ambos" ? "WhatsApp y correo" : canal} a ${nombre}?`)) return;
     setEnviando(true);
     try {
-      const resp = await fetch("https://bigticket2026.app.n8n.cloud/webhook/notificar-doc-fallida", {
+      // Fuente A y B tienen plantilla WhatsApp, redacción de correo y link de portal
+      // distintos → flujos n8n separados.
+      const webhook = fuente === "certificaciones"
+        ? "https://bigticket2026.app.n8n.cloud/webhook/notificar-doc-fallida-terceros"
+        : "https://bigticket2026.app.n8n.cloud/webhook/notificar-doc-fallida";
+      const resp = await fetch(webhook, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ canal, nombre, telefono: tel.trim(), email: mail.trim(), items: lista }),
+        body: JSON.stringify({ canal, nombre, empresa: empresa || "", titulo: titulo || nombre, telefono: tel.trim(), email: mail.trim(), items: lista }),
       });
       const txt = await resp.text();
       if (!resp.ok || !txt.trim()) throw new Error("el servicio de notificación no respondió");
@@ -2412,6 +2417,12 @@ function DetalleCertificacion({ cert, etapa, onVolver, onPasarEtapa2, onMoverA, 
   };
   useEffect(() => { setDocsCert(null); cargarDocsCert(); }, [cert.id]);
 
+  // URL firmada del documento más reciente de un tipo (para Nubarium/Biggy)
+  const urlDocDe = (t) => {
+    const r = [...(docsCert || [])].reverse().find((d) => docTipoLimpioCert(d.tipo_documento) === t);
+    return r?.url || "";
+  };
+
   // Biggy (Claude Vision) para conductores/ayudantes de App/Portal.
   // Reusa el mismo webhook mapeando los documentos del portal a los campos esperados.
   const analizarCert = async (docs) => {
@@ -2561,7 +2572,7 @@ function DetalleCertificacion({ cert, etapa, onVolver, onPasarEtapa2, onMoverA, 
         )}
 
         {etapaActual === "prevalidacion_biggy" && (
-          <NotificarDocsFallidas nombre={cert.nombre_display || cert.nombre} telefonoInicial={cert.telefono || cert.raw?.telefono || ""} emailInicial={cert.email || cert.raw?.email || cert.raw?.correo || ""} alertas={alertas} fuente="certificaciones" registroId={cert.id} terceroId={cert.tercero_id} />
+          <NotificarDocsFallidas nombre={cert.nombre_display || cert.nombre} telefonoInicial={cert.telefono || cert.raw?.telefono || ""} emailInicial={cert.email || cert.raw?.email || cert.raw?.correo || ""} alertas={alertas} fuente="certificaciones" registroId={cert.id} terceroId={cert.tercero_id} empresa={ter?.nombre || ""} titulo={titulo} />
         )}
         {!enEtapa1 && esVeh && (
           <AnalisisVehiculoBiggy cert={cert} veh={veh} docs={docsCert}
@@ -2613,14 +2624,35 @@ function DetalleCertificacion({ cert, etapa, onVolver, onPasarEtapa2, onMoverA, 
           </div>
         )}
 
-        {/* Resultado de MELI */}
+        {/* Etapa 5 personas: informe Nubarium (mismo componente de Fuente A, adaptado) + decisión */}
         {!enEtapa1 && !esVeh && etapaActual === "validacion_nubarium" && (
-          <div className="form-card" style={{ background: "#eafaf0", border: "1px solid #b7e4c7" }}>
-            <div style={{ fontSize: 13, color: "#166534", marginBottom: 12 }}>✅ <b>Aprobado por MELI.</b> {cert.respuesta_meli || ""} — Ahora en <b>Validación Nubarium</b>. Al validar sus documentos oficiales, la certificación queda lista.</div>
-            <button className="btn-orange" onClick={() => onMoverA("aceptado")} style={{ width: "100%" }}>
-              ✓ Certificación validada → Aceptado
-            </button>
-          </div>
+          <>
+            <div className="form-card" style={{ background: "#eafaf0", border: "1px solid #b7e4c7" }}>
+              <div style={{ fontSize: 13, color: "#166534" }}>✅ <b>Aprobado por MELI.</b> {cert.respuesta_meli || ""} — Ahora en <b>Validación Nubarium</b>: corre el informe oficial abajo y decide.</div>
+            </div>
+            <ValidacionNubarium
+              candidato={{
+                id: cert.id,
+                nombre: cond?.nombre || "",
+                curp: cond?.curp || "",
+                rfc: cond?.rfc || "",
+                url_ine: urlDocDe("ine"),
+                url_ine_2: urlDocDe("ine_reverso"),
+                nubarium_reporte: cert.nubarium_reporte || null,
+              }}
+              onActualizar={async (u) => {
+                cert.nubarium_reporte = u.nubarium_reporte;
+                const { error } = await sb.from("certificaciones").update({ nubarium_reporte: u.nubarium_reporte }).eq("id", cert.id);
+                if (error) console.warn("No se guardó nubarium_reporte (¿falta la columna? corre fuente_b_nubarium.sql):", error.message);
+                setDocsCert((d) => d ? [...d] : d);
+              }}
+            />
+            <div className="form-card">
+              <button className="btn-orange" onClick={() => onMoverA("aceptado")} style={{ width: "100%" }}>
+                ✓ Certificación validada → Aceptado
+              </button>
+            </div>
+          </>
         )}
         {esVeh && etapaActual === "validacion_nubarium" && (
           <ValidacionRepuve cert={cert} veh={veh} onMoverA={onMoverA}
