@@ -2290,6 +2290,18 @@ function normalizarProspeccion(row) {
   };
 }
 
+// Etapa de una tarjeta Fuente B. La automatización de MELI (RPC del correo)
+// actualiza estado + fecha_respuesta_meli pero puede no tocar etapa_kanban; como
+// etapa_kanban persiste los movimientos manuales, tendría prioridad y la tarjeta
+// quedaría "clavada" en Validación MELI. Regla: si ya hay resolución y la tarjeta
+// sigue parada en MELI, el estado resuelto manda (aprobado → Etapa 5 · Nubarium,
+// rechazado → Rechazado). Movimientos manuales posteriores siguen ganando.
+function etapaPortalCert(row) {
+  const resuelto = { aprobado: "validacion_nubarium", rechazado: "rechazado" }[row.estado];
+  if (resuelto && row.fecha_respuesta_meli && (!row.etapa_kanban || row.etapa_kanban === "validacion_meli")) return resuelto;
+  return row.etapa_kanban || ETAPA_CERT[row.estado] || "recepcion";
+}
+
 // Fuente B · certificaciones + detalle (Portal de Prospección interno)
 function normalizarPortalCert(row) {
   const cond = _one(row.certificacion_conductor);
@@ -2305,7 +2317,7 @@ function normalizarPortalCert(row) {
     titulo: esVeh ? (veh?.placa || "Sin placa") : (cond?.nombre || ter?.nombre || "Sin nombre"),
     empresa: ter?.nombre || null,
     sc:     row.service_center || ter?.service_center || "—",
-    etapa:  row.etapa_kanban || ETAPA_CERT[row.estado] || "recepcion",
+    etapa:  etapaPortalCert(row),
     score:  row.claude_score_global ?? null,
     rec:    row.claude_recomendacion || null,
     estado_raw: row.estado,
@@ -2324,7 +2336,7 @@ function DetalleCertificacion({ cert, etapa, onVolver, onPasarEtapa2, onMoverA, 
   const [alertas, setAlertas] = useState(cert.claude_alertas || []);
   const [enviando, setEnviando] = useState(false);
 
-  const etapaActual = etapa || cert.etapa_kanban || ETAPA_CERT[cert.estado] || "recepcion";
+  const etapaActual = etapa || etapaPortalCert(cert);
   const enEtapa1 = etapaActual === "recepcion";
   const enLlamada = etapaActual === "llamada_supervisor";
   const enEtapa2 = etapaActual === "prevalidacion_biggy";
@@ -3585,8 +3597,9 @@ function ModuloCertificaciones() {
 
   useEffect(() => { (async () => { await autoSyncCRM(); await cargar(); })(); }, []);
 
-  const cargar = async () => {
-    setLoading(true);
+  const [refrescando, setRefrescando] = useState(false);
+  const cargar = async (silencioso = false) => {
+    if (silencioso) setRefrescando(true); else setLoading(true);
     try {
       const [rp, rc] = await Promise.all([
         sb.from("certificaciones_mx").select("*").order("created_at", { ascending: false }),
@@ -3600,11 +3613,23 @@ function ModuloCertificaciones() {
       setItems([...cardsB, ...cardsA]);
     } catch (e) {
       console.error("Error cargando certificaciones:", e.message);
-      setItems([]);
+      if (!silencioso) setItems([]);
     } finally {
-      setLoading(false);
+      setLoading(false); setRefrescando(false);
     }
   };
+
+  // Auto-refresh de fondo cada 60 s (solo en el tablero, sin tarjeta abierta y con
+  // la pestaña visible) — así los movimientos de las automatizaciones (correo MELI,
+  // cargas del portal) aparecen solos, sin recargar la página.
+  const selRef = useRef(null);
+  selRef.current = selected;
+  useEffect(() => {
+    const t = setInterval(() => {
+      if (!selRef.current && !document.hidden) cargar(true);
+    }, 60000);
+    return () => clearInterval(t);
+  }, []);
 
   // Fuente A: jala prospectos del CRM/onboarding a certificaciones_mx
   const autoSyncCRM = async () => {
@@ -3731,7 +3756,7 @@ function ModuloCertificaciones() {
 
   if (selected) {
     if (selected.fuente === "portal_cert") {
-      return <DetalleCertificacion cert={selected.raw} etapa={selected.etapa} onVolver={() => setSelected(null)}
+      return <DetalleCertificacion cert={selected.raw} etapa={selected.etapa} onVolver={() => { setSelected(null); cargar(true); }}
         onPasarEtapa2={() => moverYCerrar(selected, "prevalidacion_biggy")}
         onMoverA={(etapa) => moverYCerrar(selected, etapa)}
         onAnalizado={(parsed) => setItems(prev => prev.map(i => i.key === selected.key ? {
@@ -3742,7 +3767,7 @@ function ModuloCertificaciones() {
     return (
       <DetalleCandidato
         candidato={selected.raw}
-        onVolver={() => setSelected(null)}
+        onVolver={() => { setSelected(null); cargar(true); }}
         onPasarEtapa2={() => moverYCerrar(selected, "llamada_supervisor")}
         onActualizar={(updated) => {
           const rn = normalizarProspeccion(updated);
@@ -3791,6 +3816,11 @@ function ModuloCertificaciones() {
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
           <img src={BIGGY_IMG} alt="Biggy" style={{ width: 32, height: 32, borderRadius: "50%", objectFit: "cover", border: "2px solid #F47B20" }} />
           {seccion === "certificaciones" && (
+            <>
+            <button onClick={() => cargar(true)} disabled={refrescando} title="Traer los últimos movimientos sin recargar la página"
+              style={{ padding: "7px 14px", borderRadius: 8, border: "0.5px solid #e4e7ec", background: "#fff", color: "#1a3a6b", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "'Geist',sans-serif", opacity: refrescando ? 0.6 : 1 }}>
+              {refrescando ? "⏳ Actualizando…" : "🔄 Actualizar"}
+            </button>
             <div style={{ display: "flex", background: "#fff", borderRadius: 8, border: "0.5px solid #e4e7ec", overflow: "hidden" }}>
               {[["kanban", "Kanban"], ["lista", "Lista"]].map(([v, l]) => (
                 <button key={v} onClick={() => setVista(v)}
@@ -3800,6 +3830,7 @@ function ModuloCertificaciones() {
                 </button>
               ))}
             </div>
+            </>
           )}
         </div>
       </div>
