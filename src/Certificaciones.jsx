@@ -2046,8 +2046,10 @@ const ESTADO_DOC_GESTION = {
 // El Portal de Terceros lee este mismo archivador (solo su empresa).
 const DOC_CATEGORIAS = [
   { id: "contratos", label: "📑 Contratos" },
+  { id: "empresa",   label: "🏛 Documentación Empresa" },   // ficha de ingreso, datos bancarios, CSF, RFC, acta constitutiva
   { id: "seguros",   label: "🛡 Seguros" },
   { id: "vehiculos", label: "🚚 Vehículos" },
+  { id: "qr",        label: "🔳 QR MELI" },                 // código QR de MELI por camioneta (Referencia = placa)
   { id: "personal",  label: "👤 Personal" },
   { id: "anexos",    label: "📎 Anexos" },
   { id: "otros",     label: "🗃 Otros" },
@@ -2270,7 +2272,8 @@ function DocumentacionTerceros() {
             {DOC_CATEGORIAS.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
           </select>
           <input value={referencia} onChange={(e) => setReferencia(e.target.value)}
-            placeholder="Referencia opcional (placa, persona…)" style={{ ...inp, flex: 1, minWidth: 180 }} />
+            placeholder={categoria === "qr" ? "Placa de la camioneta (recomendado)" : categoria === "empresa" ? "Ej. CSF, acta constitutiva, ficha…" : "Referencia opcional (placa, persona…)"}
+            style={{ ...inp, flex: 1, minWidth: 180 }} />
         </div>
 
         <input ref={fileRef} type="file" multiple style={{ display: "none" }} onChange={(e) => { subirArchivos(e.target.files); e.target.value = ""; }} />
