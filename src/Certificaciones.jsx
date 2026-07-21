@@ -439,6 +439,31 @@ function ResumenSolicitudAlta({ fuente, registro, datos, onEnviado }) {
       if (!resp.ok || !txt || !txt.trim()) throw new Error("el servicio no respondió");
       const r = JSON.parse(txt);
       if (!r.ok) throw new Error(r.error || "no se pudo crear la empresa");
+      // Archivador: indexar los documentos de la minuta (fotos, póliza, tarjeta, GPS)
+      // en la empresa recién creada — sin volver a subir nada (mismo archivo, nueva ficha).
+      if (r.tercero_id) {
+        try {
+          const ETIQ = { frente: "Frente", posterior: "Posterior", lat_izq: "Lateral izq", lat_der: "Lateral der", placa: "Placa", interior: "Interior", odometro: "Odómetro", tarjeta: "Tarjeta de circulación", seguro: "Póliza de seguro", gps: "Info GPS" };
+          const { data: ms } = await sb.from("minutas_entrevista")
+            .select("vehiculos").eq("fuente", fuente).eq("registro_id", registro.id)
+            .order("created_at", { ascending: false }).limit(1);
+          const vehs = (ms && ms[0] && Array.isArray(ms[0].vehiculos)) ? ms[0].vehiculos : [];
+          const filas = [];
+          vehs.forEach((v, i) => {
+            const ref = (v.placa || `Unidad ${i + 1}`).toUpperCase();
+            Object.entries(v.fotos || {}).forEach(([slot, path]) => {
+              filas.push({
+                tercero_id: r.tercero_id, bucket: "proceso_certificacion_bt", storage_path: path,
+                categoria: slot === "seguro" ? "seguros" : "vehiculos",
+                nombre_archivo: `${ref} — ${ETIQ[slot] || slot}.jpg`, mime_type: "image/jpeg",
+                referencia: ref, notas: "Capturado en la minuta de entrevista",
+                subido_por: window.__PERFIL_EMAIL || "", origen: "brain",
+              });
+            });
+          });
+          if (filas.length) await sb.from("documentos_empresa").upsert(filas, { onConflict: "storage_path" });
+        } catch (eIdx) { console.warn("Indexación de minuta al archivador falló:", eIdx.message); }
+      }
       const tabla = fuente === "certificaciones_mx" ? "certificaciones_mx" : "certificaciones";
       const patch = fuente === "certificaciones_mx"
         ? { estado: "en_firma", etapa_kanban: "firma_contrato" }
@@ -2236,14 +2261,14 @@ function DocumentacionTerceros() {
   };
 
   const descargar = async (doc) => {
-    const { data, error } = await sb.storage.from("archivador_empresas").createSignedUrl(doc.storage_path, 300);
+    const { data, error } = await sb.storage.from(doc.bucket || "archivador_empresas").createSignedUrl(doc.storage_path, 300);
     if (error || !data?.signedUrl) { alert("No se pudo generar el enlace: " + (error?.message || "")); return; }
     window.open(data.signedUrl, "_blank");
   };
 
   const eliminar = async (doc) => {
     if (!confirm(`¿Eliminar "${doc.nombre_archivo}" del archivador?\n\nSe borra el archivo y su registro. Esta acción no se puede deshacer.`)) return;
-    const { error: eSt } = await sb.storage.from("archivador_empresas").remove([doc.storage_path]);
+    const { error: eSt } = await sb.storage.from(doc.bucket || "archivador_empresas").remove([doc.storage_path]);
     if (eSt) { alert("No se pudo borrar el archivo: " + eSt.message); return; }
     await sb.from("documentos_empresa").delete().eq("id", doc.id);
     setDocs(p => (p || []).filter(d => d.id !== doc.id));
