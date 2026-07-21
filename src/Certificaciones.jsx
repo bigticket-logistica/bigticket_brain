@@ -1124,6 +1124,21 @@ function NotificarDocsFallidas({ nombre, telefonoInicial, emailInicial, alertas,
         fuente, registro_id: registroId, canal, telefono: tel.trim(), email: mail.trim(),
         items: lista, enviado_por: window.__PERFIL_EMAIL || "",
       });
+      // Fuente B: la observación también llega al hilo de Consultas del portal de la empresa
+      if (fuente === "certificaciones") {
+        try {
+          const { data: cr } = await sb.from("certificaciones").select("tercero_id").eq("id", registroId).limit(1);
+          const tid = cr && cr[0] && cr[0].tercero_id;
+          if (tid) {
+            await sb.from("mensajes_terceros").insert({
+              tercero_id: tid, autor: "bigticket",
+              mensaje: `📣 Observaciones sobre la certificación de ${nombre}:\n\n` +
+                lista.map((x, i) => `${i + 1}) ${x}`).join("\n") +
+                `\n\nCorrige lo señalado en la sección "Estado de certificación" del portal (reemplaza o carga los documentos observados).`,
+            });
+          }
+        } catch (eMsg) { console.warn("No se pudo dejar el mensaje en Consultas:", eMsg.message); }
+      }
       await cargarHistorial();
       setEnviadoAt(new Date());
       setSel({}); setExtra("");
@@ -2021,6 +2036,30 @@ function DetalleCertificacion({ cert, etapa, onVolver, onPasarEtapa2, onMoverA, 
         {!enEtapa1 && !enLlamada && !esVeh && (
           <BiggyChatBubble analizando={analizando} analisis={analisis} score={score} recomendacion={recomendacion} alertas={alertas} onReanalizar={() => docsCert && analizarCert(docsCert)} />
         )}
+        {cert.cambios_pendientes && (
+          <div className="form-card" style={{ background: "#fff4e5", border: "1.5px solid #F47B20" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 8 }}>
+              <div className="form-title" style={{ color: "#b45309", margin: 0 }}>⚠ La empresa actualizó documentos desde su portal</div>
+              <button onClick={async () => {
+                await sb.from("certificaciones").update({ cambios_pendientes: false }).eq("id", cert.id);
+                cert.cambios_pendientes = false;
+                setDocsCert(d => d ? [...d] : d);
+              }} style={{ marginLeft: "auto", background: "#fff", color: "#b45309", border: "1.5px solid #b45309", borderRadius: 8, padding: "7px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "'Geist',sans-serif" }}>
+                ✓ Marcar como revisado
+              </button>
+            </div>
+            <ul style={{ margin: 0, paddingLeft: 18 }}>
+              {(cert.cambios_prospecto || []).slice(-8).reverse().map((c, i) => (
+                <li key={i} style={{ fontSize: 12.5, color: "#8a4a0f", marginBottom: 4 }}>
+                  <b>{new Date(c.at).toLocaleString("es-MX", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}</b>
+                  {" · "}📎 {c.campo}: {c.accion}{c.por ? ` (${c.por})` : ""}
+                </li>
+              ))}
+            </ul>
+            <div style={{ fontSize: 11.5, color: "#8a6a3f", marginTop: 8 }}>Revisa los documentos actualizados — si corresponde, re-corre el análisis de Biggy o la validación de la etapa.</div>
+          </div>
+        )}
+
         {etapaActual === "prevalidacion_biggy" && (
           <NotificarDocsFallidas nombre={cert.nombre_display || cert.nombre} telefonoInicial={cert.telefono || cert.raw?.telefono || ""} emailInicial={cert.email || cert.raw?.email || cert.raw?.correo || ""} alertas={alertas} fuente="certificaciones" registroId={cert.id} />
         )}
