@@ -249,6 +249,97 @@ function GestorDocsCert({ cert, docs, onRecargar }) {
   );
 }
 
+// ─── CHAT CON LA EMPRESA (mensajes_terceros → pestaña Consultas del portal) ───
+// Mismo canal que el módulo Mensajes del Brain, embebido en la tarjeta de
+// certificación Fuente B. Lo que se escribe aquí aparece en el hilo de
+// Consultas del Portal de Terceros, y viceversa.
+function ChatEmpresaCert({ terceroId, empresa, titulo }) {
+  const [abierto, setAbierto] = useState(false);
+  const [msgs, setMsgs] = useState(null);
+  const [texto, setTexto] = useState("");
+  const [enviando, setEnviando] = useState(false);
+  const [noLeidos, setNoLeidos] = useState(0);
+  const finRef = useRef(null);
+
+  const cargar = async () => {
+    const { data } = await sb.from("mensajes_terceros")
+      .select("*").eq("tercero_id", terceroId).order("created_at", { ascending: true });
+    setMsgs(data || []);
+    setNoLeidos((data || []).filter(m => m.autor === "tercero" && !m.leido).length);
+  };
+  useEffect(() => { setMsgs(null); setAbierto(false); setTexto(""); cargar(); }, [terceroId]);
+  useEffect(() => { if (abierto && finRef.current) finRef.current.scrollIntoView({ block: "nearest" }); }, [abierto, msgs]);
+
+  const alternar = async () => {
+    const nx = !abierto;
+    setAbierto(nx);
+    if (nx) {
+      if (!texto && titulo) setTexto(`Sobre la certificación de ${titulo}: `);
+      if (noLeidos > 0) {
+        await sb.from("mensajes_terceros").update({ leido: true })
+          .eq("tercero_id", terceroId).eq("autor", "tercero").eq("leido", false);
+        setNoLeidos(0);
+      }
+    }
+  };
+
+  const enviar = async () => {
+    const t = texto.trim();
+    if (!t || enviando) return;
+    setEnviando(true);
+    const { data, error } = await sb.from("mensajes_terceros")
+      .insert({ tercero_id: terceroId, autor: "bigticket", mensaje: t }).select("*").single();
+    if (error) { alert("No se pudo enviar: " + error.message); }
+    else { setMsgs(prev => [...(prev || []), data]); setTexto(""); }
+    setEnviando(false);
+  };
+
+  return (
+    <div className="form-card">
+      <div style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", userSelect: "none" }} onClick={alternar}>
+        <div className="form-title" style={{ margin: 0, flex: 1 }}>💬 Mensajes con {empresa || "la empresa"}</div>
+        {noLeidos > 0 && (
+          <span style={{ background: "#F47B20", color: "#fff", fontSize: 10, fontWeight: 800, borderRadius: 10, padding: "2px 8px" }}>{noLeidos} sin leer</span>
+        )}
+        <span style={{ fontSize: 13, color: "#888" }}>{abierto ? "▴" : "▾"}</span>
+      </div>
+      <div style={{ fontSize: 11, color: "#98a2b3", marginTop: 4 }}>
+        Este hilo llega a la pestaña <b>Consultas</b> del Portal de Terceros — es la misma conversación del módulo Mensajes del Brain.
+      </div>
+      {abierto && (
+        <div style={{ marginTop: 12, borderTop: "1px solid #f0f2f5", paddingTop: 10 }}>
+          <div style={{ maxHeight: 300, overflowY: "auto", paddingRight: 4 }}>
+            {msgs === null ? <div style={{ fontSize: 12, color: "#888" }}>Cargando…</div>
+            : msgs.length === 0 ? <div style={{ fontSize: 12, color: "#888" }}>Sin mensajes con esta empresa. Escribe el primero abajo.</div>
+            : msgs.map(m => (
+              <div key={m.id} style={{ display: "flex", justifyContent: m.autor === "bigticket" ? "flex-end" : "flex-start", marginBottom: 8 }}>
+                <div style={{ maxWidth: "78%", padding: "8px 12px", borderRadius: 12, fontSize: 12.5, lineHeight: 1.5,
+                  background: m.autor === "bigticket" ? "#1a3a6b" : "#f4f5f7",
+                  color: m.autor === "bigticket" ? "#fff" : "#222",
+                  borderBottomRightRadius: m.autor === "bigticket" ? 4 : 12,
+                  borderBottomLeftRadius: m.autor === "bigticket" ? 12 : 4 }}>
+                  {m.mensaje}
+                  <div style={{ fontSize: 9, opacity: 0.6, marginTop: 4, textAlign: "right" }}>{fmtFH(m.created_at)}</div>
+                </div>
+              </div>
+            ))}
+            <div ref={finRef} />
+          </div>
+          <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+            <textarea value={texto} onChange={(e) => setTexto(e.target.value)} rows={2}
+              onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); enviar(); } }}
+              placeholder={`Escribe a ${empresa || "la empresa"}…`}
+              style={{ flex: 1, border: "1px solid #e4e7ec", borderRadius: 10, padding: "9px 12px", fontSize: 12.5, fontFamily: "'Geist',sans-serif", resize: "vertical" }} />
+            <button className="btn-orange" onClick={enviar} disabled={enviando || !texto.trim()} style={{ fontSize: 12, padding: "8px 16px", alignSelf: "flex-end" }}>
+              {enviando ? "…" : "Enviar"}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── BIGGY MESSENGER ────────────────────────────────────────────────
 function BiggyChatBubble({ analizando, analisis, score, recomendacion, alertas, onReanalizar }) {
   const colorRec = { APROBAR: { bg: "#dcfce7", color: "#166534", border: "#86efac" }, REVISAR: { bg: "#fef3c7", color: "#92400e", border: "#fde68a" }, RECHAZAR: { bg: "#fee2e2", color: "#c0392b", border: "#fca5a5" } };
@@ -2042,6 +2133,7 @@ function normalizarPortalCert(row) {
     origen: row.origen || "portal_web",
     tipo:   row.tipo || "conductor",
     titulo: esVeh ? (veh?.placa || "Sin placa") : (cond?.nombre || ter?.nombre || "Sin nombre"),
+    empresa: ter?.nombre || null,
     sc:     row.service_center || ter?.service_center || "—",
     etapa:  row.etapa_kanban || ETAPA_CERT[row.estado] || "recepcion",
     score:  row.claude_score_global ?? null,
@@ -2176,7 +2268,7 @@ function DetalleCertificacion({ cert, etapa, onVolver, onPasarEtapa2, onMoverA, 
         <button className="btn-back" onClick={onVolver}>← Volver</button>
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: 15, fontWeight: 700 }}>{titulo}</div>
-          <div style={{ fontSize: 12, color: "#888" }}>{cert.service_center || ter?.service_center || "—"} · {tc.label}</div>
+          <div style={{ fontSize: 12, color: "#888" }}>{cert.service_center || ter?.service_center || "—"} · {tc.label}{ter?.nombre ? <> · <b style={{ color: "#1a3a6b" }}>🏢 {ter.nombre}</b></> : null}</div>
         </div>
         <span style={{ fontSize: 10, fontWeight: 700, padding: "3px 10px", borderRadius: 20, background: fcFuente.bg, color: fcFuente.color, border: `1px solid ${fcFuente.border}` }}>
           {fcFuente.icon} {fcFuente.label}
@@ -2310,6 +2402,9 @@ function DetalleCertificacion({ cert, etapa, onVolver, onPasarEtapa2, onMoverA, 
             <div style={{ fontSize: 12, color: "#555" }}>Empresa transportista: <b>{ter.nombre}</b></div>
           </div>
         )}
+        {cert.tercero_id && (
+          <ChatEmpresaCert terceroId={cert.tercero_id} empresa={ter?.nombre} titulo={titulo} />
+        )}
 
         <div className="form-card">
           <div className="form-title">{esVeh ? "Datos del vehículo" : "Datos del candidato"}</div>
@@ -2411,7 +2506,12 @@ function KanbanBoard({ items, columnas = COLUMNAS, onCardClick, onMover, onElimi
                       {fc.icon} {fc.label}
                     </span>
                   </div>
-                  <div style={{ fontSize: 13, fontWeight: 600, color: "#1a1a1a", marginBottom: 8, wordBreak: "break-word" }}>{card.titulo}</div>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: "#1a1a1a", marginBottom: 4, wordBreak: "break-word" }}>{card.titulo}</div>
+                  {card.empresa && (
+                    <div title={card.empresa} style={{ fontSize: 11, fontWeight: 800, color: "#1a3a6b", marginBottom: 8, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      🏢 {card.empresa}
+                    </div>
+                  )}
                   <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
                     <span style={{ fontSize: 9, fontWeight: 700, padding: "2px 8px", borderRadius: 20, background: tc.bg, color: tc.color, border: `1px solid ${tc.border}` }}>
                       {tc.icon} {tc.label}
