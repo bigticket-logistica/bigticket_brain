@@ -159,7 +159,7 @@ function GestorDocsProspecto({ candidato, onActualizar }) {
 const SLOTS_CERT_PERSONA  = ["ine", "ine_reverso", "curp", "rfc", "licencia"];
 const SLOTS_CERT_VEHICULO = ["foto_frente", "foto_trasera", "foto_lado_izq", "foto_lado_der", "tarjeta_circulacion"];
 
-function GestorDocsCert({ cert, docs, onRecargar, cambios, resaltar }) {
+function GestorDocsCert({ cert, docs, onRecargar, cambios, resaltar, avisoSinIndexar }) {
   const [busy, setBusy] = useState(null);
   const [nuevoTipo, setNuevoTipo] = useState("otro");
   const fileReemRef = useRef(null);
@@ -199,12 +199,21 @@ function GestorDocsCert({ cert, docs, onRecargar, cambios, resaltar }) {
     setBusy(d.id);
     try {
       const ext = (file.name.split(".").pop() || "jpg").toLowerCase();
-      const path = `${basePath()}/${docTipoLimpioCert(d.tipo_documento)}_${Date.now()}.${ext}`;
+      const tipo = docTipoLimpioCert(d.tipo_documento) || "otro";
+      const path = `${basePath()}/${tipo}_${Date.now()}.${ext}`;
       const { error: eUp } = await sb.storage.from("proceso_certificacion_bt").upload(path, file, { upsert: true });
       if (eUp) throw new Error(eUp.message);
-      const { error: eUpd } = await sb.from("certificacion_documentos")
-        .update({ storage_path: path, updated_at: new Date().toISOString(), subido_por: "analista_brain" }).eq("id", d.id);
-      if (eUpd) throw new Error("El archivo subió pero no se registró: " + eUpd.message);
+      if (d._virtual) {
+        // El doc vivía solo en Storage: se registra el nuevo y se retira el archivo viejo
+        const { error: eIns } = await insDocCert({ certificacion_id: cert.id, tipo_documento: tipo, storage_path: path, subido_por: "analista_brain" });
+        if (eIns) throw new Error("El archivo subió pero no se registró: " + eIns.message);
+        try { await sb.storage.from("proceso_certificacion_bt").remove([d.storage_path]); } catch (e) { /* queda huérfano, inofensivo */ }
+      } else {
+        const { error: eUpd } = await updDocCert(d.id,
+          { storage_path: path, updated_at: new Date().toISOString(), subido_por: "analista_brain" },
+          { storage_path: path });
+        if (eUpd) throw new Error("El archivo subió pero no se registró: " + eUpd.message);
+      }
       await onRecargar();
     } catch (e) { alert("No se pudo reemplazar: " + e.message); }
     finally { setBusy(null); }
@@ -214,10 +223,12 @@ function GestorDocsCert({ cert, docs, onRecargar, cambios, resaltar }) {
     if (!confirm(`¿Eliminar ${docEtiquetaCert(d.tipo_documento)}? Esta acción no se puede deshacer.`)) return;
     setBusy(d.id);
     try {
-      try { await sb.storage.from("proceso_certificacion_bt").remove([d.storage_path]); }
-      catch (e) { /* el objeto puede no existir — se elimina igual el registro */ }
-      const { error: eDel } = await sb.from("certificacion_documentos").delete().eq("id", d.id);
-      if (eDel) throw new Error(eDel.message);
+      const { error: eRm } = await sb.storage.from("proceso_certificacion_bt").remove([d.storage_path]);
+      if (eRm && d._virtual) throw new Error(eRm.message); // virtual: Storage es su único registro
+      if (!d._virtual) {
+        const { error: eDel } = await sb.from("certificacion_documentos").delete().eq("id", d.id);
+        if (eDel) throw new Error(eDel.message);
+      }
       await onRecargar();
     } catch (e) { alert("No se pudo eliminar: " + e.message); }
     finally { setBusy(null); }
@@ -230,9 +241,8 @@ function GestorDocsCert({ cert, docs, onRecargar, cambios, resaltar }) {
       const path = `${basePath()}/${tipo}_${Date.now()}.${ext}`;
       const { error: eUp } = await sb.storage.from("proceso_certificacion_bt").upload(path, file, { upsert: true });
       if (eUp) throw new Error(eUp.message);
-      const { error: eIns } = await sb.from("certificacion_documentos")
-        .insert({ certificacion_id: cert.id, tipo_documento: tipo, storage_path: path, subido_por: "analista_brain" });
-      if (eIns) throw new Error("El archivo subió pero no se registró: " + eIns.message);
+      const { error: eIns } = await insDocCert({ certificacion_id: cert.id, tipo_documento: tipo, storage_path: path, subido_por: "analista_brain" });
+      if (eIns) console.warn("Documento en Storage sin fila en tabla:", eIns.message); // el listado igual lo mostrará
       await onRecargar();
     } catch (e) { alert("No se pudo cargar: " + e.message); }
     finally { setBusy(null); }
@@ -244,9 +254,15 @@ function GestorDocsCert({ cert, docs, onRecargar, cambios, resaltar }) {
     if (!tipo) return;
     setBusy(d.id);
     try {
-      const { error } = await sb.from("certificacion_documentos")
-        .update({ tipo_documento: tipo, updated_at: new Date().toISOString(), subido_por: "analista_brain" }).eq("id", d.id);
-      if (error) throw new Error(error.message);
+      if (d._virtual) {
+        const { error } = await insDocCert({ certificacion_id: cert.id, tipo_documento: tipo, storage_path: d.storage_path, subido_por: "analista_brain" });
+        if (error) throw new Error(error.message);
+      } else {
+        const { error } = await updDocCert(d.id,
+          { tipo_documento: tipo, updated_at: new Date().toISOString(), subido_por: "analista_brain" },
+          { tipo_documento: tipo });
+        if (error) throw new Error(error.message);
+      }
       await onRecargar();
     } catch (e) { alert("No se pudo recategorizar: " + e.message); }
     finally { setBusy(null); }
@@ -290,6 +306,11 @@ function GestorDocsCert({ cert, docs, onRecargar, cambios, resaltar }) {
   return (
     <div className="form-card">
       <div className="form-title">Documentos</div>
+      {avisoSinIndexar > 0 && (
+        <div style={{ background: "#fff4e5", border: "1px solid #f5d9b8", borderRadius: 8, padding: "8px 12px", fontSize: 11.5, color: "#8a4a0f", marginBottom: 10 }}>
+          ⚠ {avisoSinIndexar} documento(s) se muestran directo desde Storage porque no se pudieron registrar en <b>certificacion_documentos</b> — corre <b>docs_certificacion_v2.sql</b> y revisa las policies de la tabla (detalle en la consola del navegador). Mientras tanto todo funciona igual.
+        </div>
+      )}
       {docs === null ? (
         <div style={{ fontSize: 12, color: "#888" }}>Cargando documentos…</div>
       ) : (
@@ -2167,6 +2188,30 @@ const fmtFH = (x) => x ? new Date(x).toLocaleString("es-MX", { day: "2-digit", m
 // Tipos disponibles al cargar un documento nuevo desde el Brain (Fuente B)
 const TIPOS_DOC_CERT = ["ine", "ine_reverso", "curp", "rfc", "licencia", "foto_frente", "foto_trasera", "foto_lado_izq", "foto_lado_der", "tarjeta_circulacion", "poliza_seguro", "comprobante", "otro"];
 
+// Inserta/actualiza en certificacion_documentos con REINTENTO MINIMAL: si las
+// columnas nuevas (subido_por/updated_at de docs_certificacion_v2.sql) aún no
+// existen o una policy las rechaza, reintenta solo con las columnas base para
+// que el registro nunca se pierda en silencio.
+async function insDocCert(fila) {
+  let r = await sb.from("certificacion_documentos").insert(fila).select("*");
+  if (r.error) {
+    const min = Array.isArray(fila)
+      ? fila.map((f) => ({ certificacion_id: f.certificacion_id, tipo_documento: f.tipo_documento, storage_path: f.storage_path }))
+      : { certificacion_id: fila.certificacion_id, tipo_documento: fila.tipo_documento, storage_path: fila.storage_path };
+    console.warn("insert certificacion_documentos (completo) falló:", r.error.message, "— reintento minimal");
+    r = await sb.from("certificacion_documentos").insert(min).select("*");
+  }
+  return r;
+}
+async function updDocCert(id, patch, patchMin) {
+  let r = await sb.from("certificacion_documentos").update(patch).eq("id", id);
+  if (r.error) {
+    console.warn("update certificacion_documentos (completo) falló:", r.error.message, "— reintento minimal");
+    r = await sb.from("certificacion_documentos").update(patchMin).eq("id", id);
+  }
+  return r;
+}
+
 // Chip de TIPO
 const TIPO_CFG = {
   conductor: { label: "Driver",   icon: "🚗", bg: "#f1f3f5", color: "#334155", border: "#dee2e6" },
@@ -2258,25 +2303,27 @@ function DetalleCertificacion({ cert, etapa, onVolver, onPasarEtapa2, onMoverA, 
   const fcFuente = cert.origen === "app_terceros" ? ORIGEN_CFG.app_terceros : FUENTE_CFG.portal_cert;
 
   const docsReq = useRef(0);
+  const [docsSinIndexar, setDocsSinIndexar] = useState(0);
   const cargarDocsCert = async () => {
     const req = ++docsReq.current;
     try {
       const { data } = await sb.from("certificacion_documentos")
         .select("*").eq("certificacion_id", cert.id).order("created_at", { ascending: true });
       let rows = data || [];
+      let sinIndexar = 0;
 
-      // RE-INDEXACIÓN desde Storage: el portal viejo subía el archivo pero el insert
-      // a certificacion_documentos podía fallar en silencio → archivos huérfanos en
-      // el bucket sin fila en la tabla (tarjeta "Sin documentos" y Biggy sin insumos).
-      // Solo corre cuando la tarjeta NO tiene ninguna fila (el escenario roto), para
-      // no resucitar versiones antiguas ya reemplazadas. Igual que la indexación
-      // automática del Archivador: crea las filas faltantes infiriendo el tipo del
-      // nombre del archivo (ine.jpg → ine, otro_1784....png → otro).
-      if (rows.length === 0 && cert.tercero_id) {
+      // STORAGE ES LA FUENTE DE VERDAD: siempre se lista la carpeta de la
+      // certificación y se fusiona con la tabla. Los archivos sin fila (el portal
+      // viejo insertaba en silencio y podía fallar) se intentan indexar; si el
+      // insert falla (columna faltante, policy), se muestran IGUAL como documentos
+      // "virtuales" directo desde Storage — el analista nunca se queda ciego.
+      if (cert.tercero_id) {
         try {
           const carpeta = `${cert.tercero_id}/${cert.id}`;
-          const { data: files } = await sb.storage.from("proceso_certificacion_bt").list(carpeta, { limit: 200 });
-          const huerfanos = (files || []).filter((f) => f.name && f.id);
+          const { data: files, error: eList } = await sb.storage.from("proceso_certificacion_bt").list(carpeta, { limit: 200 });
+          if (eList) throw new Error(eList.message);
+          const conocidos = new Set(rows.map((r) => r.storage_path));
+          const huerfanos = (files || []).filter((f) => f.name && f.id && !conocidos.has(`${carpeta}/${f.name}`));
           if (huerfanos.length) {
             const nuevos = huerfanos.map((f) => ({
               certificacion_id: cert.id,
@@ -2285,13 +2332,27 @@ function DetalleCertificacion({ cert, etapa, onVolver, onPasarEtapa2, onMoverA, 
               subido_por: "reindex_brain",
               ...(f.created_at ? { created_at: f.created_at } : {}),
             }));
-            const { data: ins, error: eIns } = await sb.from("certificacion_documentos").insert(nuevos).select("*");
-            if (!eIns && ins?.length) rows = ins;
-            else if (eIns) console.warn("Re-index certificacion_documentos:", eIns.message);
+            const { data: ins, error: eIns } = await insDocCert(nuevos);
+            if (!eIns && ins?.length) {
+              rows = [...rows, ...ins];
+            } else {
+              if (eIns) console.warn("Re-index certificacion_documentos:", eIns.message);
+              sinIndexar = huerfanos.length;
+              rows = [...rows, ...huerfanos.map((f) => ({
+                id: `v:${carpeta}/${f.name}`,
+                _virtual: true,
+                certificacion_id: cert.id,
+                tipo_documento: docTipoLimpioCert(f.name.replace(/\.[^.]+$/, "")) || "otro",
+                storage_path: `${carpeta}/${f.name}`,
+                created_at: f.created_at || null,
+                subido_por: "portal · sin indexar",
+              }))];
+            }
           }
-        } catch (e) { console.warn("Re-index Storage:", e?.message || e); }
+        } catch (e) { console.warn("Listado Storage:", e?.message || e); }
       }
 
+      rows = [...rows].sort((a, b) => new Date(a.created_at || 0) - new Date(b.created_at || 0));
       const conUrl = await Promise.all(rows.map(async (d) => {
         let url = "";
         try {
@@ -2300,7 +2361,7 @@ function DetalleCertificacion({ cert, etapa, onVolver, onPasarEtapa2, onMoverA, 
         } catch (e) { /* documento sin URL */ }
         return { ...d, url };
       }));
-      if (req === docsReq.current) setDocsCert(conUrl);
+      if (req === docsReq.current) { setDocsCert(conUrl); setDocsSinIndexar(sinIndexar); }
     } catch (e) { if (req === docsReq.current) setDocsCert([]); }
   };
   useEffect(() => { setDocsCert(null); cargarDocsCert(); }, [cert.id]);
@@ -2525,11 +2586,6 @@ function DetalleCertificacion({ cert, etapa, onVolver, onPasarEtapa2, onMoverA, 
           </div>
         )}
 
-        {ter?.nombre && (
-          <div className="form-card">
-            <div style={{ fontSize: 12, color: "#555" }}>Empresa transportista: <b>{ter.nombre}</b></div>
-          </div>
-        )}
         {cert.tercero_id && (
           <ChatEmpresaCert terceroId={cert.tercero_id} empresa={ter?.nombre} titulo={titulo} />
         )}
@@ -2547,7 +2603,7 @@ function DetalleCertificacion({ cert, etapa, onVolver, onPasarEtapa2, onMoverA, 
         </div>
 
         <GestorDocsCert cert={cert} docs={docsCert} onRecargar={cargarDocsCert}
-          cambios={cert.cambios_prospecto} resaltar={!!cert.cambios_pendientes} />
+          cambios={cert.cambios_prospecto} resaltar={!!cert.cambios_pendientes} avisoSinIndexar={docsSinIndexar} />
       </div>
     </div>
   );
