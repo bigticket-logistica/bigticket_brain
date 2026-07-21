@@ -1063,8 +1063,20 @@ function ValidacionRepuve({ cert, veh, onMoverA, onVehActualizado }) {
 
 // ─── 📣 Notificar documentación fallida (WhatsApp / Email) · Etapa Pre-validación Biggy ───
 // Los items observados por Biggy se seleccionan y se avisan al tercero por el canal elegido.
-function NotificarDocsFallidas({ nombre, telefonoInicial, emailInicial, alertas }) {
+function NotificarDocsFallidas({ nombre, telefonoInicial, emailInicial, alertas, fuente, registroId }) {
   const [abierto, setAbierto] = useState(false);
+  const [historial, setHistorial] = useState([]);
+  const [verHist, setVerHist] = useState(false);
+
+  const cargarHistorial = async () => {
+    if (!fuente || !registroId) return;
+    const { data } = await sb.from("notificaciones_terceros")
+      .select("id, canal, items, telefono, email, created_at")
+      .eq("fuente", fuente).eq("registro_id", registroId)
+      .order("created_at", { ascending: false }).limit(20);
+    setHistorial(data || []);
+  };
+  useEffect(() => { cargarHistorial(); }, [registroId]);
   const [sel, setSel] = useState({});            // índice de alerta → seleccionada
   const [extra, setExtra] = useState("");        // observación adicional manual
   const [tel, setTel] = useState(telefonoInicial || "");
@@ -1108,7 +1120,13 @@ function NotificarDocsFallidas({ nombre, telefonoInicial, emailInicial, alertas 
       if (!resp.ok || !txt.trim()) throw new Error("el servicio de notificación no respondió");
       const r = JSON.parse(txt);
       if (r.ok === false) throw new Error(r.error || "envío rechazado");
+      await sb.from("notificaciones_terceros").insert({
+        fuente, registro_id: registroId, canal, telefono: tel.trim(), email: mail.trim(),
+        items: lista, enviado_por: window.__PERFIL_EMAIL || "",
+      });
+      await cargarHistorial();
       setEnviadoAt(new Date());
+      setSel({}); setExtra("");
       setAbierto(false);
     } catch (e) { alert("No se pudo notificar: " + e.message); }
     finally { setEnviando(false); }
@@ -1121,12 +1139,35 @@ function NotificarDocsFallidas({ nombre, telefonoInicial, emailInicial, alertas 
           <div className="form-title" style={{ color: "#b45309", marginBottom: 2 }}>📣 Notificar documentación fallida</div>
           <div style={{ fontSize: 12, color: "#8a6a3f" }}>Avisa al tercero por WhatsApp y/o correo qué documentos debe corregir o reponer.</div>
         </div>
-        {enviadoAt && <span style={{ fontSize: 12, fontWeight: 700, color: "#166534", background: "#e8f5ec", border: "1px solid #b7e0c2", borderRadius: 20, padding: "5px 12px" }}>✓ Notificado {enviadoAt.toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit" })}</span>}
+        {historial.length > 0 && (
+          <button onClick={() => setVerHist(!verHist)}
+            style={{ fontSize: 12, fontWeight: 700, color: "#166534", background: "#e8f5ec", border: "1px solid #b7e0c2", borderRadius: 20, padding: "5px 12px", cursor: "pointer", fontFamily: "'Geist',sans-serif" }}>
+            ✓ {historial.length} notificación{historial.length === 1 ? "" : "es"} enviada{historial.length === 1 ? "" : "s"} {verHist ? "▴" : "▾"}
+          </button>
+        )}
         <button onClick={() => setAbierto(!abierto)}
           style={{ background: abierto ? "#fff" : "#b45309", color: abierto ? "#b45309" : "#fff", border: "1.5px solid #b45309", borderRadius: 8, padding: "9px 16px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: "'Geist',sans-serif" }}>
           {abierto ? "Cerrar" : "Notificar"}
         </button>
       </div>
+      {verHist && historial.length > 0 && (
+        <div style={{ marginTop: 12 }}>
+          {historial.map(h => (
+            <div key={h.id} style={{ background: "#fff", border: "1px solid #f0ddc4", borderRadius: 10, padding: "10px 12px", marginBottom: 8 }}>
+              <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", fontSize: 12, color: "#8a6a3f", fontWeight: 700, marginBottom: 6 }}>
+                <span>{new Date(h.created_at).toLocaleString("es-MX", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}</span>
+                <span>{h.canal === "ambos" ? "📱 WhatsApp + ✉️ Correo" : h.canal === "whatsapp" ? "📱 WhatsApp" : "✉️ Correo"}</span>
+                <span style={{ fontWeight: 400 }}>{[h.canal !== "email" ? h.telefono : null, h.canal !== "whatsapp" ? h.email : null].filter(Boolean).join(" · ")}</span>
+              </div>
+              <ul style={{ margin: 0, paddingLeft: 18 }}>
+                {(Array.isArray(h.items) ? h.items : []).map((it, i) => (
+                  <li key={i} style={{ fontSize: 12, color: "#5a4630", marginBottom: 3 }}>{String(it)}</li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </div>
+      )}
       {abierto && (
         <div style={{ marginTop: 12 }}>
           {(alertas || []).length > 0 ? (
@@ -1537,8 +1578,31 @@ Responde con este JSON exacto:
           <BiggyChatBubble analizando={analizando} analisis={analisis} score={score} recomendacion={recomendacion} alertas={alertas} onReanalizar={analizarConClaude} />
         )}
 
+        {candidato.cambios_pendientes && (
+          <div className="form-card" style={{ background: "#fff4e5", border: "1.5px solid #F47B20" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 8 }}>
+              <div className="form-title" style={{ color: "#b45309", margin: 0 }}>⚠ El prospecto actualizó su postulación desde el portal</div>
+              <button onClick={async () => {
+                await sb.from("certificaciones_mx").update({ cambios_pendientes: false }).eq("id", candidato.id);
+                onActualizar({ ...candidato, cambios_pendientes: false });
+              }} style={{ marginLeft: "auto", background: "#fff", color: "#b45309", border: "1.5px solid #b45309", borderRadius: 8, padding: "7px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "'Geist',sans-serif" }}>
+                ✓ Marcar como revisado
+              </button>
+            </div>
+            <ul style={{ margin: 0, paddingLeft: 18 }}>
+              {(candidato.cambios_prospecto || []).slice(-8).reverse().map((c, i) => (
+                <li key={i} style={{ fontSize: 12.5, color: "#8a4a0f", marginBottom: 4 }}>
+                  <b>{new Date(c.at).toLocaleString("es-MX", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}</b>
+                  {" · "}{c.tipo === "documento" ? `📎 ${c.campo}: ${c.accion}` : `✏️ ${c.campo}: "${c.antes}" → "${c.despues}"`}
+                </li>
+              ))}
+            </ul>
+            <div style={{ fontSize: 11.5, color: "#8a6a3f", marginTop: 8 }}>Revisa los documentos/datos actualizados — si corresponde, re-corre el análisis de Biggy.</div>
+          </div>
+        )}
+
         {candidato.etapa_kanban === "prevalidacion_biggy" && (
-          <NotificarDocsFallidas nombre={candidato.nombre} telefonoInicial={candidato.telefono} emailInicial={candidato.email} alertas={alertas} />
+          <NotificarDocsFallidas nombre={candidato.nombre} telefonoInicial={candidato.telefono} emailInicial={candidato.email} alertas={alertas} fuente="certificaciones_mx" registroId={candidato.id} />
         )}
 
         {!enEtapa1 && !enLlamada && <VehiculosMinutaBiggy candidato={candidato} etapa={candidato.etapa_kanban} />}
@@ -1958,7 +2022,7 @@ function DetalleCertificacion({ cert, etapa, onVolver, onPasarEtapa2, onMoverA, 
           <BiggyChatBubble analizando={analizando} analisis={analisis} score={score} recomendacion={recomendacion} alertas={alertas} onReanalizar={() => docsCert && analizarCert(docsCert)} />
         )}
         {etapaActual === "prevalidacion_biggy" && (
-          <NotificarDocsFallidas nombre={cert.nombre_display || cert.nombre} telefonoInicial={cert.telefono || cert.raw?.telefono || ""} emailInicial={cert.email || cert.raw?.email || cert.raw?.correo || ""} alertas={alertas} />
+          <NotificarDocsFallidas nombre={cert.nombre_display || cert.nombre} telefonoInicial={cert.telefono || cert.raw?.telefono || ""} emailInicial={cert.email || cert.raw?.email || cert.raw?.correo || ""} alertas={alertas} fuente="certificaciones" registroId={cert.id} />
         )}
         {!enEtapa1 && esVeh && (
           <AnalisisVehiculoBiggy cert={cert} veh={veh} docs={docsCert}
@@ -2156,6 +2220,11 @@ function KanbanBoard({ items, columnas = COLUMNAS, onCardClick, onMover, onElimi
                     <span style={{ fontSize: 10, color: "#888", fontWeight: 600 }}>📍 {card.sc}</span>
                     <NotaBiggy score={card.score} />
                     {card.rec && <span style={{ fontSize: 9, color: "#888" }}>{card.rec}</span>}
+                    {card.raw?.cambios_pendientes && (
+                      <span style={{ fontSize: 9, fontWeight: 800, padding: "2px 8px", borderRadius: 20, background: "#fff4e5", color: "#b45309", border: "1px solid #f5d9b8" }}>
+                        ⚠ Cambios del prospecto
+                      </span>
+                    )}
                   </div>
                   {esRechazo && card.raw?.respuesta_meli && (
                     <div style={{ fontSize: 10, color: "#c0392b", marginTop: 6 }}>❌ {card.raw.respuesta_meli}</div>
