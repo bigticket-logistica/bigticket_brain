@@ -1073,8 +1073,20 @@ function NotificarDocsFallidas({ nombre, telefonoInicial, emailInicial, alertas 
   const [enviando, setEnviando] = useState(false);
   const [enviadoAt, setEnviadoAt] = useState(null);
 
+  // Convierte una alerta de Biggy (objeto o string) a texto legible para el mensaje
+  const alertaATexto = (a) => {
+    if (typeof a === "string") return a;
+    if (!a || typeof a !== "object") return String(a || "");
+    const partes = [];
+    if (a.campo) partes.push(String(a.campo).toUpperCase());
+    const cuerpo = a.detalle || a.mensaje || "";
+    if (cuerpo) partes.push(cuerpo);
+    if (!cuerpo && (a.declarado || a.encontrado)) partes.push(`declarado "${a.declarado || "—"}" vs encontrado "${a.encontrado || "—"}"`);
+    return partes.join(": ") || JSON.stringify(a);
+  };
+
   const items = () => {
-    const l = (alertas || []).filter((_, i) => sel[i]);
+    const l = (alertas || []).filter((_, i) => sel[i]).map(alertaATexto);
     if (extra.trim()) l.push(extra.trim());
     return l;
   };
