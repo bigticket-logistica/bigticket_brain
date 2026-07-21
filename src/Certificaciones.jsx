@@ -1544,9 +1544,9 @@ function NotificarDocsFallidas({ nombre, telefonoInicial, emailInicial, alertas,
             <div style={{ marginBottom: 10 }}>
               <div style={{ fontSize: 10.5, fontWeight: 800, color: "#8a6a3f", textTransform: "uppercase", marginBottom: 6 }}>Items observados por Biggy — marca los que se notificarán</div>
               {(alertas || []).map((a, i) => (
-                <label key={i} style={{ display: "flex", gap: 8, alignItems: "flex-start", padding: "6px 8px", borderRadius: 8, background: sel[i] ? "#fff4e0" : "transparent", cursor: "pointer", fontSize: 12.5, color: "#5a4630" }}>
-                  <input type="checkbox" checked={!!sel[i]} onChange={() => setSel(s => ({ ...s, [i]: !s[i] }))} style={{ marginTop: 2 }} />
-                  <span>{typeof a === "string" ? a : (a.detalle || a.mensaje || JSON.stringify(a))}</span>
+                <label key={i} style={{ display: "flex", gap: 10, alignItems: "flex-start", justifyContent: "flex-start", textAlign: "left", width: "100%", boxSizing: "border-box", padding: "7px 10px", borderRadius: 8, background: sel[i] ? "#fff4e0" : "transparent", cursor: "pointer", fontSize: 12.5, color: "#5a4630", marginBottom: 2 }}>
+                  <input type="checkbox" checked={!!sel[i]} onChange={() => setSel(s => ({ ...s, [i]: !s[i] }))} style={{ marginTop: 2, flexShrink: 0 }} />
+                  <span style={{ flex: 1, textAlign: "left", lineHeight: 1.5 }}>{typeof a === "string" ? a : (a.detalle || a.mensaje || JSON.stringify(a))}</span>
                 </label>
               ))}
             </div>
