@@ -2098,6 +2098,92 @@ function DocumentacionTerceros() {
   const [docs, setDocs] = useState(null);
   const [filtroCat, setFiltroCat] = useState("todas");
   const fileRef = useRef(null);
+  // Generación de contrato de transportista desde el archivador (empresas antiguas)
+  const [DG, setDG] = useState(null);          // datos editables (formulario del analista)
+  const [genRow, setGenRow] = useState(null);  // fila en contratos_gestion (motor de firma)
+  const [genPdf, setGenPdf] = useState(null);  // { path, url }
+  const [genBusy, setGenBusy] = useState(false);
+  const [enviandoFirma, setEnviandoFirma] = useState(false);
+  const [firmaEnviada, setFirmaEnviada] = useState(false);
+
+  const prepararContratoEmpresa = async () => {
+    if (!terceroId) { alert("Selecciona primero la empresa."); return; }
+    setGenBusy(true);
+    try {
+      const t = (empresas || []).find(e => e.id === terceroId) || {};
+      const { data: ps } = await sb.from("perfiles_empresa").select("*").eq("tercero_id", terceroId).limit(1);
+      const perfil = (ps && ps[0]) || {};
+      const { data: ts } = await sb.from("terceros").select("email_portal").eq("id", terceroId).limit(1);
+      setDG({
+        nombre:    perfil.razon_social || t.nombre || "",
+        rfc:       perfil.rfc_razon_social || t.rfc || "",
+        rep:       perfil.representante_legal || t.nombre || "",
+        correo:    perfil.correo_contacto || (ts && ts[0] && ts[0].email_portal) || "",
+        domicilio: perfil.direccion || "",
+        repse:     "", figura: "Moral", b2b: "No",
+        tarifa:    "Tabla vigente", vigencia: "12 meses renovables",
+        fechaIni:  perfil.fecha_ingreso_operacion || "",
+        modelos:   ["SDD"], ayudante: "No", svc: "",
+        lineas:    [{ tipo: "", n: "" }],
+        backup:    { aplica: "", svc: "", dias: "", tipo: "", costo: "", aprobador: "" },
+      });
+      setGenPdf(null); setGenRow(null); setFirmaEnviada(false);
+      if (!perfil.razon_social) alert("Aviso: esta empresa aún no completa su Perfil de Empresa en el portal — el formulario viene con lo mínimo; completa a mano lo que falte.");
+    } catch (e) { alert("No se pudo preparar el formulario: " + e.message); }
+    finally { setGenBusy(false); }
+  };
+
+  const generarContratoEmpresa = async () => {
+    if (!DG.nombre.trim() || !DG.rfc.trim() || !DG.domicilio.trim()) {
+      alert("Nombre, RFC y domicilio fiscal son obligatorios para el contrato."); return;
+    }
+    setGenBusy(true);
+    try {
+      let row = genRow;
+      if (!row) {
+        const { data, error } = await sb.from("contratos_gestion")
+          .insert({ tercero_id: terceroId, titulo: `Contrato de prestación de servicios — ${DG.nombre}`, tipo: "contrato", estado: "borrador" })
+          .select("id").single();
+        if (error) throw new Error(error.message);
+        row = data; setGenRow(data);
+      }
+      const r = await generarContratoPDFDesde(DG, { tabla: "gestion", registro: { id: row.id } });
+      await sb.from("contratos_gestion").update({ archivo_path: r.path }).eq("id", row.id);
+      // Indexar también en el archivador de la empresa (una sola vez)
+      const nombreArchivo = `Contrato transportista — ${DG.nombre}.pdf`;
+      await sb.from("documentos_empresa").upsert({
+        tercero_id: terceroId, categoria: "contratos", nombre_archivo: nombreArchivo,
+        storage_path: r.path, mime_type: "application/pdf",
+        referencia: "Generado con plantilla oficial", subido_por: window.__PERFIL_EMAIL || "", origen: "brain",
+      }, { onConflict: "storage_path" });
+      setGenPdf(r);
+      await cargarDocs(terceroId);
+    } catch (e) { alert("No se pudo generar el contrato: " + e.message); }
+    finally { setGenBusy(false); }
+  };
+
+  const enviarContratoAFirma = async () => {
+    if (!genRow || !genPdf) return;
+    const correo = (DG.correo || "").trim();
+    if (!correo) { alert("El contrato necesita el correo del firmante (campo Correo del firmante en el formulario)."); return; }
+    if (!confirm(`¿Enviar el contrato de ${DG.nombre} a firma digital? El tercero lo firmará desde su portal.`)) return;
+    setEnviandoFirma(true);
+    try {
+      const { data: sg, error: eSg } = await sb.storage.from("proceso_certificacion_bt").createSignedUrl(genPdf.path, 604800);
+      if (eSg || !sg?.signedUrl) throw new Error("no se pudo generar la URL del PDF");
+      const resp = await fetch("https://bigticket2026.app.n8n.cloud/webhook/mifiel-contrato-gestion", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: genRow.id, titulo: `Contrato de prestación de servicios — ${DG.nombre}`,
+          archivo_url: sg.signedUrl, firmante_nombre: DG.rep || DG.nombre, firmante_email: correo }),
+      });
+      const txt = await resp.text();
+      if (!resp.ok || !txt.trim()) throw new Error("el servicio de firma no respondió");
+      const r = JSON.parse(txt);
+      if (!r.documento_id) throw new Error(r.error || "respuesta sin documento_id");
+      setFirmaEnviada(true);
+    } catch (e) { alert("No se pudo enviar a firma: " + e.message); }
+    finally { setEnviandoFirma(false); }
+  };
 
   useEffect(() => {
     (async () => {
@@ -2200,6 +2286,46 @@ function DocumentacionTerceros() {
           <div style={{ fontSize: 12, color: "#888", marginTop: 4 }}>Carga masiva · PDF, imágenes (se comprimen solas), Office, lo que sea · quedan en {emp ? <b>{emp.nombre}</b> : "la empresa seleccionada"} → {docCatLabel(categoria)}</div>
         </div>
 
+        {categoria === "contratos" && terceroId && (
+          <div style={{ marginTop: 12, background: "#faf7ff", border: "1px solid #ddd0f7", borderRadius: 12, padding: 14 }}>
+            {!DG ? (
+              <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+                <div style={{ flex: 1, minWidth: 240, fontSize: 12.5, color: "#4c1d95" }}>
+                  <b>¿Contrato de transportista?</b> En vez de subir un PDF, genéralo aquí con la plantilla oficial de 24 páginas y el formulario del analista, precargado desde el Perfil de Empresa.
+                </div>
+                <button onClick={prepararContratoEmpresa} disabled={genBusy}
+                  style={{ background: "#7c3aed", color: "#fff", border: "none", borderRadius: 8, padding: "10px 18px", fontSize: 13, fontWeight: 700, cursor: "pointer", opacity: genBusy ? 0.6 : 1, fontFamily: "'Geist',sans-serif" }}>
+                  {genBusy ? "Preparando…" : "🧾 Generar contrato con formulario"}
+                </button>
+              </div>
+            ) : !genPdf ? (
+              <>
+                <div style={{ display: "flex", alignItems: "center", marginBottom: 8 }}>
+                  <span style={{ fontSize: 11.5, color: "#7c3aed", fontWeight: 700 }}>Formulario del contrato — revisa, completa y genera</span>
+                  <button onClick={() => { setDG(null); setGenRow(null); }} style={{ marginLeft: "auto", border: "none", background: "none", color: "#888", fontSize: 12, cursor: "pointer" }}>✕ Cancelar</button>
+                </div>
+                <EditorContrato D={DG} setD={setDG} generando={genBusy} onGenerar={generarContratoEmpresa} />
+              </>
+            ) : (
+              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                <span style={{ fontSize: 13, fontWeight: 700, color: "#4c1d95" }}>✅ Contrato generado y archivado en 📑 Contratos</span>
+                <a href={genPdf.url} target="_blank" rel="noreferrer" style={{ fontSize: 12.5, fontWeight: 700, color: "#7c3aed" }}>📄 Revisar PDF</a>
+                <button onClick={() => setGenPdf(null)} style={{ border: "none", background: "none", color: "#7c3aed", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>✏️ Editar y regenerar</button>
+                {firmaEnviada ? (
+                  <span style={{ marginLeft: "auto", fontSize: 12.5, fontWeight: 700, color: "#166534", background: "#e8f5ec", border: "1px solid #b7e0c2", borderRadius: 20, padding: "6px 14px" }}>
+                    ✍️ Enviado — el tercero lo firma en su portal
+                  </span>
+                ) : (
+                  <button onClick={enviarContratoAFirma} disabled={enviandoFirma}
+                    style={{ marginLeft: "auto", background: "#7c3aed", color: "#fff", border: "none", borderRadius: 8, padding: "10px 18px", fontSize: 13, fontWeight: 700, cursor: "pointer", opacity: enviandoFirma ? 0.6 : 1, fontFamily: "'Geist',sans-serif" }}>
+                    {enviandoFirma ? "Enviando a MIFIEL…" : "✍️ Enviar a firma del tercero"}
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
         {cola.length > 0 && (
           <div style={{ marginTop: 12 }}>
             {cola.map((c, i) => (
@@ -2275,6 +2401,69 @@ function GestionadorContratos() {
   const [f, setF] = useState({ tercero_id: "", titulo: "", tipo: "contrato", descripcion: "", archivo: null });
   const [guardando, setGuardando] = useState(false);
   const [enviandoId, setEnviandoId] = useState(null);
+  // Generación de contrato con formulario (misma plantilla y editor de Certificaciones)
+  const [DG, setDG] = useState(null);          // datos editables del contrato
+  const [genRow, setGenRow] = useState(null);  // fila borrador creada en contratos_gestion
+  const [genPdf, setGenPdf] = useState(null);  // { path, url } del PDF generado
+  const [genBusy, setGenBusy] = useState(false);
+
+  const resetGeneracion = () => { setDG(null); setGenRow(null); setGenPdf(null); };
+
+  // Prellenar el formulario del contrato desde terceros + Perfil de Empresa
+  const prepararGeneracion = async () => {
+    if (!f.tercero_id) { alert("Selecciona primero la empresa."); return; }
+    setGenBusy(true);
+    try {
+      const { data: ts } = await sb.from("terceros").select("id, nombre, rfc, email_portal").eq("id", f.tercero_id).limit(1);
+      const t = (ts && ts[0]) || {};
+      const { data: ps } = await sb.from("perfiles_empresa").select("*").eq("tercero_id", f.tercero_id).limit(1);
+      const perfil = (ps && ps[0]) || {};
+      setDG({
+        nombre:    perfil.razon_social || t.nombre || "",
+        rfc:       perfil.rfc_razon_social || t.rfc || "",
+        rep:       perfil.representante_legal || t.nombre || "",
+        correo:    perfil.correo_contacto || t.email_portal || "",
+        domicilio: perfil.direccion || "",
+        repse:     "",
+        figura:    "Moral",
+        b2b:       "No",
+        tarifa:    "Tabla vigente",
+        vigencia:  "12 meses renovables",
+        fechaIni:  perfil.fecha_ingreso_operacion || "",
+        modelos:   ["SDD"],
+        ayudante:  "No",
+        svc:       "",
+        lineas:    [{ tipo: "", n: "" }],
+        backup:    { aplica: "", svc: "", dias: "", tipo: "", costo: "", aprobador: "" },
+      });
+      setGenPdf(null);
+    } catch (e) { alert("No se pudo preparar el formulario: " + e.message); }
+    finally { setGenBusy(false); }
+  };
+
+  // Generar el PDF (crea el borrador en contratos_gestion la primera vez)
+  const generarPdfGestion = async () => {
+    if (!DG.nombre.trim() || !DG.rfc.trim() || !DG.domicilio.trim()) {
+      alert("Nombre, RFC y domicilio fiscal son obligatorios para el contrato."); return;
+    }
+    setGenBusy(true);
+    try {
+      let row = genRow;
+      if (!row) {
+        const titulo = f.titulo.trim() || `Contrato de prestación de servicios — ${DG.nombre}`;
+        const { data, error } = await sb.from("contratos_gestion")
+          .insert({ tercero_id: f.tercero_id, titulo, tipo: "contrato", descripcion: f.descripcion || null, estado: "borrador" })
+          .select("id").single();
+        if (error) throw new Error(error.message);
+        row = data; setGenRow(data);
+      }
+      const r = await generarContratoPDFDesde(DG, { tabla: "gestion", registro: { id: row.id } });
+      await sb.from("contratos_gestion").update({ archivo_path: r.path }).eq("id", row.id);
+      setGenPdf(r);
+      await cargar();
+    } catch (e) { alert("No se pudo generar el contrato: " + e.message); }
+    finally { setGenBusy(false); }
+  };
 
   const cargar = async () => {
     const { data } = await sb.from("contratos_gestion")
@@ -2369,7 +2558,7 @@ function GestionadorContratos() {
         <div style={{ fontSize: 12, color: "#888" }}>
           Contratos, anexos, bajas y otros documentos de firma — independientes del proceso de ingreso.
         </div>
-        <button className="btn-orange" onClick={() => setNuevo(!nuevo)} style={{ padding: "9px 16px" }}>
+        <button className="btn-orange" onClick={() => { setNuevo(!nuevo); resetGeneracion(); }} style={{ padding: "9px 16px" }}>
           {nuevo ? "Cancelar" : "➕ Nuevo documento"}
         </button>
       </div>
@@ -2413,7 +2602,38 @@ function GestionadorContratos() {
             <button className="btn-orange" onClick={crear} disabled={guardando} style={{ padding: "10px 18px" }}>
               {guardando ? "Guardando…" : "Crear borrador"}
             </button>
+            {f.tipo === "contrato" && !DG && (
+              <>
+                <span style={{ fontSize: 12, color: "#888" }}>— o —</span>
+                <button onClick={prepararGeneracion} disabled={genBusy}
+                  style={{ background: "#7c3aed", color: "#fff", border: "none", borderRadius: 8, padding: "10px 18px", fontSize: 13, fontWeight: 700, cursor: "pointer", opacity: genBusy ? 0.6 : 1, fontFamily: "'Geist',sans-serif" }}>
+                  {genBusy ? "Preparando…" : "🧾 Generar contrato con formulario (plantilla oficial)"}
+                </button>
+              </>
+            )}
           </div>
+
+          {DG && !genPdf && (
+            <div style={{ marginTop: 14 }}>
+              <div style={{ fontSize: 11.5, color: "#7c3aed", fontWeight: 700, marginBottom: 8 }}>
+                Formulario precargado desde el Perfil de Empresa — revisa, completa y genera. Es la misma plantilla oficial de 24 páginas del proceso de ingreso.
+              </div>
+              <EditorContrato D={DG} setD={setDG} generando={genBusy} onGenerar={generarPdfGestion} />
+            </div>
+          )}
+          {DG && genPdf && (
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 14,
+              background: "#fff", border: "1px solid #ddd0f7", borderRadius: 10, padding: "10px 12px" }}>
+              <span style={{ fontSize: 13, fontWeight: 700, color: "#4c1d95" }}>✅ Contrato generado y guardado como borrador</span>
+              <a href={genPdf.url} target="_blank" rel="noreferrer"
+                style={{ fontSize: 12.5, fontWeight: 700, color: "#7c3aed" }}>📄 Revisar PDF</a>
+              <button onClick={() => setGenPdf(null)}
+                style={{ border: "none", background: "none", color: "#7c3aed", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+                ✏️ Editar datos y regenerar
+              </button>
+              <span style={{ fontSize: 11.5, color: "#888", marginLeft: "auto" }}>Para enviarlo a firma, usa su botón en la lista de abajo ↓</span>
+            </div>
+          )}
         </div>
       )}
 
