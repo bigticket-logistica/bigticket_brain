@@ -1644,7 +1644,35 @@ function SeccionFirmaContrato({ registro, tabla, datos, onActualizado }) {
   const [D, setD] = useState(null);               // datos consolidados EDITABLES por el analista
   const [contratoGen, setContratoGen] = useState(null);   // { path, url }
   const [firmandoBT, setFirmandoBT] = useState(false);
+  const [verificandoFirma, setVerificandoFirma] = useState(false);
+  const [avisoFirma, setAvisoFirma] = useState("");
   const docId = registro.mifiel_documento_id;
+
+  // Relee la tarjeta para saber si el prestador ya firmó desde su portal
+  // (el portal marca mifiel_firmado_conductor=true al completar el widget).
+  const verificarFirmaPrestador = async () => {
+    setVerificandoFirma(true); setAvisoFirma("");
+    try {
+      const { data, error } = await sb.from(tabla)
+        .select("mifiel_firmado_conductor, mifiel_firmado_bigticket")
+        .eq("id", registro.id).maybeSingle();
+      if (error) throw new Error(error.message);
+      if (data?.mifiel_firmado_conductor) {
+        onActualizado({ ...registro, ...data });
+      } else {
+        setAvisoFirma("Aún sin firma del prestador — recuérdale entrar a su portal, sección ✍️ Firma.");
+      }
+    } catch (e) { setAvisoFirma("No se pudo verificar: " + e.message); }
+    finally { setVerificandoFirma(false); }
+  };
+
+  // Chequeo automático: mientras se espera la firma del prestador, revisa cada 45 s
+  // (además del botón manual) — el aviso verde aparece solo cuando firme.
+  useEffect(() => {
+    if (!docId || registro.mifiel_firmado_conductor || registro.mifiel_firmado_bigticket) return;
+    const t = setInterval(() => { if (!document.hidden) verificarFirmaPrestador(); }, 45000);
+    return () => clearInterval(t);
+  }, [docId, registro.mifiel_firmado_conductor]);
 
   // Paso 1: consolidar datos (Jefe > minuta > tarjeta) y abrir el editor
   const prepararContrato = async () => {
@@ -1772,7 +1800,30 @@ function SeccionFirmaContrato({ registro, tabla, datos, onActualizado }) {
             <ChipFirma label="Bigticket" listo={!!registro.mifiel_firmado_bigticket} />
           </div>
 
-          {!registro.mifiel_firmado_bigticket && registro.mifiel_widget_bigticket && (
+          {/* ORDEN DE FIRMA: primero el prestador en su portal, después BigTicket.
+              El widget BT queda BLOQUEADO hasta que la firma del tercero esté lista. */}
+          {!registro.mifiel_firmado_bigticket && !registro.mifiel_firmado_conductor && (
+            <div style={{ background: "#fff4e5", border: "1.5px solid #F47B20", borderRadius: 10, padding: "12px 14px", marginBottom: 10 }}>
+              <div style={{ fontSize: 13, fontWeight: 800, color: "#b45309", marginBottom: 4 }}>⚠️ NO firmar todavía como BigTicket</div>
+              <div style={{ fontSize: 12.5, color: "#8a4a0f", lineHeight: 1.55 }}>
+                El orden de firma es: <b>1º el prestador</b> desde su portal (sección ✍️ Firma) → <b>2º BigTicket</b>.
+                El botón de firma se habilitará automáticamente cuando la firma del prestador esté lista.
+              </div>
+              <button disabled={verificandoFirma} onClick={verificarFirmaPrestador}
+                style={{ marginTop: 10, background: "#fff", color: "#b45309", border: "1.5px solid #b45309", borderRadius: 8, padding: "8px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer", opacity: verificandoFirma ? 0.6 : 1, fontFamily: "'Geist',sans-serif" }}>
+                {verificandoFirma ? "Verificando…" : "🔄 Verificar si el prestador ya firmó"}
+              </button>
+              {avisoFirma && <div style={{ fontSize: 12, color: "#8a4a0f", marginTop: 6, fontWeight: 600 }}>{avisoFirma}</div>}
+            </div>
+          )}
+
+          {!registro.mifiel_firmado_bigticket && registro.mifiel_firmado_conductor && (
+            <div style={{ background: "#e8f5ec", border: "1px solid #b7e0c2", borderRadius: 10, padding: "10px 14px", marginBottom: 10, fontSize: 13, color: "#166534", fontWeight: 700 }}>
+              ✅ Firma del prestador lista — ahora corresponde la firma de BigTicket.
+            </div>
+          )}
+
+          {!registro.mifiel_firmado_bigticket && registro.mifiel_firmado_conductor && registro.mifiel_widget_bigticket && (
             !firmandoBT ? (
               <button onClick={() => setFirmandoBT(true)}
                 style={{ width: "100%", background: "#fff", color: "#7c3aed", border: "1.5px solid #ddd0f7",
@@ -2595,11 +2646,23 @@ function DetalleCertificacion({ cert, etapa, onVolver, onPasarEtapa2, onMoverA, 
   };
 
   // Auto-Biggy al abrir en Etapa 2+ (solo personas), si no hay análisis cacheado.
+  // REGLA ESTRICTA (igual que Fuente A): Biggy corre automático ÚNICAMENTE en la
+  // etapa "Pre-validación Biggy", una sola vez, y solo si hay documentos y no
+  // existe un análisis guardado. En cualquier otra etapa (incluido Rechazado)
+  // JAMÁS corre — solo se muestra el resultado ya obtenido desde claude_*.
+  const biggyDisparado = useRef(false);
   useEffect(() => {
-    // Biggy corre automáticamente SOLO en su etapa (Pre-validación Biggy) y una
-    // sola vez: el resultado queda guardado en claude_* y las etapas siguientes
-    // lo muestran desde ahí (Re-analizar sigue disponible en cualquier etapa).
-    if (docsCert && etapaActual === "prevalidacion_biggy" && !esVeh && !analisis && !analizando) analizarCert(docsCert);
+    const yaGuardado = !!(cert.claude_analisis || cert.claude_reviewed_at);
+    if (
+      etapaActual === "prevalidacion_biggy" &&
+      !esVeh &&
+      !yaGuardado && !analisis && !analizando &&
+      !biggyDisparado.current &&
+      Array.isArray(docsCert) && docsCert.length > 0
+    ) {
+      biggyDisparado.current = true;
+      analizarCert(docsCert);
+    }
   }, [docsCert]);
 
   // Envío a MELI (mismo formulario pre-rellenado que Prospección). Solo conductores/ayudantes.
