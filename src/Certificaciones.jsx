@@ -2586,7 +2586,8 @@ function DetalleCertificacion({ cert, etapa, onVolver, onPasarEtapa2, onMoverA, 
         claude_analisis: parsed, claude_score_global: parsed.score_global,
         claude_recomendacion: parsed.recomendacion, claude_alertas: parsed.alertas || [], claude_reviewed_at: new Date().toISOString(),
       }).eq("id", cert.id);
-      if (errSave) console.error("No se pudo guardar el análisis (certificaciones):", errSave.message);
+      if (errSave) alert("⚠ El análisis corrió pero NO quedó guardado — corre biggy_fuente_b.sql.\n\n" + errSave.message);
+      else Object.assign(cert, { claude_analisis: parsed, claude_score_global: parsed.score_global, claude_recomendacion: parsed.recomendacion, claude_alertas: parsed.alertas || [] });
       if (onAnalizado) onAnalizado(parsed);
     } catch (e) {
       setAnalisis({ _error: true, resumen: "No se pudo conectar con el servicio de análisis." });
@@ -2595,7 +2596,10 @@ function DetalleCertificacion({ cert, etapa, onVolver, onPasarEtapa2, onMoverA, 
 
   // Auto-Biggy al abrir en Etapa 2+ (solo personas), si no hay análisis cacheado.
   useEffect(() => {
-    if (docsCert && !enEtapa1 && !enLlamada && !esVeh && !analisis && !analizando) analizarCert(docsCert);
+    // Biggy corre automáticamente SOLO en su etapa (Pre-validación Biggy) y una
+    // sola vez: el resultado queda guardado en claude_* y las etapas siguientes
+    // lo muestran desde ahí (Re-analizar sigue disponible en cualquier etapa).
+    if (docsCert && etapaActual === "prevalidacion_biggy" && !esVeh && !analisis && !analizando) analizarCert(docsCert);
   }, [docsCert]);
 
   // Envío a MELI (mismo formulario pre-rellenado que Prospección). Solo conductores/ayudantes.
@@ -2713,7 +2717,7 @@ function DetalleCertificacion({ cert, etapa, onVolver, onPasarEtapa2, onMoverA, 
         )}
         {!enEtapa1 && esVeh && (
           <AnalisisVehiculoBiggy cert={cert} veh={veh} docs={docsCert}
-            onActualizado={(patch) => { Object.assign(cert, patch); sb.from("certificaciones").update(patch).eq("id", cert.id); setDocsCert(d => d ? [...d] : d); }} />
+            onActualizado={async (patch) => { Object.assign(cert, patch); const { error } = await sb.from("certificaciones").update(patch).eq("id", cert.id); if (error) alert("⚠ El análisis corrió pero NO quedó guardado — corre biggy_fuente_b.sql.\n\n" + error.message); setDocsCert(d => d ? [...d] : d); }} />
         )}
 
         {/* Etapa 2 → siguiente: MELI (persona) / REPUVE (vehículo, sin pasar por MELI) */}
