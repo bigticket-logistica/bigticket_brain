@@ -2004,18 +2004,36 @@ Responde con este JSON exacto:
             <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 8 }}>
               <div className="form-title" style={{ color: "#b45309", margin: 0 }}>⚠ El prospecto actualizó su postulación desde el portal</div>
               <button onClick={async () => {
-                await sb.from("certificaciones_mx").update({ cambios_pendientes: false }).eq("id", candidato.id);
-                onActualizar({ ...candidato, cambios_pendientes: false });
+                // Deja constancia de la revisión: en la bitácora de la tarjeta y en el
+                // Historial de postulación del portal (lead_historial → timeline).
+                const log = [...(candidato.cambios_prospecto || []), { tipo: "revision", accion: "revisado_por_analista", at: new Date().toISOString() }];
+                await sb.from("certificaciones_mx").update({ cambios_pendientes: false, cambios_prospecto: log }).eq("id", candidato.id);
+                if (candidato.lead_crm_id) {
+                  const { error } = await sb.from("lead_historial").insert({
+                    lead_id: candidato.lead_crm_id,
+                    etapa_anterior: "Cambios del prospecto",
+                    etapa_nueva: "Cambios leídos y revisados por el analista",
+                  });
+                  if (error) console.warn("lead_historial:", error.message);
+                }
+                onActualizar({ ...candidato, cambios_pendientes: false, cambios_prospecto: log });
               }} style={{ marginLeft: "auto", background: "#fff", color: "#b45309", border: "1.5px solid #b45309", borderRadius: 8, padding: "7px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "'Geist',sans-serif" }}>
                 ✓ Marcar como revisado
               </button>
             </div>
             <ul style={{ margin: 0, paddingLeft: 18 }}>
               {(candidato.cambios_prospecto || []).slice(-8).reverse().map((c, i) => (
+                c.tipo === "revision" ? (
+                  <li key={i} style={{ fontSize: 12.5, color: "#166534", marginBottom: 4, fontWeight: 700 }}>
+                    <b>{new Date(c.at).toLocaleString("es-MX", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}</b>
+                    {" · "}✅ Cambios revisados por el analista
+                  </li>
+                ) : (
                 <li key={i} style={{ fontSize: 12.5, color: "#8a4a0f", marginBottom: 4 }}>
                   <b>{new Date(c.at).toLocaleString("es-MX", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}</b>
                   {" · "}{c.tipo === "documento" ? `📎 ${c.campo}: ${c.accion}` : `✏️ ${c.campo}: "${c.antes}" → "${c.despues}"`}
                 </li>
+                )
               ))}
             </ul>
             <div style={{ fontSize: 11.5, color: "#8a6a3f", marginTop: 8 }}>Revisa los documentos/datos actualizados — si corresponde, re-corre el análisis de Biggy.</div>
@@ -2039,6 +2057,20 @@ Responde con este JSON exacto:
         <div className="form-card">
           <div className="form-title">Datos del candidato</div>
           <div className="three-col">
+            <div style={{ padding: "8px 0", borderBottom: "1px solid #f4f5f7" }}>
+              <div style={{ fontSize: 10, color: "#888", fontWeight: 700, textTransform: "uppercase", marginBottom: 2 }}>Empresa</div>
+              <div style={{ fontSize: 13, fontWeight: 600, wordBreak: "break-word", color: "#1a3a6b", display: "flex", alignItems: "center", gap: 6 }}>
+                <span style={{ flex: 1 }}>🏢 {candidato.empresa || "—"}</span>
+                <button title="Editar empresa" style={{ border: "none", background: "transparent", cursor: "pointer", fontSize: 13, color: "#98a2b3", padding: 0 }}
+                  onClick={async () => {
+                    const v = prompt("Nombre de la empresa del postulante:", candidato.empresa || "");
+                    if (v === null) return;
+                    const { error } = await sb.from("certificaciones_mx").update({ empresa: v.trim() || null }).eq("id", candidato.id);
+                    if (error) { alert("No se pudo guardar (¿falta empresa_fuente_a.sql?): " + error.message); return; }
+                    onActualizar({ ...candidato, empresa: v.trim() || null });
+                  }}>✎</button>
+              </div>
+            </div>
             {[["Nombre", candidato.nombre], ["CURP", candidato.curp], ["RFC", candidato.rfc],
               ["INE", candidato.ine], ["Licencia", candidato.licencia], ["Puesto", candidato.puesto],
               ["SVC", candidato.svc], ["Email", candidato.email], ["Teléfono", candidato.telefono]
@@ -2390,6 +2422,7 @@ function normalizarProspeccion(row) {
     fuente: "prospeccion",
     tipo,
     titulo: row.nombre || "Sin nombre",
+    empresa: row.empresa || null,
     sc:     row.svc || "—",
     etapa:  etapaProspeccion(row),
     score:  row.claude_score_global ?? null,
@@ -3778,13 +3811,23 @@ function ModuloCertificaciones() {
   // Fuente A: jala prospectos del CRM/onboarding a certificaciones_mx
   const autoSyncCRM = async () => {
     try {
-      const { data: onboardings, error: errOnb } = await sb
+      // Intenta traer leads.empresa; si la columna no existe en tu CRM, reintenta sin ella
+      let { data: onboardings, error: errOnb } = await sb
         .from("onboarding_terceros")
-        .select("*, leads(id, nombre, etapa, curp, email, telefono, zona, region_estado)")
+        .select("*, leads(id, nombre, etapa, curp, email, telefono, zona, region_estado, empresa)")
         .eq("pais", "México")
         .not("url_ine", "is", null)
         .not("url_curp", "is", null)
         .not("url_rfc", "is", null);
+      if (errOnb) {
+        ({ data: onboardings, error: errOnb } = await sb
+          .from("onboarding_terceros")
+          .select("*, leads(id, nombre, etapa, curp, email, telefono, zona, region_estado)")
+          .eq("pais", "México")
+          .not("url_ine", "is", null)
+          .not("url_curp", "is", null)
+          .not("url_rfc", "is", null));
+      }
       if (errOnb || !onboardings) return;
 
       const enValidacion = onboardings.filter(o => o.leads?.etapa === "Entrevistas y Validaciones");
@@ -3806,6 +3849,7 @@ function ModuloCertificaciones() {
         ine:          o.rut          || "",
         licencia:     o.licencia     || "",
         puesto:       o.puesto       || "",
+        empresa:      o.empresa      || o.leads?.empresa   || "",
         svc:          (o.leads?.region_estado || o.leads?.zona || "").split(" ")[0],
         email:        o.email        || o.leads?.email     || "",
         telefono:     o.telefono     || o.leads?.telefono  || "",
