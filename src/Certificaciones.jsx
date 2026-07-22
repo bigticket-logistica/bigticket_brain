@@ -2124,7 +2124,9 @@ Responde con este JSON exacto:
             </div>
             {[["Nombre", candidato.nombre], ["CURP", candidato.curp], ["RFC", candidato.rfc],
               ["INE", candidato.ine], ["Licencia", candidato.licencia], ["Puesto", candidato.puesto],
-              ["SVC", candidato.svc], ["Email", candidato.email], ["Teléfono", candidato.telefono]
+              ["SVC", candidato.svc], ["Email", candidato.email], ["Teléfono", candidato.telefono],
+              ["Vehículos a presentar", candidato.cantidad_vehiculos != null ? `${candidato.cantidad_vehiculos}` : null],
+              ["Tipo de vehículo", candidato.tipo_vehiculo]
             ].map(([l, v]) => (
               <div key={l} style={{ padding: "8px 0", borderBottom: "1px solid #f4f5f7" }}>
                 <div style={{ fontSize: 10, color: "#888", fontWeight: 700, textTransform: "uppercase", marginBottom: 2 }}>{l}</div>
@@ -2805,6 +2807,7 @@ function DetalleCertificacion({ cert, etapa, onVolver, onPasarEtapa2, onMoverA, 
             <div className="three-col" style={{ marginBottom: 12 }}>
               {[
                 ["Nombre", (cond?.nombre || "").toUpperCase()], ["CURP", cond?.curp],
+                ["Correo (invitación MELI)", cond?.email || "⚠ SIN CORREO"],
                 ["Empresa", "Big Ticket"], ["Servicio", "Last mile"],
                 ["SVC", (cert.service_center || ter?.service_center || "").split("_").pop()],
                 ["Puesto/Licencia", cert.tipo === "ayudante" ? "Auxiliar" : (cond?.licencia_numero || "")],
@@ -3917,6 +3920,8 @@ function ModuloCertificaciones() {
         licencia:     o.licencia     || "",
         puesto:       o.puesto       || "",
         empresa:      o.empresa      || o.leads?.empresa   || "",
+        cantidad_vehiculos: o.cantidad_vehiculos ?? null,
+        tipo_vehiculo: Array.isArray(o.tipos_vehiculo) ? (o.tipos_vehiculo[0] || null) : (o.tipos_vehiculo || null),
         svc:          (o.leads?.region_estado || o.leads?.zona || "").split(" ")[0],
         email:        o.email        || o.leads?.email     || "",
         telefono:     o.telefono     || o.leads?.telefono  || "",
