@@ -2054,9 +2054,14 @@ Responde con este JSON exacto:
         {/* Comparativa de datos (solo cuando ya hay análisis) */}
         {tieneAnalisis && <ComparativaDatos candidato={candidato} analisis={analisis} />}
 
-        {/* Validación Nubarium — solo en Etapa 4 (aprobado por MELI) */}
+        {/* Validación Nubarium — solo en Etapa 4 (aprobado por MELI) + informe RHCHECK confidencial */}
         {candidato.estado === "aprobado" && (
-          <ValidacionNubarium candidato={candidato} onActualizar={onActualizar} />
+          <>
+            <ValidacionNubarium candidato={candidato} onActualizar={onActualizar} />
+            <InformeRHCheck fuente="certificaciones_mx" registroId={candidato.id} terceroId={candidato.tercero_id || null}
+              titulo={candidato.nombre} pathInicial={candidato.rhcheck_informe_path}
+              onCambio={(p) => onActualizar({ ...candidato, rhcheck_informe_path: p })} />
+          </>
         )}
 
         {/* Documentos — el analista puede ver, reemplazar, eliminar y cargar (mismas columnas url_* que el portal) */}
@@ -2241,14 +2246,113 @@ async function updDocCert(id, patch, patchMin) {
   }
   return r;
 }
-// Elimina un objeto del bucket de certificación. El trigger protect_delete puede
-// bloquear el DELETE incluso vía Storage API — en ese caso se MUEVE a papelera/
-// (move = rename/UPDATE, no dispara el trigger) para que desaparezca del listado.
-async function quitarDeStorageCert(path) {
-  const { data: rm, error: eRm } = await sb.storage.from("proceso_certificacion_bt").remove([path]);
+// Elimina un objeto de un bucket. El trigger protect_delete puede bloquear el
+// DELETE incluso vía Storage API — en ese caso se MUEVE a papelera/ (move =
+// rename/UPDATE, no dispara el trigger) para que desaparezca del listado.
+async function quitarDeStorage(bucket, path) {
+  const { data: rm, error: eRm } = await sb.storage.from(bucket).remove([path]);
   if (!eRm && Array.isArray(rm) && rm.length > 0) return;
-  const { error: eMv } = await sb.storage.from("proceso_certificacion_bt").move(path, `papelera/${path}`);
+  const { error: eMv } = await sb.storage.from(bucket).move(path, `papelera/${path}`);
   if (eMv) throw new Error((eRm?.message || "delete bloqueado (protect_delete)") + " · papelera: " + eMv.message);
+}
+async function quitarDeStorageCert(path) { return quitarDeStorage("proceso_certificacion_bt", path); }
+
+// ─── 🔒 INFORME RHCHECK (Etapa Nubarium · ambas fuentes) ────────────
+// El analista de RHCHECK sube su informe PDF. Es CONFIDENCIAL: queda en el
+// bucket privado archivador_empresas y, si la tarjeta tiene empresa, se indexa
+// en documentos_empresa con confidencial=true — el Portal de Terceros filtra
+// esa marca y la categoría, así el tercero NUNCA lo ve ni lo descarga.
+function InformeRHCheck({ fuente, registroId, terceroId, titulo, pathInicial, onCambio }) {
+  const [path, setPath] = useState(pathInicial || null);
+  const [busy, setBusy] = useState(false);
+  const fileRef = useRef(null);
+  const tabla = fuente === "certificaciones" ? "certificaciones" : "certificaciones_mx";
+
+  const ver = async () => {
+    const { data } = await sb.storage.from("archivador_empresas").createSignedUrl(path, 600);
+    if (data?.signedUrl) window.open(data.signedUrl, "_blank");
+    else alert("No se pudo abrir el informe.");
+  };
+
+  const subir = async (file) => {
+    if (!file) return;
+    if (file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) {
+      alert("El informe RHCHECK debe ser un PDF."); return;
+    }
+    setBusy(true);
+    try {
+      const base = terceroId ? `${terceroId}/rhcheck` : `prospectos/${registroId}/rhcheck`;
+      const p = `${base}/RHCHECK_${Date.now()}.pdf`;
+      const { error: eUp } = await sb.storage.from("archivador_empresas")
+        .upload(p, file, { contentType: "application/pdf", upsert: false });
+      if (eUp) throw new Error(eUp.message);
+      const { error: eUpd } = await sb.from(tabla).update({ rhcheck_informe_path: p }).eq("id", registroId);
+      if (eUpd) throw new Error("El PDF subió pero no se registró en la tarjeta (¿falta rhcheck_confidencial.sql?): " + eUpd.message);
+      if (terceroId) {
+        // Indexa en el archivador digital de la empresa. OJO: si falla por falta de la
+        // columna `confidencial`, NO se reintenta sin ella — quedaría visible al portal.
+        const { error: eIns } = await sb.from("documentos_empresa").insert({
+          tercero_id: terceroId, categoria: "rhcheck", nombre_archivo: file.name,
+          storage_path: p, bucket: "archivador_empresas", mime_type: "application/pdf",
+          tamano_bytes: file.size, referencia: (titulo || "").slice(0, 120) || null,
+          subido_por: window.__PERFIL_EMAIL || "analista_brain", origen: "brain",
+          confidencial: true,
+        });
+        if (eIns) alert("El informe quedó guardado en la tarjeta, pero NO se indexó en el archivador: " + eIns.message + "\n\nCorre rhcheck_confidencial.sql y vuelve a cargarlo para indexarlo.");
+      }
+      // Retira la versión anterior (archivo + índice) para no dejar copias sueltas
+      if (path && path !== p) {
+        try { await quitarDeStorage("archivador_empresas", path); } catch (e) { console.warn("Versión anterior no retirada:", e.message); }
+        try { await sb.from("documentos_empresa").delete().eq("storage_path", path); } catch (e) { /* sin índice previo */ }
+      }
+      setPath(p);
+      if (onCambio) onCambio(p);
+    } catch (e) { alert("No se pudo cargar el informe: " + e.message); }
+    finally { setBusy(false); }
+  };
+
+  const eliminar = async () => {
+    if (!confirm("¿Eliminar el informe RHCHECK? Se retira del archivador y de la tarjeta.")) return;
+    setBusy(true);
+    try {
+      await quitarDeStorage("archivador_empresas", path);
+      try { await sb.from("documentos_empresa").delete().eq("storage_path", path); } catch (e) { /* sin índice */ }
+      const { error } = await sb.from(tabla).update({ rhcheck_informe_path: null }).eq("id", registroId);
+      if (error) throw new Error(error.message);
+      setPath(null);
+      if (onCambio) onCambio(null);
+    } catch (e) { alert("No se pudo eliminar: " + e.message); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div className="form-card" style={{ border: "1.5px solid #b45309", background: "#fdf6ee" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <div style={{ flex: 1, minWidth: 220 }}>
+          <div className="form-title" style={{ color: "#b45309", margin: 0 }}>🔒 Informe RHCHECK <span style={{ fontSize: 11, fontWeight: 500 }}>· confidencial</span></div>
+          <div style={{ fontSize: 11.5, color: "#8a6a3f", marginTop: 3 }}>
+            Solo visible y descargable para BigTicket — el tercero <b>nunca</b> lo ve en su portal ni en sus documentos.
+            {terceroId ? " Queda indexado en el archivador digital de la empresa." : " Sin empresa creada aún: queda en la tarjeta; al crear la empresa (E7) se podrá archivar."}
+          </div>
+        </div>
+        {path ? (
+          <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+            <span style={{ fontSize: 12, fontWeight: 800, color: "#166534", background: "#e8f5ec", border: "1px solid #b7e0c2", borderRadius: 20, padding: "5px 12px" }}>✓ Informe cargado</span>
+            <button style={_btnDoc} onClick={ver} disabled={busy}>Ver</button>
+            <button style={_btnDoc} onClick={() => fileRef.current && fileRef.current.click()} disabled={busy}>{busy ? "…" : "Reemplazar"}</button>
+            <button style={_btnDocRojo} onClick={eliminar} disabled={busy}>Eliminar</button>
+          </div>
+        ) : (
+          <button onClick={() => fileRef.current && fileRef.current.click()} disabled={busy}
+            style={{ border: "2px dashed #b45309", background: "#fff", color: "#b45309", fontWeight: 700, fontSize: 12.5, borderRadius: 10, padding: "10px 18px", cursor: "pointer", fontFamily: "'Geist',sans-serif" }}>
+            {busy ? "Subiendo…" : "📄 Cargar informe RHCHECK (PDF)"}
+          </button>
+        )}
+      </div>
+      <input ref={fileRef} type="file" accept="application/pdf,.pdf" style={{ display: "none" }}
+        onChange={(e) => { const f = e.target.files[0]; e.target.value = ""; if (f) subir(f); }} />
+    </div>
+  );
 }
 
 // Chip de TIPO
@@ -2658,6 +2762,12 @@ function DetalleCertificacion({ cert, etapa, onVolver, onPasarEtapa2, onMoverA, 
           <ValidacionRepuve cert={cert} veh={veh} onMoverA={onMoverA}
             onVehActualizado={(v) => { cert._vehiculo = v; setDocsCert(d => d ? [...d] : d); }} />
         )}
+        {/* 🔒 Informe RHCHECK — Etapa Nubarium, personas Y vehículos */}
+        {!enEtapa1 && etapaActual === "validacion_nubarium" && (
+          <InformeRHCheck fuente="certificaciones" registroId={cert.id} terceroId={cert.tercero_id}
+            titulo={titulo} pathInicial={cert.rhcheck_informe_path}
+            onCambio={(p) => { cert.rhcheck_informe_path = p; }} />
+        )}
         {etapaActual === "rechazado" && (
           <div className="form-card" style={{ background: "#fdecec", border: "1px solid #f5c2c2" }}>
             <div style={{ fontSize: 13, color: "#991b1b" }}>✕ <b>Rechazado.</b> {cert.respuesta_meli || cert.motivo_rechazo || ""}</div>
@@ -2830,6 +2940,7 @@ const DOC_CATEGORIAS = [
   { id: "vehiculos", label: "🚚 Vehículos" },
   { id: "qr",        label: "🔳 QR MELI" },                 // código QR de MELI por camioneta (Referencia = placa)
   { id: "personal",  label: "👤 Personal" },
+  { id: "rhcheck",   label: "🔒 RHCHECK (confidencial)" },  // informes del analista RHCHECK — el portal NO los muestra
   { id: "anexos",    label: "📎 Anexos" },
   { id: "otros",     label: "🗃 Otros" },
 ];
@@ -3003,6 +3114,7 @@ function DocumentacionTerceros() {
           storage_path: path, mime_type: archivo.type || null, tamano_bytes: archivo.size,
           referencia: referencia.trim() || null,
           subido_por: window.__PERFIL_EMAIL || "", origen: "brain",
+          ...(categoria === "rhcheck" ? { confidencial: true } : {}),
         });
         if (eIns) throw new Error("índice: " + eIns.message);
         setCola(p => p.map((x, ix) => ix === i ? { ...x, estado: "ok", tamano: archivo.size } : x));
