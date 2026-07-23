@@ -892,7 +892,7 @@ function ResumenSolicitudAlta({ fuente, registro, datos, onEnviado }) {
 // ─── ETAPA 5 · FIRMA DE CONTRATO (MIFIEL) ───────────────────────────
 // Mismo componente para ambas fuentes (regla: todas las tarjetas iguales).
 // ⚠️ Cambiar a "production" al salir del sandbox de MIFIEL.
-const MIFIEL_ENV = "sandbox";
+const MIFIEL_ENV = "production";
 
 // Carga el script del widget de MIFIEL una sola vez (compartido por Etapa 5 y Gestionador)
 function cargarScriptMifiel() {
