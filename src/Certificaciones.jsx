@@ -3831,6 +3831,292 @@ function MensajesTerceros() {
   );
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// ALTA DE VEHÍCULOS Y PERSONAL (empresas antiguas) — el analista carga desde el
+// Brain con los mismos datos y fotos que los formularios del Portal de Terceros.
+// Crea la certificación (Kanban B · Recepción), sube los documentos al proceso
+// (visibles en la tarjeta y en el portal de la empresa) y guarda copia en el
+// Archivador digital (categorías 👤 Personal / 🚚 Vehículos).
+// ═══════════════════════════════════════════════════════════════════════════
+const ESTADOS_MX_ALTA = [
+  "AGUASCALIENTES","BAJA CALIFORNIA","BAJA CALIFORNIA SUR","CAMPECHE","CHIAPAS","CHIHUAHUA",
+  "CIUDAD DE MEXICO","COAHUILA","COLIMA","DURANGO","ESTADO DE MEXICO","GUANAJUATO","GUERRERO",
+  "HIDALGO","JALISCO","MICHOACAN","MORELOS","NAYARIT","NUEVO LEON","OAXACA","PUEBLA","QUERETARO",
+  "QUINTANA ROO","SAN LUIS POTOSI","SINALOA","SONORA","TABASCO","TAMAULIPAS","TLAXCALA","VERACRUZ","YUCATAN","ZACATECAS",
+];
+const SC_LIST_ALTA = ["AMX7","ECH4","ECH5","EGD0","EGD9","EHM4","EHM5","EHP5","EHP6","ELP2","ELP3","EPB3","EQR2","ERX6","ETA4","ETG4","ETL1","ETL2","EVM2","EVR3","EZL1","SAG1","SBJ1","SCC1","SCD1","SCG1","SCH1","SCJ1","SCM1","SCN1","SCP1","SCQ1","SCT1","SCU1","SCV1","SCX1","SCY1","SDC1","SDG1","SEN1","SGD1","SGD2","SGD3","SGD4","SHM1","SHP1","SHP2","SJA1","SJD1","SLE1","SLP1","SLV1","SLW1","SLZ1","SMA1","SMD1","SML1","SMO1","SMT1","SMT2","SMT3","SMX1","SMX10","SMX2","SMX3","SMX4","SMX5","SMX6","SMX7","SMX8","SMX9","SMZ1","SNG1","SNL1","SOX1","SPB1","SPD1","SPV1","SPY1","SPZ1","SQR1","SQR2","SRX1","SSL1","STA1","STG1","STJ1","STL1","STL2","STN1","STP1","STR1","STT1","STX1","SUR1","SVH1","SVM1","SVR1","SXL1","SZC1","SZL1","SZM1","XSM11"];
+
+const DOCS_PERSONA_ALTA = [
+  ["ine", "INE (frente)"], ["ine_reverso", "INE (reverso)"],
+  ["curp", "CURP (PDF)"], ["rfc", "Constancia RFC"], ["licencia", "Licencia de conducir"],
+];
+const DOCS_VEHICULO_ALTA = [
+  ["foto_frente", "Foto: Frente"], ["foto_trasera", "Foto: Trasera"],
+  ["foto_lado_izq", "Foto: Lado izquierdo"], ["foto_lado_der", "Foto: Lado derecho"],
+  ["tarjeta_circulacion", "Tarjeta de circulación"],
+];
+
+function SlotArchivoAlta({ label, file, onFile, obligatorio }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", background: file ? "#e8f5ec" : "#f8f9fb", border: "1px solid " + (file ? "#b7e0c2" : "#e4e7ec"), borderRadius: 9, marginBottom: 7 }}>
+      <div style={{ flex: 1, fontSize: 12.5, fontWeight: 600, color: "#333" }}>
+        {file ? "✅" : "📎"} {label}{obligatorio ? " *" : ""}
+        {file && <span style={{ fontWeight: 400, color: "#667085" }}> — {file.name}</span>}
+      </div>
+      <label style={{ background: "#fff", border: "1px solid #1a3a6b", color: "#1a3a6b", borderRadius: 7, padding: "6px 12px", fontSize: 11.5, fontWeight: 700, cursor: "pointer" }}>
+        {file ? "Cambiar" : "Elegir archivo"}
+        <input type="file" accept="image/*,.pdf" style={{ display: "none" }}
+          onChange={(e) => { const x = e.target.files?.[0]; if (x) onFile(x); e.target.value = ""; }} />
+      </label>
+    </div>
+  );
+}
+
+function AltaVehiculosPersonal({ onCreada }) {
+  const [empresas, setEmpresas] = useState(null);
+  const [terceroId, setTerceroId] = useState("");
+  const [tipoAlta, setTipoAlta] = useState("conductor");   // conductor | ayudante | vehiculo
+  const [sc, setSc] = useState("");
+  const [f, setF] = useState({ nombre: "", curp: "", rfc: "", telefono: "", email: "", licencia_numero: "", licencia_estado: "", licencia_vigencia: "" });
+  const [v, setV] = useState({ placa: "", vin: "", marca: "", modelo: "", anio: "" });
+  const [files, setFiles] = useState({});
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);   // { tipo: 'ok'|'err', texto }
+  const esVeh = tipoAlta === "vehiculo";
+  const esCond = tipoAlta === "conductor";
+
+  useEffect(() => { (async () => {
+    const { data } = await sb.from("terceros").select("id, nombre, rfc").order("nombre");
+    setEmpresas(data || []);
+  })(); }, []);
+
+  const inp = { width: "100%", boxSizing: "border-box", background: "#fff", border: "0.5px solid #e4e7ec", borderRadius: 8, padding: "9px 11px", fontSize: 13, fontFamily: "'Geist',sans-serif" };
+  const lbl = { fontSize: 10.5, fontWeight: 700, color: "#667085", textTransform: "uppercase", letterSpacing: 0.5, display: "block", marginBottom: 4 };
+
+  // Sube al proceso de certificación (bucket + índice) — mismo camino que el portal
+  const subirDocCertAlta = async (tid, certId, tipoDoc, file) => {
+    const ext = (file.name.split(".").pop() || "bin").toLowerCase();
+    const path = `${tid}/${certId}/${tipoDoc}.${ext}`;
+    const { error } = await sb.storage.from("proceso_certificacion_bt").upload(path, file, { upsert: true });
+    if (error) throw new Error(`${tipoDoc}: ${error.message}`);
+    const { error: eIns } = await insDocCert({ certificacion_id: certId, tipo_documento: tipoDoc, storage_path: path, subido_por: window.__PERFIL_EMAIL || "analista_brain" });
+    if (eIns) throw new Error(`${tipoDoc} subió pero no se indexó: ${eIns.message}`);
+  };
+
+  // Copia al Archivador digital de la empresa (no bloquea el alta si falla)
+  const copiarAArchivador = async (tid, categoria, file, referencia) => {
+    try {
+      const safe = file.name.replace(/[^\w.\-]+/g, "_");
+      const p = `${tid}/${categoria}/${Date.now()}_${safe}`;
+      const { error: eUp } = await sb.storage.from("archivador_empresas").upload(p, file, { upsert: false, contentType: file.type || undefined });
+      if (eUp) throw new Error(eUp.message);
+      const { error: eIns } = await sb.from("documentos_empresa").insert({
+        tercero_id: tid, categoria, nombre_archivo: file.name, storage_path: p,
+        bucket: "archivador_empresas", mime_type: file.type || null, tamano_bytes: file.size,
+        referencia: (referencia || "").slice(0, 120) || null,
+        subido_por: window.__PERFIL_EMAIL || "analista_brain", origen: "brain",
+      });
+      if (eIns) throw new Error(eIns.message);
+      return true;
+    } catch (e) { console.warn("Archivador (" + file.name + "):", e.message); return false; }
+  };
+
+  const crear = async () => {
+    setMsg(null);
+    const falta = [];
+    if (!terceroId) falta.push("Empresa");
+    if (!sc) falta.push("Centro de servicio (SC)");
+    if (!esVeh) {
+      if (!f.nombre.trim()) falta.push("Nombre completo");
+      if (!f.curp.trim()) falta.push("CURP");
+      if (!f.rfc.trim()) falta.push("RFC");
+      if (!f.telefono.trim()) falta.push("Teléfono");
+      if (!f.email.trim() || !f.email.includes("@")) falta.push("Correo (invitación MELI)");
+      if (esCond) {
+        if (!f.licencia_numero.trim()) falta.push("Número de licencia");
+        if (!f.licencia_estado) falta.push("Estado emisor de la licencia");
+        if (!f.licencia_vigencia) falta.push("Vigencia de la licencia");
+      }
+      [["ine", true], ["ine_reverso", true], ["curp", true], ["rfc", true], ["licencia", esCond]].forEach(([t, req]) => {
+        if (req && !files[t]) falta.push("Documento: " + t.replace("_", " "));
+      });
+    } else {
+      if (!v.placa.trim()) falta.push("Placa");
+      if (!v.marca.trim()) falta.push("Marca");
+      if (!v.modelo.trim()) falta.push("Modelo");
+      if (!/^(19|20)\d{2}$/.test(v.anio.trim())) falta.push("Año (4 dígitos)");
+      DOCS_VEHICULO_ALTA.forEach(([t, l]) => { if (!files[t]) falta.push("Documento: " + l); });
+    }
+    if (falta.length) { setMsg({ tipo: "err", texto: "Faltan campos obligatorios: " + falta.join(" · ") }); return; }
+
+    setBusy(true);
+    try {
+      // 1) Certificación (misma forma que el portal — aparece en el Kanban B y en el portal)
+      const { data: cert, error } = await sb.from("certificaciones").insert({
+        tercero_id: terceroId, tipo: tipoAlta, estado: "enviado", origen: "brain_analista",
+        enviado_por: window.__PERFIL_EMAIL || "analista_brain", service_center: sc, etapa_kanban: "recepcion",
+      }).select().single();
+      if (error) throw new Error(error.message);
+
+      // 2) Detalle persona/vehículo (payloads idénticos a FormPersona/FormVehiculo)
+      if (!esVeh) {
+        const { error: e2 } = await sb.from("certificacion_conductor").insert({
+          certificacion_id: cert.id, nombre: f.nombre.trim(), curp: f.curp.trim().toUpperCase(),
+          rfc: f.rfc.trim().toUpperCase() || null, telefono: f.telefono || null,
+          email: f.email.trim().toLowerCase(),
+          licencia_numero: esCond ? (f.licencia_numero || null) : null,
+          licencia_estado: esCond ? (f.licencia_estado || null) : null,
+          licencia_vigencia: esCond ? (f.licencia_vigencia || null) : null,
+        });
+        if (e2) throw new Error(e2.message);
+      } else {
+        const { error: e2 } = await sb.from("certificacion_vehiculo").insert({
+          certificacion_id: cert.id, placa: v.placa.trim().toUpperCase().replace(/\s/g, ""),
+          vin: v.vin.trim().toUpperCase() || null, marca: v.marca.trim().toUpperCase(),
+          modelo: v.modelo.trim().toUpperCase(), anio: Number(v.anio.trim()),
+        });
+        if (e2) throw new Error(e2.message);
+      }
+
+      // 3) Documentos: proceso de certificación + copia al Archivador digital
+      const emp = (empresas || []).find((e) => e.id === terceroId);
+      const catArch = esVeh ? "vehiculos" : "personal";
+      const ref = esVeh ? `Vehículo ${v.placa.trim().toUpperCase()}` : `${esCond ? "Driver" : "Ayudante"} ${f.nombre.trim()}`;
+      let archOk = 0, archTotal = 0;
+      for (const [t, file] of Object.entries(files)) if (file) {
+        await subirDocCertAlta(terceroId, cert.id, t, file);
+        archTotal++;
+        if (await copiarAArchivador(terceroId, catArch, file, ref)) archOk++;
+      }
+
+      // 4) Evento de trazabilidad (no bloquea)
+      try {
+        await sb.from("certificacion_eventos").insert({
+          certificacion_id: cert.id, estado_nuevo: "enviado",
+          nota: "Alta cargada por analista desde el Brain", actor: window.__PERFIL_EMAIL || "analista_brain",
+        });
+      } catch (e) { /* trazabilidad opcional */ }
+
+      setMsg({ tipo: "ok", texto: `✅ ${esVeh ? "Vehículo " + v.placa.trim().toUpperCase() : f.nombre.trim()} creado para ${emp?.nombre || "la empresa"} — ya está en el Kanban (Recepción), visible en el Portal de Terceros de la empresa, y con ${archOk}/${archTotal} documentos copiados a su Archivador (${catArch === "vehiculos" ? "🚚 Vehículos" : "👤 Personal"}).` });
+      setFiles({});
+      setF({ nombre: "", curp: "", rfc: "", telefono: "", email: "", licencia_numero: "", licencia_estado: "", licencia_vigencia: "" });
+      setV({ placa: "", vin: "", marca: "", modelo: "", anio: "" });
+      if (onCreada) onCreada();
+    } catch (e) { setMsg({ tipo: "err", texto: "No se pudo crear el alta: " + e.message }); }
+    finally { setBusy(false); }
+  };
+
+  const docsAlta = esVeh ? DOCS_VEHICULO_ALTA : DOCS_PERSONA_ALTA.filter(([t]) => t !== "licencia" || esCond);
+
+  return (
+    <div style={{ maxWidth: 760 }}>
+      <div style={{ background: "#fff", border: "0.5px solid #e4e7ec", borderRadius: 12, padding: "20px 22px" }}>
+        <div className="form-title" style={{ marginTop: 0 }}>➕ Alta de Vehículos y Personal (empresas antiguas)</div>
+        <div style={{ fontSize: 12, color: "#667085", marginBottom: 16, lineHeight: 1.55 }}>
+          Carga personal o unidades en nombre de una empresa, con los mismos datos y fotos del Portal de Terceros.
+          El alta entra al Kanban en <b>Recepción</b>, la empresa la ve en su portal, y los documentos quedan también en su Archivador digital.
+        </div>
+
+        {/* Empresa + tipo de alta */}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 12, marginBottom: 14 }}>
+          <div>
+            <label style={lbl}>Empresa *</label>
+            <select value={terceroId} onChange={(e) => setTerceroId(e.target.value)} style={inp}>
+              <option value="">{empresas === null ? "Cargando empresas…" : "Selecciona la empresa…"}</option>
+              {(empresas || []).map((e) => <option key={e.id} value={e.id}>{e.nombre}{e.rfc ? ` · ${e.rfc}` : ""}</option>)}
+            </select>
+          </div>
+          <div>
+            <label style={lbl}>Tipo de alta</label>
+            <div style={{ display: "flex", gap: 6 }}>
+              {[["conductor", "🚗 Driver"], ["ayudante", "🧰 Ayudante"], ["vehiculo", "🚚 Vehículo"]].map(([t, l]) => (
+                <button key={t} onClick={() => { setTipoAlta(t); setFiles({}); setMsg(null); }}
+                  style={{ padding: "9px 14px", borderRadius: 8, cursor: "pointer", fontSize: 12.5, fontFamily: "'Geist',sans-serif",
+                    fontWeight: tipoAlta === t ? 700 : 500,
+                    background: tipoAlta === t ? "#1a3a6b" : "#fff", color: tipoAlta === t ? "#fff" : "#555",
+                    border: tipoAlta === t ? "1.5px solid #1a3a6b" : "1px solid #e4e7ec" }}>
+                  {l}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <div style={{ marginBottom: 14 }}>
+          <label style={lbl}>Centro de servicio (SC) *</label>
+          <input list="sc-list-alta" value={sc} onChange={(e) => setSc(e.target.value.toUpperCase())} placeholder="Escribe o elige: SMX10, STX1…" style={{ ...inp, maxWidth: 260 }} />
+          <datalist id="sc-list-alta">{SC_LIST_ALTA.map((s) => <option key={s} value={s} />)}</datalist>
+        </div>
+
+        {/* Datos persona */}
+        {!esVeh && (
+          <>
+            <div className="form-title" style={{ fontSize: 13 }}>Datos personales</div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 6 }}>
+              <div style={{ gridColumn: "1 / -1" }}><label style={lbl}>Nombre completo *</label>
+                <input value={f.nombre} onChange={(e) => setF({ ...f, nombre: e.target.value })} placeholder="Nombre y apellidos" style={inp} /></div>
+              <div><label style={lbl}>CURP *</label><input value={f.curp} maxLength={18} onChange={(e) => setF({ ...f, curp: e.target.value })} placeholder="18 caracteres" style={inp} /></div>
+              <div><label style={lbl}>RFC *</label><input value={f.rfc} maxLength={13} onChange={(e) => setF({ ...f, rfc: e.target.value })} placeholder="13 caracteres" style={inp} /></div>
+              <div><label style={lbl}>Teléfono *</label><input value={f.telefono} onChange={(e) => setF({ ...f, telefono: e.target.value })} placeholder="10 dígitos" style={inp} /></div>
+              <div><label style={lbl}>Correo (invitación MELI) *</label><input type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} placeholder="correo@ejemplo.com" style={inp} />
+                <div style={{ fontSize: 10.5, color: "#667085", marginTop: 3 }}>📩 A este correo llega la invitación de MELI.</div></div>
+            </div>
+            {esCond && (
+              <>
+                <div className="form-title" style={{ fontSize: 13 }}>Licencia de conducir</div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 6 }}>
+                  <div><label style={lbl}>Número *</label><input value={f.licencia_numero} onChange={(e) => setF({ ...f, licencia_numero: e.target.value })} style={inp} /></div>
+                  <div><label style={lbl}>Estado emisor *</label>
+                    <select value={f.licencia_estado} onChange={(e) => setF({ ...f, licencia_estado: e.target.value })} style={inp}>
+                      <option value="">Selecciona…</option>{ESTADOS_MX_ALTA.map((s) => <option key={s} value={s}>{s}</option>)}
+                    </select></div>
+                  <div><label style={lbl}>Vigencia *</label><input type="date" value={f.licencia_vigencia} onChange={(e) => setF({ ...f, licencia_vigencia: e.target.value })} style={inp} /></div>
+                </div>
+              </>
+            )}
+          </>
+        )}
+
+        {/* Datos vehículo */}
+        {esVeh && (
+          <>
+            <div className="form-title" style={{ fontSize: 13 }}>Datos de la unidad</div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 6 }}>
+              <div><label style={lbl}>Placa *</label><input value={v.placa} onChange={(e) => setV({ ...v, placa: e.target.value })} placeholder="ABC1234" style={inp} /></div>
+              <div><label style={lbl}>VIN (opcional)</label><input value={v.vin} onChange={(e) => setV({ ...v, vin: e.target.value })} style={inp} /></div>
+              <div><label style={lbl}>Año *</label><input value={v.anio} maxLength={4} onChange={(e) => setV({ ...v, anio: e.target.value })} placeholder="2019" style={inp} /></div>
+              <div><label style={lbl}>Marca *</label><input value={v.marca} onChange={(e) => setV({ ...v, marca: e.target.value })} placeholder="NISSAN" style={inp} /></div>
+              <div><label style={lbl}>Modelo *</label><input value={v.modelo} onChange={(e) => setV({ ...v, modelo: e.target.value })} placeholder="URVAN" style={inp} /></div>
+            </div>
+            <div style={{ fontSize: 11, color: "#8a4a0f", background: "#fff4e5", border: "1px solid #fcd9b6", borderRadius: 8, padding: "7px 10px", marginBottom: 8 }}>
+              ⏳ Recuerda: unidades con más de 15 años no son certificables.
+            </div>
+          </>
+        )}
+
+        {/* Documentos */}
+        <div className="form-title" style={{ fontSize: 13 }}>📎 Documentos {esVeh ? "de la unidad" : "de la persona"}</div>
+        {docsAlta.map(([t, l]) => (
+          <SlotArchivoAlta key={t} label={l} obligatorio file={files[t]} onFile={(x) => setFiles((p) => ({ ...p, [t]: x }))} />
+        ))}
+
+        {msg && (
+          <div style={{ marginTop: 12, padding: "10px 14px", borderRadius: 9, fontSize: 12.5, fontWeight: 600, lineHeight: 1.55,
+            background: msg.tipo === "ok" ? "#e8f5ec" : "#fdecea", border: "1px solid " + (msg.tipo === "ok" ? "#b7e0c2" : "#f5c6c0"),
+            color: msg.tipo === "ok" ? "#166534" : "#c0392b" }}>
+            {msg.texto}
+          </div>
+        )}
+
+        <button onClick={crear} disabled={busy}
+          style={{ width: "100%", marginTop: 14, background: "#1a3a6b", color: "#fff", border: "none", borderRadius: 10, padding: "13px", fontSize: 13.5, fontWeight: 700, cursor: "pointer", opacity: busy ? 0.6 : 1, fontFamily: "'Geist',sans-serif" }}>
+          {busy ? "Creando alta…" : "✓ Crear alta y cargar documentos"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function ModuloCertificaciones() {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -4097,7 +4383,7 @@ function ModuloCertificaciones() {
 
       {/* Pestañas de sección */}
       <div style={{ display: "flex", gap: 4, marginBottom: 18, borderBottom: "1px solid #e4e7ec" }}>
-        {[["certificaciones", "📋 Certificaciones"], ["contratos", "📑 Gestionador de Contratos"], ["documentacion", "🗂 Documentación Terceros"], ["mensajes", "💬 Mensajes"]].map(([v, l]) => (
+        {[["certificaciones", "📋 Certificaciones"], ["altas", "➕ Vehículos y Personal"], ["contratos", "📑 Gestionador de Contratos"], ["documentacion", "🗂 Documentación Terceros"], ["mensajes", "💬 Mensajes"]].map(([v, l]) => (
           <button key={v} onClick={() => { setSeccion(v); setSelected(null); }}
             style={{ padding: "10px 16px", border: "none", cursor: "pointer", fontSize: 13, fontFamily: "'Geist',sans-serif",
               background: "transparent", fontWeight: seccion === v ? 700 : 400,
@@ -4108,6 +4394,7 @@ function ModuloCertificaciones() {
         ))}
       </div>
 
+      {seccion === "altas" && <AltaVehiculosPersonal onCreada={() => cargar(true)} />}
       {seccion === "contratos" && <GestionadorContratos />}
       {seccion === "documentacion" && <DocumentacionTerceros />}
       {seccion === "mensajes" && <MensajesTerceros />}
@@ -4124,11 +4411,12 @@ function ModuloCertificaciones() {
               background: flujo === v ? "#1a3a6b" : "#fff",
               color: flujo === v ? "#fff" : "#555",
               border: flujo === v ? "1.5px solid #1a3a6b" : "1px solid #e4e7ec" }}>
-            {l} <span style={{ opacity: 0.75, fontWeight: 400 }}>({n})</span>
+            {l} {n != null && <span style={{ opacity: 0.75, fontWeight: 400 }}>({n})</span>}
           </button>
         ))}
       </div>
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 14 }}>
+
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 14 }}>
         <input
           value={busqueda}
           onChange={(e) => setBusqueda(e.target.value)}
