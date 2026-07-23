@@ -106,7 +106,7 @@ const MODULOS_POR_PAIS = {
     prefacturas: ["pagos"],
   },
   "Chile": {
-    superadmin: ["certificaciones_cl"],
+    superadmin: ["certificaciones_cl", "mantenciones_cl"],
     certificacion: [],
     prefacturas: [],
   },
@@ -117,6 +117,7 @@ const MODULOS_LABELS = {
   pool_meli_mx: "Indicadores Operacionales MX",
   certificaciones: "Certificaciones",
   certificaciones_cl: "Certificaciones",
+  mantenciones_cl: "Mantenciones",
   maestro: "Maestro Operaciones",
   mantenciones: "Mantenciones",
   pnr: "PNR",
@@ -15484,7 +15485,8 @@ export default function App() {
         </div>
         {tabActivo === "pool_meli_mx" && <ModuloPoolMeliMX usuario={usuario} />}
         {tabActivo === "certificaciones" && <ModuloCertificacionesMadre />}
-        {tabActivo === "certificaciones_cl" && <ModuloCertificacionesCL certronicSlot={<ModuloPagos />} mantencionesSlot={<ModuloMantencionesMadre usuario={usuario} />} />}
+        {tabActivo === "certificaciones_cl" && <ModuloCertificacionesCL certronicSlot={<ModuloPagos />} />}
+        {tabActivo === "mantenciones_cl" && <ModuloMantencionesMadre usuario={usuario} />}
         {tabActivo === "configuracion" && (
           <div className="pg" style={{ maxWidth: 700 }}>
             <div className="sec-title">Configuración</div>
