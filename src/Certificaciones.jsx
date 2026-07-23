@@ -3882,6 +3882,14 @@ function AltaVehiculosPersonal({ onCreada }) {
   const [files, setFiles] = useState({});
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState(null);   // { tipo: 'ok'|'err', texto }
+  const [padron, setPadron] = useState(null);      // padrón de la empresa seleccionada
+  const cargarPadron = async (tid) => {
+    if (!tid) { setPadron(null); return; }
+    const { data } = await sb.from("flota_personal_terceros").select("*")
+      .eq("tercero_id", tid).order("created_at", { ascending: false });
+    setPadron(data || []);
+  };
+  useEffect(() => { cargarPadron(terceroId); }, [terceroId]);
   const esVeh = tipoAlta === "vehiculo";
   const esCond = tipoAlta === "conductor";
 
@@ -3892,16 +3900,6 @@ function AltaVehiculosPersonal({ onCreada }) {
 
   const inp = { width: "100%", boxSizing: "border-box", background: "#fff", border: "0.5px solid #e4e7ec", borderRadius: 8, padding: "9px 11px", fontSize: 13, fontFamily: "'Geist',sans-serif" };
   const lbl = { fontSize: 10.5, fontWeight: 700, color: "#667085", textTransform: "uppercase", letterSpacing: 0.5, display: "block", marginBottom: 4 };
-
-  // Sube al proceso de certificación (bucket + índice) — mismo camino que el portal
-  const subirDocCertAlta = async (tid, certId, tipoDoc, file) => {
-    const ext = (file.name.split(".").pop() || "bin").toLowerCase();
-    const path = `${tid}/${certId}/${tipoDoc}.${ext}`;
-    const { error } = await sb.storage.from("proceso_certificacion_bt").upload(path, file, { upsert: true });
-    if (error) throw new Error(`${tipoDoc}: ${error.message}`);
-    const { error: eIns } = await insDocCert({ certificacion_id: certId, tipo_documento: tipoDoc, storage_path: path, subido_por: window.__PERFIL_EMAIL || "analista_brain" });
-    if (eIns) throw new Error(`${tipoDoc} subió pero no se indexó: ${eIns.message}`);
-  };
 
   // Copia al Archivador digital de la empresa (no bloquea el alta si falla)
   const copiarAArchivador = async (tid, categoria, file, referencia) => {
@@ -3917,8 +3915,8 @@ function AltaVehiculosPersonal({ onCreada }) {
         subido_por: window.__PERFIL_EMAIL || "analista_brain", origen: "brain",
       });
       if (eIns) throw new Error(eIns.message);
-      return true;
-    } catch (e) { console.warn("Archivador (" + file.name + "):", e.message); return false; }
+      return p;
+    } catch (e) { console.warn("Archivador (" + file.name + "):", e.message); return null; }
   };
 
   const crear = async () => {
@@ -3951,56 +3949,42 @@ function AltaVehiculosPersonal({ onCreada }) {
 
     setBusy(true);
     try {
-      // 1) Certificación (misma forma que el portal — aparece en el Kanban B y en el portal)
-      const { data: cert, error } = await sb.from("certificaciones").insert({
-        tercero_id: terceroId, tipo: tipoAlta, estado: "enviado", origen: "brain_analista",
-        enviado_por: window.__PERFIL_EMAIL || "analista_brain", service_center: sc, etapa_kanban: "recepcion",
-      }).select().single();
-      if (error) throw new Error(error.message);
-
-      // 2) Detalle persona/vehículo (payloads idénticos a FormPersona/FormVehiculo)
-      if (!esVeh) {
-        const { error: e2 } = await sb.from("certificacion_conductor").insert({
-          certificacion_id: cert.id, nombre: f.nombre.trim(), curp: f.curp.trim().toUpperCase(),
-          rfc: f.rfc.trim().toUpperCase() || null, telefono: f.telefono || null,
-          email: f.email.trim().toLowerCase(),
-          licencia_numero: esCond ? (f.licencia_numero || null) : null,
-          licencia_estado: esCond ? (f.licencia_estado || null) : null,
-          licencia_vigencia: esCond ? (f.licencia_vigencia || null) : null,
-        });
-        if (e2) throw new Error(e2.message);
-      } else {
-        const { error: e2 } = await sb.from("certificacion_vehiculo").insert({
-          certificacion_id: cert.id, placa: v.placa.trim().toUpperCase().replace(/\s/g, ""),
-          vin: v.vin.trim().toUpperCase() || null, marca: v.marca.trim().toUpperCase(),
-          modelo: v.modelo.trim().toUpperCase(), anio: Number(v.anio.trim()),
-        });
-        if (e2) throw new Error(e2.message);
-      }
-
-      // 3) Documentos: proceso de certificación + copia al Archivador digital
       const emp = (empresas || []).find((e) => e.id === terceroId);
+      // 1) Fila del padrón (flota_personal_terceros) — lo que YA opera de la empresa
+      const datos = !esVeh ? {
+        nombre: f.nombre.trim(), curp: f.curp.trim().toUpperCase(),
+        rfc: f.rfc.trim().toUpperCase() || null, telefono: f.telefono || null,
+        email: f.email.trim().toLowerCase(),
+        licencia_numero: esCond ? (f.licencia_numero || null) : null,
+        licencia_estado: esCond ? (f.licencia_estado || null) : null,
+        licencia_vigencia: esCond ? (f.licencia_vigencia || null) : null,
+      } : {
+        placa: v.placa.trim().toUpperCase().replace(/\s/g, ""), vin: v.vin.trim().toUpperCase() || null,
+        marca: v.marca.trim().toUpperCase(), modelo: v.modelo.trim().toUpperCase(), anio: Number(v.anio.trim()),
+      };
+      const { data: fila, error } = await sb.from("flota_personal_terceros").insert({
+        tercero_id: terceroId, tipo: tipoAlta, estado: "activo", origen: "alta_brain",
+        service_center: sc, creado_por: window.__PERFIL_EMAIL || "analista_brain", ...datos,
+      }).select().single();
+      if (error) throw new Error(error.message + (error.code === "42P01" ? " — corre flota_personal.sql" : ""));
+
+      // 2) Documentos → Archivador digital (👤 Personal / 🚚 Vehículos) + referencia en la fila
       const catArch = esVeh ? "vehiculos" : "personal";
-      const ref = esVeh ? `Vehículo ${v.placa.trim().toUpperCase()}` : `${esCond ? "Driver" : "Ayudante"} ${f.nombre.trim()}`;
-      let archOk = 0, archTotal = 0;
+      const ref = esVeh ? `Vehículo ${datos.placa}` : `${esCond ? "Driver" : "Ayudante"} ${datos.nombre}`;
+      const etiquetas = Object.fromEntries(esVeh ? DOCS_VEHICULO_ALTA : DOCS_PERSONA_ALTA);
+      const docsJson = []; let total = 0;
       for (const [t, file] of Object.entries(files)) if (file) {
-        await subirDocCertAlta(terceroId, cert.id, t, file);
-        archTotal++;
-        if (await copiarAArchivador(terceroId, catArch, file, ref)) archOk++;
+        total++;
+        const pth = await copiarAArchivador(terceroId, catArch, file, ref);
+        if (pth) docsJson.push({ tipo: t, label: etiquetas[t] || t, storage_path: pth, bucket: "archivador_empresas" });
       }
+      if (docsJson.length) await sb.from("flota_personal_terceros").update({ documentos: docsJson }).eq("id", fila.id);
 
-      // 4) Evento de trazabilidad (no bloquea)
-      try {
-        await sb.from("certificacion_eventos").insert({
-          certificacion_id: cert.id, estado_nuevo: "enviado",
-          nota: "Alta cargada por analista desde el Brain", actor: window.__PERFIL_EMAIL || "analista_brain",
-        });
-      } catch (e) { /* trazabilidad opcional */ }
-
-      setMsg({ tipo: "ok", texto: `✅ ${esVeh ? "Vehículo " + v.placa.trim().toUpperCase() : f.nombre.trim()} creado para ${emp?.nombre || "la empresa"} — ya está en el Kanban (Recepción), visible en el Portal de Terceros de la empresa, y con ${archOk}/${archTotal} documentos copiados a su Archivador (${catArch === "vehiculos" ? "🚚 Vehículos" : "👤 Personal"}).` });
+      setMsg({ tipo: "ok", texto: `✅ ${esVeh ? "Vehículo " + datos.placa : datos.nombre} quedó registrado como ${esVeh ? "unidad activa" : "personal activo"} de ${emp?.nombre || "la empresa"} — ya aparece en el padrón de abajo, en la sección "Vehículos y Personal" del portal de la empresa, y con ${docsJson.length}/${total} documentos en su Archivador.` });
       setFiles({});
       setF({ nombre: "", curp: "", rfc: "", telefono: "", email: "", licencia_numero: "", licencia_estado: "", licencia_vigencia: "" });
       setV({ placa: "", vin: "", marca: "", modelo: "", anio: "" });
+      cargarPadron(terceroId);
       if (onCreada) onCreada();
     } catch (e) { setMsg({ tipo: "err", texto: "No se pudo crear el alta: " + e.message }); }
     finally { setBusy(false); }
@@ -4013,8 +3997,9 @@ function AltaVehiculosPersonal({ onCreada }) {
       <div style={{ background: "#fff", border: "0.5px solid #e4e7ec", borderRadius: 12, padding: "20px 22px" }}>
         <div className="form-title" style={{ marginTop: 0 }}>➕ Alta de Vehículos y Personal (empresas antiguas)</div>
         <div style={{ fontSize: 12, color: "#667085", marginBottom: 16, lineHeight: 1.55 }}>
-          Carga personal o unidades en nombre de una empresa, con los mismos datos y fotos del Portal de Terceros.
-          El alta entra al Kanban en <b>Recepción</b>, la empresa la ve en su portal, y los documentos quedan también en su Archivador digital.
+          Padrón de lo que <b>ya opera</b>: carga los vehículos y el personal vigentes de una empresa antigua, con los
+          mismos datos y fotos del Portal de Terceros. La empresa lo ve en su portal (sección "Vehículos y Personal"),
+          los documentos quedan en su Archivador digital, y toda certificación nueva que termine <b>Aceptada</b> se suma sola a este padrón.
         </div>
 
         {/* Empresa + tipo de alta */}
@@ -4110,9 +4095,45 @@ function AltaVehiculosPersonal({ onCreada }) {
 
         <button onClick={crear} disabled={busy}
           style={{ width: "100%", marginTop: 14, background: "#1a3a6b", color: "#fff", border: "none", borderRadius: 10, padding: "13px", fontSize: 13.5, fontWeight: 700, cursor: "pointer", opacity: busy ? 0.6 : 1, fontFamily: "'Geist',sans-serif" }}>
-          {busy ? "Creando alta…" : "✓ Crear alta y cargar documentos"}
+          {busy ? "Registrando…" : "✓ Registrar en el padrón y cargar documentos"}
         </button>
       </div>
+
+      {/* Padrón vigente de la empresa seleccionada */}
+      {terceroId && padron !== null && (
+        <div style={{ background: "#fff", border: "0.5px solid #e4e7ec", borderRadius: 12, padding: "16px 20px", marginTop: 14 }}>
+          <div className="form-title" style={{ marginTop: 0 }}>
+            📋 Padrón vigente ({padron.filter((r) => r.estado !== "baja").length} activos{padron.some((r) => r.estado === "baja") ? ` · ${padron.filter((r) => r.estado === "baja").length} en baja` : ""})
+          </div>
+          {padron.length === 0 ? (
+            <div style={{ fontSize: 12, color: "#888" }}>Sin registros aún — lo que cargues aquí y las certificaciones que queden Aceptadas aparecerán en esta lista y en el portal de la empresa.</div>
+          ) : padron.map((r) => (
+            <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 0", borderBottom: "1px solid #f4f5f7", opacity: r.estado === "baja" ? 0.55 : 1 }}>
+              <span style={{ fontSize: 17 }}>{r.tipo === "vehiculo" ? "🚚" : r.tipo === "ayudante" ? "🧰" : "🚗"}</span>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 13, fontWeight: 600 }}>
+                  {r.tipo === "vehiculo" ? `${r.placa || "—"} · ${[r.marca, r.modelo, r.anio].filter(Boolean).join(" ")}` : r.nombre || "—"}
+                </div>
+                <div style={{ fontSize: 11, color: "#888" }}>
+                  {r.service_center || "sin SC"} · {r.origen === "certificacion" ? "✅ Vía certificación aceptada" : "➕ Alta directa del analista"} · {(r.documentos || []).length} doc(s)
+                </div>
+              </div>
+              <span style={{ fontSize: 9.5, fontWeight: 800, padding: "3px 9px", borderRadius: 12, background: r.estado === "baja" ? "#fdecea" : "#e8f5ec", color: r.estado === "baja" ? "#c0392b" : "#166534" }}>
+                {r.estado === "baja" ? "BAJA" : "ACTIVO"}
+              </span>
+              <button onClick={async () => {
+                const nuevo = r.estado === "baja" ? "activo" : "baja";
+                if (!confirm(nuevo === "baja" ? "¿Dar de baja este registro del padrón? (la empresa lo verá como Baja)" : "¿Reactivar este registro?")) return;
+                const { error } = await sb.from("flota_personal_terceros").update({ estado: nuevo, actualizado_at: new Date().toISOString() }).eq("id", r.id);
+                if (error) { alert("No se pudo actualizar: " + error.message); return; }
+                cargarPadron(terceroId);
+              }} style={{ background: "#fff", color: r.estado === "baja" ? "#166534" : "#c0392b", border: "1px solid " + (r.estado === "baja" ? "#b7e0c2" : "#f0c4c4"), borderRadius: 7, padding: "5px 10px", fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "'Geist',sans-serif" }}>
+                {r.estado === "baja" ? "Reactivar" : "Dar de baja"}
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
