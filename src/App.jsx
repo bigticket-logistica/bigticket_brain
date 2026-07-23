@@ -9,6 +9,7 @@ import { sb, BIGGY_IMG } from "./shared";
 import ModuloPoolMeliMX from "./Pool";
 import { descargarExcelMeli, descargarExcelMultihoja } from "./shared";
 import ModuloPagosMadre from "./Pagos";
+import ModuloCertificacionesCL from "./cl/Certificaciones";
 const PIPE_ID = "306833898";
 
 // Devuelve el periodo "operativo" actual (mes en México) en formato YYYY-MM
@@ -105,7 +106,7 @@ const MODULOS_POR_PAIS = {
     prefacturas: ["pagos"],
   },
   "Chile": {
-    superadmin: [],
+    superadmin: ["certificaciones_cl"],
     certificacion: [],
     prefacturas: [],
   },
@@ -115,6 +116,7 @@ const MODULOS_LABELS = {
   brain: "Brain Central",
   pool_meli_mx: "Indicadores Operacionales MX",
   certificaciones: "Certificaciones",
+  certificaciones_cl: "Certificaciones",
   maestro: "Maestro Operaciones",
   mantenciones: "Mantenciones",
   pnr: "PNR",
@@ -15484,6 +15486,7 @@ export default function App() {
         </div>
         {tabActivo === "pool_meli_mx" && <ModuloPoolMeliMX usuario={usuario} />}
         {tabActivo === "certificaciones" && <ModuloCertificacionesMadre />}
+        {tabActivo === "certificaciones_cl" && <ModuloCertificacionesCL />}
         {tabActivo === "configuracion" && (
           <div className="pg" style={{ maxWidth: 700 }}>
             <div className="sec-title">Configuración</div>
