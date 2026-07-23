@@ -101,7 +101,7 @@ const PAIS_SELECT_CFG = {
 // propios (se irán agregando aquí); México conserva todo lo ya existente.
 const MODULOS_POR_PAIS = {
   "México": {
-    superadmin: ["pool_meli_mx", "pagos", "maestro", "mantenciones", "certificaciones", "pnr", "auditoria_meli", "configuracion"],
+    superadmin: ["pool_meli_mx", "pagos", "maestro", "certificaciones", "pnr", "auditoria_meli", "configuracion"],
     certificacion: ["certificaciones"],
     prefacturas: ["pagos"],
   },
@@ -9119,7 +9119,6 @@ function ModuloCertificacionesMadre() {
   const [subtab, setSubtab] = useState("ingresos");
   const tabs = [
     { id: "ingresos",    label: "Proceso de Certificaciones MX", desc: "Drivers MX (Mercado Libre)" },
-    { id: "pagos",       label: "Certificación para Pagos",      desc: "Contratistas Chile (Certronic)" },
   ];
   return (
     <div style={{ padding: 0 }}>
@@ -9142,7 +9141,6 @@ function ModuloCertificacionesMadre() {
         </div>
       </div>
       {subtab === "ingresos"    && <ModuloCertificaciones />}
-      {subtab === "pagos"       && <ModuloPagos />}
     </div>
   );
 }
@@ -15486,7 +15484,7 @@ export default function App() {
         </div>
         {tabActivo === "pool_meli_mx" && <ModuloPoolMeliMX usuario={usuario} />}
         {tabActivo === "certificaciones" && <ModuloCertificacionesMadre />}
-        {tabActivo === "certificaciones_cl" && <ModuloCertificacionesCL />}
+        {tabActivo === "certificaciones_cl" && <ModuloCertificacionesCL certronicSlot={<ModuloPagos />} mantencionesSlot={<ModuloMantencionesMadre usuario={usuario} />} />}
         {tabActivo === "configuracion" && (
           <div className="pg" style={{ maxWidth: 700 }}>
             <div className="sec-title">Configuración</div>
@@ -15518,7 +15516,6 @@ export default function App() {
           </div>
         )}
         {tabActivo === "maestro" && <ModuloMaestro usuario={usuario} />}
-        {tabActivo === "mantenciones" && <ModuloMantencionesMadre usuario={usuario} />}
         {tabActivo === "pnr" && <ModuloPNR />}
         {tabActivo === "auditoria_meli" && <ModuloAuditoriaMeli />}
         {tabActivo === "pagos" && <ModuloPagosMadre usuario={usuario} />}
