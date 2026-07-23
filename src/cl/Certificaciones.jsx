@@ -2,14 +2,16 @@ import { useState } from "react";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CERTIFICACIONES · CHILE
-// Módulo de la operación Chile. Estructura:
+// Estructura:
 //   Certificaciones
 //     └─ Certificación para Pagos
-//          ├─ Contratistas Chile (Certronic)
-//          └─ Mantenciones
+//          ├─ Contratistas Chile (Certronic)   (certronicSlot)
+//          └─ Mantenciones                     (mantencionesSlot)
+//
+// Las dos vistas reales (Certronic y Mantenciones) viven en App.jsx y se
+// inyectan por prop (slot). Si no se pasan, se muestra un placeholder.
 // ═══════════════════════════════════════════════════════════════════════════
 
-// Placeholder reutilizable para secciones aún sin datos/lógica.
 function SeccionEnConstruccion({ titulo, descripcion }) {
   return (
     <div className="pg" style={{ maxWidth: 760 }}>
@@ -27,7 +29,7 @@ function SeccionEnConstruccion({ titulo, descripcion }) {
 }
 
 // Sub-pestaña "Certificación para Pagos": alterna entre Certronic y Mantenciones.
-function CertificacionParaPagos() {
+function CertificacionParaPagos({ certronicSlot, mantencionesSlot }) {
   const [seccion, setSeccion] = useState("certronic");
   const secciones = [
     { id: "certronic",    label: "Contratistas Chile (Certronic)" },
@@ -50,21 +52,25 @@ function CertificacionParaPagos() {
         ))}
       </div>
       {seccion === "certronic" && (
-        <SeccionEnConstruccion
-          titulo="Contratistas Chile (Certronic)"
-          descripcion="Estado de certificación de los contratistas chilenos para habilitar sus pagos (fuente: Certronic)." />
+        certronicSlot || (
+          <SeccionEnConstruccion
+            titulo="Contratistas Chile (Certronic)"
+            descripcion="Estado de certificación de los contratistas chilenos para habilitar sus pagos (fuente: Certronic)." />
+        )
       )}
       {seccion === "mantenciones" && (
-        <SeccionEnConstruccion
-          titulo="Mantenciones"
-          descripcion="Estado de mantenciones asociado a la certificación para pagos." />
+        mantencionesSlot || (
+          <SeccionEnConstruccion
+            titulo="Mantenciones"
+            descripcion="Control de protocolo de flota y cuidado de activo." />
+        )
       )}
     </div>
   );
 }
 
 // Componente raíz del módulo (madre con sub-pestañas).
-function ModuloCertificacionesCL() {
+function ModuloCertificacionesCL({ certronicSlot, mantencionesSlot }) {
   const [subtab, setSubtab] = useState("pagos");
   const tabs = [
     { id: "pagos", label: "Certificación para Pagos", desc: "Contratistas Chile (Certronic) · Mantenciones" },
@@ -88,7 +94,7 @@ function ModuloCertificacionesCL() {
           ))}
         </div>
       </div>
-      {subtab === "pagos" && <CertificacionParaPagos />}
+      {subtab === "pagos" && <CertificacionParaPagos certronicSlot={certronicSlot} mantencionesSlot={mantencionesSlot} />}
     </div>
   );
 }
