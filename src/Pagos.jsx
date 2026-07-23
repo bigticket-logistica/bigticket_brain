@@ -5572,7 +5572,7 @@ function calcularAjusteVisitadoNS(pctVisitado, nsPct, cfg) {
   return { pct: 0, categoria: "NEUTRO", noPaga: false };
 }
 
-function calcularPagos({ maestro, snapshots, scZonas, especiales, matrizPrecios, aprobaciones, tarifasCobrar, cfg, calculadoAt, bonificaciones, placaEmpresa, traspasosPorRuta = {} }) {
+function calcularPagos({ maestro, snapshots, scZonas, especiales, matrizPrecios, aprobaciones, tarifasCobrar, cfg, calculadoAt, bonificaciones, placaEmpresa, traspasosPorRuta = {}, kmManualPorRuta = {} }) {
   const errores = [];
   const filas = [];
 
@@ -5620,8 +5620,14 @@ function calcularPagos({ maestro, snapshots, scZonas, especiales, matrizPrecios,
     const ciclo = m.cluster_meli || null;
     const esSDD = (m.es_sdd === "SI" || m.es_sdd === true);  // SDD/SPOT lo da la vista (es_sdd, desde tipo_vehiculo_meli "...SDD")
 
-    // Km: reales según MELI con fallback a planificado
-    const km = Number(m.km_meli != null ? m.km_meli : (m.km_planificados || 0));
+    // Km de pago: SIEMPRE el planificado (por diseño). km_meli (TMS) queda deprecado;
+    // el real de MELI (km_recorridos_meli) es solo informativo. Si el snapshot no trae
+    // km_planificados, se usa el KM manual del analista (km_manual_mx); si tampoco hay,
+    // la ruta queda marcada SIN KM PLANIFICADO (tarjeta + alerta) para carga manual.
+    const kmPlanif = (m.km_planificados != null && Number(m.km_planificados) > 0) ? Number(m.km_planificados) : null;
+    const kmManual = (kmManualPorRuta && kmManualPorRuta[idRuta] != null) ? Number(kmManualPorRuta[idRuta]) : null;
+    const km = kmPlanif != null ? kmPlanif : (kmManual != null ? kmManual : 0);
+    const sinKmPlanificado = kmPlanif == null && kmManual == null;
 
     // Datos REALES de MELI (vienen de la vista; SOLO informativos, no afectan el calculo)
     const kmRealMeli = m.km_recorridos_meli != null ? Number(m.km_recorridos_meli) : null;
@@ -5657,7 +5663,9 @@ function calcularPagos({ maestro, snapshots, scZonas, especiales, matrizPrecios,
     if (!tipologia) obs.push(`Tipología no reconocida: "${vehiculoRaw}"`);
     if (!zona) obs.push(`SC no mapeado en sc_zonas_mx: ${sc}`);
     if (pctVisitado == null) obs.push("Sin % visitado en el snapshot");
-    // km_meli (TMS) esta deprecado: el km de pago es el planificado por diseño y el real va en su columna. Ya no genera alerta.
+    if (sinKmPlanificado) obs.push("SIN KM PLANIFICADO \u2014 tramo calculado con 0 km; ingresar KM manual y recalcular");
+    else if (kmPlanif == null && kmManual != null) obs.push(`KM manual: ${kmManual} km (snapshot sin km_planificados)`);
+    // km_meli (TMS) esta deprecado: el km de pago es SIEMPRE el planificado y el real (MELI) va en su columna.
     if (m.status_final && m.status_final !== "close") obs.push(`Status no cerrado: ${m.status_final} — revisar`);
 
     // Tarifa base
@@ -5821,6 +5829,8 @@ function calcularPagos({ maestro, snapshots, scZonas, especiales, matrizPrecios,
       zona,
       km_recorridos: km,
       km_recorridos_meli: kmRealMeli,
+      km_manual: (kmPlanif == null && kmManual != null) ? kmManual : null,
+      sin_km_planificado: sinKmPlanificado,
       tramo_km: tramo,
       ciclo,
       envios_despachados: cargadosNS,  // total ajustado (cargados - traspasados); el warning queda en observaciones
@@ -6168,6 +6178,8 @@ function ListadoPagosDiarios() {
   const [pausaModal, setPausaModal] = useState(null); // { r }
   const [pausaMotivo, setPausaMotivo] = useState("");
   const [pausando, setPausando] = useState(false);
+  const [kmEdit, setKmEdit] = useState({}); // id fila -> valor del input de KM manual
+  const [kmManualesPendientes, setKmManualesPendientes] = useState(0); // KM guardados que faltan aplicar (recalcular)
   const _quienPausa = () => { try { return (typeof usuario !== "undefined" && usuario && (usuario.nombre || usuario.email)) || "Brain"; } catch (e) { return "Brain"; } };
   const confirmarPausa = async () => {
     const r = pausaModal && pausaModal.r; if (!r) return;
@@ -6190,6 +6202,20 @@ function ListadoPagosDiarios() {
       if (error) throw error;
       setPagos(ps => ps.map(p => p.id === r.id ? { ...p, pausado: false, liberado_at: ahora, liberado_por: por } : p));
     } catch (e) { alert("Error reanudando: " + (e.message || e)); }
+  };
+  // Guarda el KM manual de una ruta sin km_planificados (km_manual_mx); se aplica al recalcular el día
+  const guardarKmManual = async (r) => {
+    const v = Number(kmEdit[r.id]);
+    if (!(v > 0)) { alert("Ingres\u00e1 un KM v\u00e1lido (mayor a 0)."); return; }
+    try {
+      const { error } = await sb.from("km_manual_mx").upsert(
+        { fecha: r.fecha, id_ruta: String(r.id_ruta), km: v, ingresado_por: _quienPausa(), ingresado_at: new Date().toISOString() },
+        { onConflict: "fecha,id_ruta" }
+      );
+      if (error) throw error;
+      setPagos(ps => ps.map(p => p.id === r.id ? { ...p, km_manual: v } : p));
+      setKmManualesPendientes(n => n + 1);
+    } catch (e) { alert("Error guardando KM manual: " + (e.message || e)); }
   };
 
   // Carga el mapa placa->empresa desde flota_terceros_mx (semana mas reciente gana)
@@ -6326,7 +6352,7 @@ function ListadoPagosDiarios() {
 
       const calculadoAt = new Date().toISOString();
 
-      const [mRes, sRes, zRes, mpRes, eRes, apRes, tcRes, cfgRes, fRes] = await Promise.all([
+      const [mRes, sRes, zRes, mpRes, eRes, apRes, tcRes, cfgRes, fRes, kmRes] = await Promise.all([
         sb.from("vw_maestro_supervisores_auto").select("*").eq("fecha", fecha).limit(5000),
         sb.from("logistic_ayudantes_snapshots").select("*").gte("fecha", fechaSnapDesde).lte("fecha", fechaSnapHasta).limit(30000),
         sb.from("sc_zonas_mx").select("service_center_id, zona"),
@@ -6336,6 +6362,7 @@ function ListadoPagosDiarios() {
         sb.from("tarifas_cobrar_meli_mx").select("*").eq("activo", true),
         sb.from("config_pagos_mx").select("*"),
         sb.from("flota_terceros_mx").select("placa, empresa_transporte, fecha_hora_envio").order("fecha_hora_envio", { ascending: false }).limit(20000),
+        sb.from("km_manual_mx").select("id_ruta, km").eq("fecha", fecha),
       ]);
 
       if (mRes.error) throw new Error("maestro supervisores: " + mRes.error.message);
@@ -6366,6 +6393,10 @@ function ListadoPagosDiarios() {
           traspasosPorRuta[k] = (traspasosPorRuta[k] || 0) + Number(a.paquetes_traspasados || 0);
         }
       } catch (e) { console.error("traspasos ambulancias:", e); }
+      // KM manuales del día (analista) — fallback cuando el snapshot no trae km_planificados
+      const kmManualPorRuta = {};
+      for (const k of ((kmRes && kmRes.data) || [])) kmManualPorRuta[String(k.id_ruta)] = Number(k.km);
+
       const { filas, errores } = calcularPagos({
         maestro,
         snapshots: sRes.data || [],
@@ -6379,6 +6410,7 @@ function ListadoPagosDiarios() {
         bonificaciones,
         placaEmpresa,
         traspasosPorRuta,
+        kmManualPorRuta,
       });
 
       const { error: delError } = await sb.from("maestro_jornada_mx").delete().eq("fecha", fecha);
@@ -6435,6 +6467,8 @@ function ListadoPagosDiarios() {
       const { data: recargados } = await sb.from("maestro_jornada_mx")
         .select("*").eq("fecha", fecha).order("driver_name").limit(5000);
       setPagos(recargados || []);
+      setKmEdit({});
+      setKmManualesPendientes(0);
     } catch (e) {
       console.error(e);
       alert("Error en cálculo:\n\n" + e.message);
@@ -6482,6 +6516,7 @@ function ListadoPagosDiarios() {
     else if (filtroEstado === "no_pagadas") res = res.filter(p => p.ns_categoria === "NO_PAGO_VIS<90%");
     else if (filtroEstado === "con_alerta") res = res.filter(p => tieneAlerta(p));
     else if (filtroEstado === "no_operadas") res = res.filter(p => p.ruta_no_operada);
+    else if (filtroEstado === "sin_km") res = res.filter(p => p.sin_km_planificado);
     else if (filtroEstado === "pausadas") res = res.filter(p => p.pausado);
 
     // Ordenamiento
@@ -6511,6 +6546,7 @@ function ListadoPagosDiarios() {
       noPagadas: filasFiltradas.filter(p => p.ns_categoria === "NO_PAGO_VIS<90%").length,
       alertas: filasFiltradas.filter(p => tieneAlerta(p)).length,
       noOperadas: filasFiltradas.filter(p => p.ruta_no_operada).length,
+      sinKm: filasFiltradas.filter(p => p.sin_km_planificado).length,
       pausadas: filasFiltradas.filter(p => p.pausado).length,
       pagoMeli: filasFiltradas.reduce((s, p) => s + Number(p.pago_meli || 0), 0),
       margenPct: (() => {
@@ -6847,60 +6883,92 @@ function ListadoPagosDiarios() {
         </div>
       )}
 
-      {/* KPIs */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10, marginBottom: 14 }}>
-        <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: "12px 14px" }}>
-          <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>Choferes</div>
-          <div style={{ fontSize: 22, fontWeight: 700, color: "#1a3a6b", marginTop: 2 }}>{totales.choferes}</div>
-        </div>
-        <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: "12px 14px" }}>
-          <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>Rutas</div>
-          <div style={{ fontSize: 22, fontWeight: 700, color: "#1a3a6b", marginTop: 2 }}>{totales.rutas}</div>
-        </div>
-        <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: "12px 14px" }}>
-          <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>Tarifa base</div>
-          <div style={{ fontSize: 18, fontWeight: 700, color: "#475569", marginTop: 2 }}>{fmtMXN(totales.tarifaBase)}</div>
-        </div>
-        <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: "12px 14px" }}>
-          <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>Ajuste NS</div>
-          <div style={{ fontSize: 18, fontWeight: 700, color: totales.ajusteNS >= 0 ? "#16a34a" : "#dc2626", marginTop: 2 }}>{totales.ajusteNS >= 0 ? "+" : ""}{fmtMXN(totales.ajusteNS)}</div>
-        </div>
-        <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: "12px 14px" }}>
-          <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>Auxiliares</div>
-          <div style={{ fontSize: 18, fontWeight: 700, color: "#475569", marginTop: 2 }}>{fmtMXN(totales.auxiliar)}</div>
-        </div>
-        <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: "12px 14px" }}>
-          <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>Total a pagar</div>
-          <div style={{ fontSize: 22, fontWeight: 700, color: "#16a34a", marginTop: 2 }}>{fmtMXN(totales.pagoNeto)}</div>
-        </div>
-        {totales.noPagadas > 0 && (
-          <div style={{ background: "#fee2e2", border: "1px solid #fca5a5", borderRadius: 6, padding: "12px 14px" }}>
-            <div style={{ fontSize: 10, color: "#991b1b", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>Rutas no pagadas</div>
-            <div style={{ fontSize: 22, fontWeight: 700, color: "#991b1b", marginTop: 2 }}>{totales.noPagadas}</div>
-            <div style={{ fontSize: 9, color: "#991b1b", marginTop: 2 }}>visitado &lt; 90%</div>
+      {/* Banner: KM manuales guardados pendientes de recalcular */}
+      {kmManualesPendientes > 0 && (
+        <div style={{ display: "flex", alignItems: "center", gap: 10, background: "#e0f2fe", border: "1px solid #7dd3fc", borderRadius: 6, padding: "10px 14px", marginBottom: 12, fontSize: 12 }}>
+          <div style={{ flex: 1, color: "#075985" }}>
+            <b>{kmManualesPendientes}</b> {kmManualesPendientes === 1 ? "KM manual guardado" : "KM manuales guardados"}. Recalculá el día para aplicarlos al pago.
           </div>
-        )}
-        {totales.alertas > 0 && (
-          <div onClick={() => setFiltroEstado(filtroEstado === "con_alerta" ? "todas" : "con_alerta")} title="Ver solo las lineas con alerta"
-            style={{ background: "#fef3c7", border: `2px solid ${filtroEstado === "con_alerta" ? "#d97706" : "#fcd34d"}`, borderRadius: 6, padding: "12px 14px", cursor: "pointer" }}>
-            <div style={{ fontSize: 10, color: "#92400e", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>Con alertas {filtroEstado === "con_alerta" ? "(filtrando)" : ""}</div>
-            <div style={{ fontSize: 22, fontWeight: 700, color: "#92400e", marginTop: 2 }}>{totales.alertas}</div>
-            <div style={{ fontSize: 9, color: "#92400e", marginTop: 2 }}>clic para filtrar</div>
-          </div>
-        )}
-        {pagos.filter(p => p.pausado).length > 0 && (
-          <div onClick={() => setFiltroEstado(filtroEstado === "pausadas" ? "todas" : "pausadas")} title="Ver solo pagos pausados"
-            style={{ background: "#fff7ed", border: `2px solid ${filtroEstado === "pausadas" ? "#c2410c" : "#fdba74"}`, borderRadius: 6, padding: "12px 14px", cursor: "pointer" }}>
-            <div style={{ fontSize: 10, color: "#9a3412", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>Pagos pausados {filtroEstado === "pausadas" ? "(filtrando)" : ""}</div>
-            <div style={{ fontSize: 22, fontWeight: 700, color: "#9a3412", marginTop: 2 }}>{pagos.filter(p => p.pausado).length}</div>
-            <div style={{ fontSize: 9, color: "#9a3412", marginTop: 2 }}>⏸ clic para filtrar</div>
-          </div>
-        )}
-        <div style={{ background: "#f5f3ff", border: "1px solid #c4b5fd", borderRadius: 6, padding: "12px 14px" }}>
-          <div style={{ fontSize: 10, color: "#5b21b6", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>Rutas sin movimiento</div>
-          <div style={{ fontSize: 22, fontWeight: 700, color: "#5b21b6", marginTop: 2 }}>{totales.noOperadas}</div>
-          <div style={{ fontSize: 9, color: "#5b21b6", marginTop: 2 }}>🚫 no operadas · revisar</div>
+          <button onClick={calcularDia} disabled={calculando}
+            style={{ padding: "6px 14px", borderRadius: 4, border: "none", background: "#0284c7", color: "#fff", fontSize: 12, fontWeight: 600, cursor: calculando ? "wait" : "pointer" }}>
+            Recalcular
+          </button>
         </div>
+      )}
+
+      {/* KPIs (compactos: caben todas las tarjetas en una fila) */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(106px, 1fr))", gap: 8, marginBottom: 12 }}>
+        {(() => {
+          const card = (extra) => ({ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: "8px 10px", ...extra });
+          const lbl = (c) => ({ fontSize: 9, color: c || "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.4, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" });
+          const big = (c) => ({ fontSize: 17, fontWeight: 700, color: c || "#1a3a6b", marginTop: 2 });
+          const mon = (c) => ({ fontSize: 14, fontWeight: 700, color: c || "#475569", marginTop: 3 });
+          const hint = (c) => ({ fontSize: 8.5, color: c, marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" });
+          return (
+            <Fragment>
+              <div style={card()}>
+                <div style={lbl()}>Choferes</div>
+                <div style={big()}>{totales.choferes}</div>
+              </div>
+              <div style={card()}>
+                <div style={lbl()}>Rutas</div>
+                <div style={big()}>{totales.rutas}</div>
+              </div>
+              <div style={card()}>
+                <div style={lbl()}>Tarifa base</div>
+                <div style={mon()}>{fmtMXN(totales.tarifaBase)}</div>
+              </div>
+              <div style={card()}>
+                <div style={lbl()}>Ajuste NS</div>
+                <div style={mon(totales.ajusteNS >= 0 ? "#16a34a" : "#dc2626")}>{totales.ajusteNS >= 0 ? "+" : ""}{fmtMXN(totales.ajusteNS)}</div>
+              </div>
+              <div style={card()}>
+                <div style={lbl()}>Auxiliares</div>
+                <div style={mon()}>{fmtMXN(totales.auxiliar)}</div>
+              </div>
+              <div style={card()}>
+                <div style={lbl()}>Total a pagar</div>
+                <div style={mon("#16a34a")}>{fmtMXN(totales.pagoNeto)}</div>
+              </div>
+              {totales.noPagadas > 0 && (
+                <div style={card({ background: "#fee2e2", border: "1px solid #fca5a5" })}>
+                  <div style={lbl("#991b1b")}>Rutas no pagadas</div>
+                  <div style={big("#991b1b")}>{totales.noPagadas}</div>
+                  <div style={hint("#991b1b")}>visitado &lt; 90%</div>
+                </div>
+              )}
+              {totales.alertas > 0 && (
+                <div onClick={() => setFiltroEstado(filtroEstado === "con_alerta" ? "todas" : "con_alerta")} title="Ver solo las lineas con alerta"
+                  style={card({ background: "#fef3c7", border: `2px solid ${filtroEstado === "con_alerta" ? "#d97706" : "#fcd34d"}`, cursor: "pointer" })}>
+                  <div style={lbl("#92400e")}>Con alertas {filtroEstado === "con_alerta" ? "(filtrando)" : ""}</div>
+                  <div style={big("#92400e")}>{totales.alertas}</div>
+                  <div style={hint("#92400e")}>clic para filtrar</div>
+                </div>
+              )}
+              {totales.sinKm > 0 && (
+                <div onClick={() => setFiltroEstado(filtroEstado === "sin_km" ? "todas" : "sin_km")} title="Rutas sin KM planificado en el snapshot — ingresar KM manual y recalcular"
+                  style={card({ background: "#e0f2fe", border: `2px solid ${filtroEstado === "sin_km" ? "#0284c7" : "#7dd3fc"}`, cursor: "pointer" })}>
+                  <div style={lbl("#075985")}>Sin KM planificado {filtroEstado === "sin_km" ? "(filtrando)" : ""}</div>
+                  <div style={big("#075985")}>{totales.sinKm}</div>
+                  <div style={hint("#075985")}>📏 clic para ingresar manual</div>
+                </div>
+              )}
+              {pagos.filter(p => p.pausado).length > 0 && (
+                <div onClick={() => setFiltroEstado(filtroEstado === "pausadas" ? "todas" : "pausadas")} title="Ver solo pagos pausados"
+                  style={card({ background: "#fff7ed", border: `2px solid ${filtroEstado === "pausadas" ? "#c2410c" : "#fdba74"}`, cursor: "pointer" })}>
+                  <div style={lbl("#9a3412")}>Pausados {filtroEstado === "pausadas" ? "(filtrando)" : ""}</div>
+                  <div style={big("#9a3412")}>{pagos.filter(p => p.pausado).length}</div>
+                  <div style={hint("#9a3412")}>⏸ clic para filtrar</div>
+                </div>
+              )}
+              <div style={card({ background: "#f5f3ff", border: "1px solid #c4b5fd" })}>
+                <div style={lbl("#5b21b6")}>Rutas sin movimiento</div>
+                <div style={big("#5b21b6")}>{totales.noOperadas}</div>
+                <div style={hint("#5b21b6")}>🚫 no operadas · revisar</div>
+              </div>
+            </Fragment>
+          );
+        })()}
       </div>
 
       {/* Filtros de estado */}
@@ -6911,6 +6979,7 @@ function ListadoPagosDiarios() {
           { id: "no_pagadas", l: `No pagadas (${pagos.filter(p => p.ns_categoria === "NO_PAGO_VIS<90%").length})` },
           { id: "con_alerta", l: `Con alertas (${pagos.filter(p => tieneAlerta(p)).length})` },
           { id: "no_operadas", l: `Sin movimiento (${pagos.filter(p => p.ruta_no_operada).length})` },
+          { id: "sin_km", l: `Sin KM planif. (${pagos.filter(p => p.sin_km_planificado).length})` },
           { id: "pausadas", l: `Pausadas (${pagos.filter(p => p.pausado).length})` },
         ].map(({ id, l }) => (
           <button key={id} onClick={() => setFiltroEstado(id)}
@@ -7017,7 +7086,22 @@ function ListadoPagosDiarios() {
                       if (s.startsWith("open") || s.includes("abier") || s.includes("progress") || s.includes("ruta")) return <span style={{ color: "#ca8a04", fontWeight: 600 }}>Abierta</span>;
                       return <span style={{ color: "#7c3aed", fontWeight: 600 }}>{r.status_final}</span>;
                     })()}</td>
-                    <td style={{ ...tdStyle(), textAlign: "right" }}>{Number(r.km_recorridos || 0).toFixed(1)}</td>
+                    <td style={{ ...tdStyle(), textAlign: "right" }}>{r.sin_km_planificado ? (
+                      r.km_manual != null ? (
+                        <span title="KM manual guardado — recalculá el día para aplicarlo al pago" style={{ color: "#0369a1", fontWeight: 600, whiteSpace: "nowrap" }}>✏️ {Number(r.km_manual).toFixed(1)}</span>
+                      ) : (
+                        <span style={{ display: "inline-flex", gap: 3, alignItems: "center" }}>
+                          <input type="number" min="0" step="0.1" placeholder="KM" value={kmEdit[r.id] != null ? kmEdit[r.id] : ""}
+                            onChange={e => setKmEdit(k => ({ ...k, [r.id]: e.target.value }))}
+                            onKeyDown={e => { if (e.key === "Enter") guardarKmManual(r); }}
+                            style={{ width: 52, padding: "2px 4px", border: "1px solid #7dd3fc", borderRadius: 4, fontSize: 11, textAlign: "right" }} />
+                          <button onClick={() => guardarKmManual(r)} title="Guardar KM manual"
+                            style={{ border: "none", background: "#0284c7", color: "#fff", borderRadius: 4, fontSize: 10, padding: "2px 6px", cursor: "pointer" }}>✓</button>
+                        </span>
+                      )
+                    ) : (
+                      <span>{Number(r.km_recorridos || 0).toFixed(1)}{r.km_manual != null ? <span title="KM manual aplicado" style={{ marginLeft: 3, fontSize: 9 }}>✏️</span> : null}</span>
+                    )}</td>
                     <td style={{ ...tdStyle(), textAlign: "right", color: "#0369a1", fontWeight: 600 }}>
                       {r.km_recorridos_meli != null ? Number(r.km_recorridos_meli).toFixed(1) : "\u2014"}
                     </td>
