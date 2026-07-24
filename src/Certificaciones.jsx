@@ -3530,9 +3530,22 @@ function GestionadorContratos() {
   };
 
   const eliminarDoc = async (doc) => {
-    if (doc.estado !== "borrador") { alert("Solo se pueden eliminar documentos en borrador."); return; }
-    if (!confirm(`¿Eliminar el borrador "${doc.titulo}"?`)) return;
-    await sb.from("contratos_gestion").delete().eq("id", doc.id);
+    // Se puede eliminar en cualquier estado (equivocaciones y pruebas), con
+    // confirmación proporcional al riesgo.
+    const firmadoCompleto = !!doc.firmado_tercero && !!doc.firmado_bigticket;
+    let aviso;
+    if (doc.estado === "borrador") aviso = `¿Eliminar el borrador "${doc.titulo}"?`;
+    else if (firmadoCompleto) aviso = `⚠️ "${doc.titulo}" está FIRMADO POR AMBAS PARTES.\n\nEliminarlo aquí borra el registro del Brain y del archivador, pero el documento firmado SIGUE EXISTIENDO en MIFIEL con validez legal (NOM-151).\n\nSolo hazlo si es una prueba. ¿Eliminar de todas formas?`;
+    else aviso = `⚠️ "${doc.titulo}" ya fue ENVIADO A FIRMA.\n\nSe eliminará del Brain, del portal del tercero y del archivador. Si alguien ya tiene el link de firma de MIFIEL, ese documento quedará huérfano allá (puedes cancelarlo en app.mifiel.com).\n\n¿Eliminar?`;
+    if (!confirm(aviso)) return;
+    if (doc.estado !== "borrador" && !confirm(`Confirmación final: eliminar definitivamente "${doc.titulo}" (${doc.folio || doc.id}).`)) return;
+    // Archivo del archivador → papelera (protect_delete impide el DELETE directo)
+    if (doc.archivo_path) {
+      try { await quitarDeStorage("archivador_empresas", doc.archivo_path); }
+      catch (e) { console.warn("Archivo no retirado:", e.message); }
+    }
+    const { error } = await sb.from("contratos_gestion").delete().eq("id", doc.id);
+    if (error) { alert("No se pudo eliminar: " + error.message); return; }
     await cargar();
   };
 
@@ -3679,6 +3692,10 @@ function GestionadorContratos() {
                   style={{ background: "#fff", color: "#7c3aed", border: "1.5px solid #ddd0f7", borderRadius: 8, padding: "8px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
                   {firmandoBT === doc.id ? "Cerrar" : "✍️ Firmar como Bigticket"}
                 </button>
+              )}
+              {doc.estado !== "borrador" && (
+                <button title="Eliminar documento (pruebas / equivocaciones)" onClick={() => eliminarDoc(doc)}
+                  style={{ width: 28, height: 28, borderRadius: "50%", border: "1px solid #f0c4c4", background: "#fff", color: "#c0392b", fontSize: 13, cursor: "pointer", padding: 0 }}>🗑</button>
               )}
             </div>
             {firmandoBT === doc.id && (
@@ -4115,7 +4132,7 @@ function AltaVehiculosPersonal({ onCreada }) {
                   {r.tipo === "vehiculo" ? `${r.placa || "—"} · ${[r.marca, r.modelo, r.anio].filter(Boolean).join(" ")}` : r.nombre || "—"}
                 </div>
                 <div style={{ fontSize: 11, color: "#888" }}>
-                  {r.service_center || "sin SC"} · {r.origen === "certificacion" ? "✅ Vía certificación aceptada" : "➕ Alta directa del analista"} · {(r.documentos || []).length} doc(s)
+                  {r.service_center || "sin SC"} · {r.origen === "certificacion" ? "✅ Vía certificación aceptada" : r.origen === "bitacora" ? "📡 Confirmación de terreno" : r.origen === "seed_flota_semanal" ? "📦 Seed flota" : "➕ Alta directa del analista"} · {(r.documentos || []).length} doc(s)
                 </div>
               </div>
               <span style={{ fontSize: 9.5, fontWeight: 800, padding: "3px 9px", borderRadius: 12, background: r.estado === "baja" ? "#fdecea" : "#e8f5ec", color: r.estado === "baja" ? "#c0392b" : "#166534" }}>
