@@ -56,6 +56,25 @@ function DetalleEmpresa({ empresa, onVolver, onActualizada }) {
   const [pagos, setPagos] = useState(null);
   const [solicitudes, setSolicitudes] = useState(null);
   const [eventos, setEventos] = useState(null);
+  const [fichaAbierta, setFichaAbierta] = useState(null);   // id de fila del padrón expandida
+  const [docsFicha, setDocsFicha] = useState({});           // { padronId: docs de la certificación }
+
+  // Expande la ficha de un chofer/vehículo; si nació de una certificación,
+  // trae también sus documentos del proceso (certificacion_documentos).
+  const abrirFicha = async (r) => {
+    if (fichaAbierta === r.id) { setFichaAbierta(null); return; }
+    setFichaAbierta(r.id);
+    if (r.certificacion_id && docsFicha[r.id] === undefined) {
+      const { data } = await sb.from("certificacion_documentos").select("*")
+        .eq("certificacion_id", r.certificacion_id);
+      setDocsFicha((p) => ({ ...p, [r.id]: data || [] }));
+    }
+  };
+  const verDocCert = async (d) => {
+    const { data, error } = await sb.storage.from("proceso_certificacion_bt").createSignedUrl(d.storage_path, 300);
+    if (error || !data?.signedUrl) { alert("No se pudo abrir el documento."); return; }
+    window.open(data.signedUrl, "_blank");
+  };
 
   // Cargas perezosas por pestaña — cada una tolera tabla/columnas faltantes
   useEffect(() => { (async () => {
@@ -249,19 +268,64 @@ function DetalleEmpresa({ empresa, onVolver, onActualizada }) {
         </div>
       )}
 
-      {/* ── PLACAS & PERSONAL (padrón) ── */}
+      {/* ── PLACAS & PERSONAL (padrón) — clic para ver ficha completa ── */}
       {tab === "placas" && (
         <div style={{ background: "#fff", border: "0.5px solid #e4e7ec", borderRadius: 12, padding: "16px 20px" }}>
           {padron === null ? <div style={{ fontSize: 12, color: "#888" }}>Cargando…</div>
             : padron.length === 0 ? <div style={{ fontSize: 12, color: "#888" }}>Sin registros en el padrón.</div>
             : padron.map((r) => (
-              <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderBottom: "1px solid #f4f5f7", opacity: r.estado === "baja" ? 0.55 : 1 }}>
-                <span style={{ fontSize: 16 }}>{r.tipo === "vehiculo" ? "🚚" : r.tipo === "ayudante" ? "🧰" : "🚗"}</span>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: 13, fontWeight: 600 }}>{r.tipo === "vehiculo" ? `${r.placa || "—"} · ${[r.marca, r.modelo, r.anio].filter(Boolean).join(" ")}` : r.nombre || "—"}</div>
-                  <div style={{ fontSize: 11, color: "#888" }}>{r.service_center || "sin SC"} · {r.origen === "certificacion" ? "✅ Certificación" : r.origen === "seed_flota_semanal" ? "📦 Seed flota" : "➕ Alta directa"}</div>
+              <div key={r.id} style={{ borderBottom: "1px solid #f4f5f7", opacity: r.estado === "baja" ? 0.6 : 1 }}>
+                <div onClick={() => abrirFicha(r)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 0", cursor: "pointer" }}>
+                  <span style={{ fontSize: 16 }}>{r.tipo === "vehiculo" ? "🚚" : r.tipo === "ayudante" ? "🧰" : "🚗"}</span>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600 }}>{r.tipo === "vehiculo" ? `${r.placa || "—"} · ${[r.marca, r.modelo, r.anio].filter(Boolean).join(" ")}` : r.nombre || "—"}</div>
+                    <div style={{ fontSize: 11, color: "#888" }}>{r.service_center || "sin SC"} · {r.origen === "certificacion" ? "✅ Certificación" : r.origen === "seed_flota_semanal" ? "📦 Seed flota" : "➕ Alta directa"}</div>
+                  </div>
+                  <Chip texto={r.estado === "baja" ? "BAJA" : "ACTIVO"} bg={r.estado === "baja" ? "#fdecea" : "#e8f5ec"} fg={r.estado === "baja" ? "#c0392b" : "#166534"} />
+                  <span style={{ fontSize: 11, color: "#98a2b3", transform: fichaAbierta === r.id ? "rotate(90deg)" : "none", transition: "transform .15s" }}>▶</span>
                 </div>
-                <Chip texto={r.estado === "baja" ? "BAJA" : "ACTIVO"} bg={r.estado === "baja" ? "#fdecea" : "#e8f5ec"} fg={r.estado === "baja" ? "#c0392b" : "#166534"} />
+                {fichaAbierta === r.id && (
+                  <div style={{ background: "#f8fafc", border: "1px solid #eef1f5", borderRadius: 10, padding: "12px 14px", margin: "0 0 10px 26px" }}>
+                    {/* Datos completos */}
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: "8px 16px", marginBottom: 10 }}>
+                      {(r.tipo === "vehiculo"
+                        ? [["Placa", r.placa], ["VIN", r.vin], ["Marca", r.marca], ["Modelo", r.modelo], ["Año", r.anio], ["SC", r.service_center]]
+                        : [["Nombre", r.nombre], ["CURP", r.curp], ["RFC", r.rfc], ["Teléfono", r.telefono], ["Correo", r.email], ["Licencia", r.licencia_numero], ["Estado lic.", r.licencia_estado], ["Vigencia lic.", r.licencia_vigencia], ["SC", r.service_center]]
+                      ).map(([l, v]) => (
+                        <div key={l}>
+                          <div style={{ fontSize: 9.5, color: "#98a2b3", fontWeight: 700, textTransform: "uppercase" }}>{l}</div>
+                          <div style={{ fontSize: 12.5, fontWeight: 600, color: "#333", wordBreak: "break-word" }}>{v || "—"}</div>
+                        </div>
+                      ))}
+                      <div>
+                        <div style={{ fontSize: 9.5, color: "#98a2b3", fontWeight: 700, textTransform: "uppercase" }}>Registrado</div>
+                        <div style={{ fontSize: 12.5, fontWeight: 600, color: "#333" }}>{fmtF(r.created_at)} · {r.creado_por || "—"}</div>
+                      </div>
+                    </div>
+                    {/* Documentos: del archivador (alta directa) + del proceso (certificación) */}
+                    <div style={{ fontSize: 10.5, fontWeight: 800, color: "#667085", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6 }}>Documentos</div>
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                      {(r.documentos || []).map((d, i) => (
+                        <button key={"a" + i} onClick={() => verDoc(d)}
+                          style={{ background: "#fff", border: "1px solid #dbe3ee", color: NAVY, borderRadius: 7, padding: "5px 11px", fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "'Geist',sans-serif" }}>
+                          📎 {d.label || d.tipo}
+                        </button>
+                      ))}
+                      {(docsFicha[r.id] || []).map((d, i) => (
+                        <button key={"c" + i} onClick={() => verDocCert(d)}
+                          style={{ background: "#fff", border: "1px solid #cfe3d4", color: "#166534", borderRadius: 7, padding: "5px 11px", fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "'Geist',sans-serif" }}>
+                          ✅ {(d.tipo_documento || "doc").replace(/_/g, " ")}
+                        </button>
+                      ))}
+                      {(r.documentos || []).length === 0 && !r.certificacion_id && (
+                        <span style={{ fontSize: 11.5, color: "#98a2b3" }}>Sin documentos adjuntos (registro de seed — las fotos llegarán al certificarse o recargarse).</span>
+                      )}
+                      {r.certificacion_id && docsFicha[r.id] === undefined && (
+                        <span style={{ fontSize: 11.5, color: "#98a2b3" }}>Cargando documentos de la certificación…</span>
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
             ))}
         </div>
