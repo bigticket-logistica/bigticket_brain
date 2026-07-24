@@ -76,9 +76,20 @@ function DetalleEmpresa({ empresa, onVolver, onActualizada }) {
       setDocs(data || []);
     }
     if (tab === "pagos" && pagos === null) {
-      // Pagos efectuados: conciliaciones por nombre (mundo B aún agrupa por texto).
-      const { data, error } = await sb.from("conciliaciones_terceros").select("*")
-        .ilike("empresa", empresa.nombre).order("semana", { ascending: false }).limit(30);
+      // Pagos efectuados: conciliaciones. La columna de empresa varía según el
+      // esquema (mundo B agrupa por texto), así que se descubre dinámicamente.
+      const { data: probe, error: e0 } = await sb.from("conciliaciones_terceros").select("*").limit(1);
+      if (e0) { setPagos({ error: e0.message }); return; }
+      if (!probe || probe.length === 0) { setPagos([]); return; }
+      const cols = Object.keys(probe[0]);
+      const colEmp = ["empresa", "empresa_transporte", "transportista", "nombre_empresa", "contratista", "nombre"].find((c) => cols.includes(c));
+      let q = sb.from("conciliaciones_terceros").select("*").limit(30);
+      if (cols.includes("semana")) q = q.order("semana", { ascending: false });
+      else if (cols.includes("created_at")) q = q.order("created_at", { ascending: false });
+      if (cols.includes("tercero_id")) q = q.eq("tercero_id", empresa.tercero_id);
+      else if (colEmp) q = q.ilike(colEmp, empresa.nombre);
+      else { setPagos({ error: "No hay columna de empresa reconocible en conciliaciones_terceros (columnas: " + cols.join(", ") + ")" }); return; }
+      const { data, error } = await q;
       setPagos(error ? { error: error.message } : (data || []));
     }
     if (tab === "solicitudes" && solicitudes === null) {

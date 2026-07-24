@@ -5118,6 +5118,26 @@ function TercerosMX() {
   const [loadingCambios, setLoadingCambios] = useState(false);
   const [cargoVariaciones, setCargoVariaciones] = useState(false);
 
+  // ── Genera la semana desde el padrón (flota_personal_terceros) ──
+  // Fuente única: lo que el analista cargó en Certificaciones → Vehículos y
+  // Personal + lo que entró por certificaciones aceptadas. Reemplaza la semana
+  // completa en flota_terceros_mx con nombres canónicos de terceros (uuid).
+  const generarDesdePadron = async (sem, yaCargada) => {
+    const aviso = yaCargada
+      ? `🔄 GENERAR DESDE PADRÓN — semana ${sem} (${etiquetaSemanaInventario(sem)})\n\n⚠️ Esta semana YA tiene inventario cargado: se BORRARÁ y se reconstruirá completa desde el padrón (placas activas de Vehículos y Personal).\n\nSi el motor ya calculó pagos con el inventario actual, hazlo solo si sabes lo que haces.\n\n¿Continuar?`
+      : `🔄 GENERAR DESDE PADRÓN — semana ${sem} (${etiquetaSemanaInventario(sem)})\n\nSe creará el inventario de esta semana desde el padrón: todas las placas ACTIVAS de Vehículos y Personal, con el nombre canónico de cada empresa.\n\n¿Continuar?`;
+    if (!confirm(aviso)) return;
+    setCargando(true); setMsg(null);
+    try {
+      const { data, error } = await sb.rpc("fn_generar_flota_semana", { p_semana: sem });
+      if (error) throw new Error(error.message + (error.code === "42883" ? " — falta correr unificacion_fase2.sql (fn_generar_flota_semana)" : ""));
+      const r = Array.isArray(data) ? data[0] : data;
+      setMsg({ ok: true, txt: `Semana ${sem} generada desde el padrón: ${r?.placas ?? "?"} placas de ${r?.empresas ?? "?"} empresas.` });
+      await cargar();
+    } catch (e) { setMsg({ ok: false, txt: "No se pudo generar desde el padrón: " + e.message }); }
+    finally { setCargando(false); }
+  };
+
   useEffect(() => { cargar(); }, []);
   const cargar = async () => {
     setLoading(true);
@@ -5298,6 +5318,11 @@ function TercerosMX() {
                   <button onClick={() => { semanaObjetivoRef.current = s; fileRef.current && fileRef.current.click(); }} disabled={cargando}
                     style={{ padding: "7px 14px", borderRadius: 4, border: "none", background: cargando ? "#94a3b8" : (cargado ? "#475569" : "#16a34a"), color: "#fff", fontSize: 11, fontWeight: 600, cursor: cargando ? "wait" : "pointer", whiteSpace: "nowrap" }}>
                     {cargado ? "Reemplazar Excel" : "Cargar Excel"}
+                  </button>
+                  <button onClick={() => generarDesdePadron(s, cargado)} disabled={cargando}
+                    title="Construye la semana desde el padrón (pestaña Vehículos y Personal de Certificaciones): placas activas con el nombre canónico de cada empresa."
+                    style={{ padding: "7px 14px", borderRadius: 4, border: "1.5px solid #1a3a6b", background: "#fff", color: "#1a3a6b", fontSize: 11, fontWeight: 700, cursor: cargando ? "wait" : "pointer", whiteSpace: "nowrap" }}>
+                    🔄 Generar desde padrón
                   </button>
                 </div>
                 {abierta && cargado && (
