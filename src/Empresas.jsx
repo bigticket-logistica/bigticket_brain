@@ -180,8 +180,13 @@ function DetalleEmpresa({ empresa, onVolver, onActualizada }) {
         await sb.from("flota_personal_terceros").update({ estado: "baja", actualizado_at: new Date().toISOString() }).eq("tercero_id", empresa.tercero_id);
         onActualizada({ ...empresa, estado_operacional: "baja" });
       } else {
-        // Baja puntual: por certificacion_id (exacto) con respaldo por placa/nombre
+        // Baja puntual: por padron_id (exacto), luego certificacion_id, con respaldo por placa/nombre
         for (const it of items) {
+          if (it.padron_id) {
+            await sb.from("flota_personal_terceros").update({ estado: "baja", actualizado_at: new Date().toISOString() })
+              .eq("tercero_id", empresa.tercero_id).eq("id", it.padron_id);
+            continue;
+          }
           if (it.certificacion_id) {
             await sb.from("flota_personal_terceros").update({ estado: "baja", actualizado_at: new Date().toISOString() })
               .eq("tercero_id", empresa.tercero_id).eq("certificacion_id", it.certificacion_id);
@@ -318,7 +323,7 @@ function DetalleEmpresa({ empresa, onVolver, onActualizada }) {
                   <span style={{ fontSize: 16 }}>{r.tipo === "vehiculo" ? "🚚" : r.tipo === "ayudante" ? "🧰" : "🚗"}</span>
                   <div style={{ flex: 1 }}>
                     <div style={{ fontSize: 13, fontWeight: 600 }}>{r.tipo === "vehiculo" ? `${r.placa || "—"} · ${[r.marca, r.modelo, r.anio].filter(Boolean).join(" ")}` : r.nombre || "—"}</div>
-                    <div style={{ fontSize: 11, color: "#888" }}>{r.service_center || "sin SC"} · {r.origen === "certificacion" ? "✅ Certificación" : r.origen === "seed_flota_semanal" ? "📦 Seed flota" : "➕ Alta directa"}</div>
+                    <div style={{ fontSize: 11, color: "#888" }}>{r.service_center || "sin SC"} · {r.origen === "certificacion" ? "✅ Certificación" : r.origen === "seed_flota_semanal" ? "📦 Seed flota" : r.origen === "bitacora" ? "📡 Confirmación de terreno" : "➕ Alta directa"}</div>
                   </div>
                   <Chip texto={r.estado === "baja" ? "BAJA" : "ACTIVO"} bg={r.estado === "baja" ? "#fdecea" : "#e8f5ec"} fg={r.estado === "baja" ? "#c0392b" : "#166534"} />
                   <span style={{ fontSize: 11, color: "#98a2b3", transform: fichaAbierta === r.id ? "rotate(90deg)" : "none", transition: "transform .15s" }}>▶</span>
