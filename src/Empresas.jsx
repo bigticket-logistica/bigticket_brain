@@ -82,7 +82,7 @@ function DetalleEmpresa({ empresa, onVolver, onActualizada }) {
       if (e0) { setPagos({ error: e0.message }); return; }
       if (!probe || probe.length === 0) { setPagos([]); return; }
       const cols = Object.keys(probe[0]);
-      const colEmp = ["empresa", "empresa_transporte", "transportista", "nombre_empresa", "contratista", "nombre"].find((c) => cols.includes(c));
+      const colEmp = ["empresa", "empresa_nombre", "empresa_transporte", "transportista", "nombre_empresa", "contratista", "nombre"].find((c) => cols.includes(c));
       let q = sb.from("conciliaciones_terceros").select("*").limit(30);
       if (cols.includes("semana")) q = q.order("semana", { ascending: false });
       else if (cols.includes("created_at")) q = q.order("created_at", { ascending: false });
