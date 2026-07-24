@@ -4,6 +4,7 @@ import ModuloMaestro from "./maestro";
 import { fechaHoyOperativa, fechaOperativaOffset, pct, Input, KpiCardMaestro, BadgeEstadoMaestro } from "./shared";
 import ModuloPNR from "./PNR";
 import ModuloCertificaciones from "./Certificaciones";
+import ModuloEmpresas from "./Empresas";
 import ModuloAuditoriaMeli from "./AuditoriaMeli";
 import { sb, BIGGY_IMG } from "./shared";
 import ModuloPoolMeliMX from "./Pool";
@@ -102,8 +103,8 @@ const PAIS_SELECT_CFG = {
 // propios (se irán agregando aquí); México conserva todo lo ya existente.
 const MODULOS_POR_PAIS = {
   "México": {
-    superadmin: ["pool_meli_mx", "pagos", "maestro", "certificaciones", "pnr", "auditoria_meli", "configuracion"],
-    certificacion: ["certificaciones"],
+    superadmin: ["pool_meli_mx", "pagos", "maestro", "certificaciones", "empresas", "pnr", "auditoria_meli", "configuracion"],
+    certificacion: ["certificaciones", "empresas"],
     prefacturas: ["pagos"],
   },
   "Chile": {
@@ -117,6 +118,7 @@ const MODULOS_LABELS = {
   brain: "Brain Central",
   pool_meli_mx: "Indicadores Operacionales MX",
   certificaciones: "Certificaciones",
+  empresas: "Empresas",
   certificaciones_cl: "Certificaciones",
   mantenciones_cl: "Mantenciones",
   maestro_cl: "Maestro Operaciones",
@@ -15487,6 +15489,7 @@ export default function App() {
         </div>
         {tabActivo === "pool_meli_mx" && <ModuloPoolMeliMX usuario={usuario} />}
         {tabActivo === "certificaciones" && <ModuloCertificacionesMadre />}
+        {tabActivo === "empresas" && <ModuloEmpresas />}
         {tabActivo === "certificaciones_cl" && <ModuloCertificacionesCL certronicSlot={<ModuloPagos />} />}
         {tabActivo === "mantenciones_cl" && <ModuloMantencionesMadre usuario={usuario} />}
         {tabActivo === "maestro_cl" && <ModuloMaestroCL />}
