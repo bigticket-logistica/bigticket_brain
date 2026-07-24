@@ -29,9 +29,10 @@ function Chip({ texto, bg, fg }) {
   return <span style={{ fontSize: 10, fontWeight: 800, padding: "3px 10px", borderRadius: 12, background: bg, color: fg, whiteSpace: "nowrap" }}>{texto}</span>;
 }
 
-function Kpi({ n, label, color }) {
+function Kpi({ n, label, color, onClick, activo }) {
   return (
-    <div style={{ background: "#fff", border: "0.5px solid #e4e7ec", borderRadius: 12, padding: "14px 18px", textAlign: "center", minWidth: 120 }}>
+    <div onClick={onClick} title="Clic para filtrar el listado"
+      style={{ background: activo ? "#eef2f7" : "#fff", border: activo ? "1.5px solid #1a3a6b" : "0.5px solid #e4e7ec", borderRadius: 12, padding: "14px 18px", textAlign: "center", minWidth: 120, cursor: onClick ? "pointer" : "default" }}>
       <div style={{ fontSize: 24, fontWeight: 800, color: color || NAVY }}>{n}</div>
       <div style={{ fontSize: 10.5, color: "#667085", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>{label}</div>
     </div>
@@ -56,6 +57,7 @@ function DetalleEmpresa({ empresa, onVolver, onActualizada }) {
   const [pagos, setPagos] = useState(null);
   const [solicitudes, setSolicitudes] = useState(null);
   const [eventos, setEventos] = useState(null);
+  const [operacion, setOperacion] = useState(null);        // confirmaciones diarias de la Bitácora
   const [fichaAbierta, setFichaAbierta] = useState(null);   // id de fila del padrón expandida
   const [docsFicha, setDocsFicha] = useState({});           // { padronId: docs de la certificación }
 
@@ -112,8 +114,27 @@ function DetalleEmpresa({ empresa, onVolver, onActualizada }) {
       setPagos(error ? { error: error.message } : (data || []));
     }
     if (tab === "solicitudes" && solicitudes === null) {
-      const { data } = await sb.from("solicitudes_terceros").select("*").eq("tercero_id", empresa.tercero_id).order("created_at", { ascending: false });
+      const { data } = await sb.from("solicitudes_baja").select("*").eq("tercero_id", empresa.tercero_id).order("created_at", { ascending: false });
       setSolicitudes(data || []);
+    }
+    if (tab === "operacion" && operacion === null) {
+      // Log diario de la Bitácora (terceros_confirmaciones_dia): qué placas
+      // confirmaron los supervisores a nombre de esta empresa, últimos 14 días.
+      const desde = new Date(Date.now() - 14 * 86400000).toISOString().slice(0, 10);
+      const { data, error } = await sb.from("terceros_confirmaciones_dia").select("*")
+        .ilike("empresa_nombre", empresa.nombre).gte("fecha", desde)
+        .order("fecha", { ascending: false }).order("placa").limit(300);
+      if (error) { setOperacion({ error: error.message }); return; }
+      // Discrepancias: placas del padrón de ESTA empresa confirmadas a OTRA
+      const placas = (padron || (await sb.from("flota_personal_terceros").select("placa").eq("tercero_id", empresa.tercero_id).eq("tipo", "vehiculo").eq("estado", "activo")).data || [])
+        .map((x) => (x.placa || "").toUpperCase().trim()).filter(Boolean);
+      let ajenas = [];
+      if (placas.length) {
+        const { data: d2 } = await sb.from("terceros_confirmaciones_dia").select("*")
+          .in("placa", placas).gte("fecha", desde).limit(300);
+        ajenas = (d2 || []).filter((c) => (c.empresa_nombre || "").toUpperCase().trim() !== (empresa.nombre || "").toUpperCase().trim());
+      }
+      setOperacion({ propias: data || [], ajenas });
     }
   })(); }, [tab]);
 
@@ -141,31 +162,49 @@ function DetalleEmpresa({ empresa, onVolver, onActualizada }) {
     onActualizada({ ...empresa, ...patch });
   };
 
-  const resolverSolicitud = async (s, estado) => {
-    const respuesta = prompt(`${estado === "aprobada" ? "APROBAR" : "RECHAZAR"} solicitud (${s.tipo} · ${s.referencia || "—"})\n\nRespuesta para la bitácora:`) ;
+  const resolverSolicitud = async (s, aprobar) => {
+    const items = Array.isArray(s.seleccion) ? s.seleccion : [];
+    const etiqueta = items.length ? items.map((x) => x.placa || x.nombre).join(", ") : (s.seleccion?.empresa || "empresa completa");
+    const respuesta = prompt(`${aprobar ? "APROBAR (se ejecuta la baja)" : "RECHAZAR"} — ${s.folio}\n${s.tipo} · ${etiqueta}\n\nRespuesta para la empresa y la bitácora:`);
     if (respuesta === null) return;
-    const { error } = await sb.from("solicitudes_terceros").update({
-      estado, respuesta: respuesta.trim() || null,
+    const { error } = await sb.from("solicitudes_baja").update({
+      estado: aprobar ? "completada" : "rechazada",
+      respuesta: respuesta.trim() || null,
       resuelto_por: window.__PERFIL_EMAIL || "analista_brain", resuelto_at: new Date().toISOString(),
     }).eq("id", s.id);
-    if (error) { alert("No se pudo resolver: " + error.message); return; }
-    // Si se aprueba una baja de vehículo/persona, el padrón se actualiza aquí mismo
-    if (estado === "aprobada" && (s.tipo === "baja_vehiculo" || s.tipo === "baja_persona") && s.referencia) {
-      await sb.from("flota_personal_terceros").update({ estado: "baja", actualizado_at: new Date().toISOString() })
-        .eq("tercero_id", empresa.tercero_id)
-        .or(s.tipo === "baja_vehiculo" ? `placa.eq.${s.referencia.toUpperCase().trim()}` : `nombre.ilike.%${s.referencia.trim()}%`);
+    if (error) { alert("No se pudo resolver (¿falta solicitudes_baja_admin.sql?): " + error.message); return; }
+    if (aprobar) {
+      if (s.tipo === "empresa") {
+        // Baja total: empresa + todo su padrón
+        await sb.from("terceros").update({ estado_operacional: "baja", motivo_estado: `Baja de empresa ${s.folio}: ${s.motivo}`, estado_actualizado_at: new Date().toISOString(), estado_actualizado_por: window.__PERFIL_EMAIL || "analista_brain" }).eq("id", empresa.tercero_id);
+        await sb.from("flota_personal_terceros").update({ estado: "baja", actualizado_at: new Date().toISOString() }).eq("tercero_id", empresa.tercero_id);
+        onActualizada({ ...empresa, estado_operacional: "baja" });
+      } else {
+        // Baja puntual: por certificacion_id (exacto) con respaldo por placa/nombre
+        for (const it of items) {
+          if (it.certificacion_id) {
+            await sb.from("flota_personal_terceros").update({ estado: "baja", actualizado_at: new Date().toISOString() })
+              .eq("tercero_id", empresa.tercero_id).eq("certificacion_id", it.certificacion_id);
+          }
+          const campo = it.placa ? ["placa", it.placa.toUpperCase().trim()] : it.nombre ? ["nombre", it.nombre.trim()] : null;
+          if (campo) {
+            await sb.from("flota_personal_terceros").update({ estado: "baja", actualizado_at: new Date().toISOString() })
+              .eq("tercero_id", empresa.tercero_id).ilike(campo[0], campo[1]);
+          }
+        }
+      }
       setPadron(null);
     }
-    await registrarEvento(empresa.tercero_id, "solicitud_" + estado, `${s.tipo} · ${s.referencia || ""} — ${respuesta || ""}`);
-    setSolicitudes(null); setEventos(null);
-    const { data } = await sb.from("solicitudes_terceros").select("*").eq("tercero_id", empresa.tercero_id).order("created_at", { ascending: false });
+    await registrarEvento(empresa.tercero_id, aprobar ? "solicitud_aprobada" : "solicitud_rechazada", `${s.folio} · ${s.tipo} · ${etiqueta} — ${respuesta || ""}`);
+    setEventos(null);
+    const { data } = await sb.from("solicitudes_baja").select("*").eq("tercero_id", empresa.tercero_id).order("created_at", { ascending: false });
     setSolicitudes(data || []);
   };
 
   const est = ESTADO_EMPRESA[empresa.estado_operacional || "activa"] || ESTADO_EMPRESA.activa;
   const TABS = [
     ["resumen", "📇 Resumen"], ["datos", "🏦 Datos & Cuenta"], ["placas", "🚚 Placas & Personal"],
-    ["docs", "🗂 Documentos"], ["pagos", "💰 Pagos"], ["solicitudes", "📥 Solicitudes"],
+    ["docs", "🗂 Documentos"], ["pagos", "💰 Pagos"], ["solicitudes", "📥 Solicitudes"], ["operacion", "📅 Operación"],
   ];
   const lblEv = { estado_pausada: "⏸ Empresa pausada", estado_activa: "▶️ Empresa reactivada", estado_baja: "🛑 Empresa dada de baja", pagos_pausados: "💸⏸ Pagos pausados", pagos_reactivados: "💸▶️ Pagos reactivados", solicitud_aprobada: "✅ Solicitud aprobada", solicitud_rechazada: "❌ Solicitud rechazada" };
 
@@ -380,33 +419,78 @@ function DetalleEmpresa({ empresa, onVolver, onActualizada }) {
         </div>
       )}
 
-      {/* ── SOLICITUDES ── */}
+      {/* ── SOLICITUDES (solicitudes_baja del Portal de Terceros) ── */}
       {tab === "solicitudes" && (
         <div style={{ background: "#fff", border: "0.5px solid #e4e7ec", borderRadius: 12, padding: "16px 20px" }}>
           {solicitudes === null ? <div style={{ fontSize: 12, color: "#888" }}>Cargando…</div>
             : solicitudes.length === 0 ? <div style={{ fontSize: 12, color: "#888" }}>Sin solicitudes de esta empresa. Las solicitudes de baja que la empresa envíe desde su portal caerán aquí.</div>
-            : solicitudes.map((s) => (
+            : solicitudes.map((s) => {
+              const items = Array.isArray(s.seleccion) ? s.seleccion : [];
+              const etiqueta = items.length ? items.map((x) => x.placa || x.nombre).join(", ") : (s.seleccion?.empresa || "Empresa completa");
+              const pendiente = ["en_revision", "en_proceso"].includes(s.estado);
+              return (
               <div key={s.id} style={{ padding: "10px 0", borderBottom: "1px solid #f4f5f7" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-                  <div style={{ flex: 1, minWidth: 200 }}>
+                  <div style={{ flex: 1, minWidth: 220 }}>
                     <div style={{ fontSize: 13, fontWeight: 700 }}>
-                      {s.tipo === "baja_vehiculo" ? "🚚 Baja de vehículo" : s.tipo === "baja_persona" ? "👤 Baja de persona" : s.tipo === "baja_empresa" ? "🏢 Baja de empresa" : "📄 " + (s.tipo || "solicitud")}
-                      {s.referencia ? ` · ${s.referencia}` : ""}
+                      {s.tipo === "vehiculo" ? "🚚 Baja de vehículo" : s.tipo === "personal" ? "👤 Baja de personal" : "🏢 Baja de empresa"}
+                      {" · "}{etiqueta} <span style={{ fontWeight: 500, color: "#98a2b3" }}>({s.folio})</span>
                     </div>
-                    <div style={{ fontSize: 11.5, color: "#667085" }}>{fmtF(s.created_at)}{s.detalle ? " · " + s.detalle : ""}</div>
+                    <div style={{ fontSize: 11.5, color: "#667085" }}>{fmtF(s.created_at)} · Motivo: {s.motivo}{s.detalle ? " — " + s.detalle : ""}{s.fecha_efectiva ? " · Efectiva: " + s.fecha_efectiva : ""}{s.enviado_por ? " · " + s.enviado_por : ""}</div>
                     {s.respuesta && <div style={{ fontSize: 11.5, color: "#475467", marginTop: 2 }}>↳ {s.respuesta} <span style={{ color: "#98a2b3" }}>({s.resuelto_por})</span></div>}
                   </div>
-                  {s.estado === "pendiente" ? (
+                  {pendiente ? (
                     <div style={{ display: "flex", gap: 6 }}>
-                      <button onClick={() => resolverSolicitud(s, "aprobada")} style={{ background: "#166534", color: "#fff", border: "none", borderRadius: 7, padding: "6px 12px", fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: "'Geist',sans-serif" }}>✓ Aprobar</button>
-                      <button onClick={() => resolverSolicitud(s, "rechazada")} style={{ background: "#fff", color: "#c0392b", border: "1.5px solid #c0392b", borderRadius: 7, padding: "6px 12px", fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: "'Geist',sans-serif" }}>✕ Rechazar</button>
+                      <button onClick={() => resolverSolicitud(s, true)} style={{ background: "#166534", color: "#fff", border: "none", borderRadius: 7, padding: "6px 12px", fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: "'Geist',sans-serif" }}>✓ Aprobar baja</button>
+                      <button onClick={() => resolverSolicitud(s, false)} style={{ background: "#fff", color: "#c0392b", border: "1.5px solid #c0392b", borderRadius: 7, padding: "6px 12px", fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: "'Geist',sans-serif" }}>✕ Rechazar</button>
                     </div>
                   ) : (
-                    <Chip texto={s.estado === "aprobada" ? "APROBADA" : "RECHAZADA"} bg={s.estado === "aprobada" ? "#e8f5ec" : "#fdecea"} fg={s.estado === "aprobada" ? "#166534" : "#c0392b"} />
+                    <Chip texto={s.estado === "completada" ? "COMPLETADA" : "RECHAZADA"} bg={s.estado === "completada" ? "#e8f5ec" : "#fdecea"} fg={s.estado === "completada" ? "#166534" : "#c0392b"} />
                   )}
                 </div>
               </div>
-            ))}
+            );})}
+        </div>
+      )}
+
+      {/* ── OPERACIÓN (confirmaciones diarias de la Bitácora) ── */}
+      {tab === "operacion" && (
+        <div style={{ background: "#fff", border: "0.5px solid #e4e7ec", borderRadius: 12, padding: "16px 20px" }}>
+          <div style={{ fontSize: 12, fontWeight: 800, color: "#667085", textTransform: "uppercase", letterSpacing: 1, marginBottom: 10 }}>Confirmación diaria de supervisores (últimos 14 días)</div>
+          {operacion === null ? <div style={{ fontSize: 12, color: "#888" }}>Cargando…</div>
+            : operacion.error ? <div style={{ fontSize: 12, color: "#c0392b" }}>No se pudo leer terceros_confirmaciones_dia: {operacion.error}</div>
+            : (
+              <>
+                {operacion.ajenas.length > 0 && (
+                  <div style={{ background: "#fdecea", border: "1px solid #f5c6c0", borderRadius: 10, padding: "10px 14px", marginBottom: 12 }}>
+                    <div style={{ fontSize: 12.5, fontWeight: 800, color: "#c0392b", marginBottom: 4 }}>⚠️ Placas del padrón de esta empresa confirmadas a OTRA empresa</div>
+                    {operacion.ajenas.slice(0, 10).map((c, i) => (
+                      <div key={i} style={{ fontSize: 12, color: "#7c2d2d" }}>{c.fecha} · <b>{c.placa}</b> confirmada a "{c.empresa_nombre}" en {c.service_center_id} ({c.supervisor || "—"}) — posible cambio de dueño: revisar padrón.</div>
+                    ))}
+                  </div>
+                )}
+                {operacion.propias.length === 0 ? <div style={{ fontSize: 12, color: "#888" }}>Sin confirmaciones a nombre de esta empresa en los últimos 14 días.</div>
+                  : (
+                    <div style={{ overflow: "auto" }}>
+                      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                        <thead><tr>{["Fecha", "Placa", "SC", "Supervisor", "Estado"].map((h) => <th key={h} style={{ textAlign: "left", padding: "6px 8px", borderBottom: "2px solid " + NAVY, color: NAVY, fontSize: 10.5, textTransform: "uppercase" }}>{h}</th>)}</tr></thead>
+                        <tbody>
+                          {operacion.propias.map((c, i) => (
+                            <tr key={i} style={{ borderBottom: "1px solid #f0f0f0" }}>
+                              <td style={{ padding: "6px 8px", whiteSpace: "nowrap" }}>{c.fecha}</td>
+                              <td style={{ padding: "6px 8px", fontWeight: 700 }}>{c.placa}</td>
+                              <td style={{ padding: "6px 8px" }}>{c.service_center_id}</td>
+                              <td style={{ padding: "6px 8px" }}>{c.supervisor || "—"}</td>
+                              <td style={{ padding: "6px 8px" }}>{c.es_pendiente ? <Chip texto="PENDIENTE CERTIFICAR" bg="#fff4e5" fg="#b45309" /> : <Chip texto="CONFIRMADA" bg="#e8f5ec" fg="#166534" />}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                <div style={{ fontSize: 10.5, color: "#98a2b3", marginTop: 8 }}>Fuente: <b>terceros_confirmaciones_dia</b> — lo que los supervisores sellan cada día en el Item 6 de su Bitácora.</div>
+              </>
+            )}
         </div>
       )}
     </div>
@@ -417,6 +501,7 @@ function DetalleEmpresa({ empresa, onVolver, onActualizada }) {
 export default function ModuloEmpresas() {
   const [empresas, setEmpresas] = useState(null);
   const [pendientes, setPendientes] = useState(0);
+  const [pendSet, setPendSet] = useState(new Set());
   const [busca, setBusca] = useState("");
   const [filtro, setFiltro] = useState("todas");   // todas | activa | pausada | baja | pagos_pausados | sin_clabe
   const [selected, setSelected] = useState(null);
@@ -426,8 +511,9 @@ export default function ModuloEmpresas() {
     let { data, error } = await sb.from("vw_terceros_360").select("*").order("nombre");
     if (error) { alert("No se pudo cargar vw_terceros_360 (¿falta unificacion_fase2.sql / empresas_admin.sql?): " + error.message); setEmpresas([]); return; }
     setEmpresas(data || []);
-    const { count } = await sb.from("solicitudes_terceros").select("id", { count: "exact", head: true }).eq("estado", "pendiente");
-    setPendientes(count || 0);
+    const { data: sol } = await sb.from("solicitudes_baja").select("tercero_id").in("estado", ["en_revision", "en_proceso"]);
+    setPendSet(new Set((sol || []).map((x) => x.tercero_id)));
+    setPendientes((sol || []).length);
   };
   useEffect(() => { cargar(); }, []);
 
@@ -437,6 +523,7 @@ export default function ModuloEmpresas() {
     if (filtro === "todas") return true;
     if (filtro === "pagos_pausados") return !!e.pagos_pausados;
     if (filtro === "sin_clabe") return !e.cuenta_clabe;
+    if (filtro === "con_solicitudes") return pendSet.has(e.tercero_id);
     return (e.estado_operacional || "activa") === filtro;
   });
 
@@ -459,14 +546,14 @@ export default function ModuloEmpresas() {
         <button onClick={cargar} style={{ marginLeft: "auto", background: "#fff", border: "1px solid #e4e7ec", color: NAVY, borderRadius: 8, padding: "8px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "'Geist',sans-serif" }}>🔄 Actualizar</button>
       </div>
 
-      {/* KPIs */}
+      {/* KPIs — clic para filtrar el listado */}
       <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
-        <Kpi n={(empresas || []).length} label="Empresas" />
-        <Kpi n={n((e) => (e.estado_operacional || "activa") === "activa")} label="Activas" color="#166534" />
-        <Kpi n={n((e) => (e.estado_operacional || "") === "pausada")} label="Pausadas" color="#b45309" />
-        <Kpi n={n((e) => !!e.pagos_pausados)} label="Pagos pausados" color="#c0392b" />
-        <Kpi n={n((e) => !e.cuenta_clabe)} label="Sin CLABE" color={ORANGE} />
-        <Kpi n={pendientes} label="Solicitudes pendientes" color={pendientes ? "#c0392b" : NAVY} />
+        <Kpi n={(empresas || []).length} label="Empresas" activo={filtro === "todas"} onClick={() => setFiltro("todas")} />
+        <Kpi n={n((e) => (e.estado_operacional || "activa") === "activa")} label="Activas" color="#166534" activo={filtro === "activa"} onClick={() => setFiltro("activa")} />
+        <Kpi n={n((e) => (e.estado_operacional || "") === "pausada")} label="Pausadas" color="#b45309" activo={filtro === "pausada"} onClick={() => setFiltro("pausada")} />
+        <Kpi n={n((e) => !!e.pagos_pausados)} label="Pagos pausados" color="#c0392b" activo={filtro === "pagos_pausados"} onClick={() => setFiltro("pagos_pausados")} />
+        <Kpi n={n((e) => !e.cuenta_clabe)} label="Sin CLABE" color={ORANGE} activo={filtro === "sin_clabe"} onClick={() => setFiltro("sin_clabe")} />
+        <Kpi n={pendientes} label="Solicitudes pendientes" color={pendientes ? "#c0392b" : NAVY} activo={filtro === "con_solicitudes"} onClick={() => setFiltro("con_solicitudes")} />
       </div>
 
       {/* Buscador + filtros */}
@@ -481,6 +568,7 @@ export default function ModuloEmpresas() {
           <option value="baja">De baja</option>
           <option value="pagos_pausados">Con pagos pausados</option>
           <option value="sin_clabe">Sin CLABE</option>
+          <option value="con_solicitudes">Con solicitudes pendientes</option>
         </select>
       </div>
 
@@ -508,7 +596,7 @@ export default function ModuloEmpresas() {
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-end", flexShrink: 0 }}>
                   <Chip texto={est.label} bg={est.bg} fg={est.fg} />
-                  {e.pagos_pausados ? <Chip texto="PAGOS ⏸" bg="#fdecea" fg="#c0392b" /> : !e.cuenta_clabe ? <Chip texto="SIN CLABE" bg="#fff4e5" fg="#b45309" /> : null}
+                  {pendSet.has(e.tercero_id) ? <Chip texto="📥 SOLICITUD" bg="#fdecea" fg="#c0392b" /> : e.pagos_pausados ? <Chip texto="PAGOS ⏸" bg="#fdecea" fg="#c0392b" /> : !e.cuenta_clabe ? <Chip texto="SIN CLABE" bg="#fff4e5" fg="#b45309" /> : null}
                 </div>
               </div>
             );
