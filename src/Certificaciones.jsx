@@ -3871,6 +3871,7 @@ const DOCS_VEHICULO_ALTA = [
   ["foto_frente", "Foto: Frente"], ["foto_trasera", "Foto: Trasera"],
   ["foto_lado_izq", "Foto: Lado izquierdo"], ["foto_lado_der", "Foto: Lado derecho"],
   ["tarjeta_circulacion", "Tarjeta de circulación"],
+  ["poliza_seguro", "Póliza de seguro"],
 ];
 
 function SlotArchivoAlta({ label, file, onFile, obligatorio }) {
@@ -3952,15 +3953,14 @@ function AltaVehiculosPersonal({ onCreada }) {
         if (!f.licencia_estado) falta.push("Estado emisor de la licencia");
         if (!f.licencia_vigencia) falta.push("Vigencia de la licencia");
       }
-      [["ine", true], ["ine_reverso", true], ["curp", true], ["rfc", true], ["licencia", esCond]].forEach(([t, req]) => {
-        if (req && !files[t]) falta.push("Documento: " + t.replace("_", " "));
-      });
+      // Documentos OPCIONALES: los terceros antiguos no siempre los tienen;
+      // se pueden completar después (archivador o re-certificación).
     } else {
       if (!v.placa.trim()) falta.push("Placa");
       if (!v.marca.trim()) falta.push("Marca");
       if (!v.modelo.trim()) falta.push("Modelo");
       if (!/^(19|20)\d{2}$/.test(v.anio.trim())) falta.push("Año (4 dígitos)");
-      DOCS_VEHICULO_ALTA.forEach(([t, l]) => { if (!files[t]) falta.push("Documento: " + l); });
+      // Fotos y tarjeta también opcionales en el alta del padrón.
     }
     if (falta.length) { setMsg({ tipo: "err", texto: "Faltan campos obligatorios: " + falta.join(" · ") }); return; }
 
@@ -3997,7 +3997,7 @@ function AltaVehiculosPersonal({ onCreada }) {
       }
       if (docsJson.length) await sb.from("flota_personal_terceros").update({ documentos: docsJson }).eq("id", fila.id);
 
-      setMsg({ tipo: "ok", texto: `✅ ${esVeh ? "Vehículo " + datos.placa : datos.nombre} quedó registrado como ${esVeh ? "unidad activa" : "personal activo"} de ${emp?.nombre || "la empresa"} — ya aparece en el padrón de abajo, en la sección "Vehículos y Personal" del portal de la empresa, y con ${docsJson.length}/${total} documentos en su Archivador.` });
+      setMsg({ tipo: "ok", texto: `✅ ${esVeh ? "Vehículo " + datos.placa : datos.nombre} quedó registrado como ${esVeh ? "unidad activa" : "personal activo"} de ${emp?.nombre || "la empresa"} — ya aparece en el padrón de abajo y en la sección "Vehículos y Personal" del portal de la empresa${total ? ` — ${docsJson.length}/${total} documento(s) en su Archivador` : " (sin documentos adjuntos; puedes cargarlos después)"}.` });
       setFiles({});
       setF({ nombre: "", curp: "", rfc: "", telefono: "", email: "", licencia_numero: "", licencia_estado: "", licencia_vigencia: "" });
       setV({ placa: "", vin: "", marca: "", modelo: "", anio: "" });
@@ -4097,9 +4097,9 @@ function AltaVehiculosPersonal({ onCreada }) {
         )}
 
         {/* Documentos */}
-        <div className="form-title" style={{ fontSize: 13 }}>📎 Documentos {esVeh ? "de la unidad" : "de la persona"}</div>
+        <div className="form-title" style={{ fontSize: 13 }}>📎 Documentos {esVeh ? "de la unidad" : "de la persona"} <span style={{ fontWeight: 400, color: "#98a2b3", fontSize: 11 }}>(opcionales — carga los que tengas; el resto se puede completar después)</span></div>
         {docsAlta.map(([t, l]) => (
-          <SlotArchivoAlta key={t} label={l} obligatorio file={files[t]} onFile={(x) => setFiles((p) => ({ ...p, [t]: x }))} />
+          <SlotArchivoAlta key={t} label={l} file={files[t]} onFile={(x) => setFiles((p) => ({ ...p, [t]: x }))} />
         ))}
 
         {msg && (
