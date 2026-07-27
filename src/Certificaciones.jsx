@@ -871,6 +871,39 @@ function ResumenSolicitudAlta({ fuente, registro, datos, onEnviado }) {
       {minuta === null ? <Fila k="📋 Minuta de entrevista" v="Cargando…" /> : minuta && (
         <Fila k="📋 Minuta de entrevista" v={`${minuta.tipo_vehiculo || "—"} · ${minuta.cantidad_choferes ?? "—"} chofer(es) · ${minuta.cantidad_ayudantes ?? "—"} ayudante(s) · ${minuta.horario || "—"} · ${minuta.zona_operacion || "—"}`} />
       )}
+      {/* Unidades de la minuta: GPS y seguro declarados por el supervisor en terreno */}
+      {minuta && Array.isArray(minuta.vehiculos) && minuta.vehiculos.length > 0 && (
+        <Fila k="🚚 Unidades de la entrevista" v={
+          <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+            {minuta.vehiculos.map((v, i) => {
+              const nFotos = v.fotos ? Object.keys(v.fotos).length : 0;
+              const gpsSi = String(v.gps || "").toLowerCase().startsWith("s");
+              const segSi = String(v.seguro || "").toLowerCase().startsWith("s");
+              return (
+                <div key={i} style={{ fontSize: 12.5 }}>
+                  <b>{v.placa || `Unidad ${i + 1}`}</b>
+                  {v.tipo ? ` · ${v.tipo}` : ""}{v.marca ? ` ${v.marca}` : ""}{v.anio ? ` ${v.anio}` : ""}
+                  {v.prop ? ` · ${v.prop}` : ""}{v.km ? ` · ${Number(v.km).toLocaleString("es-MX")} km` : ""}
+                  {" · "}
+                  <span style={{ fontWeight: 700, color: v.gps ? (gpsSi ? "#166534" : "#c0392b") : "#98a2b3" }}>
+                    📡 GPS {v.gps ? (gpsSi ? "Sí" : "NO") : "sin dato"}
+                  </span>
+                  {" · "}
+                  <span style={{ fontWeight: 700, color: v.seguro ? (segSi ? "#166534" : "#c0392b") : "#98a2b3" }}>
+                    🛡 Seguro {v.seguro ? (segSi ? "Sí" : "NO") : "sin dato"}
+                  </span>
+                  {nFotos ? <span style={{ color: "#667085" }}> · 📷 {nFotos} foto(s)</span> : null}
+                </div>
+              );
+            })}
+            {minuta.vehiculos.some((v) => !String(v.gps || "").toLowerCase().startsWith("s")) && (
+              <div style={{ fontSize: 11.5, color: "#b45309", fontWeight: 600 }}>
+                ⚠️ Certificación completa exige GPS + seguro antes de salir a ruta.
+              </div>
+            )}
+          </div>
+        } />
+      )}
       <Fila k="🏗 Items del contrato (Jefe)" v={
         itemsOp === null ? "Cargando…"
         : itemsOp ? `${itemsOp.cantidad_vehiculos ?? "—"} vehículo(s) ${itemsOp.tipo_vehiculos || ""} · inicio ${itemsOp.fecha_inicio || "—"} · ${itemsOp.esquema_tarifa || "—"}`
