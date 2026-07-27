@@ -12,6 +12,7 @@ import { descargarExcelMeli, descargarExcelMultihoja } from "./shared";
 import ModuloPagosMadre from "./Pagos";
 import ModuloCertificacionesCL from "./cl/Certificaciones";
 import ModuloMaestroCL from "./cl/Maestro";
+import ModuloAnalisisCL from "./cl/Analisis";
 const PIPE_ID = "306833898";
 
 // Devuelve el periodo "operativo" actual (mes en México) en formato YYYY-MM
@@ -109,7 +110,7 @@ const MODULOS_POR_PAIS = {
     prefacturas: ["pagos"],
   },
   "Chile": {
-    superadmin: ["certificaciones_cl", "mantenciones_cl", "maestro_cl"],
+    superadmin: ["certificaciones_cl", "mantenciones_cl", "maestro_cl", "analisis_cl"],
     certificacion: [],
     certificacion_full: ["certificaciones_cl"],
     prefacturas: [],
@@ -124,6 +125,7 @@ const MODULOS_LABELS = {
   certificaciones_cl: "Certificaciones",
   mantenciones_cl: "Mantenciones",
   maestro_cl: "Maestro Operaciones",
+  analisis_cl: "Análisis Operaciones",
   maestro: "Maestro Operaciones",
   mantenciones: "Mantenciones",
   pnr: "PNR",
@@ -15497,6 +15499,7 @@ export default function App() {
         {tabActivo === "certificaciones_cl" && <ModuloCertificacionesCL certronicSlot={<ModuloPagos />} />}
         {tabActivo === "mantenciones_cl" && <ModuloMantencionesMadre usuario={usuario} />}
         {tabActivo === "maestro_cl" && <ModuloMaestroCL />}
+        {tabActivo === "analisis_cl" && <ModuloAnalisisCL />}
         {tabActivo === "configuracion" && (
           <div className="pg" style={{ maxWidth: 700 }}>
             <div className="sec-title">Configuración</div>
