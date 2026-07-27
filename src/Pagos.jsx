@@ -5831,6 +5831,7 @@ function calcularPagos({ maestro, snapshots, scZonas, especiales, matrizPrecios,
       km_recorridos: km,
       km_recorridos_meli: kmRealMeli,
       km_fuente: kmFuente,  // REAL | MANUAL | PLANIFICADO | null
+      km_planificados: m.km_planificados != null ? Number(m.km_planificados) : null,  // informativo, visible junto al km de pago
       km_manual: kmFuente === "MANUAL" ? kmManual : null,
       sin_km_planificado: sinKm,  // sin ningún KM (real/manual/planificado); nombre de columna heredado
       tramo_km: tramo,
@@ -6573,13 +6574,13 @@ function ListadoPagosDiarios() {
     if (filasFiltradas.length === 0) { alert("No hay datos para exportar"); return; }
     const headers = [
       "Fecha","Chofer","Patente","Vehículo","Tipología","Tipo Ruta","SC","Zona","ID Ruta","Ciclo",
-      "Km","Km Real","Envíos despachados","Envíos entregados","NS%","% Visitado Real","% No Visitado Real","No visitado %","Categoría NS",
+      "Km Pago","Km Planif.","Fuente KM","Envíos despachados","Envíos entregados","NS%","% Visitado Real","% No Visitado Real","No visitado %","Categoría NS",
       "Tarifa base","Ajuste NS","Estado auxiliar","Snapshots con helper","$ Auxiliar",
       "Pago bruto","Pago neto","Pago MELI","Observaciones"
     ];
     const rows = filasFiltradas.map(p => [
       p.fecha, p.driver_name, p.placa, p.vehiculo_raw, p.tipologia, p.tipo_ruta_sdd || "", p.service_center_id, p.zona,
-      p.id_ruta, p.ciclo, p.km_recorridos, p.km_recorridos_meli, p.envios_despachados, p.envios_entregados,
+      p.id_ruta, p.ciclo, p.km_recorridos, p.km_planificados, p.km_fuente || "", p.envios_despachados, p.envios_entregados,
       p.ns_pct, p.pct_visitado_real, (p.pct_visitado_real != null ? Math.round((100 - Number(p.pct_visitado_real)) * 100) / 100 : ""), p.ns_no_visitado, p.ns_categoria, p.tarifa_base, p.ajuste_ns,
       p.auxiliar_estado, p.auxiliar_snapshots_total, p.monto_auxiliar,
       p.pago_bruto, p.pago_neto, p.pago_meli, (p.observaciones || "").replace(/[\r\n]+/g, " ")
@@ -6645,13 +6646,13 @@ function ListadoPagosDiarios() {
       const empresaDe = (p) => empSem[semanaInventario(p.fecha) + "||" + normalizarPlaca(p.placa)] || empresaMap[normalizarPlaca(p.placa)] || "";
       const headers = [
         "Fecha","Chofer","Patente","Empresa","Vehículo","Tipología","Tipo Ruta","SC","Zona","ID Ruta","Ciclo",
-        "Km","Km Real","Envíos despachados","Envíos entregados","NS%","% Visitado Real","% No Visitado Real","No visitado %","Categoría NS",
+        "Km Pago","Km Planif.","Fuente KM","Envíos despachados","Envíos entregados","NS%","% Visitado Real","% No Visitado Real","No visitado %","Categoría NS",
         "Tarifa base","Ajuste NS","Estado auxiliar","Snapshots con helper","$ Auxiliar",
         "Pago bruto","Pago neto","Pago MELI","Observaciones"
       ];
       const aoa = [headers, ...filas.map(p => [
         p.fecha, p.driver_name, p.placa, empresaDe(p), p.vehiculo_raw, p.tipologia, p.tipo_ruta_sdd || "", p.service_center_id, p.zona,
-        p.id_ruta, p.ciclo, p.km_recorridos, p.km_recorridos_meli, p.envios_despachados, p.envios_entregados,
+        p.id_ruta, p.ciclo, p.km_recorridos, p.km_planificados, p.km_fuente || "", p.envios_despachados, p.envios_entregados,
         p.ns_pct, p.pct_visitado_real, (p.pct_visitado_real != null ? Math.round((100 - Number(p.pct_visitado_real)) * 100) / 100 : ""), p.ns_no_visitado, p.ns_categoria, p.tarifa_base, p.ajuste_ns,
         p.auxiliar_estado, p.auxiliar_snapshots_total, p.monto_auxiliar,
         p.pago_bruto, p.pago_neto, p.pago_meli, (p.observaciones || "").replace(/[\r\n]+/g, " ")
@@ -7041,8 +7042,8 @@ function ListadoPagosDiarios() {
                 <Th onClick={() => toggleOrder("service_center_id")} center>SC · Zona{ordIcon("service_center_id")}</Th>
                 <Th onClick={() => toggleOrder("id_ruta")}>ID Ruta{ordIcon("id_ruta")}</Th>
                 <Th onClick={() => toggleOrder("status_final")} center>Estado{ordIcon("status_final")}</Th>
-                <Th onClick={() => toggleOrder("km_recorridos")} right>Km{ordIcon("km_recorridos")}</Th>
-                <Th onClick={() => toggleOrder("km_recorridos_meli")} right>Km Real{ordIcon("km_recorridos_meli")}</Th>
+                <Th onClick={() => toggleOrder("km_recorridos")} right>Km Pago{ordIcon("km_recorridos")}</Th>
+                <Th onClick={() => toggleOrder("km_planificados")} right>Km Planif.{ordIcon("km_planificados")}</Th>
                 <Th onClick={() => toggleOrder("ns_pct")} right>NS%{ordIcon("ns_pct")}</Th>
                 <Th onClick={() => toggleOrder("pct_visitado_real")} right>% Visitado{ordIcon("pct_visitado_real")}</Th>
                 <Th onClick={() => toggleOrder("tarifa_base")} right>Tarifa{ordIcon("tarifa_base")}</Th>
@@ -7118,8 +7119,8 @@ function ListadoPagosDiarios() {
                         </span>
                       );
                     })()}</td>
-                    <td style={{ ...tdStyle(), textAlign: "right", color: "#0369a1", fontWeight: 600 }}>
-                      {r.km_recorridos_meli != null ? Number(r.km_recorridos_meli).toFixed(1) : "\u2014"}
+                    <td style={{ ...tdStyle(), textAlign: "right", color: "#64748b" }} title="KM planificado (informativo; el pago usa el real)">
+                      {r.km_planificados != null ? Number(r.km_planificados).toFixed(1) : "\u2014"}
                     </td>
                     <td style={{ ...tdStyle(), textAlign: "right" }}>
                       <div>{fmtPct(r.ns_pct)}</div>
