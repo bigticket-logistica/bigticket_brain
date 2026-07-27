@@ -942,7 +942,7 @@ function cargarScriptMifiel() {
 // puede editarlos manualmente, y el Brain llena la plantilla con pdf-lib:
 // Hoja de Firmas (pág 11) + Anexo A (pág 13) + Backup A.2 (pág 14).
 const CONTRATO_COORDS = {
-  plantilla: "plantillas/contrato_transportista_v1.pdf",
+  plantilla: "plantillas/contrato_transportista_v2.pdf",
   pagFirmas: 10, pagAnexoA: 12, pagA2: 13,
   firmas: {
     dia: { x: 188, y: 318.5, s: 9 }, mes: { x: 228, y: 318.5, s: 9 }, anio: { x: 330, y: 318.5, s: 9 },
