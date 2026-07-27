@@ -50,16 +50,75 @@ function descargarCSV(nombre, filas, columnas) {
 }
 
 // ── Tarjeta de indicador ───────────────────────────────────────────────────
-function Kpi({ rotulo, valor, detalle, color, alerta }) {
+function Kpi({ rotulo, valor, detalle, color, alerta, abierto, onClick }) {
   return (
-    <div style={{
-      background: "#fff", border: `1px solid ${alerta ? "#f2c9c9" : "#e6e9ef"}`,
-      borderLeft: `4px solid ${color || NAVY}`, borderRadius: 10,
-      padding: "12px 16px", minWidth: 132, flex: "1 1 132px",
-    }}>
-      <div style={{ fontSize: 10.5, color: "#8a94a6", fontWeight: 700, letterSpacing: .4, textTransform: "uppercase" }}>{rotulo}</div>
+    <button className="mj-kpi" onClick={onClick} aria-expanded={!!abierto}
+      style={{
+        background: abierto ? "#f7faff" : "#fff",
+        border: `1px solid ${abierto ? (color || NAVY) : (alerta ? "#f2c9c9" : "#e6e9ef")}`,
+        borderLeft: `4px solid ${color || NAVY}`, borderRadius: 10,
+        padding: "12px 16px", minWidth: 132, flex: "1 1 132px",
+        textAlign: "left", cursor: "pointer", fontFamily: "inherit",
+      }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+        <span style={{ fontSize: 10.5, color: "#8a94a6", fontWeight: 700, letterSpacing: .4, textTransform: "uppercase" }}>{rotulo}</span>
+        <span style={{ fontSize: 9, color: abierto ? (color || NAVY) : "#c3cbd8" }}>{abierto ? "▲" : "▼"}</span>
+      </div>
       <div style={{ fontSize: 24, fontWeight: 800, color: color || NAVY, lineHeight: 1.25, letterSpacing: -.5 }}>{valor}</div>
       {detalle && <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 1 }}>{detalle}</div>}
+    </button>
+  );
+}
+
+// Agrupa filas por un campo y suma lo que devuelva valorFn.
+function agrupar(filas, campo, valorFn) {
+  const m = {};
+  for (const r of filas) { const k = r[campo] || "—"; m[k] = (m[k] || 0) + valorFn(r); }
+  return Object.entries(m).sort((a, b) => b[1] - a[1]);
+}
+
+// Panel que explica una tarjeta y muestra su desglose.
+function PanelKpi({ kpi, onCerrar }) {
+  if (!kpi) return null;
+  const desglose = kpi.desglose ? kpi.desglose() : null;
+  return (
+    <div style={{
+      background: "#fff", border: `1px solid #e6e9ef`, borderTop: `3px solid ${kpi.color || NAVY}`,
+      borderRadius: 10, padding: "14px 18px", marginBottom: 14,
+    }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
+        <div style={{ fontSize: 15, fontWeight: 800, color: kpi.color || NAVY }}>{kpi.rotulo}</div>
+        <button onClick={onCerrar} style={{ background: "none", border: "none", color: "#94a3b8", cursor: "pointer", fontSize: 18, lineHeight: 1, fontFamily: "inherit" }}>×</button>
+      </div>
+      <div style={{ fontSize: 13, color: "#334155", marginTop: 6, lineHeight: 1.8, maxWidth: 860 }}>{kpi.que}</div>
+      {kpi.como && (
+        <div style={{ fontSize: 12.5, color: "#64748b", marginTop: 8, lineHeight: 1.8, maxWidth: 860,
+                      background: "#f7f9fc", borderRadius: 8, padding: "8px 12px" }}>
+          <strong style={{ color: "#475569" }}>Cómo se calcula: </strong>{kpi.como}
+        </div>
+      )}
+      {desglose && desglose.filas.length > 0 && (
+        <div style={{ marginTop: 12 }}>
+          <div style={{ fontSize: 11, color: "#8a94a6", fontWeight: 700, textTransform: "uppercase", letterSpacing: .4, marginBottom: 6 }}>
+            {desglose.titulo}
+          </div>
+          <div style={{ maxHeight: 260, overflow: "auto", border: "1px solid #eef1f5", borderRadius: 8 }}>
+            <table className="mj-tabla" style={{ fontSize: 11.5 }}>
+              <thead><tr>{desglose.columnas.map(c => <th key={c}>{c}</th>)}</tr></thead>
+              <tbody>
+                {desglose.filas.map((f, i) => (
+                  <tr key={i}>{f.map((v, j) => (
+                    <td key={j} className={j > 0 ? "num" : ""} style={j === 0 ? { fontWeight: 600 } : undefined}>{v}</td>
+                  ))}</tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+      {desglose && desglose.filas.length === 0 && (
+        <div style={{ fontSize: 12.5, color: "#94a3b8", marginTop: 10, fontStyle: "italic" }}>{desglose.vacio || "Sin filas para mostrar."}</div>
+      )}
     </div>
   );
 }
@@ -81,6 +140,7 @@ function ModuloMaestroCL() {
   const [soloReparto, setSoloReparto] = useState(true);
   const [cecos, setCecos] = useState("");
   const [busca, setBusca] = useState("");
+  const [kpiAbierto, setKpiAbierto] = useState(null);
 
   const [resumen, setResumen] = useState(null);
   const [jornada, setJornada] = useState([]);
@@ -146,11 +206,115 @@ function ModuloMaestroCL() {
     paradas: a.paradas + n(r.paradas), pendientes: a.pendientes + n(r.pendientes),
   }), { cargados: 0, entregados: 0, devueltos: 0, dj: 0, paradas: 0, pendientes: 0 });
   const pct = tot.cargados ? (100 * tot.entregados / tot.cargados).toFixed(1) : null;
-  const sinCuadrar = jornadaVista.filter(r => r.detalle_cuadra === false).length;
+  // Dos cosas distintas, antes mezcladas en un solo contador:
+  const nSinDetalle   = jornadaVista.filter(r => r.sin_detalle === true).length;
+  const nDescuadrados = jornadaVista.filter(r => r.detalle_descuadrado === true).length;
 
   const motivos = Object.entries(devolVista.reduce((a, r) => {
     const k = r.motivo || "(sin motivo)"; a[k] = (a[k] || 0) + 1; return a;
   }, {})).sort((a, b) => b[1] - a[1]);
+
+  // ── Tarjetas: valor + explicación + desglose ─────────────────────────────
+  const porCecos = (titulo, valorFn, rotuloCol) => () => ({
+    titulo, columnas: ["CECOS", rotuloCol],
+    filas: agrupar(jornadaVista, "cecos", valorFn).map(([k, v]) => [k, fmt(v)]),
+  });
+
+  const KPIS = [
+    {
+      id: "viajes", rotulo: "Viajes", color: NAVY,
+      valor: fmt(jornadaVista.length),
+      detalle: soloReparto ? "solo reparto" : `incluye ${fmt(jornada.filter(r => r.is_line_haul).length)} line haul`,
+      que: "Cada ruta que MELI generó para el día. Un viaje equivale a una fila del maestro: un vehículo con su conductor haciendo un recorrido.",
+      como: soloReparto
+        ? "Se cuentan solo las rutas de reparto. Las de Line Haul (transferencias entre centros, que no reparten a clientes) quedan fuera; puedes incluirlas con el botón de arriba."
+        : "Se cuentan todas las rutas, incluidas las de Line Haul (transferencias entre centros, que no reparten a clientes finales).",
+      desglose: porCecos("Viajes por CECOS", () => 1, "Viajes"),
+    },
+    {
+      id: "cargados", rotulo: "Cargados", color: NAVY,
+      valor: fmt(tot.cargados), detalle: `${fmt(tot.paradas)} paradas`,
+      que: "Paquetes que salieron a la calle en estos viajes. Es el volumen con el que arrancó la jornada.",
+      como: "Es el total de paquetes que MELI asigna a cada ruta (su propio contador). En el Excel corresponde a la columna CARGADOS.",
+      desglose: porCecos("Paquetes cargados por CECOS", r => n(r.cargados), "Cargados"),
+    },
+    {
+      id: "entregados", rotulo: "Entregados", color: "#0d8043",
+      valor: fmt(tot.entregados), detalle: pct ? `${pct}% de lo cargado` : null,
+      que: "Paquetes que llegaron a su destino y quedaron con entrega confirmada.",
+      como: "Se cuentan los paquetes que el detalle de cada ruta marcó como entregados. Cuando el detalle todavía no ha corrido (día en curso), se usa el contador de MELI, que va más atrasado.",
+      desglose: porCecos("Paquetes entregados por CECOS", r => n(r.entregados), "Entregados"),
+    },
+    {
+      id: "devueltos", rotulo: "Devueltos", color: "#b42318",
+      valor: fmt(tot.devueltos), detalle: "no se entregaron",
+      que: "Devoluciones reales: paquetes que volvieron sin entregarse, con un motivo (negocio cerrado, nadie en el domicilio, zona inaccesible…).",
+      como: "Del total de paquetes no entregados se descuentan dos grupos que no son devoluciones: los que se traspasaron a otra ruta, y los que fallaron en un momento del día pero se entregaron más tarde. Este es el número que coincide con el contador de Fallidos del portal de MELI.",
+      desglose: () => ({
+        titulo: "Devoluciones por motivo",
+        columnas: ["Motivo", "Paquetes"],
+        filas: motivos.map(([m, c]) => [m, fmt(c)]),
+        vacio: "Sin devoluciones en este día. El detalle de cada folio está en la pestaña Devoluciones.",
+      }),
+    },
+    {
+      id: "traspasos", rotulo: "Traspasos", color: ORANGE,
+      valor: fmt(tot.dj), detalle: "pasaron a otra ruta",
+      que: "Paquetes que salieron en una ruta y se pasaron a otra durante el día. No son devoluciones: la ruta que los recibió normalmente los entrega. En el Excel se registran como D_JUSTIFICADOS.",
+      como: "Son los paquetes marcados como transferidos, y de cada uno se conoce la ruta de destino. La pestaña Traspasos muestra la traza completa: ruta, conductor y patente de origen y de destino.",
+      desglose: () => ({
+        titulo: "Rutas que más traspasaron",
+        columnas: ["Ruta origen", "Conductor", "Paquetes"],
+        filas: [...traspVista]
+          .sort((a, b) => n(b.paquetes) - n(a.paquetes)).slice(0, 15)
+          .map(t => [t.ruta_origen, t.chofer_origen || "—", fmt(t.paquetes)]),
+        vacio: "Sin traspasos registrados en este día.",
+      }),
+    },
+    {
+      id: "pendientes", rotulo: "Pendientes", color: "#8a94a6",
+      valor: fmt(tot.pendientes), detalle: "sin resolver al cierre",
+      que: "Paquetes que al final del día no quedaron ni entregados ni devueltos: nunca se resolvieron. Lo normal es que sean muy pocos.",
+      como: "Cargados menos entregados menos devueltos, ruta por ruta. Los traspasados no se restan, porque ya vienen contados en los entregados de la ruta que los recibió.",
+      desglose: () => ({
+        titulo: "Viajes con paquetes sin resolver",
+        columnas: ["ID Viaje", "CECOS", "Cargados", "Entregados", "Devueltos", "Pendientes"],
+        filas: jornadaVista.filter(r => n(r.pendientes) > 0)
+          .sort((a, b) => n(b.pendientes) - n(a.pendientes)).slice(0, 20)
+          .map(r => [r.id_viaje, r.cecos, fmt(r.cargados), fmt(r.entregados), fmt(r.devueltos), fmt(r.pendientes)]),
+        vacio: "Ningún viaje quedó con paquetes sin resolver. El día cerró completo.",
+      }),
+    },
+    ...(nSinDetalle > 0 ? [{
+      id: "sin_detalle", rotulo: "Falta detalle", color: "#7a5b16", alerta: true,
+      valor: fmt(nSinDetalle), detalle: "aún sin procesar",
+      que: "Viajes a los que todavía no se les ha bajado el detalle de paquetes. Mientras eso pase, sus paradas, comunas y devoluciones aparecen en cero.",
+      como: "El detalle de cada ruta se baja en la pasada de cierre, a las 00:30 de la noche siguiente. Es normal ver este número durante el día en curso; debería quedar en cero al día siguiente.",
+      desglose: () => ({
+        titulo: "Viajes sin detalle",
+        columnas: ["ID Viaje", "CECOS", "Cargados", "Estado"],
+        filas: jornadaVista.filter(r => r.sin_detalle).slice(0, 20)
+          .map(r => [r.id_viaje, r.cecos, fmt(r.cargados), r.status || "—"]),
+        vacio: "Todos los viajes tienen su detalle.",
+      }),
+    }] : []),
+    ...(nDescuadrados > 0 ? [{
+      id: "descuadrados", rotulo: "Descuadrados", color: "#b42318", alerta: true,
+      valor: fmt(nDescuadrados), detalle: "conteos que no calzan",
+      que: "Viajes donde el número de entregas que informa MELI no coincide con los paquetes que efectivamente se bajaron en el detalle. Vale revisarlos.",
+      como: "Se comparan las dos fuentes: el contador de la ruta en MELI y la cantidad de paquetes entregados en el detalle. La causa más común es que se capturaron en momentos distintos: el contador quedó en una foto temprana y el detalle se bajó después, ya con más entregas hechas.",
+      desglose: () => ({
+        titulo: "Viajes con conteos distintos",
+        columnas: ["ID Viaje", "CECOS", "MELI dice", "Detalle tiene", "Diferencia"],
+        filas: jornadaVista.filter(r => r.detalle_descuadrado)
+          .sort((a, b) => Math.abs(n(b.entregados_detalle) - n(b.entregados_meli)) - Math.abs(n(a.entregados_detalle) - n(a.entregados_meli)))
+          .slice(0, 20)
+          .map(r => [r.id_viaje, r.cecos, fmt(r.entregados_meli), fmt(r.entregados_detalle),
+                     (n(r.entregados_detalle) - n(r.entregados_meli) > 0 ? "+" : "") + fmt(n(r.entregados_detalle) - n(r.entregados_meli))]),
+        vacio: "Todos los conteos calzan.",
+      }),
+    }] : []),
+  ];
 
   const TABS = [
     { id: "jornada",    label: "Maestro Jornada", desc: "Una fila por viaje",        n: jornadaVista.length },
@@ -182,6 +346,9 @@ function ModuloMaestroCL() {
         .mj-chip{border:1px solid #dfe4ec;background:#fff;border-radius:20px;padding:4px 11px;font-size:12px;
                  cursor:pointer;font-family:inherit;color:#64748b;font-weight:600;}
         .mj-chip.on{background:${NAVY};border-color:${NAVY};color:#fff;}
+        .mj-kpi{transition:box-shadow .15s,transform .15s;}
+        .mj-kpi:hover{box-shadow:0 6px 16px -8px rgba(16,32,64,.25);transform:translateY(-1px);}
+        .mj-kpi:focus-visible{outline:2px solid ${NAVY};outline-offset:2px;}
       `}</style>
 
       {/* Cabecera */}
@@ -236,19 +403,15 @@ function ModuloMaestroCL() {
 
         {!cargando && fecha && (
           <Fragment>
-            {/* Indicadores */}
+            {/* Indicadores · cada tarjeta se abre y explica de dónde sale su número */}
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
-              <Kpi rotulo="Viajes" valor={fmt(jornadaVista.length)}
-                   detalle={soloReparto ? "solo reparto" : `incluye ${fmt(jornada.filter(r => r.is_line_haul).length)} line haul`} />
-              <Kpi rotulo="Cargados" valor={fmt(tot.cargados)} detalle={`${fmt(tot.paradas)} paradas`} />
-              <Kpi rotulo="Entregados" valor={fmt(tot.entregados)} detalle={pct ? `${pct}% de lo cargado` : null} color="#0d8043" />
-              <Kpi rotulo="Devueltos" valor={fmt(tot.devueltos)} detalle="no se entregaron" color="#b42318" />
-              <Kpi rotulo="D. Justificados" valor={fmt(tot.dj)} detalle="traspasados a otra ruta" color={ORANGE} />
-              <Kpi rotulo="Pendientes" valor={fmt(tot.pendientes)} detalle="sin resolver" color="#8a94a6" />
-              {sinCuadrar > 0 && (
-                <Kpi rotulo="Sin detalle" valor={fmt(sinCuadrar)} detalle="viajes sin cuadrar" color="#b42318" alerta />
-              )}
+              {KPIS.map(k => (
+                <Kpi key={k.id} rotulo={k.rotulo} valor={k.valor} detalle={k.detalle} color={k.color} alerta={k.alerta}
+                     abierto={kpiAbierto === k.id}
+                     onClick={() => setKpiAbierto(kpiAbierto === k.id ? null : k.id)} />
+              ))}
             </div>
+            <PanelKpi kpi={KPIS.find(k => k.id === kpiAbierto)} onCerrar={() => setKpiAbierto(null)} />
 
             {/* Filtros */}
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 10 }}>
