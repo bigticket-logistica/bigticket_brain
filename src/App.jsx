@@ -105,11 +105,13 @@ const MODULOS_POR_PAIS = {
   "México": {
     superadmin: ["pool_meli_mx", "pagos", "maestro", "certificaciones", "empresas", "pnr", "auditoria_meli", "configuracion"],
     certificacion: ["certificaciones", "empresas"],
+    certificacion_full: ["certificaciones", "empresas"],  // Certificaciones MX + CL (ver Chile abajo)
     prefacturas: ["pagos"],
   },
   "Chile": {
     superadmin: ["certificaciones_cl", "mantenciones_cl", "maestro_cl"],
     certificacion: [],
+    certificacion_full: ["certificaciones_cl"],
     prefacturas: [],
   },
 };
@@ -141,6 +143,8 @@ const USUARIOS = {
   "eduardo.stine@bigticket.cl":     { pass: "eduardo.2026", rol: "superadmin", nombre: "Eduardo Stine" },
   "danny.calas@bigticket.cl":       { pass: "danny.2026",   rol: "prefacturas", nombre: "Danny Calas" },
   "roberto.sanmartin@bigticket.cl":       { pass: "robertosn.2026",   rol: "prefacturas", nombre: "Roberto San Martin" },
+  "antonio.mariangel@bigticket.cl":       { pass: "antonio.2026",  rol: "certificacion_full", nombre: "Antonio Mariangel" },
+  "camila.valenzuela@bigticket.cl":       { pass: "camila.2026",   rol: "certificacion_full", nombre: "Camila Valenzuela" },
 };
 
 const css = `
