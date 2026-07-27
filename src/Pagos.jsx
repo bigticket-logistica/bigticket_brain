@@ -5118,26 +5118,6 @@ function TercerosMX() {
   const [loadingCambios, setLoadingCambios] = useState(false);
   const [cargoVariaciones, setCargoVariaciones] = useState(false);
 
-  // ── Genera la semana desde el padrón (flota_personal_terceros) ──
-  // Fuente única: lo que el analista cargó en Certificaciones → Vehículos y
-  // Personal + lo que entró por certificaciones aceptadas. Reemplaza la semana
-  // completa en flota_terceros_mx con nombres canónicos de terceros (uuid).
-  const generarDesdePadron = async (sem, yaCargada) => {
-    const aviso = yaCargada
-      ? `🔄 GENERAR DESDE PADRÓN — semana ${sem} (${etiquetaSemanaInventario(sem)})\n\n⚠️ Esta semana YA tiene inventario cargado: se BORRARÁ y se reconstruirá completa desde el padrón (placas activas de Vehículos y Personal).\n\nSi el motor ya calculó pagos con el inventario actual, hazlo solo si sabes lo que haces.\n\n¿Continuar?`
-      : `🔄 GENERAR DESDE PADRÓN — semana ${sem} (${etiquetaSemanaInventario(sem)})\n\nSe creará el inventario de esta semana desde el padrón: todas las placas ACTIVAS de Vehículos y Personal, con el nombre canónico de cada empresa.\n\n¿Continuar?`;
-    if (!confirm(aviso)) return;
-    setCargando(true); setMsg(null);
-    try {
-      const { data, error } = await sb.rpc("fn_generar_flota_semana", { p_semana: sem });
-      if (error) throw new Error(error.message + (error.code === "42883" ? " — falta correr unificacion_fase2.sql (fn_generar_flota_semana)" : ""));
-      const r = Array.isArray(data) ? data[0] : data;
-      setMsg({ ok: true, txt: `Semana ${sem} generada desde el padrón: ${r?.placas ?? "?"} placas de ${r?.empresas ?? "?"} empresas.` });
-      await cargar();
-    } catch (e) { setMsg({ ok: false, txt: "No se pudo generar desde el padrón: " + e.message }); }
-    finally { setCargando(false); }
-  };
-
   useEffect(() => { cargar(); }, []);
   const cargar = async () => {
     setLoading(true);
@@ -5318,11 +5298,6 @@ function TercerosMX() {
                   <button onClick={() => { semanaObjetivoRef.current = s; fileRef.current && fileRef.current.click(); }} disabled={cargando}
                     style={{ padding: "7px 14px", borderRadius: 4, border: "none", background: cargando ? "#94a3b8" : (cargado ? "#475569" : "#16a34a"), color: "#fff", fontSize: 11, fontWeight: 600, cursor: cargando ? "wait" : "pointer", whiteSpace: "nowrap" }}>
                     {cargado ? "Reemplazar Excel" : "Cargar Excel"}
-                  </button>
-                  <button onClick={() => generarDesdePadron(s, cargado)} disabled={cargando}
-                    title="Construye la semana desde el padrón (pestaña Vehículos y Personal de Certificaciones): placas activas con el nombre canónico de cada empresa."
-                    style={{ padding: "7px 14px", borderRadius: 4, border: "1.5px solid #1a3a6b", background: "#fff", color: "#1a3a6b", fontSize: 11, fontWeight: 700, cursor: cargando ? "wait" : "pointer", whiteSpace: "nowrap" }}>
-                    🔄 Generar desde padrón
                   </button>
                 </div>
                 {abierta && cargado && (
@@ -5645,17 +5620,17 @@ function calcularPagos({ maestro, snapshots, scZonas, especiales, matrizPrecios,
     const ciclo = m.cluster_meli || null;
     const esSDD = (m.es_sdd === "SI" || m.es_sdd === true);  // SDD/SPOT lo da la vista (es_sdd, desde tipo_vehiculo_meli "...SDD")
 
-    // Km de pago: SIEMPRE el planificado (por diseño). km_meli (TMS) queda deprecado;
-    // el real de MELI (km_recorridos_meli) es solo informativo. Si el snapshot no trae
-    // km_planificados, se usa el KM manual del analista (km_manual_mx); si tampoco hay,
-    // la ruta queda marcada SIN KM PLANIFICADO (tarjeta + alerta) para carga manual.
+    // Km de pago: el REAL de MELI (km_recorridos_meli, route-detail) por decisión de gerencia (jul-2026).
+    // km_meli (TMS) sigue deprecado. Cadena de fallbacks cuando no hay real (> 0):
+    //   REAL → PLANIFICADO (queda observación) → KM MANUAL del analista (km_manual_mx).
+    // Si no existe ninguno, la ruta queda marcada SIN KM (tarjeta + alerta) para carga manual.
+    const kmRealMeli = m.km_recorridos_meli != null ? Number(m.km_recorridos_meli) : null;  // crudo, se persiste tal cual
+    const kmRealPago = (kmRealMeli != null && kmRealMeli > 0) ? kmRealMeli : null;          // real válido para pagar
     const kmPlanif = (m.km_planificados != null && Number(m.km_planificados) > 0) ? Number(m.km_planificados) : null;
     const kmManual = (kmManualPorRuta && kmManualPorRuta[idRuta] != null) ? Number(kmManualPorRuta[idRuta]) : null;
-    const km = kmPlanif != null ? kmPlanif : (kmManual != null ? kmManual : 0);
-    const sinKmPlanificado = kmPlanif == null && kmManual == null;
-
-    // Datos REALES de MELI (vienen de la vista; SOLO informativos, no afectan el calculo)
-    const kmRealMeli = m.km_recorridos_meli != null ? Number(m.km_recorridos_meli) : null;
+    const kmFuente = kmRealPago != null ? "REAL" : (kmPlanif != null ? "PLANIFICADO" : (kmManual != null ? "MANUAL" : null));
+    const km = kmRealPago != null ? kmRealPago : (kmPlanif != null ? kmPlanif : (kmManual != null ? kmManual : 0));
+    const sinKm = kmFuente == null;
     const pctVisitadoReal = m.pct_no_visitado_real != null
       ? Math.round((100 - Number(m.pct_no_visitado_real)) * 100) / 100
       : null;
@@ -5688,9 +5663,10 @@ function calcularPagos({ maestro, snapshots, scZonas, especiales, matrizPrecios,
     if (!tipologia) obs.push(`Tipología no reconocida: "${vehiculoRaw}"`);
     if (!zona) obs.push(`SC no mapeado en sc_zonas_mx: ${sc}`);
     if (pctVisitado == null) obs.push("Sin % visitado en el snapshot");
-    if (sinKmPlanificado) obs.push("SIN KM PLANIFICADO \u2014 tramo calculado con 0 km; ingresar KM manual y recalcular");
-    else if (kmPlanif == null && kmManual != null) obs.push(`KM manual: ${kmManual} km (snapshot sin km_planificados)`);
-    // km_meli (TMS) esta deprecado: el km de pago es SIEMPRE el planificado y el real (MELI) va en su columna.
+    if (sinKm) obs.push("SIN KM \u2014 sin real, planificado ni manual; tramo calculado con 0 km. Ingresar KM manual y recalcular");
+    else if (kmFuente === "PLANIFICADO") obs.push(`KM real no disponible \u2014 se pag\u00f3 con planificado (${km} km)`);
+    else if (kmFuente === "MANUAL") obs.push(`KM manual: ${km} km (sin real ni planificado)`);
+    // km_meli (TMS) esta deprecado: el km de pago es el REAL de MELI (route-detail), con fallback planificado → manual.
     if (m.status_final && m.status_final !== "close") obs.push(`Status no cerrado: ${m.status_final} — revisar`);
 
     // Tarifa base
@@ -5854,8 +5830,8 @@ function calcularPagos({ maestro, snapshots, scZonas, especiales, matrizPrecios,
       zona,
       km_recorridos: km,
       km_recorridos_meli: kmRealMeli,
-      km_manual: (kmPlanif == null && kmManual != null) ? kmManual : null,
-      sin_km_planificado: sinKmPlanificado,
+      km_manual: kmFuente === "MANUAL" ? kmManual : null,
+      sin_km_planificado: sinKm,  // sin ningún KM (real/planificado/manual); nombre de columna heredado
       tramo_km: tramo,
       ciclo,
       envios_despachados: cargadosNS,  // total ajustado (cargados - traspasados); el warning queda en observaciones
@@ -6971,9 +6947,9 @@ function ListadoPagosDiarios() {
                 </div>
               )}
               {totales.sinKm > 0 && (
-                <div onClick={() => setFiltroEstado(filtroEstado === "sin_km" ? "todas" : "sin_km")} title="Rutas sin KM planificado en el snapshot — ingresar KM manual y recalcular"
+                <div onClick={() => setFiltroEstado(filtroEstado === "sin_km" ? "todas" : "sin_km")} title="Rutas sin KM real ni planificado — ingresar KM manual y recalcular"
                   style={card({ background: "#e0f2fe", border: `2px solid ${filtroEstado === "sin_km" ? "#0284c7" : "#7dd3fc"}`, cursor: "pointer" })}>
-                  <div style={lbl("#075985")}>Sin KM planificado {filtroEstado === "sin_km" ? "(filtrando)" : ""}</div>
+                  <div style={lbl("#075985")}>Sin KM {filtroEstado === "sin_km" ? "(filtrando)" : ""}</div>
                   <div style={big("#075985")}>{totales.sinKm}</div>
                   <div style={hint("#075985")}>📏 clic para ingresar manual</div>
                 </div>
@@ -7113,7 +7089,7 @@ function ListadoPagosDiarios() {
                     })()}</td>
                     <td style={{ ...tdStyle(), textAlign: "right" }}>{r.sin_km_planificado ? (
                       r.km_manual != null ? (
-                        <span title="KM manual guardado — recalculá el día para aplicarlo al pago" style={{ color: "#0369a1", fontWeight: 600, whiteSpace: "nowrap" }}>✏️ {Number(r.km_manual).toFixed(1)}</span>
+                        <span title="KM manual guardado (sin real ni planificado) — recalculá el día para aplicarlo al pago" style={{ color: "#0369a1", fontWeight: 600, whiteSpace: "nowrap" }}>✏️ {Number(r.km_manual).toFixed(1)}</span>
                       ) : (
                         <span style={{ display: "inline-flex", gap: 3, alignItems: "center" }}>
                           <input type="number" min="0" step="0.1" placeholder="KM" value={kmEdit[r.id] != null ? kmEdit[r.id] : ""}
