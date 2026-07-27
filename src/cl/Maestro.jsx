@@ -104,11 +104,17 @@ function PanelKpi({ kpi, onCerrar }) {
           </div>
           <div style={{ maxHeight: 260, overflow: "auto", border: "1px solid #eef1f5", borderRadius: 8 }}>
             <table className="mj-tabla" style={{ fontSize: 11.5 }}>
-              <thead><tr>{desglose.columnas.map(c => <th key={c}>{c}</th>)}</tr></thead>
+              <thead><tr>
+                {desglose.columnas.map((c, j) => (
+                  <th key={j} style={c.num ? { textAlign: "right" } : undefined}>{c.t}</th>
+                ))}
+              </tr></thead>
               <tbody>
                 {desglose.filas.map((f, i) => (
                   <tr key={i}>{f.map((v, j) => (
-                    <td key={j} className={j > 0 ? "num" : ""} style={j === 0 ? { fontWeight: 600 } : undefined}>{v}</td>
+                    <td key={j}
+                        className={desglose.columnas[j] && desglose.columnas[j].num ? "num" : ""}
+                        style={j === 0 ? { fontWeight: 600 } : undefined}>{v}</td>
                   ))}</tr>
                 ))}
               </tbody>
@@ -189,7 +195,7 @@ function ModuloMaestroCL() {
   const jornadaVista = jornada
     .filter(r => (!soloReparto || r.is_line_haul === false))
     .filter(r => !cecos || r.cecos === cecos)
-    .filter(r => coincide(r.id_viaje, r.patente, r.conductor, r.cecos, r.comuna_primera_parada, r.comuna_ultima_parada));
+    .filter(r => coincide(r.id_viaje, r.patente, r.conductor, r.cecos, r.comuna_primera_parada, r.comuna_ultima_parada, r.ciclo));
   const devolVista = devol
     .filter(r => !cecos || r.cecos === cecos)
     .filter(r => coincide(r.id_viaje, r.folio_guia, r.patente, r.conductor, r.motivo, r.comuna, r.receptor));
@@ -216,7 +222,7 @@ function ModuloMaestroCL() {
 
   // ── Tarjetas: valor + explicación + desglose ─────────────────────────────
   const porCecos = (titulo, valorFn, rotuloCol) => () => ({
-    titulo, columnas: ["CECOS", rotuloCol],
+    titulo, columnas: [{ t: "CECOS" }, { t: rotuloCol, num: true }],
     filas: agrupar(jornadaVista, "cecos", valorFn).map(([k, v]) => [k, fmt(v)]),
   });
 
@@ -252,7 +258,7 @@ function ModuloMaestroCL() {
       como: "Del total de paquetes no entregados se descuentan dos grupos que no son devoluciones: los que se traspasaron a otra ruta, y los que fallaron en un momento del día pero se entregaron más tarde. Este es el número que coincide con el contador de Fallidos del portal de MELI.",
       desglose: () => ({
         titulo: "Devoluciones por motivo",
-        columnas: ["Motivo", "Paquetes"],
+        columnas: [{ t: "Motivo" }, { t: "Paquetes", num: true }],
         filas: motivos.map(([m, c]) => [m, fmt(c)]),
         vacio: "Sin devoluciones en este día. El detalle de cada folio está en la pestaña Devoluciones.",
       }),
@@ -264,7 +270,7 @@ function ModuloMaestroCL() {
       como: "Son los paquetes marcados como transferidos, y de cada uno se conoce la ruta de destino. La pestaña Traspasos muestra la traza completa: ruta, conductor y patente de origen y de destino.",
       desglose: () => ({
         titulo: "Rutas que más traspasaron",
-        columnas: ["Ruta origen", "Conductor", "Paquetes"],
+        columnas: [{ t: "Ruta origen" }, { t: "Conductor" }, { t: "Paquetes", num: true }],
         filas: [...traspVista]
           .sort((a, b) => n(b.paquetes) - n(a.paquetes)).slice(0, 15)
           .map(t => [t.ruta_origen, t.chofer_origen || "—", fmt(t.paquetes)]),
@@ -278,7 +284,8 @@ function ModuloMaestroCL() {
       como: "Cargados menos entregados menos devueltos, ruta por ruta. Los traspasados no se restan, porque ya vienen contados en los entregados de la ruta que los recibió.",
       desglose: () => ({
         titulo: "Viajes con paquetes sin resolver",
-        columnas: ["ID Viaje", "CECOS", "Cargados", "Entregados", "Devueltos", "Pendientes"],
+        columnas: [{ t: "ID Viaje" }, { t: "CECOS" }, { t: "Cargados", num: true },
+                   { t: "Entregados", num: true }, { t: "Devueltos", num: true }, { t: "Pendientes", num: true }],
         filas: jornadaVista.filter(r => n(r.pendientes) > 0)
           .sort((a, b) => n(b.pendientes) - n(a.pendientes)).slice(0, 20)
           .map(r => [r.id_viaje, r.cecos, fmt(r.cargados), fmt(r.entregados), fmt(r.devueltos), fmt(r.pendientes)]),
@@ -292,7 +299,7 @@ function ModuloMaestroCL() {
       como: "El detalle de cada ruta se baja en la pasada de cierre, a las 00:30 de la noche siguiente. Es normal ver este número durante el día en curso; debería quedar en cero al día siguiente.",
       desglose: () => ({
         titulo: "Viajes sin detalle",
-        columnas: ["ID Viaje", "CECOS", "Cargados", "Estado"],
+        columnas: [{ t: "ID Viaje" }, { t: "CECOS" }, { t: "Cargados", num: true }, { t: "Estado" }],
         filas: jornadaVista.filter(r => r.sin_detalle).slice(0, 20)
           .map(r => [r.id_viaje, r.cecos, fmt(r.cargados), r.status || "—"]),
         vacio: "Todos los viajes tienen su detalle.",
@@ -305,7 +312,8 @@ function ModuloMaestroCL() {
       como: "Se comparan las dos fuentes: el contador de la ruta en MELI y la cantidad de paquetes entregados en el detalle. La causa más común es que se capturaron en momentos distintos: el contador quedó en una foto temprana y el detalle se bajó después, ya con más entregas hechas.",
       desglose: () => ({
         titulo: "Viajes con conteos distintos",
-        columnas: ["ID Viaje", "CECOS", "MELI dice", "Detalle tiene", "Diferencia"],
+        columnas: [{ t: "ID Viaje" }, { t: "CECOS" }, { t: "MELI dice", num: true },
+                   { t: "Detalle tiene", num: true }, { t: "Diferencia", num: true }],
         filas: jornadaVista.filter(r => r.detalle_descuadrado)
           .sort((a, b) => Math.abs(n(b.entregados_detalle) - n(b.entregados_meli)) - Math.abs(n(a.entregados_detalle) - n(a.entregados_meli)))
           .slice(0, 20)
@@ -450,8 +458,11 @@ function ModuloMaestroCL() {
                     <tr>
                       <th>ID Viaje</th><th>CECOS</th><th>Tercero</th><th>Patente</th><th>Conductor</th>
                       <th>Ayud.</th><th className="num">Paradas</th><th className="num">Cargados</th>
-                      <th className="num">Entregados</th><th className="num">Devueltos</th><th className="num">D. Just.</th>
-                      <th className="num">%</th><th>1ª Parada</th><th>Última Parada</th><th>Ciclo</th><th>Estado</th>
+                      <th className="num">Entregados</th><th className="num">Devueltos</th><th className="num">Traspasos</th>
+                      <th className="num">%</th>
+                      <th>Hora 1ª</th><th>1ª Parada</th>
+                      <th>Hora últ.</th><th>Última Parada</th>
+                      <th className="num">Hrs ruta</th><th>Ciclo</th><th>Estado</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -473,18 +484,25 @@ function ModuloMaestroCL() {
                         <td className="num" style={{ fontWeight: 700, color: n(r.pct_entrega) >= 98 ? "#0d8043" : n(r.pct_entrega) >= 90 ? "#7a5b16" : "#b42318" }}>
                           {r.pct_entrega === null ? "—" : `${r.pct_entrega}%`}
                         </td>
+                        <td style={{ fontWeight: 700, color: r.hora_primera_parada ? NAVY : "#cbd5e1", fontVariantNumeric: "tabular-nums" }}>
+                          {r.hora_primera_parada || "—"}
+                        </td>
                         <td style={{ color: "#475569" }}>
                           {r.comuna_primera_parada || "—"}{r.primera_parada ? <span style={{ color: "#a8b2c1" }}> · #{r.primera_parada}</span> : null}
+                        </td>
+                        <td style={{ fontWeight: 700, color: r.hora_ultima_parada ? NAVY : "#cbd5e1", fontVariantNumeric: "tabular-nums" }}>
+                          {r.hora_ultima_parada || "—"}
                         </td>
                         <td style={{ color: "#475569" }}>
                           {r.comuna_ultima_parada || "—"}{r.ultima_parada ? <span style={{ color: "#a8b2c1" }}> · #{r.ultima_parada}</span> : null}
                         </td>
+                        <td className="num" style={{ color: "#64748b" }}>{r.horas_en_ruta ?? "—"}</td>
                         <td>{r.ciclo || "—"}</td>
                         <td><Etiqueta texto={r.status || "—"} color={r.status === "finished" ? "#0d8043" : "#475569"} fondo={r.status === "finished" ? "#e7f6ec" : "#eef2f9"} /></td>
                       </tr>
                     ))}
                     {!jornadaVista.length && (
-                      <tr><td colSpan={16} style={{ padding: 20, color: "#8a94a6", textAlign: "center" }}>
+                      <tr><td colSpan={19} style={{ padding: 20, color: "#8a94a6", textAlign: "center" }}>
                         Ningún viaje coincide con los filtros. Prueba limpiando la búsqueda o el CECOS.
                       </td></tr>
                     )}
@@ -625,10 +643,15 @@ const COLS_JORNADA = [
   { titulo: "D_JUSTIFICADOS", campo: "d_justificados" },
   { titulo: "PENDIENTES", campo: "pendientes" },
   { titulo: "PCT_ENTREGA", campo: "pct_entrega" },
-  { titulo: "PRIMERA_PARADA", campo: "primera_parada" },
+  { titulo: "1_PARADA", campo: "hora_primera_parada" },
   { titulo: "COMUNA_1_PARADA", campo: "comuna_primera_parada" },
-  { titulo: "ULTIMA_PARADA", campo: "ultima_parada" },
+  { titulo: "ULTIMA_PARADA", campo: "hora_ultima_parada" },
   { titulo: "COMUNA_ULTIMA_PARADA", campo: "comuna_ultima_parada" },
+  { titulo: "HORAS_EN_RUTA", campo: "horas_en_ruta" },
+  { titulo: "NRO_1_PARADA", campo: "primera_parada" },
+  { titulo: "NRO_ULTIMA_PARADA", campo: "ultima_parada" },
+  { titulo: "PEONETA_1", valor: () => "" },
+  { titulo: "PEONETA_2", valor: () => "" },
   { titulo: "COMUNAS", campo: "comunas" },
   { titulo: "CICLO", campo: "ciclo" },
   { titulo: "ESTADO", campo: "status" },
