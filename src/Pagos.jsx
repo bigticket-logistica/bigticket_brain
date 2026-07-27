@@ -5621,15 +5621,15 @@ function calcularPagos({ maestro, snapshots, scZonas, especiales, matrizPrecios,
     const esSDD = (m.es_sdd === "SI" || m.es_sdd === true);  // SDD/SPOT lo da la vista (es_sdd, desde tipo_vehiculo_meli "...SDD")
 
     // Km de pago: el REAL de MELI (km_recorridos_meli, route-detail) por decisión de gerencia (jul-2026).
-    // km_meli (TMS) sigue deprecado. Cadena de fallbacks cuando no hay real (> 0):
-    //   REAL → PLANIFICADO (queda observación) → KM MANUAL del analista (km_manual_mx).
-    // Si no existe ninguno, la ruta queda marcada SIN KM (tarjeta + alerta) para carga manual.
+    // km_meli (TMS) sigue deprecado. Cadena cuando no hay real (> 0):
+    //   REAL → MANUAL del analista (km_manual_mx, corrige cualquier ruta sin real) → PLANIFICADO (con observación).
+    // Si no existe ninguno, la ruta queda SIN KM. Toda ruta sin real cae a la tarjeta "Sin KM real".
     const kmRealMeli = m.km_recorridos_meli != null ? Number(m.km_recorridos_meli) : null;  // crudo, se persiste tal cual
     const kmRealPago = (kmRealMeli != null && kmRealMeli > 0) ? kmRealMeli : null;          // real válido para pagar
     const kmPlanif = (m.km_planificados != null && Number(m.km_planificados) > 0) ? Number(m.km_planificados) : null;
     const kmManual = (kmManualPorRuta && kmManualPorRuta[idRuta] != null) ? Number(kmManualPorRuta[idRuta]) : null;
-    const kmFuente = kmRealPago != null ? "REAL" : (kmPlanif != null ? "PLANIFICADO" : (kmManual != null ? "MANUAL" : null));
-    const km = kmRealPago != null ? kmRealPago : (kmPlanif != null ? kmPlanif : (kmManual != null ? kmManual : 0));
+    const kmFuente = kmRealPago != null ? "REAL" : (kmManual != null ? "MANUAL" : (kmPlanif != null ? "PLANIFICADO" : null));
+    const km = kmRealPago != null ? kmRealPago : (kmManual != null ? kmManual : (kmPlanif != null ? kmPlanif : 0));
     const sinKm = kmFuente == null;
     const pctVisitadoReal = m.pct_no_visitado_real != null
       ? Math.round((100 - Number(m.pct_no_visitado_real)) * 100) / 100
@@ -5663,10 +5663,10 @@ function calcularPagos({ maestro, snapshots, scZonas, especiales, matrizPrecios,
     if (!tipologia) obs.push(`Tipología no reconocida: "${vehiculoRaw}"`);
     if (!zona) obs.push(`SC no mapeado en sc_zonas_mx: ${sc}`);
     if (pctVisitado == null) obs.push("Sin % visitado en el snapshot");
-    if (sinKm) obs.push("SIN KM \u2014 sin real, planificado ni manual; tramo calculado con 0 km. Ingresar KM manual y recalcular");
+    if (sinKm) obs.push("SIN KM \u2014 sin real, manual ni planificado; tramo calculado con 0 km. Ingresar KM manual y recalcular");
+    else if (kmFuente === "MANUAL") obs.push(`KM real no disponible \u2014 se pag\u00f3 con KM manual del analista (${km} km)`);
     else if (kmFuente === "PLANIFICADO") obs.push(`KM real no disponible \u2014 se pag\u00f3 con planificado (${km} km)`);
-    else if (kmFuente === "MANUAL") obs.push(`KM manual: ${km} km (sin real ni planificado)`);
-    // km_meli (TMS) esta deprecado: el km de pago es el REAL de MELI (route-detail), con fallback planificado → manual.
+    // km_meli (TMS) esta deprecado: el km de pago es el REAL de MELI (route-detail), con fallback manual → planificado.
     if (m.status_final && m.status_final !== "close") obs.push(`Status no cerrado: ${m.status_final} — revisar`);
 
     // Tarifa base
@@ -5830,8 +5830,9 @@ function calcularPagos({ maestro, snapshots, scZonas, especiales, matrizPrecios,
       zona,
       km_recorridos: km,
       km_recorridos_meli: kmRealMeli,
+      km_fuente: kmFuente,  // REAL | MANUAL | PLANIFICADO | null
       km_manual: kmFuente === "MANUAL" ? kmManual : null,
-      sin_km_planificado: sinKm,  // sin ningún KM (real/planificado/manual); nombre de columna heredado
+      sin_km_planificado: sinKm,  // sin ningún KM (real/manual/planificado); nombre de columna heredado
       tramo_km: tramo,
       ciclo,
       envios_despachados: cargadosNS,  // total ajustado (cargados - traspasados); el warning queda en observaciones
@@ -6176,6 +6177,8 @@ function ListadoPagosDiarios() {
   };
   const alertasDe = (p) => (reglasAlerta || []).filter(r => r.activa && cumpleReglaAlerta(p, r));
   const tieneAlerta = (p) => alertasDe(p).length > 0;
+  // Ruta sin KM real: pagó con manual/planificado o no tiene ningún KM. Filas viejas (km_fuente null y sin flag) no cuentan.
+  const sinKmReal = (p) => (p.km_fuente != null && p.km_fuente !== "REAL") || p.sin_km_planificado === true;
   const [pausaModal, setPausaModal] = useState(null); // { r }
   const [pausaMotivo, setPausaMotivo] = useState("");
   const [pausando, setPausando] = useState(false);
@@ -6517,7 +6520,7 @@ function ListadoPagosDiarios() {
     else if (filtroEstado === "no_pagadas") res = res.filter(p => p.ns_categoria === "NO_PAGO_VIS<90%");
     else if (filtroEstado === "con_alerta") res = res.filter(p => tieneAlerta(p));
     else if (filtroEstado === "no_operadas") res = res.filter(p => p.ruta_no_operada);
-    else if (filtroEstado === "sin_km") res = res.filter(p => p.sin_km_planificado);
+    else if (filtroEstado === "sin_km") res = res.filter(p => sinKmReal(p));
     else if (filtroEstado === "pausadas") res = res.filter(p => p.pausado);
 
     // Ordenamiento
@@ -6547,7 +6550,7 @@ function ListadoPagosDiarios() {
       noPagadas: filasFiltradas.filter(p => p.ns_categoria === "NO_PAGO_VIS<90%").length,
       alertas: filasFiltradas.filter(p => tieneAlerta(p)).length,
       noOperadas: filasFiltradas.filter(p => p.ruta_no_operada).length,
-      sinKm: filasFiltradas.filter(p => p.sin_km_planificado).length,
+      sinKm: filasFiltradas.filter(p => sinKmReal(p)).length,
       pausadas: filasFiltradas.filter(p => p.pausado).length,
       pagoMeli: filasFiltradas.reduce((s, p) => s + Number(p.pago_meli || 0), 0),
       margenPct: (() => {
@@ -6947,9 +6950,9 @@ function ListadoPagosDiarios() {
                 </div>
               )}
               {totales.sinKm > 0 && (
-                <div onClick={() => setFiltroEstado(filtroEstado === "sin_km" ? "todas" : "sin_km")} title="Rutas sin KM real ni planificado — ingresar KM manual y recalcular"
+                <div onClick={() => setFiltroEstado(filtroEstado === "sin_km" ? "todas" : "sin_km")} title="Rutas sin KM real (pagadas con planificado/manual o sin KM) — el analista puede ingresar el KM manual"
                   style={card({ background: "#e0f2fe", border: `2px solid ${filtroEstado === "sin_km" ? "#0284c7" : "#7dd3fc"}`, cursor: "pointer" })}>
-                  <div style={lbl("#075985")}>Sin KM {filtroEstado === "sin_km" ? "(filtrando)" : ""}</div>
+                  <div style={lbl("#075985")}>Sin KM real {filtroEstado === "sin_km" ? "(filtrando)" : ""}</div>
                   <div style={big("#075985")}>{totales.sinKm}</div>
                   <div style={hint("#075985")}>📏 clic para ingresar manual</div>
                 </div>
@@ -6980,7 +6983,7 @@ function ListadoPagosDiarios() {
           { id: "no_pagadas", l: `No pagadas (${pagos.filter(p => p.ns_categoria === "NO_PAGO_VIS<90%").length})` },
           { id: "con_alerta", l: `Con alertas (${pagos.filter(p => tieneAlerta(p)).length})` },
           { id: "no_operadas", l: `Sin movimiento (${pagos.filter(p => p.ruta_no_operada).length})` },
-          { id: "sin_km", l: `Sin KM planif. (${pagos.filter(p => p.sin_km_planificado).length})` },
+          { id: "sin_km", l: `Sin KM real (${pagos.filter(p => sinKmReal(p)).length})` },
           { id: "pausadas", l: `Pausadas (${pagos.filter(p => p.pausado).length})` },
         ].map(({ id, l }) => (
           <button key={id} onClick={() => setFiltroEstado(id)}
@@ -7087,22 +7090,34 @@ function ListadoPagosDiarios() {
                       if (s.startsWith("open") || s.includes("abier") || s.includes("progress") || s.includes("ruta")) return <span style={{ color: "#ca8a04", fontWeight: 600 }}>Abierta</span>;
                       return <span style={{ color: "#7c3aed", fontWeight: 600 }}>{r.status_final}</span>;
                     })()}</td>
-                    <td style={{ ...tdStyle(), textAlign: "right" }}>{r.sin_km_planificado ? (
-                      r.km_manual != null ? (
-                        <span title="KM manual guardado (sin real ni planificado) — recalculá el día para aplicarlo al pago" style={{ color: "#0369a1", fontWeight: 600, whiteSpace: "nowrap" }}>✏️ {Number(r.km_manual).toFixed(1)}</span>
-                      ) : (
+                    <td style={{ ...tdStyle(), textAlign: "right" }}>{(() => {
+                      if (!sinKmReal(r)) return <span>{Number(r.km_recorridos || 0).toFixed(1)}</span>;
+                      // KM manual ya aplicado en el último cálculo
+                      if (r.km_fuente === "MANUAL") return <span title="KM manual aplicado al pago" style={{ color: "#0369a1", fontWeight: 600, whiteSpace: "nowrap" }}>✏️ {Number(r.km_recorridos || 0).toFixed(1)}</span>;
+                      // KM manual recién guardado, pendiente de recalcular
+                      if (r.km_manual != null) return <span title="KM manual guardado — recalculá el día para aplicarlo al pago" style={{ color: "#0369a1", fontWeight: 600, whiteSpace: "nowrap" }}>✏️ {Number(r.km_manual).toFixed(1)} ⏳</span>;
+                      // Editor abierto
+                      if (kmEdit[r.id] != null) return (
                         <span style={{ display: "inline-flex", gap: 3, alignItems: "center" }}>
-                          <input type="number" min="0" step="0.1" placeholder="KM" value={kmEdit[r.id] != null ? kmEdit[r.id] : ""}
+                          <input type="number" min="0" step="0.1" placeholder="KM" autoFocus value={kmEdit[r.id]}
                             onChange={e => setKmEdit(k => ({ ...k, [r.id]: e.target.value }))}
-                            onKeyDown={e => { if (e.key === "Enter") guardarKmManual(r); }}
+                            onKeyDown={e => { if (e.key === "Enter") guardarKmManual(r); if (e.key === "Escape") setKmEdit(k => { const n = { ...k }; delete n[r.id]; return n; }); }}
                             style={{ width: 52, padding: "2px 4px", border: "1px solid #7dd3fc", borderRadius: 4, fontSize: 11, textAlign: "right" }} />
                           <button onClick={() => guardarKmManual(r)} title="Guardar KM manual"
                             style={{ border: "none", background: "#0284c7", color: "#fff", borderRadius: 4, fontSize: 10, padding: "2px 6px", cursor: "pointer" }}>✓</button>
+                          <button onClick={() => setKmEdit(k => { const n = { ...k }; delete n[r.id]; return n; })} title="Cancelar"
+                            style={{ border: "1px solid #cbd5e1", background: "#fff", color: "#64748b", borderRadius: 4, fontSize: 10, padding: "2px 5px", cursor: "pointer" }}>✕</button>
                         </span>
-                      )
-                    ) : (
-                      <span>{Number(r.km_recorridos || 0).toFixed(1)}{r.km_manual != null ? <span title="KM manual aplicado" style={{ marginLeft: 3, fontSize: 9 }}>✏️</span> : null}</span>
-                    )}</td>
+                      );
+                      // Sin real: muestra el km vigente (planificado o 0) + botón para ingresar manual
+                      return (
+                        <span style={{ display: "inline-flex", gap: 4, alignItems: "center", whiteSpace: "nowrap" }}>
+                          <span title={r.km_fuente === "PLANIFICADO" ? "Pagado con KM planificado (sin real)" : "Sin KM"} style={{ color: "#0369a1" }}>{Number(r.km_recorridos || 0).toFixed(1)}{r.km_fuente === "PLANIFICADO" ? <sup style={{ fontSize: 8 }}>P</sup> : null}</span>
+                          <button onClick={() => setKmEdit(k => ({ ...k, [r.id]: "" }))} title="Ingresar KM manual"
+                            style={{ border: "1px solid #7dd3fc", background: "#e0f2fe", color: "#0284c7", borderRadius: 4, fontSize: 10, padding: "1px 5px", cursor: "pointer" }}>✎</button>
+                        </span>
+                      );
+                    })()}</td>
                     <td style={{ ...tdStyle(), textAlign: "right", color: "#0369a1", fontWeight: 600 }}>
                       {r.km_recorridos_meli != null ? Number(r.km_recorridos_meli).toFixed(1) : "\u2014"}
                     </td>
