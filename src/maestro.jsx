@@ -480,14 +480,21 @@ const VistaSnapshotSupervisores = ({ fecha, pais }) => {
   const [loading, setLoading] = useState(false);
   const [error, setError]   = useState(null);
   const [descargando, setDescargando] = useState(false);
+  // Progreso del Excel cuando el rango abarca varios días ("día 3/12")
+  const [progresoExcel, setProgresoExcel] = useState(null);
   // Rango de fechas para la descarga Excel (por defecto = la fecha que se ve).
   // El componente se remonta al cambiar `fecha`, así que se resetea solo a la fecha vista.
   const [excelDesde, setExcelDesde] = useState(fecha);
   const [excelHasta, setExcelHasta] = useState(fecha);
 
   // Mapeo sub-pestaña → vista SQL
+  // `rpc`: función Postgres que recibe la fecha como parámetro y filtra ANTES de
+  // agregar. Sin ella, el filtro `.eq("fecha", ...)` se aplica DESPUÉS de que la
+  // vista procesó todo el histórico (231k+ filas de meli_paquetes_entregados),
+  // lo que dispara `statement timeout`. Si una sub-pestaña no tiene `rpc`, se
+  // consulta la vista directo como antes.
   const VISTAS = {
-    ingreso:      { tabla: "vw_maestro_supervisores_auto", label: "Ingreso Maestro" },
+    ingreso:      { tabla: "vw_maestro_supervisores_auto", label: "Ingreso Maestro", rpc: "get_maestro_supervisores_dia" },
     rutas:        { tabla: "vw_rutas_citadas_auto",        label: "Rutas Citadas"  },
     noshow:       { tabla: "vw_rostering_vs_operativo",    label: "No Show"        },
     devoluciones: { tabla: "vw_devoluciones_auto",         label: "Devoluciones"   },
@@ -502,11 +509,10 @@ const VistaSnapshotSupervisores = ({ fecha, pais }) => {
       setLoading(true);
       setError(null);
       try {
-        const { data, error: err } = await sb
-          .from(VISTAS[subTab].tabla)
-          .select("*")
-          .eq("fecha", fecha)
-          .limit(5000);
+        const cfg = VISTAS[subTab];
+        const { data, error: err } = cfg.rpc
+          ? await sb.rpc(cfg.rpc, { p_fecha: fecha })
+          : await sb.from(cfg.tabla).select("*").eq("fecha", fecha).limit(5000);
         if (cancelado) return;
         if (err) {
           setError(err.message);
@@ -568,24 +574,47 @@ const VistaSnapshotSupervisores = ({ fecha, pais }) => {
       const desde = excelDesde <= excelHasta ? excelDesde : excelHasta;
       const hasta = excelHasta >= excelDesde ? excelHasta : excelDesde;
 
-      // Cargar las 4 vistas en paralelo POR RANGO (siempre todas, sin filtro SC)
-      const [
-        { data: dIng, error: eIng },
-        { data: dRut, error: eRut },
-        { data: dNS,  error: eNS  },
-        { data: dDev, error: eDev },
-      ] = await Promise.all([
-        sb.from("vw_maestro_supervisores_auto").select("*").gte("fecha", desde).lte("fecha", hasta).order("fecha").limit(100000),
-        sb.from("vw_rutas_citadas_auto").select("*").gte("fecha", desde).lte("fecha", hasta).order("fecha").limit(100000),
-        sb.from("vw_rostering_vs_operativo").select("*").gte("fecha", desde).lte("fecha", hasta).order("fecha").limit(100000),
-        sb.from("vw_devoluciones_auto").select("*").gte("fecha", desde).lte("fecha", hasta).order("fecha").limit(100000),
-      ]);
-
-      if (eIng || eRut || eNS || eDev) {
-        alert("Error al cargar datos: " + (eIng?.message || eRut?.message || eNS?.message || eDev?.message));
+      // ─── Carga DÍA POR DÍA (antes: una sola query por rango) ───────────────
+      // Un `.gte()/.lte()` sobre estas vistas no permite que Postgres empuje el
+      // filtro de fecha hacia abajo: agrega el histórico completo y recién
+      // después recorta el rango, lo que dispara `statement timeout` (8s en la
+      // API REST). Consultando un día por vez cada statement queda chico y
+      // rápido, incluso para rangos largos.
+      const dias = [];
+      for (let t = Date.parse(desde + "T00:00:00Z"); t <= Date.parse(hasta + "T00:00:00Z"); t += 86400000) {
+        dias.push(new Date(t).toISOString().slice(0, 10));
+      }
+      if (dias.length === 0) {
+        alert("Rango de fechas inválido.");
         setDescargando(false);
         return;
       }
+
+      // Trae un día de una fuente. Si falla, el error dice QUÉ fuente y QUÉ día
+      // (antes los 4 errores se colapsaban con `||` y no se sabía cuál falló).
+      const traerDia = async (etiqueta, dia, fn) => {
+        const { data, error: err } = await fn(dia);
+        if (err) throw new Error(`${etiqueta} · ${dia}: ${err.message}`);
+        return data || [];
+      };
+
+      const dIng = [], dRut = [], dNS = [], dDev = [];
+      for (let i = 0; i < dias.length; i++) {
+        const dia = dias[i];
+        setProgresoExcel(dias.length > 1 ? `día ${i + 1}/${dias.length}` : null);
+        const [pIng, pRut, pNS, pDev] = await Promise.all([
+          traerDia("Ingreso Maestro", dia, d =>
+            sb.rpc("get_maestro_supervisores_dia", { p_fecha: d })),
+          traerDia("Rutas Citadas", dia, d =>
+            sb.from("vw_rutas_citadas_auto").select("*").eq("fecha", d).limit(20000)),
+          traerDia("No Show", dia, d =>
+            sb.from("vw_rostering_vs_operativo").select("*").eq("fecha", d).limit(20000)),
+          traerDia("Devoluciones", dia, d =>
+            sb.from("vw_devoluciones_auto").select("*").eq("fecha", d).limit(20000)),
+        ]);
+        dIng.push(...pIng); dRut.push(...pRut); dNS.push(...pNS); dDev.push(...pDev);
+      }
+      setProgresoExcel(null);
 
       const wb = window.XLSX.utils.book_new();
 
@@ -713,6 +742,7 @@ const VistaSnapshotSupervisores = ({ fecha, pais }) => {
       alert("Error al generar el Excel: " + (err.message || err));
     } finally {
       setDescargando(false);
+      setProgresoExcel(null);
     }
   };
 
@@ -766,7 +796,7 @@ const VistaSnapshotSupervisores = ({ fecha, pais }) => {
               background: descargando ? "#9ca3af" : "#16a34a", color: "#fff",
               fontSize: 12, fontWeight: 700, cursor: descargando ? "wait" : "pointer",
               display: "flex", alignItems: "center", gap: 6 }}>
-            {descargando ? "⏳ Generando..." : "📥 Descargar Excel"}
+            {descargando ? (progresoExcel ? "⏳ " + progresoExcel : "⏳ Generando...") : "📥 Descargar Excel"}
           </button>
         </div>
       </div>
