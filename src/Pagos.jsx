@@ -5572,7 +5572,7 @@ function calcularAjusteVisitadoNS(pctVisitado, nsPct, cfg) {
   return { pct: 0, categoria: "NEUTRO", noPaga: false };
 }
 
-function calcularPagos({ maestro, snapshots, scZonas, especiales, matrizPrecios, aprobaciones, tarifasCobrar, cfg, calculadoAt, bonificaciones, placaEmpresa, traspasosPorRuta = {}, kmManualPorRuta = {}, kmDecisionPorRuta = {} }) {
+function calcularPagos({ maestro, snapshots, scZonas, especiales, matrizPrecios, aprobaciones, tarifasCobrar, cfg, calculadoAt, bonificaciones, placaEmpresa, traspasosPorRuta = {} }) {
   const errores = [];
   const filas = [];
 
@@ -5620,29 +5620,18 @@ function calcularPagos({ maestro, snapshots, scZonas, especiales, matrizPrecios,
     const ciclo = m.cluster_meli || null;
     const esSDD = (m.es_sdd === "SI" || m.es_sdd === true);  // SDD/SPOT lo da la vista (es_sdd, desde tipo_vehiculo_meli "...SDD")
 
-    // Km de pago: el REAL de MELI (km_recorridos_meli, route-detail) por decisión de gerencia (jul-2026).
-    // km_meli (TMS) sigue deprecado. Cadena cuando no hay real (> 0):
-    //   REAL → MANUAL del analista (km_manual_mx, corrige cualquier ruta sin real) → PLANIFICADO (con observación).
-    // Si no existe ninguno, la ruta queda SIN KM. Toda ruta sin real cae a la tarjeta "Sin KM real".
-    // DESVÍO: si |real - planif| supera el umbral (cfg km_desvio_alerta_pct, default 50%), la ruta cae a la
-    // tarjeta "Desvío KM" y el analista elige el KM de pago (km_decision_mx: REAL / PLANIFICADO / MANUAL).
-    const kmRealMeli = m.km_recorridos_meli != null ? Number(m.km_recorridos_meli) : null;  // crudo, se persiste tal cual
-    const kmRealPago = (kmRealMeli != null && kmRealMeli > 0) ? kmRealMeli : null;          // real válido para pagar
+    // Km de pago: SOLO el REAL de MELI (km_recorridos_meli, route-detail) — decisión de gerencia (jul-2026).
+    // Sin fallbacks: si no hay real, la ruta paga con 0 km y queda marcada (tarjeta "KM real bajo/ausente");
+    // la corrección del monto la hace el analista después, en la prefactura. Si el real existe pero es muy
+    // bajo frente al planificado (< cfg km_real_bajo_pct %, default 30), también se marca para revisión.
+    // km_meli (TMS) y km_planificados NO pagan; el planificado es solo informativo.
+    const kmRealMeli = m.km_recorridos_meli != null ? Number(m.km_recorridos_meli) : null;
     const kmPlanif = (m.km_planificados != null && Number(m.km_planificados) > 0) ? Number(m.km_planificados) : null;
-    const kmManual = (kmManualPorRuta && kmManualPorRuta[idRuta] != null) ? Number(kmManualPorRuta[idRuta]) : null;
-    const kmDec = (kmDecisionPorRuta && kmDecisionPorRuta[idRuta]) ? kmDecisionPorRuta[idRuta] : null;
-    let kmFuente = null, km = 0;
-    if (kmDec && kmDec.fuente === "REAL" && kmRealPago != null) { kmFuente = "REAL"; km = kmRealPago; }
-    else if (kmDec && kmDec.fuente === "PLANIFICADO" && kmPlanif != null) { kmFuente = "PLANIFICADO"; km = kmPlanif; }
-    else if (kmDec && kmDec.fuente === "MANUAL" && Number(kmDec.km) > 0) { kmFuente = "MANUAL"; km = Number(kmDec.km); }
-    else if (kmRealPago != null) { kmFuente = "REAL"; km = kmRealPago; }
-    else if (kmManual != null) { kmFuente = "MANUAL"; km = kmManual; }
-    else if (kmPlanif != null) { kmFuente = "PLANIFICADO"; km = kmPlanif; }
-    const sinKm = kmFuente == null;
-    const kmDecidido = kmDec != null && !sinKm;  // decisión del analista aplicada
-    const umbralDesvio = (cfg && cfg.km_desvio_alerta_pct != null) ? Number(cfg.km_desvio_alerta_pct) : 50;
-    const desvioPct = (kmRealPago != null && kmPlanif != null) ? Math.abs(kmRealPago - kmPlanif) / kmPlanif * 100 : null;
-    const kmDesvio = !kmDecidido && kmFuente === "REAL" && desvioPct != null && desvioPct > umbralDesvio;  // pendiente de decisión
+    const km = (kmRealMeli != null && kmRealMeli > 0) ? kmRealMeli : 0;
+    const umbralBajo = (cfg && cfg.km_real_bajo_pct != null) ? Number(cfg.km_real_bajo_pct) : 30;
+    const kmRealBajo = km <= 0 || (kmPlanif != null && km < kmPlanif * umbralBajo / 100);
+
+    // Datos REALES de MELI adicionales (kmRealMeli ya definido arriba: es el km de pago)
     const pctVisitadoReal = m.pct_no_visitado_real != null
       ? Math.round((100 - Number(m.pct_no_visitado_real)) * 100) / 100
       : null;
@@ -5675,12 +5664,10 @@ function calcularPagos({ maestro, snapshots, scZonas, especiales, matrizPrecios,
     if (!tipologia) obs.push(`Tipología no reconocida: "${vehiculoRaw}"`);
     if (!zona) obs.push(`SC no mapeado en sc_zonas_mx: ${sc}`);
     if (pctVisitado == null) obs.push("Sin % visitado en el snapshot");
-    if (sinKm) obs.push("SIN KM \u2014 sin real, manual ni planificado; tramo calculado con 0 km. Ingresar KM manual y recalcular");
-    else if (kmDecidido) obs.push(`KM elegido por analista: ${km} km (${kmFuente}) \u2014 desv\u00edo real/planificado revisado`);
-    else if (kmDesvio) obs.push(`DESV\u00cdO KM: real ${kmRealPago} vs planificado ${kmPlanif} (${desvioPct.toFixed(0)}%) \u2014 elegir KM de pago`);
-    else if (kmFuente === "MANUAL") obs.push(`KM real no disponible \u2014 se pag\u00f3 con KM manual del analista (${km} km)`);
-    else if (kmFuente === "PLANIFICADO") obs.push(`KM real no disponible \u2014 se pag\u00f3 con planificado (${km} km)`);
-    // km_meli (TMS) esta deprecado: el km de pago es el REAL de MELI (route-detail), con fallback manual → planificado.
+    if (kmRealBajo) obs.push(km <= 0
+      ? "SIN KM REAL \u2014 pagado con 0 km (tramo m\u00ednimo); corregir monto en la prefactura"
+      : `KM REAL MUY BAJO: ${km} km vs planificado ${kmPlanif} km \u2014 verificar y corregir en la prefactura si corresponde`);
+    // km_meli (TMS) y km_planificados no pagan: el km de pago es SOLO el real de MELI (route-detail).
     if (m.status_final && m.status_final !== "close") obs.push(`Status no cerrado: ${m.status_final} — revisar`);
 
     // Tarifa base
@@ -5844,12 +5831,9 @@ function calcularPagos({ maestro, snapshots, scZonas, especiales, matrizPrecios,
       zona,
       km_recorridos: km,
       km_recorridos_meli: kmRealMeli,
-      km_fuente: kmFuente,  // REAL | MANUAL | PLANIFICADO | null
-      km_desvio: kmDesvio,  // desvío real vs planificado sobre umbral, pendiente de decisión del analista
-      km_decision: kmDecidido ? kmDec.fuente : null,  // fuente elegida por el analista (si decidió)
-      km_planificados: m.km_planificados != null ? Number(m.km_planificados) : null,  // informativo, visible junto al km de pago
-      km_manual: kmFuente === "MANUAL" ? kmManual : null,
-      sin_km_planificado: sinKm,  // sin ningún KM (real/manual/planificado); nombre de columna heredado
+      km_planificados: m.km_planificados != null ? Number(m.km_planificados) : null,  // informativo, no paga
+      km_fuente: km > 0 ? "REAL" : null,  // trazabilidad en exports
+      sin_km_planificado: kmRealBajo,  // legado: hoy marca "KM real ausente o muy bajo" (corregir en prefactura)
       tramo_km: tramo,
       ciclo,
       envios_despachados: cargadosNS,  // total ajustado (cargados - traspasados); el warning queda en observaciones
@@ -6194,13 +6178,11 @@ function ListadoPagosDiarios() {
   };
   const alertasDe = (p) => (reglasAlerta || []).filter(r => r.activa && cumpleReglaAlerta(p, r));
   const tieneAlerta = (p) => alertasDe(p).length > 0;
-  // Ruta sin KM real: pagó con manual/planificado o no tiene ningún KM. Filas viejas (km_fuente null y sin flag) no cuentan.
-  const sinKmReal = (p) => (p.km_fuente != null && p.km_fuente !== "REAL") || p.sin_km_planificado === true;
+  // Ruta con KM real ausente o muy bajo (flag del motor; la corrección del monto se hace en la prefactura)
+  const kmRealBajoDe = (p) => p.sin_km_planificado === true;
   const [pausaModal, setPausaModal] = useState(null); // { r }
   const [pausaMotivo, setPausaMotivo] = useState("");
   const [pausando, setPausando] = useState(false);
-  const [kmEdit, setKmEdit] = useState({}); // id fila -> valor del input de KM manual
-  const [kmManualesPendientes, setKmManualesPendientes] = useState(0); // KM guardados que faltan aplicar (recalcular)
   const _quienPausa = () => { try { return (typeof usuario !== "undefined" && usuario && (usuario.nombre || usuario.email)) || "Brain"; } catch (e) { return "Brain"; } };
   const confirmarPausa = async () => {
     const r = pausaModal && pausaModal.r; if (!r) return;
@@ -6223,34 +6205,6 @@ function ListadoPagosDiarios() {
       if (error) throw error;
       setPagos(ps => ps.map(p => p.id === r.id ? { ...p, pausado: false, liberado_at: ahora, liberado_por: por } : p));
     } catch (e) { alert("Error reanudando: " + (e.message || e)); }
-  };
-  // Guarda el KM manual de una ruta sin km_planificados (km_manual_mx); se aplica al recalcular el día
-  const guardarKmManual = async (r) => {
-    const v = Number(kmEdit[r.id]);
-    if (!(v > 0)) { alert("Ingres\u00e1 un KM v\u00e1lido (mayor a 0)."); return; }
-    try {
-      const { error } = await sb.from("km_manual_mx").upsert(
-        { fecha: r.fecha, id_ruta: String(r.id_ruta), km: v, ingresado_por: _quienPausa(), ingresado_at: new Date().toISOString() },
-        { onConflict: "fecha,id_ruta" }
-      );
-      if (error) throw error;
-      setPagos(ps => ps.map(p => p.id === r.id ? { ...p, km_manual: v } : p));
-      setKmManualesPendientes(n => n + 1);
-    } catch (e) { alert("Error guardando KM manual: " + (e.message || e)); }
-  };
-  // Guarda la elección del analista ante un desvío real/planificado (km_decision_mx); se aplica al recalcular
-  const guardarKmDecision = async (r, fuente, kmVal) => {
-    if (fuente === "MANUAL" && !(Number(kmVal) > 0)) { alert("Ingres\u00e1 un KM v\u00e1lido (mayor a 0)."); return; }
-    try {
-      const { error } = await sb.from("km_decision_mx").upsert(
-        { fecha: r.fecha, id_ruta: String(r.id_ruta), fuente_elegida: fuente, km_elegido: fuente === "MANUAL" ? Number(kmVal) : null, decidido_por: _quienPausa(), decidido_at: new Date().toISOString() },
-        { onConflict: "fecha,id_ruta" }
-      );
-      if (error) throw error;
-      setPagos(ps => ps.map(p => p.id === r.id ? { ...p, km_decision: fuente } : p));
-      setKmEdit(k => { const n = { ...k }; delete n[r.id]; return n; });
-      setKmManualesPendientes(n => n + 1);
-    } catch (e) { alert("Error guardando decisi\u00f3n de KM: " + (e.message || e)); }
   };
 
   // Carga el mapa placa->empresa desde flota_terceros_mx (semana mas reciente gana)
@@ -6387,7 +6341,7 @@ function ListadoPagosDiarios() {
 
       const calculadoAt = new Date().toISOString();
 
-      const [mRes, sRes, zRes, mpRes, eRes, apRes, tcRes, cfgRes, fRes, kmRes, kdRes] = await Promise.all([
+      const [mRes, sRes, zRes, mpRes, eRes, apRes, tcRes, cfgRes, fRes] = await Promise.all([
         sb.from("vw_maestro_supervisores_auto").select("*").eq("fecha", fecha).limit(5000),
         sb.from("logistic_ayudantes_snapshots").select("*").gte("fecha", fechaSnapDesde).lte("fecha", fechaSnapHasta).limit(30000),
         sb.from("sc_zonas_mx").select("service_center_id, zona"),
@@ -6397,8 +6351,6 @@ function ListadoPagosDiarios() {
         sb.from("tarifas_cobrar_meli_mx").select("*").eq("activo", true),
         sb.from("config_pagos_mx").select("*"),
         sb.from("flota_terceros_mx").select("placa, empresa_transporte, fecha_hora_envio").order("fecha_hora_envio", { ascending: false }).limit(20000),
-        sb.from("km_manual_mx").select("id_ruta, km").eq("fecha", fecha),
-        sb.from("km_decision_mx").select("id_ruta, fuente_elegida, km_elegido").eq("fecha", fecha),
       ]);
 
       if (mRes.error) throw new Error("maestro supervisores: " + mRes.error.message);
@@ -6429,13 +6381,6 @@ function ListadoPagosDiarios() {
           traspasosPorRuta[k] = (traspasosPorRuta[k] || 0) + Number(a.paquetes_traspasados || 0);
         }
       } catch (e) { console.error("traspasos ambulancias:", e); }
-      // KM manuales del día (analista) — fallback cuando el snapshot no trae km_planificados
-      const kmManualPorRuta = {};
-      for (const k of ((kmRes && kmRes.data) || [])) kmManualPorRuta[String(k.id_ruta)] = Number(k.km);
-      // Decisiones del analista por desvío real/planificado
-      const kmDecisionPorRuta = {};
-      for (const d of ((kdRes && kdRes.data) || [])) kmDecisionPorRuta[String(d.id_ruta)] = { fuente: d.fuente_elegida, km: d.km_elegido };
-
       const { filas, errores } = calcularPagos({
         maestro,
         snapshots: sRes.data || [],
@@ -6449,8 +6394,6 @@ function ListadoPagosDiarios() {
         bonificaciones,
         placaEmpresa,
         traspasosPorRuta,
-        kmManualPorRuta,
-        kmDecisionPorRuta,
       });
 
       const { error: delError } = await sb.from("maestro_jornada_mx").delete().eq("fecha", fecha);
@@ -6507,8 +6450,6 @@ function ListadoPagosDiarios() {
       const { data: recargados } = await sb.from("maestro_jornada_mx")
         .select("*").eq("fecha", fecha).order("driver_name").limit(5000);
       setPagos(recargados || []);
-      setKmEdit({});
-      setKmManualesPendientes(0);
     } catch (e) {
       console.error(e);
       alert("Error en cálculo:\n\n" + e.message);
@@ -6556,8 +6497,7 @@ function ListadoPagosDiarios() {
     else if (filtroEstado === "no_pagadas") res = res.filter(p => p.ns_categoria === "NO_PAGO_VIS<90%");
     else if (filtroEstado === "con_alerta") res = res.filter(p => tieneAlerta(p));
     else if (filtroEstado === "no_operadas") res = res.filter(p => p.ruta_no_operada);
-    else if (filtroEstado === "sin_km") res = res.filter(p => sinKmReal(p));
-    else if (filtroEstado === "desvio_km") res = res.filter(p => p.km_desvio);
+    else if (filtroEstado === "km_bajo") res = res.filter(p => kmRealBajoDe(p));
     else if (filtroEstado === "pausadas") res = res.filter(p => p.pausado);
 
     // Ordenamiento
@@ -6587,8 +6527,7 @@ function ListadoPagosDiarios() {
       noPagadas: filasFiltradas.filter(p => p.ns_categoria === "NO_PAGO_VIS<90%").length,
       alertas: filasFiltradas.filter(p => tieneAlerta(p)).length,
       noOperadas: filasFiltradas.filter(p => p.ruta_no_operada).length,
-      sinKm: filasFiltradas.filter(p => sinKmReal(p)).length,
-      desvios: filasFiltradas.filter(p => p.km_desvio).length,
+      kmBajo: filasFiltradas.filter(p => kmRealBajoDe(p)).length,
       pausadas: filasFiltradas.filter(p => p.pausado).length,
       pagoMeli: filasFiltradas.reduce((s, p) => s + Number(p.pago_meli || 0), 0),
       margenPct: (() => {
@@ -6611,7 +6550,7 @@ function ListadoPagosDiarios() {
     if (filasFiltradas.length === 0) { alert("No hay datos para exportar"); return; }
     const headers = [
       "Fecha","Chofer","Patente","Vehículo","Tipología","Tipo Ruta","SC","Zona","ID Ruta","Ciclo",
-      "Km Pago","Km Planif.","Fuente KM","Envíos despachados","Envíos entregados","NS%","% Visitado Real","% No Visitado Real","No visitado %","Categoría NS",
+      "Km Pago (Real)","Km Planif.","Fuente KM","Envíos despachados","Envíos entregados","NS%","% Visitado Real","% No Visitado Real","No visitado %","Categoría NS",
       "Tarifa base","Ajuste NS","Estado auxiliar","Snapshots con helper","$ Auxiliar",
       "Pago bruto","Pago neto","Pago MELI","Observaciones"
     ];
@@ -6683,7 +6622,7 @@ function ListadoPagosDiarios() {
       const empresaDe = (p) => empSem[semanaInventario(p.fecha) + "||" + normalizarPlaca(p.placa)] || empresaMap[normalizarPlaca(p.placa)] || "";
       const headers = [
         "Fecha","Chofer","Patente","Empresa","Vehículo","Tipología","Tipo Ruta","SC","Zona","ID Ruta","Ciclo",
-        "Km Pago","Km Planif.","Fuente KM","Envíos despachados","Envíos entregados","NS%","% Visitado Real","% No Visitado Real","No visitado %","Categoría NS",
+        "Km Pago (Real)","Km Planif.","Fuente KM","Envíos despachados","Envíos entregados","NS%","% Visitado Real","% No Visitado Real","No visitado %","Categoría NS",
         "Tarifa base","Ajuste NS","Estado auxiliar","Snapshots con helper","$ Auxiliar",
         "Pago bruto","Pago neto","Pago MELI","Observaciones"
       ];
@@ -6925,19 +6864,6 @@ function ListadoPagosDiarios() {
         </div>
       )}
 
-      {/* Banner: KM manuales guardados pendientes de recalcular */}
-      {kmManualesPendientes > 0 && (
-        <div style={{ display: "flex", alignItems: "center", gap: 10, background: "#e0f2fe", border: "1px solid #7dd3fc", borderRadius: 6, padding: "10px 14px", marginBottom: 12, fontSize: 12 }}>
-          <div style={{ flex: 1, color: "#075985" }}>
-            <b>{kmManualesPendientes}</b> {kmManualesPendientes === 1 ? "cambio de KM guardado" : "cambios de KM guardados"} (manuales o decisiones por desvío). Recalculá el día para aplicarlos al pago.
-          </div>
-          <button onClick={calcularDia} disabled={calculando}
-            style={{ padding: "6px 14px", borderRadius: 4, border: "none", background: "#0284c7", color: "#fff", fontSize: 12, fontWeight: 600, cursor: calculando ? "wait" : "pointer" }}>
-            Recalcular
-          </button>
-        </div>
-      )}
-
       {/* KPIs (compactos: caben todas las tarjetas en una fila) */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(106px, 1fr))", gap: 8, marginBottom: 12 }}>
         {(() => {
@@ -6987,20 +6913,12 @@ function ListadoPagosDiarios() {
                   <div style={hint("#92400e")}>clic para filtrar</div>
                 </div>
               )}
-              {totales.sinKm > 0 && (
-                <div onClick={() => setFiltroEstado(filtroEstado === "sin_km" ? "todas" : "sin_km")} title="Rutas sin KM real (pagadas con planificado/manual o sin KM) — el analista puede ingresar el KM manual"
-                  style={card({ background: "#e0f2fe", border: `2px solid ${filtroEstado === "sin_km" ? "#0284c7" : "#7dd3fc"}`, cursor: "pointer" })}>
-                  <div style={lbl("#075985")}>Sin KM real {filtroEstado === "sin_km" ? "(filtrando)" : ""}</div>
-                  <div style={big("#075985")}>{totales.sinKm}</div>
-                  <div style={hint("#075985")}>📏 clic para ingresar manual</div>
-                </div>
-              )}
-              {totales.desvios > 0 && (
-                <div onClick={() => setFiltroEstado(filtroEstado === "desvio_km" ? "todas" : "desvio_km")} title="Rutas donde el KM real difiere demasiado del planificado — el analista elige el KM de pago"
-                  style={card({ background: "#fdf2f8", border: `2px solid ${filtroEstado === "desvio_km" ? "#db2777" : "#f9a8d4"}`, cursor: "pointer" })}>
-                  <div style={lbl("#9d174d")}>Desvío KM {filtroEstado === "desvio_km" ? "(filtrando)" : ""}</div>
-                  <div style={big("#9d174d")}>{totales.desvios}</div>
-                  <div style={hint("#9d174d")}>⚖ real vs planif · clic para decidir</div>
+              {totales.kmBajo > 0 && (
+                <div onClick={() => setFiltroEstado(filtroEstado === "km_bajo" ? "todas" : "km_bajo")} title="Rutas sin KM real o con KM real muy bajo vs planificado — corregir monto en la prefactura"
+                  style={card({ background: "#e0f2fe", border: `2px solid ${filtroEstado === "km_bajo" ? "#0284c7" : "#7dd3fc"}`, cursor: "pointer" })}>
+                  <div style={lbl("#075985")}>KM real bajo/ausente {filtroEstado === "km_bajo" ? "(filtrando)" : ""}</div>
+                  <div style={big("#075985")}>{totales.kmBajo}</div>
+                  <div style={hint("#075985")}>📏 corregir en prefactura</div>
                 </div>
               )}
               {pagos.filter(p => p.pausado).length > 0 && (
@@ -7029,8 +6947,7 @@ function ListadoPagosDiarios() {
           { id: "no_pagadas", l: `No pagadas (${pagos.filter(p => p.ns_categoria === "NO_PAGO_VIS<90%").length})` },
           { id: "con_alerta", l: `Con alertas (${pagos.filter(p => tieneAlerta(p)).length})` },
           { id: "no_operadas", l: `Sin movimiento (${pagos.filter(p => p.ruta_no_operada).length})` },
-          { id: "sin_km", l: `Sin KM real (${pagos.filter(p => sinKmReal(p)).length})` },
-          { id: "desvio_km", l: `Desvío KM (${pagos.filter(p => p.km_desvio).length})` },
+          { id: "km_bajo", l: `KM real bajo (${pagos.filter(p => kmRealBajoDe(p)).length})` },
           { id: "pausadas", l: `Pausadas (${pagos.filter(p => p.pausado).length})` },
         ].map(({ id, l }) => (
           <button key={id} onClick={() => setFiltroEstado(id)}
@@ -7088,7 +7005,7 @@ function ListadoPagosDiarios() {
                 <Th onClick={() => toggleOrder("service_center_id")} center>SC · Zona{ordIcon("service_center_id")}</Th>
                 <Th onClick={() => toggleOrder("id_ruta")}>ID Ruta{ordIcon("id_ruta")}</Th>
                 <Th onClick={() => toggleOrder("status_final")} center>Estado{ordIcon("status_final")}</Th>
-                <Th onClick={() => toggleOrder("km_recorridos")} right>Km Pago{ordIcon("km_recorridos")}</Th>
+                <Th onClick={() => toggleOrder("km_recorridos")} right>Km Pago (Real){ordIcon("km_recorridos")}</Th>
                 <Th onClick={() => toggleOrder("km_planificados")} right>Km Planif.{ordIcon("km_planificados")}</Th>
                 <Th onClick={() => toggleOrder("ns_pct")} right>NS%{ordIcon("ns_pct")}</Th>
                 <Th onClick={() => toggleOrder("pct_visitado_real")} right>% Visitado{ordIcon("pct_visitado_real")}</Th>
@@ -7137,63 +7054,10 @@ function ListadoPagosDiarios() {
                       if (s.startsWith("open") || s.includes("abier") || s.includes("progress") || s.includes("ruta")) return <span style={{ color: "#ca8a04", fontWeight: 600 }}>Abierta</span>;
                       return <span style={{ color: "#7c3aed", fontWeight: 600 }}>{r.status_final}</span>;
                     })()}</td>
-                    <td style={{ ...tdStyle(), textAlign: "right" }}>{(() => {
-                      // Desvío real/planificado pendiente: el analista elige el KM de pago
-                      if (r.km_desvio) {
-                        if (r.km_decision) return <span title={`Decisi\u00f3n guardada (${r.km_decision}) \u2014 recalcul\u00e1 el d\u00eda para aplicarla`} style={{ color: "#9d174d", fontWeight: 600, whiteSpace: "nowrap" }}>⚖ {r.km_decision === "PLANIFICADO" ? Number(r.km_planificados || 0).toFixed(1) : Number(r.km_recorridos || 0).toFixed(1)} ⏳</span>;
-                        if (kmEdit[r.id] != null) return (
-                          <span style={{ display: "inline-flex", gap: 3, alignItems: "center" }}>
-                            <input type="number" min="0" step="0.1" placeholder="KM" autoFocus value={kmEdit[r.id]}
-                              onChange={e => setKmEdit(k => ({ ...k, [r.id]: e.target.value }))}
-                              onKeyDown={e => { if (e.key === "Enter") guardarKmDecision(r, "MANUAL", kmEdit[r.id]); if (e.key === "Escape") setKmEdit(k => { const n = { ...k }; delete n[r.id]; return n; }); }}
-                              style={{ width: 52, padding: "2px 4px", border: "1px solid #f9a8d4", borderRadius: 4, fontSize: 11, textAlign: "right" }} />
-                            <button onClick={() => guardarKmDecision(r, "MANUAL", kmEdit[r.id])} title="Guardar KM manual"
-                              style={{ border: "none", background: "#db2777", color: "#fff", borderRadius: 4, fontSize: 10, padding: "2px 6px", cursor: "pointer" }}>✓</button>
-                            <button onClick={() => setKmEdit(k => { const n = { ...k }; delete n[r.id]; return n; })} title="Cancelar"
-                              style={{ border: "1px solid #cbd5e1", background: "#fff", color: "#64748b", borderRadius: 4, fontSize: 10, padding: "2px 5px", cursor: "pointer" }}>✕</button>
-                          </span>
-                        );
-                        return (
-                          <select value="" title={`Desv\u00edo: real ${Number(r.km_recorridos_meli || 0).toFixed(1)} vs planificado ${Number(r.km_planificados || 0).toFixed(1)} km \u2014 elegir KM de pago`}
-                            onChange={e => { const v = e.target.value; if (v === "MANUAL") setKmEdit(k => ({ ...k, [r.id]: "" })); else if (v) guardarKmDecision(r, v, null); }}
-                            style={{ fontSize: 10, fontWeight: 600, border: "1px solid #f9a8d4", borderRadius: 4, padding: "2px 3px", color: "#9d174d", background: "#fdf2f8", cursor: "pointer", maxWidth: 110 }}>
-                            <option value="" disabled>⚠ {Number(r.km_recorridos || 0).toFixed(0)} km · elegir…</option>
-                            <option value="REAL">Real ({Number(r.km_recorridos_meli || 0).toFixed(1)})</option>
-                            <option value="PLANIFICADO">Planif. ({Number(r.km_planificados || 0).toFixed(1)})</option>
-                            <option value="MANUAL">Manual…</option>
-                          </select>
-                        );
-                      }
-                      // Decisión de desvío ya aplicada en el último cálculo
-                      if (r.km_decision) return <span title={`KM elegido por analista (${r.km_decision})`} style={{ color: "#9d174d", fontWeight: 600, whiteSpace: "nowrap" }}>⚖ {Number(r.km_recorridos || 0).toFixed(1)}</span>;
-                      if (!sinKmReal(r)) return <span>{Number(r.km_recorridos || 0).toFixed(1)}</span>;
-                      // KM manual ya aplicado en el último cálculo
-                      if (r.km_fuente === "MANUAL") return <span title="KM manual aplicado al pago" style={{ color: "#0369a1", fontWeight: 600, whiteSpace: "nowrap" }}>✏️ {Number(r.km_recorridos || 0).toFixed(1)}</span>;
-                      // KM manual recién guardado, pendiente de recalcular
-                      if (r.km_manual != null) return <span title="KM manual guardado — recalculá el día para aplicarlo al pago" style={{ color: "#0369a1", fontWeight: 600, whiteSpace: "nowrap" }}>✏️ {Number(r.km_manual).toFixed(1)} ⏳</span>;
-                      // Editor abierto
-                      if (kmEdit[r.id] != null) return (
-                        <span style={{ display: "inline-flex", gap: 3, alignItems: "center" }}>
-                          <input type="number" min="0" step="0.1" placeholder="KM" autoFocus value={kmEdit[r.id]}
-                            onChange={e => setKmEdit(k => ({ ...k, [r.id]: e.target.value }))}
-                            onKeyDown={e => { if (e.key === "Enter") guardarKmManual(r); if (e.key === "Escape") setKmEdit(k => { const n = { ...k }; delete n[r.id]; return n; }); }}
-                            style={{ width: 52, padding: "2px 4px", border: "1px solid #7dd3fc", borderRadius: 4, fontSize: 11, textAlign: "right" }} />
-                          <button onClick={() => guardarKmManual(r)} title="Guardar KM manual"
-                            style={{ border: "none", background: "#0284c7", color: "#fff", borderRadius: 4, fontSize: 10, padding: "2px 6px", cursor: "pointer" }}>✓</button>
-                          <button onClick={() => setKmEdit(k => { const n = { ...k }; delete n[r.id]; return n; })} title="Cancelar"
-                            style={{ border: "1px solid #cbd5e1", background: "#fff", color: "#64748b", borderRadius: 4, fontSize: 10, padding: "2px 5px", cursor: "pointer" }}>✕</button>
-                        </span>
-                      );
-                      // Sin real: muestra el km vigente (planificado o 0) + botón para ingresar manual
-                      return (
-                        <span style={{ display: "inline-flex", gap: 4, alignItems: "center", whiteSpace: "nowrap" }}>
-                          <span title={r.km_fuente === "PLANIFICADO" ? "Pagado con KM planificado (sin real)" : "Sin KM"} style={{ color: "#0369a1" }}>{Number(r.km_recorridos || 0).toFixed(1)}{r.km_fuente === "PLANIFICADO" ? <sup style={{ fontSize: 8 }}>P</sup> : null}</span>
-                          <button onClick={() => setKmEdit(k => ({ ...k, [r.id]: "" }))} title="Ingresar KM manual"
-                            style={{ border: "1px solid #7dd3fc", background: "#e0f2fe", color: "#0284c7", borderRadius: 4, fontSize: 10, padding: "1px 5px", cursor: "pointer" }}>✎</button>
-                        </span>
-                      );
-                    })()}</td>
-                    <td style={{ ...tdStyle(), textAlign: "right", color: "#64748b" }} title="KM planificado (informativo; el pago usa el real)">
+                    <td style={{ ...tdStyle(), textAlign: "right" }}>{kmRealBajoDe(r)
+                      ? <span title="KM real ausente o muy bajo — pagado tal cual; corregir monto en la prefactura" style={{ color: "#dc2626", fontWeight: 700, whiteSpace: "nowrap" }}>⚠ {Number(r.km_recorridos || 0).toFixed(1)}</span>
+                      : <span>{Number(r.km_recorridos || 0).toFixed(1)}</span>}</td>
+                    <td style={{ ...tdStyle(), textAlign: "right", color: "#64748b" }} title="KM planificado (informativo; el pago usa solo el real)">
                       {r.km_planificados != null ? Number(r.km_planificados).toFixed(1) : "\u2014"}
                     </td>
                     <td style={{ ...tdStyle(), textAlign: "right" }}>
@@ -9721,7 +9585,7 @@ function ConfigReglasNS() {
     { k: "ns_castigo_max", l: "NS máximo para castigo (%)", h: "NS menor a esto castiga" },
     { k: "ns_premio_pct", l: "Premio (%)", h: "Se suma a la tarifa" },
     { k: "ns_castigo_pct", l: "Castigo (%)", h: "Se resta de la tarifa" },
-    { k: "km_desvio_alerta_pct", l: "Desvío KM real vs planif. (%)", h: "Diferencia % que dispara la tarjeta Desvío KM (default 50)" },
+    { k: "km_real_bajo_pct", l: "KM real muy bajo vs planif. (%)", h: "Real bajo este % del planificado se marca para corregir en prefactura (default 30)" },
   ];
 
   useEffect(() => { cargar(); }, []);
