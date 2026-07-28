@@ -203,7 +203,9 @@ function ModuloMaestroCL() {
   const texto = busca.trim().toLowerCase();
   const coincide = (...campos) => !texto || campos.some(c => String(c ?? "").toLowerCase().includes(texto));
   const jornadaVista = jornada
-    .filter(r => (!soloReparto || r.is_line_haul === false))
+    // Tolerante a NULL a propósito: una ruta sin clasificar se trata como última
+    // milla en vez de desaparecer de la vista sin explicación.
+    .filter(r => (!soloReparto || r.is_line_haul !== true))
     .filter(r => !cecos || r.cecos === cecos)
     .filter(r => coincide(r.id_viaje, r.patente, r.conductor, r.cecos, r.comuna_primera_parada, r.comuna_ultima_parada, r.ciclo));
   const devolVista = devol
@@ -215,6 +217,7 @@ function ModuloMaestroCL() {
 
   const listaCecos = [...new Set(jornada.map(r => r.cecos).filter(Boolean))].sort();
   const nLineHaul = jornada.filter(r => r.is_line_haul === true).length;
+  const nSinClasificar = jornada.filter(r => r.is_line_haul === null || r.is_line_haul === undefined).length;
 
   // Totales de lo que se está viendo (respetan los filtros)
   const tot = jornadaVista.reduce((a, r) => ({
@@ -241,7 +244,9 @@ function ModuloMaestroCL() {
     {
       id: "viajes", rotulo: "Viajes", color: NAVY,
       valor: fmt(jornadaVista.length),
-      detalle: soloReparto ? "última milla" : `incluye ${fmt(nLineHaul)} line haul`,
+      detalle: soloReparto
+        ? `última milla${nSinClasificar ? ` · ${fmt(nSinClasificar)} sin clasificar` : ""}`
+        : `incluye ${fmt(nLineHaul)} line haul`,
       que: "Cada ruta que MELI generó para el día. Un viaje equivale a una fila del maestro: un vehículo con su conductor haciendo un recorrido.",
       como: soloReparto
         ? `Se cuentan solo las rutas de última milla, las que reparten a clientes. Quedan fuera ${fmt(nLineHaul)} de Line Haul, que son transferencias entre centros; para verlas, activa "Incluir Line Haul".`
@@ -381,9 +386,13 @@ function ModuloMaestroCL() {
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 8, paddingBottom: 8 }}>
             <span style={{ fontSize: 11.5, color: "#8a94a6", fontWeight: 700 }}>DÍA OPERATIVO</span>
-            <select className="mj-input" value={fecha} onChange={e => setFecha(e.target.value)}>
-              {dias.map(f => <option key={f} value={f}>{f}</option>)}
-            </select>
+            <input className="mj-input" type="date" value={fecha}
+                   min={dias.length ? dias[dias.length - 1] : undefined}
+                   max={dias.length ? dias[0] : undefined}
+                   onChange={e => e.target.value && setFecha(e.target.value)} />
+            {dias.length > 0 && !dias.includes(fecha) && (
+              <span style={{ fontSize: 11, color: "#a16207" }}>sin datos ese día</span>
+            )}
             {resumen?.ultima_captura && (
               <span style={{ fontSize: 11, color: "#94a3b8" }}>
                 última captura {resumen.ultima_captura_chile || horaChile(resumen.ultima_captura)}

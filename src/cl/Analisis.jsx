@@ -466,9 +466,13 @@ function ModuloAnalisisCL() {
             ) : (
               <Fragment>
                 <span style={{ fontSize: 11.5, color: "#8a94a6", fontWeight: 700 }}>DÍA</span>
-                <select className="an-input" value={fecha} onChange={e => setFecha(e.target.value)}>
-                  {dias.map(f => <option key={f} value={f}>{f}</option>)}
-                </select>
+                <input className="an-input" type="date" value={fecha}
+                       min={dias.length ? dias[dias.length - 1] : undefined}
+                       max={dias.length ? dias[0] : undefined}
+                       onChange={e => e.target.value && setFecha(e.target.value)} />
+                {dias.length > 0 && !dias.includes(fecha) && (
+                  <span style={{ fontSize: 11, color: "#a16207" }}>sin datos ese día</span>
+                )}
               </Fragment>
             )}
           </div>
