@@ -19,6 +19,16 @@ const CL_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJ
 // PostgREST devuelve bigint y numeric como texto: hay que convertir antes de sumar.
 const n = (v) => (v === null || v === undefined || v === "" ? 0 : Number(v));
 const fmt = (v) => n(v).toLocaleString("es-CL");
+// Los timestamptz llegan en UTC. Mostrarlos en crudo daba horas imposibles
+// (00:10 cuando en Chile eran las 20:10). Cuando la vista ya trae la hora
+// convertida se usa esa; este helper cubre el resto.
+const horaChile = (ts) => {
+  if (!ts) return "—";
+  try {
+    return new Intl.DateTimeFormat("es-CL", { timeZone: "America/Santiago",
+      hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(ts));
+  } catch (e) { return "—"; }
+};
 const NAVY = "#1a3a6b";
 const ORANGE = "#F47B20";
 
@@ -375,7 +385,7 @@ function ModuloMaestroCL() {
             </select>
             {resumen?.ultima_captura && (
               <span style={{ fontSize: 11, color: "#94a3b8" }}>
-                última captura {String(resumen.ultima_captura).slice(11, 16)} UTC
+                última captura {resumen.ultima_captura_chile || horaChile(resumen.ultima_captura)}
               </span>
             )}
           </div>
@@ -544,7 +554,7 @@ function ModuloMaestroCL() {
                           <td style={{ color: "#475569", maxWidth: 170, overflow: "hidden", textOverflow: "ellipsis" }}>{r.receptor || "—"}</td>
                           <td style={{ color: "#475569" }}>{r.comuna || "—"}</td>
                           <td className="num">{r.parada ?? "—"}</td>
-                          <td style={{ color: "#94a3b8" }}>{r.ocurrido_at ? String(r.ocurrido_at).slice(11, 16) : "—"}</td>
+                          <td style={{ color: "#94a3b8" }}>{r.hora_chile || horaChile(r.ocurrido_at)}</td>
                         </tr>
                       ))}
                       {!devolVista.length && (
@@ -670,6 +680,7 @@ const COLS_DEVOL = [
   { titulo: "COMUNA", campo: "comuna" },
   { titulo: "REGION", campo: "region" },
   { titulo: "PARADA", campo: "parada" },
+  { titulo: "HORA_CHILE", campo: "hora_chile" },
 ];
 const COLS_TRASP = [
   { titulo: "FECHA", campo: "fecha_operativa" },
