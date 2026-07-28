@@ -180,6 +180,9 @@ function ModuloAnalisisCL() {
   const [conductores, setConductores] = useState([]);
   const [motivos, setMotivos] = useState([]);
   const [tiempos, setTiempos] = useState([]);
+  const [nsSc, setNsSc] = useState([]);
+  const [nsDia, setNsDia] = useState(null);
+  const [motivosClas, setMotivosClas] = useState([]);
   // ajustes
   const [config, setConfig] = useState([]);
   const [guardando, setGuardando] = useState("");
@@ -194,14 +197,18 @@ function ModuloAnalisisCL() {
   }, []);
 
   const cargarCerrado = useCallback(async (f) => {
-    const [d, sc, cond, mot, tie] = await Promise.all([
+    const [d, sc, cond, mot, tie, ns, nsd, mcl] = await Promise.all([
       api(`vw_kpi_dia?fecha=eq.${f}`),
       api(`vw_kpi_por_sc?fecha=eq.${f}&order=ranking_entrega`),
       api(`vw_kpi_conductores?fecha=eq.${f}&order=ranking_entregas&limit=500`),
       api(`vw_kpi_motivos_sc?fecha=eq.${f}&order=paquetes.desc&limit=300`),
       api(`vw_kpi_tiempos?fecha=eq.${f}&order=horas_ruta.desc.nullslast&limit=500`),
+      api(`vw_ns_por_sc?fecha=eq.${f}`),
+      api(`vw_ns_dia?fecha=eq.${f}`),
+      api(`vw_motivos_clasificados`),
     ]);
     setKpiDia(d[0] || null); setKpiSc(sc); setConductores(cond); setMotivos(mot); setTiempos(tie);
+    setNsSc(ns); setNsDia(nsd[0] || null); setMotivosClas(mcl);
   }, []);
 
   // arranque
@@ -261,15 +268,13 @@ function ModuloAnalisisCL() {
   const frescura = reparto.length ? Math.min(...reparto.map(r => n(r.hace_minutos))) : null;
   const horasCierre = reparto.length ? n(reparto[0].horas_hasta_cierre) : null;
 
-  // ── Nivel de servicio (nomenclatura del Excel: ácido vs justificado) ─────
-  const nsDe = (fila) => {
-    const carg = n(fila.cargados), ent = n(fila.entregados), tras = n(fila.traspasos);
-    const acido = carg > 0 ? (100 * ent / carg) : null;
-    const base = carg - tras;
-    const justificado = base > 0 ? (100 * ent / base) : null;
-    return { acido, justificado };
-  };
-  const nsDia = kpiDia ? nsDe(kpiDia) : { acido: null, justificado: null };
+  // ── Nivel de servicio ────────────────────────────────────────────────────
+  // El cálculo lo hace la base (vw_ns_por_sc / vw_ns_dia). Antes se calculaba acá
+  // restando los traspasos del denominador y daba valores imposibles, sobre 100%:
+  // los traspasos ya son neutros porque MELI mueve el paquete de una ruta a otra.
+  const nsPorCecos = {};
+  for (const r of nsSc) nsPorCecos[r.cecos] = r;
+  const nsDe = (fila) => nsPorCecos[fila.cecos] || {};
 
   // ── Tarjetas del día en curso ────────────────────────────────────────────
   const KPIS_CURSO = [
@@ -322,16 +327,20 @@ function ModuloAnalisisCL() {
 
   // ── Tarjetas del día cerrado ─────────────────────────────────────────────
   const KPIS_CERRADO = kpiDia ? [
-    { id: "ns", rotulo: "Nivel de servicio", color: VERDE, valor: pct1(nsDia.acido),
-      detalle: `justificado ${pct1(nsDia.justificado)}`,
-      que: "Qué porcentaje de la carga del día llegó a destino. Se muestran las dos lecturas que usa el maestro en Excel: la ácida y la justificada.",
-      como: "Ácido = entregados ÷ cargados: castiga todo lo que no se entregó, sin excepciones. Justificado = entregados ÷ (cargados − traspasos): descuenta del denominador los paquetes que pasaron a otra ruta, porque esa ruta los entregó.",
-      ojo: "La definición de justificado está inferida de las columnas NS del Excel. Si el criterio oficial de la operación es otro, hay que ajustarlo antes de usarlo para metas.",
+    { id: "ns", rotulo: "Nivel de servicio", color: VERDE,
+      valor: nsDia ? pct1(nsDia.ns) : "—",
+      detalle: nsDia && nsDia.ns_ajustado !== null
+        ? `ajustado ${pct1(nsDia.ns_ajustado)}${nsDia.ajustado_provisorio ? " (provisorio)" : ""}` : null,
+      que: "Qué porcentaje de la carga del día llegó a destino.",
+      como: "Entregados ÷ cargados. Los traspasos NO se descuentan: cuando un paquete pasa de una ruta a otra, MELI lo saca del total de la primera y lo suma al de la segunda, así que ya están contabilizados. El ajustado descuenta del denominador solo las devoluciones clasificadas como ajenas al transportista (datos incompletos, rechazo del cliente, zona inaccesible).",
+      ojo: nsDia && nsDia.ajustado_provisorio
+        ? "El NS ajustado es PROVISORIO: hay motivos de devolución sin revisar en la clasificación. No usarlo para metas hasta validar cuáles motivos son responsabilidad del transportista y cuáles no."
+        : "El NS ajustado depende de cómo se clasifiquen los motivos de devolución, que es una decisión de la operación.",
       desglose: () => ({ titulo: "Nivel de servicio por CECOS", columnas: [
         { t: "CECOS" }, { t: "Cargados", num: true }, { t: "Entregados", num: true },
-        { t: "Traspasos", num: true }, { t: "NS ácido", num: true }, { t: "NS justificado", num: true }],
-        filas: kpiSc.map(s => { const ns = nsDe(s);
-          return [s.cecos, fmt(s.cargados), fmt(s.entregados), fmt(s.traspasos), pct1(ns.acido), pct1(ns.justificado)]; }) }) },
+        { t: "Devueltos", num: true }, { t: "Ajenas", num: true }, { t: "NS", num: true }, { t: "NS ajustado", num: true }],
+        filas: nsSc.map(r => [r.cecos, fmt(r.cargados), fmt(r.entregados), fmt(r.devueltos),
+          fmt(r.dev_no_imputables), pct1(r.ns), pct1(r.ns_ajustado)]) }) },
     { id: "entregados", rotulo: "Entregados", color: NAVY, valor: fmt(kpiDia.entregados),
       detalle: `${fmt(kpiDia.viajes)} viajes · ${fmt(kpiDia.paradas)} paradas`,
       que: "Paquetes que llegaron a destino en el día.",
@@ -355,7 +364,7 @@ function ModuloAnalisisCL() {
       detalle: "pasaron a otra ruta",
       que: "Paquetes que salieron en una ruta y se entregaron a otra durante el día. En el Excel son los D_JUSTIFICADOS.",
       como: "Paquetes marcados como transferidos por MELI, con su ruta de destino identificada.",
-      ojo: "Se concentran fuertemente en la Región Metropolitana: el 25 de julio SRM1 tuvo 399 traspasos (13% de su carga) y SVP3 ninguno. Si el ranking se hace por NS ácido, los centros que traspasan quedan penalizados por una práctica que puede ser operativamente correcta.",
+      ojo: "Se concentran fuertemente en la Región Metropolitana: el 25 de julio SRM1 tuvo 399 traspasos (13% de su carga) y SVP3 ninguno. No afectan el nivel de servicio: MELI descuenta el paquete del total de la ruta que lo entrega y lo suma al de la que lo recibe, así que el traspaso queda neutro. Lo que sí vale mirar es el volumen: 13% de la carga pasando de una ruta a otra puede indicar un problema de planificación.",
       desglose: () => ({ titulo: "Traspasos por CECOS", columnas: [
         { t: "CECOS" }, { t: "Cargados", num: true }, { t: "Traspasos", num: true }, { t: "% de la carga", num: true }],
         filas: kpiSc.map(s => [s.cecos, fmt(s.cargados), fmt(s.traspasos),
@@ -566,8 +575,8 @@ function ModuloAnalisisCL() {
             {tab === "kpi" && (
               <Fragment>
                 <Glosario titulo="Los indicadores del día cerrado" items={[
-                  { t: "NS ácido", d: "Entregados ÷ cargados. Castiga todo lo que no se entregó, sin excepciones. Es la lectura más exigente." },
-                  { t: "NS justificado", d: "Entregados ÷ (cargados − traspasos). Descuenta los paquetes que pasaron a otra ruta, porque esa ruta los entregó. Definición inferida de las columnas NS del Excel: conviene validarla con la operación." },
+                  { t: "NS", d: "Entregados ÷ cargados. Es el nivel de servicio real. Los traspasos no se descuentan: MELI mueve el paquete del total de una ruta al de la otra, así que ya están contabilizados." },
+                  { t: "NS ajustado", d: "Descuenta del denominador solo las devoluciones ajenas al transportista (datos incompletos, rechazo del cliente, zona inaccesible). Depende de la clasificación de motivos, que se revisa en la pestaña Devoluciones." },
                   { t: "Devoluciones", d: "Paquetes que volvieron sin entregarse. Excluye traspasos y los que fallaron pero se entregaron más tarde. Cuadra con el contador de Fallidos del portal de MELI." },
                   { t: "Traspasos", d: "Paquetes que se entregaron a otra ruta durante el día. En el Excel son los D_JUSTIFICADOS. Se concentran en la Región Metropolitana." },
                   { t: "Sin entregas", d: "Viajes que cerraron sin entregar nada. Aproximación a las no salidas a ruta; el registro oficial lo llevan los supervisores porque MELI no lo informa." },
@@ -577,12 +586,12 @@ function ModuloAnalisisCL() {
                   <Tabla columnas={[
                     { t: "CECOS" }, { t: "Viajes", num: true }, { t: "Cargados", num: true },
                     { t: "Entregados", num: true }, { t: "Devueltos", num: true }, { t: "Traspasos", num: true },
-                    { t: "NS ácido", num: true }, { t: "NS justif.", num: true }, { t: "% devol.", num: true },
+                    { t: "NS", num: true }, { t: "NS ajustado", num: true }, { t: "% devol.", num: true },
                     { t: "Sin entregas", num: true }, { t: "Pkg/hora", num: true }, { t: "Horas", num: true },
                     { t: "Inicio" }, { t: "Última entrega" }, { t: "Cierre p90" },
                   ]} filas={kpiSc.map(s => { const ns = nsDe(s); return [
                     s.cecos, fmt(s.viajes), fmt(s.cargados), fmt(s.entregados), fmt(s.devueltos), fmt(s.traspasos),
-                    pct1(ns.acido), pct1(ns.justificado), pct1(s.pct_devolucion), fmt(s.rutas_sin_entregas),
+                    pct1(ns.ns), pct1(ns.ns_ajustado), pct1(s.pct_devolucion), fmt(s.rutas_sin_entregas),
                     dec(s.pkg_hora), dec(s.horas_promedio), (s.inicio_mediano || "—").slice(0, 5),
                     (s.ultima_entrega_mediana || "—").slice(0, 5), (s.cierre_p90 || "—").slice(0, 5)]; })} />
                 </div>
@@ -593,10 +602,10 @@ function ModuloAnalisisCL() {
             {tab === "ranking" && (
               <Fragment>
                 <Glosario titulo="Cómo leer los rankings" items={[
-                  { t: "Ranking de CECOS", d: "Ordenado por nivel de servicio ácido. Incluye la hora mediana de inicio y de última entrega para que se pueda comparar centros con turnos distintos." },
+                  { t: "Ranking de CECOS", d: "Ordenado por nivel de servicio. Incluye la hora mediana de inicio y de última entrega para que se pueda comparar centros con turnos distintos." },
                   { t: "Ranking de conductores", d: "Tres órdenes distintos: entregas totales, ritmo por hora y devoluciones. Cada uno cuenta algo diferente." },
                   { t: "Advertencia importante", d: "El volumen depende de la carga que se le asignó al conductor y el ritmo depende de la densidad de su zona. Un conductor rural nunca va a igualar el ritmo de uno urbano sin que eso diga nada de su desempeño. Comparar dentro del mismo CECOS." },
-                  { t: "Traspasos y ranking", d: "Un centro que traspasa mucho baja su NS ácido aunque los paquetes se hayan entregado. Para rankear conviene mirar también el NS justificado." },
+                  { t: "Traspasos y ranking", d: "Un centro que traspasa mucho NO queda penalizado: los paquetes traspasados se cuentan en la ruta que los recibió, y MELI ajusta los totales de las dos rutas." },
                 ]} />
                 <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
                   <div style={{ flex: 1 }} />
@@ -614,11 +623,11 @@ function ModuloAnalisisCL() {
                               letterSpacing: .4, marginBottom: 6 }}>Ranking de service centers</div>
                 <div className="an-scroll" style={{ maxHeight: 300, marginBottom: 18 }}>
                   <Tabla columnas={[
-                    { t: "#", num: true }, { t: "CECOS" }, { t: "NS ácido", num: true }, { t: "NS justif.", num: true },
+                    { t: "#", num: true }, { t: "CECOS" }, { t: "NS", num: true }, { t: "NS ajustado", num: true },
                     { t: "Entregados", num: true }, { t: "Devueltos", num: true }, { t: "Pkg/hora", num: true },
                     { t: "Horas", num: true }, { t: "Inicio" }, { t: "Conductores", num: true },
                   ]} filas={kpiSc.map(s => { const ns = nsDe(s); return [
-                    fmt(s.ranking_entrega), s.cecos, pct1(ns.acido), pct1(ns.justificado), fmt(s.entregados),
+                    fmt(s.ranking_entrega), s.cecos, pct1(ns.ns), pct1(ns.ns_ajustado), fmt(s.entregados),
                     fmt(s.devueltos), dec(s.pkg_hora), dec(s.horas_promedio),
                     (s.inicio_mediano || "—").slice(0, 5), fmt(s.conductores)]; })} />
                 </div>
