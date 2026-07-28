@@ -242,6 +242,21 @@ function ModuloAnalisisCL() {
     return () => clearInterval(id);
   }, [tab, autoRefresco, cargarCurso]);
 
+  async function guardarMotivo(substatus, cambios) {
+    setGuardando(substatus);
+    try {
+      await api(`motivos_clasificacion?substatus=eq.${encodeURIComponent(substatus)}`, {
+        method: "PATCH", headers: { apikey: CL_KEY, Authorization: `Bearer ${CL_KEY}`,
+          "Content-Type": "application/json", Prefer: "return=minimal" },
+        body: JSON.stringify(Object.assign({}, cambios,
+          { actualizado_at: new Date().toISOString(), actualizado_por: "brain" })),
+      });
+      setMotivosClas(await api("vw_motivos_clasificados"));
+      if (fecha) await cargarCerrado(fecha);   // el NS ajustado se recalcula
+    } catch (e) { setError(e.message); }
+    finally { setGuardando(""); }
+  }
+
   async function guardarConfig(clave, valor) {
     setGuardando(clave);
     try {
@@ -677,7 +692,9 @@ function ModuloAnalisisCL() {
                 <Glosario titulo="Devoluciones por motivo" items={[
                   { t: "Qué se cuenta", d: "Paquetes que volvieron sin entregarse, con el motivo que registró el conductor en MELI. No incluye traspasos ni paquetes que fallaron y luego se entregaron." },
                   { t: "% del día", d: "Peso de esa combinación de centro y motivo sobre el total de devoluciones del día. Sirve para detectar concentraciones: un motivo que se dispara en un solo CECOS." },
-                  { t: "Motivos en otros idiomas", d: "Algunos motivos llegan en portugués (\"O pacote foi recusado\", \"Faltam dados do endereço\"). Es cómo los devuelve MELI; conviene agrupar por el código técnico y no por el texto." },
+                  { t: "Motivos en otros idiomas", d: "Algunos motivos llegan en portugués (\"O pacote foi recusado\", \"Faltam dados do endereço\"). Es cómo los devuelve MELI; por eso la clasificación se guarda por el código técnico y no por el texto." },
+                  { t: "Imputable vs ajena", d: "Imputable = la devolución cuenta contra el transportista. Ajena = causa externa (datos incompletos, cliente rechazó, zona inaccesible). Solo las ajenas se descuentan del NS ajustado." },
+                  { t: "Sin revisar", d: "La clasificación inicial la propuso el sistema, no la operación. Mientras haya motivos sin revisar, el NS ajustado se marca como provisorio." },
                 ]} />
                 <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
                   <div style={{ flex: 1 }} />
@@ -687,13 +704,68 @@ function ModuloAnalisisCL() {
                     { t: "COMUNAS", k: "comunas" }, { t: "PCT_DEL_DIA", k: "pct_del_dia" },
                   ])}>Descargar CSV</button>
                 </div>
-                <div className="an-scroll">
+                <div className="an-scroll" style={{ maxHeight: 340 }}>
                   <Tabla columnas={[
                     { t: "CECOS" }, { t: "Motivo" }, { t: "Paquetes", num: true },
                     { t: "Viajes", num: true }, { t: "Comunas", num: true }, { t: "% del día", num: true },
                   ]} filas={motivos.map(m => [m.cecos, m.motivo, fmt(m.paquetes), fmt(m.viajes_afectados),
                     fmt(m.comunas), pct1(m.pct_del_dia)])}
                     vacio="Sin devoluciones registradas para este día." />
+                </div>
+
+                {/* ── Clasificación de motivos ── */}
+                <div style={{ background: "#fff", border: "1px solid #e6e9ef", borderRadius: 10,
+                              padding: "14px 18px", marginTop: 18 }}>
+                  <div style={{ fontSize: 13, fontWeight: 800, color: NAVY }}>Clasificación de motivos</div>
+                  <div style={{ fontSize: 12.5, color: "#64748b", lineHeight: 1.8, marginTop: 6, maxWidth: 880 }}>
+                    Define qué devoluciones son responsabilidad del transportista y cuáles tienen causa externa.
+                    Solo las <strong>ajenas</strong> se descuentan del denominador del NS ajustado. Los cambios
+                    aplican de inmediato al indicador. Mientras queden motivos <em>sin revisar</em>, el NS ajustado
+                    se muestra como provisorio y no debería usarse para metas.
+                  </div>
+                  <div style={{ fontSize: 12, color: AMBAR, lineHeight: 1.8, marginTop: 8,
+                                background: "#fdf6e3", borderRadius: 8, padding: "8px 12px", maxWidth: 880 }}>
+                    La clasificación inicial es una <strong>propuesta</strong>, no una decisión tomada. El motivo de
+                    mayor peso es <em>negocio cerrado</em>: viene marcado como imputable porque depende del horario
+                    de la visita, pero es discutible y mueve bastante el indicador.
+                  </div>
+                  <div style={{ marginTop: 12 }}>
+                    {motivosClas.map(m => (
+                      <div key={m.substatus} style={{ display: "flex", gap: 12, alignItems: "flex-start",
+                        padding: "10px 0", borderTop: "1px solid #f1f4f8" }}>
+                        <div style={{ flex: 1, minWidth: 240 }}>
+                          <div style={{ fontSize: 12.5, fontWeight: 700, color: "#334155" }}>
+                            {m.motivo_texto || m.substatus}
+                            {!m.revisado && (
+                              <span style={{ marginLeft: 7, fontSize: 10, fontWeight: 700, color: AMBAR,
+                                background: "#fdf6e3", padding: "1px 7px", borderRadius: 9 }}>sin revisar</span>
+                            )}
+                          </div>
+                          <div style={{ fontSize: 11.5, color: "#64748b", lineHeight: 1.7, marginTop: 2 }}>{m.nota}</div>
+                          <div style={{ fontSize: 10.5, color: "#a8b2c1", marginTop: 3, fontFamily: "monospace" }}>
+                            {m.substatus} · {fmt(m.paquetes_historicos)} paquetes · {m.categoria || "sin categoría"}
+                          </div>
+                        </div>
+                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                          <button className={`an-chip ${m.imputable ? "on" : ""}`} disabled={guardando === m.substatus}
+                                  onClick={() => guardarMotivo(m.substatus, { imputable: !m.imputable })}
+                                  title="Cuenta contra el nivel de servicio del transportista">
+                            {m.imputable ? "Imputable" : "Ajena"}
+                          </button>
+                          <button className={`an-chip ${m.revisado ? "on" : ""}`} disabled={guardando === m.substatus}
+                                  onClick={() => guardarMotivo(m.substatus, { revisado: !m.revisado })}
+                                  title="Marcar como validado por la operación">
+                            {m.revisado ? "Revisado" : "Marcar revisado"}
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                    {!motivosClas.length && (
+                      <div style={{ fontSize: 12.5, color: "#94a3b8", fontStyle: "italic", paddingTop: 10 }}>
+                        Todavía no hay motivos registrados. Aparecen solos en cuanto haya devoluciones.
+                      </div>
+                    )}
+                  </div>
                 </div>
               </Fragment>
             )}
