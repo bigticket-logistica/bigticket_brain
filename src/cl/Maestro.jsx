@@ -214,6 +214,7 @@ function ModuloMaestroCL() {
     .filter(r => coincide(r.ruta_origen, r.ruta_destino, r.chofer_origen, r.chofer_destino, r.patente_origen, r.patente_destino));
 
   const listaCecos = [...new Set(jornada.map(r => r.cecos).filter(Boolean))].sort();
+  const nLineHaul = jornada.filter(r => r.is_line_haul === true).length;
 
   // Totales de lo que se está viendo (respetan los filtros)
   const tot = jornadaVista.reduce((a, r) => ({
@@ -240,11 +241,11 @@ function ModuloMaestroCL() {
     {
       id: "viajes", rotulo: "Viajes", color: NAVY,
       valor: fmt(jornadaVista.length),
-      detalle: soloReparto ? "solo reparto" : `incluye ${fmt(jornada.filter(r => r.is_line_haul).length)} line haul`,
+      detalle: soloReparto ? "última milla" : `incluye ${fmt(nLineHaul)} line haul`,
       que: "Cada ruta que MELI generó para el día. Un viaje equivale a una fila del maestro: un vehículo con su conductor haciendo un recorrido.",
       como: soloReparto
-        ? "Se cuentan solo las rutas de reparto. Las de Line Haul (transferencias entre centros, que no reparten a clientes) quedan fuera; puedes incluirlas con el botón de arriba."
-        : "Se cuentan todas las rutas, incluidas las de Line Haul (transferencias entre centros, que no reparten a clientes finales).",
+        ? `Se cuentan solo las rutas de última milla, las que reparten a clientes. Quedan fuera ${fmt(nLineHaul)} de Line Haul, que son transferencias entre centros; para verlas, activa "Incluir Line Haul".`
+        : `Se cuentan todas las rutas: ${fmt(jornadaVista.length - nLineHaul)} de última milla más ${fmt(nLineHaul)} de Line Haul (transferencias entre centros, que no reparten a clientes).`,
       desglose: porCecos("Viajes por CECOS", () => 1, "Viajes"),
     },
     {
@@ -439,8 +440,9 @@ function ModuloMaestroCL() {
                 <option value="">Todos los CECOS</option>
                 {listaCecos.map(c => <option key={c} value={c}>{c}</option>)}
               </select>
-              <button className={`mj-chip ${soloReparto ? "on" : ""}`} onClick={() => setSoloReparto(s => !s)}>
-                {soloReparto ? "Solo reparto" : "Reparto + Line Haul"}
+              <button className={`mj-chip ${!soloReparto ? "on" : ""}`} onClick={() => setSoloReparto(v => !v)}
+                title="Las rutas de Line Haul son transferencias entre centros, no reparto a clientes. Por defecto quedan fuera.">
+                {!soloReparto ? "✓ " : ""}Incluir Line Haul{nLineHaul ? ` (${fmt(nLineHaul)})` : ""}
               </button>
               <div style={{ flex: 1 }} />
               {tab === "jornada" && (
