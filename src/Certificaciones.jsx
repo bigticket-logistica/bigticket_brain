@@ -3945,8 +3945,11 @@ function AltaVehiculosPersonal({ onCreada }) {
   const esCond = tipoAlta === "conductor";
 
   useEffect(() => { (async () => {
-    const { data } = await sb.from("terceros").select("id, nombre, rfc").order("nombre");
-    setEmpresas(data || []);
+    // Empresas dadas de baja no se ofrecen para altas nuevas
+    let { data, error } = await sb.from("terceros")
+      .select("id, nombre, rfc, estado_operacional").order("nombre");
+    if (error) ({ data } = await sb.from("terceros").select("id, nombre, rfc").order("nombre"));
+    setEmpresas((data || []).filter((e) => (e.estado_operacional || "activa") !== "baja"));
   })(); }, []);
 
   const inp = { width: "100%", boxSizing: "border-box", background: "#fff", border: "0.5px solid #e4e7ec", borderRadius: 8, padding: "9px 11px", fontSize: 13, fontFamily: "'Geist',sans-serif" };
@@ -4058,7 +4061,12 @@ function AltaVehiculosPersonal({ onCreada }) {
             <label style={lbl}>Empresa *</label>
             <select value={terceroId} onChange={(e) => setTerceroId(e.target.value)} style={inp}>
               <option value="">{empresas === null ? "Cargando empresas…" : "Selecciona la empresa…"}</option>
-              {(empresas || []).map((e) => <option key={e.id} value={e.id}>{e.nombre}{e.rfc ? ` · ${e.rfc}` : ""}</option>)}
+              {(empresas || []).map((e) => (
+                <option key={e.id} value={e.id}>
+                  {e.nombre}{e.rfc ? (String(e.rfc).toUpperCase().startsWith("PENDIENTE") ? " · ⚠ RFC pendiente" : ` · ${e.rfc}`) : ""}
+                  {(e.estado_operacional || "activa") === "pausada" ? " · ⏸ pausada" : ""}
+                </option>
+              ))}
             </select>
           </div>
           <div>
