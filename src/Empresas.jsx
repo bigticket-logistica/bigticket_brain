@@ -147,19 +147,6 @@ function DetalleEmpresa({ empresa, onVolver, onActualizada }) {
     } finally { setAccBusy(false); }
   };
 
-  const resetPass = async () => {
-    setAccBusy(true); setAccMsg(null);
-    try {
-      const { error } = await sb.auth.resetPasswordForEmail(accEmail.trim().toLowerCase(),
-        { redirectTo: "https://prospeccionbtinterna.vercel.app" });
-      if (error) throw new Error(error.message);
-      await registrarEvento(empresa.tercero_id, "acceso_portal_reset", `Correo de restablecimiento enviado a ${accEmail.trim().toLowerCase()}`);
-      setEventos(null);
-      setAccMsg({ tipo: "ok", texto: "✉️ Correo de restablecimiento enviado. La empresa define su nueva contraseña desde el enlace." });
-    } catch (e) { setAccMsg({ tipo: "err", texto: "No se pudo enviar: " + e.message }); }
-    finally { setAccBusy(false); }
-  };
-
   const verDocCert = async (d) => {
     const { data, error } = await sb.storage.from("proceso_certificacion_bt").createSignedUrl(d.storage_path, 300);
     if (error || !data?.signedUrl) { alert("No se pudo abrir el documento."); return; }
@@ -601,10 +588,6 @@ function DetalleEmpresa({ empresa, onVolver, onActualizada }) {
                     🔧 Cambiar contraseña ahora
                   </button>
                 )}
-                <button disabled={accBusy || !accEmail.includes("@")} onClick={resetPass}
-                  style={{ background: "#fff", color: NAVY, border: "1.5px solid " + NAVY, borderRadius: 9, padding: "11px 16px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: "'Geist',sans-serif" }}>
-                  ✉️ Enviar correo de restablecer contraseña
-                </button>
               </div>
 
               {accMsg && (
@@ -617,8 +600,8 @@ function DetalleEmpresa({ empresa, onVolver, onActualizada }) {
               )}
               <div style={{ fontSize: 10.5, color: "#98a2b3", marginTop: 10, lineHeight: 1.5 }}>
                 <b>Crear acceso</b>: para empresas sin cuenta (aplica la clave generada al instante).
-                <b> Cambiar contraseña ahora</b>: la fija tú mismo en cuentas existentes — pasa por el servicio admin, sin SQL.
-                <b> Correo de restablecimiento</b>: la define la empresa desde el enlace. Todo queda en la bitácora.
+                <b> Cambiar contraseña ahora</b>: la fija tú mismo en cuentas existentes, sin SQL.
+                Usa <b>📋 Copiar</b> para enviarle las credenciales por correo o WhatsApp. Toda acción queda en la bitácora de la empresa.
               </div>
             </>
           )}
