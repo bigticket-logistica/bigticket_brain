@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { sb } from "./shared";
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -58,6 +59,11 @@ function DetalleEmpresa({ empresa, onVolver, onActualizada }) {
   const [solicitudes, setSolicitudes] = useState(null);
   const [eventos, setEventos] = useState(null);
   const [operacion, setOperacion] = useState(null);        // confirmaciones diarias de la Bitácora
+  const [acceso, setAcceso] = useState(null);              // { cuentas:[], emailPortal }
+  const [accEmail, setAccEmail] = useState("");
+  const [accPass, setAccPass] = useState("");
+  const [accBusy, setAccBusy] = useState(false);
+  const [accMsg, setAccMsg] = useState(null);              // { tipo, texto }
   const [fichaAbierta, setFichaAbierta] = useState(null);   // id de fila del padrón expandida
   const [docsFicha, setDocsFicha] = useState({});           // { padronId: docs de la certificación }
 
@@ -72,6 +78,55 @@ function DetalleEmpresa({ empresa, onVolver, onActualizada }) {
       setDocsFicha((p) => ({ ...p, [r.id]: data || [] }));
     }
   };
+  // Crea la cuenta en Auth con un cliente temporal (persistSession:false) para
+  // NO tocar la sesión del analista, y la vincula a la empresa.
+  const crearAcceso = async () => {
+    setAccBusy(true); setAccMsg(null);
+    const mail = accEmail.trim().toLowerCase();
+    try {
+      const url = sb.supabaseUrl || sb.restUrl?.replace(/\/rest\/v1.*$/, "");
+      const key = sb.supabaseKey || sb.anonKey;
+      let creada = false, yaExistia = false;
+      if (url && key) {
+        const tmp = createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
+        const { error } = await tmp.auth.signUp({ email: mail, password: accPass });
+        if (error) {
+          if (/already|registered|exists/i.test(error.message)) yaExistia = true;
+          else throw new Error(error.message);
+        } else creada = true;
+      } else {
+        throw new Error("no se pudo inicializar el cliente de Auth");
+      }
+      // Vínculo empresa ↔ cuenta (idempotente)
+      const { data: ya } = await sb.from("usuarios_terceros").select("auth_email").eq("auth_email", mail).maybeSingle();
+      if (!ya) {
+        const { error: eL } = await sb.from("usuarios_terceros").insert({ auth_email: mail, tercero_id: empresa.tercero_id });
+        if (eL) throw new Error("cuenta creada pero no se pudo vincular: " + eL.message);
+      }
+      await registrarEvento(empresa.tercero_id, "acceso_portal_creado", `Cuenta ${mail}${yaExistia ? " (ya existía en Auth — se vinculó)" : ""}`);
+      const { data: cuentas } = await sb.from("usuarios_terceros").select("*").eq("tercero_id", empresa.tercero_id);
+      setAcceso((p) => ({ ...p, cuentas: cuentas || [] }));
+      setEventos(null);
+      if (creada) setAccMsg({ tipo: "ok", texto: `✅ Acceso creado y vinculado.\n\nPortal: https://prospeccionbtinterna.vercel.app\nUsuario: ${mail}\nContraseña: ${accPass}\n\nCópialas ahora (la contraseña no se vuelve a mostrar).` });
+      else setAccMsg({ tipo: "warn", texto: `⚠️ Ese correo ya tenía cuenta en Auth: se vinculó a esta empresa, pero la contraseña NO se cambió.\n\nSi la empresa no la recuerda, usa "Enviar correo de restablecer contraseña".` });
+    } catch (e) {
+      setAccMsg({ tipo: "err", texto: "No se pudo crear el acceso: " + e.message + "\n\nAlternativa: créala en Supabase → Authentication → Users (Auto Confirm) con estas credenciales; el vínculo con la empresa se hará al reintentar aquí." });
+    } finally { setAccBusy(false); }
+  };
+
+  const resetPass = async () => {
+    setAccBusy(true); setAccMsg(null);
+    try {
+      const { error } = await sb.auth.resetPasswordForEmail(accEmail.trim().toLowerCase(),
+        { redirectTo: "https://prospeccionbtinterna.vercel.app" });
+      if (error) throw new Error(error.message);
+      await registrarEvento(empresa.tercero_id, "acceso_portal_reset", `Correo de restablecimiento enviado a ${accEmail.trim().toLowerCase()}`);
+      setEventos(null);
+      setAccMsg({ tipo: "ok", texto: "✉️ Correo de restablecimiento enviado. La empresa define su nueva contraseña desde el enlace." });
+    } catch (e) { setAccMsg({ tipo: "err", texto: "No se pudo enviar: " + e.message }); }
+    finally { setAccBusy(false); }
+  };
+
   const verDocCert = async (d) => {
     const { data, error } = await sb.storage.from("proceso_certificacion_bt").createSignedUrl(d.storage_path, 300);
     if (error || !data?.signedUrl) { alert("No se pudo abrir el documento."); return; }
@@ -116,6 +171,14 @@ function DetalleEmpresa({ empresa, onVolver, onActualizada }) {
     if (tab === "solicitudes" && solicitudes === null) {
       const { data } = await sb.from("solicitudes_baja").select("*").eq("tercero_id", empresa.tercero_id).order("created_at", { ascending: false });
       setSolicitudes(data || []);
+    }
+    if (tab === "acceso" && acceso === null) {
+      const { data: cuentas } = await sb.from("usuarios_terceros").select("*").eq("tercero_id", empresa.tercero_id);
+      const { data: t } = await sb.from("terceros").select("email_portal").eq("id", empresa.tercero_id).maybeSingle();
+      setAcceso({ cuentas: cuentas || [], emailPortal: t?.email_portal || "" });
+      const sugerido = (cuentas && cuentas[0]?.auth_email) || (t?.email_portal && !String(t.email_portal).startsWith("pendiente.") ? t.email_portal : "");
+      setAccEmail(sugerido || "");
+      setAccPass("BT-" + Math.random().toString(36).slice(2, 6).toUpperCase() + Math.random().toString(36).slice(2, 6));
     }
     if (tab === "operacion" && operacion === null) {
       // Log diario de la Bitácora (terceros_confirmaciones_dia): qué placas
@@ -209,7 +272,7 @@ function DetalleEmpresa({ empresa, onVolver, onActualizada }) {
   const est = ESTADO_EMPRESA[empresa.estado_operacional || "activa"] || ESTADO_EMPRESA.activa;
   const TABS = [
     ["resumen", "📇 Resumen"], ["datos", "🏦 Datos & Cuenta"], ["placas", "🚚 Placas & Personal"],
-    ["docs", "🗂 Documentos"], ["pagos", "💰 Pagos"], ["solicitudes", "📥 Solicitudes"], ["operacion", "📅 Operación"],
+    ["docs", "🗂 Documentos"], ["pagos", "💰 Pagos"], ["solicitudes", "📥 Solicitudes"], ["operacion", "📅 Operación"], ["acceso", "🔑 Acceso al portal"],
   ];
   const lblEv = { estado_pausada: "⏸ Empresa pausada", estado_activa: "▶️ Empresa reactivada", estado_baja: "🛑 Empresa dada de baja", pagos_pausados: "💸⏸ Pagos pausados", pagos_reactivados: "💸▶️ Pagos reactivados", solicitud_aprobada: "✅ Solicitud aprobada", solicitud_rechazada: "❌ Solicitud rechazada" };
 
@@ -455,6 +518,64 @@ function DetalleEmpresa({ empresa, onVolver, onActualizada }) {
                 </div>
               </div>
             );})}
+        </div>
+      )}
+
+      {/* ── ACCESO AL PORTAL (cuenta de la empresa) ── */}
+      {tab === "acceso" && (
+        <div style={{ background: "#fff", border: "0.5px solid #e4e7ec", borderRadius: 12, padding: "16px 20px", maxWidth: 620 }}>
+          <div style={{ fontSize: 12, fontWeight: 800, color: "#667085", textTransform: "uppercase", letterSpacing: 1, marginBottom: 10 }}>Cuenta del Portal de Terceros</div>
+          {acceso === null ? <div style={{ fontSize: 12, color: "#888" }}>Cargando…</div> : (
+            <>
+              {acceso.cuentas.length > 0 ? (
+                <div style={{ background: "#e8f5ec", border: "1px solid #b7e0c2", borderRadius: 9, padding: "10px 14px", marginBottom: 12 }}>
+                  <div style={{ fontSize: 12.5, fontWeight: 700, color: "#166534" }}>✅ Esta empresa ya tiene acceso</div>
+                  {acceso.cuentas.map((c, i) => <div key={i} style={{ fontSize: 12.5, color: "#166534" }}>· {c.auth_email}</div>)}
+                </div>
+              ) : (
+                <div style={{ background: "#fff4e5", border: "1px solid #fcd9b6", borderRadius: 9, padding: "10px 14px", marginBottom: 12, fontSize: 12.5, color: "#8a4a0f" }}>
+                  ⚠️ Sin cuenta de portal. Sin acceso no puede cargar su Perfil de Empresa (CLABE), certificar ni pedir bajas.
+                </div>
+              )}
+
+              <label style={{ fontSize: 10.5, fontWeight: 700, color: "#667085", textTransform: "uppercase", display: "block", marginBottom: 4 }}>Correo de acceso</label>
+              <input value={accEmail} onChange={(e) => setAccEmail(e.target.value)} placeholder="correo@empresa.com"
+                style={{ width: "100%", boxSizing: "border-box", border: "0.5px solid #e4e7ec", borderRadius: 8, padding: "9px 11px", fontSize: 13, fontFamily: "'Geist',sans-serif", marginBottom: 10 }} />
+              <label style={{ fontSize: 10.5, fontWeight: 700, color: "#667085", textTransform: "uppercase", display: "block", marginBottom: 4 }}>Contraseña generada</label>
+              <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+                <input value={accPass} onChange={(e) => setAccPass(e.target.value)}
+                  style={{ flex: 1, border: "0.5px solid #e4e7ec", borderRadius: 8, padding: "9px 11px", fontSize: 13, fontFamily: "monospace" }} />
+                <button onClick={() => setAccPass("BT-" + Math.random().toString(36).slice(2, 6).toUpperCase() + Math.random().toString(36).slice(2, 6))}
+                  style={{ background: "#fff", border: "1px solid #e4e7ec", color: NAVY, borderRadius: 8, padding: "9px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>🎲 Otra</button>
+                <button onClick={() => { navigator.clipboard?.writeText(`Portal: https://prospeccionbtinterna.vercel.app\nUsuario: ${accEmail}\nContraseña: ${accPass}`); setAccMsg({ tipo: "ok", texto: "Credenciales copiadas al portapapeles." }); }}
+                  style={{ background: "#fff", border: "1px solid #e4e7ec", color: NAVY, borderRadius: 8, padding: "9px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>📋 Copiar</button>
+              </div>
+
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <button disabled={accBusy || !accEmail.includes("@") || accPass.length < 8} onClick={crearAcceso}
+                  style={{ background: NAVY, color: "#fff", border: "none", borderRadius: 9, padding: "11px 18px", fontSize: 13, fontWeight: 700, cursor: "pointer", opacity: accBusy ? 0.6 : 1, fontFamily: "'Geist',sans-serif" }}>
+                  {accBusy ? "Creando…" : acceso.cuentas.length ? "🔑 Crear otra cuenta" : "🔑 Crear acceso al portal"}
+                </button>
+                <button disabled={accBusy || !accEmail.includes("@")} onClick={resetPass}
+                  style={{ background: "#fff", color: NAVY, border: "1.5px solid " + NAVY, borderRadius: 9, padding: "11px 16px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: "'Geist',sans-serif" }}>
+                  ✉️ Enviar correo de restablecer contraseña
+                </button>
+              </div>
+
+              {accMsg && (
+                <div style={{ marginTop: 12, padding: "10px 14px", borderRadius: 9, fontSize: 12.5, fontWeight: 600, lineHeight: 1.55, whiteSpace: "pre-wrap",
+                  background: accMsg.tipo === "ok" ? "#e8f5ec" : accMsg.tipo === "warn" ? "#fff4e5" : "#fdecea",
+                  border: "1px solid " + (accMsg.tipo === "ok" ? "#b7e0c2" : accMsg.tipo === "warn" ? "#fcd9b6" : "#f5c6c0"),
+                  color: accMsg.tipo === "ok" ? "#166534" : accMsg.tipo === "warn" ? "#8a4a0f" : "#c0392b" }}>
+                  {accMsg.texto}
+                </div>
+              )}
+              <div style={{ fontSize: 10.5, color: "#98a2b3", marginTop: 10, lineHeight: 1.5 }}>
+                La cuenta se crea en Supabase Auth y se vincula a esta empresa (usuarios_terceros). Entrega las credenciales por un canal seguro;
+                la empresa puede cambiar su contraseña con el correo de restablecimiento.
+              </div>
+            </>
+          )}
         </div>
       )}
 
