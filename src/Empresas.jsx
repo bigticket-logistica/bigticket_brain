@@ -121,6 +121,32 @@ function DetalleEmpresa({ empresa, onVolver, onActualizada }) {
     } finally { setAccBusy(false); }
   };
 
+  // Cambio administrativo de contraseña: pasa por n8n (service_role), porque
+  // el navegador no puede modificar cuentas existentes de Auth.
+  const cambiarClave = async () => {
+    if (!confirm(`Cambiar la contraseña de ${accEmail.trim().toLowerCase()}\n\nLa clave anterior deja de funcionar de inmediato. ¿Continuar?`)) return;
+    setAccBusy(true); setAccMsg(null);
+    try {
+      const resp = await fetch("https://bigticket2026.app.n8n.cloud/webhook/admin-acceso-tercero", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: accEmail.trim().toLowerCase(), password: accPass,
+          tercero_id: empresa.tercero_id, actor: window.__PERFIL_EMAIL || "analista_brain",
+        }),
+      });
+      const txt = await resp.text();
+      if (!txt || !txt.trim()) throw new Error("el servicio no respondió");
+      const r = JSON.parse(txt);
+      if (!r.ok) throw new Error(r.error || "no se pudo cambiar la contraseña");
+      const { data: cuentas } = await sb.from("usuarios_terceros").select("*").eq("tercero_id", empresa.tercero_id);
+      setAcceso((p) => ({ ...p, cuentas: cuentas || [] }));
+      setEventos(null);
+      setAccMsg({ tipo: "ok", texto: `✅ Contraseña actualizada.\n\nPortal: https://prospeccionbtinterna.vercel.app\nUsuario: ${accEmail.trim().toLowerCase()}\nContraseña: ${accPass}\n\nEntrégalas por un canal seguro (📋 Copiar).` });
+    } catch (e) {
+      setAccMsg({ tipo: "err", texto: "No se pudo cambiar la contraseña: " + e.message + "\n\nRevisa que el flujo n8n 'admin-acceso-tercero' esté activo y que admin_password_tercero.sql esté corrido." });
+    } finally { setAccBusy(false); }
+  };
+
   const resetPass = async () => {
     setAccBusy(true); setAccMsg(null);
     try {
@@ -281,7 +307,7 @@ function DetalleEmpresa({ empresa, onVolver, onActualizada }) {
     ["resumen", "📇 Resumen"], ["datos", "🏦 Datos & Cuenta"], ["placas", "🚚 Placas & Personal"],
     ["docs", "🗂 Documentos"], ["pagos", "💰 Pagos"], ["solicitudes", "📥 Solicitudes"], ["operacion", "📅 Operación"], ["acceso", "🔑 Acceso al portal"],
   ];
-  const lblEv = { estado_pausada: "⏸ Empresa pausada", estado_activa: "▶️ Empresa reactivada", estado_baja: "🛑 Empresa dada de baja", pagos_pausados: "💸⏸ Pagos pausados", pagos_reactivados: "💸▶️ Pagos reactivados", solicitud_aprobada: "✅ Solicitud aprobada", solicitud_rechazada: "❌ Solicitud rechazada" };
+  const lblEv = { acceso_portal_creado: "🔑 Acceso al portal creado", acceso_clave_cambiada: "🔧 Contraseña actualizada", acceso_portal_reset: "✉️ Correo de restablecimiento enviado", estado_pausada: "⏸ Empresa pausada", estado_activa: "▶️ Empresa reactivada", estado_baja: "🛑 Empresa dada de baja", pagos_pausados: "💸⏸ Pagos pausados", pagos_reactivados: "💸▶️ Pagos reactivados", solicitud_aprobada: "✅ Solicitud aprobada", solicitud_rechazada: "❌ Solicitud rechazada" };
 
   return (
     <div>
@@ -538,6 +564,7 @@ function DetalleEmpresa({ empresa, onVolver, onActualizada }) {
                 <div style={{ background: "#e8f5ec", border: "1px solid #b7e0c2", borderRadius: 9, padding: "10px 14px", marginBottom: 12 }}>
                   <div style={{ fontSize: 12.5, fontWeight: 700, color: "#166534" }}>✅ Esta empresa ya tiene acceso</div>
                   {acceso.cuentas.map((c, i) => <div key={i} style={{ fontSize: 12.5, color: "#166534" }}>· {c.auth_email}</div>)}
+                  <div style={{ fontSize: 11, color: "#3f6b4d", marginTop: 5 }}>🔒 La contraseña actual no se puede consultar (Auth guarda solo un hash irreversible). Puedes fijar una nueva abajo.</div>
                 </div>
               ) : (
                 <div style={{ background: "#fff4e5", border: "1px solid #fcd9b6", borderRadius: 9, padding: "10px 14px", marginBottom: 12, fontSize: 12.5, color: "#8a4a0f" }}>
@@ -547,8 +574,13 @@ function DetalleEmpresa({ empresa, onVolver, onActualizada }) {
 
               <label style={{ fontSize: 10.5, fontWeight: 700, color: "#667085", textTransform: "uppercase", display: "block", marginBottom: 4 }}>Correo de acceso</label>
               <input value={accEmail} onChange={(e) => setAccEmail(e.target.value)} placeholder="correo@empresa.com"
-                style={{ width: "100%", boxSizing: "border-box", border: "0.5px solid #e4e7ec", borderRadius: 8, padding: "9px 11px", fontSize: 13, fontFamily: "'Geist',sans-serif", marginBottom: 10 }} />
-              <label style={{ fontSize: 10.5, fontWeight: 700, color: "#667085", textTransform: "uppercase", display: "block", marginBottom: 4 }}>Contraseña generada</label>
+                style={{ width: "100%", boxSizing: "border-box", border: "0.5px solid #e4e7ec", borderRadius: 8, padding: "9px 11px", fontSize: 13, fontFamily: "'Geist',sans-serif", marginBottom: 4 }} />
+              <div style={{ fontSize: 10.5, color: "#98a2b3", marginBottom: 10 }}>
+                {acceso.cuentas.some((c) => c.auth_email === accEmail.trim().toLowerCase())
+                  ? "Es la cuenta actual de la empresa: puedes fijarle una contraseña nueva."
+                  : "Correo distinto al registrado: al pulsar “Crear acceso” se abrirá una cuenta ADICIONAL para esta misma empresa (útil para un segundo contacto)."}
+              </div>
+              <label style={{ fontSize: 10.5, fontWeight: 700, color: "#667085", textTransform: "uppercase", display: "block", marginBottom: 4 }}>Contraseña a aplicar (propuesta)</label>
               <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
                 <input value={accPass} onChange={(e) => setAccPass(e.target.value)}
                   style={{ flex: 1, border: "0.5px solid #e4e7ec", borderRadius: 8, padding: "9px 11px", fontSize: 13, fontFamily: "monospace" }} />
@@ -561,8 +593,14 @@ function DetalleEmpresa({ empresa, onVolver, onActualizada }) {
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                 <button disabled={accBusy || !accEmail.includes("@") || accPass.length < 8} onClick={crearAcceso}
                   style={{ background: NAVY, color: "#fff", border: "none", borderRadius: 9, padding: "11px 18px", fontSize: 13, fontWeight: 700, cursor: "pointer", opacity: accBusy ? 0.6 : 1, fontFamily: "'Geist',sans-serif" }}>
-                  {accBusy ? "Creando…" : acceso.cuentas.length ? "🔑 Crear otra cuenta" : "🔑 Crear acceso al portal"}
+                  {accBusy ? "Creando…" : acceso.cuentas.length ? "🔑 Crear cuenta adicional (otro correo)" : "🔑 Crear acceso al portal"}
                 </button>
+                {acceso.cuentas.length > 0 && (
+                  <button disabled={accBusy || !accEmail.includes("@") || accPass.length < 8} onClick={cambiarClave}
+                    style={{ background: "#F47B20", color: "#fff", border: "none", borderRadius: 9, padding: "11px 18px", fontSize: 13, fontWeight: 700, cursor: "pointer", opacity: accBusy ? 0.6 : 1, fontFamily: "'Geist',sans-serif" }}>
+                    🔧 Cambiar contraseña ahora
+                  </button>
+                )}
                 <button disabled={accBusy || !accEmail.includes("@")} onClick={resetPass}
                   style={{ background: "#fff", color: NAVY, border: "1.5px solid " + NAVY, borderRadius: 9, padding: "11px 16px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: "'Geist',sans-serif" }}>
                   ✉️ Enviar correo de restablecer contraseña
@@ -578,8 +616,9 @@ function DetalleEmpresa({ empresa, onVolver, onActualizada }) {
                 </div>
               )}
               <div style={{ fontSize: 10.5, color: "#98a2b3", marginTop: 10, lineHeight: 1.5 }}>
-                La cuenta se crea en Supabase Auth y se vincula a esta empresa (usuarios_terceros). Entrega las credenciales por un canal seguro;
-                la empresa puede cambiar su contraseña con el correo de restablecimiento.
+                <b>Crear acceso</b>: para empresas sin cuenta (aplica la clave generada al instante).
+                <b> Cambiar contraseña ahora</b>: la fija tú mismo en cuentas existentes — pasa por el servicio admin, sin SQL.
+                <b> Correo de restablecimiento</b>: la define la empresa desde el enlace. Todo queda en la bitácora.
               </div>
             </>
           )}
