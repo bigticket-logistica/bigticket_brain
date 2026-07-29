@@ -89,11 +89,18 @@ function DetalleEmpresa({ empresa, onVolver, onActualizada }) {
       let creada = false, yaExistia = false;
       if (url && key) {
         const tmp = createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
-        const { error } = await tmp.auth.signUp({ email: mail, password: accPass });
+        const { data: dSu, error } = await tmp.auth.signUp({ email: mail, password: accPass });
         if (error) {
           if (/already|registered|exists/i.test(error.message)) yaExistia = true;
           else throw new Error(error.message);
-        } else creada = true;
+        } else {
+          // Con "Confirm email" activo, Supabase finge éxito si el correo YA existe
+          // (anti-enumeración): lo delata identities vacío. En ese caso la
+          // contraseña NO se cambió — hay que avisarlo, no cantar victoria.
+          const ident = dSu?.user?.identities;
+          if (Array.isArray(ident) && ident.length === 0) yaExistia = true;
+          else creada = true;
+        }
       } else {
         throw new Error("no se pudo inicializar el cliente de Auth");
       }
@@ -108,7 +115,7 @@ function DetalleEmpresa({ empresa, onVolver, onActualizada }) {
       setAcceso((p) => ({ ...p, cuentas: cuentas || [] }));
       setEventos(null);
       if (creada) setAccMsg({ tipo: "ok", texto: `✅ Acceso creado y vinculado.\n\nPortal: https://prospeccionbtinterna.vercel.app\nUsuario: ${mail}\nContraseña: ${accPass}\n\nCópialas ahora (la contraseña no se vuelve a mostrar).` });
-      else setAccMsg({ tipo: "warn", texto: `⚠️ Ese correo ya tenía cuenta en Auth: se vinculó a esta empresa, pero la contraseña NO se cambió.\n\nSi la empresa no la recuerda, usa "Enviar correo de restablecer contraseña".` });
+      else setAccMsg({ tipo: "warn", texto: `⚠️ Ese correo YA tenía cuenta en Auth (creada antes): quedó vinculada a esta empresa, pero la contraseña NO se cambió — la generada aquí no sirve.\n\nPara darle una clave nueva usa "Enviar correo de restablecer contraseña" (la define la empresa) o pide el cambio administrativo.` });
     } catch (e) {
       setAccMsg({ tipo: "err", texto: "No se pudo crear el acceso: " + e.message + "\n\nAlternativa: créala en Supabase → Authentication → Users (Auto Confirm) con estas credenciales; el vínculo con la empresa se hará al reintentar aquí." });
     } finally { setAccBusy(false); }
