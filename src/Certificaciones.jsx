@@ -3181,7 +3181,7 @@ function DocumentacionTerceros() {
       const nombreArchivo = `Contrato transportista — ${DG.nombre}.pdf`;
       await sb.from("documentos_empresa").upsert({
         tercero_id: terceroId, categoria: "contratos", nombre_archivo: nombreArchivo,
-        storage_path: r.path, mime_type: "application/pdf",
+        storage_path: r.path, bucket: "proceso_certificacion_bt", mime_type: "application/pdf",
         referencia: "Generado con plantilla oficial", subido_por: window.__PERFIL_EMAIL || "", origen: "brain",
       }, { onConflict: "storage_path" });
       setGenPdf(r);
@@ -3524,6 +3524,17 @@ function GestionadorContratos() {
       const { error: eUp } = await sb.storage.from("proceso_certificacion_bt").upload(path, f.archivo, { contentType: "application/pdf" });
       if (eUp) throw new Error("subiendo PDF: " + eUp.message);
       await sb.from("contratos_gestion").update({ archivo_path: path }).eq("id", row.id);
+      // Indexar en el Archivador de la empresa → visible en Empresas → Documentos
+      // y en "Documentos de mi empresa" del portal.
+      try {
+        await sb.from("documentos_empresa").upsert({
+          tercero_id: f.tercero_id, categoria: "contratos", nombre_archivo: f.archivo.name,
+          storage_path: path, bucket: "proceso_certificacion_bt", mime_type: "application/pdf",
+          tamano_bytes: f.archivo.size,
+          referencia: `${f.tipo === "anexo" ? "Anexo" : f.tipo === "baja" ? "Baja" : "Contrato"} · ${f.titulo.trim()}`,
+          subido_por: window.__PERFIL_EMAIL || "", origen: "brain",
+        }, { onConflict: "storage_path" });
+      } catch (e) { console.warn("Archivador:", e.message); }
       setNuevo(false);
       setF({ tercero_id: "", titulo: "", tipo: "contrato", descripcion: "", archivo: null });
       await cargar();
@@ -3560,6 +3571,30 @@ function GestionadorContratos() {
       await cargar();
     } catch (e) { alert("No se pudo enviar a firma: " + e.message); }
     finally { setEnviandoId(null); }
+  };
+
+  // Sincroniza con MIFIEL: refresca firmas y, si ya firmaron ambos, baja el
+  // PDF firmado al archivador. Se dispara al cerrar el widget de BT y con el
+  // botón manual del encabezado.
+  const [sincronizando, setSincronizando] = useState(false);
+  const sincronizarFirmados = async (contratoId, silencioso) => {
+    setSincronizando(true);
+    try {
+      const resp = await fetch("https://bigticket2026.app.n8n.cloud/webhook/sincronizar-firmados", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(contratoId ? { contrato_id: contratoId, origen: "brain" } : { origen: "brain" }),
+      });
+      const txt = await resp.text();
+      const r = txt && txt.trim() ? JSON.parse(txt) : null;
+      const guardados = (r?.resultado || []).filter((x) => x.accion === "FIRMADO_GUARDADO");
+      if (!silencioso) {
+        if (guardados.length) alert(`✅ ${guardados.length} documento(s) firmado(s) guardado(s) en el archivador de su empresa.`);
+        else alert("Sin novedades: no hay documentos con las dos firmas completas todavía.");
+      }
+      await cargar();
+    } catch (e) {
+      if (!silencioso) alert("No se pudo sincronizar con MIFIEL: " + e.message + "\n\nRevisa que el flujo 'sincronizar-firmados' esté activo en n8n.");
+    } finally { setSincronizando(false); }
   };
 
   const eliminarDoc = async (doc) => {
@@ -3601,9 +3636,16 @@ function GestionadorContratos() {
         <div style={{ fontSize: 12, color: "#888" }}>
           Contratos, anexos, bajas y otros documentos de firma — independientes del proceso de ingreso.
         </div>
-        <button className="btn-orange" onClick={() => { setNuevo(!nuevo); resetGeneracion(); }} style={{ padding: "9px 16px" }}>
-          {nuevo ? "Cancelar" : "➕ Nuevo documento"}
-        </button>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <button onClick={() => sincronizarFirmados(null, false)} disabled={sincronizando}
+            title="Consulta MIFIEL y descarga al archivador los documentos que ya tengan ambas firmas"
+            style={{ background: "#fff", color: "#1a3a6b", border: "1.5px solid #1a3a6b", borderRadius: 8, padding: "9px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "'Geist',sans-serif", opacity: sincronizando ? 0.6 : 1 }}>
+            {sincronizando ? "Verificando…" : "📥 Traer firmados de MIFIEL"}
+          </button>
+          <button className="btn-orange" onClick={() => { setNuevo(!nuevo); resetGeneracion(); }} style={{ padding: "9px 16px" }}>
+            {nuevo ? "Cancelar" : "➕ Nuevo documento"}
+          </button>
+        </div>
       </div>
 
       {nuevo && (
@@ -3721,9 +3763,23 @@ function GestionadorContratos() {
                 </>
               )}
               {doc.estado === "enviado" && !doc.firmado_bigticket && doc.mifiel_widget_bigticket && (
-                <button onClick={() => setFirmandoBT(firmandoBT === doc.id ? null : doc.id)}
+                <button onClick={() => {
+                    const cerrando = firmandoBT === doc.id;
+                    setFirmandoBT(cerrando ? null : doc.id);
+                    if (cerrando) sincronizarFirmados(doc.id, true);   // al cerrar, verifica y baja el firmado
+                  }}
                   style={{ background: "#fff", color: "#7c3aed", border: "1.5px solid #ddd0f7", borderRadius: 8, padding: "8px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
-                  {firmandoBT === doc.id ? "Cerrar" : "✍️ Firmar como Bigticket"}
+                  {firmandoBT === doc.id ? "Cerrar y verificar firma" : "✍️ Firmar como Bigticket"}
+                </button>
+              )}
+              {doc.archivo_firmado_path && (
+                <button onClick={async () => {
+                    const { data, error } = await sb.storage.from("archivador_empresas").createSignedUrl(doc.archivo_firmado_path, 300);
+                    if (error || !data?.signedUrl) { alert("No se pudo abrir el PDF firmado."); return; }
+                    window.open(data.signedUrl, "_blank");
+                  }}
+                  style={{ background: "#e8f5ec", color: "#166534", border: "1.5px solid #b7e0c2", borderRadius: 8, padding: "8px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+                  📄 Ver firmado
                 </button>
               )}
               {doc.estado !== "borrador" && (
