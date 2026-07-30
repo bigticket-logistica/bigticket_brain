@@ -31,6 +31,10 @@ const horaChile = (ts) => {
 };
 const NAVY = "#1a3a6b";
 const ORANGE = "#F47B20";
+const AMBAR_ = "#a16207";
+const GRIS_ = "#8a94a6";
+const VERDE_ = "#0d8043";
+const ROJO_ = "#b42318";
 
 async function api(path) {
   const r = await fetch(`${CL_URL}/rest/v1/${path}`, {
@@ -157,6 +161,9 @@ function ModuloMaestroCL() {
   const [cecos, setCecos] = useState("");
   const [busca, setBusca] = useState("");
   const [kpiAbierto, setKpiAbierto] = useState(null);
+  const [recuadre, setRecuadre] = useState(null);
+  const [aCuadrar, setACuadrar] = useState([]);
+  const [pidiendo, setPidiendo] = useState(false);
 
   const [resumen, setResumen] = useState(null);
   const [jornada, setJornada] = useState([]);
@@ -185,19 +192,60 @@ function ModuloMaestroCL() {
     setCargando(true); setError("");
     (async () => {
       try {
-        const [res, jor, dev, tra] = await Promise.all([
+        const [res, jor, dev, tra, rec, cua] = await Promise.all([
           api(`vw_maestro_resumen_dia?fecha=eq.${fecha}`),
           api(`vw_maestro_jornada?fecha=eq.${fecha}&order=cargados.desc.nullslast&limit=3000`),
           api(`vw_maestro_devoluciones?fecha=eq.${fecha}&order=cecos.asc&limit=8000`),
           api(`vw_traspasos_resumen?fecha_operativa=eq.${fecha}&order=paquetes.desc&limit=3000`),
+          api(`vw_estado_recuadre?fecha_operativa=eq.${fecha}`),
+          api(`vw_rutas_a_cuadrar?fecha=eq.${fecha}&select=id_ruta,cecos,conductor,status,cargados,entregados,pendientes,motivos&limit=500`),
         ]);
         if (!vivo) return;
         setResumen(res[0] || null); setJornada(jor); setDevol(dev); setTrasp(tra);
+        setRecuadre(rec[0] || null); setACuadrar(cua);
       } catch (e) { if (vivo) setError(e.message); }
       finally { if (vivo) setCargando(false); }
     })();
     return () => { vivo = false; };
   }, [fecha]);
+
+  // Recarga los datos del día seleccionado (sin recargar la página).
+  const recargar = async () => {
+    if (!fecha) return;
+    try {
+      const [res, jor, rec, cua] = await Promise.all([
+        api(`vw_maestro_resumen_dia?fecha=eq.${fecha}`),
+        api(`vw_maestro_jornada?fecha=eq.${fecha}&order=cargados.desc.nullslast&limit=3000`),
+        api(`vw_estado_recuadre?fecha_operativa=eq.${fecha}`),
+        api(`vw_rutas_a_cuadrar?fecha=eq.${fecha}&select=id_ruta,cecos,conductor,status,cargados,entregados,pendientes,motivos&limit=500`),
+      ]);
+      setResumen(res[0] || null); setJornada(jor);
+      setRecuadre(rec[0] || null); setACuadrar(cua);
+    } catch (e) { setError(e.message); }
+  };
+
+  // Deja la solicitud en la cola; el monitor la ejecuta en su siguiente ciclo.
+  const pedirRecuadre = async () => {
+    if (!fecha) return;
+    setPidiendo(true);
+    try {
+      await api("solicitudes_proceso", {
+        method: "POST",
+        headers: { apikey: CL_KEY, Authorization: `Bearer ${CL_KEY}`,
+                   "Content-Type": "application/json", Prefer: "return=minimal" },
+        body: JSON.stringify({ tipo: "cuadrar_dia", fecha_operativa: fecha, solicitado_por: "brain" }),
+      });
+      await recargar();
+    } catch (e) { setError(e.message); }
+    finally { setPidiendo(false); }
+  };
+
+  // Mientras el recuadre está en curso, refrescar solo para ver el avance.
+  useEffect(() => {
+    if (!recuadre || !["pendiente", "en_proceso"].includes(recuadre.estado)) return;
+    const id = setInterval(() => { recargar().catch(() => {}); }, 30000);
+    return () => clearInterval(id);
+  }, [recuadre, fecha]);
 
   // Filtros en cliente
   const texto = busca.trim().toLowerCase();
@@ -218,6 +266,10 @@ function ModuloMaestroCL() {
   const listaCecos = [...new Set(jornada.map(r => r.cecos).filter(Boolean))].sort();
   const nLineHaul = jornada.filter(r => r.is_line_haul === true).length;
   const nSinClasificar = jornada.filter(r => r.is_line_haul === null || r.is_line_haul === undefined).length;
+  // Rutas que el chofer todavía no cerró. Durante el día debe ir bajando a 0.
+  // Las que quedan abiertas al cierre son la causa más común del descuadre.
+  const nAbiertas = jornadaVista.filter(r => r.status !== "close" && !r.ruta_vacia).length;
+  const nVacias   = jornada.filter(r => r.ruta_vacia === true).length;
 
   // Totales de lo que se está viendo (respetan los filtros)
   const tot = jornadaVista.reduce((a, r) => ({
@@ -308,6 +360,21 @@ function ModuloMaestroCL() {
         vacio: "Ningún viaje quedó con paquetes sin resolver. El día cerró completo.",
       }),
     },
+    {
+      id: "abiertas", rotulo: "Rutas abiertas", color: nAbiertas > 0 ? AMBAR_ : GRIS_,
+      alerta: nAbiertas > 0,
+      valor: fmt(nAbiertas), detalle: nAbiertas ? "el chofer no las cerró" : "todas cerradas",
+      que: "Rutas que el conductor todavía no cerró en MELI. Durante la jornada este número baja hasta llegar a cero; si al final del día quedan abiertas, es porque esos choferes no cerraron su ruta.",
+      como: "Se cuentan las rutas cuyo estado en MELI no es cerrado, según su última captura. Las rutas vacías quedan fuera.",
+      ojo: "Es la causa más común de los descuadres: el sistema solo guarda el cierre completo de una ruta cuando pasa a cerrada. Si nunca cierra, se queda con el contador de un snapshot anterior mientras su detalle se baja después, y los dos números dejan de coincidir.",
+      desglose: () => ({ titulo: "Rutas sin cerrar", columnas: [
+        { t: "ID Viaje" }, { t: "CECOS" }, { t: "Conductor" }, { t: "Estado" },
+        { t: "Cargados", num: true }, { t: "Entregados", num: true }, { t: "Pendientes", num: true }],
+        filas: jornadaVista.filter(r => r.status !== "close" && !r.ruta_vacia)
+          .sort((a, b) => n(b.pendientes) - n(a.pendientes))
+          .map(r => [r.id_viaje, r.cecos, r.conductor || "—", r.status,
+                     fmt(r.cargados), fmt(r.entregados), fmt(r.pendientes)]),
+        vacio: "Todas las rutas del día quedaron cerradas." }) },
     ...(nSinDetalle > 0 ? [{
       id: "sin_detalle", rotulo: "Falta detalle", color: "#7a5b16", alerta: true,
       valor: fmt(nSinDetalle), detalle: "aún sin procesar",
@@ -470,6 +537,52 @@ function ModuloMaestroCL() {
                 </button>
               )}
             </div>
+
+            {/* ── Barra de recuadre (solo en Maestro Jornada) ── */}
+            {tab === "jornada" && (
+              <div style={{ background: "#fff", border: "1px solid #e6e9ef", borderRadius: 10,
+                            padding: "12px 16px", marginBottom: 12, display: "flex",
+                            alignItems: "center", gap: 14, flexWrap: "wrap" }}>
+                <div style={{ flex: 1, minWidth: 300 }}>
+                  <div style={{ fontSize: 12.5, fontWeight: 800, color: NAVY }}>
+                    Cuadrar la jornada
+                    {aCuadrar.length > 0 && (
+                      <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 700, color: AMBAR_,
+                                     background: "#fdf6e3", padding: "1px 8px", borderRadius: 9 }}>
+                        {fmt(aCuadrar.length)} {aCuadrar.length === 1 ? "ruta por revisar" : "rutas por revisar"}
+                      </span>
+                    )}
+                  </div>
+                  <div style={{ fontSize: 12, color: "#64748b", lineHeight: 1.7, marginTop: 3 }}>
+                    {aCuadrar.length === 0
+                      ? "No hay rutas descuadradas ni con paquetes sin resolver: la jornada está cuadrada."
+                      : "Vuelve a consultar en MELI solo las rutas con conteos distintos, paquetes sin resolver o todavía abiertas. El pedido lo ejecuta el monitor en su siguiente pasada, dentro de unos 5 minutos."}
+                  </div>
+                  {recuadre && (
+                    <div style={{ fontSize: 11.5, marginTop: 5, color:
+                        recuadre.estado === "error" ? ROJO_ :
+                        recuadre.estado === "listo" || recuadre.estado === "sin_trabajo" ? VERDE_ : AMBAR_ }}>
+                      {recuadre.estado === "pendiente"   && `⏳ Pedido a las ${recuadre.solicitado_chile}, esperando al monitor (hace ${fmt(recuadre.hace_minutos)} min)`}
+                      {recuadre.estado === "en_proceso"  && `🔧 Recuadrando: ${fmt(recuadre.rutas_procesadas)} de ${fmt(recuadre.rutas_objetivo)} rutas`}
+                      {recuadre.estado === "listo"       && `✅ Recuadrado a las ${recuadre.terminado_chile} · ${recuadre.detalle || ""}`}
+                      {recuadre.estado === "sin_trabajo" && `✅ Revisado a las ${recuadre.terminado_chile}: no había nada que cuadrar`}
+                      {recuadre.estado === "error"       && `❌ ${recuadre.detalle || "El recuadre falló"}`}
+                    </div>
+                  )}
+                </div>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button className="mj-btn" onClick={recargar}>Actualizar</button>
+                  <button className="mj-btn" onClick={pedirRecuadre}
+                          disabled={pidiendo || aCuadrar.length === 0 ||
+                                    (recuadre && ["pendiente","en_proceso"].includes(recuadre.estado))}
+                          style={{ background: aCuadrar.length ? NAVY : "#fff",
+                                   color: aCuadrar.length ? "#fff" : "#b6bfcc",
+                                   cursor: aCuadrar.length ? "pointer" : "not-allowed" }}>
+                    {pidiendo ? "Pidiendo…" : "Cuadrar ahora"}
+                  </button>
+                </div>
+              </div>
+            )}
 
             {/* ── Maestro Jornada ── */}
             {tab === "jornada" && (
