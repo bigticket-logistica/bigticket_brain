@@ -10524,10 +10524,184 @@ function PadronLimpieza() {
   );
 }
 
+// ── PANEL SALUD DE FLUJOS · Padrón MELI ─────────────────────────────────────
+// Deriva el estado de cada flujo de la frescura real del dato en Supabase.
+function psHoyMX(offsetDias = 0) {
+  const d = new Date();
+  if (offsetDias) d.setDate(d.getDate() + offsetDias);
+  return d.toLocaleDateString("en-CA", { timeZone: "America/Mexico_City" }); // YYYY-MM-DD
+}
+function psDiasDesde(valor) {
+  if (!valor) return null;
+  const f = String(valor).slice(0, 10);
+  const a = new Date(f + "T00:00:00Z").getTime();
+  const b = new Date(psHoyMX() + "T00:00:00Z").getTime();
+  if (isNaN(a)) return null;
+  return Math.round((b - a) / 86400000);
+}
+
+function PadronSaludFlujos() {
+  const [f, setF] = useState(null);
+  const [cargando, setCargando] = useState(true);
+  const [err, setErr] = useState(null);
+  const [chequeado, setChequeado] = useState(null);
+  const [abierto, setAbierto] = useState(true);
+
+  const cargar = async () => {
+    setCargando(true); setErr(null);
+    const ultimo = async (tabla, col) => {
+      const { data, error } = await sb.from(tabla).select(col).not(col, "is", null)
+        .order(col, { ascending: false }).limit(1);
+      if (error) throw error;
+      return data && data[0] ? data[0][col] : null;
+    };
+    const contar = async (tabla, aplicar) => {
+      let q = sb.from(tabla).select("*", { count: "exact", head: true });
+      if (aplicar) q = aplicar(q);
+      const { count, error } = await q;
+      if (error) throw error;
+      return count || 0;
+    };
+    const seguro = async (fn) => { try { return await fn(); } catch (e) { return { _err: e.message || "error" }; } };
+
+    try {
+      const [drv, veh, det, cur, rec, via] = await Promise.all([
+        seguro(async () => {
+          const fecha = await ultimo("meli_drivers_master", "fecha_snapshot");
+          const n = fecha ? await contar("meli_drivers_master", q => q.eq("fecha_snapshot", fecha)) : 0;
+          return { fecha, n };
+        }),
+        seguro(async () => {
+          const fecha = await ultimo("meli_vehicles_master", "fecha_snapshot");
+          const n = fecha ? await contar("meli_vehicles_master", q => q.eq("fecha_snapshot", fecha)) : 0;
+          return { fecha, n };
+        }),
+        seguro(async () => ({
+          fecha: await ultimo("meli_drivers_detalle", "enriquecido_at"),
+          n: await contar("meli_drivers_detalle"),
+        })),
+        seguro(async () => ({
+          fecha: await ultimo("meli_drivers_cursos", "capturado_at"),
+          n: await contar("meli_drivers_cursos"),
+        })),
+        seguro(async () => ({
+          fecha: await ultimo("meli_validacion_tripulaciones", "cargado_at"),
+          n: await contar("meli_validacion_tripulaciones"),
+        })),
+        seguro(async () => ({
+          fecha: await ultimo("meli_viajes_historico", "fecha"),
+          n: await contar("meli_viajes_historico"),
+        })),
+      ]);
+      setF({ drv, veh, det, cur, rec, via });
+      setChequeado(new Date());
+    } catch (e) {
+      setErr(e.message || "Error consultando estado");
+    } finally {
+      setCargando(false);
+    }
+  };
+  useEffect(() => { cargar(); }, []);
+
+  const FUENTES = [
+    { k: "drv", label: "Padrón conductores", icon: "ti-user",     tipo: "diario", tabla: "meli_drivers_master",           unidad: "conductores", nota: "cron 07·12·15·17 CL" },
+    { k: "veh", label: "Padrón vehículos",   icon: "ti-truck",    tipo: "diario", tabla: "meli_vehicles_master",          unidad: "vehículos",   nota: "mismo flujo master" },
+    { k: "det", label: "Data completa",      icon: "ti-id",       tipo: "diario", tabla: "meli_drivers_detalle",          unidad: "enriquecidos", nota: "encadenado al master" },
+    { k: "cur", label: "Cursos pendientes",  icon: "ti-school",   tipo: "manual", tabla: "meli_drivers_cursos",           unidad: "cursos",      nota: "carga manual" },
+    { k: "rec", label: "Rechazados MELI",    icon: "ti-user-x",   tipo: "manual", tabla: "meli_validacion_tripulaciones", unidad: "registros",   nota: "carga Excel" },
+    { k: "via", label: "Viajes histórico",   icon: "ti-route",    tipo: "manual", tabla: "meli_viajes_historico",         unidad: "viajes",      nota: "alimenta Limpieza" },
+  ];
+
+  // Estado por fuente
+  const evaluar = (fu) => {
+    const d = f && f[fu.k];
+    if (!d) return { color: "#94a3b8", bg: "#f1f5f9", txt: "—", detalle: "sin consultar" };
+    if (d._err) return { color: "#991b1b", bg: "#fef2f2", txt: "Error", detalle: d._err };
+    if (!d.fecha) return { color: "#b45309", bg: "#fffbeb", txt: "Sin datos", detalle: "la tabla está vacía" };
+    const dias = psDiasDesde(d.fecha);
+    if (fu.tipo === "diario") {
+      if (dias === 0) return { color: "#065f46", bg: "#ecfdf5", txt: "Al día", detalle: "actualizado hoy" };
+      if (dias === 1) return { color: "#b45309", bg: "#fffbeb", txt: "1 día atrás", detalle: "no corrió hoy todavía" };
+      return { color: "#991b1b", bg: "#fef2f2", txt: `${dias} días atrás`, detalle: "revisar sesión MELI / flujo n8n" };
+    }
+    return { color: "#334155", bg: "#f8fafc", txt: dias === 0 ? "Hoy" : `hace ${dias} d`, detalle: "actualización manual" };
+  };
+
+  // Resumen global (solo mira los flujos automáticos)
+  const global = (() => {
+    if (!f) return { color: "#94a3b8", bg: "#f1f5f9", txt: "Consultando…" };
+    const diarios = FUENTES.filter(x => x.tipo === "diario").map(evaluar);
+    if (diarios.some(e => e.txt === "Error" || e.txt.includes("días atrás") || e.txt === "Sin datos"))
+      return { color: "#991b1b", bg: "#fef2f2", txt: "Requiere atención" };
+    if (diarios.some(e => e.txt === "1 día atrás"))
+      return { color: "#b45309", bg: "#fffbeb", txt: "Pendiente de hoy" };
+    return { color: "#065f46", bg: "#ecfdf5", txt: "Flujos al día" };
+  })();
+
+  return (
+    <div style={{ background: "#fff", borderBottom: "1px solid #e4e7ec", padding: "12px 24px" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 11, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5 }}>
+          Salud de flujos
+        </span>
+        <span style={{ background: global.bg, color: global.color, border: `1px solid ${global.color}22`, fontSize: 12, fontWeight: 800, padding: "3px 10px", borderRadius: 999 }}>
+          {cargando ? "Consultando…" : global.txt}
+        </span>
+        {chequeado && !cargando && (
+          <span style={{ fontSize: 11, color: "#94a3b8" }}>
+            verificado {chequeado.toLocaleTimeString("es-CL", { hour: "2-digit", minute: "2-digit" })} hrs
+          </span>
+        )}
+        <button onClick={cargar} disabled={cargando} title="Volver a verificar"
+          style={{ marginLeft: "auto", border: "1px solid #e4e7ec", background: "#fff", color: "#64748b", cursor: cargando ? "default" : "pointer", padding: "5px 10px", borderRadius: 6, fontSize: 11, fontWeight: 700, fontFamily: "'Geist', sans-serif", display: "inline-flex", alignItems: "center", gap: 5 }}>
+          <i className={`ti ${cargando ? "ti-loader-2" : "ti-refresh"}`} style={{ fontSize: 13 }} />Verificar
+        </button>
+        <button onClick={() => setAbierto(v => !v)}
+          style={{ border: "none", background: "transparent", color: "#94a3b8", cursor: "pointer", fontSize: 11, fontWeight: 700, fontFamily: "'Geist', sans-serif" }}>
+          {abierto ? "ocultar ▲" : "ver detalle ▼"}
+        </button>
+      </div>
+
+      {err && (
+        <div style={{ marginTop: 8, background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 8, padding: "7px 12px", fontSize: 12, color: "#991b1b" }}>{err}</div>
+      )}
+
+      {abierto && (
+        <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 8 }}>
+          {FUENTES.map(fu => {
+            const e = evaluar(fu);
+            const d = f && f[fu.k];
+            const esTS = fu.k === "det" || fu.k === "cur" || fu.k === "rec";
+            const cuando = d && !d._err && d.fecha
+              ? (esTS ? (typeof fmtFechaHoraMX === "function" ? fmtFechaHoraMX(d.fecha) : String(d.fecha).slice(0, 16).replace("T", " ")) : String(d.fecha).slice(0, 10))
+              : "—";
+            return (
+              <div key={fu.k} title={`${fu.tabla} · ${e.detalle}`}
+                style={{ background: e.bg, border: `1px solid ${e.color}22`, borderLeft: `3px solid ${e.color}`, borderRadius: 8, padding: "8px 11px" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 3 }}>
+                  <i className={`ti ${fu.icon}`} style={{ fontSize: 13, color: e.color }} />
+                  <span style={{ fontSize: 11.5, fontWeight: 800, color: "#1a3a6b" }}>{fu.label}</span>
+                </div>
+                <div style={{ fontSize: 11, fontWeight: 800, color: e.color, marginBottom: 2 }}>{cargando ? "…" : e.txt}</div>
+                <div style={{ fontSize: 10.5, color: "#64748b", lineHeight: 1.45 }}>
+                  {cuando}
+                  {d && !d._err && d.n != null && <> · <strong style={{ color: "#334155" }}>{d.n.toLocaleString("es-CL")}</strong> {fu.unidad}</>}
+                </div>
+                <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 2 }}>{fu.nota}</div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function PadronMeliAdmin({ usuario }) {
   const [mundo, setMundo] = useState("drivers"); // drivers (principal) | vehiculos
   return (
     <div style={{ fontFamily: "'Geist', sans-serif", background: "#f0f2f5", minHeight: "60vh" }}>
+      <PadronSaludFlujos />
       <div style={{ background: "#fff", borderBottom: "1px solid #e4e7ec", padding: "10px 24px", display: "flex", gap: 8, alignItems: "center" }}>
         <span style={{ fontSize: 11, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5, marginRight: 4 }}>Padrón MELI</span>
         {[
