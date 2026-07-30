@@ -222,8 +222,13 @@ function DetalleEmpresa({ empresa, onVolver, onActualizada }) {
   })(); }, [tab]);
 
   const verDoc = async (d) => {
-    const { data, error } = await sb.storage.from(d.bucket || "archivador_empresas").createSignedUrl(d.storage_path, 300);
-    if (error || !data?.signedUrl) { alert("No se pudo abrir el documento."); return; }
+    // PDFs firmados y zips se descargan (el visor del navegador falla con firmas
+    // digitales); imágenes y PDFs simples se abren en pestaña.
+    const p = String(d.storage_path || "").toLowerCase();
+    const descargar = p.endsWith(".zip") || p.endsWith(".xml") || /firmado/i.test(d.storage_path || "");
+    const { data, error } = await sb.storage.from(d.bucket || "archivador_empresas")
+      .createSignedUrl(d.storage_path, 3600, descargar ? { download: true } : undefined);
+    if (error || !data?.signedUrl) { alert("No se pudo abrir el documento: " + (error?.message || "ruta no encontrada") + "\n\n" + d.storage_path); return; }
     window.open(data.signedUrl, "_blank");
   };
 

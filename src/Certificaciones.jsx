@@ -3607,9 +3607,23 @@ function GestionadorContratos() {
   // Anexa al PDF firmado una página con la constancia de firmas de BigTicket
   // (quién firmó, cuándo, con qué certificado y los hashes del documento).
   const [sellando, setSellando] = useState(null);
-  const abrirDelArchivador = async (path) => {
-    const { data, error } = await sb.storage.from("archivador_empresas").createSignedUrl(path, 300);
-    if (error || !data?.signedUrl) { alert("No se pudo abrir el archivo."); return; }
+  const abrirDelArchivador = async (path, descargar = false) => {
+    if (!path) { alert("Este documento aún no tiene archivo firmado guardado."); return; }
+    const { data, error } = await sb.storage.from("archivador_empresas")
+      .createSignedUrl(path, 3600, descargar ? { download: true } : undefined);
+    if (error || !data?.signedUrl) {
+      // Diagnóstico útil: qué ruta se pidió y qué respondió Storage
+      const carpeta = path.split("/").slice(0, -1).join("/");
+      const { data: lista } = await sb.storage.from("archivador_empresas").list(carpeta, { limit: 20 });
+      alert(
+        "No se pudo abrir el archivo.\n\n" +
+        "Ruta pedida:\n" + path + "\n\n" +
+        "Error de Storage: " + (error?.message || "sin mensaje") + "\n\n" +
+        "Archivos que SÍ existen en esa carpeta:\n" +
+        ((lista || []).map((f) => "• " + f.name).join("\n") || "(carpeta vacía o sin permiso de lectura)")
+      );
+      return;
+    }
     window.open(data.signedUrl, "_blank");
   };
   const sellarRespaldo = async (doc) => {
@@ -3891,7 +3905,7 @@ function GestionadorContratos() {
                 </button>
               )}
               {doc.archivo_firmado_path && (
-                <button onClick={() => abrirDelArchivador(doc.sellado_path || doc.archivo_firmado_path)}
+                <button onClick={() => abrirDelArchivador(doc.sellado_path || doc.archivo_firmado_path, true)}
                   style={{ background: "#e8f5ec", color: "#166534", border: "1.5px solid #b7e0c2", borderRadius: 8, padding: "8px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
                   📄 Ver firmado{doc.sellado_path ? " + constancia" : ""}
                 </button>
@@ -3904,7 +3918,7 @@ function GestionadorContratos() {
                 </button>
               )}
               {doc.zip_path && (
-                <button onClick={() => abrirDelArchivador(doc.zip_path)}
+                <button onClick={() => abrirDelArchivador(doc.zip_path, true)}
                   title="Constancia de conservación NOM-151 emitida por MIFIEL"
                   style={{ background: "#fff", color: "#7c3aed", border: "1.5px solid #ddd0f7", borderRadius: 8, padding: "8px 12px", fontSize: 11.5, fontWeight: 700, cursor: "pointer" }}>
                   🗜 NOM-151
