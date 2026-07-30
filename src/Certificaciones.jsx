@@ -3501,6 +3501,13 @@ function GestionadorContratos() {
       .order("created_at", { ascending: false });
     setDocs(data || []);
   };
+
+  // Refresco automático: las firmas llegan por evento desde el portal, así que
+  // el listado se actualiza solo mientras el analista tiene la pestaña abierta.
+  useEffect(() => {
+    const t = setInterval(() => { if (!document.hidden) cargar(); }, 60000);
+    return () => clearInterval(t);
+  }, []);
   useEffect(() => {
     cargar();
     (async () => {
@@ -3632,6 +3639,29 @@ function GestionadorContratos() {
 
   return (
     <div>
+      {(() => {
+        const esperando = (docs || []).filter((d) => d.firmado_tercero && !d.firmado_bigticket && d.estado !== "firmado");
+        const listos = (docs || []).filter((d) => d.archivo_firmado_path);
+        return (
+          <>
+            {esperando.length > 0 && (
+              <div style={{ background: "#fff4e5", border: "1.5px solid #F47B20", borderRadius: 10, padding: "12px 16px", marginBottom: 12 }}>
+                <div style={{ fontSize: 13, fontWeight: 800, color: "#b45309", marginBottom: 4 }}>
+                  ✍️ {esperando.length} documento(s) ya firmados por el tercero — falta la firma de BigTicket
+                </div>
+                {esperando.map((d) => (
+                  <div key={d.id} style={{ fontSize: 12.5, color: "#8a4a0f" }}>• {d.titulo} — {d.terceros?.nombre || "—"}</div>
+                ))}
+              </div>
+            )}
+            {listos.length > 0 && (
+              <div style={{ background: "#e8f5ec", border: "1px solid #b7e0c2", borderRadius: 10, padding: "10px 16px", marginBottom: 12, fontSize: 12.5, color: "#166534", fontWeight: 600 }}>
+                ✅ {listos.length} documento(s) firmados por ambas partes y guardados en el archivador (botón “📄 Ver firmado”).
+              </div>
+            )}
+          </>
+        );
+      })()}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, flexWrap: "wrap", gap: 10 }}>
         <div style={{ fontSize: 12, color: "#888" }}>
           Contratos, anexos, bajas y otros documentos de firma — independientes del proceso de ingreso.
@@ -4296,6 +4326,43 @@ function ModuloCertificaciones() {
     const t = setInterval(() => {
       if (!selRef.current && !document.hidden) cargar(true);
     }, 60000);
+    return () => clearInterval(t);
+  }, []);
+
+  // ── Auto-avance Etapa 1 → Etapa 2 (Fuente A) ──
+  // Toda tarjeta de prospección que lleve más de 30 s en Recepción pasa sola a
+  // "Llamada de Supervisor" (y con eso se genera la tarea en la Bitácora).
+  // Se revisa cada 15 s mientras el módulo está abierto; el ref evita repetir
+  // el movimiento de una misma tarjeta.
+  const SEGUNDOS_ETAPA1 = 30;
+  const avanzadas = useRef(new Set());
+  const autoAvanzarEtapa1 = async (lista) => {
+    const ahora = Date.now();
+    const candidatas = (lista || []).filter((i) => {
+      if (i.fuente !== "prospeccion" || i.etapa !== "recepcion") return false;
+      if (avanzadas.current.has(i.id)) return false;
+      const desde = i.raw?.updated_at || i.raw?.created_at;
+      if (!desde) return false;
+      return ahora - new Date(desde).getTime() >= SEGUNDOS_ETAPA1 * 1000;
+    });
+    if (!candidatas.length) return;
+    for (const c of candidatas) {
+      avanzadas.current.add(c.id);
+      const { error } = await sb.from("certificaciones_mx").update({
+        etapa_kanban: "llamada_supervisor",
+        updated_at: new Date().toISOString(),
+      }).eq("id", c.id).eq("etapa_kanban", "recepcion");   // solo si sigue en Etapa 1
+      if (error) { console.warn("auto-avance E1→E2:", error.message); avanzadas.current.delete(c.id); }
+    }
+    await cargar(true);
+  };
+
+  const itemsRef = useRef([]);
+  itemsRef.current = items;
+  useEffect(() => {
+    const t = setInterval(() => {
+      if (!selRef.current && !document.hidden) autoAvanzarEtapa1(itemsRef.current);
+    }, 15000);
     return () => clearInterval(t);
   }, []);
 
