@@ -10525,7 +10525,8 @@ function PadronLimpieza() {
 }
 
 // ── PANEL SALUD DE FLUJOS · Padrón MELI ─────────────────────────────────────
-// Deriva el estado de cada flujo de la frescura real del dato en Supabase.
+// Deriva el estado de cada flujo de la frescura real del dato en Supabase,
+// y muestra los horarios en que efectivamente corrió (hora de Chile).
 function psHoyMX(offsetDias = 0) {
   const d = new Date();
   if (offsetDias) d.setDate(d.getDate() + offsetDias);
@@ -10539,6 +10540,19 @@ function psDiasDesde(valor) {
   if (isNaN(a)) return null;
   return Math.round((b - a) / 86400000);
 }
+function psHoraCL(iso) {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return null;
+  return d.toLocaleTimeString("es-CL", { timeZone: "America/Santiago", hour: "2-digit", minute: "2-digit", hour12: false });
+}
+function psFechaHoraCL(iso) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return String(iso).slice(0, 16).replace("T", " ");
+  return d.toLocaleDateString("es-CL", { timeZone: "America/Santiago", day: "2-digit", month: "2-digit", year: "numeric" })
+    + " " + psHoraCL(iso);
+}
 
 function PadronSaludFlujos() {
   const [f, setF] = useState(null);
@@ -10549,6 +10563,7 @@ function PadronSaludFlujos() {
 
   const cargar = async () => {
     setCargando(true); setErr(null);
+
     const ultimo = async (tabla, col) => {
       const { data, error } = await sb.from(tabla).select(col).not(col, "is", null)
         .order(col, { ascending: false }).limit(1);
@@ -10562,35 +10577,65 @@ function PadronSaludFlujos() {
       if (error) throw error;
       return count || 0;
     };
+    // Horas distintas (HH:MM Chile) en que se escribieron filas → corridas reales
+    const corridas = async (tabla, col, aplicar) => {
+      let q = sb.from(tabla).select(col).not(col, "is", null).order(col, { ascending: false }).limit(600);
+      if (aplicar) q = aplicar(q);
+      const { data, error } = await q;
+      if (error) throw error;
+      const vistos = new Set(); const out = [];
+      for (const r of (data || [])) {
+        const h = psHoraCL(r[col]);
+        if (h && !vistos.has(h)) { vistos.add(h); out.push(h); }
+        if (out.length >= 5) break;
+      }
+      return out;
+    };
     const seguro = async (fn) => { try { return await fn(); } catch (e) { return { _err: e.message || "error" }; } };
 
     try {
       const [drv, veh, det, cur, rec, via] = await Promise.all([
         seguro(async () => {
           const fecha = await ultimo("meli_drivers_master", "fecha_snapshot");
-          const n = fecha ? await contar("meli_drivers_master", q => q.eq("fecha_snapshot", fecha)) : 0;
-          return { fecha, n };
+          const filtro = q => q.eq("fecha_snapshot", fecha);
+          return {
+            fecha,
+            n: fecha ? await contar("meli_drivers_master", filtro) : 0,
+            horas: fecha ? await corridas("meli_drivers_master", "created_at", filtro) : [],
+          };
         }),
         seguro(async () => {
           const fecha = await ultimo("meli_vehicles_master", "fecha_snapshot");
-          const n = fecha ? await contar("meli_vehicles_master", q => q.eq("fecha_snapshot", fecha)) : 0;
-          return { fecha, n };
+          const filtro = q => q.eq("fecha_snapshot", fecha);
+          return {
+            fecha,
+            n: fecha ? await contar("meli_vehicles_master", filtro) : 0,
+            horas: fecha ? await corridas("meli_vehicles_master", "created_at", filtro) : [],
+          };
         }),
-        seguro(async () => ({
-          fecha: await ultimo("meli_drivers_detalle", "enriquecido_at"),
-          n: await contar("meli_drivers_detalle"),
-        })),
+        seguro(async () => {
+          const ts = await ultimo("meli_drivers_detalle", "enriquecido_at");
+          const desde = String(ts || "").slice(0, 10);
+          return {
+            fecha: ts,
+            n: await contar("meli_drivers_detalle"),
+            horas: desde ? await corridas("meli_drivers_detalle", "enriquecido_at", q => q.gte("enriquecido_at", desde + "T00:00:00Z")) : [],
+          };
+        }),
         seguro(async () => ({
           fecha: await ultimo("meli_drivers_cursos", "capturado_at"),
           n: await contar("meli_drivers_cursos"),
+          horas: [],
         })),
         seguro(async () => ({
           fecha: await ultimo("meli_validacion_tripulaciones", "cargado_at"),
           n: await contar("meli_validacion_tripulaciones"),
+          horas: [],
         })),
         seguro(async () => ({
           fecha: await ultimo("meli_viajes_historico", "fecha"),
           n: await contar("meli_viajes_historico"),
+          horas: [],
         })),
       ]);
       setF({ drv, veh, det, cur, rec, via });
@@ -10604,15 +10649,14 @@ function PadronSaludFlujos() {
   useEffect(() => { cargar(); }, []);
 
   const FUENTES = [
-    { k: "drv", label: "Padrón conductores", icon: "ti-user",     tipo: "diario", tabla: "meli_drivers_master",           unidad: "conductores", nota: "cron 07·12·15·17 CL" },
-    { k: "veh", label: "Padrón vehículos",   icon: "ti-truck",    tipo: "diario", tabla: "meli_vehicles_master",          unidad: "vehículos",   nota: "mismo flujo master" },
-    { k: "det", label: "Data completa",      icon: "ti-id",       tipo: "diario", tabla: "meli_drivers_detalle",          unidad: "enriquecidos", nota: "encadenado al master" },
-    { k: "cur", label: "Cursos pendientes",  icon: "ti-school",   tipo: "manual", tabla: "meli_drivers_cursos",           unidad: "cursos",      nota: "carga manual" },
-    { k: "rec", label: "Rechazados MELI",    icon: "ti-user-x",   tipo: "manual", tabla: "meli_validacion_tripulaciones", unidad: "registros",   nota: "carga Excel" },
-    { k: "via", label: "Viajes histórico",   icon: "ti-route",    tipo: "manual", tabla: "meli_viajes_historico",         unidad: "viajes",      nota: "alimenta Limpieza" },
+    { k: "drv", label: "Padrón conductores", icon: "ti-user",   tipo: "diario", tabla: "meli_drivers_master",           unidad: "conductores",  nota: "programado 07·12·15·17 CL" },
+    { k: "veh", label: "Padrón vehículos",   icon: "ti-truck",  tipo: "diario", tabla: "meli_vehicles_master",          unidad: "vehículos",    nota: "mismo flujo master" },
+    { k: "det", label: "Data completa",      icon: "ti-id",     tipo: "diario", tabla: "meli_drivers_detalle",          unidad: "enriquecidos", nota: "encadenado al master" },
+    { k: "cur", label: "Cursos pendientes",  icon: "ti-school", tipo: "manual", tabla: "meli_drivers_cursos",           unidad: "cursos",       nota: "carga manual" },
+    { k: "rec", label: "Rechazados MELI",    icon: "ti-user-x", tipo: "manual", tabla: "meli_validacion_tripulaciones", unidad: "registros",    nota: "carga Excel" },
+    { k: "via", label: "Viajes histórico",   icon: "ti-route",  tipo: "manual", tabla: "meli_viajes_historico",         unidad: "viajes",       nota: "alimenta Limpieza" },
   ];
 
-  // Estado por fuente
   const evaluar = (fu) => {
     const d = f && f[fu.k];
     if (!d) return { color: "#94a3b8", bg: "#f1f5f9", txt: "—", detalle: "sin consultar" };
@@ -10627,7 +10671,6 @@ function PadronSaludFlujos() {
     return { color: "#334155", bg: "#f8fafc", txt: dias === 0 ? "Hoy" : `hace ${dias} d`, detalle: "actualización manual" };
   };
 
-  // Resumen global (solo mira los flujos automáticos)
   const global = (() => {
     if (!f) return { color: "#94a3b8", bg: "#f1f5f9", txt: "Consultando…" };
     const diarios = FUENTES.filter(x => x.tipo === "diario").map(evaluar);
@@ -10649,7 +10692,7 @@ function PadronSaludFlujos() {
         </span>
         {chequeado && !cargando && (
           <span style={{ fontSize: 11, color: "#94a3b8" }}>
-            verificado {chequeado.toLocaleTimeString("es-CL", { hour: "2-digit", minute: "2-digit" })} hrs
+            verificado {psHoraCL(chequeado.toISOString())} hrs · horarios en hora de Chile
           </span>
         )}
         <button onClick={cargar} disabled={cargando} title="Volver a verificar"
@@ -10667,14 +10710,15 @@ function PadronSaludFlujos() {
       )}
 
       {abierto && (
-        <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 8 }}>
+        <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(205px, 1fr))", gap: 8 }}>
           {FUENTES.map(fu => {
             const e = evaluar(fu);
             const d = f && f[fu.k];
             const esTS = fu.k === "det" || fu.k === "cur" || fu.k === "rec";
             const cuando = d && !d._err && d.fecha
-              ? (esTS ? (typeof fmtFechaHoraMX === "function" ? fmtFechaHoraMX(d.fecha) : String(d.fecha).slice(0, 16).replace("T", " ")) : String(d.fecha).slice(0, 10))
+              ? (esTS ? psFechaHoraCL(d.fecha) : String(d.fecha).slice(0, 10))
               : "—";
+            const horas = (d && !d._err && Array.isArray(d.horas)) ? d.horas : [];
             return (
               <div key={fu.k} title={`${fu.tabla} · ${e.detalle}`}
                 style={{ background: e.bg, border: `1px solid ${e.color}22`, borderLeft: `3px solid ${e.color}`, borderRadius: 8, padding: "8px 11px" }}>
@@ -10687,7 +10731,22 @@ function PadronSaludFlujos() {
                   {cuando}
                   {d && !d._err && d.n != null && <> · <strong style={{ color: "#334155" }}>{d.n.toLocaleString("es-CL")}</strong> {fu.unidad}</>}
                 </div>
-                <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 2 }}>{fu.nota}</div>
+                {fu.tipo === "diario" && !cargando && (
+                  <div style={{ fontSize: 10.5, color: "#475569", marginTop: 3, display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
+                    <i className="ti ti-clock" style={{ fontSize: 11, color: "#94a3b8" }} />
+                    {horas.length > 0 ? (
+                      <>
+                        <span style={{ color: "#94a3b8" }}>corridas:</span>
+                        {horas.map(h => (
+                          <span key={h} style={{ background: "#fff", border: `1px solid ${e.color}33`, color: e.color, fontWeight: 800, fontSize: 10, padding: "1px 5px", borderRadius: 4 }}>{h}</span>
+                        ))}
+                      </>
+                    ) : (
+                      <span style={{ color: "#94a3b8" }}>sin registro de hora</span>
+                    )}
+                  </div>
+                )}
+                <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 3 }}>{fu.nota}</div>
               </div>
             );
           })}
@@ -10938,11 +10997,6 @@ function PadronMundo({ tipo }) {
             </select>
           </>
         )}
-        <div style={{ marginLeft: "auto", fontSize: 11, color: PMUTED, display: "flex", alignItems: "center", gap: 6 }}>
-          <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#10b981", display: "inline-block" }} />
-          Última: <strong style={{ color: PNAVY }}>{fechasDisp[0] || "—"}</strong>
-          <span style={{ color: PLIGHT }}>· cron 08:00 MX</span>
-        </div>
       </div>
 
       <div style={{ padding: "16px 24px" }}>
