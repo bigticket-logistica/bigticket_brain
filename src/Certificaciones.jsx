@@ -3604,6 +3604,94 @@ function GestionadorContratos() {
     } finally { setSincronizando(false); }
   };
 
+  // Anexa al PDF firmado una página con la constancia de firmas de BigTicket
+  // (quién firmó, cuándo, con qué certificado y los hashes del documento).
+  const [sellando, setSellando] = useState(null);
+  const abrirDelArchivador = async (path) => {
+    const { data, error } = await sb.storage.from("archivador_empresas").createSignedUrl(path, 300);
+    if (error || !data?.signedUrl) { alert("No se pudo abrir el archivo."); return; }
+    window.open(data.signedUrl, "_blank");
+  };
+  const sellarRespaldo = async (doc) => {
+    if (!doc.archivo_firmado_path) { alert("Primero hay que traer el PDF firmado de MIFIEL."); return; }
+    setSellando(doc.id);
+    try {
+      const PDFLib = await cargarPdfLib();
+      const { data: sig, error: eSig } = await sb.storage.from("archivador_empresas")
+        .createSignedUrl(doc.archivo_firmado_path, 300);
+      if (eSig || !sig?.signedUrl) throw new Error("no se pudo leer el PDF firmado");
+      const bytes = await (await fetch(sig.signedUrl)).arrayBuffer();
+
+      const pdf = await PDFLib.PDFDocument.load(bytes);
+      const helv = await pdf.embedFont(PDFLib.StandardFonts.Helvetica);
+      const bold = await pdf.embedFont(PDFLib.StandardFonts.HelveticaBold);
+      const pag = pdf.addPage([612, 792]);
+      const navy = PDFLib.rgb(0.10, 0.23, 0.42);
+      const gris = PDFLib.rgb(0.40, 0.44, 0.52);
+      let y = 730;
+      const T = (t, x, yy, f = helv, sz = 10, col = PDFLib.rgb(0, 0, 0)) =>
+        pag.drawText(String(t ?? "—"), { x, y: yy, size: sz, font: f, color: col });
+
+      T("Constancia de firmas", 56, y, bold, 20, navy); y -= 18;
+      T("Anexo generado por BigTicket · complementa la constancia NOM-151 emitida por MIFIEL", 56, y, helv, 8.5, gris); y -= 26;
+      pag.drawLine({ start: { x: 56, y }, end: { x: 556, y }, thickness: 1, color: navy }); y -= 22;
+
+      T("Documento", 56, y, bold, 11, navy); y -= 16;
+      [["Título", doc.titulo], ["Tipo", doc.tipo], ["Empresa", doc.terceros?.nombre],
+       ["ID MIFIEL", doc.mifiel_documento_id], ["Firmado (fecha del sistema)", doc.firmado_at ? new Date(doc.firmado_at).toLocaleString("es-MX") : "—"],
+      ].forEach(([k, v]) => { T(k + ":", 56, y, bold, 9.5); T(v, 210, y, helv, 9.5); y -= 14; });
+      y -= 8;
+
+      T("Firmantes", 56, y, bold, 11, navy); y -= 16;
+      const fs = Array.isArray(doc.firmantes) ? doc.firmantes : [];
+      if (!fs.length) { T("Sin detalle de firmantes registrado (vuelve a sincronizar con MIFIEL).", 56, y, helv, 9.5, gris); y -= 14; }
+      fs.forEach((f, i) => {
+        T(`${i + 1}. ${f.nombre || "—"}`, 56, y, bold, 10); y -= 13;
+        [["Correo", f.email], ["RFC", f.rfc], ["Firmó", f.firmado ? "Sí" : "No"],
+         ["Fecha de firma", f.firmado_at ? new Date(f.firmado_at).toLocaleString("es-MX") : "—"],
+         ["Certificado", f.certificado],
+        ].forEach(([k, v]) => { T(k + ":", 70, y, helv, 9); T(v, 190, y, helv, 9); y -= 12; });
+        y -= 6;
+      });
+
+      y -= 6;
+      T("Integridad del documento", 56, y, bold, 11, navy); y -= 16;
+      const cortar = (h) => (h ? String(h).match(/.{1,64}/g) : ["—"]);
+      T("Hash original (SHA-256):", 56, y, bold, 9); y -= 12;
+      cortar(doc.hash_original).forEach((l) => { T(l, 70, y, helv, 8); y -= 10; });
+      y -= 4;
+      T("Hash firmado (SHA-256):", 56, y, bold, 9); y -= 12;
+      cortar(doc.hash_firmado).forEach((l) => { T(l, 70, y, helv, 8); y -= 10; });
+
+      y -= 18;
+      T("Respaldos asociados en el archivador de la empresa:", 56, y, bold, 9.5, navy); y -= 13;
+      [["PDF firmado (con anexo MIFIEL)", doc.archivo_firmado_path],
+       ["Constancia NOM-151 (.zip)", doc.zip_path], ["Firmas en XML", doc.xml_path],
+       ["Metadata MIFIEL (.json)", doc.meta_path],
+      ].forEach(([k, v]) => { T((v ? "• " : "○ ") + k + (v ? "" : " — no disponible"), 70, y, helv, 8.5, v ? PDFLib.rgb(0, 0, 0) : gris); y -= 11; });
+
+      T(`Constancia emitida el ${new Date().toLocaleString("es-MX")} · ${window.__PERFIL_EMAIL || "Brain BigTicket"}`, 56, 60, helv, 8, gris);
+
+      const out = await pdf.save();
+      const path = doc.archivo_firmado_path.replace(/\.pdf$/i, "") + "_SELLADO.pdf";
+      const { error: eUp } = await sb.storage.from("archivador_empresas")
+        .upload(path, new Blob([out], { type: "application/pdf" }), { upsert: true, contentType: "application/pdf" });
+      if (eUp) throw new Error(eUp.message);
+
+      await sb.from("documentos_empresa").upsert({
+        tercero_id: doc.tercero_id, categoria: "contratos",
+        nombre_archivo: `FIRMADO + CONSTANCIA — ${doc.titulo}.pdf`,
+        storage_path: path, bucket: "archivador_empresas", mime_type: "application/pdf",
+        referencia: "PDF firmado con constancia de firmas anexada",
+        subido_por: window.__PERFIL_EMAIL || "", origen: "brain",
+      }, { onConflict: "storage_path" });
+      await sb.from("contratos_gestion").update({ sellado_path: path }).eq("id", doc.id);
+      await cargar();
+      alert("✅ Constancia anexada. El PDF sellado quedó en el archivador de la empresa.");
+    } catch (e) { alert("No se pudo sellar: " + e.message); }
+    finally { setSellando(null); }
+  };
+
   const eliminarDoc = async (doc) => {
     // Se puede eliminar en cualquier estado (equivocaciones y pruebas), con
     // confirmación proporcional al riesgo.
@@ -3803,13 +3891,23 @@ function GestionadorContratos() {
                 </button>
               )}
               {doc.archivo_firmado_path && (
-                <button onClick={async () => {
-                    const { data, error } = await sb.storage.from("archivador_empresas").createSignedUrl(doc.archivo_firmado_path, 300);
-                    if (error || !data?.signedUrl) { alert("No se pudo abrir el PDF firmado."); return; }
-                    window.open(data.signedUrl, "_blank");
-                  }}
+                <button onClick={() => abrirDelArchivador(doc.sellado_path || doc.archivo_firmado_path)}
                   style={{ background: "#e8f5ec", color: "#166534", border: "1.5px solid #b7e0c2", borderRadius: 8, padding: "8px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
-                  📄 Ver firmado
+                  📄 Ver firmado{doc.sellado_path ? " + constancia" : ""}
+                </button>
+              )}
+              {doc.archivo_firmado_path && !doc.sellado_path && (
+                <button onClick={() => sellarRespaldo(doc)} disabled={sellando === doc.id}
+                  title="Anexa al PDF una página con nombres, RFC, fechas de firma, certificados y hashes"
+                  style={{ background: "#fff", color: "#1a3a6b", border: "1.5px solid #1a3a6b", borderRadius: 8, padding: "8px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+                  {sellando === doc.id ? "Sellando…" : "🖊 Anexar constancia"}
+                </button>
+              )}
+              {doc.zip_path && (
+                <button onClick={() => abrirDelArchivador(doc.zip_path)}
+                  title="Constancia de conservación NOM-151 emitida por MIFIEL"
+                  style={{ background: "#fff", color: "#7c3aed", border: "1.5px solid #ddd0f7", borderRadius: 8, padding: "8px 12px", fontSize: 11.5, fontWeight: 700, cursor: "pointer" }}>
+                  🗜 NOM-151
                 </button>
               )}
               {doc.estado !== "borrador" && (
