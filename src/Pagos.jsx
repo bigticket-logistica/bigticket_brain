@@ -11007,7 +11007,32 @@ function PadronMundo({ tipo }) {
       try {
         const { data, error } = await sb.rpc(cfg.rpcDiff, { fecha_a: fechaA, fecha_b: fechaB });
         if (error) throw error;
-        if (alive) setDiffRows(data || []);
+        let filas = data || [];
+        // Atribución de altas (solo conductores): quién invitó, según auditoría
+        if (tipo === "drivers") {
+          const idsAltas = filas.filter(r => r.tipo_cambio === "alta" && r.driver_id != null).map(r => r.driver_id);
+          if (idsAltas.length > 0) {
+            try {
+              const { data: attr } = await sb
+                .from("vw_altas_padron_atribuidas")
+                .select("driver_id,invitado_por_ldap,invitado_por_email,invitacion_at,con_registro_auditoria")
+                .in("driver_id", idsAltas);
+              const mapa = {};
+              (attr || []).forEach(a => { mapa[a.driver_id] = a; });
+              filas = filas.map(r => {
+                if (r.tipo_cambio !== "alta") return r;
+                const a = mapa[r.driver_id];
+                if (a && a.con_registro_auditoria) {
+                  const quien = a.invitado_por_ldap || a.invitado_por_email || "?";
+                  const cuando = a.invitacion_at ? String(a.invitacion_at).slice(0, 10) : "";
+                  return { ...r, dado_alta_por: cuando ? `${quien} · ${cuando}` : quien };
+                }
+                return { ...r, dado_alta_por: "sin registro" };
+              });
+            } catch (e) { /* sin atribución no bloqueamos el diff */ }
+          }
+        }
+        if (alive) setDiffRows(filas);
       } catch (e) { if (alive) setError(e.message || "Error"); }
       finally { if (alive) setLoading(false); }
     })();
@@ -11208,7 +11233,7 @@ function PadronMundo({ tipo }) {
                   <PKpi l="➖ Bajas" v={bajas.length} s={`removidos vs ${fechaA}`} accent="#dc2626" />
                   <PKpi l="🔄 Cambios" v={cambios.length} s="status / tipo / carrier" accent={PORANGE} />
                 </div>
-                <PadronDiffTabla titulo="Altas" rows={altas} cols={cfg.diffCols} tipo={tipo} archivo={`altas_${tipo}`} vacio="Sin altas entre las fechas" />
+                <PadronDiffTabla titulo="Altas" rows={altas} cols={tipo === "drivers" ? [...cfg.diffCols, { k: "dado_alta_por", l: "Dado de alta por", small: true }] : cfg.diffCols} tipo={tipo} archivo={`altas_${tipo}`} vacio="Sin altas entre las fechas" />
                 <div style={{ height: 14 }} />
                 <PadronDiffTabla titulo="Bajas" rows={bajas} cols={cfg.diffCols} tipo={tipo} archivo={`bajas_${tipo}`} vacio="Sin bajas entre las fechas" />
                 {cambios.length > 0 && (
