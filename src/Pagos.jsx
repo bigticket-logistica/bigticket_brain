@@ -10756,11 +10756,187 @@ function PadronSaludFlujos() {
   );
 }
 
+// ── CORRIDAS PROGRAMADAS DE HOY · master MX ─────────────────────────────────
+// Lee flujos_ejecuciones y cruza contra los 4 horarios programados (hora Chile).
+const PC_SLOTS = ["07:00", "12:00", "15:00", "17:00"];
+const PC_WEBHOOK = "https://bigticket2026.app.n8n.cloud/webhook/disparar-master-mx";
+
+function pcFechaCL(iso) {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return null;
+  return d.toLocaleDateString("en-CA", { timeZone: "America/Santiago" }); // YYYY-MM-DD
+}
+function pcHoraCL(iso) {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return null;
+  return d.toLocaleTimeString("es-CL", { timeZone: "America/Santiago", hour: "2-digit", minute: "2-digit", hour12: false });
+}
+function pcAhoraCL() {
+  return new Date().toLocaleTimeString("es-CL", { timeZone: "America/Santiago", hour: "2-digit", minute: "2-digit", hour12: false });
+}
+
+function PadronCorridasHoy() {
+  const [ejec, setEjec] = useState([]);
+  const [cargando, setCargando] = useState(true);
+  const [errTabla, setErrTabla] = useState(null);
+  const [ejecutando, setEjecutando] = useState(false);
+  const [aviso, setAviso] = useState(null);
+
+  const cargar = async () => {
+    setCargando(true); setErrTabla(null);
+    try {
+      const { data, error } = await sb
+        .from("flujos_ejecuciones")
+        .select("ok,motivo,mensaje,drivers,vehicles,duracion_s,ejecutado_at")
+        .eq("flujo", "master_mx")
+        .order("ejecutado_at", { ascending: false })
+        .limit(60);
+      if (error) throw error;
+      const hoyCL = pcFechaCL(new Date().toISOString());
+      setEjec((data || []).filter(r => pcFechaCL(r.ejecutado_at) === hoyCL));
+    } catch (e) {
+      setErrTabla(e.message || "No pude leer flujos_ejecuciones");
+    } finally {
+      setCargando(false);
+    }
+  };
+  useEffect(() => { cargar(); }, []);
+
+  const ejecutarAhora = async () => {
+    if (ejecutando) return;
+    setEjecutando(true); setAviso(null);
+    try {
+      const r = await fetch(PC_WEBHOOK, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ origen: "brain", ts: new Date().toISOString() }),
+      });
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      setAviso("ok:Flujo disparado " + pcAhoraCL() + " hrs. Tarda ~20–40 seg; presioná Actualizar para ver el resultado.");
+    } catch (e) {
+      setAviso("err:No se pudo disparar: " + (e.message || "error"));
+    } finally {
+      setEjecutando(false);
+    }
+  };
+
+  // Asigna cada ejecución al slot cuya hora coincide; el resto va a "otras"
+  const porSlot = {};
+  const otras = [];
+  PC_SLOTS.forEach(s => { porSlot[s] = []; });
+  ejec.forEach(r => {
+    const h = pcHoraCL(r.ejecutado_at);
+    const slot = PC_SLOTS.find(s => s.slice(0, 2) === String(h).slice(0, 2));
+    if (slot) porSlot[slot].push(r); else otras.push(r);
+  });
+
+  const ahora = pcAhoraCL();
+  const estadoSlot = (slot) => {
+    const lista = porSlot[slot] || [];
+    if (lista.length > 0) {
+      const ult = lista[0]; // ya vienen ordenadas desc
+      if (ult.ok) return { tipo: "ok", color: "#065f46", bg: "#ecfdf5", icon: "ti-circle-check", txt: "Corrió OK", ult };
+      return { tipo: "err", color: "#991b1b", bg: "#fef2f2", icon: "ti-circle-x", txt: "Falló", ult };
+    }
+    if (slot > ahora) return { tipo: "pend", color: "#64748b", bg: "#f8fafc", icon: "ti-clock", txt: "Pendiente", ult: null };
+    return { tipo: "nada", color: "#991b1b", bg: "#fef2f2", icon: "ti-circle-x", txt: "No corrió", ult: null };
+  };
+
+  const detalleDe = (e) => {
+    if (!e.ult) return e.tipo === "pend" ? "aún no es la hora" : "sin registro de ejecución";
+    const u = e.ult;
+    if (u.ok) {
+      const partes = [];
+      if (u.drivers != null) partes.push(u.drivers + " conductores");
+      if (u.vehicles != null) partes.push(u.vehicles + " vehículos");
+      if (u.duracion_s != null) partes.push(u.duracion_s + "s");
+      return (pcHoraCL(u.ejecutado_at) || "") + " · " + (partes.join(" · ") || "sin detalle");
+    }
+    return (pcHoraCL(u.ejecutado_at) || "") + " · " + (u.motivo === "sesion_expirada" ? "sesión MELI expirada" : (u.motivo || "error")) ;
+  };
+
+  return (
+    <div style={{ background: "#fff", borderBottom: "1px solid #e4e7ec", padding: "12px 24px" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
+        <span style={{ fontSize: 11, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5 }}>
+          Corridas de hoy · padrón master
+        </span>
+        <span style={{ fontSize: 11, color: "#94a3b8" }}>hora de Chile · ahora {ahora} hrs</span>
+        <button onClick={cargar} disabled={cargando}
+          style={{ marginLeft: "auto", border: "1px solid #e4e7ec", background: "#fff", color: "#64748b", cursor: cargando ? "default" : "pointer", padding: "5px 10px", borderRadius: 6, fontSize: 11, fontWeight: 700, fontFamily: "'Geist', sans-serif", display: "inline-flex", alignItems: "center", gap: 5 }}>
+          <i className={`ti ${cargando ? "ti-loader-2" : "ti-refresh"}`} style={{ fontSize: 13 }} />Actualizar
+        </button>
+      </div>
+
+      {errTabla && (
+        <div style={{ background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: "8px 12px", fontSize: 12, color: "#92400e", marginBottom: 10 }}>
+          No pude leer el historial de ejecuciones ({errTabla}). Si todavía no creaste la tabla <strong>flujos_ejecuciones</strong>, los tickets van a quedar en “sin registro”.
+        </div>
+      )}
+      {aviso && (
+        <div style={{
+          borderRadius: 8, padding: "8px 12px", fontSize: 12, marginBottom: 10,
+          background: aviso.startsWith("ok:") ? "#ecfdf5" : "#fef2f2",
+          border: "1px solid " + (aviso.startsWith("ok:") ? "#a7f3d0" : "#fecaca"),
+          color: aviso.startsWith("ok:") ? "#065f46" : "#991b1b",
+        }}>{aviso.slice(aviso.indexOf(":") + 1)}</div>
+      )}
+
+      <div style={{ display: "grid", gap: 6 }}>
+        {PC_SLOTS.map(slot => {
+          const e = estadoSlot(slot);
+          return (
+            <div key={slot} style={{
+              display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap",
+              background: e.bg, border: `1px solid ${e.color}22`, borderLeft: `3px solid ${e.color}`,
+              borderRadius: 8, padding: "8px 12px",
+            }}>
+              <span style={{ fontSize: 14, fontWeight: 800, color: "#1a3a6b", minWidth: 52, fontVariantNumeric: "tabular-nums" }}>{slot}</span>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "#fff", border: `1px solid ${e.color}44`, color: e.color, fontSize: 11, fontWeight: 800, padding: "3px 9px", borderRadius: 999, minWidth: 96, justifyContent: "center" }}>
+                <i className={`ti ${e.icon}`} style={{ fontSize: 13 }} />{cargando ? "…" : e.txt}
+              </span>
+              <span style={{ fontSize: 11.5, color: "#475569", flex: 1, minWidth: 160 }}>{cargando ? "" : detalleDe(e)}</span>
+              {(porSlot[slot] || []).length > 1 && (
+                <span style={{ fontSize: 10, color: "#94a3b8" }}>{porSlot[slot].length} intentos</span>
+              )}
+              <button onClick={ejecutarAhora} disabled={ejecutando} title="Ejecutar el flujo master ahora"
+                style={{
+                  border: "none", cursor: ejecutando ? "default" : "pointer",
+                  background: ejecutando ? "#94a3b8" : "#F47B20", color: "#fff",
+                  padding: "6px 12px", borderRadius: 6, fontSize: 11, fontWeight: 800,
+                  fontFamily: "'Geist', sans-serif", display: "inline-flex", alignItems: "center", gap: 5,
+                }}>
+                <i className={`ti ${ejecutando ? "ti-loader-2" : "ti-player-play"}`} style={{ fontSize: 12 }} />
+                {ejecutando ? "Ejecutando…" : "Ejecutar"}
+              </button>
+            </div>
+          );
+        })}
+      </div>
+
+      {otras.length > 0 && (
+        <div style={{ marginTop: 8, fontSize: 11, color: "#64748b" }}>
+          <strong style={{ color: "#334155" }}>Otras corridas de hoy</strong> (fuera de horario):{" "}
+          {otras.map((o, i) => (
+            <span key={i} style={{ marginRight: 8 }}>
+              <span style={{ color: o.ok ? "#065f46" : "#991b1b", fontWeight: 800 }}>{pcHoraCL(o.ejecutado_at)}</span>
+              {o.ok ? " ✓" : " ✗"}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function PadronMeliAdmin({ usuario }) {
   const [mundo, setMundo] = useState("drivers"); // drivers (principal) | vehiculos
   return (
     <div style={{ fontFamily: "'Geist', sans-serif", background: "#f0f2f5", minHeight: "60vh" }}>
       <PadronSaludFlujos />
+      <PadronCorridasHoy />
       <div style={{ background: "#fff", borderBottom: "1px solid #e4e7ec", padding: "10px 24px", display: "flex", gap: 8, alignItems: "center" }}>
         <span style={{ fontSize: 11, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5, marginRight: 4 }}>Padrón MELI</span>
         {[
