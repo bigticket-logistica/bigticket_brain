@@ -10525,12 +10525,12 @@ function PadronLimpieza() {
 }
 
 // ── PANEL SALUD DE FLUJOS · Padrón MELI ─────────────────────────────────────
-// Deriva el estado de cada flujo de la frescura real del dato en Supabase,
-// y muestra los horarios en que efectivamente corrió (hora de Chile).
+// Resumen del padrón vigente + estado de las fuentes de carga manual.
+// El detalle de corridas automáticas vive en <PadronCorridasHoy />.
 function psHoyMX(offsetDias = 0) {
   const d = new Date();
   if (offsetDias) d.setDate(d.getDate() + offsetDias);
-  return d.toLocaleDateString("en-CA", { timeZone: "America/Mexico_City" }); // YYYY-MM-DD
+  return d.toLocaleDateString("en-CA", { timeZone: "America/Mexico_City" });
 }
 function psDiasDesde(valor) {
   if (!valor) return null;
@@ -10540,18 +10540,12 @@ function psDiasDesde(valor) {
   if (isNaN(a)) return null;
   return Math.round((b - a) / 86400000);
 }
-function psHoraCL(iso) {
-  if (!iso) return null;
-  const d = new Date(iso);
-  if (isNaN(d.getTime())) return null;
-  return d.toLocaleTimeString("es-CL", { timeZone: "America/Santiago", hour: "2-digit", minute: "2-digit", hour12: false });
-}
 function psFechaHoraCL(iso) {
   if (!iso) return "—";
   const d = new Date(iso);
   if (isNaN(d.getTime())) return String(iso).slice(0, 16).replace("T", " ");
   return d.toLocaleDateString("es-CL", { timeZone: "America/Santiago", day: "2-digit", month: "2-digit", year: "numeric" })
-    + " " + psHoraCL(iso);
+    + " " + d.toLocaleTimeString("es-CL", { timeZone: "America/Santiago", hour: "2-digit", minute: "2-digit", hour12: false });
 }
 
 function PadronSaludFlujos() {
@@ -10559,11 +10553,9 @@ function PadronSaludFlujos() {
   const [cargando, setCargando] = useState(true);
   const [err, setErr] = useState(null);
   const [chequeado, setChequeado] = useState(null);
-  const [abierto, setAbierto] = useState(true);
 
   const cargar = async () => {
     setCargando(true); setErr(null);
-
     const ultimo = async (tabla, col) => {
       const { data, error } = await sb.from(tabla).select(col).not(col, "is", null)
         .order(col, { ascending: false }).limit(1);
@@ -10577,66 +10569,22 @@ function PadronSaludFlujos() {
       if (error) throw error;
       return count || 0;
     };
-    // Horas distintas (HH:MM Chile) en que se escribieron filas → corridas reales
-    const corridas = async (tabla, col, aplicar) => {
-      let q = sb.from(tabla).select(col).not(col, "is", null).order(col, { ascending: false }).limit(600);
-      if (aplicar) q = aplicar(q);
-      const { data, error } = await q;
-      if (error) throw error;
-      const vistos = new Set(); const out = [];
-      for (const r of (data || [])) {
-        const h = psHoraCL(r[col]);
-        if (h && !vistos.has(h)) { vistos.add(h); out.push(h); }
-        if (out.length >= 5) break;
-      }
-      return out;
-    };
     const seguro = async (fn) => { try { return await fn(); } catch (e) { return { _err: e.message || "error" }; } };
 
     try {
       const [drv, veh, det, cur, rec, via] = await Promise.all([
         seguro(async () => {
           const fecha = await ultimo("meli_drivers_master", "fecha_snapshot");
-          const filtro = q => q.eq("fecha_snapshot", fecha);
-          return {
-            fecha,
-            n: fecha ? await contar("meli_drivers_master", filtro) : 0,
-            horas: fecha ? await corridas("meli_drivers_master", "created_at", filtro) : [],
-          };
+          return { fecha, n: fecha ? await contar("meli_drivers_master", q => q.eq("fecha_snapshot", fecha)) : 0 };
         }),
         seguro(async () => {
           const fecha = await ultimo("meli_vehicles_master", "fecha_snapshot");
-          const filtro = q => q.eq("fecha_snapshot", fecha);
-          return {
-            fecha,
-            n: fecha ? await contar("meli_vehicles_master", filtro) : 0,
-            horas: fecha ? await corridas("meli_vehicles_master", "created_at", filtro) : [],
-          };
+          return { fecha, n: fecha ? await contar("meli_vehicles_master", q => q.eq("fecha_snapshot", fecha)) : 0 };
         }),
-        seguro(async () => {
-          const ts = await ultimo("meli_drivers_detalle", "enriquecido_at");
-          const desde = String(ts || "").slice(0, 10);
-          return {
-            fecha: ts,
-            n: await contar("meli_drivers_detalle"),
-            horas: desde ? await corridas("meli_drivers_detalle", "enriquecido_at", q => q.gte("enriquecido_at", desde + "T00:00:00Z")) : [],
-          };
-        }),
-        seguro(async () => ({
-          fecha: await ultimo("meli_drivers_cursos", "capturado_at"),
-          n: await contar("meli_drivers_cursos"),
-          horas: [],
-        })),
-        seguro(async () => ({
-          fecha: await ultimo("meli_validacion_tripulaciones", "cargado_at"),
-          n: await contar("meli_validacion_tripulaciones"),
-          horas: [],
-        })),
-        seguro(async () => ({
-          fecha: await ultimo("meli_viajes_historico", "fecha"),
-          n: await contar("meli_viajes_historico"),
-          horas: [],
-        })),
+        seguro(async () => ({ fecha: await ultimo("meli_drivers_detalle", "enriquecido_at"), n: await contar("meli_drivers_detalle") })),
+        seguro(async () => ({ fecha: await ultimo("meli_drivers_cursos", "capturado_at"), n: await contar("meli_drivers_cursos") })),
+        seguro(async () => ({ fecha: await ultimo("meli_validacion_tripulaciones", "cargado_at"), n: await contar("meli_validacion_tripulaciones") })),
+        seguro(async () => ({ fecha: await ultimo("meli_viajes_historico", "fecha"), n: await contar("meli_viajes_historico") })),
       ]);
       setF({ drv, veh, det, cur, rec, via });
       setChequeado(new Date());
@@ -10648,60 +10596,41 @@ function PadronSaludFlujos() {
   };
   useEffect(() => { cargar(); }, []);
 
-  const FUENTES = [
-    { k: "drv", label: "Padrón conductores", icon: "ti-user",   tipo: "diario", tabla: "meli_drivers_master",           unidad: "conductores",  nota: "programado 07·12·15·17 CL" },
-    { k: "veh", label: "Padrón vehículos",   icon: "ti-truck",  tipo: "diario", tabla: "meli_vehicles_master",          unidad: "vehículos",    nota: "mismo flujo master" },
-    { k: "det", label: "Data completa",      icon: "ti-id",     tipo: "diario", tabla: "meli_drivers_detalle",          unidad: "enriquecidos", nota: "encadenado al master" },
-    { k: "cur", label: "Cursos pendientes",  icon: "ti-school", tipo: "manual", tabla: "meli_drivers_cursos",           unidad: "cursos",       nota: "carga manual" },
-    { k: "rec", label: "Rechazados MELI",    icon: "ti-user-x", tipo: "manual", tabla: "meli_validacion_tripulaciones", unidad: "registros",    nota: "carga Excel" },
-    { k: "via", label: "Viajes histórico",   icon: "ti-route",  tipo: "manual", tabla: "meli_viajes_historico",         unidad: "viajes",       nota: "alimenta Limpieza" },
+  const MANUALES = [
+    { k: "cur", label: "Cursos pendientes", icon: "ti-school", unidad: "cursos",    nota: "carga manual" },
+    { k: "rec", label: "Rechazados MELI",   icon: "ti-user-x", unidad: "registros", nota: "carga Excel" },
+    { k: "via", label: "Viajes histórico",  icon: "ti-route",  unidad: "viajes",    nota: "alimenta Limpieza" },
   ];
 
-  const evaluar = (fu) => {
-    const d = f && f[fu.k];
-    if (!d) return { color: "#94a3b8", bg: "#f1f5f9", txt: "—", detalle: "sin consultar" };
-    if (d._err) return { color: "#991b1b", bg: "#fef2f2", txt: "Error", detalle: d._err };
-    if (!d.fecha) return { color: "#b45309", bg: "#fffbeb", txt: "Sin datos", detalle: "la tabla está vacía" };
+  // Estado del padrón vigente (mira drivers / vehicles / detalle)
+  const vig = (() => {
+    if (!f) return { color: "#94a3b8", bg: "#f1f5f9", txt: "Consultando…", dias: null };
+    const d = f.drv;
+    if (!d || d._err) return { color: "#991b1b", bg: "#fef2f2", txt: "Error al consultar", dias: null };
+    if (!d.fecha) return { color: "#b45309", bg: "#fffbeb", txt: "Sin datos", dias: null };
     const dias = psDiasDesde(d.fecha);
-    if (fu.tipo === "diario") {
-      if (dias === 0) return { color: "#065f46", bg: "#ecfdf5", txt: "Al día", detalle: "actualizado hoy" };
-      if (dias === 1) return { color: "#b45309", bg: "#fffbeb", txt: "1 día atrás", detalle: "no corrió hoy todavía" };
-      return { color: "#991b1b", bg: "#fef2f2", txt: `${dias} días atrás`, detalle: "revisar sesión MELI / flujo n8n" };
-    }
-    return { color: "#334155", bg: "#f8fafc", txt: dias === 0 ? "Hoy" : `hace ${dias} d`, detalle: "actualización manual" };
-  };
-
-  const global = (() => {
-    if (!f) return { color: "#94a3b8", bg: "#f1f5f9", txt: "Consultando…" };
-    const diarios = FUENTES.filter(x => x.tipo === "diario").map(evaluar);
-    if (diarios.some(e => e.txt === "Error" || e.txt.includes("días atrás") || e.txt === "Sin datos"))
-      return { color: "#991b1b", bg: "#fef2f2", txt: "Requiere atención" };
-    if (diarios.some(e => e.txt === "1 día atrás"))
-      return { color: "#b45309", bg: "#fffbeb", txt: "Pendiente de hoy" };
-    return { color: "#065f46", bg: "#ecfdf5", txt: "Flujos al día" };
+    if (dias === 0) return { color: "#065f46", bg: "#ecfdf5", txt: "Padrón al día", dias };
+    if (dias === 1) return { color: "#b45309", bg: "#fffbeb", txt: "Pendiente de hoy", dias };
+    return { color: "#991b1b", bg: "#fef2f2", txt: `Atrasado ${dias} días`, dias };
   })();
+
+  const num = (x) => (x == null ? "—" : Number(x).toLocaleString("es-CL"));
 
   return (
     <div style={{ background: "#fff", borderBottom: "1px solid #e4e7ec", padding: "12px 24px" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
         <span style={{ fontSize: 11, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5 }}>
-          Salud de flujos
+          Estado del padrón
         </span>
-        <span style={{ background: global.bg, color: global.color, border: `1px solid ${global.color}22`, fontSize: 12, fontWeight: 800, padding: "3px 10px", borderRadius: 999 }}>
-          {cargando ? "Consultando…" : global.txt}
+        <span style={{ background: vig.bg, color: vig.color, border: `1px solid ${vig.color}22`, fontSize: 12, fontWeight: 800, padding: "3px 10px", borderRadius: 999 }}>
+          {cargando ? "Consultando…" : vig.txt}
         </span>
         {chequeado && !cargando && (
-          <span style={{ fontSize: 11, color: "#94a3b8" }}>
-            verificado {psHoraCL(chequeado.toISOString())} hrs · horarios en hora de Chile
-          </span>
+          <span style={{ fontSize: 11, color: "#94a3b8" }}>verificado {psFechaHoraCL(chequeado.toISOString()).slice(11)} hrs</span>
         )}
-        <button onClick={cargar} disabled={cargando} title="Volver a verificar"
+        <button onClick={cargar} disabled={cargando}
           style={{ marginLeft: "auto", border: "1px solid #e4e7ec", background: "#fff", color: "#64748b", cursor: cargando ? "default" : "pointer", padding: "5px 10px", borderRadius: 6, fontSize: 11, fontWeight: 700, fontFamily: "'Geist', sans-serif", display: "inline-flex", alignItems: "center", gap: 5 }}>
           <i className={`ti ${cargando ? "ti-loader-2" : "ti-refresh"}`} style={{ fontSize: 13 }} />Verificar
-        </button>
-        <button onClick={() => setAbierto(v => !v)}
-          style={{ border: "none", background: "transparent", color: "#94a3b8", cursor: "pointer", fontSize: 11, fontWeight: 700, fontFamily: "'Geist', sans-serif" }}>
-          {abierto ? "ocultar ▲" : "ver detalle ▼"}
         </button>
       </div>
 
@@ -10709,55 +10638,61 @@ function PadronSaludFlujos() {
         <div style={{ marginTop: 8, background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 8, padding: "7px 12px", fontSize: 12, color: "#991b1b" }}>{err}</div>
       )}
 
-      {abierto && (
-        <div style={{ marginTop: 10, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(205px, 1fr))", gap: 8 }}>
-          {FUENTES.map(fu => {
-            const e = evaluar(fu);
-            const d = f && f[fu.k];
-            const esTS = fu.k === "det" || fu.k === "cur" || fu.k === "rec";
-            const cuando = d && !d._err && d.fecha
-              ? (esTS ? psFechaHoraCL(d.fecha) : String(d.fecha).slice(0, 10))
-              : "—";
-            const horas = (d && !d._err && Array.isArray(d.horas)) ? d.horas : [];
-            return (
-              <div key={fu.k} title={`${fu.tabla} · ${e.detalle}`}
-                style={{ background: e.bg, border: `1px solid ${e.color}22`, borderLeft: `3px solid ${e.color}`, borderRadius: 8, padding: "8px 11px" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 3 }}>
-                  <i className={`ti ${fu.icon}`} style={{ fontSize: 13, color: e.color }} />
-                  <span style={{ fontSize: 11.5, fontWeight: 800, color: "#1a3a6b" }}>{fu.label}</span>
-                </div>
-                <div style={{ fontSize: 11, fontWeight: 800, color: e.color, marginBottom: 2 }}>{cargando ? "…" : e.txt}</div>
-                <div style={{ fontSize: 10.5, color: "#64748b", lineHeight: 1.45 }}>
-                  {cuando}
-                  {d && !d._err && d.n != null && <> · <strong style={{ color: "#334155" }}>{d.n.toLocaleString("es-CL")}</strong> {fu.unidad}</>}
-                </div>
-                {fu.tipo === "diario" && !cargando && (
-                  <div style={{ fontSize: 10.5, color: "#475569", marginTop: 3, display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
-                    <i className="ti ti-clock" style={{ fontSize: 11, color: "#94a3b8" }} />
-                    {horas.length > 0 ? (
-                      <>
-                        <span style={{ color: "#94a3b8" }}>corridas:</span>
-                        {horas.map(h => (
-                          <span key={h} style={{ background: "#fff", border: `1px solid ${e.color}33`, color: e.color, fontWeight: 800, fontSize: 10, padding: "1px 5px", borderRadius: 4 }}>{h}</span>
-                        ))}
-                      </>
-                    ) : (
-                      <span style={{ color: "#94a3b8" }}>sin registro de hora</span>
-                    )}
-                  </div>
-                )}
-                <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 3 }}>{fu.nota}</div>
-              </div>
-            );
-          })}
+      {/* Línea compacta del snapshot vigente */}
+      {!cargando && f && (
+        <div style={{ marginTop: 9, display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap", background: vig.bg, border: `1px solid ${vig.color}22`, borderRadius: 8, padding: "8px 12px" }}>
+          <span style={{ fontSize: 11.5, color: "#64748b" }}>
+            Snapshot vigente <strong style={{ color: "#1a3a6b", fontSize: 12.5 }}>{f.drv && !f.drv._err ? (f.drv.fecha || "—") : "—"}</strong>
+          </span>
+          <span style={{ fontSize: 11.5, color: "#475569", display: "inline-flex", alignItems: "center", gap: 5 }}>
+            <i className="ti ti-user" style={{ fontSize: 13, color: "#1a3a6b" }} />
+            <strong style={{ color: "#1a3a6b" }}>{f.drv && !f.drv._err ? num(f.drv.n) : "—"}</strong> conductores
+          </span>
+          <span style={{ fontSize: 11.5, color: "#475569", display: "inline-flex", alignItems: "center", gap: 5 }}>
+            <i className="ti ti-truck" style={{ fontSize: 13, color: "#1a3a6b" }} />
+            <strong style={{ color: "#1a3a6b" }}>{f.veh && !f.veh._err ? num(f.veh.n) : "—"}</strong> vehículos
+          </span>
+          <span style={{ fontSize: 11.5, color: "#475569", display: "inline-flex", alignItems: "center", gap: 5 }}>
+            <i className="ti ti-id" style={{ fontSize: 13, color: "#1a3a6b" }} />
+            <strong style={{ color: "#1a3a6b" }}>{f.det && !f.det._err ? num(f.det.n) : "—"}</strong> con data completa
+          </span>
+          <span style={{ fontSize: 10.5, color: "#94a3b8", marginLeft: "auto" }}>
+            conductores y vehículos salen del mismo flujo master
+          </span>
         </div>
       )}
+
+      {/* Fuentes de carga manual */}
+      <div style={{ marginTop: 9, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(205px, 1fr))", gap: 8 }}>
+        {MANUALES.map(fu => {
+          const d = f && f[fu.k];
+          const dias = d && !d._err ? psDiasDesde(d.fecha) : null;
+          const cuando = d && !d._err && d.fecha ? (fu.k === "via" ? String(d.fecha).slice(0, 10) : psFechaHoraCL(d.fecha)) : "—";
+          return (
+            <div key={fu.k} style={{ background: "#f8fafc", border: "1px solid #e4e7ec", borderLeft: "3px solid #94a3b8", borderRadius: 8, padding: "8px 11px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 3 }}>
+                <i className={`ti ${fu.icon}`} style={{ fontSize: 13, color: "#64748b" }} />
+                <span style={{ fontSize: 11.5, fontWeight: 800, color: "#1a3a6b" }}>{fu.label}</span>
+              </div>
+              <div style={{ fontSize: 11, fontWeight: 800, color: "#334155", marginBottom: 2 }}>
+                {cargando ? "…" : (d && d._err ? "Error" : dias === 0 ? "Hoy" : dias == null ? "Sin datos" : `hace ${dias} d`)}
+              </div>
+              <div style={{ fontSize: 10.5, color: "#64748b", lineHeight: 1.45 }}>
+                {cuando}
+                {d && !d._err && d.n != null && <> · <strong style={{ color: "#334155" }}>{num(d.n)}</strong> {fu.unidad}</>}
+              </div>
+              <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 3 }}>{fu.nota}</div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
 
-// ── CORRIDAS PROGRAMADAS DE HOY · master MX ─────────────────────────────────
-// Lee flujos_ejecuciones y cruza contra los 4 horarios programados (hora Chile).
+// ── CORRIDAS DE HOY · padrón master ─────────────────────────────────────────
+// Los 4 horarios programados muestran SOLO corridas del cron.
+// Las corridas manuales (botón) van en su propia sección: nunca "ocupan" un horario.
 const PC_SLOTS = ["07:00", "12:00", "15:00", "17:00"];
 const PC_WEBHOOK = "https://bigticket2026.app.n8n.cloud/webhook/disparar-master-mx";
 
@@ -10765,7 +10700,7 @@ function pcFechaCL(iso) {
   if (!iso) return null;
   const d = new Date(iso);
   if (isNaN(d.getTime())) return null;
-  return d.toLocaleDateString("en-CA", { timeZone: "America/Santiago" }); // YYYY-MM-DD
+  return d.toLocaleDateString("en-CA", { timeZone: "America/Santiago" });
 }
 function pcHoraCL(iso) {
   if (!iso) return null;
@@ -10775,6 +10710,20 @@ function pcHoraCL(iso) {
 }
 function pcAhoraCL() {
   return new Date().toLocaleTimeString("es-CL", { timeZone: "America/Santiago", hour: "2-digit", minute: "2-digit", hour12: false });
+}
+function pcEsManual(r) {
+  if (r.origen) return String(r.origen).toLowerCase() === "manual";
+  return String(r.mensaje || "").toLowerCase().includes("manual"); // respaldo para filas viejas
+}
+function pcResumen(r) {
+  if (r.ok) {
+    const p = [];
+    if (r.drivers != null) p.push(r.drivers + " conductores");
+    if (r.vehicles != null) p.push(r.vehicles + " vehículos");
+    if (r.duracion_s != null) p.push(r.duracion_s + "s");
+    return p.join(" · ") || "sin detalle";
+  }
+  return r.motivo === "sesion_expirada" ? "sesión MELI expirada" : (r.motivo || "error");
 }
 
 function PadronCorridasHoy() {
@@ -10789,13 +10738,13 @@ function PadronCorridasHoy() {
     try {
       const { data, error } = await sb
         .from("flujos_ejecuciones")
-        .select("ok,motivo,mensaje,drivers,vehicles,duracion_s,ejecutado_at")
+        .select("ok,motivo,mensaje,drivers,vehicles,duracion_s,ejecutado_at,origen")
         .eq("flujo", "master_mx")
         .order("ejecutado_at", { ascending: false })
-        .limit(60);
+        .limit(80);
       if (error) throw error;
-      const hoyCL = pcFechaCL(new Date().toISOString());
-      setEjec((data || []).filter(r => pcFechaCL(r.ejecutado_at) === hoyCL));
+      const hoy = pcFechaCL(new Date().toISOString());
+      setEjec((data || []).filter(r => pcFechaCL(r.ejecutado_at) === hoy));
     } catch (e) {
       setErrTabla(e.message || "No pude leer flujos_ejecuciones");
     } finally {
@@ -10814,7 +10763,7 @@ function PadronCorridasHoy() {
         body: JSON.stringify({ origen: "brain", ts: new Date().toISOString() }),
       });
       if (!r.ok) throw new Error("HTTP " + r.status);
-      setAviso("ok:Flujo disparado " + pcAhoraCL() + " hrs. Tarda ~20–40 seg; presioná Actualizar para ver el resultado.");
+      setAviso("ok:Corrida manual disparada " + pcAhoraCL() + " hrs. Tarda ~20–40 seg y aparece abajo, en “Corridas manuales”. Presioná Actualizar.");
     } catch (e) {
       setAviso("err:No se pudo disparar: " + (e.message || "error"));
     } finally {
@@ -10822,39 +10771,36 @@ function PadronCorridasHoy() {
     }
   };
 
-  // Asigna cada ejecución al slot cuya hora coincide; el resto va a "otras"
+  const manuales = ejec.filter(pcEsManual);
+  const delCron = ejec.filter(r => !pcEsManual(r));
+
   const porSlot = {};
-  const otras = [];
   PC_SLOTS.forEach(s => { porSlot[s] = []; });
-  ejec.forEach(r => {
+  const cronFuera = [];
+  delCron.forEach(r => {
     const h = pcHoraCL(r.ejecutado_at);
     const slot = PC_SLOTS.find(s => s.slice(0, 2) === String(h).slice(0, 2));
-    if (slot) porSlot[slot].push(r); else otras.push(r);
+    if (slot) porSlot[slot].push(r); else cronFuera.push(r);
   });
 
   const ahora = pcAhoraCL();
   const estadoSlot = (slot) => {
     const lista = porSlot[slot] || [];
     if (lista.length > 0) {
-      const ult = lista[0]; // ya vienen ordenadas desc
-      if (ult.ok) return { tipo: "ok", color: "#065f46", bg: "#ecfdf5", icon: "ti-circle-check", txt: "Corrió OK", ult };
-      return { tipo: "err", color: "#991b1b", bg: "#fef2f2", icon: "ti-circle-x", txt: "Falló", ult };
+      const u = lista[0];
+      return u.ok
+        ? { color: "#065f46", bg: "#ecfdf5", icon: "ti-circle-check", txt: "Corrió OK", detalle: pcHoraCL(u.ejecutado_at) + " · " + pcResumen(u), intentos: lista.length }
+        : { color: "#991b1b", bg: "#fef2f2", icon: "ti-circle-x", txt: "Falló", detalle: pcHoraCL(u.ejecutado_at) + " · " + pcResumen(u), intentos: lista.length };
     }
-    if (slot > ahora) return { tipo: "pend", color: "#64748b", bg: "#f8fafc", icon: "ti-clock", txt: "Pendiente", ult: null };
-    return { tipo: "nada", color: "#991b1b", bg: "#fef2f2", icon: "ti-circle-x", txt: "No corrió", ult: null };
+    if (slot > ahora) return { color: "#64748b", bg: "#f8fafc", icon: "ti-clock", txt: "Pendiente", detalle: "aún no es la hora", intentos: 0 };
+    return { color: "#991b1b", bg: "#fef2f2", icon: "ti-circle-x", txt: "No corrió", detalle: "el cron no dejó registro a esta hora", intentos: 0 };
   };
 
-  const detalleDe = (e) => {
-    if (!e.ult) return e.tipo === "pend" ? "aún no es la hora" : "sin registro de ejecución";
-    const u = e.ult;
-    if (u.ok) {
-      const partes = [];
-      if (u.drivers != null) partes.push(u.drivers + " conductores");
-      if (u.vehicles != null) partes.push(u.vehicles + " vehículos");
-      if (u.duracion_s != null) partes.push(u.duracion_s + "s");
-      return (pcHoraCL(u.ejecutado_at) || "") + " · " + (partes.join(" · ") || "sin detalle");
-    }
-    return (pcHoraCL(u.ejecutado_at) || "") + " · " + (u.motivo === "sesion_expirada" ? "sesión MELI expirada" : (u.motivo || "error")) ;
+  const btnStyle = {
+    border: "none", cursor: ejecutando ? "default" : "pointer",
+    background: ejecutando ? "#94a3b8" : "#F47B20", color: "#fff",
+    padding: "7px 14px", borderRadius: 7, fontSize: 12, fontWeight: 800,
+    fontFamily: "'Geist', sans-serif", display: "inline-flex", alignItems: "center", gap: 6,
   };
 
   return (
@@ -10864,15 +10810,20 @@ function PadronCorridasHoy() {
           Corridas de hoy · padrón master
         </span>
         <span style={{ fontSize: 11, color: "#94a3b8" }}>hora de Chile · ahora {ahora} hrs</span>
+        <button onClick={ejecutarAhora} disabled={ejecutando} title="Corre el flujo master en este momento (queda como corrida manual)"
+          style={{ ...btnStyle, marginLeft: "auto" }}>
+          <i className={`ti ${ejecutando ? "ti-loader-2" : "ti-player-play"}`} style={{ fontSize: 14 }} />
+          {ejecutando ? "Ejecutando…" : "Ejecutar ahora"}
+        </button>
         <button onClick={cargar} disabled={cargando}
-          style={{ marginLeft: "auto", border: "1px solid #e4e7ec", background: "#fff", color: "#64748b", cursor: cargando ? "default" : "pointer", padding: "5px 10px", borderRadius: 6, fontSize: 11, fontWeight: 700, fontFamily: "'Geist', sans-serif", display: "inline-flex", alignItems: "center", gap: 5 }}>
+          style={{ border: "1px solid #e4e7ec", background: "#fff", color: "#64748b", cursor: cargando ? "default" : "pointer", padding: "6px 11px", borderRadius: 6, fontSize: 11, fontWeight: 700, fontFamily: "'Geist', sans-serif", display: "inline-flex", alignItems: "center", gap: 5 }}>
           <i className={`ti ${cargando ? "ti-loader-2" : "ti-refresh"}`} style={{ fontSize: 13 }} />Actualizar
         </button>
       </div>
 
       {errTabla && (
         <div style={{ background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: "8px 12px", fontSize: 12, color: "#92400e", marginBottom: 10 }}>
-          No pude leer el historial de ejecuciones ({errTabla}). Si todavía no creaste la tabla <strong>flujos_ejecuciones</strong>, los tickets van a quedar en “sin registro”.
+          No pude leer el historial ({errTabla}). Revisá que exista la tabla <strong>flujos_ejecuciones</strong> con la columna <strong>origen</strong>.
         </div>
       )}
       {aviso && (
@@ -10884,45 +10835,65 @@ function PadronCorridasHoy() {
         }}>{aviso.slice(aviso.indexOf(":") + 1)}</div>
       )}
 
-      <div style={{ display: "grid", gap: 6 }}>
+      {/* Horarios programados (solo cron) */}
+      <div style={{ fontSize: 10.5, color: "#94a3b8", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 5 }}>
+        Horarios programados
+      </div>
+      <div style={{ display: "grid", gap: 5 }}>
         {PC_SLOTS.map(slot => {
           const e = estadoSlot(slot);
           return (
             <div key={slot} style={{
               display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap",
               background: e.bg, border: `1px solid ${e.color}22`, borderLeft: `3px solid ${e.color}`,
-              borderRadius: 8, padding: "8px 12px",
+              borderRadius: 8, padding: "7px 12px",
             }}>
               <span style={{ fontSize: 14, fontWeight: 800, color: "#1a3a6b", minWidth: 52, fontVariantNumeric: "tabular-nums" }}>{slot}</span>
-              <span style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "#fff", border: `1px solid ${e.color}44`, color: e.color, fontSize: 11, fontWeight: 800, padding: "3px 9px", borderRadius: 999, minWidth: 96, justifyContent: "center" }}>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "#fff", border: `1px solid ${e.color}44`, color: e.color, fontSize: 11, fontWeight: 800, padding: "3px 9px", borderRadius: 999, minWidth: 100, justifyContent: "center" }}>
                 <i className={`ti ${e.icon}`} style={{ fontSize: 13 }} />{cargando ? "…" : e.txt}
               </span>
-              <span style={{ fontSize: 11.5, color: "#475569", flex: 1, minWidth: 160 }}>{cargando ? "" : detalleDe(e)}</span>
-              {(porSlot[slot] || []).length > 1 && (
-                <span style={{ fontSize: 10, color: "#94a3b8" }}>{porSlot[slot].length} intentos</span>
-              )}
-              <button onClick={ejecutarAhora} disabled={ejecutando} title="Ejecutar el flujo master ahora"
-                style={{
-                  border: "none", cursor: ejecutando ? "default" : "pointer",
-                  background: ejecutando ? "#94a3b8" : "#F47B20", color: "#fff",
-                  padding: "6px 12px", borderRadius: 6, fontSize: 11, fontWeight: 800,
-                  fontFamily: "'Geist', sans-serif", display: "inline-flex", alignItems: "center", gap: 5,
-                }}>
-                <i className={`ti ${ejecutando ? "ti-loader-2" : "ti-player-play"}`} style={{ fontSize: 12 }} />
-                {ejecutando ? "Ejecutando…" : "Ejecutar"}
-              </button>
+              <span style={{ fontSize: 11.5, color: "#475569", flex: 1, minWidth: 160 }}>{cargando ? "" : e.detalle}</span>
+              {e.intentos > 1 && <span style={{ fontSize: 10, color: "#94a3b8" }}>{e.intentos} registros</span>}
             </div>
           );
         })}
       </div>
 
-      {otras.length > 0 && (
+      {/* Corridas manuales */}
+      <div style={{ fontSize: 10.5, color: "#94a3b8", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.4, margin: "11px 0 5px" }}>
+        Corridas manuales de hoy {manuales.length > 0 && <span style={{ color: "#64748b" }}>· {manuales.length}</span>}
+      </div>
+      {manuales.length === 0 ? (
+        <div style={{ fontSize: 11.5, color: "#94a3b8", background: "#f8fafc", border: "1px dashed #e4e7ec", borderRadius: 8, padding: "8px 12px" }}>
+          {cargando ? "…" : "Ninguna todavía. Usá “Ejecutar ahora” si necesitás refrescar el padrón fuera de horario."}
+        </div>
+      ) : (
+        <div style={{ display: "grid", gap: 5 }}>
+          {manuales.map((m, i) => (
+            <div key={i} style={{
+              display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap",
+              background: m.ok ? "#f6fdf9" : "#fef6f5", border: "1px solid #e4e7ec",
+              borderLeft: `3px solid ${m.ok ? "#10b981" : "#ef4444"}`, borderRadius: 8, padding: "7px 12px",
+            }}>
+              <span style={{ fontSize: 13, fontWeight: 800, color: "#1a3a6b", minWidth: 52, fontVariantNumeric: "tabular-nums" }}>{pcHoraCL(m.ejecutado_at)}</span>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "#fff", border: `1px solid ${m.ok ? "#10b98144" : "#ef444444"}`, color: m.ok ? "#065f46" : "#991b1b", fontSize: 11, fontWeight: 800, padding: "3px 9px", borderRadius: 999, minWidth: 100, justifyContent: "center" }}>
+                <i className={`ti ${m.ok ? "ti-circle-check" : "ti-circle-x"}`} style={{ fontSize: 13 }} />{m.ok ? "OK" : "Falló"}
+              </span>
+              <span style={{ fontSize: 11.5, color: "#475569", flex: 1, minWidth: 160 }}>{pcResumen(m)}</span>
+              <span style={{ fontSize: 10, color: "#94a3b8", display: "inline-flex", alignItems: "center", gap: 4 }}>
+                <i className="ti ti-hand-click" style={{ fontSize: 11 }} />manual
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {cronFuera.length > 0 && (
         <div style={{ marginTop: 8, fontSize: 11, color: "#64748b" }}>
-          <strong style={{ color: "#334155" }}>Otras corridas de hoy</strong> (fuera de horario):{" "}
-          {otras.map((o, i) => (
+          <strong style={{ color: "#334155" }}>Cron fuera de horario:</strong>{" "}
+          {cronFuera.map((o, i) => (
             <span key={i} style={{ marginRight: 8 }}>
-              <span style={{ color: o.ok ? "#065f46" : "#991b1b", fontWeight: 800 }}>{pcHoraCL(o.ejecutado_at)}</span>
-              {o.ok ? " ✓" : " ✗"}
+              <span style={{ color: o.ok ? "#065f46" : "#991b1b", fontWeight: 800 }}>{pcHoraCL(o.ejecutado_at)}</span>{o.ok ? " ✓" : " ✗"}
             </span>
           ))}
         </div>
