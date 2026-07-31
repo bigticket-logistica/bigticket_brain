@@ -1916,8 +1916,14 @@ function CalificacionLlamada({ registroId }) {
     ["CSF al día", SiNo(c.csf_al_dia)],
     ["Puede facturar", SiNo(c.puede_facturar)],
     ["Vehículo propio", SiNo(c.vehiculo_propio) + (c.propietario_tercero ? " · de: " + c.propietario_tercero : "")],
-    ["Unidad", [c.tipo_vehiculo === "Otro" ? c.tipo_vehiculo_otro : c.tipo_vehiculo, c.marca, c.modelo, c.anio].filter(Boolean).join(" ")],
+    ["Tipo de unidad", c.tipo_vehiculo === "Otro" ? c.tipo_vehiculo_otro : c.tipo_vehiculo],
     ["Unidades disponibles", c.cantidad_vehiculos],
+    ["Detalle de unidades", Array.isArray(c.vehiculos) && c.vehiculos.length
+      ? c.vehiculos.map((v, i) => {
+          const a = Number(v.anio) > 0 ? new Date().getFullYear() - Number(v.anio) : null;
+          return `${i + 1}) ${[v.marca, v.modelo, v.anio].filter(Boolean).join(" ") || "—"}${a != null && a > 15 ? " ⚠️ " + a + " años" : ""}`;
+        }).join(" · ")
+      : [c.marca, c.modelo, c.anio].filter(Boolean).join(" ")],
     ["Documentos vehiculares al día", SiNo(c.docs_vehiculares_al_dia)],
     ["Disponibilidad CEDIS / horario", SiNo(c.disponibilidad_horario) + (c.cedis ? " · " + c.cedis : "")],
     ["Traslado al CEDIS", c.tiempo_traslado_min != null ? c.tiempo_traslado_min + " min" + (Number(c.tiempo_traslado_min) > 90 ? " ⚠️ riesgo de deserción" : "") : null],
