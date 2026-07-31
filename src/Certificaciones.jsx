@@ -868,6 +868,7 @@ function ResumenSolicitudAlta({ fuente, registro, datos, onEnviado }) {
       <Fila k="🪪 Validación Nubarium" v={registro.nubarium_reporte ? `Informe generado${registro.nubarium_reviewed_at ? " el " + new Date(registro.nubarium_reviewed_at).toLocaleDateString("es-MX") : ""}` : null} />
       <Fila k="📞 Nota del supervisor" v={registro.comentario_supervisor} />
       <Fila k="🗣 Entrevista Operaciones" v={registro.comentario_entrevista} />
+      {/* Calificación del guion de llamada (lo captura el supervisor en su Bitácora) */}
       {minuta === null ? <Fila k="📋 Minuta de entrevista" v="Cargando…" /> : minuta && (
         <Fila k="📋 Minuta de entrevista" v={`${minuta.tipo_vehiculo || "—"} · ${minuta.cantidad_choferes ?? "—"} chofer(es) · ${minuta.cantidad_ayudantes ?? "—"} ayudante(s) · ${minuta.horario || "—"} · ${minuta.zona_operacion || "—"}`} />
       )}
@@ -1875,6 +1876,91 @@ function SeccionFirmaContrato({ registro, tabla, datos, onActualizado }) {
   );
 }
 
+// ─── CALIFICACIÓN DE LA LLAMADA (guion del supervisor) ───────────────
+// Lee lo que el supervisor capturó en la Bitácora con el script oficial
+// de calificación de flota: semáforo, filtros duros y respuestas clave.
+const CALIF_SEM = {
+  verde: { t: "VERDE · CALIFICA", bg: "#e8f5ec", fg: "#166534", bd: "#b7e0c2" },
+  amarillo: { t: "AMARILLO · STANDBY", bg: "#fff4e5", fg: "#b45309", bd: "#fcd9b6" },
+  rojo: { t: "ROJO · NO CALIFICA", bg: "#fdecea", fg: "#c0392b", bd: "#f5c6c0" },
+};
+const CALIF_EXP = { sin: "Sin experiencia", menos_1: "Menos de 1 año", "1": "1 año", "2": "2 años", "3_mas": "3 años o más" };
+
+function CalificacionLlamada({ registroId }) {
+  const [c, setC] = useState(undefined);
+  const [abierto, setAbierto] = useState(false);
+  useEffect(() => { (async () => {
+    if (!registroId) { setC(null); return; }
+    const { data } = await sb.from("calificacion_llamada").select("*")
+      .eq("registro_id", registroId).order("actualizado_at", { ascending: false }).limit(1);
+    setC((data && data[0]) || null);
+  })(); }, [registroId]);
+
+  if (c === undefined) return null;
+  if (!c) return (
+    <div className="form-card">
+      <div className="form-title">📞 Calificación de la llamada</div>
+      <div style={{ fontSize: 12, color: "#888" }}>El supervisor aún no ha registrado el guion de calificación en su Bitácora.</div>
+    </div>
+  );
+
+  const info = CALIF_SEM[c.semaforo] || CALIF_SEM.amarillo;
+  const SiNo = (v) => v === true ? "✅ Sí" : v === false ? "❌ No" : "—";
+  const filas = [
+    ["Nombre confirmado (INE)", SiNo(c.nombre_confirmado)],
+    ["Correo validado", SiNo(c.email_validado) + (c.email ? " · " + c.email : "")],
+    ["WhatsApp validado", SiNo(c.whatsapp_validado) + (c.telefono ? " · " + c.telefono : "")],
+    ["Ciudad / municipio", c.ciudad],
+    ["Figura fiscal", c.figura === "moral" ? "Persona moral" + (c.representante_legal ? " · rep: " + c.representante_legal : "") : c.figura === "fisica" ? "Persona física" : null],
+    ["RFC / régimen", [c.rfc, c.regimen_fiscal].filter(Boolean).join(" · ")],
+    ["CSF al día", SiNo(c.csf_al_dia)],
+    ["Puede facturar", SiNo(c.puede_facturar)],
+    ["Vehículo propio", SiNo(c.vehiculo_propio) + (c.propietario_tercero ? " · de: " + c.propietario_tercero : "")],
+    ["Unidad", [c.tipo_vehiculo === "Otro" ? c.tipo_vehiculo_otro : c.tipo_vehiculo, c.marca, c.modelo, c.anio].filter(Boolean).join(" ")],
+    ["Unidades disponibles", c.cantidad_vehiculos],
+    ["Documentos vehiculares al día", SiNo(c.docs_vehiculares_al_dia)],
+    ["Disponibilidad CEDIS / horario", SiNo(c.disponibilidad_horario) + (c.cedis ? " · " + c.cedis : "")],
+    ["Traslado al CEDIS", c.tiempo_traslado_min != null ? c.tiempo_traslado_min + " min" + (Number(c.tiempo_traslado_min) > 90 ? " ⚠️ riesgo de deserción" : "") : null],
+    ["Fecha de arranque", c.fecha_arranque],
+    ["Experiencia", (CALIF_EXP[c.experiencia] || "—") + (c.experiencia_empresa ? " · " + c.experiencia_empresa : "") + (c.cedis_previo_meli ? " · CEDIS MELI: " + c.cedis_previo_meli : "")],
+    ["Acepta propuesta comercial", SiNo(c.acepta_propuesta)],
+  ];
+
+  return (
+    <div className="form-card">
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 8 }}>
+        <div className="form-title" style={{ marginTop: 0, marginBottom: 0 }}>📞 Calificación de la llamada</div>
+        <span style={{ fontSize: 10, fontWeight: 800, padding: "3px 10px", borderRadius: 12, background: info.bg, color: info.fg, border: "1px solid " + info.bd }}>{info.t}</span>
+        {c.estado !== "completada" && <span style={{ fontSize: 10, fontWeight: 700, color: "#b45309" }}>· borrador</span>}
+        <button onClick={() => setAbierto(!abierto)} style={{ marginLeft: "auto", background: "#fff", border: "1px solid #e4e7ec", color: "#1a3a6b", borderRadius: 7, padding: "5px 11px", fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: "'Geist',sans-serif" }}>
+          {abierto ? "▾ Ocultar detalle" : "▸ Ver checklist completo"}
+        </button>
+      </div>
+      <div style={{ fontSize: 12.5, color: "#475467", lineHeight: 1.6 }}>
+        {c.motivo ? <><b>Motivo:</b> {c.motivo}{c.recuperable ? " (recuperable)" : " (definitivo)"} · </> : null}
+        {c.supervisor ? <>Registró: {c.supervisor} · </> : null}
+        {c.actualizado_at ? new Date(c.actualizado_at).toLocaleString("es-MX", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : ""}
+      </div>
+      {c.observaciones && (
+        <div style={{ fontSize: 12.5, color: "#28323f", background: "#f8fafc", border: "1px solid #eef1f5", borderRadius: 8, padding: "8px 11px", marginTop: 8 }}>
+          <b>Observaciones:</b> {c.observaciones}
+        </div>
+      )}
+      {abierto && (
+        <div style={{ marginTop: 10 }}>
+          {filas.map(([k, v]) => (
+            <div key={k} style={{ display: "flex", gap: 10, padding: "5px 0", borderBottom: "1px solid #f4f5f7", fontSize: 12.5 }}>
+              <span style={{ flex: "0 0 220px", color: "#888", fontWeight: 600 }}>{k}</span>
+              <span style={{ flex: 1, fontWeight: 600 }}>{v || "—"}</span>
+            </div>
+          ))}
+          {c.dudas && <div style={{ fontSize: 12.5, marginTop: 8 }}><b>Dudas del prospecto:</b> {c.dudas}</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function DetalleCandidato({ candidato, onVolver, onActualizar, onPasarEtapa2 }) {
   const [analizando, setAnalizando] = useState(false);
   const [enviando, setEnviando] = useState(false);
@@ -2136,6 +2222,9 @@ Responde con este JSON exacto:
             <div style={{ fontSize: 13, color: "#155e70", lineHeight: 1.5 }}>{candidato.comentario_supervisor}</div>
           </div>
         )}
+
+        {/* Calificación de la llamada del supervisor (guion oficial) */}
+        <CalificacionLlamada registroId={candidato.id} />
 
         {/* Datos del candidato */}
         <div className="form-card">
