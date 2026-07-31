@@ -179,7 +179,14 @@ function ModuloMaestroCL() {
         const r = await api("vw_maestro_resumen_dia?select=fecha&order=fecha.desc&limit=60");
         const fs = r.map(x => x.fecha);
         setDias(fs);
-        if (fs.length) setFecha(fs[0]);
+        if (fs.length) {
+          // Preferir HOY (en horario de Chile) si ya tiene datos; si no, el día más
+          // reciente. Antes abría siempre en el más reciente y confundía: estando a
+          // 31 mostraba el 30 sin decir por qué.
+          const hoyCL = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Santiago",
+            year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+          setFecha(fs.includes(hoyCL) ? hoyCL : fs[0]);
+        }
         else { setCargando(false); }
       } catch (e) { setError(e.message); setCargando(false); }
     })();
@@ -540,46 +547,96 @@ function ModuloMaestroCL() {
 
             {/* ── Barra de recuadre (solo en Maestro Jornada) ── */}
             {tab === "jornada" && (
-              <div style={{ background: "#fff", border: "1px solid #e6e9ef", borderRadius: 10,
-                            padding: "12px 16px", marginBottom: 12, display: "flex",
-                            alignItems: "center", gap: 14, flexWrap: "wrap" }}>
-                <div style={{ flex: 1, minWidth: 300 }}>
-                  <div style={{ fontSize: 12.5, fontWeight: 800, color: NAVY }}>
-                    Cuadrar la jornada
+              <div style={{ background: "#fff", border: `1px solid ${aCuadrar.length ? "#f3e2b8" : "#e6e9ef"}`,
+                            borderLeft: `4px solid ${aCuadrar.length ? AMBAR_ : VERDE_}`,
+                            borderRadius: 10, padding: "13px 16px", marginBottom: 12 }}>
+                <div style={{ display: "flex", alignItems: "flex-start", gap: 14, flexWrap: "wrap" }}>
+                  <div style={{ flex: 1, minWidth: 320 }}>
+                    <div style={{ fontSize: 13, fontWeight: 800, color: NAVY }}>
+                      {aCuadrar.length === 0
+                        ? "La jornada está cuadrada"
+                        : `${fmt(aCuadrar.length)} ${aCuadrar.length === 1 ? "ruta necesita" : "rutas necesitan"} recuadre`}
+                    </div>
+                    <div style={{ fontSize: 12, color: "#64748b", lineHeight: 1.7, marginTop: 3 }}>
+                      {aCuadrar.length === 0
+                        ? "No hay conteos distintos ni paquetes sin resolver."
+                        : "Vuelve a consultar en MELI esas rutas para que el contador y el detalle salgan de la misma lectura. El monitor lo ejecuta en su siguiente pasada: puede tardar hasta 5 minutos."}
+                    </div>
+
+                    {/* qué rutas y por qué */}
                     {aCuadrar.length > 0 && (
-                      <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 700, color: AMBAR_,
-                                     background: "#fdf6e3", padding: "1px 8px", borderRadius: 9 }}>
-                        {fmt(aCuadrar.length)} {aCuadrar.length === 1 ? "ruta por revisar" : "rutas por revisar"}
-                      </span>
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 7 }}>
+                        {aCuadrar.slice(0, 6).map(r => (
+                          <span key={r.id_ruta} style={{ fontSize: 11, color: "#475569",
+                            background: "#f4f6f9", border: "1px solid #e6e9ef",
+                            borderRadius: 12, padding: "2px 9px" }}>
+                            <strong>{r.id_ruta}</strong>
+                            <span style={{ color: "#94a3b8" }}> · {(r.motivos || []).join(", ")}</span>
+                          </span>
+                        ))}
+                        {aCuadrar.length > 6 && (
+                          <span style={{ fontSize: 11, color: "#94a3b8" }}>y {fmt(aCuadrar.length - 6)} más</span>
+                        )}
+                      </div>
+                    )}
+
+                    {/* estado del último pedido */}
+                    {recuadre && (
+                      <div style={{ fontSize: 12, marginTop: 8, padding: "6px 10px", borderRadius: 8,
+                        background:
+                          recuadre.estado === "error" ? "#fff4f4" :
+                          ["listo","sin_trabajo"].includes(recuadre.estado) ? "#e7f6ec" :
+                          recuadre.estado === "cancelada" ? "#f4f6f9" : "#fdf6e3",
+                        color:
+                          recuadre.estado === "error" ? ROJO_ :
+                          ["listo","sin_trabajo"].includes(recuadre.estado) ? VERDE_ :
+                          recuadre.estado === "cancelada" ? GRIS_ : AMBAR_ }}>
+                        {recuadre.estado === "pendiente" && (
+                          <span>⏳ <strong>Pedido a las {recuadre.solicitado_chile}</strong> · esperando la próxima pasada del monitor (hace {fmt(recuadre.hace_minutos)} min de {5})</span>
+                        )}
+                        {recuadre.estado === "en_proceso" && (
+                          <span>🔧 <strong>Consultando MELI ahora</strong> · {fmt(recuadre.rutas_procesadas)} de {fmt(recuadre.rutas_objetivo)} rutas</span>
+                        )}
+                        {recuadre.estado === "listo" && (
+                          <span>✅ <strong>Recuadrado a las {recuadre.terminado_chile}</strong> · {recuadre.detalle}</span>
+                        )}
+                        {recuadre.estado === "sin_trabajo" && (
+                          <span>✅ <strong>Revisado a las {recuadre.terminado_chile}</strong> · no había nada que cuadrar</span>
+                        )}
+                        {recuadre.estado === "error" && (
+                          <span>❌ <strong>El recuadre falló</strong> · {recuadre.detalle}</span>
+                        )}
+                        {recuadre.estado === "cancelada" && (
+                          <span>⊘ Pedido anterior cancelado · {recuadre.detalle}</span>
+                        )}
+                      </div>
                     )}
                   </div>
-                  <div style={{ fontSize: 12, color: "#64748b", lineHeight: 1.7, marginTop: 3 }}>
-                    {aCuadrar.length === 0
-                      ? "No hay rutas descuadradas ni con paquetes sin resolver: la jornada está cuadrada."
-                      : "Vuelve a consultar en MELI solo las rutas con conteos distintos, paquetes sin resolver o todavía abiertas. El pedido lo ejecuta el monitor en su siguiente pasada, dentro de unos 5 minutos."}
-                  </div>
-                  {recuadre && (
-                    <div style={{ fontSize: 11.5, marginTop: 5, color:
-                        recuadre.estado === "error" ? ROJO_ :
-                        recuadre.estado === "listo" || recuadre.estado === "sin_trabajo" ? VERDE_ : AMBAR_ }}>
-                      {recuadre.estado === "pendiente"   && `⏳ Pedido a las ${recuadre.solicitado_chile}, esperando al monitor (hace ${fmt(recuadre.hace_minutos)} min)`}
-                      {recuadre.estado === "en_proceso"  && `🔧 Recuadrando: ${fmt(recuadre.rutas_procesadas)} de ${fmt(recuadre.rutas_objetivo)} rutas`}
-                      {recuadre.estado === "listo"       && `✅ Recuadrado a las ${recuadre.terminado_chile} · ${recuadre.detalle || ""}`}
-                      {recuadre.estado === "sin_trabajo" && `✅ Revisado a las ${recuadre.terminado_chile}: no había nada que cuadrar`}
-                      {recuadre.estado === "error"       && `❌ ${recuadre.detalle || "El recuadre falló"}`}
+
+                  <div style={{ display: "flex", flexDirection: "column", gap: 7, minWidth: 168 }}>
+                    <button className="mj-btn" onClick={pedirRecuadre}
+                            disabled={pidiendo || aCuadrar.length === 0 ||
+                                      (recuadre && ["pendiente","en_proceso"].includes(recuadre.estado))}
+                            style={{ background: (aCuadrar.length && !pidiendo &&
+                                       !(recuadre && ["pendiente","en_proceso"].includes(recuadre.estado)))
+                                       ? NAVY : "#f4f6f9",
+                                     color: (aCuadrar.length && !pidiendo &&
+                                       !(recuadre && ["pendiente","en_proceso"].includes(recuadre.estado)))
+                                       ? "#fff" : "#b6bfcc",
+                                     borderColor: aCuadrar.length ? NAVY : "#dfe4ec",
+                                     cursor: aCuadrar.length ? "pointer" : "not-allowed", padding: "8px 12px" }}>
+                      {pidiendo ? "Enviando el pedido…"
+                        : (recuadre && ["pendiente","en_proceso"].includes(recuadre.estado)) ? "Ya está en curso"
+                        : aCuadrar.length === 0 ? "Nada que cuadrar"
+                        : `Cuadrar ${fmt(aCuadrar.length)} ${aCuadrar.length === 1 ? "ruta" : "rutas"}`}
+                    </button>
+                    <button className="mj-btn" onClick={recargar} style={{ padding: "6px 12px" }}>
+                      Recargar datos
+                    </button>
+                    <div style={{ fontSize: 10.5, color: "#a8b2c1", lineHeight: 1.5 }}>
+                      "Recargar datos" solo vuelve a leer la base; no dispara nada.
                     </div>
-                  )}
-                </div>
-                <div style={{ display: "flex", gap: 8 }}>
-                  <button className="mj-btn" onClick={recargar}>Actualizar</button>
-                  <button className="mj-btn" onClick={pedirRecuadre}
-                          disabled={pidiendo || aCuadrar.length === 0 ||
-                                    (recuadre && ["pendiente","en_proceso"].includes(recuadre.estado))}
-                          style={{ background: aCuadrar.length ? NAVY : "#fff",
-                                   color: aCuadrar.length ? "#fff" : "#b6bfcc",
-                                   cursor: aCuadrar.length ? "pointer" : "not-allowed" }}>
-                    {pidiendo ? "Pidiendo…" : "Cuadrar ahora"}
-                  </button>
+                  </div>
                 </div>
               </div>
             )}
