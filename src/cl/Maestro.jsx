@@ -177,6 +177,8 @@ function ModuloMaestroCL() {
   const [recuadre, setRecuadre] = useState(null);
   const [aCuadrar, setACuadrar] = useState([]);
   const [pidiendo, setPidiendo] = useState(false);
+  const [recRuta, setRecRuta] = useState({});      // id_ruta -> última solicitud de esa ruta
+  const [pidiendoRuta, setPidiendoRuta] = useState(null);
 
   const [resumen, setResumen] = useState(null);
   const [jornada, setJornada] = useState([]);
@@ -212,17 +214,19 @@ function ModuloMaestroCL() {
     setCargando(true); setError("");
     (async () => {
       try {
-        const [res, jor, dev, tra, rec, cua] = await Promise.all([
+        const [res, jor, dev, tra, rec, cua, rr] = await Promise.all([
           api(`vw_maestro_resumen_dia?fecha=eq.${fecha}`),
           api(`vw_maestro_jornada?fecha=eq.${fecha}&order=cargados.desc.nullslast&limit=3000`),
           api(`vw_maestro_devoluciones?fecha=eq.${fecha}&order=cecos.asc&limit=8000`),
           api(`vw_traspasos_resumen?fecha_operativa=eq.${fecha}&order=paquetes.desc&limit=3000`),
           api(`vw_estado_recuadre?fecha_operativa=eq.${fecha}`),
           api(`vw_rutas_a_cuadrar?fecha=eq.${fecha}&select=id_ruta,cecos,conductor,status,cargados,entregados,pendientes,motivos&limit=500`),
+          api(`vw_estado_recuadre_ruta?fecha_operativa=eq.${fecha}&limit=500`),
         ]);
         if (!vivo) return;
         setResumen(res[0] || null); setJornada(jor); setDevol(dev); setTrasp(tra);
         setRecuadre(rec[0] || null); setACuadrar(cua);
+        setRecRuta(Object.fromEntries((rr || []).map(x => [String(x.id_ruta), x])));
       } catch (e) { if (vivo) setError(e.message); }
       finally { if (vivo) setCargando(false); }
     })();
@@ -233,14 +237,16 @@ function ModuloMaestroCL() {
   const recargar = async () => {
     if (!fecha) return;
     try {
-      const [res, jor, rec, cua] = await Promise.all([
+      const [res, jor, rec, cua, rr] = await Promise.all([
         api(`vw_maestro_resumen_dia?fecha=eq.${fecha}`),
         api(`vw_maestro_jornada?fecha=eq.${fecha}&order=cargados.desc.nullslast&limit=3000`),
         api(`vw_estado_recuadre?fecha_operativa=eq.${fecha}`),
         api(`vw_rutas_a_cuadrar?fecha=eq.${fecha}&select=id_ruta,cecos,conductor,status,cargados,entregados,pendientes,motivos&limit=500`),
+        api(`vw_estado_recuadre_ruta?fecha_operativa=eq.${fecha}&limit=500`),
       ]);
       setResumen(res[0] || null); setJornada(jor);
       setRecuadre(rec[0] || null); setACuadrar(cua);
+      setRecRuta(Object.fromEntries((rr || []).map(x => [String(x.id_ruta), x])));
     } catch (e) { setError(e.message); }
   };
 
@@ -260,12 +266,60 @@ function ModuloMaestroCL() {
     finally { setPidiendo(false); }
   };
 
+  // Recuadre de UNA ruta: la que el analista está mirando en la tarjeta.
+  const pedirRecuadreRuta = async (idRuta) => {
+    if (!fecha || !idRuta) return;
+    setPidiendoRuta(String(idRuta));
+    try {
+      await api("solicitudes_proceso", {
+        method: "POST",
+        headers: { Prefer: "return=minimal" },
+        body: JSON.stringify({ tipo: "cuadrar_dia", fecha_operativa: fecha,
+                               id_ruta: Number(idRuta), solicitado_por: "brain" }),
+      });
+      await recargar();
+    } catch (e) { setError(e.message); }
+    finally { setPidiendoRuta(null); }
+  };
+
+  // Botón de una celda: pide el recuadre de esa ruta y muestra su estado.
+  const BotonRuta = ({ idRuta }) => {
+    const st = recRuta[String(idRuta)];
+    const enCurso = st && ["pendiente", "en_proceso"].includes(st.estado);
+    const listo = st && ["listo", "sin_trabajo"].includes(st.estado);
+    if (pidiendoRuta === String(idRuta)) {
+      return <span style={{ fontSize: 10.5, color: AMBAR_ }}>enviando…</span>;
+    }
+    if (enCurso) {
+      return <span style={{ fontSize: 10.5, color: AMBAR_ }} title={`Pedido a las ${st.solicitado_chile}`}>
+        ⏳ en cola
+      </span>;
+    }
+    return (
+      <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+        <button onClick={() => pedirRecuadreRuta(idRuta)}
+          style={{ border: `1px solid ${NAVY}`, background: "#fff", color: NAVY, borderRadius: 7,
+                   padding: "2px 8px", fontSize: 10.5, fontWeight: 700, cursor: "pointer",
+                   fontFamily: "inherit", whiteSpace: "nowrap" }}>
+          Cuadrar
+        </button>
+        {listo && (
+          <span style={{ fontSize: 10, color: VERDE_ }} title={st.detalle || ""}>
+            ✓ {st.terminado_chile}
+          </span>
+        )}
+      </span>
+    );
+  };
+
   // Mientras el recuadre está en curso, refrescar solo para ver el avance.
   useEffect(() => {
-    if (!recuadre || !["pendiente", "en_proceso"].includes(recuadre.estado)) return;
+    const diaEnCurso = recuadre && ["pendiente", "en_proceso"].includes(recuadre.estado);
+    const rutaEnCurso = Object.values(recRuta).some(x => ["pendiente", "en_proceso"].includes(x.estado));
+    if (!diaEnCurso && !rutaEnCurso) return;
     const id = setInterval(() => { recargar().catch(() => {}); }, 30000);
     return () => clearInterval(id);
-  }, [recuadre, fecha]);
+  }, [recuadre, recRuta, fecha]);
 
   // Filtros en cliente
   const texto = busca.trim().toLowerCase();
@@ -373,13 +427,16 @@ function ModuloMaestroCL() {
       valor: fmt(tot.pendientes), detalle: "sin resolver al cierre",
       que: "Paquetes que al final del día no quedaron ni entregados ni devueltos: nunca se resolvieron. Lo normal es que sean muy pocos.",
       como: "Cargados menos entregados menos devueltos, ruta por ruta. Los traspasados no se restan, porque ya vienen contados en los entregados de la ruta que los recibió.",
+      ojo: "Con el botón Cuadrar de cada fila puedes volver a consultar esa ruta puntual en MELI, sin tocar las demás. Si después del recuadre el pendiente sigue ahí, entonces el dato ya es correcto: hay un paquete que de verdad nunca se entregó ni se devolvió.",
       desglose: () => ({
         titulo: "Viajes con paquetes sin resolver",
         columnas: [{ t: "ID Viaje" }, { t: "CECOS" }, { t: "Cargados", num: true },
-                   { t: "Entregados", num: true }, { t: "Devueltos", num: true }, { t: "Pendientes", num: true }],
+                   { t: "Entregados", num: true }, { t: "Devueltos", num: true }, { t: "Pendientes", num: true },
+                   { t: "Recuadrar" }],
         filas: jornadaVista.filter(r => n(r.pendientes) > 0)
           .sort((a, b) => n(b.pendientes) - n(a.pendientes)).slice(0, 20)
-          .map(r => [r.id_viaje, r.cecos, fmt(r.cargados), fmt(r.entregados), fmt(r.devueltos), fmt(r.pendientes)]),
+          .map(r => [r.id_viaje, r.cecos, fmt(r.cargados), fmt(r.entregados), fmt(r.devueltos),
+                     fmt(r.pendientes), <BotonRuta idRuta={r.id_viaje} />]),
         vacio: "Ningún viaje quedó con paquetes sin resolver. El día cerró completo.",
       }),
     },
@@ -416,9 +473,12 @@ function ModuloMaestroCL() {
       ojo: "Si la ruta ya cerró y sigue sin detalle, el botón \"Cuadrar\" de más abajo la incluye. Pero ojo: ese botón actúa sobre todas las rutas por cuadrar del día, no solo sobre las de esta tarjeta.",
       desglose: () => ({
         titulo: "Viajes sin detalle",
-        columnas: [{ t: "ID Viaje" }, { t: "CECOS" }, { t: "Cargados", num: true }, { t: "Estado" }],
+        columnas: [{ t: "ID Viaje" }, { t: "CECOS" }, { t: "Cargados", num: true },
+                   { t: "Estado" }, { t: "Recuadrar" }],
         filas: jornadaVista.filter(r => r.sin_detalle && !r.ruta_vacia).slice(0, 20)
-          .map(r => [r.id_viaje, r.cecos, fmt(r.cargados), r.status || "—"]),
+          .map(r => [r.id_viaje, r.cecos, fmt(r.cargados), r.status || "—",
+                     r.status === "close" ? <BotonRuta idRuta={r.id_viaje} />
+                       : <span style={{ fontSize: 10.5, color: "#a8b2c1" }}>aún en ruta</span>]),
         vacio: "Todos los viajes tienen su detalle.",
       }),
     }] : []),
@@ -431,12 +491,13 @@ function ModuloMaestroCL() {
       desglose: () => ({
         titulo: "Viajes con conteos distintos",
         columnas: [{ t: "ID Viaje" }, { t: "CECOS" }, { t: "MELI dice", num: true },
-                   { t: "Detalle tiene", num: true }, { t: "Diferencia", num: true }],
+                   { t: "Detalle tiene", num: true }, { t: "Diferencia", num: true }, { t: "Recuadrar" }],
         filas: jornadaVista.filter(r => r.detalle_descuadrado && !r.ruta_vacia)
           .sort((a, b) => Math.abs(n(b.entregados_detalle) - n(b.entregados_meli)) - Math.abs(n(a.entregados_detalle) - n(a.entregados_meli)))
           .slice(0, 20)
           .map(r => [r.id_viaje, r.cecos, fmt(r.entregados_meli), fmt(r.entregados_detalle),
-                     (n(r.entregados_detalle) - n(r.entregados_meli) > 0 ? "+" : "") + fmt(n(r.entregados_detalle) - n(r.entregados_meli))]),
+                     (n(r.entregados_detalle) - n(r.entregados_meli) > 0 ? "+" : "") + fmt(n(r.entregados_detalle) - n(r.entregados_meli)),
+                     <BotonRuta idRuta={r.id_viaje} />]),
         vacio: "Todos los conteos calzan.",
       }),
     }] : []),
