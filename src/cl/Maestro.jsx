@@ -179,6 +179,8 @@ function ModuloMaestroCL() {
   const [pidiendo, setPidiendo] = useState(false);
   const [recRuta, setRecRuta] = useState({});      // id_ruta -> última solicitud de esa ruta
   const [pidiendoRuta, setPidiendoRuta] = useState(null);
+  const [leidoAt, setLeidoAt] = useState(null);      // hora de la última lectura
+  const [recargando, setRecargando] = useState(false);
 
   const [resumen, setResumen] = useState(null);
   const [jornada, setJornada] = useState([]);
@@ -227,6 +229,7 @@ function ModuloMaestroCL() {
         setResumen(res[0] || null); setJornada(jor); setDevol(dev); setTrasp(tra);
         setRecuadre(rec[0] || null); setACuadrar(cua);
         setRecRuta(Object.fromEntries((rr || []).map(x => [String(x.id_ruta), x])));
+        setLeidoAt(new Date());
       } catch (e) { if (vivo) setError(e.message); }
       finally { if (vivo) setCargando(false); }
     })();
@@ -236,6 +239,7 @@ function ModuloMaestroCL() {
   // Recarga los datos del día seleccionado (sin recargar la página).
   const recargar = async () => {
     if (!fecha) return;
+    setRecargando(true);
     try {
       const [res, jor, rec, cua, rr] = await Promise.all([
         api(`vw_maestro_resumen_dia?fecha=eq.${fecha}`),
@@ -247,7 +251,9 @@ function ModuloMaestroCL() {
       setResumen(res[0] || null); setJornada(jor);
       setRecuadre(rec[0] || null); setACuadrar(cua);
       setRecRuta(Object.fromEntries((rr || []).map(x => [String(x.id_ruta), x])));
+      setLeidoAt(new Date());
     } catch (e) { setError(e.message); }
+    finally { setRecargando(false); }
   };
 
   // Deja la solicitud en la cola; el monitor la ejecuta en su siguiente ciclo.
@@ -719,11 +725,14 @@ function ModuloMaestroCL() {
                         : aCuadrar.length === 0 ? "Nada que cuadrar"
                         : `Cuadrar ${fmt(aCuadrar.length)} ${aCuadrar.length === 1 ? "ruta" : "rutas"} del ${String(fecha).slice(8,10)}/${String(fecha).slice(5,7)}`}
                     </button>
-                    <button className="mj-btn" onClick={recargar} style={{ padding: "6px 12px" }}>
-                      Recargar datos
+                    <button className="mj-btn" onClick={recargar} disabled={recargando}
+                            style={{ padding: "6px 12px" }}>
+                      {recargando ? "Leyendo…" : "Recargar datos"}
                     </button>
                     <div style={{ fontSize: 10.5, color: "#a8b2c1", lineHeight: 1.5 }}>
-                      "Recargar datos" solo vuelve a leer la base; no dispara nada.
+                      {leidoAt
+                        ? `Datos leídos a las ${horaChile(leidoAt.toISOString())}. Vuelve a leer la base; no dispara nada.`
+                        : "Vuelve a leer la base; no dispara nada."}
                     </div>
                   </div>
                 </div>
