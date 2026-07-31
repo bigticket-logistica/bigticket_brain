@@ -124,6 +124,7 @@ function PanelKpi({ kpi, onCerrar }) {
           <strong style={{ color: "#475569" }}>Cómo se calcula: </strong>{kpi.como}
         </div>
       )}
+      {kpi.render && <div style={{ marginTop: 12 }}>{kpi.render()}</div>}
       {desglose && desglose.filas.length > 0 && (
         <div style={{ marginTop: 12 }}>
           <div style={{ fontSize: 11, color: "#8a94a6", fontWeight: 700, textTransform: "uppercase", letterSpacing: .4, marginBottom: 6 }}>
@@ -318,6 +319,132 @@ function ModuloMaestroCL() {
     );
   };
 
+  // Contenido de la tarjeta "Por revisar": el recuadre y las cinco categorías.
+  const Seccion = ({ titulo, nota, columnas, filas, vacio }) => (
+    <div style={{ marginTop: 14 }}>
+      <div style={{ fontSize: 11, color: "#8a94a6", fontWeight: 700, textTransform: "uppercase",
+                    letterSpacing: .4, marginBottom: 4 }}>{titulo}</div>
+      {nota && <div style={{ fontSize: 12, color: "#64748b", lineHeight: 1.7, marginBottom: 6, maxWidth: 880 }}>{nota}</div>}
+      {filas.length === 0
+        ? <div style={{ fontSize: 12.5, color: "#94a3b8", fontStyle: "italic" }}>{vacio}</div>
+        : <div style={{ maxHeight: 240, overflow: "auto", border: "1px solid #eef1f5", borderRadius: 8 }}>
+            <table className="mj-tabla" style={{ fontSize: 11.5 }}>
+              <thead><tr>{columnas.map((c, j) => (
+                <th key={j} style={c.num ? { textAlign: "right" } : undefined}>{c.t}</th>))}</tr></thead>
+              <tbody>{filas.map((f, i) => (
+                <tr key={i}>{f.map((v, j) => (
+                  <td key={j} className={columnas[j] && columnas[j].num ? "num" : ""}
+                      style={j === 0 ? { fontWeight: 600 } : undefined}>{v}</td>))}</tr>))}</tbody>
+            </table>
+          </div>}
+    </div>
+  );
+
+  const PanelRevisar = () => (
+    <Fragment>
+      {/* recuadre del día completo */}
+      <div style={{ background: aCuadrar.length ? "#fdf6e3" : "#e7f6ec",
+                    border: `1px solid ${aCuadrar.length ? "#f3e2b8" : "#c9e6d4"}`,
+                    borderRadius: 9, padding: "11px 14px", display: "flex",
+                    alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <div style={{ flex: 1, minWidth: 280 }}>
+          <div style={{ fontSize: 12.5, fontWeight: 800, color: aCuadrar.length ? AMBAR_ : VERDE_ }}>
+            {aCuadrar.length
+              ? `${fmt(aCuadrar.length)} ${aCuadrar.length === 1 ? "viaje se puede" : "viajes se pueden"} recuadrar · ${fecha}`
+              : `La jornada del ${fecha} está cuadrada`}
+          </div>
+          <div style={{ fontSize: 12, color: "#64748b", lineHeight: 1.7, marginTop: 2 }}>
+            {aCuadrar.length
+              ? "Vuelve a consultarlos en MELI para que el contador y el detalle salgan de la misma lectura. Lo ejecuta el monitor en su siguiente pasada: hasta 5 minutos. También puedes recuadrar de a uno con el botón de cada fila."
+              : "No hay viajes cerrados con inconsistencias."}
+          </div>
+          {recuadre && (
+            <div style={{ fontSize: 12, marginTop: 6, color:
+                recuadre.estado === "error" ? ROJO_ :
+                ["listo","sin_trabajo"].includes(recuadre.estado) ? VERDE_ :
+                recuadre.estado === "cancelada" ? GRIS_ : AMBAR_ }}>
+              {recuadre.estado === "pendiente"   && `⏳ Pedido a las ${recuadre.solicitado_chile} · esperando al monitor (hace ${fmt(recuadre.hace_minutos)} min)`}
+              {recuadre.estado === "en_proceso"  && `🔧 Consultando MELI · ${fmt(recuadre.rutas_procesadas)} de ${fmt(recuadre.rutas_objetivo)}`}
+              {recuadre.estado === "listo"       && `✅ Recuadrado a las ${recuadre.terminado_chile} · ${recuadre.detalle}`}
+              {recuadre.estado === "sin_trabajo" && `✅ Revisado a las ${recuadre.terminado_chile} · no había nada que cuadrar`}
+              {recuadre.estado === "error"       && `❌ Falló · ${recuadre.detalle}`}
+              {recuadre.estado === "cancelada"   && `⊘ Pedido anterior cancelado`}
+            </div>
+          )}
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 172 }}>
+          <button className="mj-btn" onClick={pedirRecuadre}
+                  disabled={pidiendo || aCuadrar.length === 0 ||
+                            (recuadre && ["pendiente","en_proceso"].includes(recuadre.estado))}
+                  style={{ background: (aCuadrar.length && !pidiendo &&
+                             !(recuadre && ["pendiente","en_proceso"].includes(recuadre.estado))) ? NAVY : "#fff",
+                           color: (aCuadrar.length && !pidiendo &&
+                             !(recuadre && ["pendiente","en_proceso"].includes(recuadre.estado))) ? "#fff" : "#b6bfcc",
+                           borderColor: aCuadrar.length ? NAVY : "#dfe4ec",
+                           cursor: aCuadrar.length ? "pointer" : "not-allowed", padding: "7px 12px" }}>
+            {pidiendo ? "Enviando…"
+              : (recuadre && ["pendiente","en_proceso"].includes(recuadre.estado)) ? "Ya está en curso"
+              : aCuadrar.length === 0 ? "Nada que cuadrar"
+              : `Recuadrar ${fmt(aCuadrar.length)}`}
+          </button>
+          <button className="mj-btn" onClick={recargar} disabled={recargando} style={{ padding: "5px 12px" }}>
+            {recargando ? "Leyendo…" : "Recargar datos"}
+          </button>
+          {leidoAt && <div style={{ fontSize: 10, color: "#a8b2c1" }}>leído {horaChile(leidoAt.toISOString())}</div>}
+        </div>
+      </div>
+
+      <Seccion titulo={`Paquetes sin resolver · ${fmt(n(tot.pendientes))} en ${fmt(jornadaVista.filter(r => n(r.pendientes) > 0).length)} viajes`}
+        nota="Salieron a la calle y no hay registro de entrega ni de devolución. Si después de recuadrar el número no baja, el dato ya es correcto: son paquetes que de verdad nunca se resolvieron."
+        columnas={[{ t: "ID Viaje" }, { t: "CECOS" }, { t: "Conductor" }, { t: "Cargados", num: true },
+                   { t: "Entregados", num: true }, { t: "Devueltos", num: true }, { t: "Pendientes", num: true }, { t: "" }]}
+        filas={jornadaVista.filter(r => n(r.pendientes) > 0)
+          .sort((a, b) => n(b.pendientes) - n(a.pendientes))
+          .map(r => [r.id_viaje, r.cecos, r.conductor || "—", fmt(r.cargados), fmt(r.entregados),
+                     fmt(r.devueltos), fmt(r.pendientes), <BotonRuta idRuta={r.id_viaje} />])}
+        vacio="Ningún viaje quedó con paquetes sin resolver." />
+
+      <Seccion titulo={`Conteos que no calzan · ${fmt(nDescuadrados)} viajes`}
+        nota="El contador de MELI difiere de los paquetes del detalle. Si la diferencia es POSITIVA (el detalle tiene más), recuadrar lo sincroniza. Si es NEGATIVA, revisar: puede haber envíos de varias piezas contados distinto."
+        columnas={[{ t: "ID Viaje" }, { t: "CECOS" }, { t: "MELI dice", num: true },
+                   { t: "Detalle tiene", num: true }, { t: "Diferencia", num: true }, { t: "" }]}
+        filas={jornadaVista.filter(r => r.detalle_descuadrado && !r.ruta_vacia)
+          .sort((a, b) => Math.abs(n(b.entregados_detalle) - n(b.entregados_meli)) -
+                          Math.abs(n(a.entregados_detalle) - n(a.entregados_meli)))
+          .map(r => [r.id_viaje, r.cecos, fmt(r.entregados_meli), fmt(r.entregados_detalle),
+                     (n(r.entregados_detalle) - n(r.entregados_meli) > 0 ? "+" : "") +
+                       fmt(n(r.entregados_detalle) - n(r.entregados_meli)),
+                     <BotonRuta idRuta={r.id_viaje} />])}
+        vacio="Todos los conteos calzan." />
+
+      <Seccion titulo={`Sin detalle bajado · ${fmt(nSinDetalle)} viajes`}
+        nota="El detalle se baja al cerrar cada ruta y en la pasada de las 00:30. Durante el día en curso es normal verlos."
+        columnas={[{ t: "ID Viaje" }, { t: "CECOS" }, { t: "Cargados", num: true }, { t: "Estado" }, { t: "" }]}
+        filas={jornadaVista.filter(r => r.sin_detalle && !r.ruta_vacia)
+          .map(r => [r.id_viaje, r.cecos, fmt(r.cargados), r.status || "—",
+                     r.status === "close" ? <BotonRuta idRuta={r.id_viaje} />
+                       : <span style={{ fontSize: 10.5, color: "#a8b2c1" }}>aún en ruta</span>])}
+        vacio="Todos los viajes tienen su detalle." />
+
+      <Seccion titulo={`Viajes abiertos · ${fmt(nAbiertas)}`}
+        nota="El conductor todavía no los cerró en MELI. No se arreglan recuadrando: hay que pedirle que cierre. Mientras sigan abiertos, su cierre no se guarda y pueden aparecer descuadrados."
+        columnas={[{ t: "ID Viaje" }, { t: "CECOS" }, { t: "Conductor" }, { t: "Estado" },
+                   { t: "Cargados", num: true }, { t: "Entregados", num: true }, { t: "Pendientes", num: true }]}
+        filas={jornadaVista.filter(r => r.status !== "close" && !r.ruta_vacia)
+          .sort((a, b) => n(b.pendientes) - n(a.pendientes))
+          .map(r => [r.id_viaje, r.cecos, r.conductor || "—", r.status,
+                     fmt(r.cargados), fmt(r.entregados), fmt(r.pendientes)])}
+        vacio="Todos los viajes del día quedaron cerrados." />
+
+      <Seccion titulo={`Viajes vacíos · ${fmt(nVacias)}`}
+        nota="MELI los creó y cerró sin asignarles carga. No son operación ni no salidas a ruta: es ruido del sistema. No se pueden recuadrar porque no hay detalle que bajar."
+        columnas={[{ t: "ID Viaje" }, { t: "CECOS" }, { t: "Conductor" }, { t: "Cargados", num: true }, { t: "Estado" }]}
+        filas={jornada.filter(r => r.ruta_vacia)
+          .map(r => [r.id_viaje, r.cecos, r.conductor || "—", fmt(r.cargados), r.status || "—"])}
+        vacio="MELI no creó viajes vacíos este día." />
+    </Fragment>
+  );
+
   // Mientras el recuadre está en curso, refrescar solo para ver el avance.
   useEffect(() => {
     const diaEnCurso = recuadre && ["pendiente", "en_proceso"].includes(recuadre.estado);
@@ -429,86 +556,19 @@ function ModuloMaestroCL() {
       }),
     },
     {
-      id: "pendientes", rotulo: "Pendientes", color: "#8a94a6",
-      valor: fmt(tot.pendientes),
-      detalle: `paquetes en ${fmt(jornadaVista.filter(r => n(r.pendientes) > 0).length)} viajes`,
-      que: "Paquetes que al final del día no quedaron ni entregados ni devueltos: nunca se resolvieron. Lo normal es que sean muy pocos. El número grande son PAQUETES; la tabla de abajo lista los viajes que los contienen, así que ver 18 paquetes repartidos en 4 viajes es lo esperado.",
-      como: "Cargados menos entregados menos devueltos, ruta por ruta. Los traspasados no se restan, porque ya vienen contados en los entregados de la ruta que los recibió.",
-      ojo: "Con el botón Cuadrar de cada fila puedes volver a consultar esa ruta puntual en MELI, sin tocar las demás. Si después del recuadre el pendiente sigue ahí, entonces el dato ya es correcto: hay un paquete que de verdad nunca se entregó ni se devolvió.",
-      desglose: () => ({
-        titulo: `${fmt(jornadaVista.filter(r => n(r.pendientes) > 0).length)} viajes · ${fmt(tot.pendientes)} paquetes sin resolver`,
-        columnas: [{ t: "ID Viaje" }, { t: "CECOS" }, { t: "Cargados", num: true },
-                   { t: "Entregados", num: true }, { t: "Devueltos", num: true }, { t: "Pendientes", num: true },
-                   { t: "Recuadrar" }],
-        filas: jornadaVista.filter(r => n(r.pendientes) > 0)
-          .sort((a, b) => n(b.pendientes) - n(a.pendientes)).slice(0, 20)
-          .map(r => [r.id_viaje, r.cecos, fmt(r.cargados), fmt(r.entregados), fmt(r.devueltos),
-                     fmt(r.pendientes), <BotonRuta idRuta={r.id_viaje} />]),
-        vacio: "Ningún viaje quedó con paquetes sin resolver. El día cerró completo.",
-      }),
+      id: "revisar",
+      rotulo: "Por revisar",
+      color: (aCuadrar.length || nAbiertas) ? AMBAR_ : VERDE_,
+      alerta: aCuadrar.length > 0,
+      valor: fmt(aCuadrar.length),
+      detalle: aCuadrar.length
+        ? `${fmt(n(tot.pendientes))} paq. sin resolver · ${fmt(nDescuadrados)} descuadrados`
+        : "la jornada está cuadrada",
+      que: "Reúne todo lo que amerita revisión de la jornada: viajes con paquetes sin resolver, con conteos que no calzan, sin detalle bajado, todavía abiertos, y los que MELI creó vacíos. Desde aquí también se puede volver a consultarlos en MELI.",
+      como: "El número grande son los VIAJES que se pueden recuadrar (cerrados con alguna inconsistencia). Los abiertos y los vacíos se listan aparte porque no se arreglan recuadrando.",
+      render: () => <PanelRevisar />,
     },
-    {
-      id: "abiertas", rotulo: "Rutas abiertas", color: nAbiertas > 0 ? AMBAR_ : GRIS_,
-      alerta: nAbiertas > 0,
-      valor: fmt(nAbiertas), detalle: nAbiertas ? "viajes que el chofer no cerró" : "todas cerradas",
-      que: "Rutas que el conductor todavía no cerró en MELI. Durante la jornada este número baja hasta llegar a cero; si al final del día quedan abiertas, es porque esos choferes no cerraron su ruta.",
-      como: "Se cuentan las rutas cuyo estado en MELI no es cerrado, según su última captura. Las rutas vacías quedan fuera.",
-      ojo: "Es la causa más común de los descuadres: el sistema solo guarda el cierre completo de una ruta cuando pasa a cerrada. Si nunca cierra, se queda con el contador de un snapshot anterior mientras su detalle se baja después, y los dos números dejan de coincidir.",
-      desglose: () => ({ titulo: "Rutas sin cerrar", columnas: [
-        { t: "ID Viaje" }, { t: "CECOS" }, { t: "Conductor" }, { t: "Estado" },
-        { t: "Cargados", num: true }, { t: "Entregados", num: true }, { t: "Pendientes", num: true }],
-        filas: jornadaVista.filter(r => r.status !== "close" && !r.ruta_vacia)
-          .sort((a, b) => n(b.pendientes) - n(a.pendientes))
-          .map(r => [r.id_viaje, r.cecos, r.conductor || "—", r.status,
-                     fmt(r.cargados), fmt(r.entregados), fmt(r.pendientes)]),
-        vacio: "Todas las rutas del día quedaron cerradas." }) },
-    ...(nVacias > 0 ? [{
-      id: "vacias", rotulo: "Rutas vacías", color: GRIS_,
-      valor: fmt(nVacias), detalle: "viajes que MELI creó sin carga",
-      que: "Rutas que MELI creó y cerró sin asignarles ni un paquete. No son operación: son ruido administrativo del sistema.",
-      como: "Se identifican por estar cerradas con cero paquetes cargados. No cuentan como viajes, no entran en los indicadores, y tampoco se pueden cuadrar: sin paquetes no hay detalle que bajar.",
-      ojo: "Tampoco son no salidas a ruta. Una no salida tendría carga asignada y cero entregas; estas nunca tuvieron carga.",
-      desglose: () => ({ titulo: "Rutas vacías", columnas: [
-        { t: "ID Viaje" }, { t: "CECOS" }, { t: "Conductor" }, { t: "Cargados", num: true }, { t: "Estado" }],
-        filas: jornada.filter(r => r.ruta_vacia).map(r => [r.id_viaje, r.cecos, r.conductor || "—",
-          fmt(r.cargados), r.status || "—"]) }) }] : []),
-    ...(nSinDetalle > 0 ? [{
-      id: "sin_detalle", rotulo: "Falta detalle", color: "#7a5b16", alerta: true,
-      valor: fmt(nSinDetalle), detalle: "viajes aún sin procesar",
-      que: "Viajes a los que todavía no se les ha bajado el detalle de paquetes. Mientras eso pase, sus paradas, comunas y devoluciones aparecen en cero.",
-      como: "El detalle de cada ruta se baja en la pasada de cierre, a las 00:30 de la noche siguiente. Es normal ver este número durante el día en curso; debería quedar en cero al día siguiente.",
-      ojo: "Si la ruta ya cerró y sigue sin detalle, el botón \"Cuadrar\" de más abajo la incluye. Pero ojo: ese botón actúa sobre todas las rutas por cuadrar del día, no solo sobre las de esta tarjeta.",
-      desglose: () => ({
-        titulo: "Viajes sin detalle",
-        columnas: [{ t: "ID Viaje" }, { t: "CECOS" }, { t: "Cargados", num: true },
-                   { t: "Estado" }, { t: "Recuadrar" }],
-        filas: jornadaVista.filter(r => r.sin_detalle && !r.ruta_vacia).slice(0, 20)
-          .map(r => [r.id_viaje, r.cecos, fmt(r.cargados), r.status || "—",
-                     r.status === "close" ? <BotonRuta idRuta={r.id_viaje} />
-                       : <span style={{ fontSize: 10.5, color: "#a8b2c1" }}>aún en ruta</span>]),
-        vacio: "Todos los viajes tienen su detalle.",
-      }),
-    }] : []),
-    ...(nDescuadrados > 0 ? [{
-      id: "descuadrados", rotulo: "Descuadrados", color: "#b42318", alerta: true,
-      valor: fmt(nDescuadrados), detalle: "viajes con conteos que no calzan",
-      que: "Viajes donde el número de entregas que informa MELI no coincide con los paquetes que efectivamente se bajaron en el detalle. Vale revisarlos.",
-      como: "Se comparan las dos fuentes: el contador de la ruta en MELI y la cantidad de paquetes entregados en el detalle. La causa más común es que se capturaron en momentos distintos: el contador quedó en una foto temprana y el detalle se bajó después, ya con más entregas hechas.",
-      ojo: "El botón \"Cuadrar\" de más abajo corrige esto: vuelve a pedir route-detail, con lo que el contador y el detalle salen de la misma lectura. Actúa sobre todas las rutas por cuadrar del día, no solo sobre las de esta tarjeta.",
-      desglose: () => ({
-        titulo: "Viajes con conteos distintos",
-        columnas: [{ t: "ID Viaje" }, { t: "CECOS" }, { t: "MELI dice", num: true },
-                   { t: "Detalle tiene", num: true }, { t: "Diferencia", num: true }, { t: "Recuadrar" }],
-        filas: jornadaVista.filter(r => r.detalle_descuadrado && !r.ruta_vacia)
-          .sort((a, b) => Math.abs(n(b.entregados_detalle) - n(b.entregados_meli)) - Math.abs(n(a.entregados_detalle) - n(a.entregados_meli)))
-          .slice(0, 20)
-          .map(r => [r.id_viaje, r.cecos, fmt(r.entregados_meli), fmt(r.entregados_detalle),
-                     (n(r.entregados_detalle) - n(r.entregados_meli) > 0 ? "+" : "") + fmt(n(r.entregados_detalle) - n(r.entregados_meli)),
-                     <BotonRuta idRuta={r.id_viaje} />]),
-        vacio: "Todos los conteos calzan.",
-      }),
-    }] : []),
-  ];
+];
 
   const TABS = [
     { id: "jornada",    label: "Maestro Jornada", desc: "Una fila por viaje",        n: jornadaVista.length },
@@ -540,6 +600,9 @@ function ModuloMaestroCL() {
         .mj-chip{border:1px solid #dfe4ec;background:#fff;border-radius:20px;padding:4px 11px;font-size:12px;
                  cursor:pointer;font-family:inherit;color:#64748b;font-weight:600;}
         .mj-chip.on{background:${NAVY};border-color:${NAVY};color:#fff;}
+        .mj-kpis{display:grid;gap:10px;grid-template-columns:repeat(6,minmax(0,1fr));margin-bottom:14px;}
+        @media (max-width:1180px){.mj-kpis{grid-template-columns:repeat(3,minmax(0,1fr));}}
+        @media (max-width:680px){.mj-kpis{grid-template-columns:repeat(2,minmax(0,1fr));}}
         .mj-kpi{transition:box-shadow .15s,transform .15s;}
         .mj-kpi:hover{box-shadow:0 6px 16px -8px rgba(16,32,64,.25);transform:translateY(-1px);}
         .mj-kpi:focus-visible{outline:2px solid ${NAVY};outline-offset:2px;}
@@ -601,8 +664,8 @@ function ModuloMaestroCL() {
 
         {!cargando && fecha && (
           <Fragment>
-            {/* Indicadores · cada tarjeta se abre y explica de dónde sale su número */}
-            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
+            {/* Indicadores · una sola fila; cada tarjeta se abre y se explica */}
+            <div className="mj-kpis">
               {KPIS.map(k => (
                 <Kpi key={k.id} rotulo={k.rotulo} valor={k.valor} detalle={k.detalle} color={k.color} alerta={k.alerta}
                      abierto={kpiAbierto === k.id}
@@ -640,105 +703,6 @@ function ModuloMaestroCL() {
                 </button>
               )}
             </div>
-
-            {/* ── Barra de recuadre (solo en Maestro Jornada) ── */}
-            {tab === "jornada" && (
-              <div style={{ background: "#fff", border: `1px solid ${aCuadrar.length ? "#f3e2b8" : "#e6e9ef"}`,
-                            borderLeft: `4px solid ${aCuadrar.length ? AMBAR_ : VERDE_}`,
-                            borderRadius: 10, padding: "13px 16px", marginBottom: 12 }}>
-                <div style={{ display: "flex", alignItems: "flex-start", gap: 14, flexWrap: "wrap" }}>
-                  <div style={{ flex: 1, minWidth: 320 }}>
-                    <div style={{ fontSize: 13, fontWeight: 800, color: NAVY }}>
-                      {aCuadrar.length === 0
-                        ? `La jornada del ${fecha} está cuadrada`
-                        : `${fmt(aCuadrar.length)} ${aCuadrar.length === 1 ? "ruta necesita" : "rutas necesitan"} recuadre · ${fecha}`}
-                    </div>
-                    <div style={{ fontSize: 12, color: "#64748b", lineHeight: 1.7, marginTop: 3 }}>
-                      {aCuadrar.length === 0
-                        ? "No hay rutas cerradas con conteos distintos ni paquetes sin resolver."
-                        : "Actúa sobre TODAS las rutas listadas abajo, no sobre la tarjeta que tengas abierta. Vuelve a consultarlas en MELI para que el contador y el detalle salgan de la misma lectura. Lo ejecuta el monitor en su siguiente pasada: hasta 5 minutos."}
-                    </div>
-
-                    {/* qué rutas y por qué */}
-                    {aCuadrar.length > 0 && (
-                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 7 }}>
-                        {aCuadrar.slice(0, 12).map(r => (
-                          <span key={r.id_ruta} style={{ fontSize: 11, color: "#475569",
-                            background: "#f4f6f9", border: "1px solid #e6e9ef",
-                            borderRadius: 12, padding: "2px 9px" }}>
-                            <strong>{r.id_ruta}</strong>
-                            <span style={{ color: "#94a3b8" }}> · {(r.motivos || []).join(", ")}</span>
-                          </span>
-                        ))}
-                        {aCuadrar.length > 12 && (
-                          <span style={{ fontSize: 11, color: "#94a3b8" }}>y {fmt(aCuadrar.length - 12)} más</span>
-                        )}
-                      </div>
-                    )}
-
-                    {/* estado del último pedido */}
-                    {recuadre && (
-                      <div style={{ fontSize: 12, marginTop: 8, padding: "6px 10px", borderRadius: 8,
-                        background:
-                          recuadre.estado === "error" ? "#fff4f4" :
-                          ["listo","sin_trabajo"].includes(recuadre.estado) ? "#e7f6ec" :
-                          recuadre.estado === "cancelada" ? "#f4f6f9" : "#fdf6e3",
-                        color:
-                          recuadre.estado === "error" ? ROJO_ :
-                          ["listo","sin_trabajo"].includes(recuadre.estado) ? VERDE_ :
-                          recuadre.estado === "cancelada" ? GRIS_ : AMBAR_ }}>
-                        {recuadre.estado === "pendiente" && (
-                          <span>⏳ <strong>Pedido a las {recuadre.solicitado_chile}</strong> · esperando la próxima pasada del monitor (hace {fmt(recuadre.hace_minutos)} min de {5})</span>
-                        )}
-                        {recuadre.estado === "en_proceso" && (
-                          <span>🔧 <strong>Consultando MELI ahora</strong> · {fmt(recuadre.rutas_procesadas)} de {fmt(recuadre.rutas_objetivo)} rutas</span>
-                        )}
-                        {recuadre.estado === "listo" && (
-                          <span>✅ <strong>Recuadrado a las {recuadre.terminado_chile}</strong> · {recuadre.detalle}</span>
-                        )}
-                        {recuadre.estado === "sin_trabajo" && (
-                          <span>✅ <strong>Revisado a las {recuadre.terminado_chile}</strong> · no había nada que cuadrar</span>
-                        )}
-                        {recuadre.estado === "error" && (
-                          <span>❌ <strong>El recuadre falló</strong> · {recuadre.detalle}</span>
-                        )}
-                        {recuadre.estado === "cancelada" && (
-                          <span>⊘ Pedido anterior cancelado · {recuadre.detalle}</span>
-                        )}
-                      </div>
-                    )}
-                  </div>
-
-                  <div style={{ display: "flex", flexDirection: "column", gap: 7, minWidth: 168 }}>
-                    <button className="mj-btn" onClick={pedirRecuadre}
-                            disabled={pidiendo || aCuadrar.length === 0 ||
-                                      (recuadre && ["pendiente","en_proceso"].includes(recuadre.estado))}
-                            style={{ background: (aCuadrar.length && !pidiendo &&
-                                       !(recuadre && ["pendiente","en_proceso"].includes(recuadre.estado)))
-                                       ? NAVY : "#f4f6f9",
-                                     color: (aCuadrar.length && !pidiendo &&
-                                       !(recuadre && ["pendiente","en_proceso"].includes(recuadre.estado)))
-                                       ? "#fff" : "#b6bfcc",
-                                     borderColor: aCuadrar.length ? NAVY : "#dfe4ec",
-                                     cursor: aCuadrar.length ? "pointer" : "not-allowed", padding: "8px 12px" }}>
-                      {pidiendo ? "Enviando el pedido…"
-                        : (recuadre && ["pendiente","en_proceso"].includes(recuadre.estado)) ? "Ya está en curso"
-                        : aCuadrar.length === 0 ? "Nada que cuadrar"
-                        : `Cuadrar ${fmt(aCuadrar.length)} ${aCuadrar.length === 1 ? "ruta" : "rutas"} del ${String(fecha).slice(8,10)}/${String(fecha).slice(5,7)}`}
-                    </button>
-                    <button className="mj-btn" onClick={recargar} disabled={recargando}
-                            style={{ padding: "6px 12px" }}>
-                      {recargando ? "Leyendo…" : "Recargar datos"}
-                    </button>
-                    <div style={{ fontSize: 10.5, color: "#a8b2c1", lineHeight: 1.5 }}>
-                      {leidoAt
-                        ? `Datos leídos a las ${horaChile(leidoAt.toISOString())}. Vuelve a leer la base; no dispara nada.`
-                        : "Vuelve a leer la base; no dispara nada."}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
 
             {/* ── Maestro Jornada ── */}
             {tab === "jornada" && (
