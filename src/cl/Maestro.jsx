@@ -404,7 +404,7 @@ function ModuloMaestroCL() {
     },
     {
       id: "devueltos", rotulo: "Devueltos", color: "#b42318",
-      valor: fmt(tot.devueltos), detalle: "no se entregaron",
+      valor: fmt(tot.devueltos), detalle: "paquetes que no se entregaron",
       que: "Devoluciones reales: paquetes que volvieron sin entregarse, con un motivo (negocio cerrado, nadie en el domicilio, zona inaccesible…).",
       como: "Del total de paquetes no entregados se descuentan dos grupos que no son devoluciones: los que se traspasaron a otra ruta, y los que fallaron en un momento del día pero se entregaron más tarde. Este es el número que coincide con el contador de Fallidos del portal de MELI.",
       desglose: () => ({
@@ -416,7 +416,7 @@ function ModuloMaestroCL() {
     },
     {
       id: "traspasos", rotulo: "Traspasos", color: ORANGE,
-      valor: fmt(tot.dj), detalle: "pasaron a otra ruta",
+      valor: fmt(tot.dj), detalle: "paquetes que pasaron a otra ruta",
       que: "Paquetes que salieron en una ruta y se pasaron a otra durante el día. No son devoluciones: la ruta que los recibió normalmente los entrega. En el Excel se registran como D_JUSTIFICADOS.",
       como: "Son los paquetes marcados como transferidos, y de cada uno se conoce la ruta de destino. La pestaña Traspasos muestra la traza completa: ruta, conductor y patente de origen y de destino.",
       desglose: () => ({
@@ -430,12 +430,13 @@ function ModuloMaestroCL() {
     },
     {
       id: "pendientes", rotulo: "Pendientes", color: "#8a94a6",
-      valor: fmt(tot.pendientes), detalle: "sin resolver al cierre",
-      que: "Paquetes que al final del día no quedaron ni entregados ni devueltos: nunca se resolvieron. Lo normal es que sean muy pocos.",
+      valor: fmt(tot.pendientes),
+      detalle: `paquetes en ${fmt(jornadaVista.filter(r => n(r.pendientes) > 0).length)} viajes`,
+      que: "Paquetes que al final del día no quedaron ni entregados ni devueltos: nunca se resolvieron. Lo normal es que sean muy pocos. El número grande son PAQUETES; la tabla de abajo lista los viajes que los contienen, así que ver 18 paquetes repartidos en 4 viajes es lo esperado.",
       como: "Cargados menos entregados menos devueltos, ruta por ruta. Los traspasados no se restan, porque ya vienen contados en los entregados de la ruta que los recibió.",
       ojo: "Con el botón Cuadrar de cada fila puedes volver a consultar esa ruta puntual en MELI, sin tocar las demás. Si después del recuadre el pendiente sigue ahí, entonces el dato ya es correcto: hay un paquete que de verdad nunca se entregó ni se devolvió.",
       desglose: () => ({
-        titulo: "Viajes con paquetes sin resolver",
+        titulo: `${fmt(jornadaVista.filter(r => n(r.pendientes) > 0).length)} viajes · ${fmt(tot.pendientes)} paquetes sin resolver`,
         columnas: [{ t: "ID Viaje" }, { t: "CECOS" }, { t: "Cargados", num: true },
                    { t: "Entregados", num: true }, { t: "Devueltos", num: true }, { t: "Pendientes", num: true },
                    { t: "Recuadrar" }],
@@ -449,7 +450,7 @@ function ModuloMaestroCL() {
     {
       id: "abiertas", rotulo: "Rutas abiertas", color: nAbiertas > 0 ? AMBAR_ : GRIS_,
       alerta: nAbiertas > 0,
-      valor: fmt(nAbiertas), detalle: nAbiertas ? "el chofer no las cerró" : "todas cerradas",
+      valor: fmt(nAbiertas), detalle: nAbiertas ? "viajes que el chofer no cerró" : "todas cerradas",
       que: "Rutas que el conductor todavía no cerró en MELI. Durante la jornada este número baja hasta llegar a cero; si al final del día quedan abiertas, es porque esos choferes no cerraron su ruta.",
       como: "Se cuentan las rutas cuyo estado en MELI no es cerrado, según su última captura. Las rutas vacías quedan fuera.",
       ojo: "Es la causa más común de los descuadres: el sistema solo guarda el cierre completo de una ruta cuando pasa a cerrada. Si nunca cierra, se queda con el contador de un snapshot anterior mientras su detalle se baja después, y los dos números dejan de coincidir.",
@@ -463,7 +464,7 @@ function ModuloMaestroCL() {
         vacio: "Todas las rutas del día quedaron cerradas." }) },
     ...(nVacias > 0 ? [{
       id: "vacias", rotulo: "Rutas vacías", color: GRIS_,
-      valor: fmt(nVacias), detalle: "MELI las creó sin carga",
+      valor: fmt(nVacias), detalle: "viajes que MELI creó sin carga",
       que: "Rutas que MELI creó y cerró sin asignarles ni un paquete. No son operación: son ruido administrativo del sistema.",
       como: "Se identifican por estar cerradas con cero paquetes cargados. No cuentan como viajes, no entran en los indicadores, y tampoco se pueden cuadrar: sin paquetes no hay detalle que bajar.",
       ojo: "Tampoco son no salidas a ruta. Una no salida tendría carga asignada y cero entregas; estas nunca tuvieron carga.",
@@ -473,7 +474,7 @@ function ModuloMaestroCL() {
           fmt(r.cargados), r.status || "—"]) }) }] : []),
     ...(nSinDetalle > 0 ? [{
       id: "sin_detalle", rotulo: "Falta detalle", color: "#7a5b16", alerta: true,
-      valor: fmt(nSinDetalle), detalle: "aún sin procesar",
+      valor: fmt(nSinDetalle), detalle: "viajes aún sin procesar",
       que: "Viajes a los que todavía no se les ha bajado el detalle de paquetes. Mientras eso pase, sus paradas, comunas y devoluciones aparecen en cero.",
       como: "El detalle de cada ruta se baja en la pasada de cierre, a las 00:30 de la noche siguiente. Es normal ver este número durante el día en curso; debería quedar en cero al día siguiente.",
       ojo: "Si la ruta ya cerró y sigue sin detalle, el botón \"Cuadrar\" de más abajo la incluye. Pero ojo: ese botón actúa sobre todas las rutas por cuadrar del día, no solo sobre las de esta tarjeta.",
@@ -490,7 +491,7 @@ function ModuloMaestroCL() {
     }] : []),
     ...(nDescuadrados > 0 ? [{
       id: "descuadrados", rotulo: "Descuadrados", color: "#b42318", alerta: true,
-      valor: fmt(nDescuadrados), detalle: "conteos que no calzan",
+      valor: fmt(nDescuadrados), detalle: "viajes con conteos que no calzan",
       que: "Viajes donde el número de entregas que informa MELI no coincide con los paquetes que efectivamente se bajaron en el detalle. Vale revisarlos.",
       como: "Se comparan las dos fuentes: el contador de la ruta en MELI y la cantidad de paquetes entregados en el detalle. La causa más común es que se capturaron en momentos distintos: el contador quedó en una foto temprana y el detalle se bajó después, ya con más entregas hechas.",
       ojo: "El botón \"Cuadrar\" de más abajo corrige esto: vuelve a pedir route-detail, con lo que el contador y el detalle salen de la misma lectura. Actúa sobre todas las rutas por cuadrar del día, no solo sobre las de esta tarjeta.",
