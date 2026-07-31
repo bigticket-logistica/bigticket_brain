@@ -8,6 +8,9 @@ const CATEGORIAS = {
   alta_padron:          { label: "Alta en padrón",           icon: "➕", color: "#1a3a6b" },
   modificacion_vehiculo:{ label: "Modificación de vehículo", icon: "🚚", color: "#F47B20" },
   baja_conductor:       { label: "Baja de conductor",        icon: "🗑️", color: "#7c3aed" },
+  alta_vehiculo:        { label: "Alta de vehículo",         icon: "🆕", color: "#0e7490" },
+  baja_vehiculo:        { label: "Baja de vehículo",         icon: "🗑️", color: "#9f1239" },
+  provider_otros:       { label: "Otra acción de padrón",    icon: "🔍", color: "#64748b" },
 };
 
 const catInfo = (c) => CATEGORIAS[c] || { label: c || "—", icon: "•", color: "#666" };
@@ -67,6 +70,16 @@ function describirCambio(a) {
   }
   if (a.categoria === "baja_conductor") {
     return a.driver_id ? `Conductor ${a.driver_id}` : "Conductor";
+  }
+  if (a.categoria === "alta_vehiculo") {
+    const partes = [ps.brand, ps.model, ps.year].filter(Boolean).join(" · ");
+    return partes || "Vehículo nuevo";
+  }
+  if (a.categoria === "baja_vehiculo") {
+    return a.vehicle_id ? `Vehículo ${a.vehicle_id}` : "Vehículo";
+  }
+  if (a.categoria === "provider_otros") {
+    return a.endpoint || "Endpoint sin clasificar";
   }
   return "—";
 }
@@ -147,6 +160,18 @@ function DetalleAccion({ a }) {
     if (a.correo || ps.correo) filasCategoria.push(["Correo del operador", a.correo || ps.correo]);
   } else if (a.categoria === "baja_conductor") {
     if (a.driver_id) filasCategoria.push(["ID de conductor", String(a.driver_id)]);
+  } else if (a.categoria === "alta_vehiculo") {
+    const mmv = [ps.brand, ps.model, ps.year, ps.version].filter(Boolean).join(" · ");
+    if (mmv) filasCategoria.push(["Vehículo", mmv]);
+    if (Array.isArray(ps.campos) && ps.campos.length)
+      filasCategoria.push(["Campos enviados", ps.campos.join(", ")]);
+  } else if (a.categoria === "baja_vehiculo") {
+    if (a.vehicle_id) filasCategoria.push(["ID de vehículo", String(a.vehicle_id)]);
+  } else if (a.categoria === "provider_otros") {
+    if (a.endpoint) filasCategoria.push(["Endpoint", a.endpoint]);
+    if (a.metodo) filasCategoria.push(["Método", a.metodo]);
+    if (Array.isArray(ps.campos) && ps.campos.length)
+      filasCategoria.push(["Claves del payload", ps.campos.join(", ")]);
   }
 
   return (
