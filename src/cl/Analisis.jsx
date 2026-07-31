@@ -22,13 +22,25 @@ const fmt = (v) => n(v).toLocaleString("es-CL");
 const pct1 = (v) => (v === null || v === undefined ? "—" : `${n(v).toFixed(1)}%`);
 const dec = (v, d = 1) => (v === null || v === undefined ? "—" : n(v).toFixed(d));
 
+// Los headers de opciones se MEZCLAN con los base, no los reemplazan: antes un
+// Object.assign de primer nivel borraba el apikey si se pasaban headers propios, y
+// solo funcionaba porque cada llamada los repetía a mano.
 async function api(path, opciones) {
-  const r = await fetch(`${CL_URL}/rest/v1/${path}`, Object.assign({
-    headers: { apikey: CL_KEY, Authorization: `Bearer ${CL_KEY}`, "Content-Type": "application/json" },
-  }, opciones || {}));
-  if (!r.ok) throw new Error(`HTTP ${r.status}: ${(await r.text()).slice(0, 200)}`);
-  if (opciones && opciones.method === "PATCH") return true;
-  return r.json();
+  const o = opciones || {};
+  const r = await fetch(`${CL_URL}/rest/v1/${path}`, {
+    method: o.method || "GET",
+    headers: Object.assign({
+      apikey: CL_KEY,
+      Authorization: `Bearer ${CL_KEY}`,
+      "Content-Type": "application/json",
+    }, o.headers || {}),
+    body: o.body,
+  });
+  if (!r.ok) throw new Error(`HTTP ${r.status}: ${(await r.text()).slice(0, 250)}`);
+  // Las escrituras con Prefer: return=minimal responden sin cuerpo.
+  const texto = await r.text();
+  if (!texto || !texto.trim()) return true;
+  try { return JSON.parse(texto); } catch (e) { return true; }
 }
 
 function descargarCSV(nombre, filas, columnas) {
@@ -246,8 +258,7 @@ function ModuloAnalisisCL() {
     setGuardando(substatus);
     try {
       await api(`motivos_clasificacion?substatus=eq.${encodeURIComponent(substatus)}`, {
-        method: "PATCH", headers: { apikey: CL_KEY, Authorization: `Bearer ${CL_KEY}`,
-          "Content-Type": "application/json", Prefer: "return=minimal" },
+        method: "PATCH", headers: { Prefer: "return=minimal" },
         body: JSON.stringify(Object.assign({}, cambios,
           { actualizado_at: new Date().toISOString(), actualizado_por: "brain" })),
       });
@@ -261,8 +272,7 @@ function ModuloAnalisisCL() {
     setGuardando(clave);
     try {
       await api(`monitoreo_config?clave=eq.${clave}`, {
-        method: "PATCH", headers: { apikey: CL_KEY, Authorization: `Bearer ${CL_KEY}`,
-          "Content-Type": "application/json", Prefer: "return=minimal" },
+        method: "PATCH", headers: { Prefer: "return=minimal" },
         body: JSON.stringify({ valor, actualizado_at: new Date().toISOString(), actualizado_por: "brain" }),
       });
       setConfig(await api("monitoreo_config?order=grupo,clave"));

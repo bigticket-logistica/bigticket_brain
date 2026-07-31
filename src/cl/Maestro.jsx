@@ -36,12 +36,25 @@ const GRIS_ = "#8a94a6";
 const VERDE_ = "#0d8043";
 const ROJO_ = "#b42318";
 
-async function api(path) {
+// Acepta opciones para poder escribir, no solo leer. La versión anterior recibía
+// solo `path` e ignoraba el segundo argumento, así que el botón de recuadre hacía
+// un GET en vez del POST: no insertaba nada y tampoco fallaba. Silencio total.
+async function api(path, opciones) {
+  const o = opciones || {};
   const r = await fetch(`${CL_URL}/rest/v1/${path}`, {
-    headers: { apikey: CL_KEY, Authorization: `Bearer ${CL_KEY}` },
+    method: o.method || "GET",
+    headers: Object.assign({
+      apikey: CL_KEY,
+      Authorization: `Bearer ${CL_KEY}`,
+      "Content-Type": "application/json",
+    }, o.headers || {}),
+    body: o.body,
   });
-  if (!r.ok) throw new Error(`La consulta falló (HTTP ${r.status}). ${(await r.text()).slice(0, 200)}`);
-  return r.json();
+  if (!r.ok) throw new Error(`La consulta falló (HTTP ${r.status}). ${(await r.text()).slice(0, 250)}`);
+  // Las escrituras con Prefer: return=minimal responden sin cuerpo: r.json() reventaría.
+  const texto = await r.text();
+  if (!texto || !texto.trim()) return true;
+  try { return JSON.parse(texto); } catch (e) { return true; }
 }
 
 function descargarCSV(nombre, filas, columnas) {
@@ -238,10 +251,10 @@ function ModuloMaestroCL() {
     try {
       await api("solicitudes_proceso", {
         method: "POST",
-        headers: { apikey: CL_KEY, Authorization: `Bearer ${CL_KEY}`,
-                   "Content-Type": "application/json", Prefer: "return=minimal" },
+        headers: { Prefer: "return=minimal" },
         body: JSON.stringify({ tipo: "cuadrar_dia", fecha_operativa: fecha, solicitado_por: "brain" }),
       });
+      // El monitor tarda hasta 5 min; se recarga ya para que aparezca "esperando".
       await recargar();
     } catch (e) { setError(e.message); }
     finally { setPidiendo(false); }
@@ -286,8 +299,11 @@ function ModuloMaestroCL() {
   }), { cargados: 0, entregados: 0, devueltos: 0, dj: 0, paradas: 0, pendientes: 0 });
   const pct = tot.cargados ? (100 * tot.entregados / tot.cargados).toFixed(1) : null;
   // Dos cosas distintas, antes mezcladas en un solo contador:
-  const nSinDetalle   = jornadaVista.filter(r => r.sin_detalle === true).length;
-  const nDescuadrados = jornadaVista.filter(r => r.detalle_descuadrado === true).length;
+  // Se excluyen las rutas vacías: nunca van a tener detalle porque nunca tuvieron
+  // paquetes, así que aparecerían en "Falta detalle" para siempre sin que se pueda
+  // hacer nada. Van en su propio contador.
+  const nSinDetalle   = jornadaVista.filter(r => r.sin_detalle === true && !r.ruta_vacia).length;
+  const nDescuadrados = jornadaVista.filter(r => r.detalle_descuadrado === true && !r.ruta_vacia).length;
 
   const motivos = Object.entries(devolVista.reduce((a, r) => {
     const k = r.motivo || "(sin motivo)"; a[k] = (a[k] || 0) + 1; return a;
@@ -382,15 +398,26 @@ function ModuloMaestroCL() {
           .map(r => [r.id_viaje, r.cecos, r.conductor || "—", r.status,
                      fmt(r.cargados), fmt(r.entregados), fmt(r.pendientes)]),
         vacio: "Todas las rutas del día quedaron cerradas." }) },
+    ...(nVacias > 0 ? [{
+      id: "vacias", rotulo: "Rutas vacías", color: GRIS_,
+      valor: fmt(nVacias), detalle: "MELI las creó sin carga",
+      que: "Rutas que MELI creó y cerró sin asignarles ni un paquete. No son operación: son ruido administrativo del sistema.",
+      como: "Se identifican por estar cerradas con cero paquetes cargados. No cuentan como viajes, no entran en los indicadores, y tampoco se pueden cuadrar: sin paquetes no hay detalle que bajar.",
+      ojo: "Tampoco son no salidas a ruta. Una no salida tendría carga asignada y cero entregas; estas nunca tuvieron carga.",
+      desglose: () => ({ titulo: "Rutas vacías", columnas: [
+        { t: "ID Viaje" }, { t: "CECOS" }, { t: "Conductor" }, { t: "Cargados", num: true }, { t: "Estado" }],
+        filas: jornada.filter(r => r.ruta_vacia).map(r => [r.id_viaje, r.cecos, r.conductor || "—",
+          fmt(r.cargados), r.status || "—"]) }) }] : []),
     ...(nSinDetalle > 0 ? [{
       id: "sin_detalle", rotulo: "Falta detalle", color: "#7a5b16", alerta: true,
       valor: fmt(nSinDetalle), detalle: "aún sin procesar",
       que: "Viajes a los que todavía no se les ha bajado el detalle de paquetes. Mientras eso pase, sus paradas, comunas y devoluciones aparecen en cero.",
       como: "El detalle de cada ruta se baja en la pasada de cierre, a las 00:30 de la noche siguiente. Es normal ver este número durante el día en curso; debería quedar en cero al día siguiente.",
+      ojo: "Si la ruta ya cerró y sigue sin detalle, el botón \"Cuadrar\" de más abajo la incluye. Pero ojo: ese botón actúa sobre todas las rutas por cuadrar del día, no solo sobre las de esta tarjeta.",
       desglose: () => ({
         titulo: "Viajes sin detalle",
         columnas: [{ t: "ID Viaje" }, { t: "CECOS" }, { t: "Cargados", num: true }, { t: "Estado" }],
-        filas: jornadaVista.filter(r => r.sin_detalle).slice(0, 20)
+        filas: jornadaVista.filter(r => r.sin_detalle && !r.ruta_vacia).slice(0, 20)
           .map(r => [r.id_viaje, r.cecos, fmt(r.cargados), r.status || "—"]),
         vacio: "Todos los viajes tienen su detalle.",
       }),
@@ -400,11 +427,12 @@ function ModuloMaestroCL() {
       valor: fmt(nDescuadrados), detalle: "conteos que no calzan",
       que: "Viajes donde el número de entregas que informa MELI no coincide con los paquetes que efectivamente se bajaron en el detalle. Vale revisarlos.",
       como: "Se comparan las dos fuentes: el contador de la ruta en MELI y la cantidad de paquetes entregados en el detalle. La causa más común es que se capturaron en momentos distintos: el contador quedó en una foto temprana y el detalle se bajó después, ya con más entregas hechas.",
+      ojo: "El botón \"Cuadrar\" de más abajo corrige esto: vuelve a pedir route-detail, con lo que el contador y el detalle salen de la misma lectura. Actúa sobre todas las rutas por cuadrar del día, no solo sobre las de esta tarjeta.",
       desglose: () => ({
         titulo: "Viajes con conteos distintos",
         columnas: [{ t: "ID Viaje" }, { t: "CECOS" }, { t: "MELI dice", num: true },
                    { t: "Detalle tiene", num: true }, { t: "Diferencia", num: true }],
-        filas: jornadaVista.filter(r => r.detalle_descuadrado)
+        filas: jornadaVista.filter(r => r.detalle_descuadrado && !r.ruta_vacia)
           .sort((a, b) => Math.abs(n(b.entregados_detalle) - n(b.entregados_meli)) - Math.abs(n(a.entregados_detalle) - n(a.entregados_meli)))
           .slice(0, 20)
           .map(r => [r.id_viaje, r.cecos, fmt(r.entregados_meli), fmt(r.entregados_detalle),
@@ -554,19 +582,19 @@ function ModuloMaestroCL() {
                   <div style={{ flex: 1, minWidth: 320 }}>
                     <div style={{ fontSize: 13, fontWeight: 800, color: NAVY }}>
                       {aCuadrar.length === 0
-                        ? "La jornada está cuadrada"
-                        : `${fmt(aCuadrar.length)} ${aCuadrar.length === 1 ? "ruta necesita" : "rutas necesitan"} recuadre`}
+                        ? `La jornada del ${fecha} está cuadrada`
+                        : `${fmt(aCuadrar.length)} ${aCuadrar.length === 1 ? "ruta necesita" : "rutas necesitan"} recuadre · ${fecha}`}
                     </div>
                     <div style={{ fontSize: 12, color: "#64748b", lineHeight: 1.7, marginTop: 3 }}>
                       {aCuadrar.length === 0
-                        ? "No hay conteos distintos ni paquetes sin resolver."
-                        : "Vuelve a consultar en MELI esas rutas para que el contador y el detalle salgan de la misma lectura. El monitor lo ejecuta en su siguiente pasada: puede tardar hasta 5 minutos."}
+                        ? "No hay rutas cerradas con conteos distintos ni paquetes sin resolver."
+                        : "Actúa sobre TODAS las rutas listadas abajo, no sobre la tarjeta que tengas abierta. Vuelve a consultarlas en MELI para que el contador y el detalle salgan de la misma lectura. Lo ejecuta el monitor en su siguiente pasada: hasta 5 minutos."}
                     </div>
 
                     {/* qué rutas y por qué */}
                     {aCuadrar.length > 0 && (
                       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 7 }}>
-                        {aCuadrar.slice(0, 6).map(r => (
+                        {aCuadrar.slice(0, 12).map(r => (
                           <span key={r.id_ruta} style={{ fontSize: 11, color: "#475569",
                             background: "#f4f6f9", border: "1px solid #e6e9ef",
                             borderRadius: 12, padding: "2px 9px" }}>
@@ -574,8 +602,8 @@ function ModuloMaestroCL() {
                             <span style={{ color: "#94a3b8" }}> · {(r.motivos || []).join(", ")}</span>
                           </span>
                         ))}
-                        {aCuadrar.length > 6 && (
-                          <span style={{ fontSize: 11, color: "#94a3b8" }}>y {fmt(aCuadrar.length - 6)} más</span>
+                        {aCuadrar.length > 12 && (
+                          <span style={{ fontSize: 11, color: "#94a3b8" }}>y {fmt(aCuadrar.length - 12)} más</span>
                         )}
                       </div>
                     )}
@@ -628,7 +656,7 @@ function ModuloMaestroCL() {
                       {pidiendo ? "Enviando el pedido…"
                         : (recuadre && ["pendiente","en_proceso"].includes(recuadre.estado)) ? "Ya está en curso"
                         : aCuadrar.length === 0 ? "Nada que cuadrar"
-                        : `Cuadrar ${fmt(aCuadrar.length)} ${aCuadrar.length === 1 ? "ruta" : "rutas"}`}
+                        : `Cuadrar ${fmt(aCuadrar.length)} ${aCuadrar.length === 1 ? "ruta" : "rutas"} del ${String(fecha).slice(8,10)}/${String(fecha).slice(5,7)}`}
                     </button>
                     <button className="mj-btn" onClick={recargar} style={{ padding: "6px 12px" }}>
                       Recargar datos
