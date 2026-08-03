@@ -737,7 +737,7 @@ function ModuloMaestroCL() {
                 <table className="mj-tabla">
                   <thead>
                     <tr>
-                      <th>ID Viaje</th><th>CECOS</th><th>Tercero</th><th>Patente</th><th>Conductor</th>
+                      <th>ID Viaje</th><th>CECOS</th><th>Tipo de Ruta</th><th>Tercero</th><th>Patente</th><th>Conductor</th>
                       <th>Ayud.</th><th className="num">Paradas</th><th className="num">Cargados</th>
                       <th className="num">Entregados</th><th className="num">Devueltos</th><th className="num">Traspasos</th>
                       <th className="num">%</th>
@@ -751,11 +751,20 @@ function ModuloMaestroCL() {
                       <tr key={`${r.id_viaje}-${r.fecha}`}>
                         <td style={{ fontWeight: 700, color: NAVY }}>
                           {r.id_viaje}
-                          {r.is_line_haul && <span style={{ marginLeft: 5 }}><Etiqueta texto="LH" color="#7a5b16" fondo="#fdf3d8" /></span>}
-                          {r.tipo === "melione" && <span style={{ marginLeft: 5 }}><Etiqueta texto="ONE" color="#5b21b6" fondo="#ede9fe" /></span>}
-                          {r.entrega_y_retira && <span style={{ marginLeft: 5 }} title="Entrega y además retira"><Etiqueta texto="E+R" color="#0e7490" fondo="#e0f2fe" /></span>}
                         </td>
                         <td><Etiqueta texto={r.cecos || "—"} /></td>
+                        <td style={{ whiteSpace: "nowrap" }}>
+                          {/* Tipo de servicio que informa MELI, más las banderas que lo acompañan.
+                              El tipo y el Line Haul son dimensiones independientes: hay rutas
+                              last_mile que además son Line Haul. */}
+                          {r.tipo === "melione"
+                            ? <Etiqueta texto="MELI ONE" color="#5b21b6" fondo="#ede9fe" />
+                            : r.tipo === "last_mile"
+                              ? <span style={{ fontSize: 11.5, color: "#475569" }}>Última milla</span>
+                              : <span style={{ color: "#cbd5e1" }}>—</span>}
+                          {r.is_line_haul && <span style={{ marginLeft: 5 }} title="Line Haul: transferencia entre centros, no reparto a clientes"><Etiqueta texto="LH" color="#7a5b16" fondo="#fdf3d8" /></span>}
+                          {r.entrega_y_retira && <span style={{ marginLeft: 5 }} title="Entrega y además pasa a retirar"><Etiqueta texto="E+R" color="#0e7490" fondo="#e0f2fe" /></span>}
+                        </td>
                         <td style={{ color: "#475569" }}>{r.tercero || "—"}</td>
                         <td style={{ fontWeight: 600 }}>{r.patente || "—"}</td>
                         <td style={{ color: "#334155", maxWidth: 190, overflow: "hidden", textOverflow: "ellipsis" }}>{r.conductor || "—"}</td>
