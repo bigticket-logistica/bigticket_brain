@@ -57,6 +57,18 @@ async function api(path, opciones) {
   try { return JSON.parse(texto); } catch (e) { return true; }
 }
 
+// Variante tolerante: si una consulta falla (por ejemplo, timeout en una vista
+// pesada), devuelve el valor por defecto en vez de tumbar todo el bloque. Antes
+// los módulos pedían trece consultas en paralelo y una sola caída dejaba la
+// pantalla en blanco aunque las otras doce hubieran respondido.
+async function apiSuave(path, porDefecto, fallos) {
+  try { return await api(path); }
+  catch (e) {
+    if (fallos) fallos.push(String(path).split("?")[0] + ": " + e.message);
+    return porDefecto;
+  }
+}
+
 function descargarCSV(nombre, filas, columnas) {
   if (!filas.length) return;
   const esc = (v) => {
@@ -194,7 +206,7 @@ function ModuloMaestroCL() {
   useEffect(() => {
     (async () => {
       try {
-        const r = await api("vw_maestro_resumen_dia?select=fecha&order=fecha.desc&limit=60");
+        const r = await api("vw_dias_disponibles?select=fecha&order=fecha.desc&limit=60");
         const fs = r.map(x => x.fecha);
         setDias(fs);
         if (fs.length) {
@@ -217,15 +229,17 @@ function ModuloMaestroCL() {
     setCargando(true); setError("");
     (async () => {
       try {
+        const fallos = [];
         const [res, jor, dev, tra, rec, cua, rr] = await Promise.all([
-          api(`vw_maestro_resumen_dia?fecha=eq.${fecha}`),
-          api(`vw_maestro_jornada?fecha=eq.${fecha}&order=cargados.desc.nullslast&limit=3000`),
-          api(`vw_maestro_devoluciones?fecha=eq.${fecha}&order=cecos.asc&limit=8000`),
-          api(`vw_traspasos_resumen?fecha_operativa=eq.${fecha}&order=paquetes.desc&limit=3000`),
-          api(`vw_estado_recuadre?fecha_operativa=eq.${fecha}`),
-          api(`vw_rutas_a_cuadrar?fecha=eq.${fecha}&select=id_ruta,cecos,conductor,status,cargados,entregados,pendientes,motivos&limit=500`),
-          api(`vw_estado_recuadre_ruta?fecha_operativa=eq.${fecha}&limit=500`),
+          apiSuave(`vw_maestro_resumen_dia?fecha=eq.${fecha}`, [], fallos),
+          apiSuave(`vw_maestro_jornada?fecha=eq.${fecha}&order=cargados.desc.nullslast&limit=3000`, [], fallos),
+          apiSuave(`vw_maestro_devoluciones?fecha=eq.${fecha}&order=cecos.asc&limit=8000`, [], fallos),
+          apiSuave(`vw_traspasos_resumen?fecha_operativa=eq.${fecha}&order=paquetes.desc&limit=3000`, [], fallos),
+          apiSuave(`vw_estado_recuadre?fecha_operativa=eq.${fecha}`, [], fallos),
+          apiSuave(`vw_rutas_a_cuadrar?fecha=eq.${fecha}&select=id_ruta,cecos,conductor,status,cargados,entregados,pendientes,motivos&limit=500`, [], fallos),
+          apiSuave(`vw_estado_recuadre_ruta?fecha_operativa=eq.${fecha}&limit=500`, [], fallos),
         ]);
+        if (fallos.length) setError("Algunas consultas no respondieron: " + fallos.join(" | "));
         if (!vivo) return;
         setResumen(res[0] || null); setJornada(jor); setDevol(dev); setTrasp(tra);
         setRecuadre(rec[0] || null); setACuadrar(cua);
@@ -242,13 +256,15 @@ function ModuloMaestroCL() {
     if (!fecha) return;
     setRecargando(true);
     try {
+      const fallos = [];
       const [res, jor, rec, cua, rr] = await Promise.all([
-        api(`vw_maestro_resumen_dia?fecha=eq.${fecha}`),
-        api(`vw_maestro_jornada?fecha=eq.${fecha}&order=cargados.desc.nullslast&limit=3000`),
-        api(`vw_estado_recuadre?fecha_operativa=eq.${fecha}`),
-        api(`vw_rutas_a_cuadrar?fecha=eq.${fecha}&select=id_ruta,cecos,conductor,status,cargados,entregados,pendientes,motivos&limit=500`),
-        api(`vw_estado_recuadre_ruta?fecha_operativa=eq.${fecha}&limit=500`),
+        apiSuave(`vw_maestro_resumen_dia?fecha=eq.${fecha}`, [], fallos),
+        apiSuave(`vw_maestro_jornada?fecha=eq.${fecha}&order=cargados.desc.nullslast&limit=3000`, [], fallos),
+        apiSuave(`vw_estado_recuadre?fecha_operativa=eq.${fecha}`, [], fallos),
+        apiSuave(`vw_rutas_a_cuadrar?fecha=eq.${fecha}&select=id_ruta,cecos,conductor,status,cargados,entregados,pendientes,motivos&limit=500`, [], fallos),
+        apiSuave(`vw_estado_recuadre_ruta?fecha_operativa=eq.${fecha}&limit=500`, [], fallos),
       ]);
+      setError(fallos.length ? "Algunas consultas no respondieron: " + fallos.join(" | ") : "");
       setResumen(res[0] || null); setJornada(jor);
       setRecuadre(rec[0] || null); setACuadrar(cua);
       setRecRuta(Object.fromEntries((rr || []).map(x => [String(x.id_ruta), x])));
