@@ -184,6 +184,7 @@ function ModuloMaestroCL() {
   const [fecha, setFecha] = useState("");
   const [tab, setTab] = useState("jornada");
   const [soloReparto, setSoloReparto] = useState(true);
+  const [tipoServicio, setTipoServicio] = useState("todos");   // todos | Última milla | MELI ONE
   const [cecos, setCecos] = useState("");
   const [busca, setBusca] = useState("");
   const [kpiAbierto, setKpiAbierto] = useState(null);
@@ -477,6 +478,7 @@ function ModuloMaestroCL() {
     // Tolerante a NULL a propósito: una ruta sin clasificar se trata como última
     // milla en vez de desaparecer de la vista sin explicación.
     .filter(r => (!soloReparto || r.is_line_haul !== true))
+    .filter(r => (tipoServicio === "todos" || r.tipo_servicio === tipoServicio))
     .filter(r => !cecos || r.cecos === cecos)
     .filter(r => coincide(r.id_viaje, r.patente, r.conductor, r.cecos, r.comuna_primera_parada, r.comuna_ultima_parada, r.ciclo));
   const devolVista = devol
@@ -488,6 +490,9 @@ function ModuloMaestroCL() {
 
   const listaCecos = [...new Set(jornada.map(r => r.cecos).filter(Boolean))].sort();
   const nLineHaul = jornada.filter(r => r.is_line_haul === true).length;
+  // MELI distingue last_mile de melione (MELI ONE) en el campo tipo.
+  const tiposServicio = [...new Set(jornada.map(r => r.tipo_servicio).filter(Boolean))].sort();
+  const nMeliOne = jornada.filter(r => r.tipo === "melione").length;
   const nSinClasificar = jornada.filter(r => r.is_line_haul === null || r.is_line_haul === undefined).length;
   // Rutas que el chofer todavía no cerró. Durante el día debe ir bajando a 0.
   // Las que quedan abiertas al cierre son la causa más común del descuadre.
@@ -522,9 +527,8 @@ function ModuloMaestroCL() {
     {
       id: "viajes", rotulo: "Viajes", color: NAVY,
       valor: fmt(jornadaVista.length),
-      detalle: soloReparto
-        ? `última milla${nSinClasificar ? ` · ${fmt(nSinClasificar)} sin clasificar` : ""}`
-        : `incluye ${fmt(nLineHaul)} line haul`,
+      detalle: (tipoServicio !== "todos" ? tipoServicio : (soloReparto ? "última milla" : `incluye ${fmt(nLineHaul)} line haul`))
+        + (nMeliOne && tipoServicio === "todos" ? ` · ${fmt(nMeliOne)} MELI ONE` : ""),
       que: "Cada ruta que MELI generó para el día. Un viaje equivale a una fila del maestro: un vehículo con su conductor haciendo un recorrido.",
       como: soloReparto
         ? `Se cuentan solo las rutas de última milla, las que reparten a clientes. Quedan fuera ${fmt(nLineHaul)} de Line Haul, que son transferencias entre centros; para verlas, activa "Incluir Line Haul".`
@@ -698,6 +702,13 @@ function ModuloMaestroCL() {
                 <option value="">Todos los CECOS</option>
                 {listaCecos.map(c => <option key={c} value={c}>{c}</option>)}
               </select>
+              {tiposServicio.length > 1 && (
+                <select className="mj-input" value={tipoServicio} onChange={e => setTipoServicio(e.target.value)}
+                        title="MELI distingue el reparto de última milla de las rutas MELI ONE">
+                  <option value="todos">Todos los servicios{nMeliOne ? ` · ${fmt(nMeliOne)} MELI ONE` : ""}</option>
+                  {tiposServicio.map(t => <option key={t} value={t}>{t}</option>)}
+                </select>
+              )}
               <button className={`mj-chip ${!soloReparto ? "on" : ""}`} onClick={() => setSoloReparto(v => !v)}
                 title="Las rutas de Line Haul son transferencias entre centros, no reparto a clientes. Por defecto quedan fuera.">
                 {!soloReparto ? "✓ " : ""}Incluir Line Haul{nLineHaul ? ` (${fmt(nLineHaul)})` : ""}
@@ -739,7 +750,10 @@ function ModuloMaestroCL() {
                     {jornadaVista.map(r => (
                       <tr key={`${r.id_viaje}-${r.fecha}`}>
                         <td style={{ fontWeight: 700, color: NAVY }}>
-                          {r.id_viaje}{r.is_line_haul && <span style={{ marginLeft: 5 }}><Etiqueta texto="LH" color="#7a5b16" fondo="#fdf3d8" /></span>}
+                          {r.id_viaje}
+                          {r.is_line_haul && <span style={{ marginLeft: 5 }}><Etiqueta texto="LH" color="#7a5b16" fondo="#fdf3d8" /></span>}
+                          {r.tipo === "melione" && <span style={{ marginLeft: 5 }}><Etiqueta texto="ONE" color="#5b21b6" fondo="#ede9fe" /></span>}
+                          {r.entrega_y_retira && <span style={{ marginLeft: 5 }} title="Entrega y además retira"><Etiqueta texto="E+R" color="#0e7490" fondo="#e0f2fe" /></span>}
                         </td>
                         <td><Etiqueta texto={r.cecos || "—"} /></td>
                         <td style={{ color: "#475569" }}>{r.tercero || "—"}</td>
@@ -902,6 +916,7 @@ const COLS_JORNADA = [
   { titulo: "FECHA", campo: "fecha" },
   { titulo: "ID_VIAJE", campo: "id_viaje" },
   { titulo: "CECOS", campo: "cecos" },
+  { titulo: "SERVICIO", campo: "tipo_servicio" },
   { titulo: "TERCERO", campo: "tercero" },
   { titulo: "PATENTE", campo: "patente" },
   { titulo: "CONDUCTOR", campo: "conductor" },
