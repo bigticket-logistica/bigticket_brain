@@ -207,6 +207,13 @@ function ModuloMaestroCL() {
   const [zonaEdit, setZonaEdit] = useState({});       // id -> fila en edición
   const [zonaGuardando, setZonaGuardando] = useState(null);
   const [zonaFiltro, setZonaFiltro] = useState("todas");   // todas | pendientes
+  // ── Maestro de Pago (modelo hoja 1) y Vehículos BT ──
+  const [pago, setPago] = useState([]);
+  const [vehiculos, setVehiculos] = useState([]);
+  const [vehEdit, setVehEdit] = useState({});
+  const [vehMasivo, setVehMasivo] = useState("");
+  const [vehGuardando, setVehGuardando] = useState(null);
+  const [vehMsg, setVehMsg] = useState("");
 
   const [resumen, setResumen] = useState(null);
   const [jornada, setJornada] = useState([]);
@@ -368,6 +375,64 @@ function ModuloMaestroCL() {
     if (fallos.length) setError("No se pudieron cargar: " + fallos.join(" | "));
   };
   useEffect(() => { if (tab === "zonas") cargarZonas(); }, [tab]);
+
+  // ── Maestro de Pago: el modelo de operaciones, una fila por viaje ──
+  const cargarPago = async () => {
+    const fallos = [];
+    const d = await apiSuave(
+      `vw_maestro_pago?fecha=eq.${fecha}&ruta_vacia=eq.false&order=cecos.asc.nullslast,id_viaje&limit=3000`,
+      [], fallos);
+    setPago(d);
+    if (fallos.length) setError("No se pudieron cargar: " + fallos.join(" | "));
+  };
+  useEffect(() => { if (tab === "pago") cargarPago(); }, [tab, fecha]);
+
+  // ── Vehículos BT: la tabla auxiliar de certificación ──
+  const cargarVehiculos = async () => {
+    setVehiculos(await apiSuave("tipo_vehiculo_bt?order=proyecto,patente&limit=500", []));
+  };
+  useEffect(() => { if (tab === "vehiculos") cargarVehiculos(); }, [tab]);
+
+  const guardarVehiculo = async (patente, campos, esNuevo) => {
+    setVehGuardando(patente);
+    try {
+      if (esNuevo) {
+        await api("tipo_vehiculo_bt", { method: "POST", headers: { Prefer: "return=minimal" },
+          body: JSON.stringify({ patente, ...campos, actualizado_por: "brain" }) });
+      } else {
+        await api(`tipo_vehiculo_bt?patente=eq.${encodeURIComponent(patente)}`, {
+          method: "PATCH", headers: { Prefer: "return=minimal" },
+          body: JSON.stringify({ ...campos, actualizado_at: new Date().toISOString(),
+                                 actualizado_por: "brain" }) });
+      }
+      setVehEdit(e => { const n = { ...e }; delete n[patente]; return n; });
+      await cargarVehiculos();
+      setVehMsg(`${patente} guardada`); setTimeout(() => setVehMsg(""), 3000);
+    } catch (e) { setError(e.message); }
+    finally { setVehGuardando(null); }
+  };
+
+  // Carga masiva de vehículos: "PATENTE, TIPO" por línea.
+  const TIPOS_VEH = ["ELECTRICA", "BIG VAN", "COMBUSTION LARGE VAN", "COMBUSTION"];
+  const cargarVehMasivo = async () => {
+    const filas = vehMasivo.split("\n").map(l => l.trim()).filter(Boolean).map(l => {
+      const [pat, tipo] = l.split(/[,;\t]/).map(x => (x || "").trim().toUpperCase());
+      return { patente: pat, proyecto: tipo };
+    }).filter(fl => /^[A-Z0-9]{5,8}$/.test(fl.patente) && TIPOS_VEH.includes(fl.proyecto));
+    if (!filas.length) { setError("Formato: PATENTE, TIPO (ELECTRICA / BIG VAN / COMBUSTION LARGE VAN)"); return; }
+    setVehGuardando("__masivo__");
+    try {
+      await api("tipo_vehiculo_bt?on_conflict=patente", {
+        method: "POST",
+        headers: { Prefer: "return=minimal,resolution=merge-duplicates" },
+        body: JSON.stringify(filas.map(fl => ({ ...fl, actualizado_por: "brain",
+          nota: "Carga masiva desde el Brain." }))),
+      });
+      setVehMasivo(""); await cargarVehiculos();
+      setVehMsg(`${filas.length} patentes cargadas`); setTimeout(() => setVehMsg(""), 4000);
+    } catch (e) { setError(e.message); }
+    finally { setVehGuardando(null); }
+  };
 
   const guardarZona = async (id, campos) => {
     setZonaGuardando(id);
@@ -703,6 +768,8 @@ function ModuloMaestroCL() {
     { id: "nosalidas",  label: "No Salidas a Ruta", desc: "Carga manual",             n: null },
     { id: "cecos",      label: "CECOS",           desc: "Catálogo y clasificación",   n: cecosCat.length || null },
     { id: "zonas",      label: "Zonas de Pago",   desc: "Geografía y segmentación",   n: zonas.length || null },
+    { id: "pago",       label: "Maestro Pago",    desc: "Modelo de tarificación",     n: pago.length || null },
+    { id: "vehiculos",  label: "Vehículos BT",    desc: "Clasificación por patente",  n: vehiculos.length || null },
   ];
 
   return (
@@ -1291,6 +1358,204 @@ function ModuloMaestroCL() {
                       </tbody>
                     </table>
                   </div>
+                </div>
+              </Fragment>
+            )}
+
+            {/* ── Maestro de Pago (el modelo de operaciones) ── */}
+            {tab === "pago" && (
+              <Fragment>
+                <div style={{ background: "#fff", border: "1px solid #e6e9ef", borderRadius: 10,
+                              padding: "13px 16px", marginBottom: 12, display: "flex",
+                              justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+                  <div style={{ maxWidth: 840 }}>
+                    <div style={{ fontSize: 13, fontWeight: 800, color: NAVY }}>Maestro de pago · modelo de tarificación</div>
+                    <div style={{ fontSize: 12, color: "#64748b", lineHeight: 1.7, marginTop: 3 }}>
+                      Las columnas del modelo de operaciones, una fila por viaje. El CECOS y la segmentación
+                      se resuelven por la <strong>zona donde entregó</strong>; cuando falta algo, la columna
+                      Estado dice qué (crear la zona o asignarle segmentación). SPOT y SORTING serán ingreso
+                      manual. Los KM son los <strong>planificados</strong> por MELI.
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    <button className="mj-btn" onClick={() => descargarCSV(
+                      pago.map(r => ({ SERVICIO: r.servicio, CECOS: r.cecos, FECHA: r.fecha,
+                        "ID VIAJE": r.id_viaje, PATENTE: r.patente, TERCERO: r.tercero,
+                        CARGADOS: r.cargados, ENTREGADOS: r.entregados,
+                        "SEGMENTACION ZONAL": r.segmentacion_zonal,
+                        "TIPO VEHICULO LOGIST": r.tipo_vehiculo_logist,
+                        "TIPO VEHICULO BT": r.tipo_vehiculo_bt,
+                        "KM PLANIFICADOS": r.km_planificados,
+                        "NIVEL DE SERVICIO": r.nivel_servicio, ESTADO: r.estado_resolucion })),
+                      `maestro_pago_${fecha}.csv`)}>
+                      Descargar CSV
+                    </button>
+                  </div>
+                </div>
+
+                {(() => {
+                  const filtrado = pago.filter(r => !r.is_line_haul);
+                  const resueltos = filtrado.filter(r => r.estado_resolucion === "resuelto").length;
+                  return (
+                    <Fragment>
+                      <div style={{ fontSize: 12, color: "#64748b", marginBottom: 8 }}>
+                        {fmt(filtrado.length)} viajes de reparto · <strong style={{ color: resueltos === filtrado.length ? "#0d8043" : "#b45309" }}>
+                        {fmt(resueltos)} con CECOS y segmentación resueltos</strong> · {fmt(filtrado.length - resueltos)} pendientes de zona
+                      </div>
+                      <div style={{ background: "#fff", border: "1px solid #e6e9ef", borderRadius: 10, overflow: "hidden" }}>
+                        <div style={{ overflowX: "auto", maxHeight: 560, overflowY: "auto" }}>
+                          <table className="mj-tabla">
+                            <thead>
+                              <tr>
+                                <th>Servicio</th><th>CECOS</th><th>ID Viaje</th><th>Patente</th><th>Tercero</th>
+                                <th style={{ textAlign: "right" }}>Cargados</th>
+                                <th style={{ textAlign: "right" }}>Entregados</th>
+                                <th>Segmentación</th><th>Veh. Logist</th><th>Veh. BT</th>
+                                <th style={{ textAlign: "right" }}>KM plan</th>
+                                <th style={{ textAlign: "right" }}>NS</th><th>Estado</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {filtrado.map(r => (
+                                <tr key={r.id_viaje} style={r.estado_resolucion !== "resuelto" ? { background: "#fffdf4" } : undefined}>
+                                  <td>{r.servicio === "MELI ONE"
+                                        ? <Etiqueta texto="MELI ONE" color="#5b21b6" fondo="#ede9fe" />
+                                        : <span style={{ fontSize: 12 }}>{r.servicio}</span>}</td>
+                                  <td style={{ fontSize: 12, fontWeight: 600 }}>{r.cecos || <span style={{ color: "#cbd5e1" }}>—</span>}</td>
+                                  <td style={{ fontWeight: 600 }}>{r.id_viaje}</td>
+                                  <td>{r.patente || "—"}</td>
+                                  <td style={{ maxWidth: 170, whiteSpace: "nowrap", overflow: "hidden",
+                                               textOverflow: "ellipsis", fontSize: 12 }} title={r.tercero || ""}>{r.tercero || "—"}</td>
+                                  <td className="num">{fmt(r.cargados)}</td>
+                                  <td className="num" style={{ color: "#0d8043", fontWeight: 700 }}>{fmt(r.entregados)}</td>
+                                  <td style={{ fontSize: 12 }}>{r.segmentacion_zonal || <span style={{ color: "#cbd5e1" }}>—</span>}</td>
+                                  <td style={{ fontSize: 11.5, color: "#64748b" }}>{r.tipo_vehiculo_logist || "—"}</td>
+                                  <td style={{ fontSize: 11.5 }}>
+                                    {r.tipo_vehiculo_bt === "ELECTRICA"
+                                      ? <Etiqueta texto="ELECTRICA" color="#0d8043" fondo="#e7f6ec" />
+                                      : r.tipo_vehiculo_bt}
+                                  </td>
+                                  <td className="num">{r.km_planificados != null ? fmt(Math.round(r.km_planificados * 10) / 10) : "—"}</td>
+                                  <td className="num">{r.nivel_servicio != null
+                                    ? <span style={{ fontWeight: 700, color: r.nivel_servicio >= 0.99 ? "#0d8043" : r.nivel_servicio >= 0.975 ? "#b45309" : ROJO_ }}>
+                                        {(r.nivel_servicio * 100).toFixed(1)}%</span> : "—"}</td>
+                                  <td>{r.estado_resolucion === "resuelto"
+                                        ? <Etiqueta texto="RESUELTO" color="#0d8043" fondo="#e7f6ec" />
+                                        : <span style={{ fontSize: 11, color: "#b45309" }} title="La zona geográfica falta o no tiene segmentación asignada: se resuelve en la pestaña Zonas de Pago">{r.estado_resolucion || "sin datos"}</span>}</td>
+                                </tr>
+                              ))}
+                              {filtrado.length === 0 && (
+                                <tr><td colSpan={13} style={{ textAlign: "center", color: "#94a3b8", padding: 18 }}>
+                                  Sin viajes para esta fecha (requiere las migraciones 26 a 31).
+                                </td></tr>
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    </Fragment>
+                  );
+                })()}
+              </Fragment>
+            )}
+
+            {/* ── Vehículos BT (tabla auxiliar de certificación) ── */}
+            {tab === "vehiculos" && (
+              <Fragment>
+                <div style={{ background: "#fff", border: "1px solid #e6e9ef", borderRadius: 10,
+                              padding: "13px 16px", marginBottom: 12 }}>
+                  <div style={{ fontSize: 13, fontWeight: 800, color: NAVY }}>Clasificación BT por patente</div>
+                  <div style={{ fontSize: 12, color: "#64748b", lineHeight: 1.7, marginTop: 3, maxWidth: 900 }}>
+                    Define el tipo de vehículo para la llave de tarifa. <strong>Regla oficial: toda patente
+                    que no esté acá paga como COMBUSTION</strong> — una eléctrica nueva sin registrar se paga
+                    mal en silencio, así que las altas de flota deben pasar por esta tabla. La mantiene certificación.
+                  </div>
+                  {vehMsg && <div style={{ fontSize: 12, color: VERDE_, marginTop: 6 }}>✓ {vehMsg}</div>}
+                </div>
+
+                <div style={{ background: "#fff", border: "1px solid #e6e9ef", borderRadius: 10,
+                              padding: "13px 16px", marginBottom: 12, display: "flex", gap: 14, flexWrap: "wrap" }}>
+                  <div style={{ flex: 1, minWidth: 300 }}>
+                    <div style={{ fontSize: 12, fontWeight: 800, color: NAVY, marginBottom: 4 }}>Carga masiva</div>
+                    <textarea className="mj-input" rows={3} value={vehMasivo}
+                      onChange={e => setVehMasivo(e.target.value)}
+                      placeholder={"PATENTE, TIPO — una por línea:\nSLXZ99, ELECTRICA\nTCJV80, BIG VAN"}
+                      style={{ width: "100%", fontFamily: "inherit", fontSize: 12, resize: "vertical" }} />
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", justifyContent: "flex-end", gap: 6 }}>
+                    <button className="mj-btn" onClick={cargarVehMasivo}
+                            disabled={vehGuardando === "__masivo__" || !vehMasivo.trim()}
+                            style={{ background: NAVY, color: "#fff", borderColor: NAVY, padding: "8px 14px" }}>
+                      {vehGuardando === "__masivo__" ? "Cargando…" : "Cargar patentes"}
+                    </button>
+                    <div style={{ fontSize: 10.5, color: "#a8b2c1", maxWidth: 200 }}>
+                      Tipos: ELECTRICA · BIG VAN · COMBUSTION LARGE VAN
+                    </div>
+                  </div>
+                </div>
+
+                <div style={{ background: "#fff", border: "1px solid #e6e9ef", borderRadius: 10, overflow: "hidden" }}>
+                  <table className="mj-tabla">
+                    <thead>
+                      <tr><th>Patente</th><th>Tipo (proyecto)</th><th>Activa</th><th>Nota</th><th></th></tr>
+                    </thead>
+                    <tbody>
+                      {vehiculos.map(v => {
+                        const ed = vehEdit[v.patente];
+                        return (
+                          <tr key={v.patente}>
+                            <td style={{ fontWeight: 700 }}>{v.patente}</td>
+                            <td>
+                              {ed ? (
+                                <select className="mj-input" value={ed.proyecto}
+                                  onChange={e => setVehEdit(x => ({ ...x, [v.patente]: { ...ed, proyecto: e.target.value } }))}
+                                  style={{ fontSize: 12 }}>
+                                  {TIPOS_VEH.map(t2 => <option key={t2} value={t2}>{t2}</option>)}
+                                </select>
+                              ) : (v.proyecto === "ELECTRICA"
+                                    ? <Etiqueta texto="ELECTRICA" color="#0d8043" fondo="#e7f6ec" />
+                                    : <span style={{ fontSize: 12 }}>{v.proyecto}</span>)}
+                            </td>
+                            <td>{v.activo
+                                  ? <Etiqueta texto="ACTIVA" color="#0d8043" fondo="#e7f6ec" />
+                                  : <Etiqueta texto="INACTIVA" color="#8a94a6" fondo="#f1f5f9" />}</td>
+                            <td style={{ fontSize: 11, color: "#94a3b8", maxWidth: 320 }}>{v.nota || ""}</td>
+                            <td style={{ whiteSpace: "nowrap" }}>
+                              {ed ? (
+                                <Fragment>
+                                  <button className="mj-btn" style={{ padding: "3px 10px", fontSize: 11,
+                                      background: NAVY, color: "#fff", borderColor: NAVY }}
+                                    disabled={vehGuardando === v.patente}
+                                    onClick={() => guardarVehiculo(v.patente, {
+                                      proyecto: ed.proyecto, activo: ed.activo }, false)}>
+                                    {vehGuardando === v.patente ? "…" : "Guardar"}
+                                  </button>
+                                  <button className="mj-btn" style={{ padding: "3px 8px", fontSize: 11, marginLeft: 4 }}
+                                    onClick={() => setVehEdit(x => { const n = { ...x }; delete n[v.patente]; return n; })}>
+                                    Cancelar
+                                  </button>
+                                  <label style={{ fontSize: 10.5, marginLeft: 8, color: "#64748b" }}>
+                                    <input type="checkbox" checked={!!ed.activo}
+                                      onChange={e => setVehEdit(x => ({ ...x, [v.patente]: { ...ed, activo: e.target.checked } }))} /> activa
+                                  </label>
+                                </Fragment>
+                              ) : (
+                                <button className="mj-btn" style={{ padding: "3px 10px", fontSize: 11 }}
+                                  onClick={() => setVehEdit(x => ({ ...x, [v.patente]: { proyecto: v.proyecto, activo: v.activo } }))}>
+                                  Editar
+                                </button>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                      {vehiculos.length === 0 && (
+                        <tr><td colSpan={5} style={{ textAlign: "center", color: "#94a3b8", padding: 18 }}>
+                          Cargando… (requiere la migración 31)
+                        </td></tr>
+                      )}
+                    </tbody>
+                  </table>
                 </div>
               </Fragment>
             )}
