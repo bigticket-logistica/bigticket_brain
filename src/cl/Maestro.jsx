@@ -195,6 +195,12 @@ function ModuloMaestroCL() {
   const [pidiendoRuta, setPidiendoRuta] = useState(null);
   const [leidoAt, setLeidoAt] = useState(null);      // hora de la última lectura
   const [recargando, setRecargando] = useState(false);
+  // ── Mantenedor de CECOS ──
+  const [cecosCat, setCecosCat] = useState([]);        // vw_cecos_detectados
+  const [cecosEdit, setCecosEdit] = useState({});      // codigo -> fila en edición
+  const [cecosMasivo, setCecosMasivo] = useState("");
+  const [cecosGuardando, setCecosGuardando] = useState(null);
+  const [cecosMsg, setCecosMsg] = useState("");
 
   const [resumen, setResumen] = useState(null);
   const [jornada, setJornada] = useState([]);
@@ -334,6 +340,62 @@ function ModuloMaestroCL() {
         )}
       </span>
     );
+  };
+
+  // ── Mantenedor de CECOS: catálogo + detectados ──
+  const cargarCecos = async () => {
+    try {
+      const d = await api("vw_cecos_detectados?order=rutas_historicas.desc&limit=200");
+      setCecosCat(d);
+    } catch (e) { setError(e.message); }
+  };
+  useEffect(() => { if (tab === "cecos") cargarCecos(); }, [tab]);
+
+  const guardarCeco = async (codigo, campos, esNuevo) => {
+    setCecosGuardando(codigo);
+    try {
+      if (esNuevo) {
+        await api("cecos", { method: "POST", headers: { Prefer: "return=minimal" },
+          body: JSON.stringify({ codigo, fuente: "manual", ...campos,
+                                 actualizado_por: "brain", actualizado_at: new Date().toISOString() }) });
+      } else {
+        await api(`cecos?codigo=eq.${encodeURIComponent(codigo)}`, {
+          method: "PATCH", headers: { Prefer: "return=minimal" },
+          body: JSON.stringify({ ...campos, actualizado_por: "brain",
+                                 actualizado_at: new Date().toISOString() }) });
+      }
+      setCecosEdit(e => { const n = { ...e }; delete n[codigo]; return n; });
+      await cargarCecos();
+      setCecosMsg(`${codigo} guardado`);
+      setTimeout(() => setCecosMsg(""), 3000);
+    } catch (e) { setError(e.message); }
+    finally { setCecosGuardando(null); }
+  };
+
+  // Carga masiva: un código por línea, opcionalmente "CODIGO, NOMBRE_ADMIN".
+  const cargarCecosMasivo = async () => {
+    const lineas = cecosMasivo.split("\n").map(l => l.trim()).filter(Boolean);
+    if (!lineas.length) return;
+    const filas = lineas.map(l => {
+      const [cod, adm] = l.split(/[,;\t]/).map(x => (x || "").trim());
+      return { codigo: cod.toUpperCase(), nombre_admin: adm ? adm.toUpperCase() : null,
+               fuente: "masivo", actualizado_por: "brain" };
+    }).filter(f => /^[A-Z0-9_]{2,12}$/.test(f.codigo));
+    if (!filas.length) { setError("Ningún código válido en la carga (formato: CODIGO o CODIGO, ML_NOMBRE)"); return; }
+    setCecosGuardando("__masivo__");
+    try {
+      // resolution=merge-duplicates: los que ya existen se actualizan, no fallan
+      await api("cecos?on_conflict=codigo", {
+        method: "POST",
+        headers: { Prefer: "return=minimal,resolution=merge-duplicates" },
+        body: JSON.stringify(filas),
+      });
+      setCecosMasivo("");
+      await cargarCecos();
+      setCecosMsg(`${filas.length} CECOS cargados`);
+      setTimeout(() => setCecosMsg(""), 4000);
+    } catch (e) { setError(e.message); }
+    finally { setCecosGuardando(null); }
   };
 
   // Contenido de la tarjeta "Por revisar": el recuadre y las cinco categorías.
@@ -595,6 +657,7 @@ function ModuloMaestroCL() {
     { id: "devol",      label: "Devoluciones",    desc: "Detalle por folio",          n: devolVista.length },
     { id: "traspasos",  label: "Traspasos",       desc: "Origen → destino",           n: traspVista.length },
     { id: "nosalidas",  label: "No Salidas a Ruta", desc: "Carga manual",             n: null },
+    { id: "cecos",      label: "CECOS",           desc: "Catálogo y clasificación",   n: cecosCat.length || null },
   ];
 
   return (
@@ -895,6 +958,145 @@ function ModuloMaestroCL() {
                       )}
                     </tbody>
                   </table>
+                </div>
+              </Fragment>
+            )}
+
+            {/* ── Mantenedor de CECOS ── */}
+            {tab === "cecos" && (
+              <Fragment>
+                <div style={{ background: "#fff", border: "1px solid #e6e9ef", borderRadius: 10,
+                              padding: "13px 16px", marginBottom: 12 }}>
+                  <div style={{ fontSize: 13, fontWeight: 800, color: NAVY }}>Catálogo de CECOS</div>
+                  <div style={{ fontSize: 12, color: "#64748b", lineHeight: 1.7, marginTop: 3, maxWidth: 900 }}>
+                    Los códigos llegan solos desde el portal de MELI: cada CECOS que el maestro ve queda
+                    registrado acá, pendiente de clasificar. Completa el <strong>nombre administrativo</strong> (el del
+                    tarifario, ej. ML_RM_1) y marca si es <strong>operación Bigticket</strong> — solo esos entran al motor
+                    de pago. La columna Carriers ayuda a decidir: si solo aparecen terceros ajenos, no es tuyo.
+                  </div>
+                  {cecosMsg && <div style={{ fontSize: 12, color: VERDE_, marginTop: 6 }}>✓ {cecosMsg}</div>}
+                </div>
+
+                {/* carga masiva */}
+                <div style={{ background: "#fff", border: "1px solid #e6e9ef", borderRadius: 10,
+                              padding: "13px 16px", marginBottom: 12, display: "flex", gap: 14, flexWrap: "wrap" }}>
+                  <div style={{ flex: 1, minWidth: 300 }}>
+                    <div style={{ fontSize: 12, fontWeight: 800, color: NAVY, marginBottom: 4 }}>Carga masiva</div>
+                    <textarea className="mj-input" rows={3} value={cecosMasivo}
+                      onChange={e => setCecosMasivo(e.target.value)}
+                      placeholder={"Un código por línea. Opcional el nombre admin separado por coma:\nSRM1, ML_RM_1\nSBB2, ML_CAÑETE\nSPO1"}
+                      style={{ width: "100%", fontFamily: "inherit", fontSize: 12, resize: "vertical" }} />
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", justifyContent: "flex-end", gap: 6 }}>
+                    <button className="mj-btn" onClick={cargarCecosMasivo}
+                            disabled={cecosGuardando === "__masivo__" || !cecosMasivo.trim()}
+                            style={{ background: NAVY, color: "#fff", borderColor: NAVY, padding: "8px 14px" }}>
+                      {cecosGuardando === "__masivo__" ? "Cargando…" : "Cargar códigos"}
+                    </button>
+                    <div style={{ fontSize: 10.5, color: "#a8b2c1", maxWidth: 180 }}>
+                      Los que ya existen se actualizan, no se duplican.
+                    </div>
+                  </div>
+                </div>
+
+                {/* tabla del catálogo */}
+                <div style={{ background: "#fff", border: "1px solid #e6e9ef", borderRadius: 10, overflow: "hidden" }}>
+                  <div style={{ overflowX: "auto" }}>
+                    <table className="mj-tabla">
+                      <thead>
+                        <tr>
+                          <th>Código</th><th>Nombre admin (tarifario)</th><th>¿Bigticket?</th>
+                          <th style={{ textAlign: "right" }}>Rutas</th><th style={{ textAlign: "right" }}>Días</th>
+                          <th style={{ textAlign: "right" }}>Patentes</th><th>Carriers</th>
+                          <th>Visto</th><th>Nota</th><th></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {cecosCat.map(c => {
+                          const ed = cecosEdit[c.codigo];
+                          const pendiente = c.es_bigticket === null || c.es_bigticket === undefined;
+                          return (
+                            <tr key={c.codigo} style={pendiente ? { background: "#fffdf4" } : undefined}>
+                              <td style={{ fontWeight: 700 }}>
+                                {c.codigo}
+                                {c.sin_registrar && <span style={{ marginLeft: 6 }}><Etiqueta texto="NUEVO" color="#b45309" fondo="#fef3c7" /></span>}
+                              </td>
+                              <td>
+                                {ed ? (
+                                  <input className="mj-input" value={ed.nombre_admin ?? ""} placeholder="ML_…"
+                                    onChange={e => setCecosEdit(x => ({ ...x, [c.codigo]: { ...ed, nombre_admin: e.target.value.toUpperCase() } }))}
+                                    style={{ width: 140, fontSize: 12 }} />
+                                ) : (c.nombre_admin || <span style={{ color: "#cbd5e1" }}>— sin asignar</span>)}
+                              </td>
+                              <td>
+                                {ed ? (
+                                  <select className="mj-input" value={ed.es_bigticket === null ? "" : String(ed.es_bigticket)}
+                                    onChange={e => setCecosEdit(x => ({ ...x, [c.codigo]: { ...ed,
+                                      es_bigticket: e.target.value === "" ? null : e.target.value === "true" } }))}
+                                    style={{ fontSize: 12 }}>
+                                    <option value="">pendiente</option>
+                                    <option value="true">Sí, Bigticket</option>
+                                    <option value="false">No, ajeno</option>
+                                  </select>
+                                ) : (
+                                  c.es_bigticket === true ? <Etiqueta texto="BIGTICKET" color="#0d8043" fondo="#e7f6ec" />
+                                  : c.es_bigticket === false ? <Etiqueta texto="AJENO" color="#64748b" fondo="#f1f5f9" />
+                                  : <Etiqueta texto="PENDIENTE" color="#b45309" fondo="#fef3c7" />
+                                )}
+                              </td>
+                              <td className="num">{fmt(c.rutas_historicas)}</td>
+                              <td className="num">{fmt(c.dias_operados)}</td>
+                              <td className="num">{fmt(c.patentes)}</td>
+                              <td style={{ maxWidth: 200, whiteSpace: "nowrap", overflow: "hidden",
+                                           textOverflow: "ellipsis", fontSize: 11 }}
+                                  title={c.lista_carriers || ""}>{c.lista_carriers || "—"}</td>
+                              <td style={{ fontSize: 11, color: "#64748b", whiteSpace: "nowrap" }}>
+                                {String(c.visto_desde).slice(5)} → {String(c.visto_hasta).slice(5)}
+                              </td>
+                              <td>
+                                {ed ? (
+                                  <input className="mj-input" value={ed.nota ?? ""}
+                                    onChange={e => setCecosEdit(x => ({ ...x, [c.codigo]: { ...ed, nota: e.target.value } }))}
+                                    style={{ width: 150, fontSize: 12 }} />
+                                ) : <span style={{ fontSize: 11, color: "#94a3b8" }}>{c.nota || ""}</span>}
+                              </td>
+                              <td style={{ whiteSpace: "nowrap" }}>
+                                {ed ? (
+                                  <Fragment>
+                                    <button className="mj-btn" style={{ padding: "3px 10px", fontSize: 11,
+                                        background: NAVY, color: "#fff", borderColor: NAVY }}
+                                      disabled={cecosGuardando === c.codigo}
+                                      onClick={() => guardarCeco(c.codigo, {
+                                        nombre_admin: ed.nombre_admin || null,
+                                        es_bigticket: ed.es_bigticket,
+                                        nota: ed.nota || null,
+                                      }, c.sin_registrar)}>
+                                      {cecosGuardando === c.codigo ? "…" : "Guardar"}
+                                    </button>
+                                    <button className="mj-btn" style={{ padding: "3px 8px", fontSize: 11, marginLeft: 4 }}
+                                      onClick={() => setCecosEdit(x => { const n = { ...x }; delete n[c.codigo]; return n; })}>
+                                      Cancelar
+                                    </button>
+                                  </Fragment>
+                                ) : (
+                                  <button className="mj-btn" style={{ padding: "3px 10px", fontSize: 11 }}
+                                    onClick={() => setCecosEdit(x => ({ ...x, [c.codigo]: {
+                                      nombre_admin: c.nombre_admin, es_bigticket: c.es_bigticket ?? null, nota: c.nota } }))}>
+                                    Editar
+                                  </button>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                        {cecosCat.length === 0 && (
+                          <tr><td colSpan={10} style={{ textAlign: "center", color: "#94a3b8", padding: 18 }}>
+                            Cargando el catálogo…
+                          </td></tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
               </Fragment>
             )}
