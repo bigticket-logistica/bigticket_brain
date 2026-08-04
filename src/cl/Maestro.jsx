@@ -201,6 +201,12 @@ function ModuloMaestroCL() {
   const [cecosMasivo, setCecosMasivo] = useState("");
   const [cecosGuardando, setCecosGuardando] = useState(null);
   const [cecosMsg, setCecosMsg] = useState("");
+  // ── Mantenedor de Zonas de Pago ──
+  const [zonas, setZonas] = useState([]);
+  const [segmentaciones, setSegmentaciones] = useState([]);
+  const [zonaEdit, setZonaEdit] = useState({});       // id -> fila en edición
+  const [zonaGuardando, setZonaGuardando] = useState(null);
+  const [zonaFiltro, setZonaFiltro] = useState("todas");   // todas | pendientes
 
   const [resumen, setResumen] = useState(null);
   const [jornada, setJornada] = useState([]);
@@ -345,11 +351,37 @@ function ModuloMaestroCL() {
   // ── Mantenedor de CECOS: catálogo + detectados ──
   const cargarCecos = async () => {
     try {
-      const d = await api("vw_cecos_detectados?order=rutas_historicas.desc&limit=200");
+      const d = await api("vw_cecos_completo?order=rutas_historicas.desc&limit=200");
       setCecosCat(d);
     } catch (e) { setError(e.message); }
   };
   useEffect(() => { if (tab === "cecos") cargarCecos(); }, [tab]);
+
+  // ── Zonas de Pago: listado + segmentaciones para el selector ──
+  const cargarZonas = async () => {
+    const fallos = [];
+    const [z, seg] = await Promise.all([
+      apiSuave("vw_zonas_mantenedor?order=codigo_meli,nombre&limit=500", [], fallos),
+      apiSuave("segmentaciones?order=nombre&activo=eq.true", [], fallos),
+    ]);
+    setZonas(z); setSegmentaciones(seg);
+    if (fallos.length) setError("No se pudieron cargar: " + fallos.join(" | "));
+  };
+  useEffect(() => { if (tab === "zonas") cargarZonas(); }, [tab]);
+
+  const guardarZona = async (id, campos) => {
+    setZonaGuardando(id);
+    try {
+      await api(`zonas_pago?id=eq.${id}`, {
+        method: "PATCH", headers: { Prefer: "return=minimal" },
+        body: JSON.stringify({ ...campos, actualizado_at: new Date().toISOString(),
+                               actualizado_por: "brain" }),
+      });
+      setZonaEdit(e => { const n = { ...e }; delete n[id]; return n; });
+      await cargarZonas();
+    } catch (e) { setError(e.message); }
+    finally { setZonaGuardando(null); }
+  };
 
   const guardarCeco = async (codigo, campos, esNuevo) => {
     setCecosGuardando(codigo);
@@ -384,12 +416,24 @@ function ModuloMaestroCL() {
     if (!filas.length) { setError("Ningún código válido en la carga (formato: CODIGO o CODIGO, ML_NOMBRE)"); return; }
     setCecosGuardando("__masivo__");
     try {
-      // resolution=merge-duplicates: los que ya existen se actualizan, no fallan
+      // 1) los códigos MELI al catálogo
       await api("cecos?on_conflict=codigo", {
         method: "POST",
         headers: { Prefer: "return=minimal,resolution=merge-duplicates" },
-        body: JSON.stringify(filas),
+        body: JSON.stringify(filas.map(({ codigo, fuente, actualizado_por }) =>
+          ({ codigo, fuente, actualizado_por }))),
       });
+      // 2) los pares "CODIGO, ML_NOMBRE" además crean el cecos administrativo
+      //    (relación N a 1: varios admin pueden colgar del mismo código)
+      const admin = filas.filter(fl => fl.nombre_admin)
+        .map(fl => ({ nombre: fl.nombre_admin, codigo_meli: fl.codigo, actualizado_por: "brain" }));
+      if (admin.length) {
+        await api("cecos_admin?on_conflict=nombre,codigo_meli", {
+          method: "POST",
+          headers: { Prefer: "return=minimal,resolution=merge-duplicates" },
+          body: JSON.stringify(admin),
+        });
+      }
       setCecosMasivo("");
       await cargarCecos();
       setCecosMsg(`${filas.length} CECOS cargados`);
@@ -658,6 +702,7 @@ function ModuloMaestroCL() {
     { id: "traspasos",  label: "Traspasos",       desc: "Origen → destino",           n: traspVista.length },
     { id: "nosalidas",  label: "No Salidas a Ruta", desc: "Carga manual",             n: null },
     { id: "cecos",      label: "CECOS",           desc: "Catálogo y clasificación",   n: cecosCat.length || null },
+    { id: "zonas",      label: "Zonas de Pago",   desc: "Geografía y segmentación",   n: zonas.length || null },
   ];
 
   return (
@@ -1005,7 +1050,7 @@ function ModuloMaestroCL() {
                     <table className="mj-tabla">
                       <thead>
                         <tr>
-                          <th>Código</th><th>Nombre admin (tarifario)</th><th>¿Bigticket?</th>
+                          <th>Código</th><th>CECOS admin (tarifario)</th><th>¿Bigticket?</th>
                           <th style={{ textAlign: "right" }}>Rutas</th><th style={{ textAlign: "right" }}>Días</th>
                           <th style={{ textAlign: "right" }}>Patentes</th><th>Carriers</th>
                           <th>Visto</th><th>Nota</th><th></th>
@@ -1021,12 +1066,17 @@ function ModuloMaestroCL() {
                                 {c.codigo}
                                 {c.sin_registrar && <span style={{ marginLeft: 6 }}><Etiqueta texto="NUEVO" color="#b45309" fondo="#fef3c7" /></span>}
                               </td>
-                              <td>
-                                {ed ? (
-                                  <input className="mj-input" value={ed.nombre_admin ?? ""} placeholder="ML_…"
-                                    onChange={e => setCecosEdit(x => ({ ...x, [c.codigo]: { ...ed, nombre_admin: e.target.value.toUpperCase() } }))}
-                                    style={{ width: 140, fontSize: 12 }} />
-                                ) : (c.nombre_admin || <span style={{ color: "#cbd5e1" }}>— sin asignar</span>)}
+                              <td style={{ maxWidth: 260 }}>
+                                {/* Un código puede alojar VARIOS cecos del tarifario (SRM1 = RM_1 +
+                                    San Antonio + Cordillera). El cecos de pago de cada viaje se
+                                    resuelve por la zona donde entregó, no por este código. */}
+                                {c.nombres_admin
+                                  ? <span style={{ fontSize: 12 }}>{c.nombres_admin}
+                                      {c.consolidado && <span style={{ marginLeft: 6 }}
+                                        title="Varios cecos del tarifario viven en este código: el de pago se resuelve por zona de entrega">
+                                        <Etiqueta texto={`${c.cecos_admin} EN 1`} color="#5b21b6" fondo="#ede9fe" /></span>}
+                                    </span>
+                                  : <span style={{ color: "#cbd5e1" }}>— sin asignar</span>}
                               </td>
                               <td>
                                 {ed ? (
@@ -1067,7 +1117,6 @@ function ModuloMaestroCL() {
                                         background: NAVY, color: "#fff", borderColor: NAVY }}
                                       disabled={cecosGuardando === c.codigo}
                                       onClick={() => guardarCeco(c.codigo, {
-                                        nombre_admin: ed.nombre_admin || null,
                                         es_bigticket: ed.es_bigticket,
                                         nota: ed.nota || null,
                                       }, c.sin_registrar)}>
@@ -1081,7 +1130,7 @@ function ModuloMaestroCL() {
                                 ) : (
                                   <button className="mj-btn" style={{ padding: "3px 10px", fontSize: 11 }}
                                     onClick={() => setCecosEdit(x => ({ ...x, [c.codigo]: {
-                                      nombre_admin: c.nombre_admin, es_bigticket: c.es_bigticket ?? null, nota: c.nota } }))}>
+                                      es_bigticket: c.es_bigticket ?? null, nota: c.nota } }))}>
                                     Editar
                                   </button>
                                 )}
@@ -1092,6 +1141,151 @@ function ModuloMaestroCL() {
                         {cecosCat.length === 0 && (
                           <tr><td colSpan={10} style={{ textAlign: "center", color: "#94a3b8", padding: 18 }}>
                             Cargando el catálogo…
+                          </td></tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </Fragment>
+            )}
+
+            {/* ── Mantenedor de Zonas de Pago ── */}
+            {tab === "zonas" && (
+              <Fragment>
+                <div style={{ background: "#fff", border: "1px solid #e6e9ef", borderRadius: 10,
+                              padding: "13px 16px", marginBottom: 12 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start",
+                                gap: 12, flexWrap: "wrap" }}>
+                    <div style={{ maxWidth: 860 }}>
+                      <div style={{ fontSize: 13, fontWeight: 800, color: NAVY }}>Zonas de pago</div>
+                      <div style={{ fontSize: 12, color: "#64748b", lineHeight: 1.7, marginTop: 3 }}>
+                        Cada zona geográfica (calculada desde las entregas reales) debe apuntar a una
+                        <strong> segmentación del tarifario</strong> — de ahí hereda su CECOS admin y, con el
+                        tarifario cargado, su tarifa. Las zonas <strong>sin segmentación no pueden pagar</strong>:
+                        son la lista de trabajo. El radio se ajusta en metros y "Ver mapa" abre el centro
+                        de la zona para revisarla.
+                      </div>
+                    </div>
+                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                      <select className="mj-input" value={zonaFiltro} onChange={e => setZonaFiltro(e.target.value)}>
+                        <option value="todas">Todas ({fmt(zonas.length)})</option>
+                        <option value="pendientes">
+                          Sin segmentación ({fmt(zonas.filter(z => !z.segmentacion).length)})
+                        </option>
+                      </select>
+                    </div>
+                  </div>
+                </div>
+
+                <div style={{ background: "#fff", border: "1px solid #e6e9ef", borderRadius: 10, overflow: "hidden" }}>
+                  <div style={{ overflowX: "auto" }}>
+                    <table className="mj-tabla">
+                      <thead>
+                        <tr>
+                          <th>Zona</th><th>Código MELI</th><th>Segmentación (tarifario)</th>
+                          <th>CECOS admin</th><th style={{ textAlign: "right" }}>Radio m</th>
+                          <th style={{ textAlign: "right" }}>Paq. 7d</th>
+                          <th>Revisada</th><th>Activa</th><th>Mapa</th><th></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {zonas
+                          .filter(z => zonaFiltro === "todas" || !z.segmentacion)
+                          .map(z => {
+                            const ed = zonaEdit[z.id];
+                            const pendiente = !z.segmentacion;
+                            return (
+                              <tr key={z.id} style={pendiente ? { background: "#fffdf4" } : undefined}>
+                                <td style={{ fontWeight: 600 }}>{z.nombre}</td>
+                                <td><Etiqueta texto={z.codigo_meli || "—"} /></td>
+                                <td>
+                                  {ed ? (
+                                    <select className="mj-input" value={ed.segmentacion ?? ""}
+                                      onChange={e => setZonaEdit(x => ({ ...x, [z.id]: { ...ed,
+                                        segmentacion: e.target.value || null } }))}
+                                      style={{ fontSize: 12, minWidth: 150 }}>
+                                      <option value="">— sin asignar —</option>
+                                      {segmentaciones.map(sg =>
+                                        <option key={sg.nombre} value={sg.nombre}>{sg.nombre}</option>)}
+                                    </select>
+                                  ) : (z.segmentacion
+                                        ? <span style={{ fontSize: 12, fontWeight: 600 }}>{z.segmentacion}</span>
+                                        : <Etiqueta texto="SIN ASIGNAR" color="#b45309" fondo="#fef3c7" />)}
+                                </td>
+                                <td style={{ fontSize: 12 }}>
+                                  {z.cecos_admin
+                                    || (z.segmentacion === "RM"
+                                        ? <span style={{ color: "#64748b" }} title="RM es compartida: el CECOS admin lo decide el código MELI del viaje">por código</span>
+                                        : <span style={{ color: "#cbd5e1" }}>—</span>)}
+                                </td>
+                                <td className="num">
+                                  {ed ? (
+                                    <input className="mj-input" type="number" value={ed.radio_m ?? ""}
+                                      min={100} max={60000} step={100}
+                                      onChange={e => setZonaEdit(x => ({ ...x, [z.id]: { ...ed,
+                                        radio_m: e.target.value === "" ? null : Number(e.target.value) } }))}
+                                      style={{ width: 84, fontSize: 12, textAlign: "right" }} />
+                                  ) : fmt(z.radio_m)}
+                                </td>
+                                <td className="num">{fmt(z.paquetes_7d)}</td>
+                                <td>{z.revisada
+                                      ? <Etiqueta texto="SÍ" color="#0d8043" fondo="#e7f6ec" />
+                                      : <Etiqueta texto="NO" color="#8a94a6" fondo="#f1f5f9" />}</td>
+                                <td>{z.activa
+                                      ? <Etiqueta texto="ACTIVA" color="#0d8043" fondo="#e7f6ec" />
+                                      : <Etiqueta texto="INACTIVA" color="#8a94a6" fondo="#f1f5f9" />}</td>
+                                <td>
+                                  {z.lat != null && (
+                                    <a href={`https://www.google.com/maps?q=${z.lat},${z.lon}&z=13`}
+                                       target="_blank" rel="noreferrer"
+                                       style={{ fontSize: 11.5, color: NAVY, fontWeight: 700 }}>
+                                      Ver mapa ↗
+                                    </a>
+                                  )}
+                                </td>
+                                <td style={{ whiteSpace: "nowrap" }}>
+                                  {ed ? (
+                                    <Fragment>
+                                      <button className="mj-btn" style={{ padding: "3px 10px", fontSize: 11,
+                                          background: NAVY, color: "#fff", borderColor: NAVY }}
+                                        disabled={zonaGuardando === z.id}
+                                        onClick={() => guardarZona(z.id, {
+                                          segmentacion: ed.segmentacion,
+                                          radio_m: ed.radio_m,
+                                          revisada: ed.revisada,
+                                          activa: ed.activa,
+                                        })}>
+                                        {zonaGuardando === z.id ? "…" : "Guardar"}
+                                      </button>
+                                      <button className="mj-btn" style={{ padding: "3px 8px", fontSize: 11, marginLeft: 4 }}
+                                        onClick={() => setZonaEdit(x => { const n = { ...x }; delete n[z.id]; return n; })}>
+                                        Cancelar
+                                      </button>
+                                      <label style={{ fontSize: 10.5, marginLeft: 8, color: "#64748b" }}>
+                                        <input type="checkbox" checked={!!ed.revisada}
+                                          onChange={e => setZonaEdit(x => ({ ...x, [z.id]: { ...ed, revisada: e.target.checked } }))} /> revisada
+                                      </label>
+                                      <label style={{ fontSize: 10.5, marginLeft: 6, color: "#64748b" }}>
+                                        <input type="checkbox" checked={!!ed.activa}
+                                          onChange={e => setZonaEdit(x => ({ ...x, [z.id]: { ...ed, activa: e.target.checked } }))} /> activa
+                                      </label>
+                                    </Fragment>
+                                  ) : (
+                                    <button className="mj-btn" style={{ padding: "3px 10px", fontSize: 11 }}
+                                      onClick={() => setZonaEdit(x => ({ ...x, [z.id]: {
+                                        segmentacion: z.segmentacion, radio_m: z.radio_m,
+                                        revisada: z.revisada, activa: z.activa } }))}>
+                                      Editar
+                                    </button>
+                                  )}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        {zonas.length === 0 && (
+                          <tr><td colSpan={10} style={{ textAlign: "center", color: "#94a3b8", padding: 18 }}>
+                            Cargando zonas… (requiere las migraciones 26, 27 y 30)
                           </td></tr>
                         )}
                       </tbody>
