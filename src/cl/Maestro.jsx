@@ -214,6 +214,11 @@ function ModuloMaestroCL() {
   const [vehMasivo, setVehMasivo] = useState("");
   const [vehGuardando, setVehGuardando] = useState(null);
   const [vehMsg, setVehMsg] = useState("");
+  // ── zona nueva + override de viaje ──
+  const ZONA_NUEVA0 = { nombre: "", cecos: "", segmentacion: "", lat: "", lon: "", radio: 5000, nota: "" };
+  const [zonaNueva, setZonaNueva] = useState(null);        // null = formulario cerrado
+  const [ovr, setOvr] = useState(null);                    // { id_viaje, segmentacion, motivo }
+  const [ovrGuardando, setOvrGuardando] = useState(false);
 
   const [resumen, setResumen] = useState(null);
   const [jornada, setJornada] = useState([]);
@@ -410,6 +415,46 @@ function ModuloMaestroCL() {
       setVehMsg(`${patente} guardada`); setTimeout(() => setVehMsg(""), 3000);
     } catch (e) { setError(e.message); }
     finally { setVehGuardando(null); }
+  };
+
+  const crearZona = async () => {
+    const z = zonaNueva;
+    if (!z.nombre || !z.cecos || !z.segmentacion || !z.lat || !z.lon) {
+      setError("Zona nueva: completa nombre, código, segmentación y coordenadas."); return;
+    }
+    setZonaGuardando("__nueva__");
+    try {
+      await api("rpc/crear_zona_pago", { method: "POST", body: JSON.stringify({
+        p_nombre: z.nombre, p_cecos: z.cecos, p_segmentacion: z.segmentacion,
+        p_lat: Number(z.lat), p_lon: Number(z.lon), p_radio_m: Number(z.radio) || 5000,
+        p_nota: z.nota || null }) });
+      setZonaNueva(null);
+      await cargarZonas();
+    } catch (e) { setError(e.message); }
+    finally { setZonaGuardando(null); }
+  };
+
+  const moverZona = async (id, lat, lon, radio) => {
+    await api("rpc/mover_zona_pago", { method: "POST", body: JSON.stringify({
+      p_id: id, p_lat: Number(lat), p_lon: Number(lon), p_radio_m: radio ? Number(radio) : null }) });
+  };
+
+  const guardarOverride = async () => {
+    if (!ovr.id_viaje || !ovr.segmentacion || !ovr.motivo || ovr.motivo.trim().length < 5) {
+      setError("La corrección necesita: ID de viaje, segmentación y un motivo (mínimo 5 caracteres)."); return;
+    }
+    setOvrGuardando(true);
+    try {
+      await api("viaje_zona_override?on_conflict=fecha,id_ruta", {
+        method: "POST",
+        headers: { Prefer: "return=minimal,resolution=merge-duplicates" },
+        body: JSON.stringify({ fecha, id_ruta: Number(ovr.id_viaje),
+          segmentacion: ovr.segmentacion, motivo: ovr.motivo.trim(), creado_por: "brain" }),
+      });
+      setOvr(null);
+      await cargarPago();
+    } catch (e) { setError(e.message); }
+    finally { setOvrGuardando(false); }
   };
 
   // Carga masiva de vehículos: "PATENTE, TIPO" por línea.
@@ -1241,9 +1286,59 @@ function ModuloMaestroCL() {
                           Sin segmentación ({fmt(zonas.filter(z => !z.segmentacion).length)})
                         </option>
                       </select>
+                      <button className="mj-btn" onClick={() => setZonaNueva(zonaNueva ? null : { ...ZONA_NUEVA0 })}
+                              style={{ background: NAVY, color: "#fff", borderColor: NAVY }}>
+                        {zonaNueva ? "Cerrar" : "➕ Nueva zona"}
+                      </button>
                     </div>
                   </div>
                 </div>
+
+                {zonaNueva && (
+                  <div style={{ background: "#fdf6e3", border: "1px solid #f3e2b8", borderRadius: 10,
+                                padding: "13px 16px", marginBottom: 12 }}>
+                    <div style={{ fontSize: 12.5, fontWeight: 800, color: NAVY, marginBottom: 8 }}>
+                      Nueva zona de pago
+                      <span style={{ fontWeight: 400, color: "#64748b", marginLeft: 8, fontSize: 11.5 }}>
+                        La coordenada se copia desde Google Maps: click derecho en el punto → copiar. El caso
+                        típico: Cahuil, que tiene tarifa propia pero MELI nunca la informa como comuna.
+                      </span>
+                    </div>
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end" }}>
+                      <label style={{ fontSize: 10.5, color: "#64748b" }}>Nombre<br/>
+                        <input className="mj-input" value={zonaNueva.nombre} placeholder="Cahuil"
+                          onChange={e => setZonaNueva(z => ({ ...z, nombre: e.target.value }))} style={{ width: 120 }} /></label>
+                      <label style={{ fontSize: 10.5, color: "#64748b" }}>Código MELI<br/>
+                        <input className="mj-input" value={zonaNueva.cecos} placeholder="SLT1"
+                          onChange={e => setZonaNueva(z => ({ ...z, cecos: e.target.value.toUpperCase() }))} style={{ width: 76 }} /></label>
+                      <label style={{ fontSize: 10.5, color: "#64748b" }}>Segmentación<br/>
+                        <select className="mj-input" value={zonaNueva.segmentacion}
+                          onChange={e => setZonaNueva(z => ({ ...z, segmentacion: e.target.value }))} style={{ minWidth: 130 }}>
+                          <option value="">— elegir —</option>
+                          {segmentaciones.map(sg => <option key={sg.nombre} value={sg.nombre}>{sg.nombre}</option>)}
+                        </select></label>
+                      <label style={{ fontSize: 10.5, color: "#64748b" }}>Latitud<br/>
+                        <input className="mj-input" value={zonaNueva.lat} placeholder="-34.4794"
+                          onChange={e => setZonaNueva(z => ({ ...z, lat: e.target.value }))} style={{ width: 92 }} /></label>
+                      <label style={{ fontSize: 10.5, color: "#64748b" }}>Longitud<br/>
+                        <input className="mj-input" value={zonaNueva.lon} placeholder="-72.0311"
+                          onChange={e => setZonaNueva(z => ({ ...z, lon: e.target.value }))} style={{ width: 92 }} /></label>
+                      <label style={{ fontSize: 10.5, color: "#64748b" }}>Radio m<br/>
+                        <input className="mj-input" type="number" value={zonaNueva.radio} min={100} max={60000} step={100}
+                          onChange={e => setZonaNueva(z => ({ ...z, radio: e.target.value }))} style={{ width: 84 }} /></label>
+                      <button className="mj-btn" onClick={crearZona} disabled={zonaGuardando === "__nueva__"}
+                              style={{ background: NAVY, color: "#fff", borderColor: NAVY, padding: "7px 14px" }}>
+                        {zonaGuardando === "__nueva__" ? "Creando…" : "Crear zona"}
+                      </button>
+                      {zonaNueva.lat && zonaNueva.lon && (
+                        <a href={`https://www.google.com/maps?q=${zonaNueva.lat},${zonaNueva.lon}&z=13`}
+                           target="_blank" rel="noreferrer" style={{ fontSize: 11.5, color: NAVY, fontWeight: 700 }}>
+                          Verificar en el mapa ↗
+                        </a>
+                      )}
+                    </div>
+                  </div>
+                )}
 
                 <div style={{ background: "#fff", border: "1px solid #e6e9ef", borderRadius: 10, overflow: "hidden" }}>
                   <div style={{ overflowX: "auto" }}>
@@ -1317,12 +1412,19 @@ function ModuloMaestroCL() {
                                       <button className="mj-btn" style={{ padding: "3px 10px", fontSize: 11,
                                           background: NAVY, color: "#fff", borderColor: NAVY }}
                                         disabled={zonaGuardando === z.id}
-                                        onClick={() => guardarZona(z.id, {
-                                          segmentacion: ed.segmentacion,
-                                          radio_m: ed.radio_m,
-                                          revisada: ed.revisada,
-                                          activa: ed.activa,
-                                        })}>
+                                        onClick={async () => {
+                                          // si movió el centro, primero la función RPC (geography)
+                                          if ((ed.lat && Number(ed.lat) !== z.lat) || (ed.lon && Number(ed.lon) !== z.lon)) {
+                                            try { await moverZona(z.id, ed.lat ?? z.lat, ed.lon ?? z.lon, ed.radio_m); }
+                                            catch (e) { setError(e.message); return; }
+                                          }
+                                          guardarZona(z.id, {
+                                            segmentacion: ed.segmentacion,
+                                            radio_m: ed.radio_m,
+                                            revisada: ed.revisada,
+                                            activa: ed.activa,
+                                          });
+                                        }}>
                                         {zonaGuardando === z.id ? "…" : "Guardar"}
                                       </button>
                                       <button className="mj-btn" style={{ padding: "3px 8px", fontSize: 11, marginLeft: 4 }}
@@ -1337,6 +1439,14 @@ function ModuloMaestroCL() {
                                         <input type="checkbox" checked={!!ed.activa}
                                           onChange={e => setZonaEdit(x => ({ ...x, [z.id]: { ...ed, activa: e.target.checked } }))} /> activa
                                       </label>
+                                      <input className="mj-input" value={ed.lat ?? z.lat ?? ""} placeholder="lat"
+                                        title="Mover el centro: latitud"
+                                        onChange={e => setZonaEdit(x => ({ ...x, [z.id]: { ...ed, lat: e.target.value } }))}
+                                        style={{ width: 76, fontSize: 11, marginLeft: 8 }} />
+                                      <input className="mj-input" value={ed.lon ?? z.lon ?? ""} placeholder="lon"
+                                        title="Mover el centro: longitud"
+                                        onChange={e => setZonaEdit(x => ({ ...x, [z.id]: { ...ed, lon: e.target.value } }))}
+                                        style={{ width: 76, fontSize: 11, marginLeft: 4 }} />
                                     </Fragment>
                                   ) : (
                                     <button className="mj-btn" style={{ padding: "3px 10px", fontSize: 11 }}
@@ -1378,6 +1488,9 @@ function ModuloMaestroCL() {
                     </div>
                   </div>
                   <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    <button className="mj-btn" onClick={() => setOvr(ovr ? null : { id_viaje: "", segmentacion: "", motivo: "" })}>
+                      {ovr ? "Cerrar corrección" : "✎ Corregir zona de un viaje"}
+                    </button>
                     <button className="mj-btn" onClick={() => descargarCSV(
                       pago.map(r => ({ SERVICIO: r.servicio, CECOS: r.cecos, FECHA: r.fecha,
                         "ID VIAJE": r.id_viaje, PATENTE: r.patente, TERCERO: r.tercero,
@@ -1392,6 +1505,35 @@ function ModuloMaestroCL() {
                     </button>
                   </div>
                 </div>
+
+                {ovr && (
+                  <div style={{ background: "#fdf6e3", border: "1px solid #f3e2b8", borderRadius: 10,
+                                padding: "12px 16px", marginBottom: 12, display: "flex", gap: 8,
+                                flexWrap: "wrap", alignItems: "flex-end" }}>
+                    <div style={{ width: "100%", fontSize: 11.5, color: "#64748b", marginBottom: 2 }}>
+                      La corrección prima sobre la regla automática del punto más lejano, para el viaje y
+                      la fecha seleccionada ({fecha}). Queda registrada con motivo y usuario, como los
+                      ajustes manuales del Excel.
+                    </div>
+                    <label style={{ fontSize: 10.5, color: "#64748b" }}>ID Viaje<br/>
+                      <input className="mj-input" value={ovr.id_viaje} placeholder="62795849"
+                        onChange={e => setOvr(o => ({ ...o, id_viaje: e.target.value.replace(/\D/g, "") }))}
+                        style={{ width: 100 }} /></label>
+                    <label style={{ fontSize: 10.5, color: "#64748b" }}>Segmentación<br/>
+                      <select className="mj-input" value={ovr.segmentacion}
+                        onChange={e => setOvr(o => ({ ...o, segmentacion: e.target.value }))} style={{ minWidth: 130 }}>
+                        <option value="">— elegir —</option>
+                        {segmentaciones.map(sg => <option key={sg.nombre} value={sg.nombre}>{sg.nombre}</option>)}
+                      </select></label>
+                    <label style={{ fontSize: 10.5, color: "#64748b", flex: 1, minWidth: 220 }}>Motivo (obligatorio)<br/>
+                      <input className="mj-input" value={ovr.motivo} placeholder="Entregas rurales fuera del radio de la zona"
+                        onChange={e => setOvr(o => ({ ...o, motivo: e.target.value }))} style={{ width: "100%" }} /></label>
+                    <button className="mj-btn" onClick={guardarOverride} disabled={ovrGuardando}
+                            style={{ background: NAVY, color: "#fff", borderColor: NAVY, padding: "7px 14px" }}>
+                      {ovrGuardando ? "Guardando…" : "Guardar corrección"}
+                    </button>
+                  </div>
+                )}
 
                 {(() => {
                   const filtrado = pago.filter(r => !r.is_line_haul);
