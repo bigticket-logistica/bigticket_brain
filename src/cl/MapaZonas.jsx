@@ -99,9 +99,13 @@ export default function MapaZonas({ zonas, segmentaciones, api, onCerrar, onCrea
   const limpiar = () => { setCentro(null); setVertices([]); capaDibujo.current.clearLayers(); };
   const cambiarModo = (m) => { setModo(m); limpiar(); setMsg(""); };
 
+  const CODIGOS_VALIDOS = /^(S[A-Z]{2}\d|CL[A-Z]{2,3}\d{1,2}|CLXCQ1|CLRM03)$/;
   const guardar = async () => {
     if (!form.nombre || !form.cecos || !form.segmentacion) {
       setMsg("Completa nombre, código MELI y segmentación."); return;
+    }
+    if (!CODIGOS_VALIDOS.test(form.cecos)) {
+      setMsg(`"${form.cecos}" no parece un código MELI real (ej: SLT1, SRM2, SBB1). Una zona con código inválido nunca recibiría paquetes.`); return;
     }
     if (modo === "circulo" && !centro) { setMsg("Haz click en el mapa para fijar el centro."); return; }
     if (modo === "poligono" && vertices.length < 3) { setMsg("El polígono necesita al menos 3 vértices."); return; }
@@ -186,7 +190,24 @@ export default function MapaZonas({ zonas, segmentaciones, api, onCerrar, onCrea
           </div>
         )}
 
-        <div ref={divRef} style={{ flex: 1, minHeight: 520 }} />
+        <div style={{ flex: 1, minHeight: 520, position: "relative" }}>
+          <div ref={divRef} style={{ position: "absolute", inset: 0,
+                                     cursor: modo === "ver" ? "grab" : "crosshair" }} />
+          {/* instrucción flotante: el mapa se dibuja clickeando, sin lápiz */}
+          {modo !== "ver" && (
+            <div style={{ position: "absolute", top: 10, left: "50%", transform: "translateX(-50%)",
+                          background: "rgba(26,58,107,.92)", color: "#fff", padding: "7px 16px",
+                          borderRadius: 20, fontSize: 12.5, fontWeight: 700, zIndex: 500,
+                          pointerEvents: "none", whiteSpace: "nowrap", boxShadow: "0 2px 8px rgba(0,0,0,.25)" }}>
+              {modo === "circulo"
+                ? (centro ? "Centro fijado · ajusta el radio arriba y completa el formulario"
+                          : "👆 Haz CLICK sobre el mapa para fijar el centro del círculo")
+                : (vertices.length === 0 ? "👆 Haz CLICK sobre el mapa: cada click agrega un vértice del polígono"
+                   : vertices.length < 3 ? `${vertices.length} de mínimo 3 vértices · sigue clickeando el contorno`
+                   : `${vertices.length} vértices · sigue agregando o presiona Guardar polígono`)}
+            </div>
+          )}
+        </div>
         <div style={{ padding: "7px 16px", fontSize: 11, color: "#8a94a6", borderTop: "1px solid #eef1f5" }}>
           Azul: zonas con segmentación · Ámbar: sin segmentación (no pagan) · Violeta: polígonos ·
           En modo dibujo, cada click sobre el mapa {modo === "poligono" ? "agrega un vértice" : "fija el centro"}.
