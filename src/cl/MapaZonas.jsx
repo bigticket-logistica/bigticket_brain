@@ -36,9 +36,15 @@ export default function MapaZonas({ zonas, segmentaciones, api, onCerrar, onCrea
   // ── montar el mapa una sola vez ──
   useEffect(() => {
     const mapa = L.map(divRef.current, { center: [-33.45, -70.66], zoom: 6 });
-    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      maxZoom: 18, attribution: "© OpenStreetMap",
+    // Dos capas base intercambiables. Ninguna necesita API key ni pago.
+    const calles = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 19, attribution: "© OpenStreetMap",
     }).addTo(mapa);
+    const satelite = L.tileLayer(
+      "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+      { maxZoom: 19, attribution: "Imagery © Esri" });
+    L.control.layers({ "Calles": calles, "Satélite": satelite }, null,
+                     { position: "topright", collapsed: false }).addTo(mapa);
     mapRef.current = mapa;
     capaDibujo.current = L.layerGroup().addTo(mapa);
 
@@ -68,7 +74,7 @@ export default function MapaZonas({ zonas, segmentaciones, api, onCerrar, onCrea
         capaDibujo.current.clearLayers();
         L.circle([lat, lng], { radius: radioRef.current, color: ORANGE, weight: 2, fillOpacity: 0.15 })
           .addTo(capaDibujo.current);
-        L.marker([lat, lng]).addTo(capaDibujo.current);
+        L.circleMarker([lat, lng], { radius: 5, color: "#fff", weight: 2, fillColor: ORANGE, fillOpacity: 1 }).addTo(capaDibujo.current);
       } else if (modoRef.current === "poligono") {
         setVertices(v => {
           const nuevo = [...v, [+lat.toFixed(5), +lng.toFixed(5)]];
@@ -92,9 +98,37 @@ export default function MapaZonas({ zonas, segmentaciones, api, onCerrar, onCrea
       capaDibujo.current.clearLayers();
       L.circle([centro.lat, centro.lon], { radius: radio, color: ORANGE, weight: 2, fillOpacity: 0.15 })
         .addTo(capaDibujo.current);
-      L.marker([centro.lat, centro.lon]).addTo(capaDibujo.current);
+      L.circleMarker([centro.lat, centro.lon], { radius: 5, color: "#fff", weight: 2, fillColor: ORANGE, fillOpacity: 1 }).addTo(capaDibujo.current);
     }
   }, [radio]);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Puntos de entrega reales: dibujar sobre datos, no a ojo ──
+  const capaPuntos = useRef(null);
+  const [puntosOn, setPuntosOn] = useState(false);
+  const [cargandoPuntos, setCargandoPuntos] = useState(false);
+  const verPuntos = async () => {
+    if (puntosOn) {
+      capaPuntos.current && capaPuntos.current.clearLayers();
+      setPuntosOn(false); return;
+    }
+    if (!form.cecos) { setMsg("Escribe el código MELI (ej. SLT1) para ver sus entregas."); return; }
+    setCargandoPuntos(true);
+    try {
+      const desde = new Date(Date.now() - 7 * 864e5).toISOString().slice(0, 10);
+      const d = await api(`vw_puntos_entrega?codigo_meli=eq.${form.cecos}&fecha_operativa=gte.${desde}&limit=4000`);
+      if (!capaPuntos.current) capaPuntos.current = L.layerGroup().addTo(mapRef.current);
+      capaPuntos.current.clearLayers();
+      for (const pt of d) {
+        L.circleMarker([pt.lat, pt.lon], {
+          radius: Math.min(7, 2 + Math.log2(pt.paquetes + 1)),
+          color: "#0d8043", weight: 1, fillColor: "#22c55e", fillOpacity: 0.55,
+        }).bindTooltip(`${pt.paquetes} paq · ${pt.comunas || ""}`).addTo(capaPuntos.current);
+      }
+      setPuntosOn(true);
+      setMsg(d.length ? `${d.length} puntos de entrega de los últimos 7 días` : "Sin entregas en 7 días para ese código");
+    } catch (e) { setMsg("Error cargando puntos: " + e.message); }
+    finally { setCargandoPuntos(false); }
+  };
 
   const limpiar = () => { setCentro(null); setVertices([]); capaDibujo.current.clearLayers(); };
   const cambiarModo = (m) => { setModo(m); limpiar(); setMsg(""); };
@@ -138,7 +172,7 @@ export default function MapaZonas({ zonas, segmentaciones, api, onCerrar, onCrea
       <div style={{ background: "#fff", borderRadius: 12, width: "min(1100px, 96vw)",
                     maxHeight: "94vh", display: "flex", flexDirection: "column", overflow: "hidden" }}>
         <div style={{ padding: "12px 16px", display: "flex", gap: 10, alignItems: "center",
-                      flexWrap: "wrap", borderBottom: "1px solid #eef1f5" }}>
+                      flexWrap: "wrap", borderBottom: "1px solid #eef1f5", flexShrink: 0 }}>
           <strong style={{ color: NAVY, fontSize: 14 }}>Mapa de zonas de pago</strong>
           <span style={btn(modo === "ver")}      onClick={() => cambiarModo("ver")}>Ver</span>
           <span style={btn(modo === "circulo")}  onClick={() => cambiarModo("circulo")}>⊕ Círculo</span>
@@ -169,7 +203,8 @@ export default function MapaZonas({ zonas, segmentaciones, api, onCerrar, onCrea
 
         {modo !== "ver" && (
           <div style={{ padding: "10px 16px", display: "flex", gap: 8, alignItems: "flex-end",
-                        flexWrap: "wrap", background: "#fdf6e3", borderBottom: "1px solid #f3e2b8" }}>
+                        flexWrap: "wrap", background: "#fdf6e3", borderBottom: "1px solid #f3e2b8",
+                        flexShrink: 0 }}>
             <label style={{ fontSize: 10.5, color: "#64748b" }}>Nombre<br/>
               <input value={form.nombre} onChange={e => setForm(f => ({ ...f, nombre: e.target.value }))}
                      placeholder="Cahuil" style={{ padding: "5px 8px", borderRadius: 6, border: "1px solid #dfe4ec", width: 130 }} /></label>
@@ -182,6 +217,10 @@ export default function MapaZonas({ zonas, segmentaciones, api, onCerrar, onCrea
                 <option value="">— elegir —</option>
                 {segmentaciones.map(s => <option key={s.nombre} value={s.nombre}>{s.nombre}</option>)}
               </select></label>
+            <button onClick={verPuntos} disabled={cargandoPuntos} style={btn(puntosOn)}
+                    title="Muestra dónde se entregó de verdad en los últimos 7 días, para dibujar sobre los datos">
+              {cargandoPuntos ? "…" : puntosOn ? "✓ Entregas" : "◉ Ver entregas"}
+            </button>
             <button onClick={guardar} disabled={guardando}
                     style={{ ...btn(true), padding: "7px 16px" }}>
               {guardando ? "Guardando…" : modo === "circulo" ? "Guardar círculo" : "Guardar polígono"}
@@ -190,7 +229,7 @@ export default function MapaZonas({ zonas, segmentaciones, api, onCerrar, onCrea
           </div>
         )}
 
-        <div style={{ flex: 1, minHeight: 520, position: "relative" }}>
+        <div style={{ flex: "1 1 auto", minHeight: 260, position: "relative" }}>
           <div ref={divRef} style={{ position: "absolute", inset: 0,
                                      cursor: modo === "ver" ? "grab" : "crosshair" }} />
           {/* instrucción flotante: el mapa se dibuja clickeando, sin lápiz */}
@@ -208,8 +247,9 @@ export default function MapaZonas({ zonas, segmentaciones, api, onCerrar, onCrea
             </div>
           )}
         </div>
-        <div style={{ padding: "7px 16px", fontSize: 11, color: "#8a94a6", borderTop: "1px solid #eef1f5" }}>
+        <div style={{ padding: "7px 16px", fontSize: 11, color: "#8a94a6", borderTop: "1px solid #eef1f5", flexShrink: 0 }}>
           Azul: zonas con segmentación · Ámbar: sin segmentación (no pagan) · Violeta: polígonos ·
+          Verde: entregas reales ·
           En modo dibujo, cada click sobre el mapa {modo === "poligono" ? "agrega un vértice" : "fija el centro"}.
         </div>
       </div>
