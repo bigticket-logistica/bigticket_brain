@@ -12,6 +12,7 @@
 // Habla con la API REST del proyecto de Chile por fetch, sin dependencias extra.
 // ═══════════════════════════════════════════════════════════════════════════
 import { useState, useEffect, Fragment } from "react";
+import MapaZonas from "./MapaZonas";   // editor de mapa · requiere: npm install leaflet
 
 const CL_URL = "https://hmowsazntdjtsvdfgutn.supabase.co";
 const CL_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imhtb3dzYXpudGRqdHN2ZGZndXRuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQ5MTc4NzgsImV4cCI6MjEwMDQ5Mzg3OH0.xAJokU0eFhof--d8R4uCRBr2-CJLzC5re0w1IPRqQR8";
@@ -217,6 +218,7 @@ function ModuloMaestroCL() {
   // ── zona nueva + override de viaje ──
   const ZONA_NUEVA0 = { nombre: "", cecos: "", segmentacion: "", lat: "", lon: "", radio: 5000, nota: "" };
   const [zonaNueva, setZonaNueva] = useState(null);        // null = formulario cerrado
+  const [mapaAbierto, setMapaAbierto] = useState(false);
   const [ovr, setOvr] = useState(null);                    // { id_viaje, segmentacion, motivo }
   const [ovrGuardando, setOvrGuardando] = useState(false);
   const [pagoFiltro, setPagoFiltro] = useState("todos");   // todos | pendientes | calculados
@@ -1266,6 +1268,11 @@ function ModuloMaestroCL() {
             {/* ── Mantenedor de Zonas de Pago ── */}
             {tab === "zonas" && (
               <Fragment>
+                {mapaAbierto && (
+                  <MapaZonas zonas={zonas} segmentaciones={segmentaciones} api={api}
+                             onCerrar={() => setMapaAbierto(false)}
+                             onCreada={cargarZonas} />
+                )}
                 <div style={{ background: "#fff", border: "1px solid #e6e9ef", borderRadius: 10,
                               padding: "13px 16px", marginBottom: 12 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start",
@@ -1287,9 +1294,12 @@ function ModuloMaestroCL() {
                           Sin segmentación ({fmt(zonas.filter(z => !z.segmentacion).length)})
                         </option>
                       </select>
-                      <button className="mj-btn" onClick={() => setZonaNueva(zonaNueva ? null : { ...ZONA_NUEVA0 })}
+                      <button className="mj-btn" onClick={() => setMapaAbierto(true)}
                               style={{ background: NAVY, color: "#fff", borderColor: NAVY }}>
-                        {zonaNueva ? "Cerrar" : "➕ Nueva zona"}
+                        🗺 Abrir mapa
+                      </button>
+                      <button className="mj-btn" onClick={() => setZonaNueva(zonaNueva ? null : { ...ZONA_NUEVA0 })}>
+                        {zonaNueva ? "Cerrar" : "➕ Por coordenadas"}
                       </button>
                     </div>
                   </div>
