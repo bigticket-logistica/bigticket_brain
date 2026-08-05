@@ -219,6 +219,7 @@ function ModuloMaestroCL() {
   const [zonaNueva, setZonaNueva] = useState(null);        // null = formulario cerrado
   const [ovr, setOvr] = useState(null);                    // { id_viaje, segmentacion, motivo }
   const [ovrGuardando, setOvrGuardando] = useState(false);
+  const [pagoFiltro, setPagoFiltro] = useState("todos");   // todos | pendientes | calculados
 
   const [resumen, setResumen] = useState(null);
   const [jornada, setJornada] = useState([]);
@@ -385,7 +386,7 @@ function ModuloMaestroCL() {
   const cargarPago = async () => {
     const fallos = [];
     const d = await apiSuave(
-      `vw_maestro_pago?fecha=eq.${fecha}&ruta_vacia=eq.false&order=cecos.asc.nullslast,id_viaje&limit=3000`,
+      `vw_pago_viaje?fecha=eq.${fecha}&ruta_vacia=eq.false&order=cecos.asc.nullslast,id_viaje&limit=3000`,
       [], fallos);
     setPago(d);
     if (fallos.length) setError("No se pudieron cargar: " + fallos.join(" | "));
@@ -1499,7 +1500,9 @@ function ModuloMaestroCL() {
                         "TIPO VEHICULO LOGIST": r.tipo_vehiculo_logist,
                         "TIPO VEHICULO BT": r.tipo_vehiculo_bt,
                         "KM PLANIFICADOS": r.km_planificados,
-                        "NIVEL DE SERVICIO": r.nivel_servicio, ESTADO: r.estado_resolucion })),
+                        "NIVEL DE SERVICIO": r.nivel_servicio,
+                        "TIPO PAGO": r.tipo_pago, "TARIFA": r.tarifa_aplicada,
+                        "PAGO": r.pago, "ESTADO PAGO": r.estado_pago })),
                       `maestro_pago_${fecha}.csv`)}>
                       Descargar CSV
                     </button>
@@ -1536,13 +1539,30 @@ function ModuloMaestroCL() {
                 )}
 
                 {(() => {
-                  const filtrado = pago.filter(r => !r.is_line_haul);
-                  const resueltos = filtrado.filter(r => r.estado_resolucion === "resuelto").length;
+                  const reparto = pago.filter(r => !r.is_line_haul);
+                  const calculados = reparto.filter(r => r.estado_pago === "calculado");
+                  const pendientes = reparto.filter(r => r.estado_pago !== "calculado");
+                  const totalDia = calculados.reduce((a, r) => a + n(r.pago), 0);
+                  const filtrado = pagoFiltro === "pendientes" ? pendientes
+                                 : pagoFiltro === "calculados" ? calculados : reparto;
+                  const chip = (activo) => ({ cursor: "pointer", padding: "3px 10px", borderRadius: 14,
+                    fontSize: 11.5, fontWeight: 700, border: "1px solid " + (activo ? NAVY : "#dfe4ec"),
+                    background: activo ? NAVY : "#fff", color: activo ? "#fff" : "#64748b" });
                   return (
                     <Fragment>
-                      <div style={{ fontSize: 12, color: "#64748b", marginBottom: 8 }}>
-                        {fmt(filtrado.length)} viajes de reparto · <strong style={{ color: resueltos === filtrado.length ? "#0d8043" : "#b45309" }}>
-                        {fmt(resueltos)} con CECOS y segmentación resueltos</strong> · {fmt(filtrado.length - resueltos)} pendientes de zona
+                      <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 8 }}>
+                        <span style={{ fontSize: 15, fontWeight: 800, color: "#0d8043" }}>
+                          {totalDia.toLocaleString("es-CL", { style: "currency", currency: "CLP", maximumFractionDigits: 0 })}
+                        </span>
+                        <span style={{ fontSize: 11.5, color: "#8a94a6" }}>pago proyectado del día (sin bono NS, pendiente de confirmar)</span>
+                        <span style={{ flex: 1 }} />
+                        <span style={chip(pagoFiltro === "todos")} onClick={() => setPagoFiltro("todos")}>
+                          Todos ({fmt(reparto.length)})</span>
+                        <span style={chip(pagoFiltro === "calculados")} onClick={() => setPagoFiltro("calculados")}>
+                          Calculados ({fmt(calculados.length)})</span>
+                        <span style={chip(pagoFiltro === "pendientes")} onClick={() => setPagoFiltro("pendientes")}
+                              title="Sin resolver (falta zona: se corrige acá mismo con ✎) o sin tarifa (falta la fila en el tarifario)">
+                          ⚠ Pendientes ({fmt(pendientes.length)})</span>
                       </div>
                       <div style={{ background: "#fff", border: "1px solid #e6e9ef", borderRadius: 10, overflow: "hidden" }}>
                         <div style={{ overflowX: "auto", maxHeight: 560, overflowY: "auto" }}>
@@ -1552,9 +1572,12 @@ function ModuloMaestroCL() {
                                 <th>Servicio</th><th>CECOS</th><th>ID Viaje</th><th>Patente</th><th>Tercero</th>
                                 <th style={{ textAlign: "right" }}>Cargados</th>
                                 <th style={{ textAlign: "right" }}>Entregados</th>
-                                <th>Segmentación</th><th>Veh. Logist</th><th>Veh. BT</th>
-                                <th style={{ textAlign: "right" }}>KM plan</th>
-                                <th style={{ textAlign: "right" }}>NS</th><th>Estado</th>
+                                <th>Segmentación</th><th>Veh. BT</th>
+                                <th style={{ textAlign: "right" }}>NS</th>
+                                <th>Tipo pago</th>
+                                <th style={{ textAlign: "right" }}>Tarifa</th>
+                                <th style={{ textAlign: "right" }}>Pago</th>
+                                <th>Estado</th><th></th>
                               </tr>
                             </thead>
                             <tbody>
@@ -1571,24 +1594,44 @@ function ModuloMaestroCL() {
                                   <td className="num">{fmt(r.cargados)}</td>
                                   <td className="num" style={{ color: "#0d8043", fontWeight: 700 }}>{fmt(r.entregados)}</td>
                                   <td style={{ fontSize: 12 }}>{r.segmentacion_zonal || <span style={{ color: "#cbd5e1" }}>—</span>}</td>
-                                  <td style={{ fontSize: 11.5, color: "#64748b" }}>{r.tipo_vehiculo_logist || "—"}</td>
                                   <td style={{ fontSize: 11.5 }}>
                                     {r.tipo_vehiculo_bt === "ELECTRICA"
                                       ? <Etiqueta texto="ELECTRICA" color="#0d8043" fondo="#e7f6ec" />
                                       : r.tipo_vehiculo_bt}
                                   </td>
-                                  <td className="num">{r.km_planificados != null ? fmt(Math.round(r.km_planificados * 10) / 10) : "—"}</td>
                                   <td className="num">{r.nivel_servicio != null
                                     ? <span style={{ fontWeight: 700, color: r.nivel_servicio >= 0.99 ? "#0d8043" : r.nivel_servicio >= 0.975 ? "#b45309" : ROJO_ }}>
                                         {(r.nivel_servicio * 100).toFixed(1)}%</span> : "—"}</td>
-                                  <td>{r.estado_resolucion === "resuelto"
-                                        ? <Etiqueta texto="RESUELTO" color="#0d8043" fondo="#e7f6ec" />
-                                        : <span style={{ fontSize: 11, color: "#b45309" }} title="La zona geográfica falta o no tiene segmentación asignada: se resuelve en la pestaña Zonas de Pago">{r.estado_resolucion || "sin datos"}</span>}</td>
+                                  <td style={{ fontSize: 11.5, color: "#64748b" }}>{r.tipo_pago || "—"}</td>
+                                  <td className="num" style={{ fontSize: 11.5 }}>
+                                    {r.tarifa_aplicada != null ? "$" + fmt(Math.round(r.tarifa_aplicada)) : "—"}</td>
+                                  <td className="num" style={{ fontWeight: 800, color: r.pago ? "#0d8043" : "#cbd5e1" }}>
+                                    {r.pago ? "$" + fmt(Math.round(r.pago)) : "—"}</td>
+                                  <td>
+                                    {r.estado_pago === "calculado"
+                                      ? <Etiqueta texto="CALCULADO" color="#0d8043" fondo="#e7f6ec" />
+                                      : r.estado_pago === "sin tarifa"
+                                        ? <span title={`No existe la llave ${r.cecos || "?"} · ${r.servicio} · ${r.segmentacion_zonal || "?"} · ${r.tipo_vehiculo_bt} en el tarifario: hay que agregarla (autorizan Nicole o Esteban)`}>
+                                            <Etiqueta texto="SIN TARIFA" color="#b45309" fondo="#fef3c7" /></span>
+                                        : <span title="Falta la zona: corrígelo con el botón ✎ de esta fila, o crea la zona en la pestaña Zonas de Pago">
+                                            <Etiqueta texto="SIN RESOLVER" color="#b42318" fondo="#fdecea" /></span>}
+                                    {r.zona_manual && <span style={{ marginLeft: 4 }} title={r.motivo_manual || "Corrección manual"}>
+                                        <Etiqueta texto="MANUAL" color="#5b21b6" fondo="#ede9fe" /></span>}
+                                  </td>
+                                  <td>
+                                    {r.estado_pago === "sin resolver" && (
+                                      <button className="mj-btn" style={{ padding: "2px 8px", fontSize: 11 }}
+                                        title="Corregir la zona de este viaje"
+                                        onClick={() => setOvr({ id_viaje: String(r.id_viaje), segmentacion: "", motivo: "" })}>
+                                        ✎
+                                      </button>
+                                    )}
+                                  </td>
                                 </tr>
                               ))}
                               {filtrado.length === 0 && (
-                                <tr><td colSpan={13} style={{ textAlign: "center", color: "#94a3b8", padding: 18 }}>
-                                  Sin viajes para esta fecha (requiere las migraciones 26 a 31).
+                                <tr><td colSpan={15} style={{ textAlign: "center", color: "#94a3b8", padding: 18 }}>
+                                  Sin viajes para esta fecha (requiere las migraciones 26 a 36).
                                 </td></tr>
                               )}
                             </tbody>
