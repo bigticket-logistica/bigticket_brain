@@ -1348,7 +1348,7 @@ function ModuloMaestroCL() {
                         <tr>
                           <th>Zona</th><th>Código MELI</th><th>Segmentación (tarifario)</th>
                           <th>CECOS admin</th><th style={{ textAlign: "right" }}>Radio m</th>
-                          <th style={{ textAlign: "right" }}>Paq. 7d</th>
+                          <th style={{ textAlign: "right" }}>Paq. ayer</th>
                           <th>Revisada</th><th>Activa</th><th>Mapa</th><th></th>
                         </tr>
                       </thead>
@@ -1391,7 +1391,7 @@ function ModuloMaestroCL() {
                                       style={{ width: 84, fontSize: 12, textAlign: "right" }} />
                                   ) : fmt(z.radio_m)}
                                 </td>
-                                <td className="num">{fmt(z.paquetes_7d)}</td>
+                                <td className="num">{fmt(z.paquetes_ayer)}</td>
                                 <td>{z.revisada
                                       ? <Etiqueta texto="SÍ" color="#0d8043" fondo="#e7f6ec" />
                                       : <Etiqueta texto="NO" color="#8a94a6" fondo="#f1f5f9" />}</td>
