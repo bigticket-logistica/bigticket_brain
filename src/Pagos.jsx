@@ -9704,6 +9704,24 @@ function padronFmt(v) {
   return String(v);
 }
 
+// Trae TODAS las filas de una consulta paginando con range().
+// Necesario porque la API de Supabase corta en 1000 filas por request,
+// aunque se pida un limit mayor. Sin esto, las tablas que superan ese
+// tamaño devuelven datos incompletos SIN error (bug silencioso).
+async function padronTraerTodo(construir) {
+  const PASO = 1000;
+  let desde = 0; const acumulado = [];
+  for (;;) {
+    const { data, error } = await construir().range(desde, desde + PASO - 1);
+    if (error) throw error;
+    const lote = data || [];
+    acumulado.push(...lote);
+    if (lote.length < PASO) break;
+    desde += PASO;
+    if (desde > 100000) break; // corte de seguridad
+  }
+  return acumulado;
+}
 function padronRolMeta(isOnlyHelper) {
   if (isOnlyHelper === true)  return { label: "Helper", color: "#F47B20", bg: "#fff3e6" };
   if (isOnlyHelper === false) return { label: "Driver", color: "#1a3a6b", bg: "#e8edf5" };
@@ -9747,27 +9765,12 @@ function PadronDriversData({ fecha }) {
         // así que se pagina con range() hasta agotar. Sin esto, los conductores
         // nuevos (insertados último) quedaban fuera del cruce y salían sin
         // correo / teléfono / fecha de creación / rol.
-        const traerTodo = async (construir) => {
-          const PASO = 1000;
-          let desde = 0; const acumulado = [];
-          for (;;) {
-            const { data, error } = await construir().range(desde, desde + PASO - 1);
-            if (error) throw error;
-            const lote = data || [];
-            acumulado.push(...lote);
-            if (lote.length < PASO) break;
-            desde += PASO;
-            if (desde > 100000) break; // corte de seguridad
-          }
-          return acumulado;
-        };
-
         const [masterData, detalleData] = await Promise.all([
-          traerTodo(() => sb.from("meli_drivers_master")
+          padronTraerTodo(() => sb.from("meli_drivers_master")
             .select("driver_id,nombre,first_name,last_name,document_value,status")
             .eq("fecha_snapshot", fecha)
             .order("driver_id", { ascending: true })),
-          traerTodo(() => sb.from("meli_drivers_detalle")
+          padronTraerTodo(() => sb.from("meli_drivers_detalle")
             .select("driver_id,first_name,last_name,document_value,email,phone,creation_date,status,tiene_infraccion,infraction_status,esta_bloqueado,blocking_reason,is_only_helper")
             .order("driver_id", { ascending: true })),
         ]);
@@ -9972,9 +9975,8 @@ function PadronCursos() {
     (async () => {
       setLoading(true); setError(null);
       try {
-        const { data, error } = await sb.from("vw_cursos_actividad").select("*").limit(5000);
-        if (error) throw error;
-        if (alive) setRows(data || []);
+        const data = await padronTraerTodo(() => sb.from("vw_cursos_actividad").select("*").order("driver_id", { ascending: true }));
+        if (alive) setRows(data);
       } catch (e) { if (alive) setError(e.message || "Error"); }
       finally { if (alive) setLoading(false); }
     })();
@@ -10087,9 +10089,8 @@ function PadronRechazados() {
   async function cargar() {
     setLoading(true); setError(null);
     try {
-      const { data, error } = await sb.from("vw_rechazados_actividad").select("*").limit(5000);
-      if (error) throw error;
-      setRows(data || []);
+      const data = await padronTraerTodo(() => sb.from("vw_rechazados_actividad").select("*").order("curp", { ascending: true }));
+      setRows(data);
     } catch (e) { setError(e.message || "Error"); }
     finally { setLoading(false); }
   }
@@ -10325,9 +10326,8 @@ function PadronLimpieza() {
     (async () => {
       setLoading(true); setError(null);
       try {
-        const { data, error } = await sb.from("vw_padron_embudo").select("*").limit(5000);
-        if (error) throw error;
-        if (alive) setRows(data || []);
+        const data = await padronTraerTodo(() => sb.from("vw_padron_embudo").select("*").order("driver_id", { ascending: true }));
+        if (alive) setRows(data);
       } catch (e) { if (alive) setError(e.message || "Error"); }
       finally { if (alive) setLoading(false); }
     })();
@@ -11005,10 +11005,10 @@ function PadronMundo({ tipo }) {
     (async () => {
       setLoading(true); setError(null);
       try {
-        const { data, error } = await sb
+        const data = await padronTraerTodo(() => sb
           .from(cfg.tabla).select(cfg.selectData)
-          .eq("fecha_snapshot", fechaSel).limit(5000);
-        if (error) throw error;
+          .eq("fecha_snapshot", fechaSel)
+          .order(cfg.llave, { ascending: true }));
         if (alive) setDataRows(data || []);
       } catch (e) { if (alive) setError(e.message || "Error"); }
       finally { if (alive) setLoading(false); }
@@ -11064,11 +11064,11 @@ function PadronMundo({ tipo }) {
     (async () => {
       setLoading(true); setError(null);
       try {
-        const { data, error } = await sb
+        const data = await padronTraerTodo(() => sb
           .from(cfg.tabla)
           .select("vehicle_id,placa,tipo_nombre,capacidad,es_sdd")
-          .eq("fecha_snapshot", fechaSel).limit(5000);
-        if (error) throw error;
+          .eq("fecha_snapshot", fechaSel)
+          .order("vehicle_id", { ascending: true }));
         const norm = p => String(p || "").replace(/^SDD-/, "");
         const baseTipo = t => String(t || "").replace(/\s*SDD$/i, "").trim();
         const grupos = {};
