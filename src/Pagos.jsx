@@ -9743,18 +9743,36 @@ function PadronDriversData({ fecha }) {
       setLoading(true); setError(null); setExpandidos(new Set());
       try {
         // Snapshot del día (universo operativo) + detalle enriquecido (1 fila por driver)
-        const [mRes, dRes] = await Promise.all([
-          sb.from("meli_drivers_master")
+        // OJO: Supabase corta en 1000 filas por request aunque se pida limit mayor,
+        // así que se pagina con range() hasta agotar. Sin esto, los conductores
+        // nuevos (insertados último) quedaban fuera del cruce y salían sin
+        // correo / teléfono / fecha de creación / rol.
+        const traerTodo = async (construir) => {
+          const PASO = 1000;
+          let desde = 0; const acumulado = [];
+          for (;;) {
+            const { data, error } = await construir().range(desde, desde + PASO - 1);
+            if (error) throw error;
+            const lote = data || [];
+            acumulado.push(...lote);
+            if (lote.length < PASO) break;
+            desde += PASO;
+            if (desde > 100000) break; // corte de seguridad
+          }
+          return acumulado;
+        };
+
+        const [masterData, detalleData] = await Promise.all([
+          traerTodo(() => sb.from("meli_drivers_master")
             .select("driver_id,nombre,first_name,last_name,document_value,status")
-            .eq("fecha_snapshot", fecha).limit(5000),
-          sb.from("meli_drivers_detalle")
+            .eq("fecha_snapshot", fecha)
+            .order("driver_id", { ascending: true })),
+          traerTodo(() => sb.from("meli_drivers_detalle")
             .select("driver_id,first_name,last_name,document_value,email,phone,creation_date,status,tiene_infraccion,infraction_status,esta_bloqueado,blocking_reason,is_only_helper")
-            .limit(5000),
+            .order("driver_id", { ascending: true })),
         ]);
-        if (mRes.error) throw mRes.error;
-        if (dRes.error) throw dRes.error;
-        const map = new Map((dRes.data || []).map(d => [Number(d.driver_id), d]));
-        if (alive) { setMasterRows(mRes.data || []); setDetalleMap(map); }
+        const map = new Map(detalleData.map(d => [Number(d.driver_id), d]));
+        if (alive) { setMasterRows(masterData); setDetalleMap(map); }
       } catch (e) { if (alive) setError(e.message || "Error"); }
       finally { if (alive) setLoading(false); }
     })();
