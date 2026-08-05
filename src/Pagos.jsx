@@ -9825,7 +9825,16 @@ function PadronDriversData({ fecha }) {
           .some(v => String(v ?? "").toLowerCase().includes(q))
       );
     }
-    return res;
+    // Más recientes primero: por fecha de alta y, si falta, por ID (los IDs de
+    // MELI son secuenciales). Los sin fecha quedan al final.
+    return [...res].sort((a, b) => {
+      const fa = a.creation_date ? new Date(a.creation_date).getTime() : null;
+      const fb = b.creation_date ? new Date(b.creation_date).getTime() : null;
+      if (fa !== null && fb !== null && fa !== fb) return fb - fa;
+      if (fa === null && fb !== null) return 1;
+      if (fa !== null && fb === null) return -1;
+      return Number(b.driver_id) - Number(a.driver_id);
+    });
   }, [rows, busqueda, soloInfractores]);
 
   const toggleExpand = (id) => {
