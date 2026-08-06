@@ -33,6 +33,8 @@ export default function MapaZonas({ zonas, segmentaciones, api, onCerrar, onCrea
   const [form, setForm] = useState({ nombre: "", segmentacion: "" });
   const [guardando, setGuardando] = useState(false);
   const [puntosOn, setPuntosOn] = useState(false);
+  const [dias, setDias] = useState(7);
+  const [fino, setFino] = useState(false);   // ~11 m en vez de ~110 m
   const [cargando, setCargando] = useState(false);
   const [msg, setMsg] = useState("");
 
@@ -128,26 +130,38 @@ export default function MapaZonas({ zonas, segmentaciones, api, onCerrar, onCrea
   const cambiarModo = (m) => { setModo(m); limpiar(); setMsg(""); };
 
   // ── entregas reales ──
-  const verEntregas = async () => {
-    if (puntosOn) { capaPuntos.current.clearLayers(); setPuntosOn(false); setMsg(""); return; }
+  // Usa la función puntos_entrega: agrega TODO el rango en una pasada, así no se
+  // trunca. La vista anterior agrupaba por día y multiplicaba las filas —
+  // SIL1 generaba 39.000 y el front cortaba en 4.000.
+  const verEntregas = async (recargar) => {
+    if (puntosOn && !recargar) { capaPuntos.current.clearLayers(); setPuntosOn(false); setMsg(""); return; }
     if (!cecosVista) { setMsg("Elige un CECOS arriba para ver sus entregas."); return; }
     setCargando(true);
     try {
-      const desde = new Date(Date.now() - 7 * 864e5).toISOString().slice(0, 10);
-      const d = await api(`vw_puntos_entrega?codigo_meli=eq.${cecosVista}&fecha_operativa=gte.${desde}&limit=4000`);
+      const hoy = new Date();
+      const desde = new Date(hoy.getTime() - dias * 864e5).toISOString().slice(0, 10);
+      const d = await api("rpc/puntos_entrega", { method: "POST", body: JSON.stringify({
+        p_cecos: cecosVista, p_desde: desde,
+        p_hasta: hoy.toISOString().slice(0, 10),
+        p_precision: fino ? 4 : 3 }) });
       capaPuntos.current.clearLayers();
+      let total = 0;
       for (const pt of d) {
+        total += Number(pt.paquetes);
         L.circleMarker([pt.lat, pt.lon], {
-          radius: Math.min(8, 2 + Math.log2(pt.paquetes + 1)),
-          color: VERDE, weight: 1, fillColor: "#22c55e", fillOpacity: 0.6,
+          radius: Math.min(9, 2.5 + Math.log2(Number(pt.paquetes) + 1)),
+          color: VERDE, weight: 1, fillColor: "#22c55e", fillOpacity: 0.55,
         }).bindTooltip(`${pt.paquetes} paq · ${pt.comunas || ""}`).addTo(capaPuntos.current);
       }
       setPuntosOn(true);
-      setMsg(d.length ? `${d.length} puntos de entrega · ${cecosVista} · últimos 7 días`
-                      : `Sin entregas en 7 días para ${cecosVista}`);
+      setMsg(d.length
+        ? `${d.length.toLocaleString("es-CL")} puntos · ${total.toLocaleString("es-CL")} paquetes · ${cecosVista} · ${dias} días`
+        : `Sin entregas en ${dias} días para ${cecosVista}`);
     } catch (e) { setMsg("Error: " + e.message); }
     finally { setCargando(false); }
   };
+  // al cambiar los días o la precisión, recargar si ya están visibles
+  useEffect(() => { if (puntosOn) verEntregas(true); }, [dias, fino]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   const CODIGO_OK = /^(S[A-Z]{2}\d|CL[A-Z]{2,3}\d{1,2})$/;
   const guardar = async () => {
@@ -198,10 +212,25 @@ export default function MapaZonas({ zonas, segmentaciones, api, onCerrar, onCrea
             <option value="">Todos los CECOS</option>
             {codigos.map(c => <option key={c} value={c}>{c}</option>)}
           </select>
-          <span style={btn(puntosOn)} onClick={verEntregas}
-                title="Dónde se entregó de verdad en los últimos 7 días: dibuja sobre los datos">
+          <span style={btn(puntosOn)} onClick={() => verEntregas(false)}
+                title="Dónde se entregó de verdad: dibuja sobre los datos, no a ojo">
             {cargando ? "…" : puntosOn ? "✓ Entregas" : "◉ Ver entregas"}
           </span>
+          {puntosOn && (
+            <Fragment>
+              <select value={dias} onChange={e => setDias(Number(e.target.value))} style={{ ...inp, width: 92 }}
+                      title="Rango de días de entregas a mostrar">
+                <option value={1}>1 día</option>
+                <option value={3}>3 días</option>
+                <option value={7}>7 días</option>
+                <option value={15}>15 días</option>
+              </select>
+              <label style={{ fontSize: 11, color: "#64748b", whiteSpace: "nowrap" }}
+                     title="Detalle fino agrupa cada ~11 m en vez de ~110 m: más puntos, más preciso, más lento">
+                <input type="checkbox" checked={fino} onChange={e => setFino(e.target.checked)} /> detalle fino
+              </label>
+            </Fragment>
+          )}
           <span style={{ flex: 1 }} />
           <span style={btn(false)} onClick={onCerrar}>Cerrar</span>
         </div>
