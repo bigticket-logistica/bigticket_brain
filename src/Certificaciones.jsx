@@ -4503,7 +4503,9 @@ function ModuloCertificaciones() {
       }
       if (errOnb || !onboardings) return;
 
-      const enValidacion = onboardings.filter(o => o.leads?.etapa === "Entrevistas y Validaciones");
+      // El CRM renombró la etapa: se aceptan el nombre nuevo y el histórico
+      const ETAPAS_CERT = ["Proceso Interno de Certificaciones", "Entrevistas y Validaciones"];
+      const enValidacion = onboardings.filter(o => ETAPAS_CERT.includes(o.leads?.etapa));
       if (enValidacion.length === 0) return;
 
       const { data: existentes } = await sb
