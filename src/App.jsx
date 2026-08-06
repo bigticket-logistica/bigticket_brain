@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo, useCallback, Fragment } from "react";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.112.1?bundle";
 import ModuloMaestro from "./maestro";
 import { fechaHoyOperativa, fechaOperativaOffset, pct, Input, KpiCardMaestro, BadgeEstadoMaestro } from "./shared";
 import ModuloPNR from "./PNR";
@@ -7,7 +7,7 @@ import ModuloCertificaciones from "./Certificaciones";
 import ModuloEmpresas from "./Empresas";
 import ModuloAuditoriaMeli from "./AuditoriaMeli";
 import { sb, BIGGY_IMG } from "./shared";
-import ModuloPoolMeliMX from "./Pool";
+import ModuloPoolMeliMX from "./Pool";{ createClient }
 import { descargarExcelMeli, descargarExcelMultihoja } from "./shared";
 import ModuloPagosMadre from "./Pagos";
 import ModuloCertificacionesCL from "./cl/Certificaciones";
