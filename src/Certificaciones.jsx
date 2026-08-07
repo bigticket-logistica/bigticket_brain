@@ -10,6 +10,7 @@ const COLUMNAS = [
   { id: "entrevista_operaciones", label: "Etapa 6: Entrevista con Operaciones", color: "#0e7490", bg: "#e8f6f9", border: "#c9e8f0" },
   { id: "solicitud_alta",      label: "Etapa 7: Solicitud de Alta",     color: "#0f766e", bg: "#e7f5f2", border: "#c4e6df" },
   { id: "firma_contrato",      label: "Etapa 8: Firma de Contrato",     color: "#7c3aed", bg: "#f5f0fe", border: "#ddd0f7" },
+  { id: "revision_interna",    label: "Revisión Interna",               color: "#b45309", bg: "#fff4e5", border: "#fcd9b6" },
   { id: "aceptado",            label: "Aceptado",                       color: "#166534", bg: "#e8f5ec", border: "#b7e0c2" },
   { id: "rechazado",           label: "Rechazado",                      color: "#c0392b", bg: "#fbeaea", border: "#f0c4c4" },
 ];
@@ -23,7 +24,7 @@ const COLUMNAS_B = COLUMNAS.filter(c => !ETAPAS_SOLO_INGRESOS.includes(c.id));
 // Etiquetas cortas para los KPIs del header (coinciden con las columnas)
 const ETAPA_CORTA = {
   recepcion: "Etapa 1 · Recepción", llamada_supervisor: "Etapa 2 · Llamada Sup.", prevalidacion_biggy: "Etapa 3 · Biggy", validacion_meli: "Etapa 4 · MELI",
-  validacion_nubarium: "Etapa 5 · Nubarium/REPUVE", entrevista_operaciones: "Etapa 6 · Entrevista", solicitud_alta: "Etapa 7 · Sol. de Alta", firma_contrato: "Etapa 8 · Firma", aceptado: "Aceptado", rechazado: "Rechazado",
+  validacion_nubarium: "Etapa 5 · Nubarium/REPUVE", entrevista_operaciones: "Etapa 6 · Entrevista", solicitud_alta: "Etapa 7 · Sol. de Alta", firma_contrato: "Etapa 8 · Firma", revision_interna: "Revisión Interna", aceptado: "Aceptado", rechazado: "Rechazado",
 };
 
 // ─── VISOR DOCUMENTO ────────────────────────────────────────────────
@@ -1965,6 +1966,43 @@ function CalificacionLlamada({ registroId }) {
   );
 }
 
+// ─── AVISO DE REVISIÓN INTERNA ───────────────────────────────────────────────
+// Aparece cuando MELI declinó al candidato: la tarjeta NO se rechaza sola, queda
+// en Revisión Interna y el analista decide. Se muestra en ambos flujos (A y B).
+function AvisoRevisionInterna({ registro, onAceptar, onRechazar, moviendo }) {
+  const declinado = (registro.estado === "rechazado")
+    || /declinad|rechazad|no se recomienda|riesgo/i.test(registro.respuesta_meli || "");
+  return (
+    <div style={{ background: "#fff4e5", border: "2px solid #F47B20", borderRadius: 12, padding: "16px 18px", marginBottom: 14 }}>
+      <div style={{ fontSize: 14.5, fontWeight: 800, color: "#b45309", marginBottom: 6 }}>
+        ⚠️ MELI recomienda no seguir con el proceso
+      </div>
+      <div style={{ fontSize: 12.5, color: "#8a4a0f", lineHeight: 1.6 }}>
+        {registro.respuesta_meli
+          ? <>Respuesta de MELI: <b>{registro.respuesta_meli}</b></>
+          : <>MELI declinó al candidato en la validación.</>}
+        {registro.fecha_respuesta_meli && (
+          <> · {new Date(registro.fecha_respuesta_meli).toLocaleString("es-MX", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}</>
+        )}
+        {registro.motivo_rechazo ? <><br />Motivo registrado: {registro.motivo_rechazo}</> : null}
+      </div>
+      <div style={{ fontSize: 12, color: "#8a4a0f", marginTop: 8, fontStyle: "italic" }}>
+        La recomendación de MELI no cierra el caso: revisa la información de arriba y decide.
+      </div>
+      <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
+        <button onClick={onAceptar} disabled={moviendo}
+          style={{ flex: 1, minWidth: 190, background: "#166534", color: "#fff", border: "none", borderRadius: 9, padding: "12px", fontSize: 13, fontWeight: 800, cursor: "pointer", opacity: moviendo ? 0.6 : 1, fontFamily: "'Geist',sans-serif" }}>
+          ✓ Continuar de todas formas → Aceptado
+        </button>
+        <button onClick={onRechazar} disabled={moviendo}
+          style={{ flex: 1, minWidth: 190, background: "#fff", color: "#c0392b", border: "1.5px solid #f0c4c4", borderRadius: 9, padding: "12px", fontSize: 13, fontWeight: 800, cursor: "pointer", opacity: moviendo ? 0.6 : 1, fontFamily: "'Geist',sans-serif" }}>
+          ✕ Acatar recomendación → Rechazado
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function DetalleCandidato({ candidato, onVolver, onActualizar, onPasarEtapa2 }) {
   const [analizando, setAnalizando] = useState(false);
   const [enviando, setEnviando] = useState(false);
@@ -1975,6 +2013,26 @@ function DetalleCandidato({ candidato, onVolver, onActualizar, onPasarEtapa2 }) 
   const [decidiendo, setDecidiendo] = useState(false);
   const [rechazando, setRechazando] = useState(false);
   const [motivo, setMotivo] = useState("");
+  // Resolución de la Revisión Interna (posterior al rechazo de MELI)
+  const [resolviendoRI, setResolviendoRI] = useState(false);
+  const resolverRevisionInterna = async (decision) => {
+    const txt = decision === "aceptado"
+      ? "Continuar con el proceso a pesar de la recomendación de MELI.\n\n¿Confirmas pasar a ACEPTADO?"
+      : "Acatar la recomendación de MELI.\n\n¿Confirmas pasar a RECHAZADO?";
+    if (!confirm(txt)) return;
+    setResolviendoRI(true);
+    try {
+      const patch = { etapa_kanban: decision, estado: decision, updated_at: new Date().toISOString() };
+      if (decision === "rechazado") {
+        patch.motivo_rechazo = "Revisión interna: se acata la recomendación de MELI"
+          + (candidato.respuesta_meli ? " (" + candidato.respuesta_meli + ")" : "");
+      }
+      const { error } = await sb.from("certificaciones_mx").update(patch).eq("id", candidato.id);
+      if (error) throw new Error(error.message);
+      onActualizar({ ...candidato, ...patch });
+    } catch (e) { alert("No se pudo resolver la revisión: " + e.message); }
+    finally { setResolviendoRI(false); }
+  };
 
   // Biggy corre automático al abrir SOLO si la tarjeta ya está en Etapa 2+ y no tiene análisis.
   // En Etapa 1 (recepción) NO corre — ahí solo se visualiza.
@@ -2225,6 +2283,13 @@ Responde con este JSON exacto:
             <div style={{ fontSize: 12, fontWeight: 700, color: "#0e7490", marginBottom: 4 }}>📞 Comentario del supervisor</div>
             <div style={{ fontSize: 13, color: "#155e70", lineHeight: 1.5 }}>{candidato.comentario_supervisor}</div>
           </div>
+        )}
+
+        {/* Revisión Interna: MELI declinó y el analista decide */}
+        {etapaProspeccion(candidato) === "revision_interna" && (
+          <AvisoRevisionInterna registro={candidato} moviendo={resolviendoRI}
+            onAceptar={() => resolverRevisionInterna("aceptado")}
+            onRechazar={() => resolverRevisionInterna("rechazado")} />
         )}
 
         {/* Calificación de la llamada del supervisor (guion oficial) */}
@@ -2574,12 +2639,18 @@ const TIPO_CFG = {
 };
 
 // Mapeo estado crudo → etapa del Kanban (columna)
-const ETAPA_MX   = { pendiente: "recepcion", enviado: "validacion_meli", aprobado: "validacion_nubarium", en_entrevista: "entrevista_operaciones", alta_solicitada: "solicitud_alta", en_firma: "firma_contrato", aceptado: "aceptado", rechazado: "rechazado" };
-const ETAPA_CERT = { enviado: "recepcion", en_validacion: "validacion_meli", validado: "aceptado", con_alertas: "aceptado", certificado: "aceptado", rechazado: "rechazado" };
+// OJO: estado "rechazado" NO significa etapa Rechazado. Cuando MELI declina, la
+// tarjeta pasa a REVISIÓN INTERNA y es el analista quien decide Aceptado o
+// Rechazado. Solo si el analista ya movió la tarjeta se respeta su decisión.
+const ETAPA_MX   = { pendiente: "recepcion", enviado: "validacion_meli", aprobado: "validacion_nubarium", en_entrevista: "entrevista_operaciones", alta_solicitada: "solicitud_alta", en_firma: "firma_contrato", aceptado: "aceptado", rechazado: "revision_interna" };
+const ETAPA_CERT = { enviado: "recepcion", en_validacion: "validacion_meli", validado: "aceptado", con_alertas: "aceptado", certificado: "aceptado", rechazado: "revision_interna" };
 
 // Etapa de un prospecto (Fuente A). "pendiente" se divide: sin análisis de Biggy → Recepción;
 // con análisis cacheado → Etapa 2 (Pre Validación Biggy).
 function etapaProspeccion(row) {
+  // Si el analista ya resolvió la Revisión Interna, su decisión es definitiva
+  if (["aceptado", "rechazado"].includes(row.etapa_kanban)) return row.etapa_kanban;
+  if (row.etapa_kanban === "revision_interna") return "revision_interna";
   const base = ETAPA_MX[row.estado] || "recepcion";
   // estados definidos (enviado/aprobado/aceptado/rechazado) mandan → automatización
   if (base !== "recepcion") return base;
@@ -2618,7 +2689,10 @@ function normalizarProspeccion(row) {
 // sigue parada en MELI, el estado resuelto manda (aprobado → Etapa 5 · Nubarium,
 // rechazado → Rechazado). Movimientos manuales posteriores siguen ganando.
 function etapaPortalCert(row) {
-  const resuelto = { aprobado: "validacion_nubarium", rechazado: "rechazado" }[row.estado];
+  // La decisión del analista (Aceptado / Rechazado) siempre manda
+  if (["aceptado", "rechazado", "revision_interna"].includes(row.etapa_kanban)) return row.etapa_kanban;
+  // MELI declinó → Revisión Interna (no Rechazado directo)
+  const resuelto = { aprobado: "validacion_nubarium", rechazado: "revision_interna" }[row.estado];
   if (resuelto && row.fecha_respuesta_meli && (!row.etapa_kanban || row.etapa_kanban === "validacion_meli")) return resuelto;
   return row.etapa_kanban || ETAPA_CERT[row.estado] || "recepcion";
 }
@@ -2774,6 +2848,25 @@ function DetalleCertificacion({ cert, etapa, onVolver, onPasarEtapa2, onMoverA, 
   };
 
   // Auto-Biggy al abrir en Etapa 2+ (solo personas), si no hay análisis cacheado.
+  // Resolución de la Revisión Interna (posterior al rechazo de MELI)
+  const [resolviendoRI, setResolviendoRI] = useState(false);
+  const resolverRevisionInterna = async (decision) => {
+    const txt = decision === "aceptado"
+      ? "Continuar con el proceso a pesar de la recomendación de MELI.\n\n¿Confirmas pasar a ACEPTADO?"
+      : "Acatar la recomendación de MELI.\n\n¿Confirmas pasar a RECHAZADO?";
+    if (!confirm(txt)) return;
+    setResolviendoRI(true);
+    try {
+      const patch = { etapa_kanban: decision, updated_at: new Date().toISOString() };
+      const { error } = await sb.from("certificaciones").update(patch).eq("id", cert.id);
+      if (error) throw new Error(error.message);
+      Object.assign(cert, patch);
+      if (onMoverA) onMoverA(decision);
+      else onVolver();
+    } catch (e) { alert("No se pudo resolver la revisión: " + e.message); }
+    finally { setResolviendoRI(false); }
+  };
+
   // REGLA ESTRICTA (igual que Fuente A): Biggy corre automático ÚNICAMENTE en la
   // etapa "Pre-validación Biggy", una sola vez, y solo si hay documentos y no
   // existe un análisis guardado. En cualquier otra etapa (incluido Rechazado)
@@ -2864,6 +2957,13 @@ function DetalleCertificacion({ cert, etapa, onVolver, onPasarEtapa2, onMoverA, 
             <div style={{ fontSize: 12, fontWeight: 700, color: "#0e7490", marginBottom: 4 }}>📞 Comentario del supervisor</div>
             <div style={{ fontSize: 13, color: "#155e70", lineHeight: 1.5 }}>{cert.comentario_supervisor}</div>
           </div>
+        )}
+
+        {/* Revisión Interna: MELI declinó y el analista decide */}
+        {etapaActual === "revision_interna" && (
+          <AvisoRevisionInterna registro={cert} moviendo={resolviendoRI}
+            onAceptar={() => resolverRevisionInterna("aceptado")}
+            onRechazar={() => resolverRevisionInterna("rechazado")} />
         )}
 
         {/* Etapa 3+: Biggy para personas; vehículos usarán su Vision propia (track REPUVE) */}
@@ -4095,7 +4195,7 @@ const ESTADOS_MX_ALTA = [
   "HIDALGO","JALISCO","MICHOACAN","MORELOS","NAYARIT","NUEVO LEON","OAXACA","PUEBLA","QUERETARO",
   "QUINTANA ROO","SAN LUIS POTOSI","SINALOA","SONORA","TABASCO","TAMAULIPAS","TLAXCALA","VERACRUZ","YUCATAN","ZACATECAS",
 ];
-const SC_LIST_ALTA = ["AMX7","ECH4","ECH5","EGD0","EGD9","EHM4","EHM5","EHP5","EHP6","ELP2","ELP3","EPB3","EQR2","ERX6","ETA4","ETG4","ETL1","ETL2","EVM2","EVR3","EZL1","SAG1","SBJ1","SCC1","SCD1","SCG1","SCH1","SCJ1","SCM1","SCN1","SCP1","SCQ1","SCT1","SCU1","SCV1","SCX1","SCY1","SDC1","SDG1","SEN1","SGD1","SGD2","SGD3","SGD4","SHM1","SHP1","SHP2","SJA1","SJD1","SLE1","SLP1","SLV1","SLW1","SLZ1","SMA1","SMD1","SML1","SMO1","SMT1","SMT2","SMT3","SMX1","SMX10","SMX2","SMX3","SMX4","SMX5","SMX6","SMX7","SMX8","SMX9","SMZ1","SNG1","SNL1","SOX1","SPB1","SPD1","SPV1","SPY1","SPZ1","SQR1","SQR2","SRX1","SSL1","STA1","STG1","STJ1","STL1","STL2","STN1","STP1","STR1","STT1","STX1","SUR1","SVH1","SVM1","SVR1","SXL1","SZC1","SZL1","SZM1","XSM11"];
+const SC_LIST_ALTA = ["AMX7","ECH4","ECH5","EGD0","EGD9","EHM4","EHM5","EHP5","EHP6","ELP2","ELP3","EPB3","EQR2","ERX6","ETA4","ETG4","ETL1","ETL2","EVM2","EVR3","EZL1","SAG1","SBJ1","SCC1","SCD1","SCG1","SCH1","SCJ1","SCM1","SCN1","SCP1","SCT1","SCU1","SCV1","SCX1","SCY1","SDC1","SDG1","SEN1","SGD1","SGD2","SGD3","SGD4","SHM1","SHP1","SHP2","SJA1","SJD1","SLE1","SLP1","SLV1","SLW1","SLZ1","SMA1","SMD1","SML1","SMO1","SMT1","SMT2","SMT3","SMX1","SMX10","SMX2","SMX3","SMX4","SMX5","SMX6","SMX7","SMX8","SMX9","SMZ1","SNG1","SNL1","SOX1","SPB1","SPD1","SPV1","SPY1","SPZ1","SQR1","SQR2","SRX1","SSL1","STA1","STG1","STJ1","STL1","STL2","STN1","STP1","STR1","STT1","STX1","SUR1","SVH1","SVM1","SVR1","SXL1","SZC1","SZL1","SZM1","XSM11"];
 
 const DOCS_PERSONA_ALTA = [
   ["ine", "INE (frente)"], ["ine_reverso", "INE (reverso)"],
