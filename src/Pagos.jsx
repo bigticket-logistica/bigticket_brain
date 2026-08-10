@@ -771,43 +771,82 @@ function colorBucket(bucket) {
   return "#64748b";
 }
 
+// ── Torre de Control: caché compartida entre las tarjetas de todos los SC ──
+// get_torre_resumen NO recibe SC: calcula el día completo de los 14 SC y cada
+// tarjeta se queda con una sola fila. Sin caché, abrir la torre de 5 SC hacía
+// que la base calculara el MISMO día 5 veces.
+const cacheTorreResumen = new Map();   // fecha -> respuesta completa
+const cacheTorreFilas = new Map();     // "fecha|sc" -> filas del SC
+const enVueloResumen = new Map();      // fecha -> promesa en curso
+function limpiarCacheTorre() {
+  cacheTorreResumen.clear();
+  cacheTorreFilas.clear();
+  enVueloResumen.clear();
+}
+
+// Si dos tarjetas se abren a la vez, comparten la misma llamada en lugar de
+// disparar dos idénticas.
+async function traerTorreResumen(fecha) {
+  if (cacheTorreResumen.has(fecha)) return cacheTorreResumen.get(fecha);
+  if (enVueloResumen.has(fecha)) return enVueloResumen.get(fecha);
+  const promesa = (async () => {
+    const t0 = performance.now();
+    const { data, error } = await sb.rpc("get_torre_resumen", { fecha_desde: fecha, fecha_hasta: fecha });
+    console.log(`[Torre ${fecha}] get_torre_resumen: ${Math.round(performance.now() - t0)} ms`);
+    if (error) throw error;
+    cacheTorreResumen.set(fecha, data || {});
+    return data || {};
+  })();
+  enVueloResumen.set(fecha, promesa);
+  try { return await promesa; } finally { enVueloResumen.delete(fecha); }
+}
+
+async function traerTorreFilas(fecha, scId) {
+  const clave = `${fecha}|${scId}`;
+  if (cacheTorreFilas.has(clave)) return cacheTorreFilas.get(clave);
+  const t0 = performance.now();
+  const { data, error } = await sb.rpc("get_torre_3_pilares", { fecha_desde: fecha, fecha_hasta: fecha, sc_filtro: scId });
+  console.log(`[Torre ${fecha}] get_torre_3_pilares ${scId}: ${Math.round(performance.now() - t0)} ms`);
+  if (error) throw error;
+  cacheTorreFilas.set(clave, data || []);
+  return data || [];
+}
+
 function TorreControlSC({ scId, fecha }) {
   const [resumen, setResumen] = useState(null);
   const [filas, setFilas] = useState([]);
-  const [loading, setLoading] = useState(false);
+  const [loadingRes, setLoadingRes] = useState(false);
+  const [loadingFilas, setLoadingFilas] = useState(false);
   const [cargado, setCargado] = useState(false);
   const [abierto, setAbierto] = useState(false);          // colapsado por defecto
   const [bucketSel, setBucketSel] = useState(null);       // chip seleccionado para filtrar
+  const loading = loadingRes || loadingFilas;
 
   // Al cambiar de SC o fecha, se descarta lo cargado.
   useEffect(() => { setCargado(false); setResumen(null); setFilas([]); }, [scId, fecha]);
 
-  // CARGA PEREZOSA: get_torre_resumen + get_torre_3_pilares son las dos RPC
-  // más caras del panel. Antes se disparaban al expandir la fila aunque esta
-  // sección naciera colapsada, y bloqueaban la consulta de helpers.
+  // CARGA PEREZOSA y en DOS PISTAS: el resumen del día y las rutas del SC se
+  // piden por separado, así lo primero que llega ya se muestra en vez de
+  // esperar a que terminen las dos. Ambas van por caché compartida.
   useEffect(() => {
-    if (!abierto || cargado || loading) return;
+    if (!abierto || cargado) return;
     let cancel = false;
-    (async () => {
-      setLoading(true);
-      try {
-        const [resR, filR] = await Promise.all([
-          sb.rpc("get_torre_resumen", { fecha_desde: fecha, fecha_hasta: fecha }),
-          sb.rpc("get_torre_3_pilares", { fecha_desde: fecha, fecha_hasta: fecha, sc_filtro: scId }),
-        ]);
-        if (cancel) return;
-        const porSc = (resR.data?.por_sc || []).find((x) => x.sc === scId) || null;
-        setResumen(porSc);
-        setFilas(filR.data || []);
-        setCargado(true);
-      } catch (e) {
-        console.error("Error torre SC:", e);
-      } finally {
-        if (!cancel) setLoading(false);
-      }
-    })();
+    setCargado(true);              // ya se pidió: evita re-disparos
+    setLoadingRes(true);
+    setLoadingFilas(true);
+
+    traerTorreResumen(fecha)
+      .then((d) => { if (!cancel) setResumen(((d && d.por_sc) || []).find((x) => x.sc === scId) || null); })
+      .catch((e) => console.error("Error torre resumen:", e))
+      .finally(() => { if (!cancel) setLoadingRes(false); });
+
+    traerTorreFilas(fecha, scId)
+      .then((d) => { if (!cancel) setFilas(d); })
+      .catch((e) => console.error("Error torre 3 pilares:", e))
+      .finally(() => { if (!cancel) setLoadingFilas(false); });
+
     return () => { cancel = true; };
-  }, [abierto, cargado, loading, scId, fecha]);
+  }, [abierto, cargado, scId, fecha]);
 
   const tituloTorre = (
     <button onClick={() => setAbierto((v) => !v)}
@@ -818,13 +857,17 @@ function TorreControlSC({ scId, fecha }) {
     </button>
   );
 
-  if (abierto && loading) return (
+  const textoCargando = loadingRes && loadingFilas
+    ? "Cargando torre de control…"
+    : loadingFilas ? "Cargando rutas del SC…" : "Cargando resumen del día…";
+
+  if (abierto && loading && !resumen && filas.length === 0) return (
     <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid #e5e7eb" }}>
       {tituloTorre}
-      <div style={{ fontSize: 12, color: "#9ca3af", padding: 8 }}>Cargando torre de control…</div>
+      <div style={{ fontSize: 12, color: "#9ca3af", padding: 8 }}>{textoCargando}</div>
     </div>
   );
-  if (abierto && cargado && !resumen && filas.length === 0) return (
+  if (abierto && cargado && !loading && !resumen && filas.length === 0) return (
     <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid #e5e7eb" }}>
       {tituloTorre}
       <div style={{ fontSize: 12, color: "#9ca3af", marginTop: 4 }}>Sin datos de torre para este día.</div>
@@ -864,6 +907,9 @@ function TorreControlSC({ scId, fecha }) {
     <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid #e5e7eb" }}>
       {/* Encabezado colapsable (el detalle se consulta sólo al abrirlo) */}
       {tituloTorre}
+      {abierto && loading && (
+        <div style={{ fontSize: 11, color: "#9ca3af", padding: "4px 8px" }}>{textoCargando}</div>
+      )}
 
       {abierto && (
         <div style={{ marginTop: 8 }}>
@@ -1906,7 +1952,7 @@ function PanelControlSupervisores() {
             <option value="patentes">Patentes nuevas</option>
           </select>
         </div>
-        <button onClick={() => { setTick((t) => t + 1); cargar(true); }} disabled={refrescando}
+        <button onClick={() => { limpiarCacheTorre(); setTick((t) => t + 1); cargar(true); }} disabled={refrescando}
           style={{ padding: "6px 14px", background: "#1e3a5f", color: "#fff", border: "none", borderRadius: 6, fontSize: 13, fontWeight: 600, cursor: refrescando ? "wait" : "pointer", opacity: refrescando ? 0.7 : 1 }}>
           {refrescando ? "⏳ Actualizando…" : "🔄 Refrescar"}
         </button>
