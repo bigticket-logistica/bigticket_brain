@@ -774,11 +774,19 @@ function colorBucket(bucket) {
 function TorreControlSC({ scId, fecha }) {
   const [resumen, setResumen] = useState(null);
   const [filas, setFilas] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
+  const [cargado, setCargado] = useState(false);
   const [abierto, setAbierto] = useState(false);          // colapsado por defecto
   const [bucketSel, setBucketSel] = useState(null);       // chip seleccionado para filtrar
 
+  // Al cambiar de SC o fecha, se descarta lo cargado.
+  useEffect(() => { setCargado(false); setResumen(null); setFilas([]); }, [scId, fecha]);
+
+  // CARGA PEREZOSA: get_torre_resumen + get_torre_3_pilares son las dos RPC
+  // más caras del panel. Antes se disparaban al expandir la fila aunque esta
+  // sección naciera colapsada, y bloqueaban la consulta de helpers.
   useEffect(() => {
+    if (!abierto || cargado || loading) return;
     let cancel = false;
     (async () => {
       setLoading(true);
@@ -791,6 +799,7 @@ function TorreControlSC({ scId, fecha }) {
         const porSc = (resR.data?.por_sc || []).find((x) => x.sc === scId) || null;
         setResumen(porSc);
         setFilas(filR.data || []);
+        setCargado(true);
       } catch (e) {
         console.error("Error torre SC:", e);
       } finally {
@@ -798,12 +807,26 @@ function TorreControlSC({ scId, fecha }) {
       }
     })();
     return () => { cancel = true; };
-  }, [scId, fecha]);
+  }, [abierto, cargado, loading, scId, fecha]);
 
-  if (loading) return <div style={{ fontSize: 12, color: "#9ca3af", padding: 8 }}>Cargando torre de control…</div>;
-  if (!resumen && filas.length === 0) return (
+  const tituloTorre = (
+    <button onClick={() => setAbierto((v) => !v)}
+      style={{ display: "flex", alignItems: "center", gap: 8, background: "none", border: "none", cursor: "pointer", padding: 0, fontSize: 12, fontWeight: 700, color: "#374151" }}>
+      <span>{abierto ? "▼" : "▶"}</span>
+      📊 Torre de Control · {scId}
+      {filas.length > 0 && <span style={{ fontSize: 10, fontWeight: 600, color: "#9ca3af" }}>({filas.length} rutas)</span>}
+    </button>
+  );
+
+  if (abierto && loading) return (
     <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid #e5e7eb" }}>
-      <div style={{ fontSize: 12, fontWeight: 700, color: "#374151" }}>📊 Torre de Control · {scId}</div>
+      {tituloTorre}
+      <div style={{ fontSize: 12, color: "#9ca3af", padding: 8 }}>Cargando torre de control…</div>
+    </div>
+  );
+  if (abierto && cargado && !resumen && filas.length === 0) return (
+    <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid #e5e7eb" }}>
+      {tituloTorre}
       <div style={{ fontSize: 12, color: "#9ca3af", marginTop: 4 }}>Sin datos de torre para este día.</div>
     </div>
   );
@@ -839,13 +862,8 @@ function TorreControlSC({ scId, fecha }) {
 
   return (
     <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid #e5e7eb" }}>
-      {/* Encabezado colapsable */}
-      <button onClick={() => setAbierto((v) => !v)}
-        style={{ display: "flex", alignItems: "center", gap: 8, background: "none", border: "none", cursor: "pointer", padding: 0, fontSize: 12, fontWeight: 700, color: "#374151" }}>
-        <span>{abierto ? "▼" : "▶"}</span>
-        📊 Torre de Control · {scId}
-        {filas.length > 0 && <span style={{ fontSize: 10, fontWeight: 600, color: "#9ca3af" }}>({filas.length} rutas)</span>}
-      </button>
+      {/* Encabezado colapsable (el detalle se consulta sólo al abrirlo) */}
+      {tituloTorre}
 
       {abierto && (
         <div style={{ marginTop: 8 }}>
@@ -974,7 +992,13 @@ function PatentesNuevasSC({ scId, decididoPor }) {
     }
   }, [scId]);
 
-  useEffect(() => { cargar(); }, [cargar]);
+  // Carga DIFERIDA: esta sección es informativa y necesita 2 consultas para
+  // decidir si se muestra. Se atrasa 700 ms para que las consultas que el
+  // analista sí está esperando (helpers) salgan primero y sin competencia.
+  useEffect(() => {
+    const t = setTimeout(() => { cargar(); }, 700);
+    return () => clearTimeout(t);
+  }, [cargar]);
 
   function actualizar(idx, campo, valor) {
     setPlacas((prev) => prev.map((p, i) => (i === idx ? { ...p, [campo]: valor } : p)));
@@ -1134,6 +1158,23 @@ function fmtFechaHoraMX(iso) {
   } catch { return iso; }
 }
 
+// Corre N tareas asíncronas con concurrencia limitada. Evita que 14 RPC
+// salgan simultáneos y se peleen por el pool de Supabase (eso hace lento
+// TODO el panel, no sólo la consulta que uno está esperando).
+async function mapConLimite(items, limite, fn) {
+  const out = new Array(items.length);
+  let cursor = 0;
+  const workers = new Array(Math.min(limite, items.length)).fill(0).map(async () => {
+    for (;;) {
+      const idx = cursor++;
+      if (idx >= items.length) return;
+      out[idx] = await fn(items[idx], idx);
+    }
+  });
+  await Promise.all(workers);
+  return out;
+}
+
 function PaquetesHelper({ idRuta, helperNombre, fecha }) {
   const [paquetes, setPaquetes] = useState(undefined);
   useEffect(() => {
@@ -1220,325 +1261,18 @@ function PaquetesHelper({ idRuta, helperNombre, fecha }) {
   );
 }
 
-function RutasHelperAprobar({ scId, fecha, decididoPor }) {
-  const [rutas, setRutas] = useState([]); // agrupado por id_ruta
-  const [decisiones, setDecisiones] = useState({}); // travel_id → 'aprobado' | 'rechazado'
-  const [loading, setLoading] = useState(true);
-  const [guardando, setGuardando] = useState(null);
-  const [abierto, setAbierto] = useState(false); // colapsado por defecto
-  const [helperAbierto, setHelperAbierto] = useState(null); // "{idRuta}_{idx}" del helper expandido
-  const [motivos, setMotivos] = useState({}); // travel_id → motivo de rechazo
-  const [notificando, setNotificando] = useState(null); // travel_id en proceso de notificar
-  const [notificados, setNotificados] = useState({}); // travel_id → true si ya se notificó
-
-  useEffect(() => {
-    let cancel = false;
-    (async () => {
-      setLoading(true);
-      try {
-        const [chR, aprobR] = await Promise.all([
-          // Detalle de helpers desde vw_control_helper_diario (nombres, %, monto, zona)
-          sb.from("vw_control_helper_diario")
-            .select("id_ruta, sc, cluster, vehiculo, placa, zona, helper_flag, es_chofer, chofer_nombre, helper_nombre_limpio, helper_pct, helper_idx, helper_count, pkgs_helper, pkgs_total, monto_mxn, autorizado")
-            .eq("sc", scId).eq("fecha", fecha).eq("helper_flag", true)
-            .order("id_ruta", { ascending: true }).order("helper_idx", { ascending: true }),
-          sb.from("aprobaciones_helper")
-            .select("travel_id, decision, motivo_rechazo, notificado_at")
-            .eq("service_center_id", scId).eq("fecha", fecha),
-        ]);
-        if (cancel) return;
-
-        // Agrupar por id_ruta
-        const porRuta = new Map();
-        for (const f of chR.data || []) {
-          if (!porRuta.has(f.id_ruta)) {
-            const vehLower = String(f.vehiculo || "").toLowerCase();
-            const esForanea = String(f.zona || "").toLowerCase().includes("foran");
-            const bloqueada = esForanea && vehLower.includes("small van");
-            porRuta.set(f.id_ruta, {
-              id_ruta: f.id_ruta,
-              cluster: f.cluster,
-              vehiculo: f.vehiculo,
-              placa: f.placa,
-              zona: f.zona,
-              monto_mxn: f.monto_mxn,
-              bloqueada,
-              personas: [],
-            });
-          }
-          porRuta.get(f.id_ruta).personas.push({
-            nombre: f.es_chofer ? f.chofer_nombre : f.helper_nombre_limpio,
-            es_chofer: f.es_chofer,
-            pct: f.helper_pct,
-            pkgs: f.pkgs_helper,
-          });
-        }
-        const lista = [...porRuta.values()].sort((a, b) => {
-          if (!!a.bloqueada !== !!b.bloqueada) return a.bloqueada ? -1 : 1;
-          return String(a.id_ruta).localeCompare(String(b.id_ruta));
-        });
-        setRutas(lista);
-
-        const dec = {};
-        const mot = {};
-        const notif = {};
-        for (const a of aprobR.data || []) {
-          dec[String(a.travel_id)] = a.decision;
-          if (a.motivo_rechazo) mot[String(a.travel_id)] = a.motivo_rechazo;
-          if (a.notificado_at) notif[String(a.travel_id)] = a.notificado_at;
-        }
-        setDecisiones(dec);
-        setMotivos(mot);
-        setNotificados(notif);
-      } catch (e) {
-        console.error("Error cargando rutas helper:", e);
-      } finally {
-        if (!cancel) setLoading(false);
-      }
-    })();
-    return () => { cancel = true; };
-  }, [scId, fecha]);
-
-  async function decidir(ruta, decision) {
-    const tid = String(ruta.id_ruta);
-    setGuardando(tid);
-    try {
-      const payload = {
-        service_center_id: scId,
-        fecha,
-        travel_id: ruta.id_ruta,
-        vehicle_plate: ruta.placa || null,
-        driver_name: (ruta.personas.find((p) => p.es_chofer) || {}).nombre || null,
-        vehiculo: ruta.vehiculo || null,
-        cluster: ruta.cluster || null,
-        bloqueada: !!ruta.bloqueada,
-        decision,
-        motivo_rechazo: decision === "rechazado" ? (motivos[tid] || null) : null,
-        decidido_por: decididoPor || null,
-        decidido_at: new Date().toISOString(),
-      };
-      const { error } = await sb.from("aprobaciones_helper")
-        .upsert(payload, { onConflict: "service_center_id,fecha,travel_id" });
-      if (error) throw error;
-      setDecisiones((prev) => ({ ...prev, [tid]: decision }));
-    } catch (e) {
-      console.error("Error guardando decisión:", e);
-      alert("No se pudo guardar la decisión: " + (e.message || e));
-    } finally {
-      setGuardando(null);
-    }
-  }
-
-  // URL del webhook de n8n (path: notificar-rechazo-helper)
-  const WEBHOOK_RECHAZO = "https://bigticket2026.app.n8n.cloud/webhook/notificar-rechazo-helper";
-
-  async function notificar(ruta) {
-    const tid = String(ruta.id_ruta);
-    setNotificando(tid);
-    try {
-      // Buscar el supervisor del SC (nombre, email, teléfono)
-      const { data: sup } = await sb.from("vw_supervisores_panel")
-        .select("nombre, email, telefono, scs_asignados")
-        .contains("scs_asignados", JSON.stringify([scId])).limit(1).maybeSingle();
-
-      const helper = ruta.personas.find((p) => !p.es_chofer);
-      const chofer = ruta.personas.find((p) => p.es_chofer);
-
-      const payload = {
-        sc: scId,
-        fecha,
-        helper_nombre: helper ? helper.nombre : "",
-        chofer: chofer ? chofer.nombre : "",
-        ruta: String(ruta.id_ruta),
-        motivo: motivos[tid] || "",
-        supervisor_nombre: sup?.nombre || "",
-        supervisor_email: sup?.email || "",
-        supervisor_telefono: sup?.telefono || "",
-      };
-
-      const resp = await fetch(WEBHOOK_RECHAZO, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      if (!resp.ok) throw new Error("El webhook respondió " + resp.status);
-
-      const ahoraISO = new Date().toISOString();
-      // Registrar la notificación Y el motivo en la base (así el motivo siempre
-      // queda guardado, sin importar si se escribió antes o después de rechazar)
-      await sb.from("aprobaciones_helper")
-        .update({ notificado_at: ahoraISO, motivo_rechazo: motivos[tid] || null })
-        .eq("service_center_id", scId).eq("fecha", fecha).eq("travel_id", ruta.id_ruta);
-
-      setNotificados((prev) => ({ ...prev, [tid]: ahoraISO }));
-    } catch (e) {
-      console.error("Error notificando:", e);
-      alert("No se pudo enviar la notificación: " + (e.message || e));
-    } finally {
-      setNotificando(null);
-    }
-  }
-
-  if (loading) return <div style={{ fontSize: 12, color: "#9ca3af", padding: 8 }}>Cargando rutas con helper…</div>;
-  if (rutas.length === 0) return <div style={{ fontSize: 12, color: "#9ca3af", padding: 8 }}>Sin rutas con helper este día.</div>;
-
-  return (
-    <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid #e5e7eb" }}>
-      <button onClick={() => setAbierto((v) => !v)}
-        style={{ display: "flex", alignItems: "center", gap: 8, background: "none", border: "none", cursor: "pointer", padding: 0, fontSize: 12, fontWeight: 700, color: "#374151" }}>
-        <span>{abierto ? "▼" : "▶"}</span>
-        🧑‍🔧 Rutas con ayudante — aprobar pago
-        <span style={{ fontSize: 10, fontWeight: 600, color: "#9ca3af" }}>({rutas.length})</span>
-      </button>
-      {abierto && (
-      <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 8 }}>
-        {rutas.map((r) => {
-          const tid = String(r.id_ruta);
-          const dec = decisiones[tid];
-          const enCurso = guardando === tid;
-          // Filosofía 1: bloqueada sin decisión = se muestra como rechazada por defecto
-          const rechazadoVisual = dec === "rechazado" || (r.bloqueada && !dec);
-          const aprobadoVisual = dec === "aprobado";
-          return (
-            <div key={tid} style={{
-              background: "#fff",
-              border: `1px solid ${aprobadoVisual ? "#86efac" : rechazadoVisual ? "#fca5a5" : "#e5e7eb"}`,
-              borderRadius: 6, padding: 10,
-            }}>
-              <div style={{ display: "flex", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
-                <div style={{ flex: 1, minWidth: 220 }}>
-                  <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-                    <span style={{ fontFamily: "monospace", fontWeight: 700, fontSize: 12 }}>{r.id_ruta}</span>
-                    {r.cluster && <span style={{ fontSize: 9, background: "#e2e8f0", color: "#475569", padding: "1px 6px", borderRadius: 3, fontWeight: 700 }}>{r.cluster}</span>}
-                    {r.bloqueada && <span style={{ fontSize: 9, background: "#fee2e2", color: "#b91c1c", padding: "1px 6px", borderRadius: 3, fontWeight: 700 }}>⚠ BLOQUEADA</span>}
-                    {r.monto_mxn != null && <span style={{ fontSize: 9, background: "#dcfce7", color: "#166534", padding: "1px 6px", borderRadius: 3, fontWeight: 700 }}>${r.monto_mxn} MXN</span>}
-                  </div>
-                  <div style={{ fontSize: 10, color: "#9ca3af", marginTop: 2 }}>
-                    {r.placa && <span style={{ fontFamily: "monospace" }}>{r.placa}</span>}
-                    {r.vehiculo && <span> · {r.vehiculo}</span>}
-                    {r.zona && <span> · {r.zona}</span>}
-                  </div>
-                  {/* Personas: chofer + helpers con su % */}
-                  <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 3 }}>
-                    {r.personas.map((p, i) => (
-                      <div key={i} style={{ fontSize: 11, color: "#4b5563", display: "flex", gap: 6, alignItems: "center" }}>
-                        <span style={{ fontSize: 9, background: p.es_chofer ? "#dbeafe" : "#fef3c7", color: p.es_chofer ? "#1e40af" : "#92400e", padding: "1px 6px", borderRadius: 3, fontWeight: 700 }}>
-                          {p.es_chofer ? "CHOFER" : "HELPER"}
-                        </span>
-                        <span style={{ fontWeight: 600 }}>{p.nombre || "—"}</span>
-                        {p.pct && <span style={{ marginLeft: "auto", fontWeight: 700, color: "#374151" }}>{p.pct}</span>}
-                      </div>
-                    ))}
-                  </div>
-                  {/* Ver paquetes entregados (toda la ruta, agrupado por persona) */}
-                  <button onClick={() => setHelperAbierto(helperAbierto === r.id_ruta ? null : r.id_ruta)}
-                    style={{ marginTop: 6, fontSize: 11, color: "#1e3a5f", background: "none", border: "none", cursor: "pointer", fontWeight: 600, padding: 0, textDecoration: "underline" }}>
-                    {helperAbierto === r.id_ruta ? "▲ ocultar paquetes" : "▼ ver paquetes entregados"}
-                  </button>
-                  {helperAbierto === r.id_ruta && (
-                    <PaquetesHelper idRuta={r.id_ruta} fecha={fecha} />
-                  )}
-                </div>
-                <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                  <button onClick={() => decidir(r, "aprobado")} disabled={enCurso}
-                    style={{
-                      padding: "6px 12px", fontSize: 12, fontWeight: 700, borderRadius: 6, cursor: enCurso ? "wait" : "pointer",
-                      border: aprobadoVisual ? "2px solid #16a34a" : "1px solid #d1d5db",
-                      background: aprobadoVisual ? "#16a34a" : "#fff",
-                      color: aprobadoVisual ? "#fff" : "#16a34a",
-                    }}>✓ Aprobar</button>
-                  <button onClick={() => decidir(r, "rechazado")} disabled={enCurso}
-                    style={{
-                      padding: "6px 12px", fontSize: 12, fontWeight: 700, borderRadius: 6, cursor: enCurso ? "wait" : "pointer",
-                      border: rechazadoVisual ? "2px solid #dc2626" : "1px solid #d1d5db",
-                      background: rechazadoVisual ? "#dc2626" : "#fff",
-                      color: rechazadoVisual ? "#fff" : "#dc2626",
-                    }}>✗ Rechazar</button>
-                </div>
-              </div>
-              {r.bloqueada && !dec && (
-                <div style={{ marginTop: 8, fontSize: 10, color: "#b91c1c", fontStyle: "italic" }}>
-                  ⚠ Bloqueada por defecto (Small Van foránea) — no se paga salvo que apruebes.
-                </div>
-              )}
-              {/* Si está rechazado */}
-              {rechazadoVisual && (
-                notificados[tid] ? (
-                  /* Ya se notificó: mostrar el registro de lo enviado */
-                  <div style={{ marginTop: 8, padding: 8, background: "#f0fdf4", borderRadius: 6, border: "1px solid #bbf7d0" }}>
-                    <div style={{ fontSize: 11, fontWeight: 700, color: "#16a34a", marginBottom: 4 }}>
-                      ✓ Rechazo notificado al supervisor
-                    </div>
-                    {motivos[tid] && motivos[tid].trim() && (
-                      <div style={{ fontSize: 12, color: "#374151", marginBottom: 3 }}>
-                        <strong>Motivo enviado:</strong> {motivos[tid]}
-                      </div>
-                    )}
-                    <div style={{ fontSize: 10, color: "#6b7280" }}>
-                      📲 Enviado el {fmtFechaHoraMX(notificados[tid])}
-                    </div>
-                  </div>
-                ) : (
-                  /* Aún no notificado: campo de motivo + botón */
-                  <div style={{ marginTop: 8, padding: 8, background: "#fef2f2", borderRadius: 6, border: "1px solid #fecaca" }}>
-                    <textarea
-                      value={motivos[tid] || ""}
-                      onChange={(e) => setMotivos((prev) => ({ ...prev, [tid]: e.target.value }))}
-                      onBlur={(e) => {
-                        // Guardar el motivo en la base al salir del campo. Usamos upsert
-                        // por si la fila aún no existe (motivo escrito antes de rechazar).
-                        const txt = e.target.value;
-                        const choferRow = r.personas.find((p) => p.es_chofer);
-                        sb.from("aprobaciones_helper")
-                          .upsert({
-                            service_center_id: scId,
-                            fecha,
-                            travel_id: r.id_ruta,
-                            vehicle_plate: r.placa || null,
-                            driver_name: choferRow ? choferRow.nombre : null,
-                            vehiculo: r.vehiculo || null,
-                            cluster: r.cluster || null,
-                            bloqueada: !!r.bloqueada,
-                            decision: "rechazado",
-                            motivo_rechazo: txt || null,
-                            decidido_por: decididoPor || null,
-                            decidido_at: new Date().toISOString(),
-                          }, { onConflict: "service_center_id,fecha,travel_id" })
-                          .then(() => {}, (err) => console.error("Error guardando motivo:", err));
-                      }}
-                      placeholder="Motivo del rechazo (opcional)…"
-                      rows={2}
-                      style={{ width: "100%", fontSize: 12, padding: "6px 8px", borderRadius: 5, border: "1px solid #d1d5db", resize: "vertical", boxSizing: "border-box" }}
-                    />
-                    <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 6 }}>
-                      <button onClick={() => notificar(r)} disabled={notificando === tid}
-                        style={{
-                          padding: "6px 12px", fontSize: 12, fontWeight: 700, borderRadius: 6,
-                          cursor: notificando === tid ? "wait" : "pointer",
-                          border: "none", background: "#1e3a5f", color: "#fff",
-                        }}>
-                        {notificando === tid ? "Enviando…" : "📲 Notificar (WhatsApp + correo)"}
-                      </button>
-                      <span style={{ fontSize: 10, color: "#9ca3af" }}>Avisa al supervisor del SC</span>
-                    </div>
-                  </div>
-                )
-              )}
-            </div>
-          );
-        })}
-      </div>
-      )}
-    </div>
-  );
-}
-
-function FormularioInicialSC({ scId, fecha }) {
-  const [row, setRow] = useState(undefined); // undefined=cargando, null=sin datos
+function FormularioInicialSC({ scId, fecha, rowPrecargado = undefined }) {
+  const [row, setRow] = useState(rowPrecargado !== undefined ? (rowPrecargado || null) : undefined);
   const [verAyudantes, setVerAyudantes] = useState(false);
   useEffect(() => {
     let cancel = false;
     setVerAyudantes(false);
+    // El panel ya trajo vw_bitacora_panel completo para la fecha. Si nos pasa
+    // la fila, no hace falta una segunda consulta por cada SC que se expande.
+    if (rowPrecargado !== undefined) {
+      setRow(rowPrecargado || null);
+      return () => { cancel = true; };
+    }
     (async () => {
       try {
         const { data } = await sb.from("vw_bitacora_panel")
@@ -1547,7 +1281,7 @@ function FormularioInicialSC({ scId, fecha }) {
       } catch (e) { if (!cancel) setRow(null); }
     })();
     return () => { cancel = true; };
-  }, [scId, fecha]);
+  }, [scId, fecha, rowPrecargado]);
 
   if (row === undefined) return <div style={{ fontSize: 12, color: "#9ca3af" }}>Cargando formulario…</div>;
   if (row === null) return <div style={{ fontSize: 12, color: "#9ca3af" }}>El supervisor no completó el formulario del {fecha}.</div>;
@@ -1638,7 +1372,7 @@ function FormularioInicialSC({ scId, fecha }) {
 
 const TERCEROS_HISTORICO_DESDE = "2026-07-01";
 
-function ItemTercerosBitacora({ scId, fecha }) {
+function ItemTercerosBitacora({ scId, fecha, filasPrecargadas = undefined }) {
   const hoyMX = useMemo(() => {
     const mx = new Date(Date.now() - 6 * 60 * 60 * 1000);
     return mx.toISOString().split("T")[0];
@@ -1660,6 +1394,12 @@ function ItemTercerosBitacora({ scId, fecha }) {
     })();
     // Detalle placa a placa
     if (!esHoy && !hayHistorico) { setFilas(null); return () => { cancel = true; }; }
+    // El panel ya llamó get_terceros_confirmacion_sc para armar el ítem 6 del
+    // checklist: reusamos esas filas en vez de repetir la RPC al expandir.
+    if (filasPrecargadas !== undefined) {
+      setFilas(filasPrecargadas || []);
+      return () => { cancel = true; };
+    }
     setFilas(undefined);
     (async () => {
       try {
@@ -1670,7 +1410,7 @@ function ItemTercerosBitacora({ scId, fecha }) {
       } catch (e) { if (!cancel) setFilas([]); }
     })();
     return () => { cancel = true; };
-  }, [scId, fecha, esHoy, hayHistorico]);
+  }, [scId, fecha, esHoy, hayHistorico, filasPrecargadas]);
 
   // Índice de movimientos por placa (para pintar el warning en su fila)
   const cambiosPorPlaca = useMemo(() => {
@@ -1969,8 +1709,9 @@ function PanelControlSupervisores() {
   const [error, setError] = useState(null);
   const [expandido, setExpandido] = useState(new Set());
   const [filtroSc, setFiltroSc] = useState("");  // "" = todos
-  const [filtroEvento, setFiltroEvento] = useState("todos");  // todos|bitacora|helper|torre|ambulancias|patentes
+  const [filtroEvento, setFiltroEvento] = useState("todos");  // todos|bitacora|torre|ambulancias|patentes
   const [terceros6, setTerceros6] = useState({});   // {scId: {total, confirmadas, completo}}
+  const [terceros6Rows, setTerceros6Rows] = useState({}); // {scId: filas} — se reusan al expandir
   const [t6Activo, setT6Activo] = useState(false);  // true solo cuando la fecha seleccionada es HOY (MX)
   const [refrescando, setRefrescando] = useState(false); // refresh silencioso (no desmonta la tabla)
   const [tick, setTick] = useState(0);              // fuerza recarga de los detalles expandidos
@@ -2019,7 +1760,9 @@ function PanelControlSupervisores() {
       const esHoy = fecha === mxHoy;
       const t6Idx = {};
       const scsUnicos = Array.from(new Set(lista.map((x) => x.sc)));
-      const res = await Promise.all(scsUnicos.map(async (sc) => {
+      // Concurrencia limitada: 14 RPC simultáneas saturan el pool de Supabase
+      // y hacen lento todo lo demás que el analista está esperando.
+      const res = await mapConLimite(scsUnicos, 4, async (sc) => {
         try {
           if (esHoy) {
             const { data, error } = await sb.rpc("get_terceros_confirmacion_sc", { p_sc: sc, p_fecha: mxHoy });
@@ -2027,7 +1770,7 @@ function PanelControlSupervisores() {
             const fs = Array.isArray(data) ? data : [];
             const total = fs.length;
             const confirmadas = fs.filter((f) => f.confirmado_hoy).length;
-            return { sc, t: { total, confirmadas, completo: total === 0 || confirmadas === total } };
+            return { sc, filas: fs, t: { total, confirmadas, completo: total === 0 || confirmadas === total } };
           } else {
             const { data, error } = await sb.rpc("get_terceros_resumen_dia", { p_sc: sc, p_fecha: fecha });
             if (error) throw error;
@@ -2037,9 +1780,15 @@ function PanelControlSupervisores() {
             return { sc, t: { total: confirmadas, confirmadas, completo: true } };
           }
         } catch { return { sc, t: null }; }
-      }));
-      for (const r of res) if (r.t) t6Idx[r.sc] = r.t;
+      });
+      const t6Rows = {};
+      for (const r of res || []) {
+        if (!r) continue;
+        if (r.t) t6Idx[r.sc] = r.t;
+        if (r.filas) t6Rows[r.sc] = r.filas;
+      }
 
+      setTerceros6Rows(t6Rows);
       setTerceros6(t6Idx);
       setT6Activo(true); // el resumen aplica tanto para hoy como para fechas pasadas con datos
       setSupervisores(lista);
@@ -2126,7 +1875,10 @@ function PanelControlSupervisores() {
   return (
     <div className="pg">
       <div className="sec-title">Consolidaciones Bitácora por SC</div>
-      <div className="sec-sub">Torre de control, rutas con helper, ambulancias y bitácora del supervisor · por SC</div>
+      <div className="sec-sub">Torre de control, ambulancias y bitácora del supervisor · por SC</div>
+      <div style={{ fontSize: 11, color: "#64748b", background: "#f8fafc", border: "1px solid #e4e7ec", borderRadius: 5, padding: "6px 10px", marginBottom: 10 }}>
+        🧑‍🔧 La aprobación del pago de ayudantes se hace ahora en la pestaña <b>Ayudantes</b>, junto a los números de entrega del día.
+      </div>
 
       {/* Barra de control: fecha + refrescar */}
       <div className="form-card" style={{ marginBottom: 12, display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
@@ -2149,7 +1901,6 @@ function PanelControlSupervisores() {
             style={{ padding: "6px 10px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }}>
             <option value="todos">Todos</option>
             <option value="bitacora">Bitácora del supervisor</option>
-            <option value="helper">Rutas con helper</option>
             <option value="torre">Torre de Control</option>
             <option value="ambulancias">Ambulancias</option>
             <option value="patentes">Patentes nuevas</option>
@@ -2236,19 +1987,15 @@ function PanelControlSupervisores() {
 
                           {/* Formulario inicial del supervisor (del día elegido) */}
                           {(filtroEvento === "todos" || filtroEvento === "bitacora") && (
-                            <FormularioInicialSC scId={s.sc} fecha={fecha} />
+                            <FormularioInicialSC scId={s.sc} fecha={fecha} rowPrecargado={bitHoy[s.sc] || null} />
                           )}
 
                           {/* ─── 6 · Confirmación de Terceros (independiente del formulario) ─── */}
                           {(filtroEvento === "todos" || filtroEvento === "bitacora") && (
                             <div style={{ marginTop: 8 }}>
-                              <ItemTercerosBitacora scId={s.sc} fecha={fecha} />
+                              <ItemTercerosBitacora scId={s.sc} fecha={fecha}
+                                filasPrecargadas={terceros6Rows[s.sc]} />
                             </div>
-                          )}
-
-                          {/* ─── Rutas con helper (mismo día) ─── */}
-                          {(filtroEvento === "todos" || filtroEvento === "helper") && (
-                            <RutasHelperAprobar scId={s.sc} fecha={fecha} decididoPor={null} />
                           )}
 
                           {/* ─── Torre de Control del SC (mismo día) ─── */}
@@ -3985,7 +3732,15 @@ function ConciliacionTercerosMX({ usuario }) {
     const filasDetalle = filasSC.map(d => `
       <tr>
         <td>${fmtFechaDDMM(d.fecha)}</td><td>${d.placa || ""}</td><td>${d.id_ruta || ""}</td>
-        <td style="text-align:left">${d.driver_name || ""}</td><td>${(() => { const a = auxMap[String(d.id_ruta)]; return (a && String(a.decision).toLowerCase() === "aprobado") ? "Si" : "No"; })()}</td>
+        <td style="text-align:left">${d.driver_name || ""}</td><td>${(() => {
+          const a = auxMap[String(d.id_ruta)];
+          const aprobado = a && String(a.decision).toLowerCase() === "aprobado";
+          if (aprobado) return "Si";
+          // El comentario del analista viaja al transportista: antes se cargaba
+          // pero nunca se mostraba, y el "No" quedaba sin explicación.
+          const motivo = a && a.motivo ? String(a.motivo).trim() : "";
+          return motivo ? `No<br><span style="font-size:8px;color:#666">${motivo}</span>` : "No";
+        })()}</td>
         <td>${d.service_center_id || ""}</td><td>${d.cargado ?? ""}</td><td>${d.entregado ?? ""}</td>
         <td>${fmtPct(d.pct_entrega)}</td><td>${fmtKm(d.km_pago)}</td><td>${fmtFactor(d.factor_ns)}</td>
         <td style="color:#166534;font-weight:600">${(d.tiene_bonificacion || Number(d.monto_bonificacion||0) > 0) ? ("+" + fmtMon(d.monto_bonificacion)) : "—"}</td>
@@ -4416,7 +4171,18 @@ function ConciliacionTercerosMX({ usuario }) {
               <td style={{ padding: "5px 8px", textAlign: "center", fontWeight: 700 }} title={d.traspaso ? `Traspasado desde ${d.traspaso.de} (${String(d.traspaso.at || "").slice(0, 10)})` : undefined}>{d.placa}{d.traspaso ? " 🔁" : ""}</td>
               <td style={{ padding: "5px 8px", textAlign: "center" }}>{d.id_ruta}</td>
               <td style={{ padding: "5px 8px" }}>{d.driver_name}</td>
-              <td style={{ padding: "5px 8px", textAlign: "center" }}>{(() => { const a = auxMap[String(d.id_ruta)]; return (a && String(a.decision).toLowerCase() === "aprobado") ? "Si" : "No"; })()}</td>
+              <td style={{ padding: "5px 8px", textAlign: "center" }}>{(() => {
+                const a = auxMap[String(d.id_ruta)];
+                const aprobado = a && String(a.decision).toLowerCase() === "aprobado";
+                const motivo = a && a.motivo ? String(a.motivo).trim() : "";
+                if (aprobado) return "Si";
+                return (
+                  <span title={motivo || "Sin decisión del analista"}>
+                    No
+                    {motivo && <span style={{ display: "block", fontSize: 9, color: "#b45309", fontWeight: 600 }}>💬 motivo</span>}
+                  </span>
+                );
+              })()}</td>
               <td style={{ padding: "5px 8px", textAlign: "center" }}>{d.service_center_id}</td>
               <td style={{ padding: "5px 8px", textAlign: "center" }}>{d.cargado}</td>
               <td style={{ padding: "5px 8px", textAlign: "center" }}>{d.entregado}</td>
@@ -5392,9 +5158,9 @@ function ModuloPagosMadre({ usuario }) {
     { id: "terceros",    label: "Terceros",              desc: "Empresas subcontratadas por patente" },
     { id: "conciliacion", label: "Conciliación Terceros", desc: "Conciliación semanal por empresa" },
     { id: "historial_pago", label: "Historial de Pago", desc: "Resumen semanal: cierres, cambios, saldos y reporte" },
-    { id: "ayudantes",   label: "Ayudantes",             desc: "Detalle diario de auxiliares" },
+    { id: "ayudantes",   label: "Ayudantes",             desc: "Números del día y aprobación del pago del ayudante" },
     { id: "ambulancias", label: "Ambulancias",           desc: "Traspasos internos ruta→ruta" },
-    { id: "supervisores", label: "Consolidaciones Bitácora",   desc: "Consolidado por SC: torre, helpers, ambulancias y bitácora" },
+    { id: "supervisores", label: "Consolidaciones Bitácora",   desc: "Consolidado por SC: torre de control, ambulancias y bitácora del supervisor" },
     { id: "padron_meli", label: "Padrón MELI",         desc: "Conductores y vehículos · altas, bajas y cambios diarios" },
     { id: "prefacturas", label: "Prefacturas",           desc: "Envío masivo de prefacturas MX" },
     { id: "config",      label: "Configuración",         desc: "Tarifario, zonas y reglas" },
@@ -5437,14 +5203,14 @@ function ModuloPagosMadre({ usuario }) {
         </div>
       ) : (
         <>
-          {subtab === "listado"     && <ListadoPagosDiarios />}
+          {subtab === "listado"     && <ListadoPagosDiarios usuario={usuario} />}
           {subtab === "pagos_pausados" && <PagosPausados usuario={usuario} />}
           {subtab === "info_ruta"   && <InformacionDeRuta />}
           {subtab === "torre_3p"    && <TorreTresPilares />}
           {subtab === "terceros"    && <TercerosMX />}
           {subtab === "conciliacion" && <ConciliacionTercerosMX usuario={usuario} />}
           {subtab === "historial_pago" && <HistorialPagoMX usuario={usuario} />}
-          {subtab === "ayudantes"   && <AyudantesDetalleDia />}
+          {subtab === "ayudantes"   && <AyudantesDetalleDia usuario={usuario} />}
           {subtab === "ambulancias" && <PoolMeliAmbulancias />}
           {subtab === "supervisores" && <PanelControlSupervisores />}
           {subtab === "padron_meli" && <PadronMeliAdmin usuario={usuario} />}
@@ -5552,6 +5318,23 @@ function calcularSemanaPago(fechaStr) {
 const SC_FORANEOS = new Set(["SCY1","SCQ1","SQR1","SHP1","STL1","STX1","SVH1","SPB1","SPY1"]);
 
 const AUX_COBRAR_MELI = 350;
+
+// Webhook n8n que avisa al supervisor cuando el analista rechaza un ayudante.
+const WEBHOOK_RECHAZO_HELPER = "https://bigticket2026.app.n8n.cloud/webhook/notificar-rechazo-helper";
+
+// ── Estado del auxiliar: MISMA lógica que usa calcularDia() ────────────────
+// Se centraliza acá para que la pestaña Ayudantes muestre exactamente lo que
+// el motor va a pagar, sin reimplementar la regla y quedar desfasada.
+//   pagaSegunMaestro = con_ayudante === "SI" en vw_maestro_supervisores_auto
+//   La decisión del analista manda; sin decisión no se paga.
+function estadoAuxiliar({ pagaSegunMaestro, decision, sc, tipologia }) {
+  if (!pagaSegunMaestro) return "SIN_HELPER";
+  const d = decision ? String(decision).toLowerCase() : null;
+  if (d === "aprobado") return "APROBADO";
+  if (d === "rechazado") return "RECHAZADO";
+  if (SC_FORANEOS.has(sc) && tipologia === "SMALL VAN") return "BLOQUEADO_ESTRUCTURAL";
+  return "SIN_APROBACION";
+}
 
 function calcularAjusteVisitadoNS(pctVisitado, nsPct, cfg) {
   const visMin    = (cfg && cfg.vis_min_pago   != null) ? cfg.vis_min_pago   : 90;
@@ -6123,7 +5906,7 @@ function ConfigBonificaciones() {
   );
 }
 
-function ListadoPagosDiarios() {
+function ListadoPagosDiarios({ usuario }) {
   const [fecha, setFecha] = useState(fechaOperativaOffset(-1)); // ayer por defecto
   const [excelOpen, setExcelOpen] = useState(false);
   const [excelMode, setExcelMode] = useState("dia"); // dia | rango
@@ -7753,7 +7536,7 @@ function DetalleRutaExpandido({ detalle, fmtHoraMX, onClose }) {
 
 const N8N_WEBHOOK_RERUN_HELPERS = "https://bigticket2026.app.n8n.cloud/webhook/rerun-helpers-mx";
 
-function AyudantesDetalleDia() {
+function AyudantesDetalleDia({ usuario }) {
   // ── Fecha por defecto: día anterior (operativo MX) ──
   const fechaAyerOperativa = () => {
     try {
@@ -7773,6 +7556,19 @@ function AyudantesDetalleDia() {
   const [disparando, setDisparando] = useState(false);
   const [msgFlujo, setMsgFlujo] = useState("");
 
+  // ── Aprobación de ayudantes (movida desde Consolidaciones Bitácora) ──
+  const [maestro, setMaestro] = useState([]);          // vw_maestro_supervisores_auto del día
+  const [aprob, setAprob] = useState({});              // travel_id → fila de aprobaciones_helper
+  const [cfgAux, setCfgAux] = useState({ pagar: 300, cobrar: AUX_COBRAR_MELI });
+  const [supPorSc, setSupPorSc] = useState({});        // sc → supervisor (para el aviso)
+  const [motivos, setMotivos] = useState({});          // travel_id → comentario del analista
+  const [guardando, setGuardando] = useState(null);
+  const [notificando, setNotificando] = useState(null);
+  const [filaAbierta, setFilaAbierta] = useState(null);
+  const [filtroDecision, setFiltroDecision] = useState("todas");
+
+  const quien = () => (usuario && (usuario.nombre || usuario.email)) || "Brain";
+
   useEffect(() => { cargar(); }, [fecha]);
 
   // Lectura paginada (Supabase REST corta en 1000 filas)
@@ -7790,13 +7586,48 @@ function AyudantesDetalleDia() {
   const cargar = async () => {
     setLoading(true);
     try {
-      const [snaps, ents] = await Promise.all([
+      const [snaps, ents, maes, aprobRows, cfgR, supR] = await Promise.all([
         fetchAll("logistic_ayudantes_snapshots", "id_ruta,service_center_id,cluster,driver_id,driver_name,vehiculo_descripcion,placa,is_assignable,momento_dia,hora_snapshot,has_helper,entregados,total_envios"),
         fetchAll("meli_paquetes_entregados", "id_ruta,service_center_id,driver_id,driver_name,user_id_real,user_name_real"),
+        // El Maestro es el gatillo del pago: sin con_ayudante = SI, el motor
+        // paga $0 aunque el analista apruebe.
+        fetchAll("vw_maestro_supervisores_auto", "idviaje,service_center_id,driver_name,con_ayudante,cantidad_personas,tipo_vehiculo,patentes,cluster_meli,status_final"),
+        fetchAll("aprobaciones_helper", "travel_id,service_center_id,decision,motivo_rechazo,notificado_at,decidido_por,decidido_at"),
+        sb.from("config_pagos_mx").select("clave, valor"),
+        sb.from("vw_supervisores_panel").select("nombre, email, telefono, scs_asignados"),
       ]);
       setSnapshots(snaps);
       setEntregas(ents);
-    } catch (e) { console.error(e); setSnapshots([]); setEntregas([]); }
+      setMaestro(maes);
+
+      const idxAprob = {}, mot = {};
+      for (const a of aprobRows) {
+        const k = String(a.travel_id);
+        idxAprob[k] = a;
+        if (a.motivo_rechazo) mot[k] = a.motivo_rechazo;
+      }
+      setAprob(idxAprob);
+      setMotivos(mot);
+
+      const c = {};
+      for (const r of (cfgR.data || [])) c[r.clave] = Number(r.valor);
+      setCfgAux({
+        pagar:  c.aux_por_pagar  != null ? c.aux_por_pagar  : 300,
+        cobrar: c.aux_por_cobrar != null ? c.aux_por_cobrar : AUX_COBRAR_MELI,
+      });
+
+      // Supervisor por SC: se trae una vez para todo el día, en vez de una
+      // consulta por cada rechazo que se notifica.
+      const sm = {};
+      for (const sup of (supR.data || [])) {
+        const scs = Array.isArray(sup.scs_asignados) ? sup.scs_asignados : [];
+        for (const sc of scs) if (!sm[String(sc)]) sm[String(sc)] = sup;
+      }
+      setSupPorSc(sm);
+    } catch (e) {
+      console.error(e);
+      setSnapshots([]); setEntregas([]); setMaestro([]); setAprob({});
+    }
     setLoading(false);
   };
 
@@ -7940,6 +7771,302 @@ function AyudantesDetalleDia() {
         return a.id_ruta - b.id_ruta;
       });
   }, [entregas, rutasSnapHelper, entregadosEsperados, busqueda]);
+
+  // ══════════════════════════════════════════════════════════════════════
+  //  APROBACIÓN DE AYUDANTES — "ver los números y aprobar"
+  // ══════════════════════════════════════════════════════════════════════
+
+  const maestroPorRuta = useMemo(() => {
+    const m = {};
+    for (const r of maestro) {
+      const k = String(r.idviaje || "");
+      if (k) m[k] = r;
+    }
+    return m;
+  }, [maestro]);
+
+  // Universo de aprobación = UNIÓN de dos fuentes que no siempre coinciden:
+  //   · snapshots con has_helper al cierre  → lo que se ve en la operación
+  //   · Maestro con con_ayudante = SI       → lo que el motor efectivamente paga
+  // Antes solo se veía la primera, así que una ruta que el Maestro marcaba con
+  // ayudante y el snapshot no, nunca aparecía para decidir y quedaba sin pagar.
+  const filasPago = useMemo(() => {
+    const coincideBusqueda = (f) => {
+      if (!busqueda) return true;
+      const q = busqueda.toLowerCase();
+      return (
+        (f.driver_name || "").toLowerCase().includes(q) ||
+        (f.sc || "").toLowerCase().includes(q) ||
+        String(f.id_ruta).includes(busqueda) ||
+        (f.helpers || []).some((h) => (h.nombre || "").toLowerCase().includes(q))
+      );
+    };
+
+    const mapa = new Map();
+    for (const f of detalleEntregas) {
+      mapa.set(String(f.id_ruta), { ...f, enSnapshot: true });
+    }
+    for (const r of maestro) {
+      const k = String(r.idviaje || "");
+      if (!k) continue;
+      const pagaMaestro = String(r.con_ayudante || "").toUpperCase() === "SI";
+      if (mapa.has(k)) continue;
+      if (!pagaMaestro) continue;
+      const fila = {
+        id_ruta: r.idviaje, sc: r.service_center_id, driver_name: r.driver_name,
+        driver_paq: null, driver_pct: null, helpers: [], total: 0,
+        esperado: null, cobertura: null, sinRegistro: 0,
+        estado: "SOLO_MAESTRO", enSnapshot: false,
+      };
+      if (coincideBusqueda(fila)) mapa.set(k, fila);
+    }
+
+    const out = [];
+    for (const [k, f] of mapa.entries()) {
+      const m = maestroPorRuta[k] || null;
+      const snap = rutasSnapHelper[k] || null;
+      const pagaSegunMaestro = !!m && String(m.con_ayudante || "").toUpperCase() === "SI";
+      const sc = f.sc || (m && m.service_center_id) || null;
+      const vehiculo = (m && m.tipo_vehiculo) || null;
+      const tipologia = parsearTipologia(vehiculo, null);
+      const a = aprob[k] || null;
+      const decision = a && a.decision ? String(a.decision).toLowerCase() : null;
+      const bloqueada = SC_FORANEOS.has(sc) && tipologia === "SMALL VAN";
+      const estadoAux = estadoAuxiliar({ pagaSegunMaestro, decision, sc, tipologia });
+      const montoPagar = estadoAux === "APROBADO" ? cfgAux.pagar : 0;
+      const montoCobrar = pagaSegunMaestro ? cfgAux.cobrar : 0;
+
+      // Contradicciones que antes quedaban invisibles
+      const alertas = [];
+      if (f.enSnapshot && !pagaSegunMaestro) {
+        alertas.push(m
+          ? "El Maestro no marca ayudante en esta ruta: el motor paga $0 aunque la apruebes."
+          : "La ruta no está en el Maestro del día: el motor no la va a procesar.");
+      }
+      if (!f.enSnapshot && pagaSegunMaestro) {
+        alertas.push("El snapshot no marcó ayudante, pero el Maestro sí: esta ruta SÍ paga si la aprobás.");
+      }
+      if (decision === "aprobado" && !pagaSegunMaestro) {
+        alertas.push("Aprobada, pero el Maestro dice que no hubo ayudante: el motor pagará $0.");
+      }
+      if (f.estado === "INCOMPLETO" || f.estado === "SIN_DETALLE") {
+        alertas.push("Los % de entrega no son confiables: la captura de paquetes está incompleta.");
+      }
+      if (bloqueada && !decision) {
+        alertas.push("Bloqueada por defecto (SC foráneo + Small Van): no se paga salvo aprobación explícita.");
+      }
+
+      out.push({
+        ...f,
+        sc,
+        placa: (m && m.patentes) || (snap && snap.placa) || null,
+        vehiculo,
+        cluster: (m && m.cluster_meli) || null,
+        tipologia,
+        personas_maestro: m && m.cantidad_personas != null ? Number(m.cantidad_personas) : null,
+        status_final: (m && m.status_final) || null,
+        enMaestro: !!m,
+        pagaSegunMaestro,
+        bloqueada,
+        decision,
+        estadoAux,
+        montoPagar,
+        montoCobrar,
+        margen: montoCobrar - montoPagar,
+        motivo_guardado: (a && a.motivo_rechazo) || null,
+        notificado_at: (a && a.notificado_at) || null,
+        decidido_por: (a && a.decidido_por) || null,
+        decidido_at: (a && a.decidido_at) || null,
+        alertas,
+      });
+    }
+
+    const ordEstado = { SOLO_MAESTRO: 0, SIN_DETALLE: 1, INCOMPLETO: 2, SOLO_DRIVER: 3, OK: 4 };
+    return out
+      .filter((f) => {
+        if (filtroDecision === "pendientes") return f.pagaSegunMaestro && !f.decision;
+        if (filtroDecision === "aprobadas")  return f.decision === "aprobado";
+        if (filtroDecision === "rechazadas") return f.decision === "rechazado";
+        if (filtroDecision === "bloqueadas") return f.bloqueada && !f.decision;
+        if (filtroDecision === "alertas")    return f.alertas.length > 0;
+        return true;
+      })
+      .sort((a, b) => {
+        // Primero lo que falta decidir y paga; después el resto
+        const pa = a.pagaSegunMaestro && !a.decision ? 0 : 1;
+        const pb = b.pagaSegunMaestro && !b.decision ? 0 : 1;
+        if (pa !== pb) return pa - pb;
+        if (a.bloqueada !== b.bloqueada) return a.bloqueada ? -1 : 1;
+        if ((ordEstado[a.estado] ?? 9) !== (ordEstado[b.estado] ?? 9)) return (ordEstado[a.estado] ?? 9) - (ordEstado[b.estado] ?? 9);
+        if ((a.sc || "") !== (b.sc || "")) return (a.sc || "").localeCompare(b.sc || "");
+        return String(a.id_ruta).localeCompare(String(b.id_ruta));
+      });
+  }, [detalleEntregas, maestro, maestroPorRuta, rutasSnapHelper, aprob, cfgAux, busqueda, filtroDecision]);
+
+  // Los números del día (sin filtros: el total siempre es el total)
+  const numerosPago = useMemo(() => {
+    const base = [];
+    const vistos = new Set();
+    for (const f of detalleEntregas) { vistos.add(String(f.id_ruta)); base.push(String(f.id_ruta)); }
+    for (const r of maestro) {
+      const k = String(r.idviaje || "");
+      if (k && !vistos.has(k) && String(r.con_ayudante || "").toUpperCase() === "SI") { vistos.add(k); base.push(k); }
+    }
+    let paganMaestro = 0, aprobadas = 0, rechazadas = 0, pendientes = 0, bloqueadas = 0, conAlerta = 0;
+    let aPagar = 0, aCobrar = 0;
+    for (const k of base) {
+      const m = maestroPorRuta[k] || null;
+      const paga = !!m && String(m.con_ayudante || "").toUpperCase() === "SI";
+      const a = aprob[k] || null;
+      const dec = a && a.decision ? String(a.decision).toLowerCase() : null;
+      const tip = parsearTipologia((m && m.tipo_vehiculo) || null, null);
+      const sc = (m && m.service_center_id) || null;
+      if (paga) {
+        paganMaestro++;
+        aCobrar += cfgAux.cobrar;
+        if (dec === "aprobado") { aprobadas++; aPagar += cfgAux.pagar; }
+        else if (dec === "rechazado") rechazadas++;
+        else { pendientes++; if (SC_FORANEOS.has(sc) && tip === "SMALL VAN") bloqueadas++; }
+      }
+      if (dec === "aprobado" && !paga) conAlerta++;
+      if (!paga && m == null) conAlerta++;
+    }
+    return { total: base.length, paganMaestro, aprobadas, rechazadas, pendientes, bloqueadas, conAlerta, aPagar, aCobrar, margen: aCobrar - aPagar };
+  }, [detalleEntregas, maestro, maestroPorRuta, aprob, cfgAux]);
+
+  // ── Acciones ─────────────────────────────────────────────────────────
+  const filaAprobPayload = (f, extra) => ({
+    service_center_id: f.sc,
+    fecha,
+    travel_id: f.id_ruta,
+    vehicle_plate: f.placa || null,
+    driver_name: f.driver_name || null,
+    vehiculo: f.vehiculo || null,
+    cluster: f.cluster || null,
+    bloqueada: !!f.bloqueada,
+    ...extra,
+  });
+
+  const decidir = async (f, decision) => {
+    const tid = String(f.id_ruta);
+    setGuardando(tid);
+    try {
+      const payload = filaAprobPayload(f, {
+        decision,
+        motivo_rechazo: decision === "rechazado" ? (motivos[tid] || null) : null,
+        decidido_por: quien(),                 // antes quedaba siempre en null
+        decidido_at: new Date().toISOString(),
+      });
+      const { error } = await sb.from("aprobaciones_helper")
+        .upsert(payload, { onConflict: "service_center_id,fecha,travel_id" });
+      if (error) throw error;
+      setAprob((prev) => ({ ...prev, [tid]: { ...(prev[tid] || {}), ...payload } }));
+    } catch (e) {
+      alert("No se pudo guardar la decisión: " + (e.message || e));
+    } finally { setGuardando(null); }
+  };
+
+  // Guardar el comentario SIN forzar una decisión. Antes el onBlur del campo
+  // escribía decision:"rechazado" y dejaba rechazos que nadie apretó.
+  const guardarMotivo = async (f) => {
+    const tid = String(f.id_ruta);
+    const txt = (motivos[tid] || "").trim() || null;
+    if (txt === (f.motivo_guardado || null)) return;
+    try {
+      if (aprob[tid]) {
+        const { error } = await sb.from("aprobaciones_helper")
+          .update({ motivo_rechazo: txt })
+          .eq("service_center_id", f.sc).eq("fecha", fecha).eq("travel_id", f.id_ruta);
+        if (error) throw error;
+        setAprob((prev) => ({ ...prev, [tid]: { ...prev[tid], motivo_rechazo: txt } }));
+      } else {
+        const payload = filaAprobPayload(f, { decision: null, motivo_rechazo: txt });
+        const { error } = await sb.from("aprobaciones_helper")
+          .upsert(payload, { onConflict: "service_center_id,fecha,travel_id" });
+        if (error) throw error;
+        setAprob((prev) => ({ ...prev, [tid]: payload }));
+      }
+    } catch (e) { console.error("Error guardando comentario:", e); }
+  };
+
+  const notificar = async (f) => {
+    const tid = String(f.id_ruta);
+    if (f.notificado_at && !window.confirm(
+      `Ya se notificó el ${fmtFechaHoraMX(f.notificado_at)}.
+
+¿Reenviar el aviso al supervisor?`)) return;
+    const sup = supPorSc[String(f.sc)] || {};
+    setNotificando(tid);
+    try {
+      const payload = {
+        sc: f.sc,
+        fecha,
+        ruta: String(f.id_ruta),
+        chofer: f.driver_name || "",
+        chofer_pct: f.driver_pct,
+        // TODOS los ayudantes de la ruta, no solo el primero
+        helper_nombre: f.helpers.map((h) => h.nombre).join(" y "),
+        helpers: f.helpers.map((h) => ({ nombre: h.nombre, paquetes: h.paquetes, pct: h.pct })),
+        helpers_detalle: f.helpers.map((h) => `${h.nombre}: ${h.paquetes} paq. (${h.pct}%)`).join(" · "),
+        total_paquetes: f.total,
+        motivo: motivos[tid] || "",
+        monto_no_pagado: cfgAux.pagar,
+        supervisor_nombre: sup.nombre || "",
+        supervisor_email: sup.email || "",
+        supervisor_telefono: sup.telefono || "",
+        notificado_por: quien(),
+      };
+      const r = await fetch(WEBHOOK_RECHAZO_HELPER, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!r.ok) throw new Error("El webhook respondió " + r.status);
+      const ahora = new Date().toISOString();
+      await sb.from("aprobaciones_helper")
+        .update({ notificado_at: ahora, motivo_rechazo: motivos[tid] || null })
+        .eq("service_center_id", f.sc).eq("fecha", fecha).eq("travel_id", f.id_ruta);
+      setAprob((prev) => ({ ...prev, [tid]: { ...(prev[tid] || {}), notificado_at: ahora, motivo_rechazo: motivos[tid] || null } }));
+    } catch (e) {
+      alert("No se pudo enviar la notificación: " + (e.message || e));
+    } finally { setNotificando(null); }
+  };
+
+  // Aprobación en lote: solo rutas que pagan, sin decisión y NO bloqueadas.
+  // Las bloqueadas (foráneo + Small Van) siguen siendo una por una a propósito.
+  const aprobarLote = async () => {
+    const objetivo = filasPago.filter((f) => f.pagaSegunMaestro && !f.decision && !f.bloqueada);
+    if (objetivo.length === 0) return;
+    const total = objetivo.length * cfgAux.pagar;
+    if (!window.confirm(
+      `¿Aprobar ${objetivo.length} ruta(s) con ayudante del ${fecha}?
+
+` +
+      `Se pagarán $${total.toLocaleString("es-MX")} MXN en total ($${cfgAux.pagar} por ruta).
+` +
+      `Queda registrado a tu nombre: ${quien()}.
+
+` +
+      `Aplica SOLO a las rutas visibles con los filtros actuales.\n` +
+      `Las rutas bloqueadas (SC foráneo + Small Van) NO se incluyen: esas se aprueban una por una.`)) return;
+    setGuardando("lote");
+    try {
+      const ahora = new Date().toISOString();
+      const payloads = objetivo.map((f) => filaAprobPayload(f, {
+        decision: "aprobado", motivo_rechazo: null, decidido_por: quien(), decidido_at: ahora,
+      }));
+      const { error } = await sb.from("aprobaciones_helper")
+        .upsert(payloads, { onConflict: "service_center_id,fecha,travel_id" });
+      if (error) throw error;
+      setAprob((prev) => {
+        const n = { ...prev };
+        for (const pl of payloads) n[String(pl.travel_id)] = { ...(n[String(pl.travel_id)] || {}), ...pl };
+        return n;
+      });
+    } catch (e) {
+      alert("No se pudo aprobar el lote: " + (e.message || e));
+    } finally { setGuardando(null); }
+  };
 
   // ── Salud del flujo ──
   const salud = useMemo(() => {
@@ -8099,23 +8226,61 @@ function AyudantesDetalleDia() {
 
   // ── Excel: vista entregas ──
   const descargarExcelEntregas = () => {
-    if (detalleEntregas.length === 0) return;
-    const headers = ["Fecha", "SC", "ID Ruta", "Chofer", "% Entrega Chofer", "Paq. Chofer", "Ayudante(s)", "% Entrega Ayudante(s)", "Paq. Ayudante(s)", "Paq. Capturados", "Paq. Esperados (snapshot)", "Cobertura %", "Sin Registro", "Estado"];
-    const data = detalleEntregas.map(f => [
-      fecha, f.sc, f.id_ruta, f.driver_name || "",
+    if (filasPago.length === 0) return;
+    const headers = ["Fecha", "SC", "ID Ruta", "Placa", "Vehículo", "Chofer", "% Entrega Chofer", "Paq. Chofer",
+      "Ayudante(s)", "% Entrega Ayudante(s)", "Paq. Ayudante(s)", "Paq. Capturados", "Paq. Esperados (snapshot)",
+      "Cobertura %", "Sin Registro", "Captura", "Maestro con ayudante", "Estado pago", "Decisión",
+      "Comentario del analista", "Decidido por", "Decidido el", "Avisado el",
+      "$ Pagamos", "$ MELI nos paga", "$ Margen", "Alertas"];
+    const data = filasPago.map(f => [
+      fecha, f.sc, f.id_ruta, f.placa || "", f.vehiculo || "", f.driver_name || "",
       f.driver_pct == null ? "—" : `${f.driver_pct}%`,
       f.driver_paq == null ? "—" : f.driver_paq,
       f.helpers.map(h => h.nombre).join(" // ") || "—",
       f.helpers.map(h => `${h.pct}%`).join(" // ") || "—",
       f.helpers.map(h => h.paquetes).join(" // ") || "—",
       f.total, f.esperado ?? "—", f.cobertura != null ? `${f.cobertura}%` : "—", f.sinRegistro,
-      f.estado === "OK" ? "OK" : f.estado === "INCOMPLETO" ? `Incompleto (${f.cobertura}%)` : f.estado === "SOLO_DRIVER" ? "Solo driver" : "Sin detalle",
+      f.estado === "OK" ? "OK" : f.estado === "INCOMPLETO" ? `Incompleto (${f.cobertura}%)`
+        : f.estado === "SOLO_DRIVER" ? "Solo driver"
+        : f.estado === "SOLO_MAESTRO" ? "Solo Maestro" : "Sin detalle",
+      f.pagaSegunMaestro ? "SI" : "NO",
+      f.estadoAux,
+      f.decision ? f.decision : (f.bloqueada ? "bloqueada sin decidir" : "sin decidir"),
+      f.motivo_guardado || "",
+      f.decidido_por || "",
+      f.decidido_at ? fmtFechaHoraMX(f.decidido_at) : "",
+      f.notificado_at ? fmtFechaHoraMX(f.notificado_at) : "",
+      f.montoPagar, f.montoCobrar, f.margen,
+      f.alertas.join(" | "),
     ]);
     const ws = window.XLSX.utils.aoa_to_sheet([headers, ...data]);
-    ws["!cols"] = [10, 8, 12, 26, 14, 10, 40, 18, 14, 12, 14, 11, 10, 16].map(w => ({ wch: w }));
+    ws["!cols"] = [10, 8, 12, 12, 18, 26, 14, 10, 40, 18, 14, 12, 14, 11, 10, 14, 16, 20, 18, 46, 20, 18, 18, 12, 14, 12, 60].map(w => ({ wch: w }));
+
+    const resumen = [
+      ["PAGO DE AYUDANTES MX"], [""],
+      ["Fecha", fecha],
+      ["Rutas en el universo", filasPago.length],
+      ["Pagan según Maestro (con_ayudante = SI)", numerosPago.paganMaestro],
+      ["Aprobadas", numerosPago.aprobadas],
+      ["Rechazadas", numerosPago.rechazadas],
+      ["Sin decidir", numerosPago.pendientes],
+      ["  de las cuales bloqueadas (foráneo + Small Van)", numerosPago.bloqueadas],
+      [""],
+      ["Monto por ayudante aprobado", cfgAux.pagar],
+      ["Monto que MELI paga por ruta con ayudante", cfgAux.cobrar],
+      ["TOTAL A PAGAR", numerosPago.aPagar],
+      ["TOTAL QUE MELI NOS PAGA", numerosPago.aCobrar],
+      ["MARGEN", numerosPago.margen],
+      [""],
+      ["Nota", "MELI paga por ruta con ayudante aunque el analista rechace el pago al transportista."],
+    ];
+    const wsRes = window.XLSX.utils.aoa_to_sheet(resumen);
+    wsRes["!cols"] = [{ wch: 48 }, { wch: 24 }];
+
     const wb = window.XLSX.utils.book_new();
-    window.XLSX.utils.book_append_sheet(wb, ws, "Entregas Helper");
-    window.XLSX.writeFile(wb, `Ayudantes_Entregas_MX_${fecha}.xlsx`);
+    window.XLSX.utils.book_append_sheet(wb, wsRes, "Resumen");
+    window.XLSX.utils.book_append_sheet(wb, ws, "Detalle");
+    window.XLSX.writeFile(wb, `Ayudantes_Pago_MX_${fecha}.xlsx`);
   };
 
   // ── Excel: vista matriz (original) ──
@@ -8200,8 +8365,8 @@ function AyudantesDetalleDia() {
     <div className="pg" style={{ maxWidth: 1400 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16, flexWrap: "wrap", gap: 12 }}>
         <div>
-          <div className="sec-title">Ayudantes — Entregas del Día</div>
-          <div className="sec-sub">Rutas con helper al cierre: driver vs ayudante(s) con su % de entrega, validado contra el snapshot</div>
+          <div className="sec-title">Ayudantes — Números y Aprobación</div>
+          <div className="sec-sub">Ver los números (driver vs ayudante, % de entrega, cobertura) y aprobar o rechazar el pago del ayudante del día</div>
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           <div style={{ display: "flex", gap: 2, background: "#f1f5f9", borderRadius: 6, padding: 2 }}>
@@ -8223,10 +8388,10 @@ function AyudantesDetalleDia() {
             ↻ Refrescar
           </button>
           <button onClick={vista === "entregas" ? descargarExcelEntregas : descargarExcel}
-            disabled={vista === "entregas" ? detalleEntregas.length === 0 : consolidados.length === 0}
+            disabled={vista === "entregas" ? filasPago.length === 0 : consolidados.length === 0}
             style={{ padding: "8px 14px", background: "#16a34a", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 600, color: "#fff",
-              cursor: (vista === "entregas" ? detalleEntregas.length === 0 : consolidados.length === 0) ? "not-allowed" : "pointer",
-              opacity: (vista === "entregas" ? detalleEntregas.length === 0 : consolidados.length === 0) ? 0.5 : 1 }}>
+              cursor: (vista === "entregas" ? filasPago.length === 0 : consolidados.length === 0) ? "not-allowed" : "pointer",
+              opacity: (vista === "entregas" ? filasPago.length === 0 : consolidados.length === 0) ? 0.5 : 1 }}>
             Descargar Excel
           </button>
         </div>
@@ -8256,6 +8421,61 @@ function AyudantesDetalleDia() {
 
       {vista === "entregas" && (
         <>
+          {/* ══ Los números del pago del ayudante ══ */}
+          <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderLeft: "3px solid #1a3a6b", borderRadius: 6, padding: "12px 14px", marginBottom: 12 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 700, color: "#1a3a6b" }}>Pago del ayudante · {fecha}</div>
+                <div style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}>
+                  El gatillo del pago es <b>con_ayudante</b> del Maestro Supervisores. Sin decisión del analista no se paga.
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                <select value={filtroDecision} onChange={(e) => setFiltroDecision(e.target.value)}
+                  style={{ background: "#fff", border: "1px solid #cbd5e1", borderRadius: 4, padding: "7px 10px", fontSize: 12 }}>
+                  <option value="todas">Todas las rutas</option>
+                  <option value="pendientes">Sin decidir ({numerosPago.pendientes})</option>
+                  <option value="bloqueadas">Bloqueadas ({numerosPago.bloqueadas})</option>
+                  <option value="aprobadas">Aprobadas ({numerosPago.aprobadas})</option>
+                  <option value="rechazadas">Rechazadas ({numerosPago.rechazadas})</option>
+                  <option value="alertas">Con alerta</option>
+                </select>
+                <button onClick={aprobarLote}
+                  disabled={guardando === "lote" || filasPago.filter((f) => f.pagaSegunMaestro && !f.decision && !f.bloqueada).length === 0}
+                  style={{ padding: "8px 14px", background: "#16a34a", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 700, color: "#fff",
+                    cursor: guardando === "lote" ? "wait" : "pointer",
+                    opacity: filasPago.filter((f) => f.pagaSegunMaestro && !f.decision && !f.bloqueada).length === 0 ? 0.45 : 1 }}>
+                  {guardando === "lote" ? "Aprobando…" : `✓ Aprobar ${filasPago.filter((f) => f.pagaSegunMaestro && !f.decision && !f.bloqueada).length} sin bloqueo`}
+                </button>
+              </div>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 10, marginTop: 12 }}>
+              {[
+                { l: "Pagan según Maestro", v: numerosPago.paganMaestro, c: "#1a3a6b" },
+                { l: "Sin decidir", v: numerosPago.pendientes, c: numerosPago.pendientes > 0 ? "#b45309" : "#64748b",
+                  sub: numerosPago.bloqueadas > 0 ? `${numerosPago.bloqueadas} bloqueada(s)` : null },
+                { l: "Aprobadas", v: numerosPago.aprobadas, c: "#16a34a" },
+                { l: "Rechazadas", v: numerosPago.rechazadas, c: "#dc2626" },
+                { l: "A pagar", v: `$${numerosPago.aPagar.toLocaleString("es-MX")}`, c: "#16a34a", sub: `$${cfgAux.pagar} por ruta` },
+                { l: "MELI nos paga", v: `$${numerosPago.aCobrar.toLocaleString("es-MX")}`, c: "#1a3a6b", sub: `$${cfgAux.cobrar} por ruta con ayudante` },
+                { l: "Margen", v: `$${numerosPago.margen.toLocaleString("es-MX")}`, c: "#F47B20", sub: "MELI cobra igual si rechazás" },
+              ].map((k, i) => (
+                <div key={i} style={{ background: "#f8fafc", border: "1px solid #e4e7ec", borderRadius: 5, padding: "8px 10px" }}>
+                  <div style={{ fontSize: 9, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase" }}>{k.l}</div>
+                  <div style={{ fontSize: 18, fontWeight: 700, color: k.c, marginTop: 1 }}>{k.v}</div>
+                  {k.sub && <div style={{ fontSize: 9, color: "#94a3b8" }}>{k.sub}</div>}
+                </div>
+              ))}
+            </div>
+
+            {numerosPago.pendientes > 0 && (
+              <div style={{ marginTop: 10, padding: "7px 10px", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 4, fontSize: 11, color: "#92400e" }}>
+                ⚠️ Quedan <b>{numerosPago.pendientes}</b> ruta(s) sin decidir. El motor las paga en $0 hasta que se aprueben, y si decidís después de calcular el día hay que <b>recalcular</b> en Listado de Pagos.
+              </div>
+            )}
+          </div>
+
           {/* KPIs vista entregas */}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 10, marginBottom: 14 }}>
             <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderLeft: "3px solid #1a3a6b", borderRadius: 6, padding: "12px 14px" }}>
@@ -8290,9 +8510,11 @@ function AyudantesDetalleDia() {
           <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, overflow: "auto" }}>
             {loading ? (
               <div style={{ padding: 30, textAlign: "center", color: "#94a3b8" }}>Cargando...</div>
-            ) : detalleEntregas.length === 0 ? (
+            ) : filasPago.length === 0 ? (
               <div style={{ padding: 40, textAlign: "center", color: "#94a3b8", fontSize: 13 }}>
-                Sin rutas con helper para esta fecha (o el flujo de entregas no ha corrido).
+                {filtroDecision === "todas"
+                  ? "Sin rutas con ayudante para esta fecha (o el flujo de entregas no ha corrido)."
+                  : "Ninguna ruta cumple el filtro seleccionado."}
               </div>
             ) : (
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
@@ -8306,23 +8528,48 @@ function AyudantesDetalleDia() {
                     <th style={{ padding: "10px 8px", textAlign: "left", fontSize: 10, fontWeight: 600, color: "#475569" }}>Ayudante(s)</th>
                     <th style={{ padding: "10px 8px", textAlign: "center", fontSize: 10, fontWeight: 600, color: "#475569" }}>% Entrega</th>
                     <th style={{ padding: "10px 8px", textAlign: "center", fontSize: 10, fontWeight: 600, color: "#475569" }}>Total Paq.</th>
-                    <th style={{ padding: "10px 8px", textAlign: "center", fontSize: 10, fontWeight: 600, color: "#475569" }}>Estado</th>
+                    <th style={{ padding: "10px 8px", textAlign: "center", fontSize: 10, fontWeight: 600, color: "#475569" }}>Captura</th>
+                    <th style={{ padding: "10px 8px", textAlign: "center", fontSize: 10, fontWeight: 600, color: "#475569" }}>Paga</th>
+                    <th style={{ padding: "10px 8px", textAlign: "center", fontSize: 10, fontWeight: 600, color: "#475569" }}>$ Aux</th>
+                    <th style={{ padding: "10px 8px", textAlign: "center", fontSize: 10, fontWeight: 600, color: "#475569" }}>Decisión</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {detalleEntregas.map((f, i) => {
+                  {filasPago.map((f, i) => {
+                    const tid = String(f.id_ruta);
                     const estiloEstado = f.estado === "OK"
                       ? { bg: "#dcfce7", color: "#16a34a", txt: "OK" }
                       : f.estado === "INCOMPLETO"
                         ? { bg: "#fef3c7", color: "#b45309", txt: `INCOMPLETO ${f.cobertura}%` }
                         : f.estado === "SOLO_DRIVER"
                           ? { bg: "#fed7aa", color: "#b45309", txt: "SOLO DRIVER" }
-                          : { bg: "#fee2e2", color: "#dc2626", txt: "SIN DETALLE" };
+                          : f.estado === "SOLO_MAESTRO"
+                            ? { bg: "#e0e7ff", color: "#3730a3", txt: "SOLO MAESTRO" }
+                            : { bg: "#fee2e2", color: "#dc2626", txt: "SIN DETALLE" };
+                    const abierta = filaAbierta === tid;
+                    const enCurso = guardando === tid;
+                    // Bloqueada sin decisión se muestra como rechazada (no se paga)
+                    const rechazadoVisual = f.decision === "rechazado" || (f.bloqueada && !f.decision);
+                    const aprobadoVisual = f.decision === "aprobado";
+                    const fondo = !f.pagaSegunMaestro ? "#f8fafc"
+                      : f.alertas.length > 0 ? "#fffbeb"
+                      : aprobadoVisual ? "#f0fdf4"
+                      : rechazadoVisual ? "#fef2f2" : "transparent";
                     return (
-                      <tr key={i} style={{ borderBottom: "1px solid #f0f0f0", background: f.estado === "SIN_DETALLE" ? "#fef2f2" : f.estado === "INCOMPLETO" ? "#fffbeb" : "transparent" }}>
+                      <Fragment key={tid}>
+                      <tr style={{ borderBottom: abierta ? "none" : "1px solid #f0f0f0", background: fondo }}>
                         <td style={{ padding: "8px", color: "#64748b", fontSize: 11 }}>{fecha}</td>
                         <td style={{ padding: "8px", fontWeight: 500 }}>{f.sc || "—"}</td>
-                        <td style={{ padding: "8px", fontFamily: "monospace", color: "#64748b", fontSize: 11 }}>{f.id_ruta}</td>
+                        <td style={{ padding: "8px", fontFamily: "monospace", color: "#64748b", fontSize: 11 }}>
+                          <button onClick={() => setFilaAbierta(abierta ? null : tid)}
+                            title="Ver comentario, aviso y paquetes"
+                            style={{ background: "none", border: "none", padding: 0, cursor: "pointer", fontFamily: "monospace", fontSize: 11, color: "#1a3a6b", fontWeight: 600 }}>
+                            {abierta ? "▼" : "▶"} {f.id_ruta}
+                          </button>
+                          {f.alertas.length > 0 && (
+                            <div style={{ fontSize: 9, color: "#b45309", fontWeight: 700 }}>⚠ {f.alertas.length} alerta(s)</div>
+                          )}
+                        </td>
                         <td style={{ padding: "8px", fontWeight: 500 }}>{f.driver_name || "—"}</td>
                         <td style={{ padding: "8px", textAlign: "center" }}>
                           {pctBadge(f.driver_pct)}
@@ -8357,7 +8604,124 @@ function AyudantesDetalleDia() {
                             {estiloEstado.txt}
                           </span>
                         </td>
+
+                        {/* ── Paga: exactamente lo que va a hacer el motor ── */}
+                        <td style={{ padding: "8px", textAlign: "center" }}>
+                          <span style={{ ...badgeAux(f.estadoAux), fontSize: 9 }}>{f.estadoAux}</span>
+                          {!f.pagaSegunMaestro && (
+                            <div style={{ fontSize: 9, color: "#94a3b8" }}>Maestro: sin ayudante</div>
+                          )}
+                          {f.personas_maestro ? (
+                            <div style={{ fontSize: 9, color: "#94a3b8" }}>{f.personas_maestro} persona(s)</div>
+                          ) : null}
+                        </td>
+
+                        {/* ── Plata: lo que pagamos vs lo que MELI nos paga ── */}
+                        <td style={{ padding: "8px", textAlign: "center", whiteSpace: "nowrap" }}>
+                          <div style={{ fontWeight: 700, color: f.montoPagar > 0 ? "#16a34a" : "#94a3b8" }}>
+                            ${f.montoPagar.toLocaleString("es-MX")}
+                          </div>
+                          {f.montoCobrar > 0 && (
+                            <div style={{ fontSize: 9, color: "#64748b" }}>MELI ${f.montoCobrar.toLocaleString("es-MX")}</div>
+                          )}
+                        </td>
+
+                        {/* ── Decisión ── */}
+                        <td style={{ padding: "8px", textAlign: "center", whiteSpace: "nowrap" }}>
+                          {f.pagaSegunMaestro || f.decision ? (
+                            <div style={{ display: "inline-flex", gap: 4 }}>
+                              <button onClick={() => decidir(f, "aprobado")} disabled={enCurso}
+                                title={f.bloqueada ? "Bloqueada por defecto: aprobar es una excepción explícita" : "Aprobar el pago del ayudante"}
+                                style={{ padding: "5px 9px", fontSize: 11, fontWeight: 700, borderRadius: 5, cursor: enCurso ? "wait" : "pointer",
+                                  border: aprobadoVisual ? "2px solid #16a34a" : "1px solid #cbd5e1",
+                                  background: aprobadoVisual ? "#16a34a" : "#fff",
+                                  color: aprobadoVisual ? "#fff" : "#16a34a" }}>✓</button>
+                              <button onClick={() => decidir(f, "rechazado")} disabled={enCurso}
+                                title="Rechazar el pago del ayudante"
+                                style={{ padding: "5px 9px", fontSize: 11, fontWeight: 700, borderRadius: 5, cursor: enCurso ? "wait" : "pointer",
+                                  border: f.decision === "rechazado" ? "2px solid #dc2626" : "1px solid #cbd5e1",
+                                  background: f.decision === "rechazado" ? "#dc2626" : "#fff",
+                                  color: f.decision === "rechazado" ? "#fff" : "#dc2626" }}>✗</button>
+                            </div>
+                          ) : (
+                            <span style={{ fontSize: 10, color: "#cbd5e1" }}>no aplica</span>
+                          )}
+                          {f.decidido_por && (
+                            <div style={{ fontSize: 9, color: "#94a3b8", marginTop: 2 }}>{f.decidido_por}</div>
+                          )}
+                          {f.notificado_at && (
+                            <div style={{ fontSize: 9, color: "#16a34a", fontWeight: 600 }}>✓ avisado</div>
+                          )}
+                        </td>
                       </tr>
+
+                      {/* ── Detalle: alertas, comentario, aviso y paquetes ── */}
+                      {abierta && (
+                        <tr style={{ borderBottom: "1px solid #f0f0f0", background: "#fafbfc" }}>
+                          <td colSpan={12} style={{ padding: "10px 14px" }}>
+                            {f.alertas.length > 0 && (
+                              <div style={{ marginBottom: 8 }}>
+                                {f.alertas.map((a, k) => (
+                                  <div key={k} style={{ fontSize: 11, color: "#92400e", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 4, padding: "5px 8px", marginBottom: 3 }}>
+                                    ⚠ {a}
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+
+                            <div style={{ display: "flex", gap: 14, flexWrap: "wrap", fontSize: 11, color: "#475569", marginBottom: 8 }}>
+                              {f.placa && <span>Placa <b style={{ fontFamily: "monospace" }}>{f.placa}</b></span>}
+                              {f.vehiculo && <span>{f.vehiculo}{f.tipologia ? ` · ${f.tipologia}` : ""}</span>}
+                              {f.cluster && <span>Ciclo {f.cluster}</span>}
+                              {f.status_final && <span>Status {f.status_final}</span>}
+                              {f.bloqueada && <span style={{ color: "#b91c1c", fontWeight: 700 }}>SC foráneo + Small Van → bloqueada por defecto</span>}
+                            </div>
+
+                            {/* Comentario del analista: se guarda sin forzar decisión */}
+                            <div style={{ marginBottom: 8 }}>
+                              <div style={{ fontSize: 10, color: "#64748b", fontWeight: 600, marginBottom: 3 }}>
+                                Comentario del analista (viaja en el aviso al supervisor y queda en la conciliación)
+                              </div>
+                              <textarea rows={2}
+                                value={motivos[tid] || ""}
+                                onChange={(e) => setMotivos((prev) => ({ ...prev, [tid]: e.target.value }))}
+                                onBlur={() => guardarMotivo(f)}
+                                placeholder="Ej.: el ayudante entregó 4 paquetes de 180, no corresponde el pago…"
+                                style={{ width: "100%", fontSize: 12, padding: "6px 8px", borderRadius: 5, border: "1px solid #cbd5e1", resize: "vertical", boxSizing: "border-box" }} />
+                            </div>
+
+                            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                              <button onClick={() => notificar(f)} disabled={notificando === tid}
+                                style={{ padding: "6px 12px", fontSize: 11, fontWeight: 700, borderRadius: 5, border: "none",
+                                  background: f.notificado_at ? "#fff" : "#1a3a6b",
+                                  color: f.notificado_at ? "#1a3a6b" : "#fff",
+                                  boxShadow: f.notificado_at ? "inset 0 0 0 1px #1a3a6b" : "none",
+                                  cursor: notificando === tid ? "wait" : "pointer" }}>
+                                {notificando === tid ? "Enviando…" : f.notificado_at ? "↻ Reenviar aviso" : "📲 Avisar al supervisor"}
+                              </button>
+                              <span style={{ fontSize: 10, color: "#94a3b8" }}>
+                                {(supPorSc[String(f.sc)] && supPorSc[String(f.sc)].nombre)
+                                  ? `${supPorSc[String(f.sc)].nombre} · ${supPorSc[String(f.sc)].telefono || "sin teléfono"}`
+                                  : "Sin supervisor cargado para este SC"}
+                              </span>
+                            </div>
+
+                            {(f.decidido_por || f.decidido_at || f.notificado_at) && (
+                              <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 8, paddingTop: 6, borderTop: "1px solid #e4e7ec" }}>
+                                {f.decidido_at && <span>Decidido el {fmtFechaHoraMX(f.decidido_at)} por {f.decidido_por || "—"}. </span>}
+                                {f.notificado_at && <span>Avisado el {fmtFechaHoraMX(f.notificado_at)}.</span>}
+                              </div>
+                            )}
+
+                            {f.enSnapshot && (
+                              <div style={{ marginTop: 8 }}>
+                                <PaquetesHelper idRuta={f.id_ruta} fecha={fecha} />
+                              </div>
+                            )}
+                          </td>
+                        </tr>
+                      )}
+                      </Fragment>
                     );
                   })}
                 </tbody>
