@@ -2635,6 +2635,11 @@ function InformeRHCheck({ fuente, registroId, terceroId, titulo, pathInicial, on
 }
 
 // Chip de TIPO
+// El resultado de Biggy se muestra desde la Etapa 3 en adelante. Si el análisis
+// se generó antes (algún proceso lo dispara al crearse la tarjeta), queda
+// guardado y se reutiliza: al pasar a Etapa 3 se muestra sin correr de nuevo.
+const ETAPAS_SIN_NOTA_BIGGY = ["recepcion", "llamada_supervisor"];
+
 const TIPO_CFG = {
   conductor: { label: "Driver",   icon: "🚗", bg: "#f1f3f5", color: "#334155", border: "#dee2e6" },
   ayudante:  { label: "Ayudante", icon: "🧰", bg: "#f1f3f5", color: "#334155", border: "#dee2e6" },
@@ -3240,8 +3245,8 @@ function KanbanBoard({ items, columnas = COLUMNAS, onCardClick, onMover, onElimi
                       {tc.icon} {tc.label}
                     </span>
                     <span style={{ fontSize: 10, color: "#888", fontWeight: 600 }}>📍 {card.sc}</span>
-                    <NotaBiggy score={card.score} />
-                    {card.rec && <span style={{ fontSize: 9, color: "#888" }}>{card.rec}</span>}
+                    {!ETAPAS_SIN_NOTA_BIGGY.includes(col.id) && <NotaBiggy score={card.score} />}
+                    {!ETAPAS_SIN_NOTA_BIGGY.includes(col.id) && card.rec && <span style={{ fontSize: 9, color: "#888" }}>{card.rec}</span>}
                     {card.raw?.cambios_pendientes && (
                       <span style={{ fontSize: 9, fontWeight: 800, padding: "2px 8px", borderRadius: 20, background: "#fff4e5", color: "#b45309", border: "1px solid #f5d9b8" }}>
                         ⚠ Cambios del prospecto
@@ -4934,7 +4939,7 @@ function ModuloCertificaciones() {
                     <span style={{ fontSize: 9, fontWeight: 700, padding: "2px 8px", borderRadius: 20, background: tc.bg, color: tc.color, border: `1px solid ${tc.border}` }}>
                       {tc.icon} {tc.label}
                     </span>
-                    <NotaBiggy score={card.score} />
+                    {!ETAPAS_SIN_NOTA_BIGGY.includes(card.etapa) && <NotaBiggy score={card.score} />}
                   </div>
                   <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>📍 {card.sc}</div>
                 </div>
