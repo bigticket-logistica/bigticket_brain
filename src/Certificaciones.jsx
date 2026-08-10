@@ -2203,7 +2203,10 @@ Responde con este JSON exacto:
         <button className="btn-back" onClick={onVolver}>← Volver</button>
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: 15, fontWeight: 700 }}>{candidato.nombre}</div>
-          <div style={{ fontSize: 12, color: "#888" }}>{candidato.svc} · {candidato.puesto}</div>
+          <div style={{ fontSize: 12, color: "#888" }}>
+            {candidato.svc} · {candidato.puesto}
+            {candidato.created_at && <> · 🗓 ingresó al flujo el {new Date(candidato.created_at).toLocaleString("es-MX", { day: "2-digit", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit" })}</>}
+          </div>
         </div>
         <span className={`badge ${estadoBadge[candidato.estado]}`}>{candidato.estado?.toUpperCase()}</span>
       </div>
@@ -2673,6 +2676,7 @@ function normalizarProspeccion(row) {
     tipo,
     titulo: row.nombre || "Sin nombre",
     empresa: row.empresa || null,
+    creado: row.created_at || null,
     sc:     row.svc || "—",
     etapa:  etapaProspeccion(row),
     score:  row.claude_score_global ?? null,
@@ -2706,6 +2710,7 @@ function normalizarPortalCert(row) {
   return {
     key:    `cert-${row.id}`,
     id:     row.id,
+    creado: row.created_at || null,
     fuente: "portal_cert",
     origen: row.origen || "portal_web",
     tipo:   row.tipo || "conductor",
@@ -2930,7 +2935,10 @@ function DetalleCertificacion({ cert, etapa, onVolver, onPasarEtapa2, onMoverA, 
         <button className="btn-back" onClick={onVolver}>← Volver</button>
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: 15, fontWeight: 700 }}>{titulo}</div>
-          <div style={{ fontSize: 12, color: "#888" }}>{cert.service_center || ter?.service_center || "—"} · {tc.label}{ter?.nombre ? <> · <b style={{ color: "#1a3a6b" }}>🏢 {ter.nombre}</b></> : null}</div>
+          <div style={{ fontSize: 12, color: "#888" }}>
+            {cert.service_center || ter?.service_center || "—"} · {tc.label}{ter?.nombre ? <> · <b style={{ color: "#1a3a6b" }}>🏢 {ter.nombre}</b></> : null}
+            {cert.created_at && <> · 🗓 ingresó al flujo el {new Date(cert.created_at).toLocaleString("es-MX", { day: "2-digit", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit" })}</>}
+          </div>
         </div>
         <span style={{ fontSize: 10, fontWeight: 700, padding: "3px 10px", borderRadius: 20, background: fcFuente.bg, color: fcFuente.color, border: `1px solid ${fcFuente.border}` }}>
           {fcFuente.icon} {fcFuente.label}
@@ -3208,6 +3216,19 @@ function KanbanBoard({ items, columnas = COLUMNAS, onCardClick, onMover, onElimi
                       {fc.icon} {fc.label}
                     </span>
                   </div>
+                  {/* Fecha y hora de entrada al flujo (sirve para medir antigüedad) */}
+                  {card.creado && (
+                    <div title={"Ingresó al flujo el " + new Date(card.creado).toLocaleString("es-MX")}
+                      style={{ fontSize: 9.5, color: "#98a2b3", fontWeight: 600, marginBottom: 4 }}>
+                      🗓 {new Date(card.creado).toLocaleString("es-MX", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}
+                      {(() => {
+                        const h = Math.floor((Date.now() - new Date(card.creado).getTime()) / 3600000);
+                        if (h < 24) return <span style={{ color: "#667085" }}> · hace {h} h</span>;
+                        const d = Math.floor(h / 24);
+                        return <span style={{ color: d > 7 ? "#b45309" : "#667085", fontWeight: d > 7 ? 800 : 600 }}> · hace {d} día{d === 1 ? "" : "s"}</span>;
+                      })()}
+                    </div>
+                  )}
                   <div style={{ fontSize: 13, fontWeight: 600, color: "#1a1a1a", marginBottom: 4, wordBreak: "break-word" }}>{card.titulo}</div>
                   {card.empresa && (
                     <div title={card.empresa} style={{ fontSize: 11, fontWeight: 800, color: "#1a3a6b", marginBottom: 8, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
