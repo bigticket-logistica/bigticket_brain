@@ -7034,7 +7034,6 @@ function AyudantesDetalleDia({ usuario }) {
     } catch { return new Date(Date.now() - 86400000).toISOString().slice(0, 10); }
   };
 
-  const [snapshots, setSnapshots] = useState([]);
   const [entregas, setEntregas] = useState([]);
   const [loading, setLoading] = useState(true);
   const [fecha, setFecha] = useState(fechaAyerOperativa());
@@ -7103,16 +7102,15 @@ function AyudantesDetalleDia({ usuario }) {
     // ── Bloque 1 · rápido: con esto ya se ve la tabla y se puede decidir ──
     const bloqueBase = (async () => {
       try {
-        const [snaps, aprobRows, cfgR, supR] = await Promise.all([
-          medir("snapshots", () => fetchAll("logistic_ayudantes_snapshots",
-            "id_ruta,service_center_id,driver_name,placa,momento_dia,has_helper,entregados"), ms),
+        // Los snapshots de ayudantes ya no se leen: sus momentos intermedios no
+        // aportaban nada y su campo `entregados` venía congelado.
+        const [aprobRows, cfgR, supR] = await Promise.all([
           medir("aprobaciones", () => sb.from("aprobaciones_helper")
             .select("travel_id,service_center_id,decision,motivo_rechazo,notificado_at,decidido_por,decidido_at")
             .eq("fecha", fecha).limit(5000), ms),
           sb.from("config_pagos_mx").select("clave, valor"),
           sb.from("vw_supervisores_panel").select("nombre, email, telefono, scs_asignados"),
         ]);
-        setSnapshots(snaps);
 
         const idxAprob = {}, mot = {};
         for (const a of ((aprobRows && aprobRows.data) || [])) {
@@ -7140,7 +7138,7 @@ function AyudantesDetalleDia({ usuario }) {
         setSupPorSc(sm);
       } catch (e) {
         console.error("Error en la lectura base:", e);
-        setSnapshots([]); setAprob({});
+        setAprob({});
       } finally {
         setProgreso("");
         setLoading(false);   // la tabla ya se puede pintar
@@ -7189,7 +7187,7 @@ function AyudantesDetalleDia({ usuario }) {
       setCargandoMaestro(true);
       try {
         const mj = await medir("gatillo (tabla calculada)", () => sb.from("maestro_jornada_mx")
-          .select("id_ruta,service_center_id,driver_name,placa,tipologia,tipo_vehiculo_meli,vehiculo_raw,ciclo,tiene_auxiliar,auxiliar_snapshots_total,status_final")
+          .select("id_ruta,service_center_id,driver_name,placa,tipologia,tipo_vehiculo_meli,vehiculo_raw,ciclo,tiene_auxiliar,auxiliar_snapshots_total,status_final,envios_entregados")
           .eq("fecha", fecha).limit(5000), ms);
 
         if (!mj.error && (mj.data || []).length > 0) {
@@ -7204,6 +7202,7 @@ function AyudantesDetalleDia({ usuario }) {
             patentes: r.placa,
             cluster_meli: r.ciclo,
             status_final: r.status_final,
+            envios_entregados: r.envios_entregados,
           })));
           setMaestroFuente("calculado");
           return;
@@ -7252,7 +7251,7 @@ function AyudantesDetalleDia({ usuario }) {
         .select("idviaje,service_center_id,driver_name,con_ayudante,cantidad_personas,tipo_vehiculo,patentes,cluster_meli,status_final")
         .eq("fecha", fecha).limit(5000), ms);
       if (v.error) throw v.error;
-      setMaestro(v.data || []);
+      setMaestro((v.data || []).map((r) => ({ ...r, envios_entregados: r.entregados })));
       setMaestroFuente("vista");
       setTiempos(ms);
     } catch (e) {
@@ -7282,47 +7281,6 @@ function AyudantesDetalleDia({ usuario }) {
     }
     return t.join(" ");
   };
-
-  // ── Rutas con helper según snapshots (universo oficial de la vista) ──
-  // Prioridad de momentos del día (de inicio a cierre). Por ruta se toma el
-  // snapshot MÁS TARDÍO disponible: si hubo cierre se usa el cierre; si el flujo
-  // de snapshots se cortó esa noche (p.ej. solo llegó a fin_tarde), cae al último
-  // momento capturado en vez de dejar la vista en 0.
-  const PRIORIDAD_MOMENTOS = ["inicio", "media_manana", "tarde", "fin_tarde", "pre_cierre", "cierre_dia", "post_cierre"];
-  const rangoMomento = (md) => {
-    const i = PRIORIDAD_MOMENTOS.indexOf(md);
-    return i === -1 ? -1 : i;
-  };
-  const rutasSnapHelper = useMemo(() => {
-    // Por ruta, quedarse con el snapshot del momento más tardío
-    const ultimoPorRuta = {};
-    for (const s of snapshots) {
-      const k = String(s.id_ruta);
-      const r = rangoMomento(s.momento_dia);
-      if (r < 0) continue;
-      if (!ultimoPorRuta[k] || r > ultimoPorRuta[k].rango) {
-        ultimoPorRuta[k] = { rango: r, snap: s };
-      }
-    }
-    const m = {};
-    for (const [k, { snap: s }] of Object.entries(ultimoPorRuta)) {
-      if (s.has_helper) {
-        m[k] = { id_ruta: s.id_ruta, sc: s.service_center_id, driver_name: s.driver_name, placa: s.placa };
-      }
-    }
-    return m;
-  }, [snapshots]);
-
-  // ── Entregados esperados por ruta (máximo entre snapshots = cierre) ──
-  const entregadosEsperados = useMemo(() => {
-    const m = {};
-    for (const s of snapshots) {
-      const k = String(s.id_ruta);
-      const e = Number(s.entregados) || 0;
-      if (!m[k] || e > m[k]) m[k] = e;
-    }
-    return m;
-  }, [snapshots]);
 
   // ── Paquetes por ruta y por persona ──────────────────────────────────
   // Una sola estructura para las dos fuentes posibles: las filas ya agrupadas
@@ -7354,34 +7312,54 @@ function AyudantesDetalleDia({ usuario }) {
     () => Object.values(rutasAgrupadas).reduce((a, r) => a + r.total, 0),
     [rutasAgrupadas]);
 
-  // ── Detalle de entregas por ruta: driver vs helpers con % ──
+  const maestroPorRuta = useMemo(() => {
+    const m = {};
+    for (const r of maestro) {
+      const k = String(r.idviaje || "");
+      if (k) m[k] = r;
+    }
+    return m;
+  }, [maestro]);
+
+  // ── Detalle de entregas por ruta: driver vs ayudante(s) con % ──
+  // El universo NO sale más de los snapshots. Sale de dos evidencias:
+  //   1. los paquetes: si en una ruta entregó alguien distinto del chofer,
+  //      hubo ayudante y ahí está el % de cada uno (esto es lo que se decide);
+  //   2. el motor de pagos: si dice que hubo ayudante, la ruta tiene que
+  //      aparecer aunque el ayudante no haya entregado nada, para poder
+  //      rechazarla.
+  // Los snapshots intermedios no aportaban nada: su campo `entregados` venía
+  // congelado (el mismo valor en las 9 fotos del día), así que la "cobertura"
+  // que calculaba contra ellos era falsa. Ahora el denominador son los
+  // entregados que registró el motor.
   const detalleEntregas = useMemo(() => {
     const rutas = rutasAgrupadas;
-
     const filas = [];
-    const rutasConDataEntregas = new Set(Object.keys(rutas));
+    const vistas = new Set();
 
     for (const r of Object.values(rutas)) {
+      const k = String(r.id_ruta);
       const personas = Object.values(r.personas);
       const driverRows = personas.filter(p => esMismaPersona(p.nombre, r.driver_name));
       const helperRows = personas.filter(p => !esMismaPersona(p.nombre, r.driver_name));
+      const m = maestroPorRuta[k] || null;
+      const pagaMaestro = !!m && String(m.con_ayudante || "").toUpperCase() === "SI";
+
+      // Sin ayudante en los paquetes y sin ayudante en el motor → no es del tema
+      if (helperRows.length === 0 && !pagaMaestro) continue;
+      vistas.add(k);
+
       const pct = (n) => r.total > 0 ? Math.round((n / r.total) * 1000) / 10 : 0;
       const driverPaq = driverRows.reduce((a, p) => a + p.paquetes, 0);
-      const tieneSnapHelper = !!rutasSnapHelper[String(r.id_ruta)];
-
-      // Universo oficial: solo rutas con helper flag al CIERRE (mismo criterio del scraper)
-      if (!tieneSnapHelper) continue;
-
-      // Cruce contra snapshot: entregados esperados vs capturados (cobertura)
-      const esperado = entregadosEsperados[String(r.id_ruta)] || null;
+      const esperado = m && m.envios_entregados != null ? Number(m.envios_entregados) : null;
       const cobertura = esperado ? Math.round((r.total / esperado) * 100) : null;
       let estadoFila = helperRows.length > 0 ? "OK" : "SOLO_DRIVER";
       if (esperado && cobertura !== null && cobertura < 95) estadoFila = "INCOMPLETO";
 
       filas.push({
         id_ruta: r.id_ruta,
-        sc: r.sc,
-        driver_name: r.driver_name,
+        sc: r.sc || (m && m.service_center_id) || null,
+        driver_name: r.driver_name || (m && m.driver_name) || null,
         driver_paq: driverPaq,
         driver_pct: pct(driverPaq),
         helpers: helperRows.sort((a, b) => b.paquetes - a.paquetes).map(h => ({
@@ -7395,16 +7373,18 @@ function AyudantesDetalleDia({ usuario }) {
       });
     }
 
-    // Rutas que el snapshot marca con helper pero SIN data de entregas → gap del flujo
-    for (const [k, s] of Object.entries(rutasSnapHelper)) {
-      if (!rutasConDataEntregas.has(k)) {
-        filas.push({
-          id_ruta: s.id_ruta, sc: s.sc, driver_name: s.driver_name,
-          driver_paq: null, driver_pct: null, helpers: [], total: 0,
-          esperado: entregadosEsperados[k] || null, cobertura: 0, sinRegistro: 0,
-          estado: "SIN_DETALLE",
-        });
-      }
+    // El motor marca ayudante pero no hay ni un paquete capturado → gap del flujo
+    for (const m of maestro) {
+      const k = String(m.idviaje || "");
+      if (!k || vistas.has(k)) continue;
+      if (String(m.con_ayudante || "").toUpperCase() !== "SI") continue;
+      filas.push({
+        id_ruta: m.idviaje, sc: m.service_center_id, driver_name: m.driver_name,
+        driver_paq: null, driver_pct: null, helpers: [], total: 0,
+        esperado: m.envios_entregados != null ? Number(m.envios_entregados) : null,
+        cobertura: 0, sinRegistro: 0,
+        estado: "SIN_DETALLE",
+      });
     }
 
     return filas
@@ -7422,22 +7402,13 @@ function AyudantesDetalleDia({ usuario }) {
         const ord = { SIN_DETALLE: 0, INCOMPLETO: 1, SOLO_DRIVER: 2, OK: 3 };
         if (ord[a.estado] !== ord[b.estado]) return ord[a.estado] - ord[b.estado];
         if ((a.sc || "") !== (b.sc || "")) return (a.sc || "").localeCompare(b.sc || "");
-        return a.id_ruta - b.id_ruta;
+        return String(a.id_ruta).localeCompare(String(b.id_ruta));
       });
-  }, [rutasAgrupadas, rutasSnapHelper, entregadosEsperados, busqueda]);
+  }, [rutasAgrupadas, maestroPorRuta, maestro, busqueda]);
 
   // ══════════════════════════════════════════════════════════════════════
   //  APROBACIÓN DE AYUDANTES — "ver los números y aprobar"
   // ══════════════════════════════════════════════════════════════════════
-
-  const maestroPorRuta = useMemo(() => {
-    const m = {};
-    for (const r of maestro) {
-      const k = String(r.idviaje || "");
-      if (k) m[k] = r;
-    }
-    return m;
-  }, [maestro]);
 
   // Universo de aprobación = UNIÓN de dos fuentes que no siempre coinciden:
   //   · snapshots con has_helper al cierre  → lo que se ve en la operación
@@ -7456,29 +7427,15 @@ function AyudantesDetalleDia({ usuario }) {
       );
     };
 
+    // detalleEntregas ya trae el universo completo (paquetes + motor)
     const mapa = new Map();
     for (const f of detalleEntregas) {
-      mapa.set(String(f.id_ruta), { ...f, enSnapshot: true });
-    }
-    for (const r of maestro) {
-      const k = String(r.idviaje || "");
-      if (!k) continue;
-      const pagaMaestro = String(r.con_ayudante || "").toUpperCase() === "SI";
-      if (mapa.has(k)) continue;
-      if (!pagaMaestro) continue;
-      const fila = {
-        id_ruta: r.idviaje, sc: r.service_center_id, driver_name: r.driver_name,
-        driver_paq: null, driver_pct: null, helpers: [], total: 0,
-        esperado: null, cobertura: null, sinRegistro: 0,
-        estado: "SOLO_MAESTRO", enSnapshot: false,
-      };
-      if (coincideBusqueda(fila)) mapa.set(k, fila);
+      mapa.set(String(f.id_ruta), { ...f, conPaquetes: f.total > 0 });
     }
 
     const out = [];
     for (const [k, f] of mapa.entries()) {
       const m = maestroPorRuta[k] || null;
-      const snap = rutasSnapHelper[k] || null;
       const pagaSegunMaestro = !!m && String(m.con_ayudante || "").toUpperCase() === "SI";
       const sc = f.sc || (m && m.service_center_id) || null;
       const vehiculo = (m && m.tipo_vehiculo) || null;
@@ -7498,13 +7455,13 @@ function AyudantesDetalleDia({ usuario }) {
       // Contradicciones que antes quedaban invisibles
       const alertas = [];
       if (gatilloDisponible) {
-        if (f.enSnapshot && !pagaSegunMaestro) {
+        if (f.conPaquetes && !pagaSegunMaestro) {
           alertas.push(m
             ? "El cálculo del día dice que esta ruta no tuvo ayudante: el motor paga $0 aunque la apruebes. Revisá la bitácora del supervisor."
             : "Esta ruta no aparece en el cálculo del día, así que hoy el motor no la procesa. Tu decisión igual queda registrada y se aplica sola cuando el día se recalcule.");
         }
-        if (!f.enSnapshot && pagaSegunMaestro) {
-          alertas.push("El snapshot no marcó ayudante, pero el Maestro sí: esta ruta SÍ paga si la aprobás.");
+        if (!f.conPaquetes && pagaSegunMaestro) {
+          alertas.push("El motor marca ayudante pero no hay ningún paquete capturado en esta ruta: no hay % para respaldar la decisión.");
         }
         if (decision === "aprobado" && !pagaSegunMaestro) {
           alertas.push("Aprobada, pero el Maestro dice que no hubo ayudante: el motor pagará $0.");
@@ -7512,8 +7469,11 @@ function AyudantesDetalleDia({ usuario }) {
       } else {
         alertas.push("El día no está calculado: no se sabe si el motor va a pagar esta ruta.");
       }
-      if (f.estado === "INCOMPLETO" || f.estado === "SIN_DETALLE") {
-        alertas.push("Los % de entrega no son confiables: la captura de paquetes está incompleta.");
+      if (f.estado === "INCOMPLETO") {
+        alertas.push(`Captura incompleta (${f.cobertura}% de los ${f.esperado} entregados del motor): los % por persona no son confiables.`);
+      }
+      if (f.estado === "SOLO_DRIVER") {
+        alertas.push("Los paquetes muestran que entregó solo el chofer: el ayudante no registró ninguna entrega.");
       }
       if (bloqueada && !decision) {
         alertas.push("Bloqueada por defecto (SC foráneo + Small Van): no se paga salvo aprobación explícita.");
@@ -7522,7 +7482,7 @@ function AyudantesDetalleDia({ usuario }) {
       out.push({
         ...f,
         sc,
-        placa: (m && m.patentes) || (snap && snap.placa) || null,
+        placa: (m && m.patentes) || null,
         vehiculo,
         cluster: (m && m.cluster_meli) || null,
         tipologia,
@@ -7544,7 +7504,7 @@ function AyudantesDetalleDia({ usuario }) {
       });
     }
 
-    const ordEstado = { SOLO_MAESTRO: 0, SIN_DETALLE: 1, INCOMPLETO: 2, SOLO_DRIVER: 3, OK: 4 };
+    const ordEstado = { SIN_DETALLE: 0, INCOMPLETO: 1, SOLO_DRIVER: 2, OK: 3 };
     return out
       .filter((f) => {
         if (filtroDecision === "pendientes") return f.pagaSegunMaestro && !f.decision;
@@ -7564,13 +7524,20 @@ function AyudantesDetalleDia({ usuario }) {
         if ((a.sc || "") !== (b.sc || "")) return (a.sc || "").localeCompare(b.sc || "");
         return String(a.id_ruta).localeCompare(String(b.id_ruta));
       });
-  }, [detalleEntregas, maestro, maestroPorRuta, rutasSnapHelper, aprob, cfgAux, busqueda, filtroDecision, gatilloDisponible]);
+  }, [detalleEntregas, maestro, maestroPorRuta, aprob, cfgAux, busqueda, filtroDecision, gatilloDisponible]);
 
   // Los números del día (sin filtros: el total siempre es el total)
   const numerosPago = useMemo(() => {
+    // Universo SIN filtros de búsqueda: los totales del día son los del día.
+    // Evidencia: paquetes con alguien distinto del chofer, o el motor lo marca.
     const base = [];
     const vistos = new Set();
-    for (const f of detalleEntregas) { vistos.add(String(f.id_ruta)); base.push(String(f.id_ruta)); }
+    for (const r of Object.values(rutasAgrupadas)) {
+      const personas = Object.values(r.personas);
+      if (!personas.some((pp) => !esMismaPersona(pp.nombre, r.driver_name))) continue;
+      const k = String(r.id_ruta);
+      vistos.add(k); base.push(k);
+    }
     for (const r of maestro) {
       const k = String(r.idviaje || "");
       if (k && !vistos.has(k) && String(r.con_ayudante || "").toUpperCase() === "SI") { vistos.add(k); base.push(k); }
@@ -7595,7 +7562,7 @@ function AyudantesDetalleDia({ usuario }) {
       if (!paga && m == null) conAlerta++;
     }
     return { total: base.length, paganMaestro, aprobadas, rechazadas, pendientes, bloqueadas, conAlerta, aPagar, aCobrar, margen: aCobrar - aPagar };
-  }, [detalleEntregas, maestro, maestroPorRuta, aprob, cfgAux]);
+  }, [rutasAgrupadas, maestro, maestroPorRuta, aprob, cfgAux]);
 
   // ── Acciones ─────────────────────────────────────────────────────────
   const filaAprobPayload = (f, extra) => ({
@@ -7733,7 +7700,7 @@ function AyudantesDetalleDia({ usuario }) {
 
   // ── Salud del flujo ──
   const salud = useMemo(() => {
-    const conHelperSnap = Object.keys(rutasSnapHelper).length;
+    const rutasUniverso = detalleEntregas.length;
     const sinDetalle = detalleEntregas.filter(f => f.estado === "SIN_DETALLE").length;
     const incompletas = detalleEntregas.filter(f => f.estado === "INCOMPLETO").length;
     const soloDriver = detalleEntregas.filter(f => f.estado === "SOLO_DRIVER").length;
@@ -7745,7 +7712,7 @@ function AyudantesDetalleDia({ usuario }) {
     if (totalPaquetes === 0) return {
       nivel: "error", color: "#dc2626", bg: "#fef2f2", borde: "#fecaca",
       titulo: "❌ Flujo de entregas NO ejecutado o fallido",
-      detalle: `No hay paquetes entregados cargados para ${fecha}. ${conHelperSnap} ruta(s) con helper según snapshots quedan sin detalle. Ejecuta el flujo con el botón.`,
+      detalle: `No hay paquetes entregados cargados para ${fecha} (${rutasUniverso} ruta(s) en el universo). Sin paquetes no hay % por persona y no se puede decidir. Ejecuta el flujo con el botón.`,
     };
     if (sinDetalle > 0 || incompletas > 0) return {
       nivel: "warn", color: "#b45309", bg: "#fffbeb", borde: "#fde68a",
@@ -7757,7 +7724,7 @@ function AyudantesDetalleDia({ usuario }) {
       titulo: "✅ Flujo de entregas completo",
       detalle: `${totalPaquetes.toLocaleString("es-MX")} paquetes cargados · ${detalleEntregas.length} ruta(s) con helper, todas con cobertura ≥95% contra el snapshot de cierre${soloDriver > 0 ? ` · ${soloDriver} con entregas solo del driver (revisar)` : ""}.`,
     };
-  }, [totalPaquetes, detalleEntregas, rutasSnapHelper, fecha, cargandoEntregas]);
+  }, [totalPaquetes, detalleEntregas, fecha, cargandoEntregas]);
 
   // ── Disparar flujo n8n: SELECTIVO (solo incompletas) o día completo ──
   const ejecutarFlujo = async () => {
@@ -7814,7 +7781,7 @@ function AyudantesDetalleDia({ usuario }) {
       f.total, f.esperado ?? "—", f.cobertura != null ? `${f.cobertura}%` : "—", f.sinRegistro,
       f.estado === "OK" ? "OK" : f.estado === "INCOMPLETO" ? `Incompleto (${f.cobertura}%)`
         : f.estado === "SOLO_DRIVER" ? "Solo driver"
-        : f.estado === "SOLO_MAESTRO" ? "Solo Maestro" : "Sin detalle",
+        : "Sin detalle",
       f.pagaSegunMaestro ? "SI" : "NO",
       f.estadoAux,
       f.decision ? f.decision : (f.bloqueada ? "bloqueada sin decidir" : "sin decidir"),
@@ -8073,10 +8040,8 @@ function AyudantesDetalleDia({ usuario }) {
                       : f.estado === "INCOMPLETO"
                         ? { bg: "#fef3c7", color: "#b45309", txt: `INCOMPLETO ${f.cobertura}%` }
                         : f.estado === "SOLO_DRIVER"
-                          ? { bg: "#fed7aa", color: "#b45309", txt: "SOLO DRIVER" }
-                          : f.estado === "SOLO_MAESTRO"
-                            ? { bg: "#e0e7ff", color: "#3730a3", txt: "SOLO MAESTRO" }
-                            : { bg: "#fee2e2", color: "#dc2626", txt: "SIN DETALLE" };
+                          ? { bg: "#fed7aa", color: "#b45309", txt: "SOLO CHOFER" }
+                          : { bg: "#fee2e2", color: "#dc2626", txt: "SIN CAPTURA" };
                     const abierta = filaAbierta === tid;
                     const enCurso = guardando === tid;
                     // Bloqueada sin decisión se muestra como rechazada (no se paga)
@@ -8216,9 +8181,9 @@ function AyudantesDetalleDia({ usuario }) {
                                 <b> Podés decidirla igual</b>: la decisión se guarda para esta ruta y esta fecha, y el motor la toma sola cuando recalculés el día.
                               </div>
                             )}
-                            {!f.enSnapshot && f.pagaSegunMaestro && (
+                            {!f.conPaquetes && f.pagaSegunMaestro && (
                               <div style={{ fontSize: 11, color: "#92400e", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 4, padding: "6px 9px", marginBottom: 8 }}>
-                                El cálculo del día marca ayudante en esta ruta, pero los snapshots de la operación no lo registraron: no hay % de entrega para respaldar la decisión.
+                                El motor marca ayudante en esta ruta, pero no hay ni un paquete capturado: no hay % de entrega para respaldar la decisión. Puede ser un gap del flujo de entregas.
                               </div>
                             )}
 
@@ -8258,7 +8223,7 @@ function AyudantesDetalleDia({ usuario }) {
                               </div>
                             )}
 
-                            {f.enSnapshot && (
+                            {f.conPaquetes && (
                               <div style={{ marginTop: 8 }}>
                                 <PaquetesHelper idRuta={f.id_ruta} fecha={fecha} />
                               </div>
