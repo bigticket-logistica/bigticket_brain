@@ -7573,6 +7573,10 @@ function AyudantesDetalleDia({ usuario }) {
   const [entregasAgg, setEntregasAgg] = useState(null);  // agregado por la base
   const [progreso, setProgreso] = useState("");
   const [tiempos, setTiempos] = useState(null);          // ms por lectura
+  const [cargandoEntregas, setCargandoEntregas] = useState(false);
+  const [cargandoMaestro, setCargandoMaestro] = useState(false);
+  const [maestroFuente, setMaestroFuente] = useState(null);  // "calculado" | "vista"
+  const [errorMaestro, setErrorMaestro] = useState(null);
 
   const quien = () => (usuario && (usuario.nombre || usuario.email)) || "Brain";
 
@@ -7602,99 +7606,151 @@ function AyudantesDetalleDia({ usuario }) {
     }
   };
 
+  // La carga va en TRES bloques independientes. Ninguno espera a los otros:
+  // antes todo colgaba del Maestro (una vista costosa) y la pestaña quedaba en
+  // blanco aunque las otras lecturas ya hubieran terminado.
   const cargar = async () => {
     setLoading(true);
-    setProgreso("Leyendo entregas del día…");
+    setTiempos(null);
+    setErrorMaestro(null);
+    setProgreso("Leyendo snapshots y aprobaciones…");
     const ms = {};
     const t0 = performance.now();
-    try {
-      // 1) ENTREGAS. Es la lectura más grande del día (un registro por paquete
-      //    de todos los SC). Con la RPC la base agrupa y devuelve ~200 filas.
-      let agg = null;
-      if (rpcEntregasDisponible !== false) {
-        const rpc = await medir("entregas (RPC agregada)",
-          () => sb.rpc("get_entregas_helper_dia", { p_fecha: fecha }), ms);
-        if (rpc.error) {
-          const cod = String(rpc.error.code || "");
-          if (cod === "PGRST202" || cod === "42883") rpcEntregasDisponible = false;
-          console.warn("get_entregas_helper_dia no disponible:", rpc.error.message);
-        } else {
-          rpcEntregasDisponible = true;
-          agg = Array.isArray(rpc.data) ? rpc.data : [];
+
+    // ── Bloque 1 · rápido: con esto ya se ve la tabla y se puede decidir ──
+    const bloqueBase = (async () => {
+      try {
+        const [snaps, aprobRows, cfgR, supR] = await Promise.all([
+          medir("snapshots", () => fetchAll("logistic_ayudantes_snapshots",
+            "id_ruta,service_center_id,driver_name,placa,momento_dia,has_helper,entregados"), ms),
+          medir("aprobaciones", () => sb.from("aprobaciones_helper")
+            .select("travel_id,service_center_id,decision,motivo_rechazo,notificado_at,decidido_por,decidido_at")
+            .eq("fecha", fecha).limit(5000), ms),
+          sb.from("config_pagos_mx").select("clave, valor"),
+          sb.from("vw_supervisores_panel").select("nombre, email, telefono, scs_asignados"),
+        ]);
+        setSnapshots(snaps);
+
+        const idxAprob = {}, mot = {};
+        for (const a of ((aprobRows && aprobRows.data) || [])) {
+          const k = String(a.travel_id);
+          idxAprob[k] = a;
+          if (a.motivo_rechazo) mot[k] = a.motivo_rechazo;
         }
-      }
+        setAprob(idxAprob);
+        setMotivos(mot);
 
-      let ents = [];
-      if (agg) {
-        setEntregasAgg(agg);
-        setEntregas([]);
-      } else {
-        setProgreso("Leyendo paquete por paquete (sin la función agregada)…");
-        ents = await medir("entregas (lectura cruda paginada)",
-          () => fetchAll("meli_paquetes_entregados", "id_ruta,service_center_id,driver_name,user_id_real,user_name_real"), ms);
-        setEntregasAgg(null);
-        setEntregas(ents);
-      }
+        const c = {};
+        for (const r of ((cfgR && cfgR.data) || [])) c[r.clave] = Number(r.valor);
+        setCfgAux({
+          pagar:  c.aux_por_pagar  != null ? c.aux_por_pagar  : 300,
+          cobrar: c.aux_por_cobrar != null ? c.aux_por_cobrar : AUX_COBRAR_MELI,
+        });
 
-      setProgreso("Leyendo snapshots, Maestro y aprobaciones…");
-      const [snaps, maes, aprobRows, cfgR, supR] = await Promise.all([
-        // Solo las columnas que se usan: cobertura y universo con helper.
-        medir("snapshots", () => fetchAll("logistic_ayudantes_snapshots",
-          "id_ruta,service_center_id,driver_name,placa,momento_dia,has_helper,entregados"), ms),
-        // El Maestro es el gatillo del pago: sin con_ayudante = SI, el motor
-        // paga $0 aunque el analista apruebe. Es una VISTA: se lee de una sola
-        // vez (paginarla la recalculaba en cada página y colgaba la pestaña).
-        medir("maestro supervisores", () => sb.from("vw_maestro_supervisores_auto")
+        // Supervisor por SC: una vez para todo el día, en vez de una consulta
+        // por cada rechazo que se notifica.
+        const sm = {};
+        for (const sup of ((supR && supR.data) || [])) {
+          const scs = Array.isArray(sup.scs_asignados) ? sup.scs_asignados : [];
+          for (const sc of scs) if (!sm[String(sc)]) sm[String(sc)] = sup;
+        }
+        setSupPorSc(sm);
+      } catch (e) {
+        console.error("Error en la lectura base:", e);
+        setSnapshots([]); setAprob({});
+      } finally {
+        setProgreso("");
+        setLoading(false);   // la tabla ya se puede pintar
+      }
+    })();
+
+    // ── Bloque 2 · entregas: llena los % de cada persona ──
+    const bloqueEntregas = (async () => {
+      setCargandoEntregas(true);
+      try {
+        let agg = null;
+        if (rpcEntregasDisponible !== false) {
+          const rpc = await medir("entregas (RPC agregada)",
+            () => sb.rpc("get_entregas_helper_dia", { p_fecha: fecha }), ms);
+          if (rpc.error) {
+            const cod = String(rpc.error.code || "");
+            if (cod === "PGRST202" || cod === "42883") rpcEntregasDisponible = false;
+            console.warn("get_entregas_helper_dia no disponible:", rpc.error.message, rpc.error.code || "");
+          } else {
+            rpcEntregasDisponible = true;
+            agg = Array.isArray(rpc.data) ? rpc.data : [];
+          }
+        }
+        if (agg) {
+          setEntregasAgg(agg);
+          setEntregas([]);
+        } else {
+          const ents = await medir("entregas (lectura cruda paginada)",
+            () => fetchAll("meli_paquetes_entregados", "id_ruta,service_center_id,driver_name,user_id_real,user_name_real"), ms);
+          setEntregasAgg(null);
+          setEntregas(ents);
+        }
+      } catch (e) {
+        console.error("Error leyendo entregas:", e);
+        setEntregasAgg(null); setEntregas([]);
+      } finally {
+        setCargandoEntregas(false);
+      }
+    })();
+
+    // ── Bloque 3 · gatillo de pago (lo más lento) ──
+    // Primero la tabla YA CALCULADA (maestro_jornada_mx): es física, indexada y
+    // trae tiene_auxiliar/tipologia/placa listos. Solo si el día todavía no se
+    // calculó se cae a la vista en vivo, que es la que colgaba la pestaña.
+    const bloqueMaestro = (async () => {
+      setCargandoMaestro(true);
+      try {
+        const mj = await medir("gatillo (tabla calculada)", () => sb.from("maestro_jornada_mx")
+          .select("id_ruta,service_center_id,driver_name,placa,tipologia,tipo_vehiculo_meli,vehiculo_raw,ciclo,tiene_auxiliar,auxiliar_snapshots_total,status_final")
+          .eq("fecha", fecha).limit(5000), ms);
+
+        if (!mj.error && (mj.data || []).length > 0) {
+          setMaestro((mj.data || []).map((r) => ({
+            idviaje: r.id_ruta,
+            service_center_id: r.service_center_id,
+            driver_name: r.driver_name,
+            con_ayudante: r.tiene_auxiliar ? "SI" : "NO",
+            cantidad_personas: r.auxiliar_snapshots_total,
+            tipo_vehiculo: r.vehiculo_raw || r.tipo_vehiculo_meli,
+            _tipologia: r.tipologia,
+            patentes: r.placa,
+            cluster_meli: r.ciclo,
+            status_final: r.status_final,
+          })));
+          setMaestroFuente("calculado");
+          return;
+        }
+
+        const v = await medir("gatillo (vista en vivo)", () => sb.from("vw_maestro_supervisores_auto")
           .select("idviaje,service_center_id,driver_name,con_ayudante,cantidad_personas,tipo_vehiculo,patentes,cluster_meli,status_final")
-          .eq("fecha", fecha).limit(5000), ms),
-        medir("aprobaciones", () => sb.from("aprobaciones_helper")
-          .select("travel_id,service_center_id,decision,motivo_rechazo,notificado_at,decidido_por,decidido_at")
-          .eq("fecha", fecha).limit(5000), ms),
-        sb.from("config_pagos_mx").select("clave, valor"),
-        sb.from("vw_supervisores_panel").select("nombre, email, telefono, scs_asignados"),
-      ]);
-      if (maes.error) throw maes.error;
-      if (aprobRows.error) throw aprobRows.error;
-
-      setSnapshots(snaps);
-      setMaestro(maes.data || []);
-
-      const idxAprob = {}, mot = {};
-      for (const a of (aprobRows.data || [])) {
-        const k = String(a.travel_id);
-        idxAprob[k] = a;
-        if (a.motivo_rechazo) mot[k] = a.motivo_rechazo;
+          .eq("fecha", fecha).limit(5000), ms);
+        if (v.error) throw v.error;
+        setMaestro(v.data || []);
+        setMaestroFuente("vista");
+      } catch (e) {
+        console.error("Error leyendo el gatillo de pago:", e);
+        setMaestro([]);
+        setMaestroFuente(null);
+        setErrorMaestro(e.message || String(e));
+      } finally {
+        setCargandoMaestro(false);
       }
-      setAprob(idxAprob);
-      setMotivos(mot);
+    })();
 
-      const c = {};
-      for (const r of (cfgR.data || [])) c[r.clave] = Number(r.valor);
-      setCfgAux({
-        pagar:  c.aux_por_pagar  != null ? c.aux_por_pagar  : 300,
-        cobrar: c.aux_por_cobrar != null ? c.aux_por_cobrar : AUX_COBRAR_MELI,
-      });
-
-      // Supervisor por SC: se trae una vez para todo el día, en vez de una
-      // consulta por cada rechazo que se notifica.
-      const sm = {};
-      for (const sup of (supR.data || [])) {
-        const scs = Array.isArray(sup.scs_asignados) ? sup.scs_asignados : [];
-        for (const sc of scs) if (!sm[String(sc)]) sm[String(sc)] = sup;
-      }
-      setSupPorSc(sm);
-
-      ms.TOTAL = Math.round(performance.now() - t0);
-      console.log(`[Ayudantes ${fecha}] TOTAL: ${ms.TOTAL} ms`);
-      setTiempos(ms);
-    } catch (e) {
-      console.error("Error cargando ayudantes:", e);
-      setSnapshots([]); setEntregas([]); setEntregasAgg(null); setMaestro([]); setAprob({});
-      setTiempos(null);
-    }
-    setProgreso("");
-    setLoading(false);
+    await Promise.allSettled([bloqueBase, bloqueEntregas, bloqueMaestro]);
+    ms.TOTAL = Math.round(performance.now() - t0);
+    console.log(`[Ayudantes ${fecha}] TOTAL: ${ms.TOTAL} ms`);
+    setTiempos(ms);
   };
+
+  // Refrescar reintenta la RPC agregada: así, si la creaste con la pestaña ya
+  // abierta, no hace falta recargar la página entera.
+  const refrescar = () => { rpcEntregasDisponible = null; cargar(); };
 
   // ── Helpers de nombres (MELI duplica: "Pedro Jehonatan Pedro Jehonatan Garduño Lopez") ──
   const normTokens = (s) => (s || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z\s]/g, " ").split(/\s+/).filter(Boolean);
@@ -7914,7 +7970,7 @@ function AyudantesDetalleDia({ usuario }) {
       const pagaSegunMaestro = !!m && String(m.con_ayudante || "").toUpperCase() === "SI";
       const sc = f.sc || (m && m.service_center_id) || null;
       const vehiculo = (m && m.tipo_vehiculo) || null;
-      const tipologia = parsearTipologia(vehiculo, null);
+      const tipologia = (m && m._tipologia) || parsearTipologia(vehiculo, null);
       const a = aprob[k] || null;
       const decision = a && a.decision ? String(a.decision).toLowerCase() : null;
       const bloqueada = SC_FORANEOS.has(sc) && tipologia === "SMALL VAN";
@@ -8005,7 +8061,7 @@ function AyudantesDetalleDia({ usuario }) {
       const paga = !!m && String(m.con_ayudante || "").toUpperCase() === "SI";
       const a = aprob[k] || null;
       const dec = a && a.decision ? String(a.decision).toLowerCase() : null;
-      const tip = parsearTipologia((m && m.tipo_vehiculo) || null, null);
+      const tip = (m && m._tipologia) || parsearTipologia((m && m.tipo_vehiculo) || null, null);
       const sc = (m && m.service_center_id) || null;
       if (paga) {
         paganMaestro++;
@@ -8160,6 +8216,11 @@ function AyudantesDetalleDia({ usuario }) {
     const sinDetalle = detalleEntregas.filter(f => f.estado === "SIN_DETALLE").length;
     const incompletas = detalleEntregas.filter(f => f.estado === "INCOMPLETO").length;
     const soloDriver = detalleEntregas.filter(f => f.estado === "SOLO_DRIVER").length;
+    if (cargandoEntregas) return {
+      nivel: "info", color: "#1e40af", bg: "#eff6ff", borde: "#bfdbfe",
+      titulo: "⏳ Leyendo entregas del día",
+      detalle: "Todavía no se puede juzgar la salud del flujo.",
+    };
     if (totalPaquetes === 0) return {
       nivel: "error", color: "#dc2626", bg: "#fef2f2", borde: "#fecaca",
       titulo: "❌ Flujo de entregas NO ejecutado o fallido",
@@ -8175,7 +8236,7 @@ function AyudantesDetalleDia({ usuario }) {
       titulo: "✅ Flujo de entregas completo",
       detalle: `${totalPaquetes.toLocaleString("es-MX")} paquetes cargados · ${detalleEntregas.length} ruta(s) con helper, todas con cobertura ≥95% contra el snapshot de cierre${soloDriver > 0 ? ` · ${soloDriver} con entregas solo del driver (revisar)` : ""}.`,
     };
-  }, [totalPaquetes, detalleEntregas, rutasSnapHelper, fecha]);
+  }, [totalPaquetes, detalleEntregas, rutasSnapHelper, fecha, cargandoEntregas]);
 
   // ── Disparar flujo n8n: SELECTIVO (solo incompletas) o día completo ──
   const ejecutarFlujo = async () => {
@@ -8289,7 +8350,7 @@ function AyudantesDetalleDia({ usuario }) {
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           <input type="date" value={fecha} onChange={e => setFecha(e.target.value)}
             style={{ background: "#fff", border: "1px solid #cbd5e1", borderRadius: 4, padding: "7px 10px", fontSize: 12 }} />
-          <button onClick={cargar} title="Refrescar datos"
+          <button onClick={refrescar} title="Refrescar datos"
             style={{ padding: "8px 12px", background: "#fff", border: "1px solid #cbd5e1", borderRadius: 6, fontSize: 12, fontWeight: 600, color: "#475569", cursor: "pointer" }}>
             ↻ Refrescar
           </button>
@@ -8303,6 +8364,11 @@ function AyudantesDetalleDia({ usuario }) {
       </div>
 
       {/* ── Salud del flujo + botón de ejecución ── */}
+      {cargandoEntregas && (
+        <div style={{ background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 6, padding: "9px 14px", marginBottom: 10, fontSize: 12, color: "#1e40af" }}>
+          ⏳ Leyendo las entregas del día… los % por persona aparecen cuando termine.
+        </div>
+      )}
       <div style={{ background: salud.bg, border: `1px solid ${salud.borde}`, borderRadius: 6, padding: "12px 14px", marginBottom: 14 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
           <div style={{ flex: 1, minWidth: 280 }}>
@@ -8344,7 +8410,8 @@ function AyudantesDetalleDia({ usuario }) {
                   <option value="alertas">Con alerta</option>
                 </select>
                 <button onClick={aprobarLote}
-                  disabled={guardando === "lote" || filasPago.filter((f) => f.pagaSegunMaestro && !f.decision && !f.bloqueada).length === 0}
+                  title={cargandoMaestro ? "Esperando el gatillo de pago del día" : "Aprobar las rutas visibles sin bloqueo"}
+                  disabled={cargandoMaestro || guardando === "lote" || filasPago.filter((f) => f.pagaSegunMaestro && !f.decision && !f.bloqueada).length === 0}
                   style={{ padding: "8px 14px", background: "#16a34a", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 700, color: "#fff",
                     cursor: guardando === "lote" ? "wait" : "pointer",
                     opacity: filasPago.filter((f) => f.pagaSegunMaestro && !f.decision && !f.bloqueada).length === 0 ? 0.45 : 1 }}>
@@ -8353,16 +8420,27 @@ function AyudantesDetalleDia({ usuario }) {
               </div>
             </div>
 
+            {cargandoMaestro && (
+              <div style={{ marginTop: 10, padding: "7px 10px", background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 4, fontSize: 11, color: "#1e40af" }}>
+                ⏳ Leyendo el gatillo de pago del día… los números y la columna <b>Paga</b> se completan cuando llegue. La tabla y las decisiones ya funcionan.
+              </div>
+            )}
+            {errorMaestro && (
+              <div style={{ marginTop: 10, padding: "7px 10px", background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 4, fontSize: 11, color: "#991b1b" }}>
+                ❌ No se pudo leer el gatillo de pago: {errorMaestro}. Sin ese dato no se sabe qué rutas paga el motor — no apruebes hasta resolverlo.
+              </div>
+            )}
+
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 10, marginTop: 12 }}>
               {[
-                { l: "Pagan según Maestro", v: numerosPago.paganMaestro, c: "#1a3a6b" },
-                { l: "Sin decidir", v: numerosPago.pendientes, c: numerosPago.pendientes > 0 ? "#b45309" : "#64748b",
+                { l: "Pagan según Maestro", v: cargandoMaestro ? "…" : numerosPago.paganMaestro, c: "#1a3a6b" },
+                { l: "Sin decidir", v: cargandoMaestro ? "…" : numerosPago.pendientes, c: numerosPago.pendientes > 0 ? "#b45309" : "#64748b",
                   sub: numerosPago.bloqueadas > 0 ? `${numerosPago.bloqueadas} bloqueada(s)` : null },
-                { l: "Aprobadas", v: numerosPago.aprobadas, c: "#16a34a" },
-                { l: "Rechazadas", v: numerosPago.rechazadas, c: "#dc2626" },
-                { l: "A pagar", v: `$${numerosPago.aPagar.toLocaleString("es-MX")}`, c: "#16a34a", sub: `$${cfgAux.pagar} por ruta` },
-                { l: "MELI nos paga", v: `$${numerosPago.aCobrar.toLocaleString("es-MX")}`, c: "#1a3a6b", sub: `$${cfgAux.cobrar} por ruta con ayudante` },
-                { l: "Margen", v: `$${numerosPago.margen.toLocaleString("es-MX")}`, c: "#F47B20", sub: "MELI cobra igual si rechazás" },
+                { l: "Aprobadas", v: cargandoMaestro ? "…" : numerosPago.aprobadas, c: "#16a34a" },
+                { l: "Rechazadas", v: cargandoMaestro ? "…" : numerosPago.rechazadas, c: "#dc2626" },
+                { l: "A pagar", v: cargandoMaestro ? "…" : `$${numerosPago.aPagar.toLocaleString("es-MX")}`, c: "#16a34a", sub: `$${cfgAux.pagar} por ruta` },
+                { l: "MELI nos paga", v: cargandoMaestro ? "…" : `$${numerosPago.aCobrar.toLocaleString("es-MX")}`, c: "#1a3a6b", sub: `$${cfgAux.cobrar} por ruta con ayudante` },
+                { l: "Margen", v: cargandoMaestro ? "…" : `$${numerosPago.margen.toLocaleString("es-MX")}`, c: "#F47B20", sub: "MELI cobra igual si rechazás" },
               ].map((k, i) => (
                 <div key={i} style={{ background: "#f8fafc", border: "1px solid #e4e7ec", borderRadius: 5, padding: "8px 10px" }}>
                   <div style={{ fontSize: 9, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase" }}>{k.l}</div>
@@ -8416,6 +8494,8 @@ function AyudantesDetalleDia({ usuario }) {
               {Object.entries(tiempos).filter(([k]) => k !== "TOTAL")
                 .sort((a, b) => b[1] - a[1])
                 .map(([k, v]) => ` · ${k}: ${v} ms`).join("")}
+              {maestroFuente === "calculado" && " · gatillo desde la tabla ya calculada"}
+              {maestroFuente === "vista" && " · gatillo desde la vista en vivo (el día no está calculado)"}
               {rpcEntregasDisponible === false && " · sin get_entregas_helper_dia: la lectura de paquetes va cruda"}
             </div>
           )}
