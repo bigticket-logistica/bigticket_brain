@@ -7010,6 +7010,7 @@ const badgeAux = (estado) => {
     "SOSPECHOSO":            { bg: "#fee2e2", co: "#991b1b" },
     "NO_AUTORIZADO":         { bg: "#fee2e2", co: "#991b1b" },
     "SIN_HELPER":            { bg: "#f1f5f9", co: "#64748b" },
+    "FUERA_DEL_CALCULO":     { bg: "#e0e7ff", co: "#3730a3" },
   };
   const m = map[estado] || map["SIN_HELPER"];
   return { padding: "2px 6px", borderRadius: 3, fontWeight: 600, background: m.bg, color: m.co };
@@ -7485,7 +7486,12 @@ function AyudantesDetalleDia({ usuario }) {
       const a = aprob[k] || null;
       const decision = a && a.decision ? String(a.decision).toLowerCase() : null;
       const bloqueada = SC_FORANEOS.has(sc) && tipologia === "SMALL VAN";
-      const estadoAux = estadoAuxiliar({ pagaSegunMaestro, decision, sc, tipologia });
+      // Dos situaciones muy distintas que antes se veían iguales:
+      //   · la ruta NO está en el cálculo del día  → FUERA_DEL_CALCULO
+      //   · está y el cálculo dice que no hubo ayudante → SIN_HELPER
+      const estadoAux = (gatilloDisponible && !m)
+        ? "FUERA_DEL_CALCULO"
+        : estadoAuxiliar({ pagaSegunMaestro, decision, sc, tipologia });
       const montoPagar = estadoAux === "APROBADO" ? cfgAux.pagar : 0;
       const montoCobrar = pagaSegunMaestro ? cfgAux.cobrar : 0;
 
@@ -7494,8 +7500,8 @@ function AyudantesDetalleDia({ usuario }) {
       if (gatilloDisponible) {
         if (f.enSnapshot && !pagaSegunMaestro) {
           alertas.push(m
-            ? "El Maestro no marca ayudante en esta ruta: el motor paga $0 aunque la apruebes."
-            : "La ruta no está en el Maestro del día: el motor no la va a procesar.");
+            ? "El cálculo del día dice que esta ruta no tuvo ayudante: el motor paga $0 aunque la apruebes. Revisá la bitácora del supervisor."
+            : "Esta ruta no aparece en el cálculo del día, así que hoy el motor no la procesa. Tu decisión igual queda registrada y se aplica sola cuando el día se recalcule.");
         }
         if (!f.enSnapshot && pagaSegunMaestro) {
           alertas.push("El snapshot no marcó ayudante, pero el Maestro sí: esta ruta SÍ paga si la aprobás.");
@@ -8155,8 +8161,7 @@ function AyudantesDetalleDia({ usuario }) {
 
                         {/* ── Decisión ── */}
                         <td style={{ padding: "8px", textAlign: "center", whiteSpace: "nowrap" }}>
-                          {f.pagaSegunMaestro || f.decision ? (
-                            <div style={{ display: "inline-flex", gap: 4 }}>
+                          <div style={{ display: "inline-flex", gap: 4 }}>
                               <button onClick={() => decidir(f, "aprobado")} disabled={enCurso}
                                 title={f.bloqueada ? "Bloqueada por defecto: aprobar es una excepción explícita" : "Aprobar el pago del ayudante"}
                                 style={{ padding: "5px 9px", fontSize: 11, fontWeight: 700, borderRadius: 5, cursor: enCurso ? "wait" : "pointer",
@@ -8169,9 +8174,9 @@ function AyudantesDetalleDia({ usuario }) {
                                   border: f.decision === "rechazado" ? "2px solid #dc2626" : "1px solid #cbd5e1",
                                   background: f.decision === "rechazado" ? "#dc2626" : "#fff",
                                   color: f.decision === "rechazado" ? "#fff" : "#dc2626" }}>✗</button>
-                            </div>
-                          ) : (
-                            <span style={{ fontSize: 10, color: "#cbd5e1" }}>no aplica</span>
+                          </div>
+                          {f.decision && !f.pagaSegunMaestro && (
+                            <div style={{ fontSize: 9, color: "#3730a3", fontWeight: 600 }}>guardada · sin efecto hoy</div>
                           )}
                           {f.decidido_por && (
                             <div style={{ fontSize: 9, color: "#94a3b8", marginTop: 2 }}>{f.decidido_por}</div>
@@ -8203,6 +8208,19 @@ function AyudantesDetalleDia({ usuario }) {
                               {f.status_final && <span>Status {f.status_final}</span>}
                               {f.bloqueada && <span style={{ color: "#b91c1c", fontWeight: 700 }}>SC foráneo + Small Van → bloqueada por defecto</span>}
                             </div>
+
+                            {f.estadoAux === "FUERA_DEL_CALCULO" && (
+                              <div style={{ fontSize: 11, color: "#3730a3", background: "#eef2ff", border: "1px solid #c7d2fe", borderRadius: 4, padding: "6px 9px", marginBottom: 8 }}>
+                                Esta ruta tuvo ayudante en la operación, pero no está en el cálculo de pagos del {fecha}.
+                                Las causas habituales: se rosteó después de calcular el día, quedó cancelada o rechazada, o el cálculo se corrió antes de que apareciera.
+                                <b> Podés decidirla igual</b>: la decisión se guarda para esta ruta y esta fecha, y el motor la toma sola cuando recalculés el día.
+                              </div>
+                            )}
+                            {!f.enSnapshot && f.pagaSegunMaestro && (
+                              <div style={{ fontSize: 11, color: "#92400e", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 4, padding: "6px 9px", marginBottom: 8 }}>
+                                El cálculo del día marca ayudante en esta ruta, pero los snapshots de la operación no lo registraron: no hay % de entrega para respaldar la decisión.
+                              </div>
+                            )}
 
                             {/* Comentario del analista: se guarda sin forzar decisión */}
                             <div style={{ marginBottom: 8 }}>
