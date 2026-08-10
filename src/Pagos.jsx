@@ -7536,6 +7536,12 @@ function DetalleRutaExpandido({ detalle, fmtHoraMX, onClose }) {
 
 const N8N_WEBHOOK_RERUN_HELPERS = "https://bigticket2026.app.n8n.cloud/webhook/rerun-helpers-mx";
 
+// ¿Existe get_entregas_helper_dia en la base? null = sin probar.
+// Con la función, la base agrupa los paquetes y devuelve ~200 filas en vez de
+// las decenas de miles de paquetes del día. Sin ella se cae a la lectura cruda
+// paginada (correcta, pero lenta).
+let rpcEntregasDisponible = null;
+
 function AyudantesDetalleDia({ usuario }) {
   // ── Fecha por defecto: día anterior (operativo MX) ──
   const fechaAyerOperativa = () => {
@@ -7546,13 +7552,11 @@ function AyudantesDetalleDia({ usuario }) {
     } catch { return new Date(Date.now() - 86400000).toISOString().slice(0, 10); }
   };
 
-  const [vista, setVista] = useState("entregas"); // "entregas" | "matriz"
   const [snapshots, setSnapshots] = useState([]);
   const [entregas, setEntregas] = useState([]);
   const [loading, setLoading] = useState(true);
   const [fecha, setFecha] = useState(fechaAyerOperativa());
   const [busqueda, setBusqueda] = useState("");
-  const [filtroAsignable, setFiltroAsignable] = useState("asignables"); // "asignables" | "no_asignables" | "todas"
   const [disparando, setDisparando] = useState(false);
   const [msgFlujo, setMsgFlujo] = useState("");
 
@@ -7566,6 +7570,9 @@ function AyudantesDetalleDia({ usuario }) {
   const [notificando, setNotificando] = useState(null);
   const [filaAbierta, setFilaAbierta] = useState(null);
   const [filtroDecision, setFiltroDecision] = useState("todas");
+  const [entregasAgg, setEntregasAgg] = useState(null);  // agregado por la base
+  const [progreso, setProgreso] = useState("");
+  const [tiempos, setTiempos] = useState(null);          // ms por lectura
 
   const quien = () => (usuario && (usuario.nombre || usuario.email)) || "Brain";
 
@@ -7583,25 +7590,77 @@ function AyudantesDetalleDia({ usuario }) {
     return out;
   };
 
+  // Cronómetro por lectura: queda en consola y en el pie de la pestaña, para
+  // saber cuál de las consultas es la que cuesta en lugar de adivinar.
+  const medir = async (nombre, fn, acumulador) => {
+    const t0 = performance.now();
+    try { return await fn(); }
+    finally {
+      const ms = Math.round(performance.now() - t0);
+      acumulador[nombre] = ms;
+      console.log(`[Ayudantes ${fecha}] ${nombre}: ${ms} ms`);
+    }
+  };
+
   const cargar = async () => {
     setLoading(true);
+    setProgreso("Leyendo entregas del día…");
+    const ms = {};
+    const t0 = performance.now();
     try {
-      const [snaps, ents, maes, aprobRows, cfgR, supR] = await Promise.all([
-        fetchAll("logistic_ayudantes_snapshots", "id_ruta,service_center_id,cluster,driver_id,driver_name,vehiculo_descripcion,placa,is_assignable,momento_dia,hora_snapshot,has_helper,entregados,total_envios"),
-        fetchAll("meli_paquetes_entregados", "id_ruta,service_center_id,driver_id,driver_name,user_id_real,user_name_real"),
+      // 1) ENTREGAS. Es la lectura más grande del día (un registro por paquete
+      //    de todos los SC). Con la RPC la base agrupa y devuelve ~200 filas.
+      let agg = null;
+      if (rpcEntregasDisponible !== false) {
+        const rpc = await medir("entregas (RPC agregada)",
+          () => sb.rpc("get_entregas_helper_dia", { p_fecha: fecha }), ms);
+        if (rpc.error) {
+          const cod = String(rpc.error.code || "");
+          if (cod === "PGRST202" || cod === "42883") rpcEntregasDisponible = false;
+          console.warn("get_entregas_helper_dia no disponible:", rpc.error.message);
+        } else {
+          rpcEntregasDisponible = true;
+          agg = Array.isArray(rpc.data) ? rpc.data : [];
+        }
+      }
+
+      let ents = [];
+      if (agg) {
+        setEntregasAgg(agg);
+        setEntregas([]);
+      } else {
+        setProgreso("Leyendo paquete por paquete (sin la función agregada)…");
+        ents = await medir("entregas (lectura cruda paginada)",
+          () => fetchAll("meli_paquetes_entregados", "id_ruta,service_center_id,driver_name,user_id_real,user_name_real"), ms);
+        setEntregasAgg(null);
+        setEntregas(ents);
+      }
+
+      setProgreso("Leyendo snapshots, Maestro y aprobaciones…");
+      const [snaps, maes, aprobRows, cfgR, supR] = await Promise.all([
+        // Solo las columnas que se usan: cobertura y universo con helper.
+        medir("snapshots", () => fetchAll("logistic_ayudantes_snapshots",
+          "id_ruta,service_center_id,driver_name,placa,momento_dia,has_helper,entregados"), ms),
         // El Maestro es el gatillo del pago: sin con_ayudante = SI, el motor
-        // paga $0 aunque el analista apruebe.
-        fetchAll("vw_maestro_supervisores_auto", "idviaje,service_center_id,driver_name,con_ayudante,cantidad_personas,tipo_vehiculo,patentes,cluster_meli,status_final"),
-        fetchAll("aprobaciones_helper", "travel_id,service_center_id,decision,motivo_rechazo,notificado_at,decidido_por,decidido_at"),
+        // paga $0 aunque el analista apruebe. Es una VISTA: se lee de una sola
+        // vez (paginarla la recalculaba en cada página y colgaba la pestaña).
+        medir("maestro supervisores", () => sb.from("vw_maestro_supervisores_auto")
+          .select("idviaje,service_center_id,driver_name,con_ayudante,cantidad_personas,tipo_vehiculo,patentes,cluster_meli,status_final")
+          .eq("fecha", fecha).limit(5000), ms),
+        medir("aprobaciones", () => sb.from("aprobaciones_helper")
+          .select("travel_id,service_center_id,decision,motivo_rechazo,notificado_at,decidido_por,decidido_at")
+          .eq("fecha", fecha).limit(5000), ms),
         sb.from("config_pagos_mx").select("clave, valor"),
         sb.from("vw_supervisores_panel").select("nombre, email, telefono, scs_asignados"),
       ]);
+      if (maes.error) throw maes.error;
+      if (aprobRows.error) throw aprobRows.error;
+
       setSnapshots(snaps);
-      setEntregas(ents);
-      setMaestro(maes);
+      setMaestro(maes.data || []);
 
       const idxAprob = {}, mot = {};
-      for (const a of aprobRows) {
+      for (const a of (aprobRows.data || [])) {
         const k = String(a.travel_id);
         idxAprob[k] = a;
         if (a.motivo_rechazo) mot[k] = a.motivo_rechazo;
@@ -7624,10 +7683,16 @@ function AyudantesDetalleDia({ usuario }) {
         for (const sc of scs) if (!sm[String(sc)]) sm[String(sc)] = sup;
       }
       setSupPorSc(sm);
+
+      ms.TOTAL = Math.round(performance.now() - t0);
+      console.log(`[Ayudantes ${fecha}] TOTAL: ${ms.TOTAL} ms`);
+      setTiempos(ms);
     } catch (e) {
-      console.error(e);
-      setSnapshots([]); setEntregas([]); setMaestro([]); setAprob({});
+      console.error("Error cargando ayudantes:", e);
+      setSnapshots([]); setEntregas([]); setEntregasAgg(null); setMaestro([]); setAprob({});
+      setTiempos(null);
     }
+    setProgreso("");
     setLoading(false);
   };
 
@@ -7691,18 +7756,39 @@ function AyudantesDetalleDia({ usuario }) {
     return m;
   }, [snapshots]);
 
+  // ── Paquetes por ruta y por persona ──────────────────────────────────
+  // Una sola estructura para las dos fuentes posibles: las filas ya agrupadas
+  // por la base (get_entregas_helper_dia) o la lectura cruda paquete a paquete.
+  const rutasAgrupadas = useMemo(() => {
+    const rutas = {};
+    const sumar = (idRuta, sc, driverName, userId, nombre, n) => {
+      const k = String(idRuta);
+      if (!rutas[k]) rutas[k] = { id_ruta: idRuta, sc, driver_name: driverName, total: 0, sinRegistro: 0, personas: {} };
+      rutas[k].total += n;
+      if (userId == null) { rutas[k].sinRegistro += n; return; }
+      const uk = String(userId);
+      if (!rutas[k].personas[uk]) rutas[k].personas[uk] = { user_id: userId, nombre, paquetes: 0 };
+      rutas[k].personas[uk].paquetes += n;
+    };
+    if (entregasAgg) {
+      for (const r of entregasAgg) {
+        sumar(r.id_ruta, r.service_center_id, r.driver_name, r.user_id_real, r.user_name_real, Number(r.paquetes) || 0);
+      }
+    } else {
+      for (const p of entregas) {
+        sumar(p.id_ruta, p.service_center_id, p.driver_name, p.user_id_real, p.user_name_real, 1);
+      }
+    }
+    return rutas;
+  }, [entregasAgg, entregas]);
+
+  const totalPaquetes = useMemo(
+    () => Object.values(rutasAgrupadas).reduce((a, r) => a + r.total, 0),
+    [rutasAgrupadas]);
+
   // ── Detalle de entregas por ruta: driver vs helpers con % ──
   const detalleEntregas = useMemo(() => {
-    const rutas = {};
-    for (const p of entregas) {
-      const k = String(p.id_ruta);
-      if (!rutas[k]) rutas[k] = { id_ruta: p.id_ruta, sc: p.service_center_id, driver_name: p.driver_name, total: 0, sinRegistro: 0, personas: {} };
-      rutas[k].total++;
-      if (p.user_id_real == null) { rutas[k].sinRegistro++; continue; }
-      const uk = String(p.user_id_real);
-      if (!rutas[k].personas[uk]) rutas[k].personas[uk] = { user_id: p.user_id_real, nombre: p.user_name_real, paquetes: 0 };
-      rutas[k].personas[uk].paquetes++;
-    }
+    const rutas = rutasAgrupadas;
 
     const filas = [];
     const rutasConDataEntregas = new Set(Object.keys(rutas));
@@ -7770,7 +7856,7 @@ function AyudantesDetalleDia({ usuario }) {
         if ((a.sc || "") !== (b.sc || "")) return (a.sc || "").localeCompare(b.sc || "");
         return a.id_ruta - b.id_ruta;
       });
-  }, [entregas, rutasSnapHelper, entregadosEsperados, busqueda]);
+  }, [rutasAgrupadas, rutasSnapHelper, entregadosEsperados, busqueda]);
 
   // ══════════════════════════════════════════════════════════════════════
   //  APROBACIÓN DE AYUDANTES — "ver los números y aprobar"
@@ -8074,7 +8160,7 @@ function AyudantesDetalleDia({ usuario }) {
     const sinDetalle = detalleEntregas.filter(f => f.estado === "SIN_DETALLE").length;
     const incompletas = detalleEntregas.filter(f => f.estado === "INCOMPLETO").length;
     const soloDriver = detalleEntregas.filter(f => f.estado === "SOLO_DRIVER").length;
-    if (entregas.length === 0) return {
+    if (totalPaquetes === 0) return {
       nivel: "error", color: "#dc2626", bg: "#fef2f2", borde: "#fecaca",
       titulo: "❌ Flujo de entregas NO ejecutado o fallido",
       detalle: `No hay paquetes entregados cargados para ${fecha}. ${conHelperSnap} ruta(s) con helper según snapshots quedan sin detalle. Ejecuta el flujo con el botón.`,
@@ -8082,14 +8168,14 @@ function AyudantesDetalleDia({ usuario }) {
     if (sinDetalle > 0 || incompletas > 0) return {
       nivel: "warn", color: "#b45309", bg: "#fffbeb", borde: "#fde68a",
       titulo: `⚠️ Flujo incompleto: ${sinDetalle} ruta(s) sin detalle · ${incompletas} con captura parcial`,
-      detalle: `Se cargaron ${entregas.length.toLocaleString("es-MX")} paquetes. ${sinDetalle} ruta(s) con helper no tienen entregas registradas y ${incompletas} tienen menos paquetes capturados que los entregados según el snapshot de cierre (cobertura <95%)${soloDriver > 0 ? `; ${soloDriver} solo muestran entregas del driver` : ""}. Los % de esas rutas NO son confiables — re-ejecuta el flujo del día.`,
+      detalle: `Se cargaron ${totalPaquetes.toLocaleString("es-MX")} paquetes. ${sinDetalle} ruta(s) con helper no tienen entregas registradas y ${incompletas} tienen menos paquetes capturados que los entregados según el snapshot de cierre (cobertura <95%)${soloDriver > 0 ? `; ${soloDriver} solo muestran entregas del driver` : ""}. Los % de esas rutas NO son confiables — re-ejecuta el flujo del día.`,
     };
     return {
       nivel: "ok", color: "#166534", bg: "#f0fdf4", borde: "#86efac",
       titulo: "✅ Flujo de entregas completo",
-      detalle: `${entregas.length.toLocaleString("es-MX")} paquetes cargados · ${detalleEntregas.length} ruta(s) con helper, todas con cobertura ≥95% contra el snapshot de cierre${soloDriver > 0 ? ` · ${soloDriver} con entregas solo del driver (revisar)` : ""}.`,
+      detalle: `${totalPaquetes.toLocaleString("es-MX")} paquetes cargados · ${detalleEntregas.length} ruta(s) con helper, todas con cobertura ≥95% contra el snapshot de cierre${soloDriver > 0 ? ` · ${soloDriver} con entregas solo del driver (revisar)` : ""}.`,
     };
-  }, [entregas, detalleEntregas, rutasSnapHelper, fecha]);
+  }, [totalPaquetes, detalleEntregas, rutasSnapHelper, fecha]);
 
   // ── Disparar flujo n8n: SELECTIVO (solo incompletas) o día completo ──
   const ejecutarFlujo = async () => {
@@ -8126,102 +8212,6 @@ function AyudantesDetalleDia({ usuario }) {
       setMsgFlujo(`❌ No se pudo disparar el flujo: ${e.message}. Revisa que el workflow webhook esté activo en n8n y que la sesión MELI esté vigente.`);
     }
     setDisparando(false);
-  };
-
-  // ════════ Lo siguiente alimenta la vista MATRIZ (snapshots, lógica original) ════════
-  const horasMomentos = useMemo(() => {
-    const m = {};
-    for (const s of snapshots) {
-      if (!m[s.momento_dia]) m[s.momento_dia] = s.hora_snapshot;
-    }
-    return m;
-  }, [snapshots]);
-
-  const consolidados = useMemo(() => {
-    const m = {};
-    for (const s of snapshots) {
-      const k = String(s.id_ruta);
-      if (!m[k]) m[k] = {
-        id_ruta: s.id_ruta,
-        cluster: s.cluster,
-        service_center_id: s.service_center_id,
-        driver_id: s.driver_id,
-        driver_name: s.driver_name,
-        vehiculo_descripcion: s.vehiculo_descripcion,
-        placa: s.placa,
-        is_assignable: s.is_assignable,
-        snapshots: { inicio: null, media_manana: null, tarde: null, fin_tarde: null, pre_cierre: null },
-        snapshots_horas: {},
-        snapshots_con_helper: 0,
-        total_snapshots: 0,
-      };
-      m[k].snapshots[s.momento_dia] = s.has_helper;
-      m[k].snapshots_horas[s.momento_dia] = s.hora_snapshot;
-      m[k].total_snapshots++;
-      if (s.has_helper) m[k].snapshots_con_helper++;
-      if (s.is_assignable) m[k].is_assignable = true;
-    }
-    return Object.values(m)
-      .filter(c => {
-        if (filtroAsignable === "asignables" && !c.is_assignable) return false;
-        if (filtroAsignable === "no_asignables" && c.is_assignable) return false;
-        if (!busqueda) return true;
-        return (
-          (c.driver_name || "").toLowerCase().includes(busqueda.toLowerCase()) ||
-          (c.placa || "").toLowerCase().includes(busqueda.toLowerCase()) ||
-          (c.service_center_id || "").toLowerCase().includes(busqueda.toLowerCase()) ||
-          String(c.id_ruta).includes(busqueda)
-        );
-      })
-      .sort((a, b) => {
-        if (a.service_center_id !== b.service_center_id) return a.service_center_id.localeCompare(b.service_center_id);
-        return (a.cluster || "").localeCompare(b.cluster || "");
-      });
-  }, [snapshots, busqueda, filtroAsignable]);
-
-  const todasRutas = useMemo(() => {
-    const m = {};
-    for (const s of snapshots) {
-      const k = String(s.id_ruta);
-      if (!m[k]) m[k] = { is_assignable: false };
-      if (s.is_assignable) m[k].is_assignable = true;
-    }
-    return Object.values(m);
-  }, [snapshots]);
-
-  const conteoAsignables = todasRutas.filter(r => r.is_assignable).length;
-  const conteoNoAsignables = todasRutas.filter(r => !r.is_assignable).length;
-  const totalConHelper = consolidados.filter(c => c.snapshots_con_helper >= 3).length;
-  const totalSospechosos = consolidados.filter(c => c.snapshots_con_helper >= 1 && c.snapshots_con_helper < 3).length;
-
-  const formatHora = (h) => {
-    if (!h) return "—";
-    try {
-      return new Date(h).toLocaleTimeString("es-CL", { hour: "2-digit", minute: "2-digit", timeZone: "America/Santiago" });
-    } catch { return "—"; }
-  };
-
-  const formatHoraMx = (h) => {
-    if (!h) return "—";
-    try {
-      return new Date(h).toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit", timeZone: "America/Mexico_City" });
-    } catch { return "—"; }
-  };
-
-  const renderTicket = (h, hora) => {
-    if (h === true) return (
-      <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
-        <span style={{ color: "#16a34a", fontSize: 16, fontWeight: 700 }}>✓</span>
-        {hora && <span style={{ fontSize: 9, color: "#94a3b8", marginTop: 2 }}>{formatHora(hora)}</span>}
-      </div>
-    );
-    if (h === false) return (
-      <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
-        <span style={{ color: "#cbd5e1", fontSize: 14 }}>—</span>
-        {hora && <span style={{ fontSize: 9, color: "#cbd5e1", marginTop: 2 }}>{formatHora(hora)}</span>}
-      </div>
-    );
-    return <span style={{ color: "#e2e8f0", fontSize: 14 }}>·</span>;
   };
 
   // ── Excel: vista entregas ──
@@ -8283,78 +8273,6 @@ function AyudantesDetalleDia({ usuario }) {
     window.XLSX.writeFile(wb, `Ayudantes_Pago_MX_${fecha}.xlsx`);
   };
 
-  // ── Excel: vista matriz (original) ──
-  const descargarExcel = () => {
-    if (consolidados.length === 0) return;
-
-    const headers = [
-      "Fecha", "Service Center", "Cluster", "ID Ruta", "Driver ID", "Driver",
-      "Placa", "Vehículo",
-      "Inicio (✓/—)", "Hora Inicio (Chile)", "Hora Inicio (México)",
-      "Media Mañana", "Hora MM (Chile)", "Hora MM (México)",
-      "Tarde", "Hora Tarde (Chile)", "Hora Tarde (México)",
-      "Fin Tarde", "Hora FT (Chile)", "Hora FT (México)",
-      "Pre Cierre", "Hora PC (Chile)", "Hora PC (México)",
-      "Total Snapshots", "Snapshots con Helper", "Estado", "Pago Auxiliar"
-    ];
-
-    const formatHelper = (h) => h === true ? "Sí" : h === false ? "No" : "—";
-
-    const data = consolidados.map(c => {
-      const estado = c.snapshots_con_helper >= 3 ? "OK" : c.snapshots_con_helper >= 1 ? "SOSPECHOSO" : "SIN_HELPER";
-      const pago = estado === "OK" ? 300 : 0;
-      return [
-        fecha,
-        c.service_center_id,
-        c.cluster || "",
-        c.id_ruta,
-        c.driver_id || "",
-        c.driver_name || "",
-        c.placa || "",
-        c.vehiculo_descripcion || "",
-        formatHelper(c.snapshots.inicio), formatHora(c.snapshots_horas.inicio), formatHoraMx(c.snapshots_horas.inicio),
-        formatHelper(c.snapshots.media_manana), formatHora(c.snapshots_horas.media_manana), formatHoraMx(c.snapshots_horas.media_manana),
-        formatHelper(c.snapshots.tarde), formatHora(c.snapshots_horas.tarde), formatHoraMx(c.snapshots_horas.tarde),
-        formatHelper(c.snapshots.fin_tarde), formatHora(c.snapshots_horas.fin_tarde), formatHoraMx(c.snapshots_horas.fin_tarde),
-        formatHelper(c.snapshots.pre_cierre), formatHora(c.snapshots_horas.pre_cierre), formatHoraMx(c.snapshots_horas.pre_cierre),
-        c.total_snapshots,
-        c.snapshots_con_helper,
-        estado,
-        pago,
-      ];
-    });
-
-    const ws = window.XLSX.utils.aoa_to_sheet([headers, ...data]);
-    const widths = [10, 14, 10, 12, 12, 24, 14, 18, 12, 12, 12, 14, 12, 12, 10, 12, 12, 12, 12, 12, 12, 12, 12, 10, 14, 14, 12];
-    ws["!cols"] = widths.map(w => ({ wch: w }));
-
-    const resumen = [
-      ["RESUMEN AYUDANTES MX"],
-      [""],
-      ["Fecha", fecha],
-      ["Total rutas detectadas", consolidados.length],
-      ["Confirmadas (≥3 snapshots con helper)", totalConHelper],
-      ["Sospechosas (1-2 snapshots con helper)", totalSospechosos],
-      ["Sin helper", consolidados.length - totalConHelper - totalSospechosos],
-      [""],
-      ["MONTO A PAGAR (sólo confirmadas)", `$${(totalConHelper * 300).toLocaleString("es-MX")} MXN`],
-      [""],
-      ["Snapshots ejecutados:"],
-      ["  Inicio", formatHora(horasMomentos.inicio) + " Chile / " + formatHoraMx(horasMomentos.inicio) + " MX"],
-      ["  Media Mañana", formatHora(horasMomentos.media_manana) + " Chile / " + formatHoraMx(horasMomentos.media_manana) + " MX"],
-      ["  Tarde", formatHora(horasMomentos.tarde) + " Chile / " + formatHoraMx(horasMomentos.tarde) + " MX"],
-      ["  Fin Tarde", formatHora(horasMomentos.fin_tarde) + " Chile / " + formatHoraMx(horasMomentos.fin_tarde) + " MX"],
-      ["  Pre Cierre", formatHora(horasMomentos.pre_cierre) + " Chile / " + formatHoraMx(horasMomentos.pre_cierre) + " MX"],
-    ];
-    const wsResumen = window.XLSX.utils.aoa_to_sheet(resumen);
-    wsResumen["!cols"] = [{ wch: 40 }, { wch: 30 }];
-
-    const wb = window.XLSX.utils.book_new();
-    window.XLSX.utils.book_append_sheet(wb, wsResumen, "Resumen");
-    window.XLSX.utils.book_append_sheet(wb, ws, "Detalle");
-    window.XLSX.writeFile(wb, `Ayudantes_MX_${fecha}.xlsx`);
-  };
-
   const pctBadge = (pct) => {
     if (pct == null) return <span style={{ color: "#94a3b8" }}>—</span>;
     const color = pct >= 50 ? "#16a34a" : pct >= 20 ? "#1a3a6b" : "#64748b";
@@ -8369,29 +8287,16 @@ function AyudantesDetalleDia({ usuario }) {
           <div className="sec-sub">Ver los números (driver vs ayudante, % de entrega, cobertura) y aprobar o rechazar el pago del ayudante del día</div>
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          <div style={{ display: "flex", gap: 2, background: "#f1f5f9", borderRadius: 6, padding: 2 }}>
-            <button onClick={() => setVista("entregas")}
-              style={{ padding: "6px 12px", borderRadius: 4, border: "none", fontSize: 12, fontWeight: 600, cursor: "pointer",
-                background: vista === "entregas" ? "#1a3a6b" : "transparent", color: vista === "entregas" ? "#fff" : "#475569" }}>
-              Entregas
-            </button>
-            <button onClick={() => setVista("matriz")}
-              style={{ padding: "6px 12px", borderRadius: 4, border: "none", fontSize: 12, fontWeight: 600, cursor: "pointer",
-                background: vista === "matriz" ? "#1a3a6b" : "transparent", color: vista === "matriz" ? "#fff" : "#475569" }}>
-              Matriz snapshots
-            </button>
-          </div>
           <input type="date" value={fecha} onChange={e => setFecha(e.target.value)}
             style={{ background: "#fff", border: "1px solid #cbd5e1", borderRadius: 4, padding: "7px 10px", fontSize: 12 }} />
           <button onClick={cargar} title="Refrescar datos"
             style={{ padding: "8px 12px", background: "#fff", border: "1px solid #cbd5e1", borderRadius: 6, fontSize: 12, fontWeight: 600, color: "#475569", cursor: "pointer" }}>
             ↻ Refrescar
           </button>
-          <button onClick={vista === "entregas" ? descargarExcelEntregas : descargarExcel}
-            disabled={vista === "entregas" ? filasPago.length === 0 : consolidados.length === 0}
+          <button onClick={descargarExcelEntregas} disabled={filasPago.length === 0}
             style={{ padding: "8px 14px", background: "#16a34a", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 600, color: "#fff",
-              cursor: (vista === "entregas" ? filasPago.length === 0 : consolidados.length === 0) ? "not-allowed" : "pointer",
-              opacity: (vista === "entregas" ? filasPago.length === 0 : consolidados.length === 0) ? 0.5 : 1 }}>
+              cursor: filasPago.length === 0 ? "not-allowed" : "pointer",
+              opacity: filasPago.length === 0 ? 0.5 : 1 }}>
             Descargar Excel
           </button>
         </div>
@@ -8419,9 +8324,7 @@ function AyudantesDetalleDia({ usuario }) {
         )}
       </div>
 
-      {vista === "entregas" && (
-        <>
-          {/* ══ Los números del pago del ayudante ══ */}
+      {/* ══ Los números del pago del ayudante ══ */}
           <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderLeft: "3px solid #1a3a6b", borderRadius: 6, padding: "12px 14px", marginBottom: 12 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
               <div>
@@ -8504,12 +8407,25 @@ function AyudantesDetalleDia({ usuario }) {
           </div>
 
           <input type="text" placeholder="Buscar por driver, ayudante, SC o ID ruta..." value={busqueda} onChange={e => setBusqueda(e.target.value)}
-            style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 4, padding: "7px 10px", fontSize: 12, width: "100%", marginBottom: 14, boxSizing: "border-box" }} />
+            style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 4, padding: "7px 10px", fontSize: 12, width: "100%", marginBottom: 8, boxSizing: "border-box" }} />
+
+          {/* Tiempos de la carga: para ver dónde se va el tiempo sin abrir la consola */}
+          {tiempos && (
+            <div style={{ fontSize: 10, color: "#94a3b8", marginBottom: 12 }}>
+              Carga en <b>{tiempos.TOTAL} ms</b>
+              {Object.entries(tiempos).filter(([k]) => k !== "TOTAL")
+                .sort((a, b) => b[1] - a[1])
+                .map(([k, v]) => ` · ${k}: ${v} ms`).join("")}
+              {rpcEntregasDisponible === false && " · sin get_entregas_helper_dia: la lectura de paquetes va cruda"}
+            </div>
+          )}
 
           {/* Tabla entregas */}
           <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, overflow: "auto" }}>
             {loading ? (
-              <div style={{ padding: 30, textAlign: "center", color: "#94a3b8" }}>Cargando...</div>
+              <div style={{ padding: 30, textAlign: "center", color: "#94a3b8" }}>
+                {progreso || "Cargando…"}
+              </div>
             ) : filasPago.length === 0 ? (
               <div style={{ padding: 40, textAlign: "center", color: "#94a3b8", fontSize: 13 }}>
                 {filtroDecision === "todas"
@@ -8621,9 +8537,6 @@ function AyudantesDetalleDia({ usuario }) {
                           <div style={{ fontWeight: 700, color: f.montoPagar > 0 ? "#16a34a" : "#94a3b8" }}>
                             ${f.montoPagar.toLocaleString("es-MX")}
                           </div>
-                          {f.montoCobrar > 0 && (
-                            <div style={{ fontSize: 9, color: "#64748b" }}>MELI ${f.montoCobrar.toLocaleString("es-MX")}</div>
-                          )}
                         </td>
 
                         {/* ── Decisión ── */}
@@ -8728,188 +8641,6 @@ function AyudantesDetalleDia({ usuario }) {
               </table>
             )}
           </div>
-        </>
-      )}
-
-      {vista === "matriz" && (
-        <>
-          {/* Resumen de horas de los snapshots */}
-          <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: "12px 14px", marginBottom: 14 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, flexWrap: "wrap", gap: 8 }}>
-              <div>
-                <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase" }}>Snapshots del día (zona México)</div>
-                <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 2 }}>
-                  Se ejecutan automáticamente 5 veces al día. Horario operativo: México.
-                </div>
-              </div>
-              <div style={{ fontSize: 11, color: "#475569" }}>
-                <strong>{Object.keys(horasMomentos).length}/5</strong> ejecutados
-              </div>
-            </div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 10 }}>
-              {[
-                { id: "inicio",       l: "Inicio",       e: "07:00 MX · 09:00 CL" },
-                { id: "media_manana", l: "Media mañana", e: "11:00 MX · 13:00 CL" },
-                { id: "tarde",        l: "Tarde",        e: "15:00 MX · 17:00 CL" },
-                { id: "fin_tarde",    l: "Fin tarde",    e: "19:00 MX · 21:00 CL" },
-                { id: "pre_cierre",   l: "Pre cierre",   e: "23:00 MX · 01:00 CL+1" },
-              ].map(m => {
-                const hora = horasMomentos[m.id];
-                const ejecutado = !!hora;
-                return (
-                  <div key={m.id} style={{
-                    padding: "8px 10px",
-                    borderRadius: 4,
-                    background: ejecutado ? "#f0fdf4" : "#f8fafc",
-                    border: `1px solid ${ejecutado ? "#86efac" : "#e4e7ec"}`,
-                  }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
-                      <span style={{ width: 8, height: 8, borderRadius: "50%", background: ejecutado ? "#16a34a" : "#cbd5e1" }} />
-                      <span style={{ fontSize: 12, fontWeight: 600, color: ejecutado ? "#166534" : "#475569" }}>{m.l}</span>
-                    </div>
-                    {ejecutado ? (
-                      <div style={{ fontSize: 11, color: "#1f2937", paddingLeft: 14 }}>
-                        <div><strong>{formatHora(hora)}</strong> Chile · {formatHoraMx(hora)} MX</div>
-                      </div>
-                    ) : (
-                      <div style={{ fontSize: 11, color: "#94a3b8", paddingLeft: 14 }}>
-                        Programado: {m.e}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* KPIs */}
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 10, marginBottom: 14 }}>
-            <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderLeft: "3px solid #1a3a6b", borderRadius: 6, padding: "12px 14px" }}>
-              <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase" }}>Total rutas</div>
-              <div style={{ fontSize: 22, fontWeight: 700, color: "#1a3a6b", marginTop: 2 }}>{consolidados.length}</div>
-            </div>
-            <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderLeft: "3px solid #16a34a", borderRadius: 6, padding: "12px 14px" }}>
-              <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase" }}>Confirmados</div>
-              <div style={{ fontSize: 22, fontWeight: 700, color: "#16a34a", marginTop: 2 }}>{totalConHelper}</div>
-              <div style={{ fontSize: 10, color: "#94a3b8" }}>≥3 snapshots con helper</div>
-            </div>
-            <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderLeft: "3px solid #F47B20", borderRadius: 6, padding: "12px 14px" }}>
-              <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase" }}>Sospechosos</div>
-              <div style={{ fontSize: 22, fontWeight: 700, color: "#F47B20", marginTop: 2 }}>{totalSospechosos}</div>
-              <div style={{ fontSize: 10, color: "#94a3b8" }}>1-2 snapshots</div>
-            </div>
-            <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderLeft: "3px solid #16a34a", borderRadius: 6, padding: "12px 14px" }}>
-              <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase" }}>Pago auxiliares</div>
-              <div style={{ fontSize: 22, fontWeight: 700, color: "#16a34a", marginTop: 2 }}>${(totalConHelper * 300).toLocaleString("es-MX")}</div>
-              <div style={{ fontSize: 10, color: "#94a3b8" }}>$300 × {totalConHelper} rutas</div>
-            </div>
-          </div>
-
-          {/* Filtros */}
-          <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap", alignItems: "center" }}>
-            <div style={{ display: "flex", gap: 4 }}>
-              <button onClick={() => setFiltroAsignable("asignables")}
-                style={{ padding: "7px 14px", borderRadius: 4, border: `1px solid ${filtroAsignable === "asignables" ? "#1a3a6b" : "#e4e7ec"}`,
-                  background: filtroAsignable === "asignables" ? "#1a3a6b" : "#fff",
-                  color: filtroAsignable === "asignables" ? "#fff" : "#475569",
-                  fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
-                Asignadas ({conteoAsignables})
-              </button>
-              <button onClick={() => setFiltroAsignable("no_asignables")}
-                style={{ padding: "7px 14px", borderRadius: 4, border: `1px solid ${filtroAsignable === "no_asignables" ? "#1a3a6b" : "#e4e7ec"}`,
-                  background: filtroAsignable === "no_asignables" ? "#1a3a6b" : "#fff",
-                  color: filtroAsignable === "no_asignables" ? "#fff" : "#475569",
-                  fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
-                Sin asignar ({conteoNoAsignables})
-              </button>
-              <button onClick={() => setFiltroAsignable("todas")}
-                style={{ padding: "7px 14px", borderRadius: 4, border: `1px solid ${filtroAsignable === "todas" ? "#1a3a6b" : "#e4e7ec"}`,
-                  background: filtroAsignable === "todas" ? "#1a3a6b" : "#fff",
-                  color: filtroAsignable === "todas" ? "#fff" : "#475569",
-                  fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
-                Todas ({conteoAsignables + conteoNoAsignables})
-              </button>
-            </div>
-            <input type="text" placeholder="Buscar por driver, placa, SC o ID ruta..." value={busqueda} onChange={e => setBusqueda(e.target.value)}
-              style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 4, padding: "7px 10px", fontSize: 12, flex: 1, minWidth: 240 }} />
-          </div>
-
-          {/* Tabla */}
-          <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, overflow: "auto" }}>
-            {loading ? (
-              <div style={{ padding: 30, textAlign: "center", color: "#94a3b8" }}>Cargando...</div>
-            ) : consolidados.length === 0 ? (
-              <div style={{ padding: 40, textAlign: "center", color: "#94a3b8", fontSize: 13 }}>
-                Sin datos para esta fecha. Los snapshots se capturan automáticamente 5 veces al día.
-              </div>
-            ) : (
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-                <thead>
-                  <tr style={{ background: "#f8fafc", borderBottom: "1px solid #e4e7ec" }}>
-                    <th style={{ padding: "10px 8px", textAlign: "left", fontSize: 10, fontWeight: 600, color: "#475569" }}>SC</th>
-                    <th style={{ padding: "10px 8px", textAlign: "left", fontSize: 10, fontWeight: 600, color: "#475569" }}>Cluster</th>
-                    <th style={{ padding: "10px 8px", textAlign: "left", fontSize: 10, fontWeight: 600, color: "#475569" }}>ID Ruta</th>
-                    <th style={{ padding: "10px 8px", textAlign: "left", fontSize: 10, fontWeight: 600, color: "#475569" }}>Placa</th>
-                    <th style={{ padding: "10px 8px", textAlign: "left", fontSize: 10, fontWeight: 600, color: "#475569" }}>Driver</th>
-                    <th style={{ padding: "10px 8px", textAlign: "left", fontSize: 10, fontWeight: 600, color: "#475569" }}>Vehículo</th>
-                    {[
-                      { id: "inicio", l: "Inicio" },
-                      { id: "media_manana", l: "Media mañana" },
-                      { id: "tarde", l: "Tarde" },
-                      { id: "fin_tarde", l: "Fin tarde" },
-                      { id: "pre_cierre", l: "Pre cierre" },
-                    ].map(m => (
-                      <th key={m.id} style={{ padding: "10px 4px", textAlign: "center", fontSize: 10, fontWeight: 600, color: "#475569", minWidth: 90 }}>
-                        <div>{m.l}</div>
-                        {horasMomentos[m.id] ? (
-                          <div style={{ fontSize: 9, color: "#94a3b8", fontWeight: 400, marginTop: 2, lineHeight: 1.3 }}>
-                            <div>{formatHora(horasMomentos[m.id])} CL</div>
-                            <div>{formatHoraMx(horasMomentos[m.id])} MX</div>
-                          </div>
-                        ) : (
-                          <div style={{ fontSize: 9, color: "#cbd5e1", fontWeight: 400, marginTop: 2 }}>—</div>
-                        )}
-                      </th>
-                    ))}
-                    <th style={{ padding: "10px 8px", textAlign: "center", fontSize: 10, fontWeight: 600, color: "#475569" }}>Estado</th>
-                    <th style={{ padding: "10px 8px", textAlign: "right", fontSize: 10, fontWeight: 600, color: "#475569" }}>Pago</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {consolidados.map((c, i) => {
-                    const estado = c.snapshots_con_helper >= 3 ? "OK" : c.snapshots_con_helper >= 1 ? "SOSPECHOSO" : "SIN_HELPER";
-                    const colorEstado = estado === "OK" ? "#16a34a" : estado === "SOSPECHOSO" ? "#F47B20" : "#94a3b8";
-                    const bgEstado = estado === "OK" ? "#dcfce7" : estado === "SOSPECHOSO" ? "#fed7aa" : "#f1f5f9";
-                    return (
-                      <tr key={i} style={{ borderBottom: "1px solid #f0f0f0" }}>
-                        <td style={{ padding: "8px", fontWeight: 500 }}>{c.service_center_id}</td>
-                        <td style={{ padding: "8px" }}>{c.cluster}</td>
-                        <td style={{ padding: "8px", fontFamily: "monospace", color: "#64748b", fontSize: 11 }}>{c.id_ruta}</td>
-                        <td style={{ padding: "8px", fontSize: 11 }}>{c.placa || "—"}</td>
-                        <td style={{ padding: "8px", fontWeight: 500 }}>{c.driver_name || "—"}</td>
-                        <td style={{ padding: "8px", color: "#64748b", fontSize: 11 }}>{c.vehiculo_descripcion}</td>
-                        <td style={{ padding: "8px 4px", textAlign: "center" }}>{renderTicket(c.snapshots.inicio, c.snapshots_horas.inicio)}</td>
-                        <td style={{ padding: "8px 4px", textAlign: "center" }}>{renderTicket(c.snapshots.media_manana, c.snapshots_horas.media_manana)}</td>
-                        <td style={{ padding: "8px 4px", textAlign: "center" }}>{renderTicket(c.snapshots.tarde, c.snapshots_horas.tarde)}</td>
-                        <td style={{ padding: "8px 4px", textAlign: "center" }}>{renderTicket(c.snapshots.fin_tarde, c.snapshots_horas.fin_tarde)}</td>
-                        <td style={{ padding: "8px 4px", textAlign: "center" }}>{renderTicket(c.snapshots.pre_cierre, c.snapshots_horas.pre_cierre)}</td>
-                        <td style={{ padding: "8px", textAlign: "center" }}>
-                          <span style={{ fontSize: 9, padding: "2px 6px", borderRadius: 4, background: bgEstado, color: colorEstado, fontWeight: 600 }}>
-                            {estado}
-                          </span>
-                        </td>
-                        <td style={{ padding: "8px", textAlign: "right", fontWeight: 600, color: estado === "OK" ? "#16a34a" : "#94a3b8" }}>
-                          {estado === "OK" ? "$300" : "—"}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            )}
-          </div>
-        </>
-      )}
     </div>
   );
 }
