@@ -5366,6 +5366,46 @@ const AUX_COBRAR_MELI = 350;
 // Webhook n8n que avisa al supervisor cuando el analista rechaza un ayudante.
 const WEBHOOK_RECHAZO_HELPER = "https://bigticket2026.app.n8n.cloud/webhook/notificar-rechazo-helper";
 
+// ── Lectura del Maestro Supervisores de un día ────────────────────────────
+// vw_maestro_supervisores_auto tarda ~46 s (recalcula el reparto de paquetes
+// sobre todo el histórico antes de filtrar por fecha) y Supabase corta las
+// consultas de la app: de ahí "canceling statement due to statement timeout".
+//
+// Orden de intentos:
+//   1. tabla materializada por cron    → instantánea
+//   2. RPC get_maestro_supervisores_dia → levanta el timeout para esta consulta
+//   3. lectura directa de la vista      → lo de antes; falla si hay timeout
+let fuenteMaestroPreferida = null;   // "tabla" | "rpc" | "vista"
+
+async function leerMaestroDia(fecha) {
+  // 1) Tabla materializada
+  if (fuenteMaestroPreferida === null || fuenteMaestroPreferida === "tabla") {
+    const t = await sb.from("maestro_supervisores_dia_mx").select("*").eq("fecha", fecha).limit(5000);
+    if (!t.error && (t.data || []).length > 0) {
+      fuenteMaestroPreferida = "tabla";
+      return { data: t.data, fuente: "tabla" };
+    }
+    if (t.error) fuenteMaestroPreferida = "rpc";   // la tabla todavía no existe
+  }
+
+  // 2) RPC que levanta el statement_timeout solo para esta consulta
+  if (fuenteMaestroPreferida !== "vista") {
+    const r = await sb.rpc("get_maestro_supervisores_dia", { p_fecha: fecha });
+    if (!r.error) {
+      fuenteMaestroPreferida = "rpc";
+      return { data: r.data || [], fuente: "rpc" };
+    }
+    const cod = String(r.error.code || "");
+    if (cod === "PGRST202" || cod === "42883") fuenteMaestroPreferida = "vista";
+    else return { error: r.error, fuente: "rpc" };
+  }
+
+  // 3) Lectura directa de la vista
+  const v = await sb.from("vw_maestro_supervisores_auto").select("*").eq("fecha", fecha).limit(5000);
+  if (v.error) return { error: v.error, fuente: "vista" };
+  return { data: v.data || [], fuente: "vista" };
+}
+
 // ── Estado del auxiliar: MISMA lógica que usa calcularDia() ────────────────
 // Se centraliza acá para que la pestaña Ayudantes muestre exactamente lo que
 // el motor va a pagar, sin reimplementar la regla y quedar desfasada.
@@ -6126,19 +6166,7 @@ function ListadoPagosDiarios({ usuario }) {
         if (error) throw error;
         setPagos(data || []);
 
-        // Aviso de recálculo: ¿aprobaciones de helper modificadas tras el último cálculo?
-        let aviso = null;
-        if ((data || []).length > 0) {
-          const { data: aprob } = await sb.from("aprobaciones_helper")
-            .select("decidido_at").eq("fecha", fecha).not("decidido_at", "is", null);
-          const maxCalc = (data || []).reduce((mx, p) => {
-            const ts = p.calculado_at ? new Date(p.calculado_at).getTime() : 0;
-            return ts > mx ? ts : mx;
-          }, 0);
-          const modificadas = (aprob || []).filter(a => new Date(a.decidido_at).getTime() > maxCalc).length;
-          if (modificadas > 0) aviso = modificadas;
-        }
-        if (!cancel) setAvisoRecalc(aviso);
+        if (!cancel) await recomputarAvisoRecalc(data || []);
       } catch (e) {
         console.error("Error cargando pagos:", e);
         if (!cancel) setPagos([]);
@@ -6146,6 +6174,37 @@ function ListadoPagosDiarios({ usuario }) {
       if (!cancel) setLoading(false);
     })();
     return () => { cancel = true; };
+  }, [fecha, recomputarAvisoRecalc]);
+
+  // Aviso de recálculo: ¿hay decisiones de helper posteriores al último cálculo?
+  // Solo se puede saber si las filas traen calculado_at. Cuando vienen todas en
+  // null (filas escritas por procesos que no llenaban esa columna), la
+  // comparación daba "todas modificadas" y el aviso quedaba pegado para
+  // siempre. En ese caso ya no se muestra: un aviso que no se puede apagar es
+  // peor que no tenerlo.
+  const recomputarAvisoRecalc = useCallback(async (filasMaestro) => {
+    try {
+      if (!filasMaestro || filasMaestro.length === 0) { setAvisoRecalc(null); return; }
+      const sellos = filasMaestro
+        .map((p) => p.calculado_at)
+        .filter(Boolean)
+        .map((t) => new Date(t).getTime())
+        .filter((t) => !isNaN(t));
+      if (sellos.length === 0) {
+        console.warn(`[Pagos ${fecha}] maestro_jornada_mx sin calculado_at: no se puede evaluar si hay que recalcular.`);
+        setAvisoRecalc(null);
+        return;
+      }
+      const maxCalc = sellos.reduce((a, b) => (b > a ? b : a), 0);
+      const { data: aprob } = await sb.from("aprobaciones_helper")
+        .select("decidido_at").eq("fecha", fecha).not("decidido_at", "is", null);
+      const modificadas = (aprob || [])
+        .filter((a) => new Date(a.decidido_at).getTime() > maxCalc).length;
+      setAvisoRecalc(modificadas > 0 ? modificadas : null);
+    } catch (e) {
+      console.error("Error evaluando el aviso de recálculo:", e);
+      setAvisoRecalc(null);
+    }
   }, [fecha]);
 
   const calcularDia = async () => {
@@ -6169,7 +6228,7 @@ function ListadoPagosDiarios({ usuario }) {
       const calculadoAt = new Date().toISOString();
 
       const [mRes, sRes, zRes, mpRes, eRes, apRes, tcRes, cfgRes, fRes] = await Promise.all([
-        sb.from("vw_maestro_supervisores_auto").select("*").eq("fecha", fecha).limit(5000),
+        leerMaestroDia(fecha),
         sb.from("logistic_ayudantes_snapshots").select("*").gte("fecha", fechaSnapDesde).lte("fecha", fechaSnapHasta).limit(30000),
         sb.from("sc_zonas_mx").select("service_center_id, zona"),
         sb.from("matriz_precios").select("*").eq("activo", true),
@@ -6180,7 +6239,13 @@ function ListadoPagosDiarios({ usuario }) {
         sb.from("flota_terceros_mx").select("placa, empresa_transporte, fecha_hora_envio").order("fecha_hora_envio", { ascending: false }).limit(20000),
       ]);
 
-      if (mRes.error) throw new Error("maestro supervisores: " + mRes.error.message);
+      if (mRes.error) {
+        const esTimeout = String(mRes.error.message || "").toLowerCase().includes("timeout");
+        throw new Error("maestro supervisores: " + mRes.error.message + (esTimeout
+          ? "\n\nLa vista del Maestro tarda mas de lo que la base permite. Corre el script maestro_dia.sql y volve a intentar."
+          : ""));
+      }
+      console.log(`[Calculo ${fecha}] Maestro leido desde: ${mRes.fuente}`);
       if (sRes.error) throw new Error("snapshots: " + sRes.error.message);
 
       const maestro = mRes.data || [];
@@ -6273,10 +6338,17 @@ function ListadoPagosDiarios({ usuario }) {
         timestamp: new Date().toISOString(),
       });
 
-      // Recargar
+      // Recargar. Antes solo se refrescaban las filas: el aviso de "hay que
+      // recalcular" quedaba con el valor viejo y no se apagaba nunca aunque el
+      // recálculo hubiera resuelto todo.
       const { data: recargados } = await sb.from("maestro_jornada_mx")
         .select("*").eq("fecha", fecha).order("driver_name").limit(5000);
       setPagos(recargados || []);
+      const sinSello = (recargados || []).filter((r) => !r.calculado_at).length;
+      if (sinSello > 0) {
+        console.warn(`[Pagos ${fecha}] ${sinSello} de ${(recargados || []).length} filas quedaron sin calculado_at.`);
+      }
+      await recomputarAvisoRecalc(recargados || []);
     } catch (e) {
       console.error(e);
       alert("Error en cálculo:\n\n" + e.message);
@@ -7247,11 +7319,12 @@ function AyudantesDetalleDia({ usuario }) {
     setErrorMaestro(null);
     const ms = { ...(tiempos || {}) };
     try {
-      const v = await medir("gatillo (vista en vivo)", () => sb.from("vw_maestro_supervisores_auto")
-        .select("idviaje,service_center_id,driver_name,con_ayudante,cantidad_personas,tipo_vehiculo,patentes,cluster_meli,status_final")
-        .eq("fecha", fecha).limit(5000), ms);
+      const v = await medir("gatillo (Maestro del día)", () => leerMaestroDia(fecha), ms);
       if (v.error) throw v.error;
-      setMaestro((v.data || []).map((r) => ({ ...r, envios_entregados: r.entregados })));
+      setMaestro((v.data || []).map((r) => ({
+        ...r,
+        envios_entregados: r.envios_entregados != null ? r.envios_entregados : r.entregados,
+      })));
       setMaestroFuente("vista");
       setTiempos(ms);
     } catch (e) {
