@@ -6149,33 +6149,6 @@ function ListadoPagosDiarios({ usuario }) {
     return mejor;
   };
 
-  // Carga al montar y al cambiar fecha
-  useEffect(() => {
-    let cancel = false;
-    (async () => {
-      setLoading(true);
-      setResumenCalculo(null);
-      setAvisoRecalc(null);
-      try {
-        const { data, error } = await sb.from("maestro_jornada_mx")
-          .select("*")
-          .eq("fecha", fecha)
-          .order("driver_name")
-          .limit(5000);
-        if (cancel) return;
-        if (error) throw error;
-        setPagos(data || []);
-
-        if (!cancel) await recomputarAvisoRecalc(data || []);
-      } catch (e) {
-        console.error("Error cargando pagos:", e);
-        if (!cancel) setPagos([]);
-      }
-      if (!cancel) setLoading(false);
-    })();
-    return () => { cancel = true; };
-  }, [fecha, recomputarAvisoRecalc]);
-
   // Aviso de recálculo: ¿hay decisiones de helper posteriores al último cálculo?
   // Solo se puede saber si las filas traen calculado_at. Cuando vienen todas en
   // null (filas escritas por procesos que no llenaban esa columna), la
@@ -6206,6 +6179,33 @@ function ListadoPagosDiarios({ usuario }) {
       setAvisoRecalc(null);
     }
   }, [fecha]);
+
+  // Carga al montar y al cambiar fecha
+  useEffect(() => {
+    let cancel = false;
+    (async () => {
+      setLoading(true);
+      setResumenCalculo(null);
+      setAvisoRecalc(null);
+      try {
+        const { data, error } = await sb.from("maestro_jornada_mx")
+          .select("*")
+          .eq("fecha", fecha)
+          .order("driver_name")
+          .limit(5000);
+        if (cancel) return;
+        if (error) throw error;
+        setPagos(data || []);
+
+        if (!cancel) await recomputarAvisoRecalc(data || []);
+      } catch (e) {
+        console.error("Error cargando pagos:", e);
+        if (!cancel) setPagos([]);
+      }
+      if (!cancel) setLoading(false);
+    })();
+    return () => { cancel = true; };
+  }, [fecha, recomputarAvisoRecalc]);
 
   const calcularDia = async () => {
     if (!confirm(`¿Calcular pagos del ${fecha}?\n\nLeerá el Maestro Supervisores (snapshot de cierre) y las aprobaciones de helper de ese día, y guardará el resultado en maestro_jornada_mx.`)) return;
