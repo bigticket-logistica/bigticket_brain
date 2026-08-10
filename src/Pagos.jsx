@@ -7394,17 +7394,14 @@ function AyudantesDetalleDia({ usuario }) {
     return m;
   }, [maestro]);
 
-  // ── Detalle de entregas por ruta: driver vs ayudante(s) con % ──
-  // El universo NO sale más de los snapshots. Sale de dos evidencias:
-  //   1. los paquetes: si en una ruta entregó alguien distinto del chofer,
-  //      hubo ayudante y ahí está el % de cada uno (esto es lo que se decide);
-  //   2. el motor de pagos: si dice que hubo ayudante, la ruta tiene que
-  //      aparecer aunque el ayudante no haya entregado nada, para poder
-  //      rechazarla.
-  // Los snapshots intermedios no aportaban nada: su campo `entregados` venía
-  // congelado (el mismo valor en las 9 fotos del día), así que la "cobertura"
-  // que calculaba contra ellos era falsa. Ahora el denominador son los
-  // entregados que registró el motor.
+  // ── Detalle de entregas por ruta: chofer vs ayudante(s) con % ──
+  // REGLA DEL NEGOCIO: solo entran al análisis y al pago las rutas con el flag
+  // de ayudante ACTIVO (con_ayudante = SI, que sale de has_helper del último
+  // snapshot del día). Si el conductor no declaró el ayudante, la ruta no se
+  // analiza ni se paga, aunque los paquetes muestren que entregó otra persona.
+  //
+  // Los % por persona salen de los paquetes (quién escaneó cada entrega), y la
+  // cobertura se mide contra los entregados que registró el motor.
   const detalleEntregas = useMemo(() => {
     const rutas = rutasAgrupadas;
     const filas = [];
@@ -7418,8 +7415,8 @@ function AyudantesDetalleDia({ usuario }) {
       const m = maestroPorRuta[k] || null;
       const pagaMaestro = !!m && String(m.con_ayudante || "").toUpperCase() === "SI";
 
-      // Sin ayudante en los paquetes y sin ayudante en el motor → no es del tema
-      if (helperRows.length === 0 && !pagaMaestro) continue;
+      // Sin flag de ayudante activo, la ruta no es del tema: no se analiza ni se paga
+      if (!pagaMaestro) continue;
       vistas.add(k);
 
       const pct = (n) => r.total > 0 ? Math.round((n / r.total) * 1000) / 10 : 0;
@@ -7602,15 +7599,9 @@ function AyudantesDetalleDia({ usuario }) {
   // Los números del día (sin filtros: el total siempre es el total)
   const numerosPago = useMemo(() => {
     // Universo SIN filtros de búsqueda: los totales del día son los del día.
-    // Evidencia: paquetes con alguien distinto del chofer, o el motor lo marca.
+    // Mismo criterio que la tabla: solo rutas con el flag de ayudante activo.
     const base = [];
     const vistos = new Set();
-    for (const r of Object.values(rutasAgrupadas)) {
-      const personas = Object.values(r.personas);
-      if (!personas.some((pp) => !esMismaPersona(pp.nombre, r.driver_name))) continue;
-      const k = String(r.id_ruta);
-      vistos.add(k); base.push(k);
-    }
     for (const r of maestro) {
       const k = String(r.idviaje || "");
       if (k && !vistos.has(k) && String(r.con_ayudante || "").toUpperCase() === "SI") { vistos.add(k); base.push(k); }
@@ -7957,7 +7948,7 @@ function AyudantesDetalleDia({ usuario }) {
               <div>
                 <div style={{ fontSize: 12, fontWeight: 700, color: "#1a3a6b" }}>Pago del ayudante · {fecha}</div>
                 <div style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}>
-                  El gatillo del pago es <b>con_ayudante</b> del Maestro Supervisores. Sin decisión del analista no se paga.
+                  Solo se listan las rutas con el <b>flag de ayudante activo</b> al cierre. Sin decisión del analista no se paga.
                 </div>
               </div>
               <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
@@ -8083,9 +8074,13 @@ function AyudantesDetalleDia({ usuario }) {
               </div>
             ) : filasPago.length === 0 ? (
               <div style={{ padding: 40, textAlign: "center", color: "#94a3b8", fontSize: 13 }}>
-                {filtroDecision === "todas"
-                  ? "Sin rutas con ayudante para esta fecha (o el flujo de entregas no ha corrido)."
-                  : "Ninguna ruta cumple el filtro seleccionado."}
+                {cargandoMaestro
+                  ? "Esperando el flag de ayudante del día…"
+                  : !gatilloDisponible
+                    ? "Falta el flag de ayudante del día: calculá la fecha en Listado de Pagos."
+                    : filtroDecision === "todas"
+                      ? "Ninguna ruta del día tiene el flag de ayudante activo."
+                      : "Ninguna ruta cumple el filtro seleccionado."}
               </div>
             ) : (
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
