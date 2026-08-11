@@ -817,36 +817,60 @@ function TorreControlSC({ scId, fecha }) {
   const [filas, setFilas] = useState([]);
   const [loadingRes, setLoadingRes] = useState(false);
   const [loadingFilas, setLoadingFilas] = useState(false);
-  const [cargado, setCargado] = useState(false);
+  const [intentado, setIntentado] = useState(false);
+  // El marcador de "ya lo pedí" va en un ref, NO en estado: si fuera estado,
+  // al setearlo se re-dispara este mismo efecto, la limpieza cancela la
+  // ejecución anterior y los datos que llegan se descartan.
+  const pedidoRef = useRef(null);
   const [abierto, setAbierto] = useState(false);          // colapsado por defecto
   const [bucketSel, setBucketSel] = useState(null);       // chip seleccionado para filtrar
+  const [msRes, setMsRes] = useState(null);               // ms de get_torre_resumen
+  const [msFilas, setMsFilas] = useState(null);           // ms de get_torre_3_pilares
   const loading = loadingRes || loadingFilas;
 
   // Al cambiar de SC o fecha, se descarta lo cargado.
-  useEffect(() => { setCargado(false); setResumen(null); setFilas([]); }, [scId, fecha]);
+  useEffect(() => {
+    setIntentado(false); setResumen(null); setFilas([]);
+    setMsRes(null); setMsFilas(null);
+    pedidoRef.current = null;
+  }, [scId, fecha]);
 
   // CARGA PEREZOSA y en DOS PISTAS: el resumen del día y las rutas del SC se
   // piden por separado, así lo primero que llega ya se muestra en vez de
   // esperar a que terminen las dos. Ambas van por caché compartida.
   useEffect(() => {
-    if (!abierto || cargado) return;
+    if (!abierto) return;
+    const clave = `${fecha}|${scId}`;
+    if (pedidoRef.current === clave) return;   // ya se pidió
+    pedidoRef.current = clave;
     let cancel = false;
-    setCargado(true);              // ya se pidió: evita re-disparos
     setLoadingRes(true);
     setLoadingFilas(true);
 
+    const t0 = performance.now();
     traerTorreResumen(fecha)
       .then((d) => { if (!cancel) setResumen(((d && d.por_sc) || []).find((x) => x.sc === scId) || null); })
       .catch((e) => console.error("Error torre resumen:", e))
-      .finally(() => { if (!cancel) setLoadingRes(false); });
+      .finally(() => {
+        if (cancel) return;
+        setMsRes(Math.round(performance.now() - t0));
+        setLoadingRes(false);
+        setIntentado(true);
+      });
 
+    const t1 = performance.now();
     traerTorreFilas(fecha, scId)
       .then((d) => { if (!cancel) setFilas(d); })
       .catch((e) => console.error("Error torre 3 pilares:", e))
-      .finally(() => { if (!cancel) setLoadingFilas(false); });
+      .finally(() => {
+        if (cancel) return;
+        setMsFilas(Math.round(performance.now() - t1));
+        setLoadingFilas(false);
+        setIntentado(true);
+      });
 
     return () => { cancel = true; };
-  }, [abierto, cargado, scId, fecha]);
+  }, [abierto, scId, fecha]);
 
   const tituloTorre = (
     <button onClick={() => setAbierto((v) => !v)}
@@ -867,7 +891,7 @@ function TorreControlSC({ scId, fecha }) {
       <div style={{ fontSize: 12, color: "#9ca3af", padding: 8 }}>{textoCargando}</div>
     </div>
   );
-  if (abierto && cargado && !loading && !resumen && filas.length === 0) return (
+  if (abierto && intentado && !loading && !resumen && filas.length === 0) return (
     <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid #e5e7eb" }}>
       {tituloTorre}
       <div style={{ fontSize: 12, color: "#9ca3af", marginTop: 4 }}>Sin datos de torre para este día.</div>
@@ -909,6 +933,13 @@ function TorreControlSC({ scId, fecha }) {
       {tituloTorre}
       {abierto && loading && (
         <div style={{ fontSize: 11, color: "#9ca3af", padding: "4px 8px" }}>{textoCargando}</div>
+      )}
+      {abierto && !loading && (msRes != null || msFilas != null) && (
+        <div style={{ fontSize: 10, color: "#94a3b8", padding: "2px 8px 4px" }}>
+          {msRes != null && <>resumen del día: <b>{msRes} ms</b>{msRes < 30 ? " (de caché)" : ""}</>}
+          {msRes != null && msFilas != null && " · "}
+          {msFilas != null && <>rutas del SC: <b>{msFilas} ms</b>{msFilas < 30 ? " (de caché)" : ""}</>}
+        </div>
       )}
 
       {abierto && (
@@ -5583,6 +5614,16 @@ function calcularPagos({ maestro, snapshots, scZonas, especiales, matrizPrecios,
         auxiliarEstado = "SIN_APROBACION";
         montoAux = 0;
         obs.push("Helper sin decisión del analista — no se paga hasta aprobar");
+      }
+    } else {
+      // REGLA: sin flag de ayudante activo, la ruta está FUERA del pago de
+      // auxiliares. Si quedó una aprobación de antes, se ignora — pero se deja
+      // constancia en la fila para que la exclusión sea rastreable y no muda.
+      const aprobFuera = aprobPorRuta[idRuta] || null;
+      const decFuera = (aprobFuera && aprobFuera.decision)
+        ? String(aprobFuera.decision).toLowerCase() : null;
+      if (decFuera === "aprobado") {
+        obs.push("Aprobación de ayudante IGNORADA: la ruta no tiene flag de ayudante activo — no corresponde pago de auxiliar");
       }
     }
 
