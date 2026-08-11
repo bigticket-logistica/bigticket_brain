@@ -1,9 +1,16 @@
 import { useState, useEffect, useRef } from "react";
 import { sb, BIGGY_IMG } from "./shared";
 
+// Todas las fechas del módulo se muestran en HORA DE MÉXICO, sin importar desde
+// dónde se abra el Brain. Sin timeZone, el navegador usa su zona local y el
+// mismo registro se vería con dos horas de diferencia entre Chile y México.
+const TZ_MX = "America/Mexico_City";
+const fMX = (v, opts) => v ? new Date(v).toLocaleString("es-MX", { timeZone: TZ_MX, ...(opts || {}) }) : "";
+
 const COLUMNAS = [
   { id: "recepcion",           label: "Etapa 1: Recepción Documental",  color: "#1a3a6b", bg: "#eef2f7", border: "#d6def0" },
   { id: "llamada_supervisor",  label: "Etapa 2: Llamada de Supervisor", color: "#0e7490", bg: "#e8f6f9", border: "#c9e8f0" },
+  { id: "stand_by",            label: "Stand By",                       color: "#b45309", bg: "#fff8ef", border: "#fcd9b6" },
   { id: "prevalidacion_biggy", label: "Etapa 3: Pre Validación Biggy",  color: "#F47B20", bg: "#fff4ec", border: "#fbd9c0" },
   { id: "validacion_meli",     label: "Etapa 4: Validación MELI",       color: "#1a3a6b", bg: "#eef2f7", border: "#d6def0" },
   { id: "validacion_nubarium", label: "Etapa 5: Nubarium / REPUVE",       color: "#1a3a6b", bg: "#eef2f7", border: "#d6def0" },
@@ -22,7 +29,8 @@ const ETAPAS_SOLO_INGRESOS = ["llamada_supervisor", "entrevista_operaciones", "s
 const COLUMNAS_B = COLUMNAS.filter(c => !ETAPAS_SOLO_INGRESOS.includes(c.id));
 
 // Etiquetas cortas para los KPIs del header (coinciden con las columnas)
-const ETAPA_CORTA = {
+const ETAPA_CORTA = {
+  stand_by: "Stand By",
   recepcion: "Etapa 1 · Recepción", llamada_supervisor: "Etapa 2 · Llamada Sup.", prevalidacion_biggy: "Etapa 3 · Biggy", validacion_meli: "Etapa 4 · MELI",
   validacion_nubarium: "Etapa 5 · Nubarium/REPUVE", entrevista_operaciones: "Etapa 6 · Entrevista", solicitud_alta: "Etapa 7 · Sol. de Alta", firma_contrato: "Etapa 8 · Firma", revision_interna: "Revisión Interna", aceptado: "Aceptado", rechazado: "Rechazado",
 };
@@ -1609,7 +1617,7 @@ function NotificarDocsFallidas({ nombre, telefonoInicial, emailInicial, alertas,
           {historial.map(h => (
             <div key={h.id} style={{ background: "#fff", border: "1px solid #f0ddc4", borderRadius: 10, padding: "10px 12px", marginBottom: 8 }}>
               <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", fontSize: 12, color: "#8a6a3f", fontWeight: 700, marginBottom: 6 }}>
-                <span>{new Date(h.created_at).toLocaleString("es-MX", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}</span>
+                <span>{new Date(h.created_at).toLocaleString("es-MX", { timeZone: TZ_MX, day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}</span>
                 <span>{h.canal === "ambos" ? "📱 WhatsApp + ✉️ Correo" : h.canal === "whatsapp" ? "📱 WhatsApp" : "✉️ Correo"}</span>
                 <span style={{ fontWeight: 400 }}>{[h.canal !== "email" ? h.telefono : null, h.canal !== "whatsapp" ? h.email : null].filter(Boolean).join(" · ")}</span>
               </div>
@@ -1944,7 +1952,7 @@ function CalificacionLlamada({ registroId }) {
       <div style={{ fontSize: 12.5, color: "#475467", lineHeight: 1.6 }}>
         {c.motivo ? <><b>Motivo:</b> {c.motivo}{c.recuperable ? " (recuperable)" : " (definitivo)"} · </> : null}
         {c.supervisor ? <>Registró: {c.supervisor} · </> : null}
-        {c.actualizado_at ? new Date(c.actualizado_at).toLocaleString("es-MX", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : ""}
+        {c.actualizado_at ? new Date(c.actualizado_at).toLocaleString("es-MX", { timeZone: TZ_MX, day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : ""}
       </div>
       {c.observaciones && (
         <div style={{ fontSize: 12.5, color: "#28323f", background: "#f8fafc", border: "1px solid #eef1f5", borderRadius: 8, padding: "8px 11px", marginTop: 8 }}>
@@ -1982,7 +1990,7 @@ function AvisoRevisionInterna({ registro, onAceptar, onRechazar, moviendo }) {
           ? <>Respuesta de MELI: <b>{registro.respuesta_meli}</b></>
           : <>MELI declinó al candidato en la validación.</>}
         {registro.fecha_respuesta_meli && (
-          <> · {new Date(registro.fecha_respuesta_meli).toLocaleString("es-MX", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}</>
+          <> · {new Date(registro.fecha_respuesta_meli).toLocaleString("es-MX", { timeZone: TZ_MX, day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}</>
         )}
         {registro.motivo_rechazo ? <><br />Motivo registrado: {registro.motivo_rechazo}</> : null}
       </div>
@@ -2014,6 +2022,20 @@ function DetalleCandidato({ candidato, onVolver, onActualizar, onPasarEtapa2 }) 
   const [rechazando, setRechazando] = useState(false);
   const [motivo, setMotivo] = useState("");
   // Resolución de la Revisión Interna (posterior al rechazo de MELI)
+  // Reactivación desde Stand By: el prospecto vuelve al flujo cuando se necesita
+  const [reactivando, setReactivando] = useState(false);
+  const reactivarFlujo = async () => {
+    if (!confirm("Reactivar el flujo de este prospecto.\n\nPasará a Etapa 3 · Pre Validación Biggy. ¿Continuar?")) return;
+    setReactivando(true);
+    try {
+      const patch = { etapa_kanban: "prevalidacion_biggy", updated_at: new Date().toISOString() };
+      const { error } = await sb.from("certificaciones_mx").update(patch).eq("id", candidato.id);
+      if (error) throw new Error(error.message);
+      onActualizar({ ...candidato, ...patch });
+    } catch (e) { alert("No se pudo reactivar: " + e.message); }
+    finally { setReactivando(false); }
+  };
+
   const [resolviendoRI, setResolviendoRI] = useState(false);
   const resolverRevisionInterna = async (decision) => {
     const txt = decision === "aceptado"
@@ -2205,7 +2227,7 @@ Responde con este JSON exacto:
           <div style={{ fontSize: 15, fontWeight: 700 }}>{candidato.nombre}</div>
           <div style={{ fontSize: 12, color: "#888" }}>
             {candidato.svc} · {candidato.puesto}
-            {candidato.created_at && <> · 🗓 ingresó al flujo el {new Date(candidato.created_at).toLocaleString("es-MX", { day: "2-digit", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit" })}</>}
+            {candidato.created_at && <> · 🗓 ingresó al flujo el {fMX(candidato.created_at, { day: "2-digit", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit" })} <span style={{ color: "#b0b7c3" }}>(hora de México)</span></>}
           </div>
         </div>
         <span className={`badge ${estadoBadge[candidato.estado]}`}>{candidato.estado?.toUpperCase()}</span>
@@ -2260,12 +2282,12 @@ Responde con este JSON exacto:
               {(candidato.cambios_prospecto || []).slice(-8).reverse().map((c, i) => (
                 c.tipo === "revision" ? (
                   <li key={i} style={{ fontSize: 12.5, color: "#166534", marginBottom: 4, fontWeight: 700 }}>
-                    <b>{new Date(c.at).toLocaleString("es-MX", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}</b>
+                    <b>{new Date(c.at).toLocaleString("es-MX", { timeZone: TZ_MX, day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}</b>
                     {" · "}✅ Cambios revisados por el analista
                   </li>
                 ) : (
                 <li key={i} style={{ fontSize: 12.5, color: "#8a4a0f", marginBottom: 4 }}>
-                  <b>{new Date(c.at).toLocaleString("es-MX", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}</b>
+                  <b>{new Date(c.at).toLocaleString("es-MX", { timeZone: TZ_MX, day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}</b>
                   {" · "}{c.tipo === "documento" ? `📎 ${c.campo}: ${c.accion}` : `✏️ ${c.campo}: "${c.antes}" → "${c.despues}"`}
                 </li>
                 )
@@ -2285,6 +2307,23 @@ Responde con este JSON exacto:
           <div className="form-card" style={{ background: "#e8f6f9", border: "1px solid #c9e8f0" }}>
             <div style={{ fontSize: 12, fontWeight: 700, color: "#0e7490", marginBottom: 4 }}>📞 Comentario del supervisor</div>
             <div style={{ fontSize: 13, color: "#155e70", lineHeight: 1.5 }}>{candidato.comentario_supervisor}</div>
+          </div>
+        )}
+
+        {/* Stand By: prospecto válido que aún no se necesita */}
+        {etapaProspeccion(candidato) === "stand_by" && (
+          <div style={{ background: "#fff8ef", border: "2px solid #F47B20", borderRadius: 12, padding: "16px 18px", marginBottom: 14 }}>
+            <div style={{ fontSize: 14.5, fontWeight: 800, color: "#b45309", marginBottom: 6 }}>
+              ⏸ En Stand By — prospecto válido, aún no requerido
+            </div>
+            <div style={{ fontSize: 12.5, color: "#8a4a0f", lineHeight: 1.6 }}>
+              El supervisor lo dejó en espera; la información queda intacta y el flujo se puede reactivar en cualquier momento.
+              {candidato.comentario_supervisor && <><br />Motivo: <b>{candidato.comentario_supervisor}</b></>}
+            </div>
+            <button onClick={reactivarFlujo} disabled={reactivando}
+              style={{ marginTop: 12, width: "100%", background: "#F47B20", color: "#fff", border: "none", borderRadius: 9, padding: "12px", fontSize: 13, fontWeight: 800, cursor: "pointer", opacity: reactivando ? 0.6 : 1, fontFamily: "'Geist',sans-serif" }}>
+              {reactivando ? "Reactivando…" : "▶ Reactivar flujo → Pre Validación Biggy"}
+            </button>
           </div>
         )}
 
@@ -2498,7 +2537,7 @@ const DOC_LABEL = {
 // Documentos antiguos del portal quedaron con sufijo _timestamp en el tipo — se limpia solo para mostrar/matchear.
 const docTipoLimpioCert = (t) => String(t || "").replace(/_\d{10,}$/, "");
 const docEtiquetaCert = (t) => DOC_LABEL[docTipoLimpioCert(t)] || docTipoLimpioCert(t).replace(/_/g, " ");
-const fmtFH = (x) => x ? new Date(x).toLocaleString("es-MX", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : "";
+const fmtFH = (x) => x ? new Date(x).toLocaleString("es-MX", { timeZone: TZ_MX, day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : "";
 // Tipos disponibles al cargar un documento nuevo desde el Brain (Fuente B)
 const TIPOS_DOC_CERT = ["ine", "ine_reverso", "curp", "rfc", "licencia", "foto_frente", "foto_trasera", "foto_lado_izq", "foto_lado_der", "tarjeta_circulacion", "poliza_seguro", "comprobante", "otro"];
 
@@ -2638,7 +2677,8 @@ function InformeRHCheck({ fuente, registroId, terceroId, titulo, pathInicial, on
 // El resultado de Biggy se muestra desde la Etapa 3 en adelante. Si el análisis
 // se generó antes (algún proceso lo dispara al crearse la tarjeta), queda
 // guardado y se reutiliza: al pasar a Etapa 3 se muestra sin correr de nuevo.
-const ETAPAS_SIN_NOTA_BIGGY = ["recepcion", "llamada_supervisor"];
+const ETAPAS_SIN_NOTA_BIGGY = ["recepcion", "llamada_supervisor", "stand_by"];
+
 
 const TIPO_CFG = {
   conductor: { label: "Driver",   icon: "🚗", bg: "#f1f3f5", color: "#334155", border: "#dee2e6" },
@@ -2663,7 +2703,7 @@ function etapaProspeccion(row) {
   // estados definidos (enviado/aprobado/aceptado/rechazado) mandan → automatización
   if (base !== "recepcion") return base;
   // estado "pendiente" → Etapas 1/2/3: usa el movimiento guardado si existe
-  if (["recepcion", "llamada_supervisor", "prevalidacion_biggy"].includes(row.etapa_kanban)) return row.etapa_kanban;
+  if (["recepcion", "llamada_supervisor", "stand_by", "prevalidacion_biggy"].includes(row.etapa_kanban)) return row.etapa_kanban;
   return row.claude_analisis ? "prevalidacion_biggy" : "recepcion";
 }
 
@@ -2699,7 +2739,7 @@ function normalizarProspeccion(row) {
 // rechazado → Rechazado). Movimientos manuales posteriores siguen ganando.
 function etapaPortalCert(row) {
   // La decisión del analista (Aceptado / Rechazado) siempre manda
-  if (["aceptado", "rechazado", "revision_interna"].includes(row.etapa_kanban)) return row.etapa_kanban;
+  if (["aceptado", "rechazado", "revision_interna", "stand_by"].includes(row.etapa_kanban)) return row.etapa_kanban;
   // MELI declinó → Revisión Interna (no Rechazado directo)
   const resuelto = { aprobado: "validacion_nubarium", rechazado: "revision_interna" }[row.estado];
   if (resuelto && row.fecha_respuesta_meli && (!row.etapa_kanban || row.etapa_kanban === "validacion_meli")) return resuelto;
@@ -2859,6 +2899,21 @@ function DetalleCertificacion({ cert, etapa, onVolver, onPasarEtapa2, onMoverA, 
 
   // Auto-Biggy al abrir en Etapa 2+ (solo personas), si no hay análisis cacheado.
   // Resolución de la Revisión Interna (posterior al rechazo de MELI)
+  // Reactivación desde Stand By: el prospecto vuelve al flujo cuando se necesita
+  const [reactivando, setReactivando] = useState(false);
+  const reactivarFlujo = async () => {
+    if (!confirm("Reactivar el flujo de este prospecto.\n\nPasará a Etapa 3 · Pre Validación Biggy. ¿Continuar?")) return;
+    setReactivando(true);
+    try {
+      const patch = { etapa_kanban: "prevalidacion_biggy", updated_at: new Date().toISOString() };
+      const { error } = await sb.from("certificaciones").update(patch).eq("id", cert.id);
+      if (error) throw new Error(error.message);
+      Object.assign(cert, patch);
+      if (onMoverA) onMoverA("prevalidacion_biggy"); else onVolver();
+    } catch (e) { alert("No se pudo reactivar: " + e.message); }
+    finally { setReactivando(false); }
+  };
+
   const [resolviendoRI, setResolviendoRI] = useState(false);
   const resolverRevisionInterna = async (decision) => {
     const txt = decision === "aceptado"
@@ -2942,7 +2997,7 @@ function DetalleCertificacion({ cert, etapa, onVolver, onPasarEtapa2, onMoverA, 
           <div style={{ fontSize: 15, fontWeight: 700 }}>{titulo}</div>
           <div style={{ fontSize: 12, color: "#888" }}>
             {cert.service_center || ter?.service_center || "—"} · {tc.label}{ter?.nombre ? <> · <b style={{ color: "#1a3a6b" }}>🏢 {ter.nombre}</b></> : null}
-            {cert.created_at && <> · 🗓 ingresó al flujo el {new Date(cert.created_at).toLocaleString("es-MX", { day: "2-digit", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit" })}</>}
+            {cert.created_at && <> · 🗓 ingresó al flujo el {fMX(cert.created_at, { day: "2-digit", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit" })} <span style={{ color: "#b0b7c3" }}>(hora de México)</span></>}
           </div>
         </div>
         <span style={{ fontSize: 10, fontWeight: 700, padding: "3px 10px", borderRadius: 20, background: fcFuente.bg, color: fcFuente.color, border: `1px solid ${fcFuente.border}` }}>
@@ -2972,6 +3027,23 @@ function DetalleCertificacion({ cert, etapa, onVolver, onPasarEtapa2, onMoverA, 
           </div>
         )}
 
+        {/* Stand By: prospecto válido que aún no se necesita */}
+        {etapaActual === "stand_by" && (
+          <div style={{ background: "#fff8ef", border: "2px solid #F47B20", borderRadius: 12, padding: "16px 18px", marginBottom: 14 }}>
+            <div style={{ fontSize: 14.5, fontWeight: 800, color: "#b45309", marginBottom: 6 }}>
+              ⏸ En Stand By — prospecto válido, aún no requerido
+            </div>
+            <div style={{ fontSize: 12.5, color: "#8a4a0f", lineHeight: 1.6 }}>
+              El supervisor lo dejó en espera; la información queda intacta y el flujo se puede reactivar en cualquier momento.
+              {cert.comentario_supervisor && <><br />Motivo: <b>{cert.comentario_supervisor}</b></>}
+            </div>
+            <button onClick={reactivarFlujo} disabled={reactivando}
+              style={{ marginTop: 12, width: "100%", background: "#F47B20", color: "#fff", border: "none", borderRadius: 9, padding: "12px", fontSize: 13, fontWeight: 800, cursor: "pointer", opacity: reactivando ? 0.6 : 1, fontFamily: "'Geist',sans-serif" }}>
+              {reactivando ? "Reactivando…" : "▶ Reactivar flujo → Pre Validación Biggy"}
+            </button>
+          </div>
+        )}
+
         {/* Revisión Interna: MELI declinó y el analista decide */}
         {etapaActual === "revision_interna" && (
           <AvisoRevisionInterna registro={cert} moviendo={resolviendoRI}
@@ -2998,7 +3070,7 @@ function DetalleCertificacion({ cert, etapa, onVolver, onPasarEtapa2, onMoverA, 
             <ul style={{ margin: 0, paddingLeft: 18 }}>
               {(cert.cambios_prospecto || []).slice(-8).reverse().map((c, i) => (
                 <li key={i} style={{ fontSize: 12.5, color: "#8a4a0f", marginBottom: 4 }}>
-                  <b>{new Date(c.at).toLocaleString("es-MX", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}</b>
+                  <b>{new Date(c.at).toLocaleString("es-MX", { timeZone: TZ_MX, day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}</b>
                   {" · "}📎 {docEtiquetaCert(c.campo)}: {c.accion}{c.por ? ` (${c.por})` : ""}
                   {c.storage_path && (
                     <button onClick={async () => {
@@ -3223,9 +3295,9 @@ function KanbanBoard({ items, columnas = COLUMNAS, onCardClick, onMover, onElimi
                   </div>
                   {/* Fecha y hora de entrada al flujo (sirve para medir antigüedad) */}
                   {card.creado && (
-                    <div title={"Ingresó al flujo el " + new Date(card.creado).toLocaleString("es-MX")}
+                    <div title={"Ingresó al flujo el " + fMX(card.creado) + " (hora de México)"}
                       style={{ fontSize: 9.5, color: "#98a2b3", fontWeight: 600, marginBottom: 4 }}>
-                      🗓 {new Date(card.creado).toLocaleString("es-MX", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}
+                      🗓 {fMX(card.creado, { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}
                       {(() => {
                         const h = Math.floor((Date.now() - new Date(card.creado).getTime()) / 3600000);
                         if (h < 24) return <span style={{ color: "#667085" }}> · hace {h} h</span>;
@@ -3626,7 +3698,7 @@ function DocumentacionTerceros() {
                     <td>{docCatLabel(d.categoria)}</td>
                     <td style={{ color: "#555" }}>{d.referencia || "—"}</td>
                     <td style={{ fontFamily: "monospace", color: "#555" }}>{fmtBytes(d.tamano_bytes)}</td>
-                    <td style={{ fontSize: 11.5, color: "#888" }}>{new Date(d.created_at).toLocaleDateString("es-MX", { day: "2-digit", month: "2-digit", year: "2-digit" })} · {d.subido_por || "—"}</td>
+                    <td style={{ fontSize: 11.5, color: "#888" }}>{new Date(d.created_at).toLocaleDateString("es-MX", { timeZone: TZ_MX, day: "2-digit", month: "2-digit", year: "2-digit" })} · {d.subido_por || "—"}</td>
                     <td style={{ whiteSpace: "nowrap", textAlign: "right" }}>
                       <button onClick={() => descargar(d)} style={{ border: "1px solid #d6def0", background: "#eef2f7", color: "#1a3a6b", borderRadius: 6, padding: "5px 10px", fontSize: 11.5, fontWeight: 700, cursor: "pointer", marginRight: 6 }}>Ver / Descargar</button>
                       <button onClick={() => eliminar(d)} style={{ border: "none", background: "none", color: "#c0392b", fontSize: 11.5, fontWeight: 700, cursor: "pointer" }}>Eliminar</button>
@@ -4188,7 +4260,7 @@ function MensajesTerceros() {
                     borderBottomLeftRadius: m.autor === "bigticket" ? 12 : 4 }}>
                     {m.mensaje}
                     <div style={{ fontSize: 9, opacity: 0.6, marginTop: 4, textAlign: "right" }}>
-                      {new Date(m.created_at).toLocaleString("es-MX", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}
+                      {new Date(m.created_at).toLocaleString("es-MX", { timeZone: TZ_MX, day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}
                     </div>
                   </div>
                 </div>
@@ -4941,7 +5013,10 @@ function ModuloCertificaciones() {
                     </span>
                     {!ETAPAS_SIN_NOTA_BIGGY.includes(card.etapa) && <NotaBiggy score={card.score} />}
                   </div>
-                  <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>📍 {card.sc}</div>
+                  <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>
+                    📍 {card.sc}
+                    {card.creado && <> · 🗓 {fMX(card.creado, { day: "2-digit", month: "short", year: "2-digit", hour: "2-digit", minute: "2-digit" })} <span style={{ fontSize: 10, color: "#b0b7c3" }}>(MX)</span></>}
+                  </div>
                 </div>
                 <button title="Quitar del tablero" onClick={(e) => { e.stopPropagation(); eliminarTarjeta(card); }}
                   style={{ width: 24, height: 24, borderRadius: "50%", border: "1px solid #e4e7ec", background: "#fff", color: "#c0392b", fontSize: 13, cursor: "pointer", padding: 0, flexShrink: 0 }}>✕</button>
