@@ -3096,25 +3096,36 @@ function TorreTresPilares() {
   const [travelExpandido, setTravelExpandido] = useState(null);
   const [historial, setHistorial] = useState({});
 
-  // ─── Carga ───
+  // ─── Carga: resumen (no depende de scFiltro — get_torre_resumen siempre calcula todos los SC) ───
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const resumenRes = await sb.rpc("get_torre_resumen", { fecha_desde: fecha, fecha_hasta: fecha });
+        if (!alive) return;
+        if (resumenRes.error) throw resumenRes.error;
+        setResumen(resumenRes.data);
+      } catch (e) {
+        if (alive) setError(e.message || String(e));
+      }
+    })();
+    return () => { alive = false; };
+  }, [fecha, refreshKey]);
+
+  // ─── Carga: filas (detalle por ruta, sí depende de scFiltro) ───
   useEffect(() => {
     let alive = true;
     (async () => {
       setLoading(true);
       setError(null);
       try {
-        const [resumenRes, filasRes] = await Promise.all([
-          sb.rpc("get_torre_resumen", { fecha_desde: fecha, fecha_hasta: fecha }),
-          sb.rpc("get_torre_3_pilares", {
-            fecha_desde: fecha,
-            fecha_hasta: fecha,
-            sc_filtro: scFiltro || null,
-          }),
-        ]);
+        const filasRes = await sb.rpc("get_torre_3_pilares", {
+          fecha_desde: fecha,
+          fecha_hasta: fecha,
+          sc_filtro: scFiltro || null,
+        });
         if (!alive) return;
-        if (resumenRes.error) throw resumenRes.error;
         if (filasRes.error) throw filasRes.error;
-        setResumen(resumenRes.data);
         setFilas(filasRes.data || []);
       } catch (e) {
         if (alive) setError(e.message || String(e));
