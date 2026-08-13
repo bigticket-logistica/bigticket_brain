@@ -1,5 +1,6 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { descargarExcelMultihoja, fechaHoyOperativa, fechaOperativaOffset, sb } from "./shared";
+import ModuloCobrosMermas from "./Mermas";
 
 function BotonDescargarExcel({ onClick, disabled, label = "Descargar Excel" }) {
   return (
@@ -5220,7 +5221,7 @@ function ModuloPagosMadre({ usuario }) {
   // Si el usuario tiene rol "prefacturas", solo puede acceder a la sub-tab Prefacturas.
   // Las otras sub-tabs siguen visibles pero al hacer click muestran un mensaje de bloqueo.
   const rolLimitadoAPrefacturas = usuario?.rol === "prefacturas";
-  const subtabsPermitidas = rolLimitadoAPrefacturas ? ["prefacturas"] : null; // null = todas
+  const subtabsPermitidas = rolLimitadoAPrefacturas ? ["prefacturas", "mermas"] : null; // null = todas
 
   const [subtab, setSubtabState] = useState(() => {
     if (rolLimitadoAPrefacturas) return "prefacturas";
@@ -5239,6 +5240,7 @@ function ModuloPagosMadre({ usuario }) {
     { id: "supervisores", label: "Consolidaciones Bitácora",   desc: "Consolidado por SC: torre de control, ambulancias y bitácora del supervisor" },
     { id: "padron_meli", label: "Padrón MELI",         desc: "Conductores y vehículos · altas, bajas y cambios diarios" },
     { id: "prefacturas", label: "Prefacturas",           desc: "Envío masivo de prefacturas MX" },
+    { id: "mermas",      label: "Cobros Mermas",         desc: "Cobro de mermas a terceros por SC" },
     { id: "config",      label: "Configuración",         desc: "Tarifario, zonas y reglas" },
   ];
 
@@ -5290,6 +5292,7 @@ function ModuloPagosMadre({ usuario }) {
           {subtab === "supervisores" && <PanelControlSupervisores />}
           {subtab === "padron_meli" && <PadronMeliAdmin usuario={usuario} />}
           {subtab === "prefacturas" && <ModuloPrefacturasEnvio usuario={usuario} />}
+          {subtab === "mermas"      && <ModuloCobrosMermas usuario={usuario} logoB64={LOGO_PREFACTURA_B64} />}
           {subtab === "config"      && <ConfiguracionPagos />}
         </>
       )}
