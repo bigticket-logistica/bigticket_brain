@@ -10,12 +10,13 @@
 // renderiza el PDF. No se manda base64 desde el navegador.
 // ════════════════════════════════════════════════════════════════════════════
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { descargarExcelMultihoja, sb } from "./shared";
 import {
   MM_ESTADO_COBRABLE, MM_ESTADOS_CONOCIDOS,
   mmLeerDetalle, mmAgrupar, mmCruzar, mmConstruirHTML, mmNombrePdf,
   mmVariables, mmAplicarPlantilla, mmFmtMon, mmFmtFecha, mmUnirCorreos, mmSimilitud,
+  mmFechaISO, mmNormEmpresa,
 } from "./mermas_core";
 
 // El logo (LOGO_PREFACTURA_B64) vive en Pagos.jsx y llega por prop.
@@ -60,7 +61,48 @@ async function asegurarXLSX() {
   return !!window.XLSX;
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// Shell con sub-pestañas: cargar/enviar, historial de cargas, historial de envíos
+// ════════════════════════════════════════════════════════════════════════════
 export default function ModuloCobrosMermas({ usuario, logoB64 = "" }) {
+  const [subtab, setSubtab] = useState(() => {
+    try { return localStorage.getItem("mm_subtab") || "envio"; } catch { return "envio"; }
+  });
+  const cambiar = (t) => { try { localStorage.setItem("mm_subtab", t); } catch {} setSubtab(t); };
+
+  const subtabs = [
+    { id: "envio",    label: "Cargar y enviar",       icon: "📊" },
+    { id: "cargas",   label: "Historial de cargas",   icon: "📥" },
+    { id: "enviados", label: "Historial de envíos",   icon: "📨" },
+  ];
+
+  return (
+    <div style={{ padding: 0 }}>
+      <div style={{ background: "#fff", borderBottom: "1px solid #e4e7ec", padding: "12px 24px" }}>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          {subtabs.map(t => (
+            <button key={t.id} onClick={() => cambiar(t.id)}
+              style={{
+                padding: "8px 16px", borderRadius: 8,
+                border: `1px solid ${subtab === t.id ? "#1a3a6b" : "#e4e7ec"}`,
+                background: subtab === t.id ? "#1a3a6b" : "#fff",
+                color: subtab === t.id ? "#fff" : "#475569",
+                fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "Geist, sans-serif",
+              }}>
+              {t.icon} {t.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {subtab === "envio"    && <MermasCargaYEnvio usuario={usuario} logoB64={logoB64} />}
+      {subtab === "cargas"   && <MermasHistorialCargas />}
+      {subtab === "enviados" && <MermasHistorialEnvios />}
+    </div>
+  );
+}
+
+function MermasCargaYEnvio({ usuario, logoB64 = "" }) {
   // ── Maestros de Prefacturas (misma fuente de verdad, sin duplicar) ────────
   const [transportistas, setTransportistas] = useState([]);
   const [parametros, setParametros] = useState([]);
@@ -71,6 +113,8 @@ export default function ModuloCobrosMermas({ usuario, logoB64 = "" }) {
   const [filas, setFilas] = useState([]);
   const [avisosArchivo, setAvisosArchivo] = useState([]);
   const [leyendo, setLeyendo] = useState(false);
+  const [cargaId, setCargaId] = useState(null);          // id en mermas_cargas
+  const [guiasCobradas, setGuiasCobradas] = useState(new Set()); // ya cobradas antes
   const [error, setError] = useState("");
   const [arrastrando, setArrastrando] = useState(false);
   const inputRef = useRef(null);
@@ -128,21 +172,115 @@ export default function ModuloCobrosMermas({ usuario, logoB64 = "" }) {
       const nombreHoja = wb.SheetNames.find(n => /detalle/i.test(n)) || wb.SheetNames[0];
       const ws = wb.Sheets[nombreHoja];
       const aoa = window.XLSX.utils.sheet_to_json(ws, { header: 1, blankrows: false, defval: "" });
-      const { filas: f, avisos } = mmLeerDetalle(aoa);
-      if (!f.length) throw new Error(avisos[0] || "No se encontraron filas de mermas en el archivo.");
-      setFilas(f);
-      setAvisosArchivo(avisos || []);
-      setArchivo({ nombre: file.name, size: file.size, hoja: nombreHoja });
-      // Un archivo nuevo invalida todo lo anterior: overrides, selección y estado de envío
+      const { filas: f, avisos: avs } = mmLeerDetalle(aoa);
+      if (!f.length) throw new Error(avs[0] || "No se encontraron filas de mermas en el archivo.");
+      const avisos = [...(avs || [])];
+
+      // Un archivo nuevo invalida todo lo anterior
       setOverrides({}); setEnvios({}); setSeleccion(new Set()); setLogFinal(null);
+
+      // ── Guías que ya se cobraron en un envío anterior ──────────────────────
+      // Es la protección real contra cobrar dos veces la misma merma entre
+      // semanas: el Excel de MELI arrastra las pendientes de períodos previos.
+      const guias = [...new Set(f.filter(x => x.estado === MM_ESTADO_COBRABLE).map(x => x.guia).filter(Boolean))];
+      let yaCobradas = new Set();
+      if (guias.length) {
+        try {
+          const enLotes = [];
+          for (let i = 0; i < guias.length; i += 300) enLotes.push(guias.slice(i, i + 300));
+          for (const lote of enLotes) {
+            const { data } = await sb.from("vw_mermas_guias_cobradas")
+              .select("guia, periodo_cobro, transportista").in("guia", lote);
+            (data || []).forEach(r => yaCobradas.add(String(r.guia)));
+          }
+        } catch (e) { console.error("chequeo guías cobradas:", e); }
+      }
+      setGuiasCobradas(yaCobradas);
+      if (yaCobradas.size) {
+        const monto = f.filter(x => yaCobradas.has(String(x.guia))).reduce((s2, x) => s2 + x.valor, 0);
+        avisos.push(`${yaCobradas.size} guía(s) ya fueron cobradas en un envío anterior (${mmFmtMon(monto)}): quedan EXCLUIDAS del cobro.`);
+      }
+
+      setFilas(f);
+      setAvisosArchivo(avisos);
+      setArchivo({ nombre: file.name, size: file.size, hoja: nombreHoja });
+
       // Sugerir período desde el archivo si viene poblado
       const per = f.map(x => x.periodoPrefactura).filter(Boolean).sort().pop();
       if (per && !periodoCobro) setPeriodoCobro(per);
+
+      // ── Guardar la carga en el historial ─────────────────────────────────
+      await guardarCarga(file, buf, nombreHoja, f, avisos, yaCobradas);
     } catch (e) {
       setError(e.message || String(e));
       setFilas([]); setArchivo(null); setAvisosArchivo([]);
     }
     setLeyendo(false);
+  };
+
+  // ── Persistir la carga (cabecera + líneas) en el historial ───────────────
+  const guardarCarga = async (file, buf, hoja, f, avisos, yaCobradas) => {
+    try {
+      let hash = null;
+      try {
+        const h = await crypto.subtle.digest("SHA-256", buf);
+        hash = [...new Uint8Array(h)].map(b => b.toString(16).padStart(2, "0")).join("");
+      } catch { /* sin hash si el navegador no expone subtle en http */ }
+
+      const porEstado = (e) => f.filter(x => x.estado === e);
+      const pend = porEstado(MM_ESTADO_COBRABLE);
+      const empresas = new Set(pend.filter(x => !yaCobradas.has(String(x.guia))).map(x => mmNormEmpresa(x.transportista))).size;
+
+      const { data: cab, error: errCab } = await sb.from("mermas_cargas").insert({
+        usuario: usuario?.email || usuario?.nombre || "—",
+        archivo_nombre: file.name,
+        archivo_hash: hash,
+        archivo_bytes: file.size,
+        hoja,
+        filas_total: f.length,
+        filas_pendiente: pend.length,
+        filas_cobrado: porEstado("COBRADO").length,
+        filas_asume: porEstado("ASUME BIGTICKET").length,
+        monto_total: Number(f.reduce((s2, x) => s2 + x.valor, 0).toFixed(2)),
+        monto_pendiente: Number(pend.reduce((s2, x) => s2 + x.valor, 0).toFixed(2)),
+        empresas_pendientes: empresas,
+        periodo_sugerido: f.map(x => x.periodoPrefactura).filter(Boolean).sort().pop() || null,
+        avisos: (avisos || []).join(" | ") || null,
+        pais: "MX",
+      }).select("id").single();
+      if (errCab) throw errCab;
+
+      setCargaId(cab.id);
+
+      // Detalle en lotes: 618 filas de una sola vez hace timeout
+      const lineas = f.map(x => ({
+        carga_id: cab.id,
+        fila_excel: x.fila,
+        site: x.site || null,
+        ceco: x.ceco || null,
+        fecha: mmFechaISO(x.fecha),
+        id_ruta: x.idRuta || null,
+        guia: x.guia || null,
+        motivo: x.motivo || null,
+        placa: x.placa || null,
+        conductor: x.conductor || null,
+        transportista: x.transportista || null,
+        transportista_norm: mmNormEmpresa(x.transportista) || null,
+        valor: Number((x.valor || 0).toFixed(2)),
+        estado: x.estado || null,
+        sub_estado: x.subEstado || null,
+        prefactura_meli: x.prefacturaMeli || null,
+        periodo_prefactura: x.periodoPrefactura || null,
+      }));
+      for (let i = 0; i < lineas.length; i += 200) {
+        const { error } = await sb.from("mermas_cargas_lineas").insert(lineas.slice(i, i + 200));
+        if (error) throw error;
+      }
+    } catch (e) {
+      console.error("guardar carga:", e);
+      // La carga al historial no debe impedir trabajar: se avisa y se sigue.
+      setAvisosArchivo(prev => [...prev, "No se pudo guardar esta carga en el historial: " + (e.message || e)]);
+    }
   };
 
   const onDrop = (fileList) => {
@@ -155,6 +293,7 @@ export default function ModuloCobrosMermas({ usuario, logoB64 = "" }) {
     if (!confirm("¿Quitar el archivo cargado y todos los resultados?\n\n(El asunto, cuerpo y jefaturas se mantienen)")) return;
     setFilas([]); setArchivo(null); setAvisosArchivo([]); setOverrides({});
     setEnvios({}); setSeleccion(new Set()); setLogFinal(null); setError("");
+    setCargaId(null); setGuiasCobradas(new Set());
   };
 
   // ── Conteo por estado (para el filtro) ───────────────────────────────────
@@ -169,8 +308,8 @@ export default function ModuloCobrosMermas({ usuario, logoB64 = "" }) {
 
   // ── Agrupación + cruce ───────────────────────────────────────────────────
   const grupos = useMemo(
-    () => mmAgrupar(filas, { estados: estadosIncluidos }),
-    [filas, estadosIncluidos]
+    () => mmAgrupar(filas, { estados: estadosIncluidos, excluirGuias: guiasCobradas }),
+    [filas, estadosIncluidos, guiasCobradas]
   );
 
   const gruposCruzados = useMemo(
@@ -251,7 +390,7 @@ export default function ModuloCobrosMermas({ usuario, logoB64 = "" }) {
     // Se inserta fila por fila, en el momento: si el navegador se cierra a mitad
     // del lote, lo ya enviado queda registrado.
     try {
-      await sb.from("mermas_cobros_envios_log").insert({
+      const { data: logRow, error: errLog } = await sb.from("mermas_cobros_envios_log").insert({
         fecha_envio: resultado.ts,
         periodo_cobro: periodoCobro,
         folio: folioDe(g),
@@ -274,7 +413,21 @@ export default function ModuloCobrosMermas({ usuario, logoB64 = "" }) {
         usuario: usuario?.email || usuario?.nombre || "—",
         archivo_origen: archivo?.nombre || null,
         pais: "MX",
-      });
+      }).select("id").single();
+      if (errLog) throw errLog;
+
+      // Marcar las líneas de esta carga como cobradas. Esto es lo que impide
+      // que la próxima carga vuelva a cobrar las mismas guías.
+      if (resultado.ok && cargaId) {
+        const guias = g.sites.flatMap(s2 => s2.lineas.map(l => l.guia)).filter(Boolean);
+        for (let i = 0; i < guias.length; i += 200) {
+          const { error } = await sb.from("mermas_cargas_lineas")
+            .update({ enviado_at: resultado.ts, periodo_cobro: periodoCobro, envio_log_id: logRow.id })
+            .eq("carga_id", cargaId)
+            .in("guia", guias.slice(i, i + 200));
+          if (error) console.error("marcar líneas enviadas:", error);
+        }
+      }
     } catch (e) {
       console.error("log mermas:", e);
     }
@@ -966,4 +1119,464 @@ function th(align = "left") {
 
 function td(align = "left") {
   return { padding: "8px 10px", fontSize: 12, color: "#1a1a1a", textAlign: align, verticalAlign: "top" };
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// HISTORIAL DE CARGAS — qué Excel se subió, cuándo, y qué salió de cada uno
+// ════════════════════════════════════════════════════════════════════════════
+
+function MermasHistorialCargas() {
+  const [cargas, setCargas] = useState([]);
+  const [cargando, setCargando] = useState(true);
+  const [limite, setLimite] = useState(50);
+  const [abierta, setAbierta] = useState(null);       // id de la carga expandida
+  const [lineas, setLineas] = useState([]);
+  const [cargandoLineas, setCargandoLineas] = useState(false);
+  const [filtroLineas, setFiltroLineas] = useState("todas");
+  const [busqueda, setBusqueda] = useState("");
+
+  const cargar = async () => {
+    setCargando(true);
+    try {
+      const { data } = await sb.from("mermas_cargas")
+        .select("*").eq("pais", "MX")
+        .order("cargado_at", { ascending: false }).limit(limite);
+      setCargas(data || []);
+    } catch (e) { console.error("historial cargas:", e); }
+    setCargando(false);
+  };
+  useEffect(() => { cargar(); }, [limite]);
+
+  const abrir = async (id) => {
+    if (abierta === id) { setAbierta(null); setLineas([]); return; }
+    setAbierta(id); setCargandoLineas(true); setLineas([]); setFiltroLineas("todas");
+    try {
+      const { data } = await sb.from("mermas_cargas_lineas")
+        .select("*").eq("carga_id", id)
+        .order("fila_excel", { ascending: true });
+      setLineas(data || []);
+    } catch (e) { console.error("líneas de la carga:", e); }
+    setCargandoLineas(false);
+  };
+
+  const lineasVisibles = useMemo(() => {
+    let r = lineas;
+    if (filtroLineas === "enviadas") r = r.filter(l => l.enviado_at);
+    else if (filtroLineas === "pendientes") r = r.filter(l => !l.enviado_at && l.estado === MM_ESTADO_COBRABLE);
+    else if (filtroLineas !== "todas") r = r.filter(l => l.estado === filtroLineas);
+    const q = busqueda.trim().toLowerCase();
+    if (q) r = r.filter(l =>
+      String(l.transportista || "").toLowerCase().includes(q) ||
+      String(l.guia || "").includes(q) ||
+      String(l.site || "").toLowerCase().includes(q) ||
+      String(l.placa || "").toLowerCase().includes(q)
+    );
+    return r.slice(0, 400);
+  }, [lineas, filtroLineas, busqueda]);
+
+  const descargar = async (carga) => {
+    const { data } = await sb.from("mermas_cargas_lineas")
+      .select("*").eq("carga_id", carga.id).order("fila_excel");
+    const rows = data || [];
+    await descargarExcelMultihoja([
+      {
+        nombre: "Resumen", datos: [
+          ["Carga de mermas"],
+          ["Archivo", carga.archivo_nombre],
+          ["Cargado", new Date(carga.cargado_at).toLocaleString("es-MX")],
+          ["Usuario", carga.usuario || "—"],
+          ["Filas totales", carga.filas_total],
+          ["Pendientes de cobro", carga.filas_pendiente],
+          ["Ya cobradas (Excel)", carga.filas_cobrado],
+          ["Asume Bigticket", carga.filas_asume],
+          ["Monto total", Number(carga.monto_total || 0)],
+          ["Monto pendiente", Number(carga.monto_pendiente || 0)],
+          ["Empresas a cobrar", carga.empresas_pendientes],
+          ["Avisos", carga.avisos || "—"],
+        ]
+      },
+      {
+        nombre: "Líneas", datos: [
+          ["Fila Excel", "Site", "Fecha", "ID Ruta", "N° Guía", "Motivo", "Placa", "Conductor",
+           "Transportista", "Valor", "Estado", "Sub estado", "Enviado", "Período cobro"],
+          ...rows.map(l => [
+            l.fila_excel, l.site, l.fecha, l.id_ruta, l.guia, l.motivo, l.placa, l.conductor,
+            l.transportista, Number(l.valor || 0), l.estado, l.sub_estado,
+            l.enviado_at ? new Date(l.enviado_at).toLocaleString("es-MX") : "", l.periodo_cobro || "",
+          ]),
+        ]
+      },
+    ], `carga_mermas_${carga.id}`);
+  };
+
+  const totales = useMemo(() => ({
+    cargas: cargas.length,
+    filas: cargas.reduce((s, c) => s + (c.filas_total || 0), 0),
+    pendiente: cargas.reduce((s, c) => s + Number(c.monto_pendiente || 0), 0),
+  }), [cargas]);
+
+  return (
+    <div className="pg" style={{ maxWidth: 1500 }}>
+      <div style={{ marginBottom: 16 }}>
+        <div className="sec-title">Historial de cargas</div>
+        <div className="sec-sub">
+          Cada Excel de mermas que se subió al Brain, con su detalle línea por línea.
+          Las líneas marcadas como enviadas son las que quedan excluidas de las cargas siguientes.
+        </div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 10, marginBottom: 14 }}>
+        <Ind label="Cargas" valor={totales.cargas} color="#1a3a6b" />
+        <Ind label="Filas acumuladas" valor={totales.filas.toLocaleString("es-MX")} color="#1a3a6b" />
+        <Ind label="Monto pendiente acumulado" valor={mmFmtMon(totales.pendiente)} color="#dc2626" />
+      </div>
+
+      <div className="form-card" style={{ padding: "12px 16px" }}>
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <select value={limite} onChange={e => setLimite(Number(e.target.value))} style={{ width: 150 }}>
+            <option value={20}>Últimas 20</option>
+            <option value={50}>Últimas 50</option>
+            <option value={200}>Últimas 200</option>
+          </select>
+          <button onClick={cargar} style={btnGhost}>🔄 Refrescar</button>
+        </div>
+      </div>
+
+      <div className="form-card" style={{ padding: 0, overflow: "hidden" }}>
+        {cargando ? (
+          <div className="loading">Cargando historial...</div>
+        ) : cargas.length === 0 ? (
+          <div className="empty">Todavía no se cargó ningún archivo de mermas.</div>
+        ) : (
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+              <thead>
+                <tr style={{ background: "#f8fafc", borderBottom: "1px solid #e4e7ec" }}>
+                  <th style={th()}>Cargado</th>
+                  <th style={th()}>Archivo</th>
+                  <th style={th()}>Usuario</th>
+                  <th style={th("right")}>Filas</th>
+                  <th style={th("right")}>Pendientes</th>
+                  <th style={th("right")}>Monto pendiente</th>
+                  <th style={th("right")}>Empresas</th>
+                  <th style={th()}>Avisos</th>
+                  <th style={th()}></th>
+                </tr>
+              </thead>
+              <tbody>
+                {cargas.map(c => (
+                  <Fragment key={c.id}>
+                    <tr style={{ borderBottom: "1px solid #f1f5f9", background: abierta === c.id ? "#eff6ff" : "transparent" }}>
+                      <td style={td()}>
+                        <div style={{ fontSize: 11.5 }}>{new Date(c.cargado_at).toLocaleString("es-MX")}</div>
+                        <div style={{ fontSize: 9.5, color: "#94a3b8" }}>#{c.id}</div>
+                      </td>
+                      <td style={td()}>
+                        <div style={{ fontWeight: 600, maxWidth: 240, wordBreak: "break-all" }}>{c.archivo_nombre}</div>
+                        <div style={{ fontSize: 9.5, color: "#94a3b8" }}>
+                          hoja {c.hoja || "—"} · {c.archivo_bytes ? (c.archivo_bytes / 1024).toFixed(0) + " KB" : "—"}
+                          {c.periodo_sugerido ? ` · ${c.periodo_sugerido}` : ""}
+                        </div>
+                      </td>
+                      <td style={td()}><span style={{ fontSize: 10.5, color: "#64748b" }}>{c.usuario || "—"}</span></td>
+                      <td style={td("right")}>{c.filas_total}</td>
+                      <td style={td("right")}>
+                        <span style={{ fontWeight: 600 }}>{c.filas_pendiente}</span>
+                        <div style={{ fontSize: 9.5, color: "#94a3b8" }}>
+                          {c.filas_cobrado} cobr · {c.filas_asume} asume
+                        </div>
+                      </td>
+                      <td style={{ ...td("right"), fontWeight: 700, color: "#1a3a6b" }}>{mmFmtMon(c.monto_pendiente)}</td>
+                      <td style={td("right")}>{c.empresas_pendientes ?? "—"}</td>
+                      <td style={td()}>
+                        {c.avisos
+                          ? <div style={{ fontSize: 9.5, color: "#9a3412", maxWidth: 260 }}>⚠ {c.avisos.slice(0, 160)}{c.avisos.length > 160 ? "…" : ""}</div>
+                          : <span style={{ fontSize: 10, color: "#94a3b8" }}>sin avisos</span>}
+                      </td>
+                      <td style={td()}>
+                        <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                          <button onClick={() => abrir(c.id)} style={btnMini("#1a3a6b")}>
+                            {abierta === c.id ? "Ocultar" : "Ver detalle"}
+                          </button>
+                          <button onClick={() => descargar(c)} style={btnMini("#0891b2")}>⬇ Excel</button>
+                        </div>
+                      </td>
+                    </tr>
+                    {abierta === c.id && (
+                      <tr>
+                        <td colSpan={9} style={{ padding: "12px 16px", background: "#f8fafc", borderBottom: "1px solid #e4e7ec" }}>
+                          {cargandoLineas ? (
+                            <div className="loading">Cargando líneas...</div>
+                          ) : (
+                            <>
+                              <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap", alignItems: "center" }}>
+                                <input placeholder="Buscar guía, empresa, site o placa..." value={busqueda}
+                                  onChange={e => setBusqueda(e.target.value)} style={{ flex: "1 1 260px", maxWidth: 340 }} />
+                                <select value={filtroLineas} onChange={e => setFiltroLineas(e.target.value)} style={{ width: 200 }}>
+                                  <option value="todas">Todas ({lineas.length})</option>
+                                  <option value="pendientes">Pendientes sin cobrar</option>
+                                  <option value="enviadas">Ya cobradas desde el Brain</option>
+                                  {MM_ESTADOS_CONOCIDOS.map(e => <option key={e} value={e}>{e}</option>)}
+                                </select>
+                                <span style={{ fontSize: 11, color: "#64748b" }}>
+                                  {lineasVisibles.length} visible(s) · {mmFmtMon(lineasVisibles.reduce((s, l) => s + Number(l.valor || 0), 0))}
+                                </span>
+                              </div>
+                              <div style={{ maxHeight: 420, overflowY: "auto" }}>
+                                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+                                  <thead>
+                                    <tr style={{ background: "#e8ebf0", position: "sticky", top: 0 }}>
+                                      {["Fila", "Site", "Fecha", "ID Ruta", "N° Guía", "Motivo", "Placa", "Transportista", "Valor", "Estado", "Cobrado"].map(h => (
+                                        <th key={h} style={{ padding: "5px 8px", textAlign: h === "Valor" ? "right" : "left", fontSize: 10, color: "#475569", whiteSpace: "nowrap" }}>{h}</th>
+                                      ))}
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {lineasVisibles.map(l => (
+                                      <tr key={l.id} style={{ borderBottom: "1px solid #eef0f3", background: l.enviado_at ? "#f0fdf4" : "transparent" }}>
+                                        <td style={{ padding: "3px 8px", color: "#94a3b8" }}>{l.fila_excel}</td>
+                                        <td style={{ padding: "3px 8px" }}>{l.site}</td>
+                                        <td style={{ padding: "3px 8px" }}>{mmFmtFecha(l.fecha)}</td>
+                                        <td style={{ padding: "3px 8px" }}>{l.id_ruta}</td>
+                                        <td style={{ padding: "3px 8px", fontFamily: "monospace" }}>{l.guia}</td>
+                                        <td style={{ padding: "3px 8px" }}>{l.motivo}</td>
+                                        <td style={{ padding: "3px 8px" }}>{l.placa}</td>
+                                        <td style={{ padding: "3px 8px", maxWidth: 190 }}>{l.transportista}</td>
+                                        <td style={{ padding: "3px 8px", textAlign: "right", fontWeight: 600 }}>{mmFmtMon(l.valor)}</td>
+                                        <td style={{ padding: "3px 8px", fontSize: 10, color: "#64748b" }}>{l.estado}</td>
+                                        <td style={{ padding: "3px 8px", fontSize: 10 }}>
+                                          {l.enviado_at
+                                            ? <span style={{ color: "#166534", fontWeight: 600 }}>✓ {l.periodo_cobro || new Date(l.enviado_at).toLocaleDateString("es-MX")}</span>
+                                            : <span style={{ color: "#94a3b8" }}>—</span>}
+                                        </td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                                {lineas.length > 400 && (
+                                  <div style={{ fontSize: 10.5, color: "#94a3b8", padding: "8px 0" }}>
+                                    Se muestran las primeras 400 líneas. Usá el buscador o bajá el Excel para ver todo.
+                                  </div>
+                                )}
+                              </div>
+                            </>
+                          )}
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// HISTORIAL DE ENVÍOS — qué cobro salió, a quién, por cuánto
+// ════════════════════════════════════════════════════════════════════════════
+
+function MermasHistorialEnvios() {
+  const [logs, setLogs] = useState([]);
+  const [cargando, setCargando] = useState(true);
+  const [limite, setLimite] = useState(200);
+  const [filtroEstado, setFiltroEstado] = useState("todos");
+  const [periodo, setPeriodo] = useState("todos");
+  const [busqueda, setBusqueda] = useState("");
+  const [detalle, setDetalle] = useState(null);
+
+  const cargar = async () => {
+    setCargando(true);
+    try {
+      const { data } = await sb.from("mermas_cobros_envios_log")
+        .select("*").eq("pais", "MX")
+        .order("fecha_envio", { ascending: false }).limit(limite);
+      setLogs(data || []);
+    } catch (e) { console.error("historial envíos:", e); }
+    setCargando(false);
+  };
+  useEffect(() => { cargar(); }, [limite]);
+
+  const periodos = useMemo(
+    () => [...new Set(logs.map(l => l.periodo_cobro).filter(Boolean))].sort().reverse(),
+    [logs]
+  );
+
+  const filtrados = useMemo(() => {
+    let r = logs;
+    if (filtroEstado !== "todos") r = r.filter(l => l.estado === filtroEstado);
+    if (periodo !== "todos") r = r.filter(l => l.periodo_cobro === periodo);
+    const q = busqueda.trim().toLowerCase();
+    if (q) r = r.filter(l =>
+      String(l.transportista || "").toLowerCase().includes(q) ||
+      String(l.correo_to || "").toLowerCase().includes(q) ||
+      String(l.sites || "").toLowerCase().includes(q) ||
+      String(l.folio || "").toLowerCase().includes(q) ||
+      String(l.guias || "").includes(q)
+    );
+    return r;
+  }, [logs, filtroEstado, periodo, busqueda]);
+
+  const stats = useMemo(() => ({
+    total: filtrados.length,
+    ok: filtrados.filter(l => l.estado === "enviado").length,
+    err: filtrados.filter(l => l.estado === "fallido").length,
+    monto: filtrados.filter(l => l.estado === "enviado").reduce((s, l) => s + Number(l.monto_total || 0), 0),
+    cobros: filtrados.filter(l => l.estado === "enviado").reduce((s, l) => s + (l.n_cobros || 0), 0),
+  }), [filtrados]);
+
+  const descargar = async () => {
+    await descargarExcelMultihoja([
+      {
+        nombre: "Envíos", datos: [
+          ["Fecha", "Estado", "Período", "Folio", "Transportista", "RFC", "Sites", "N° cobros",
+           "Monto", "TO", "CC", "Asunto", "PDF", "Match", "Motivo / MessageID", "Usuario", "Archivo origen", "Guías"],
+          ...filtrados.map(l => [
+            new Date(l.fecha_envio).toLocaleString("es-MX"), l.estado, l.periodo_cobro, l.folio,
+            l.transportista, l.rfc, l.sites, l.n_cobros, Number(l.monto_total || 0),
+            l.correo_to, l.correo_cc, l.asunto, l.nombre_pdf, l.match_tipo,
+            l.motivo || l.message_id, l.usuario, l.archivo_origen, l.guias,
+          ]),
+        ]
+      },
+    ], "historial_envios_mermas");
+  };
+
+  return (
+    <div className="pg" style={{ maxWidth: 1500 }}>
+      <div style={{ marginBottom: 16 }}>
+        <div className="sec-title">Historial de envíos</div>
+        <div className="sec-sub">Cada cobro de mermas que salió del Brain, con su monto, destinatarios y las guías incluidas.</div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 10, marginBottom: 14 }}>
+        <Ind label="Envíos" valor={stats.total} color="#1a3a6b" />
+        <Ind label="Enviados OK" valor={stats.ok} sub={`${stats.cobros} cobros`} color="#16a34a" />
+        <Ind label="Fallidos" valor={stats.err} color="#dc2626" />
+        <Ind label="Monto cobrado" valor={mmFmtMon(stats.monto)} color="#1a3a6b" />
+      </div>
+
+      <div className="form-card" style={{ padding: "12px 16px" }}>
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <input placeholder="Buscar empresa, correo, folio, site o guía..." value={busqueda}
+            onChange={e => setBusqueda(e.target.value)} style={{ flex: "1 1 260px", maxWidth: 380 }} />
+          <select value={filtroEstado} onChange={e => setFiltroEstado(e.target.value)} style={{ width: 160 }}>
+            <option value="todos">Todos los estados</option>
+            <option value="enviado">Solo enviados</option>
+            <option value="fallido">Solo fallidos</option>
+          </select>
+          <select value={periodo} onChange={e => setPeriodo(e.target.value)} style={{ width: 150 }}>
+            <option value="todos">Todos los períodos</option>
+            {periodos.map(p => <option key={p} value={p}>{p}</option>)}
+          </select>
+          <select value={limite} onChange={e => setLimite(Number(e.target.value))} style={{ width: 140 }}>
+            <option value={100}>Últimos 100</option>
+            <option value={200}>Últimos 200</option>
+            <option value={1000}>Últimos 1000</option>
+          </select>
+          <button onClick={cargar} style={btnGhost}>🔄 Refrescar</button>
+          <button onClick={descargar} style={btnGhost}>⬇ Excel</button>
+        </div>
+      </div>
+
+      <div className="form-card" style={{ padding: 0, overflow: "hidden" }}>
+        {cargando ? (
+          <div className="loading">Cargando historial...</div>
+        ) : filtrados.length === 0 ? (
+          <div className="empty">Sin envíos registrados.</div>
+        ) : (
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+              <thead>
+                <tr style={{ background: "#f8fafc", borderBottom: "1px solid #e4e7ec" }}>
+                  <th style={th()}>Fecha</th>
+                  <th style={th()}>Estado</th>
+                  <th style={th()}>Transportista</th>
+                  <th style={th()}>Sites</th>
+                  <th style={th("right")}>Cobros</th>
+                  <th style={th("right")}>Monto</th>
+                  <th style={th()}>Destinatarios</th>
+                  <th style={th()}>Período / Folio</th>
+                  <th style={th()}></th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtrados.map(l => (
+                  <Fragment key={l.id}>
+                    <tr style={{ borderBottom: "1px solid #f1f5f9", background: l.estado === "fallido" ? "#fef2f2" : "transparent" }}>
+                      <td style={td()}><span style={{ fontSize: 11 }}>{new Date(l.fecha_envio).toLocaleString("es-MX")}</span></td>
+                      <td style={td()}>
+                        <span style={{
+                          background: l.estado === "enviado" ? "#dcfce7" : "#fee2e2",
+                          color: l.estado === "enviado" ? "#166534" : "#991b1b",
+                          padding: "3px 8px", borderRadius: 20, fontSize: 10, fontWeight: 700, whiteSpace: "nowrap",
+                        }}>{l.estado === "enviado" ? "✓ ENVIADO" : "✗ FALLIDO"}</span>
+                        {l.match_tipo && l.match_tipo !== "exacto" && (
+                          <div style={{ fontSize: 9, color: "#9a3412", marginTop: 2 }}>cruce {l.match_tipo}</div>
+                        )}
+                      </td>
+                      <td style={td()}>
+                        <div style={{ fontWeight: 600, maxWidth: 220 }}>{l.transportista}</div>
+                        <div style={{ fontSize: 9.5, color: "#94a3b8" }}>{l.rfc || "sin RFC"}</div>
+                      </td>
+                      <td style={td()}><span style={{ fontSize: 10.5, color: "#475569" }}>{l.sites || "—"}</span></td>
+                      <td style={td("right")}>{l.n_cobros}</td>
+                      <td style={{ ...td("right"), fontWeight: 700, color: "#1a3a6b" }}>{mmFmtMon(l.monto_total)}</td>
+                      <td style={td()}>
+                        <div style={{ fontSize: 10.5, wordBreak: "break-all", maxWidth: 210 }}>{l.correo_to}</div>
+                        {l.correo_cc && <div style={{ fontSize: 9, color: "#94a3b8", wordBreak: "break-all", maxWidth: 210 }}>cc: {l.correo_cc}</div>}
+                      </td>
+                      <td style={td()}>
+                        <div style={{ fontSize: 10.5 }}>{l.periodo_cobro || "—"}</div>
+                        <div style={{ fontSize: 9, color: "#94a3b8" }}>{l.folio || "—"}</div>
+                      </td>
+                      <td style={td()}>
+                        <button onClick={() => setDetalle(detalle === l.id ? null : l.id)} style={btnMini("#64748b")}>
+                          {detalle === l.id ? "Ocultar" : "Ver más"}
+                        </button>
+                      </td>
+                    </tr>
+                    {detalle === l.id && (
+                      <tr>
+                        <td colSpan={9} style={{ padding: "12px 16px", background: "#f8fafc", borderBottom: "1px solid #e4e7ec", fontSize: 11.5 }}>
+                          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 12 }}>
+                            <div>
+                              <b>Asunto:</b> {l.asunto || "—"}<br />
+                              <b>PDF:</b> {l.nombre_pdf || "—"}<br />
+                              <b>BCC:</b> {l.correo_bcc || "—"}
+                            </div>
+                            <div>
+                              <b>Usuario:</b> {l.usuario || "—"}<br />
+                              <b>Archivo origen:</b> {l.archivo_origen || "—"}<br />
+                              <b>Message ID:</b> <span style={{ fontFamily: "monospace", fontSize: 10 }}>{l.message_id || "—"}</span>
+                            </div>
+                            {l.estado === "fallido" && (
+                              <div style={{ color: "#991b1b" }}>
+                                <b>Motivo del fallo:</b><br />{l.motivo || "—"}
+                              </div>
+                            )}
+                          </div>
+                          {l.guias && (
+                            <div style={{ marginTop: 10 }}>
+                              <b>Guías incluidas ({String(l.guias).split(",").filter(Boolean).length}):</b>
+                              <div style={{ fontFamily: "monospace", fontSize: 10, color: "#475569", marginTop: 4, wordBreak: "break-all", maxHeight: 90, overflowY: "auto" }}>
+                                {String(l.guias).split(",").join(" · ")}
+                              </div>
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
+  );
 }
