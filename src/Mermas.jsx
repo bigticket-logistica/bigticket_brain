@@ -813,6 +813,30 @@ function ModalEditarGrupo({ g, transportistas, onCancelar, onGuardar }) {
   const [asunto, setAsunto] = useState(g.asuntoFinal);
   const [cuerpo, setCuerpo] = useState(g.cuerpoFinal);
 
+  // ── Cierre seguro del modal ──────────────────────────────────────────────
+  // El evento `click` se dispara en el ancestro común del mousedown y el
+  // mouseup. Al seleccionar texto arrastrando desde un input y soltando fuera
+  // de la caja, ese ancestro era el overlay y el modal se cerraba solo.
+  // Solución: cerrar únicamente si el gesto empezó Y terminó en el overlay.
+  const presionoOverlay = useRef(false);
+
+  const huboCambios =
+    to !== g.to || cc !== g.cc || bcc !== g.bcc ||
+    asunto !== g.asuntoFinal || cuerpo !== g.cuerpoFinal ||
+    transportistaId !== (g.trans?.id ? String(g.trans.id) : "");
+
+  const cerrar = () => {
+    if (huboCambios && !confirm("Tenés cambios sin guardar en este cobro.\n\n¿Cerrar y descartarlos?")) return;
+    onCancelar();
+  };
+
+  // Escape cierra (con el mismo aviso de cambios sin guardar)
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape") cerrar(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
+
   const candidatos = useMemo(() => {
     const q = busqueda.trim().toLowerCase();
     const base = q
@@ -832,8 +856,16 @@ function ModalEditarGrupo({ g, transportistas, onCancelar, onGuardar }) {
   };
 
   return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 20 }} onClick={onCancelar}>
-      <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 14, padding: 24, maxWidth: 780, width: "100%", maxHeight: "90vh", overflowY: "auto" }}>
+    <div
+      onMouseDown={e => { presionoOverlay.current = e.target === e.currentTarget; }}
+      onClick={e => {
+        // Solo cierra el clic que nació y murió en el fondo oscuro.
+        if (presionoOverlay.current && e.target === e.currentTarget) cerrar();
+        presionoOverlay.current = false;
+      }}
+      style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 20 }}
+    >
+      <div style={{ background: "#fff", borderRadius: 14, padding: 24, maxWidth: 780, width: "100%", maxHeight: "90vh", overflowY: "auto" }}>
         <div style={{ fontSize: 16, fontWeight: 700, color: "#1a3a6b", marginBottom: 4 }}>{g.empresa}</div>
         <div style={{ fontSize: 12, color: "#64748b", marginBottom: 16 }}>
           {g.nLineas} cobro(s) · {mmFmtMon(g.total)} · sites {g.sites.map(s => s.ceco).join(", ")}
@@ -895,7 +927,7 @@ function ModalEditarGrupo({ g, transportistas, onCancelar, onGuardar }) {
         </div>
 
         <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 14 }}>
-          <button onClick={onCancelar} style={btnGhost}>Cancelar</button>
+          <button onClick={cerrar} style={btnGhost}>Cancelar</button>
           <button onClick={() => onGuardar({ transportistaId: transportistaId || null, to, cc, bcc, asunto, cuerpo })}
             className="btn-blue" style={{ padding: "8px 16px", fontSize: 12 }}>Guardar</button>
         </div>
