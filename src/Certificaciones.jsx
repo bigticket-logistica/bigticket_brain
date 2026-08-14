@@ -2107,6 +2107,113 @@ function EditorDatos({ titulo, campos, valores, onGuardar, extra }) {
   );
 }
 
+// ─── EVIDENCIA DE LA ENTREVISTA EN TERRENO ───────────────────────────────────
+// Muestra al analista las fotos que subió el supervisor y dónde se hizo la
+// entrevista (geolocalización capturada por la Bitácora al guardar la minuta).
+const ETIQ_FOTO = {
+  frente: "Frente", posterior: "Posterior", lat_izq: "Lateral izq.", lat_der: "Lateral der.",
+  placa: "Placa", interior: "Interior", odometro: "Odómetro",
+  tarjeta: "Tarjeta de circulación", seguro: "Póliza de seguro", gps: "Instalación GPS",
+};
+
+function EvidenciaMinuta({ minuta }) {
+  const [urls, setUrls] = useState({});      // path -> url firmada
+  const [cargando, setCargando] = useState(false);
+  const [zoom, setZoom] = useState(null);    // { url, etiqueta }
+
+  const unidades = Array.isArray(minuta?.vehiculos) ? minuta.vehiculos : [];
+  const paths = [];
+  unidades.forEach((v) => Object.values(v.fotos || {}).forEach((p) => { if (p) paths.push(p); }));
+
+  useEffect(() => { (async () => {
+    if (!paths.length) return;
+    setCargando(true);
+    const m = {};
+    for (const path of paths) {
+      // Las fotos de terreno viven en el bucket de la bitácora
+      for (const bucket of ["bitacora-cancelaciones-meli", "archivador_empresas", "proceso_certificacion_bt"]) {
+        try {
+          const { data, error } = await sb.storage.from(bucket).createSignedUrl(path, 3600);
+          if (!error && data?.signedUrl) { m[path] = data.signedUrl; break; }
+        } catch (e) { /* siguiente bucket */ }
+      }
+    }
+    setUrls(m); setCargando(false);
+  })(); }, [minuta?.id]);
+
+  const geo = minuta?.geo && typeof minuta.geo === "object" ? minuta.geo : null;
+  if (!unidades.length && !geo) return null;
+
+  return (
+    <div className="form-card">
+      <div className="form-title">📷 Evidencia de la entrevista en terreno</div>
+
+      {geo ? (
+        <div style={{ background: "#f8fafc", border: "1px solid #eef1f5", borderRadius: 9, padding: "10px 13px", marginBottom: 12, fontSize: 12.5 }}>
+          <b>📍 Ubicación de la entrevista:</b>{" "}
+          <a href={`https://www.google.com/maps?q=${geo.lat},${geo.lng}`} target="_blank" rel="noreferrer"
+            style={{ color: "#1a3a6b", fontWeight: 700 }}>
+            {Number(geo.lat).toFixed(6)}, {Number(geo.lng).toFixed(6)} — ver en Google Maps ↗
+          </a>
+          {geo.precision != null && <span style={{ color: "#667085" }}> · precisión ±{geo.precision} m</span>}
+          {geo.at && <span style={{ color: "#667085" }}> · {fMX(geo.at, { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}</span>}
+        </div>
+      ) : (
+        <div style={{ fontSize: 12, color: "#b45309", background: "#fff4e5", border: "1px solid #fcd9b6", borderRadius: 9, padding: "9px 12px", marginBottom: 12 }}>
+          ⚠️ Sin geolocalización: el supervisor guardó la minuta sin permiso de ubicación.
+        </div>
+      )}
+
+      {cargando && <div style={{ fontSize: 12, color: "#888", marginBottom: 8 }}>Cargando fotos…</div>}
+
+      {unidades.map((v, i) => {
+        const fotos = Object.entries(v.fotos || {});
+        return (
+          <div key={i} style={{ marginBottom: 14 }}>
+            <div style={{ fontSize: 12, fontWeight: 800, color: "#1a3a6b", marginBottom: 6 }}>
+              🚚 {v.placa || `Unidad ${i + 1}`}
+              {v.marca ? ` · ${v.marca}` : ""}{v.anio ? ` ${v.anio}` : ""}
+              <span style={{ color: "#98a2b3", fontWeight: 600 }}> · {fotos.length} foto(s)</span>
+            </div>
+            {fotos.length === 0 ? (
+              <div style={{ fontSize: 12, color: "#98a2b3" }}>Sin fotos cargadas para esta unidad.</div>
+            ) : (
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                {fotos.map(([slot, path]) => (
+                  <div key={slot} style={{ width: 128 }}>
+                    <div
+                      onClick={() => urls[path] && setZoom({ url: urls[path], etiqueta: ETIQ_FOTO[slot] || slot })}
+                      style={{ width: 128, height: 96, borderRadius: 8, border: "1px solid #e4e7ec", overflow: "hidden",
+                        background: "#f4f5f7", cursor: urls[path] ? "zoom-in" : "default",
+                        display: "flex", alignItems: "center", justifyContent: "center" }}>
+                      {urls[path]
+                        ? <img src={urls[path]} alt={slot} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                        : <span style={{ fontSize: 10, color: "#98a2b3", textAlign: "center", padding: 6 }}>no disponible</span>}
+                    </div>
+                    <div style={{ fontSize: 10, color: "#667085", fontWeight: 700, marginTop: 3, textAlign: "center" }}>
+                      {ETIQ_FOTO[slot] || slot}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      {zoom && (
+        <div onClick={() => setZoom(null)}
+          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.85)", zIndex: 500, display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 12, padding: 20 }}>
+          <div style={{ color: "#fff", fontSize: 13, fontWeight: 700 }}>{zoom.etiqueta} · clic para cerrar</div>
+          <img src={zoom.url} alt={zoom.etiqueta} style={{ maxWidth: "92vw", maxHeight: "80vh", objectFit: "contain", borderRadius: 8 }} />
+          <a href={zoom.url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}
+            style={{ color: "#9ec5ff", fontSize: 12.5, fontWeight: 700 }}>Abrir en pestaña nueva ↗</a>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function DetalleCandidato({ candidato, onVolver, onActualizar, onPasarEtapa2 }) {
   const [analizando, setAnalizando] = useState(false);
   const [enviando, setEnviando] = useState(false);
@@ -2118,6 +2225,15 @@ function DetalleCandidato({ candidato, onVolver, onActualizar, onPasarEtapa2 }) 
   const [rechazando, setRechazando] = useState(false);
   const [motivo, setMotivo] = useState("");
   // Resolución de la Revisión Interna (posterior al rechazo de MELI)
+  // Minuta de la entrevista en terreno (para ver fotos y geolocalización)
+  const [minutaDet, setMinutaDet] = useState(null);
+  useEffect(() => { (async () => {
+    const { data } = await sb.from("minutas_entrevista").select("*")
+      .eq("fuente", "certificaciones_mx").eq("registro_id", candidato.id)
+      .order("created_at", { ascending: false }).limit(1);
+    setMinutaDet((data && data[0]) || null);
+  })(); }, [candidato.id]);
+
   // Reactivación desde Stand By: el prospecto vuelve al flujo cuando se necesita
   const [reactivando, setReactivando] = useState(false);
   const reactivarFlujo = async () => {
@@ -2432,6 +2548,10 @@ Responde con este JSON exacto:
 
         {/* Calificación de la llamada del supervisor (guion oficial) */}
         <CalificacionLlamada registroId={candidato.id} />
+
+        {/* Evidencia de la entrevista: fotos del supervisor + geolocalización.
+            Aparece desde la etapa de entrevista, cuando ya existe la minuta. */}
+        {minutaDet && <EvidenciaMinuta minuta={minutaDet} />}
 
         {/* Datos del candidato — editables por el analista en cualquier etapa */}
         <EditorDatos
