@@ -2011,6 +2011,102 @@ function AvisoRevisionInterna({ registro, onAceptar, onRechazar, moviendo }) {
   );
 }
 
+// ─── EDITOR DE DATOS DEL PROSPECTO ───────────────────────────────────────────
+// Permite al analista corregir los datos en CUALQUIER etapa del flujo (A o B).
+// Guarda en la tabla/registro que corresponda y refresca la vista.
+//   campos: [{ k, label, tipo?, opciones? }]
+//   valores: objeto con los valores actuales
+//   onGuardar: async (cambios) => void   ← recibe solo lo que cambió
+function EditorDatos({ titulo, campos, valores, onGuardar, extra }) {
+  const [editando, setEditando] = useState(false);
+  const [borrador, setBorrador] = useState({});
+  const [guardando, setGuardando] = useState(false);
+  const [msg, setMsg] = useState(null);
+
+  const abrir = () => {
+    const b = {};
+    campos.forEach((c) => { b[c.k] = valores[c.k] ?? ""; });
+    setBorrador(b); setMsg(null); setEditando(true);
+  };
+
+  const guardar = async () => {
+    // Solo se envía lo que realmente cambió, para no pisar datos ajenos
+    const cambios = {};
+    campos.forEach((c) => {
+      const antes = valores[c.k] ?? "";
+      const ahora = borrador[c.k] ?? "";
+      if (String(antes) !== String(ahora)) {
+        cambios[c.k] = c.tipo === "number"
+          ? (String(ahora).trim() === "" ? null : Number(ahora))
+          : (String(ahora).trim() === "" ? null : String(ahora).trim());
+      }
+    });
+    if (!Object.keys(cambios).length) { setEditando(false); return; }
+    setGuardando(true); setMsg(null);
+    try {
+      await onGuardar(cambios);
+      setMsg({ ok: true, t: `✅ ${Object.keys(cambios).length} campo(s) actualizado(s).` });
+      setEditando(false);
+    } catch (e) {
+      setMsg({ ok: false, t: "No se pudo guardar: " + e.message });
+    } finally { setGuardando(false); }
+  };
+
+  const inp = { width: "100%", boxSizing: "border-box", border: "1px solid #e4e7ec", borderRadius: 7, padding: "7px 9px", fontSize: 13, fontFamily: "'Geist',sans-serif" };
+
+  return (
+    <div className="form-card">
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10, flexWrap: "wrap" }}>
+        <div className="form-title" style={{ marginTop: 0, marginBottom: 0 }}>{titulo}</div>
+        {!editando ? (
+          <button onClick={abrir}
+            style={{ marginLeft: "auto", background: "#fff", border: "1.5px solid #1a3a6b", color: "#1a3a6b", borderRadius: 8, padding: "6px 13px", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "'Geist',sans-serif" }}>
+            ✎ Editar datos
+          </button>
+        ) : (
+          <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+            <button onClick={() => { setEditando(false); setMsg(null); }} disabled={guardando}
+              style={{ background: "#fff", border: "1px solid #e4e7ec", color: "#667085", borderRadius: 8, padding: "6px 13px", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "'Geist',sans-serif" }}>
+              Cancelar
+            </button>
+            <button onClick={guardar} disabled={guardando}
+              style={{ background: "#166534", border: "none", color: "#fff", borderRadius: 8, padding: "6px 15px", fontSize: 12, fontWeight: 800, cursor: "pointer", opacity: guardando ? 0.6 : 1, fontFamily: "'Geist',sans-serif" }}>
+              {guardando ? "Guardando…" : "💾 Guardar"}
+            </button>
+          </div>
+        )}
+      </div>
+
+      {msg && (
+        <div style={{ marginBottom: 10, fontSize: 12.5, fontWeight: 700, color: msg.ok ? "#166534" : "#c0392b" }}>{msg.t}</div>
+      )}
+
+      <div className="three-col">
+        {extra}
+        {campos.map((c) => (
+          <div key={c.k} style={{ padding: "8px 0", borderBottom: "1px solid #f4f5f7" }}>
+            <div style={{ fontSize: 10, color: "#888", fontWeight: 700, textTransform: "uppercase", marginBottom: 2 }}>{c.label}</div>
+            {editando ? (
+              c.opciones ? (
+                <select style={inp} value={borrador[c.k] ?? ""} onChange={(e) => setBorrador({ ...borrador, [c.k]: e.target.value })}>
+                  <option value="">—</option>
+                  {c.opciones.map((o) => <option key={o} value={o}>{o}</option>)}
+                </select>
+              ) : (
+                <input style={inp} type={c.tipo === "number" ? "text" : (c.tipo || "text")}
+                  value={borrador[c.k] ?? ""}
+                  onChange={(e) => setBorrador({ ...borrador, [c.k]: c.mayus ? e.target.value.toUpperCase() : e.target.value })} />
+              )
+            ) : (
+              <div style={{ fontSize: 13, fontWeight: 600, wordBreak: "break-all" }}>{valores[c.k] || "—"}</div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function DetalleCandidato({ candidato, onVolver, onActualizar, onPasarEtapa2 }) {
   const [analizando, setAnalizando] = useState(false);
   const [enviando, setEnviando] = useState(false);
@@ -2337,37 +2433,30 @@ Responde con este JSON exacto:
         {/* Calificación de la llamada del supervisor (guion oficial) */}
         <CalificacionLlamada registroId={candidato.id} />
 
-        {/* Datos del candidato */}
-        <div className="form-card">
-          <div className="form-title">Datos del candidato</div>
-          <div className="three-col">
-            <div style={{ padding: "8px 0", borderBottom: "1px solid #f4f5f7" }}>
-              <div style={{ fontSize: 10, color: "#888", fontWeight: 700, textTransform: "uppercase", marginBottom: 2 }}>Empresa</div>
-              <div style={{ fontSize: 13, fontWeight: 600, wordBreak: "break-word", color: "#1a3a6b", display: "flex", alignItems: "center", gap: 6 }}>
-                <span style={{ flex: 1 }}>🏢 {candidato.empresa || "—"}</span>
-                <button title="Editar empresa" style={{ border: "none", background: "transparent", cursor: "pointer", fontSize: 13, color: "#98a2b3", padding: 0 }}
-                  onClick={async () => {
-                    const v = prompt("Nombre de la empresa del postulante:", candidato.empresa || "");
-                    if (v === null) return;
-                    const { error } = await sb.from("certificaciones_mx").update({ empresa: v.trim() || null }).eq("id", candidato.id);
-                    if (error) { alert("No se pudo guardar (¿falta empresa_fuente_a.sql?): " + error.message); return; }
-                    onActualizar({ ...candidato, empresa: v.trim() || null });
-                  }}>✎</button>
-              </div>
-            </div>
-            {[["Nombre", candidato.nombre], ["CURP", candidato.curp], ["RFC", candidato.rfc],
-              ["INE", candidato.ine], ["Licencia", candidato.licencia], ["Puesto", candidato.puesto],
-              ["SVC", candidato.svc], ["Email", candidato.email], ["Teléfono", candidato.telefono],
-              ["Vehículos a presentar", candidato.cantidad_vehiculos != null ? `${candidato.cantidad_vehiculos}` : null],
-              ["Tipo de vehículo", candidato.tipo_vehiculo]
-            ].map(([l, v]) => (
-              <div key={l} style={{ padding: "8px 0", borderBottom: "1px solid #f4f5f7" }}>
-                <div style={{ fontSize: 10, color: "#888", fontWeight: 700, textTransform: "uppercase", marginBottom: 2 }}>{l}</div>
-                <div style={{ fontSize: 13, fontWeight: 600, wordBreak: "break-all" }}>{v || "—"}</div>
-              </div>
-            ))}
-          </div>
-        </div>
+        {/* Datos del candidato — editables por el analista en cualquier etapa */}
+        <EditorDatos
+          titulo="Datos del candidato"
+          valores={candidato}
+          campos={[
+            { k: "nombre", label: "Nombre" },
+            { k: "curp", label: "CURP", mayus: true },
+            { k: "rfc", label: "RFC", mayus: true },
+            { k: "ine", label: "INE" },
+            { k: "licencia", label: "Licencia" },
+            { k: "puesto", label: "Puesto" },
+            { k: "svc", label: "SVC", mayus: true },
+            { k: "email", label: "Email" },
+            { k: "telefono", label: "Teléfono" },
+            { k: "cantidad_vehiculos", label: "Vehículos a presentar", tipo: "number" },
+            { k: "tipo_vehiculo", label: "Tipo de vehículo", opciones: ["Small Van", "Large Van", "Car Sedán", "Otro"] },
+            { k: "empresa", label: "Empresa" },
+          ]}
+          onGuardar={async (cambios) => {
+            const { error } = await sb.from("certificaciones_mx")
+              .update({ ...cambios, updated_at: new Date().toISOString() }).eq("id", candidato.id);
+            if (error) throw new Error(error.message);
+            onActualizar({ ...candidato, ...cambios });
+          }} />
 
         {/* Comparativa de datos (solo cuando ya hay análisis) */}
         {tieneAnalisis && <ComparativaDatos candidato={candidato} analisis={analisis} />}
@@ -2977,17 +3066,6 @@ function DetalleCertificacion({ cert, etapa, onVolver, onPasarEtapa2, onMoverA, 
     finally { setEnviando(false); }
   };
 
-  const campos = esVeh ? [
-    ["Placa", veh?.placa], ["VIN", veh?.vin], ["Marca", veh?.marca], ["Modelo", veh?.modelo],
-    ["Año", veh?.anio], ["Clase", veh?.clase], ["Entidad emplacamiento", veh?.entidad_emplaco],
-    ["REPUVE ID", veh?.repuve_id], ["Estatus robo", veh?.estatus_robo],
-    ["Registrado", veh ? (veh.registrado ? "Sí" : "No") : "—"],
-  ] : [
-    ["Nombre", cond?.nombre], ["CURP", cond?.curp], ["RFC", cond?.rfc],
-    ["Teléfono", cond?.telefono], ["Email", cond?.email],
-    ["Licencia N°", cond?.licencia_numero], ["Licencia estado", cond?.licencia_estado],
-    ["Licencia vigencia", cond?.licencia_vigencia],
-  ];
 
   return (
     <div>
@@ -3192,17 +3270,38 @@ function DetalleCertificacion({ cert, etapa, onVolver, onPasarEtapa2, onMoverA, 
           <ChatEmpresaCert terceroId={cert.tercero_id} empresa={ter?.nombre} titulo={titulo} />
         )}
 
-        <div className="form-card">
-          <div className="form-title">{esVeh ? "Datos del vehículo" : "Datos del candidato"}</div>
-          <div className="three-col">
-            {campos.map(([l, v]) => (
-              <div key={l} style={{ padding: "8px 0", borderBottom: "1px solid #f4f5f7" }}>
-                <div style={{ fontSize: 10, color: "#888", fontWeight: 700, textTransform: "uppercase", marginBottom: 2 }}>{l}</div>
-                <div style={{ fontSize: 13, fontWeight: 600, wordBreak: "break-all" }}>{v || "—"}</div>
-              </div>
-            ))}
-          </div>
-        </div>
+        {/* Datos editables: conductor o vehículo, según el tipo de certificación.
+            Se guarda en la tabla hija correspondiente y se recarga la vista. */}
+        <EditorDatos
+          titulo={esVeh ? "Datos del vehículo" : "Datos del candidato"}
+          valores={esVeh ? (veh || {}) : (cond || {})}
+          campos={esVeh ? [
+            { k: "placa", label: "Placa", mayus: true },
+            { k: "vin", label: "VIN", mayus: true },
+            { k: "marca", label: "Marca" },
+            { k: "modelo", label: "Modelo" },
+            { k: "anio", label: "Año", tipo: "number" },
+            { k: "clase", label: "Clase" },
+            { k: "entidad_emplaco", label: "Entidad emplacamiento" },
+          ] : [
+            { k: "nombre", label: "Nombre" },
+            { k: "curp", label: "CURP", mayus: true },
+            { k: "rfc", label: "RFC", mayus: true },
+            { k: "telefono", label: "Teléfono" },
+            { k: "email", label: "Email" },
+            { k: "licencia_numero", label: "Licencia N°" },
+            { k: "licencia_estado", label: "Licencia estado" },
+            { k: "licencia_vigencia", label: "Licencia vigencia", tipo: "date" },
+          ]}
+          onGuardar={async (cambios) => {
+            const tabla = esVeh ? "certificacion_vehiculo" : "certificacion_conductor";
+            const fila = esVeh ? veh : cond;
+            if (!fila?.id) throw new Error("no se encontró el registro a actualizar");
+            const { error } = await sb.from(tabla).update(cambios).eq("id", fila.id);
+            if (error) throw new Error(error.message);
+            Object.assign(fila, cambios);
+            if (typeof cargarDocsCert === "function") await cargarDocsCert();
+          }} />
 
         <GestorDocsCert cert={cert} docs={docsCert} onRecargar={cargarDocsCert}
           cambios={cert.cambios_prospecto} resaltar={!!cert.cambios_pendientes} avisoSinIndexar={docsSinIndexar} />
