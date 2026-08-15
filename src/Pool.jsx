@@ -7,6 +7,24 @@ import { descargarExcelMeli, descargarExcelMultihoja, fechaHoyOperativa, fechaOp
 //  precargada, items del contrato → contrato_operacional (alimenta
 //  el PDF de la Etapa 8) vía RPC completar_alta_operacional.
 // ═══════════════════════════════════════════════════════════════════
+// El tipo de vehículo se toma de CADA unidad de la minuta, no del campo general
+// (el general es uno solo y aplastaba flotas mixtas: 1 Large + 1 Small salía
+// como "2 Large Van").
+function resumenTiposMinuta(m) {
+  const vehs = Array.isArray(m?.vehiculos) ? m.vehiculos : [];
+  if (!vehs.length) return { texto: m?.tipo_vehiculo || "", detalle: [], n: "" };
+  const porTipo = {};
+  vehs.forEach((v) => { const t = (v.tipo || "Sin tipo").trim(); porTipo[t] = (porTipo[t] || 0) + 1; });
+  const texto = Object.entries(porTipo).map(([t, n]) => `${n} ${t}`).join(" + ");
+  const detalle = vehs.map((v, i) => ({
+    placa: v.placa || `Unidad ${i + 1}`,
+    tipo: v.tipo || "sin tipo",
+    marca: v.marca || "",
+    anio: v.anio || "",
+  }));
+  return { texto, detalle, n: vehs.length };
+}
+
 const ITEMS_VACIO = {
   cantidad_vehiculos: "", tipo_vehiculos: "", cantidad_choferes: "",
   cantidad_ayudantes: "", horario: "", fecha_inicio: "",
@@ -70,7 +88,7 @@ function TareasJefeOperaciones() {
             const m = map[t.id];
             nx[t.id] = m ? {
               ...ITEMS_VACIO,
-              tipo_vehiculos: m.tipo_vehiculo || "",
+              tipo_vehiculos: resumenTiposMinuta(m).texto,
               cantidad_choferes: m.cantidad_choferes ?? "",
               cantidad_ayudantes: m.cantidad_ayudantes ?? "",
               cantidad_vehiculos: Array.isArray(m.vehiculos) ? (m.vehiculos.length || "") : "",
@@ -176,8 +194,18 @@ function TareasJefeOperaciones() {
             {/* Minuta del supervisor (precargada, solo lectura) */}
             <div style={{ marginTop: 12, background: "#f6fbfd", border: "1px solid #c9e8f0", borderRadius: 10, padding: "12px 14px", fontSize: 12, color: "#155e70" }}>
               <b>📋 Minuta del supervisor:</b>{" "}
-              {m ? `${m.tipo_vehiculo || "—"} · ${m.cantidad_choferes ?? "—"} chofer(es) · ${m.cantidad_ayudantes ?? "—"} ayudante(s) · ${m.horario || "—"} · ${m.zona_operacion || "—"} · ${m.experiencia || "—"}${m.comentarios ? ` · "${m.comentarios}"` : ""}`
+              {m ? `${m.cantidad_choferes ?? "—"} chofer(es) · ${m.cantidad_ayudantes ?? "—"} ayudante(s) · ${m.horario || "—"} · ${m.zona_operacion || "—"} · ${m.experiencia || "—"}${m.comentarios ? ` · "${m.comentarios}"` : ""}`
                 : "sin minuta registrada"}
+              {m && resumenTiposMinuta(m).detalle.length > 0 && (
+                <div style={{ marginTop: 8, paddingTop: 8, borderTop: "1px dashed #c9e8f0" }}>
+                  <b>🚚 Unidades registradas en terreno ({resumenTiposMinuta(m).texto}):</b>
+                  {resumenTiposMinuta(m).detalle.map((u, i) => (
+                    <div key={i} style={{ marginTop: 3 }}>
+                      • <b>{u.placa}</b> — {u.tipo}{u.marca ? ` · ${u.marca}` : ""}{u.anio ? ` · ${u.anio}` : ""}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
 
             {/* Items del contrato */}
@@ -189,7 +217,14 @@ function TareasJefeOperaciones() {
                 <div><span style={lbl}>Cantidad de vehículos *</span>
                   <input type="number" min="0" value={it.cantidad_vehiculos} onChange={(e) => setCampo(t.id, "cantidad_vehiculos", e.target.value)} style={inputStyle} /></div>
                 <div><span style={lbl}>Tipo de vehículos *</span>
-                  <input value={it.tipo_vehiculos} onChange={(e) => setCampo(t.id, "tipo_vehiculos", e.target.value)} placeholder="Ej. Small Van" style={inputStyle} /></div>
+                  <input value={it.tipo_vehiculos} onChange={(e) => setCampo(t.id, "tipo_vehiculos", e.target.value)} placeholder="Ej. 1 Large Van + 1 Small Van" style={inputStyle} />
+                  {m && resumenTiposMinuta(m).texto && it.tipo_vehiculos !== resumenTiposMinuta(m).texto && (
+                    <div style={{ fontSize: 10.5, color: "#b45309", marginTop: 3 }}>
+                      Según la minuta: <b>{resumenTiposMinuta(m).texto}</b>{" "}
+                      <span onClick={() => setCampo(t.id, "tipo_vehiculos", resumenTiposMinuta(m).texto)}
+                        style={{ color: "#0f766e", fontWeight: 800, cursor: "pointer", textDecoration: "underline" }}>usar</span>
+                    </div>
+                  )}</div>
                 <div><span style={lbl}>Cantidad de choferes *</span>
                   <input type="number" min="0" value={it.cantidad_choferes} onChange={(e) => setCampo(t.id, "cantidad_choferes", e.target.value)} style={inputStyle} /></div>
                 <div><span style={lbl}>Cantidad de ayudantes *</span>
