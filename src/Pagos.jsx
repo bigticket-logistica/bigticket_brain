@@ -7155,6 +7155,11 @@ function AyudantesDetalleDia({ usuario }) {
   const [fecha, setFecha] = useState(fechaAyerOperativa());
   const [busqueda, setBusqueda] = useState("");
   const [disparando, setDisparando] = useState(false);
+  // ── Monitor del flujo disparado (Arreglo 1) ──
+  // El webhook n8n es fire-and-forget: responde 200 al instante y el trabajo real
+  // corre en el VPS. Sin esto, un fallo del VPS se ve igual que un exito.
+  // El monitor no pregunta "corriste?", mide el resultado: cuenta paquetes.
+  const [flujoMonitor, setFlujoMonitor] = useState(null);  // { inicio, baseline, actual, rutas, ultimoCambio, estado }
   const [msgFlujo, setMsgFlujo] = useState("");
 
   // ── Aprobación de ayudantes (movida desde Consolidaciones Bitácora) ──
@@ -7173,6 +7178,8 @@ function AyudantesDetalleDia({ usuario }) {
   const [cargandoEntregas, setCargandoEntregas] = useState(false);
   const [cargandoMaestro, setCargandoMaestro] = useState(false);
   const [maestroFuente, setMaestroFuente] = useState(null);  // "calculado" | "vista" | "no_calculado"
+  const [gatilloSello, setGatilloSello] = useState(null);        // calculado_at del gatillo (Arreglo 2)
+  const [gatilloDesfasado, setGatilloDesfasado] = useState(null); // { snapshots, aprobaciones } posteriores al sello
   const [errorMaestro, setErrorMaestro] = useState(null);
   const gatilloDisponible = maestroFuente === "calculado" || maestroFuente === "vista";
 
@@ -7211,6 +7218,8 @@ function AyudantesDetalleDia({ usuario }) {
     setLoading(true);
     setTiempos(null);
     setErrorMaestro(null);
+    setGatilloSello(null);
+    setGatilloDesfasado(null);
     setProgreso("Leyendo snapshots y aprobaciones…");
     const ms = {};
     const t0 = performance.now();
@@ -7303,7 +7312,7 @@ function AyudantesDetalleDia({ usuario }) {
       setCargandoMaestro(true);
       try {
         const mj = await medir("gatillo (tabla calculada)", () => sb.from("maestro_jornada_mx")
-          .select("id_ruta,service_center_id,driver_name,placa,tipologia,tipo_vehiculo_meli,vehiculo_raw,ciclo,tiene_auxiliar,auxiliar_snapshots_total,status_final,envios_entregados")
+          .select("id_ruta,service_center_id,driver_name,placa,tipologia,tipo_vehiculo_meli,vehiculo_raw,ciclo,tiene_auxiliar,auxiliar_snapshots_total,status_final,envios_entregados,calculado_at")
           .eq("fecha", fecha).limit(5000), ms);
 
         if (!mj.error && (mj.data || []).length > 0) {
@@ -7321,6 +7330,33 @@ function AyudantesDetalleDia({ usuario }) {
             envios_entregados: r.envios_entregados,
           })));
           setMaestroFuente("calculado");
+          // Arreglo 2 · sello del calculo + deteccion de datos mas nuevos que el
+          // gatillo. Hoy 14-08 el flag has_helper se corrigio en la base y la
+          // pestana siguio mostrando el numero viejo sin avisar de nada.
+          const sellos = (mj.data || []).map((r) => r.calculado_at).filter(Boolean).sort();
+          const sello = sellos.length ? sellos[sellos.length - 1] : null;
+          setGatilloSello(sello);
+          if (sello) {
+            try {
+              const [snapPost, aprobPost] = await Promise.all([
+                sb.from("logistic_ayudantes_snapshots")
+                  .select("id_ruta", { count: "exact", head: true })
+                  .eq("fecha", fecha).gt("hora_snapshot", sello),
+                sb.from("aprobaciones_helper")
+                  .select("travel_id", { count: "exact", head: true })
+                  .eq("fecha", fecha).gt("decidido_at", sello),
+              ]);
+              setGatilloDesfasado({
+                snapshots: snapPost.count || 0,
+                aprobaciones: aprobPost.count || 0,
+              });
+            } catch (e) {
+              console.warn("No se pudo evaluar el desfase del gatillo:", e.message || e);
+              setGatilloDesfasado(null);
+            }
+          } else {
+            setGatilloDesfasado(null);
+          }
           return;
         }
         if (mj.error) throw mj.error;
@@ -7834,6 +7870,48 @@ function AyudantesDetalleDia({ usuario }) {
     };
   }, [totalPaquetes, detalleEntregas, fecha, cargandoEntregas]);
 
+  // ── Monitor del flujo (Arreglo 1) ─────────────────────────────────────
+  // Cuenta paquetes del día en la base. Es la única señal honesta: si el VPS
+  // falló (choque de navegador, sesión MELI vencida), el contador no se mueve
+  // aunque n8n haya respondido 200.
+  const contarPaquetesDia = async (f) => {
+    const { count, error } = await sb.from("meli_paquetes_entregados")
+      .select("id_ruta", { count: "exact", head: true }).eq("fecha", f);
+    if (error) throw error;
+    return count || 0;
+  };
+
+  useEffect(() => {
+    if (!flujoMonitor || flujoMonitor.estado === "ok" || flujoMonitor.estado === "sin_señal") return;
+    let vivo = true;
+    const id = setInterval(async () => {
+      try {
+        const actual = await contarPaquetesDia(flujoMonitor.fecha);
+        if (!vivo) return;
+        setFlujoMonitor((m) => {
+          if (!m) return m;
+          const crecio = actual > m.actual;
+          const ahora = Date.now();
+          const minsSinCambio = (ahora - (crecio ? ahora : m.ultimoCambio)) / 60000;
+          const minsTotal = (ahora - m.inicio) / 60000;
+          let estado = m.estado;
+          // Arrancó a insertar → en curso. 4 min sin una sola inserción → falló.
+          if (crecio) estado = "corriendo";
+          else if (estado === "esperando" && minsTotal > 4) estado = "sin_señal";
+          else if (estado === "corriendo" && minsSinCambio > 6) estado = "ok";
+          return {
+            ...m, actual,
+            ultimoCambio: crecio ? ahora : m.ultimoCambio,
+            estado,
+          };
+        });
+      } catch (e) {
+        console.warn("Monitor de flujo:", e.message || e);
+      }
+    }, 20000);
+    return () => { vivo = false; clearInterval(id); };
+  }, [flujoMonitor?.estado, flujoMonitor?.fecha]);
+
   // ── Disparar flujo n8n: SELECTIVO (solo incompletas) o día completo ──
   const ejecutarFlujo = async () => {
     if (N8N_WEBHOOK_RERUN_HELPERS.includes("REEMPLAZAR")) {
@@ -7854,6 +7932,11 @@ function AyudantesDetalleDia({ usuario }) {
 
     setDisparando(true);
     setMsgFlujo("");
+    // Baseline ANTES de disparar: el monitor compara contra esto para saber si
+    // el trabajo realmente insertó algo (Arreglo 1).
+    let baseline = null;
+    try { baseline = await contarPaquetesDia(fecha); }
+    catch (e) { console.warn("No se pudo tomar baseline de paquetes:", e.message || e); }
     try {
       const payload = esSelectivo ? { fecha, id_rutas: rutasReparar } : { fecha };
       const r = await fetch(N8N_WEBHOOK_RERUN_HELPERS, {
@@ -7862,6 +7945,15 @@ function AyudantesDetalleDia({ usuario }) {
         body: JSON.stringify(payload),
       });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      if (baseline !== null) {
+        const ahora = Date.now();
+        setFlujoMonitor({
+          fecha, inicio: ahora, ultimoCambio: ahora,
+          baseline, actual: baseline,
+          rutas: esSelectivo ? rutasReparar.length : null,
+          estado: "esperando",
+        });
+      }
       setMsgFlujo(esSelectivo
         ? `✅ Reparación disparada ${new Date().toLocaleTimeString("es-CL", { hour: "2-digit", minute: "2-digit" })} hrs · ${rutasReparar.length} ruta(s) del ${fecha} (~${minutos} min). Vuelve más tarde y presiona ↻ Refrescar.`
         : `✅ Barrido del día completo disparado ${new Date().toLocaleTimeString("es-CL", { hour: "2-digit", minute: "2-digit" })} hrs para ${fecha} (~45–90 min). Vuelve más tarde y presiona ↻ Refrescar.`);
@@ -7971,12 +8063,22 @@ function AyudantesDetalleDia({ usuario }) {
             <div style={{ fontSize: 13, fontWeight: 700, color: salud.color }}>{salud.titulo}</div>
             <div style={{ fontSize: 11, color: "#475569", marginTop: 3 }}>{salud.detalle}</div>
           </div>
-          <button onClick={ejecutarFlujo} disabled={disparando}
-            style={{ padding: "9px 16px", background: disparando ? "#94a3b8" : "#F47B20", border: "none", borderRadius: 6,
-              fontSize: 12, fontWeight: 700, color: "#fff", cursor: disparando ? "wait" : "pointer", whiteSpace: "nowrap" }}>
-            {disparando ? "Disparando..." : (detalleEntregas.some(f => f.estado === "INCOMPLETO" || f.estado === "SIN_DETALLE")
-              ? `▶ Reparar ${detalleEntregas.filter(f => f.estado === "INCOMPLETO" || f.estado === "SIN_DETALLE").length} incompletas del ${fecha}`
-              : `▶ Ejecutar flujo del ${fecha}`)}
+          {/* Arreglo 1 · el botón queda bloqueado mientras hay trabajo vivo: un
+              segundo click lanzaba otro barrido que competía por el navegador
+              del VPS y mataba a los dos. */}
+          <button onClick={ejecutarFlujo}
+            disabled={disparando || (flujoMonitor && (flujoMonitor.estado === "esperando" || flujoMonitor.estado === "corriendo"))}
+            style={{ padding: "9px 16px",
+              background: (disparando || (flujoMonitor && (flujoMonitor.estado === "esperando" || flujoMonitor.estado === "corriendo"))) ? "#94a3b8" : "#F47B20",
+              border: "none", borderRadius: 6, fontSize: 12, fontWeight: 700, color: "#fff",
+              cursor: (disparando || (flujoMonitor && (flujoMonitor.estado === "esperando" || flujoMonitor.estado === "corriendo"))) ? "not-allowed" : "pointer",
+              whiteSpace: "nowrap" }}>
+            {disparando ? "Disparando..."
+              : (flujoMonitor && flujoMonitor.estado === "esperando") ? "⏳ Esperando que arranque…"
+              : (flujoMonitor && flujoMonitor.estado === "corriendo") ? "⏳ Flujo en curso…"
+              : (detalleEntregas.some(f => f.estado === "INCOMPLETO" || f.estado === "SIN_DETALLE")
+                ? `▶ Reparar ${detalleEntregas.filter(f => f.estado === "INCOMPLETO" || f.estado === "SIN_DETALLE").length} incompletas del ${fecha}`
+                : `▶ Ejecutar flujo del ${fecha}`)}
           </button>
         </div>
         {msgFlujo && (
@@ -7984,6 +8086,42 @@ function AyudantesDetalleDia({ usuario }) {
             {msgFlujo}
           </div>
         )}
+
+        {/* Arreglo 1 · pulso real del flujo, medido en la base */}
+        {flujoMonitor && (() => {
+          const nuevos = flujoMonitor.actual - flujoMonitor.baseline;
+          const minsTotal = Math.round((Date.now() - flujoMonitor.inicio) / 60000);
+          const minsSinCambio = Math.round((Date.now() - flujoMonitor.ultimoCambio) / 60000);
+          const cfg = {
+            esperando: { bg: "#fffbeb", borde: "#fde68a", color: "#92400e", icono: "⏳",
+              titulo: "Esperando la primera inserción",
+              texto: `Disparado hace ${minsTotal} min. n8n respondió OK, pero todavía no llegan paquetes nuevos a la base. Si no arranca en unos minutos, el barrido falló en el VPS.` },
+            corriendo: { bg: "#ecfdf5", borde: "#a7f3d0", color: "#065f46", icono: "🟢",
+              titulo: `Flujo en curso · ${nuevos.toLocaleString("es-MX")} paquetes nuevos`,
+              texto: `Corriendo hace ${minsTotal} min${flujoMonitor.rutas ? ` sobre ${flujoMonitor.rutas} ruta(s)` : ""}. Última inserción hace ${minsSinCambio} min. Al terminar, presioná ↻ Refrescar.` },
+            sin_señal: { bg: "#fef2f2", borde: "#fecaca", color: "#991b1b", icono: "❌",
+              titulo: "El flujo no insertó nada",
+              texto: `Pasaron ${minsTotal} min desde el disparo sin una sola inserción. Causas frecuentes: sesión MELI vencida (extensión Don B Sync), o el navegador del VPS ocupado por otro barrido. Revisá los logs del VPS antes de reintentar — volver a disparar mientras algo corre empeora el choque.` },
+            ok: { bg: "#f8fafc", borde: "#e2e8f0", color: "#334155", icono: "✅",
+              titulo: `Flujo terminado · ${nuevos.toLocaleString("es-MX")} paquetes capturados`,
+              texto: `Sin inserciones nuevas en ${minsSinCambio} min: el barrido terminó. Presioná ↻ Refrescar para ver los % actualizados.` },
+          }[flujoMonitor.estado];
+          if (!cfg) return null;
+          return (
+            <div style={{ marginTop: 10, padding: "10px 12px", background: cfg.bg, border: `1px solid ${cfg.borde}`, borderRadius: 4 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10, flexWrap: "wrap" }}>
+                <div style={{ flex: 1, minWidth: 240 }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: cfg.color }}>{cfg.icono} {cfg.titulo}</div>
+                  <div style={{ fontSize: 11, color: "#475569", marginTop: 3, lineHeight: 1.5 }}>{cfg.texto}</div>
+                </div>
+                <button onClick={() => setFlujoMonitor(null)}
+                  style={{ background: "none", border: "none", color: "#64748b", fontSize: 11, cursor: "pointer", padding: "2px 6px", whiteSpace: "nowrap" }}>
+                  ✕ ocultar
+                </button>
+              </div>
+            </div>
+          );
+        })()}
       </div>
 
       {/* ══ Los números del pago del ayudante ══ */}
@@ -8019,6 +8157,22 @@ function AyudantesDetalleDia({ usuario }) {
             {cargandoMaestro && (
               <div style={{ marginTop: 10, padding: "7px 10px", background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 4, fontSize: 11, color: "#1e40af" }}>
                 ⏳ Leyendo el gatillo de pago del día… los números y la columna <b>Paga</b> se completan cuando llegue. La tabla y las decisiones ya funcionan.
+              </div>
+            )}
+            {/* Arreglo 2 · el gatillo es una tabla materializada. Si los datos base
+                cambiaron después del cálculo, los números de arriba están viejos y
+                nada lo decía. Hoy 14-08 mostró 14 rutas cuando la base tenía 51. */}
+            {maestroFuente === "calculado" && gatilloDesfasado &&
+             (gatilloDesfasado.snapshots > 0 || gatilloDesfasado.aprobaciones > 0) && !cargandoMaestro && (
+              <div style={{ background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 6, padding: "10px 12px", marginBottom: 10, fontSize: 11.5, color: "#92400e" }}>
+                <div style={{ fontWeight: 700, marginBottom: 3 }}>⚠️ Los números de abajo están desactualizados</div>
+                <div style={{ lineHeight: 1.5 }}>
+                  El gatillo se calculó el <b>{gatilloSello ? new Date(gatilloSello).toLocaleString("es-CL") : "—"}</b> y después de eso
+                  {gatilloDesfasado.snapshots > 0 && <> hubo <b>{gatilloDesfasado.snapshots}</b> snapshot(s) nuevos o corregidos</>}
+                  {gatilloDesfasado.snapshots > 0 && gatilloDesfasado.aprobaciones > 0 && " y"}
+                  {gatilloDesfasado.aprobaciones > 0 && <> se registraron <b>{gatilloDesfasado.aprobaciones}</b> decisión(es) de ayudante</>}
+                  . Recalculá el día en <b>Listado de Pagos</b> para que esta pestaña refleje los datos reales.
+                </div>
               </div>
             )}
             {maestroFuente === "no_calculado" && !cargandoMaestro && (
@@ -8103,7 +8257,7 @@ function AyudantesDetalleDia({ usuario }) {
               {Object.entries(tiempos).filter(([k]) => k !== "TOTAL")
                 .sort((a, b) => b[1] - a[1])
                 .map(([k, v]) => ` · ${k}: ${v} ms`).join("")}
-              {maestroFuente === "calculado" && " · gatillo desde la tabla ya calculada"}
+              {maestroFuente === "calculado" && ` · gatillo desde la tabla ya calculada${gatilloSello ? ` (sellada ${new Date(gatilloSello).toLocaleString("es-CL", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })})` : ""}`}
               {maestroFuente === "vista" && " · gatillo desde la vista en vivo"}
               {maestroFuente === "no_calculado" && " · sin gatillo: el día no está calculado"}
               {rpcEntregasDisponible === false && " · sin get_entregas_helper_dia: la lectura de paquetes va cruda"}
