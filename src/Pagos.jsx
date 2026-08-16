@@ -5236,6 +5236,7 @@ function ModuloPagosMadre({ usuario }) {
     { id: "conciliacion", label: "Conciliación Terceros", desc: "Conciliación semanal por empresa" },
     { id: "historial_pago", label: "Historial de Pago", desc: "Resumen semanal: cierres, cambios, saldos y reporte" },
     { id: "ayudantes",   label: "Ayudantes",             desc: "Números del día y aprobación del pago del ayudante" },
+    { id: "cierre_dia",  label: "Cierre del Día",        desc: "Salud del día por ruta: conciliación entre Torre, KM, informe y escaneos" },
     { id: "ambulancias", label: "Ambulancias",           desc: "Traspasos internos ruta→ruta" },
     { id: "supervisores", label: "Consolidaciones Bitácora",   desc: "Consolidado por SC: torre de control, ambulancias y bitácora del supervisor" },
     { id: "padron_meli", label: "Padrón MELI",         desc: "Conductores y vehículos · altas, bajas y cambios diarios" },
@@ -5288,6 +5289,7 @@ function ModuloPagosMadre({ usuario }) {
           {subtab === "conciliacion" && <ConciliacionTercerosMX usuario={usuario} />}
           {subtab === "historial_pago" && <HistorialPagoMX usuario={usuario} />}
           {subtab === "ayudantes"   && <AyudantesDetalleDia usuario={usuario} />}
+          {subtab === "cierre_dia"  && <CierreDelDia />}
           {subtab === "ambulancias" && <PoolMeliAmbulancias />}
           {subtab === "supervisores" && <PanelControlSupervisores />}
           {subtab === "padron_meli" && <PadronMeliAdmin usuario={usuario} />}
@@ -7139,6 +7141,287 @@ const N8N_WEBHOOK_RERUN_HELPERS = "https://bigticket2026.app.n8n.cloud/webhook/r
 // las decenas de miles de paquetes del día. Sin ella se cae a la lectura cruda
 // paginada (correcta, pero lenta).
 let rpcEntregasDisponible = null;
+
+// ═══════════════════════════════════════════════════════════════════
+// CIERRE DEL DÍA · Conciliación de fuentes por fecha específica
+// ═══════════════════════════════════════════════════════════════════
+// Compara por UNA fecha las cuatro fuentes del cierre (Torre/cierre_rutas_mx,
+// KM de pago, Informe de la cola de cierre, escaneos) y muestra SOLO las
+// discrepancias. Nace del incidente del 13-15/08/2026: el listado mostró un
+// NS de 58% cuando el real era 96% porque una fuente quedó congelada y nada
+// lo advertía. Backend: fn_conciliacion_cierre(p_fecha) — RPC de fecha
+// obligatoria; jamás escanea más de un día (lección Disk IO del 12-08).
+function CierreDelDia() {
+  const hoyMX = () => {
+    const mx = new Date(Date.now() - 6 * 3600 * 1000);
+    return mx.toISOString().slice(0, 10);
+  };
+  const [fecha, setFecha] = useState(hoyMX());
+  const [filas, setFilas] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [soloDif, setSoloDif] = useState(true);
+  const [abierta, setAbierta] = useState(null);
+  const [cargadoAt, setCargadoAt] = useState(null);
+  const [enVivo, setEnVivo] = useState(true);   // auto-refresh cada 60s (1 RPC/min, una sola fecha)
+
+  const cargar = async (silencioso = false) => {
+    if (!silencioso) setLoading(true);
+    setError(null);
+    try {
+      const { data, error: e } = await sb.rpc("fn_conciliacion_cierre", { p_fecha: fecha });
+      if (e) throw e;
+      setFilas(data || []);
+      setCargadoAt(new Date());
+    } catch (e) {
+      console.error("Error conciliación cierre:", e);
+      if (!silencioso) { setError(e.message || String(e)); setFilas([]); }
+    } finally { if (!silencioso) setLoading(false); }
+  };
+  useEffect(() => { cargar(); }, [fecha]);
+
+  // ── Modo en vivo: refresco silencioso cada 60s (solo para la fecha de hoy) ──
+  // La Torre actualiza cierre_rutas_mx cada ~5 min via trigger, y el Informe
+  // completa los datos ricos ~30 min despues de cada cierre: el polling de 60s
+  // basta para ver los cierres "llegando" sin recargar a mano.
+  useEffect(() => {
+    if (!enVivo || fecha !== hoyMX()) return;
+    const id = setInterval(() => cargar(true), 60_000);
+    return () => clearInterval(id);
+  }, [enVivo, fecha]);
+
+  // ── Resumen para el semáforo ──
+  const tot = filas.length;
+  const conKm = filas.filter(f => f.km_pago != null || f.km_informe != null).length;
+  const conHelper = filas.filter(f => f.tuvo_helper).length;
+  const cerradas = filas.filter(f => !f.flag_abierta).length;
+  const conDif = filas.filter(f => (f.discrepancias || 0) > 0).length;
+  const abiertas = tot - cerradas;
+
+  const visibles = soloDif ? filas.filter(f => (f.discrepancias || 0) > 0) : filas;
+
+  const Card = ({ titulo, valor, sub, tono }) => {
+    const colores = {
+      ok:    { borde: "#a7f3d0", bg: "#f0fdf4", num: "#065f46" },
+      warn:  { borde: "#fde68a", bg: "#fffbeb", num: "#92400e" },
+      bad:   { borde: "#fecaca", bg: "#fef2f2", num: "#991b1b" },
+      neutro:{ borde: "#e4e7ec", bg: "#fff",    num: "#1a3a6b" },
+    }[tono || "neutro"];
+    return (
+      <div style={{ flex: 1, minWidth: 130, background: colores.bg, border: `1px solid ${colores.borde}`,
+        borderRadius: 8, padding: "12px 14px" }}>
+        <div style={{ fontSize: 11, fontWeight: 600, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.3 }}>{titulo}</div>
+        <div style={{ fontSize: 24, fontWeight: 700, color: colores.num, marginTop: 2 }}>{valor}</div>
+        {sub && <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 2 }}>{sub}</div>}
+      </div>
+    );
+  };
+
+  const Chip = ({ on, label, tono }) => on ? (
+    <span style={{ display: "inline-block", padding: "2px 8px", borderRadius: 10, fontSize: 10.5, fontWeight: 700,
+      background: tono === "bad" ? "#fef2f2" : "#fffbeb",
+      color: tono === "bad" ? "#991b1b" : "#92400e",
+      border: `1px solid ${tono === "bad" ? "#fecaca" : "#fde68a"}`, marginRight: 4 }}>{label}</span>
+  ) : null;
+
+  const fmtKm = (v) => v == null ? "—" : Number(v).toFixed(1);
+
+  return (
+    <div style={{ padding: 24 }}>
+      {/* Encabezado con fecha ESPECÍFICA */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10, marginBottom: 14 }}>
+        <div>
+          <div style={{ fontSize: 16, fontWeight: 700, color: "#1a3a6b" }}>Cierre del Día · Conciliación de fuentes</div>
+          <div style={{ fontSize: 12, color: "#64748b", marginTop: 2 }}>
+            Torre (cierre_rutas_mx) vs KM de pago vs Informe de cierre vs escaneos — una fecha a la vez
+            {cargadoAt && ` · consultado ${cargadoAt.toLocaleTimeString("es-CL")}`}
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <input type="date" value={fecha} onChange={(e) => setFecha(e.target.value)}
+            style={{ padding: "7px 10px", border: "1px solid #e4e7ec", borderRadius: 6, fontSize: 13, color: "#1a3a6b", fontWeight: 600 }} />
+          <button onClick={() => cargar()} disabled={loading}
+            style={{ padding: "8px 14px", background: loading ? "#94a3b8" : "#1a3a6b", color: "#fff", border: "none",
+              borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: loading ? "wait" : "pointer" }}>
+            {loading ? "Cargando…" : "↻ Refrescar"}
+          </button>
+          {fecha === hoyMX() && (
+            <button onClick={() => setEnVivo(!enVivo)}
+              title="Refresco automático cada 60 segundos (solo fecha de hoy)"
+              style={{ padding: "8px 12px", background: enVivo ? "#f0fdf4" : "#fff",
+                border: `1px solid ${enVivo ? "#a7f3d0" : "#e4e7ec"}`, borderRadius: 6,
+                fontSize: 12, fontWeight: 700, color: enVivo ? "#065f46" : "#64748b", cursor: "pointer" }}>
+              {enVivo ? "🟢 En vivo" : "⏸ Pausado"}
+            </button>
+          )}
+        </div>
+      </div>
+
+      {error && (
+        <div style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 6, padding: "10px 12px",
+          fontSize: 12, color: "#991b1b", marginBottom: 12 }}>
+          Error consultando la conciliación: {error}
+        </div>
+      )}
+
+      {/* Semáforo */}
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
+        <Card titulo="Rutas del día" valor={tot} sub="universo cierre_rutas_mx" tono="neutro" />
+        <Card titulo="Con KM" valor={`${conKm}/${tot}`} sub="pago u informe"
+          tono={tot === 0 ? "neutro" : conKm === tot ? "ok" : conKm >= tot * 0.9 ? "warn" : "bad"} />
+        <Card titulo="Con ayudante" valor={conHelper} sub="tuvo_helper (día completo)" tono="neutro" />
+        <Card titulo="Cerradas" valor={`${cerradas}/${tot}`} sub={abiertas > 0 ? `${abiertas} abiertas/multi-día` : "todas cerradas"}
+          tono={tot === 0 ? "neutro" : abiertas === 0 ? "ok" : abiertas <= 6 ? "warn" : "bad"} />
+        <Card titulo="Discrepancias" valor={conDif} sub={conDif === 0 ? "fuentes alineadas" : "rutas con diferencias"}
+          tono={conDif === 0 ? "ok" : conDif <= 5 ? "warn" : "bad"} />
+      </div>
+
+      {/* Cierres recientes: rutas cerradas ordenadas por ultima captura de la Torre */}
+      {(() => {
+        const cerradasConHora = filas
+          .filter(f => !f.flag_abierta && f.ultima_captura)
+          .sort((a, b) => new Date(b.ultima_captura) - new Date(a.ultima_captura))
+          .slice(0, 8);
+        if (!cerradasConHora.length) return null;
+        const minsDesde = (ts) => Math.max(0, Math.round((Date.now() - new Date(ts).getTime()) / 60000));
+        return (
+          <div style={{ marginBottom: 14 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.3, marginBottom: 6 }}>
+              Últimos cierres {enVivo && fecha === hoyMX() ? "· actualizando cada 60s" : ""}
+            </div>
+            <div style={{ display: "flex", gap: 8, overflowX: "auto", paddingBottom: 4 }}>
+              {cerradasConHora.map((f) => {
+                const mins = minsDesde(f.ultima_captura);
+                const reciente = mins <= 20;
+                return (
+                  <div key={f.id_ruta} onClick={() => { setSoloDif(false); setAbierta(f.id_ruta); }}
+                    style={{ minWidth: 168, background: reciente ? "#f0fdf4" : "#fff",
+                      border: `1px solid ${reciente ? "#a7f3d0" : "#e4e7ec"}`, borderRadius: 8,
+                      padding: "9px 11px", cursor: "pointer", flexShrink: 0 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+                      <span style={{ fontSize: 12, fontWeight: 700, color: "#1a3a6b" }}>{f.id_ruta}</span>
+                      <span style={{ fontSize: 10, color: reciente ? "#065f46" : "#94a3b8", fontWeight: 600 }}>
+                        {reciente ? "🟢 " : ""}hace {mins < 60 ? `${mins} min` : `${Math.round(mins / 60)} h`}
+                      </span>
+                    </div>
+                    <div style={{ fontSize: 11, color: "#64748b", marginTop: 3 }}>
+                      {f.sc} · {f.entreg_torre ?? "—"}/{f.total_torre ?? "—"} entreg.
+                      {f.tuvo_helper ? " · 👥" : ""}
+                    </div>
+                    <div style={{ fontSize: 11, color: "#64748b", marginTop: 1 }}>
+                      {f.km_pago != null || f.km_informe != null
+                        ? `${Number(f.km_pago ?? f.km_informe).toFixed(1)} km`
+                        : "km pendiente"}
+                      {(f.discrepancias || 0) > 0 && <span style={{ color: "#92400e", fontWeight: 700 }}> · ⚠ {f.discrepancias}</span>}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Toggle */}
+      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10 }}>
+        <button onClick={() => setSoloDif(!soloDif)}
+          style={{ padding: "6px 12px", background: "none", border: "1px solid #e4e7ec", borderRadius: 6,
+            fontSize: 12, fontWeight: 600, color: "#1a3a6b", cursor: "pointer" }}>
+          {soloDif ? `Mostrando solo discrepancias (${visibles.length}) · ver todas` : `Mostrando todas (${visibles.length}) · ver solo discrepancias`}
+        </button>
+      </div>
+
+      {/* Tabla */}
+      <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 8, overflow: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+          <thead>
+            <tr style={{ background: "#f8fafc", color: "#64748b", fontSize: 11, textTransform: "uppercase", letterSpacing: 0.3 }}>
+              {["Ruta", "SC", "Chofer", "Status", "Entreg. Torre", "Entreg. Informe", "KM pago", "KM informe", "Helper", "Alertas"].map(h => (
+                <th key={h} style={{ padding: "8px 10px", textAlign: "left", borderBottom: "1px solid #e4e7ec", whiteSpace: "nowrap" }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {visibles.length === 0 && !loading && (
+              <tr><td colSpan={10} style={{ padding: "28px 12px", textAlign: "center", color: "#94a3b8", fontSize: 13 }}>
+                {soloDif ? "✅ Sin discrepancias: las fuentes del día están alineadas." : "Sin rutas para esta fecha."}
+              </td></tr>
+            )}
+            {visibles.map((f) => (
+              <Fragment key={f.id_ruta}>
+                <tr onClick={() => setAbierta(abierta === f.id_ruta ? null : f.id_ruta)}
+                  style={{ cursor: "pointer", background: (f.discrepancias || 0) > 0 ? "#fffdf5" : "#fff",
+                    borderBottom: "1px solid #f1f5f9" }}>
+                  <td style={{ padding: "7px 10px", fontWeight: 700, color: "#1a3a6b" }}>{f.id_ruta}</td>
+                  <td style={{ padding: "7px 10px" }}>{f.sc}</td>
+                  <td style={{ padding: "7px 10px", maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.driver_name || "—"}</td>
+                  <td style={{ padding: "7px 10px" }}>
+                    <span style={{ fontSize: 11, fontWeight: 700,
+                      color: f.flag_abierta ? "#92400e" : "#065f46" }}>
+                      {f.status_final || "—"}
+                    </span>
+                  </td>
+                  <td style={{ padding: "7px 10px", textAlign: "right" }}>{f.entreg_torre ?? "—"}/{f.total_torre ?? "—"}</td>
+                  <td style={{ padding: "7px 10px", textAlign: "right" }}>{f.en_informe ? `${f.entreg_informe ?? "—"}` : <span style={{ color: "#94a3b8" }}>sin informe</span>}</td>
+                  <td style={{ padding: "7px 10px", textAlign: "right" }}>{fmtKm(f.km_pago)}</td>
+                  <td style={{ padding: "7px 10px", textAlign: "right" }}>{fmtKm(f.km_informe)}</td>
+                  <td style={{ padding: "7px 10px" }}>{f.tuvo_helper ? "👥 sí" : "—"}{f.escaneos_helper > 0 ? ` · ${f.escaneos_helper} esc.` : ""}</td>
+                  <td style={{ padding: "7px 10px" }}>
+                    <Chip on={f.flag_sin_km} label="SIN KM" tono="bad" />
+                    <Chip on={f.flag_dif_km} label="KM ≠" tono="warn" />
+                    <Chip on={f.flag_dif_entreg} label="ENTREG ≠" tono="warn" />
+                    <Chip on={f.flag_dif_helper} label="HELPER ≠" tono="warn" />
+                    <Chip on={f.flag_sin_informe} label="SIN INFORME" tono="warn" />
+                    <Chip on={f.flag_abierta} label="ABIERTA" tono="warn" />
+                  </td>
+                </tr>
+                {abierta === f.id_ruta && (
+                  <tr style={{ background: "#f8fafc" }}>
+                    <td colSpan={10} style={{ padding: "12px 16px", borderBottom: "1px solid #e4e7ec" }}>
+                      <div style={{ display: "flex", gap: 24, flexWrap: "wrap", fontSize: 12, color: "#334155" }}>
+                        <div>
+                          <div style={{ fontWeight: 700, color: "#1a3a6b", marginBottom: 4 }}>Torre / cierre_rutas_mx</div>
+                          <div>Entregados: {f.entreg_torre ?? "—"} / {f.total_torre ?? "—"}</div>
+                          <div>Helper día: {f.tuvo_helper ? "sí" : "no"} · Capturas: {f.capturas_torre ?? "—"}</div>
+                          <div>Fuente fila: {f.fuente_cierre}</div>
+                        </div>
+                        <div>
+                          <div style={{ fontWeight: 700, color: "#1a3a6b", marginBottom: 4 }}>KM de pago (meli_ruta_detalle)</div>
+                          <div>KM: {fmtKm(f.km_pago)} · Fuente: {f.km_fuente || "—"}</div>
+                          <div>Entregados detalle: {f.entreg_detalle ?? "—"}</div>
+                        </div>
+                        <div>
+                          <div style={{ fontWeight: 700, color: "#1a3a6b", marginBottom: 4 }}>Informe cola cierre</div>
+                          {f.en_informe ? (
+                            <>
+                              <div>KM MELI: {fmtKm(f.km_informe)} · NS: {f.ns_informe != null ? `${Number(f.ns_informe).toFixed(1)}%` : "—"}</div>
+                              <div>Entregados: {f.entreg_informe ?? "—"} · Fallidos: {f.fallidos_informe ?? "—"}</div>
+                              <div>Helper al cierre: {f.helper_informe ? "sí" : "no"}</div>
+                            </>
+                          ) : <div style={{ color: "#92400e" }}>Ruta aún no procesada por la cola de cierre (corre cada 30 min sobre rutas cerradas).</div>}
+                        </div>
+                        <div>
+                          <div style={{ fontWeight: 700, color: "#1a3a6b", marginBottom: 4 }}>Escaneos</div>
+                          <div>Total: {f.escaneos} · De ayudante: {f.escaneos_helper}</div>
+                        </div>
+                      </div>
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 10, lineHeight: 1.5 }}>
+        Consulta por fecha específica vía <code>fn_conciliacion_cierre</code> — nunca escanea rangos.
+        Umbrales: KM ≠ si difieren &gt; 1,5 km · Entregados ≠ si difieren &gt; 3 paquetes.
+        "Sin informe" en rutas cerradas suele resolverse solo en el próximo ciclo de la cola (cada 30 min).
+      </div>
+    </div>
+  );
+}
 
 function AyudantesDetalleDia({ usuario }) {
   // ── Fecha por defecto: día anterior (operativo MX) ──
