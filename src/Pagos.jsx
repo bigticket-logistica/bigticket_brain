@@ -7190,15 +7190,34 @@ function CierreDelDia() {
     return () => clearInterval(id);
   }, [enVivo, fecha]);
 
-  // ── Resumen para el semáforo ──
+  // ── Estado humano por ruta ──────────────────────────────────────────
+  // en_reparto  : abierta, trabajando — no se audita todavia
+  // procesando  : cerro hace poco; el acta de cierre llega en <=30-60 min
+  // completa    : cerrada, con acta y sin diferencias entre fuentes
+  // revisar     : cerrada con diferencias o con datos que ya debieron llegar
+  const estadoDe = (f) => {
+    if (f.flag_abierta) return "en_reparto";
+    if ((f.discrepancias || 0) > 0) return "revisar";
+    if (!f.en_informe) return "procesando";
+    return "completa";
+  };
   const tot = filas.length;
-  const conKm = filas.filter(f => f.km_pago != null || f.km_informe != null).length;
+  const nReparto = filas.filter(f => estadoDe(f) === "en_reparto").length;
+  const nProcesando = filas.filter(f => estadoDe(f) === "procesando").length;
+  const nCompletas = filas.filter(f => estadoDe(f) === "completa").length;
+  const nRevisar = filas.filter(f => estadoDe(f) === "revisar").length;
   const conHelper = filas.filter(f => f.tuvo_helper).length;
-  const cerradas = filas.filter(f => !f.flag_abierta).length;
-  const conDif = filas.filter(f => (f.discrepancias || 0) > 0).length;
-  const abiertas = tot - cerradas;
 
-  const visibles = soloDif ? filas.filter(f => (f.discrepancias || 0) > 0) : filas;
+  const visibles = soloDif ? filas.filter(f => estadoDe(f) === "revisar") : filas;
+
+  // La pregunta que responde la pestaña, en una linea
+  const titular = tot === 0
+    ? "Sin rutas registradas para esta fecha."
+    : nReparto > 0
+      ? `Dia en curso: ${nReparto} en reparto · ${nCompletas} completas${nRevisar ? ` · ${nRevisar} por revisar` : ""}`
+      : nRevisar === 0 && nProcesando === 0
+        ? `✅ Dia completo y consistente: las ${tot} rutas listas para calcular el pago.`
+        : `${nCompletas}/${tot} completas${nProcesando ? ` · ${nProcesando} con acta en camino` : ""}${nRevisar ? ` · ⚠ ${nRevisar} requieren revision` : ""}`;
 
   const Card = ({ titulo, valor, sub, tono }) => {
     const colores = {
@@ -7264,16 +7283,23 @@ function CierreDelDia() {
         </div>
       )}
 
-      {/* Semáforo */}
+      {/* La respuesta del dia, en una linea */}
+      <div style={{ background: nRevisar > 0 ? "#fffbeb" : "#f8fafc",
+        border: `1px solid ${nRevisar > 0 ? "#fde68a" : "#e4e7ec"}`,
+        borderRadius: 8, padding: "12px 16px", marginBottom: 14,
+        fontSize: 14, fontWeight: 700, color: nRevisar > 0 ? "#92400e" : "#1a3a6b" }}>
+        {titular}
+      </div>
+
+      {/* Semaforo por estado */}
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
-        <Card titulo="Rutas del día" valor={tot} sub="universo cierre_rutas_mx" tono="neutro" />
-        <Card titulo="Con KM" valor={`${conKm}/${tot}`} sub="pago u informe"
-          tono={tot === 0 ? "neutro" : conKm === tot ? "ok" : conKm >= tot * 0.9 ? "warn" : "bad"} />
-        <Card titulo="Con ayudante" valor={conHelper} sub="tuvo_helper (día completo)" tono="neutro" />
-        <Card titulo="Cerradas" valor={`${cerradas}/${tot}`} sub={abiertas > 0 ? `${abiertas} abiertas/multi-día` : "todas cerradas"}
-          tono={tot === 0 ? "neutro" : abiertas === 0 ? "ok" : abiertas <= 6 ? "warn" : "bad"} />
-        <Card titulo="Discrepancias" valor={conDif} sub={conDif === 0 ? "fuentes alineadas" : "rutas con diferencias"}
-          tono={conDif === 0 ? "ok" : conDif <= 5 ? "warn" : "bad"} />
+        <Card titulo="🚚 En reparto" valor={nReparto} sub="trabajando ahora · sin auditar" tono="neutro" />
+        <Card titulo="⏳ Cierre en proceso" valor={nProcesando} sub="acta llega en ~30 min" tono={nProcesando > 0 ? "warn" : "neutro"} />
+        <Card titulo="✓ Completas" valor={`${nCompletas}/${tot}`} sub="cerradas, con acta y consistentes"
+          tono={tot > 0 && nCompletas === tot ? "ok" : "neutro"} />
+        <Card titulo="⚠ Por revisar" valor={nRevisar} sub={nRevisar === 0 ? "nada pendiente de ti" : "fuentes difieren o falta data"}
+          tono={nRevisar === 0 ? "ok" : "bad"} />
+        <Card titulo="👥 Con ayudante" valor={conHelper} sub="detectados por la Torre" tono="neutro" />
       </div>
 
       {/* Cierres recientes: rutas cerradas ordenadas por ultima captura de la Torre */}
@@ -7327,7 +7353,7 @@ function CierreDelDia() {
         <button onClick={() => setSoloDif(!soloDif)}
           style={{ padding: "6px 12px", background: "none", border: "1px solid #e4e7ec", borderRadius: 6,
             fontSize: 12, fontWeight: 600, color: "#1a3a6b", cursor: "pointer" }}>
-          {soloDif ? `Mostrando solo discrepancias (${visibles.length}) · ver todas` : `Mostrando todas (${visibles.length}) · ver solo discrepancias`}
+          {soloDif ? `Mostrando solo las que requieren revisión (${visibles.length}) · ver todas las rutas` : `Mostrando todas (${visibles.length}) · ver solo las que requieren revisión`}
         </button>
       </div>
 
@@ -7336,7 +7362,7 @@ function CierreDelDia() {
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
           <thead>
             <tr style={{ background: "#f8fafc", color: "#64748b", fontSize: 11, textTransform: "uppercase", letterSpacing: 0.3 }}>
-              {["Ruta", "SC", "Chofer", "Status", "Entreg. Torre", "Entreg. Informe", "KM pago", "KM informe", "Helper", "Alertas"].map(h => (
+              {["Ruta", "SC", "Chofer", "Estado", "Entregados (Torre)", "Entregados (acta)", "KM pago", "KM acta", "Ayudante", "Qué revisar"].map(h => (
                 <th key={h} style={{ padding: "8px 10px", textAlign: "left", borderBottom: "1px solid #e4e7ec", whiteSpace: "nowrap" }}>{h}</th>
               ))}
             </tr>
@@ -7344,7 +7370,7 @@ function CierreDelDia() {
           <tbody>
             {visibles.length === 0 && !loading && (
               <tr><td colSpan={10} style={{ padding: "28px 12px", textAlign: "center", color: "#94a3b8", fontSize: 13 }}>
-                {soloDif ? "✅ Sin discrepancias: las fuentes del día están alineadas." : "Sin rutas para esta fecha."}
+                {soloDif ? "✅ Nada que revisar: todo lo cerrado coincide entre fuentes." : "Sin rutas para esta fecha."}
               </td></tr>
             )}
             {visibles.map((f) => (
@@ -7355,24 +7381,41 @@ function CierreDelDia() {
                   <td style={{ padding: "7px 10px", fontWeight: 700, color: "#1a3a6b" }}>{f.id_ruta}</td>
                   <td style={{ padding: "7px 10px" }}>{f.sc}</td>
                   <td style={{ padding: "7px 10px", maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.driver_name || "—"}</td>
-                  <td style={{ padding: "7px 10px" }}>
-                    <span style={{ fontSize: 11, fontWeight: 700,
-                      color: f.flag_abierta ? "#92400e" : "#065f46" }}>
-                      {f.status_final || "—"}
-                    </span>
+                  <td style={{ padding: "7px 10px", whiteSpace: "nowrap" }}>
+                    {(() => {
+                      const est = estadoDe(f);
+                      const cfg = {
+                        en_reparto: { txt: "🚚 En reparto", color: "#64748b" },
+                        procesando: { txt: "⏳ Cerrando", color: "#92400e" },
+                        completa:   { txt: "✓ Completa", color: "#065f46" },
+                        revisar:    { txt: "⚠ Revisar", color: "#991b1b" },
+                      }[est];
+                      return <span style={{ fontSize: 11.5, fontWeight: 700, color: cfg.color }}>{cfg.txt}</span>;
+                    })()}
                   </td>
                   <td style={{ padding: "7px 10px", textAlign: "right" }}>{f.entreg_torre ?? "—"}/{f.total_torre ?? "—"}</td>
-                  <td style={{ padding: "7px 10px", textAlign: "right" }}>{f.en_informe ? `${f.entreg_informe ?? "—"}` : <span style={{ color: "#94a3b8" }}>sin informe</span>}</td>
+                  <td style={{ padding: "7px 10px", textAlign: "right" }}>{f.en_informe ? `${f.entreg_informe ?? "—"}` : <span style={{ color: "#c0c8d4", fontSize: 11 }}>{f.flag_abierta ? "al cierre" : "en proceso"}</span>}</td>
                   <td style={{ padding: "7px 10px", textAlign: "right" }}>{fmtKm(f.km_pago)}</td>
                   <td style={{ padding: "7px 10px", textAlign: "right" }}>{fmtKm(f.km_informe)}</td>
                   <td style={{ padding: "7px 10px" }}>{f.tuvo_helper ? "👥 sí" : "—"}{f.escaneos_helper > 0 ? ` · ${f.escaneos_helper} esc.` : ""}</td>
                   <td style={{ padding: "7px 10px" }}>
-                    <Chip on={f.flag_sin_km} label="SIN KM" tono="bad" />
-                    <Chip on={f.flag_dif_km} label="KM ≠" tono="warn" />
-                    <Chip on={f.flag_dif_entreg} label="ENTREG ≠" tono="warn" />
-                    <Chip on={f.flag_dif_helper} label="HELPER ≠" tono="warn" />
-                    <Chip on={f.flag_sin_informe} label="SIN INFORME" tono="warn" />
-                    <Chip on={f.flag_abierta} label="ABIERTA" tono="warn" />
+                    {f.flag_abierta ? (
+                      <span style={{ color: "#c0c8d4", fontSize: 11 }}>—</span>
+                    ) : (
+                      <>
+                        <Chip on={f.flag_sin_km} label="Falta el KM" tono="bad" />
+                        <Chip on={f.flag_dif_km} label="KM no coinciden" tono="warn" />
+                        <Chip on={f.flag_dif_entreg} label="Entregados no coinciden" tono="warn" />
+                        <Chip on={f.flag_dif_helper} label="Ayudante inconsistente" tono="warn" />
+                        <Chip on={f.flag_sin_informe} label="Acta atrasada" tono="warn" />
+                        {(f.discrepancias || 0) === 0 && !f.en_informe && (
+                          <span style={{ color: "#92400e", fontSize: 11 }}>acta en camino (~30 min)</span>
+                        )}
+                        {(f.discrepancias || 0) === 0 && f.en_informe && (
+                          <span style={{ color: "#065f46", fontSize: 11 }}>✓ todo coincide</span>
+                        )}
+                      </>
+                    )}
                   </td>
                 </tr>
                 {abierta === f.id_ruta && (
@@ -7415,9 +7458,10 @@ function CierreDelDia() {
       </div>
 
       <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 10, lineHeight: 1.5 }}>
-        Consulta por fecha específica vía <code>fn_conciliacion_cierre</code> — nunca escanea rangos.
-        Umbrales: KM ≠ si difieren &gt; 1,5 km · Entregados ≠ si difieren &gt; 3 paquetes.
-        "Sin informe" en rutas cerradas suele resolverse solo en el próximo ciclo de la cola (cada 30 min).
+        Cómo leerla: cada ruta cerrada genera un "acta de cierre" automática (~30 min después de cerrar) con
+        entregados finales, KM y ayudante. Esta pestaña compara el acta contra la Torre y el KM de pago:
+        si todo coincide → ✓ Completa; si algo difiere o no llegó a tiempo → ⚠ Revisar, con la causa exacta.
+        Las rutas en reparto no se auditan (aún están trabajando). Consulta por fecha específica — nunca rangos.
       </div>
     </div>
   );
