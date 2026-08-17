@@ -2607,6 +2607,12 @@ function ConciliacionTercerosMX({ usuario }) {
   const [guardandoTransp, setGuardandoTransp] = useState(false);
   const [asignacionSel, setAsignacionSel] = useState({}); // placa -> empresa
   const [asignando, setAsignando] = useState(null);
+  const [noPagRows, setNoPagRows] = useState(null);   // viajes de la semana que nunca salieron en una prefactura enviada
+  const [noPagBusy, setNoPagBusy] = useState(false);
+  const [noPagVerQuitados, setNoPagVerQuitados] = useState(false);
+  const [repagoRows, setRepagoRows] = useState(null);   // viajes sellados en más de un envío (posible repago)
+  const [repagoVerLineas, setRepagoVerLineas] = useState(false); // incluir líneas duplicadas dentro de un mismo envío
+  const [repagoAbierto, setRepagoAbierto] = useState(false);
   const [cerrando, setCerrando] = useState(null);      // "empresa||SC" en proceso
   const [msg, setMsg] = useState(null);
   const [cobrosPorSC, setCobrosPorSC] = useState({});   // empresa -> { sc: cobros }
@@ -2730,7 +2736,7 @@ function ConciliacionTercerosMX({ usuario }) {
     } catch (e) { console.error("maestros prefacturas:", e); }
   };
 
-  useEffect(() => { cargarResumen(semana); setConsolidadas(new Set()); cargarRepetidas(semana); cargarAux(semana); setExpandida(null); setDetalles({}); setAsignacionSel({}); setTrasp(null); setTraspRows(null); cargarTraspasos(semana); }, [semana]);
+  useEffect(() => { cargarResumen(semana); setConsolidadas(new Set()); cargarRepetidas(semana); cargarAux(semana); setExpandida(null); setDetalles({}); setAsignacionSel({}); setTrasp(null); setTraspRows(null); cargarTraspasos(semana); cargarNoPagados(semana); cargarRepagos(semana); setNoPagVerQuitados(false); setRepagoAbierto(false); }, [semana]);
   useEffect(() => { cargarMaestros(); }, []);
 
   const cargarDetalle = async (empresa) => {
@@ -2768,6 +2774,7 @@ function ConciliacionTercerosMX({ usuario }) {
 
   const refrescarTodo = async () => {
     setDetalles({}); setAsignacionSel({});
+    cargarNoPagados(semana);
     await Promise.all([cargarResumen(semana), cargarMaestros()]);
   };
 
@@ -3053,6 +3060,59 @@ function ConciliacionTercerosMX({ usuario }) {
       await cargarResumen(semana);
     } catch (e) { console.error("guardar cobros:", e); setMsg({ ok: false, txt: "Error guardando cobros: " + (e.message || e) }); }
     setGuardandoEdit(null);
+  };
+
+  // ── Posible repago: viajes que salieron en MÁS DE UN envío (sellos, últimas 8 semanas) ──
+  const cargarRepagos = async (sem) => {
+    const sm = sem != null ? sem : semana;
+    try {
+      const { data, error } = await sb.rpc("get_viajes_enviados_duplicados", { p_semana_desde: Math.max(24, sm - 8), p_semana_hasta: sm });
+      if (error) throw error;
+      setRepagoRows(data || []);
+    } catch (e) { console.error("posible repago:", e); setRepagoRows([]); }
+  };
+
+  // ── Asociar una placa impaga al tercero EN LA SEMANA DE CADA VIAJE ──
+  // No sirve asignarla en la semana en pantalla: el mapa placa→empresa es por semana, así que
+  // un viaje impago de la semana 33 solo se resuelve asignando la placa en la semana 33.
+  const asociarPlacaSemanas = async (placa, filas) => {
+    const eleccion = asignacionSel[placa];
+    if (!eleccion) return alert("Eleg\u00ed un transportista para la placa " + placa);
+    if (eleccion === "__nueva__") { setFormTransp({ ...TRANSP_FORM_VACIO }); return; }
+    const sems = [...new Set(filas.map(f => Number(f.semana)))].sort((a, b) => a - b);
+    if (!confirm(`¿Asociar la placa ${placa} a "${eleccion}" en la semana ${sems.join(", ")}?\n\nSe agrega al inventario de esa(s) semana(s) para que los viajes entren en su prefactura.`)) return;
+    setAsignando(placa);
+    try {
+      for (const sm of sems) {
+        const sc = (filas.find(f => Number(f.semana) === sm) || {}).service_center_id || null;
+        const { error } = await sb.from("flota_terceros_mx").insert({
+          semana: sm, placa: normalizarPlaca(placa), empresa_transporte: eleccion,
+          operacion: sc ? "ML_MX_" + sc : null,
+          responsable: (usuario && (usuario.nombre || usuario.email)) || "Brain - Viajes sin pago",
+          fecha_hora_envio: new Date().toISOString(),
+        });
+        if (error) throw error;
+      }
+      setMsg({ ok: true, txt: `Placa ${placa} asociada a ${eleccion} en la semana ${sems.join(", ")}. Gener\u00e1, cerr\u00e1 y envi\u00e1 la prefactura de esa semana para pagarlos.` });
+      await cargarNoPagados(semana);
+      await cargarResumen(semana);
+    } catch (e) {
+      console.error("asociar placa impaga:", e);
+      setMsg({ ok: false, txt: "Error asociando placa: " + (e.message || e) });
+    }
+    setAsignando(null);
+  };
+
+  // ── Viajes no pagados de SEMANAS ANTERIORES (no salieron en ninguna prefactura enviada) ──
+  const cargarNoPagados = async (sem) => {
+    const sm = sem != null ? sem : semana;
+    setNoPagBusy(true);
+    try {
+      const { data, error } = await sb.rpc("get_viajes_no_pagados_semana", { p_semana: sm });
+      if (error) throw error;
+      setNoPagRows(data || []);
+    } catch (e) { console.error("viajes no pagados:", e); setNoPagRows([]); }
+    setNoPagBusy(false);
   };
 
   // ── Asignar placa a transportista (inserta en flota_terceros_mx) ──
@@ -4444,6 +4504,165 @@ function ConciliacionTercerosMX({ usuario }) {
           <div style={{ fontSize: 10, color: "#b45309", marginTop: 8 }}>"Consolidar" deja el pago del 1er día y quita los días repetidos (queda auditado). Si la conciliación estaba cerrada, vuelve a borrador para revisarla y cerrarla de nuevo.</div>
         </div>
       )}
+
+      {/* Viajes que el motor pagó pero que nunca salieron en una prefactura ENVIADA */}
+      {noPagRows && noPagRows.length > 0 && (() => {
+        const reales = noPagRows.filter(r => !r.quitado_auditado);
+        const quitados = noPagRows.filter(r => r.quitado_auditado);
+        const visibles = noPagVerQuitados ? noPagRows : reales;
+        if (!visibles.length) return null;
+        const montoTotal = reales.reduce((a, r) => a + Number(r.monto || 0), 0);
+        const sinAsociar = reales.filter(r => !r.tiene_empresa);
+        // Agrupado por placa: la acción del analista es asociar la placa a un tercero
+        const porPlaca = {};
+        for (const r of visibles) (porPlaca[r.placa] = porPlaca[r.placa] || []).push(r);
+        const placasOrden = Object.keys(porPlaca).sort((a, b) => {
+          const sa = porPlaca[a][0].tiene_empresa ? 1 : 0, sbb = porPlaca[b][0].tiene_empresa ? 1 : 0;
+          if (sa !== sbb) return sa - sbb;                       // sin asociar primero
+          const wa = Math.min(...porPlaca[a].map(r => Number(r.semana)));
+          const wb = Math.min(...porPlaca[b].map(r => Number(r.semana)));
+          if (wa !== wb) return wa - wb;                          // luego la semana más vieja
+          return porPlaca[b].reduce((x, r) => x + Number(r.monto || 0), 0) - porPlaca[a].reduce((x, r) => x + Number(r.monto || 0), 0);
+        });
+        return (
+          <div style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 10, padding: 14, marginBottom: 14 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 8 }}>
+              <span style={{ fontSize: 14, fontWeight: 800, color: "#991b1b" }}>💸 Viajes sin pago enviado — semanas anteriores</span>
+              <span style={{ fontSize: 12, color: "#b91c1c" }}>
+                {reales.length} viaje(s) · {fmtMon(montoTotal)}
+                {sinAsociar.length ? ` · ${new Set(sinAsociar.map(r => r.placa)).size} placa(s) sin asociar` : ""}
+                {quitados.length ? ` · ${quitados.length} quitado(s) a propósito` : ""}
+              </span>
+              {quitados.length > 0 && (
+                <label style={{ fontSize: 11, color: "#64748b", display: "inline-flex", alignItems: "center", gap: 5, cursor: "pointer" }}>
+                  <input type="checkbox" checked={noPagVerQuitados} onChange={e => setNoPagVerQuitados(e.target.checked)} />
+                  Ver los quitados a propósito
+                </label>
+              )}
+              <button onClick={() => cargarNoPagados(semana)} disabled={noPagBusy}
+                style={{ marginLeft: "auto", padding: "6px 14px", background: "#fff", color: "#991b1b", border: "1px solid #fecaca", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+                {noPagBusy ? "Revisando..." : "Revisar de nuevo"}</button>
+            </div>
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+                <thead><tr style={{ background: "#fff1f2" }}>
+                  {["Sem.", "Placa", "Empresa actual", "SC", "Viajes", "Fechas", "Monto", "Motivo", "Asociar a tercero"].map(h => (
+                    <th key={h} style={{ textAlign: h === "Monto" || h === "Viajes" ? "right" : "left", padding: "6px 8px", borderBottom: "1px solid #fecaca", color: "#991b1b", fontWeight: 700, whiteSpace: "nowrap" }}>{h}</th>))}
+                </tr></thead>
+                <tbody>
+                  {placasOrden.map(placa => {
+                    const filas = porPlaca[placa];
+                    const f0 = filas[0];
+                    const neto = filas.reduce((a, r) => a + Number(r.monto || 0), 0);
+                    const scs = [...new Set(filas.map(r => r.service_center_id).filter(Boolean))];
+                    const sems = [...new Set(filas.map(r => Number(r.semana)))].sort((a, b) => a - b);
+                    const fechas = [...new Set(filas.map(r => String(r.fecha).slice(5, 10).split("-").reverse().join("-")))];
+                    const motivos = [...new Set(filas.map(r => r.motivo))];
+                    const auditado = f0.quitado_auditado;
+                    return (
+                      <tr key={placa} style={{ background: auditado ? "#f8fafc" : "transparent", opacity: auditado ? 0.7 : 1 }}>
+                        <td style={{ padding: "6px 8px", fontWeight: 700, color: "#9a3412", whiteSpace: "nowrap" }}>{sems.join(", ")}</td>
+                        <td style={{ padding: "6px 8px", fontFamily: "monospace", fontWeight: 700 }}>{placa}</td>
+                        <td style={{ padding: "6px 8px", color: f0.tiene_empresa ? "#334155" : "#b91c1c", fontWeight: f0.tiene_empresa ? 400 : 700 }}>
+                          {f0.tiene_empresa ? f0.empresa : "— sin asociar —"}</td>
+                        <td style={{ padding: "6px 8px" }}>{scs.join(", ") || "—"}</td>
+                        <td style={{ padding: "6px 8px", textAlign: "right", fontWeight: 700 }}>{filas.length}</td>
+                        <td style={{ padding: "6px 8px", fontSize: 10, color: "#64748b", maxWidth: 150, whiteSpace: "normal" }}>{fechas.join(", ")}</td>
+                        <td style={{ padding: "6px 8px", textAlign: "right", fontWeight: 700, color: "#b91c1c" }}>{fmtMon(neto)}</td>
+                        <td style={{ padding: "6px 8px", fontSize: 10, color: auditado ? "#475569" : "#991b1b", maxWidth: 220, whiteSpace: "normal" }}>
+                          {auditado ? "✓ " : ""}{motivos.join(" · ")}</td>
+                        <td style={{ padding: "6px 8px", whiteSpace: "nowrap" }}>
+                          {auditado ? <span style={{ fontSize: 10, color: "#94a3b8" }}>no requiere acción</span>
+                            : f0.tiene_empresa
+                              ? <span style={{ fontSize: 10, color: "#64748b" }} title="La placa ya está asociada: falta generar/cerrar/enviar la prefactura de esa empresa y SC">generar y enviar prefactura</span>
+                              : (<span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+                                  <select value={asignacionSel[placa] || ""}
+                                    onChange={e => setAsignacionSel(prev => ({ ...prev, [placa]: e.target.value }))}
+                                    style={{ padding: "5px 8px", border: "1px solid #e4e7ec", borderRadius: 6, fontSize: 11, minWidth: 200 }}>
+                                    <option value="">— Elegir transportista —</option>
+                                    {opcionesTransp.map(n => <option key={n} value={n}>{n}</option>)}
+                                    <option value="__nueva__">＋ Nuevo transportista...</option>
+                                  </select>
+                                  <button onClick={() => asociarPlacaSemanas(placa, filas)} disabled={asignando === placa}
+                                    style={{ padding: "5px 12px", background: "#F47B20", color: "#fff", border: "none", borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: "pointer", opacity: asignando === placa ? 0.6 : 1 }}>
+                                    {asignando === placa ? "..." : "Asociar"}</button>
+                                </span>)}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            <div style={{ fontSize: 10, color: "#b91c1c", marginTop: 8 }}>
+              Viajes de semanas <b>ya cerradas</b> (la semana en curso no se incluye: sus prefacturas todavía no se envían) que el motor valorizó pero que nunca salieron en una prefactura enviada por correo.
+              Un viaje se considera pagado cuando figura en el detalle de una prefactura con envío confirmado, o cuando tiene sello de envío (se cruza por fecha + ID de ruta).
+              “Asociar” agrega la placa al inventario de <b>la semana del viaje</b>; después hay que generar, cerrar y enviar esa prefactura. Mientras no se paguen, siguen apareciendo acá.
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Posible repago: viajes que salieron en más de un envío de prefactura */}
+      {repagoRows && (() => {
+        const repagos = repagoRows.filter(r => r.tipo_alerta === "POSIBLE REPAGO");
+        const lineasDup = repagoRows.filter(r => r.tipo_alerta !== "POSIBLE REPAGO");
+        if (!repagos.length && !lineasDup.length) return null;
+        const cruzan = repagos.filter(r => r.cruza_empresas);
+        const visibles = repagoVerLineas ? repagoRows : repagos;
+        return (
+          <div style={{ background: "#faf5ff", border: "1px solid #e9d5ff", borderRadius: 10, padding: 14, marginBottom: 14 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", cursor: "pointer" }} onClick={() => setRepagoAbierto(v => !v)}>
+              <span style={{ fontSize: 14, fontWeight: 800, color: "#6b21a8" }}>⚠ Posible repago — viajes en más de un envío</span>
+              <span style={{ fontSize: 12, color: "#7e22ce" }}>
+                {repagos.length} ruta(s) en las últimas 8 semanas
+                {cruzan.length ? ` · ⚠ ${cruzan.length} enviada(s) a EMPRESAS DISTINTAS` : ""}
+                {lineasDup.length ? ` · ${lineasDup.length} con líneas duplicadas en un mismo PDF` : ""}
+              </span>
+              <span style={{ marginLeft: "auto", fontSize: 11, color: "#7e22ce", fontWeight: 700 }}>{repagoAbierto ? "▲ ocultar" : "▼ ver detalle"}</span>
+            </div>
+            {repagoAbierto && (
+              <Fragment>
+                <div style={{ fontSize: 11, color: "#6b21a8", margin: "8px 0" }}>
+                  Cada fila es un viaje que salió en más de un correo de prefactura (sellos de envío). Un reenvío a la <b>misma</b> empresa puede ser una prefactura corregida (verificar que la primera no se haya pagado); a <b>empresas distintas</b> es el caso grave: el mismo viaje cobrado por dos terceros. Se resuelve con nota de crédito o descuento en la próxima prefactura (saldos pendientes).
+                </div>
+                {lineasDup.length > 0 && (
+                  <label style={{ fontSize: 11, color: "#64748b", display: "inline-flex", alignItems: "center", gap: 5, cursor: "pointer", marginBottom: 6 }}>
+                    <input type="checkbox" checked={repagoVerLineas} onChange={e => setRepagoVerLineas(e.target.checked)} />
+                    Ver también las líneas duplicadas dentro de un mismo envío ({lineasDup.length})
+                  </label>
+                )}
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+                    <thead><tr style={{ background: "#f3e8ff" }}>
+                      {["Fecha viaje", "ID Ruta", "Empresas", "Envíos", "Fechas de envío", "Monto sumado", "Tipo"].map(h => (
+                        <th key={h} style={{ textAlign: h === "Monto sumado" || h === "Envíos" ? "right" : "left", padding: "6px 8px", borderBottom: "1px solid #e9d5ff", color: "#6b21a8", fontWeight: 700, whiteSpace: "nowrap" }}>{h}</th>))}
+                    </tr></thead>
+                    <tbody>
+                      {visibles.map((r, i) => (
+                        <tr key={`${r.fecha}|${r.id_ruta}|${i}`} style={{ background: r.cruza_empresas ? "#fdf2f8" : "transparent" }}>
+                          <td style={{ padding: "5px 8px", whiteSpace: "nowrap" }}>{String(r.fecha).slice(0, 10)}</td>
+                          <td style={{ padding: "5px 8px", fontFamily: "monospace", fontWeight: 700 }}>{r.id_ruta}</td>
+                          <td style={{ padding: "5px 8px", maxWidth: 240, whiteSpace: "normal", color: r.cruza_empresas ? "#be185d" : "#334155", fontWeight: r.cruza_empresas ? 700 : 400 }}>
+                            {(r.empresas || []).join(" → ")}{r.cruza_empresas ? " ⚠" : ""}</td>
+                          <td style={{ padding: "5px 8px", textAlign: "right", fontWeight: 700 }}>{r.envios_distintos}</td>
+                          <td style={{ padding: "5px 8px", fontSize: 10, color: "#64748b", maxWidth: 190, whiteSpace: "normal" }}>
+                            {[...new Set((r.enviado_ats || []).map(t => String(t).slice(0, 10)))].join(", ")}</td>
+                          <td style={{ padding: "5px 8px", textAlign: "right", fontWeight: 700, color: Number(r.monto_total) < 0 ? "#0f766e" : "#be185d" }}>{fmtMon(r.monto_total)}</td>
+                          <td style={{ padding: "5px 8px", fontSize: 10, color: "#6b21a8" }}>{r.tipo_alerta === "POSIBLE REPAGO" ? (r.cruza_empresas ? "repago entre empresas" : "reenvío misma empresa") : "líneas duplicadas"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div style={{ fontSize: 10, color: "#7e22ce", marginTop: 8 }}>
+                  “Monto sumado” es la suma de TODOS los envíos del viaje: el sobrepago potencial es la parte que exceda un envío. Montos negativos son descuentos (mermas) aplicados más de una vez, en perjuicio del transportista.
+                </div>
+              </Fragment>
+            )}
+          </div>
+        );
+      })()}
 
       {traspRows && traspRows.length > 0 && (
         <div style={{ background: "#fff1f2", border: "1px solid #fecdd3", borderRadius: 10, padding: 14, marginBottom: 14 }}>
