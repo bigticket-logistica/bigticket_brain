@@ -2995,9 +2995,11 @@ function DetalleCertificacion({ cert, etapa, onVolver, onPasarEtapa2, onMoverA, 
   const enLlamada = etapaActual === "llamada_supervisor";
   const enEtapa2 = etapaActual === "prevalidacion_biggy";
   const esVeh = cert.tipo === "vehiculo";
-  const cond = cert._conductor;
-  const veh  = cert._vehiculo;
-  const ter  = cert._tercero;
+  // Los registros hijos viven en cert.raw (así los deja normalizarPortalCert);
+  // se aceptan ambas rutas por compatibilidad con vistas que los pasan planos.
+  const cond = cert._conductor || cert.raw?._conductor || null;
+  const veh  = cert._vehiculo  || cert.raw?._vehiculo  || null;
+  const ter  = cert._tercero   || cert.raw?._tercero   || null;
   const titulo = esVeh ? (veh?.placa || "Sin placa") : (cond?.nombre || ter?.nombre || "Sin nombre");
   const tc = TIPO_CFG[cert.tipo] || TIPO_CFG.conductor;
   const fcFuente = cert.origen === "app_terceros" ? ORIGEN_CFG.app_terceros : FUENTE_CFG.portal_cert;
@@ -3416,10 +3418,16 @@ function DetalleCertificacion({ cert, etapa, onVolver, onPasarEtapa2, onMoverA, 
           onGuardar={async (cambios) => {
             const tabla = esVeh ? "certificacion_vehiculo" : "certificacion_conductor";
             const fila = esVeh ? veh : cond;
-            if (!fila?.id) throw new Error("no se encontró el registro a actualizar");
-            const { error } = await sb.from(tabla).update(cambios).eq("id", fila.id);
+            // Se actualiza por id si se conoce; si no, por certificacion_id (la
+            // relación es 1 a 1, así que apunta al mismo registro).
+            let q = sb.from(tabla).update(cambios);
+            q = fila?.id ? q.eq("id", fila.id) : q.eq("certificacion_id", cert.id);
+            const { data, error } = await q.select();
             if (error) throw new Error(error.message);
-            Object.assign(fila, cambios);
+            if (!data || !data.length) {
+              throw new Error("no existe el registro de " + (esVeh ? "vehículo" : "conductor") + " para esta certificación");
+            }
+            if (fila) Object.assign(fila, cambios);
             if (typeof cargarDocsCert === "function") await cargarDocsCert();
           }} />
 
