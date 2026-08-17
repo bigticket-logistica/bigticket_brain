@@ -2611,8 +2611,10 @@ function ConciliacionTercerosMX({ usuario }) {
   const [noPagBusy, setNoPagBusy] = useState(false);
   const [noPagVerQuitados, setNoPagVerQuitados] = useState(false);
   const [repagoRows, setRepagoRows] = useState(null);   // viajes sellados en más de un envío (posible repago)
-  const [repagoVerLineas, setRepagoVerLineas] = useState(false); // incluir líneas duplicadas dentro de un mismo envío
   const [repagoAbierto, setRepagoAbierto] = useState(false);
+  const [repagoFiltro, setRepagoFiltro] = useState("cruzan"); // cruzan | misma | lineas | todos
+  const [repagoBusca, setRepagoBusca] = useState("");
+  const [repagoMax, setRepagoMax] = useState(25);
   const [cerrando, setCerrando] = useState(null);      // "empresa||SC" en proceso
   const [msg, setMsg] = useState(null);
   const [cobrosPorSC, setCobrosPorSC] = useState({});   // empresa -> { sc: cobros }
@@ -4609,7 +4611,14 @@ function ConciliacionTercerosMX({ usuario }) {
         const lineasDup = repagoRows.filter(r => r.tipo_alerta !== "POSIBLE REPAGO");
         if (!repagos.length && !lineasDup.length) return null;
         const cruzan = repagos.filter(r => r.cruza_empresas);
-        const visibles = repagoVerLineas ? repagoRows : repagos;
+        let visibles = repagoFiltro === "cruzan" ? cruzan
+          : repagoFiltro === "misma" ? repagos.filter(r => !r.cruza_empresas)
+          : repagoFiltro === "lineas" ? lineasDup
+          : repagoRows;
+        const q = repagoBusca.trim().toLowerCase();
+        if (q) visibles = visibles.filter(r => String(r.id_ruta).includes(q) || (r.empresas || []).some(e => String(e).toLowerCase().includes(q)));
+        const visiblesTotal = visibles.length;
+        visibles = visibles.slice(0, repagoMax);
         return (
           <div style={{ background: "#faf5ff", border: "1px solid #e9d5ff", borderRadius: 10, padding: 14, marginBottom: 14 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", cursor: "pointer" }} onClick={() => setRepagoAbierto(v => !v)}>
@@ -4624,23 +4633,32 @@ function ConciliacionTercerosMX({ usuario }) {
             {repagoAbierto && (
               <Fragment>
                 <div style={{ fontSize: 11, color: "#6b21a8", margin: "8px 0" }}>
-                  Cada fila es un viaje que salió en más de un correo de prefactura (sellos de envío). Un reenvío a la <b>misma</b> empresa puede ser una prefactura corregida (verificar que la primera no se haya pagado); a <b>empresas distintas</b> es el caso grave: el mismo viaje cobrado por dos terceros. Se resuelve con nota de crédito o descuento en la próxima prefactura (saldos pendientes).
+                  <b>Cómo trabajar esta lista:</b> parte por “Entre empresas” (el mismo viaje cobrado por dos terceros: descontar al que no correspondía vía saldo pendiente en su próxima prefactura). Los “Reenvíos misma empresa” suelen ser prefacturas corregidas: verificar que el transportista no haya facturado las dos versiones. Las “líneas duplicadas” son descuentos/cargos repetidos dentro de un mismo PDF.
                 </div>
-                {lineasDup.length > 0 && (
-                  <label style={{ fontSize: 11, color: "#64748b", display: "inline-flex", alignItems: "center", gap: 5, cursor: "pointer", marginBottom: 6 }}>
-                    <input type="checkbox" checked={repagoVerLineas} onChange={e => setRepagoVerLineas(e.target.checked)} />
-                    Ver también las líneas duplicadas dentro de un mismo envío ({lineasDup.length})
-                  </label>
-                )}
-                <div style={{ overflowX: "auto" }}>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginBottom: 8 }}>
+                  {[{ id: "cruzan", l: `⚠ Entre empresas (${cruzan.length})` },
+                    { id: "misma", l: `Reenvío misma empresa (${repagos.length - cruzan.length})` },
+                    { id: "lineas", l: `Líneas duplicadas (${lineasDup.length})` },
+                    { id: "todos", l: `Todos (${repagoRows.length})` }].map(f => (
+                    <button key={f.id} onClick={() => { setRepagoFiltro(f.id); setRepagoMax(25); }}
+                      style={{ fontSize: 11, padding: "4px 10px", borderRadius: 12, cursor: "pointer", fontWeight: repagoFiltro === f.id ? 700 : 400,
+                        border: repagoFiltro === f.id ? "1.5px solid #7e22ce" : "1px solid #e9d5ff",
+                        background: repagoFiltro === f.id ? "#f3e8ff" : "#fff", color: "#6b21a8" }}>{f.l}</button>
+                  ))}
+                  <input placeholder="Buscar empresa o ID ruta..." value={repagoBusca}
+                    onChange={e => { setRepagoBusca(e.target.value); setRepagoMax(25); }}
+                    style={{ marginLeft: "auto", padding: "5px 10px", border: "1px solid #e9d5ff", borderRadius: 6, fontSize: 11, minWidth: 220 }} />
+                </div>
+                <div style={{ overflowX: "auto", maxHeight: 420, overflowY: "auto", border: "1px solid #e9d5ff", borderRadius: 8 }}>
                   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
-                    <thead><tr style={{ background: "#f3e8ff" }}>
-                      {["Fecha viaje", "ID Ruta", "Empresas", "Envíos", "Fechas de envío", "Monto sumado", "Tipo"].map(h => (
+                    <thead style={{ position: "sticky", top: 0, zIndex: 1 }}><tr style={{ background: "#f3e8ff" }}>
+                      {["Sem.", "Fecha viaje", "ID Ruta", "Empresas", "Envíos", "Fechas de envío", "Monto sumado", "Qué hacer"].map(h => (
                         <th key={h} style={{ textAlign: h === "Monto sumado" || h === "Envíos" ? "right" : "left", padding: "6px 8px", borderBottom: "1px solid #e9d5ff", color: "#6b21a8", fontWeight: 700, whiteSpace: "nowrap" }}>{h}</th>))}
                     </tr></thead>
                     <tbody>
                       {visibles.map((r, i) => (
                         <tr key={`${r.fecha}|${r.id_ruta}|${i}`} style={{ background: r.cruza_empresas ? "#fdf2f8" : "transparent" }}>
+                          <td style={{ padding: "5px 8px", fontWeight: 700, color: "#9a3412" }}>{semanaInventario(r.fecha)}</td>
                           <td style={{ padding: "5px 8px", whiteSpace: "nowrap" }}>{String(r.fecha).slice(0, 10)}</td>
                           <td style={{ padding: "5px 8px", fontFamily: "monospace", fontWeight: 700 }}>{r.id_ruta}</td>
                           <td style={{ padding: "5px 8px", maxWidth: 240, whiteSpace: "normal", color: r.cruza_empresas ? "#be185d" : "#334155", fontWeight: r.cruza_empresas ? 700 : 400 }}>
@@ -4649,12 +4667,19 @@ function ConciliacionTercerosMX({ usuario }) {
                           <td style={{ padding: "5px 8px", fontSize: 10, color: "#64748b", maxWidth: 190, whiteSpace: "normal" }}>
                             {[...new Set((r.enviado_ats || []).map(t => String(t).slice(0, 10)))].join(", ")}</td>
                           <td style={{ padding: "5px 8px", textAlign: "right", fontWeight: 700, color: Number(r.monto_total) < 0 ? "#0f766e" : "#be185d" }}>{fmtMon(r.monto_total)}</td>
-                          <td style={{ padding: "5px 8px", fontSize: 10, color: "#6b21a8" }}>{r.tipo_alerta === "POSIBLE REPAGO" ? (r.cruza_empresas ? "repago entre empresas" : "reenvío misma empresa") : "líneas duplicadas"}</td>
+                          <td style={{ padding: "5px 8px", fontSize: 10, color: "#6b21a8", maxWidth: 200, whiteSpace: "normal" }}>{r.tipo_alerta === "POSIBLE REPAGO"
+                            ? (r.cruza_empresas ? "Descontar al tercero que no correspondía (saldo pendiente en su próxima prefactura)" : "Verificar que el transportista no facture las dos versiones")
+                            : "Revisar el PDF: descuento/cargo repetido — compensar en la próxima prefactura"}</td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
                 </div>
+                {visiblesTotal > visibles.length && (
+                  <button onClick={() => setRepagoMax(m => m + 50)}
+                    style={{ marginTop: 8, padding: "5px 14px", border: "1px solid #e9d5ff", background: "#fff", color: "#6b21a8", borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>
+                    Mostrar 50 más ({visiblesTotal - visibles.length} restantes)</button>
+                )}
                 <div style={{ fontSize: 10, color: "#7e22ce", marginTop: 8 }}>
                   “Monto sumado” es la suma de TODOS los envíos del viaje: el sobrepago potencial es la parte que exceda un envío. Montos negativos son descuentos (mermas) aplicados más de una vez, en perjuicio del transportista.
                 </div>
