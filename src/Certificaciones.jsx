@@ -2214,6 +2214,118 @@ function EvidenciaMinuta({ minuta }) {
   );
 }
 
+// ─── SLA DE TAREAS (contador + reactivación con justificación) ───────────────
+// El mismo cronómetro que ve el supervisor en su Bitácora, para que el analista
+// sepa desde el Brain si una tarea está por vencer o ya venció, y pueda
+// renovar el plazo dejando constancia del motivo.
+function fmtSLA(ms) {
+  const neg = ms < 0;
+  const t = Math.abs(ms);
+  const h = Math.floor(t / 3600000);
+  const m = Math.floor((t % 3600000) / 60000);
+  return (neg ? "-" : "") + String(h).padStart(2, "0") + ":" + String(m).padStart(2, "0");
+}
+function colorSLA(ms) {
+  if (ms < 0) return { bg: "#fdecea", fg: "#c0392b", bd: "#f5c6c0" };   // vencido
+  if (ms < 6 * 3600000) return { bg: "#fff4e5", fg: "#b45309", bd: "#fcd9b6" }; // por vencer
+  return { bg: "#e8f5ec", fg: "#166534", bd: "#b7e0c2" };
+}
+
+// Contador compacto para la tarjeta del Kanban
+function ChipSLA({ vence }) {
+  const [ahora, setAhora] = useState(Date.now());
+  useEffect(() => { const t = setInterval(() => setAhora(Date.now()), 60000); return () => clearInterval(t); }, []);
+  if (!vence) return null;
+  const ms = new Date(vence).getTime() - ahora;
+  const c = colorSLA(ms);
+  return (
+    <span title={ms < 0 ? "SLA vencido" : "Tiempo restante del SLA"}
+      style={{ fontSize: 9, fontWeight: 800, padding: "2px 6px", borderRadius: 6, background: c.bg, color: c.fg, border: `1px solid ${c.bd}` }}>
+      ⏱ {fmtSLA(ms)}
+    </span>
+  );
+}
+
+// Panel del detalle: estado del SLA + reactivación con motivo obligatorio
+function PanelSLA({ tarea, onReactivado }) {
+  const [ahora, setAhora] = useState(Date.now());
+  const [abierto, setAbierto] = useState(false);
+  const [motivo, setMotivo] = useState("");
+  const [horas, setHoras] = useState(48);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
+  useEffect(() => { const t = setInterval(() => setAhora(Date.now()), 60000); return () => clearInterval(t); }, []);
+
+  if (!tarea || tarea.estado !== "pendiente") return null;
+  const ms = tarea.sla_vence_at ? new Date(tarea.sla_vence_at).getTime() - ahora : null;
+  const c = ms == null ? colorSLA(0) : colorSLA(ms);
+  const etiqueta = tarea.tipo_tarea === "entrevista_prospecto" ? "Entrevista de operaciones" : "Llamada del supervisor";
+
+  const reactivar = async () => {
+    if (motivo.trim().length < 10) { setMsg({ ok: false, t: "Escribe el motivo (mínimo 10 caracteres)." }); return; }
+    setBusy(true); setMsg(null);
+    try {
+      const { data, error } = await sb.rpc("reactivar_sla_tarea", {
+        p_tarea_id: tarea.id, p_motivo: motivo.trim(),
+        p_horas: Number(horas) || 48, p_email: window.__PERFIL_EMAIL || "",
+      });
+      if (error) throw new Error(error.message);
+      if (data && data.ok === false) throw new Error(data.error || "no se pudo reactivar");
+      setMsg({ ok: true, t: `✅ Plazo renovado por ${horas} h.` });
+      setMotivo(""); setAbierto(false);
+      if (onReactivado) await onReactivado();
+    } catch (e) { setMsg({ ok: false, t: e.message }); }
+    finally { setBusy(false); }
+  };
+
+  const inp = { border: "1px solid #e4e7ec", borderRadius: 7, padding: "7px 9px", fontSize: 13, fontFamily: "'Geist',sans-serif" };
+
+  return (
+    <div style={{ background: c.bg, border: `1.5px solid ${c.bd}`, borderRadius: 10, padding: "12px 15px", marginBottom: 12 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <div style={{ fontSize: 12.5, fontWeight: 800, color: c.fg }}>
+          ⏱ {etiqueta}: {ms == null ? "sin plazo definido" : ms < 0 ? `SLA vencido hace ${fmtSLA(ms).replace("-", "")}` : `vence en ${fmtSLA(ms)}`}
+        </div>
+        <span style={{ fontSize: 11, color: "#667085" }}>
+          {tarea.sc ? `· ${tarea.sc}` : ""}{tarea.asignado_a ? ` · ${tarea.asignado_a}` : " · según SC"}
+        </span>
+        <button onClick={() => setAbierto(!abierto)}
+          style={{ marginLeft: "auto", background: "#fff", border: `1.5px solid ${c.fg}`, color: c.fg, borderRadius: 8, padding: "6px 12px", fontSize: 11.5, fontWeight: 800, cursor: "pointer", fontFamily: "'Geist',sans-serif" }}>
+          {abierto ? "Cancelar" : "🔄 Reactivar plazo"}
+        </button>
+      </div>
+
+      {abierto && (
+        <div style={{ marginTop: 10, background: "#fff", border: "1px solid #e4e7ec", borderRadius: 9, padding: "11px 13px" }}>
+          <div style={{ fontSize: 11, fontWeight: 800, color: "#667085", textTransform: "uppercase", marginBottom: 5 }}>
+            Motivo de la reactivación (obligatorio)
+          </div>
+          <textarea value={motivo} onChange={(e) => setMotivo(e.target.value)} rows={2}
+            placeholder="Ej. El prospecto no contestó en los intentos previos; se reagenda contacto para esta semana."
+            style={{ ...inp, width: "100%", boxSizing: "border-box", minHeight: 52 }} />
+          <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 11.5, color: "#667085", fontWeight: 700 }}>Nuevo plazo:</span>
+            <select value={horas} onChange={(e) => setHoras(e.target.value)} style={inp}>
+              <option value={24}>24 horas</option>
+              <option value={48}>48 horas</option>
+              <option value={72}>72 horas</option>
+              <option value={120}>5 días</option>
+            </select>
+            <button onClick={reactivar} disabled={busy}
+              style={{ marginLeft: "auto", background: "#1a3a6b", color: "#fff", border: "none", borderRadius: 8, padding: "9px 16px", fontSize: 12.5, fontWeight: 800, cursor: "pointer", opacity: busy ? 0.6 : 1, fontFamily: "'Geist',sans-serif" }}>
+              {busy ? "Guardando…" : "Reactivar y registrar"}
+            </button>
+          </div>
+          <div style={{ fontSize: 10.5, color: "#98a2b3", marginTop: 7 }}>
+            Queda registrado quién reactivó, cuándo, con qué motivo y cuánto llevaba vencida.
+          </div>
+        </div>
+      )}
+      {msg && <div style={{ marginTop: 8, fontSize: 12.5, fontWeight: 700, color: msg.ok ? "#166534" : "#c0392b" }}>{msg.t}</div>}
+    </div>
+  );
+}
+
 function DetalleCandidato({ candidato, onVolver, onActualizar, onPasarEtapa2 }) {
   const [analizando, setAnalizando] = useState(false);
   const [enviando, setEnviando] = useState(false);
@@ -2225,6 +2337,19 @@ function DetalleCandidato({ candidato, onVolver, onActualizar, onPasarEtapa2 }) 
   const [rechazando, setRechazando] = useState(false);
   const [motivo, setMotivo] = useState("");
   // Resolución de la Revisión Interna (posterior al rechazo de MELI)
+  // Tarea pendiente asociada (para el SLA y su reactivación)
+  const [tareaSLA, setTareaSLA] = useState(null);
+  const cargarTareaSLA = async () => {
+    const { data } = await sb.from("tareas_supervisor")
+      .select("id, tipo_tarea, estado, sc, asignado_a, sla_vence_at")
+      .eq("fuente", "certificaciones_mx").eq("registro_id", candidato.id)
+      .eq("estado", "pendiente")
+      .in("tipo_tarea", ["llamada_prospecto", "entrevista_prospecto"])
+      .order("created_at", { ascending: false }).limit(1);
+    setTareaSLA((data && data[0]) || null);
+  };
+  useEffect(() => { cargarTareaSLA(); }, [candidato.id]);
+
   // Minuta de la entrevista en terreno (para ver fotos y geolocalización)
   const [minutaDet, setMinutaDet] = useState(null);
   useEffect(() => { (async () => {
@@ -2548,6 +2673,9 @@ Responde con este JSON exacto:
 
         {/* Calificación de la llamada del supervisor (guion oficial) */}
         <CalificacionLlamada registroId={candidato.id} />
+
+        {/* SLA de la tarea pendiente + reactivación con motivo */}
+        <PanelSLA tarea={tareaSLA} onReactivado={cargarTareaSLA} />
 
         {/* Evidencia de la entrevista: fotos del supervisor + geolocalización.
             Aparece desde la etapa de entrevista, cuando ya existe la minuta. */}
@@ -3110,6 +3238,19 @@ function DetalleCertificacion({ cert, etapa, onVolver, onPasarEtapa2, onMoverA, 
 
   // Auto-Biggy al abrir en Etapa 2+ (solo personas), si no hay análisis cacheado.
   // Resolución de la Revisión Interna (posterior al rechazo de MELI)
+  // Tarea pendiente asociada (para el SLA y su reactivación)
+  const [tareaSLA, setTareaSLA] = useState(null);
+  const cargarTareaSLA = async () => {
+    const { data } = await sb.from("tareas_supervisor")
+      .select("id, tipo_tarea, estado, sc, asignado_a, sla_vence_at")
+      .eq("fuente", "certificaciones").eq("registro_id", cert.id)
+      .eq("estado", "pendiente")
+      .in("tipo_tarea", ["llamada_prospecto", "entrevista_prospecto"])
+      .order("created_at", { ascending: false }).limit(1);
+    setTareaSLA((data && data[0]) || null);
+  };
+  useEffect(() => { cargarTareaSLA(); }, [cert.id]);
+
   // Reactivación desde Stand By: el prospecto vuelve al flujo cuando se necesita
   const [reactivando, setReactivando] = useState(false);
   const reactivarFlujo = async () => {
@@ -3392,6 +3533,9 @@ function DetalleCertificacion({ cert, etapa, onVolver, onPasarEtapa2, onMoverA, 
           <ChatEmpresaCert terceroId={cert.tercero_id} empresa={ter?.nombre} titulo={titulo} />
         )}
 
+        {/* SLA de la tarea pendiente + reactivación con motivo */}
+        <PanelSLA tarea={tareaSLA} onReactivado={cargarTareaSLA} />
+
         {/* Datos editables: conductor o vehículo, según el tipo de certificación.
             Se guarda en la tabla hija correspondiente y se recarga la vista. */}
         <EditorDatos
@@ -3532,6 +3676,9 @@ function KanbanBoard({ items, columnas = COLUMNAS, onCardClick, onMover, onElimi
                         return <span style={{ color: d > 7 ? "#b45309" : "#667085", fontWeight: d > 7 ? 800 : 600 }}> · hace {d} día{d === 1 ? "" : "s"}</span>;
                       })()}
                     </div>
+                  )}
+                  {card.tarea?.sla_vence_at && (
+                    <div style={{ marginBottom: 5 }}><ChipSLA vence={card.tarea.sla_vence_at} /></div>
                   )}
                   <div style={{ fontSize: 13, fontWeight: 600, color: "#1a1a1a", marginBottom: 4, wordBreak: "break-word" }}>{card.titulo}</div>
                   {card.empresa && (
@@ -4848,7 +4995,18 @@ function ModuloCertificaciones() {
       const cardsA = (rp.data || []).filter(r => !r.oculto_kanban).map(normalizarProspeccion);
       const cardsB = (rc.data || []).filter(r => !r.oculto_kanban).map(normalizarPortalCert);
       // Portal primero para que lo más nuevo del rediseño quede visible arriba
-      setItems([...cardsB, ...cardsA]);
+      // SLA de las tareas pendientes, para el contador en cada tarjeta
+      let todas = [...cardsB, ...cardsA];
+      try {
+        const { data: tks } = await sb.from("tareas_supervisor")
+          .select("id, registro_id, tipo_tarea, sla_vence_at, estado, sc, asignado_a")
+          .eq("estado", "pendiente")
+          .in("tipo_tarea", ["llamada_prospecto", "entrevista_prospecto"]);
+        const porReg = {};
+        (tks || []).forEach((t) => { porReg[String(t.registro_id)] = t; });
+        todas = todas.map((i) => ({ ...i, tarea: porReg[String(i.id)] || null }));
+      } catch (e) { /* el contador es informativo: no debe romper el tablero */ }
+      setItems(todas);
     } catch (e) {
       console.error("Error cargando certificaciones:", e.message);
       if (!silencioso) setItems([]);
