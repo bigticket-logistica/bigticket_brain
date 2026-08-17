@@ -29,7 +29,8 @@ const ETAPAS_SOLO_INGRESOS = ["llamada_supervisor", "entrevista_operaciones", "s
 const COLUMNAS_B = COLUMNAS.filter(c => !ETAPAS_SOLO_INGRESOS.includes(c.id));
 
 // Etiquetas cortas para los KPIs del header (coinciden con las columnas)
-const ETAPA_CORTA = {
+const ETAPA_CORTA = {
+
   stand_by: "Stand By",
   recepcion: "Etapa 1 · Recepción", llamada_supervisor: "Etapa 2 · Llamada Sup.", prevalidacion_biggy: "Etapa 3 · Biggy", validacion_meli: "Etapa 4 · MELI",
   validacion_nubarium: "Etapa 5 · Nubarium/REPUVE", entrevista_operaciones: "Etapa 6 · Entrevista", solicitud_alta: "Etapa 7 · Sol. de Alta", firma_contrato: "Etapa 8 · Firma", revision_interna: "Revisión Interna", aceptado: "Aceptado", rechazado: "Rechazado",
@@ -916,9 +917,42 @@ function ResumenSolicitudAlta({ fuente, registro, datos, onEnviado }) {
       )}
       <Fila k="🏗 Items del contrato (Jefe)" v={
         itemsOp === null ? "Cargando…"
-        : itemsOp ? `${itemsOp.cantidad_vehiculos ?? "—"} vehículo(s) ${itemsOp.tipo_vehiculos || ""} · inicio ${itemsOp.fecha_inicio || "—"} · ${itemsOp.esquema_tarifa || "—"}`
+        : itemsOp ? `inicio ${itemsOp.fecha_inicio || "—"} · ${itemsOp.esquema_tarifa || itemsOp.tarifa_aplicable || "—"}`
         : (tareaAlta && tareaAlta.estado === "pendiente" ? "⏳ Pendiente — tarea Alta Operacional en Indicadores (SLA 24 h)" : "Sin completar")
       } />
+
+      {/* Líneas del Anexo A tal como las dejó el Jefe de Operaciones: lo que
+          esté incompleto aquí es exactamente lo que el analista tendrá que
+          cruzar a mano en Etapa 8 antes de generar el contrato. */}
+      {itemsOp && (
+        <Fila k="📋 Líneas del Anexo A" v={
+          Array.isArray(itemsOp.lineas) && itemsOp.lineas.length ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+              {itemsOp.lineas.slice(0, 3).map((l, i) => {
+                const svc = (l.svc || l.sc || "").toUpperCase();
+                const falta = [];
+                if (!svc) falta.push("SVC");
+                if (!normModeloLinea(l.modelo)) falta.push("modelo");
+                if (!normTipoVehiculo(l.tipo)) falta.push("tipo");
+                if (!String(l.n ?? l.cantidad ?? "").trim()) falta.push("cantidad");
+                if (!normAyudanteLinea(l.ayudante)) falta.push("ayudante");
+                return (
+                  <div key={i} style={{ fontSize: 12.5 }}>
+                    <b>{i + 1}.</b> {svc || "—"} · {normModeloLinea(l.modelo) || "—"} · {normTipoVehiculo(l.tipo) || "—"}
+                    {" · "}{String(l.n ?? l.cantidad ?? "—")} unidad(es) · ayudante {normAyudanteLinea(l.ayudante) || "—"}
+                    {l.placa ? <span style={{ color: "#667085" }}> · {String(l.placa).toUpperCase()}</span> : null}
+                    {falta.length ? <span style={{ color: "#c0392b", fontWeight: 700 }}> · falta {falta.join(", ")}</span> : null}
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <span style={{ color: "#b45309", fontWeight: 600 }}>
+              ⚠️ El Jefe no cargó las líneas por unidad — el analista deberá completarlas en Etapa 8.
+            </span>
+          )
+        } />
+      )}
 
       <button onClick={crearEmpresa} disabled={enviando}
         style={{ width: "100%", marginTop: 14, background: "#0f766e", color: "#fff", border: "none", borderRadius: 10,
@@ -968,6 +1002,31 @@ const CONTRATO_COORDS = {
     modX: 223.0, modY: { SDD: 458.3, Spot: 415.5, Backup: 377.3 },
     filasY: [293.0, 243.1, 193.2], ayudanteY: [301.0, 251.1, 201.2],
     svcX: 100, cantX: 292, ayuSiX: 350.2, ayuNoX: 375.0, obsX: 512,
+    // Casillas de la TABLA DE LÍNEAS (una fila por unidad). x absoluto y
+    // dy relativo al ancla de la fila (filasY). Medidas sobre la plantilla
+    // v2, página 13 (índice 12) — cada casilla va bajo su etiqueta.
+    lin: {
+      modelo: {
+        "SDD":    { x: 181.4, dy:  3.9 },
+        "Spot":   { x: 163.9, dy: -4.2 },
+        "Backup": { x: 205.1, dy: -4.2 },
+      },
+      tipo: {
+        "Large Van":  { x: 223.2, dy:  3.9 },
+        "Small Van":  { x: 223.2, dy: -4.2 },
+        "Car":        { x: 250.5, dy: -4.2 },
+        "Medium Van": { x: 264.7, dy: -12.4 },
+      },
+      ayudante: {
+        "Sí":               { x: 350.3, dy:  8.0 },
+        "No":               { x: 375.1, dy:  8.0 },
+        "Según activación": { x: 379.6, dy: -8.3 },
+      },
+      tarifa: {
+        "Tabla vigente": { x: 460.2, dy: -0.1 },
+        "Especial":      { x: 460.2, dy: -8.3 },
+      },
+    },
   },
   a2: {
     col: 311.7,
@@ -996,6 +1055,81 @@ function cargarPdfLib() {
 
 const MESES_ES = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
 
+// ── Línea operativa del Anexo A: una fila por unidad ─────────────────
+// Cada unidad tiene su propio SVC, modelo (SDD/Spot/Backup), tipo de
+// vehículo, ayudante y tarifa: dos camionetas del mismo transportista
+// pueden ser una SDD Large Van y otra Spot Small Van.
+const MODELOS_LINEA  = ["SDD", "Spot", "Backup"];
+const TIPOS_LINEA    = ["Large Van", "Medium Van", "Small Van", "Car"];
+const AYUDANTE_LINEA = ["Sí", "No", "Según activación"];
+const TARIFAS_LINEA  = ["Tabla vigente", "Especial"];
+
+// Normaliza lo que escriba el Jefe o venga de la minuta a los valores
+// exactos de la plantilla ("large" / "LARGE VAN" / "Van Grande" → "Large Van").
+function normTipoVehiculo(v) {
+  const t = String(v || "").toLowerCase().replace(/[^a-z]/g, "");
+  if (!t) return "";
+  if (t.includes("large") || t.includes("grande")) return "Large Van";
+  if (t.includes("medi")) return "Medium Van";      // cubre "Medim Van" de la plantilla
+  if (t.includes("small") || t.includes("chica") || t.includes("pequen")) return "Small Van";
+  if (t.includes("car") || t.includes("auto") || t.includes("sedan")) return "Car";
+  return TIPOS_LINEA.find((x) => x.toLowerCase() === String(v).toLowerCase()) || "";
+}
+function normModeloLinea(v) {
+  const t = String(v || "").toLowerCase();
+  if (!t) return "";
+  if (t.includes("sdd") || t.includes("dedic")) return "SDD";
+  if (t.includes("spot")) return "Spot";
+  if (t.includes("backup") || t.includes("respaldo")) return "Backup";
+  return "";
+}
+function normAyudanteLinea(v) {
+  const t = String(v || "").toLowerCase();
+  if (!t) return "";
+  if (t.startsWith("s")) return "Sí";
+  if (t.startsWith("n")) return "No";
+  if (t.includes("activ")) return "Según activación";
+  return "";
+}
+function normLinea(l, svcDefault, tarifaDefault) {
+  l = l || {};
+  return {
+    svc:      String(l.svc || l.sc || svcDefault || "").toUpperCase(),
+    modelo:   normModeloLinea(l.modelo || l.modelo_operativo),
+    tipo:     normTipoVehiculo(l.tipo || l.tipo_vehiculo),
+    n:        String(l.n ?? l.cantidad ?? l.cantidad_vehiculos ?? ""),
+    ayudante: normAyudanteLinea(l.ayudante ?? l.ayudante_helper),
+    tarifa:   TARIFAS_LINEA.includes(l.tarifa) ? l.tarifa : (tarifaDefault || "Tabla vigente"),
+    placa:    String(l.placa || "").toUpperCase(),
+    obs:      l.obs || "",
+  };
+}
+// Qué le falta al contrato para poder estamparse. Devuelve textos legibles.
+function faltantesContrato(D) {
+  const f = [];
+  if (!D) return ["sin datos"];
+  if (!String(D.nombre || "").trim())    f.push("Nombre / razón social");
+  if (!String(D.rfc || "").trim())       f.push("RFC");
+  if (!String(D.domicilio || "").trim()) f.push("Domicilio fiscal");
+  if (!String(D.fechaIni || "").trim())  f.push("Fecha de inicio de operación");
+  const ls = (D.lineas || []).filter((l) => l.tipo || l.modelo || l.n || l.svc);
+  if (!ls.length) f.push("Al menos una línea operativa (Anexo A)");
+  ls.forEach((l, i) => {
+    const q = [];
+    if (!l.svc)      q.push("SVC");
+    if (!l.modelo)   q.push("modelo (SDD/Spot/Backup)");
+    if (!l.tipo)     q.push("tipo de vehículo");
+    if (!String(l.n).trim()) q.push("cantidad");
+    if (!l.ayudante) q.push("ayudante");
+    if (q.length) f.push(`Línea ${i + 1}: falta ${q.join(", ")}`);
+  });
+  if (D.backup && D.backup.aplica === "Sí") {
+    if (!D.backup.svc)  f.push("Backup A.2: SVC");
+    if (!D.backup.tipo) f.push("Backup A.2: tipo de vehículo");
+  }
+  return f;
+}
+
 // Consolida las fuentes en un objeto EDITABLE por el analista.
 async function consolidarDatosContrato({ tabla, registro, datos }) {
   const { data: cos } = await sb.from("contrato_operacional")
@@ -1008,14 +1142,28 @@ async function consolidarDatosContrato({ tabla, registro, datos }) {
   const m = (ms && ms[0]) || {};
   const mf = m.datos?.fields || {}, mr = m.datos?.radio || {}, mm = m.datos?.multi || {};
 
+  const svcDefault    = ((co.sc || registro.svc || "").split("_").pop() || "").toUpperCase();
+  const tarifaDefault = co.tarifa_aplicable || "Tabla vigente";
+
+  // Prioridad de fuentes para la tabla del Anexo A:
+  //  1) contrato_operacional.lineas — lo que definió el JEFE DE OPERACIONES
+  //     (una fila por unidad, con su modelo, tipo, ayudante y tarifa).
+  //  2) unidades de la minuta de entrevista — una fila por unidad, con el
+  //     tipo que vio el supervisor en terreno; modelo y ayudante quedan
+  //     vacíos y el analista los completa en Etapa 8.
+  //  3) el resumen antiguo (tipo_vehiculos + cantidad_vehiculos) — una sola fila.
   let lineas = [];
   const vehs = Array.isArray(m.vehiculos) ? m.vehiculos : [];
-  if (vehs.length) {
-    const porTipo = {};
-    vehs.forEach(v => { const t = v.tipo || "Sin tipo"; porTipo[t] = (porTipo[t] || 0) + 1; });
-    lineas = Object.entries(porTipo).slice(0, 3).map(([tipo, n]) => ({ tipo, n: String(n) }));
+  if (Array.isArray(co.lineas) && co.lineas.length) {
+    lineas = co.lineas.slice(0, 3).map((l) => normLinea(l, svcDefault, tarifaDefault));
+  } else if (vehs.length) {
+    lineas = vehs.slice(0, 3).map((v) => normLinea(
+      { tipo: v.tipo, n: "1", placa: v.placa, ayudante: co.ayudante_helper },
+      svcDefault, tarifaDefault));
   } else {
-    lineas = [{ tipo: co.tipo_vehiculos || "", n: String(co.cantidad_vehiculos || "") }];
+    lineas = [normLinea(
+      { tipo: co.tipo_vehiculos, n: co.cantidad_vehiculos, modelo: co.modelos_operativos },
+      svcDefault, tarifaDefault)];
   }
 
   return {
@@ -1030,9 +1178,16 @@ async function consolidarDatosContrato({ tabla, registro, datos }) {
     tarifa:    co.tarifa_aplicable || "Tabla vigente",
     vigencia:  co.vigencia_particular || "12 meses renovables",
     fechaIni:  co.fecha_inicio || mf.op_inicio || "",
-    modelos:   (co.modelos_operativos ? co.modelos_operativos.split("/") : null) || mm.op_modelo || ["SDD"],
-    ayudante:  mr.op_ayudante === "Sí" ? "Sí" : "No",
-    svc:       ((co.sc || registro.svc || "").split("_").pop() || "").toUpperCase(),
+    // Bloque superior "Modelo" del Anexo A: es el conjunto de modelos que
+    // aparecen en las líneas (si una unidad es SDD y otra Spot, se marcan ambos).
+    modelos:   (() => {
+      const deLineas = [...new Set(lineas.map((l) => l.modelo).filter(Boolean))];
+      if (deLineas.length) return deLineas;
+      const deCO = (co.modelos_operativos || "").split("/").map(normModeloLinea).filter(Boolean);
+      return deCO.length ? deCO : (mm.op_modelo || []);
+    })(),
+    ayudante:  normAyudanteLinea(co.ayudante_helper || mr.op_ayudante) || "",
+    svc:       svcDefault,
     lineas,
     backup: {
       aplica: co.backup_aplica || "", svc: co.backup_svc || "", dias: co.backup_dias || "",
@@ -1076,21 +1231,35 @@ async function generarContratoPDFDesde(D, { tabla, registro }) {
   X(pA, D.b2b === "Sí" ? A.chkB2bSi : A.chkB2bNo);
   T(pA, A.col, A.fechaInicio, D.fechaIni); T(pA, A.col, A.vigencia, D.vigencia);
   (D.modelos || []).forEach(mo => { if (A.modY[mo]) X(pA, { x: A.modX, y: A.modY[mo] }); });
+  // Tabla de líneas: cada unidad marca SU modelo, SU tipo, SU ayudante y
+  // SU tarifa. Antes esto se escribía como texto en Observaciones y las
+  // casillas quedaban vacías — el analista tenía que cruzarlas a mano.
   (D.lineas || []).slice(0, 3).forEach((l, i) => {
-    if (!l.tipo && !l.n) return;
-    T(pA, A.svcX, A.filasY[i], D.svc, 8);
-    T(pA, A.cantX, A.filasY[i], l.n, 8);
-    X(pA, { x: D.ayudante === "Sí" ? A.ayuSiX : A.ayuNoX, y: A.ayudanteY[i] });
-    T(pA, A.obsX, A.filasY[i] + 9, l.tipo, 6.5);
-    T(pA, A.obsX, A.filasY[i] + 1, (D.modelos || []).join("/"), 6.5);
-    T(pA, A.obsX, A.filasY[i] - 7, D.tarifa, 6.5);
+    if (!l.tipo && !l.n && !l.modelo && !l.svc) return;
+    const y = A.filasY[i];
+    const casilla = (grupo, valor) => {
+      const c = A.lin[grupo] && A.lin[grupo][valor];
+      if (c) X(pA, { x: c.x, y: y + c.dy });
+    };
+    T(pA, A.svcX,  y, l.svc || D.svc, 8);
+    T(pA, A.cantX, y, l.n, 8);
+    casilla("modelo",   l.modelo);
+    casilla("tipo",     normTipoVehiculo(l.tipo));
+    casilla("ayudante", l.ayudante || D.ayudante);
+    casilla("tarifa",   l.tarifa || D.tarifa);
+    // Observaciones: solo lo que escriba el analista (placa u observación).
+    const obs = l.obs || l.placa || "";
+    if (obs) T(pA, A.obsX, y, obs, 6.5);
   });
 
-  // A.2 Backup Operativo (solo si el modelo Backup está en juego)
+  // A.2 Backup Operativo — la casilla Sí/No se marca SIEMPRE (antes, si
+  // nadie tocaba Backup, el anexo salía en blanco y el analista lo cruzaba).
   const bk = D.backup || {};
-  if ((D.modelos || []).includes("Backup") || bk.aplica) {
-    X(p2, bk.aplica === "Sí" ? B.chkSi : B.chkNo);
-    if (bk.aplica === "Sí") {
+  const aplicaBk = bk.aplica
+    || (((D.modelos || []).includes("Backup") || (D.lineas || []).some((l) => l.modelo === "Backup")) ? "Sí" : "No");
+  {
+    X(p2, aplicaBk === "Sí" ? B.chkSi : B.chkNo);
+    if (aplicaBk === "Sí") {
       T(p2, B.col, B.transportista, D.nombre);
       T(p2, B.col, B.svc, bk.svc);
       T(p2, B.col, B.dias, bk.dias);
@@ -1117,6 +1286,7 @@ function CGField({ label, children }) {
   return (<div><span style={CG_LBL}>{label}</span>{children}</div>);
 }
 function EditorContrato({ D, setD, generando, onGenerar }) {
+  const faltan = faltantesContrato(D);
   const S = (k, v) => setD((p) => ({ ...p, [k]: v }));
   const SB_ = (k, v) => setD((p) => ({ ...p, backup: { ...p.backup, [k]: v } }));
   const SL = (i, k, v) => setD((p) => ({ ...p, lineas: p.lineas.map((l, ix) => ix === i ? { ...l, [k]: v } : l) }));
@@ -1147,9 +1317,11 @@ function EditorContrato({ D, setD, generando, onGenerar }) {
           <select style={CG_INP} value={D.tarifa} onChange={(e) => S("tarifa", e.target.value)}><option>Tabla vigente</option><option>Especial</option></select></CGField>
         <CGField label="Fecha inicio operación"><input type="date" style={CG_INP} value={D.fechaIni} onChange={(e) => S("fechaIni", e.target.value)} /></CGField>
         <CGField label="Vigencia particular"><input style={CG_INP} value={D.vigencia} onChange={(e) => S("vigencia", e.target.value)} /></CGField>
-        <CGField label="¿Opera con ayudante?">
-          <select style={CG_INP} value={D.ayudante} onChange={(e) => S("ayudante", e.target.value)}><option>Sí</option><option>No</option></select></CGField>
-        <CGField label="SVC de las líneas"><input style={{ ...CG_INP, fontFamily: "monospace" }} value={D.svc} onChange={(e) => S("svc", e.target.value.toUpperCase())} /></CGField>
+        <CGField label="Ayudante (valor por defecto)">
+          <select style={CG_INP} value={D.ayudante || ""} onChange={(e) => S("ayudante", e.target.value)}>
+            <option value="">—</option>{AYUDANTE_LINEA.map((a) => <option key={a}>{a}</option>)}
+          </select></CGField>
+        <CGField label="SVC (valor por defecto)"><input style={{ ...CG_INP, fontFamily: "monospace" }} value={D.svc} onChange={(e) => S("svc", e.target.value.toUpperCase())} /></CGField>
       </div>
       <div style={{ marginTop: 10 }}>
         <span style={CG_LBL}>Modelos operativos (Anexo A)</span>
@@ -1166,20 +1338,52 @@ function EditorContrato({ D, setD, generando, onGenerar }) {
         </div>
       </div>
       <div style={{ marginTop: 10 }}>
-        <span style={CG_LBL}>Líneas operativas (Anexo A · máx. 3)</span>
-        {(D.lineas || []).map((l, i) => (
-          <div key={i} style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 6 }}>
-            <span style={{ fontSize: 12, fontWeight: 700, color: "#7c3aed", width: 16 }}>{i + 1}</span>
-            <select style={{ ...CG_INP, flex: 2 }} value={l.tipo} onChange={(e) => SL(i, "tipo", e.target.value)}>
-              <option value="">— Tipo —</option><option>Large Van</option><option>Medium Van</option><option>Small Van</option><option>Car</option>
-            </select>
-            <input type="number" min="0" placeholder="Cant." style={{ ...CG_INP, flex: 1, fontFamily: "monospace" }} value={l.n} onChange={(e) => SL(i, "n", e.target.value)} />
-            <button onClick={() => setD((p) => ({ ...p, lineas: p.lineas.filter((_, ix) => ix !== i) }))}
-              style={{ border: "none", background: "none", color: "#c0392b", fontSize: 11.5, fontWeight: 700, cursor: "pointer" }}>Quitar</button>
-          </div>
-        ))}
+        <span style={CG_LBL}>Líneas operativas del Anexo A · una fila por unidad (máx. 3)</span>
+        <div style={{ fontSize: 11, color: "#7c6f96", marginBottom: 6 }}>
+          Vienen del Jefe de Operaciones. Lo que falte, complétalo aquí: cada casilla se cruza en el PDF.
+        </div>
+        {(D.lineas || []).map((l, i) => {
+          const falta = (v) => (!v ? { border: "1.5px solid #f0b4b4", background: "#fff6f6" } : null);
+          return (
+            <div key={i} style={{ border: "1px solid #ede7fb", borderRadius: 10, padding: 10, marginBottom: 8, background: "#fcfaff" }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+                <span style={{ fontSize: 11.5, fontWeight: 800, color: "#7c3aed" }}>
+                  Línea {i + 1}{l.placa ? ` · ${l.placa}` : ""}
+                </span>
+                <button onClick={() => setD((p) => ({ ...p, lineas: p.lineas.filter((_, ix) => ix !== i) }))}
+                  style={{ border: "none", background: "none", color: "#c0392b", fontSize: 11.5, fontWeight: 700, cursor: "pointer" }}>Quitar</button>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(125px, 1fr))", gap: 8 }}>
+                <CGField label="Centro / SVC">
+                  <input style={{ ...CG_INP, ...falta(l.svc), fontFamily: "monospace" }} value={l.svc || ""}
+                    onChange={(e) => SL(i, "svc", e.target.value.toUpperCase())} placeholder="STX1" /></CGField>
+                <CGField label="Modelo">
+                  <select style={{ ...CG_INP, ...falta(l.modelo) }} value={l.modelo || ""} onChange={(e) => SL(i, "modelo", e.target.value)}>
+                    <option value="">— Modelo —</option>{MODELOS_LINEA.map((m) => <option key={m}>{m}</option>)}
+                  </select></CGField>
+                <CGField label="Tipo vehículo">
+                  <select style={{ ...CG_INP, ...falta(l.tipo) }} value={l.tipo || ""} onChange={(e) => SL(i, "tipo", e.target.value)}>
+                    <option value="">— Tipo —</option>{TIPOS_LINEA.map((t) => <option key={t}>{t}</option>)}
+                  </select></CGField>
+                <CGField label="Cantidad">
+                  <input type="number" min="0" style={{ ...CG_INP, ...falta(String(l.n || "").trim()), fontFamily: "monospace" }}
+                    value={l.n || ""} onChange={(e) => SL(i, "n", e.target.value)} /></CGField>
+                <CGField label="Ayudante / helper">
+                  <select style={{ ...CG_INP, ...falta(l.ayudante) }} value={l.ayudante || ""} onChange={(e) => SL(i, "ayudante", e.target.value)}>
+                    <option value="">— Ayudante —</option>{AYUDANTE_LINEA.map((a) => <option key={a}>{a}</option>)}
+                  </select></CGField>
+                <CGField label="Tarifa aplicable">
+                  <select style={CG_INP} value={l.tarifa || "Tabla vigente"} onChange={(e) => SL(i, "tarifa", e.target.value)}>
+                    {TARIFAS_LINEA.map((t) => <option key={t}>{t}</option>)}
+                  </select></CGField>
+                <CGField label="Observaciones">
+                  <input style={CG_INP} value={l.obs || ""} onChange={(e) => SL(i, "obs", e.target.value)} placeholder="Placa u observación" /></CGField>
+              </div>
+            </div>
+          );
+        })}
         {(D.lineas || []).length < 3 && (
-          <button onClick={() => setD((p) => ({ ...p, lineas: [...(p.lineas || []), { tipo: "", n: "" }] }))}
+          <button onClick={() => setD((p) => ({ ...p, lineas: [...(p.lineas || []), { svc: p.svc || "", modelo: "", tipo: "", n: "1", ayudante: p.ayudante || "", tarifa: p.tarifa || "Tabla vigente", obs: "" }] }))}
             style={{ border: "1.5px dashed #ddd0f7", background: "#faf7ff", color: "#7c3aed", borderRadius: 8, padding: "7px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "'Geist',sans-serif" }}>
             + Agregar línea
           </button>
@@ -1198,10 +1402,20 @@ function EditorContrato({ D, setD, generando, onGenerar }) {
           </div>
         </div>
       )}
-      <button onClick={onGenerar} disabled={generando}
-        style={{ width: "100%", marginTop: 12, background: "#7c3aed", color: "#fff", border: "none", borderRadius: 10,
-          padding: "12px", fontSize: 13.5, fontWeight: 700, cursor: "pointer", opacity: generando ? 0.6 : 1, fontFamily: "'Geist',sans-serif" }}>
-        {generando ? "Generando PDF…" : "📄 Generar PDF del contrato con estos datos"}
+      {faltan.length > 0 && (
+        <div style={{ marginTop: 12, background: "#fff6f6", border: "1px solid #f0b4b4", borderRadius: 10, padding: "10px 12px" }}>
+          <div style={{ fontSize: 11.5, fontWeight: 800, color: "#c0392b", marginBottom: 4 }}>
+            ⚠️ Falta completar antes de generar el contrato
+          </div>
+          <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12, color: "#8b3a3a", lineHeight: 1.55 }}>
+            {faltan.map((f, i) => <li key={i}>{f}</li>)}
+          </ul>
+        </div>
+      )}
+      <button onClick={onGenerar} disabled={generando || faltan.length > 0}
+        style={{ width: "100%", marginTop: 12, background: faltan.length ? "#c9c2d8" : "#7c3aed", color: "#fff", border: "none", borderRadius: 10,
+          padding: "12px", fontSize: 13.5, fontWeight: 700, cursor: faltan.length ? "not-allowed" : "pointer", opacity: generando ? 0.6 : 1, fontFamily: "'Geist',sans-serif" }}>
+        {generando ? "Generando PDF…" : faltan.length ? "Completa los datos marcados para generar el PDF" : "📄 Generar PDF del contrato con estos datos"}
       </button>
     </div>
   );
@@ -1729,8 +1943,9 @@ function SeccionFirmaContrato({ registro, tabla, datos, onActualizado }) {
 
   // Paso 2: generar el PDF con los datos revisados/editados
   const generarContrato = async () => {
-    if (!D.nombre.trim() || !D.rfc.trim() || !D.domicilio.trim()) {
-      alert("Nombre, RFC y domicilio fiscal son obligatorios para el contrato."); return;
+    const faltan = faltantesContrato(D);
+    if (faltan.length) {
+      alert("El contrato no puede generarse todavía:\n\n• " + faltan.join("\n• ")); return;
     }
     setGenerando(true);
     try {
@@ -3816,8 +4031,8 @@ function DocumentacionTerceros() {
         repse:     "", figura: "Moral", b2b: "No",
         tarifa:    "Tabla vigente", vigencia: "12 meses renovables",
         fechaIni:  perfil.fecha_ingreso_operacion || "",
-        modelos:   ["SDD"], ayudante: "No", svc: "",
-        lineas:    [{ tipo: "", n: "" }],
+        modelos:   [], ayudante: "", svc: "",
+        lineas:    [{ svc: "", modelo: "", tipo: "", n: "1", ayudante: "", tarifa: "Tabla vigente", obs: "" }],
         backup:    { aplica: "", svc: "", dias: "", tipo: "", costo: "", aprobador: "" },
       });
       setGenPdf(null); setGenRow(null); setFirmaEnviada(false);
@@ -3827,8 +4042,9 @@ function DocumentacionTerceros() {
   };
 
   const generarContratoEmpresa = async () => {
-    if (!DG.nombre.trim() || !DG.rfc.trim() || !DG.domicilio.trim()) {
-      alert("Nombre, RFC y domicilio fiscal son obligatorios para el contrato."); return;
+    const faltanG = faltantesContrato(DG);
+    if (faltanG.length) {
+      alert("El contrato no puede generarse todavía:\n\n• " + faltanG.join("\n• ")); return;
     }
     setGenBusy(true);
     try {
