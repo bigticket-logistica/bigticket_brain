@@ -3078,6 +3078,30 @@ function ConciliacionTercerosMX({ usuario }) {
     return filas;
   };
 
+  // ── Marcar viajes como YA PAGADOS por otro medio (fuera del flujo de prefacturas) ──
+  const marcarPagadoExterno = async (placa, filas) => {
+    if (!filas || !filas.length) return;
+    const metodo = prompt(`¿Cómo se pagaron los ${filas.length} viaje(s) de la placa ${placa}?\n\nEscrib\u00ed el método/motivo (ej: transferencia directa 12-08, incluido en prefactura manual, efectivo autorizado por gerencia):`);
+    if (metodo == null) return;
+    if (!metodo.trim()) return alert("El m\u00e9todo/motivo es obligatorio: queda en la auditor\u00eda.");
+    setAsignando(placa);
+    try {
+      const payload = filas.map(r => ({
+        fecha: String(r.fecha).slice(0, 10), id_ruta: String(r.id_ruta), placa: r.placa,
+        semana: Number(r.semana), monto: Number(r.monto || 0), metodo: metodo.trim(),
+        usuario: (usuario && (usuario.nombre || usuario.email)) || "Brain",
+      }));
+      const { error } = await sb.from("viajes_pago_externo_mx").upsert(payload, { onConflict: "fecha,id_ruta" });
+      if (error) throw error;
+      setMsg({ ok: true, txt: `${filas.length} viaje(s) de ${placa} marcados como pagados por otro medio (queda auditado).` });
+      await cargarNoPagados(semana);
+    } catch (e) {
+      console.error("pago externo:", e);
+      setMsg({ ok: false, txt: "Error marcando pago externo: " + (e.message || e) });
+    }
+    setAsignando(null);
+  };
+
   const agregarArrastre = async (placa, filas) => {
     const f0 = filas[0];
     const eleccion = asignacionSel[placa] || (f0.tiene_empresa ? f0.empresa : "");
@@ -4525,16 +4549,21 @@ function ConciliacionTercerosMX({ usuario }) {
 
       {/* Viajes que el motor pagó pero que nunca salieron en una prefactura ENVIADA */}
       {noPagRows && noPagRows.length > 0 && (() => {
+        const esGestionado = (r) => r.en_prefactura_actual || r.pago_externo; // ✓ verde: ya lo trabajó el analista
         const reales = noPagRows.filter(r => !r.quitado_auditado);
         const quitados = noPagRows.filter(r => r.quitado_auditado);
+        const pendientes = reales.filter(r => !esGestionado(r));
+        const gestionados = reales.filter(r => esGestionado(r));
         const visibles = noPagVerQuitados ? noPagRows : reales;
         if (!visibles.length) return null;
-        const montoTotal = reales.reduce((a, r) => a + Number(r.monto || 0), 0);
-        const sinAsociar = reales.filter(r => !r.tiene_empresa);
+        const montoTotal = pendientes.reduce((a, r) => a + Number(r.monto || 0), 0);
+        const sinAsociar = pendientes.filter(r => !r.tiene_empresa);
         // Agrupado por placa: la acción del analista es asociar la placa a un tercero
         const porPlaca = {};
         for (const r of visibles) (porPlaca[r.placa] = porPlaca[r.placa] || []).push(r);
         const placasOrden = Object.keys(porPlaca).sort((a, b) => {
+          const ga = porPlaca[a].every(esGestionado) ? 1 : 0, gb = porPlaca[b].every(esGestionado) ? 1 : 0;
+          if (ga !== gb) return ga - gb;                          // gestionados al final
           const sa = porPlaca[a][0].tiene_empresa ? 1 : 0, sbb = porPlaca[b][0].tiene_empresa ? 1 : 0;
           if (sa !== sbb) return sa - sbb;                       // sin asociar primero
           const wa = Math.min(...porPlaca[a].map(r => Number(r.semana)));
@@ -4547,7 +4576,8 @@ function ConciliacionTercerosMX({ usuario }) {
             <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 8 }}>
               <span style={{ fontSize: 14, fontWeight: 800, color: "#991b1b" }}>💸 Viajes sin pago enviado — semanas anteriores</span>
               <span style={{ fontSize: 12, color: "#b91c1c" }}>
-                {reales.length} viaje(s) · {fmtMon(montoTotal)}
+                {pendientes.length} viaje(s) pendiente(s) · {fmtMon(montoTotal)}
+                {gestionados.length ? ` · ✓ ${gestionados.length} gestionado(s)` : ""}
                 {sinAsociar.length ? ` · ${new Set(sinAsociar.map(r => r.placa)).size} placa(s) sin asociar` : ""}
                 {quitados.length ? ` · ${quitados.length} quitado(s) a propósito` : ""}
               </span>
@@ -4577,8 +4607,11 @@ function ConciliacionTercerosMX({ usuario }) {
                     const fechas = [...new Set(filas.map(r => String(r.fecha).slice(5, 10).split("-").reverse().join("-")))];
                     const motivos = [...new Set(filas.map(r => r.motivo))];
                     const auditado = f0.quitado_auditado;
+                    const pend = filas.filter(r => !esGestionado(r));
+                    const todoGestionado = !auditado && pend.length === 0;
+                    const parcial = !auditado && pend.length > 0 && pend.length < filas.length;
                     return (
-                      <tr key={placa} style={{ background: auditado ? "#f8fafc" : "transparent", opacity: auditado ? 0.7 : 1 }}>
+                      <tr key={placa} style={{ background: auditado ? "#f8fafc" : (todoGestionado ? "#f0fdf4" : "transparent"), opacity: auditado ? 0.7 : 1 }}>
                         <td style={{ padding: "6px 8px", fontWeight: 700, color: "#9a3412", whiteSpace: "nowrap" }}>{sems.join(", ")}</td>
                         <td style={{ padding: "6px 8px", fontFamily: "monospace", fontWeight: 700 }}>{placa}</td>
                         <td style={{ padding: "6px 8px", color: f0.tiene_empresa ? "#334155" : "#b91c1c", fontWeight: f0.tiene_empresa ? 400 : 700 }}>
@@ -4591,7 +4624,13 @@ function ConciliacionTercerosMX({ usuario }) {
                           {auditado ? "✓ " : ""}{motivos.join(" · ")}</td>
                         <td style={{ padding: "6px 8px", whiteSpace: "nowrap" }}>
                           {auditado ? <span style={{ fontSize: 10, color: "#94a3b8" }}>no requiere acción</span>
-                            : (<span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+                            : todoGestionado ? (
+                              <span style={{ fontSize: 11, fontWeight: 700, color: "#15803d", whiteSpace: "nowrap" }}
+                                title={filas.some(r => r.pago_externo) ? "Marcado como pagado por otro medio" : `Agregado a la prefactura de la sem ${semana} — se confirma al enviarla`}>
+                                ✓ {filas.every(r => r.pago_externo) ? "pagado por otro medio" : filas.some(r => r.pago_externo) ? "gestionado" : `en prefactura sem ${semana} · pendiente de envío`}
+                              </span>
+                            ) : (<span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+                                {parcial && <span style={{ fontSize: 9, fontWeight: 700, color: "#15803d", whiteSpace: "nowrap" }}>✓ {filas.length - pend.length}/{filas.length}</span>}
                                 <select value={asignacionSel[placa] != null ? asignacionSel[placa] : (f0.tiene_empresa ? f0.empresa : "")}
                                   onChange={e => setAsignacionSel(prev => ({ ...prev, [placa]: e.target.value }))}
                                   style={{ padding: "5px 8px", border: "1px solid #e4e7ec", borderRadius: 6, fontSize: 11, minWidth: 200 }}>
@@ -4603,6 +4642,10 @@ function ConciliacionTercerosMX({ usuario }) {
                                   title={`Agrega estos viajes como l\u00edneas \u26a0 en la prefactura de la semana actual (${semana}) del transportista elegido`}
                                   style={{ padding: "5px 12px", background: "#F47B20", color: "#fff", border: "none", borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: "pointer", opacity: asignando === placa ? 0.6 : 1, whiteSpace: "nowrap" }}>
                                   {asignando === placa ? "..." : `Agregar a sem. ${semana}`}</button>
+                                <button onClick={() => marcarPagadoExterno(placa, pend)} disabled={asignando === placa}
+                                  title="Marcar como YA PAGADO por otro medio (transferencia directa, efectivo, otra prefactura, etc.). Queda auditado y deja de contar como pendiente."
+                                  style={{ padding: "5px 10px", background: "#fff", color: "#15803d", border: "1.5px solid #86efac", borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>
+                                  ✓ Ya pagado</button>
                               </span>)}
                         </td>
                       </tr>
@@ -4614,7 +4657,7 @@ function ConciliacionTercerosMX({ usuario }) {
             <div style={{ fontSize: 10, color: "#b91c1c", marginTop: 8 }}>
               Viajes de semanas <b>ya cerradas</b> (la semana en curso no se incluye: sus prefacturas todavía no se envían) que el motor valorizó pero que nunca salieron en una prefactura enviada por correo.
               Un viaje se considera pagado cuando figura en el detalle de una prefactura con envío confirmado, o cuando tiene sello de envío (se cruza por fecha + ID de ruta).
-              “Agregar a sem. actual” mete los viajes como líneas ⚠ en la prefactura de <b>esta semana</b> del transportista elegido: suman al total y se pagan al cerrar y enviar esa prefactura. Desaparecen de acá cuando el envío se confirma.
+              “Agregar a sem. actual” mete los viajes como líneas ⚠ en la prefactura de <b>esta semana</b> del transportista elegido (✓ verde mientras espera el envío; desaparece al confirmarse). “✓ Ya pagado” marca viajes pagados por otro medio (transferencia directa, etc.), pidiendo el método y dejando auditoría.
             </div>
           </div>
         );
