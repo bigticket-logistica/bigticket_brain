@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { createClient } from "@supabase/supabase-js";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { sb } from "./shared";
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -661,6 +661,8 @@ function DetalleEmpresa({ empresa, onVolver, onActualizada }) {
 export default function ModuloEmpresas() {
   const [empresas, setEmpresas] = useState(null);
   const [pendientes, setPendientes] = useState(0);
+  const [conflictos, setConflictos] = useState([]);
+  const [verConflictos, setVerConflictos] = useState(false);
   const [pendSet, setPendSet] = useState(new Set());
   const [busca, setBusca] = useState("");
   const [filtro, setFiltro] = useState("todas");   // todas | activa | pausada | baja | pagos_pausados | sin_clabe
@@ -674,6 +676,12 @@ export default function ModuloEmpresas() {
     const { data: sol } = await sb.from("solicitudes_baja").select("tercero_id").in("estado", ["en_revision", "en_proceso"]);
     setPendSet(new Set((sol || []).map((x) => x.tercero_id)));
     setPendientes((sol || []).length);
+    // Conflictos de datos: RFC repetido, correo compartido, fichas múltiples,
+    // o ficha cuyo RFC no coincide con su empresa (fusión indebida).
+    try {
+      const { data: cf } = await sb.from("vw_terceros_conflictos").select("*");
+      setConflictos(cf || []);
+    } catch (e) { setConflictos([]); }
   };
   useEffect(() => { cargar(); }, []);
 
@@ -707,6 +715,34 @@ export default function ModuloEmpresas() {
       </div>
 
       {/* KPIs — clic para filtrar el listado */}
+      {verConflictos && conflictos.length > 0 && (
+        <div style={{ background: "#fdecea", border: "1.5px solid #f5c6c0", borderRadius: 11, padding: "14px 17px", marginBottom: 14 }}>
+          <div style={{ fontSize: 13.5, fontWeight: 800, color: "#c0392b", marginBottom: 8 }}>
+            ⚠ Conflictos de datos que requieren revisión ({conflictos.length})
+          </div>
+          {conflictos.map((c, i) => {
+            const et = {
+              rfc_duplicado:      { t: "RFC repetido en varias empresas", g: "Son la misma empresa: hay que fusionarlas." },
+              correo_compartido:  { t: "Correo compartido", g: "Puede ser válido (un contador para varios), pero verifica que no sean duplicados." },
+              fichas_multiples:   { t: "Varias fichas de prefactura", g: "La prefactura podría enviarse al correo equivocado." },
+              rfc_ficha_distinto: { t: "RFC de la ficha ≠ RFC de la empresa", g: "Fusión indebida: son empresas distintas y hay que separarlas." },
+            }[c.tipo] || { t: c.tipo, g: "" };
+            return (
+              <div key={i} style={{ background: "#fff", border: "1px solid #f0c4c4", borderRadius: 8, padding: "9px 12px", marginBottom: 7 }}>
+                <div style={{ fontSize: 12, fontWeight: 800, color: "#c0392b" }}>
+                  {et.t} · <span style={{ fontFamily: "monospace" }}>{c.valor}</span>
+                  {c.empresas > 1 ? <span style={{ color: "#8a4a0f" }}> ×{c.empresas}</span> : null}
+                </div>
+                <div style={{ fontSize: 11.5, color: "#475467", marginTop: 2, wordBreak: "break-word" }}>{c.detalle}</div>
+                {et.g ? <div style={{ fontSize: 11, color: "#98a2b3", marginTop: 3, fontStyle: "italic" }}>{et.g}</div> : null}
+              </div>
+            );
+          })}
+          <div style={{ fontSize: 11, color: "#8a4a0f", marginTop: 4 }}>
+            Estos casos no se corrigen solos: avisa a soporte con el detalle para fusionar o separar las empresas.
+          </div>
+        </div>
+      )}
       <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
         <Kpi n={(empresas || []).length} label="Empresas" activo={filtro === "todas"} onClick={() => setFiltro("todas")} />
         <Kpi n={n((e) => (e.estado_operacional || "activa") === "activa")} label="Activas" color="#166534" activo={filtro === "activa"} onClick={() => setFiltro("activa")} />
@@ -714,6 +750,7 @@ export default function ModuloEmpresas() {
         <Kpi n={n((e) => !!e.pagos_pausados)} label="Pagos pausados" color="#c0392b" activo={filtro === "pagos_pausados"} onClick={() => setFiltro("pagos_pausados")} />
         <Kpi n={n((e) => !e.cuenta_clabe)} label="Sin CLABE" color={ORANGE} activo={filtro === "sin_clabe"} onClick={() => setFiltro("sin_clabe")} />
         <Kpi n={pendientes} label="Solicitudes pendientes" color={pendientes ? "#c0392b" : NAVY} activo={filtro === "con_solicitudes"} onClick={() => setFiltro("con_solicitudes")} />
+        <Kpi n={conflictos.length} label="⚠ Conflictos de datos" color={conflictos.length ? "#c0392b" : NAVY} activo={verConflictos} onClick={() => setVerConflictos(!verConflictos)} />
       </div>
 
       {/* Buscador + filtros */}
