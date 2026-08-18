@@ -5185,6 +5185,325 @@ function AltaVehiculosPersonal({ onCreada }) {
   );
 }
 
+
+// ─── 🔔 AVISOS Y RECORDATORIOS ────────────────────────────────────────
+// Lo que Certificaciones le pidió a un tercero y sigue sin resolverse.
+// Ciclo: pendiente → (3 días) avisado por correo + WhatsApp → (lunes
+// siguiente) escalado, con la prefactura del tercero en pausa.
+// El barrido de 3 días y el del lunes corren en n8n; esta pestaña es la
+// vista del analista y el punto donde se cierra o se libera a mano.
+const SOL_TIPOS = {
+  firma_contrato:      { label: "Firma de contrato",       icon: "✍️" },
+  firma_anexo:         { label: "Firma de anexo",          icon: "📎" },
+  actualizacion_datos: { label: "Actualización de datos",  icon: "🏢" },
+  documento_pendiente: { label: "Documento pendiente",     icon: "📄" },
+  otro:                { label: "Otro",                    icon: "•" },
+};
+const SOL_ESTADOS = {
+  pendiente: { label: "Pendiente",        color: "#166534", bg: "#e8f5ec", border: "#c3e6cd" },
+  avisado:   { label: "Aviso enviado",    color: "#b45309", bg: "#fff8e6", border: "#f5d9b8" },
+  escalado:  { label: "Escalado",         color: "#c0392b", bg: "#fbeaea", border: "#f0b4b4" },
+  cumplida:  { label: "Cumplida",         color: "#0f766e", bg: "#e7f5f2", border: "#c4e6df" },
+  anulada:   { label: "Anulada",          color: "#667085", bg: "#f2f4f7", border: "#e4e7ec" },
+};
+const WEBHOOK_AVISO_MANUAL = "https://bigticket2026.app.n8n.cloud/webhook/aviso-solicitud-tercero";
+
+function AvisosRecordatorios({ onContador }) {
+  const [rows, setRows] = useState(null);
+  const [bloqueos, setBloqueos] = useState([]);
+  const [filtro, setFiltro] = useState("atencion");   // atencion | todas | cumplidas
+  const [busca, setBusca] = useState("");
+  const [busyId, setBusyId] = useState(null);
+  const [nueva, setNueva] = useState(false);
+  const [terceros, setTerceros] = useState([]);
+  const [f, setF] = useState({ tercero_id: "", tipo: "actualizacion_datos", titulo: "", detalle: "", dias_plazo: 3 });
+
+  const cargar = async () => {
+    const [{ data: sols }, { data: blo }] = await Promise.all([
+      sb.from("vw_solicitudes_tercero").select("*").order("solicitado_at", { ascending: false }).limit(400),
+      sb.from("vw_terceros_bloqueados_prefactura").select("*"),
+    ]);
+    setRows(sols || []);
+    setBloqueos(blo || []);
+    if (onContador) onContador((sols || []).filter((r) => r.estado === "avisado" || r.estado === "escalado"
+      || (r.estado === "pendiente" && r.semaforo === "amarillo")).length);
+  };
+  useEffect(() => { cargar(); (async () => {
+    const { data } = await sb.from("terceros").select("id, nombre, email_portal").order("nombre");
+    setTerceros(data || []);
+  })(); }, []);
+  // Refresco suave: los barridos de n8n cambian estados mientras la
+  // pestaña está abierta.
+  useEffect(() => {
+    const t = setInterval(() => { if (!document.hidden) cargar(); }, 60000);
+    return () => clearInterval(t);
+  }, []);
+
+  const crear = async () => {
+    if (!f.tercero_id || !f.titulo.trim()) { alert("Selecciona la empresa y escribe qué se le solicita."); return; }
+    setBusyId("nueva");
+    try {
+      const { data, error } = await sb.rpc("crear_solicitud_tercero", {
+        p_tercero_id: f.tercero_id, p_tipo: f.tipo, p_titulo: f.titulo.trim(),
+        p_detalle: f.detalle.trim() || null, p_origen: "manual",
+        p_email: window.__PERFIL_EMAIL || "brain",
+        p_dias_plazo: parseInt(f.dias_plazo, 10) || 3,
+      });
+      if (error) throw new Error(error.message);
+      if (data && data.ok === false) throw new Error(data.error);
+      if (data && data.duplicada) alert("Ya existía una solicitud viva del mismo tipo para esa empresa — no se duplicó.");
+      setNueva(false);
+      setF({ tercero_id: "", tipo: "actualizacion_datos", titulo: "", detalle: "", dias_plazo: 3 });
+      await cargar();
+    } catch (e) { alert("No se pudo crear: " + e.message); }
+    finally { setBusyId(null); }
+  };
+
+  const cumplir = async (r) => {
+    if (!confirm(`¿Marcar como cumplida "${r.titulo}"?\n\nSi la empresa tenía la prefactura en pausa por esta solicitud, se libera.`)) return;
+    setBusyId(r.id);
+    try {
+      const { data, error } = await sb.rpc("cumplir_solicitud_tercero", { p_id: r.id, p_email: window.__PERFIL_EMAIL || "brain" });
+      if (error) throw new Error(error.message);
+      if (data && data.ok === false) throw new Error(data.error);
+      if (data && data.escaladas_restantes > 0)
+        alert(`Cumplida. Atención: a esta empresa le quedan ${data.escaladas_restantes} solicitud(es) escalada(s), así que la prefactura sigue en pausa.`);
+      await cargar();
+    } catch (e) { alert("No se pudo cerrar: " + e.message); }
+    finally { setBusyId(null); }
+  };
+
+  const anular = async (r) => {
+    const motivo = prompt("Motivo de la anulación (mínimo 10 caracteres):", "");
+    if (motivo === null) return;
+    setBusyId(r.id);
+    try {
+      const { data, error } = await sb.rpc("anular_solicitud_tercero", { p_id: r.id, p_motivo: motivo, p_email: window.__PERFIL_EMAIL || "brain" });
+      if (error) throw new Error(error.message);
+      if (data && data.ok === false) throw new Error(data.error);
+      await cargar();
+    } catch (e) { alert("No se pudo anular: " + e.message); }
+    finally { setBusyId(null); }
+  };
+
+  // Reenvío manual del aviso (mismo flujo de n8n que el barrido de 3 días).
+  const reenviar = async (r) => {
+    if (!confirm(`¿Reenviar el aviso de "${r.titulo}" a ${r.empresa || "la empresa"} por correo y WhatsApp?`)) return;
+    setBusyId(r.id);
+    try {
+      const resp = await fetch(WEBHOOK_AVISO_MANUAL, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ solicitud_id: r.id, origen: "brain_manual" }),
+      });
+      const txt = await resp.text();
+      if (!resp.ok) throw new Error(txt || "el servicio de avisos no respondió");
+      await cargar();
+      alert("Aviso reenviado.");
+    } catch (e) { alert("No se pudo reenviar: " + e.message); }
+    finally { setBusyId(null); }
+  };
+
+  const liberar = async (b) => {
+    const motivo = prompt(`Liberar la prefactura de ${b.empresa || "la empresa"} sin que regularice.\n\nMotivo (mínimo 10 caracteres, queda auditado):`, "");
+    if (motivo === null) return;
+    try {
+      const { data, error } = await sb.rpc("liberar_bloqueo_prefactura", { p_tercero_id: b.tercero_id, p_motivo: motivo, p_email: window.__PERFIL_EMAIL || "brain" });
+      if (error) throw new Error(error.message);
+      if (data && data.ok === false) throw new Error(data.error);
+      await cargar();
+    } catch (e) { alert("No se pudo liberar: " + e.message); }
+  };
+
+  const vivas = (rows || []).filter((r) => ["pendiente", "avisado", "escalado"].includes(r.estado));
+  const nAtencion = vivas.filter((r) => r.estado !== "pendiente" || r.semaforo === "amarillo").length;
+  const nEscaladas = vivas.filter((r) => r.estado === "escalado").length;
+
+  const q = busca.trim().toLowerCase();
+  const visibles = (rows || []).filter((r) => {
+    if (filtro === "atencion" && !(["pendiente", "avisado", "escalado"].includes(r.estado)
+      && (r.estado !== "pendiente" || r.semaforo === "amarillo"))) return false;
+    if (filtro === "todas" && !["pendiente", "avisado", "escalado"].includes(r.estado)) return false;
+    if (filtro === "cumplidas" && !["cumplida", "anulada"].includes(r.estado)) return false;
+    if (!q) return true;
+    return `${r.empresa || ""} ${r.titulo || ""} ${r.detalle || ""}`.toLowerCase().includes(q);
+  });
+
+  const Kpi = ({ label, valor, color, bg }) => (
+    <div style={{ flex: "1 1 130px", background: bg, border: `1px solid ${color}33`, borderRadius: 10, padding: "10px 12px" }}>
+      <div style={{ fontSize: 10, fontWeight: 700, color: "#888", textTransform: "uppercase", letterSpacing: ".04em" }}>{label}</div>
+      <div style={{ fontSize: 22, fontWeight: 800, color, fontVariantNumeric: "tabular-nums" }}>{valor}</div>
+    </div>
+  );
+
+  const inp = { width: "100%", boxSizing: "border-box", border: "1px solid #e4e7ec", borderRadius: 8, padding: "9px 11px", fontSize: 13, fontFamily: "'Geist',sans-serif", background: "#fff" };
+  const lbl = { fontSize: 10, fontWeight: 700, color: "#888", textTransform: "uppercase", marginBottom: 4, display: "block" };
+
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
+        <div className="sec-title" style={{ margin: 0, flex: 1 }}>🔔 Avisos y Recordatorios</div>
+        <button onClick={() => setNueva(!nueva)}
+          style={{ padding: "9px 16px", borderRadius: 8, border: "none", background: "#1a3a6b", color: "#fff", fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: "'Geist',sans-serif" }}>
+          {nueva ? "✕ Cancelar" : "➕ Nueva solicitud"}
+        </button>
+        <button onClick={cargar}
+          style={{ padding: "9px 14px", borderRadius: 8, border: "0.5px solid #e4e7ec", background: "#fff", color: "#1a3a6b", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "'Geist',sans-serif" }}>
+          🔄 Actualizar
+        </button>
+      </div>
+
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
+        <Kpi label="Requieren atención" valor={nAtencion} color="#b45309" bg="#fff8e6" />
+        <Kpi label="Escaladas" valor={nEscaladas} color="#c0392b" bg="#fbeaea" />
+        <Kpi label="Prefacturas en pausa" valor={bloqueos.length} color="#7c3aed" bg="#f5f0fe" />
+        <Kpi label="Vivas en total" valor={vivas.length} color="#1a3a6b" bg="#eef2f7" />
+      </div>
+
+      {/* Prefacturas pausadas: lo que el motor de Pagos debe respetar */}
+      {bloqueos.length > 0 && (
+        <div style={{ background: "#fbeaea", border: "1px solid #f0b4b4", borderRadius: 12, padding: 14, marginBottom: 14 }}>
+          <div style={{ fontSize: 12, fontWeight: 800, color: "#c0392b", marginBottom: 8, textTransform: "uppercase", letterSpacing: ".4px" }}>
+            🚫 Prefactura en pausa por documentación pendiente
+          </div>
+          {bloqueos.map((b) => (
+            <div key={b.tercero_id} style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", padding: "7px 0", borderBottom: "1px solid #f5d0d0", fontSize: 13 }}>
+              <span style={{ fontWeight: 700, flex: 1, minWidth: 180 }}>{b.empresa || b.tercero_id}</span>
+              <span style={{ fontSize: 12, color: "#8b3a3a" }}>{b.motivos}</span>
+              <span style={{ fontSize: 11.5, color: "#888" }}>desde {b.desde ? fMX(b.desde, { day: "2-digit", month: "short" }) : "—"}</span>
+              <button onClick={() => liberar(b)}
+                style={{ border: "1px solid #c0392b", background: "#fff", color: "#c0392b", borderRadius: 7, padding: "5px 12px", fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: "'Geist',sans-serif" }}>
+                Liberar con motivo
+              </button>
+            </div>
+          ))}
+          <div style={{ fontSize: 11, color: "#8b3a3a", marginTop: 8 }}>
+            El motor de Pagos consulta <b>vw_terceros_bloqueados_prefactura</b> antes de enviar la prefactura.
+          </div>
+        </div>
+      )}
+
+      {/* Nueva solicitud manual */}
+      {nueva && (
+        <div className="form-card" style={{ marginBottom: 14 }}>
+          <div className="form-title" style={{ marginTop: 0 }}>➕ Solicitar algo a una empresa</div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10 }}>
+            <div><span style={lbl}>Empresa *</span>
+              <select value={f.tercero_id} onChange={(e) => setF({ ...f, tercero_id: e.target.value })} style={inp}>
+                <option value="">Selecciona…</option>
+                {terceros.map((t) => <option key={t.id} value={t.id}>{t.nombre}</option>)}
+              </select></div>
+            <div><span style={lbl}>Tipo *</span>
+              <select value={f.tipo} onChange={(e) => setF({ ...f, tipo: e.target.value })} style={inp}>
+                {Object.entries(SOL_TIPOS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+              </select></div>
+            <div><span style={lbl}>Días de plazo antes del aviso</span>
+              <input type="number" min="0" value={f.dias_plazo} onChange={(e) => setF({ ...f, dias_plazo: e.target.value })} style={{ ...inp, fontFamily: "monospace" }} /></div>
+          </div>
+          <div style={{ marginTop: 10 }}>
+            <span style={lbl}>Qué se le solicita *</span>
+            <input value={f.titulo} onChange={(e) => setF({ ...f, titulo: e.target.value })}
+              placeholder="Ej. Actualizar datos de empresa en el portal" style={inp} />
+          </div>
+          <div style={{ marginTop: 10 }}>
+            <span style={lbl}>Detalle (va en el correo)</span>
+            <textarea value={f.detalle} onChange={(e) => setF({ ...f, detalle: e.target.value })} rows={2}
+              placeholder="Qué debe hacer exactamente y dónde" style={{ ...inp, resize: "vertical" }} />
+          </div>
+          <button onClick={crear} disabled={busyId === "nueva"}
+            style={{ width: "100%", marginTop: 12, background: "#1a3a6b", color: "#fff", border: "none", borderRadius: 8, padding: "12px", fontSize: 13, fontWeight: 700, cursor: "pointer", opacity: busyId === "nueva" ? 0.6 : 1, fontFamily: "'Geist',sans-serif" }}>
+            {busyId === "nueva" ? "Creando…" : "✓ Crear solicitud"}
+          </button>
+          <div style={{ fontSize: 11, color: "#888", marginTop: 8, textAlign: "center" }}>
+            El recordatorio por correo y WhatsApp sale solo cuando se cumplan los días de plazo.
+          </div>
+        </div>
+      )}
+
+      {/* Filtros */}
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 12 }}>
+        {[["atencion", `⚠️ Requieren atención (${nAtencion})`], ["todas", `Todas las vivas (${vivas.length})`], ["cumplidas", "Cerradas"]].map(([v, l]) => (
+          <button key={v} onClick={() => setFiltro(v)}
+            style={{ padding: "8px 14px", borderRadius: 8, cursor: "pointer", fontSize: 12.5, fontFamily: "'Geist',sans-serif",
+              fontWeight: filtro === v ? 700 : 500,
+              background: filtro === v ? "#1a3a6b" : "#fff", color: filtro === v ? "#fff" : "#555",
+              border: filtro === v ? "1.5px solid #1a3a6b" : "1px solid #e4e7ec" }}>{l}</button>
+        ))}
+        <input value={busca} onChange={(e) => setBusca(e.target.value)} placeholder="🔍 Empresa o solicitud…"
+          style={{ ...inp, flex: 1, minWidth: 180, width: "auto" }} />
+      </div>
+
+      {/* Listado */}
+      {rows === null ? (
+        <div style={{ background: "#fff", border: "0.5px solid #e4e7ec", borderRadius: 12, padding: 24, textAlign: "center", color: "#888", fontSize: 13 }}>Cargando solicitudes…</div>
+      ) : visibles.length === 0 ? (
+        <div style={{ background: "#fff", border: "0.5px solid #e4e7ec", borderRadius: 12, padding: 32, textAlign: "center" }}>
+          <div style={{ fontSize: 30, marginBottom: 8 }}>✅</div>
+          <div style={{ fontWeight: 700, marginBottom: 4 }}>Nada pendiente por avisar</div>
+          <div style={{ fontSize: 12, color: "#888" }}>Las solicitudes aparecen aquí en cuanto se envía un contrato a firma o se pide una actualización.</div>
+        </div>
+      ) : visibles.map((r) => {
+        const est = SOL_ESTADOS[r.estado] || SOL_ESTADOS.pendiente;
+        const tp = SOL_TIPOS[r.tipo] || SOL_TIPOS.otro;
+        const amarillo = r.estado === "avisado" || (r.estado === "pendiente" && r.semaforo === "amarillo");
+        return (
+          <div key={r.id} style={{ background: "#fff", border: "0.5px solid #e4e7ec",
+            borderLeft: `4px solid ${est.color}`, borderRadius: 12, padding: 16, marginBottom: 10 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              <div style={{ flex: 1, minWidth: 220 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 3 }}>
+                  <span style={{ fontSize: 14, fontWeight: 800 }}>{tp.icon} {r.titulo}</span>
+                  <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 9px", borderRadius: 20, background: est.bg, color: est.color, border: `1px solid ${est.border}` }}>
+                    {est.label}
+                  </span>
+                  {/* Aviso amarillo en la línea de la solicitud */}
+                  {amarillo && (
+                    <span style={{ fontSize: 10.5, fontWeight: 800, padding: "2px 9px", borderRadius: 20, background: "#fff8e6", color: "#b45309", border: "1px solid #f5d9b8" }}>
+                      ⚠️ {r.estado === "avisado"
+                        ? `Aviso enviado hace ${r.dias_desde_aviso ?? 0} día(s)`
+                        : `${r.dias_solicitada} días sin respuesta — se avisará en el próximo barrido`}
+                    </span>
+                  )}
+                  {r.prefactura_bloqueada && (
+                    <span style={{ fontSize: 10.5, fontWeight: 800, padding: "2px 9px", borderRadius: 20, background: "#fbeaea", color: "#c0392b", border: "1px solid #f0b4b4" }}>
+                      🚫 Prefactura en pausa
+                    </span>
+                  )}
+                </div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: "#1a3a6b" }}>{r.empresa || "— empresa sin crear —"}</div>
+                {r.detalle && <div style={{ fontSize: 12, color: "#667085", marginTop: 2 }}>{r.detalle}</div>}
+                <div style={{ fontSize: 11.5, color: "#888", marginTop: 3 }}>
+                  Solicitada el {fMX(r.solicitado_at, { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}
+                  {" · "}{r.dias_solicitada} día(s)
+                  {r.aviso_at && <> · aviso {fMX(r.aviso_at, { day: "2-digit", month: "short" })}</>}
+                  {r.escalar_desde && r.estado === "avisado" && <> · escala el {String(r.escalar_desde)}</>}
+                  {r.escalado_at && <> · escalada el {fMX(r.escalado_at, { day: "2-digit", month: "short" })}</>}
+                  {r.aviso_canales && <> · canales: {Object.entries(r.aviso_canales).map(([k, v]) => `${k}=${v}`).join(", ")}</>}
+                </div>
+              </div>
+              {["pendiente", "avisado", "escalado"].includes(r.estado) && (
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  <button onClick={() => cumplir(r)} disabled={busyId === r.id}
+                    style={{ border: "none", background: "#0f766e", color: "#fff", borderRadius: 7, padding: "7px 13px", fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: "'Geist',sans-serif" }}>
+                    ✓ Cumplida
+                  </button>
+                  <button onClick={() => reenviar(r)} disabled={busyId === r.id}
+                    style={{ border: "1px solid #e4e7ec", background: "#fff", color: "#1a3a6b", borderRadius: 7, padding: "7px 13px", fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: "'Geist',sans-serif" }}>
+                    ↻ Reenviar aviso
+                  </button>
+                  <button onClick={() => anular(r)} disabled={busyId === r.id}
+                    style={{ border: "none", background: "none", color: "#c0392b", fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: "'Geist',sans-serif" }}>
+                    Anular
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function ModuloCertificaciones() {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -5195,8 +5514,23 @@ function ModuloCertificaciones() {
   const [busqueda, setBusqueda] = useState("");
   const [filtroFuente, setFiltroFuente] = useState("todas");
   const [filtroTipo, setFiltroTipo] = useState("todos");
+  // Contador amarillo de la pestaña Avisos: solicitudes que ya requieren
+  // atención (avisadas, escaladas o vencidas sin avisar).
+  const [nAvisos, setNAvisos] = useState(0);
 
   useEffect(() => { (async () => { await autoSyncCRM(); await cargar(); })(); }, []);
+
+  // El contador se lee aunque la pestaña Avisos no esté abierta, para que
+  // el número esté visible desde que se entra al módulo.
+  useEffect(() => {
+    const leer = async () => {
+      const { data } = await sb.from("vw_avisos_contador").select("atencion").maybeSingle();
+      if (data) setNAvisos(data.atencion || 0);
+    };
+    leer();
+    const t = setInterval(() => { if (!document.hidden) leer(); }, 120000);
+    return () => clearInterval(t);
+  }, []);
 
   const [refrescando, setRefrescando] = useState(false);
   const cargar = async (silencioso = false) => {
@@ -5501,12 +5835,21 @@ function ModuloCertificaciones() {
 
       {/* Pestañas de sección */}
       <div style={{ display: "flex", gap: 4, marginBottom: 18, borderBottom: "1px solid #e4e7ec" }}>
-        {[["certificaciones", "📋 Certificaciones"], ["altas", "➕ Vehículos y Personal"], ["contratos", "📑 Gestionador de Contratos"], ["documentacion", "🗂 Documentación Terceros"], ["mensajes", "💬 Mensajes"]].map(([v, l]) => (
+        {[["certificaciones", "📋 Certificaciones"], ["altas", "➕ Vehículos y Personal"], ["contratos", "📑 Gestionador de Contratos"], ["documentacion", "🗂 Documentación Terceros"], ["avisos", "🔔 Avisos"], ["mensajes", "💬 Mensajes"]].map(([v, l]) => (
           <button key={v} onClick={() => { setSeccion(v); setSelected(null); }}
             style={{ padding: "10px 16px", border: "none", cursor: "pointer", fontSize: 13, fontFamily: "'Geist',sans-serif",
               background: "transparent", fontWeight: seccion === v ? 700 : 400,
-              color: seccion === v ? "#1a3a6b" : "#888",
+              color: seccion === v ? "#1a3a6b" : "#888", position: "relative",
               borderBottom: seccion === v ? "2.5px solid #F47B20" : "2.5px solid transparent", marginBottom: -1 }}>
+            {/* Número amarillo sobre el nombre de la pestaña */}
+            {v === "avisos" && nAvisos > 0 && (
+              <span style={{ position: "absolute", top: -2, right: 4, minWidth: 18, height: 18, padding: "0 5px",
+                borderRadius: 999, background: "#F5B301", color: "#3d2b00", fontSize: 10.5, fontWeight: 800,
+                display: "inline-flex", alignItems: "center", justifyContent: "center", lineHeight: 1,
+                border: "1px solid #dc9f00", fontVariantNumeric: "tabular-nums" }}>
+                {nAvisos > 99 ? "99+" : nAvisos}
+              </span>
+            )}
             {l}
           </button>
         ))}
@@ -5515,6 +5858,7 @@ function ModuloCertificaciones() {
       {seccion === "altas" && <AltaVehiculosPersonal onCreada={() => cargar(true)} />}
       {seccion === "contratos" && <GestionadorContratos />}
       {seccion === "documentacion" && <DocumentacionTerceros />}
+      {seccion === "avisos" && <AvisosRecordatorios onContador={setNAvisos} />}
       {seccion === "mensajes" && <MensajesTerceros />}
 
       {seccion === "certificaciones" && (
