@@ -25,6 +25,65 @@ function resumenTiposMinuta(m) {
   return { texto, detalle, n: vehs.length };
 }
 
+// ── Líneas del Anexo A: UNA FILA POR UNIDAD ──────────────────────────
+// La hoja del contrato tiene una tabla con Centro/SVC, Modelo, Tipo de
+// vehículo, Cantidad, Ayudante y Tarifa por línea. Dos camionetas del
+// mismo transportista pueden ser una SDD Large Van con ayudante y otra
+// Spot Small Van sin ayudante: por eso el Jefe define cada una aquí y no
+// un resumen agregado. Estos valores se cruzan tal cual en el PDF, así
+// que los literales tienen que ser exactos.
+const MODELOS_LINEA  = ["SDD", "Spot", "Backup"];
+const TIPOS_LINEA    = ["Large Van", "Medium Van", "Small Van", "Car"];
+const AYUDANTE_LINEA = ["Sí", "No", "Según activación"];
+const TARIFAS_LINEA  = ["Tabla vigente", "Especial"];
+const MAX_LINEAS     = 3;   // la hoja del Anexo A tiene 3 filas
+
+function normTipoVehiculo(v) {
+  const t = String(v || "").toLowerCase().replace(/[^a-z]/g, "");
+  if (!t) return "";
+  if (t.includes("large") || t.includes("grande")) return "Large Van";
+  if (t.includes("medi")) return "Medium Van";      // cubre el "Medim Van" de la plantilla
+  if (t.includes("small") || t.includes("chica") || t.includes("pequen")) return "Small Van";
+  if (t.includes("car") || t.includes("auto") || t.includes("sedan")) return "Car";
+  return TIPOS_LINEA.find((x) => x.toLowerCase() === String(v).toLowerCase()) || "";
+}
+const LINEA_VACIA = { svc: "", modelo: "", tipo: "", n: "1", ayudante: "", tarifa: "Tabla vigente", placa: "", obs: "" };
+
+// Modelos que se marcan en el bloque superior del Anexo A: se derivan de
+// las líneas, no se eligen aparte (antes se podían contradecir).
+const modelosDeLineas = (it) =>
+  [...new Set((it.lineas || []).map((l) => l.modelo).filter(Boolean))];
+
+// Resumen agregado que siguen leyendo otras vistas: se calcula, no se teclea.
+const resumenDeLineas = (it) => {
+  const ls = (it.lineas || []).filter((l) => l.tipo || l.n);
+  const total = ls.reduce((a, l) => a + (parseInt(l.n, 10) || 0), 0);
+  const porTipo = {};
+  ls.forEach((l) => { if (l.tipo) porTipo[l.tipo] = (porTipo[l.tipo] || 0) + (parseInt(l.n, 10) || 0); });
+  return {
+    cantidad_vehiculos: total ? String(total) : "",
+    tipo_vehiculos: Object.entries(porTipo).map(([t, c]) => `${c} ${t}`).join(" + "),
+  };
+};
+
+// Qué le falta a las líneas para que el contrato pueda estamparse.
+const faltantesLineas = (it) => {
+  const f = [];
+  const ls = (it.lineas || []).filter((l) => l.svc || l.modelo || l.tipo || String(l.n).trim());
+  if (!ls.length) { f.push("Falta al menos una línea operativa"); return f; }
+  ls.forEach((l, i) => {
+    const q = [];
+    if (!String(l.svc || "").trim()) q.push("Centro/SVC");
+    if (!l.modelo)                   q.push("modelo");
+    if (!l.tipo)                     q.push("tipo de vehículo");
+    if (!String(l.n || "").trim())   q.push("cantidad");
+    if (!l.ayudante)                 q.push("ayudante");
+    if (!l.tarifa)                   q.push("tarifa");
+    if (q.length) f.push(`Línea ${i + 1}${l.placa ? ` (${l.placa})` : ""}: falta ${q.join(", ")}`);
+  });
+  return f;
+};
+
 const ITEMS_VACIO = {
   cantidad_vehiculos: "", tipo_vehiculos: "", cantidad_choferes: "",
   cantidad_ayudantes: "", horario: "", fecha_inicio: "",
@@ -32,7 +91,8 @@ const ITEMS_VACIO = {
   // Datos del contrato (Hoja de Firmas + Anexo A)
   rfc_razon_social: "", domicilio_fiscal: "", repse: "",
   back_to_back: "", vigencia_particular: "", tarifa_aplicable: "",
-  modelos: [],   // SDD / Spot / Backup (Anexo A · tabla de modelos)
+  modelos: [],   // derivado de las líneas (bloque superior del Anexo A)
+  lineas: [],    // una fila por unidad → tabla del Anexo A
   backup_aplica: "", backup_svc: "", backup_dias: "", backup_tipo: "",
   backup_costo_cliente: "", backup_aprobador: "",
 };
@@ -86,6 +146,21 @@ function TareasJefeOperaciones() {
         pend.forEach((t) => {
           if (!nx[t.id]) {
             const m = map[t.id];
+            // Una línea por unidad vista en terreno: el tipo y la placa ya
+            // vienen; el Jefe solo define modelo, SVC y ayudante de cada una.
+            const svcTarea = ((t.sc || "").split("_").pop() || "").toUpperCase();
+            const vehsMin = Array.isArray(m?.vehiculos) ? m.vehiculos : [];
+            const lineasMin = vehsMin.slice(0, MAX_LINEAS).map((v, i) => ({
+              ...LINEA_VACIA,
+              svc: svcTarea,
+              tipo: normTipoVehiculo(v.tipo),
+              n: "1",
+              placa: (v.placa || "").toUpperCase() || `Unidad ${i + 1}`,
+            }));
+            const modelosMin = Array.isArray(m?.datos?.multi?.op_modelo) ? m.datos.multi.op_modelo : [];
+            // Si la entrevista dejó un único modelo, se propone en todas las
+            // líneas; con varios, el Jefe elige cuál corresponde a cada unidad.
+            if (modelosMin.length === 1) lineasMin.forEach((l) => { l.modelo = modelosMin[0]; });
             nx[t.id] = m ? {
               ...ITEMS_VACIO,
               tipo_vehiculos: resumenTiposMinuta(m).texto,
@@ -97,10 +172,11 @@ function TareasJefeOperaciones() {
               rfc_razon_social: m.datos?.fields?.p_rfc || "",
               domicilio_fiscal: m.datos?.fields?.p_domicilio || "",
               repse: m.datos?.fields?.p_repse || "",
-              modelos: Array.isArray(m.datos?.multi?.op_modelo) ? m.datos.multi.op_modelo : [],
-              backup_aplica: (m.datos?.multi?.op_modelo || []).includes("Backup") ? "Sí" : "",
-              backup_svc: (m.datos?.multi?.op_modelo || []).includes("Backup") ? (t.sc || "") : "",
-            } : { ...ITEMS_VACIO };
+              modelos: modelosMin,
+              lineas: lineasMin.length ? lineasMin : [{ ...LINEA_VACIA, svc: svcTarea }],
+              backup_aplica: modelosMin.includes("Backup") ? "Sí" : "",
+              backup_svc: modelosMin.includes("Backup") ? svcTarea : "",
+            } : { ...ITEMS_VACIO, lineas: [{ ...LINEA_VACIA, svc: svcTarea }] };
           }
         });
         return nx;
@@ -112,28 +188,102 @@ function TareasJefeOperaciones() {
   const setCampo = (id, campo, valor) =>
     setItems((prev) => ({ ...prev, [id]: { ...(prev[id] || ITEMS_VACIO), [campo]: valor } }));
 
-  const completos = (it) =>
-    String(it.cantidad_vehiculos) !== "" && it.tipo_vehiculos && String(it.cantidad_choferes) !== "" &&
-    String(it.cantidad_ayudantes) !== "" && it.horario.trim() && it.fecha_inicio && it.esquema_tarifa &&
-    it.rfc_razon_social.trim() && it.domicilio_fiscal.trim() && it.back_to_back && it.tarifa_aplicable &&
-    (it.modelos || []).length > 0 &&
-    (!(it.modelos || []).includes("Backup") ||
-      (it.backup_aplica && it.backup_svc.trim() && it.backup_dias.trim() && it.backup_tipo && it.backup_costo_cliente && it.backup_aprobador));
+  // Edición de una línea concreta; los modelos del bloque superior se
+  // recalculan solos para que nunca contradigan a las líneas.
+  const setLinea = (id, i, campo, valor) =>
+    setItems((prev) => {
+      const it = prev[id] || ITEMS_VACIO;
+      const lineas = (it.lineas || []).map((l, ix) => (ix === i ? { ...l, [campo]: valor } : l));
+      const nx = { ...it, lineas };
+      nx.modelos = modelosDeLineas(nx);
+      return { ...prev, [id]: nx };
+    });
+  const addLinea = (id) =>
+    setItems((prev) => {
+      const it = prev[id] || ITEMS_VACIO;
+      if ((it.lineas || []).length >= MAX_LINEAS) return prev;
+      const ult = (it.lineas || [])[(it.lineas || []).length - 1] || {};
+      return { ...prev, [id]: { ...it, lineas: [...(it.lineas || []), { ...LINEA_VACIA, svc: ult.svc || "", tarifa: it.tarifa_aplicable || "Tabla vigente" }] } };
+    });
+  const delLinea = (id, i) =>
+    setItems((prev) => {
+      const it = prev[id] || ITEMS_VACIO;
+      const lineas = (it.lineas || []).filter((_, ix) => ix !== i);
+      const nx = { ...it, lineas };
+      nx.modelos = modelosDeLineas(nx);
+      return { ...prev, [id]: nx };
+    });
+
+  // La tarea NO se cierra incompleta: el Jefe es quien tiene la información
+  // operativa; si la deja en blanco, el analista solo puede adivinarla.
+  const faltantes = (it) => {
+    const f = [];
+    if (String(it.cantidad_choferes) === "")  f.push("Cantidad de choferes");
+    if (String(it.cantidad_ayudantes) === "") f.push("Cantidad de ayudantes");
+    if (!it.horario.trim())                   f.push("Horario de operación");
+    if (!it.fecha_inicio)                     f.push("Fecha de inicio");
+    if (!it.esquema_tarifa)                   f.push("Esquema de tarifa");
+    if (!it.rfc_razon_social.trim())          f.push("RFC de la razón social");
+    if (!it.domicilio_fiscal.trim())          f.push("Domicilio fiscal");
+    if (!it.back_to_back)                     f.push("Operación back-to-back");
+    if (!it.tarifa_aplicable)                 f.push("Tarifa aplicable");
+    f.push(...faltantesLineas(it));
+    if (modelosDeLineas(it).includes("Backup")) {
+      if (!it.backup_aplica)          f.push("Backup A.2: ¿aplica?");
+      if (!it.backup_svc.trim())      f.push("Backup A.2: SVC");
+      if (!it.backup_dias.trim())     f.push("Backup A.2: días y horario");
+      if (!it.backup_tipo)            f.push("Backup A.2: tipo de vehículo");
+      if (!it.backup_costo_cliente)   f.push("Backup A.2: costo reconocido por Cliente");
+      if (!it.backup_aprobador)       f.push("Backup A.2: aprobador interno");
+    }
+    return f;
+  };
+  const completos = (it) => faltantes(it).length === 0;
 
   const completar = async (t) => {
     const it = items[t.id] || ITEMS_VACIO;
-    if (!completos(it)) { alert("Completa todos los items marcados con *: operación (vehículos, choferes, horario, fecha, tarifa) y datos del contrato (RFC de la razón social, domicilio fiscal, back-to-back y tarifa aplicable)."); return; }
+    const falta = faltantes(it);
+    if (falta.length) {
+      alert("La tarea no se puede cerrar todavía. Falta:\n\n• " + falta.join("\n• ")); return;
+    }
     if (!confirm(`¿Guardar los items del contrato de ${t.titulo || "este prospecto"}? Alimentarán el contrato de la Etapa 8.`)) return;
     setBusyId(t.id);
     try {
+      // Las líneas son la fuente de verdad; el resumen agregado y los
+      // modelos del bloque superior se derivan de ellas.
+      const lineas = (it.lineas || [])
+        .filter((l) => l.svc || l.modelo || l.tipo || String(l.n).trim())
+        .slice(0, MAX_LINEAS)
+        .map((l) => ({
+          svc: String(l.svc || "").toUpperCase(), modelo: l.modelo, tipo: l.tipo,
+          n: String(l.n || ""), ayudante: l.ayudante,
+          tarifa: l.tarifa || it.tarifa_aplicable || "Tabla vigente",
+          placa: String(l.placa || "").toUpperCase(), obs: l.obs || "",
+        }));
+      const modelos = modelosDeLineas(it);
+      const res = resumenDeLineas(it);
       const { data, error } = await sb.rpc("completar_alta_operacional", {
         p_tarea_id: t.id,
-        p_datos: { ...it, modelos_operativos: (it.modelos || []).join("/") },
+        p_datos: {
+          ...it, ...res, modelos, lineas,
+          modelos_operativos: modelos.join("/"),
+          ayudante_helper: (lineas[0] && lineas[0].ayudante) || "",
+        },
         p_email: (window.__PERFIL_EMAIL || "jefe.supervisores@bigticket.mx"),
         p_nombre: (window.__PERFIL_NOMBRE || "Jefe de Supervisores"),
       });
       if (error) throw new Error(error.message);
       if (data && data.ok === false) throw new Error(data.error || "no se pudo completar");
+      // Persistencia explícita de las líneas: la RPC antigua ignora las
+      // claves que no conoce, así que esto garantiza que lleguen a
+      // contrato_operacional.lineas (SECURITY DEFINER, sin depender de RLS).
+      const { error: eLin } = await sb.rpc("guardar_lineas_alta", {
+        p_fuente: t.fuente,
+        p_registro_id: String(t.registro_id),
+        p_lineas: lineas,
+        p_ayudante: (lineas[0] && lineas[0].ayudante) || "",
+      });
+      if (eLin) alert("Los items se guardaron, pero las líneas del Anexo A no: " + eLin.message + "\n\nEl analista tendrá que completarlas en la Etapa 8.");
       await cargar();
     } catch (e) { alert("Error: " + e.message); }
     finally { setBusyId(null); }
@@ -214,17 +364,12 @@ function TareasJefeOperaciones() {
                 🏗 Items del contrato (alimentan el PDF de la Etapa 8)
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 10 }}>
-                <div><span style={lbl}>Cantidad de vehículos *</span>
-                  <input type="number" min="0" value={it.cantidad_vehiculos} onChange={(e) => setCampo(t.id, "cantidad_vehiculos", e.target.value)} style={inputStyle} /></div>
-                <div><span style={lbl}>Tipo de vehículos *</span>
-                  <input value={it.tipo_vehiculos} onChange={(e) => setCampo(t.id, "tipo_vehiculos", e.target.value)} placeholder="Ej. 1 Large Van + 1 Small Van" style={inputStyle} />
-                  {m && resumenTiposMinuta(m).texto && it.tipo_vehiculos !== resumenTiposMinuta(m).texto && (
-                    <div style={{ fontSize: 10.5, color: "#b45309", marginTop: 3 }}>
-                      Según la minuta: <b>{resumenTiposMinuta(m).texto}</b>{" "}
-                      <span onClick={() => setCampo(t.id, "tipo_vehiculos", resumenTiposMinuta(m).texto)}
-                        style={{ color: "#0f766e", fontWeight: 800, cursor: "pointer", textDecoration: "underline" }}>usar</span>
-                    </div>
-                  )}</div>
+                <div><span style={lbl}>Flota (según las líneas)</span>
+                  <div style={{ ...inputStyle, background: "#f4faf8", color: "#0f766e", fontWeight: 700 }}>
+                    {resumenDeLineas(it).cantidad_vehiculos || "—"} vehículo(s){resumenDeLineas(it).tipo_vehiculos ? ` · ${resumenDeLineas(it).tipo_vehiculos}` : ""}
+                  </div>
+                  <div style={{ fontSize: 10.5, color: "#888", marginTop: 3 }}>Se calcula de la tabla de líneas de abajo.</div>
+                </div>
                 <div><span style={lbl}>Cantidad de choferes *</span>
                   <input type="number" min="0" value={it.cantidad_choferes} onChange={(e) => setCampo(t.id, "cantidad_choferes", e.target.value)} style={inputStyle} /></div>
                 <div><span style={lbl}>Cantidad de ayudantes *</span>
@@ -258,21 +403,88 @@ function TareasJefeOperaciones() {
                 <div><span style={lbl}>Vigencia particular</span>
                   <input value={it.vigencia_particular} onChange={(e) => setCampo(t.id, "vigencia_particular", e.target.value)} placeholder="Vacío = 12 meses renovables" style={inputStyle} /></div>
               </div>
-              <div style={{ marginTop: 10 }}>
-                <span style={lbl}>Modelos operativos (Anexo A) *</span>
-                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                  {MODELOS_OP.map((mo) => {
-                    const on = (it.modelos || []).includes(mo);
-                    return (
-                      <span key={mo} onClick={() => setCampo(t.id, "modelos", on ? it.modelos.filter((x) => x !== mo) : [...(it.modelos || []), mo])}
-                        style={{ cursor: "pointer", userSelect: "none", borderRadius: 999, padding: "7px 16px", fontSize: 13,
-                          border: `1.5px solid ${on ? "#0f766e" : "#dfe3e8"}`, background: on ? "#0f766e" : "#fff",
-                          color: on ? "#fff" : "#555", fontWeight: on ? 700 : 400 }}>{mo}</span>
-                    );
-                  })}
+              {/* ── Tabla de líneas del Anexo A: una fila por unidad ── */}
+              <div style={{ marginTop: 14, background: "#fff", border: "1px solid #c4e6df", borderRadius: 10, padding: 12 }}>
+                <div style={{ fontSize: 11.5, fontWeight: 800, color: "#0f766e", marginBottom: 3, textTransform: "uppercase", letterSpacing: ".4px" }}>
+                  🚚 Líneas del Anexo A · una fila por unidad *
+                </div>
+                <div style={{ fontSize: 11.5, color: "#5b6b68", marginBottom: 10 }}>
+                  Cada línea se cruza tal cual en el contrato. Define el modelo y el ayudante de <b>cada unidad</b>:
+                  una puede ser SDD Large Van con ayudante y otra Spot Small Van sin ayudante.
+                </div>
+                {(it.lineas || []).map((l, i) => {
+                  const falta = (v) => (!v ? { border: "1.5px solid #f0b4b4", background: "#fff6f6" } : null);
+                  return (
+                    <div key={i} style={{ border: "1px solid #e4f0ec", borderRadius: 10, padding: 10, marginBottom: 8, background: "#fbfefd" }}>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+                        <span style={{ fontSize: 11.5, fontWeight: 800, color: "#0f766e" }}>
+                          Línea {i + 1}{l.placa ? ` · ${l.placa}` : ""}
+                        </span>
+                        {(it.lineas || []).length > 1 && (
+                          <button onClick={() => delLinea(t.id, i)}
+                            style={{ border: "none", background: "none", color: "#c0392b", fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: "'Geist',sans-serif" }}>Quitar</button>
+                        )}
+                      </div>
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: 8 }}>
+                        <div><span style={lbl}>Centro / SVC *</span>
+                          <input value={l.svc || ""} onChange={(e) => setLinea(t.id, i, "svc", e.target.value.toUpperCase())}
+                            placeholder="Ej. STX1" style={{ ...inputStyle, ...falta(l.svc), fontFamily: "monospace" }} /></div>
+                        <div><span style={lbl}>Modelo *</span>
+                          <select value={l.modelo || ""} onChange={(e) => setLinea(t.id, i, "modelo", e.target.value)} style={{ ...inputStyle, ...falta(l.modelo) }}>
+                            <option value="">Selecciona…</option>{MODELOS_LINEA.map((x) => <option key={x}>{x}</option>)}
+                          </select></div>
+                        <div><span style={lbl}>Tipo vehículo *</span>
+                          <select value={l.tipo || ""} onChange={(e) => setLinea(t.id, i, "tipo", e.target.value)} style={{ ...inputStyle, ...falta(l.tipo) }}>
+                            <option value="">Selecciona…</option>{TIPOS_LINEA.map((x) => <option key={x}>{x}</option>)}
+                          </select></div>
+                        <div><span style={lbl}>Cantidad *</span>
+                          <input type="number" min="1" value={l.n || ""} onChange={(e) => setLinea(t.id, i, "n", e.target.value)}
+                            style={{ ...inputStyle, ...falta(String(l.n || "").trim()), fontFamily: "monospace" }} /></div>
+                        <div><span style={lbl}>Ayudante / helper *</span>
+                          <select value={l.ayudante || ""} onChange={(e) => setLinea(t.id, i, "ayudante", e.target.value)} style={{ ...inputStyle, ...falta(l.ayudante) }}>
+                            <option value="">Selecciona…</option>{AYUDANTE_LINEA.map((x) => <option key={x}>{x}</option>)}
+                          </select></div>
+                        <div><span style={lbl}>Tarifa aplicable *</span>
+                          <select value={l.tarifa || "Tabla vigente"} onChange={(e) => setLinea(t.id, i, "tarifa", e.target.value)} style={inputStyle}>
+                            {TARIFAS_LINEA.map((x) => <option key={x}>{x}</option>)}
+                          </select></div>
+                        <div><span style={lbl}>Observaciones</span>
+                          <input value={l.obs || ""} onChange={(e) => setLinea(t.id, i, "obs", e.target.value)}
+                            placeholder="Opcional" style={inputStyle} /></div>
+                      </div>
+                    </div>
+                  );
+                })}
+                {(it.lineas || []).length < MAX_LINEAS ? (
+                  <button onClick={() => addLinea(t.id)}
+                    style={{ border: "1.5px dashed #c4e6df", background: "#f4faf8", color: "#0f766e", borderRadius: 8, padding: "8px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "'Geist',sans-serif" }}>
+                    + Agregar línea
+                  </button>
+                ) : (
+                  <div style={{ fontSize: 11, color: "#888" }}>La hoja del Anexo A admite 3 líneas; para más unidades, agrupa por tipo en la cantidad.</div>
+                )}
+                {m && Array.isArray(m.vehiculos) && m.vehiculos.length > MAX_LINEAS && (
+                  <div style={{ fontSize: 11.5, color: "#b45309", fontWeight: 600, marginTop: 6 }}>
+                    ⚠️ La minuta registró {m.vehiculos.length} unidades y la hoja solo tiene {MAX_LINEAS} líneas: agrupa las del mismo modelo y tipo en la cantidad.
+                  </div>
+                )}
+                <div style={{ marginTop: 10, paddingTop: 8, borderTop: "1px dashed #c4e6df" }}>
+                  <span style={lbl}>Modelos que se marcarán en el Anexo A (derivado)</span>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    {MODELOS_OP.map((mo) => {
+                      const on = modelosDeLineas(it).includes(mo);
+                      return (
+                        <span key={mo}
+                          style={{ userSelect: "none", borderRadius: 999, padding: "6px 14px", fontSize: 12.5,
+                            border: `1.5px solid ${on ? "#0f766e" : "#dfe3e8"}`, background: on ? "#0f766e" : "#fff",
+                            color: on ? "#fff" : "#aaa", fontWeight: on ? 700 : 400 }}>{mo}</span>
+                      );
+                    })}
+                  </div>
+                  <div style={{ fontSize: 10.5, color: "#888", marginTop: 4 }}>Sale de los modelos de las líneas — no se elige aparte.</div>
                 </div>
               </div>
-              {(it.modelos || []).includes("Backup") && (
+              {modelosDeLineas(it).includes("Backup") && (
                 <div style={{ marginTop: 12, background: "#fff8f0", border: "1px solid #f5d9b8", borderRadius: 10, padding: 12 }}>
                   <div style={{ fontSize: 11.5, fontWeight: 800, color: "#b45309", marginBottom: 10, textTransform: "uppercase", letterSpacing: ".4px" }}>
                     🛟 Backup Operativo (A.2) — requiere aprobación interna
@@ -316,9 +528,19 @@ function TareasJefeOperaciones() {
               </div>
             </div>
 
-            <button onClick={() => completar(t)} disabled={busyId === t.id}
-              style={{ width: "100%", marginTop: 10, background: "#0f766e", color: "#fff", border: "none", borderRadius: 8, padding: "12px", fontSize: 13, fontWeight: 700, cursor: "pointer", opacity: busyId === t.id ? 0.6 : 1 }}>
-              {busyId === t.id ? "Guardando…" : "✓ Completar items del contrato"}
+            {faltantes(it).length > 0 && (
+              <div style={{ marginTop: 10, background: "#fff6f6", border: "1px solid #f0b4b4", borderRadius: 10, padding: "10px 12px" }}>
+                <div style={{ fontSize: 11.5, fontWeight: 800, color: "#c0392b", marginBottom: 4 }}>
+                  ⚠️ Falta completar para cerrar la tarea
+                </div>
+                <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12, color: "#8b3a3a", lineHeight: 1.55 }}>
+                  {faltantes(it).map((f, i) => <li key={i}>{f}</li>)}
+                </ul>
+              </div>
+            )}
+            <button onClick={() => completar(t)} disabled={busyId === t.id || faltantes(it).length > 0}
+              style={{ width: "100%", marginTop: 10, background: faltantes(it).length ? "#b9c6c3" : "#0f766e", color: "#fff", border: "none", borderRadius: 8, padding: "12px", fontSize: 13, fontWeight: 700, cursor: faltantes(it).length ? "not-allowed" : "pointer", opacity: busyId === t.id ? 0.6 : 1, fontFamily: "'Geist',sans-serif" }}>
+              {busyId === t.id ? "Guardando…" : faltantes(it).length ? "Completa los datos marcados" : "✓ Completar items del contrato"}
             </button>
           </div>
         );
