@@ -2653,6 +2653,9 @@ function ConciliacionTercerosMX({ usuario }) {
   const [traslado, setTraslado] = useState(null);              // { empresa, sc, linea, destino } — traslado manual de UN viaje
   const [trasladando, setTrasladando] = useState(false);
   const [sincronizando, setSincronizando] = useState(null);   // clave empresa||sc en resync con motor
+  const [buscarEmp, setBuscarEmp] = useState("");             // filtro por nombre de empresa
+  const [syncTodo, setSyncTodo] = useState(null);             // { total, hechas, actual } mientras corre el sync masivo
+  const [syncResult, setSyncResult] = useState({});           // clave empresa||sc -> { ok, cambios, altas, error }
   const [asuntoLote, setAsuntoLote] = useState(() => { try { return localStorage.getItem("conc_mx_asunto") || ASUNTO_DEFAULT; } catch { return ASUNTO_DEFAULT; } });
   const [cuerpoLote, setCuerpoLote] = useState(() => { try { return localStorage.getItem("conc_mx_cuerpo") || CUERPO_DEFAULT; } catch { return CUERPO_DEFAULT; } });
   const [editorCorreoOpen, setEditorCorreoOpen] = useState(false);
@@ -3536,9 +3539,12 @@ function ConciliacionTercerosMX({ usuario }) {
   // (aux aprobado, ajuste NS, viajes nuevos), la prefactura queda desactualizada.
   // Este botón trae los montos y viajes nuevos del motor RESPETANDO el trabajo manual:
   // líneas editadas a mano (✏️), manuales, importadas, traspasadas, eliminadas y saldos no se tocan.
-  const sincronizarConMotor = async (empresa, sc) => {
+  // opts.silencioso = true: sin confirm ni setMsg (lo usa "Sincronizar todo").
+  //   Devuelve { ok, cambios, altas } o { ok:false, error } para que el lote informe por empresa.
+  const sincronizarConMotor = async (empresa, sc, opts = {}) => {
+    const silencioso = !!opts.silencioso;
     const clave = claveCierre(empresa, sc);
-    if (sincronizando) return;
+    if (sincronizando && !silencioso) return;
     setSincronizando(clave);
     try {
       // 1) motor vigente para esta empresa+SC
@@ -3622,7 +3628,7 @@ function ConciliacionTercerosMX({ usuario }) {
         excluidas.size ? `• ${excluidas.size} línea(s) eliminadas/traspasadas NO se reponen` : null,
         yaNoEnMotor.length ? `• ${yaNoEnMotor.length} línea(s) están en la prefactura pero ya no en el motor (revisar)` : null,
       ].filter(Boolean).join("\n");
-      if (!confirm(`Sincronizar ${empresa} · ${sc} (semana ${semana}) con el Motor de pagos:\n${congeladaTxt ? congeladaTxt + "\n" : ""}\n${resumenTxt}\n\nLa prefactura vuelve a borrador y cada cambio queda auditado. ¿Continuar?`)) { setSincronizando(null); return; }
+      if (!silencioso && !confirm(`Sincronizar ${empresa} · ${sc} (semana ${semana}) con el Motor de pagos:\n${congeladaTxt ? congeladaTxt + "\n" : ""}\n${resumenTxt}\n\nLa prefactura vuelve a borrador y cada cambio queda auditado. ¿Continuar?`)) { setSincronizando(null); return; }
       // 5) aplicar
       const finales = [...nuevasFilas, ...altas.map(d => ({ ...d, _id: lineaId(d), origen: "motor" }))];
       await guardarBorradorSC(empresa, sc, finales, cobrosDe(empresa, sc));
@@ -3635,12 +3641,51 @@ function ConciliacionTercerosMX({ usuario }) {
         try { const rr = await leerFilasEmpresa(empresa); setDetalles(prev => ({ ...prev, [empresa]: rr.filas })); } catch (er) { console.error(er); }
       }
       await cargarResumen(semana);
-      setMsg({ ok: true, txt: `${empresa} · ${sc} sincronizada: ${cambios.length} monto(s) actualizados y ${altas.length} viaje(s) agregados (${deltaCambios >= 0 ? "+" : ""}${fmtMon(Math.round((deltaCambios + totalAltas) * 100) / 100)} neto). Quedó en borrador para revisar y cerrar.` });
+      if (!silencioso) setMsg({ ok: true, txt: `${empresa} · ${sc} sincronizada: ${cambios.length} monto(s) actualizados y ${altas.length} viaje(s) agregados (${deltaCambios >= 0 ? "+" : ""}${fmtMon(Math.round((deltaCambios + totalAltas) * 100) / 100)} neto). Quedó en borrador para revisar y cerrar.` });
+      setSincronizando(null);
+      return { ok: true, cambios: cambios.length, altas: altas.length };
     } catch (e) {
       console.error("sincronizar con motor:", e);
-      setMsg({ ok: false, txt: "Error sincronizando: " + (e.message || e) });
+      if (!silencioso) setMsg({ ok: false, txt: "Error sincronizando: " + (e.message || e) });
+      setSincronizando(null);
+      return { ok: false, error: e.message || String(e) };
     }
-    setSincronizando(null);
+  };
+
+  // ── Sincronizar TODAS las prefacturas sincronizables de la semana ──
+  // Recorre empresa+SC en estado borrador/cerrada (las "enviada" y "sin_generar" se saltan:
+  // una enviada hay que reabrirla a mano, una sin generar no tiene nada que resincronizar).
+  // Va de una en una para no pisar el guardado de borradores ni saturar la BD.
+  const sincronizarTodo = async () => {
+    const objetivos = [];
+    for (const g of empresasAgrupadas) {
+      if (g.empresa === SIN_EMPRESA) continue;
+      for (const rSC of g.filasSC) {
+        const est = rSC.estado_conciliacion;
+        if (!est || est === "sin_generar" || est === "enviada") continue;
+        objetivos.push({ empresa: g.empresa, sc: rSC.service_center });
+      }
+    }
+    if (!objetivos.length) { setMsg({ ok: false, txt: "No hay prefacturas para sincronizar (las enviadas hay que reabrirlas primero)." }); return; }
+    if (!confirm(`Sincronizar ${objetivos.length} prefactura(s) de la semana ${semana} con el Motor de pagos.\n\nCada una trae montos recalculados y viajes nuevos respetando el trabajo manual, y queda en borrador.\n\n¿Continuar?`)) return;
+
+    setSyncResult({});
+    setSyncTodo({ total: objetivos.length, hechas: 0, actual: null });
+    let conCambios = 0, totalCambios = 0, totalAltas = 0, errores = 0;
+    for (let i = 0; i < objetivos.length; i++) {
+      const o = objetivos[i];
+      setSyncTodo({ total: objetivos.length, hechas: i, actual: `${o.empresa} · ${o.sc}` });
+      const r = await sincronizarConMotor(o.empresa, o.sc, { silencioso: true });
+      setSyncResult(prev => ({ ...prev, [claveCierre(o.empresa, o.sc)]: r }));
+      if (r.ok) {
+        totalCambios += r.cambios; totalAltas += r.altas;
+        if (r.cambios || r.altas) conCambios++;
+      } else errores++;
+    }
+    setSyncTodo(null);
+    await cargarResumen(semana);
+    setMsg({ ok: errores === 0,
+      txt: `Sincronización masiva lista: ${objetivos.length} prefactura(s) revisadas · ${conCambios} con cambios (${totalCambios} monto(s), ${totalAltas} viaje(s) nuevos)${errores ? ` · ${errores} con error` : ""}.` });
   };
 
   // ── Traslado manual de UN viaje a otra empresa (botón ⇄ en el detalle) ──
@@ -4840,9 +4885,39 @@ function ConciliacionTercerosMX({ usuario }) {
         </div>
       )}
 
+      {/* Buscador de empresa + sincronización masiva */}
+      {!loading && resumen.length > 0 && (
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
+          <input value={buscarEmp} onChange={e => setBuscarEmp(e.target.value)}
+            placeholder="Buscar empresa por nombre..."
+            style={{ padding: "8px 12px", border: "1px solid #e4e7ec", borderRadius: 6, fontSize: 13, minWidth: 260 }} />
+          {buscarEmp && (
+            <button onClick={() => setBuscarEmp("")}
+              style={{ padding: "7px 12px", background: "#fff", color: "#64748b", border: "1px solid #e4e7ec", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+              Limpiar
+            </button>
+          )}
+          <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 10 }}>
+            {syncTodo && (
+              <span style={{ fontSize: 12, color: "#0e7490", fontWeight: 700 }}>
+                {syncTodo.hechas}/{syncTodo.total} · {syncTodo.actual || "..."}
+              </span>
+            )}
+            <button onClick={sincronizarTodo} disabled={!!syncTodo || !!sincronizando}
+              title="Recorre todas las prefacturas en borrador o cerradas de la semana y trae del Motor los montos recalculados y los viajes nuevos. Las enviadas se saltan (hay que reabrirlas)."
+              style={{ padding: "8px 16px", background: syncTodo ? "#94a3b8" : "#0e7490", color: "#fff", border: "none",
+                borderRadius: 6, fontSize: 12, fontWeight: 800, cursor: syncTodo ? "wait" : "pointer" }}>
+              {syncTodo ? "Sincronizando..." : "🔄 Sincronizar todo con motor"}
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Tarjetas por empresa */}
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-        {empresasAgrupadas.map(g => {
+        {empresasAgrupadas
+          .filter(g => !buscarEmp.trim() || norm(g.empresa).includes(norm(buscarEmp.trim())))
+          .map(g => {
           const esSinEmpresa = g.empresa === SIN_EMPRESA;
           const _netoE = Math.round(g.filasSC.reduce((s, rSC) => s + netoSCneteado(g.empresa, rSC, esSinEmpresa), 0) * 100) / 100;
           const _brutoE = Math.round(g.filasSC.reduce((s, rSC) => { const n = netoSCneteado(g.empresa, rSC, esSinEmpresa); return s + (n < 0 ? n : Math.round(n * 1.16 * 100) / 100); }, 0) * 100) / 100;
@@ -4887,6 +4962,21 @@ function ConciliacionTercerosMX({ usuario }) {
                   <div style={{ textAlign: "center" }}><div style={{ fontSize: 10, color: "#94a3b8" }}>Ajustes</div><div style={{ fontWeight: 800, color: (ajustesEmp[norm(g.empresa)] || 0) > 0 ? "#a16207" : "#94a3b8" }}>{ajustesEmp[norm(g.empresa)] || 0}</div></div>
                   <div style={{ textAlign: "center" }}><div style={{ fontSize: 10, color: "#94a3b8" }}>Neto</div><div style={{ fontWeight: 800, color: _netoE < 0 ? "#9a3412" : "#16a34a" }}>{fmtMon(_netoE)}</div></div>
                   <div style={{ textAlign: "center" }}><div style={{ fontSize: 10, color: "#94a3b8" }}>Bruto</div><div style={{ fontWeight: 800 }}>{fmtMon(_brutoE)}</div></div>
+                  {(() => {
+                    // Resultado del sync masivo por empresa: verde si trajo cambios, gris si ya estaba al día
+                    const rs = g.filasSC.map(f => syncResult[claveCierre(g.empresa, f.service_center)]).filter(Boolean);
+                    if (!rs.length) return null;
+                    const err = rs.filter(r => !r.ok).length;
+                    const camb = rs.reduce((s, r) => s + (r.cambios || 0), 0);
+                    const alt = rs.reduce((s, r) => s + (r.altas || 0), 0);
+                    if (err) return <span title="Alguna prefactura falló al sincronizar" style={{ fontSize: 11, fontWeight: 800, color: "#991b1b" }}>✕ {err} error(es)</span>;
+                    return (
+                      <span title={camb || alt ? `Sincronizada: ${camb} monto(s), ${alt} viaje(s) nuevos` : "Sincronizada: ya estaba al día"}
+                        style={{ fontSize: 11, fontWeight: 800, color: (camb || alt) ? "#065f46" : "#94a3b8" }}>
+                        ✓ {camb || alt ? `${camb + alt} cambio(s)` : "al día"}
+                      </span>
+                    );
+                  })()}
                   <div style={{ fontSize: 16, color: "#94a3b8" }}>{abierta ? "▾" : "▸"}</div>
                 </div>
               </div>
@@ -4986,6 +5076,41 @@ function ConciliacionTercerosMX({ usuario }) {
                                   </div>
                                 </div>
                               )}
+                              {/* ── Aviso: viajes que van con pago 0 y POR QUÉ ──
+                                   Nace de la duda recurrente "¿por qué este viaje no paga?".
+                                   Agrupa por motivo para ver de un golpe si es un patrón (visitado <90%,
+                                   NS 0, no operada) o casos sueltos, y lista cada ruta con su causa. */}
+                              {(() => {
+                                const cero = filasSC.filter(d => !d._saldo && (d.es_no_pago || Number(d.monto || 0) === 0));
+                                if (!cero.length) return null;
+                                const porMotivo = {};
+                                for (const d of cero) {
+                                  const mv = (d.motivo_no_pago || "").trim() || "Monto 0 sin motivo registrado — revisar en el Listado de Pagos";
+                                  (porMotivo[mv] = porMotivo[mv] || []).push(d);
+                                }
+                                const motivos = Object.entries(porMotivo).sort((a, b) => b[1].length - a[1].length);
+                                return (
+                                  <div style={{ marginBottom: 10, border: "1px solid #fca5a5", background: "#fef2f2", borderRadius: 8, padding: "9px 12px" }}>
+                                    <div style={{ fontSize: 12, fontWeight: 800, color: "#991b1b" }}>
+                                      {`\u26A0 ${cero.length} viaje(s) con pago $0 en esta prefactura`}
+                                    </div>
+                                    <div style={{ fontSize: 11, color: "#7f1d1d", marginTop: 5, lineHeight: 1.6 }}>
+                                      {motivos.map(([mv, arr]) => (
+                                        <div key={mv} style={{ marginBottom: 3 }}>
+                                          <span style={{ fontWeight: 700 }}>{`${arr.length}\u00d7 `}</span>
+                                          <span>{mv}</span>
+                                          <span style={{ color: "#b91c1c" }}>
+                                            {` \u2014 ${arr.slice(0, 6).map(d => `ruta ${d.id_ruta || "?"}${d.placa ? ` (${d.placa})` : ""}`).join(", ")}${arr.length > 6 ? ` y ${arr.length - 6} m\u00e1s` : ""}`}
+                                          </span>
+                                        </div>
+                                      ))}
+                                    </div>
+                                    <div style={{ fontSize: 10.5, color: "#b91c1c", marginTop: 5, fontStyle: "italic" }}>
+                                      Si alguno debe pagarse, editá el monto en el detalle (queda auditado) o corregí el dato de origen y sincronizá con el motor.
+                                    </div>
+                                  </div>
+                                );
+                              })()}
                               {renderTablaDetalle(filasSC, { editable: (rSC.estado_conciliacion === "sin_generar" || rSC.estado_conciliacion === "borrador"), empresa: g.empresa, sc: rSC.service_center })}
                               {(rSC.estado_conciliacion === "sin_generar" || rSC.estado_conciliacion === "borrador") && renderEditorSC(g.empresa, rSC)}
                               {noPagosSC.length > 0 && (
@@ -6272,9 +6397,28 @@ function ListadoPagosDiarios({ usuario }) {
   const [calculando, setCalculando] = useState(false);
   const [busqueda, setBusqueda] = useState("");
   const [resumenCalculo, setResumenCalculo] = useState(null);
-  const [filtroEstado, setFiltroEstado] = useState("todas"); // todas | pagadas | no_pagadas | con_alerta
+  const [filtroEstado, setFiltroEstado] = useState("todas"); // todas | pagadas | no_pagadas | con_alerta | datos_incompletos
+  const [causaFalta, setCausaFalta] = useState(null);        // sub-filtro de la tarjeta de datos incompletos
   const [avisoRecalc, setAvisoRecalc] = useState(null); // N aprobaciones modificadas tras el último cálculo
   const [guardandoTarifado, setGuardandoTarifado] = useState(false);
+  // ── Datos incompletos: qué le falta a una línea para poder tarifarse bien ──
+  // A diferencia de "Con alertas" (que incluye avisos operativos), esto marca SOLO
+  // vacíos de información maestra que impiden calcular la tarifa correcta.
+  // Se deduce de las observaciones que ya escribe el motor + campos vacíos.
+  const FALTAS = [
+    { id: "tipologia", label: "Sin tipología de vehículo",
+      test: (p) => !p.tipo_vehiculo || /Tipolog[íi]a no reconocida/i.test(p.observaciones || "") },
+    { id: "zona",      label: "SC sin zona mapeada",
+      test: (p) => /SC no mapeado/i.test(p.observaciones || "") },
+    { id: "tarifa",    label: "Sin tarifa en la matriz",
+      test: (p) => /Sin tarifa para/i.test(p.observaciones || "") },
+    { id: "km",        label: "Sin KM real",
+      test: (p) => /SIN KM REAL/i.test(p.observaciones || "") },
+    { id: "visitado",  label: "Sin % visitado",
+      test: (p) => /Sin % visitado/i.test(p.observaciones || "") },
+  ];
+  const faltasDe = (p) => FALTAS.filter(f => f.test(p)).map(f => f.id);
+  const faltaInfo = (p) => faltasDe(p).length > 0;
   const topScrollRef = useRef(null);
   const tableWrapRef = useRef(null);
   const [tablaWidth, setTablaWidth] = useState(1560);
@@ -6663,6 +6807,9 @@ function ListadoPagosDiarios({ usuario }) {
     else if (filtroEstado === "no_operadas") res = res.filter(p => p.ruta_no_operada);
     else if (filtroEstado === "km_bajo") res = res.filter(p => kmRealBajoDe(p));
     else if (filtroEstado === "pausadas") res = res.filter(p => p.pausado);
+    else if (filtroEstado === "datos_incompletos") {
+      res = causaFalta ? res.filter(p => faltasDe(p).includes(causaFalta)) : res.filter(p => faltaInfo(p));
+    }
 
     // Ordenamiento
     res.sort((a, b) => {
@@ -6676,7 +6823,7 @@ function ListadoPagosDiarios({ usuario }) {
     });
 
     return res;
-  }, [pagos, busqueda, filtroEstado, orderBy, orderDir, reglasAlerta, empresaMap, empresaMapSem]);
+  }, [pagos, busqueda, filtroEstado, causaFalta, orderBy, orderDir, reglasAlerta, empresaMap, empresaMapSem]);
 
   // Totales
   const totales = useMemo(() => {
@@ -6692,6 +6839,7 @@ function ListadoPagosDiarios({ usuario }) {
       alertas: filasFiltradas.filter(p => tieneAlerta(p)).length,
       noOperadas: filasFiltradas.filter(p => p.ruta_no_operada).length,
       kmBajo: filasFiltradas.filter(p => kmRealBajoDe(p)).length,
+      datosIncompletos: pagos.filter(p => faltaInfo(p)).length,
       pausadas: filasFiltradas.filter(p => p.pausado).length,
       pagoMeli: filasFiltradas.reduce((s, p) => s + Number(p.pago_meli || 0), 0),
       margenPct: (() => {
@@ -7083,6 +7231,39 @@ function ListadoPagosDiarios({ usuario }) {
                   <div style={lbl("#075985")}>KM real bajo/ausente {filtroEstado === "km_bajo" ? "(filtrando)" : ""}</div>
                   <div style={big("#075985")}>{totales.kmBajo}</div>
                   <div style={hint("#075985")}>📏 corregir en prefactura</div>
+                </div>
+              )}
+              {totales.datosIncompletos > 0 && (
+                <div style={card({ background: "#fdf4ff", border: `2px solid ${filtroEstado === "datos_incompletos" ? "#a21caf" : "#e9d5ff"}`, minWidth: 260 })}>
+                  <div onClick={() => { setFiltroEstado(filtroEstado === "datos_incompletos" ? "todas" : "datos_incompletos"); setCausaFalta(null); }}
+                    title="Líneas que no se pueden tarifar bien porque les falta información maestra"
+                    style={{ cursor: "pointer" }}>
+                    <div style={lbl("#86198f")}>Faltan datos {filtroEstado === "datos_incompletos" && !causaFalta ? "(filtrando)" : ""}</div>
+                    <div style={big("#86198f")}>{totales.datosIncompletos}</div>
+                    <div style={hint("#86198f")}>📋 clic para filtrar</div>
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 3, marginTop: 6, borderTop: "1px solid #e9d5ff", paddingTop: 6 }}>
+                    {FALTAS.map(f => {
+                      const cn = pagos.filter(p => f.test(p)).length;
+                      if (!cn) return null;
+                      const activo = filtroEstado === "datos_incompletos" && causaFalta === f.id;
+                      return (
+                        <div key={f.id}
+                          onClick={() => {
+                            if (activo) { setCausaFalta(null); setFiltroEstado("todas"); }
+                            else { setCausaFalta(f.id); setFiltroEstado("datos_incompletos"); }
+                          }}
+                          style={{ display: "flex", justifyContent: "space-between", gap: 8, cursor: "pointer",
+                            fontSize: 10.5, fontWeight: activo ? 800 : 600,
+                            color: activo ? "#701a75" : "#a21caf",
+                            background: activo ? "#f5d0fe" : "transparent",
+                            borderRadius: 4, padding: "2px 4px" }}>
+                          <span>{activo ? "▸ " : ""}{f.label}</span>
+                          <span>{cn}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
               )}
               {pagos.filter(p => p.pausado).length > 0 && (
