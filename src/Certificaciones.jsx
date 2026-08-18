@@ -5208,7 +5208,81 @@ const SOL_ESTADOS = {
 };
 const WEBHOOK_AVISO_MANUAL = "https://bigticket2026.app.n8n.cloud/webhook/aviso-solicitud-tercero";
 
+// De dónde sale cada dato de contacto, para que el analista sepa qué está
+// corrigiendo: el perfil lo llena el tercero en su portal.
+const ORIGEN_CONTACTO = {
+  editado:  { label: "editado aquí",   color: "#7c3aed" },
+  perfil:   { label: "perfil empresa", color: "#0f766e" },
+  portal:   { label: "acceso portal",  color: "#1a3a6b" },
+  sin_dato: { label: "sin dato",       color: "#c0392b" },
+};
+
+function EditorContacto({ row, onGuardado, onCancelar }) {
+  const [correo, setCorreo] = useState(row.correo_envio || "");
+  const [tel, setTel] = useState(row.telefono_envio || "");
+  const [enPerfil, setEnPerfil] = useState(true);
+  const [busy, setBusy] = useState(false);
+
+  const guardar = async () => {
+    setBusy(true);
+    try {
+      const { data, error } = await sb.rpc("actualizar_contacto_solicitud", {
+        p_id: row.id, p_email: correo, p_telefono: tel,
+        p_guardar_en_perfil: enPerfil, p_usuario: window.__PERFIL_EMAIL || "brain",
+      });
+      if (error) throw new Error(error.message);
+      if (data && data.ok === false) throw new Error(data.error);
+      if (enPerfil && data && data.perfil_actualizado === false)
+        alert("Guardado para este aviso. Ojo: la empresa aún no tiene Perfil de Empresa creado, así que no se pudo corregir en la raíz.");
+      onGuardado();
+    } catch (e) { alert("No se pudo guardar: " + e.message); }
+    finally { setBusy(false); }
+  };
+
+  const inp = { width: "100%", boxSizing: "border-box", border: "1px solid #ddd0f7", borderRadius: 8, padding: "8px 10px", fontSize: 12.5, fontFamily: "'Geist',sans-serif", background: "#fff" };
+  const lb = { fontSize: 9.5, fontWeight: 700, color: "#7c6f96", textTransform: "uppercase", marginBottom: 3, display: "block" };
+
+  return (
+    <div style={{ marginTop: 10, background: "#faf7ff", border: "1px solid #ddd0f7", borderRadius: 10, padding: 12 }}>
+      <div style={{ fontSize: 11, fontWeight: 800, color: "#7c3aed", marginBottom: 8, textTransform: "uppercase", letterSpacing: ".4px" }}>
+        ✎ Contacto de este aviso
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10 }}>
+        <div><span style={lb}>Correo</span>
+          <input value={correo} onChange={(e) => setCorreo(e.target.value)} placeholder="correo@empresa.com" style={inp} /></div>
+        <div><span style={lb}>WhatsApp · 10 dígitos</span>
+          <input value={tel} onChange={(e) => setTel(e.target.value)} placeholder="5512345678"
+            style={{ ...inp, fontFamily: "monospace" }} />
+          <div style={{ fontSize: 10, color: "#888", marginTop: 3 }}>Sin +52 ni espacios.</div>
+        </div>
+      </div>
+      <label style={{ display: "flex", alignItems: "flex-start", gap: 8, marginTop: 10, fontSize: 12, cursor: "pointer" }}>
+        <input type="checkbox" checked={enPerfil} onChange={(e) => setEnPerfil(e.target.checked)} style={{ marginTop: 2 }} />
+        <span>
+          <b>Guardar también en el Perfil de Empresa</b>
+          <div style={{ fontSize: 11, color: "#7c6f96" }}>
+            Corrige la raíz: sirve para los avisos siguientes y para las notificaciones
+            de documentos fallidos, que leen los mismos campos. Sin esto, el cambio
+            aplica solo a este aviso.
+          </div>
+        </span>
+      </label>
+      <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+        <button onClick={guardar} disabled={busy}
+          style={{ flex: 1, background: "#7c3aed", color: "#fff", border: "none", borderRadius: 8, padding: "10px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", opacity: busy ? 0.6 : 1, fontFamily: "'Geist',sans-serif" }}>
+          {busy ? "Guardando…" : "💾 Guardar contacto"}
+        </button>
+        <button onClick={onCancelar}
+          style={{ border: "1px solid #ddd0f7", background: "#fff", color: "#7c3aed", borderRadius: 8, padding: "10px 16px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: "'Geist',sans-serif" }}>
+          Cancelar
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function AvisosRecordatorios({ onContador }) {
+  const [editando, setEditando] = useState(null);   // id de la solicitud en edición
   const [rows, setRows] = useState(null);
   const [bloqueos, setBloqueos] = useState([]);
   const [filtro, setFiltro] = useState("atencion");   // atencion | todas | cumplidas
@@ -5288,7 +5362,11 @@ function AvisosRecordatorios({ onContador }) {
 
   // Reenvío manual del aviso (mismo flujo de n8n que el barrido de 3 días).
   const reenviar = async (r) => {
-    if (!confirm(`¿Reenviar el aviso de "${r.titulo}" a ${r.empresa || "la empresa"} por correo y WhatsApp?`)) return;
+    if (!r.correo_envio && !r.telefono_envio) {
+      alert("Esta empresa no tiene correo ni teléfono: no hay por dónde avisarle.\n\nCorrige el contacto con «✎ Editar contacto» antes de reenviar."); return;
+    }
+    const canales = [r.correo_envio && `correo (${r.correo_envio})`, r.telefono_envio && `WhatsApp (${r.telefono_envio})`].filter(Boolean).join(" y ");
+    if (!confirm(`¿Reenviar el aviso de "${r.titulo}" a ${r.razon_social || r.empresa || "la empresa"}?\n\nSale por ${canales}.`)) return;
     setBusyId(r.id);
     try {
       const resp = await fetch(WEBHOOK_AVISO_MANUAL, {
@@ -5469,8 +5547,34 @@ function AvisosRecordatorios({ onContador }) {
                     </span>
                   )}
                 </div>
-                <div style={{ fontSize: 13, fontWeight: 700, color: "#1a3a6b" }}>{r.empresa || "— empresa sin crear —"}</div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: "#1a3a6b" }}>{r.razon_social || r.empresa || "— empresa sin crear —"}</div>
                 {r.detalle && <div style={{ fontSize: 12, color: "#667085", marginTop: 2 }}>{r.detalle}</div>}
+
+                {/* A dónde va a salir el aviso, y de dónde sale ese dato */}
+                <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginTop: 6,
+                  background: "#f8f9fb", border: "1px solid #eceff4", borderRadius: 8, padding: "6px 10px" }}>
+                  {[["📧", r.correo_envio, r.correo_origen], ["📱", r.telefono_envio, r.telefono_origen]].map(([ic, val, org], ix) => {
+                    const o = ORIGEN_CONTACTO[org] || ORIGEN_CONTACTO.sin_dato;
+                    return (
+                      <span key={ix} style={{ fontSize: 12, display: "inline-flex", alignItems: "center", gap: 5 }}>
+                        {ic} <span style={{ fontWeight: 600, color: val ? "#1a1a1a" : "#c0392b" }}>
+                          {val || (ix === 0 ? "sin correo" : "sin teléfono — no habrá WhatsApp")}
+                        </span>
+                        <span style={{ fontSize: 9.5, fontWeight: 700, color: o.color, background: "#fff",
+                          border: `1px solid ${o.color}33`, borderRadius: 20, padding: "1px 7px" }}>{o.label}</span>
+                      </span>
+                    );
+                  })}
+                  <button onClick={() => setEditando(editando === r.id ? null : r.id)}
+                    style={{ border: "none", background: "none", color: "#7c3aed", fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: "'Geist',sans-serif", padding: 0 }}>
+                    {editando === r.id ? "Cerrar" : "✎ Editar contacto"}
+                  </button>
+                </div>
+                {editando === r.id && (
+                  <EditorContacto row={r}
+                    onGuardado={() => { setEditando(null); cargar(); }}
+                    onCancelar={() => setEditando(null)} />
+                )}
                 <div style={{ fontSize: 11.5, color: "#888", marginTop: 3 }}>
                   Solicitada el {fMX(r.solicitado_at, { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}
                   {" · "}{r.dias_solicitada} día(s)
