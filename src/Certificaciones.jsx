@@ -1923,13 +1923,15 @@ function SeccionFirmaContrato({ registro, tabla, datos, onActualizado }) {
   // navegador del prestador: si firmaba por el correo de MIFIEL, nada se
   // actualizaba nunca (caso Perla, 19-ago-2026).
   const verificarFirmaPrestador = async () => {
+    // El spinner arranca ANTES del webhook: la consulta a MIFIEL tarda unos
+    // segundos y sin esto el botón parecía muerto hasta que llegaba todo.
+    setVerificandoFirma(true); setAvisoFirma("");
     try {
       await fetch("https://bigticket2026.app.n8n.cloud/webhook/sincronizar-firma-flujo-a", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ id: registro.id }),
       });
     } catch (eSync) { console.warn("Sincronización MIFIEL no disponible:", eSync.message); }
-    setVerificandoFirma(true); setAvisoFirma("");
     try {
       const { data, error } = await sb.from(tabla)
         .select("mifiel_firmado_conductor, mifiel_firmado_bigticket")
