@@ -852,10 +852,22 @@ function ResumenSolicitudAlta({ fuente, registro, datos, onEnviado }) {
         } catch (eIdx) { console.warn("Indexación de minuta al archivador falló:", eIdx.message); }
       }
       const tabla = fuente === "certificaciones_mx" ? "certificaciones_mx" : "certificaciones";
+      // El tercero_id recién creado se escribe de vuelta en la tarjeta. Sin
+      // esto la tarjeta queda huérfana: sin bloqueo de prefactura posible,
+      // sin vínculo al archivador ni al chat de empresa (bug Perla/Fidel,
+      // 17-ago-2026: el webhook devolvía el id y nunca se guardaba).
       const patch = fuente === "certificaciones_mx"
-        ? { estado: "en_firma", etapa_kanban: "firma_contrato" }
-        : { etapa_kanban: "firma_contrato" };
+        ? { estado: "en_firma", etapa_kanban: "firma_contrato", ...(r.tercero_id ? { tercero_id: r.tercero_id } : {}) }
+        : { etapa_kanban: "firma_contrato", ...(r.tercero_id ? { tercero_id: r.tercero_id } : {}) };
       await sb.from(tabla).update(patch).eq("id", registro.id);
+      // Y si ya existía una solicitud de firma para esta tarjeta (no debería
+      // en el flujo normal, pero sí tras un backfill), se completa el vínculo.
+      if (r.tercero_id) {
+        await sb.from("solicitudes_tercero")
+          .update({ tercero_id: r.tercero_id })
+          .eq("ref_tabla", tabla).eq("ref_id", String(registro.id))
+          .is("tercero_id", null);
+      }
       alert("✅ Empresa creada y credenciales enviadas por correo.\nLa tarjeta pasa a Etapa 8 · Firma de Contrato.");
       onEnviado(patch);
     } catch (e) { alert("No se pudo completar: " + e.message); }
@@ -2574,6 +2586,39 @@ function DetalleCandidato({ candidato, onVolver, onActualizar, onPasarEtapa2 }) 
     setMinutaDet((data && data[0]) || null);
   })(); }, [candidato.id]);
 
+  // Re-entrevista / re-llamada: la tarea original se ejecutó pero hay que
+  // repetirla. Crea una tarea NUEVA copiando SC y contacto de la ejecutada;
+  // la vieja queda intacta como historia. Auditado en tareas_reactivaciones.
+  const [reactivandoTarea, setReactivandoTarea] = useState(false);
+  const reactivarTareaEjecutada = async (tipo) => {
+    const etiqueta = tipo === "entrevista_prospecto" ? "la entrevista" : "la llamada del supervisor";
+    const motivo = prompt(
+      `Repetir ${etiqueta} de este prospecto.\n\n` +
+      `Se creará una tarea nueva para el supervisor del SC; la anterior queda como registro.\n\n` +
+      `Motivo (mínimo 10 caracteres, queda auditado):`, "");
+    if (motivo === null) return;
+    setReactivandoTarea(true);
+    try {
+      const { data, error } = await sb.rpc("reactivar_tarea_supervisor", {
+        p_fuente: "certificaciones_mx",
+        p_registro_id: String(candidato.id),
+        p_tipo_tarea: tipo,
+        p_motivo: motivo,
+        p_email: window.__PERFIL_EMAIL || "brain",
+        p_sla_horas: 24,
+      });
+      if (error) throw new Error(error.message);
+      if (data && data.ok === false) throw new Error(data.error);
+      if (data && data.ya_pendiente) {
+        alert("Ya había una tarea pendiente de este tipo — el supervisor ya la tiene en su bitácora, no se duplicó.");
+      } else {
+        alert(`Tarea creada y visible para el supervisor del SC ${data.sc || ""}. SLA: 24 horas.`);
+      }
+      await cargarTareaSLA();
+    } catch (e) { alert("No se pudo reactivar: " + e.message); }
+    finally { setReactivandoTarea(false); }
+  };
+
   // Reactivación desde Stand By: el prospecto vuelve al flujo cuando se necesita
   const [reactivando, setReactivando] = useState(false);
   const reactivarFlujo = async () => {
@@ -2891,6 +2936,32 @@ Responde con este JSON exacto:
 
         {/* SLA de la tarea pendiente + reactivación con motivo */}
         <PanelSLA tarea={tareaSLA} onReactivado={cargarTareaSLA} />
+
+
+        {/* Repetir una tarea YA EJECUTADA (entrevista o llamada). Solo se
+            ofrece cuando no hay tarea pendiente: si hay una viva, el
+            supervisor ya la tiene y crear otra duplicaría trabajo. */}
+        {!tareaSLA && ["entrevista_operaciones", "llamada_supervisor", "solicitud_alta"].includes(etapaProspeccion(candidato)) && (
+          <div style={{ background: "#fff", border: "0.5px solid #e4e7ec", borderRadius: 12, padding: 16, marginTop: 12 }}>
+            <div style={{ fontSize: 11.5, fontWeight: 800, color: "#0e7490", textTransform: "uppercase", letterSpacing: ".4px", marginBottom: 4 }}>
+              🔁 Repetir tarea del supervisor
+            </div>
+            <div style={{ fontSize: 12.5, color: "#667085", lineHeight: 1.6, marginBottom: 10 }}>
+              La tarea anterior ya se ejecutó. Si hubo un error y hay que repetirla, esto crea una
+              tarea nueva en la bitácora del supervisor del SC (la original queda como registro).
+            </div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button onClick={() => reactivarTareaEjecutada("entrevista_prospecto")} disabled={reactivandoTarea}
+                style={{ flex: 1, minWidth: 180, background: "#0e7490", color: "#fff", border: "none", borderRadius: 9, padding: "11px", fontSize: 12.5, fontWeight: 800, cursor: "pointer", opacity: reactivandoTarea ? 0.6 : 1, fontFamily: "'Geist',sans-serif" }}>
+                {reactivandoTarea ? "Creando…" : "🔁 Repetir entrevista"}
+              </button>
+              <button onClick={() => reactivarTareaEjecutada("llamada_prospecto")} disabled={reactivandoTarea}
+                style={{ flex: 1, minWidth: 180, background: "#fff", color: "#0e7490", border: "1.5px solid #0e7490", borderRadius: 9, padding: "11px", fontSize: 12.5, fontWeight: 800, cursor: "pointer", opacity: reactivandoTarea ? 0.6 : 1, fontFamily: "'Geist',sans-serif" }}>
+                🔁 Repetir llamada
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Evidencia de la entrevista: fotos del supervisor + geolocalización.
             Aparece desde la etapa de entrevista, cuando ya existe la minuta. */}
@@ -3466,6 +3537,39 @@ function DetalleCertificacion({ cert, etapa, onVolver, onPasarEtapa2, onMoverA, 
   };
   useEffect(() => { cargarTareaSLA(); }, [cert.id]);
 
+  // Re-entrevista / re-llamada: la tarea original se ejecutó pero hay que
+  // repetirla. Crea una tarea NUEVA copiando SC y contacto de la ejecutada;
+  // la vieja queda intacta como historia. Auditado en tareas_reactivaciones.
+  const [reactivandoTarea, setReactivandoTarea] = useState(false);
+  const reactivarTareaEjecutada = async (tipo) => {
+    const etiqueta = tipo === "entrevista_prospecto" ? "la entrevista" : "la llamada del supervisor";
+    const motivo = prompt(
+      `Repetir ${etiqueta} de este prospecto.\n\n` +
+      `Se creará una tarea nueva para el supervisor del SC; la anterior queda como registro.\n\n` +
+      `Motivo (mínimo 10 caracteres, queda auditado):`, "");
+    if (motivo === null) return;
+    setReactivandoTarea(true);
+    try {
+      const { data, error } = await sb.rpc("reactivar_tarea_supervisor", {
+        p_fuente: "certificaciones",
+        p_registro_id: String(cert.id),
+        p_tipo_tarea: tipo,
+        p_motivo: motivo,
+        p_email: window.__PERFIL_EMAIL || "brain",
+        p_sla_horas: 24,
+      });
+      if (error) throw new Error(error.message);
+      if (data && data.ok === false) throw new Error(data.error);
+      if (data && data.ya_pendiente) {
+        alert("Ya había una tarea pendiente de este tipo — el supervisor ya la tiene en su bitácora, no se duplicó.");
+      } else {
+        alert(`Tarea creada y visible para el supervisor del SC ${data.sc || ""}. SLA: 24 horas.`);
+      }
+      await cargarTareaSLA();
+    } catch (e) { alert("No se pudo reactivar: " + e.message); }
+    finally { setReactivandoTarea(false); }
+  };
+
   // Reactivación desde Stand By: el prospecto vuelve al flujo cuando se necesita
   const [reactivando, setReactivando] = useState(false);
   const reactivarFlujo = async () => {
@@ -3750,6 +3854,32 @@ function DetalleCertificacion({ cert, etapa, onVolver, onPasarEtapa2, onMoverA, 
 
         {/* SLA de la tarea pendiente + reactivación con motivo */}
         <PanelSLA tarea={tareaSLA} onReactivado={cargarTareaSLA} />
+
+
+        {/* Repetir una tarea YA EJECUTADA (entrevista o llamada). Solo para
+            personas (los vehículos no llevan entrevista) y cuando no hay
+            tarea pendiente viva. */}
+        {!tareaSLA && !esVeh && ["validacion_meli", "validacion_nubarium", "entrevista_operaciones", "revision_interna"].includes(cert.etapa_kanban) && (
+          <div style={{ background: "#fff", border: "0.5px solid #e4e7ec", borderRadius: 12, padding: 16, marginTop: 12 }}>
+            <div style={{ fontSize: 11.5, fontWeight: 800, color: "#0e7490", textTransform: "uppercase", letterSpacing: ".4px", marginBottom: 4 }}>
+              🔁 Repetir tarea del supervisor
+            </div>
+            <div style={{ fontSize: 12.5, color: "#667085", lineHeight: 1.6, marginBottom: 10 }}>
+              La tarea anterior ya se ejecutó. Si hubo un error y hay que repetirla, esto crea una
+              tarea nueva en la bitácora del supervisor del SC (la original queda como registro).
+            </div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button onClick={() => reactivarTareaEjecutada("entrevista_prospecto")} disabled={reactivandoTarea}
+                style={{ flex: 1, minWidth: 180, background: "#0e7490", color: "#fff", border: "none", borderRadius: 9, padding: "11px", fontSize: 12.5, fontWeight: 800, cursor: "pointer", opacity: reactivandoTarea ? 0.6 : 1, fontFamily: "'Geist',sans-serif" }}>
+                {reactivandoTarea ? "Creando…" : "🔁 Repetir entrevista"}
+              </button>
+              <button onClick={() => reactivarTareaEjecutada("llamada_prospecto")} disabled={reactivandoTarea}
+                style={{ flex: 1, minWidth: 180, background: "#fff", color: "#0e7490", border: "1.5px solid #0e7490", borderRadius: 9, padding: "11px", fontSize: 12.5, fontWeight: 800, cursor: "pointer", opacity: reactivandoTarea ? 0.6 : 1, fontFamily: "'Geist',sans-serif" }}>
+                🔁 Repetir llamada
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Datos editables: conductor o vehículo, según el tipo de certificación.
             Se guarda en la tabla hija correspondiente y se recarga la vista. */}
