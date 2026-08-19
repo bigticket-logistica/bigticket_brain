@@ -1918,8 +1918,17 @@ function SeccionFirmaContrato({ registro, tabla, datos, onActualizado }) {
   const docId = registro.mifiel_documento_id;
 
   // Relee la tarjeta para saber si el prestador ya firmó desde su portal
-  // (el portal marca mifiel_firmado_conductor=true al completar el widget).
+  // El botón consulta MIFIEL de verdad (vía n8n) y luego relee la BD.
+  // Antes solo leía la BD, que dependía del callback del widget en el
+  // navegador del prestador: si firmaba por el correo de MIFIEL, nada se
+  // actualizaba nunca (caso Perla, 19-ago-2026).
   const verificarFirmaPrestador = async () => {
+    try {
+      await fetch("https://bigticket2026.app.n8n.cloud/webhook/sincronizar-firma-flujo-a", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: registro.id }),
+      });
+    } catch (eSync) { console.warn("Sincronización MIFIEL no disponible:", eSync.message); }
     setVerificandoFirma(true); setAvisoFirma("");
     try {
       const { data, error } = await sb.from(tabla)
