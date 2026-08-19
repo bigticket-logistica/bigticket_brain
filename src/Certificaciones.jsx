@@ -4916,6 +4916,27 @@ function MensajesTerceros() {
     cargarConvos();
   };
 
+  // El hilo abierto se refresca solo: si el tercero responde mientras el
+  // analista mira la conversación, aparece sin cerrar y reabrir.
+  useEffect(() => {
+    if (!sel) return;
+    const t = setInterval(async () => {
+      if (document.hidden) return;
+      const { data } = await sb.from("mensajes_terceros")
+        .select("*").eq("tercero_id", sel.tercero_id).order("created_at", { ascending: true });
+      if (data) {
+        setMsgs(prev => (prev && data.length === prev.length) ? prev : data);
+        const hayNuevosDelTercero = (data || []).some(m => m.autor === "tercero" && !m.leido);
+        if (hayNuevosDelTercero) {
+          await sb.from("mensajes_terceros").update({ leido: true })
+            .eq("tercero_id", sel.tercero_id).eq("autor", "tercero").eq("leido", false);
+          cargarConvos();
+        }
+      }
+    }, 20000);
+    return () => clearInterval(t);
+  }, [sel]);
+
   const enviar = async () => {
     const t = texto.trim();
     if (!t || !sel) return;
@@ -5762,6 +5783,8 @@ function ModuloCertificaciones() {
   // Contador amarillo de la pestaña Avisos: solicitudes que ya requieren
   // atención (avisadas, escaladas o vencidas sin avisar).
   const [nAvisos, setNAvisos] = useState(0);
+  // Contador naranja de la pestaña Mensajes: mensajes de terceros sin leer.
+  const [nMensajes, setNMensajes] = useState(0);
 
   useEffect(() => { (async () => { await autoSyncCRM(); await cargar(); })(); }, []);
 
@@ -5771,6 +5794,10 @@ function ModuloCertificaciones() {
     const leer = async () => {
       const { data } = await sb.from("vw_avisos_contador").select("atencion").maybeSingle();
       if (data) setNAvisos(data.atencion || 0);
+      const { count } = await sb.from("mensajes_terceros")
+        .select("id", { count: "exact", head: true })
+        .eq("autor", "tercero").eq("leido", false);
+      setNMensajes(count || 0);
     };
     leer();
     const t = setInterval(() => { if (!document.hidden) leer(); }, 120000);
@@ -6086,6 +6113,15 @@ function ModuloCertificaciones() {
               background: "transparent", fontWeight: seccion === v ? 700 : 400,
               color: seccion === v ? "#1a3a6b" : "#888", position: "relative",
               borderBottom: seccion === v ? "2.5px solid #F47B20" : "2.5px solid transparent", marginBottom: -1 }}>
+            {/* Número naranja de mensajes sin leer */}
+            {v === "mensajes" && nMensajes > 0 && (
+              <span style={{ position: "absolute", top: -2, right: 4, minWidth: 18, height: 18, padding: "0 5px",
+                borderRadius: 999, background: "#F47B20", color: "#fff", fontSize: 10.5, fontWeight: 800,
+                display: "inline-flex", alignItems: "center", justifyContent: "center", lineHeight: 1,
+                border: "1px solid #d96a15", fontVariantNumeric: "tabular-nums" }}>
+                {nMensajes > 99 ? "99+" : nMensajes}
+              </span>
+            )}
             {/* Número amarillo sobre el nombre de la pestaña */}
             {v === "avisos" && nAvisos > 0 && (
               <span style={{ position: "absolute", top: -2, right: 4, minWidth: 18, height: 18, padding: "0 5px",
