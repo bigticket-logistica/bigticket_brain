@@ -518,10 +518,9 @@ export function mmConstruirHTML(grupo, opts = {}) {
   </div>
   ${bloques}
   <div class="nota">
-    <div class="nota-title">CÓMO SE APLICA ESTE COBRO</div>
-    <div class="nota-row">• El monto total de ${mmFmtMon(grupo.total)} se descuenta de su prefactura del período ${esc(periodoCobro || "en curso")}.</div>
+    <div class="nota-title">OBSERVACIONES</div>
     <div class="nota-row">• Cada línea corresponde a una penalización aplicada por Mercado Libre por paquete perdido o PNR, identificada por número de guía.</div>
-    <div class="nota-row">• Si detecta diferencias, notifíquelas a su supervisor directo y a conciliacionesmx@bigticket.mx antes del cierre del período, indicando el número de guía.</div>
+    <div class="nota-row">• Si detecta diferencias, notifíquelas a su supervisor directo.</div>
   </div>
   <div class="pie">Documento generado automáticamente por Bigticket Brain · ${esc(grupo.empresa)} · ${grupo.nSites} site(s) · ${grupo.nLineas} cobro(s) · ${mmFmtMon(grupo.total)}</div>
   <div class="noprint"><button onclick="window.print()">Imprimir / Guardar PDF</button></div>
