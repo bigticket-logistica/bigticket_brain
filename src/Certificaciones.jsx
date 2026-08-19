@@ -4882,6 +4882,40 @@ function MensajesTerceros() {
   const [msgs, setMsgs] = useState(null);
   const [texto, setTexto] = useState("");
   const [nuevoPara, setNuevoPara] = useState("");
+  // 📣 Notificación manual: el analista escribe lo que necesite y avisa UNA
+  // vez por WhatsApp + correo con el botón. El contacto viene del Perfil de
+  // Empresa y se puede editar solo para este envío (no pisa el perfil).
+  const [notif, setNotif] = useState(null);       // { n, correo, telefono } del tercero abierto
+  const [editContacto, setEditContacto] = useState(false);
+  const [notificando, setNotificando] = useState(false);
+
+  const cargarNotif = async (terceroId) => {
+    const { data } = await sb.rpc("mensajes_sin_leer_tercero", { p_tercero_id: terceroId });
+    const f = Array.isArray(data) ? data[0] : data;
+    setNotif(f ? { n: f.mensajes_sin_leer, correo: f.correo || "", telefono: f.telefono || "" } : null);
+  };
+
+  const notificar = async () => {
+    if (!sel || !notif || !notif.n) return;
+    if (!notif.correo && !notif.telefono) {
+      alert("La empresa no tiene correo ni teléfono. Edita el contacto antes de notificar."); return;
+    }
+    const canales = [notif.telefono && `WhatsApp (${notif.telefono})`, notif.correo && `correo (${notif.correo})`].filter(Boolean).join(" y ");
+    if (!confirm(`¿Avisar a ${sel.nombre} que tiene ${notif.n} mensaje(s) sin leer?\n\nSale UN aviso por ${canales}.`)) return;
+    setNotificando(true);
+    try {
+      const resp = await fetch("https://bigticket2026.app.n8n.cloud/webhook/notificar-mensajes-tercero", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tercero_id: sel.tercero_id, correo: notif.correo, telefono: notif.telefono }),
+      });
+      const r = await resp.json().catch(() => null);
+      if (!resp.ok || !r) throw new Error("el servicio de avisos no respondió");
+      if (r.ok === false) throw new Error(r.error || "no se pudo notificar");
+      alert(`📣 Aviso enviado a ${r.empresa}.\n\nWhatsApp: ${r.whatsapp}\nCorreo: ${r.email}`);
+      await cargarNotif(sel.tercero_id);
+    } catch (e) { alert("No se pudo notificar: " + e.message); }
+    finally { setNotificando(false); }
+  };
 
   const cargarConvos = async () => {
     const { data } = await sb.from("mensajes_terceros")
@@ -4914,6 +4948,8 @@ function MensajesTerceros() {
     await sb.from("mensajes_terceros").update({ leido: true })
       .eq("tercero_id", c.tercero_id).eq("autor", "tercero").eq("leido", false);
     cargarConvos();
+    setEditContacto(false);
+    cargarNotif(c.tercero_id);
   };
 
   // El hilo abierto se refresca solo: si el tercero responde mientras el
@@ -4946,6 +4982,7 @@ function MensajesTerceros() {
     if (error) { alert("No se pudo enviar: " + error.message); setTexto(t); return; }
     setMsgs(prev => [...(prev || []), data]);
     cargarConvos();
+    cargarNotif(sel.tercero_id);   // el contador del botón Notificar sube al tiro
   };
 
   const iniciarConversacion = () => {
@@ -4999,7 +5036,44 @@ function MensajesTerceros() {
           </div>
         ) : (
           <>
-            <div style={{ padding: "12px 16px", borderBottom: "0.5px solid #e4e7ec", fontWeight: 700, fontSize: 14 }}>🏢 {sel.nombre}</div>
+            <div style={{ padding: "12px 16px", borderBottom: "0.5px solid #e4e7ec" }}>
+              <div style={{ fontWeight: 700, fontSize: 14, marginBottom: notif && notif.n > 0 ? 8 : 0 }}>🏢 {sel.nombre}</div>
+              {/* Barra de notificación: mensajes sin leer + contacto + botón */}
+              {notif && notif.n > 0 && (
+                <div style={{ background: "#fff8e6", border: "1px solid #f5d9b8", borderRadius: 10, padding: "9px 12px" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                    <span style={{ fontSize: 12.5, fontWeight: 700, color: "#b45309", flex: 1, minWidth: 160 }}>
+                      ✉️ {notif.n} mensaje(s) que el tercero aún no lee
+                    </span>
+                    <button onClick={() => setEditContacto(!editContacto)}
+                      style={{ border: "none", background: "none", color: "#7c3aed", fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: "'Geist',sans-serif" }}>
+                      {editContacto ? "Cerrar" : "✎ Contacto"}
+                    </button>
+                    <button onClick={notificar} disabled={notificando}
+                      style={{ background: "#F47B20", color: "#fff", border: "none", borderRadius: 8, padding: "8px 16px",
+                        fontSize: 12, fontWeight: 800, cursor: "pointer", opacity: notificando ? 0.6 : 1, fontFamily: "'Geist',sans-serif" }}>
+                      {notificando ? "Enviando…" : "📣 Notificar por WhatsApp y correo"}
+                    </button>
+                  </div>
+                  <div style={{ fontSize: 11.5, color: "#7a5c1e", marginTop: 5 }}>
+                    Irá a: 📧 {notif.correo || <b style={{ color: "#c0392b" }}>sin correo</b>} · 📱 {notif.telefono || <b style={{ color: "#c0392b" }}>sin teléfono</b>}
+                  </div>
+                  {editContacto && (
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 8, marginTop: 8 }}>
+                      <input value={notif.correo} onChange={(e) => setNotif({ ...notif, correo: e.target.value })}
+                        placeholder="correo@empresa.com"
+                        style={{ border: "1px solid #ddd0f7", borderRadius: 8, padding: "8px 10px", fontSize: 12, fontFamily: "'Geist',sans-serif" }} />
+                      <input value={notif.telefono} onChange={(e) => setNotif({ ...notif, telefono: e.target.value.replace(/\D/g, "").slice(0, 10) })}
+                        placeholder="10 dígitos, sin +52"
+                        style={{ border: "1px solid #ddd0f7", borderRadius: 8, padding: "8px 10px", fontSize: 12, fontFamily: "monospace" }} />
+                      <div style={{ gridColumn: "1 / -1", fontSize: 10.5, color: "#7c6f96" }}>
+                        Solo para este aviso — no cambia el Perfil de Empresa. Para corregirlo de raíz, usa la pestaña Avisos.
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
             <div style={{ flex: 1, overflowY: "auto", padding: 16, maxHeight: 440 }}>
               {msgs === null ? <div style={{ fontSize: 12, color: "#888" }}>Cargando…</div>
               : msgs.length === 0 ? <div style={{ fontSize: 12, color: "#888" }}>Sin mensajes. Escribe el primero abajo.</div>
