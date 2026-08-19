@@ -2481,7 +2481,8 @@ function HistorialPagoMX({ usuario }) {
   const [semana, setSemana] = useState(() => { const s = semanaInventario(fechaOperativaOffset(0)); return s != null ? s - 1 : 24; });
   const [loading, setLoading] = useState(false);
   const [d, setD] = useState({ prefacturas: [], eventos: [], saldos: [], reportes: [], noCreadas: [] });
-  const fmtMon = (v) => "$ " + Math.round(Number(v || 0)).toLocaleString("es-CL");
+  // Contabilidad: 2 decimales siempre (el motor ya entrega montos redondeados a 2).
+  const fmtMon = (v) => "$ " + Number(v || 0).toLocaleString("es-CL", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const fmtDT = (s) => { if (!s) return "\u2014"; try { return new Date(s).toLocaleString("es-MX", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }); } catch (e) { return String(s).slice(0, 16); } };
   const cargar = async (sem) => {
     setLoading(true);
@@ -2664,7 +2665,8 @@ function ConciliacionTercerosMX({ usuario }) {
   const aplicarVarsCorreo = (txt, empresa, sc, periodo, operacion) => String(txt || "").replace(/\{TRANSPORTISTA\}/g, empresa || "").replace(/\{CECO\}/g, sc || "").replace(/\{PERIODO\}/g, periodo || "").replace(/\{OPERACION\}/g, operacion || "");
 
   const norm = (s) => String(s || "").trim().toUpperCase();
-  const fmtMon = (v) => "$ " + Math.round(Number(v || 0)).toLocaleString("es-CL");
+  // Contabilidad: 2 decimales siempre (el motor ya entrega montos redondeados a 2).
+  const fmtMon = (v) => "$ " + Number(v || 0).toLocaleString("es-CL", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const fmtPct = (v) => (v == null ? "—" : Number(v).toLocaleString("es-CL", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + "%");
   const fmtKm = (v) => (v == null ? "—" : Number(v).toLocaleString("es-CL", { maximumFractionDigits: 1 }));
   const fmtFactor = (v) => Number(v || 0).toLocaleString("es-CL", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -5791,6 +5793,21 @@ async function leerMaestroDia(fecha) {
 // el motor va a pagar, sin reimplementar la regla y quedar desfasada.
 //   pagaSegunMaestro = con_ayudante === "SI" en vw_maestro_supervisores_auto
 //   La decisión del analista manda; sin decisión no se paga.
+// ── Redondeo contable a 2 decimales ──────────────────────────────────
+// Los montos del motor salen con decimales largos porque el ajuste NS y las
+// bonificaciones son PORCENTAJES sobre la tarifa base (ej. 1847 * 0.07 =
+// 129.28999999999999). El KM no aporta decimales: solo elige el tramo, y el
+// tramo devuelve una tarifa discreta de la matriz.
+// Regla contable aplicada: se redondea CADA COMPONENTE a 2 decimales y el total
+// se arma sumando componentes ya redondeados. Así la suma de las líneas de una
+// prefactura cuadra exactamente con su total (sin descuadres de un centavo).
+// Se usa Number(...toFixed(2)) en vez de Math.round(x*100)/100 porque toFixed
+// resuelve mejor los casos límite del punto flotante (ej. 1.005).
+function r2(x) {
+  const v = Number(x || 0);
+  return Number.isFinite(v) ? Number(v.toFixed(2)) : 0;
+}
+
 function estadoAuxiliar({ pagaSegunMaestro, decision, sc, tipologia }) {
   if (!pagaSegunMaestro) return "SIN_HELPER";
   const d = decision ? String(decision).toLowerCase() : null;
@@ -5933,7 +5950,7 @@ function calcularPagos({ maestro, snapshots, scZonas, especiales, matrizPrecios,
     const noPagaNS0 = nsPct <= 0;  // Regla: nivel de servicio 0 => sin pago
     const noPaga = ajuste.noPaga || noPagaNS0;
     const factorNS = 1 + (ajuste.pct / 100);
-    const ajusteNS = tarifaBase * (ajuste.pct / 100);
+    const ajusteNS = r2(tarifaBase * (ajuste.pct / 100));
 
     // ── Helper: gatillo = con_ayudante del Maestro Supervisores ──
     // La DECISIÓN explícita del analista (aprobaciones_helper.decision) manda:
@@ -6055,15 +6072,16 @@ function calcularPagos({ maestro, snapshots, scZonas, especiales, matrizPrecios,
         if (!mejor || Number(b.pct_aumento || 0) > Number(mejor.pct_aumento || 0)) mejor = b;
       }
       if (mejor) {
-        montoBono = tarifaBase * (Number(mejor.pct_aumento || 0) / 100);
+        montoBono = r2(tarifaBase * (Number(mejor.pct_aumento || 0) / 100));
         bonoAplicado = mejor;
-        obs.push(`Bonificación "${mejor.nombre}" +${Number(mejor.pct_aumento || 0)}% sobre base = +${Math.round(montoBono)}`);
+        obs.push(`Bonificación "${mejor.nombre}" +${Number(mejor.pct_aumento || 0)}% sobre base = +${montoBono.toFixed(2)}`);
       }
     }
 
-    const pagoBruto = noPaga ? 0 : (tarifaBase + ajusteNS + montoBono + montoAux);
+    // Suma de componentes ya redondeados: garantiza que detalle y total cuadren.
+    const pagoBruto = noPaga ? 0 : r2(r2(tarifaBase) + ajusteNS + montoBono + r2(montoAux));
     const descuentos = 0;
-    const pagoNeto = pagoBruto - descuentos;
+    const pagoNeto = r2(pagoBruto - descuentos);
     const nsCategoriaFinal = ajuste.categoria;
 
     // Pago MELI: lo que MELI nos paga (matriz por cobrar + $350 si hubo helper).
@@ -6101,7 +6119,7 @@ function calcularPagos({ maestro, snapshots, scZonas, especiales, matrizPrecios,
       pct_visitado_real: pctVisitadoReal,
       ns_categoria: nsCategoriaFinal,
       factor_ns: factorNS,
-      tarifa_base: tarifaBase,
+      tarifa_base: r2(tarifaBase),
       ajuste_ns: ajusteNS,
       monto_bonificacion: noPaga ? 0 : montoBono,
       bonificacion_nombre: bonoAplicado ? bonoAplicado.nombre : null,
@@ -6109,11 +6127,11 @@ function calcularPagos({ maestro, snapshots, scZonas, especiales, matrizPrecios,
       tiene_auxiliar: tieneHelper,
       auxiliar_estado: auxiliarEstado,
       auxiliar_snapshots_total: tieneHelper ? Number(m.cantidad_personas || 0) : 0,
-      monto_auxiliar: noPaga ? 0 : montoAux,
+      monto_auxiliar: noPaga ? 0 : r2(montoAux),
       pago_bruto: pagoBruto,
       descuentos_externos: descuentos,
       pago_neto: pagoNeto,
-      pago_meli: pagoMeli,
+      pago_meli: pagoMeli == null ? null : r2(pagoMeli),
       semana_pago: calcularSemanaPago(fechaSalida),
       tiene_tarifa_especial: tieneTarifaEspecial,
       ruta_no_operada: rutaNoOperada,
@@ -6766,7 +6784,8 @@ function ListadoPagosDiarios({ usuario }) {
   };
 
   // Helpers de formato
-  const fmtMXN = (n) => `$${Number(n || 0).toLocaleString("es-MX", { maximumFractionDigits: 0 })}`;
+  // Contabilidad: 2 decimales siempre.
+  const fmtMXN = (n) => `$${Number(n || 0).toLocaleString("es-MX", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   const fmtPct = (n) => `${Number(n || 0).toFixed(2)}%`;
   const fmtDuracion = (mins) => {
     if (mins == null || mins === 0) return "—";
@@ -9239,7 +9258,8 @@ function PagosPausados({ usuario }) {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [incluirLiberados, setIncluirLiberados] = useState(false);
-  const fmtMon = (v) => "$ " + Math.round(Number(v || 0)).toLocaleString("es-CL");
+  // Contabilidad: 2 decimales siempre (el motor ya entrega montos redondeados a 2).
+  const fmtMon = (v) => "$ " + Number(v || 0).toLocaleString("es-CL", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const fmtDT = (s) => { if (!s) return "\u2014"; try { return new Date(s).toLocaleString("es-MX", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }); } catch (e) { return String(s).slice(0, 16); } };
   const cargar = async () => {
     setLoading(true);
