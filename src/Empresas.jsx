@@ -58,6 +58,23 @@ function DetalleEmpresa({ empresa, onVolver, onActualizada }) {
   const [pagos, setPagos] = useState(null);
   const [solicitudes, setSolicitudes] = useState(null);
   const [eventos, setEventos] = useState(null);
+  // El bucket archivador_empresas es privado: la URL se firma al momento
+  // (5 minutos) y no se persiste en ningún lado.
+  const [cargandoEvidencia, setCargandoEvidencia] = useState(false);
+  const abrirEvidencia = async (descargar) => {
+    if (!perfil || !perfil.evidencia_cuenta_path) return;
+    setCargandoEvidencia(true);
+    try {
+      const { data, error } = await sb.storage
+        .from("archivador_empresas")
+        .createSignedUrl(perfil.evidencia_cuenta_path, 300,
+          descargar ? { download: `evidencia_cuenta_${(empresa.nombre || "empresa").replace(/[^a-zA-Z0-9]+/g, "_")}` } : undefined);
+      if (error || !data) throw new Error((error && error.message) || "no se pudo generar el enlace");
+      window.open(data.signedUrl, "_blank", "noopener");
+    } catch (e) {
+      alert("No se pudo abrir la evidencia: " + e.message);
+    } finally { setCargandoEvidencia(false); }
+  };
   const [operacion, setOperacion] = useState(null);        // confirmaciones diarias de la Bitácora
   const [acceso, setAcceso] = useState(null);              // { cuentas:[], emailPortal }
   const [accEmail, setAccEmail] = useState("");
@@ -381,7 +398,9 @@ function DetalleEmpresa({ empresa, onVolver, onActualizada }) {
           {perfil === null ? <div style={{ fontSize: 12, color: "#888" }}>Cargando…</div> : (
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(230px, 1fr))", gap: "10px 18px" }}>
               {Object.entries({ ...{ nombre: empresa.nombre, rfc: empresa.rfc }, ...(perfil || {}) })
-                .filter(([k]) => !["id", "tercero_id", "created_at", "updated_at"].includes(k))
+                // evidencia_cuenta_path no se muestra como texto: tiene su
+                // propio bloque abajo, con ver y descargar.
+                .filter(([k]) => !["id", "tercero_id", "created_at", "updated_at", "evidencia_cuenta_path"].includes(k))
                 .map(([k, v]) => (
                   <div key={k} style={{ padding: "6px 0", borderBottom: "1px solid #f4f5f7" }}>
                     <div style={{ fontSize: 9.5, color: "#98a2b3", fontWeight: 700, textTransform: "uppercase" }}>{k.replace(/_/g, " ")}</div>
@@ -395,6 +414,43 @@ function DetalleEmpresa({ empresa, onVolver, onActualizada }) {
           {perfil && Object.keys(perfil).length === 0 && (
             <div style={{ fontSize: 12, color: "#b45309", background: "#fff8f0", border: "1px solid #fcd9b6", borderRadius: 8, padding: "8px 12px", marginTop: 10 }}>
               ⚠️ Esta empresa aún no completa su Perfil de Empresa en el portal — sin CLABE no hay a dónde pagarle.
+            </div>
+          )}
+
+          {/* Print del banco con la CLABE: es el respaldo de a quién se le
+              paga, así que se ve y se descarga desde aquí en vez de tener
+              que pedírselo a la empresa. Vive en el bucket privado, por eso
+              la URL se firma al momento (5 min) y no se guarda. */}
+          {perfil && Object.keys(perfil).length > 0 && (
+            <div style={{ marginTop: 16, paddingTop: 14, borderTop: "1px solid #f0f1f3" }}>
+              <div style={{ fontSize: 12, fontWeight: 800, color: "#667085", textTransform: "uppercase", letterSpacing: 1, marginBottom: 10 }}>
+                Evidencia de la cuenta de pago
+              </div>
+              {perfil.evidencia_cuenta_path ? (
+                <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap",
+                  background: "#f4faf8", border: "1px solid #c4e6df", borderRadius: 10, padding: "11px 14px" }}>
+                  <span style={{ fontSize: 18 }}>🏦</span>
+                  <div style={{ flex: 1, minWidth: 190 }}>
+                    <div style={{ fontSize: 12.5, fontWeight: 700, color: "#0f766e" }}>Print del banco con banco y CLABE</div>
+                    <div style={{ fontSize: 10.5, color: "#98a2b3", wordBreak: "break-all" }}>{perfil.evidencia_cuenta_path}</div>
+                  </div>
+                  <button onClick={() => abrirEvidencia(false)} disabled={cargandoEvidencia}
+                    style={{ border: "1px solid #0f766e", background: "#fff", color: "#0f766e", borderRadius: 8,
+                      padding: "7px 14px", fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: "'Geist',sans-serif" }}>
+                    {cargandoEvidencia ? "Abriendo…" : "👁 Ver"}
+                  </button>
+                  <button onClick={() => abrirEvidencia(true)} disabled={cargandoEvidencia}
+                    style={{ border: "none", background: "#0f766e", color: "#fff", borderRadius: 8,
+                      padding: "7px 14px", fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: "'Geist',sans-serif" }}>
+                    ⬇ Descargar
+                  </button>
+                </div>
+              ) : (
+                <div style={{ fontSize: 12, color: "#b45309", background: "#fff8f0", border: "1px solid #fcd9b6", borderRadius: 8, padding: "9px 12px" }}>
+                  ⚠️ Sin print del banco cargado. Es el respaldo de que la CLABE corresponde al titular declarado
+                  {perfil.cuenta_clabe ? " — la CLABE está registrada pero sin evidencia que la valide." : "."}
+                </div>
+              )}
             </div>
           )}
         </div>
