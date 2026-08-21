@@ -6423,17 +6423,21 @@ function ListadoPagosDiarios({ usuario }) {
   // A diferencia de "Con alertas" (que incluye avisos operativos), esto marca SOLO
   // vacíos de información maestra que impiden calcular la tarifa correcta.
   // Se deduce de las observaciones que ya escribe el motor + campos vacíos.
+  // Campos reales que devuelve el motor (verificado 21-08-2026): la tipología es
+  // `tipologia` (no `tipo_vehiculo`) y el km real es `km_recorridos`. Usar nombres
+  // inexistentes hacía que el test diera siempre verdadero y la tarjeta contara
+  // TODAS las rutas.
   const FALTAS = [
     { id: "tipologia", label: "Sin tipología de vehículo",
-      test: (p) => !p.tipo_vehiculo || /Tipolog[íi]a no reconocida/i.test(p.observaciones || "") },
+      test: (p) => !p.tipologia || /Tipolog[íi]a no reconocida/i.test(p.observaciones || "") },
+    { id: "km",        label: "Sin KM real",
+      test: (p) => !(Number(p.km_recorridos) > 0) },
     { id: "zona",      label: "SC sin zona mapeada",
-      test: (p) => /SC no mapeado/i.test(p.observaciones || "") },
+      test: (p) => !p.zona || /SC no mapeado/i.test(p.observaciones || "") },
     { id: "tarifa",    label: "Sin tarifa en la matriz",
       test: (p) => /Sin tarifa para/i.test(p.observaciones || "") },
-    { id: "km",        label: "Sin KM real",
-      test: (p) => /SIN KM REAL/i.test(p.observaciones || "") },
     { id: "visitado",  label: "Sin % visitado",
-      test: (p) => /Sin % visitado/i.test(p.observaciones || "") },
+      test: (p) => p.pct_visitado == null || /Sin % visitado/i.test(p.observaciones || "") },
   ];
   const faltasDe = (p) => FALTAS.filter(f => f.test(p)).map(f => f.id);
   const faltaInfo = (p) => faltasDe(p).length > 0;
@@ -7253,7 +7257,7 @@ function ListadoPagosDiarios({ usuario }) {
                 </div>
               )}
               {totales.datosIncompletos > 0 && (
-                <div style={card({ background: "#fdf4ff", border: `2px solid ${filtroEstado === "datos_incompletos" ? "#a21caf" : "#e9d5ff"}`, minWidth: 260 })}>
+                <div style={{ ...card({ background: "#fdf4ff", border: `2px solid ${filtroEstado === "datos_incompletos" ? "#a21caf" : "#e9d5ff"}` }), minWidth: 210, maxWidth: 240, flex: "0 0 auto" }}>
                   <div onClick={() => { setFiltroEstado(filtroEstado === "datos_incompletos" ? "todas" : "datos_incompletos"); setCausaFalta(null); }}
                     title="Líneas que no se pueden tarifar bien porque les falta información maestra"
                     style={{ cursor: "pointer" }}>
@@ -7267,18 +7271,20 @@ function ListadoPagosDiarios({ usuario }) {
                       if (!cn) return null;
                       const activo = filtroEstado === "datos_incompletos" && causaFalta === f.id;
                       return (
-                        <div key={f.id}
+                        <div key={f.id} title={f.label}
                           onClick={() => {
                             if (activo) { setCausaFalta(null); setFiltroEstado("todas"); }
                             else { setCausaFalta(f.id); setFiltroEstado("datos_incompletos"); }
                           }}
-                          style={{ display: "flex", justifyContent: "space-between", gap: 8, cursor: "pointer",
+                          style={{ display: "flex", justifyContent: "space-between", gap: 6, cursor: "pointer",
                             fontSize: 10.5, fontWeight: activo ? 800 : 600,
                             color: activo ? "#701a75" : "#a21caf",
                             background: activo ? "#f5d0fe" : "transparent",
                             borderRadius: 4, padding: "2px 4px" }}>
-                          <span>{activo ? "▸ " : ""}{f.label}</span>
-                          <span>{cn}</span>
+                          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            {activo ? "▸ " : ""}{f.label}
+                          </span>
+                          <span style={{ flexShrink: 0 }}>{cn}</span>
                         </div>
                       );
                     })}
