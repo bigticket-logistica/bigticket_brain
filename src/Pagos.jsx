@@ -7257,7 +7257,9 @@ function ListadoPagosDiarios({ usuario }) {
                 </div>
               )}
               {totales.datosIncompletos > 0 && (
-                <div style={{ ...card({ background: "#fdf4ff", border: `2px solid ${filtroEstado === "datos_incompletos" ? "#a21caf" : "#e9d5ff"}` }), minWidth: 210, maxWidth: 240, flex: "0 0 auto" }}>
+                <div style={card({ background: "#fdf4ff",
+                    border: `1px solid ${filtroEstado === "datos_incompletos" ? "#a21caf" : "#e9d5ff"}`,
+                    gridColumn: "span 2" })}>
                   <div onClick={() => { setFiltroEstado(filtroEstado === "datos_incompletos" ? "todas" : "datos_incompletos"); setCausaFalta(null); }}
                     title="Líneas que no se pueden tarifar bien porque les falta información maestra"
                     style={{ cursor: "pointer" }}>
@@ -7265,7 +7267,7 @@ function ListadoPagosDiarios({ usuario }) {
                     <div style={big("#86198f")}>{totales.datosIncompletos}</div>
                     <div style={hint("#86198f")}>📋 clic para filtrar</div>
                   </div>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 3, marginTop: 6, borderTop: "1px solid #e9d5ff", paddingTop: 6 }}>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 1, marginTop: 4, borderTop: "1px solid #e9d5ff", paddingTop: 4 }}>
                     {FALTAS.map(f => {
                       const cn = pagos.filter(p => f.test(p)).length;
                       if (!cn) return null;
@@ -7277,10 +7279,10 @@ function ListadoPagosDiarios({ usuario }) {
                             else { setCausaFalta(f.id); setFiltroEstado("datos_incompletos"); }
                           }}
                           style={{ display: "flex", justifyContent: "space-between", gap: 6, cursor: "pointer",
-                            fontSize: 10.5, fontWeight: activo ? 800 : 600,
+                            fontSize: 8.5, fontWeight: activo ? 800 : 600, lineHeight: 1.5,
                             color: activo ? "#701a75" : "#a21caf",
                             background: activo ? "#f5d0fe" : "transparent",
-                            borderRadius: 4, padding: "2px 4px" }}>
+                            borderRadius: 3, padding: "1px 3px" }}>
                           <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                             {activo ? "▸ " : ""}{f.label}
                           </span>
