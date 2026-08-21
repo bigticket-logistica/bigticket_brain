@@ -86,6 +86,45 @@ function DetalleEmpresa({ empresa, onVolver, onActualizada }) {
   // El bucket archivador_empresas es privado: la URL se firma al momento
   // (5 minutos) y no se persiste en ningún lado.
   const [cargandoEvidencia, setCargandoEvidencia] = useState(false);
+  // Envío de la ficha a Finanzas: correo con todos los datos + adjuntos,
+  // y snapshot guardado de lo que se envió (envios_ficha_empresa).
+  const [enviandoFicha, setEnviandoFicha] = useState(false);
+  const [ultimoEnvio, setUltimoEnvio] = useState(null);
+  const DEST_FINANZAS = ["esteban.dussaut@bigticket.cl", "nicole.vargas@bigticket.cl", "adriana.giummarra@bigticket.cl"];
+
+  const cargarUltimoEnvio = async () => {
+    const { data } = await sb.from("envios_ficha_empresa")
+      .select("enviado_at, enviado_por, destinatarios, resultado")
+      .eq("tercero_id", empresa.tercero_id)
+      .order("enviado_at", { ascending: false }).limit(1);
+    setUltimoEnvio((data && data[0]) || null);
+  };
+  useEffect(() => { if (empresa.tercero_id) cargarUltimoEnvio(); }, [empresa.tercero_id]);
+
+  const enviarFichaFinanzas = async () => {
+    const faltan = [];
+    if (!perfil || !perfil.cuenta_clabe) faltan.push("CLABE");
+    if (!perfil || !perfil.evidencia_cuenta_path) faltan.push("print del banco");
+    if (perfil && perfil.figura_juridica === "moral" && !perfil.acta_constitutiva_path) faltan.push("acta constitutiva");
+    if (faltan.length && !confirm(`⚠️ A esta empresa le falta: ${faltan.join(", ")}.\n\nFinanzas recibirá la ficha incompleta. ¿Enviar igual?`)) return;
+    if (!faltan.length && !confirm(`¿Enviar la ficha de ${empresa.nombre} a Finanzas?\n\n${DEST_FINANZAS.join("\n")}\n\nVan adjuntos los documentos del perfil.`)) return;
+
+    setEnviandoFicha(true);
+    try {
+      const resp = await fetch("https://bigticket2026.app.n8n.cloud/webhook/ficha-empresa-finanzas", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tercero_id: empresa.tercero_id,
+          enviado_por: window.__PERFIL_EMAIL || "analista_brain",
+          destinatarios: DEST_FINANZAS }),
+      });
+      const r = await resp.json().catch(() => null);
+      if (!resp.ok || !r) throw new Error("el servicio de correo no respondió");
+      if (r.ok === false) throw new Error(r.detalle || "no se pudo enviar");
+      alert(`📨 Ficha enviada a Finanzas.\n\nEmpresa: ${r.empresa}\nAdjuntos: ${r.adjuntos}`);
+      await cargarUltimoEnvio();
+    } catch (e) { alert("No se pudo enviar: " + e.message); }
+    finally { setEnviandoFicha(false); }
+  };
   const abrirDocPerfil = async (path, descargar, prefijo) => {
     if (!path) return;
     setCargandoEvidencia(true);
@@ -341,7 +380,7 @@ function DetalleEmpresa({ empresa, onVolver, onActualizada }) {
     ["resumen", "📇 Resumen"], ["datos", "🏦 Datos & Cuenta"], ["placas", "🚚 Placas & Personal"],
     ["docs", "🗂 Documentos"], ["pagos", "💰 Pagos"], ["solicitudes", "📥 Solicitudes"], ["operacion", "📅 Operación"], ["acceso", "🔑 Acceso al portal"],
   ];
-  const lblEv = { acceso_portal_creado: "🔑 Acceso al portal creado", acceso_clave_cambiada: "🔧 Contraseña actualizada", acceso_portal_reset: "✉️ Correo de restablecimiento enviado", estado_pausada: "⏸ Empresa pausada", estado_activa: "▶️ Empresa reactivada", estado_baja: "🛑 Empresa dada de baja", pagos_pausados: "💸⏸ Pagos pausados", pagos_reactivados: "💸▶️ Pagos reactivados", solicitud_aprobada: "✅ Solicitud aprobada", solicitud_rechazada: "❌ Solicitud rechazada" };
+  const lblEv = { acceso_portal_creado: "🔑 Acceso al portal creado", acceso_clave_cambiada: "🔧 Contraseña actualizada", acceso_portal_reset: "✉️ Correo de restablecimiento enviado", estado_pausada: "⏸ Empresa pausada", estado_activa: "▶️ Empresa reactivada", estado_baja: "🛑 Empresa dada de baja", pagos_pausados: "💸⏸ Pagos pausados", pagos_reactivados: "💸▶️ Pagos reactivados", solicitud_aprobada: "✅ Solicitud aprobada", solicitud_rechazada: "❌ Solicitud rechazada", ficha_enviada_finanzas: "📨 Ficha enviada a Finanzas" };
 
   return (
     <div>
@@ -485,6 +524,38 @@ function DetalleEmpresa({ empresa, onVolver, onActualizada }) {
                   Figura jurídica sin declarar en el portal.
                 </div>
               )}
+
+              {/* Envío de la ficha completa a Finanzas */}
+              <div style={{ marginTop: 18, paddingTop: 16, borderTop: "1px solid #f0f1f3" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+                  <div style={{ flex: 1, minWidth: 220 }}>
+                    <div style={{ fontSize: 12.5, fontWeight: 800, color: NAVY }}>📨 Enviar ficha a Finanzas</div>
+                    <div style={{ fontSize: 11.5, color: "#667085", lineHeight: 1.5 }}>
+                      Correo con todos los datos de la empresa y los documentos adjuntos.
+                      Queda guardado un snapshot de lo enviado.
+                    </div>
+                    <div style={{ fontSize: 10.5, color: "#98a2b3", marginTop: 3 }}>
+                      {DEST_FINANZAS.join(" · ")}
+                    </div>
+                  </div>
+                  <button onClick={enviarFichaFinanzas} disabled={enviandoFicha}
+                    style={{ background: NAVY, color: "#fff", border: "none", borderRadius: 9,
+                      padding: "11px 20px", fontSize: 12.5, fontWeight: 800,
+                      cursor: enviandoFicha ? "wait" : "pointer", opacity: enviandoFicha ? 0.6 : 1,
+                      fontFamily: "'Geist',sans-serif", whiteSpace: "nowrap" }}>
+                    {enviandoFicha ? "Enviando…" : "📨 Enviar a Finanzas"}
+                  </button>
+                </div>
+                {ultimoEnvio && (
+                  <div style={{ marginTop: 10, background: "#f4faf8", border: "1px solid #c4e6df",
+                    borderRadius: 8, padding: "8px 12px", fontSize: 11.5, color: "#0f766e" }}>
+                    ✓ Último envío: <b>{fmtF(ultimoEnvio.enviado_at)}</b> por {ultimoEnvio.enviado_por}
+                    {ultimoEnvio.resultado && ultimoEnvio.resultado !== "ok" && (
+                      <span style={{ color: "#c0392b" }}> · ⚠️ {ultimoEnvio.resultado}</span>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
           )}
         </div>
