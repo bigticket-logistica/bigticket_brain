@@ -7259,7 +7259,9 @@ function ListadoPagosDiarios({ usuario }) {
               {totales.datosIncompletos > 0 && (
                 <div style={card({ background: "#fdf4ff",
                     border: `1px solid ${filtroEstado === "datos_incompletos" ? "#a21caf" : "#e9d5ff"}`,
-                    gridColumn: "span 2" })}>
+                    // Ocupa 2 columnas solo si hay varias causas que listar; con 1 o 2
+                    // se comporta como cualquier otra tarjeta del grid.
+                    gridColumn: FALTAS.filter(f => pagos.some(p => f.test(p))).length >= 3 ? "span 2" : "auto" })}>
                   <div onClick={() => { setFiltroEstado(filtroEstado === "datos_incompletos" ? "todas" : "datos_incompletos"); setCausaFalta(null); }}
                     title="Líneas que no se pueden tarifar bien porque les falta información maestra"
                     style={{ cursor: "pointer" }}>
