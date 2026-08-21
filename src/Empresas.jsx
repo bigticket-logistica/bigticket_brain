@@ -26,6 +26,31 @@ const ESTADO_EMPRESA = {
 
 const fmtF = (x) => (x ? new Date(x).toLocaleString("es-MX", { day: "2-digit", month: "short", year: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—");
 
+// Documento del perfil con ver y descargar. El bucket es privado: la URL se
+// firma al momento (5 min) y no se persiste en ningun lado.
+function DocPerfil({ ic, titulo, path, color, bg, borde, cargando, onVer, onBajar }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap",
+      background: bg, border: "1px solid " + borde, borderRadius: 10, padding: "11px 14px", marginBottom: 8 }}>
+      <span style={{ fontSize: 18 }}>{ic}</span>
+      <div style={{ flex: 1, minWidth: 190 }}>
+        <div style={{ fontSize: 12.5, fontWeight: 700, color }}>{titulo}</div>
+        <div style={{ fontSize: 10.5, color: "#98a2b3", wordBreak: "break-all" }}>{path}</div>
+      </div>
+      <button onClick={onVer} disabled={cargando}
+        style={{ border: "1px solid " + color, background: "#fff", color, borderRadius: 8,
+          padding: "7px 14px", fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: "'Geist',sans-serif" }}>
+        {cargando ? "Abriendo\u2026" : "\u{1F441} Ver"}
+      </button>
+      <button onClick={onBajar} disabled={cargando}
+        style={{ border: "none", background: color, color: "#fff", borderRadius: 8,
+          padding: "7px 14px", fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: "'Geist',sans-serif" }}>
+        \u2B07 Descargar
+      </button>
+    </div>
+  );
+}
+
 function Chip({ texto, bg, fg }) {
   return <span style={{ fontSize: 10, fontWeight: 800, padding: "3px 10px", borderRadius: 12, background: bg, color: fg, whiteSpace: "nowrap" }}>{texto}</span>;
 }
@@ -61,18 +86,18 @@ function DetalleEmpresa({ empresa, onVolver, onActualizada }) {
   // El bucket archivador_empresas es privado: la URL se firma al momento
   // (5 minutos) y no se persiste en ningún lado.
   const [cargandoEvidencia, setCargandoEvidencia] = useState(false);
-  const abrirEvidencia = async (descargar) => {
-    if (!perfil || !perfil.evidencia_cuenta_path) return;
+  const abrirDocPerfil = async (path, descargar, prefijo) => {
+    if (!path) return;
     setCargandoEvidencia(true);
     try {
       const { data, error } = await sb.storage
         .from("archivador_empresas")
-        .createSignedUrl(perfil.evidencia_cuenta_path, 300,
-          descargar ? { download: `evidencia_cuenta_${(empresa.nombre || "empresa").replace(/[^a-zA-Z0-9]+/g, "_")}` } : undefined);
+        .createSignedUrl(path, 300,
+          descargar ? { download: `${prefijo}_${(empresa.nombre || "empresa").replace(/[^a-zA-Z0-9]+/g, "_")}` } : undefined);
       if (error || !data) throw new Error((error && error.message) || "no se pudo generar el enlace");
       window.open(data.signedUrl, "_blank", "noopener");
     } catch (e) {
-      alert("No se pudo abrir la evidencia: " + e.message);
+      alert("No se pudo abrir el documento: " + e.message);
     } finally { setCargandoEvidencia(false); }
   };
   const [operacion, setOperacion] = useState(null);        // confirmaciones diarias de la Bitácora
@@ -400,7 +425,8 @@ function DetalleEmpresa({ empresa, onVolver, onActualizada }) {
               {Object.entries({ ...{ nombre: empresa.nombre, rfc: empresa.rfc }, ...(perfil || {}) })
                 // evidencia_cuenta_path no se muestra como texto: tiene su
                 // propio bloque abajo, con ver y descargar.
-                .filter(([k]) => !["id", "tercero_id", "created_at", "updated_at", "evidencia_cuenta_path"].includes(k))
+                .filter(([k]) => !["id", "tercero_id", "created_at", "updated_at",
+                                   "evidencia_cuenta_path", "acta_constitutiva_path"].includes(k))
                 .map(([k, v]) => (
                   <div key={k} style={{ padding: "6px 0", borderBottom: "1px solid #f4f5f7" }}>
                     <div style={{ fontSize: 9.5, color: "#98a2b3", fontWeight: 700, textTransform: "uppercase" }}>{k.replace(/_/g, " ")}</div>
@@ -424,31 +450,39 @@ function DetalleEmpresa({ empresa, onVolver, onActualizada }) {
           {perfil && Object.keys(perfil).length > 0 && (
             <div style={{ marginTop: 16, paddingTop: 14, borderTop: "1px solid #f0f1f3" }}>
               <div style={{ fontSize: 12, fontWeight: 800, color: "#667085", textTransform: "uppercase", letterSpacing: 1, marginBottom: 10 }}>
-                Evidencia de la cuenta de pago
+                Documentos del perfil
               </div>
               {perfil.evidencia_cuenta_path ? (
-                <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap",
-                  background: "#f4faf8", border: "1px solid #c4e6df", borderRadius: 10, padding: "11px 14px" }}>
-                  <span style={{ fontSize: 18 }}>🏦</span>
-                  <div style={{ flex: 1, minWidth: 190 }}>
-                    <div style={{ fontSize: 12.5, fontWeight: 700, color: "#0f766e" }}>Print del banco con banco y CLABE</div>
-                    <div style={{ fontSize: 10.5, color: "#98a2b3", wordBreak: "break-all" }}>{perfil.evidencia_cuenta_path}</div>
-                  </div>
-                  <button onClick={() => abrirEvidencia(false)} disabled={cargandoEvidencia}
-                    style={{ border: "1px solid #0f766e", background: "#fff", color: "#0f766e", borderRadius: 8,
-                      padding: "7px 14px", fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: "'Geist',sans-serif" }}>
-                    {cargandoEvidencia ? "Abriendo…" : "👁 Ver"}
-                  </button>
-                  <button onClick={() => abrirEvidencia(true)} disabled={cargandoEvidencia}
-                    style={{ border: "none", background: "#0f766e", color: "#fff", borderRadius: 8,
-                      padding: "7px 14px", fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: "'Geist',sans-serif" }}>
-                    ⬇ Descargar
-                  </button>
-                </div>
+                <DocPerfil ic="🏦" titulo="Print del banco con banco y CLABE" path={perfil.evidencia_cuenta_path}
+                  color="#0f766e" bg="#f4faf8" borde="#c4e6df" cargando={cargandoEvidencia}
+                  onVer={() => abrirDocPerfil(perfil.evidencia_cuenta_path, false, "evidencia_cuenta")}
+                  onBajar={() => abrirDocPerfil(perfil.evidencia_cuenta_path, true, "evidencia_cuenta")} />
               ) : (
-                <div style={{ fontSize: 12, color: "#b45309", background: "#fff8f0", border: "1px solid #fcd9b6", borderRadius: 8, padding: "9px 12px" }}>
+                <div style={{ fontSize: 12, color: "#b45309", background: "#fff8f0", border: "1px solid #fcd9b6", borderRadius: 8, padding: "9px 12px", marginBottom: 8 }}>
                   ⚠️ Sin print del banco cargado. Es el respaldo de que la CLABE corresponde al titular declarado
                   {perfil.cuenta_clabe ? " — la CLABE está registrada pero sin evidencia que la valide." : "."}
+                </div>
+              )}
+
+              {/* Acta constitutiva: solo aplica a persona moral */}
+              {perfil.figura_juridica === "moral" ? (
+                perfil.acta_constitutiva_path ? (
+                  <DocPerfil ic="🏛️" titulo="Acta constitutiva" path={perfil.acta_constitutiva_path}
+                    color="#1a3a6b" bg="#f5f8fd" borde="#c7d7f9" cargando={cargandoEvidencia}
+                    onVer={() => abrirDocPerfil(perfil.acta_constitutiva_path, false, "acta_constitutiva")}
+                    onBajar={() => abrirDocPerfil(perfil.acta_constitutiva_path, true, "acta_constitutiva")} />
+                ) : (
+                  <div style={{ fontSize: 12, color: "#b45309", background: "#fff8f0", border: "1px solid #fcd9b6", borderRadius: 8, padding: "9px 12px" }}>
+                    ⚠️ Persona moral sin acta constitutiva cargada — falta acreditar la sociedad y las facultades de quien firma.
+                  </div>
+                )
+              ) : perfil.figura_juridica === "fisica" ? (
+                <div style={{ fontSize: 11.5, color: "#98a2b3", padding: "4px 2px" }}>
+                  Persona física con actividad empresarial — no requiere acta constitutiva.
+                </div>
+              ) : (
+                <div style={{ fontSize: 11.5, color: "#98a2b3", padding: "4px 2px" }}>
+                  Figura jurídica sin declarar en el portal.
                 </div>
               )}
             </div>
