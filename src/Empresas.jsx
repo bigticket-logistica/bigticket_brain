@@ -90,7 +90,7 @@ function DetalleEmpresa({ empresa, onVolver, onActualizada }) {
   // y snapshot guardado de lo que se envió (envios_ficha_empresa).
   const [enviandoFicha, setEnviandoFicha] = useState(false);
   const [ultimoEnvio, setUltimoEnvio] = useState(null);
-  const DEST_FINANZAS = ["esteban.dussaut@bigticket.cl", "nicole.vargas@bigticket.cl", "adriana.giummarra@bigticket.cl"];
+  const DEST_FINANZAS = ["esteban.dussaut@bigticket.cl", "nicole.vargas@bigticket.cl", "adriana.giummarra@bigticket.cl", "camilo.naranjo@bigticket.cl"];
 
   const cargarUltimoEnvio = async () => {
     const { data } = await sb.from("envios_ficha_empresa")
