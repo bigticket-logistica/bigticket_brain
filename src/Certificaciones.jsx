@@ -5063,7 +5063,7 @@ function MensajesTerceros() {
                       <input value={notif.correo} onChange={(e) => setNotif({ ...notif, correo: e.target.value })}
                         placeholder="correo@empresa.com"
                         style={{ border: "1px solid #ddd0f7", borderRadius: 8, padding: "8px 10px", fontSize: 12, fontFamily: "'Geist',sans-serif" }} />
-                      <input value={notif.telefono} onChange={(e) => setNotif({ ...notif, telefono: e.target.value.replace(/\D/g, "").slice(0, 10) })}
+                      <input value={notif.telefono} onChange={(e) => setNotif({ ...notif, telefono: e.target.value.replace(/\D/g, "").slice(-10) })}
                         placeholder="10 dígitos, sin +52"
                         style={{ border: "1px solid #ddd0f7", borderRadius: 8, padding: "8px 10px", fontSize: 12, fontFamily: "monospace" }} />
                       <div style={{ gridColumn: "1 / -1", fontSize: 10.5, color: "#7c6f96" }}>
@@ -5844,6 +5844,292 @@ function AvisosRecordatorios({ onContador }) {
   );
 }
 
+
+// ─── 📊 TABLERO DE CONTROL · SLA de supervisores ──────────────────────
+// Mide el cumplimiento de llamadas y entrevistas para el bono de SLA.
+// Una tarea CUMPLE si se cerró antes de su sla_vence_at. Las reactivaciones
+// se cuentan aparte: extender el plazo no borra que se extendió.
+//
+// Los nombres de las columnas de cierre varían según la tabla, así que se
+// detectan sobre la fila en vez de asumirse (esa suposición ya costó caro).
+const CIERRE_RE = /^(completad|completo|cerrad|resuelt|finalizad|atendid)/i;
+const fechaCierre = (t) => {
+  for (const [k, v] of Object.entries(t || {})) {
+    if (!v || typeof v !== "string") continue;
+    if (CIERRE_RE.test(k) && /^\d{4}-\d{2}-\d{2}/.test(v)) return v;
+  }
+  return null;
+};
+const TIPO_LBL = { llamada_prospecto: "Llamada", entrevista_prospecto: "Entrevista" };
+
+function TableroControl() {
+  const hoy = new Date();
+  const iso = (d) => d.toISOString().slice(0, 10);
+  const primeroMes = new Date(hoy.getFullYear(), hoy.getMonth(), 1);
+
+  const [modo, setModo] = useState("mes");            // dia | rango | mes
+  const [desde, setDesde] = useState(iso(primeroMes));
+  const [hasta, setHasta] = useState(iso(hoy));
+  const [mes, setMes] = useState(iso(hoy).slice(0, 7));
+  const [rows, setRows] = useState(null);
+  const [reacts, setReacts] = useState([]);
+  const [fSup, setFSup] = useState("todos");
+  const [fSC, setFSC] = useState("todos");
+
+  // Rango efectivo según el modo elegido
+  const rango = (() => {
+    if (modo === "mes") {
+      const [a, m] = mes.split("-").map(Number);
+      return { ini: `${mes}-01`, fin: iso(new Date(a, m, 0)) };
+    }
+    if (modo === "dia") return { ini: desde, fin: desde };
+    return { ini: desde, fin: hasta };
+  })();
+
+  const cargar = async () => {
+    setRows(null);
+    const desdeTs = `${rango.ini}T00:00:00`;
+    const hastaTs = `${rango.fin}T23:59:59`;
+    const [{ data: tareas }, { data: rea }] = await Promise.all([
+      sb.from("tareas_supervisor").select("*")
+        .in("tipo_tarea", ["llamada_prospecto", "entrevista_prospecto"])
+        .gte("created_at", desdeTs).lte("created_at", hastaTs)
+        .order("created_at", { ascending: false }).limit(3000),
+      sb.from("tareas_reactivaciones").select("registro_id, tipo_tarea, created_at, motivo, reactivado_por"),
+    ]);
+    setReacts(rea || []);
+    setRows(tareas || []);
+  };
+  useEffect(() => { cargar(); }, [modo, desde, hasta, mes]);
+
+  // Una fila por tarea, con su veredicto de SLA
+  const detalle = (rows || []).map((t) => {
+    const cierre = fechaCierre(t);
+    const vence = t.sla_vence_at;
+    const abierta = t.estado === "pendiente";
+    const nReact = (reacts || []).filter((r) =>
+      String(r.registro_id) === String(t.registro_id) && r.tipo_tarea === t.tipo_tarea).length;
+    let veredicto;
+    if (cierre && vence) veredicto = new Date(cierre) <= new Date(vence) ? "CUMPLE" : "NO CUMPLE";
+    else if (abierta && vence && new Date() > new Date(vence)) veredicto = "NO CUMPLE";
+    else if (abierta) veredicto = "EN CURSO";
+    else veredicto = cierre ? "CUMPLE" : "SIN DATO";
+    return {
+      id: t.id, sc: t.sc || "—", tipo: TIPO_LBL[t.tipo_tarea] || t.tipo_tarea,
+      supervisor: t.asignado_a || "— sin asignar —",
+      titulo: t.titulo || "", estado: t.estado,
+      creada: t.created_at, vence, cierre, veredicto, reactivaciones: nReact,
+    };
+  });
+
+  const supervisores = [...new Set(detalle.map((d) => d.supervisor))].sort();
+  const scs = [...new Set(detalle.map((d) => d.sc))].sort();
+  const visibles = detalle.filter((d) =>
+    (fSup === "todos" || d.supervisor === fSup) && (fSC === "todos" || d.sc === fSC));
+
+  // Resumen por supervisor: la base del bono
+  const resumen = supervisores
+    .filter((sup) => fSup === "todos" || sup === fSup)
+    .map((sup) => {
+      const t = visibles.filter((d) => d.supervisor === sup);
+      const cumple = t.filter((d) => d.veredicto === "CUMPLE").length;
+      const no = t.filter((d) => d.veredicto === "NO CUMPLE").length;
+      const curso = t.filter((d) => d.veredicto === "EN CURSO").length;
+      const medidas = cumple + no;
+      return {
+        supervisor: sup, total: t.length,
+        llamadas: t.filter((d) => d.tipo === "Llamada").length,
+        entrevistas: t.filter((d) => d.tipo === "Entrevista").length,
+        cumple, no, curso,
+        reactivaciones: t.reduce((a, d) => a + d.reactivaciones, 0),
+        pct: medidas ? Math.round((cumple / medidas) * 100) : null,
+      };
+    }).sort((a, b) => (b.pct ?? -1) - (a.pct ?? -1));
+
+  const tot = {
+    cumple: visibles.filter((d) => d.veredicto === "CUMPLE").length,
+    no: visibles.filter((d) => d.veredicto === "NO CUMPLE").length,
+    curso: visibles.filter((d) => d.veredicto === "EN CURSO").length,
+    react: visibles.reduce((a, d) => a + d.reactivaciones, 0),
+  };
+  const pctGlobal = (tot.cumple + tot.no) ? Math.round((tot.cumple / (tot.cumple + tot.no)) * 100) : null;
+
+  // ── Exportar a Excel ──
+  // .xls como tabla HTML con estilos: Excel lo abre nativo y conserva los
+  // colores corporativos, sin depender de ninguna librería.
+  const exportar = () => {
+    const esc = (v) => String(v ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;");
+    const th = (t) => `<th style="background:#1a3a6b;color:#fff;font-weight:bold;border:1px solid #16305a;padding:6px 8px;font-size:11px;">${t}</th>`;
+    const td = (t, extra) => `<td style="border:1px solid #dfe3e8;padding:5px 8px;font-size:11px;${extra || ""}">${esc(t)}</td>`;
+    const colorV = (v) => v === "CUMPLE" ? "background:#e8f5ec;color:#166534;font-weight:bold;"
+      : v === "NO CUMPLE" ? "background:#fbeaea;color:#c0392b;font-weight:bold;"
+      : "background:#fff8e6;color:#b45309;";
+    const filasRes = resumen.map((r) => `<tr>${td(r.supervisor)}${td(r.total)}${td(r.llamadas)}${td(r.entrevistas)}
+      ${td(r.cumple, "background:#e8f5ec;color:#166534;font-weight:bold;")}${td(r.no, "background:#fbeaea;color:#c0392b;font-weight:bold;")}
+      ${td(r.curso)}${td(r.reactivaciones)}${td(r.pct === null ? "—" : r.pct + "%", "font-weight:bold;")}</tr>`).join("");
+    const filasDet = visibles.map((d) => `<tr>${td(fMX(d.creada, { day: "2-digit", month: "2-digit", year: "numeric" }))}
+      ${td(fMX(d.creada, { hour: "2-digit", minute: "2-digit" }))}${td(d.sc)}${td(d.tipo)}${td(d.supervisor)}${td(d.titulo)}
+      ${td(d.vence ? fMX(d.vence, { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—")}
+      ${td(d.cierre ? fMX(d.cierre, { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—")}
+      ${td(d.veredicto, colorV(d.veredicto))}${td(d.reactivaciones)}${td(d.estado)}</tr>`).join("");
+    const html = `<html xmlns:x="urn:schemas-microsoft-com:office:excel"><head><meta charset="utf-8" />
+      <!--[if gte mso 9]><xml><x:ExcelWorkbook><x:ExcelWorksheets>
+      <x:ExcelWorksheet><x:Name>SLA Supervisores</x:Name><x:WorksheetOptions><x:DisplayGridlines/></x:WorksheetOptions></x:ExcelWorksheet>
+      </x:ExcelWorksheets></x:ExcelWorkbook></xml><![endif]--></head><body style="font-family:Calibri,Arial;">
+      <table><tr><td colspan="9" style="background:#1a3a6b;color:#fff;font-size:15px;font-weight:bold;padding:10px;">
+        BIGTICKET · Cumplimiento SLA de supervisores</td></tr>
+      <tr><td colspan="9" style="background:#F47B20;color:#fff;font-size:11px;padding:6px 10px;">
+        Periodo ${rango.ini} al ${rango.fin} · generado ${fMX(new Date().toISOString(), { day: "2-digit", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit" })}</td></tr></table>
+      <br/><table style="border-collapse:collapse;"><tr>${["Supervisor", "Tareas", "Llamadas", "Entrevistas", "Cumple", "No cumple", "En curso", "Reactivaciones", "% Cumplimiento"].map(th).join("")}</tr>${filasRes}</table>
+      <br/><br/><table style="border-collapse:collapse;"><tr><td colspan="11" style="background:#1a3a6b;color:#fff;font-weight:bold;padding:7px 10px;font-size:12px;">Detalle por tarea</td></tr>
+      <tr>${["Fecha", "Hora", "Centro / SVC", "Tipo", "Supervisor", "Prospecto", "Vence SLA", "Cierre", "Cumple SLA", "Reactivaciones", "Estado"].map(th).join("")}</tr>${filasDet}</table>
+      </body></html>`;
+    const blob = new Blob([`\ufeff${html}`], { type: "application/vnd.ms-excel;charset=utf-8" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `SLA_supervisores_${rango.ini}_a_${rango.fin}.xls`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  };
+
+  const Kpi = ({ label, valor, color, bg }) => (
+    <div style={{ flex: "1 1 120px", background: bg, border: `1px solid ${color}33`, borderRadius: 10, padding: "10px 12px" }}>
+      <div style={{ fontSize: 10, fontWeight: 700, color: "#888", textTransform: "uppercase", letterSpacing: ".04em" }}>{label}</div>
+      <div style={{ fontSize: 22, fontWeight: 800, color, fontVariantNumeric: "tabular-nums" }}>{valor}</div>
+    </div>
+  );
+  const inp = { border: "1px solid #e4e7ec", borderRadius: 8, padding: "8px 11px", fontSize: 12.5, fontFamily: "'Geist',sans-serif", background: "#fff" };
+  const th = { padding: "9px 10px", fontSize: 10.5, fontWeight: 800, color: "#fff", textTransform: "uppercase", letterSpacing: ".4px", textAlign: "left", background: "#1a3a6b", position: "sticky", top: 0 };
+  const td = { padding: "8px 10px", fontSize: 12, borderBottom: "1px solid #f0f1f3" };
+  const colorV = (v) => v === "CUMPLE" ? { bg: "#e8f5ec", fg: "#166534" }
+    : v === "NO CUMPLE" ? { bg: "#fbeaea", fg: "#c0392b" }
+    : v === "EN CURSO" ? { bg: "#fff8e6", fg: "#b45309" } : { bg: "#f2f4f7", fg: "#667085" };
+
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
+        <div className="sec-title" style={{ margin: 0, flex: 1 }}>📊 Tablero de Control · SLA de supervisores</div>
+        <button onClick={exportar} disabled={!rows || !visibles.length}
+          style={{ padding: "9px 16px", borderRadius: 8, border: "none", background: "#F47B20", color: "#fff", fontSize: 12.5, fontWeight: 800, cursor: "pointer", fontFamily: "'Geist',sans-serif", opacity: (!rows || !visibles.length) ? .5 : 1 }}>
+          ⬇ Descargar Excel
+        </button>
+      </div>
+
+      {/* Periodo */}
+      <div style={{ background: "#fff", border: "0.5px solid #e4e7ec", borderRadius: 12, padding: 14, marginBottom: 14 }}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          {[["dia", "📅 Un día"], ["rango", "📆 Rango"], ["mes", "🗓 Mes completo"]].map(([v, l]) => (
+            <button key={v} onClick={() => setModo(v)}
+              style={{ padding: "8px 14px", borderRadius: 8, cursor: "pointer", fontSize: 12.5, fontFamily: "'Geist',sans-serif",
+                fontWeight: modo === v ? 700 : 500, background: modo === v ? "#1a3a6b" : "#fff",
+                color: modo === v ? "#fff" : "#555", border: modo === v ? "1.5px solid #1a3a6b" : "1px solid #e4e7ec" }}>{l}</button>
+          ))}
+          <div style={{ width: 1, height: 24, background: "#e4e7ec", margin: "0 4px" }} />
+          {modo === "mes" ? (
+            <input type="month" value={mes} onChange={(e) => setMes(e.target.value)} style={inp} />
+          ) : modo === "dia" ? (
+            <input type="date" value={desde} onChange={(e) => setDesde(e.target.value)} style={inp} />
+          ) : (
+            <>
+              <input type="date" value={desde} onChange={(e) => setDesde(e.target.value)} style={inp} />
+              <span style={{ fontSize: 12, color: "#888" }}>a</span>
+              <input type="date" value={hasta} onChange={(e) => setHasta(e.target.value)} style={inp} />
+            </>
+          )}
+          <div style={{ flex: 1 }} />
+          <select value={fSup} onChange={(e) => setFSup(e.target.value)} style={inp}>
+            <option value="todos">Todos los supervisores</option>
+            {supervisores.map((x) => <option key={x} value={x}>{x}</option>)}
+          </select>
+          <select value={fSC} onChange={(e) => setFSC(e.target.value)} style={inp}>
+            <option value="todos">Todos los SC</option>
+            {scs.map((x) => <option key={x} value={x}>{x}</option>)}
+          </select>
+        </div>
+      </div>
+
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
+        <Kpi label="Cumplimiento" valor={pctGlobal === null ? "—" : pctGlobal + "%"} color="#1a3a6b" bg="#eef2f7" />
+        <Kpi label="Cumple" valor={tot.cumple} color="#166534" bg="#e8f5ec" />
+        <Kpi label="No cumple" valor={tot.no} color="#c0392b" bg="#fbeaea" />
+        <Kpi label="En curso" valor={tot.curso} color="#b45309" bg="#fff8e6" />
+        <Kpi label="Reactivaciones" valor={tot.react} color="#7c3aed" bg="#f5f0fe" />
+      </div>
+
+      {/* Resumen por supervisor — la base del bono */}
+      <div style={{ background: "#fff", border: "0.5px solid #e4e7ec", borderRadius: 12, overflow: "hidden", marginBottom: 14 }}>
+        <div style={{ padding: "11px 16px", background: "#fafbfc", borderBottom: "1px solid #eef0f3", fontSize: 12, fontWeight: 800, color: "#1a3a6b", textTransform: "uppercase", letterSpacing: ".4px" }}>
+          Resumen por supervisor
+        </div>
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 720 }}>
+            <thead><tr>{["Supervisor", "Tareas", "Llamadas", "Entrevistas", "Cumple", "No cumple", "En curso", "Reactiv.", "% SLA"].map((h) => <th key={h} style={th}>{h}</th>)}</tr></thead>
+            <tbody>
+              {rows === null ? <tr><td colSpan={9} style={{ ...td, textAlign: "center", color: "#888" }}>Cargando…</td></tr>
+                : resumen.length === 0 ? <tr><td colSpan={9} style={{ ...td, textAlign: "center", color: "#888" }}>Sin tareas en el periodo.</td></tr>
+                : resumen.map((r) => (
+                  <tr key={r.supervisor}>
+                    <td style={{ ...td, fontWeight: 700 }}>{r.supervisor}</td>
+                    <td style={td}>{r.total}</td><td style={td}>{r.llamadas}</td><td style={td}>{r.entrevistas}</td>
+                    <td style={{ ...td, color: "#166534", fontWeight: 700 }}>{r.cumple}</td>
+                    <td style={{ ...td, color: "#c0392b", fontWeight: 700 }}>{r.no}</td>
+                    <td style={{ ...td, color: "#b45309" }}>{r.curso}</td>
+                    <td style={{ ...td, color: r.reactivaciones ? "#7c3aed" : "#98a2b3", fontWeight: r.reactivaciones ? 700 : 400 }}>{r.reactivaciones}</td>
+                    <td style={{ ...td, fontWeight: 800, color: r.pct === null ? "#98a2b3" : r.pct >= 90 ? "#166534" : r.pct >= 75 ? "#b45309" : "#c0392b" }}>
+                      {r.pct === null ? "—" : r.pct + "%"}
+                    </td>
+                  </tr>
+                ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Detalle por tarea */}
+      <div style={{ background: "#fff", border: "0.5px solid #e4e7ec", borderRadius: 12, overflow: "hidden" }}>
+        <div style={{ padding: "11px 16px", background: "#fafbfc", borderBottom: "1px solid #eef0f3", fontSize: 12, fontWeight: 800, color: "#1a3a6b", textTransform: "uppercase", letterSpacing: ".4px" }}>
+          Detalle por tarea {visibles.length ? `(${visibles.length})` : ""}
+        </div>
+        <div style={{ overflowX: "auto", maxHeight: 520, overflowY: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 980 }}>
+            <thead><tr>{["Fecha", "Hora", "SVC", "Tipo", "Supervisor", "Prospecto", "Vence SLA", "Cierre", "Cumple", "Reactiv."].map((h) => <th key={h} style={th}>{h}</th>)}</tr></thead>
+            <tbody>
+              {rows === null ? <tr><td colSpan={10} style={{ ...td, textAlign: "center", color: "#888" }}>Cargando…</td></tr>
+                : visibles.length === 0 ? <tr><td colSpan={10} style={{ ...td, textAlign: "center", color: "#888" }}>Sin tareas en el periodo.</td></tr>
+                : visibles.map((d) => {
+                  const c = colorV(d.veredicto);
+                  return (
+                    <tr key={d.id}>
+                      <td style={td}>{fMX(d.creada, { day: "2-digit", month: "2-digit", year: "numeric" })}</td>
+                      <td style={{ ...td, fontFamily: "monospace" }}>{fMX(d.creada, { hour: "2-digit", minute: "2-digit" })}</td>
+                      <td style={{ ...td, fontFamily: "monospace", fontWeight: 700 }}>{d.sc}</td>
+                      <td style={td}>{d.tipo}</td>
+                      <td style={td}>{d.supervisor}</td>
+                      <td style={{ ...td, maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{d.titulo}</td>
+                      <td style={{ ...td, fontFamily: "monospace", fontSize: 11 }}>{d.vence ? fMX(d.vence, { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—"}</td>
+                      <td style={{ ...td, fontFamily: "monospace", fontSize: 11 }}>{d.cierre ? fMX(d.cierre, { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—"}</td>
+                      <td style={td}>
+                        <span style={{ fontSize: 10, fontWeight: 800, padding: "3px 9px", borderRadius: 20, background: c.bg, color: c.fg }}>{d.veredicto}</span>
+                      </td>
+                      <td style={{ ...td, textAlign: "center", color: d.reactivaciones ? "#7c3aed" : "#c3cad6", fontWeight: d.reactivaciones ? 800 : 400 }}>{d.reactivaciones || "–"}</td>
+                    </tr>
+                  );
+                })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div style={{ fontSize: 11, color: "#98a2b3", marginTop: 10, lineHeight: 1.6 }}>
+        <b>Cómo se mide:</b> una tarea CUMPLE si se cerró antes de su vencimiento de SLA. Las que siguen
+        pendientes con el plazo vencido cuentan como NO CUMPLE; las pendientes dentro de plazo quedan
+        EN CURSO y no entran en el porcentaje. Las reactivaciones se muestran aparte a propósito:
+        extender un plazo no borra que hubo que extenderlo.
+      </div>
+    </div>
+  );
+}
+
 function ModuloCertificaciones() {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -6181,7 +6467,7 @@ function ModuloCertificaciones() {
 
       {/* Pestañas de sección */}
       <div style={{ display: "flex", gap: 4, marginBottom: 18, borderBottom: "1px solid #e4e7ec" }}>
-        {[["certificaciones", "📋 Certificaciones"], ["altas", "➕ Vehículos y Personal"], ["contratos", "📑 Gestionador de Contratos"], ["documentacion", "🗂 Documentación Terceros"], ["avisos", "🔔 Avisos"], ["mensajes", "💬 Mensajes"]].map(([v, l]) => (
+        {[["certificaciones", "📋 Certificaciones"], ["altas", "➕ Vehículos y Personal"], ["contratos", "📑 Gestionador de Contratos"], ["documentacion", "🗂 Documentación Terceros"], ["avisos", "🔔 Avisos"], ["mensajes", "💬 Mensajes"], ["tablero", "📊 Tablero de Control"]].map(([v, l]) => (
           <button key={v} onClick={() => { setSeccion(v); setSelected(null); }}
             style={{ padding: "10px 16px", border: "none", cursor: "pointer", fontSize: 13, fontFamily: "'Geist',sans-serif",
               background: "transparent", fontWeight: seccion === v ? 700 : 400,
@@ -6214,6 +6500,7 @@ function ModuloCertificaciones() {
       {seccion === "contratos" && <GestionadorContratos />}
       {seccion === "documentacion" && <DocumentacionTerceros />}
       {seccion === "avisos" && <AvisosRecordatorios onContador={setNAvisos} />}
+      {seccion === "tablero" && <TableroControl />}
       {seccion === "mensajes" && <MensajesTerceros />}
 
       {seccion === "certificaciones" && (
