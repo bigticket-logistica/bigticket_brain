@@ -6534,6 +6534,27 @@ function ModuloCertificaciones() {
     const card = items.find(i => i.key === cardKey);
     if (!card || card.etapa === targetEtapa) return;
     const col = COLUMNAS.find(c => c.id === targetEtapa);
+
+    // ── Etapa 7 → Etapa 8 solo por el botón de credenciales ──
+    // Arrastrar la tarjeta salta la creación de la empresa: queda sin
+    // portal, sin credenciales y sin tercero_id, pero figura "en firma"
+    // (caso Susana Andrade, 24-ago-2026: 8 días así). El único camino
+    // válido es «🏢 Crear empresa y enviar credenciales» en la Etapa 7.
+    if (card.etapa === "solicitud_alta" && targetEtapa === "firma_contrato") {
+      alert(
+        "Esta tarjeta no se puede mover a mano a Firma de Contrato.\n\n" +
+        "Ábrela y usa «🏢 Crear empresa y enviar credenciales»: ese botón crea la empresa, " +
+        "manda el acceso al portal y mueve la tarjeta solo.\n\n" +
+        "Sin ese paso el transportista queda sin portal y su contrato no se puede firmar."
+      );
+      return;
+    }
+    // Tampoco se entra a Firma desde ninguna otra etapa sin empresa creada.
+    if (targetEtapa === "firma_contrato" && card.fuente === "prospeccion" && !card.raw?.tercero_id) {
+      alert("Esta empresa todavía no existe (sin tercero_id), así que no puede pasar a Firma de Contrato.\n\nCrea primero las credenciales del portal en la Etapa 7.");
+      return;
+    }
+
     if (!confirm(`¿Mover "${card.titulo}" a "${col?.label || targetEtapa}"?`)) return;
     setItems(prev => prev.map(i => i.key === cardKey ? { ...i, etapa: targetEtapa, raw: { ...i.raw, etapa_kanban: targetEtapa, ...(card.fuente === "prospeccion" && ESTADO_POR_ETAPA[targetEtapa] ? { estado: ESTADO_POR_ETAPA[targetEtapa] } : {}) } } : i));
     // Persiste la etapa en ambas fuentes (para que no se revierta al refrescar).
