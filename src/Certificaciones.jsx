@@ -5881,27 +5881,27 @@ function TableroControl() {
   // El padrón es la fuente de verdad de qué SC atiende cada supervisor.
   // scs_asignados es jsonb (array): se compara en JS, no con = ANY().
   const [errPadron, setErrPadron] = useState(null);
-  useEffect(() => { (async () => {
-    const { data, error } = await sb.from("supervisores_bt")
-      .select("nombre, email, scs_asignados, activo, rol").order("nombre");
+  // El padrón vive en padron_sc_supervisor: una fila por SC, sin el RLS de
+  // supervisores_bt (que está pensado para que cada supervisor vea solo su
+  // propia fila y por eso deja al Brain sin datos).
+  const cargarPadron = async () => {
+    const { data, error } = await sb.from("padron_sc_supervisor")
+      .select("sc, supervisor, email, activo").order("sc");
     if (error) { setErrPadron(error.message); setPadron([]); return; }
     const act = (data || []).filter((x) => x.activo !== false);
     setPadron(act);
-    // Si el padrón llega vacío el tablero no puede nombrar a nadie: casi
-    // siempre es RLS sobre supervisores_bt (la bitácora solo deja ver la
-    // fila propia). Se avisa en pantalla en vez de mostrar todo "sin supervisor".
-    if (!act.length) setErrPadron("El padrón llegó vacío");
-  })(); }, []);
+    setErrPadron(act.length ? null : "La tabla padron_sc_supervisor está vacía — corre padron_sc_supervisor.sql");
+  };
+  useEffect(() => { cargarPadron(); }, []);
   const supDeSC = (sc) => {
     if (!sc) return null;
-    const m = padron.filter((p) => Array.isArray(p.scs_asignados)
-      && p.scs_asignados.some((x) => String(x).toUpperCase() === String(sc).toUpperCase()));
-    return m.length === 1 ? m[0] : (m.length > 1 ? { nombre: null, varios: m } : null);
+    const f = padron.find((p) => String(p.sc).toUpperCase() === String(sc).toUpperCase());
+    return f ? { nombre: f.supervisor, email: f.email } : null;
   };
   const nombrePorEmail = (mail) => {
     if (!mail) return null;
     const p = padron.find((x) => String(x.email || "").toLowerCase() === String(mail).toLowerCase());
-    if (p) return p.nombre;
+    if (p) return p.supervisor;
     // Sin ficha en el padrón: se arma un nombre legible del correo en vez
     // de mostrar la dirección cruda en un reporte de bonos.
     const l = String(mail).split("@")[0].replace(/[._-]+/g, " ");
@@ -5968,8 +5968,6 @@ function TableroControl() {
       origenAtrib = "llamadas";
     } else if (delSC && delSC.nombre) {
       supervisor = delSC.nombre; origenAtrib = "SC";
-    } else if (delSC && delSC.varios) {
-      supervisor = `⚠️ ${t.sc}: ${delSC.varios.length} supervisores`; origenAtrib = "ambiguo";
     } else {
       supervisor = `— SC ${t.sc || "?"} sin supervisor —`; origenAtrib = "sin padrón";
     }
@@ -5986,7 +5984,7 @@ function TableroControl() {
   // cero es información para el bono, no ausencia de información.
   const supervisores = [...new Set([
     ...detalle.map((d) => d.supervisor),
-    ...(verSinTareas ? padron.filter((p) => Array.isArray(p.scs_asignados) && p.scs_asignados.length).map((p) => p.nombre) : []),
+    ...(verSinTareas ? padron.map((p) => p.supervisor) : []),
   ])].sort();
   const scs = [...new Set(detalle.map((d) => d.sc))].sort();
   const visibles = detalle.filter((d) =>
@@ -6001,10 +5999,10 @@ function TableroControl() {
       const no = t.filter((d) => d.veredicto === "NO CUMPLE").length;
       const curso = t.filter((d) => d.veredicto === "EN CURSO").length;
       const medidas = cumple + no;
-      const ficha = padron.find((p) => p.nombre === sup);
+      const suyos = padron.filter((p) => p.supervisor === sup).map((p) => p.sc);
       return {
         supervisor: sup,
-        scs: ficha && Array.isArray(ficha.scs_asignados) ? ficha.scs_asignados.join(", ") : "—",
+        scs: suyos.length ? suyos.join(", ") : "—",
         total: t.length,
         llamadas: t.filter((d) => d.tipo === "Llamada").length,
         entrevistas: t.filter((d) => d.tipo === "Entrevista").length,
@@ -6126,9 +6124,8 @@ function TableroControl() {
             ⚠️ No se pudo leer el padrón de supervisores
           </div>
           <div style={{ fontSize: 12, color: "#8b3a3a", lineHeight: 1.5 }}>
-            Sin <i>supervisores_bt</i> el tablero no puede asignar las entrevistas a su SC y todo aparece
-            como «sin supervisor». Suele ser una política RLS que solo deja ver la fila propia.
-            Detalle: {errPadron}
+            El tablero lee <i>padron_sc_supervisor</i> (una fila por SC). Sin ella las entrevistas no se
+            pueden atribuir y todo aparece como «sin supervisor». Detalle: {errPadron}
           </div>
         </div>
       )}
@@ -6211,8 +6208,9 @@ function TableroControl() {
         pendientes con el plazo vencido cuentan como NO CUMPLE; las pendientes dentro de plazo quedan
         EN CURSO y no entran en el porcentaje. Las reactivaciones se muestran aparte a propósito:
         extender un plazo no borra que hubo que extenderlo.
-        <br /><b>Atribución:</b> las <b>entrevistas</b> se cargan al supervisor dueño del SC según el
-        padrón <i>supervisores_bt</i>; las <b>llamadas</b> van todas a Jorge Arellano, sin importar el SC.
+        <br /><b>Atribución:</b> las <b>entrevistas</b> se cargan al supervisor dueño del SC según la tabla
+        <i> padron_sc_supervisor</i>; las <b>llamadas</b> van todas a Jorge Arellano, sin importar el SC.
+        Para cambiar quién cubre un SC se edita esa tabla y el tablero lo toma al recargar.
         <br /><b>Reactivaciones:</b> suma las de <i>sla_reactivaciones</i> (botón «Reactivar plazo») y las
         de <i>tareas_reactivaciones</i> (repetir una entrevista o llamada ya ejecutada).
       </div>
