@@ -5877,6 +5877,7 @@ function TableroControl() {
   const [fSup, setFSup] = useState("todos");
   const [fSC, setFSC] = useState("todos");
   const [verSinTareas, setVerSinTareas] = useState(true);
+  const [atribuirPor, setAtribuirPor] = useState("sc");   // sc | ejecutor
 
   // El padrón es la fuente de verdad de qué SC atiende cada supervisor.
   // scs_asignados es jsonb (array): se compara en JS, no con = ANY().
@@ -5912,14 +5913,23 @@ function TableroControl() {
     setRows(null);
     const desdeTs = `${rango.ini}T00:00:00`;
     const hastaTs = `${rango.fin}T23:59:59`;
-    const [{ data: tareas }, { data: rea }] = await Promise.all([
+    // Hay DOS orígenes de reactivación y hay que sumar los dos:
+    //  · sla_reactivaciones      → botón "🔄 Reactivar plazo" (el habitual)
+    //  · tareas_reactivaciones   → repetir entrevista/llamada ya ejecutada
+    const [{ data: tareas }, { data: reaSla }, { data: reaTar }] = await Promise.all([
       sb.from("tareas_supervisor").select("*")
         .in("tipo_tarea", ["llamada_prospecto", "entrevista_prospecto"])
         .gte("created_at", desdeTs).lte("created_at", hastaTs)
         .order("created_at", { ascending: false }).limit(3000),
-      sb.from("tareas_reactivaciones").select("registro_id, tipo_tarea, created_at, motivo, reactivado_por"),
+      sb.from("sla_reactivaciones").select("*").limit(5000),
+      sb.from("tareas_reactivaciones").select("*").limit(5000),
     ]);
-    setReacts(rea || []);
+    // Los nombres de las llaves varían entre las dos tablas, así que se
+    // recogen todos los valores que puedan ser el id de la tarea.
+    const clavesId = (r) => Object.entries(r || {})
+      .filter(([k, v]) => v && /tarea|registro/i.test(k))
+      .map(([, v]) => String(v));
+    setReacts([...(reaSla || []), ...(reaTar || [])].map((r) => ({ ids: clavesId(r) })));
     setRows(tareas || []);
   };
   useEffect(() => { cargar(); }, [modo, desde, hasta, mes]);
@@ -5930,7 +5940,7 @@ function TableroControl() {
     const vence = t.sla_vence_at;
     const abierta = t.estado === "pendiente";
     const nReact = (reacts || []).filter((r) =>
-      String(r.registro_id) === String(t.registro_id) && r.tipo_tarea === t.tipo_tarea).length;
+      r.ids.includes(String(t.id)) || r.ids.includes(String(t.registro_id))).length;
     let veredicto;
     if (cierre && vence) veredicto = new Date(cierre) <= new Date(vence) ? "CUMPLE" : "NO CUMPLE";
     else if (abierta && vence && new Date() > new Date(vence)) veredicto = "NO CUMPLE";
@@ -5941,12 +5951,21 @@ function TableroControl() {
     // diseño, así que sin este último paso caían todas en un mismo balde).
     const cerroMail = t.completado_por || t.completada_por || t.resuelto_por || t.cerrado_por || null;
     const delSC = supDeSC(t.sc);
+    const porEjecutor = cerroMail || t.asignado_a;
     let supervisor, origenAtrib;
-    if (cerroMail) { supervisor = nombrePorEmail(cerroMail); origenAtrib = "cerró"; }
-    else if (t.asignado_a) { supervisor = nombrePorEmail(t.asignado_a); origenAtrib = "asignada"; }
-    else if (delSC && delSC.nombre) { supervisor = delSC.nombre; origenAtrib = "por SC"; }
-    else if (delSC && delSC.varios) { supervisor = `⚠️ ${t.sc}: ${delSC.varios.length} supervisores`; origenAtrib = "ambiguo"; }
-    else { supervisor = `— SC ${t.sc || "?"} sin supervisor —`; origenAtrib = "sin padrón"; }
+    if (atribuirPor === "sc") {
+      // El bono se paga por SC: el dueño del centro responde por sus tareas,
+      // las haya cerrado él o no (las llamadas van todas a Jorge Arellano,
+      // así que atribuir por ejecutor las cargaría todas a una sola persona).
+      if (delSC && delSC.nombre) { supervisor = delSC.nombre; origenAtrib = "por SC"; }
+      else if (delSC && delSC.varios) { supervisor = `⚠️ ${t.sc}: ${delSC.varios.length} supervisores`; origenAtrib = "ambiguo"; }
+      else { supervisor = `— SC ${t.sc || "?"} sin supervisor —`; origenAtrib = "sin padrón"; }
+    } else {
+      if (cerroMail) { supervisor = nombrePorEmail(cerroMail); origenAtrib = "cerró"; }
+      else if (t.asignado_a) { supervisor = nombrePorEmail(t.asignado_a); origenAtrib = "asignada"; }
+      else if (delSC && delSC.nombre) { supervisor = delSC.nombre; origenAtrib = "por SC"; }
+      else { supervisor = `— sin ejecutor —`; origenAtrib = "sin dato"; }
+    }
 
     return {
       id: t.id, sc: t.sc || "—", tipo: TIPO_LBL[t.tipo_tarea] || t.tipo_tarea,
@@ -5960,7 +5979,7 @@ function TableroControl() {
   // cero es información para el bono, no ausencia de información.
   const supervisores = [...new Set([
     ...detalle.map((d) => d.supervisor),
-    ...(verSinTareas ? padron.filter((p) => p.rol === "supervisor").map((p) => p.nombre) : []),
+    ...(verSinTareas ? padron.filter((p) => Array.isArray(p.scs_asignados) && p.scs_asignados.length).map((p) => p.nombre) : []),
   ])].sort();
   const scs = [...new Set(detalle.map((d) => d.sc))].sort();
   const visibles = detalle.filter((d) =>
@@ -6087,6 +6106,11 @@ function TableroControl() {
             <option value="todos">Todos los SC</option>
             {scs.map((x) => <option key={x} value={x}>{x}</option>)}
           </select>
+          <select value={atribuirPor} onChange={(e) => setAtribuirPor(e.target.value)} style={inp}
+            title="Por SC: el dueño del centro responde por sus tareas (base del bono). Por ejecutor: quien la cerró o la tenía asignada.">
+            <option value="sc">Atribuir por SC</option>
+            <option value="ejecutor">Atribuir por ejecutor</option>
+          </select>
           <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#555", cursor: "pointer" }}>
             <input type="checkbox" checked={verSinTareas} onChange={(e) => setVerSinTareas(e.target.checked)} />
             Incluir supervisores sin tareas
@@ -6172,10 +6196,12 @@ function TableroControl() {
         pendientes con el plazo vencido cuentan como NO CUMPLE; las pendientes dentro de plazo quedan
         EN CURSO y no entran en el porcentaje. Las reactivaciones se muestran aparte a propósito:
         extender un plazo no borra que hubo que extenderlo.
-        <br /><b>Atribución:</b> primero quien cerró la tarea, luego quien la tenía asignada y, si no,
-        el supervisor del SC según el padrón (<i>supervisores_bt</i>). Las entrevistas nacen sin asignar,
-        así que la mayoría se atribuye por SC. Un SC con dos supervisores o sin ninguno en el padrón
-        aparece marcado en vez de repartirse a ciegas.
+        <br /><b>Atribución por SC</b> (por defecto): el supervisor dueño del centro según el padrón
+        <i> supervisores_bt</i> responde por las tareas de su SC. Es como se paga el bono, y evita que
+        todas las llamadas se carguen a quien las tiene asignadas por defecto. Cambiando a
+        <i> por ejecutor</i> se mide a quien efectivamente cerró cada tarea.
+        <br /><b>Reactivaciones:</b> suma las de <i>sla_reactivaciones</i> (botón «Reactivar plazo») y las
+        de <i>tareas_reactivaciones</i> (repetir una entrevista o llamada ya ejecutada).
       </div>
     </div>
   );
