@@ -5873,8 +5873,30 @@ function TableroControl() {
   const [mes, setMes] = useState(iso(hoy).slice(0, 7));
   const [rows, setRows] = useState(null);
   const [reacts, setReacts] = useState([]);
+  const [padron, setPadron] = useState([]);      // supervisores_bt activos
   const [fSup, setFSup] = useState("todos");
   const [fSC, setFSC] = useState("todos");
+  const [verSinTareas, setVerSinTareas] = useState(true);
+
+  // El padrón es la fuente de verdad de qué SC atiende cada supervisor.
+  // scs_asignados es jsonb (array): se compara en JS, no con = ANY().
+  useEffect(() => { (async () => {
+    const { data } = await sb.from("supervisores_bt")
+      .select("nombre, email, scs_asignados, activo, rol")
+      .eq("activo", true).order("nombre");
+    setPadron(data || []);
+  })(); }, []);
+  const supDeSC = (sc) => {
+    if (!sc) return null;
+    const m = padron.filter((p) => Array.isArray(p.scs_asignados)
+      && p.scs_asignados.some((x) => String(x).toUpperCase() === String(sc).toUpperCase()));
+    return m.length === 1 ? m[0] : (m.length > 1 ? { nombre: null, varios: m } : null);
+  };
+  const nombrePorEmail = (mail) => {
+    if (!mail) return null;
+    const p = padron.find((x) => String(x.email || "").toLowerCase() === String(mail).toLowerCase());
+    return p ? p.nombre : mail;
+  };
 
   // Rango efectivo según el modo elegido
   const rango = (() => {
@@ -5914,15 +5936,32 @@ function TableroControl() {
     else if (abierta && vence && new Date() > new Date(vence)) veredicto = "NO CUMPLE";
     else if (abierta) veredicto = "EN CURSO";
     else veredicto = cierre ? "CUMPLE" : "SIN DATO";
+    // Atribución, en orden de honestidad: quien la cerró > quien la tenía
+    // asignada > el supervisor del SC (las entrevistas van sin asignar por
+    // diseño, así que sin este último paso caían todas en un mismo balde).
+    const cerroMail = t.completado_por || t.completada_por || t.resuelto_por || t.cerrado_por || null;
+    const delSC = supDeSC(t.sc);
+    let supervisor, origenAtrib;
+    if (cerroMail) { supervisor = nombrePorEmail(cerroMail); origenAtrib = "cerró"; }
+    else if (t.asignado_a) { supervisor = nombrePorEmail(t.asignado_a); origenAtrib = "asignada"; }
+    else if (delSC && delSC.nombre) { supervisor = delSC.nombre; origenAtrib = "por SC"; }
+    else if (delSC && delSC.varios) { supervisor = `⚠️ ${t.sc}: ${delSC.varios.length} supervisores`; origenAtrib = "ambiguo"; }
+    else { supervisor = `— SC ${t.sc || "?"} sin supervisor —`; origenAtrib = "sin padrón"; }
+
     return {
       id: t.id, sc: t.sc || "—", tipo: TIPO_LBL[t.tipo_tarea] || t.tipo_tarea,
-      supervisor: t.asignado_a || "— sin asignar —",
+      supervisor, origenAtrib,
       titulo: t.titulo || "", estado: t.estado,
       creada: t.created_at, vence, cierre, veredicto, reactivaciones: nReact,
     };
   });
 
-  const supervisores = [...new Set(detalle.map((d) => d.supervisor))].sort();
+  // Con tareas + los del padrón que no tuvieron ninguna: un supervisor en
+  // cero es información para el bono, no ausencia de información.
+  const supervisores = [...new Set([
+    ...detalle.map((d) => d.supervisor),
+    ...(verSinTareas ? padron.filter((p) => p.rol === "supervisor").map((p) => p.nombre) : []),
+  ])].sort();
   const scs = [...new Set(detalle.map((d) => d.sc))].sort();
   const visibles = detalle.filter((d) =>
     (fSup === "todos" || d.supervisor === fSup) && (fSC === "todos" || d.sc === fSC));
@@ -5936,8 +5975,11 @@ function TableroControl() {
       const no = t.filter((d) => d.veredicto === "NO CUMPLE").length;
       const curso = t.filter((d) => d.veredicto === "EN CURSO").length;
       const medidas = cumple + no;
+      const ficha = padron.find((p) => p.nombre === sup);
       return {
-        supervisor: sup, total: t.length,
+        supervisor: sup,
+        scs: ficha && Array.isArray(ficha.scs_asignados) ? ficha.scs_asignados.join(", ") : "—",
+        total: t.length,
         llamadas: t.filter((d) => d.tipo === "Llamada").length,
         entrevistas: t.filter((d) => d.tipo === "Entrevista").length,
         cumple, no, curso,
@@ -5964,25 +6006,25 @@ function TableroControl() {
     const colorV = (v) => v === "CUMPLE" ? "background:#e8f5ec;color:#166534;font-weight:bold;"
       : v === "NO CUMPLE" ? "background:#fbeaea;color:#c0392b;font-weight:bold;"
       : "background:#fff8e6;color:#b45309;";
-    const filasRes = resumen.map((r) => `<tr>${td(r.supervisor)}${td(r.total)}${td(r.llamadas)}${td(r.entrevistas)}
+    const filasRes = resumen.map((r) => `<tr>${td(r.supervisor)}${td(r.scs)}${td(r.total)}${td(r.llamadas)}${td(r.entrevistas)}
       ${td(r.cumple, "background:#e8f5ec;color:#166534;font-weight:bold;")}${td(r.no, "background:#fbeaea;color:#c0392b;font-weight:bold;")}
       ${td(r.curso)}${td(r.reactivaciones)}${td(r.pct === null ? "—" : r.pct + "%", "font-weight:bold;")}</tr>`).join("");
     const filasDet = visibles.map((d) => `<tr>${td(fMX(d.creada, { day: "2-digit", month: "2-digit", year: "numeric" }))}
       ${td(fMX(d.creada, { hour: "2-digit", minute: "2-digit" }))}${td(d.sc)}${td(d.tipo)}${td(d.supervisor)}${td(d.titulo)}
       ${td(d.vence ? fMX(d.vence, { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—")}
       ${td(d.cierre ? fMX(d.cierre, { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—")}
-      ${td(d.veredicto, colorV(d.veredicto))}${td(d.reactivaciones)}${td(d.estado)}</tr>`).join("");
+      ${td(d.veredicto, colorV(d.veredicto))}${td(d.reactivaciones)}${td(d.estado)}${td(d.origenAtrib)}</tr>`).join("");
     const html = `<html xmlns:x="urn:schemas-microsoft-com:office:excel"><head><meta charset="utf-8" />
       <!--[if gte mso 9]><xml><x:ExcelWorkbook><x:ExcelWorksheets>
       <x:ExcelWorksheet><x:Name>SLA Supervisores</x:Name><x:WorksheetOptions><x:DisplayGridlines/></x:WorksheetOptions></x:ExcelWorksheet>
       </x:ExcelWorksheets></x:ExcelWorkbook></xml><![endif]--></head><body style="font-family:Calibri,Arial;">
-      <table><tr><td colspan="9" style="background:#1a3a6b;color:#fff;font-size:15px;font-weight:bold;padding:10px;">
+      <table><tr><td colspan="10" style="background:#1a3a6b;color:#fff;font-size:15px;font-weight:bold;padding:10px;">
         BIGTICKET · Cumplimiento SLA de supervisores</td></tr>
-      <tr><td colspan="9" style="background:#F47B20;color:#fff;font-size:11px;padding:6px 10px;">
+      <tr><td colspan="10" style="background:#F47B20;color:#fff;font-size:11px;padding:6px 10px;">
         Periodo ${rango.ini} al ${rango.fin} · generado ${fMX(new Date().toISOString(), { day: "2-digit", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit" })}</td></tr></table>
-      <br/><table style="border-collapse:collapse;"><tr>${["Supervisor", "Tareas", "Llamadas", "Entrevistas", "Cumple", "No cumple", "En curso", "Reactivaciones", "% Cumplimiento"].map(th).join("")}</tr>${filasRes}</table>
-      <br/><br/><table style="border-collapse:collapse;"><tr><td colspan="11" style="background:#1a3a6b;color:#fff;font-weight:bold;padding:7px 10px;font-size:12px;">Detalle por tarea</td></tr>
-      <tr>${["Fecha", "Hora", "Centro / SVC", "Tipo", "Supervisor", "Prospecto", "Vence SLA", "Cierre", "Cumple SLA", "Reactivaciones", "Estado"].map(th).join("")}</tr>${filasDet}</table>
+      <br/><table style="border-collapse:collapse;"><tr>${["Supervisor", "SC asignados", "Tareas", "Llamadas", "Entrevistas", "Cumple", "No cumple", "En curso", "Reactivaciones", "% Cumplimiento"].map(th).join("")}</tr>${filasRes}</table>
+      <br/><br/><table style="border-collapse:collapse;"><tr><td colspan="12" style="background:#1a3a6b;color:#fff;font-weight:bold;padding:7px 10px;font-size:12px;">Detalle por tarea</td></tr>
+      <tr>${["Fecha", "Hora", "Centro / SVC", "Tipo", "Supervisor", "Prospecto", "Vence SLA", "Cierre", "Cumple SLA", "Reactivaciones", "Estado", "Atribución"].map(th).join("")}</tr>${filasDet}</table>
       </body></html>`;
     const blob = new Blob([`\ufeff${html}`], { type: "application/vnd.ms-excel;charset=utf-8" });
     const a = document.createElement("a");
@@ -6045,6 +6087,10 @@ function TableroControl() {
             <option value="todos">Todos los SC</option>
             {scs.map((x) => <option key={x} value={x}>{x}</option>)}
           </select>
+          <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#555", cursor: "pointer" }}>
+            <input type="checkbox" checked={verSinTareas} onChange={(e) => setVerSinTareas(e.target.checked)} />
+            Incluir supervisores sin tareas
+          </label>
         </div>
       </div>
 
@@ -6063,14 +6109,15 @@ function TableroControl() {
         </div>
         <div style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 720 }}>
-            <thead><tr>{["Supervisor", "Tareas", "Llamadas", "Entrevistas", "Cumple", "No cumple", "En curso", "Reactiv.", "% SLA"].map((h) => <th key={h} style={th}>{h}</th>)}</tr></thead>
+            <thead><tr>{["Supervisor", "SC asignados", "Tareas", "Llamadas", "Entrevistas", "Cumple", "No cumple", "En curso", "Reactiv.", "% SLA"].map((h) => <th key={h} style={th}>{h}</th>)}</tr></thead>
             <tbody>
-              {rows === null ? <tr><td colSpan={9} style={{ ...td, textAlign: "center", color: "#888" }}>Cargando…</td></tr>
-                : resumen.length === 0 ? <tr><td colSpan={9} style={{ ...td, textAlign: "center", color: "#888" }}>Sin tareas en el periodo.</td></tr>
+              {rows === null ? <tr><td colSpan={10} style={{ ...td, textAlign: "center", color: "#888" }}>Cargando…</td></tr>
+                : resumen.length === 0 ? <tr><td colSpan={10} style={{ ...td, textAlign: "center", color: "#888" }}>Sin tareas en el periodo.</td></tr>
                 : resumen.map((r) => (
                   <tr key={r.supervisor}>
                     <td style={{ ...td, fontWeight: 700 }}>{r.supervisor}</td>
-                    <td style={td}>{r.total}</td><td style={td}>{r.llamadas}</td><td style={td}>{r.entrevistas}</td>
+                    <td style={{ ...td, fontFamily: "monospace", fontSize: 11, color: "#667085" }}>{r.scs}</td>
+                    <td style={{ ...td, color: r.total ? "inherit" : "#c3cad6" }}>{r.total}</td><td style={td}>{r.llamadas}</td><td style={td}>{r.entrevistas}</td>
                     <td style={{ ...td, color: "#166534", fontWeight: 700 }}>{r.cumple}</td>
                     <td style={{ ...td, color: "#c0392b", fontWeight: 700 }}>{r.no}</td>
                     <td style={{ ...td, color: "#b45309" }}>{r.curso}</td>
@@ -6125,6 +6172,10 @@ function TableroControl() {
         pendientes con el plazo vencido cuentan como NO CUMPLE; las pendientes dentro de plazo quedan
         EN CURSO y no entran en el porcentaje. Las reactivaciones se muestran aparte a propósito:
         extender un plazo no borra que hubo que extenderlo.
+        <br /><b>Atribución:</b> primero quien cerró la tarea, luego quien la tenía asignada y, si no,
+        el supervisor del SC según el padrón (<i>supervisores_bt</i>). Las entrevistas nacen sin asignar,
+        así que la mayoría se atribuye por SC. Un SC con dos supervisores o sin ninguno en el padrón
+        aparece marcado en vez de repartirse a ciegas.
       </div>
     </div>
   );
