@@ -927,6 +927,32 @@ function ResumenSolicitudAlta({ fuente, registro, datos, onEnviado }) {
           </div>
         } />
       )}
+      {/* El Jefe ya cumplió: la tarjeta está lista para crear credenciales.
+          Antes no había ninguna señal y las tarjetas se quedaban esperando
+          en silencio (Susana 7 días, Jaime 9). */}
+      {itemsOp && itemsOp.fecha_inicio && !registro.tercero_id && (
+        <div style={{ background: "#e8f5ec", border: "1.5px solid #86c9a0", borderRadius: 12, padding: "13px 15px", margin: "10px 0" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 20 }}>✅</span>
+            <div style={{ flex: 1, minWidth: 200 }}>
+              <div style={{ fontSize: 13, fontWeight: 800, color: "#166534" }}>
+                El Jefe de Operaciones ya completó sus items
+              </div>
+              <div style={{ fontSize: 12, color: "#2f6b47", lineHeight: 1.5 }}>
+                La tarjeta está lista para crear las credenciales del portal y pasar a Etapa 8.
+              </div>
+              {itemsOp.completado_at && (
+                <div style={{ fontSize: 11.5, color: "#4a7c5f", marginTop: 3 }}>
+                  Completado el {fMX(itemsOp.completado_at, { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}
+                  {itemsOp.sla_cumplido === false && <b style={{ color: "#c0392b" }}> · SLA 24 h vencido</b>}
+                  {itemsOp.sla_cumplido === true && <b style={{ color: "#166534" }}> · SLA cumplido</b>}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       <Fila k="🏗 Items del contrato (Jefe)" v={
         itemsOp === null ? "Cargando…"
         : itemsOp ? `inicio ${itemsOp.fecha_inicio || "—"} · ${itemsOp.esquema_tarifa || itemsOp.tarifa_aplicable || "—"}`
@@ -2115,8 +2141,9 @@ function SeccionFirmaContrato({ registro, tabla, datos, onActualizado }) {
                     ⚠️ Esta tarjeta no tiene empresa creada
                   </div>
                   <div style={{ fontSize: 12, color: "#8b3a3a", lineHeight: 1.5 }}>
-                    Sin empresa no hay portal al cual mandar la firma. Vuelve a la Etapa 7 con «Mover» y
-                    usa «🏢 Crear empresa y enviar credenciales», luego regresa aquí.
+                    Sin empresa no hay portal al cual mandar la firma. Esta tarjeta llegó aquí sin pasar
+                    por la creación de credenciales: vuelve a Etapa 7 con «Mover» y usa
+                    «🏢 Crear empresa y enviar credenciales».
                   </div>
                 </div>
               )}
