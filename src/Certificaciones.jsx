@@ -1917,6 +1917,16 @@ function SeccionFirmaContrato({ registro, tabla, datos, onActualizado }) {
   const [avisoFirma, setAvisoFirma] = useState("");
   const docId = registro.mifiel_documento_id;
 
+  // Items que dejó el Jefe de Operaciones, con la marca de su SLA. Se ven
+  // aquí para que el analista revise y corrija sin volver a la Etapa 7.
+  const [itemsJefe, setItemsJefe] = useState(null);
+  const cargarItemsJefe = async () => {
+    const { data } = await sb.from("contrato_operacional")
+      .select("*").eq("registro_id", registro.id).maybeSingle();
+    setItemsJefe(data || null);
+  };
+  useEffect(() => { cargarItemsJefe(); }, [registro.id]);
+
   // Relee la tarjeta para saber si el prestador ya firmó desde su portal
   // El botón consulta MIFIEL de verdad (vía n8n) y luego relee la BD.
   // Antes solo leía la BD, que dependía del callback del widget en el
@@ -2047,6 +2057,70 @@ function SeccionFirmaContrato({ registro, tabla, datos, onActualizado }) {
             </button>
           ) : (
             <>
+              {/* Lo que dejó el Jefe + cumplimiento de su SLA de 24 h */}
+              {itemsJefe && (
+                <div style={{ background: "#f7f9fc", border: "1px solid #dde5f0", borderRadius: 12, padding: 14, marginBottom: 12 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
+                    <span style={{ fontSize: 11.5, fontWeight: 800, color: "#1a3a6b", textTransform: "uppercase", letterSpacing: ".4px", flex: 1 }}>
+                      🏗 Items del Jefe de Operaciones
+                    </span>
+                    {itemsJefe.completado_at && (
+                      <>
+                        <span style={{ fontSize: 11.5, color: "#667085" }}>
+                          Completado {fMX(itemsJefe.completado_at, { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}
+                          {itemsJefe.completado_por ? ` · ${itemsJefe.completado_por}` : ""}
+                        </span>
+                        {itemsJefe.sla_cumplido !== null && itemsJefe.sla_cumplido !== undefined && (
+                          <span style={{ fontSize: 10, fontWeight: 800, padding: "3px 10px", borderRadius: 20,
+                            background: itemsJefe.sla_cumplido ? "#e8f5ec" : "#fbeaea",
+                            color: itemsJefe.sla_cumplido ? "#166534" : "#c0392b" }}>
+                            {itemsJefe.sla_cumplido ? "✓ SLA 24 h CUMPLIDO" : "✕ SLA 24 h VENCIDO"}
+                          </span>
+                        )}
+                      </>
+                    )}
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 8, fontSize: 12 }}>
+                    {[["Fecha inicio", itemsJefe.fecha_inicio], ["Esquema tarifa", itemsJefe.esquema_tarifa],
+                      ["Tarifa aplicable", itemsJefe.tarifa_aplicable], ["Back-to-back", itemsJefe.back_to_back],
+                      ["Vigencia", itemsJefe.vigencia_particular], ["Horario", itemsJefe.horario],
+                      ["Choferes", itemsJefe.cantidad_choferes], ["Ayudantes", itemsJefe.cantidad_ayudantes]].map(([k, v]) => (
+                      <div key={k}>
+                        <div style={{ fontSize: 9.5, fontWeight: 700, color: "#98a2b3", textTransform: "uppercase" }}>{k}</div>
+                        <div style={{ fontWeight: 600, color: v ? "#1a1a2e" : "#c0392b" }}>{v || "— falta —"}</div>
+                      </div>
+                    ))}
+                  </div>
+                  {Array.isArray(itemsJefe.lineas) && itemsJefe.lineas.length > 0 && (
+                    <div style={{ marginTop: 10, paddingTop: 9, borderTop: "1px solid #e6ecf5" }}>
+                      <div style={{ fontSize: 9.5, fontWeight: 700, color: "#98a2b3", textTransform: "uppercase", marginBottom: 4 }}>Líneas del Anexo A</div>
+                      {itemsJefe.lineas.map((l, i) => (
+                        <div key={i} style={{ fontSize: 12, color: "#33415c" }}>
+                          <b>{i + 1}.</b> {l.svc || "—"} · {l.modelo || "— sin modelo —"} · {l.tipo || "— sin tipo —"} · {l.n || "?"} unidad(es) · ayudante {l.ayudante || "—"}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <div style={{ fontSize: 11, color: "#8a94a6", marginTop: 9 }}>
+                    Si algo viene mal, corrígelo abajo: lo que edites aquí es lo que se estampa en el contrato,
+                    sin necesidad de devolverle la tarea al Jefe.
+                  </div>
+                </div>
+              )}
+
+              {/* Sin empresa creada no hay portal ni firma posible */}
+              {!registro.tercero_id && (
+                <div style={{ background: "#fbeaea", border: "1.5px solid #f0b4b4", borderRadius: 12, padding: 14, marginBottom: 12 }}>
+                  <div style={{ fontSize: 12.5, fontWeight: 800, color: "#c0392b", marginBottom: 3 }}>
+                    ⚠️ Esta tarjeta no tiene empresa creada
+                  </div>
+                  <div style={{ fontSize: 12, color: "#8b3a3a", lineHeight: 1.5 }}>
+                    Sin empresa no hay portal al cual mandar la firma. Vuelve a la Etapa 7 con «Mover» y
+                    usa «🏢 Crear empresa y enviar credenciales», luego regresa aquí.
+                  </div>
+                </div>
+              )}
+
               {!contratoGen && <EditorContrato D={D} setD={setD} generando={generando} onGenerar={generarContrato} />}
               {contratoGen && (
                 <>
