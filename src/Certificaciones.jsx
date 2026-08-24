@@ -5877,15 +5877,20 @@ function TableroControl() {
   const [fSup, setFSup] = useState("todos");
   const [fSC, setFSC] = useState("todos");
   const [verSinTareas, setVerSinTareas] = useState(true);
-  const [atribuirPor, setAtribuirPor] = useState("sc");   // sc | ejecutor
 
   // El padrón es la fuente de verdad de qué SC atiende cada supervisor.
   // scs_asignados es jsonb (array): se compara en JS, no con = ANY().
+  const [errPadron, setErrPadron] = useState(null);
   useEffect(() => { (async () => {
-    const { data } = await sb.from("supervisores_bt")
-      .select("nombre, email, scs_asignados, activo, rol")
-      .eq("activo", true).order("nombre");
-    setPadron(data || []);
+    const { data, error } = await sb.from("supervisores_bt")
+      .select("nombre, email, scs_asignados, activo, rol").order("nombre");
+    if (error) { setErrPadron(error.message); setPadron([]); return; }
+    const act = (data || []).filter((x) => x.activo !== false);
+    setPadron(act);
+    // Si el padrón llega vacío el tablero no puede nombrar a nadie: casi
+    // siempre es RLS sobre supervisores_bt (la bitácora solo deja ver la
+    // fila propia). Se avisa en pantalla en vez de mostrar todo "sin supervisor".
+    if (!act.length) setErrPadron("El padrón llegó vacío");
   })(); }, []);
   const supDeSC = (sc) => {
     if (!sc) return null;
@@ -5896,7 +5901,11 @@ function TableroControl() {
   const nombrePorEmail = (mail) => {
     if (!mail) return null;
     const p = padron.find((x) => String(x.email || "").toLowerCase() === String(mail).toLowerCase());
-    return p ? p.nombre : mail;
+    if (p) return p.nombre;
+    // Sin ficha en el padrón: se arma un nombre legible del correo en vez
+    // de mostrar la dirección cruda en un reporte de bonos.
+    const l = String(mail).split("@")[0].replace(/[._-]+/g, " ");
+    return l.replace(/\b\w/g, (c) => c.toUpperCase());
   };
 
   // Rango efectivo según el modo elegido
@@ -5949,22 +5958,20 @@ function TableroControl() {
     // Atribución, en orden de honestidad: quien la cerró > quien la tenía
     // asignada > el supervisor del SC (las entrevistas van sin asignar por
     // diseño, así que sin este último paso caían todas en un mismo balde).
-    const cerroMail = t.completado_por || t.completada_por || t.resuelto_por || t.cerrado_por || null;
+    // Regla de la operación:
+    //  · Llamadas    → TODAS a Jorge Arellano, sin importar el SC.
+    //  · Entrevistas → al supervisor dueño del SC, según el padrón.
     const delSC = supDeSC(t.sc);
-    const porEjecutor = cerroMail || t.asignado_a;
     let supervisor, origenAtrib;
-    if (atribuirPor === "sc") {
-      // El bono se paga por SC: el dueño del centro responde por sus tareas,
-      // las haya cerrado él o no (las llamadas van todas a Jorge Arellano,
-      // así que atribuir por ejecutor las cargaría todas a una sola persona).
-      if (delSC && delSC.nombre) { supervisor = delSC.nombre; origenAtrib = "por SC"; }
-      else if (delSC && delSC.varios) { supervisor = `⚠️ ${t.sc}: ${delSC.varios.length} supervisores`; origenAtrib = "ambiguo"; }
-      else { supervisor = `— SC ${t.sc || "?"} sin supervisor —`; origenAtrib = "sin padrón"; }
+    if (t.tipo_tarea === "llamada_prospecto") {
+      supervisor = nombrePorEmail(t.asignado_a) || "Jorge Arellano";
+      origenAtrib = "llamadas";
+    } else if (delSC && delSC.nombre) {
+      supervisor = delSC.nombre; origenAtrib = "SC";
+    } else if (delSC && delSC.varios) {
+      supervisor = `⚠️ ${t.sc}: ${delSC.varios.length} supervisores`; origenAtrib = "ambiguo";
     } else {
-      if (cerroMail) { supervisor = nombrePorEmail(cerroMail); origenAtrib = "cerró"; }
-      else if (t.asignado_a) { supervisor = nombrePorEmail(t.asignado_a); origenAtrib = "asignada"; }
-      else if (delSC && delSC.nombre) { supervisor = delSC.nombre; origenAtrib = "por SC"; }
-      else { supervisor = `— sin ejecutor —`; origenAtrib = "sin dato"; }
+      supervisor = `— SC ${t.sc || "?"} sin supervisor —`; origenAtrib = "sin padrón";
     }
 
     return {
@@ -6106,17 +6113,25 @@ function TableroControl() {
             <option value="todos">Todos los SC</option>
             {scs.map((x) => <option key={x} value={x}>{x}</option>)}
           </select>
-          <select value={atribuirPor} onChange={(e) => setAtribuirPor(e.target.value)} style={inp}
-            title="Por SC: el dueño del centro responde por sus tareas (base del bono). Por ejecutor: quien la cerró o la tenía asignada.">
-            <option value="sc">Atribuir por SC</option>
-            <option value="ejecutor">Atribuir por ejecutor</option>
-          </select>
           <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#555", cursor: "pointer" }}>
             <input type="checkbox" checked={verSinTareas} onChange={(e) => setVerSinTareas(e.target.checked)} />
             Incluir supervisores sin tareas
           </label>
         </div>
       </div>
+
+      {errPadron && (
+        <div style={{ background: "#fbeaea", border: "1px solid #f0b4b4", borderRadius: 10, padding: "11px 14px", marginBottom: 14 }}>
+          <div style={{ fontSize: 12.5, fontWeight: 800, color: "#c0392b", marginBottom: 3 }}>
+            ⚠️ No se pudo leer el padrón de supervisores
+          </div>
+          <div style={{ fontSize: 12, color: "#8b3a3a", lineHeight: 1.5 }}>
+            Sin <i>supervisores_bt</i> el tablero no puede asignar las entrevistas a su SC y todo aparece
+            como «sin supervisor». Suele ser una política RLS que solo deja ver la fila propia.
+            Detalle: {errPadron}
+          </div>
+        </div>
+      )}
 
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
         <Kpi label="Cumplimiento" valor={pctGlobal === null ? "—" : pctGlobal + "%"} color="#1a3a6b" bg="#eef2f7" />
@@ -6196,10 +6211,8 @@ function TableroControl() {
         pendientes con el plazo vencido cuentan como NO CUMPLE; las pendientes dentro de plazo quedan
         EN CURSO y no entran en el porcentaje. Las reactivaciones se muestran aparte a propósito:
         extender un plazo no borra que hubo que extenderlo.
-        <br /><b>Atribución por SC</b> (por defecto): el supervisor dueño del centro según el padrón
-        <i> supervisores_bt</i> responde por las tareas de su SC. Es como se paga el bono, y evita que
-        todas las llamadas se carguen a quien las tiene asignadas por defecto. Cambiando a
-        <i> por ejecutor</i> se mide a quien efectivamente cerró cada tarea.
+        <br /><b>Atribución:</b> las <b>entrevistas</b> se cargan al supervisor dueño del SC según el
+        padrón <i>supervisores_bt</i>; las <b>llamadas</b> van todas a Jorge Arellano, sin importar el SC.
         <br /><b>Reactivaciones:</b> suma las de <i>sla_reactivaciones</i> (botón «Reactivar plazo») y las
         de <i>tareas_reactivaciones</i> (repetir una entrevista o llamada ya ejecutada).
       </div>
