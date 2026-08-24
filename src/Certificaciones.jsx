@@ -3412,6 +3412,8 @@ function InformeRHCheck({ fuente, registroId, terceroId, titulo, pathInicial, on
 // El resultado de Biggy se muestra desde la Etapa 3 en adelante. Si el análisis
 // se generó antes (algún proceso lo dispara al crearse la tarjeta), queda
 // guardado y se reutiliza: al pasar a Etapa 3 se muestra sin correr de nuevo.
+// Etapas donde el estado de la firma importa y se muestra en la tarjeta.
+const ETAPAS_CON_FIRMA = ["firma_contrato", "aceptado"];
 const ETAPAS_SIN_NOTA_BIGGY = ["recepcion", "llamada_supervisor", "stand_by"];
 
 
@@ -4090,7 +4092,7 @@ function KanbanBoard({ items, columnas = COLUMNAS, onCardClick, onMover, onElimi
           <div key={col.id} className="kanban-col"
             onDragOver={(e) => { e.preventDefault(); if (overCol !== col.id) setOverCol(col.id); }}
             onDragLeave={() => setOverCol(prev => prev === col.id ? null : prev)}
-            onDrop={() => { setOverCol(null); const k = dragKey.current; dragKey.current = null; if (k) onMover(k, col.id); }}
+            onDrop={() => { setOverCol(null); dragKey.current = null; }}
             style={{ flex: "1 1 0", minWidth: 205, alignSelf: "stretch", ...(overCol === col.id ? { outline: `2px dashed ${col.color}`, outlineOffset: -4, borderRadius: 10 } : {}) }}>
             <div className="kanban-col-header" style={{ background: col.bg, border: `1px solid ${col.border}`, position: "sticky", top: 0, zIndex: 2 }}>
               <span style={{ fontSize: 13, fontWeight: 700, color: col.color }}>{col.label}</span>
@@ -4102,14 +4104,15 @@ function KanbanBoard({ items, columnas = COLUMNAS, onCardClick, onMover, onElimi
               const tc = TIPO_CFG[card.tipo] || TIPO_CFG.conductor;
               const esVeh = card.tipo === "vehiculo";
               const esRechazo = col.id === "rechazado";
+              // Sin arrastre: el avance de etapa lo dan los botones de cada
+              // etapa, que además ejecutan lo que corresponde (crear empresa,
+              // enviar a firma, validar). Arrastrar saltaba esos pasos y dejaba
+              // tarjetas incoherentes: en Firma sin empresa, o retrocedidas
+              // después de firmar (casos Susana y Fidel, ago-2026).
               return (
                 <div key={card.key} className="kanban-card"
-                  draggable
-                  onDragStart={() => { dragKey.current = card.key; didDrag.current = false; }}
-                  onDrag={() => { didDrag.current = true; }}
-                  onDragEnd={() => { dragKey.current = null; }}
-                  onClick={() => { if (didDrag.current) { didDrag.current = false; return; } onCardClick(card); }}
-                  style={{ position: "relative", cursor: "grab" }}>
+                  onClick={() => onCardClick(card)}
+                  style={{ position: "relative", cursor: "pointer" }}>
                   {/* eliminar (solo front) */}
                   <button title="Quitar del tablero" onClick={(e) => { e.stopPropagation(); onEliminar(card); }}
                     style={{ position: "absolute", top: 6, right: 6, width: 20, height: 20, lineHeight: "18px", textAlign: "center", borderRadius: "50%", border: "1px solid #e4e7ec", background: "#fff", color: "#c0392b", fontSize: 12, cursor: "pointer", padding: 0 }}>✕</button>
@@ -4155,6 +4158,28 @@ function KanbanBoard({ items, columnas = COLUMNAS, onCardClick, onMover, onElimi
                         ⚠ Cambios del prospecto
                       </span>
                     )}
+                    {/* Estado real de la firma, leído de los flags de MIFIEL.
+                        Una tarjeta en Aceptado sin ambas firmas no está cerrada:
+                        antes eso solo se veía abriendo la tarjeta o el PDF. */}
+                    {ETAPAS_CON_FIRMA.includes(col.id) && card.fuente === "prospeccion" && (() => {
+                      const t = card.raw?.mifiel_firmado_conductor === true;
+                      const b = card.raw?.mifiel_firmado_bigticket === true;
+                      const enviado = !!card.raw?.contrato_enviado_at;
+                      if (!enviado && !t && !b) return null;
+                      const cfg = (t && b) ? { bg: "#e8f5ec", fg: "#166534", bd: "#b7e0c2", txt: "✍️ Firmado por ambas partes" }
+                        : t ? { bg: "#fff8e6", fg: "#b45309", bd: "#f5d9b8", txt: "✍️ Falta firma BigTicket" }
+                        : b ? { bg: "#fff8e6", fg: "#b45309", bd: "#f5d9b8", txt: "✍️ Falta firma del tercero" }
+                        : { bg: "#fbeaea", fg: "#c0392b", bd: "#f0b4b4", txt: "✍️ Sin firmas" };
+                      return (
+                        <span title={card.raw?.contrato_firmado_at
+                          ? `Cerrado el ${fMX(card.raw.contrato_firmado_at, { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}`
+                          : "Contrato en proceso de firma"}
+                          style={{ fontSize: 9, fontWeight: 800, padding: "2px 8px", borderRadius: 20,
+                            background: cfg.bg, color: cfg.fg, border: `1px solid ${cfg.bd}` }}>
+                          {cfg.txt}
+                        </span>
+                      );
+                    })()}
                   </div>
                   {esRechazo && card.raw?.respuesta_meli && (
                     <div style={{ fontSize: 10, color: "#c0392b", marginTop: 6 }}>❌ {card.raw.respuesta_meli}</div>
@@ -6535,6 +6560,8 @@ function ModuloCertificaciones() {
     if (!card || card.etapa === targetEtapa) return;
     const col = COLUMNAS.find(c => c.id === targetEtapa);
 
+    // El arrastre está deshabilitado en el tablero; esto queda como red de
+    // seguridad por si algún camino vuelve a llamar a moverTarjeta.
     // ── Etapa 7 → Etapa 8 solo por el botón de credenciales ──
     // Arrastrar la tarjeta salta la creación de la empresa: queda sin
     // portal, sin credenciales y sin tercero_id, pero figura "en firma"
