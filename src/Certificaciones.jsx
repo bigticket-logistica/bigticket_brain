@@ -2236,6 +2236,7 @@ function SeccionFirmaContrato({ registro, tabla, datos, onActualizado }) {
 // igual, pero avisando qué falta (a veces se rechaza a alguien que ya firmó).
 function PanelCierreFirma({ registro, tabla, onActualizado }) {
   const [guardando, setGuardando] = useState(null);
+  const [ok, setOk] = useState(null);
   const firmoT = registro.mifiel_firmado_conductor === true;
   const firmoB = registro.mifiel_firmado_bigticket === true;
   const completo = firmoT && firmoB;
@@ -2253,8 +2254,15 @@ function PanelCierreFirma({ registro, tabla, onActualizado }) {
       if (estado) patch.estado = estado;
       const { error } = await sb.from(tabla).update(patch).eq("id", registro.id);
       if (error) throw new Error(error.message);
+      await sb.from("movimientos_etapa").insert({
+        tabla, registro_id: String(registro.id), titulo: registro.nombre || null,
+        etapa_origen: "firma_contrato", etapa_destino: etapa,
+        motivo: `Cierre de Etapa 8 desde el detalle · firmas: tercero ${firmoT ? "sí" : "no"}, BigTicket ${firmoB ? "sí" : "no"}`,
+        movido_por: window.__PERFIL_EMAIL || "analista_brain",
+      });
+      setOk(`✓ Tarjeta movida a ${etiqueta}.`);
       onActualizado && onActualizado();
-    } catch (e) { alert("No se pudo mover: " + e.message); }
+    } catch (e) { setOk(null); alert("No se pudo mover: " + e.message); }
     finally { setGuardando(null); }
   };
 
@@ -2276,6 +2284,12 @@ function PanelCierreFirma({ registro, tabla, onActualizado }) {
           ? "El contrato está cerrado. Pasa la tarjeta a Aceptado para terminar el proceso."
           : `Estado de firmas: tercero ${firmoT ? "✓" : "pendiente"} · BigTicket ${firmoB ? "✓" : "pendiente"}.`}
       </div>
+      {ok && (
+        <div style={{ background: "#e8f5ec", border: "1px solid #86c9a0", color: "#166534",
+          borderRadius: 9, padding: "9px 12px", fontSize: 12.5, fontWeight: 700, marginBottom: 10 }}>
+          {ok}
+        </div>
+      )}
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         <button onClick={() => mover("aceptado", "aceptado", "Aceptado")} disabled={!!guardando}
           style={completo ? { ...btn("#0f766e", "#fff", "#0f766e") } : btn("#fff", "#0f766e", "#c4e6df")}>
@@ -4162,7 +4176,7 @@ function KanbanBoard({ items, columnas = COLUMNAS, onCardClick, onMover, onElimi
           <div key={col.id} className="kanban-col"
             onDragOver={(e) => { e.preventDefault(); if (overCol !== col.id) setOverCol(col.id); }}
             onDragLeave={() => setOverCol(prev => prev === col.id ? null : prev)}
-            onDrop={() => { setOverCol(null); dragKey.current = null; }}
+            onDrop={() => { setOverCol(null); const k = dragKey.current; dragKey.current = null; if (k) onMover(k, col.id); }}
             style={{ flex: "1 1 0", minWidth: 205, alignSelf: "stretch", ...(overCol === col.id ? { outline: `2px dashed ${col.color}`, outlineOffset: -4, borderRadius: 10 } : {}) }}>
             <div className="kanban-col-header" style={{ background: col.bg, border: `1px solid ${col.border}`, position: "sticky", top: 0, zIndex: 2 }}>
               <span style={{ fontSize: 13, fontWeight: 700, color: col.color }}>{col.label}</span>
@@ -4181,8 +4195,12 @@ function KanbanBoard({ items, columnas = COLUMNAS, onCardClick, onMover, onElimi
               // después de firmar (casos Susana y Fidel, ago-2026).
               return (
                 <div key={card.key} className="kanban-card"
-                  onClick={() => onCardClick(card)}
-                  style={{ position: "relative", cursor: "pointer" }}>
+                  draggable
+                  onDragStart={() => { dragKey.current = card.key; didDrag.current = false; }}
+                  onDrag={() => { didDrag.current = true; }}
+                  onDragEnd={() => { dragKey.current = null; }}
+                  onClick={() => { if (didDrag.current) { didDrag.current = false; return; } onCardClick(card); }}
+                  style={{ position: "relative", cursor: "grab" }}>
                   {/* eliminar (solo front) */}
                   <button title="Quitar del tablero" onClick={(e) => { e.stopPropagation(); onEliminar(card); }}
                     style={{ position: "absolute", top: 6, right: 6, width: 20, height: 20, lineHeight: "18px", textAlign: "center", borderRadius: "50%", border: "1px solid #e4e7ec", background: "#fff", color: "#c0392b", fontSize: 12, cursor: "pointer", padding: 0 }}>✕</button>
@@ -6414,6 +6432,87 @@ function TableroControl() {
   );
 }
 
+// ─── MOVER TARJETA CON MOTIVO ─────────────────────────────────────────
+// El arrastre libre dejaba tarjetas incoherentes sin rastro de quién ni por
+// qué. Ahora se permite mover, pero mostrando el movimiento, avisando lo
+// que puede romperse y guardando el motivo en movimientos_etapa.
+function ModalMoverEtapa({ mov, onCancelar, onConfirmar }) {
+  const [motivo, setMotivo] = useState("");
+  const [enviando, setEnviando] = useState(false);
+  const corto = motivo.trim().length < 10;
+
+  const confirmar = async () => {
+    if (corto) return;
+    setEnviando(true);
+    await onConfirmar(motivo.trim());
+    setEnviando(false);
+  };
+
+  const nombreEtapa = (id) => (COLUMNAS.find(c => c.id === id) || {}).label || id;
+
+  return (
+    <div onClick={onCancelar}
+      style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,.45)", zIndex: 9500,
+        display: "flex", alignItems: "center", justifyContent: "center", padding: 18 }}>
+      <div onClick={(e) => e.stopPropagation()}
+        style={{ background: "#fff", borderRadius: 16, maxWidth: 520, width: "100%",
+          boxShadow: "0 20px 60px rgba(0,0,0,.28)", overflow: "hidden", fontFamily: "'Geist',sans-serif" }}>
+        <div style={{ background: "#1a3a6b", color: "#fff", padding: "15px 20px" }}>
+          <div style={{ fontSize: 15, fontWeight: 800 }}>Mover tarjeta de etapa</div>
+          <div style={{ fontSize: 12.5, opacity: .85, marginTop: 2 }}>{mov.card.titulo}</div>
+        </div>
+
+        <div style={{ padding: 20 }}>
+          {/* El movimiento, explícito */}
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap",
+            background: "#f7f9fc", border: "1px solid #dde5f0", borderRadius: 10, padding: "12px 14px", marginBottom: 14 }}>
+            <span style={{ fontSize: 12.5, fontWeight: 700, color: "#667085" }}>{nombreEtapa(mov.card.etapa)}</span>
+            <span style={{ fontSize: 16, color: "#F47B20" }}>→</span>
+            <span style={{ fontSize: 12.5, fontWeight: 800, color: "#1a3a6b" }}>{mov.col?.label || mov.targetEtapa}</span>
+          </div>
+
+          {/* Lo que puede romperse */}
+          {mov.advertencias.length > 0 && (
+            <div style={{ background: "#fff7ed", border: "1.5px solid #F47B20", borderRadius: 10, padding: "12px 14px", marginBottom: 14 }}>
+              <div style={{ fontSize: 12, fontWeight: 800, color: "#9a4a06", marginBottom: 5 }}>
+                ⚠️ Antes de mover, ten en cuenta
+              </div>
+              <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12, color: "#b45309", lineHeight: 1.6 }}>
+                {mov.advertencias.map((a, i) => <li key={i}>{a}</li>)}
+              </ul>
+            </div>
+          )}
+
+          <label style={{ fontSize: 11, fontWeight: 700, color: "#5b6b85", textTransform: "uppercase", letterSpacing: ".04em", display: "block", marginBottom: 6 }}>
+            Motivo del movimiento *
+          </label>
+          <textarea value={motivo} onChange={(e) => setMotivo(e.target.value)} rows={3}
+            placeholder="Por qué mueves esta tarjeta (mínimo 10 caracteres). Queda registrado con tu usuario."
+            style={{ width: "100%", boxSizing: "border-box", border: `1.5px solid ${corto && motivo ? "#f0b4b4" : "#dfe5ee"}`,
+              borderRadius: 10, padding: "11px 13px", fontSize: 13, fontFamily: "'Geist',sans-serif", resize: "vertical" }} />
+          <div style={{ fontSize: 11, color: corto && motivo ? "#c0392b" : "#98a2b3", marginTop: 4 }}>
+            {motivo.trim().length}/10 caracteres mínimos
+          </div>
+
+          <div style={{ display: "flex", gap: 9, marginTop: 16 }}>
+            <button onClick={confirmar} disabled={corto || enviando}
+              style={{ flex: 1, background: corto ? "#c9d2e0" : "#1a3a6b", color: "#fff", border: "none",
+                borderRadius: 10, padding: "12px", fontSize: 13, fontWeight: 800,
+                cursor: corto ? "not-allowed" : "pointer", fontFamily: "'Geist',sans-serif" }}>
+              {enviando ? "Moviendo…" : "Mover y registrar"}
+            </button>
+            <button onClick={onCancelar}
+              style={{ border: "1px solid #dfe5ee", background: "#fff", color: "#667085", borderRadius: 10,
+                padding: "12px 20px", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "'Geist',sans-serif" }}>
+              Cancelar
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ModuloCertificaciones() {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -6625,48 +6724,70 @@ function ModuloCertificaciones() {
   };
 
   // Mover tarjeta de columna manualmente (con confirmación)
+  // El movimiento manual se permite, pero pide motivo y queda registrado
+  // en movimientos_etapa. Antes se arrastraba sin rastro y aparecían
+  // tarjetas incoherentes sin saber quién ni por qué.
+  const [movPend, setMovPend] = useState(null);   // { card, targetEtapa, col, advertencias[] }
+  // Aviso en pantalla (no alert nativo: en móvil se suprime y el analista
+  // se queda sin saber si su acción funcionó).
+  const [aviso, setAviso] = useState(null);      // { tipo: ok|error, texto }
+  useEffect(() => {
+    if (!aviso) return;
+    const t = setTimeout(() => setAviso(null), 6000);
+    return () => clearTimeout(t);
+  }, [aviso]);
+
   const moverTarjeta = async (cardKey, targetEtapa) => {
     const card = items.find(i => i.key === cardKey);
     if (!card || card.etapa === targetEtapa) return;
     const col = COLUMNAS.find(c => c.id === targetEtapa);
 
-    // El arrastre está deshabilitado en el tablero; esto queda como red de
-    // seguridad por si algún camino vuelve a llamar a moverTarjeta.
-    // ── Etapa 7 → Etapa 8 solo por el botón de credenciales ──
-    // Arrastrar la tarjeta salta la creación de la empresa: queda sin
-    // portal, sin credenciales y sin tercero_id, pero figura "en firma"
-    // (caso Susana Andrade, 24-ago-2026: 8 días así). El único camino
-    // válido es «🏢 Crear empresa y enviar credenciales» en la Etapa 7.
-    if (card.etapa === "solicitud_alta" && targetEtapa === "firma_contrato") {
-      alert(
-        "Esta tarjeta no se puede mover a mano a Firma de Contrato.\n\n" +
-        "Ábrela y usa «🏢 Crear empresa y enviar credenciales»: ese botón crea la empresa, " +
-        "manda el acceso al portal y mueve la tarjeta solo.\n\n" +
-        "Sin ese paso el transportista queda sin portal y su contrato no se puede firmar."
-      );
-      return;
-    }
-    // Tampoco se entra a Firma desde ninguna otra etapa sin empresa creada.
+    // Advertencias: no bloquean, informan. El analista decide con el dato
+    // a la vista y su motivo queda guardado junto al aviso.
+    const adv = [];
     if (targetEtapa === "firma_contrato" && card.fuente === "prospeccion" && !card.raw?.tercero_id) {
-      alert("Esta empresa todavía no existe (sin tercero_id), así que no puede pasar a Firma de Contrato.\n\nCrea primero las credenciales del portal en la Etapa 7.");
-      return;
+      adv.push("La empresa no está creada (sin tercero_id): el tercero no tendrá portal ni podrá firmar. El camino normal es el botón «🏢 Crear empresa y enviar credenciales» en la Etapa 7.");
     }
+    if (card.raw?.mifiel_firmado_conductor === true && card.raw?.mifiel_firmado_bigketicket === true
+        && targetEtapa !== "aceptado") {
+      adv.push("Este contrato ya está firmado por ambas partes: moverlo fuera de Aceptado deja el proceso abierto sin razón operativa.");
+    }
+    if (card.raw?.contrato_enviado_at && ["recepcion", "llamada_supervisor", "validacion_meli", "validacion_nubarium"].includes(targetEtapa)) {
+      adv.push("El contrato ya salió a firma; devolver la tarjeta a una etapa previa no cancela el documento en MIFIEL.");
+    }
+    setMovPend({ card, targetEtapa, col, advertencias: adv });
+  };
 
-    if (!confirm(`¿Mover "${card.titulo}" a "${col?.label || targetEtapa}"?`)) return;
-    setItems(prev => prev.map(i => i.key === cardKey ? { ...i, etapa: targetEtapa, raw: { ...i.raw, etapa_kanban: targetEtapa, ...(card.fuente === "prospeccion" && ESTADO_POR_ETAPA[targetEtapa] ? { estado: ESTADO_POR_ETAPA[targetEtapa] } : {}) } } : i));
-    // Persiste la etapa en ambas fuentes (para que no se revierta al refrescar).
-    // NO se dispara Biggy aquí: la Pre Validación corre al ABRIR la tarjeta en Etapa 2.
-    if (card.fuente === "prospeccion") {
-      const patch = { etapa_kanban: targetEtapa, updated_at: new Date().toISOString() };
-      const estado = ESTADO_POR_ETAPA[targetEtapa];
-      if (estado) patch.estado = estado;
-      const { error } = await sb.from("certificaciones_mx").update(patch).eq("id", card.id);
-      if (error) { alert("No se pudo guardar el movimiento: " + error.message); await cargar(); return; }
-    } else if (card.fuente === "portal_cert") {
-      const { error } = await sb.from("certificaciones").update({ etapa_kanban: targetEtapa }).eq("id", card.id);
-      if (error) { alert("No se pudo guardar el movimiento: " + error.message); await cargar(); return; }
+  const confirmarMovimiento = async (motivo) => {
+    const mp = movPend;
+    if (!mp) return;
+    const { card, targetEtapa } = mp;
+    const tabla = card.fuente === "prospeccion" ? "certificaciones_mx" : "certificaciones";
+    try {
+      const patch = { etapa_kanban: targetEtapa };
+      if (card.fuente === "prospeccion") {
+        patch.updated_at = new Date().toISOString();
+        const estado = ESTADO_POR_ETAPA[targetEtapa];
+        if (estado) patch.estado = estado;
+      }
+      const { error } = await sb.from(tabla).update(patch).eq("id", card.id);
+      if (error) throw new Error(error.message);
+      await sb.from("movimientos_etapa").insert({
+        tabla, registro_id: String(card.id), titulo: card.titulo,
+        etapa_origen: card.etapa, etapa_destino: targetEtapa,
+        motivo, advertencias: mp.advertencias.join(" · ") || null,
+        movido_por: window.__PERFIL_EMAIL || "analista_brain",
+      });
+      setMovPend(null);
+      setAviso({ tipo: "ok", texto: `✓ "${card.titulo}" se movió a ${mp.col?.label || targetEtapa}. El motivo quedó registrado.` });
+      await cargar(true);
+    } catch (e) {
+      setAviso({ tipo: "error", texto: "No se pudo mover: " + e.message });
+      setMovPend(null);
     }
   };
+
+
 
   // Mover la tarjeta seleccionada a una etapa y volver al tablero (usado por los botones del detalle)
   const moverYCerrar = async (card, targetEtapa) => {
@@ -6883,7 +7004,25 @@ function ModuloCertificaciones() {
             : "Ninguna tarjeta coincide con la búsqueda o los filtros"}</div>
         </div>
       ) : vista === "kanban" ? (
+        <>
         <KanbanBoard items={itemsFiltrados} columnas={colsFlujo} onCardClick={setSelected} onMover={moverTarjeta} onEliminar={eliminarTarjeta} />
+
+        {/* Aviso flotante del resultado de la acción */}
+        {aviso && (
+          <div style={{ position: "fixed", bottom: 22, right: 22, zIndex: 9000, maxWidth: 420,
+            background: aviso.tipo === "ok" ? "#e8f5ec" : "#fbeaea",
+            border: `1.5px solid ${aviso.tipo === "ok" ? "#86c9a0" : "#f0b4b4"}`,
+            color: aviso.tipo === "ok" ? "#166534" : "#c0392b",
+            borderRadius: 12, padding: "13px 16px", fontSize: 13, fontWeight: 700,
+            boxShadow: "0 8px 28px rgba(0,0,0,.14)", fontFamily: "'Geist',sans-serif" }}>
+            {aviso.texto}
+            <span onClick={() => setAviso(null)} style={{ marginLeft: 12, cursor: "pointer", opacity: .6 }}>✕</span>
+          </div>
+        )}
+
+        {/* Movimiento manual con motivo obligatorio */}
+        {movPend && <ModalMoverEtapa mov={movPend} onCancelar={() => setMovPend(null)} onConfirmar={confirmarMovimiento} />}
+        </>
       ) : (
         <div>
           {itemsFiltrados.map(card => {
