@@ -2218,8 +2218,78 @@ function SeccionFirmaContrato({ registro, tabla, datos, onActualizado }) {
               </div>
             )
           )}
+
+          {/* Cierre de la etapa: con ambas firmas el paso natural es Aceptado,
+              pero la decisión queda en manos del analista. Antes no había
+              ninguna salida desde aquí y las tarjetas se quedaban en Firma
+              aunque el contrato estuviera cerrado (caso Fidel, ago-2026). */}
+          <PanelCierreFirma registro={registro} tabla={tabla} onActualizado={onActualizado} />
         </>
       )}
+    </div>
+  );
+}
+
+// ─── CIERRE DE LA ETAPA 8 · decisión del analista ────────────────────
+// Aceptado / Revisión Interna / Rechazado. Con ambas firmas el botón de
+// Aceptado se destaca y el panel lo sugiere; sin ellas se puede cerrar
+// igual, pero avisando qué falta (a veces se rechaza a alguien que ya firmó).
+function PanelCierreFirma({ registro, tabla, onActualizado }) {
+  const [guardando, setGuardando] = useState(null);
+  const firmoT = registro.mifiel_firmado_conductor === true;
+  const firmoB = registro.mifiel_firmado_bigticket === true;
+  const completo = firmoT && firmoB;
+
+  const mover = async (etapa, estado, etiqueta) => {
+    const faltan = [!firmoT && "la firma del tercero", !firmoB && "la firma de BigTicket"].filter(Boolean);
+    let msg = `¿Mover esta tarjeta a ${etiqueta}?`;
+    if (faltan.length && etapa === "aceptado") {
+      msg += `\n\n⚠️ Falta ${faltan.join(" y ")}. Normalmente se acepta con el contrato firmado por ambas partes.`;
+    }
+    if (!confirm(msg)) return;
+    setGuardando(etapa);
+    try {
+      const patch = { etapa_kanban: etapa };
+      if (estado) patch.estado = estado;
+      const { error } = await sb.from(tabla).update(patch).eq("id", registro.id);
+      if (error) throw new Error(error.message);
+      onActualizado && onActualizado();
+    } catch (e) { alert("No se pudo mover: " + e.message); }
+    finally { setGuardando(null); }
+  };
+
+  const btn = (bg, fg, bd) => ({
+    flex: 1, minWidth: 140, background: bg, color: fg, border: `1.5px solid ${bd}`,
+    borderRadius: 10, padding: "11px", fontSize: 12.5, fontWeight: 800,
+    cursor: "pointer", fontFamily: "'Geist',sans-serif",
+  });
+
+  return (
+    <div style={{ marginTop: 12, background: completo ? "#e8f5ec" : "#f7f9fc",
+      border: `1.5px solid ${completo ? "#86c9a0" : "#dde5f0"}`, borderRadius: 12, padding: 14 }}>
+      <div style={{ fontSize: 12, fontWeight: 800, color: completo ? "#166534" : "#1a3a6b",
+        textTransform: "uppercase", letterSpacing: ".4px", marginBottom: 3 }}>
+        {completo ? "✅ Contrato firmado por ambas partes" : "🖊 Cierre de la etapa"}
+      </div>
+      <div style={{ fontSize: 12, color: completo ? "#2f6b47" : "#667085", lineHeight: 1.5, marginBottom: 11 }}>
+        {completo
+          ? "El contrato está cerrado. Pasa la tarjeta a Aceptado para terminar el proceso."
+          : `Estado de firmas: tercero ${firmoT ? "✓" : "pendiente"} · BigTicket ${firmoB ? "✓" : "pendiente"}.`}
+      </div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <button onClick={() => mover("aceptado", "aceptado", "Aceptado")} disabled={!!guardando}
+          style={completo ? { ...btn("#0f766e", "#fff", "#0f766e") } : btn("#fff", "#0f766e", "#c4e6df")}>
+          {guardando === "aceptado" ? "Moviendo…" : "✓ Aceptado"}
+        </button>
+        <button onClick={() => mover("revision_interna", null, "Revisión Interna")} disabled={!!guardando}
+          style={btn("#fff", "#b45309", "#f5d9b8")}>
+          {guardando === "revision_interna" ? "Moviendo…" : "⚠ Revisión Interna"}
+        </button>
+        <button onClick={() => mover("rechazado", "rechazado", "Rechazado")} disabled={!!guardando}
+          style={btn("#fff", "#c0392b", "#f0b4b4")}>
+          {guardando === "rechazado" ? "Moviendo…" : "✕ Rechazado"}
+        </button>
+      </div>
     </div>
   );
 }
