@@ -2219,6 +2219,31 @@ function SeccionFirmaContrato({ registro, tabla, datos, onActualizado }) {
             )
           )}
 
+          {/* Refresco a demanda, disponible SIEMPRE mientras falte una firma.
+              El widget de MIFIEL no siempre avisa al Brain cuando se completa
+              (y si se firma por el correo de MIFIEL, nunca), así que sin este
+              botón había que esperar el barrido del flujo 24. */}
+          {!(registro.mifiel_firmado_conductor && registro.mifiel_firmado_bigticket) && (
+            <div style={{ marginTop: 10 }}>
+              <button disabled={verificandoFirma} onClick={verificarFirmaPrestador}
+                style={{ width: "100%", background: "#fff", color: "#1a3a6b", border: "1.5px solid #c7d7f9",
+                  borderRadius: 10, padding: "11px", fontSize: 12.5, fontWeight: 800,
+                  cursor: verificandoFirma ? "wait" : "pointer", fontFamily: "'Geist',sans-serif" }}>
+                {verificandoFirma ? "Consultando MIFIEL…" : "🔄 Actualizar estado de firmas"}
+              </button>
+              <div style={{ fontSize: 11, color: "#98a2b3", marginTop: 5, textAlign: "center", lineHeight: 1.5 }}>
+                Consulta MIFIEL y refresca ambas firmas. Úsalo justo después de firmar
+                {avisoFirma ? "" : " — el widget no siempre avisa al Brain."}
+              </div>
+              {avisoFirma && (
+                <div style={{ marginTop: 8, background: "#eef2f9", border: "1px solid #c7d7f9", color: "#1a3a6b",
+                  borderRadius: 9, padding: "9px 12px", fontSize: 12.5, fontWeight: 700 }}>
+                  {avisoFirma}
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Cierre de la etapa: con ambas firmas el paso natural es Aceptado,
               pero la decisión queda en manos del analista. Antes no había
               ninguna salida desde aquí y las tarjetas se quedaban en Firma
