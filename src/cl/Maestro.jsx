@@ -238,12 +238,17 @@ function ModuloMaestroCL() {
         const fs = r.map(x => x.fecha);
         setDias(fs);
         if (fs.length) {
-          // Preferir HOY (en horario de Chile) si ya tiene datos; si no, el día más
-          // reciente. Antes abría siempre en el más reciente y confundía: estando a
-          // 31 mostraba el 30 sin decir por qué.
+          // Abre en AYER (horario de Chile): el maestro es de jornadas cerradas, y
+          // el día en curso además responde lento porque sus estadísticas todavía
+          // no reflejan los datos que el monitor está escribiendo. El seguimiento
+          // minuto a minuto se hace en el monitor, no acá.
+          // Si ayer no tiene datos (feriado, domingo), cae al día más reciente.
           const hoyCL = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Santiago",
             year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
-          setFecha(fs.includes(hoyCL) ? hoyCL : fs[0]);
+          const d = new Date(hoyCL + "T12:00:00Z");
+          d.setUTCDate(d.getUTCDate() - 1);
+          const ayerCL = d.toISOString().slice(0, 10);
+          setFecha(fs.includes(ayerCL) ? ayerCL : fs[0]);
         }
         else { setCargando(false); }
       } catch (e) { setError(e.message); setCargando(false); }
