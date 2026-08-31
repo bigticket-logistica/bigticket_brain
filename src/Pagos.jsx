@@ -2496,7 +2496,7 @@ function HistorialPagoMX({ usuario }) {
       ]);
       const prefacturas = pf.data || [];
       const creadas = new Set(prefacturas.map(r => `${r.empresa_nombre}||${r.service_center}`));
-      const noCreadas = (res.data || []).filter(r => r.empresa && r.empresa !== "SIN EMPRESA" && Number(r.n_viajes || 0) > 0 && !creadas.has(`${r.empresa}||${r.service_center}`));
+      const noCreadas = (res.data || []).filter(r => r.empresa && r.empresa !== SIN_EMPRESA && Number(r.n_viajes || 0) > 0 && !creadas.has(`${r.empresa}||${r.service_center}`));
       setD({ prefacturas, eventos: ev.data || [], saldos: sd.data || [], reportes: rc.data || [], noCreadas });
     } catch (e) { console.error("historial pago:", e); }
     setLoading(false);
@@ -2617,6 +2617,7 @@ function ConciliacionTercerosMX({ usuario }) {
   const [saldosPorSC, setSaldosPorSC] = useState({});   // "empresa||sc" -> { pendiente, semanaOrigen } (arrastre de negativos)
   const [placasViejas, setPlacasViejas] = useState({}); // placa -> primera semana que apareció sin empresa (anteriores)
   const [aplicManual, setAplicManual] = useState({}); // "empresa||scDestino" -> [{ origenSC, origenSem, monto, origenKey }] (saldos de otro SC aplicados a mano)
+  const [sellos, setSellos] = useState({}); // "fecha|id_ruta" -> sello de envío inmutable
   const [pausados, setPausados] = useState([]); // rutas con pago pausado (Listado de Pagos), pendientes de liberar
   const cargarPausados = async () => {
     try {
@@ -2625,6 +2626,26 @@ function ConciliacionTercerosMX({ usuario }) {
     } catch (e) { console.error("pausados concil:", e); setPausados([]); }
   };
   useEffect(() => { cargarPausados(); }, []);
+  // Sellos de envío de la semana: viven fuera de maestro_jornada_mx (que se reinserta en cada
+  // recálculo), así que sobreviven a recalculos, ediciones de monto, cierres y reaperturas.
+  const cargarSellos = async (sem) => {
+    const sm = sem != null ? sem : semana;
+    try {
+      const { data, error } = await sb.from("prefactura_viajes_enviados")
+        .select("fecha, id_ruta, empresa_nombre, service_center, enviado_at")
+        .eq("semana", sm).not("id_ruta", "is", null).limit(20000);
+      if (error) throw error;
+      const m = {};
+      for (const r of data || []) {
+        const k = `${String(r.fecha).slice(0, 10)}|${r.id_ruta}`;
+        if (!m[k]) m[k] = { empresa: r.empresa_nombre, sc: r.service_center, enviado_at: r.enviado_at, veces: 1 };
+        else m[k].veces++;
+      }
+      setSellos(m);
+    } catch (e) { console.error("sellos de envío:", e); setSellos({}); }
+  };
+  const selloDe = (d) => (d && d.id_ruta) ? sellos[`${String(d.fecha || "").slice(0, 10)}|${d.id_ruta}`] : null;
+  useEffect(() => { cargarSellos(semana); }, [semana]);
   const activarPausado = async (r) => {
     if (!confirm(`\u00bfActivar (liberar) el pago de ${r.driver_name || r.placa} \u00b7 ruta ${r.id_ruta} del ${r.fecha}?`)) return;
     try {
@@ -2697,7 +2718,9 @@ function ConciliacionTercerosMX({ usuario }) {
           const nA = det.filter(d => d && !d._saldo && (d._editado || d.es_manual || d.origen === "ajuste")).length;
           if (nA) { mapE[norm(c.empresa_nombre)] = (mapE[norm(c.empresa_nombre)] || 0) + nA; mapS[`${norm(c.empresa_nombre)}||${norm(c.service_center)}`] = nA; }
           const k = `${norm(c.empresa_nombre)}||${norm(c.service_center)}`;
-          if (!have.has(k)) {
+          // El bucket de diagnóstico no se reinyecta desde lo guardado: si el RPC ya no lo devuelve
+          // es porque las placas quedaron asignadas, y sumar el guardado infla la tarjeta.
+          if (!have.has(k) && c.empresa_nombre !== SIN_EMPRESA) {
             const tt = transpPorNorm[norm(c.empresa_nombre)] || {};
             extra.push({ empresa: c.empresa_nombre, service_center: c.service_center,
               n_viajes: c.n_viajes != null ? c.n_viajes : det.length, n_no_pago: c.n_no_pago != null ? c.n_no_pago : det.filter(d => d.es_no_pago).length,
@@ -2787,8 +2810,11 @@ function ConciliacionTercerosMX({ usuario }) {
       if (!out[r.empresa]) out[r.empresa] = { empresa: r.empresa, filasSC: [], totalNeto: 0, totalBruto: 0, totalIva: 0, nViajes: 0, nNoPago: 0, placas: new Set(), rfc: r.rfc, correo_to: r.correo_to };
       const g = out[r.empresa];
       g.filasSC.push(r);
-      g.totalNeto += Number((r.neto_guardado != null ? r.neto_guardado : r.total_neto) || 0);
-      g.totalBruto += Number((r.bruto_guardado != null ? r.bruto_guardado : r.total_bruto) || 0);
+      // En el bucket de diagnóstico se ignora lo guardado: siempre el cálculo vivo, para que un
+      // borrador viejo no muestre viajes/montos que ya se asignaron a su empresa real.
+      const _vivo = r.empresa === SIN_EMPRESA;
+      g.totalNeto += Number((!_vivo && r.neto_guardado != null ? r.neto_guardado : r.total_neto) || 0);
+      g.totalBruto += Number((!_vivo && r.bruto_guardado != null ? r.bruto_guardado : r.total_bruto) || 0);
       g.totalIva += Number(r.iva_16 || 0);
       g.nViajes += Number(r.n_viajes || 0);
       g.nNoPago += Number(r.n_no_pago || 0);
@@ -3122,13 +3148,26 @@ function ConciliacionTercerosMX({ usuario }) {
       if (!nuevos.length) { alert("Esos viajes ya est\u00e1n en la prefactura de " + eleccion + " de esta semana."); setAsignando(null); return; }
       const porSC = {};
       for (const r of nuevos) {
+        // La línea viaja con TODOS los datos operativos del viaje (v3.2 del RPC los trae del
+        // maestro); el factor se deriva del pago: neto = tarifa × factor + auxiliar.
+        const _tarifa = Number(r.tarifa_base || 0);
+        const _aux = Number(r.monto_auxiliar || 0);
+        const _monto = Number(r.monto || 0);
         const ln = {
           _id: `arr|${r.semana}|${r.id_ruta}|${String(r.fecha).slice(0, 10)}`,
           origen: "arrastre", es_manual: true, _arrastre: true, semana_origen: Number(r.semana),
           fecha: String(r.fecha).slice(0, 10), placa: r.placa, id_ruta: r.id_ruta,
           driver_name: `${r.driver_name || ""} ⚠ viaje sem ${r.semana}`.trim(),
-          service_center_id: r.service_center_id || "SIN SC", tiene_auxiliar: false,
-          cargado: null, entregado: null, monto: Number(r.monto || 0), es_no_pago: false,
+          service_center_id: r.service_center_id || "SIN SC",
+          tiene_auxiliar: !!r.tiene_auxiliar,
+          cargado: r.cargado != null ? Number(r.cargado) : null,
+          entregado: r.entregado != null ? Number(r.entregado) : null,
+          pct_entrega: r.pct_entrega != null ? Number(r.pct_entrega) : (r.cargado > 0 ? Math.round(Number(r.entregado || 0) / Number(r.cargado) * 10000) / 100 : null),
+          pct_visitado_gate: r.pct_visitado != null ? Number(r.pct_visitado) : null,
+          km_pago: r.km_pago != null ? Number(r.km_pago) : null,
+          km_real_meli: r.km_pago != null ? Number(r.km_pago) : null,
+          factor_ns: _tarifa > 0 ? Math.round((_monto - _aux) / _tarifa * 10000) / 10000 : 1,
+          monto: _monto, es_no_pago: false,
         };
         (porSC[ln.service_center_id] = porSC[ln.service_center_id] || []).push(ln);
       }
@@ -4107,6 +4146,26 @@ function ConciliacionTercerosMX({ usuario }) {
       enviado_por: (usuario && (usuario.nombre || usuario.email)) || "Brain",
       message_id: data.messageId || null, correo_to: correoTo, correo_cc: cc, asunto, cuerpo, nombre_pdf: nombrePdf,
     }).eq("empresa_nombre", empresa).eq("service_center", sc).eq("semana", semana);
+    // SELLO DE ENVÍO: registro inmutable de que cada línea viajó en esta prefactura.
+    try {
+      const enviadoAt = new Date().toISOString();
+      const fc = await sb.from("conciliaciones_terceros").select("id")
+        .eq("empresa_nombre", empresa).eq("service_center", sc).eq("semana", semana).maybeSingle();
+      const nuevos = (filasSC || []).filter(d => d && d.fecha).map(d => ({
+        semana, fecha: String(d.fecha).slice(0, 10), id_ruta: d.id_ruta ? String(d.id_ruta) : null,
+        placa: d.placa || null, driver_name: d.driver_name || null,
+        service_center: sc, empresa_nombre: empresa,
+        tipo: d._saldo ? "saldo" : (d.id_ruta ? "viaje" : "ajuste"),
+        monto_enviado: Number(d.monto || 0), conciliacion_id: (fc && fc.data && fc.data.id) || null,
+        message_id: data.messageId || null, nombre_pdf: nombrePdf,
+        enviado_at: enviadoAt, enviado_por: (usuario && (usuario.nombre || usuario.email)) || "Brain",
+      }));
+      for (let i = 0; i < nuevos.length; i += 200) {
+        const { error: eS } = await sb.from("prefactura_viajes_enviados").insert(nuevos.slice(i, i + 200));
+        if (eS) throw eS;
+      }
+      cargarSellos(semana);
+    } catch (eS) { console.error("sello de envío (el correo SÍ salió):", eS); }
     await logEvento(empresa, sc, "enviar", tot, { estado: "enviada", detalle: { message_id: data.messageId || null, correo_to: correoTo } });
     return data.messageId;
   };
@@ -4396,7 +4455,11 @@ function ConciliacionTercerosMX({ usuario }) {
             <tr key={i} style={{ borderBottom: "1px solid #eef0f3", background: d._saldo ? "#fff7ed" : (d.es_manual ? "#eff6ff" : (d.es_no_pago ? "#fef2f2" : (i % 2 ? "#fafbfc" : "#fff"))) }}>
               <td style={{ padding: "5px 8px", textAlign: "center", whiteSpace: "nowrap" }}>{fmtFechaDDMM(d.fecha)}</td>
               <td style={{ padding: "5px 8px", textAlign: "center", fontWeight: 700 }} title={d.traspaso ? `Traspasado desde ${d.traspaso.de} (${String(d.traspaso.at || "").slice(0, 10)})` : undefined}>{d.placa}{d.traspaso ? " 🔁" : ""}</td>
-              <td style={{ padding: "5px 8px", textAlign: "center" }}>{d.id_ruta}</td>
+              <td style={{ padding: "5px 8px", textAlign: "center", whiteSpace: "nowrap" }}>{d.id_ruta}{(() => {
+                const sl = selloDe(d); if (!sl) return null;
+                return <span title={`Sello de env\u00edo: viaj\u00f3 en la prefactura de ${sl.empresa} \u00b7 ${sl.sc} el ${String(sl.enviado_at || "").slice(0, 10)}${sl.veces > 1 ? ` \u2014 \u26a0 ${sl.veces} env\u00edos: revisar pago doble` : ""}`}
+                  style={{ marginLeft: 4, fontSize: 9, color: sl.veces > 1 ? "#b91c1c" : "#16a34a", fontWeight: 800 }}>{sl.veces > 1 ? `\u2713\u00d7${sl.veces}` : "\u2713"}</span>;
+              })()}</td>
               <td style={{ padding: "5px 8px" }}>{d.driver_name}</td>
               <td style={{ padding: "5px 8px", textAlign: "center" }}>{(() => {
                 const a = auxMap[String(d.id_ruta)];
@@ -5295,6 +5358,8 @@ function ConciliacionTercerosMX({ usuario }) {
 
 function TercerosMX() {
   const [tab, setTab] = useState("inventario");
+  const [dupsPanel, setDupsPanel] = useState(null); // { grupos, dataPendiente, semanasFile, espaciosCorregidos }
+  const [dupsSel, setDupsSel] = useState({}); // clave de grupo -> nombre elegido
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [cargando, setCargando] = useState(false);
@@ -5349,8 +5414,50 @@ function TercerosMX() {
   for (let s = 24; s <= hasta; s++) lineas.push(s);
   lineas.sort((a, b) => b - a);
 
+  // Confirma y sube el inventario a flota_terceros_mx (reemplaza las semanas del archivo)
+  const subirDatos = async (data, semanasFile, espaciosCorregidos) => {
+    const notaEsp = espaciosCorregidos > 0 ? "\n(Se normalizaron espacios sobrantes en " + espaciosCorregidos + " celda(s) de empresa.)" : "";
+    if (!confirm("Se cargarán " + data.length + " filas" + (semanasFile.length ? " de la semana " + semanasFile.join(", ") : "") + "." + notaEsp + "\n\nSe reemplazará lo que haya de esa(s) semana(s). ¿Continuar?")) return;
+    for (const sem of semanasFile) {
+      const { error } = await sb.from("flota_terceros_mx").delete().eq("semana", sem);
+      if (error) throw error;
+    }
+    let ok = 0;
+    for (let i = 0; i < data.length; i += 200) {
+      const chunk = data.slice(i, i + 200);
+      const { error } = await sb.from("flota_terceros_mx").insert(chunk);
+      if (error) throw error;
+      ok += chunk.length;
+    }
+    setMsg({ ok: true, txt: "Cargadas " + ok + " filas" + (semanasFile.length ? " (semana " + semanasFile.join(", ") + ")" : "") + "." });
+    cargar();
+  };
+
+  // Aplica los nombres unificados elegidos en el panel y sube
+  const aplicarDupsYCargar = async () => {
+    if (!dupsPanel) return;
+    const mapa = {};
+    for (const g of dupsPanel.grupos) {
+      const elegido = String(dupsSel[g.key] || "").replace(/\s+/g, " ").trim();
+      if (!elegido) { alert("Eleg\u00ed o escrib\u00ed un nombre para todos los grupos antes de cargar."); return; }
+      for (const v of g.variantes) mapa[v.nombre] = elegido;
+    }
+    const dataFinal = dupsPanel.dataPendiente.map(d => (d.empresa_transporte && mapa[d.empresa_transporte] != null) ? { ...d, empresa_transporte: mapa[d.empresa_transporte] } : d);
+    const pend = dupsPanel;
+    setDupsPanel(null); setDupsSel({});
+    setCargando(true); setMsg(null);
+    try {
+      await subirDatos(dataFinal, pend.semanasFile, pend.espaciosCorregidos);
+    } catch (e) {
+      console.error(e);
+      setMsg({ ok: false, txt: "Error al cargar: " + (e.message || e) });
+    }
+    setCargando(false);
+  };
+
   const cargarExcel = async (file) => {
     if (!file) return;
+    setDupsPanel(null); setDupsSel({});
     const objetivo = semanaObjetivoRef.current;
     setCargando(true); setMsg(null);
     try {
@@ -5376,6 +5483,15 @@ function TercerosMX() {
       if (ix.placa < 0 || ix.empresa < 0) { setMsg({ ok: false, txt: "No encontré las columnas PLACA / EMPRESA TRANSPORTE. ¿Es el formato del inventario de flota?" }); setCargando(false); return; }
       const get = (row, i) => (i >= 0 && row[i] != null && row[i] !== "") ? row[i] : null;
       const toIso = v => { if (v == null) return null; if (v instanceof Date) return v.toISOString(); const d = new Date(v); return isNaN(d.getTime()) ? null : d.toISOString(); };
+      // Normaliza EMPRESA TRANSPORTE: colapsa espacios internos y de borde. Evita duplicados
+      // tipo " JUAN PEREZ" vs "JUAN PEREZ", que generan prefacturas separadas para la misma empresa.
+      let espaciosCorregidos = 0;
+      const normEmpresa = (v) => {
+        if (v == null) return null;
+        const limpio = String(v).replace(/\s+/g, " ").trim();
+        if (limpio !== String(v)) espaciosCorregidos++;
+        return limpio === "" ? null : limpio;
+      };
       const data = [];
       for (let r = 1; r < aoa.length; r++) {
         const row = aoa[r];
@@ -5389,7 +5505,7 @@ function TercerosMX() {
           operacion: get(row, ix.operacion),
           placa: normalizarPlaca(placa),
           tipo_vehiculo: get(row, ix.tipo),
-          empresa_transporte: get(row, ix.empresa),
+          empresa_transporte: normEmpresa(get(row, ix.empresa)),
           cargo: get(row, ix.cargo),
           nombre_trabajador: get(row, ix.nombre),
           curp_trabajador: get(row, ix.curp),
@@ -5404,20 +5520,39 @@ function TercerosMX() {
       if (objetivo != null && semanasFile.length && !semanasFile.includes(objetivo)) {
         if (!confirm("Estás cargando en la línea de la semana " + objetivo + " (" + etiquetaSemanaInventario(objetivo) + "), pero el Excel trae la semana " + semanasFile.join(", ") + ".\n\nSe respetará la SEMANA del Excel. ¿Continuar igual?")) { setCargando(false); if (fileRef.current) fileRef.current.value = ""; semanaObjetivoRef.current = null; return; }
       }
-      if (!confirm("Se cargarán " + data.length + " filas" + (semanasFile.length ? " de la semana " + semanasFile.join(", ") : "") + ".\n\nSe reemplazará lo que haya de esa(s) semana(s). ¿Continuar?")) { setCargando(false); semanaObjetivoRef.current = null; return; }
-      for (const sem of semanasFile) {
-        const { error } = await sb.from("flota_terceros_mx").delete().eq("semana", sem);
-        if (error) throw error;
+      // ── Variantes del mismo nombre de empresa (mayúsculas/acentos) o distintas al histórico ──
+      const claveEmp = (x) => String(x || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase().replace(/\s+/g, " ").trim();
+      const porClave = {};
+      for (const d of data) {
+        if (!d.empresa_transporte) continue;
+        const k = claveEmp(d.empresa_transporte);
+        (porClave[k] = porClave[k] || {})[d.empresa_transporte] = (porClave[k][d.empresa_transporte] || 0) + 1;
       }
-      let ok = 0;
-      for (let i = 0; i < data.length; i += 200) {
-        const chunk = data.slice(i, i + 200);
-        const { error } = await sb.from("flota_terceros_mx").insert(chunk);
-        if (error) throw error;
-        ok += chunk.length;
+      const histPorClave = {};
+      for (const r of rows) { if (r.empresa_transporte) { const k = claveEmp(r.empresa_transporte); if (!histPorClave[k]) histPorClave[k] = String(r.empresa_transporte).replace(/\s+/g, " ").trim(); } }
+      const grupos = [];
+      for (const k in porClave) {
+        const nombres = Object.keys(porClave[k]);
+        const hist = histPorClave[k] || null;
+        const histDistinto = hist != null && !nombres.includes(hist);
+        if (nombres.length > 1 || histDistinto) {
+          const variantes = nombres.map(n => ({ nombre: n, filas: porClave[k][n], hist: false }));
+          variantes.sort((a, b) => b.filas - a.filas);
+          if (histDistinto) variantes.push({ nombre: hist, filas: 0, hist: true });
+          grupos.push({ key: k, variantes, sugerido: histDistinto ? hist : variantes[0].nombre });
+        }
       }
-      setMsg({ ok: true, txt: "Cargadas " + ok + " filas" + (semanasFile.length ? " (semana " + semanasFile.join(", ") + ")" : "") + "." });
-      cargar();
+      if (grupos.length > 0) {
+        const sel = {}; for (const g of grupos) sel[g.key] = g.sugerido;
+        setDupsSel(sel);
+        setDupsPanel({ grupos, dataPendiente: data, semanasFile, espaciosCorregidos });
+        setMsg({ ok: false, txt: "\u26a0 " + grupos.length + " empresa(s) con nombres duplicados o distintos al hist\u00f3rico. Unif\u00edcalos en el panel amarillo y presion\u00e1 Aplicar y cargar." });
+        setCargando(false);
+        semanaObjetivoRef.current = null;
+        if (fileRef.current) fileRef.current.value = "";
+        return;
+      }
+      await subirDatos(data, semanasFile, espaciosCorregidos);
     } catch (e) {
       console.error(e);
       setMsg({ ok: false, txt: "Error al cargar: " + (e.message || e) });
@@ -5444,6 +5579,47 @@ function TercerosMX() {
         <div style={{ fontSize: 15, fontWeight: 700, color: "#1a3a6b" }}>Terceros — Inventario de flota por semana</div>
         <div style={{ fontSize: 11, color: "#94a3b8" }}>El inventario de cada semana operada alimenta la empresa por patente en el Listado de Pagos</div>
       </div>
+
+      {/* Unificación de nombres de empresa duplicados (previo a la carga) */}
+      {dupsPanel && (
+        <div style={{ background: "#fffbeb", border: "1.5px solid #fcd34d", borderRadius: 8, padding: "14px 16px", marginBottom: 14 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#92400e" }}>⚠ Nombres de empresa con variantes — unificá antes de cargar</div>
+          <div style={{ fontSize: 11, color: "#92400e", marginTop: 2 }}>
+            Variantes por mayúsculas o acentos dentro del Excel, o distintas a la grafía histórica, generan prefacturas separadas para la misma empresa.
+            {dupsPanel.espaciosCorregidos > 0 ? " Los espacios sobrantes ya se corrigieron automáticamente en " + dupsPanel.espaciosCorregidos + " celda(s)." : ""}
+          </div>
+          {dupsPanel.grupos.map(g => (
+            <div key={g.key} style={{ marginTop: 10, padding: "10px 12px", background: "#fff", border: "1px solid #fde68a", borderRadius: 6 }}>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
+                {g.variantes.map(v => (
+                  <button key={v.nombre + (v.hist ? "_h" : "")} onClick={() => setDupsSel(x => ({ ...x, [g.key]: v.nombre }))}
+                    title={v.hist ? "Graf\u00eda ya usada en semanas anteriores" : v.filas + " fila(s) en este Excel"}
+                    style={{ fontSize: 11, padding: "3px 10px", borderRadius: 12, cursor: "pointer",
+                      border: dupsSel[g.key] === v.nombre ? "1.5px solid #d97706" : "1px solid #e4e7ec",
+                      background: dupsSel[g.key] === v.nombre ? "#fef3c7" : "#f8fafc", fontWeight: dupsSel[g.key] === v.nombre ? 700 : 400, color: "#334155" }}>
+                    “{v.nombre}” {v.hist ? "· histórico" : "· " + v.filas + (v.filas === 1 ? " fila" : " filas")}
+                  </button>
+                ))}
+              </div>
+              <div style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 8 }}>
+                <span style={{ fontSize: 11, color: "#64748b", whiteSpace: "nowrap" }}>Se cargará como:</span>
+                <input value={dupsSel[g.key] || ""} onChange={e => setDupsSel(x => ({ ...x, [g.key]: e.target.value }))}
+                  style={{ flex: 1, maxWidth: 420, padding: "5px 8px", border: "1px solid #e4e7ec", borderRadius: 6, fontSize: 12, fontWeight: 600 }} />
+              </div>
+            </div>
+          ))}
+          <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+            <button onClick={aplicarDupsYCargar} disabled={cargando}
+              style={{ padding: "7px 16px", borderRadius: 6, border: "none", background: "#d97706", color: "#fff", fontSize: 12, fontWeight: 700, cursor: cargando ? "wait" : "pointer" }}>
+              {cargando ? "Cargando..." : "Aplicar y cargar"}
+            </button>
+            <button onClick={() => { setDupsPanel(null); setDupsSel({}); setMsg(null); }}
+              style={{ padding: "7px 16px", borderRadius: 6, border: "1px solid #e4e7ec", background: "#fff", color: "#64748b", fontSize: 12, cursor: "pointer" }}>
+              Cancelar carga
+            </button>
+          </div>
+        </div>
+      )}
 
       <div style={{ display: "flex", gap: 6, marginBottom: 14, borderBottom: "1px solid #e4e7ec" }}>
         {[["inventario", "Inventario de Flota"], ["variaciones", "Variaciones"]].map(([id, lbl]) => (
@@ -5661,6 +5837,25 @@ function parsearTipologia(vehiculoRaw, categorias) {
   if (v.includes("SMALL VAN")) return "SMALL VAN";
   if (v.includes("CAR")) return "CAR";
   return null;
+}
+
+// ── Ayudantes: nombres y porcentajes (formato "A // B" verificado en get_helper_por_ruta_dia) ──
+// No se corta por coma: un nombre puede venir "APELLIDO, NOMBRE" y se rompería en dos.
+function _partirHelper(v, permitirComa) {
+  if (v == null) return [];
+  if (Array.isArray(v)) return v.filter(x => x != null && String(x).trim() !== "").map(x => String(x).trim());
+  const t = String(v).trim();
+  if (!t) return [];
+  const re = permitirComa ? /\s*(?:\/\/|[;|,]|\s\/\s)\s*/ : /\s*(?:\/\/|[;|]|\s\/\s)\s*/;
+  return t.split(re).map(x => x.trim()).filter(Boolean);
+}
+function fmtHelperNombres(v) { const a = _partirHelper(v, false); return a.length ? a.join(" // ") : null; }
+function fmtHelperPcts(v) {
+  const a = _partirHelper(v, true).map(x => {
+    const num = Number(String(x).replace("%", "").trim());
+    return isNaN(num) ? String(x) : `${Math.round(num * 10) / 10}%`;
+  });
+  return a.length ? a.join(" // ") : null;
 }
 
 function normalizarPlaca(p) {
@@ -6125,6 +6320,11 @@ function calcularPagos({ maestro, snapshots, scZonas, especiales, matrizPrecios,
       bonificacion_nombre: bonoAplicado ? bonoAplicado.nombre : null,
       bonificacion_pct: bonoAplicado ? Number(bonoAplicado.pct_aumento || 0) : 0,
       tiene_auxiliar: tieneHelper,
+      // Ayudantes: nombre(s) y %(s) tal como vienen del maestro (get_maestro_supervisores_dia los
+      // incluye, verificado). Se persisten acá para que Listado y Excel no consulten
+      // vw_helper_por_ruta, que es costosa (causó el agotamiento de Disk IO).
+      ayudantes_nombres: tieneHelper ? (m.nombre_ayudante != null ? String(m.nombre_ayudante) : (m.nombre_helper != null ? String(m.nombre_helper) : null)) : null,
+      ayudantes_pcts: tieneHelper ? (m.pct_por_persona != null ? String(m.pct_por_persona) : (m.pct_helper != null ? String(m.pct_helper) : null)) : null,
       auxiliar_estado: auxiliarEstado,
       auxiliar_snapshots_total: tieneHelper ? Number(m.cantidad_personas || 0) : 0,
       monto_auxiliar: noPaga ? 0 : r2(montoAux),
@@ -6475,6 +6675,13 @@ function ListadoPagosDiarios({ usuario }) {
     }
   };
   const alertasDe = (p) => (reglasAlerta || []).filter(r => r.activa && cumpleReglaAlerta(p, r));
+  // Ayudantes de una fila: leídos de lo persistido por el motor (sin consultas extra)
+  const helperDe = (r) => {
+    if (!r || !r.tiene_auxiliar) return null;
+    const nombres = fmtHelperNombres(r.ayudantes_nombres);
+    const pcts = fmtHelperPcts(r.ayudantes_pcts);
+    return (nombres || pcts) ? { nombres, pcts } : null;
+  };
   const tieneAlerta = (p) => alertasDe(p).length > 0;
   // Ruta con KM real ausente o muy bajo (flag del motor; la corrección del monto se hace en la prefactura)
   const kmRealBajoDe = (p) => p.sin_km_planificado === true;
@@ -6886,7 +7093,7 @@ function ListadoPagosDiarios({ usuario }) {
     const headers = [
       "Fecha","Chofer","Patente","Vehículo","Tipología","Tipo Ruta","SC","Zona","ID Ruta","Ciclo",
       "Km Pago (Real)","Km Planif.","Fuente KM","Envíos despachados","Envíos entregados","NS%","% Visitado Real","% No Visitado Real","No visitado %","Categoría NS",
-      "Tarifa base","Ajuste NS","Estado auxiliar","Snapshots con helper","$ Auxiliar",
+      "Tarifa base","Ajuste NS","Estado auxiliar","Snapshots con helper","$ Auxiliar","Ayudante(s)","% Ayudante(s)",
       "Pago bruto","Pago neto","Pago MELI","Observaciones"
     ];
     const rows = filasFiltradas.map(p => [
@@ -6894,6 +7101,7 @@ function ListadoPagosDiarios({ usuario }) {
       p.id_ruta, p.ciclo, p.km_recorridos, p.km_planificados, p.km_fuente || "", p.envios_despachados, p.envios_entregados,
       p.ns_pct, p.pct_visitado_real, (p.pct_visitado_real != null ? Math.round((100 - Number(p.pct_visitado_real)) * 100) / 100 : ""), p.ns_no_visitado, p.ns_categoria, p.tarifa_base, p.ajuste_ns,
       p.auxiliar_estado, p.auxiliar_snapshots_total, p.monto_auxiliar,
+      (p.tiene_auxiliar && fmtHelperNombres(p.ayudantes_nombres)) || "", (p.tiene_auxiliar && fmtHelperPcts(p.ayudantes_pcts)) || "",
       p.pago_bruto, p.pago_neto, p.pago_meli, (p.observaciones || "").replace(/[\r\n]+/g, " ")
     ]);
     const csv = [headers, ...rows].map(r => r.map(v => {
@@ -6958,7 +7166,7 @@ function ListadoPagosDiarios({ usuario }) {
       const headers = [
         "Fecha","Chofer","Patente","Empresa","Vehículo","Tipología","Tipo Ruta","SC","Zona","ID Ruta","Ciclo",
         "Km Pago (Real)","Km Planif.","Fuente KM","Envíos despachados","Envíos entregados","NS%","% Visitado Real","% No Visitado Real","No visitado %","Categoría NS",
-        "Tarifa base","Ajuste NS","Estado auxiliar","Snapshots con helper","$ Auxiliar",
+        "Tarifa base","Ajuste NS","Estado auxiliar","Snapshots con helper","$ Auxiliar","Ayudante(s)","% Ayudante(s)",
         "Pago bruto","Pago neto","Pago MELI","Observaciones"
       ];
       const aoa = [headers, ...filas.map(p => [
@@ -6966,6 +7174,7 @@ function ListadoPagosDiarios({ usuario }) {
         p.id_ruta, p.ciclo, p.km_recorridos, p.km_planificados, p.km_fuente || "", p.envios_despachados, p.envios_entregados,
         p.ns_pct, p.pct_visitado_real, (p.pct_visitado_real != null ? Math.round((100 - Number(p.pct_visitado_real)) * 100) / 100 : ""), p.ns_no_visitado, p.ns_categoria, p.tarifa_base, p.ajuste_ns,
         p.auxiliar_estado, p.auxiliar_snapshots_total, p.monto_auxiliar,
+        (p.tiene_auxiliar && fmtHelperNombres(p.ayudantes_nombres)) || "", (p.tiene_auxiliar && fmtHelperPcts(p.ayudantes_pcts)) || "",
         p.pago_bruto, p.pago_neto, p.pago_meli, (p.observaciones || "").replace(/[\r\n]+/g, " ")
       ])];
       const nombre = desde === hasta ? `pagos_${desde}` : `pagos_${desde}_a_${hasta}`;
@@ -7388,6 +7597,8 @@ function ListadoPagosDiarios({ usuario }) {
                 <Th right>Bonif.</Th>
                 <Th onClick={() => toggleOrder("auxiliar_estado")} center>Aux{ordIcon("auxiliar_estado")}</Th>
                 <Th onClick={() => toggleOrder("monto_auxiliar")} right>$Aux{ordIcon("monto_auxiliar")}</Th>
+                <Th>Ayudante(s)</Th>
+                <Th center>% Ayudante(s)</Th>
                 <Th onClick={() => toggleOrder("pago_neto")} right>Pago neto{ordIcon("pago_neto")}</Th>
                 <Th right>Pago MELI</Th>
                 <Th right>% Margen</Th>
@@ -7468,6 +7679,23 @@ function ListadoPagosDiarios({ usuario }) {
                     <td style={{ ...tdStyle(), textAlign: "right" }}>
                       {Number(r.monto_auxiliar) > 0 ? fmtMXN(r.monto_auxiliar) : "—"}
                     </td>
+                    {(() => {
+                      const h = helperDe(r);
+                      const sinDato = r.tiene_auxiliar && (!h || !h.nombres);
+                      return (
+                        <Fragment>
+                          <td style={{ ...tdStyle(), fontSize: 10, maxWidth: 190, whiteSpace: "normal", lineHeight: 1.25 }}
+                            title={h && h.nombres ? h.nombres : undefined}>
+                            {h && h.nombres
+                              ? h.nombres
+                              : <span style={{ color: sinDato ? "#b45309" : "#cbd5e1" }} title={sinDato ? "El c\u00e1lculo de este d\u00eda es anterior a esta funci\u00f3n: recalcul\u00e1 el d\u00eda para traer los nombres" : undefined}>{sinDato ? "recalcular d\u00eda" : "—"}</span>}
+                          </td>
+                          <td style={{ ...tdStyle(), textAlign: "center", fontSize: 10, whiteSpace: "nowrap", fontWeight: h && h.pcts ? 600 : 400, color: h && h.pcts ? "#0f766e" : "#cbd5e1" }}>
+                            {h && h.pcts ? h.pcts : "—"}
+                          </td>
+                        </Fragment>
+                      );
+                    })()}
                     <td style={{ ...tdStyle(), textAlign: "right", fontWeight: 700, color: noPagada ? "#991b1b" : "#16a34a", fontSize: 12 }}>
                       {noPagada ? "$0" : fmtMXN(r.pago_neto)}
                     </td>
@@ -7506,6 +7734,8 @@ function ListadoPagosDiarios({ usuario }) {
                   <td style={tdStyle()}></td>
                   <td style={tdStyle()}></td>
                   <td style={{ ...tdStyle(), textAlign: "right", color: "#1a3a6b" }}>{fmtMXN(totales.auxiliar)}</td>
+                  <td style={tdStyle()}></td>{/* Ayudante(s) */}
+                  <td style={tdStyle()}></td>{/* % Ayudante(s) */}
                   <td style={{ ...tdStyle(), textAlign: "right", color: "#16a34a", fontSize: 13 }}>{fmtMXN(totales.pagoNeto)}</td>
                   <td style={{ ...tdStyle(), textAlign: "right", color: "#1a3a6b" }}>{totales.pagoMeli > 0 ? fmtMXN(totales.pagoMeli) : "—"}</td>
                   <td style={{ ...tdStyle(), textAlign: "right", color: "#1a3a6b" }}>{totales.margenPct != null ? `${totales.margenPct.toFixed(1)}%` : "—"}</td>
