@@ -11663,9 +11663,9 @@ function PadronSaludFlujos() {
 }
 
 // ── CORRIDAS DE HOY · padrón master ─────────────────────────────────────────
-// Los 4 horarios programados muestran SOLO corridas del cron.
-// Las corridas manuales (botón) van en su propia sección: nunca "ocupan" un horario.
-const PC_SLOTS = ["07:00", "12:00", "15:00", "17:00"];
+// El padrón se refresca SOLO a mano, con el botón "Ejecutar ahora".
+// Ya no hay horarios programados: el cron se retiró porque la sesión de MELI
+// vence a diario y hay que capturarla con Don B antes de correr.
 const PC_WEBHOOK = "https://bigticket2026.app.n8n.cloud/webhook/disparar-master-mx";
 
 function pcFechaCL(iso) {
@@ -11783,30 +11783,8 @@ function PadronCorridasHoy() {
     return () => clearInterval(iv);
   }, [corriendo, vuelta]);
 
-  const manuales = ejec.filter(pcEsManual);
-  const delCron = ejec.filter(r => !pcEsManual(r));
-
-  const porSlot = {};
-  PC_SLOTS.forEach(s => { porSlot[s] = []; });
-  const cronFuera = [];
-  delCron.forEach(r => {
-    const h = pcHoraCL(r.ejecutado_at);
-    const slot = PC_SLOTS.find(s => s.slice(0, 2) === String(h).slice(0, 2));
-    if (slot) porSlot[slot].push(r); else cronFuera.push(r);
-  });
-
   const ahora = pcAhoraCL();
-  const estadoSlot = (slot) => {
-    const lista = porSlot[slot] || [];
-    if (lista.length > 0) {
-      const u = lista[0];
-      return u.ok
-        ? { color: "#065f46", bg: "#ecfdf5", icon: "ti-circle-check", txt: "Corrió OK", detalle: pcHoraCL(u.ejecutado_at) + " · " + pcResumen(u), intentos: lista.length }
-        : { color: "#991b1b", bg: "#fef2f2", icon: "ti-circle-x", txt: "Falló", detalle: pcHoraCL(u.ejecutado_at) + " · " + pcResumen(u), intentos: lista.length };
-    }
-    if (slot > ahora) return { color: "#64748b", bg: "#f8fafc", icon: "ti-clock", txt: "Pendiente", detalle: "aún no es la hora", intentos: 0 };
-    return { color: "#991b1b", bg: "#fef2f2", icon: "ti-circle-x", txt: "No corrió", detalle: "el cron no dejó registro a esta hora", intentos: 0 };
-  };
+  const ultimaOk = ejec.find(r => r.ok) || null;
 
   const btnStyle = {
     border: "none", color: "#fff",
@@ -11818,7 +11796,7 @@ function PadronCorridasHoy() {
     <div style={{ background: "#fff", borderBottom: "1px solid #e4e7ec", padding: "12px 24px" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
         <span style={{ fontSize: 11, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5 }}>
-          Corridas de hoy · padrón master
+          Padrón master · refresco manual
         </span>
         <span style={{ fontSize: 11, color: "#94a3b8" }}>hora de Chile · ahora {ahora} hrs</span>
         <button onClick={ejecutarAhora} disabled={ejecutando || !!corriendo}
@@ -11851,41 +11829,22 @@ function PadronCorridasHoy() {
         }}>{aviso.slice(aviso.indexOf(":") + 1)}</div>
       )}
 
-      {/* Horarios programados (solo cron) */}
-      <div style={{ fontSize: 10.5, color: "#94a3b8", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 5 }}>
-        Horarios programados
-      </div>
-      <div style={{ display: "grid", gap: 5 }}>
-        {PC_SLOTS.map(slot => {
-          const e = estadoSlot(slot);
-          return (
-            <div key={slot} style={{
-              display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap",
-              background: e.bg, border: `1px solid ${e.color}22`, borderLeft: `3px solid ${e.color}`,
-              borderRadius: 8, padding: "7px 12px",
-            }}>
-              <span style={{ fontSize: 14, fontWeight: 800, color: "#1a3a6b", minWidth: 52, fontVariantNumeric: "tabular-nums" }}>{slot}</span>
-              <span style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "#fff", border: `1px solid ${e.color}44`, color: e.color, fontSize: 11, fontWeight: 800, padding: "3px 9px", borderRadius: 999, minWidth: 100, justifyContent: "center" }}>
-                <i className={`ti ${e.icon}`} style={{ fontSize: 13 }} />{cargando ? "…" : e.txt}
-              </span>
-              <span style={{ fontSize: 11.5, color: "#475569", flex: 1, minWidth: 160 }}>{cargando ? "" : e.detalle}</span>
-              {e.intentos > 1 && <span style={{ fontSize: 10, color: "#94a3b8" }}>{e.intentos} registros</span>}
-            </div>
-          );
-        })}
-      </div>
+      {ultimaOk && (
+        <div style={{ fontSize: 11.5, color: "#065f46", background: "#f6fdf9", border: "1px solid #a7f3d0", borderRadius: 8, padding: "7px 12px", marginBottom: 10 }}>
+          <strong>Última corrida OK:</strong> {pcHoraCL(ultimaOk.ejecutado_at)} hrs · {pcResumen(ultimaOk)}
+        </div>
+      )}
 
-      {/* Corridas manuales */}
-      <div style={{ fontSize: 10.5, color: "#94a3b8", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.4, margin: "11px 0 5px" }}>
-        Corridas manuales de hoy {manuales.length > 0 && <span style={{ color: "#64748b" }}>· {manuales.length}</span>}
+      <div style={{ fontSize: 10.5, color: "#94a3b8", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 5 }}>
+        Corridas de hoy {ejec.length > 0 && <span style={{ color: "#64748b" }}>· {ejec.length}</span>}
       </div>
-      {manuales.length === 0 ? (
+      {ejec.length === 0 ? (
         <div style={{ fontSize: 11.5, color: "#94a3b8", background: "#f8fafc", border: "1px dashed #e4e7ec", borderRadius: 8, padding: "8px 12px" }}>
-          {cargando ? "…" : "Ninguna todavía. Usa “Ejecutar ahora” si necesitas refrescar el padrón fuera de horario."}
+          {cargando ? "…" : "Ninguna todavía. Captura la sesión de MELI con Don B y usa “Ejecutar ahora”."}
         </div>
       ) : (
         <div style={{ display: "grid", gap: 5 }}>
-          {manuales.map((m, i) => (
+          {ejec.map((m, i) => (
             <div key={i} style={{
               display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap",
               background: m.ok ? "#f6fdf9" : "#fef6f5", border: "1px solid #e4e7ec",
@@ -11897,23 +11856,14 @@ function PadronCorridasHoy() {
               </span>
               <span style={{ fontSize: 11.5, color: "#475569", flex: 1, minWidth: 160 }}>{pcResumen(m)}</span>
               <span style={{ fontSize: 10, color: "#94a3b8", display: "inline-flex", alignItems: "center", gap: 4 }}>
-                <i className="ti ti-hand-click" style={{ fontSize: 11 }} />manual
+                <i className={`ti ${pcEsManual(m) ? "ti-hand-click" : "ti-clock"}`} style={{ fontSize: 11 }} />
+                {pcEsManual(m) ? "manual" : "cron"}
               </span>
             </div>
           ))}
         </div>
       )}
 
-      {cronFuera.length > 0 && (
-        <div style={{ marginTop: 8, fontSize: 11, color: "#64748b" }}>
-          <strong style={{ color: "#334155" }}>Cron fuera de horario:</strong>{" "}
-          {cronFuera.map((o, i) => (
-            <span key={i} style={{ marginRight: 8 }}>
-              <span style={{ color: o.ok ? "#065f46" : "#991b1b", fontWeight: 800 }}>{pcHoraCL(o.ejecutado_at)}</span>{o.ok ? " ✓" : " ✗"}
-            </span>
-          ))}
-        </div>
-      )}
     </div>
   );
 }
