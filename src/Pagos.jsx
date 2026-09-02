@@ -11704,6 +11704,10 @@ function PadronCorridasHoy() {
   const [errTabla, setErrTabla] = useState(null);
   const [ejecutando, setEjecutando] = useState(false);
   const [aviso, setAviso] = useState(null);
+  const [corriendo, setCorriendo] = useState(() => {
+    try { return sessionStorage.getItem("padron_t0") || null; } catch { return null; }
+  });
+  const [vuelta, setVuelta] = useState(0);
 
   const cargar = async () => {
     setCargando(true); setErrTabla(null);
@@ -11726,22 +11730,58 @@ function PadronCorridasHoy() {
   useEffect(() => { cargar(); }, []);
 
   const ejecutarAhora = async () => {
-    if (ejecutando) return;
+    if (ejecutando || corriendo) return;
+    const ts = new Date().toISOString();
     setEjecutando(true); setAviso(null);
     try {
       const r = await fetch(PC_WEBHOOK, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ origen: "brain", ts: new Date().toISOString() }),
+        body: JSON.stringify({ origen: "brain", ts }),
       });
       if (!r.ok) throw new Error("HTTP " + r.status);
-      setAviso("ok:Corrida manual disparada " + pcAhoraCL() + " hrs. Tarda ~20–40 seg y aparece abajo, en “Corridas manuales”. Presioná Actualizar.");
+      try { sessionStorage.setItem("padron_t0", ts); } catch {}
+      setCorriendo(ts); setVuelta(0);
+      setAviso("run:Corrida en curso desde las " + pcAhoraCL() + " hrs. Tarda unos 8 minutos; te aviso acá cuando termine.");
     } catch (e) {
       setAviso("err:No se pudo disparar: " + (e.message || "error"));
     } finally {
       setEjecutando(false);
     }
   };
+
+  // Con una corrida en curso, sondea flujos_ejecuciones cada 15s buscando
+  // una fila posterior al ts con el que se disparó. El botón queda bloqueado.
+  useEffect(() => {
+    if (!corriendo) return;
+    const soltar = () => {
+      try { sessionStorage.removeItem("padron_t0"); } catch {}
+      setCorriendo(null); setVuelta(0);
+    };
+    const iv = setInterval(async () => {
+      if (vuelta >= 64) { // 16 min, algo más que el tope del ciclo en n8n
+        soltar();
+        setAviso("err:La corrida no reportó resultado en 16 minutos. Revisa el flujo en n8n.");
+        return;
+      }
+      setVuelta(v => v + 1);
+      const { data, error } = await sb
+        .from("flujos_ejecuciones")
+        .select("ok,motivo,drivers,vehicles,duracion_s,ejecutado_at")
+        .eq("flujo", "master_mx")
+        .gt("ejecutado_at", corriendo)
+        .order("ejecutado_at", { ascending: false })
+        .limit(1);
+      if (error || !data || !data[0]) return; // sigue corriendo
+      const r = data[0];
+      soltar();
+      setAviso(r.ok
+        ? `ok:Padrón actualizado · ${r.drivers} conductores · ${r.vehicles} vehículos · ${r.duracion_s}s`
+        : `err:La corrida falló (${r.motivo || "sin motivo"}). Revisa el detalle abajo.`);
+      cargar();
+    }, 15000);
+    return () => clearInterval(iv);
+  }, [corriendo, vuelta]);
 
   const manuales = ejec.filter(pcEsManual);
   const delCron = ejec.filter(r => !pcEsManual(r));
@@ -11769,8 +11809,7 @@ function PadronCorridasHoy() {
   };
 
   const btnStyle = {
-    border: "none", cursor: ejecutando ? "default" : "pointer",
-    background: ejecutando ? "#94a3b8" : "#F47B20", color: "#fff",
+    border: "none", color: "#fff",
     padding: "7px 14px", borderRadius: 7, fontSize: 12, fontWeight: 800,
     fontFamily: "'Geist', sans-serif", display: "inline-flex", alignItems: "center", gap: 6,
   };
@@ -11782,10 +11821,15 @@ function PadronCorridasHoy() {
           Corridas de hoy · padrón master
         </span>
         <span style={{ fontSize: 11, color: "#94a3b8" }}>hora de Chile · ahora {ahora} hrs</span>
-        <button onClick={ejecutarAhora} disabled={ejecutando} title="Corre el flujo master en este momento (queda como corrida manual)"
-          style={{ ...btnStyle, marginLeft: "auto" }}>
-          <i className={`ti ${ejecutando ? "ti-loader-2" : "ti-player-play"}`} style={{ fontSize: 14 }} />
-          {ejecutando ? "Ejecutando…" : "Ejecutar ahora"}
+        <button onClick={ejecutarAhora} disabled={ejecutando || !!corriendo}
+          title={corriendo ? "Ya hay una corrida en curso" : "Corre el flujo master en este momento (queda como corrida manual)"}
+          style={{
+            ...btnStyle, marginLeft: "auto",
+            background: (ejecutando || corriendo) ? "#94a3b8" : "#F47B20",
+            cursor: (ejecutando || corriendo) ? "not-allowed" : "pointer",
+          }}>
+          <i className={`ti ${(ejecutando || corriendo) ? "ti-loader-2" : "ti-player-play"}`} style={{ fontSize: 14 }} />
+          {ejecutando ? "Disparando…" : corriendo ? `Corriendo… ${Math.floor(vuelta * 15 / 60)} min` : "Ejecutar ahora"}
         </button>
         <button onClick={cargar} disabled={cargando}
           style={{ border: "1px solid #e4e7ec", background: "#fff", color: "#64748b", cursor: cargando ? "default" : "pointer", padding: "6px 11px", borderRadius: 6, fontSize: 11, fontWeight: 700, fontFamily: "'Geist', sans-serif", display: "inline-flex", alignItems: "center", gap: 5 }}>
@@ -11795,15 +11839,15 @@ function PadronCorridasHoy() {
 
       {errTabla && (
         <div style={{ background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: "8px 12px", fontSize: 12, color: "#92400e", marginBottom: 10 }}>
-          No pude leer el historial ({errTabla}). Revisá que exista la tabla <strong>flujos_ejecuciones</strong> con la columna <strong>origen</strong>.
+          No pude leer el historial ({errTabla}). Revisa que exista la tabla <strong>flujos_ejecuciones</strong> con la columna <strong>origen</strong>.
         </div>
       )}
       {aviso && (
         <div style={{
           borderRadius: 8, padding: "8px 12px", fontSize: 12, marginBottom: 10,
-          background: aviso.startsWith("ok:") ? "#ecfdf5" : "#fef2f2",
-          border: "1px solid " + (aviso.startsWith("ok:") ? "#a7f3d0" : "#fecaca"),
-          color: aviso.startsWith("ok:") ? "#065f46" : "#991b1b",
+          background: aviso.startsWith("ok:") ? "#ecfdf5" : aviso.startsWith("run:") ? "#fffbeb" : "#fef2f2",
+          border: "1px solid " + (aviso.startsWith("ok:") ? "#a7f3d0" : aviso.startsWith("run:") ? "#fde68a" : "#fecaca"),
+          color: aviso.startsWith("ok:") ? "#065f46" : aviso.startsWith("run:") ? "#92400e" : "#991b1b",
         }}>{aviso.slice(aviso.indexOf(":") + 1)}</div>
       )}
 
@@ -11837,7 +11881,7 @@ function PadronCorridasHoy() {
       </div>
       {manuales.length === 0 ? (
         <div style={{ fontSize: 11.5, color: "#94a3b8", background: "#f8fafc", border: "1px dashed #e4e7ec", borderRadius: 8, padding: "8px 12px" }}>
-          {cargando ? "…" : "Ninguna todavía. Usá “Ejecutar ahora” si necesitás refrescar el padrón fuera de horario."}
+          {cargando ? "…" : "Ninguna todavía. Usa “Ejecutar ahora” si necesitas refrescar el padrón fuera de horario."}
         </div>
       ) : (
         <div style={{ display: "grid", gap: 5 }}>
