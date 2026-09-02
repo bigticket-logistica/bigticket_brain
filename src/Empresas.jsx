@@ -74,6 +74,132 @@ async function registrarEvento(terceroId, tipo, detalle) {
   if (error) console.warn("terceros_eventos:", error.message);
 }
 
+// ─── CAMBIO DE RAZÓN SOCIAL ───────────────────────────────────────────
+// Cuando una empresa cambia de nombre sigue siendo LA MISMA empresa: su
+// portal, su correo, sus placas, sus contratos y su historial no cambian.
+// Renombrar aquí evita el error que causa el enredo real — crear una
+// empresa nueva y tener que traspasarle correo, portal y accesos a mano
+// (caso FP → FR Tecnoservicios, sep-2026: tres rondas de SQL).
+//
+// El nombre anterior se CONSERVA como alias: MELI sigue usando la razón
+// social vieja en sus reportes durante semanas, y si se borra ese alias
+// los cruces automáticos dejan de encontrar a la empresa.
+function PanelRazonSocial({ empresa, onActualizada }) {
+  const [abierto, setAbierto] = useState(false);
+  const [nombre, setNombre] = useState(empresa.nombre || "");
+  const [rfc, setRfc] = useState(empresa.rfc || "");
+  const [motivo, setMotivo] = useState("");
+  const [guardando, setGuardando] = useState(false);
+  const [msg, setMsg] = useState(null);
+
+  const sinCambios = nombre.trim() === (empresa.nombre || "").trim()
+                  && rfc.trim() === (empresa.rfc || "").trim();
+  const corto = motivo.trim().length < 10;
+
+  const guardar = async () => {
+    if (sinCambios) { setMsg({ tipo: "err", texto: "No cambiaste el nombre ni el RFC." }); return; }
+    if (!nombre.trim()) { setMsg({ tipo: "err", texto: "La razón social no puede quedar vacía." }); return; }
+    if (corto) { setMsg({ tipo: "err", texto: "Escribe el motivo (mínimo 10 caracteres)." }); return; }
+    setGuardando(true);
+    setMsg(null);
+    try {
+      const nombreViejo = empresa.nombre || "";
+      const patch = { nombre: nombre.trim().toUpperCase() };
+      if (rfc.trim() !== (empresa.rfc || "").trim()) patch.rfc = rfc.trim().toUpperCase();
+
+      const { error } = await sb.from("terceros").update(patch).eq("id", empresa.tercero_id);
+      if (error) throw new Error(error.message);
+
+      // Alias nuevo (canónico) + el anterior se conserva para los cruces con MELI
+      await sb.from("terceros_alias")
+        .upsert({ tercero_id: empresa.tercero_id, alias: patch.nombre, fuente: "canonico" },
+                { onConflict: "tercero_id,alias" });
+      if (nombreViejo && nombreViejo !== patch.nombre) {
+        await sb.from("terceros_alias")
+          .upsert({ tercero_id: empresa.tercero_id, alias: nombreViejo, fuente: "razon_social_anterior" },
+                  { onConflict: "tercero_id,alias" });
+      }
+
+      await registrarEvento(empresa.tercero_id, "razon_social_cambiada",
+        `"${nombreViejo}" → "${patch.nombre}"${patch.rfc ? ` · RFC ${empresa.rfc || "—"} → ${patch.rfc}` : ""} · ${motivo.trim()}`);
+
+      setMsg({ tipo: "ok", texto: `✓ Razón social actualizada. El nombre anterior quedó como alias para los cruces con MELI. El correo, el portal y el historial no cambiaron.` });
+      setMotivo("");
+      onActualizada && onActualizada(patch);
+    } catch (e) {
+      setMsg({ tipo: "err", texto: "No se pudo actualizar: " + e.message });
+    } finally { setGuardando(false); }
+  };
+
+  const inp = { width: "100%", boxSizing: "border-box", border: "1px solid #dfe5ee", borderRadius: 8,
+    padding: "9px 11px", fontSize: 13, fontFamily: "'Geist',sans-serif", background: "#fff" };
+  const lbl = { fontSize: 10, fontWeight: 700, color: "#667085", textTransform: "uppercase",
+    letterSpacing: ".04em", display: "block", marginBottom: 4 };
+
+  return (
+    <div style={{ background: "#fff", border: "0.5px solid #e4e7ec", borderRadius: 12, padding: "16px 20px", marginTop: 12 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <div style={{ flex: 1, minWidth: 200 }}>
+          <div style={{ fontSize: 12, fontWeight: 800, color: "#667085", textTransform: "uppercase", letterSpacing: 1 }}>
+            Razón social
+          </div>
+          <div style={{ fontSize: 11.5, color: "#98a2b3", marginTop: 3, lineHeight: 1.5 }}>
+            Si la empresa cambió de nombre, edítalo aquí. Sigue siendo la misma empresa:
+            conserva su correo, su portal, sus placas y todo su historial.
+          </div>
+        </div>
+        <button onClick={() => { setAbierto(!abierto); setMsg(null); }}
+          style={{ padding: "9px 16px", borderRadius: 8, border: "1.5px solid #1a3a6b", background: abierto ? "#1a3a6b" : "#fff",
+            color: abierto ? "#fff" : "#1a3a6b", fontWeight: 700, fontSize: 12.5, cursor: "pointer",
+            fontFamily: "'Geist',sans-serif", whiteSpace: "nowrap" }}>
+          {abierto ? "Cerrar" : "✏️ Cambiar razón social"}
+        </button>
+      </div>
+
+      {abierto && (
+        <div style={{ marginTop: 14, paddingTop: 14, borderTop: "1px solid #f0f1f3" }}>
+          <div style={{ background: "#eef2f9", border: "1px solid #c7d7f9", borderRadius: 9, padding: "10px 12px",
+            fontSize: 11.5, color: "#1a3a6b", lineHeight: 1.55, marginBottom: 12 }}>
+            <b>No crees una empresa nueva para un cambio de nombre.</b> Renombrar aquí mantiene el acceso al
+            portal, el correo, los contratos firmados y las placas. El nombre anterior se guarda como alias,
+            porque MELI sigue usándolo en sus reportes por un tiempo.
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 10 }}>
+            <div><span style={lbl}>Razón social *</span>
+              <input value={nombre} onChange={(e) => setNombre(e.target.value)} style={inp} /></div>
+            <div><span style={lbl}>RFC (solo si también cambió)</span>
+              <input value={rfc} onChange={(e) => setRfc(e.target.value.toUpperCase())}
+                style={{ ...inp, fontFamily: "monospace" }} /></div>
+          </div>
+          <div style={{ marginTop: 10 }}>
+            <span style={lbl}>Motivo del cambio *</span>
+            <input value={motivo} onChange={(e) => setMotivo(e.target.value)}
+              placeholder="Ej. Cambio de razón social a S.A. de C.V. informado por el transportista"
+              style={inp} />
+            <div style={{ fontSize: 10.5, color: corto && motivo ? "#c0392b" : "#98a2b3", marginTop: 3 }}>
+              {motivo.trim().length}/10 caracteres mínimos · queda en la bitácora de la empresa
+            </div>
+          </div>
+          {msg && (
+            <div style={{ marginTop: 11, borderRadius: 9, padding: "10px 12px", fontSize: 12.5, fontWeight: 700,
+              background: msg.tipo === "ok" ? "#e8f5ec" : "#fbeaea",
+              border: `1px solid ${msg.tipo === "ok" ? "#86c9a0" : "#f0b4b4"}`,
+              color: msg.tipo === "ok" ? "#166534" : "#c0392b" }}>
+              {msg.texto}
+            </div>
+          )}
+          <button onClick={guardar} disabled={guardando || sinCambios || corto}
+            style={{ width: "100%", marginTop: 12, background: (sinCambios || corto) ? "#c9d2e0" : "#1a3a6b",
+              color: "#fff", border: "none", borderRadius: 9, padding: "11px", fontSize: 13, fontWeight: 800,
+              cursor: (guardando || sinCambios || corto) ? "not-allowed" : "pointer", fontFamily: "'Geist',sans-serif" }}>
+            {guardando ? "Guardando…" : "💾 Guardar razón social"}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ═══ DETALLE DE EMPRESA ═════════════════════════════════════════════════════
 function DetalleEmpresa({ empresa, onVolver, onActualizada }) {
   const [tab, setTab] = useState("resumen");
@@ -90,7 +216,7 @@ function DetalleEmpresa({ empresa, onVolver, onActualizada }) {
   // y snapshot guardado de lo que se envió (envios_ficha_empresa).
   const [enviandoFicha, setEnviandoFicha] = useState(false);
   const [ultimoEnvio, setUltimoEnvio] = useState(null);
-  const DEST_FINANZAS = ["esteban.dussaut@bigticket.cl", "nicole.vargas@bigticket.cl", "adriana.giummarra@bigticket.cl", "camilo.naranjo@bigticket.cl"];
+  const DEST_FINANZAS = ["esteban.dussaut@bigticket.cl", "nicole.vargas@bigticket.cl", "adriana.giummarra@bigticket.cl"];
 
   const cargarUltimoEnvio = async () => {
     const { data } = await sb.from("envios_ficha_empresa")
@@ -380,7 +506,7 @@ function DetalleEmpresa({ empresa, onVolver, onActualizada }) {
     ["resumen", "📇 Resumen"], ["datos", "🏦 Datos & Cuenta"], ["placas", "🚚 Placas & Personal"],
     ["docs", "🗂 Documentos"], ["pagos", "💰 Pagos"], ["solicitudes", "📥 Solicitudes"], ["operacion", "📅 Operación"], ["acceso", "🔑 Acceso al portal"],
   ];
-  const lblEv = { acceso_portal_creado: "🔑 Acceso al portal creado", acceso_clave_cambiada: "🔧 Contraseña actualizada", acceso_portal_reset: "✉️ Correo de restablecimiento enviado", estado_pausada: "⏸ Empresa pausada", estado_activa: "▶️ Empresa reactivada", estado_baja: "🛑 Empresa dada de baja", pagos_pausados: "💸⏸ Pagos pausados", pagos_reactivados: "💸▶️ Pagos reactivados", solicitud_aprobada: "✅ Solicitud aprobada", solicitud_rechazada: "❌ Solicitud rechazada", ficha_enviada_finanzas: "📨 Ficha enviada a Finanzas" };
+  const lblEv = { acceso_portal_creado: "🔑 Acceso al portal creado", acceso_clave_cambiada: "🔧 Contraseña actualizada", acceso_portal_reset: "✉️ Correo de restablecimiento enviado", estado_pausada: "⏸ Empresa pausada", estado_activa: "▶️ Empresa reactivada", estado_baja: "🛑 Empresa dada de baja", pagos_pausados: "💸⏸ Pagos pausados", pagos_reactivados: "💸▶️ Pagos reactivados", solicitud_aprobada: "✅ Solicitud aprobada", solicitud_rechazada: "❌ Solicitud rechazada", ficha_enviada_finanzas: "📨 Ficha enviada a Finanzas", razon_social_cambiada: "✏️ Razón social actualizada" };
 
   return (
     <div>
@@ -441,6 +567,12 @@ function DetalleEmpresa({ empresa, onVolver, onActualizada }) {
               Nota de arquitectura: estos estados quedan en <b>terceros</b> y en la bitácora. La conexión con el motor
               (excluir de la generación semanal / retener prefactura) es la siguiente fase — por ahora es registro y control visual.
             </div>
+
+            <PanelRazonSocial empresa={empresa}
+              onActualizada={(patch) => {
+                setEventos(null);   // fuerza la recarga de la bitácora del useEffect
+                onActualizada && onActualizada({ ...empresa, ...(patch || {}) });
+              }} />
           </div>
           <div style={{ background: "#fff", border: "0.5px solid #e4e7ec", borderRadius: 12, padding: "16px 20px" }}>
             <div style={{ fontSize: 12, fontWeight: 800, color: "#667085", textTransform: "uppercase", letterSpacing: 1, marginBottom: 10 }}>Bitácora de la empresa</div>
