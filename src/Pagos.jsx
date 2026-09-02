@@ -11698,6 +11698,30 @@ function pcResumen(r) {
   return r.motivo === "sesion_expirada" ? "sesión MELI expirada" : (r.motivo || "error");
 }
 
+// Lee la expiración real de la sesión MELI desde la cookie session_id_expires.
+// minutos negativos = sesión vencida.
+function pcSesionEstado(fila) {
+  if (!fila) return null;
+  let vence = null;
+  try {
+    const cks = JSON.parse(fila.cookies || "[]");
+    const c = cks.find(x => x.name === "session_id_expires");
+    if (c && c.value) {
+      const d = new Date(decodeURIComponent(c.value));
+      if (!isNaN(d.getTime())) vence = d;
+    }
+    if (!vence) {
+      const sid = cks.find(x => x.name === "session_id");
+      if (sid && sid.expires > 0) vence = new Date(sid.expires * 1000);
+    }
+  } catch { /* cookies ilegibles */ }
+  return {
+    vence,
+    usuario: fila.usuario_id || "—",
+    minutos: vence ? Math.round((vence.getTime() - Date.now()) / 60000) : null,
+  };
+}
+
 function PadronCorridasHoy() {
   const [ejec, setEjec] = useState([]);
   const [cargando, setCargando] = useState(true);
@@ -11708,6 +11732,7 @@ function PadronCorridasHoy() {
     try { return sessionStorage.getItem("padron_t0") || null; } catch { return null; }
   });
   const [vuelta, setVuelta] = useState(0);
+  const [sesion, setSesion] = useState(null);
 
   const cargar = async () => {
     setCargando(true); setErrTabla(null);
@@ -11727,7 +11752,16 @@ function PadronCorridasHoy() {
       setCargando(false);
     }
   };
-  useEffect(() => { cargar(); }, []);
+
+  const cargarSesion = async () => {
+    try {
+      const { data } = await sb.from("sesiones_meli")
+        .select("usuario_id,actualizado_at,cookies").eq("id", "sesion_activa").limit(1);
+      setSesion(data && data[0] ? pcSesionEstado(data[0]) : null);
+    } catch { setSesion(null); }
+  };
+
+  useEffect(() => { cargar(); cargarSesion(); }, []);
 
   const ejecutarAhora = async () => {
     if (ejecutando || corriendo) return;
@@ -11809,7 +11843,7 @@ function PadronCorridasHoy() {
           <i className={`ti ${(ejecutando || corriendo) ? "ti-loader-2" : "ti-player-play"}`} style={{ fontSize: 14 }} />
           {ejecutando ? "Disparando…" : corriendo ? `Corriendo… ${Math.floor(vuelta * 15 / 60)} min` : "Ejecutar ahora"}
         </button>
-        <button onClick={cargar} disabled={cargando}
+        <button onClick={() => { cargar(); cargarSesion(); }} disabled={cargando}
           style={{ border: "1px solid #e4e7ec", background: "#fff", color: "#64748b", cursor: cargando ? "default" : "pointer", padding: "6px 11px", borderRadius: 6, fontSize: 11, fontWeight: 700, fontFamily: "'Geist', sans-serif", display: "inline-flex", alignItems: "center", gap: 5 }}>
           <i className={`ti ${cargando ? "ti-loader-2" : "ti-refresh"}`} style={{ fontSize: 13 }} />Actualizar
         </button>
@@ -11828,6 +11862,24 @@ function PadronCorridasHoy() {
           color: aviso.startsWith("ok:") ? "#065f46" : aviso.startsWith("run:") ? "#92400e" : "#991b1b",
         }}>{aviso.slice(aviso.indexOf(":") + 1)}</div>
       )}
+
+      {sesion && (() => {
+        const m = sesion.minutos;
+        const est = m == null
+          ? { bg: "#fffbeb", bd: "#fde68a", tx: "#92400e", ico: "ti-help-circle", msg: "No pude leer la expiración de la sesión. Verifica con Don B antes de correr." }
+          : m <= 0
+          ? { bg: "#fef2f2", bd: "#fecaca", tx: "#991b1b", ico: "ti-lock-off", msg: "Sesión de MELI vencida. Captúrala con Don B antes de ejecutar: la corrida va a fallar." }
+          : m < 60
+          ? { bg: "#fffbeb", bd: "#fde68a", tx: "#92400e", ico: "ti-clock-exclamation", msg: `Sesión de MELI vence en ${m} min (${pcHoraCL(sesion.vence.toISOString())} hrs). Conviene recapturar con Don B.` }
+          : { bg: "#f6fdf9", bd: "#a7f3d0", tx: "#065f46", ico: "ti-lock-check", msg: `Sesión de MELI válida hasta las ${pcHoraCL(sesion.vence.toISOString())} hrs (${Math.floor(m / 60)} h ${m % 60} min).` };
+        return (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, background: est.bg, border: `1px solid ${est.bd}`, color: est.tx, borderRadius: 8, padding: "7px 12px", fontSize: 11.5, marginBottom: 10 }}>
+            <i className={`ti ${est.ico}`} style={{ fontSize: 14 }} />
+            <span style={{ flex: 1 }}>{est.msg}</span>
+            <span style={{ fontSize: 10, opacity: 0.75 }}>usuario {sesion.usuario}</span>
+          </div>
+        );
+      })()}
 
       {ultimaOk && (
         <div style={{ fontSize: 11.5, color: "#065f46", background: "#f6fdf9", border: "1px solid #a7f3d0", borderRadius: 8, padding: "7px 12px", marginBottom: 10 }}>
