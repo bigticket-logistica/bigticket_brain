@@ -107,8 +107,19 @@ function PanelRazonSocial({ empresa, onActualizada }) {
       const patch = { nombre: nombre.trim().toUpperCase() };
       if (rfc.trim() !== (empresa.rfc || "").trim()) patch.rfc = rfc.trim().toUpperCase();
 
-      const { error } = await sb.from("terceros").update(patch).eq("id", empresa.tercero_id);
+      // .select() para saber CUÁNTAS filas cambiaron. Supabase no lanza
+      // excepción cuando una política RLS bloquea un update: devuelve cero
+      // filas y el código seguía escribiendo alias y bitácora como si
+      // hubiera funcionado (bug real: el nombre no cambiaba pero la
+      // bitácora decía que sí, sep-2026).
+      const { data: filas, error } = await sb.from("terceros")
+        .update(patch).eq("id", empresa.tercero_id).select("id, nombre");
       if (error) throw new Error(error.message);
+      if (!filas || filas.length === 0) {
+        throw new Error("la base no aplicó el cambio (0 filas actualizadas). "
+          + "Suele ser una política RLS de UPDATE que falta en la tabla terceros. "
+          + "No se tocaron los alias ni la bitácora.");
+      }
 
       // Alias nuevo (canónico) + el anterior se conserva para los cruces con MELI
       await sb.from("terceros_alias")
