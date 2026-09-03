@@ -10758,6 +10758,7 @@ function PadronDriversData({ fecha }) {
     infractores: rows.filter(r => r.tiene_infraccion).length,
     conEmail: rows.filter(r => r.email).length,
     conTel: rows.filter(r => r.phone).length,
+    sinDetalle: rows.filter(r => !r.enriquecido).length,
   }), [rows]);
 
   const filtradas = useMemo(() => {
@@ -10770,16 +10771,11 @@ function PadronDriversData({ fecha }) {
           .some(v => String(v ?? "").toLowerCase().includes(q))
       );
     }
-    // Más recientes primero: por fecha de alta y, si falta, por ID (los IDs de
-    // MELI son secuenciales). Los sin fecha quedan al final.
-    return [...res].sort((a, b) => {
-      const fa = a.creation_date ? new Date(a.creation_date).getTime() : null;
-      const fb = b.creation_date ? new Date(b.creation_date).getTime() : null;
-      if (fa !== null && fb !== null && fa !== fb) return fb - fa;
-      if (fa === null && fb !== null) return 1;
-      if (fa !== null && fb === null) return -1;
-      return Number(b.driver_id) - Number(a.driver_id);
-    });
+    // Más recientes primero por driver_id: los IDs de MELI son secuenciales,
+    // así que un conductor recién dado de alta queda arriba aunque todavía no
+    // tenga detalle. Antes se ordenaba por creation_date y los sin enriquecer
+    // se iban al fondo de la tabla, justo los que el analista viene a buscar.
+    return [...res].sort((a, b) => Number(b.driver_id) - Number(a.driver_id));
   }, [rows, busqueda, soloInfractores]);
 
   const toggleExpand = (id) => {
@@ -10910,7 +10906,7 @@ function PadronDriversData({ fecha }) {
         </div>
       </div>
       <div style={{ marginTop: 10, fontSize: 11, color: PLIGHT, fontStyle: "italic" }}>
-        ℹ️ Contacto, fecha de creación e infracciones provienen del detalle de MELI (tabla de enriquecimiento). Conductores sin estos datos aún no fueron enriquecidos o MELI no los expone. Clic en una fila con <strong style={{ color: "#92400e" }}>infracción</strong> para ver el detalle.
+        ℹ️ Contacto, fecha de creación e infracciones provienen del detalle de MELI (tabla de enriquecimiento){kpis.sinDetalle > 0 ? `; hoy hay ${kpis.sinDetalle} conductor${kpis.sinDetalle === 1 ? "" : "es"} del padrón sin detalle todavía, ordenados arriba por ID` : ""}. Conductores sin estos datos aún no fueron enriquecidos o MELI no los expone. Clic en una fila con <strong style={{ color: "#92400e" }}>infracción</strong> para ver el detalle.
       </div>
     </div>
   );
