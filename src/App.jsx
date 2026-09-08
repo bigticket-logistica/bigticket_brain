@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo, useCallback, Fragment } from "react";
-import { createClient } from "@supabase/supabase-js";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import ModuloMaestro from "./maestro";
 import { fechaHoyOperativa, fechaOperativaOffset, pct, Input, KpiCardMaestro, BadgeEstadoMaestro } from "./shared";
 import ModuloPNR from "./PNR";
@@ -106,12 +106,14 @@ const MODULOS_POR_PAIS = {
     superadmin: ["pool_meli_mx", "pagos", "maestro", "certificaciones", "empresas", "pnr", "auditoria_meli", "configuracion"],
     certificacion: ["certificaciones", "empresas"],
     certificacion_full: ["certificaciones", "empresas"],  // Certificaciones MX + CL (ver Chile abajo)
+    certificacion_mant: ["certificaciones", "empresas"],  // Certificaciones MX + CL + Mantenciones CL
     prefacturas: ["pagos"],
   },
   "Chile": {
     superadmin: ["certificaciones_cl", "mantenciones_cl", "maestro_cl"],
     certificacion: [],
     certificacion_full: ["certificaciones_cl"],
+    certificacion_mant: ["certificaciones_cl", "mantenciones_cl"],
     prefacturas: [],
   },
 };
@@ -145,6 +147,8 @@ const USUARIOS = {
   "roberto.sanmartin@bigticket.cl":       { pass: "robertosn.2026",   rol: "prefacturas", nombre: "Roberto San Martin" },
   "antonio.mariangel@bigticket.cl":       { pass: "antonio.2026",  rol: "certificacion_full", nombre: "Antonio Mariangel" },
   "camila.valenzuela@bigticket.cl":       { pass: "camila.2026",   rol: "certificacion_full", nombre: "Camila Valenzuela" },
+  "galiz.martinez@bigticket.cl":         { pass: "Galiz.2026!",  rol: "certificacion_full", nombre: "Galiz Martínez" },
+  "maycol.olavarria@bigticket.cl":       { pass: "Maycol.2026!", rol: "certificacion_mant", nombre: "Maycol Olavarría" },
 };
 
 const css = `
