@@ -2,9 +2,15 @@ import { Fragment, useEffect, useMemo, useState } from "react";
 import { sb } from "./shared";
 
 // ─── PNR — Cobro a terceros ─────────────────────────────────────────
-// Lista los PNR que pasaron a facturación en la semana y permite
-// agregar cada uno a la conciliación del transportista como línea
-// negativa, dejando registro de quién lo hizo.
+// Lista los PNR cobrables de la semana y permite agregar cada uno a la
+// conciliación del transportista como línea negativa, dejando registro
+// de quién lo hizo. Son cobrables dos motivos:
+//   BILLED          → MELI lo envió a facturación
+//   WITHOUT_RECEIPT → el supervisor respondió pero no cargó comprobante
+// El caso pertenece a la semana en que se volvió cobrable por primera
+// vez, así que aparece en una sola semana y nunca se repite. El motivo
+// y el derecho a cobro se leen del estado ACTUAL del caso en MELI: si
+// después se anuló, la fila queda bloqueada.
 
 const ANCLA_SEM = Date.UTC(2026, 5, 1); // lunes de la semana 24
 
@@ -58,6 +64,34 @@ function recalcSC(filas, cobros) {
     neto, iva, bruto, cobros: c, liquido, negativo: neg,
     nViajes: reales.length, nNoPago: reales.filter(d => d.es_no_pago).length,
   };
+}
+
+const MOTIVOS = {
+  BILLED: { label: "Enviado a facturación", corto: "facturación", color: "#1a3a6b", bg: "#e8eef7", concepto: "PNR facturado" },
+  WITHOUT_RECEIPT: { label: "Sin comprobante cargado", corto: "sin comprobante", color: "#92400e", bg: "#fef3c7", concepto: "PNR sin comprobante" },
+};
+const SUB_COBRABLES = Object.keys(MOTIVOS);
+
+function ChipMotivo({ sub, estadoActual }) {
+  if (!sub) {
+    return (
+      <span style={{
+        display: "inline-block", padding: "2px 7px", fontSize: 10, fontWeight: 700,
+        borderRadius: 4, background: "#f1f3f6", color: "#64748b", whiteSpace: "nowrap",
+      }} title={"Estado actual en MELI: " + (estadoActual || "—")}>
+        Ya no cobrable
+      </span>
+    );
+  }
+  const m = MOTIVOS[sub] || { label: sub, color: "#334155", bg: "#eef2f7" };
+  return (
+    <span style={{
+      display: "inline-block", padding: "2px 7px", fontSize: 10, fontWeight: 700,
+      borderRadius: 4, background: m.bg, color: m.color, whiteSpace: "nowrap",
+    }}>
+      {m.label}
+    </span>
+  );
 }
 
 const lineaId = (d) => d._id || `m|${String(d.fecha || "").slice(0, 10)}|${d.placa || ""}|${d.id_ruta || ""}|${d.service_center_id || ""}`;
@@ -151,20 +185,28 @@ export default function PnrCobrosMX({ usuario }) {
 
       // 1) transiciones a facturación dentro de la semana
       const { data: hist, error: e1 } = await sb.from("pnr_historial_mx")
-        .select("case_id, creado_en").eq("sub_a", "BILLED")
-        .gte("creado_en", desde).lt("creado_en", hasta)
+        .select("case_id, sub_a, creado_en").in("sub_a", SUB_COBRABLES)
+        .lt("creado_en", hasta)
         .order("creado_en", { ascending: true });
       if (e1) throw e1;
 
-      // un caso se cobra una sola vez: si hay más de una transición, vale la primera
-      const facturadoEn = {};
-      for (const h of hist || []) if (!facturadoEn[h.case_id]) facturadoEn[h.case_id] = h.creado_en;
-      const ids = Object.keys(facturadoEn).map(Number);
+      // Primera vez que cada caso se volvió cobrable. Esa fecha define su
+      // semana, así que un caso aparece en una sola semana aunque después
+      // cambie de sub-estado varias veces.
+      const primeraVez = {};
+      for (const h of hist || []) if (!primeraVez[h.case_id]) primeraVez[h.case_id] = h.creado_en;
+
+      // se quedan solo los que se volvieron cobrables dentro de esta semana
+      const cobrable = {};
+      for (const cid in primeraVez) {
+        if (primeraVez[cid] >= desde) cobrable[cid] = { ts: primeraVez[cid] };
+      }
+      const ids = Object.keys(cobrable).map(Number);
       if (!ids.length) { setFilas([]); setCobrados({}); setLoading(false); return; }
 
       // 2) datos del caso
       const { data: casos, error: e2 } = await sb.from("pnr_casos_mx")
-        .select("case_id, shipment_id, monto, moneda, conductor, service_center, route_code, route_id, tercero_id")
+        .select("case_id, shipment_id, monto, moneda, conductor, service_center, route_code, route_id, tercero_id, estado, sub_estado")
         .in("case_id", ids);
       if (e2) throw e2;
 
@@ -222,9 +264,11 @@ export default function PnrCobrosMX({ usuario }) {
           const t = a.tipo || "aviso";
           porTipo[t] = (porTipo[t] || 0) + 1;
         }
+        const mot = cobrable[c.case_id] || {};
         return {
           ...c,
-          facturado_en: facturadoEn[c.case_id],
+          sub_cobro: MOTIVOS[c.sub_estado] ? c.sub_estado : null,
+          facturado_en: mot.ts,
           placa,
           fecha_ruta: j.fecha || null,
           semana_ruta: semRuta,
@@ -248,6 +292,10 @@ export default function PnrCobrosMX({ usuario }) {
   // Agrega el PNR a la conciliación del transportista como línea negativa,
   // igual que las líneas "COBRO ID … - PNR" que ya existen en las prefacturas.
   const agregar = async (f) => {
+    if (!f.sub_cobro) {
+      setMsg({ ok: false, txt: `El PNR ${f.case_id} ya no es cobrable: hoy está en "${f.sub_estado || "—"}" en MELI.` });
+      return;
+    }
     if (!f.empresa) {
       setMsg({ ok: false, txt: `El PNR ${f.case_id} no tiene empresa resuelta. Revisá la placa en el inventario de flota de la semana ${f.semana_ruta}.` });
       return;
@@ -262,9 +310,10 @@ export default function PnrCobrosMX({ usuario }) {
       setMsg({ ok: false, txt: `El PNR ${f.case_id} no tiene monto.` });
       return;
     }
+    const mot = MOTIVOS[f.sub_cobro] || { label: f.sub_cobro || "PNR", concepto: "PNR" };
     const etiqueta = `COBRO ID ${f.shipment_id || f.case_id} - PNR`;
     if (!window.confirm(
-      `¿Agregar este cobro a la conciliación?\n\n${f.empresa} · ${sc} · semana ${semana}\n${etiqueta}\nPlaca ${f.placa || "—"} · ${f.conductor || ""}\nMonto: -${money(monto)}\n\nLa prefactura de esa empresa y SC vuelve a borrador y el movimiento queda auditado.`
+      `¿Agregar este cobro a la conciliación?\n\nMotivo: ${mot.label}\n${f.empresa} · ${sc} · semana ${semana}\n${etiqueta}\nPlaca ${f.placa || "—"} · ${f.conductor || ""}\nMonto: -${money(monto)}\n\nLa prefactura de esa empresa y SC vuelve a borrador y el movimiento queda auditado.`
     )) return;
 
     setGuardando(f.case_id); setMsg(null);
@@ -280,6 +329,7 @@ export default function PnrCobrosMX({ usuario }) {
         facturado_en: String(f.facturado_en).slice(0, 10),
         driver_name: f.conductor || null,
         placa: f.placa || null,
+        concepto: mot.concepto,
         monto,
         estado: "enviado",
         enviado_a_cobro_en: new Date().toISOString(),
@@ -325,6 +375,7 @@ export default function PnrCobrosMX({ usuario }) {
         monto: -monto, es_no_pago: false,
         pnr_case_id: f.case_id,
         pnr_shipment_id: f.shipment_id || null,
+        pnr_motivo: mot.label,
         agregado_por: quien,
         agregado_at: new Date().toISOString(),
       };
@@ -348,7 +399,7 @@ export default function PnrCobrosMX({ usuario }) {
       await sb.from("conciliacion_terceros_ajustes").insert({
         empresa_nombre: f.empresa, service_center: sc, semana,
         accion: "agregar", origen_linea: "pnr", linea,
-        motivo: `Cobro de PNR ${f.case_id} (guía ${f.shipment_id || "—"}) por ${money(monto)}`,
+        motivo: `Cobro de PNR ${f.case_id} · ${mot.label} (guía ${f.shipment_id || "—"}) por ${money(monto)}`,
         usuario: quien,
       });
 
@@ -372,9 +423,12 @@ export default function PnrCobrosMX({ usuario }) {
       .some(v => String(v || "").toUpperCase().includes(q)));
   }, [filas, busqueda]);
 
-  const pendientes = visibles.filter(f => !cobrados[String(f.case_id)]);
+  const pendientes = visibles.filter(f => !cobrados[String(f.case_id)] && f.sub_cobro);
+  const yaNoCobrables = visibles.filter(f => !cobrados[String(f.case_id)] && !f.sub_cobro).length;
   const totalPend = pendientes.reduce((s, f) => s + Number(f.monto || 0), 0);
   const sinEmpresa = pendientes.filter(f => !f.empresa).length;
+  const nFacturados = pendientes.filter(f => f.sub_cobro === "BILLED").length;
+  const nSinComprobante = pendientes.filter(f => f.sub_cobro === "WITHOUT_RECEIPT").length;
 
   return (
     <div style={{ padding: 24, fontFamily: "Geist, sans-serif" }}>
@@ -382,7 +436,7 @@ export default function PnrCobrosMX({ usuario }) {
         <div>
           <div style={{ fontSize: 16, fontWeight: 700, color: "#1a3a6b" }}>PNR — cobro a terceros</div>
           <div style={{ fontSize: 11, color: "#64748b" }}>
-            Casos que pasaron a facturación en la semana. Agregar carga el cobro en la conciliación del transportista como línea negativa.
+            PNR que se volvieron cobrables en esta semana, por envío a facturación o por quedar sin comprobante cargado. Cada caso aparece en una sola semana. Agregar carga el cobro en la conciliación como línea negativa.
           </div>
         </div>
         <div style={{ flex: 1 }} />
@@ -407,9 +461,12 @@ export default function PnrCobrosMX({ usuario }) {
       </div>
 
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
-        <Kpi label="Pendientes de cobro" valor={pendientes.length} sub={`${visibles.length} facturados en la semana`} />
+        <Kpi label="Pendientes de cobro" valor={pendientes.length} sub={`${visibles.length} cobrables en la semana`} />
+        <Kpi label="Enviados a facturación" valor={nFacturados} />
+        <Kpi label="Sin comprobante cargado" valor={nSinComprobante} sub={nSinComprobante ? "el supervisor respondió sin foto" : "ninguno esta semana"} />
         <Kpi label="Monto por cobrar" valor={money(totalPend)} sub="suma del valor del paquete" />
         <Kpi label="Sin empresa" valor={sinEmpresa} sub={sinEmpresa ? "requieren revisar la placa" : "todos resueltos"} />
+        {yaNoCobrables ? <Kpi label="Ya no cobrables" valor={yaNoCobrables} sub="cambiaron de estado en MELI" /> : null}
       </div>
 
       {msg ? (
@@ -424,7 +481,8 @@ export default function PnrCobrosMX({ usuario }) {
           <thead>
             <tr>
               <th style={th}>PNR</th>
-              <th style={th}>Facturado</th>
+              <th style={th}>Motivo del cobro</th>
+              <th style={th}>Pasó a cobro</th>
               <th style={{ ...th, textAlign: "right" }}>Monto</th>
               <th style={th}>Chofer</th>
               <th style={th}>Placa</th>
@@ -437,7 +495,7 @@ export default function PnrCobrosMX({ usuario }) {
           </thead>
           <tbody>
             {!loading && !visibles.length ? (
-              <tr><td style={{ ...td, textAlign: "center", color: "#94a3b8", padding: 30 }} colSpan={10}>
+              <tr><td style={{ ...td, textAlign: "center", color: "#94a3b8", padding: 30 }} colSpan={11}>
                 Sin PNR facturados en esta semana.
               </td></tr>
             ) : null}
@@ -452,6 +510,10 @@ export default function PnrCobrosMX({ usuario }) {
                         <div style={{ fontSize: 9, color: "#b45309", fontWeight: 600 }}>nació facturado</div>
                       ) : null}
                     </td>
+                    <td style={td}><ChipMotivo sub={f.sub_cobro} estadoActual={f.sub_estado} />
+                      {!f.sub_cobro ? (
+                        <div style={{ fontSize: 9, color: "#94a3b8", marginTop: 2 }}>{f.sub_estado || "—"}</div>
+                      ) : null}</td>
                     <td style={td}>{fechaHora(f.facturado_en)}</td>
                     <td style={{ ...td, textAlign: "right", fontWeight: 600 }}>{money(f.monto)}</td>
                     <td style={td}>{f.conductor || "—"}</td>
@@ -486,12 +548,12 @@ export default function PnrCobrosMX({ usuario }) {
                           <div style={{ fontSize: 9, color: "#94a3b8" }}>sem {ya.semana}</div>
                         </div>
                       ) : (
-                        <button onClick={() => agregar(f)} disabled={guardando === f.case_id || !f.empresa}
-                          title={!f.empresa ? "Falta resolver la empresa transportista" : "Agregar como línea negativa a la conciliación"}
+                        <button onClick={() => agregar(f)} disabled={guardando === f.case_id || !f.empresa || !f.sub_cobro}
+                          title={!f.sub_cobro ? "El caso ya no está en un estado cobrable" : (!f.empresa ? "Falta resolver la empresa transportista" : "Agregar como línea negativa a la conciliación")}
                           style={{
                             padding: "5px 12px", fontSize: 11, fontWeight: 600, borderRadius: 6, border: "none",
-                            background: f.empresa ? "#1a3a6b" : "#e4e7ec", color: f.empresa ? "#fff" : "#94a3b8",
-                            cursor: (guardando === f.case_id || !f.empresa) ? "not-allowed" : "pointer",
+                            background: (f.empresa && f.sub_cobro) ? "#1a3a6b" : "#e4e7ec", color: (f.empresa && f.sub_cobro) ? "#fff" : "#94a3b8",
+                            cursor: (guardando === f.case_id || !f.empresa || !f.sub_cobro) ? "not-allowed" : "pointer",
                             opacity: guardando === f.case_id ? 0.5 : 1,
                           }}>
                           {guardando === f.case_id ? "Agregando…" : "Agregar"}
@@ -501,7 +563,7 @@ export default function PnrCobrosMX({ usuario }) {
                   </tr>
                   {abierto === f.case_id ? (
                     <tr>
-                      <td colSpan={10} style={{ padding: "10px 14px 14px 14px", background: "#f8fafc", borderBottom: "1px solid #e4e7ec" }}>
+                      <td colSpan={11} style={{ padding: "10px 14px 14px 14px", background: "#f8fafc", borderBottom: "1px solid #e4e7ec" }}>
                         <div style={{ fontSize: 10, fontWeight: 700, color: "#64748b", marginBottom: 6 }}>
                           Historial de avisos
                         </div>
