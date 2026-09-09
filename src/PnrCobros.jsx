@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { sb } from "./shared";
 
 // ─── PNR — Cobro a terceros ─────────────────────────────────────────
@@ -75,17 +75,38 @@ function Kpi({ label, valor, sub }) {
   );
 }
 
-function ChipAviso({ label, ts }) {
-  const ok = !!ts;
+function ChipResumen({ label, n }) {
   return (
-    <span title={ok ? fechaHora(ts) : "sin aviso"}
-      style={{
-        display: "inline-block", padding: "1px 6px", marginRight: 4, marginBottom: 2,
-        fontSize: 9, fontWeight: 600, borderRadius: 4,
-        background: ok ? "#e8f5e9" : "#f1f3f6", color: ok ? "#1b5e20" : "#94a3b8",
-      }}>
-      {label}
+    <span style={{
+      display: "inline-block", padding: "1px 6px", marginRight: 4, marginBottom: 2,
+      fontSize: 9, fontWeight: 600, borderRadius: 4, background: "#eef2f7", color: "#334155",
+    }}>
+      {label} {n}
     </span>
+  );
+}
+
+// Detalle de avisos, con la misma lectura que el panel de Posventa:
+// cada envío con su tipo, a quién fue y cuántas horas de SLA quedaban.
+function DetalleAvisos({ lista }) {
+  if (!lista || !lista.length) {
+    return <div style={{ fontSize: 11, color: "#94a3b8" }}>Este caso no recibió avisos.</div>;
+  }
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "auto auto auto auto", gap: "2px 16px", fontSize: 11 }}>
+      {lista.map((a, i) => (
+        <Fragment key={i}>
+          <span style={{ color: "#334155" }}>
+            {a.tipo || "aviso"}{a.destino ? " · " + a.destino : ""}
+          </span>
+          <span style={{ color: "#64748b" }}>{fechaHora(a.creado_en)}</span>
+          <span style={{ color: a.horas_restantes != null && a.horas_restantes <= 6 ? "#b45309" : "#94a3b8" }}>
+            {a.horas_restantes != null ? a.horas_restantes + " h" : ""}
+          </span>
+          <span style={{ color: "#94a3b8" }}>{a.estado_entrega || ""}</span>
+        </Fragment>
+      ))}
+    </div>
   );
 }
 
@@ -95,6 +116,7 @@ export default function PnrCobrosMX() {
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState(null);
   const [busqueda, setBusqueda] = useState("");
+  const [abierto, setAbierto] = useState(null);
 
   useEffect(() => { cargar(semana); }, [semana]);
 
@@ -120,9 +142,19 @@ export default function PnrCobrosMX() {
 
       // 2) datos del caso
       const { data: casos, error: e2 } = await sb.from("pnr_casos_mx")
-        .select("case_id, monto, moneda, conductor, service_center, route_code, route_id, tercero_id, avisado_inicial_en, avisado_24h_en, avisado_final_cond_en, avisado_final_sup_en")
+        .select("case_id, monto, moneda, conductor, service_center, route_code, route_id, tercero_id")
         .in("case_id", ids);
       if (e2) throw e2;
+
+      // 2b) historial completo de avisos (el mismo que muestra Posventa)
+      const avisosPorCaso = {};
+      const { data: avs } = await sb.from("vw_pnr_avisos_historial")
+        .select("case_id, tipo, destino, creado_en, horas_restantes, estado_entrega")
+        .in("case_id", ids)
+        .order("creado_en", { ascending: true });
+      for (const a of avs || []) {
+        (avisosPorCaso[a.case_id] = avisosPorCaso[a.case_id] || []).push(a);
+      }
 
       // 3) placa y fecha de ruta desde la jornada
       const rutas = [...new Set((casos || []).map(c => c.route_id).filter(Boolean))];
@@ -155,6 +187,12 @@ export default function PnrCobrosMX() {
         const placa = j.placa || null;
         const empresa = (placa && semRuta != null)
           ? (empSem[semRuta + "||" + normalizarPlaca(placa)] || null) : null;
+        const avisos = avisosPorCaso[c.case_id] || [];
+        const porTipo = {};
+        for (const a of avisos) {
+          const t = a.tipo || "aviso";
+          porTipo[t] = (porTipo[t] || 0) + 1;
+        }
         return {
           ...c,
           facturado_en: facturadoEn[c.case_id],
@@ -162,7 +200,9 @@ export default function PnrCobrosMX() {
           fecha_ruta: j.fecha || null,
           semana_ruta: semRuta,
           empresa,
-          sin_avisos: !c.avisado_inicial_en && !c.avisado_24h_en && !c.avisado_final_cond_en && !c.avisado_final_sup_en,
+          avisos,
+          resumen_avisos: Object.entries(porTipo),
+          sin_avisos: avisos.length === 0,
         };
       }).sort((a, b) => String(b.facturado_en).localeCompare(String(a.facturado_en)));
 
@@ -247,7 +287,9 @@ export default function PnrCobrosMX() {
               </td></tr>
             ) : null}
             {visibles.map(f => (
-              <tr key={f.case_id}>
+              <Fragment key={f.case_id}>
+              <tr onClick={() => setAbierto(abierto === f.case_id ? null : f.case_id)}
+                style={{ cursor: "pointer", background: abierto === f.case_id ? "#f8fafc" : "transparent" }}>
                 <td style={{ ...td, fontWeight: 600 }}>
                   {f.case_id}
                   {f.sin_avisos ? (
@@ -271,12 +313,25 @@ export default function PnrCobrosMX() {
                     : <span style={{ color: "#b45309", fontWeight: 600 }}>por asignar</span>}
                 </td>
                 <td style={td}>
-                  <ChipAviso label="inicial" ts={f.avisado_inicial_en} />
-                  <ChipAviso label="24h" ts={f.avisado_24h_en} />
-                  <ChipAviso label="final chofer" ts={f.avisado_final_cond_en} />
-                  <ChipAviso label="final sup" ts={f.avisado_final_sup_en} />
+                  {f.sin_avisos
+                    ? <span style={{ fontSize: 10, color: "#94a3b8" }}>sin avisos</span>
+                    : f.resumen_avisos.map(([tipo, n]) => <ChipResumen key={tipo} label={tipo} n={n} />)}
+                  <div style={{ fontSize: 9, color: "#94a3b8", marginTop: 2 }}>
+                    {abierto === f.case_id ? "ocultar detalle" : "ver detalle"}
+                  </div>
                 </td>
               </tr>
+              {abierto === f.case_id ? (
+                <tr>
+                  <td colSpan={9} style={{ padding: "10px 14px 14px 14px", background: "#f8fafc", borderBottom: "1px solid #e4e7ec" }}>
+                    <div style={{ fontSize: 10, fontWeight: 700, color: "#64748b", marginBottom: 6 }}>
+                      Historial de avisos
+                    </div>
+                    <DetalleAvisos lista={f.avisos} />
+                  </td>
+                </tr>
+              ) : null}
+              </Fragment>
             ))}
           </tbody>
         </table>
