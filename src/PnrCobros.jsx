@@ -2,9 +2,9 @@ import { Fragment, useEffect, useMemo, useState } from "react";
 import { sb } from "./shared";
 
 // ─── PNR — Cobro a terceros ─────────────────────────────────────────
-// Lista los PNR que pasaron a facturación en la semana, con placa,
-// empresa transportista sugerida y el historial de avisos.
-// Solo lectura: no inserta en cobros_pnr_mx todavía.
+// Lista los PNR que pasaron a facturación en la semana y permite
+// agregar cada uno a la conciliación del transportista como línea
+// negativa, dejando registro de quién lo hizo.
 
 const ANCLA_SEM = Date.UTC(2026, 5, 1); // lunes de la semana 24
 
@@ -43,6 +43,24 @@ function normalizarPlaca(p) {
   const s = String(p).trim().toUpperCase().replace(/^SDD-/, "");
   return s || null;
 }
+
+// Mismo cálculo de totales que Conciliación Terceros: el IVA se aplica
+// sobre el neto y los cobros se restan del bruto.
+function recalcSC(filas, cobros) {
+  const reales = (filas || []).filter(d => !d._saldo);
+  const neto = Math.round((filas || []).reduce((s, d) => s + Number(d.monto || 0), 0) * 100) / 100;
+  const neg = neto < 0;
+  const iva = neg ? 0 : Math.round(neto * 0.16 * 100) / 100;
+  const bruto = neg ? neto : Math.round(neto * 1.16 * 100) / 100;
+  const c = Number(cobros || 0);
+  const liquido = Math.round((bruto - c) * 100) / 100;
+  return {
+    neto, iva, bruto, cobros: c, liquido, negativo: neg,
+    nViajes: reales.length, nNoPago: reales.filter(d => d.es_no_pago).length,
+  };
+}
+
+const lineaId = (d) => d._id || `m|${String(d.fecha || "").slice(0, 10)}|${d.placa || ""}|${d.id_ruta || ""}|${d.service_center_id || ""}`;
 
 const money = (n) => "$" + Number(n || 0).toLocaleString("es-MX", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
@@ -110,13 +128,17 @@ function DetalleAvisos({ lista }) {
   );
 }
 
-export default function PnrCobrosMX() {
+export default function PnrCobrosMX({ usuario }) {
   const [semana, setSemana] = useState(() => semanaInventario(new Date().toISOString()));
   const [filas, setFilas] = useState([]);
+  const [cobrados, setCobrados] = useState({});
   const [loading, setLoading] = useState(false);
+  const [guardando, setGuardando] = useState(null);
   const [msg, setMsg] = useState(null);
   const [busqueda, setBusqueda] = useState("");
   const [abierto, setAbierto] = useState(null);
+
+  const quien = (usuario && (usuario.nombre || usuario.email)) || "Brain";
 
   useEffect(() => { cargar(semana); }, [semana]);
 
@@ -138,11 +160,11 @@ export default function PnrCobrosMX() {
       const facturadoEn = {};
       for (const h of hist || []) if (!facturadoEn[h.case_id]) facturadoEn[h.case_id] = h.creado_en;
       const ids = Object.keys(facturadoEn).map(Number);
-      if (!ids.length) { setFilas([]); setLoading(false); return; }
+      if (!ids.length) { setFilas([]); setCobrados({}); setLoading(false); return; }
 
       // 2) datos del caso
       const { data: casos, error: e2 } = await sb.from("pnr_casos_mx")
-        .select("case_id, monto, moneda, conductor, service_center, route_code, route_id, tercero_id")
+        .select("case_id, shipment_id, monto, moneda, conductor, service_center, route_code, route_id, tercero_id")
         .in("case_id", ids);
       if (e2) throw e2;
 
@@ -155,6 +177,13 @@ export default function PnrCobrosMX() {
       for (const a of avs || []) {
         (avisosPorCaso[a.case_id] = avisosPorCaso[a.case_id] || []).push(a);
       }
+
+      // 2c) los que ya se agregaron a una conciliación
+      const yaCobrados = {};
+      const { data: cob } = await sb.from("cobros_pnr_mx")
+        .select("pnr_id, empresa_nombre, service_center, semana, monto, asignado_por, enviado_a_cobro_en")
+        .in("pnr_id", ids.map(String));
+      for (const c of cob || []) yaCobrados[c.pnr_id] = c;
 
       // 3) placa y fecha de ruta desde la jornada
       const rutas = [...new Set((casos || []).map(c => c.route_id).filter(Boolean))];
@@ -207,12 +236,133 @@ export default function PnrCobrosMX() {
       }).sort((a, b) => String(b.facturado_en).localeCompare(String(a.facturado_en)));
 
       setFilas(out);
+      setCobrados(yaCobrados);
     } catch (e) {
       console.error("PNR cobros:", e);
-      setMsg("No se pudo cargar la semana: " + (e.message || e));
+      setMsg({ ok: false, txt: "No se pudo cargar la semana: " + (e.message || e) });
       setFilas([]);
     }
     setLoading(false);
+  };
+
+  // Agrega el PNR a la conciliación del transportista como línea negativa,
+  // igual que las líneas "COBRO ID … - PNR" que ya existen en las prefacturas.
+  const agregar = async (f) => {
+    if (!f.empresa) {
+      setMsg({ ok: false, txt: `El PNR ${f.case_id} no tiene empresa resuelta. Revisá la placa en el inventario de flota de la semana ${f.semana_ruta}.` });
+      return;
+    }
+    if (String(f.empresa).includes(" / ")) {
+      setMsg({ ok: false, txt: `La placa ${f.placa} aparece en más de una empresa esa semana (${f.empresa}). Corregí el inventario antes de cobrar.` });
+      return;
+    }
+    const sc = f.service_center || "SIN SC";
+    const monto = Math.abs(Number(f.monto || 0));
+    if (!monto) {
+      setMsg({ ok: false, txt: `El PNR ${f.case_id} no tiene monto.` });
+      return;
+    }
+    const etiqueta = `COBRO ID ${f.shipment_id || f.case_id} - PNR`;
+    if (!window.confirm(
+      `¿Agregar este cobro a la conciliación?\n\n${f.empresa} · ${sc} · semana ${semana}\n${etiqueta}\nPlaca ${f.placa || "—"} · ${f.conductor || ""}\nMonto: -${money(monto)}\n\nLa prefactura de esa empresa y SC vuelve a borrador y el movimiento queda auditado.`
+    )) return;
+
+    setGuardando(f.case_id); setMsg(null);
+    let insertado = false;
+    try {
+      // 1) marca el caso como cobrado; el unique de pnr_id evita el doble cobro
+      const { error: eIns } = await sb.from("cobros_pnr_mx").insert({
+        pnr_id: String(f.case_id),
+        empresa_nombre: f.empresa,
+        service_center: sc,
+        semana: String(semana),
+        fecha_ruta: f.fecha_ruta || String(f.facturado_en).slice(0, 10),
+        facturado_en: String(f.facturado_en).slice(0, 10),
+        driver_name: f.conductor || null,
+        placa: f.placa || null,
+        monto,
+        estado: "enviado",
+        enviado_a_cobro_en: new Date().toISOString(),
+        asignado_por: quien,
+      });
+      if (eIns) {
+        if (String(eIns.message || "").toLowerCase().includes("duplicate")) {
+          setMsg({ ok: false, txt: `El PNR ${f.case_id} ya fue enviado a cobro antes.` });
+          await cargar(semana); setGuardando(null); return;
+        }
+        throw eIns;
+      }
+      insertado = true;
+
+      // 2) líneas actuales de esa empresa y SC: si la prefactura ya fue editada
+      //    manda el detalle guardado; si no, las que devuelve el motor.
+      const { data: motor, error: eRpc } = await sb.rpc("get_conciliacion_terceros_detalle",
+        { p_semana: semana, p_empresa: f.empresa, p_sc: sc });
+      if (eRpc) throw eRpc;
+      let lineas = (motor || []).map(d => ({ ...d, _id: lineaId(d), origen: d.origen || "motor" }));
+
+      const { data: conc } = await sb.from("conciliaciones_terceros")
+        .select("service_center, detalle, total_cobros, estado")
+        .eq("empresa_nombre", f.empresa).eq("service_center", sc).eq("semana", semana).maybeSingle();
+      if (conc && Array.isArray(conc.detalle) && conc.detalle.length) {
+        lineas = conc.detalle.map(d => ({ ...d, _id: d._id || lineaId(d), origen: d.origen || "motor" }));
+      }
+
+      const idLinea = `pnr|${f.case_id}`;
+      if (lineas.some(d => lineaId(d) === idLinea)) {
+        setMsg({ ok: false, txt: `La conciliación de ${f.empresa} · ${sc} ya tenía la línea del PNR ${f.case_id}.` });
+        await cargar(semana); setGuardando(null); return;
+      }
+
+      const linea = {
+        _id: idLinea, origen: "pnr", es_manual: true,
+        fecha: f.fecha_ruta ? String(f.fecha_ruta).slice(0, 10) : null,
+        placa: f.placa || "—",
+        id_ruta: f.route_code || "",
+        driver_name: etiqueta,
+        service_center_id: sc,
+        tiene_auxiliar: false, cargado: null, entregado: null,
+        monto: -monto, es_no_pago: false,
+        pnr_case_id: f.case_id,
+        pnr_shipment_id: f.shipment_id || null,
+        agregado_por: quien,
+        agregado_at: new Date().toISOString(),
+      };
+      const filasSC = lineas.concat([linea]);
+
+      // 3) recalcula y guarda la prefactura en borrador
+      const { inicio } = rangoSemana(semana);
+      const tot = recalcSC(filasSC, Number((conc && conc.total_cobros) || 0));
+      const { error: eUp } = await sb.from("conciliaciones_terceros").upsert({
+        empresa_nombre: f.empresa, service_center: sc, semana,
+        semana_inicio: inicio.toISOString().slice(0, 10), estado: "borrador",
+        total_neto: tot.neto, iva_16: tot.iva, total_bruto: tot.bruto,
+        total_cobros: tot.cobros, liquido_pago: tot.liquido,
+        n_viajes: tot.nViajes, n_no_pago: tot.nNoPago,
+        detalle: filasSC, tiene_ajustes: true,
+        generado_at: new Date().toISOString(),
+      }, { onConflict: "empresa_nombre,service_center,semana" });
+      if (eUp) throw eUp;
+
+      // 4) auditoría del ajuste
+      await sb.from("conciliacion_terceros_ajustes").insert({
+        empresa_nombre: f.empresa, service_center: sc, semana,
+        accion: "agregar", origen_linea: "pnr", linea,
+        motivo: `Cobro de PNR ${f.case_id} (guía ${f.shipment_id || "—"}) por ${money(monto)}`,
+        usuario: quien,
+      });
+
+      setMsg({ ok: true, txt: `PNR ${f.case_id} agregado a ${f.empresa} · ${sc} por -${money(monto)}. La prefactura volvió a borrador: generála y enviála para que el descuento salga.` });
+      await cargar(semana);
+    } catch (e) {
+      console.error("agregar cobro PNR:", e);
+      // si la conciliación falló, no dejamos el caso marcado como cobrado
+      if (insertado) {
+        try { await sb.from("cobros_pnr_mx").delete().eq("pnr_id", String(f.case_id)); } catch (e2) { console.error(e2); }
+      }
+      setMsg({ ok: false, txt: "No se pudo agregar el cobro: " + (e.message || e) });
+    }
+    setGuardando(null);
   };
 
   const visibles = useMemo(() => {
@@ -222,8 +372,9 @@ export default function PnrCobrosMX() {
       .some(v => String(v || "").toUpperCase().includes(q)));
   }, [filas, busqueda]);
 
-  const total = visibles.reduce((s, f) => s + Number(f.monto || 0), 0);
-  const sinEmpresa = visibles.filter(f => !f.empresa).length;
+  const pendientes = visibles.filter(f => !cobrados[String(f.case_id)]);
+  const totalPend = pendientes.reduce((s, f) => s + Number(f.monto || 0), 0);
+  const sinEmpresa = pendientes.filter(f => !f.empresa).length;
 
   return (
     <div style={{ padding: 24, fontFamily: "Geist, sans-serif" }}>
@@ -231,7 +382,7 @@ export default function PnrCobrosMX() {
         <div>
           <div style={{ fontSize: 16, fontWeight: 700, color: "#1a3a6b" }}>PNR — cobro a terceros</div>
           <div style={{ fontSize: 11, color: "#64748b" }}>
-            Casos que pasaron a facturación en la semana. La empresa se resuelve con el inventario de flota de la semana de la ruta.
+            Casos que pasaron a facturación en la semana. Agregar carga el cobro en la conciliación del transportista como línea negativa.
           </div>
         </div>
         <div style={{ flex: 1 }} />
@@ -256,13 +407,16 @@ export default function PnrCobrosMX() {
       </div>
 
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
-        <Kpi label="Casos facturados" valor={visibles.length} />
-        <Kpi label="Monto a cobrar" valor={money(total)} sub="suma del valor del paquete" />
-        <Kpi label="Sin empresa" valor={sinEmpresa} sub={sinEmpresa ? "requieren asignación manual" : "todos resueltos"} />
+        <Kpi label="Pendientes de cobro" valor={pendientes.length} sub={`${visibles.length} facturados en la semana`} />
+        <Kpi label="Monto por cobrar" valor={money(totalPend)} sub="suma del valor del paquete" />
+        <Kpi label="Sin empresa" valor={sinEmpresa} sub={sinEmpresa ? "requieren revisar la placa" : "todos resueltos"} />
       </div>
 
       {msg ? (
-        <div style={{ padding: 10, marginBottom: 12, background: "#fdecea", color: "#7f1d1d", borderRadius: 6, fontSize: 12 }}>{msg}</div>
+        <div style={{
+          padding: 10, marginBottom: 12, borderRadius: 6, fontSize: 12,
+          background: msg.ok ? "#e8f5e9" : "#fdecea", color: msg.ok ? "#1b5e20" : "#7f1d1d",
+        }}>{msg.txt}</div>
       ) : null}
 
       <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10, overflow: "auto" }}>
@@ -278,61 +432,86 @@ export default function PnrCobrosMX() {
               <th style={th}>Ruta</th>
               <th style={th}>Empresa transportista</th>
               <th style={th}>Avisos</th>
+              <th style={{ ...th, textAlign: "right" }}>Cobro</th>
             </tr>
           </thead>
           <tbody>
             {!loading && !visibles.length ? (
-              <tr><td style={{ ...td, textAlign: "center", color: "#94a3b8", padding: 30 }} colSpan={9}>
+              <tr><td style={{ ...td, textAlign: "center", color: "#94a3b8", padding: 30 }} colSpan={10}>
                 Sin PNR facturados en esta semana.
               </td></tr>
             ) : null}
-            {visibles.map(f => (
-              <Fragment key={f.case_id}>
-              <tr onClick={() => setAbierto(abierto === f.case_id ? null : f.case_id)}
-                style={{ cursor: "pointer", background: abierto === f.case_id ? "#f8fafc" : "transparent" }}>
-                <td style={{ ...td, fontWeight: 600 }}>
-                  {f.case_id}
-                  {f.sin_avisos ? (
-                    <div style={{ fontSize: 9, color: "#b45309", fontWeight: 600 }}>nació facturado</div>
+            {visibles.map(f => {
+              const ya = cobrados[String(f.case_id)];
+              return (
+                <Fragment key={f.case_id}>
+                  <tr style={{ background: abierto === f.case_id ? "#f8fafc" : (ya ? "#fbfdfb" : "transparent") }}>
+                    <td style={{ ...td, fontWeight: 600 }}>
+                      {f.case_id}
+                      {f.sin_avisos ? (
+                        <div style={{ fontSize: 9, color: "#b45309", fontWeight: 600 }}>nació facturado</div>
+                      ) : null}
+                    </td>
+                    <td style={td}>{fechaHora(f.facturado_en)}</td>
+                    <td style={{ ...td, textAlign: "right", fontWeight: 600 }}>{money(f.monto)}</td>
+                    <td style={td}>{f.conductor || "—"}</td>
+                    <td style={td}>{f.placa || <span style={{ color: "#b45309" }}>sin placa</span>}</td>
+                    <td style={td}>{f.service_center || "—"}</td>
+                    <td style={td}>
+                      {f.route_code || "—"}
+                      <div style={{ fontSize: 9, color: "#94a3b8" }}>
+                        {soloFecha(f.fecha_ruta)}{f.semana_ruta != null ? ` · sem ${f.semana_ruta}` : ""}
+                      </div>
+                    </td>
+                    <td style={td}>
+                      {f.empresa
+                        ? f.empresa
+                        : <span style={{ color: "#b45309", fontWeight: 600 }}>por asignar</span>}
+                    </td>
+                    <td style={{ ...td, cursor: "pointer" }} onClick={() => setAbierto(abierto === f.case_id ? null : f.case_id)}>
+                      {f.sin_avisos
+                        ? <span style={{ fontSize: 10, color: "#94a3b8" }}>sin avisos</span>
+                        : f.resumen_avisos.map(([tipo, n]) => <ChipResumen key={tipo} label={tipo} n={n} />)}
+                      <div style={{ fontSize: 9, color: "#94a3b8", marginTop: 2 }}>
+                        {abierto === f.case_id ? "ocultar detalle" : "ver detalle"}
+                      </div>
+                    </td>
+                    <td style={{ ...td, textAlign: "right", whiteSpace: "nowrap" }}>
+                      {ya ? (
+                        <div>
+                          <div style={{ fontSize: 10, fontWeight: 700, color: "#1b5e20" }}>cobrado</div>
+                          <div style={{ fontSize: 9, color: "#94a3b8" }}>
+                            {ya.asignado_por} · {fechaHora(ya.enviado_a_cobro_en)}
+                          </div>
+                          <div style={{ fontSize: 9, color: "#94a3b8" }}>sem {ya.semana}</div>
+                        </div>
+                      ) : (
+                        <button onClick={() => agregar(f)} disabled={guardando === f.case_id || !f.empresa}
+                          title={!f.empresa ? "Falta resolver la empresa transportista" : "Agregar como línea negativa a la conciliación"}
+                          style={{
+                            padding: "5px 12px", fontSize: 11, fontWeight: 600, borderRadius: 6, border: "none",
+                            background: f.empresa ? "#1a3a6b" : "#e4e7ec", color: f.empresa ? "#fff" : "#94a3b8",
+                            cursor: (guardando === f.case_id || !f.empresa) ? "not-allowed" : "pointer",
+                            opacity: guardando === f.case_id ? 0.5 : 1,
+                          }}>
+                          {guardando === f.case_id ? "Agregando…" : "Agregar"}
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                  {abierto === f.case_id ? (
+                    <tr>
+                      <td colSpan={10} style={{ padding: "10px 14px 14px 14px", background: "#f8fafc", borderBottom: "1px solid #e4e7ec" }}>
+                        <div style={{ fontSize: 10, fontWeight: 700, color: "#64748b", marginBottom: 6 }}>
+                          Historial de avisos
+                        </div>
+                        <DetalleAvisos lista={f.avisos} />
+                      </td>
+                    </tr>
                   ) : null}
-                </td>
-                <td style={td}>{fechaHora(f.facturado_en)}</td>
-                <td style={{ ...td, textAlign: "right", fontWeight: 600 }}>{money(f.monto)}</td>
-                <td style={td}>{f.conductor || "—"}</td>
-                <td style={td}>{f.placa || <span style={{ color: "#b45309" }}>sin placa</span>}</td>
-                <td style={td}>{f.service_center || "—"}</td>
-                <td style={td}>
-                  {f.route_code || "—"}
-                  <div style={{ fontSize: 9, color: "#94a3b8" }}>
-                    {soloFecha(f.fecha_ruta)}{f.semana_ruta != null ? ` · sem ${f.semana_ruta}` : ""}
-                  </div>
-                </td>
-                <td style={td}>
-                  {f.empresa
-                    ? f.empresa
-                    : <span style={{ color: "#b45309", fontWeight: 600 }}>por asignar</span>}
-                </td>
-                <td style={td}>
-                  {f.sin_avisos
-                    ? <span style={{ fontSize: 10, color: "#94a3b8" }}>sin avisos</span>
-                    : f.resumen_avisos.map(([tipo, n]) => <ChipResumen key={tipo} label={tipo} n={n} />)}
-                  <div style={{ fontSize: 9, color: "#94a3b8", marginTop: 2 }}>
-                    {abierto === f.case_id ? "ocultar detalle" : "ver detalle"}
-                  </div>
-                </td>
-              </tr>
-              {abierto === f.case_id ? (
-                <tr>
-                  <td colSpan={9} style={{ padding: "10px 14px 14px 14px", background: "#f8fafc", borderBottom: "1px solid #e4e7ec" }}>
-                    <div style={{ fontSize: 10, fontWeight: 700, color: "#64748b", marginBottom: 6 }}>
-                      Historial de avisos
-                    </div>
-                    <DetalleAvisos lista={f.avisos} />
-                  </td>
-                </tr>
-              ) : null}
-              </Fragment>
-            ))}
+                </Fragment>
+              );
+            })}
           </tbody>
         </table>
       </div>

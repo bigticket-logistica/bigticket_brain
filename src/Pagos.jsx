@@ -5757,6 +5757,7 @@ function ModuloPagosMadre({ usuario }) {
     { id: "torre_3p",    label: "Torre de Control Pagos", desc: "3 Pilares · MELI vs Operación" },
     { id: "terceros",    label: "Terceros",              desc: "Empresas subcontratadas por patente" },
     { id: "conciliacion", label: "Conciliación Terceros", desc: "Conciliación semanal por empresa" },
+    { id: "pnr_cobros",  label: "PNR",                   desc: "Cobro de PNR a terceros por semana" },
     { id: "historial_pago", label: "Historial de Pago", desc: "Resumen semanal: cierres, cambios, saldos y reporte" },
     { id: "ayudantes",   label: "Ayudantes",             desc: "Números del día y aprobación del pago del ayudante" },
     { id: "cierre_dia",  label: "Cierre del Día",        desc: "Salud del día por ruta: conciliación entre Torre, KM, informe y escaneos" },
@@ -5765,7 +5766,6 @@ function ModuloPagosMadre({ usuario }) {
     { id: "padron_meli", label: "Padrón MELI",         desc: "Conductores y vehículos · altas, bajas y cambios diarios" },
     { id: "prefacturas", label: "Prefacturas",           desc: "Envío masivo de prefacturas MX" },
     { id: "mermas",      label: "Cobros Mermas",         desc: "Cobro de mermas a terceros por SC" },
-    { id: "pnr_cobros",  label: "PNR",                   desc: "Cobro de PNR a terceros por semana" },
     { id: "config",      label: "Configuración",         desc: "Tarifario, zonas y reglas" },
   ];
 
@@ -5811,6 +5811,7 @@ function ModuloPagosMadre({ usuario }) {
           {subtab === "torre_3p"    && <TorreTresPilares />}
           {subtab === "terceros"    && <TercerosMX />}
           {subtab === "conciliacion" && <ConciliacionTercerosMX usuario={usuario} />}
+          {subtab === "pnr_cobros"  && <PnrCobrosMX usuario={usuario} />}
           {subtab === "historial_pago" && <HistorialPagoMX usuario={usuario} />}
           {subtab === "ayudantes"   && <AyudantesDetalleDia usuario={usuario} />}
           {subtab === "cierre_dia"  && <CierreDelDia />}
@@ -5819,7 +5820,6 @@ function ModuloPagosMadre({ usuario }) {
           {subtab === "padron_meli" && <PadronMeliAdmin usuario={usuario} />}
           {subtab === "prefacturas" && <ModuloPrefacturasEnvio usuario={usuario} />}
           {subtab === "mermas"      && <ModuloCobrosMermas usuario={usuario} logoB64={LOGO_PREFACTURA_B64} />}
-          {subtab === "pnr_cobros"  && <PnrCobrosMX />}
           {subtab === "config"      && <ConfiguracionPagos />}
         </>
       )}
