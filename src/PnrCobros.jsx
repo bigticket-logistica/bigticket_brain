@@ -356,13 +356,23 @@ export default function PnrCobrosMX({ usuario }) {
   const resolverSc = async (empresa, scPreferido, cache) => {
     const k = empresa;
     if (!cache[k]) {
+      const cuenta = {};
       const { data, error } = await sb.rpc("get_conciliacion_terceros_detalle",
         { p_semana: semanaCobro, p_empresa: empresa, p_sc: null });
       if (error) throw error;
-      const cuenta = {};
       for (const d of data || []) {
         const sc = d.service_center_id || "SIN SC";
         cuenta[sc] = (cuenta[sc] || 0) + 1;
+      }
+      // El motor no siempre devuelve las líneas de una prefactura ya generada.
+      // Las prefacturas guardadas son la prueba directa de que hay operación,
+      // así que también cuentan como SC disponible.
+      const { data: conc } = await sb.from("conciliaciones_terceros")
+        .select("service_center, n_viajes")
+        .eq("empresa_nombre", empresa).eq("semana", semanaCobro);
+      for (const c of conc || []) {
+        const sc = c.service_center || "SIN SC";
+        if (!cuenta[sc]) cuenta[sc] = Number(c.n_viajes || 0) || 1;
       }
       cache[k] = cuenta;
     }
