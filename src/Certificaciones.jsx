@@ -1024,55 +1024,65 @@ function cargarScriptMifiel() {
 // puede editarlos manualmente, y el Brain llena la plantilla con pdf-lib:
 // Hoja de Firmas (pág 11) + Anexo A (pág 13) + Backup A.2 (pág 14).
 const CONTRATO_COORDS = {
-  plantilla: "plantillas/contrato_transportista_v2.pdf",
+  // ── Plantilla v2.0 (EO_Inhouse_ContratoTransportista_v2_0) ──
+  // Todas las coordenadas fueron REMEDIDAS sobre esta plantilla: la v1.0
+  // tenía el bloque Modelo 30 pt más arriba y las filas de la tabla en
+  // otra posición, así que reusar las anteriores dejaba las cruces fuera
+  // de sus casillas. Verificado renderizando las 3 filas sobre el PDF.
+  //
+  // Convención: las cajas ☐ se midieron con pdfplumber (x0, y0) y aquí
+  // van con la calibración de dibujo +0.5 / +0.3, que es donde pdf-lib
+  // centra la X dentro de la casilla.
+  plantilla: "plantillas/contrato_transportista_v2_0.pdf",
   pagFirmas: 10, pagAnexoA: 12, pagA2: 13,
   firmas: {
-    dia: { x: 188, y: 318.5, s: 9 }, mes: { x: 228, y: 318.5, s: 9 }, anio: { x: 330, y: 318.5, s: 9 },
-    nombre: { x: 421, y: 279, s: 8 }, rfc: { x: 338, y: 268.5, s: 8.5 }, rep: { x: 424, y: 258, s: 8.5 },
-    chkMoral: { x: 372.5, y: 206.3 }, chkFisica: { x: 553.9, y: 206.3 },
-    col: 311.7, tNombre: 194.8, tRfc: 182.8, tDomicilio: 170.7, tRep: 158.7, tCorreo: 146.6, tRepse: 134.6,
+    dia: { x: 97.4, y: 687.9, s: 9 }, mes: { x: 128.9, y: 687.9, s: 9 }, anio: { x: 224.0, y: 687.9, s: 9 },
+    nombre: { x: 380, y: 652.0, s: 8 }, rfc: { x: 330, y: 641.1, s: 8.5 }, rep: { x: 400, y: 630.1, s: 8.5 },
+    chkMoral: { x: 364.2, y: 584.7 }, chkFisica: { x: 517.9, y: 584.7 },
+    col: 311.7,
+    tNombre: 572.6, tRfc: 560.0, tDomicilio: 547.4, tRep: 534.8, tCorreo: 522.2, tRepse: 509.6,
   },
   anexoA: {
-    col: 311.7, nombre: 602.9, rfc: 590.8, rep: 578.8, correo: 566.7,
-    chkMeli: { x: 371.7, y: 555.6 }, chkOtro: { x: 406.8, y: 555.6 },
-    chkB2bSi: { x: 322.1, y: 545.3 }, chkB2bNo: { x: 350.5, y: 545.3 },
-    fechaInicio: 534.1, vigencia: 522.0,
-    modX: 223.0, modY: { SDD: 458.3, Spot: 415.5, Backup: 377.3 },
-    filasY: [293.0, 243.1, 193.2], ayudanteY: [301.0, 251.1, 201.2],
-    svcX: 100, cantX: 292, ayuSiX: 350.2, ayuNoX: 375.0, obsX: 512,
-    // Casillas de la TABLA DE LÍNEAS (una fila por unidad). x absoluto y
-    // dy relativo al ancla de la fila (filasY). Medidas sobre la plantilla
-    // v2, página 13 (índice 12) — cada casilla va bajo su etiqueta.
+    col: 311.7, nombre: 634.1, rfc: 621.5, rep: 608.9, correo: 596.3,
+    chkMeli: { x: 363.4, y: 584.9 }, chkOtro: { x: 392.5, y: 584.9 },
+    chkB2bSi: { x: 320.3, y: 574.1 }, chkB2bNo: { x: 343.9, y: 574.1 },
+    fechaInicio: 562.1, vigencia: 549.5,
+    modX: 223.2, modY: { SDD: 488.4, Spot: 453.1, Backup: 422.9 },
+    // Ancla de cada fila = baseline del número de línea. El espaciado NO
+    // es uniforme en esta plantilla (fila1→2 = 48 pt, fila2→3 = 52.2 pt),
+    // por eso van las tres explícitas en vez de calcularse con un delta.
+    filasY: [343.7, 295.7, 243.5],
+    svcX: 100, cantX: 292, obsX: 512,
     lin: {
       modelo: {
-        "SDD":    { x: 181.4, dy:  3.9 },
-        "Spot":   { x: 163.9, dy: -4.2 },
-        "Backup": { x: 205.1, dy: -4.2 },
+        "SDD":    { x: 178.9, dy:  4.5 },
+        "Spot":   { x: 204.9, dy:  4.5 },
+        "Backup": { x: 191.9, dy: -4.0 },
       },
       tipo: {
-        "Large Van":  { x: 223.2, dy:  3.9 },
-        "Small Van":  { x: 223.2, dy: -4.2 },
-        "Car":        { x: 250.5, dy: -4.2 },
-        "Medium Van": { x: 264.7, dy: -12.4 },
+        "Large Van":  { x: 254.2, dy:  13.1 },
+        "Small Van":  { x: 254.9, dy:   4.5 },
+        "Car":        { x: 235.4, dy:  -4.0 },
+        "Medium Van": { x: 236.2, dy: -12.6 },
       },
       ayudante: {
-        "Sí":               { x: 350.3, dy:  8.0 },
-        "No":               { x: 375.1, dy:  8.0 },
-        "Según activación": { x: 379.6, dy: -8.3 },
+        "Sí":               { x: 348.8, dy:  8.8 },
+        "No":               { x: 369.5, dy:  8.8 },
+        "Según activación": { x: 374.3, dy: -8.2 },
       },
       tarifa: {
-        "Tabla vigente": { x: 460.2, dy: -0.1 },
-        "Especial":      { x: 460.2, dy: -8.3 },
+        "Tabla vigente": { x: 501.3, dy:  4.5 },
+        "Especial":      { x: 491.1, dy: -4.0 },
       },
     },
   },
   a2: {
     col: 311.7,
-    chkSi: { x: 322.1, y: 529.2 }, chkNo: { x: 350.5, y: 529.2 },
-    transportista: 517.7, svc: 505.6, dias: 493.6,
-    chkLarge: { x: 355.4, y: 482.8 }, chkSmall: { x: 413.1, y: 482.8 }, chkCar: { x: 444.3, y: 482.8 },
-    chkCostoSi: { x: 322.1, y: 451.9 }, chkCostoNo: { x: 350.5, y: 451.9 }, chkCostoPropio: { x: 458.0, y: 451.9 },
-    chkAprOper: { x: 364.9, y: 441.6 }, chkAprGer: { x: 418.3, y: 441.6 }, chkAprFin: { x: 470.9, y: 441.6 },
+    chkSi: { x: 320.3, y: 559.7 }, chkNo: { x: 343.9, y: 559.7 },
+    transportista: 547.8, svc: 535.2, dias: 522.6,
+    chkLarge: { x: 347.9, y: 511.2 }, chkSmall: { x: 396.1, y: 511.2 }, chkCar: { x: 422.2, y: 511.2 },
+    chkCostoSi: { x: 320.3, y: 478.9 }, chkCostoNo: { x: 343.9, y: 478.9 }, chkCostoPropio: { x: 435.2, y: 478.9 },
+    chkAprOper: { x: 358.5, y: 468.1 }, chkAprGer: { x: 403.5, y: 468.1 }, chkAprFin: { x: 447.9, y: 468.1 },
   },
 };
 
