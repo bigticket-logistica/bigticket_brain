@@ -2888,6 +2888,22 @@ function ConciliacionTercerosMX({ usuario }) {
     for (const ln of lineasManualesDe(empresa, sc)) if (!have.has(ln._origenSC)) arr.push(ln);
     return arr;
   };
+  // Lineas manuales negativas ya cargadas que mencionan un SC con saldo AUN ABIERTO:
+  // se cobro a mano en vez de usar "Aplicar saldo de X aqui", asi que ese saldo sigue vivo
+  // y se vuelve a descontar cada semana. Devuelve [{ sc, pendiente, semanaOrigen, lineas }].
+  const cobrosManualesDeSaldoAbierto = (empresa, sc) => {
+    const abiertos = saldosOtrosSC(empresa, sc);
+    if (!abiertos.length) return [];
+    const filas = (detalles[empresa] || []).filter(d => (d.service_center_id || "SIN SC") === sc && Number(d.monto || 0) < 0);
+    const out = [];
+    for (const si of abiertos) {
+      const code = String(si.sc || "").toUpperCase();
+      if (!code) continue;
+      const lineas = filas.filter(d => `${d.driver_name || ""} ${d.placa || ""}`.toUpperCase().includes(code));
+      if (lineas.length) out.push({ ...si, lineas });
+    }
+    return out;
+  };
   const saldosOtrosSC = (empresa, sc) => Object.keys(saldosPorSC).filter(k => k.startsWith(norm(empresa) + "||")).map(k => saldosPorSC[k]).filter(si => si && si.pendiente < 0 && norm(si.sc) !== norm(sc));
   const aplicadoManual = (empresa, sc, origenSC) => (aplicManual[`${norm(empresa)}||${norm(sc)}`] || []).some(a => a.origenSC === origenSC);
   const aplicarSaldoManual = (empresa, sc, origenSC) => {
@@ -3061,6 +3077,20 @@ function ConciliacionTercerosMX({ usuario }) {
     const f = formLinea; if (!f) return;
     const monto = Number(f.monto);
     if (f.monto === "" || isNaN(monto)) return alert("El monto es obligatorio y debe ser numérico.");
+    // Si el concepto menciona un SC que tiene saldo pendiente abierto, avisar: cobrarlo a mano
+    // deja ese saldo vivo y vuelve a descontarse cada semana. Lo correcto es "Aplicar saldo de X aquí".
+    const _abiertos = saldosOtrosSC(f.empresa, f.sc);
+    if (monto < 0 && _abiertos.length) {
+      const _txt = `${f.concepto || ""} ${f.driver_name || ""}`.toUpperCase();
+      const _coincide = _abiertos.filter(si => _txt.includes(String(si.sc || "").toUpperCase()));
+      if (_coincide.length) {
+        const _d = _coincide.map(si => `• ${si.sc}: ${fmtMon(si.pendiente)} (origen sem ${si.semanaOrigen})`).join("\n");
+        if (!confirm(`\u26a0 Esta l\u00ednea menciona un SC que tiene SALDO PENDIENTE abierto:\n\n${_d}\n\n`
+          + `Si cobr\u00e1s a mano, el saldo de ese SC NO se cierra y va a seguir descont\u00e1ndose cada semana.\n`
+          + `Lo correcto es usar el bot\u00f3n \u201cAplicar saldo de ${_coincide[0].sc} aqu\u00ed\u201d, que cobra y cierra el saldo de una vez.\n\n`
+          + `\u00bfGuardar igual la l\u00ednea manual?`)) return;
+      }
+    }
     if (f.tipo === "viaje" && !f.placa.trim()) return alert("La patente es obligatoria para un viaje completo.");
     const clave = claveCierre(f.empresa, f.sc); setGuardandoEdit(clave);
     try {
@@ -5180,6 +5210,23 @@ function ConciliacionTercerosMX({ usuario }) {
                                   {netoSemana !== 0 && <div style={{ fontSize: 11, color: neteado < 0 ? "#9a3412" : "#166534", marginTop: 4, fontWeight: 700 }}>{`Con los viajes de esta semana (${fmtMon(netoSemana)}): neto resultante ${fmtMon(neteado)}${neteado < 0 ? " \u2192 sigue pendiente" : " \u2192 se concilia y se paga"}.`}</div>}
                                   <div style={{ marginTop: 8 }}><button onClick={(e) => { e.stopPropagation(); consolidarSaldoManual(g.empresa, rSC.service_center); }} title="Dar por cerrado por acuerdo: elimina el saldo de la base y deja de arrastrarse/sumar" style={{ fontSize: 11, fontWeight: 700, color: "#fff", background: "#b91c1c", border: "none", borderRadius: 6, padding: "5px 12px", cursor: "pointer" }}>🗑 Consolidar (eliminar saldo por acuerdo)</button></div>
                                 </div>);
+                              })()}
+                              {!esSinEmpresa && (() => {
+                                const _dobles = cobrosManualesDeSaldoAbierto(g.empresa, rSC.service_center);
+                                if (!_dobles.length) return null;
+                                return (
+                                  <div style={{ marginBottom: 10, border: "1.5px solid #dc2626", background: "#fef2f2", borderRadius: 8, padding: "10px 12px" }}>
+                                    <div style={{ fontSize: 11, fontWeight: 800, color: "#991b1b", marginBottom: 4 }}>
+                                      ⚠ Cobro manual sobre un saldo que sigue abierto — riesgo de doble descuento
+                                    </div>
+                                    {_dobles.map(x => (
+                                      <div key={x.sc} style={{ fontSize: 11, color: "#991b1b", marginTop: 3 }}>
+                                        Acá hay {x.lineas.length} línea(s) manual(es) que mencionan <b>{x.sc}</b>, y el saldo de {x.sc} sigue pendiente por <b>{fmtMon(x.pendiente)}</b> (origen sem {x.semanaOrigen}).
+                                        {" "}Si ya cobraste ese monto acá, andá a la tarjeta de {x.sc} y usá <b>Consolidar (eliminar saldo por acuerdo)</b> para cerrarlo; si no, quitá la línea manual y usá <b>Aplicar saldo de {x.sc} aquí</b>.
+                                      </div>
+                                    ))}
+                                  </div>
+                                );
                               })()}
                               {!esSinEmpresa && (rSC.estado_conciliacion === "sin_generar" || rSC.estado_conciliacion === "borrador") && saldosOtrosSC(g.empresa, rSC.service_center).length > 0 && (
                                 <div style={{ marginBottom: 10, border: "1px dashed #fdba74", background: "#fffbeb", borderRadius: 8, padding: "8px 12px" }}>
