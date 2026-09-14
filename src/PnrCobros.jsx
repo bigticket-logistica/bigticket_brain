@@ -374,7 +374,7 @@ export default function PnrCobrosMX({ usuario }) {
         _id: idLinea, origen: "pnr", es_manual: true,
         fecha: f.fecha_ruta ? String(f.fecha_ruta).slice(0, 10) : null,
         placa: f.placa || "—",
-        id_ruta: f.route_code || "",
+        id_ruta: f.route_id || "",   // el numérico, igual que el resto de la prefactura
         driver_name: etiqueta,
         service_center_id: sc,
         tiene_auxiliar: false, cargado: null, entregado: null,
