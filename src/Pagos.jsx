@@ -9889,6 +9889,9 @@ function PagosPausados({ usuario }) {
       const por = (usuario && (usuario.nombre || usuario.email)) || "Brain";
       const { error } = await sb.from("maestro_jornada_mx").update({ pausado: false, liberado_at: new Date().toISOString(), liberado_por: por }).eq("id", r.id);
       if (error) throw error;
+      // Quita la excepción: la ruta vuelve a verse aprobada en el portal del tercero
+      const { error: eRev } = await sb.from("revision_ruta_mx").delete().eq("fecha", r.fecha).eq("id_ruta", r.id_ruta);
+      if (eRev) alert("El pago se activó, pero el portal del tercero sigue mostrándolo en revisión:\n\n" + eRev.message);
       cargar();
     } catch (e) { alert("Error activando: " + (e.message || e)); }
   };
