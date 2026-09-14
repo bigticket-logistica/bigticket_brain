@@ -2876,7 +2876,7 @@ function ConciliacionTercerosMX({ usuario }) {
     const man = lineasManualesDe(empresa, rSC.service_center).reduce((a, d) => a + Number(d.monto || 0), 0);
     return Math.round((nv + prev + man) * 100) / 100;
   };
-  const lineasManualesDe = (empresa, sc) => (aplicManual[`${norm(empresa)}||${norm(sc)}`] || []).map(a => ({ _saldo: true, _manual: true, _id: "saldoM|" + a.origenSC, _origenSC: a.origenSC, _origenKey: a.origenKey, _origenSem: a.origenSem, origen: "saldo_manual", fecha: null, placa: "\u2014", id_ruta: "", driver_name: `Saldo aplicado de ${a.origenSC} (sem ${a.origenSem})`, service_center_id: sc, tiene_auxiliar: false, cargado: null, entregado: null, monto: Number(a.monto || 0), es_no_pago: false }));
+  const lineasManualesDe = (empresa, sc) => (aplicManual[`${norm(empresa)}||${norm(sc)}`] || []).map(a => ({ _saldo: true, _manual: true, _id: "saldoM|" + a.origenSC, _origenSC: a.origenSC, _origenKey: a.origenKey, _origenSem: a.origenSem, origen: "saldo_manual", fecha: null, placa: "\u2014", id_ruta: "", driver_name: `Saldo aplicado de ${a.origenSC} (sem ${a.origenSem})${a.motivo ? " \u2014 " + a.motivo : ""}`, _motivo: a.motivo || null, service_center_id: sc, tiene_auxiliar: false, cargado: null, entregado: null, monto: Number(a.monto || 0), es_no_pago: false }));
   const filasConSaldoLine = (empresa, sc, filas) => {
     const arr = (filas || []).filter(d => !(d._saldo && !d._manual)); // quita la línea auto; conserva manuales ya guardadas
     const prev = saldoPrevioDe(empresa, sc);
@@ -2908,19 +2908,25 @@ function ConciliacionTercerosMX({ usuario }) {
   const aplicadoManual = (empresa, sc, origenSC) => (aplicManual[`${norm(empresa)}||${norm(sc)}`] || []).some(a => a.origenSC === origenSC);
   const aplicarSaldoManual = (empresa, sc, origenSC) => {
     const si = saldoInfoDe(empresa, origenSC); if (!si || !(si.pendiente < 0)) return;
+    // Motivo obligatorio: queda guardado junto al saldo, para no reconstruir después
+    // por qué la deuda de un SC se cobró en otro.
+    const motivo = window.prompt("Aplicar el saldo de " + origenSC + " (" + fmtMon(si.pendiente) + ", origen sem " + si.semanaOrigen + ") al cobro de " + sc + ".\n\nSe descuenta ac\u00e1 y el saldo de " + origenSC + " queda cerrado (neteado).\n\nMotivo / acuerdo con el transportista:", "");
+    if (motivo === null) return;
+    if (!motivo.trim()) return alert("El motivo es obligatorio: queda en la auditor\u00eda del saldo.");
     const tk = `${norm(empresa)}||${norm(sc)}`;
-    setAplicManual(prev => ({ ...prev, [tk]: [...((prev[tk] || []).filter(a => a.origenSC !== origenSC)), { origenSC, origenSem: si.semanaOrigen, monto: si.pendiente, origenKey: `${norm(empresa)}||${norm(origenSC)}` }] }));
+    setAplicManual(prev => ({ ...prev, [tk]: [...((prev[tk] || []).filter(a => a.origenSC !== origenSC)), { origenSC, origenSem: si.semanaOrigen, monto: si.pendiente, origenKey: `${norm(empresa)}||${norm(origenSC)}`, motivo: motivo.trim() }] }));
   };
   const quitarSaldoManual = (empresa, sc, origenSC) => {
     const tk = `${norm(empresa)}||${norm(sc)}`;
     setAplicManual(prev => ({ ...prev, [tk]: (prev[tk] || []).filter(a => a.origenSC !== origenSC) }));
   };
-  const conciliarSaldoManual = async (empresa, origenSC, targetSC) => {
+  const conciliarSaldoManual = async (empresa, origenSC, targetSC, motivo) => {
     try {
       const { data: row } = await sb.from("saldos_pendientes_terceros").select("*").eq("empresa_nombre", empresa).eq("service_center", origenSC).maybeSingle();
       if (!row) return;
       const det = (row.detalle && typeof row.detalle === "object") ? row.detalle : {};
-      det.liquidado_hasta = semana; det.aplicado_a = { sc: targetSC, sem: semana };
+      det.liquidado_hasta = semana;
+      det.aplicado_a = { sc: targetSC, sem: semana, motivo: motivo || null, por: (usuario && (usuario.nombre || usuario.email)) || "Brain", at: new Date().toISOString() };
       await sb.from("saldos_pendientes_terceros").update({ estado: "conciliado", saldo_pendiente: 0, semana_conciliacion: semana, conciliado_at: new Date().toISOString(), detalle: det }).eq("id", row.id);
     } catch (e) { console.error("conciliar saldo manual:", e); }
   };
@@ -3318,7 +3324,7 @@ function ConciliacionTercerosMX({ usuario }) {
       const _manualSum = Math.round(_manualLines.reduce((s, d) => s + Number(d.monto || 0), 0) * 100) / 100;
       const _netoParaSaldo = Math.round((tot.netoViajes + _manualSum) * 100) / 100;
       if (tot.saldoPrevio < 0 || _netoParaSaldo < 0) await persistirSaldoCierre(empresa, sc, _netoParaSaldo);
-      for (const ml of _manualLines) await conciliarSaldoManual(empresa, ml._origenSC, sc);
+      for (const ml of _manualLines) await conciliarSaldoManual(empresa, ml._origenSC, sc, ml._motivo);
       if (_manualLines.length) setAplicManual(prev => { const cp = { ...prev }; delete cp[`${norm(empresa)}||${norm(sc)}`]; return cp; });
       await logEvento(empresa, sc, tot.negativo ? "cerrar_pendiente" : "cerrar", tot, { estado: tot.negativo ? "pendiente_conciliacion" : "cerrada" });
       setMsg({ ok: true, txt: `Conciliación de ${empresa} · ${sc} cerrada (semana ${semana}).` });
@@ -4328,7 +4334,7 @@ function ConciliacionTercerosMX({ usuario }) {
     const _manualSum = Math.round(_manualLines.reduce((s, d) => s + Number(d.monto || 0), 0) * 100) / 100;
     const _netoParaSaldo = Math.round((netoViajes + _manualSum) * 100) / 100;
     if (prev < 0 || _netoParaSaldo < 0) await persistirSaldoCierre(empresa, sc, _netoParaSaldo);
-    for (const ml of _manualLines) await conciliarSaldoManual(empresa, ml._origenSC, sc);
+    for (const ml of _manualLines) await conciliarSaldoManual(empresa, ml._origenSC, sc, ml._motivo);
     if (_manualLines.length) setAplicManual(prev => { const cp = { ...prev }; delete cp[`${norm(empresa)}||${norm(sc)}`]; return cp; });
     await logEvento(empresa, sc, negativo ? "cerrar_pendiente" : "cerrar", { neto: tot.neto, bruto: tot.bruto, liquido: tot.liquido, nViajes: tot.nViajes }, { estado, detalle: { masivo: true, saldoPrevio: prev, netoViajes } });
     return { ok: true, negativo, neteado: tot.neto, liquido: tot.liquido };
