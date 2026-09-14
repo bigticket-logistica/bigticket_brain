@@ -430,6 +430,64 @@ export default function PnrCobrosMX({ usuario }) {
     setGuardando(null);
   };
 
+  // Deshace un cobro: saca la línea de la conciliación y libera el caso para
+  // volver a cobrarlo. Usa la empresa, SC y semana con que se cobró, no las
+  // que se ven ahora, porque el inventario de flota pudo haber cambiado.
+  const quitar = async (f, ya) => {
+    const sc = ya.service_center;
+    const sem = Number(ya.semana);
+    const { data: conc } = await sb.from("conciliaciones_terceros")
+      .select("detalle, total_cobros, estado")
+      .eq("empresa_nombre", ya.empresa_nombre).eq("service_center", sc).eq("semana", sem).maybeSingle();
+
+    const enviada = conc && String(conc.estado || "").toLowerCase() === "enviada";
+    if (!window.confirm(
+      `¿Quitar este cobro?\n\nPNR ${f.case_id} · ${ya.empresa_nombre} · ${sc} · semana ${sem}\nMonto: -${money(ya.monto)}\n` +
+      (enviada ? `\n⚠ Esta prefactura YA FUE ENVIADA al transportista. Va a volver a borrador y hay que generarla y enviarla de nuevo.\n` : "") +
+      `\nEl caso vuelve a quedar pendiente y se puede cobrar otra vez.`
+    )) return;
+
+    setGuardando(f.case_id); setMsg(null);
+    try {
+      const idLinea = `pnr|${f.case_id}`;
+      if (conc && Array.isArray(conc.detalle) && conc.detalle.length) {
+        const quedan = conc.detalle.filter(d => lineaId(d) !== idLinea);
+        if (quedan.length !== conc.detalle.length) {
+          const { inicio } = rangoSemana(sem);
+          const tot = recalcSC(quedan, Number(conc.total_cobros || 0));
+          const { error: eUp } = await sb.from("conciliaciones_terceros").upsert({
+            empresa_nombre: ya.empresa_nombre, service_center: sc, semana: sem,
+            semana_inicio: inicio.toISOString().slice(0, 10), estado: "borrador",
+            total_neto: tot.neto, iva_16: tot.iva, total_bruto: tot.bruto,
+            total_cobros: tot.cobros, liquido_pago: tot.liquido,
+            n_viajes: tot.nViajes, n_no_pago: tot.nNoPago,
+            detalle: quedan, tiene_ajustes: true,
+            generado_at: new Date().toISOString(),
+          }, { onConflict: "empresa_nombre,service_center,semana" });
+          if (eUp) throw eUp;
+
+          await sb.from("conciliacion_terceros_ajustes").insert({
+            empresa_nombre: ya.empresa_nombre, service_center: sc, semana: sem,
+            accion: "eliminar", origen_linea: "pnr",
+            linea: conc.detalle.find(d => lineaId(d) === idLinea) || null,
+            motivo: `Cobro de PNR ${f.case_id} revertido desde la pestaña PNR`,
+            usuario: quien,
+          });
+        }
+      }
+
+      const { error: eDel } = await sb.from("cobros_pnr_mx").delete().eq("pnr_id", String(f.case_id));
+      if (eDel) throw eDel;
+
+      setMsg({ ok: true, txt: `Cobro del PNR ${f.case_id} quitado de ${ya.empresa_nombre} · ${sc}. El caso vuelve a estar pendiente.` });
+      await cargar(semana);
+    } catch (e) {
+      console.error("quitar cobro PNR:", e);
+      setMsg({ ok: false, txt: "No se pudo quitar el cobro: " + (e.message || e) });
+    }
+    setGuardando(null);
+  };
+
   const visibles = useMemo(() => {
     const q = busqueda.trim().toUpperCase();
     if (!q) return filas;
@@ -560,6 +618,16 @@ export default function PnrCobrosMX({ usuario }) {
                             {ya.asignado_por} · {fechaHora(ya.enviado_a_cobro_en)}
                           </div>
                           <div style={{ fontSize: 9, color: "#94a3b8" }}>sem {ya.semana}</div>
+                          <button onClick={() => quitar(f, ya)} disabled={guardando === f.case_id}
+                            title="Sacar la línea de la conciliación y liberar el caso"
+                            style={{
+                              marginTop: 4, padding: "3px 10px", fontSize: 10, fontWeight: 600,
+                              borderRadius: 5, border: "1px solid #fca5a5", background: "#fff", color: "#b91c1c",
+                              cursor: guardando === f.case_id ? "not-allowed" : "pointer",
+                              opacity: guardando === f.case_id ? 0.5 : 1,
+                            }}>
+                            {guardando === f.case_id ? "Quitando…" : "Quitar"}
+                          </button>
                         </div>
                       ) : (
                         <button onClick={() => agregar(f)} disabled={guardando === f.case_id || !f.empresa || !f.sub_cobro}

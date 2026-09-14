@@ -3014,9 +3014,18 @@ function ConciliacionTercerosMX({ usuario }) {
       const filasSC = todas.filter(d => (d.service_center_id || "SIN SC") === sc);
       await guardarBorradorSC(empresa, sc, filasSC, cobrosDe(empresa, sc));
       await auditarAjuste(empresa, sc, "eliminar", linea.origen || "motor", linea, motivo.trim());
+      // Los cobros de PNR viven también en cobros_pnr_mx. Si la línea se borra
+      // desde acá y no se libera el caso, la pestaña PNR lo deja marcado como
+      // cobrado para siempre y ya no se puede volver a cobrar.
+      let liberado = false;
+      if (linea.origen === "pnr" && linea.pnr_case_id) {
+        const { error: eLib } = await sb.from("cobros_pnr_mx").delete().eq("pnr_id", String(linea.pnr_case_id));
+        if (eLib) throw eLib;
+        liberado = true;
+      }
       setDetalles(prev => ({ ...prev, [empresa]: todas }));
       await cargarResumen(semana);
-      setMsg({ ok: true, txt: `Línea eliminada de ${empresa} · ${sc}.` });
+      setMsg({ ok: true, txt: `Línea eliminada de ${empresa} · ${sc}.` + (liberado ? ` El PNR ${linea.pnr_case_id} vuelve a quedar pendiente en la pestaña PNR.` : "") });
     } catch (e) { console.error("eliminar línea:", e); setMsg({ ok: false, txt: "Error eliminando línea: " + (e.message || e) }); }
     setGuardandoEdit(null);
   };
