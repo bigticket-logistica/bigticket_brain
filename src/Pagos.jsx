@@ -4021,6 +4021,38 @@ function ConciliacionTercerosMX({ usuario }) {
         ${noPagos.map(d => `<div class="obs-row">${fmtFechaDDMM(d.fecha)} · ${d.placa} · Ruta ${d.id_ruta} · ${d.driver_name || ""} — ${d.motivo_no_pago || "NO PAGADO"} (cargado ${d.cargado}, entregado ${d.entregado}, entrega ${fmtPct(d.pct_entrega)})</div>`).join("")}
       </div>` : "";
 
+    // Segunda hoja: detalle de los cobros por PNR con su historial de avisos.
+    // Los datos viajan dentro de la propia línea (los copia la pestaña PNR al
+    // momento de cobrar), así que la prefactura no consulta nada de Posventa.
+    const lineasPnr = filasSC.filter(d => d.origen === "pnr");
+    const fmtAv = (a) => {
+      const f = a && a.f ? new Date(a.f) : null;
+      const dd = f ? `${String(f.getDate()).padStart(2, "0")}/${String(f.getMonth() + 1).padStart(2, "0")} ${String(f.getHours()).padStart(2, "0")}:${String(f.getMinutes()).padStart(2, "0")}` : "";
+      return `<div class="pnr-av"><b>${a.t || "aviso"}</b>${a.d ? " \u00b7 " + a.d : ""} \u00b7 ${dd}${a.h != null ? " \u00b7 quedaban " + a.h + " h" : ""}</div>`;
+    };
+    const pnrHtml = !lineasPnr.length ? "" : `
+  <div class="pnr-page">
+    <div class="det-title">DETALLE DE COBROS POR PNR \u2014 ${empresa} \u00b7 ${sc} \u00b7 ${periodo}</div>
+    <table class="det">
+      <tr><th>PNR</th><th>GU\u00cdA</th><th>FECHA RUTA</th><th>ID RUTA</th><th>PATENTE</th><th>CONDUCTOR</th><th>SECTOR</th><th>MOTIVO DEL COBRO</th><th>MONTO</th></tr>
+      ${lineasPnr.map(d => `
+      <tr>
+        <td>${d.pnr_case_id || ""}</td><td>${d.pnr_shipment_id || ""}</td>
+        <td>${fmtFechaDDMM(d.fecha)}</td><td>${d.id_ruta || ""}</td>
+        <td>${d.placa || ""}</td><td style="text-align:left">${d.pnr_conductor || ""}</td>
+        <td>${d.service_center_id || ""}</td><td style="text-align:left">${d.pnr_motivo || ""}</td>
+        <td style="text-align:right">${fmtMon(d.monto)}</td>
+      </tr>`).join("")}
+    </table>
+    ${lineasPnr.map(d => `
+    <div class="pnr-box">
+      <div class="pnr-box-tit">PNR ${d.pnr_case_id || ""} \u00b7 gu\u00eda ${d.pnr_shipment_id || "\u2014"} \u00b7 ${d.placa || ""} \u00b7 ${fmtMon(d.monto)} \u2014 historial de avisos</div>
+      ${(Array.isArray(d.pnr_avisos) && d.pnr_avisos.length)
+        ? d.pnr_avisos.map(fmtAv).join("")
+        : `<div class="pnr-sin">Sin avisos registrados para este caso.</div>`}
+    </div>`).join("")}
+  </div>`;
+
     const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Prefactura ${empresa} ${sc} ${periodo}</title>
 <style>
   * { margin:0; padding:0; box-sizing:border-box; font-family: Arial, Helvetica, sans-serif; }
@@ -4052,6 +4084,12 @@ function ConciliacionTercerosMX({ usuario }) {
   .bono { margin-top:14px; border:1px solid #86efac; background:#f0fdf4; border-radius:4px; padding:10px 12px; }
   .bono-title { font-weight:800; font-size:10px; color:#166534; margin-bottom:6px; }
   .bono-row { font-size:10px; color:#14532d; padding:2px 0; }
+  .pnr-page { page-break-before: always; padding-top: 6px; }
+  .pnr-box { margin-top:12px; border:1px solid #cdd3dc; border-radius:4px; padding:8px 10px; }
+  .pnr-box-tit { font-size:10px; font-weight:800; color:#1a3a6b; margin-bottom:4px; }
+  .pnr-av { font-size:9px; color:#444; padding:1px 0; }
+  .pnr-av b { color:#1a1a1a; }
+  .pnr-sin { font-size:9px; color:#991b1b; }
   @media print { body { padding: 10mm 12mm; } .noprint { display:none; } }
   .noprint { margin-top:24px; } .noprint button { padding:8px 18px; background:#1a3a6b; color:#fff; border:none; border-radius:6px; font-size:13px; cursor:pointer; }
 </style></head><body>
@@ -4100,6 +4138,7 @@ function ConciliacionTercerosMX({ usuario }) {
   </table>
   ${bonoHtml}
   ${obsHtml}
+  ${pnrHtml}
   <div class="noprint"><button onclick="window.print()">Imprimir / Guardar PDF</button></div>
 </body></html>`;
     const nombrePdf = `Prefactura_${String(empresa).replace(/[^A-Za-z0-9]+/g, "_")}_${sc}_${periodo.replace(/ /g, "_")}.pdf`;

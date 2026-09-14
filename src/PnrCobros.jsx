@@ -382,6 +382,14 @@ export default function PnrCobrosMX({ usuario }) {
         pnr_case_id: f.case_id,
         pnr_shipment_id: f.shipment_id || null,
         pnr_motivo: mot.label,
+        pnr_conductor: f.conductor || null,
+        pnr_facturado_en: f.facturado_en || null,
+        // Copia del historial de avisos al momento del cobro: es la prueba que
+        // viaja impresa en la prefactura, así que no puede depender de Posventa.
+        pnr_avisos: (f.avisos || []).map(a => ({
+          t: a.tipo || "aviso", d: a.destino || null,
+          f: a.creado_en, h: a.horas_restantes != null ? a.horas_restantes : null,
+        })),
         agregado_por: quien,
         agregado_at: new Date().toISOString(),
       };
