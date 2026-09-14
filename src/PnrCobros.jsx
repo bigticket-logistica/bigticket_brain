@@ -311,9 +311,15 @@ export default function PnrCobrosMX({ usuario }) {
       return;
     }
     const mot = MOTIVOS[f.sub_cobro] || { label: f.sub_cobro || "PNR", concepto: "PNR" };
-    const etiqueta = `COBRO ID ${f.shipment_id || f.case_id} - PNR`;
+    // Texto que ve el transportista en el detalle de la prefactura: tiene que
+    // explicarse solo, porque es la única referencia que va a tener al reclamar.
+    const etiqueta = [
+      `COBRO PNR ${f.case_id}`,
+      f.shipment_id ? `guía ${f.shipment_id}` : null,
+      f.fecha_ruta ? `ruta del ${soloFecha(f.fecha_ruta)}` : null,
+    ].filter(Boolean).join(" · ");
     if (!window.confirm(
-      `¿Agregar este cobro a la conciliación?\n\nMotivo: ${mot.label}\n${f.empresa} · ${sc} · semana ${semana}\n${etiqueta}\nPlaca ${f.placa || "—"} · ${f.conductor || ""}\nMonto: -${money(monto)}\n\nLa prefactura de esa empresa y SC vuelve a borrador y el movimiento queda auditado.`
+      `¿Agregar este cobro a la conciliación?\n\nMotivo: ${mot.label}\n${f.empresa} · ${sc} · semana ${semana}\nPNR ${f.case_id} · guía ${f.shipment_id || "—"} · ruta ${f.route_code || "—"}\nPlaca ${f.placa || "—"} · ${f.conductor || ""}\nMonto: -${money(monto)}\n\nLa prefactura de esa empresa y SC vuelve a borrador y el movimiento queda auditado.`
     )) return;
 
     setGuardando(f.case_id); setMsg(null);
