@@ -6736,7 +6736,6 @@ function ListadoPagosDiarios({ usuario }) {
   const [guardadoPorSC, setGuardadoPorSC] = useState({});   // sc -> rutas en tarifado_mx
   const [scAbierto, setScAbierto] = useState(null);         // sc con el detalle desplegado
   const [revisiones, setRevisiones] = useState({});         // id_ruta -> fila de revision_ruta_mx
-  const [buscaPausa, setBuscaPausa] = useState("");         // buscador del panel de pausas
   // ── Datos incompletos: qué le falta a una línea para poder tarifarse bien ──
   // A diferencia de "Con alertas" (que incluye avisos operativos), esto marca SOLO
   // vacíos de información maestra que impiden calcular la tarifa correcta.
@@ -6815,6 +6814,11 @@ function ListadoPagosDiarios({ usuario }) {
       const ahora = new Date().toISOString(); const por = _quienPausa();
       const { error } = await sb.from("maestro_jornada_mx").update({ pausado: true, pausa_motivo: pausaMotivo.trim(), pausa_por: por, pausa_at: ahora, liberado_at: null, liberado_por: null }).eq("id", r.id);
       if (error) throw error;
+      // Espejo para el portal: el tercero ve la ruta "en revisión" con este mismo motivo
+      await sb.from("revision_ruta_mx").upsert({
+        fecha: r.fecha || fecha, id_ruta: r.id_ruta, estado: "pausada",
+        motivo_rechazo: pausaMotivo.trim(), revisado_por: por, revisado_at: ahora,
+      }, { onConflict: "fecha,id_ruta" });
       setPagos(ps => ps.map(p => p.id === r.id ? { ...p, pausado: true, pausa_motivo: pausaMotivo.trim(), pausa_por: por, pausa_at: ahora } : p));
       setPausaModal(null); setPausaMotivo("");
     } catch (e) { alert("Error pausando: " + (e.message || e)); }
@@ -6826,7 +6830,10 @@ function ListadoPagosDiarios({ usuario }) {
       const ahora = new Date().toISOString(); const por = _quienPausa();
       const { error } = await sb.from("maestro_jornada_mx").update({ pausado: false, liberado_at: ahora, liberado_por: por }).eq("id", r.id);
       if (error) throw error;
+      // Quita la excepción: la ruta vuelve a verse aprobada en el portal
+      await sb.from("revision_ruta_mx").delete().eq("fecha", r.fecha || fecha).eq("id_ruta", r.id_ruta);
       setPagos(ps => ps.map(p => p.id === r.id ? { ...p, pausado: false, liberado_at: ahora, liberado_por: por } : p));
+      cargarPublicaciones();
     } catch (e) { alert("Error reanudando: " + (e.message || e)); }
   };
 
@@ -7464,51 +7471,6 @@ function ListadoPagosDiarios({ usuario }) {
     setPublicando(null);
   };
 
-  // Pausar = retener el pago de una ruta. No existe "rechazar": el no pago por
-  // visitado bajo el mínimo lo decide el motor y se refleja con su propia causa.
-  // Una ruta sin fila en revision_ruta_mx está aprobada (aprobación por excepción).
-  const pausarRuta = async (r) => {
-    const motivo = prompt(
-      `Pausar la ruta ${r.id_ruta} · ${r.placa}\n\nEl tercero va a leer este texto en su portal como motivo de la retención:`,
-      revisiones[r.id_ruta]?.motivo_rechazo || "");
-    if (motivo === null) return;
-    if (!motivo.trim()) { alert("El motivo es obligatorio: el tercero lo va a leer."); return; }
-    const { error } = await sb.from("revision_ruta_mx").upsert({
-      fecha, id_ruta: r.id_ruta, estado: "pausada", motivo_rechazo: motivo.trim(),
-      revisado_por: (usuario && (usuario.email || usuario.nombre)) || "brain",
-      revisado_at: new Date().toISOString(),
-    }, { onConflict: "fecha,id_ruta" });
-    if (error) { alert("No se pudo pausar: " + error.message); return; }
-    setBuscaPausa("");
-    await cargarPublicaciones();
-  };
-
-  const reactivarRuta = async (idRuta) => {
-    if (!confirm(`Reactivar la ruta ${idRuta}?\n\nVuelve a quedar aprobada y se paga normalmente.`)) return;
-    const { error } = await sb.from("revision_ruta_mx").delete().eq("fecha", fecha).eq("id_ruta", idRuta);
-    if (error) { alert("No se pudo reactivar: " + error.message); return; }
-    await cargarPublicaciones();
-  };
-
-  // Resultados del buscador de pausas: se busca la ruta, no se barre la tabla
-  const candidatasPausa = useMemo(() => {
-    const q = buscaPausa.trim().toLowerCase();
-    if (q.length < 2) return [];
-    return (pagos || [])
-      .filter(p => !revisiones[p.id_ruta])
-      .filter(p =>
-        String(p.id_ruta || "").toLowerCase().includes(q) ||
-        String(p.placa || "").toLowerCase().includes(q) ||
-        String(p.driver_name || "").toLowerCase().includes(q))
-      .slice(0, 8);
-  }, [buscaPausa, pagos, revisiones]);
-
-  const rutasPausadas = useMemo(() => {
-    const m = {};
-    for (const p of (pagos || [])) m[p.id_ruta] = p;
-    return Object.values(revisiones).map(r => ({ ...r, ruta: m[r.id_ruta] || null }));
-  }, [revisiones, pagos]);
-
   // Detalle de un SC: rutas del cálculo con su empresa asignada
   const detalleSC = (sc) => (pagos || [])
     .filter(p => (p.service_center_id || "—") === sc)
@@ -7593,63 +7555,6 @@ function ListadoPagosDiarios({ usuario }) {
             </button>
           )}
         </div>
-
-        {/* Retener el pago de una ruta: se busca, no se barre la tabla */}
-        {pagos.length > 0 && (
-          <div style={{ border: "1px solid #fde68a", background: "#fffbeb", borderRadius: 6, padding: 10, marginBottom: 10 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-              <span style={{ fontSize: 12, fontWeight: 700, color: "#92400e" }}>Retener el pago de una ruta</span>
-              <input value={buscaPausa} onChange={e => setBuscaPausa(e.target.value)}
-                placeholder="Busca por patente, id de ruta o chofer..."
-                style={{ flex: 1, minWidth: 240, background: "#fff", border: "1px solid #fcd34d", borderRadius: 4, padding: "6px 10px", fontSize: 12 }} />
-              {rutasPausadas.length > 0 && (
-                <span style={{ fontSize: 11, fontWeight: 700, color: "#92400e", background: "#fef3c7", padding: "3px 9px", borderRadius: 10 }}>
-                  {rutasPausadas.length} pausada{rutasPausadas.length > 1 ? "s" : ""} este día
-                </span>
-              )}
-            </div>
-
-            {buscaPausa.trim().length >= 2 && (
-              <div style={{ marginTop: 8, background: "#fff", border: "1px solid #fde68a", borderRadius: 6, overflow: "hidden" }}>
-                {candidatasPausa.length === 0 ? (
-                  <div style={{ padding: "9px 11px", fontSize: 11.5, color: "#94a3b8" }}>Sin coincidencias sin pausar.</div>
-                ) : candidatasPausa.map(c => (
-                  <div key={c.id_ruta} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 11px", borderBottom: "1px solid #fef3c7", fontSize: 11.5 }}>
-                    <span style={{ fontWeight: 700, color: "#334155", minWidth: 72 }}>{c.placa || "—"}</span>
-                    <span style={{ color: "#94a3b8", minWidth: 82 }}>{c.id_ruta}</span>
-                    <span style={{ color: "#64748b", flex: 1, minWidth: 120 }}>{c.driver_name || "—"}</span>
-                    <span style={{ color: "#475569", minWidth: 44 }}>{c.service_center_id}</span>
-                    <span style={{ fontVariantNumeric: "tabular-nums", fontWeight: 600, minWidth: 74, textAlign: "right" }}>
-                      ${Number(c.pago_neto || 0).toLocaleString("es-MX")}
-                    </span>
-                    <button onClick={() => pausarRuta(c)}
-                      style={{ border: "none", background: "#f59e0b", color: "#fff", fontSize: 11, fontWeight: 700, borderRadius: 4, padding: "5px 12px", cursor: "pointer" }}>
-                      Pausar
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {rutasPausadas.length > 0 && (
-              <div style={{ marginTop: 8, background: "#fff", border: "1px solid #fde68a", borderRadius: 6, overflow: "hidden" }}>
-                {rutasPausadas.map(r => (
-                  <div key={r.id_ruta} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 11px", borderBottom: "1px solid #fef3c7", fontSize: 11.5 }}>
-                    <span style={{ fontSize: 9, fontWeight: 700, padding: "2px 6px", borderRadius: 3, background: "#fef3c7", color: "#92400e" }}>PAUSADA</span>
-                    <span style={{ fontWeight: 700, color: "#334155", minWidth: 72 }}>{r.ruta?.placa || "—"}</span>
-                    <span style={{ color: "#94a3b8", minWidth: 82 }}>{r.id_ruta}</span>
-                    <span style={{ color: "#64748b", flex: 1, minWidth: 140 }}>{r.motivo_rechazo || "sin motivo"}</span>
-                    <span style={{ color: "#94a3b8", fontSize: 10.5 }}>{r.revisado_por}</span>
-                    <button onClick={() => reactivarRuta(r.id_ruta)}
-                      style={{ border: "1px solid #86efac", background: "#f0fdf4", color: "#166534", fontSize: 11, fontWeight: 700, borderRadius: 4, padding: "5px 12px", cursor: "pointer" }}>
-                      Reactivar
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
 
         {resumenSC.length === 0 ? (
           <div style={{ fontSize: 12, color: "#94a3b8" }}>Calculá el día para ver los centros de servicio.</div>
@@ -7997,6 +7902,18 @@ function ListadoPagosDiarios({ usuario }) {
           </button>
         ))}
       </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+          <span style={{ fontSize: 11, fontWeight: 600, color: "#64748b" }}>Buscar ruta para pausar</span>
+          <input value={busqueda} onChange={e => setBusqueda(e.target.value)}
+            placeholder="Id de ruta, patente o chofer..."
+            style={{ background: "#fff", border: "1px solid #fcd34d", borderRadius: 4, padding: "6px 10px", fontSize: 12, minWidth: 280 }} />
+          {busqueda && (
+            <>
+              <span style={{ fontSize: 11, color: "#94a3b8" }}>{filasFiltradas.length} coincidencia(s)</span>
+              <button onClick={() => setBusqueda("")} style={{ border: "1px solid #e4e7ec", background: "#fff", color: "#64748b", fontSize: 11, borderRadius: 4, padding: "5px 10px", cursor: "pointer" }}>Limpiar</button>
+            </>
+          )}
+        </div>
 
       {pausaModal && (
         <div onMouseDown={e => { if (e.target === e.currentTarget && !pausando) setPausaModal(null); }}
@@ -8034,6 +7951,7 @@ function ListadoPagosDiarios({ usuario }) {
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11, minWidth: 1660 }}>
             <thead>
               <tr style={{ background: "#f8fafc", borderBottom: "1px solid #e4e7ec", position: "sticky", top: 0 }}>
+                <Th center>Pausa</Th>
                 <Th onClick={() => toggleOrder("driver_name")}>Chofer{ordIcon("driver_name")}</Th>
                 <Th onClick={() => toggleOrder("placa")}>Patente{ordIcon("placa")}</Th>
                 <Th>Empresa</Th>
@@ -8057,7 +7975,6 @@ function ListadoPagosDiarios({ usuario }) {
                 <Th right>Pago MELI</Th>
                 <Th right>% Margen</Th>
                 <Th>Observaciones</Th>
-                <Th center>Pago</Th>
               </tr>
             </thead>
             <tbody>
@@ -8068,6 +7985,16 @@ function ListadoPagosDiarios({ usuario }) {
                 const margenPct = (pagoMeli != null && pagoMeli > 0) ? ((pagoMeli - Number(r.pago_neto)) / pagoMeli * 100) : null;
                 return (
                   <tr key={r.id || i} style={{ borderBottom: "1px solid #f0f0f0", background: noPagada ? "#fef2f2" : tieneAlerta ? "#fffbeb" : undefined }}>
+                    <td style={{ ...tdStyle(), textAlign: "center", whiteSpace: "nowrap" }}>
+                      {r.pausado ? (
+                        <div>
+                          <span title={r.pausa_motivo || ""} style={{ display: "inline-block", fontSize: 10, fontWeight: 800, color: "#92400e", background: "#fef3c7", border: "1px solid #fcd34d", borderRadius: 6, padding: "2px 6px" }}>⏸ Pausado</span>
+                          <button onClick={() => reanudarPago(r)} style={{ display: "block", margin: "4px auto 0", fontSize: 10, fontWeight: 700, color: "#166534", background: "#fff", border: "1px solid #166534", borderRadius: 6, padding: "2px 8px", cursor: "pointer" }}>Reanudar</button>
+                        </div>
+                      ) : (
+                        <button onClick={() => { setPausaMotivo(""); setPausaModal({ r }); }} disabled={!r.id} title={r.id ? "Pausar el pago de esta ruta" : "Sin id, no se puede pausar"} style={{ fontSize: 10, fontWeight: 700, color: "#b45309", background: "#fff", border: "1px solid #fcd34d", borderRadius: 6, padding: "3px 8px", cursor: r.id ? "pointer" : "not-allowed" }}>⏸ Pausar</button>
+                      )}
+                    </td>
                     <td style={tdStyle(true)}>{r.driver_name || "—"}</td>
                     <td style={{ ...tdStyle(), fontFamily: "monospace", fontSize: 10 }}>{r.placa || "—"}</td>
                     <td style={{ ...tdStyle(), fontSize: 10, color: "#475569", maxWidth: 170, whiteSpace: "normal", lineHeight: 1.25 }}>
@@ -8161,16 +8088,6 @@ function ListadoPagosDiarios({ usuario }) {
                     </td>
                     <td style={{ ...tdStyle(), fontSize: 10, color: noPagada ? "#991b1b" : (r.observaciones ? "#92400e" : "#cbd5e1"), maxWidth: 260, whiteSpace: "normal", lineHeight: 1.3 }} title={r.observaciones || ""}>
                       {r.observaciones || "—"}
-                    </td>
-                    <td style={{ ...tdStyle(), textAlign: "center", whiteSpace: "nowrap" }}>
-                      {r.pausado ? (
-                        <div>
-                          <span title={r.pausa_motivo || ""} style={{ display: "inline-block", fontSize: 10, fontWeight: 800, color: "#92400e", background: "#fef3c7", border: "1px solid #fcd34d", borderRadius: 6, padding: "2px 6px" }}>⏸ Pausado</span>
-                          <button onClick={() => reanudarPago(r)} style={{ display: "block", margin: "4px auto 0", fontSize: 10, fontWeight: 700, color: "#166534", background: "#fff", border: "1px solid #166534", borderRadius: 6, padding: "2px 8px", cursor: "pointer" }}>Reanudar</button>
-                        </div>
-                      ) : (
-                        <button onClick={() => { setPausaMotivo(""); setPausaModal({ r }); }} disabled={!r.id} title={r.id ? "Pausar el pago de esta ruta" : "Sin id, no se puede pausar"} style={{ fontSize: 10, fontWeight: 700, color: "#b45309", background: "#fff", border: "1px solid #fcd34d", borderRadius: 6, padding: "3px 8px", cursor: r.id ? "pointer" : "not-allowed" }}>⏸ Pausar</button>
-                      )}
                     </td>
                   </tr>
                 );
