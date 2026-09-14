@@ -178,8 +178,9 @@ export default function PnrCobrosMX({ usuario }) {
 
   useEffect(() => { cargar(semana); }, [semana]);
 
-  const cargar = async (sem) => {
-    setLoading(true); setMsg(null);
+  const cargar = async (sem, conservarMsg) => {
+    setLoading(true);
+    if (!conservarMsg) setMsg(null);
     try {
       const { inicio, fin } = rangoSemana(sem);
       const desde = inicio.toISOString();
@@ -499,7 +500,7 @@ export default function PnrCobrosMX({ usuario }) {
       setMsg({ ok: true, txt: `PNR ${f.case_id} agregado por -${money(monto)}${r.movidos ? " (cobrado en otro SC por falta de operación)" : ""}. La prefactura volvió a borrador: generala y enviala.` });
     }
     setGuardando(null);
-    await cargar(semana);
+    await cargar(semana, true);
   };
 
   // Carga de una pasada los pendientes tildados.
@@ -523,7 +524,7 @@ export default function PnrCobrosMX({ usuario }) {
         + (r.fallidos.length ? ` Fallaron: ${r.fallidos.join(", ")}.` : " Generá y enviá las prefacturas afectadas."),
     });
     setGuardando(null);
-    await cargar(semana);
+    await cargar(semana, true);
   };
 
   // Deshace un cobro: saca la línea de la conciliación y libera el caso para
@@ -576,7 +577,7 @@ export default function PnrCobrosMX({ usuario }) {
       if (eDel) throw eDel;
 
       setMsg({ ok: true, txt: `Cobro del PNR ${f.case_id} quitado de ${ya.empresa_nombre} · ${sc}. El caso vuelve a estar pendiente.` });
-      await cargar(semana);
+      await cargar(semana, true);
     } catch (e) {
       console.error("quitar cobro PNR:", e);
       setMsg({ ok: false, txt: "No se pudo quitar el cobro: " + (e.message || e) });
