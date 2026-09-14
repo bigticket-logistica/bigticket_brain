@@ -4064,7 +4064,11 @@ function ConciliacionTercerosMX({ usuario }) {
 
     const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Prefactura ${empresa} ${sc} ${periodo}</title>
 <style>
-  * { margin:0; padding:0; box-sizing:border-box; font-family: Arial, Helvetica, sans-serif; }
+  * { margin:0; padding:0; box-sizing:border-box; font-family: Arial, Helvetica, sans-serif;
+      -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  /* Sin esto el navegador imprime en vertical y descarta los fondos: la
+     cabecera naranja sale gris y la tabla de 13 columnas queda comprimida. */
+  @page { size: A4 landscape; margin: 8mm 10mm; }
   body { padding: 28px 32px; color:#1a1a1a; font-size:11px; }
   .head { display:flex; justify-content:space-between; align-items:flex-start; background:#F47B20; color:#fff; padding:14px 18px; border-radius:4px; }
   .head h1 { font-size:26px; letter-spacing:1px; }
@@ -4099,7 +4103,7 @@ function ConciliacionTercerosMX({ usuario }) {
   .pnr-av { font-size:9px; color:#444; padding:1px 0; }
   .pnr-av b { color:#1a1a1a; }
   .pnr-sin { font-size:9px; color:#991b1b; }
-  @media print { body { padding: 10mm 12mm; } .noprint { display:none; } }
+  @media print { body { padding: 0; } .noprint { display:none; } }
   .noprint { margin-top:24px; } .noprint button { padding:8px 18px; background:#1a3a6b; color:#fff; border:none; border-radius:6px; font-size:13px; cursor:pointer; }
 </style></head><body>
   <div class="head">
