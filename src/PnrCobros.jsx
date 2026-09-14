@@ -706,7 +706,10 @@ export default function PnrCobrosMX({ usuario }) {
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
           <thead>
             <tr>
-              <th style={{ ...th, width: 28 }}>
+              <th style={{ ...th, width: 54, whiteSpace: "nowrap" }} title="Marca o desmarca todos los pendientes de la lista, incluidos los que no se ven en pantalla">
+                <span style={{ fontWeight: 700, color: nSeleccionados ? "#15803d" : "#94a3b8", marginRight: 4 }}>
+                  {nSeleccionados}/{cobrables.length}
+                </span>
                 <input type="checkbox" checked={todosTildados}
                   onChange={e => {
                     const v = e.target.checked; const sel = { ...seleccion };
