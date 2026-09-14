@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
-import { sb } from "./shared";
+import { descargarExcelMultihoja, sb } from "./shared";
 
 // ─── PNR — Cobro a terceros ─────────────────────────────────────────
 // Lista los PNR cobrables de la semana y permite agregar cada uno a la
@@ -289,28 +289,11 @@ export default function PnrCobrosMX({ usuario }) {
     setLoading(false);
   };
 
-  // Agrega el PNR a la conciliación del transportista como línea negativa,
-  // igual que las líneas "COBRO ID … - PNR" que ya existen en las prefacturas.
-  const agregar = async (f) => {
-    if (!f.sub_cobro) {
-      setMsg({ ok: false, txt: `El PNR ${f.case_id} ya no es cobrable: hoy está en "${f.sub_estado || "—"}" en MELI.` });
-      return;
-    }
-    if (!f.empresa) {
-      setMsg({ ok: false, txt: `El PNR ${f.case_id} no tiene empresa resuelta. Revisá la placa en el inventario de flota de la semana ${f.semana_ruta}.` });
-      return;
-    }
-    if (String(f.empresa).includes(" / ")) {
-      setMsg({ ok: false, txt: `La placa ${f.placa} aparece en más de una empresa esa semana (${f.empresa}). Corregí el inventario antes de cobrar.` });
-      return;
-    }
+  // Arma la línea de prefactura y la fila de cobro de un PNR.
+  const prepararCobro = (f) => {
+    const mot = MOTIVOS[f.sub_cobro] || { label: f.sub_cobro || "PNR", concepto: "PNR" };
     const sc = f.service_center || "SIN SC";
     const monto = Math.abs(Number(f.monto || 0));
-    if (!monto) {
-      setMsg({ ok: false, txt: `El PNR ${f.case_id} no tiene monto.` });
-      return;
-    }
-    const mot = MOTIVOS[f.sub_cobro] || { label: f.sub_cobro || "PNR", concepto: "PNR" };
     // Texto que ve el transportista en el detalle de la prefactura: tiene que
     // explicarse solo, porque es la única referencia que va a tener al reclamar.
     const etiqueta = [
@@ -318,29 +301,116 @@ export default function PnrCobrosMX({ usuario }) {
       f.shipment_id ? `guía ${f.shipment_id}` : null,
       f.fecha_ruta ? `ruta del ${soloFecha(f.fecha_ruta)}` : null,
     ].filter(Boolean).join(" · ");
+    const linea = {
+      _id: `pnr|${f.case_id}`, origen: "pnr", es_manual: true,
+      fecha: f.fecha_ruta ? String(f.fecha_ruta).slice(0, 10) : null,
+      placa: f.placa || "—",
+      id_ruta: f.route_id || "",   // el numérico, igual que el resto de la prefactura
+      driver_name: etiqueta,
+      service_center_id: sc,
+      tiene_auxiliar: false, cargado: null, entregado: null,
+      monto: -monto, es_no_pago: false,
+      pnr_case_id: f.case_id,
+      pnr_shipment_id: f.shipment_id || null,
+      pnr_motivo: mot.label,
+      pnr_conductor: f.conductor || null,
+      pnr_facturado_en: f.facturado_en || null,
+      // Copia del historial de avisos al momento del cobro: es la prueba que
+      // viaja impresa en la prefactura, así que no puede depender de Posventa.
+      pnr_avisos: (f.avisos || []).map(a => ({
+        t: a.tipo || "aviso", d: a.destino || null,
+        f: a.creado_en, h: a.horas_restantes != null ? a.horas_restantes : null,
+      })),
+      agregado_por: quien,
+      agregado_at: new Date().toISOString(),
+    };
+    const fila = {
+      pnr_id: String(f.case_id),
+      empresa_nombre: f.empresa,
+      service_center: sc,
+      semana: String(semana),
+      fecha_ruta: f.fecha_ruta || String(f.facturado_en).slice(0, 10),
+      facturado_en: String(f.facturado_en).slice(0, 10),
+      driver_name: f.conductor || null,
+      placa: f.placa || null,
+      concepto: mot.concepto,
+      monto,
+      estado: "enviado",
+      enviado_a_cobro_en: new Date().toISOString(),
+      asignado_por: quien,
+    };
+    return { mot, sc, monto, etiqueta, linea, fila };
+  };
+
+  // Motivo por el que un PNR no se puede cobrar automáticamente.
+  const bloqueo = (f) => {
+    if (!f.empresa) return "sin empresa resuelta";
+    if (String(f.empresa).includes(" / ")) return "la placa está en dos empresas esa semana";
+    if (!Math.abs(Number(f.monto || 0))) return "sin monto";
+    return null;
+  };
+
+  // Escribe en la conciliación de una empresa y SC todas las líneas de PNR que
+  // le corresponden. Una sola escritura por grupo: si se hiciera una por caso,
+  // dos cobros de la misma empresa se pisarían el detalle entre sí.
+  const cargarEnConciliacion = async (empresa, sc, items) => {
+    const { data: motor, error: eRpc } = await sb.rpc("get_conciliacion_terceros_detalle",
+      { p_semana: semana, p_empresa: empresa, p_sc: sc });
+    if (eRpc) throw eRpc;
+    let lineas = (motor || []).map(d => ({ ...d, _id: lineaId(d), origen: d.origen || "motor" }));
+
+    const { data: conc } = await sb.from("conciliaciones_terceros")
+      .select("detalle, total_cobros, estado")
+      .eq("empresa_nombre", empresa).eq("service_center", sc).eq("semana", semana).maybeSingle();
+    if (conc && Array.isArray(conc.detalle) && conc.detalle.length) {
+      lineas = conc.detalle.map(d => ({ ...d, _id: d._id || lineaId(d), origen: d.origen || "motor" }));
+    }
+
+    const yaEstan = new Set(lineas.map(lineaId));
+    const nuevas = items.map(it => it.linea).filter(l => !yaEstan.has(l._id));
+    if (!nuevas.length) return 0;
+
+    const filasSC = lineas.concat(nuevas);
+    const { inicio } = rangoSemana(semana);
+    const tot = recalcSC(filasSC, Number((conc && conc.total_cobros) || 0));
+    const { error: eUp } = await sb.from("conciliaciones_terceros").upsert({
+      empresa_nombre: empresa, service_center: sc, semana,
+      semana_inicio: inicio.toISOString().slice(0, 10), estado: "borrador",
+      total_neto: tot.neto, iva_16: tot.iva, total_bruto: tot.bruto,
+      total_cobros: tot.cobros, liquido_pago: tot.liquido,
+      n_viajes: tot.nViajes, n_no_pago: tot.nNoPago,
+      detalle: filasSC, tiene_ajustes: true,
+      generado_at: new Date().toISOString(),
+    }, { onConflict: "empresa_nombre,service_center,semana" });
+    if (eUp) throw eUp;
+
+    await sb.from("conciliacion_terceros_ajustes").insert(nuevas.map(l => ({
+      empresa_nombre: empresa, service_center: sc, semana,
+      accion: "agregar", origen_linea: "pnr", linea: l,
+      motivo: `Cobro de PNR ${l.pnr_case_id} · ${l.pnr_motivo} (guía ${l.pnr_shipment_id || "—"}) por ${money(Math.abs(l.monto))}`,
+      usuario: quien,
+    })));
+    return nuevas.length;
+  };
+
+  // Agrega un PNR a la conciliación del transportista como línea negativa,
+  // igual que las líneas "COBRO ID … - PNR" que ya existen en las prefacturas.
+  const agregar = async (f) => {
+    const porQue = bloqueo(f);
+    if (porQue) {
+      setMsg({ ok: false, txt: `No se puede cobrar el PNR ${f.case_id}: ${porQue}.` });
+      return;
+    }
+    const { mot, sc, monto, fila, linea } = prepararCobro(f);
     if (!window.confirm(
-      `¿Agregar este cobro a la conciliación?\n\nMotivo: ${mot.label}\n${f.empresa} · ${sc} · semana ${semana}\nPNR ${f.case_id} · guía ${f.shipment_id || "—"} · ruta ${f.route_code || "—"}\nPlaca ${f.placa || "—"} · ${f.conductor || ""}\nMonto: -${money(monto)}\n\nLa prefactura de esa empresa y SC vuelve a borrador y el movimiento queda auditado.`
+      `¿Agregar este cobro a la conciliación?\n\nMotivo: ${mot.label}\n${f.empresa} · ${sc} · semana ${semana}\nPNR ${f.case_id} · guía ${f.shipment_id || "—"} · ruta ${f.route_id || "—"}\nPlaca ${f.placa || "—"} · ${f.conductor || ""}\nMonto: -${money(monto)}\n\nLa prefactura de esa empresa y SC vuelve a borrador y el movimiento queda auditado.`
     )) return;
 
     setGuardando(f.case_id); setMsg(null);
     let insertado = false;
     try {
       // 1) marca el caso como cobrado; el unique de pnr_id evita el doble cobro
-      const { error: eIns } = await sb.from("cobros_pnr_mx").insert({
-        pnr_id: String(f.case_id),
-        empresa_nombre: f.empresa,
-        service_center: sc,
-        semana: String(semana),
-        fecha_ruta: f.fecha_ruta || String(f.facturado_en).slice(0, 10),
-        facturado_en: String(f.facturado_en).slice(0, 10),
-        driver_name: f.conductor || null,
-        placa: f.placa || null,
-        concepto: mot.concepto,
-        monto,
-        estado: "enviado",
-        enviado_a_cobro_en: new Date().toISOString(),
-        asignado_por: quien,
-      });
+      const { error: eIns } = await sb.from("cobros_pnr_mx").insert(fila);
       if (eIns) {
         if (String(eIns.message || "").toLowerCase().includes("duplicate")) {
           setMsg({ ok: false, txt: `El PNR ${f.case_id} ya fue enviado a cobro antes.` });
@@ -350,74 +420,11 @@ export default function PnrCobrosMX({ usuario }) {
       }
       insertado = true;
 
-      // 2) líneas actuales de esa empresa y SC: si la prefactura ya fue editada
-      //    manda el detalle guardado; si no, las que devuelve el motor.
-      const { data: motor, error: eRpc } = await sb.rpc("get_conciliacion_terceros_detalle",
-        { p_semana: semana, p_empresa: f.empresa, p_sc: sc });
-      if (eRpc) throw eRpc;
-      let lineas = (motor || []).map(d => ({ ...d, _id: lineaId(d), origen: d.origen || "motor" }));
-
-      const { data: conc } = await sb.from("conciliaciones_terceros")
-        .select("service_center, detalle, total_cobros, estado")
-        .eq("empresa_nombre", f.empresa).eq("service_center", sc).eq("semana", semana).maybeSingle();
-      if (conc && Array.isArray(conc.detalle) && conc.detalle.length) {
-        lineas = conc.detalle.map(d => ({ ...d, _id: d._id || lineaId(d), origen: d.origen || "motor" }));
-      }
-
-      const idLinea = `pnr|${f.case_id}`;
-      if (lineas.some(d => lineaId(d) === idLinea)) {
-        setMsg({ ok: false, txt: `La conciliación de ${f.empresa} · ${sc} ya tenía la línea del PNR ${f.case_id}.` });
-        await cargar(semana); setGuardando(null); return;
-      }
-
-      const linea = {
-        _id: idLinea, origen: "pnr", es_manual: true,
-        fecha: f.fecha_ruta ? String(f.fecha_ruta).slice(0, 10) : null,
-        placa: f.placa || "—",
-        id_ruta: f.route_id || "",   // el numérico, igual que el resto de la prefactura
-        driver_name: etiqueta,
-        service_center_id: sc,
-        tiene_auxiliar: false, cargado: null, entregado: null,
-        monto: -monto, es_no_pago: false,
-        pnr_case_id: f.case_id,
-        pnr_shipment_id: f.shipment_id || null,
-        pnr_motivo: mot.label,
-        pnr_conductor: f.conductor || null,
-        pnr_facturado_en: f.facturado_en || null,
-        // Copia del historial de avisos al momento del cobro: es la prueba que
-        // viaja impresa en la prefactura, así que no puede depender de Posventa.
-        pnr_avisos: (f.avisos || []).map(a => ({
-          t: a.tipo || "aviso", d: a.destino || null,
-          f: a.creado_en, h: a.horas_restantes != null ? a.horas_restantes : null,
-        })),
-        agregado_por: quien,
-        agregado_at: new Date().toISOString(),
-      };
-      const filasSC = lineas.concat([linea]);
-
-      // 3) recalcula y guarda la prefactura en borrador
-      const { inicio } = rangoSemana(semana);
-      const tot = recalcSC(filasSC, Number((conc && conc.total_cobros) || 0));
-      const { error: eUp } = await sb.from("conciliaciones_terceros").upsert({
-        empresa_nombre: f.empresa, service_center: sc, semana,
-        semana_inicio: inicio.toISOString().slice(0, 10), estado: "borrador",
-        total_neto: tot.neto, iva_16: tot.iva, total_bruto: tot.bruto,
-        total_cobros: tot.cobros, liquido_pago: tot.liquido,
-        n_viajes: tot.nViajes, n_no_pago: tot.nNoPago,
-        detalle: filasSC, tiene_ajustes: true,
-        generado_at: new Date().toISOString(),
-      }, { onConflict: "empresa_nombre,service_center,semana" });
-      if (eUp) throw eUp;
-
-      // 4) auditoría del ajuste
-      await sb.from("conciliacion_terceros_ajustes").insert({
-        empresa_nombre: f.empresa, service_center: sc, semana,
-        accion: "agregar", origen_linea: "pnr", linea,
-        motivo: `Cobro de PNR ${f.case_id} · ${mot.label} (guía ${f.shipment_id || "—"}) por ${money(monto)}`,
-        usuario: quien,
-      });
-
-      setMsg({ ok: true, txt: `PNR ${f.case_id} agregado a ${f.empresa} · ${sc} por -${money(monto)}. La prefactura volvió a borrador: generála y enviála para que el descuento salga.` });
+      // 2) carga la línea en la prefactura
+      const n = await cargarEnConciliacion(f.empresa, sc, [{ linea }]);
+      setMsg(n
+        ? { ok: true, txt: `PNR ${f.case_id} agregado a ${f.empresa} · ${sc} por -${money(monto)}. La prefactura volvió a borrador: generala y enviala para que el descuento salga.` }
+        : { ok: false, txt: `La conciliación de ${f.empresa} · ${sc} ya tenía la línea del PNR ${f.case_id}.` });
       await cargar(semana);
     } catch (e) {
       console.error("agregar cobro PNR:", e);
@@ -428,6 +435,59 @@ export default function PnrCobrosMX({ usuario }) {
       setMsg({ ok: false, txt: "No se pudo agregar el cobro: " + (e.message || e) });
     }
     setGuardando(null);
+  };
+
+  // Carga de una pasada todos los pendientes que no tengan bloqueo, agrupando
+  // por empresa y SC para hacer una sola escritura por prefactura.
+  const agregarTodos = async () => {
+    const candidatos = pendientes.filter(f => !bloqueo(f));
+    const omitidos = pendientes.filter(f => bloqueo(f));
+    if (!candidatos.length) {
+      setMsg({ ok: false, txt: "No hay PNR que se puedan cobrar automáticamente. Revisá los que están sin empresa." });
+      return;
+    }
+    const totalMonto = candidatos.reduce((a, f) => a + Math.abs(Number(f.monto || 0)), 0);
+    const grupos = {};
+    for (const f of candidatos) {
+      const prep = prepararCobro(f);
+      const k = f.empresa + "||" + prep.sc;
+      (grupos[k] = grupos[k] || { empresa: f.empresa, sc: prep.sc, items: [] }).items.push(prep);
+    }
+    const nGrupos = Object.keys(grupos).length;
+    if (!window.confirm(
+      `¿Agregar ${candidatos.length} cobros de PNR?\n\nTotal: -${money(totalMonto)}\nPrefacturas afectadas: ${nGrupos}\n` +
+      (omitidos.length ? `Se omiten ${omitidos.length} sin empresa resuelta.\n` : "") +
+      `\nTodas esas prefacturas vuelven a borrador y hay que generarlas de nuevo.`
+    )) return;
+
+    setGuardando("todos"); setMsg(null);
+    let ok = 0;
+    const fallidos = [];
+    for (const k of Object.keys(grupos)) {
+      const g = grupos[k];
+      let insertadas = [];
+      try {
+        const { error: eIns } = await sb.from("cobros_pnr_mx").insert(g.items.map(it => it.fila));
+        if (eIns) throw eIns;
+        insertadas = g.items.map(it => it.fila.pnr_id);
+        await cargarEnConciliacion(g.empresa, g.sc, g.items);
+        ok += g.items.length;
+      } catch (e) {
+        console.error("agregar todos:", g.empresa, g.sc, e);
+        if (insertadas.length) {
+          try { await sb.from("cobros_pnr_mx").delete().in("pnr_id", insertadas); } catch (e2) { console.error(e2); }
+        }
+        fallidos.push(`${g.empresa} · ${g.sc}`);
+      }
+    }
+    setMsg({
+      ok: !fallidos.length,
+      txt: `${ok} cobros agregados en ${nGrupos - fallidos.length} prefacturas.` +
+        (omitidos.length ? ` ${omitidos.length} omitidos por falta de empresa.` : "") +
+        (fallidos.length ? ` Fallaron: ${fallidos.join(", ")}.` : " Generá y enviá las prefacturas afectadas."),
+    });
+    setGuardando(null);
+    await cargar(semana);
   };
 
   // Deshace un cobro: saca la línea de la conciliación y libera el caso para
@@ -488,10 +548,39 @@ export default function PnrCobrosMX({ usuario }) {
     setGuardando(null);
   };
 
+  const exportar = async () => {
+    const enc = ["PNR", "Motivo del cobro", "Pasó a cobro", "Monto", "Chofer", "Placa", "SC",
+      "ID ruta", "Ruta", "Fecha ruta", "Semana ruta", "Guía", "Empresa transportista",
+      "Estado", "Cobrado por", "Cobrado el", "Semana cobro", "Avisos"];
+    const datos = [enc];
+    const avisos = [["PNR", "Tipo", "Destino", "Fecha", "Horas restantes", "Estado entrega"]];
+    for (const f of visibles) {
+      const ya = cobrados[String(f.case_id)];
+      const m = MOTIVOS[f.sub_cobro] || {};
+      datos.push([
+        f.case_id, m.label || f.sub_cobro || "", fechaHora(f.facturado_en), Number(f.monto || 0),
+        f.conductor || "", f.placa || "", f.service_center || "",
+        f.route_id || "", f.route_code || "", f.fecha_ruta ? soloFecha(f.fecha_ruta) : "",
+        f.semana_ruta != null ? f.semana_ruta : "", f.shipment_id || "", f.empresa || "",
+        ya ? "Cobrado" : "Pendiente", ya ? ya.asignado_por : "",
+        ya ? fechaHora(ya.enviado_a_cobro_en) : "", ya ? ya.semana : "",
+        (f.avisos || []).length,
+      ]);
+      for (const a of f.avisos || []) {
+        avisos.push([f.case_id, a.tipo || "", a.destino || "", fechaHora(a.creado_en),
+          a.horas_restantes != null ? a.horas_restantes : "", a.estado_entrega || ""]);
+      }
+    }
+    await descargarExcelMultihoja(
+      [{ nombre: `PNR sem ${semana}`, datos }, { nombre: "Avisos", datos: avisos }],
+      `PNR_cobros_sem${semana}.xlsx`
+    );
+  };
+
   const visibles = useMemo(() => {
     const q = busqueda.trim().toUpperCase();
     if (!q) return filas;
-    return filas.filter(f => [f.case_id, f.conductor, f.placa, f.service_center, f.route_code, f.empresa]
+    return filas.filter(f => [f.case_id, f.conductor, f.placa, f.service_center, f.route_id, f.route_code, f.shipment_id, f.empresa]
       .some(v => String(v || "").toUpperCase().includes(q)));
   }, [filas, busqueda]);
 
@@ -526,6 +615,15 @@ export default function PnrCobrosMX({ usuario }) {
         </button>
         <input value={busqueda} onChange={e => setBusqueda(e.target.value)} placeholder="Buscar caso, chofer, placa…"
           style={{ padding: "6px 10px", fontSize: 12, border: "1px solid #e4e7ec", borderRadius: 6, width: 220 }} />
+        <button onClick={exportar} disabled={loading || !visibles.length}
+          style={{ padding: "7px 14px", fontSize: 11, fontWeight: 600, background: "#fff", color: "#1a3a6b", border: "1px solid #1a3a6b", borderRadius: 6, cursor: (loading || !visibles.length) ? "not-allowed" : "pointer", opacity: (loading || !visibles.length) ? 0.5 : 1 }}>
+          Descargar Excel
+        </button>
+        <button onClick={agregarTodos} disabled={!!guardando || loading || !pendientes.length}
+          title="Agrega todos los pendientes que tengan empresa resuelta"
+          style={{ padding: "7px 14px", fontSize: 11, fontWeight: 700, background: "#15803d", color: "#fff", border: "none", borderRadius: 6, cursor: (!!guardando || loading || !pendientes.length) ? "not-allowed" : "pointer", opacity: (!!guardando || loading || !pendientes.length) ? 0.5 : 1 }}>
+          {guardando === "todos" ? "Agregando…" : `Agregar todos (${pendientes.filter(f => !bloqueo(f)).length})`}
+        </button>
         <button onClick={() => cargar(semana)} disabled={loading}
           style={{ padding: "7px 14px", fontSize: 11, fontWeight: 600, background: "#1a3a6b", color: "#fff", border: "none", borderRadius: 6, cursor: loading ? "not-allowed" : "pointer", opacity: loading ? 0.5 : 1 }}>
           {loading ? "Cargando…" : "Actualizar"}
@@ -592,7 +690,10 @@ export default function PnrCobrosMX({ usuario }) {
                     <td style={td}>{f.placa || <span style={{ color: "#b45309" }}>sin placa</span>}</td>
                     <td style={td}>{f.service_center || "—"}</td>
                     <td style={td}>
-                      {f.route_code || "—"}
+                      {f.route_id || "—"}
+                      <div style={{ fontSize: 9, color: "#94a3b8" }}>
+                        {f.route_code || ""}
+                      </div>
                       <div style={{ fontSize: 9, color: "#94a3b8" }}>
                         {soloFecha(f.fecha_ruta)}{f.semana_ruta != null ? ` · sem ${f.semana_ruta}` : ""}
                       </div>
