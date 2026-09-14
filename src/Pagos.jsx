@@ -6674,6 +6674,13 @@ function ListadoPagosDiarios({ usuario }) {
   const [causaFalta, setCausaFalta] = useState(null);        // sub-filtro de la tarjeta de datos incompletos
   const [avisoRecalc, setAvisoRecalc] = useState(null); // N aprobaciones modificadas tras el último cálculo
   const [guardandoTarifado, setGuardandoTarifado] = useState(false);
+  // ── Publicación al portal de terceros ────────────────────────────────
+  // Guardar (arriba) es el borrador del analista: puede recalcular sin límite.
+  // Publicar es un acto distinto — deja el día visible para el tercero, con
+  // autor, hora y versión. Republicar no pisa: crea la versión n+1 con motivo.
+  const [publicaciones, setPublicaciones] = useState({});   // sc -> fila vigente
+  const [publicando, setPublicando] = useState(null);       // sc en curso
+  const [guardadoPorSC, setGuardadoPorSC] = useState({});   // sc -> rutas en tarifado_mx
   // ── Datos incompletos: qué le falta a una línea para poder tarifarse bien ──
   // A diferencia de "Con alertas" (que incluye avisos operativos), esto marca SOLO
   // vacíos de información maestra que impiden calcular la tarifa correcta.
@@ -7288,6 +7295,92 @@ function ListadoPagosDiarios({ usuario }) {
     setGuardandoTarifado(false);
   };
 
+  // Trae lo publicado del día y cuántas rutas hay realmente guardadas por SC.
+  // Se publica SOLO lo que está en tarifado_mx (el guardado), nunca el cálculo
+  // en memoria: así el tercero ve exactamente lo mismo que irá en su prefactura.
+  const cargarPublicaciones = useCallback(async () => {
+    try {
+      const [pubR, tarR] = await Promise.all([
+        sb.from("vw_publicacion_vigente_mx").select("*").eq("fecha", fecha),
+        sb.from("tarifado_mx").select("service_center_id").eq("fecha", fecha),
+      ]);
+      const mp = {};
+      for (const r of (pubR.data || [])) mp[r.service_center] = r;
+      setPublicaciones(mp);
+      const mg = {};
+      for (const r of (tarR.data || [])) mg[r.service_center_id] = (mg[r.service_center_id] || 0) + 1;
+      setGuardadoPorSC(mg);
+    } catch (e) { console.error("No se pudo leer el estado de publicación:", e); }
+  }, [fecha]);
+  useEffect(() => { cargarPublicaciones(); }, [cargarPublicaciones]);
+
+  // Resumen del cálculo en memoria, por SC (para la tarjeta)
+  const resumenSC = useMemo(() => {
+    const m = {};
+    for (const p of pagos) {
+      const sc = p.service_center_id || "—";
+      if (!m[sc]) m[sc] = { sc, rutas: 0, monto: 0 };
+      m[sc].rutas += 1;
+      m[sc].monto += Number(p.pago_neto || 0);
+    }
+    return Object.values(m).sort((a, b) => String(a.sc).localeCompare(String(b.sc)));
+  }, [pagos]);
+
+  const publicarSC = async (sc) => {
+    const vig = publicaciones[sc];
+    // Lo guardado manda: si el analista recalculó y no guardó, no se publica.
+    const { data: guardado, error: eG } = await sb.from("tarifado_mx")
+      .select("id_ruta, pago_neto, tercero_id").eq("fecha", fecha).eq("service_center_id", sc);
+    if (eG) { alert("No se pudo leer el tarifado guardado:\n\n" + eG.message); return; }
+    if (!guardado || guardado.length === 0) {
+      alert(`No hay tarifado guardado para ${sc} del ${fecha}.\n\nGuardá el día antes de publicar.`);
+      return;
+    }
+    // Excepciones ya marcadas: sin fila = aprobada (aprobación por excepción)
+    const { data: exc } = await sb.from("revision_ruta_mx")
+      .select("id_ruta, estado").eq("fecha", fecha)
+      .in("id_ruta", guardado.map(g => g.id_ruta));
+    const estadoDe = {};
+    for (const e of (exc || [])) estadoDe[e.id_ruta] = e.estado;
+    const rechazadas = guardado.filter(g => estadoDe[g.id_ruta] === "rechazada").length;
+    const pausadas   = guardado.filter(g => ["pausada", "bloqueada"].includes(estadoDe[g.id_ruta])).length;
+    const aprobadas  = guardado.length - rechazadas - pausadas;
+    const monto = guardado.reduce((t, g) => estadoDe[g.id_ruta] ? t : t + Number(g.pago_neto || 0), 0);
+    const sinEmpresa = guardado.filter(g => !g.tercero_id).length;
+
+    let motivo = null;
+    if (vig) {
+      motivo = prompt(`${sc} del ${fecha} ya está publicado (v${vig.version}).\n\nSe creará la versión ${vig.version + 1} y el tercero verá la corrección.\n\nMotivo:`);
+      if (motivo === null) return;
+      if (!motivo.trim()) { alert("El motivo es obligatorio al republicar."); return; }
+    } else {
+      const aviso = sinEmpresa > 0
+        ? `\n\n⚠️ ${sinEmpresa} ruta(s) sin empresa en el padrón: nadie las verá.`
+        : "";
+      if (!confirm(`Publicar ${sc} · ${fecha}\n\n${aprobadas} aprobadas · ${rechazadas} rechazadas · ${pausadas} retenidas\nMonto: $${Number(monto).toLocaleString("es-MX")}${aviso}\n\nEl tercero lo verá en su portal. ¿Continuar?`)) return;
+    }
+
+    setPublicando(sc);
+    try {
+      const { error } = await sb.from("publicacion_dia_mx").insert({
+        fecha, service_center: sc,
+        version: vig ? vig.version + 1 : 1,
+        rutas_total: guardado.length,
+        rutas_aprobadas: aprobadas,
+        rutas_rechazadas: rechazadas,
+        rutas_pausadas: pausadas,
+        monto_total: monto,
+        motivo_version: motivo,
+        publicado_por: (usuario && (usuario.email || usuario.nombre)) || "brain",
+      });
+      if (error) throw error;
+      await cargarPublicaciones();
+    } catch (e) {
+      alert("No se pudo publicar:\n\n" + e.message);
+    }
+    setPublicando(null);
+  };
+
   // Sincroniza la barra de scroll horizontal superior con la tabla
   const onTopScroll = () => { if (tableWrapRef.current && topScrollRef.current) tableWrapRef.current.scrollLeft = topScrollRef.current.scrollLeft; };
   const onTableScroll = () => { if (tableWrapRef.current && topScrollRef.current) topScrollRef.current.scrollLeft = tableWrapRef.current.scrollLeft; };
@@ -7338,6 +7431,77 @@ function ListadoPagosDiarios({ usuario }) {
             {guardandoTarifado ? "Guardando..." : "Guardar en tarifado"}
           </button>
         </div>
+      </div>
+
+      {/* Tarjeta: publicación al portal de terceros, por SC */}
+      <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 8, padding: 14, marginBottom: 14 }}>
+        <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#1a3a6b" }}>Publicación al portal de terceros</div>
+          <div style={{ fontSize: 11, color: "#94a3b8" }}>
+            Se publica lo guardado en tarifado, por centro de servicio. Guardar no publica.
+          </div>
+        </div>
+
+        {resumenSC.length === 0 ? (
+          <div style={{ fontSize: 12, color: "#94a3b8" }}>Calculá el día para ver los centros de servicio.</div>
+        ) : (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 8 }}>
+            {resumenSC.map(({ sc, rutas, monto }) => {
+              const pub = publicaciones[sc];
+              const guardadas = guardadoPorSC[sc] || 0;
+              const sinGuardar = guardadas === 0;
+              const desfase = guardadas > 0 && guardadas !== rutas;
+              const enCurso = publicando === sc;
+              return (
+                <div key={sc} style={{
+                  border: `1px solid ${pub ? "#bbf7d0" : "#e4e7ec"}`, borderRadius: 6,
+                  background: pub ? "#f0fdf4" : "#f8fafc", padding: 10,
+                }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                    <span style={{ fontSize: 13, fontWeight: 700, color: "#334155" }}>{sc}</span>
+                    <span style={{
+                      fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 10,
+                      background: pub ? "#dcfce7" : "#e2e8f0", color: pub ? "#166534" : "#64748b",
+                    }}>
+                      {pub ? `PUBLICADO v${pub.version}` : "SIN PUBLICAR"}
+                    </span>
+                  </div>
+
+                  <div style={{ fontSize: 11, color: "#64748b", marginTop: 6, fontVariantNumeric: "tabular-nums" }}>
+                    {rutas} rutas calculadas · ${Number(monto).toLocaleString("es-MX")}
+                  </div>
+                  <div style={{ fontSize: 11, color: sinGuardar ? "#b45309" : desfase ? "#b45309" : "#94a3b8", marginTop: 2 }}>
+                    {sinGuardar
+                      ? "Sin guardar en tarifado"
+                      : desfase
+                        ? `⚠️ ${guardadas} guardadas ≠ ${rutas} calculadas — guardá de nuevo`
+                        : `${guardadas} guardadas`}
+                  </div>
+                  {pub && (
+                    <div style={{ fontSize: 10.5, color: "#166534", marginTop: 4 }}>
+                      {pub.rutas_aprobadas} aprobadas
+                      {pub.rutas_rechazadas > 0 ? ` · ${pub.rutas_rechazadas} rechazadas` : ""}
+                      {pub.rutas_pausadas > 0 ? ` · ${pub.rutas_pausadas} retenidas` : ""}
+                      <div style={{ color: "#64748b", marginTop: 2 }}>
+                        {pub.publicado_por} · {new Date(pub.publicado_at).toLocaleString("es-MX", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}
+                      </div>
+                    </div>
+                  )}
+
+                  <button onClick={() => publicarSC(sc)} disabled={enCurso || sinGuardar}
+                    style={{
+                      marginTop: 8, width: "100%", padding: "6px 10px", borderRadius: 4, border: "none",
+                      background: (enCurso || sinGuardar) ? "#cbd5e1" : pub ? "#1a3a6b" : "#16a34a",
+                      color: "#fff", fontSize: 11.5, fontWeight: 600,
+                      cursor: (enCurso || sinGuardar) ? "not-allowed" : "pointer",
+                    }}>
+                    {enCurso ? "Publicando..." : pub ? "Republicar con motivo" : "Aprobar y publicar"}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {/* Tarjeta: rutas con ID repetido en varios días (posible doble pago) */}
