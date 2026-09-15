@@ -18,6 +18,23 @@ const ESTADOS = {
   vencida:     { l: "Vencida",     bg: "#f1f5f9", fg: "#64748b" },
 };
 const TIPO_LINEA = { ruta: "Ruta", cobro: "Cobro", faltante: "Ruta faltante" };
+const FASES = {
+  supervisor: { l: "Con el supervisor", bg: "#fef3c7", fg: "#92400e" },
+  analista:   { l: "Te toca a ti",      bg: "#dbeafe", fg: "#1e40af" },
+  cerrada:    { l: "Cerrada",           bg: "#f1f5f9", fg: "#64748b" },
+};
+const VEREDICTO = {
+  aprueba:        { l: "El supervisor RESPALDA el reclamo", bg: "#dcfce7", fg: "#166534" },
+  rechaza:        { l: "El supervisor NO lo respalda",      bg: "#fee2e2", fg: "#991b1b" },
+  sin_respuesta:  { l: "El supervisor no respondió en 48 h", bg: "#fef3c7", fg: "#92400e" },
+};
+const venceEn = (iso) => {
+  if (!iso) return null;
+  const ms = new Date(iso).getTime() - Date.now();
+  if (ms <= 0) return { vencido: true, txt: "SLA vencido" };
+  const h = Math.floor(ms / 3600000);
+  return { vencido: false, txt: h >= 24 ? `${Math.floor(h / 24)} d ${h % 24} h` : `${h} h` };
+};
 
 const money = (n) => "$" + Number(n || 0).toLocaleString("es-MX", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const fechaHora = (s) => s ? new Date(s).toLocaleString("es-MX", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : "—";
@@ -115,7 +132,7 @@ export default function Diferencias({ usuario }) {
         <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10, overflow: "hidden" }}>
           <div style={{ display: "grid", gridTemplateColumns: "70px 1.6fr 90px 1fr 110px 110px 100px", gap: 10, padding: "9px 14px", background: "#f8fafc", fontSize: 10.5, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.4 }}>
             <span>Folio</span><span>Empresa</span><span>SC</span><span>Líneas</span>
-            <span style={{ textAlign: "right" }}>Reclamado</span><span>Estado</span><span>Antigüedad</span>
+            <span style={{ textAlign: "right" }}>Reclamado</span><span>Fase</span><span>SLA</span>
           </div>
           {casos.map(c => {
             const e = ESTADOS[c.estado] || ESTADOS.abierta;
@@ -123,7 +140,7 @@ export default function Diferencias({ usuario }) {
             const sinResolver = ["abierta", "en_revision"].includes(c.estado);
             return (
               <button key={c.id} onClick={() => abrir(c)}
-                style={{ width: "100%", display: "grid", gridTemplateColumns: "70px 1.6fr 90px 1fr 110px 110px 100px", gap: 10, padding: "11px 14px", borderTop: "1px solid #f1f5f9", background: "#fff", border: "none", borderLeft: "3px solid " + (sinResolver && d >= 3 ? "#dc2626" : "transparent"), textAlign: "left", fontSize: 12, alignItems: "center", cursor: "pointer" }}>
+                style={{ width: "100%", display: "grid", gridTemplateColumns: "70px 1.6fr 90px 1fr 110px 110px 100px", gap: 10, padding: "11px 14px", borderTop: "1px solid #f1f5f9", background: "#fff", border: "none", borderLeft: "3px solid " + (sinResolver && venceEn(c.fase === "analista" ? c.sla_analista_at : c.sla_supervisor_at)?.vencido ? "#dc2626" : "transparent"), textAlign: "left", fontSize: 12, alignItems: "center", cursor: "pointer" }}>
                 <span style={{ fontWeight: 700, color: "#1a3a6b" }}>#{c.folio}</span>
                 <span style={{ color: "#334155" }}>{c.terceros?.nombre || "—"}</span>
                 <span style={{ color: "#64748b" }}>{c.service_center || "varios"}</span>
@@ -133,10 +150,17 @@ export default function Diferencias({ usuario }) {
                   {[...new Set((c.diferencias_lineas || []).map(l => TIPO_LINEA[l.tipo]))].join(", ")}
                 </span>
                 <span style={{ textAlign: "right", fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>{money(c.monto_reclamado)}</span>
-                <span><span style={{ fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 10, background: e.bg, color: e.fg }}>{e.l}</span></span>
-                <span style={{ color: sinResolver && d >= 3 ? "#dc2626" : "#94a3b8", fontWeight: sinResolver && d >= 3 ? 700 : 400 }}>
-                  {d === 0 ? "hoy" : `${d} día${d > 1 ? "s" : ""}`}
+                <span>
+                  {sinResolver
+                    ? (() => { const f = FASES[c.fase] || FASES.supervisor;
+                        return <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 10, background: f.bg, color: f.fg }}>{f.l}</span>; })()
+                    : <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 10, background: e.bg, color: e.fg }}>{e.l}</span>}
                 </span>
+                {(() => {
+                  const sla = sinResolver ? venceEn(c.fase === "analista" ? c.sla_analista_at : c.sla_supervisor_at) : null;
+                  if (!sla) return <span style={{ color: "#94a3b8" }}>{d === 0 ? "hoy" : `${d} d`}</span>;
+                  return <span style={{ color: sla.vencido ? "#dc2626" : "#64748b", fontWeight: sla.vencido ? 700 : 400 }}>{sla.vencido ? "vencido" : `quedan ${sla.txt}`}</span>;
+                })()}
               </button>
             );
           })}
@@ -196,7 +220,7 @@ function DetalleCaso({ caso, quien, onCerrar, onCambio }) {
     if (semana === null) return;
     setTrabajando(true);
     const { error } = await sb.from("diferencias").update({
-      estado, monto_reconocido: reconocido, ajuste_semana: semana.trim() || null,
+      estado, fase: "cerrada", monto_reconocido: reconocido, ajuste_semana: semana.trim() || null,
       resuelta_por: quien, resuelta_at: new Date().toISOString(),
     }).eq("id", caso.id);
     if (error) { alert("No se pudo cerrar: " + error.message); setTrabajando(false); return; }
@@ -234,6 +258,30 @@ function DetalleCaso({ caso, quien, onCerrar, onCambio }) {
         </div>
 
         <div style={{ padding: 18 }}>
+          {/* Lo que dijo el supervisor: la mitad del expediente */}
+          {caso.fase === "supervisor" ? (
+            <div style={{ background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: 12, marginBottom: 14, fontSize: 12.5, color: "#92400e" }}>
+              <b>Esperando al supervisor.</b> El caso llega a ti cuando él respalde o rechace el
+              reclamo, o cuando venzan sus 48 h{caso.sla_supervisor_at ? ` (vence ${fechaHora(caso.sla_supervisor_at)})` : ""}.
+            </div>
+          ) : caso.supervisor_veredicto ? (
+            (() => {
+              const v = VEREDICTO[caso.supervisor_veredicto] || VEREDICTO.sin_respuesta;
+              return (
+                <div style={{ background: v.bg, border: "1px solid " + v.fg + "33", borderRadius: 8, padding: 12, marginBottom: 14 }}>
+                  <div style={{ fontSize: 12.5, fontWeight: 700, color: v.fg }}>{v.l}</div>
+                  {caso.supervisor_nota && (
+                    <div style={{ fontSize: 12.5, color: "#334155", marginTop: 5 }}>{caso.supervisor_nota}</div>
+                  )}
+                  <div style={{ fontSize: 11, color: "#64748b", marginTop: 5 }}>
+                    {caso.supervisor_por || "—"} · {fechaHora(caso.supervisor_at)}
+                    {caso.sla_analista_at && ` · tu SLA vence ${fechaHora(caso.sla_analista_at)}`}
+                  </div>
+                </div>
+              );
+            })()
+          ) : null}
+
           {/* Líneas */}
           <div style={{ fontSize: 13, fontWeight: 700, color: "#1a3a6b", marginBottom: 8 }}>
             Qué reclama ({lineas.length})
@@ -321,7 +369,9 @@ function DetalleCaso({ caso, quien, onCerrar, onCambio }) {
           {/* Evidencia */}
           {caso.adjuntos.length > 0 && (
             <>
-              <div style={{ fontSize: 13, fontWeight: 700, color: "#1a3a6b", margin: "14px 0 8px" }}>Evidencia</div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: "#1a3a6b", margin: "14px 0 8px" }}>
+                Evidencia <span style={{ fontWeight: 400, fontSize: 11, color: "#94a3b8" }}>· la marcada [supervisor] la subió él en la Bitácora</span>
+              </div>
               <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                 {caso.adjuntos.map(a => (
                   <button key={a.id} onClick={() => verAdjunto(a)}
@@ -334,7 +384,7 @@ function DetalleCaso({ caso, quien, onCerrar, onCambio }) {
           )}
 
           {/* Cerrar */}
-          {["abierta", "en_revision"].includes(caso.estado) && (
+          {["abierta", "en_revision"].includes(caso.estado) && caso.fase === "analista" && (
             <button onClick={cerrarCaso} disabled={pendientes > 0 || trabajando}
               style={{ width: "100%", marginTop: 14, padding: "11px", borderRadius: 6, border: "none", background: pendientes > 0 ? "#cbd5e1" : "#1a3a6b", color: "#fff", fontSize: 13, fontWeight: 700, cursor: pendientes > 0 ? "not-allowed" : "pointer" }}>
               {pendientes > 0 ? `Falta resolver ${pendientes} línea(s)` : `Cerrar la diferencia · ${money(reconocido)} reconocido`}
