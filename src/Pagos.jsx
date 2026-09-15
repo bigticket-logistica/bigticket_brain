@@ -2667,6 +2667,8 @@ function ConciliacionTercerosMX({ usuario }) {
   const [consolidadas, setConsolidadas] = useState(() => new Set()); // claves empresa||sc||id_ruta ya consolidadas
   const [importOpen, setImportOpen] = useState(false);
   const [importRows, setImportRows] = useState(null);
+  const [ajustesPend, setAjustesPend] = useState([]);   // diferencias aceptadas sin aplicar
+  const [aplicandoDif, setAplicandoDif] = useState(false);
   const [importBusy, setImportBusy] = useState(false);
   const [repBusy, setRepBusy] = useState(false);
   const [consolidando, setConsolidando] = useState(null);      // id_ruta | "__todas__"
@@ -3974,6 +3976,48 @@ function ConciliacionTercerosMX({ usuario }) {
     return nuevas.length;
   };
 
+  // Ajustes que vienen de diferencias aceptadas y todavía no entraron a ninguna
+  // prefactura. Sin este paso el tercero ve el ajuste en su portal y no le llega
+  // la plata — la discrepancia que más rápido rompe la confianza.
+  const cargarAjustesPendientes = useCallback(async () => {
+    const { data } = await sb.from("ajustes_pago_mx")
+      .select("*, terceros(nombre)").is("semana", null);
+    setAjustesPend(data || []);
+  }, []);
+  useEffect(() => { cargarAjustesPendientes(); }, [cargarAjustesPendientes, semana]);
+
+  const aplicarAjustesDiferencias = async () => {
+    if (!ajustesPend.length) return;
+    const total = ajustesPend.reduce((t, a) => t + Number(a.monto || 0), 0);
+    if (!confirm(`Aplicar ${ajustesPend.length} ajuste(s) de diferencias aceptadas a las prefacturas de la semana ${semana}.\n\nTotal: $${total.toLocaleString("es-MX")}\n\nQuedan en borrador y auditados. ¿Continuar?`)) return;
+    setAplicandoDif(true);
+    const grupos = {};
+    for (const a of ajustesPend) {
+      const empresa = a.terceros?.nombre;
+      if (!empresa) continue;
+      const k = `${empresa}||${a.service_center}`;
+      (grupos[k] = grupos[k] || { empresa, sc: a.service_center, items: [], ids: [] });
+      grupos[k].items.push({
+        kind: "ajuste", fecha: a.fecha, placa: "AJUSTE", id_ruta: "—",
+        concepto: a.concepto, montoFirmado: Number(a.monto || 0), aux: false,
+      });
+      grupos[k].ids.push(a.id);
+    }
+    let ok = 0, fail = 0; const errores = [];
+    for (const k of Object.keys(grupos)) {
+      const g = grupos[k];
+      try {
+        await _aplicarAjustesGrupo(g.empresa, g.sc, g.items);
+        await sb.from("ajustes_pago_mx").update({ semana: String(semana) }).in("id", g.ids);
+        ok += g.items.length;
+      } catch (e) { fail += g.items.length; errores.push(`${g.empresa}·${g.sc}: ${e.message || e}`); }
+    }
+    await cargarResumen(semana);
+    await cargarAjustesPendientes();
+    setAplicandoDif(false);
+    setMsg({ ok: fail === 0, txt: `Diferencias: ${ok} ajuste(s) aplicados, ${fail} con error.` + (errores.length ? " — " + errores.join(" | ") : "") });
+  };
+
   const aplicarImport = async () => {
     const validos = (importRows || []).filter(r => r.valido);
     if (!validos.length) return;
@@ -4631,6 +4675,13 @@ function ConciliacionTercerosMX({ usuario }) {
         <button onClick={enviarTodo} disabled={enviando === "__todo__"} style={{ padding: "8px 16px", background: enviando === "__todo__" ? "#94a3b8" : "#1e40af", color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>{enviando === "__todo__" ? "Enviando..." : "📧 Enviar todo"}</button>
         <button onClick={() => generarReporteCierre({})} title="Genera y envía el informe consolidado de la semana a los destinatarios de arriba" style={{ padding: "8px 16px", background: "#fff", color: "#1a3a6b", border: "1px solid #1a3a6b", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>📄 Reporte</button>
         <button onClick={() => { setImportRows(null); setImportOpen(true); }} style={{ padding: "8px 16px", background: "#1a3a6b", color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>📥 Importar ajustes (Excel)</button>
+        {ajustesPend.length > 0 && (
+          <button onClick={aplicarAjustesDiferencias} disabled={aplicandoDif}
+            title={ajustesPend.map(x => `${x.terceros?.nombre || "?"} · ${x.service_center} · ${x.concepto}`).join("\n")}
+            style={{ padding: "8px 16px", background: aplicandoDif ? "#cbd5e1" : "#f59e0b", color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: aplicandoDif ? "not-allowed" : "pointer" }}>
+            {aplicandoDif ? "Aplicando..." : `⚖️ Aplicar ${ajustesPend.length} ajuste(s) de diferencias`}
+          </button>
+        )}
         </div>
       </div>
 
