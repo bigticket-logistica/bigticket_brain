@@ -6556,6 +6556,323 @@ function ModalMoverEtapa({ mov, onCancelar, onConfirmar }) {
   );
 }
 
+
+// ─── 🚚 INVENTARIO DE FLOTA ───────────────────────────────────────────
+// Padrón maestro de placas: espejo de la hoja VEHICULOS del Maestro de
+// Certificación MX, que el equipo sube a diario.
+//
+// La PLACA es la llave. Cada carga actualiza las placas que vienen en el
+// archivo y CONSERVA las que no aparecen: una carga parcial o un archivo
+// filtrado no borra el padrón.
+//
+// SheetJS se carga desde CDN bajo demanda, igual que el widget de MIFIEL,
+// para no agregar una dependencia al build por una pestaña.
+function cargarSheetJS() {
+  return new Promise((resolve, reject) => {
+    if (window.XLSX) return resolve(window.XLSX);
+    const ya = document.querySelector("script[data-sheetjs]");
+    if (ya) { ya.addEventListener("load", () => resolve(window.XLSX)); return; }
+    const s = document.createElement("script");
+    s.src = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
+    s.setAttribute("data-sheetjs", "1");
+    s.onload = () => resolve(window.XLSX);
+    s.onerror = () => reject(new Error("no se pudo cargar el lector de Excel"));
+    document.head.appendChild(s);
+  });
+}
+
+// Encabezado de la planilla → columna de la tabla. Se compara sin acentos
+// ni espacios, porque los títulos del Excel cambian de forma con el tiempo.
+const COLS_FLOTA = {
+  "PLACA": "placa", "CECO": "ceco", "TIPO": "tipo", "EMPRESA": "empresa",
+  "TARJETA DE CIRCULACION": "tarjeta_circulacion",
+  "SEGURO A TERCEROS": "seguro_terceros",
+  "% CERTIFICACION": "pct_certificacion",
+  "PRIMER VIAJE": "primer_viaje", "ULTIMO VIAJE": "ultimo_viaje",
+  "CANT RUTAS": "cant_rutas",
+  "TRASPASO ENTRE TERCEROS": "traspaso_entre_terceros",
+  "FECHA TRASPASO": "fecha_traspaso", "TERCERO ANTERIOR": "tercero_anterior",
+  "STATUS": "status", "STATUS EMPRESA": "status_empresa",
+  "ALERTA INACTIVIDAD": "alerta_inactividad",
+  "SEMANA INFORMADA INV": "semana_informada_inv",
+  "ULTIMO TERCERO INV": "ultimo_tercero_inv",
+  "ALERTA TERCERO INV": "alerta_tercero_inv",
+};
+const normCol = (t) => String(t || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+  .toUpperCase().replace(/\s+/g, " ").trim();
+const FECHAS_FLOTA = ["primer_viaje", "ultimo_viaje", "fecha_traspaso"];
+
+// Excel guarda las fechas como número de serie; sin convertirlas se
+// guardarían como "45871" y ninguna comparación de fechas funcionaría.
+const fechaExcel = (v) => {
+  if (v === null || v === undefined || v === "") return null;
+  if (v instanceof Date) return v.toISOString().slice(0, 10);
+  if (typeof v === "number") {
+    const d = new Date(Date.UTC(1899, 11, 30) + v * 86400000);
+    return isNaN(d) ? null : d.toISOString().slice(0, 10);
+  }
+  const t = String(v).trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(t)) return t.slice(0, 10);
+  const m = t.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})$/);
+  if (m) return `${m[3]}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}`;
+  return null;
+};
+
+function InventarioFlota() {
+  const [rows, setRows] = useState(null);
+  const [cargas, setCargas] = useState([]);
+  const [busca, setBusca] = useState("");
+  const [fEmpresa, setFEmpresa] = useState("todas");
+  const [fAlerta, setFAlerta] = useState("todas");
+  const [subiendo, setSubiendo] = useState(false);
+  const [msg, setMsg] = useState(null);
+  const fileRef = useRef(null);
+
+  const cargar = async () => {
+    const [{ data: inv }, { data: cg }] = await Promise.all([
+      sb.from("vw_inventario_flota").select("*").order("placa").limit(3000),
+      sb.from("inventario_flota_cargas").select("*").order("cargado_at", { ascending: false }).limit(5),
+    ]);
+    setRows(inv || []);
+    setCargas(cg || []);
+  };
+  useEffect(() => { cargar(); }, []);
+
+  const subir = async (ev) => {
+    const file = ev.target.files && ev.target.files[0];
+    ev.target.value = "";
+    if (!file) return;
+    setSubiendo(true); setMsg(null);
+    try {
+      const XLSX = await cargarSheetJS();
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(buf, { type: "array", cellDates: true });
+
+      // La hoja se busca por nombre; si el archivo trae solo una, se usa esa.
+      const hoja = wb.SheetNames.find(x => normCol(x) === "VEHICULOS")
+                || (wb.SheetNames.length === 1 ? wb.SheetNames[0] : null);
+      if (!hoja) throw new Error(`El archivo no tiene una hoja VEHICULOS. Hojas encontradas: ${wb.SheetNames.join(", ")}`);
+
+      const crudo = XLSX.utils.sheet_to_json(wb.Sheets[hoja], { defval: null, raw: true });
+      if (!crudo.length) throw new Error("La hoja VEHICULOS está vacía.");
+
+      // Mapa encabezado→columna a partir de la primera fila real
+      const mapa = {};
+      Object.keys(crudo[0]).forEach(h => {
+        const destino = COLS_FLOTA[normCol(h)];
+        if (destino) mapa[h] = destino;
+      });
+      if (!Object.values(mapa).includes("placa")) {
+        throw new Error("No se encontró la columna PLACA en la hoja.");
+      }
+
+      const ahora = new Date().toISOString();
+      const quien = window.__PERFIL_EMAIL || "analista_brain";
+      const filas = [];
+      const vistas = new Set();
+      for (const r of crudo) {
+        const o = { cargado_at: ahora, cargado_por: quien, archivo: file.name };
+        for (const [h, col] of Object.entries(mapa)) {
+          let v = r[h];
+          if (FECHAS_FLOTA.includes(col)) v = fechaExcel(v);
+          else if (col === "pct_certificacion" || col === "cant_rutas") {
+            v = (v === null || v === "" || isNaN(Number(v))) ? null : Number(v);
+          } else if (v !== null && v !== undefined) v = String(v).trim() || null;
+          o[col] = v;
+        }
+        const placa = String(o.placa || "").toUpperCase().trim();
+        // Sin placa no hay llave: la fila se descarta en vez de entrar como basura.
+        if (!placa || vistas.has(placa)) continue;
+        vistas.add(placa);
+        o.placa = placa;
+        filas.push(o);
+      }
+      if (!filas.length) throw new Error("No se encontró ninguna fila con placa válida.");
+
+      const previas = new Set((rows || []).map(r => r.placa));
+      const nuevas = filas.filter(f => !previas.has(f.placa)).length;
+
+      // En lotes: un upsert de 500 filas de una vez suele cortarse.
+      for (let i = 0; i < filas.length; i += 200) {
+        const { error } = await sb.from("inventario_flota")
+          .upsert(filas.slice(i, i + 200), { onConflict: "placa" });
+        if (error) throw new Error(error.message);
+      }
+
+      await sb.from("inventario_flota_cargas").insert({
+        archivo: file.name, filas: filas.length,
+        nuevas, actualizadas: filas.length - nuevas, cargado_por: quien,
+      });
+
+      setMsg({ tipo: "ok", texto: `✓ ${filas.length} placas cargadas · ${nuevas} nuevas, ${filas.length - nuevas} actualizadas. Las placas que no venían en el archivo se conservaron.` });
+      await cargar();
+    } catch (e) {
+      setMsg({ tipo: "err", texto: "No se pudo cargar: " + e.message });
+    } finally { setSubiendo(false); }
+  };
+
+  const empresas = [...new Set((rows || []).map(r => r.empresa).filter(Boolean))].sort();
+  const q = busca.trim().toUpperCase();
+  const visibles = (rows || []).filter(r => {
+    if (fEmpresa !== "todas" && r.empresa !== fEmpresa) return false;
+    if (fAlerta !== "todas" && (r.alerta_tercero_inv || "—") !== fAlerta) return false;
+    if (!q) return true;
+    return `${r.placa} ${r.empresa || ""} ${r.ceco || ""} ${r.ultimo_tercero_inv || ""}`.toUpperCase().includes(q);
+  });
+
+  const kpi = {
+    total: (rows || []).length,
+    activas: (rows || []).filter(r => r.status === "ACTIVO").length,
+    sinEmpresa: (rows || []).filter(r => r.match_empresa === "sin_empresa_en_brain").length,
+    alertas: (rows || []).filter(r => r.alerta_tercero_inv && r.alerta_tercero_inv !== "OK").length,
+  };
+
+  const exportar = () => {
+    const cab = ["PLACA","CECO","TIPO","EMPRESA","TARJETA DE CIRCULACION","SEGURO A TERCEROS",
+      "% CERTIFICACION","PRIMER VIAJE","ULTIMO VIAJE","CANT RUTAS","STATUS","ALERTA TERCERO INV","EMPRESA EN BRAIN"];
+    const esc = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+    const csv = [cab.join(";")].concat(visibles.map(r => [
+      r.placa, r.ceco, r.tipo, r.empresa, r.tarjeta_circulacion, r.seguro_terceros,
+      r.pct_certificacion, r.primer_viaje, r.ultimo_viaje, r.cant_rutas,
+      r.status, r.alerta_tercero_inv, r.empresa_brain,
+    ].map(esc).join(";"))).join("\n");
+    const blob = new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `inventario_flota_${new Date().toISOString().slice(0,10)}.csv`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  };
+
+  const Kpi = ({ label, valor, color, bg }) => (
+    <div style={{ flex: "1 1 130px", background: bg, border: `1px solid ${color}33`, borderRadius: 10, padding: "10px 12px" }}>
+      <div style={{ fontSize: 10, fontWeight: 700, color: "#888", textTransform: "uppercase", letterSpacing: ".04em" }}>{label}</div>
+      <div style={{ fontSize: 22, fontWeight: 800, color, fontVariantNumeric: "tabular-nums" }}>{valor}</div>
+    </div>
+  );
+  const inp = { border: "1px solid #e4e7ec", borderRadius: 8, padding: "8px 11px", fontSize: 12.5, fontFamily: "'Geist',sans-serif", background: "#fff" };
+  const th = { padding: "9px 10px", fontSize: 10.5, fontWeight: 800, color: "#fff", textTransform: "uppercase", letterSpacing: ".4px", textAlign: "left", background: "#1a3a6b", position: "sticky", top: 0 };
+  const td = { padding: "7px 10px", fontSize: 12, borderBottom: "1px solid #f0f1f3", whiteSpace: "nowrap" };
+  const colorAlerta = (a) => a === "OK" ? { bg: "#e8f5ec", fg: "#166534" }
+    : a === "TRASPASADO" ? { bg: "#eef2ff", fg: "#1a3a6b" }
+    : a === "TERCERO DISTINTO" ? { bg: "#fbeaea", fg: "#c0392b" }
+    : { bg: "#fff8e6", fg: "#b45309" };
+
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
+        <div className="sec-title" style={{ margin: 0, flex: 1 }}>🚚 Inventario de Flota</div>
+        <button onClick={exportar} disabled={!visibles.length}
+          style={{ padding: "9px 14px", borderRadius: 8, border: "0.5px solid #e4e7ec", background: "#fff", color: "#1a3a6b", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "'Geist',sans-serif", opacity: visibles.length ? 1 : .5 }}>
+          ⬇ Exportar CSV
+        </button>
+        <input ref={fileRef} type="file" accept=".xlsx,.xlsm,.xls" style={{ display: "none" }} onChange={subir} />
+        <button onClick={() => fileRef.current && fileRef.current.click()} disabled={subiendo}
+          style={{ padding: "9px 18px", borderRadius: 8, border: "none", background: "#F47B20", color: "#fff", fontSize: 12.5, fontWeight: 800, cursor: subiendo ? "wait" : "pointer", fontFamily: "'Geist',sans-serif" }}>
+          {subiendo ? "Cargando…" : "⬆ Subir Excel del día"}
+        </button>
+      </div>
+
+      <div style={{ fontSize: 11.5, color: "#98a2b3", marginBottom: 12, lineHeight: 1.5 }}>
+        Sube el <b>Maestro de Certificación MX</b>: se lee la hoja <b>VEHICULOS</b> y se actualiza el padrón por placa.
+        Las placas que no vengan en el archivo <b>se conservan</b>.
+      </div>
+
+      {msg && (
+        <div style={{ marginBottom: 12, borderRadius: 10, padding: "11px 14px", fontSize: 12.5, fontWeight: 700,
+          background: msg.tipo === "ok" ? "#e8f5ec" : "#fbeaea",
+          border: `1px solid ${msg.tipo === "ok" ? "#86c9a0" : "#f0b4b4"}`,
+          color: msg.tipo === "ok" ? "#166534" : "#c0392b" }}>
+          {msg.texto}
+        </div>
+      )}
+
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
+        <Kpi label="Placas en el padrón" valor={kpi.total} color="#1a3a6b" bg="#eef2f7" />
+        <Kpi label="Activas" valor={kpi.activas} color="#166534" bg="#e8f5ec" />
+        <Kpi label="Con alerta de tercero" valor={kpi.alertas} color="#b45309" bg="#fff8e6" />
+        <Kpi label="Empresa no está en el Brain" valor={kpi.sinEmpresa} color="#c0392b" bg="#fbeaea" />
+      </div>
+
+      {cargas.length > 0 && (
+        <div style={{ fontSize: 11.5, color: "#667085", background: "#fff", border: "0.5px solid #e4e7ec",
+          borderRadius: 10, padding: "9px 13px", marginBottom: 12 }}>
+          <b>Última carga:</b> {fMX(cargas[0].cargado_at, { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}
+          {" · "}{cargas[0].filas} placas ({cargas[0].nuevas} nuevas){cargas[0].cargado_por ? ` · ${cargas[0].cargado_por}` : ""}
+          {cargas[0].archivo ? <span style={{ color: "#98a2b3" }}> · {cargas[0].archivo}</span> : null}
+        </div>
+      )}
+
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 12 }}>
+        <input value={busca} onChange={(e) => setBusca(e.target.value)} placeholder="🔍 Placa, empresa, CECO…"
+          style={{ ...inp, flex: 1, minWidth: 200 }} />
+        <select value={fEmpresa} onChange={(e) => setFEmpresa(e.target.value)} style={inp}>
+          <option value="todas">Todas las empresas ({empresas.length})</option>
+          {empresas.map(x => <option key={x} value={x}>{x}</option>)}
+        </select>
+        <select value={fAlerta} onChange={(e) => setFAlerta(e.target.value)} style={inp}>
+          <option value="todas">Todas las alertas</option>
+          {["OK","TRASPASADO","TERCERO DISTINTO","SIN REGISTRO INV"].map(x => <option key={x} value={x}>{x}</option>)}
+        </select>
+      </div>
+
+      <div style={{ background: "#fff", border: "0.5px solid #e4e7ec", borderRadius: 12, overflow: "hidden" }}>
+        <div style={{ padding: "10px 16px", background: "#fafbfc", borderBottom: "1px solid #eef0f3", fontSize: 12, fontWeight: 800, color: "#1a3a6b", textTransform: "uppercase", letterSpacing: ".4px" }}>
+          Padrón {visibles.length ? `(${visibles.length}${visibles.length !== kpi.total ? ` de ${kpi.total}` : ""})` : ""}
+        </div>
+        <div style={{ overflowX: "auto", maxHeight: 560, overflowY: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1100 }}>
+            <thead><tr>{["Placa","CECO","Tipo","Empresa","T. Circulación","Seguro","% Cert.","Últ. viaje","Rutas","Status","Alerta tercero"].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
+            <tbody>
+              {rows === null ? <tr><td colSpan={11} style={{ ...td, textAlign: "center", color: "#888" }}>Cargando…</td></tr>
+                : visibles.length === 0 ? (
+                  <tr><td colSpan={11} style={{ ...td, textAlign: "center", color: "#888", padding: 28 }}>
+                    {kpi.total === 0 ? "El padrón está vacío. Sube el Excel del día para empezar." : "Sin resultados con esos filtros."}
+                  </td></tr>
+                ) : visibles.map(r => {
+                  const ca = colorAlerta(r.alerta_tercero_inv);
+                  return (
+                    <tr key={r.placa}>
+                      <td style={{ ...td, fontFamily: "monospace", fontWeight: 800 }}>{r.placa}</td>
+                      <td style={{ ...td, fontFamily: "monospace", fontSize: 11 }}>{r.ceco || "—"}</td>
+                      <td style={td}>{r.tipo || "—"}</td>
+                      <td style={{ ...td, maxWidth: 230, overflow: "hidden", textOverflow: "ellipsis" }}
+                        title={r.match_empresa === "sin_empresa_en_brain" ? "Esta empresa no existe en el Brain" : (r.empresa_brain || "")}>
+                        {r.empresa || "—"}
+                        {r.match_empresa === "sin_empresa_en_brain" && r.empresa && (
+                          <span style={{ marginLeft: 6, fontSize: 9, fontWeight: 800, color: "#c0392b" }}>⚠</span>
+                        )}
+                      </td>
+                      <td style={{ ...td, color: r.tarjeta_circulacion === "VALIDADO" ? "#166534" : "#b45309", fontWeight: 600 }}>{r.tarjeta_circulacion || "—"}</td>
+                      <td style={{ ...td, color: r.seguro_terceros === "VALIDADO" ? "#166534" : "#b45309", fontWeight: 600 }}>{r.seguro_terceros || "—"}</td>
+                      <td style={{ ...td, fontWeight: 700 }}>{r.pct_certificacion === null || r.pct_certificacion === undefined ? "—" : Math.round(r.pct_certificacion * 100) + "%"}</td>
+                      <td style={{ ...td, fontSize: 11 }}>{r.ultimo_viaje || "—"}</td>
+                      <td style={td}>{r.cant_rutas ?? "—"}</td>
+                      <td style={{ ...td, fontWeight: 700, color: r.status === "ACTIVO" ? "#166534" : "#98a2b3" }}>{r.status || "—"}</td>
+                      <td style={td}>
+                        {r.alerta_tercero_inv ? (
+                          <span style={{ fontSize: 9.5, fontWeight: 800, padding: "3px 9px", borderRadius: 20, background: ca.bg, color: ca.fg }}>
+                            {r.alerta_tercero_inv}
+                          </span>
+                        ) : "—"}
+                      </td>
+                    </tr>
+                  );
+                })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div style={{ fontSize: 11, color: "#98a2b3", marginTop: 10, lineHeight: 1.6 }}>
+        La <b>placa</b> es la llave del padrón: cada carga actualiza las que vienen en el archivo y conserva
+        el resto. La columna <b>Empresa</b> marca con ⚠ cuando ese nombre no existe en el módulo Empresas —
+        se cruza por nombre y por alias, así que un cambio de razón social no rompe el enlace.
+      </div>
+    </div>
+  );
+}
+
 function ModuloCertificaciones() {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -6972,7 +7289,7 @@ function ModuloCertificaciones() {
 
       {/* Pestañas de sección */}
       <div style={{ display: "flex", gap: 4, marginBottom: 18, borderBottom: "1px solid #e4e7ec" }}>
-        {[["certificaciones", "📋 Certificaciones"], ["altas", "➕ Vehículos y Personal"], ["contratos", "📑 Gestionador de Contratos"], ["documentacion", "🗂 Documentación Terceros"], ["avisos", "🔔 Avisos"], ["mensajes", "💬 Mensajes"], ["tablero", "📊 Tablero de Control"]].map(([v, l]) => (
+        {[["certificaciones", "📋 Certificaciones"], ["altas", "➕ Vehículos y Personal"], ["flota", "🚚 Inventario de Flota"], ["contratos", "📑 Gestionador de Contratos"], ["documentacion", "🗂 Documentación Terceros"], ["avisos", "🔔 Avisos"], ["mensajes", "💬 Mensajes"], ["tablero", "📊 Tablero de Control"]].map(([v, l]) => (
           <button key={v} onClick={() => { setSeccion(v); setSelected(null); }}
             style={{ padding: "10px 16px", border: "none", cursor: "pointer", fontSize: 13, fontFamily: "'Geist',sans-serif",
               background: "transparent", fontWeight: seccion === v ? 700 : 400,
@@ -7011,6 +7328,7 @@ function ModuloCertificaciones() {
       </div>
 
       {seccion === "altas" && <AltaVehiculosPersonal onCreada={() => cargar(true)} />}
+      {seccion === "flota" && <InventarioFlota />}
       {seccion === "contratos" && <GestionadorContratos />}
       {seccion === "documentacion" && <DocumentacionTerceros />}
       {seccion === "avisos" && <AvisosRecordatorios onContador={setNAvisos} />}
