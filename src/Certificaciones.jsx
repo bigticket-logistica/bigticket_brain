@@ -6654,15 +6654,18 @@ function DiferenciasBitacora({ fecha, setFecha }) {
       q: "El supervisor confirmo otra empresa en el patio. Para el pago manda tu Excel: si el supervisor tiene razon, actualizalo." },
     SIN_EMPRESA_EN_BRAIN: { t: "Empresa no esta en el Brain", c: "#b45309", bg: "#fff8e6",
       q: "La empresa del padron no existe en Empresas o esta escrita distinto. Hay que darla de alta o crear el alias." },
-    SIN_PADRON: { t: "Sin registro en bitacora", c: "#667085", bg: "#f4f6f9",
-      q: "La placa opero hoy y el supervisor nunca la confirmo en el patio." },
-    SIN_CERTIFICACION: { t: "No esta en tu Excel", c: "#667085", bg: "#f4f6f9",
-      q: "La placa opero hoy y no viene en tu inventario. Para el pago manda lo que confirmo el supervisor." },
+    SIN_CONFIRMAR: { t: "Sin confirmar", c: "#667085", bg: "#f4f6f9",
+      q: "El supervisor todavia no confirma esta placa en su bitacora del dia. No es una diferencia: es un pendiente suyo." },
+    SIN_CERTIFICACION: { t: "No esta en tu Excel", c: "#b45309", bg: "#fff8e6",
+      q: "La placa opero y el supervisor la confirmo, pero no viene en tu inventario. Para el pago manda lo que el confirmo." },
   };
   const th = { textAlign: "left", padding: "9px 10px", fontSize: 11, fontWeight: 700, color: "#667085", background: "#f8fafc", whiteSpace: "nowrap" };
   const td = { padding: "8px 10px", fontSize: 12, borderBottom: "1px solid #f0f1f3" };
 
-  const malas = (filas || []).filter(f => f.alerta !== "OK");
+  // "Sin confirmar" no es una diferencia: es trabajo pendiente del supervisor.
+  // Mezclarlos esconde las discrepancias reales entre decenas de pendientes.
+  const malas = (filas || []).filter(f => f.alerta !== "OK" && f.alerta !== "SIN_CONFIRMAR");
+  const pend = (filas || []).filter(f => f.alerta === "SIN_CONFIRMAR");
   const ok = (filas || []).filter(f => f.alerta === "OK").length;
 
   return (
@@ -6691,15 +6694,30 @@ function DiferenciasBitacora({ fecha, setFecha }) {
         <div style={{ background: "#f4f6f9", borderRadius: 10, padding: 24, textAlign: "center", color: "#667085", fontSize: 13 }}>
           Sin placas con viaje ese dia.
         </div>
-      ) : malas.length === 0 ? (
-        <div style={{ background: "#e8f5ec", border: "1px solid #86c9a0", borderRadius: 10, padding: 24, textAlign: "center", color: "#166534", fontSize: 13, fontWeight: 700 }}>
-          Las {ok} placas del dia coinciden con tu inventario.
-        </div>
       ) : (
         <>
           <div style={{ fontSize: 12.5, color: "#667085", marginBottom: 10 }}>
-            <b style={{ color: "#c0392b" }}>{malas.length}</b> con diferencia · <b style={{ color: "#166534" }}>{ok}</b> correctas · {filas.length} placas con viaje
+            <b style={{ color: malas.length ? "#c0392b" : "#166534" }}>{malas.length}</b> con diferencia ·{" "}
+            <b style={{ color: "#166534" }}>{ok}</b> coinciden ·{" "}
+            <b style={{ color: "#667085" }}>{pend.length}</b> sin confirmar por el supervisor · {filas.length} placas con viaje
           </div>
+
+          {malas.length === 0 && (
+            <div style={{ background: "#e8f5ec", border: "1px solid #86c9a0", borderRadius: 10, padding: 20, textAlign: "center", color: "#166534", fontSize: 13, fontWeight: 700, marginBottom: 12 }}>
+              Ninguna diferencia entre tu inventario y lo confirmado en el patio.
+            </div>
+          )}
+
+          {pend.length > 0 && (
+            <div style={{ background: "#f4f6f9", border: "0.5px solid #e4e7ec", borderRadius: 10, padding: "12px 14px", marginBottom: 12, fontSize: 12.5, color: "#667085", lineHeight: 1.5 }}>
+              <b style={{ color: "#1a3a6b" }}>{pend.length} placa(s) sin confirmar por el supervisor.</b>{" "}
+              Todavia no se pueden comparar: hasta que el supervisor confirme su bitacora del dia, no sabemos si coinciden.
+              <div style={{ marginTop: 6, color: "#98a2b3", fontSize: 11.5 }}>
+                {[...new Set(pend.map(x => x.sc))].join(" · ")}
+              </div>
+            </div>
+          )}
+          {malas.length > 0 && (
           <div style={{ background: "#fff", border: "0.5px solid #e4e7ec", borderRadius: 10, overflow: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead><tr>
@@ -6733,6 +6751,7 @@ function DiferenciasBitacora({ fecha, setFecha }) {
               </tbody>
             </table>
           </div>
+          )}
         </>
       )}
     </div>
@@ -6770,7 +6789,7 @@ function InventarioFlota() {
     let cancel = false;
     (async () => {
       const { data } = await sb.rpc("fn_flota_discrepancias_dia", { p_fecha: fechaDif });
-      if (!cancel) setNDif((data || []).filter(d => d.alerta !== "OK").length);
+      if (!cancel) setNDif((data || []).filter(d => d.alerta !== "OK" && d.alerta !== "SIN_CONFIRMAR").length);
     })();
     return () => { cancel = true; };
   }, [fechaDif]);
