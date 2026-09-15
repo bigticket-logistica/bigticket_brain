@@ -429,17 +429,19 @@ export default function PnrCobrosMX({ usuario }) {
 
   // Ejecuta un lote de cobros: resuelve el SC de cada uno, agrupa por empresa y
   // SC final, y hace una sola escritura por prefactura.
-  const ejecutarCobros = async (lista) => {
+  const ejecutarCobros = async (lista, scForzado) => {
     const cache = {};
     const grupos = {};
     const sinOperacion = [];
     for (const f of lista) {
       const prep = prepararCobro(f);
-      let scFinal;
-      try {
-        scFinal = await resolverSc(f.empresa, prep.sc, cache);
-      } catch (e) {
-        console.error("resolver SC:", e); scFinal = null;
+      let scFinal = scForzado || null;
+      if (!scFinal) {
+        try {
+          scFinal = await resolverSc(f.empresa, prep.sc, cache);
+        } catch (e) {
+          console.error("resolver SC:", e); scFinal = null;
+        }
       }
       if (!scFinal) { sinOperacion.push(`${f.case_id} (${f.empresa})`); continue; }
       prep.linea.service_center_id = scFinal;
@@ -486,6 +488,36 @@ export default function PnrCobrosMX({ usuario }) {
       }
     }
     return { ok, movidos, fallidos, sinOperacion, nGrupos: Object.keys(grupos).length };
+  };
+
+  // Fuerza el cobro en un SC elegido por el analista. Sirve cuando la empresa
+  // no tiene operación en el SC del PNR, o directamente no operó esa semana.
+  const agregarForzando = async (f) => {
+    if (!f.empresa) {
+      setMsg({ ok: false, txt: `El PNR ${f.case_id} no tiene empresa resuelta.` });
+      return;
+    }
+    const { data: conc } = await sb.from("conciliaciones_terceros")
+      .select("service_center, n_viajes, estado")
+      .eq("empresa_nombre", f.empresa).eq("semana", semanaCobro);
+    const opciones = (conc || []).map(c => `${c.service_center} (${c.n_viajes || 0} viajes, ${c.estado})`);
+    const sc = window.prompt(
+      `¿En qué SC cobrar el PNR ${f.case_id}?\n\n${f.empresa} · semana ${semanaCobro}\nEl PNR corresponde a ${f.service_center}.\n\n` +
+      (opciones.length
+        ? `Prefacturas de esta empresa en la semana:\n${opciones.join("\n")}`
+        : `Esta empresa NO tiene prefactura en la semana ${semanaCobro}. Si escribís un SC igual, se va a crear una prefactura solo con este descuento y el líquido va a quedar en negativo.`),
+      opciones.length ? String(conc[0].service_center) : f.service_center || ""
+    );
+    if (!sc || !sc.trim()) return;
+    setGuardando(f.case_id); setMsg(null);
+    const r = await ejecutarCobros([f], sc.trim().toUpperCase());
+    setMsg(r.fallidos.length
+      ? { ok: false, txt: `No se pudo cobrar en ${r.fallidos.join(", ")}.` }
+      : { ok: !!r.ok, txt: r.ok
+          ? `PNR ${f.case_id} cobrado en ${sc.trim().toUpperCase()} por decisión del analista. La prefactura volvió a borrador.`
+          : `Esa prefactura ya tenía la línea del PNR ${f.case_id}.` });
+    setGuardando(null);
+    await cargar(semana, true);
   };
 
   const agregar = async (f) => {
@@ -804,6 +836,7 @@ export default function PnrCobrosMX({ usuario }) {
                           </button>
                         </div>
                       ) : (
+                        <div>
                         <button onClick={() => agregar(f)} disabled={guardando === f.case_id || !f.empresa || !f.sub_cobro}
                           title={!f.sub_cobro ? "El caso ya no está en un estado cobrable" : (!f.empresa ? "Falta resolver la empresa transportista" : "Agregar como línea negativa a la conciliación")}
                           style={{
@@ -814,6 +847,12 @@ export default function PnrCobrosMX({ usuario }) {
                           }}>
                           {guardando === f.case_id ? "Agregando…" : "Agregar"}
                         </button>
+                          <div onClick={() => guardando ? null : agregarForzando(f)}
+                            title="Elegir a mano el SC donde se descuenta"
+                            style={{ marginTop: 3, fontSize: 9, color: "#1a3a6b", textDecoration: "underline", cursor: guardando ? "default" : "pointer" }}>
+                            forzar SC
+                          </div>
+                        </div>
                       )}
                     </td>
                   </tr>
