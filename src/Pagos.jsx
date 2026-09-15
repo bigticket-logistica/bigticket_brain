@@ -6738,6 +6738,8 @@ function ListadoPagosDiarios({ usuario }) {
   const [publicando, setPublicando] = useState(null);       // sc en curso
   const [guardadoPorSC, setGuardadoPorSC] = useState({});   // sc -> rutas en tarifado_mx
   const [scAbierto, setScAbierto] = useState(null);         // sc con el detalle desplegado
+  const [publicadas, setPublicadas] = useState({});         // id_ruta -> foto vigente publicada
+  const [marcadas, setMarcadas] = useState({});             // id_ruta -> true (republicar solo estas)
   const [revisiones, setRevisiones] = useState({});         // id_ruta -> fila de revision_ruta_mx
   // ── Datos incompletos: qué le falta a una línea para poder tarifarse bien ──
   // A diferencia de "Con alertas" (que incluye avisos operativos), esto marca SOLO
@@ -7366,10 +7368,11 @@ function ListadoPagosDiarios({ usuario }) {
   // en memoria: así el tercero ve exactamente lo mismo que irá en su prefactura.
   const cargarPublicaciones = useCallback(async () => {
     try {
-      const [pubR, tarR, revR] = await Promise.all([
+      const [pubR, tarR, revR, linR] = await Promise.all([
         sb.from("vw_publicacion_vigente_mx").select("*").eq("fecha", fecha),
         sb.from("tarifado_mx").select("service_center_id").eq("fecha", fecha),
         sb.from("revision_ruta_mx").select("*").eq("fecha", fecha),
+        sb.from("vw_publicacion_lineas_vigente").select("*").eq("fecha", fecha),
       ]);
       const mp = {};
       for (const r of (pubR.data || [])) mp[r.service_center] = r;
@@ -7380,6 +7383,10 @@ function ListadoPagosDiarios({ usuario }) {
       const mr = {};
       for (const r of (revR.data || [])) mr[r.id_ruta] = r;
       setRevisiones(mr);
+      const ml = {};
+      for (const r of (linR.data || [])) ml[r.id_ruta] = r;
+      setPublicadas(ml);
+      setMarcadas({});
     } catch (e) { console.error("No se pudo leer el estado de publicación:", e); }
   }, [fecha]);
   useEffect(() => { cargarPublicaciones(); }, [cargarPublicaciones]);
@@ -7422,23 +7429,44 @@ function ListadoPagosDiarios({ usuario }) {
       : `Publicados ${ok} centro(s) del ${fecha}.`);
   };
 
-  // Escribe la publicación de un SC. Lanza si falla (lo maneja quien llama).
-  const publicarUno = async (sc, motivo) => {
+  // Escribe la publicación de un SC y la FOTO de cada ruta. La foto es lo que
+  // ve el tercero: sin ella, cualquier recálculo posterior le cambia el número
+  // en pantalla sin que nadie lo haya decidido.
+  // soloRutas: si viene, republica únicamente esas (las demás conservan su foto).
+  const publicarUno = async (sc, motivo, soloRutas = null) => {
     const vig = publicaciones[sc];
+    const version = vig ? vig.version + 1 : 1;
     const { data: guardado, error: eG } = await sb.from("tarifado_mx")
-      .select("id_ruta, pago_neto, tercero_id").eq("fecha", fecha).eq("service_center_id", sc);
+      .select("*").eq("fecha", fecha).eq("service_center_id", sc);
     if (eG) throw new Error("no se pudo leer el tarifado guardado");
     if (!guardado || guardado.length === 0) throw new Error("sin tarifado guardado");
+
     const { data: exc } = await sb.from("revision_ruta_mx")
       .select("id_ruta, estado").eq("fecha", fecha)
       .in("id_ruta", guardado.map(g => g.id_ruta));
     const estadoDe = {};
     for (const e of (exc || [])) estadoDe[e.id_ruta] = e.estado;
+
+    const aPublicar = soloRutas ? guardado.filter(g => soloRutas.includes(g.id_ruta)) : guardado;
+    if (aPublicar.length === 0) throw new Error("no marcaste ninguna ruta");
+
+    const lineas = aPublicar.map(g => ({
+      fecha, service_center: sc, id_ruta: g.id_ruta, version,
+      tercero_id: g.tercero_id, placa: g.placa, driver_name: g.driver_name,
+      ns_pct: g.ns_pct, pct_visitado: g.pct_visitado, ns_categoria: g.ns_categoria,
+      tiene_auxiliar: g.tiene_auxiliar, monto_auxiliar: g.monto_auxiliar,
+      pago_neto: g.pago_neto, motivo,
+      publicado_por: (usuario && (usuario.email || usuario.nombre)) || "brain",
+    }));
+    for (let i = 0; i < lineas.length; i += 500) {
+      const { error } = await sb.from("publicacion_lineas_mx").insert(lineas.slice(i, i + 500));
+      if (error) throw error;
+    }
+
     const rechazadas = guardado.filter(g => estadoDe[g.id_ruta] === "rechazada").length;
     const pausadas   = guardado.filter(g => ["pausada", "bloqueada"].includes(estadoDe[g.id_ruta])).length;
     const { error } = await sb.from("publicacion_dia_mx").insert({
-      fecha, service_center: sc,
-      version: vig ? vig.version + 1 : 1,
+      fecha, service_center: sc, version,
       rutas_total: guardado.length,
       rutas_aprobadas: guardado.length - rechazadas - pausadas,
       rutas_rechazadas: rechazadas,
@@ -7469,9 +7497,26 @@ function ListadoPagosDiarios({ usuario }) {
       if (!confirm(`Publicar ${sc} · ${fecha}\n\n${guardadas} rutas guardadas${aviso}\n\nEl tercero lo verá en su portal. ¿Continuar?`)) return;
     }
     setPublicando(sc);
-    try { await publicarUno(sc, motivo); await cargarPublicaciones(); }
+    try { await publicarUno(sc, motivo, marcadasDe(sc)); await cargarPublicaciones(); }
     catch (e) { alert("No se pudo publicar:\n\n" + e.message); }
     setPublicando(null);
+  };
+
+  // Una ruta "cambió" si su monto o su ayudante no coinciden con la foto que
+  // el tercero está viendo. Es lo que el analista necesita ver de un vistazo
+  // después de recalcular: qué se movió de verdad y qué no.
+  const cambioDe = (p) => {
+    const pub = publicadas[p.id_ruta];
+    if (!pub) return "nueva";
+    const dif = Math.abs(Number(pub.pago_neto || 0) - Number(p.pago_neto || 0));
+    if (dif >= 0.01) return Number(p.pago_neto || 0) > Number(pub.pago_neto || 0) ? "subio" : "bajo";
+    if (!!pub.tiene_auxiliar !== !!p.tiene_auxiliar) return "ayudante";
+    return null;
+  };
+
+  const marcadasDe = (sc) => {
+    const ids = detalleSC(sc).filter(d => marcadas[d.id_ruta]).map(d => d.id_ruta);
+    return ids.length ? ids : null;   // null = republicar el SC completo
   };
 
   // Detalle de un SC: rutas del cálculo con su empresa asignada
@@ -7480,7 +7525,8 @@ function ListadoPagosDiarios({ usuario }) {
     .map(p => ({
       id_ruta: p.id_ruta, placa: p.placa, driver: p.driver_name,
       empresa: empresaDeFila(p), monto: Number(p.pago_neto || 0),
-      noPago: !!p.es_no_pago,
+      noPago: !!p.es_no_pago, cambio: cambioDe(p),
+      montoPub: publicadas[p.id_ruta] ? Number(publicadas[p.id_ruta].pago_neto || 0) : null,
     }))
     .sort((a, b) => String(a.empresa).localeCompare(String(b.empresa)) || String(a.placa).localeCompare(String(b.placa)));
 
@@ -7609,27 +7655,80 @@ function ListadoPagosDiarios({ usuario }) {
                     </div>
                   )}
 
-                  {/* Detalle: qué va a ver cada empresa de este centro */}
-                  {abierto && det && (
-                    <div style={{ marginTop: 10, background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, overflow: "hidden" }}>
-                      <div style={{ display: "grid", gridTemplateColumns: "1.6fr .8fr .8fr 1.2fr .8fr", gap: 8, padding: "7px 10px", background: "#f8fafc", fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.4 }}>
-                        <span>Empresa</span><span>Placa</span><span>Ruta</span><span>Conductor</span><span style={{ textAlign: "right" }}>Monto</span>
-                      </div>
-                      {det.map(d => (
-                        <div key={d.id_ruta} style={{ display: "grid", gridTemplateColumns: "1.6fr .8fr .8fr 1.2fr .8fr", gap: 8, padding: "7px 10px", borderTop: "1px solid #f1f5f9", fontSize: 11.5, alignItems: "center" }}>
-                          <span style={{ color: d.empresa ? "#334155" : "#b45309", fontWeight: d.empresa ? 400 : 600 }}>
-                            {d.empresa || "⚠️ sin empresa en el padrón"}
-                          </span>
-                          <span style={{ fontWeight: 600, color: "#334155" }}>{d.placa || "—"}</span>
-                          <span style={{ color: "#94a3b8" }}>{d.id_ruta}</span>
-                          <span style={{ color: "#64748b" }}>{d.driver || "—"}</span>
-                          <span style={{ textAlign: "right", fontVariantNumeric: "tabular-nums", color: d.noPago ? "#b91c1c" : "#334155", fontWeight: 600 }}>
-                            {d.noPago ? "no pago" : `$${Number(d.monto).toLocaleString("es-MX")}`}
-                          </span>
+                  {/* Detalle: qué va a ver cada empresa, y qué se movió */}
+                  {abierto && det && (() => {
+                    const conCambio = det.filter(d => d.cambio);
+                    const nMarc = det.filter(d => marcadas[d.id_ruta]).length;
+                    const MARCA = {
+                      subio:    { t: "SUBIÓ",    bg: "#dcfce7", fg: "#166534" },
+                      bajo:     { t: "BAJÓ",     bg: "#fee2e2", fg: "#991b1b" },
+                      ayudante: { t: "AYUDANTE", bg: "#e0e7ff", fg: "#3730a3" },
+                      nueva:    { t: "NUEVA",    bg: "#fef3c7", fg: "#92400e" },
+                    };
+                    return (
+                      <div style={{ marginTop: 10, background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, overflow: "hidden" }}>
+                        {pub && (
+                          <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", background: conCambio.length ? "#fffbeb" : "#f8fafc", borderBottom: "1px solid #e4e7ec", fontSize: 11.5, flexWrap: "wrap" }}>
+                            <span style={{ color: conCambio.length ? "#92400e" : "#64748b", fontWeight: 600 }}>
+                              {conCambio.length
+                                ? `${conCambio.length} ruta(s) cambiaron respecto de lo publicado`
+                                : "Ninguna ruta cambió respecto de lo publicado"}
+                            </span>
+                            {conCambio.length > 0 && (
+                              <button onClick={() => setMarcadas(m => { const n = { ...m }; for (const d of conCambio) n[d.id_ruta] = true; return n; })}
+                                style={{ border: "1px solid #f59e0b", background: "#fff", color: "#92400e", fontSize: 11, fontWeight: 700, borderRadius: 4, padding: "4px 10px", cursor: "pointer" }}>
+                                Marcar las que cambiaron
+                              </button>
+                            )}
+                            {nMarc > 0 && (
+                              <>
+                                <span style={{ color: "#1a3a6b", fontWeight: 700 }}>{nMarc} marcada(s) para republicar</span>
+                                <button onClick={() => setMarcadas(m => { const n = { ...m }; for (const d of det) delete n[d.id_ruta]; return n; })}
+                                  style={{ border: "1px solid #e4e7ec", background: "#fff", color: "#64748b", fontSize: 11, borderRadius: 4, padding: "4px 10px", cursor: "pointer" }}>
+                                  Quitar marcas
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        )}
+                        <div style={{ display: "grid", gridTemplateColumns: "30px 1.5fr .8fr .8fr 1fr .9fr .9fr", gap: 8, padding: "7px 10px", background: "#f8fafc", fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.4 }}>
+                          <span />
+                          <span>Empresa</span><span>Placa</span><span>Ruta</span><span>Conductor</span>
+                          <span style={{ textAlign: "right" }}>Publicado</span><span style={{ textAlign: "right" }}>Ahora</span>
                         </div>
-                      ))}
-                    </div>
-                  )}
+                        {det.map(d => {
+                          const mk = MARCA[d.cambio];
+                          const chk = !!marcadas[d.id_ruta];
+                          return (
+                            <div key={d.id_ruta} style={{ display: "grid", gridTemplateColumns: "30px 1.5fr .8fr .8fr 1fr .9fr .9fr", gap: 8, padding: "7px 10px", borderTop: "1px solid #f1f5f9", fontSize: 11.5, alignItems: "center", background: chk ? "#eff6ff" : mk ? "#fffdf5" : "#fff" }}>
+                              <span>
+                                {pub && (
+                                  <input type="checkbox" checked={chk}
+                                    onChange={() => setMarcadas(m => { const n = { ...m }; if (chk) delete n[d.id_ruta]; else n[d.id_ruta] = true; return n; })}
+                                    style={{ width: 15, height: 15, cursor: "pointer" }} />
+                                )}
+                              </span>
+                              <span style={{ color: d.empresa ? "#334155" : "#b45309", fontWeight: d.empresa ? 400 : 600 }}>
+                                {d.empresa || "⚠️ sin empresa en el padrón"}
+                              </span>
+                              <span style={{ fontWeight: 600, color: "#334155" }}>{d.placa || "—"}</span>
+                              <span style={{ color: "#94a3b8" }}>{d.id_ruta}</span>
+                              <span style={{ color: "#64748b" }}>{d.driver || "—"}</span>
+                              <span style={{ textAlign: "right", color: "#94a3b8", fontVariantNumeric: "tabular-nums" }}>
+                                {d.montoPub != null ? `$${d.montoPub.toLocaleString("es-MX")}` : "—"}
+                              </span>
+                              <span style={{ textAlign: "right", fontVariantNumeric: "tabular-nums", color: d.noPago ? "#b91c1c" : "#334155", fontWeight: 600 }}>
+                                {d.noPago ? "no pago" : `$${Number(d.monto).toLocaleString("es-MX")}`}
+                                {mk && (
+                                  <span style={{ marginLeft: 5, fontSize: 8.5, fontWeight: 700, padding: "1px 5px", borderRadius: 3, background: mk.bg, color: mk.fg }}>{mk.t}</span>
+                                )}
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    );
+                  })()}
 
                   <button onClick={() => publicarSC(sc)} disabled={enCurso || sinGuardar || publicando !== null}
                     style={{
@@ -7638,7 +7737,9 @@ function ListadoPagosDiarios({ usuario }) {
                       color: "#fff", fontSize: 11.5, fontWeight: 600,
                       cursor: (enCurso || sinGuardar || publicando !== null) ? "not-allowed" : "pointer",
                     }}>
-                    {enCurso ? "Publicando..." : pub ? "Republicar con motivo" : "Publicar solo este centro"}
+                    {enCurso ? "Publicando..."
+                      : pub ? (marcadasDe(sc) ? `Republicar ${marcadasDe(sc).length} ruta(s) marcada(s)` : "Republicar todo el centro")
+                      : "Publicar solo este centro"}
                   </button>
                 </div>
               );

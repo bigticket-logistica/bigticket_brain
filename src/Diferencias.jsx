@@ -203,6 +203,27 @@ function DetalleCaso({ caso, quien, onCerrar, onCambio }) {
     const { error } = await sb.from("diferencias_lineas")
       .update({ estado, monto_reconocido: monto, resolucion: resolucion.trim() }).eq("id", l.id);
     if (error) { alert("No se pudo guardar: " + error.message); setTrabajando(false); return; }
+    // Aceptar sin generar el ajuste es aceptar en el papel: el tercero lee
+    // "aceptada" y no le llega la plata. El movimiento se crea acá mismo, en
+    // la fecha de hoy — entra en la semana donde efectivamente se paga, y la
+    // semana que originó el reclamo (ya enviada) no se mueve.
+    if (estado === "aceptada" && monto) {
+      const hoy = new Date().toISOString().slice(0, 10);
+      const sc = (l.id_ruta && detalleRuta[l.id_ruta]?.service_center_id) || caso.service_center;
+      if (!sc) {
+        alert("No se pudo determinar el centro de servicio del ajuste.\n\nLa línea quedó aceptada pero SIN ajuste: créalo a mano en la prefactura.");
+      } else {
+        const { error: eAj } = await sb.from("ajustes_pago_mx").insert({
+          tercero_id: caso.tercero_id, service_center: sc,
+          fecha: hoy, fecha_origen: l.fecha, monto,
+          concepto: `Diferencia #${caso.folio} · ${TIPO_LINEA[l.tipo]}${l.id_ruta ? ` ${l.id_ruta}` : ""}${l.fecha ? ` del ${l.fecha}` : ""}`,
+          diferencia_id: caso.id, linea_id: l.id, creado_por: quien,
+        });
+        if (eAj) alert("La línea quedó aceptada, pero NO se generó el ajuste:\n\n" + eAj.message + "\n\nCréalo a mano en la prefactura.");
+        else await evento("ajuste_generado", `${money(monto)} en la prefactura de ${sc} · ${hoy}`);
+      }
+    }
+
     await evento(estado === "aceptada" ? "linea_aceptada" : "linea_rechazada",
       `${TIPO_LINEA[l.tipo]} ${l.id_ruta || l.placa || ""}: ${resolucion.trim()}${monto ? ` · ${money(monto)}` : ""}`);
     const { data } = await sb.from("diferencias_lineas").select("*").eq("diferencia_id", caso.id);
