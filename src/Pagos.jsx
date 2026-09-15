@@ -7457,6 +7457,15 @@ function ListadoPagosDiarios({ usuario }) {
   const totalGuardadas = useMemo(
     () => Object.values(guardadoPorSC).reduce((t, n) => t + n, 0), [guardadoPorSC]);
 
+  // Rutas que operaron y no tienen empresa en el padrón: si se publican, nadie
+  // las ve. Es el único error que ningún tercero va a reclamar — no sabe que
+  // existen — así que tiene que gritar antes de publicar, no después.
+  const sinEmpresaDia = useMemo(() => {
+    const ss = (pagos || []).filter(p => !empresaDeFila(p));
+    return { n: ss.length, monto: ss.reduce((t, p) => t + Number(p.pago_neto || 0), 0),
+             scs: [...new Set(ss.map(p => p.service_center_id || "—"))] };
+  }, [pagos, empresaMap, empresaMapSem]);
+
   // Publica el día completo: un solo acto para los N centros del día.
   // El detalle por SC de abajo queda para cuando haya que retener uno.
   const publicarDia = async () => {
@@ -7465,7 +7474,10 @@ function ListadoPagosDiarios({ usuario }) {
     const rutas = pend.reduce((t, r) => t + (guardadoPorSC[r.sc] || 0), 0);
     const yaPub = pend.filter(r => publicaciones[r.sc]).length;
     const aviso = yaPub > 0 ? `\n\n${yaPub} centro(s) ya están publicados y se omitirán. Para corregirlos, publicá ese centro por separado.` : "";
-    if (!confirm(`Aprobar y publicar el día ${fecha}\n\n${rutas} rutas · ${pend.length - yaPub} centro(s)${aviso}\n\nLos terceros lo verán en su portal. ¿Continuar?`)) return;
+    const huerf = sinEmpresaDia.n > 0
+      ? `\n\n⚠️ ${sinEmpresaDia.n} ruta(s) por $${Number(sinEmpresaDia.monto).toLocaleString("es-MX")} no tienen empresa en el padrón: nadie las va a ver, y ningún tercero las va a reclamar porque no sabe que existen.`
+      : "";
+    if (!confirm(`Aprobar y publicar el día ${fecha}\n\n${rutas} rutas · ${pend.length - yaPub} centro(s)${aviso}${huerf}\n\nLos terceros lo verán en su portal. ¿Continuar?`)) return;
     setPublicando("__DIA__");
     let ok = 0, fallos = [];
     for (const r of pend) {
@@ -7655,6 +7667,18 @@ function ListadoPagosDiarios({ usuario }) {
             </button>
           )}
         </div>
+
+        {sinEmpresaDia.n > 0 && (
+          <div style={{ background: "#fef2f2", border: "1px solid #fca5a5", borderRadius: 6, padding: "10px 12px", marginBottom: 10 }}>
+            <div style={{ fontSize: 12.5, fontWeight: 700, color: "#991b1b" }}>
+              ⚠️ {sinEmpresaDia.n} ruta(s) sin empresa en el padrón · ${Number(sinEmpresaDia.monto).toLocaleString("es-MX")}
+            </div>
+            <div style={{ fontSize: 11.5, color: "#7f1d1d", marginTop: 3, lineHeight: 1.4 }}>
+              Si publicás así, esas rutas no las ve nadie y ningún tercero las va a reclamar.
+              Revisá el inventario de flota antes de publicar — centros: {sinEmpresaDia.scs.join(", ")}.
+            </div>
+          </div>
+        )}
 
         {resumenSC.length === 0 ? (
           <div style={{ fontSize: 12, color: "#94a3b8" }}>Calculá el día para ver los centros de servicio.</div>
