@@ -6618,18 +6618,36 @@ const fechaExcel = (v) => {
   return null;
 };
 
-// Contraste entre lo que declara el analista en su Excel y lo que el supervisor
-// confirmo en el patio. Para el pago manda el Excel; si la placa no esta ahi,
-// manda la bitacora. Esta pantalla no resuelve: muestra lo que hay que corregir.
-function DiferenciasBitacora({ difs }) {
-  const [ver, setVer] = useState("recientes");
-  if (difs === null) return <div style={{ padding: 30, color: "#98a2b3", fontSize: 13 }}>Cargando…</div>;
+// Contraste del DIA entre lo que declara el analista en su Excel y lo que el
+// supervisor confirmo en el patio, sobre las placas que hicieron viaje ese dia.
+//
+// Por dia y no un historico de 30 dias: la pregunta operativa es "que esta mal
+// hoy", no "que estuvo mal alguna vez". Un historico convierte la alerta en una
+// lista larga que nadie revisa.
+//
+// Para el pago manda el Excel del analista; si la placa no esta ahi, manda la
+// bitacora. Por eso esta pantalla no resuelve: muestra lo que hay que corregir.
+function DiferenciasBitacora({ fecha, setFecha }) {
+  const [filas, setFilas] = useState(null);
+  const [err, setErr] = useState(null);
 
-  const dias = (f) => f ? Math.floor((Date.now() - new Date(f).getTime()) / 86400000) : null;
-  const base = difs.filter(d => d.alerta !== "OK");
-  const filas = ver === "recientes"
-    ? base.filter(d => dias(d.ultimo_viaje) !== null && dias(d.ultimo_viaje) <= 30)
-    : base;
+  useEffect(() => {
+    let cancel = false;
+    (async () => {
+      setFilas(null); setErr(null);
+      const { data, error } = await sb.rpc("fn_flota_discrepancias_dia", { p_fecha: fecha });
+      if (cancel) return;
+      if (error) { setErr(error.message); setFilas([]); return; }
+      setFilas(data || []);
+    })();
+    return () => { cancel = true; };
+  }, [fecha]);
+
+  const mover = (n) => {
+    const d = new Date(fecha + "T12:00:00");
+    d.setDate(d.getDate() + n);
+    setFecha(d.toISOString().slice(0, 10));
+  };
 
   const TXT = {
     TERCERO_DISTINTO: { t: "Tercero distinto", c: "#c0392b", bg: "#fbeaea",
@@ -6637,69 +6655,90 @@ function DiferenciasBitacora({ difs }) {
     SIN_EMPRESA_EN_BRAIN: { t: "Empresa no esta en el Brain", c: "#b45309", bg: "#fff8e6",
       q: "La empresa del padron no existe en Empresas o esta escrita distinto. Hay que darla de alta o crear el alias." },
     SIN_PADRON: { t: "Sin registro en bitacora", c: "#667085", bg: "#f4f6f9",
-      q: "La placa esta en tu Excel pero el supervisor nunca la confirmo en el patio." },
+      q: "La placa opero hoy y el supervisor nunca la confirmo en el patio." },
+    SIN_CERTIFICACION: { t: "No esta en tu Excel", c: "#667085", bg: "#f4f6f9",
+      q: "La placa opero hoy y no viene en tu inventario. Para el pago manda lo que confirmo el supervisor." },
   };
   const th = { textAlign: "left", padding: "9px 10px", fontSize: 11, fontWeight: 700, color: "#667085", background: "#f8fafc", whiteSpace: "nowrap" };
   const td = { padding: "8px 10px", fontSize: 12, borderBottom: "1px solid #f0f1f3" };
 
+  const malas = (filas || []).filter(f => f.alerta !== "OK");
+  const ok = (filas || []).filter(f => f.alerta === "OK").length;
+
   return (
     <div>
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
-        <div style={{ fontSize: 11.5, color: "#98a2b3", flex: 1, minWidth: 260, lineHeight: 1.5 }}>
-          Lo que declara tu Excel frente a lo que el supervisor confirmo en el patio.
-          Para el pago <b>manda tu Excel</b>; si la placa no esta ahi, manda la bitacora.
+        <button onClick={() => mover(-1)} style={navBtnCert}>‹</button>
+        <input type="date" value={fecha} onChange={(e) => setFecha(e.target.value)}
+          style={{ border: "0.5px solid #e4e7ec", borderRadius: 8, padding: "7px 11px", fontSize: 12.5, fontFamily: "'Geist',sans-serif" }} />
+        <button onClick={() => mover(1)} style={navBtnCert}>›</button>
+        <button onClick={() => setFecha(new Date(Date.now() - 6 * 3600 * 1000).toISOString().slice(0, 10))}
+          style={{ ...navBtnCert, width: "auto", padding: "7px 14px", fontSize: 12 }}>Hoy</button>
+        <div style={{ fontSize: 11.5, color: "#98a2b3", flex: 1, minWidth: 220, lineHeight: 1.5 }}>
+          Placas con viaje ese dia. Para el pago <b>manda tu Excel</b>; si la placa no esta ahi, manda la bitacora.
         </div>
-        {[["recientes", "Con viaje en 30 dias"], ["todas", "Todas"]].map(([id, l]) => (
-          <button key={id} onClick={() => setVer(id)}
-            style={{ padding: "6px 13px", borderRadius: 16, fontSize: 11.5, fontWeight: 700, cursor: "pointer",
-              fontFamily: "'Geist',sans-serif",
-              border: `0.5px solid ${ver === id ? "#1a3a6b" : "#e4e7ec"}`,
-              background: ver === id ? "#1a3a6b" : "#fff", color: ver === id ? "#fff" : "#667085" }}>{l}</button>
-        ))}
       </div>
 
-      {filas.length === 0 ? (
+      {err && (
+        <div style={{ background: "#fbeaea", color: "#c0392b", borderRadius: 10, padding: "11px 14px", fontSize: 12.5, marginBottom: 12 }}>
+          {err}
+        </div>
+      )}
+
+      {filas === null ? (
+        <div style={{ padding: 30, textAlign: "center", color: "#98a2b3", fontSize: 13 }}>Cargando…</div>
+      ) : filas.length === 0 ? (
+        <div style={{ background: "#f4f6f9", borderRadius: 10, padding: 24, textAlign: "center", color: "#667085", fontSize: 13 }}>
+          Sin placas con viaje ese dia.
+        </div>
+      ) : malas.length === 0 ? (
         <div style={{ background: "#e8f5ec", border: "1px solid #86c9a0", borderRadius: 10, padding: 24, textAlign: "center", color: "#166534", fontSize: 13, fontWeight: 700 }}>
-          Sin diferencias{ver === "recientes" ? " en placas con viaje reciente" : ""}.
+          Las {ok} placas del dia coinciden con tu inventario.
         </div>
       ) : (
-        <div style={{ background: "#fff", border: "0.5px solid #e4e7ec", borderRadius: 10, overflow: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead><tr>
-              <th style={th}>Placa</th><th style={th}>CECO</th>
-              <th style={th}>Tu Excel dice</th><th style={th}>El patio dice</th>
-              <th style={th}>Confirmada</th><th style={th}>Ultimo viaje</th><th style={th}>Que pasa</th>
-            </tr></thead>
-            <tbody>
-              {filas.map(d => {
-                const a = TXT[d.alerta] || TXT.SIN_PADRON;
-                const dv = dias(d.ultimo_viaje);
-                return (
-                  <tr key={d.placa}>
-                    <td style={{ ...td, fontWeight: 700, color: "#1a3a6b" }}>{d.placa}</td>
-                    <td style={{ ...td, color: "#667085" }}>{d.ceco || "—"}</td>
-                    <td style={td}>{d.empresa_certificacion || "—"}</td>
-                    <td style={{ ...td, color: d.empresa_padron ? "#1a1a1a" : "#98a2b3" }}>{d.empresa_padron || "sin registro"}</td>
-                    <td style={{ ...td, color: "#667085", whiteSpace: "nowrap" }}>
-                      {d.vigente_desde || "—"}{d.fuente ? ` · ${d.fuente}` : ""}
-                    </td>
-                    <td style={{ ...td, color: dv !== null && dv <= 7 ? "#c0392b" : "#667085", whiteSpace: "nowrap", fontWeight: dv !== null && dv <= 7 ? 700 : 400 }}>
-                      {d.ultimo_viaje || "sin viajes"}{dv !== null ? ` · ${dv}d` : ""}
-                    </td>
-                    <td style={td}>
-                      <span style={{ display: "inline-block", padding: "2px 8px", borderRadius: 10, fontSize: 10.5, fontWeight: 700, background: a.bg, color: a.c, whiteSpace: "nowrap" }}>{a.t}</span>
-                      <div style={{ fontSize: 11, color: "#667085", marginTop: 4, maxWidth: 340, lineHeight: 1.4 }}>{a.q}</div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+        <>
+          <div style={{ fontSize: 12.5, color: "#667085", marginBottom: 10 }}>
+            <b style={{ color: "#c0392b" }}>{malas.length}</b> con diferencia · <b style={{ color: "#166534" }}>{ok}</b> correctas · {filas.length} placas con viaje
+          </div>
+          <div style={{ background: "#fff", border: "0.5px solid #e4e7ec", borderRadius: 10, overflow: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead><tr>
+                <th style={th}>Placa</th><th style={th}>SC</th><th style={th}>Conductor</th>
+                <th style={th}>Tu Excel dice</th><th style={th}>El patio dice</th>
+                <th style={th}>Confirmada</th><th style={th}>Que pasa</th>
+              </tr></thead>
+              <tbody>
+                {malas.map(f => {
+                  const a = TXT[f.alerta] || TXT.SIN_PADRON;
+                  return (
+                    <tr key={f.placa}>
+                      <td style={{ ...td, fontWeight: 700, color: "#1a3a6b" }}>
+                        {f.placa}
+                        <div style={{ fontWeight: 400, fontSize: 11, color: "#98a2b3" }}>{f.rutas} ruta{f.rutas > 1 ? "s" : ""}</div>
+                      </td>
+                      <td style={{ ...td, color: "#667085" }}>{f.sc || "—"}</td>
+                      <td style={{ ...td, color: "#667085" }}>{f.conductor || "—"}</td>
+                      <td style={td}>{f.empresa_certificacion || <span style={{ color: "#98a2b3" }}>no esta</span>}</td>
+                      <td style={{ ...td, color: f.empresa_padron ? "#1a1a1a" : "#98a2b3" }}>{f.empresa_padron || "sin registro"}</td>
+                      <td style={{ ...td, color: "#667085", whiteSpace: "nowrap" }}>
+                        {f.vigente_desde || "—"}{f.fuente ? ` · ${f.fuente}` : ""}
+                      </td>
+                      <td style={td}>
+                        <span style={{ display: "inline-block", padding: "2px 8px", borderRadius: 10, fontSize: 10.5, fontWeight: 700, background: a.bg, color: a.c, whiteSpace: "nowrap" }}>{a.t}</span>
+                        <div style={{ fontSize: 11, color: "#667085", marginTop: 4, maxWidth: 340, lineHeight: 1.4 }}>{a.q}</div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </>
       )}
     </div>
   );
 }
+const navBtnCert = { border: "0.5px solid #e4e7ec", background: "#fff", color: "#1a3a6b", borderRadius: 8, width: 32, height: 32, fontSize: 15, fontWeight: 700, cursor: "pointer", fontFamily: "'Geist',sans-serif" };
 
 function InventarioFlota() {
   const [rows, setRows] = useState(null);
@@ -6711,15 +6750,8 @@ function InventarioFlota() {
   const [msg, setMsg] = useState(null);
   const fileRef = useRef(null);
   const [sub, setSub] = useState("padron");   // padron | diferencias
-  const [difs, setDifs] = useState(null);     // cruce contra lo que confirmo el supervisor
-  // Solo cuentan las placas que operaron hace poco: una parada hace meses con
-  // el nombre mal escrito no le quita plata a nadie, y ahogaria la alerta.
-  const relevantes = (difs || []).filter(d => {
-    if (d.alerta === "OK") return false;
-    if (!d.ultimo_viaje) return false;
-    return (Date.now() - new Date(d.ultimo_viaje).getTime()) / 86400000 <= 30;
-  });
-  const nDif = relevantes.length;
+  const [fechaDif, setFechaDif] = useState(() => new Date(Date.now() - 6 * 3600 * 1000).toISOString().slice(0, 10));
+  const [nDif, setNDif] = useState(0);        // diferencias del dia, para el contador de la subpestaña
 
   const cargar = async () => {
     const [{ data: inv }, { data: cg }] = await Promise.all([
@@ -6728,11 +6760,20 @@ function InventarioFlota() {
     ]);
     setRows(inv || []);
     setCargas(cg || []);
-    // Cruce con lo que el supervisor confirmo en el patio.
-    const { data: dd } = await sb.from("vw_flota_discrepancias").select("*");
-    setDifs(dd || []);
+
   };
-  useEffect(() => { cargar(); }, []);
+  useEffect(() => { cargar(); }, []);
+  // El numero de la subpestaña se calcula aca y no dentro de ella: si se contara
+  // al montar el componente, el analista veria el aviso recien despues de entrar,
+  // justo cuando ya no sirve para avisarle.
+  useEffect(() => {
+    let cancel = false;
+    (async () => {
+      const { data } = await sb.rpc("fn_flota_discrepancias_dia", { p_fecha: fechaDif });
+      if (!cancel) setNDif((data || []).filter(d => d.alerta !== "OK").length);
+    })();
+    return () => { cancel = true; };
+  }, [fechaDif]);
 
   const subir = async (ev) => {
     const file = ev.target.files && ev.target.files[0];
@@ -6888,7 +6929,7 @@ function InventarioFlota() {
       </div>
 
       {sub === "diferencias" && (
-        <DiferenciasBitacora difs={difs} />
+        <DiferenciasBitacora fecha={fechaDif} setFecha={setFechaDif} />
       )}
 
 
