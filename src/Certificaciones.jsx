@@ -4175,7 +4175,7 @@ function NotaBiggy({ score }) {
   );
 }
 
-function KanbanBoard({ items, columnas = COLUMNAS, onCardClick, onMover, onEliminar }) {
+function KanbanBoard({ items, columnas = COLUMNAS, onCardClick, onMover, onEliminar, nuevas }) {
   const dragKey = useRef(null);
   const didDrag = useRef(false);
   const [overCol, setOverCol] = useState(null);
@@ -4276,6 +4276,14 @@ function KanbanBoard({ items, columnas = COLUMNAS, onCardClick, onMover, onElimi
                     <span style={{ fontSize: 10, color: "#888", fontWeight: 600 }}>📍 {card.sc}</span>
                     {!ETAPAS_SIN_NOTA_BIGGY.includes(col.id) && <NotaBiggy score={card.score} />}
                     {!ETAPAS_SIN_NOTA_BIGGY.includes(col.id) && card.rec && <span style={{ fontSize: 9, color: "#888" }}>{card.rec}</span>}
+                    {/* El contador dice cuántas tarjetas nuevas hay; sin esto
+                        habría que abrirlas una por una para saber cuáles son. */}
+                    {nuevas && nuevas.has(`${card.fuente === "prospeccion" ? "certificaciones_mx" : "certificaciones"}:${card.id}`) && (
+                      <span style={{ fontSize: 9, fontWeight: 800, padding: "2px 8px", borderRadius: 20,
+                        background: "#e11d48", color: "#fff", border: "1px solid #be123c" }}>
+                        ● NUEVA
+                      </span>
+                    )}
                     {card.raw?.cambios_pendientes && (
                       <span style={{ fontSize: 9, fontWeight: 800, padding: "2px 8px", borderRadius: 20, background: "#fff4e5", color: "#b45309", border: "1px solid #f5d9b8" }}>
                         ⚠ Cambios del prospecto
@@ -6563,6 +6571,17 @@ function ModuloCertificaciones() {
   const [nAvisos, setNAvisos] = useState(0);
   // Contador naranja de la pestaña Mensajes: mensajes de terceros sin leer.
   const [nMensajes, setNMensajes] = useState(0);
+  // Tarjetas que NADIE ha abierto todavía, de los dos flujos. Se cuenta
+  // por "no vista", no por fecha: un contador por antigüedad baja solo con
+  // el tiempo aunque nadie las haya mirado, que es como se pierden.
+  const [nNuevas, setNNuevas] = useState(0);
+  const [idsNuevas, setIdsNuevas] = useState(() => new Set());
+  const cargarNuevas = async () => {
+    const { data } = await sb.from("vw_tarjetas_nuevas").select("tabla, registro_id");
+    const filas = data || [];
+    setNNuevas(filas.length);
+    setIdsNuevas(new Set(filas.map(r => `${r.tabla}:${r.registro_id}`)));
+  };
 
   useEffect(() => { (async () => { await autoSyncCRM(); await cargar(); })(); }, []);
 
@@ -6579,6 +6598,12 @@ function ModuloCertificaciones() {
     };
     leer();
     const t = setInterval(() => { if (!document.hidden) leer(); }, 120000);
+    return () => clearInterval(t);
+  }, []);
+
+  useEffect(() => {
+    cargarNuevas();
+    const t = setInterval(() => { if (!document.hidden) cargarNuevas(); }, 60000);
     return () => clearInterval(t);
   }, []);
 
@@ -6762,6 +6787,23 @@ function ModuloCertificaciones() {
   // El movimiento manual se permite, pero pide motivo y queda registrado
   // en movimientos_etapa. Antes se arrastraba sin rastro y aparecían
   // tarjetas incoherentes sin saber quién ni por qué.
+  // Abrir una tarjeta la marca como vista: el número baja solo, sin que
+  // nadie tenga que "marcar como leído" a mano.
+  const marcarVista = async (card) => {
+    if (!card) return;
+    const tabla = card.fuente === "prospeccion" ? "certificaciones_mx" : "certificaciones";
+    const clave = `${tabla}:${card.id}`;
+    if (!idsNuevas.has(clave)) return;
+    setIdsNuevas(prev => { const s2 = new Set(prev); s2.delete(clave); return s2; });
+    setNNuevas(v => Math.max(0, v - 1));
+    try {
+      await sb.rpc("marcar_tarjeta_vista", {
+        p_tabla: tabla, p_registro_id: String(card.id),
+        p_usuario: window.__PERFIL_EMAIL || "analista_brain",
+      });
+    } catch (e) { console.warn("marcar_tarjeta_vista:", e.message); }
+  };
+
   const [movPend, setMovPend] = useState(null);   // { card, targetEtapa, col, advertencias[] }
   // Aviso en pantalla (no alert nativo: en móvil se suprime y el analista
   // se queda sin saber si su acción funcionó).
@@ -6936,6 +6978,15 @@ function ModuloCertificaciones() {
               background: "transparent", fontWeight: seccion === v ? 700 : 400,
               color: seccion === v ? "#1a3a6b" : "#888", position: "relative",
               borderBottom: seccion === v ? "2.5px solid #F47B20" : "2.5px solid transparent", marginBottom: -1 }}>
+            {/* Número de tarjetas nuevas sin revisar */}
+            {v === "certificaciones" && nNuevas > 0 && (
+              <span style={{ position: "absolute", top: -2, right: 4, minWidth: 18, height: 18, padding: "0 5px",
+                borderRadius: 999, background: "#e11d48", color: "#fff", fontSize: 10.5, fontWeight: 800,
+                display: "inline-flex", alignItems: "center", justifyContent: "center", lineHeight: 1,
+                border: "1px solid #be123c", fontVariantNumeric: "tabular-nums" }}>
+                {nNuevas > 99 ? "99+" : nNuevas}
+              </span>
+            )}
             {/* Número naranja de mensajes sin leer */}
             {v === "mensajes" && nMensajes > 0 && (
               <span style={{ position: "absolute", top: -2, right: 4, minWidth: 18, height: 18, padding: "0 5px",
@@ -7040,7 +7091,9 @@ function ModuloCertificaciones() {
         </div>
       ) : vista === "kanban" ? (
         <>
-        <KanbanBoard items={itemsFiltrados} columnas={colsFlujo} onCardClick={setSelected} onMover={moverTarjeta} onEliminar={eliminarTarjeta} />
+        <KanbanBoard items={itemsFiltrados} columnas={colsFlujo} nuevas={idsNuevas}
+          onCardClick={(card) => { marcarVista(card); setSelected(card); }}
+          onMover={moverTarjeta} onEliminar={eliminarTarjeta} />
 
         {/* Aviso flotante del resultado de la acción */}
         {aviso && (
