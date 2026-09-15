@@ -2,6 +2,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "rea
 import { descargarExcelMultihoja, fechaHoyOperativa, fechaOperativaOffset, sb } from "./shared";
 import ModuloCobrosMermas from "./Mermas";
 import PnrCobrosMX from "./PnrCobros";
+import Diferencias from "./Diferencias";
 
 function BotonDescargarExcel({ onClick, disabled, label = "Descargar Excel" }) {
   return (
@@ -5863,6 +5864,7 @@ function ModuloPagosMadre({ usuario }) {
     { id: "terceros",    label: "Terceros",              desc: "Empresas subcontratadas por patente" },
     { id: "conciliacion", label: "Conciliación Terceros", desc: "Conciliación semanal por empresa" },
     { id: "pnr_cobros",  label: "PNR",                   desc: "Cobro de PNR a terceros por semana" },
+    { id: "diferencias", label: "Diferencias",           desc: "Reclamos de terceros sobre pagos y cobros" },
     { id: "historial_pago", label: "Historial de Pago", desc: "Resumen semanal: cierres, cambios, saldos y reporte" },
     { id: "ayudantes",   label: "Ayudantes",             desc: "Números del día y aprobación del pago del ayudante" },
     { id: "cierre_dia",  label: "Cierre del Día",        desc: "Salud del día por ruta: conciliación entre Torre, KM, informe y escaneos" },
@@ -5917,6 +5919,7 @@ function ModuloPagosMadre({ usuario }) {
           {subtab === "terceros"    && <TercerosMX />}
           {subtab === "conciliacion" && <ConciliacionTercerosMX usuario={usuario} />}
           {subtab === "pnr_cobros"  && <PnrCobrosMX usuario={usuario} />}
+          {subtab === "diferencias" && <Diferencias usuario={usuario} />}
           {subtab === "historial_pago" && <HistorialPagoMX usuario={usuario} />}
           {subtab === "ayudantes"   && <AyudantesDetalleDia usuario={usuario} />}
           {subtab === "cierre_dia"  && <CierreDelDia />}
