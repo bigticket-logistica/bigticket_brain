@@ -51,7 +51,25 @@ export default function Diferencias({ usuario }) {
       sb.from("diferencias_eventos").select("*").eq("diferencia_id", caso.id).order("created_at"),
       sb.from("diferencias_adjuntos").select("*").eq("diferencia_id", caso.id),
     ]);
-    setSel({ ...caso, lineas: lin.data || [], eventos: ev.data || [], adjuntos: adj.data || [] });
+    const lineas = lin.data || [];
+
+    // El comentario del tercero no basta para decidir: se trae lo que el motor
+    // calculó para esa ruta y quién era el supervisor del centro ese día.
+    const rutas = lineas.filter(l => l.id_ruta).map(l => l.id_ruta);
+    let detalleRuta = {};
+    if (rutas.length) {
+      const { data } = await sb.from("tarifado_mx")
+        .select("id_ruta, fecha, placa, driver_name, service_center_id, ns_pct, pct_visitado, ns_categoria, km_pago, tiene_auxiliar, monto_auxiliar, pago_neto, tarifa_base, empresa_nombre")
+        .in("id_ruta", rutas);
+      for (const r of (data || [])) detalleRuta[r.id_ruta] = r;
+    }
+    const scs = [...new Set([...Object.values(detalleRuta).map(r => r.service_center_id), caso.service_center].filter(Boolean))];
+    let supervisores = {};
+    if (scs.length) {
+      const { data } = await sb.from("padron_sc_supervisor").select("sc, supervisor, email").in("sc", scs);
+      for (const r of (data || [])) supervisores[r.sc] = r;
+    }
+    setSel({ ...caso, lineas, eventos: ev.data || [], adjuntos: adj.data || [], detalleRuta, supervisores });
   };
 
   const pendientes = casos.filter(c => ["abierta", "en_revision"].includes(c.estado)).length;
@@ -132,6 +150,7 @@ export default function Diferencias({ usuario }) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 function DetalleCaso({ caso, quien, onCerrar, onCambio }) {
+  const { detalleRuta = {}, supervisores = {} } = caso;
   const [lineas, setLineas] = useState(caso.lineas);
   const [eventos, setEventos] = useState(caso.eventos);
   const [nota, setNota] = useState("");
@@ -238,8 +257,45 @@ function DetalleCaso({ caso, quien, onCerrar, onCambio }) {
                   </span>
                 </div>
 
-                <div style={{ marginTop: 8, background: "#f8fafc", borderRadius: 6, padding: "8px 10px", fontSize: 12.5, color: "#334155" }}>
-                  {l.comentario}
+                {(() => {
+                  const d = l.id_ruta ? detalleRuta[l.id_ruta] : null;
+                  const sup = supervisores[d?.service_center_id || caso.service_center];
+                  if (!d && !sup) return null;
+                  return (
+                    <div style={{ marginTop: 8, background: "#f0f9ff", border: "1px solid #bae6fd", borderRadius: 6, padding: "8px 10px", fontSize: 11.5 }}>
+                      <div style={{ fontWeight: 700, color: "#075985", marginBottom: 4 }}>Lo que dice el sistema</div>
+                      {d ? (
+                        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))", gap: "4px 14px", color: "#334155" }}>
+                          <span><b>Ruta</b> {d.id_ruta}</span>
+                          <span><b>Día</b> {d.fecha}</span>
+                          <span><b>Placa</b> {d.placa}</span>
+                          <span><b>SC</b> {d.service_center_id}</span>
+                          <span><b>Chofer</b> {d.driver_name || "—"}</span>
+                          <span><b>Empresa</b> {d.empresa_nombre || "sin asignar"}</span>
+                          <span><b>NS</b> {d.ns_pct != null ? Number(d.ns_pct).toFixed(1) + "%" : "—"}</span>
+                          <span><b>Visitado</b> {d.pct_visitado != null ? Number(d.pct_visitado).toFixed(1) + "%" : "—"}</span>
+                          <span><b>Categoría NS</b> {d.ns_categoria || "—"}</span>
+                          <span><b>KM pago</b> {d.km_pago ?? "—"}</span>
+                          <span><b>Tarifa base</b> {d.tarifa_base != null ? money(d.tarifa_base) : "—"}</span>
+                          <span><b>Ayudante</b> {d.tiene_auxiliar ? money(d.monto_auxiliar) : "no"}</span>
+                          <span><b>Pago neto</b> {money(d.pago_neto)}</span>
+                        </div>
+                      ) : (
+                        <div style={{ color: "#b45309" }}>
+                          Esta ruta no está en el tarifado de ese día — puede ser justamente lo que reclama.
+                        </div>
+                      )}
+                      {sup && (
+                        <div style={{ marginTop: 6, paddingTop: 6, borderTop: "1px solid #bae6fd", color: "#075985" }}>
+                          <b>Supervisor de {sup.sc}:</b> {sup.supervisor}{sup.email ? ` · ${sup.email}` : ""}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+
+                <div style={{ marginTop: 8, background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 6, padding: "8px 10px", fontSize: 12.5, color: "#334155" }}>
+                  <b style={{ color: "#92400e" }}>Dice el tercero:</b> {l.comentario}
                 </div>
 
                 {resuelta ? (
