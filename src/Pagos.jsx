@@ -1452,172 +1452,80 @@ function FormularioInicialSC({ scId, fecha, rowPrecargado = undefined }) {
 
 const TERCEROS_HISTORICO_DESDE = "2026-07-01";
 
+// Detalle del Ítem 6 de la Bitácora, visto desde el Brain. Misma fuente que la
+// pantalla del supervisor: placas que HICIERON VIAJE ese día (The Eyes), sin
+// line-haul ni planificadas, con la empresa del padrón y lo que dice el
+// inventario de certificación.
+//
+// Reemplaza la "Confirmación de Terceros" que leía del rostering y mostraba el
+// estado de certificación: eso mezclaba dos preguntas distintas y, sobre todo,
+// partía de lo planificado en vez de lo operado.
 function ItemTercerosBitacora({ scId, fecha, filasPrecargadas = undefined }) {
-  const hoyMX = useMemo(() => {
-    const mx = new Date(Date.now() - 6 * 60 * 60 * 1000);
-    return mx.toISOString().split("T")[0];
-  }, []);
-  const esHoy = fecha === hoyMX;
-  const hayHistorico = !esHoy && fecha >= TERCEROS_HISTORICO_DESDE && fecha < hoyMX;
-  const [filas, setFilas] = useState(undefined);   // undefined=cargando
-  const [cambios, setCambios] = useState([]);      // movimientos del día
+  const [filas, setFilas] = useState(filasPrecargadas);
+  const [sello, setSello] = useState(null);
 
   useEffect(() => {
     let cancel = false;
-    // Movimientos del día (cualquier fecha)
     (async () => {
-      try {
-        const { data, error } = await sb.rpc("get_terceros_cambios_dia", { p_sc: scId, p_fecha: fecha });
-        if (error) throw error;
-        if (!cancel) setCambios(Array.isArray(data) ? data : []);
-      } catch (e) { if (!cancel) setCambios([]); }
-    })();
-    // Detalle placa a placa
-    if (!esHoy && !hayHistorico) { setFilas(null); return () => { cancel = true; }; }
-    // El panel ya llamó get_terceros_confirmacion_sc para armar el ítem 6 del
-    // checklist: reusamos esas filas en vez de repetir la RPC al expandir.
-    if (filasPrecargadas !== undefined) {
-      setFilas(filasPrecargadas || []);
-      return () => { cancel = true; };
-    }
-    setFilas(undefined);
-    (async () => {
-      try {
-        const rpc = esHoy ? "get_terceros_confirmacion_sc" : "get_terceros_confirmacion_historico";
-        const { data, error } = await sb.rpc(rpc, { p_sc: scId, p_fecha: fecha });
-        if (error) throw error;
+      if (filasPrecargadas !== undefined) { setFilas(filasPrecargadas || []); }
+      else {
+        const { data } = await sb.rpc("fn_flota_dia_sc", { p_sc: scId, p_fecha: fecha });
         if (!cancel) setFilas(Array.isArray(data) ? data : []);
-      } catch (e) { if (!cancel) setFilas([]); }
+      }
+      const { data: c } = await sb.from("flota_confirmacion_dia")
+        .select("*").eq("fecha", fecha).eq("service_center", scId).maybeSingle();
+      if (!cancel) setSello(c || null);
     })();
     return () => { cancel = true; };
-  }, [scId, fecha, esHoy, hayHistorico, filasPrecargadas]);
+  }, [scId, fecha, filasPrecargadas]);
 
-  // Índice de movimientos por placa (para pintar el warning en su fila)
-  const cambiosPorPlaca = useMemo(() => {
-    const m = {};
-    for (const c of cambios) {
-      const k = String(c.placa || "").toUpperCase().trim();
-      (m[k] = m[k] || []).push(c);
-    }
-    return m;
-  }, [cambios]);
+  if (filas === undefined) return <div style={{ padding: 12, fontSize: 12, color: "#94a3b8" }}>Cargando…</div>;
 
-  const total = Array.isArray(filas) ? filas.length : 0;
-  const confirmadas = Array.isArray(filas) ? filas.filter((f) => f.confirmado_hoy).length : 0;
-  const completo = total > 0 && confirmadas === total;
-  const resumenColor = total === 0 ? "#9ca3af" : completo ? "#16a34a" : confirmadas === 0 ? "#dc2626" : "#d97706";
-  const nWarn = cambios.length;
-
-  const WarningChip = ({ c }) => {
-    const esCambio = c.empresa_anterior &&
-      String(c.empresa_anterior).toUpperCase().trim() !== String(c.empresa_nueva || "").toUpperCase().trim();
-    return (
-      <div style={{ fontSize: 10.5, marginTop: 3, padding: "3px 8px", borderRadius: 4, lineHeight: 1.5,
-                    background: c.es_empresa_nueva ? "#fef2f2" : "#fffbeb",
-                    border: `1px solid ${c.es_empresa_nueva ? "#fecaca" : "#fde68a"}`,
-                    color: c.es_empresa_nueva ? "#b91c1c" : "#92400e" }}>
-        {esCambio && (
-          <span>⚠ Cambio de empresa: <strong>{c.empresa_anterior}</strong> → <strong>{c.empresa_nueva}</strong></span>
-        )}
-        {!esCambio && c.es_empresa_nueva && (
-          <span>⚠ Empresa nueva registrada: <strong>{c.empresa_nueva}</strong>{c.rfc ? ` (RFC ${c.rfc})` : ""}</span>
-        )}
-        {!esCambio && !c.es_empresa_nueva && c.es_cambio_sc && (
-          <span>⚠ Traslado de SC: <strong>{c.sc_anterior}</strong> → este SC ({c.empresa_nueva})</span>
-        )}
-        {esCambio && c.es_empresa_nueva && (
-          <span style={{ marginLeft: 6, fontWeight: 800 }}>· empresa NUEVA no certificada</span>
-        )}
-        {c.es_cambio_sc && esCambio && (
-          <span style={{ marginLeft: 6 }}>· venía de {c.sc_anterior}</span>
-        )}
-        {c.supervisor && <span style={{ marginLeft: 6, color: "#9ca3af" }}>({c.supervisor})</span>}
-      </div>
-    );
-  };
-
-  const FilaPlaca = ({ f }) => {
-    const certificada = !f.es_pendiente;
-    const warns = cambiosPorPlaca[String(f.placa || "").toUpperCase().trim()] || [];
-    return (
-      <div style={{ fontSize: 11, color: "#4b5563", padding: "3px 6px", background: warns.length ? "#fffdf5" : "#f8fafc", borderRadius: 4 }}>
-        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
-          <span style={{ fontFamily: "monospace", fontWeight: 700 }}>{f.placa}</span>
-          <span>{f.empresa_actual || "— sin empresa —"}</span>
-          {f.rfc && <span style={{ fontSize: 9, background: "#e2e8f0", color: "#475569", padding: "0 5px", borderRadius: 3, fontWeight: 700 }}>RFC {f.rfc}</span>}
-          <span style={{ fontSize: 9, padding: "0 5px", borderRadius: 3, fontWeight: 700, background: certificada ? "#dcfce7" : "#fee2e2", color: certificada ? "#166534" : "#b91c1c" }}>
-            {certificada ? "Certificada" : "No certificada"}
-          </span>
-          <span style={{ marginLeft: "auto", fontWeight: 700, color: f.confirmado_hoy ? "#16a34a" : "#9ca3af" }}>
-            {f.confirmado_hoy ? "✓ confirmada" : "pendiente"}
-          </span>
-        </div>
-        {warns.map((c, k) => <WarningChip key={k} c={c} />)}
-      </div>
-    );
-  };
+  const sinEmp = filas.filter(f => f.sin_empresa);
+  const discrepa = filas.filter(f => !f.sin_empresa && f.discrepa);
+  const conf = filas.filter(f => f.confirmado_hoy).length;
 
   return (
-    <div style={{ fontSize: 12, padding: "5px 8px", background: "#fff", border: "1px solid #eef0f3", borderRadius: 5 }}>
-      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-        <span style={{ fontWeight: 600, color: "#374151" }}>6 · Confirmación de Terceros</span>
-        {nWarn > 0 && (
-          <span style={{ fontSize: 10, fontWeight: 800, background: "#fffbeb", border: "1px solid #fde68a", color: "#92400e", padding: "1px 7px", borderRadius: 9 }}>
-            ⚠ {nWarn} movimiento{nWarn === 1 ? "" : "s"}
-          </span>
-        )}
-        <span style={{ marginLeft: "auto", fontWeight: 700, color: resumenColor }}>
-          {filas === undefined ? "…"
-            : esHoy ? `${confirmadas}/${total}`
-            : hayHistorico ? (total > 0 ? `${total} ✓` : "—")
-            : "—"}
+    <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 8, overflow: "hidden" }}>
+      <div style={{ padding: "9px 12px", background: "#f8fafc", borderBottom: "1px solid #e4e7ec", display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+        <span style={{ fontWeight: 600, color: "#374151", fontSize: 12.5 }}>6 · Inventario de Flota</span>
+        <span style={{ fontSize: 11.5, color: "#64748b" }}>
+          {conf}/{filas.length} confirmadas
+          {sinEmp.length > 0 && <span style={{ color: "#b91c1c", fontWeight: 700 }}> · {sinEmp.length} sin empresa</span>}
+          {discrepa.length > 0 && <span style={{ color: "#b45309", fontWeight: 700 }}> · {discrepa.length} vs certificación</span>}
+          {sello && <span style={{ color: "#166534" }}> · sellado por {sello.confirmado_por}</span>}
         </span>
       </div>
 
-      {!esHoy && !hayHistorico && (
-        <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 4, fontStyle: "italic" }}>
-          El detalle de Terceros está disponible desde el {TERCEROS_HISTORICO_DESDE}.
-        </div>
-      )}
-
-      {hayHistorico && Array.isArray(filas) && (
-        <div style={{ fontSize: 10.5, color: "#9ca3af", marginTop: 4, fontStyle: "italic" }}>
-          Fecha pasada: se listan las placas confirmadas ese día (las no confirmadas no se historizan).
-        </div>
-      )}
-
-      {(esHoy || hayHistorico) && filas === undefined && (
-        <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 4 }}>Cargando terceros…</div>
-      )}
-
-      {(esHoy || hayHistorico) && Array.isArray(filas) && filas.length === 0 && (
-        <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 4 }}>
-          {esHoy ? "Sin placas rosterizadas hoy para este SC." : "Sin confirmaciones registradas ese día para este SC."}
-        </div>
-      )}
-
-      {(esHoy || hayHistorico) && Array.isArray(filas) && filas.length > 0 && (
-        <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 3 }}>
-          {filas.map((f, i) => <FilaPlaca key={i} f={f} />)}
-        </div>
-      )}
-
-      {/* Movimientos de placas que no aparecen en la lista de arriba */}
-      {Array.isArray(filas) && cambios.filter((c) => !(filas || []).some((f) =>
-        String(f.placa || "").toUpperCase().trim() === String(c.placa || "").toUpperCase().trim())).length > 0 && (
-        <div style={{ marginTop: 6 }}>
-          {cambios.filter((c) => !(filas || []).some((f) =>
-            String(f.placa || "").toUpperCase().trim() === String(c.placa || "").toUpperCase().trim())).map((c, i) => (
-            <div key={i} style={{ display: "flex", gap: 6, alignItems: "flex-start" }}>
-              <span style={{ fontFamily: "monospace", fontWeight: 700, fontSize: 11, marginTop: 5 }}>{c.placa}</span>
-              <div style={{ flex: 1 }}><WarningChip c={c} /></div>
+      {filas.length === 0 ? (
+        <div style={{ padding: 14, fontSize: 12, color: "#94a3b8" }}>Sin placas con viaje ese día.</div>
+      ) : (
+        <>
+          <div style={{ display: "grid", gridTemplateColumns: ".8fr 1.6fr 1.2fr .7fr .8fr", gap: 8, padding: "7px 12px", fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: .4, borderBottom: "1px solid #f1f5f9" }}>
+            <span>Placa</span><span>Empresa</span><span>Conductor</span><span style={{ textAlign: "center" }}>Rutas</span><span style={{ textAlign: "right" }}>Estado</span>
+          </div>
+          {filas.map(f => (
+            <div key={f.placa} style={{ display: "grid", gridTemplateColumns: ".8fr 1.6fr 1.2fr .7fr .8fr", gap: 8, padding: "7px 12px", fontSize: 11.5, alignItems: "center", borderBottom: "1px solid #f8fafc", background: f.sin_empresa ? "#fef2f2" : f.discrepa ? "#fffbeb" : "#fff" }}>
+              <span style={{ fontWeight: 600, color: "#334155" }}>{f.placa}</span>
+              <span style={{ color: f.sin_empresa ? "#b91c1c" : "#334155", fontWeight: f.sin_empresa ? 600 : 400 }}>
+                {f.empresa || "⚠️ sin empresa en el padrón"}
+                {f.discrepa && (
+                  <div style={{ fontSize: 10.5, color: "#b45309" }}>certificación: {f.empresa_cert}</div>
+                )}
+              </span>
+              <span style={{ color: "#64748b" }}>{f.conductor || "—"}</span>
+              <span style={{ textAlign: "center", color: "#94a3b8" }}>{f.rutas}</span>
+              <span style={{ textAlign: "right", fontSize: 10, fontWeight: 700, color: f.confirmado_hoy ? "#166534" : "#94a3b8" }}>
+                {f.confirmado_hoy ? "✓ confirmada" : "sin confirmar"}
+              </span>
             </div>
           ))}
-        </div>
+        </>
       )}
     </div>
   );
 }
+
 
 function declColor(v) {
   return v === "Sí" ? "#b45309" : v === "No" ? "#16a34a" : "#9ca3af";
@@ -1832,16 +1740,10 @@ function PanelControlSupervisores() {
       for (const r of ayerR.data || []) idxAyer[r.service_center_id] = r;
 
       // ── Item 6 · Confirmación de Terceros ──────────────────────────
-      // HOY: get_terceros_confirmacion_sc (rostering en vivo → X/Y exacto).
-      // FECHA PASADA: get_terceros_resumen_dia (log diario). No conocemos el
-      // total rosterizado histórico, así que se cuenta como completo cuando
-      // hay al menos una confirmación registrada ese día para el SC.
-      const mxHoy = new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString().split("T")[0];
-      const esHoy = fecha === mxHoy;
-      const t6Idx = {};
-      const scsUnicos = Array.from(new Set(lista.map((x) => x.sc)));
-      // Concurrencia limitada: 14 RPC simultáneas saturan el pool de Supabase
-      // y hacen lento todo lo demás que el analista está esperando.
+      // Una sola fuente para hoy y para fechas pasadas: fn_flota_dia_sc, las
+      // placas que hicieron viaje segun The Eyes. Antes habia dos caminos
+      // distintos y el de fechas pasadas daba por completo cualquier dia con
+      // algun dato, asi que el panel marcaba 6/6 sin haberse confirmado nada.
       const res = await mapConLimite(scsUnicos, 4, async (sc) => {
         try {
           // Misma fuente que el Ítem 6 de la Bitácora: placas que HICIERON VIAJE
