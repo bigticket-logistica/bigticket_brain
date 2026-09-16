@@ -264,7 +264,7 @@ function ModuloRobos({ usuario }) {
   const traerDeMeli = async () => {
     setTrayendo(true); setMsg(null);
     try {
-      const r = await fetch("/api/mermas-acumulado", { method: "POST" });
+      const r = await fetch("/api/reportes/mermas-acumulado", { method: "POST" });
       const j = await r.json();
       if (!j.ok) throw new Error(j.error || "Respuesta sin detalle");
       const t = j.totales || {};
