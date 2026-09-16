@@ -1844,21 +1844,20 @@ function PanelControlSupervisores() {
       // y hacen lento todo lo demás que el analista está esperando.
       const res = await mapConLimite(scsUnicos, 4, async (sc) => {
         try {
-          if (esHoy) {
-            const { data, error } = await sb.rpc("get_terceros_confirmacion_sc", { p_sc: sc, p_fecha: mxHoy });
-            if (error) throw error;
-            const fs = Array.isArray(data) ? data : [];
-            const total = fs.length;
-            const confirmadas = fs.filter((f) => f.confirmado_hoy).length;
-            return { sc, filas: fs, t: { total, confirmadas, completo: total === 0 || confirmadas === total } };
-          } else {
-            const { data, error } = await sb.rpc("get_terceros_resumen_dia", { p_sc: sc, p_fecha: fecha });
-            if (error) throw error;
-            const row = Array.isArray(data) ? data[0] : data;
-            const confirmadas = Number(row?.confirmadas || 0);
-            if (!row?.tiene_datos) return { sc, t: null };
-            return { sc, t: { total: confirmadas, confirmadas, completo: true } };
-          }
+          // Misma fuente que el Ítem 6 de la Bitácora: placas que HICIERON VIAJE
+          // (The Eyes), no las rosterizadas. Y completo exige que todas estén
+          // confirmadas y ninguna sin empresa — antes bastaba con que hubiera
+          // algún dato viejo, y el panel marcaba 6/6 sin haberse confirmado nada.
+          const { data, error } = await sb.rpc("fn_flota_dia_sc", { p_sc: sc, p_fecha: esHoy ? mxHoy : fecha });
+          if (error) throw error;
+          const fs = Array.isArray(data) ? data : [];
+          if (fs.length === 0) return { sc, t: null };
+          const confirmadas = fs.filter((f) => f.confirmado_hoy).length;
+          const sinEmp = fs.filter((f) => f.sin_empresa).length;
+          return { sc, filas: fs, t: {
+            total: fs.length, confirmadas,
+            completo: sinEmp === 0 && confirmadas === fs.length,
+          } };
         } catch { return { sc, t: null }; }
       });
       const t6Rows = {};
