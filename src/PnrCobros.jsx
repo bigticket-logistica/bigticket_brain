@@ -384,7 +384,7 @@ function ModuloRobos({ usuario }) {
         <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10, overflow: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead><tr>
-              <th style={th}>Guía</th><th style={th}>Hecho</th><th style={th}>Motivo</th>
+              <th style={th}>Guía</th><th style={th}>Hecho</th><th style={th}>Nos llegó</th><th style={th}>Motivo</th>
               <th style={th}>Placa</th><th style={th}>Conductor</th><th style={th}>Transportista</th>
               <th style={{ ...th, textAlign: "right" }}>Monto</th><th style={{ ...th, textAlign: "right" }}>Acciones</th>
             </tr></thead>
@@ -400,6 +400,27 @@ function ModuloRobos({ usuario }) {
                     <td style={{ ...td, color: "#64748b", whiteSpace: "nowrap" }}>
                       {f.fecha || "—"}
                       {f.periodo_prefactura && <div style={{ fontSize: 9, color: "#94a3b8" }}>{f.periodo_prefactura}</div>}
+                    </td>
+                    {/* Cuándo entró a nuestra base: es el día en que el tercero lo
+                        ve en su portal, y no tiene nada que ver con la fecha del
+                        hecho. Sin esta columna no se distingue un cobro de hoy de
+                        uno que arrastramos desde una carga de hace un mes. */}
+                    <td style={{ ...td, whiteSpace: "nowrap" }}>
+                      {(() => {
+                        if (!f.created_at) return <span style={{ color: "#cbd5e1" }}>—</span>;
+                        const d = new Date(f.created_at);
+                        const dias = Math.floor((Date.now() - d.getTime()) / 86400000);
+                        return (
+                          <>
+                            <span style={{ color: dias <= 1 ? "#16a34a" : "#64748b", fontWeight: dias <= 1 ? 700 : 400 }}>
+                              {d.toLocaleDateString("es-MX", { day: "2-digit", month: "short" })}
+                            </span>
+                            <div style={{ fontSize: 9, color: "#94a3b8" }}>
+                              {dias === 0 ? "hoy" : dias === 1 ? "ayer" : `hace ${dias} d`}
+                            </div>
+                          </>
+                        );
+                      })()}
                     </td>
                     <td style={{ ...td, color: "#475569" }}>{f.motivo || "—"}</td>
                     <td style={{ ...td, fontWeight: 600 }}>{f.placa || "—"}</td>
