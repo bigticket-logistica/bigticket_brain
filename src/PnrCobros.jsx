@@ -162,7 +162,57 @@ function DetalleAvisos({ lista }) {
   );
 }
 
-export default function PnrCobrosMX({ usuario }) {
+// ═══════════════════════════════════════════════════════════════════════════
+// Cobros a terceros — todo lo que se descuenta de lo que se les paga.
+//
+// Cada tipo de cobro vive en su propia subpestaña pero comparte la mecánica:
+// dos carriles independientes (portal diario y prefactura semanal), cada uno
+// con su botón de agregar y de quitar. Lo que cambia entre ellos es de dónde
+// sale el caso y cómo se calcula el monto, no cómo se cobra.
+// ═══════════════════════════════════════════════════════════════════════════
+export default function CobrosTerceros({ usuario }) {
+  const [sub, setSub] = useState("pnr");
+  const TABS = [
+    { id: "pnr", label: "PNR", desc: "Pedido no resuelto" },
+    { id: "robos", label: "Robos y extravíos", desc: "Paquetes perdidos en ruta" },
+    { id: "noshow", label: "No Show", desc: "Rutas comprometidas y no operadas" },
+  ];
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 6, padding: "14px 24px 0", flexWrap: "wrap" }}>
+        {TABS.map(t => (
+          <button key={t.id} onClick={() => setSub(t.id)} title={t.desc}
+            style={{
+              padding: "8px 18px", borderRadius: 8, fontSize: 12.5, fontWeight: 700, cursor: "pointer",
+              border: `1px solid ${sub === t.id ? "#1a3a6b" : "#e4e7ec"}`,
+              background: sub === t.id ? "#1a3a6b" : "#fff",
+              color: sub === t.id ? "#fff" : "#64748b",
+            }}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+      {sub === "pnr" && <ModuloPnr usuario={usuario} />}
+      {sub === "robos" && <EnConstruccion titulo="Robos y extravíos"
+        nota="Cobro de paquetes perdidos o robados en ruta. Mismo mecanismo que PNR: dos carriles, con su botón de agregar y quitar en cada uno." />}
+      {sub === "noshow" && <EnConstruccion titulo="No Show"
+        nota="Cobro por rutas comprometidas que no se operaron. Hoy el no-show se declara en la Bitácora del supervisor pero no tiene monto asociado." />}
+    </div>
+  );
+}
+
+function EnConstruccion({ titulo, nota }) {
+  return (
+    <div style={{ padding: 40, textAlign: "center" }}>
+      <div style={{ fontSize: 16, fontWeight: 700, color: "#1a3a6b" }}>{titulo}</div>
+      <div style={{ fontSize: 13, color: "#94a3b8", marginTop: 8, maxWidth: 520, margin: "8px auto 0", lineHeight: 1.6 }}>
+        {nota}
+      </div>
+    </div>
+  );
+}
+
+function ModuloPnr({ usuario }) {
   const [semana, setSemana] = useState(() => semanaInventario(new Date().toISOString()));
   const [filas, setFilas] = useState([]);
   const [cobrados, setCobrados] = useState({});

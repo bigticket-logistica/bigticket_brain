@@ -1,7 +1,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { descargarExcelMultihoja, fechaHoyOperativa, fechaOperativaOffset, sb } from "./shared";
 import ModuloCobrosMermas from "./Mermas";
-import PnrCobrosMX from "./PnrCobros";
+import CobrosTerceros from "./PnrCobros";
 import Diferencias from "./Diferencias";
 import Comparativa from "./Comparativa";
 
@@ -5823,7 +5823,7 @@ function ModuloPagosMadre({ usuario }) {
     { id: "torre_3p",    label: "Torre de Control Pagos", desc: "3 Pilares · MELI vs Operación" },
     { id: "terceros",    label: "Terceros",              desc: "Empresas subcontratadas por patente" },
     { id: "conciliacion", label: "Conciliación Terceros", desc: "Conciliación semanal por empresa" },
-    { id: "pnr_cobros",  label: "PNR",                   desc: "Cobro de PNR a terceros por semana" },
+    { id: "pnr_cobros",  label: "Cobros",                desc: "PNR, robos y extravíos, no show" },
     { id: "diferencias", label: "Diferencias",           desc: "Reclamos de terceros sobre pagos y cobros" },
     { id: "comparativa", label: "Comparativa",          desc: "Prefactura del lunes vs acumulado diario" },
     { id: "historial_pago", label: "Historial de Pago", desc: "Resumen semanal: cierres, cambios, saldos y reporte" },
@@ -5879,7 +5879,7 @@ function ModuloPagosMadre({ usuario }) {
           {subtab === "torre_3p"    && <TorreTresPilares />}
           {subtab === "terceros"    && <TercerosMX />}
           {subtab === "conciliacion" && <ConciliacionTercerosMX usuario={usuario} />}
-          {subtab === "pnr_cobros"  && <PnrCobrosMX usuario={usuario} />}
+          {subtab === "pnr_cobros"  && <CobrosTerceros usuario={usuario} />}
           {subtab === "diferencias" && <Diferencias usuario={usuario} />}
           {subtab === "comparativa" && <Comparativa />}
           {subtab === "historial_pago" && <HistorialPagoMX usuario={usuario} />}
