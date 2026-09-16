@@ -623,6 +623,26 @@ export default function PnrCobrosMX({ usuario }) {
   // Deshace un cobro: saca la línea de la conciliación y libera el caso para
   // volver a cobrarlo. Usa la empresa, SC y semana con que se cobró, no las
   // que se ven ahora, porque el inventario de flota pudo haber cambiado.
+  // ── Quitar solo del portal (carril B) ────────────────────────────────────
+  // Borra el registro de cobros_pnr_mx, que es lo que ve el tercero y lo que
+  // alimenta la prefactura diaria. No toca la conciliación semanal: si el cobro
+  // también está en el carril A, hay que quitarlo de ahí por separado.
+  const quitarDelPortal = async (f, ya) => {
+    if (!window.confirm(
+      `¿Quitar este cobro del portal del tercero?\n\nPNR ${f.case_id} · ${ya.empresa_nombre} · -${money(ya.monto)}\n\n` +
+      `Deja de verse en sus movimientos y sale de la prefactura diaria.\n` +
+      `Si también está en la prefactura semanal, hay que quitarlo desde ahí.`
+    )) return;
+    setGuardando(f.case_id); setMsg(null);
+    try {
+      const { error } = await sb.from("cobros_pnr_mx").delete().eq("pnr_id", String(f.case_id));
+      if (error) throw error;
+      setMsg({ ok: true, txt: `PNR ${f.case_id} quitado del portal. El caso vuelve a quedar pendiente.` });
+      await cargar(semanaCobro, true);
+    } catch (e) { setMsg({ ok: false, txt: "No se pudo quitar: " + (e.message || e) }); }
+    setGuardando(null);
+  };
+
   const quitar = async (f, ya) => {
     const sc = ya.service_center;
     const sem = Number(ya.semana);
@@ -875,16 +895,26 @@ export default function PnrCobrosMX({ usuario }) {
                             {ya.asignado_por} · {fechaHora(ya.enviado_a_cobro_en)}
                           </div>
                           <div style={{ fontSize: 9, color: "#94a3b8" }}>sem {ya.semana}</div>
-                          <button onClick={() => quitar(f, ya)} disabled={guardando === f.case_id}
-                            title="Sacar la línea de la conciliación y liberar el caso"
-                            style={{
-                              marginTop: 4, padding: "3px 10px", fontSize: 10, fontWeight: 600,
-                              borderRadius: 5, border: "1px solid #fca5a5", background: "#fff", color: "#b91c1c",
-                              cursor: guardando === f.case_id ? "not-allowed" : "pointer",
-                              opacity: guardando === f.case_id ? 0.5 : 1,
-                            }}>
-                            {guardando === f.case_id ? "Quitando…" : "Quitar"}
-                          </button>
+                          <div style={{ display: "flex", flexDirection: "column", gap: 3, marginTop: 4 }}>
+                            <button onClick={() => quitarDelPortal(f, ya)} disabled={guardando === f.case_id}
+                              title="Solo del portal del tercero y de la prefactura diaria. No toca la conciliación semanal."
+                              style={{
+                                padding: "3px 10px", fontSize: 9.5, fontWeight: 700, borderRadius: 5,
+                                border: "1px solid #f59e0b", background: "#fffbeb", color: "#92400e",
+                                cursor: guardando === f.case_id ? "not-allowed" : "pointer",
+                              }}>
+                              {guardando === f.case_id ? "…" : "Quitar del portal"}
+                            </button>
+                            <button onClick={() => quitar(f, ya)} disabled={guardando === f.case_id}
+                              title="Sacar la línea de la conciliación semanal y liberar el caso"
+                              style={{
+                                padding: "3px 10px", fontSize: 9.5, fontWeight: 700, borderRadius: 5,
+                                border: "1px solid #fca5a5", background: "#fff", color: "#b91c1c",
+                                cursor: guardando === f.case_id ? "not-allowed" : "pointer",
+                              }}>
+                              {guardando === f.case_id ? "…" : "Quitar de prefactura"}
+                            </button>
+                          </div>
                         </div>
                       ) : (
                         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
