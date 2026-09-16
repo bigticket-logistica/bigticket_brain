@@ -229,12 +229,18 @@ function ModuloRobos({ usuario }) {
   const [semana, setSemana] = useState(() => semanaBrainHoy());
   const quien = (usuario && (usuario.email || usuario.nombre)) || "brain";
 
+  // Hito cero de este módulo. Antes del 14 de septiembre el tercero no tenía
+  // dónde ver sus cobros, así que esas líneas se resuelven por el camino
+  // anterior y no se muestran acá.
+  const HITO_CERO = "2026-09-14";
+
   const cargar = useCallback(async () => {
     setFilas(null);
     const [lin, cob] = await Promise.all([
       sb.from("mermas_cargas_lineas")
         .select("id, guia, fecha, id_ruta, motivo, placa, conductor, transportista, valor, estado, periodo_prefactura, created_at")
         .neq("estado", "ANULADA POR MELI")
+        .gte("fecha", HITO_CERO)
         .order("fecha", { ascending: false })
         .limit(3000),
       sb.from("cobros_merma_mx").select("*").eq("estado", "enviado"),
