@@ -166,6 +166,7 @@ export default function PnrCobrosMX({ usuario }) {
   const [semana, setSemana] = useState(() => semanaInventario(new Date().toISOString()));
   const [filas, setFilas] = useState([]);
   const [cobrados, setCobrados] = useState({});
+  const [enPrefactura, setEnPrefactura] = useState({});  // pnr_id -> ya tiene linea en la conciliacion
   const [loading, setLoading] = useState(false);
   const [guardando, setGuardando] = useState(null);
   const [msg, setMsg] = useState(null);
@@ -284,6 +285,23 @@ export default function PnrCobrosMX({ usuario }) {
 
       setFilas(out);
       setCobrados(yaCobrados);
+
+      // Un PNR puede estar solo en el portal (carril B), solo en la prefactura
+      // (carril A) o en los dos. Sin distinguirlos, publicar al portal ocultaba
+      // el boton de agregar a la prefactura: la fila pasaba a "cobrado" y ya.
+      const enPref = {};
+      if (Object.keys(yaCobrados).length) {
+        const { data: concs } = await sb.from("conciliaciones_terceros")
+          .select("empresa_nombre, service_center, semana, detalle")
+          .eq("semana", Number(sem));
+        for (const c of (concs || [])) {
+          for (const d of (Array.isArray(c.detalle) ? c.detalle : [])) {
+            const id = String(d?._id || "");
+            if (id.startsWith("pnr|")) enPref[id.slice(4)] = true;
+          }
+        }
+      }
+      setEnPrefactura(enPref);
       const sel = {};
       for (const f of out) if (!yaCobrados[String(f.case_id)]) sel[f.case_id] = true;
       setSeleccion(sel);
@@ -889,31 +907,48 @@ export default function PnrCobrosMX({ usuario }) {
                     </td>
                     <td style={{ ...td, textAlign: "right", whiteSpace: "nowrap" }}>
                       {ya ? (
-                        <div>
-                          <div style={{ fontSize: 10, fontWeight: 700, color: "#1b5e20" }}>cobrado</div>
-                          <div style={{ fontSize: 9, color: "#94a3b8" }}>
-                            {ya.asignado_por} · {fechaHora(ya.enviado_a_cobro_en)}
-                          </div>
-                          <div style={{ fontSize: 9, color: "#94a3b8" }}>sem {ya.semana}</div>
-                          <div style={{ display: "flex", flexDirection: "column", gap: 3, marginTop: 4 }}>
+                        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                          {/* CARRIL B · portal */}
+                          <div>
+                            <div style={{ fontSize: 9.5, fontWeight: 700, color: "#92400e" }}>✓ en el portal</div>
+                            <div style={{ fontSize: 8.5, color: "#94a3b8" }}>{ya.empresa_nombre}</div>
                             <button onClick={() => quitarDelPortal(f, ya)} disabled={guardando === f.case_id}
-                              title="Solo del portal del tercero y de la prefactura diaria. No toca la conciliación semanal."
-                              style={{
-                                padding: "3px 10px", fontSize: 9.5, fontWeight: 700, borderRadius: 5,
-                                border: "1px solid #f59e0b", background: "#fffbeb", color: "#92400e",
-                                cursor: guardando === f.case_id ? "not-allowed" : "pointer",
-                              }}>
+                              title="Solo del portal del tercero y de la prefactura diaria."
+                              style={{ marginTop: 3, width: "100%", padding: "3px 8px", fontSize: 9.5, fontWeight: 700,
+                                borderRadius: 5, border: "1px solid #f59e0b", background: "#fffbeb", color: "#92400e",
+                                cursor: guardando === f.case_id ? "not-allowed" : "pointer" }}>
                               {guardando === f.case_id ? "…" : "Quitar del portal"}
                             </button>
-                            <button onClick={() => quitar(f, ya)} disabled={guardando === f.case_id}
-                              title="Sacar la línea de la conciliación semanal y liberar el caso"
-                              style={{
-                                padding: "3px 10px", fontSize: 9.5, fontWeight: 700, borderRadius: 5,
-                                border: "1px solid #fca5a5", background: "#fff", color: "#b91c1c",
-                                cursor: guardando === f.case_id ? "not-allowed" : "pointer",
-                              }}>
-                              {guardando === f.case_id ? "…" : "Quitar de prefactura"}
-                            </button>
+                          </div>
+
+                          {/* CARRIL A · prefactura semanal */}
+                          <div>
+                            {enPrefactura[String(f.case_id)] ? (
+                              <>
+                                <div style={{ fontSize: 9.5, fontWeight: 700, color: "#1b5e20" }}>✓ en prefactura</div>
+                                <div style={{ fontSize: 8.5, color: "#94a3b8" }}>
+                                  {ya.service_center} · sem {ya.semana} · {ya.asignado_por}
+                                </div>
+                                <button onClick={() => quitar(f, ya)} disabled={guardando === f.case_id}
+                                  style={{ marginTop: 3, width: "100%", padding: "3px 8px", fontSize: 9.5, fontWeight: 700,
+                                    borderRadius: 5, border: "1px solid #fca5a5", background: "#fff", color: "#b91c1c",
+                                    cursor: guardando === f.case_id ? "not-allowed" : "pointer" }}>
+                                  {guardando === f.case_id ? "…" : "Quitar de prefactura"}
+                                </button>
+                              </>
+                            ) : (
+                              <>
+                                <button onClick={() => agregar(f)} disabled={guardando === f.case_id || !f.empresa || !f.sub_cobro}
+                                  title="Agregar como línea negativa a la prefactura de la semana"
+                                  style={{ width: "100%", padding: "5px 10px", fontSize: 10.5, fontWeight: 700, borderRadius: 6, border: "none",
+                                    background: (f.empresa && f.sub_cobro) ? "#1a3a6b" : "#e4e7ec",
+                                    color: (f.empresa && f.sub_cobro) ? "#fff" : "#94a3b8",
+                                    cursor: (guardando === f.case_id || !f.empresa || !f.sub_cobro) ? "not-allowed" : "pointer" }}>
+                                  {guardando === f.case_id ? "…" : "Agregar a prefactura"}
+                                </button>
+                                <div style={{ fontSize: 8.5, color: "#94a3b8", textAlign: "center", marginTop: 2 }}>semanal · carril A</div>
+                              </>
+                            )}
                           </div>
                         </div>
                       ) : (
