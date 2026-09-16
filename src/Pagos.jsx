@@ -6702,6 +6702,7 @@ function ListadoPagosDiarios({ usuario }) {
   const [scAbierto, setScAbierto] = useState(null);         // sc con el detalle desplegado
   const [publicadas, setPublicadas] = useState({});         // id_ruta -> foto vigente publicada
   const [marcadas, setMarcadas] = useState({});             // id_ruta -> true (republicar solo estas)
+  const [empresaGuardada, setEmpresaGuardada] = useState({}); // id_ruta -> empresa resuelta al guardar
   const [revisiones, setRevisiones] = useState({});         // id_ruta -> fila de revision_ruta_mx
   // ── Datos incompletos: qué le falta a una línea para poder tarifarse bien ──
   // A diferencia de "Con alertas" (que incluye avisos operativos), esto marca SOLO
@@ -7332,7 +7333,7 @@ function ListadoPagosDiarios({ usuario }) {
     try {
       const [pubR, tarR, revR, linR] = await Promise.all([
         sb.from("vw_publicacion_vigente_mx").select("*").eq("fecha", fecha),
-        sb.from("tarifado_mx").select("service_center_id").eq("fecha", fecha),
+        sb.from("tarifado_mx").select("service_center_id, id_ruta, empresa_nombre, tercero_id").eq("fecha", fecha),
         sb.from("revision_ruta_mx").select("*").eq("fecha", fecha),
         sb.from("vw_publicacion_lineas_vigente").select("*").eq("fecha", fecha),
       ]);
@@ -7340,8 +7341,13 @@ function ListadoPagosDiarios({ usuario }) {
       for (const r of (pubR.data || [])) mp[r.service_center] = r;
       setPublicaciones(mp);
       const mg = {};
-      for (const r of (tarR.data || [])) mg[r.service_center_id] = (mg[r.service_center_id] || 0) + 1;
+      const me = {};
+      for (const r of (tarR.data || [])) {
+        mg[r.service_center_id] = (mg[r.service_center_id] || 0) + 1;
+        me[r.id_ruta] = r.tercero_id ? (r.empresa_nombre || "") : null;
+      }
       setGuardadoPorSC(mg);
+      setEmpresaGuardada(me);
       const mr = {};
       for (const r of (revR.data || [])) mr[r.id_ruta] = r;
       setRevisiones(mr);
@@ -7514,7 +7520,11 @@ function ListadoPagosDiarios({ usuario }) {
     .filter(p => (p.service_center_id || "—") === sc)
     .map(p => ({
       id_ruta: p.id_ruta, placa: p.placa, driver: p.driver_name,
-      empresa: empresaDeFila(p), monto: Number(p.pago_neto || 0),
+      // La empresa que vale es la que quedó en tarifado_mx al guardar: la resuelve
+      // un trigger con la precedencia certificación → bitácora. empresaDeFila usa
+      // el mapa del Excel semanal viejo y marcaba sin empresa rutas que sí tienen.
+      empresa: (p.id_ruta in empresaGuardada) ? empresaGuardada[p.id_ruta] : empresaDeFila(p),
+      monto: Number(p.pago_neto || 0),
       noPago: !!p.es_no_pago, cambio: cambioDe(p),
       montoPub: publicadas[p.id_ruta] ? Number(publicadas[p.id_ruta].pago_neto || 0) : null,
     }))
