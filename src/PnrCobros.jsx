@@ -427,6 +427,45 @@ export default function PnrCobrosMX({ usuario }) {
     return nuevas.length;
   };
 
+  // ── CARRIL B · Publicar al portal ────────────────────────────────────────
+  // Escribe solo en cobros_pnr_mx, que es lo que lee el portal del tercero. No
+  // toca la prefactura: ese es el carril A, que sigue armándose el lunes.
+  //
+  // La empresa NO la asigna el analista: la resuelve fn_empresa_de_placa con la
+  // fecha de la ruta, igual que el pago. Así el cobro y el pago de una misma
+  // placa nunca pueden ir a empresas distintas.
+  const publicarAlPortal = async (lista) => {
+    const filas = [];
+    const sinEmpresa = [];
+    for (const f of lista) {
+      if (!f.placa) { sinEmpresa.push(`${f.case_id} (sin placa)`); continue; }
+      const prep = prepararCobro(f);
+      const { data: tid } = await sb.rpc("fn_empresa_de_placa", { p_placa: f.placa });
+      if (!tid) { sinEmpresa.push(`${f.case_id} · ${f.placa}`); continue; }
+      const { data: emp } = await sb.from("terceros").select("nombre").eq("id", tid).maybeSingle();
+      filas.push({
+        pnr_id: String(f.case_id),
+        empresa_nombre: emp?.nombre || f.empresa,
+        service_center: prep.sc,
+        semana: String(semanaCobro),
+        fecha_ruta: f.fecha_ruta || String(f.facturado_en).slice(0, 10),
+        facturado_en: String(f.facturado_en).slice(0, 10),
+        driver_name: f.conductor || null,
+        placa: f.placa,
+        concepto: prep.mot.concepto,
+        monto: prep.monto,
+        estado: "enviado",
+        enviado_a_cobro_en: new Date().toISOString(),
+        asignado_por: quien,
+      });
+    }
+    if (!filas.length) return { ok: 0, sinEmpresa };
+    const { error } = await sb.from("cobros_pnr_mx").upsert(filas, { onConflict: "pnr_id" });
+    if (error) throw error;
+    return { ok: filas.length, sinEmpresa };
+  };
+
+  // ── CARRIL A · Agregar a la prefactura ───────────────────────────────────
   // Ejecuta un lote de cobros: resuelve el SC de cada uno, agrupa por empresa y
   // SC final, y hace una sola escritura por prefactura.
   const ejecutarCobros = async (lista, scForzado) => {
@@ -473,7 +512,8 @@ export default function PnrCobrosMX({ usuario }) {
       const g = grupos[k];
       let insertadas = [];
       try {
-        const { error: eIns } = await sb.from("cobros_pnr_mx").insert(g.filas);
+        // upsert y no insert: el carril B pudo haberlo publicado antes al portal.
+        const { error: eIns } = await sb.from("cobros_pnr_mx").upsert(g.filas, { onConflict: "pnr_id" });
         if (eIns) throw eIns;
         insertadas = g.filas.map(x => x.pnr_id);
         const n = await cargarEnConciliacion(g.empresa, g.sc, g.lineas);
@@ -488,6 +528,17 @@ export default function PnrCobrosMX({ usuario }) {
       }
     }
     return { ok, movidos, fallidos, sinOperacion, nGrupos: Object.keys(grupos).length };
+  };
+
+  const publicarUno = async (f) => {
+    setGuardando(f.case_id); setMsg(null);
+    try {
+      const r = await publicarAlPortal([f]);
+      if (r.ok) setMsg({ ok: true, txt: `PNR ${f.case_id} publicado al portal del tercero.` });
+      else setMsg({ ok: false, txt: `No se pudo resolver la empresa de la placa ${f.placa || "—"}: revisá el inventario de flota.` });
+      await cargar(semanaCobro, true);
+    } catch (e) { setMsg({ ok: false, txt: "No se pudo publicar: " + (e.message || e) }); }
+    setGuardando(null);
   };
 
   // Fuerza el cobro en un SC elegido por el analista. Sirve cuando la empresa
@@ -836,21 +887,42 @@ export default function PnrCobrosMX({ usuario }) {
                           </button>
                         </div>
                       ) : (
-                        <div>
-                        <button onClick={() => agregar(f)} disabled={guardando === f.case_id || !f.empresa || !f.sub_cobro}
-                          title={!f.sub_cobro ? "El caso ya no está en un estado cobrable" : (!f.empresa ? "Falta resolver la empresa transportista" : "Agregar como línea negativa a la conciliación")}
-                          style={{
-                            padding: "5px 12px", fontSize: 11, fontWeight: 600, borderRadius: 6, border: "none",
-                            background: (f.empresa && f.sub_cobro) ? "#1a3a6b" : "#e4e7ec", color: (f.empresa && f.sub_cobro) ? "#fff" : "#94a3b8",
-                            cursor: (guardando === f.case_id || !f.empresa || !f.sub_cobro) ? "not-allowed" : "pointer",
-                            opacity: guardando === f.case_id ? 0.5 : 1,
-                          }}>
-                          {guardando === f.case_id ? "Agregando…" : "Agregar"}
-                        </button>
-                          <div onClick={() => guardando ? null : agregarForzando(f)}
-                            title="Elegir a mano el SC donde se descuenta"
-                            style={{ marginTop: 3, fontSize: 9, color: "#1a3a6b", textDecoration: "underline", cursor: guardando ? "default" : "pointer" }}>
-                            forzar SC
+                        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                          {/* CARRIL B · portal: la empresa la resuelve el modelo diario */}
+                          <div>
+                            <button onClick={() => publicarUno(f)} disabled={guardando === f.case_id || !f.placa || !f.sub_cobro}
+                              title={!f.sub_cobro ? "El caso ya no está en un estado cobrable"
+                                : !f.placa ? "Sin placa no se puede resolver la empresa"
+                                : "El tercero lo ve hoy en su portal. La empresa se resuelve por la placa, igual que el pago."}
+                              style={{
+                                width: "100%", padding: "5px 10px", fontSize: 10.5, fontWeight: 700, borderRadius: 6,
+                                border: "1px solid #f59e0b",
+                                background: (f.placa && f.sub_cobro) ? "#fffbeb" : "#f8fafc",
+                                color: (f.placa && f.sub_cobro) ? "#92400e" : "#94a3b8",
+                                cursor: (guardando === f.case_id || !f.placa || !f.sub_cobro) ? "not-allowed" : "pointer",
+                              }}>
+                              {guardando === f.case_id ? "…" : "Publicar al portal"}
+                            </button>
+                            <div style={{ fontSize: 8.5, color: "#94a3b8", textAlign: "center", marginTop: 2 }}>diario · carril B</div>
+                          </div>
+
+                          {/* CARRIL A · prefactura del lunes: la empresa la asigna el analista */}
+                          <div>
+                            <button onClick={() => agregar(f)} disabled={guardando === f.case_id || !f.empresa || !f.sub_cobro}
+                              title={!f.sub_cobro ? "El caso ya no está en un estado cobrable" : (!f.empresa ? "Falta resolver la empresa transportista" : "Agregar como línea negativa a la prefactura de la semana")}
+                              style={{
+                                width: "100%", padding: "5px 10px", fontSize: 10.5, fontWeight: 700, borderRadius: 6, border: "none",
+                                background: (f.empresa && f.sub_cobro) ? "#1a3a6b" : "#e4e7ec", color: (f.empresa && f.sub_cobro) ? "#fff" : "#94a3b8",
+                                cursor: (guardando === f.case_id || !f.empresa || !f.sub_cobro) ? "not-allowed" : "pointer",
+                              }}>
+                              {guardando === f.case_id ? "…" : "Agregar a prefactura"}
+                            </button>
+                            <div style={{ fontSize: 8.5, color: "#94a3b8", textAlign: "center", marginTop: 2 }}>semanal · carril A</div>
+                            <div onClick={() => guardando ? null : agregarForzando(f)}
+                              title="Elegir a mano el SC donde se descuenta"
+                              style={{ marginTop: 2, fontSize: 9, color: "#1a3a6b", textDecoration: "underline", cursor: guardando ? "default" : "pointer", textAlign: "center" }}>
+                              forzar SC
+                            </div>
                           </div>
                         </div>
                       )}
