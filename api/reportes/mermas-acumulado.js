@@ -40,6 +40,24 @@ function periodoDe(fecha) {
   return `${y}${m}Q${d.getUTCDate() <= 15 ? 1 : 2}`;
 }
 
+// Don B guarda las cookies como el arreglo JSON que entrega la extensión, no
+// como header. Hay que armarlo, y además filtrar por dominio: vienen cookies de
+// auth-meli.adminml.com que no sirven en envios.adminml.com y solo ensucian.
+function armarHeaderCookie(crudo) {
+  let arr;
+  try { arr = JSON.parse(crudo); } catch { return String(crudo || ""); }  // ya venía como header
+  if (!Array.isArray(arr)) return String(crudo || "");
+  const utiles = arr.filter(c => {
+    const d = String(c?.domain || "").replace(/^\./, "");
+    return !d || d === "adminml.com" || d.endsWith(".adminml.com") || d.includes("envios");
+  });
+  const vistas = new Set();
+  return utiles
+    .filter(c => c?.name && !vistas.has(c.name) && vistas.add(c.name) !== false)
+    .map(c => `${c.name}=${c.value}`)
+    .join("; ");
+}
+
 async function cookiesDeSesion() {
   const { data, error } = await sb.from("sesiones_meli")
     .select("usuario_id, cookies, actualizado_at")
@@ -52,7 +70,9 @@ async function cookiesDeSesion() {
       `Son las únicas cuentas con acceso a facturación: hay que renovar la sesión con Don B.`
     );
   }
-  return { cookie: data[0].cookies, usuario: data[0].usuario_id, desde: data[0].actualizado_at };
+  const cookie = armarHeaderCookie(data[0].cookies);
+  if (!cookie) throw new Error("La sesión de " + data[0].usuario_id + " no tiene cookies utilizables.");
+  return { cookie, usuario: data[0].usuario_id, desde: data[0].actualizado_at };
 }
 
 async function pedir(url, cookie) {
@@ -65,7 +85,10 @@ async function pedir(url, cookie) {
     },
   });
   if (r.status === 401 || r.status === 403) {
-    throw new Error("MELI rechazó la sesión (401/403): hay que renovarla con Don B.");
+    throw new Error(
+      `MELI rechazó la sesión (${r.status}). Puede ser que la cuenta no tenga acceso a ` +
+      `facturación, o que la sesión haya caducado y haya que renovarla con Don B.`
+    );
   }
   if (!r.ok) throw new Error(`MELI respondió ${r.status} en ${url}`);
   return r;
