@@ -1739,11 +1739,15 @@ function PanelControlSupervisores() {
       const idxAyer = {};
       for (const r of ayerR.data || []) idxAyer[r.service_center_id] = r;
 
-      // ── Item 6 · Confirmación de Terceros ──────────────────────────
+      // ── Item 6 · Inventario de Flota ───────────────────────────────
       // Una sola fuente para hoy y para fechas pasadas: fn_flota_dia_sc, las
       // placas que hicieron viaje segun The Eyes. Antes habia dos caminos
       // distintos y el de fechas pasadas daba por completo cualquier dia con
       // algun dato, asi que el panel marcaba 6/6 sin haberse confirmado nada.
+      const mxHoy = new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString().split("T")[0];
+      const esHoy = fecha === mxHoy;
+      const scsUnicos = [...new Set(lista.map((x) => x.sc).filter(Boolean))];
+      const t6Idx = {};
       const res = await mapConLimite(scsUnicos, 4, async (sc) => {
         try {
           // Misma fuente que el Ítem 6 de la Bitácora: placas que HICIERON VIAJE
