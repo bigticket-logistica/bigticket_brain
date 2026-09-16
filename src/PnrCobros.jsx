@@ -870,6 +870,9 @@ export default function PnrCobrosMX({ usuario }) {
                     </td>
                     <td style={{ ...td, fontWeight: 600 }}>
                       {f.case_id}
+                      {f.shipment_id ? (
+                        <div style={{ fontSize: 9.5, color: "#64748b", fontWeight: 400 }}>guía {f.shipment_id}</div>
+                      ) : null}
                       {f.sin_avisos ? (
                         <div style={{ fontSize: 9, color: "#b45309", fontWeight: 600 }}>nació facturado</div>
                       ) : null}
