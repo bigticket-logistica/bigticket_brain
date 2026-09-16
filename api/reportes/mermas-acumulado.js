@@ -15,7 +15,7 @@
 // que es lo que hoy hace que el tercero se entere del cobro tres meses después.
 // ═══════════════════════════════════════════════════════════════════════════
 import { createClient } from "@supabase/supabase-js";
-import * as XLSX from "xlsx";
+import ExcelJS from "exceljs";   // ya está en el package.json del Brain
 
 const SUPABASE_URL = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY;
@@ -102,36 +102,42 @@ const COLS = {
 };
 const norm = (s) => String(s || "").toUpperCase().replace(/[_\-.]/g, " ").replace(/\s+/g, " ").trim();
 
-function excelAFilas(buf, periodo) {
-  const wb = XLSX.read(buf, { type: "buffer", cellDates: true });
-  const hoja = wb.SheetNames[0];
-  const crudo = XLSX.utils.sheet_to_json(wb.Sheets[hoja], { defval: null, raw: true });
-  if (!crudo.length) return [];
+async function excelAFilas(buf, periodo) {
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.load(buf);
+  const hoja = wb.worksheets[0];
+  if (!hoja || hoja.rowCount < 2) return [];
+
+  // Encabezados en la primera fila. Se mapean por nombre normalizado para que
+  // un cambio de mayúsculas o acentos en el archivo de MELI no rompa la carga.
+  const encabezados = [];
+  hoja.getRow(1).eachCell((celda, col) => { encabezados[col] = String(celda.value ?? "").trim(); });
 
   const mapa = {};
-  for (const h of Object.keys(crudo[0])) {
+  encabezados.forEach((h, col) => {
     const destino = COLS[norm(h)];
-    if (destino) mapa[h] = destino;
-  }
+    if (destino) mapa[col] = destino;
+  });
   if (!Object.values(mapa).includes("guia")) {
     throw new Error(
       "El Excel del acumulado no trae una columna de guía reconocible. " +
-      "Encabezados: " + Object.keys(crudo[0]).join(" · ")
+      "Encabezados: " + encabezados.filter(Boolean).join(" · ")
     );
   }
 
   const vistas = new Set();
   const filas = [];
-  for (const r of crudo) {
+  for (let i = 2; i <= hoja.rowCount; i++) {
+    const fila = hoja.getRow(i);
     const o = { periodo_prefactura: periodo, prefactura_meli: "ACUMULADO" };
-    for (const [h, col] of Object.entries(mapa)) {
-      let v = r[h];
-      if (col === "valor") v = N(v);
-      else if (col === "fecha") {
-        if (v instanceof Date) v = v.toISOString().slice(0, 10);
-        else v = T(v);
+    for (const [col, campo] of Object.entries(mapa)) {
+      let v = fila.getCell(Number(col)).value;
+      if (v && typeof v === "object") v = v.result ?? v.text ?? v.hyperlink ?? v;  // fórmulas y enlaces
+      if (campo === "valor") v = N(v);
+      else if (campo === "fecha") {
+        v = v instanceof Date ? v.toISOString().slice(0, 10) : T(v);
       } else v = T(v);
-      o[col] = v;
+      o[campo] = v;
     }
     const guia = T(o.guia);
     if (!guia || vistas.has(guia)) continue;   // sin guía no hay llave
@@ -161,7 +167,7 @@ export default async function handler(req, res) {
         `/site/MLM/mile/LAST_MILE/carrier/${CARRIER_ID}?period_name=${periodo}`;
       const r = await pedir(url, cookie);
       const buf = Buffer.from(await r.arrayBuffer());
-      const filas = excelAFilas(buf, periodo);
+      const filas = await excelAFilas(buf, periodo);
 
       // Lo que ya teníamos de este período, para saber qué es nuevo y qué
       // desapareció. Si MELI quita una guía del acumulado, es que la anuló:
