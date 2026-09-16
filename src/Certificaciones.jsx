@@ -6853,6 +6853,23 @@ function InventarioFlota() {
         const { error } = await sb.from("inventario_flota")
           .upsert(filas.slice(i, i + 200), { onConflict: "placa" });
         if (error) throw new Error(error.message);
+      }
+      // Copia historica de la carga. inventario_flota es una foto: cada subida
+      // pisa la anterior y no queda rastro de que decia ayer. El pago se resuelve
+      // contra el inventario del dia operado, asi que sin historia un archivo
+      // subido hoy reescribiria en silencio la empresa de un pago de ayer.
+      try {
+        const hist = filas.map(f => ({
+          carga_at: ahora, placa: f.placa, empresa: f.empresa, ceco: f.ceco,
+          pct_certificacion: f.pct_certificacion, archivo: file.name,
+        }));
+        for (let i = 0; i < hist.length; i += 200) {
+          await sb.from("inventario_flota_historia").insert(hist.slice(i, i + 200));
+        }
+      } catch (e) {
+        // No bloquea la carga: el padron ya quedo actualizado y eso es lo que
+        // opera. La historia es para auditar despues.
+        console.error("No se pudo guardar la historia del inventario:", e);
       }
 
       await sb.from("inventario_flota_cargas").insert({
