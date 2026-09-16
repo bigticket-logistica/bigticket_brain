@@ -3,6 +3,7 @@ import { descargarExcelMultihoja, fechaHoyOperativa, fechaOperativaOffset, sb } 
 import ModuloCobrosMermas from "./Mermas";
 import PnrCobrosMX from "./PnrCobros";
 import Diferencias from "./Diferencias";
+import Comparativa from "./Comparativa";
 
 function BotonDescargarExcel({ onClick, disabled, label = "Descargar Excel" }) {
   return (
@@ -1757,14 +1758,17 @@ function PanelControlSupervisores() {
           const { data, error } = await sb.rpc("fn_flota_dia_sc", { p_sc: sc, p_fecha: esHoy ? mxHoy : fecha });
           if (error) throw error;
           const fs = Array.isArray(data) ? data : [];
-          if (fs.length === 0) return { sc, t: null };
+          // Cero placas con viaje: el item aplica igual y queda cumplido, pero
+          // se devuelve el objeto — si se devolviera null, el total del panel
+          // bajaria a 5 sin decir por que.
+          if (fs.length === 0) return { sc, t: { total: 0, confirmadas: 0, completo: true } };
           const confirmadas = fs.filter((f) => f.confirmado_hoy).length;
           const sinEmp = fs.filter((f) => f.sin_empresa).length;
           return { sc, filas: fs, t: {
             total: fs.length, confirmadas,
             completo: sinEmp === 0 && confirmadas === fs.length,
           } };
-        } catch { return { sc, t: null }; }
+        } catch { return { sc, t: { total: 0, confirmadas: 0, completo: false } }; }
       });
       const t6Rows = {};
       for (const r of res || []) {
@@ -5821,6 +5825,7 @@ function ModuloPagosMadre({ usuario }) {
     { id: "conciliacion", label: "Conciliación Terceros", desc: "Conciliación semanal por empresa" },
     { id: "pnr_cobros",  label: "PNR",                   desc: "Cobro de PNR a terceros por semana" },
     { id: "diferencias", label: "Diferencias",           desc: "Reclamos de terceros sobre pagos y cobros" },
+    { id: "comparativa", label: "Comparativa",          desc: "Prefactura del lunes vs acumulado diario" },
     { id: "historial_pago", label: "Historial de Pago", desc: "Resumen semanal: cierres, cambios, saldos y reporte" },
     { id: "ayudantes",   label: "Ayudantes",             desc: "Números del día y aprobación del pago del ayudante" },
     { id: "cierre_dia",  label: "Cierre del Día",        desc: "Salud del día por ruta: conciliación entre Torre, KM, informe y escaneos" },
@@ -5876,6 +5881,7 @@ function ModuloPagosMadre({ usuario }) {
           {subtab === "conciliacion" && <ConciliacionTercerosMX usuario={usuario} />}
           {subtab === "pnr_cobros"  && <PnrCobrosMX usuario={usuario} />}
           {subtab === "diferencias" && <Diferencias usuario={usuario} />}
+          {subtab === "comparativa" && <Comparativa />}
           {subtab === "historial_pago" && <HistorialPagoMX usuario={usuario} />}
           {subtab === "ayudantes"   && <AyudantesDetalleDia usuario={usuario} />}
           {subtab === "cierre_dia"  && <CierreDelDia />}
@@ -7362,14 +7368,30 @@ function ListadoPagosDiarios({ usuario }) {
   const totalGuardadas = useMemo(
     () => Object.values(guardadoPorSC).reduce((t, n) => t + n, 0), [guardadoPorSC]);
 
-  // Rutas que operaron y no tienen empresa en el padrón: si se publican, nadie
-  // las ve. Es el único error que ningún tercero va a reclamar — no sabe que
-  // existen — así que tiene que gritar antes de publicar, no después.
-  const sinEmpresaDia = useMemo(() => {
-    const ss = (pagos || []).filter(p => !empresaDeFila(p));
-    return { n: ss.length, monto: ss.reduce((t, p) => t + Number(p.pago_neto || 0), 0),
-             scs: [...new Set(ss.map(p => p.service_center_id || "—"))] };
-  }, [pagos, empresaMap, empresaMapSem]);
+  // Rutas guardadas sin empresa: si se publican, nadie las ve, y como el tercero
+  // no sabe que existen tampoco las va a reclamar. Es el único error del sistema
+  // sin quien lo levante, así que tiene que gritar antes de publicar.
+  //
+  // Se cuenta sobre lo GUARDADO en tarifado_mx, no sobre el cálculo en memoria:
+  // el tercero_id lo resuelve un trigger al insertar, así que el mapa que usa la
+  // tabla de arriba (Excel semanal) daba un número distinto al real.
+  const [sinEmpresaDia, setSinEmpresaDia] = useState({ n: 0, monto: 0, scs: [] });
+  useEffect(() => {
+    let cancel = false;
+    (async () => {
+      const { data } = await sb.from("tarifado_mx")
+        .select("service_center_id, pago_neto")
+        .eq("fecha", fecha).is("tercero_id", null);
+      if (cancel) return;
+      const ss = data || [];
+      setSinEmpresaDia({
+        n: ss.length,
+        monto: ss.reduce((t, r) => t + Number(r.pago_neto || 0), 0),
+        scs: [...new Set(ss.map(r => r.service_center_id || "—"))],
+      });
+    })();
+    return () => { cancel = true; };
+  }, [fecha, guardadoPorSC]);
 
   // Publica el día completo: un solo acto para los N centros del día.
   // El detalle por SC de abajo queda para cuando haya que retener uno.
