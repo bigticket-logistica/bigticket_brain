@@ -193,12 +193,264 @@ export default function CobrosTerceros({ usuario }) {
         ))}
       </div>
       {sub === "pnr" && <ModuloPnr usuario={usuario} />}
-      {sub === "robos" && <EnConstruccion titulo="Robos y extravíos"
-        nota="Cobro de paquetes perdidos o robados en ruta. Mismo mecanismo que PNR: dos carriles, con su botón de agregar y quitar en cada uno." />}
+      {sub === "robos" && <ModuloRobos usuario={usuario} />}
       {sub === "noshow" && <EnConstruccion titulo="No Show"
         nota="Cobro por rutas comprometidas que no se operaron. Hoy el no-show se declara en la Bitácora del supervisor pero no tiene monto asociado." />}
     </div>
   );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Robos y extravíos — cobro de paquetes perdidos, con los mismos dos carriles
+// que PNR: portal diario (carril B) y prefactura semanal (carril A).
+//
+// De dónde salen: mermas_cargas_lineas, que se llena de dos formas — la carga
+// manual del Excel de complementarias que ya existe en el módulo Mermas, y el
+// botón "Traer de MELI" que golpea el acumulado del período en curso.
+//
+// Lo que MELI acumula en vivo: la pre-factura del período se va llenando día a
+// día. Por eso el botón se puede pulsar cada mañana y trae lo que cayó hoy, en
+// vez de esperar al cierre quincenal — que es lo que hoy hace que el tercero se
+// entere del cobro hasta tres meses después del hecho.
+//
+// La fecha del hecho puede ser de hace meses. Siempre se muestra junto al
+// cobro: sin eso, un descuento aparece en un día donde no pasó nada.
+// ═══════════════════════════════════════════════════════════════════════════
+
+function ModuloRobos({ usuario }) {
+  const [filas, setFilas] = useState(null);
+  const [cobrados, setCobrados] = useState({});      // guia -> fila de cobros_merma_mx
+  const [enPref, setEnPref] = useState({});          // guia -> ya tiene linea en la conciliacion
+  const [busca, setBusca] = useState("");
+  const [filtro, setFiltro] = useState("pendientes");
+  const [trayendo, setTrayendo] = useState(false);
+  const [guardando, setGuardando] = useState(null);
+  const [msg, setMsg] = useState(null);
+  const [semana, setSemana] = useState(() => semanaBrainHoy());
+  const quien = (usuario && (usuario.email || usuario.nombre)) || "brain";
+
+  const cargar = useCallback(async () => {
+    setFilas(null);
+    const [lin, cob] = await Promise.all([
+      sb.from("mermas_cargas_lineas")
+        .select("id, guia, fecha, id_ruta, motivo, placa, conductor, transportista, valor, estado, periodo_prefactura, created_at")
+        .neq("estado", "ANULADA POR MELI")
+        .order("fecha", { ascending: false })
+        .limit(3000),
+      sb.from("cobros_merma_mx").select("*").eq("estado", "enviado"),
+    ]);
+    setFilas(lin.data || []);
+    const mc = {};
+    for (const c of (cob.data || [])) mc[c.guia] = c;
+    setCobrados(mc);
+
+    // ¿Ya tiene línea en alguna conciliación? Se busca por el id que usa la
+    // línea del detalle, igual que en PNR.
+    const ep = {};
+    const { data: concs } = await sb.from("conciliaciones_terceros")
+      .select("detalle").eq("semana", Number(semana));
+    for (const c of (concs || [])) {
+      for (const d of (Array.isArray(c.detalle) ? c.detalle : [])) {
+        const id = String(d?._id || "");
+        if (id.startsWith("merma|")) ep[id.slice(6)] = true;
+      }
+    }
+    setEnPref(ep);
+  }, [semana]);
+
+  useEffect(() => { cargar(); }, [cargar]);
+
+  // ── Traer de MELI: golpea el acumulado del período en curso ───────────────
+  const traerDeMeli = async () => {
+    setTrayendo(true); setMsg(null);
+    try {
+      const r = await fetch("/api/mermas-acumulado", { method: "POST" });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || "Respuesta sin detalle");
+      const t = j.totales || {};
+      const det = (j.periodos || []).map(p =>
+        `${p.periodo}: ${p.nuevas} nuevas, ${p.actualizadas} actualizadas, ${p.anuladas} anuladas`).join(" · ");
+      setMsg({
+        ok: true,
+        txt: `Sesión ${j.usuario}. ${t.nuevas || 0} cobro(s) nuevo(s), ${t.actualizadas || 0} con monto cambiado, ${t.anuladas || 0} anulado(s) por MELI. ${det}`,
+      });
+      await cargar();
+    } catch (e) {
+      setMsg({ ok: false, txt: "No se pudo traer de MELI: " + (e.message || e) });
+    }
+    setTrayendo(false);
+  };
+
+  // ── CARRIL B · publicar al portal ─────────────────────────────────────────
+  // La empresa la resuelve fn_empresa_de_placa con la FECHA DEL HECHO, no la de
+  // hoy: un paquete perdido en agosto se le cobra a quien tenía la placa en
+  // agosto, aunque hoy sea de otra empresa.
+  const publicarUno = async (f) => {
+    if (!f.placa) { setMsg({ ok: false, txt: `La guía ${f.guia} no tiene placa: no se puede resolver la empresa.` }); return; }
+    setGuardando(f.id); setMsg(null);
+    try {
+      const { data: tid } = await sb.rpc("fn_empresa_de_placa", { p_placa: f.placa });
+      if (!tid) throw new Error(`No hay empresa para la placa ${f.placa} en el padrón.`);
+      const { data: emp } = await sb.from("terceros").select("nombre").eq("id", tid).maybeSingle();
+      const { error } = await sb.from("cobros_merma_mx").upsert({
+        linea_id: f.id, guia: f.guia, tercero_id: tid,
+        empresa_nombre: emp?.nombre || f.transportista,
+        service_center: null, semana: String(semana),
+        fecha_hecho: f.fecha, fecha_cobro: new Date().toISOString().slice(0, 10),
+        id_ruta: f.id_ruta, placa: f.placa, driver_name: f.conductor,
+        motivo: f.motivo, monto: f.valor, estado: "enviado", asignado_por: quien,
+      }, { onConflict: "linea_id" });
+      if (error) throw error;
+      setMsg({ ok: true, txt: `Guía ${f.guia} publicada al portal de ${emp?.nombre || "—"}.` });
+      await cargar();
+    } catch (e) { setMsg({ ok: false, txt: "No se pudo publicar: " + (e.message || e) }); }
+    setGuardando(null);
+  };
+
+  const quitarDelPortal = async (f, ya) => {
+    if (!window.confirm(`¿Quitar del portal el cobro de la guía ${f.guia}?\n\n${ya.empresa_nombre} · ${money(f.valor)}\n\nDeja de verse en sus movimientos.`)) return;
+    setGuardando(f.id); setMsg(null);
+    try {
+      const { error } = await sb.from("cobros_merma_mx").delete().eq("linea_id", f.id);
+      if (error) throw error;
+      await cargar();
+    } catch (e) { setMsg({ ok: false, txt: "No se pudo quitar: " + (e.message || e) }); }
+    setGuardando(null);
+  };
+
+  const visibles = useMemo(() => {
+    let fs = filas || [];
+    if (filtro === "pendientes") fs = fs.filter(f => !cobrados[f.guia]);
+    else if (filtro === "publicados") fs = fs.filter(f => cobrados[f.guia]);
+    const q = busca.trim().toLowerCase();
+    if (q) fs = fs.filter(f =>
+      [f.guia, f.placa, f.conductor, f.transportista, f.id_ruta].some(x => String(x || "").toLowerCase().includes(q)));
+    return fs.slice(0, 400);
+  }, [filas, cobrados, filtro, busca]);
+
+  const totPend = (filas || []).filter(f => !cobrados[f.guia]).reduce((t, f) => t + Number(f.valor || 0), 0);
+  const th = { textAlign: "left", padding: "8px 10px", fontSize: 10, fontWeight: 700, color: "#64748b", background: "#f8fafc", textTransform: "uppercase", letterSpacing: .4, whiteSpace: "nowrap" };
+  const td = { padding: "8px 10px", fontSize: 11.5, borderBottom: "1px solid #f1f5f9" };
+
+  return (
+    <div style={{ padding: 24 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap", marginBottom: 14 }}>
+        <div>
+          <div style={{ fontSize: 17, fontWeight: 700, color: "#1a3a6b" }}>Robos y extravíos</div>
+          <div style={{ fontSize: 11.5, color: "#94a3b8", marginTop: 2, maxWidth: 620, lineHeight: 1.5 }}>
+            Paquetes perdidos que MELI cobra. Se traen del acumulado del período en curso, que se
+            llena día a día. La fecha del hecho puede ser de meses atrás — siempre va junto al cobro.
+          </div>
+        </div>
+        <button onClick={traerDeMeli} disabled={trayendo}
+          style={{
+            padding: "9px 18px", borderRadius: 8, border: "none", fontSize: 12.5, fontWeight: 700,
+            background: trayendo ? "#cbd5e1" : "#1a3a6b", color: "#fff",
+            cursor: trayendo ? "not-allowed" : "pointer",
+          }}>
+          {trayendo ? "Consultando a MELI…" : "↓ Traer de MELI"}
+        </button>
+      </div>
+
+      {msg && (
+        <div style={{
+          background: msg.ok ? "#f0fdf4" : "#fef2f2", color: msg.ok ? "#166534" : "#991b1b",
+          border: `1px solid ${msg.ok ? "#86efac" : "#fca5a5"}`, borderRadius: 8,
+          padding: "10px 12px", fontSize: 12.5, marginBottom: 12, lineHeight: 1.5,
+        }}>{msg.txt}</div>
+      )}
+
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
+        {[["pendientes", "Sin publicar"], ["publicados", "En el portal"], ["todas", "Todas"]].map(([id, l]) => (
+          <button key={id} onClick={() => setFiltro(id)}
+            style={{ padding: "6px 14px", borderRadius: 16, fontSize: 11.5, fontWeight: 700, cursor: "pointer",
+              border: `1px solid ${filtro === id ? "#1a3a6b" : "#e4e7ec"}`,
+              background: filtro === id ? "#1a3a6b" : "#fff", color: filtro === id ? "#fff" : "#64748b" }}>{l}</button>
+        ))}
+        <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="Guía, placa, conductor, ruta…"
+          style={{ border: "1px solid #e4e7ec", borderRadius: 6, padding: "6px 10px", fontSize: 12, minWidth: 240 }} />
+        <span style={{ fontSize: 11.5, color: "#64748b", marginLeft: "auto" }}>
+          Pendiente de cobrar: <b style={{ color: "#b91c1c" }}>{money(totPend)}</b>
+        </span>
+      </div>
+
+      {filas === null ? (
+        <div style={{ padding: 40, textAlign: "center", color: "#94a3b8", fontSize: 13 }}>Cargando…</div>
+      ) : visibles.length === 0 ? (
+        <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10, padding: 36, textAlign: "center", color: "#94a3b8", fontSize: 13 }}>
+          {filtro === "pendientes" ? "No hay cobros sin publicar." : "Sin resultados."}
+        </div>
+      ) : (
+        <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10, overflow: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead><tr>
+              <th style={th}>Guía</th><th style={th}>Hecho</th><th style={th}>Motivo</th>
+              <th style={th}>Placa</th><th style={th}>Conductor</th><th style={th}>Transportista</th>
+              <th style={{ ...th, textAlign: "right" }}>Monto</th><th style={{ ...th, textAlign: "right" }}>Acciones</th>
+            </tr></thead>
+            <tbody>
+              {visibles.map(f => {
+                const ya = cobrados[f.guia];
+                return (
+                  <tr key={f.id} style={{ background: ya ? "#fbfdfb" : "#fff" }}>
+                    <td style={{ ...td, fontWeight: 600, color: "#1a3a6b" }}>
+                      {f.guia}
+                      {f.id_ruta && <div style={{ fontSize: 9.5, color: "#94a3b8", fontWeight: 400 }}>ruta {f.id_ruta}</div>}
+                    </td>
+                    <td style={{ ...td, color: "#64748b", whiteSpace: "nowrap" }}>
+                      {f.fecha || "—"}
+                      {f.periodo_prefactura && <div style={{ fontSize: 9, color: "#94a3b8" }}>{f.periodo_prefactura}</div>}
+                    </td>
+                    <td style={{ ...td, color: "#475569" }}>{f.motivo || "—"}</td>
+                    <td style={{ ...td, fontWeight: 600 }}>{f.placa || "—"}</td>
+                    <td style={{ ...td, color: "#64748b" }}>{f.conductor || "—"}</td>
+                    <td style={{ ...td, color: "#64748b" }}>{f.transportista || "—"}</td>
+                    <td style={{ ...td, textAlign: "right", fontWeight: 700, color: "#b91c1c", fontVariantNumeric: "tabular-nums" }}>
+                      {money(f.valor)}
+                    </td>
+                    <td style={{ ...td, textAlign: "right", whiteSpace: "nowrap" }}>
+                      {ya ? (
+                        <div>
+                          <div style={{ fontSize: 9.5, fontWeight: 700, color: "#92400e" }}>✓ en el portal</div>
+                          <div style={{ fontSize: 8.5, color: "#94a3b8" }}>{ya.empresa_nombre}</div>
+                          <button onClick={() => quitarDelPortal(f, ya)} disabled={guardando === f.id}
+                            style={{ marginTop: 3, padding: "3px 10px", fontSize: 9.5, fontWeight: 700, borderRadius: 5,
+                              border: "1px solid #f59e0b", background: "#fffbeb", color: "#92400e", cursor: "pointer" }}>
+                            {guardando === f.id ? "…" : "Quitar del portal"}
+                          </button>
+                        </div>
+                      ) : (
+                        <div>
+                          <button onClick={() => publicarUno(f)} disabled={guardando === f.id || !f.placa}
+                            title={!f.placa ? "Sin placa no se puede resolver la empresa" : "El tercero lo ve hoy en su portal"}
+                            style={{ padding: "5px 12px", fontSize: 10.5, fontWeight: 700, borderRadius: 6,
+                              border: "1px solid #f59e0b", background: f.placa ? "#fffbeb" : "#f8fafc",
+                              color: f.placa ? "#92400e" : "#94a3b8", cursor: f.placa ? "pointer" : "not-allowed" }}>
+                            {guardando === f.id ? "…" : "Publicar al portal"}
+                          </button>
+                          <div style={{ fontSize: 8.5, color: "#94a3b8", marginTop: 2 }}>diario · carril B</div>
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Numeración del Brain: ISO + 1
+function semanaBrainHoy() {
+  const d = new Date(Date.now() - 6 * 3600 * 1000);
+  const x = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  const dn = x.getUTCDay() || 7;
+  x.setUTCDate(x.getUTCDate() + 4 - dn);
+  const ini = new Date(Date.UTC(x.getUTCFullYear(), 0, 1));
+  return Math.ceil(((x - ini) / 86400000 + 1) / 7) + 1;
 }
 
 function EnConstruccion({ titulo, nota }) {
