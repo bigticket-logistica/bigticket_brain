@@ -1085,6 +1085,23 @@ function ModuloPnr({ usuario }) {
         // upsert y no insert: el carril B pudo haberlo publicado antes al portal.
         const { error: eIns } = await sb.from("cobros_pnr_mx").upsert(g.filas, { onConflict: "pnr_id" });
         if (eIns) throw eIns;
+
+        // Aviso al supervisor del centro. El caso desaparece de su bitácora
+        // cuando la torre lo cierra, así que sin este correo nunca se entera de
+        // que terminó en cobro ni de cuánto. No bloquea: si n8n está caído, el
+        // cobro ya quedó hecho y el historial igual lo va a mostrar.
+        for (const fila of g.filas) {
+          try {
+            const { data: payload } = await sb.rpc("fn_payload_aviso_pnr", { p_pnr: fila.pnr_id });
+            if (payload) {
+              await fetch("https://bigticket2026.app.n8n.cloud/webhook/pnr-cobrado-notificar", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload),
+              });
+            }
+          } catch (e) { console.error("No se pudo avisar al supervisor del PNR", fila.pnr_id, e); }
+        }
         insertadas = g.filas.map(x => x.pnr_id);
         const n = await cargarEnConciliacion(g.empresa, g.sc, g.lineas);
         ok += n;
