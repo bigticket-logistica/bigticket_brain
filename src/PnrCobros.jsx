@@ -1101,22 +1101,7 @@ function ModuloPnr({ usuario }) {
         const { error: eIns } = await sb.from("cobros_pnr_mx").upsert(g.filas, { onConflict: "pnr_id" });
         if (eIns) throw eIns;
 
-        // Aviso al supervisor del centro. El caso desaparece de su bitácora
-        // cuando la torre lo cierra, así que sin este correo nunca se entera de
-        // que terminó en cobro ni de cuánto. No bloquea: si n8n está caído, el
-        // cobro ya quedó hecho y el historial igual lo va a mostrar.
-        for (const fila of g.filas) {
-          try {
-            const { data: payload } = await sb.rpc("fn_payload_aviso_pnr", { p_pnr: fila.pnr_id });
-            if (payload) {
-              await fetch("https://bigticket2026.app.n8n.cloud/webhook/pnr-cobrado-notificar", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(payload),
-              });
-            }
-          } catch (e) { console.error("No se pudo avisar al supervisor del PNR", fila.pnr_id, e); }
-        }
+        for (const fila of g.filas) await avisarSupervisorPnr(fila.pnr_id);
         insertadas = g.filas.map(x => x.pnr_id);
         const n = await cargarEnConciliacion(g.empresa, g.sc, g.lineas);
         ok += n;
@@ -1132,12 +1117,31 @@ function ModuloPnr({ usuario }) {
     return { ok, movidos, fallidos, sinOperacion, nGrupos: Object.keys(grupos).length };
   };
 
+  // Aviso al supervisor del centro. Sale por los DOS carriles: el caso
+  // desaparece de su bitácora cuando la torre lo cierra, así que sin esto nunca
+  // se entera de que terminó en cobro ni de cuánto. No bloquea: si n8n está
+  // caído, el cobro ya quedó hecho y el historial igual lo va a mostrar.
+  const avisarSupervisorPnr = async (pnrId) => {
+    try {
+      const { data: payload } = await sb.rpc("fn_payload_aviso_pnr", { p_pnr: String(pnrId) });
+      if (!payload) return;
+      await fetch("https://bigticket2026.app.n8n.cloud/webhook/pnr-cobrado-notificar", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+    } catch (e) { console.error("No se pudo avisar al supervisor del PNR", pnrId, e); }
+  };
+
   const publicarUno = async (f) => {
     setGuardando(f.case_id); setMsg(null);
     try {
       const r = await publicarAlPortal([f]);
-      if (r.ok) setMsg({ ok: true, txt: `PNR ${f.case_id} publicado al portal del tercero.` });
-      else setMsg({ ok: false, txt: `No se pudo resolver la empresa de la placa ${f.placa || "—"}: revisá el inventario de flota.` });
+      if (r.ok) {
+        await avisarSupervisorPnr(f.case_id);
+        setMsg({ ok: true, txt: `PNR ${f.case_id} publicado al portal del tercero. Se avisó al supervisor del centro.` });
+      }
+      else setMsg({ ok: false, txt: `No se pudo resolver la empresa de la placa ${f.placa || "—"}: revisa el inventario de flota.` });
       await cargar(semanaCobro, true);
     } catch (e) { setMsg({ ok: false, txt: "No se pudo publicar: " + (e.message || e) }); }
     setGuardando(null);
