@@ -842,7 +842,7 @@ function ModuloPnr({ usuario }) {
           facturado_en: mot.ts,
           placa,
           fecha_ruta: j.fecha || null,
-          semana_ruta: semRuta,
+          semana_ruta: semanaInventario(j.fecha),
           empresa,
           avisos,
           resumen_avisos: Object.entries(porTipo),
