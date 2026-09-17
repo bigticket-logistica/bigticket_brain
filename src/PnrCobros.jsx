@@ -194,8 +194,7 @@ export default function CobrosTerceros({ usuario }) {
       </div>
       {sub === "pnr" && <ModuloPnr usuario={usuario} />}
       {sub === "robos" && <ModuloRobos usuario={usuario} />}
-      {sub === "noshow" && <EnConstruccion titulo="No Show"
-        nota="Cobro por rutas comprometidas que no se operaron. Hoy el no-show se declara en la Bitácora del supervisor pero no tiene monto asociado." />}
+      {sub === "noshow" && <ModuloNoShow usuario={usuario} />}
     </div>
   );
 }
@@ -517,6 +516,191 @@ function semanaBrainHoy() {
   x.setUTCDate(x.getUTCDate() + 4 - dn);
   const ini = new Date(Date.UTC(x.getUTCFullYear(), 0, 1));
   return Math.ceil(((x - ini) / 86400000 + 1) / 7) + 1;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// No Show — el conductor no se presentó a operar su ruta.
+//
+// Nace en la Bitácora: el supervisor declara las placas que no se presentaron
+// en el Ítem correspondiente de su día. De ahí sale la línea de cobro.
+//
+// El monto lo pone el analista a mano: no hay tarifa fija todavía. Y la empresa
+// se resuelve por la placa con fn_empresa_de_placa, igual que el pago, para que
+// el cobro y el pago de una misma placa nunca vayan a empresas distintas.
+//
+// Limitación conocida: la Bitácora guarda solo la placa, no el nombre del
+// conductor. Cuando el tercero reclame, "no se presentó la placa X" es más
+// débil que nombrar a quien faltó. Vale la pena pedirle a la Bitácora que
+// capture también el conductor.
+// ═══════════════════════════════════════════════════════════════════════════
+function ModuloNoShow({ usuario }) {
+  const [filas, setFilas] = useState(null);
+  const [enPref, setEnPref] = useState({});
+  const [filtro, setFiltro] = useState("pendientes");
+  const [guardando, setGuardando] = useState(null);
+  const [msg, setMsg] = useState(null);
+  const semana = semanaBrainHoy();
+  const quien = (usuario && (usuario.email || usuario.nombre)) || "brain";
+
+  const cargar = useCallback(async () => {
+    setFilas(null);
+    const [v, concs] = await Promise.all([
+      sb.from("vw_noshow_declarados").select("*").order("fecha", { ascending: false }),
+      sb.from("conciliaciones_terceros").select("detalle").eq("semana", Number(semana)),
+    ]);
+    setFilas(v.data || []);
+    const ep = {};
+    for (const c of (concs.data || [])) {
+      for (const d of (Array.isArray(c.detalle) ? c.detalle : [])) {
+        const id = String(d?._id || "");
+        if (id.startsWith("noshow|")) ep[id.slice(7)] = true;
+      }
+    }
+    setEnPref(ep);
+  }, [semana]);
+
+  useEffect(() => { cargar(); }, [cargar]);
+
+  const clave = (f) => `${f.fecha}|${f.sc}|${f.placa}`;
+
+  // CARRIL B · portal. El monto lo pone el analista: no hay tarifa fija.
+  const publicar = async (f) => {
+    if (!f.tercero_id) { setMsg({ ok: false, txt: `La placa ${f.placa} no tiene empresa en el padrón.` }); return; }
+    const m = window.prompt(
+      `Cobro por no show\n\n${f.empresa}\n${f.placa} · ${f.sc} · ${f.fecha}\n\nMonto a cobrar:`,
+      f.monto || "");
+    if (m === null) return;
+    const monto = Number(String(m).replace(/[^\d.\-]/g, ""));
+    if (!isFinite(monto) || monto <= 0) { setMsg({ ok: false, txt: "Monto inválido." }); return; }
+
+    setGuardando(clave(f)); setMsg(null);
+    try {
+      const { error } = await sb.from("cobros_noshow_mx").upsert({
+        fecha: f.fecha, service_center: f.sc, placa: f.placa,
+        tercero_id: f.tercero_id, empresa_nombre: f.empresa,
+        monto, semana: String(semana), estado: "enviado",
+        justificacion: f.noshow_justificacion, asignado_por: quien,
+      }, { onConflict: "fecha,service_center,placa" });
+      if (error) throw error;
+      setMsg({ ok: true, txt: `No show del ${f.fecha} publicado a ${f.empresa} · ${money(monto)}.` });
+      await cargar();
+    } catch (e) { setMsg({ ok: false, txt: "No se pudo publicar: " + (e.message || e) }); }
+    setGuardando(null);
+  };
+
+  const quitar = async (f) => {
+    if (!window.confirm(`¿Quitar del portal el no show del ${f.fecha}?\n\n${f.empresa} · ${f.placa} · ${money(f.monto)}`)) return;
+    setGuardando(clave(f));
+    try {
+      await sb.from("cobros_noshow_mx").delete().eq("id", f.cobro_id);
+      await cargar();
+    } catch (e) { setMsg({ ok: false, txt: "No se pudo quitar: " + (e.message || e) }); }
+    setGuardando(null);
+  };
+
+  const visibles = useMemo(() => {
+    let fs = filas || [];
+    if (filtro === "pendientes") fs = fs.filter(f => f.cobro_estado !== "enviado");
+    else if (filtro === "publicados") fs = fs.filter(f => f.cobro_estado === "enviado");
+    return fs;
+  }, [filas, filtro]);
+
+  const totPub = (filas || []).filter(f => f.cobro_estado === "enviado")
+    .reduce((t, f) => t + Number(f.monto || 0), 0);
+  const th = { textAlign: "left", padding: "8px 10px", fontSize: 10, fontWeight: 700, color: "#64748b", background: "#f8fafc", textTransform: "uppercase", letterSpacing: .4, whiteSpace: "nowrap" };
+  const td = { padding: "8px 10px", fontSize: 11.5, borderBottom: "1px solid #f1f5f9" };
+
+  return (
+    <div style={{ padding: 24 }}>
+      <div style={{ marginBottom: 14 }}>
+        <div style={{ fontSize: 17, fontWeight: 700, color: "#1a3a6b" }}>No Show</div>
+        <div style={{ fontSize: 11.5, color: "#94a3b8", marginTop: 2, maxWidth: 640, lineHeight: 1.5 }}>
+          Placas que el supervisor declaró como no presentadas en su bitácora del día.
+          El monto lo pones tú: no hay tarifa fija todavía.
+        </div>
+      </div>
+
+      {msg && (
+        <div style={{ background: msg.ok ? "#f0fdf4" : "#fef2f2", color: msg.ok ? "#166534" : "#991b1b",
+          border: `1px solid ${msg.ok ? "#86efac" : "#fca5a5"}`, borderRadius: 8,
+          padding: "10px 12px", fontSize: 12.5, marginBottom: 12 }}>{msg.txt}</div>
+      )}
+
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
+        {[["pendientes", "Sin cobrar"], ["publicados", "En el portal"], ["todas", "Todas"]].map(([id, l]) => (
+          <button key={id} onClick={() => setFiltro(id)}
+            style={{ padding: "6px 14px", borderRadius: 16, fontSize: 11.5, fontWeight: 700, cursor: "pointer",
+              border: `1px solid ${filtro === id ? "#1a3a6b" : "#e4e7ec"}`,
+              background: filtro === id ? "#1a3a6b" : "#fff", color: filtro === id ? "#fff" : "#64748b" }}>{l}</button>
+        ))}
+        <span style={{ fontSize: 11.5, color: "#64748b", marginLeft: "auto" }}>
+          Cobrado: <b style={{ color: "#b91c1c" }}>{money(totPub)}</b>
+        </span>
+      </div>
+
+      {filas === null ? (
+        <div style={{ padding: 40, textAlign: "center", color: "#94a3b8", fontSize: 13 }}>Cargando…</div>
+      ) : visibles.length === 0 ? (
+        <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10, padding: 36, textAlign: "center", color: "#94a3b8", fontSize: 13 }}>
+          {filtro === "pendientes" ? "No hay no shows sin cobrar." : "Sin resultados."}
+        </div>
+      ) : (
+        <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10, overflow: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead><tr>
+              <th style={th}>Fecha</th><th style={th}>SC</th><th style={th}>Placa</th>
+              <th style={th}>Empresa</th><th style={th}>Justificación</th>
+              <th style={{ ...th, textAlign: "right" }}>Monto</th>
+              <th style={{ ...th, textAlign: "right" }}>Acciones</th>
+            </tr></thead>
+            <tbody>
+              {visibles.map(f => {
+                const pub = f.cobro_estado === "enviado";
+                return (
+                  <tr key={clave(f)} style={{ background: pub ? "#fbfdfb" : "#fff" }}>
+                    <td style={{ ...td, color: "#64748b", whiteSpace: "nowrap" }}>{f.fecha}</td>
+                    <td style={{ ...td, color: "#64748b" }}>{f.sc}</td>
+                    <td style={{ ...td, fontWeight: 600, color: "#1a3a6b" }}>{f.placa}</td>
+                    <td style={{ ...td, color: f.empresa ? "#334155" : "#b45309", fontWeight: f.empresa ? 400 : 600 }}>
+                      {f.empresa || "⚠️ sin empresa en el padrón"}
+                    </td>
+                    <td style={{ ...td, color: "#94a3b8", fontSize: 11 }}>{f.noshow_justificacion || "—"}</td>
+                    <td style={{ ...td, textAlign: "right", fontWeight: 700, fontVariantNumeric: "tabular-nums",
+                      color: f.monto ? "#b91c1c" : "#cbd5e1" }}>
+                      {f.monto ? money(f.monto) : "sin monto"}
+                    </td>
+                    <td style={{ ...td, textAlign: "right", whiteSpace: "nowrap" }}>
+                      {pub ? (
+                        <div>
+                          <div style={{ fontSize: 9.5, fontWeight: 700, color: "#92400e" }}>✓ en el portal</div>
+                          <button onClick={() => quitar(f)} disabled={guardando === clave(f)}
+                            style={{ marginTop: 3, padding: "3px 10px", fontSize: 9.5, fontWeight: 700, borderRadius: 5,
+                              border: "1px solid #f59e0b", background: "#fffbeb", color: "#92400e", cursor: "pointer" }}>
+                            Quitar del portal
+                          </button>
+                        </div>
+                      ) : (
+                        <div>
+                          <button onClick={() => publicar(f)} disabled={guardando === clave(f) || !f.tercero_id}
+                            style={{ padding: "5px 12px", fontSize: 10.5, fontWeight: 700, borderRadius: 6,
+                              border: "1px solid #f59e0b", background: f.tercero_id ? "#fffbeb" : "#f8fafc",
+                              color: f.tercero_id ? "#92400e" : "#94a3b8",
+                              cursor: f.tercero_id ? "pointer" : "not-allowed" }}>
+                            {guardando === clave(f) ? "…" : "Cobrar y publicar"}
+                          </button>
+                          <div style={{ fontSize: 8.5, color: "#94a3b8", marginTop: 2 }}>diario · carril B</div>
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
 }
 
 function EnConstruccion({ titulo, nota }) {
