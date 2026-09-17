@@ -808,12 +808,27 @@ function ModuloPnr({ usuario }) {
         for (const k in acc) empSem[k] = [...acc[k]].join(" / ");
       }
 
+      // La empresa se resuelve con fn_empresa_de_placa, igual que el pago: manda
+      // el inventario de certificación y, si la placa no está ahí, el padrón de
+      // la bitácora. Antes se leía flota_terceros_mx —el Excel semanal viejo— y
+      // por eso había placas que el motor sí resolvía y acá salían sin empresa.
+      const placasUnicas = [...new Set((casos || [])
+        .map(c => (jornada[c.route_id] || {}).placa).filter(Boolean)
+        .map(p => normalizarPlaca(p)))];
+      const empPorPlaca = {};
+      await Promise.all(placasUnicas.map(async (pl) => {
+        try {
+          const { data: tid } = await sb.rpc("fn_empresa_de_placa", { p_placa: pl });
+          if (!tid) return;
+          const { data: t } = await sb.from("terceros").select("nombre").eq("id", tid).maybeSingle();
+          if (t?.nombre) empPorPlaca[pl] = t.nombre;
+        } catch (e) { console.error("No se pudo resolver la empresa de", pl, e); }
+      }));
+
       const out = (casos || []).map(c => {
         const j = jornada[c.route_id] || {};
-        const semRuta = semanaInventario(j.fecha);
         const placa = j.placa || null;
-        const empresa = (placa && semRuta != null)
-          ? (empSem[semRuta + "||" + normalizarPlaca(placa)] || null) : null;
+        const empresa = placa ? (empPorPlaca[normalizarPlaca(placa)] || null) : null;
         const avisos = avisosPorCaso[c.case_id] || [];
         const porTipo = {};
         for (const a of avisos) {
