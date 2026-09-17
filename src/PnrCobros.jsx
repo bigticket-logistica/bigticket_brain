@@ -217,45 +217,49 @@ export default function CobrosTerceros({ usuario }) {
 // cobro: sin eso, un descuento aparece en un día donde no pasó nada.
 // ═══════════════════════════════════════════════════════════════════════════
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Robos y extravíos — dos momentos de un mismo caso.
+//
+// FASE 1 · PERDIDO, sin monto. Lo detecta el vigilante de The Eyes cuando MELI
+// declara el paquete `lost`, dos o tres días después del hecho. Se publica al
+// portal como aviso: el tercero sabe que hay un paquete perdido en su ruta y
+// cuánto tiempo lleva, aunque todavía no haya precio. Lo mismo va como tarea al
+// supervisor del centro, que es quien puede buscarlo.
+//
+// FASE 2 · COBRABLE, con monto. Llega semanas después en el acumulado de MELI
+// y cae en mermas_cargas_lineas. Se cruza por guía con el aviso y el mismo caso
+// pasa a cobro. Para el tercero no es sorpresa: ya lo conocía.
+//
+// Los dos carriles —portal y prefactura— operan sobre la fase 2, que es la que
+// tiene plata. La fase 1 solo avisa.
+// ═══════════════════════════════════════════════════════════════════════════
+
 function ModuloRobos({ usuario }) {
   const [filas, setFilas] = useState(null);
-  const [cobrados, setCobrados] = useState({});      // guia -> fila de cobros_merma_mx
-  const [enPref, setEnPref] = useState({});          // guia -> ya tiene linea en la conciliacion
+  const [cobrados, setCobrados] = useState({});
+  const [enPref, setEnPref] = useState({});
+  const [fase, setFase] = useState("cobrable");
   const [busca, setBusca] = useState("");
-  const [filtro, setFiltro] = useState("pendientes");
   const [trayendo, setTrayendo] = useState(false);
   const [guardando, setGuardando] = useState(null);
   const [msg, setMsg] = useState(null);
-  const [semana, setSemana] = useState(() => semanaBrainHoy());
+  const semana = semanaBrainHoy();
   const quien = (usuario && (usuario.email || usuario.nombre)) || "brain";
-
-  // Hito cero de este módulo. Antes del 14 de septiembre el tercero no tenía
-  // dónde ver sus cobros, así que esas líneas se resuelven por el camino
-  // anterior y no se muestran acá.
   const HITO_CERO = "2026-09-14";
 
   const cargar = useCallback(async () => {
     setFilas(null);
-    const [lin, cob] = await Promise.all([
-      sb.from("mermas_cargas_lineas")
-        .select("id, guia, fecha, id_ruta, motivo, placa, conductor, transportista, valor, estado, periodo_prefactura, created_at")
-        .neq("estado", "ANULADA POR MELI")
-        .gte("fecha", HITO_CERO)
-        .order("fecha", { ascending: false })
-        .limit(3000),
+    const [paq, cob, concs] = await Promise.all([
+      sb.from("vw_paquetes_cobrables").select("*").gte("fecha_ruta", HITO_CERO).limit(2000),
       sb.from("cobros_merma_mx").select("*").eq("estado", "enviado"),
+      sb.from("conciliaciones_terceros").select("detalle").eq("semana", Number(semana)),
     ]);
-    setFilas(lin.data || []);
+    setFilas(paq.data || []);
     const mc = {};
     for (const c of (cob.data || [])) mc[c.guia] = c;
     setCobrados(mc);
-
-    // ¿Ya tiene línea en alguna conciliación? Se busca por el id que usa la
-    // línea del detalle, igual que en PNR.
     const ep = {};
-    const { data: concs } = await sb.from("conciliaciones_terceros")
-      .select("detalle").eq("semana", Number(semana));
-    for (const c of (concs || [])) {
+    for (const c of (concs.data || [])) {
       for (const d of (Array.isArray(c.detalle) ? c.detalle : [])) {
         const id = String(d?._id || "");
         if (id.startsWith("merma|")) ep[id.slice(6)] = true;
@@ -266,7 +270,6 @@ function ModuloRobos({ usuario }) {
 
   useEffect(() => { cargar(); }, [cargar]);
 
-  // ── Traer de MELI: golpea el acumulado del período en curso ───────────────
   const traerDeMeli = async () => {
     setTrayendo(true); setMsg(null);
     try {
@@ -274,189 +277,225 @@ function ModuloRobos({ usuario }) {
       const j = await r.json();
       if (!j.ok) throw new Error(j.error || "Respuesta sin detalle");
       const t = j.totales || {};
-      const det = (j.periodos || []).map(p =>
-        `${p.periodo}: ${p.nuevas} nuevas, ${p.actualizadas} actualizadas, ${p.anuladas} anuladas`).join(" · ");
-      setMsg({
-        ok: true,
-        txt: `Sesión ${j.usuario}. ${t.nuevas || 0} cobro(s) nuevo(s), ${t.actualizadas || 0} con monto cambiado, ${t.anuladas || 0} anulado(s) por MELI. ${det}`,
-      });
+      setMsg({ ok: true, txt: `Sesión ${j.usuario}. ${t.nuevas || 0} con monto nuevo, ${t.actualizadas || 0} actualizados, ${t.anuladas || 0} anulados por MELI.` });
       await cargar();
-    } catch (e) {
-      setMsg({ ok: false, txt: "No se pudo traer de MELI: " + (e.message || e) });
-    }
+    } catch (e) { setMsg({ ok: false, txt: "No se pudo traer de MELI: " + (e.message || e) }); }
     setTrayendo(false);
   };
 
-  // ── CARRIL B · publicar al portal ─────────────────────────────────────────
-  // La empresa la resuelve fn_empresa_de_placa con la FECHA DEL HECHO, no la de
-  // hoy: un paquete perdido en agosto se le cobra a quien tenía la placa en
-  // agosto, aunque hoy sea de otra empresa.
-  const publicarUno = async (f) => {
-    if (!f.placa) { setMsg({ ok: false, txt: `La guía ${f.guia} no tiene placa: no se puede resolver la empresa.` }); return; }
-    setGuardando(f.id); setMsg(null);
+  // FASE 1 · avisar del paquete perdido, sin monto
+  const avisarPerdido = async (f) => {
+    setGuardando(f.folio_guia); setMsg(null);
     try {
-      const { data: tid } = await sb.rpc("fn_empresa_de_placa", { p_placa: f.placa });
-      if (!tid) throw new Error(`No hay empresa para la placa ${f.placa} en el padrón.`);
+      const { data, error } = await sb.rpc("fn_publicar_paquete_perdido",
+        { p_guia: f.folio_guia, p_quien: quien });
+      if (error) throw error;
+      if (!data?.ok) throw new Error(data?.error || "No se pudo publicar");
+      setMsg({ ok: true, txt: `Guía ${f.folio_guia} avisada a ${data.empresa}. También quedó como tarea del supervisor de ${data.sc}.` });
+      await cargar();
+    } catch (e) { setMsg({ ok: false, txt: "No se pudo avisar: " + (e.message || e) }); }
+    setGuardando(null);
+  };
+
+  // FASE 2 · cobrar, ya con monto
+  const publicarCobro = async (f) => {
+    if (!f.patente) { setMsg({ ok: false, txt: `La guía ${f.folio_guia} no tiene placa.` }); return; }
+    setGuardando(f.folio_guia); setMsg(null);
+    try {
+      const { data: tid } = await sb.rpc("fn_empresa_de_placa", { p_placa: f.patente });
+      if (!tid) throw new Error(`No hay empresa para la placa ${f.patente} en el padrón.`);
       const { data: emp } = await sb.from("terceros").select("nombre").eq("id", tid).maybeSingle();
       const { error } = await sb.from("cobros_merma_mx").upsert({
-        linea_id: f.id, guia: f.guia, tercero_id: tid,
-        empresa_nombre: emp?.nombre || f.transportista,
-        service_center: null, semana: String(semana),
-        fecha_hecho: f.fecha, fecha_cobro: new Date().toISOString().slice(0, 10),
-        id_ruta: f.id_ruta, placa: f.placa, driver_name: f.conductor,
-        motivo: f.motivo, monto: f.valor, estado: "enviado", asignado_por: quien,
+        linea_id: f.merma_id, guia: String(f.folio_guia), tercero_id: tid,
+        empresa_nombre: emp?.nombre, service_center: f.service_center_id,
+        semana: String(semana), fecha_hecho: f.fecha_ruta,
+        fecha_cobro: new Date().toISOString().slice(0, 10),
+        id_ruta: String(f.id_ruta || ""), placa: f.patente, driver_name: f.driver_name,
+        motivo: "Paquete perdido", monto: f.monto, estado: "enviado", asignado_por: quien,
       }, { onConflict: "linea_id" });
       if (error) throw error;
-      setMsg({ ok: true, txt: `Guía ${f.guia} publicada al portal de ${emp?.nombre || "—"}.` });
+      setMsg({ ok: true, txt: `Guía ${f.folio_guia} cobrada a ${emp?.nombre} · ${money(f.monto)}.` });
       await cargar();
     } catch (e) { setMsg({ ok: false, txt: "No se pudo publicar: " + (e.message || e) }); }
     setGuardando(null);
   };
 
-  const quitarDelPortal = async (f, ya) => {
-    if (!window.confirm(`¿Quitar del portal el cobro de la guía ${f.guia}?\n\n${ya.empresa_nombre} · ${money(f.valor)}\n\nDeja de verse en sus movimientos.`)) return;
-    setGuardando(f.id); setMsg(null);
+  const quitarCobro = async (f, ya) => {
+    if (!window.confirm(`¿Quitar del portal el cobro de la guía ${f.folio_guia}?\n\n${ya.empresa_nombre} · ${money(f.monto)}`)) return;
+    setGuardando(f.folio_guia);
     try {
-      const { error } = await sb.from("cobros_merma_mx").delete().eq("linea_id", f.id);
-      if (error) throw error;
+      await sb.from("cobros_merma_mx").delete().eq("guia", String(f.folio_guia));
       await cargar();
     } catch (e) { setMsg({ ok: false, txt: "No se pudo quitar: " + (e.message || e) }); }
     setGuardando(null);
   };
 
-  const visibles = useMemo(() => {
-    let fs = filas || [];
-    if (filtro === "pendientes") fs = fs.filter(f => !cobrados[f.guia]);
-    else if (filtro === "publicados") fs = fs.filter(f => cobrados[f.guia]);
+  const { visibles, conteo } = useMemo(() => {
+    const fs = filas || [];
+    const c = {
+      cobrable: fs.filter(f => f.fase === "cobrable").length,
+      perdido: fs.filter(f => f.fase === "perdido").length,
+      en_riesgo: fs.filter(f => f.fase === "en_riesgo").length,
+    };
+    let v = fs.filter(f => f.fase === fase);
     const q = busca.trim().toLowerCase();
-    if (q) fs = fs.filter(f =>
-      [f.guia, f.placa, f.conductor, f.transportista, f.id_ruta].some(x => String(x || "").toLowerCase().includes(q)));
-    return fs.slice(0, 400);
-  }, [filas, cobrados, filtro, busca]);
+    if (q) v = v.filter(f => [f.folio_guia, f.patente, f.driver_name, f.id_ruta]
+      .some(x => String(x || "").toLowerCase().includes(q)));
+    return { visibles: v.slice(0, 400), conteo: c };
+  }, [filas, fase, busca]);
 
-  const totPend = (filas || []).filter(f => !cobrados[f.guia]).reduce((t, f) => t + Number(f.valor || 0), 0);
+  const dias = (iso) => iso ? Math.floor((Date.now() - new Date(iso).getTime()) / 86400000) : null;
   const th = { textAlign: "left", padding: "8px 10px", fontSize: 10, fontWeight: 700, color: "#64748b", background: "#f8fafc", textTransform: "uppercase", letterSpacing: .4, whiteSpace: "nowrap" };
   const td = { padding: "8px 10px", fontSize: 11.5, borderBottom: "1px solid #f1f5f9" };
+
+  const TABS = [
+    { id: "cobrable", l: "Con monto", n: conteo.cobrable, ayuda: "MELI ya puso el precio. Se cobra." },
+    { id: "perdido", l: "Perdidos sin monto", n: conteo.perdido, ayuda: "MELI los declaró perdidos. El precio llega después, en el acumulado." },
+    { id: "en_riesgo", l: "En riesgo", n: conteo.en_riesgo, ayuda: "No volvieron al centro. Todavía pueden aparecer." },
+  ];
 
   return (
     <div style={{ padding: 24 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap", marginBottom: 14 }}>
         <div>
           <div style={{ fontSize: 17, fontWeight: 700, color: "#1a3a6b" }}>Robos y extravíos</div>
-          <div style={{ fontSize: 11.5, color: "#94a3b8", marginTop: 2, maxWidth: 620, lineHeight: 1.5 }}>
-            Paquetes perdidos que MELI cobra. Se traen del acumulado del período en curso, que se
-            llena día a día. La fecha del hecho puede ser de meses atrás — siempre va junto al cobro.
+          <div style={{ fontSize: 11.5, color: "#94a3b8", marginTop: 2, maxWidth: 640, lineHeight: 1.5 }}>
+            El paquete se declara perdido a los dos o tres días; el monto llega semanas después en
+            el acumulado de MELI. Se avisa primero y se cobra cuando hay precio.
           </div>
         </div>
         <button onClick={traerDeMeli} disabled={trayendo}
-          style={{
-            padding: "9px 18px", borderRadius: 8, border: "none", fontSize: 12.5, fontWeight: 700,
-            background: trayendo ? "#cbd5e1" : "#1a3a6b", color: "#fff",
-            cursor: trayendo ? "not-allowed" : "pointer",
-          }}>
-          {trayendo ? "Consultando a MELI…" : "↓ Traer de MELI"}
+          style={{ padding: "9px 18px", borderRadius: 8, border: "none", fontSize: 12.5, fontWeight: 700,
+            background: trayendo ? "#cbd5e1" : "#1a3a6b", color: "#fff", cursor: trayendo ? "not-allowed" : "pointer" }}>
+          {trayendo ? "Consultando a MELI…" : "↓ Traer montos de MELI"}
         </button>
       </div>
 
       {msg && (
-        <div style={{
-          background: msg.ok ? "#f0fdf4" : "#fef2f2", color: msg.ok ? "#166534" : "#991b1b",
+        <div style={{ background: msg.ok ? "#f0fdf4" : "#fef2f2", color: msg.ok ? "#166534" : "#991b1b",
           border: `1px solid ${msg.ok ? "#86efac" : "#fca5a5"}`, borderRadius: 8,
-          padding: "10px 12px", fontSize: 12.5, marginBottom: 12, lineHeight: 1.5,
-        }}>{msg.txt}</div>
+          padding: "10px 12px", fontSize: 12.5, marginBottom: 12, lineHeight: 1.5 }}>{msg.txt}</div>
       )}
 
-      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
-        {[["pendientes", "Sin publicar"], ["publicados", "En el portal"], ["todas", "Todas"]].map(([id, l]) => (
-          <button key={id} onClick={() => setFiltro(id)}
-            style={{ padding: "6px 14px", borderRadius: 16, fontSize: 11.5, fontWeight: 700, cursor: "pointer",
-              border: `1px solid ${filtro === id ? "#1a3a6b" : "#e4e7ec"}`,
-              background: filtro === id ? "#1a3a6b" : "#fff", color: filtro === id ? "#fff" : "#64748b" }}>{l}</button>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 6 }}>
+        {TABS.map(t => (
+          <button key={t.id} onClick={() => setFase(t.id)} title={t.ayuda}
+            style={{ padding: "7px 15px", borderRadius: 16, fontSize: 11.5, fontWeight: 700, cursor: "pointer",
+              border: `1px solid ${fase === t.id ? "#1a3a6b" : "#e4e7ec"}`,
+              background: fase === t.id ? "#1a3a6b" : "#fff", color: fase === t.id ? "#fff" : "#64748b" }}>
+            {t.l}{t.n > 0 ? ` (${t.n})` : ""}
+          </button>
         ))}
         <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="Guía, placa, conductor, ruta…"
-          style={{ border: "1px solid #e4e7ec", borderRadius: 6, padding: "6px 10px", fontSize: 12, minWidth: 240 }} />
-        <span style={{ fontSize: 11.5, color: "#64748b", marginLeft: "auto" }}>
-          Pendiente de cobrar: <b style={{ color: "#b91c1c" }}>{money(totPend)}</b>
-        </span>
+          style={{ border: "1px solid #e4e7ec", borderRadius: 6, padding: "6px 10px", fontSize: 12, minWidth: 230 }} />
+      </div>
+      <div style={{ fontSize: 11, color: "#94a3b8", marginBottom: 12 }}>
+        {TABS.find(t => t.id === fase)?.ayuda}
       </div>
 
       {filas === null ? (
         <div style={{ padding: 40, textAlign: "center", color: "#94a3b8", fontSize: 13 }}>Cargando…</div>
       ) : visibles.length === 0 ? (
         <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10, padding: 36, textAlign: "center", color: "#94a3b8", fontSize: 13 }}>
-          {filtro === "pendientes" ? "No hay cobros sin publicar." : "Sin resultados."}
+          Sin paquetes en esta fase.
         </div>
       ) : (
         <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10, overflow: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead><tr>
-              <th style={th}>Guía</th><th style={th}>Hecho</th><th style={th}>Nos llegó</th><th style={th}>Motivo</th>
-              <th style={th}>Placa</th><th style={th}>Conductor</th><th style={th}>Transportista</th>
-              <th style={{ ...th, textAlign: "right" }}>Monto</th><th style={{ ...th, textAlign: "right" }}>Acciones</th>
+              <th style={th}>Guía</th><th style={th}>Ruta del</th><th style={th}>Estado</th>
+              <th style={th}>Placa</th><th style={th}>Quién respondía</th><th style={th}>SC</th>
+              <th style={{ ...th, textAlign: "right" }}>Monto</th>
+              <th style={{ ...th, textAlign: "right" }}>Acciones</th>
             </tr></thead>
             <tbody>
               {visibles.map(f => {
-                const ya = cobrados[f.guia];
+                const ya = cobrados[String(f.folio_guia)];
+                const dRuta = dias(f.fecha_ruta);
+                const avisado = !!f.aviso_at;
                 return (
-                  <tr key={f.id} style={{ background: ya ? "#fbfdfb" : "#fff" }}>
+                  <tr key={f.folio_guia} style={{ background: ya ? "#fbfdfb" : "#fff" }}>
                     <td style={{ ...td, fontWeight: 600, color: "#1a3a6b" }}>
-                      {f.guia}
+                      {f.folio_guia}
                       {f.id_ruta && <div style={{ fontSize: 9.5, color: "#94a3b8", fontWeight: 400 }}>ruta {f.id_ruta}</div>}
                     </td>
                     <td style={{ ...td, color: "#64748b", whiteSpace: "nowrap" }}>
-                      {f.fecha || "—"}
-                      {f.periodo_prefactura && <div style={{ fontSize: 9, color: "#94a3b8" }}>{f.periodo_prefactura}</div>}
+                      {f.fecha_ruta}
+                      {dRuta !== null && <div style={{ fontSize: 9, color: dRuta > 7 ? "#b45309" : "#94a3b8" }}>hace {dRuta} d</div>}
                     </td>
-                    {/* Cuándo entró a nuestra base: es el día en que el tercero lo
-                        ve en su portal, y no tiene nada que ver con la fecha del
-                        hecho. Sin esta columna no se distingue un cobro de hoy de
-                        uno que arrastramos desde una carga de hace un mes. */}
-                    <td style={{ ...td, whiteSpace: "nowrap" }}>
-                      {(() => {
-                        if (!f.created_at) return <span style={{ color: "#cbd5e1" }}>—</span>;
-                        const d = new Date(f.created_at);
-                        const dias = Math.floor((Date.now() - d.getTime()) / 86400000);
-                        return (
-                          <>
-                            <span style={{ color: dias <= 1 ? "#16a34a" : "#64748b", fontWeight: dias <= 1 ? 700 : 400 }}>
-                              {d.toLocaleDateString("es-MX", { day: "2-digit", month: "short" })}
-                            </span>
-                            <div style={{ fontSize: 9, color: "#94a3b8" }}>
-                              {dias === 0 ? "hoy" : dias === 1 ? "ayer" : `hace ${dias} d`}
-                            </div>
-                          </>
-                        );
-                      })()}
+                    <td style={td}>
+                      <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 10,
+                        background: f.substatus === "lost" ? "#fee2e2" : "#fef3c7",
+                        color: f.substatus === "lost" ? "#991b1b" : "#92400e" }}>
+                        {f.substatus}
+                      </span>
+                      {f.lost_at && <div style={{ fontSize: 9, color: "#94a3b8", marginTop: 2 }}>
+                        perdido {new Date(f.lost_at).toLocaleDateString("es-MX", { day: "2-digit", month: "short" })}
+                      </div>}
                     </td>
-                    <td style={{ ...td, color: "#475569" }}>{f.motivo || "—"}</td>
-                    <td style={{ ...td, fontWeight: 600 }}>{f.placa || "—"}</td>
-                    <td style={{ ...td, color: "#64748b" }}>{f.conductor || "—"}</td>
-                    <td style={{ ...td, color: "#64748b" }}>{f.transportista || "—"}</td>
-                    <td style={{ ...td, textAlign: "right", fontWeight: 700, color: "#b91c1c", fontVariantNumeric: "tabular-nums" }}>
-                      {money(f.valor)}
+                    <td style={{ ...td, fontWeight: 600 }}>{f.patente || "—"}</td>
+                    {/* Quién responde cambia con la fase: mientras el paquete iba en
+                        ruta era el conductor; una vez que entró al centro en
+                        problem_solving, es el supervisor quien lo tiene que encontrar. */}
+                    <td style={{ ...td, color: "#64748b" }}>
+                      <div>
+                        <span style={{ fontSize: 9, color: "#94a3b8" }}>chofer </span>
+                        {f.driver_name || "—"}
+                      </div>
+                      {f.supervisor && (
+                        <div style={{ marginTop: 2 }}>
+                          <span style={{ fontSize: 9, color: "#94a3b8" }}>supervisor </span>
+                          {f.supervisor}
+                        </div>
+                      )}
+                    </td>
+                    <td style={{ ...td, color: "#64748b" }}>{f.service_center_id || "—"}</td>
+                    <td style={{ ...td, textAlign: "right", fontWeight: 700, fontVariantNumeric: "tabular-nums",
+                      color: f.monto ? "#b91c1c" : "#cbd5e1" }}>
+                      {f.monto ? money(f.monto) : "sin precio"}
                     </td>
                     <td style={{ ...td, textAlign: "right", whiteSpace: "nowrap" }}>
-                      {ya ? (
-                        <div>
-                          <div style={{ fontSize: 9.5, fontWeight: 700, color: "#92400e" }}>✓ en el portal</div>
-                          <div style={{ fontSize: 8.5, color: "#94a3b8" }}>{ya.empresa_nombre}</div>
-                          <button onClick={() => quitarDelPortal(f, ya)} disabled={guardando === f.id}
-                            style={{ marginTop: 3, padding: "3px 10px", fontSize: 9.5, fontWeight: 700, borderRadius: 5,
-                              border: "1px solid #f59e0b", background: "#fffbeb", color: "#92400e", cursor: "pointer" }}>
-                            {guardando === f.id ? "…" : "Quitar del portal"}
-                          </button>
-                        </div>
+                      {f.fase === "cobrable" ? (
+                        ya ? (
+                          <div>
+                            <div style={{ fontSize: 9.5, fontWeight: 700, color: "#92400e" }}>✓ en el portal</div>
+                            <div style={{ fontSize: 8.5, color: "#94a3b8" }}>{ya.empresa_nombre}</div>
+                            <button onClick={() => quitarCobro(f, ya)} disabled={guardando === f.folio_guia}
+                              style={{ marginTop: 3, padding: "3px 10px", fontSize: 9.5, fontWeight: 700, borderRadius: 5,
+                                border: "1px solid #f59e0b", background: "#fffbeb", color: "#92400e", cursor: "pointer" }}>
+                              Quitar del portal
+                            </button>
+                          </div>
+                        ) : (
+                          <div>
+                            <button onClick={() => publicarCobro(f)} disabled={guardando === f.folio_guia || !f.patente}
+                              style={{ padding: "5px 12px", fontSize: 10.5, fontWeight: 700, borderRadius: 6,
+                                border: "1px solid #f59e0b", background: "#fffbeb", color: "#92400e", cursor: "pointer" }}>
+                              {guardando === f.folio_guia ? "…" : "Publicar cobro"}
+                            </button>
+                            <div style={{ fontSize: 8.5, color: "#94a3b8", marginTop: 2 }}>diario · carril B</div>
+                          </div>
+                        )
+                      ) : f.fase === "perdido" ? (
+                        avisado ? (
+                          <div style={{ fontSize: 9.5, fontWeight: 700, color: "#166534" }}>
+                            ✓ avisado
+                            <div style={{ fontSize: 8.5, color: "#94a3b8", fontWeight: 400 }}>
+                              esperando el monto de MELI
+                            </div>
+                          </div>
+                        ) : (
+                          <div>
+                            <button onClick={() => avisarPerdido(f)} disabled={guardando === f.folio_guia}
+                              style={{ padding: "5px 12px", fontSize: 10.5, fontWeight: 700, borderRadius: 6,
+                                border: "1px solid #1a3a6b", background: "#fff", color: "#1a3a6b", cursor: "pointer" }}>
+                              {guardando === f.folio_guia ? "…" : "Avisar al tercero"}
+                            </button>
+                            <div style={{ fontSize: 8.5, color: "#94a3b8", marginTop: 2 }}>sin monto todavía</div>
+                          </div>
+                        )
                       ) : (
-                        <div>
-                          <button onClick={() => publicarUno(f)} disabled={guardando === f.id || !f.placa}
-                            title={!f.placa ? "Sin placa no se puede resolver la empresa" : "El tercero lo ve hoy en su portal"}
-                            style={{ padding: "5px 12px", fontSize: 10.5, fontWeight: 700, borderRadius: 6,
-                              border: "1px solid #f59e0b", background: f.placa ? "#fffbeb" : "#f8fafc",
-                              color: f.placa ? "#92400e" : "#94a3b8", cursor: f.placa ? "pointer" : "not-allowed" }}>
-                            {guardando === f.id ? "…" : "Publicar al portal"}
-                          </button>
-                          <div style={{ fontSize: 8.5, color: "#94a3b8", marginTop: 2 }}>diario · carril B</div>
-                        </div>
+                        <span style={{ fontSize: 10, color: "#94a3b8" }}>puede aparecer</span>
                       )}
                     </td>
                   </tr>
