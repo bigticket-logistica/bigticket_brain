@@ -4,6 +4,7 @@ import ModuloCobrosMermas from "./Mermas";
 import CobrosTerceros from "./PnrCobros";
 import Diferencias from "./Diferencias";
 import Comparativa from "./Comparativa";
+import FacturacionTerceros from "./FacturacionTerceros";
 
 function BotonDescargarExcel({ onClick, disabled, label = "Descargar Excel" }) {
   return (
@@ -5840,6 +5841,7 @@ function ModuloPagosMadre({ usuario }) {
     { id: "torre_3p",    label: "Torre de Control Pagos", desc: "3 Pilares · MELI vs Operación" },
     { id: "terceros",    label: "Terceros",              desc: "Empresas subcontratadas por patente" },
     { id: "conciliacion", label: "Conciliación Terceros", desc: "Conciliación semanal por empresa" },
+    { id: "facturacion_terceros", label: "Facturación Terceros", desc: "Facturas que suben los terceros contra cada prefactura" },
     { id: "pnr_cobros",  label: "Cobros",                desc: "PNR, robos y extravíos, no show" },
     { id: "diferencias", label: "Diferencias",           desc: "Reclamos de terceros sobre pagos y cobros" },
     { id: "comparativa", label: "Comparativa",          desc: "Prefactura del lunes vs acumulado diario" },
@@ -5896,6 +5898,7 @@ function ModuloPagosMadre({ usuario }) {
           {subtab === "torre_3p"    && <TorreTresPilares />}
           {subtab === "terceros"    && <TercerosMX />}
           {subtab === "conciliacion" && <ConciliacionTercerosMX usuario={usuario} />}
+          {subtab === "facturacion_terceros" && <FacturacionTerceros usuario={usuario} />}
           {subtab === "pnr_cobros"  && <CobrosTerceros usuario={usuario} />}
           {subtab === "diferencias" && <Diferencias usuario={usuario} />}
           {subtab === "comparativa" && <Comparativa />}
