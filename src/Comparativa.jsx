@@ -77,6 +77,11 @@ export default function Comparativa() {
         idx[k].diaCobros = Number(d.total_cobros || 0);
         idx[k].diaAjustes = Number(d.total_ajustes || 0);
         idx[k].rutas = d.rutas;
+        // El total_neto de la prefactura ya viene con los cobros restados: las
+        // líneas de PNR y mermas van dentro del detalle como montos negativos.
+        // El diario los separa. Comparar pagos contra neto daba una diferencia
+        // que no existía — exactamente el monto de los cobros.
+        idx[k].diaNeto = Number(d.total_pagos || 0) + Number(d.total_cobros || 0) + Number(d.total_ajustes || 0);
       }
       setFilas(Object.values(idx).sort((a, b) =>
         String(a.empresa).localeCompare(String(b.empresa)) || String(a.sc).localeCompare(String(b.sc))));
@@ -88,15 +93,15 @@ export default function Comparativa() {
   const { visibles, tot } = useMemo(() => {
     const fs = filas || [];
     const dif = (f) => {
-      if (f.tradPagos === null || f.diaPagos === null) return null;
-      return Number((f.diaPagos - f.tradPagos).toFixed(2));
+      if (f.tradPagos === null || f.diaNeto == null) return null;
+      return Number((f.diaNeto - f.tradPagos).toFixed(2));
     };
     const conDif = fs.filter(f => { const d = dif(f); return d === null || Math.abs(d) > 0.01; });
     return {
       visibles: (soloDif ? conDif : fs).map(f => ({ ...f, dif: dif(f) })),
       tot: {
         trad: fs.reduce((t, f) => t + (f.tradPagos || 0), 0),
-        dia: fs.reduce((t, f) => t + (f.diaPagos || 0), 0),
+        dia: fs.reduce((t, f) => t + (f.diaNeto || 0), 0),
         nDif: conDif.length, n: fs.length,
       },
     };
@@ -167,7 +172,7 @@ export default function Comparativa() {
                 </tr></thead>
                 <tbody>
                   {visibles.map(f => {
-                    const soloLunes = f.diaPagos === null;
+                    const soloLunes = f.diaNeto == null;
                     const soloDiario = f.tradPagos === null;
                     const nota = soloLunes ? "Está en la prefactura del lunes y no en el acumulado: ese día o SC no se publicó."
                       : soloDiario ? "Está publicada y no tiene prefactura del lunes todavía."
@@ -182,7 +187,14 @@ export default function Comparativa() {
                           {soloDiario ? "—" : money(f.tradPagos)}
                         </td>
                         <td style={{ ...td, textAlign: "right", fontVariantNumeric: "tabular-nums", color: soloLunes ? "#cbd5e1" : "#334155" }}>
-                          {soloLunes ? "—" : money(f.diaPagos)}
+                          {soloLunes ? "—" : money(f.diaNeto)}
+                          {!soloLunes && (f.diaCobros || f.diaAjustes) ? (
+                            <div style={{ fontSize: 9.5, color: "#94a3b8" }}>
+                              {money(f.diaPagos)} viajes
+                              {f.diaCobros ? ` · ${money(f.diaCobros)} cobros` : ""}
+                              {f.diaAjustes ? ` · ${money(f.diaAjustes)} ajustes` : ""}
+                            </div>
+                          ) : null}
                         </td>
                         <td style={{ ...td, textAlign: "center", color: "#94a3b8" }}>{f.rutas ?? "—"}</td>
                         <td style={{ ...td, textAlign: "right", fontWeight: 700, fontVariantNumeric: "tabular-nums",
