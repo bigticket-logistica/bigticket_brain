@@ -4308,7 +4308,12 @@ function ConciliacionTercerosMX({ usuario }) {
     try {
       rutaDoc = `prefacturas/${semana}/${sc}/${nombrePdf.replace(/[^\w.\-]/g, "_")}_${Date.now()}.html`;
       const { error: eDoc } = await sb.storage.from("proceso_certificacion_bt")
-        .upload(rutaDoc, new Blob([html], { type: "text/html" }), { contentType: "text/html" });
+        .upload(rutaDoc, new Blob([html], { type: "text/html; charset=utf-8" }), {
+          contentType: "text/html; charset=utf-8",
+          // Sin esto Supabase sirve el archivo como descarga y el navegador lo
+          // muestra como texto plano en vez de renderizar la prefactura.
+          cacheControl: "3600", upsert: false,
+        });
       if (eDoc) { rutaDoc = null; throw eDoc; }
     } catch (eDoc) {
       // No bloquea: el correo ya salió. El tercero ve el detalle en su portal
