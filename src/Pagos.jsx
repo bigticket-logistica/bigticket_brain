@@ -2583,6 +2583,7 @@ function ConciliacionTercerosMX({ usuario }) {
   const [repBusy, setRepBusy] = useState(false);
   const [consolidando, setConsolidando] = useState(null);      // id_ruta | "__todas__"
   const [consolidaProgreso, setConsolidaProgreso] = useState(null);
+  const [syncLog, setSyncLog] = useState({});   // empresa||sc -> { perdioManuales }
   const [traspRows, setTraspRows] = useState(null);            // placas en 2+ empresas en la semana
   const [traspBusy, setTraspBusy] = useState(false);
   const [trasp, setTrasp] = useState(null);                    // modal traspasador { placa, cargando, grupos, sel, destino }
@@ -2621,7 +2622,7 @@ function ConciliacionTercerosMX({ usuario }) {
       const { data, error } = await sb.rpc("get_conciliacion_terceros_resumen", { p_semana: sem });
       if (error) throw error;
       const base = data || [];
-      setResumen(base);
+      const mapSync = {};
       // Una sola lectura de conciliaciones guardadas: (a) cuenta ajustes; (b) muestra empresas creadas a mano que el resumen no trae
       try {
         const { data: concs } = await sb.from("conciliaciones_terceros").select("*").eq("semana", sem);
@@ -2632,6 +2633,13 @@ function ConciliacionTercerosMX({ usuario }) {
           const det = Array.isArray(c.detalle) ? c.detalle : [];
           const nA = det.filter(d => d && !d._saldo && (d._editado || d.es_manual || d.origen === "ajuste")).length;
           if (nA) { mapE[norm(c.empresa_nombre)] = (mapE[norm(c.empresa_nombre)] || 0) + nA; mapS[`${norm(c.empresa_nombre)}||${norm(c.service_center)}`] = nA; }
+          // El resumen viene de un RPC que no conoce las columnas de sincronización.
+          // Se enriquece acá con la misma lectura que ya se hace, sin otra consulta.
+          mapSync[`${norm(c.empresa_nombre)}||${norm(c.service_center)}`] = {
+            sync_veces: c.sync_veces || 0,
+            sync_ultima_at: c.sync_ultima_at || null,
+            sync_ultima_por: c.sync_ultima_por || null,
+          };
           const k = `${norm(c.empresa_nombre)}||${norm(c.service_center)}`;
           // El bucket de diagnóstico no se reinyecta desde lo guardado: si el RPC ya no lo devuelve
           // es porque las placas quedaron asignadas, y sumar el guardado infla la tarjeta.
@@ -2641,12 +2649,15 @@ function ConciliacionTercerosMX({ usuario }) {
               n_viajes: c.n_viajes != null ? c.n_viajes : det.length, n_no_pago: c.n_no_pago != null ? c.n_no_pago : det.filter(d => d.es_no_pago).length,
               total_neto: c.total_neto || 0, total_bruto: c.total_bruto || 0, neto_guardado: c.total_neto || 0, bruto_guardado: c.total_bruto || 0,
               estado_conciliacion: c.estado || "borrador", tiene_ajustes: !!c.tiene_ajustes, supervisor: null,
-              rfc: tt.rfc || "", correo_to: tt.correo_to || "", enviado_at: c.enviado_at || null });
+              rfc: tt.rfc || "", correo_to: tt.correo_to || "", enviado_at: c.enviado_at || null,
+              sync_veces: c.sync_veces || 0, sync_ultima_at: c.sync_ultima_at || null, sync_ultima_por: c.sync_ultima_por || null });
           }
         }
         // Arrastre de negativos: mostrar empresas con saldo pendiente aunque no tengan viajes esta semana
         const saldoMap = await cargarSaldos(sem);
         await cargarPlacasViejas(sem);
+        for (const r of base) Object.assign(r, mapSync[`${norm(r.empresa)}||${norm(r.service_center)}`] || {});
+        setResumen([...base]);
         const have2 = new Set([...base, ...extra].map(r => `${norm(r.empresa)}||${norm(r.service_center)}`));
         for (const k in saldoMap) {
           if (have2.has(k)) continue;
@@ -2656,7 +2667,12 @@ function ConciliacionTercerosMX({ usuario }) {
         }
         setAjustesEmp(mapE); setAjustesSC(mapS);
         if (extra.length) setResumen([...base, ...extra]);
-      } catch (er) { console.error("conteo/merge conciliaciones:", er); setAjustesEmp({}); setAjustesSC({}); }
+      } catch (er) {
+        // Si el enriquecido falla, se muestra el resumen del motor igual: perder
+        // el conteo de ajustes es molesto, quedarse con la pantalla en blanco no.
+        console.error("conteo/merge conciliaciones:", er);
+        setResumen([...base]); setAjustesEmp({}); setAjustesSC({});
+      }
     } catch (e) {
       console.error("resumen conciliación:", e);
       setMsg({ ok: false, txt: "Error cargando resumen: " + (e.message || e) });
@@ -3332,6 +3348,23 @@ function ConciliacionTercerosMX({ usuario }) {
     setConsolidando(null);
   };
 
+  // Última sincronización de cada prefactura, solo para saber si se llevó
+  // líneas manuales. El resto del dato ya viene en la fila del resumen.
+  const cargarSyncLog = useCallback(async (sem) => {
+    const { data } = await sb.from("conciliacion_sync_log")
+      .select("empresa_nombre, service_center, manuales_antes, manuales_despues, creado_en")
+      .eq("semana", sem).order("creado_en", { ascending: false });
+    const m = {};
+    for (const l of (data || [])) {
+      const k = `${norm(l.empresa_nombre)}||${norm(l.service_center)}`;
+      if (m[k]) continue;   // solo la más reciente
+      const perdidas = Number(l.manuales_antes || 0) - Number(l.manuales_despues || 0);
+      m[k] = { perdioManuales: perdidas > 0 ? perdidas : 0 };
+    }
+    setSyncLog(m);
+  }, []);
+  useEffect(() => { if (semana) cargarSyncLog(semana); }, [semana, cargarSyncLog]);
+
   const consolidarTodas = async () => {
     if (!repRows || !repRows.length) return;
     if (!confirm(`¿Consolidar ${repRows.length} ruta(s) repetida(s)? Se deja el pago del 1er día de cada una y se quitan los días repetidos (queda auditado).`)) return;
@@ -3642,6 +3675,35 @@ function ConciliacionTercerosMX({ usuario }) {
       for (const c of cambios) await auditarAjuste(empresa, sc, "resync_monto", "motor", c.linea, `Motor: ${fmtMon(c.antes)} → ${fmtMon(c.despues)}${causaDif(c.antes, c.despues, c.linea)}`);
       for (const d of altas) await auditarAjuste(empresa, sc, "resync_alta", "motor", d, "Viaje agregado desde el motor" + causaAlta(d));
       await logEvento(empresa, sc, "recalcular", recalcSC(finales, cobrosDe(empresa, sc)), { detalle: { montos_actualizados: cambios.length, viajes_agregados: altas.length, delta: deltaCambios, altas_total: totalAltas } });
+
+      // Registro de la sincronización. Importa el "manuales antes / después":
+      // la función respeta las líneas manuales por diseño, pero si alguna vez
+      // ese número baja, se llevó ajustes por delante y hay que mirarlo.
+      try {
+        const esManual = (d) => d && !d._saldo && String(d.origen || "motor") !== "motor";
+        const { data: cid } = await sb.from("conciliaciones_terceros")
+          .select("id, sync_veces").eq("empresa_nombre", empresa)
+          .eq("service_center", sc).eq("semana", semana).maybeSingle();
+        await sb.from("conciliacion_sync_log").insert({
+          conciliacion_id: cid?.id || null, semana, empresa_nombre: empresa, service_center: sc,
+          lineas_antes: filas.length, lineas_despues: finales.length,
+          neto_antes: Math.round(filas.reduce((t, d) => t + Number(d.monto || 0), 0) * 100) / 100,
+          neto_despues: Math.round(finales.reduce((t, d) => t + Number(d.monto || 0), 0) * 100) / 100,
+          manuales_antes: filas.filter(esManual).length,
+          manuales_despues: finales.filter(esManual).length,
+          sincronizado_por: (usuario && (usuario.nombre || usuario.email)) || "Brain",
+        });
+        if (cid?.id) {
+          await sb.from("conciliaciones_terceros").update({
+            sync_veces: Number(cid.sync_veces || 0) + 1,
+            sync_ultima_at: new Date().toISOString(),
+            sync_ultima_por: (usuario && (usuario.nombre || usuario.email)) || "Brain",
+          }).eq("id", cid.id);
+        }
+      } catch (eLog) {
+        // No bloquea: la sincronización ya se aplicó y eso es lo que importa.
+        console.error("No se pudo registrar la sincronización:", eLog);
+      }
       // 6) refrescar
       setDetalles(prev => { const nx = { ...prev }; delete nx[empresa]; return nx; });
       if (expandida && norm(expandida) === norm(empresa)) {
@@ -5158,7 +5220,16 @@ function ConciliacionTercerosMX({ usuario }) {
                                 <span style={{ fontWeight: 800, color: "#1a3a6b", fontSize: 13 }}>SC {rSC.service_center}</span>
                                 {chipEstado(rSC.estado_conciliacion)}
                                 <span style={{ fontSize: 11, color: "#64748b" }}>
-                                  Sup: {rSC.supervisor || "—"} · {_viajesSC} viajes · {rSC.n_no_pago} no pago{(ajustesSC[`${norm(g.empresa)}||${norm(rSC.service_center)}`] || 0) > 0 ? ` · ${ajustesSC[`${norm(g.empresa)}||${norm(rSC.service_center)}`]} ajuste(s)` : ""} · Neto {fmtMon(_netoViajesSC)} · Bruto {fmtMon(_brutoBaseSC)}{rSC.tiene_ajustes ? " · ✏️ ajustada" : ""}{rSC.enviado_at ? " · 📤 " + new Date(rSC.enviado_at).toLocaleDateString("es-CL") : ""}{(() => { const prev = saldoPrevioDe(g.empresa, rSC.service_center); const man = lineasManualesDe(g.empresa, rSC.service_center).reduce((s, d) => s + Number(d.monto || 0), 0); if (!(prev < 0) && !(man < 0)) return ""; const nv = _netoViajesSC; const net = Math.round((nv + prev + man) * 100) / 100; const br = net < 0 ? net : Math.round(net * 1.16 * 100) / 100; const partes = []; if (prev < 0) partes.push(`Saldo ${fmtMon(prev)}`); if (man < 0) partes.push(`Aplicado ${fmtMon(man)}`); return ` · ⚠️ ${partes.join(" · ")} · A pagar: neto ${fmtMon(net)} / bruto ${fmtMon(br)}`; })()}
+                                  Sup: {rSC.supervisor || "—"} · {_viajesSC} viajes · {rSC.n_no_pago} no pago{(ajustesSC[`${norm(g.empresa)}||${norm(rSC.service_center)}`] || 0) > 0 ? ` · ${ajustesSC[`${norm(g.empresa)}||${norm(rSC.service_center)}`]} ajuste(s)` : ""} · Neto {fmtMon(_netoViajesSC)} · Bruto {fmtMon(_brutoBaseSC)}{rSC.tiene_ajustes ? " · ✏️ ajustada" : ""}{rSC.enviado_at ? " · 📤 " + new Date(rSC.enviado_at).toLocaleDateString("es-CL") : ""}{rSC.sync_veces > 0 ? (() => {
+                                    const perdidas = (syncLog[`${norm(g.empresa)}||${norm(rSC.service_center)}`] || {}).perdioManuales;
+                                    return (
+                                      <span title={`Última: ${rSC.sync_ultima_at ? new Date(rSC.sync_ultima_at).toLocaleString("es-CL") : "—"}${rSC.sync_ultima_por ? " · " + rSC.sync_ultima_por : ""}${perdidas ? `\nOJO: en la última sincronización desaparecieron ${perdidas} línea(s) manual(es).` : ""}`}
+                                        style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, padding: "1px 7px", borderRadius: 9,
+                                          background: perdidas ? "#fef3c7" : "#eef2f7", color: perdidas ? "#92400e" : "#64748b", cursor: "help" }}>
+                                        {perdidas ? "⚠️ " : "🔄 "}sincronizada {rSC.sync_veces}×
+                                      </span>
+                                    );
+                                  })() : null}{(() => { const prev = saldoPrevioDe(g.empresa, rSC.service_center); const man = lineasManualesDe(g.empresa, rSC.service_center).reduce((s, d) => s + Number(d.monto || 0), 0); if (!(prev < 0) && !(man < 0)) return ""; const nv = _netoViajesSC; const net = Math.round((nv + prev + man) * 100) / 100; const br = net < 0 ? net : Math.round(net * 1.16 * 100) / 100; const partes = []; if (prev < 0) partes.push(`Saldo ${fmtMon(prev)}`); if (man < 0) partes.push(`Aplicado ${fmtMon(man)}`); return ` · ⚠️ ${partes.join(" · ")} · A pagar: neto ${fmtMon(net)} / bruto ${fmtMon(br)}`; })()}
                                 </span>
                               </div>
                               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
