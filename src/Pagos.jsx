@@ -4184,10 +4184,27 @@ function ConciliacionTercerosMX({ usuario }) {
     });
     const data = await resp.json().catch(() => ({}));
     if (!resp.ok || data.ok !== true) throw new Error((data && data.error) || ("Error HTTP " + resp.status));
+    // Guarda el documento que efectivamente se envió, para que el tercero lo
+    // abra desde su portal. Se guarda el HTML y no un PDF regenerado: es el
+    // mismo que n8n convirtió y mandó, así que si algún día se discute qué
+    // decía la prefactura, este archivo es la prueba.
+    let rutaDoc = null;
+    try {
+      rutaDoc = `prefacturas/${semana}/${sc}/${nombrePdf.replace(/[^\w.\-]/g, "_")}_${Date.now()}.html`;
+      const { error: eDoc } = await sb.storage.from("proceso_certificacion_bt")
+        .upload(rutaDoc, new Blob([html], { type: "text/html" }), { contentType: "text/html" });
+      if (eDoc) { rutaDoc = null; throw eDoc; }
+    } catch (eDoc) {
+      // No bloquea: el correo ya salió. El tercero ve el detalle en su portal
+      // igual, solo que sin el documento adjunto.
+      console.error("No se pudo guardar el documento de la prefactura:", eDoc);
+    }
+
     await sb.from("conciliaciones_terceros").update({
       estado: "enviada", enviado_at: new Date().toISOString(),
       enviado_por: (usuario && (usuario.nombre || usuario.email)) || "Brain",
       message_id: data.messageId || null, correo_to: correoTo, correo_cc: cc, asunto, cuerpo, nombre_pdf: nombrePdf,
+      ...(rutaDoc ? { pdf_url: rutaDoc } : {}),
     }).eq("empresa_nombre", empresa).eq("service_center", sc).eq("semana", semana);
     // SELLO DE ENVÍO: registro inmutable de que cada línea viajó en esta prefactura.
     try {
