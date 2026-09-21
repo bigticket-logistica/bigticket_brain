@@ -3971,38 +3971,72 @@ function ConciliacionTercerosMX({ usuario }) {
   // prefactura. Sin este paso el tercero ve el ajuste en su portal y no le llega
   // la plata — la discrepancia que más rápido rompe la confianza.
   const cargarAjustesPendientes = useCallback(async () => {
-    const { data } = await sb.from("ajustes_pago_mx")
-      .select("*, terceros(nombre)").is("semana", null);
-    setAjustesPend(data || []);
+    // Todo lo que el carril B publicó al portal y todavía no está en ninguna
+    // prefactura: ajustes de diferencias, no shows y mermas. Un solo botón los
+    // baja a las tres, porque para el analista es la misma tarea del lunes.
+    const [aj, ns, mm] = await Promise.all([
+      sb.from("ajustes_pago_mx").select("*, terceros(nombre)").is("semana", null),
+      sb.from("cobros_noshow_mx").select("*, terceros(nombre)").eq("estado", "enviado").is("aplicado_semana", null),
+      sb.from("cobros_merma_mx").select("*, terceros(nombre)").eq("estado", "enviado").is("aplicado_semana", null),
+    ]);
+    const items = [];
+    for (const a of (aj.data || [])) items.push({
+      _tipo: "ajuste", id: a.id, empresa: a.terceros?.nombre, sc: a.service_center,
+      fecha: a.fecha, placa: "AJUSTE", id_ruta: "—",
+      concepto: a.concepto, monto: Number(a.monto || 0),
+    });
+    for (const n of (ns.data || [])) items.push({
+      _tipo: "noshow", id: n.id, empresa: n.terceros?.nombre || n.empresa_nombre, sc: n.service_center,
+      fecha: n.fecha, placa: n.placa, id_ruta: "—",
+      concepto: `No show · ${n.placa} · ${n.fecha}${n.justificacion ? " · " + n.justificacion : ""}`,
+      monto: -Math.abs(Number(n.monto || 0)),
+    });
+    for (const m of (mm.data || [])) items.push({
+      _tipo: "merma", id: m.id, empresa: m.terceros?.nombre || m.empresa_nombre, sc: m.service_center,
+      fecha: m.fecha_hecho, placa: m.placa, id_ruta: m.id_ruta || "—",
+      concepto: `${m.motivo || "Paquete perdido"} · guía ${m.guia}${m.fecha_hecho ? " · ruta del " + m.fecha_hecho : ""}`,
+      monto: -Math.abs(Number(m.monto || 0)),
+    });
+    setAjustesPend(items);
   }, []);
   useEffect(() => { cargarAjustesPendientes(); }, [cargarAjustesPendientes, semana]);
 
   const aplicarAjustesDiferencias = async () => {
     if (!ajustesPend.length) return;
     const total = ajustesPend.reduce((t, a) => t + Number(a.monto || 0), 0);
-    if (!confirm(`Aplicar ${ajustesPend.length} ajuste(s) de diferencias aceptadas a las prefacturas de la semana ${semana}.\n\nTotal: $${total.toLocaleString("es-MX")}\n\nQuedan en borrador y auditados. ¿Continuar?`)) return;
+    const porTipo = ajustesPend.reduce((m, a) => ({ ...m, [a._tipo]: (m[a._tipo] || 0) + 1 }), {});
+    const desglose = Object.entries(porTipo).map(([t, n]) => `${n} ${t}`).join(" · ");
+    if (!confirm(`Aplicar ${ajustesPend.length} línea(s) a las prefacturas de la semana ${semana}.\n\n${desglose}\nTotal: $${total.toLocaleString("es-MX")}\n\nQuedan en borrador y auditadas. ¿Continuar?`)) return;
     setAplicandoDif(true);
     const grupos = {};
+    const sinEmpresa = [];
     for (const a of ajustesPend) {
-      const empresa = a.terceros?.nombre;
-      if (!empresa) continue;
-      const k = `${empresa}||${a.service_center}`;
-      (grupos[k] = grupos[k] || { empresa, sc: a.service_center, items: [], ids: [] });
+      if (!a.empresa) { sinEmpresa.push(`${a._tipo} ${a.placa || a.id}`); continue; }
+      const k = `${a.empresa}||${a.sc}`;
+      (grupos[k] = grupos[k] || { empresa: a.empresa, sc: a.sc, items: [], porTabla: {} });
       grupos[k].items.push({
-        kind: "ajuste", fecha: a.fecha, placa: "AJUSTE", id_ruta: "—",
-        concepto: a.concepto, montoFirmado: Number(a.monto || 0), aux: false,
+        kind: "ajuste", fecha: a.fecha, placa: a.placa, id_ruta: a.id_ruta,
+        concepto: a.concepto, montoFirmado: a.monto, aux: false,
       });
-      grupos[k].ids.push(a.id);
+      const tabla = a._tipo === "ajuste" ? "ajustes_pago_mx"
+                  : a._tipo === "noshow" ? "cobros_noshow_mx" : "cobros_merma_mx";
+      (grupos[k].porTabla[tabla] = grupos[k].porTabla[tabla] || []).push(a.id);
     }
     let ok = 0, fail = 0; const errores = [];
     for (const k of Object.keys(grupos)) {
       const g = grupos[k];
       try {
         await _aplicarAjustesGrupo(g.empresa, g.sc, g.items);
-        await sb.from("ajustes_pago_mx").update({ semana: String(semana) }).in("id", g.ids);
+        // Se marcan recién después de que la línea entró: si la prefactura
+        // falla, quedan pendientes y el botón las vuelve a tomar.
+        for (const [tabla, ids] of Object.entries(g.porTabla)) {
+          const campo = tabla === "ajustes_pago_mx" ? "semana" : "aplicado_semana";
+          await sb.from(tabla).update({ [campo]: String(semana) }).in("id", ids);
+        }
         ok += g.items.length;
       } catch (e) { fail += g.items.length; errores.push(`${g.empresa}·${g.sc}: ${e.message || e}`); }
     }
+    if (sinEmpresa.length) errores.push(`Sin empresa resuelta: ${sinEmpresa.join(", ")}`);
     await cargarResumen(semana);
     await cargarAjustesPendientes();
     setAplicandoDif(false);
@@ -4685,9 +4719,9 @@ function ConciliacionTercerosMX({ usuario }) {
         <button onClick={() => { setImportRows(null); setImportOpen(true); }} style={{ padding: "8px 16px", background: "#1a3a6b", color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>📥 Importar ajustes (Excel)</button>
         {ajustesPend.length > 0 && (
           <button onClick={aplicarAjustesDiferencias} disabled={aplicandoDif}
-            title={ajustesPend.map(x => `${x.terceros?.nombre || "?"} · ${x.service_center} · ${x.concepto}`).join("\n")}
+            title={ajustesPend.map(x => `${x.empresa || "sin empresa"} · ${x.sc} · ${x.concepto}`).join("\n")}
             style={{ padding: "8px 16px", background: aplicandoDif ? "#cbd5e1" : "#f59e0b", color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: aplicandoDif ? "not-allowed" : "pointer" }}>
-            {aplicandoDif ? "Aplicando..." : `⚖️ Aplicar ${ajustesPend.length} ajuste(s) de diferencias`}
+            {aplicandoDif ? "Aplicando..." : `⚖️ Aplicar ${ajustesPend.length} cobro(s) a prefacturas`}
           </button>
         )}
         </div>
