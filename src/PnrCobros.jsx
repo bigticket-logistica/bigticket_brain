@@ -509,6 +509,15 @@ function ModuloRobos({ usuario }) {
 }
 
 // Numeración del Brain: ISO + 1
+function semanaBrainDe(iso) {
+  const d = new Date(String(iso).length <= 10 ? iso + "T12:00:00" : iso);
+  const x = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  const dn = x.getUTCDay() || 7;
+  x.setUTCDate(x.getUTCDate() + 4 - dn);
+  const ini = new Date(Date.UTC(x.getUTCFullYear(), 0, 1));
+  return Math.ceil(((x - ini) / 86400000 + 1) / 7) + 1;
+}
+
 function semanaBrainHoy() {
   const d = new Date(Date.now() - 6 * 3600 * 1000);
   const x = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
@@ -577,11 +586,45 @@ function ModuloNoShow({ usuario }) {
       const { error } = await sb.from("cobros_noshow_mx").upsert({
         fecha: f.fecha, service_center: f.sc, placa: f.placa,
         tercero_id: f.tercero_id, empresa_nombre: f.empresa,
-        monto, semana: String(semana), estado: "enviado",
+        monto, semana: String(semanaBrainDe(f.fecha)), estado: "enviado",
         justificacion: f.noshow_justificacion, asignado_por: quien,
       }, { onConflict: "fecha,service_center,placa" });
       if (error) throw error;
-      setMsg({ ok: true, txt: `No show del ${f.fecha} publicado a ${f.empresa} · ${money(monto)}.` });
+
+      // Se intenta bajarlo a la prefactura en el mismo acto. Si no se puede
+      // —porque ya se envió o todavía no existe— el cobro queda publicado
+      // igual y el botón de Conciliación lo toma después. Así no hay un paso
+      // que alguien tenga que recordar, pero tampoco se pierde si falla.
+      let enPrefTxt = "";
+      try {
+        const semRuta = semanaBrainDe(f.fecha);
+        const { data: res } = await sb.rpc("fn_agregar_cobro_prefactura", {
+          p_semana: semRuta, p_empresa: f.empresa, p_sc: f.sc,
+          p_linea: {
+            _id: `noshow|${f.fecha}|${f.sc}|${f.placa}`,
+            origen: "ajuste", es_manual: true, service_center_id: f.sc,
+            fecha: f.fecha, placa: f.placa, id_ruta: "—",
+            driver_name: `No show · ${f.placa}${f.noshow_justificacion ? " · " + f.noshow_justificacion : ""}`,
+            monto: -Math.abs(monto), es_no_pago: false, tiene_auxiliar: false,
+            km_real_meli: null, bonificacion_nombre: null, bonificacion_pct: 0,
+            tiene_bonificacion: false, monto_bonificacion: 0, motivo_no_pago: null,
+          },
+        });
+        if (res?.ok) {
+          await sb.from("cobros_noshow_mx").update({ aplicado_semana: String(semRuta) })
+            .eq("fecha", f.fecha).eq("service_center", f.sc).eq("placa", f.placa);
+          enPrefTxt = ` Agregado a la prefactura de la semana ${semRuta}.`;
+        } else if (res?.motivo === "enviada") {
+          enPrefTxt = " La prefactura de esa semana ya se envió: hay que reabrirla y aplicarlo desde Conciliación.";
+        } else {
+          enPrefTxt = " Todavía no hay prefactura de esa semana: se aplica desde Conciliación cuando se genere.";
+        }
+      } catch (e) {
+        console.error("No se pudo agregar a la prefactura:", e);
+        enPrefTxt = " No se pudo agregar a la prefactura: aplícalo desde Conciliación.";
+      }
+
+      setMsg({ ok: true, txt: `No show del ${f.fecha} publicado a ${f.empresa} · ${money(monto)}.${enPrefTxt}` });
       await cargar();
     } catch (e) { setMsg({ ok: false, txt: "No se pudo publicar: " + (e.message || e) }); }
     setGuardando(null);
@@ -591,6 +634,16 @@ function ModuloNoShow({ usuario }) {
     if (!window.confirm(`¿Quitar del portal el no show del ${f.fecha}?\n\n${f.empresa} · ${f.placa} · ${money(f.monto)}`)) return;
     setGuardando(clave(f));
     try {
+      // Si ya había bajado a la prefactura, hay que sacarlo de ahí también:
+      // dejarlo sería cobrarle al tercero algo que ya no ve en su portal.
+      if (f.cobro_estado === "enviado" && enPref[clave(f)]) {
+        try {
+          await sb.rpc("fn_quitar_cobro_prefactura", {
+            p_semana: Number(enPref[clave(f)]), p_empresa: f.empresa, p_sc: f.sc,
+            p_id: `noshow|${f.fecha}|${f.sc}|${f.placa}`,
+          });
+        } catch (e) { console.error("No se pudo quitar de la prefactura:", e); }
+      }
       await sb.from("cobros_noshow_mx").delete().eq("id", f.cobro_id);
       await cargar();
     } catch (e) { setMsg({ ok: false, txt: "No se pudo quitar: " + (e.message || e) }); }
