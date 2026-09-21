@@ -546,15 +546,14 @@ function ModuloNoShow({ usuario }) {
     setFilas(null);
     const [v, concs] = await Promise.all([
       sb.from("vw_noshow_declarados").select("*").order("fecha", { ascending: false }),
-      sb.from("conciliaciones_terceros").select("detalle").eq("semana", Number(semana)),
+      sb.from("cobros_noshow_mx").select("id, fecha, service_center, placa, aplicado_semana").eq("estado", "enviado"),
     ]);
     setFilas(v.data || []);
+    // Qué cobros ya bajaron a la prefactura. Se marca con aplicado_semana
+    // cuando el botón de Conciliación los aplica, así que acá solo se lee.
     const ep = {};
     for (const c of (concs.data || [])) {
-      for (const d of (Array.isArray(c.detalle) ? c.detalle : [])) {
-        const id = String(d?._id || "");
-        if (id.startsWith("noshow|")) ep[id.slice(7)] = true;
-      }
+      if (c.aplicado_semana) ep[`${c.fecha}|${c.service_center}|${c.placa}`] = c.aplicado_semana;
     }
     setEnPref(ep);
   }, [semana]);
@@ -671,13 +670,29 @@ function ModuloNoShow({ usuario }) {
                     </td>
                     <td style={{ ...td, textAlign: "right", whiteSpace: "nowrap" }}>
                       {pub ? (
-                        <div>
-                          <div style={{ fontSize: 9.5, fontWeight: 700, color: "#92400e" }}>✓ en el portal</div>
-                          <button onClick={() => quitar(f)} disabled={guardando === clave(f)}
-                            style={{ marginTop: 3, padding: "3px 10px", fontSize: 9.5, fontWeight: 700, borderRadius: 5,
-                              border: "1px solid #f59e0b", background: "#fffbeb", color: "#92400e", cursor: "pointer" }}>
-                            Quitar del portal
-                          </button>
+                        <div style={{ display: "flex", flexDirection: "column", gap: 5, alignItems: "flex-end" }}>
+                          <div>
+                            <div style={{ fontSize: 9.5, fontWeight: 700, color: "#92400e" }}>✓ en el portal</div>
+                            <div style={{ fontSize: 8.5, color: "#94a3b8" }}>diario · carril B</div>
+                            <button onClick={() => quitar(f)} disabled={guardando === clave(f)}
+                              style={{ marginTop: 3, padding: "3px 10px", fontSize: 9.5, fontWeight: 700, borderRadius: 5,
+                                border: "1px solid #f59e0b", background: "#fffbeb", color: "#92400e", cursor: "pointer" }}>
+                              Quitar del portal
+                            </button>
+                          </div>
+                          {/* El carril A no se opera desde acá: el botón que baja los
+                              cobros a las prefacturas vive en Conciliación, que es
+                              donde el analista trabaja el lunes. */}
+                          {enPref[clave(f)] ? (
+                            <div style={{ fontSize: 9.5, fontWeight: 700, color: "#166534" }}>
+                              ✓ en prefactura
+                              <div style={{ fontSize: 8.5, color: "#94a3b8", fontWeight: 400 }}>semana {enPref[clave(f)]}</div>
+                            </div>
+                          ) : (
+                            <div style={{ fontSize: 9, color: "#94a3b8", maxWidth: 150, textAlign: "right", lineHeight: 1.3 }}>
+                              falta bajarlo a la prefactura desde Conciliación
+                            </div>
+                          )}
                         </div>
                       ) : (
                         <div>
