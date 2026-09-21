@@ -96,13 +96,20 @@ export default function Comparativa() {
       if (f.tradPagos === null || f.diaNeto == null) return null;
       return Number((f.diaNeto - f.tradPagos).toFixed(2));
     };
-    const conDif = fs.filter(f => { const d = dif(f); return d === null || Math.abs(d) > 0.01; });
+    // El modelo A —la prefactura del lunes— es la base. Una publicación sin
+    // prefactura todavía no es un descuadre: es que el lunes aún no se generó.
+    // Contarla como diferencia llenaba la pantalla de casos que no lo son.
+    const comparables = fs.filter(f => f.tradPagos !== null);
+    const conDif = comparables.filter(f => { const d = dif(f); return d !== null && Math.abs(d) > 0.01; });
+    const sinPrefactura = fs.filter(f => f.tradPagos === null);
     return {
       visibles: (soloDif ? conDif : fs).map(f => ({ ...f, dif: dif(f) })),
       tot: {
-        trad: fs.reduce((t, f) => t + (f.tradPagos || 0), 0),
-        dia: fs.reduce((t, f) => t + (f.diaNeto || 0), 0),
-        nDif: conDif.length, n: fs.length,
+        trad: comparables.reduce((t, f) => t + (f.tradPagos || 0), 0),
+        dia: comparables.reduce((t, f) => t + (f.diaNeto || 0), 0),
+        nDif: conDif.length, n: comparables.length,
+        sinPref: sinPrefactura.length,
+        sinPrefMonto: sinPrefactura.reduce((t, f) => t + (f.diaNeto || 0), 0),
       },
     };
   }, [filas, soloDif]);
@@ -151,9 +158,17 @@ export default function Comparativa() {
             <Kpi label="Acumulado diario" valor={money(tot.dia)} />
             <Kpi label="Diferencia" valor={money(tot.dia - tot.trad)}
               color={Math.abs(tot.dia - tot.trad) < 0.01 ? "#16a34a" : "#dc2626"} />
-            <Kpi label="Empresas que no cuadran" valor={`${tot.nDif} de ${tot.n}`}
+            <Kpi label="No cuadran" valor={`${tot.nDif} de ${tot.n}`}
               color={tot.nDif === 0 ? "#16a34a" : "#b45309"} />
           </div>
+
+          {tot.sinPref > 0 && (
+            <div style={{ background: "#f8fafc", border: "1px solid #e4e7ec", borderRadius: 10,
+              padding: "11px 14px", marginBottom: 12, fontSize: 12.5, color: "#64748b", lineHeight: 1.5 }}>
+              <b style={{ color: "#1a3a6b" }}>{tot.sinPref} publicación(es) sin prefactura todavía</b>, por {money(tot.sinPrefMonto)}.
+              No son descuadres: el lunes todavía no se generó la prefactura de esas empresas.
+            </div>
+          )}
 
           {visibles.length === 0 ? (
             <div style={{ background: "#f0fdf4", border: "1px solid #86efac", borderRadius: 10, padding: 24, textAlign: "center", color: "#166534", fontSize: 13, fontWeight: 700 }}>
@@ -174,10 +189,17 @@ export default function Comparativa() {
                   {visibles.map(f => {
                     const soloLunes = f.diaNeto == null;
                     const soloDiario = f.tradPagos === null;
+                    // Un espejo exacto entre dos empresas del mismo SC es la
+                    // firma de una placa asignada distinto en cada modelo: no
+                    // falta plata, está en el bolsillo equivocado.
+                    const espejo = f.dif != null && visibles.some(o =>
+                      o !== f && o.sc === f.sc && o.dif != null &&
+                      Math.abs(Number(o.dif) + Number(f.dif)) < 0.01);
                     const nota = soloLunes ? "Está en la prefactura del lunes y no en el acumulado: ese día o SC no se publicó."
                       : soloDiario ? "Está publicada y no tiene prefactura del lunes todavía."
-                      : (f.dif > 0 ? "El diario tiene de más: puede haber una línea que la conciliación excluyó."
-                                   : "La prefactura tiene de más: línea manual, o rutas que no llegaron al padrón.");
+                      : espejo ? "Hay otra empresa del mismo centro con la diferencia inversa: la misma placa está asignada a empresas distintas en cada modelo. Revisa el padrón."
+                      : (f.dif > 0 ? "El diario tiene de más: rutas publicadas que la prefactura no incluyó, o una línea que la conciliación excluyó."
+                                   : "La prefactura tiene de más: línea manual, rutas consolidadas, o viajes que no llegaron a publicarse.");
                     return (
                       <tr key={`${f.tercero_id}|${f.sc}`}>
                         <td style={{ ...td, fontWeight: 600, color: "#334155" }}>{f.empresa}</td>
