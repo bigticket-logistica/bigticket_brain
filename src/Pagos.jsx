@@ -3619,8 +3619,12 @@ function ConciliacionTercerosMX({ usuario }) {
       const yaNoEnMotor = filas.filter(d => !d._saldo && !d.traspaso && String(d.origen || "motor") === "motor" && !motorPorId[lineaId(d)]);
       const altas = motor.filter(d => !idsGuardadas.has(lineaId(d)) && !excluidas.has(lineaId(d)));
       if (!cambios.length && !altas.length) {
-        setMsg({ ok: true, txt: `${empresa} · ${sc} ya está al día con el motor.${respetadasEdit.length ? ` (${respetadasEdit.length} línea(s) editadas a mano se respetan.)` : ""}` });
-        setSincronizando(null); return;
+        if (!silencioso) setMsg({ ok: true, txt: `${empresa} · ${sc} ya está al día con el motor.${respetadasEdit.length ? ` (${respetadasEdit.length} línea(s) editadas a mano se respetan.)` : ""}` });
+        setSincronizando(null);
+        // Devolver un objeto y no undefined: el bucle masivo lee r.ok, y con
+        // undefined reventaba en la primera prefactura ya sincronizada — que es
+        // el caso más común cuando alguien vuelve a pulsar el botón.
+        return { ok: true, cambios: 0, altas: 0, alDia: true };
       }
       // ── Forense: POR QUÉ difiere cada línea ──
       // Momento del congelamiento (primer evento/ajuste de esta prefactura) + desglose actual del motor
@@ -3668,7 +3672,7 @@ function ConciliacionTercerosMX({ usuario }) {
         excluidas.size ? `• ${excluidas.size} línea(s) eliminadas/traspasadas NO se reponen` : null,
         yaNoEnMotor.length ? `• ${yaNoEnMotor.length} línea(s) están en la prefactura pero ya no en el motor (revisar)` : null,
       ].filter(Boolean).join("\n");
-      if (!silencioso && !confirm(`Sincronizar ${empresa} · ${sc} (semana ${semana}) con el Motor de pagos:\n${congeladaTxt ? congeladaTxt + "\n" : ""}\n${resumenTxt}\n\nLa prefactura vuelve a borrador y cada cambio queda auditado. ¿Continuar?`)) { setSincronizando(null); return; }
+      if (!silencioso && !confirm(`Sincronizar ${empresa} · ${sc} (semana ${semana}) con el Motor de pagos:\n${congeladaTxt ? congeladaTxt + "\n" : ""}\n${resumenTxt}\n\nLa prefactura vuelve a borrador y cada cambio queda auditado. ¿Continuar?`)) { setSincronizando(null); return { ok: false, cancelado: true, cambios: 0, altas: 0 }; }
       // 5) aplicar
       const finales = [...nuevasFilas, ...altas.map(d => ({ ...d, _id: lineaId(d), origen: "motor" }))];
       await guardarBorradorSC(empresa, sc, finales, cobrosDe(empresa, sc));
@@ -3743,11 +3747,19 @@ function ConciliacionTercerosMX({ usuario }) {
     let conCambios = 0, totalCambios = 0, totalAltas = 0, errores = 0;
     for (let i = 0; i < objetivos.length; i++) {
       const o = objetivos[i];
-      setSyncTodo({ total: objetivos.length, hechas: i, actual: `${o.empresa} · ${o.sc}` });
-      const r = await sincronizarConMotor(o.empresa, o.sc, { silencioso: true });
+      setSyncTodo({ total: objetivos.length, hechas: i + 1, actual: `${o.empresa} · ${o.sc}` });
+      // Blindado: una prefactura que falle no puede cortar las otras 29.
+      let r;
+      try {
+        r = await sincronizarConMotor(o.empresa, o.sc, { silencioso: true });
+      } catch (e) {
+        console.error("sincronizar masivo:", o.empresa, o.sc, e);
+        r = { ok: false, error: e.message || String(e), cambios: 0, altas: 0 };
+      }
+      if (!r || typeof r !== "object") r = { ok: false, error: "sin respuesta", cambios: 0, altas: 0 };
       setSyncResult(prev => ({ ...prev, [claveCierre(o.empresa, o.sc)]: r }));
       if (r.ok) {
-        totalCambios += r.cambios; totalAltas += r.altas;
+        totalCambios += Number(r.cambios || 0); totalAltas += Number(r.altas || 0);
         if (r.cambios || r.altas) conCambios++;
       } else errores++;
     }
