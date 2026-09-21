@@ -1037,7 +1037,16 @@ const CONTRATO_COORDS = {
   pagFirmas: 10, pagAnexoA: 12, pagA2: 13,
   firmas: {
     dia: { x: 97.4, y: 687.9, s: 9 }, mes: { x: 128.9, y: 687.9, s: 9 }, anio: { x: 224.0, y: 687.9, s: 9 },
-    nombre: { x: 380, y: 652.0, s: 8 }, rfc: { x: 330, y: 641.1, s: 8.5 }, rep: { x: 400, y: 630.1, s: 8.5 },
+    // Medido sobre la plantilla v2.0 (pagina 11): cada campo es una raya de
+    // ~81 pt. La raya de Nombre va de x=403.7 a 486.6 con tinta en y=654.0;
+    // RFC de 332.4 a 415.2 en y=643.2; Representante de 404.6 a 487.4 en
+    // y=632.2. La baseline va 1.5 pt SOBRE la tinta: con el y0 que reporta
+    // pdfplumber el texto quedaba debajo y la raya lo cruzaba. La x anterior
+    // (380/330/400) empezaba antes de que terminara la etiqueta impresa.
+    // w = ancho util de la raya; TW achica la fuente para no salirse.
+    nombre: { x: 405.5, y: 655.5, s: 8,   w: 80 },
+    rfc:    { x: 334.5, y: 644.7, s: 8.5, w: 79 },
+    rep:    { x: 406.5, y: 633.7, s: 8.5, w: 80 },
     chkMoral: { x: 364.2, y: 584.7 }, chkFisica: { x: 517.9, y: 584.7 },
     col: 311.7,
     tNombre: 572.6, tRfc: 560.0, tDomicilio: 547.4, tRep: 534.8, tCorreo: 522.2, tRepse: 509.6,
@@ -1259,15 +1268,23 @@ async function generarContratoPDFDesde(D, { tabla, registro }) {
   const p2 = pdf.getPage(CONTRATO_COORDS.pagA2);
   const T = (pg, x, y, txt, s = 8.5) => { if (txt) pg.drawText(String(txt), { x, y, size: s, font, color: negro }); };
   const X = (pg, c) => { if (c) pg.drawText("X", { x: c.x, y: c.y, size: 9, font: bold, color: negro }); };
+  // Campos que se escriben sobre una raya impresa: achica la fuente hasta
+  // que el texto quepa. Una razon social larga se salia de la casilla.
+  const TW = (pg, c, txt) => {
+    if (!txt) return;
+    let s = c.s;
+    while (s > 5.5 && font.widthOfTextAtSize(String(txt), s) > c.w) s -= 0.25;
+    pg.drawText(String(txt), { x: c.x, y: c.y, size: s, font, color: negro });
+  };
 
   const F = CONTRATO_COORDS.firmas, A = CONTRATO_COORDS.anexoA, B = CONTRATO_COORDS.a2;
   const hoy = new Date();
   T(pF, F.dia.x, F.dia.y, String(hoy.getDate()).padStart(2, "0"), F.dia.s);
   T(pF, F.mes.x, F.mes.y, MESES_ES[hoy.getMonth()], F.mes.s);
   T(pF, F.anio.x, F.anio.y, String(hoy.getFullYear()).slice(-2), F.anio.s);
-  T(pF, F.nombre.x, F.nombre.y, D.nombre, F.nombre.s);
-  T(pF, F.rfc.x, F.rfc.y, D.rfc, F.rfc.s);
-  T(pF, F.rep.x, F.rep.y, D.rep, F.rep.s);
+  TW(pF, F.nombre, D.nombre);
+  TW(pF, F.rfc, D.rfc);
+  TW(pF, F.rep, D.rep);
   X(pF, D.figura === "Moral" ? F.chkMoral : F.chkFisica);
   T(pF, F.col, F.tNombre, D.nombre); T(pF, F.col, F.tRfc, D.rfc);
   T(pF, F.col, F.tDomicilio, D.domicilio, 7);
