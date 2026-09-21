@@ -2582,6 +2582,7 @@ function ConciliacionTercerosMX({ usuario }) {
   const [importBusy, setImportBusy] = useState(false);
   const [repBusy, setRepBusy] = useState(false);
   const [consolidando, setConsolidando] = useState(null);      // id_ruta | "__todas__"
+  const [consolidaProgreso, setConsolidaProgreso] = useState(null);
   const [traspRows, setTraspRows] = useState(null);            // placas en 2+ empresas en la semana
   const [traspBusy, setTraspBusy] = useState(false);
   const [trasp, setTrasp] = useState(null);                    // modal traspasador { placa, cargando, grupos, sel, destino }
@@ -3336,9 +3337,15 @@ function ConciliacionTercerosMX({ usuario }) {
     if (!confirm(`¿Consolidar ${repRows.length} ruta(s) repetida(s)? Se deja el pago del 1er día de cada una y se quitan los días repetidos (queda auditado).`)) return;
     setConsolidando("__todas__");
     let ok = 0, fail = 0; const errores = [];
-    for (const rep of repRows) {
+    // Cada ruta hace varias consultas, así que con 20 o 30 el proceso tarda un
+    // minuto largo. Sin avance visible parece colgado y alguien recarga la
+    // página a la mitad, dejando la consolidación por la mitad.
+    for (let i = 0; i < repRows.length; i++) {
+      const rep = repRows[i];
+      setConsolidaProgreso({ actual: i + 1, total: repRows.length, ruta: rep.id_ruta });
       try { await _consolidarNucleo(rep); ok++; } catch (e) { fail++; errores.push(`${rep.id_ruta}: ${e.message || e}`); }
     }
+    setConsolidaProgreso(null);
     await cargarResumen(semana); await cargarRepetidas(semana); setConsolidando(null);
     setMsg({ ok: fail === 0, txt: `Consolidación masiva: ${ok} ok, ${fail} con error.` + (errores.length ? " — " + errores.join(" | ") : "") });
   };
@@ -4688,7 +4695,9 @@ function ConciliacionTercerosMX({ usuario }) {
           <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 8 }}>
             <span style={{ fontSize: 14, fontWeight: 800, color: "#92400e" }}>🔁 Rutas con ID repetido en la semana</span>
             <span style={{ fontSize: 12, color: "#b45309" }}>{repRows.filter(r => !consolidadas.has(`${r.empresa}||${r.service_center}||${r.id_ruta}`)).length} pendiente(s) · sobre-pago {fmtMon(repRows.filter(r => !consolidadas.has(`${r.empresa}||${r.service_center}||${r.id_ruta}`)).reduce((s, r) => s + Number(r.sobre_pago || 0), 0))}{consolidadas.size > 0 ? ` · ${consolidadas.size} ya consolidada(s)` : ""}</span>
-            <button onClick={consolidarTodas} disabled={!!consolidando} style={{ marginLeft: "auto", padding: "6px 14px", background: consolidando ? "#94a3b8" : "#92400e", color: "#fff", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>{consolidando === "__todas__" ? "Consolidando..." : "Consolidar todas (dejar 1er día)"}</button>
+            <button onClick={consolidarTodas} disabled={!!consolidando} style={{ marginLeft: "auto", padding: "6px 14px", background: consolidando ? "#94a3b8" : "#92400e", color: "#fff", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>{consolidando === "__todas__"
+              ? (consolidaProgreso ? `Consolidando ${consolidaProgreso.actual} de ${consolidaProgreso.total}…` : "Consolidando…")
+              : "Consolidar todas (dejar 1er día)"}</button>
           </div>
           <div style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
