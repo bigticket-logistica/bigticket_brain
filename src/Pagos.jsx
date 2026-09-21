@@ -5150,6 +5150,23 @@ function ConciliacionTercerosMX({ usuario }) {
                     {esSinEmpresa ? "⚠️ " + g.empresa : g.empresa}
                     {esSinEmpresa && det && Object.keys(porPlaca).some(p => placasViejas[p]) && <span style={{ fontSize: 11, fontWeight: 700, color: "#9a3412", background: "#ffedd5", padding: "1px 7px", borderRadius: 8 }}>⚠️ {Object.keys(porPlaca).filter(p => placasViejas[p]).length} de semanas anteriores</span>}
                     {!esSinEmpresa && <span style={{ fontSize: 11, fontWeight: 600, color: "#7c3aed", background: "#f3e8ff", padding: "1px 7px", borderRadius: 8 }}>{g.filasSC.length} SC</span>}
+                    {/* Cuántas veces se resincronizó esta empresa, sumando sus SC.
+                        Va en la barra de arriba para verlo sin desplegar: si una
+                        empresa se sincronizó cinco veces, algo pasó con sus datos. */}
+                    {!esSinEmpresa && (() => {
+                      const veces = g.filasSC.reduce((t, r) => t + Number(r.sync_veces || 0), 0);
+                      if (!veces) return null;
+                      const perdio = g.filasSC.some(r => (syncLog[`${norm(g.empresa)}||${norm(r.service_center)}`] || {}).perdioManuales);
+                      const ult = g.filasSC.map(r => r.sync_ultima_at).filter(Boolean).sort().pop();
+                      const quien = (g.filasSC.find(r => r.sync_ultima_at === ult) || {}).sync_ultima_por;
+                      return (
+                        <span title={`Última sincronización: ${ult ? new Date(ult).toLocaleString("es-CL") : "—"}${quien ? " · " + quien : ""}${perdio ? "\nOJO: en la última desaparecieron líneas manuales." : ""}`}
+                          style={{ fontSize: 11, fontWeight: 600, padding: "1px 7px", borderRadius: 8, cursor: "help",
+                            color: perdio ? "#92400e" : "#64748b", background: perdio ? "#fef3c7" : "#eef2f7" }}>
+                          {perdio ? "⚠️ " : "🔄 "}{veces} sincro
+                        </span>
+                      );
+                    })()}
                     {!esSinEmpresa && saldoEmpresa(g.empresa) < 0 && <span style={{ fontSize: 11, fontWeight: 800, color: "#9a3412", background: "#ffedd5", padding: "1px 7px", borderRadius: 8 }}>⚠️ Saldo pendiente {fmtMon(saldoEmpresa(g.empresa))}</span>}
                     {!esSinEmpresa && _netoE < 0 && <span style={{ fontSize: 11, fontWeight: 800, color: "#9a3412", background: "#fee2e2", padding: "1px 7px", borderRadius: 8 }}>⚠️ Negativo → irá a pendiente</span>}
                   </div>
