@@ -1036,7 +1036,9 @@ const CONTRATO_COORDS = {
   plantilla: "plantillas/contrato_transportista_v2_0.pdf",
   pagFirmas: 10, pagAnexoA: 12, pagA2: 13,
   firmas: {
-    dia: { x: 97.4, y: 687.9, s: 9 }, mes: { x: 128.9, y: 687.9, s: 9 }, anio: { x: 224.0, y: 687.9, s: 9 },
+    // Linea de la fecha: la raya tiene tinta en y=690.0, asi que la baseline
+    // va en 691.5. Con 687.9 el texto quedaba 2 pt debajo y salia cruzado.
+    dia: { x: 99.0, y: 691.5, s: 9 }, mes: { x: 130.5, y: 691.5, s: 9 }, anio: { x: 225.5, y: 691.5, s: 9 },
     // Medido sobre la plantilla v2.0 (pagina 11): cada campo es una raya de
     // ~81 pt. La raya de Nombre va de x=403.7 a 486.6 con tinta en y=654.0;
     // RFC de 332.4 a 415.2 en y=643.2; Representante de 404.6 a 487.4 en
