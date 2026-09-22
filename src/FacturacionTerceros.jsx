@@ -25,6 +25,8 @@ export default function FacturacionTerceros({ usuario }) {
   const [filtro, setFiltro] = useState("todas");
   const [busca, setBusca] = useState("");
   const [validando, setValidando] = useState(null);
+  const [sel, setSel] = useState({});        // id de prefactura -> marcada para pagar
+  const [pagando, setPagando] = useState(false);
   const [msg, setMsg] = useState(null);
 
   const cargar = useCallback(async () => {
@@ -32,7 +34,7 @@ export default function FacturacionTerceros({ usuario }) {
     // Se parte de las prefacturas enviadas: la pregunta del analista es "¿quién
     // me falta por facturar?", no "¿qué facturas llegaron?".
     let q = sb.from("conciliaciones_terceros")
-      .select("id, semana, empresa_nombre, service_center, liquido_pago, enviado_at, tercero_id")
+      .select("id, semana, empresa_nombre, service_center, liquido_pago, enviado_at, tercero_id, pagado_at, pagado_por, pago_referencia")
       .eq("estado", "enviada").not("tercero_id", "is", null)
       .order("semana", { ascending: false });
     if (semana) q = q.eq("semana", semana);
@@ -69,6 +71,34 @@ export default function FacturacionTerceros({ usuario }) {
       await cargar();
     } catch (e) { setMsg({ ok: false, txt: "No se pudo consultar al SAT: " + (e.message || e) }); }
     setValidando(null);
+  };
+
+  // El pago es uno por prefactura, así que se marca la prefactura entera y con
+  // eso todas sus líneas quedan resueltas en el portal del tercero. Marcar
+  // línea por línea sería pedir un trabajo que no refleja cómo ocurre el pago.
+  const marcarPagadas = async () => {
+    const ids = Object.keys(sel).filter(k => sel[k]).map(Number);
+    if (!ids.length) return;
+    const filasSel = (filas || []).filter(f => ids.includes(f.id));
+    const total = filasSel.reduce((t, f) => t + Number(f.liquido_pago || 0), 0);
+    const ref = window.prompt(
+      `Marcar ${ids.length} prefactura(s) como pagadas.\n\nTotal: ${money(total)}\n\n` +
+      `Referencia de la transferencia (opcional, queda visible para el tercero):`, "");
+    if (ref === null) return;
+
+    setPagando(true); setMsg(null);
+    try {
+      const { error } = await sb.from("conciliaciones_terceros").update({
+        pagado_at: new Date().toISOString(),
+        pagado_por: (usuario && (usuario.nombre || usuario.email)) || "Brain",
+        pago_referencia: ref.trim() || null,
+      }).in("id", ids);
+      if (error) throw error;
+      setMsg({ ok: true, txt: `${ids.length} prefactura(s) marcadas como pagadas por ${money(total)}. El tercero ya lo ve en su portal.` });
+      setSel({});
+      await cargar();
+    } catch (e) { setMsg({ ok: false, txt: "No se pudo marcar el pago: " + (e.message || e) }); }
+    setPagando(false);
   };
 
   const validarPendientes = async () => {
@@ -133,6 +163,14 @@ export default function FacturacionTerceros({ usuario }) {
             se comparan al subirla; el estado lo confirma el SAT.
           </div>
         </div>
+        {Object.values(sel).some(Boolean) && (
+          <button onClick={marcarPagadas} disabled={pagando}
+            style={{ padding: "9px 18px", borderRadius: 8, border: "none", fontSize: 12.5, fontWeight: 700,
+              background: pagando ? "#cbd5e1" : "#16a34a", color: "#fff", marginRight: 8,
+              cursor: pagando ? "not-allowed" : "pointer" }}>
+            {pagando ? "Marcando…" : `Marcar ${Object.values(sel).filter(Boolean).length} como pagadas`}
+          </button>
+        )}
         <button onClick={validarPendientes} disabled={validando !== null}
           style={{ padding: "9px 18px", borderRadius: 8, border: "none", fontSize: 12.5, fontWeight: 700,
             background: validando ? "#cbd5e1" : "#1a3a6b", color: "#fff",
@@ -176,6 +214,15 @@ export default function FacturacionTerceros({ usuario }) {
         <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10, overflow: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead><tr>
+              <th style={{ ...th, width: 28 }}>
+                <input type="checkbox"
+                  checked={visibles.length > 0 && visibles.every(p => sel[p.id])}
+                  onChange={e => {
+                    const n = {};
+                    if (e.target.checked) for (const p of visibles) if (!p.pagado_at) n[p.id] = true;
+                    setSel(n);
+                  }} />
+              </th>
               <th style={th}>Sem</th><th style={th}>Empresa</th><th style={th}>SC</th>
               <th style={{ ...th, textAlign: "right" }}>Prefactura</th>
               <th style={{ ...th, textAlign: "right" }}>Factura</th>
@@ -187,7 +234,13 @@ export default function FacturacionTerceros({ usuario }) {
                 const f = p.facturas[0];
                 const e = ESTADOS[p._estado];
                 return (
-                  <tr key={p.id}>
+                  <tr key={p.id} style={{ background: p.pagado_at ? "#f0fdf4" : "#fff" }}>
+                    <td style={td}>
+                      {!p.pagado_at && (
+                        <input type="checkbox" checked={!!sel[p.id]}
+                          onChange={() => setSel(x => ({ ...x, [p.id]: !x[p.id] }))} />
+                      )}
+                    </td>
                     <td style={{ ...td, color: "#64748b" }}>{p.semana}</td>
                     <td style={{ ...td, fontWeight: 600, color: "#334155" }}>{p.empresa_nombre}</td>
                     <td style={{ ...td, color: "#64748b" }}>{p.service_center}</td>
@@ -215,6 +268,12 @@ export default function FacturacionTerceros({ usuario }) {
                       )}
                     </td>
                     <td style={{ ...td, whiteSpace: "nowrap", textAlign: "right" }}>
+                      {p.pagado_at && (
+                        <div style={{ fontSize: 9.5, fontWeight: 700, color: "#166534", marginBottom: 3 }}>
+                          Pagada {fecha(p.pagado_at)}
+                          {p.pago_referencia && <div style={{ fontWeight: 400, color: "#94a3b8" }}>{p.pago_referencia}</div>}
+                        </div>
+                      )}
                       {f && (
                         <>
                           <button onClick={() => abrir(f.storage_path)}
