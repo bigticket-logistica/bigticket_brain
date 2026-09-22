@@ -32,6 +32,7 @@ const semanaActual = () => {
 
 export default function Comparativa() {
   const [semana, setSemana] = useState(() => Math.max(SEMANA_INICIO, semanaActual()));
+  const [semanas, setSemanas] = useState([]);
   const [filas, setFilas] = useState(null);
   const [soloDif, setSoloDif] = useState(true);
   const [err, setErr] = useState(null);
@@ -39,53 +40,28 @@ export default function Comparativa() {
   const cargar = useCallback(async () => {
     setFilas(null); setErr(null);
     try {
-      const [trad, diario] = await Promise.all([
-        sb.from("conciliaciones_terceros")
-          .select("tercero_id, empresa_nombre, service_center, estado, total_neto, total_cobros")
-          .eq("semana", semana),
-        sb.from("vw_prefactura_diaria_resumen").select("*").eq("semana", semana),
-      ]);
-      if (trad.error) throw trad.error;
-      if (diario.error) throw diario.error;
-
-      // Se cruza por tercero_id + SC. Las que solo están en un lado también
-      // aparecen: son justamente las que hay que mirar.
-      const idx = {};
-      for (const t of (trad.data || [])) {
-        if (!t.tercero_id) continue;
-        idx[`${t.tercero_id}|${t.service_center}`] = {
-          tercero_id: t.tercero_id, empresa: t.empresa_nombre, sc: t.service_center,
-          estado: t.estado, tradPagos: Number(t.total_neto || 0),
-          tradCobros: Number(t.total_cobros || 0),
-          diaPagos: null, diaCobros: null, diaAjustes: null, rutas: null,
-        };
-      }
-      const ids = [...new Set((diario.data || []).map(d => d.tercero_id))];
-      const nombres = {};
-      if (ids.length) {
-        const { data: ts } = await sb.from("terceros").select("id, nombre").in("id", ids);
-        for (const t of (ts || [])) nombres[t.id] = t.nombre;
-      }
-      for (const d of (diario.data || [])) {
-        const k = `${d.tercero_id}|${d.service_center}`;
-        if (!idx[k]) idx[k] = {
-          tercero_id: d.tercero_id, empresa: nombres[d.tercero_id] || "—",
-          sc: d.service_center, estado: null,
-          tradPagos: null, tradCobros: null,
-        };
-        idx[k].diaPagos = Number(d.total_pagos || 0);
-        idx[k].diaCobros = Number(d.total_cobros || 0);
-        idx[k].diaAjustes = Number(d.total_ajustes || 0);
-        idx[k].rutas = d.rutas;
-        // El total_neto de la prefactura ya viene con los cobros restados: las
-        // líneas de PNR y mermas van dentro del detalle como montos negativos.
-        // El diario los separa. Comparar pagos contra neto daba una diferencia
-        // que no existía — exactamente el monto de los cobros.
-        idx[k].diaNeto = Number(d.total_pagos || 0) + Number(d.total_cobros || 0) + Number(d.total_ajustes || 0);
-      }
-      setFilas(Object.values(idx).sort((a, b) =>
-        String(a.empresa).localeCompare(String(b.empresa)) || String(a.sc).localeCompare(String(b.sc))));
+      // Una sola fuente: vw_cuadre_prefactura ya compara lo que el tercero ve
+      // en su portal contra el neto de su prefactura. Antes esta pantalla
+      // armaba su propia comparación y medía cosas distintas de las que
+      // miraban las consultas, así que daba otro número.
+      const { data, error } = await sb.from("vw_cuadre_prefactura")
+        .select("*").eq("semana", semana);
+      if (error) throw error;
+      setFilas((data || []).map(r => ({
+        tercero_id: r.empresa_nombre + "|" + r.service_center,
+        empresa: r.empresa_nombre, sc: r.service_center, estado: r.estado,
+        tradPagos: r.tradicional == null ? null : Number(r.tradicional),
+        diaNeto: r.diario == null ? null : Number(r.diario),
+        diaPagos: Number(r.diario_pagos || 0),
+        diaCobros: Number(r.diario_cobros || 0),
+        diaAjustes: 0,
+        rutas: r.rutas_diario,
+      })));
     } catch (e) { setErr(e.message || String(e)); setFilas([]); }
+
+    const { data: ws } = await sb.from("conciliaciones_terceros")
+      .select("semana").order("semana", { ascending: false }).limit(300);
+    setSemanas([...new Set((ws || []).map(w => w.semana))].filter(w => w >= SEMANA_INICIO));
   }, [semana]);
 
   useEffect(() => { cargar(); }, [cargar]);
