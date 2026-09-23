@@ -2314,37 +2314,49 @@ async function traerFirmadoDeMifiel(tabla, id) {
   return res || null;
 }
 
-function PanelCierreFirma({ registro, tabla, onActualizado }) {
-  const [guardando, setGuardando] = useState(null);
-  const [ok, setOk] = useState(null);
+// Botón único para el contrato firmado: si ya está en el archivador lo abre;
+// si no, se lo pide a MIFIEL por el flujo y luego lo abre. Se usa tanto en el
+// panel de cierre de Etapa 8 como en el bloque de Aceptado.
+function BotonContratoFirmado({ registro, tabla, onActualizado }) {
   const [trayendo, setTrayendo] = useState(false);
-  const pathFirmado = registro.contrato_firmado_path || null;
+  const path = registro.contrato_firmado_path || null;
 
-  // Trae el PDF firmado desde MIFIEL al archivador y lo abre. Si ya estaba
-  // archivado, lo abre directo sin volver a consultar.
-  const verFirmado = async () => {
-    if (pathFirmado) { await abrirFirmadoArchivador(pathFirmado); return; }
+  const accion = async () => {
+    if (path) { await abrirFirmadoArchivador(path); return; }
     setTrayendo(true);
     try {
       const r = await traerFirmadoDeMifiel(tabla, registro.id);
       if (r?.accion === "DESCARGANDO" && r.detalle) {
         await abrirFirmadoArchivador(r.detalle);
-        onActualizado && onActualizado();
+        onActualizado && onActualizado({ contrato_firmado_path: r.detalle });
       } else if (r?.accion === "SIN_TERCERO") {
         alert("El contrato está firmado, pero la tarjeta no tiene empresa asociada (tercero_id), así que no hay carpeta donde archivarlo.");
       } else if (r?.accion === "PENDIENTE") {
         alert("MIFIEL todavía no reporta las dos firmas — " + (r.detalle || ""));
+      } else if (r?.accion === "ERROR") {
+        alert("MIFIEL respondió con error:\n\n" + (r.detalle || "") + "\n\nSi dice 404, el documento ya no existe en MIFIEL y hay que regenerar el contrato.");
       } else {
-        alert("No se pudo traer el PDF firmado." + (r?.detalle ? "\n\n" + r.detalle : ""));
+        alert("No se pudo traer el PDF firmado.");
       }
     } catch (e) {
-      alert("No se pudo traer el PDF firmado: " + e.message + "\n\nRevisa que el flujo 'sincronizar-firmados' esté activo en n8n.");
+      alert("No se pudo traer el PDF firmado: " + e.message);
     } finally { setTrayendo(false); }
   };
-  const firmoT = registro.mifiel_firmado_conductor === true;
-  const firmoB = registro.mifiel_firmado_bigticket === true;
-  const completo = firmoT && firmoB;
 
+  return (
+    <button onClick={accion} disabled={trayendo}
+      title={path ? "Abre el PDF guardado en el archivador de la empresa" : "Consulta MIFIEL, guarda el PDF en el archivador y lo abre"}
+      style={{ width: "100%", background: "#fff", color: "#166534", border: "1.5px solid #86c9a0",
+        borderRadius: 10, padding: "11px", fontSize: 12.5, fontWeight: 800,
+        cursor: trayendo ? "wait" : "pointer", fontFamily: "'Geist',sans-serif", opacity: trayendo ? 0.6 : 1 }}>
+      {trayendo ? "Trayendo de MIFIEL…" : path ? "\u2b07 Descargar contrato firmado" : "\ud83d\udce5 Traer contrato firmado de MIFIEL"}
+    </button>
+  );
+}
+
+function PanelCierreFirma({ registro, tabla, onActualizado }) {
+  const [guardando, setGuardando] = useState(null);
+  const [ok, setOk] = useState(null);
   const mover = async (etapa, estado, etiqueta) => {
     const faltan = [!firmoT && "la firma del tercero", !firmoB && "la firma de BigTicket"].filter(Boolean);
     let msg = `¿Mover esta tarjeta a ${etiqueta}?`;
@@ -2389,13 +2401,9 @@ function PanelCierreFirma({ registro, tabla, onActualizado }) {
           : `Estado de firmas: tercero ${firmoT ? "✓" : "pendiente"} · BigTicket ${firmoB ? "✓" : "pendiente"}.`}
       </div>
       {completo && (
-        <button onClick={verFirmado} disabled={trayendo}
-          title={pathFirmado ? "Abre el PDF guardado en el archivador de la empresa" : "Consulta MIFIEL, guarda el PDF en el archivador y lo abre"}
-          style={{ width: "100%", background: "#fff", color: "#166534", border: "1.5px solid #86c9a0",
-            borderRadius: 10, padding: "11px", fontSize: 12.5, fontWeight: 800, marginBottom: 10,
-            cursor: trayendo ? "wait" : "pointer", fontFamily: "'Geist',sans-serif", opacity: trayendo ? 0.6 : 1 }}>
-          {trayendo ? "Trayendo de MIFIEL…" : pathFirmado ? "\u2b07 Descargar contrato firmado" : "\ud83d\udce5 Traer contrato firmado de MIFIEL"}
-        </button>
+        <div style={{ marginBottom: 10 }}>
+          <BotonContratoFirmado registro={registro} tabla={tabla} onActualizado={onActualizado} />
+        </div>
       )}
       {ok && (
         <div style={{ background: "#e8f5ec", border: "1px solid #86c9a0", color: "#166534",
@@ -3439,6 +3447,26 @@ Responde con este JSON exacto:
             datos={{ nombre: candidato.nombre, curp: candidato.curp_validado || candidato.curp, rfc: candidato.rfc,
               email: candidato.email, puesto: candidato.puesto || "Driver", sc: candidato.svc, placa: null }}
             onActualizado={(patch) => onActualizar({ ...candidato, ...patch })} />
+        )}
+
+        {/* Contrato firmado: vive fuera de SeccionFirmaContrato a propósito.
+            Esa sección solo se muestra con estado "en_firma", así que al pasar
+            la tarjeta a Aceptado desaparecía justo cuando el contrato ya estaba
+            cerrado y era cuando más falta hacía verlo. */}
+        {(candidato.mifiel_firmado_conductor && candidato.mifiel_firmado_bigticket) && (
+          <div style={{ marginTop: 14, background: "#e8f5ec", border: "1.5px solid #86c9a0", borderRadius: 12, padding: 14 }}>
+            <div style={{ fontSize: 12, fontWeight: 800, color: "#166534", textTransform: "uppercase", letterSpacing: ".4px", marginBottom: 3 }}>
+              ✍️ Contrato firmado por ambas partes
+            </div>
+            <div style={{ fontSize: 12, color: "#2f6b47", lineHeight: 1.5, marginBottom: 11 }}>
+              {candidato.contrato_firmado_at
+                ? `Cerrado el ${fMX(candidato.contrato_firmado_at, { day: "2-digit", month: "long", year: "numeric" })}.`
+                : "El documento tiene las dos firmas registradas en MIFIEL."}
+              {candidato.contrato_firmado_path ? " El PDF está guardado en el archivador de la empresa." : ""}
+            </div>
+            <BotonContratoFirmado registro={candidato} tabla="certificaciones_mx"
+              onActualizado={(patch) => onActualizar({ ...candidato, ...patch })} />
+          </div>
         )}
       </div>
     </div>
