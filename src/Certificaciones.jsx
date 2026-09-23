@@ -7542,6 +7542,31 @@ function ModuloCertificaciones() {
     portal: itemsFiltrados.filter(i => i.raw?.origen !== "app_terceros").length,
   };
 
+  // Trae de MIFIEL todos los contratos firmados que aún no están archivados.
+  // Sin id, el flujo corre en modo masivo (hasta 20 por vuelta y por canal).
+  const [trayendoTodos, setTrayendoTodos] = useState(false);
+  const traerFirmadosTodos = async () => {
+    setTrayendoTodos(true);
+    try {
+      const resp = await fetch("https://bigticket2026.app.n8n.cloud/webhook/sincronizar-firmados", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+      });
+      const txt = await resp.text();
+      const r = txt && txt.trim() ? JSON.parse(txt) : null;
+      const res = (r?.resultado || []).filter((x) => x.tabla === "certificaciones_mx");
+      const bajados = res.filter((x) => x.accion === "DESCARGANDO").length;
+      const errores = res.filter((x) => x.accion === "ERROR" || x.accion === "SIN_TERCERO");
+      let msg = bajados
+        ? `Se archivaron ${bajados} contrato(s) firmado(s). Ya puedes descargarlos desde la tarjeta.`
+        : "No había contratos firmados pendientes de archivar.";
+      if (errores.length) msg += `\n\nCon problema (${errores.length}):\n` + errores.map((e) => `• ${e.titulo || e.id}: ${e.accion} ${e.detalle || ""}`).join("\n");
+      alert(msg);
+      await cargar(true);
+    } catch (e) {
+      alert("No se pudo contactar el flujo de MIFIEL: " + e.message + "\n\nRevisa en n8n que 'sincronizar-firmados' esté activo y que no haya otro flujo viejo usando la misma ruta.");
+    } finally { setTrayendoTodos(false); }
+  };
+
   return (
     <div className="pg">
       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 14, flexWrap: "wrap", gap: 12 }}>
@@ -7556,6 +7581,11 @@ function ModuloCertificaciones() {
             <button onClick={() => cargar(true)} disabled={refrescando} title="Traer los últimos movimientos sin recargar la página"
               style={{ padding: "7px 14px", borderRadius: 8, border: "0.5px solid #e4e7ec", background: "#fff", color: "#1a3a6b", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "'Geist',sans-serif", opacity: refrescando ? 0.6 : 1 }}>
               {refrescando ? "⏳ Actualizando…" : "🔄 Actualizar"}
+            </button>
+            <button onClick={traerFirmadosTodos} disabled={trayendoTodos}
+              title="Consulta MIFIEL y guarda en el archivador los contratos que ya firmaron ambas partes"
+              style={{ padding: "7px 14px", borderRadius: 8, border: "0.5px solid #c4e6df", background: "#fff", color: "#0f766e", fontSize: 12, fontWeight: 700, cursor: trayendoTodos ? "wait" : "pointer", fontFamily: "'Geist',sans-serif", opacity: trayendoTodos ? 0.6 : 1 }}>
+              {trayendoTodos ? "⏳ Trayendo…" : "📥 Traer firmados de MIFIEL"}
             </button>
             <div style={{ display: "flex", background: "#fff", borderRadius: 8, border: "0.5px solid #e4e7ec", overflow: "hidden" }}>
               {[["kanban", "Kanban"], ["lista", "Lista"]].map(([v, l]) => (
