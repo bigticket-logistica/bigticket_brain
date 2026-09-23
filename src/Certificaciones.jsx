@@ -2204,7 +2204,7 @@ function SeccionFirmaContrato({ registro, tabla, datos, onActualizado }) {
         <>
           <div style={{ fontSize: 13, color: "#4c1d95", marginBottom: 10 }}>
             Contrato enviado a firma{registro.contrato_enviado_at ? ` el ${new Date(registro.contrato_enviado_at).toLocaleString("es-CL")}` : ""}.
-            La tarjeta pasará sola a <b>Aceptado</b> cuando ambas firmas estén completas.
+            Cuando estén las dos firmas, pasa la tarjeta a <b>Aceptado</b> desde el panel de cierre.
           </div>
           <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
             <ChipFirma label={`Prestador: ${datos.nombre || "—"}`} listo={!!registro.mifiel_firmado_conductor} />
@@ -2288,9 +2288,59 @@ function SeccionFirmaContrato({ registro, tabla, datos, onActualizado }) {
 // Aceptado / Revisión Interna / Rechazado. Con ambas firmas el botón de
 // Aceptado se destaca y el panel lo sugiere; sin ellas se puede cerrar
 // igual, pero avisando qué falta (a veces se rechaza a alguien que ya firmó).
+// Abre el PDF firmado que el flujo sincronizar-firmados dejó en el archivador
+// de la empresa. Mismo mecanismo que usa el Gestionador de Contratos.
+async function abrirFirmadoArchivador(path, descargar = true) {
+  if (!path) { alert("Este contrato todavía no tiene PDF firmado guardado."); return; }
+  const { data, error } = await sb.storage.from("archivador_empresas")
+    .createSignedUrl(path, 3600, descargar ? { download: true } : undefined);
+  if (error || !data?.signedUrl) {
+    alert("No se pudo abrir el archivo.\n\nRuta pedida:\n" + path + "\n\n" + (error?.message || "sin URL firmada"));
+    return;
+  }
+  window.open(data.signedUrl, "_blank");
+}
+
+// Pide a n8n que consulte MIFIEL y, si el documento tiene ambas firmas,
+// baje el PDF al archivador y escriba contrato_firmado_path.
+async function traerFirmadoDeMifiel(tabla, id) {
+  const resp = await fetch("https://bigticket2026.app.n8n.cloud/webhook/sincronizar-firmados", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ tabla, id, origen: "brain" }),
+  });
+  const txt = await resp.text();
+  const r = txt && txt.trim() ? JSON.parse(txt) : null;
+  const res = (r?.resultado || []).find((x) => String(x.id) === String(id)) || (r?.resultado || [])[0];
+  return res || null;
+}
+
 function PanelCierreFirma({ registro, tabla, onActualizado }) {
   const [guardando, setGuardando] = useState(null);
   const [ok, setOk] = useState(null);
+  const [trayendo, setTrayendo] = useState(false);
+  const pathFirmado = registro.contrato_firmado_path || null;
+
+  // Trae el PDF firmado desde MIFIEL al archivador y lo abre. Si ya estaba
+  // archivado, lo abre directo sin volver a consultar.
+  const verFirmado = async () => {
+    if (pathFirmado) { await abrirFirmadoArchivador(pathFirmado); return; }
+    setTrayendo(true);
+    try {
+      const r = await traerFirmadoDeMifiel(tabla, registro.id);
+      if (r?.accion === "DESCARGANDO" && r.detalle) {
+        await abrirFirmadoArchivador(r.detalle);
+        onActualizado && onActualizado();
+      } else if (r?.accion === "SIN_TERCERO") {
+        alert("El contrato está firmado, pero la tarjeta no tiene empresa asociada (tercero_id), así que no hay carpeta donde archivarlo.");
+      } else if (r?.accion === "PENDIENTE") {
+        alert("MIFIEL todavía no reporta las dos firmas — " + (r.detalle || ""));
+      } else {
+        alert("No se pudo traer el PDF firmado." + (r?.detalle ? "\n\n" + r.detalle : ""));
+      }
+    } catch (e) {
+      alert("No se pudo traer el PDF firmado: " + e.message + "\n\nRevisa que el flujo 'sincronizar-firmados' esté activo en n8n.");
+    } finally { setTrayendo(false); }
+  };
   const firmoT = registro.mifiel_firmado_conductor === true;
   const firmoB = registro.mifiel_firmado_bigticket === true;
   const completo = firmoT && firmoB;
@@ -2338,6 +2388,15 @@ function PanelCierreFirma({ registro, tabla, onActualizado }) {
           ? "El contrato está cerrado. Pasa la tarjeta a Aceptado para terminar el proceso."
           : `Estado de firmas: tercero ${firmoT ? "✓" : "pendiente"} · BigTicket ${firmoB ? "✓" : "pendiente"}.`}
       </div>
+      {completo && (
+        <button onClick={verFirmado} disabled={trayendo}
+          title={pathFirmado ? "Abre el PDF guardado en el archivador de la empresa" : "Consulta MIFIEL, guarda el PDF en el archivador y lo abre"}
+          style={{ width: "100%", background: "#fff", color: "#166534", border: "1.5px solid #86c9a0",
+            borderRadius: 10, padding: "11px", fontSize: 12.5, fontWeight: 800, marginBottom: 10,
+            cursor: trayendo ? "wait" : "pointer", fontFamily: "'Geist',sans-serif", opacity: trayendo ? 0.6 : 1 }}>
+          {trayendo ? "Trayendo de MIFIEL…" : pathFirmado ? "\u2b07 Descargar contrato firmado" : "\ud83d\udce5 Traer contrato firmado de MIFIEL"}
+        </button>
+      )}
       {ok && (
         <div style={{ background: "#e8f5ec", border: "1px solid #86c9a0", color: "#166534",
           borderRadius: 9, padding: "9px 12px", fontSize: 12.5, fontWeight: 700, marginBottom: 10 }}>
@@ -4320,14 +4379,27 @@ function KanbanBoard({ items, columnas = COLUMNAS, onCardClick, onMover, onElimi
                         : t ? { bg: "#fff8e6", fg: "#b45309", bd: "#f5d9b8", txt: "✍️ Falta firma BigTicket" }
                         : b ? { bg: "#fff8e6", fg: "#b45309", bd: "#f5d9b8", txt: "✍️ Falta firma del tercero" }
                         : { bg: "#fbeaea", fg: "#c0392b", bd: "#f0b4b4", txt: "✍️ Sin firmas" };
+                      const pathF = card.raw?.contrato_firmado_path || null;
                       return (
-                        <span title={card.raw?.contrato_firmado_at
-                          ? `Cerrado el ${fMX(card.raw.contrato_firmado_at, { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}`
-                          : "Contrato en proceso de firma"}
-                          style={{ fontSize: 9, fontWeight: 800, padding: "2px 8px", borderRadius: 20,
-                            background: cfg.bg, color: cfg.fg, border: `1px solid ${cfg.bd}` }}>
-                          {cfg.txt}
-                        </span>
+                        <>
+                          <span title={card.raw?.contrato_firmado_at
+                            ? `Cerrado el ${fMX(card.raw.contrato_firmado_at, { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}`
+                            : "Contrato en proceso de firma"}
+                            style={{ fontSize: 9, fontWeight: 800, padding: "2px 8px", borderRadius: 20,
+                              background: cfg.bg, color: cfg.fg, border: `1px solid ${cfg.bd}` }}>
+                            {cfg.txt}
+                          </span>
+                          {/* Descarga directa desde la tarjeta, sin abrirla: el PDF\r
+                              ya vive en el archivador de la empresa. */}
+                          {t && b && pathF && (
+                            <span role="button" title="Descargar el contrato firmado por ambas partes"
+                              onClick={(e) => { e.stopPropagation(); abrirFirmadoArchivador(pathF); }}
+                              style={{ fontSize: 9, fontWeight: 800, padding: "2px 8px", borderRadius: 20, cursor: "pointer",
+                                background: "#fff", color: "#0f766e", border: "1px solid #c4e6df" }}>
+                              \u2b07 PDF firmado
+                            </span>
+                          )}
+                        </>
                       );
                     })()}
                   </div>
