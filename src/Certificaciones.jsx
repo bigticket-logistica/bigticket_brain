@@ -7209,6 +7209,53 @@ function ModuloCertificaciones() {
   }, []);
 
   const [refrescando, setRefrescando] = useState(false);
+  // Trae de MIFIEL todos los contratos firmados que aún no están archivados.
+  // Sin id, el flujo corre en modo masivo (hasta 20 por vuelta y por canal).
+  const [trayendoTodos, setTrayendoTodos] = useState(false);
+  const traerFirmadosTodos = async () => {
+    setTrayendoTodos(true);
+    try {
+      const { count: antesCount } = await sb.from("certificaciones_mx")
+        .select("id", { count: "exact", head: true }).not("contrato_firmado_path", "is", null);
+      const antes = antesCount || 0;
+      const resp = await fetch("https://bigticket2026.app.n8n.cloud/webhook/sincronizar-firmados", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+      });
+      const txt = await resp.text();
+      const r = txt && txt.trim() ? JSON.parse(txt) : null;
+      const pedidos = (r?.resultado || []).filter((x) => x.tabla === "certificaciones_mx");
+      const errores = pedidos.filter((x) => x.accion === "ERROR" || x.accion === "SIN_TERCERO");
+      const encolados = pedidos.filter((x) => x.accion === "DESCARGANDO").length;
+
+      // El flujo contesta apenas encola las descargas: su resumen dice qué se
+      // pidió, no qué se guardó. La única confirmación real es contar en la
+      // base cuántas filas quedaron con contrato_firmado_path escrito.
+      const contar = async () => {
+        const { count } = await sb.from("certificaciones_mx")
+          .select("id", { count: "exact", head: true })
+          .not("contrato_firmado_path", "is", null);
+        return count || 0;
+      };
+      let archivados = await contar();
+      for (let i = 0; i < 6 && archivados < antes + encolados; i++) {
+        await new Promise((r2) => setTimeout(r2, 2500));
+        archivados = await contar();
+      }
+      const nuevos = archivados - antes;
+
+      let msg = nuevos > 0
+        ? `Se archivaron ${nuevos} contrato(s) firmado(s). Ya puedes descargarlos desde la tarjeta.`
+        : encolados > 0
+          ? `El flujo encoló ${encolados} descarga(s) pero no se guardó ninguna. Revisa la última ejecución en n8n: la cadena se cortó entre «Bajar PDF firmado» y «Cerrar y registrar».`
+          : "No había contratos firmados pendientes de archivar.";
+      if (errores.length) msg += `\n\nCon problema (${errores.length}):\n` + errores.map((e) => `• ${e.titulo || e.id}: ${e.accion} ${e.detalle || ""}`).join("\n");
+      alert(msg);
+      await cargar(true);
+    } catch (e) {
+      alert("No se pudo contactar el flujo de MIFIEL: " + e.message + "\n\nRevisa en n8n que 'sincronizar-firmados' esté activo y que no haya otro flujo viejo usando la misma ruta.");
+    } finally { setTrayendoTodos(false); }
+  };
+
   const cargar = async (silencioso = false) => {
     if (silencioso) setRefrescando(true); else setLoading(true);
     try {
@@ -7540,31 +7587,6 @@ function ModuloCertificaciones() {
     total:  itemsFiltrados.length,
     app:    itemsFiltrados.filter(i => i.raw?.origen === "app_terceros").length,
     portal: itemsFiltrados.filter(i => i.raw?.origen !== "app_terceros").length,
-  };
-
-  // Trae de MIFIEL todos los contratos firmados que aún no están archivados.
-  // Sin id, el flujo corre en modo masivo (hasta 20 por vuelta y por canal).
-  const [trayendoTodos, setTrayendoTodos] = useState(false);
-  const traerFirmadosTodos = async () => {
-    setTrayendoTodos(true);
-    try {
-      const resp = await fetch("https://bigticket2026.app.n8n.cloud/webhook/sincronizar-firmados", {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
-      });
-      const txt = await resp.text();
-      const r = txt && txt.trim() ? JSON.parse(txt) : null;
-      const res = (r?.resultado || []).filter((x) => x.tabla === "certificaciones_mx");
-      const bajados = res.filter((x) => x.accion === "DESCARGANDO").length;
-      const errores = res.filter((x) => x.accion === "ERROR" || x.accion === "SIN_TERCERO");
-      let msg = bajados
-        ? `Se archivaron ${bajados} contrato(s) firmado(s). Ya puedes descargarlos desde la tarjeta.`
-        : "No había contratos firmados pendientes de archivar.";
-      if (errores.length) msg += `\n\nCon problema (${errores.length}):\n` + errores.map((e) => `• ${e.titulo || e.id}: ${e.accion} ${e.detalle || ""}`).join("\n");
-      alert(msg);
-      await cargar(true);
-    } catch (e) {
-      alert("No se pudo contactar el flujo de MIFIEL: " + e.message + "\n\nRevisa en n8n que 'sincronizar-firmados' esté activo y que no haya otro flujo viejo usando la misma ruta.");
-    } finally { setTrayendoTodos(false); }
   };
 
   return (
