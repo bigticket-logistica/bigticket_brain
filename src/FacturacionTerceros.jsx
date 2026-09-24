@@ -53,7 +53,11 @@ export default function FacturacionTerceros({ usuario }) {
 
     const { data: ws } = await sb.from("conciliaciones_terceros")
       .select("semana").eq("estado", "enviada").order("semana", { ascending: false }).limit(500);
-    setSemanas([...new Set((ws || []).map(w => w.semana))]);
+    const lista = [...new Set((ws || []).map(w => w.semana))];
+    setSemanas(lista);
+    // Arranca en la más reciente: el analista revisa la semana que acaba de
+    // enviar, no el histórico completo.
+    if (semana == null && lista.length) setSemana(lista[0]);
   }, [semana]);
 
   useEffect(() => { cargar(); }, [cargar]);
@@ -127,7 +131,7 @@ export default function FacturacionTerceros({ usuario }) {
 
   const ESTADOS = {
     sin_factura:  { l: "Sin factura",      bg: "#f1f5f9", fg: "#64748b" },
-    sin_xml:      { l: "Solo PDF",         bg: "#f1f5f9", fg: "#64748b" },
+    sin_xml:      { l: "Sin leer",          bg: "#f1f5f9", fg: "#64748b" },
     sin_validar:  { l: "Falta validar",    bg: "#dbeafe", fg: "#1e40af" },
     descuadre:    { l: "No cuadra",        bg: "#fef3c7", fg: "#92400e" },
     sat_problema: { l: "Rechazada por SAT", bg: "#fee2e2", fg: "#991b1b" },
@@ -227,7 +231,10 @@ export default function FacturacionTerceros({ usuario }) {
               <th style={{ ...th, textAlign: "right" }}>Prefactura</th>
               <th style={{ ...th, textAlign: "right" }}>Factura</th>
               <th style={{ ...th, textAlign: "right" }}>Dif.</th>
-              <th style={th}>Folio fiscal</th><th style={th}>Estado</th><th style={th}></th>
+              <th style={th}>Folio fiscal</th>
+              <th style={{ ...th, textAlign: "center" }}>Monto</th>
+              <th style={{ ...th, textAlign: "center" }}>SAT</th>
+              <th style={th}>Estado</th><th style={th}></th>
             </tr></thead>
             <tbody>
               {visibles.map(p => {
@@ -254,8 +261,25 @@ export default function FacturacionTerceros({ usuario }) {
                     </td>
                     <td style={{ ...td, color: "#94a3b8", fontSize: 10.5 }}>
                       {f?.serie_folio && <div style={{ color: "#334155", fontSize: 11.5 }}>{f.serie_folio}</div>}
-                      {f?.uuid || (f ? "sin XML" : "—")}
+                      {f?.uuid || (f ? "sin leer" : "—")}
                       {f?.rfc_emisor && <div>RFC {f.rfc_emisor}</div>}
+                    </td>
+                    {/* Dos validaciones distintas: que el monto cuadre con la
+                        prefactura, y que el SAT reconozca el comprobante. Una
+                        puede pasar y la otra no. */}
+                    <td style={{ ...td, textAlign: "center", fontSize: 15 }}>
+                      {!f ? <span style={{ color: "#cbd5e1" }}>—</span>
+                        : f.diferencia == null ? <span title="No se pudo leer el monto" style={{ color: "#94a3b8" }}>?</span>
+                        : Math.abs(Number(f.diferencia)) <= 1
+                          ? <span title="Cuadra con la prefactura" style={{ color: "#16a34a" }}>✓</span>
+                          : <span title={`Difiere en ${money(f.diferencia)}`} style={{ color: "#dc2626" }}>✗</span>}
+                    </td>
+                    <td style={{ ...td, textAlign: "center", fontSize: 15 }}>
+                      {!f ? <span style={{ color: "#cbd5e1" }}>—</span>
+                        : !f.sat_estado ? <span title="Todavía sin validar" style={{ color: "#94a3b8" }}>?</span>
+                        : String(f.sat_estado).toLowerCase() === "vigente"
+                          ? <span title="El SAT la confirma vigente" style={{ color: "#16a34a" }}>✓</span>
+                          : <span title={`El SAT responde: ${f.sat_estado}`} style={{ color: "#dc2626" }}>✗</span>}
                     </td>
                     <td style={td}>
                       <span style={{ fontSize: 10, fontWeight: 700, padding: "3px 9px", borderRadius: 10, background: e.bg, color: e.fg, whiteSpace: "nowrap" }}>
