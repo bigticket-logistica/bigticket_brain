@@ -4,6 +4,17 @@ import { sb, BIGGY_IMG } from "./shared";
 // Todas las fechas del módulo se muestran en HORA DE MÉXICO, sin importar desde
 // dónde se abra el Brain. Sin timeZone, el navegador usa su zona local y el
 // mismo registro se vería con dos horas de diferencia entre Chile y México.
+// Un File de 0 bytes sube sin error y deja un objeto vacío en Storage: el
+// Brain lo lista como cargado y el análisis de Biggy revienta días después
+// sin que nadie sepa por qué (caso curp.pdf, sep-2026). Se revisa antes.
+function validarArchivo(file, etiqueta) {
+  const q = etiqueta ? `El archivo de ${etiqueta}` : "El archivo";
+  if (!file) return `${q} no llegó. Vuelve a seleccionarlo.`;
+  if (!file.size) return `${q} está vacío (0 bytes). Suele pasar cuando la foto todavía se está descargando en el teléfono: ábrela primero en la galería y vuelve a subirla.`;
+  if (file.size > 25 * 1024 * 1024) return `${q} pesa más de 25 MB. Comprímelo antes de subirlo.`;
+  return null;
+}
+
 const TZ_MX = "America/Mexico_City";
 const fMX = (v, opts) => v ? new Date(v).toLocaleString("es-MX", { timeZone: TZ_MX, ...(opts || {}) }) : "";
 
@@ -109,6 +120,7 @@ function GestorDocsProspecto({ candidato, onActualizar }) {
       const ext = (file.name.split(".").pop() || "jpg").toLowerCase();
       const campo = col.replace("url_", "");
       const path = `prospeccion/${candidato.id}/${campo}_${Date.now()}.${ext}`;
+      { const malo = validarArchivo(file); if (malo) { alert(malo); return; } }
       const { error: eUp } = await sb.storage.from("documentos-terceros").upload(path, file, { upsert: true });
       if (eUp) throw new Error(eUp.message);
       const { data: pu } = sb.storage.from("documentos-terceros").getPublicUrl(path);
@@ -211,6 +223,7 @@ function GestorDocsCert({ cert, docs, onRecargar, cambios, resaltar, avisoSinInd
       const ext = (file.name.split(".").pop() || "jpg").toLowerCase();
       const tipo = docTipoLimpioCert(d.tipo_documento) || "otro";
       const path = `${basePath()}/${tipo}_${Date.now()}.${ext}`;
+      { const malo = validarArchivo(file); if (malo) { alert(malo); return; } }
       const { error: eUp } = await sb.storage.from("proceso_certificacion_bt").upload(path, file, { upsert: true });
       if (eUp) throw new Error(eUp.message);
       if (d._virtual) {
@@ -250,6 +263,7 @@ function GestorDocsCert({ cert, docs, onRecargar, cambios, resaltar, avisoSinInd
     try {
       const ext = (file.name.split(".").pop() || "jpg").toLowerCase();
       const path = `${basePath()}/${tipo}_${Date.now()}.${ext}`;
+      { const malo = validarArchivo(file); if (malo) { alert(malo); return; } }
       const { error: eUp } = await sb.storage.from("proceso_certificacion_bt").upload(path, file, { upsert: true });
       if (eUp) throw new Error(eUp.message);
       const { error: eIns } = await insDocCert({ certificacion_id: cert.id, tipo_documento: tipo, storage_path: path, subido_por: "analista_brain" });
@@ -2357,6 +2371,10 @@ function BotonContratoFirmado({ registro, tabla, onActualizado }) {
 function PanelCierreFirma({ registro, tabla, onActualizado }) {
   const [guardando, setGuardando] = useState(null);
   const [ok, setOk] = useState(null);
+  const firmoT = registro.mifiel_firmado_conductor === true;
+  const firmoB = registro.mifiel_firmado_bigticket === true;
+  const completo = firmoT && firmoB;
+
   const mover = async (etapa, estado, etiqueta) => {
     const faltan = [!firmoT && "la firma del tercero", !firmoB && "la firma de BigTicket"].filter(Boolean);
     let msg = `¿Mover esta tarjeta a ${etiqueta}?`;
@@ -4926,6 +4944,7 @@ function GestionadorContratos() {
         .select("id").single();
       if (error) throw new Error(error.message);
       const path = `gestion_contratos/${row.id}/${f.archivo.name.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
+      { const malo = validarArchivo(f.archivo); if (malo) { alert(malo); return; } }
       const { error: eUp } = await sb.storage.from("proceso_certificacion_bt").upload(path, f.archivo, { contentType: "application/pdf" });
       if (eUp) throw new Error("subiendo PDF: " + eUp.message);
       await sb.from("contratos_gestion").update({ archivo_path: path }).eq("id", row.id);
@@ -5561,6 +5580,7 @@ function AltaVehiculosPersonal({ onCreada }) {
     try {
       const safe = file.name.replace(/[^\w.\-]+/g, "_");
       const p = `${tid}/${categoria}/${Date.now()}_${safe}`;
+      { const malo = validarArchivo(file); if (malo) { alert(malo); return; } }
       const { error: eUp } = await sb.storage.from("archivador_empresas").upload(p, file, { upsert: false, contentType: file.type || undefined });
       if (eUp) throw new Error(eUp.message);
       const { error: eIns } = await sb.from("documentos_empresa").insert({
