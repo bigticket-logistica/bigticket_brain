@@ -20,6 +20,40 @@ const sb = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 const SAT_URL = "https://consultaqr.facturaelectronica.sat.gob.mx/ConsultaCFDIService.svc";
 
+// ── Leer el CFDI desde el PDF ────────────────────────────────────────────────
+// Varios terceros suben solo la representación impresa, sin el XML. Ese PDF
+// trae todo lo que hace falta —folio fiscal, los dos RFC y el total— porque es
+// el formato estándar del SAT. Leerlo evita pedirles un archivo que muchos no
+// saben dónde está, y permite validar lo que ya subieron.
+const RE = {
+  uuid: /\b([0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{8,12})\b/i,
+  rfcEmisor: /RFC\s*emisor\s*:?\s*([A-ZÑ&]{3,4}\d{6}[A-Z0-9]{3})/i,
+  rfcReceptor: /RFC\s*receptor\s*:?\s*([A-ZÑ&]{3,4}\d{6}[A-Z0-9]{3})/i,
+  total: /\bTotal\b[^\d$]{0,40}\$?\s*([\d,]+\.\d{2})/i,
+  fecha: /(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})/,
+};
+
+async function leerPdf(buffer) {
+  // pdf-parse extrae la capa de texto. Si el PDF es un escaneo no hay capa y
+  // devuelve vacío: ahí no se puede validar y hay que pedir el XML.
+  const pdfParse = (await import("pdf-parse")).default;
+  const { text } = await pdfParse(buffer);
+  if (!text || text.trim().length < 50) return null;
+
+  const uno = (re) => { const m = text.match(re); return m ? m[1] : null; };
+  const total = uno(RE.total);
+  return {
+    uuid: (uno(RE.uuid) || "").toUpperCase() || null,
+    rfc_emisor: (uno(RE.rfcEmisor) || "").toUpperCase() || null,
+    rfc_receptor: (uno(RE.rfcReceptor) || "").toUpperCase() || null,
+    total: total ? Number(total.replace(/,/g, "")) : null,
+    fecha_emision: (() => {
+      const m = text.match(RE.fecha);
+      return m ? `${m[1]}T${m[2]}` : null;
+    })(),
+  };
+}
+
 // El SAT espera el total con 6 decimales y sin separadores de miles.
 const totalSat = (n) => Number(n || 0).toFixed(6);
 
@@ -80,8 +114,7 @@ export default async function handler(req, res) {
     // el reintento: una factura recién timbrada puede tardar en aparecer en el
     // SAT, así que un "no encontrado" al subirla no significa que sea falsa.
     let q = sb.from("facturas_tercero")
-      .select("id, uuid, rfc_emisor, rfc_receptor, monto_factura, nombre_archivo")
-      .not("uuid", "is", null);
+      .select("id, uuid, rfc_emisor, rfc_receptor, monto_factura, monto_prefactura, nombre_archivo, storage_path, tercero_id");
     if (factura_id) q = q.eq("id", factura_id);
     else if (reintentar) q = q.is("sat_validado_at", null).limit(50);
     else return res.status(200).json({ ok: false, error: "Pasa factura_id, o reintentar=1 para las pendientes." });
@@ -92,9 +125,35 @@ export default async function handler(req, res) {
 
     const resultados = [];
     for (const f of facturas) {
-      if (!f.rfc_emisor || !f.rfc_receptor || f.monto_factura == null) {
+      // Si vino solo el PDF, se leen los datos de ahí antes de preguntar al SAT.
+      if ((!f.uuid || f.monto_factura == null) && f.storage_path) {
+        try {
+          const { data: blob, error: eDl } = await sb.storage
+            .from("proceso_certificacion_bt").download(f.storage_path);
+          if (eDl) throw eDl;
+          const leido = await leerPdf(Buffer.from(await blob.arrayBuffer()));
+          if (leido?.uuid) {
+            const dif = leido.total != null
+              ? Number((leido.total - Number(f.monto_prefactura || 0)).toFixed(2)) : null;
+            await sb.from("facturas_tercero").update({
+              uuid: leido.uuid, rfc_emisor: leido.rfc_emisor,
+              rfc_receptor: leido.rfc_receptor, monto_factura: leido.total,
+              fecha_emision: leido.fecha_emision, diferencia: dif,
+              validaciones: { leido_de: "pdf", problemas: [] },
+            }).eq("id", f.id);
+            Object.assign(f, {
+              uuid: leido.uuid, rfc_emisor: leido.rfc_emisor,
+              rfc_receptor: leido.rfc_receptor, monto_factura: leido.total,
+            });
+          }
+        } catch (e) {
+          console.error("No se pudo leer el PDF de", f.id, e);
+        }
+      }
+
+      if (!f.uuid || !f.rfc_emisor || !f.rfc_receptor || f.monto_factura == null) {
         resultados.push({ id: f.id, uuid: f.uuid, estado: null,
-          nota: "Faltan datos del XML para consultar al SAT" });
+          nota: "No se pudieron leer los datos del comprobante. Si es un escaneo, hay que subir el XML." });
         continue;
       }
       try {
