@@ -12,7 +12,8 @@
     "react-dom": "^18.2.0",
     "@supabase/supabase-js": "^2.39.0",
     "exceljs": "^4.4.0",
-    "leaflet": "^1.9.4"
+    "leaflet": "^1.9.4",
+    "pdf-parse": "^1.1.1"
   },
   "devDependencies": {
     "vite": "^5.0.0",
