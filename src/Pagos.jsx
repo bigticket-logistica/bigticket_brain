@@ -9855,7 +9855,7 @@ function ConfigPorPagar({ usuario }) {
       <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: 12, marginBottom: 14, display: "flex", alignItems: "center", gap: 10 }}>
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: 13, fontWeight: 700, color: "#1a3a6b" }}>Tarifa base por zona</div>
-          <div style={{ fontSize: 11, color: "#94a3b8" }}>Afecta a todos los SC de la zona que no tengan tarifa propia</div>
+          <div style={{ fontSize: 11, color: "#94a3b8" }}>Se aplica a los SC que todavía no tienen tarifas cargadas</div>
         </div>
         <button onClick={() => setVerZonas(v => !v)}
           style={{ padding: "6px 12px", background: "#eff6ff", color: "#1d4ed8", border: "1px solid #bfdbfe", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
@@ -9914,7 +9914,6 @@ function TarifasPorSC({ usuario, onCambio }) {
   const [cargas, setCargas] = useState([]);
   const [uso, setUso] = useState({});
   const [extraCats, setExtraCats] = useState([]);   // categorias agregadas en esta sesion
-  const [nuevaCat, setNuevaCat] = useState("");
   const [scSel, setScSel] = useState("");           // SC que se muestra en grande
   const [msg, setMsg] = useState(null);
 
@@ -9930,7 +9929,6 @@ function TarifasPorSC({ usuario, onCambio }) {
   const [editTipo, setEditTipo] = useState("SPOT");
   const [cel, setCel] = useState({});
   const [guardando, setGuardando] = useState(false);
-  const [nuevoSC, setNuevoSC] = useState("");
 
   // Importacion
   const [imp, setImp] = useState(null);
@@ -9988,13 +9986,6 @@ function TarifasPorSC({ usuario, onCambio }) {
 
   // Las categorias salen de lo que ya existe en la matriz, mas las agregadas aqui.
   const CATS = Array.from(new Set([...CATS_BASE, ...base.map(f => f.tipo_vehiculo), ...exc.map(f => f.tipo_vehiculo), ...extraCats].filter(Boolean)));
-  const agregarCategoria = () => {
-    const v = nuevaCat.trim().toUpperCase();
-    if (!v) return;
-    if (CATS.includes(v)) { setMsg({ ok: false, txt: `La categoría "${v}" ya existe.` }); return; }
-    setExtraCats(p => [...p, v]); setNuevaCat("");
-    setMsg({ ok: true, txt: `Categoría "${v}" agregada. Se guarda al poner una tarifa y presionar Guardar.` });
-  };
 
   const scsConExcepcion = Array.from(new Set(exc.map(e => e.site)));
   const todosSC = Object.keys(scZonas).sort();
@@ -10187,7 +10178,7 @@ function TarifasPorSC({ usuario, onCambio }) {
       <div style={{ ...cardS, display: "flex", alignItems: "center", gap: 10 }}>
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: 14, fontWeight: 700, color: "#1a3a6b" }}>Tarifas por service center</div>
-          <div style={{ fontSize: 11, color: "#94a3b8" }}>Una tarjeta por SC · naranja = tarifa propia del SC · gris = tarifa de su zona</div>
+          <div style={{ fontSize: 11, color: "#94a3b8" }}>Elige un SC y edita sus tarifas, o cárgalas en bloque desde el Excel</div>
         </div>
         <button onClick={() => setVista(vista === "historial" ? "tarjetas" : "historial")} style={{ ...btnS, padding: "7px 14px", fontSize: 12 }}>
           {vista === "historial" ? "Volver a tarjetas" : "Historial de cargas"}
@@ -10304,14 +10295,12 @@ function TarifasPorSC({ usuario, onCambio }) {
         </div>
       ) : (
         <div>
-          <div style={{ ...cardS, display: "grid", gridTemplateColumns: "230px 135px 125px auto 230px", gap: 12, alignItems: "end" }}>
+          <div style={{ ...cardS, display: "grid", gridTemplateColumns: "230px 135px 125px auto", gap: 12, alignItems: "end" }}>
             <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
               <label style={{ fontSize: 10, color: "#64748b", fontWeight: 700 }}>SERVICE CENTER</label>
               <select value={scSel} onChange={e => { setScSel(e.target.value); setEditSC(null); }}
                 style={{ padding: "7px 9px", border: "1px solid #cbd5e1", borderRadius: 6, fontSize: 12, width: "100%", boxSizing: "border-box" }}>
-                {scsFiltrados.map(s => (
-                  <option key={s} value={s}>{s} — zona {scZonas[s]}{uso[s] ? ` · ${uso[s]} rutas` : ""}</option>
-                ))}
+                {scsFiltrados.map(s => <option key={s} value={s}>{s}</option>)}
               </select>
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
@@ -10332,16 +10321,8 @@ function TarifasPorSC({ usuario, onCambio }) {
             <label style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 12, color: "#475569", paddingBottom: 7, whiteSpace: "nowrap" }}>
               <input type="checkbox" checked={fSoloOp} onChange={e => setFSoloOp(e.target.checked)} style={{ width: 15, height: 15 }} />
               Solo SC con operación
-              <span style={{ fontSize: 11, color: "#94a3b8", marginLeft: 6 }}>{scsEnOperacion} activos · {scsConExcepcion.length} con tarifa propia</span>
+              <span style={{ fontSize: 11, color: "#94a3b8", marginLeft: 6 }}>{scsFiltrados.length} SC</span>
             </label>
-            <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-              <label style={{ fontSize: 10, color: "#64748b", fontWeight: 700 }}>DAR TARIFA PROPIA</label>
-              <select value={nuevoSC} onChange={e => { const v = e.target.value; setNuevoSC(""); if (v) { setFSoloOp(false); setScSel(v); abrirEdicion(v, fTipo); } }}
-                style={{ padding: "7px 9px", border: "1px solid #cbd5e1", borderRadius: 6, fontSize: 12, width: "100%", boxSizing: "border-box" }}>
-                <option value="">＋ Elegir un SC...</option>
-                {todosSC.filter(s => !scsConExcepcion.includes(s)).map(s => <option key={s} value={s}>{s} — zona {scZonas[s]}</option>)}
-              </select>
-            </div>
           </div>
 
           {!scSel && (
@@ -10362,7 +10343,6 @@ function TarifasPorSC({ usuario, onCambio }) {
                 <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "12px 16px", background: propia ? "#fffbeb" : "#f8fafc", borderBottom: "1px solid #eef0f3", flexWrap: "wrap" }}>
                   <div style={{ fontSize: 16, fontWeight: 700, color: "#1a3a6b" }}>{site}</div>
                   <span style={{ fontSize: 10, fontWeight: 700, padding: "3px 8px", borderRadius: 4, background: "#e2e8f0", color: "#475569" }}>zona {zona}</span>
-                  {propia && <span style={{ fontSize: 10, fontWeight: 700, padding: "3px 8px", borderRadius: 4, background: "#fef3c7", color: "#92400e" }}>tarifa propia</span>}
                   {esTop && <span style={{ fontSize: 10, fontWeight: 700, padding: "3px 8px", borderRadius: 4, background: "#dbeafe", color: "#1e40af" }}>más operación</span>}
                   <span style={{ fontSize: 11, color: "#64748b" }}>
                     {uso[site] ? `${uso[site]} rutas / 30 d` : "sin operación en 30 días"}{desde ? ` · vigente desde ${String(desde).slice(0, 10)}` : ""}
@@ -10373,7 +10353,7 @@ function TarifasPorSC({ usuario, onCambio }) {
                     <button onClick={() => { setFTipo("SDD"); if (editando) abrirEdicion(site, "SDD"); }}
                       style={{ ...btnS, background: fTipo === "SDD" ? "#1a3a6b" : "#eff6ff", color: fTipo === "SDD" ? "#fff" : "#1d4ed8" }}>SDD</button>
                     {!editando && <button onClick={() => abrirEdicion(site, fTipo)} style={btnS}>Editar</button>}
-                    {propia && !editando && <button onClick={() => quitarExcepcion(site)} style={{ ...btnS, background: "#fff", color: "#b91c1c", borderColor: "#fecaca" }}>Quitar tarifa propia</button>}
+                    {propia && !editando && <button onClick={() => quitarExcepcion(site)} style={{ ...btnS, background: "#fff", color: "#b91c1c", borderColor: "#fecaca" }}>Borrar tarifas de {site}</button>}
                   </div>
                 </div>
                 <div style={{ padding: "14px 16px" }}>
@@ -10406,15 +10386,11 @@ function TarifasPorSC({ usuario, onCambio }) {
                     </tbody>
                   </table>
 
-                  <div style={{ display: "flex", alignItems: "center", gap: 14, marginTop: 12, fontSize: 11, color: "#64748b", flexWrap: "wrap" }}>
-                    <span style={{ display: "flex", alignItems: "center", gap: 6 }}><span style={{ width: 12, height: 12, background: "#fffbeb", border: "1px solid #fcd9a6", borderRadius: 3 }}></span>tarifa propia de {site}</span>
-                    <span style={{ display: "flex", alignItems: "center", gap: 6 }}><span style={{ width: 12, height: 12, background: "#fff", border: "1px solid #e4e7ec", borderRadius: 3 }}></span>heredada de la zona {zona}</span>
-                    <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
-                      <input type="text" value={nuevaCat} onChange={e => setNuevaCat(e.target.value)} placeholder="Nueva categoría de vehículo"
-                        style={{ padding: "5px 8px", border: "1px solid #cbd5e1", borderRadius: 6, fontSize: 11, width: 190 }} />
-                      <button onClick={agregarCategoria} style={btnS}>＋ Categoría</button>
+                  {!propia && (
+                    <div style={{ marginTop: 10, fontSize: 11, color: "#94a3b8" }}>
+                      {site} todavía no tiene tarifas cargadas: por ahora paga las de la zona {zona}. Al editar o importar, pasan a ser suyas.
                     </div>
-                  </div>
+                  )}
 
                   {editando && (
                     <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 12, paddingTop: 12, borderTop: "1px solid #f1f5f9" }}>
@@ -10442,8 +10418,7 @@ function TarifasPorSC({ usuario, onCambio }) {
                       <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
                         <div style={{ fontSize: 13, fontWeight: 700, color: "#1a3a6b" }}>{site}</div>
                         <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 4, background: "#e2e8f0", color: "#475569" }}>{scZonas[site]}</span>
-                        {propia && <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 4, background: "#fef3c7", color: "#92400e" }}>propia</span>}
-                        <span style={{ marginLeft: "auto", fontSize: 10, color: "#94a3b8" }}>{uso[site] ? `${uso[site]} rutas` : "paga por zona"}</span>
+                        <span style={{ marginLeft: "auto", fontSize: 10, color: "#94a3b8" }}>{uso[site] ? `${uso[site]} rutas` : ""}</span>
                       </div>
                       <div style={{ fontSize: 11, color: "#64748b" }}>
                         {CATS[0]} <strong style={{ color: c1.propia ? "#b45309" : "#475569" }}>{mxn(c1.monto)}</strong>
