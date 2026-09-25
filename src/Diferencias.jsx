@@ -38,6 +38,55 @@ const venceEn = (iso) => {
 
 const money = (n) => "$" + Number(n || 0).toLocaleString("es-MX", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const fechaHora = (s) => s ? new Date(s).toLocaleString("es-MX", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : "—";
+// ── Qué se reclama, en palabras ─────────────────────────────────────────────
+// El tipo de línea solo ("Cobro", "Ruta") no alcanza: el analista y el
+// supervisor tienen que leer de una vez si el tercero pide que le paguen algo
+// o que le devuelvan un descuento, y qué pasa con la plata si se acepta.
+const RECLAMO = {
+  ruta:     { t: "Reclama el PAGO de una ruta", d: "Dice que la ruta se le pagó mal. Si se acepta, se le paga la diferencia.", bg: "#dbeafe", fg: "#1e40af", verbo: "pagan" },
+  faltante: { t: "Reclama una RUTA QUE NO SE LE PAGÓ", d: "Dice que hizo esta ruta y no le aparece. Si se acepta, se le paga.", bg: "#dbeafe", fg: "#1e40af", verbo: "pagan" },
+  cobro:    { t: "Reclama un DESCUENTO que se le aplicó", d: "No está de acuerdo con que se le cobre esto. Si se acepta, se le devuelve.", bg: "#fee2e2", fg: "#991b1b", verbo: "devuelven" },
+};
+
+// Los cobros viven en tres tablas y el id solo no dice en cuál. Si la línea
+// trae el origen se usa; las anteriores a ese campo eran todas PNR.
+const origenCobro = (o) => {
+  const x = String(o || "").toLowerCase();
+  if (x.includes("show")) return "noshow";
+  if (x.includes("merma") || x.includes("robo") || x.includes("extrav") || x.includes("perdid")) return "merma";
+  return "pnr";
+};
+const TABLA_COBRO = { pnr: "cobros_pnr_mx", noshow: "cobros_noshow_mx", merma: "cobros_merma_mx" };
+
+async function cargarCobros(lineas) {
+  const porTabla = {};
+  for (const l of lineas.filter(l => l.tipo === "cobro" && l.cobro_id != null)) {
+    const t = TABLA_COBRO[origenCobro(l.cobro_origen)];
+    (porTabla[t] = porTabla[t] || []).push(l.cobro_id);
+  }
+  const out = {};
+  await Promise.all(Object.entries(porTabla).map(async ([tabla, ids]) => {
+    const { data } = await sb.from(tabla).select("*").in("id", ids);
+    for (const r of (data || [])) out[`${tabla}:${r.id}`] = { ...r, _tabla: tabla };
+  }));
+  return out;
+}
+const cobroDe = (cobros, l) => cobros[`${TABLA_COBRO[origenCobro(l.cobro_origen)]}:${l.cobro_id}`] || null;
+
+// Numeración del Brain: ISO + 1, con la fecha de México.
+function semanaBrainDe(iso) {
+  const d = new Date(String(iso).length <= 10 ? iso + "T12:00:00" : iso);
+  const x = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  const dn = x.getUTCDay() || 7;
+  x.setUTCDate(x.getUTCDate() + 4 - dn);
+  const ini = new Date(Date.UTC(x.getUTCFullYear(), 0, 1));
+  return Math.ceil(((x - ini) / 86400000 + 1) / 7) + 1;
+}
+const hoyMx = () => new Date(Date.now() - 6 * 3600 * 1000).toISOString().slice(0, 10);
+
+// Semana en que el cobro entró a la prefactura del tercero.
+const semanaCobro = (c) => c?.semana || c?.aplicado_semana || (c?.facturado_en ? String(semanaBrainDe(c.facturado_en)) : null);
+
 const dias = (s) => s ? Math.floor((Date.now() - new Date(s).getTime()) / 86400000) : 0;
 
 export default function Diferencias({ usuario }) {
@@ -86,7 +135,8 @@ export default function Diferencias({ usuario }) {
       const { data } = await sb.from("padron_sc_supervisor").select("sc, supervisor, email").in("sc", scs);
       for (const r of (data || [])) supervisores[r.sc] = r;
     }
-    setSel({ ...caso, lineas, eventos: ev.data || [], adjuntos: adj.data || [], detalleRuta, supervisores });
+    const cobros = await cargarCobros(lineas);
+    setSel({ ...caso, lineas, eventos: ev.data || [], adjuntos: adj.data || [], detalleRuta, supervisores, cobros });
   };
 
   const pendientes = casos.filter(c => ["abierta", "en_revision"].includes(c.estado)).length;
@@ -147,7 +197,7 @@ export default function Diferencias({ usuario }) {
                 <span style={{ color: "#64748b" }}>
                   {(c.diferencias_lineas || []).length} línea(s)
                   {" · "}
-                  {[...new Set((c.diferencias_lineas || []).map(l => TIPO_LINEA[l.tipo]))].join(", ")}
+                  {[...new Set((c.diferencias_lineas || []).map(l => ({ ruta: "reclama un pago", faltante: "ruta que falta", cobro: "reclama un descuento" })[l.tipo] || l.tipo))].join(", ")}
                 </span>
                 <span style={{ textAlign: "right", fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>{money(c.monto_reclamado)}</span>
                 <span>
@@ -174,7 +224,7 @@ export default function Diferencias({ usuario }) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 function DetalleCaso({ caso, quien, onCerrar, onCambio }) {
-  const { detalleRuta = {}, supervisores = {} } = caso;
+  const { detalleRuta = {}, supervisores = {}, cobros = {} } = caso;
   const [lineas, setLineas] = useState(caso.lineas);
   const [eventos, setEventos] = useState(caso.eventos);
   const [nota, setNota] = useState("");
@@ -190,7 +240,10 @@ function DetalleCaso({ caso, quien, onCerrar, onCambio }) {
   const resolverLinea = async (l, estado) => {
     let monto = null, resolucion = "";
     if (estado === "aceptada") {
-      const m = prompt(`Aceptar la línea (${TIPO_LINEA[l.tipo]} ${l.id_ruta || l.placa}).\n\nMonto a reconocer — entra como ajuste en la prefactura vigente:`, l.monto_ref || "");
+      const pregunta = l.tipo === "cobro"
+        ? `Aceptar el reclamo del descuento (${l.concepto || "cobro " + l.cobro_id}).\n\nMonto a DEVOLVER al tercero — entra como abono en la prefactura de la semana ${semanaBrainDe(hoyMx())}:`
+        : `Aceptar el reclamo de pago (${TIPO_LINEA[l.tipo]} ${l.id_ruta || l.placa}).\n\nMonto a PAGAR al tercero — entra como abono en la prefactura de la semana ${semanaBrainDe(hoyMx())}:`;
+      const m = prompt(pregunta, l.monto_ref || "");
       if (m === null) return;
       monto = Number(String(m).replace(/[^\d.\-]/g, ""));
       if (!isFinite(monto)) { alert("Monto inválido."); return; }
@@ -208,7 +261,7 @@ function DetalleCaso({ caso, quien, onCerrar, onCambio }) {
     // la fecha de hoy — entra en la semana donde efectivamente se paga, y la
     // semana que originó el reclamo (ya enviada) no se mueve.
     if (estado === "aceptada" && monto) {
-      const hoy = new Date().toISOString().slice(0, 10);
+      const hoy = hoyMx();   // en UTC, después de las 18 h de México ya sería mañana
       const sc = (l.id_ruta && detalleRuta[l.id_ruta]?.service_center_id) || caso.service_center;
       if (!sc) {
         alert("No se pudo determinar el centro de servicio del ajuste.\n\nLa línea quedó aceptada pero SIN ajuste: créalo a mano en la prefactura.");
@@ -216,7 +269,9 @@ function DetalleCaso({ caso, quien, onCerrar, onCambio }) {
         const { error: eAj } = await sb.from("ajustes_pago_mx").insert({
           tercero_id: caso.tercero_id, service_center: sc,
           fecha: hoy, fecha_origen: l.fecha, monto,
-          concepto: `Diferencia #${caso.folio} · ${TIPO_LINEA[l.tipo]}${l.id_ruta ? ` ${l.id_ruta}` : ""}${l.fecha ? ` del ${l.fecha}` : ""}`,
+          concepto: l.tipo === "cobro"
+            ? `Devolución diferencia #${caso.folio} · ${l.concepto || "cobro " + l.cobro_id}${l.fecha ? ` · ruta del ${l.fecha}` : ""}`
+            : `Diferencia #${caso.folio} · ${TIPO_LINEA[l.tipo]}${l.id_ruta ? ` ${l.id_ruta}` : ""}${l.fecha ? ` del ${l.fecha}` : ""}`,
           diferencia_id: caso.id, linea_id: l.id, creado_por: quien,
         });
         if (eAj) alert("La línea quedó aceptada, pero NO se generó el ajuste:\n\n" + eAj.message + "\n\nCréalo a mano en la prefactura.");
@@ -237,7 +292,9 @@ function DetalleCaso({ caso, quien, onCerrar, onCambio }) {
     const acept = lineas.filter(l => l.estado === "aceptada").length;
     const rech = lineas.filter(l => l.estado === "rechazada").length;
     const estado = acept === 0 ? "rechazada" : rech === 0 ? "aceptada" : "parcial";
-    const semana = prompt(`Cerrar la diferencia #${caso.folio} como ${estado.toUpperCase()}.\n\n${acept} aceptada(s) · ${rech} rechazada(s) · ${money(reconocido)} reconocido\n\n¿En qué semana de prefactura entra el ajuste? (vacío si no aplica)`, "");
+    // Los ajustes se crean con la fecha de hoy, así que entran en la semana en
+    // curso: se propone esa y el analista solo la confirma.
+    const semana = prompt(`Cerrar la diferencia #${caso.folio} como ${estado.toUpperCase()}.\n\n${acept} aceptada(s) · ${rech} rechazada(s) · ${money(reconocido)} reconocido\n\n¿En qué semana de prefactura entra el ajuste? (vacío si no aplica)`, acept > 0 ? String(semanaBrainDe(hoyMx())) : "");
     if (semana === null) return;
     setTrabajando(true);
     const { error } = await sb.from("diferencias").update({
@@ -311,6 +368,15 @@ function DetalleCaso({ caso, quien, onCerrar, onCambio }) {
             const resuelta = l.estado !== "pendiente";
             return (
               <div key={l.id} style={{ background: "#fff", border: "1px solid " + (resuelta ? "#e4e7ec" : "#fcd34d"), borderRadius: 8, padding: 12, marginBottom: 8 }}>
+                {(() => {
+                  const r = RECLAMO[l.tipo] || RECLAMO.ruta;
+                  return (
+                    <div style={{ background: r.bg, borderRadius: 6, padding: "8px 10px", marginBottom: 8 }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: r.fg }}>{r.t}{l.monto_ref != null ? ` · ${money(l.monto_ref)}` : ""}</div>
+                      <div style={{ fontSize: 11.5, color: "#334155", marginTop: 2 }}>{r.d}</div>
+                    </div>
+                  );
+                })()}
                 <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
                   <div>
                     <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 3, background: "#e2e8f0", color: "#475569" }}>
@@ -318,7 +384,7 @@ function DetalleCaso({ caso, quien, onCerrar, onCambio }) {
                     </span>
                     <span style={{ fontSize: 13, fontWeight: 600, color: "#334155", marginLeft: 8 }}>{l.placa || "—"}</span>
                     <span style={{ fontSize: 12, color: "#94a3b8", marginLeft: 8 }}>
-                      {l.id_ruta ? `Ruta ${l.id_ruta}` : l.cobro_id ? `Cobro ${l.cobro_id}` : ""} · {l.fecha || "sin fecha"}
+                      {l.id_ruta ? `Ruta ${l.id_ruta}` : l.cobro_id ? `Cobro ${l.cobro_id}` : ""} · {l.tipo === "cobro" ? "ruta del " : ""}{l.fecha || "sin fecha"}
                     </span>
                   </div>
                   <span style={{ fontWeight: 700, fontVariantNumeric: "tabular-nums", fontSize: 13 }}>
@@ -362,6 +428,10 @@ function DetalleCaso({ caso, quien, onCerrar, onCambio }) {
                     </div>
                   );
                 })()}
+
+                {l.tipo === "cobro" && <DetalleCobro l={l} c={cobroDe(cobros, l)} />}
+
+                {!resuelta && <SiSeAcepta l={l} c={l.tipo === "cobro" ? cobroDe(cobros, l) : null} />}
 
                 <div style={{ marginTop: 8, background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 6, padding: "8px 10px", fontSize: 12.5, color: "#334155" }}>
                   <b style={{ color: "#92400e" }}>Dice el tercero:</b> {l.comentario}
@@ -445,6 +515,71 @@ function DetalleCaso({ caso, quien, onCerrar, onCambio }) {
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Qué es el descuento que reclama: sale de la tabla de cobros, no del texto
+// del tercero.
+function DetalleCobro({ l, c }) {
+  const caja = { marginTop: 8, background: "#f0f9ff", border: "1px solid #bae6fd", borderRadius: 6, padding: "8px 10px", fontSize: 11.5 };
+  if (!c) return (
+    <div style={caja}>
+      <div style={{ fontWeight: 700, color: "#075985", marginBottom: 4 }}>Lo que dice el sistema</div>
+      <div style={{ color: "#b45309" }}>No se encontró el cobro {l.cobro_id}. Puede haberse quitado de la prefactura después del reclamo.</div>
+    </div>
+  );
+  const esPnr = c._tabla === "cobros_pnr_mx";
+  const esNoShow = c._tabla === "cobros_noshow_mx";
+  const concepto = esPnr ? (c.concepto || "PNR") : esNoShow ? "No show" : (c.motivo || "Paquete perdido");
+  const sem = semanaCobro(c);
+  return (
+    <div style={caja}>
+      <div style={{ fontWeight: 700, color: "#075985", marginBottom: 4 }}>Lo que dice el sistema</div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: "4px 14px", color: "#334155" }}>
+        <span><b>Qué se cobró</b> {concepto}</span>
+        {esPnr && <span><b>PNR</b> {c.pnr_id}</span>}
+        {(c.shipment_id || c.guia) && <span><b>Guía</b> {c.shipment_id || c.guia}</span>}
+        <span><b>{esNoShow ? "Día" : "Ruta del"}</b> {c.fecha_ruta || c.fecha_hecho || c.fecha || "—"}</span>
+        <span><b>Placa</b> {c.placa || "—"}</span>
+        {c.driver_name && <span><b>Chofer</b> {c.driver_name}</span>}
+        <span><b>SC</b> {c.service_center || "—"}</span>
+        <span><b>Monto</b> {money(c.monto)}</span>
+        {c.facturado_en && <span><b>Pasó a facturación</b> {c.facturado_en}</span>}
+        <span><b>Cobrado en</b> {sem ? `semana ${sem}` : "—"}</span>
+        {c.asignado_por && <span><b>Lo cargó</b> {c.asignado_por}</span>}
+        {c.justificacion && <span><b>Justificación</b> {c.justificacion}</span>}
+      </div>
+      {esPnr && /factur/i.test(c.concepto || "") && (
+        <div style={{ marginTop: 6, paddingTop: 6, borderTop: "1px solid #bae6fd", color: "#b45309" }}>
+          <b>PNR facturado por MELI:</b> por regla no tiene reverso. Si lo devuelves al tercero, la plata la pone
+          Bigticket, salvo que también se le reclame a MELI.
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Qué pasa con la plata si el analista acepta, antes de que apriete el botón.
+function SiSeAcepta({ l, c }) {
+  const hoy = hoyMx();
+  const semHoy = String(semanaBrainDe(hoy));
+  const r = RECLAMO[l.tipo] || RECLAMO.ruta;
+  const semCobro = c ? semanaCobro(c) : null;
+  const semOrigen = l.fecha ? String(semanaBrainDe(l.fecha)) : null;
+  let extra = "";
+  if (l.tipo === "cobro" && semCobro) {
+    extra = semCobro === semHoy
+      ? ` El cobro también está en la semana ${semCobro}: en esa prefactura el descuento y la devolución se anulan.`
+      : ` El cobro se aplicó en la semana ${semCobro}, que no se toca: la devolución llega en la ${semHoy}.`;
+  } else if (semOrigen && semOrigen !== semHoy) {
+    extra = ` La semana ${semOrigen} de la ruta no se toca.`;
+  }
+  return (
+    <div style={{ marginTop: 8, background: "#f8fafc", border: "1px dashed #cbd5e1", borderRadius: 6, padding: "8px 10px", fontSize: 11.5, color: "#475569" }}>
+      <b style={{ color: "#1a3a6b" }}>Si lo aceptas:</b> se le {r.verbo} {l.monto_ref != null ? money(l.monto_ref) : "el monto que reconozcas"} como
+      abono en la prefactura de la semana {semHoy} ({l.tipo === "cobro" && c?.service_center ? c.service_center : "su centro"}).{extra}
     </div>
   );
 }
