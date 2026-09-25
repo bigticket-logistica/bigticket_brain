@@ -9711,6 +9711,7 @@ function ConfiguracionPagos({ usuario }) {
 }
 
 function ConfigPorPagar({ usuario }) {
+  const [verZonas, setVerZonas] = useState(false); // lo principal son las tarjetas por SC; las zonas van plegadas
   const [data, setData] = useState([]);
   const [edits, setEdits] = useState({});
   const [orig, setOrig] = useState({});
@@ -9849,7 +9850,20 @@ function ConfigPorPagar({ usuario }) {
       {msg && (
         <div style={{ background: msg.ok ? "#ecfdf5" : "#fef2f2", border: `1px solid ${msg.ok ? "#a7f3d0" : "#fca5a5"}`, color: msg.ok ? "#065f46" : "#991b1b", borderRadius: 6, padding: 10, marginBottom: 14, fontSize: 12 }}>{msg.txt}</div>
       )}
-      {zonas.map(z => (
+      <TarifasPorSC usuario={usuario} onCambio={cargar} />
+
+      <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: 12, marginBottom: 14, display: "flex", alignItems: "center", gap: 10 }}>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#1a3a6b" }}>Tarifa base por zona</div>
+          <div style={{ fontSize: 11, color: "#94a3b8" }}>Afecta a todos los SC de la zona que no tengan tarifa propia</div>
+        </div>
+        <button onClick={() => setVerZonas(v => !v)}
+          style={{ padding: "6px 12px", background: "#eff6ff", color: "#1d4ed8", border: "1px solid #bfdbfe", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+          {verZonas ? "Ocultar zonas" : "Editar tarifa por zona"}
+        </button>
+      </div>
+
+      {verZonas && zonas.map(z => (
         <div key={z} style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: 14, marginBottom: 14 }}>
           <div style={{ fontSize: 13, fontWeight: 700, color: "#1a3a6b", marginBottom: 10 }}>Zona {z}</div>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
@@ -9875,7 +9889,6 @@ function ConfigPorPagar({ usuario }) {
           </table>
         </div>
       ))}
-      <TarifasPorSC usuario={usuario} onCambio={cargar} />
     </div>
   );
 }
@@ -9899,13 +9912,14 @@ function TarifasPorSC({ usuario, onCambio }) {
   const [base, setBase] = useState([]);
   const [exc, setExc] = useState([]);
   const [cargas, setCargas] = useState([]);
+  const [uso, setUso] = useState({});
   const [msg, setMsg] = useState(null);
 
   // Filtros
   const [fTexto, setFTexto] = useState("");
   const [fZona, setFZona] = useState("");
   const [fTipo, setFTipo] = useState("SPOT");
-  const [fSoloExc, setFSoloExc] = useState(true);
+  const [fSoloOp, setFSoloOp] = useState(true);
   const [tope, setTope] = useState(24);
 
   // Edicion
@@ -9927,11 +9941,16 @@ function TarifasPorSC({ usuario, onCambio }) {
   const cargarTodo = async () => {
     setCargando(true);
     try {
-      const [zRes, mRes, cRes] = await Promise.all([
+      const desde30 = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
+      const [zRes, mRes, cRes, uRes] = await Promise.all([
         sb.from("sc_zonas_mx").select("service_center_id, zona"),
         sb.from("matriz_precios").select("*"),
         sb.from("matriz_precios_cargas").select("*").order("created_at", { ascending: false }).limit(20),
+        sb.from("maestro_jornada_mx").select("service_center_id").gte("fecha", desde30).limit(20000),
       ]);
+      const u = {};
+      for (const r of (uRes.data || [])) { const k = String(r.service_center_id || "").toUpperCase(); if (k) u[k] = (u[k] || 0) + 1; }
+      setUso(u);
       const z = {};
       for (const r of (zRes.data || [])) z[String(r.service_center_id).toUpperCase()] = r.zona;
       setScZonas(z);
@@ -9969,11 +9988,12 @@ function TarifasPorSC({ usuario, onCambio }) {
   const zonasDisp = Array.from(new Set(Object.values(scZonas))).sort();
 
   const scsFiltrados = todosSC.filter(s => {
-    if (fSoloExc && !scsConExcepcion.includes(s)) return false;
+    if (fSoloOp && !(uso[s] > 0)) return false;
     if (fZona && scZonas[s] !== fZona) return false;
     if (fTexto && !s.toLowerCase().includes(fTexto.trim().toLowerCase())) return false;
     return true;
-  });
+  }).sort((a, b) => (uso[b] || 0) - (uso[a] || 0) || a.localeCompare(b));
+  const scsEnOperacion = todosSC.filter(s => uso[s] > 0).length;
   const scsMostrados = scsFiltrados.slice(0, tope);
 
   const abrirEdicion = (site, tipo) => {
@@ -10116,7 +10136,6 @@ function TarifasPorSC({ usuario, onCambio }) {
       if (eLog) throw eLog;
       setMsg({ ok: true, txt: `Tarifario aplicado: ${n} tarifas vigentes desde ${vig}.` });
       setImp(null); if (fileRef.current) fileRef.current.value = "";
-      setFSoloExc(true);
       await cargarTodo(); if (onCambio) onCambio();
     } catch (e) { setMsg({ ok: false, txt: "Error al aplicar: " + (e.message || e) }); }
     setAplicando(false);
@@ -10269,23 +10288,23 @@ function TarifasPorSC({ usuario, onCambio }) {
         </div>
       ) : (
         <div>
-          <div style={{ ...cardS, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <div style={{ ...cardS, display: "grid", gridTemplateColumns: "200px 145px 115px auto 240px", gap: 10, alignItems: "center" }}>
             <input type="text" value={fTexto} onChange={e => { setFTexto(e.target.value); setTope(24); }} placeholder="Buscar SC..."
-              style={{ padding: "6px 10px", border: "1px solid #cbd5e1", borderRadius: 6, fontSize: 12, minWidth: 170 }} />
-            <select value={fZona} onChange={e => { setFZona(e.target.value); setTope(24); }} style={{ padding: "6px 8px", border: "1px solid #cbd5e1", borderRadius: 6, fontSize: 12 }}>
+              style={{ padding: "6px 10px", border: "1px solid #cbd5e1", borderRadius: 6, fontSize: 12, width: "100%", boxSizing: "border-box" }} />
+            <select value={fZona} onChange={e => { setFZona(e.target.value); setTope(24); }} style={{ padding: "6px 8px", border: "1px solid #cbd5e1", borderRadius: 6, fontSize: 12, width: "100%", boxSizing: "border-box" }}>
               <option value="">Todas las zonas</option>
               {zonasDisp.map(z => <option key={z} value={z}>Zona {z}</option>)}
             </select>
-            <select value={fTipo} onChange={e => setFTipo(e.target.value)} style={{ padding: "6px 8px", border: "1px solid #cbd5e1", borderRadius: 6, fontSize: 12 }}>
+            <select value={fTipo} onChange={e => setFTipo(e.target.value)} style={{ padding: "6px 8px", border: "1px solid #cbd5e1", borderRadius: 6, fontSize: 12, width: "100%", boxSizing: "border-box" }}>
               <option value="SPOT">SPOT</option><option value="SDD">SDD</option>
             </select>
-            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#475569" }}>
-              <input type="checkbox" checked={fSoloExc} onChange={e => { setFSoloExc(e.target.checked); setTope(24); }} />
-              Solo con tarifa propia
+            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#475569", whiteSpace: "nowrap" }}>
+              <input type="checkbox" checked={fSoloOp} onChange={e => { setFSoloOp(e.target.checked); setTope(24); }} style={{ width: 14, height: 14 }} />
+              Solo SC con operación
+              <span style={{ fontSize: 11, color: "#94a3b8", marginLeft: 8 }}>{scsFiltrados.length} de {scsEnOperacion} activos · {scsConExcepcion.length} con tarifa propia</span>
             </label>
-            <span style={{ fontSize: 11, color: "#94a3b8" }}>{scsFiltrados.length} SC · {scsConExcepcion.length} con tarifa propia</span>
-            <select value={nuevoSC} onChange={e => { const v = e.target.value; setNuevoSC(""); if (v) { setFSoloExc(false); setFTexto(v); abrirEdicion(v, fTipo); } }}
-              style={{ marginLeft: "auto", padding: "6px 8px", border: "1px solid #cbd5e1", borderRadius: 6, fontSize: 12 }}>
+            <select value={nuevoSC} onChange={e => { const v = e.target.value; setNuevoSC(""); if (v) { setFSoloOp(false); setFTexto(v); abrirEdicion(v, fTipo); } }}
+              style={{ padding: "6px 8px", border: "1px solid #cbd5e1", borderRadius: 6, fontSize: 12, width: "100%", boxSizing: "border-box" }}>
               <option value="">＋ Dar tarifa propia a un SC...</option>
               {todosSC.filter(s => !scsConExcepcion.includes(s)).map(s => <option key={s} value={s}>{s} — zona {scZonas[s]}</option>)}
             </select>
@@ -10293,7 +10312,7 @@ function TarifasPorSC({ usuario, onCambio }) {
 
           {!scsFiltrados.length && (
             <div style={{ ...cardS, textAlign: "center", color: "#94a3b8", fontSize: 12 }}>
-              No hay SC que cumplan el filtro. Desmarca "Solo con tarifa propia" para ver todos.
+              No hay SC que cumplan el filtro. Desmarca "Solo SC con operación" para verlos todos.
             </div>
           )}
 
@@ -10309,6 +10328,7 @@ function TarifasPorSC({ usuario, onCambio }) {
                     <div style={{ fontSize: 13, fontWeight: 700, color: "#1a3a6b" }}>{site}</div>
                     <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 4, background: "#e2e8f0", color: "#475569" }}>zona {zona}</span>
                     {propia && <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 4, background: "#fef3c7", color: "#92400e" }}>tarifa propia</span>}
+                    {uso[site] > 0 && <span style={{ fontSize: 10, color: "#64748b" }}>{uso[site]} rutas / 30d</span>}
                     {desde && <span style={{ fontSize: 10, color: "#94a3b8" }}>desde {String(desde).slice(0, 10)}</span>}
                     <div style={{ marginLeft: "auto", display: "flex", gap: 5 }}>
                       {!editando && <button onClick={() => abrirEdicion(site, fTipo)} style={btnS}>Editar {fTipo}</button>}
