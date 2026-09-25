@@ -9901,7 +9901,7 @@ function ConfigPorPagar({ usuario }) {
 // ─────────────────────────────────────────────────────────────────────────
 function TarifasPorSC({ usuario, onCambio }) {
   const TRAMOS = ["0-100", "101-150", "151-200", "201-250", "251+"];
-  const CATS = ["SMALL VAN", "LARGE VAN", "EXTRA LARGE VAN", "CAR"];
+  const CATS_BASE = ["SMALL VAN", "LARGE VAN", "CAR"];
   const COLS_XLS = ["SITE", "ZONIFICACION", "TIPO", "VEHICULO"];
   const mxn = (n) => (n == null || n === "" || isNaN(Number(n))) ? "—"
     : "$" + Number(n).toLocaleString("es-MX", { minimumFractionDigits: 0, maximumFractionDigits: 0 });
@@ -9913,6 +9913,9 @@ function TarifasPorSC({ usuario, onCambio }) {
   const [exc, setExc] = useState([]);
   const [cargas, setCargas] = useState([]);
   const [uso, setUso] = useState({});
+  const [extraCats, setExtraCats] = useState([]);   // categorias agregadas en esta sesion
+  const [nuevaCat, setNuevaCat] = useState("");
+  const [scSel, setScSel] = useState("");           // SC que se muestra en grande
   const [msg, setMsg] = useState(null);
 
   // Filtros
@@ -9983,6 +9986,16 @@ function TarifasPorSC({ usuario, onCambio }) {
     return { monto: null, propia: false, desde: null };
   };
 
+  // Las categorias salen de lo que ya existe en la matriz, mas las agregadas aqui.
+  const CATS = Array.from(new Set([...CATS_BASE, ...base.map(f => f.tipo_vehiculo), ...exc.map(f => f.tipo_vehiculo), ...extraCats].filter(Boolean)));
+  const agregarCategoria = () => {
+    const v = nuevaCat.trim().toUpperCase();
+    if (!v) return;
+    if (CATS.includes(v)) { setMsg({ ok: false, txt: `La categoría "${v}" ya existe.` }); return; }
+    setExtraCats(p => [...p, v]); setNuevaCat("");
+    setMsg({ ok: true, txt: `Categoría "${v}" agregada. Se guarda al poner una tarifa y presionar Guardar.` });
+  };
+
   const scsConExcepcion = Array.from(new Set(exc.map(e => e.site)));
   const todosSC = Object.keys(scZonas).sort();
   const zonasDisp = Array.from(new Set(Object.values(scZonas))).sort();
@@ -9994,7 +10007,10 @@ function TarifasPorSC({ usuario, onCambio }) {
     return true;
   }).sort((a, b) => (uso[b] || 0) - (uso[a] || 0) || a.localeCompare(b));
   const scsEnOperacion = todosSC.filter(s => uso[s] > 0).length;
-  const scsMostrados = scsFiltrados.slice(0, tope);
+  useEffect(() => {
+    if (!scsFiltrados.length) { if (scSel) setScSel(""); return; }
+    if (!scSel || !scsFiltrados.includes(scSel)) setScSel(scsFiltrados[0]);
+  }, [scsFiltrados.join("|")]);
 
   const abrirEdicion = (site, tipo) => {
     setEditSC(site); setEditTipo(tipo); setMsg(null);
@@ -10288,101 +10304,161 @@ function TarifasPorSC({ usuario, onCambio }) {
         </div>
       ) : (
         <div>
-          <div style={{ ...cardS, display: "grid", gridTemplateColumns: "200px 145px 115px auto 240px", gap: 10, alignItems: "center" }}>
-            <input type="text" value={fTexto} onChange={e => { setFTexto(e.target.value); setTope(24); }} placeholder="Buscar SC..."
-              style={{ padding: "6px 10px", border: "1px solid #cbd5e1", borderRadius: 6, fontSize: 12, width: "100%", boxSizing: "border-box" }} />
-            <select value={fZona} onChange={e => { setFZona(e.target.value); setTope(24); }} style={{ padding: "6px 8px", border: "1px solid #cbd5e1", borderRadius: 6, fontSize: 12, width: "100%", boxSizing: "border-box" }}>
-              <option value="">Todas las zonas</option>
-              {zonasDisp.map(z => <option key={z} value={z}>Zona {z}</option>)}
-            </select>
-            <select value={fTipo} onChange={e => setFTipo(e.target.value)} style={{ padding: "6px 8px", border: "1px solid #cbd5e1", borderRadius: 6, fontSize: 12, width: "100%", boxSizing: "border-box" }}>
-              <option value="SPOT">SPOT</option><option value="SDD">SDD</option>
-            </select>
-            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#475569", whiteSpace: "nowrap" }}>
-              <input type="checkbox" checked={fSoloOp} onChange={e => { setFSoloOp(e.target.checked); setTope(24); }} style={{ width: 14, height: 14 }} />
+          <div style={{ ...cardS, display: "grid", gridTemplateColumns: "230px 135px 125px auto 230px", gap: 12, alignItems: "end" }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+              <label style={{ fontSize: 10, color: "#64748b", fontWeight: 700 }}>SERVICE CENTER</label>
+              <select value={scSel} onChange={e => { setScSel(e.target.value); setEditSC(null); }}
+                style={{ padding: "7px 9px", border: "1px solid #cbd5e1", borderRadius: 6, fontSize: 12, width: "100%", boxSizing: "border-box" }}>
+                {scsFiltrados.map(s => (
+                  <option key={s} value={s}>{s} — zona {scZonas[s]}{uso[s] ? ` · ${uso[s]} rutas` : ""}</option>
+                ))}
+              </select>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+              <label style={{ fontSize: 10, color: "#64748b", fontWeight: 700 }}>ZONA</label>
+              <select value={fZona} onChange={e => setFZona(e.target.value)}
+                style={{ padding: "7px 9px", border: "1px solid #cbd5e1", borderRadius: 6, fontSize: 12, width: "100%", boxSizing: "border-box" }}>
+                <option value="">Todas</option>
+                {zonasDisp.map(z => <option key={z} value={z}>{z}</option>)}
+              </select>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+              <label style={{ fontSize: 10, color: "#64748b", fontWeight: 700 }}>TIPO DE RUTA</label>
+              <select value={fTipo} onChange={e => { setFTipo(e.target.value); setEditSC(null); }}
+                style={{ padding: "7px 9px", border: "1px solid #cbd5e1", borderRadius: 6, fontSize: 12, width: "100%", boxSizing: "border-box" }}>
+                <option value="SPOT">SPOT</option><option value="SDD">SDD</option>
+              </select>
+            </div>
+            <label style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 12, color: "#475569", paddingBottom: 7, whiteSpace: "nowrap" }}>
+              <input type="checkbox" checked={fSoloOp} onChange={e => setFSoloOp(e.target.checked)} style={{ width: 15, height: 15 }} />
               Solo SC con operación
-              <span style={{ fontSize: 11, color: "#94a3b8", marginLeft: 8 }}>{scsFiltrados.length} de {scsEnOperacion} activos · {scsConExcepcion.length} con tarifa propia</span>
+              <span style={{ fontSize: 11, color: "#94a3b8", marginLeft: 6 }}>{scsEnOperacion} activos · {scsConExcepcion.length} con tarifa propia</span>
             </label>
-            <select value={nuevoSC} onChange={e => { const v = e.target.value; setNuevoSC(""); if (v) { setFSoloOp(false); setFTexto(v); abrirEdicion(v, fTipo); } }}
-              style={{ padding: "6px 8px", border: "1px solid #cbd5e1", borderRadius: 6, fontSize: 12, width: "100%", boxSizing: "border-box" }}>
-              <option value="">＋ Dar tarifa propia a un SC...</option>
-              {todosSC.filter(s => !scsConExcepcion.includes(s)).map(s => <option key={s} value={s}>{s} — zona {scZonas[s]}</option>)}
-            </select>
+            <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+              <label style={{ fontSize: 10, color: "#64748b", fontWeight: 700 }}>DAR TARIFA PROPIA</label>
+              <select value={nuevoSC} onChange={e => { const v = e.target.value; setNuevoSC(""); if (v) { setFSoloOp(false); setScSel(v); abrirEdicion(v, fTipo); } }}
+                style={{ padding: "7px 9px", border: "1px solid #cbd5e1", borderRadius: 6, fontSize: 12, width: "100%", boxSizing: "border-box" }}>
+                <option value="">＋ Elegir un SC...</option>
+                {todosSC.filter(s => !scsConExcepcion.includes(s)).map(s => <option key={s} value={s}>{s} — zona {scZonas[s]}</option>)}
+              </select>
+            </div>
           </div>
 
-          {!scsFiltrados.length && (
+          {!scSel && (
             <div style={{ ...cardS, textAlign: "center", color: "#94a3b8", fontSize: 12 }}>
               No hay SC que cumplan el filtro. Desmarca "Solo SC con operación" para verlos todos.
             </div>
           )}
 
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(430px, 1fr))", gap: 12 }}>
-            {scsMostrados.map(site => {
-              const zona = scZonas[site];
-              const propia = scsConExcepcion.includes(site);
-              const editando = editSC === site;
-              const desde = (exc.find(e => e.site === site && e.vigente_desde) || {}).vigente_desde;
-              return (
-                <div key={site} style={{ background: "#fff", border: `1px solid ${propia ? "#fcd9a6" : "#e4e7ec"}`, borderRadius: 6, overflow: "hidden" }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 7, padding: "8px 12px", background: propia ? "#fffbeb" : "#f8fafc", borderBottom: "1px solid #eef0f3", flexWrap: "wrap" }}>
-                    <div style={{ fontSize: 13, fontWeight: 700, color: "#1a3a6b" }}>{site}</div>
-                    <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 4, background: "#e2e8f0", color: "#475569" }}>zona {zona}</span>
-                    {propia && <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 4, background: "#fef3c7", color: "#92400e" }}>tarifa propia</span>}
-                    {uso[site] > 0 && <span style={{ fontSize: 10, color: "#64748b" }}>{uso[site]} rutas / 30d</span>}
-                    {desde && <span style={{ fontSize: 10, color: "#94a3b8" }}>desde {String(desde).slice(0, 10)}</span>}
-                    <div style={{ marginLeft: "auto", display: "flex", gap: 5 }}>
-                      {!editando && <button onClick={() => abrirEdicion(site, fTipo)} style={btnS}>Editar {fTipo}</button>}
-                      {propia && !editando && <button onClick={() => quitarExcepcion(site)} style={{ ...btnS, background: "#fff", color: "#b91c1c", borderColor: "#fecaca" }}>Quitar</button>}
-                    </div>
-                  </div>
-                  <div style={{ padding: "8px 12px 12px" }}>
-                    <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                      <thead><tr style={{ background: "#fafbfc" }}>
-                        <th style={thS}>Categoría</th>
-                        {TRAMOS.map(tr => <th key={tr} style={{ ...thS, textAlign: "right" }}>{tr}</th>)}
-                      </tr></thead>
-                      <tbody>
-                        {CATS.map(cat => (
-                          <tr key={cat}>
-                            <td style={{ ...tdS, fontWeight: 700, whiteSpace: "nowrap" }}>{cat}</td>
-                            {TRAMOS.map(tr => {
-                              if (editando) return (
-                                <td key={tr} style={{ ...tdS, textAlign: "right" }}>
-                                  <input type="number" placeholder="zona" value={cel[`${cat}|${tr}`] ?? ""}
-                                    onChange={e => setCel(p => ({ ...p, [`${cat}|${tr}`]: e.target.value }))} style={inpS} />
-                                </td>
-                              );
-                              const c = resolver(site, fTipo, cat, tr, hoyISO());
-                              return (
-                                <td key={tr} style={{ ...tdS, textAlign: "right", fontWeight: c.propia ? 700 : 400, color: c.propia ? "#b45309" : (c.monto == null ? "#cbd5e1" : "#475569"), background: c.propia ? "#fffbeb" : "transparent" }}>
-                                  {mxn(c.monto)}
-                                </td>
-                              );
-                            })}
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                    {editando && (
-                      <div style={{ display: "flex", alignItems: "center", gap: 7, marginTop: 9, flexWrap: "wrap" }}>
-                        <div style={{ display: "flex", gap: 5 }}>
-                          <button onClick={() => abrirEdicion(site, "SPOT")} style={{ ...btnS, background: editTipo === "SPOT" ? "#1a3a6b" : "#eff6ff", color: editTipo === "SPOT" ? "#fff" : "#1d4ed8" }}>SPOT</button>
-                          <button onClick={() => abrirEdicion(site, "SDD")} style={{ ...btnS, background: editTipo === "SDD" ? "#1a3a6b" : "#eff6ff", color: editTipo === "SDD" ? "#fff" : "#1d4ed8" }}>SDD</button>
-                        </div>
-                        <div style={{ flex: 1, fontSize: 10, color: "#64748b", minWidth: 150 }}>Vacío = paga por zona {zona}</div>
-                        <button onClick={() => setEditSC(null)} style={{ ...btnS, background: "#fff", color: "#475569", borderColor: "#cbd5e1" }}>Cancelar</button>
-                        <button onClick={guardarSC} disabled={guardando} style={{ ...btnP, padding: "5px 12px", fontSize: 11, opacity: guardando ? 0.6 : 1 }}>{guardando ? "..." : "Guardar"}</button>
-                      </div>
-                    )}
+          {!!scSel && (() => {
+            const site = scSel;
+            const zona = scZonas[site];
+            const propia = scsConExcepcion.includes(site);
+            const editando = editSC === site;
+            const desde = (exc.find(e => e.site === site && e.vigente_desde) || {}).vigente_desde;
+            const esTop = scsFiltrados[0] === site;
+            return (
+              <div style={{ background: "#fff", border: `1px solid ${propia ? "#fcd9a6" : "#e4e7ec"}`, borderRadius: 6, overflow: "hidden", marginBottom: 14 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "12px 16px", background: propia ? "#fffbeb" : "#f8fafc", borderBottom: "1px solid #eef0f3", flexWrap: "wrap" }}>
+                  <div style={{ fontSize: 16, fontWeight: 700, color: "#1a3a6b" }}>{site}</div>
+                  <span style={{ fontSize: 10, fontWeight: 700, padding: "3px 8px", borderRadius: 4, background: "#e2e8f0", color: "#475569" }}>zona {zona}</span>
+                  {propia && <span style={{ fontSize: 10, fontWeight: 700, padding: "3px 8px", borderRadius: 4, background: "#fef3c7", color: "#92400e" }}>tarifa propia</span>}
+                  {esTop && <span style={{ fontSize: 10, fontWeight: 700, padding: "3px 8px", borderRadius: 4, background: "#dbeafe", color: "#1e40af" }}>más operación</span>}
+                  <span style={{ fontSize: 11, color: "#64748b" }}>
+                    {uso[site] ? `${uso[site]} rutas / 30 d` : "sin operación en 30 días"}{desde ? ` · vigente desde ${String(desde).slice(0, 10)}` : ""}
+                  </span>
+                  <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
+                    <button onClick={() => { setFTipo("SPOT"); if (editando) abrirEdicion(site, "SPOT"); }}
+                      style={{ ...btnS, background: fTipo === "SPOT" ? "#1a3a6b" : "#eff6ff", color: fTipo === "SPOT" ? "#fff" : "#1d4ed8" }}>SPOT</button>
+                    <button onClick={() => { setFTipo("SDD"); if (editando) abrirEdicion(site, "SDD"); }}
+                      style={{ ...btnS, background: fTipo === "SDD" ? "#1a3a6b" : "#eff6ff", color: fTipo === "SDD" ? "#fff" : "#1d4ed8" }}>SDD</button>
+                    {!editando && <button onClick={() => abrirEdicion(site, fTipo)} style={btnS}>Editar</button>}
+                    {propia && !editando && <button onClick={() => quitarExcepcion(site)} style={{ ...btnS, background: "#fff", color: "#b91c1c", borderColor: "#fecaca" }}>Quitar tarifa propia</button>}
                   </div>
                 </div>
-              );
-            })}
-          </div>
+                <div style={{ padding: "14px 16px" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                    <thead><tr style={{ background: "#f8fafc" }}>
+                      <th style={{ ...thS, fontSize: 11 }}>Categoría</th>
+                      {TRAMOS.map(tr => <th key={tr} style={{ ...thS, fontSize: 11, textAlign: "right" }}>{tr} km</th>)}
+                    </tr></thead>
+                    <tbody>
+                      {CATS.map(cat => (
+                        <tr key={cat}>
+                          <td style={{ ...tdS, fontSize: 12, fontWeight: 700, whiteSpace: "nowrap" }}>{cat}</td>
+                          {TRAMOS.map(tr => {
+                            if (editando) return (
+                              <td key={tr} style={{ ...tdS, textAlign: "right" }}>
+                                <input type="number" placeholder="por zona" value={cel[`${cat}|${tr}`] ?? ""}
+                                  onChange={e => setCel(p => ({ ...p, [`${cat}|${tr}`]: e.target.value }))}
+                                  style={{ ...inpS, width: 80 }} />
+                              </td>
+                            );
+                            const c = resolver(site, fTipo, cat, tr, hoyISO());
+                            return (
+                              <td key={tr} style={{ ...tdS, fontSize: 12, textAlign: "right", fontWeight: c.propia ? 700 : 400, color: c.propia ? "#b45309" : (c.monto == null ? "#cbd5e1" : "#475569"), background: c.propia ? "#fffbeb" : "transparent" }}>
+                                {mxn(c.monto)}
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
 
-          {scsFiltrados.length > tope && (
-            <div style={{ textAlign: "center", marginTop: 12 }}>
-              <button onClick={() => setTope(t => t + 24)} style={btnS}>Mostrar {Math.min(24, scsFiltrados.length - tope)} más de {scsFiltrados.length}</button>
+                  <div style={{ display: "flex", alignItems: "center", gap: 14, marginTop: 12, fontSize: 11, color: "#64748b", flexWrap: "wrap" }}>
+                    <span style={{ display: "flex", alignItems: "center", gap: 6 }}><span style={{ width: 12, height: 12, background: "#fffbeb", border: "1px solid #fcd9a6", borderRadius: 3 }}></span>tarifa propia de {site}</span>
+                    <span style={{ display: "flex", alignItems: "center", gap: 6 }}><span style={{ width: 12, height: 12, background: "#fff", border: "1px solid #e4e7ec", borderRadius: 3 }}></span>heredada de la zona {zona}</span>
+                    <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
+                      <input type="text" value={nuevaCat} onChange={e => setNuevaCat(e.target.value)} placeholder="Nueva categoría de vehículo"
+                        style={{ padding: "5px 8px", border: "1px solid #cbd5e1", borderRadius: 6, fontSize: 11, width: 190 }} />
+                      <button onClick={agregarCategoria} style={btnS}>＋ Categoría</button>
+                    </div>
+                  </div>
+
+                  {editando && (
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 12, paddingTop: 12, borderTop: "1px solid #f1f5f9" }}>
+                      <div style={{ flex: 1, fontSize: 11, color: "#64748b" }}>Editando <strong>{editTipo}</strong> · lo que dejes vacío vuelve a pagar por la zona {zona}</div>
+                      <button onClick={() => setEditSC(null)} style={{ ...btnS, background: "#fff", color: "#475569", borderColor: "#cbd5e1" }}>Cancelar</button>
+                      <button onClick={guardarSC} disabled={guardando} style={{ ...btnP, opacity: guardando ? 0.6 : 1 }}>{guardando ? "Guardando..." : "Guardar"}</button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
+
+          {scsFiltrados.length > 1 && (
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 700, color: "#1a3a6b", marginBottom: 8 }}>Otros SC {fSoloOp ? "con operación" : ""}</div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 10 }}>
+                {scsFiltrados.filter(s => s !== scSel).slice(0, tope).map(site => {
+                  const propia = scsConExcepcion.includes(site);
+                  const c1 = resolver(site, fTipo, CATS[0], TRAMOS[0], hoyISO());
+                  const c2 = resolver(site, fTipo, CATS[1] || CATS[0], TRAMOS[0], hoyISO());
+                  return (
+                    <div key={site} onClick={() => { setScSel(site); setEditSC(null); }}
+                      style={{ background: "#fff", border: `1px solid ${propia ? "#fcd9a6" : "#e4e7ec"}`, borderRadius: 6, padding: "10px 12px", cursor: "pointer" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
+                        <div style={{ fontSize: 13, fontWeight: 700, color: "#1a3a6b" }}>{site}</div>
+                        <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 4, background: "#e2e8f0", color: "#475569" }}>{scZonas[site]}</span>
+                        {propia && <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 4, background: "#fef3c7", color: "#92400e" }}>propia</span>}
+                        <span style={{ marginLeft: "auto", fontSize: 10, color: "#94a3b8" }}>{uso[site] ? `${uso[site]} rutas` : "paga por zona"}</span>
+                      </div>
+                      <div style={{ fontSize: 11, color: "#64748b" }}>
+                        {CATS[0]} <strong style={{ color: c1.propia ? "#b45309" : "#475569" }}>{mxn(c1.monto)}</strong>
+                        {CATS[1] ? <span> · {CATS[1]} <strong style={{ color: c2.propia ? "#b45309" : "#475569" }}>{mxn(c2.monto)}</strong></span> : null}
+                        <span style={{ color: "#94a3b8" }}> en {TRAMOS[0]} km</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              {scsFiltrados.length - 1 > tope && (
+                <div style={{ textAlign: "center", marginTop: 12 }}>
+                  <button onClick={() => setTope(t => t + 24)} style={btnS}>Mostrar más de {scsFiltrados.length - 1}</button>
+                </div>
+              )}
             </div>
           )}
         </div>
