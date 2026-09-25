@@ -5817,7 +5817,7 @@ function ModuloPagosMadre({ usuario }) {
           {subtab === "padron_meli" && <PadronMeliAdmin usuario={usuario} />}
           {subtab === "prefacturas" && <ModuloPrefacturasEnvio usuario={usuario} />}
           {subtab === "mermas"      && <ModuloCobrosMermas usuario={usuario} logoB64={LOGO_PREFACTURA_B64} />}
-          {subtab === "config"      && <ConfiguracionPagos />}
+          {subtab === "config"      && <ConfiguracionPagos usuario={usuario} />}
         </>
       )}
     </div>
@@ -9671,7 +9671,7 @@ function ConfigAlertas() {
   );
 }
 
-function ConfiguracionPagos() {
+function ConfiguracionPagos({ usuario }) {
   const [subtab, setSubtab] = useState("tarifario");
   return (
     <div className="pg" style={{ maxWidth: 1200 }}>
@@ -9698,7 +9698,7 @@ function ConfiguracionPagos() {
           </button>
         ))}
       </div>
-      {subtab === "tarifario" && <ConfigPorPagar />}
+      {subtab === "tarifario" && <ConfigPorPagar usuario={usuario} />}
       {subtab === "por_cobrar" && <ConfigPorCobrarMeli />}
       {subtab === "especiales" && <ConfigTarifasEspeciales />}
       {subtab === "zonas" && <ConfigZonas />}
@@ -9710,7 +9710,7 @@ function ConfiguracionPagos() {
   );
 }
 
-function ConfigPorPagar() {
+function ConfigPorPagar({ usuario }) {
   const [data, setData] = useState([]);
   const [edits, setEdits] = useState({});
   const [orig, setOrig] = useState({});
@@ -9736,7 +9736,10 @@ function ConfigPorPagar() {
   const cargar = async () => {
     setLoading(true);
     try {
-      const { data: d } = await sb.from("matriz_precios").select("*");
+      const { data: dAll } = await sb.from("matriz_precios").select("*");
+      // Solo las filas de ZONA (sin site ni tipo_ruta) alimentan estas grillas.
+      // Las excepciones por SC se editan en el panel Tarifas por service center.
+      const d = (dAll || []).filter(r => !r.site && !r.tipo_ruta);
       setData(d || []);
       const m = {};
       for (const r of (d || [])) m[`${r.tipo_vehiculo}|${r.zonificacion}|${r.tramo_km}`] = String(r.tarifa_mxn);
@@ -9759,7 +9762,8 @@ function ConfigPorPagar() {
         if (orig[k] !== undefined) {
           if (String(num) !== orig[k]) {
             const { error } = await sb.from("matriz_precios").update({ tarifa_mxn: num })
-              .eq("tipo_vehiculo", cat).eq("zonificacion", z).eq("tramo_km", tr);
+              .eq("tipo_vehiculo", cat).eq("zonificacion", z).eq("tramo_km", tr)
+              .is("site", null).is("tipo_ruta", null);
             if (error) throw error;
             updates++;
           }
@@ -9784,9 +9788,9 @@ function ConfigPorPagar() {
   const baseCats = ["LARGE VAN", "SMALL VAN", "CAR"];
   const baseZonas = ["L1", "L2", "L3", "L4"];
   const baseTramos = ["0-100", "101-150", "151-200", "201-250", "251+"];
-  const eliminarCat = async (cat) => { if (!confirm(`¿Eliminar la categoría "${cat}"? Se borran sus tarifas guardadas y el motor deja de usarla.`)) return; try { const { error } = await sb.from("matriz_precios").delete().eq("tipo_vehiculo", cat); if (error) throw error; setExtraCats(p => p.filter(x => x !== cat)); setMsg({ ok: true, txt: `Categoría "${cat}" eliminada.` }); cargar(); } catch (e) { setMsg({ ok: false, txt: "Error: " + (e.message || e) }); } };
-  const eliminarTramo = async (tr) => { if (!confirm(`¿Eliminar el rango "${tr}"? Se borran sus tarifas guardadas.`)) return; try { const { error } = await sb.from("matriz_precios").delete().eq("tramo_km", tr); if (error) throw error; setExtraTramos(p => p.filter(x => x !== tr)); setMsg({ ok: true, txt: `Rango "${tr}" eliminado.` }); cargar(); } catch (e) { setMsg({ ok: false, txt: "Error: " + (e.message || e) }); } };
-  const eliminarZona = async (z) => { if (!confirm(`¿Eliminar la zona "${z}"? Se borran sus tarifas guardadas.`)) return; try { const { error } = await sb.from("matriz_precios").delete().eq("zonificacion", z); if (error) throw error; setExtraZonas(p => p.filter(x => x !== z)); setMsg({ ok: true, txt: `Zona "${z}" eliminada.` }); cargar(); } catch (e) { setMsg({ ok: false, txt: "Error: " + (e.message || e) }); } };
+  const eliminarCat = async (cat) => { if (!confirm(`¿Eliminar la categoría "${cat}"? Se borran sus tarifas guardadas y el motor deja de usarla.`)) return; try { const { error } = await sb.from("matriz_precios").delete().eq("tipo_vehiculo", cat).is("site", null); if (error) throw error; setExtraCats(p => p.filter(x => x !== cat)); setMsg({ ok: true, txt: `Categoría "${cat}" eliminada.` }); cargar(); } catch (e) { setMsg({ ok: false, txt: "Error: " + (e.message || e) }); } };
+  const eliminarTramo = async (tr) => { if (!confirm(`¿Eliminar el rango "${tr}"? Se borran sus tarifas guardadas.`)) return; try { const { error } = await sb.from("matriz_precios").delete().eq("tramo_km", tr).is("site", null); if (error) throw error; setExtraTramos(p => p.filter(x => x !== tr)); setMsg({ ok: true, txt: `Rango "${tr}" eliminado.` }); cargar(); } catch (e) { setMsg({ ok: false, txt: "Error: " + (e.message || e) }); } };
+  const eliminarZona = async (z) => { if (!confirm(`¿Eliminar la zona "${z}"? Se borran sus tarifas guardadas.`)) return; try { const { error } = await sb.from("matriz_precios").delete().eq("zonificacion", z).is("site", null); if (error) throw error; setExtraZonas(p => p.filter(x => x !== z)); setMsg({ ok: true, txt: `Zona "${z}" eliminada.` }); cargar(); } catch (e) { setMsg({ ok: false, txt: "Error: " + (e.message || e) }); } };
 
   if (loading) return <div style={{ textAlign: "center", padding: 40, color: "#94a3b8" }}>Cargando...</div>;
 
@@ -9871,6 +9875,552 @@ function ConfigPorPagar() {
           </table>
         </div>
       ))}
+      <TarifasPorSC usuario={usuario} onCambio={cargar} />
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Tarifas por SC: excepciones sobre la tarifa de zona, importacion masiva
+// de Excel con validacion y previsualizacion, e historial de cargas.
+// La tarifa de zona sigue viviendo en las grillas de arriba; aca solo van
+// las filas que difieren (site y/o tipo_ruta con valor).
+// ─────────────────────────────────────────────────────────────────────────
+function TarifasPorSC({ usuario, onCambio }) {
+  const TRAMOS = ["0-100", "101-150", "151-200", "201-250", "251+"];
+  const CATS = ["SMALL VAN", "LARGE VAN", "EXTRA LARGE VAN", "CAR"];
+  const COLS_XLS = ["SITE", "ZONIFICACION", "TIPO", "VEHICULO"];
+
+  const [vista, setVista] = useState("excepciones"); // excepciones | historial
+  const [cargando, setCargando] = useState(true);
+  const [scZonas, setScZonas] = useState({});      // { SMX7: "L2", ... }
+  const [base, setBase] = useState([]);            // filas de zona (site null)
+  const [exc, setExc] = useState([]);              // filas con site
+  const [cargas, setCargas] = useState([]);
+  const [msg, setMsg] = useState(null);
+
+  const [verSC, setVerSC] = useState("");
+  const [verTipo, setVerTipo] = useState("SPOT");
+
+  const [nuevoSC, setNuevoSC] = useState("");
+  const [editSC, setEditSC] = useState(null);      // SC abierto para editar
+  const [editTipo, setEditTipo] = useState("SPOT");
+  const [cel, setCel] = useState({});              // { "CAT|TRAMO": "1981" }
+  const [guardando, setGuardando] = useState(false);
+
+  // Importacion
+  const [imp, setImp] = useState(null);            // { archivo, filas, cambios, nuevas, rechazos, sinCambio }
+  const [impVigencia, setImpVigencia] = useState("");
+  const [impError, setImpError] = useState(null);  // { encontradas, faltantes }
+  const [aplicando, setAplicando] = useState(false);
+  const fileRef = useRef(null);
+
+  useEffect(() => { cargarTodo(); }, []);
+
+  const cargarTodo = async () => {
+    setCargando(true);
+    try {
+      const [zRes, mRes, cRes] = await Promise.all([
+        sb.from("sc_zonas_mx").select("service_center_id, zona"),
+        sb.from("matriz_precios").select("*"),
+        sb.from("matriz_precios_cargas").select("*").order("created_at", { ascending: false }).limit(20),
+      ]);
+      const z = {};
+      for (const r of (zRes.data || [])) z[String(r.service_center_id).toUpperCase()] = r.zona;
+      setScZonas(z);
+      const filas = mRes.data || [];
+      setBase(filas.filter(f => !f.site));
+      setExc(filas.filter(f => !!f.site));
+      setCargas(cRes.data || []);
+    } catch (e) { console.error(e); setMsg({ ok: false, txt: "Error al cargar: " + (e.message || e) }); }
+    setCargando(false);
+  };
+
+  const hoyISO = () => new Date().toISOString().slice(0, 10);
+  const vigenteEn = (f, fecha) =>
+    (!f.vigente_desde || String(f.vigente_desde).slice(0, 10) <= fecha) &&
+    (!f.vigente_hasta || String(f.vigente_hasta).slice(0, 10) >= fecha);
+
+  // Resuelve igual que el motor: site+tipo, site, zona+tipo, zona.
+  const resolver = (site, tipo, cat, tramo, fecha) => {
+    const f = fecha || hoyISO();
+    const todas = [...exc, ...base].filter(x =>
+      x.activo === true && x.tipo_vehiculo === cat && x.tramo_km === tramo && vigenteEn(x, f));
+    const zona = scZonas[String(site || "").toUpperCase()] || null;
+    const orden = [
+      { fn: (x) => x.site === site && x.tipo_ruta === tipo, et: "excepción " + site + " · " + tipo },
+      { fn: (x) => x.site === site && !x.tipo_ruta, et: "excepción " + site },
+      { fn: (x) => !x.site && x.zonificacion === zona && x.tipo_ruta === tipo, et: "zona " + zona + " · " + tipo },
+      { fn: (x) => !x.site && x.zonificacion === zona && !x.tipo_ruta, et: "zona " + zona },
+    ];
+    for (const o of orden) { const hit = todas.find(o.fn); if (hit) return { monto: Number(hit.tarifa_mxn), etiqueta: o.et, propia: !!hit.site }; }
+    return { monto: null, etiqueta: "sin tarifa", propia: false };
+  };
+
+  const scsConExcepcion = Array.from(new Set(exc.map(e => e.site))).sort();
+  const scsDisponibles = Object.keys(scZonas).sort();
+
+  const abrirSC = (site, tipo) => {
+    setEditSC(site); setEditTipo(tipo || "SPOT"); setMsg(null);
+    const m = {};
+    for (const f of exc) {
+      if (f.site === site && (f.tipo_ruta || "SPOT") === (tipo || "SPOT")) m[`${f.tipo_vehiculo}|${f.tramo_km}`] = String(f.tarifa_mxn);
+    }
+    setCel(m);
+  };
+
+  const guardarSC = async () => {
+    if (!editSC) return;
+    setGuardando(true); setMsg(null);
+    try {
+      const zona = scZonas[String(editSC).toUpperCase()] || null;
+      if (!zona) throw new Error(`El SC ${editSC} no está en sc_zonas_mx.`);
+      let n = 0;
+      for (const cat of CATS) for (const tr of TRAMOS) {
+        const k = `${cat}|${tr}`;
+        const val = (cel[k] ?? "").toString().trim();
+        const prev = exc.find(f => f.site === editSC && (f.tipo_ruta || "SPOT") === editTipo && f.tipo_vehiculo === cat && f.tramo_km === tr);
+        if (val === "") {
+          if (prev) { const { error } = await sb.from("matriz_precios").delete().eq("id", prev.id); if (error) throw error; n++; }
+          continue;
+        }
+        if (isNaN(Number(val))) throw new Error(`Valor no numérico en ${cat} ${tr}: "${val}"`);
+        const num = Number(val);
+        if (prev) {
+          if (Number(prev.tarifa_mxn) !== num) { const { error } = await sb.from("matriz_precios").update({ tarifa_mxn: num }).eq("id", prev.id); if (error) throw error; n++; }
+        } else {
+          const km = tr.endsWith("+") ? { mn: parseInt(tr, 10) || 0, mx: null }
+            : (() => { const p = tr.split("-"); const b = parseInt(p[1], 10); return { mn: parseInt(p[0], 10) || 0, mx: isNaN(b) ? null : b }; })();
+          const { error } = await sb.from("matriz_precios").insert({
+            tipo_vehiculo: cat, zonificacion: zona, tramo_km: tr, km_min: km.mn, km_max: km.mx,
+            tarifa_mxn: num, activo: true, site: editSC, tipo_ruta: editTipo,
+            vigente_desde: impVigencia || null,
+          });
+          if (error) throw error; n++;
+        }
+      }
+      setMsg({ ok: true, txt: `Excepción de ${editSC} (${editTipo}) guardada: ${n} cambios.` });
+      await cargarTodo(); if (onCambio) onCambio();
+    } catch (e) { setMsg({ ok: false, txt: "Error: " + (e.message || e) }); }
+    setGuardando(false);
+  };
+
+  const quitarExcepcion = async (site) => {
+    if (!confirm(`¿Quitar todas las excepciones de ${site}? Vuelve a pagar con la tarifa de su zona.`)) return;
+    try {
+      const { error } = await sb.from("matriz_precios").delete().eq("site", site);
+      if (error) throw error;
+      setMsg({ ok: true, txt: `${site} vuelve a la tarifa de su zona.` });
+      if (editSC === site) setEditSC(null);
+      await cargarTodo(); if (onCambio) onCambio();
+    } catch (e) { setMsg({ ok: false, txt: "Error: " + (e.message || e) }); }
+  };
+
+  // ── Importacion de Excel ──
+  const asegurarXLSX = async () => {
+    if (window.XLSX) return true;
+    await new Promise((res) => { const s = document.createElement("script"); s.src = "https://cdn.sheetjs.com/xlsx-0.20.0/package/dist/xlsx.full.min.js"; s.onload = res; s.onerror = res; document.head.appendChild(s); });
+    return !!window.XLSX;
+  };
+
+  const leerExcel = async (file) => {
+    setImp(null); setImpError(null); setMsg(null);
+    if (!(await asegurarXLSX())) { setMsg({ ok: false, txt: "No se pudo cargar la librería de Excel." }); return; }
+    const XLSX = window.XLSX;
+    try {
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(buf, { type: "array" });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const filas = XLSX.utils.sheet_to_json(ws, { header: 1, blankrows: false });
+      if (!filas.length) { setImpError({ encontradas: [], faltantes: COLS_XLS.concat(TRAMOS) }); return; }
+      const head = (filas[0] || []).map(h => String(h == null ? "" : h).trim().toUpperCase());
+      const norm = (s) => String(s).replace(/\s+/g, "").replace(/\+-$/, "+").replace(/-$/, "");
+      const idx = {};
+      for (const c of COLS_XLS) { const i = head.indexOf(c); if (i >= 0) idx[c] = i; }
+      const idxTramo = {};
+      for (const tr of TRAMOS) { const i = head.findIndex(h => norm(h) === norm(tr)); if (i >= 0) idxTramo[tr] = i; }
+      const faltantes = COLS_XLS.filter(c => idx[c] === undefined).concat(TRAMOS.filter(t => idxTramo[t] === undefined));
+      if (faltantes.length) { setImpError({ encontradas: head.filter(Boolean), faltantes }); return; }
+
+      const cambios = [], nuevas = [], rechazos = []; let sinCambio = 0;
+      const vig = impVigencia || hoyISO();
+      for (let i = 1; i < filas.length; i++) {
+        const r = filas[i]; if (!r || !r[idx.SITE]) continue;
+        const nfila = i + 1;
+        const site = String(r[idx.SITE]).trim().toUpperCase();
+        const zonaXls = String(r[idx.ZONIFICACION] || "").trim().toUpperCase();
+        const tipo = String(r[idx.TIPO] || "").trim().toUpperCase();
+        const veh = String(r[idx.VEHICULO] || "").trim().toUpperCase();
+        const zonaSis = scZonas[site] || null;
+        if (!zonaSis) { rechazos.push({ fila: nfila, dato: `${site} · ${zonaXls} · ${tipo} · ${veh}`, motivo: `El site ${site} no existe en sc_zonas_mx` }); continue; }
+        if (zonaXls && zonaXls !== zonaSis) { rechazos.push({ fila: nfila, dato: `${site} · ${zonaXls} · ${tipo} · ${veh}`, motivo: `${site} está asignado a la zona ${zonaSis}, no a ${zonaXls}` }); continue; }
+        if (tipo !== "SDD" && tipo !== "SPOT") { rechazos.push({ fila: nfila, dato: `${site} · ${zonaXls} · ${tipo} · ${veh}`, motivo: `TIPO debe ser SDD o SPOT, llegó "${tipo}"` }); continue; }
+        if (!veh) { rechazos.push({ fila: nfila, dato: `${site} · ${zonaXls} · ${tipo}`, motivo: "VEHICULO vacío" }); continue; }
+        for (const tr of TRAMOS) {
+          const raw = r[idxTramo[tr]];
+          if (raw === null || raw === undefined || String(raw).trim() === "" || Number(raw) === 0) continue;
+          const monto = Number(raw);
+          if (isNaN(monto) || monto < 0) { rechazos.push({ fila: nfila, dato: `${site} · ${tipo} · ${veh} · ${tr}`, motivo: `Monto inválido: "${raw}"` }); continue; }
+          const act = resolver(site, tipo, veh, tr, vig);
+          if (act.monto === monto) { sinCambio++; continue; }
+          const reg = { fila: nfila, site, zona: zonaSis, tipo, veh, tramo: tr, antes: act.monto, nuevo: monto };
+          if (act.monto == null) nuevas.push(reg); else cambios.push(reg);
+        }
+      }
+      setImp({ archivo: file.name, leidas: filas.length - 1, sinCambio, cambios, nuevas, rechazos });
+    } catch (e) {
+      console.error(e);
+      setImpError({ encontradas: [], faltantes: [], detalle: "No se pudo leer el archivo: " + (e.message || e) });
+    }
+  };
+
+  const aplicarImport = async () => {
+    if (!imp) return;
+    setAplicando(true); setMsg(null);
+    const vig = impVigencia || hoyISO();
+    try {
+      const aplicar = [...imp.cambios, ...imp.nuevas];
+      let n = 0;
+      for (const c of aplicar) {
+        const prev = exc.find(f => f.site === c.site && (f.tipo_ruta || "") === c.tipo && f.tipo_vehiculo === c.veh && f.tramo_km === c.tramo);
+        if (prev) {
+          const { error } = await sb.from("matriz_precios")
+            .update({ tarifa_mxn: c.nuevo, vigente_desde: vig, activo: true }).eq("id", prev.id);
+          if (error) throw error;
+        } else {
+          const km = c.tramo.endsWith("+") ? { mn: parseInt(c.tramo, 10) || 0, mx: null }
+            : (() => { const p = c.tramo.split("-"); const b = parseInt(p[1], 10); return { mn: parseInt(p[0], 10) || 0, mx: isNaN(b) ? null : b }; })();
+          const { error } = await sb.from("matriz_precios").insert({
+            tipo_vehiculo: c.veh, zonificacion: c.zona, tramo_km: c.tramo, km_min: km.mn, km_max: km.mx,
+            tarifa_mxn: c.nuevo, activo: true, site: c.site, tipo_ruta: c.tipo, vigente_desde: vig,
+          });
+          if (error) throw error;
+        }
+        n++;
+      }
+      const { error: eLog } = await sb.from("matriz_precios_cargas").insert({
+        archivo: imp.archivo,
+        usuario: (usuario && (usuario.nombre || usuario.email)) || "Brain",
+        vigente_desde: vig,
+        filas_leidas: imp.leidas,
+        filas_aplicadas: n,
+        filas_rechazadas: imp.rechazos.length,
+        rechazos: imp.rechazos,
+        resumen: { sin_cambio: imp.sinCambio, cambios: imp.cambios, nuevas: imp.nuevas },
+        estado: "aplicada",
+      });
+      if (eLog) throw eLog;
+      setMsg({ ok: true, txt: `Tarifario aplicado: ${n} tarifas vigentes desde ${vig}.` });
+      setImp(null); if (fileRef.current) fileRef.current.value = "";
+      await cargarTodo(); if (onCambio) onCambio();
+    } catch (e) { setMsg({ ok: false, txt: "Error al aplicar: " + (e.message || e) }); }
+    setAplicando(false);
+  };
+
+  const registrarRechazo = async () => {
+    try {
+      await sb.from("matriz_precios_cargas").insert({
+        archivo: (fileRef.current && fileRef.current.files[0] && fileRef.current.files[0].name) || "archivo",
+        usuario: (usuario && (usuario.nombre || usuario.email)) || "Brain",
+        vigente_desde: impVigencia || hoyISO(),
+        filas_leidas: 0, filas_aplicadas: 0, filas_rechazadas: 0,
+        rechazos: [{ motivo: "Formato inválido", faltantes: (impError && impError.faltantes) || [], encontradas: (impError && impError.encontradas) || [] }],
+        estado: "rechazada",
+      });
+      setImpError(null); if (fileRef.current) fileRef.current.value = "";
+      setMsg({ ok: true, txt: "Se registró el intento de carga rechazado." });
+      cargarTodo();
+    } catch (e) { setMsg({ ok: false, txt: "Error: " + (e.message || e) }); }
+  };
+
+  const cardS = { background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: 14, marginBottom: 14 };
+  const inpS = { width: 78, textAlign: "right", border: "1px solid #e4e7ec", borderRadius: 4, padding: "4px 6px", fontSize: 12 };
+  const btnP = { padding: "7px 14px", background: "#F47B20", color: "#fff", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer" };
+  const btnS = { padding: "6px 12px", background: "#eff6ff", color: "#1d4ed8", border: "1px solid #bfdbfe", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer" };
+  const thS = { padding: "6px 10px", textAlign: "left", fontSize: 10, color: "#64748b", fontWeight: 600 };
+  const tdS = { padding: "7px 10px", fontSize: 12, borderBottom: "1px solid #f1f5f9" };
+
+  if (cargando) return <div style={{ textAlign: "center", padding: 30, color: "#94a3b8" }}>Cargando tarifas por SC...</div>;
+
+  return (
+    <div>
+      <div style={{ ...cardS, display: "flex", alignItems: "center", gap: 10 }}>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: "#1a3a6b" }}>Tarifas por service center</div>
+          <div style={{ fontSize: 11, color: "#94a3b8" }}>Excepciones sobre la tarifa de zona · importación masiva con registro</div>
+        </div>
+        <button onClick={() => setVista(vista === "historial" ? "excepciones" : "historial")} style={btnS}>
+          {vista === "historial" ? "Volver a excepciones" : "Historial de cargas"}
+        </button>
+        <label style={{ ...btnP, display: "inline-block" }}>
+          Importar tarifario
+          <input ref={fileRef} type="file" accept=".xlsx,.xls" onChange={e => { const f = e.target.files && e.target.files[0]; if (f) leerExcel(f); }} style={{ display: "none" }} />
+        </label>
+      </div>
+
+      {msg && (
+        <div style={{ background: msg.ok ? "#ecfdf5" : "#fef2f2", border: `1px solid ${msg.ok ? "#a7f3d0" : "#fca5a5"}`, color: msg.ok ? "#065f46" : "#991b1b", borderRadius: 6, padding: 10, marginBottom: 14, fontSize: 12 }}>{msg.txt}</div>
+      )}
+
+      {impError && (
+        <div style={{ ...cardS, borderColor: "#fecaca" }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#b91c1c", marginBottom: 6 }}>El archivo no tiene el formato esperado</div>
+          {impError.detalle && <div style={{ fontSize: 12, color: "#7f1d1d", marginBottom: 8 }}>{impError.detalle}</div>}
+          {!!(impError.faltantes || []).length && (
+            <div style={{ fontSize: 12, color: "#7f1d1d", marginBottom: 6 }}>
+              Faltan las columnas: <strong>{impError.faltantes.join(", ")}</strong>
+            </div>
+          )}
+          {!!(impError.encontradas || []).length && (
+            <div style={{ fontSize: 11, color: "#64748b", marginBottom: 10 }}>Encontradas: {impError.encontradas.join(" · ")}</div>
+          )}
+          <div style={{ fontSize: 11, color: "#475569", marginBottom: 10 }}>
+            Se esperan las columnas SITE, ZONIFICACION, TIPO (SDD o SPOT), VEHICULO y los rangos {TRAMOS.join(" · ")}. No se modificó ninguna tarifa.
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={registrarRechazo} style={btnS}>Registrar intento y cerrar</button>
+            <button onClick={() => { setImpError(null); if (fileRef.current) fileRef.current.value = ""; }} style={{ ...btnS, background: "#fff", color: "#475569", borderColor: "#cbd5e1" }}>Cerrar</button>
+          </div>
+        </div>
+      )}
+
+      {imp && (
+        <div style={{ ...cardS, borderColor: "#fcd9a6" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: "#1a3a6b" }}>{imp.archivo}</div>
+              <div style={{ fontSize: 11, color: "#94a3b8" }}>{imp.leidas} filas leídas · nada se guarda hasta confirmar</div>
+            </div>
+            <label style={{ fontSize: 11, color: "#475569", fontWeight: 700 }}>Vigente desde</label>
+            <input type="date" value={impVigencia} onChange={e => setImpVigencia(e.target.value)}
+              style={{ border: "1px solid #cbd5e1", borderRadius: 6, padding: "6px 8px", fontSize: 12 }} />
+          </div>
+          <div style={{ display: "flex", gap: 10, marginBottom: 10, fontSize: 12 }}>
+            <span style={{ padding: "4px 10px", background: "#f1f5f9", borderRadius: 4 }}>Sin cambio: <strong>{imp.sinCambio}</strong></span>
+            <span style={{ padding: "4px 10px", background: "#fffbeb", borderRadius: 4, color: "#92400e" }}>Cambian: <strong>{imp.cambios.length}</strong></span>
+            <span style={{ padding: "4px 10px", background: "#f0fdf4", borderRadius: 4, color: "#15803d" }}>Nuevas: <strong>{imp.nuevas.length}</strong></span>
+            <span style={{ padding: "4px 10px", background: "#fef2f2", borderRadius: 4, color: "#b91c1c" }}>Rechazadas: <strong>{imp.rechazos.length}</strong></span>
+          </div>
+          {!!(imp.cambios.length + imp.nuevas.length) && (
+            <div style={{ maxHeight: 260, overflowY: "auto", border: "1px solid #eef0f3", borderRadius: 6, marginBottom: 10 }}>
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead><tr style={{ background: "#f8fafc" }}>
+                  <th style={thS}>Fila</th><th style={thS}>Site</th><th style={thS}>Tipo</th><th style={thS}>Vehículo</th>
+                  <th style={thS}>Tramo</th><th style={{ ...thS, textAlign: "right" }}>Vigente</th>
+                  <th style={{ ...thS, textAlign: "right" }}>Nueva</th><th style={{ ...thS, textAlign: "right" }}>Dif.</th>
+                </tr></thead>
+                <tbody>
+                  {[...imp.cambios, ...imp.nuevas].map((c, i) => (
+                    <tr key={i}>
+                      <td style={{ ...tdS, color: "#94a3b8" }}>{c.fila}</td>
+                      <td style={{ ...tdS, fontWeight: 700 }}>{c.site}</td>
+                      <td style={tdS}>{c.tipo}</td>
+                      <td style={tdS}>{c.veh}</td>
+                      <td style={tdS}>{c.tramo}</td>
+                      <td style={{ ...tdS, textAlign: "right", color: "#64748b" }}>{c.antes == null ? "sin tarifa" : fmtMXN(c.antes)}</td>
+                      <td style={{ ...tdS, textAlign: "right", fontWeight: 700 }}>{fmtMXN(c.nuevo)}</td>
+                      <td style={{ ...tdS, textAlign: "right", fontWeight: 700, color: c.antes == null ? "#15803d" : "#b45309" }}>
+                        {c.antes == null ? "nueva" : (c.nuevo - c.antes > 0 ? "+" : "") + fmtMXN(c.nuevo - c.antes)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {!!imp.rechazos.length && (
+            <div style={{ background: "#fff7ed", border: "1px solid #fcd9a6", borderRadius: 6, padding: 10, marginBottom: 10 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: "#92400e", marginBottom: 6 }}>{imp.rechazos.length} filas no se van a cargar</div>
+              {imp.rechazos.slice(0, 8).map((r, i) => (
+                <div key={i} style={{ fontSize: 11, color: "#7c2d12" }}>Fila {r.fila} · {r.dato} — {r.motivo}</div>
+              ))}
+              {imp.rechazos.length > 8 && <div style={{ fontSize: 11, color: "#92400e" }}>y {imp.rechazos.length - 8} más</div>}
+            </div>
+          )}
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <div style={{ flex: 1, fontSize: 11, color: "#64748b" }}>Queda registrada la carga con tu usuario. Recalcular fechas anteriores a la vigencia no se ve afectado.</div>
+            <button onClick={() => { setImp(null); if (fileRef.current) fileRef.current.value = ""; }} style={{ ...btnS, background: "#fff", color: "#475569", borderColor: "#cbd5e1" }}>Cancelar</button>
+            <button onClick={aplicarImport} disabled={aplicando || !(imp.cambios.length + imp.nuevas.length)} style={{ ...btnP, opacity: aplicando ? 0.6 : 1 }}>
+              {aplicando ? "Aplicando..." : `Aplicar ${imp.cambios.length + imp.nuevas.length} tarifas`}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {vista === "historial" ? (
+        <div style={cardS}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#1a3a6b", marginBottom: 10 }}>Historial de cargas</div>
+          {!cargas.length && <div style={{ fontSize: 12, color: "#94a3b8" }}>Todavía no hay cargas registradas.</div>}
+          {!!cargas.length && (
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead><tr style={{ background: "#f8fafc" }}>
+                <th style={thS}>Fecha</th><th style={thS}>Usuario</th><th style={thS}>Archivo</th>
+                <th style={thS}>Vigencia</th><th style={{ ...thS, textAlign: "right" }}>Aplicadas</th>
+                <th style={{ ...thS, textAlign: "right" }}>Rechazadas</th><th style={thS}>Estado</th>
+              </tr></thead>
+              <tbody>
+                {cargas.map(c => (
+                  <tr key={c.id}>
+                    <td style={tdS}>{String(c.created_at).slice(0, 16).replace("T", " ")}</td>
+                    <td style={{ ...tdS, fontWeight: 700 }}>{c.usuario}</td>
+                    <td style={tdS}>{c.archivo}</td>
+                    <td style={tdS}>desde {c.vigente_desde}</td>
+                    <td style={{ ...tdS, textAlign: "right" }}>{c.filas_aplicadas}</td>
+                    <td style={{ ...tdS, textAlign: "right", color: c.filas_rechazadas ? "#b91c1c" : "#94a3b8" }}>{c.filas_rechazadas}</td>
+                    <td style={tdS}>
+                      <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 4, background: c.estado === "aplicada" ? "#dcfce7" : "#fee2e2", color: c.estado === "aplicada" ? "#15803d" : "#b91c1c" }}>{c.estado}</span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      ) : (
+        <div>
+          <div style={cardS}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10, flexWrap: "wrap" }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: "#1a3a6b" }}>Ver la tarifa que se aplica a un SC</div>
+              <select value={verSC} onChange={e => setVerSC(e.target.value)}
+                style={{ padding: "6px 8px", border: "1px solid #cbd5e1", borderRadius: 6, fontSize: 12, minWidth: 160 }}>
+                <option value="">— Elegir SC —</option>
+                {scsDisponibles.map(s => <option key={s} value={s}>{s} — zona {scZonas[s]}</option>)}
+              </select>
+              <select value={verTipo} onChange={e => setVerTipo(e.target.value)}
+                style={{ padding: "6px 8px", border: "1px solid #cbd5e1", borderRadius: 6, fontSize: 12 }}>
+                <option value="SPOT">SPOT</option><option value="SDD">SDD</option>
+              </select>
+              <span style={{ marginLeft: "auto", fontSize: 11, color: "#94a3b8" }}>Solo lectura · así paga el motor hoy</span>
+            </div>
+            {!verSC && <div style={{ fontSize: 12, color: "#94a3b8" }}>Elige un SC para ver su tarifa resuelta.</div>}
+            {!!verSC && (
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead><tr style={{ background: "#f8fafc" }}>
+                  <th style={thS}>Categoría</th>
+                  {TRAMOS.map(tr => <th key={tr} style={{ ...thS, textAlign: "right" }}>{tr} km</th>)}
+                  <th style={thS}>Origen</th>
+                </tr></thead>
+                <tbody>
+                  {CATS.map(cat => {
+                    const celdas = TRAMOS.map(tr => resolver(verSC, verTipo, cat, tr, hoyISO()));
+                    const et = (celdas.find(c => c.propia) || {}).etiqueta;
+                    return (
+                      <tr key={cat}>
+                        <td style={{ ...tdS, fontWeight: 700 }}>{cat}</td>
+                        {celdas.map((c, i) => (
+                          <td key={i} style={{ ...tdS, textAlign: "right", fontWeight: c.propia ? 700 : 400, color: c.propia ? "#b45309" : (c.monto == null ? "#cbd5e1" : "#1f2937") }}>
+                            {c.monto == null ? "—" : fmtMXN(c.monto)}
+                          </td>
+                        ))}
+                        <td style={tdS}>
+                          {et ? <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 4, background: "#fef3c7", color: "#92400e" }}>{et}</span>
+                              : <span style={{ fontSize: 10, color: "#64748b" }}>zona {scZonas[verSC]}</span>}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
+          </div>
+
+          <div style={cardS}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10, flexWrap: "wrap" }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: "#1a3a6b" }}>Excepciones por SC</div>
+              <span style={{ fontSize: 11, color: "#94a3b8" }}>Solo los SC que pagan distinto a su zona</span>
+              <select value={nuevoSC} onChange={e => setNuevoSC(e.target.value)}
+                style={{ marginLeft: "auto", padding: "6px 8px", border: "1px solid #cbd5e1", borderRadius: 6, fontSize: 12 }}>
+                <option value="">— SC —</option>
+                {scsDisponibles.filter(s => !scsConExcepcion.includes(s)).map(s => <option key={s} value={s}>{s}</option>)}
+              </select>
+              <button onClick={() => { if (nuevoSC) { abrirSC(nuevoSC, "SPOT"); setNuevoSC(""); } }} style={btnS}>＋ Agregar excepción</button>
+            </div>
+
+            {!scsConExcepcion.length && !editSC && <div style={{ fontSize: 12, color: "#94a3b8" }}>No hay excepciones cargadas. Todos los SC pagan por su zona.</div>}
+
+            {scsConExcepcion.map(site => (
+              <div key={site} style={{ border: "1px solid #e4e7ec", borderRadius: 6, marginBottom: 8 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", background: "#f8fafc" }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: "#1a3a6b" }}>{site}</div>
+                  <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 4, background: "#e2e8f0", color: "#475569" }}>zona {scZonas[site] || "?"}</span>
+                  <span style={{ fontSize: 11, color: "#94a3b8" }}>{exc.filter(e => e.site === site).length} tarifas propias</span>
+                  <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
+                    <button onClick={() => abrirSC(site, "SPOT")} style={{ ...btnS, background: editSC === site && editTipo === "SPOT" ? "#1a3a6b" : "#eff6ff", color: editSC === site && editTipo === "SPOT" ? "#fff" : "#1d4ed8" }}>SPOT</button>
+                    <button onClick={() => abrirSC(site, "SDD")} style={{ ...btnS, background: editSC === site && editTipo === "SDD" ? "#1a3a6b" : "#eff6ff", color: editSC === site && editTipo === "SDD" ? "#fff" : "#1d4ed8" }}>SDD</button>
+                    <button onClick={() => quitarExcepcion(site)} style={{ ...btnS, background: "#fff", color: "#b91c1c", borderColor: "#fecaca" }}>Quitar</button>
+                  </div>
+                </div>
+                {editSC === site && (
+                  <div style={{ padding: 12 }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                      <thead><tr style={{ background: "#f8fafc" }}>
+                        <th style={thS}>Categoría</th>
+                        {TRAMOS.map(tr => <th key={tr} style={{ ...thS, textAlign: "right" }}>{tr} km</th>)}
+                      </tr></thead>
+                      <tbody>
+                        {CATS.map(cat => (
+                          <tr key={cat}>
+                            <td style={{ ...tdS, fontWeight: 700 }}>{cat}</td>
+                            {TRAMOS.map(tr => (
+                              <td key={tr} style={{ ...tdS, textAlign: "right" }}>
+                                <input type="number" placeholder="por zona" value={cel[`${cat}|${tr}`] ?? ""}
+                                  onChange={e => setCel(p => ({ ...p, [`${cat}|${tr}`]: e.target.value }))} style={inpS} />
+                              </td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10 }}>
+                      <div style={{ flex: 1, fontSize: 11, color: "#64748b" }}>Las celdas vacías caen a la tarifa de la zona {scZonas[site]}. Solo se guarda lo que difiere.</div>
+                      <button onClick={() => setEditSC(null)} style={{ ...btnS, background: "#fff", color: "#475569", borderColor: "#cbd5e1" }}>Cerrar</button>
+                      <button onClick={guardarSC} disabled={guardando} style={{ ...btnP, opacity: guardando ? 0.6 : 1 }}>{guardando ? "Guardando..." : `Guardar ${editTipo}`}</button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            ))}
+
+            {!!editSC && !scsConExcepcion.includes(editSC) && (
+              <div style={{ border: "1px solid #fcd9a6", borderRadius: 6, padding: 12, background: "#fffbeb" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: "#1a3a6b" }}>{editSC}</div>
+                  <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 4, background: "#e2e8f0", color: "#475569" }}>zona {scZonas[editSC] || "?"}</span>
+                  <span style={{ fontSize: 11, color: "#92400e" }}>excepción nueva</span>
+                  <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
+                    <button onClick={() => abrirSC(editSC, "SPOT")} style={{ ...btnS, background: editTipo === "SPOT" ? "#1a3a6b" : "#eff6ff", color: editTipo === "SPOT" ? "#fff" : "#1d4ed8" }}>SPOT</button>
+                    <button onClick={() => abrirSC(editSC, "SDD")} style={{ ...btnS, background: editTipo === "SDD" ? "#1a3a6b" : "#eff6ff", color: editTipo === "SDD" ? "#fff" : "#1d4ed8" }}>SDD</button>
+                  </div>
+                </div>
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead><tr style={{ background: "#f8fafc" }}>
+                    <th style={thS}>Categoría</th>
+                    {TRAMOS.map(tr => <th key={tr} style={{ ...thS, textAlign: "right" }}>{tr} km</th>)}
+                  </tr></thead>
+                  <tbody>
+                    {CATS.map(cat => (
+                      <tr key={cat}>
+                        <td style={{ ...tdS, fontWeight: 700 }}>{cat}</td>
+                        {TRAMOS.map(tr => (
+                          <td key={tr} style={{ ...tdS, textAlign: "right" }}>
+                            <input type="number" placeholder="por zona" value={cel[`${cat}|${tr}`] ?? ""}
+                              onChange={e => setCel(p => ({ ...p, [`${cat}|${tr}`]: e.target.value }))} style={inpS} />
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10 }}>
+                  <div style={{ flex: 1, fontSize: 11, color: "#64748b" }}>Deja vacío lo que deba seguir pagando por zona.</div>
+                  <button onClick={() => setEditSC(null)} style={{ ...btnS, background: "#fff", color: "#475569", borderColor: "#cbd5e1" }}>Cancelar</button>
+                  <button onClick={guardarSC} disabled={guardando} style={{ ...btnP, opacity: guardando ? 0.6 : 1 }}>{guardando ? "Guardando..." : `Guardar ${editTipo}`}</button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
