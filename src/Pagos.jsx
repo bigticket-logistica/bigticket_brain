@@ -1,10 +1,6 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { descargarExcelMultihoja, fechaHoyOperativa, fechaOperativaOffset, sb } from "./shared";
 import ModuloCobrosMermas from "./Mermas";
-import CobrosTerceros from "./PnrCobros";
-import Diferencias from "./Diferencias";
-import Comparativa from "./Comparativa";
-import FacturacionTerceros from "./FacturacionTerceros";
 
 function BotonDescargarExcel({ onClick, disabled, label = "Descargar Excel" }) {
   return (
@@ -1454,80 +1450,172 @@ function FormularioInicialSC({ scId, fecha, rowPrecargado = undefined }) {
 
 const TERCEROS_HISTORICO_DESDE = "2026-07-01";
 
-// Detalle del Ítem 6 de la Bitácora, visto desde el Brain. Misma fuente que la
-// pantalla del supervisor: placas que HICIERON VIAJE ese día (The Eyes), sin
-// line-haul ni planificadas, con la empresa del padrón y lo que dice el
-// inventario de certificación.
-//
-// Reemplaza la "Confirmación de Terceros" que leía del rostering y mostraba el
-// estado de certificación: eso mezclaba dos preguntas distintas y, sobre todo,
-// partía de lo planificado en vez de lo operado.
 function ItemTercerosBitacora({ scId, fecha, filasPrecargadas = undefined }) {
-  const [filas, setFilas] = useState(filasPrecargadas);
-  const [sello, setSello] = useState(null);
+  const hoyMX = useMemo(() => {
+    const mx = new Date(Date.now() - 6 * 60 * 60 * 1000);
+    return mx.toISOString().split("T")[0];
+  }, []);
+  const esHoy = fecha === hoyMX;
+  const hayHistorico = !esHoy && fecha >= TERCEROS_HISTORICO_DESDE && fecha < hoyMX;
+  const [filas, setFilas] = useState(undefined);   // undefined=cargando
+  const [cambios, setCambios] = useState([]);      // movimientos del día
 
   useEffect(() => {
     let cancel = false;
+    // Movimientos del día (cualquier fecha)
     (async () => {
-      if (filasPrecargadas !== undefined) { setFilas(filasPrecargadas || []); }
-      else {
-        const { data } = await sb.rpc("fn_flota_dia_sc", { p_sc: scId, p_fecha: fecha });
+      try {
+        const { data, error } = await sb.rpc("get_terceros_cambios_dia", { p_sc: scId, p_fecha: fecha });
+        if (error) throw error;
+        if (!cancel) setCambios(Array.isArray(data) ? data : []);
+      } catch (e) { if (!cancel) setCambios([]); }
+    })();
+    // Detalle placa a placa
+    if (!esHoy && !hayHistorico) { setFilas(null); return () => { cancel = true; }; }
+    // El panel ya llamó get_terceros_confirmacion_sc para armar el ítem 6 del
+    // checklist: reusamos esas filas en vez de repetir la RPC al expandir.
+    if (filasPrecargadas !== undefined) {
+      setFilas(filasPrecargadas || []);
+      return () => { cancel = true; };
+    }
+    setFilas(undefined);
+    (async () => {
+      try {
+        const rpc = esHoy ? "get_terceros_confirmacion_sc" : "get_terceros_confirmacion_historico";
+        const { data, error } = await sb.rpc(rpc, { p_sc: scId, p_fecha: fecha });
+        if (error) throw error;
         if (!cancel) setFilas(Array.isArray(data) ? data : []);
-      }
-      const { data: c } = await sb.from("flota_confirmacion_dia")
-        .select("*").eq("fecha", fecha).eq("service_center", scId).maybeSingle();
-      if (!cancel) setSello(c || null);
+      } catch (e) { if (!cancel) setFilas([]); }
     })();
     return () => { cancel = true; };
-  }, [scId, fecha, filasPrecargadas]);
+  }, [scId, fecha, esHoy, hayHistorico, filasPrecargadas]);
 
-  if (filas === undefined) return <div style={{ padding: 12, fontSize: 12, color: "#94a3b8" }}>Cargando…</div>;
+  // Índice de movimientos por placa (para pintar el warning en su fila)
+  const cambiosPorPlaca = useMemo(() => {
+    const m = {};
+    for (const c of cambios) {
+      const k = String(c.placa || "").toUpperCase().trim();
+      (m[k] = m[k] || []).push(c);
+    }
+    return m;
+  }, [cambios]);
 
-  const sinEmp = filas.filter(f => f.sin_empresa);
-  const discrepa = filas.filter(f => !f.sin_empresa && f.discrepa);
-  const conf = filas.filter(f => f.confirmado_hoy).length;
+  const total = Array.isArray(filas) ? filas.length : 0;
+  const confirmadas = Array.isArray(filas) ? filas.filter((f) => f.confirmado_hoy).length : 0;
+  const completo = total > 0 && confirmadas === total;
+  const resumenColor = total === 0 ? "#9ca3af" : completo ? "#16a34a" : confirmadas === 0 ? "#dc2626" : "#d97706";
+  const nWarn = cambios.length;
+
+  const WarningChip = ({ c }) => {
+    const esCambio = c.empresa_anterior &&
+      String(c.empresa_anterior).toUpperCase().trim() !== String(c.empresa_nueva || "").toUpperCase().trim();
+    return (
+      <div style={{ fontSize: 10.5, marginTop: 3, padding: "3px 8px", borderRadius: 4, lineHeight: 1.5,
+                    background: c.es_empresa_nueva ? "#fef2f2" : "#fffbeb",
+                    border: `1px solid ${c.es_empresa_nueva ? "#fecaca" : "#fde68a"}`,
+                    color: c.es_empresa_nueva ? "#b91c1c" : "#92400e" }}>
+        {esCambio && (
+          <span>⚠ Cambio de empresa: <strong>{c.empresa_anterior}</strong> → <strong>{c.empresa_nueva}</strong></span>
+        )}
+        {!esCambio && c.es_empresa_nueva && (
+          <span>⚠ Empresa nueva registrada: <strong>{c.empresa_nueva}</strong>{c.rfc ? ` (RFC ${c.rfc})` : ""}</span>
+        )}
+        {!esCambio && !c.es_empresa_nueva && c.es_cambio_sc && (
+          <span>⚠ Traslado de SC: <strong>{c.sc_anterior}</strong> → este SC ({c.empresa_nueva})</span>
+        )}
+        {esCambio && c.es_empresa_nueva && (
+          <span style={{ marginLeft: 6, fontWeight: 800 }}>· empresa NUEVA no certificada</span>
+        )}
+        {c.es_cambio_sc && esCambio && (
+          <span style={{ marginLeft: 6 }}>· venía de {c.sc_anterior}</span>
+        )}
+        {c.supervisor && <span style={{ marginLeft: 6, color: "#9ca3af" }}>({c.supervisor})</span>}
+      </div>
+    );
+  };
+
+  const FilaPlaca = ({ f }) => {
+    const certificada = !f.es_pendiente;
+    const warns = cambiosPorPlaca[String(f.placa || "").toUpperCase().trim()] || [];
+    return (
+      <div style={{ fontSize: 11, color: "#4b5563", padding: "3px 6px", background: warns.length ? "#fffdf5" : "#f8fafc", borderRadius: 4 }}>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+          <span style={{ fontFamily: "monospace", fontWeight: 700 }}>{f.placa}</span>
+          <span>{f.empresa_actual || "— sin empresa —"}</span>
+          {f.rfc && <span style={{ fontSize: 9, background: "#e2e8f0", color: "#475569", padding: "0 5px", borderRadius: 3, fontWeight: 700 }}>RFC {f.rfc}</span>}
+          <span style={{ fontSize: 9, padding: "0 5px", borderRadius: 3, fontWeight: 700, background: certificada ? "#dcfce7" : "#fee2e2", color: certificada ? "#166534" : "#b91c1c" }}>
+            {certificada ? "Certificada" : "No certificada"}
+          </span>
+          <span style={{ marginLeft: "auto", fontWeight: 700, color: f.confirmado_hoy ? "#16a34a" : "#9ca3af" }}>
+            {f.confirmado_hoy ? "✓ confirmada" : "pendiente"}
+          </span>
+        </div>
+        {warns.map((c, k) => <WarningChip key={k} c={c} />)}
+      </div>
+    );
+  };
 
   return (
-    <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 8, overflow: "hidden" }}>
-      <div style={{ padding: "9px 12px", background: "#f8fafc", borderBottom: "1px solid #e4e7ec", display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
-        <span style={{ fontWeight: 600, color: "#374151", fontSize: 12.5 }}>6 · Inventario de Flota</span>
-        <span style={{ fontSize: 11.5, color: "#64748b" }}>
-          {conf}/{filas.length} confirmadas
-          {sinEmp.length > 0 && <span style={{ color: "#b91c1c", fontWeight: 700 }}> · {sinEmp.length} sin empresa</span>}
-          {discrepa.length > 0 && <span style={{ color: "#b45309", fontWeight: 700 }}> · {discrepa.length} vs certificación</span>}
-          {sello && <span style={{ color: "#166534" }}> · sellado por {sello.confirmado_por}</span>}
+    <div style={{ fontSize: 12, padding: "5px 8px", background: "#fff", border: "1px solid #eef0f3", borderRadius: 5 }}>
+      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        <span style={{ fontWeight: 600, color: "#374151" }}>6 · Confirmación de Terceros</span>
+        {nWarn > 0 && (
+          <span style={{ fontSize: 10, fontWeight: 800, background: "#fffbeb", border: "1px solid #fde68a", color: "#92400e", padding: "1px 7px", borderRadius: 9 }}>
+            ⚠ {nWarn} movimiento{nWarn === 1 ? "" : "s"}
+          </span>
+        )}
+        <span style={{ marginLeft: "auto", fontWeight: 700, color: resumenColor }}>
+          {filas === undefined ? "…"
+            : esHoy ? `${confirmadas}/${total}`
+            : hayHistorico ? (total > 0 ? `${total} ✓` : "—")
+            : "—"}
         </span>
       </div>
 
-      {filas.length === 0 ? (
-        <div style={{ padding: 14, fontSize: 12, color: "#94a3b8" }}>Sin placas con viaje ese día.</div>
-      ) : (
-        <>
-          <div style={{ display: "grid", gridTemplateColumns: ".8fr 1.6fr 1.2fr .7fr .8fr", gap: 8, padding: "7px 12px", fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: .4, borderBottom: "1px solid #f1f5f9" }}>
-            <span>Placa</span><span>Empresa</span><span>Conductor</span><span style={{ textAlign: "center" }}>Rutas</span><span style={{ textAlign: "right" }}>Estado</span>
-          </div>
-          {filas.map(f => (
-            <div key={f.placa} style={{ display: "grid", gridTemplateColumns: ".8fr 1.6fr 1.2fr .7fr .8fr", gap: 8, padding: "7px 12px", fontSize: 11.5, alignItems: "center", borderBottom: "1px solid #f8fafc", background: f.sin_empresa ? "#fef2f2" : f.discrepa ? "#fffbeb" : "#fff" }}>
-              <span style={{ fontWeight: 600, color: "#334155" }}>{f.placa}</span>
-              <span style={{ color: f.sin_empresa ? "#b91c1c" : "#334155", fontWeight: f.sin_empresa ? 600 : 400 }}>
-                {f.empresa || "⚠️ sin empresa en el padrón"}
-                {f.discrepa && (
-                  <div style={{ fontSize: 10.5, color: "#b45309" }}>certificación: {f.empresa_cert}</div>
-                )}
-              </span>
-              <span style={{ color: "#64748b" }}>{f.conductor || "—"}</span>
-              <span style={{ textAlign: "center", color: "#94a3b8" }}>{f.rutas}</span>
-              <span style={{ textAlign: "right", fontSize: 10, fontWeight: 700, color: f.confirmado_hoy ? "#166534" : "#94a3b8" }}>
-                {f.confirmado_hoy ? "✓ confirmada" : "sin confirmar"}
-              </span>
+      {!esHoy && !hayHistorico && (
+        <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 4, fontStyle: "italic" }}>
+          El detalle de Terceros está disponible desde el {TERCEROS_HISTORICO_DESDE}.
+        </div>
+      )}
+
+      {hayHistorico && Array.isArray(filas) && (
+        <div style={{ fontSize: 10.5, color: "#9ca3af", marginTop: 4, fontStyle: "italic" }}>
+          Fecha pasada: se listan las placas confirmadas ese día (las no confirmadas no se historizan).
+        </div>
+      )}
+
+      {(esHoy || hayHistorico) && filas === undefined && (
+        <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 4 }}>Cargando terceros…</div>
+      )}
+
+      {(esHoy || hayHistorico) && Array.isArray(filas) && filas.length === 0 && (
+        <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 4 }}>
+          {esHoy ? "Sin placas rosterizadas hoy para este SC." : "Sin confirmaciones registradas ese día para este SC."}
+        </div>
+      )}
+
+      {(esHoy || hayHistorico) && Array.isArray(filas) && filas.length > 0 && (
+        <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 3 }}>
+          {filas.map((f, i) => <FilaPlaca key={i} f={f} />)}
+        </div>
+      )}
+
+      {/* Movimientos de placas que no aparecen en la lista de arriba */}
+      {Array.isArray(filas) && cambios.filter((c) => !(filas || []).some((f) =>
+        String(f.placa || "").toUpperCase().trim() === String(c.placa || "").toUpperCase().trim())).length > 0 && (
+        <div style={{ marginTop: 6 }}>
+          {cambios.filter((c) => !(filas || []).some((f) =>
+            String(f.placa || "").toUpperCase().trim() === String(c.placa || "").toUpperCase().trim())).map((c, i) => (
+            <div key={i} style={{ display: "flex", gap: 6, alignItems: "flex-start" }}>
+              <span style={{ fontFamily: "monospace", fontWeight: 700, fontSize: 11, marginTop: 5 }}>{c.placa}</span>
+              <div style={{ flex: 1 }}><WarningChip c={c} /></div>
             </div>
           ))}
-        </>
+        </div>
       )}
     </div>
   );
 }
-
 
 function declColor(v) {
   return v === "Sí" ? "#b45309" : v === "No" ? "#16a34a" : "#9ca3af";
@@ -1741,35 +1829,35 @@ function PanelControlSupervisores() {
       const idxAyer = {};
       for (const r of ayerR.data || []) idxAyer[r.service_center_id] = r;
 
-      // ── Item 6 · Inventario de Flota ───────────────────────────────
-      // Una sola fuente para hoy y para fechas pasadas: fn_flota_dia_sc, las
-      // placas que hicieron viaje segun The Eyes. Antes habia dos caminos
-      // distintos y el de fechas pasadas daba por completo cualquier dia con
-      // algun dato, asi que el panel marcaba 6/6 sin haberse confirmado nada.
+      // ── Item 6 · Confirmación de Terceros ──────────────────────────
+      // HOY: get_terceros_confirmacion_sc (rostering en vivo → X/Y exacto).
+      // FECHA PASADA: get_terceros_resumen_dia (log diario). No conocemos el
+      // total rosterizado histórico, así que se cuenta como completo cuando
+      // hay al menos una confirmación registrada ese día para el SC.
       const mxHoy = new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString().split("T")[0];
       const esHoy = fecha === mxHoy;
-      const scsUnicos = [...new Set(lista.map((x) => x.sc).filter(Boolean))];
       const t6Idx = {};
+      const scsUnicos = Array.from(new Set(lista.map((x) => x.sc)));
+      // Concurrencia limitada: 14 RPC simultáneas saturan el pool de Supabase
+      // y hacen lento todo lo demás que el analista está esperando.
       const res = await mapConLimite(scsUnicos, 4, async (sc) => {
         try {
-          // Misma fuente que el Ítem 6 de la Bitácora: placas que HICIERON VIAJE
-          // (The Eyes), no las rosterizadas. Y completo exige que todas estén
-          // confirmadas y ninguna sin empresa — antes bastaba con que hubiera
-          // algún dato viejo, y el panel marcaba 6/6 sin haberse confirmado nada.
-          const { data, error } = await sb.rpc("fn_flota_dia_sc", { p_sc: sc, p_fecha: esHoy ? mxHoy : fecha });
-          if (error) throw error;
-          const fs = Array.isArray(data) ? data : [];
-          // Cero placas con viaje: el item aplica igual y queda cumplido, pero
-          // se devuelve el objeto — si se devolviera null, el total del panel
-          // bajaria a 5 sin decir por que.
-          if (fs.length === 0) return { sc, t: { total: 0, confirmadas: 0, completo: true } };
-          const confirmadas = fs.filter((f) => f.confirmado_hoy).length;
-          const sinEmp = fs.filter((f) => f.sin_empresa).length;
-          return { sc, filas: fs, t: {
-            total: fs.length, confirmadas,
-            completo: sinEmp === 0 && confirmadas === fs.length,
-          } };
-        } catch { return { sc, t: { total: 0, confirmadas: 0, completo: false } }; }
+          if (esHoy) {
+            const { data, error } = await sb.rpc("get_terceros_confirmacion_sc", { p_sc: sc, p_fecha: mxHoy });
+            if (error) throw error;
+            const fs = Array.isArray(data) ? data : [];
+            const total = fs.length;
+            const confirmadas = fs.filter((f) => f.confirmado_hoy).length;
+            return { sc, filas: fs, t: { total, confirmadas, completo: total === 0 || confirmadas === total } };
+          } else {
+            const { data, error } = await sb.rpc("get_terceros_resumen_dia", { p_sc: sc, p_fecha: fecha });
+            if (error) throw error;
+            const row = Array.isArray(data) ? data[0] : data;
+            const confirmadas = Number(row?.confirmadas || 0);
+            if (!row?.tiene_datos) return { sc, t: null };
+            return { sc, t: { total: confirmadas, confirmadas, completo: true } };
+          }
+        } catch { return { sc, t: null }; }
       });
       const t6Rows = {};
       for (const r of res || []) {
@@ -2577,13 +2665,9 @@ function ConciliacionTercerosMX({ usuario }) {
   const [consolidadas, setConsolidadas] = useState(() => new Set()); // claves empresa||sc||id_ruta ya consolidadas
   const [importOpen, setImportOpen] = useState(false);
   const [importRows, setImportRows] = useState(null);
-  const [ajustesPend, setAjustesPend] = useState([]);   // diferencias aceptadas sin aplicar
-  const [aplicandoDif, setAplicandoDif] = useState(false);
   const [importBusy, setImportBusy] = useState(false);
   const [repBusy, setRepBusy] = useState(false);
   const [consolidando, setConsolidando] = useState(null);      // id_ruta | "__todas__"
-  const [consolidaProgreso, setConsolidaProgreso] = useState(null);
-  const [syncLog, setSyncLog] = useState({});   // empresa||sc -> { perdioManuales }
   const [traspRows, setTraspRows] = useState(null);            // placas en 2+ empresas en la semana
   const [traspBusy, setTraspBusy] = useState(false);
   const [trasp, setTrasp] = useState(null);                    // modal traspasador { placa, cargando, grupos, sel, destino }
@@ -2622,7 +2706,7 @@ function ConciliacionTercerosMX({ usuario }) {
       const { data, error } = await sb.rpc("get_conciliacion_terceros_resumen", { p_semana: sem });
       if (error) throw error;
       const base = data || [];
-      const mapSync = {};
+      setResumen(base);
       // Una sola lectura de conciliaciones guardadas: (a) cuenta ajustes; (b) muestra empresas creadas a mano que el resumen no trae
       try {
         const { data: concs } = await sb.from("conciliaciones_terceros").select("*").eq("semana", sem);
@@ -2633,13 +2717,6 @@ function ConciliacionTercerosMX({ usuario }) {
           const det = Array.isArray(c.detalle) ? c.detalle : [];
           const nA = det.filter(d => d && !d._saldo && (d._editado || d.es_manual || d.origen === "ajuste")).length;
           if (nA) { mapE[norm(c.empresa_nombre)] = (mapE[norm(c.empresa_nombre)] || 0) + nA; mapS[`${norm(c.empresa_nombre)}||${norm(c.service_center)}`] = nA; }
-          // El resumen viene de un RPC que no conoce las columnas de sincronización.
-          // Se enriquece acá con la misma lectura que ya se hace, sin otra consulta.
-          mapSync[`${norm(c.empresa_nombre)}||${norm(c.service_center)}`] = {
-            sync_veces: c.sync_veces || 0,
-            sync_ultima_at: c.sync_ultima_at || null,
-            sync_ultima_por: c.sync_ultima_por || null,
-          };
           const k = `${norm(c.empresa_nombre)}||${norm(c.service_center)}`;
           // El bucket de diagnóstico no se reinyecta desde lo guardado: si el RPC ya no lo devuelve
           // es porque las placas quedaron asignadas, y sumar el guardado infla la tarjeta.
@@ -2649,15 +2726,12 @@ function ConciliacionTercerosMX({ usuario }) {
               n_viajes: c.n_viajes != null ? c.n_viajes : det.length, n_no_pago: c.n_no_pago != null ? c.n_no_pago : det.filter(d => d.es_no_pago).length,
               total_neto: c.total_neto || 0, total_bruto: c.total_bruto || 0, neto_guardado: c.total_neto || 0, bruto_guardado: c.total_bruto || 0,
               estado_conciliacion: c.estado || "borrador", tiene_ajustes: !!c.tiene_ajustes, supervisor: null,
-              rfc: tt.rfc || "", correo_to: tt.correo_to || "", enviado_at: c.enviado_at || null,
-              sync_veces: c.sync_veces || 0, sync_ultima_at: c.sync_ultima_at || null, sync_ultima_por: c.sync_ultima_por || null });
+              rfc: tt.rfc || "", correo_to: tt.correo_to || "", enviado_at: c.enviado_at || null });
           }
         }
         // Arrastre de negativos: mostrar empresas con saldo pendiente aunque no tengan viajes esta semana
         const saldoMap = await cargarSaldos(sem);
         await cargarPlacasViejas(sem);
-        for (const r of base) Object.assign(r, mapSync[`${norm(r.empresa)}||${norm(r.service_center)}`] || {});
-        setResumen([...base]);
         const have2 = new Set([...base, ...extra].map(r => `${norm(r.empresa)}||${norm(r.service_center)}`));
         for (const k in saldoMap) {
           if (have2.has(k)) continue;
@@ -2667,12 +2741,7 @@ function ConciliacionTercerosMX({ usuario }) {
         }
         setAjustesEmp(mapE); setAjustesSC(mapS);
         if (extra.length) setResumen([...base, ...extra]);
-      } catch (er) {
-        // Si el enriquecido falla, se muestra el resumen del motor igual: perder
-        // el conteo de ajustes es molesto, quedarse con la pantalla en blanco no.
-        console.error("conteo/merge conciliaciones:", er);
-        setResumen([...base]); setAjustesEmp({}); setAjustesSC({});
-      }
+      } catch (er) { console.error("conteo/merge conciliaciones:", er); setAjustesEmp({}); setAjustesSC({}); }
     } catch (e) {
       console.error("resumen conciliación:", e);
       setMsg({ ok: false, txt: "Error cargando resumen: " + (e.message || e) });
@@ -2806,7 +2875,7 @@ function ConciliacionTercerosMX({ usuario }) {
     const man = lineasManualesDe(empresa, rSC.service_center).reduce((a, d) => a + Number(d.monto || 0), 0);
     return Math.round((nv + prev + man) * 100) / 100;
   };
-  const lineasManualesDe = (empresa, sc) => (aplicManual[`${norm(empresa)}||${norm(sc)}`] || []).map(a => ({ _saldo: true, _manual: true, _id: "saldoM|" + a.origenSC, _origenSC: a.origenSC, _origenKey: a.origenKey, _origenSem: a.origenSem, origen: "saldo_manual", fecha: null, placa: "\u2014", id_ruta: "", driver_name: `Saldo aplicado de ${a.origenSC} (sem ${a.origenSem})${a.motivo ? " \u2014 " + a.motivo : ""}`, _motivo: a.motivo || null, service_center_id: sc, tiene_auxiliar: false, cargado: null, entregado: null, monto: Number(a.monto || 0), es_no_pago: false }));
+  const lineasManualesDe = (empresa, sc) => (aplicManual[`${norm(empresa)}||${norm(sc)}`] || []).map(a => ({ _saldo: true, _manual: true, _id: "saldoM|" + a.origenSC, _origenSC: a.origenSC, _origenKey: a.origenKey, _origenSem: a.origenSem, origen: "saldo_manual", fecha: null, placa: "\u2014", id_ruta: "", driver_name: `Saldo aplicado de ${a.origenSC} (sem ${a.origenSem})`, service_center_id: sc, tiene_auxiliar: false, cargado: null, entregado: null, monto: Number(a.monto || 0), es_no_pago: false }));
   const filasConSaldoLine = (empresa, sc, filas) => {
     const arr = (filas || []).filter(d => !(d._saldo && !d._manual)); // quita la línea auto; conserva manuales ya guardadas
     const prev = saldoPrevioDe(empresa, sc);
@@ -2818,45 +2887,23 @@ function ConciliacionTercerosMX({ usuario }) {
     for (const ln of lineasManualesDe(empresa, sc)) if (!have.has(ln._origenSC)) arr.push(ln);
     return arr;
   };
-  // Lineas manuales negativas ya cargadas que mencionan un SC con saldo AUN ABIERTO:
-  // se cobro a mano en vez de usar "Aplicar saldo de X aqui", asi que ese saldo sigue vivo
-  // y se vuelve a descontar cada semana. Devuelve [{ sc, pendiente, semanaOrigen, lineas }].
-  const cobrosManualesDeSaldoAbierto = (empresa, sc) => {
-    const abiertos = saldosOtrosSC(empresa, sc);
-    if (!abiertos.length) return [];
-    const filas = (detalles[empresa] || []).filter(d => (d.service_center_id || "SIN SC") === sc && Number(d.monto || 0) < 0);
-    const out = [];
-    for (const si of abiertos) {
-      const code = String(si.sc || "").toUpperCase();
-      if (!code) continue;
-      const lineas = filas.filter(d => `${d.driver_name || ""} ${d.placa || ""}`.toUpperCase().includes(code));
-      if (lineas.length) out.push({ ...si, lineas });
-    }
-    return out;
-  };
   const saldosOtrosSC = (empresa, sc) => Object.keys(saldosPorSC).filter(k => k.startsWith(norm(empresa) + "||")).map(k => saldosPorSC[k]).filter(si => si && si.pendiente < 0 && norm(si.sc) !== norm(sc));
   const aplicadoManual = (empresa, sc, origenSC) => (aplicManual[`${norm(empresa)}||${norm(sc)}`] || []).some(a => a.origenSC === origenSC);
   const aplicarSaldoManual = (empresa, sc, origenSC) => {
     const si = saldoInfoDe(empresa, origenSC); if (!si || !(si.pendiente < 0)) return;
-    // Motivo obligatorio: queda guardado junto al saldo, para no reconstruir después
-    // por qué la deuda de un SC se cobró en otro.
-    const motivo = window.prompt("Aplicar el saldo de " + origenSC + " (" + fmtMon(si.pendiente) + ", origen sem " + si.semanaOrigen + ") al cobro de " + sc + ".\n\nSe descuenta ac\u00e1 y el saldo de " + origenSC + " queda cerrado (neteado).\n\nMotivo / acuerdo con el transportista:", "");
-    if (motivo === null) return;
-    if (!motivo.trim()) return alert("El motivo es obligatorio: queda en la auditor\u00eda del saldo.");
     const tk = `${norm(empresa)}||${norm(sc)}`;
-    setAplicManual(prev => ({ ...prev, [tk]: [...((prev[tk] || []).filter(a => a.origenSC !== origenSC)), { origenSC, origenSem: si.semanaOrigen, monto: si.pendiente, origenKey: `${norm(empresa)}||${norm(origenSC)}`, motivo: motivo.trim() }] }));
+    setAplicManual(prev => ({ ...prev, [tk]: [...((prev[tk] || []).filter(a => a.origenSC !== origenSC)), { origenSC, origenSem: si.semanaOrigen, monto: si.pendiente, origenKey: `${norm(empresa)}||${norm(origenSC)}` }] }));
   };
   const quitarSaldoManual = (empresa, sc, origenSC) => {
     const tk = `${norm(empresa)}||${norm(sc)}`;
     setAplicManual(prev => ({ ...prev, [tk]: (prev[tk] || []).filter(a => a.origenSC !== origenSC) }));
   };
-  const conciliarSaldoManual = async (empresa, origenSC, targetSC, motivo) => {
+  const conciliarSaldoManual = async (empresa, origenSC, targetSC) => {
     try {
       const { data: row } = await sb.from("saldos_pendientes_terceros").select("*").eq("empresa_nombre", empresa).eq("service_center", origenSC).maybeSingle();
       if (!row) return;
       const det = (row.detalle && typeof row.detalle === "object") ? row.detalle : {};
-      det.liquidado_hasta = semana;
-      det.aplicado_a = { sc: targetSC, sem: semana, motivo: motivo || null, por: (usuario && (usuario.nombre || usuario.email)) || "Brain", at: new Date().toISOString() };
+      det.liquidado_hasta = semana; det.aplicado_a = { sc: targetSC, sem: semana };
       await sb.from("saldos_pendientes_terceros").update({ estado: "conciliado", saldo_pendiente: 0, semana_conciliacion: semana, conciliado_at: new Date().toISOString(), detalle: det }).eq("id", row.id);
     } catch (e) { console.error("conciliar saldo manual:", e); }
   };
@@ -2966,18 +3013,9 @@ function ConciliacionTercerosMX({ usuario }) {
       const filasSC = todas.filter(d => (d.service_center_id || "SIN SC") === sc);
       await guardarBorradorSC(empresa, sc, filasSC, cobrosDe(empresa, sc));
       await auditarAjuste(empresa, sc, "eliminar", linea.origen || "motor", linea, motivo.trim());
-      // Los cobros de PNR viven también en cobros_pnr_mx. Si la línea se borra
-      // desde acá y no se libera el caso, la pestaña PNR lo deja marcado como
-      // cobrado para siempre y ya no se puede volver a cobrar.
-      let liberado = false;
-      if (linea.origen === "pnr" && linea.pnr_case_id) {
-        const { error: eLib } = await sb.from("cobros_pnr_mx").delete().eq("pnr_id", String(linea.pnr_case_id));
-        if (eLib) throw eLib;
-        liberado = true;
-      }
       setDetalles(prev => ({ ...prev, [empresa]: todas }));
       await cargarResumen(semana);
-      setMsg({ ok: true, txt: `Línea eliminada de ${empresa} · ${sc}.` + (liberado ? ` El PNR ${linea.pnr_case_id} vuelve a quedar pendiente en la pestaña PNR.` : "") });
+      setMsg({ ok: true, txt: `Línea eliminada de ${empresa} · ${sc}.` });
     } catch (e) { console.error("eliminar línea:", e); setMsg({ ok: false, txt: "Error eliminando línea: " + (e.message || e) }); }
     setGuardandoEdit(null);
   };
@@ -3013,20 +3051,6 @@ function ConciliacionTercerosMX({ usuario }) {
     const f = formLinea; if (!f) return;
     const monto = Number(f.monto);
     if (f.monto === "" || isNaN(monto)) return alert("El monto es obligatorio y debe ser numérico.");
-    // Si el concepto menciona un SC que tiene saldo pendiente abierto, avisar: cobrarlo a mano
-    // deja ese saldo vivo y vuelve a descontarse cada semana. Lo correcto es "Aplicar saldo de X aquí".
-    const _abiertos = saldosOtrosSC(f.empresa, f.sc);
-    if (monto < 0 && _abiertos.length) {
-      const _txt = `${f.concepto || ""} ${f.driver_name || ""}`.toUpperCase();
-      const _coincide = _abiertos.filter(si => _txt.includes(String(si.sc || "").toUpperCase()));
-      if (_coincide.length) {
-        const _d = _coincide.map(si => `• ${si.sc}: ${fmtMon(si.pendiente)} (origen sem ${si.semanaOrigen})`).join("\n");
-        if (!confirm(`\u26a0 Esta l\u00ednea menciona un SC que tiene SALDO PENDIENTE abierto:\n\n${_d}\n\n`
-          + `Si cobr\u00e1s a mano, el saldo de ese SC NO se cierra y va a seguir descont\u00e1ndose cada semana.\n`
-          + `Lo correcto es usar el bot\u00f3n \u201cAplicar saldo de ${_coincide[0].sc} aqu\u00ed\u201d, que cobra y cierra el saldo de una vez.\n\n`
-          + `\u00bfGuardar igual la l\u00ednea manual?`)) return;
-      }
-    }
     if (f.tipo === "viaje" && !f.placa.trim()) return alert("La patente es obligatoria para un viaje completo.");
     const clave = claveCierre(f.empresa, f.sc); setGuardandoEdit(clave);
     try {
@@ -3254,7 +3278,7 @@ function ConciliacionTercerosMX({ usuario }) {
       const _manualSum = Math.round(_manualLines.reduce((s, d) => s + Number(d.monto || 0), 0) * 100) / 100;
       const _netoParaSaldo = Math.round((tot.netoViajes + _manualSum) * 100) / 100;
       if (tot.saldoPrevio < 0 || _netoParaSaldo < 0) await persistirSaldoCierre(empresa, sc, _netoParaSaldo);
-      for (const ml of _manualLines) await conciliarSaldoManual(empresa, ml._origenSC, sc, ml._motivo);
+      for (const ml of _manualLines) await conciliarSaldoManual(empresa, ml._origenSC, sc);
       if (_manualLines.length) setAplicManual(prev => { const cp = { ...prev }; delete cp[`${norm(empresa)}||${norm(sc)}`]; return cp; });
       await logEvento(empresa, sc, tot.negativo ? "cerrar_pendiente" : "cerrar", tot, { estado: tot.negativo ? "pendiente_conciliacion" : "cerrada" });
       setMsg({ ok: true, txt: `Conciliación de ${empresa} · ${sc} cerrada (semana ${semana}).` });
@@ -3348,37 +3372,14 @@ function ConciliacionTercerosMX({ usuario }) {
     setConsolidando(null);
   };
 
-  // Última sincronización de cada prefactura, solo para saber si se llevó
-  // líneas manuales. El resto del dato ya viene en la fila del resumen.
-  const cargarSyncLog = useCallback(async (sem) => {
-    const { data } = await sb.from("conciliacion_sync_log")
-      .select("empresa_nombre, service_center, manuales_antes, manuales_despues, creado_en")
-      .eq("semana", sem).order("creado_en", { ascending: false });
-    const m = {};
-    for (const l of (data || [])) {
-      const k = `${norm(l.empresa_nombre)}||${norm(l.service_center)}`;
-      if (m[k]) continue;   // solo la más reciente
-      const perdidas = Number(l.manuales_antes || 0) - Number(l.manuales_despues || 0);
-      m[k] = { perdioManuales: perdidas > 0 ? perdidas : 0 };
-    }
-    setSyncLog(m);
-  }, []);
-  useEffect(() => { if (semana) cargarSyncLog(semana); }, [semana, cargarSyncLog]);
-
   const consolidarTodas = async () => {
     if (!repRows || !repRows.length) return;
     if (!confirm(`¿Consolidar ${repRows.length} ruta(s) repetida(s)? Se deja el pago del 1er día de cada una y se quitan los días repetidos (queda auditado).`)) return;
     setConsolidando("__todas__");
     let ok = 0, fail = 0; const errores = [];
-    // Cada ruta hace varias consultas, así que con 20 o 30 el proceso tarda un
-    // minuto largo. Sin avance visible parece colgado y alguien recarga la
-    // página a la mitad, dejando la consolidación por la mitad.
-    for (let i = 0; i < repRows.length; i++) {
-      const rep = repRows[i];
-      setConsolidaProgreso({ actual: i + 1, total: repRows.length, ruta: rep.id_ruta });
+    for (const rep of repRows) {
       try { await _consolidarNucleo(rep); ok++; } catch (e) { fail++; errores.push(`${rep.id_ruta}: ${e.message || e}`); }
     }
-    setConsolidaProgreso(null);
     await cargarResumen(semana); await cargarRepetidas(semana); setConsolidando(null);
     setMsg({ ok: fail === 0, txt: `Consolidación masiva: ${ok} ok, ${fail} con error.` + (errores.length ? " — " + errores.join(" | ") : "") });
   };
@@ -3619,12 +3620,8 @@ function ConciliacionTercerosMX({ usuario }) {
       const yaNoEnMotor = filas.filter(d => !d._saldo && !d.traspaso && String(d.origen || "motor") === "motor" && !motorPorId[lineaId(d)]);
       const altas = motor.filter(d => !idsGuardadas.has(lineaId(d)) && !excluidas.has(lineaId(d)));
       if (!cambios.length && !altas.length) {
-        if (!silencioso) setMsg({ ok: true, txt: `${empresa} · ${sc} ya está al día con el motor.${respetadasEdit.length ? ` (${respetadasEdit.length} línea(s) editadas a mano se respetan.)` : ""}` });
-        setSincronizando(null);
-        // Devolver un objeto y no undefined: el bucle masivo lee r.ok, y con
-        // undefined reventaba en la primera prefactura ya sincronizada — que es
-        // el caso más común cuando alguien vuelve a pulsar el botón.
-        return { ok: true, cambios: 0, altas: 0, alDia: true };
+        setMsg({ ok: true, txt: `${empresa} · ${sc} ya está al día con el motor.${respetadasEdit.length ? ` (${respetadasEdit.length} línea(s) editadas a mano se respetan.)` : ""}` });
+        setSincronizando(null); return;
       }
       // ── Forense: POR QUÉ difiere cada línea ──
       // Momento del congelamiento (primer evento/ajuste de esta prefactura) + desglose actual del motor
@@ -3672,42 +3669,13 @@ function ConciliacionTercerosMX({ usuario }) {
         excluidas.size ? `• ${excluidas.size} línea(s) eliminadas/traspasadas NO se reponen` : null,
         yaNoEnMotor.length ? `• ${yaNoEnMotor.length} línea(s) están en la prefactura pero ya no en el motor (revisar)` : null,
       ].filter(Boolean).join("\n");
-      if (!silencioso && !confirm(`Sincronizar ${empresa} · ${sc} (semana ${semana}) con el Motor de pagos:\n${congeladaTxt ? congeladaTxt + "\n" : ""}\n${resumenTxt}\n\nLa prefactura vuelve a borrador y cada cambio queda auditado. ¿Continuar?`)) { setSincronizando(null); return { ok: false, cancelado: true, cambios: 0, altas: 0 }; }
+      if (!silencioso && !confirm(`Sincronizar ${empresa} · ${sc} (semana ${semana}) con el Motor de pagos:\n${congeladaTxt ? congeladaTxt + "\n" : ""}\n${resumenTxt}\n\nLa prefactura vuelve a borrador y cada cambio queda auditado. ¿Continuar?`)) { setSincronizando(null); return; }
       // 5) aplicar
       const finales = [...nuevasFilas, ...altas.map(d => ({ ...d, _id: lineaId(d), origen: "motor" }))];
       await guardarBorradorSC(empresa, sc, finales, cobrosDe(empresa, sc));
       for (const c of cambios) await auditarAjuste(empresa, sc, "resync_monto", "motor", c.linea, `Motor: ${fmtMon(c.antes)} → ${fmtMon(c.despues)}${causaDif(c.antes, c.despues, c.linea)}`);
       for (const d of altas) await auditarAjuste(empresa, sc, "resync_alta", "motor", d, "Viaje agregado desde el motor" + causaAlta(d));
       await logEvento(empresa, sc, "recalcular", recalcSC(finales, cobrosDe(empresa, sc)), { detalle: { montos_actualizados: cambios.length, viajes_agregados: altas.length, delta: deltaCambios, altas_total: totalAltas } });
-
-      // Registro de la sincronización. Importa el "manuales antes / después":
-      // la función respeta las líneas manuales por diseño, pero si alguna vez
-      // ese número baja, se llevó ajustes por delante y hay que mirarlo.
-      try {
-        const esManual = (d) => d && !d._saldo && String(d.origen || "motor") !== "motor";
-        const { data: cid } = await sb.from("conciliaciones_terceros")
-          .select("id, sync_veces").eq("empresa_nombre", empresa)
-          .eq("service_center", sc).eq("semana", semana).maybeSingle();
-        await sb.from("conciliacion_sync_log").insert({
-          conciliacion_id: cid?.id || null, semana, empresa_nombre: empresa, service_center: sc,
-          lineas_antes: filas.length, lineas_despues: finales.length,
-          neto_antes: Math.round(filas.reduce((t, d) => t + Number(d.monto || 0), 0) * 100) / 100,
-          neto_despues: Math.round(finales.reduce((t, d) => t + Number(d.monto || 0), 0) * 100) / 100,
-          manuales_antes: filas.filter(esManual).length,
-          manuales_despues: finales.filter(esManual).length,
-          sincronizado_por: (usuario && (usuario.nombre || usuario.email)) || "Brain",
-        });
-        if (cid?.id) {
-          await sb.from("conciliaciones_terceros").update({
-            sync_veces: Number(cid.sync_veces || 0) + 1,
-            sync_ultima_at: new Date().toISOString(),
-            sync_ultima_por: (usuario && (usuario.nombre || usuario.email)) || "Brain",
-          }).eq("id", cid.id);
-        }
-      } catch (eLog) {
-        // No bloquea: la sincronización ya se aplicó y eso es lo que importa.
-        console.error("No se pudo registrar la sincronización:", eLog);
-      }
       // 6) refrescar
       setDetalles(prev => { const nx = { ...prev }; delete nx[empresa]; return nx; });
       if (expandida && norm(expandida) === norm(empresa)) {
@@ -3747,19 +3715,11 @@ function ConciliacionTercerosMX({ usuario }) {
     let conCambios = 0, totalCambios = 0, totalAltas = 0, errores = 0;
     for (let i = 0; i < objetivos.length; i++) {
       const o = objetivos[i];
-      setSyncTodo({ total: objetivos.length, hechas: i + 1, actual: `${o.empresa} · ${o.sc}` });
-      // Blindado: una prefactura que falle no puede cortar las otras 29.
-      let r;
-      try {
-        r = await sincronizarConMotor(o.empresa, o.sc, { silencioso: true });
-      } catch (e) {
-        console.error("sincronizar masivo:", o.empresa, o.sc, e);
-        r = { ok: false, error: e.message || String(e), cambios: 0, altas: 0 };
-      }
-      if (!r || typeof r !== "object") r = { ok: false, error: "sin respuesta", cambios: 0, altas: 0 };
+      setSyncTodo({ total: objetivos.length, hechas: i, actual: `${o.empresa} · ${o.sc}` });
+      const r = await sincronizarConMotor(o.empresa, o.sc, { silencioso: true });
       setSyncResult(prev => ({ ...prev, [claveCierre(o.empresa, o.sc)]: r }));
       if (r.ok) {
-        totalCambios += Number(r.cambios || 0); totalAltas += Number(r.altas || 0);
+        totalCambios += r.cambios; totalAltas += r.altas;
         if (r.cambios || r.altas) conCambios++;
       } else errores++;
     }
@@ -3967,82 +3927,6 @@ function ConciliacionTercerosMX({ usuario }) {
     return nuevas.length;
   };
 
-  // Ajustes que vienen de diferencias aceptadas y todavía no entraron a ninguna
-  // prefactura. Sin este paso el tercero ve el ajuste en su portal y no le llega
-  // la plata — la discrepancia que más rápido rompe la confianza.
-  const cargarAjustesPendientes = useCallback(async () => {
-    // Todo lo que el carril B publicó al portal y todavía no está en ninguna
-    // prefactura: ajustes de diferencias, no shows y mermas. Un solo botón los
-    // baja a las tres, porque para el analista es la misma tarea del lunes.
-    const [aj, ns, mm] = await Promise.all([
-      sb.from("ajustes_pago_mx").select("*, terceros(nombre)").is("semana", null),
-      sb.from("cobros_noshow_mx").select("*, terceros(nombre)").eq("estado", "enviado").is("aplicado_semana", null),
-      sb.from("cobros_merma_mx").select("*, terceros(nombre)").eq("estado", "enviado").is("aplicado_semana", null),
-    ]);
-    const items = [];
-    for (const a of (aj.data || [])) items.push({
-      _tipo: "ajuste", id: a.id, empresa: a.terceros?.nombre, sc: a.service_center,
-      fecha: a.fecha, placa: "AJUSTE", id_ruta: "—",
-      concepto: a.concepto, monto: Number(a.monto || 0),
-    });
-    for (const n of (ns.data || [])) items.push({
-      _tipo: "noshow", id: n.id, empresa: n.terceros?.nombre || n.empresa_nombre, sc: n.service_center,
-      fecha: n.fecha, placa: n.placa, id_ruta: "—",
-      concepto: `No show · ${n.placa} · ${n.fecha}${n.justificacion ? " · " + n.justificacion : ""}`,
-      monto: -Math.abs(Number(n.monto || 0)),
-    });
-    for (const m of (mm.data || [])) items.push({
-      _tipo: "merma", id: m.id, empresa: m.terceros?.nombre || m.empresa_nombre, sc: m.service_center,
-      fecha: m.fecha_hecho, placa: m.placa, id_ruta: m.id_ruta || "—",
-      concepto: `${m.motivo || "Paquete perdido"} · guía ${m.guia}${m.fecha_hecho ? " · ruta del " + m.fecha_hecho : ""}`,
-      monto: -Math.abs(Number(m.monto || 0)),
-    });
-    setAjustesPend(items);
-  }, []);
-  useEffect(() => { cargarAjustesPendientes(); }, [cargarAjustesPendientes, semana]);
-
-  const aplicarAjustesDiferencias = async () => {
-    if (!ajustesPend.length) return;
-    const total = ajustesPend.reduce((t, a) => t + Number(a.monto || 0), 0);
-    const porTipo = ajustesPend.reduce((m, a) => ({ ...m, [a._tipo]: (m[a._tipo] || 0) + 1 }), {});
-    const desglose = Object.entries(porTipo).map(([t, n]) => `${n} ${t}`).join(" · ");
-    if (!confirm(`Aplicar ${ajustesPend.length} línea(s) a las prefacturas de la semana ${semana}.\n\n${desglose}\nTotal: $${total.toLocaleString("es-MX")}\n\nQuedan en borrador y auditadas. ¿Continuar?`)) return;
-    setAplicandoDif(true);
-    const grupos = {};
-    const sinEmpresa = [];
-    for (const a of ajustesPend) {
-      if (!a.empresa) { sinEmpresa.push(`${a._tipo} ${a.placa || a.id}`); continue; }
-      const k = `${a.empresa}||${a.sc}`;
-      (grupos[k] = grupos[k] || { empresa: a.empresa, sc: a.sc, items: [], porTabla: {} });
-      grupos[k].items.push({
-        kind: "ajuste", fecha: a.fecha, placa: a.placa, id_ruta: a.id_ruta,
-        concepto: a.concepto, montoFirmado: a.monto, aux: false,
-      });
-      const tabla = a._tipo === "ajuste" ? "ajustes_pago_mx"
-                  : a._tipo === "noshow" ? "cobros_noshow_mx" : "cobros_merma_mx";
-      (grupos[k].porTabla[tabla] = grupos[k].porTabla[tabla] || []).push(a.id);
-    }
-    let ok = 0, fail = 0; const errores = [];
-    for (const k of Object.keys(grupos)) {
-      const g = grupos[k];
-      try {
-        await _aplicarAjustesGrupo(g.empresa, g.sc, g.items);
-        // Se marcan recién después de que la línea entró: si la prefactura
-        // falla, quedan pendientes y el botón las vuelve a tomar.
-        for (const [tabla, ids] of Object.entries(g.porTabla)) {
-          const campo = tabla === "ajustes_pago_mx" ? "semana" : "aplicado_semana";
-          await sb.from(tabla).update({ [campo]: String(semana) }).in("id", ids);
-        }
-        ok += g.items.length;
-      } catch (e) { fail += g.items.length; errores.push(`${g.empresa}·${g.sc}: ${e.message || e}`); }
-    }
-    if (sinEmpresa.length) errores.push(`Sin empresa resuelta: ${sinEmpresa.join(", ")}`);
-    await cargarResumen(semana);
-    await cargarAjustesPendientes();
-    setAplicandoDif(false);
-    setMsg({ ok: fail === 0, txt: `Diferencias: ${ok} ajuste(s) aplicados, ${fail} con error.` + (errores.length ? " — " + errores.join(" | ") : "") });
-  };
-
   const aplicarImport = async () => {
     const validos = (importRows || []).filter(r => r.valido);
     if (!validos.length) return;
@@ -4136,45 +4020,9 @@ function ConciliacionTercerosMX({ usuario }) {
         ${noPagos.map(d => `<div class="obs-row">${fmtFechaDDMM(d.fecha)} · ${d.placa} · Ruta ${d.id_ruta} · ${d.driver_name || ""} — ${d.motivo_no_pago || "NO PAGADO"} (cargado ${d.cargado}, entregado ${d.entregado}, entrega ${fmtPct(d.pct_entrega)})</div>`).join("")}
       </div>` : "";
 
-    // Segunda hoja: detalle de los cobros por PNR con su historial de avisos.
-    // Los datos viajan dentro de la propia línea (los copia la pestaña PNR al
-    // momento de cobrar), así que la prefactura no consulta nada de Posventa.
-    const lineasPnr = filasSC.filter(d => d.origen === "pnr");
-    const fmtAv = (a) => {
-      const f = a && a.f ? new Date(a.f) : null;
-      const dd = f ? `${String(f.getDate()).padStart(2, "0")}/${String(f.getMonth() + 1).padStart(2, "0")} ${String(f.getHours()).padStart(2, "0")}:${String(f.getMinutes()).padStart(2, "0")}` : "";
-      return `<div class="pnr-av"><b>${a.t || "aviso"}</b>${a.d ? " \u00b7 " + a.d : ""} \u00b7 ${dd}${a.h != null ? " \u00b7 quedaban " + a.h + " h" : ""}</div>`;
-    };
-    const pnrHtml = !lineasPnr.length ? "" : `
-  <div class="pnr-page">
-    <div class="det-title">DETALLE DE COBROS POR PNR \u2014 ${empresa} \u00b7 ${sc} \u00b7 ${periodo}</div>
-    <table class="det">
-      <tr><th>PNR</th><th>GU\u00cdA</th><th>FECHA RUTA</th><th>ID RUTA</th><th>PATENTE</th><th>CONDUCTOR</th><th>SECTOR</th><th>MOTIVO DEL COBRO</th><th>MONTO</th></tr>
-      ${lineasPnr.map(d => `
-      <tr>
-        <td>${d.pnr_case_id || ""}</td><td>${d.pnr_shipment_id || ""}</td>
-        <td>${fmtFechaDDMM(d.fecha)}</td><td>${d.id_ruta || ""}</td>
-        <td>${d.placa || ""}</td><td style="text-align:left">${d.pnr_conductor || ""}</td>
-        <td>${d.service_center_id || ""}</td><td style="text-align:left">${d.pnr_motivo || ""}</td>
-        <td style="text-align:right">${fmtMon(d.monto)}</td>
-      </tr>`).join("")}
-    </table>
-    ${lineasPnr.map(d => `
-    <div class="pnr-box">
-      <div class="pnr-box-tit">PNR ${d.pnr_case_id || ""} \u00b7 gu\u00eda ${d.pnr_shipment_id || "\u2014"} \u00b7 ${d.placa || ""} \u00b7 ${fmtMon(d.monto)} \u2014 historial de avisos</div>
-      ${(Array.isArray(d.pnr_avisos) && d.pnr_avisos.length)
-        ? d.pnr_avisos.map(fmtAv).join("")
-        : `<div class="pnr-sin">Sin avisos registrados para este caso.</div>`}
-    </div>`).join("")}
-  </div>`;
-
     const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Prefactura ${empresa} ${sc} ${periodo}</title>
 <style>
-  * { margin:0; padding:0; box-sizing:border-box; font-family: Arial, Helvetica, sans-serif;
-      -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-  /* Sin esto el navegador imprime en vertical y descarta los fondos: la
-     cabecera naranja sale gris y la tabla de 13 columnas queda comprimida. */
-  @page { size: A4 landscape; margin: 8mm 10mm; }
+  * { margin:0; padding:0; box-sizing:border-box; font-family: Arial, Helvetica, sans-serif; }
   body { padding: 28px 32px; color:#1a1a1a; font-size:11px; }
   .head { display:flex; justify-content:space-between; align-items:flex-start; background:#F47B20; color:#fff; padding:14px 18px; border-radius:4px; }
   .head h1 { font-size:26px; letter-spacing:1px; }
@@ -4203,13 +4051,7 @@ function ConciliacionTercerosMX({ usuario }) {
   .bono { margin-top:14px; border:1px solid #86efac; background:#f0fdf4; border-radius:4px; padding:10px 12px; }
   .bono-title { font-weight:800; font-size:10px; color:#166534; margin-bottom:6px; }
   .bono-row { font-size:10px; color:#14532d; padding:2px 0; }
-  .pnr-page { page-break-before: always; padding-top: 6px; }
-  .pnr-box { margin-top:12px; border:1px solid #cdd3dc; border-radius:4px; padding:8px 10px; }
-  .pnr-box-tit { font-size:10px; font-weight:800; color:#1a3a6b; margin-bottom:4px; }
-  .pnr-av { font-size:9px; color:#444; padding:1px 0; }
-  .pnr-av b { color:#1a1a1a; }
-  .pnr-sin { font-size:9px; color:#991b1b; }
-  @media print { body { padding: 0; } .noprint { display:none; } }
+  @media print { body { padding: 10mm 12mm; } .noprint { display:none; } }
   .noprint { margin-top:24px; } .noprint button { padding:8px 18px; background:#1a3a6b; color:#fff; border:none; border-radius:6px; font-size:13px; cursor:pointer; }
 </style></head><body>
   <div class="head">
@@ -4257,7 +4099,6 @@ function ConciliacionTercerosMX({ usuario }) {
   </table>
   ${bonoHtml}
   ${obsHtml}
-  ${pnrHtml}
   <div class="noprint"><button onclick="window.print()">Imprimir / Guardar PDF</button></div>
 </body></html>`;
     const nombrePdf = `Prefactura_${String(empresa).replace(/[^A-Za-z0-9]+/g, "_")}_${sc}_${periodo.replace(/ /g, "_")}.pdf`;
@@ -4300,32 +4141,10 @@ function ConciliacionTercerosMX({ usuario }) {
     });
     const data = await resp.json().catch(() => ({}));
     if (!resp.ok || data.ok !== true) throw new Error((data && data.error) || ("Error HTTP " + resp.status));
-    // Guarda el documento que efectivamente se envió, para que el tercero lo
-    // abra desde su portal. Se guarda el HTML y no un PDF regenerado: es el
-    // mismo que n8n convirtió y mandó, así que si algún día se discute qué
-    // decía la prefactura, este archivo es la prueba.
-    let rutaDoc = null;
-    try {
-      rutaDoc = `prefacturas/${semana}/${sc}/${nombrePdf.replace(/[^\w.\-]/g, "_")}_${Date.now()}.html`;
-      const { error: eDoc } = await sb.storage.from("proceso_certificacion_bt")
-        .upload(rutaDoc, new Blob([html], { type: "text/html; charset=utf-8" }), {
-          contentType: "text/html; charset=utf-8",
-          // Sin esto Supabase sirve el archivo como descarga y el navegador lo
-          // muestra como texto plano en vez de renderizar la prefactura.
-          cacheControl: "3600", upsert: false,
-        });
-      if (eDoc) { rutaDoc = null; throw eDoc; }
-    } catch (eDoc) {
-      // No bloquea: el correo ya salió. El tercero ve el detalle en su portal
-      // igual, solo que sin el documento adjunto.
-      console.error("No se pudo guardar el documento de la prefactura:", eDoc);
-    }
-
     await sb.from("conciliaciones_terceros").update({
       estado: "enviada", enviado_at: new Date().toISOString(),
       enviado_por: (usuario && (usuario.nombre || usuario.email)) || "Brain",
       message_id: data.messageId || null, correo_to: correoTo, correo_cc: cc, asunto, cuerpo, nombre_pdf: nombrePdf,
-      ...(rutaDoc ? { pdf_url: rutaDoc } : {}),
     }).eq("empresa_nombre", empresa).eq("service_center", sc).eq("semana", semana);
     // SELLO DE ENVÍO: registro inmutable de que cada línea viajó en esta prefactura.
     try {
@@ -4426,7 +4245,7 @@ function ConciliacionTercerosMX({ usuario }) {
     const _manualSum = Math.round(_manualLines.reduce((s, d) => s + Number(d.monto || 0), 0) * 100) / 100;
     const _netoParaSaldo = Math.round((netoViajes + _manualSum) * 100) / 100;
     if (prev < 0 || _netoParaSaldo < 0) await persistirSaldoCierre(empresa, sc, _netoParaSaldo);
-    for (const ml of _manualLines) await conciliarSaldoManual(empresa, ml._origenSC, sc, ml._motivo);
+    for (const ml of _manualLines) await conciliarSaldoManual(empresa, ml._origenSC, sc);
     if (_manualLines.length) setAplicManual(prev => { const cp = { ...prev }; delete cp[`${norm(empresa)}||${norm(sc)}`]; return cp; });
     await logEvento(empresa, sc, negativo ? "cerrar_pendiente" : "cerrar", { neto: tot.neto, bruto: tot.bruto, liquido: tot.liquido, nViajes: tot.nViajes }, { estado, detalle: { masivo: true, saldoPrevio: prev, netoViajes } });
     return { ok: true, negativo, neteado: tot.neto, liquido: tot.liquido };
@@ -4722,13 +4541,6 @@ function ConciliacionTercerosMX({ usuario }) {
         <button onClick={enviarTodo} disabled={enviando === "__todo__"} style={{ padding: "8px 16px", background: enviando === "__todo__" ? "#94a3b8" : "#1e40af", color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>{enviando === "__todo__" ? "Enviando..." : "📧 Enviar todo"}</button>
         <button onClick={() => generarReporteCierre({})} title="Genera y envía el informe consolidado de la semana a los destinatarios de arriba" style={{ padding: "8px 16px", background: "#fff", color: "#1a3a6b", border: "1px solid #1a3a6b", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>📄 Reporte</button>
         <button onClick={() => { setImportRows(null); setImportOpen(true); }} style={{ padding: "8px 16px", background: "#1a3a6b", color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>📥 Importar ajustes (Excel)</button>
-        {ajustesPend.length > 0 && (
-          <button onClick={aplicarAjustesDiferencias} disabled={aplicandoDif}
-            title={ajustesPend.map(x => `${x.empresa || "sin empresa"} · ${x.sc} · ${x.concepto}`).join("\n")}
-            style={{ padding: "8px 16px", background: aplicandoDif ? "#cbd5e1" : "#f59e0b", color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: aplicandoDif ? "not-allowed" : "pointer" }}>
-            {aplicandoDif ? "Aplicando..." : `⚖️ Aplicar ${ajustesPend.length} cobro(s) a prefacturas`}
-          </button>
-        )}
         </div>
       </div>
 
@@ -4808,9 +4620,7 @@ function ConciliacionTercerosMX({ usuario }) {
           <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 8 }}>
             <span style={{ fontSize: 14, fontWeight: 800, color: "#92400e" }}>🔁 Rutas con ID repetido en la semana</span>
             <span style={{ fontSize: 12, color: "#b45309" }}>{repRows.filter(r => !consolidadas.has(`${r.empresa}||${r.service_center}||${r.id_ruta}`)).length} pendiente(s) · sobre-pago {fmtMon(repRows.filter(r => !consolidadas.has(`${r.empresa}||${r.service_center}||${r.id_ruta}`)).reduce((s, r) => s + Number(r.sobre_pago || 0), 0))}{consolidadas.size > 0 ? ` · ${consolidadas.size} ya consolidada(s)` : ""}</span>
-            <button onClick={consolidarTodas} disabled={!!consolidando} style={{ marginLeft: "auto", padding: "6px 14px", background: consolidando ? "#94a3b8" : "#92400e", color: "#fff", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>{consolidando === "__todas__"
-              ? (consolidaProgreso ? `Consolidando ${consolidaProgreso.actual} de ${consolidaProgreso.total}…` : "Consolidando…")
-              : "Consolidar todas (dejar 1er día)"}</button>
+            <button onClick={consolidarTodas} disabled={!!consolidando} style={{ marginLeft: "auto", padding: "6px 14px", background: consolidando ? "#94a3b8" : "#92400e", color: "#fff", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>{consolidando === "__todas__" ? "Consolidando..." : "Consolidar todas (dejar 1er día)"}</button>
           </div>
           <div style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
@@ -5201,23 +5011,6 @@ function ConciliacionTercerosMX({ usuario }) {
                     {esSinEmpresa ? "⚠️ " + g.empresa : g.empresa}
                     {esSinEmpresa && det && Object.keys(porPlaca).some(p => placasViejas[p]) && <span style={{ fontSize: 11, fontWeight: 700, color: "#9a3412", background: "#ffedd5", padding: "1px 7px", borderRadius: 8 }}>⚠️ {Object.keys(porPlaca).filter(p => placasViejas[p]).length} de semanas anteriores</span>}
                     {!esSinEmpresa && <span style={{ fontSize: 11, fontWeight: 600, color: "#7c3aed", background: "#f3e8ff", padding: "1px 7px", borderRadius: 8 }}>{g.filasSC.length} SC</span>}
-                    {/* Cuántas veces se resincronizó esta empresa, sumando sus SC.
-                        Va en la barra de arriba para verlo sin desplegar: si una
-                        empresa se sincronizó cinco veces, algo pasó con sus datos. */}
-                    {!esSinEmpresa && (() => {
-                      const veces = g.filasSC.reduce((t, r) => t + Number(r.sync_veces || 0), 0);
-                      if (!veces) return null;
-                      const perdio = g.filasSC.some(r => (syncLog[`${norm(g.empresa)}||${norm(r.service_center)}`] || {}).perdioManuales);
-                      const ult = g.filasSC.map(r => r.sync_ultima_at).filter(Boolean).sort().pop();
-                      const quien = (g.filasSC.find(r => r.sync_ultima_at === ult) || {}).sync_ultima_por;
-                      return (
-                        <span title={`Última sincronización: ${ult ? new Date(ult).toLocaleString("es-CL") : "—"}${quien ? " · " + quien : ""}${perdio ? "\nOJO: en la última desaparecieron líneas manuales." : ""}`}
-                          style={{ fontSize: 11, fontWeight: 600, padding: "1px 7px", borderRadius: 8, cursor: "help",
-                            color: perdio ? "#92400e" : "#64748b", background: perdio ? "#fef3c7" : "#eef2f7" }}>
-                          {perdio ? "⚠️ " : "🔄 "}{veces} sincro
-                        </span>
-                      );
-                    })()}
                     {!esSinEmpresa && saldoEmpresa(g.empresa) < 0 && <span style={{ fontSize: 11, fontWeight: 800, color: "#9a3412", background: "#ffedd5", padding: "1px 7px", borderRadius: 8 }}>⚠️ Saldo pendiente {fmtMon(saldoEmpresa(g.empresa))}</span>}
                     {!esSinEmpresa && _netoE < 0 && <span style={{ fontSize: 11, fontWeight: 800, color: "#9a3412", background: "#fee2e2", padding: "1px 7px", borderRadius: 8 }}>⚠️ Negativo → irá a pendiente</span>}
                   </div>
@@ -5288,16 +5081,7 @@ function ConciliacionTercerosMX({ usuario }) {
                                 <span style={{ fontWeight: 800, color: "#1a3a6b", fontSize: 13 }}>SC {rSC.service_center}</span>
                                 {chipEstado(rSC.estado_conciliacion)}
                                 <span style={{ fontSize: 11, color: "#64748b" }}>
-                                  Sup: {rSC.supervisor || "—"} · {_viajesSC} viajes · {rSC.n_no_pago} no pago{(ajustesSC[`${norm(g.empresa)}||${norm(rSC.service_center)}`] || 0) > 0 ? ` · ${ajustesSC[`${norm(g.empresa)}||${norm(rSC.service_center)}`]} ajuste(s)` : ""} · Neto {fmtMon(_netoViajesSC)} · Bruto {fmtMon(_brutoBaseSC)}{rSC.tiene_ajustes ? " · ✏️ ajustada" : ""}{rSC.enviado_at ? " · 📤 " + new Date(rSC.enviado_at).toLocaleDateString("es-CL") : ""}{rSC.sync_veces > 0 ? (() => {
-                                    const perdidas = (syncLog[`${norm(g.empresa)}||${norm(rSC.service_center)}`] || {}).perdioManuales;
-                                    return (
-                                      <span title={`Última: ${rSC.sync_ultima_at ? new Date(rSC.sync_ultima_at).toLocaleString("es-CL") : "—"}${rSC.sync_ultima_por ? " · " + rSC.sync_ultima_por : ""}${perdidas ? `\nOJO: en la última sincronización desaparecieron ${perdidas} línea(s) manual(es).` : ""}`}
-                                        style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, padding: "1px 7px", borderRadius: 9,
-                                          background: perdidas ? "#fef3c7" : "#eef2f7", color: perdidas ? "#92400e" : "#64748b", cursor: "help" }}>
-                                        {perdidas ? "⚠️ " : "🔄 "}sincronizada {rSC.sync_veces}×
-                                      </span>
-                                    );
-                                  })() : null}{(() => { const prev = saldoPrevioDe(g.empresa, rSC.service_center); const man = lineasManualesDe(g.empresa, rSC.service_center).reduce((s, d) => s + Number(d.monto || 0), 0); if (!(prev < 0) && !(man < 0)) return ""; const nv = _netoViajesSC; const net = Math.round((nv + prev + man) * 100) / 100; const br = net < 0 ? net : Math.round(net * 1.16 * 100) / 100; const partes = []; if (prev < 0) partes.push(`Saldo ${fmtMon(prev)}`); if (man < 0) partes.push(`Aplicado ${fmtMon(man)}`); return ` · ⚠️ ${partes.join(" · ")} · A pagar: neto ${fmtMon(net)} / bruto ${fmtMon(br)}`; })()}
+                                  Sup: {rSC.supervisor || "—"} · {_viajesSC} viajes · {rSC.n_no_pago} no pago{(ajustesSC[`${norm(g.empresa)}||${norm(rSC.service_center)}`] || 0) > 0 ? ` · ${ajustesSC[`${norm(g.empresa)}||${norm(rSC.service_center)}`]} ajuste(s)` : ""} · Neto {fmtMon(_netoViajesSC)} · Bruto {fmtMon(_brutoBaseSC)}{rSC.tiene_ajustes ? " · ✏️ ajustada" : ""}{rSC.enviado_at ? " · 📤 " + new Date(rSC.enviado_at).toLocaleDateString("es-CL") : ""}{(() => { const prev = saldoPrevioDe(g.empresa, rSC.service_center); const man = lineasManualesDe(g.empresa, rSC.service_center).reduce((s, d) => s + Number(d.monto || 0), 0); if (!(prev < 0) && !(man < 0)) return ""; const nv = _netoViajesSC; const net = Math.round((nv + prev + man) * 100) / 100; const br = net < 0 ? net : Math.round(net * 1.16 * 100) / 100; const partes = []; if (prev < 0) partes.push(`Saldo ${fmtMon(prev)}`); if (man < 0) partes.push(`Aplicado ${fmtMon(man)}`); return ` · ⚠️ ${partes.join(" · ")} · A pagar: neto ${fmtMon(net)} / bruto ${fmtMon(br)}`; })()}
                                 </span>
                               </div>
                               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -5343,23 +5127,6 @@ function ConciliacionTercerosMX({ usuario }) {
                                   {netoSemana !== 0 && <div style={{ fontSize: 11, color: neteado < 0 ? "#9a3412" : "#166534", marginTop: 4, fontWeight: 700 }}>{`Con los viajes de esta semana (${fmtMon(netoSemana)}): neto resultante ${fmtMon(neteado)}${neteado < 0 ? " \u2192 sigue pendiente" : " \u2192 se concilia y se paga"}.`}</div>}
                                   <div style={{ marginTop: 8 }}><button onClick={(e) => { e.stopPropagation(); consolidarSaldoManual(g.empresa, rSC.service_center); }} title="Dar por cerrado por acuerdo: elimina el saldo de la base y deja de arrastrarse/sumar" style={{ fontSize: 11, fontWeight: 700, color: "#fff", background: "#b91c1c", border: "none", borderRadius: 6, padding: "5px 12px", cursor: "pointer" }}>🗑 Consolidar (eliminar saldo por acuerdo)</button></div>
                                 </div>);
-                              })()}
-                              {!esSinEmpresa && (() => {
-                                const _dobles = cobrosManualesDeSaldoAbierto(g.empresa, rSC.service_center);
-                                if (!_dobles.length) return null;
-                                return (
-                                  <div style={{ marginBottom: 10, border: "1.5px solid #dc2626", background: "#fef2f2", borderRadius: 8, padding: "10px 12px" }}>
-                                    <div style={{ fontSize: 11, fontWeight: 800, color: "#991b1b", marginBottom: 4 }}>
-                                      ⚠ Cobro manual sobre un saldo que sigue abierto — riesgo de doble descuento
-                                    </div>
-                                    {_dobles.map(x => (
-                                      <div key={x.sc} style={{ fontSize: 11, color: "#991b1b", marginTop: 3 }}>
-                                        Acá hay {x.lineas.length} línea(s) manual(es) que mencionan <b>{x.sc}</b>, y el saldo de {x.sc} sigue pendiente por <b>{fmtMon(x.pendiente)}</b> (origen sem {x.semanaOrigen}).
-                                        {" "}Si ya cobraste ese monto acá, andá a la tarjeta de {x.sc} y usá <b>Consolidar (eliminar saldo por acuerdo)</b> para cerrarlo; si no, quitá la línea manual y usá <b>Aplicar saldo de {x.sc} aquí</b>.
-                                      </div>
-                                    ))}
-                                  </div>
-                                );
                               })()}
                               {!esSinEmpresa && (rSC.estado_conciliacion === "sin_generar" || rSC.estado_conciliacion === "borrador") && saldosOtrosSC(g.empresa, rSC.service_center).length > 0 && (
                                 <div style={{ marginBottom: 10, border: "1px dashed #fdba74", background: "#fffbeb", borderRadius: 8, padding: "8px 12px" }}>
@@ -5989,10 +5756,6 @@ function ModuloPagosMadre({ usuario }) {
     { id: "torre_3p",    label: "Torre de Control Pagos", desc: "3 Pilares · MELI vs Operación" },
     { id: "terceros",    label: "Terceros",              desc: "Empresas subcontratadas por patente" },
     { id: "conciliacion", label: "Conciliación Terceros", desc: "Conciliación semanal por empresa" },
-    { id: "facturacion_terceros", label: "Facturación Terceros", desc: "Facturas que suben los terceros contra cada prefactura" },
-    { id: "pnr_cobros",  label: "Cobros",                desc: "PNR, robos y extravíos, no show" },
-    { id: "diferencias", label: "Diferencias",           desc: "Reclamos de terceros sobre pagos y cobros" },
-    { id: "comparativa", label: "Comparativa",          desc: "Prefactura del lunes vs acumulado diario" },
     { id: "historial_pago", label: "Historial de Pago", desc: "Resumen semanal: cierres, cambios, saldos y reporte" },
     { id: "ayudantes",   label: "Ayudantes",             desc: "Números del día y aprobación del pago del ayudante" },
     { id: "cierre_dia",  label: "Cierre del Día",        desc: "Salud del día por ruta: conciliación entre Torre, KM, informe y escaneos" },
@@ -6046,10 +5809,6 @@ function ModuloPagosMadre({ usuario }) {
           {subtab === "torre_3p"    && <TorreTresPilares />}
           {subtab === "terceros"    && <TercerosMX />}
           {subtab === "conciliacion" && <ConciliacionTercerosMX usuario={usuario} />}
-          {subtab === "facturacion_terceros" && <FacturacionTerceros usuario={usuario} />}
-          {subtab === "pnr_cobros"  && <CobrosTerceros usuario={usuario} />}
-          {subtab === "diferencias" && <Diferencias usuario={usuario} />}
-          {subtab === "comparativa" && <Comparativa />}
           {subtab === "historial_pago" && <HistorialPagoMX usuario={usuario} />}
           {subtab === "ayudantes"   && <AyudantesDetalleDia usuario={usuario} />}
           {subtab === "cierre_dia"  && <CierreDelDia />}
@@ -6137,7 +5896,7 @@ function normEmpresaTarifa(s) {
   return String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase().trim();
 }
 
-function buscarTarifa(empresaRuta, tipologia, zona, tramo, fecha, especiales, matrizPrecios) {
+function buscarTarifa(empresaRuta, tipologia, zona, tramo, fecha, especiales, matrizPrecios, site, tipoSDD) {
   const tipTitleCase = tipologiaTitleCase(tipologia);
   const empNorm = normEmpresaTarifa(empresaRuta);
   if (empNorm) {
@@ -6152,13 +5911,32 @@ function buscarTarifa(empresaRuta, tipologia, zona, tramo, fecha, especiales, ma
     if (especial) return { monto: Number(especial.monto), fuente: "ESPECIAL" };
   }
 
-  const general = matrizPrecios.find(m =>
+  // Vigencia: una tarifa sin fechas se considera siempre vigente (comportamiento previo).
+  // Con fechas, solo aplica dentro del rango; asi recalcular un dia pasado nunca toma
+  // tarifas cargadas despues. El cambio de un periodo ya pagado debe ser intencional.
+  const vigenteEnFecha = (m) =>
+    (!m.vigente_desde || !fecha || String(m.vigente_desde).slice(0, 10) <= fecha) &&
+    (!m.vigente_hasta || !fecha || String(m.vigente_hasta).slice(0, 10) >= fecha);
+
+  const base = (matrizPrecios || []).filter(m =>
+    m.activo === true &&
     m.tipo_vehiculo === tipologia &&
-    m.zonificacion === zona &&
     m.tramo_km === tramo &&
-    m.activo === true
+    vigenteEnFecha(m)
   );
-  if (general) return { monto: Number(general.tarifa_mxn), fuente: "MATRIZ" };
+
+  // Cascada de lo mas especifico a lo mas general. Las filas sin site ni tipo_ruta
+  // (todas las historicas) caen en el ultimo caso: la busqueda por zona de siempre.
+  const candidatos = [
+    { f: (m) => m.site === site && m.tipo_ruta === tipoSDD,                     fuente: "MATRIZ_SITE_TIPO" },
+    { f: (m) => m.site === site && !m.tipo_ruta,                                fuente: "MATRIZ_SITE" },
+    { f: (m) => !m.site && m.zonificacion === zona && m.tipo_ruta === tipoSDD,  fuente: "MATRIZ_ZONA_TIPO" },
+    { f: (m) => !m.site && m.zonificacion === zona && !m.tipo_ruta,             fuente: "MATRIZ" },
+  ];
+  for (const c of candidatos) {
+    const hit = base.find(c.f);
+    if (hit) return { monto: Number(hit.tarifa_mxn), fuente: c.fuente };
+  }
 
   return { monto: 0, fuente: "SIN_TARIFA" };
 }
@@ -6374,7 +6152,7 @@ function calcularPagos({ maestro, snapshots, scZonas, especiales, matrizPrecios,
     let tarifaInfo = { monto: 0, fuente: "SIN_TARIFA" };
     if (tipologia && zona) {
       const empresaRuta = (placaEmpresa || {})[placa] || null;
-      tarifaInfo = buscarTarifa(empresaRuta, tipologia, zona, tramo, fechaSalida, especiales, matrizPrecios);
+      tarifaInfo = buscarTarifa(empresaRuta, tipologia, zona, tramo, fechaSalida, especiales, matrizPrecios, sc, esSDD ? "SDD" : "SPOT");
       if (tarifaInfo.fuente === "SIN_TARIFA") obs.push(`Sin tarifa para ${tipologia} / ${zona} / ${tramo}`);
     }
     const tarifaBase = tarifaInfo.monto;
@@ -6860,18 +6638,6 @@ function ListadoPagosDiarios({ usuario }) {
   const [causaFalta, setCausaFalta] = useState(null);        // sub-filtro de la tarjeta de datos incompletos
   const [avisoRecalc, setAvisoRecalc] = useState(null); // N aprobaciones modificadas tras el último cálculo
   const [guardandoTarifado, setGuardandoTarifado] = useState(false);
-  // ── Publicación al portal de terceros ────────────────────────────────
-  // Guardar (arriba) es el borrador del analista: puede recalcular sin límite.
-  // Publicar es un acto distinto — deja el día visible para el tercero, con
-  // autor, hora y versión. Republicar no pisa: crea la versión n+1 con motivo.
-  const [publicaciones, setPublicaciones] = useState({});   // sc -> fila vigente
-  const [publicando, setPublicando] = useState(null);       // sc en curso
-  const [guardadoPorSC, setGuardadoPorSC] = useState({});   // sc -> rutas en tarifado_mx
-  const [scAbierto, setScAbierto] = useState(null);         // sc con el detalle desplegado
-  const [publicadas, setPublicadas] = useState({});         // id_ruta -> foto vigente publicada
-  const [marcadas, setMarcadas] = useState({});             // id_ruta -> true (republicar solo estas)
-  const [empresaGuardada, setEmpresaGuardada] = useState({}); // id_ruta -> empresa resuelta al guardar
-  const [revisiones, setRevisiones] = useState({});         // id_ruta -> fila de revision_ruta_mx
   // ── Datos incompletos: qué le falta a una línea para poder tarifarse bien ──
   // A diferencia de "Con alertas" (que incluye avisos operativos), esto marca SOLO
   // vacíos de información maestra que impiden calcular la tarifa correcta.
@@ -6950,11 +6716,6 @@ function ListadoPagosDiarios({ usuario }) {
       const ahora = new Date().toISOString(); const por = _quienPausa();
       const { error } = await sb.from("maestro_jornada_mx").update({ pausado: true, pausa_motivo: pausaMotivo.trim(), pausa_por: por, pausa_at: ahora, liberado_at: null, liberado_por: null }).eq("id", r.id);
       if (error) throw error;
-      // Espejo para el portal: el tercero ve la ruta "en revisión" con este mismo motivo
-      await sb.from("revision_ruta_mx").upsert({
-        fecha: r.fecha || fecha, id_ruta: r.id_ruta, estado: "pausada",
-        motivo_rechazo: pausaMotivo.trim(), revisado_por: por, revisado_at: ahora,
-      }, { onConflict: "fecha,id_ruta" });
       setPagos(ps => ps.map(p => p.id === r.id ? { ...p, pausado: true, pausa_motivo: pausaMotivo.trim(), pausa_por: por, pausa_at: ahora } : p));
       setPausaModal(null); setPausaMotivo("");
     } catch (e) { alert("Error pausando: " + (e.message || e)); }
@@ -6966,10 +6727,7 @@ function ListadoPagosDiarios({ usuario }) {
       const ahora = new Date().toISOString(); const por = _quienPausa();
       const { error } = await sb.from("maestro_jornada_mx").update({ pausado: false, liberado_at: ahora, liberado_por: por }).eq("id", r.id);
       if (error) throw error;
-      // Quita la excepción: la ruta vuelve a verse aprobada en el portal
-      await sb.from("revision_ruta_mx").delete().eq("fecha", r.fecha || fecha).eq("id_ruta", r.id_ruta);
       setPagos(ps => ps.map(p => p.id === r.id ? { ...p, pausado: false, liberado_at: ahora, liberado_por: por } : p));
-      cargarPublicaciones();
     } catch (e) { alert("Error reanudando: " + (e.message || e)); }
   };
 
@@ -7494,211 +7252,6 @@ function ListadoPagosDiarios({ usuario }) {
     setGuardandoTarifado(false);
   };
 
-  // Trae lo publicado del día y cuántas rutas hay realmente guardadas por SC.
-  // Se publica SOLO lo que está en tarifado_mx (el guardado), nunca el cálculo
-  // en memoria: así el tercero ve exactamente lo mismo que irá en su prefactura.
-  const cargarPublicaciones = useCallback(async () => {
-    try {
-      const [pubR, tarR, revR, linR] = await Promise.all([
-        sb.from("vw_publicacion_vigente_mx").select("*").eq("fecha", fecha),
-        sb.from("tarifado_mx").select("service_center_id, id_ruta, empresa_nombre, tercero_id").eq("fecha", fecha),
-        sb.from("revision_ruta_mx").select("*").eq("fecha", fecha),
-        sb.from("vw_publicacion_lineas_vigente").select("*").eq("fecha", fecha),
-      ]);
-      const mp = {};
-      for (const r of (pubR.data || [])) mp[r.service_center] = r;
-      setPublicaciones(mp);
-      const mg = {};
-      const me = {};
-      for (const r of (tarR.data || [])) {
-        mg[r.service_center_id] = (mg[r.service_center_id] || 0) + 1;
-        me[r.id_ruta] = r.tercero_id ? (r.empresa_nombre || "") : null;
-      }
-      setGuardadoPorSC(mg);
-      setEmpresaGuardada(me);
-      const mr = {};
-      for (const r of (revR.data || [])) mr[r.id_ruta] = r;
-      setRevisiones(mr);
-      const ml = {};
-      for (const r of (linR.data || [])) ml[r.id_ruta] = r;
-      setPublicadas(ml);
-      setMarcadas({});
-    } catch (e) { console.error("No se pudo leer el estado de publicación:", e); }
-  }, [fecha]);
-  useEffect(() => { cargarPublicaciones(); }, [cargarPublicaciones]);
-
-  // Resumen del cálculo en memoria, por SC (para la tarjeta)
-  const resumenSC = useMemo(() => {
-    const m = {};
-    for (const p of pagos) {
-      const sc = p.service_center_id || "—";
-      if (!m[sc]) m[sc] = { sc, rutas: 0, monto: 0 };
-      m[sc].rutas += 1;
-      m[sc].monto += Number(p.pago_neto || 0);
-    }
-    return Object.values(m).sort((a, b) => String(a.sc).localeCompare(String(b.sc)));
-  }, [pagos]);
-
-  const totalGuardadas = useMemo(
-    () => Object.values(guardadoPorSC).reduce((t, n) => t + n, 0), [guardadoPorSC]);
-
-  // Rutas guardadas sin empresa: si se publican, nadie las ve, y como el tercero
-  // no sabe que existen tampoco las va a reclamar. Es el único error del sistema
-  // sin quien lo levante, así que tiene que gritar antes de publicar.
-  //
-  // Se cuenta sobre lo GUARDADO en tarifado_mx, no sobre el cálculo en memoria:
-  // el tercero_id lo resuelve un trigger al insertar, así que el mapa que usa la
-  // tabla de arriba (Excel semanal) daba un número distinto al real.
-  const [sinEmpresaDia, setSinEmpresaDia] = useState({ n: 0, monto: 0, scs: [] });
-  useEffect(() => {
-    let cancel = false;
-    (async () => {
-      const { data } = await sb.from("tarifado_mx")
-        .select("service_center_id, pago_neto")
-        .eq("fecha", fecha).is("tercero_id", null);
-      if (cancel) return;
-      const ss = data || [];
-      setSinEmpresaDia({
-        n: ss.length,
-        monto: ss.reduce((t, r) => t + Number(r.pago_neto || 0), 0),
-        scs: [...new Set(ss.map(r => r.service_center_id || "—"))],
-      });
-    })();
-    return () => { cancel = true; };
-  }, [fecha, guardadoPorSC]);
-
-  // Publica el día completo: un solo acto para los N centros del día.
-  // El detalle por SC de abajo queda para cuando haya que retener uno.
-  const publicarDia = async () => {
-    const pend = resumenSC.filter(r => (guardadoPorSC[r.sc] || 0) > 0);
-    if (pend.length === 0) { alert("No hay nada guardado en tarifado para este día."); return; }
-    const rutas = pend.reduce((t, r) => t + (guardadoPorSC[r.sc] || 0), 0);
-    const yaPub = pend.filter(r => publicaciones[r.sc]).length;
-    const aviso = yaPub > 0 ? `\n\n${yaPub} centro(s) ya están publicados y se omitirán. Para corregirlos, publicá ese centro por separado.` : "";
-    const huerf = sinEmpresaDia.n > 0
-      ? `\n\n⚠️ ${sinEmpresaDia.n} ruta(s) por $${Number(sinEmpresaDia.monto).toLocaleString("es-MX")} no tienen empresa en el padrón: nadie las va a ver, y ningún tercero las va a reclamar porque no sabe que existen.`
-      : "";
-    if (!confirm(`Aprobar y publicar el día ${fecha}\n\n${rutas} rutas · ${pend.length - yaPub} centro(s)${aviso}${huerf}\n\nLos terceros lo verán en su portal. ¿Continuar?`)) return;
-    setPublicando("__DIA__");
-    let ok = 0, fallos = [];
-    for (const r of pend) {
-      if (publicaciones[r.sc]) continue;
-      try { await publicarUno(r.sc, null); ok++; }
-      catch (e) { fallos.push(`${r.sc}: ${e.message}`); }
-    }
-    await cargarPublicaciones();
-    setPublicando(null);
-    alert(fallos.length
-      ? `Publicados ${ok} centro(s).\n\nNo se pudo publicar:\n${fallos.join("\n")}`
-      : `Publicados ${ok} centro(s) del ${fecha}.`);
-  };
-
-  // Escribe la publicación de un SC y la FOTO de cada ruta. La foto es lo que
-  // ve el tercero: sin ella, cualquier recálculo posterior le cambia el número
-  // en pantalla sin que nadie lo haya decidido.
-  // soloRutas: si viene, republica únicamente esas (las demás conservan su foto).
-  const publicarUno = async (sc, motivo, soloRutas = null) => {
-    const vig = publicaciones[sc];
-    const version = vig ? vig.version + 1 : 1;
-    const { data: guardado, error: eG } = await sb.from("tarifado_mx")
-      .select("*").eq("fecha", fecha).eq("service_center_id", sc);
-    if (eG) throw new Error("no se pudo leer el tarifado guardado");
-    if (!guardado || guardado.length === 0) throw new Error("sin tarifado guardado");
-
-    const { data: exc } = await sb.from("revision_ruta_mx")
-      .select("id_ruta, estado").eq("fecha", fecha)
-      .in("id_ruta", guardado.map(g => g.id_ruta));
-    const estadoDe = {};
-    for (const e of (exc || [])) estadoDe[e.id_ruta] = e.estado;
-
-    const aPublicar = soloRutas ? guardado.filter(g => soloRutas.includes(g.id_ruta)) : guardado;
-    if (aPublicar.length === 0) throw new Error("no marcaste ninguna ruta");
-
-    const lineas = aPublicar.map(g => ({
-      fecha, service_center: sc, id_ruta: g.id_ruta, version,
-      tercero_id: g.tercero_id, placa: g.placa, driver_name: g.driver_name,
-      ns_pct: g.ns_pct, pct_visitado: g.pct_visitado, ns_categoria: g.ns_categoria,
-      tiene_auxiliar: g.tiene_auxiliar, monto_auxiliar: g.monto_auxiliar,
-      pago_neto: g.pago_neto, motivo,
-      publicado_por: (usuario && (usuario.email || usuario.nombre)) || "brain",
-    }));
-    for (let i = 0; i < lineas.length; i += 500) {
-      const { error } = await sb.from("publicacion_lineas_mx").insert(lineas.slice(i, i + 500));
-      if (error) throw error;
-    }
-
-    const rechazadas = guardado.filter(g => estadoDe[g.id_ruta] === "rechazada").length;
-    const pausadas   = guardado.filter(g => ["pausada", "bloqueada"].includes(estadoDe[g.id_ruta])).length;
-    const { error } = await sb.from("publicacion_dia_mx").insert({
-      fecha, service_center: sc, version,
-      rutas_total: guardado.length,
-      rutas_aprobadas: guardado.length - rechazadas - pausadas,
-      rutas_rechazadas: rechazadas,
-      rutas_pausadas: pausadas,
-      monto_total: guardado.reduce((t, g) => estadoDe[g.id_ruta] ? t : t + Number(g.pago_neto || 0), 0),
-      motivo_version: motivo,
-      publicado_por: (usuario && (usuario.email || usuario.nombre)) || "brain",
-    });
-    if (error) throw error;
-  };
-
-  const publicarSC = async (sc) => {
-    const vig = publicaciones[sc];
-    const guardadas = guardadoPorSC[sc] || 0;
-    if (guardadas === 0) {
-      alert(`No hay tarifado guardado para ${sc} del ${fecha}.\n\nGuardá el día antes de publicar.`);
-      return;
-    }
-    let motivo = null;
-    if (vig) {
-      motivo = prompt(`${sc} del ${fecha} ya está publicado (v${vig.version}).\n\nSe creará la versión ${vig.version + 1} y el tercero verá la corrección.\n\nMotivo:`);
-      if (motivo === null) return;
-      if (!motivo.trim()) { alert("El motivo es obligatorio al republicar."); return; }
-    } else {
-      const det = detalleSC(sc);
-      const sinEmpresa = det.filter(d => !d.empresa).length;
-      const aviso = sinEmpresa > 0 ? `\n\n⚠️ ${sinEmpresa} ruta(s) sin empresa en el padrón: nadie las verá.` : "";
-      if (!confirm(`Publicar ${sc} · ${fecha}\n\n${guardadas} rutas guardadas${aviso}\n\nEl tercero lo verá en su portal. ¿Continuar?`)) return;
-    }
-    setPublicando(sc);
-    try { await publicarUno(sc, motivo, marcadasDe(sc)); await cargarPublicaciones(); }
-    catch (e) { alert("No se pudo publicar:\n\n" + e.message); }
-    setPublicando(null);
-  };
-
-  // Una ruta "cambió" si su monto o su ayudante no coinciden con la foto que
-  // el tercero está viendo. Es lo que el analista necesita ver de un vistazo
-  // después de recalcular: qué se movió de verdad y qué no.
-  const cambioDe = (p) => {
-    const pub = publicadas[p.id_ruta];
-    if (!pub) return "nueva";
-    const dif = Math.abs(Number(pub.pago_neto || 0) - Number(p.pago_neto || 0));
-    if (dif >= 0.01) return Number(p.pago_neto || 0) > Number(pub.pago_neto || 0) ? "subio" : "bajo";
-    if (!!pub.tiene_auxiliar !== !!p.tiene_auxiliar) return "ayudante";
-    return null;
-  };
-
-  const marcadasDe = (sc) => {
-    const ids = detalleSC(sc).filter(d => marcadas[d.id_ruta]).map(d => d.id_ruta);
-    return ids.length ? ids : null;   // null = republicar el SC completo
-  };
-
-  // Detalle de un SC: rutas del cálculo con su empresa asignada
-  const detalleSC = (sc) => (pagos || [])
-    .filter(p => (p.service_center_id || "—") === sc)
-    .map(p => ({
-      id_ruta: p.id_ruta, placa: p.placa, driver: p.driver_name,
-      // La empresa que vale es la que quedó en tarifado_mx al guardar: la resuelve
-      // un trigger con la precedencia certificación → bitácora. empresaDeFila usa
-      // el mapa del Excel semanal viejo y marcaba sin empresa rutas que sí tienen.
-      empresa: (p.id_ruta in empresaGuardada) ? empresaGuardada[p.id_ruta] : empresaDeFila(p),
-      monto: Number(p.pago_neto || 0),
-      noPago: !!p.es_no_pago, cambio: cambioDe(p),
-      montoPub: publicadas[p.id_ruta] ? Number(publicadas[p.id_ruta].pago_neto || 0) : null,
-    }))
-    .sort((a, b) => String(a.empresa).localeCompare(String(b.empresa)) || String(a.placa).localeCompare(String(b.placa)));
-
-
   // Sincroniza la barra de scroll horizontal superior con la tabla
   const onTopScroll = () => { if (tableWrapRef.current && topScrollRef.current) tableWrapRef.current.scrollLeft = topScrollRef.current.scrollLeft; };
   const onTableScroll = () => { if (tableWrapRef.current && topScrollRef.current) topScrollRef.current.scrollLeft = tableWrapRef.current.scrollLeft; };
@@ -7749,183 +7302,6 @@ function ListadoPagosDiarios({ usuario }) {
             {guardandoTarifado ? "Guardando..." : "Guardar en tarifado"}
           </button>
         </div>
-      </div>
-
-      {/* Tarjeta: publicación al portal de terceros */}
-      <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 8, padding: 14, marginBottom: 14 }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
-          <div>
-            <div style={{ fontSize: 13, fontWeight: 700, color: "#1a3a6b" }}>Publicación al portal de terceros</div>
-            <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 2 }}>
-              Se publica lo guardado en tarifado. Guardar no publica.
-            </div>
-          </div>
-          {resumenSC.length > 0 && (
-            <button onClick={publicarDia} disabled={publicando !== null || totalGuardadas === 0}
-              style={{
-                padding: "9px 18px", borderRadius: 4, border: "none",
-                background: (publicando !== null || totalGuardadas === 0) ? "#cbd5e1" : "#16a34a",
-                color: "#fff", fontSize: 12.5, fontWeight: 700,
-                cursor: (publicando !== null || totalGuardadas === 0) ? "not-allowed" : "pointer",
-              }}>
-              {publicando === "__DIA__" ? "Publicando el día..." : `Aprobar y publicar el día · ${totalGuardadas} rutas · ${resumenSC.length} centros`}
-            </button>
-          )}
-        </div>
-
-        {sinEmpresaDia.n > 0 && (
-          <div style={{ background: "#fef2f2", border: "1px solid #fca5a5", borderRadius: 6, padding: "10px 12px", marginBottom: 10 }}>
-            <div style={{ fontSize: 12.5, fontWeight: 700, color: "#991b1b" }}>
-              ⚠️ {sinEmpresaDia.n} ruta(s) sin empresa en el padrón · ${Number(sinEmpresaDia.monto).toLocaleString("es-MX")}
-            </div>
-            <div style={{ fontSize: 11.5, color: "#7f1d1d", marginTop: 3, lineHeight: 1.4 }}>
-              Si publicás así, esas rutas no las ve nadie y ningún tercero las va a reclamar.
-              Revisá el inventario de flota antes de publicar — centros: {sinEmpresaDia.scs.join(", ")}.
-            </div>
-          </div>
-        )}
-
-        {resumenSC.length === 0 ? (
-          <div style={{ fontSize: 12, color: "#94a3b8" }}>Calculá el día para ver los centros de servicio.</div>
-        ) : (
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(250px, 1fr))", gap: 8 }}>
-            {resumenSC.map(({ sc, rutas, monto }) => {
-              const pub = publicaciones[sc];
-              const guardadas = guardadoPorSC[sc] || 0;
-              const sinGuardar = guardadas === 0;
-              const desfase = guardadas > 0 && guardadas !== rutas;
-              const enCurso = publicando === sc;
-              const abierto = scAbierto === sc;
-              const det = abierto ? detalleSC(sc) : null;
-              return (
-                <div key={sc} style={{
-                  border: `1px solid ${pub ? "#bbf7d0" : "#e4e7ec"}`, borderRadius: 6,
-                  background: pub ? "#f0fdf4" : "#f8fafc", padding: 10,
-                  gridColumn: abierto ? "1 / -1" : "auto",
-                }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-                    <button onClick={() => setScAbierto(abierto ? null : sc)}
-                      style={{ background: "none", border: "none", padding: 0, cursor: "pointer", fontSize: 13, fontWeight: 700, color: "#334155" }}>
-                      {sc} <span style={{ color: "#94a3b8", fontSize: 11 }}>{abierto ? "▴" : "▾"}</span>
-                    </button>
-                    <span style={{
-                      fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 10,
-                      background: pub ? "#dcfce7" : "#e2e8f0", color: pub ? "#166534" : "#64748b",
-                    }}>
-                      {pub ? `PUBLICADO v${pub.version}` : "SIN PUBLICAR"}
-                    </span>
-                  </div>
-
-                  <div style={{ fontSize: 11, color: "#64748b", marginTop: 6, fontVariantNumeric: "tabular-nums" }}>
-                    {rutas} rutas calculadas · ${Number(monto).toLocaleString("es-MX")}
-                  </div>
-                  <div style={{ fontSize: 11, color: (sinGuardar || desfase) ? "#b45309" : "#94a3b8", marginTop: 2 }}>
-                    {sinGuardar ? "Sin guardar en tarifado"
-                      : desfase ? `⚠️ ${guardadas} guardadas ≠ ${rutas} calculadas — guardá de nuevo`
-                      : `${guardadas} guardadas`}
-                  </div>
-                  {pub && (
-                    <div style={{ fontSize: 10.5, color: "#166534", marginTop: 4 }}>
-                      {pub.rutas_aprobadas} aprobadas
-                      {pub.rutas_rechazadas > 0 ? ` · ${pub.rutas_rechazadas} rechazadas` : ""}
-                      {pub.rutas_pausadas > 0 ? ` · ${pub.rutas_pausadas} retenidas` : ""}
-                      <div style={{ color: "#64748b", marginTop: 2 }}>
-                        {pub.publicado_por} · {new Date(pub.publicado_at).toLocaleString("es-MX", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Detalle: qué va a ver cada empresa, y qué se movió */}
-                  {abierto && det && (() => {
-                    const conCambio = det.filter(d => d.cambio);
-                    const nMarc = det.filter(d => marcadas[d.id_ruta]).length;
-                    const MARCA = {
-                      subio:    { t: "SUBIÓ",    bg: "#dcfce7", fg: "#166534" },
-                      bajo:     { t: "BAJÓ",     bg: "#fee2e2", fg: "#991b1b" },
-                      ayudante: { t: "AYUDANTE", bg: "#e0e7ff", fg: "#3730a3" },
-                      nueva:    { t: "NUEVA",    bg: "#fef3c7", fg: "#92400e" },
-                    };
-                    return (
-                      <div style={{ marginTop: 10, background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, overflow: "hidden" }}>
-                        {pub && (
-                          <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", background: conCambio.length ? "#fffbeb" : "#f8fafc", borderBottom: "1px solid #e4e7ec", fontSize: 11.5, flexWrap: "wrap" }}>
-                            <span style={{ color: conCambio.length ? "#92400e" : "#64748b", fontWeight: 600 }}>
-                              {conCambio.length
-                                ? `${conCambio.length} ruta(s) cambiaron respecto de lo publicado`
-                                : "Ninguna ruta cambió respecto de lo publicado"}
-                            </span>
-                            {conCambio.length > 0 && (
-                              <button onClick={() => setMarcadas(m => { const n = { ...m }; for (const d of conCambio) n[d.id_ruta] = true; return n; })}
-                                style={{ border: "1px solid #f59e0b", background: "#fff", color: "#92400e", fontSize: 11, fontWeight: 700, borderRadius: 4, padding: "4px 10px", cursor: "pointer" }}>
-                                Marcar las que cambiaron
-                              </button>
-                            )}
-                            {nMarc > 0 && (
-                              <>
-                                <span style={{ color: "#1a3a6b", fontWeight: 700 }}>{nMarc} marcada(s) para republicar</span>
-                                <button onClick={() => setMarcadas(m => { const n = { ...m }; for (const d of det) delete n[d.id_ruta]; return n; })}
-                                  style={{ border: "1px solid #e4e7ec", background: "#fff", color: "#64748b", fontSize: 11, borderRadius: 4, padding: "4px 10px", cursor: "pointer" }}>
-                                  Quitar marcas
-                                </button>
-                              </>
-                            )}
-                          </div>
-                        )}
-                        <div style={{ display: "grid", gridTemplateColumns: "30px 1.5fr .8fr .8fr 1fr .9fr .9fr", gap: 8, padding: "7px 10px", background: "#f8fafc", fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.4 }}>
-                          <span />
-                          <span>Empresa</span><span>Placa</span><span>Ruta</span><span>Conductor</span>
-                          <span style={{ textAlign: "right" }}>Publicado</span><span style={{ textAlign: "right" }}>Ahora</span>
-                        </div>
-                        {det.map(d => {
-                          const mk = MARCA[d.cambio];
-                          const chk = !!marcadas[d.id_ruta];
-                          return (
-                            <div key={d.id_ruta} style={{ display: "grid", gridTemplateColumns: "30px 1.5fr .8fr .8fr 1fr .9fr .9fr", gap: 8, padding: "7px 10px", borderTop: "1px solid #f1f5f9", fontSize: 11.5, alignItems: "center", background: chk ? "#eff6ff" : mk ? "#fffdf5" : "#fff" }}>
-                              <span>
-                                {pub && (
-                                  <input type="checkbox" checked={chk}
-                                    onChange={() => setMarcadas(m => { const n = { ...m }; if (chk) delete n[d.id_ruta]; else n[d.id_ruta] = true; return n; })}
-                                    style={{ width: 15, height: 15, cursor: "pointer" }} />
-                                )}
-                              </span>
-                              <span style={{ color: d.empresa ? "#334155" : "#b45309", fontWeight: d.empresa ? 400 : 600 }}>
-                                {d.empresa || "⚠️ sin empresa en el padrón"}
-                              </span>
-                              <span style={{ fontWeight: 600, color: "#334155" }}>{d.placa || "—"}</span>
-                              <span style={{ color: "#94a3b8" }}>{d.id_ruta}</span>
-                              <span style={{ color: "#64748b" }}>{d.driver || "—"}</span>
-                              <span style={{ textAlign: "right", color: "#94a3b8", fontVariantNumeric: "tabular-nums" }}>
-                                {d.montoPub != null ? `$${d.montoPub.toLocaleString("es-MX")}` : "—"}
-                              </span>
-                              <span style={{ textAlign: "right", fontVariantNumeric: "tabular-nums", color: d.noPago ? "#b91c1c" : "#334155", fontWeight: 600 }}>
-                                {d.noPago ? "no pago" : `$${Number(d.monto).toLocaleString("es-MX")}`}
-                                {mk && (
-                                  <span style={{ marginLeft: 5, fontSize: 8.5, fontWeight: 700, padding: "1px 5px", borderRadius: 3, background: mk.bg, color: mk.fg }}>{mk.t}</span>
-                                )}
-                              </span>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    );
-                  })()}
-
-                  <button onClick={() => publicarSC(sc)} disabled={enCurso || sinGuardar || publicando !== null}
-                    style={{
-                      marginTop: 8, width: "100%", padding: "6px 10px", borderRadius: 4, border: "none",
-                      background: (enCurso || sinGuardar || publicando !== null) ? "#cbd5e1" : pub ? "#1a3a6b" : "#64748b",
-                      color: "#fff", fontSize: 11.5, fontWeight: 600,
-                      cursor: (enCurso || sinGuardar || publicando !== null) ? "not-allowed" : "pointer",
-                    }}>
-                    {enCurso ? "Publicando..."
-                      : pub ? (marcadasDe(sc) ? `Republicar ${marcadasDe(sc).length} ruta(s) marcada(s)` : "Republicar todo el centro")
-                      : "Publicar solo este centro"}
-                  </button>
-                </div>
-              );
-            })}
-          </div>
-        )}
       </div>
 
       {/* Tarjeta: rutas con ID repetido en varios días (posible doble pago) */}
@@ -8186,18 +7562,6 @@ function ListadoPagosDiarios({ usuario }) {
           </button>
         ))}
       </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
-          <span style={{ fontSize: 11, fontWeight: 600, color: "#64748b" }}>Buscar ruta para pausar</span>
-          <input value={busqueda} onChange={e => setBusqueda(e.target.value)}
-            placeholder="Id de ruta, patente o chofer..."
-            style={{ background: "#fff", border: "1px solid #fcd34d", borderRadius: 4, padding: "6px 10px", fontSize: 12, minWidth: 280 }} />
-          {busqueda && (
-            <>
-              <span style={{ fontSize: 11, color: "#94a3b8" }}>{filasFiltradas.length} coincidencia(s)</span>
-              <button onClick={() => setBusqueda("")} style={{ border: "1px solid #e4e7ec", background: "#fff", color: "#64748b", fontSize: 11, borderRadius: 4, padding: "5px 10px", cursor: "pointer" }}>Limpiar</button>
-            </>
-          )}
-        </div>
 
       {pausaModal && (
         <div onMouseDown={e => { if (e.target === e.currentTarget && !pausando) setPausaModal(null); }}
@@ -8235,7 +7599,6 @@ function ListadoPagosDiarios({ usuario }) {
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11, minWidth: 1660 }}>
             <thead>
               <tr style={{ background: "#f8fafc", borderBottom: "1px solid #e4e7ec", position: "sticky", top: 0 }}>
-                <Th center>Pausa</Th>
                 <Th onClick={() => toggleOrder("driver_name")}>Chofer{ordIcon("driver_name")}</Th>
                 <Th onClick={() => toggleOrder("placa")}>Patente{ordIcon("placa")}</Th>
                 <Th>Empresa</Th>
@@ -8259,6 +7622,7 @@ function ListadoPagosDiarios({ usuario }) {
                 <Th right>Pago MELI</Th>
                 <Th right>% Margen</Th>
                 <Th>Observaciones</Th>
+                <Th center>Pago</Th>
               </tr>
             </thead>
             <tbody>
@@ -8269,16 +7633,6 @@ function ListadoPagosDiarios({ usuario }) {
                 const margenPct = (pagoMeli != null && pagoMeli > 0) ? ((pagoMeli - Number(r.pago_neto)) / pagoMeli * 100) : null;
                 return (
                   <tr key={r.id || i} style={{ borderBottom: "1px solid #f0f0f0", background: noPagada ? "#fef2f2" : tieneAlerta ? "#fffbeb" : undefined }}>
-                    <td style={{ ...tdStyle(), textAlign: "center", whiteSpace: "nowrap" }}>
-                      {r.pausado ? (
-                        <div>
-                          <span title={r.pausa_motivo || ""} style={{ display: "inline-block", fontSize: 10, fontWeight: 800, color: "#92400e", background: "#fef3c7", border: "1px solid #fcd34d", borderRadius: 6, padding: "2px 6px" }}>⏸ Pausado</span>
-                          <button onClick={() => reanudarPago(r)} style={{ display: "block", margin: "4px auto 0", fontSize: 10, fontWeight: 700, color: "#166534", background: "#fff", border: "1px solid #166534", borderRadius: 6, padding: "2px 8px", cursor: "pointer" }}>Reanudar</button>
-                        </div>
-                      ) : (
-                        <button onClick={() => { setPausaMotivo(""); setPausaModal({ r }); }} disabled={!r.id} title={r.id ? "Pausar el pago de esta ruta" : "Sin id, no se puede pausar"} style={{ fontSize: 10, fontWeight: 700, color: "#b45309", background: "#fff", border: "1px solid #fcd34d", borderRadius: 6, padding: "3px 8px", cursor: r.id ? "pointer" : "not-allowed" }}>⏸ Pausar</button>
-                      )}
-                    </td>
                     <td style={tdStyle(true)}>{r.driver_name || "—"}</td>
                     <td style={{ ...tdStyle(), fontFamily: "monospace", fontSize: 10 }}>{r.placa || "—"}</td>
                     <td style={{ ...tdStyle(), fontSize: 10, color: "#475569", maxWidth: 170, whiteSpace: "normal", lineHeight: 1.25 }}>
@@ -8372,6 +7726,16 @@ function ListadoPagosDiarios({ usuario }) {
                     </td>
                     <td style={{ ...tdStyle(), fontSize: 10, color: noPagada ? "#991b1b" : (r.observaciones ? "#92400e" : "#cbd5e1"), maxWidth: 260, whiteSpace: "normal", lineHeight: 1.3 }} title={r.observaciones || ""}>
                       {r.observaciones || "—"}
+                    </td>
+                    <td style={{ ...tdStyle(), textAlign: "center", whiteSpace: "nowrap" }}>
+                      {r.pausado ? (
+                        <div>
+                          <span title={r.pausa_motivo || ""} style={{ display: "inline-block", fontSize: 10, fontWeight: 800, color: "#92400e", background: "#fef3c7", border: "1px solid #fcd34d", borderRadius: 6, padding: "2px 6px" }}>⏸ Pausado</span>
+                          <button onClick={() => reanudarPago(r)} style={{ display: "block", margin: "4px auto 0", fontSize: 10, fontWeight: 700, color: "#166534", background: "#fff", border: "1px solid #166534", borderRadius: 6, padding: "2px 8px", cursor: "pointer" }}>Reanudar</button>
+                        </div>
+                      ) : (
+                        <button onClick={() => { setPausaMotivo(""); setPausaModal({ r }); }} disabled={!r.id} title={r.id ? "Pausar el pago de esta ruta" : "Sin id, no se puede pausar"} style={{ fontSize: 10, fontWeight: 700, color: "#b45309", background: "#fff", border: "1px solid #fcd34d", borderRadius: 6, padding: "3px 8px", cursor: r.id ? "pointer" : "not-allowed" }}>⏸ Pausar</button>
+                      )}
                     </td>
                   </tr>
                 );
@@ -10173,9 +9537,6 @@ function PagosPausados({ usuario }) {
       const por = (usuario && (usuario.nombre || usuario.email)) || "Brain";
       const { error } = await sb.from("maestro_jornada_mx").update({ pausado: false, liberado_at: new Date().toISOString(), liberado_por: por }).eq("id", r.id);
       if (error) throw error;
-      // Quita la excepción: la ruta vuelve a verse aprobada en el portal del tercero
-      const { error: eRev } = await sb.from("revision_ruta_mx").delete().eq("fecha", r.fecha).eq("id_ruta", r.id_ruta);
-      if (eRev) alert("El pago se activó, pero el portal del tercero sigue mostrándolo en revisión:\n\n" + eRev.message);
       cargar();
     } catch (e) { alert("Error activando: " + (e.message || e)); }
   };
@@ -11416,7 +10777,6 @@ function PadronDriversData({ fecha }) {
     infractores: rows.filter(r => r.tiene_infraccion).length,
     conEmail: rows.filter(r => r.email).length,
     conTel: rows.filter(r => r.phone).length,
-    sinDetalle: rows.filter(r => !r.enriquecido).length,
   }), [rows]);
 
   const filtradas = useMemo(() => {
@@ -11429,11 +10789,16 @@ function PadronDriversData({ fecha }) {
           .some(v => String(v ?? "").toLowerCase().includes(q))
       );
     }
-    // Más recientes primero por driver_id: los IDs de MELI son secuenciales,
-    // así que un conductor recién dado de alta queda arriba aunque todavía no
-    // tenga detalle. Antes se ordenaba por creation_date y los sin enriquecer
-    // se iban al fondo de la tabla, justo los que el analista viene a buscar.
-    return [...res].sort((a, b) => Number(b.driver_id) - Number(a.driver_id));
+    // Más recientes primero: por fecha de alta y, si falta, por ID (los IDs de
+    // MELI son secuenciales). Los sin fecha quedan al final.
+    return [...res].sort((a, b) => {
+      const fa = a.creation_date ? new Date(a.creation_date).getTime() : null;
+      const fb = b.creation_date ? new Date(b.creation_date).getTime() : null;
+      if (fa !== null && fb !== null && fa !== fb) return fb - fa;
+      if (fa === null && fb !== null) return 1;
+      if (fa !== null && fb === null) return -1;
+      return Number(b.driver_id) - Number(a.driver_id);
+    });
   }, [rows, busqueda, soloInfractores]);
 
   const toggleExpand = (id) => {
@@ -11564,7 +10929,7 @@ function PadronDriversData({ fecha }) {
         </div>
       </div>
       <div style={{ marginTop: 10, fontSize: 11, color: PLIGHT, fontStyle: "italic" }}>
-        ℹ️ Contacto, fecha de creación e infracciones provienen del detalle de MELI (tabla de enriquecimiento){kpis.sinDetalle > 0 ? `; hoy hay ${kpis.sinDetalle} conductor${kpis.sinDetalle === 1 ? "" : "es"} del padrón sin detalle todavía, ordenados arriba por ID` : ""}. Conductores sin estos datos aún no fueron enriquecidos o MELI no los expone. Clic en una fila con <strong style={{ color: "#92400e" }}>infracción</strong> para ver el detalle.
+        ℹ️ Contacto, fecha de creación e infracciones provienen del detalle de MELI (tabla de enriquecimiento). Conductores sin estos datos aún no fueron enriquecidos o MELI no los expone. Clic en una fila con <strong style={{ color: "#92400e" }}>infracción</strong> para ver el detalle.
       </div>
     </div>
   );
