@@ -2,7 +2,8 @@ import { useState, useEffect, useRef, useMemo, useCallback, Fragment } from "rea
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import ModuloMaestro from "./maestro";
 import { fechaHoyOperativa, fechaOperativaOffset, pct, Input, KpiCardMaestro, BadgeEstadoMaestro } from "./shared";
-import ModuloPNR from "./PNR";
+// PNR ahora vive en la Torre; su pestaña la reemplaza Alertas Portal.
+import ModuloAlertasPortal from "./AlertasPortal";
 import ModuloCertificaciones from "./Certificaciones";
 import ModuloEmpresas from "./Empresas";
 import ModuloAuditoriaMeli from "./AuditoriaMeli";
@@ -103,7 +104,7 @@ const PAIS_SELECT_CFG = {
 // propios (se irán agregando aquí); México conserva todo lo ya existente.
 const MODULOS_POR_PAIS = {
   "México": {
-    superadmin: ["pool_meli_mx", "pagos", "maestro", "certificaciones", "empresas", "pnr", "auditoria_meli", "configuracion"],
+    superadmin: ["pool_meli_mx", "pagos", "maestro", "certificaciones", "empresas", "alertas_portal", "auditoria_meli", "configuracion"],
     certificacion: ["certificaciones", "empresas"],
     certificacion_full: ["certificaciones", "empresas"],  // Certificaciones MX + CL (ver Chile abajo)
     certificacion_mant: ["certificaciones", "empresas"],  // Certificaciones MX + CL + Mantenciones CL
@@ -128,7 +129,7 @@ const MODULOS_LABELS = {
   maestro_cl: "Maestro Operaciones",
   maestro: "Maestro Operaciones",
   mantenciones: "Mantenciones",
-  pnr: "PNR",
+  alertas_portal: "Alertas Portal",
   auditoria_meli: "Auditoría MELI",
   pagos: "Administración",
   configuracion: "Configuración",
@@ -146,7 +147,7 @@ const USUARIOS = {
   "danny.calas@bigticket.cl":       { pass: "danny.2026",   rol: "prefacturas", nombre: "Danny Calas" },
   "roberto.sanmartin@bigticket.cl":       { pass: "robertosn.2026",   rol: "prefacturas", nombre: "Roberto San Martin" },
   "antonio.mariangel@bigticket.cl":       { pass: "antonio.2026",  rol: "certificacion_full", nombre: "Antonio Mariangel" },
-  "camila.valenzuela@bigticket.cl":       { pass: "camila.2026",   rol: "superadmin", nombre: "Camila Valenzuela" },
+  "camila.valenzuela@bigticket.cl":       { pass: "camila.2026",   rol: "certificacion_full", nombre: "Camila Valenzuela" },
   "galiz.martinez@bigticket.cl":         { pass: "Galiz.2026!",  rol: "certificacion_full", nombre: "Galiz Martínez" },
   "maycol.olavarria@bigticket.cl":       { pass: "Maycol.2026!", rol: "certificacion_mant", nombre: "Maycol Olavarría" },
 };
@@ -15532,7 +15533,7 @@ export default function App() {
           </div>
         )}
         {tabActivo === "maestro" && <ModuloMaestro usuario={usuario} />}
-        {tabActivo === "pnr" && <ModuloPNR />}
+        {tabActivo === "alertas_portal" && <ModuloAlertasPortal usuario={usuario} />}
         {tabActivo === "auditoria_meli" && <ModuloAuditoriaMeli />}
         {tabActivo === "pagos" && <ModuloPagosMadre usuario={usuario} />}
         {!tabActivo && (
