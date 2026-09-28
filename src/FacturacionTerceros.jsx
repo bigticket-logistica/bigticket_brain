@@ -85,6 +85,14 @@ export default function FacturacionTerceros({ usuario }) {
     if (!ids.length) return;
     const filasSel = (filas || []).filter(f => ids.includes(f.id));
     const total = filasSel.reduce((t, f) => t + Number(f.liquido_pago || 0), 0);
+    // Pagar sin factura conforme deja al tercero cobrado sin comprobante
+    // válido: se puede, pero no en silencio.
+    const flojas = filasSel.filter(f => estadoDe(f) !== "conforme");
+    if (flojas.length && !window.confirm(
+      `${flojas.length} de las ${ids.length} prefacturas marcadas no tienen una factura conforme:\n\n` +
+      flojas.slice(0, 8).map(f => `· ${f.empresa_nombre} — ${ESTADOS[estadoDe(f)].l}`).join("\n") +
+      (flojas.length > 8 ? `\n· y ${flojas.length - 8} más` : "") +
+      `\n\n¿Las marcas igual como pagadas?`)) return;
     const ref = window.prompt(
       `Marcar ${ids.length} prefactura(s) como pagadas.\n\nTotal: ${money(total)}\n\n` +
       `Referencia de la transferencia (opcional, queda visible para el tercero):`, "");
@@ -104,6 +112,8 @@ export default function FacturacionTerceros({ usuario }) {
     } catch (e) { setMsg({ ok: false, txt: "No se pudo marcar el pago: " + (e.message || e) }); }
     setPagando(false);
   };
+
+  const nSel = Object.values(sel).filter(Boolean).length;
 
   const validarPendientes = async () => {
     setValidando("todas"); setMsg(null);
@@ -141,8 +151,16 @@ export default function FacturacionTerceros({ usuario }) {
   const { visibles, resumen } = useMemo(() => {
     const fs = (filas || []).map(p => ({ ...p, _estado: estadoDe(p) }));
     const r = {};
-    for (const p of fs) r[p._estado] = (r[p._estado] || 0) + 1;
-    let v = filtro === "todas" ? fs : fs.filter(p => p._estado === filtro);
+    for (const p of fs) {
+      r[p._estado] = (r[p._estado] || 0) + 1;
+      r[p.pagado_at ? "pagadas" : "por_pagar"] = (r[p.pagado_at ? "pagadas" : "por_pagar"] || 0) + 1;
+    }
+    // "Pagadas" y "Por pagar" no son estados de la factura sino del pago, así
+    // que se filtran aparte.
+    let v = filtro === "todas" ? fs
+      : filtro === "pagadas" ? fs.filter(p => p.pagado_at)
+      : filtro === "por_pagar" ? fs.filter(p => !p.pagado_at)
+      : fs.filter(p => p._estado === filtro);
     const q = busca.trim().toLowerCase();
     if (q) v = v.filter(p => [p.empresa_nombre, p.service_center, p.facturas[0]?.uuid, p.facturas[0]?.serie_folio]
       .some(x => String(x || "").toLowerCase().includes(q)));
@@ -167,14 +185,15 @@ export default function FacturacionTerceros({ usuario }) {
             se comparan al subirla; el estado lo confirma el SAT.
           </div>
         </div>
-        {Object.values(sel).some(Boolean) && (
-          <button onClick={marcarPagadas} disabled={pagando}
-            style={{ padding: "9px 18px", borderRadius: 8, border: "none", fontSize: 12.5, fontWeight: 700,
-              background: pagando ? "#cbd5e1" : "#16a34a", color: "#fff", marginRight: 8,
-              cursor: pagando ? "not-allowed" : "pointer" }}>
-            {pagando ? "Marcando…" : `Marcar ${Object.values(sel).filter(Boolean).length} como pagadas`}
-          </button>
-        )}
+        {/* Siempre a la vista, aunque no haya nada marcado: escondido, el
+            analista no sabe que puede marcar el pago desde aquí. */}
+        <button onClick={marcarPagadas} disabled={pagando || nSel === 0}
+          title={nSel === 0 ? "Marca las prefacturas que ya pagaste" : ""}
+          style={{ padding: "9px 18px", borderRadius: 8, border: "none", fontSize: 12.5, fontWeight: 700,
+            background: pagando || nSel === 0 ? "#cbd5e1" : "#16a34a", color: "#fff", marginRight: 8,
+            cursor: pagando || nSel === 0 ? "not-allowed" : "pointer" }}>
+          {pagando ? "Marcando…" : nSel === 0 ? "Marcar como pagadas" : `Marcar ${nSel} como pagadas`}
+        </button>
         <button onClick={validarPendientes} disabled={validando !== null}
           style={{ padding: "9px 18px", borderRadius: 8, border: "none", fontSize: 12.5, fontWeight: 700,
             background: validando ? "#cbd5e1" : "#1a3a6b", color: "#fff",
@@ -196,7 +215,8 @@ export default function FacturacionTerceros({ usuario }) {
           {semanas.map(w => <option key={w} value={w}>Semana {w}</option>)}
         </select>
         {[["todas", "Todas"], ["sin_factura", "Sin factura"], ["descuadre", "No cuadran"],
-          ["sat_problema", "SAT"], ["sin_validar", "Por validar"], ["conforme", "Conformes"]].map(([id, l]) => (
+          ["sat_problema", "SAT"], ["sin_validar", "Por validar"], ["conforme", "Conformes"],
+          ["por_pagar", "Por pagar"], ["pagadas", "Pagadas"]].map(([id, l]) => (
           <button key={id} onClick={() => setFiltro(id)}
             style={{ padding: "6px 13px", borderRadius: 16, fontSize: 11.5, fontWeight: 700, cursor: "pointer",
               border: `1px solid ${filtro === id ? "#1a3a6b" : "#e4e7ec"}`,
@@ -220,12 +240,13 @@ export default function FacturacionTerceros({ usuario }) {
             <thead><tr>
               <th style={{ ...th, width: 28 }}>
                 <input type="checkbox"
-                  checked={visibles.length > 0 && visibles.every(p => sel[p.id])}
+                  checked={visibles.some(p => !p.pagado_at) && visibles.every(p => p.pagado_at || sel[p.id])}
                   onChange={e => {
-                    const n = {};
-                    if (e.target.checked) for (const p of visibles) if (!p.pagado_at) n[p.id] = true;
+                    const n = { ...sel };
+                    for (const p of visibles) if (!p.pagado_at) n[p.id] = e.target.checked;
                     setSel(n);
                   }} />
+                {/* Marca todas las de la pantalla; las ya pagadas quedan fuera. */}
               </th>
               <th style={th}>Sem</th><th style={th}>Empresa</th><th style={th}>SC</th>
               <th style={{ ...th, textAlign: "right" }}>Prefactura</th>
