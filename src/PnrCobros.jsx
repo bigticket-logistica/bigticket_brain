@@ -1418,6 +1418,21 @@ function ModuloPnr({ usuario }) {
   const nFacturados = pendientes.filter(f => f.sub_cobro === "BILLED").length;
   const nSinComprobante = pendientes.filter(f => f.sub_cobro === "WITHOUT_RECEIPT").length;
 
+  // Lo que ya se le cargó al tercero en esta semana. Antes solo se veía lo que
+  // faltaba por cobrar, así que una semana terminada mostraba ceros y no
+  // quedaba registro de cuánto se cobró. El monto sale del cobro, no del caso:
+  // si el analista lo ajustó al agregarlo, manda ese.
+  const yaCobrados = visibles.filter(f => cobrados[String(f.case_id)]);
+  const montoCobrado = yaCobrados.reduce((t, f) => {
+    const c = cobrados[String(f.case_id)];
+    return t + Number((c && c.monto != null ? c.monto : f.monto) || 0);
+  }, 0);
+  const cobradoFact = yaCobrados.filter(f => f.sub_cobro === "BILLED").length;
+  const cobradoSin = yaCobrados.filter(f => f.sub_cobro === "WITHOUT_RECEIPT").length;
+  // El total de la semana: lo cobrado más lo que queda por cobrar. Es la cifra
+  // que debe coincidir con el tablero de la Torre.
+  const totalSemana = montoCobrado + totalPend;
+
   return (
     <div style={{ padding: 24, fontFamily: "Geist, sans-serif" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 14 }}>
@@ -1468,6 +1483,12 @@ function ModuloPnr({ usuario }) {
         <Kpi label="Enviados a facturación" valor={nFacturados} />
         <Kpi label="Sin comprobante cargado" valor={nSinComprobante} sub={nSinComprobante ? "el supervisor respondió sin foto" : "ninguno esta semana"} />
         <Kpi label="Monto por cobrar" valor={money(totalPend)} sub="suma del valor del paquete" />
+        <Kpi label="Cobrado en la semana" valor={money(montoCobrado)}
+          sub={yaCobrados.length
+            ? `${yaCobrados.length} caso(s): ${cobradoFact} facturado(s), ${cobradoSin} sin comprobante`
+            : "todavía no se carga ninguno"} />
+        <Kpi label="Total de la semana" valor={money(totalSemana)}
+          sub={`${yaCobrados.length + pendientes.length} caso(s) · cobrado + por cobrar`} />
         <Kpi label="Sin empresa" valor={sinEmpresa} sub={sinEmpresa ? "requieren revisar la placa" : "todos resueltos"} />
         {yaNoCobrables ? <Kpi label="Ya no cobrables" valor={yaNoCobrables} sub="cambiaron de estado en MELI" /> : null}
       </div>
