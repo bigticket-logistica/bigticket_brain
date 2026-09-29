@@ -804,8 +804,13 @@ function ModuloPnr({ usuario }) {
     if (!conservarMsg) setMsg(null);
     try {
       const { inicio, fin } = rangoSemana(sem);
-      const desde = inicio.toISOString();
-      const hasta = new Date(fin.getTime() + 86400000).toISOString();
+      // El día lo define la hora de México, no UTC. La semana 39 va del lunes
+      // 14 al domingo 20 en el centro: un caso de las 21:54 del domingo 13 es
+      // del 13 y pertenece a la 38. Cortando en UTC la semana arrancaba a las
+      // 18:00 del domingo anterior y esos casos se corrían de semana.
+      const MX = 6 * 3600000;   // México va 6 horas detrás de UTC
+      const desde = new Date(inicio.getTime() + MX).toISOString();
+      const hasta = new Date(fin.getTime() + 86400000 + MX).toISOString();
 
       // 1) transiciones a facturación dentro de la semana
       const { data: hist, error: e1 } = await sb.from("pnr_historial_mx")
