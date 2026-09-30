@@ -6898,6 +6898,248 @@ function DiferenciasBitacora({ fecha, setFecha }) {
 }
 const navBtnCert = { border: "0.5px solid #e4e7ec", background: "#fff", color: "#1a3a6b", borderRadius: 8, width: 32, height: 32, fontSize: 15, fontWeight: 700, cursor: "pointer", fontFamily: "'Geist',sans-serif" };
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Empresas del patio — placas que operaron con una empresa que no existe.
+//
+// Cuando un supervisor asigna una placa y la empresa no está en el catálogo, la
+// escribe a mano en la Bitácora y cae acá. No se crea un tercero desde el
+// patio: el analista decide si esa empresa ya está en trámite, si corresponde a
+// una que ya existe con otro nombre, o si hay que abrir una certificación.
+//
+// Mientras el caso siga abierto, esa placa opera sin empresa a la que pagarle.
+// ═══════════════════════════════════════════════════════════════════════════
+function EmpresasDelPatio({ onContador }) {
+  const [rows, setRows] = useState(null);
+  const [terceros, setTerceros] = useState([]);
+  const [tramites, setTramites] = useState([]);
+  const [filtro, setFiltro] = useState("abiertos");
+  const [abierta, setAbierta] = useState(null);
+  const [eleccion, setEleccion] = useState({});
+  const [busca, setBusca] = useState("");
+  const [msg, setMsg] = useState(null);
+  const [trabajando, setTrabajando] = useState(false);
+
+  const cargar = async () => {
+    const [r, t, c] = await Promise.all([
+      sb.from("placas_sin_certificar").select("*").order("registrado_at", { ascending: false }).limit(500),
+      sb.from("terceros").select("id, nombre").neq("estado", "baja").order("nombre"),
+      sb.from("certificaciones_mx").select("id, nombre, empresa, svc, etapa_kanban, estado, tercero_id")
+        .neq("etapa_kanban", "rechazado").order("created_at", { ascending: false }).limit(300),
+    ]);
+    const lista = r.data || [];
+    setRows(lista);
+    setTerceros(t.data || []);
+    setTramites(c.data || []);
+    if (onContador) onContador(lista.filter((x) => x.estado === "pendiente" || x.estado === "en_certificacion").length);
+  };
+  useEffect(() => { cargar(); }, []);
+
+  // Coincidencias por nombre: el supervisor escribe lo que le dijeron, así que
+  // rara vez calza exacto con el catálogo. Se busca por trozos del nombre.
+  const parecidos = (nombre) => {
+    const limpia = (x) => String(x || "").toUpperCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^A-Z0-9 ]/g, " ").trim();
+    const partes = limpia(nombre).split(/\s+/).filter((w) => w.length > 3);
+    if (!partes.length) return { terceros: [], tramites: [] };
+    const pega = (x) => { const t = limpia(x); return partes.filter((w) => t.includes(w)).length; };
+    return {
+      terceros: terceros.map((e) => ({ ...e, n: pega(e.nombre) })).filter((e) => e.n > 0)
+        .sort((a, b) => b.n - a.n).slice(0, 5),
+      tramites: tramites.map((e) => ({ ...e, n: Math.max(pega(e.empresa), pega(e.nombre)) })).filter((e) => e.n > 0)
+        .sort((a, b) => b.n - a.n).slice(0, 5),
+    };
+  };
+
+  const resolver = async (r, patch, texto) => {
+    setTrabajando(true); setMsg(null);
+    try {
+      const { error } = await sb.from("placas_sin_certificar").update({
+        ...patch, resuelta_at: new Date().toISOString(), resuelta_por: "analista",
+      }).eq("id", r.id);
+      if (error) throw error;
+      setMsg({ ok: true, txt: texto });
+      setAbierta(null);
+      await cargar();
+    } catch (e) { setMsg({ ok: false, txt: "No se pudo guardar: " + (e.message || e) }); }
+    setTrabajando(false);
+  };
+
+  // Asociar a una empresa que ya existe: además de cerrar el caso, deja la
+  // placa asignada en el padrón para que deje de operar sin dueño.
+  const asociarTercero = async (r, id) => {
+    const emp = terceros.find((e) => e.id === id);
+    if (!emp) return;
+    setTrabajando(true); setMsg(null);
+    try {
+      await sb.from("placas_terceros_pagos").update({ vigente_hasta: new Date().toISOString().slice(0, 10) })
+        .is("vigente_hasta", null).ilike("placa", r.placa);
+      await sb.from("placas_terceros_pagos").insert({
+        placa: r.placa, empresa_nombre: emp.nombre, tercero_id: emp.id,
+        service_center_id: r.service_center, vigente_desde: new Date().toISOString().slice(0, 10),
+        fuente: "certificaciones", estado: "confirmado", creado_por: "analista",
+        notas: `Resuelta desde Empresas del patio · escrita como "${r.empresa_escrita}"`,
+      });
+      await resolver(r, { estado: "resuelta", tercero_id: emp.id },
+        `${r.placa} quedó asignada a ${emp.nombre}.`);
+    } catch (e) { setMsg({ ok: false, txt: "No se pudo asociar: " + (e.message || e) }); setTrabajando(false); }
+  };
+
+  const visibles = (rows || []).filter((r) =>
+    filtro === "abiertos" ? (r.estado === "pendiente" || r.estado === "en_certificacion") :
+    filtro === "resueltos" ? r.estado === "resuelta" : true);
+
+  const COLOR = { pendiente: ["#fef2f2", "#b91c1c"], en_certificacion: ["#fffbeb", "#92400e"],
+    resuelta: ["#f0fdf4", "#15803d"], descartada: ["#f8fafc", "#64748b"] };
+  const ETIQUETA = { pendiente: "Sin resolver", en_certificacion: "En certificación",
+    resuelta: "Resuelta", descartada: "Descartada" };
+
+  if (rows === null) return <div style={{ padding: 20, color: "#94a3b8", fontSize: 13 }}>Cargando…</div>;
+
+  return (
+    <div>
+      <div className="sec-title">🚨 Empresas del patio</div>
+      <div style={{ fontSize: 12.5, color: "#64748b", margin: "0 0 14px", maxWidth: 760, lineHeight: 1.5 }}>
+        Placas que operaron con una empresa que un supervisor escribió a mano porque no estaba en el
+        catálogo. Mientras el caso siga abierto, esa placa no tiene a quién pagarle.
+      </div>
+
+      {msg && (
+        <div style={{ marginBottom: 12, padding: "9px 12px", borderRadius: 7, fontSize: 13,
+          background: msg.ok ? "#dcfce7" : "#fee2e2", color: msg.ok ? "#166534" : "#991b1b" }}>{msg.txt}</div>
+      )}
+
+      <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
+        {[["abiertos", "Sin resolver"], ["resueltos", "Resueltas"], ["todos", "Todas"]].map(([k, l]) => (
+          <button key={k} onClick={() => setFiltro(k)}
+            style={{ padding: "7px 14px", borderRadius: 999, fontSize: 12, cursor: "pointer",
+              border: "1px solid #e4e7ec", background: filtro === k ? "#1a3a6b" : "#fff",
+              color: filtro === k ? "#fff" : "#666", fontWeight: filtro === k ? 700 : 400 }}>{l}</button>
+        ))}
+      </div>
+
+      {visibles.length === 0 ? (
+        <div style={{ padding: 28, textAlign: "center", color: "#94a3b8", fontSize: 13,
+          background: "#fff", border: "0.5px solid #e4e7ec", borderRadius: 10 }}>
+          No hay casos {filtro === "abiertos" ? "sin resolver" : "para este filtro"}.
+        </div>
+      ) : visibles.map((r) => {
+        const [bg, fg] = COLOR[r.estado] || COLOR.pendiente;
+        const open = abierta === r.id;
+        const p = open ? parecidos(r.empresa_escrita) : null;
+        return (
+          <div key={r.id} style={{ background: "#fff", border: "0.5px solid #e4e7ec", borderLeft: `4px solid ${fg}`,
+            borderRadius: 10, marginBottom: 10, overflow: "hidden" }}>
+            <div onClick={() => { setAbierta(open ? null : r.id); setBusca(""); }}
+              style={{ padding: "12px 15px", cursor: "pointer", display: "flex", gap: 14,
+                alignItems: "center", flexWrap: "wrap" }}>
+              <div style={{ flex: 1, minWidth: 240 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 9, flexWrap: "wrap" }}>
+                  <span style={{ fontSize: 15, fontWeight: 700, color: "#1a3a6b" }}>{r.empresa_escrita}</span>
+                  <span style={{ fontSize: 10.5, fontWeight: 700, padding: "2px 9px", borderRadius: 999, background: bg, color: fg }}>
+                    {ETIQUETA[r.estado]}
+                  </span>
+                </div>
+                <div style={{ fontSize: 12.5, color: "#64748b", marginTop: 3 }}>
+                  Placa <b>{r.placa}</b> · {r.service_center || "sin centro"}
+                  {r.conductor ? ` · ${r.conductor}` : ""}
+                  {r.id_ruta ? ` · ruta ${r.id_ruta}` : ""} · detectada el {r.fecha_deteccion}
+                </div>
+                <div style={{ fontSize: 11.5, color: "#94a3b8", marginTop: 2 }}>
+                  La registró {r.registrado_por}
+                </div>
+              </div>
+              <span style={{ color: "#94a3b8", fontSize: 12 }}>{open ? "▲" : "▼"}</span>
+            </div>
+
+            {open && (
+              <div style={{ borderTop: "1px solid #e4e7ec", padding: 15, background: "#fcfcfc" }}>
+                {r.estado === "resuelta" || r.estado === "descartada" ? (
+                  <div style={{ fontSize: 13, color: "#64748b" }}>
+                    Caso cerrado el {String(r.resuelta_at || "").slice(0, 10)}
+                    {r.notas ? ` · ${r.notas}` : ""}
+                  </div>
+                ) : (
+                  <>
+                    {p.tramites.length > 0 && (
+                      <div style={{ marginBottom: 14 }}>
+                        <div style={{ fontSize: 12, fontWeight: 700, color: "#92400e", marginBottom: 6 }}>
+                          Parece estar en certificación
+                        </div>
+                        {p.tramites.map((t) => (
+                          <div key={t.id} style={{ display: "flex", gap: 10, alignItems: "center",
+                            justifyContent: "space-between", padding: "8px 11px", background: "#fffbeb",
+                            border: "1px solid #fde68a", borderRadius: 7, marginBottom: 6, flexWrap: "wrap" }}>
+                            <div style={{ fontSize: 12.5 }}>
+                              <b>{t.empresa || t.nombre}</b>
+                              <span style={{ color: "#64748b" }}> · {t.svc || "sin centro"} · {t.etapa_kanban}</span>
+                            </div>
+                            <button disabled={trabajando}
+                              onClick={() => resolver(r, { estado: "en_certificacion", certificacion_id: t.id, tercero_id: t.tercero_id || null },
+                                "Caso vinculado al trámite de certificación.")}
+                              style={{ border: "none", background: "#b45309", color: "#fff", fontSize: 11.5,
+                                fontWeight: 700, borderRadius: 6, padding: "6px 12px", cursor: "pointer" }}>
+                              Es esta
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    <div style={{ fontSize: 12, fontWeight: 700, color: "#1a3a6b", marginBottom: 6 }}>
+                      Asociar a una empresa que ya existe
+                    </div>
+                    {p.terceros.length > 0 && !busca && (
+                      <div style={{ fontSize: 11.5, color: "#64748b", marginBottom: 6 }}>
+                        Coincidencias por nombre:
+                      </div>
+                    )}
+                    <input value={busca} onChange={(e) => setBusca(e.target.value)} placeholder="Buscar empresa…"
+                      style={{ width: "100%", border: "1px solid #e4e7ec", borderRadius: 7, padding: "8px 10px", fontSize: 13, marginBottom: 8 }} />
+                    <div style={{ maxHeight: 190, overflowY: "auto", border: "1px solid #e4e7ec", borderRadius: 7, background: "#fff" }}>
+                      {(busca.trim()
+                        ? terceros.filter((e) => e.nombre.toLowerCase().includes(busca.trim().toLowerCase())).slice(0, 25)
+                        : p.terceros
+                      ).map((e) => (
+                        <div key={e.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center",
+                          gap: 10, padding: "8px 11px", borderBottom: "1px solid #f1f5f9" }}>
+                          <span style={{ fontSize: 12.5 }}>{e.nombre}</span>
+                          <button disabled={trabajando} onClick={() => asociarTercero(r, e.id)}
+                            style={{ border: "none", background: "#1a3a6b", color: "#fff", fontSize: 11.5,
+                              fontWeight: 700, borderRadius: 6, padding: "6px 12px", cursor: "pointer" }}>
+                            Asociar
+                          </button>
+                        </div>
+                      ))}
+                      {!busca.trim() && p.terceros.length === 0 && (
+                        <div style={{ padding: 12, fontSize: 12, color: "#94a3b8" }}>
+                          Ninguna empresa del catálogo se parece. Busca arriba o abre una certificación nueva.
+                        </div>
+                      )}
+                    </div>
+
+                    <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
+                      <button disabled={trabajando}
+                        onClick={() => resolver(r, { estado: "descartada", notas: "El supervisor se equivocó o la placa ya no opera" },
+                          "Caso descartado.")}
+                        style={{ border: "1px solid #e4e7ec", background: "#fff", color: "#64748b", fontSize: 12,
+                          borderRadius: 7, padding: "8px 14px", cursor: "pointer" }}>
+                        Descartar
+                      </button>
+                      <div style={{ fontSize: 11.5, color: "#94a3b8", alignSelf: "center", flex: 1, minWidth: 220 }}>
+                        Si la empresa no existe ni está en trámite, ábrele una certificación desde Certificaciones
+                        y vuelve a este caso para asociarla.
+                      </div>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function InventarioFlota() {
   const [rows, setRows] = useState(null);
   const [cargas, setCargas] = useState([]);
@@ -6920,7 +7162,8 @@ function InventarioFlota() {
     setCargas(cg || []);
 
   };
-  useEffect(() => { cargar(); }, []);
+  useEffect(() => { cargar(); }, []);
+
   // El numero de la subpestaña se calcula aca y no dentro de ella: si se contara
   // al montar el componente, el analista veria el aviso recien despues de entrar,
   // justo cuando ya no sirve para avisarle.
@@ -6992,7 +7235,8 @@ function InventarioFlota() {
         const { error } = await sb.from("inventario_flota")
           .upsert(filas.slice(i, i + 200), { onConflict: "placa" });
         if (error) throw new Error(error.message);
-      }
+      }
+
       // Copia historica de la carga. inventario_flota es una foto: cada subida
       // pisa la anterior y no queda rastro de que decia ayer. El pago se resuelve
       // contra el inventario del dia operado, asi que sin historia un archivo
@@ -7088,7 +7332,8 @@ function InventarioFlota() {
       <div style={{ fontSize: 11.5, color: "#98a2b3", marginBottom: 12, lineHeight: 1.5 }}>
         Sube el <b>Maestro de Certificación MX</b>: se lee la hoja <b>VEHICULOS</b> y se actualiza el padrón por placa.
         Las placas que no vengan en el archivo <b>se conservan</b>.
-      </div>
+      </div>
+
       {/* Subpestañas: el padrón del analista y su contraste con el patio */}
       <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
         {[["padron", "Padrón"], ["diferencias", `Diferencias bitácora${nDif ? ` (${nDif})` : ""}`]].map(([id, l]) => (
@@ -7218,6 +7463,7 @@ function ModuloCertificaciones() {
   // Contador amarillo de la pestaña Avisos: solicitudes que ya requieren
   // atención (avisadas, escaladas o vencidas sin avisar).
   const [nAvisos, setNAvisos] = useState(0);
+  const [nSinCert, setNSinCert] = useState(0);
   // Contador naranja de la pestaña Mensajes: mensajes de terceros sin leer.
   const [nMensajes, setNMensajes] = useState(0);
   // Tarjetas que NADIE ha abierto todavía, de los dos flujos. Se cuenta
@@ -7673,7 +7919,7 @@ function ModuloCertificaciones() {
 
       {/* Pestañas de sección */}
       <div style={{ display: "flex", gap: 4, marginBottom: 18, borderBottom: "1px solid #e4e7ec" }}>
-        {[["certificaciones", "📋 Certificaciones"], ["altas", "➕ Vehículos y Personal"], ["flota", "🚚 Inventario de Flota"], ["contratos", "📑 Gestionador de Contratos"], ["documentacion", "🗂 Documentación Terceros"], ["avisos", "🔔 Avisos"], ["mensajes", "💬 Mensajes"], ["tablero", "📊 Tablero de Control"]].map(([v, l]) => (
+        {[["certificaciones", "📋 Certificaciones"], ["altas", "➕ Vehículos y Personal"], ["flota", "🚚 Inventario de Flota"], ["sin_certificar", "🚨 Empresas del patio"], ["contratos", "📑 Gestionador de Contratos"], ["documentacion", "🗂 Documentación Terceros"], ["avisos", "🔔 Avisos"], ["mensajes", "💬 Mensajes"], ["tablero", "📊 Tablero de Control"]].map(([v, l]) => (
           <button key={v} onClick={() => { setSeccion(v); setSelected(null); }}
             style={{ padding: "10px 16px", border: "none", cursor: "pointer", fontSize: 13, fontFamily: "'Geist',sans-serif",
               background: "transparent", fontWeight: seccion === v ? 700 : 400,
@@ -7686,6 +7932,15 @@ function ModuloCertificaciones() {
                 display: "inline-flex", alignItems: "center", justifyContent: "center", lineHeight: 1,
                 border: "1px solid #be123c", fontVariantNumeric: "tabular-nums" }}>
                 {nNuevas > 99 ? "99+" : nNuevas}
+              </span>
+            )}
+            {/* Empresas que un supervisor escribió en el patio y no existen */}
+            {v === "sin_certificar" && nSinCert > 0 && (
+              <span style={{ position: "absolute", top: -2, right: 4, minWidth: 18, height: 18, padding: "0 5px",
+                borderRadius: 999, background: "#e11d48", color: "#fff", fontSize: 10.5, fontWeight: 800,
+                display: "inline-flex", alignItems: "center", justifyContent: "center", lineHeight: 1,
+                border: "1px solid #be123c", fontVariantNumeric: "tabular-nums" }}>
+                {nSinCert > 99 ? "99+" : nSinCert}
               </span>
             )}
             {/* Número naranja de mensajes sin leer */}
@@ -7713,6 +7968,7 @@ function ModuloCertificaciones() {
 
       {seccion === "altas" && <AltaVehiculosPersonal onCreada={() => cargar(true)} />}
       {seccion === "flota" && <InventarioFlota />}
+      {seccion === "sin_certificar" && <EmpresasDelPatio onContador={setNSinCert} />}
       {seccion === "contratos" && <GestionadorContratos />}
       {seccion === "documentacion" && <DocumentacionTerceros />}
       {seccion === "avisos" && <AvisosRecordatorios onContador={setNAvisos} />}
