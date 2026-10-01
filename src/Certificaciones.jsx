@@ -1038,7 +1038,7 @@ function cargarScriptMifiel() {
 // puede editarlos manualmente, y el Brain llena la plantilla con pdf-lib:
 // Hoja de Firmas (pág 11) + Anexo A (pág 13) + Backup A.2 (pág 14).
 const CONTRATO_COORDS = {
-  // ── Plantilla v2.0 (EO_Inhouse_ContratoTransportista_v2_0) ──
+  // ── Plantilla v3.0 (EO_Inhouse_ContratoTransportista_v3_0) ──
   // Todas las coordenadas fueron REMEDIDAS sobre esta plantilla: la v1.0
   // tenía el bloque Modelo 30 pt más arriba y las filas de la tabla en
   // otra posición, así que reusar las anteriores dejaba las cruces fuera
@@ -1047,7 +1047,7 @@ const CONTRATO_COORDS = {
   // Convención: las cajas ☐ se midieron con pdfplumber (x0, y0) y aquí
   // van con la calibración de dibujo +0.5 / +0.3, que es donde pdf-lib
   // centra la X dentro de la casilla.
-  plantilla: "plantillas/contrato_transportista_v2_0.pdf",
+  plantilla: "plantillas/contrato_transportista_v3_0.pdf",
   pagFirmas: 10, pagAnexoA: 12, pagA2: 13,
   firmas: {
     // Linea de la fecha: la raya tiene tinta en y=690.0, asi que la baseline
