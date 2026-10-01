@@ -1133,7 +1133,11 @@ const MESES_ES = ["enero","febrero","marzo","abril","mayo","junio","julio","agos
 // vehículo, ayudante y tarifa: dos camionetas del mismo transportista
 // pueden ser una SDD Large Van y otra Spot Small Van.
 const MODELOS_LINEA  = ["SDD", "Spot", "Backup"];
-const TIPOS_LINEA    = ["Large Van", "Medium Van", "Small Van", "Car"];
+// "Extra Large Van" llegó con el Anexo B de la plantilla v3.0 y aplica
+// SOLO al modelo Spot. La hoja del Anexo A no tiene casilla para ella
+// (la celda de tipo mide 42.7 pt y las cuatro opciones ya la llenan),
+// así que en el PDF se deja constancia por Observaciones.
+const TIPOS_LINEA    = ["Large Van", "Extra Large Van", "Medium Van", "Small Van", "Car"];
 const AYUDANTE_LINEA = ["Sí", "No", "Según activación"];
 const TARIFAS_LINEA  = ["Tabla vigente", "Especial"];
 
@@ -1142,6 +1146,7 @@ const TARIFAS_LINEA  = ["Tabla vigente", "Especial"];
 function normTipoVehiculo(v) {
   const t = String(v || "").toLowerCase().replace(/[^a-z]/g, "");
   if (!t) return "";
+  if (t.includes("extralarge") || t.includes("xl")) return "Extra Large Van";
   if (t.includes("large") || t.includes("grande")) return "Large Van";
   if (t.includes("medi")) return "Medium Van";      // cubre "Medim Van" de la plantilla
   if (t.includes("small") || t.includes("chica") || t.includes("pequen")) return "Small Van";
@@ -1325,12 +1330,19 @@ async function generarContratoPDFDesde(D, { tabla, registro }) {
     T(pA, A.svcX,  y, l.svc || D.svc, 8);
     T(pA, A.cantX, y, l.n, 8);
     casilla("modelo",   l.modelo);
-    casilla("tipo",     normTipoVehiculo(l.tipo));
+    const tipoNorm = normTipoVehiculo(l.tipo);
+    casilla("tipo",     tipoNorm);
     casilla("ayudante", l.ayudante || D.ayudante);
     casilla("tarifa",   l.tarifa || D.tarifa);
-    // Observaciones: solo lo que escriba el analista (placa u observación).
+    // Observaciones: lo que escriba el analista (placa u observación).
+    // Extra Large Van no tiene casilla en la plantilla v3.0, así que el tipo
+    // se escribe aquí para que el contrato igual lo diga. Sin esto la fila
+    // salía sin ningún tipo marcado y nadie se enteraba.
+    const partes = [];
+    if (tipoNorm && !A.lin.tipo[tipoNorm]) partes.push(tipoNorm);
     const obs = l.obs || l.placa || "";
-    if (obs) T(pA, A.obsX, y, obs, 6.5);
+    if (obs) partes.push(obs);
+    if (partes.length) T(pA, A.obsX, y, partes.join(" · "), 6.5);
   });
 
   // A.2 Backup Operativo — la casilla Sí/No se marca SIEMPRE (antes, si
@@ -3317,7 +3329,10 @@ Responde con este JSON exacto:
             { k: "email", label: "Email" },
             { k: "telefono", label: "Teléfono" },
             { k: "cantidad_vehiculos", label: "Vehículos a presentar", tipo: "number" },
-            { k: "tipo_vehiculo", label: "Tipo de vehículo", opciones: ["Small Van", "Large Van", "Car Sedán", "Otro"] },
+            // Extra Large Van entró con la plantilla de contrato v3.0. Esta lista
+            // usa nombres propios (Car Sedán, Otro) y no TIPOS_LINEA, que es la
+            // del Anexo A; son dos catálogos distintos a propósito.
+            { k: "tipo_vehiculo", label: "Tipo de vehículo", opciones: ["Small Van", "Large Van", "Extra Large Van", "Car Sedán", "Otro"] },
             { k: "empresa", label: "Empresa" },
           ]}
           onGuardar={async (cambios) => {

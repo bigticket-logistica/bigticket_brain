@@ -33,7 +33,11 @@ function resumenTiposMinuta(m) {
 // un resumen agregado. Estos valores se cruzan tal cual en el PDF, así
 // que los literales tienen que ser exactos.
 const MODELOS_LINEA  = ["SDD", "Spot", "Backup"];
-const TIPOS_LINEA    = ["Large Van", "Medium Van", "Small Van", "Car"];
+// "Extra Large Van" llegó con el Anexo B de la plantilla v3.0 y aplica
+// SOLO al modelo Spot. La hoja del Anexo A no tiene casilla para ella
+// (la celda de tipo mide 42.7 pt y las cuatro opciones ya la llenan),
+// así que en el PDF se deja constancia por Observaciones.
+const TIPOS_LINEA    = ["Large Van", "Extra Large Van", "Medium Van", "Small Van", "Car"];
 const AYUDANTE_LINEA = ["Sí", "No", "Según activación"];
 const TARIFAS_LINEA  = ["Tabla vigente", "Especial"];
 const MAX_LINEAS     = 3;   // la hoja del Anexo A tiene 3 filas
@@ -41,6 +45,7 @@ const MAX_LINEAS     = 3;   // la hoja del Anexo A tiene 3 filas
 function normTipoVehiculo(v) {
   const t = String(v || "").toLowerCase().replace(/[^a-z]/g, "");
   if (!t) return "";
+  if (t.includes("extralarge") || t.includes("xl")) return "Extra Large Van";
   if (t.includes("large") || t.includes("grande")) return "Large Van";
   if (t.includes("medi")) return "Medium Van";      // cubre el "Medim Van" de la plantilla
   if (t.includes("small") || t.includes("chica") || t.includes("pequen")) return "Small Van";
