@@ -588,6 +588,7 @@ function IndicadoresOperacionalesMX({ usuario }) {
     { id: "torre_rostering_hoy", label: "Torre de Control Rostering Hoy", desc: "Operativo en vivo · cronómetros + alertas SDD" },
     { id: "torre_d1", label: "Torre Control D-1", desc: "3 Pilares · MELI × Rostering × Operación" },
     { id: "kpi_operacion", label: "KPI de Operación", desc: "NS Informe MELI vs Snapshots" },
+    { id: "vendor_score", label: "Vendor Score", desc: "Nota semanal MELI · aproximada" },
     { id: "control_helper", label: "Control Helper", desc: "Helpers no autorizados / certificados / fantasmas" },
     { id: "tareas", label: "📋 Tareas", desc: "Altas operacionales · SLA 24 h" },
   ];
@@ -626,6 +627,7 @@ function IndicadoresOperacionalesMX({ usuario }) {
 
       {vista === "compromiso" && <PoolMeliCompromiso />}
       {vista === "kpi_operacion" && <PoolMeliKPIOperacion />}
+      {vista === "vendor_score" && <PoolVendorScore />}
       {vista === "diferencias" && <PoolMeliDiferenciasMaestros />}
 
       {vista === "control_helper" && <PoolMeliControlHelper />}
@@ -6141,5 +6143,383 @@ function PoolMeliDiferenciasMaestros() {
     </div>
   );
 }
+
+// ═══════════════════════════════════════════════════════════════════
+//  VENDOR SCORE MX — nota semanal que MELI pone a Big Ticket (0 a 100)
+//  Fuente: tablas vs_* que llena el scraper del VPS (/opt/vendor-score)
+//  cada mañana a las 7:00 MX con los datos del DÍA ANTERIOR.
+//  Es una APROXIMACIÓN: el número oficial es el que manda MELI.
+// ═══════════════════════════════════════════════════════════════════
+const VS_INICIO = "2026-10-01";          // el registro parte este día (sin historia previa)
+const VS_GMV_PAQUETE_RESPALDO = 640;     // MXN por paquete si el día no trae GMV (promedio sep-2026)
+const VS_NAVY = "#1a3a6b";
+const VS_ORANGE = "#F47B20";
+const VS_BORDER = "#e4e7ec";
+const VS_MUTED = "#5b6474";
+const VS_TEXT = "#1a1a1a";
+const VS_PESOS = { ER: 35, AR: 15, DS: 30, BPP: 20 };
+
+// Redondeo como Excel (el .5 sube)
+const vsRedondear = (x) => Math.round(x + 1e-9);
+
+// Puntajes de cada indicador (0 a 100). null = sin datos (MELI lo cuenta como 0)
+function vsScoreLineal(num, den) {
+  if (!den) return null;
+  return vsRedondear((num / den) * 100);
+}
+function vsScoreDS(pctEntrega) {
+  if (pctEntrega == null) return null;
+  if (pctEntrega >= 98.5) return 100;
+  if (pctEntrega >= 97.5) return 75;
+  if (pctEntrega >= 97.0) return 50;
+  return 0;
+}
+// Cortes del BPP aproximados (MELI no los publica; salen del análisis de su Excel)
+const VS_TRAMOS_BPP = [[0.085, 100], [0.165, 50], [0.25, 25]];
+function vsScoreBPP(pctBpp) {
+  if (pctBpp == null) return null;
+  for (const [corte, pts] of VS_TRAMOS_BPP) if (pctBpp < corte) return pts;
+  return 0;
+}
+function vsEstado(score) {
+  if (score >= 80) return { txt: "OK", bg: "#e4ecfb", fg: "#1f3f99" };
+  if (score >= 70) return { txt: "Seguimiento", bg: "#fef3c7", fg: "#7a4f00" };
+  return { txt: "Warning", bg: "#fde5d4", fg: "#9a3c06" };
+}
+function vsColorChip(v) {
+  if (v == null) return { bg: "#f1f2f4", fg: VS_MUTED };
+  if (v >= 100) return { bg: "#e4ecfb", fg: "#1f3f99" };
+  if (v >= 75) return { bg: "#eef1f6", fg: "#2e3a4f" };
+  if (v >= 50) return { bg: "#fef3c7", fg: "#7a4f00" };
+  return { bg: "#fde5d4", fg: "#9a3c06" };
+}
+const vsNum = (n, dec = 1) => (n == null ? "—" : n.toLocaleString("es-MX", { minimumFractionDigits: dec, maximumFractionDigits: dec }));
+const vsPesos = (n) => "$" + Number(n || 0).toLocaleString("es-MX", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+// Fechas: lunes de la semana y número de semana ISO (MELI) — el Brain numera ISO + 1
+function vsLunes(iso) {
+  const d = new Date(iso + "T12:00:00Z");
+  const dia = (d.getUTCDay() + 6) % 7;
+  d.setUTCDate(d.getUTCDate() - dia);
+  return d.toISOString().slice(0, 10);
+}
+function vsSemanaISO(iso) {
+  const d = new Date(iso + "T12:00:00Z");
+  d.setUTCDate(d.getUTCDate() + 3 - ((d.getUTCDay() + 6) % 7));
+  const enero4 = new Date(Date.UTC(d.getUTCFullYear(), 0, 4));
+  return 1 + Math.round(((d - enero4) / 86400000 - 3 + ((enero4.getUTCDay() + 6) % 7)) / 7);
+}
+const vsFechaLarga = (iso) => new Date(iso + "T12:00:00Z").toLocaleDateString("es-MX", { weekday: "long", day: "numeric", month: "long", timeZone: "UTC" });
+const vsFechaCorta = (iso) => new Date(iso + "T12:00:00Z").toLocaleDateString("es-MX", { day: "numeric", month: "short", timeZone: "UTC" });
+
+// Calcula el Vendor Score a partir de los datos brutos sumados (igual que MELI)
+function vsCalcular(b) {
+  const er = vsScoreLineal(b.ejec, b.conf);
+  const ar = vsScoreLineal(b.conf, b.sol);
+  const dsPct = b.desp ? (b.entr / b.desp) * 100 : null;
+  const ds = vsScoreDS(dsPct);
+  const bppPct = b.gmv ? (b.bpp / b.gmv) * 100 : null;
+  const bpp = vsScoreBPP(bppPct);
+  const v = (x) => x ?? 0;
+  const score = vsRedondear(0.35 * v(er) + 0.15 * v(ar) + 0.30 * v(ds) + 0.20 * v(bpp));
+  const pierde = {
+    ER: 0.35 * (100 - v(er)), AR: 0.15 * (100 - v(ar)),
+    DS: 0.30 * (100 - v(ds)), BPP: 0.20 * (100 - v(bpp)),
+  };
+  return { ...b, montoBpp: b.bpp, er, ar, ds, dsPct, bpp, bppPct, score, pierde };
+}
+
+function vsQueLoBaja(r) {
+  const [comp, pts] = Object.entries(r.pierde).sort((a, b) => b[1] - a[1])[0];
+  if (pts < 0.05) return "Sin pérdidas";
+  const det = {
+    ER: r.er == null ? "sin rutas confirmadas" : `ER ${vsNum((r.ejec / r.conf) * 100)}%`,
+    AR: r.ar == null ? "sin rutas solicitadas" : `AR ${vsNum((r.conf / r.sol) * 100)}%`,
+    DS: r.dsPct == null ? "sin envíos MLP" : `DS ${vsNum(r.dsPct, 2)}%`,
+    BPP: r.bppPct == null ? "sin GMV" : `BPP ${vsNum(r.bppPct, 2)}%`,
+  }[comp];
+  return `${det} · −${vsNum(pts)} pts`;
+}
+
+function vsMeta(comp, t) {
+  if (comp === "ER") return "Cada punto de ER suma 0,35 al score. Es lineal: no hay tramos.";
+  if (comp === "AR") return "Cada punto de AR suma 0,15 al score. Es lineal: no hay tramos.";
+  if (comp === "DS") {
+    if (t.dsPct == null) return "Sin paquetes despachados todavía.";
+    const sig = [[97.0, 50], [97.5, 75], [98.5, 100]].find(([c]) => t.dsPct < c);
+    if (!sig) return "Ya está en el tramo máximo (98,5% o más).";
+    const faltan = Math.max(1, Math.ceil((sig[0] / 100) * t.desp - t.entr));
+    return `Llegar a ${vsNum(sig[0])}% sube el DS a ${sig[1]} (+${vsNum(0.3 * (sig[1] - (t.ds ?? 0)))} pts). Faltan unas ${faltan.toLocaleString("es-MX")} entregas.`;
+  }
+  if (t.bppPct == null) return "Sin GMV del día para calcular el porcentaje.";
+  const sig = [...VS_TRAMOS_BPP].reverse().find(([c, p]) => p > (t.bpp ?? 0) && t.bppPct >= c);
+  if (!sig) return "Ya está en el tramo máximo.";
+  const exceso = t.montoBpp - (sig[0] / 100) * t.gmv;
+  return `Bajar de ${vsNum(sig[0], 3)}% sube el BPP a ${sig[1]} (+${vsNum(0.2 * (sig[1] - (t.bpp ?? 0)))} pts). Hay que salvar unos ${vsPesos(exceso)} en disputas.`;
+}
+
+function PoolVendorScore() {
+  const hoy = fechaHoyOperativa();
+  const ayer = fechaOperativaOffset(-1);
+  const lunes = vsLunes(ayer);
+  const desde = lunes < VS_INICIO ? VS_INICIO : lunes;
+  const domingo = (() => { const d = new Date(lunes + "T12:00:00Z"); d.setUTCDate(d.getUTCDate() + 6); return d.toISOString().slice(0, 10); })();
+  const semMeli = vsSemanaISO(ayer);
+
+  const [fotos, setFotos] = useState([]);
+  const [casos, setCasos] = useState([]);
+  const [nuevosHoy, setNuevosHoy] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      setLoading(true); setError(null);
+      try {
+        const [rF, rC, rN] = await Promise.all([
+          sb.from("vs_foto_svc").select("*").gte("fecha", desde).lte("fecha", ayer).limit(5000),
+          sb.from("vs_bpp_casos").select("*").gte("shipment_day", desde).lte("shipment_day", ayer).neq("estado", "desaparecido").limit(5000),
+          sb.from("vs_bpp_casos").select("*").eq("primera_vez", hoy).order("gmv", { ascending: false }).limit(50),
+        ]);
+        if (rF.error) throw rF.error;
+        if (rC.error) throw rC.error;
+        if (!alive) return;
+        // De cada día y SVC se usa la foto más reciente
+        const ultima = {};
+        for (const f of rF.data || []) {
+          const k = f.fecha + "|" + f.svc;
+          if (!ultima[k] || f.capturado_el > ultima[k].capturado_el) ultima[k] = f;
+        }
+        setFotos(Object.values(ultima));
+        setCasos(rC.data || []);
+        setNuevosHoy(rN.data || []);
+      } catch (e) {
+        if (alive) setError(e.message || String(e));
+      } finally {
+        if (alive) setLoading(false);
+      }
+    })();
+    return () => { alive = false; };
+  }, [desde, ayer, hoy]);
+
+  const { total, svcs, gmvRespaldo } = useMemo(() => {
+    const base = () => ({ sol: 0, conf: 0, ejec: 0, desp: 0, entr: 0, gmv: 0, bpp: 0 });
+    const porSvc = {};
+    const tot = base();
+    let respaldo = false;
+    for (const f of fotos) {
+      if (!porSvc[f.svc]) porSvc[f.svc] = base();
+      const s = porSvc[f.svc];
+      const gp = f.gmv_paquete != null ? Number(f.gmv_paquete) : (respaldo = true, VS_GMV_PAQUETE_RESPALDO);
+      const add = {
+        sol: (f.sol_sdd || 0) + (f.sol_spot || 0),
+        conf: (f.conf_sdd || 0) + (f.conf_spot || 0),
+        ejec: (f.ejec_sdd || 0) + (f.ejec_spot || 0),
+        desp: f.despachados || 0, entr: f.entregados || 0,
+        gmv: (f.despachados || 0) * gp,
+      };
+      for (const k in add) { s[k] += add[k]; tot[k] += add[k]; }
+    }
+    for (const c of casos) {
+      if (!porSvc[c.svc]) porSvc[c.svc] = base();
+      const s = porSvc[c.svc];
+      s.bpp += Number(c.gmv) || 0; tot.bpp += Number(c.gmv) || 0;
+    }
+    const lista = Object.entries(porSvc)
+      .map(([svc, b]) => ({ svc, ...vsCalcular(b) }))
+      .sort((a, b) => a.score - b.score);
+    return { total: vsCalcular(tot), svcs: lista, gmvRespaldo: respaldo };
+  }, [fotos, casos]);
+
+  const abiertosSemana = useMemo(() => [...casos].sort((a, b) => Number(b.gmv) - Number(a.gmv)), [casos]);
+  const sinDatos = !loading && !error && fotos.length === 0;
+  const est = vsEstado(total.score);
+  const ganados = 100 - Object.values(total.pierde).reduce((a, b) => a + b, 0);
+  const comps = ["ER", "AR", "DS", "BPP"].sort((a, b) => total.pierde[b] - total.pierde[a]);
+  const nombres = { ER: "Cumplir rutas", AR: "Aceptar rutas", DS: "Entregar", BPP: "Reclamos" };
+  const metrica = {
+    ER: { v: total.conf ? `${vsNum((total.ejec / total.conf) * 100)}%` : "—", txt: `rutas ejecutadas de las confirmadas (${total.ejec} de ${total.conf})` },
+    AR: { v: total.sol ? `${vsNum((total.conf / total.sol) * 100)}%` : "—", txt: `rutas aceptadas de las solicitadas (${total.conf} de ${total.sol})` },
+    DS: { v: total.dsPct == null ? "—" : `${vsNum(total.dsPct, 2)}%`, txt: `paquetes entregados (${total.entr.toLocaleString("es-MX")} de ${total.desp.toLocaleString("es-MX")})` },
+    BPP: { v: total.bppPct == null ? "—" : `${vsNum(total.bppPct, 3)}%`, txt: `del GMV en reclamos abiertos (${vsPesos(total.montoBpp)})` },
+  };
+  const compScore = { ER: total.er, AR: total.ar, DS: total.ds, BPP: total.bpp };
+  const tonoPerdida = { BPP: VS_ORANGE, DS: "#f69a52", ER: "#f9b98a", AR: "#fcd8bd" };
+
+  const card = { background: "#fff", border: `1px solid ${VS_BORDER}`, borderRadius: 12, padding: "22px 26px" };
+  const num = { fontVariantNumeric: "tabular-nums" };
+
+  return (
+    <div style={{ padding: 24, background: "#f0f2f5", minHeight: "100%", color: VS_TEXT }}>
+
+      {/* Aviso de qué fecha y qué tan exacto es */}
+      <div style={{ background: "#fff8eb", border: "1px solid #f5d9a8", borderRadius: 10, padding: "12px 16px", marginBottom: 18, fontSize: 13, lineHeight: 1.55, color: "#5c4300" }}>
+        <b>Indicador del {vsFechaLarga(hoy)} con datos hasta el {vsFechaLarga(ayer)}.</b>{" "}
+        Cada mañana se actualiza con el día anterior. Es una <b>aproximación</b> calculada por Big Ticket con los datos del portal de MELI:
+        el número oficial es el que envía MELI en su reporte semanal. El BPP usa reclamos <b>abiertos</b> (antes de disputas), por eso puede verse peor que el final.
+        {gmvRespaldo && " Algunos días no traían GMV y se usó un promedio de $640 por paquete."}
+      </div>
+
+      {loading && <div style={{ ...card, color: VS_MUTED }}>Cargando el Vendor Score…</div>}
+      {error && <div style={{ ...card, color: "#b42318" }}>No se pudo leer el Vendor Score: {error}. Revisa que las tablas vs_* existan y que el scraper haya corrido.</div>}
+      {sinDatos && (
+        <div style={{ ...card, color: VS_MUTED, lineHeight: 1.6 }}>
+          Todavía no hay datos de esta semana. El scraper corre cada día a las 7:00 de México y guarda el día anterior.
+          El registro empezó el {vsFechaCorta(VS_INICIO)}.
+        </div>
+      )}
+
+      {!loading && !error && !sinDatos && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+
+          {/* Encabezado: un solo número */}
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", gap: 32, flexWrap: "wrap" }}>
+            <div style={{ maxWidth: 720 }}>
+              <div style={{ fontSize: 13, color: VS_MUTED, marginBottom: 6 }}>Vendor Score MLP · Big Ticket México</div>
+              <div style={{ fontSize: 30, fontWeight: 700, color: VS_NAVY, lineHeight: 1.15 }}>
+                Semana {semMeli + 1} del Brain · Semana {semMeli} de MELI
+              </div>
+              <div style={{ fontSize: 14, color: VS_MUTED, marginTop: 6, lineHeight: 1.5 }}>
+                {vsFechaCorta(lunes)} al {vsFechaCorta(domingo)}. Acumulado del {vsFechaCorta(desde)} al {vsFechaCorta(ayer)}: si la semana sigue igual, cierra con esta nota.
+                Pondera 35% cumplir rutas (ER), 15% aceptar (AR), 30% entregar (DS) y 20% reclamos (BPP).
+              </div>
+            </div>
+            <div style={{ display: "flex", alignItems: "flex-end", gap: 16 }}>
+              <div style={{ display: "flex", alignItems: "baseline", gap: 4 }}>
+                <span style={{ ...num, fontSize: 84, fontWeight: 700, lineHeight: 0.9, color: VS_NAVY }}>{total.score}</span>
+                <span style={{ fontSize: 22, color: VS_MUTED }}>/100</span>
+              </div>
+              <div style={{ paddingBottom: 6 }}>
+                <div style={{ display: "inline-block", padding: "5px 12px", borderRadius: 999, background: est.bg, color: est.fg, fontWeight: 700, fontSize: 13 }}>{est.txt}</div>
+                <div style={{ fontSize: 13, color: VS_MUTED, marginTop: 8 }}>
+                  {total.score >= 80 ? "Sobre la meta OK (80)" : `Faltan ${80 - total.score} puntos para OK (80)`}
+                </div>
+                <div style={{ fontSize: 12, color: VS_MUTED, marginTop: 2 }}>Aproximado</div>
+              </div>
+            </div>
+          </div>
+
+          {/* Dónde se pierden los puntos */}
+          <div style={card}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 16, flexWrap: "wrap", marginBottom: 14 }}>
+              <div style={{ fontSize: 18, fontWeight: 700 }}>Dónde se pierden los puntos</div>
+              <div style={{ fontSize: 13, color: VS_MUTED }}>De 100 puntos posibles se ganan {vsNum(ganados)}.</div>
+            </div>
+            <div style={{ display: "flex", height: 38, borderRadius: 8, overflow: "hidden", fontSize: 12, fontWeight: 700 }}>
+              <div style={{ width: `${ganados}%`, background: VS_NAVY, color: "#fff", display: "flex", alignItems: "center", paddingLeft: 12, whiteSpace: "nowrap" }}>Ganados {vsNum(ganados)}</div>
+              {comps.map(c => total.pierde[c] > 0.01 && (
+                <div key={c} title={`${c} −${vsNum(total.pierde[c])}`} style={{ width: `${total.pierde[c]}%`, background: tonoPerdida[c], color: VS_TEXT, display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", whiteSpace: "nowrap" }}>
+                  {total.pierde[c] >= 4 ? `${c} −${vsNum(total.pierde[c])}` : ""}
+                </div>
+              ))}
+            </div>
+            <div style={{ fontSize: 12, color: VS_MUTED, marginTop: 8 }}>
+              Perdidos: {comps.map(c => `${c} ${vsNum(total.pierde[c])}`).join(", ")}
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))", gap: 14, marginTop: 18 }}>
+              {comps.map(c => (
+                <div key={c} style={{ border: `1px solid ${VS_BORDER}`, borderRadius: 10, padding: 16, background: "#fbfbfc", display: "flex", flexDirection: "column", gap: 10 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+                    <div style={{ fontSize: 15, fontWeight: 700 }}>{c} · {nombres[c]}</div>
+                    <div style={{ fontSize: 12, color: VS_MUTED }}>pesa {VS_PESOS[c]}</div>
+                  </div>
+                  <div>
+                    <div style={{ ...num, fontSize: 28, fontWeight: 700 }}>{metrica[c].v}</div>
+                    <div style={{ fontSize: 12, color: VS_MUTED }}>{metrica[c].txt}</div>
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
+                    <span>Nota {compScore[c] ?? "sin datos"} · aporta {vsNum(VS_PESOS[c] - total.pierde[c])} de {VS_PESOS[c]}</span>
+                    <span style={{ fontWeight: 700, color: "#9a3c06" }}>−{vsNum(total.pierde[c])}</span>
+                  </div>
+                  <div style={{ height: 1, background: VS_BORDER }} />
+                  <div style={{ fontSize: 13, lineHeight: 1.45, color: "#2b3038" }}>{vsMeta(c, total)}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div style={{ display: "flex", gap: 20, alignItems: "flex-start", flexWrap: "wrap" }}>
+
+            {/* Service centers del peor al mejor */}
+            <div style={{ ...card, flex: "1 1 640px", minWidth: 0 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 12, gap: 12, flexWrap: "wrap" }}>
+                <div style={{ fontSize: 18, fontWeight: 700 }}>Service centers, del peor al mejor</div>
+                <div style={{ fontSize: 12, color: VS_MUTED }}>Nota de cada indicador (0 a 100)</div>
+              </div>
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 640 }}>
+                  <thead>
+                    <tr style={{ color: VS_MUTED, fontSize: 12, textAlign: "left" }}>
+                      {["SVC", "Score", "Estado", "ER", "AR", "DS", "BPP", "Qué lo baja"].map(h => (
+                        <th key={h} style={{ padding: "6px 8px", borderBottom: `1px solid ${VS_BORDER}`, fontWeight: 600 }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {svcs.map(s => {
+                      const e = vsEstado(s.score);
+                      return (
+                        <tr key={s.svc} style={{ borderBottom: "1px solid #f0f1f3" }}>
+                          <td style={{ padding: "7px 8px", fontWeight: 700 }}>{s.svc}</td>
+                          <td style={{ padding: "7px 8px", ...num, fontSize: 17, fontWeight: 700 }}>{s.score}</td>
+                          <td style={{ padding: "7px 8px" }}>
+                            <span style={{ padding: "3px 10px", borderRadius: 999, background: e.bg, color: e.fg, fontWeight: 700, fontSize: 12 }}>{e.txt}</span>
+                          </td>
+                          {[s.er, s.ar, s.ds, s.bpp].map((v, i) => {
+                            const c = vsColorChip(v);
+                            return (
+                              <td key={i} style={{ padding: "7px 6px" }}>
+                                <div style={{ ...num, background: c.bg, color: c.fg, borderRadius: 6, textAlign: "center", padding: "4px 0", fontWeight: 700, minWidth: 40 }}>{v ?? "—"}</div>
+                              </td>
+                            );
+                          })}
+                          <td style={{ padding: "7px 8px", color: "#2b3038" }}>{vsQueLoBaja(s)}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <div style={{ fontSize: 12, color: VS_MUTED, marginTop: 10, lineHeight: 1.5 }}>
+                Un indicador sin datos cuenta 0, igual que en el cálculo de MELI. Los cortes del BPP (0,085%, 0,165% y 0,25%) son aproximados.
+              </div>
+            </div>
+
+            {/* Aviso temprano de reclamos */}
+            <div style={{ ...card, flex: "0 1 380px", display: "flex", flexDirection: "column", gap: 12 }}>
+              <div style={{ fontSize: 18, fontWeight: 700 }}>Reclamos que aparecieron hoy</div>
+              <div style={{ fontSize: 13, color: VS_MUTED, lineHeight: 1.5 }}>
+                Detectados en la corrida del {vsFechaCorta(hoy)}. Monto en riesgo, no cobro final: puede bajar con las disputas.
+              </div>
+              <div style={{ display: "flex", gap: 22 }}>
+                <div><div style={{ ...num, fontSize: 24, fontWeight: 700 }}>{nuevosHoy.length}</div><div style={{ fontSize: 12, color: VS_MUTED }}>casos nuevos</div></div>
+                <div><div style={{ ...num, fontSize: 24, fontWeight: 700, color: "#9a3c06" }}>{vsPesos(nuevosHoy.reduce((a, c) => a + Number(c.gmv || 0), 0))}</div><div style={{ fontSize: 12, color: VS_MUTED }}>en riesgo</div></div>
+              </div>
+              {nuevosHoy.length === 0 && <div style={{ fontSize: 13, color: VS_MUTED }}>Hoy no aparecieron reclamos nuevos.</div>}
+              {nuevosHoy.slice(0, 8).map(k => (
+                <div key={k.shipment_id} style={{ borderTop: "1px solid #f0f1f3", paddingTop: 10 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, gap: 8 }}>
+                    <b>{k.svc} · {k.tipo}</b>
+                    <b style={num}>{vsPesos(k.gmv)}</b>
+                  </div>
+                  <div style={{ fontSize: 12, color: VS_MUTED, marginTop: 3 }}>
+                    Paquete {k.shipment_id} · Ruta {k.route_id} · despachado el {vsFechaCorta(k.shipment_day)}
+                  </div>
+                </div>
+              ))}
+              <div style={{ borderTop: `1px solid ${VS_BORDER}`, paddingTop: 12, fontSize: 13, lineHeight: 1.5 }}>
+                En la semana hay <b>{abiertosSemana.length}</b> reclamos abiertos por <b>{vsPesos(total.montoBpp)}</b>.
+                {abiertosSemana[0] && <> El mayor: {abiertosSemana[0].svc}, {abiertosSemana[0].tipo}, {vsPesos(abiertosSemana[0].gmv)} (paquete {abiertosSemana[0].shipment_id}).</>}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 
 export default IndicadoresOperacionalesMX;
