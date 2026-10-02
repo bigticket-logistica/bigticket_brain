@@ -6485,6 +6485,161 @@ function VsGlosario() {
   );
 }
 
+// ═══ Qué falta para cumplir: mejoras posibles y camino más corto a OK (80) ═══
+const VS_META_OK = 80;
+const VS_PROPUESTA = {
+  DS: "Reforzar las rutas con baja visita, reintentar en el día las entregas fallidas y revisar a los choferes con faltas.",
+  BPP: "Disputar los reclamos abiertos de mayor monto con la evidencia de entrega en Logistic (foto, ubicación, quién recibió).",
+  ER: "Cubrir los no shows con choferes o vehículos de respaldo y confirmar solo la capacidad real.",
+  AR: "Aceptar más solicitudes con flota de respaldo y anticipar la demanda con Torre de Control Compromiso.",
+};
+
+// Opciones de mejora de un conjunto (total o SVC). Cada ramo tiene niveles alternativos.
+function vsOpciones(t) {
+  const ops = [];
+  if (t.dsPct != null && t.desp) {
+    [[97.0, 50], [97.5, 75], [98.5, 100]].forEach(([corte, nota], nivel) => {
+      if (nota <= (t.ds ?? 0)) return;
+      const n = Math.max(1, Math.ceil((corte / 100) * t.desp - t.entr - 1e-9));
+      ops.push({ ramo: "DS", nivel, suma: 0.3 * (nota - (t.ds ?? 0)), cantidad: `${n.toLocaleString("es-MX")} entregas más`,
+        accion: `Llevar el DS a ${vsNum(corte)}% (nota ${nota})`, corto: `${n.toLocaleString("es-MX")} entregas` });
+    });
+  }
+  if (t.bppPct != null && t.gmv && t.montoBpp > 0) {
+    [[0.25, 25], [0.165, 50], [0.085, 100]].forEach(([corte, nota], nivel) => {
+      if (nota <= (t.bpp ?? 0)) return;
+      const salvar = Math.max(0, t.montoBpp - (corte / 100) * t.gmv);
+      ops.push({ ramo: "BPP", nivel, suma: 0.2 * (nota - (t.bpp ?? 0)), cantidad: `salvar ${vsPesos(salvar)} en disputas`,
+        accion: `Bajar el BPP a menos de ${vsNum(corte, 3)}% (nota ${nota})`, corto: `salvar ${vsPesos(salvar)}` });
+    });
+  }
+  if (t.conf && t.ejec < t.conf) {
+    const n = t.conf - t.ejec;
+    ops.push({ ramo: "ER", nivel: 0, suma: 0.35 * (100 - (t.er ?? 0)), cantidad: `${n} ${n === 1 ? "ruta" : "rutas"} sin ejecutar`,
+      accion: "Ejecutar todas las rutas confirmadas (cero no shows)", corto: `${n} no ${n === 1 ? "show" : "shows"}`,
+      porUnidad: (35 / t.conf) });
+  }
+  if (t.sol && t.conf < t.sol) {
+    const n = t.sol - t.conf;
+    ops.push({ ramo: "AR", nivel: 0, suma: 0.15 * (100 - (t.ar ?? 0)), cantidad: `${n} ${n === 1 ? "solicitud rechazada" : "solicitudes rechazadas"}`,
+      accion: "Aceptar todas las rutas solicitadas", corto: `${n} rechazos`, porUnidad: (15 / t.sol) });
+  }
+  return ops.filter(o => o.suma > 0.05);
+}
+
+// Puntaje exacto antes de redondear (suma de aportes)
+const vsPuntos = (t) => 100 - Object.values(t.pierde).reduce((a, b) => a + b, 0);
+
+// Camino más corto a la meta: menos acciones y niveles más bajos
+function vsCaminoMeta(t, meta = VS_META_OK) {
+  const base = vsPuntos(t);
+  if (vsRedondear(base) >= meta) return { yaCumple: true, acciones: [], final: vsRedondear(base) };
+  const ops = vsOpciones(t);
+  const porRamo = {};
+  for (const o of ops) (porRamo[o.ramo] = porRamo[o.ramo] || [null]).push(o);
+  const ramos = Object.keys(porRamo);
+  let mejor = null;
+  const probar = (i, elegidas) => {
+    if (i === ramos.length) {
+      const acc = elegidas.filter(Boolean);
+      const final = vsRedondear(base + acc.reduce((a, o) => a + o.suma, 0));
+      if (final < meta) return;
+      const costo = acc.length * 10 + acc.reduce((a, o) => a + o.nivel, 0);
+      if (!mejor || costo < mejor.costo) mejor = { costo, acciones: acc, final };
+      return;
+    }
+    for (const o of porRamo[ramos[i]]) probar(i + 1, [...elegidas, o]);
+  };
+  probar(0, []);
+  return mejor ? { yaCumple: false, ...mejor } : { yaCumple: false, acciones: [], final: null, imposible: true };
+}
+
+// La mejora más rentable de un SVC: la que más suma con el primer nivel de cada ramo
+function vsMejorAccion(t) {
+  const primeras = {};
+  for (const o of vsOpciones(t)) if (!primeras[o.ramo] || o.nivel < primeras[o.ramo].nivel) primeras[o.ramo] = o;
+  const lista = Object.values(primeras).sort((a, b) => b.suma - a.suma);
+  if (!lista.length) return "—";
+  const o = lista[0];
+  return `${o.ramo}: ${o.corto} → +${vsNum(o.suma)} pts`;
+}
+
+function VsQueFalta({ total }) {
+  const camino = vsCaminoMeta(total);
+  const ops = vsOpciones(total).sort((a, b) => b.suma - a.suma);
+  const base = vsPuntos(total);
+  const faltan = Math.max(0, VS_META_OK - base);
+  const card = { background: "#fff", border: `1px solid ${VS_BORDER}`, borderRadius: 12, padding: "22px 26px" };
+  const num = { fontVariantNumeric: "tabular-nums" };
+
+  return (
+    <div style={{ ...card, borderLeft: `5px solid ${camino.yaCumple ? "#15803d" : VS_ORANGE}` }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
+        <div style={{ fontSize: 18, fontWeight: 700 }}>Qué falta para cumplir</div>
+        <div style={{ fontSize: 12, color: VS_MUTED }}>Meta: OK (80 puntos) · con lo acumulado hasta ayer</div>
+      </div>
+
+      <div style={{ fontSize: 15, marginTop: 10, lineHeight: 1.55 }}>
+        {camino.yaCumple && <>La semana está en <b>OK</b>. Para mantenerla, cuida los ramos que más pierden en la lista de abajo.</>}
+        {!camino.yaCumple && camino.imposible && <>Faltan <b>{vsNum(faltan)} puntos</b> para OK y con lo acumulado no alcanza ni mejorando todos los ramos: los días que quedan de la semana tienen que salir mejor.</>}
+        {!camino.yaCumple && !camino.imposible && (
+          <>
+            Faltan <b>{vsNum(faltan)} puntos</b> para llegar a OK. El camino más corto:{" "}
+            {camino.acciones.map((o, i) => (
+              <span key={o.ramo}>
+                {i > 0 && " + "}
+                <b>{o.accion.charAt(0).toLowerCase() + o.accion.slice(1)}</b> ({o.cantidad}, +{vsNum(o.suma)} pts)
+              </span>
+            ))}
+            . Con eso la nota quedaría en <b style={{ color: "#15803d" }}>{camino.final}</b>.
+          </>
+        )}
+      </div>
+
+      {ops.length > 0 && (
+        <div style={{ overflowX: "auto", marginTop: 14 }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 760 }}>
+            <thead>
+              <tr style={{ color: VS_MUTED, fontSize: 12, textAlign: "left" }}>
+                {["Ramo", "Mejora", "Qué falta", "Suma", "Nota quedaría", "Cómo lograrlo"].map(h => (
+                  <th key={h} style={{ padding: "6px 8px", borderBottom: `1px solid ${VS_BORDER}`, fontWeight: 600 }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {ops.map((o, i) => {
+                const queda = vsRedondear(base + o.suma);
+                const e = vsEstado(queda);
+                return (
+                  <tr key={i} style={{ borderBottom: "1px solid #f0f1f3", verticalAlign: "top" }}>
+                    <td style={{ padding: "8px", fontWeight: 700 }}>{o.ramo}</td>
+                    <td style={{ padding: "8px" }}>{o.accion}</td>
+                    <td style={{ padding: "8px", ...num }}>
+                      {o.cantidad}
+                      {o.porUnidad && <div style={{ fontSize: 12, color: VS_MUTED }}>cada una vale unos {vsNum(o.porUnidad, 2)} pts</div>}
+                    </td>
+                    <td style={{ padding: "8px", ...num, fontWeight: 700, color: "#15803d" }}>+{vsNum(o.suma)}</td>
+                    <td style={{ padding: "8px" }}>
+                      <span style={{ ...num, fontWeight: 700, marginRight: 6 }}>{queda}</span>
+                      <span style={{ padding: "2px 8px", borderRadius: 999, background: e.bg, color: e.fg, fontWeight: 700, fontSize: 11 }}>{e.txt}</span>
+                    </td>
+                    <td style={{ padding: "8px", color: "#2b3038", lineHeight: 1.45 }}>{VS_PROPUESTA[o.ramo]}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <div style={{ fontSize: 12, color: VS_MUTED, marginTop: 10, lineHeight: 1.5 }}>
+        Las cantidades se calculan sobre lo acumulado de la semana. Lo que ya pasó no se puede rehacer, pero los días que quedan sí pueden compensar:
+        por ejemplo, si al DS le faltan 20 entregas, los próximos días tienen que entregar sobre el 97% para recuperarlas. Cada opción se mide por separado;
+        "Nota quedaría" es la nota si solo se hace esa mejora.
+      </div>
+    </div>
+  );
+}
+
 function PoolVendorScore() {
   const hoy = fechaHoyOperativa();
   const ayer = fechaOperativaOffset(-1);
@@ -6662,6 +6817,9 @@ function PoolVendorScore() {
             </div>
           </div>
 
+          {/* Qué falta para cumplir */}
+          <VsQueFalta total={total} />
+
           {/* Dónde se pierden los puntos */}
           <div style={card}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 16, flexWrap: "wrap", marginBottom: 14 }}>
@@ -6711,10 +6869,10 @@ function PoolVendorScore() {
                 <div style={{ fontSize: 12, color: VS_MUTED }}>Nota de cada indicador (0 a 100)</div>
               </div>
               <div style={{ overflowX: "auto" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 640 }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 860 }}>
                   <thead>
                     <tr style={{ color: VS_MUTED, fontSize: 12, textAlign: "left" }}>
-                      {["SVC", "Score", "Estado", "ER", "AR", "DS", "BPP", "Qué lo baja"].map(h => (
+                      {["SVC", "Score", "Estado", "ER", "AR", "DS", "BPP", "Qué lo baja", "Para mejorar"].map(h => (
                         <th key={h} style={{ padding: "6px 8px", borderBottom: `1px solid ${VS_BORDER}`, fontWeight: 600 }}>{h}</th>
                       ))}
                     </tr>
@@ -6738,6 +6896,7 @@ function PoolVendorScore() {
                             );
                           })}
                           <td style={{ padding: "7px 8px", color: "#2b3038" }}>{vsQueLoBaja(s)}</td>
+                          <td style={{ padding: "7px 8px", color: "#15803d", fontWeight: 600 }}>{vsMejorAccion(s)}</td>
                         </tr>
                       );
                     })}
