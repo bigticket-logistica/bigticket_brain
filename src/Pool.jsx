@@ -6431,7 +6431,7 @@ function PoolVendorScore() {
                   </div>
                   <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
                     <span>Nota {compScore[c] ?? "sin datos"} · aporta {vsNum(VS_PESOS[c] - total.pierde[c])} de {VS_PESOS[c]}</span>
-                    <span style={{ fontWeight: 700, color: "#9a3c06" }}>−{vsNum(total.pierde[c])}</span>
+                    <span style={{ fontWeight: 700, color: total.pierde[c] > 0.05 ? "#9a3c06" : VS_MUTED }}>{total.pierde[c] > 0.05 ? `−${vsNum(total.pierde[c])}` : "sin pérdida"}</span>
                   </div>
                   <div style={{ height: 1, background: VS_BORDER }} />
                   <div style={{ fontSize: 13, lineHeight: 1.45, color: "#2b3038" }}>{vsMeta(c, total)}</div>
