@@ -6564,77 +6564,122 @@ function vsMejorAccion(t) {
   return `${o.ramo}: ${o.corto} → +${vsNum(o.suma)} pts`;
 }
 
-function VsQueFalta({ total }) {
+// Dónde está la brecha de cada ramo: qué SVC concentran lo que falta
+const VS_BRECHA = {
+  DS: { valor: s => s.desp - s.entr, txt: v => `${v.toLocaleString("es-MX")} sin entregar` },
+  ER: { valor: s => s.conf - s.ejec, txt: v => `${v} ${v === 1 ? "no show" : "no shows"}` },
+  AR: { valor: s => s.sol - s.conf, txt: v => `${v} ${v === 1 ? "rechazo" : "rechazos"}` },
+  BPP: { valor: s => s.montoBpp || 0, txt: v => `${vsPesos(v)} en reclamos` },
+};
+function vsDondeAtacar(ramo, svcs) {
+  const b = VS_BRECHA[ramo];
+  const lista = svcs.map(s => ({ svc: s.svc, v: b.valor(s) })).filter(x => x.v > 0).sort((a, c) => c.v - a.v);
+  const total = lista.reduce((a, x) => a + x.v, 0);
+  return lista.map(x => ({ ...x, txt: b.txt(x.v), pct: total ? Math.round((x.v / total) * 100) : 0 }));
+}
+const VS_NOMBRE_RAMO = { DS: "Entregar", ER: "Cumplir rutas", AR: "Aceptar rutas", BPP: "Reclamos" };
+const VS_QUE_ES = {
+  DS: "Subir el porcentaje de paquetes entregados. Son niveles alternativos: elige hasta dónde llegar, no se suman entre sí.",
+  BPP: "Bajar el monto de reclamos con disputas. Son niveles alternativos: elige hasta dónde llegar, no se suman entre sí.",
+  ER: "Ejecutar las rutas confirmadas. Cada ruta cuenta: no hay tramos.",
+  AR: "Aceptar las rutas que MELI solicita. Cada solicitud cuenta: no hay tramos.",
+};
+
+function VsQueFalta({ total, svcs }) {
   const camino = vsCaminoMeta(total);
-  const ops = vsOpciones(total).sort((a, b) => b.suma - a.suma);
+  const ops = vsOpciones(total);
   const base = vsPuntos(total);
   const faltan = Math.max(0, VS_META_OK - base);
-  const card = { background: "#fff", border: `1px solid ${VS_BORDER}`, borderRadius: 12, padding: "22px 26px" };
   const num = { fontVariantNumeric: "tabular-nums" };
 
+  // Una fila por ramo; DS y BPP muestran sus niveles alternativos
+  const ramos = ["DS", "BPP", "ER", "AR"]
+    .map(r => ({ ramo: r, niveles: ops.filter(o => o.ramo === r).sort((a, b) => a.nivel - b.nivel) }))
+    .filter(r => r.niveles.length)
+    .sort((a, b) => Math.max(...b.niveles.map(o => o.suma)) - Math.max(...a.niveles.map(o => o.suma)));
+
+  const lugares = (ramo, max = 4) => {
+    const l = vsDondeAtacar(ramo, svcs);
+    if (!l.length) return <span style={{ color: VS_MUTED }}>Sin detalle por SVC</span>;
+    return (
+      <>
+        {l.slice(0, max).map(x => (
+          <div key={x.svc}><b>{x.svc}</b>: {x.txt} <span style={{ color: VS_MUTED }}>({x.pct}%)</span></div>
+        ))}
+        {l.length > max && <div style={{ color: VS_MUTED }}>y {l.length - max} SVC más</div>}
+      </>
+    );
+  };
+
   return (
-    <div style={{ ...card, borderLeft: `5px solid ${camino.yaCumple ? "#15803d" : VS_ORANGE}` }}>
+    <div style={{ background: "#fff", border: `1px solid ${VS_BORDER}`, borderLeft: `5px solid ${camino.yaCumple ? "#15803d" : VS_ORANGE}`, borderRadius: 12, padding: "22px 26px" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
         <div style={{ fontSize: 18, fontWeight: 700 }}>Qué falta para cumplir</div>
         <div style={{ fontSize: 12, color: VS_MUTED }}>Meta: OK (80 puntos) · con lo acumulado hasta ayer</div>
       </div>
 
-      <div style={{ fontSize: 15, marginTop: 10, lineHeight: 1.55 }}>
-        {camino.yaCumple && <>La semana está en <b>OK</b>. Para mantenerla, cuida los ramos que más pierden en la lista de abajo.</>}
+      <div style={{ fontSize: 15, marginTop: 10, lineHeight: 1.6 }}>
+        {camino.yaCumple && <>La semana está en <b>OK</b>. Para mantenerla, cuida los ramos de la tabla de abajo.</>}
         {!camino.yaCumple && camino.imposible && <>Faltan <b>{vsNum(faltan)} puntos</b> para OK y con lo acumulado no alcanza ni mejorando todos los ramos: los días que quedan de la semana tienen que salir mejor.</>}
         {!camino.yaCumple && !camino.imposible && (
           <>
             Faltan <b>{vsNum(faltan)} puntos</b> para llegar a OK. El camino más corto:{" "}
-            {camino.acciones.map((o, i) => (
-              <span key={o.ramo}>
-                {i > 0 && " + "}
-                <b>{o.accion.charAt(0).toLowerCase() + o.accion.slice(1)}</b> ({o.cantidad}, +{vsNum(o.suma)} pts)
-              </span>
-            ))}
+            {camino.acciones.map((o, i) => {
+              const top = vsDondeAtacar(o.ramo, svcs).slice(0, 2).map(x => x.svc);
+              return (
+                <span key={o.ramo}>
+                  {i > 0 && " + "}
+                  <b>{o.accion.charAt(0).toLowerCase() + o.accion.slice(1)}</b> ({o.cantidad}, +{vsNum(o.suma)} pts)
+                  {top.length > 0 && <>, atacando primero <b>{top.join(" y ")}</b></>}
+                </span>
+              );
+            })}
             . Con eso la nota quedaría en <b style={{ color: "#15803d" }}>{camino.final}</b>.
           </>
         )}
       </div>
 
-      {ops.length > 0 && (
+      {ramos.length > 0 && (
         <div style={{ overflowX: "auto", marginTop: 14 }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 760 }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 900 }}>
             <thead>
               <tr style={{ color: VS_MUTED, fontSize: 12, textAlign: "left" }}>
-                {["Ramo", "Mejora", "Qué falta", "Suma", "Nota quedaría", "Cómo lograrlo"].map(h => (
+                {["Ramo", "Qué mejorar", "Cuánto falta y cuánto suma", "Dónde atacar (SVC)", "Cómo lograrlo"].map(h => (
                   <th key={h} style={{ padding: "6px 8px", borderBottom: `1px solid ${VS_BORDER}`, fontWeight: 600 }}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {ops.map((o, i) => {
-                const queda = vsRedondear(base + o.suma);
-                const e = vsEstado(queda);
-                return (
-                  <tr key={i} style={{ borderBottom: "1px solid #f0f1f3", verticalAlign: "top" }}>
-                    <td style={{ padding: "8px", fontWeight: 700 }}>{o.ramo}</td>
-                    <td style={{ padding: "8px" }}>{o.accion}</td>
-                    <td style={{ padding: "8px", ...num }}>
-                      {o.cantidad}
-                      {o.porUnidad && <div style={{ fontSize: 12, color: VS_MUTED }}>cada una vale unos {vsNum(o.porUnidad, 2)} pts</div>}
-                    </td>
-                    <td style={{ padding: "8px", ...num, fontWeight: 700, color: "#15803d" }}>+{vsNum(o.suma)}</td>
-                    <td style={{ padding: "8px" }}>
-                      <span style={{ ...num, fontWeight: 700, marginRight: 6 }}>{queda}</span>
-                      <span style={{ padding: "2px 8px", borderRadius: 999, background: e.bg, color: e.fg, fontWeight: 700, fontSize: 11 }}>{e.txt}</span>
-                    </td>
-                    <td style={{ padding: "8px", color: "#2b3038", lineHeight: 1.45 }}>{VS_PROPUESTA[o.ramo]}</td>
-                  </tr>
-                );
-              })}
+              {ramos.map(r => (
+                <tr key={r.ramo} style={{ borderBottom: "1px solid #f0f1f3", verticalAlign: "top" }}>
+                  <td style={{ padding: "10px 8px", fontWeight: 700, whiteSpace: "nowrap" }}>{r.ramo} · {VS_NOMBRE_RAMO[r.ramo]}</td>
+                  <td style={{ padding: "10px 8px", color: "#2b3038", lineHeight: 1.45, maxWidth: 240 }}>{VS_QUE_ES[r.ramo]}</td>
+                  <td style={{ padding: "10px 8px", lineHeight: 1.6 }}>
+                    {r.niveles.map((o, i) => {
+                      const queda = vsRedondear(base + o.suma);
+                      const e = vsEstado(queda);
+                      return (
+                        <div key={i} style={num}>
+                          {o.accion.replace(/^Llevar el DS a |^Bajar el BPP a /, "")}: <b>{o.cantidad}</b>{" "}
+                          <span style={{ color: "#15803d", fontWeight: 700 }}>+{vsNum(o.suma)}</span>{" "}
+                          → <b>{queda}</b>{" "}
+                          <span style={{ padding: "1px 7px", borderRadius: 999, background: e.bg, color: e.fg, fontWeight: 700, fontSize: 11 }}>{e.txt}</span>
+                        </div>
+                      );
+                    })}
+                    {r.niveles[0].porUnidad && <div style={{ fontSize: 12, color: VS_MUTED }}>cada una vale unos {vsNum(r.niveles[0].porUnidad, 2)} pts</div>}
+                  </td>
+                  <td style={{ padding: "10px 8px", lineHeight: 1.6, whiteSpace: "nowrap" }}>{lugares(r.ramo)}</td>
+                  <td style={{ padding: "10px 8px", color: "#2b3038", lineHeight: 1.45, maxWidth: 300 }}>{VS_PROPUESTA[r.ramo]}</td>
+                </tr>
+              ))}
             </tbody>
           </table>
         </div>
       )}
       <div style={{ fontSize: 12, color: VS_MUTED, marginTop: 10, lineHeight: 1.5 }}>
-        Las cantidades se calculan sobre lo acumulado de la semana. Lo que ya pasó no se puede rehacer, pero los días que quedan sí pueden compensar:
-        por ejemplo, si al DS le faltan 20 entregas, los próximos días tienen que entregar sobre el 97% para recuperarlas. Cada opción se mide por separado;
-        "Nota quedaría" es la nota si solo se hace esa mejora.
+        "Dónde atacar" muestra los SVC que concentran lo que falta, con su parte del total entre paréntesis. Las cantidades se calcularon sobre lo acumulado de la semana:
+        lo que ya pasó no se puede rehacer, pero los días que quedan sí pueden compensar. Cada nivel se mide por separado y la nota que aparece al lado es la que quedaría si solo se hace esa mejora.
       </div>
     </div>
   );
@@ -6818,7 +6863,7 @@ function PoolVendorScore() {
           </div>
 
           {/* Qué falta para cumplir */}
-          <VsQueFalta total={total} />
+          <VsQueFalta total={total} svcs={svcs} />
 
           {/* Dónde se pierden los puntos */}
           <div style={card}>
