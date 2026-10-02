@@ -7609,7 +7609,12 @@ function ListadoPagosDiarios({ usuario }) {
     await cargarPublicaciones();
     setPublicando(null);
     // Un día publicado es plata que el tercero ya puede ver: se le avisa.
-    if (ok > 0) avisarPortal("publicacion", { fecha, centros: ok });
+    // Antes se refresca la foto del maestro, de donde el portal saca las
+    // devoluciones y el visitado: sin eso esos dos indicadores salen vacíos.
+    if (ok > 0) {
+      await sb.rpc("fn_portal_refrescar_maestro").catch(() => {});
+      avisarPortal("publicacion", { fecha, centros: ok });
+    }
     alert(fallos.length
       ? `Publicados ${ok} centro(s).\n\nNo se pudo publicar:\n${fallos.join("\n")}`
       : `Publicados ${ok} centro(s) del ${fecha}.`);
@@ -7686,6 +7691,7 @@ function ListadoPagosDiarios({ usuario }) {
     try {
       await publicarUno(sc, motivo, marcadasDe(sc));
       await cargarPublicaciones();
+      await sb.rpc("fn_portal_refrescar_maestro").catch(() => {});
       avisarPortal("publicacion", { fecha, sc });
     }
     catch (e) { alert("No se pudo publicar:\n\n" + e.message); }
