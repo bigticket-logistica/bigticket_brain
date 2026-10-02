@@ -5,6 +5,7 @@ import CobrosTerceros from "./PnrCobros";
 import Diferencias from "./Diferencias";
 import Comparativa from "./Comparativa";
 import FacturacionTerceros from "./FacturacionTerceros";
+import { avisarPortal } from "./avisarPortal";
 
 function BotonDescargarExcel({ onClick, disabled, label = "Descargar Excel" }) {
   return (
@@ -7607,6 +7608,8 @@ function ListadoPagosDiarios({ usuario }) {
     }
     await cargarPublicaciones();
     setPublicando(null);
+    // Un día publicado es plata que el tercero ya puede ver: se le avisa.
+    if (ok > 0) avisarPortal("publicacion", { fecha, centros: ok });
     alert(fallos.length
       ? `Publicados ${ok} centro(s).\n\nNo se pudo publicar:\n${fallos.join("\n")}`
       : `Publicados ${ok} centro(s) del ${fecha}.`);
@@ -7680,7 +7683,11 @@ function ListadoPagosDiarios({ usuario }) {
       if (!confirm(`Publicar ${sc} · ${fecha}\n\n${guardadas} rutas guardadas${aviso}\n\nEl tercero lo verá en su portal. ¿Continuar?`)) return;
     }
     setPublicando(sc);
-    try { await publicarUno(sc, motivo, marcadasDe(sc)); await cargarPublicaciones(); }
+    try {
+      await publicarUno(sc, motivo, marcadasDe(sc));
+      await cargarPublicaciones();
+      avisarPortal("publicacion", { fecha, sc });
+    }
     catch (e) { alert("No se pudo publicar:\n\n" + e.message); }
     setPublicando(null);
   };

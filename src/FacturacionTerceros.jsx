@@ -13,6 +13,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { sb } from "./shared";
+import { avisarPortal } from "./avisarPortal";
 
 const money = (n) => "$" + Number(n || 0).toLocaleString("es-MX", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const fecha = (s) => s ? new Date(s).toLocaleDateString("es-MX", { day: "2-digit", month: "short", year: "2-digit" }) : "—";
@@ -106,6 +107,8 @@ export default function FacturacionTerceros({ usuario }) {
         pago_referencia: ref.trim() || null,
       }).in("id", ids);
       if (error) throw error;
+      // El pago es la noticia que el tercero más espera: va al teléfono.
+      avisarPortal("pago", { prefacturas: ids.length });
       setMsg({ ok: true, txt: `${ids.length} prefactura(s) marcadas como pagadas por ${money(total)}. El tercero ya lo ve en su portal.` });
       setSel({});
       await cargar();

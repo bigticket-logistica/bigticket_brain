@@ -1,5 +1,6 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { descargarExcelMultihoja, sb } from "./shared";
+import { avisarPortal } from "./avisarPortal";
 
 // ─── PNR — Cobro a terceros ─────────────────────────────────────────
 // Lista los PNR cobrables de la semana y permite agregar cada uno a la
@@ -290,6 +291,7 @@ function ModuloRobos({ usuario }) {
         { p_guia: f.folio_guia, p_quien: quien });
       if (error) throw error;
       if (!data?.ok) throw new Error(data?.error || "No se pudo publicar");
+      avisarPortal("cobro", { tercero_id: f.tercero_id, sc: f.sc });
       setMsg({ ok: true, txt: `Guía ${f.folio_guia} avisada a ${data.empresa}. También quedó como tarea del supervisor de ${data.sc}.` });
       await cargar();
     } catch (e) { setMsg({ ok: false, txt: "No se pudo avisar: " + (e.message || e) }); }
@@ -610,6 +612,7 @@ function ModuloNoShow({ usuario }) {
             tiene_bonificacion: false, monto_bonificacion: 0, motivo_no_pago: null,
           },
         });
+        avisarPortal("cobro", { tercero_id: f.tercero_id, sc: f.sc });
         if (res?.ok) {
           await sb.from("cobros_noshow_mx").update({ aplicado_semana: String(semRuta) })
             .eq("fecha", f.fecha).eq("service_center", f.sc).eq("placa", f.placa);
@@ -1212,6 +1215,7 @@ function ModuloPnr({ usuario }) {
       const r = await publicarAlPortal([f]);
       if (r.ok) {
         await avisarSupervisorPnr(f.case_id);
+        avisarPortal("cobro", { tercero_id: f.tercero_id, sc: f.sc });
         setMsg({ ok: true, txt: `PNR ${f.case_id} publicado al portal del tercero. Se avisó al supervisor del centro.` });
       }
       else setMsg({ ok: false, txt: `No se pudo resolver la empresa de la placa ${f.placa || "—"}: revisa el inventario de flota.` });
