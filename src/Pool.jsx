@@ -6441,9 +6441,9 @@ const VS_GLOSARIO = [
     grupo: "Términos de esta pantalla",
     items: [
       ["Día operativo", "El día de la operación. El indicador de hoy muestra los datos hasta ayer: el Brain descarga el día anterior cada mañana a las 7:00 de México."],
-      ["Semana Brain / semana MELI", "La semana va de lunes a domingo. MELI usa la numeración ISO y el Brain la numera una más (la semana 40 de MELI es la 41 del Brain)."],
+      ["Semana", "Va de lunes a domingo y usa la misma numeración de los correos de MELI: la semana 40 es del 28 de septiembre al 4 de octubre."],
       ["Nota acumulada", "La nota de la semana sumando todos los días desde el lunes hasta ayer. Si la semana sigue igual, cierra con esa nota."],
-      ["Nota del día", "La nota calculada solo con un día. Sirve para ver días buenos y malos, no para la nota final."],
+      ["Nota del día", "La nota calculada solo con un día (arriba, al lado de la nota acumulada, aparece la del último día). Sirve para ver días buenos y malos, no para la nota final."],
       ["Puntos perdidos", "Peso del ramo × (100 − nota del ramo) ÷ 100. Muestra qué ramo le quita más puntos a la semana."],
       ["Qué lo baja", "El ramo que más puntos le quita a un SVC, con su resultado."],
       ["Foto diaria", "Copia de los datos que guarda el Brain cada mañana. MELI sigue completando días pasados, así que el Brain usa la foto más reciente de cada día."],
@@ -6786,7 +6786,7 @@ function VsHistoricoSemanal({ ayer }) {
         <div>
           <div style={{ fontSize: 18, fontWeight: 700 }}>Evolución semana a semana</div>
           <div style={{ fontSize: 13, color: VS_MUTED, marginTop: 4 }}>
-            Nota oficial de los correos de MELI y estimación del Brain. Las semanas usan la numeración de MELI (el Brain suma una).
+            Nota oficial de los correos de MELI y estimación del Brain, con la misma numeración de semanas de los correos.
           </div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -7025,7 +7025,7 @@ function PoolVendorScore() {
           {semanas.map(l => {
             const sm = vsSemanaISO(l);
             const fin = (() => { const x = new Date(l + "T12:00:00Z"); x.setUTCDate(x.getUTCDate() + 6); return x.toISOString().slice(0, 10); })();
-            return <option key={l} value={l}>Semana {sm + 1} del Brain ({vsFechaCorta(l)} al {vsFechaCorta(fin)}){l === lunesActual ? " · en curso" : ""}</option>;
+            return <option key={l} value={l}>Semana {sm} ({vsFechaCorta(l)} al {vsFechaCorta(fin)}){l === lunesActual ? " · en curso" : ""}</option>;
           })}
         </select>
         {!esActual && <button onClick={() => setLunesSel(lunesActual)} style={{ border: "none", background: "transparent", color: VS_NAVY, fontWeight: 600, fontSize: 13, cursor: "pointer", textDecoration: "underline" }}>Volver a la semana en curso</button>}
@@ -7049,17 +7049,36 @@ function PoolVendorScore() {
             <div style={{ maxWidth: 720 }}>
               <div style={{ fontSize: 13, color: VS_MUTED, marginBottom: 6 }}>Vendor Score MLP · Big Ticket México</div>
               <div style={{ fontSize: 30, fontWeight: 700, color: VS_NAVY, lineHeight: 1.15 }}>
-                Semana {semMeli + 1} del Brain · Semana {semMeli} de MELI
+                Semana {semMeli} · {vsFechaCorta(lunes)} al {vsFechaCorta(domingo)}
               </div>
               <div style={{ fontSize: 14, color: VS_MUTED, marginTop: 6, lineHeight: 1.5 }}>
-                {vsFechaCorta(lunes)} al {vsFechaCorta(domingo)}. {esActual ? <>Acumulado del {vsFechaCorta(desde)} al {vsFechaCorta(hasta)}: si la semana sigue igual, cierra con esta nota.</> : <>Semana cerrada: nota con los datos del {vsFechaCorta(desde)} al {vsFechaCorta(hasta)}.</>}
-                Pondera 35% cumplir rutas (ER), 15% aceptar (AR), 30% entregar (DS) y 20% reclamos (BPP).
+                {esActual
+                  ? <>Semana en curso. La nota acumulada usa del {vsFechaLarga(desde)} al {vsFechaLarga(hasta)} ({evolucion.length} de 7 días): si el resto de la semana sigue igual, cierra con esta nota.</>
+                  : <>Semana cerrada: nota final con los datos del {vsFechaLarga(desde)} al {vsFechaLarga(hasta)}.</>}
+                {" "}Pondera 35% cumplir rutas (ER), 15% aceptar (AR), 30% entregar (DS) y 20% reclamos (BPP). Es la misma numeración de semanas de los correos de MELI.
               </div>
             </div>
             <div style={{ display: "flex", alignItems: "flex-end", gap: 16 }}>
-              <div style={{ display: "flex", alignItems: "baseline", gap: 4 }}>
-                <span style={{ ...num, fontSize: 84, fontWeight: 700, lineHeight: 0.9, color: VS_NAVY }}>{total.score}</span>
-                <span style={{ fontSize: 22, color: VS_MUTED }}>/100</span>
+              {evolucion.length > 0 && (() => {
+                const u = evolucion[evolucion.length - 1];
+                const eu = vsEstado(u.dia.score);
+                return (
+                  <div style={{ border: `1px solid ${VS_BORDER}`, background: "#fff", borderRadius: 10, padding: "10px 14px", marginRight: 8 }}>
+                    <div style={{ fontSize: 12, color: VS_MUTED }}>Nota del día</div>
+                    <div style={{ fontSize: 12, color: VS_MUTED, textTransform: "capitalize" }}>{vsFechaLarga(u.fecha)}</div>
+                    <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginTop: 4 }}>
+                      <span style={{ ...num, fontSize: 30, fontWeight: 700, color: VS_TEXT }}>{u.dia.score}</span>
+                      <span style={{ padding: "2px 8px", borderRadius: 999, background: eu.bg, color: eu.fg, fontWeight: 700, fontSize: 11 }}>{eu.txt}</span>
+                    </div>
+                  </div>
+                );
+              })()}
+              <div>
+                <div style={{ fontSize: 12, color: VS_MUTED, marginBottom: 4 }}>Nota acumulada de la semana</div>
+                <div style={{ display: "flex", alignItems: "baseline", gap: 4 }}>
+                  <span style={{ ...num, fontSize: 84, fontWeight: 700, lineHeight: 0.9, color: VS_NAVY }}>{total.score}</span>
+                  <span style={{ fontSize: 22, color: VS_MUTED }}>/100</span>
+                </div>
               </div>
               <div style={{ paddingBottom: 6 }}>
                 <div style={{ display: "inline-block", padding: "5px 12px", borderRadius: 999, background: est.bg, color: est.fg, fontWeight: 700, fontSize: 13 }}>{est.txt}</div>
@@ -7185,8 +7204,8 @@ function PoolVendorScore() {
                 </div>
               ))}
               <div style={{ borderTop: `1px solid ${VS_BORDER}`, paddingTop: 12, fontSize: 13, lineHeight: 1.5 }}>
-                En la semana hay <b>{abiertosSemana.length}</b> reclamos abiertos por <b>{vsPesos(total.montoBpp)}</b>.
-                {abiertosSemana[0] && <> El mayor: {abiertosSemana[0].svc}, {abiertosSemana[0].tipo}, {vsPesos(abiertosSemana[0].gmv)} (paquete {abiertosSemana[0].shipment_id}).</>}
+                Esta semana hay <b>{abiertosSemana.length}</b> reclamos abiertos, todavía disputables, con <b>{vsPesos(total.montoBpp)}</b> en riesgo.
+                {abiertosSemana[0] && <> El de mayor monto es de <b>{abiertosSemana[0].svc}</b>: {({ "PNR CONTRADICTORIO": "PNR (el comprador dice que no le llegó)", "EMPTY BOX": "caja vacía", "LOST ON ROUTE": "perdido en ruta", "STOLEN": "robado" })[abiertosSemana[0].tipo] || abiertosSemana[0].tipo} por <b>{vsPesos(abiertosSemana[0].gmv)}</b>, paquete {abiertosSemana[0].shipment_id}. Conviene disputarlo primero.</>}
               </div>
             </div>
           </div>
