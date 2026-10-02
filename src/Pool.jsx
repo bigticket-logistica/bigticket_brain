@@ -6150,7 +6150,7 @@ function PoolMeliDiferenciasMaestros() {
 //  cada mañana a las 7:00 MX con los datos del DÍA ANTERIOR.
 //  Es una APROXIMACIÓN: el número oficial es el que manda MELI.
 // ═══════════════════════════════════════════════════════════════════
-const VS_INICIO = "2026-10-01";          // el registro parte este día (sin historia previa)
+const VS_INICIO = "2026-09-28";          // el registro parte este día: lunes de la semana 40 de MELI (sin historia previa)
 const VS_GMV_PAQUETE_RESPALDO = 640;     // MXN por paquete si el día no trae GMV (promedio sep-2026)
 const VS_NAVY = "#1a3a6b";
 const VS_ORANGE = "#F47B20";
