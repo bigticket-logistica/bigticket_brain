@@ -6463,6 +6463,41 @@ function PoolVendorScore() {
     return { total: vsCalcular(tot), svcs: lista, gmvRespaldo: respaldo };
   }, [fotos, casos]);
 
+  // Evolución día por día: nota de cada día sola y nota acumulada de la semana al cierre de ese día
+  const evolucion = useMemo(() => {
+    const base = () => ({ sol: 0, conf: 0, ejec: 0, desp: 0, entr: 0, gmv: 0, bpp: 0 });
+    const porDia = {};
+    for (const f of fotos) {
+      const b = (porDia[f.fecha] = porDia[f.fecha] || base());
+      const gp = f.gmv_paquete != null ? Number(f.gmv_paquete) : VS_GMV_PAQUETE_RESPALDO;
+      b.sol += (f.sol_sdd || 0) + (f.sol_spot || 0);
+      b.conf += (f.conf_sdd || 0) + (f.conf_spot || 0);
+      b.ejec += (f.ejec_sdd || 0) + (f.ejec_spot || 0);
+      b.desp += f.despachados || 0; b.entr += f.entregados || 0;
+      b.gmv += (f.despachados || 0) * gp;
+    }
+    for (const c of casos) {
+      const b = (porDia[c.shipment_day] = porDia[c.shipment_day] || base());
+      b.bpp += Number(c.gmv) || 0;
+    }
+    const dias = Object.keys(porDia).sort();
+    const acum = base();
+    let previo = null;
+    return dias.map(d => {
+      for (const k in acum) acum[k] += porDia[d][k];
+      const dia = vsCalcular(porDia[d]);
+      const ac = vsCalcular({ ...acum });
+      let cambio = "—";
+      if (previo) {
+        const dif = ["ER", "AR", "DS", "BPP"].map(c => [c, previo.pierde[c] - ac.pierde[c]]).sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]))[0];
+        cambio = Math.abs(dif[1]) < 0.05 ? "Sin cambios relevantes" : `${dif[0]} ${dif[1] > 0 ? "+" : "−"}${vsNum(Math.abs(dif[1]))} pts`;
+      }
+      const fila = { fecha: d, dia, ac, variacion: previo ? ac.score - previo.score : null, cambio };
+      previo = ac;
+      return fila;
+    });
+  }, [fotos, casos]);
+
   const abiertosSemana = useMemo(() => [...casos].sort((a, b) => Number(b.gmv) - Number(a.gmv)), [casos]);
   const sinDatos = !loading && !error && fotos.length === 0;
   const est = vsEstado(total.score);
@@ -6644,6 +6679,57 @@ function PoolVendorScore() {
                 En la semana hay <b>{abiertosSemana.length}</b> reclamos abiertos por <b>{vsPesos(total.montoBpp)}</b>.
                 {abiertosSemana[0] && <> El mayor: {abiertosSemana[0].svc}, {abiertosSemana[0].tipo}, {vsPesos(abiertosSemana[0].gmv)} (paquete {abiertosSemana[0].shipment_id}).</>}
               </div>
+            </div>
+          </div>
+          <div style={card}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12, flexWrap: "wrap", marginBottom: 6 }}>
+              <div style={{ fontSize: 18, fontWeight: 700 }}>Evolución día por día</div>
+              <div style={{ fontSize: 12, color: VS_MUTED }}>Cada fila es un día operativo de la semana</div>
+            </div>
+            <div style={{ fontSize: 13, color: VS_MUTED, marginBottom: 12, lineHeight: 1.5 }}>
+              "Nota del día" usa solo ese día. "Acumulada" es la nota de la semana sumando desde el lunes hasta ese día: es la que se vio en el Brain a la mañana siguiente.
+              Los días ya pasados se recalculan con la foto más reciente, porque MELI sigue completando datos.
+            </div>
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 720 }}>
+                <thead>
+                  <tr style={{ color: VS_MUTED, fontSize: 12, textAlign: "left" }}>
+                    {["Día operativo", "Visto en el Brain", "Nota del día", "Acumulada", "Variación", "ER", "AR", "DS", "BPP", "Qué la movió"].map(h => (
+                      <th key={h} style={{ padding: "6px 8px", borderBottom: `1px solid ${VS_BORDER}`, fontWeight: 600 }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {evolucion.map(f => {
+                    const e = vsEstado(f.ac.score);
+                    const visto = (() => { const x = new Date(f.fecha + "T12:00:00Z"); x.setUTCDate(x.getUTCDate() + 1); return x.toISOString().slice(0, 10); })();
+                    const v = f.variacion;
+                    return (
+                      <tr key={f.fecha} style={{ borderBottom: "1px solid #f0f1f3" }}>
+                        <td style={{ padding: "7px 8px", fontWeight: 700, textTransform: "capitalize" }}>{vsFechaLarga(f.fecha)}</td>
+                        <td style={{ padding: "7px 8px", color: VS_MUTED }}>{vsFechaCorta(visto)}</td>
+                        <td style={{ padding: "7px 8px", ...num }}>{f.dia.score}</td>
+                        <td style={{ padding: "7px 8px" }}>
+                          <span style={{ ...num, fontWeight: 700, fontSize: 16, marginRight: 8 }}>{f.ac.score}</span>
+                          <span style={{ padding: "2px 8px", borderRadius: 999, background: e.bg, color: e.fg, fontWeight: 700, fontSize: 11 }}>{e.txt}</span>
+                        </td>
+                        <td style={{ padding: "7px 8px", ...num, fontWeight: 700, color: v == null || v === 0 ? VS_MUTED : v > 0 ? "#15803d" : "#b42318" }}>
+                          {v == null ? "Primer día" : v === 0 ? "0" : `${v > 0 ? "+" : "−"}${Math.abs(v)}`}
+                        </td>
+                        {[f.ac.er, f.ac.ar, f.ac.ds, f.ac.bpp].map((x, i) => {
+                          const c = vsColorChip(x);
+                          return (
+                            <td key={i} style={{ padding: "7px 6px" }}>
+                              <div style={{ ...num, background: c.bg, color: c.fg, borderRadius: 6, textAlign: "center", padding: "3px 0", fontWeight: 700, minWidth: 38 }}>{x ?? "—"}</div>
+                            </td>
+                          );
+                        })}
+                        <td style={{ padding: "7px 8px", color: "#2b3038" }}>{f.cambio}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             </div>
           </div>
           <VsReclamosAcumulados desdeSemana={desde} ayer={ayer} />
