@@ -6258,6 +6258,137 @@ function vsMeta(comp, t) {
   return `Bajar de ${vsNum(sig[0], 3)}% sube el BPP a ${sig[1]} (+${vsNum(0.2 * (sig[1] - (t.bpp ?? 0)))} pts). Hay que salvar unos ${vsPesos(exceso)} en disputas.`;
 }
 
+// Reclamos BPP acumulados por período: abiertos (en riesgo) y desaparecidos (salvados o descartados)
+function VsReclamosAcumulados({ desdeSemana, ayer }) {
+  const [periodo, setPeriodo] = useState("semana");
+  const [filas, setFilas] = useState([]);
+  const [cargando, setCargando] = useState(true);
+  const [err, setErr] = useState(null);
+  const inicioMes = ayer.slice(0, 8) + "01";
+  const desde = periodo === "semana" ? desdeSemana : (inicioMes < VS_INICIO ? VS_INICIO : inicioMes);
+
+  useEffect(() => {
+    let vivo = true;
+    (async () => {
+      setCargando(true); setErr(null);
+      const { data, error } = await sb.from("vs_bpp_casos").select("*")
+        .gte("shipment_day", desde).lte("shipment_day", ayer).limit(5000);
+      if (!vivo) return;
+      if (error) setErr(error.message); else setFilas(data || []);
+      setCargando(false);
+    })();
+    return () => { vivo = false; };
+  }, [desde, ayer]);
+
+  const r = useMemo(() => {
+    const abiertos = filas.filter(c => c.estado !== "desaparecido");
+    const salvados = filas.filter(c => c.estado === "desaparecido");
+    const suma = (arr) => arr.reduce((a, c) => a + Number(c.gmv || 0), 0);
+    const agrupar = (arr, campo) => {
+      const m = {};
+      for (const c of arr) {
+        const k = c[campo] || "Sin dato";
+        m[k] = m[k] || { k, n: 0, monto: 0 };
+        m[k].n++; m[k].monto += Number(c.gmv || 0);
+      }
+      return Object.values(m).sort((a, b) => b.monto - a.monto);
+    };
+    return {
+      abiertos, salvados, montoAbierto: suma(abiertos), montoSalvado: suma(salvados),
+      porSvc: agrupar(abiertos, "svc"), porTipo: agrupar(abiertos, "tipo"),
+      top: [...abiertos].sort((a, b) => Number(b.gmv) - Number(a.gmv)).slice(0, 10),
+    };
+  }, [filas]);
+
+  const card = { background: "#fff", border: `1px solid ${VS_BORDER}`, borderRadius: 12, padding: "22px 26px" };
+  const num = { fontVariantNumeric: "tabular-nums" };
+  const boton = (id, txt) => (
+    <button key={id} onClick={() => setPeriodo(id)} style={{
+      border: `1px solid ${periodo === id ? VS_NAVY : VS_BORDER}`, background: periodo === id ? VS_NAVY : "#fff",
+      color: periodo === id ? "#fff" : VS_TEXT, borderRadius: 999, padding: "6px 14px", fontSize: 13, fontWeight: 600, cursor: "pointer",
+    }}>{txt}</button>
+  );
+  const tituloTipo = { "PNR CONTRADICTORIO": "PNR", "EMPTY BOX": "Caja vacía", "LOST ON ROUTE": "Perdido en ruta", "STOLEN": "Robado" };
+  const filaLista = { display: "flex", justifyContent: "space-between", fontSize: 13, padding: "5px 0", borderBottom: "1px solid #f0f1f3", gap: 8 };
+
+  return (
+    <div style={card}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 6 }}>
+        <div style={{ fontSize: 18, fontWeight: 700 }}>Reclamos acumulados</div>
+        <div style={{ display: "flex", gap: 8 }}>{boton("semana", "Esta semana")}{boton("mes", "Este mes")}</div>
+      </div>
+      <div style={{ fontSize: 13, color: VS_MUTED, marginBottom: 16, lineHeight: 1.5 }}>
+        Paquetes despachados del {vsFechaCorta(desde)} al {vsFechaCorta(ayer)}, agrupados por fecha de despacho: los días recientes todavía
+        van a sumar reclamos. "Salvados" son los que estaban en el portal y ya no aparecen, porque se ganó la disputa o MELI los descartó.
+      </div>
+      {cargando && <div style={{ color: VS_MUTED }}>Cargando reclamos…</div>}
+      {err && <div style={{ color: "#b42318" }}>No se pudieron leer los reclamos: {err}</div>}
+      {!cargando && !err && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+          <div style={{ display: "flex", gap: 32, flexWrap: "wrap" }}>
+            <div>
+              <div style={{ ...num, fontSize: 26, fontWeight: 700, color: "#9a3c06" }}>{vsPesos(r.montoAbierto)}</div>
+              <div style={{ fontSize: 13, color: VS_MUTED }}>en riesgo · {r.abiertos.length} reclamos abiertos</div>
+            </div>
+            <div>
+              <div style={{ ...num, fontSize: 26, fontWeight: 700, color: "#15803d" }}>{vsPesos(r.montoSalvado)}</div>
+              <div style={{ fontSize: 13, color: VS_MUTED }}>salvados · {r.salvados.length} reclamos que ya no figuran</div>
+            </div>
+          </div>
+          {r.abiertos.length === 0 && <div style={{ fontSize: 13, color: VS_MUTED }}>No hay reclamos abiertos en este período.</div>}
+          {r.abiertos.length > 0 && (
+            <div style={{ display: "flex", gap: 24, flexWrap: "wrap", alignItems: "flex-start" }}>
+              <div style={{ flex: "1 1 240px" }}>
+                <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 8 }}>Por service center</div>
+                {r.porSvc.map(g => (
+                  <div key={g.k} style={filaLista}>
+                    <span><b>{g.k}</b> · {g.n} {g.n === 1 ? "reclamo" : "reclamos"}</span><b style={num}>{vsPesos(g.monto)}</b>
+                  </div>
+                ))}
+              </div>
+              <div style={{ flex: "1 1 200px" }}>
+                <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 8 }}>Por tipo</div>
+                {r.porTipo.map(g => (
+                  <div key={g.k} style={filaLista}>
+                    <span>{tituloTipo[g.k] || g.k} · {g.n}</span><b style={num}>{vsPesos(g.monto)}</b>
+                  </div>
+                ))}
+              </div>
+              <div style={{ flex: "2 1 460px", minWidth: 0 }}>
+                <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 8 }}>Los 10 de mayor monto</div>
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, minWidth: 480 }}>
+                    <thead>
+                      <tr style={{ color: VS_MUTED, textAlign: "left" }}>
+                        {["Despacho", "SVC", "Tipo", "Paquete", "Ruta", "Visto desde", "Monto"].map(h => (
+                          <th key={h} style={{ padding: "4px 6px", borderBottom: `1px solid ${VS_BORDER}`, fontWeight: 600 }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {r.top.map(c => (
+                        <tr key={c.shipment_id} style={{ borderBottom: "1px solid #f0f1f3" }}>
+                          <td style={{ padding: "5px 6px" }}>{vsFechaCorta(c.shipment_day)}</td>
+                          <td style={{ padding: "5px 6px", fontWeight: 700 }}>{c.svc}</td>
+                          <td style={{ padding: "5px 6px" }}>{tituloTipo[c.tipo] || c.tipo}</td>
+                          <td style={{ padding: "5px 6px", ...num }}>{c.shipment_id}</td>
+                          <td style={{ padding: "5px 6px", ...num }}>{c.route_id}</td>
+                          <td style={{ padding: "5px 6px" }}>{vsFechaCorta(c.primera_vez)}</td>
+                          <td style={{ padding: "5px 6px", ...num, fontWeight: 700, textAlign: "right" }}>{vsPesos(c.gmv)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function PoolVendorScore() {
   const hoy = fechaHoyOperativa();
   const ayer = fechaOperativaOffset(-1);
@@ -6515,6 +6646,7 @@ function PoolVendorScore() {
               </div>
             </div>
           </div>
+          <VsReclamosAcumulados desdeSemana={desde} ayer={ayer} />
         </div>
       )}
     </div>
