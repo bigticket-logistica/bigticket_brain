@@ -6389,6 +6389,102 @@ function VsReclamosAcumulados({ desdeSemana, ayer }) {
   );
 }
 
+// Glosario para el analista: siglas y términos de la pestaña, del PDF y del reporte semanal de MELI
+const VS_GLOSARIO = [
+  {
+    grupo: "El indicador",
+    items: [
+      ["Vendor Score", "Nota semanal de 0 a 100 que Mercado Libre le pone a Big Ticket como proveedor, por service center y total. Fórmula: 35% ER + 15% AR + 30% DS + 20% BPP."],
+      ["MLP", "La línea de operación que mide este score (vans y autos del proveedor, como \"Large Van MLP\"). En el reporte de MELI aparece separada de Rentals, que tiene otro cálculo y no aplica a Big Ticket."],
+      ["SRM", "La contraparte de Mercado Libre que gestiona la relación con el proveedor y envía el reporte semanal (\"SRM Experience\")."],
+      ["OK · Seguimiento · Warning", "Estado según la nota: 80 o más es OK; de 70 a 79, Seguimiento; menos de 70, Warning."],
+      ["Aproximado", "La nota del Brain es una estimación calculada por Big Ticket con los datos del portal. El número oficial es el del reporte semanal de MELI."],
+    ],
+  },
+  {
+    grupo: "Los cuatro ramos",
+    items: [
+      ["ER · Execution Rate", "Cumplir rutas: rutas ejecutadas ÷ rutas confirmadas. Pesa 35%. Lineal: cada punto suma 0,35 a la nota."],
+      ["AR · Acceptance Rate", "Aceptar rutas: rutas confirmadas ÷ rutas solicitadas por MELI. Pesa 15%. Lineal: cada punto suma 0,15."],
+      ["DS · Delivery Success", "Entregar: paquetes entregados ÷ paquetes despachados. Pesa 30%. Por tramos: 98,5% o más = 100; desde 97,5% = 75; desde 97% = 50; menos de 97% = 0."],
+      ["BPP · Buyer Protection Program", "Reclamos: monto de reclamos ÷ GMV. Pesa 20%. Por tramos (aproximados): menos de 0,085% = 100; menos de 0,165% = 50; menos de 0,25% = 25; más = 0."],
+      ["Lineal / por tramos", "Lineal: cada punto de mejora suma de a poco. Por tramos: no suma nada hasta cruzar un corte, y al cruzarlo suma de golpe (7,5 a 30 puntos)."],
+      ["Sin datos = 0", "Si un ramo no tiene datos en la semana (por ejemplo, un SVC sin envíos), cuenta 0, igual que en el cálculo de MELI."],
+    ],
+  },
+  {
+    grupo: "Rutas y paquetes",
+    items: [
+      ["SVC · Service center", "Centro de MELI desde donde salen las rutas (SMX7, SQR1, etc.). La nota se calcula por SVC y para el total."],
+      ["SDD y Spot", "Modelos de contratación de rutas de MELI: SDD es Same Day Delivery (entrega el mismo día) y Spot son rutas puntuales. El Brain suma ambos."],
+      ["Rutas solicitadas", "Las que MELI le pidió a Big Ticket. Es la base del AR."],
+      ["Rutas confirmadas", "Las que Big Ticket aceptó. Son la base del ER."],
+      ["Rutas ejecutadas", "Las confirmadas que efectivamente salieron a operar."],
+      ["No show", "Ruta confirmada en la que el chofer o el vehículo no se presentó. Baja el ER."],
+      ["Ships despachados / entregados", "Paquetes que salieron a ruta y los que llegaron al comprador. Su división es el DS. En el reporte de MELI, Retiros y Dev ex son columnas aparte que no entran al score."],
+    ],
+  },
+  {
+    grupo: "Reclamos (BPP)",
+    items: [
+      ["GMV", "Valor de la mercancía despachada. Es la base sobre la que se mide el BPP. El portal no lo entrega por SVC, así que el Brain lo estima: paquetes despachados × valor promedio por paquete del día."],
+      ["PNR · PNR contradictorio", "Paquete no recibido: el comprador dice que no le llegó, aunque figura entregado."],
+      ["Caja vacía", "El comprador recibió la caja sin el producto (\"Empty box\" en el reporte)."],
+      ["Perdido en ruta", "Paquete que se perdió durante la ruta (\"Lost on route\")."],
+      ["Robado", "Paquete robado durante la ruta (\"Stolen\")."],
+      ["Reclamo abierto", "Reclamo que figura en el portal de MELI y todavía puede disputarse. El BPP del Brain usa estos, por eso suele verse peor que el final."],
+      ["Disputa", "Respuesta a MELI con la evidencia de entrega (foto, ubicación, quién recibió en Logistic) para que el reclamo no se cobre."],
+      ["Salvado", "Reclamo que estaba en el portal y ya no aparece: se ganó la disputa o MELI lo descartó."],
+    ],
+  },
+  {
+    grupo: "Términos de esta pantalla",
+    items: [
+      ["Día operativo", "El día de la operación. El indicador de hoy muestra los datos hasta ayer: el Brain descarga el día anterior cada mañana a las 7:00 de México."],
+      ["Semana Brain / semana MELI", "La semana va de lunes a domingo. MELI usa la numeración ISO y el Brain la numera una más (la semana 40 de MELI es la 41 del Brain)."],
+      ["Nota acumulada", "La nota de la semana sumando todos los días desde el lunes hasta ayer. Si la semana sigue igual, cierra con esa nota."],
+      ["Nota del día", "La nota calculada solo con un día. Sirve para ver días buenos y malos, no para la nota final."],
+      ["Puntos perdidos", "Peso del ramo × (100 − nota del ramo) ÷ 100. Muestra qué ramo le quita más puntos a la semana."],
+      ["Qué lo baja", "El ramo que más puntos le quita a un SVC, con su resultado."],
+      ["Foto diaria", "Copia de los datos que guarda el Brain cada mañana. MELI sigue completando días pasados, así que el Brain usa la foto más reciente de cada día."],
+      ["WoW", "Week over week: comparación de una semana contra la anterior, como en las hojas \"Resumen WoW\" del reporte de MELI."],
+    ],
+  },
+];
+
+function VsGlosario() {
+  const [abierto, setAbierto] = useState(true);
+  return (
+    <div style={{ background: "#fff", border: `1px solid ${VS_BORDER}`, borderRadius: 12, padding: "22px 26px" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+        <div>
+          <div style={{ fontSize: 18, fontWeight: 700 }}>Glosario</div>
+          <div style={{ fontSize: 13, color: VS_MUTED, marginTop: 4 }}>Qué significa cada sigla y término de esta pantalla y del reporte semanal de MELI.</div>
+        </div>
+        <button onClick={() => setAbierto(!abierto)} style={{
+          border: `1px solid ${VS_BORDER}`, background: "#fff", color: VS_NAVY, borderRadius: 999,
+          padding: "6px 14px", fontSize: 13, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap",
+        }}>{abierto ? "Ocultar glosario" : "Ver glosario"}</button>
+      </div>
+      {abierto && (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(420px, 1fr))", gap: "8px 32px", marginTop: 18 }}>
+          {VS_GLOSARIO.map(g => (
+            <div key={g.grupo} style={{ breakInside: "avoid" }}>
+              <div style={{ fontSize: 14, fontWeight: 700, color: VS_NAVY, borderBottom: `2px solid ${VS_BORDER}`, paddingBottom: 6, marginBottom: 4 }}>{g.grupo}</div>
+              {g.items.map(([termino, def]) => (
+                <div key={termino} style={{ display: "grid", gridTemplateColumns: "150px 1fr", gap: 12, padding: "7px 0", borderBottom: "1px solid #f0f1f3", fontSize: 13, lineHeight: 1.45 }}>
+                  <div style={{ fontWeight: 700 }}>{termino}</div>
+                  <div style={{ color: "#2b3038" }}>{def}</div>
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function PoolVendorScore() {
   const hoy = fechaHoyOperativa();
   const ayer = fechaOperativaOffset(-1);
@@ -6735,6 +6831,7 @@ function PoolVendorScore() {
           <VsReclamosAcumulados desdeSemana={desde} ayer={ayer} />
         </div>
       )}
+      <div style={{ marginTop: 20 }}><VsGlosario /></div>
     </div>
   );
 }
