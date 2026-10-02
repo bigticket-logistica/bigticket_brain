@@ -6174,8 +6174,8 @@ function vsScoreDS(pctEntrega) {
   if (pctEntrega >= 97.0) return 50;
   return 0;
 }
-// Cortes del BPP aproximados (MELI no los publica; salen del análisis de su Excel)
-const VS_TRAMOS_BPP = [[0.085, 100], [0.165, 50], [0.25, 25]];
+// Cortes del BPP según la guía de MELI: meta 0,338% del GMV; 100 bajo 25% de la meta, 50 entre 25% y 50%, 25 entre 50% y 75%, 0 desde 75%
+const VS_TRAMOS_BPP = [[0.0845, 100], [0.169, 50], [0.2535, 25]];
 function vsScoreBPP(pctBpp) {
   if (pctBpp == null) return null;
   for (const [corte, pts] of VS_TRAMOS_BPP) if (pctBpp < corte) return pts;
@@ -6407,7 +6407,7 @@ const VS_GLOSARIO = [
       ["ER · Execution Rate", "Cumplir rutas: rutas ejecutadas ÷ rutas confirmadas. Pesa 35%. Lineal: cada punto suma 0,35 a la nota."],
       ["AR · Acceptance Rate", "Aceptar rutas: rutas confirmadas ÷ rutas solicitadas por MELI. Pesa 15%. Lineal: cada punto suma 0,15."],
       ["DS · Delivery Success", "Entregar: paquetes entregados ÷ paquetes despachados. Pesa 30%. Por tramos: 98,5% o más = 100; desde 97,5% = 75; desde 97% = 50; menos de 97% = 0."],
-      ["BPP · Buyer Protection Program", "Reclamos: monto de reclamos ÷ GMV. Pesa 20%. Por tramos (aproximados): menos de 0,085% = 100; menos de 0,165% = 50; menos de 0,25% = 25; más = 0."],
+      ["BPP · Buyer Protection Program", "Reclamos: monto de reclamos ÷ GMV. Pesa 20%. Por tramos, según la guía de MELI (meta 0,338% del GMV): menos de 0,0845% = 100; menos de 0,169% = 50; menos de 0,2535% = 25; desde ahí = 0."],
       ["Lineal / por tramos", "Lineal: cada punto de mejora suma de a poco. Por tramos: no suma nada hasta cruzar un corte, y al cruzarlo suma de golpe (7,5 a 30 puntos)."],
       ["Sin datos = 0", "Si un ramo no tiene datos en la semana (por ejemplo, un SVC sin envíos), cuenta 0, igual que en el cálculo de MELI."],
     ],
@@ -6506,7 +6506,7 @@ function vsOpciones(t) {
     });
   }
   if (t.bppPct != null && t.gmv && t.montoBpp > 0) {
-    [[0.25, 25], [0.165, 50], [0.085, 100]].forEach(([corte, nota], nivel) => {
+    [[0.2535, 25], [0.169, 50], [0.0845, 100]].forEach(([corte, nota], nivel) => {
       if (nota <= (t.bpp ?? 0)) return;
       const salvar = Math.max(0, t.montoBpp - (corte / 100) * t.gmv);
       ops.push({ ramo: "BPP", nivel, suma: 0.2 * (nota - (t.bpp ?? 0)), cantidad: `salvar ${vsPesos(salvar)} en disputas`,
@@ -6685,13 +6685,208 @@ function VsQueFalta({ total, svcs }) {
   );
 }
 
+// ═══ Evolución semanal: nota oficial de MELI (correos) vs estimación del Brain ═══
+function VsHistoricoSemanal({ ayer }) {
+  const [oficial, setOficial] = useState([]);
+  const [fotos, setFotos] = useState([]);
+  const [casos, setCasos] = useState([]);
+  const [svcSel, setSvcSel] = useState("TOTAL");
+  const [cargando, setCargando] = useState(true);
+  const [err, setErr] = useState(null);
+
+  useEffect(() => {
+    let vivo = true;
+    (async () => {
+      setCargando(true); setErr(null);
+      try {
+        const [rO, rF, rC] = await Promise.all([
+          sb.from("vs_oficial_semana").select("*").order("semana_meli").limit(5000),
+          sb.from("vs_foto_svc").select("*").gte("fecha", VS_INICIO).lte("fecha", ayer).limit(20000),
+          sb.from("vs_bpp_casos").select("svc, shipment_day, gmv, estado").gte("shipment_day", VS_INICIO).lte("shipment_day", ayer).neq("estado", "desaparecido").limit(20000),
+        ]);
+        if (rO.error) throw rO.error;
+        if (rF.error) throw rF.error;
+        if (rC.error) throw rC.error;
+        if (!vivo) return;
+        const ultima = {};
+        for (const f of rF.data || []) {
+          const k = f.fecha + "|" + f.svc;
+          if (!ultima[k] || f.capturado_el > ultima[k].capturado_el) ultima[k] = f;
+        }
+        setOficial(rO.data || []); setFotos(Object.values(ultima)); setCasos(rC.data || []);
+      } catch (e) {
+        if (vivo) setErr(e.message || String(e));
+      } finally {
+        if (vivo) setCargando(false);
+      }
+    })();
+    return () => { vivo = false; };
+  }, [ayer]);
+
+  // Estimación del Brain por semana MELI (ISO) y SVC, con los datos sumados como hace MELI
+  const estimado = useMemo(() => {
+    const base = () => ({ sol: 0, conf: 0, ejec: 0, desp: 0, entr: 0, gmv: 0, bpp: 0 });
+    const acc = {};
+    const lunesSem = {};
+    const sumar = (sem, svc, add) => {
+      acc[sem] = acc[sem] || {};
+      for (const k of [svc, "TOTAL"]) {
+        acc[sem][k] = acc[sem][k] || base();
+        for (const c in add) acc[sem][k][c] += add[c];
+      }
+    };
+    for (const f of fotos) {
+      const gp = f.gmv_paquete != null ? Number(f.gmv_paquete) : VS_GMV_PAQUETE_RESPALDO;
+      const sf = vsSemanaISO(f.fecha); lunesSem[sf] = vsLunes(f.fecha);
+      sumar(sf, f.svc, {
+        sol: (f.sol_sdd || 0) + (f.sol_spot || 0), conf: (f.conf_sdd || 0) + (f.conf_spot || 0),
+        ejec: (f.ejec_sdd || 0) + (f.ejec_spot || 0), desp: f.despachados || 0, entr: f.entregados || 0,
+        gmv: (f.despachados || 0) * gp,
+      });
+    }
+    for (const c of casos) {
+      const sc = vsSemanaISO(c.shipment_day); lunesSem[sc] = lunesSem[sc] || vsLunes(c.shipment_day);
+      sumar(sc, c.svc, { bpp: Number(c.gmv) || 0 });
+    }
+    const out = {};
+    for (const sem in acc) {
+      const lunes = lunesSem[sem];
+      const dom = (() => { const x = new Date(lunes + "T12:00:00Z"); x.setUTCDate(x.getUTCDate() + 6); return x.toISOString().slice(0, 10); })();
+      const parcial = lunes < VS_INICIO || dom > ayer;
+      out[sem] = {};
+      for (const svc in acc[sem]) out[sem][svc] = { ...vsCalcular(acc[sem][svc]), parcial };
+    }
+    return out;
+  }, [fotos, casos, ayer]);
+
+  const opcionesSvc = useMemo(() => {
+    const s = new Set(oficial.map(o => o.svc));
+    for (const sem in estimado) for (const k in estimado[sem]) s.add(k);
+    s.delete("TOTAL");
+    return ["TOTAL", ...[...s].sort()];
+  }, [oficial, estimado]);
+
+  const serieOf = oficial.filter(o => o.svc === svcSel).map(o => ({ sem: o.semana_meli, v: o.vendor_score, o }));
+  const serieEs = Object.keys(estimado).map(Number).sort((a, b) => a - b)
+    .filter(sem => estimado[sem][svcSel]).map(sem => ({ sem, v: estimado[sem][svcSel].score, parcial: estimado[sem][svcSel].parcial }));
+  const semanas = [...new Set([...serieOf.map(p => p.sem), ...serieEs.map(p => p.sem)])].sort((a, b) => a - b);
+
+  const W = 1000, H = 300, padL = 44, padR = 16, padT = 22, padB = 36;
+  const x = (sem) => semanas.length < 2 ? (padL + W - padR) / 2 : padL + ((semanas.indexOf(sem)) / (semanas.length - 1)) * (W - padL - padR);
+  const y = (v) => padT + (1 - v / 100) * (H - padT - padB);
+  const linea = (serie) => serie.map((p, i) => `${i ? "L" : "M"}${x(p.sem).toFixed(1)},${y(p.v).toFixed(1)}`).join(" ");
+
+  const ultOf = serieOf[serieOf.length - 1], prevOf = serieOf[serieOf.length - 2];
+  const ultEs = serieEs[serieEs.length - 1];
+  const card = { background: "#fff", border: `1px solid ${VS_BORDER}`, borderRadius: 12, padding: "22px 26px" };
+
+  return (
+    <div style={card}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <div>
+          <div style={{ fontSize: 18, fontWeight: 700 }}>Evolución semana a semana</div>
+          <div style={{ fontSize: 13, color: VS_MUTED, marginTop: 4 }}>
+            Nota oficial de los correos de MELI y estimación del Brain. Las semanas usan la numeración de MELI (el Brain suma una).
+          </div>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <label htmlFor="vs-hist-svc" style={{ fontSize: 13, fontWeight: 600 }}>Ver</label>
+          <select id="vs-hist-svc" value={svcSel} onChange={e => setSvcSel(e.target.value)}
+            style={{ padding: "7px 10px", borderRadius: 8, border: `1px solid ${VS_BORDER}`, fontSize: 13, background: "#fff", color: VS_TEXT }}>
+            {opcionesSvc.map(s => <option key={s} value={s}>{s === "TOTAL" ? "Total Big Ticket" : s}</option>)}
+          </select>
+        </div>
+      </div>
+
+      {cargando && <div style={{ color: VS_MUTED, marginTop: 14 }}>Cargando historial…</div>}
+      {err && <div style={{ color: "#b42318", marginTop: 14 }}>No se pudo leer el historial: {err}. Revisa que exista la tabla vs_oficial_semana y su regla de lectura.</div>}
+
+      {!cargando && !err && semanas.length === 0 && (
+        <div style={{ color: VS_MUTED, marginTop: 14 }}>Todavía no hay semanas cargadas para {svcSel === "TOTAL" ? "el total" : svcSel}.</div>
+      )}
+
+      {!cargando && !err && semanas.length > 0 && (
+        <>
+          <div style={{ display: "flex", gap: 28, flexWrap: "wrap", marginTop: 14, fontSize: 14 }}>
+            {ultOf && (
+              <div>
+                Última semana oficial: <b>S{ultOf.sem} = {ultOf.v}</b>
+                {prevOf && (
+                  <span style={{ marginLeft: 6, fontWeight: 700, color: ultOf.v - prevOf.v > 0 ? "#15803d" : ultOf.v - prevOf.v < 0 ? "#b42318" : VS_MUTED }}>
+                    ({ultOf.v - prevOf.v > 0 ? "+" : ultOf.v - prevOf.v < 0 ? "−" : ""}{Math.abs(ultOf.v - prevOf.v)} vs S{prevOf.sem})
+                  </span>
+                )}
+              </div>
+            )}
+            {ultEs && <div>Estimación del Brain: <b>S{ultEs.sem} = {ultEs.v}</b>{ultEs.parcial && <span style={{ color: VS_MUTED }}> (semana parcial)</span>}</div>}
+          </div>
+
+          <div style={{ overflowX: "auto", marginTop: 10 }}>
+            <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", minWidth: 640, height: "auto", display: "block" }} role="img"
+              aria-label={`Vendor Score semanal de ${svcSel === "TOTAL" ? "Big Ticket" : svcSel}`}>
+              {[0, 25, 50, 75, 100].map(v => (
+                <g key={v}>
+                  <line x1={padL} x2={W - padR} y1={y(v)} y2={y(v)} stroke="#eef0f3" />
+                  <text x={padL - 8} y={y(v) + 4} fontSize="11" textAnchor="end" fill={VS_MUTED}>{v}</text>
+                </g>
+              ))}
+              <line x1={padL} x2={W - padR} y1={y(80)} y2={y(80)} stroke="#15803d" strokeDasharray="5 4" />
+              <text x={W - padR} y={y(80) - 5} fontSize="11" textAnchor="end" fill="#15803d">OK 80</text>
+              <line x1={padL} x2={W - padR} y1={y(70)} y2={y(70)} stroke="#b45309" strokeDasharray="5 4" />
+              <text x={W - padR} y={y(70) - 5} fontSize="11" textAnchor="end" fill="#b45309">Warning bajo 70</text>
+
+              {serieOf.length > 1 && <path d={linea(serieOf)} fill="none" stroke={VS_NAVY} strokeWidth="2" />}
+              {serieEs.length > 1 && <path d={linea(serieEs)} fill="none" stroke={VS_ORANGE} strokeWidth="2" strokeDasharray="6 4" />}
+
+              {serieOf.map(p => (
+                <g key={"o" + p.sem}>
+                  <circle cx={x(p.sem)} cy={y(p.v)} r="5" fill={VS_NAVY}>
+                    <title>{`Semana ${p.sem} (oficial MELI): ${p.v}`}</title>
+                  </circle>
+                  <text x={x(p.sem)} y={y(p.v) - 10} fontSize="11" textAnchor="middle" fill={VS_NAVY} fontWeight="700">{p.v}</text>
+                </g>
+              ))}
+              {serieEs.map(p => (
+                <g key={"e" + p.sem}>
+                  <circle cx={x(p.sem)} cy={y(p.v)} r="6" fill={p.parcial ? "#fff" : VS_ORANGE} stroke={VS_ORANGE} strokeWidth="2.5">
+                    <title>{`Semana ${p.sem} (estimación Brain${p.parcial ? ", parcial" : ""}): ${p.v}`}</title>
+                  </circle>
+                  <text x={x(p.sem)} y={y(p.v) + 20} fontSize="11" textAnchor="middle" fill="#b45309" fontWeight="700">{p.v}{p.parcial ? "*" : ""}</text>
+                </g>
+              ))}
+              {semanas.map(sem => (
+                <text key={"x" + sem} x={x(sem)} y={H - 12} fontSize="11" textAnchor="middle" fill={VS_MUTED}>S{sem}</text>
+              ))}
+            </svg>
+          </div>
+
+          <div style={{ display: "flex", gap: 20, flexWrap: "wrap", fontSize: 12, color: VS_MUTED, marginTop: 6 }}>
+            <span><svg width="22" height="10" aria-hidden="true"><line x1="0" x2="22" y1="5" y2="5" stroke={VS_NAVY} strokeWidth="2" /><circle cx="11" cy="5" r="4" fill={VS_NAVY} /></svg> Oficial MELI (correo semanal)</span>
+            <span><svg width="22" height="10" aria-hidden="true"><line x1="0" x2="22" y1="5" y2="5" stroke={VS_ORANGE} strokeWidth="2" strokeDasharray="4 3" /><circle cx="11" cy="5" r="4" fill={VS_ORANGE} /></svg> Estimación Brain</span>
+            <span><svg width="12" height="12" aria-hidden="true"><circle cx="6" cy="6" r="4.5" fill="#fff" stroke={VS_ORANGE} strokeWidth="2" /></svg> Semana parcial (*): el registro empezó el {vsFechaCorta(VS_INICIO)}</span>
+          </div>
+          <div style={{ fontSize: 12, color: VS_MUTED, marginTop: 8, lineHeight: 1.5 }}>
+            Cuando llegue el correo oficial de una semana que el Brain ya estimó, ambos puntos quedan en la misma semana y se ve cuánto se acercó la estimación.
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function PoolVendorScore() {
   const hoy = fechaHoyOperativa();
   const ayer = fechaOperativaOffset(-1);
-  const lunes = vsLunes(ayer);
+  const lunesActual = vsLunes(ayer);
+  const [lunesSel, setLunesSel] = useState(lunesActual);
+  const lunes = lunesSel;
+  const esActual = lunes === lunesActual;
   const desde = lunes < VS_INICIO ? VS_INICIO : lunes;
   const domingo = (() => { const d = new Date(lunes + "T12:00:00Z"); d.setUTCDate(d.getUTCDate() + 6); return d.toISOString().slice(0, 10); })();
-  const semMeli = vsSemanaISO(ayer);
+  const hasta = domingo < ayer ? domingo : ayer;
+  const semMeli = vsSemanaISO(lunes);
+  // Semanas disponibles: desde la del inicio del registro hasta la actual
+  const semanas = (() => { const l = []; let d = vsLunes(VS_INICIO); while (d <= lunesActual) { l.push(d); const x = new Date(d + "T12:00:00Z"); x.setUTCDate(x.getUTCDate() + 7); d = x.toISOString().slice(0, 10); } return l.reverse(); })();
 
   const [fotos, setFotos] = useState([]);
   const [casos, setCasos] = useState([]);
@@ -6705,8 +6900,8 @@ function PoolVendorScore() {
       setLoading(true); setError(null);
       try {
         const [rF, rC, rN] = await Promise.all([
-          sb.from("vs_foto_svc").select("*").gte("fecha", desde).lte("fecha", ayer).limit(5000),
-          sb.from("vs_bpp_casos").select("*").gte("shipment_day", desde).lte("shipment_day", ayer).neq("estado", "desaparecido").limit(5000),
+          sb.from("vs_foto_svc").select("*").gte("fecha", desde).lte("fecha", hasta).limit(5000),
+          sb.from("vs_bpp_casos").select("*").gte("shipment_day", desde).lte("shipment_day", hasta).neq("estado", "desaparecido").limit(5000),
           sb.from("vs_bpp_casos").select("*").eq("primera_vez", hoy).order("gmv", { ascending: false }).limit(50),
         ]);
         if (rF.error) throw rF.error;
@@ -6728,7 +6923,7 @@ function PoolVendorScore() {
       }
     })();
     return () => { alive = false; };
-  }, [desde, ayer, hoy]);
+  }, [desde, hasta, hoy]);
 
   const { total, svcs, gmvRespaldo } = useMemo(() => {
     const base = () => ({ sol: 0, conf: 0, ejec: 0, desp: 0, entr: 0, gmv: 0, bpp: 0 });
@@ -6823,6 +7018,20 @@ function PoolVendorScore() {
         {gmvRespaldo && " Algunos días no traían GMV y se usó un promedio de $640 por paquete."}
       </div>
 
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 18, flexWrap: "wrap" }}>
+        <label htmlFor="vs-semana" style={{ fontSize: 13, fontWeight: 600, color: VS_TEXT }}>Semana</label>
+        <select id="vs-semana" value={lunesSel} onChange={e => setLunesSel(e.target.value)}
+          style={{ padding: "7px 10px", borderRadius: 8, border: `1px solid ${VS_BORDER}`, fontSize: 13, background: "#fff", color: VS_TEXT }}>
+          {semanas.map(l => {
+            const sm = vsSemanaISO(l);
+            const fin = (() => { const x = new Date(l + "T12:00:00Z"); x.setUTCDate(x.getUTCDate() + 6); return x.toISOString().slice(0, 10); })();
+            return <option key={l} value={l}>Semana {sm + 1} del Brain ({vsFechaCorta(l)} al {vsFechaCorta(fin)}){l === lunesActual ? " · en curso" : ""}</option>;
+          })}
+        </select>
+        {!esActual && <button onClick={() => setLunesSel(lunesActual)} style={{ border: "none", background: "transparent", color: VS_NAVY, fontWeight: 600, fontSize: 13, cursor: "pointer", textDecoration: "underline" }}>Volver a la semana en curso</button>}
+        <span style={{ fontSize: 12, color: VS_MUTED }}>El registro empezó el {vsFechaCorta(VS_INICIO)}: no hay semanas anteriores.</span>
+      </div>
+
       {loading && <div style={{ ...card, color: VS_MUTED }}>Cargando el Vendor Score…</div>}
       {error && <div style={{ ...card, color: "#b42318" }}>No se pudo leer el Vendor Score: {error}. Revisa que las tablas vs_* existan y que el scraper haya corrido.</div>}
       {sinDatos && (
@@ -6843,7 +7052,7 @@ function PoolVendorScore() {
                 Semana {semMeli + 1} del Brain · Semana {semMeli} de MELI
               </div>
               <div style={{ fontSize: 14, color: VS_MUTED, marginTop: 6, lineHeight: 1.5 }}>
-                {vsFechaCorta(lunes)} al {vsFechaCorta(domingo)}. Acumulado del {vsFechaCorta(desde)} al {vsFechaCorta(ayer)}: si la semana sigue igual, cierra con esta nota.
+                {vsFechaCorta(lunes)} al {vsFechaCorta(domingo)}. {esActual ? <>Acumulado del {vsFechaCorta(desde)} al {vsFechaCorta(hasta)}: si la semana sigue igual, cierra con esta nota.</> : <>Semana cerrada: nota con los datos del {vsFechaCorta(desde)} al {vsFechaCorta(hasta)}.</>}
                 Pondera 35% cumplir rutas (ER), 15% aceptar (AR), 30% entregar (DS) y 20% reclamos (BPP).
               </div>
             </div>
@@ -6949,7 +7158,7 @@ function PoolVendorScore() {
                 </table>
               </div>
               <div style={{ fontSize: 12, color: VS_MUTED, marginTop: 10, lineHeight: 1.5 }}>
-                Un indicador sin datos cuenta 0, igual que en el cálculo de MELI. Los cortes del BPP (0,085%, 0,165% y 0,25%) son aproximados.
+                Un indicador sin datos cuenta 0, igual que en el cálculo de MELI. Los cortes del BPP (0,0845%, 0,169% y 0,2535%) salen de la guía de MELI: meta de 0,338% del GMV.
               </div>
             </div>
 
@@ -7032,7 +7241,8 @@ function PoolVendorScore() {
               </table>
             </div>
           </div>
-          <VsReclamosAcumulados desdeSemana={desde} ayer={ayer} />
+          <VsHistoricoSemanal ayer={ayer} />
+          <VsReclamosAcumulados desdeSemana={desde} ayer={hasta} />
         </div>
       )}
       <div style={{ marginTop: 20 }}><VsGlosario /></div>
