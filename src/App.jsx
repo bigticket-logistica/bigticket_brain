@@ -15424,6 +15424,18 @@ function SelectorPais({ usuario, onSelect, onLogout }) {
   );
 }
 
+// Identidad de quien está usando el Brain. Varios módulos escriben el autor de
+// lo que hacen (movimientos_etapa.movido_por, subido_por, enviado_por) leyendo
+// window.__PERFIL_EMAIL. Si no se llena, todo queda registrado como
+// "analista_brain" y el historial no sirve para saber quién hizo qué.
+function fijarPerfilGlobal(u) {
+  try {
+    window.__PERFIL_EMAIL  = u?.email || "";
+    window.__PERFIL_NOMBRE = u?.nombre || "";
+    window.__PERFIL_ROL    = u?.rol || "";
+  } catch {}
+}
+
 export default function App() {
   const [usuario, setUsuario] = useState(() => {
     try {
@@ -15439,12 +15451,18 @@ export default function App() {
     try { return localStorage.getItem("bt_pais") || null; } catch { return null; }
   });
 
+  // Se fija también al montar: si la persona recarga la página con la sesión
+  // ya iniciada, handleLogin no vuelve a correr y el perfil quedaría vacío.
+  useEffect(() => { fijarPerfilGlobal(usuario); }, [usuario]);
+
   const handleLogin = (u) => {
     localStorage.setItem("bt_usuario", JSON.stringify(u));
+    fijarPerfilGlobal(u);
     setUsuario(u);
   };
   const handleLogout = () => {
     localStorage.removeItem("bt_usuario");
+    fijarPerfilGlobal(null);
     try { localStorage.removeItem("bt_nav_tab"); localStorage.removeItem("bt_nav_subtab_pagos"); localStorage.removeItem("bt_pais"); } catch {}
     setPaisState(null);
     setUsuario(null);

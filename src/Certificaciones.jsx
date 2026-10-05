@@ -1137,6 +1137,23 @@ const MODELOS_LINEA  = ["SDD", "Spot", "Backup"];
 // SOLO al modelo Spot. La hoja del Anexo A no tiene casilla para ella
 // (la celda de tipo mide 42.7 pt y las cuatro opciones ya la llenan),
 // así que en el PDF se deja constancia por Observaciones.
+// Deja constancia de un cambio de etapa. Hasta octubre de 2026 solo dos de los
+// doce puntos que mueven una tarjeta escribían aquí, así que el historial tenía
+// huecos justo en los pasos manuales — los que interesa medir.
+// No lanza: si el registro falla, la tarjeta igual se movió y no hay por qué
+// trabar al usuario; pero queda en consola para poder auditarlo.
+async function registrarMovimiento({ tabla, registro, origen, destino, motivo }) {
+  if (!origen || !destino || origen === destino) return;
+  try {
+    const { error } = await sb.from("movimientos_etapa").insert({
+      tabla, registro_id: String(registro.id), titulo: registro.nombre || null,
+      etapa_origen: origen, etapa_destino: destino, motivo: motivo || null,
+      movido_por: window.__PERFIL_EMAIL || "analista_brain",
+    });
+    if (error) console.warn("movimientos_etapa:", error.message);
+  } catch (e) { console.warn("movimientos_etapa:", e.message); }
+}
+
 const TIPOS_LINEA    = ["Large Van", "Extra Large Van", "Medium Van", "Small Van", "Car"];
 const AYUDANTE_LINEA = ["Sí", "No", "Según activación"];
 const TARIFAS_LINEA  = ["Tabla vigente", "Especial"];
@@ -2975,6 +2992,8 @@ function DetalleCandidato({ candidato, onVolver, onActualizar, onPasarEtapa2 }) 
       const patch = { etapa_kanban: "prevalidacion_biggy", updated_at: new Date().toISOString() };
       const { error } = await sb.from("certificaciones_mx").update(patch).eq("id", candidato.id);
       if (error) throw new Error(error.message);
+      await registrarMovimiento({ tabla: "certificaciones_mx", registro: candidato,
+        origen: candidato.etapa_kanban, destino: "prevalidacion_biggy", motivo: "Reactivación del flujo desde el detalle" });
       onActualizar({ ...candidato, ...patch });
     } catch (e) { alert("No se pudo reactivar: " + e.message); }
     finally { setReactivando(false); }
@@ -2995,6 +3014,8 @@ function DetalleCandidato({ candidato, onVolver, onActualizar, onPasarEtapa2 }) 
       }
       const { error } = await sb.from("certificaciones_mx").update(patch).eq("id", candidato.id);
       if (error) throw new Error(error.message);
+      await registrarMovimiento({ tabla: "certificaciones_mx", registro: candidato,
+        origen: candidato.etapa_kanban, destino: decision, motivo: "Resolución de revisión interna" });
       onActualizar({ ...candidato, ...patch });
     } catch (e) { alert("No se pudo resolver la revisión: " + e.message); }
     finally { setResolviendoRI(false); }
@@ -3146,6 +3167,8 @@ Responde con este JSON exacto:
       const patch = { estado: nuevoEstado, decidido_at: now, etapa_kanban: ETAPA_MX[nuevoEstado] || null };
       if (nuevoEstado === "rechazado") patch.motivo_rechazo = motivoTxt;
       await sb.from("certificaciones_mx").update(patch).eq("id", candidato.id);
+      await registrarMovimiento({ tabla: "certificaciones_mx", registro: candidato,
+        origen: candidato.etapa_kanban, destino: ETAPA_MX[nuevoEstado] || nuevoEstado, motivo: motivoTxt || `Decisión del analista: ${nuevoEstado}` });
       onActualizar({ ...candidato, ...patch });
     } catch (e) {
       alert("Error al guardar la decisión: " + e.message);
@@ -3951,6 +3974,8 @@ function DetalleCertificacion({ cert, etapa, onVolver, onPasarEtapa2, onMoverA, 
       const patch = { etapa_kanban: "prevalidacion_biggy", updated_at: new Date().toISOString() };
       const { error } = await sb.from("certificaciones").update(patch).eq("id", cert.id);
       if (error) throw new Error(error.message);
+      await registrarMovimiento({ tabla: "certificaciones", registro: cert,
+        origen: cert.etapa_kanban, destino: "prevalidacion_biggy", motivo: "Reactivación del flujo desde el detalle" });
       Object.assign(cert, patch);
       if (onMoverA) onMoverA("prevalidacion_biggy"); else onVolver();
     } catch (e) { alert("No se pudo reactivar: " + e.message); }
@@ -3968,6 +3993,8 @@ function DetalleCertificacion({ cert, etapa, onVolver, onPasarEtapa2, onMoverA, 
       const patch = { etapa_kanban: decision, updated_at: new Date().toISOString() };
       const { error } = await sb.from("certificaciones").update(patch).eq("id", cert.id);
       if (error) throw new Error(error.message);
+      await registrarMovimiento({ tabla: "certificaciones", registro: cert,
+        origen: cert.etapa_kanban, destino: decision, motivo: "Resolución de revisión interna" });
       Object.assign(cert, patch);
       if (onMoverA) onMoverA(decision);
       else onVolver();
@@ -6711,6 +6738,201 @@ function ModalMoverEtapa({ mov, onCancelar, onConfirmar }) {
 }
 
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Trazabilidad de tarjetas — recorrido completo del Flujo A
+//
+// Una fila por tarjeta y una columna por hito, con fecha y responsable. La
+// fuente es movimientos_etapa; antes de octubre de 2026 solo dos de los doce
+// puntos que mueven una tarjeta escribían ahí, así que lo anterior se rellena
+// con las fechas que la propia tarjeta ya guardaba (created_at, decidido_at,
+// contrato_enviado_at) y se marca como RECONSTRUIDA.
+//
+// Dos advertencias que el informe muestra en pantalla, para que nadie saque
+// conclusiones de desempeño con datos que no las aguantan:
+//  · en las filas reconstruidas no se sabe quién movió la tarjeta
+//  · sus tiempos salen inflados, porque miden el tramo completo entre los dos
+//    únicos hitos registrados, no la permanencia real en cada etapa
+// ═══════════════════════════════════════════════════════════════════════════
+const HITOS = [
+  { k: "recepcion",              label: "Llegada" },
+  { k: "llamada_supervisor",     label: "Llamada supervisor" },
+  { k: "stand_by",               label: "Stand by" },
+  { k: "prevalidacion_biggy",    label: "Prevalidación Biggy" },
+  { k: "validacion_meli",        label: "Validación MELI" },
+  { k: "validacion_nubarium",    label: "Nubarium / REPUVE" },
+  { k: "revision_interna",       label: "Revisión interna" },
+  { k: "entrevista_operaciones", label: "Entrevista operaciones" },
+  { k: "solicitud_alta",         label: "Solicitud de alta" },
+  { k: "firma_contrato",         label: "Firma de contrato" },
+  { k: "aceptado",               label: "Aceptado" },
+  { k: "rechazado",              label: "Rechazado" },
+];
+
+function Trazabilidad() {
+  const [rows, setRows] = useState(null);
+  const [busca, setBusca] = useState("");
+  const [desde, setDesde] = useState("");
+  const [hasta, setHasta] = useState("");
+  const [soloCerradas, setSoloCerradas] = useState(false);
+
+  useEffect(() => { (async () => {
+    const [c, m] = await Promise.all([
+      sb.from("certificaciones_mx")
+        .select("id, nombre, svc, etapa_kanban, estado, created_at, decidido_at, contrato_enviado_at")
+        .order("created_at", { ascending: false }).limit(2000),
+      sb.from("movimientos_etapa").select("*").eq("tabla", "certificaciones_mx")
+        .order("created_at", { ascending: true }).limit(20000),
+    ]);
+    const porTarjeta = new Map();
+    for (const mv of (m.data || [])) {
+      const k = String(mv.registro_id);
+      if (!porTarjeta.has(k)) porTarjeta.set(k, []);
+      porTarjeta.get(k).push(mv);
+    }
+
+    const armadas = (c.data || []).map((t) => {
+      const movs = porTarjeta.get(String(t.id)) || [];
+      const hitos = {};
+      // La llegada no es un movimiento: es el alta de la tarjeta.
+      hitos.recepcion = { at: t.created_at, por: null, origen: "alta" };
+      for (const mv of movs) {
+        // Se queda la PRIMERA vez que entró a cada etapa: si la tarjeta
+        // retrocedió y volvió, el hito es el momento en que llegó por primera vez.
+        if (mv.etapa_destino && !hitos[mv.etapa_destino]) {
+          hitos[mv.etapa_destino] = { at: mv.created_at, por: mv.movido_por || null, origen: "movimiento" };
+        }
+      }
+      // Relleno de lo anterior a la instrumentación, sin responsable.
+      const reconstruidos = [];
+      const rellena = (k, at) => {
+        if (!at || hitos[k]) return;
+        hitos[k] = { at, por: "analista", origen: "reconstruido" };
+        reconstruidos.push(k);
+      };
+      rellena("firma_contrato", t.contrato_enviado_at);
+      if (t.estado === "aceptado" || t.estado === "rechazado") rellena(t.estado, t.decidido_at);
+
+      // Horas entre hitos consecutivos que existan.
+      const sec = HITOS.map((h) => ({ ...h, ...(hitos[h.k] || {}) })).filter((h) => h.at);
+      let totalH = null;
+      if (sec.length > 1) {
+        totalH = (new Date(sec[sec.length - 1].at) - new Date(sec[0].at)) / 36e5;
+        for (let i = 1; i < sec.length; i++) sec[i].horas = (new Date(sec[i].at) - new Date(sec[i - 1].at)) / 36e5;
+      }
+      return {
+        id: t.id, nombre: t.nombre || "—", svc: t.svc || "—",
+        etapa: t.etapa_kanban, estado: t.estado,
+        hitos, sec, totalH, reconstruida: reconstruidos.length > 0,
+        cerrada: ["aceptado", "rechazado"].includes(t.etapa_kanban),
+      };
+    });
+    setRows(armadas);
+  })(); }, []);
+
+  const visibles = (rows || []).filter((r) => {
+    if (soloCerradas && !r.cerrada) return false;
+    const q = busca.trim().toUpperCase();
+    if (q && !(`${r.nombre} ${r.svc} ${r.id}`.toUpperCase().includes(q))) return false;
+    const lleg = r.hitos.recepcion?.at;
+    if (desde && (!lleg || lleg < desde)) return false;
+    if (hasta && (!lleg || lleg > hasta + "T23:59:59")) return false;
+    return true;
+  });
+
+  const exportar = async () => {
+    const XLSX = await cargarSheetJS();
+    const datos = visibles.map((r) => {
+      const fila = {
+        "ID tarjeta": r.id, "Prospecto": r.nombre, "SVC / Site": r.svc,
+        "Etapa actual": r.etapa || "—",
+        "Horas totales": r.totalH != null ? Math.round(r.totalH * 10) / 10 : "",
+        "Datos reconstruidos": r.reconstruida ? "SÍ — sin responsable y tiempos inflados" : "No",
+      };
+      for (const h of HITOS) {
+        const v = r.hitos[h.k];
+        fila[`${h.label} · fecha`] = v ? fMX(v.at, { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "";
+        fila[`${h.label} · responsable`] = v ? (v.por || (v.origen === "alta" ? "portal" : "—")) : "";
+      }
+      return fila;
+    });
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(datos), "Trazabilidad");
+    XLSX.writeFile(wb, `trazabilidad_certificaciones_${new Date().toISOString().slice(0, 10)}.xlsx`);
+  };
+
+  const inp = { border: "1px solid #e4e7ec", borderRadius: 8, padding: "8px 11px", fontSize: 12.5, fontFamily: "'Geist',sans-serif", background: "#fff" };
+  const th  = { padding: "9px 10px", fontSize: 10.5, fontWeight: 800, color: "#fff", textTransform: "uppercase", letterSpacing: ".4px", textAlign: "left", background: "#1a3a6b", position: "sticky", top: 0, whiteSpace: "nowrap" };
+  const td  = { padding: "7px 10px", fontSize: 11.5, borderBottom: "1px solid #f0f1f3", verticalAlign: "top", whiteSpace: "nowrap" };
+
+  if (!rows) return <div style={{ padding: 30, textAlign: "center", color: "#667085" }}>Cargando trazabilidad…</div>;
+
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
+        <div className="sec-title" style={{ margin: 0, flex: 1 }}>🧭 Trazabilidad de tarjetas · Flujo A</div>
+        <button onClick={exportar} disabled={!visibles.length}
+          style={{ padding: "9px 16px", borderRadius: 8, border: "none", background: "#F47B20", color: "#fff", fontSize: 12.5, fontWeight: 800, cursor: "pointer", fontFamily: "'Geist',sans-serif", opacity: visibles.length ? 1 : .5 }}>
+          ⬇ Descargar Excel
+        </button>
+      </div>
+
+      <div style={{ background: "#fff8e6", border: "1px solid #f0c674", borderRadius: 10, padding: "10px 13px", fontSize: 12, color: "#7a5a12", marginBottom: 12, lineHeight: 1.5 }}>
+        Las filas marcadas <b>RECONSTRUIDA</b> son anteriores al registro completo de movimientos: su responsable aparece como
+        «analista» y sus tiempos salen inflados, porque miden el tramo entre los dos únicos hitos que quedaron guardados y no la
+        permanencia real en cada etapa. No las uses para medir desempeño.
+      </div>
+
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+        <input placeholder="Buscar prospecto, SVC o ID…" value={busca} onChange={(e) => setBusca(e.target.value)} style={{ ...inp, flex: "1 1 240px" }} />
+        <input type="date" value={desde} onChange={(e) => setDesde(e.target.value)} style={inp} title="Llegada desde" />
+        <input type="date" value={hasta} onChange={(e) => setHasta(e.target.value)} style={inp} title="Llegada hasta" />
+        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: "#475569" }}>
+          <input type="checkbox" checked={soloCerradas} onChange={(e) => setSoloCerradas(e.target.checked)} />
+          Solo cerradas
+        </label>
+        <div style={{ alignSelf: "center", fontSize: 12, color: "#667085" }}>{visibles.length} tarjeta(s)</div>
+      </div>
+
+      <div style={{ overflowX: "auto", border: "1px solid #e4e7ec", borderRadius: 10, maxHeight: "70vh" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", background: "#fff" }}>
+          <thead>
+            <tr>
+              <th style={th}>Prospecto</th><th style={th}>SVC</th><th style={th}>Total</th>
+              {HITOS.map((h) => <th key={h.k} style={th}>{h.label}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {visibles.map((r) => (
+              <tr key={r.id}>
+                <td style={td}>
+                  <div style={{ fontWeight: 700, color: "#1a3a6b" }}>{r.nombre}</div>
+                  <div style={{ fontSize: 9.5, color: "#98a2b3", fontFamily: "monospace" }}>{r.id}</div>
+                  {r.reconstruida && <span style={{ fontSize: 9, fontWeight: 800, color: "#b45309", background: "#fff8e6", border: "1px solid #f0c674", borderRadius: 20, padding: "1px 6px" }}>RECONSTRUIDA</span>}
+                </td>
+                <td style={td}>{r.svc}</td>
+                <td style={{ ...td, fontWeight: 700 }}>{r.totalH != null ? `${Math.round(r.totalH)} h` : "—"}</td>
+                {HITOS.map((h) => {
+                  const v = r.hitos[h.k];
+                  const paso = r.sec.find((x) => x.k === h.k);
+                  if (!v) return <td key={h.k} style={{ ...td, color: "#d0d5dd" }}>—</td>;
+                  return (
+                    <td key={h.k} style={td}>
+                      <div>{fMX(v.at, { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}</div>
+                      <div style={{ fontSize: 10, color: "#667085" }}>{v.por || (v.origen === "alta" ? "portal" : "—")}</div>
+                      {paso?.horas != null && <div style={{ fontSize: 9.5, color: "#98a2b3" }}>+{Math.round(paso.horas)} h</div>}
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+
 // ─── 🚚 INVENTARIO DE FLOTA ───────────────────────────────────────────
 // Padrón maestro de placas: espejo de la hoja VEHICULOS del Maestro de
 // Certificación MX, que el equipo sube a diario.
@@ -7632,7 +7854,9 @@ function ModuloCertificaciones() {
         etapa_kanban: "llamada_supervisor",
         updated_at: new Date().toISOString(),
       }).eq("id", c.id).eq("etapa_kanban", "recepcion");   // solo si sigue en Etapa 1
-      if (error) { console.warn("auto-avance E1→E2:", error.message); avanzadas.current.delete(c.id); }
+      if (error) { console.warn("auto-avance E1→E2:", error.message); avanzadas.current.delete(c.id); continue; }
+      await registrarMovimiento({ tabla: "certificaciones_mx", registro: c,
+        origen: "recepcion", destino: "llamada_supervisor", motivo: "Auto-avance por tiempo en Etapa 1" });
     }
     await cargar(true);
   };
@@ -7987,7 +8211,15 @@ function ModuloCertificaciones() {
       {seccion === "contratos" && <GestionadorContratos />}
       {seccion === "documentacion" && <DocumentacionTerceros />}
       {seccion === "avisos" && <AvisosRecordatorios onContador={setNAvisos} />}
-      {seccion === "tablero" && <TableroControl />}
+      {seccion === "tablero" && (
+        <>
+          <TableroControl />
+          {/* La trazabilidad vive bajo el mismo Tablero: ambos miden el proceso,
+              uno el SLA de los supervisores y el otro el recorrido de la tarjeta. */}
+          <div style={{ height: 1, background: "#e4e7ec", margin: "26px 0 20px" }} />
+          <Trazabilidad />
+        </>
+      )}
       {seccion === "mensajes" && <MensajesTerceros />}
 
       {seccion === "certificaciones" && (
