@@ -7612,7 +7612,10 @@ function ListadoPagosDiarios({ usuario }) {
     // Antes se refresca la foto del maestro, de donde el portal saca las
     // devoluciones y el visitado: sin eso esos dos indicadores salen vacíos.
     if (ok > 0) {
-      await sb.rpc("fn_portal_refrescar_maestro").catch(() => {});
+      // rpc() no es una promesa completa: no tiene .catch(). Con .catch() se caía
+      // aquí mismo, la función no llegaba a correr y el aviso al portal se perdía.
+      await sb.rpc("fn_portal_refrescar_maestro")
+        .then(({ error }) => { if (error) console.error("Refresco del maestro:", error.message); });
       avisarPortal("publicacion", { fecha, centros: ok });
     }
     alert(fallos.length
@@ -7691,7 +7694,10 @@ function ListadoPagosDiarios({ usuario }) {
     try {
       await publicarUno(sc, motivo, marcadasDe(sc));
       await cargarPublicaciones();
-      await sb.rpc("fn_portal_refrescar_maestro").catch(() => {});
+      // rpc() no es una promesa completa: no tiene .catch(). Con .catch() se caía
+      // aquí mismo, la función no llegaba a correr y el aviso al portal se perdía.
+      await sb.rpc("fn_portal_refrescar_maestro")
+        .then(({ error }) => { if (error) console.error("Refresco del maestro:", error.message); });
       avisarPortal("publicacion", { fecha, sc });
     }
     catch (e) { alert("No se pudo publicar:\n\n" + e.message); }
