@@ -6828,11 +6828,16 @@ function Trazabilidad() {
       });
 
       const cerrado = ["aceptado", "rechazado"].includes(t.etapa_kanban);
-      const hFirma = (() => {
-        const f = tramos.find((x) => x.etapa === "firma_contrato");
-        return f ? HORAS(new Date(f.entrada) - new Date(t.created_at)) : null;
-      })();
-      const hTotal = cerrado && !estimadoInicio && movs.length
+      // El total de punta a punta SÍ es medible aunque falten pasos intermedios:
+      // sus dos extremos son fechas exactas — el alta de la tarjeta y el
+      // movimiento que la llevó a su etapa final. Lo que los huecos impiden
+      // medir es el desglose por fase, no el total. Solo queda sin total la
+      // tarjeta que no tiene ningún movimiento registrado, porque ahí no se
+      // sabe cuándo llegó a donde está.
+      const fTramo = tramos.find((x) => x.etapa === "firma_contrato");
+      const hFirma = fTramo && !(fTramo === tramos[0] && estimadoInicio)
+        ? HORAS(new Date(fTramo.entrada) - new Date(t.created_at)) : null;
+      const hTotal = cerrado && movs.length
         ? HORAS(new Date(tramos[tramos.length - 1].entrada) - new Date(t.created_at)) : null;
 
       return {
@@ -6986,7 +6991,9 @@ function Trazabilidad() {
                   <td style={{ ...td, fontWeight: 700, color: r.enCurso.horas > 168 ? "#c0392b" : r.enCurso.horas > 72 ? "#b45309" : "#166534" }}>
                     {fmtH(r.enCurso.horas)}{!r.enCurso.medido && <span style={{ fontSize: 9, color: "#98a2b3" }}> (est.)</span>}
                   </td>
-                  <td style={td}>{r.hTotal != null ? fmtH(r.hTotal) : "—"}</td>
+                  <td style={td} title={r.hTotal == null && r.cerrado ? "Sin movimientos registrados: no se sabe cuándo llegó a su etapa final" : ""}>
+                    {r.hTotal != null ? fmtH(r.hTotal) : r.cerrado ? <span style={{ color: "#98a2b3" }}>sin registro</span> : "en curso"}
+                  </td>
                 </tr>
                 {abierta === r.id && (
                   <tr><td colSpan={6} style={{ padding: 0, background: "#fbfcfd", borderBottom: "1px solid #e4e7ec" }}>
