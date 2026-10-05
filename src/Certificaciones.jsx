@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, Fragment } from "react";
 import { sb, BIGGY_IMG } from "./shared";
 
 // Todas las fechas del módulo se muestran en HORA DE MÉXICO, sin importar desde
@@ -6753,32 +6753,34 @@ function ModalMoverEtapa({ mov, onCancelar, onConfirmar }) {
 //  · sus tiempos salen inflados, porque miden el tramo completo entre los dos
 //    únicos hitos registrados, no la permanencia real en cada etapa
 // ═══════════════════════════════════════════════════════════════════════════
-const HITOS = [
-  { k: "recepcion",              label: "Llegada" },
-  { k: "llamada_supervisor",     label: "Llamada supervisor" },
-  { k: "stand_by",               label: "Stand by" },
-  { k: "prevalidacion_biggy",    label: "Prevalidación Biggy" },
-  { k: "validacion_meli",        label: "Validación MELI" },
-  { k: "validacion_nubarium",    label: "Nubarium / REPUVE" },
-  { k: "revision_interna",       label: "Revisión interna" },
-  { k: "entrevista_operaciones", label: "Entrevista operaciones" },
-  { k: "solicitud_alta",         label: "Solicitud de alta" },
-  { k: "firma_contrato",         label: "Firma de contrato" },
-  { k: "aceptado",               label: "Aceptado" },
-  { k: "rechazado",              label: "Rechazado" },
-];
+const ETIQUETA_ETAPA = {
+  recepcion: "Recepción", llamada_supervisor: "Llamada supervisor", stand_by: "Stand By",
+  prevalidacion_biggy: "Prevalidación Biggy", validacion_meli: "Validación MELI",
+  validacion_nubarium: "Nubarium / REPUVE", revision_interna: "Revisión interna",
+  entrevista_operaciones: "Entrevista operaciones", solicitud_alta: "Solicitud de alta",
+  firma_contrato: "Firma de contrato", aceptado: "Aceptado", rechazado: "Rechazado",
+};
+const ORDEN_ETAPA = Object.keys(ETIQUETA_ETAPA);
+const ET = (k) => ETIQUETA_ETAPA[k] || k || "—";
+const HORAS = (ms) => ms / 36e5;
+const fmtH = (h) => h == null ? "—" : h < 48 ? `${Math.round(h)} h` : `${(h / 24).toFixed(1)} d`;
+const mediana = (xs) => {
+  if (!xs.length) return null;
+  const a = [...xs].sort((x, y) => x - y), m = Math.floor(a.length / 2);
+  return a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2;
+};
 
 function Trazabilidad() {
-  const [rows, setRows] = useState(null);
+  const [datos, setDatos] = useState(null);
   const [busca, setBusca] = useState("");
   const [desde, setDesde] = useState("");
   const [hasta, setHasta] = useState("");
-  const [soloCerradas, setSoloCerradas] = useState(false);
+  const [abierta, setAbierta] = useState(null);
 
   useEffect(() => { (async () => {
     const [c, m] = await Promise.all([
       sb.from("certificaciones_mx")
-        .select("id, nombre, svc, etapa_kanban, estado, created_at, decidido_at, contrato_enviado_at, claude_reviewed_at, fecha_envio_meli")
+        .select("id, nombre, svc, etapa_kanban, estado, created_at, updated_at")
         .order("created_at", { ascending: false }).limit(2000),
       sb.from("movimientos_etapa").select("*").eq("tabla", "certificaciones_mx")
         .order("created_at", { ascending: true }).limit(20000),
@@ -6789,93 +6791,140 @@ function Trazabilidad() {
       if (!porTarjeta.has(k)) porTarjeta.set(k, []);
       porTarjeta.get(k).push(mv);
     }
+    const ahora = Date.now();
 
-    const armadas = (c.data || []).map((t) => {
+    const tarjetas = (c.data || []).map((t) => {
       const movs = porTarjeta.get(String(t.id)) || [];
-      const hitos = {};
-      // La llegada no es un movimiento: es el alta de la tarjeta.
-      hitos.recepcion = { at: t.created_at, por: null, origen: "alta" };
-      for (const mv of movs) {
-        // Se queda la PRIMERA vez que entró a cada etapa: si la tarjeta
-        // retrocedió y volvió, el hito es el momento en que llegó por primera vez.
-        if (mv.etapa_destino && !hitos[mv.etapa_destino]) {
-          hitos[mv.etapa_destino] = { at: mv.created_at, por: mv.movido_por || null, origen: "movimiento" };
-        }
-      }
-      // Relleno de lo anterior a la instrumentación, con las fechas que la
-      // propia tarjeta ya guardaba. El autor se atribuye según QUIÉN hace ese
-      // paso en la realidad: Biggy analiza los documentos solo, el flujo de
-      // n8n resuelve la respuesta de MELI solo, y el contrato y la decisión
-      // final los ejecuta una persona que no quedó identificada.
-      const reconstruidos = [];
-      const rellena = (k, at, por) => {
-        if (!at || hitos[k]) return;
-        hitos[k] = { at, por, origen: "reconstruido" };
-        reconstruidos.push(k);
-      };
-      rellena("prevalidacion_biggy", t.claude_reviewed_at, "biggy");
-      rellena("validacion_meli",     t.fecha_envio_meli,   "flujo_resolucion_meli");
-      rellena("firma_contrato",      t.contrato_enviado_at, "analista");
-      if (t.estado === "aceptado" || t.estado === "rechazado") rellena(t.estado, t.decidido_at, "analista");
+      // El recorrido se arma como tramos: cada movimiento CIERRA el tramo en
+      // curso y ABRE el siguiente. Así la permanencia en una fase es la
+      // diferencia entre que entró y que salió, no una resta entre hitos
+      // sueltos — que era lo que inflaba los tiempos del informe anterior.
+      const tramos = [];
+      let etapa = movs.length ? movs[0].etapa_origen : t.etapa_kanban;
+      let entrada = t.created_at;
+      let estimadoInicio = false;
 
-      // Horas entre hitos consecutivos que existan.
-      const sec = HITOS.map((h) => ({ ...h, ...(hitos[h.k] || {}) })).filter((h) => h.at);
-      let totalH = null;
-      if (sec.length > 1) {
-        totalH = (new Date(sec[sec.length - 1].at) - new Date(sec[0].at)) / 36e5;
-        for (let i = 1; i < sec.length; i++) sec[i].horas = (new Date(sec[i].at) - new Date(sec[i - 1].at)) / 36e5;
+      // Si el primer movimiento registrado sale de una etapa que no es la de
+      // llegada, la tarjeta avanzó antes de que se registraran movimientos.
+      // Ese tramo inicial no se puede medir y se marca.
+      if (movs.length && movs[0].etapa_origen !== "recepcion") estimadoInicio = true;
+
+      for (const mv of movs) {
+        tramos.push({
+          etapa: mv.etapa_origen || etapa, entrada,
+          salida: mv.created_at, por: mv.movido_por || null,
+          horas: HORAS(new Date(mv.created_at) - new Date(entrada)),
+          medido: tramos.length > 0 || !estimadoInicio,
+        });
+        etapa = mv.etapa_destino;
+        entrada = mv.created_at;
       }
+      // Tramo abierto: lo que lleva en la etapa donde está ahora.
+      const sinRegistro = !movs.length;
+      const entradaActual = sinRegistro ? (t.updated_at || t.created_at) : entrada;
+      tramos.push({
+        etapa: t.etapa_kanban || etapa, entrada: entradaActual, salida: null, por: null,
+        horas: HORAS(ahora - new Date(entradaActual)), medido: !sinRegistro, abierto: true,
+      });
+
+      const cerrado = ["aceptado", "rechazado"].includes(t.etapa_kanban);
+      const hFirma = (() => {
+        const f = tramos.find((x) => x.etapa === "firma_contrato");
+        return f ? HORAS(new Date(f.entrada) - new Date(t.created_at)) : null;
+      })();
+      const hTotal = cerrado && !estimadoInicio && movs.length
+        ? HORAS(new Date(tramos[tramos.length - 1].entrada) - new Date(t.created_at)) : null;
+
       return {
         id: t.id, nombre: t.nombre || "—", svc: t.svc || "—",
-        etapa: t.etapa_kanban, estado: t.estado,
-        hitos, sec, totalH, reconstruida: reconstruidos.length > 0,
-        cerrada: ["aceptado", "rechazado"].includes(t.etapa_kanban),
+        etapa: t.etapa_kanban, llegada: t.created_at, tramos, cerrado,
+        desenlace: cerrado ? t.etapa_kanban : null,
+        hTotal, hFirma: estimadoInicio ? null : hFirma,
+        estimada: estimadoInicio || sinRegistro,
+        enCurso: tramos[tramos.length - 1],
       };
     });
-    setRows(armadas);
+    setDatos(tarjetas);
   })(); }, []);
 
-  const visibles = (rows || []).filter((r) => {
-    if (soloCerradas && !r.cerrada) return false;
+  const visibles = (datos || []).filter((r) => {
     const q = busca.trim().toUpperCase();
     if (q && !(`${r.nombre} ${r.svc} ${r.id}`.toUpperCase().includes(q))) return false;
-    const lleg = r.hitos.recepcion?.at;
-    if (desde && (!lleg || lleg < desde)) return false;
-    if (hasta && (!lleg || lleg > hasta + "T23:59:59")) return false;
+    if (desde && r.llegada < desde) return false;
+    if (hasta && r.llegada > hasta + "T23:59:59") return false;
     return true;
   });
 
+  // ── Promedios: SOLO tramos cerrados y medidos. Un tramo estimado daría un
+  // número plausible y equivocado, y nadie podría distinguirlo después.
+  const porEtapa = (() => {
+    const acc = {};
+    for (const r of visibles) for (const tr of r.tramos) {
+      if (tr.abierto || !tr.medido || tr.horas == null) continue;
+      (acc[tr.etapa] = acc[tr.etapa] || []).push(tr.horas);
+    }
+    return ORDEN_ETAPA.filter((k) => acc[k]?.length).map((k) => ({
+      etapa: k, n: acc[k].length,
+      prom: acc[k].reduce((a, b) => a + b, 0) / acc[k].length,
+      med: mediana(acc[k]), max: Math.max(...acc[k]),
+    }));
+  })();
+
+  const resumenDe = (filtro, campo) => {
+    const xs = visibles.filter(filtro).map((r) => r[campo]).filter((x) => x != null);
+    return { n: xs.length, prom: xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null, med: mediana(xs) };
+  };
+  const totAcep = resumenDe((r) => r.desenlace === "aceptado", "hTotal");
+  const totRech = resumenDe((r) => r.desenlace === "rechazado", "hTotal");
+  const totFirma = resumenDe(() => true, "hFirma");
+
   const exportar = async () => {
     const XLSX = await cargarSheetJS();
-    const datos = visibles.map((r) => {
-      const fila = {
-        "ID tarjeta": r.id, "Prospecto": r.nombre, "SVC / Site": r.svc,
-        "Etapa actual": r.etapa || "—",
-        "Horas totales": r.totalH != null ? Math.round(r.totalH * 10) / 10 : "",
-        "Datos reconstruidos": r.reconstruida ? "SÍ — sin responsable y tiempos inflados" : "No",
-      };
-      for (const h of HITOS) {
-        const v = r.hitos[h.k];
-        fila[`${h.label} · fecha`] = v ? fMX(v.at, { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "";
-        fila[`${h.label} · responsable`] = v ? (v.por || (v.origen === "alta" ? "portal" : "—")) : "";
-      }
-      return fila;
-    });
+    const detalle = [];
+    for (const r of visibles) for (const tr of r.tramos) {
+      detalle.push({
+        "ID tarjeta": r.id, "Prospecto": r.nombre, "SVC": r.svc,
+        "Fase": ET(tr.etapa),
+        "Entró": fMX(tr.entrada, { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" }),
+        "Salió": tr.salida ? fMX(tr.salida, { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "(sigue aquí)",
+        "Horas en la fase": Math.round(tr.horas * 10) / 10,
+        "Quién la movió": tr.por || (tr.abierto ? "" : "—"),
+        "Medición": tr.medido ? "exacta" : "estimada — no entra en los promedios",
+      });
+    }
+    const resumen = porEtapa.map((e) => ({
+      "Fase": ET(e.etapa), "Veces medidas": e.n,
+      "Promedio (h)": Math.round(e.prom * 10) / 10,
+      "Mediana (h)": Math.round(e.med * 10) / 10,
+      "Máximo (h)": Math.round(e.max * 10) / 10,
+    }));
+    resumen.push({}, { "Fase": "TOTAL hasta Aceptado", "Veces medidas": totAcep.n, "Promedio (h)": totAcep.prom ? Math.round(totAcep.prom) : "", "Mediana (h)": totAcep.med ? Math.round(totAcep.med) : "" });
+    resumen.push({ "Fase": "TOTAL hasta Rechazado", "Veces medidas": totRech.n, "Promedio (h)": totRech.prom ? Math.round(totRech.prom) : "", "Mediana (h)": totRech.med ? Math.round(totRech.med) : "" });
+    resumen.push({ "Fase": "TOTAL hasta Firma de contrato", "Veces medidas": totFirma.n, "Promedio (h)": totFirma.prom ? Math.round(totFirma.prom) : "", "Mediana (h)": totFirma.med ? Math.round(totFirma.med) : "" });
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(datos), "Trazabilidad");
-    XLSX.writeFile(wb, `trazabilidad_certificaciones_${new Date().toISOString().slice(0, 10)}.xlsx`);
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(resumen), "Promedios");
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(detalle), "Recorrido");
+    XLSX.writeFile(wb, `tiempos_certificaciones_${new Date().toISOString().slice(0, 10)}.xlsx`);
   };
 
   const inp = { border: "1px solid #e4e7ec", borderRadius: 8, padding: "8px 11px", fontSize: 12.5, fontFamily: "'Geist',sans-serif", background: "#fff" };
-  const th  = { padding: "9px 10px", fontSize: 10.5, fontWeight: 800, color: "#fff", textTransform: "uppercase", letterSpacing: ".4px", textAlign: "left", background: "#1a3a6b", position: "sticky", top: 0, whiteSpace: "nowrap" };
-  const td  = { padding: "7px 10px", fontSize: 11.5, borderBottom: "1px solid #f0f1f3", verticalAlign: "top", whiteSpace: "nowrap" };
+  const th  = { padding: "9px 10px", fontSize: 10.5, fontWeight: 800, color: "#fff", textTransform: "uppercase", letterSpacing: ".4px", textAlign: "left", background: "#1a3a6b", position: "sticky", top: 0 };
+  const td  = { padding: "8px 10px", fontSize: 12, borderBottom: "1px solid #f0f1f3" };
 
-  if (!rows) return <div style={{ padding: 30, textAlign: "center", color: "#667085" }}>Cargando trazabilidad…</div>;
+  if (!datos) return <div style={{ padding: 30, textAlign: "center", color: "#667085" }}>Calculando tiempos…</div>;
+
+  const kpi = (label, v, n) => (
+    <div style={{ flex: "1 1 150px", background: "#f8fafc", border: "1px solid #e4e7ec", borderRadius: 10, padding: "10px 12px" }}>
+      <div style={{ fontSize: 10, fontWeight: 700, color: "#888", textTransform: "uppercase", letterSpacing: ".04em" }}>{label}</div>
+      <div style={{ fontSize: 20, fontWeight: 800, color: "#1a3a6b" }}>{fmtH(v)}</div>
+      <div style={{ fontSize: 10, color: "#98a2b3" }}>{n} tarjeta(s)</div>
+    </div>
+  );
 
   return (
     <div>
       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
-        <div className="sec-title" style={{ margin: 0, flex: 1 }}>🧭 Trazabilidad de tarjetas · Flujo A</div>
+        <div className="sec-title" style={{ margin: 0, flex: 1 }}>⏱ Tiempos por fase · Flujo A</div>
         <button onClick={exportar} disabled={!visibles.length}
           style={{ padding: "9px 16px", borderRadius: 8, border: "none", background: "#F47B20", color: "#fff", fontSize: 12.5, fontWeight: 800, cursor: "pointer", fontFamily: "'Geist',sans-serif", opacity: visibles.length ? 1 : .5 }}>
           ⬇ Descargar Excel
@@ -6883,53 +6932,80 @@ function Trazabilidad() {
       </div>
 
       <div style={{ background: "#fff8e6", border: "1px solid #f0c674", borderRadius: 10, padding: "10px 13px", fontSize: 12, color: "#7a5a12", marginBottom: 12, lineHeight: 1.5 }}>
-        Las filas marcadas <b>RECONSTRUIDA</b> son anteriores al registro completo de movimientos: algunos hitos se dedujeron de
-        fechas que guardaba la tarjeta, los pasos manuales figuran como «analista» sin identificar a la persona, y sus tiempos salen inflados, porque miden el tramo entre los dos únicos hitos que quedaron guardados y no la
-        permanencia real en cada etapa. No las uses para medir desempeño.
+        Los promedios se calculan solo con tramos <b>medidos</b>: entrada y salida registradas. Las tarjetas anteriores al registro
+        completo de movimientos muestran su permanencia actual como <b>estimada</b> y quedan fuera de las métricas, para que un
+        número aproximado no se mezcle con los reales.
       </div>
 
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
+        {kpi("Llegada → Aceptado", totAcep.prom, totAcep.n)}
+        {kpi("Llegada → Rechazado", totRech.prom, totRech.n)}
+        {kpi("Llegada → Firma", totFirma.prom, totFirma.n)}
+      </div>
+
+      <div style={{ fontSize: 12.5, fontWeight: 800, color: "#1a3a6b", marginBottom: 7 }}>Permanencia promedio por fase</div>
+      <div style={{ overflowX: "auto", border: "1px solid #e4e7ec", borderRadius: 10, marginBottom: 18 }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", background: "#fff" }}>
+          <thead><tr><th style={th}>Fase</th><th style={th}>Medidas</th><th style={th}>Promedio</th><th style={th}>Mediana</th><th style={th}>Máximo</th></tr></thead>
+          <tbody>
+            {porEtapa.map((e) => (
+              <tr key={e.etapa}>
+                <td style={{ ...td, fontWeight: 700, color: "#1a3a6b" }}>{ET(e.etapa)}</td>
+                <td style={td}>{e.n}</td>
+                <td style={{ ...td, fontWeight: 700 }}>{fmtH(e.prom)}</td>
+                <td style={td}>{fmtH(e.med)}</td>
+                <td style={{ ...td, color: e.max > 168 ? "#c0392b" : "#475569" }}>{fmtH(e.max)}</td>
+              </tr>
+            ))}
+            {!porEtapa.length && <tr><td style={td} colSpan={5}>Todavía no hay tramos con entrada y salida registradas.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
         <input placeholder="Buscar prospecto, SVC o ID…" value={busca} onChange={(e) => setBusca(e.target.value)} style={{ ...inp, flex: "1 1 240px" }} />
         <input type="date" value={desde} onChange={(e) => setDesde(e.target.value)} style={inp} title="Llegada desde" />
         <input type="date" value={hasta} onChange={(e) => setHasta(e.target.value)} style={inp} title="Llegada hasta" />
-        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: "#475569" }}>
-          <input type="checkbox" checked={soloCerradas} onChange={(e) => setSoloCerradas(e.target.checked)} />
-          Solo cerradas
-        </label>
         <div style={{ alignSelf: "center", fontSize: 12, color: "#667085" }}>{visibles.length} tarjeta(s)</div>
       </div>
 
-      <div style={{ overflowX: "auto", border: "1px solid #e4e7ec", borderRadius: 10, maxHeight: "70vh" }}>
+      <div style={{ overflowX: "auto", border: "1px solid #e4e7ec", borderRadius: 10, maxHeight: "60vh" }}>
         <table style={{ width: "100%", borderCollapse: "collapse", background: "#fff" }}>
-          <thead>
-            <tr>
-              <th style={th}>Prospecto</th><th style={th}>SVC</th><th style={th}>Total</th>
-              {HITOS.map((h) => <th key={h.k} style={th}>{h.label}</th>)}
-            </tr>
-          </thead>
+          <thead><tr><th style={th}>Prospecto</th><th style={th}>SVC</th><th style={th}>Llegada</th><th style={th}>Dónde está</th><th style={th}>Lleva ahí</th><th style={th}>Total</th></tr></thead>
           <tbody>
             {visibles.map((r) => (
-              <tr key={r.id}>
-                <td style={td}>
-                  <div style={{ fontWeight: 700, color: "#1a3a6b" }}>{r.nombre}</div>
-                  <div style={{ fontSize: 9.5, color: "#98a2b3", fontFamily: "monospace" }}>{r.id}</div>
-                  {r.reconstruida && <span style={{ fontSize: 9, fontWeight: 800, color: "#b45309", background: "#fff8e6", border: "1px solid #f0c674", borderRadius: 20, padding: "1px 6px" }}>RECONSTRUIDA</span>}
-                </td>
-                <td style={td}>{r.svc}</td>
-                <td style={{ ...td, fontWeight: 700 }}>{r.totalH != null ? `${Math.round(r.totalH)} h` : "—"}</td>
-                {HITOS.map((h) => {
-                  const v = r.hitos[h.k];
-                  const paso = r.sec.find((x) => x.k === h.k);
-                  if (!v) return <td key={h.k} style={{ ...td, color: "#d0d5dd" }}>—</td>;
-                  return (
-                    <td key={h.k} style={td}>
-                      <div>{fMX(v.at, { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}</div>
-                      <div style={{ fontSize: 10, color: "#667085" }}>{v.por || (v.origen === "alta" ? "portal" : "—")}</div>
-                      {paso?.horas != null && <div style={{ fontSize: 9.5, color: "#98a2b3" }}>+{Math.round(paso.horas)} h</div>}
-                    </td>
-                  );
-                })}
-              </tr>
+              <Fragment key={r.id}>
+                <tr onClick={() => setAbierta(abierta === r.id ? null : r.id)} style={{ cursor: "pointer" }}>
+                  <td style={td}>
+                    <div style={{ fontWeight: 700, color: "#1a3a6b" }}>{abierta === r.id ? "▾ " : "▸ "}{r.nombre}</div>
+                    <div style={{ fontSize: 9.5, color: "#98a2b3", fontFamily: "monospace" }}>{r.id}</div>
+                  </td>
+                  <td style={td}>{r.svc}</td>
+                  <td style={td}>{fMX(r.llegada, { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}</td>
+                  <td style={td}>{ET(r.etapa)}</td>
+                  <td style={{ ...td, fontWeight: 700, color: r.enCurso.horas > 168 ? "#c0392b" : r.enCurso.horas > 72 ? "#b45309" : "#166534" }}>
+                    {fmtH(r.enCurso.horas)}{!r.enCurso.medido && <span style={{ fontSize: 9, color: "#98a2b3" }}> (est.)</span>}
+                  </td>
+                  <td style={td}>{r.hTotal != null ? fmtH(r.hTotal) : "—"}</td>
+                </tr>
+                {abierta === r.id && (
+                  <tr><td colSpan={6} style={{ padding: 0, background: "#fbfcfd", borderBottom: "1px solid #e4e7ec" }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                      <tbody>
+                        {r.tramos.map((tr, i) => (
+                          <tr key={i}>
+                            <td style={{ ...td, paddingLeft: 26, width: 200, fontWeight: 600 }}>{ET(tr.etapa)}</td>
+                            <td style={td}>{fMX(tr.entrada, { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}</td>
+                            <td style={{ ...td, width: 110, fontWeight: 700 }}>{fmtH(tr.horas)}</td>
+                            <td style={td}>{tr.abierto ? <i style={{ color: "#667085" }}>sigue aquí</i> : <>salió por <b>{tr.por || "—"}</b></>}</td>
+                            <td style={{ ...td, width: 150, color: "#98a2b3", fontSize: 10.5 }}>{tr.medido ? "" : "estimado"}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </td></tr>
+                )}
+              </Fragment>
             ))}
           </tbody>
         </table>
