@@ -6778,7 +6778,7 @@ function Trazabilidad() {
   useEffect(() => { (async () => {
     const [c, m] = await Promise.all([
       sb.from("certificaciones_mx")
-        .select("id, nombre, svc, etapa_kanban, estado, created_at, decidido_at, contrato_enviado_at")
+        .select("id, nombre, svc, etapa_kanban, estado, created_at, decidido_at, contrato_enviado_at, claude_reviewed_at, fecha_envio_meli")
         .order("created_at", { ascending: false }).limit(2000),
       sb.from("movimientos_etapa").select("*").eq("tabla", "certificaciones_mx")
         .order("created_at", { ascending: true }).limit(20000),
@@ -6802,15 +6802,21 @@ function Trazabilidad() {
           hitos[mv.etapa_destino] = { at: mv.created_at, por: mv.movido_por || null, origen: "movimiento" };
         }
       }
-      // Relleno de lo anterior a la instrumentación, sin responsable.
+      // Relleno de lo anterior a la instrumentación, con las fechas que la
+      // propia tarjeta ya guardaba. El autor se atribuye según QUIÉN hace ese
+      // paso en la realidad: Biggy analiza los documentos solo, el flujo de
+      // n8n resuelve la respuesta de MELI solo, y el contrato y la decisión
+      // final los ejecuta una persona que no quedó identificada.
       const reconstruidos = [];
-      const rellena = (k, at) => {
+      const rellena = (k, at, por) => {
         if (!at || hitos[k]) return;
-        hitos[k] = { at, por: "analista", origen: "reconstruido" };
+        hitos[k] = { at, por, origen: "reconstruido" };
         reconstruidos.push(k);
       };
-      rellena("firma_contrato", t.contrato_enviado_at);
-      if (t.estado === "aceptado" || t.estado === "rechazado") rellena(t.estado, t.decidido_at);
+      rellena("prevalidacion_biggy", t.claude_reviewed_at, "biggy");
+      rellena("validacion_meli",     t.fecha_envio_meli,   "flujo_resolucion_meli");
+      rellena("firma_contrato",      t.contrato_enviado_at, "analista");
+      if (t.estado === "aceptado" || t.estado === "rechazado") rellena(t.estado, t.decidido_at, "analista");
 
       // Horas entre hitos consecutivos que existan.
       const sec = HITOS.map((h) => ({ ...h, ...(hitos[h.k] || {}) })).filter((h) => h.at);
@@ -6877,8 +6883,8 @@ function Trazabilidad() {
       </div>
 
       <div style={{ background: "#fff8e6", border: "1px solid #f0c674", borderRadius: 10, padding: "10px 13px", fontSize: 12, color: "#7a5a12", marginBottom: 12, lineHeight: 1.5 }}>
-        Las filas marcadas <b>RECONSTRUIDA</b> son anteriores al registro completo de movimientos: su responsable aparece como
-        «analista» y sus tiempos salen inflados, porque miden el tramo entre los dos únicos hitos que quedaron guardados y no la
+        Las filas marcadas <b>RECONSTRUIDA</b> son anteriores al registro completo de movimientos: algunos hitos se dedujeron de
+        fechas que guardaba la tarjeta, los pasos manuales figuran como «analista» sin identificar a la persona, y sus tiempos salen inflados, porque miden el tramo entre los dos únicos hitos que quedaron guardados y no la
         permanencia real en cada etapa. No las uses para medir desempeño.
       </div>
 
