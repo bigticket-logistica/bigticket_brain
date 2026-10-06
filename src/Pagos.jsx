@@ -5982,12 +5982,12 @@ const RM_MESES = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio"
 const RM_DIAS = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"];
 const RM_NAVY = "#1a3a6b", RM_ORANGE = "#F47B20", RM_MUTED = "#5b6474", RM_BORDER = "#e4e7ec";
 
-function rmBase() { return { total: 0, cancel: 0, acept: 0, rech: 0, venc: 0, pend: 0, na_sdd: 0, na_spot: 0, ef_sdd: 0, ef_spot: 0 }; }
+function rmBase() { return { total: 0, cancel: 0, acept: 0, rech: 0, venc: 0, pend: 0, na_sdd: 0, na_spot: 0, ef_sdd: 0, ef_spot: 0, hard_sdd: 0, hard_spot: 0 }; }
 function rmSumar(b, p) {
   b.total++;
   if (p.status === "canceled") { b.cancel++; return; }
   if (p.es_sdd) b.ef_sdd++; else b.ef_spot++;
-  if (p.status === "accepted") b.acept++;
+  if (p.status === "accepted") { b.acept++; if (p.rosterizado === false && p.fecha_ruta < fechaHoyOperativa()) { p.es_sdd ? b.hard_sdd++ : b.hard_spot++; } }
   else if (p.status === "rejected") { b.rech++; p.es_sdd ? b.na_sdd++ : b.na_spot++; }
   else if (p.status === "expired") { b.venc++; p.es_sdd ? b.na_sdd++ : b.na_spot++; }
   else if (p.status === "pending") b.pend++;
@@ -6023,7 +6023,7 @@ function RechazosMeliMX() {
       try {
         const todas = [];
         for (let desde = 0; ; desde += 1000) {
-          const { data, error: e } = await sb.from("mx_pedidos_estado").select("request_id, facility_id, fecha_ruta, status, es_sdd, vehiculo, tipo, eta, creado_meli")
+          const { data, error: e } = await sb.from("mx_pedidos_estado").select("request_id, facility_id, fecha_ruta, status, es_sdd, vehiculo, tipo, eta, creado_meli, rosterizado")
             .gte("fecha_ruta", mes + "-01").lte("fecha_ruta", hastaVista).order("request_id").range(desde, desde + 999);
           if (e) throw e;
           todas.push(...(data || []));
@@ -6060,10 +6060,10 @@ function RechazosMeliMX() {
   const idx = meses.indexOf(mes);
 
   const descargar = async () => {
-    const diario = [["Fecha", "Día", "Efectivas", "Aceptadas", "Rechazadas", "Vencidas sin responder", "No aceptadas SDD", "No aceptadas Spot", "No aceptadas total", "Canceladas MELI", "AR"]];
-    for (const d of dias) diario.push([d.fecha, RM_DIAS[new Date(d.fecha + "T12:00:00Z").getUTCDay()], rmEfect(d), d.acept, d.rech, d.venc, d.na_sdd, d.na_spot, rmNoAcept(d), d.cancel, rmAR(d) == null ? "" : Number((rmAR(d) * 100).toFixed(1))]);
-    const ranking = [["#", "SC", "Efectivas", "Aceptadas", "No aceptadas SDD", "No aceptadas Spot", "No aceptadas total", "AR", "% del total"]];
-    svcs.forEach((s, i) => ranking.push([i + 1, s.svc, rmEfect(s), s.acept, s.na_sdd, s.na_spot, s.na, rmAR(s) == null ? "" : Number((rmAR(s) * 100).toFixed(1)), Number((s.share * 100).toFixed(1))]));
+    const diario = [["Fecha", "Día", "Efectivas", "Aceptadas", "Rechazadas", "Vencidas sin responder", "No aceptadas SDD", "No aceptadas Spot", "No aceptadas total", "Canceladas MELI", "AR", "Hard SDD", "Hard Spot"]];
+    for (const d of dias) diario.push([d.fecha, RM_DIAS[new Date(d.fecha + "T12:00:00Z").getUTCDay()], rmEfect(d), d.acept, d.rech, d.venc, d.na_sdd, d.na_spot, rmNoAcept(d), d.cancel, rmAR(d) == null ? "" : Number((rmAR(d) * 100).toFixed(1)), d.hard_sdd, d.hard_spot]);
+    const ranking = [["#", "SC", "Efectivas", "Aceptadas", "No aceptadas SDD", "No aceptadas Spot", "No aceptadas total", "AR", "% del total", "Hard SDD", "Hard Spot"]];
+    svcs.forEach((s, i) => ranking.push([i + 1, s.svc, rmEfect(s), s.acept, s.na_sdd, s.na_spot, s.na, rmAR(s) == null ? "" : Number((rmAR(s) * 100).toFixed(1)), Number((s.share * 100).toFixed(1)), s.hard_sdd, s.hard_spot]));
     const detalle = [["Fecha ruta", "SC", "Modelo", "Estado", "Vehículo", "Tipo", "Request ID"]];
     for (const p of filas.filter(x => x.status === "rejected" || x.status === "expired").sort((a, b) => a.fecha_ruta.localeCompare(b.fecha_ruta) || a.facility_id.localeCompare(b.facility_id)))
       detalle.push([p.fecha_ruta, p.facility_id, p.es_sdd ? "SDD" : "Spot", p.status === "expired" ? "Vencido sin responder" : "Rechazado", p.vehiculo, p.tipo, p.request_id]);
@@ -6124,7 +6124,7 @@ function RechazosMeliMX() {
             <Kpi titulo="No aceptadas (soft)" valor={rmN(rmNoAcept(total))} sub={`SDD ${rmN(total.na_sdd)} · Spot ${rmN(total.na_spot)}`} color={RM_ORANGE} />
             <Kpi titulo="Rechazadas" valor={rmN(total.rech)} sub="respondidas con rechazo" color="#9a3c06" />
             <Kpi titulo="Vencidas sin responder" valor={rmN(total.venc)} sub="nadie respondió en 30 min" color="#991b1b" />
-            <Kpi titulo="No show hard" valor="—" sub="se suma con la etapa de rostering" color="#94a3b8" />
+            <Kpi titulo="No show hard (sin placa ni chofer)" valor={rmN(total.hard_sdd + total.hard_spot)} sub={`SDD ${rmN(total.hard_sdd)} · Spot ${rmN(total.hard_spot)} · aceptadas no rosterizadas`} color="#7f1d1d" />
           </div>
 
           <div style={{ display: "flex", gap: 18, alignItems: "flex-start", flexWrap: "wrap" }}>
@@ -6137,7 +6137,7 @@ function RechazosMeliMX() {
                 <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 640 }}>
                   <thead>
                     <tr style={{ color: RM_MUTED, fontSize: 12, textAlign: "left" }}>
-                      {["Fecha", "Efectivas", "Aceptadas", "SDD", "Spot", "No aceptadas", "", "AR"].map((h, i) => (
+                      {["Fecha", "Efectivas", "Aceptadas", "SDD", "Spot", "No aceptadas", "", "AR", "Hard"].map((h, i) => (
                         <th key={i} style={{ padding: "6px 8px", borderBottom: `1px solid ${RM_BORDER}`, fontWeight: 600 }}>{h}</th>
                       ))}
                     </tr>
@@ -6160,6 +6160,7 @@ function RechazosMeliMX() {
                             </div>
                           </td>
                           <td style={{ padding: "6px 8px" }}>{rmPct(rmAR(d))}</td>
+                          <td style={{ padding: "6px 8px", color: (d.hard_sdd + d.hard_spot) ? "#7f1d1d" : RM_MUTED, fontWeight: (d.hard_sdd + d.hard_spot) ? 700 : 400 }}>{d.hard_sdd + d.hard_spot}</td>
                         </tr>
                       );
                     })}
@@ -6178,7 +6179,7 @@ function RechazosMeliMX() {
                 <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 520 }}>
                   <thead>
                     <tr style={{ color: RM_MUTED, fontSize: 12, textAlign: "left" }}>
-                      {["#", "SC", "Efectivas", "SDD", "Spot", "Total", "AR", "% del total"].map(h => (
+                      {["#", "SC", "Efectivas", "SDD", "Spot", "Total", "AR", "% del total", "Hard SDD", "Hard Spot"].map(h => (
                         <th key={h} style={{ padding: "6px 8px", borderBottom: `1px solid ${RM_BORDER}`, fontWeight: 600 }}>{h}</th>
                       ))}
                     </tr>
@@ -6194,13 +6195,15 @@ function RechazosMeliMX() {
                         <td style={{ padding: "6px 8px", fontWeight: 700 }}>{s.na}</td>
                         <td style={{ padding: "6px 8px", color: rmAR(s) != null && rmAR(s) < 0.9 ? "#9a3c06" : "#1a1a1a" }}>{rmPct(rmAR(s))}</td>
                         <td style={{ padding: "6px 8px" }}>{rmPct(s.share)}</td>
+                        <td style={{ padding: "6px 8px", color: s.hard_sdd ? "#7f1d1d" : RM_MUTED, fontWeight: s.hard_sdd ? 700 : 400 }}>{s.hard_sdd}</td>
+                        <td style={{ padding: "6px 8px", color: s.hard_spot ? "#7f1d1d" : RM_MUTED, fontWeight: s.hard_spot ? 700 : 400 }}>{s.hard_spot}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
               <div style={{ fontSize: 12, color: RM_MUTED, marginTop: 8, lineHeight: 1.5 }}>
-                AR = aceptadas ÷ efectivas (ofrecidas menos canceladas por MELI y menos las que siguen por responder). Las vencidas sin responder MELI las cuenta como rechazo.
+                AR = aceptadas ÷ efectivas (ofrecidas menos canceladas por MELI y menos las que siguen por responder). Las vencidas sin responder MELI las cuenta como rechazo. Hard = aceptadas de días ya cerrados que nunca tuvieron placa y chofer asignados.
               </div>
             </div>
           </div>
