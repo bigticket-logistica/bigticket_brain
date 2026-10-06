@@ -6006,6 +6006,7 @@ function RechazosMeliMX() {
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState(null);
   const [diaSel, setDiaSel] = useState(null);
+  const [detalle, setDetalle] = useState(null); // tarjeta abierta
 
   const meses = useMemo(() => {
     const out = []; let [y, m] = RM_INICIO.split("-").map(Number);
@@ -6019,11 +6020,11 @@ function RechazosMeliMX() {
   useEffect(() => {
     let vivo = true;
     (async () => {
-      setCargando(true); setError(null); setDiaSel(null);
+      setCargando(true); setError(null); setDiaSel(null); setDetalle(null);
       try {
         const todas = [];
         for (let desde = 0; ; desde += 1000) {
-          const { data, error: e } = await sb.from("mx_pedidos_estado").select("request_id, facility_id, fecha_ruta, status, es_sdd, vehiculo, tipo, eta, creado_meli, rosterizado")
+          const { data, error: e } = await sb.from("mx_pedidos_estado").select("request_id, travel_id, facility_id, fecha_ruta, status, es_sdd, vehiculo, tipo, eta, creado_meli, rosterizado, placa, chofer")
             .gte("fecha_ruta", mes + "-01").lte("fecha_ruta", hastaVista).order("request_id").range(desde, desde + 999);
           if (e) throw e;
           todas.push(...(data || []));
@@ -6070,11 +6071,14 @@ function RechazosMeliMX() {
     await descargarExcelMultihoja([{ nombre: "Diario", datos: diario }, { nombre: "Ranking SC", datos: ranking }, { nombre: "Detalle no aceptadas", datos: detalle }], `rechazos_meli_${mes}`);
   };
 
-  const Kpi = ({ titulo, valor, sub, color }) => (
-    <div style={{ ...card, padding: "14px 16px", borderTop: `4px solid ${color}` }}>
+  const Kpi = ({ titulo, valor, sub, color, id }) => (
+    <div onClick={() => setDetalle(detalle === id ? null : id)} title="Ver el detalle"
+      style={{ ...card, padding: "14px 16px", borderTop: `4px solid ${color}`, cursor: "pointer",
+               outline: detalle === id ? `2px solid ${color}` : "none", outlineOffset: -2 }}>
       <div style={{ fontSize: 12, color: RM_MUTED }}>{titulo}</div>
       <div style={{ fontSize: 28, fontWeight: 700, color, fontVariantNumeric: "tabular-nums" }}>{valor}</div>
       {sub && <div style={{ fontSize: 12, color: RM_MUTED }}>{sub}</div>}
+      <div style={{ fontSize: 11, color: color, marginTop: 4, fontWeight: 600 }}>{detalle === id ? "Ocultar detalle ▲" : "Ver detalle ▼"}</div>
     </div>
   );
   const ListaTop = ({ titulo, campo, color }) => {
@@ -6119,13 +6123,72 @@ function RechazosMeliMX() {
       {!cargando && !error && (
         <>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 12 }}>
-            <Kpi titulo="Efectivas" valor={rmN(rmEfect(total))} sub={`ofrecidas ${rmN(total.total)} − canceladas MELI ${rmN(total.cancel)}`} color={RM_NAVY} />
-            <Kpi titulo="Aceptadas" valor={rmN(total.acept)} sub={`AR ${rmPct(rmAR(total))}`} color="#166534" />
-            <Kpi titulo="No aceptadas (soft)" valor={rmN(rmNoAcept(total))} sub={`SDD ${rmN(total.na_sdd)} · Spot ${rmN(total.na_spot)}`} color={RM_ORANGE} />
-            <Kpi titulo="Rechazadas" valor={rmN(total.rech)} sub="respondidas con rechazo" color="#9a3c06" />
-            <Kpi titulo="Vencidas sin responder" valor={rmN(total.venc)} sub="nadie respondió en 30 min" color="#991b1b" />
-            <Kpi titulo="No show hard (sin placa ni chofer)" valor={rmN(total.hard_sdd + total.hard_spot)} sub={`SDD ${rmN(total.hard_sdd)} · Spot ${rmN(total.hard_spot)} · aceptadas no rosterizadas`} color="#7f1d1d" />
+            <Kpi id="efectivas" titulo="Efectivas" valor={rmN(rmEfect(total))} sub={`ofrecidas ${rmN(total.total)} − canceladas MELI ${rmN(total.cancel)}`} color={RM_NAVY} />
+            <Kpi id="aceptadas" titulo="Aceptadas" valor={rmN(total.acept)} sub={`AR ${rmPct(rmAR(total))}`} color="#166534" />
+            <Kpi id="soft" titulo="No aceptadas (soft)" valor={rmN(rmNoAcept(total))} sub={`SDD ${rmN(total.na_sdd)} · Spot ${rmN(total.na_spot)}`} color={RM_ORANGE} />
+            <Kpi id="rechazadas" titulo="Rechazadas" valor={rmN(total.rech)} sub="respondidas con rechazo" color="#9a3c06" />
+            <Kpi id="vencidas" titulo="Vencidas sin responder" valor={rmN(total.venc)} sub="nadie respondió en 30 min" color="#991b1b" />
+            <Kpi id="hard" titulo="No show hard (sin placa ni chofer)" valor={rmN(total.hard_sdd + total.hard_spot)} sub={`SDD ${rmN(total.hard_sdd)} · Spot ${rmN(total.hard_spot)} · aceptadas no rosterizadas`} color="#7f1d1d" />
           </div>
+
+          {detalle && (() => {
+            const hoyOp = fechaHoyOperativa();
+            const FILTROS = {
+              efectivas: { t: "Efectivas", f: p => p.status !== "canceled" },
+              aceptadas: { t: "Aceptadas", f: p => p.status === "accepted" },
+              soft: { t: "No aceptadas (soft)", f: p => p.status === "rejected" || p.status === "expired" },
+              rechazadas: { t: "Rechazadas", f: p => p.status === "rejected" },
+              vencidas: { t: "Vencidas sin responder", f: p => p.status === "expired" },
+              hard: { t: "No show hard (sin placa ni chofer)", f: p => p.status === "accepted" && p.rosterizado === false && p.fecha_ruta < hoyOp },
+            };
+            const def = FILTROS[detalle];
+            const lista = filas.filter(def.f).filter(p => !diaSel || p.fecha_ruta === diaSel)
+              .sort((a, b) => b.fecha_ruta.localeCompare(a.fecha_ruta) || a.facility_id.localeCompare(b.facility_id));
+            const hora = iso => iso ? new Date(iso).toLocaleTimeString("es-MX", { timeZone: "America/Mexico_City", hour: "2-digit", minute: "2-digit" }) : "—";
+            const ESTADO = { accepted: "Aceptada", rejected: "Rechazada", expired: "Vencida sin responder", canceled: "Cancelada MELI", pending: "Por responder" };
+            const bajar = () => descargarExcelMultihoja([{ nombre: def.t.slice(0, 30), datos: [["Fecha ruta", "SC", "Modelo", "Estado", "Vehículo", "Tipo", "Llegada (MX)", "Travel", "Placa", "Chofer", "Request ID"],
+              ...lista.map(p => [p.fecha_ruta, p.facility_id, p.es_sdd ? "SDD" : "Spot", ESTADO[p.status] || p.status, p.vehiculo, p.tipo === "urgent" ? "Urgente" : "Regular", hora(p.eta), p.travel_id, p.placa || "", p.chofer || "", p.request_id])] }],
+              `${detalle}_${diaSel || mes}`);
+            return (
+              <div style={card}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
+                  <div style={{ fontSize: 16, fontWeight: 700 }}>{def.t} · {diaSel ? `${diaSel.slice(8, 10)}/${diaSel.slice(5, 7)}` : etiquetaMes(mes)} · {lista.length} rutas</div>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button onClick={bajar} disabled={!lista.length} style={{ border: `1px solid ${RM_NAVY}`, background: "#fff", color: RM_NAVY, borderRadius: 8, padding: "6px 12px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Descargar Excel</button>
+                    <button onClick={() => setDetalle(null)} style={{ border: `1px solid ${RM_BORDER}`, background: "#fff", borderRadius: 8, padding: "6px 12px", fontSize: 12, cursor: "pointer" }}>Cerrar</button>
+                  </div>
+                </div>
+                <div style={{ overflowX: "auto", maxHeight: 420, overflowY: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 820 }}>
+                    <thead>
+                      <tr style={{ color: RM_MUTED, fontSize: 12, textAlign: "left", position: "sticky", top: 0, background: "#fff" }}>
+                        {["Fecha", "SC", "Modelo", "Estado", "Vehículo", "Tipo", "Llegada", "Travel", "Placa", "Chofer"].map(h => (
+                          <th key={h} style={{ padding: "6px 8px", borderBottom: `1px solid ${RM_BORDER}`, fontWeight: 600, background: "#fff" }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {lista.map(p => (
+                        <tr key={p.request_id} style={{ borderBottom: "1px solid #f0f1f3" }}>
+                          <td style={{ padding: "6px 8px", whiteSpace: "nowrap" }}>{p.fecha_ruta.slice(8, 10)}/{p.fecha_ruta.slice(5, 7)}</td>
+                          <td style={{ padding: "6px 8px", fontWeight: 700 }}>{p.facility_id}</td>
+                          <td style={{ padding: "6px 8px", color: p.es_sdd ? RM_NAVY : RM_ORANGE, fontWeight: 600 }}>{p.es_sdd ? "SDD" : "Spot"}</td>
+                          <td style={{ padding: "6px 8px" }}>{ESTADO[p.status] || p.status}</td>
+                          <td style={{ padding: "6px 8px" }}>{p.vehiculo}</td>
+                          <td style={{ padding: "6px 8px", color: p.tipo === "urgent" ? "#991b1b" : RM_MUTED }}>{p.tipo === "urgent" ? "Urgente" : "Regular"}</td>
+                          <td style={{ padding: "6px 8px" }}>{hora(p.eta)}</td>
+                          <td style={{ padding: "6px 8px", fontVariantNumeric: "tabular-nums" }}>{p.travel_id}</td>
+                          <td style={{ padding: "6px 8px" }}>{p.placa || "—"}</td>
+                          <td style={{ padding: "6px 8px" }}>{p.chofer || "—"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                {lista.length === 0 && <div style={{ fontSize: 13, color: RM_MUTED, marginTop: 8 }}>Sin rutas en esta categoría.</div>}
+              </div>
+            );
+          })()}
 
           <div style={{ display: "flex", gap: 18, alignItems: "flex-start", flexWrap: "wrap" }}>
             <div style={{ ...card, flex: "1 1 560px", minWidth: 0 }}>
