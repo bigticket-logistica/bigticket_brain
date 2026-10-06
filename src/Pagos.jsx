@@ -5982,12 +5982,18 @@ const RM_MESES = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio"
 const RM_DIAS = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"];
 const RM_NAVY = "#1a3a6b", RM_ORANGE = "#F47B20", RM_MUTED = "#5b6474", RM_BORDER = "#e4e7ec";
 
-function rmBase() { return { total: 0, cancel: 0, acept: 0, rech: 0, venc: 0, pend: 0, na_sdd: 0, na_spot: 0, ef_sdd: 0, ef_spot: 0, hard_sdd: 0, hard_spot: 0 }; }
+function rmBase() { return { total: 0, cancel: 0, acept: 0, rech: 0, venc: 0, pend: 0, na_sdd: 0, na_spot: 0, ef_sdd: 0, ef_spot: 0, hard_sdd: 0, hard_spot: 0, ss_sdd: 0, ss_spot: 0 }; }
 function rmSumar(b, p) {
   b.total++;
   if (p.status === "canceled") { b.cancel++; return; }
   if (p.es_sdd) b.ef_sdd++; else b.ef_spot++;
-  if (p.status === "accepted") { b.acept++; if (p.rosterizado === false && p.fecha_ruta < fechaHoyOperativa()) { p.es_sdd ? b.hard_sdd++ : b.hard_spot++; } }
+  if (p.status === "accepted") {
+    b.acept++;
+    if (p.fecha_ruta < fechaHoyOperativa()) {
+      if (p.rosterizado === false) { p.es_sdd ? b.hard_sdd++ : b.hard_spot++; }
+      else if (p.rosterizado === true && p.travel_status_final === "created") { p.es_sdd ? b.ss_sdd++ : b.ss_spot++; }
+    }
+  }
   else if (p.status === "rejected") { b.rech++; p.es_sdd ? b.na_sdd++ : b.na_spot++; }
   else if (p.status === "expired") { b.venc++; p.es_sdd ? b.na_sdd++ : b.na_spot++; }
   else if (p.status === "pending") b.pend++;
@@ -5998,7 +6004,7 @@ const rmAR = b => (rmEfect(b) - b.pend) > 0 ? b.acept / (rmEfect(b) - b.pend) : 
 const rmPct = v => v == null ? "—" : (v * 100).toLocaleString("es-MX", { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + "%";
 const rmN = v => Number(v || 0).toLocaleString("es-MX");
 
-function RechazosMeliMX() {
+function RechazosMeliMX({ usuario }) {
   const hoy = fechaHoyOperativa();
   const mesActual = hoy.slice(0, 7);
   const [mes, setMes] = useState(mesActual);
@@ -6007,6 +6013,7 @@ function RechazosMeliMX() {
   const [error, setError] = useState(null);
   const [diaSel, setDiaSel] = useState(null);
   const [detalle, setDetalle] = useState(null); // tarjeta abierta
+  const [revisiones, setRevisiones] = useState({}); // request_id → revisión del analista
 
   const meses = useMemo(() => {
     const out = []; let [y, m] = RM_INICIO.split("-").map(Number);
@@ -6024,13 +6031,14 @@ function RechazosMeliMX() {
       try {
         const todas = [];
         for (let desde = 0; ; desde += 1000) {
-          const { data, error: e } = await sb.from("mx_pedidos_estado").select("request_id, travel_id, facility_id, fecha_ruta, status, es_sdd, vehiculo, tipo, eta, creado_meli, rosterizado, placa, chofer")
+          const { data, error: e } = await sb.from("mx_pedidos_estado").select("request_id, travel_id, facility_id, fecha_ruta, status, es_sdd, vehiculo, tipo, eta, creado_meli, rosterizado, placa, chofer, travel_status_final, ultima_captura")
             .gte("fecha_ruta", mes + "-01").lte("fecha_ruta", hastaVista).order("request_id").range(desde, desde + 999);
           if (e) throw e;
           todas.push(...(data || []));
           if (!data || data.length < 1000) break;
         }
-        if (vivo) setFilas(todas);
+        const { data: rev } = await sb.from("mx_hard_revision").select("*").gte("fecha_ruta", mes + "-01").lte("fecha_ruta", hastaVista);
+        if (vivo) { setFilas(todas); setRevisiones(Object.fromEntries((rev || []).map(r => [String(r.request_id), r]))); }
       } catch (e) { if (vivo) setError(e.message || String(e)); }
       finally { if (vivo) setCargando(false); }
     })();
@@ -6122,14 +6130,16 @@ function RechazosMeliMX() {
 
       {!cargando && !error && (
         <>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 12 }}>
+          <div style={{ overflowX: "auto" }}><div style={{ display: "grid", gridTemplateColumns: "repeat(7, minmax(150px, 1fr))", gap: 12, minWidth: 1100 }}>
             <Kpi id="efectivas" titulo="Efectivas" valor={rmN(rmEfect(total))} sub={`ofrecidas ${rmN(total.total)} − canceladas MELI ${rmN(total.cancel)}`} color={RM_NAVY} />
             <Kpi id="aceptadas" titulo="Aceptadas" valor={rmN(total.acept)} sub={`AR ${rmPct(rmAR(total))}`} color="#166534" />
             <Kpi id="soft" titulo="No aceptadas (soft)" valor={rmN(rmNoAcept(total))} sub={`SDD ${rmN(total.na_sdd)} · Spot ${rmN(total.na_spot)}`} color={RM_ORANGE} />
             <Kpi id="rechazadas" titulo="Rechazadas" valor={rmN(total.rech)} sub="respondidas con rechazo" color="#9a3c06" />
             <Kpi id="vencidas" titulo="Vencidas sin responder" valor={rmN(total.venc)} sub="nadie respondió en 30 min" color="#991b1b" />
-            <Kpi id="hard" titulo="No show hard (sin placa ni chofer)" valor={rmN(total.hard_sdd + total.hard_spot)} sub={`SDD ${rmN(total.hard_sdd)} · Spot ${rmN(total.hard_spot)} · aceptadas no rosterizadas`} color="#7f1d1d" />
-          </div>
+            <Kpi id="hard" titulo="Hard: sin placa ni chofer" valor={rmN(total.hard_sdd + total.hard_spot)} sub={`SDD ${rmN(total.hard_sdd)} · Spot ${rmN(total.hard_spot)} · nunca se asignó`} color="#7f1d1d" />
+            <Kpi id="sin_salir" titulo="Asignada sin salir (investigar)" valor={rmN(total.ss_sdd + total.ss_spot)}
+              sub={`SDD ${rmN(total.ss_sdd)} · Spot ${rmN(total.ss_spot)} · ${filas.filter(p => p.status === "accepted" && p.rosterizado === true && p.travel_status_final === "created" && p.fecha_ruta < fechaHoyOperativa() && !revisiones[String(p.request_id)]).length} sin revisar`} color="#6b21a8" />
+          </div></div>
 
           {detalle && (() => {
             const hoyOp = fechaHoyOperativa();
@@ -6139,15 +6149,25 @@ function RechazosMeliMX() {
               soft: { t: "No aceptadas (soft)", f: p => p.status === "rejected" || p.status === "expired" },
               rechazadas: { t: "Rechazadas", f: p => p.status === "rejected" },
               vencidas: { t: "Vencidas sin responder", f: p => p.status === "expired" },
-              hard: { t: "No show hard (sin placa ni chofer)", f: p => p.status === "accepted" && p.rosterizado === false && p.fecha_ruta < hoyOp },
+              hard: { t: "Hard: sin placa ni chofer", f: p => p.status === "accepted" && p.rosterizado === false && p.fecha_ruta < hoyOp },
+              sin_salir: { t: "Asignada sin salir (investigar)", f: p => p.status === "accepted" && p.rosterizado === true && p.travel_status_final === "created" && p.fecha_ruta < hoyOp },
             };
             const def = FILTROS[detalle];
             const lista = filas.filter(def.f).filter(p => !diaSel || p.fecha_ruta === diaSel)
               .sort((a, b) => b.fecha_ruta.localeCompare(a.fecha_ruta) || a.facility_id.localeCompare(b.facility_id));
             const hora = iso => iso ? new Date(iso).toLocaleTimeString("es-MX", { timeZone: "America/Mexico_City", hour: "2-digit", minute: "2-digit" }) : "—";
             const ESTADO = { accepted: "Aceptada", rejected: "Rechazada", expired: "Vencida sin responder", canceled: "Cancelada MELI", pending: "Por responder" };
-            const bajar = () => descargarExcelMultihoja([{ nombre: def.t.slice(0, 30), datos: [["Fecha ruta", "SC", "Modelo", "Estado", "Vehículo", "Tipo", "Llegada (MX)", "Travel", "Placa", "Chofer", "Request ID"],
-              ...lista.map(p => [p.fecha_ruta, p.facility_id, p.es_sdd ? "SDD" : "Spot", ESTADO[p.status] || p.status, p.vehiculo, p.tipo === "urgent" ? "Urgente" : "Regular", hora(p.eta), p.travel_id, p.placa || "", p.chofer || "", p.request_id])] }],
+            const conRevision = detalle === "hard" || detalle === "sin_salir";
+            const RESULTADOS = { no_show: "No show confirmado", cancelada_meli: "Cancelada por MELI", salio: "Sí salió (error de dato)", otro: "Otro" };
+            const guardarRevision = async (p, resultado) => {
+              const fila = { request_id: p.request_id, fecha_ruta: p.fecha_ruta, resultado: resultado || null,
+                             revisado_por: usuario?.email || usuario?.nombre || null, revisado_at: new Date().toISOString() };
+              const { error: e } = await sb.from("mx_hard_revision").upsert(fila, { onConflict: "request_id" });
+              if (e) { alert("No se pudo guardar la revisión: " + e.message); return; }
+              setRevisiones(r => ({ ...r, [String(p.request_id)]: fila }));
+            };
+            const bajar = () => descargarExcelMultihoja([{ nombre: def.t.slice(0, 30), datos: [["Fecha ruta", "SC", "Modelo", "Estado", "Vehículo", "Tipo", "Llegada (MX)", "Travel", "Placa", "Chofer", "Estado del viaje", "Revisión", "Revisado por", "Request ID"],
+              ...lista.map(p => { const rv = revisiones[String(p.request_id)]; return [p.fecha_ruta, p.facility_id, p.es_sdd ? "SDD" : "Spot", ESTADO[p.status] || p.status, p.vehiculo, p.tipo === "urgent" ? "Urgente" : "Regular", hora(p.eta), p.travel_id, p.placa || "", p.chofer || "", p.travel_status_final || "", rv ? (RESULTADOS[rv.resultado] || "") : "", rv?.revisado_por || "", p.request_id]; })] }],
               `${detalle}_${diaSel || mes}`);
             return (
               <div style={card}>
@@ -6159,10 +6179,10 @@ function RechazosMeliMX() {
                   </div>
                 </div>
                 <div style={{ overflowX: "auto", maxHeight: 420, overflowY: "auto" }}>
-                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 820 }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: conRevision ? 1100 : 820 }}>
                     <thead>
                       <tr style={{ color: RM_MUTED, fontSize: 12, textAlign: "left", position: "sticky", top: 0, background: "#fff" }}>
-                        {["Fecha", "SC", "Modelo", "Estado", "Vehículo", "Tipo", "Llegada", "Travel", "Placa", "Chofer"].map(h => (
+                        {["Fecha", "SC", "Modelo", "Estado", "Vehículo", "Tipo", "Llegada", "Travel", "Placa", "Chofer", ...(conRevision ? ["Estado del viaje", "Revisión del analista"] : [])].map(h => (
                           <th key={h} style={{ padding: "6px 8px", borderBottom: `1px solid ${RM_BORDER}`, fontWeight: 600, background: "#fff" }}>{h}</th>
                         ))}
                       </tr>
@@ -6180,12 +6200,24 @@ function RechazosMeliMX() {
                           <td style={{ padding: "6px 8px", fontVariantNumeric: "tabular-nums" }}>{p.travel_id}</td>
                           <td style={{ padding: "6px 8px" }}>{p.placa || "—"}</td>
                           <td style={{ padding: "6px 8px" }}>{p.chofer || "—"}</td>
+                          {conRevision && <td style={{ padding: "6px 8px", color: RM_MUTED }}>{p.travel_status_final || "sin dato"}</td>}
+                          {conRevision && (
+                            <td style={{ padding: "6px 8px" }}>
+                              <select value={revisiones[String(p.request_id)]?.resultado || ""} onChange={e => guardarRevision(p, e.target.value)}
+                                style={{ padding: "4px 6px", borderRadius: 6, border: `1px solid ${revisiones[String(p.request_id)]?.resultado ? "#15803d" : "#f59e0b"}`, fontSize: 12, background: "#fff" }}>
+                                <option value="">Sin revisar</option>
+                                {Object.entries(RESULTADOS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                              </select>
+                              {revisiones[String(p.request_id)]?.revisado_por && <div style={{ fontSize: 10, color: RM_MUTED, marginTop: 2 }}>{revisiones[String(p.request_id)].revisado_por}</div>}
+                            </td>
+                          )}
                         </tr>
                       ))}
                     </tbody>
                   </table>
                 </div>
                 {lista.length === 0 && <div style={{ fontSize: 13, color: RM_MUTED, marginTop: 8 }}>Sin rutas en esta categoría.</div>}
+                {detalle === "sin_salir" && <div style={{ fontSize: 12, color: RM_MUTED, marginTop: 8, lineHeight: 1.5 }}>Rutas aceptadas que tuvieron placa y chofer pero el viaje nunca salió (quedó en "created"). Pueden ser no show o una cancelación de MELI: el analista debe revisar cada una en el portal y marcar el resultado.</div>}
               </div>
             );
           })()}
@@ -6358,7 +6390,7 @@ function ModuloPagosMadre({ usuario }) {
           {subtab === "conciliacion" && <ConciliacionTercerosMX usuario={usuario} />}
           {subtab === "facturacion_terceros" && <FacturacionTerceros usuario={usuario} />}
           {subtab === "pnr_cobros"  && <CobrosTerceros usuario={usuario} />}
-      {subtab === "rechazos_meli" && <RechazosMeliMX />}
+      {subtab === "rechazos_meli" && <RechazosMeliMX usuario={usuario} />}
           {subtab === "diferencias" && <Diferencias usuario={usuario} />}
           {subtab === "comparativa" && <Comparativa />}
           {subtab === "historial_pago" && <HistorialPagoMX usuario={usuario} />}
