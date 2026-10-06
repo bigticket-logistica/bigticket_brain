@@ -5973,6 +5973,248 @@ function TercerosMX() {
   );
 }
 
+// ═══════════════════════════════════════════════════════════════════
+//  RECHAZOS MELI · historial de rutas no aceptadas (no show soft) por mes, día y SC
+//  Fuente: mx_pedidos_estado (proceso pedidos-watch cada 5 min + carga histórica desde 01-08-2026)
+// ═══════════════════════════════════════════════════════════════════
+const RM_INICIO = "2026-08";
+const RM_MESES = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"];
+const RM_DIAS = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"];
+const RM_NAVY = "#1a3a6b", RM_ORANGE = "#F47B20", RM_MUTED = "#5b6474", RM_BORDER = "#e4e7ec";
+
+function rmBase() { return { total: 0, cancel: 0, acept: 0, rech: 0, venc: 0, pend: 0, na_sdd: 0, na_spot: 0, ef_sdd: 0, ef_spot: 0 }; }
+function rmSumar(b, p) {
+  b.total++;
+  if (p.status === "canceled") { b.cancel++; return; }
+  if (p.es_sdd) b.ef_sdd++; else b.ef_spot++;
+  if (p.status === "accepted") b.acept++;
+  else if (p.status === "rejected") { b.rech++; p.es_sdd ? b.na_sdd++ : b.na_spot++; }
+  else if (p.status === "expired") { b.venc++; p.es_sdd ? b.na_sdd++ : b.na_spot++; }
+  else if (p.status === "pending") b.pend++;
+}
+const rmEfect = b => b.total - b.cancel;
+const rmNoAcept = b => b.rech + b.venc;
+const rmAR = b => (rmEfect(b) - b.pend) > 0 ? b.acept / (rmEfect(b) - b.pend) : null;
+const rmPct = v => v == null ? "—" : (v * 100).toLocaleString("es-MX", { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + "%";
+const rmN = v => Number(v || 0).toLocaleString("es-MX");
+
+function RechazosMeliMX() {
+  const hoy = fechaHoyOperativa();
+  const mesActual = hoy.slice(0, 7);
+  const [mes, setMes] = useState(mesActual);
+  const [filas, setFilas] = useState([]);
+  const [cargando, setCargando] = useState(true);
+  const [error, setError] = useState(null);
+  const [diaSel, setDiaSel] = useState(null);
+
+  const meses = useMemo(() => {
+    const out = []; let [y, m] = RM_INICIO.split("-").map(Number);
+    const [yf, mf] = mesActual.split("-").map(Number);
+    while (y < yf || (y === yf && m <= mf)) { out.push(`${y}-${String(m).padStart(2, "0")}`); m++; if (m > 12) { m = 1; y++; } }
+    return out;
+  }, [mesActual]);
+  const finMes = (() => { const [y, m] = mes.split("-").map(Number); return new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10); })();
+  const hastaVista = mes === mesActual ? hoy : finMes;
+
+  useEffect(() => {
+    let vivo = true;
+    (async () => {
+      setCargando(true); setError(null); setDiaSel(null);
+      try {
+        const todas = [];
+        for (let desde = 0; ; desde += 1000) {
+          const { data, error: e } = await sb.from("mx_pedidos_estado").select("request_id, facility_id, fecha_ruta, status, es_sdd, vehiculo, tipo, eta, creado_meli")
+            .gte("fecha_ruta", mes + "-01").lte("fecha_ruta", hastaVista).order("request_id").range(desde, desde + 999);
+          if (e) throw e;
+          todas.push(...(data || []));
+          if (!data || data.length < 1000) break;
+        }
+        if (vivo) setFilas(todas);
+      } catch (e) { if (vivo) setError(e.message || String(e)); }
+      finally { if (vivo) setCargando(false); }
+    })();
+    return () => { vivo = false; };
+  }, [mes, hastaVista]);
+
+  const { total, dias, svcs } = useMemo(() => {
+    const t = rmBase(), porDia = {}, porSvc = {};
+    for (const p of filas) {
+      rmSumar(t, p);
+      rmSumar(porDia[p.fecha_ruta] = porDia[p.fecha_ruta] || rmBase(), p);
+      if (!diaSel || p.fecha_ruta === diaSel) rmSumar(porSvc[p.facility_id] = porSvc[p.facility_id] || rmBase(), p);
+    }
+    const listaDias = [];
+    for (let d = mes + "-01"; d <= hastaVista; ) {
+      listaDias.push({ fecha: d, ...(porDia[d] || rmBase()) });
+      const x = new Date(d + "T12:00:00Z"); x.setUTCDate(x.getUTCDate() + 1); d = x.toISOString().slice(0, 10);
+    }
+    const totNA = Object.values(porSvc).reduce((a, b) => a + rmNoAcept(b), 0);
+    const listaSvc = Object.entries(porSvc).map(([svc, b]) => ({ svc, ...b, na: rmNoAcept(b), share: totNA ? rmNoAcept(b) / totNA : 0 }))
+      .sort((a, b) => b.na - a.na || rmEfect(b) - rmEfect(a));
+    return { total: t, dias: listaDias, svcs: listaSvc };
+  }, [filas, diaSel, mes, hastaVista]);
+
+  const maxNA = Math.max(1, ...dias.map(d => rmNoAcept(d)));
+  const card = { background: "#fff", border: `1px solid ${RM_BORDER}`, borderRadius: 12, padding: "18px 22px" };
+  const etiquetaMes = m => `${RM_MESES[Number(m.slice(5, 7)) - 1]} ${m.slice(0, 4)}`;
+  const idx = meses.indexOf(mes);
+
+  const descargar = async () => {
+    const diario = [["Fecha", "Día", "Efectivas", "Aceptadas", "Rechazadas", "Vencidas sin responder", "No aceptadas SDD", "No aceptadas Spot", "No aceptadas total", "Canceladas MELI", "AR"]];
+    for (const d of dias) diario.push([d.fecha, RM_DIAS[new Date(d.fecha + "T12:00:00Z").getUTCDay()], rmEfect(d), d.acept, d.rech, d.venc, d.na_sdd, d.na_spot, rmNoAcept(d), d.cancel, rmAR(d) == null ? "" : Number((rmAR(d) * 100).toFixed(1))]);
+    const ranking = [["#", "SC", "Efectivas", "Aceptadas", "No aceptadas SDD", "No aceptadas Spot", "No aceptadas total", "AR", "% del total"]];
+    svcs.forEach((s, i) => ranking.push([i + 1, s.svc, rmEfect(s), s.acept, s.na_sdd, s.na_spot, s.na, rmAR(s) == null ? "" : Number((rmAR(s) * 100).toFixed(1)), Number((s.share * 100).toFixed(1))]));
+    const detalle = [["Fecha ruta", "SC", "Modelo", "Estado", "Vehículo", "Tipo", "Request ID"]];
+    for (const p of filas.filter(x => x.status === "rejected" || x.status === "expired").sort((a, b) => a.fecha_ruta.localeCompare(b.fecha_ruta) || a.facility_id.localeCompare(b.facility_id)))
+      detalle.push([p.fecha_ruta, p.facility_id, p.es_sdd ? "SDD" : "Spot", p.status === "expired" ? "Vencido sin responder" : "Rechazado", p.vehiculo, p.tipo, p.request_id]);
+    await descargarExcelMultihoja([{ nombre: "Diario", datos: diario }, { nombre: "Ranking SC", datos: ranking }, { nombre: "Detalle no aceptadas", datos: detalle }], `rechazos_meli_${mes}`);
+  };
+
+  const Kpi = ({ titulo, valor, sub, color }) => (
+    <div style={{ ...card, padding: "14px 16px", borderTop: `4px solid ${color}` }}>
+      <div style={{ fontSize: 12, color: RM_MUTED }}>{titulo}</div>
+      <div style={{ fontSize: 28, fontWeight: 700, color, fontVariantNumeric: "tabular-nums" }}>{valor}</div>
+      {sub && <div style={{ fontSize: 12, color: RM_MUTED }}>{sub}</div>}
+    </div>
+  );
+  const ListaTop = ({ titulo, campo, color }) => {
+    const l = svcs.filter(s => s[campo] > 0).sort((a, b) => b[campo] - a[campo]);
+    const max = Math.max(1, ...l.map(s => s[campo]));
+    return (
+      <div style={{ ...card, flex: "1 1 280px" }}>
+        <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 10 }}>{titulo}</div>
+        {l.length === 0 && <div style={{ fontSize: 13, color: RM_MUTED }}>Sin rutas no aceptadas.</div>}
+        {l.map((s, i) => (
+          <div key={s.svc} style={{ marginBottom: 8 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}><span><span style={{ color: RM_MUTED }}>#{i + 1}</span> <b>{s.svc}</b></span><b>{s[campo]}</b></div>
+            <div style={{ height: 6, background: "#f1f2f4", borderRadius: 3 }}><div style={{ width: `${(s[campo] / max) * 100}%`, height: 6, background: color, borderRadius: 3 }} /></div>
+          </div>
+        ))}
+      </div>
+    );
+  };
+
+  return (
+    <div style={{ padding: 24, background: "#f0f2f5", minHeight: "100%", display: "flex", flexDirection: "column", gap: 18 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", gap: 16, flexWrap: "wrap" }}>
+        <div>
+          <div style={{ fontSize: 24, fontWeight: 700, color: RM_NAVY }}>Rechazos de rutas MELI</div>
+          <div style={{ fontSize: 13, color: RM_MUTED, marginTop: 4, maxWidth: 820, lineHeight: 1.5 }}>
+            Rutas que MELI ofreció y Big Ticket no aceptó: rechazadas o vencidas sin responder (no show soft). Fuente: Pedidos de vehículos de MELI, actualizado cada 5 minutos.
+          </div>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <button disabled={idx <= 0} onClick={() => setMes(meses[idx - 1])} style={{ border: `1px solid ${RM_BORDER}`, background: "#fff", borderRadius: 8, padding: "6px 12px", cursor: idx <= 0 ? "default" : "pointer", opacity: idx <= 0 ? 0.4 : 1 }}>‹</button>
+          <select value={mes} onChange={e => setMes(e.target.value)} style={{ padding: "7px 10px", borderRadius: 8, border: `1px solid ${RM_BORDER}`, fontSize: 13, fontWeight: 600 }}>
+            {meses.map(m => <option key={m} value={m}>{etiquetaMes(m)}{m === mesActual ? " · en curso" : ""}</option>)}
+          </select>
+          <button disabled={idx >= meses.length - 1} onClick={() => setMes(meses[idx + 1])} style={{ border: `1px solid ${RM_BORDER}`, background: "#fff", borderRadius: 8, padding: "6px 12px", cursor: idx >= meses.length - 1 ? "default" : "pointer", opacity: idx >= meses.length - 1 ? 0.4 : 1 }}>›</button>
+          <button onClick={descargar} disabled={cargando || !filas.length} style={{ border: "none", background: RM_NAVY, color: "#fff", borderRadius: 8, padding: "8px 14px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>Descargar Excel</button>
+        </div>
+      </div>
+
+      {error && <div style={{ ...card, color: "#b42318" }}>No se pudieron leer los pedidos: {error}</div>}
+      {cargando && <div style={{ ...card, color: RM_MUTED }}>Cargando {etiquetaMes(mes)}…</div>}
+
+      {!cargando && !error && (
+        <>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 12 }}>
+            <Kpi titulo="Efectivas" valor={rmN(rmEfect(total))} sub={`ofrecidas ${rmN(total.total)} − canceladas MELI ${rmN(total.cancel)}`} color={RM_NAVY} />
+            <Kpi titulo="Aceptadas" valor={rmN(total.acept)} sub={`AR ${rmPct(rmAR(total))}`} color="#166534" />
+            <Kpi titulo="No aceptadas (soft)" valor={rmN(rmNoAcept(total))} sub={`SDD ${rmN(total.na_sdd)} · Spot ${rmN(total.na_spot)}`} color={RM_ORANGE} />
+            <Kpi titulo="Rechazadas" valor={rmN(total.rech)} sub="respondidas con rechazo" color="#9a3c06" />
+            <Kpi titulo="Vencidas sin responder" valor={rmN(total.venc)} sub="nadie respondió en 30 min" color="#991b1b" />
+            <Kpi titulo="No show hard" valor="—" sub="se suma con la etapa de rostering" color="#94a3b8" />
+          </div>
+
+          <div style={{ display: "flex", gap: 18, alignItems: "flex-start", flexWrap: "wrap" }}>
+            <div style={{ ...card, flex: "1 1 560px", minWidth: 0 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
+                <div style={{ fontSize: 16, fontWeight: 700 }}>Día a día · {etiquetaMes(mes)}</div>
+                <div style={{ fontSize: 12, color: RM_MUTED }}>Haz clic en un día para ver su ranking por SC</div>
+              </div>
+              <div style={{ overflowX: "auto", marginTop: 10 }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 640 }}>
+                  <thead>
+                    <tr style={{ color: RM_MUTED, fontSize: 12, textAlign: "left" }}>
+                      {["Fecha", "Efectivas", "Aceptadas", "SDD", "Spot", "No aceptadas", "", "AR"].map((h, i) => (
+                        <th key={i} style={{ padding: "6px 8px", borderBottom: `1px solid ${RM_BORDER}`, fontWeight: 600 }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {dias.map(d => {
+                      const na = rmNoAcept(d), sel = diaSel === d.fecha;
+                      return (
+                        <tr key={d.fecha} onClick={() => setDiaSel(sel ? null : d.fecha)} style={{ borderBottom: "1px solid #f0f1f3", cursor: "pointer", background: sel ? "#eef3fb" : "transparent" }}>
+                          <td style={{ padding: "6px 8px", whiteSpace: "nowrap" }}><b>{d.fecha.slice(8, 10)}/{d.fecha.slice(5, 7)}</b> <span style={{ color: RM_MUTED }}>{RM_DIAS[new Date(d.fecha + "T12:00:00Z").getUTCDay()]}</span></td>
+                          <td style={{ padding: "6px 8px" }}>{rmEfect(d) || "—"}</td>
+                          <td style={{ padding: "6px 8px" }}>{d.acept || "—"}</td>
+                          <td style={{ padding: "6px 8px", color: d.na_sdd ? RM_NAVY : RM_MUTED, fontWeight: d.na_sdd ? 700 : 400 }}>{d.na_sdd}</td>
+                          <td style={{ padding: "6px 8px", color: d.na_spot ? RM_ORANGE : RM_MUTED, fontWeight: d.na_spot ? 700 : 400 }}>{d.na_spot}</td>
+                          <td style={{ padding: "6px 8px", fontWeight: 700 }}>{na}</td>
+                          <td style={{ padding: "6px 8px", width: 160 }}>
+                            <div style={{ display: "flex", height: 10, borderRadius: 3, overflow: "hidden", background: "#f1f2f4" }}>
+                              <div style={{ width: `${(d.na_sdd / maxNA) * 100}%`, background: RM_NAVY }} />
+                              <div style={{ width: `${(d.na_spot / maxNA) * 100}%`, background: RM_ORANGE }} />
+                            </div>
+                          </td>
+                          <td style={{ padding: "6px 8px" }}>{rmPct(rmAR(d))}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <div style={{ fontSize: 12, color: RM_MUTED, marginTop: 8 }}>SDD y Spot = rutas no aceptadas de cada modelo. Barra: azul SDD, naranjo Spot.</div>
+            </div>
+
+            <div style={{ ...card, flex: "1 1 520px", minWidth: 0 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
+                <div style={{ fontSize: 16, fontWeight: 700 }}>Ranking por SC · {diaSel ? `${diaSel.slice(8, 10)}/${diaSel.slice(5, 7)}` : etiquetaMes(mes)}</div>
+                {diaSel && <button onClick={() => setDiaSel(null)} style={{ border: "none", background: "transparent", color: RM_NAVY, fontWeight: 600, cursor: "pointer", textDecoration: "underline", fontSize: 12 }}>Ver el mes completo</button>}
+              </div>
+              <div style={{ overflowX: "auto", marginTop: 10 }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 520 }}>
+                  <thead>
+                    <tr style={{ color: RM_MUTED, fontSize: 12, textAlign: "left" }}>
+                      {["#", "SC", "Efectivas", "SDD", "Spot", "Total", "AR", "% del total"].map(h => (
+                        <th key={h} style={{ padding: "6px 8px", borderBottom: `1px solid ${RM_BORDER}`, fontWeight: 600 }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {svcs.map((s, i) => (
+                      <tr key={s.svc} style={{ borderBottom: "1px solid #f0f1f3" }}>
+                        <td style={{ padding: "6px 8px", color: RM_MUTED }}>{i + 1}</td>
+                        <td style={{ padding: "6px 8px", fontWeight: 700 }}>{s.svc}</td>
+                        <td style={{ padding: "6px 8px" }}>{rmEfect(s)}</td>
+                        <td style={{ padding: "6px 8px", color: s.na_sdd ? RM_NAVY : RM_MUTED, fontWeight: s.na_sdd ? 700 : 400 }}>{s.na_sdd}</td>
+                        <td style={{ padding: "6px 8px", color: s.na_spot ? RM_ORANGE : RM_MUTED, fontWeight: s.na_spot ? 700 : 400 }}>{s.na_spot}</td>
+                        <td style={{ padding: "6px 8px", fontWeight: 700 }}>{s.na}</td>
+                        <td style={{ padding: "6px 8px", color: rmAR(s) != null && rmAR(s) < 0.9 ? "#9a3c06" : "#1a1a1a" }}>{rmPct(rmAR(s))}</td>
+                        <td style={{ padding: "6px 8px" }}>{rmPct(s.share)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div style={{ fontSize: 12, color: RM_MUTED, marginTop: 8, lineHeight: 1.5 }}>
+                AR = aceptadas ÷ efectivas (ofrecidas menos canceladas por MELI y menos las que siguen por responder). Las vencidas sin responder MELI las cuenta como rechazo.
+              </div>
+            </div>
+          </div>
+
+          <div style={{ display: "flex", gap: 18, flexWrap: "wrap" }}>
+            <ListaTop titulo={`Ranking SDD (flota fija) · ${diaSel ? diaSel.slice(8, 10) + "/" + diaSel.slice(5, 7) : etiquetaMes(mes)}`} campo="na_sdd" color={RM_NAVY} />
+            <ListaTop titulo={`Ranking Spot (flota variable) · ${diaSel ? diaSel.slice(8, 10) + "/" + diaSel.slice(5, 7) : etiquetaMes(mes)}`} campo="na_spot" color={RM_ORANGE} />
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function ModuloPagosMadre({ usuario }) {
   // Si el usuario tiene rol "prefacturas", solo puede acceder a la sub-tab Prefacturas.
   // Las otras sub-tabs siguen visibles pero al hacer click muestran un mensaje de bloqueo.
@@ -5992,6 +6234,7 @@ function ModuloPagosMadre({ usuario }) {
     { id: "conciliacion", label: "Conciliación Terceros", desc: "Conciliación semanal por empresa" },
     { id: "facturacion_terceros", label: "Facturación Terceros", desc: "Facturas que suben los terceros contra cada prefactura" },
     { id: "pnr_cobros",  label: "Cobros",                desc: "PNR, robos y extravíos, no show" },
+    { id: "rechazos_meli", label: "Rechazos MELI",      desc: "Rutas no aceptadas por mes, día y SC · SDD y Spot" },
     { id: "diferencias", label: "Diferencias",           desc: "Reclamos de terceros sobre pagos y cobros" },
     { id: "comparativa", label: "Comparativa",          desc: "Prefactura del lunes vs acumulado diario" },
     { id: "historial_pago", label: "Historial de Pago", desc: "Resumen semanal: cierres, cambios, saldos y reporte" },
@@ -6049,6 +6292,7 @@ function ModuloPagosMadre({ usuario }) {
           {subtab === "conciliacion" && <ConciliacionTercerosMX usuario={usuario} />}
           {subtab === "facturacion_terceros" && <FacturacionTerceros usuario={usuario} />}
           {subtab === "pnr_cobros"  && <CobrosTerceros usuario={usuario} />}
+      {subtab === "rechazos_meli" && <RechazosMeliMX />}
           {subtab === "diferencias" && <Diferencias usuario={usuario} />}
           {subtab === "comparativa" && <Comparativa />}
           {subtab === "historial_pago" && <HistorialPagoMX usuario={usuario} />}
