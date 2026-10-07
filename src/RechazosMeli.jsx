@@ -288,66 +288,93 @@ function RechazosMeliMX({ usuario }) {
 
       {!cargando && !error && (
         <>
-          {/* ═══ LO QUE PERDIMOS ═══ */}
-          <div style={{ background: "#7f1d1d", color: "#fff", borderRadius: 14, padding: "24px 28px", boxShadow: "0 6px 20px rgba(127,29,29,.25)" }}>
+          {/* ═══ LO QUE PERDIMOS (opción A: fondo blanco, rojo en los montos) ═══ */}
+          <div style={{ background: "#fff", border: `1px solid ${RM_BORDER}`, borderLeft: "6px solid #A32D2D", padding: "22px 26px" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 20, flexWrap: "wrap" }}>
-              <div>
-                <div style={{ fontSize: 14, letterSpacing: 1, textTransform: "uppercase", opacity: 0.85, fontWeight: 700 }}>Lo que perdimos en {etiquetaMes(mes)} por no aceptar o no hacer rutas</div>
-                <div style={{ fontSize: 64, fontWeight: 800, lineHeight: 1.05, marginTop: 6, fontVariantNumeric: "tabular-nums" }}>{rmPesos(costos.total.multa + costos.total.ingreso)}</div>
-                <div style={{ fontSize: 15, opacity: 0.9, marginTop: 4 }}>
+              <div style={{ flex: "1 1 360px" }}>
+                <div style={{ fontSize: 14, color: RM_MUTED, fontWeight: 600 }}>Lo que perdimos en {etiquetaMes(mes)} por no aceptar o no hacer rutas</div>
+                <div style={{ fontSize: 60, fontWeight: 800, lineHeight: 1.05, marginTop: 4, color: "#A32D2D", fontVariantNumeric: "tabular-nums" }}>−{rmPesos(costos.total.multa + costos.total.ingreso)}</div>
+                <div style={{ fontSize: 14, color: RM_MUTED, marginTop: 6 }}>
                   {rmN(costos.total.rutas)} rutas que no hicimos = {rmN(costos.svcs.reduce((x, v) => x + (v.soft || 0), 0))} que no aceptamos (rechazadas o vencidas) + {rmN(costos.svcs.reduce((x, v) => x + (v.hard || 0), 0))} que aceptamos y no salieron · MXN sin IVA
                 </div>
               </div>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(200px, 1fr))", gap: 12, flex: "1 1 440px", maxWidth: 620 }}>
-                <div style={{ background: "rgba(255,255,255,.12)", borderRadius: 10, padding: "14px 16px" }}>
-                  <div style={{ fontSize: 13, opacity: 0.85 }}>Multas que nos cobra MELI</div>
-                  <div style={{ fontSize: 32, fontWeight: 800, fontVariantNumeric: "tabular-nums" }}>{rmPesos(costos.total.multa)}</div>
-                  <div style={{ fontSize: 12, opacity: 0.8 }}>SDD: 75% de la tarifa por no aceptar, 100% por no hacer</div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(190px, 1fr))", gap: 10, flex: "1 1 440px", maxWidth: 620 }}>
+                <div style={{ background: "#FCEBEB", borderRadius: 10, padding: "12px 14px" }}>
+                  <div style={{ fontSize: 13, color: "#A32D2D" }}>Multas que nos cobra MELI</div>
+                  <div style={{ fontSize: 28, fontWeight: 800, color: "#791F1F", fontVariantNumeric: "tabular-nums" }}>{rmPesos(costos.total.multa)}</div>
+                  <div style={{ fontSize: 12, color: "#A32D2D" }}>SDD: 75% de la tarifa por no aceptar, 100% por no hacer</div>
                 </div>
-                <div style={{ background: "rgba(255,255,255,.12)", borderRadius: 10, padding: "14px 16px" }}>
-                  <div style={{ fontSize: 13, opacity: 0.85 }}>Lo que pudimos ganar haciendo esas rutas</div>
-                  <div style={{ fontSize: 32, fontWeight: 800, fontVariantNumeric: "tabular-nums" }}>{rmPesos(costos.total.ingreso)}</div>
-                  <div style={{ fontSize: 12, opacity: 0.8 }}>Tarifa de cada ruta no aceptada o no hecha (SDD y Spot)</div>
+                <div style={{ background: "#FAEEDA", borderRadius: 10, padding: "12px 14px" }}>
+                  <div style={{ fontSize: 13, color: "#854F0B" }}>Lo que pudimos ganar haciendo esas rutas</div>
+                  <div style={{ fontSize: 28, fontWeight: 800, color: "#633806", fontVariantNumeric: "tabular-nums" }}>{rmPesos(costos.total.ingreso)}</div>
+                  <div style={{ fontSize: 12, color: "#854F0B" }}>Tarifa de cada ruta no aceptada o no hecha (SDD y Spot)</div>
                 </div>
                 {costos.ultimo && (
-                  <div style={{ background: "rgba(255,255,255,.12)", borderRadius: 10, padding: "14px 16px" }}>
-                    <div style={{ fontSize: 13, opacity: 0.85 }}>Pérdida del último día cerrado ({costos.ultimo.fecha.slice(8, 10)}/{costos.ultimo.fecha.slice(5, 7)})</div>
-                    <div style={{ fontSize: 26, fontWeight: 800, fontVariantNumeric: "tabular-nums" }}>−{rmPesos(costos.ultimo.multa + costos.ultimo.ingreso)}</div>
-                    <div style={{ fontSize: 12, opacity: 0.8 }}>{costos.ultimo.n} rutas que no hicimos: {rmPesos(costos.ultimo.multa)} en multas + {rmPesos(costos.ultimo.ingreso)} que dejamos de ganar</div>
+                  <div style={{ background: "#f6f7f9", borderRadius: 10, padding: "12px 14px" }}>
+                    <div style={{ fontSize: 13, color: RM_MUTED }}>Pérdida del último día cerrado ({costos.ultimo.fecha.slice(8, 10)}/{costos.ultimo.fecha.slice(5, 7)})</div>
+                    <div style={{ fontSize: 24, fontWeight: 800, color: "#A32D2D", fontVariantNumeric: "tabular-nums" }}>−{rmPesos(costos.ultimo.multa + costos.ultimo.ingreso)}</div>
+                    <div style={{ fontSize: 12, color: RM_MUTED }}>{costos.ultimo.n} rutas: {rmPesos(costos.ultimo.multa)} en multas + {rmPesos(costos.ultimo.ingreso)} que dejamos de ganar</div>
                   </div>
                 )}
                 {costos.proy && (
-                  <div style={{ background: "rgba(255,255,255,.12)", borderRadius: 10, padding: "14px 16px" }}>
-                    <div style={{ fontSize: 13, opacity: 0.85 }}>Pérdida al cierre del mes si seguimos así</div>
-                    <div style={{ fontSize: 26, fontWeight: 800, fontVariantNumeric: "tabular-nums" }}>−{rmPesos(costos.proy.multa + costos.proy.ingreso)}</div>
-                    <div style={{ fontSize: 12, opacity: 0.8 }}>{rmPesos(costos.proy.multa)} en multas + {rmPesos(costos.proy.ingreso)} que dejaríamos de ganar</div>
+                  <div style={{ background: "#f6f7f9", borderRadius: 10, padding: "12px 14px" }}>
+                    <div style={{ fontSize: 13, color: RM_MUTED }}>Pérdida al cierre del mes si seguimos así</div>
+                    <div style={{ fontSize: 24, fontWeight: 800, color: "#A32D2D", fontVariantNumeric: "tabular-nums" }}>−{rmPesos(costos.proy.multa + costos.proy.ingreso)}</div>
+                    <div style={{ fontSize: 12, color: RM_MUTED }}>{rmPesos(costos.proy.multa)} en multas + {rmPesos(costos.proy.ingreso)} que dejaríamos de ganar</div>
                   </div>
                 )}
               </div>
             </div>
 
-            {/* Acumulado día a día */}
+            {/* Gráfico: pérdida acumulada del mes (eje Y, $) por día (eje X) */}
             {(() => {
-              const max = Math.max(1, ...costos.serie.map(x => x.acMulta + x.acIngreso));
+              const serie = costos.serie;
+              if (!serie.length) return null;
+              const W = 1000, H = 250, pL = 78, pR = 16, pT = 26, pB = 40;
+              const maxV = Math.max(1, ...serie.map(x => x.acMulta + x.acIngreso));
+              const paso = (() => { const crudo = maxV / 4, mag = 10 ** Math.floor(Math.log10(crudo)); return [1, 2, 2.5, 5, 10].map(m => m * mag).find(v => v >= crudo); })();
+              const tope = paso * 4;
+              const y = v => pT + (1 - v / tope) * (H - pT - pB);
+              const ancho = (W - pL - pR) / serie.length;
+              const corto = v => v >= 1e6 ? `$${(v / 1e6).toLocaleString("es-MX", { maximumFractionDigits: 1 })} M` : v >= 1e3 ? `$${Math.round(v / 1e3)} mil` : `$${Math.round(v)}`;
+              const cada = Math.ceil(serie.length / 16);
+              const ult = serie[serie.length - 1];
               return (
-                <div style={{ marginTop: 20 }}>
-                  <div style={{ fontSize: 13, opacity: 0.85, marginBottom: 6 }}>Así se fue sumando la pérdida, día a día</div>
-                  <div style={{ display: "flex", alignItems: "flex-end", gap: 3, height: 110 }}>
-                    {costos.serie.map(x => {
-                      const tot = x.acMulta + x.acIngreso;
-                      return (
-                        <div key={x.fecha} title={`${x.fecha.slice(8, 10)}/${x.fecha.slice(5, 7)}: pérdida acumulada −${rmPesos(tot)} (ese día −${rmPesos(x.multa + x.ingreso)}, ${x.n} rutas)`}
-                          style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "flex-end", height: "100%", minWidth: 6 }}>
-                          <div style={{ height: `${(x.acIngreso / max) * 100}%`, background: "rgba(255,255,255,.35)", borderRadius: "3px 3px 0 0" }} />
-                          <div style={{ height: `${(x.acMulta / max) * 100}%`, background: "#fca5a5" }} />
-                        </div>
-                      );
-                    })}
+                <div style={{ marginTop: 22 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
+                    <div style={{ fontSize: 15, fontWeight: 700 }}>Pérdida acumulada del mes, día a día</div>
+                    <div style={{ display: "flex", gap: 16, fontSize: 12, color: RM_MUTED }}>
+                      <span><span style={{ display: "inline-block", width: 10, height: 10, background: "#A32D2D", marginRight: 6 }} />Multas MELI</span>
+                      <span><span style={{ display: "inline-block", width: 10, height: 10, background: "#F09595", marginRight: 6 }} />Ingreso que dejamos de ganar</span>
+                    </div>
                   </div>
-                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, opacity: 0.75, marginTop: 4 }}>
-                    <span>{costos.serie[0]?.fecha.slice(8, 10)}/{costos.serie[0]?.fecha.slice(5, 7)}</span>
-                    <span>Rosado: multas · Blanco: ingreso perdido</span>
-                    <span>{costos.serie.at(-1)?.fecha.slice(8, 10)}/{costos.serie.at(-1)?.fecha.slice(5, 7)}</span>
+                  <div style={{ fontSize: 12, color: RM_MUTED, marginTop: 2 }}>Cada barra es un día. Su altura es todo lo perdido desde el día 1 hasta ese día, por eso siempre sube.</div>
+                  <div style={{ overflowX: "auto" }}>
+                    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", minWidth: 620, height: "auto", display: "block", marginTop: 6 }} role="img" aria-label="Pérdida acumulada en pesos por día del mes">
+                      {[0, 1, 2, 3, 4].map(i => (
+                        <g key={i}>
+                          <line x1={pL} x2={W - pR} y1={y(paso * i)} y2={y(paso * i)} stroke="#eef0f3" />
+                          <text x={pL - 8} y={y(paso * i) + 4} fontSize="11" textAnchor="end" fill={RM_MUTED}>{corto(paso * i)}</text>
+                        </g>
+                      ))}
+                      <text x={14} y={pT + (H - pT - pB) / 2} fontSize="11" fill={RM_MUTED} textAnchor="middle" transform={`rotate(-90 14 ${pT + (H - pT - pB) / 2})`}>Pérdida acumulada (MXN)</text>
+                      {serie.map((x, i) => {
+                        const bx = pL + i * ancho + ancho * 0.15, bw = ancho * 0.7;
+                        const yM = y(x.acMulta), yT = y(x.acMulta + x.acIngreso);
+                        return (
+                          <g key={x.fecha}>
+                            <title>{`${x.fecha.slice(8, 10)}/${x.fecha.slice(5, 7)}: perdido en el mes hasta este día −${rmPesos(x.acMulta + x.acIngreso)} (multas ${rmPesos(x.acMulta)}). Ese día: −${rmPesos(x.multa + x.ingreso)} en ${x.n} rutas.`}</title>
+                            <rect x={bx} y={yT} width={bw} height={Math.max(0, yM - yT)} fill="#F09595" />
+                            <rect x={bx} y={yM} width={bw} height={Math.max(0, y(0) - yM)} fill="#A32D2D" />
+                            {(i % cada === 0 || i === serie.length - 1) && (
+                              <text x={bx + bw / 2} y={H - pB + 16} fontSize="11" textAnchor="middle" fill={RM_MUTED}>{x.fecha.slice(8, 10)}/{x.fecha.slice(5, 7)}</text>
+                            )}
+                          </g>
+                        );
+                      })}
+                      <text x={pL + (serie.length - 1) * ancho + ancho / 2} y={y(ult.acMulta + ult.acIngreso) - 8} fontSize="12" fontWeight="700" textAnchor="middle" fill="#A32D2D">−{corto(ult.acMulta + ult.acIngreso)}</text>
+                      <text x={(pL + W - pR) / 2} y={H - 4} fontSize="11" textAnchor="middle" fill={RM_MUTED}>Día del mes</text>
+                    </svg>
                   </div>
                 </div>
               );
