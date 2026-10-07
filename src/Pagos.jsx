@@ -6060,6 +6060,25 @@ function RechazosMeliMX({ usuario }) {
           const f = ultimaFoto[k];
           p.hard_meli_sc = f ? (p.es_sdd ? (f.conf_sdd || 0) - (f.ejec_sdd || 0) : (f.conf_spot || 0) - (f.ejec_spot || 0)) : null;
         }
+        // Candidatas a no show del Brain por SC, día y modelo: sin placa ni chofer + asignadas sin salir sin ruta en MELI
+        const hoyOp = fechaHoyOperativa();
+        const esCandidata = p => p.status === "accepted" && p.fecha_ruta < hoyOp &&
+          (p.rosterizado === false || (p.rosterizado === true && p.travel_status_final === "created" && p.salio_meli !== true));
+        const nGrupo = {};
+        for (const p of todas) if (esCandidata(p)) { const g = `${p.fecha_ruta}|${p.facility_id}|${p.es_sdd}`; nGrupo[g] = (nGrupo[g] || 0) + 1; }
+        for (const p of todas) {
+          if (!esCandidata(p)) continue;
+          const g = `${p.fecha_ruta}|${p.facility_id}|${p.es_sdd}`;
+          if (p.hard_meli_sc == null) {
+            const f = ultimaFoto[`${p.fecha_ruta}|${p.facility_id}`];
+            p.hard_meli_sc = f ? (p.es_sdd ? (f.conf_sdd || 0) - (f.ejec_sdd || 0) : (f.conf_spot || 0) - (f.ejec_spot || 0)) : null;
+          }
+          const n = nGrupo[g], m = p.hard_meli_sc;
+          p.cmp_meli = m == null ? { txt: "Sin dato de MELI", color: RM_MUTED }
+            : n === m ? { txt: `Coincide con MELI ✅ (${m} de ${n})`, color: "#15803d" }
+            : n > m ? { txt: `MELI reconoce ${m} de ${n} · sobran ${n - m}: cancelación o cambio de MELI`, color: "#b45309" }
+            : { txt: `MELI cuenta ${m}; el Brain tiene ${n}`, color: RM_MUTED };
+        }
         if (vivo) { setFilas(todas); setRevisiones(Object.fromEntries((rev || []).map(r => [String(r.request_id), r]))); }
       } catch (e) { if (vivo) setError(e.message || String(e)); }
       finally { if (vivo) setCargando(false); }
@@ -6188,8 +6207,8 @@ function RechazosMeliMX({ usuario }) {
               if (e) { alert("No se pudo guardar la revisión: " + e.message); return; }
               setRevisiones(r => ({ ...r, [String(p.request_id)]: fila }));
             };
-            const bajar = () => descargarExcelMultihoja([{ nombre: def.t.slice(0, 30), datos: [["Fecha ruta", "SC", "Modelo", "Estado", "Vehículo", "Tipo", "Llegada (MX)", "Travel", "Placa", "Chofer", "Estado del viaje", "Según MELI", "Hard MELI en el SC ese día", "Revisión", "Revisado por", "Request ID"],
-              ...lista.map(p => { const rv = revisiones[String(p.request_id)]; return [p.fecha_ruta, p.facility_id, p.es_sdd ? "SDD" : "Spot", ESTADO[p.status] || p.status, p.vehiculo, p.tipo === "urgent" ? "Urgente" : "Regular", hora(p.eta), p.travel_id, p.placa || "", p.chofer || "", p.travel_status_final || "", p.salio_meli === true ? `Salió con la ruta ${p.ruta_meli}` : p.salio_meli === false ? "Sin ruta en MELI" : "", p.hard_meli_sc ?? "", rv ? (RESULTADOS[rv.resultado] || "") : "", rv?.revisado_por || "", p.request_id]; })] }],
+            const bajar = () => descargarExcelMultihoja([{ nombre: def.t.slice(0, 30), datos: [["Fecha ruta", "SC", "Modelo", "Estado", "Vehículo", "Tipo", "Llegada (MX)", "Travel", "Placa", "Chofer", "Estado del viaje", "Según MELI", "Comparación con MELI", "Revisión", "Revisado por", "Request ID"],
+              ...lista.map(p => { const rv = revisiones[String(p.request_id)]; return [p.fecha_ruta, p.facility_id, p.es_sdd ? "SDD" : "Spot", ESTADO[p.status] || p.status, p.vehiculo, p.tipo === "urgent" ? "Urgente" : "Regular", hora(p.eta), p.travel_id, p.placa || "", p.chofer || "", p.travel_status_final || "", p.salio_meli === true ? `Salió con la ruta ${p.ruta_meli}` : p.salio_meli === false ? "Sin ruta en MELI" : "", p.cmp_meli ? p.cmp_meli.txt : "", rv ? (RESULTADOS[rv.resultado] || "") : "", rv?.revisado_por || "", p.request_id]; })] }],
               `${detalle}_${diaSel || mes}`);
             return (
               <div style={card}>
@@ -6204,7 +6223,7 @@ function RechazosMeliMX({ usuario }) {
                   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: conRevision ? 1100 : 820 }}>
                     <thead>
                       <tr style={{ color: RM_MUTED, fontSize: 12, textAlign: "left", position: "sticky", top: 0, background: "#fff" }}>
-                        {["Fecha", "SC", "Modelo", "Estado", "Vehículo", "Tipo", "Llegada", "Travel", "Placa", "Chofer", ...(conRevision ? ["Estado del viaje", ...(detalle === "sin_salir" ? ["Según MELI", "Hard MELI en el SC ese día"] : []), "Revisión del analista"] : [])].map(h => (
+                        {["Fecha", "SC", "Modelo", "Estado", "Vehículo", "Tipo", "Llegada", "Travel", "Placa", "Chofer", ...(conRevision ? ["Estado del viaje", ...(detalle === "sin_salir" ? ["Según MELI"] : []), "Comparación con MELI (SC, día y modelo)", "Revisión del analista"] : [])].map(h => (
                           <th key={h} style={{ padding: "6px 8px", borderBottom: `1px solid ${RM_BORDER}`, fontWeight: 600, background: "#fff" }}>{h}</th>
                         ))}
                       </tr>
@@ -6228,7 +6247,7 @@ function RechazosMeliMX({ usuario }) {
                               {p.salio_meli === true ? `Salió con la ruta ${p.ruta_meli}` : p.salio_meli === false ? "Sin ruta en MELI: no salió" : "Sin informe de rutas"}
                             </td>
                           )}
-                          {detalle === "sin_salir" && <td style={{ padding: "6px 8px", textAlign: "center" }}>{p.hard_meli_sc ?? "—"}</td>}
+                          {conRevision && <td style={{ padding: "6px 8px", fontWeight: 600, color: p.cmp_meli?.color || RM_MUTED }}>{p.cmp_meli ? p.cmp_meli.txt : (p.salio_meli === true ? "No cuenta: salió con otra ruta" : "—")}</td>}
                           {conRevision && (
                             <td style={{ padding: "6px 8px" }}>
                               <select value={revisiones[String(p.request_id)]?.resultado || ""} onChange={e => guardarRevision(p, e.target.value)}
@@ -6245,7 +6264,7 @@ function RechazosMeliMX({ usuario }) {
                   </table>
                 </div>
                 {lista.length === 0 && <div style={{ fontSize: 13, color: RM_MUTED, marginTop: 8 }}>Sin rutas en esta categoría.</div>}
-                {detalle === "sin_salir" && <div style={{ fontSize: 12, color: RM_MUTED, marginTop: 8, lineHeight: 1.5 }}>Rutas aceptadas que tuvieron placa y chofer pero el viaje quedó en "created". "Según MELI" cruza la placa y el chofer con el informe oficial de rutas de ese día y SC: si aparecen, el vehículo salió con otra ruta y no cuenta como no show. "Hard MELI" es el no show oficial de MELI en ese SC y día (confirmadas − ejecutadas), para comparar. El analista confirma las que quedan sin ruta: no show o cancelación de MELI.</div>}
+                {detalle === "sin_salir" && <div style={{ fontSize: 12, color: RM_MUTED, marginTop: 8, lineHeight: 1.5 }}>Rutas aceptadas que tuvieron placa y chofer pero el viaje quedó en "created". "Según MELI" cruza la placa y el chofer con el informe oficial de rutas de ese día y SC: si aparecen, el vehículo salió con otra ruta y no cuenta como no show. "Comparación con MELI" junta, para ese SC, día y modelo, las rutas del Brain que no salieron (sin placa ni chofer + asignadas sin salir) y las compara con los no show que reconoce MELI. Si coincide, todas son no show. Si sobran, MELI solo reconoce esa cantidad: las demás son cancelaciones o cambios de MELI, y el analista revisa cuáles.</div>}
               </div>
             );
           })()}
