@@ -25,8 +25,12 @@ const RM_TARIFA = {
 const RM_TARIFA_DEF = { "Large Van MLP SDD": 2500, "Small Van MLP SDD": 2320, "Large Van MLP": 2510, "Small Van MLP": 2260, "Car MLP": 1585 };
 const rmTarifa = p => RM_TARIFA[`${p.facility_id}|${p.vehiculo}`] ?? RM_TARIFA_DEF[p.vehiculo] ?? (p.es_sdd ? 2500 : 2260);
 const RM_PCT_SOFT = 0.75, RM_PCT_HARD = 1.0;
-// Lo que MELI cobró de verdad por no show, por quincena (de la prefactura), para comparar
-const RM_MULTA_REAL = { "202609Q1": 239837.5, "202609Q2": 187897.5 };
+// Lo que MELI cobró por no show SDD, por la quincena EN QUE OCURRIERON los no show.
+// MELI lo descuenta con una quincena de desfase: los no show de 202609Q1 se cobran en la prefactura 202609Q2.
+// Confirmados con los archivos de MELI: 202608Q2 = $105.845 (cobrado en la prefactura 202609Q1) y 202609Q1 = $187.897,50 (cobrado en la 202609Q2).
+const RM_MULTA_REAL = { "202608Q2": 105845, "202609Q1": 187897.5 };
+// Tipo de cambio de respaldo (MXN → USD y CLP). CLP sale del propio archivo de cobro de MELI (≈53,81 CLP por MXN).
+const RM_TC_RESPALDO = { usd: 0.054, clp: 53.81, fecha: null, fuente: "referencia" };
 const rmPesos = v => "$" + Math.round(v || 0).toLocaleString("es-MX");
 const RM_MESES = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"];
 const RM_DIAS = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"];
@@ -158,6 +162,14 @@ function RechazosMeliMX({ usuario }) {
   const [error, setError] = useState(null);
   const [diaSel, setDiaSel] = useState(null);
   const [detalle, setDetalle] = useState(null); // tarjeta abierta
+  const [tc, setTc] = useState(RM_TC_RESPALDO);
+  useEffect(() => {
+    let vivo = true;
+    fetch("https://open.er-api.com/v6/latest/MXN").then(r => r.json()).then(j => {
+      if (vivo && j?.rates?.USD && j?.rates?.CLP) setTc({ usd: j.rates.USD, clp: j.rates.CLP, fecha: (j.time_last_update_utc || "").slice(5, 16), fuente: "en línea" });
+    }).catch(() => {});
+    return () => { vivo = false; };
+  }, []);
   const [revisiones, setRevisiones] = useState({}); // request_id → revisión del analista
 
   const meses = useMemo(() => {
@@ -293,7 +305,13 @@ function RechazosMeliMX({ usuario }) {
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 20, flexWrap: "wrap" }}>
               <div style={{ flex: "1 1 360px" }}>
                 <div style={{ fontSize: 14, color: RM_MUTED, fontWeight: 600 }}>Lo que perdimos en {etiquetaMes(mes)} por no aceptar o no hacer rutas</div>
-                <div style={{ fontSize: 60, fontWeight: 800, lineHeight: 1.05, marginTop: 4, color: "#A32D2D", fontVariantNumeric: "tabular-nums" }}>−{rmPesos(costos.total.multa + costos.total.ingreso)}</div>
+                <div style={{ fontSize: 60, fontWeight: 800, lineHeight: 1.05, marginTop: 4, color: "#A32D2D", fontVariantNumeric: "tabular-nums" }}>−{rmPesos(costos.total.multa + costos.total.ingreso)} <span style={{ fontSize: 20, fontWeight: 700 }}>MXN</span></div>
+                <div style={{ fontSize: 16, fontWeight: 700, color: "#A32D2D", marginTop: 2, fontVariantNumeric: "tabular-nums" }}>
+                  ≈ −US${Math.round((costos.total.multa + costos.total.ingreso) * tc.usd).toLocaleString("es-MX")} · ≈ −CLP ${Math.round((costos.total.multa + costos.total.ingreso) * tc.clp).toLocaleString("es-CL")}
+                  <span style={{ fontSize: 11, fontWeight: 400, color: RM_MUTED, marginLeft: 8 }}>
+                    tipo de cambio {tc.fuente === "en línea" ? `del ${tc.fecha}` : "de referencia"}: 1 MXN = US${tc.usd.toFixed(4)} = CLP ${tc.clp.toFixed(2)}
+                  </span>
+                </div>
                 <div style={{ fontSize: 14, color: RM_MUTED, marginTop: 6 }}>
                   {rmN(costos.total.rutas)} rutas que no hicimos = {rmN(costos.svcs.reduce((x, v) => x + (v.soft || 0), 0))} que no aceptamos (rechazadas o vencidas) + {rmN(costos.svcs.reduce((x, v) => x + (v.hard || 0), 0))} que aceptamos y no salieron · MXN sin IVA
                 </div>
@@ -411,7 +429,7 @@ function RechazosMeliMX({ usuario }) {
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
                 <thead>
                   <tr style={{ color: RM_MUTED, fontSize: 12, textAlign: "left" }}>
-                    {["Quincena", "Brain", "MELI cobró"].map(h => <th key={h} style={{ padding: "6px 8px", borderBottom: `1px solid ${RM_BORDER}`, fontWeight: 600 }}>{h}</th>)}
+                    {["Quincena de los no show", "Brain", "MELI cobró (prefactura siguiente)"].map(h => <th key={h} style={{ padding: "6px 8px", borderBottom: `1px solid ${RM_BORDER}`, fontWeight: 600 }}>{h}</th>)}
                   </tr>
                 </thead>
                 <tbody>
@@ -425,7 +443,7 @@ function RechazosMeliMX({ usuario }) {
                 </tbody>
               </table>
               <div style={{ fontSize: 12, color: RM_MUTED, marginTop: 8, lineHeight: 1.5 }}>
-                Multas SDD: 75% de la tarifa base por cada ruta no aceptada y 100% por cada ruta aceptada que no se hizo. Spot no tiene multa, pero sí ingreso perdido. "MELI cobró" sale de la prefactura; si el Brain se aleja mucho, revisar las rutas sin revisión del analista.
+                Multas SDD: 75% de la tarifa base por cada ruta no aceptada y 100% por cada ruta aceptada que no se hizo. Spot no tiene multa, pero sí ingreso perdido. MELI cobra los no show de cada quincena en la prefactura de la quincena siguiente (por ejemplo, los del 1 al 15 de septiembre se descontaron en la prefactura 202609Q2). Si el Brain se aleja mucho, revisar las rutas sin revisión del analista.
               </div>
             </div>
           </div>
