@@ -5991,7 +5991,7 @@ function rmSumar(b, p) {
     b.acept++;
     if (p.fecha_ruta < fechaHoyOperativa()) {
       if (p.rosterizado === false) { p.es_sdd ? b.hard_sdd++ : b.hard_spot++; }
-      else if (p.rosterizado === true && p.travel_status_final === "created") { p.es_sdd ? b.ss_sdd++ : b.ss_spot++; }
+      else if (p.rosterizado === true && p.travel_status_final === "created" && p.salio_meli !== true) { p.es_sdd ? b.ss_sdd++ : b.ss_spot++; }
     }
   }
   else if (p.status === "rejected") { b.rech++; p.es_sdd ? b.na_sdd++ : b.na_spot++; }
@@ -6038,6 +6038,28 @@ function RechazosMeliMX({ usuario }) {
           if (!data || data.length < 1000) break;
         }
         const { data: rev } = await sb.from("mx_hard_revision").select("*").gte("fecha_ruta", mes + "-01").lte("fecha_ruta", hastaVista);
+        // Cruce con MELI: rutas ejecutadas (informe de rutas) y hard oficial por SC y día (confirmadas − ejecutadas)
+        const { data: ejec } = await sb.from("vs_rutas_ejecutadas").select("fecha, svc, route_id, placa, placa_norm, chofer, chofer_norm").gte("fecha", mes + "-01").lte("fecha", hastaVista).limit(20000);
+        const { data: fotos } = await sb.from("vs_foto_svc").select("fecha, svc, capturado_el, conf_sdd, ejec_sdd, conf_spot, ejec_spot").gte("fecha", mes + "-01").lte("fecha", hastaVista).limit(20000);
+        const conDatos = new Set((ejec || []).map(r => r.fecha));
+        const porPlaca = new Map(), porChofer = new Map();
+        for (const r of ejec || []) {
+          if (r.placa_norm) porPlaca.set(`${r.fecha}|${r.svc}|${r.placa_norm}`, r);
+          if (r.chofer_norm) porChofer.set(`${r.fecha}|${r.svc}|${r.chofer_norm}`, r);
+        }
+        const ultimaFoto = {};
+        for (const f of fotos || []) { const k = f.fecha + "|" + f.svc; if (!ultimaFoto[k] || f.capturado_el > ultimaFoto[k].capturado_el) ultimaFoto[k] = f; }
+        const normPlaca = x => String(x || "").toUpperCase().replace(/[^A-Z0-9]/g, "").replace(/^SDD/, "");
+        const normNombre = x => String(x || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
+        for (const p of todas) {
+          if (p.status !== "accepted" || p.rosterizado !== true) continue;
+          const k = `${p.fecha_ruta}|${p.facility_id}`;
+          const m = porPlaca.get(`${k}|${normPlaca(p.placa)}`) || porChofer.get(`${k}|${normNombre(p.chofer)}`);
+          p.salio_meli = conDatos.has(p.fecha_ruta) ? !!m : null;
+          p.ruta_meli = m ? m.route_id : null;
+          const f = ultimaFoto[k];
+          p.hard_meli_sc = f ? (p.es_sdd ? (f.conf_sdd || 0) - (f.ejec_sdd || 0) : (f.conf_spot || 0) - (f.ejec_spot || 0)) : null;
+        }
         if (vivo) { setFilas(todas); setRevisiones(Object.fromEntries((rev || []).map(r => [String(r.request_id), r]))); }
       } catch (e) { if (vivo) setError(e.message || String(e)); }
       finally { if (vivo) setCargando(false); }
@@ -6138,7 +6160,7 @@ function RechazosMeliMX({ usuario }) {
             <Kpi id="vencidas" titulo="Vencidas sin responder" valor={rmN(total.venc)} sub="nadie respondió en 30 min" color="#991b1b" />
             <Kpi id="hard" titulo="Hard: sin placa ni chofer" valor={rmN(total.hard_sdd + total.hard_spot)} sub={`SDD ${rmN(total.hard_sdd)} · Spot ${rmN(total.hard_spot)} · nunca se asignó`} color="#7f1d1d" />
             <Kpi id="sin_salir" titulo="Asignada sin salir (investigar)" valor={rmN(total.ss_sdd + total.ss_spot)}
-              sub={`SDD ${rmN(total.ss_sdd)} · Spot ${rmN(total.ss_spot)} · ${filas.filter(p => p.status === "accepted" && p.rosterizado === true && p.travel_status_final === "created" && p.fecha_ruta < fechaHoyOperativa() && !revisiones[String(p.request_id)]).length} sin revisar`} color="#6b21a8" />
+              sub={`SDD ${rmN(total.ss_sdd)} · Spot ${rmN(total.ss_spot)} · ${filas.filter(p => p.status === "accepted" && p.rosterizado === true && p.travel_status_final === "created" && p.fecha_ruta < fechaHoyOperativa()).filter(p => p.salio_meli === true).length} salieron con otra ruta (no cuentan) · ${filas.filter(p => p.status === "accepted" && p.rosterizado === true && p.travel_status_final === "created" && p.salio_meli !== true && p.fecha_ruta < fechaHoyOperativa() && !revisiones[String(p.request_id)]).length} sin revisar`} color="#6b21a8" />
           </div></div>
 
           {detalle && (() => {
@@ -6166,8 +6188,8 @@ function RechazosMeliMX({ usuario }) {
               if (e) { alert("No se pudo guardar la revisión: " + e.message); return; }
               setRevisiones(r => ({ ...r, [String(p.request_id)]: fila }));
             };
-            const bajar = () => descargarExcelMultihoja([{ nombre: def.t.slice(0, 30), datos: [["Fecha ruta", "SC", "Modelo", "Estado", "Vehículo", "Tipo", "Llegada (MX)", "Travel", "Placa", "Chofer", "Estado del viaje", "Revisión", "Revisado por", "Request ID"],
-              ...lista.map(p => { const rv = revisiones[String(p.request_id)]; return [p.fecha_ruta, p.facility_id, p.es_sdd ? "SDD" : "Spot", ESTADO[p.status] || p.status, p.vehiculo, p.tipo === "urgent" ? "Urgente" : "Regular", hora(p.eta), p.travel_id, p.placa || "", p.chofer || "", p.travel_status_final || "", rv ? (RESULTADOS[rv.resultado] || "") : "", rv?.revisado_por || "", p.request_id]; })] }],
+            const bajar = () => descargarExcelMultihoja([{ nombre: def.t.slice(0, 30), datos: [["Fecha ruta", "SC", "Modelo", "Estado", "Vehículo", "Tipo", "Llegada (MX)", "Travel", "Placa", "Chofer", "Estado del viaje", "Según MELI", "Hard MELI en el SC ese día", "Revisión", "Revisado por", "Request ID"],
+              ...lista.map(p => { const rv = revisiones[String(p.request_id)]; return [p.fecha_ruta, p.facility_id, p.es_sdd ? "SDD" : "Spot", ESTADO[p.status] || p.status, p.vehiculo, p.tipo === "urgent" ? "Urgente" : "Regular", hora(p.eta), p.travel_id, p.placa || "", p.chofer || "", p.travel_status_final || "", p.salio_meli === true ? `Salió con la ruta ${p.ruta_meli}` : p.salio_meli === false ? "Sin ruta en MELI" : "", p.hard_meli_sc ?? "", rv ? (RESULTADOS[rv.resultado] || "") : "", rv?.revisado_por || "", p.request_id]; })] }],
               `${detalle}_${diaSel || mes}`);
             return (
               <div style={card}>
@@ -6182,7 +6204,7 @@ function RechazosMeliMX({ usuario }) {
                   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: conRevision ? 1100 : 820 }}>
                     <thead>
                       <tr style={{ color: RM_MUTED, fontSize: 12, textAlign: "left", position: "sticky", top: 0, background: "#fff" }}>
-                        {["Fecha", "SC", "Modelo", "Estado", "Vehículo", "Tipo", "Llegada", "Travel", "Placa", "Chofer", ...(conRevision ? ["Estado del viaje", "Revisión del analista"] : [])].map(h => (
+                        {["Fecha", "SC", "Modelo", "Estado", "Vehículo", "Tipo", "Llegada", "Travel", "Placa", "Chofer", ...(conRevision ? ["Estado del viaje", ...(detalle === "sin_salir" ? ["Según MELI", "Hard MELI en el SC ese día"] : []), "Revisión del analista"] : [])].map(h => (
                           <th key={h} style={{ padding: "6px 8px", borderBottom: `1px solid ${RM_BORDER}`, fontWeight: 600, background: "#fff" }}>{h}</th>
                         ))}
                       </tr>
@@ -6201,6 +6223,12 @@ function RechazosMeliMX({ usuario }) {
                           <td style={{ padding: "6px 8px" }}>{p.placa || "—"}</td>
                           <td style={{ padding: "6px 8px" }}>{p.chofer || "—"}</td>
                           {conRevision && <td style={{ padding: "6px 8px", color: RM_MUTED }}>{p.travel_status_final || "sin dato"}</td>}
+                          {detalle === "sin_salir" && (
+                            <td style={{ padding: "6px 8px", fontWeight: 600, color: p.salio_meli === true ? "#15803d" : p.salio_meli === false ? "#b42318" : RM_MUTED }}>
+                              {p.salio_meli === true ? `Salió con la ruta ${p.ruta_meli}` : p.salio_meli === false ? "Sin ruta en MELI: no salió" : "Sin informe de rutas"}
+                            </td>
+                          )}
+                          {detalle === "sin_salir" && <td style={{ padding: "6px 8px", textAlign: "center" }}>{p.hard_meli_sc ?? "—"}</td>}
                           {conRevision && (
                             <td style={{ padding: "6px 8px" }}>
                               <select value={revisiones[String(p.request_id)]?.resultado || ""} onChange={e => guardarRevision(p, e.target.value)}
@@ -6217,7 +6245,7 @@ function RechazosMeliMX({ usuario }) {
                   </table>
                 </div>
                 {lista.length === 0 && <div style={{ fontSize: 13, color: RM_MUTED, marginTop: 8 }}>Sin rutas en esta categoría.</div>}
-                {detalle === "sin_salir" && <div style={{ fontSize: 12, color: RM_MUTED, marginTop: 8, lineHeight: 1.5 }}>Rutas aceptadas que tuvieron placa y chofer pero el viaje nunca salió (quedó en "created"). Pueden ser no show o una cancelación de MELI: el analista debe revisar cada una en el portal y marcar el resultado.</div>}
+                {detalle === "sin_salir" && <div style={{ fontSize: 12, color: RM_MUTED, marginTop: 8, lineHeight: 1.5 }}>Rutas aceptadas que tuvieron placa y chofer pero el viaje quedó en "created". "Según MELI" cruza la placa y el chofer con el informe oficial de rutas de ese día y SC: si aparecen, el vehículo salió con otra ruta y no cuenta como no show. "Hard MELI" es el no show oficial de MELI en ese SC y día (confirmadas − ejecutadas), para comparar. El analista confirma las que quedan sin ruta: no show o cancelación de MELI.</div>}
               </div>
             );
           })()}
