@@ -6997,10 +6997,10 @@ function VsHistoricoSemanal({ ayer }) {
                   <text x={padL - 8} y={y(v) + 4} fontSize="11" textAnchor="end" fill={VS_MUTED}>{v}</text>
                 </g>
               ))}
-              <line x1={padL} x2={W - padR} y1={y(80)} y2={y(80)} stroke="#15803d" strokeDasharray="5 4" />
-              <text x={W - padR} y={y(80) - 5} fontSize="11" textAnchor="end" fill="#15803d">OK 80</text>
+              <line x1={padL} x2={W - padR} y1={y(VS_META_BT)} y2={y(VS_META_BT)} stroke="#15803d" strokeWidth="1.5" strokeDasharray="5 4" />
+              <text x={padL + 6} y={y(VS_META_BT) - 6} fontSize="11" textAnchor="start" fill="#15803d" fontWeight="700">Meta BT {VS_META_BT}</text>
               <line x1={padL} x2={W - padR} y1={y(70)} y2={y(70)} stroke="#b45309" strokeDasharray="5 4" />
-              <text x={W - padR} y={y(70) - 5} fontSize="11" textAnchor="end" fill="#b45309">Warning bajo 70</text>
+              <text x={padL + 6} y={y(70) + 14} fontSize="11" textAnchor="start" fill="#b45309">Warning MELI bajo 70</text>
 
               {serieOf.length > 1 && <path d={linea(serieOf)} fill="none" stroke={VS_NAVY} strokeWidth="2" />}
               {serieEs.length > 1 && <path d={linea(serieEs)} fill="none" stroke={VS_ORANGE} strokeWidth="2" strokeDasharray="6 4" />}
