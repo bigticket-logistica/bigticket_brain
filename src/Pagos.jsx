@@ -6241,7 +6241,9 @@ function RechazosMeliMX({ usuario }) {
               <div>
                 <div style={{ fontSize: 14, letterSpacing: 1, textTransform: "uppercase", opacity: 0.85, fontWeight: 700 }}>Lo que perdimos en {etiquetaMes(mes)} por no aceptar o no hacer rutas</div>
                 <div style={{ fontSize: 64, fontWeight: 800, lineHeight: 1.05, marginTop: 6, fontVariantNumeric: "tabular-nums" }}>{rmPesos(costos.total.multa + costos.total.ingreso)}</div>
-                <div style={{ fontSize: 15, opacity: 0.9, marginTop: 4 }}>{rmN(costos.total.rutas)} rutas que no hicimos · MXN sin IVA</div>
+                <div style={{ fontSize: 15, opacity: 0.9, marginTop: 4 }}>
+                  {rmN(costos.total.rutas)} rutas que no hicimos = {rmN(costos.svcs.reduce((x, v) => x + (v.soft || 0), 0))} que no aceptamos (rechazadas o vencidas) + {rmN(costos.svcs.reduce((x, v) => x + (v.hard || 0), 0))} que aceptamos y no salieron · MXN sin IVA
+                </div>
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(200px, 1fr))", gap: 12, flex: "1 1 440px", maxWidth: 620 }}>
                 <div style={{ background: "rgba(255,255,255,.12)", borderRadius: 10, padding: "14px 16px" }}>
