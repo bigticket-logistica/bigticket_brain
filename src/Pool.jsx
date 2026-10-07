@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { descargarExcelMeli, descargarExcelMultihoja, fechaHoyOperativa, fechaOperativaOffset, pct, sb } from "./shared";
-import RechazosMeliMX from "./RechazosMeli";
+import RechazosMeliMX, { rmResumenPerdidas } from "./RechazosMeli";
 
 // ═══════════════════════════════════════════════════════════════════
 //  TAREAS DEL JEFE DE SUPERVISORES — Alta Operacional (Etapa 7)
@@ -6315,22 +6315,9 @@ const vsIncluir = svc => !VS_EXCLUIR.includes(svc);
 // Peso que le da Big Ticket a cada ramo: aceptar y cumplir pesan más porque son multas e ingreso perdido
 const VS_PESOS_BT = { ER: 35, AR: 30, BPP: 20, DS: 15 };
 const VS_ORDEN_BT = ["ER", "AR", "BPP", "DS"];
+const VS_META_BT = 90;
 const VS_NOMBRE_LARGO = { ER: "Cumplir las rutas aceptadas", AR: "Aceptar las rutas ofrecidas", BPP: "Reclamos de paquetes", DS: "Entregar los paquetes" };
-// Tarifa base promedio por SC (rango 0–100 km, prefactura MELI). Multas MELI: SDD no aceptada 75%, SDD aceptada no hecha 100%; Spot sin multa.
-const VS_TARIFA_SDD = { SCY1: 2500, SHP1: 2375, SMX7: 2320, SMX8: 2500, SMX10: 2500, SQR1: 2445, STL1: 2375, STX1: 2320, SVH1: 2515 };
-const VS_TARIFA_SPOT = { SCY1: 2385, SHP1: 2385, SMX1: 2510, SMX8: 2385, SMX10: 2035, SPY1: 2525, SQR1: 2455, STL1: 2385, STX1: 2780, SVH1: 2525 };
-function vsDinero(fotos) {
-  const d = { softSdd: 0, softSpot: 0, hardSdd: 0, hardSpot: 0, multaAR: 0, multaER: 0, ingresoAR: 0, ingresoER: 0 };
-  for (const f of fotos) {
-    const tS = VS_TARIFA_SDD[f.svc] ?? 2400, tP = VS_TARIFA_SPOT[f.svc] ?? 2385;
-    const sS = Math.max(0, (f.sol_sdd || 0) - (f.conf_sdd || 0)), sP = Math.max(0, (f.sol_spot || 0) - (f.conf_spot || 0));
-    const hS = Math.max(0, (f.conf_sdd || 0) - (f.ejec_sdd || 0)), hP = Math.max(0, (f.conf_spot || 0) - (f.ejec_spot || 0));
-    d.softSdd += sS; d.softSpot += sP; d.hardSdd += hS; d.hardSpot += hP;
-    d.multaAR += sS * tS * 0.75; d.multaER += hS * tS;
-    d.ingresoAR += sS * tS + sP * tP; d.ingresoER += hS * tS + hP * tP;
-  }
-  return d;
-}
+const VS_DINERO_VACIO = { softSdd: 0, softSpot: 0, hardSdd: 0, hardSpot: 0, multaAR: 0, multaER: 0, ingresoAR: 0, ingresoER: 0 };
 const vsNotaBT = t => vsRedondear(VS_ORDEN_BT.reduce((a, c) => a + VS_PESOS_BT[c] * ({ ER: t.er, AR: t.ar, BPP: t.bpp, DS: t.ds }[c] ?? 0) / 100, 0));
 const VS_NAVY = "#1a3a6b";
 const VS_ORANGE = "#F47B20";
@@ -6767,7 +6754,8 @@ const VS_QUE_ES = {
 
 function VsQueFalta({ total, svcs, dinero }) {
   const base = vsPuntos(total);
-  const faltan = Math.max(0, VS_META_OK - base);
+  const notaBT = vsNotaBT(total);
+  const faltanBT = Math.max(0, VS_META_BT - notaBT);
   const num = { fontVariantNumeric: "tabular-nums" };
   const pct = (a, b) => (b ? vsNum((a / b) * 100) : "—");
   const queda = suma => vsRedondear(base + suma);
@@ -6818,14 +6806,14 @@ function VsQueFalta({ total, svcs, dinero }) {
   const etiquetaPlata = { ER: "multas + ingreso perdido", AR: "multas + ingreso perdido", BPP: "en reclamos abiertos", DS: "sin multa directa" };
 
   return (
-    <div style={{ background: "#fff", border: `1px solid ${VS_BORDER}`, borderLeft: `5px solid ${base >= VS_META_OK ? "#15803d" : VS_ORANGE}`, borderRadius: 12, padding: "22px 26px" }}>
+    <div style={{ background: "#fff", border: `1px solid ${VS_BORDER}`, borderLeft: `5px solid ${notaBT >= VS_META_BT ? "#15803d" : VS_ORANGE}`, borderRadius: 12, padding: "22px 26px" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
         <div style={{ fontSize: 18, fontWeight: 700 }}>Dónde fallamos y cómo mejorar</div>
-        <div style={{ fontSize: 12, color: VS_MUTED }}>En orden de importancia para Big Ticket · meta MELI: 80 puntos</div>
+        <div style={{ fontSize: 12, color: VS_MUTED }}>En orden de importancia para Big Ticket · meta BT: {VS_META_BT} puntos</div>
       </div>
       <div style={{ fontSize: 15, marginTop: 8, lineHeight: 1.55 }}>
-        {base >= VS_META_OK ? <>La semana va en <b>OK</b> para MELI. Igual, cada ruta no aceptada o no hecha nos cuesta plata: mira la columna de dinero.</>
-          : <>Faltan <b>{vsNum(faltan)} puntos</b> para llegar a OK (80).</>}
+        {notaBT >= VS_META_BT ? <>La nota Big Ticket es <b>{notaBT}</b>: sobre la meta de {VS_META_BT}. Igual, cada ruta no aceptada o no hecha nos cuesta plata.</>
+          : <>La nota Big Ticket es <b>{notaBT}</b>: faltan <b>{faltanBT} puntos</b> para la meta de {VS_META_BT}. Empieza por las primeras filas.</>}
       </div>
       <div style={{ overflowX: "auto", marginTop: 14 }}>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 980 }}>
@@ -7173,7 +7161,13 @@ function PoolVendorScore() {
   const est = vsEstado(total.score);
   const ganados = 100 - Object.values(total.pierde).reduce((a, b) => a + b, 0);
   const comps = VS_ORDEN_BT;
-  const dinero = useMemo(() => vsDinero(fotos), [fotos]);
+  // Plata perdida de la semana: misma fuente y mismas reglas que la pestaña Rechazos MELI
+  const [dinero, setDinero] = useState(VS_DINERO_VACIO);
+  useEffect(() => {
+    let vivo = true;
+    rmResumenPerdidas(desde, hasta).then(d => { if (vivo) setDinero(d); }).catch(() => { if (vivo) setDinero(VS_DINERO_VACIO); });
+    return () => { vivo = false; };
+  }, [desde, hasta]);
   const nombres = { ER: "Cumplir rutas", AR: "Aceptar rutas", DS: "Entregar", BPP: "Reclamos" };
   const metrica = {
     ER: { v: total.conf ? `${vsNum((total.ejec / total.conf) * 100)}%` : "—", txt: `rutas ejecutadas de las confirmadas (${total.ejec} de ${total.conf})` },
@@ -7242,7 +7236,7 @@ function PoolVendorScore() {
               <div style={{ border: `2px solid ${VS_ORANGE}`, background: "#fff7ef", borderRadius: 10, padding: "10px 14px", marginRight: 8 }}>
                 <div style={{ fontSize: 12, color: "#9a3c06", fontWeight: 700 }}>Nota Big Ticket</div>
                 <div style={{ ...num, fontSize: 34, fontWeight: 800, color: "#9a3c06" }}>{vsNotaBT(total)}</div>
-                <div style={{ fontSize: 11, color: "#9a3c06", maxWidth: 170, lineHeight: 1.35 }}>Pesa más aceptar (30) y cumplir (35): son multas y plata perdida</div>
+                <div style={{ fontSize: 12, color: "#9a3c06", fontWeight: 600 }}>{vsNotaBT(total) >= VS_META_BT ? `Sobre la meta BT (${VS_META_BT})` : `Meta BT ${VS_META_BT}: faltan ${VS_META_BT - vsNotaBT(total)} puntos`}</div>
               </div>
               <div>
                 <div style={{ fontSize: 12, color: VS_MUTED, marginBottom: 4 }}>Nota MELI de la semana</div>
@@ -7253,10 +7247,7 @@ function PoolVendorScore() {
               </div>
               <div style={{ paddingBottom: 6 }}>
                 <div style={{ display: "inline-block", padding: "5px 12px", borderRadius: 999, background: est.bg, color: est.fg, fontWeight: 700, fontSize: 13 }}>{est.txt}</div>
-                <div style={{ fontSize: 13, color: VS_MUTED, marginTop: 8 }}>
-                  {total.score >= 80 ? "Sobre la meta OK (80)" : `Faltan ${80 - total.score} puntos para OK (80)`}
-                </div>
-                <div style={{ fontSize: 12, color: VS_MUTED, marginTop: 2 }}>Aproximado</div>
+
               </div>
             </div>
           </div>

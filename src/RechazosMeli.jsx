@@ -54,6 +54,101 @@ const rmAR = b => (rmEfect(b) - b.pend) > 0 ? b.acept / (rmEfect(b) - b.pend) : 
 const rmPct = v => v == null ? "—" : (v * 100).toLocaleString("es-MX", { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + "%";
 const rmN = v => Number(v || 0).toLocaleString("es-MX");
 
+// ─── Fuente única de rutas no aceptadas y no hechas (la usan Rechazos MELI y el Vendor Score) ───
+export const RM_EXCLUIR = ["SMXRV1"];
+export async function rmCargarDatos(desde, hasta) {
+    const todas = [];
+    for (let pag = 0; ; pag += 1000) {
+      const { data, error: e } = await sb.from("mx_pedidos_estado").select("request_id, travel_id, facility_id, fecha_ruta, status, es_sdd, vehiculo, tipo, eta, creado_meli, rosterizado, placa, chofer, travel_status_final, ultima_captura")
+        .gte("fecha_ruta", desde).lte("fecha_ruta", hasta).order("request_id").range(pag, pag + 999);
+      if (e) throw e;
+      todas.push(...(data || []).filter(x => !RM_EXCLUIR.includes(x.facility_id)));
+      if (!data || data.length < 1000) break;
+    }
+    const { data: rev } = await sb.from("mx_hard_revision").select("*").gte("fecha_ruta", desde).lte("fecha_ruta", hasta);
+    // Cruce con MELI: rutas ejecutadas (informe de rutas) y hard oficial por SC y día (confirmadas − ejecutadas)
+    const { data: ejec } = await sb.from("vs_rutas_ejecutadas").select("fecha, svc, route_id, placa, placa_norm, chofer, chofer_norm").gte("fecha", desde).lte("fecha", hasta).limit(20000);
+    const { data: fotos } = await sb.from("vs_foto_svc").select("fecha, svc, capturado_el, conf_sdd, ejec_sdd, conf_spot, ejec_spot").gte("fecha", desde).lte("fecha", hasta).limit(20000);
+    const conDatos = new Set((ejec || []).map(r => r.fecha));
+    const porPlaca = new Map(), porChofer = new Map();
+    for (const r of ejec || []) {
+      if (r.placa_norm) porPlaca.set(`${r.fecha}|${r.svc}|${r.placa_norm}`, r);
+      if (r.chofer_norm) porChofer.set(`${r.fecha}|${r.svc}|${r.chofer_norm}`, r);
+    }
+    const ultimaFoto = {};
+    for (const f of fotos || []) { const k = f.fecha + "|" + f.svc; if (!ultimaFoto[k] || f.capturado_el > ultimaFoto[k].capturado_el) ultimaFoto[k] = f; }
+    const normPlaca = x => String(x || "").toUpperCase().replace(/[^A-Z0-9]/g, "").replace(/^SDD/, "");
+    const normNombre = x => String(x || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
+    for (const p of todas) {
+      if (p.status !== "accepted" || p.rosterizado !== true) continue;
+      const k = `${p.fecha_ruta}|${p.facility_id}`;
+      const m = porPlaca.get(`${k}|${normPlaca(p.placa)}`) || porChofer.get(`${k}|${normNombre(p.chofer)}`);
+      p.salio_meli = conDatos.has(p.fecha_ruta) ? !!m : null;
+      p.ruta_meli = m ? m.route_id : null;
+      const f = ultimaFoto[k];
+      p.hard_meli_sc = f ? (p.es_sdd ? (f.conf_sdd || 0) - (f.ejec_sdd || 0) : (f.conf_spot || 0) - (f.ejec_spot || 0)) : null;
+    }
+    // Candidatas a no show del Brain por SC, día y modelo: sin placa ni chofer + asignadas sin salir sin ruta en MELI
+    const hoyOp = fechaHoyOperativa();
+    const esCandidata = p => p.status === "accepted" && p.fecha_ruta < hoyOp &&
+      (p.rosterizado === false || (p.rosterizado === true && p.travel_status_final === "created" && p.salio_meli !== true));
+    const nGrupo = {};
+    for (const p of todas) if (esCandidata(p)) { const g = `${p.fecha_ruta}|${p.facility_id}|${p.es_sdd}`; nGrupo[g] = (nGrupo[g] || 0) + 1; }
+    for (const p of todas) {
+      if (!esCandidata(p)) continue;
+      const g = `${p.fecha_ruta}|${p.facility_id}|${p.es_sdd}`;
+      if (p.hard_meli_sc == null) {
+        const f = ultimaFoto[`${p.fecha_ruta}|${p.facility_id}`];
+        p.hard_meli_sc = f ? (p.es_sdd ? (f.conf_sdd || 0) - (f.ejec_sdd || 0) : (f.conf_spot || 0) - (f.ejec_spot || 0)) : null;
+      }
+      const n = nGrupo[g], m = p.hard_meli_sc;
+      p.cmp_meli = m == null ? { txt: "Sin dato de MELI", color: RM_MUTED }
+        : n === m ? { txt: `Coincide con MELI ✅ (${m} de ${n})`, color: "#15803d" }
+        : n > m ? { txt: `MELI reconoce ${m} de ${n} · sobran ${n - m}: cancelación o cambio de MELI`, color: "#b45309" }
+        : { txt: `MELI cuenta ${m}; el Brain tiene ${n}`, color: RM_MUTED };
+    }
+    return { filas: todas, revisiones: Object.fromEntries((rev || []).map(r => [String(r.request_id), r])) };
+}
+
+// Cada ruta perdida con su multa e ingreso: soft = rechazada o vencida; hard = aceptada que no salió (días cerrados),
+// sin las marcadas por el analista como cancelada o salió, y sin pasar del no show oficial de MELI por SC, día y modelo
+export function rmPerdidas(filas, revisiones, hoyOp = fechaHoyOperativa()) {
+  const items = [];
+  const sumar = (p, tipo) => {
+    const t = rmTarifa(p);
+    items.push({ p, tipo, multa: p.es_sdd ? t * (tipo === "soft" ? RM_PCT_SOFT : RM_PCT_HARD) : 0, ingreso: t });
+  };
+  for (const p of filas) if (p.status === "rejected" || p.status === "expired") sumar(p, "soft");
+  const grupos = {};
+  for (const p of filas) {
+    if (p.status !== "accepted" || p.fecha_ruta >= hoyOp) continue;
+    const cand = p.rosterizado === false || (p.rosterizado === true && p.travel_status_final === "created" && p.salio_meli !== true);
+    if (!cand) continue;
+    const rv = revisiones[String(p.request_id)]?.resultado;
+    if (rv === "cancelada_meli" || rv === "salio") continue;
+    const g = `${p.fecha_ruta}|${p.facility_id}|${p.es_sdd}`;
+    (grupos[g] = grupos[g] || []).push(p);
+  }
+  for (const lista of Object.values(grupos)) {
+    const m = lista[0].hard_meli_sc;
+    const tope = m == null ? lista.length : Math.min(lista.length, Math.max(0, m));
+    lista.sort((a, b) => (revisiones[String(b.request_id)]?.resultado === "no_show") - (revisiones[String(a.request_id)]?.resultado === "no_show"));
+    lista.slice(0, tope).forEach(p => sumar(p, "hard"));
+  }
+  return items;
+}
+
+// Resumen para el Vendor Score: misma fuente y mismas reglas que Rechazos MELI
+export async function rmResumenPerdidas(desde, hasta) {
+  const { filas, revisiones } = await rmCargarDatos(desde, hasta);
+  const d = { softSdd: 0, softSpot: 0, hardSdd: 0, hardSpot: 0, multaAR: 0, multaER: 0, ingresoAR: 0, ingresoER: 0 };
+  for (const x of rmPerdidas(filas, revisiones)) {
+    if (x.tipo === "soft") { x.p.es_sdd ? d.softSdd++ : d.softSpot++; d.multaAR += x.multa; d.ingresoAR += x.ingreso; }
+    else { x.p.es_sdd ? d.hardSdd++ : d.hardSpot++; d.multaER += x.multa; d.ingresoER += x.ingreso; }
+  }
+  return d;
+}
+
 function RechazosMeliMX({ usuario }) {
   const hoy = fechaHoyOperativa();
   const mesActual = hoy.slice(0, 7);
@@ -79,57 +174,8 @@ function RechazosMeliMX({ usuario }) {
     (async () => {
       setCargando(true); setError(null); setDiaSel(null); setDetalle(null);
       try {
-        const todas = [];
-        for (let desde = 0; ; desde += 1000) {
-          const { data, error: e } = await sb.from("mx_pedidos_estado").select("request_id, travel_id, facility_id, fecha_ruta, status, es_sdd, vehiculo, tipo, eta, creado_meli, rosterizado, placa, chofer, travel_status_final, ultima_captura")
-            .gte("fecha_ruta", mes + "-01").lte("fecha_ruta", hastaVista).order("request_id").range(desde, desde + 999);
-          if (e) throw e;
-          todas.push(...(data || []));
-          if (!data || data.length < 1000) break;
-        }
-        const { data: rev } = await sb.from("mx_hard_revision").select("*").gte("fecha_ruta", mes + "-01").lte("fecha_ruta", hastaVista);
-        // Cruce con MELI: rutas ejecutadas (informe de rutas) y hard oficial por SC y día (confirmadas − ejecutadas)
-        const { data: ejec } = await sb.from("vs_rutas_ejecutadas").select("fecha, svc, route_id, placa, placa_norm, chofer, chofer_norm").gte("fecha", mes + "-01").lte("fecha", hastaVista).limit(20000);
-        const { data: fotos } = await sb.from("vs_foto_svc").select("fecha, svc, capturado_el, conf_sdd, ejec_sdd, conf_spot, ejec_spot").gte("fecha", mes + "-01").lte("fecha", hastaVista).limit(20000);
-        const conDatos = new Set((ejec || []).map(r => r.fecha));
-        const porPlaca = new Map(), porChofer = new Map();
-        for (const r of ejec || []) {
-          if (r.placa_norm) porPlaca.set(`${r.fecha}|${r.svc}|${r.placa_norm}`, r);
-          if (r.chofer_norm) porChofer.set(`${r.fecha}|${r.svc}|${r.chofer_norm}`, r);
-        }
-        const ultimaFoto = {};
-        for (const f of fotos || []) { const k = f.fecha + "|" + f.svc; if (!ultimaFoto[k] || f.capturado_el > ultimaFoto[k].capturado_el) ultimaFoto[k] = f; }
-        const normPlaca = x => String(x || "").toUpperCase().replace(/[^A-Z0-9]/g, "").replace(/^SDD/, "");
-        const normNombre = x => String(x || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
-        for (const p of todas) {
-          if (p.status !== "accepted" || p.rosterizado !== true) continue;
-          const k = `${p.fecha_ruta}|${p.facility_id}`;
-          const m = porPlaca.get(`${k}|${normPlaca(p.placa)}`) || porChofer.get(`${k}|${normNombre(p.chofer)}`);
-          p.salio_meli = conDatos.has(p.fecha_ruta) ? !!m : null;
-          p.ruta_meli = m ? m.route_id : null;
-          const f = ultimaFoto[k];
-          p.hard_meli_sc = f ? (p.es_sdd ? (f.conf_sdd || 0) - (f.ejec_sdd || 0) : (f.conf_spot || 0) - (f.ejec_spot || 0)) : null;
-        }
-        // Candidatas a no show del Brain por SC, día y modelo: sin placa ni chofer + asignadas sin salir sin ruta en MELI
-        const hoyOp = fechaHoyOperativa();
-        const esCandidata = p => p.status === "accepted" && p.fecha_ruta < hoyOp &&
-          (p.rosterizado === false || (p.rosterizado === true && p.travel_status_final === "created" && p.salio_meli !== true));
-        const nGrupo = {};
-        for (const p of todas) if (esCandidata(p)) { const g = `${p.fecha_ruta}|${p.facility_id}|${p.es_sdd}`; nGrupo[g] = (nGrupo[g] || 0) + 1; }
-        for (const p of todas) {
-          if (!esCandidata(p)) continue;
-          const g = `${p.fecha_ruta}|${p.facility_id}|${p.es_sdd}`;
-          if (p.hard_meli_sc == null) {
-            const f = ultimaFoto[`${p.fecha_ruta}|${p.facility_id}`];
-            p.hard_meli_sc = f ? (p.es_sdd ? (f.conf_sdd || 0) - (f.ejec_sdd || 0) : (f.conf_spot || 0) - (f.ejec_spot || 0)) : null;
-          }
-          const n = nGrupo[g], m = p.hard_meli_sc;
-          p.cmp_meli = m == null ? { txt: "Sin dato de MELI", color: RM_MUTED }
-            : n === m ? { txt: `Coincide con MELI ✅ (${m} de ${n})`, color: "#15803d" }
-            : n > m ? { txt: `MELI reconoce ${m} de ${n} · sobran ${n - m}: cancelación o cambio de MELI`, color: "#b45309" }
-            : { txt: `MELI cuenta ${m}; el Brain tiene ${n}`, color: RM_MUTED };
-        }
-        if (vivo) { setFilas(todas); setRevisiones(Object.fromEntries((rev || []).map(r => [String(r.request_id), r]))); }
+        const { filas: todas, revisiones: revMap } = await rmCargarDatos(mes + "-01", hastaVista);
+        if (vivo) { setFilas(todas); setRevisiones(revMap); }
       } catch (e) { if (vivo) setError(e.message || String(e)); }
       finally { if (vivo) setCargando(false); }
     })();
@@ -163,31 +209,10 @@ function RechazosMeliMX({ usuario }) {
     const dia = f => (porDia[f] = porDia[f] || { multa: 0, ingreso: 0, n: 0 });
     const svc = c => (porSvc[c] = porSvc[c] || { svc: c, soft: 0, hard: 0, multa: 0, ingreso: 0 });
     const q = f => { const k = `${f.slice(0, 4)}${f.slice(5, 7)}Q${Number(f.slice(8, 10)) <= 15 ? 1 : 2}`; return (porQ[k] = porQ[k] || { q: k, soft: 0, hard: 0, multa: 0, ingreso: 0 }); };
-    const sumar = (p, tipo) => {
-      const t = rmTarifa(p);
-      const multa = p.es_sdd ? t * (tipo === "soft" ? RM_PCT_SOFT : RM_PCT_HARD) : 0;
-      for (const b of [dia(p.fecha_ruta), svc(p.facility_id), q(p.fecha_ruta)]) { b.multa += multa; b.ingreso += t; b[tipo] = (b[tipo] || 0) + 1; b.n = (b.n || 0) + 1; }
+    const sumar = (x) => {
+      for (const b of [dia(x.p.fecha_ruta), svc(x.p.facility_id), q(x.p.fecha_ruta)]) { b.multa += x.multa; b.ingreso += x.ingreso; b[x.tipo] = (b[x.tipo] || 0) + 1; b.n = (b.n || 0) + 1; }
     };
-    // Soft: rechazadas + vencidas (SDD con multa 75%; Spot solo ingreso perdido)
-    for (const p of filas) if (p.status === "rejected" || p.status === "expired") sumar(p, "soft");
-    // Hard: rutas que no salieron (días cerrados), sin las que el analista marcó como cancelada o salió,
-    // y sin pasar del no show oficial de MELI en cada SC, día y modelo
-    const grupos = {};
-    for (const p of filas) {
-      if (p.status !== "accepted" || p.fecha_ruta >= hoyOp) continue;
-      const cand = p.rosterizado === false || (p.rosterizado === true && p.travel_status_final === "created" && p.salio_meli !== true);
-      if (!cand) continue;
-      const rv = revisiones[String(p.request_id)]?.resultado;
-      if (rv === "cancelada_meli" || rv === "salio") continue;
-      const g = `${p.fecha_ruta}|${p.facility_id}|${p.es_sdd}`;
-      (grupos[g] = grupos[g] || []).push(p);
-    }
-    for (const lista of Object.values(grupos)) {
-      const m = lista[0].hard_meli_sc;
-      const tope = m == null ? lista.length : Math.min(lista.length, Math.max(0, m));
-      lista.sort((a, b) => (revisiones[String(b.request_id)]?.resultado === "no_show") - (revisiones[String(a.request_id)]?.resultado === "no_show"));
-      lista.slice(0, tope).forEach(p => sumar(p, "hard"));
-    }
+    for (const x of rmPerdidas(filas, revisiones, hoyOp)) sumar(x);
     // Serie acumulada del mes
     let acM = 0, acI = 0;
     const serie = dias.map(d => { const x = porDia[d.fecha] || { multa: 0, ingreso: 0, n: 0 }; acM += x.multa; acI += x.ingreso; return { fecha: d.fecha, multa: x.multa, ingreso: x.ingreso, n: x.n, acMulta: acM, acIngreso: acI }; });
