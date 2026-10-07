@@ -585,6 +585,7 @@ function IndicadoresOperacionalesMX({ usuario }) {
   // El Padrón MELI (altas/bajas/cambios) se movió a Administración → "Padrón MELI".
   const tabs = [
     { id: "compromiso", label: "Torre de Control Compromiso", desc: "Compromiso MELI · SDD vs SPOT" },
+    { id: "pedidos_vivo", label: "Pedidos en vivo", desc: "Aceptación cada 5 min · alertas" },
     { id: "torre_rostering_hoy", label: "Torre de Control Rostering Hoy", desc: "Operativo en vivo · cronómetros + alertas SDD" },
     { id: "torre_d1", label: "Torre Control D-1", desc: "3 Pilares · MELI × Rostering × Operación" },
     { id: "kpi_operacion", label: "KPI de Operación", desc: "NS Informe MELI vs Snapshots" },
@@ -626,6 +627,7 @@ function IndicadoresOperacionalesMX({ usuario }) {
       </div>
 
       {vista === "compromiso" && <PoolMeliCompromiso />}
+      {vista === "pedidos_vivo" && <PedidosEnVivoMX />}
       {vista === "kpi_operacion" && <PoolMeliKPIOperacion />}
       {vista === "vendor_score" && <PoolVendorScore />}
       {vista === "diferencias" && <PoolMeliDiferenciasMaestros />}
@@ -6144,6 +6146,157 @@ function PoolMeliDiferenciasMaestros() {
   );
 }
 
+// ═══ Pedidos de vehículos en vivo (proceso pedidos-watch, cada 5 min) ═══
+const PV_ESTADOS = [
+  { id: "pending", txt: "Por responder", bg: "#fef3c7", fg: "#7a4f00" },
+  { id: "accepted", txt: "Aceptados", bg: "#dcfce7", fg: "#166534" },
+  { id: "rejected", txt: "Rechazados", bg: "#fde5d4", fg: "#9a3c06" },
+  { id: "expired", txt: "Vencidos sin responder", bg: "#fee2e2", fg: "#991b1b" },
+  { id: "canceled", txt: "Cancelados por MELI", bg: "#eef1f6", fg: "#2e3a4f" },
+];
+const PV_ALERTA = {
+  por_responder: { txt: "Por responder", bg: "#fef3c7", fg: "#7a4f00" },
+  rechazo: { txt: "Rechazado", bg: "#fde5d4", fg: "#9a3c06" },
+  vencido: { txt: "Vencido", bg: "#fee2e2", fg: "#991b1b" },
+  sesion: { txt: "Sin sesión", bg: "#e0e7ff", fg: "#3730a3" },
+};
+
+function PedidosEnVivoMX() {
+  const hoy = fechaHoyOperativa();
+  const sumar = (iso, n) => { const d = new Date(iso + "T12:00:00Z"); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+  const [fecha, setFecha] = useState(hoy);
+  const [pedidos, setPedidos] = useState([]);
+  const [alertas, setAlertas] = useState([]);
+  const [ultimo, setUltimo] = useState(null);
+  const [error, setError] = useState(null);
+  const [cargando, setCargando] = useState(true);
+
+  const cargar = useCallback(async () => {
+    setError(null);
+    try {
+      const desde24h = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
+      const [rP, rA, rU] = await Promise.all([
+        sb.from("mx_pedidos_estado").select("*").eq("fecha_ruta", fecha).limit(2000),
+        sb.from("mx_pedidos_alertas").select("*").gte("creado", desde24h).order("creado", { ascending: false }).limit(200),
+        sb.from("mx_pedidos_estado").select("ultima_vez").order("ultima_vez", { ascending: false }).limit(1),
+      ]);
+      if (rP.error) throw rP.error;
+      if (rA.error) throw rA.error;
+      setPedidos(rP.data || []); setAlertas(rA.data || []); setUltimo(rU.data?.[0]?.ultima_vez || null);
+    } catch (e) { setError(e.message || String(e)); }
+    finally { setCargando(false); }
+  }, [fecha]);
+
+  useEffect(() => { cargar(); const t = setInterval(cargar, 60_000); return () => clearInterval(t); }, [cargar]);
+
+  const porSvc = useMemo(() => {
+    const m = {};
+    for (const p of pedidos) {
+      const s = (m[p.facility_id] = m[p.facility_id] || { svc: p.facility_id, total: 0, sdd_rech: 0, spot_rech: 0 });
+      s[p.status] = (s[p.status] || 0) + 1; s.total++;
+      if (p.status === "rejected" || p.status === "expired") p.es_sdd ? s.sdd_rech++ : s.spot_rech++;
+    }
+    return Object.values(m).sort((a, b) => (b.rejected || 0) + (b.expired || 0) - ((a.rejected || 0) + (a.expired || 0)) || a.svc.localeCompare(b.svc));
+  }, [pedidos]);
+  const tot = useMemo(() => { const t = {}; for (const p of pedidos) t[p.status] = (t[p.status] || 0) + 1; return t; }, [pedidos]);
+  const minDesde = ultimo ? Math.round((Date.now() - new Date(ultimo).getTime()) / 60000) : null;
+  const card = { background: "#fff", border: "1px solid #e4e7ec", borderRadius: 12, padding: "18px 22px" };
+
+  return (
+    <div style={{ padding: 24, background: "#f0f2f5", minHeight: "100%", display: "flex", flexDirection: "column", gap: 18 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", gap: 16, flexWrap: "wrap" }}>
+        <div>
+          <div style={{ fontSize: 24, fontWeight: 700, color: "#1a3a6b" }}>Pedidos de vehículos en vivo</div>
+          <div style={{ fontSize: 13, color: "#5b6474", marginTop: 4 }}>
+            Se actualiza cada 5 minutos de 05:00 a 23:59 (México) directo desde MELI.{" "}
+            {minDesde != null && <b style={{ color: minDesde > 15 ? "#b42318" : "#15803d" }}>Último dato hace {minDesde} min{minDesde > 15 ? " · revisar el proceso" : ""}</b>}
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          {[0, 1, 2].map(n => {
+            const f = sumar(hoy, n), act = f === fecha;
+            return <button key={f} onClick={() => setFecha(f)} style={{ border: `1px solid ${act ? "#1a3a6b" : "#e4e7ec"}`, background: act ? "#1a3a6b" : "#fff", color: act ? "#fff" : "#1a1a1a", borderRadius: 999, padding: "6px 14px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+              {n === 0 ? "Hoy" : n === 1 ? "Mañana" : "Pasado mañana"} · {f.slice(8, 10)}/{f.slice(5, 7)}
+            </button>;
+          })}
+        </div>
+      </div>
+
+      {error && <div style={{ ...card, color: "#b42318" }}>No se pudieron leer los pedidos: {error}</div>}
+      {cargando && <div style={{ ...card, color: "#5b6474" }}>Cargando…</div>}
+
+      {!cargando && !error && (
+        <>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12 }}>
+            {PV_ESTADOS.map(e => (
+              <div key={e.id} style={{ ...card, padding: "14px 16px", borderTop: `4px solid ${e.fg}` }}>
+                <div style={{ fontSize: 13, color: "#5b6474" }}>{e.txt}</div>
+                <div style={{ fontSize: 30, fontWeight: 700, color: e.fg, fontVariantNumeric: "tabular-nums" }}>{tot[e.id] || 0}</div>
+              </div>
+            ))}
+          </div>
+
+          <div style={{ display: "flex", gap: 18, alignItems: "flex-start", flexWrap: "wrap" }}>
+            <div style={{ ...card, flex: "1 1 560px", minWidth: 0 }}>
+              <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 10 }}>Por service center</div>
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 620 }}>
+                  <thead>
+                    <tr style={{ color: "#5b6474", fontSize: 12, textAlign: "left" }}>
+                      {["SVC", "Por responder", "Aceptados", "Rechazados", "Vencidos", "No aceptados SDD", "No aceptados Spot", "Cancelados MELI", "Total"].map(h => (
+                        <th key={h} style={{ padding: "6px 8px", borderBottom: "1px solid #e4e7ec", fontWeight: 600 }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {porSvc.map(s => (
+                      <tr key={s.svc} style={{ borderBottom: "1px solid #f0f1f3" }}>
+                        <td style={{ padding: "7px 8px", fontWeight: 700 }}>{s.svc}</td>
+                        <td style={{ padding: "7px 8px", color: s.pending ? "#7a4f00" : "#5b6474", fontWeight: s.pending ? 700 : 400 }}>{s.pending || 0}</td>
+                        <td style={{ padding: "7px 8px" }}>{s.accepted || 0}</td>
+                        <td style={{ padding: "7px 8px", color: s.rejected ? "#9a3c06" : "#5b6474", fontWeight: s.rejected ? 700 : 400 }}>{s.rejected || 0}</td>
+                        <td style={{ padding: "7px 8px", color: s.expired ? "#991b1b" : "#5b6474", fontWeight: s.expired ? 700 : 400 }}>{s.expired || 0}</td>
+                        <td style={{ padding: "7px 8px" }}>{s.sdd_rech}</td>
+                        <td style={{ padding: "7px 8px" }}>{s.spot_rech}</td>
+                        <td style={{ padding: "7px 8px", color: "#5b6474" }}>{s.canceled || 0}</td>
+                        <td style={{ padding: "7px 8px", fontWeight: 700 }}>{s.total}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div style={{ fontSize: 12, color: "#5b6474", marginTop: 8, lineHeight: 1.5 }}>
+                "No aceptados" = rechazados + vencidos. En SDD cuentan como no show soft (bajan el AR del Vendor Score). El portal de MELI muestra los vencidos dentro de "Rechazados".
+              </div>
+            </div>
+
+            <div style={{ ...card, flex: "1 1 360px", maxHeight: 560, overflowY: "auto" }}>
+              <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 10 }}>Alertas de las últimas 24 horas</div>
+              {alertas.length === 0 && <div style={{ fontSize: 13, color: "#5b6474" }}>Sin alertas.</div>}
+              {alertas.map(a => {
+                const t = PV_ALERTA[a.tipo] || { txt: a.tipo, bg: "#f1f2f4", fg: "#5b6474" };
+                return (
+                  <div key={a.id} style={{ borderTop: "1px solid #f0f1f3", padding: "9px 0" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center" }}>
+                      <span style={{ padding: "2px 9px", borderRadius: 999, background: t.bg, color: t.fg, fontWeight: 700, fontSize: 11 }}>{t.txt}</span>
+                      <span style={{ fontSize: 12, color: "#5b6474" }}>
+                        {new Date(a.creado).toLocaleString("es-MX", { timeZone: "America/Mexico_City", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}
+                        {a.enviada ? " · enviada" : " · por enviar"}
+                      </span>
+                    </div>
+                    <div style={{ fontSize: 13, marginTop: 5, lineHeight: 1.45 }}>{a.mensaje}</div>
+                    {a.error_envio && <div style={{ fontSize: 11, color: "#b42318", marginTop: 3 }}>Error de envío: {a.error_envio}</div>}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 // ═══════════════════════════════════════════════════════════════════
 //  VENDOR SCORE MX — nota semanal que MELI pone a Big Ticket (0 a 100)
 //  Fuente: tablas vs_* que llena el scraper del VPS (/opt/vendor-score)
@@ -6152,6 +6305,30 @@ function PoolMeliDiferenciasMaestros() {
 // ═══════════════════════════════════════════════════════════════════
 const VS_INICIO = "2026-09-28";          // el registro parte este día: lunes de la semana 40 de MELI (sin historia previa)
 const VS_GMV_PAQUETE_RESPALDO = 640;     // MXN por paquete si el día no trae GMV (promedio sep-2026)
+
+// SVC que no entran en la pestaña ni en los cálculos
+const VS_EXCLUIR = ["SMXRV1"];
+const vsIncluir = svc => !VS_EXCLUIR.includes(svc);
+// Peso que le da Big Ticket a cada ramo: aceptar y cumplir pesan más porque son multas e ingreso perdido
+const VS_PESOS_BT = { ER: 35, AR: 30, BPP: 20, DS: 15 };
+const VS_ORDEN_BT = ["ER", "AR", "BPP", "DS"];
+const VS_NOMBRE_LARGO = { ER: "Cumplir las rutas aceptadas", AR: "Aceptar las rutas ofrecidas", BPP: "Reclamos de paquetes", DS: "Entregar los paquetes" };
+// Tarifa base promedio por SC (rango 0–100 km, prefactura MELI). Multas MELI: SDD no aceptada 75%, SDD aceptada no hecha 100%; Spot sin multa.
+const VS_TARIFA_SDD = { SCY1: 2500, SHP1: 2375, SMX7: 2320, SMX8: 2500, SMX10: 2500, SQR1: 2445, STL1: 2375, STX1: 2320, SVH1: 2515 };
+const VS_TARIFA_SPOT = { SCY1: 2385, SHP1: 2385, SMX1: 2510, SMX8: 2385, SMX10: 2035, SPY1: 2525, SQR1: 2455, STL1: 2385, STX1: 2780, SVH1: 2525 };
+function vsDinero(fotos) {
+  const d = { softSdd: 0, softSpot: 0, hardSdd: 0, hardSpot: 0, multaAR: 0, multaER: 0, ingresoAR: 0, ingresoER: 0 };
+  for (const f of fotos) {
+    const tS = VS_TARIFA_SDD[f.svc] ?? 2400, tP = VS_TARIFA_SPOT[f.svc] ?? 2385;
+    const sS = Math.max(0, (f.sol_sdd || 0) - (f.conf_sdd || 0)), sP = Math.max(0, (f.sol_spot || 0) - (f.conf_spot || 0));
+    const hS = Math.max(0, (f.conf_sdd || 0) - (f.ejec_sdd || 0)), hP = Math.max(0, (f.conf_spot || 0) - (f.ejec_spot || 0));
+    d.softSdd += sS; d.softSpot += sP; d.hardSdd += hS; d.hardSpot += hP;
+    d.multaAR += sS * tS * 0.75; d.multaER += hS * tS;
+    d.ingresoAR += sS * tS + sP * tP; d.ingresoER += hS * tS + hP * tP;
+  }
+  return d;
+}
+const vsNotaBT = t => vsRedondear(VS_ORDEN_BT.reduce((a, c) => a + VS_PESOS_BT[c] * ({ ER: t.er, AR: t.ar, BPP: t.bpp, DS: t.ds }[c] ?? 0) / 100, 0));
 const VS_NAVY = "#1a3a6b";
 const VS_ORANGE = "#F47B20";
 const VS_BORDER = "#e4e7ec";
@@ -6274,7 +6451,7 @@ function VsReclamosAcumulados({ desdeSemana, ayer }) {
       const { data, error } = await sb.from("vs_bpp_casos").select("*")
         .gte("shipment_day", desde).lte("shipment_day", ayer).limit(5000);
       if (!vivo) return;
-      if (error) setErr(error.message); else setFilas(data || []);
+      if (error) setErr(error.message); else setFilas((data || []).filter(x => vsIncluir(x.svc)));
       setCargando(false);
     })();
     return () => { vivo = false; };
@@ -6585,107 +6762,106 @@ const VS_QUE_ES = {
   AR: "Aceptar las rutas que MELI solicita. Cada solicitud cuenta: no hay tramos.",
 };
 
-function VsQueFalta({ total, svcs }) {
-  const camino = vsCaminoMeta(total);
-  const ops = vsOpciones(total);
+function VsQueFalta({ total, svcs, dinero }) {
   const base = vsPuntos(total);
   const faltan = Math.max(0, VS_META_OK - base);
   const num = { fontVariantNumeric: "tabular-nums" };
+  const pct = (a, b) => (b ? vsNum((a / b) * 100) : "—");
+  const queda = suma => vsRedondear(base + suma);
+  const Chip = ({ n }) => { const e = vsEstado(n); return <span style={{ padding: "1px 8px", borderRadius: 999, background: e.bg, color: e.fg, fontWeight: 700, fontSize: 11 }}>{e.txt}</span>; };
+  const Sube = ({ suma }) => <b style={{ color: "#15803d" }}>+{vsNum(suma)} pts → nota {queda(suma)} <Chip n={queda(suma)} /></b>;
 
-  // Una fila por ramo; DS y BPP muestran sus niveles alternativos
-  const ramos = ["DS", "BPP", "ER", "AR"]
-    .map(r => ({ ramo: r, niveles: ops.filter(o => o.ramo === r).sort((a, b) => a.nivel - b.nivel) }))
-    .filter(r => r.niveles.length)
-    .sort((a, b) => Math.max(...b.niveles.map(o => o.suma)) - Math.max(...a.niveles.map(o => o.suma)));
+  const filas = VS_ORDEN_BT.map(r => {
+    let estado, subir, plata = null;
+    if (r === "ER") {
+      const n = Math.max(0, total.conf - total.ejec), suma = 0.35 * (100 - (total.er ?? 0));
+      estado = <>Hicimos <b>{total.ejec}</b> de <b>{total.conf}</b> rutas aceptadas ({pct(total.ejec, total.conf)}%). <b style={{ color: n ? "#b42318" : "#15803d" }}>{n ? `${n} no salieron (no show).` : "Todas salieron."}</b></>;
+      subir = n ? <>Si salen todas las rutas aceptadas: <Sube suma={suma} />. Cada ruta que sale suma ~{vsNum(35 / Math.max(1, total.conf), 2)} pts.</> : "Mantener: todas las rutas aceptadas salieron.";
+      plata = dinero.multaER + dinero.ingresoER;
+    } else if (r === "AR") {
+      const n = Math.max(0, total.sol - total.conf), suma = 0.15 * (100 - (total.ar ?? 0));
+      estado = <>Aceptamos <b>{total.conf}</b> de <b>{total.sol}</b> rutas ofrecidas ({pct(total.conf, total.sol)}%). <b style={{ color: n ? "#b42318" : "#15803d" }}>{n ? `${n} rechazadas o vencidas.` : "Aceptamos todas."}</b></>;
+      subir = n ? <>Si se aceptan todas las rutas ofrecidas: <Sube suma={suma} />. Cada ruta aceptada suma ~{vsNum(15 / Math.max(1, total.sol), 2)} pts.</> : "Mantener: se aceptaron todas las rutas.";
+      plata = dinero.multaAR + dinero.ingresoAR;
+    } else if (r === "BPP") {
+      estado = total.bppPct == null ? "Sin datos de reclamos todavía." : <>Reclamos abiertos por <b>{vsPesos(total.montoBpp)}</b> = {vsNum(total.bppPct, 3)}% del valor despachado → nota BPP <b>{total.bpp}</b>.</>;
+      const niveles = [[0.2535, 25], [0.169, 50], [0.0845, 100]].filter(([, nota]) => nota > (total.bpp ?? 0));
+      subir = !niveles.length ? "Está en el tramo máximo (nota 100): disputar a tiempo los reclamos nuevos para no subir."
+        : niveles.map(([corte, nota]) => {
+            const salvar = Math.max(0, total.montoBpp - (corte / 100) * total.gmv), suma = 0.2 * (nota - (total.bpp ?? 0));
+            return <div key={corte}>Salvando <b>{vsPesos(salvar)}</b> en disputas (bajar de {vsNum(corte, 3)}%), el BPP pasa a nota {nota}: <Sube suma={suma} /></div>;
+          });
+      plata = total.montoBpp;
+    } else {
+      estado = total.dsPct == null ? "Sin paquetes despachados todavía." : <>Entregamos <b>{total.entr.toLocaleString("es-MX")}</b> de <b>{total.desp.toLocaleString("es-MX")}</b> paquetes ({vsNum(total.dsPct, 2)}%) → nota DS <b>{total.ds}</b>.</>;
+      const niveles = [[97.0, 50], [97.5, 75], [98.5, 100]].filter(([, nota]) => nota > (total.ds ?? 0));
+      subir = total.dsPct == null ? "—" : !niveles.length ? "Está en el tramo máximo (98,5% o más)."
+        : niveles.map(([corte, nota]) => {
+            const n = Math.max(1, Math.ceil((corte / 100) * total.desp - total.entr - 1e-9)), suma = 0.3 * (nota - (total.ds ?? 0));
+            return <div key={corte}>Entregando <b>{n.toLocaleString("es-MX")} paquetes más</b> se llega a {vsNum(corte, 1)}% y el DS pasa de nota {total.ds} a {nota}: <Sube suma={suma} /></div>;
+          });
+    }
+    return { r, estado, subir, plata, pierde: total.pierde[r] };
+  });
 
   const lugares = (ramo, max = 4) => {
     const l = vsDondeAtacar(ramo, svcs);
-    if (!l.length) return <span style={{ color: VS_MUTED }}>Sin detalle por SVC</span>;
-    return (
-      <>
-        {l.slice(0, max).map(x => (
-          <div key={x.svc}><b>{x.svc}</b>: {x.txt} <span style={{ color: VS_MUTED }}>({x.pct}%)</span></div>
-        ))}
-        {l.length > max && <div style={{ color: VS_MUTED }}>y {l.length - max} SVC más</div>}
-      </>
-    );
+    if (!l.length) return <span style={{ color: VS_MUTED }}>—</span>;
+    return (<>
+      {l.slice(0, max).map(x => <div key={x.svc}><b>{x.svc}</b>: {x.txt} <span style={{ color: VS_MUTED }}>({x.pct}%)</span></div>)}
+      {l.length > max && <div style={{ color: VS_MUTED }}>y {l.length - max} SVC más</div>}
+    </>);
   };
+  const etiquetaPlata = { ER: "multas + ingreso perdido", AR: "multas + ingreso perdido", BPP: "en reclamos abiertos", DS: "sin multa directa" };
 
   return (
-    <div style={{ background: "#fff", border: `1px solid ${VS_BORDER}`, borderLeft: `5px solid ${camino.yaCumple ? "#15803d" : VS_ORANGE}`, borderRadius: 12, padding: "22px 26px" }}>
+    <div style={{ background: "#fff", border: `1px solid ${VS_BORDER}`, borderLeft: `5px solid ${base >= VS_META_OK ? "#15803d" : VS_ORANGE}`, borderRadius: 12, padding: "22px 26px" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
-        <div style={{ fontSize: 18, fontWeight: 700 }}>Qué falta para cumplir</div>
-        <div style={{ fontSize: 12, color: VS_MUTED }}>Meta: OK (80 puntos) · con lo acumulado hasta ayer</div>
+        <div style={{ fontSize: 18, fontWeight: 700 }}>Dónde fallamos y cómo mejorar</div>
+        <div style={{ fontSize: 12, color: VS_MUTED }}>En orden de importancia para Big Ticket · meta MELI: 80 puntos</div>
       </div>
-
-      <div style={{ fontSize: 15, marginTop: 10, lineHeight: 1.6 }}>
-        {camino.yaCumple && <>La semana está en <b>OK</b>. Para mantenerla, cuida los ramos de la tabla de abajo.</>}
-        {!camino.yaCumple && camino.imposible && <>Faltan <b>{vsNum(faltan)} puntos</b> para OK y con lo acumulado no alcanza ni mejorando todos los ramos: los días que quedan de la semana tienen que salir mejor.</>}
-        {!camino.yaCumple && !camino.imposible && (
-          <>
-            Faltan <b>{vsNum(faltan)} puntos</b> para llegar a OK. El camino más corto:{" "}
-            {camino.acciones.map((o, i) => {
-              const top = vsDondeAtacar(o.ramo, svcs).slice(0, 2).map(x => x.svc);
-              return (
-                <span key={o.ramo}>
-                  {i > 0 && " + "}
-                  <b>{o.accion.charAt(0).toLowerCase() + o.accion.slice(1)}</b> ({o.cantidad}, +{vsNum(o.suma)} pts)
-                  {top.length > 0 && <>, atacando primero <b>{top.join(" y ")}</b></>}
-                </span>
-              );
-            })}
-            . Con eso la nota quedaría en <b style={{ color: "#15803d" }}>{camino.final}</b>.
-          </>
-        )}
+      <div style={{ fontSize: 15, marginTop: 8, lineHeight: 1.55 }}>
+        {base >= VS_META_OK ? <>La semana va en <b>OK</b> para MELI. Igual, cada ruta no aceptada o no hecha nos cuesta plata: mira la columna de dinero.</>
+          : <>Faltan <b>{vsNum(faltan)} puntos</b> para llegar a OK (80).</>}
       </div>
-
-      {ramos.length > 0 && (
-        <div style={{ overflowX: "auto", marginTop: 14 }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 900 }}>
-            <thead>
-              <tr style={{ color: VS_MUTED, fontSize: 12, textAlign: "left" }}>
-                {["Ramo", "Qué mejorar", "Cuánto falta y cuánto suma", "Dónde atacar (SVC)", "Cómo lograrlo"].map(h => (
-                  <th key={h} style={{ padding: "6px 8px", borderBottom: `1px solid ${VS_BORDER}`, fontWeight: 600 }}>{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {ramos.map(r => (
-                <tr key={r.ramo} style={{ borderBottom: "1px solid #f0f1f3", verticalAlign: "top" }}>
-                  <td style={{ padding: "10px 8px", fontWeight: 700, whiteSpace: "nowrap" }}>{r.ramo} · {VS_NOMBRE_RAMO[r.ramo]}</td>
-                  <td style={{ padding: "10px 8px", color: "#2b3038", lineHeight: 1.45, maxWidth: 240 }}>{VS_QUE_ES[r.ramo]}</td>
-                  <td style={{ padding: "10px 8px", lineHeight: 1.6 }}>
-                    {r.niveles.map((o, i) => {
-                      const queda = vsRedondear(base + o.suma);
-                      const e = vsEstado(queda);
-                      return (
-                        <div key={i} style={num}>
-                          {o.accion.replace(/^Llevar el DS a |^Bajar el BPP a /, "")}: <b>{o.cantidad}</b>{" "}
-                          <span style={{ color: "#15803d", fontWeight: 700 }}>+{vsNum(o.suma)}</span>{" "}
-                          → <b>{queda}</b>{" "}
-                          <span style={{ padding: "1px 7px", borderRadius: 999, background: e.bg, color: e.fg, fontWeight: 700, fontSize: 11 }}>{e.txt}</span>
-                        </div>
-                      );
-                    })}
-                    {r.niveles[0].porUnidad && <div style={{ fontSize: 12, color: VS_MUTED }}>cada una vale unos {vsNum(r.niveles[0].porUnidad, 2)} pts</div>}
-                  </td>
-                  <td style={{ padding: "10px 8px", lineHeight: 1.6, whiteSpace: "nowrap" }}>{lugares(r.ramo)}</td>
-                  <td style={{ padding: "10px 8px", color: "#2b3038", lineHeight: 1.45, maxWidth: 300 }}>{VS_PROPUESTA[r.ramo]}</td>
-                </tr>
+      <div style={{ overflowX: "auto", marginTop: 14 }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 980 }}>
+          <thead>
+            <tr style={{ color: VS_MUTED, fontSize: 12, textAlign: "left" }}>
+              {["#", "Ramo", "Cómo vamos", "Lo que nos cuesta", "Cómo subir", "Dónde atacar (SVC)"].map(h => (
+                <th key={h} style={{ padding: "6px 8px", borderBottom: `1px solid ${VS_BORDER}`, fontWeight: 600 }}>{h}</th>
               ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+            </tr>
+          </thead>
+          <tbody>
+            {filas.map((f, idx) => (
+              <tr key={f.r} style={{ borderBottom: "1px solid #f0f1f3", verticalAlign: "top" }}>
+                <td style={{ padding: "12px 8px", fontWeight: 800, color: VS_NAVY, fontSize: 16 }}>{idx + 1}</td>
+                <td style={{ padding: "12px 8px", minWidth: 150 }}>
+                  <div style={{ fontWeight: 700 }}>{f.r} · {VS_NOMBRE_LARGO[f.r]}</div>
+                  <div style={{ fontSize: 11, color: VS_MUTED, marginTop: 2 }}>Peso MELI {VS_PESOS[f.r]} · peso BT {VS_PESOS_BT[f.r]}</div>
+                </td>
+                <td style={{ padding: "12px 8px", lineHeight: 1.5, maxWidth: 280 }}>{f.estado}</td>
+                <td style={{ padding: "12px 8px", whiteSpace: "nowrap" }}>
+                  <div style={{ ...num, fontWeight: 700, color: f.pierde > 0.05 ? "#9a3c06" : "#15803d" }}>{f.pierde > 0.05 ? `−${vsNum(f.pierde)} pts` : "Sin pérdida"}</div>
+                  {f.plata > 0 && <div style={{ ...num, fontWeight: 800, color: "#b42318", fontSize: 15 }}>−{vsPesos(f.plata)}</div>}
+                  <div style={{ fontSize: 11, color: VS_MUTED }}>{etiquetaPlata[f.r]}</div>
+                </td>
+                <td style={{ padding: "12px 8px", lineHeight: 1.55, maxWidth: 360 }}>{f.subir}</td>
+                <td style={{ padding: "12px 8px", lineHeight: 1.6, whiteSpace: "nowrap" }}>{lugares(f.r)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
       <div style={{ fontSize: 12, color: VS_MUTED, marginTop: 10, lineHeight: 1.5 }}>
-        "Dónde atacar" muestra los SVC que concentran lo que falta, con su parte del total entre paréntesis. Las cantidades se calcularon sobre lo acumulado de la semana:
-        lo que ya pasó no se puede rehacer, pero los días que quedan sí pueden compensar. Cada nivel se mide por separado y la nota que aparece al lado es la que quedaría si solo se hace esa mejora.
+        "Lo que nos cuesta" muestra los puntos que se pierden en la nota de MELI y la plata de la semana: en aceptar y cumplir, la multa de MELI (SDD: 75% de la tarifa por cada ruta no aceptada y 100% por cada aceptada que no salió) más la tarifa que dejamos de ganar.
+        "Cómo subir" dice cuánto subiría la nota si se hace solo esa mejora. Lo que ya pasó no se puede rehacer, pero los días que quedan de la semana sí pueden compensar.
       </div>
     </div>
   );
 }
 
-// ═══ Evolución semanal: nota oficial de MELI (correos) vs estimación del Brain ═══
 function VsHistoricoSemanal({ ayer }) {
   const [oficial, setOficial] = useState([]);
   const [fotos, setFotos] = useState([]);
@@ -6709,11 +6885,11 @@ function VsHistoricoSemanal({ ayer }) {
         if (rC.error) throw rC.error;
         if (!vivo) return;
         const ultima = {};
-        for (const f of rF.data || []) {
+        for (const f of (rF.data || []).filter(x => vsIncluir(x.svc))) {
           const k = f.fecha + "|" + f.svc;
           if (!ultima[k] || f.capturado_el > ultima[k].capturado_el) ultima[k] = f;
         }
-        setOficial(rO.data || []); setFotos(Object.values(ultima)); setCasos(rC.data || []);
+        setOficial((rO.data || []).filter(x => vsIncluir(x.svc))); setFotos(Object.values(ultima)); setCasos((rC.data || []).filter(x => vsIncluir(x.svc)));
       } catch (e) {
         if (vivo) setErr(e.message || String(e));
       } finally {
@@ -6909,13 +7085,13 @@ function PoolVendorScore() {
         if (!alive) return;
         // De cada día y SVC se usa la foto más reciente
         const ultima = {};
-        for (const f of rF.data || []) {
+        for (const f of (rF.data || []).filter(x => vsIncluir(x.svc))) {
           const k = f.fecha + "|" + f.svc;
           if (!ultima[k] || f.capturado_el > ultima[k].capturado_el) ultima[k] = f;
         }
         setFotos(Object.values(ultima));
-        setCasos(rC.data || []);
-        setNuevosHoy(rN.data || []);
+        setCasos((rC.data || []).filter(x => vsIncluir(x.svc)));
+        setNuevosHoy((rN.data || []).filter(x => vsIncluir(x.svc)));
       } catch (e) {
         if (alive) setError(e.message || String(e));
       } finally {
@@ -6993,7 +7169,8 @@ function PoolVendorScore() {
   const sinDatos = !loading && !error && fotos.length === 0;
   const est = vsEstado(total.score);
   const ganados = 100 - Object.values(total.pierde).reduce((a, b) => a + b, 0);
-  const comps = ["ER", "AR", "DS", "BPP"].sort((a, b) => total.pierde[b] - total.pierde[a]);
+  const comps = VS_ORDEN_BT;
+  const dinero = useMemo(() => vsDinero(fotos), [fotos]);
   const nombres = { ER: "Cumplir rutas", AR: "Aceptar rutas", DS: "Entregar", BPP: "Reclamos" };
   const metrica = {
     ER: { v: total.conf ? `${vsNum((total.ejec / total.conf) * 100)}%` : "—", txt: `rutas ejecutadas de las confirmadas (${total.ejec} de ${total.conf})` },
@@ -7010,13 +7187,6 @@ function PoolVendorScore() {
   return (
     <div style={{ padding: 24, background: "#f0f2f5", minHeight: "100%", color: VS_TEXT }}>
 
-      {/* Aviso de qué fecha y qué tan exacto es */}
-      <div style={{ background: "#fff8eb", border: "1px solid #f5d9a8", borderRadius: 10, padding: "12px 16px", marginBottom: 18, fontSize: 13, lineHeight: 1.55, color: "#5c4300" }}>
-        <b>Indicador del {vsFechaLarga(hoy)} con datos hasta el {vsFechaLarga(ayer)}.</b>{" "}
-        Cada mañana se actualiza con el día anterior. Es una <b>aproximación</b> calculada por Big Ticket con los datos del portal de MELI:
-        el número oficial es el que envía MELI en su reporte semanal. El BPP usa reclamos <b>abiertos</b> (antes de disputas), por eso puede verse peor que el final.
-        {gmvRespaldo && " Algunos días no traían GMV y se usó un promedio de $640 por paquete."}
-      </div>
 
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 18, flexWrap: "wrap" }}>
         <label htmlFor="vs-semana" style={{ fontSize: 13, fontWeight: 600, color: VS_TEXT }}>Semana</label>
@@ -7029,15 +7199,13 @@ function PoolVendorScore() {
           })}
         </select>
         {!esActual && <button onClick={() => setLunesSel(lunesActual)} style={{ border: "none", background: "transparent", color: VS_NAVY, fontWeight: 600, fontSize: 13, cursor: "pointer", textDecoration: "underline" }}>Volver a la semana en curso</button>}
-        <span style={{ fontSize: 12, color: VS_MUTED }}>El registro empezó el {vsFechaCorta(VS_INICIO)}: no hay semanas anteriores.</span>
       </div>
 
       {loading && <div style={{ ...card, color: VS_MUTED }}>Cargando el Vendor Score…</div>}
       {error && <div style={{ ...card, color: "#b42318" }}>No se pudo leer el Vendor Score: {error}. Revisa que las tablas vs_* existan y que el scraper haya corrido.</div>}
       {sinDatos && (
         <div style={{ ...card, color: VS_MUTED, lineHeight: 1.6 }}>
-          Todavía no hay datos de esta semana. El scraper corre cada día a las 7:00 de México y guarda el día anterior.
-          El registro empezó el {vsFechaCorta(VS_INICIO)}.
+          Todavía no hay datos de esta semana. Se actualiza cada mañana con los datos del día anterior.
         </div>
       )}
 
@@ -7051,12 +7219,7 @@ function PoolVendorScore() {
               <div style={{ fontSize: 30, fontWeight: 700, color: VS_NAVY, lineHeight: 1.15 }}>
                 Semana {semMeli} · {vsFechaCorta(lunes)} al {vsFechaCorta(domingo)}
               </div>
-              <div style={{ fontSize: 14, color: VS_MUTED, marginTop: 6, lineHeight: 1.5 }}>
-                {esActual
-                  ? <>Semana en curso. La nota acumulada usa del {vsFechaLarga(desde)} al {vsFechaLarga(hasta)} ({evolucion.length} de 7 días): si el resto de la semana sigue igual, cierra con esta nota.</>
-                  : <>Semana cerrada: nota final con los datos del {vsFechaLarga(desde)} al {vsFechaLarga(hasta)}.</>}
-                {" "}Pondera 35% cumplir rutas (ER), 15% aceptar (AR), 30% entregar (DS) y 20% reclamos (BPP). Es la misma numeración de semanas de los correos de MELI.
-              </div>
+              <div style={{ fontSize: 13, color: VS_MUTED, marginTop: 6 }}>Datos hasta el {vsFechaLarga(hasta)}{esActual ? " · semana en curso" : " · semana cerrada"}</div>
             </div>
             <div style={{ display: "flex", alignItems: "flex-end", gap: 16 }}>
               {evolucion.length > 0 && (() => {
@@ -7073,8 +7236,13 @@ function PoolVendorScore() {
                   </div>
                 );
               })()}
+              <div style={{ border: `2px solid ${VS_ORANGE}`, background: "#fff7ef", borderRadius: 10, padding: "10px 14px", marginRight: 8 }}>
+                <div style={{ fontSize: 12, color: "#9a3c06", fontWeight: 700 }}>Nota Big Ticket</div>
+                <div style={{ ...num, fontSize: 34, fontWeight: 800, color: "#9a3c06" }}>{vsNotaBT(total)}</div>
+                <div style={{ fontSize: 11, color: "#9a3c06", maxWidth: 170, lineHeight: 1.35 }}>Pesa más aceptar (30) y cumplir (35): son multas y plata perdida</div>
+              </div>
               <div>
-                <div style={{ fontSize: 12, color: VS_MUTED, marginBottom: 4 }}>Nota acumulada de la semana</div>
+                <div style={{ fontSize: 12, color: VS_MUTED, marginBottom: 4 }}>Nota MELI de la semana</div>
                 <div style={{ display: "flex", alignItems: "baseline", gap: 4 }}>
                   <span style={{ ...num, fontSize: 84, fontWeight: 700, lineHeight: 0.9, color: VS_NAVY }}>{total.score}</span>
                   <span style={{ fontSize: 22, color: VS_MUTED }}>/100</span>
@@ -7091,13 +7259,13 @@ function PoolVendorScore() {
           </div>
 
           {/* Qué falta para cumplir */}
-          <VsQueFalta total={total} svcs={svcs} />
+          <VsQueFalta total={total} svcs={svcs} dinero={dinero} />
 
           {/* Dónde se pierden los puntos */}
           <div style={card}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 16, flexWrap: "wrap", marginBottom: 14 }}>
-              <div style={{ fontSize: 18, fontWeight: 700 }}>Dónde se pierden los puntos</div>
-              <div style={{ fontSize: 13, color: VS_MUTED }}>De 100 puntos posibles se ganan {vsNum(ganados)}.</div>
+              <div style={{ fontSize: 18, fontWeight: 700 }}>Dónde perdemos puntos y plata</div>
+              <div style={{ fontSize: 13, color: VS_MUTED }}>De 100 puntos de MELI ganamos {vsNum(ganados)} · esta semana perdemos <b style={{ color: "#b42318" }}>{vsPesos(dinero.multaAR + dinero.multaER + dinero.ingresoAR + dinero.ingresoER)}</b> por no aceptar o no hacer rutas</div>
             </div>
             <div style={{ display: "flex", height: 38, borderRadius: 8, overflow: "hidden", fontSize: 12, fontWeight: 700 }}>
               <div style={{ width: `${ganados}%`, background: VS_NAVY, color: "#fff", display: "flex", alignItems: "center", paddingLeft: 12, whiteSpace: "nowrap" }}>Ganados {vsNum(ganados)}</div>
@@ -7115,8 +7283,8 @@ function PoolVendorScore() {
               {comps.map(c => (
                 <div key={c} style={{ border: `1px solid ${VS_BORDER}`, borderRadius: 10, padding: 16, background: "#fbfbfc", display: "flex", flexDirection: "column", gap: 10 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-                    <div style={{ fontSize: 15, fontWeight: 700 }}>{c} · {nombres[c]}</div>
-                    <div style={{ fontSize: 12, color: VS_MUTED }}>pesa {VS_PESOS[c]}</div>
+                    <div style={{ fontSize: 15, fontWeight: 700 }}>{VS_ORDEN_BT.indexOf(c) + 1}. {c} · {nombres[c]}</div>
+                    <div style={{ fontSize: 11, color: VS_MUTED, textAlign: "right" }}>MELI pesa {VS_PESOS[c]}<br /><b style={{ color: "#9a3c06" }}>BT pesa {VS_PESOS_BT[c]}</b></div>
                   </div>
                   <div>
                     <div style={{ ...num, fontSize: 28, fontWeight: 700 }}>{metrica[c].v}</div>
@@ -7126,6 +7294,16 @@ function PoolVendorScore() {
                     <span>Nota {compScore[c] ?? "sin datos"} · aporta {vsNum(VS_PESOS[c] - total.pierde[c])} de {VS_PESOS[c]}</span>
                     <span style={{ fontWeight: 700, color: total.pierde[c] > 0.05 ? "#9a3c06" : VS_MUTED }}>{total.pierde[c] > 0.05 ? `−${vsNum(total.pierde[c])}` : "sin pérdida"}</span>
                   </div>
+                  {(c === "ER" || c === "AR") && (
+                    <div style={{ background: "#fef2f2", borderRadius: 8, padding: "8px 10px" }}>
+                      <div style={{ fontSize: 12, color: "#991b1b" }}>{c === "ER" ? "Rutas aceptadas que no salieron (no show)" : "Rutas ofrecidas que no aceptamos"}</div>
+                      <div style={{ ...num, fontSize: 22, fontWeight: 800, color: "#b42318" }}>−{vsPesos(c === "ER" ? dinero.multaER + dinero.ingresoER : dinero.multaAR + dinero.ingresoAR)}</div>
+                      <div style={{ fontSize: 11, color: "#991b1b" }}>
+                        {c === "ER" ? `${dinero.hardSdd} SDD + ${dinero.hardSpot} Spot · multas ${vsPesos(dinero.multaER)} + ingreso perdido ${vsPesos(dinero.ingresoER)}`
+                                    : `${dinero.softSdd} SDD + ${dinero.softSpot} Spot · multas ${vsPesos(dinero.multaAR)} + ingreso perdido ${vsPesos(dinero.ingresoAR)}`}
+                      </div>
+                    </div>
+                  )}
                   <div style={{ height: 1, background: VS_BORDER }} />
                   <div style={{ fontSize: 13, lineHeight: 1.45, color: "#2b3038" }}>{vsMeta(c, total)}</div>
                 </div>
