@@ -6258,16 +6258,16 @@ function RechazosMeliMX({ usuario }) {
                 </div>
                 {costos.ultimo && (
                   <div style={{ background: "rgba(255,255,255,.12)", borderRadius: 10, padding: "14px 16px" }}>
-                    <div style={{ fontSize: 13, opacity: 0.85 }}>Último día cerrado ({costos.ultimo.fecha.slice(8, 10)}/{costos.ultimo.fecha.slice(5, 7)}) sumó</div>
-                    <div style={{ fontSize: 26, fontWeight: 800, fontVariantNumeric: "tabular-nums" }}>+{rmPesos(costos.ultimo.multa + costos.ultimo.ingreso)}</div>
-                    <div style={{ fontSize: 12, opacity: 0.8 }}>{costos.ultimo.n} rutas · multas {rmPesos(costos.ultimo.multa)}</div>
+                    <div style={{ fontSize: 13, opacity: 0.85 }}>Pérdida del último día cerrado ({costos.ultimo.fecha.slice(8, 10)}/{costos.ultimo.fecha.slice(5, 7)})</div>
+                    <div style={{ fontSize: 26, fontWeight: 800, fontVariantNumeric: "tabular-nums" }}>−{rmPesos(costos.ultimo.multa + costos.ultimo.ingreso)}</div>
+                    <div style={{ fontSize: 12, opacity: 0.8 }}>{costos.ultimo.n} rutas que no hicimos: {rmPesos(costos.ultimo.multa)} en multas + {rmPesos(costos.ultimo.ingreso)} que dejamos de ganar</div>
                   </div>
                 )}
                 {costos.proy && (
                   <div style={{ background: "rgba(255,255,255,.12)", borderRadius: 10, padding: "14px 16px" }}>
-                    <div style={{ fontSize: 13, opacity: 0.85 }}>Si seguimos así, al cierre del mes</div>
-                    <div style={{ fontSize: 26, fontWeight: 800, fontVariantNumeric: "tabular-nums" }}>{rmPesos(costos.proy.multa + costos.proy.ingreso)}</div>
-                    <div style={{ fontSize: 12, opacity: 0.8 }}>multas {rmPesos(costos.proy.multa)}</div>
+                    <div style={{ fontSize: 13, opacity: 0.85 }}>Pérdida al cierre del mes si seguimos así</div>
+                    <div style={{ fontSize: 26, fontWeight: 800, fontVariantNumeric: "tabular-nums" }}>−{rmPesos(costos.proy.multa + costos.proy.ingreso)}</div>
+                    <div style={{ fontSize: 12, opacity: 0.8 }}>{rmPesos(costos.proy.multa)} en multas + {rmPesos(costos.proy.ingreso)} que dejaríamos de ganar</div>
                   </div>
                 )}
               </div>
@@ -6283,7 +6283,7 @@ function RechazosMeliMX({ usuario }) {
                     {costos.serie.map(x => {
                       const tot = x.acMulta + x.acIngreso;
                       return (
-                        <div key={x.fecha} title={`${x.fecha.slice(8, 10)}/${x.fecha.slice(5, 7)}: acumulado ${rmPesos(tot)} (ese día +${rmPesos(x.multa + x.ingreso)}, ${x.n} rutas)`}
+                        <div key={x.fecha} title={`${x.fecha.slice(8, 10)}/${x.fecha.slice(5, 7)}: pérdida acumulada −${rmPesos(tot)} (ese día −${rmPesos(x.multa + x.ingreso)}, ${x.n} rutas)`}
                           style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "flex-end", height: "100%", minWidth: 6 }}>
                           <div style={{ height: `${(x.acIngreso / max) * 100}%`, background: "rgba(255,255,255,.35)", borderRadius: "3px 3px 0 0" }} />
                           <div style={{ height: `${(x.acMulta / max) * 100}%`, background: "#fca5a5" }} />
