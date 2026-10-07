@@ -1,5 +1,6 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { descargarExcelMeli, descargarExcelMultihoja, fechaHoyOperativa, fechaOperativaOffset, pct, sb } from "./shared";
+import RechazosMeliMX from "./RechazosMeli";
 
 // ═══════════════════════════════════════════════════════════════════
 //  TAREAS DEL JEFE DE SUPERVISORES — Alta Operacional (Etapa 7)
@@ -586,6 +587,7 @@ function IndicadoresOperacionalesMX({ usuario }) {
   const tabs = [
     { id: "compromiso", label: "Torre de Control Compromiso", desc: "Compromiso MELI · SDD vs SPOT" },
     { id: "pedidos_vivo", label: "Pedidos en vivo", desc: "Aceptación cada 5 min · alertas" },
+    { id: "rechazos_meli", label: "Rechazos MELI", desc: "Rutas no aceptadas y no hechas · pérdida en $" },
     { id: "torre_rostering_hoy", label: "Torre de Control Rostering Hoy", desc: "Operativo en vivo · cronómetros + alertas SDD" },
     { id: "torre_d1", label: "Torre Control D-1", desc: "3 Pilares · MELI × Rostering × Operación" },
     { id: "kpi_operacion", label: "KPI de Operación", desc: "NS Informe MELI vs Snapshots" },
@@ -628,6 +630,7 @@ function IndicadoresOperacionalesMX({ usuario }) {
 
       {vista === "compromiso" && <PoolMeliCompromiso />}
       {vista === "pedidos_vivo" && <PedidosEnVivoMX />}
+      {vista === "rechazos_meli" && <RechazosMeliMX usuario={usuario} />}
       {vista === "kpi_operacion" && <PoolMeliKPIOperacion />}
       {vista === "vendor_score" && <PoolVendorScore />}
       {vista === "diferencias" && <PoolMeliDiferenciasMaestros />}
