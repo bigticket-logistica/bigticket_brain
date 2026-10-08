@@ -6310,7 +6310,8 @@ const VS_INICIO = "2026-09-28";          // el registro parte este día: lunes d
 const VS_GMV_PAQUETE_RESPALDO = 640;     // MXN por paquete si el día no trae GMV (promedio sep-2026)
 
 // SVC que no entran en la pestaña ni en los cálculos
-const VS_EXCLUIR = ["SMXRV1"];
+// SMXRV1 por decisión de Big Ticket; los demás son SC de Chile que el portal de MELI devuelve a la misma sesión
+const VS_EXCLUIR = ["SMXRV1", "SIL1", "SLT1", "SBB1", "SRM1", "SRM2", "SRM3"];
 const vsIncluir = svc => !VS_EXCLUIR.includes(svc);
 // Peso que le da Big Ticket a cada ramo: aceptar y cumplir pesan más porque son multas e ingreso perdido
 const VS_PESOS_BT = { ER: 35, AR: 30, BPP: 20, DS: 15 };
@@ -7111,13 +7112,13 @@ function PoolVendorScore() {
       for (const k in add) { s[k] += add[k]; tot[k] += add[k]; }
     }
     for (const c of casos) {
-      if (!porSvc[c.svc]) porSvc[c.svc] = base();
+      if (!porSvc[c.svc]) continue; // reclamo de un SC sin rutas ni paquetes en México: no se cuenta
       const s = porSvc[c.svc];
       s.bpp += Number(c.gmv) || 0; tot.bpp += Number(c.gmv) || 0;
     }
     // Solo SVC con actividad en la semana: descarta SC sin rutas ni paquetes (por ejemplo, los de Chile que lista el portal)
     const lista = Object.entries(porSvc)
-      .filter(([, b]) => b.sol > 0 || b.conf > 0 || b.desp > 0 || b.bpp > 0)
+      .filter(([, b]) => b.sol > 0 || b.conf > 0 || b.desp > 0)
       .map(([svc, b]) => ({ svc, ...vsCalcular(b) }))
       .sort((a, b) => a.score - b.score);
     return { total: vsCalcular(tot), svcs: lista, gmvRespaldo: respaldo };
