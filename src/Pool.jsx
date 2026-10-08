@@ -6313,6 +6313,13 @@ const VS_GMV_PAQUETE_RESPALDO = 640;     // MXN por paquete si el día no trae G
 // SMXRV1 por decisión de Big Ticket; los demás son SC de Chile que el portal de MELI devuelve a la misma sesión
 const VS_EXCLUIR = ["SMXRV1", "SIL1", "SLT1", "SBB1", "SRM1", "SRM2", "SRM3"];
 const vsIncluir = svc => !VS_EXCLUIR.includes(svc);
+// SVC de México: los que alguna vez tuvieron paquetes despachados en la foto diaria. Los reclamos de cualquier
+// otro SC (Chile u otro país que devuelva el portal a la misma sesión) no se cuentan.
+let _vsSvcMexico = null;
+const vsSvcMexico = () => (_vsSvcMexico = _vsSvcMexico || (async () => {
+  const { data } = await sb.from("vs_foto_svc").select("svc").gt("despachados", 0).limit(20000);
+  return new Set((data || []).map(r => r.svc).filter(vsIncluir));
+})());
 // Peso que le da Big Ticket a cada ramo: aceptar y cumplir pesan más porque son multas e ingreso perdido
 const VS_PESOS_BT = { ER: 35, AR: 30, BPP: 20, DS: 15 };
 const VS_ORDEN_BT = ["ER", "AR", "BPP", "DS"];
@@ -6333,7 +6340,8 @@ const vsRedondear = (x) => Math.round(x + 1e-9);
 // Puntajes de cada indicador (0 a 100). null = sin datos (MELI lo cuenta como 0)
 function vsScoreLineal(num, den) {
   if (!den) return null;
-  return vsRedondear((num / den) * 100);
+  // Tope 100: si MELI registra más rutas ejecutadas que confirmadas (rutas agregadas en el día), no suma de más
+  return Math.min(100, vsRedondear((num / den) * 100));
 }
 function vsScoreDS(pctEntrega) {
   if (pctEntrega == null) return null;
@@ -6442,7 +6450,7 @@ function VsReclamosAcumulados({ desdeSemana, ayer }) {
       const { data, error } = await sb.from("vs_bpp_casos").select("*")
         .gte("shipment_day", desde).lte("shipment_day", ayer).limit(5000);
       if (!vivo) return;
-      if (error) setErr(error.message); else setFilas((data || []).filter(x => vsIncluir(x.svc)));
+      if (error) setErr(error.message); else { const mx = await vsSvcMexico(); setFilas((data || []).filter(x => mx.has(x.svc))); }
       setCargando(false);
     })();
     return () => { vivo = false; };
@@ -6881,7 +6889,7 @@ function VsHistoricoSemanal({ ayer }) {
           const k = f.fecha + "|" + f.svc;
           if (!ultima[k] || f.capturado_el > ultima[k].capturado_el) ultima[k] = f;
         }
-        setOficial((rO.data || []).filter(x => vsIncluir(x.svc))); setFotos(Object.values(ultima)); setCasos((rC.data || []).filter(x => vsIncluir(x.svc)));
+        setOficial((rO.data || []).filter(x => vsIncluir(x.svc))); setFotos(Object.values(ultima)); { const mx = await vsSvcMexico(); setCasos((rC.data || []).filter(x => mx.has(x.svc))); }
       } catch (e) {
         if (vivo) setErr(e.message || String(e));
       } finally {
@@ -7082,8 +7090,9 @@ function PoolVendorScore() {
           if (!ultima[k] || f.capturado_el > ultima[k].capturado_el) ultima[k] = f;
         }
         setFotos(Object.values(ultima));
-        setCasos((rC.data || []).filter(x => vsIncluir(x.svc)));
-        setNuevosHoy((rN.data || []).filter(x => vsIncluir(x.svc)));
+        const mx = await vsSvcMexico();
+        setCasos((rC.data || []).filter(x => mx.has(x.svc)));
+        setNuevosHoy((rN.data || []).filter(x => mx.has(x.svc)));
       } catch (e) {
         if (alive) setError(e.message || String(e));
       } finally {
@@ -7219,7 +7228,16 @@ function PoolVendorScore() {
               <div style={{ fontSize: 30, fontWeight: 700, color: VS_NAVY, lineHeight: 1.15 }}>
                 Semana {semMeli} · {vsFechaCorta(lunes)} al {vsFechaCorta(domingo)}
               </div>
-              <div style={{ fontSize: 13, color: VS_MUTED, marginTop: 6 }}>Datos hasta el {vsFechaLarga(hasta)}{esActual ? " · semana en curso" : " · semana cerrada"}</div>
+              {(() => {
+                const ultimo = fotos.reduce((m, f) => (f.fecha > m ? f.fecha : m), "");
+                const falta = esActual && ultimo && ultimo < hasta;
+                return (
+                  <div style={{ fontSize: 13, color: falta ? "#b45309" : VS_MUTED, marginTop: 6, fontWeight: falta ? 600 : 400 }}>
+                    {ultimo ? <>Datos hasta el {vsFechaLarga(ultimo)}</> : "Sin datos todavía"}{esActual ? " · semana en curso" : " · semana cerrada"}
+                    {falta && <> · falta el {vsFechaLarga(hasta)}: la carga de las 7:00 (México) todavía no llegó</>}
+                  </div>
+                );
+              })()}
             </div>
             <div style={{ display: "flex", alignItems: "flex-end", gap: 16 }}>
               {evolucion.length > 0 && (() => {
