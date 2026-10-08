@@ -7115,7 +7115,9 @@ function PoolVendorScore() {
       const s = porSvc[c.svc];
       s.bpp += Number(c.gmv) || 0; tot.bpp += Number(c.gmv) || 0;
     }
+    // Solo SVC con actividad en la semana: descarta SC sin rutas ni paquetes (por ejemplo, los de Chile que lista el portal)
     const lista = Object.entries(porSvc)
+      .filter(([, b]) => b.sol > 0 || b.conf > 0 || b.desp > 0 || b.bpp > 0)
       .map(([svc, b]) => ({ svc, ...vsCalcular(b) }))
       .sort((a, b) => a.score - b.score);
     return { total: vsCalcular(tot), svcs: lista, gmvRespaldo: respaldo };
