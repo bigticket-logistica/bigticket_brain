@@ -6803,7 +6803,7 @@ function VsQueFalta({ total, svcs, dinero }) {
       {l.length > max && <div style={{ color: VS_MUTED }}>y {l.length - max} SVC más</div>}
     </>);
   };
-  const etiquetaPlata = { ER: "multas + ingreso perdido", AR: "multas + ingreso perdido", BPP: "en reclamos abiertos", DS: "sin multa directa" };
+  const etiquetaPlata = { ER: "multas + ingreso no facturado", AR: "multas + ingreso no facturado", BPP: "en reclamos abiertos", DS: "sin multa directa" };
 
   return (
     <div style={{ background: "#fff", border: `1px solid ${VS_BORDER}`, borderLeft: `5px solid ${notaBT >= VS_META_BT ? "#15803d" : VS_ORANGE}`, borderRadius: 12, padding: "22px 26px" }}>
@@ -6846,7 +6846,7 @@ function VsQueFalta({ total, svcs, dinero }) {
         </table>
       </div>
       <div style={{ fontSize: 12, color: VS_MUTED, marginTop: 10, lineHeight: 1.5 }}>
-        "Lo que nos cuesta" muestra los puntos que se pierden en la nota de MELI y la plata de la semana: en aceptar y cumplir, la multa de MELI (SDD: 75% de la tarifa por cada ruta no aceptada y 100% por cada aceptada que no salió) más la tarifa que dejamos de ganar.
+        "Lo que nos cuesta" muestra los puntos que se pierden en la nota de MELI y la plata de la semana: en aceptar y cumplir, la multa de MELI (SDD: 75% de la tarifa por cada ruta no aceptada y 100% por cada aceptada que no salió) más la tarifa que dejamos de facturar.
         "Cómo subir" dice cuánto subiría la nota si se hace solo esa mejora. Lo que ya pasó no se puede rehacer, pero los días que quedan de la semana sí pueden compensar.
       </div>
     </div>
@@ -7293,8 +7293,8 @@ function PoolVendorScore() {
                       <div style={{ fontSize: 12, color: "#991b1b" }}>{c === "ER" ? "Rutas aceptadas que no salieron (no show)" : "Rutas ofrecidas que no aceptamos"}</div>
                       <div style={{ ...num, fontSize: 22, fontWeight: 800, color: "#b42318" }}>−{vsPesos(c === "ER" ? dinero.multaER + dinero.ingresoER : dinero.multaAR + dinero.ingresoAR)}</div>
                       <div style={{ fontSize: 11, color: "#991b1b" }}>
-                        {c === "ER" ? `${dinero.hardSdd} SDD + ${dinero.hardSpot} Spot · multas ${vsPesos(dinero.multaER)} + ingreso perdido ${vsPesos(dinero.ingresoER)}`
-                                    : `${dinero.softSdd} SDD + ${dinero.softSpot} Spot · multas ${vsPesos(dinero.multaAR)} + ingreso perdido ${vsPesos(dinero.ingresoAR)}`}
+                        {c === "ER" ? `${dinero.hardSdd} SDD + ${dinero.hardSpot} Spot · multas ${vsPesos(dinero.multaER)} + ingreso no facturado ${vsPesos(dinero.ingresoER)}`
+                                    : `${dinero.softSdd} SDD + ${dinero.softSpot} Spot · multas ${vsPesos(dinero.multaAR)} + ingreso no facturado ${vsPesos(dinero.ingresoAR)}`}
                       </div>
                     </div>
                   )}

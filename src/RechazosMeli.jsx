@@ -214,7 +214,7 @@ function RechazosMeliMX({ usuario }) {
 
   const maxNA = Math.max(1, ...dias.map(d => rmNoAcept(d)));
 
-  // ─── Lo que perdimos: multas MELI + ingreso que dejamos de ganar, acumulado día a día ───
+  // ─── Lo que perdimos: multas MELI + ingreso que dejamos de facturar, acumulado día a día ───
   const costos = useMemo(() => {
     const hoyOp = fechaHoyOperativa();
     const porDia = {}, porSvc = {}, porQ = {};
@@ -222,9 +222,14 @@ function RechazosMeliMX({ usuario }) {
     const svc = c => (porSvc[c] = porSvc[c] || { svc: c, soft: 0, hard: 0, multa: 0, ingreso: 0 });
     const q = f => { const k = `${f.slice(0, 4)}${f.slice(5, 7)}Q${Number(f.slice(8, 10)) <= 15 ? 1 : 2}`; return (porQ[k] = porQ[k] || { q: k, soft: 0, hard: 0, multa: 0, ingreso: 0 }); };
     const sumar = (x) => {
-      for (const b of [dia(x.p.fecha_ruta), svc(x.p.facility_id), q(x.p.fecha_ruta)]) { b.multa += x.multa; b.ingreso += x.ingreso; b[x.tipo] = (b[x.tipo] || 0) + 1; b.n = (b.n || 0) + 1; }
+      for (const b of [dia(x.p.fecha_ruta), svc(x.p.facility_id), q(x.p.fecha_ruta)]) { b.multa += x.multa; b.ingreso += x.ingreso; b[x.tipo] = (b[x.tipo] || 0) + 1; b.n = (b.n || 0) + 1; const k2 = x.tipo + (x.p.es_sdd ? "_sdd" : "_spot"); b[k2] = (b[k2] || 0) + 1; }
     };
-    for (const x of rmPerdidas(filas, revisiones, hoyOp)) sumar(x);
+    const porTipo = { soft: { n: 0, multa: 0, ingreso: 0 }, hardSin: { n: 0, multa: 0, ingreso: 0 }, hardAsig: { n: 0, multa: 0, ingreso: 0 } };
+    for (const x of rmPerdidas(filas, revisiones, hoyOp)) {
+      sumar(x);
+      const k = x.tipo === "soft" ? "soft" : (x.p.rosterizado === false ? "hardSin" : "hardAsig");
+      porTipo[k].n++; porTipo[k].multa += x.multa; porTipo[k].ingreso += x.ingreso;
+    }
     // Serie acumulada del mes
     let acM = 0, acI = 0;
     const serie = dias.map(d => { const x = porDia[d.fecha] || { multa: 0, ingreso: 0, n: 0 }; acM += x.multa; acI += x.ingreso; return { fecha: d.fecha, multa: x.multa, ingreso: x.ingreso, n: x.n, acMulta: acM, acIngreso: acI }; });
@@ -232,7 +237,7 @@ function RechazosMeliMX({ usuario }) {
     const ultimo = [...serie].reverse().find(x => x.fecha < hoyOp && x.n > 0) || null;
     const diasMes = Number(finMes.slice(8, 10)), diasTransc = dias.filter(d => d.fecha < hoyOp).length || 1;
     const proy = mes === mesActual ? { multa: (acM / diasTransc) * diasMes, ingreso: (acI / diasTransc) * diasMes } : null;
-    return { total, serie, ultimo, proy, svcs: Object.values(porSvc).sort((a, b) => (b.multa + b.ingreso) - (a.multa + a.ingreso)), quincenas: Object.values(porQ).sort((a, b) => a.q.localeCompare(b.q)) };
+    return { porTipo, total, serie, ultimo, proy, svcs: Object.values(porSvc).sort((a, b) => (b.multa + b.ingreso) - (a.multa + a.ingreso)), quincenas: Object.values(porQ).sort((a, b) => a.q.localeCompare(b.q)) };
   }, [filas, revisiones, dias, mes, mesActual, finMes]);
   const card = { background: "#fff", border: `1px solid ${RM_BORDER}`, borderRadius: 12, padding: "18px 22px" };
   const etiquetaMes = m => `${RM_MESES[Number(m.slice(5, 7)) - 1]} ${m.slice(0, 4)}`;
@@ -249,13 +254,22 @@ function RechazosMeliMX({ usuario }) {
     await descargarExcelMultihoja([{ nombre: "Diario", datos: diario }, { nombre: "Ranking SC", datos: ranking }, { nombre: "Detalle no aceptadas", datos: detalle }], `rechazos_meli_${mes}`);
   };
 
-  const Kpi = ({ titulo, valor, sub, color, id }) => (
+  const conv = v => `≈ US$${Math.round(v * tc.usd).toLocaleString("es-MX")} · CLP $${Math.round(v * tc.clp).toLocaleString("es-CL")}`;
+  const Conv = ({ v, color = RM_MUTED }) => <div style={{ fontSize: 12, fontWeight: 600, color, marginTop: 2, fontVariantNumeric: "tabular-nums" }}>{conv(v)}</div>;
+  const Kpi = ({ titulo, valor, sub, color, id, plata }) => (
     <div onClick={() => setDetalle(detalle === id ? null : id)} title="Ver el detalle"
       style={{ ...card, padding: "14px 16px", borderTop: `4px solid ${color}`, cursor: "pointer",
                outline: detalle === id ? `2px solid ${color}` : "none", outlineOffset: -2 }}>
       <div style={{ fontSize: 12, color: RM_MUTED }}>{titulo}</div>
       <div style={{ fontSize: 28, fontWeight: 700, color, fontVariantNumeric: "tabular-nums" }}>{valor}</div>
       {sub && <div style={{ fontSize: 12, color: RM_MUTED }}>{sub}</div>}
+      {plata && plata.n > 0 && (
+        <div style={{ marginTop: 6, paddingTop: 6, borderTop: "1px solid #f0f1f3" }}>
+          <div style={{ fontSize: 15, fontWeight: 800, color: "#A32D2D", fontVariantNumeric: "tabular-nums" }}>−{rmPesos(plata.multa + plata.ingreso)}</div>
+          <div style={{ fontSize: 11, color: RM_MUTED }}>{rmPesos(plata.multa)} en multas + {rmPesos(plata.ingreso)} que dejamos de facturar</div>
+          <div style={{ fontSize: 11, color: RM_MUTED, fontVariantNumeric: "tabular-nums" }}>{conv(plata.multa + plata.ingreso)}</div>
+        </div>
+      )}
       <div style={{ fontSize: 11, color: color, marginTop: 4, fontWeight: 600 }}>{detalle === id ? "Ocultar detalle ▲" : "Ver detalle ▼"}</div>
     </div>
   );
@@ -320,25 +334,29 @@ function RechazosMeliMX({ usuario }) {
                 <div style={{ background: "#FCEBEB", borderRadius: 10, padding: "12px 14px" }}>
                   <div style={{ fontSize: 13, color: "#A32D2D" }}>Multas que nos cobra MELI</div>
                   <div style={{ fontSize: 28, fontWeight: 800, color: "#791F1F", fontVariantNumeric: "tabular-nums" }}>{rmPesos(costos.total.multa)}</div>
+                  <Conv v={costos.total.multa} color="#A32D2D" />
                   <div style={{ fontSize: 12, color: "#A32D2D" }}>SDD: 75% de la tarifa por no aceptar, 100% por no hacer</div>
                 </div>
                 <div style={{ background: "#FAEEDA", borderRadius: 10, padding: "12px 14px" }}>
-                  <div style={{ fontSize: 13, color: "#854F0B" }}>Lo que pudimos ganar haciendo esas rutas</div>
+                  <div style={{ fontSize: 13, color: "#854F0B" }}>Ingreso que dejamos de facturar</div>
                   <div style={{ fontSize: 28, fontWeight: 800, color: "#633806", fontVariantNumeric: "tabular-nums" }}>{rmPesos(costos.total.ingreso)}</div>
-                  <div style={{ fontSize: 12, color: "#854F0B" }}>Tarifa de cada ruta no aceptada o no hecha (SDD y Spot)</div>
+                  <Conv v={costos.total.ingreso} color="#854F0B" />
+                  <div style={{ fontSize: 12, color: "#854F0B" }}>Tarifa de MELI de cada ruta no aceptada o no hecha (SDD y Spot). Es ingreso, no ganancia</div>
                 </div>
                 {costos.ultimo && (
                   <div style={{ background: "#f6f7f9", borderRadius: 10, padding: "12px 14px" }}>
                     <div style={{ fontSize: 13, color: RM_MUTED }}>Pérdida del último día cerrado ({costos.ultimo.fecha.slice(8, 10)}/{costos.ultimo.fecha.slice(5, 7)})</div>
                     <div style={{ fontSize: 24, fontWeight: 800, color: "#A32D2D", fontVariantNumeric: "tabular-nums" }}>−{rmPesos(costos.ultimo.multa + costos.ultimo.ingreso)}</div>
-                    <div style={{ fontSize: 12, color: RM_MUTED }}>{costos.ultimo.n} rutas: {rmPesos(costos.ultimo.multa)} en multas + {rmPesos(costos.ultimo.ingreso)} que dejamos de ganar</div>
+                    <Conv v={costos.ultimo.multa + costos.ultimo.ingreso} />
+                    <div style={{ fontSize: 12, color: RM_MUTED }}>{costos.ultimo.n} rutas: {rmPesos(costos.ultimo.multa)} en multas + {rmPesos(costos.ultimo.ingreso)} que dejamos de facturar</div>
                   </div>
                 )}
                 {costos.proy && (
                   <div style={{ background: "#f6f7f9", borderRadius: 10, padding: "12px 14px" }}>
                     <div style={{ fontSize: 13, color: RM_MUTED }}>Pérdida al cierre del mes si seguimos así</div>
                     <div style={{ fontSize: 24, fontWeight: 800, color: "#A32D2D", fontVariantNumeric: "tabular-nums" }}>−{rmPesos(costos.proy.multa + costos.proy.ingreso)}</div>
-                    <div style={{ fontSize: 12, color: RM_MUTED }}>{rmPesos(costos.proy.multa)} en multas + {rmPesos(costos.proy.ingreso)} que dejaríamos de ganar</div>
+                    <Conv v={costos.proy.multa + costos.proy.ingreso} />
+                    <div style={{ fontSize: 12, color: RM_MUTED }}>{rmPesos(costos.proy.multa)} en multas + {rmPesos(costos.proy.ingreso)} que dejaríamos de facturar</div>
                   </div>
                 )}
               </div>
@@ -363,7 +381,7 @@ function RechazosMeliMX({ usuario }) {
                     <div style={{ fontSize: 15, fontWeight: 700 }}>Pérdida acumulada del mes, día a día</div>
                     <div style={{ display: "flex", gap: 16, fontSize: 12, color: RM_MUTED }}>
                       <span><span style={{ display: "inline-block", width: 10, height: 10, background: "#A32D2D", marginRight: 6 }} />Multas MELI</span>
-                      <span><span style={{ display: "inline-block", width: 10, height: 10, background: "#F09595", marginRight: 6 }} />Ingreso que dejamos de ganar</span>
+                      <span><span style={{ display: "inline-block", width: 10, height: 10, background: "#F09595", marginRight: 6 }} />Ingreso que dejamos de facturar</span>
                     </div>
                   </div>
                   <div style={{ fontSize: 12, color: RM_MUTED, marginTop: 2 }}>Cada barra es un día. Su altura es todo lo perdido desde el día 1 hasta ese día, por eso siempre sube.</div>
@@ -403,25 +421,103 @@ function RechazosMeliMX({ usuario }) {
             <div style={{ ...card, flex: "2 1 560px", minWidth: 0 }}>
               <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 10 }}>Dónde duele más · {etiquetaMes(mes)}</div>
               <div style={{ overflowX: "auto" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 620 }}>
-                  <thead>
-                    <tr style={{ color: RM_MUTED, fontSize: 12, textAlign: "left" }}>
-                      {["SC", "No aceptadas", "No hechas", "Multas MELI", "Ingreso perdido", "Pérdida total"].map(h => <th key={h} style={{ padding: "6px 8px", borderBottom: `1px solid ${RM_BORDER}`, fontWeight: 600 }}>{h}</th>)}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {costos.svcs.map(x => (
-                      <tr key={x.svc} style={{ borderBottom: "1px solid #f0f1f3" }}>
-                        <td style={{ padding: "6px 8px", fontWeight: 700 }}>{x.svc}</td>
-                        <td style={{ padding: "6px 8px" }}>{x.soft || 0}</td>
-                        <td style={{ padding: "6px 8px" }}>{x.hard || 0}</td>
-                        <td style={{ padding: "6px 8px", color: "#b42318", fontWeight: 600 }}>{rmPesos(x.multa)}</td>
-                        <td style={{ padding: "6px 8px" }}>{rmPesos(x.ingreso)}</td>
-                        <td style={{ padding: "6px 8px", fontWeight: 800, color: "#7f1d1d" }}>{rmPesos(x.multa + x.ingreso)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                {(() => {
+                  const th = { padding: "6px 8px", borderBottom: `1px solid ${RM_BORDER}`, fontWeight: 600, textAlign: "center" };
+                  const td = { padding: "6px 8px", fontVariantNumeric: "tabular-nums", textAlign: "center" };
+                  const sep = { borderLeft: "2px solid #d5d9e0" }; // línea que separa cada grupo
+                  const tot = costos.svcs.reduce((a, x) => {
+                    for (const k of ["soft_sdd", "soft_spot", "hard_sdd", "hard_spot"]) a[k] += x[k] || 0;
+                    a.multa += x.multa; a.ingreso += x.ingreso; return a;
+                  }, { soft_sdd: 0, soft_spot: 0, hard_sdd: 0, hard_spot: 0, multa: 0, ingreso: 0 });
+                  const n = v => v ? v : <span style={{ color: "#c4c8cf" }}>0</span>;
+                  const grupo = (titulo, tipo) => (
+                    <>
+                      <div>{titulo}</div>
+                      <div style={{ fontStyle: "italic", fontWeight: 500, fontSize: 11, color: RM_MUTED }}>{tipo}</div>
+                    </>
+                  );
+                  return (
+                  <>
+                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 860 }}>
+                      <thead>
+                        <tr style={{ color: RM_MUTED, fontSize: 12 }}>
+                          <th style={{ ...th, textAlign: "left" }} rowSpan={2}>SC</th>
+                          <th style={{ ...th, ...sep }} colSpan={2}>{grupo("No aceptadas", "Soft")}</th>
+                          <th style={{ ...th, ...sep }} colSpan={2}>{grupo("No hechas", "Hard")}</th>
+                          <th style={{ ...th, ...sep }} rowSpan={2}>Multas MELI</th>
+                          <th style={th} rowSpan={2}>Ingreso no facturado</th>
+                          <th style={th} rowSpan={2}>Pérdida total</th>
+                        </tr>
+                        <tr style={{ color: RM_MUTED, fontSize: 11 }}>
+                          <th style={{ ...th, ...sep, color: "#A32D2D" }}>SDD · con multa</th>
+                          <th style={th}>Spot · sin multa automática</th>
+                          <th style={{ ...th, ...sep, color: "#A32D2D" }}>SDD · con multa</th>
+                          <th style={th}>Spot · sin multa automática</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {costos.svcs.map(x => (
+                          <tr key={x.svc} style={{ borderBottom: "1px solid #f0f1f3" }}>
+                            <td style={{ ...td, textAlign: "left", fontWeight: 700 }}>{x.svc}</td>
+                            <td style={{ ...td, ...sep, color: "#A32D2D", fontWeight: x.soft_sdd ? 700 : 400 }}>{n(x.soft_sdd)}</td>
+                            <td style={td}>{n(x.soft_spot)}</td>
+                            <td style={{ ...td, ...sep, color: "#A32D2D", fontWeight: x.hard_sdd ? 700 : 400 }}>{n(x.hard_sdd)}</td>
+                            <td style={td}>{n(x.hard_spot)}</td>
+                            <td style={{ ...td, ...sep, color: "#b42318", fontWeight: 600 }}>{rmPesos(x.multa)}</td>
+                            <td style={td}>{rmPesos(x.ingreso)}</td>
+                            <td style={{ ...td, fontWeight: 800, color: "#7f1d1d" }}>{rmPesos(x.multa + x.ingreso)}</td>
+                          </tr>
+                        ))}
+                        <tr style={{ borderTop: `2px solid ${RM_BORDER}`, background: "#fafafa" }}>
+                          <td style={{ ...td, textAlign: "left", fontWeight: 800 }}>Total</td>
+                          <td style={{ ...td, ...sep, fontWeight: 800, color: "#A32D2D" }}>{tot.soft_sdd}</td>
+                          <td style={{ ...td, fontWeight: 800 }}>{tot.soft_spot}</td>
+                          <td style={{ ...td, ...sep, fontWeight: 800, color: "#A32D2D" }}>{tot.hard_sdd}</td>
+                          <td style={{ ...td, fontWeight: 800 }}>{tot.hard_spot}</td>
+                          <td style={{ ...td, ...sep, fontWeight: 800, color: "#b42318" }}>{rmPesos(tot.multa)}</td>
+                          <td style={{ ...td, fontWeight: 800 }}>{rmPesos(tot.ingreso)}</td>
+                          <td style={{ ...td, fontWeight: 800, color: "#7f1d1d" }}>{rmPesos(tot.multa + tot.ingreso)}</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                    {(() => {
+                      const pt = costos.porTipo;
+                      const hard = { n: pt.hardSin.n + pt.hardAsig.n, multa: pt.hardSin.multa + pt.hardAsig.multa, ingreso: pt.hardSin.ingreso + pt.hardAsig.ingreso };
+                      const caja = (titulo, sub, rutasSdd, rutasSpot, x, color, fondo) => (
+                        <div style={{ flex: "1 1 260px", background: fondo, borderRadius: 10, padding: "14px 16px", borderTop: `4px solid ${color}` }}>
+                          <div style={{ fontSize: 14, fontWeight: 700, color }}>{titulo} <span style={{ fontStyle: "italic", fontWeight: 500, fontSize: 12 }}>{sub}</span></div>
+                          <div style={{ fontSize: 12, color: RM_MUTED, marginTop: 2 }}>{rutasSdd + rutasSpot} rutas · {rutasSdd} SDD y {rutasSpot} Spot</div>
+                          <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: "4px 12px", marginTop: 10, fontSize: 13, fontVariantNumeric: "tabular-nums" }}>
+                            <span>Multa que cobra MELI</span><b style={{ color: "#A32D2D", textAlign: "right" }}>−{rmPesos(x.multa)}</b>
+                            <span>Ingreso no facturado</span><b style={{ textAlign: "right" }}>−{rmPesos(x.ingreso)}</b>
+                            <span style={{ borderTop: `1px solid ${RM_BORDER}`, paddingTop: 4, fontWeight: 700 }}>Total</span>
+                            <b style={{ borderTop: `1px solid ${RM_BORDER}`, paddingTop: 4, color: "#7f1d1d", textAlign: "right", fontSize: 15 }}>−{rmPesos(x.multa + x.ingreso)}</b>
+                          </div>
+                        </div>
+                      );
+                      return (
+                        <div style={{ marginTop: 16 }}>
+                          <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+                            {caja("Por no aceptar", "Soft", tot.soft_sdd, tot.soft_spot, pt.soft, "#F47B20", "#fff7ef")}
+                            {caja("Por no ejecutar lo aceptado", "Hard", tot.hard_sdd, tot.hard_spot, hard, "#7f1d1d", "#fdf2f2")}
+                            <div style={{ flex: "1 1 260px", background: "#A32D2D", color: "#fff", borderRadius: 10, padding: "14px 16px" }}>
+                              <div style={{ fontSize: 14, fontWeight: 700 }}>Lo que nos va a descontar MELI</div>
+                              <div style={{ fontSize: 12, opacity: 0.85, marginTop: 2 }}>Multas soft + hard de {etiquetaMes(mes)}</div>
+                              <div style={{ fontSize: 30, fontWeight: 800, marginTop: 8, fontVariantNumeric: "tabular-nums" }}>−{rmPesos(pt.soft.multa + hard.multa)}</div>
+                              <div style={{ fontSize: 12, opacity: 0.9, fontVariantNumeric: "tabular-nums" }}>{conv(pt.soft.multa + hard.multa)}</div>
+                              <div style={{ fontSize: 11, opacity: 0.85, marginTop: 6, lineHeight: 1.4 }}>Soft {rmPesos(pt.soft.multa)} + Hard {rmPesos(hard.multa)}. MELI lo descuenta en la prefactura de la quincena siguiente.</div>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })()}
+                  </>
+                  );
+                })()}
+              </div>
+              <div style={{ fontSize: 12, color: RM_MUTED, marginTop: 8, lineHeight: 1.5 }}>
+                <b>SDD:</b> MELI cobra automáticamente el 75% de la tarifa si no se aceptan y el 100% si se aceptaron y no salieron.{" "}
+                <b>Spot:</b> sin multa automática; suman al ingreso no facturado. Si la operación de MELI registra a mano una Spot aceptada que no salió, puede cobrarla aparte al 50% (cobro "no sistémico", poco frecuente).
               </div>
             </div>
             <div style={{ ...card, flex: "1 1 340px" }}>
@@ -443,18 +539,18 @@ function RechazosMeliMX({ usuario }) {
                 </tbody>
               </table>
               <div style={{ fontSize: 12, color: RM_MUTED, marginTop: 8, lineHeight: 1.5 }}>
-                Multas SDD: 75% de la tarifa base por cada ruta no aceptada y 100% por cada ruta aceptada que no se hizo. Spot no tiene multa, pero sí ingreso perdido. MELI cobra los no show de cada quincena en la prefactura de la quincena siguiente (por ejemplo, los del 1 al 15 de septiembre se descontaron en la prefactura 202609Q2). Si el Brain se aleja mucho, revisar las rutas sin revisión del analista.
+                Multas SDD: 75% de la tarifa base por cada ruta no aceptada y 100% por cada ruta aceptada que no se hizo. Spot no tiene multa automática (MELI puede cobrar a mano una Spot aceptada que no salió, al 50%), pero sí ingreso no facturado. MELI cobra los no show de cada quincena en la prefactura de la quincena siguiente (por ejemplo, los del 1 al 15 de septiembre se descontaron en la prefactura 202609Q2). Si el Brain se aleja mucho, revisar las rutas sin revisión del analista.
               </div>
             </div>
           </div>
           <div style={{ overflowX: "auto" }}><div style={{ display: "grid", gridTemplateColumns: "repeat(7, minmax(150px, 1fr))", gap: 12, minWidth: 1100 }}>
             <Kpi id="efectivas" titulo="Efectivas" valor={rmN(rmEfect(total))} sub={`ofrecidas ${rmN(total.total)} − canceladas MELI ${rmN(total.cancel)}`} color={RM_NAVY} />
             <Kpi id="aceptadas" titulo="Aceptadas" valor={rmN(total.acept)} sub={`AR ${rmPct(rmAR(total))}`} color="#166534" />
-            <Kpi id="soft" titulo="No aceptadas (soft)" valor={rmN(rmNoAcept(total))} sub={`SDD ${rmN(total.na_sdd)} · Spot ${rmN(total.na_spot)}`} color={RM_ORANGE} />
+            <Kpi id="soft" plata={costos.porTipo.soft} titulo="No aceptadas (soft)" valor={rmN(rmNoAcept(total))} sub={`SDD ${rmN(total.na_sdd)} · Spot ${rmN(total.na_spot)}`} color={RM_ORANGE} />
             <Kpi id="rechazadas" titulo="Rechazadas" valor={rmN(total.rech)} sub="respondidas con rechazo" color="#9a3c06" />
             <Kpi id="vencidas" titulo="Vencidas sin responder" valor={rmN(total.venc)} sub="nadie respondió en 30 min" color="#991b1b" />
-            <Kpi id="hard" titulo="Hard: sin placa ni chofer" valor={rmN(total.hard_sdd + total.hard_spot)} sub={`SDD ${rmN(total.hard_sdd)} · Spot ${rmN(total.hard_spot)} · nunca se asignó`} color="#7f1d1d" />
-            <Kpi id="sin_salir" titulo="Asignada sin salir (investigar)" valor={rmN(total.ss_sdd + total.ss_spot)}
+            <Kpi id="hard" plata={costos.porTipo.hardSin} titulo="Hard: sin placa ni chofer" valor={rmN(total.hard_sdd + total.hard_spot)} sub={`SDD ${rmN(total.hard_sdd)} · Spot ${rmN(total.hard_spot)} · nunca se asignó`} color="#7f1d1d" />
+            <Kpi id="sin_salir" plata={costos.porTipo.hardAsig} titulo="Asignada sin salir (investigar)" valor={rmN(total.ss_sdd + total.ss_spot)}
               sub={`SDD ${rmN(total.ss_sdd)} · Spot ${rmN(total.ss_spot)} · ${filas.filter(p => p.status === "accepted" && p.rosterizado === true && p.travel_status_final === "created" && p.fecha_ruta < fechaHoyOperativa()).filter(p => p.salio_meli === true).length} salieron con otra ruta (no cuentan) · ${filas.filter(p => p.status === "accepted" && p.rosterizado === true && p.travel_status_final === "created" && p.salio_meli !== true && p.fecha_ruta < fechaHoyOperativa() && !revisiones[String(p.request_id)]).length} sin revisar`} color="#6b21a8" />
           </div></div>
 
