@@ -11107,15 +11107,15 @@ function TarifasPorSC({ usuario, onCambio }) {
                     const celda = (cat, tr, turno) => {
                       const k = conTurno ? `${cat}|${tr}|${turno}` : `${cat}|${tr}`;
                       if (editando) return (
-                        <td key={k} style={{ ...tdS, textAlign: "right" }}>
+                        <td key={k} style={{ ...tdS, textAlign: "center" }}>
                           <input type="number" placeholder="—" value={cel[k] ?? ""}
                             onChange={e => setCel(p => ({ ...p, [k]: e.target.value }))}
-                            style={{ ...inpS, width: conTurno ? 64 : 80 }} />
+                            style={{ ...inpS, width: conTurno ? 64 : 80, textAlign: "center" }} />
                         </td>
                       );
                       const c = resolver(site, tipoR, cat, tr, hoyISO(), turno, tipoT);
                       return (
-                        <td key={k} style={{ ...tdS, fontSize: 12, textAlign: "right", fontWeight: c.propia ? 700 : 400, color: c.propia ? "#b45309" : (c.monto == null ? "#cbd5e1" : "#475569"), background: c.propia ? "#fffbeb" : "transparent" }}>
+                        <td key={k} style={{ ...tdS, fontSize: 12, textAlign: "center", fontWeight: c.propia ? 700 : 400, color: c.propia ? "#b45309" : (c.monto == null ? "#cbd5e1" : "#475569"), background: c.propia ? "#fffbeb" : "transparent" }}>
                           {mxn(c.monto)}
                         </td>
                       );
@@ -11127,7 +11127,7 @@ function TarifasPorSC({ usuario, onCambio }) {
                             <th rowSpan={conTurno ? 2 : 1} style={{ ...thS, fontSize: 11, verticalAlign: "bottom" }}>Categoría</th>
                             {TRAMOS.map(tr => (
                               <th key={tr} colSpan={conTurno ? 2 : 1}
-                                style={{ ...thS, fontSize: 11, textAlign: conTurno ? "center" : "right", borderLeft: conTurno ? "1px solid #eef0f3" : "none" }}>
+                                style={{ ...thS, fontSize: 11, textAlign: "center", borderLeft: conTurno ? "1px solid #eef0f3" : "none" }}>
                                 {tr} km
                               </th>
                             ))}
@@ -11135,7 +11135,7 @@ function TarifasPorSC({ usuario, onCambio }) {
                           {conTurno && (
                             <tr style={{ background: "#f8fafc" }}>
                               {TRAMOS.map(tr => TURNOS.map((tu, i) => (
-                                <th key={tr + tu} style={{ ...thS, fontSize: 10, textAlign: "right", color: "#94a3b8", borderLeft: i === 0 ? "1px solid #eef0f3" : "none" }}>{tu}</th>
+                                <th key={tr + tu} style={{ ...thS, fontSize: 10, textAlign: "center", color: "#94a3b8", borderLeft: i === 0 ? "1px solid #eef0f3" : "none" }}>{tu}</th>
                               )))}
                             </tr>
                           )}
