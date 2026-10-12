@@ -6163,10 +6163,15 @@ function buscarTarifa(empresaRuta, tipologia, zona, tramo, fecha, especiales, ma
     (!m.vigente_desde || !fecha || String(m.vigente_desde).slice(0, 10) <= fecha) &&
     (!m.vigente_hasta || !fecha || String(m.vigente_hasta).slice(0, 10) >= fecha);
 
+  // Solo las tarifas de ruta entran al pago. Las de otro tipo (Cancelacion)
+  // quedan guardadas como referencia y nunca se usan para tarifar una ruta.
+  const esTarifaDeRuta = (m) => !m.tipo_tarifa || String(m.tipo_tarifa).trim().toUpperCase() === "RUTA";
+
   const base = (matrizPrecios || []).filter(m =>
     m.activo === true &&
     m.tipo_vehiculo === tipologia &&
     m.tramo_km === tramo &&
+    esTarifaDeRuta(m) &&
     vigenteEnFecha(m)
   );
 
