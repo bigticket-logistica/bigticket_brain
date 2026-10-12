@@ -4,6 +4,7 @@ import ModuloMaestro from "./maestro";
 import { fechaHoyOperativa, fechaOperativaOffset, pct, Input, KpiCardMaestro, BadgeEstadoMaestro } from "./shared";
 // PNR ahora vive en la Torre; su pestaña la reemplaza Alertas Portal.
 import ModuloAlertasPortal from "./AlertasPortal";
+import ModuloReferidos from "./Referidos";
 import ModuloCertificaciones from "./Certificaciones";
 import ModuloEmpresas from "./Empresas";
 import ModuloAuditoriaMeli from "./AuditoriaMeli";
@@ -104,7 +105,7 @@ const PAIS_SELECT_CFG = {
 // propios (se irán agregando aquí); México conserva todo lo ya existente.
 const MODULOS_POR_PAIS = {
   "México": {
-    superadmin: ["pool_meli_mx", "pagos", "maestro", "certificaciones", "empresas", "alertas_portal", "auditoria_meli", "configuracion"],
+    superadmin: ["pool_meli_mx", "pagos", "maestro", "certificaciones", "empresas", "alertas_portal", "referidos", "auditoria_meli", "configuracion"],
     certificacion: ["certificaciones", "empresas"],
     certificacion_full: ["certificaciones", "empresas"],  // Certificaciones MX + CL (ver Chile abajo)
     certificacion_mant: ["certificaciones", "empresas"],  // Certificaciones MX + CL + Mantenciones CL
@@ -130,6 +131,7 @@ const MODULOS_LABELS = {
   maestro: "Maestro Operaciones",
   mantenciones: "Mantenciones",
   alertas_portal: "Alertas Portal",
+  referidos: "Referidos",
   auditoria_meli: "Auditoría MELI",
   pagos: "Administración",
   configuracion: "Configuración",
@@ -15552,6 +15554,7 @@ export default function App() {
         )}
         {tabActivo === "maestro" && <ModuloMaestro usuario={usuario} />}
         {tabActivo === "alertas_portal" && <ModuloAlertasPortal usuario={usuario} />}
+        {tabActivo === "referidos" && <ModuloReferidos usuario={usuario} />}
         {tabActivo === "auditoria_meli" && <ModuloAuditoriaMeli />}
         {tabActivo === "pagos" && <ModuloPagosMadre usuario={usuario} />}
         {!tabActivo && (
