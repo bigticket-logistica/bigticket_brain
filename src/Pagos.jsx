@@ -10654,19 +10654,29 @@ function TarifasPorSC({ usuario, onCambio }) {
     (!f.vigente_hasta || String(f.vigente_hasta).slice(0, 10) >= fecha);
 
   // Misma cascada que usa el motor: site+tipo, site, zona+tipo, zona.
-  const resolver = (site, tipo, cat, tramo, fecha) => {
+  // Normaliza el tipo de tarifa: vacio y "Ruta" son lo mismo.
+  const tt = (v) => { const s = String(v || "").trim().toUpperCase(); return (!s || s === "RUTA") ? "RUTA" : s; };
+
+  // Resuelve igual que el motor, pero contemplando turno y tipo de tarifa.
+  // Gana la fila mas especifica: site > tipo de ruta > turno.
+  const resolver = (site, tipo, cat, tramo, fecha, turno, tipoTarifa) => {
     const f = fecha || hoyISO();
-    const todas = [...exc, ...base].filter(x =>
-      x.activo === true && x.tipo_vehiculo === cat && x.tramo_km === tramo && vigenteEn(x, f));
     const zona = scZonas[String(site || "").toUpperCase()] || null;
-    const orden = [
-      { fn: (x) => x.site === site && x.tipo_ruta === tipo, propia: true },
-      { fn: (x) => x.site === site && !x.tipo_ruta, propia: true },
-      { fn: (x) => !x.site && x.zonificacion === zona && x.tipo_ruta === tipo, propia: false },
-      { fn: (x) => !x.site && x.zonificacion === zona && !x.tipo_ruta, propia: false },
-    ];
-    for (const o of orden) { const h = todas.find(o.fn); if (h) return { monto: Number(h.tarifa_mxn), propia: o.propia, desde: h.vigente_desde || null }; }
-    return { monto: null, propia: false, desde: null };
+    const quiero = tt(tipoTarifa);
+    const cand = [...exc, ...base].filter(x =>
+      x.activo === true &&
+      x.tipo_vehiculo === cat &&
+      x.tramo_km === tramo &&
+      tt(x.tipo_tarifa) === quiero &&
+      vigenteEn(x, f) &&
+      (!x.turno || !turno || x.turno === turno) &&
+      (x.site ? x.site === site : x.zonificacion === zona) &&
+      (!x.tipo_ruta || x.tipo_ruta === tipo)
+    );
+    if (!cand.length) return { monto: null, propia: false, desde: null, turnoPropio: false };
+    const peso = (x) => (x.site ? 8 : 0) + (x.tipo_ruta ? 4 : 0) + (x.turno ? 2 : 0);
+    const h = cand.reduce((a, b) => (peso(b) > peso(a) ? b : a));
+    return { monto: Number(h.tarifa_mxn), propia: !!h.site, desde: h.vigente_desde || null, turnoPropio: !!h.turno };
   };
 
   // Las categorias salen de lo que ya existe en la matriz, mas las agregadas aqui.
@@ -10688,10 +10698,26 @@ function TarifasPorSC({ usuario, onCambio }) {
     if (!scSel || !scsFiltrados.includes(scSel)) setScSel(scsFiltrados[0]);
   }, [scsFiltrados.join("|")]);
 
-  const abrirEdicion = (site, tipo) => {
-    setEditSC(site); setEditTipo(tipo); setMsg(null);
+  // Vista activa: SPOT (ruta), SDD (ruta, con AM/PM) o CANCEL (cancelacion de SPOT).
+  const vistaTipoRuta = (v) => (v === "SDD" ? "SDD" : "SPOT");
+  const vistaTipoTarifa = (v) => (v === "CANCEL" ? "Cancelacion" : null);
+  const TURNOS = ["AM", "PM"];
+
+  const abrirEdicion = (site, vista) => {
+    setEditSC(site); setEditTipo(vista); setMsg(null);
+    const tipoR = vistaTipoRuta(vista), quiero = tt(vistaTipoTarifa(vista));
     const m = {};
-    for (const f of exc) if (f.site === site && (f.tipo_ruta || "SPOT") === tipo) m[`${f.tipo_vehiculo}|${f.tramo_km}`] = String(f.tarifa_mxn);
+    for (const f of exc) {
+      if (f.site !== site) continue;
+      if ((f.tipo_ruta || "SPOT") !== tipoR) continue;
+      if (tt(f.tipo_tarifa) !== quiero) continue;
+      if (vista === "SDD") {
+        // Una fila sin turno vale para AM y PM; una con turno solo para el suyo.
+        for (const tu of (f.turno ? [f.turno] : TURNOS)) m[`${f.tipo_vehiculo}|${f.tramo_km}|${tu}`] = String(f.tarifa_mxn);
+      } else {
+        m[`${f.tipo_vehiculo}|${f.tramo_km}`] = String(f.tarifa_mxn);
+      }
+    }
     setCel(m);
   };
 
@@ -10701,29 +10727,60 @@ function TarifasPorSC({ usuario, onCambio }) {
     try {
       const zona = scZonas[String(editSC).toUpperCase()];
       if (!zona) throw new Error(`El SC ${editSC} no está en sc_zonas_mx.`);
+      const vista = editTipo, tipoR = vistaTipoRuta(vista), tipoT = vistaTipoTarifa(vista), quiero = tt(tipoT);
+      const kmDe = (tr) => tr.endsWith("+") ? { mn: parseInt(tr, 10) || 0, mx: null }
+        : (() => { const p = tr.split("-"); const b = parseInt(p[1], 10); return { mn: parseInt(p[0], 10) || 0, mx: isNaN(b) ? null : b }; })();
+      const filaDe = (cat, tr, turno) => exc.find(f =>
+        f.site === editSC && (f.tipo_ruta || "SPOT") === tipoR && tt(f.tipo_tarifa) === quiero &&
+        f.tipo_vehiculo === cat && f.tramo_km === tr && (f.turno || null) === (turno || null));
+      const borrar = async (fila) => { if (!fila) return 0; const { error } = await sb.from("matriz_precios").delete().eq("id", fila.id); if (error) throw error; return 1; };
+      const poner = async (cat, tr, turno, num) => {
+        const prev = filaDe(cat, tr, turno);
+        if (prev) {
+          if (Number(prev.tarifa_mxn) === num) return 0;
+          const { error } = await sb.from("matriz_precios").update({ tarifa_mxn: num }).eq("id", prev.id);
+          if (error) throw error; return 1;
+        }
+        const km = kmDe(tr);
+        const { error } = await sb.from("matriz_precios").insert({
+          tipo_vehiculo: cat, zonificacion: zona, tramo_km: tr, km_min: km.mn, km_max: km.mx,
+          tarifa_mxn: num, activo: true, site: editSC, tipo_ruta: tipoR,
+          turno: turno || null, tipo_tarifa: tipoT, vigente_desde: null,
+        });
+        if (error) throw error; return 1;
+      };
+      const numDe = (k) => {
+        const v = ((cel[k] ?? "") + "").trim();
+        if (v === "") return null;
+        if (isNaN(Number(v))) throw new Error(`Valor no numérico en ${k.replace(/\|/g, " ")}: "${v}"`);
+        return Number(v);
+      };
+
       let n = 0;
       for (const cat of CATS) for (const tr of TRAMOS) {
-        const val = ((cel[`${cat}|${tr}`] ?? "") + "").trim();
-        const prev = exc.find(f => f.site === editSC && (f.tipo_ruta || "SPOT") === editTipo && f.tipo_vehiculo === cat && f.tramo_km === tr);
-        if (val === "") {
-          if (prev) { const { error } = await sb.from("matriz_precios").delete().eq("id", prev.id); if (error) throw error; n++; }
-          continue;
-        }
-        if (isNaN(Number(val))) throw new Error(`Valor no numérico en ${cat} ${tr}: "${val}"`);
-        const num = Number(val);
-        if (prev) {
-          if (Number(prev.tarifa_mxn) !== num) { const { error } = await sb.from("matriz_precios").update({ tarifa_mxn: num }).eq("id", prev.id); if (error) throw error; n++; }
+        if (vista === "SDD") {
+          const am = numDe(`${cat}|${tr}|AM`), pm = numDe(`${cat}|${tr}|PM`);
+          if (am === null && pm === null) {
+            n += await borrar(filaDe(cat, tr, null));
+            n += await borrar(filaDe(cat, tr, "AM"));
+            n += await borrar(filaDe(cat, tr, "PM"));
+          } else if (am !== null && pm !== null && am === pm) {
+            // Mismo monto en los dos turnos: se guarda una sola fila sin turno.
+            n += await borrar(filaDe(cat, tr, "AM"));
+            n += await borrar(filaDe(cat, tr, "PM"));
+            n += await poner(cat, tr, null, am);
+          } else {
+            n += await borrar(filaDe(cat, tr, null));
+            if (am !== null) n += await poner(cat, tr, "AM", am); else n += await borrar(filaDe(cat, tr, "AM"));
+            if (pm !== null) n += await poner(cat, tr, "PM", pm); else n += await borrar(filaDe(cat, tr, "PM"));
+          }
         } else {
-          const km = tr.endsWith("+") ? { mn: parseInt(tr, 10) || 0, mx: null }
-            : (() => { const p = tr.split("-"); const b = parseInt(p[1], 10); return { mn: parseInt(p[0], 10) || 0, mx: isNaN(b) ? null : b }; })();
-          const { error } = await sb.from("matriz_precios").insert({
-            tipo_vehiculo: cat, zonificacion: zona, tramo_km: tr, km_min: km.mn, km_max: km.mx,
-            tarifa_mxn: num, activo: true, site: editSC, tipo_ruta: editTipo, vigente_desde: impVigencia || null,
-          });
-          if (error) throw error; n++;
+          const v = numDe(`${cat}|${tr}`);
+          if (v === null) n += await borrar(filaDe(cat, tr, null));
+          else n += await poner(cat, tr, null, v);
         }
       }
-      setMsg({ ok: true, txt: `${editSC} · ${editTipo}: ${n} cambios guardados.` });
+      setMsg({ ok: true, txt: `${editSC} · ${vista === "CANCEL" ? "Cancelación" : vista}: ${n} cambios guardados.` });
       setEditSC(null);
       await cargarTodo(); if (onCambio) onCambio();
     } catch (e) { setMsg({ ok: false, txt: "Error: " + (e.message || e) }); }
@@ -10783,7 +10840,7 @@ function TarifasPorSC({ usuario, onCambio }) {
           if (raw === null || raw === undefined || String(raw).trim() === "" || Number(raw) === 0) continue;
           const monto = Number(raw);
           if (isNaN(monto) || monto < 0) { rechazos.push({ fila: nf, dato: `${site} · ${tipo} · ${veh} · ${tr}`, motivo: `Monto inválido: "${raw}"` }); continue; }
-          const act = resolver(site, tipo, veh, tr, vig);
+          const act = resolver(site, tipo, veh, tr, vig, null, null);
           if (act.monto === monto) { sinCambio++; continue; }
           const reg = { fila: nf, site, zona: zS, tipo, veh, tramo: tr, antes: act.monto, nuevo: monto };
           if (act.monto == null) nuevas.push(reg); else cambios.push(reg);
@@ -10980,7 +11037,7 @@ function TarifasPorSC({ usuario, onCambio }) {
         </div>
       ) : (
         <div>
-          <div style={{ ...cardS, display: "grid", gridTemplateColumns: "230px 135px 125px auto", gap: 12, alignItems: "end" }}>
+          <div style={{ ...cardS, display: "grid", gridTemplateColumns: "230px 135px 165px auto", gap: 12, alignItems: "end" }}>
             <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
               <label style={{ fontSize: 10, color: "#64748b", fontWeight: 700 }}>SERVICE CENTER</label>
               <select value={scSel} onChange={e => { setScSel(e.target.value); setEditSC(null); }}
@@ -10997,10 +11054,12 @@ function TarifasPorSC({ usuario, onCambio }) {
               </select>
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-              <label style={{ fontSize: 10, color: "#64748b", fontWeight: 700 }}>TIPO DE RUTA</label>
+              <label style={{ fontSize: 10, color: "#64748b", fontWeight: 700 }}>TARIFARIO</label>
               <select value={fTipo} onChange={e => { setFTipo(e.target.value); setEditSC(null); }}
                 style={{ padding: "7px 9px", border: "1px solid #cbd5e1", borderRadius: 6, fontSize: 12, width: "100%", boxSizing: "border-box" }}>
-                <option value="SPOT">SPOT</option><option value="SDD">SDD</option>
+                <option value="SPOT">SPOT · Ruta</option>
+                <option value="SDD">SDD · Ruta</option>
+                <option value="CANCEL">SPOT · Cancelación</option>
               </select>
             </div>
             <label style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 12, color: "#475569", paddingBottom: 7, whiteSpace: "nowrap" }}>
@@ -11033,43 +11092,67 @@ function TarifasPorSC({ usuario, onCambio }) {
                     {uso[site] ? `${uso[site]} rutas / 30 d` : "sin operación en 30 días"}{desde ? ` · vigente desde ${String(desde).slice(0, 10)}` : ""}
                   </span>
                   <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
-                    <button onClick={() => { setFTipo("SPOT"); if (editando) abrirEdicion(site, "SPOT"); }}
-                      style={{ ...btnS, background: fTipo === "SPOT" ? "#1a3a6b" : "#eff6ff", color: fTipo === "SPOT" ? "#fff" : "#1d4ed8" }}>SPOT</button>
-                    <button onClick={() => { setFTipo("SDD"); if (editando) abrirEdicion(site, "SDD"); }}
-                      style={{ ...btnS, background: fTipo === "SDD" ? "#1a3a6b" : "#eff6ff", color: fTipo === "SDD" ? "#fff" : "#1d4ed8" }}>SDD</button>
+                    {[["SPOT", "SPOT"], ["SDD", "SDD"], ["CANCEL", "Cancelación"]].map(([v, lbl]) => (
+                      <button key={v} onClick={() => { setFTipo(v); if (editando) abrirEdicion(site, v); }}
+                        style={{ ...btnS, background: fTipo === v ? "#1a3a6b" : "#eff6ff", color: fTipo === v ? "#fff" : "#1d4ed8" }}>{lbl}</button>
+                    ))}
                     {!editando && <button onClick={() => abrirEdicion(site, fTipo)} style={btnS}>Editar</button>}
                     {propia && !editando && <button onClick={() => quitarExcepcion(site)} style={{ ...btnS, background: "#fff", color: "#b91c1c", borderColor: "#fecaca" }}>Borrar tarifas de {site}</button>}
                   </div>
                 </div>
                 <div style={{ padding: "14px 16px" }}>
-                  <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                    <thead><tr style={{ background: "#f8fafc" }}>
-                      <th style={{ ...thS, fontSize: 11 }}>Categoría</th>
-                      {TRAMOS.map(tr => <th key={tr} style={{ ...thS, fontSize: 11, textAlign: "right" }}>{tr} km</th>)}
-                    </tr></thead>
-                    <tbody>
-                      {CATS.map(cat => (
-                        <tr key={cat}>
-                          <td style={{ ...tdS, fontSize: 12, fontWeight: 700, whiteSpace: "nowrap" }}>{cat}</td>
-                          {TRAMOS.map(tr => {
-                            if (editando) return (
-                              <td key={tr} style={{ ...tdS, textAlign: "right" }}>
-                                <input type="number" placeholder="por zona" value={cel[`${cat}|${tr}`] ?? ""}
-                                  onChange={e => setCel(p => ({ ...p, [`${cat}|${tr}`]: e.target.value }))}
-                                  style={{ ...inpS, width: 80 }} />
-                              </td>
-                            );
-                            const c = resolver(site, fTipo, cat, tr, hoyISO());
-                            return (
-                              <td key={tr} style={{ ...tdS, fontSize: 12, textAlign: "right", fontWeight: c.propia ? 700 : 400, color: c.propia ? "#b45309" : (c.monto == null ? "#cbd5e1" : "#475569"), background: c.propia ? "#fffbeb" : "transparent" }}>
-                                {mxn(c.monto)}
-                              </td>
-                            );
-                          })}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                  {(() => {
+                    const conTurno = fTipo === "SDD";                 // SDD abre cada tramo en AM y PM
+                    const tipoR = vistaTipoRuta(fTipo), tipoT = vistaTipoTarifa(fTipo);
+                    const celda = (cat, tr, turno) => {
+                      const k = conTurno ? `${cat}|${tr}|${turno}` : `${cat}|${tr}`;
+                      if (editando) return (
+                        <td key={k} style={{ ...tdS, textAlign: "right" }}>
+                          <input type="number" placeholder="—" value={cel[k] ?? ""}
+                            onChange={e => setCel(p => ({ ...p, [k]: e.target.value }))}
+                            style={{ ...inpS, width: conTurno ? 64 : 80 }} />
+                        </td>
+                      );
+                      const c = resolver(site, tipoR, cat, tr, hoyISO(), turno, tipoT);
+                      return (
+                        <td key={k} style={{ ...tdS, fontSize: 12, textAlign: "right", fontWeight: c.propia ? 700 : 400, color: c.propia ? "#b45309" : (c.monto == null ? "#cbd5e1" : "#475569"), background: c.propia ? "#fffbeb" : "transparent" }}>
+                          {mxn(c.monto)}
+                        </td>
+                      );
+                    };
+                    return (
+                      <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                        <thead>
+                          <tr style={{ background: "#f8fafc" }}>
+                            <th rowSpan={conTurno ? 2 : 1} style={{ ...thS, fontSize: 11, verticalAlign: "bottom" }}>Categoría</th>
+                            {TRAMOS.map(tr => (
+                              <th key={tr} colSpan={conTurno ? 2 : 1}
+                                style={{ ...thS, fontSize: 11, textAlign: conTurno ? "center" : "right", borderLeft: conTurno ? "1px solid #eef0f3" : "none" }}>
+                                {tr} km
+                              </th>
+                            ))}
+                          </tr>
+                          {conTurno && (
+                            <tr style={{ background: "#f8fafc" }}>
+                              {TRAMOS.map(tr => TURNOS.map((tu, i) => (
+                                <th key={tr + tu} style={{ ...thS, fontSize: 10, textAlign: "right", color: "#94a3b8", borderLeft: i === 0 ? "1px solid #eef0f3" : "none" }}>{tu}</th>
+                              )))}
+                            </tr>
+                          )}
+                        </thead>
+                        <tbody>
+                          {CATS.map(cat => (
+                            <tr key={cat}>
+                              <td style={{ ...tdS, fontSize: 12, fontWeight: 700, whiteSpace: "nowrap" }}>{cat}</td>
+                              {conTurno
+                                ? TRAMOS.map(tr => TURNOS.map(tu => celda(cat, tr, tu)))
+                                : TRAMOS.map(tr => celda(cat, tr, null))}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    );
+                  })()}
 
                   {!propia && (
                     <div style={{ marginTop: 10, fontSize: 11, color: "#94a3b8" }}>
@@ -11079,7 +11162,10 @@ function TarifasPorSC({ usuario, onCambio }) {
 
                   {editando && (
                     <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 12, paddingTop: 12, borderTop: "1px solid #f1f5f9" }}>
-                      <div style={{ flex: 1, fontSize: 11, color: "#64748b" }}>Editando <strong>{editTipo}</strong> · lo que dejes vacío vuelve a pagar por la zona {zona}</div>
+                      <div style={{ flex: 1, fontSize: 11, color: "#64748b" }}>
+                        Editando <strong>{editTipo === "CANCEL" ? "Cancelación" : editTipo}</strong> de {site} · lo que dejes vacío se borra y vuelve a la tarifa de la zona {zona}
+                        {editTipo === "SDD" ? " · si AM y PM quedan iguales se guarda un solo valor para ambos" : ""}
+                      </div>
                       <button onClick={() => setEditSC(null)} style={{ ...btnS, background: "#fff", color: "#475569", borderColor: "#cbd5e1" }}>Cancelar</button>
                       <button onClick={guardarSC} disabled={guardando} style={{ ...btnP, opacity: guardando ? 0.6 : 1 }}>{guardando ? "Guardando..." : "Guardar"}</button>
                     </div>
@@ -11095,8 +11181,8 @@ function TarifasPorSC({ usuario, onCambio }) {
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 10 }}>
                 {scsFiltrados.filter(s => s !== scSel).slice(0, tope).map(site => {
                   const propia = scsConExcepcion.includes(site);
-                  const c1 = resolver(site, fTipo, CATS[0], TRAMOS[0], hoyISO());
-                  const c2 = resolver(site, fTipo, CATS[1] || CATS[0], TRAMOS[0], hoyISO());
+                  const c1 = resolver(site, vistaTipoRuta(fTipo), CATS[0], TRAMOS[0], hoyISO(), fTipo === "SDD" ? "AM" : null, vistaTipoTarifa(fTipo));
+                  const c2 = resolver(site, vistaTipoRuta(fTipo), CATS[1] || CATS[0], TRAMOS[0], hoyISO(), fTipo === "SDD" ? "AM" : null, vistaTipoTarifa(fTipo));
                   return (
                     <div key={site} onClick={() => { setScSel(site); setEditSC(null); }}
                       style={{ background: "#fff", border: `1px solid ${propia ? "#fcd9a6" : "#e4e7ec"}`, borderRadius: 6, padding: "10px 12px", cursor: "pointer" }}>
