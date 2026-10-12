@@ -789,6 +789,7 @@ function ModuloPnr({ usuario }) {
   const [semana, setSemana] = useState(() => semanaInventario(new Date().toISOString()));
   const [filas, setFilas] = useState([]);
   const [cobrados, setCobrados] = useState({});
+  const [overrides, setOverrides] = useState({});        // "placa|semana" -> empresa puesta a mano
   const [enPrefactura, setEnPrefactura] = useState({});  // pnr_id -> ya tiene linea en la conciliacion
   const [loading, setLoading] = useState(false);
   const [guardando, setGuardando] = useState(null);
@@ -928,6 +929,15 @@ function ModuloPnr({ usuario }) {
 
       setFilas(out);
       setCobrados(yaCobrados);
+      // Cambios manuales de empresa: se aplican sobre lo que resolvio la placa y
+      // valen mientras no se recargue el inventario de esa semana.
+      try {
+        const { data: ov } = await sb.from("cobros_empresa_override_mx")
+          .select("placa_norm, semana, empresa_nombre, motivo, usuario");
+        const mapa = {};
+        for (const o of (ov || [])) mapa[`${o.placa_norm}|${o.semana}`] = o;
+        setOverrides(mapa);
+      } catch (e) { console.error("overrides de empresa:", e); }
 
       // Un PNR puede estar solo en el portal (carril B), solo en la prefactura
       // (carril A) o en los dos. Sin distinguirlos, publicar al portal ocultaba
@@ -1003,10 +1013,59 @@ function ModuloPnr({ usuario }) {
     return partes.filter(Boolean).join(" · ");
   };
 
+  // Empresa efectiva de una fila: manda el cambio manual de esa placa y semana;
+  // si no hay, la que resolvio el inventario.
+  const empresaDe = (f) => {
+    if (!f.placa || f.semana_ruta == null) return f.empresa;
+    const o = overrides[`${normalizarPlaca(f.placa)}|${f.semana_ruta}`];
+    return o ? o.empresa_nombre : f.empresa;
+  };
+  const empresaCambiada = (f) => {
+    if (!f.placa || f.semana_ruta == null) return null;
+    return overrides[`${normalizarPlaca(f.placa)}|${f.semana_ruta}`] || null;
+  };
+
+  // Cambia la empresa de una placa en una semana. Afecta a todos los cobros de
+  // esa placa en esa semana, no solo a este caso.
+  const cambiarEmpresa = async (f) => {
+    if (!f.placa || f.semana_ruta == null) {
+      setMsg({ ok: false, txt: "Este caso no tiene placa o semana de ruta, así que no se puede reasignar la empresa." });
+      return;
+    }
+    const pl = normalizarPlaca(f.placa);
+    const nombre = prompt(
+      `Empresa responsable de la placa ${f.placa} en la semana ${f.semana_ruta}\n\n` +
+      `El inventario resolvió: ${f.empresa || "sin empresa"}\n` +
+      `Escribe el nombre correcto, o deja vacío para volver al inventario.`,
+      empresaDe(f) || ""
+    );
+    if (nombre === null) return;
+    const limpio = String(nombre).trim();
+    try {
+      if (!limpio) {
+        const { error } = await sb.from("cobros_empresa_override_mx")
+          .delete().eq("placa_norm", pl).eq("semana", f.semana_ruta);
+        if (error) throw error;
+        setMsg({ ok: true, txt: `${f.placa} vuelve a la empresa del inventario de la semana ${f.semana_ruta}.` });
+      } else {
+        const motivo = prompt("Motivo del cambio (queda registrado):", "Cambio de responsable de la placa") || null;
+        const { error } = await sb.from("cobros_empresa_override_mx")
+          .upsert({
+            placa_norm: pl, semana: f.semana_ruta, empresa_nombre: limpio, motivo,
+            usuario: (usuario && (usuario.nombre || usuario.email)) || "Brain",
+          }, { onConflict: "placa_norm,semana" });
+        if (error) throw error;
+        setMsg({ ok: true, txt: `${f.placa} queda asignada a ${limpio} en la semana ${f.semana_ruta}.` });
+      }
+      await cargar(semana, true);
+    } catch (e) { setMsg({ ok: false, txt: "Error al cambiar la empresa: " + (e.message || e) }); }
+  };
+
   // Motivo por el que un PNR no se puede cobrar automáticamente.
   const bloqueo = (f) => {
-    if (!f.empresa) return "sin empresa resuelta";
-    if (String(f.empresa).includes(" / ")) return "la placa está en dos empresas esa semana";
+    const emp = empresaDe(f);
+    if (!emp) return "sin empresa resuelta";
+    if (String(emp).includes(" / ")) return "la placa está en dos empresas esa semana";
     if (!Math.abs(Number(f.monto || 0))) return "sin monto";
     return null;
   };
@@ -1106,7 +1165,7 @@ function ModuloPnr({ usuario }) {
       const { data: emp } = await sb.from("terceros").select("nombre").eq("id", tid).maybeSingle();
       filas.push({
         pnr_id: String(f.case_id),
-        empresa_nombre: emp?.nombre || f.empresa,
+        empresa_nombre: emp?.nombre || empresaDe(f),
         service_center: prep.sc,
         semana: String(semanaCobro),
         fecha_ruta: f.fecha_ruta || String(f.facturado_en).slice(0, 10),
@@ -1138,17 +1197,17 @@ function ModuloPnr({ usuario }) {
       let scFinal = scForzado || null;
       if (!scFinal) {
         try {
-          scFinal = await resolverSc(f.empresa, prep.sc, cache);
+          scFinal = await resolverSc(empresaDe(f), prep.sc, cache);
         } catch (e) {
           console.error("resolver SC:", e); scFinal = null;
         }
       }
-      if (!scFinal) { sinOperacion.push(`${f.case_id} (${f.empresa})`); continue; }
+      if (!scFinal) { sinOperacion.push(`${f.case_id} (${empresaDe(f)})`); continue; }
       prep.linea.service_center_id = scFinal;
       prep.linea.driver_name = etiquetar(prep.linea, scFinal);
       const fila = {
         pnr_id: String(f.case_id),
-        empresa_nombre: f.empresa,
+        empresa_nombre: empresaDe(f),
         service_center: scFinal,
         semana: String(semanaCobro),
         fecha_ruta: f.fecha_ruta || String(f.facturado_en).slice(0, 10),
@@ -1161,8 +1220,8 @@ function ModuloPnr({ usuario }) {
         enviado_a_cobro_en: new Date().toISOString(),
         asignado_por: quien,
       };
-      const k = f.empresa + "||" + scFinal;
-      (grupos[k] = grupos[k] || { empresa: f.empresa, sc: scFinal, lineas: [], filas: [] });
+      const k = empresaDe(f) + "||" + scFinal;
+      (grupos[k] = grupos[k] || { empresa: empresaDe(f), sc: scFinal, lineas: [], filas: [] });
       grupos[k].lineas.push(prep.linea);
       grupos[k].filas.push(fila);
     }
@@ -1227,16 +1286,16 @@ function ModuloPnr({ usuario }) {
   // Fuerza el cobro en un SC elegido por el analista. Sirve cuando la empresa
   // no tiene operación en el SC del PNR, o directamente no operó esa semana.
   const agregarForzando = async (f) => {
-    if (!f.empresa) {
+    if (!empresaDe(f)) {
       setMsg({ ok: false, txt: `El PNR ${f.case_id} no tiene empresa resuelta.` });
       return;
     }
     const { data: conc } = await sb.from("conciliaciones_terceros")
       .select("service_center, n_viajes, estado")
-      .eq("empresa_nombre", f.empresa).eq("semana", semanaCobro);
+      .eq("empresa_nombre", empresaDe(f)).eq("semana", semanaCobro);
     const opciones = (conc || []).map(c => `${c.service_center} (${c.n_viajes || 0} viajes, ${c.estado})`);
     const sc = window.prompt(
-      `¿En qué SC cobrar el PNR ${f.case_id}?\n\n${f.empresa} · semana ${semanaCobro}\nEl PNR corresponde a ${f.service_center}.\n\n` +
+      `¿En qué SC cobrar el PNR ${f.case_id}?\n\n${empresaDe(f)} · semana ${semanaCobro}\nEl PNR corresponde a ${f.service_center}.\n\n` +
       (opciones.length
         ? `Prefacturas de esta empresa en la semana:\n${opciones.join("\n")}`
         : `Esta empresa NO tiene prefactura en la semana ${semanaCobro}. Si escribís un SC igual, se va a crear una prefactura solo con este descuento y el líquido va a quedar en negativo.`),
@@ -1262,12 +1321,12 @@ function ModuloPnr({ usuario }) {
     }
     const monto = Math.abs(Number(f.monto || 0));
     if (!window.confirm(
-      `¿Agregar este cobro a la conciliación?\n\n${f.empresa} · ${f.service_center} · se cobra en la semana ${semanaCobro}\nPNR ${f.case_id} · guía ${f.shipment_id || "—"} · ruta ${f.route_id || "—"}\nMonto: -${money(monto)}\n\nSi la empresa no operó en ese SC esa semana, se cobra en otro y queda anotado en la línea.`
+      `¿Agregar este cobro a la conciliación?\n\n${empresaDe(f)} · ${f.service_center} · se cobra en la semana ${semanaCobro}\nPNR ${f.case_id} · guía ${f.shipment_id || "—"} · ruta ${f.route_id || "—"}\nMonto: -${money(monto)}\n\nSi la empresa no operó en ese SC esa semana, se cobra en otro y queda anotado en la línea.`
     )) return;
     setGuardando(f.case_id); setMsg(null);
     const r = await ejecutarCobros([f]);
     if (r.sinOperacion.length) {
-      setMsg({ ok: false, txt: `${f.empresa} no tiene operación en la semana ${semanaCobro}, así que no hay prefactura donde descontar el PNR ${f.case_id}.` });
+      setMsg({ ok: false, txt: `${empresaDe(f)} no tiene operación en la semana ${semanaCobro}, así que no hay prefactura donde descontar el PNR ${f.case_id}.` });
     } else if (r.fallidos.length) {
       setMsg({ ok: false, txt: `No se pudo agregar el cobro en ${r.fallidos.join(", ")}.` });
     } else if (!r.ok) {
@@ -1394,7 +1453,7 @@ function ModuloPnr({ usuario }) {
         f.case_id, m.label || f.sub_cobro || "", fechaHora(f.facturado_en), Number(f.monto || 0),
         f.conductor || "", f.placa || "", f.service_center || "",
         f.route_id || "", f.route_code || "", f.fecha_ruta ? soloFecha(f.fecha_ruta) : "",
-        f.semana_ruta != null ? f.semana_ruta : "", f.shipment_id || "", f.empresa || "",
+        f.semana_ruta != null ? f.semana_ruta : "", f.shipment_id || "", empresaDe(f) || "",
         ya ? "Cobrado" : "Pendiente", ya ? ya.asignado_por : "",
         ya ? fechaHora(ya.enviado_a_cobro_en) : "", ya ? ya.semana : "",
         (f.avisos || []).length,
@@ -1413,14 +1472,14 @@ function ModuloPnr({ usuario }) {
   const visibles = useMemo(() => {
     const q = busqueda.trim().toUpperCase();
     if (!q) return filas;
-    return filas.filter(f => [f.case_id, f.conductor, f.placa, f.service_center, f.route_id, f.route_code, f.shipment_id, f.empresa]
+    return filas.filter(f => [f.case_id, f.conductor, f.placa, f.service_center, f.route_id, f.route_code, f.shipment_id, empresaDe(f)]
       .some(v => String(v || "").toUpperCase().includes(q)));
   }, [filas, busqueda]);
 
   const pendientes = visibles.filter(f => !cobrados[String(f.case_id)] && f.sub_cobro);
   const yaNoCobrables = visibles.filter(f => !cobrados[String(f.case_id)] && !f.sub_cobro).length;
   const totalPend = pendientes.reduce((s, f) => s + Number(f.monto || 0), 0);
-  const sinEmpresa = pendientes.filter(f => !f.empresa).length;
+  const sinEmpresa = pendientes.filter(f => !empresaDe(f)).length;
   const cobrables = pendientes.filter(f => !bloqueo(f));
   const nSeleccionados = cobrables.filter(f => seleccion[f.case_id]).length;
   const todosTildados = cobrables.length > 0 && nSeleccionados === cobrables.length;
@@ -1582,9 +1641,29 @@ function ModuloPnr({ usuario }) {
                       </div>
                     </td>
                     <td style={td}>
-                      {f.empresa
-                        ? f.empresa
-                        : <span style={{ color: "#b45309", fontWeight: 600 }}>por asignar</span>}
+                      {(() => {
+                        const emp = empresaDe(f);
+                        const ov = empresaCambiada(f);
+                        return (
+                          <div>
+                            <div>
+                              {emp ? emp : <span style={{ color: "#b45309", fontWeight: 600 }}>por asignar</span>}
+                            </div>
+                            {ov && (
+                              <div style={{ fontSize: 9, color: "#92400e", marginTop: 2 }}
+                                title={`Puesta a mano por ${ov.usuario || "—"}${ov.motivo ? " · " + ov.motivo : ""}. El inventario decía: ${f.empresa || "sin empresa"}.`}>
+                                cambiada a mano
+                              </div>
+                            )}
+                            <button onClick={() => cambiarEmpresa(f)}
+                              style={{ marginTop: 3, padding: "1px 6px", fontSize: 9, fontWeight: 700,
+                                background: "#eff6ff", color: "#1d4ed8", border: "1px solid #bfdbfe",
+                                borderRadius: 4, cursor: "pointer" }}>
+                              Cambiar empresa
+                            </button>
+                          </div>
+                        );
+                      })()}
                     </td>
                     <td style={{ ...td, cursor: "pointer" }} onClick={() => setAbierto(abierto === f.case_id ? null : f.case_id)}>
                       {f.sin_avisos
@@ -1627,12 +1706,12 @@ function ModuloPnr({ usuario }) {
                               </>
                             ) : (
                               <>
-                                <button onClick={() => agregar(f)} disabled={guardando === f.case_id || !f.empresa || !f.sub_cobro}
+                                <button onClick={() => agregar(f)} disabled={guardando === f.case_id || !empresaDe(f) || !f.sub_cobro}
                                   title="Agregar como línea negativa a la prefactura de la semana"
                                   style={{ width: "100%", padding: "5px 10px", fontSize: 10.5, fontWeight: 700, borderRadius: 6, border: "none",
-                                    background: (f.empresa && f.sub_cobro) ? "#1a3a6b" : "#e4e7ec",
-                                    color: (f.empresa && f.sub_cobro) ? "#fff" : "#94a3b8",
-                                    cursor: (guardando === f.case_id || !f.empresa || !f.sub_cobro) ? "not-allowed" : "pointer" }}>
+                                    background: (empresaDe(f) && f.sub_cobro) ? "#1a3a6b" : "#e4e7ec",
+                                    color: (empresaDe(f) && f.sub_cobro) ? "#fff" : "#94a3b8",
+                                    cursor: (guardando === f.case_id || !empresaDe(f) || !f.sub_cobro) ? "not-allowed" : "pointer" }}>
                                   {guardando === f.case_id ? "…" : "Agregar a prefactura"}
                                 </button>
                                 <div style={{ fontSize: 8.5, color: "#94a3b8", textAlign: "center", marginTop: 2 }}>semanal · carril A</div>
@@ -1662,12 +1741,12 @@ function ModuloPnr({ usuario }) {
 
                           {/* CARRIL A · prefactura del lunes: la empresa la asigna el analista */}
                           <div>
-                            <button onClick={() => agregar(f)} disabled={guardando === f.case_id || !f.empresa || !f.sub_cobro}
-                              title={!f.sub_cobro ? "El caso ya no está en un estado cobrable" : (!f.empresa ? "Falta resolver la empresa transportista" : "Agregar como línea negativa a la prefactura de la semana")}
+                            <button onClick={() => agregar(f)} disabled={guardando === f.case_id || !empresaDe(f) || !f.sub_cobro}
+                              title={!f.sub_cobro ? "El caso ya no está en un estado cobrable" : (!empresaDe(f) ? "Falta resolver la empresa transportista" : "Agregar como línea negativa a la prefactura de la semana")}
                               style={{
                                 width: "100%", padding: "5px 10px", fontSize: 10.5, fontWeight: 700, borderRadius: 6, border: "none",
-                                background: (f.empresa && f.sub_cobro) ? "#1a3a6b" : "#e4e7ec", color: (f.empresa && f.sub_cobro) ? "#fff" : "#94a3b8",
-                                cursor: (guardando === f.case_id || !f.empresa || !f.sub_cobro) ? "not-allowed" : "pointer",
+                                background: (empresaDe(f) && f.sub_cobro) ? "#1a3a6b" : "#e4e7ec", color: (empresaDe(f) && f.sub_cobro) ? "#fff" : "#94a3b8",
+                                cursor: (guardando === f.case_id || !empresaDe(f) || !f.sub_cobro) ? "not-allowed" : "pointer",
                               }}>
                               {guardando === f.case_id ? "…" : "Agregar a prefactura"}
                             </button>
