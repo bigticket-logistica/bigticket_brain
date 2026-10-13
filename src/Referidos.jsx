@@ -5,6 +5,9 @@
 //               rechazar y marcar pagados.
 //   Referidos   cada transportista referido y en qué etapa va.
 //   Referidores quienes refieren, su código y su cuenta para pagarles.
+//   Oportunidades en qué centros se buscan transportistas, cuántos vehículos y
+//               de qué tipo. Se muestra en el portal de referidos y en la
+//               postulación.
 //
 // Lee de las vistas vw_ref_brain_* y cambia el estado de un bono con la
 // función fn_ref_brain_premio (todo en Supabase, prefijo ref_).
@@ -49,25 +52,31 @@ export default function ModuloReferidos({ usuario }) {
   const [bonos, setBonos] = useState([]);
   const [referidos, setReferidos] = useState([]);
   const [referidores, setReferidores] = useState([]);
+  const [oportunidades, setOportunidades] = useState([]);
+  const [centros, setCentros] = useState([]);
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState("");
 
   const cargar = useCallback(async () => {
     setCargando(true); setError("");
-    const [b, r, p] = await Promise.all([
+    const [b, r, p, o, c] = await Promise.all([
       sb.from("vw_ref_brain_premios").select("*").order("cumplido_at", { ascending: false }),
       sb.from("vw_ref_brain_referidos").select("*").order("creado_at", { ascending: false }),
       sb.from("vw_ref_brain_referidores").select("*").order("creado_at", { ascending: false }),
+      sb.from("ref_oportunidades").select("*").order("sc"),
+      sb.from("centros_mx").select("sc, nombre").eq("activo", true).order("nombre"),
     ]);
-    const err = b.error || r.error || p.error;
+    const err = b.error || r.error || p.error || o.error || c.error;
     if (err) setError(err.message);
     setBonos(b.data || []); setReferidos(r.data || []); setReferidores(p.data || []);
+    setOportunidades(o.data || []); setCentros(c.data || []);
     setCargando(false);
   }, []);
   useEffect(() => { cargar(); }, [cargar]);
 
   const porValidar = bonos.filter((x) => x.estado === "por_validar").length;
-  const TABS = [["bonos", "Bonos", porValidar], ["referidos", "Referidos", referidos.length], ["referidores", "Referidores", referidores.length]];
+  const vacantes = oportunidades.filter((x) => x.activa && x.cantidad > 0).reduce((t, x) => t + x.cantidad, 0);
+  const TABS = [["bonos", "Bonos", porValidar], ["referidos", "Referidos", referidos.length], ["referidores", "Referidores", referidores.length], ["oportunidades", "Oportunidades", vacantes]];
 
   return (
     <div className="pg">
@@ -87,6 +96,7 @@ export default function ModuloReferidos({ usuario }) {
           {tab === "bonos" && <Bonos bonos={bonos} usuario={usuario} onCambio={cargar} />}
           {tab === "referidos" && <Referidos referidos={referidos} />}
           {tab === "referidores" && <Referidores referidores={referidores} />}
+          {tab === "oportunidades" && <Oportunidades lista={oportunidades} centros={centros} usuario={usuario} onCambio={cargar} />}
         </>
       )}
     </div>
@@ -247,6 +257,117 @@ function Referidores({ referidores }) {
   );
 }
 
+// ── Oportunidades ───────────────────────────────────────────────────────────
+// Por cada centro y tipo de vehículo, cuántos se buscan. Lo activo y con
+// cantidad mayor a cero aparece en el portal de referidos y en la postulación.
+const TIPOS = ["Small Van", "Large Van"];
+
+function Oportunidades({ lista, centros, usuario, onCambio }) {
+  const [nuevo, setNuevo] = useState({ sc: "", tipo: "Small Van", cantidad: 1, nota: "" });
+  const [busy, setBusy] = useState(false);
+  const nombreDe = (sc) => (centros.find((c) => c.sc === sc) || {}).nombre || sc;
+  const por = usuario?.email || usuario?.nombre || "brain";
+
+  const guardar = async (sc, tipo, cantidad, activa, nota) => {
+    setBusy(true);
+    const { error } = await sb.rpc("fn_ref_oportunidad_guardar", { p_sc: sc, p_tipo: tipo, p_cantidad: Number(cantidad) || 0, p_activa: activa, p_nota: nota || null, p_por: por });
+    setBusy(false);
+    if (error) { alert("No se pudo guardar: " + error.message); return false; }
+    onCambio(); return true;
+  };
+  const borrar = async (o) => {
+    if (!confirm(`¿Quitar la oportunidad de ${o.tipo_vehiculo} en ${nombreDe(o.sc)}?`)) return;
+    setBusy(true);
+    const { error } = await sb.rpc("fn_ref_oportunidad_borrar", { p_id: o.id });
+    setBusy(false);
+    if (error) { alert("No se pudo quitar: " + error.message); return; }
+    onCambio();
+  };
+  const agregar = async () => {
+    if (!nuevo.sc) { alert("Elige el centro."); return; }
+    if (!(Number(nuevo.cantidad) > 0)) { alert("Escribe cuántos vehículos se buscan."); return; }
+    if (await guardar(nuevo.sc, nuevo.tipo, nuevo.cantidad, true, nuevo.nota)) setNuevo({ sc: "", tipo: "Small Van", cantidad: 1, nota: "" });
+  };
+
+  const total = lista.filter((x) => x.activa && x.cantidad > 0).reduce((t, x) => t + x.cantidad, 0);
+  const porCentro = lista.reduce((m, o) => { (m[o.sc] = m[o.sc] || []).push(o); return m; }, {});
+
+  return (
+    <>
+      <div className="form-card">
+        <div style={{ fontWeight: 700, color: AZUL, marginBottom: 4 }}>Agregar una oportunidad</div>
+        <div style={{ fontSize: 12.5, color: GRIS, marginBottom: 12 }}>
+          Lo que esté activo y con cantidad aparece en el portal de referidos y en la postulación. Si el centro y el tipo ya existen, se actualiza la cantidad.
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "2fr 1.2fr 0.8fr 2fr auto", gap: 10, alignItems: "end" }}>
+          <label style={lbl}>Centro
+            <select value={nuevo.sc} onChange={(e) => setNuevo({ ...nuevo, sc: e.target.value })}>
+              <option value="">Elige un centro</option>
+              {centros.map((c) => <option key={c.sc} value={c.sc}>{c.nombre} ({c.sc})</option>)}
+            </select>
+          </label>
+          <label style={lbl}>Tipo de vehículo
+            <select value={nuevo.tipo} onChange={(e) => setNuevo({ ...nuevo, tipo: e.target.value })}>
+              {TIPOS.map((t) => <option key={t}>{t}</option>)}
+            </select>
+          </label>
+          <label style={lbl}>Cantidad
+            <input type="number" min="1" value={nuevo.cantidad} onChange={(e) => setNuevo({ ...nuevo, cantidad: e.target.value })} />
+          </label>
+          <label style={lbl}>Nota (opcional)
+            <input placeholder="Por ejemplo: turno de mañana" value={nuevo.nota} onChange={(e) => setNuevo({ ...nuevo, nota: e.target.value })} />
+          </label>
+          <button className="btn-orange" disabled={busy} onClick={agregar}>Agregar</button>
+        </div>
+      </div>
+
+      <div style={{ fontSize: 13, color: GRIS, margin: "4px 2px 10px" }}>
+        Hoy se buscan <b style={{ color: AZUL }}>{total} {total === 1 ? "vehículo" : "vehículos"}</b> en total.
+      </div>
+
+      {lista.length === 0 ? <div className="empty">Todavía no hay oportunidades. Agrega la primera arriba.</div> : (
+        <div className="form-card" style={{ padding: 0, overflowX: "auto" }}>
+          <table style={tabla}>
+            <thead><tr>{["Centro", "Tipo de vehículo", "Cantidad", "Nota", "En el portal", "Actualizado", ""].map((h) => <th key={h} style={th}>{h}</th>)}</tr></thead>
+            <tbody>
+              {Object.entries(porCentro).map(([sc, filas]) => filas.map((o, i) => (
+                <FilaOportunidad key={o.id} o={o} centro={i === 0 ? `${nombreDe(sc)} (${sc})` : ""} busy={busy} onGuardar={guardar} onBorrar={borrar} />
+              )))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </>
+  );
+}
+
+function FilaOportunidad({ o, centro, busy, onGuardar, onBorrar }) {
+  const [cantidad, setCantidad] = useState(o.cantidad);
+  const [nota, setNota] = useState(o.nota || "");
+  const cambio = Number(cantidad) !== o.cantidad || (nota || "") !== (o.nota || "");
+  const visible = o.activa && o.cantidad > 0;
+  return (
+    <tr style={{ borderTop: `0.5px solid ${BORDE}` }}>
+      <td style={{ ...td, fontWeight: 700 }}>{centro}</td>
+      <td style={td}>{o.tipo_vehiculo}</td>
+      <td style={td}><input type="number" min="0" value={cantidad} onChange={(e) => setCantidad(e.target.value)} style={{ width: 80 }} /></td>
+      <td style={td}><input value={nota} onChange={(e) => setNota(e.target.value)} placeholder="—" /></td>
+      <td style={td}>
+        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, cursor: "pointer" }}>
+          <input type="checkbox" checked={o.activa} disabled={busy} onChange={(e) => onGuardar(o.sc, o.tipo_vehiculo, o.cantidad, e.target.checked, o.nota)} />
+          {visible ? <span style={{ color: "#166534", fontWeight: 700 }}>Se muestra</span> : <span style={{ color: GRIS }}>Oculta</span>}
+        </label>
+      </td>
+      <td style={td}>{fecha(o.actualizado_at)}<div style={sub}>{o.actualizado_por || ""}</div></td>
+      <td style={{ ...td, whiteSpace: "nowrap" }}>
+        {cambio && <button className="btn-blue" style={btnChico} disabled={busy} onClick={() => onGuardar(o.sc, o.tipo_vehiculo, cantidad, o.activa, nota)}>Guardar</button>}{" "}
+        <button className="btn-back" style={{ color: "#b42318" }} disabled={busy} onClick={() => onBorrar(o)}>Quitar</button>
+      </td>
+    </tr>
+  );
+}
+
+const lbl = { display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: GRIS, fontWeight: 600 };
 const tabla = { width: "100%", borderCollapse: "collapse", fontSize: 13 };
 const th = { textAlign: "left", padding: "10px 12px", fontSize: 11, color: GRIS, fontWeight: 600, textTransform: "uppercase", letterSpacing: ".04em", background: "#f8f9fb", whiteSpace: "nowrap" };
 const td = { padding: "10px 12px", verticalAlign: "top" };
