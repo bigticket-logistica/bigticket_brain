@@ -7127,7 +7127,7 @@ function PoolVendorScore() {
     }
     // Solo SVC con actividad en la semana: descarta SC sin rutas ni paquetes (por ejemplo, los de Chile que lista el portal)
     const lista = Object.entries(porSvc)
-      .filter(([, b]) => b.sol > 0 || b.conf > 0 || b.desp > 0)
+      .filter(([, b]) => b.sol > 0 || b.conf > 0) // en el ranking, solo SVC con rutas ofrecidas o confirmadas a Big Ticket
       .map(([svc, b]) => ({ svc, ...vsCalcular(b) }))
       .sort((a, b) => a.score - b.score);
     return { total: vsCalcular(tot), svcs: lista, gmvRespaldo: respaldo };
@@ -7272,6 +7272,67 @@ function PoolVendorScore() {
               </div>
             </div>
           </div>
+
+          {/* Resumen de la semana por ramo: nota, puntos perdidos (MELI y BT) y plata */}
+          {(() => {
+            const nota = { ER: total.er, AR: total.ar, BPP: total.bpp, DS: total.ds };
+            const res = {
+              ER: total.conf ? `${vsNum((total.ejec / total.conf) * 100)}% · ${total.ejec} de ${total.conf} rutas aceptadas` : "—",
+              AR: total.sol ? `${vsNum((total.conf / total.sol) * 100)}% · ${total.conf} de ${total.sol} rutas ofrecidas` : "—",
+              BPP: total.bppPct != null ? `${vsNum(total.bppPct, 3)}% del GMV · ${vsPesos(total.montoBpp)} en reclamos` : "—",
+              DS: total.dsPct != null ? `${vsNum(total.dsPct, 2)}% · ${total.entr.toLocaleString("es-MX")} de ${total.desp.toLocaleString("es-MX")} paquetes` : "—",
+            };
+            const plata = { ER: dinero.multaER + dinero.ingresoER, AR: dinero.multaAR + dinero.ingresoAR, BPP: null, DS: null };
+            const filas = ["ER", "AR", "BPP", "DS"].map(c => ({ c, nota: nota[c], meli: total.pierde[c], bt: VS_PESOS_BT[c] * (100 - (nota[c] ?? 0)) / 100 }))
+              .sort((x, y) => y.meli - x.meli);
+            const th = { padding: "8px 10px", borderBottom: `1px solid ${VS_BORDER}`, fontWeight: 600, fontSize: 12, color: VS_MUTED, textAlign: "left" };
+            const td = { padding: "9px 10px", borderBottom: "1px solid #f0f1f3", fontVariantNumeric: "tabular-nums" };
+            const totMeli = filas.reduce((a, f) => a + f.meli, 0), totBt = filas.reduce((a, f) => a + f.bt, 0);
+            return (
+              <div style={card}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12, flexWrap: "wrap", marginBottom: 8 }}>
+                  <div style={{ fontSize: 18, fontWeight: 700 }}>Nota de la semana por ramo</div>
+                  <div style={{ fontSize: 12, color: VS_MUTED }}>Acumulado de la semana{esActual ? " hasta ayer" : ""} · de mayor a menor pérdida</div>
+                </div>
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14, minWidth: 760 }}>
+                    <thead>
+                      <tr>
+                        <th style={th}>Ramo</th><th style={th}>Resultado</th>
+                        <th style={{ ...th, textAlign: "center" }}>Nota</th>
+                        <th style={{ ...th, textAlign: "center" }}>Puntos perdidos MELI</th>
+                        <th style={{ ...th, textAlign: "center" }}>Puntos perdidos BT</th>
+                        <th style={{ ...th, textAlign: "right" }}>Plata perdida</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filas.map(f => {
+                        const ch = vsColorChip(f.nota);
+                        return (
+                          <tr key={f.c}>
+                            <td style={{ ...td, fontWeight: 700 }}>{f.c} · {VS_NOMBRE_LARGO[f.c]}</td>
+                            <td style={{ ...td, color: "#2b3038" }}>{res[f.c]}</td>
+                            <td style={{ ...td, textAlign: "center" }}><span style={{ display: "inline-block", minWidth: 44, padding: "3px 0", borderRadius: 6, background: ch.bg, color: ch.fg, fontWeight: 700 }}>{f.nota ?? "—"}</span></td>
+                            <td style={{ ...td, textAlign: "center", fontWeight: 700, color: f.meli > 0.05 ? "#9a3c06" : "#15803d" }}>{f.meli > 0.05 ? `−${vsNum(f.meli)}` : "0"}</td>
+                            <td style={{ ...td, textAlign: "center", fontWeight: 700, color: f.bt > 0.05 ? "#9a3c06" : "#15803d" }}>{f.bt > 0.05 ? `−${vsNum(f.bt)}` : "0"}</td>
+                            <td style={{ ...td, textAlign: "right", fontWeight: 700, color: "#b42318" }}>{plata[f.c] ? `−${vsPesos(plata[f.c])}` : f.c === "BPP" ? <span style={{ color: VS_MUTED, fontWeight: 400 }}>{vsPesos(total.montoBpp)} en riesgo</span> : <span style={{ color: VS_MUTED, fontWeight: 400 }}>sin multa directa</span>}</td>
+                          </tr>
+                        );
+                      })}
+                      <tr style={{ background: "#fafafa" }}>
+                        <td style={{ ...td, fontWeight: 800 }}>Total</td>
+                        <td style={{ ...td, color: VS_MUTED }}>Nota MELI {total.score} · Nota BT {vsNotaBT(total)}</td>
+                        <td style={td} />
+                        <td style={{ ...td, textAlign: "center", fontWeight: 800, color: "#9a3c06" }}>−{vsNum(totMeli)}</td>
+                        <td style={{ ...td, textAlign: "center", fontWeight: 800, color: "#9a3c06" }}>−{vsNum(totBt)}</td>
+                        <td style={{ ...td, textAlign: "right", fontWeight: 800, color: "#b42318" }}>−{vsPesos(plata.ER + plata.AR)}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            );
+          })()}
 
           {/* Qué falta para cumplir */}
           <VsQueFalta total={total} svcs={svcs} dinero={dinero} />
