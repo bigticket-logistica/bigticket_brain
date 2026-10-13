@@ -260,12 +260,14 @@ function Referidores({ referidores }) {
 // ── Oportunidades ───────────────────────────────────────────────────────────
 // Por cada centro y tipo de vehículo, cuántos se buscan. Lo activo y con
 // cantidad mayor a cero aparece en el portal de referidos y en la postulación.
-const TIPOS = ["Small Van", "Large Van"];
+// Sugerencias para el tipo de vehículo; se puede escribir cualquier otro.
+const TIPOS_SUGERIDOS = ["Small Van", "Large Van", "Auto", "Moto", "Camioneta pickup", "Camión 3.5 t"];
 
 function Oportunidades({ lista, centros, usuario, onCambio }) {
   const [nuevo, setNuevo] = useState({ sc: "", tipo: "Small Van", cantidad: 1, nota: "" });
   const [busy, setBusy] = useState(false);
   const nombreDe = (sc) => (centros.find((c) => c.sc === sc) || {}).nombre || sc;
+  const tipos = [...new Set([...TIPOS_SUGERIDOS, ...lista.map((x) => x.tipo_vehiculo)])];
   const por = usuario?.email || usuario?.nombre || "brain";
 
   const guardar = async (sc, tipo, cantidad, activa, nota) => {
@@ -285,8 +287,9 @@ function Oportunidades({ lista, centros, usuario, onCambio }) {
   };
   const agregar = async () => {
     if (!nuevo.sc) { alert("Elige el centro."); return; }
+    if (nuevo.tipo.trim().length < 2) { alert("Escribe el tipo de vehículo."); return; }
     if (!(Number(nuevo.cantidad) > 0)) { alert("Escribe cuántos vehículos se buscan."); return; }
-    if (await guardar(nuevo.sc, nuevo.tipo, nuevo.cantidad, true, nuevo.nota)) setNuevo({ sc: "", tipo: "Small Van", cantidad: 1, nota: "" });
+    if (await guardar(nuevo.sc, nuevo.tipo.trim(), nuevo.cantidad, true, nuevo.nota)) setNuevo({ sc: "", tipo: "Small Van", cantidad: 1, nota: "" });
   };
 
   const total = lista.filter((x) => x.activa && x.cantidad > 0).reduce((t, x) => t + x.cantidad, 0);
@@ -297,7 +300,7 @@ function Oportunidades({ lista, centros, usuario, onCambio }) {
       <div className="form-card">
         <div style={{ fontWeight: 700, color: AZUL, marginBottom: 4 }}>Agregar una oportunidad</div>
         <div style={{ fontSize: 12.5, color: GRIS, marginBottom: 12 }}>
-          Lo que esté activo y con cantidad aparece en el portal de referidos y en la postulación. Si el centro y el tipo ya existen, se actualiza la cantidad.
+          Lo que esté activo y con cantidad aparece en el portal de referidos y en la postulación: el referido solo puede elegir estos centros y estos tipos de vehículo. Si el centro y el tipo ya existen, se actualiza la cantidad.
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "2fr 1.2fr 0.8fr 2fr auto", gap: 10, alignItems: "end" }}>
           <label style={lbl}>Centro
@@ -307,9 +310,10 @@ function Oportunidades({ lista, centros, usuario, onCambio }) {
             </select>
           </label>
           <label style={lbl}>Tipo de vehículo
-            <select value={nuevo.tipo} onChange={(e) => setNuevo({ ...nuevo, tipo: e.target.value })}>
-              {TIPOS.map((t) => <option key={t}>{t}</option>)}
-            </select>
+            {/* Lista con sugerencias, pero se puede escribir un tipo nuevo. */}
+            <input list="ref-tipos-vehiculo" value={nuevo.tipo} placeholder="Elige o escribe"
+              onChange={(e) => setNuevo({ ...nuevo, tipo: e.target.value })} />
+            <datalist id="ref-tipos-vehiculo">{tipos.map((t) => <option key={t} value={t} />)}</datalist>
           </label>
           <label style={lbl}>Cantidad
             <input type="number" min="1" value={nuevo.cantidad} onChange={(e) => setNuevo({ ...nuevo, cantidad: e.target.value })} />
