@@ -317,20 +317,14 @@ function RechazosMeliMX({ usuario }) {
           {/* ═══ LO QUE PERDIMOS (opción A: fondo blanco, rojo en los montos) ═══ */}
           <div style={{ background: "#fff", border: `1px solid ${RM_BORDER}`, borderLeft: "6px solid #A32D2D", padding: "22px 26px" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 20, flexWrap: "wrap" }}>
-              <div style={{ flex: "1 1 360px" }}>
-                <div style={{ fontSize: 14, color: RM_MUTED, fontWeight: 600 }}>Lo que perdimos en {etiquetaMes(mes)} por no aceptar o no hacer rutas</div>
-                <div style={{ fontSize: 60, fontWeight: 800, lineHeight: 1.05, marginTop: 4, color: "#A32D2D", fontVariantNumeric: "tabular-nums" }}>−{rmPesos(costos.total.multa + costos.total.ingreso)} <span style={{ fontSize: 20, fontWeight: 700 }}>MXN</span></div>
-                <div style={{ fontSize: 16, fontWeight: 700, color: "#A32D2D", marginTop: 2, fontVariantNumeric: "tabular-nums" }}>
-                  ≈ −US${Math.round((costos.total.multa + costos.total.ingreso) * tc.usd).toLocaleString("es-MX")} · ≈ −CLP ${Math.round((costos.total.multa + costos.total.ingreso) * tc.clp).toLocaleString("es-CL")}
-                  <span style={{ fontSize: 11, fontWeight: 400, color: RM_MUTED, marginLeft: 8 }}>
-                    tipo de cambio {tc.fuente === "en línea" ? `del ${tc.fecha}` : "de referencia"}: 1 MXN = US${tc.usd.toFixed(4)} = CLP ${tc.clp.toFixed(2)}
-                  </span>
-                </div>
-                <div style={{ fontSize: 14, color: RM_MUTED, marginTop: 6 }}>
+              <div style={{ flex: "1 1 100%" }}>
+                <div style={{ fontSize: 15, fontWeight: 700, color: "#2b3038" }}>Pérdidas de {etiquetaMes(mes)} por no aceptar o no hacer rutas</div>
+                <div style={{ fontSize: 13, color: RM_MUTED, marginTop: 2 }}>
                   {rmN(costos.total.rutas)} rutas que no hicimos = {rmN(costos.svcs.reduce((x, v) => x + (v.soft || 0), 0))} que no aceptamos (rechazadas o vencidas) + {rmN(costos.svcs.reduce((x, v) => x + (v.hard || 0), 0))} que aceptamos y no salieron · MXN sin IVA
+                  <span style={{ marginLeft: 8, fontSize: 11 }}>· tipo de cambio {tc.fuente === "en línea" ? `del ${tc.fecha}` : "de referencia"}: 1 MXN = US${tc.usd.toFixed(4)} = CLP ${tc.clp.toFixed(2)}</span>
                 </div>
               </div>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(190px, 1fr))", gap: 10, flex: "1 1 440px", maxWidth: 620 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12, flex: "1 1 100%" }}>
                 <div style={{ background: "#FCEBEB", borderRadius: 10, padding: "12px 14px" }}>
                   <div style={{ fontSize: 13, color: "#A32D2D" }}>Multas que nos cobra MELI</div>
                   <div style={{ fontSize: 28, fontWeight: 800, color: "#791F1F", fontVariantNumeric: "tabular-nums" }}>{rmPesos(costos.total.multa)}</div>
