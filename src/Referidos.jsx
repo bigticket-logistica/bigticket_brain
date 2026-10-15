@@ -264,15 +264,16 @@ function Referidores({ referidores }) {
 const TIPOS_SUGERIDOS = ["Small Van", "Large Van", "Auto", "Moto", "Camioneta pickup", "Camión 3.5 t"];
 
 function Oportunidades({ lista, centros, usuario, onCambio }) {
-  const [nuevo, setNuevo] = useState({ sc: "", tipo: "Small Van", cantidad: 1, nota: "" });
+  const [nuevo, setNuevo] = useState({ sc: "", tipo: "Small Van", cantidad: 1, tarifa: "", nota: "" });
   const [busy, setBusy] = useState(false);
   const nombreDe = (sc) => (centros.find((c) => c.sc === sc) || {}).nombre || sc;
   const tipos = [...new Set([...TIPOS_SUGERIDOS, ...lista.map((x) => x.tipo_vehiculo)])];
   const por = usuario?.email || usuario?.nombre || "brain";
 
-  const guardar = async (sc, tipo, cantidad, activa, nota) => {
+  const guardar = async (sc, tipo, cantidad, activa, nota, tarifa) => {
     setBusy(true);
-    const { error } = await sb.rpc("fn_ref_oportunidad_guardar", { p_sc: sc, p_tipo: tipo, p_cantidad: Number(cantidad) || 0, p_activa: activa, p_nota: nota || null, p_por: por });
+    const t = tarifa === "" || tarifa == null ? null : Number(tarifa);
+    const { error } = await sb.rpc("fn_ref_oportunidad_guardar", { p_sc: sc, p_tipo: tipo, p_cantidad: Number(cantidad) || 0, p_activa: activa, p_nota: nota || null, p_tarifa: t, p_por: por });
     setBusy(false);
     if (error) { alert("No se pudo guardar: " + error.message); return false; }
     onCambio(); return true;
@@ -289,7 +290,8 @@ function Oportunidades({ lista, centros, usuario, onCambio }) {
     if (!nuevo.sc) { alert("Elige el centro."); return; }
     if (nuevo.tipo.trim().length < 2) { alert("Escribe el tipo de vehículo."); return; }
     if (!(Number(nuevo.cantidad) > 0)) { alert("Escribe cuántos vehículos se buscan."); return; }
-    if (await guardar(nuevo.sc, nuevo.tipo.trim(), nuevo.cantidad, true, nuevo.nota)) setNuevo({ sc: "", tipo: "Small Van", cantidad: 1, nota: "" });
+    if (!(Number(nuevo.tarifa) > 0)) { alert("Escribe la tarifa por viaje."); return; }
+    if (await guardar(nuevo.sc, nuevo.tipo.trim(), nuevo.cantidad, true, nuevo.nota, nuevo.tarifa)) setNuevo({ sc: "", tipo: "Small Van", cantidad: 1, tarifa: "", nota: "" });
   };
 
   const total = lista.filter((x) => x.activa && x.cantidad > 0).reduce((t, x) => t + x.cantidad, 0);
@@ -300,9 +302,9 @@ function Oportunidades({ lista, centros, usuario, onCambio }) {
       <div className="form-card">
         <div style={{ fontWeight: 700, color: AZUL, marginBottom: 4 }}>Agregar una oportunidad</div>
         <div style={{ fontSize: 12.5, color: GRIS, marginBottom: 12 }}>
-          Lo que esté activo y con cantidad aparece en el portal de referidos y en la postulación: el referido solo puede elegir estos centros y estos tipos de vehículo. Si el centro y el tipo ya existen, se actualiza la cantidad.
+          Lo que esté activo y con cantidad aparece en el portal de referidos y en la postulación, con su tarifa por viaje y el comentario: el referido solo puede elegir estos centros y estos tipos de vehículo. Si el centro y el tipo ya existen, se actualizan sus datos.
         </div>
-        <div style={{ display: "grid", gridTemplateColumns: "2fr 1.2fr 0.8fr 2fr auto", gap: 10, alignItems: "end" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1.8fr 1.2fr 0.7fr 1fr auto", gap: 10, alignItems: "end" }}>
           <label style={lbl}>Centro
             <select value={nuevo.sc} onChange={(e) => setNuevo({ ...nuevo, sc: e.target.value })}>
               <option value="">Elige un centro</option>
@@ -318,11 +320,15 @@ function Oportunidades({ lista, centros, usuario, onCambio }) {
           <label style={lbl}>Cantidad
             <input type="number" min="1" value={nuevo.cantidad} onChange={(e) => setNuevo({ ...nuevo, cantidad: e.target.value })} />
           </label>
-          <label style={lbl}>Nota (opcional)
-            <input placeholder="Por ejemplo: turno de mañana" value={nuevo.nota} onChange={(e) => setNuevo({ ...nuevo, nota: e.target.value })} />
+          <label style={lbl}>Tarifa por viaje (MXN)
+            <input type="number" min="0" step="1" placeholder="Ej. 1800" value={nuevo.tarifa} onChange={(e) => setNuevo({ ...nuevo, tarifa: e.target.value })} />
           </label>
           <button className="btn-orange" disabled={busy} onClick={agregar}>Agregar</button>
         </div>
+        <label style={{ ...lbl, marginTop: 10 }}>Comentario para más información (opcional)
+          <textarea rows={2} placeholder="Por ejemplo: turno de mañana, salida a las 7:00, se paga semanal." value={nuevo.nota}
+            onChange={(e) => setNuevo({ ...nuevo, nota: e.target.value })} style={{ resize: "vertical" }} />
+        </label>
       </div>
 
       <div style={{ fontSize: 13, color: GRIS, margin: "4px 2px 10px" }}>
@@ -332,7 +338,7 @@ function Oportunidades({ lista, centros, usuario, onCambio }) {
       {lista.length === 0 ? <div className="empty">Todavía no hay oportunidades. Agrega la primera arriba.</div> : (
         <div className="form-card" style={{ padding: 0, overflowX: "auto" }}>
           <table style={tabla}>
-            <thead><tr>{["Centro", "Tipo de vehículo", "Cantidad", "Nota", "En el portal", "Actualizado", ""].map((h) => <th key={h} style={th}>{h}</th>)}</tr></thead>
+            <thead><tr>{["Centro", "Tipo de vehículo", "Cantidad", "Tarifa por viaje", "Comentario", "En el portal", "Actualizado", ""].map((h) => <th key={h} style={th}>{h}</th>)}</tr></thead>
             <tbody>
               {Object.entries(porCentro).map(([sc, filas]) => filas.map((o, i) => (
                 <FilaOportunidad key={o.id} o={o} centro={i === 0 ? `${nombreDe(sc)} (${sc})` : ""} busy={busy} onGuardar={guardar} onBorrar={borrar} />
@@ -347,24 +353,29 @@ function Oportunidades({ lista, centros, usuario, onCambio }) {
 
 function FilaOportunidad({ o, centro, busy, onGuardar, onBorrar }) {
   const [cantidad, setCantidad] = useState(o.cantidad);
+  const [tarifa, setTarifa] = useState(o.tarifa ?? "");
   const [nota, setNota] = useState(o.nota || "");
-  const cambio = Number(cantidad) !== o.cantidad || (nota || "") !== (o.nota || "");
+  const cambio = Number(cantidad) !== o.cantidad || (nota || "") !== (o.nota || "")
+    || String(tarifa ?? "") !== String(o.tarifa ?? "");
   const visible = o.activa && o.cantidad > 0;
   return (
     <tr style={{ borderTop: `0.5px solid ${BORDE}` }}>
       <td style={{ ...td, fontWeight: 700 }}>{centro}</td>
       <td style={td}>{o.tipo_vehiculo}</td>
       <td style={td}><input type="number" min="0" value={cantidad} onChange={(e) => setCantidad(e.target.value)} style={{ width: 80 }} /></td>
-      <td style={td}><input value={nota} onChange={(e) => setNota(e.target.value)} placeholder="—" /></td>
+      <td style={td}>
+        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>$<input type="number" min="0" value={tarifa} onChange={(e) => setTarifa(e.target.value)} style={{ width: 90 }} /></div>
+      </td>
+      <td style={td}><textarea rows={1} value={nota} onChange={(e) => setNota(e.target.value)} placeholder="—" style={{ minWidth: 180, resize: "vertical" }} /></td>
       <td style={td}>
         <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, cursor: "pointer" }}>
-          <input type="checkbox" checked={o.activa} disabled={busy} onChange={(e) => onGuardar(o.sc, o.tipo_vehiculo, o.cantidad, e.target.checked, o.nota)} />
+          <input type="checkbox" checked={o.activa} disabled={busy} onChange={(e) => onGuardar(o.sc, o.tipo_vehiculo, o.cantidad, e.target.checked, o.nota, o.tarifa)} />
           {visible ? <span style={{ color: "#166534", fontWeight: 700 }}>Se muestra</span> : <span style={{ color: GRIS }}>Oculta</span>}
         </label>
       </td>
       <td style={td}>{fecha(o.actualizado_at)}<div style={sub}>{o.actualizado_por || ""}</div></td>
       <td style={{ ...td, whiteSpace: "nowrap" }}>
-        {cambio && <button className="btn-blue" style={btnChico} disabled={busy} onClick={() => onGuardar(o.sc, o.tipo_vehiculo, cantidad, o.activa, nota)}>Guardar</button>}{" "}
+        {cambio && <button className="btn-blue" style={btnChico} disabled={busy} onClick={() => onGuardar(o.sc, o.tipo_vehiculo, cantidad, o.activa, nota, tarifa)}>Guardar</button>}{" "}
         <button className="btn-back" style={{ color: "#b42318" }} disabled={busy} onClick={() => onBorrar(o)}>Quitar</button>
       </td>
     </tr>
