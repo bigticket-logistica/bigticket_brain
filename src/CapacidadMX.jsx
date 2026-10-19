@@ -27,6 +27,16 @@ const CAP_ESTADOS = {
   a: { txt: "Spot excede", bg: "#fff4d6", fg: "#7a4f00", sub: "#5c4300" },
   r: { txt: "SDD no cabe", bg: "#fde8e6", fg: "#b42318", sub: "#7a1a12" },
 };
+const CAP_LEYENDA = [
+  { id: "v", titulo: "Verde, cabe", muestra: "6", bg: "#e7f6ec", fg: "#15803d", borde: "none", outline: "none",
+    texto: "La SDD y el Spot esperados entran en la capacidad del site. No hace falta hacer nada." },
+  { id: "a", titulo: "Amarillo, el Spot excede", muestra: "9", bg: "#fff4d6", fg: "#7a4f00", borde: "none", outline: "none",
+    texto: "La SDD cabe, pero MELI ofrece más Spot del que el site puede hacer. Tomar solo el Spot que tenga unidad confirmada." },
+  { id: "r", titulo: "Rojo, la SDD no cabe", muestra: "10", bg: "#fde8e6", fg: "#b42318", borde: "none", outline: "2px solid #b42318",
+    texto: "La SDD sola supera la capacidad. Conseguir unidades antes del día o habrá multa por rechazo o por no salir." },
+  { id: "g", titulo: "Gris, sin estimación", muestra: "", bg: "#f6f7f9", fg: "#5b6474", borde: "1px dashed #c9ced6", outline: "none",
+    texto: "Ese día todavía no se calcula. La estimación de 9 días se hace cada noche a las 23:30." },
+];
 const CAP_NOMBRE_DIA = ["Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"];
 
 const capSumar = (iso, n) => {
@@ -64,6 +74,8 @@ export default function CapacidadMX() {
   const [techos, setTechos] = useState({});
   const [ultima, setUltima] = useState(null);
   const [diaDet, setDiaDet] = useState(() => capSumar(fechaHoyOperativa(), 1));
+  // Filtro de las tarjetas: null | "sdd" | "spot" (qué se muestra) | "rojos" | "exceso" (qué sites)
+  const [filtro, setFiltro] = useState(null);
   const [error, setError] = useState(null);
   const [cargando, setCargando] = useState(true);
 
@@ -138,7 +150,28 @@ export default function CapacidadMX() {
     return { sdd, spot, spotRec, exceso, mayor, rojos };
   }, [sites, celdas, techos, manana]);
 
-  const detalle = useMemo(() => sites
+  const sitesVisibles = useMemo(() => {
+    if (filtro === "rojos") return sites.filter((s) => celdas[s]?.[manana]?.estado === "r");
+    if (filtro === "exceso") return sites.filter((s) => ["a", "r"].includes(celdas[s]?.[manana]?.estado));
+    return sites;
+  }, [filtro, sites, celdas, manana]);
+
+  const tocarTarjeta = (f) => {
+    const nuevo = filtro === f ? null : f;
+    setFiltro(nuevo);
+    if (nuevo === "rojos" || nuevo === "exceso") setDiaDet(manana);
+  };
+  // Qué número muestra cada celda según el filtro
+  const valorCelda = (c) => (filtro === "sdd" ? c.sdd : filtro === "spot" ? c.spot : c.total);
+  const maloCelda = (c) => (filtro === "sdd" ? c.sddMalo : filtro === "spot" ? c.spotMalo : c.malo);
+  const textoFiltro = {
+    sdd: "Mostrando solo la SDD de cada site",
+    spot: "Mostrando solo el Spot de cada site",
+    rojos: "Mostrando solo los sites con la SDD de mañana sobre su capacidad",
+    exceso: "Mostrando solo los sites donde mañana se espera más de lo que pueden hacer",
+  };
+
+  const detalle = useMemo(() => sitesVisibles
     .map((site) => {
       const c = celdas[site]?.[diaDet];
       if (!c) return null;
@@ -146,7 +179,7 @@ export default function CapacidadMX() {
       return { site, c, techo, brecha: c.total - techo, accion: capAccion(c, techo) };
     })
     .filter(Boolean)
-    .sort((a, b) => b.brecha - a.brecha), [sites, celdas, techos, diaDet]);
+    .sort((a, b) => b.brecha - a.brecha), [sitesVisibles, celdas, techos, diaDet]);
 
   const minDesde = ultima ? Math.round((Date.now() - new Date(ultima).getTime()) / 60000) : null;
   const horaUltima = ultima
@@ -183,41 +216,58 @@ export default function CapacidadMX() {
       {!cargando && !error && sites.length > 0 && (
         <>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12 }}>
-            <div style={{ ...card, padding: "14px 16px", borderTop: `4px solid ${CAP_NAVY}` }}>
-              <div style={{ fontSize: 13, color: CAP_MUTED }}>SDD esperada para mañana</div>
-              <div style={{ fontSize: 30, fontWeight: 700, color: CAP_NAVY, fontVariantNumeric: "tabular-nums" }}>{Math.round(tarjetas.sdd)}</div>
-              <div style={{ fontSize: 12, color: CAP_MUTED }}>La tarde anterior ya está toda a la vista</div>
-            </div>
-            <div style={{ ...card, padding: "14px 16px", borderTop: "4px solid #F47B20" }}>
-              <div style={{ fontSize: 13, color: CAP_MUTED }}>Spot esperado para mañana</div>
-              <div style={{ fontSize: 30, fontWeight: 700, color: "#9a4a0c", fontVariantNumeric: "tabular-nums" }}>≈ {Math.round(tarjetas.spot)}</div>
-              <div style={{ fontSize: 12, color: CAP_MUTED }}>{tarjetas.spotRec} ya recibidas; el resto suele llegar hoy y mañana</div>
-            </div>
-            <div style={{ ...card, padding: "14px 16px", borderTop: "4px solid #b42318" }}>
-              <div style={{ fontSize: 13, color: CAP_MUTED }}>Sites con SDD sobre su capacidad mañana</div>
-              <div style={{ fontSize: 30, fontWeight: 700, color: "#b42318", fontVariantNumeric: "tabular-nums" }}>{tarjetas.rojos.length}</div>
-              <div style={{ fontSize: 12, color: CAP_MUTED }}>{tarjetas.rojos.length ? tarjetas.rojos.join(" · ") : "Ninguno: la SDD cabe en todos"}</div>
-            </div>
-            <div style={{ ...card, padding: "14px 16px", borderTop: "4px solid #7a4f00" }}>
-              <div style={{ fontSize: 13, color: CAP_MUTED }}>Rutas esperadas sobre la capacidad mañana</div>
-              <div style={{ fontSize: 30, fontWeight: 700, color: "#7a4f00", fontVariantNumeric: "tabular-nums" }}>{Math.round(tarjetas.exceso)}</div>
-              <div style={{ fontSize: 12, color: CAP_MUTED }}>
-                {tarjetas.mayor ? `${capFmt(tarjetas.mayor.e)} en ${tarjetas.mayor.site}: decidir hoy cuánto Spot tomar` : "Todo cabe en un día normal"}
-              </div>
-            </div>
+            {[
+              { id: "sdd", color: CAP_NAVY, num: CAP_NAVY, titulo: "SDD esperada para mañana",
+                valor: Math.round(tarjetas.sdd), pie: "La tarde anterior ya está toda a la vista" },
+              { id: "spot", color: "#F47B20", num: "#9a4a0c", titulo: "Spot esperado para mañana",
+                valor: `≈ ${Math.round(tarjetas.spot)}`, pie: `${tarjetas.spotRec} ya recibidas; el resto suele llegar hoy y mañana` },
+              { id: "rojos", color: "#b42318", num: "#b42318", titulo: "Sites con SDD sobre su capacidad mañana",
+                valor: tarjetas.rojos.length, pie: tarjetas.rojos.length ? tarjetas.rojos.join(" · ") : "Ninguno: la SDD cabe en todos" },
+              { id: "exceso", color: "#7a4f00", num: "#7a4f00", titulo: "Rutas esperadas sobre la capacidad mañana",
+                valor: Math.round(tarjetas.exceso), pie: tarjetas.mayor ? `${capFmt(tarjetas.mayor.e)} en ${tarjetas.mayor.site}: decidir hoy cuánto Spot tomar` : "Todo cabe en un día normal" },
+            ].map((t) => {
+              const act = filtro === t.id;
+              return (
+                <button key={t.id} onClick={() => tocarTarjeta(t.id)} aria-pressed={act}
+                  style={{ ...card, padding: "14px 16px", borderTop: `4px solid ${t.color}`, textAlign: "left", cursor: "pointer", fontFamily: "inherit",
+                    background: act ? "#f3f6fb" : "#fff", boxShadow: act ? `inset 0 0 0 2px ${t.color}` : "none" }}>
+                  <div style={{ fontSize: 13, color: CAP_MUTED, display: "flex", justifyContent: "space-between", gap: 8 }}>
+                    <span>{t.titulo}</span>
+                    <span style={{ fontSize: 11, fontWeight: 600, color: act ? t.num : "#8a93a3", whiteSpace: "nowrap" }}>{act ? "Filtro activo" : "Filtrar"}</span>
+                  </div>
+                  <div style={{ fontSize: 30, fontWeight: 700, color: t.num, fontVariantNumeric: "tabular-nums" }}>{t.valor}</div>
+                  <div style={{ fontSize: 12, color: CAP_MUTED }}>{t.pie}</div>
+                </button>
+              );
+            })}
           </div>
 
-          <div style={card}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12, flexWrap: "wrap", marginBottom: 4 }}>
-              <div style={{ fontSize: 16, fontWeight: 700 }}>Planificación: hoy y los próximos 9 días</div>
-              <div style={{ display: "flex", gap: 14, fontSize: 12, color: CAP_MUTED, flexWrap: "wrap" }}>
-                <span><b style={{ color: CAP_ESTADOS.v.fg }}>Cabe</b>: todo dentro de la capacidad</span>
-                <span><b style={{ color: CAP_ESTADOS.a.fg }}>Spot excede</b>: decidir cuánto Spot tomar</span>
-                <span><b style={{ color: CAP_ESTADOS.r.fg }}>SDD no cabe</b>: la SDD supera la capacidad</span>
-              </div>
+          {filtro && (
+            <div style={{ ...card, padding: "10px 16px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", background: "#f3f6fb" }}>
+              <span style={{ fontSize: 13, color: CAP_NAVY, fontWeight: 600 }}>{textoFiltro[filtro]}</span>
+              <button onClick={() => setFiltro(null)}
+                style={{ border: `1px solid ${CAP_NAVY}`, background: "#fff", color: CAP_NAVY, borderRadius: 999, padding: "6px 14px", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
+                Quitar filtro
+              </button>
             </div>
-            <div style={{ fontSize: 12, color: CAP_MUTED, marginBottom: 12 }}>
-              Cada celda: demanda esperada en un día normal, su composición y el día malo (P90). Capacidad: rutas que el site ejecutó en un día bueno en las últimas 4 semanas. Toca un día para ver su detalle abajo.
+          )}
+
+          <div style={card}>
+            <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>Planificación: hoy y los próximos 9 días</div>
+            <div style={{ fontSize: 12, color: CAP_MUTED, marginBottom: 12, lineHeight: 1.5 }}>
+              Cada celda muestra la demanda esperada en un día normal, cuánto es SDD y cuánto Spot, y el día malo (lo que MELI podría pedir en un día exigente).
+              La capacidad es lo que el site ejecutó en un día bueno durante las últimas 4 semanas. Toca un día para ver su detalle abajo.
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 10, marginBottom: 14 }}>
+              {CAP_LEYENDA.map((l) => (
+                <div key={l.id} style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
+                  <div aria-hidden="true" style={{ flex: "0 0 38px", height: 30, borderRadius: 6, background: l.bg, border: l.borde, outline: l.outline, outlineOffset: -2,
+                    display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700, color: l.fg }}>{l.muestra}</div>
+                  <div style={{ fontSize: 12, color: "#3a414d", lineHeight: 1.4 }}>
+                    <b style={{ color: l.fg }}>{l.titulo}.</b> {l.texto}
+                  </div>
+                </div>
+              ))}
             </div>
             <div style={{ overflowX: "auto" }}>
               <div style={{ display: "grid", gridTemplateColumns: `130px repeat(${CAP_DIAS}, minmax(96px, 1fr))`, gap: 6, minWidth: 1150 }}>
@@ -229,7 +279,7 @@ export default function CapacidadMX() {
                     <div style={{ fontSize: 11, color: CAP_MUTED }}>{f.slice(8, 10)}/{f.slice(5, 7)}</div>
                   </button>
                 ))}
-                {sites.map((site) => (
+                {sitesVisibles.map((site) => (
                   <div key={site} style={{ display: "contents" }}>
                     <div style={{ padding: "8px 4px", display: "flex", flexDirection: "column", justifyContent: "center" }}>
                       <div style={{ fontSize: 14, fontWeight: 700 }}>{site}</div>
@@ -248,9 +298,9 @@ export default function CapacidadMX() {
                       return (
                         <div key={f} title={`${site} ${f}: ${e.txt}`}
                           style={{ background: e.bg, borderRadius: 8, padding: "7px 8px", textAlign: "center", outline: c.estado === "r" ? `2px solid ${e.fg}` : "none", outlineOffset: -2 }}>
-                          <div style={{ fontSize: 18, fontWeight: 700, color: e.fg, fontVariantNumeric: "tabular-nums" }}>{capFmt(c.total)}</div>
+                          <div style={{ fontSize: 18, fontWeight: 700, color: e.fg, fontVariantNumeric: "tabular-nums" }}>{capFmt(valorCelda(c))}</div>
                           <div style={{ fontSize: 10, color: e.sub }}>SDD {capFmt(c.sdd)} · Spot {capFmt(c.spot)}</div>
-                          <div style={{ fontSize: 10, color: e.sub }}>día malo {capFmt(c.malo)}</div>
+                          <div style={{ fontSize: 10, color: e.sub }}>día malo {capFmt(maloCelda(c))}</div>
                         </div>
                       );
                     })}
@@ -278,7 +328,11 @@ export default function CapacidadMX() {
               </div>
             </div>
             {detalle.length === 0 ? (
-              <div style={{ fontSize: 13, color: CAP_MUTED }}>Ese día todavía no tiene estimación. La de 9 días se calcula cada noche a las 23:30.</div>
+              <div style={{ fontSize: 13, color: CAP_MUTED }}>
+                {filtro && sitesVisibles.length === 0
+                  ? "Ningún site cumple este filtro mañana. Quita el filtro para ver todos."
+                  : "Ese día todavía no tiene estimación. La de 9 días se calcula cada noche a las 23:30."}
+              </div>
             ) : (
               <div style={{ overflowX: "auto" }}>
                 <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 980 }}>
