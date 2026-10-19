@@ -6313,8 +6313,8 @@ const VS_INICIO = "2026-09-28";          // el registro parte este día: lunes d
 const VS_GMV_PAQUETE_RESPALDO = 640;     // MXN por paquete si el día no trae GMV (promedio sep-2026)
 
 // SVC que no entran en la pestaña ni en los cálculos
-// SMXRV1 por decisión de Big Ticket; los demás son SC de Chile que el portal de MELI devuelve a la misma sesión
-const VS_EXCLUIR = ["SMXRV1", "SIL1", "SLT1", "SBB1", "SRM1", "SRM2", "SRM3"];
+// SC de Chile que el portal de MELI devuelve a la misma sesión. SMXRV1 sí se incluye: MELI lo cuenta en la nota total.
+const VS_EXCLUIR = ["SIL1", "SLT1", "SBB1", "SRM1", "SRM2", "SRM3", "SAR1", "SLS1", "SVP3"];
 const vsIncluir = svc => !VS_EXCLUIR.includes(svc);
 // SVC de México: los que alguna vez tuvieron paquetes despachados en la foto diaria. Los reclamos de cualquier
 // otro SC (Chile u otro país que devuelva el portal a la misma sesión) no se cuentan.
@@ -6329,6 +6329,30 @@ const VS_ORDEN_BT = ["ER", "AR", "BPP", "DS"];
 const VS_META_BT = 90;
 const VS_NOMBRE_LARGO = { ER: "Cumplir las rutas aceptadas", AR: "Aceptar las rutas ofrecidas", BPP: "Reclamos de paquetes", DS: "Entregar los paquetes" };
 const VS_DINERO_VACIO = { softSdd: 0, softSpot: 0, hardSdd: 0, hardSpot: 0, multaAR: 0, multaER: 0, ingresoAR: 0, ingresoER: 0 };
+// Ajustes para calzar con MELI (validado con la semana 42):
+// · Solicitadas: el informe de Capacidad no trae los pedidos urgentes, pero MELI sí los cuenta en el AR.
+//   Se toman los pedidos de Pedidos de vehículos (sin cancelados ni pendientes) y, si son más, se suma la diferencia.
+// · Ejecutadas: nunca más que las confirmadas de ese SC y día (MELI tope 100%; evita rutas registradas en otro SC).
+async function vsAjustarFotos(fotos, desde, hasta) {
+  const cnt = {};
+  for (let pag = 0; ; pag += 1000) {
+    const { data, error } = await sb.from("mx_pedidos_estado").select("facility_id, fecha_ruta, status")
+      .gte("fecha_ruta", desde).lte("fecha_ruta", hasta).not("status", "in", "(canceled,pending)").order("request_id").range(pag, pag + 999);
+    if (error) break;
+    for (const p of data || []) { const k = p.fecha_ruta + "|" + p.facility_id; cnt[k] = (cnt[k] || 0) + 1; }
+    if (!data || data.length < 1000) break;
+  }
+  return fotos.map(f0 => {
+    const f = { ...f0 };
+    const sol = (f.sol_sdd || 0) + (f.sol_spot || 0);
+    const extra = Math.max(0, (cnt[f.fecha + "|" + f.svc] || 0) - sol);
+    if (extra) { f.sol_spot = (f.sol_spot || 0) + extra; f.sol_urgentes = extra; }
+    const conf = (f.conf_sdd || 0) + (f.conf_spot || 0);
+    let sobra = (f.ejec_sdd || 0) + (f.ejec_spot || 0) - conf;
+    if (sobra > 0) { const r = Math.min(sobra, f.ejec_spot || 0); f.ejec_spot = (f.ejec_spot || 0) - r; f.ejec_sdd = (f.ejec_sdd || 0) - (sobra - r); }
+    return f;
+  });
+}
 const vsNotaBT = t => vsRedondear(VS_ORDEN_BT.reduce((a, c) => a + VS_PESOS_BT[c] * ({ ER: t.er, AR: t.ar, BPP: t.bpp, DS: t.ds }[c] ?? 0) / 100, 0));
 const VS_NAVY = "#1a3a6b";
 const VS_ORANGE = "#F47B20";
@@ -6892,7 +6916,7 @@ function VsHistoricoSemanal({ ayer }) {
           const k = f.fecha + "|" + f.svc;
           if (!ultima[k] || f.capturado_el > ultima[k].capturado_el) ultima[k] = f;
         }
-        setOficial((rO.data || []).filter(x => vsIncluir(x.svc))); setFotos(Object.values(ultima)); { const mx = await vsSvcMexico(); setCasos((rC.data || []).filter(x => mx.has(x.svc))); }
+        setOficial((rO.data || []).filter(x => vsIncluir(x.svc))); setFotos(await vsAjustarFotos(Object.values(ultima), VS_INICIO, ayer)); { const mx = await vsSvcMexico(); setCasos((rC.data || []).filter(x => mx.has(x.svc))); }
       } catch (e) {
         if (vivo) setErr(e.message || String(e));
       } finally {
@@ -7092,7 +7116,7 @@ function PoolVendorScore() {
           const k = f.fecha + "|" + f.svc;
           if (!ultima[k] || f.capturado_el > ultima[k].capturado_el) ultima[k] = f;
         }
-        setFotos(Object.values(ultima));
+        setFotos(await vsAjustarFotos(Object.values(ultima), desde, hasta));
         const mx = await vsSvcMexico();
         setCasos((rC.data || []).filter(x => mx.has(x.svc)));
         setNuevosHoy((rN.data || []).filter(x => mx.has(x.svc)));

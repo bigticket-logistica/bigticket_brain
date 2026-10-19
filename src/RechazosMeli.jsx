@@ -59,7 +59,7 @@ const rmPct = v => v == null ? "—" : (v * 100).toLocaleString("es-MX", { minim
 const rmN = v => Number(v || 0).toLocaleString("es-MX");
 
 // ─── Fuente única de rutas no aceptadas y no hechas (la usan Rechazos MELI y el Vendor Score) ───
-export const RM_EXCLUIR = ["SMXRV1"];
+export const RM_EXCLUIR = []; // SMXRV1 vuelve a contar: MELI lo incluye y lo cobra
 export async function rmCargarDatos(desde, hasta) {
     const todas = [];
     for (let pag = 0; ; pag += 1000) {
