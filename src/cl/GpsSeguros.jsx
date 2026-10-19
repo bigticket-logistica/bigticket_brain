@@ -705,12 +705,25 @@ function FlotaGps() {
           return (
             <div style={{ display: "grid", gap: 10, gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", marginBottom: 14 }}>
               <Col titulo="Urgente · riesgo" color="#991b1b">
-                <Fila num={fmt(crit("nada"))} color="#991b1b" texto="trabajan sin GPS y sin seguro" onClick={() => irA({ vista: "bandejas", bandeja: "critica", sub: "nada" })} />
-                <Fila num={fmt(crit("gps_vencida"))} color="#991b1b" texto="trabajan sin GPS y con la póliza vencida" onClick={() => irA({ vista: "bandejas", bandeja: "critica", sub: "gps_vencida" })} />
-                <Fila num={fmt(crit("gps"))} color="#991b1b" texto="trabajan sin GPS (tienen seguro)" onClick={() => irA({ vista: "bandejas", bandeja: "critica", sub: "gps" })} />
-                <Fila num={fmt(crit("seguro"))} color="#991b1b" texto="trabajan sin seguro (tienen GPS)" onClick={() => irA({ vista: "bandejas", bandeja: "critica", sub: "seguro" })} />
-                <Fila num={fmt(crit("vencida"))} color={AMBAR_} texto="trabajan con la póliza vencida" sub="confirmar con Certificación si se renovó" onClick={() => irA({ vista: "bandejas", bandeja: "critica", sub: "vencida" })} />
-                <Fila num={fmt(fueraNomina.length)} color="#7c3aed" texto="trabajan sin estar registrados en el Maestro" sub={`${fmt(porEstadoCertronic.nunca)} nunca estuvieron en Certronic`} onClick={() => irA({ vista: "bandejas", bandeja: "registro" })} />
+                <div onClick={() => irA({ vista: "bandejas", bandeja: "critica" })}
+                     style={{ display: "flex", gap: 10, alignItems: "baseline", padding: "6px 4px 8px", cursor: "pointer", borderBottom: "2px solid #fecaca", background: "#fff5f5", borderRadius: 6 }}>
+                  <span style={{ fontSize: 26, fontWeight: 800, color: "#991b1b", minWidth: 48, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{fmt(resumen.porBandeja.critica)}</span>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: "#1f2937", lineHeight: 1.35 }}>trabajan sin la cobertura exigida
+                    <span style={{ display: "block", fontSize: 11, fontWeight: 400, color: GRIS_ }}>hicieron ruta en 30 días y les falta GPS o seguro · se dividen así:</span></span>
+                  <span style={{ marginLeft: "auto", color: GRIS_, fontSize: 13 }}>›</span>
+                </div>
+                <div style={{ paddingLeft: 18, borderLeft: "2px solid #fee2e2", marginLeft: 26 }}>
+                  <Fila num={fmt(crit("nada"))} color="#991b1b" texto="sin GPS y sin seguro" onClick={() => irA({ vista: "bandejas", bandeja: "critica", sub: "nada" })} />
+                  <Fila num={fmt(crit("gps_vencida"))} color="#991b1b" texto="sin GPS y con la póliza vencida" onClick={() => irA({ vista: "bandejas", bandeja: "critica", sub: "gps_vencida" })} />
+                  <Fila num={fmt(crit("gps"))} color="#991b1b" texto="sin GPS (tienen seguro)" onClick={() => irA({ vista: "bandejas", bandeja: "critica", sub: "gps" })} />
+                  <Fila num={fmt(crit("seguro"))} color="#991b1b" texto="sin seguro (tienen GPS)" onClick={() => irA({ vista: "bandejas", bandeja: "critica", sub: "seguro" })} />
+                  <Fila num={fmt(crit("vencida"))} color={AMBAR_} texto="con la póliza vencida (tienen GPS)" sub="confirmar con Certificación si se renovó" onClick={() => irA({ vista: "bandejas", bandeja: "critica", sub: "vencida" })} />
+                </div>
+                <div style={{ marginTop: 8, paddingTop: 4, borderTop: "1px dashed #e6e9ef" }}>
+                  <Fila num={fmt(fueraNomina.length)} color="#7c3aed" texto="además, trabajan sin estar registrados en el Maestro"
+                        sub={`no se suman arriba porque no están en el Maestro · ${fmt(porEstadoCertronic.nunca)} nunca estuvieron en Certronic`}
+                        onClick={() => irA({ vista: "bandejas", bandeja: "registro" })} />
+                </div>
               </Col>
               <Col titulo="Ahorro y revisión" color={AMBAR_}>
                 <Fila num={fmt(resumen.porBandeja.cortar)} color={ROJO_} texto="se pagan y no se usan (GPS o seguro)"
