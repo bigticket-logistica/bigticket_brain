@@ -3,10 +3,10 @@
 // Levantamiento de uso de GPS (Geotab) y seguros de la flota.
 //
 // Fuentes en bigticket-cl:
-//   • vw_flota_semaforo  → una fila por patente: Nómina + maestro + Geotab + banderas
+//   • vw_flota_semaforo  → una fila por patente: Maestro de Certificación + viajes + Geotab + banderas
 //   • flota_alertas      → alertas abiertas/cerradas (las genera fn_flota_generar_alertas,
 //                          programada a diario con pg_cron)
-//   • vw_flota_cl        → última carga de la Nómina de Flota
+//   • vw_flota_padron    → padrón vigente del Maestro (cert_vehiculos, cert_gps_seguros, cert_esporadicos, cert_empresas)
 //   • flota_cl_cargas    → historial de cargas del Excel
 //   • flota_config       → umbrales (días sin uso, días de alerta, viajes de apoyo)
 //   • geotab_lecturas    → inventario diario de dispositivos (lo llena el sync de Geotab)
@@ -95,23 +95,23 @@ const BANDEJAS = [
   { id: "cortar",    titulo: "Cortar",               color: ROJO_,  fondo: "#fdecec",
     que: "GPS y/o seguro que se pagan en vehículos sin ruta ni movimiento de GPS por sobre el umbral.",
     entra: f => f.cortar_gps || f.sacar_seguro },
-  { id: "revisar",   titulo: "Revisar instalación",  color: AMBAR_, fondo: "#fff6dc",
+  { id: "revisar",   titulo: "GPS mudo",  color: AMBAR_, fondo: "#fff6dc",
     que: "El vehículo trabaja pero su GPS no comunica: está desconectado o dañado. No se corta, se revisa.",
     entra: f => f.gps_mudo },
   { id: "cobertura", titulo: "Completar cobertura",  color: AZUL_,  fondo: "#eaf1ff",
     que: "Vehículos de planta activos sin GPS o sin seguro de carga, o con la póliza vencida.",
     entra: f => f.activa_sin_gps || f.activa_sin_seguro || f.seguro_vencido },
-  { id: "nomina",    titulo: "Corregir Nómina",      color: GRIS_,  fondo: "#f1f5f9",
-    que: "Lo que dice el Excel no coincide con lo que se ve en el maestro y Geotab, o no hay ninguna señal para saberlo.",
-    entra: f => !!f.nomina_desactualizada || f.seguro_sin_senal || f.gps_fuera_nomina },
+  { id: "nomina",    titulo: "Corregir Maestro",      color: GRIS_,  fondo: "#f1f5f9",
+    que: "Lo que dice el Maestro de Certificación no coincide con los viajes y Geotab, falta el registro de GPS y seguro, o no hay señal para saberlo.",
+    entra: f => !!f.nomina_desactualizada || f.sin_hoja_gps || f.seguro_sin_senal || f.gps_fuera_nomina },
 ];
 const bandejaDe = (f) => BANDEJAS.find(b => b.entra(f))?.id || null;
-// Bandeja aparte: patentes que hacen ruta MELI y no están en la Nómina (fuente: vw_flota_ruta_fuera_nomina
+// Bandeja aparte: patentes que hacen ruta MELI y no están en el Maestro (fuente: vw_flota_ruta_fuera_nomina
 // en bigticket-cl + vw_certronic_vehiculo_ultimo en el proyecto principal).
 const BANDEJA_REGISTRO = { id: "registro", titulo: "Opera sin registro", color: "#7c3aed", fondo: "#f3edff",
-  que: "Hicieron ruta MELI en los últimos 30 días y no están en la Nómina. Se cruza con Certronic para ver si están certificadas." };
+  que: "Hicieron ruta MELI en los últimos 30 días y no están en el Maestro de Certificación (ni en Vehiculos ni en Esporadicos). Se cruza con Certronic." };
 const ESTADO_CERTRONIC = {
-  vigente:  { rotulo: "En Certronic", color: VERDE_, fondo: "#e7f6ec", que: "Certificada hoy: solo falta en la Nómina" },
+  vigente:  { rotulo: "En Certronic", color: VERDE_, fondo: "#e7f6ec", que: "Certificada hoy: solo falta en el Maestro" },
   salio:    { rotulo: "Salió de Certronic", color: AMBAR_, fondo: "#fff6dc", que: "Estuvo certificada y ya no aparece, pero sigue haciendo ruta" },
   nunca:    { rotulo: "Nunca en Certronic", color: ROJO_, fondo: "#fdecec", que: "Opera sin certificación registrada" },
 };
@@ -127,7 +127,8 @@ const motivos = (f, u) => {
   if (f.seguro_vencido) m.push(`Seguro de carga vencido el ${fch(f.seg_carga_vence)}`);
   if (f.nomina_desactualizada) m.push(f.nomina_desactualizada);
   if (f.seguro_sin_senal) m.push("Tiene seguro pero no hay viajes MELI ni GPS activo para saber si se usa");
-  if (f.gps_fuera_nomina) m.push(`GPS activo en Geotab (${f.gps_base}) y la patente no está en la Nómina`);
+  if (f.sin_hoja_gps) m.push("Está ACTIVA en Vehiculos pero no tiene fila en la hoja GPS y Seguros");
+  if (f.gps_fuera_nomina) m.push(`GPS activo en Geotab (${f.gps_base}) y la patente no está en el Maestro`);
   return m;
 };
 
@@ -161,78 +162,127 @@ const COLS_DETALLE = [
   { titulo: "GPS_DIAS_SIN_REPORTAR", campo: "gps_dias_sin_reportar" }, { titulo: "SEGURO_CARGA", campo: "seg_carga" }, { titulo: "SEGURO_PROVEEDOR", campo: "seg_carga_proveedor" },
   { titulo: "SEGURO_POLIZA", campo: "seg_carga_poliza" }, { titulo: "SEGURO_VENCE", campo: "seg_carga_vence" },
   { titulo: "DIAS_SIN_USO", valor: f => diasUso(f) ?? "sin señal" }, { titulo: "BANDEJA", valor: f => BANDEJAS.find(b => b.id === bandejaDe(f))?.titulo || "" },
-  { titulo: "MOTIVO_NOMINA", campo: "nomina_desactualizada" }, { titulo: "FUGA_MENSUAL", campo: "fuga_mensual" }, { titulo: "FUGA_ACUMULADA", campo: "fuga_acumulada" },
+  { titulo: "MOTIVO_MAESTRO", campo: "nomina_desactualizada" }, { titulo: "SIN_FILA_GPS_SEGUROS", campo: "sin_hoja_gps" }, { titulo: "FUGA_MENSUAL", campo: "fuga_mensual" }, { titulo: "FUGA_ACUMULADA", campo: "fuga_acumulada" },
 ];
 
-// ── Lectura del Excel "Nómina Flota Vehículos" (hoja Nomina) ──────────────
-// Mismo criterio que la primera carga: fechas de serie → fecha, "-"/"#VALUE!"/vacío → null,
-// patentes repetidas → se queda la fila vigente (la no INACTIVA) y se completa lo que falte.
-const COLUMNAS_EXCEL = {
-  "PATENTE": "patente", "SERVICIO": "servicio", "OPERACION": "operacion", "ESTADO": "estado", "TIPO": "tipo",
-  "PROYECTO": "proyecto", "TIPO VEHICULO": "tipo_vehiculo", "TIPO DE ENERGIA": "tipo_energia", "DUENO VEHICULO": "dueno",
-  "NOMBRE TERCERO": "tercero", "RUT TERCERO": "rut_tercero", "MARCA": "marca", "MODELO": "modelo", "ANO": "anio",
-  "CHASIS O VIN": "vin", "MOTOR": "motor", "TIENE GPS": "gps", "ESTADO GPS": "gps_estado", "PROVEEDOR GPS": "gps_proveedor",
-  "FECHA DE INSTALACION GPS": "gps_instalado_el", "ID DISPOSITIVO GPS": "gps_dispositivo", "TIENE SEGURO CARGA": "seg_carga",
-  "ESTADO SEGURO": "seg_carga_estado", "PROVEEDOR SEGURO CARGA": "seg_carga_proveedor", "FECHA INCLUSION SEGURO CARGA": "seg_carga_desde",
-  "POLIZA SEGURO CARGA": "seg_carga_poliza", "FECHA VENCIMIENTO SEGURO CARGA": "seg_carga_vence", "TIENE SEGURO VEHICULO": "seg_veh",
-  "PROVEEDOR SEGURO VEHICULO": "seg_veh_proveedor", "FECHA INCLUSION SEGURO VEHICULO": "seg_veh_desde", "POLIZA SEGURO VEHICULOS": "seg_veh_poliza",
-  "FECHA VENCIMIENTO SEGURO VEHICULO": "seg_veh_vence", "CERTIFICACION CERTRONIC BT": "cert_certronic_bt",
-  "CERTIFICACION CERTRONIC MELI": "cert_certronic_meli", "CERTIFICACION ROSEN": "cert_rosen", "CERTIFICACION FALABELLA": "cert_falabella",
-  "FECHA SOLICITUD BAJA": "baja_solicitada_el", "OBSERVACIONES": "observaciones",
+// ── Lectura del Excel "Maestro de Certificación" ──────────────────────────
+// Formato definitivo acordado con Certificación. Se cargan 4 hojas con TODAS sus filas (la historia de
+// cada patente o empresa se conserva; las vistas eligen la fila vigente). Reglas de limpieza:
+//   · patente sin guiones/espacios · RUT sin puntos (0 → vacío) · tabulaciones y espacios de más fuera
+//   · estado: IANACTIVA/INCTIVA → INACTIVA, PROCESO BAJA → PROCESO DE BAJA, SIN RUTAS → ACTIVA (el Brain
+//     calcula el uso solo); el valor original queda en estado_original
+//   · servicio "-" → UM · ¿Tiene GPS? solo SI/NO (vacío = no informado) · ID GPS "NO" → vacío
+//   · proveedor de seguro con un número (fecha corrida) → vacío · fechas de serie Excel → fecha
+const normCab = (s) => String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[¿?]/g, "")
+  .replace(/[\t\u00a0]/g, " ").replace(/\s+/g, " ").trim().toUpperCase();
+const esVacio = (v) => v === null || v === undefined ||
+  ["", "-", "NAT", "NAN", "N/A", "#N/A", "#VALUE!"].includes(String(v).replace(/\u00a0/g, "").trim().toUpperCase());
+const limpio = (v, mayus = true) => {
+  if (esVacio(v)) return null;
+  const t = String(v).replace(/[\t\u00a0]+/g, " ").replace(/\s{2,}/g, " ").trim();
+  return mayus ? t.toUpperCase() : t;
 };
-const CAMPOS_FECHA = new Set(["gps_instalado_el", "seg_carga_desde", "seg_carga_vence", "seg_veh_desde", "seg_veh_vence", "baja_solicitada_el"]);
-const normCab = (s) => String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[¿?]/g, "").replace(/\s+/g, " ").trim().toUpperCase();
-const esVacio = (v) => v === null || v === undefined || ["", "-", "NAT", "NAN", "#N/A", "#VALUE!"].includes(String(v).trim().toUpperCase());
-const texto = (v) => { if (esVacio(v)) return null; const s = String(v).trim(); return s.length < 40 ? s.toUpperCase() : s; };
-const fechaExcel = (v) => {
+const patenteX = (v) => esVacio(v) ? null : String(v).toUpperCase().replace(/[-\s\u00a0]/g, "");
+const rutX = (v) => { if (esVacio(v)) return null; const r = String(v).toUpperCase().replace(/[.\s\u00a0]/g, ""); return ["0", "0.0"].includes(r) ? null : r; };
+const fechaX = (v) => {
   if (esVacio(v)) return null;
   if (v instanceof Date) return isNaN(v) ? null : v.toISOString().slice(0, 10);
-  const num = Number(v);
-  if (!isNaN(num) && num > 30000 && num < 80000) return new Date(Date.UTC(1899, 11, 30) + Math.round(num) * 86400000).toISOString().slice(0, 10);
+  const n = Number(v);
+  if (!isNaN(n)) return (n > 30000 && n < 80000) ? new Date(Date.UTC(1899, 11, 30) + Math.round(n) * 86400000).toISOString().slice(0, 10) : null;
   const m = String(v).match(/^(\d{4})-(\d{2})-(\d{2})/); if (m) return m[0];
   const d = String(v).match(/^(\d{1,2})[-\/](\d{1,2})[-\/](\d{4})/);
-  if (d) return `${d[3]}-${d[2].padStart(2, "0")}-${d[1].padStart(2, "0")}`;
-  return null;
+  return d ? `${d[3]}-${d[2].padStart(2, "0")}-${d[1].padStart(2, "0")}` : null;
 };
-const anioExcel = (v) => { const k = parseInt(v, 10); return k >= 1950 && k <= 2030 ? k : null; };
+const numX = (v) => { if (esVacio(v)) return null; const n = Number(v); return isNaN(n) ? null : Math.round(n * 10000) / 10000; };
+const anioX = (v) => { const k = parseInt(v, 10); return k >= 1950 && k <= 2030 ? k : null; };
+const siNo = (v) => { const t = limpio(v); return t === "SI" || t === "NO" ? t : null; };
+const estadoX = (v) => {
+  const t = limpio(v);
+  if (t === "IANACTIVA" || t === "INCTIVA") return "INACTIVA";
+  if (t === "PROCESO BAJA") return "PROCESO DE BAJA";
+  if (t === "SIN RUTAS") return "ACTIVA";
+  return t;
+};
 
-async function leerNomina(archivo) {
+// Hoja → tabla, con la columna que identifica la fila de encabezados y el mapeo columna → campo.
+const HOJAS_MAESTRO = [
+  { hoja: "VEHICULOS", tabla: "cert_vehiculos", clave: "PATENTE", obligatoria: "patente", cols: {
+      "PATENTE": ["patente", patenteX], "NOMBRE TERCERO": ["tercero", limpio], "RUT TERCERO": ["rut_tercero", rutX],
+      "SERVICIO": ["servicio", v => String(v ?? "").trim() === "-" ? "UM" : limpio(v)], "CECO": ["ceco", limpio],
+      "ESTADO": ["estado", estadoX], "TIPO": ["tipo", limpio], "PROYECTO": ["proyecto", limpio], "DUENO VEHICULO": ["dueno", limpio],
+      "FECHA ALTA": ["fecha_alta", fechaX], "FECHA BAJA": ["fecha_baja", fechaX], "TIPO VEHICULO": ["tipo_vehiculo", limpio],
+      "TIPO DE ENERGIA": ["tipo_energia", limpio], "MARCA": ["marca", limpio], "MODELO": ["modelo", limpio], "ANO": ["anio", anioX],
+      "CHASIS O VIN": ["vin", limpio], "MOTOR": ["motor", limpio], "REVISION TECNICA": ["doc_rev_tecnica", limpio],
+      "PADRON O INSCRIPCION": ["doc_padron", limpio], "GASES": ["doc_gases", limpio], "SOAP": ["doc_soap", limpio],
+      "PERMISO DE CIRCULACION": ["doc_permiso", limpio], "CERTIFICACION": ["certificacion", numX],
+      "OBSERVACION": ["observacion", v => limpio(v, false)] },
+    extra: (raw, o) => { o.estado_original = limpio(raw["ESTADO"]); } },
+  { hoja: "GPS Y SEGUROS", tabla: "cert_gps_seguros", clave: "PATENTE", obligatoria: "patente", cols: {
+      "PATENTE": ["patente", patenteX], "TERCERO": ["tercero", limpio], "CERTIFICACION": ["certificacion", limpio],
+      "ESTADO": ["estado", estadoX], "TIENE GPS": ["gps", siNo], "ESTADO GPS": ["gps_estado", limpio],
+      "PROVEEDOR GPS": ["gps_proveedor", limpio], "FECHA DE INSTALACION GPS": ["gps_instalado_el", fechaX],
+      "ID DISPOSITIVO GPS": ["gps_dispositivo", v => { const t = limpio(v); return t === "NO" ? null : t; }],
+      "FECHA DESINTALACION GPS": ["gps_desinstalado_el", fechaX], "TIENE SEGURO CARGA": ["seg_carga", siNo],
+      "ESTADO SEGURO": ["seg_carga_estado", limpio],
+      "PROVEEDOR SEGURO CARGA": ["seg_carga_proveedor", v => { const t = limpio(v); return t && /^\d{5}(\.0)?$/.test(t) ? null : t; }],
+      "FECHA INCLUSION SEGURO CARGA": ["seg_carga_desde", fechaX], "POLIZA SEGURO CARGA": ["seg_carga_poliza", limpio],
+      "FECHA VENCIMIENTO SEGURO CARGA": ["seg_carga_vence", fechaX], "TIENE SEGURO VEHICULO": ["seg_veh", siNo],
+      "PROVEEDOR SEGURO VEHICULO": ["seg_veh_proveedor", limpio], "FECHA INCLUSION SEGURO VEHICULO": ["seg_veh_desde", fechaX],
+      "POLIZA SEGURO VEHICULOS": ["seg_veh_poliza", limpio], "FECHA VENCIMIENTO SEGURO VEHICULO": ["seg_veh_vence", fechaX],
+      "FECHA DE ALTA": ["fecha_alta", fechaX], "FECHA DE BAJA CERTRONIC": ["fecha_baja_certronic", fechaX] } },
+  { hoja: "ESPORADICOS", tabla: "cert_esporadicos", clave: "PATENTE", obligatoria: null, cols: {
+      "NOMBRE EMPRESA": ["empresa", limpio], "RUT": ["rut_empresa", rutX], "OPERACION": ["operacion", limpio],
+      "CERTIFICACION EMPRESA": ["certificacion_empresa", limpio], "ESTADO": ["estado", estadoX], "PERIODO CYBER": ["periodo", fechaX],
+      "FECHA DE ALTA": ["fecha_alta", fechaX], "FECHA DE CERTIFICACION": ["fecha_certificacion", fechaX],
+      "ENTRADA": ["entrada", fechaX], "SALIDA": ["salida", fechaX], "CHOFER": ["chofer", limpio], "RUT CHOFER": ["rut_chofer", rutX],
+      "PATENTE": ["patente", patenteX], "CERTIFICACION": ["certificacion", numX] } },
+  { hoja: "MAESTRO EMPRESA", tabla: "cert_empresas", clave: "RUT", obligatoria: null, cols: {
+      "RUT": ["rut", rutX], "EMPRESA": ["empresa", limpio], "CECO": ["ceco", limpio], "CORREO": ["correo", v => limpio(v, false)],
+      "TIPO": ["tipo", limpio], "ESTADO": ["estado", estadoX], "TIPO CERTIFICACION": ["tipo_certificacion", limpio],
+      "ALTA CERTRONIC": ["alta_certronic", fechaX], "INICIO OPERACION": ["inicio_operacion", fechaX],
+      "SOLICITUD DE BAJA": ["solicitud_baja", fechaX], "BAJA CERTRONIC": ["baja_certronic", fechaX],
+      "CERTIFICACION": ["certificacion", numX] },
+    descartar: (o) => !o.rut && !o.empresa },
+];
+
+async function leerMaestro(archivo) {
   const XLSX = await cargarSheetJS();
-  const buf = await archivo.arrayBuffer();
-  const wb = XLSX.read(buf, { type: "array" });
-  const nombreHoja = wb.SheetNames.find(h => normCab(h) === "NOMINA") || wb.SheetNames[0];
-  const matriz = XLSX.utils.sheet_to_json(wb.Sheets[nombreHoja], { header: 1, raw: true, defval: null });
-  const iCab = matriz.findIndex(f => (f || []).some(c => normCab(c) === "PATENTE"));
-  if (iCab < 0) throw new Error(`No encontré la fila de encabezados (con PATENTE) en la hoja ${nombreHoja}.`);
-  const cab = matriz[iCab].map(normCab);
-  const idx = {};
-  cab.forEach((c, i) => { const campo = COLUMNAS_EXCEL[c]; if (campo && idx[campo] === undefined) idx[campo] = i; });
-  if (idx.patente === undefined) throw new Error("La hoja no tiene columna PATENTE.");
-  const faltan = Object.values(COLUMNAS_EXCEL).filter(c => idx[c] === undefined);
-
-  const porPatente = new Map(); const repetidas = new Set();
-  for (const fila of matriz.slice(iCab + 1)) {
-    if (!fila) continue;
-    const patente = texto(fila[idx.patente]); if (!patente) continue;
-    const o = { patente: patente.replace(/[-\s]/g, "") };
-    for (const [campo, i] of Object.entries(idx)) {
-      if (campo === "patente") continue;
-      const v = fila[i];
-      o[campo] = CAMPOS_FECHA.has(campo) ? fechaExcel(v)
-        : campo === "anio" ? anioExcel(v)
-        : campo === "observaciones" ? (esVacio(v) ? null : String(v).trim())
-        : texto(v);
-    }
-    const previa = porPatente.get(o.patente);
-    if (!previa) { porPatente.set(o.patente, o); continue; }
-    repetidas.add(o.patente);
-    const [vigente, otra] = (previa.estado === "INACTIVA" && o.estado !== "INACTIVA") ? [o, previa] : [previa, o];
-    for (const k of Object.keys(otra)) if (vigente[k] === null || vigente[k] === undefined) vigente[k] = otra[k];
-    porPatente.set(o.patente, vigente);
+  const wb = XLSX.read(await archivo.arrayBuffer(), { type: "array" });
+  const avisos = []; const resultado = [];
+  for (const def of HOJAS_MAESTRO) {
+    const nombre = wb.SheetNames.find(h => normCab(h) === def.hoja);
+    if (!nombre) throw new Error(`Falta la hoja "${def.hoja}". El Excel debe mantener el formato del Maestro de Certificación.`);
+    const matriz = XLSX.utils.sheet_to_json(wb.Sheets[nombre], { header: 1, raw: true, defval: null });
+    const iCab = matriz.findIndex(f => (f || []).some(c => normCab(c) === def.clave));
+    if (iCab < 0) throw new Error(`En la hoja "${nombre}" no encontré la fila de títulos (columna ${def.clave}).`);
+    const cab = matriz[iCab].map(normCab);
+    const idx = {}; cab.forEach((c, i) => { if (def.cols[c] && idx[c] === undefined) idx[c] = i; });
+    const faltan = Object.keys(def.cols).filter(c => idx[c] === undefined);
+    if (faltan.length) avisos.push(`${nombre}: faltan las columnas ${faltan.join(", ")} (quedan vacías)`);
+    const filas = [];
+    matriz.slice(iCab + 1).forEach((fila, k) => {
+      if (!fila || fila.every(x => esVacio(x))) return;
+      const raw = {}; Object.entries(idx).forEach(([c, i]) => { raw[c] = fila[i]; });
+      const o = { fila: iCab + 2 + k };
+      for (const [c, [campo, fn]] of Object.entries(def.cols)) o[campo] = idx[c] === undefined ? null : fn(raw[c]);
+      if (def.extra) def.extra(raw, o);
+      if (def.obligatoria && !o[def.obligatoria]) return;
+      if (def.descartar && def.descartar(o)) return;
+      filas.push(o);
+    });
+    resultado.push({ hoja: nombre, tabla: def.tabla, filas });
   }
-  return { filas: [...porPatente.values()], repetidas: [...repetidas], hoja: nombreHoja, columnasFaltantes: faltan };
+  const veh = resultado.find(r => r.tabla === "cert_vehiculos").filas;
+  const patentes = new Set(veh.map(f => f.patente));
+  return {
+    hojas: resultado, avisos,
+    resumen: {
+      patentes: patentes.size,
+      activas: new Set(veh.filter(f => f.estado === "ACTIVA").map(f => f.patente)).size,
+      conHistoria: veh.length - patentes.size,
+    },
+  };
 }
-
 
 // ── Tira de actividad de 30 días ────────────────────────────────────────────
 function TiraActividad({ patente }) {
@@ -363,6 +413,7 @@ function FlotaGps() {
     solPend: solicitudes.filter(s => s.estado === "pendiente").length,
   }), [semaforo, solicitudes, fueraNomina]);
   const sinCostos = !n(u.costo_gps_mensual) && !n(u.costo_seguro_mensual);
+  const cargaVigente = cargas.find(c => c.origen === "maestro") || null;
 
   const listas = useMemo(() => ({
     ops: [...new Set(semaforo.map(f => f.operacion).filter(Boolean))].sort(),
@@ -464,26 +515,32 @@ function FlotaGps() {
   const previsualizar = async (f) => {
     setArchivo(f); setPrevia(null); setError("");
     if (!f) return;
-    try { setPrevia(await leerNomina(f)); }
+    try { setPrevia(await leerMaestro(f)); }
     catch (e) { setError("No se pudo leer el Excel: " + e.message); }
   };
+  // La carga se registra como "maestro_pendiente" y solo pasa a "maestro" cuando entraron todas las hojas:
+  // así, si algo falla a medio camino, el Brain sigue mostrando la carga anterior completa.
   const importar = async () => {
-    if (!previa || !previa.filas.length) return;
+    if (!previa) return;
     setImportando(true); setError("");
     try {
+      const hojas = Object.fromEntries(previa.hojas.map(h => [h.hoja, h.filas.length]));
       const carga = await api("flota_cl_cargas", { method: "POST", headers: { Prefer: "return=representation" },
-        body: JSON.stringify({ cargado_por: usuarioActual(), archivo: archivo?.name || null, filas: previa.filas.length,
-          duplicadas: previa.repetidas, observacion: `Carga desde el Brain · hoja ${previa.hoja}` }) });
+        body: JSON.stringify({ cargado_por: usuarioActual(), archivo: archivo?.name || null, filas: previa.resumen.patentes,
+          origen: "maestro_pendiente", hojas, observacion: "Carga del Maestro de Certificación desde el Brain" }) });
       const cargaId = (Array.isArray(carga) ? carga[0] : carga)?.id;
       if (!cargaId) throw new Error("No se pudo registrar la carga.");
-      for (let i = 0; i < previa.filas.length; i += 200) {
-        const lote = previa.filas.slice(i, i + 200).map(r => ({ ...r, carga_id: cargaId }));
-        await api("flota_cl", { method: "POST", headers: { Prefer: "return=minimal" }, body: JSON.stringify(lote) });
+      for (const h of previa.hojas) {
+        for (let i = 0; i < h.filas.length; i += 250) {
+          const lote = h.filas.slice(i, i + 250).map(r => ({ ...r, carga_id: cargaId }));
+          await api(h.tabla, { method: "POST", headers: { Prefer: "return=minimal" }, body: JSON.stringify(lote) });
+        }
       }
+      await api(`flota_cl_cargas?id=eq.${cargaId}`, { method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ origen: "maestro" }) });
       setArchivo(null); setPrevia(null);
       await cargarTodo();
-      avisar(`Nómina cargada: ${fmt(previa.filas.length)} patentes (carga #${cargaId})`);
-    } catch (e) { setError("La carga falló: " + e.message); }
+      avisar(`Maestro cargado: ${fmt(previa.resumen.patentes)} patentes (carga #${cargaId}). El semáforo y las bandejas ya usan estos datos.`);
+    } catch (e) { setError("La carga falló y no se aplicó (sigue vigente la anterior): " + e.message); }
     finally { setImportando(false); }
   };
 
@@ -525,7 +582,7 @@ function FlotaGps() {
     ["alertas", `Alertas (${fmt(alertas.length)})`],
     ["solicitudes", `Solicitudes (${fmt(resumen.solPend)})`],
     ["detalle", "Detalle completo"],
-    ["config", "Umbrales y Nómina"],
+    ["config", "Umbrales y carga del Maestro"],
   ];
 
   return (
@@ -533,7 +590,7 @@ function FlotaGps() {
       {/* Resumen */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
         <div style={{ fontSize: 11.5, color: GRIS_ }}>
-          Geotab al {fch(geotabFecha)} · Nómina carga #{cargas[0]?.id || "—"} del {fch(cargas[0]?.cargado_at)}
+          Geotab al {fch(geotabFecha)} · Maestro de Certificación: carga #{cargaVigente?.id || "—"} del {fch(cargaVigente?.cargado_at)}
           {" "}· sin uso = sin ruta MELI <strong>y</strong> sin movimiento de GPS
         </div>
         <button className="mj-btn" onClick={recalcular} disabled={recalculando}>{recalculando ? "Recalculando…" : "Recalcular ahora"}</button>
@@ -546,7 +603,7 @@ function FlotaGps() {
       {!cargando && (
         <div style={{ display: "grid", gap: 8, gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", marginBottom: 14 }}>
           <Kpi titulo="GPS activos en Geotab" valor={fmt(resumen.gpsActivos)} sub="se pagan todos los meses" />
-          <Kpi titulo="Seguros de carga" valor={fmt(resumen.seguros)} sub="según la Nómina vigente" />
+          <Kpi titulo="Seguros de carga" valor={fmt(resumen.seguros)} sub="según el Maestro de Certificación" />
           <Kpi titulo="Se paga sin uso" color={ROJO_} valor={sinCostos ? fmt(resumen.porBandeja.cortar) + " veh." : clp(resumen.fugaMes) + "/mes"}
                sub={sinCostos ? "define los costos en Umbrales para verlo en pesos" : `${clp(resumen.fugaAcum)} acumulado desde que dejaron de usarse`}
                onClick={sinCostos ? () => setVista("config") : () => { setVista("bandejas"); setBandeja("cortar"); }} />
@@ -641,7 +698,7 @@ function FlotaGps() {
                        onClick={() => setAbierta(abierta === f.patente ? null : f.patente)}>
                     <div style={{ minWidth: 150 }}>
                       <div style={{ fontSize: 15, fontWeight: 800, color: NAVY }}>{f.patente}</div>
-                      <div style={{ fontSize: 11, color: GRIS_ }}>{[f.estado || "fuera de Nómina", f.tipo].filter(Boolean).join(" · ")}</div>
+                      <div style={{ fontSize: 11, color: GRIS_ }}>{[f.estado || "fuera del Maestro", f.tipo].filter(Boolean).join(" · ")}</div>
                     </div>
                     <div style={{ minWidth: 200, flex: 1 }}>
                       <div style={{ fontSize: 12, fontWeight: 600, color: "#1f2937" }}>{f.operacion || "—"}</div>
@@ -670,7 +727,7 @@ function FlotaGps() {
                         <div><strong>Último viaje MELI:</strong> {fch(f.ultimo_viaje)} · {fmt(f.viajes_30d)} viajes en 30 días · {fmt(f.viajes_mes)} este mes</div>
                         <div><strong>GPS:</strong> {f.gps_activo ? `activo en ${f.gps_base}` : f.gps_base ? "dado de baja en Geotab" : "sin dispositivo"} · última comunicación {fchHora(f.gps_ultima_comunicacion)}</div>
                         <div><strong>Seguro de carga:</strong> {f.seg_carga === "SI" ? `${f.seg_carga_proveedor || ""} ${f.seg_carga_poliza || ""} · vence ${fch(f.seg_carga_vence)}` : (f.seg_carga || "no informado")}</div>
-                        <div><strong>Nómina:</strong> GPS {f.gps_nomina || "—"} {f.gps_dispositivo ? `(${f.gps_dispositivo})` : ""} · baja pedida {fch(f.baja_solicitada_el)}</div>
+                        <div><strong>Maestro:</strong> GPS {f.gps_nomina || "no informado"} {f.gps_dispositivo ? `(${f.gps_dispositivo})` : ""} · baja pedida {fch(f.baja_solicitada_el)}</div>
                       </div>
                       {botonesSolicitud(f).length > 0 && (
                         pidiendo?.patente === f.patente ? (
@@ -771,7 +828,7 @@ function FlotaGps() {
               <button className={`mj-chip ${!verSolCerradas ? "on" : ""}`} onClick={() => setVerSolCerradas(false)}>Pendientes</button>
               <button className={`mj-chip ${verSolCerradas ? "on" : ""}`} onClick={() => setVerSolCerradas(true)}>Cumplidas y anuladas</button>
               <div style={{ flex: 1 }} />
-              <span style={{ fontSize: 11.5, color: GRIS_ }}>Se marcan cumplidas solas cuando Geotab o la Nómina lo confirman (todos los días 07:05)</span>
+              <span style={{ fontSize: 11.5, color: GRIS_ }}>Se marcan cumplidas solas cuando Geotab o el Maestro lo confirman (todos los días 07:05)</span>
             </div>
             <div className="mj-scroll">
               <table className="mj-tabla">
@@ -834,7 +891,7 @@ function FlotaGps() {
                   return (
                     <tr key={f.patente}>
                       <td style={{ fontWeight: 700 }}>{f.patente}</td>
-                      <td>{f.estado || <span style={{ color: "#a8b2c1" }}>fuera de Nómina</span>}</td>
+                      <td>{f.estado || <span style={{ color: "#a8b2c1" }}>fuera del Maestro</span>}</td>
                       <td>{f.tipo || "—"}</td>
                       <td>{f.operacion || "—"}</td>
                       <td style={{ maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis" }} title={f.tercero || ""}>{f.tercero || "—"}</td>
@@ -914,18 +971,21 @@ function FlotaGps() {
 
           <div style={{ display: "grid", gap: 12, gridTemplateColumns: "repeat(auto-fit, minmax(340px, 1fr))" }}>
             <div style={{ background: "#fff", border: "1px solid #e6e9ef", borderRadius: 10, padding: "13px 16px" }}>
-              <div style={{ fontSize: 13, fontWeight: 800, color: NAVY, marginBottom: 4 }}>Cargar Nómina de Flota (Excel)</div>
+              <div style={{ fontSize: 13, fontWeight: 800, color: NAVY, marginBottom: 4 }}>Cargar Maestro de Certificación (Excel)</div>
               <div style={{ fontSize: 11.5, color: "#64748b", lineHeight: 1.7, marginBottom: 8 }}>
-                Sube el Excel de siempre (hoja <strong>Nomina</strong>). Cada carga queda registrada y pasa a ser la vigente; las anteriores se conservan.
+                Sube el Maestro con su formato de siempre. Se cargan las hojas <strong>Vehiculos</strong>, <strong>GPS y Seguros</strong>,
+                <strong> Esporadicos</strong> y <strong>Maestro Empresa</strong> con todas sus filas (la historia de cada patente se conserva).
+                La carga nueva pasa a ser la vigente solo si entran todas las hojas.
               </div>
               <input type="file" accept=".xlsx,.xlsm,.xls" onChange={e => previsualizar(e.target.files?.[0] || null)} style={{ fontSize: 12 }} />
               {previa && (
                 <div style={{ marginTop: 10, fontSize: 12, lineHeight: 1.8 }}>
-                  <div><strong>{fmt(previa.filas.length)}</strong> patentes en la hoja {previa.hoja}{previa.repetidas.length ? ` · repetidas resueltas: ${previa.repetidas.join(", ")}` : ""}</div>
-                  <div style={{ color: "#64748b" }}>{fmt(previa.filas.filter(f => f.gps === "SI").length)} con GPS · {fmt(previa.filas.filter(f => f.seg_carga === "SI").length)} con seguro · {fmt(previa.filas.filter(f => f.estado === "ACTIVA").length)} activas</div>
-                  {previa.columnasFaltantes.length > 0 && <div style={{ color: AMBAR_ }}>Columnas que no vienen (quedan vacías): {previa.columnasFaltantes.join(", ")}</div>}
+                  <div><strong>{fmt(previa.resumen.patentes)}</strong> patentes en Vehiculos · {fmt(previa.resumen.activas)} activas
+                    {previa.resumen.conHistoria ? ` · ${fmt(previa.resumen.conHistoria)} filas de historia (patentes con más de una fila)` : ""}</div>
+                  <div style={{ color: "#64748b" }}>{previa.hojas.map(h => `${h.hoja}: ${fmt(h.filas.length)} filas`).join(" · ")}</div>
+                  {previa.avisos.map((a, i) => <div key={i} style={{ color: AMBAR_ }}>{a}</div>)}
                   <button className="mj-btn" onClick={importar} disabled={importando} style={{ marginTop: 6, background: NAVY, color: "#fff" }}>
-                    {importando ? "Cargando…" : `Cargar ${fmt(previa.filas.length)} patentes`}
+                    {importando ? "Cargando…" : "Cargar el Maestro"}
                   </button>
                 </div>
               )}
@@ -933,11 +993,14 @@ function FlotaGps() {
             <div style={{ background: "#fff", border: "1px solid #e6e9ef", borderRadius: 10, overflow: "hidden" }}>
               <div style={{ padding: "10px 14px", fontSize: 13, fontWeight: 800, color: NAVY, borderBottom: "1px solid #eef1f5" }}>Historial de cargas</div>
               <table className="mj-tabla">
-                <thead><tr><th>#</th><th>Fecha</th><th>Por</th><th className="num">Patentes</th></tr></thead>
+                <thead><tr><th>#</th><th>Fecha</th><th>Por</th><th>Archivo</th><th className="num">Patentes</th><th>Hojas</th></tr></thead>
                 <tbody>
-                  {cargas.map((c, i) => (
-                    <tr key={c.id} style={{ fontWeight: i === 0 ? 700 : 400 }}>
-                      <td>{c.id}{i === 0 ? " · vigente" : ""}</td><td>{fchHora(c.cargado_at)}</td><td>{c.cargado_por || "—"}</td><td className="num">{fmt(c.filas)}</td>
+                  {cargas.map(c => (
+                    <tr key={c.id} style={{ fontWeight: c.id === cargaVigente?.id ? 700 : 400, color: c.origen === "maestro_pendiente" ? GRIS_ : undefined }}>
+                      <td>{c.id}{c.id === cargaVigente?.id ? " · vigente" : c.origen === "nomina" ? " · Nómina antigua" : c.origen === "maestro_pendiente" ? " · incompleta" : ""}</td>
+                      <td>{fchHora(c.cargado_at)}</td><td>{c.cargado_por || "—"}</td>
+                      <td style={{ color: "#64748b" }}>{c.archivo || "—"}</td><td className="num">{fmt(c.filas)}</td>
+                      <td style={{ color: "#64748b", whiteSpace: "normal" }}>{c.hojas ? Object.entries(c.hojas).map(([k, n]) => `${k} ${n}`).join(" · ") : "—"}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -976,7 +1039,7 @@ export default function ModuloGpsSegurosCL() {
       <div style={{ background: "#fff", borderBottom: "1px solid #e4e7ec", padding: "12px 24px" }}>
         <div style={{ fontSize: 18, fontWeight: 800, color: NAVY, letterSpacing: -.3 }}>GPS y Seguros · Chile</div>
         <div style={{ fontSize: 12, color: "#94a3b8", marginTop: 2 }}>
-          Levantamiento de uso real de la flota: Nómina, maestro de viajes y Geotab
+          Levantamiento de uso real de la flota: Maestro de Certificación, maestro de viajes y Geotab
         </div>
       </div>
       <div className="mj-wrap" style={{ padding: "16px 24px 28px" }}>
