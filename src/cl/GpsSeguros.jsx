@@ -109,26 +109,43 @@ const diasUso = (f) => (f.dias_sin_uso === null || f.dias_sin_uso === undefined 
 // ── Bandejas de trabajo ─────────────────────────────────────────────────────
 // Cada vehículo cae en la primera bandeja que le corresponde (no se repite).
 const BANDEJAS = [
-  { id: "critica",   titulo: "Trabaja sin cobertura", color: "#991b1b", fondo: "#fee2e2",
-    que: "CRÍTICO: hizo ruta en los últimos 30 días y le falta GPS activo y/o seguro de carga vigente. Aplica a toda la planta y al apoyo con 9 o más viajes en el mes.",
+  { id: "critica",   titulo: "Trabajan sin GPS o sin seguro", color: "#991b1b", fondo: "#fee2e2",
+    que: "Hicieron ruta en los últimos 30 días y les falta GPS activo o seguro de carga vigente. Exigible a toda la planta y al apoyo, temporada y esporádico desde 9 viajes en el mes.",
     entra: f => f.cobertura_critica },
-  { id: "cortar",    titulo: "Cortar",               color: ROJO_,  fondo: "#fdecec",
-    que: "GPS y/o seguro que se pagan en vehículos sin ruta ni movimiento de GPS por sobre el umbral.",
+  { id: "cortar",    titulo: "Se pagan y no se usan",  color: ROJO_,  fondo: "#fdecec",
+    que: "GPS o seguro que se siguen pagando en vehículos sin ruta y sin movimiento de GPS hace 30 días o más. Corresponde pedir la baja.",
     entra: f => f.cortar_gps || f.sacar_seguro },
   { id: "revisar",   titulo: "GPS mudo",  color: AMBAR_, fondo: "#fff6dc",
-    que: "El vehículo trabaja pero su GPS no comunica: está desconectado o dañado. No se corta, se revisa.",
+    que: "El vehículo trabaja, pero su GPS no transmite hace 30 días o más: está desconectado o dañado. No se corta, se revisa.",
     entra: f => f.gps_mudo },
-  { id: "cobertura", titulo: "Completar cobertura",  color: AZUL_,  fondo: "#eaf1ff",
+  { id: "cobertura", titulo: "Planta detenida sin GPS o seguro",  color: AZUL_,  fondo: "#eaf1ff",
     que: "Planta ACTIVA sin GPS o sin seguro (o con póliza vencida) que no hizo ruta en los últimos 30 días: revisar si sigue vigente o completar antes de que vuelva a salir.",
     entra: f => f.estado === "ACTIVA" && f.tipo === "PLANTA" && !f.trabajando && (f.activa_sin_gps || f.activa_sin_seguro || f.seguro_vencido) },
-  { id: "nomina",    titulo: "Corregir Maestro",      color: GRIS_,  fondo: "#f1f5f9",
+  { id: "nomina",    titulo: "Datos a corregir en el Maestro", color: GRIS_,  fondo: "#f1f5f9",
     que: "Lo que dice el Maestro de Certificación no coincide con los viajes y Geotab, falta el registro de GPS y seguro, o no hay señal para saberlo.",
     entra: f => !!f.nomina_desactualizada || f.sin_hoja_gps || f.seguro_sin_senal || f.gps_fuera_nomina },
 ];
 const bandejaDe = (f) => BANDEJAS.find(b => b.entra(f))?.id || null;
+const SUB_CRITICA = [
+  { id: "nada",        rotulo: "Sin GPS y sin seguro",            entra: f => f.falta_gps && f.seg_carga !== "SI" },
+  { id: "gps_vencida", rotulo: "Sin GPS y póliza vencida",        entra: f => f.falta_gps && f.seg_carga === "SI" && f.seguro_vencido },
+  { id: "gps",         rotulo: "Solo sin GPS (seguro vigente)",    entra: f => f.falta_gps && !f.falta_seguro },
+  { id: "seguro",      rotulo: "Solo sin seguro (GPS activo)",     entra: f => !f.falta_gps && f.seg_carga !== "SI" },
+  { id: "vencida",     rotulo: "Solo póliza vencida (GPS activo): confirmar renovación", entra: f => !f.falta_gps && f.seg_carga === "SI" && f.seguro_vencido },
+];
+const subCritica = (f) => SUB_CRITICA.find(x => x.entra(f))?.id || null;
+const SUB_NOMINA = [
+  { id: "sin_hoja",   rotulo: "Activos sin fila en GPS y Seguros", entra: f => f.sin_hoja_gps },
+  { id: "inactiva",   rotulo: "Figuran inactivos y hacen ruta",   entra: f => /hace ruta/.test(f.nomina_desactualizada || "") },
+  { id: "empresa",    rotulo: "Vehículo activo de empresa inactiva", entra: f => /empresa INACTIVA/.test(f.nomina_desactualizada || "") },
+  { id: "gps_si",     rotulo: "Maestro dice GPS SÍ, Geotab no lo tiene activo", entra: f => /GPS SÍ/.test(f.nomina_desactualizada || "") },
+  { id: "gps_no",     rotulo: "Maestro dice GPS NO, Geotab lo tiene activo",    entra: f => /GPS NO/.test(f.nomina_desactualizada || "") || f.gps_fuera_nomina },
+  { id: "sin_senal",  rotulo: "Sin ninguna señal de uso",          entra: f => true },
+];
+const subNomina = (f) => SUB_NOMINA.find(x => x.entra(f))?.id;
 // Bandeja aparte: patentes que hacen ruta MELI y no están en el Maestro (fuente: vw_flota_ruta_fuera_nomina
 // en bigticket-cl + vw_certronic_vehiculo_ultimo en el proyecto principal).
-const BANDEJA_REGISTRO = { id: "registro", titulo: "Opera sin registro", color: "#7c3aed", fondo: "#f3edff",
+const BANDEJA_REGISTRO = { id: "registro", titulo: "Trabajan sin estar registrados", color: "#7c3aed", fondo: "#f3edff",
   que: "Hicieron ruta MELI en los últimos 30 días y no están en el Maestro de Certificación (ni en Vehiculos ni en Esporadicos). Se cruza con Certronic." };
 const ESTADO_CERTRONIC = {
   vigente:  { rotulo: "En Certronic", color: VERDE_, fondo: "#e7f6ec", que: "Certificada hoy: solo falta en el Maestro" },
@@ -402,7 +419,8 @@ function FlotaGps() {
   const [busca, setBusca] = useState("");
   const [fOp, setFOp] = useState("");
   const [fTipo, setFTipo] = useState("");
-  const [fDetalle, setFDetalle] = useState("");     // "" | "gps" | "seguro" (lo fijan las tarjetas del resumen)
+  const [fDetalle, setFDetalle] = useState("");
+  const [fSub, setFSub] = useState("");             // subcategoría dentro de la bandeja crítica o de datos a corregir     // "" | "gps" | "seguro" (lo fijan las tarjetas del resumen)
   const [abierta, setAbierta] = useState(null);         // patente expandida
   const [pidiendo, setPidiendo] = useState(null);       // { patente, tipo, motivo }
   const [fTipoAlerta, setFTipoAlerta] = useState("");
@@ -481,13 +499,15 @@ function FlotaGps() {
       (!q || [f.patente, f.tercero, f.operacion, f.modelo, f.seg_carga_poliza].some(v => String(v || "").toUpperCase().includes(q)));
   };
   const enBandeja = useMemo(() => semaforo
-    .filter(f => bandejaDe(f) === bandeja && filtrar(f))
+    .filter(f => bandejaDe(f) === bandeja && filtrar(f) &&
+      (!fSub || (bandeja === "critica" ? subCritica(f) === fSub : bandeja === "nomina" ? subNomina(f) === fSub : true)))
     .sort((a, b) => n(b.fuga_acumulada) - n(a.fuga_acumulada) || (diasUso(b) ?? -1) - (diasUso(a) ?? -1)),
-    [semaforo, bandeja, busca, fOp, fTipo]);
+    [semaforo, bandeja, busca, fOp, fTipo, fSub]);
   const detalle = useMemo(() => semaforo.filter(f => filtrar(f) &&
     (!fDetalle || (fDetalle === "gps" ? f.gps_activo : f.seg_carga === "SI"))), [semaforo, busca, fOp, fTipo, fDetalle]);
   // Navegación desde las tarjetas: limpia los filtros para que la lista coincida con el número de la tarjeta.
-  const irA = ({ vista: vv, bandeja: bb, detalle: dd = "" }) => {
+  const irA = ({ vista: vv, bandeja: bb, detalle: dd = "", sub = "" }) => {
+    setFSub(sub);
     setBusca(""); setFOp(""); setFTipo(""); setFSc(""); setFCertronic(""); setFTipoAlerta("");
     setVerCerradas(false); setVerSolCerradas(false); setAbierta(null); setFDetalle(dd);
     if (bb) setBandeja(bb);
@@ -642,7 +662,7 @@ function FlotaGps() {
   };
 
   const VISTAS = [
-    ["bandejas", "Bandejas de trabajo"],
+    ["bandejas", "Listas de trabajo"],
     ["alertas", `Alertas (${fmt(alertas.length)})`],
     ["solicitudes", `Solicitudes (${fmt(resumen.solPend)})`],
     ["detalle", "Detalle completo"],
@@ -665,24 +685,50 @@ function FlotaGps() {
       {cargando && <div style={{ color: GRIS_, fontSize: 13, padding: "12px 0" }}>Cargando la flota…</div>}
 
       {!cargando && (
-        <div style={{ display: "grid", gap: 8, gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", marginBottom: 14 }}>
-          <Kpi titulo="Trabajan sin cobertura" color="#991b1b" valor={fmt(resumen.porBandeja.critica)}
-               sub={`${fmt(semaforo.filter(f => f.cobertura_critica && f.falta_gps && f.falta_seguro).length)} sin GPS ni seguro · crítico`}
-               onClick={() => irA({ vista: "bandejas", bandeja: "critica" })} />
-          <Kpi titulo="GPS activos en Geotab" valor={fmt(resumen.gpsActivos)} sub="se pagan todos los meses · ver listado"
-               onClick={() => irA({ vista: "detalle", detalle: "gps" })} />
-          <Kpi titulo="Seguros de carga" valor={fmt(resumen.seguros)} sub="según el Maestro de Certificación · ver listado"
-               onClick={() => irA({ vista: "detalle", detalle: "seguro" })} />
-          <Kpi titulo="Se paga sin uso" color={ROJO_} valor={sinCostos ? fmt(resumen.porBandeja.cortar) + " veh." : clp(resumen.fugaMes) + "/mes"}
-               sub={sinCostos ? "bandeja Cortar · carga los costos en Umbrales para verlo en pesos" : `${clp(resumen.fugaAcum)} acumulado desde que dejaron de usarse`}
-               onClick={() => irA({ vista: "bandejas", bandeja: "cortar" })} />
-          <Kpi titulo="Alertas abiertas" color={AMBAR_} valor={fmt(alertas.length)} sub={`sin ruta ≥ ${u.dias_alerta_sin_ruta ?? "—"} días · apoyo ≥ ${u.viajes_mes_apoyo ?? "—"} viajes`}
-               onClick={() => irA({ vista: "alertas" })} />
-          <Kpi titulo="Operan sin registro" color={BANDEJA_REGISTRO.color} valor={fmt(fueraNomina.length)}
-               sub={`${fmt(porEstadoCertronic.nunca)} nunca estuvieron en Certronic`} onClick={() => irA({ vista: "bandejas", bandeja: "registro" })} />
-          <Kpi titulo="Solicitudes pendientes" color={AZUL_} valor={fmt(resumen.solPend)} sub="bajas y revisiones pedidas"
-               onClick={() => irA({ vista: "solicitudes" })} />
-        </div>
+        (() => {
+          const cuenta = (fn) => semaforo.filter(fn).length;
+          const crit = (id) => cuenta(f => f.cobertura_critica && subCritica(f) === id);
+          const Fila = ({ num, texto, sub, color, onClick }) => (
+            <div onClick={onClick} style={{ display: "flex", gap: 10, alignItems: "baseline", padding: "6px 4px", cursor: "pointer", borderBottom: "1px solid #f1f4f8" }}
+                 onMouseEnter={e => e.currentTarget.style.background = "#f7faff"} onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+              <span style={{ fontSize: 20, fontWeight: 800, color, minWidth: 48, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{num}</span>
+              <span style={{ fontSize: 12.5, color: "#1f2937", lineHeight: 1.35 }}>{texto}{sub && <span style={{ display: "block", fontSize: 11, color: GRIS_ }}>{sub}</span>}</span>
+              <span style={{ marginLeft: "auto", color: GRIS_, fontSize: 13 }}>›</span>
+            </div>
+          );
+          const Col = ({ titulo, color, children }) => (
+            <div style={{ background: "#fff", border: "1px solid #e6e9ef", borderTop: `4px solid ${color}`, borderRadius: 10, padding: "10px 12px" }}>
+              <div style={{ fontSize: 11, fontWeight: 800, color, letterSpacing: .4, textTransform: "uppercase", marginBottom: 4 }}>{titulo}</div>
+              {children}
+            </div>
+          );
+          return (
+            <div style={{ display: "grid", gap: 10, gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", marginBottom: 14 }}>
+              <Col titulo="Urgente · riesgo" color="#991b1b">
+                <Fila num={fmt(crit("nada"))} color="#991b1b" texto="trabajan sin GPS y sin seguro" onClick={() => irA({ vista: "bandejas", bandeja: "critica", sub: "nada" })} />
+                <Fila num={fmt(crit("gps_vencida"))} color="#991b1b" texto="trabajan sin GPS y con la póliza vencida" onClick={() => irA({ vista: "bandejas", bandeja: "critica", sub: "gps_vencida" })} />
+                <Fila num={fmt(crit("gps"))} color="#991b1b" texto="trabajan sin GPS (tienen seguro)" onClick={() => irA({ vista: "bandejas", bandeja: "critica", sub: "gps" })} />
+                <Fila num={fmt(crit("seguro"))} color="#991b1b" texto="trabajan sin seguro (tienen GPS)" onClick={() => irA({ vista: "bandejas", bandeja: "critica", sub: "seguro" })} />
+                <Fila num={fmt(crit("vencida"))} color={AMBAR_} texto="trabajan con la póliza vencida" sub="confirmar con Certificación si se renovó" onClick={() => irA({ vista: "bandejas", bandeja: "critica", sub: "vencida" })} />
+                <Fila num={fmt(fueraNomina.length)} color="#7c3aed" texto="trabajan sin estar registrados en el Maestro" sub={`${fmt(porEstadoCertronic.nunca)} nunca estuvieron en Certronic`} onClick={() => irA({ vista: "bandejas", bandeja: "registro" })} />
+              </Col>
+              <Col titulo="Ahorro y revisión" color={AMBAR_}>
+                <Fila num={fmt(resumen.porBandeja.cortar)} color={ROJO_} texto="se pagan y no se usan (GPS o seguro)"
+                      sub={sinCostos ? "pedir la baja · carga los costos en Umbrales para verlo en pesos" : `${clp(resumen.fugaMes)} al mes · ${clp(resumen.fugaAcum)} acumulado`}
+                      onClick={() => irA({ vista: "bandejas", bandeja: "cortar" })} />
+                <Fila num={fmt(resumen.porBandeja.revisar)} color={AMBAR_} texto="trabajan pero el GPS no transmite" sub="revisar la instalación" onClick={() => irA({ vista: "bandejas", bandeja: "revisar" })} />
+                <Fila num={fmt(resumen.porBandeja.cobertura)} color={AZUL_} texto="de planta detenidos sin GPS o seguro" sub="no hicieron ruta en 30 días" onClick={() => irA({ vista: "bandejas", bandeja: "cobertura" })} />
+                <Fila num={fmt(resumen.solPend)} color={AZUL_} texto="solicitudes de baja o revisión pendientes" onClick={() => irA({ vista: "solicitudes" })} />
+              </Col>
+              <Col titulo="Datos y seguimiento" color={GRIS_}>
+                <Fila num={fmt(resumen.porBandeja.nomina)} color={GRIS_} texto="datos a corregir en el Maestro de Certificación" onClick={() => irA({ vista: "bandejas", bandeja: "nomina" })} />
+                <Fila num={fmt(alertas.length)} color={NAVY} texto="alertas abiertas" sub="se abren y cierran solas cada día a las 07:00" onClick={() => irA({ vista: "alertas" })} />
+                <Fila num={fmt(resumen.gpsActivos)} color={NAVY} texto="GPS activos en Geotab (se pagan)" onClick={() => irA({ vista: "detalle", detalle: "gps" })} />
+                <Fila num={fmt(resumen.seguros)} color={NAVY} texto="vehículos con seguro de carga en el Maestro" onClick={() => irA({ vista: "detalle", detalle: "seguro" })} />
+              </Col>
+            </div>
+          );
+        })()
       )}
 
       {!cargando && (
@@ -694,19 +740,38 @@ function FlotaGps() {
       {/* ── Bandejas ── */}
       {!cargando && vista === "bandejas" && (
         <Fragment>
-          <div style={{ display: "grid", gap: 8, gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", marginBottom: 12 }}>
-            {[...BANDEJAS, BANDEJA_REGISTRO].map(b => (
-              <button key={b.id} onClick={() => irA({ vista: "bandejas", bandeja: b.id })}
-                style={{ textAlign: "left", fontFamily: "inherit", cursor: "pointer", borderRadius: 10, padding: "10px 14px",
-                         background: bandeja === b.id ? b.fondo : "#fff", border: `1px solid ${bandeja === b.id ? b.color : "#e6e9ef"}` }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-                  <span style={{ fontSize: 13, fontWeight: 800, color: b.color }}>{b.titulo}</span>
-                  <span style={{ fontSize: 20, fontWeight: 800, color: resumen.porBandeja[b.id] ? b.color : VERDE_ }}>{fmt(resumen.porBandeja[b.id])}</span>
+          {(() => {
+            const b = [...BANDEJAS, BANDEJA_REGISTRO].find(x => x.id === bandeja);
+            const subs = bandeja === "critica" ? SUB_CRITICA : bandeja === "nomina" ? SUB_NOMINA : null;
+            const subDe = bandeja === "critica" ? subCritica : subNomina;
+            const base = semaforo.filter(f => bandejaDe(f) === bandeja);
+            return (
+              <Fragment>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
+                  {[...BANDEJAS, BANDEJA_REGISTRO].map(x => (
+                    <button key={x.id} onClick={() => irA({ vista: "bandejas", bandeja: x.id })}
+                      style={{ fontFamily: "inherit", cursor: "pointer", borderRadius: 20, padding: "5px 12px", fontSize: 12, fontWeight: 700,
+                               border: `1px solid ${bandeja === x.id ? x.color : "#dfe4ec"}`, background: bandeja === x.id ? x.fondo : "#fff", color: bandeja === x.id ? x.color : "#475569" }}>
+                      {x.titulo} <span style={{ marginLeft: 4 }}>{fmt(resumen.porBandeja[x.id])}</span>
+                    </button>
+                  ))}
                 </div>
-                <div style={{ fontSize: 11, color: "#64748b", marginTop: 3, lineHeight: 1.5 }}>{b.que}</div>
-              </button>
-            ))}
-          </div>
+                <div style={{ background: b.fondo, border: `1px solid ${b.color}33`, borderRadius: 10, padding: "9px 14px", marginBottom: 10 }}>
+                  <div style={{ fontSize: 14, fontWeight: 800, color: b.color }}>{b.titulo} · {fmt(resumen.porBandeja[b.id])}</div>
+                  <div style={{ fontSize: 12, color: "#334155", marginTop: 2 }}>{b.que}</div>
+                  {subs && (
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>
+                      <button className={`mj-chip ${!fSub ? "on" : ""}`} onClick={() => setFSub("")}>Todos ({fmt(base.length)})</button>
+                      {subs.map(x => {
+                        const c = base.filter(f => subDe(f) === x.id).length;
+                        return c ? <button key={x.id} className={`mj-chip ${fSub === x.id ? "on" : ""}`} onClick={() => setFSub(fSub === x.id ? "" : x.id)}>{x.rotulo} ({fmt(c)})</button> : null;
+                      })}
+                    </div>
+                  )}
+                </div>
+              </Fragment>
+            );
+          })()}
           {bandeja === "registro" ? (
             <Fragment>
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 8 }}>
@@ -765,52 +830,60 @@ function FlotaGps() {
                 [...COLS_BANDEJA(u), { titulo: "Solicitud pendiente", campo: "_pend" }], b.titulo);
             }}>Descargar Excel</button>
           </Fragment>)}
-          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            {enBandeja.map(f => {
-              const b = BANDEJAS.find(x => x.id === bandeja);
-              const pend = pendientes[f.patente] || [];
-              const du = diasUso(f);
-              return (
-                <div key={f.patente} style={{ background: "#fff", border: "1px solid #e6e9ef", borderLeft: `4px solid ${b.color}`, borderRadius: 10, padding: "10px 14px" }}>
-                  <div style={{ display: "flex", gap: 14, alignItems: "flex-start", flexWrap: "wrap", cursor: "pointer" }}
-                       onClick={() => setAbierta(abierta === f.patente ? null : f.patente)}>
-                    <div style={{ minWidth: 150 }}>
-                      <div style={{ fontSize: 15, fontWeight: 800, color: NAVY }}>{f.patente}</div>
-                      <div style={{ fontSize: 11, color: GRIS_ }}>{[f.estado || "fuera del Maestro", f.tipo].filter(Boolean).join(" · ")}</div>
-                    </div>
-                    <div style={{ minWidth: 200, flex: 1 }}>
-                      <div style={{ fontSize: 12, fontWeight: 600, color: "#1f2937" }}>{f.operacion || "—"}</div>
-                      <div style={{ fontSize: 11, color: GRIS_, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 320 }} title={f.tercero || ""}>
-                        {f.tercero || "—"}{f.marca ? ` · ${f.marca} ${f.modelo || ""}` : ""}
-                      </div>
-                    </div>
-                    {(bandeja === "critica" || bandeja === "cobertura") ? (
-                      <div style={{ minWidth: 140, textAlign: "right" }}>
-                        <div style={{ fontSize: 18, fontWeight: 800, color: bandeja === "critica" ? "#991b1b" : "#1f2937" }}>{fmt(f.viajes_30d)} viajes</div>
-                        <div style={{ fontSize: 10.5, color: GRIS_ }}>en 30 días · último {f.ultimo_viaje ? `hace ${fmt(f.dias_sin_viaje)} d` : "sin viajes"}</div>
-                        <div style={{ display: "flex", gap: 4, justifyContent: "flex-end", marginTop: 3 }}>
-                          {f.falta_gps && <Etiqueta texto="Falta GPS" color="#991b1b" fondo="#fee2e2" />}
-                          {f.falta_seguro && <Etiqueta texto={f.seguro_vencido ? "Seguro vencido" : "Falta seguro"} color="#991b1b" fondo="#fee2e2" />}
-                        </div>
-                      </div>
-                    ) : (
-                      <div style={{ minWidth: 110, textAlign: "right" }}>
-                        <div style={{ fontSize: 18, fontWeight: 800, color: du === null ? GRIS_ : du >= 30 ? ROJO_ : "#1f2937" }}>{du === null ? "—" : `${fmt(du)} d`}</div>
-                        <div style={{ fontSize: 10.5, color: GRIS_ }}>{du === null ? "sin señal de uso" : "sin ruta ni GPS"}</div>
-                      </div>
-                    )}
-                    <div style={{ minWidth: 120, textAlign: "right" }}>
-                      <div style={{ fontSize: 14, fontWeight: 800, color: n(f.fuga_mensual) ? ROJO_ : GRIS_ }}>{n(f.fuga_mensual) ? clp(f.fuga_mensual) : "—"}</div>
-                      <div style={{ fontSize: 10.5, color: GRIS_ }}>{n(f.fuga_mensual) ? "al mes sin uso" : "se paga: " + ([f.gps_activo ? "GPS" : null, f.seg_carga === "SI" ? "seguro" : null].filter(Boolean).join(" + ") || "nada")}</div>
-                    </div>
-                    <div style={{ fontSize: 16, color: GRIS_ }}>{abierta === f.patente ? "▾" : "▸"}</div>
-                  </div>
-                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 7 }}>
-                    {motivos(f, u).map((m, i) => <span key={i} style={{ fontSize: 11.5, color: "#334155", background: "#f4f6f9", borderRadius: 6, padding: "2px 8px" }}>{m}</span>)}
-                    {pend.map(s => <Etiqueta key={s.id} texto={`${TIPOS_SOLICITUD[s.tipo]} pedida ${fch(s.pedida_el)} · ${s.pedida_por || ""}`} color={AZUL_} fondo="#eaf1ff" />)}
-                  </div>
+          {(() => {
+            const usoCols = bandeja === "cortar" || bandeja === "revisar";
+            return (
+            <div className="mj-scroll">
+              <table className="mj-tabla">
+                <thead><tr>
+                  <th>Patente</th><th>Tipo · estado</th><th>Operación</th><th>Tercero</th>
+                  {usoCols ? <Fragment><th className="num">Días sin ruta ni GPS</th><th className="num">Días GPS sin transmitir</th></Fragment>
+                           : <Fragment><th className="num">Viajes 30 días</th><th>Último viaje</th></Fragment>}
+                  <th>Qué pasa</th><th>Se paga</th><th></th>
+                </tr></thead>
+                <tbody>
+                  {enBandeja.map(f => {
+                    const pend = pendientes[f.patente] || [];
+                    const du = diasUso(f);
+                    const chips = [
+                      f.falta_gps && f.cobertura_critica ? ["Falta GPS", "#991b1b", "#fee2e2"] : null,
+                      f.cobertura_critica && f.seg_carga !== "SI" ? ["Falta seguro", "#991b1b", "#fee2e2"] : null,
+                      f.seguro_vencido ? ["Póliza vencida", AMBAR_, "#fff6dc"] : null,
+                      f.cortar_gps ? ["Cortar GPS", ROJO_, "#fdecec"] : null,
+                      f.sacar_seguro ? ["Sacar del seguro", ROJO_, "#fdecec"] : null,
+                      f.gps_mudo ? ["GPS mudo", AMBAR_, "#fff6dc"] : null,
+                      bandeja === "cobertura" && f.activa_sin_gps ? ["Sin GPS", AZUL_, "#eaf1ff"] : null,
+                      bandeja === "cobertura" && f.activa_sin_seguro ? ["Sin seguro", AZUL_, "#eaf1ff"] : null,
+                      bandeja === "nomina" ? [SUB_NOMINA.find(x => x.id === subNomina(f))?.rotulo, GRIS_, "#f1f5f9"] : null,
+                    ].filter(Boolean);
+                    return (
+                      <Fragment key={f.patente}>
+                        <tr style={{ cursor: "pointer", background: abierta === f.patente ? "#f7faff" : undefined }} onClick={() => setAbierta(abierta === f.patente ? null : f.patente)}>
+                          <td style={{ fontWeight: 800, color: NAVY }}>{f.patente}</td>
+                          <td>{f.tipo || "—"}<span style={{ color: f.estado === "ACTIVA" ? GRIS_ : ROJO_ }}>{" · "}{f.estado || "fuera del Maestro"}</span></td>
+                          <td>{f.operacion || "—"}</td>
+                          <td style={{ maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis" }} title={f.tercero || ""}>{f.tercero || "—"}</td>
+                          {usoCols ? <Fragment>
+                              <td className="num" style={{ fontWeight: 700, color: du !== null && du >= 30 ? ROJO_ : undefined }}>{du === null ? "—" : fmt(du)}</td>
+                              <td className="num">{f.gps_dias_sin_reportar ?? "—"}</td>
+                            </Fragment> : <Fragment>
+                              <td className="num" style={{ fontWeight: 700 }}>{fmt(f.viajes_30d)}</td>
+                              <td>{f.ultimo_viaje ? `${fch(f.ultimo_viaje)} (hace ${fmt(f.dias_sin_viaje)} d)` : "sin viajes"}</td>
+                            </Fragment>}
+                          <td><div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                            {chips.map(([t, c, fo], i) => <Etiqueta key={i} texto={t} color={c} fondo={fo} />)}
+                            {pend.map(x => <Etiqueta key={x.id} texto={`${TIPOS_SOLICITUD[x.tipo]} pedida`} color={AZUL_} fondo="#eaf1ff" />)}
+                          </div></td>
+                          <td style={{ color: "#475569" }}>{n(f.fuga_mensual) ? clp(f.fuga_mensual) + "/mes" : ([f.gps_activo ? "GPS" : null, f.seg_carga === "SI" ? "seguro" : null].filter(Boolean).join(" + ") || "nada")}</td>
+                          <td style={{ color: GRIS_ }}>{abierta === f.patente ? "▾" : "▸"}</td>
+                        </tr>
+                        {abierta === f.patente && (
+                          <tr><td colSpan={9} style={{ whiteSpace: "normal", background: "#fbfcfe" }}>
+                            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", margin: "4px 0 8px" }}>
+                              {motivos(f, u).map((m, i) => <span key={i} style={{ fontSize: 11.5, color: "#334155", background: "#eef2f7", borderRadius: 6, padding: "2px 8px" }}>{m}</span>)}
+                            </div>
                   {abierta === f.patente && (
-                    <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px dashed #e6e9ef", display: "grid", gap: 12, gridTemplateColumns: "minmax(0, 1fr)" }}>
+                    <div style={{ padding: "6px 4px 10px", display: "grid", gap: 12, gridTemplateColumns: "minmax(0, 1fr)" }}>
                       <TiraActividad patente={f.patente} />
                       <div style={{ display: "grid", gap: 6, gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", fontSize: 11.5, color: "#334155" }}>
                         <div><strong>Último viaje MELI:</strong> {fch(f.ultimo_viaje)} · {fmt(f.viajes_30d)} viajes en 30 días · {fmt(f.viajes_mes)} este mes</div>
@@ -836,11 +909,17 @@ function FlotaGps() {
                       )}
                     </div>
                   )}
-                </div>
-              );
-            })}
-            {enBandeja.length === 0 && <div style={{ textAlign: "center", color: "#94a3b8", padding: 24, background: "#fff", borderRadius: 10, border: "1px solid #e6e9ef" }}>Nada en esta bandeja con esos filtros.</div>}
-          </div>
+                          </td></tr>
+                        )}
+                      </Fragment>
+                    );
+                  })}
+                  {enBandeja.length === 0 && <tr><td colSpan={9} style={{ textAlign: "center", color: "#94a3b8", padding: 24 }}>Nada en esta lista con esos filtros.</td></tr>}
+                </tbody>
+              </table>
+            </div>
+            );
+          })()}
           </Fragment>
           )}
         </Fragment>
