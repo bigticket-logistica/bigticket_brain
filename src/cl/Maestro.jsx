@@ -13,6 +13,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 import { useState, useEffect, Fragment } from "react";
 import MapaZonas from "./MapaZonas";   // editor de mapa · requiere: npm install leaflet
+import FlotaGps from "./FlotaGps";      // pestaña GPS y Seguros (levantamiento de flota)
 
 const CL_URL = "https://hmowsazntdjtsvdfgutn.supabase.co";
 const CL_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imhtb3dzYXpudGRqdHN2ZGZndXRuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQ5MTc4NzgsImV4cCI6MjEwMDQ5Mzg3OH0.xAJokU0eFhof--d8R4uCRBr2-CJLzC5re0w1IPRqQR8";
@@ -823,6 +824,7 @@ function ModuloMaestroCL() {
     { id: "zonas",      label: "Zonas de Pago",   desc: "Geografía y segmentación",   n: zonas.length || null },
     { id: "pago",       label: "Maestro Pago",    desc: "Modelo de tarificación",     n: pago.length || null },
     { id: "vehiculos",  label: "Vehículos BT",    desc: "Clasificación por patente",  n: vehiculos.length || null },
+    { id: "flota",      label: "GPS y Seguros",   desc: "Uso real de la flota",       n: null },
   ];
 
   return (
@@ -1758,6 +1760,11 @@ function ModuloMaestroCL() {
                   </table>
                 </div>
               </Fragment>
+            )}
+
+            {/* ── GPS y Seguros · levantamiento de flota (archivo aparte) ── */}
+            {tab === "flota" && (
+              <FlotaGps api={api} apiSuave={apiSuave} descargarCSV={descargarCSV} Etiqueta={Etiqueta} />
             )}
 
             {/* ── No Salidas a Ruta ── */}
