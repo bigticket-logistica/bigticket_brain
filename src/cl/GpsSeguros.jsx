@@ -92,6 +92,9 @@ const diasUso = (f) => (f.dias_sin_uso === null || f.dias_sin_uso === undefined 
 // ── Bandejas de trabajo ─────────────────────────────────────────────────────
 // Cada vehículo cae en la primera bandeja que le corresponde (no se repite).
 const BANDEJAS = [
+  { id: "critica",   titulo: "Trabaja sin cobertura", color: "#991b1b", fondo: "#fee2e2",
+    que: "CRÍTICO: hizo ruta en los últimos 30 días y le falta GPS activo y/o seguro de carga vigente. Aplica a toda la planta y al apoyo con 9 o más viajes en el mes.",
+    entra: f => f.cobertura_critica },
   { id: "cortar",    titulo: "Cortar",               color: ROJO_,  fondo: "#fdecec",
     que: "GPS y/o seguro que se pagan en vehículos sin ruta ni movimiento de GPS por sobre el umbral.",
     entra: f => f.cortar_gps || f.sacar_seguro },
@@ -99,7 +102,7 @@ const BANDEJAS = [
     que: "El vehículo trabaja pero su GPS no comunica: está desconectado o dañado. No se corta, se revisa.",
     entra: f => f.gps_mudo },
   { id: "cobertura", titulo: "Completar cobertura",  color: AZUL_,  fondo: "#eaf1ff",
-    que: "Vehículos de planta activos sin GPS o sin seguro de carga, o con la póliza vencida.",
+    que: "Planta sin GPS o sin seguro que hoy no está trabajando: revisar si sigue vigente o completar antes de que vuelva a salir.",
     entra: f => f.activa_sin_gps || f.activa_sin_seguro || f.seguro_vencido },
   { id: "nomina",    titulo: "Corregir Maestro",      color: GRIS_,  fondo: "#f1f5f9",
     que: "Lo que dice el Maestro de Certificación no coincide con los viajes y Geotab, falta el registro de GPS y seguro, o no hay señal para saberlo.",
@@ -119,13 +122,21 @@ const estadoCertronic = (c) => !c ? "nunca" : c.vigente ? "vigente" : "salio";
 
 const motivos = (f, u) => {
   const m = [];
+  if (f.cobertura_critica) {
+    const falta = [f.falta_gps ? "GPS activo" : null, f.falta_seguro ? (f.seguro_vencido ? `seguro vigente (póliza vencida el ${fch(f.seg_carga_vence)})` : "seguro de carga") : null].filter(Boolean).join(" y ");
+    m.push(`Hizo ${fmt(f.viajes_30d)} viajes en 30 días y le falta ${falta}`);
+    if (f.tipo !== "PLANTA") m.push(`${f.tipo} con ${fmt(f.viajes_mes)} viajes este mes (desde ${u.viajes_mes_apoyo} debe estar cubierto)`);
+    if (f.estado && f.estado !== "ACTIVA") m.push(`Figura ${f.estado} en el Maestro y está trabajando`);
+  }
   if (f.cortar_gps) m.push(`GPS activo (${f.gps_base}) sin uso hace ${diasUso(f)} días · umbral ${u.dias_corte_gps}`);
   if (f.sacar_seguro) m.push(`Seguro ${f.seg_carga_proveedor || ""} ${f.seg_carga_poliza || ""} sin uso hace ${diasUso(f)} días · umbral ${u.dias_corte_seguro}`);
   if (f.gps_mudo) m.push(`GPS sin comunicar hace ${fmt(f.gps_dias_sin_reportar)} días, pero hizo ${fmt(f.viajes_30d)} viajes en 30 días`);
-  if (f.activa_sin_gps) m.push("Planta activa sin GPS activo en Geotab");
-  if (f.activa_sin_seguro) m.push("Planta activa sin seguro de carga");
-  if (f.seguro_vencido) m.push(`Seguro de carga vencido el ${fch(f.seg_carga_vence)}`);
-  if (f.nomina_desactualizada) m.push(f.nomina_desactualizada);
+  if (!f.cobertura_critica) {
+    if (f.activa_sin_gps) m.push("Planta activa sin GPS activo en Geotab");
+    if (f.activa_sin_seguro) m.push("Planta activa sin seguro de carga");
+    if (f.seguro_vencido) m.push(`Seguro de carga vencido el ${fch(f.seg_carga_vence)}`);
+  }
+  if (f.nomina_desactualizada && !(f.cobertura_critica && /hace ruta/.test(f.nomina_desactualizada))) m.push(f.nomina_desactualizada);
   if (f.seguro_sin_senal) m.push("Tiene seguro pero no hay viajes MELI ni GPS activo para saber si se usa");
   if (f.sin_hoja_gps) m.push("Está ACTIVA en Vehiculos pero no tiene fila en la hoja GPS y Seguros");
   if (f.gps_fuera_nomina) m.push(`GPS activo en Geotab (${f.gps_base}) y la patente no está en el Maestro`);
@@ -138,6 +149,7 @@ const TIPOS_ALERTA = {
   CORTAR_GPS:   { rotulo: "Cortar GPS",       color: ROJO_,  fondo: "#fdecec" },
   SACAR_SEGURO: { rotulo: "Sacar del seguro", color: ROJO_,  fondo: "#fdecec" },
   GPS_MUDO:     { rotulo: "GPS mudo",         color: AMBAR_, fondo: "#fff6dc" },
+  COBERTURA_CRITICA: { rotulo: "Trabaja sin cobertura", color: "#991b1b", fondo: "#fee2e2" },
 };
 const TIPOS_SOLICITUD = {
   BAJA_GPS:    "Baja de GPS",
@@ -162,7 +174,8 @@ const COLS_DETALLE = [
   { titulo: "GPS_DIAS_SIN_REPORTAR", campo: "gps_dias_sin_reportar" }, { titulo: "SEGURO_CARGA", campo: "seg_carga" }, { titulo: "SEGURO_PROVEEDOR", campo: "seg_carga_proveedor" },
   { titulo: "SEGURO_POLIZA", campo: "seg_carga_poliza" }, { titulo: "SEGURO_VENCE", campo: "seg_carga_vence" },
   { titulo: "DIAS_SIN_USO", valor: f => diasUso(f) ?? "sin señal" }, { titulo: "BANDEJA", valor: f => BANDEJAS.find(b => b.id === bandejaDe(f))?.titulo || "" },
-  { titulo: "MOTIVO_MAESTRO", campo: "nomina_desactualizada" }, { titulo: "SIN_FILA_GPS_SEGUROS", campo: "sin_hoja_gps" }, { titulo: "FUGA_MENSUAL", campo: "fuga_mensual" }, { titulo: "FUGA_ACUMULADA", campo: "fuga_acumulada" },
+  { titulo: "MOTIVO_MAESTRO", campo: "nomina_desactualizada" },
+  { titulo: "TRABAJA_SIN_COBERTURA", campo: "cobertura_critica" }, { titulo: "FALTA_GPS", campo: "falta_gps" }, { titulo: "FALTA_SEGURO", campo: "falta_seguro" }, { titulo: "SIN_FILA_GPS_SEGUROS", campo: "sin_hoja_gps" }, { titulo: "FUGA_MENSUAL", campo: "fuga_mensual" }, { titulo: "FUGA_ACUMULADA", campo: "fuga_acumulada" },
 ];
 
 // ── Lectura del Excel "Maestro de Certificación" ──────────────────────────
@@ -328,7 +341,7 @@ function TiraActividad({ patente }) {
 // ═══════════════════════════════════════════════════════════════════════════
 function FlotaGps() {
   const [vista, setVista] = useState("bandejas");      // bandejas | alertas | solicitudes | detalle | config
-  const [bandeja, setBandeja] = useState("cortar");
+  const [bandeja, setBandeja] = useState("critica");
   const [semaforo, setSemaforo] = useState([]);
   const [fueraNomina, setFueraNomina] = useState([]);
   const [certronic, setCertronic] = useState({});       // patente -> última foto en Certronic
@@ -611,6 +624,9 @@ function FlotaGps() {
 
       {!cargando && (
         <div style={{ display: "grid", gap: 8, gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", marginBottom: 14 }}>
+          <Kpi titulo="Trabajan sin cobertura" color="#991b1b" valor={fmt(resumen.porBandeja.critica)}
+               sub={`${fmt(semaforo.filter(f => f.cobertura_critica && f.falta_gps && f.falta_seguro).length)} sin GPS ni seguro · crítico`}
+               onClick={() => irA({ vista: "bandejas", bandeja: "critica" })} />
           <Kpi titulo="GPS activos en Geotab" valor={fmt(resumen.gpsActivos)} sub="se pagan todos los meses · ver listado"
                onClick={() => irA({ vista: "detalle", detalle: "gps" })} />
           <Kpi titulo="Seguros de carga" valor={fmt(resumen.seguros)} sub="según el Maestro de Certificación · ver listado"
@@ -719,10 +735,21 @@ function FlotaGps() {
                         {f.tercero || "—"}{f.marca ? ` · ${f.marca} ${f.modelo || ""}` : ""}
                       </div>
                     </div>
-                    <div style={{ minWidth: 110, textAlign: "right" }}>
-                      <div style={{ fontSize: 18, fontWeight: 800, color: du === null ? GRIS_ : du >= 30 ? ROJO_ : "#1f2937" }}>{du === null ? "—" : `${fmt(du)} d`}</div>
-                      <div style={{ fontSize: 10.5, color: GRIS_ }}>{du === null ? "sin señal de uso" : "sin uso"}</div>
-                    </div>
+                    {(bandeja === "critica" || bandeja === "cobertura") ? (
+                      <div style={{ minWidth: 140, textAlign: "right" }}>
+                        <div style={{ fontSize: 18, fontWeight: 800, color: bandeja === "critica" ? "#991b1b" : "#1f2937" }}>{fmt(f.viajes_30d)} viajes</div>
+                        <div style={{ fontSize: 10.5, color: GRIS_ }}>en 30 días · último {f.ultimo_viaje ? `hace ${fmt(f.dias_sin_viaje)} d` : "sin viajes"}</div>
+                        <div style={{ display: "flex", gap: 4, justifyContent: "flex-end", marginTop: 3 }}>
+                          {f.falta_gps && <Etiqueta texto="Falta GPS" color="#991b1b" fondo="#fee2e2" />}
+                          {f.falta_seguro && <Etiqueta texto={f.seguro_vencido ? "Seguro vencido" : "Falta seguro"} color="#991b1b" fondo="#fee2e2" />}
+                        </div>
+                      </div>
+                    ) : (
+                      <div style={{ minWidth: 110, textAlign: "right" }}>
+                        <div style={{ fontSize: 18, fontWeight: 800, color: du === null ? GRIS_ : du >= 30 ? ROJO_ : "#1f2937" }}>{du === null ? "—" : `${fmt(du)} d`}</div>
+                        <div style={{ fontSize: 10.5, color: GRIS_ }}>{du === null ? "sin señal de uso" : "sin ruta ni GPS"}</div>
+                      </div>
+                    )}
                     <div style={{ minWidth: 120, textAlign: "right" }}>
                       <div style={{ fontSize: 14, fontWeight: 800, color: n(f.fuga_mensual) ? ROJO_ : GRIS_ }}>{n(f.fuga_mensual) ? clp(f.fuga_mensual) : "—"}</div>
                       <div style={{ fontSize: 10.5, color: GRIS_ }}>{n(f.fuga_mensual) ? "al mes sin uso" : "se paga: " + ([f.gps_activo ? "GPS" : null, f.seg_carga === "SI" ? "seguro" : null].filter(Boolean).join(" + ") || "nada")}</div>
@@ -803,6 +830,7 @@ function FlotaGps() {
                           {a.tipo === "CORTAR_GPS" && `${fmt(d.dias_sin_uso)} días sin uso · dispositivo en ${d.gps_base || "—"}`}
                           {a.tipo === "SACAR_SEGURO" && `${fmt(d.dias_sin_uso)} días sin uso · ${d.proveedor || ""} ${d.poliza || ""}`}
                           {a.tipo === "GPS_MUDO" && `GPS sin comunicar hace ${fmt(d.gps_dias_sin_reportar)} días · ${fmt(d.viajes_30d)} viajes en 30 días`}
+                          {a.tipo === "COBERTURA_CRITICA" && `${d.tipo || ""} ${d.estado && d.estado !== "ACTIVA" ? "(" + d.estado + ") " : ""}· ${fmt(d.viajes_30d)} viajes en 30 días · falta ${[d.falta_gps ? "GPS" : null, d.falta_seguro ? (d.seguro_vencido ? "seguro (vencido)" : "seguro") : null].filter(Boolean).join(" y ")} · ${d.operacion || ""}`}
                         </td>
                         <td>{fch(a.abierta_el)}</td>
                         {verCerradas && <td>{fch(a.cerrada_el)}</td>}
