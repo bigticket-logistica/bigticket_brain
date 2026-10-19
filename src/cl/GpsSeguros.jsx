@@ -62,6 +62,23 @@ function descargarCSV(nombre, filas, columnas) {
   URL.revokeObjectURL(a.href);
 }
 
+// Descarga en Excel (.xlsx) lo que se ve en pantalla. columnas: [{ titulo, campo } | { titulo, valor: fila => ... }]
+async function descargarExcel(nombre, filas, columnas, hoja = "Datos") {
+  if (!filas.length) { alert("No hay filas para descargar con los filtros actuales."); return; }
+  try {
+    const XLSX = await cargarSheetJS();
+    const fmtCelda = (v) => v === true ? "SI" : v === false ? "NO" : v === null || v === undefined ? "" :
+      (typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v)) ? v.split("-").reverse().join("-") : v;
+    const datos = [columnas.map(c => c.titulo), ...filas.map(f => columnas.map(c => fmtCelda(c.valor ? c.valor(f) : f[c.campo])))];
+    const ws = XLSX.utils.aoa_to_sheet(datos);
+    ws["!cols"] = columnas.map((c, i) => ({ wch: Math.min(60, Math.max(10, ...datos.slice(0, 300).map(r => String(r[i] ?? "").length + 2))) }));
+    ws["!autofilter"] = { ref: XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: datos.length - 1, c: columnas.length - 1 } }) };
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, hoja.slice(0, 31));
+    XLSX.writeFile(wb, `${nombre}.xlsx`);
+  } catch (e) { alert("No se pudo generar el Excel: " + (e.message || e)); }
+}
+
 function Etiqueta({ texto, color, fondo }) {
   return (
     <span style={{ display: "inline-block", padding: "1px 7px", borderRadius: 10, fontSize: 10.5,
@@ -151,6 +168,18 @@ const TIPOS_ALERTA = {
   GPS_MUDO:     { rotulo: "GPS mudo",         color: AMBAR_, fondo: "#fff6dc" },
   COBERTURA_CRITICA: { rotulo: "Trabaja sin cobertura", color: "#991b1b", fondo: "#fee2e2" },
 };
+const textoAlerta = (a) => {
+  const d = a.detalle || {};
+  switch (a.tipo) {
+    case "SIN_RUTA": return `${fmt(d.dias_sin_uso)} días sin uso · último viaje ${fch(d.ultimo_viaje)} · ${d.operacion || ""}`;
+    case "APOYO_EXCESO": return `${fmt(d.viajes_mes)} viajes en el mes · ${d.operacion || ""}`;
+    case "CORTAR_GPS": return `${fmt(d.dias_sin_uso)} días sin uso · dispositivo en ${d.gps_base || "—"}`;
+    case "SACAR_SEGURO": return `${fmt(d.dias_sin_uso)} días sin uso · ${d.proveedor || ""} ${d.poliza || ""}`;
+    case "GPS_MUDO": return `GPS sin comunicar hace ${fmt(d.gps_dias_sin_reportar)} días · ${fmt(d.viajes_30d)} viajes en 30 días`;
+    case "COBERTURA_CRITICA": return `${d.tipo || ""} ${d.estado && d.estado !== "ACTIVA" ? "(" + d.estado + ") " : ""}· ${fmt(d.viajes_30d)} viajes en 30 días · falta ${[d.falta_gps ? "GPS" : null, d.falta_seguro ? (d.seguro_vencido ? "seguro (vencido)" : "seguro") : null].filter(Boolean).join(" y ")} · ${d.operacion || ""}`;
+    default: return "";
+  }
+};
 const TIPOS_SOLICITUD = {
   BAJA_GPS:    "Baja de GPS",
   BAJA_SEGURO: "Baja del seguro",
@@ -165,6 +194,19 @@ const ROTULO_UMBRAL = {
   costo_seguro_mensual: { titulo: "Costo seguro",        unidad: "CLP al mes" },
 };
 
+const COLS_BANDEJA = (u) => [
+  { titulo: "Patente", campo: "patente" }, { titulo: "Estado", campo: "estado" }, { titulo: "Tipo", campo: "tipo" },
+  { titulo: "Operación", campo: "operacion" }, { titulo: "Tercero", campo: "tercero" },
+  { titulo: "Marca / modelo", valor: f => [f.marca, f.modelo].filter(Boolean).join(" ") },
+  { titulo: "Viajes 30 días", campo: "viajes_30d" }, { titulo: "Viajes en el mes", campo: "viajes_mes" },
+  { titulo: "Último viaje", campo: "ultimo_viaje" }, { titulo: "Días sin uso", valor: f => diasUso(f) ?? "sin señal" },
+  { titulo: "Falta GPS", campo: "falta_gps" }, { titulo: "Falta seguro", campo: "falta_seguro" },
+  { titulo: "GPS activo en Geotab", campo: "gps_activo" }, { titulo: "Base Geotab", campo: "gps_base" },
+  { titulo: "ID dispositivo", campo: "gps_dispositivo" }, { titulo: "Última comunicación GPS", valor: f => fchHora(f.gps_ultima_comunicacion) },
+  { titulo: "Seguro de carga", campo: "seg_carga" }, { titulo: "Proveedor seguro", campo: "seg_carga_proveedor" },
+  { titulo: "Póliza", campo: "seg_carga_poliza" }, { titulo: "Vence seguro", campo: "seg_carga_vence" },
+  { titulo: "Motivo", valor: f => motivos(f, u).join(" | ") },
+];
 const COLS_DETALLE = [
   { titulo: "PATENTE", campo: "patente" }, { titulo: "ESTADO", campo: "estado" }, { titulo: "TIPO", campo: "tipo" },
   { titulo: "OPERACION", campo: "operacion" }, { titulo: "TERCERO", campo: "tercero" }, { titulo: "MARCA", campo: "marca" },
@@ -676,7 +718,7 @@ function FlotaGps() {
                 ))}
                 <div style={{ flex: 1 }} />
                 <span style={{ fontSize: 12, color: GRIS_ }}>{fmt(enRegistro.length)} vehículos</span>
-                <button className="mj-btn" onClick={() => descargarCSV(`opera_sin_registro_${hoyChile()}`, enRegistro, COLS_REGISTRO)}>Descargar CSV</button>
+                <button className="mj-btn" onClick={() => descargarExcel(`opera_sin_registro_${hoyChile()}`, enRegistro, COLS_REGISTRO, "Opera sin registro")}>Descargar Excel</button>
               </div>
               <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
                 <span style={{ fontSize: 11.5, color: GRIS_, alignSelf: "center" }}>Por SC:</span>
@@ -715,7 +757,14 @@ function FlotaGps() {
             </Fragment>
           ) : (
           <Fragment>
-          {filtros(<span style={{ fontSize: 12, color: GRIS_ }}>{fmt(enBandeja.length)} vehículos</span>)}
+          {filtros(<Fragment>
+            <span style={{ fontSize: 12, color: GRIS_ }}>{fmt(enBandeja.length)} vehículos</span>
+            <button className="mj-btn" onClick={() => {
+              const b = BANDEJAS.find(x => x.id === bandeja);
+              descargarExcel(`${b.titulo.toLowerCase().replace(/\s+/g, "_")}_${hoyChile()}`, enBandeja.map(f => ({ ...f, _pend: (pendientes[f.patente] || []).map(x => TIPOS_SOLICITUD[x.tipo]).join(", ") })),
+                [...COLS_BANDEJA(u), { titulo: "Solicitud pendiente", campo: "_pend" }], b.titulo);
+            }}>Descargar Excel</button>
+          </Fragment>)}
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
             {enBandeja.map(f => {
               const b = BANDEJAS.find(x => x.id === bandeja);
@@ -812,6 +861,11 @@ function FlotaGps() {
               })}
               <div style={{ flex: 1 }} />
               <button className={`mj-chip ${verCerradas ? "on" : ""}`} onClick={() => setVerCerradas(v => !v)}>{verCerradas ? "✓ " : ""}Ver cerradas</button>
+              <button className="mj-btn" onClick={() => descargarExcel(`alertas_${fTipoAlerta ? fTipoAlerta.toLowerCase() + "_" : ""}${verCerradas ? "cerradas_" : ""}${hoyChile()}`, lista, [
+                { titulo: "Tipo", valor: a => TIPOS_ALERTA[a.tipo]?.rotulo || a.tipo }, { titulo: "Patente", campo: "patente" },
+                { titulo: "Detalle", valor: a => textoAlerta(a) }, { titulo: "Abierta", campo: "abierta_el" }, { titulo: "Cerrada", campo: "cerrada_el" },
+                { titulo: "Estado", campo: "estado" }, { titulo: "Revisada por", campo: "revisada_por" }, { titulo: "Nota", campo: "nota" },
+              ], "Alertas")}>Descargar Excel</button>
             </div>
             <div className="mj-scroll">
               <table className="mj-tabla">
@@ -825,12 +879,7 @@ function FlotaGps() {
                         <td><Etiqueta texto={t.rotulo} color={t.color} fondo={t.fondo} /></td>
                         <td style={{ fontWeight: 700 }}>{a.patente}</td>
                         <td style={{ color: "#64748b", whiteSpace: "normal", maxWidth: 420 }}>
-                          {a.tipo === "SIN_RUTA" && `${fmt(d.dias_sin_uso)} días sin uso · último viaje ${fch(d.ultimo_viaje)} · ${d.operacion || ""}`}
-                          {a.tipo === "APOYO_EXCESO" && `${fmt(d.viajes_mes)} viajes en el mes · ${d.operacion || ""}`}
-                          {a.tipo === "CORTAR_GPS" && `${fmt(d.dias_sin_uso)} días sin uso · dispositivo en ${d.gps_base || "—"}`}
-                          {a.tipo === "SACAR_SEGURO" && `${fmt(d.dias_sin_uso)} días sin uso · ${d.proveedor || ""} ${d.poliza || ""}`}
-                          {a.tipo === "GPS_MUDO" && `GPS sin comunicar hace ${fmt(d.gps_dias_sin_reportar)} días · ${fmt(d.viajes_30d)} viajes en 30 días`}
-                          {a.tipo === "COBERTURA_CRITICA" && `${d.tipo || ""} ${d.estado && d.estado !== "ACTIVA" ? "(" + d.estado + ") " : ""}· ${fmt(d.viajes_30d)} viajes en 30 días · falta ${[d.falta_gps ? "GPS" : null, d.falta_seguro ? (d.seguro_vencido ? "seguro (vencido)" : "seguro") : null].filter(Boolean).join(" y ")} · ${d.operacion || ""}`}
+                          {textoAlerta(a)}
                         </td>
                         <td>{fch(a.abierta_el)}</td>
                         {verCerradas && <td>{fch(a.cerrada_el)}</td>}
@@ -870,6 +919,12 @@ function FlotaGps() {
               <button className={`mj-chip ${verSolCerradas ? "on" : ""}`} onClick={() => setVerSolCerradas(true)}>Cumplidas y anuladas</button>
               <div style={{ flex: 1 }} />
               <span style={{ fontSize: 11.5, color: GRIS_ }}>Se marcan cumplidas solas cuando Geotab o el Maestro lo confirman (todos los días 07:05)</span>
+              <button className="mj-btn" onClick={() => descargarExcel(`solicitudes_${verSolCerradas ? "cerradas" : "pendientes"}_${hoyChile()}`, lista, [
+                { titulo: "Patente", campo: "patente" }, { titulo: "Solicitud", valor: x => TIPOS_SOLICITUD[x.tipo] || x.tipo }, { titulo: "Motivo", campo: "motivo" },
+                { titulo: "Días sin uso", campo: "dias_sin_uso" }, { titulo: "Pedida", valor: x => fchHora(x.pedida_el) }, { titulo: "Pedida por", campo: "pedida_por" },
+                { titulo: "Estado", campo: "estado" }, { titulo: "Cerrada", valor: x => fchHora(x.cerrada_el) }, { titulo: "Cerrada por", campo: "cerrada_por" },
+                { titulo: "Nota de cierre", campo: "nota_cierre" },
+              ], "Solicitudes")}>Descargar Excel</button>
             </div>
             <div className="mj-scroll">
               <table className="mj-tabla">
@@ -920,7 +975,7 @@ function FlotaGps() {
               <button key={k} className={`mj-chip ${fDetalle === k ? "on" : ""}`} onClick={() => setFDetalle(fDetalle === k ? "" : k)}>{fDetalle === k ? "✓ " : ""}{t}</button>
             ))}
             <span style={{ fontSize: 12, color: GRIS_ }}>{fmt(detalle.length)} patentes</span>
-            <button className="mj-btn" onClick={() => descargarCSV(`gps_seguros_${hoyChile()}`, detalle, COLS_DETALLE)}>Descargar CSV</button>
+            <button className="mj-btn" onClick={() => descargarExcel(`gps_seguros_detalle_${hoyChile()}`, detalle, COLS_DETALLE, "Detalle")}>Descargar Excel</button>
           </Fragment>)}
           <div className="mj-scroll">
             <table className="mj-tabla">
