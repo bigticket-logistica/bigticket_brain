@@ -45,8 +45,25 @@ const capSumar = (iso, n) => {
   return d.toISOString().slice(0, 10);
 };
 const capDiaSemana = (iso) => new Date(iso + "T12:00:00Z").getUTCDay();
-const capFmt = (v) => (v == null || Number.isNaN(v) ? "—" : Number(v).toFixed(1).replace(".", ","));
-const capFmtSigno = (v) => (v > 0.05 ? "+" : v < -0.05 ? "−" : "") + capFmt(Math.abs(v));
+// Todo se muestra en rutas enteras: el día normal redondeado y el día malo hacia arriba
+const capFmt = (v) => (v == null || Number.isNaN(v) ? "—" : String(Math.round(v)));
+const capFmtSigno = (v) => (v > 0 ? "+" : v < 0 ? "−" : "") + capFmt(Math.abs(v));
+
+// Nivel de confianza de cada celda, según las pruebas contra el pasado:
+//   alta  = casi todo es SDD, o el Spot de hoy ya llegó en su mayoría (acierto ~90% o más)
+//   media = Spot de hoy o de mañana (acierto ~60% a 75%)
+//   baja  = Spot a 2 o más días (acierto ~40%: solo orden de magnitud)
+function capConfianza(c, h) {
+  if (c.spot <= 1) return "alta";
+  if (h === 0 && c.spotRec >= 0.75 * c.spot) return "alta";
+  if (h <= 1) return "media";
+  return "baja";
+}
+const CAP_CONF = {
+  alta: { txt: "Alta", fg: "#15803d", texto: "Casi todo es SDD o ya llegó. Acierta 9 de cada 10 veces con ±1 ruta." },
+  media: { txt: "Media", fg: "#7a4f00", texto: "Spot de hoy o mañana. Acierto de 60% a 75%: planificar con el número de “hasta”." },
+  baja: { txt: "Baja", fg: "#b42318", texto: "Spot a 2 o más días. Acierto cercano a 40%: tomarlo solo como orden de magnitud." },
+};
 
 function capEstado(c, techo) {
   if (c.sdd > techo + 1e-9) return "r";
@@ -93,7 +110,8 @@ export default function CapacidadMX() {
       if (rU.error) throw rU.error;
       setPron(rP.data || []);
       const t = {};
-      for (const r of rT.data || []) t[r.facility_id] = Number(r.techo) || 0;
+      // capacidad en rutas enteras, hacia abajo (conservador)
+      for (const r of rT.data || []) t[r.facility_id] = Math.floor((Number(r.techo) || 0) + 1e-9);
       setTechos(t);
       setUltima(rU.data?.[0]?.generado_el || null);
     } catch (e) {
@@ -115,23 +133,27 @@ export default function CapacidadMX() {
     for (const r of pron) {
       const s = (m[r.facility_id] = m[r.facility_id] || {});
       const c = (s[r.fecha_ruta] = s[r.fecha_ruta] || { sdd: 0, spot: 0, sddMalo: 0, spotMalo: 0, sddRec: 0, spotRec: 0 });
+      // rutas enteras: día normal redondeado, día malo redondeado hacia arriba
+      const p50 = Math.round(Number(r.p50) || 0);
+      const p90 = Math.max(Math.ceil((Number(r.p90) || 0) - 1e-9), p50);
       if (r.flota === "fija") {
-        c.sdd = Number(r.p50) || 0; c.sddMalo = Number(r.p90) || 0; c.sddRec = r.recibidas || 0;
+        c.sdd = p50; c.sddMalo = p90; c.sddRec = r.recibidas || 0;
       } else {
-        c.spot = Number(r.p50) || 0; c.spotMalo = Number(r.p90) || 0; c.spotRec = r.recibidas || 0;
+        c.spot = p50; c.spotMalo = p90; c.spotRec = r.recibidas || 0;
       }
     }
     for (const [site, porDia] of Object.entries(m)) {
       const techo = techos[site] ?? 0;
-      for (const c of Object.values(porDia)) {
+      for (const [fecha, c] of Object.entries(porDia)) {
         c.total = c.sdd + c.spot;
-        c.malo = c.sddMalo + c.spotMalo;
+        c.malo = Math.max(c.sddMalo + c.spotMalo, c.total);
         c.estado = capEstado(c, techo);
+        c.conf = capConfianza(c, dias.indexOf(fecha));
       }
     }
     const lista = Object.keys(m).sort((a, b) => (techos[b] ?? 0) - (techos[a] ?? 0) || a.localeCompare(b));
     return { sites: lista, celdas: m };
-  }, [pron, techos]);
+  }, [pron, techos, dias]);
 
   const manana = dias[1];
   const tarjetas = useMemo(() => {
@@ -164,6 +186,7 @@ export default function CapacidadMX() {
   // Qué número muestra cada celda según el filtro
   const valorCelda = (c) => (filtro === "sdd" ? c.sdd : filtro === "spot" ? c.spot : c.total);
   const maloCelda = (c) => (filtro === "sdd" ? c.sddMalo : filtro === "spot" ? c.spotMalo : c.malo);
+  const confCelda = (c) => (filtro === "sdd" ? "alta" : c.conf);
   const textoFiltro = {
     sdd: "Mostrando solo la SDD de cada site",
     spot: "Mostrando solo el Spot de cada site",
@@ -255,7 +278,7 @@ export default function CapacidadMX() {
           <div style={card}>
             <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>Planificación: hoy y los próximos 9 días</div>
             <div style={{ fontSize: 12, color: CAP_MUTED, marginBottom: 12, lineHeight: 1.5 }}>
-              Cada celda muestra la demanda esperada en un día normal, cuánto es SDD y cuánto Spot, y el día malo (lo que MELI podría pedir en un día exigente).
+              Cada celda muestra las rutas esperadas en un día normal (número grande), cuántas son SDD y cuántas Spot, y hasta cuántas podría pedir MELI en un día exigente.
               La capacidad es lo que el site ejecutó en un día bueno durante las últimas 4 semanas. Toca un día para ver su detalle abajo.
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 10, marginBottom: 14 }}>
@@ -267,6 +290,12 @@ export default function CapacidadMX() {
                     <b style={{ color: l.fg }}>{l.titulo}.</b> {l.texto}
                   </div>
                 </div>
+              ))}
+            </div>
+            <div style={{ display: "flex", gap: 18, flexWrap: "wrap", fontSize: 12, color: "#3a414d", marginBottom: 14, paddingTop: 10, borderTop: "1px solid #f0f1f3" }}>
+              <b style={{ color: "#1a1a1a" }}>Nivel de confianza:</b>
+              {Object.entries(CAP_CONF).map(([k, v]) => (
+                <span key={k} style={{ flex: "1 1 260px" }}><b style={{ color: v.fg }}>{v.txt}.</b> {v.texto}</span>
               ))}
             </div>
             <div style={{ overflowX: "auto" }}>
@@ -296,11 +325,11 @@ export default function CapacidadMX() {
                       }
                       const e = CAP_ESTADOS[c.estado];
                       return (
-                        <div key={f} title={`${site} ${f}: ${e.txt}`}
+                        <div key={f} title={`${site} ${f}: ${e.txt}. Confianza ${CAP_CONF[confCelda(c)].txt.toLowerCase()}: ${CAP_CONF[confCelda(c)].texto}`}
                           style={{ background: e.bg, borderRadius: 8, padding: "7px 8px", textAlign: "center", outline: c.estado === "r" ? `2px solid ${e.fg}` : "none", outlineOffset: -2 }}>
                           <div style={{ fontSize: 18, fontWeight: 700, color: e.fg, fontVariantNumeric: "tabular-nums" }}>{capFmt(valorCelda(c))}</div>
                           <div style={{ fontSize: 10, color: e.sub }}>SDD {capFmt(c.sdd)} · Spot {capFmt(c.spot)}</div>
-                          <div style={{ fontSize: 10, color: e.sub }}>día malo {capFmt(maloCelda(c))}</div>
+                          <div style={{ fontSize: 10, color: e.sub }}>hasta {capFmt(maloCelda(c))} · confianza <b>{CAP_CONF[confCelda(c)].txt.toLowerCase()}</b></div>
                         </div>
                       );
                     })}
@@ -342,9 +371,10 @@ export default function CapacidadMX() {
                       <th style={thNum}>SDD</th>
                       <th style={thNum}>Spot recibido</th>
                       <th style={thNum}>Spot por llegar</th>
-                      <th style={thNum}>Esperado / día malo</th>
+                      <th style={thNum}>Esperadas / hasta</th>
                       <th style={thNum}>Capacidad</th>
                       <th style={thNum}>Brecha</th>
+                      <th style={th}>Confianza</th>
                       <th style={th}>Qué hacer</th>
                     </tr>
                   </thead>
@@ -352,14 +382,18 @@ export default function CapacidadMX() {
                     {detalle.map(({ site, c, techo, brecha, accion }) => (
                       <tr key={site} style={{ borderBottom: "1px solid #f0f1f3" }}>
                         <td style={{ padding: 8, fontWeight: 700 }}>{site}</td>
-                        <td style={tdNum} title={c.sddRec < c.sdd ? `${c.sddRec} ya recibidas` : "Toda recibida"}>
-                          {capFmt(c.sdd)}{c.sddRec < c.sdd - 0.05 && <span style={{ color: CAP_MUTED, fontSize: 11 }}> ({c.sddRec} recib.)</span>}
+                        <td style={tdNum} title={c.sddRec === 0 && c.sdd > 0 ? "MELI aún no publica la SDD de ese día: se usa la de la semana pasada" : c.sddRec < c.sdd ? `${c.sddRec} ya recibidas` : "Toda recibida"}>
+                          {capFmt(c.sdd)}
+                          {c.sddRec === 0 && c.sdd > 0
+                            ? <span style={{ color: CAP_MUTED, fontSize: 11 }}> (sin publicar)</span>
+                            : c.sddRec < c.sdd && <span style={{ color: CAP_MUTED, fontSize: 11 }}> ({c.sddRec} recib.)</span>}
                         </td>
                         <td style={tdNum}>{c.spotRec}</td>
                         <td style={{ ...tdNum, color: CAP_MUTED }}>{capFmt(Math.max(0, c.spot - c.spotRec))}</td>
                         <td style={tdNum}>{capFmt(c.total)} / {capFmt(c.malo)}</td>
                         <td style={tdNum}>{capFmt(techo)}</td>
                         <td style={{ ...tdNum, fontWeight: brecha > 0.05 ? 700 : 400, color: brecha > 0.05 ? "#b42318" : "#15803d" }}>{capFmtSigno(brecha)}</td>
+                        <td style={{ padding: 8, fontWeight: 700, color: CAP_CONF[c.conf].fg }} title={CAP_CONF[c.conf].texto}>{CAP_CONF[c.conf].txt}</td>
                         <td style={{ padding: 8, color: "#3a414d" }}>{accion}</td>
                       </tr>
                     ))}
