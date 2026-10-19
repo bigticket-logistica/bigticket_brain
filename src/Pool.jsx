@@ -7361,6 +7361,74 @@ function PoolVendorScore() {
             );
           })()}
 
+          {/* BPP: lo que cuenta el correo de MELI (corte al domingo) y lo que llega después (concentrado) */}
+          {hasta === domingo && (() => {
+            const svcSet = new Set(fotos.map(f => f.svc));
+            const validos = casos.filter(c => svcSet.has(c.svc));
+            const antes = validos.filter(c => !c.primera_vez || String(c.primera_vez).slice(0, 10) <= domingo);
+            const despues = validos.filter(c => c.primera_vez && String(c.primera_vez).slice(0, 10) > domingo).sort((x, y) => (Number(y.gmv) || 0) - (Number(x.gmv) || 0));
+            const suma = l => l.reduce((a, c) => a + (Number(c.gmv) || 0), 0);
+            const baseT = { sol: total.sol, conf: total.conf, ejec: total.ejec, desp: total.desp, entr: total.entr, gmv: total.gmv };
+            const corte = vsCalcular({ ...baseT, bpp: suma(antes) });
+            const hoyC = vsCalcular({ ...baseT, bpp: suma(antes) + suma(despues) });
+            const Caja = ({ titulo, sub, x, monto, n, borde, fondo }) => {
+              const e = vsEstado(x.score);
+              return (
+                <div style={{ flex: "1 1 300px", border: `2px solid ${borde}`, background: fondo, borderRadius: 10, padding: "14px 16px" }}>
+                  <div style={{ fontSize: 14, fontWeight: 700 }}>{titulo}</div>
+                  <div style={{ fontSize: 12, color: VS_MUTED, marginTop: 2 }}>{sub}</div>
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 14, marginTop: 10, flexWrap: "wrap" }}>
+                    <div><div style={{ fontSize: 11, color: VS_MUTED }}>Reclamos</div><div style={{ fontSize: 18, fontWeight: 800 }}>{vsPesos(monto)}</div><div style={{ fontSize: 11, color: VS_MUTED }}>{n} casos · {vsNum(x.bppPct, 3)}% del GMV</div></div>
+                    <div><div style={{ fontSize: 11, color: VS_MUTED }}>Nota BPP</div><div style={{ fontSize: 26, fontWeight: 800 }}>{x.bpp}</div></div>
+                    <div><div style={{ fontSize: 11, color: VS_MUTED }}>Nota MELI de la semana</div><div style={{ fontSize: 26, fontWeight: 800 }}>{x.score} <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 999, background: e.bg, color: e.fg, verticalAlign: "middle" }}>{e.txt}</span></div></div>
+                  </div>
+                </div>
+              );
+            };
+            return (
+              <div style={card}>
+                <div style={{ fontSize: 18, fontWeight: 700 }}>Reclamos: la nota del correo de MELI y la nota final</div>
+                <div style={{ fontSize: 13, color: "#2b3038", marginTop: 6, lineHeight: 1.55 }}>
+                  MELI manda el correo con los reclamos abiertos <b>hasta el domingo</b>. Los que se abren después (sobre todo PNR contradictorios, que llegan días después de la entrega) los suma más tarde, en su concentrado. Por eso la nota final puede bajar respecto del correo.
+                </div>
+                <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginTop: 12 }}>
+                  <Caja titulo="Como el correo de MELI" sub={`Reclamos vistos hasta el domingo ${domingo.slice(8, 10)}/${domingo.slice(5, 7)}`} x={corte} monto={suma(antes)} n={antes.length} borde="#c7d6f2" fondo="#f5f8fe" />
+                  <Caja titulo="Como quedaría la nota final" sub="Con todos los reclamos vistos hasta hoy" x={hoyC} monto={suma(antes) + suma(despues)} n={antes.length + despues.length} borde={hoyC.score < corte.score ? "#f1b8b8" : "#c7e6cf"} fondo={hoyC.score < corte.score ? "#fdf2f2" : "#f3fbf5"} />
+                </div>
+                {despues.length > 0 ? (
+                  <div style={{ marginTop: 14 }}>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: "#991b1b" }}>
+                      {despues.length} reclamos llegaron después del corte, por {vsPesos(suma(despues))}: todavía se pueden disputar
+                      {hoyC.score < corte.score && <span style={{ fontWeight: 500, color: "#2b3038" }}> · si se ganan, la semana se queda en {corte.score} en vez de bajar a {hoyC.score}</span>}
+                    </div>
+                    <div style={{ overflowX: "auto", marginTop: 8 }}>
+                      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 640 }}>
+                        <thead><tr style={{ color: VS_MUTED, fontSize: 12, textAlign: "left" }}>
+                          {["Paquete", "SC", "Tipo", "Despachado", "Visto el", "Monto"].map(h => <th key={h} style={{ padding: "6px 8px", borderBottom: `1px solid ${VS_BORDER}`, fontWeight: 600, textAlign: h === "Monto" ? "right" : "left" }}>{h}</th>)}
+                        </tr></thead>
+                        <tbody>
+                          {despues.slice(0, 15).map(c => (
+                            <tr key={c.shipment_id} style={{ borderBottom: "1px solid #f0f1f3" }}>
+                              <td style={{ padding: "6px 8px", fontVariantNumeric: "tabular-nums" }}>{c.shipment_id}</td>
+                              <td style={{ padding: "6px 8px", fontWeight: 700 }}>{c.svc}</td>
+                              <td style={{ padding: "6px 8px" }}>{c.tipo}</td>
+                              <td style={{ padding: "6px 8px" }}>{String(c.shipment_day || "").slice(8, 10)}/{String(c.shipment_day || "").slice(5, 7)}</td>
+                              <td style={{ padding: "6px 8px" }}>{String(c.primera_vez).slice(8, 10)}/{String(c.primera_vez).slice(5, 7)}</td>
+                              <td style={{ padding: "6px 8px", textAlign: "right", fontWeight: 700, color: "#b42318" }}>{vsPesos(c.gmv)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    {despues.length > 15 && <div style={{ fontSize: 12, color: VS_MUTED, marginTop: 6 }}>Y {despues.length - 15} reclamos más, de menor monto.</div>}
+                  </div>
+                ) : (
+                  <div style={{ fontSize: 13, color: "#15803d", marginTop: 12, fontWeight: 600 }}>No llegaron reclamos después del corte: la nota del correo debería mantenerse.</div>
+                )}
+              </div>
+            );
+          })()}
+
           {/* Qué falta para cumplir */}
           <VsQueFalta total={total} svcs={svcs} dinero={dinero} />
 
