@@ -14,7 +14,7 @@
 // Habla con la API REST del proyecto de Chile por fetch, igual que el Maestro.
 // ═══════════════════════════════════════════════════════════════════════════
 import { useState, useEffect, useMemo, Fragment } from "react";
-import { cargarSheetJS } from "../shared";
+import { cargarSheetJS, sb } from "../shared";
 
 const NAVY = "#1a3a6b";
 const VERDE_ = "#0d8043";
@@ -106,6 +106,16 @@ const BANDEJAS = [
     entra: f => !!f.nomina_desactualizada || f.seguro_sin_senal || f.gps_fuera_nomina },
 ];
 const bandejaDe = (f) => BANDEJAS.find(b => b.entra(f))?.id || null;
+// Bandeja aparte: patentes que hacen ruta MELI y no están en la Nómina (fuente: vw_flota_ruta_fuera_nomina
+// en bigticket-cl + vw_certronic_vehiculo_ultimo en el proyecto principal).
+const BANDEJA_REGISTRO = { id: "registro", titulo: "Opera sin registro", color: "#7c3aed", fondo: "#f3edff",
+  que: "Hicieron ruta MELI en los últimos 30 días y no están en la Nómina. Se cruza con Certronic para ver si están certificadas." };
+const ESTADO_CERTRONIC = {
+  vigente:  { rotulo: "En Certronic", color: VERDE_, fondo: "#e7f6ec", que: "Certificada hoy: solo falta en la Nómina" },
+  salio:    { rotulo: "Salió de Certronic", color: AMBAR_, fondo: "#fff6dc", que: "Estuvo certificada y ya no aparece, pero sigue haciendo ruta" },
+  nunca:    { rotulo: "Nunca en Certronic", color: ROJO_, fondo: "#fdecec", que: "Opera sin certificación registrada" },
+};
+const estadoCertronic = (c) => !c ? "nunca" : c.vigente ? "vigente" : "salio";
 
 const motivos = (f, u) => {
   const m = [];
@@ -270,6 +280,10 @@ function FlotaGps() {
   const [vista, setVista] = useState("bandejas");      // bandejas | alertas | solicitudes | detalle | config
   const [bandeja, setBandeja] = useState("cortar");
   const [semaforo, setSemaforo] = useState([]);
+  const [fueraNomina, setFueraNomina] = useState([]);
+  const [certronic, setCertronic] = useState({});       // patente -> última foto en Certronic
+  const [fCertronic, setFCertronic] = useState("");
+  const [fSc, setFSc] = useState("");
   const [alertas, setAlertas] = useState([]);
   const [cerradas, setCerradas] = useState(null);
   const [solicitudes, setSolicitudes] = useState([]);
@@ -301,7 +315,7 @@ function FlotaGps() {
   const cargarTodo = async () => {
     setCargando(true); setError("");
     const fallos = [];
-    const [sem, ale, sol, car, cfg, hcf, geo] = await Promise.all([
+    const [sem, ale, sol, car, cfg, hcf, geo, fn] = await Promise.all([
       apiSuave("vw_flota_semaforo?order=patente&limit=3000", [], fallos),
       apiSuave("flota_alertas?estado=eq.abierta&order=abierta_el.desc,tipo,patente&limit=3000", [], fallos),
       apiSuave("flota_solicitudes?order=pedida_el.desc&limit=1000", [], fallos),
@@ -309,7 +323,19 @@ function FlotaGps() {
       apiSuave("flota_config?order=clave", [], fallos),
       apiSuave("flota_config_historial?order=cambiado_el.desc&limit=50", [], fallos),
       apiSuave("geotab_lecturas?select=fecha&order=fecha.desc&limit=1", [], fallos),
+      apiSuave("vw_flota_ruta_fuera_nomina?order=viajes_30d.desc&limit=1000", [], fallos),
     ]);
+    setFueraNomina(fn);
+    // Certronic vive en el proyecto principal: se consulta solo por las patentes que hacen falta.
+    if (fn.length) {
+      try {
+        const { data, error } = await sb.from("vw_certronic_vehiculo_ultimo")
+          .select("patente,contratista,tipo_certificacion,ultima_foto,vigente")
+          .in("patente", fn.map(x => x.patente));
+        if (error) throw error;
+        setCertronic(Object.fromEntries((data || []).map(c => [c.patente, c])));
+      } catch (e) { fallos.push("Certronic: " + (e.message || e)); }
+    }
     setSemaforo(sem); setAlertas(ale); setSolicitudes(sol); setCargas(car); setConfig(cfg); setHistorialCfg(hcf);
     setGeotabFecha(geo[0]?.fecha || null);
     if (fallos.length) setError("Algunas consultas no respondieron: " + fallos.join(" | "));
@@ -332,9 +358,10 @@ function FlotaGps() {
     seguros: semaforo.filter(f => f.seg_carga === "SI").length,
     fugaMes: semaforo.reduce((a, f) => a + n(f.fuga_mensual), 0),
     fugaAcum: semaforo.reduce((a, f) => a + n(f.fuga_acumulada), 0),
-    porBandeja: Object.fromEntries(BANDEJAS.map(b => [b.id, semaforo.filter(f => bandejaDe(f) === b.id).length])),
+    porBandeja: { ...Object.fromEntries(BANDEJAS.map(b => [b.id, semaforo.filter(f => bandejaDe(f) === b.id).length])),
+                  registro: fueraNomina.length },
     solPend: solicitudes.filter(s => s.estado === "pendiente").length,
-  }), [semaforo, solicitudes]);
+  }), [semaforo, solicitudes, fueraNomina]);
   const sinCostos = !n(u.costo_gps_mensual) && !n(u.costo_seguro_mensual);
 
   const listas = useMemo(() => ({
@@ -351,6 +378,32 @@ function FlotaGps() {
     .sort((a, b) => n(b.fuga_acumulada) - n(a.fuga_acumulada) || (diasUso(b) ?? -1) - (diasUso(a) ?? -1)),
     [semaforo, bandeja, busca, fOp, fTipo]);
   const detalle = useMemo(() => semaforo.filter(filtrar), [semaforo, busca, fOp, fTipo]);
+  const scsRegistro = useMemo(() => {
+    const m = {};
+    for (const r of fueraNomina) for (const sc of String(r.cecos || "—").split(",").map(x => x.trim())) m[sc] = (m[sc] || 0) + 1;
+    return Object.entries(m).sort((a, b) => b[1] - a[1]);
+  }, [fueraNomina]);
+  const enRegistro = useMemo(() => {
+    const q = busca.trim().toUpperCase();
+    return fueraNomina.filter(r =>
+      (!fSc || String(r.cecos || "").split(",").map(x => x.trim()).includes(fSc)) &&
+      (!fCertronic || estadoCertronic(certronic[r.patente]) === fCertronic) &&
+      (!q || r.patente.includes(q) || String(certronic[r.patente]?.contratista || "").toUpperCase().includes(q)));
+  }, [fueraNomina, certronic, busca, fSc, fCertronic]);
+  const porEstadoCertronic = useMemo(() => {
+    const m = { vigente: 0, salio: 0, nunca: 0 };
+    for (const r of fueraNomina) m[estadoCertronic(certronic[r.patente])]++;
+    return m;
+  }, [fueraNomina, certronic]);
+  const COLS_REGISTRO = [
+    { titulo: "PATENTE", campo: "patente" }, { titulo: "SC", campo: "cecos" }, { titulo: "VIAJES_30D", campo: "viajes_30d" },
+    { titulo: "VIAJES_MES", campo: "viajes_mes" }, { titulo: "ULTIMO_VIAJE", campo: "ultimo_viaje" },
+    { titulo: "GPS_ACTIVO", valor: r => r.gps_activo ? "SI" : "NO" }, { titulo: "GPS_BASE", campo: "gps_base" },
+    { titulo: "CERTRONIC", valor: r => ESTADO_CERTRONIC[estadoCertronic(certronic[r.patente])].rotulo },
+    { titulo: "CONTRATISTA", valor: r => certronic[r.patente]?.contratista || "" },
+    { titulo: "TIPO_CERTIFICACION", valor: r => certronic[r.patente]?.tipo_certificacion || "" },
+    { titulo: "ULTIMA_FOTO_CERTRONIC", valor: r => certronic[r.patente]?.ultima_foto || "" },
+  ];
 
   // ── Acciones ──
   const pedir = async () => {
@@ -498,6 +551,8 @@ function FlotaGps() {
                sub={sinCostos ? "define los costos en Umbrales para verlo en pesos" : `${clp(resumen.fugaAcum)} acumulado desde que dejaron de usarse`}
                onClick={sinCostos ? () => setVista("config") : () => { setVista("bandejas"); setBandeja("cortar"); }} />
           <Kpi titulo="Alertas abiertas" color={AMBAR_} valor={fmt(alertas.length)} sub={`sin ruta ≥ ${u.dias_alerta_sin_ruta ?? "—"} días · apoyo ≥ ${u.viajes_mes_apoyo ?? "—"} viajes`} onClick={() => setVista("alertas")} />
+          <Kpi titulo="Operan sin registro" color={BANDEJA_REGISTRO.color} valor={fmt(fueraNomina.length)}
+               sub={`${fmt(porEstadoCertronic.nunca)} nunca estuvieron en Certronic`} onClick={() => { setVista("bandejas"); setBandeja("registro"); }} />
           <Kpi titulo="Solicitudes pendientes" color={AZUL_} valor={fmt(resumen.solPend)} sub="bajas y revisiones pedidas" onClick={() => setVista("solicitudes")} />
         </div>
       )}
@@ -512,7 +567,7 @@ function FlotaGps() {
       {!cargando && vista === "bandejas" && (
         <Fragment>
           <div style={{ display: "grid", gap: 8, gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", marginBottom: 12 }}>
-            {BANDEJAS.map(b => (
+            {[...BANDEJAS, BANDEJA_REGISTRO].map(b => (
               <button key={b.id} onClick={() => { setBandeja(b.id); setAbierta(null); }}
                 style={{ textAlign: "left", fontFamily: "inherit", cursor: "pointer", borderRadius: 10, padding: "10px 14px",
                          background: bandeja === b.id ? b.fondo : "#fff", border: `1px solid ${bandeja === b.id ? b.color : "#e6e9ef"}` }}>
@@ -524,6 +579,56 @@ function FlotaGps() {
               </button>
             ))}
           </div>
+          {bandeja === "registro" ? (
+            <Fragment>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 8 }}>
+                <input className="mj-input" style={{ minWidth: 220 }} value={busca} onChange={e => setBusca(e.target.value)} placeholder="Buscar patente o contratista…" />
+                {Object.entries(ESTADO_CERTRONIC).map(([k, v]) => (
+                  <button key={k} title={v.que} className={`mj-chip ${fCertronic === k ? "on" : ""}`} onClick={() => setFCertronic(fCertronic === k ? "" : k)}>
+                    {v.rotulo} ({fmt(porEstadoCertronic[k])})
+                  </button>
+                ))}
+                <div style={{ flex: 1 }} />
+                <span style={{ fontSize: 12, color: GRIS_ }}>{fmt(enRegistro.length)} vehículos</span>
+                <button className="mj-btn" onClick={() => descargarCSV(`opera_sin_registro_${hoyChile()}`, enRegistro, COLS_REGISTRO)}>Descargar CSV</button>
+              </div>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
+                <span style={{ fontSize: 11.5, color: GRIS_, alignSelf: "center" }}>Por SC:</span>
+                {scsRegistro.map(([sc, c]) => (
+                  <button key={sc} className={`mj-chip ${fSc === sc ? "on" : ""}`} onClick={() => setFSc(fSc === sc ? "" : sc)}>{sc} ({c})</button>
+                ))}
+              </div>
+              <div className="mj-scroll">
+                <table className="mj-tabla">
+                  <thead><tr><th>Patente</th><th>SC</th><th className="num">Viajes 30d</th><th className="num">Viajes mes</th><th>Último viaje</th><th>GPS</th><th>Certronic</th><th>Contratista</th><th>Tipo</th><th>Última foto</th></tr></thead>
+                  <tbody>
+                    {enRegistro.map(r => {
+                      const c = certronic[r.patente]; const e = ESTADO_CERTRONIC[estadoCertronic(c)];
+                      return (
+                        <tr key={r.patente}>
+                          <td style={{ fontWeight: 700 }}>{r.patente}</td>
+                          <td>{r.cecos || "—"}</td>
+                          <td className="num" style={{ fontWeight: n(r.viajes_30d) >= 8 ? 700 : 400 }}>{fmt(r.viajes_30d)}</td>
+                          <td className="num">{fmt(r.viajes_mes)}</td>
+                          <td>{fch(r.ultimo_viaje)}</td>
+                          <td>{r.gps_activo ? `activo · ${r.gps_base}` : r.gps_base ? "de baja" : "—"}</td>
+                          <td><Etiqueta texto={e.rotulo} color={e.color} fondo={e.fondo} /></td>
+                          <td style={{ maxWidth: 240, overflow: "hidden", textOverflow: "ellipsis" }} title={c?.contratista || ""}>{c?.contratista || "—"}</td>
+                          <td>{c?.tipo_certificacion || "—"}</td>
+                          <td>{c ? fch(c.ultima_foto) : "—"}</td>
+                        </tr>
+                      );
+                    })}
+                    {enRegistro.length === 0 && <tr><td colSpan={10} style={{ textAlign: "center", color: "#94a3b8", padding: 18 }}>Nada con esos filtros.</td></tr>}
+                  </tbody>
+                </table>
+              </div>
+              <div style={{ fontSize: 11, color: GRIS_, marginTop: 8 }}>
+                "Nunca en Certronic" se refiere a lo que trae el scraper de Certronic; confirma dos o tres casos con Certificación antes de tomarlo como regla.
+              </div>
+            </Fragment>
+          ) : (
+          <Fragment>
           {filtros(<span style={{ fontSize: 12, color: GRIS_ }}>{fmt(enBandeja.length)} vehículos</span>)}
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
             {enBandeja.map(f => {
@@ -590,6 +695,8 @@ function FlotaGps() {
             })}
             {enBandeja.length === 0 && <div style={{ textAlign: "center", color: "#94a3b8", padding: 24, background: "#fff", borderRadius: 10, border: "1px solid #e6e9ef" }}>Nada en esta bandeja con esos filtros.</div>}
           </div>
+          </Fragment>
+          )}
         </Fragment>
       )}
 
