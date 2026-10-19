@@ -13,7 +13,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
 import { useState, useEffect, Fragment } from "react";
 import MapaZonas from "./MapaZonas";   // editor de mapa · requiere: npm install leaflet
-import FlotaGps from "./FlotaGps";      // pestaña GPS y Seguros (levantamiento de flota)
 
 const CL_URL = "https://hmowsazntdjtsvdfgutn.supabase.co";
 const CL_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imhtb3dzYXpudGRqdHN2ZGZndXRuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQ5MTc4NzgsImV4cCI6MjEwMDQ5Mzg3OH0.xAJokU0eFhof--d8R4uCRBr2-CJLzC5re0w1IPRqQR8";
@@ -216,6 +215,14 @@ function ModuloMaestroCL() {
   const [vehMasivo, setVehMasivo] = useState("");
   const [vehGuardando, setVehGuardando] = useState(null);
   const [vehMsg, setVehMsg] = useState("");
+  // ── Tarifario ──
+  const [tarifas, setTarifas] = useState([]);
+  const [tarifaEdit, setTarifaEdit] = useState({});        // id -> fila en edición
+  const [tarifaGuardando, setTarifaGuardando] = useState(null);
+  const [tarifaMsg, setTarifaMsg] = useState("");
+  const [tarifaServicio, setTarifaServicio] = useState("todos");
+  const [tarifaNueva, setTarifaNueva] = useState(null);     // null = formulario cerrado
+  const [adminCat, setAdminCat] = useState([]);             // nombres de cecos_admin para el alta
   // ── zona nueva + override de viaje ──
   const ZONA_NUEVA0 = { nombre: "", cecos: "", segmentacion: "", lat: "", lon: "", radio: 5000, nota: "" };
   const [zonaNueva, setZonaNueva] = useState(null);        // null = formulario cerrado
@@ -406,6 +413,95 @@ function ModuloMaestroCL() {
     setVehiculos(await apiSuave("tipo_vehiculo_bt?order=proyecto,patente&limit=500", []));
   };
   useEffect(() => { if (tab === "vehiculos") cargarVehiculos(); }, [tab]);
+
+  // ── Tarifario: el catálogo de tarifas que alimenta vw_pago_viaje ──
+  const SERVICIOS_TARIFA = ["UM", "MELI ONE", "RECOLECTA", "SPOT", "SORTEO", "TRONCAL"];
+  const TIPOS_PAGO = ["GUIAS", "ARRIENDO", "PISO"];
+  const VEHICULOS_TARIFA = ["COMBUSTION", "BIG VAN", "COMBUSTION LARGE VAN", "ELECTRICA"];
+  const TARIFA_NUEVA0 = { cecos_admin: "", segmentacion: "", servicio: "UM", tipo_pago: "GUIAS",
+    detalle: "", tipo_vehiculo: "COMBUSTION", tarifa_oficial: "", tarifa_contingencia: "",
+    cobrar_oficial: "", cobrar_contingencia: "", vigente_desde: "", nota: "" };
+
+  const cargarTarifario = async () => {
+    const fallos = [];
+    const [t, seg, adm] = await Promise.all([
+      apiSuave("tarifas?order=servicio,cecos_admin.nullsfirst,segmentacion,tipo_vehiculo,detalle&limit=500", [], fallos),
+      apiSuave("segmentaciones?order=nombre&activo=eq.true", [], fallos),
+      apiSuave("cecos_admin?select=nombre&order=nombre", [], fallos),
+    ]);
+    setTarifas(t);
+    if (seg.length) setSegmentaciones(seg);
+    setAdminCat([...new Set(adm.map(a => a.nombre))]);
+    if (fallos.length) setError("No se pudieron cargar: " + fallos.join(" | "));
+  };
+  useEffect(() => { if (tab === "tarifario") cargarTarifario(); }, [tab]);
+
+  const guardarTarifa = async (id, campos) => {
+    setTarifaGuardando(id);
+    try {
+      await api(`tarifas?id=eq.${id}`, {
+        method: "PATCH", headers: { Prefer: "return=minimal" },
+        body: JSON.stringify({ ...campos, actualizado_at: new Date().toISOString(),
+                               actualizado_por: "brain" }),
+      });
+      setTarifaEdit(e => { const x = { ...e }; delete x[id]; return x; });
+      await cargarTarifario();
+      setTarifaMsg("Tarifa guardada"); setTimeout(() => setTarifaMsg(""), 3000);
+    } catch (e) { setError(e.message); }
+    finally { setTarifaGuardando(null); }
+  };
+
+  // La subvención por combustible (R2 del cuestionario) se activa o desactiva
+  // COMPLETA: cuando MELI la quite, es un solo click y rige de inmediato.
+  const contingenciaGlobal = async (activar) => {
+    const cuantas = tarifas.filter(t => t.activa && t.contingencia_activa !== activar).length;
+    if (!cuantas) { setTarifaMsg("Nada que cambiar"); setTimeout(() => setTarifaMsg(""), 3000); return; }
+    if (!window.confirm(
+      `${activar ? "ACTIVAR" : "DESACTIVAR"} la tarifa de contingencia (subvención combustible) en ${cuantas} tarifa(s).\n\n` +
+      `El cambio rige DE INMEDIATO sobre cualquier día que se consulte: el pago ${activar ? "sube" : "baja"} al valor ${activar ? "con" : "sin"} subvención.\n\n¿Continuar?`)) return;
+    setTarifaGuardando("__global__");
+    try {
+      await api(`tarifas?activa=eq.true`, {
+        method: "PATCH", headers: { Prefer: "return=minimal" },
+        body: JSON.stringify({ contingencia_activa: activar,
+          actualizado_at: new Date().toISOString(), actualizado_por: "brain" }),
+      });
+      await cargarTarifario();
+      setTarifaMsg(`Contingencia ${activar ? "activada" : "desactivada"} en todas`);
+      setTimeout(() => setTarifaMsg(""), 4000);
+    } catch (e) { setError(e.message); }
+    finally { setTarifaGuardando(null); }
+  };
+
+  const crearTarifa = async () => {
+    const t = tarifaNueva;
+    if (!t.servicio || !t.tipo_pago || !t.tipo_vehiculo || t.tarifa_oficial === "") {
+      setError("Tarifa nueva: faltan servicio, tipo de pago, vehículo o el monto oficial."); return;
+    }
+    setTarifaGuardando("__nueva__");
+    try {
+      await api("tarifas", {
+        method: "POST", headers: { Prefer: "return=minimal" },
+        body: JSON.stringify({
+          cecos_admin: t.cecos_admin || null,
+          segmentacion: t.segmentacion || null,
+          servicio: t.servicio, tipo_pago: t.tipo_pago,
+          detalle: t.detalle || null, tipo_vehiculo: t.tipo_vehiculo,
+          tarifa_oficial: Number(t.tarifa_oficial),
+          tarifa_contingencia: t.tarifa_contingencia === "" ? Number(t.tarifa_oficial) : Number(t.tarifa_contingencia),
+          cobrar_oficial: t.cobrar_oficial === "" ? null : Number(t.cobrar_oficial),
+          cobrar_contingencia: t.cobrar_contingencia === "" ? null : Number(t.cobrar_contingencia),
+          vigente_desde: t.vigente_desde || undefined,
+          nota: t.nota || "Creada desde el Brain.",
+          actualizado_por: "brain",
+        }),
+      });
+      setTarifaNueva(null);
+      await cargarTarifario();
+      setTarifaMsg("Tarifa creada"); setTimeout(() => setTarifaMsg(""), 3000);
+    } catch (e) { setError(e.message); }
+    finally { setTarifaGuardando(null); }
+  };
 
   const guardarVehiculo = async (patente, campos, esNuevo) => {
     setVehGuardando(patente);
@@ -824,7 +920,7 @@ function ModuloMaestroCL() {
     { id: "zonas",      label: "Zonas de Pago",   desc: "Geografía y segmentación",   n: zonas.length || null },
     { id: "pago",       label: "Maestro Pago",    desc: "Modelo de tarificación",     n: pago.length || null },
     { id: "vehiculos",  label: "Vehículos BT",    desc: "Clasificación por patente",  n: vehiculos.length || null },
-    { id: "flota",      label: "GPS y Seguros",   desc: "Uso real de la flota",       n: null },
+    { id: "tarifario",  label: "Tarifario",       desc: "Tarifas por pagar y cobrar", n: tarifas.length || null },
   ];
 
   return (
@@ -1762,10 +1858,253 @@ function ModuloMaestroCL() {
               </Fragment>
             )}
 
-            {/* ── GPS y Seguros · levantamiento de flota (archivo aparte) ── */}
-            {tab === "flota" && (
-              <FlotaGps api={api} apiSuave={apiSuave} descargarCSV={descargarCSV} Etiqueta={Etiqueta} />
-            )}
+            {/* ── Tarifario ── */}
+            {tab === "tarifario" && (() => {
+              const $m = (v) => v == null ? "—" :
+                "$" + Number(v).toLocaleString("es-CL", { maximumFractionDigits: 2 });
+              const visibles = tarifas.filter(t => tarifaServicio === "todos" || t.servicio === tarifaServicio);
+              const conContingencia = tarifas.filter(t => t.activa && t.contingencia_activa).length;
+              const inp = { fontSize: 11.5, width: 92, textAlign: "right" };
+              return (
+                <Fragment>
+                  <div style={{ background: "#fff", border: "1px solid #e6e9ef", borderRadius: 10,
+                                padding: "13px 16px", marginBottom: 12 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+                      <div style={{ maxWidth: 760 }}>
+                        <div style={{ fontSize: 13, fontWeight: 800, color: NAVY }}>Tarifario por pagar y cobrar</div>
+                        <div style={{ fontSize: 12, color: "#64748b", lineHeight: 1.7, marginTop: 3 }}>
+                          La llave es <strong>CECOS admin + segmentación + servicio + vehículo</strong>. Cada fila
+                          trae tarifa <strong>oficial</strong> y de <strong>contingencia</strong> (oficial + subvención
+                          por combustible): paga la que tenga el interruptor. Los cambios rigen <strong>de
+                          inmediato</strong> sobre cualquier día dentro de la vigencia — para un cambio de precio
+                          a futuro, cierra la vigencia de la fila vieja y crea una nueva desde esa fecha.
+                        </div>
+                        {tarifaMsg && <div style={{ fontSize: 12, color: "#0d8043", marginTop: 5 }}>✓ {tarifaMsg}</div>}
+                      </div>
+                      <div style={{ display: "flex", gap: 8, alignItems: "flex-start", flexWrap: "wrap" }}>
+                        <select className="mj-input" value={tarifaServicio}
+                                onChange={e => setTarifaServicio(e.target.value)}>
+                          <option value="todos">Todos los servicios ({fmt(tarifas.length)})</option>
+                          {SERVICIOS_TARIFA.map(sv => {
+                            const c = tarifas.filter(t => t.servicio === sv).length;
+                            return c ? <option key={sv} value={sv}>{sv} ({c})</option> : null;
+                          })}
+                        </select>
+                        <button className="mj-btn" onClick={() => setTarifaNueva(tarifaNueva ? null : { ...TARIFA_NUEVA0 })}
+                                style={{ background: NAVY, color: "#fff", borderColor: NAVY }}>
+                          {tarifaNueva ? "Cerrar" : "➕ Nueva tarifa"}
+                        </button>
+                      </div>
+                    </div>
+                    <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 10,
+                                  paddingTop: 10, borderTop: "1px dashed #eef1f5", flexWrap: "wrap" }}>
+                      <span style={{ fontSize: 12, fontWeight: 700,
+                                     color: conContingencia ? "#b45309" : "#64748b" }}>
+                        Subvención combustible (contingencia): {conContingencia
+                          ? `ACTIVA en ${fmt(conContingencia)} tarifas` : "desactivada"}
+                      </span>
+                      <button className="mj-btn" style={{ padding: "3px 10px", fontSize: 11 }}
+                              disabled={tarifaGuardando === "__global__"}
+                              onClick={() => contingenciaGlobal(true)}>Activar en todas</button>
+                      <button className="mj-btn" style={{ padding: "3px 10px", fontSize: 11 }}
+                              disabled={tarifaGuardando === "__global__"}
+                              onClick={() => contingenciaGlobal(false)}>Desactivar en todas</button>
+                      <span style={{ fontSize: 10.5, color: "#a8b2c1" }}>
+                        pide confirmación · rige de inmediato en el pago calculado
+                      </span>
+                    </div>
+                  </div>
+
+                  {tarifaNueva && (
+                    <div style={{ background: "#fdf6e3", border: "1px solid #f3e2b8", borderRadius: 10,
+                                  padding: "12px 16px", marginBottom: 12, display: "flex", gap: 8,
+                                  flexWrap: "wrap", alignItems: "flex-end" }}>
+                      <label style={{ fontSize: 10.5, color: "#64748b" }}>CECOS admin<br/>
+                        <select className="mj-input" value={tarifaNueva.cecos_admin}
+                                onChange={e => setTarifaNueva(t => ({ ...t, cecos_admin: e.target.value }))}
+                                style={{ minWidth: 140 }}>
+                          <option value="">— todos (SPOT/SORTEO) —</option>
+                          {adminCat.map(a => <option key={a} value={a}>{a}</option>)}
+                        </select></label>
+                      <label style={{ fontSize: 10.5, color: "#64748b" }}>Segmentación<br/>
+                        <select className="mj-input" value={tarifaNueva.segmentacion}
+                                onChange={e => setTarifaNueva(t => ({ ...t, segmentacion: e.target.value }))}
+                                style={{ minWidth: 130 }}>
+                          <option value="">— sin (TRONCAL/SPOT) —</option>
+                          {segmentaciones.map(sg => <option key={sg.nombre} value={sg.nombre}>{sg.nombre}</option>)}
+                        </select></label>
+                      <label style={{ fontSize: 10.5, color: "#64748b" }}>Servicio<br/>
+                        <select className="mj-input" value={tarifaNueva.servicio}
+                                onChange={e => setTarifaNueva(t => ({ ...t, servicio: e.target.value }))}>
+                          {SERVICIOS_TARIFA.map(sv => <option key={sv} value={sv}>{sv}</option>)}
+                        </select></label>
+                      <label style={{ fontSize: 10.5, color: "#64748b" }}>Tipo pago<br/>
+                        <select className="mj-input" value={tarifaNueva.tipo_pago}
+                                onChange={e => setTarifaNueva(t => ({ ...t, tipo_pago: e.target.value }))}>
+                          {TIPOS_PAGO.map(tp => <option key={tp} value={tp}>{tp}</option>)}
+                        </select></label>
+                      <label style={{ fontSize: 10.5, color: "#64748b" }}>Vehículo<br/>
+                        <select className="mj-input" value={tarifaNueva.tipo_vehiculo}
+                                onChange={e => setTarifaNueva(t => ({ ...t, tipo_vehiculo: e.target.value }))}>
+                          {VEHICULOS_TARIFA.map(v => <option key={v} value={v}>{v}</option>)}
+                        </select></label>
+                      <label style={{ fontSize: 10.5, color: "#64748b" }}>Detalle (TRONCAL)<br/>
+                        <input className="mj-input" value={tarifaNueva.detalle} placeholder="14 POS."
+                               onChange={e => setTarifaNueva(t => ({ ...t, detalle: e.target.value }))}
+                               style={{ width: 86 }} /></label>
+                      <label style={{ fontSize: 10.5, color: "#64748b" }}>$ Oficial<br/>
+                        <input className="mj-input" type="number" step="0.01" value={tarifaNueva.tarifa_oficial}
+                               onChange={e => setTarifaNueva(t => ({ ...t, tarifa_oficial: e.target.value }))}
+                               style={inp} /></label>
+                      <label style={{ fontSize: 10.5, color: "#64748b" }}>$ Contingencia<br/>
+                        <input className="mj-input" type="number" step="0.01" value={tarifaNueva.tarifa_contingencia}
+                               placeholder="= oficial"
+                               onChange={e => setTarifaNueva(t => ({ ...t, tarifa_contingencia: e.target.value }))}
+                               style={inp} /></label>
+                      <label style={{ fontSize: 10.5, color: "#64748b" }}>Cobrar of.<br/>
+                        <input className="mj-input" type="number" step="0.01" value={tarifaNueva.cobrar_oficial}
+                               onChange={e => setTarifaNueva(t => ({ ...t, cobrar_oficial: e.target.value }))}
+                               style={inp} /></label>
+                      <label style={{ fontSize: 10.5, color: "#64748b" }}>Cobrar cont.<br/>
+                        <input className="mj-input" type="number" step="0.01" value={tarifaNueva.cobrar_contingencia}
+                               onChange={e => setTarifaNueva(t => ({ ...t, cobrar_contingencia: e.target.value }))}
+                               style={inp} /></label>
+                      <label style={{ fontSize: 10.5, color: "#64748b" }}>Vigente desde<br/>
+                        <input className="mj-input" type="date" value={tarifaNueva.vigente_desde}
+                               onChange={e => setTarifaNueva(t => ({ ...t, vigente_desde: e.target.value }))} /></label>
+                      <button className="mj-btn" onClick={crearTarifa}
+                              disabled={tarifaGuardando === "__nueva__"}
+                              style={{ background: NAVY, color: "#fff", borderColor: NAVY, padding: "7px 14px" }}>
+                        {tarifaGuardando === "__nueva__" ? "Creando…" : "Crear tarifa"}
+                      </button>
+                    </div>
+                  )}
+
+                  <div style={{ background: "#fff", border: "1px solid #e6e9ef", borderRadius: 10, overflow: "hidden" }}>
+                    <div style={{ overflowX: "auto" }}>
+                      <table className="mj-tabla">
+                        <thead>
+                          <tr>
+                            <th>Servicio</th><th>CECOS admin</th><th>Segmentación</th>
+                            <th>Tipo</th><th>Vehículo</th>
+                            <th style={{ textAlign: "right" }}>$ Oficial</th>
+                            <th style={{ textAlign: "right" }}>$ Contingencia</th>
+                            <th>Paga</th>
+                            <th style={{ textAlign: "right" }}>Cobrar</th>
+                            <th>Vigencia</th><th>Estado</th><th></th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {visibles.map(t => {
+                            const ed = tarifaEdit[t.id];
+                            return (
+                              <tr key={t.id} style={!t.activa ? { opacity: 0.5 } : undefined}>
+                                <td>{t.servicio === "MELI ONE"
+                                      ? <Etiqueta texto="MELI ONE" color="#5b21b6" fondo="#ede9fe" />
+                                      : <span style={{ fontSize: 12, fontWeight: 600 }}>{t.servicio}</span>}</td>
+                                <td style={{ fontSize: 12 }}>{t.cecos_admin || <span style={{ color: "#94a3b8" }}>todos</span>}</td>
+                                <td style={{ fontSize: 12 }}>{t.segmentacion || "—"}</td>
+                                <td style={{ fontSize: 11.5 }}>{t.tipo_pago}{t.detalle ? ` · ${t.detalle}` : ""}
+                                    {t.tipo_pago === "PISO" &&
+                                      <span style={{ color: "#94a3b8" }} title={`cubre ${t.entregas_base} entregas · adicional ${$m(t.tarifa_adicional)}`}> ⓘ</span>}</td>
+                                <td style={{ fontSize: 11.5 }}>{t.tipo_vehiculo === "ELECTRICA"
+                                      ? <Etiqueta texto="ELECTRICA" color="#0d8043" fondo="#e7f6ec" /> : t.tipo_vehiculo}</td>
+                                <td className="num">
+                                  {ed ? <input className="mj-input" type="number" step="0.01"
+                                          value={ed.tarifa_oficial}
+                                          onChange={e => setTarifaEdit(x => ({ ...x, [t.id]: { ...ed, tarifa_oficial: e.target.value } }))}
+                                          style={inp} />
+                                      : $m(t.tarifa_oficial)}</td>
+                                <td className="num">
+                                  {ed ? <input className="mj-input" type="number" step="0.01"
+                                          value={ed.tarifa_contingencia ?? ""}
+                                          onChange={e => setTarifaEdit(x => ({ ...x, [t.id]: { ...ed, tarifa_contingencia: e.target.value } }))}
+                                          style={inp} />
+                                      : $m(t.tarifa_contingencia)}</td>
+                                <td>
+                                  {ed ? (
+                                    <label style={{ fontSize: 10.5, color: "#64748b", whiteSpace: "nowrap" }}>
+                                      <input type="checkbox" checked={!!ed.contingencia_activa}
+                                        onChange={e => setTarifaEdit(x => ({ ...x, [t.id]: { ...ed, contingencia_activa: e.target.checked } }))} /> conting.
+                                    </label>
+                                  ) : (t.contingencia_activa
+                                        ? <Etiqueta texto="CONTINGENCIA" color="#b45309" fondo="#fef3c7" />
+                                        : <Etiqueta texto="OFICIAL" color="#1a3a6b" fondo="#e8edf5" />)}
+                                </td>
+                                <td className="num" style={{ fontSize: 11.5, color: "#64748b" }}
+                                    title={`oficial ${$m(t.cobrar_oficial)} · contingencia ${$m(t.cobrar_contingencia)}`}>
+                                  {$m(t.contingencia_activa ? t.cobrar_contingencia : t.cobrar_oficial)}
+                                </td>
+                                <td style={{ fontSize: 11, color: "#64748b", whiteSpace: "nowrap" }}>
+                                  {ed ? (
+                                    <Fragment>
+                                      <input className="mj-input" type="date" value={ed.vigente_desde || ""}
+                                        onChange={e => setTarifaEdit(x => ({ ...x, [t.id]: { ...ed, vigente_desde: e.target.value } }))}
+                                        style={{ fontSize: 10.5, width: 118 }} />
+                                      <input className="mj-input" type="date" value={ed.vigente_hasta || ""}
+                                        title="vigente hasta (vacío = sin tope)"
+                                        onChange={e => setTarifaEdit(x => ({ ...x, [t.id]: { ...ed, vigente_hasta: e.target.value } }))}
+                                        style={{ fontSize: 10.5, width: 118, marginLeft: 3 }} />
+                                    </Fragment>
+                                  ) : `${t.vigente_desde || "—"} → ${t.vigente_hasta || "∞"}`}
+                                </td>
+                                <td>{ed ? (
+                                      <label style={{ fontSize: 10.5, color: "#64748b" }}>
+                                        <input type="checkbox" checked={!!ed.activa}
+                                          onChange={e => setTarifaEdit(x => ({ ...x, [t.id]: { ...ed, activa: e.target.checked } }))} /> activa
+                                      </label>
+                                    ) : (t.activa
+                                          ? <Etiqueta texto="ACTIVA" color="#0d8043" fondo="#e7f6ec" />
+                                          : <Etiqueta texto="INACTIVA" color="#8a94a6" fondo="#f1f5f9" />)}</td>
+                                <td style={{ whiteSpace: "nowrap" }}>
+                                  {ed ? (
+                                    <Fragment>
+                                      <button className="mj-btn" style={{ padding: "3px 10px", fontSize: 11,
+                                          background: NAVY, color: "#fff", borderColor: NAVY }}
+                                        disabled={tarifaGuardando === t.id}
+                                        onClick={() => guardarTarifa(t.id, {
+                                          tarifa_oficial: Number(ed.tarifa_oficial),
+                                          tarifa_contingencia: ed.tarifa_contingencia === "" || ed.tarifa_contingencia == null
+                                            ? null : Number(ed.tarifa_contingencia),
+                                          contingencia_activa: ed.contingencia_activa,
+                                          vigente_desde: ed.vigente_desde || t.vigente_desde,
+                                          vigente_hasta: ed.vigente_hasta || null,
+                                          activa: ed.activa,
+                                        })}>
+                                        {tarifaGuardando === t.id ? "…" : "Guardar"}
+                                      </button>
+                                      <button className="mj-btn" style={{ padding: "3px 8px", fontSize: 11, marginLeft: 4 }}
+                                        onClick={() => setTarifaEdit(x => { const n2 = { ...x }; delete n2[t.id]; return n2; })}>
+                                        Cancelar
+                                      </button>
+                                    </Fragment>
+                                  ) : (
+                                    <button className="mj-btn" style={{ padding: "3px 10px", fontSize: 11 }}
+                                      onClick={() => setTarifaEdit(x => ({ ...x, [t.id]: {
+                                        tarifa_oficial: t.tarifa_oficial,
+                                        tarifa_contingencia: t.tarifa_contingencia,
+                                        contingencia_activa: t.contingencia_activa,
+                                        vigente_desde: t.vigente_desde, vigente_hasta: t.vigente_hasta,
+                                        activa: t.activa } }))}>
+                                      Editar
+                                    </button>
+                                  )}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                          {visibles.length === 0 && (
+                            <tr><td colSpan={12} style={{ textAlign: "center", color: "#94a3b8", padding: 18 }}>
+                              Sin tarifas cargadas (requiere las migraciones 32 y 37).
+                            </td></tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </Fragment>
+              );
+            })()}
 
             {/* ── No Salidas a Ruta ── */}
             {tab === "nosalidas" && (
