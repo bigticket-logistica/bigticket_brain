@@ -347,6 +347,7 @@ function FlotaGps() {
   const [busca, setBusca] = useState("");
   const [fOp, setFOp] = useState("");
   const [fTipo, setFTipo] = useState("");
+  const [fDetalle, setFDetalle] = useState("");     // "" | "gps" | "seguro" (lo fijan las tarjetas del resumen)
   const [abierta, setAbierta] = useState(null);         // patente expandida
   const [pidiendo, setPidiendo] = useState(null);       // { patente, tipo, motivo }
   const [fTipoAlerta, setFTipoAlerta] = useState("");
@@ -428,7 +429,15 @@ function FlotaGps() {
     .filter(f => bandejaDe(f) === bandeja && filtrar(f))
     .sort((a, b) => n(b.fuga_acumulada) - n(a.fuga_acumulada) || (diasUso(b) ?? -1) - (diasUso(a) ?? -1)),
     [semaforo, bandeja, busca, fOp, fTipo]);
-  const detalle = useMemo(() => semaforo.filter(filtrar), [semaforo, busca, fOp, fTipo]);
+  const detalle = useMemo(() => semaforo.filter(f => filtrar(f) &&
+    (!fDetalle || (fDetalle === "gps" ? f.gps_activo : f.seg_carga === "SI"))), [semaforo, busca, fOp, fTipo, fDetalle]);
+  // Navegación desde las tarjetas: limpia los filtros para que la lista coincida con el número de la tarjeta.
+  const irA = ({ vista: vv, bandeja: bb, detalle: dd = "" }) => {
+    setBusca(""); setFOp(""); setFTipo(""); setFSc(""); setFCertronic(""); setFTipoAlerta("");
+    setVerCerradas(false); setVerSolCerradas(false); setAbierta(null); setFDetalle(dd);
+    if (bb) setBandeja(bb);
+    setVista(vv);
+  };
   const scsRegistro = useMemo(() => {
     const m = {};
     for (const r of fueraNomina) for (const sc of String(r.cecos || "—").split(",").map(x => x.trim())) m[sc] = (m[sc] || 0) + 1;
@@ -602,21 +611,25 @@ function FlotaGps() {
 
       {!cargando && (
         <div style={{ display: "grid", gap: 8, gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", marginBottom: 14 }}>
-          <Kpi titulo="GPS activos en Geotab" valor={fmt(resumen.gpsActivos)} sub="se pagan todos los meses" />
-          <Kpi titulo="Seguros de carga" valor={fmt(resumen.seguros)} sub="según el Maestro de Certificación" />
+          <Kpi titulo="GPS activos en Geotab" valor={fmt(resumen.gpsActivos)} sub="se pagan todos los meses · ver listado"
+               onClick={() => irA({ vista: "detalle", detalle: "gps" })} />
+          <Kpi titulo="Seguros de carga" valor={fmt(resumen.seguros)} sub="según el Maestro de Certificación · ver listado"
+               onClick={() => irA({ vista: "detalle", detalle: "seguro" })} />
           <Kpi titulo="Se paga sin uso" color={ROJO_} valor={sinCostos ? fmt(resumen.porBandeja.cortar) + " veh." : clp(resumen.fugaMes) + "/mes"}
-               sub={sinCostos ? "define los costos en Umbrales para verlo en pesos" : `${clp(resumen.fugaAcum)} acumulado desde que dejaron de usarse`}
-               onClick={sinCostos ? () => setVista("config") : () => { setVista("bandejas"); setBandeja("cortar"); }} />
-          <Kpi titulo="Alertas abiertas" color={AMBAR_} valor={fmt(alertas.length)} sub={`sin ruta ≥ ${u.dias_alerta_sin_ruta ?? "—"} días · apoyo ≥ ${u.viajes_mes_apoyo ?? "—"} viajes`} onClick={() => setVista("alertas")} />
+               sub={sinCostos ? "bandeja Cortar · carga los costos en Umbrales para verlo en pesos" : `${clp(resumen.fugaAcum)} acumulado desde que dejaron de usarse`}
+               onClick={() => irA({ vista: "bandejas", bandeja: "cortar" })} />
+          <Kpi titulo="Alertas abiertas" color={AMBAR_} valor={fmt(alertas.length)} sub={`sin ruta ≥ ${u.dias_alerta_sin_ruta ?? "—"} días · apoyo ≥ ${u.viajes_mes_apoyo ?? "—"} viajes`}
+               onClick={() => irA({ vista: "alertas" })} />
           <Kpi titulo="Operan sin registro" color={BANDEJA_REGISTRO.color} valor={fmt(fueraNomina.length)}
-               sub={`${fmt(porEstadoCertronic.nunca)} nunca estuvieron en Certronic`} onClick={() => { setVista("bandejas"); setBandeja("registro"); }} />
-          <Kpi titulo="Solicitudes pendientes" color={AZUL_} valor={fmt(resumen.solPend)} sub="bajas y revisiones pedidas" onClick={() => setVista("solicitudes")} />
+               sub={`${fmt(porEstadoCertronic.nunca)} nunca estuvieron en Certronic`} onClick={() => irA({ vista: "bandejas", bandeja: "registro" })} />
+          <Kpi titulo="Solicitudes pendientes" color={AZUL_} valor={fmt(resumen.solPend)} sub="bajas y revisiones pedidas"
+               onClick={() => irA({ vista: "solicitudes" })} />
         </div>
       )}
 
       {!cargando && (
         <div style={{ display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap", borderBottom: "1px solid #e6e9ef", paddingBottom: 10 }}>
-          {VISTAS.map(([id, t]) => <button key={id} className={`mj-chip ${vista === id ? "on" : ""}`} onClick={() => setVista(id)}>{t}</button>)}
+          {VISTAS.map(([id, t]) => <button key={id} className={`mj-chip ${vista === id ? "on" : ""}`} onClick={() => { if (id === "detalle") setFDetalle(""); setVista(id); }}>{t}</button>)}
         </div>
       )}
 
@@ -625,7 +638,7 @@ function FlotaGps() {
         <Fragment>
           <div style={{ display: "grid", gap: 8, gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", marginBottom: 12 }}>
             {[...BANDEJAS, BANDEJA_REGISTRO].map(b => (
-              <button key={b.id} onClick={() => { setBandeja(b.id); setAbierta(null); }}
+              <button key={b.id} onClick={() => irA({ vista: "bandejas", bandeja: b.id })}
                 style={{ textAlign: "left", fontFamily: "inherit", cursor: "pointer", borderRadius: 10, padding: "10px 14px",
                          background: bandeja === b.id ? b.fondo : "#fff", border: `1px solid ${bandeja === b.id ? b.color : "#e6e9ef"}` }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
@@ -875,6 +888,9 @@ function FlotaGps() {
       {!cargando && vista === "detalle" && (
         <Fragment>
           {filtros(<Fragment>
+            {[["gps", "Solo GPS activo en Geotab"], ["seguro", "Solo con seguro de carga"]].map(([k, t]) => (
+              <button key={k} className={`mj-chip ${fDetalle === k ? "on" : ""}`} onClick={() => setFDetalle(fDetalle === k ? "" : k)}>{fDetalle === k ? "✓ " : ""}{t}</button>
+            ))}
             <span style={{ fontSize: 12, color: GRIS_ }}>{fmt(detalle.length)} patentes</span>
             <button className="mj-btn" onClick={() => descargarCSV(`gps_seguros_${hoyChile()}`, detalle, COLS_DETALLE)}>Descargar CSV</button>
           </Fragment>)}
