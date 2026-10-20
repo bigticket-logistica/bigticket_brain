@@ -185,7 +185,7 @@ const TIPOS_ALERTA = {
   CORTAR_GPS:   { rotulo: "Cortar GPS",       color: ROJO_,  fondo: "#fdecec" },
   SACAR_SEGURO: { rotulo: "Sacar del seguro", color: ROJO_,  fondo: "#fdecec" },
   GPS_MUDO:     { rotulo: "GPS mudo",         color: AMBAR_, fondo: "#fff6dc" },
-  COBERTURA_CRITICA: { rotulo: "Trabaja sin cobertura", color: "#991b1b", fondo: "#fee2e2" },
+  COBERTURA_CRITICA: { rotulo: "Trabaja sin GPS", color: "#991b1b", fondo: "#fee2e2" },
 };
 const textoAlerta = (a) => {
   const d = a.detalle || {};
@@ -195,7 +195,7 @@ const textoAlerta = (a) => {
     case "CORTAR_GPS": return `${fmt(d.dias_sin_uso)} días sin uso · dispositivo en ${d.gps_base || "—"}`;
     case "SACAR_SEGURO": return `${fmt(d.dias_sin_uso)} días sin uso · ${d.proveedor || ""} ${d.poliza || ""}`;
     case "GPS_MUDO": return `GPS sin comunicar hace ${fmt(d.gps_dias_sin_reportar)} días · ${fmt(d.viajes_30d)} viajes en 30 días`;
-    case "COBERTURA_CRITICA": return `${d.tipo || ""} ${d.estado && d.estado !== "ACTIVA" ? "(" + d.estado + ") " : ""}· ${fmt(d.viajes_30d)} viajes en 30 días · falta ${[d.falta_gps ? "GPS" : null, d.falta_seguro ? (d.seguro_vencido ? "seguro (vencido)" : "seguro") : null].filter(Boolean).join(" y ")} · ${d.operacion || ""}`;
+    case "COBERTURA_CRITICA": return `${d.tipo || ""} ${d.estado && d.estado !== "ACTIVA" ? "(" + d.estado + ") " : ""}· ${fmt(d.viajes_30d)} viajes en 30 días · sin GPS activo · ${d.operacion || ""}`;
     default: return "";
   }
 };
@@ -1097,10 +1097,9 @@ function FlotaGps() {
             case "SACAR_SEGURO": return { texto: `Seguro de carga vigente (se paga) y ${du === null ? "sin señal de uso" : `${fmt(du)} días sin uso`}`, vivo: true };
             case "GPS_MUDO":     return { texto: `Hizo ${fmt(f.viajes_30d)} viajes en 30 días, pero el GPS no transmite hace ${fmt(f.gps_dias_sin_reportar)} días`, vivo: true };
             case "APOYO_EXCESO": return { texto: `${fmt(f.viajes_mes)} viajes este mes (desde ${u.viajes_mes_apoyo ?? 9} debe estar certificado y cubierto)`, vivo: true };
-            case "COBERTURA_CRITICA": {
-              const falta = [f.falta_gps ? "GPS activo" : null, f.falta_seguro ? "seguro de carga" : null].filter(Boolean).join(" y ");
-              return { texto: `Hizo ${fmt(f.viajes_30d)} viajes en 30 días y le falta ${falta || "—"}`, vivo: true };
-            }
+            case "COBERTURA_CRITICA":
+              if (!f.cobertura_critica) return { texto: "Ya cumple (tiene GPS o ya no es exigible): la alerta se cierra en el próximo recálculo", vivo: false };
+              return { texto: `Hizo ${fmt(f.viajes_30d)} viajes en 30 días y no tiene GPS activo${f.tipo !== "PLANTA" ? ` (${fmt(f.viajes_mes)} viajes este mes)` : ""}`, vivo: true };
             default: return { texto: textoAlerta(a), vivo: false };
           }
         };
