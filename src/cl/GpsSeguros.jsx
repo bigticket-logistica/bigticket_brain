@@ -221,7 +221,9 @@ const COLS_BANDEJA = (u) => [
   { titulo: "GPS activo en Geotab", campo: "gps_activo" }, { titulo: "Base Geotab", campo: "gps_base" },
   { titulo: "ID dispositivo", campo: "gps_dispositivo" }, { titulo: "Última comunicación GPS", valor: f => fchHora(f.gps_ultima_comunicacion) },
   { titulo: "Seguro de carga", campo: "seg_carga" }, { titulo: "Proveedor seguro", campo: "seg_carga_proveedor" },
-  { titulo: "Póliza", campo: "seg_carga_poliza" }, { titulo: "Vence seguro", campo: "seg_carga_vence" },
+  { titulo: "Póliza", campo: "seg_carga_poliza" }, { titulo: "Vence seguro", campo: "seg_carga_vence" }, { titulo: "Fuente seguro carga", valor: f => f.seg_carga_fuente === "EXCEL" ? "Excel (*)" : f.seg_carga_fuente || "" },
+  { titulo: "Seguro de vehículo", campo: "seg_veh" }, { titulo: "Póliza vehículo", campo: "seg_veh_poliza" }, { titulo: "Vence seguro vehículo", campo: "seg_veh_vence" },
+  { titulo: "Fuente seguro vehículo", valor: f => f.seg_veh_fuente === "EXCEL" ? "Excel (*)" : f.seg_veh_fuente || "" },
   { titulo: "Motivo", valor: f => motivos(f, u).join(" | ") },
 ];
 const COLS_DETALLE = [
@@ -230,7 +232,8 @@ const COLS_DETALLE = [
   { titulo: "MODELO", campo: "modelo" }, { titulo: "ULTIMO_VIAJE", campo: "ultimo_viaje" }, { titulo: "DIAS_SIN_VIAJE", campo: "dias_sin_viaje" },
   { titulo: "VIAJES_30D", campo: "viajes_30d" }, { titulo: "VIAJES_MES", campo: "viajes_mes" }, { titulo: "GPS_NOMINA", campo: "gps_nomina" },
   { titulo: "GPS_ACTIVO_GEOTAB", campo: "gps_activo" }, { titulo: "GPS_BASE", campo: "gps_base" }, { titulo: "GPS_ULTIMA_COMUNICACION", campo: "gps_ultima_comunicacion" },
-  { titulo: "GPS_DIAS_SIN_REPORTAR", campo: "gps_dias_sin_reportar" }, { titulo: "SEGURO_CARGA", campo: "seg_carga" }, { titulo: "SEGURO_PROVEEDOR", campo: "seg_carga_proveedor" },
+  { titulo: "GPS_DIAS_SIN_REPORTAR", campo: "gps_dias_sin_reportar" }, { titulo: "SEGURO_CARGA", campo: "seg_carga" }, { titulo: "SEGURO_PROVEEDOR", campo: "seg_carga_proveedor" }, { titulo: "SEGURO_CARGA_FUENTE", campo: "seg_carga_fuente" },
+  { titulo: "SEGURO_VEHICULO", campo: "seg_veh" }, { titulo: "SEGURO_VEHICULO_POLIZA", campo: "seg_veh_poliza" }, { titulo: "SEGURO_VEHICULO_VENCE", campo: "seg_veh_vence" }, { titulo: "SEGURO_VEHICULO_FUENTE", campo: "seg_veh_fuente" },
   { titulo: "SEGURO_POLIZA", campo: "seg_carga_poliza" }, { titulo: "SEGURO_VENCE", campo: "seg_carga_vence" },
   { titulo: "DIAS_SIN_USO", valor: f => diasUso(f) ?? "sin señal" }, { titulo: "BANDEJA", valor: f => BANDEJAS.find(b => b.id === bandejaDe(f))?.titulo || "" },
   { titulo: "MOTIVO_MAESTRO", campo: "nomina_desactualizada" },
@@ -356,6 +359,87 @@ async function leerMaestro(archivo) {
   };
 }
 
+// ── Ficha de una póliza BCI (datos extraídos del portal de BCI Seguros) ──────
+function FichaPoliza({ poliza, extraccion, enFlota, onClose }) {
+  const [p, setP] = useState(null); const [items, setItems] = useState([]); const [err, setErr] = useState("");
+  useEffect(() => {
+    (async () => {
+      try {
+        const q = `extraccion_id=eq.${extraccion.id}&poliza=eq.${encodeURIComponent(poliza)}`;
+        const [pp, it] = await Promise.all([api(`bci_polizas?${q}&select=*`), api(`bci_items?${q}&order=item`)]);
+        setP(pp[0] || null); setItems(it || []);
+      } catch (e) { setErr(e.message); }
+    })();
+  }, [poliza]);
+  const det = p?.detalle || {};
+  const cob = det.listaCoberturas || [], pagos = det.listaPago || [], sin = det.listaSiniestros || [];
+  const caja = { background: "#fff", border: "1px solid #e6e9ef", borderRadius: 10, padding: "10px 14px", marginBottom: 10 };
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,.45)", zIndex: 1000, display: "flex", justifyContent: "center", alignItems: "flex-start", padding: "40px 16px", overflow: "auto" }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: "#f4f6f9", borderRadius: 12, width: "min(1000px, 100%)", padding: 16, boxShadow: "0 20px 50px rgba(0,0,0,.25)" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
+          <div>
+            <div style={{ fontSize: 18, fontWeight: 800, color: NAVY }}>Póliza {poliza}</div>
+            <div style={{ fontSize: 12, color: GRIS_ }}>{p?.ramo || ""}{p?.convenio ? ` · ${p.convenio}` : ""} · datos de BCI Seguros extraídos el {fchHora(extraccion.extraido_at)}</div>
+          </div>
+          <button className="mj-btn" onClick={onClose}>Cerrar</button>
+        </div>
+        {err && <div style={{ color: ROJO_, fontSize: 12 }}>{err}</div>}
+        {!p && !err && <div style={{ color: GRIS_, fontSize: 13 }}>Cargando póliza…</div>}
+        {p && (
+          <Fragment>
+            <div style={{ ...caja, display: "grid", gap: 8, gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", fontSize: 12.5 }}>
+              <div><div style={{ color: GRIS_, fontSize: 11 }}>Vigencia</div><strong>{fch(p.vigencia_desde)} → {fch(p.vigencia_hasta)}</strong></div>
+              <div><div style={{ color: GRIS_, fontSize: 11 }}>Vehículos cubiertos</div><strong>{fmt(items.length)}</strong>{p.items && p.items !== items.length ? <span style={{ color: GRIS_ }}> (BCI informa {fmt(p.items)} ítems)</span> : null}</div>
+              <div><div style={{ color: GRIS_, fontSize: 11 }}>Prima neta / bruta</div><strong>{p.prima_neta} / {p.prima_bruta} {p.moneda}</strong></div>
+              <div><div style={{ color: GRIS_, fontSize: 11 }}>Monto asegurado</div><strong>{fmt(p.monto_asegurado)} {p.moneda}</strong></div>
+              <div><div style={{ color: GRIS_, fontSize: 11 }}>Corredor</div><strong>{p.corredor || "—"}</strong>{p.comision != null ? ` · ${p.comision}%` : ""}</div>
+              <div><div style={{ color: GRIS_, fontSize: 11 }}>Documento</div>
+                {p.pdf_url ? <a href={p.pdf_url} target="_blank" rel="noreferrer">Abrir PDF de BCI</a>
+                           : <a href="https://portalclientes.bciseguros.cl/login" target="_blank" rel="noreferrer">Ver en el portal BCI</a>}</div>
+            </div>
+            <div style={caja}>
+              <div style={{ fontSize: 13, fontWeight: 800, color: NAVY, marginBottom: 6 }}>Vehículos cubiertos</div>
+              <div className="mj-scroll" style={{ maxHeight: 320 }}>
+                <table className="mj-tabla">
+                  <thead><tr><th className="num">Ítem</th><th>Patente</th><th>Marca</th><th>Modelo</th><th className="num">Año</th><th>Motor</th><th>Chasis</th><th>En la flota (Maestro)</th></tr></thead>
+                  <tbody>
+                    {items.map(i => {
+                      const f = enFlota[i.patente];
+                      return (
+                        <tr key={i.item}>
+                          <td className="num">{i.item}</td><td style={{ fontWeight: 700 }}>{i.patente}</td><td>{i.marca || "—"}</td><td>{i.modelo || "—"}</td>
+                          <td className="num">{i.anio || "—"}</td><td>{i.motor || "—"}</td><td>{i.chasis || "—"}</td>
+                          <td>{f ? <span>{f.tipo || "—"} · <span style={{ color: f.estado === "ACTIVA" ? VERDE_ : ROJO_ }}>{f.estado || "—"}</span> · {fmt(f.viajes_30d)} viajes 30d</span>
+                                 : <Etiqueta texto="No está en el Maestro" color={ROJO_} fondo="#fdecec" />}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            <div style={{ display: "grid", gap: 10, gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))" }}>
+              <div style={caja}>
+                <div style={{ fontSize: 13, fontWeight: 800, color: NAVY, marginBottom: 6 }}>Coberturas {det.cantToRegCobertura ? <span style={{ fontSize: 11, color: GRIS_, fontWeight: 400 }}>(muestra de {cob.length}; BCI informa {det.cantToRegCobertura} registros)</span> : null}</div>
+                <table className="mj-tabla"><thead><tr><th>Ítem</th><th>Cobertura</th><th className="num">Monto</th><th className="num">Prima</th></tr></thead>
+                  <tbody>{cob.map((c, k) => <tr key={k}><td>{c.numeroItem}</td><td>{c.descripcionCobertura}</td><td className="num">{c.montoAsegurado}</td><td className="num">{c.primaNeta}</td></tr>)}</tbody></table>
+              </div>
+              <div style={caja}>
+                <div style={{ fontSize: 13, fontWeight: 800, color: NAVY, marginBottom: 6 }}>Cuotas</div>
+                <table className="mj-tabla"><thead><tr><th>N°</th><th>Vence</th><th className="num">Monto</th><th>Estado</th></tr></thead>
+                  <tbody>{pagos.map((c, k) => <tr key={k}><td>{c.nCuota}</td><td>{c.fechaVencimiento}</td><td className="num">{c.montoCuota} {c.moneda}</td>
+                    <td style={{ color: c.estado === "PAGADA" ? VERDE_ : AMBAR_ }}>{c.estado}</td></tr>)}</tbody></table>
+                <div style={{ fontSize: 12, marginTop: 8 }}><strong>Siniestros:</strong> {sin.length ? `${sin.length} registrados` : "ninguno registrado"}</div>
+              </div>
+            </div>
+          </Fragment>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── Tira de actividad de 30 días ────────────────────────────────────────────
 function TiraActividad({ patente }) {
   const [datos, setDatos] = useState(null);
@@ -413,6 +497,9 @@ function FlotaGps() {
   const [config, setConfig] = useState([]);
   const [historialCfg, setHistorialCfg] = useState([]);
   const [geotabFecha, setGeotabFecha] = useState(null);
+  const [bciExt, setBciExt] = useState(null);         // última extracción exitosa del portal BCI
+  const [bciPolizas, setBciPolizas] = useState([]);
+  const [ficha, setFicha] = useState(null);           // póliza BCI abierta en la ficha
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState("");
   const [msg, setMsg] = useState("");
@@ -462,6 +549,9 @@ function FlotaGps() {
     }
     setSemaforo(sem); setAlertas(ale); setSolicitudes(sol); setCargas(car); setConfig(cfg); setHistorialCfg(hcf);
     setGeotabFecha(geo[0]?.fecha || null);
+    const ext = (await apiSuave("bci_extracciones?ok=eq.true&order=id.desc&limit=1", [], fallos))[0] || null;
+    setBciExt(ext);
+    if (ext) setBciPolizas(await apiSuave(`bci_polizas?extraccion_id=eq.${ext.id}&select=poliza,ramo,convenio,vigencia_desde,vigencia_hasta,items,prima_neta,moneda&order=ramo,poliza`, [], fallos));
     if (fallos.length) setError("Algunas consultas no respondieron: " + fallos.join(" | "));
     setCargando(false);
   };
@@ -628,6 +718,21 @@ function FlotaGps() {
     finally { setImportando(false); }
   };
 
+  // ── Seguro de carga / vehículo: BCI con enlace a su ficha; otros proveedores con * (solo Excel) ──
+  const seguroCelda = (f, tipo) => {
+    const tiene = tipo === "carga" ? f.seg_carga : f.seg_veh;
+    const fuente = tipo === "carga" ? f.seg_carga_fuente : f.seg_veh_fuente;
+    const pol = tipo === "carga" ? f.seg_carga_poliza : f.seg_veh_poliza;
+    const vence = tipo === "carga" ? f.seg_carga_vence : f.seg_veh_vence;
+    const prov = tipo === "carga" ? f.seg_carga_proveedor : f.seg_veh_proveedor;
+    if (fuente === "BCI" && tiene === "SI")
+      return <span>BCI · <a href="#" onClick={e => { e.preventDefault(); e.stopPropagation(); setFicha(pol); }} style={{ color: "#1F4E9E", fontWeight: 700 }}>{pol}</a> · vence {fch(vence)}</span>;
+    if (fuente === "BCI") return <span style={{ color: ROJO_ }}>Sin seguro (no está en BCI)</span>;
+    if (tiene) return <span title="Dato del Maestro de Certificación (Excel), no verificado con la aseguradora">{tiene === "SI" ? `${prov || "SI"}${pol ? " · " + pol : ""}${vence ? " · vence " + fch(vence) : ""}` : tiene} <strong style={{ color: AMBAR_ }}>*</strong></span>;
+    return <span style={{ color: "#a8b2c1" }}>no informado</span>;
+  };
+  const enFlota = useMemo(() => Object.fromEntries(semaforo.map(f => [f.patente, f])), [semaforo]);
+
   // ── Piezas de UI ──
   const Kpi = ({ titulo, valor, sub, color, onClick }) => (
     <div onClick={onClick} style={{ background: "#fff", border: "1px solid #e6e9ef", borderRadius: 10, padding: "11px 14px",
@@ -674,7 +779,8 @@ function FlotaGps() {
       {/* Resumen */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
         <div style={{ fontSize: 11.5, color: GRIS_ }}>
-          Geotab al {fch(geotabFecha)} · Maestro de Certificación: carga #{cargaVigente?.id || "—"} del {fch(cargaVigente?.cargado_at)}
+          Geotab al {fch(geotabFecha)} · BCI al {bciExt ? fchHora(bciExt.extraido_at) : "—"} · Maestro de Certificación: carga #{cargaVigente?.id || "—"} del {fch(cargaVigente?.cargado_at)}
+          {" "}· <strong style={{ color: AMBAR_ }}>*</strong> = seguro informado solo en el Excel (no verificado con la aseguradora)
           {" "}· sin uso = sin ruta MELI <strong>y</strong> sin movimiento de GPS
         </div>
         <button className="mj-btn" onClick={recalcular} disabled={recalculando}>{recalculando ? "Recalculando…" : "Recalcular ahora"}</button>
@@ -901,7 +1007,8 @@ function FlotaGps() {
                       <div style={{ display: "grid", gap: 6, gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", fontSize: 11.5, color: "#334155" }}>
                         <div><strong>Último viaje MELI:</strong> {fch(f.ultimo_viaje)} · {fmt(f.viajes_30d)} viajes en 30 días · {fmt(f.viajes_mes)} este mes</div>
                         <div><strong>GPS:</strong> {f.gps_activo ? `activo en ${f.gps_base}` : f.gps_base ? "dado de baja en Geotab" : "sin dispositivo"} · última comunicación {fchHora(f.gps_ultima_comunicacion)}</div>
-                        <div><strong>Seguro de carga:</strong> {f.seg_carga === "SI" ? `${f.seg_carga_proveedor || ""} ${f.seg_carga_poliza || ""} · vence ${fch(f.seg_carga_vence)}` : (f.seg_carga || "no informado")}</div>
+                        <div><strong>Seguro de carga:</strong> {seguroCelda(f, "carga")}</div>
+                        <div><strong>Seguro de vehículo:</strong> {seguroCelda(f, "vehiculo")}</div>
                         <div><strong>Maestro:</strong> GPS {f.gps_nomina || "no informado"} {f.gps_dispositivo ? `(${f.gps_dispositivo})` : ""} · baja pedida {fch(f.baja_solicitada_el)}</div>
                       </div>
                       {botonesSolicitud(f).length > 0 && (
@@ -1074,7 +1181,7 @@ function FlotaGps() {
               <thead><tr>
                 <th>Patente</th><th>Estado</th><th>Tipo</th><th>Operación</th><th>Tercero</th>
                 <th>Últ. viaje</th><th className="num">Viajes 30d</th><th>GPS</th><th>Últ. comunicación</th>
-                <th>Seguro</th><th>Vence</th><th className="num">Días sin uso</th><th>Bandeja</th>
+                <th>Seguro de carga</th><th>Seguro de vehículo</th><th className="num">Días sin uso</th><th>Bandeja</th>
               </tr></thead>
               <tbody>
                 {detalle.map(f => {
@@ -1090,8 +1197,8 @@ function FlotaGps() {
                       <td className="num">{f.viajes_30d ?? "—"}</td>
                       <td>{f.gps_activo ? `activo · ${f.gps_base}` : f.gps_base ? "de baja" : "—"}</td>
                       <td>{fchHora(f.gps_ultima_comunicacion)}</td>
-                      <td>{f.seg_carga === "SI" ? (f.seg_carga_proveedor || "SI") : (f.seg_carga || "—")}</td>
-                      <td style={{ color: f.seguro_vencido ? ROJO_ : undefined }}>{fch(f.seg_carga_vence)}</td>
+                      <td>{seguroCelda(f, "carga")}</td>
+                      <td>{seguroCelda(f, "vehiculo")}</td>
                       <td className="num">{diasUso(f) ?? "sin señal"}</td>
                       <td>{b ? <Etiqueta texto={b.titulo} color={b.color} fondo={b.fondo} /> : <span style={{ color: VERDE_, fontSize: 11 }}>✓ en orden</span>}</td>
                     </tr>
@@ -1103,9 +1210,31 @@ function FlotaGps() {
         </Fragment>
       )}
 
+      {ficha && bciExt && <FichaPoliza poliza={ficha} extraccion={bciExt} enFlota={enFlota} onClose={() => setFicha(null)} />}
+
       {/* ── Umbrales y Nómina ── */}
       {!cargando && vista === "config" && (
         <Fragment>
+          <div style={{ background: "#fff", border: "1px solid #e6e9ef", borderRadius: 10, padding: "13px 16px", marginBottom: 12 }}>
+            <div style={{ fontSize: 13, fontWeight: 800, color: NAVY }}>Seguros BCI (fuente oficial)</div>
+            <div style={{ fontSize: 11.5, color: "#64748b", margin: "3px 0 10px" }}>
+              Se extraen del portal de BCI Seguros dos veces por semana. Una patente tiene seguro BCI solo si está en una de estas pólizas;
+              lo que diga el Excel para BCI se reemplaza por esto. Otros proveedores se toman del Excel y se marcan con *.
+              {bciExt ? ` Última extracción: ${fchHora(bciExt.extraido_at)} (${bciExt.origen}, ${fmt(bciExt.polizas)} pólizas, ${fmt(bciExt.items)} vehículos).` : " Todavía no hay extracciones."}
+            </div>
+            <table className="mj-tabla">
+              <thead><tr><th>Póliza</th><th>Ramo</th><th>Convenio</th><th>Vigencia</th><th className="num">Ítems</th><th className="num">Prima neta</th><th></th></tr></thead>
+              <tbody>
+                {bciPolizas.map(x => (
+                  <tr key={x.poliza}>
+                    <td style={{ fontWeight: 700 }}>{x.poliza}</td><td>{x.ramo}</td><td>{x.convenio || "—"}</td>
+                    <td>{fch(x.vigencia_desde)} → {fch(x.vigencia_hasta)}</td><td className="num">{fmt(x.items)}</td><td className="num">{x.prima_neta} {x.moneda}</td>
+                    <td><button className="mj-btn" style={{ padding: "3px 10px", fontSize: 11 }} onClick={() => setFicha(x.poliza)}>Ver ficha</button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
           <div style={{ background: "#fff", border: "1px solid #e6e9ef", borderRadius: 10, padding: "13px 16px", marginBottom: 12 }}>
             <div style={{ fontSize: 13, fontWeight: 800, color: NAVY }}>Umbrales</div>
             <div style={{ fontSize: 11.5, color: "#64748b", margin: "3px 0 10px" }}>
