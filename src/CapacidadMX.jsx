@@ -25,15 +25,15 @@ const CAP_BORDER = "#e4e7ec";
 const CAP_ESTADOS = {
   v: { txt: "Cabe", bg: "#e7f6ec", fg: "#15803d", sub: "#3d4a3f" },
   a: { txt: "Spot excede", bg: "#fff4d6", fg: "#7a4f00", sub: "#5c4300" },
-  r: { txt: "SDD no cabe", bg: "#fde8e6", fg: "#b42318", sub: "#7a1a12" },
+  r: { txt: "No alcanza", bg: "#fde8e6", fg: "#b42318", sub: "#7a1a12" },
 };
 const CAP_LEYENDA = [
   { id: "v", titulo: "Verde, cabe", muestra: "6", bg: "#e7f6ec", fg: "#15803d", borde: "none", outline: "none",
     texto: "La SDD y el Spot esperados entran en la capacidad del site. No hace falta hacer nada." },
   { id: "a", titulo: "Amarillo, el Spot excede", muestra: "9", bg: "#fff4d6", fg: "#7a4f00", borde: "none", outline: "none",
     texto: "La SDD cabe, pero MELI ofrece más Spot del que el site puede hacer. Tomar solo el Spot que tenga unidad confirmada." },
-  { id: "r", titulo: "Rojo, la SDD no cabe", muestra: "10", bg: "#fde8e6", fg: "#b42318", borde: "none", outline: "2px solid #b42318",
-    texto: "La SDD sola supera la capacidad. Conseguir unidades antes del día o habrá multa por rechazo o por no salir." },
+  { id: "r", titulo: "Rojo, no alcanza", muestra: "10", bg: "#fde8e6", fg: "#b42318", borde: "none", outline: "2px solid #b42318",
+    texto: "La SDD, o lo que ya aceptamos, supera la capacidad. Conseguir unidades antes del día o habrá multa por rechazo o por no salir." },
   { id: "g", titulo: "Gris, sin estimación", muestra: "", bg: "#f6f7f9", fg: "#5b6474", borde: "1px dashed #c9ced6", outline: "none",
     texto: "Ese día todavía no se calcula. La estimación de 9 días se hace cada noche a las 23:30." },
 ];
@@ -65,16 +65,33 @@ const CAP_CONF = {
   baja: { txt: "Baja", fg: "#b42318", texto: "Spot a 2 o más días. Acierto cercano a 40%: tomarlo solo como orden de magnitud." },
 };
 
+// Rojo: la SDD esperada o lo ya aceptado supera la capacidad (multa o no show seguro).
+// Amarillo: cabe lo obligatorio, pero lo ofrecido supera la capacidad.
 function capEstado(c, techo) {
-  if (c.sdd > techo + 1e-9) return "r";
+  if (c.sdd > techo + 1e-9 || c.acep > techo + 1e-9) return "r";
   if (c.total > techo + 1e-9) return "a";
   return "v";
 }
 
+// El color sigue al filtro activo
+function capEstadoVista(c, filtro) {
+  if (filtro === "sdd") return c.sdd > c.cap + 1e-9 ? "r" : "v";
+  if (filtro === "spot") return c.sdd > c.cap + 1e-9 ? "r" : c.sdd + c.spot > c.cap + 1e-9 ? "a" : "v";
+  return c.estado;
+}
+
 function capAccion(c, techo) {
+  if (c.acep > techo + 1e-9) {
+    const n = Math.ceil(c.acep - techo);
+    return `Ya se aceptaron ${n} más de lo que el site puede hacer: conseguir unidades o habrá no show`;
+  }
   if (c.sdd > techo + 1e-9) {
     const n = Math.ceil(c.sdd - techo);
     return `SDD sobre la capacidad: conseguir ${n} unidad${n === 1 ? "" : "es"} o habrá multa`;
+  }
+  if (c.pend > 0) {
+    const libres = Math.max(0, Math.floor(techo - c.acep));
+    return `${c.pend} pedido${c.pend === 1 ? "" : "s"} por responder; quedan ${libres} unidad${libres === 1 ? "" : "es"} libre${libres === 1 ? "" : "s"}`;
   }
   if (c.total > techo + 1e-9) return `El Spot excede en ${capFmt(c.total - techo)}: tomar solo con unidad confirmada`;
   if (c.malo > techo + 1e-9) {
@@ -89,6 +106,8 @@ export default function CapacidadMX() {
   const dias = useMemo(() => Array.from({ length: CAP_DIAS }, (_, i) => capSumar(hoy, i)), [hoy]);
   const [pron, setPron] = useState([]);
   const [techos, setTechos] = useState({});
+  const [ops, setOps] = useState([]);       // v_cap_site_dia: ofrecidos, aceptados, rechazados...
+  const [decl, setDecl] = useState({});     // "SITE|fecha" -> unidades disponibles declaradas
   const [ultima, setUltima] = useState(null);
   const [diaDet, setDiaDet] = useState(() => capSumar(fechaHoyOperativa(), 1));
   // Filtro de las tarjetas: null | "sdd" | "spot" (qué se muestra) | "rojos" | "exceso" (qué sites)
@@ -99,11 +118,15 @@ export default function CapacidadMX() {
   const cargar = useCallback(async () => {
     setError(null);
     try {
-      const [rP, rT, rU] = await Promise.all([
+      const [rP, rT, rU, rS, rD] = await Promise.all([
         sb.from("v_cap_pronostico_ultimo").select("*")
           .gte("fecha_ruta", dias[0]).lte("fecha_ruta", dias[dias.length - 1]).limit(2000),
         sb.from("v_cap_techo").select("*"),
         sb.from("cap_pronostico").select("generado_el").order("generado_el", { ascending: false }).limit(1),
+        sb.from("v_cap_site_dia").select("facility_id,fecha_ruta,flota,ofrecidos,aceptados,rechazados,vencidos,cancelados")
+          .gte("fecha_ruta", dias[0]).lte("fecha_ruta", dias[dias.length - 1]).limit(5000),
+        sb.from("cap_disponibilidad").select("fecha,service_center,disponible")
+          .gte("fecha", dias[0]).lte("fecha", dias[dias.length - 1]).limit(5000),
       ]);
       if (rP.error) throw rP.error;
       if (rT.error) throw rT.error;
@@ -114,6 +137,14 @@ export default function CapacidadMX() {
       for (const r of rT.data || []) t[r.facility_id] = Math.floor((Number(r.techo) || 0) + 1e-9);
       setTechos(t);
       setUltima(rU.data?.[0]?.generado_el || null);
+      // Si fallan estas dos, la pantalla sigue con lo demás (comprometido en 0 y capacidad histórica)
+      setOps(rS.error ? [] : rS.data || []);
+      const dm = {};
+      for (const r of rD.error ? [] : rD.data || []) {
+        const k = `${r.service_center}|${r.fecha}`;
+        dm[k] = (dm[k] || 0) + (r.disponible ? 1 : 0);
+      }
+      setDecl(dm);
     } catch (e) {
       setError(e.message || String(e));
     } finally {
@@ -132,7 +163,8 @@ export default function CapacidadMX() {
     const m = {};
     for (const r of pron) {
       const s = (m[r.facility_id] = m[r.facility_id] || {});
-      const c = (s[r.fecha_ruta] = s[r.fecha_ruta] || { sdd: 0, spot: 0, sddMalo: 0, spotMalo: 0, sddRec: 0, spotRec: 0 });
+      const c = (s[r.fecha_ruta] = s[r.fecha_ruta] || { sdd: 0, spot: 0, sddMalo: 0, spotMalo: 0, sddRec: 0, spotRec: 0,
+        sddAcep: 0, spotAcep: 0, rech: 0, pend: 0 });
       // rutas enteras: día normal redondeado, día malo redondeado hacia arriba
       const p50 = Math.round(Number(r.p50) || 0);
       const p90 = Math.max(Math.ceil((Number(r.p90) || 0) - 1e-9), p50);
@@ -142,34 +174,49 @@ export default function CapacidadMX() {
         c.spot = p50; c.spotMalo = p90; c.spotRec = r.recibidas || 0;
       }
     }
+    // Comprometido (aceptado), rechazado y por responder, de los pedidos reales
+    for (const r of ops) {
+      const c = m[r.facility_id]?.[r.fecha_ruta];
+      if (!c) continue;
+      if (r.flota === "fija") c.sddAcep += r.aceptados || 0; else c.spotAcep += r.aceptados || 0;
+      c.rech += r.rechazados || 0;
+      c.pend += Math.max(0, (r.ofrecidos || 0) - (r.aceptados || 0) - (r.rechazados || 0) - (r.vencidos || 0) - (r.cancelados || 0));
+    }
     for (const [site, porDia] of Object.entries(m)) {
       const techo = techos[site] ?? 0;
       for (const [fecha, c] of Object.entries(porDia)) {
         c.total = c.sdd + c.spot;
         c.malo = Math.max(c.sddMalo + c.spotMalo, c.total);
-        c.estado = capEstado(c, techo);
+        c.acep = c.sddAcep + c.spotAcep;
+        // Capacidad del día: la flota declarada por el supervisor si existe; si no, la histórica
+        const k = `${site}|${fecha}`;
+        c.capDecl = Object.prototype.hasOwnProperty.call(decl, k);
+        c.cap = c.capDecl ? decl[k] : techo;
+        c.estado = capEstado(c, c.cap);
         c.conf = capConfianza(c, dias.indexOf(fecha));
       }
     }
     const lista = Object.keys(m).sort((a, b) => (techos[b] ?? 0) - (techos[a] ?? 0) || a.localeCompare(b));
     return { sites: lista, celdas: m };
-  }, [pron, techos, dias]);
+  }, [pron, techos, dias, ops, decl]);
 
   const manana = dias[1];
   const tarjetas = useMemo(() => {
-    let sdd = 0, spot = 0, spotRec = 0, exceso = 0, mayor = null;
+    let sdd = 0, spot = 0, spotRec = 0, spotAcep = 0, exceso = 0, mayor = null;
     const rojos = [];
     for (const site of sites) {
       const c = celdas[site]?.[manana];
       if (!c) continue;
-      const techo = techos[site] ?? 0;
-      sdd += c.sdd; spot += c.spot; spotRec += c.spotRec;
+      const techo = c.cap;
+      sdd += c.sdd; spot += c.spot; spotRec += c.spotRec; spotAcep += c.spotAcep;
       const e = Math.max(0, c.total - techo);
       exceso += e;
       if (e > 0 && (!mayor || e > mayor.e)) mayor = { site, e };
-      if (c.estado === "r") rojos.push(`${site}: ${capFmt(c.sdd)} SDD contra capacidad de ${capFmt(techo)}`);
+      if (c.estado === "r") rojos.push(c.acep > techo
+        ? `${site}: ${capFmt(c.acep)} aceptadas contra capacidad de ${capFmt(techo)}`
+        : `${site}: ${capFmt(c.sdd)} SDD contra capacidad de ${capFmt(techo)}`);
     }
-    return { sdd, spot, spotRec, exceso, mayor, rojos };
+    return { sdd, spot, spotRec, spotAcep, exceso, mayor, rojos };
   }, [sites, celdas, techos, manana]);
 
   const sitesVisibles = useMemo(() => {
@@ -190,7 +237,7 @@ export default function CapacidadMX() {
   const textoFiltro = {
     sdd: "Mostrando solo la SDD de cada site",
     spot: "Mostrando solo el Spot de cada site",
-    rojos: "Mostrando solo los sites con la SDD de mañana sobre su capacidad",
+    rojos: "Mostrando solo los sites donde mañana la SDD o lo aceptado supera la capacidad",
     exceso: "Mostrando solo los sites donde mañana se espera más de lo que pueden hacer",
   };
 
@@ -198,7 +245,7 @@ export default function CapacidadMX() {
     .map((site) => {
       const c = celdas[site]?.[diaDet];
       if (!c) return null;
-      const techo = techos[site] ?? 0;
+      const techo = c.cap;
       return { site, c, techo, brecha: c.total - techo, accion: capAccion(c, techo) };
     })
     .filter(Boolean)
@@ -242,10 +289,10 @@ export default function CapacidadMX() {
             {[
               { id: "sdd", color: CAP_NAVY, num: CAP_NAVY, titulo: "SDD esperada para mañana",
                 valor: Math.round(tarjetas.sdd), pie: "La tarde anterior ya está toda a la vista" },
-              { id: "spot", color: "#F47B20", num: "#9a4a0c", titulo: "Spot esperado para mañana",
-                valor: `≈ ${Math.round(tarjetas.spot)}`, pie: `${tarjetas.spotRec} ya recibidas; el resto suele llegar hoy y mañana` },
-              { id: "rojos", color: "#b42318", num: "#b42318", titulo: "Sites con SDD sobre su capacidad mañana",
-                valor: tarjetas.rojos.length, pie: tarjetas.rojos.length ? tarjetas.rojos.join(" · ") : "Ninguno: la SDD cabe en todos" },
+              { id: "spot", color: "#F47B20", num: "#9a4a0c", titulo: "Spot ofrecido para mañana",
+                valor: `≈ ${Math.round(tarjetas.spot)}`, pie: `${tarjetas.spotRec} ya recibidas · ${tarjetas.spotAcep} aceptadas` },
+              { id: "rojos", color: "#b42318", num: "#b42318", titulo: "Sites que no alcanzan mañana",
+                valor: tarjetas.rojos.length, pie: tarjetas.rojos.length ? tarjetas.rojos.join(" · ") : "Ninguno: la SDD y lo aceptado caben en todos" },
               { id: "exceso", color: "#7a4f00", num: "#7a4f00", titulo: "Rutas esperadas sobre la capacidad mañana",
                 valor: Math.round(tarjetas.exceso), pie: tarjetas.mayor ? `${capFmt(tarjetas.mayor.e)} en ${tarjetas.mayor.site}: decidir hoy cuánto Spot tomar` : "Todo cabe en un día normal" },
             ].map((t) => {
@@ -312,7 +359,7 @@ export default function CapacidadMX() {
                   <div key={site} style={{ display: "contents" }}>
                     <div style={{ padding: "8px 4px", display: "flex", flexDirection: "column", justifyContent: "center" }}>
                       <div style={{ fontSize: 14, fontWeight: 700 }}>{site}</div>
-                      <div style={{ fontSize: 11, color: CAP_MUTED }}>capacidad {capFmt(techos[site] ?? 0)}</div>
+                      <div style={{ fontSize: 11, color: CAP_MUTED }}>capacidad histórica {capFmt(techos[site] ?? 0)}</div>
                     </div>
                     {dias.map((f) => {
                       const c = celdas[site]?.[f];
@@ -323,13 +370,16 @@ export default function CapacidadMX() {
                           </div>
                         );
                       }
-                      const e = CAP_ESTADOS[c.estado];
+                      const ev = capEstadoVista(c, filtro);
+                      const e = CAP_ESTADOS[ev];
                       return (
                         <div key={f} title={`${site} ${f}: ${e.txt}. Confianza ${CAP_CONF[confCelda(c)].txt.toLowerCase()}: ${CAP_CONF[confCelda(c)].texto}`}
-                          style={{ background: e.bg, borderRadius: 8, padding: "7px 8px", textAlign: "center", outline: c.estado === "r" ? `2px solid ${e.fg}` : "none", outlineOffset: -2 }}>
+                          style={{ background: e.bg, borderRadius: 8, padding: "7px 8px", textAlign: "center", outline: ev === "r" ? `2px solid ${e.fg}` : "none", outlineOffset: -2 }}>
                           <div style={{ fontSize: 18, fontWeight: 700, color: e.fg, fontVariantNumeric: "tabular-nums" }}>{capFmt(valorCelda(c))}</div>
                           <div style={{ fontSize: 10, color: e.sub }}>SDD {capFmt(c.sdd)} · Spot {capFmt(c.spot)}</div>
+                          {c.acep > 0 && <div style={{ fontSize: 10, color: e.sub }}>aceptadas <b>{capFmt(c.acep)}</b>{c.pend > 0 ? ` · ${c.pend} por responder` : ""}</div>}
                           <div style={{ fontSize: 10, color: e.sub }}>hasta {capFmt(maloCelda(c))} · confianza <b>{CAP_CONF[confCelda(c)].txt.toLowerCase()}</b></div>
+                          {c.capDecl && <div style={{ fontSize: 10, color: e.sub }}>flota declarada <b>{capFmt(c.cap)}</b></div>}
                         </div>
                       );
                     })}
@@ -364,14 +414,17 @@ export default function CapacidadMX() {
               </div>
             ) : (
               <div style={{ overflowX: "auto" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 980 }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 1240 }}>
                   <thead>
                     <tr style={{ color: CAP_MUTED, fontSize: 12, textAlign: "left" }}>
                       <th style={th}>Site</th>
                       <th style={thNum}>SDD</th>
                       <th style={thNum}>Spot recibido</th>
                       <th style={thNum}>Spot por llegar</th>
-                      <th style={thNum}>Esperadas / hasta</th>
+                      <th style={thNum}>Ofrecidas / hasta</th>
+                      <th style={thNum}>Aceptadas</th>
+                      <th style={thNum}>Rechazadas</th>
+                      <th style={thNum}>Por responder</th>
                       <th style={thNum}>Capacidad</th>
                       <th style={thNum}>Brecha</th>
                       <th style={th}>Confianza</th>
@@ -391,7 +444,12 @@ export default function CapacidadMX() {
                         <td style={tdNum}>{c.spotRec}</td>
                         <td style={{ ...tdNum, color: CAP_MUTED }}>{capFmt(Math.max(0, c.spot - c.spotRec))}</td>
                         <td style={tdNum}>{capFmt(c.total)} / {capFmt(c.malo)}</td>
-                        <td style={tdNum}>{capFmt(techo)}</td>
+                        <td style={{ ...tdNum, fontWeight: 700, color: c.acep > techo ? "#b42318" : "#1a1a1a" }}>{capFmt(c.acep)}</td>
+                        <td style={{ ...tdNum, color: c.rech > 0 ? "#b42318" : CAP_MUTED }}>{capFmt(c.rech)}</td>
+                        <td style={{ ...tdNum, color: c.pend > 0 ? "#7a4f00" : CAP_MUTED, fontWeight: c.pend > 0 ? 700 : 400 }}>{capFmt(c.pend)}</td>
+                        <td style={tdNum} title={c.capDecl ? "Flota declarada por el supervisor en la Bitácora" : "Capacidad histórica: rutas ejecutadas en un día bueno de las últimas 4 semanas"}>
+                          {capFmt(techo)} <span style={{ color: CAP_MUTED, fontSize: 11 }}>{c.capDecl ? "(declarada)" : "(histórica)"}</span>
+                        </td>
                         <td style={{ ...tdNum, fontWeight: brecha > 0.05 ? 700 : 400, color: brecha > 0.05 ? "#b42318" : "#15803d" }}>{capFmtSigno(brecha)}</td>
                         <td style={{ padding: 8, fontWeight: 700, color: CAP_CONF[c.conf].fg }} title={CAP_CONF[c.conf].texto}>{CAP_CONF[c.conf].txt}</td>
                         <td style={{ padding: 8, color: "#3a414d" }}>{accion}</td>
@@ -402,7 +460,8 @@ export default function CapacidadMX() {
               </div>
             )}
             <div style={{ fontSize: 12, color: CAP_MUTED, marginTop: 8, lineHeight: 1.5 }}>
-              Brecha: lo esperado en un día normal menos la capacidad del site. Si es positiva, faltan unidades para cubrir todo. El Spot que excede es una oportunidad; la SDD que excede es multa segura si no se cubre.
+              Ofrecidas: todo lo que MELI pidió o se espera que pida. Aceptadas: lo que ya comprometimos y hay que cubrir sí o sí. Capacidad: la flota que declaró el supervisor en la Bitácora o, si no declaró, la histórica.
+              Brecha: ofrecidas menos capacidad. El Spot que excede es una oportunidad; la SDD o lo aceptado que excede es multa o no show seguro si no se cubre.
             </div>
           </div>
         </>
