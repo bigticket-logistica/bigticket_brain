@@ -284,7 +284,7 @@ export default function CapacidadMX() {
   const valorCelda = (c) => (filtro === "sdd" ? c.sdd : filtro === "spot" ? c.spot : c.total);
   const maloCelda = (c) => (filtro === "sdd" ? c.sddMalo : filtro === "spot" ? c.spotMalo : c.malo);
   const bajoCelda = (c) => (filtro === "sdd" ? c.sddBajo : filtro === "spot" ? c.spotBajo : c.bajo);
-  const rangoTxt = (bajo, alto) => (bajo >= alto ? `exacto: ${capFmt(alto)}` : `entre ${capFmt(bajo)} y ${capFmt(alto)}`);
+  const rangoTxt = (bajo, alto) => (bajo >= alto ? "Total ya conocido" : `Podría terminar entre ${capFmt(bajo)} y ${capFmt(alto)}`);
   const confCelda = (c) => (filtro === "sdd" ? "alta" : c.conf);
   const aceptCelda = (c) => (filtro === "sdd" ? c.sddAcep : filtro === "spot" ? c.spotAcep : c.acep);
   const textoFiltro = {
@@ -378,7 +378,7 @@ export default function CapacidadMX() {
           <div style={card}>
             <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>Planificación: hoy y los próximos 9 días</div>
             <div style={{ fontSize: 12, color: CAP_MUTED, marginBottom: 12, lineHeight: 1.5 }}>
-              Cada celda muestra a la izquierda las rutas que MELI ofrece (o se espera que ofrezca en un día normal) y a la derecha las que ya aceptamos, que son las que hay que cubrir sí o sí. Debajo, cuántas son SDD y cuántas Spot, cuántas faltan por responder y el rango esperado: en 8 de cada 10 días como ese, MELI pide algo dentro de ese rango. Toca una celda para ver de dónde vinieron sus rutas.
+              Cada celda muestra a la izquierda las rutas que MELI ofrece (o se espera que ofrezca en un día normal) y a la derecha las que ya aceptamos, que son las que hay que cubrir sí o sí. Debajo, cuántas son SDD y cuántas Spot, cuántas faltan por responder y en cuánto podría terminar el total del día: en 8 de cada 10 días como ese, el resultado queda dentro de ese rango. Toca una celda para ver de dónde vinieron sus rutas.
               La capacidad es la flota que declaró el supervisor en la Bitácora o, si no declaró, lo que el site ejecutó en un día bueno durante las últimas 4 semanas (histórica). Toca el nombre de un día para ver su detalle abajo.
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 10, marginBottom: 14 }}>
@@ -446,8 +446,14 @@ export default function CapacidadMX() {
                           </div>
                           <div style={{ fontSize: 10, color: e.sub }}>SDD {capFmt(c.sdd)} · Spot {capFmt(c.spot)}</div>
                           {c.pend > 0 && <div style={{ fontSize: 10, color: "#7a4f00", fontWeight: 700 }}>{c.pend} por responder</div>}
-                          <div style={{ fontSize: 10, color: e.sub }}>{rangoTxt(bajoCelda(c), maloCelda(c))} · confianza <b>{CAP_CONF[confCelda(c)].txt.toLowerCase()}</b></div>
-                          {c.capDecl && <div style={{ fontSize: 10, color: e.sub }}>flota declarada <b>{capFmt(c.cap)}</b></div>}
+                          <div style={{ fontSize: 10, color: e.sub, marginTop: 2 }}>{rangoTxt(bajoCelda(c), maloCelda(c))}</div>
+                          {c.capDecl && <div style={{ fontSize: 10, color: e.sub }}>Flota declarada: <b>{capFmt(c.cap)}</b></div>}
+                          <div style={{ marginTop: 5 }}>
+                            <span style={{ display: "inline-block", fontSize: 9, fontWeight: 700, letterSpacing: ".03em", padding: "2px 7px", borderRadius: 999,
+                              background: "#ffffffb3", color: CAP_CONF[confCelda(c)].fg, border: `1px solid ${CAP_CONF[confCelda(c)].fg}55` }}>
+                              Confianza {CAP_CONF[confCelda(c)].txt.toLowerCase()}
+                            </span>
+                          </div>
                         </div>
                       );
                     })}
