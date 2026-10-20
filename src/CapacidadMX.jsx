@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { fechaHoyOperativa, sb } from "./shared";
 
 // ═══════════════════════════════════════════════════════════════════
@@ -37,6 +37,17 @@ const CAP_LEYENDA = [
   { id: "g", titulo: "Gris, sin estimación", muestra: "", bg: "#f6f7f9", fg: "#5b6474", borde: "1px dashed #c9ced6", outline: "none",
     texto: "Ese día todavía no se calcula. La estimación de 9 días se hace cada noche a las 23:30." },
 ];
+// Tramos de anticipación del panel "de dónde vinieron las rutas"
+const CAP_TRAMOS = [
+  { txt: "7 o más días antes", min: 7, max: Infinity },
+  { txt: "2 a 6 días antes", min: 2, max: 6 },
+  { txt: "El día anterior", min: 1, max: 1 },
+  { txt: "El mismo día", min: -Infinity, max: 0 },
+];
+const capDiasAntes = (fecha, iso) => {
+  const dia = new Date(iso).toLocaleDateString("en-CA", { timeZone: "America/Mexico_City" });
+  return Math.round((new Date(fecha + "T12:00:00Z") - new Date(dia + "T12:00:00Z")) / 86400000);
+};
 const CAP_NOMBRE_DIA = ["Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"];
 
 const capSumar = (iso, n) => {
@@ -112,6 +123,42 @@ export default function CapacidadMX() {
   const [diaDet, setDiaDet] = useState(() => capSumar(fechaHoyOperativa(), 1));
   // Filtro de las tarjetas: null | "sdd" | "spot" (qué se muestra) | "rojos" | "exceso" (qué sites)
   const [filtro, setFiltro] = useState(null);
+  // Celda tocada: { site, fecha } y el desglose de sus ofertas por anticipación
+  const [sel, setSel] = useState(null);
+  const [origen, setOrigen] = useState(null);
+  const panelRef = useRef(null);
+
+  useEffect(() => {
+    if (!sel) return undefined;
+    let cancel = false;
+    setOrigen({ cargando: true });
+    sb.from("v_cap_viaje").select("travel_id,flota,estado_final,primer_aviso")
+      .eq("facility_id", sel.site).eq("fecha_ruta", sel.fecha).limit(3000)
+      .then(({ data, error: e }) => {
+        if (cancel) return;
+        if (e) { setOrigen({ error: e.message }); return; }
+        const filas = CAP_TRAMOS.map((t) => ({ ...t, of: 0, sdd: 0, spot: 0, acep: 0, rech: 0, venc: 0, pend: 0, canc: 0 }));
+        for (const v of data || []) {
+          if (!v.primer_aviso) continue;
+          const d = capDiasAntes(sel.fecha, v.primer_aviso);
+          const f = filas.find((x) => d >= x.min && d <= x.max);
+          f.of += 1;
+          if (v.flota === "fija") f.sdd += 1; else f.spot += 1;
+          if (v.estado_final === "accepted") f.acep += 1;
+          else if (v.estado_final === "rejected") f.rech += 1;
+          else if (v.estado_final === "expired") f.venc += 1;
+          else if (v.estado_final === "canceled") f.canc += 1;
+          else f.pend += 1;
+        }
+        const tot = filas.reduce((a, f) => {
+          for (const k of ["of", "sdd", "spot", "acep", "rech", "venc", "pend", "canc"]) a[k] += f[k];
+          return a;
+        }, { txt: "Total", of: 0, sdd: 0, spot: 0, acep: 0, rech: 0, venc: 0, pend: 0, canc: 0 });
+        setOrigen({ filas, tot });
+        setTimeout(() => panelRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" }), 50);
+      });
+    return () => { cancel = true; };
+  }, [sel]);
   const [error, setError] = useState(null);
   const [cargando, setCargando] = useState(true);
 
@@ -164,14 +211,16 @@ export default function CapacidadMX() {
     for (const r of pron) {
       const s = (m[r.facility_id] = m[r.facility_id] || {});
       const c = (s[r.fecha_ruta] = s[r.fecha_ruta] || { sdd: 0, spot: 0, sddMalo: 0, spotMalo: 0, sddRec: 0, spotRec: 0,
-        sddAcep: 0, spotAcep: 0, rech: 0, pend: 0 });
+        sddAcep: 0, spotAcep: 0, rech: 0, pend: 0, sddBajo: 0, spotBajo: 0 });
       // rutas enteras: día normal redondeado, día malo redondeado hacia arriba
       const p50 = Math.round(Number(r.p50) || 0);
+      // piso del rango (día flojo). Estimaciones antiguas sin p10: se usa lo recibido
+      const p10 = r.p10 == null ? Math.min(r.recibidas || 0, p50) : Math.min(Math.round(Number(r.p10) || 0), p50);
       const p90 = Math.max(Math.ceil((Number(r.p90) || 0) - 1e-9), p50);
       if (r.flota === "fija") {
-        c.sdd = p50; c.sddMalo = p90; c.sddRec = r.recibidas || 0;
+        c.sdd = p50; c.sddMalo = p90; c.sddBajo = p10; c.sddRec = r.recibidas || 0;
       } else {
-        c.spot = p50; c.spotMalo = p90; c.spotRec = r.recibidas || 0;
+        c.spot = p50; c.spotMalo = p90; c.spotBajo = p10; c.spotRec = r.recibidas || 0;
       }
     }
     // Comprometido (aceptado), rechazado y por responder, de los pedidos reales
@@ -187,6 +236,7 @@ export default function CapacidadMX() {
       for (const [fecha, c] of Object.entries(porDia)) {
         c.total = c.sdd + c.spot;
         c.malo = Math.max(c.sddMalo + c.spotMalo, c.total);
+        c.bajo = Math.min(c.sddBajo + c.spotBajo, c.total);
         c.acep = c.sddAcep + c.spotAcep;
         // Capacidad del día: la flota declarada por el supervisor si existe; si no, la histórica
         const k = `${site}|${fecha}`;
@@ -233,6 +283,8 @@ export default function CapacidadMX() {
   // Qué número muestra cada celda según el filtro
   const valorCelda = (c) => (filtro === "sdd" ? c.sdd : filtro === "spot" ? c.spot : c.total);
   const maloCelda = (c) => (filtro === "sdd" ? c.sddMalo : filtro === "spot" ? c.spotMalo : c.malo);
+  const bajoCelda = (c) => (filtro === "sdd" ? c.sddBajo : filtro === "spot" ? c.spotBajo : c.bajo);
+  const rangoTxt = (bajo, alto) => (bajo >= alto ? `exacto: ${capFmt(alto)}` : `entre ${capFmt(bajo)} y ${capFmt(alto)}`);
   const confCelda = (c) => (filtro === "sdd" ? "alta" : c.conf);
   const aceptCelda = (c) => (filtro === "sdd" ? c.sddAcep : filtro === "spot" ? c.spotAcep : c.acep);
   const textoFiltro = {
@@ -326,8 +378,8 @@ export default function CapacidadMX() {
           <div style={card}>
             <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>Planificación: hoy y los próximos 9 días</div>
             <div style={{ fontSize: 12, color: CAP_MUTED, marginBottom: 12, lineHeight: 1.5 }}>
-              Cada celda muestra a la izquierda las rutas que MELI ofrece (o se espera que ofrezca en un día normal) y a la derecha las que ya aceptamos, que son las que hay que cubrir sí o sí. Debajo, cuántas son SDD y cuántas Spot, cuántas faltan por responder y hasta cuántas podría pedir MELI en un día exigente.
-              La capacidad es lo que el site ejecutó en un día bueno durante las últimas 4 semanas. Toca un día para ver su detalle abajo.
+              Cada celda muestra a la izquierda las rutas que MELI ofrece (o se espera que ofrezca en un día normal) y a la derecha las que ya aceptamos, que son las que hay que cubrir sí o sí. Debajo, cuántas son SDD y cuántas Spot, cuántas faltan por responder y el rango esperado: en 8 de cada 10 días como ese, MELI pide algo dentro de ese rango. Toca una celda para ver de dónde vinieron sus rutas.
+              La capacidad es la flota que declaró el supervisor en la Bitácora o, si no declaró, lo que el site ejecutó en un día bueno durante las últimas 4 semanas (histórica). Toca el nombre de un día para ver su detalle abajo.
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 10, marginBottom: 14 }}>
               {CAP_LEYENDA.map((l) => (
@@ -374,8 +426,12 @@ export default function CapacidadMX() {
                       const ev = capEstadoVista(c, filtro);
                       const e = CAP_ESTADOS[ev];
                       return (
-                        <div key={f} title={`${site} ${f}: ${e.txt}. Confianza ${CAP_CONF[confCelda(c)].txt.toLowerCase()}: ${CAP_CONF[confCelda(c)].texto}`}
-                          style={{ background: e.bg, borderRadius: 8, padding: "7px 8px", textAlign: "center", outline: ev === "r" ? `2px solid ${e.fg}` : "none", outlineOffset: -2 }}>
+                        <div key={f} role="button" tabIndex={0}
+                          onClick={() => { setSel({ site, fecha: f }); setDiaDet(f); }}
+                          onKeyDown={(k) => { if (k.key === "Enter" || k.key === " ") { k.preventDefault(); setSel({ site, fecha: f }); setDiaDet(f); } }}
+                          title={`${site} ${f}: ${e.txt}. Confianza ${CAP_CONF[confCelda(c)].txt.toLowerCase()}: ${CAP_CONF[confCelda(c)].texto}. Toca para ver de dónde vinieron las rutas.`}
+                          style={{ background: e.bg, borderRadius: 8, padding: "7px 8px", textAlign: "center", cursor: "pointer",
+                            outline: sel?.site === site && sel?.fecha === f ? `3px solid ${CAP_NAVY}` : ev === "r" ? `2px solid ${e.fg}` : "none", outlineOffset: -2 }}>
                           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4, marginBottom: 3 }}>
                             <div>
                               <div style={{ fontSize: 9, color: e.sub, textTransform: "uppercase", letterSpacing: ".04em" }}>Ofrecidas</div>
@@ -390,7 +446,7 @@ export default function CapacidadMX() {
                           </div>
                           <div style={{ fontSize: 10, color: e.sub }}>SDD {capFmt(c.sdd)} · Spot {capFmt(c.spot)}</div>
                           {c.pend > 0 && <div style={{ fontSize: 10, color: "#7a4f00", fontWeight: 700 }}>{c.pend} por responder</div>}
-                          <div style={{ fontSize: 10, color: e.sub }}>hasta {capFmt(maloCelda(c))} · confianza <b>{CAP_CONF[confCelda(c)].txt.toLowerCase()}</b></div>
+                          <div style={{ fontSize: 10, color: e.sub }}>{rangoTxt(bajoCelda(c), maloCelda(c))} · confianza <b>{CAP_CONF[confCelda(c)].txt.toLowerCase()}</b></div>
                           {c.capDecl && <div style={{ fontSize: 10, color: e.sub }}>flota declarada <b>{capFmt(c.cap)}</b></div>}
                         </div>
                       );
@@ -400,6 +456,71 @@ export default function CapacidadMX() {
               </div>
             </div>
           </div>
+
+
+          {sel && (
+            <div ref={panelRef} style={{ ...card, border: `2px solid ${CAP_NAVY}` }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap", marginBottom: 6 }}>
+                <div>
+                  <div style={{ fontSize: 16, fontWeight: 700 }}>
+                    De dónde vinieron las rutas: {sel.site}, {etiquetaDia(sel.fecha, dias.indexOf(sel.fecha)).toLowerCase()} {sel.fecha.slice(8, 10)}/{sel.fecha.slice(5, 7)}
+                  </div>
+                  <div style={{ fontSize: 12, color: CAP_MUTED, marginTop: 2 }}>
+                    Cada oferta de MELI según cuántos días antes llegó, y qué pasó con ella. Lo que llega con días de anticipación se puede planificar; lo del día anterior y del mismo día necesita unidades de reserva.
+                  </div>
+                </div>
+                <button onClick={() => setSel(null)}
+                  style={{ border: `1px solid ${CAP_BORDER}`, background: "#fff", borderRadius: 999, padding: "6px 14px", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
+                  Cerrar
+                </button>
+              </div>
+              {origen?.cargando && <div style={{ fontSize: 13, color: CAP_MUTED }}>Cargando…</div>}
+              {origen?.error && <div style={{ fontSize: 13, color: "#b42318" }}>No se pudo leer: {origen.error}</div>}
+              {origen?.filas && (origen.tot.of === 0 ? (
+                <div style={{ fontSize: 13, color: CAP_MUTED }}>Todavía no llega ninguna oferta de MELI para ese día. Lo que muestra la grilla es la estimación.</div>
+              ) : (
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 860 }}>
+                    <thead>
+                      <tr style={{ color: CAP_MUTED, fontSize: 12, textAlign: "left" }}>
+                        <th style={th}>Llegó</th>
+                        <th style={thNum}>Ofrecidas</th>
+                        <th style={thNum}>SDD</th>
+                        <th style={thNum}>Spot</th>
+                        <th style={thNum}>Aceptadas</th>
+                        <th style={thNum}>% aceptado</th>
+                        <th style={thNum}>Rechazadas</th>
+                        <th style={thNum}>Vencidas</th>
+                        <th style={thNum}>Por responder</th>
+                        <th style={thNum}>Canceladas por MELI</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {[...origen.filas, origen.tot].map((f) => {
+                        const base = f.of - f.canc;
+                        const pct = base > 0 ? Math.round((100 * f.acep) / base) : null;
+                        const esTot = f.txt === "Total";
+                        return (
+                          <tr key={f.txt} style={{ borderBottom: "1px solid #f0f1f3", fontWeight: esTot ? 700 : 400, background: esTot ? "#f6f8fb" : "transparent" }}>
+                            <td style={{ padding: 8 }}>{f.txt}</td>
+                            <td style={tdNum}>{f.of || "—"}</td>
+                            <td style={{ ...tdNum, color: CAP_MUTED }}>{f.sdd || "—"}</td>
+                            <td style={{ ...tdNum, color: CAP_MUTED }}>{f.spot || "—"}</td>
+                            <td style={{ ...tdNum, fontWeight: 700 }}>{f.acep || "—"}</td>
+                            <td style={{ ...tdNum, color: pct == null ? CAP_MUTED : pct < 70 ? "#b42318" : pct < 90 ? "#7a4f00" : "#15803d", fontWeight: 700 }}>{pct == null ? "—" : `${pct}%`}</td>
+                            <td style={{ ...tdNum, color: f.rech ? "#b42318" : CAP_MUTED }}>{f.rech || "—"}</td>
+                            <td style={{ ...tdNum, color: f.venc ? "#b42318" : CAP_MUTED }}>{f.venc || "—"}</td>
+                            <td style={{ ...tdNum, color: f.pend ? "#7a4f00" : CAP_MUTED, fontWeight: f.pend ? 700 : 400 }}>{f.pend || "—"}</td>
+                            <td style={{ ...tdNum, color: CAP_MUTED }}>{f.canc || "—"}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              ))}
+            </div>
+          )}
 
           <div style={card}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 10 }}>
@@ -433,7 +554,7 @@ export default function CapacidadMX() {
                       <th style={thNum}>SDD</th>
                       <th style={thNum}>Spot recibido</th>
                       <th style={thNum}>Spot por llegar</th>
-                      <th style={thNum}>Ofrecidas / hasta</th>
+                      <th style={thNum}>Ofrecidas (rango)</th>
                       <th style={thNum}>Aceptadas</th>
                       <th style={thNum}>Rechazadas</th>
                       <th style={thNum}>Por responder</th>
@@ -455,7 +576,7 @@ export default function CapacidadMX() {
                         </td>
                         <td style={tdNum}>{c.spotRec}</td>
                         <td style={{ ...tdNum, color: CAP_MUTED }}>{capFmt(Math.max(0, c.spot - c.spotRec))}</td>
-                        <td style={tdNum}>{capFmt(c.total)} / {capFmt(c.malo)}</td>
+                        <td style={tdNum}>{capFmt(c.total)} <span style={{ color: CAP_MUTED, fontSize: 11 }}>({c.bajo >= c.malo ? "exacto" : `${capFmt(c.bajo)}–${capFmt(c.malo)}`})</span></td>
                         <td style={{ ...tdNum, fontWeight: 700, color: c.acep > techo ? "#b42318" : "#1a1a1a" }}>{capFmt(c.acep)}</td>
                         <td style={{ ...tdNum, color: c.rech > 0 ? "#b42318" : CAP_MUTED }}>{capFmt(c.rech)}</td>
                         <td style={{ ...tdNum, color: c.pend > 0 ? "#7a4f00" : CAP_MUTED, fontWeight: c.pend > 0 ? 700 : 400 }}>{capFmt(c.pend)}</td>
