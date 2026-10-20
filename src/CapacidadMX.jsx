@@ -234,6 +234,7 @@ export default function CapacidadMX() {
   const valorCelda = (c) => (filtro === "sdd" ? c.sdd : filtro === "spot" ? c.spot : c.total);
   const maloCelda = (c) => (filtro === "sdd" ? c.sddMalo : filtro === "spot" ? c.spotMalo : c.malo);
   const confCelda = (c) => (filtro === "sdd" ? "alta" : c.conf);
+  const aceptCelda = (c) => (filtro === "sdd" ? c.sddAcep : filtro === "spot" ? c.spotAcep : c.acep);
   const textoFiltro = {
     sdd: "Mostrando solo la SDD de cada site",
     spot: "Mostrando solo el Spot de cada site",
@@ -325,7 +326,7 @@ export default function CapacidadMX() {
           <div style={card}>
             <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>Planificación: hoy y los próximos 9 días</div>
             <div style={{ fontSize: 12, color: CAP_MUTED, marginBottom: 12, lineHeight: 1.5 }}>
-              Cada celda muestra las rutas esperadas en un día normal (número grande), cuántas son SDD y cuántas Spot, y hasta cuántas podría pedir MELI en un día exigente.
+              Cada celda muestra a la izquierda las rutas que MELI ofrece (o se espera que ofrezca en un día normal) y a la derecha las que ya aceptamos, que son las que hay que cubrir sí o sí. Debajo, cuántas son SDD y cuántas Spot, cuántas faltan por responder y hasta cuántas podría pedir MELI en un día exigente.
               La capacidad es lo que el site ejecutó en un día bueno durante las últimas 4 semanas. Toca un día para ver su detalle abajo.
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 10, marginBottom: 14 }}>
@@ -375,9 +376,20 @@ export default function CapacidadMX() {
                       return (
                         <div key={f} title={`${site} ${f}: ${e.txt}. Confianza ${CAP_CONF[confCelda(c)].txt.toLowerCase()}: ${CAP_CONF[confCelda(c)].texto}`}
                           style={{ background: e.bg, borderRadius: 8, padding: "7px 8px", textAlign: "center", outline: ev === "r" ? `2px solid ${e.fg}` : "none", outlineOffset: -2 }}>
-                          <div style={{ fontSize: 18, fontWeight: 700, color: e.fg, fontVariantNumeric: "tabular-nums" }}>{capFmt(valorCelda(c))}</div>
+                          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4, marginBottom: 3 }}>
+                            <div>
+                              <div style={{ fontSize: 9, color: e.sub, textTransform: "uppercase", letterSpacing: ".04em" }}>Ofrecidas</div>
+                              <div style={{ fontSize: 18, fontWeight: 700, color: e.fg, fontVariantNumeric: "tabular-nums", lineHeight: 1.1 }}>{capFmt(valorCelda(c))}</div>
+                            </div>
+                            <div style={{ borderLeft: `1px solid ${e.sub}33` }}>
+                              <div style={{ fontSize: 9, color: e.sub, textTransform: "uppercase", letterSpacing: ".04em" }}>Aceptadas</div>
+                              <div style={{ fontSize: 18, fontWeight: 700, color: aceptCelda(c) > c.cap ? "#b42318" : "#1a1a1a", fontVariantNumeric: "tabular-nums", lineHeight: 1.1 }}>
+                                {aceptCelda(c) > 0 ? capFmt(aceptCelda(c)) : "—"}
+                              </div>
+                            </div>
+                          </div>
                           <div style={{ fontSize: 10, color: e.sub }}>SDD {capFmt(c.sdd)} · Spot {capFmt(c.spot)}</div>
-                          {c.acep > 0 && <div style={{ fontSize: 10, color: e.sub }}>aceptadas <b>{capFmt(c.acep)}</b>{c.pend > 0 ? ` · ${c.pend} por responder` : ""}</div>}
+                          {c.pend > 0 && <div style={{ fontSize: 10, color: "#7a4f00", fontWeight: 700 }}>{c.pend} por responder</div>}
                           <div style={{ fontSize: 10, color: e.sub }}>hasta {capFmt(maloCelda(c))} · confianza <b>{CAP_CONF[confCelda(c)].txt.toLowerCase()}</b></div>
                           {c.capDecl && <div style={{ fontSize: 10, color: e.sub }}>flota declarada <b>{capFmt(c.cap)}</b></div>}
                         </div>
