@@ -379,7 +379,7 @@ export default function CapacidadMX() {
             <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>Planificación: hoy y los próximos 9 días</div>
             <div style={{ fontSize: 12, color: CAP_MUTED, marginBottom: 12, lineHeight: 1.5 }}>
               Cada celda muestra a la izquierda las rutas que MELI ofrece (o se espera que ofrezca en un día normal) y a la derecha las que ya aceptamos, que son las que hay que cubrir sí o sí. Debajo, cuántas son SDD y cuántas Spot, cuántas faltan por responder y en cuánto podría terminar el total del día: en 8 de cada 10 días como ese, el resultado queda dentro de ese rango. Toca una celda para ver de dónde vinieron sus rutas.
-              La capacidad es la flota que declaró el supervisor en la Bitácora o, si no declaró, lo que el site ejecutó en un día bueno durante las últimas 4 semanas (histórica). Toca el nombre de un día para ver su detalle abajo.
+              La capacidad es la flota definida por el supervisor en la Bitácora o, si no la definió, la histórica: lo que el site ejecutó en un día bueno (percentil 90) de los últimos 28 días. Toca el nombre de un día para ver su detalle abajo.
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 10, marginBottom: 14 }}>
               {CAP_LEYENDA.map((l) => (
@@ -412,7 +412,13 @@ export default function CapacidadMX() {
                   <div key={site} style={{ display: "contents" }}>
                     <div style={{ padding: "8px 4px", display: "flex", flexDirection: "column", justifyContent: "center" }}>
                       <div style={{ fontSize: 14, fontWeight: 700 }}>{site}</div>
-                      <div style={{ fontSize: 11, color: CAP_MUTED }}>capacidad histórica {capFmt(techos[site] ?? 0)}</div>
+                      <div style={{ fontSize: 11, color: CAP_MUTED }} title="Rutas ejecutadas en un día bueno (percentil 90) de los últimos 28 días">Histórica {capFmt(techos[site] ?? 0)}</div>
+                      {(() => {
+                        const defs = dias.map((f) => celdas[site]?.[f]).filter((x) => x?.capDecl).map((x) => x.cap);
+                        if (!defs.length) return <div style={{ fontSize: 11, color: CAP_MUTED }}>Definida: sin declarar</div>;
+                        const mn = Math.min(...defs), mx = Math.max(...defs);
+                        return <div style={{ fontSize: 11, color: CAP_NAVY, fontWeight: 600 }} title="Flota declarada por el supervisor en la Bitácora">Definida {mn === mx ? mn : `${mn} a ${mx}`}</div>;
+                      })()}
                     </div>
                     {dias.map((f) => {
                       const c = celdas[site]?.[f];
@@ -446,8 +452,15 @@ export default function CapacidadMX() {
                           </div>
                           <div style={{ fontSize: 10, color: e.sub }}>SDD {capFmt(c.sdd)} · Spot {capFmt(c.spot)}</div>
                           {c.pend > 0 && <div style={{ fontSize: 10, color: "#7a4f00", fontWeight: 700 }}>{c.pend} por responder</div>}
-                          <div style={{ fontSize: 10, color: e.sub, marginTop: 2 }}>{rangoTxt(bajoCelda(c), maloCelda(c))}</div>
-                          {c.capDecl && <div style={{ fontSize: 10, color: e.sub }}>Flota declarada: <b>{capFmt(c.cap)}</b></div>}
+                          <div style={{ marginTop: 4, paddingTop: 4, borderTop: `1px solid ${e.sub}22` }}>
+                            <div style={{ fontSize: 9, color: e.sub, textTransform: "uppercase", letterSpacing: ".04em" }}>
+                              {bajoCelda(c) >= maloCelda(c) ? "Total conocido" : "Rango probable"}
+                            </div>
+                            <div style={{ fontSize: 12, fontWeight: 700, color: e.fg, whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }}>
+                              {bajoCelda(c) >= maloCelda(c) ? capFmt(maloCelda(c)) : `${capFmt(bajoCelda(c))} – ${capFmt(maloCelda(c))}`}
+                            </div>
+                          </div>
+                          {c.capDecl && <div style={{ fontSize: 10, color: e.sub, marginTop: 2 }}>Flota definida: <b>{capFmt(c.cap)}</b></div>}
                           <div style={{ marginTop: 5 }}>
                             <span style={{ display: "inline-block", fontSize: 9, fontWeight: 700, letterSpacing: ".03em", padding: "2px 7px", borderRadius: 999,
                               background: "#ffffffb3", color: CAP_CONF[confCelda(c)].fg, border: `1px solid ${CAP_CONF[confCelda(c)].fg}55` }}>
@@ -586,8 +599,8 @@ export default function CapacidadMX() {
                         <td style={{ ...tdNum, fontWeight: 700, color: c.acep > techo ? "#b42318" : "#1a1a1a" }}>{capFmt(c.acep)}</td>
                         <td style={{ ...tdNum, color: c.rech > 0 ? "#b42318" : CAP_MUTED }}>{capFmt(c.rech)}</td>
                         <td style={{ ...tdNum, color: c.pend > 0 ? "#7a4f00" : CAP_MUTED, fontWeight: c.pend > 0 ? 700 : 400 }}>{capFmt(c.pend)}</td>
-                        <td style={tdNum} title={c.capDecl ? "Flota declarada por el supervisor en la Bitácora" : "Capacidad histórica: rutas ejecutadas en un día bueno de las últimas 4 semanas"}>
-                          {capFmt(techo)} <span style={{ color: CAP_MUTED, fontSize: 11 }}>{c.capDecl ? "(declarada)" : "(histórica)"}</span>
+                        <td style={tdNum} title={c.capDecl ? "Flota definida por el supervisor en la Bitácora" : "Capacidad histórica: rutas ejecutadas en un día bueno (percentil 90) de los últimos 28 días"}>
+                          {capFmt(techo)} <span style={{ color: CAP_MUTED, fontSize: 11 }}>{c.capDecl ? "(definida)" : "(histórica)"}</span>
                         </td>
                         <td style={{ ...tdNum, fontWeight: brecha > 0.05 ? 700 : 400, color: brecha > 0.05 ? "#b42318" : "#15803d" }}>{capFmtSigno(brecha)}</td>
                         <td style={{ padding: 8, fontWeight: 700, color: CAP_CONF[c.conf].fg }} title={CAP_CONF[c.conf].texto}>{CAP_CONF[c.conf].txt}</td>
@@ -599,7 +612,7 @@ export default function CapacidadMX() {
               </div>
             )}
             <div style={{ fontSize: 12, color: CAP_MUTED, marginTop: 8, lineHeight: 1.5 }}>
-              Ofrecidas: todo lo que MELI pidió o se espera que pida. Aceptadas: lo que ya comprometimos y hay que cubrir sí o sí. Capacidad: la flota que declaró el supervisor en la Bitácora o, si no declaró, la histórica.
+              Ofrecidas: todo lo que MELI pidió o se espera que pida. Aceptadas: lo que ya comprometimos y hay que cubrir sí o sí. Capacidad: la flota definida por el supervisor en la Bitácora o, si no la definió, la histórica.
               Brecha: ofrecidas menos capacidad. El Spot que excede es una oportunidad; la SDD o lo aceptado que excede es multa o no show seguro si no se cubre.
             </div>
           </div>
