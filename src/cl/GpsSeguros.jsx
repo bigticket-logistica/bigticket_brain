@@ -1067,8 +1067,37 @@ function FlotaGps() {
         const base = verCerradas ? (cerradas || []) : alertas;
         const q = busca.trim().toUpperCase();
         const lista = base.filter(a => (!fTipoAlerta || a.tipo === fTipoAlerta) && (!q || a.patente.includes(q)));
+        const hoy = hoyChile();
+        const diasDesde = (fecha) => fecha ? Math.round((new Date(hoy + "T12:00:00Z") - new Date(String(fecha).slice(0, 10) + "T12:00:00Z")) / 86400000) : null;
+        // Datos de HOY (del semáforo); si el vehículo ya no está en el padrón, se usa lo guardado al abrir la alerta.
+        const situacion = (a) => {
+          const f = enFlota[a.patente], d = a.detalle || {};
+          if (!f) return { texto: textoAlerta(a) + " (dato del día en que se abrió)", vivo: false };
+          const du = diasUso(f);
+          switch (a.tipo) {
+            case "SIN_RUTA":     return { texto: du === null ? "Sin ninguna señal de uso" : `Lleva ${fmt(du)} días sin ruta MELI y sin movimiento de GPS`, vivo: true };
+            case "CORTAR_GPS":   return { texto: `GPS activo en Geotab (se paga) y ${du === null ? "sin señal de uso" : `${fmt(du)} días sin uso`}`, vivo: true };
+            case "SACAR_SEGURO": return { texto: `Seguro de carga vigente (se paga) y ${du === null ? "sin señal de uso" : `${fmt(du)} días sin uso`}`, vivo: true };
+            case "GPS_MUDO":     return { texto: `Hizo ${fmt(f.viajes_30d)} viajes en 30 días, pero el GPS no transmite hace ${fmt(f.gps_dias_sin_reportar)} días`, vivo: true };
+            case "APOYO_EXCESO": return { texto: `${fmt(f.viajes_mes)} viajes este mes (desde ${u.viajes_mes_apoyo ?? 9} debe estar certificado y cubierto)`, vivo: true };
+            case "COBERTURA_CRITICA": {
+              const falta = [f.falta_gps ? "GPS activo" : null, f.falta_seguro ? "seguro de carga" : null].filter(Boolean).join(" y ");
+              return { texto: `Hizo ${fmt(f.viajes_30d)} viajes en 30 días y le falta ${falta || "—"}`, vivo: true };
+            }
+            default: return { texto: textoAlerta(a), vivo: false };
+          }
+        };
+        const ultimaRuta = (f) => f?.ultimo_viaje ? `${fch(f.ultimo_viaje)} (hace ${fmt(diasDesde(f.ultimo_viaje))} d)` : "sin rutas MELI registradas";
+        const ultimoGps = (f) => !f ? "—" : !f.gps_base ? "sin GPS" : !f.gps_activo ? "GPS dado de baja"
+          : f.gps_ultima_comunicacion ? `${fchHora(f.gps_ultima_comunicacion).slice(0, 8)} (hace ${fmt(f.gps_dias_sin_reportar ?? diasDesde(f.gps_ultima_comunicacion))} d)` : "sin registro";
         return (
           <Fragment>
+            <div style={{ background: "#fff", border: "1px solid #e6e9ef", borderRadius: 10, padding: "9px 14px", marginBottom: 10, fontSize: 12, color: "#334155", lineHeight: 1.6 }}>
+              <strong>Cómo leer esta tabla:</strong> <strong>Situación hoy</strong> se calcula con los datos de hoy.
+              {" "}<strong>Última ruta MELI</strong> y <strong>Último movimiento GPS</strong> dicen desde cuándo no hay señal de trabajo.
+              {" "}<strong>Detectada el</strong> es el día en que el Brain abrió la alerta (las alertas empezaron el 18-10-2026, por eso las más antiguas dicen esa fecha aunque el vehículo lleve meses detenido).
+              {" "}Se abren y se cierran solas cada día a las 07:00.
+            </div>
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 10 }}>
               <input className="mj-input" style={{ minWidth: 180 }} value={busca} onChange={e => setBusca(e.target.value)} placeholder="Buscar patente…" />
               {Object.entries(TIPOS_ALERTA).map(([k, v]) => {
@@ -1077,29 +1106,46 @@ function FlotaGps() {
               })}
               <div style={{ flex: 1 }} />
               <button className={`mj-chip ${verCerradas ? "on" : ""}`} onClick={() => setVerCerradas(v => !v)}>{verCerradas ? "✓ " : ""}Ver cerradas</button>
-              <button className="mj-btn" onClick={() => descargarExcel(`alertas_${fTipoAlerta ? fTipoAlerta.toLowerCase() + "_" : ""}${verCerradas ? "cerradas_" : ""}${hoyChile()}`, lista, [
+              <button className="mj-btn" onClick={() => descargarExcel(`alertas_${fTipoAlerta ? fTipoAlerta.toLowerCase() + "_" : ""}${verCerradas ? "cerradas_" : ""}${hoy}`, lista, [
                 { titulo: "Tipo", valor: a => TIPOS_ALERTA[a.tipo]?.rotulo || a.tipo }, { titulo: "Patente", campo: "patente" },
-                { titulo: "Detalle", valor: a => textoAlerta(a) }, { titulo: "Abierta", campo: "abierta_el" }, { titulo: "Cerrada", campo: "cerrada_el" },
-                { titulo: "Estado", campo: "estado" }, { titulo: "Revisada por", campo: "revisada_por" }, { titulo: "Nota", campo: "nota" },
+                { titulo: "Tipo de vehículo", valor: a => enFlota[a.patente]?.tipo || a.detalle?.tipo || "" },
+                { titulo: "Estado en el Maestro", valor: a => enFlota[a.patente]?.estado || a.detalle?.estado || "" },
+                { titulo: "Operación", valor: a => enFlota[a.patente]?.operacion || a.detalle?.operacion || "" },
+                { titulo: "Situación hoy", valor: a => situacion(a).texto },
+                { titulo: "Última ruta MELI", valor: a => ultimaRuta(enFlota[a.patente]) }, { titulo: "Último movimiento GPS", valor: a => ultimoGps(enFlota[a.patente]) },
+                { titulo: "Días sin uso hoy", valor: a => enFlota[a.patente] ? (diasUso(enFlota[a.patente]) ?? "sin señal") : "" },
+                { titulo: "Detectada el", campo: "abierta_el" }, { titulo: "Cerrada el", campo: "cerrada_el" },
+                { titulo: "Revisada por", campo: "revisada_por" }, { titulo: "Nota", campo: "nota" },
               ], "Alertas")}>Descargar Excel</button>
             </div>
             <div className="mj-scroll">
               <table className="mj-tabla">
-                <thead><tr><th>Tipo</th><th>Patente</th><th>Detalle</th><th>Abierta</th>{verCerradas && <th>Cerrada</th>}<th>Revisión</th><th></th></tr></thead>
+                <thead><tr>
+                  <th>Alerta</th><th>Patente</th><th>Vehículo</th><th>Situación hoy</th>
+                  <th>Última ruta MELI</th><th>Último movimiento GPS</th>
+                  <th title="Día en que el Brain abrió la alerta">Detectada el</th>{verCerradas && <th>Cerrada el</th>}
+                  <th>Revisión</th><th></th>
+                </tr></thead>
                 <tbody>
                   {lista.map(a => {
                     const t = TIPOS_ALERTA[a.tipo] || { rotulo: a.tipo, color: GRIS_, fondo: "#f1f5f9" };
-                    const d = a.detalle || {};
+                    const f = enFlota[a.patente];
+                    const sit = situacion(a);
                     return (
                       <tr key={a.id}>
                         <td><Etiqueta texto={t.rotulo} color={t.color} fondo={t.fondo} /></td>
-                        <td style={{ fontWeight: 700 }}>{a.patente}</td>
-                        <td style={{ color: "#64748b", whiteSpace: "normal", maxWidth: 420 }}>
-                          {textoAlerta(a)}
+                        <td style={{ fontWeight: 800, color: NAVY }}>{a.patente}</td>
+                        <td style={{ whiteSpace: "normal", maxWidth: 200 }}>
+                          {f ? <Fragment>{f.tipo || "—"} · <span style={{ color: f.estado === "ACTIVA" ? GRIS_ : ROJO_ }}>{f.estado || "fuera del Maestro"}</span>
+                                 <div style={{ fontSize: 11, color: GRIS_ }}>{f.operacion || "—"}</div></Fragment>
+                             : <span style={{ color: GRIS_ }}>{a.detalle?.operacion || "—"}</span>}
                         </td>
+                        <td style={{ whiteSpace: "normal", maxWidth: 360, fontWeight: sit.vivo ? 600 : 400, color: sit.vivo ? "#1f2937" : GRIS_ }}>{sit.texto}</td>
+                        <td>{ultimaRuta(f)}</td>
+                        <td>{ultimoGps(f)}</td>
                         <td>{fch(a.abierta_el)}</td>
                         {verCerradas && <td>{fch(a.cerrada_el)}</td>}
-                        <td style={{ whiteSpace: "normal", maxWidth: 260 }}>
+                        <td style={{ whiteSpace: "normal", maxWidth: 240 }}>
                           {a.revisada_por ? <span style={{ fontSize: 11.5 }}><strong>{a.revisada_por}</strong>{a.nota ? ` · ${a.nota}` : ""}</span> : <span style={{ color: "#a8b2c1" }}>sin revisar</span>}
                         </td>
                         <td style={{ whiteSpace: "nowrap" }}>
@@ -1114,11 +1160,10 @@ function FlotaGps() {
                       </tr>
                     );
                   })}
-                  {lista.length === 0 && <tr><td colSpan={7} style={{ textAlign: "center", color: "#94a3b8", padding: 18 }}>{verCerradas && cerradas === null ? "Cargando…" : "No hay alertas con esos filtros."}</td></tr>}
+                  {lista.length === 0 && <tr><td colSpan={10} style={{ textAlign: "center", color: "#94a3b8", padding: 18 }}>{verCerradas && cerradas === null ? "Cargando…" : "No hay alertas con esos filtros."}</td></tr>}
                 </tbody>
               </table>
             </div>
-            <div style={{ fontSize: 11, color: GRIS_, marginTop: 8 }}>Las alertas se abren una vez por patente y tipo, y se cierran solas cuando la condición desaparece. Se recalculan todos los días a las 07:00.</div>
           </Fragment>
         );
       })()}
