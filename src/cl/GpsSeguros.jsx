@@ -359,8 +359,22 @@ async function leerMaestro(archivo) {
   };
 }
 
+// ── PDF de una póliza guardado en Storage (bucket privado bci-polizas): enlace firmado por 1 hora ──
+async function abrirPdf(ruta) {
+  const ventana = window.open("", "_blank");   // se abre antes para que el navegador no la bloquee
+  try {
+    const r = await fetch(`${CL_URL}/storage/v1/object/sign/bci-polizas/${encodeURIComponent(ruta)}`, {
+      method: "POST", headers: { apikey: CL_KEY, Authorization: `Bearer ${CL_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ expiresIn: 3600 }),
+    });
+    const j = await r.json();
+    if (!r.ok || !j.signedURL) throw new Error(j.message || `HTTP ${r.status}`);
+    ventana.location.href = `${CL_URL}/storage/v1${j.signedURL}`;
+  } catch (e) { ventana.close(); alert("No se pudo abrir el PDF: " + e.message); }
+}
+
 // ── Ficha de una póliza BCI (datos extraídos del portal de BCI Seguros) ──────
-function FichaPoliza({ poliza, extraccion, enFlota, onClose }) {
+function FichaPoliza({ poliza, extraccion, enFlota, pdf, onClose }) {
   const [p, setP] = useState(null); const [items, setItems] = useState([]); const [err, setErr] = useState("");
   useEffect(() => {
     (async () => {
@@ -395,8 +409,9 @@ function FichaPoliza({ poliza, extraccion, enFlota, onClose }) {
               <div><div style={{ color: GRIS_, fontSize: 11 }}>Monto asegurado</div><strong>{fmt(p.monto_asegurado)} {p.moneda}</strong></div>
               <div><div style={{ color: GRIS_, fontSize: 11 }}>Corredor</div><strong>{p.corredor || "—"}</strong>{p.comision != null ? ` · ${p.comision}%` : ""}</div>
               <div><div style={{ color: GRIS_, fontSize: 11 }}>Documento</div>
-                {p.pdf_url ? <a href={p.pdf_url} target="_blank" rel="noreferrer">Abrir PDF de BCI</a>
-                           : <a href="https://portalclientes.bciseguros.cl/login" target="_blank" rel="noreferrer">Ver en el portal BCI</a>}</div>
+                {pdf ? <button className="mj-btn" style={{ padding: "3px 10px", fontSize: 11 }} onClick={() => abrirPdf(pdf.ruta)}>Ver PDF de la póliza</button>
+                     : <a href="https://portalclientes.bciseguros.cl/login" target="_blank" rel="noreferrer">PDF no disponible · ver en el portal BCI</a>}
+                {pdf && <div style={{ fontSize: 10.5, color: GRIS_, marginTop: 2 }}>guardado el {fchHora(pdf.subido_at)}</div>}</div>
             </div>
             <div style={caja}>
               <div style={{ fontSize: 13, fontWeight: 800, color: NAVY, marginBottom: 6 }}>Vehículos cubiertos</div>
@@ -499,6 +514,7 @@ function FlotaGps() {
   const [geotabFecha, setGeotabFecha] = useState(null);
   const [bciExt, setBciExt] = useState(null);         // última extracción exitosa del portal BCI
   const [bciPolizas, setBciPolizas] = useState([]);
+  const [bciPdfs, setBciPdfs] = useState({});          // poliza -> { ruta, bytes, subido_at }
   const [ficha, setFicha] = useState(null);           // póliza BCI abierta en la ficha
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState("");
@@ -551,6 +567,7 @@ function FlotaGps() {
     setGeotabFecha(geo[0]?.fecha || null);
     const ext = (await apiSuave("bci_extracciones?ok=eq.true&order=id.desc&limit=1", [], fallos))[0] || null;
     setBciExt(ext);
+    setBciPdfs(Object.fromEntries((await apiSuave("bci_pdfs?select=poliza,ruta,bytes,subido_at", [], fallos)).map(x => [x.poliza, x])));
     if (ext) setBciPolizas(await apiSuave(`bci_polizas?extraccion_id=eq.${ext.id}&select=poliza,ramo,convenio,vigencia_desde,vigencia_hasta,items,prima_neta,moneda&order=ramo,poliza`, [], fallos));
     if (fallos.length) setError("Algunas consultas no respondieron: " + fallos.join(" | "));
     setCargando(false);
@@ -1210,7 +1227,7 @@ function FlotaGps() {
         </Fragment>
       )}
 
-      {ficha && bciExt && <FichaPoliza poliza={ficha} extraccion={bciExt} enFlota={enFlota} onClose={() => setFicha(null)} />}
+      {ficha && bciExt && <FichaPoliza poliza={ficha} extraccion={bciExt} enFlota={enFlota} pdf={bciPdfs[ficha]} onClose={() => setFicha(null)} />}
 
       {/* ── Umbrales y Nómina ── */}
       {!cargando && vista === "config" && (
@@ -1223,13 +1240,15 @@ function FlotaGps() {
               {bciExt ? ` Última extracción: ${fchHora(bciExt.extraido_at)} (${bciExt.origen}, ${fmt(bciExt.polizas)} pólizas, ${fmt(bciExt.items)} vehículos).` : " Todavía no hay extracciones."}
             </div>
             <table className="mj-tabla">
-              <thead><tr><th>Póliza</th><th>Ramo</th><th>Convenio</th><th>Vigencia</th><th className="num">Ítems</th><th className="num">Prima neta</th><th></th></tr></thead>
+              <thead><tr><th>Póliza</th><th>Ramo</th><th>Convenio</th><th>Vigencia</th><th className="num">Ítems</th><th className="num">Prima neta</th><th></th><th></th></tr></thead>
               <tbody>
                 {bciPolizas.map(x => (
                   <tr key={x.poliza}>
                     <td style={{ fontWeight: 700 }}>{x.poliza}</td><td>{x.ramo}</td><td>{x.convenio || "—"}</td>
                     <td>{fch(x.vigencia_desde)} → {fch(x.vigencia_hasta)}</td><td className="num">{fmt(x.items)}</td><td className="num">{x.prima_neta} {x.moneda}</td>
                     <td><button className="mj-btn" style={{ padding: "3px 10px", fontSize: 11 }} onClick={() => setFicha(x.poliza)}>Ver ficha</button></td>
+                    <td>{bciPdfs[x.poliza] ? <button className="mj-btn" style={{ padding: "3px 10px", fontSize: 11 }} onClick={() => abrirPdf(bciPdfs[x.poliza].ruta)}>PDF</button>
+                                           : <span style={{ fontSize: 11, color: "#a8b2c1" }}>sin PDF</span>}</td>
                   </tr>
                 ))}
               </tbody>
