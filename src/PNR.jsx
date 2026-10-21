@@ -1,276 +1,462 @@
-import { useState, useEffect } from "react";
-import { sb } from "./shared";
+// ═══════════════════════════════════════════════════════════════════════════
+// PNR · CHILE
+// Reclamos de "paquete no recibido" de MELI Chile. Los captura pnr-cl.cjs en
+// el VPS de Chile cada 5 minutos y los deja en bigticket-cl:
+//   pnr_casos_cl      una fila por caso (upsert por case_id)
+//   pnr_historial_cl  cada cambio de estado (trigger trg_pnr_historial_cl)
+//   pnr_avisos_cl     avisos por caso y canal: "correo" (casilla postventa)
+//                     y "brain" (la analista lo vio en esta pestaña)
+//
+// Mismo modelo de lectura que Posventa MX en The Eyes: las tarjetas responden
+// a una sola pregunta —quién tiene que mover— y los nombres de estado son los
+// de la planilla de la analista, sin reinterpretar.
+// ═══════════════════════════════════════════════════════════════════════════
+import { useState, useEffect, useMemo, useCallback, Fragment } from "react";
 
-// ─── MÓDULO PNR ─────────────────────────────────────────────────────
-// ─── MÓDULO PNR ─────────────────────────────────────────────────────
-function ModuloPNR() {
-  const [casos, setCasos] = useState([]);
-  const [estadoRuta, setEstadoRuta] = useState({});
-  const [supervisores, setSupervisores] = useState({});
-  const [loading, setLoading] = useState(true);
-  const [periodo, setPeriodo] = useState("");
-  const [periodos, setPeriodos] = useState([]);
-  const [filtroEstado, setFiltroEstado] = useState("todos");
-  const [filtroSC, setFiltroSC] = useState("todos");
-  const [busqueda, setBusqueda] = useState("");
-  const [tabPnr, setTabPnr] = useState("casos");
-  const [ahora, setAhora] = useState(Date.now());
+const CL_URL = "https://hmowsazntdjtsvdfgutn.supabase.co";
+const CL_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imhtb3dzYXpudGRqdHN2ZGZndXRuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQ5MTc4NzgsImV4cCI6MjEwMDQ5Mzg3OH0.xAJokU0eFhof--d8R4uCRBr2-CJLzC5re0w1IPRqQR8";
 
-  useEffect(() => { cargarPeriodos(); cargarEstadoRuta(); cargarSupervisores(); }, []);
-  useEffect(() => { if (periodo) cargarCasos(periodo); }, [periodo]);
-  // Cronómetro: refresca el "ahora" cada segundo para la cuenta regresiva en vivo
-  useEffect(() => { const t = setInterval(() => setAhora(Date.now()), 1000); return () => clearInterval(t); }, []);
+const NAVY = "#1a3a6b";
+const NAVY_T = "#eef2f8";
+const ORANGE = "#F47B20";
+const ORANGE_T = "#fdf1e6";
+const PENAL = "#b8651c";
+const PENAL_T = "#fdf3e8";
+const LADRILLO = "#9e3b1b";
+const LADRILLO_T = "#faece6";
+const VERDE = "#1f7a5c";
+const VERDE_T = "#e9f3ef";
+const GRIS = "#8a94a6";
 
-  const cargarPeriodos = async () => {
-    const { data } = await sb.from("pnr_casos").select("periodo").not("periodo", "is", null).order("periodo", { ascending: false });
-    const unicos = [...new Set((data || []).map(d => d.periodo))];
-    setPeriodos(unicos);
-    if (unicos.length) setPeriodo(unicos[0]);
-    else setLoading(false);
-  };
+const SLA_H = 48;               // plazo que se puso la torre (MELI da 72 h)
+const REFRESCO_MS = 60 * 1000;  // el VPS captura cada 5 min; acá se relee cada 1
 
-  const cargarCasos = async (p) => {
-    setLoading(true);
-    const { data } = await sb.from("pnr_casos").select("*").eq("periodo", p).order("fecha_caso", { ascending: false });
-    setCasos(data || []);
-    setLoading(false);
-  };
-
-  // Cruce con la vista de estado de ruta (en ruta hoy / finalizada + datos de la ruta)
-  const cargarEstadoRuta = async () => {
-    const { data } = await sb.from("vw_pnr_estado_ruta").select("*");
-    const mapa = {};
-    (data || []).forEach(r => { mapa[r.id_caso] = r; });
-    setEstadoRuta(mapa);
-  };
-
-  // Supervisor por SC (estacion_origen)
-  const cargarSupervisores = async () => {
-    const { data } = await sb.from("vw_pnr_supervisor").select("*");
-    const mapa = {};
-    (data || []).forEach(s => { mapa[s.estacion_origen] = s; });
-    setSupervisores(mapa);
-  };
-
-  const estadoColor = {
-    "Esperando comprobante":   { bg: "#fef3c7", color: "#92400e" },
-    "Comprobante cargado":     { bg: "#dbeafe", color: "#1e40af" },
-    "Pendiente de revision":   { bg: "#f3e8ff", color: "#6b21a8" },
-    "Sin comprobante cargado": { bg: "#fee2e2", color: "#c0392b" },
-    "Anulado":                 { bg: "#f1f5f9", color: "#475569" },
-    "Con penalidad":           { bg: "#fde68a", color: "#854d0e" },
-    "Enviado a facturacion":   { bg: "#d1fae5", color: "#065f46" },
-  };
-  const getEstilo = (e) => estadoColor[e] || { bg: "#f1f5f9", color: "#475569" };
-
-  // Estados considerados "abiertos" (reloj de 48h corre)
-  const ABIERTOS = ["Pendiente de revision", "Esperando comprobante", "Sin comprobante cargado"];
-  const esAbierto = (e) => ABIERTOS.includes(e);
-
-  // ¿El PNR está en una ruta de hoy? (lo trae la vista vw_pnr_estado_ruta)
-  const enRutaHoy = (c) => !!(estadoRuta[c.id_caso] && estadoRuta[c.id_caso].en_ruta_hoy);
-
-  // Cronómetro de 48h: devuelve {texto, bg, color, vencido}
-  const cronometro = (c) => {
-    if (!c.fecha_caso) return null;
-    const limite = new Date(c.fecha_caso).getTime() + 48 * 3600 * 1000;
-    let diff = limite - ahora;
-    if (diff <= 0) return { texto: "VENCIDO", bg: "#fee2e2", color: "#991b1b", vencido: true };
-    const h = Math.floor(diff / 3600000);
-    const m = Math.floor((diff % 3600000) / 60000);
-    const s = Math.floor((diff % 60000) / 1000);
-    const pad = (n) => String(n).padStart(2, "0");
-    const texto = `${pad(h)}:${pad(m)}:${pad(s)}`;
-    if (diff <= 2 * 3600000) return { texto, bg: "#fee2e2", color: "#991b1b" };
-    if (diff <= 6 * 3600000) return { texto, bg: "#fef3c7", color: "#92400e" };
-    return { texto, bg: "#f1f5f9", color: "#64748b" };
-  };
-
-  // Botón de notificación (preparado; el flujo n8n se conecta después)
-  const notificar = (c, canal) => {
-    const sup = supervisores[c.estacion_origen];
-    if (!sup) { alert("Este SC (" + (c.estacion_origen || "—") + ") no tiene supervisor asignado en supervisores_bt."); return; }
-    alert("Notificación por " + canal + " preparada para " + sup.supervisor_nombre + " (PNR " + c.id_caso + ").\n\nEl envío automático se activa con el flujo de notificaciones (pendiente).");
-  };
-
-  const casosFiltrados = casos.filter(c => {
-    const matchEstado = filtroEstado === "todos" || c.estado === filtroEstado;
-    const matchSC = filtroSC === "todos" || c.estacion_origen === filtroSC;
-    const matchBusqueda = !busqueda || c.id_caso?.includes(busqueda) || c.ruta?.toLowerCase().includes(busqueda.toLowerCase()) || c.id_conductor?.toLowerCase().includes(busqueda.toLowerCase()) || c.productos?.toLowerCase().includes(busqueda.toLowerCase());
-    return matchEstado && matchSC && matchBusqueda;
+async function api(path, opciones) {
+  const o = opciones || {};
+  const r = await fetch(`${CL_URL}/rest/v1/${path}`, {
+    method: o.method || "GET",
+    headers: Object.assign({
+      apikey: CL_KEY,
+      Authorization: `Bearer ${CL_KEY}`,
+      "Content-Type": "application/json",
+    }, o.headers || {}),
+    body: o.body,
   });
+  if (!r.ok) throw new Error(`La consulta falló (HTTP ${r.status}). ${(await r.text()).slice(0, 250)}`);
+  const texto = await r.text();
+  if (!texto || !texto.trim()) return true;
+  try { return JSON.parse(texto); } catch (e) { return true; }
+}
 
-  const casosHoy = casosFiltrados.filter(c => enRutaHoy(c));
-  const casosResto = casosFiltrados.filter(c => !enRutaHoy(c));
+// Los ocho estados de MELI con el nombre de la planilla de la analista.
+const ESTADOS_PNR = [
+  { clave: "WAITING_RECEIPT",  etiqueta: "Esperando comprobante",   corto: "Esperando compr.", motivo: "Pendiente de resolución", grupo: "responder" },
+  { clave: "TO_BILL",          etiqueta: "Con Penalidad",           corto: "Con penalidad",    motivo: "Pendiente de resolución, con probabilidad de pasar a cobro 50%", grupo: "penalidad" },
+  { clave: "UPLOADED_RECEIPT", etiqueta: "Comprobante Cargado",     corto: "Compr. cargado",   motivo: "Respuesta enviada a mandante", grupo: "meli" },
+  { clave: "ASSIGNED",         etiqueta: "Pendiente de revisión",   corto: "Pend. revisión",   motivo: "Pendiente de revisión por Mercado Libre", grupo: "meli" },
+  { clave: "ON_REVIEW",        etiqueta: "En Revisión",             corto: "En revisión",      motivo: "En revisión por Mercado Libre", grupo: "meli" },
+  { clave: "WITHOUT_RECEIPT",  etiqueta: "Sin Comprobante Cargado", corto: "Sin comprobante",  motivo: "Sin respuesta, sin respaldo", grupo: "sinrespaldo" },
+  { clave: "NOT_BILLED",       etiqueta: "Anulado",                 corto: "Anulado",          motivo: "Reclamo cerrado por cliente o por Mercado Libre", grupo: "cerrado" },
+  { clave: "BILLED",           etiqueta: "Enviado a Facturación",   corto: "A facturación",    motivo: "Pasa a cobro", grupo: "cerrado" },
+];
+const POR_ESTADO = Object.fromEntries(ESTADOS_PNR.map((e) => [e.clave, e]));
 
-  const estadosUnicos = [...new Set(casos.map(c => c.estado).filter(Boolean))];
-  const scUnicos = [...new Set(casos.map(c => c.estacion_origen).filter(Boolean))].sort();
-  const totalValor = casos.reduce((a, c) => a + (c.valor_compra || 0), 0);
-  const porEstado = estadosUnicos.map(e => ({ estado: e, cantidad: casos.filter(c => c.estado === e).length, valor: casos.filter(c => c.estado === e).reduce((a, c) => a + (c.valor_compra || 0), 0) }));
-  const enRutaHoyCount = casos.filter(c => enRutaHoy(c)).length;
+const COLOR_ESTADO = {
+  WAITING_RECEIPT: ORANGE, TO_BILL: PENAL, UPLOADED_RECEIPT: NAVY, ASSIGNED: NAVY,
+  ON_REVIEW: NAVY, WITHOUT_RECEIPT: LADRILLO, NOT_BILLED: VERDE, BILLED: LADRILLO,
+};
 
-  // Tarjeta de un PNR (usada en ambas secciones)
-  const tarjetaPNR = (c, i) => {
-    const estilo = getEstilo(c.estado);
-    const er = estadoRuta[c.id_caso];
-    const sup = supervisores[c.estacion_origen];
-    const crono = esAbierto(c.estado) ? cronometro(c) : null;
-    const hoy = enRutaHoy(c);
-    return (
-      <div key={c.id || c.id_caso || i} style={{ background:"#fff", border:"1px solid #e4e7ec", borderLeft: hoy ? "3px solid #16a34a" : "3px solid #cbd5e1", borderRadius:10, padding:"12px 14px" }}>
-        <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
-          <span style={{ fontSize:13, fontWeight:800, color:"#1a3a6b" }}>PNR {c.id_caso}</span>
-          <span style={{ ...estilo, padding:"2px 10px", borderRadius:20, fontSize:11, fontWeight:700 }}>{c.estado || "—"}</span>
-          <span style={{ fontSize:11, fontWeight:700, color:"#475569", background:"#f1f5f9", padding:"2px 8px", borderRadius:6 }}>{c.estacion_origen || "—"}</span>
-          {crono && <span style={{ marginLeft:"auto", fontSize:13, fontWeight:800, fontVariantNumeric:"tabular-nums", padding:"2px 10px", borderRadius:6, background:crono.bg, color:crono.color }}>⏳ {crono.texto}</span>}
-        </div>
-        <div style={{ fontSize:12, color:"#555", marginTop:6 }}>{c.productos || "—"} · <strong>${(c.valor_compra || 0).toLocaleString("es-MX")}</strong></div>
-        {c.pedido_revision ? <div style={{ fontSize:12, color:"#92400e", marginTop:4 }}>⚠ {c.pedido_revision}</div> : null}
-        <div style={{ fontSize:12, marginTop:4 }}>
-          {hoy
-            ? <span style={{ color:"#16a34a", fontWeight:600 }}>🚚 {er?.ruta_driver || "—"} · {er?.pendientes != null ? er.pendientes + " pendientes" : "ruta de hoy"}</span>
-            : <span style={{ color:"#94a3b8" }}>🕐 ruta pasada{er?.ruta_driver ? " · " + er.ruta_driver : ""}</span>}
-        </div>
-        <div style={{ display:"flex", gap:14, flexWrap:"wrap", marginTop:8, paddingTop:8, borderTop:"1px solid #f1f5f9", fontSize:11, color:"#94a3b8" }}>
-          <span>📅 {c.fecha_caso ? new Date(c.fecha_caso).toLocaleString("es-MX",{day:"2-digit",month:"short",hour:"2-digit",minute:"2-digit"}) : "—"}</span>
-          {c.id_envio ? <span>📦 Envío {c.id_envio}</span> : null}
-          {c.id_reclamo ? <span>📄 Reclamo {c.id_reclamo}</span> : null}
-          <span>🛣 Ruta {c.ruta || "—"}</span>
-        </div>
-        <div style={{ display:"flex", gap:8, alignItems:"center", marginTop:10 }}>
-          <button onClick={() => notificar(c, "WhatsApp")} style={{ fontSize:11, padding:"5px 12px", borderRadius:8, border:"1px solid #25d366", background:"#fff", color:"#128c3e", cursor:"pointer", fontWeight:700, fontFamily:"'Outfit', sans-serif" }}>💬 WhatsApp</button>
-          <button onClick={() => notificar(c, "Correo")} style={{ fontSize:11, padding:"5px 12px", borderRadius:8, border:"1px solid #3B82F6", background:"#fff", color:"#1e40af", cursor:"pointer", fontWeight:700, fontFamily:"'Outfit', sans-serif" }}>✉ Correo</button>
-          <span style={{ marginLeft:"auto", fontSize:11, color:"#94a3b8" }}>Sup: {sup?.supervisor_nombre || "sin asignar"}</span>
-        </div>
-      </div>
-    );
-  };
+const GRUPOS = [
+  { clave: "responder",   etiqueta: "Por responder", nota: "falta el comprobante", color: ORANGE,   tinte: ORANGE_T,   reloj: true },
+  { clave: "penalidad",   etiqueta: "Con penalidad", nota: "pedir revisión",       color: PENAL,    tinte: PENAL_T,    reloj: true },
+  { clave: "meli",        etiqueta: "Con respaldo",  nota: "Mercado Libre revisa", color: NAVY,     tinte: NAVY_T },
+  { clave: "sinrespaldo", etiqueta: "Sin respaldo",  nota: "respondido sin foto",  color: LADRILLO, tinte: LADRILLO_T },
+  { clave: "cerrado",     etiqueta: "Cerrados",      nota: "anulados y cobrados",  color: VERDE,    tinte: VERDE_T },
+];
+const POR_GRUPO = Object.fromEntries(GRUPOS.map((g) => [g.clave, g]));
 
-  if (loading) return <div className="pg" style={{ display:"flex", alignItems:"center", justifyContent:"center", height:"60vh" }}><div style={{ textAlign:"center" }}><div style={{ fontSize:40, marginBottom:12 }}>📋</div><div style={{ fontSize:14, color:"#888" }}>Cargando PNR...</div></div></div>;
+// Un sub_estado que MELI invente mañana cae en "responder": aparece arriba
+// pidiendo que alguien lo mire, en vez de esconderse.
+const clasificar = (c) => (POR_ESTADO[c.sub_estado] ? POR_ESTADO[c.sub_estado].grupo : "responder");
+const esAbierto = (c) => !!POR_GRUPO[clasificar(c)].reloj;
 
-  if (!casos.length && !loading) return <div className="pg" style={{ display:"flex", alignItems:"center", justifyContent:"center", height:"60vh" }}><div style={{ textAlign:"center" }}><div style={{ fontSize:48, marginBottom:12 }}>📭</div><div style={{ fontSize:16, fontWeight:700, marginBottom:8 }}>Sin datos de PNR</div><div style={{ fontSize:13, color:"#888" }}>Usa el botón PNR en Don B para sincronizar</div></div></div>;
+const dinero = (v) => "$" + Math.round(Number(v) || 0).toLocaleString("es-CL");
+const fechaCL = (ts, conHora = true) => {
+  if (!ts) return "—";
+  try {
+    return new Intl.DateTimeFormat("es-CL", Object.assign({ timeZone: "America/Santiago",
+      day: "2-digit", month: "short" }, conHora ? { hour: "2-digit", minute: "2-digit", hour12: false } : {}))
+      .format(new Date(ts));
+  } catch (e) { return "—"; }
+};
+const horasMin = (h) => `${Math.floor(h)}:${String(Math.floor((h % 1) * 60)).padStart(2, "0")}`;
 
+function Chip({ sub }) {
+  const e = POR_ESTADO[sub];
+  const color = COLOR_ESTADO[sub] || GRIS;
   return (
-    <div className="pg">
-      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:20, flexWrap:"wrap", gap:12 }}>
-        <div>
-          <div style={{ fontSize:20, fontWeight:800, color:"#1a3a6b" }}>📋 PNR</div>
-          <div style={{ fontSize:12, color:"#888", marginTop:2 }}>Reclamos · plazo 48h para responder</div>
-        </div>
-        <div style={{ display:"flex", gap:8, alignItems:"center" }}>
-          <select value={periodo} onChange={e => setPeriodo(e.target.value)} style={{ fontSize:12, padding:"6px 10px", borderRadius:8, border:"1px solid #e4e7ec", fontFamily:"'Outfit', sans-serif" }}>
-            {periodos.map(p => <option key={p} value={p}>{p}</option>)}
-          </select>
-          <button onClick={() => { cargarCasos(periodo); cargarEstadoRuta(); }} style={{ fontSize:12, padding:"6px 14px", borderRadius:8, border:"1px solid #e4e7ec", background:"#fff", cursor:"pointer", fontFamily:"'Outfit', sans-serif" }}>🔄 Actualizar</button>
-        </div>
-      </div>
+    <span title={e ? `${e.etiqueta} · ${e.motivo}` : sub}
+      style={{ display: "inline-block", fontSize: 11, fontWeight: 700, color,
+        background: color + "14", border: `1px solid ${color}40`, borderRadius: 20,
+        padding: "2px 9px", whiteSpace: "nowrap" }}>
+      {e ? e.corto : (sub || "—")}
+    </span>
+  );
+}
 
-      <div className="three-col" style={{ marginBottom:20 }}>
-        <div className="form-card" style={{ textAlign:"center", padding:"16px 12px" }}>
-          <div style={{ fontSize:36, fontWeight:800, color:"#1a3a6b" }}>{casos.length}</div>
-          <div style={{ fontSize:11, color:"#888", fontWeight:600, textTransform:"uppercase", letterSpacing:1 }}>Total Casos</div>
-        </div>
-        <div className="form-card" style={{ textAlign:"center", padding:"16px 12px" }}>
-          <div style={{ fontSize:36, fontWeight:800, color:"#16a34a" }}>{enRutaHoyCount}</div>
-          <div style={{ fontSize:11, color:"#888", fontWeight:600, textTransform:"uppercase", letterSpacing:1 }}>En Ruta Hoy</div>
-        </div>
-        <div className="form-card" style={{ textAlign:"center", padding:"16px 12px" }}>
-          <div style={{ fontSize:28, fontWeight:800, color:"#c0392b" }}>${totalValor.toLocaleString("es-MX", { minimumFractionDigits:0 })}</div>
-          <div style={{ fontSize:11, color:"#888", fontWeight:600, textTransform:"uppercase", letterSpacing:1 }}>Valor Total en Riesgo</div>
-        </div>
-      </div>
+// Reloj de 48 h. Solo corre en los casos donde nos toca mover a nosotros.
+function Reloj({ c, ahora }) {
+  if (!esAbierto(c) || !c.fecha_caso) return <span style={{ color: "#cbd5e1" }}>—</span>;
+  const transcurrido = (ahora - new Date(c.fecha_caso).getTime()) / 3600000;
+  const resta = SLA_H - transcurrido;
+  if (resta <= 0) {
+    return <span style={{ fontSize: 11.5, fontWeight: 800, color: LADRILLO }}>Vencido +{horasMin(-resta)}</span>;
+  }
+  const color = resta <= 4 ? LADRILLO : resta <= 12 ? ORANGE : "#475569";
+  return (
+    <span title={`Quedan ${horasMin(resta)} del plazo de ${SLA_H} h`}
+      style={{ fontSize: 12, fontWeight: 800, color, fontVariantNumeric: "tabular-nums" }}>
+      {horasMin(resta)}
+    </span>
+  );
+}
 
-      <div style={{ display:"flex", gap:0, borderBottom:"2px solid #e4e7ec", marginBottom:16 }}>
-        {[{id:"casos",label:"📋 Casos"},{id:"resumen",label:"📊 Por Estado"},{id:"rutas",label:"🚛 Por Ruta"}].map(t => (
-          <button key={t.id} onClick={() => setTabPnr(t.id)} style={{ padding:"10px 20px", background:"none", border:"none", borderBottom:tabPnr===t.id?"2px solid #3B82F6":"2px solid transparent", color:tabPnr===t.id?"#3B82F6":"#555", fontSize:12, fontWeight:800, cursor:"pointer", marginBottom:-2, fontFamily:"'Outfit', sans-serif" }}>{t.label}</button>
-        ))}
-      </div>
+function Tarjeta({ grupo, casos, monto, activa, onClick }) {
+  return (
+    <button onClick={onClick} title={`Ver solo ${grupo.etiqueta.toLowerCase()}`}
+      style={{ flex: 1, minWidth: 150, textAlign: "left", cursor: "pointer", fontFamily: "inherit",
+        background: activa ? grupo.tinte : "#fff",
+        border: `1px solid ${activa ? grupo.color : "#e4e7ec"}`, borderTop: `3px solid ${grupo.color}`,
+        borderRadius: 12, padding: "11px 14px", boxShadow: activa ? `inset 0 0 0 1px ${grupo.color}` : "none" }}>
+      <div style={{ fontSize: 10.5, color: activa ? grupo.color : "#64748b", letterSpacing: .3,
+        textTransform: "uppercase", fontWeight: 700 }}>{grupo.etiqueta}</div>
+      <div style={{ fontSize: 22, fontWeight: 700, color: "#1f2937", lineHeight: 1.3 }}>{dinero(monto)}</div>
+      <div style={{ fontSize: 11, color: "#94a3b8" }}>{casos} {casos === 1 ? "caso" : "casos"} · {grupo.nota}</div>
+    </button>
+  );
+}
 
-      {tabPnr === "casos" && (
-        <div>
-          <div style={{ display:"flex", gap:8, marginBottom:14, flexWrap:"wrap", alignItems:"center" }}>
-            <input placeholder="🔍 Buscar caso, ruta, conductor, producto..." value={busqueda} onChange={e => setBusqueda(e.target.value)} style={{ fontSize:12, padding:"6px 12px", borderRadius:8, border:"1px solid #e4e7ec", fontFamily:"'Outfit', sans-serif", minWidth:280 }} />
-            <select value={filtroSC} onChange={e => setFiltroSC(e.target.value)} style={{ fontSize:12, padding:"6px 10px", borderRadius:8, border:"1px solid #e4e7ec", fontFamily:"'Outfit', sans-serif" }}>
-              <option value="todos">Todos los SC</option>
-              {scUnicos.map(s => <option key={s} value={s}>{s}</option>)}
-            </select>
-            <select value={filtroEstado} onChange={e => setFiltroEstado(e.target.value)} style={{ fontSize:12, padding:"6px 10px", borderRadius:8, border:"1px solid #e4e7ec", fontFamily:"'Outfit', sans-serif" }}>
-              <option value="todos">Todos los estados</option>
-              {estadosUnicos.map(e => <option key={e} value={e}>{e}</option>)}
-            </select>
-            <span style={{ fontSize:12, color:"#888" }}>{casosFiltrados.length} casos</span>
-          </div>
-
-          <div style={{ display:"flex", alignItems:"center", gap:8, margin:"0 0 10px" }}>
-            <span style={{ fontSize:14, fontWeight:800, color:"#16a34a" }}>🚚 En ruta hoy</span>
-            <span style={{ fontSize:11, color:"#888", background:"#f1f5f9", padding:"2px 8px", borderRadius:6 }}>accionable ahora · {casosHoy.length}</span>
-          </div>
-          <div style={{ display:"flex", flexDirection:"column", gap:8, marginBottom:22 }}>
-            {casosHoy.length ? casosHoy.map(tarjetaPNR) : <div style={{ fontSize:12, color:"#94a3b8", padding:"8px" }}>Sin PNR en ruta hoy para este filtro.</div>}
-          </div>
-
-          <div style={{ display:"flex", alignItems:"center", gap:8, margin:"0 0 10px" }}>
-            <span style={{ fontSize:14, fontWeight:800, color:"#64748b" }}>🕐 Rutas pasadas</span>
-            <span style={{ fontSize:11, color:"#888", background:"#f1f5f9", padding:"2px 8px", borderRadius:6 }}>{casosResto.length}</span>
-          </div>
-          <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
-            {casosResto.length ? casosResto.map(tarjetaPNR) : <div style={{ fontSize:12, color:"#94a3b8", padding:"8px" }}>Sin PNR de rutas pasadas para este filtro.</div>}
-          </div>
-        </div>
-      )}
-
-      {tabPnr === "resumen" && (
-        <div className="form-card" style={{ padding:0, overflow:"hidden" }}>
-          <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12 }}>
-            <thead>
-              <tr style={{ background:"#f8f9fa" }}>
-                {["Estado","Cantidad","Valor"].map(h => <th key={h} style={{ padding:"10px 14px", textAlign:"left", fontWeight:700, color:"#555", borderBottom:"1px solid #e4e7ec" }}>{h}</th>)}
-              </tr>
-            </thead>
-            <tbody>
-              {porEstado.sort((a,b)=>b.cantidad-a.cantidad).map((r, i) => {
-                const estilo = getEstilo(r.estado);
-                return (
-                  <tr key={i} style={{ borderBottom:"1px solid #f4f5f7" }}>
-                    <td style={{ padding:"9px 14px" }}><span style={{ ...estilo, padding:"3px 10px", borderRadius:20, fontSize:11, fontWeight:700 }}>{r.estado}</span></td>
-                    <td style={{ padding:"9px 14px", fontWeight:700, color:"#1a3a6b" }}>{r.cantidad}</td>
-                    <td style={{ padding:"9px 14px", color:"#c0392b", fontWeight:600 }}>${r.valor.toLocaleString("es-MX")}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
-
-      {tabPnr === "rutas" && (
-        <div className="form-card" style={{ padding:0, overflow:"hidden" }}>
-          <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12 }}>
-            <thead>
-              <tr style={{ background:"#f8f9fa" }}>
-                {["Ruta","Conductor","Casos","Valor"].map(h => <th key={h} style={{ padding:"10px 14px", textAlign:"left", fontWeight:700, color:"#555", borderBottom:"1px solid #e4e7ec" }}>{h}</th>)}
-              </tr>
-            </thead>
-            <tbody>
-              {[...new Set(casos.map(c => c.ruta).filter(Boolean))].map((ruta, i) => {
-                const delRuta = casos.filter(c => c.ruta === ruta);
-                const valor = delRuta.reduce((a, c) => a + (c.valor_compra || 0), 0);
-                const driver = estadoRuta[delRuta[0]?.id_caso]?.ruta_driver || delRuta[0]?.id_conductor || "—";
-                return (
-                  <tr key={i} style={{ borderBottom:"1px solid #f4f5f7" }}>
-                    <td style={{ padding:"9px 14px", fontWeight:600, color:"#1a3a6b" }}>{ruta}</td>
-                    <td style={{ padding:"9px 14px", color:"#555" }}>{driver}</td>
-                    <td style={{ padding:"9px 14px", fontWeight:700 }}>{delRuta.length}</td>
-                    <td style={{ padding:"9px 14px", color:"#c0392b", fontWeight:600 }}>${valor.toLocaleString("es-MX")}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
+function Dato({ etiqueta, valor }) {
+  return (
+    <div>
+      <div style={{ fontSize: 10, color: GRIS, textTransform: "uppercase", letterSpacing: .4, fontWeight: 700 }}>{etiqueta}</div>
+      <div style={{ fontSize: 12.5, color: "#1f2937", marginTop: 2, wordBreak: "break-word" }}>{valor || "—"}</div>
     </div>
   );
 }
 
-export default ModuloPNR;
+function Detalle({ c, historial, aviso }) {
+  const e = POR_ESTADO[c.sub_estado];
+  return (
+    <div style={{ padding: "14px 18px", background: "#fbfcfe", borderTop: "1px solid #eef1f5" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(170px,1fr))", gap: 14 }}>
+        <Dato etiqueta="Estado" valor={e ? `${e.etiqueta} · ${e.motivo}` : c.sub_estado} />
+        <Dato etiqueta="ID de envío" valor={c.shipment_id} />
+        <Dato etiqueta="Estación" valor={c.service_center} />
+        <Dato etiqueta="Ruta" valor={[c.route_code, c.route_id].filter(Boolean).join(" · ")} />
+        <Dato etiqueta="Conductor" valor={c.conductor} />
+        <Dato etiqueta="Monto" valor={dinero(c.monto)} />
+        <Dato etiqueta="Periodo" valor={c.periodo} />
+        <Dato etiqueta="Creado en MELI" valor={fechaCL(c.fecha_caso)} />
+        <Dato etiqueta="Detectado por la torre" valor={fechaCL(c.creado_en)} />
+        <Dato etiqueta="Correo a postventa" valor={aviso && aviso.correo ? fechaCL(aviso.correo.enviado_en) : "pendiente"} />
+      </div>
+
+      <div style={{ display: "flex", gap: 8, marginTop: 14, flexWrap: "wrap" }}>
+        <a className="pc-btn" href={`https://envios.adminml.com/logistics/case-center/cases/${c.case_id}`}
+           target="_blank" rel="noreferrer">Abrir caso en MELI</a>
+        {c.route_id && (
+          <a className="pc-btn" href={`https://envios.adminml.com/logistics/monitoring-distribution/detail/${c.route_id}?site=MLC`}
+             target="_blank" rel="noreferrer">Ver detalle de la ruta</a>
+        )}
+      </div>
+
+      <div style={{ marginTop: 16 }}>
+        <div style={{ fontSize: 10, color: GRIS, textTransform: "uppercase", letterSpacing: .4, fontWeight: 700, marginBottom: 6 }}>
+          Historial de estados
+        </div>
+        {!historial ? (
+          <div style={{ fontSize: 12, color: GRIS }}>Cargando…</div>
+        ) : !historial.length ? (
+          <div style={{ fontSize: 12, color: GRIS }}>Sin cambios registrados.</div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+            {historial.map((h) => (
+              <div key={h.id} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12 }}>
+                <span style={{ color: GRIS, minWidth: 92, fontVariantNumeric: "tabular-nums" }}>{fechaCL(h.cambiado_en)}</span>
+                {h.sub_estado_desde ? <><Chip sub={h.sub_estado_desde} /><span style={{ color: GRIS }}>→</span></> : <span style={{ color: GRIS }}>Nace como</span>}
+                <Chip sub={h.sub_estado_hacia} />
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+export default function ModuloPnrCL({ usuario }) {
+  const [casos, setCasos] = useState([]);
+  const [avisos, setAvisos] = useState({});        // case_id → { brain, correo }
+  const [cargando, setCargando] = useState(true);
+  const [error, setError] = useState("");
+  const [ultima, setUltima] = useState(null);
+  const [periodo, setPeriodo] = useState("");
+  const [grupo, setGrupo] = useState("todos");
+  const [sc, setSc] = useState("todos");
+  const [busqueda, setBusqueda] = useState("");
+  const [abierta, setAbierta] = useState(null);
+  const [historiales, setHistoriales] = useState({});
+  const [ahora, setAhora] = useState(Date.now());
+
+  const cargar = useCallback(async () => {
+    try {
+      const [filas, avs] = await Promise.all([
+        api("pnr_casos_cl?select=case_id,tipo,fecha_caso,route_code,route_id,service_center,conductor,shipment_id,monto,moneda,estado,sub_estado,periodo,actualizado_en,creado_en&order=fecha_caso.desc&limit=5000"),
+        api("pnr_avisos_cl?select=case_id,canal,destino,enviado_en,leido_en,error&limit=10000"),
+      ]);
+      const mapa = {};
+      for (const a of avs || []) {
+        mapa[a.case_id] = mapa[a.case_id] || {};
+        mapa[a.case_id][a.canal] = a;
+      }
+      setCasos(filas || []);
+      setAvisos(mapa);
+      setUltima(new Date());
+      setError("");
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setCargando(false);
+    }
+  }, []);
+
+  useEffect(() => { cargar(); const t = setInterval(cargar, REFRESCO_MS); return () => clearInterval(t); }, [cargar]);
+  useEffect(() => { const t = setInterval(() => setAhora(Date.now()), 30000); return () => clearInterval(t); }, []);
+
+  const periodos = useMemo(() => [...new Set(casos.map((c) => c.periodo).filter(Boolean))].sort().reverse(), [casos]);
+  useEffect(() => { if (!periodo && periodos.length) setPeriodo(periodos[0]); }, [periodos, periodo]);
+
+  const delPeriodo = useMemo(() => casos.filter((c) => !periodo || c.periodo === periodo), [casos, periodo]);
+  const scs = useMemo(() => [...new Set(delPeriodo.map((c) => c.service_center).filter(Boolean))].sort(), [delPeriodo]);
+
+  const sinVer = (c) => esAbierto(c) && !(avisos[c.case_id] && avisos[c.case_id].brain && avisos[c.case_id].brain.leido_en);
+
+  const totales = useMemo(() => {
+    const t = Object.fromEntries(GRUPOS.map((g) => [g.clave, { casos: 0, monto: 0 }]));
+    for (const c of delPeriodo) {
+      if (sc !== "todos" && c.service_center !== sc) continue;
+      const k = clasificar(c);
+      t[k].casos++; t[k].monto += Number(c.monto) || 0;
+    }
+    return t;
+  }, [delPeriodo, sc]);
+
+  const lista = useMemo(() => {
+    const q = busqueda.trim().toLowerCase();
+    return delPeriodo
+      .filter((c) => grupo === "todos" || clasificar(c) === grupo)
+      .filter((c) => sc === "todos" || c.service_center === sc)
+      .filter((c) => !q || [c.case_id, c.shipment_id, c.conductor, c.route_code, c.route_id, c.service_center]
+        .some((v) => v && String(v).toLowerCase().includes(q)))
+      .sort((a, b) => {
+        // Primero lo que corre reloj, del más urgente al menos; después el resto, más nuevo arriba.
+        const ra = esAbierto(a), rb = esAbierto(b);
+        if (ra !== rb) return ra ? -1 : 1;
+        const fa = new Date(a.fecha_caso || 0).getTime(), fb = new Date(b.fecha_caso || 0).getTime();
+        return ra ? fa - fb : fb - fa;
+      });
+  }, [delPeriodo, grupo, sc, busqueda]);
+
+  const nSinVer = delPeriodo.filter(sinVer).length;
+
+  const marcarVisto = async (ids) => {
+    if (!ids.length) return;
+    const ts = new Date().toISOString();
+    const quien = (usuario && (usuario.email || usuario.nombre)) || "brain";
+    setAvisos((prev) => {
+      const n = { ...prev };
+      for (const id of ids) n[id] = { ...(n[id] || {}), brain: { ...((n[id] || {}).brain || {}), canal: "brain", leido_en: ts, destino: quien } };
+      return n;
+    });
+    try {
+      for (let i = 0; i < ids.length; i += 200) {
+        await api("pnr_avisos_cl?on_conflict=case_id,canal", {
+          method: "POST",
+          headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+          body: JSON.stringify(ids.slice(i, i + 200).map((id) => ({ case_id: id, canal: "brain", leido_en: ts, destino: quien }))),
+        });
+      }
+    } catch (e) {
+      setError("No se pudo marcar como visto: " + e.message);
+    }
+  };
+
+  const abrir = async (c) => {
+    const id = c.case_id;
+    setAbierta(abierta === id ? null : id);
+    if (abierta === id) return;
+    if (sinVer(c)) marcarVisto([id]);
+    if (!historiales[id]) {
+      try {
+        const h = await api(`pnr_historial_cl?case_id=eq.${id}&select=id,estado_desde,sub_estado_desde,estado_hacia,sub_estado_hacia,cambiado_en&order=cambiado_en.asc`);
+        setHistoriales((p) => ({ ...p, [id]: h || [] }));
+      } catch (e) {
+        setHistoriales((p) => ({ ...p, [id]: [] }));
+      }
+    }
+  };
+
+  return (
+    <div style={{ padding: 0, fontFamily: "'Geist', system-ui, -apple-system, sans-serif" }}>
+      <style>{`
+        .pc-tabla{width:100%;border-collapse:collapse;font-size:12px;background:#fff;}
+        .pc-tabla thead th{position:sticky;top:0;z-index:2;background:${NAVY};color:#fff;font-size:10.5px;
+          letter-spacing:.4px;text-transform:uppercase;padding:8px 10px;text-align:left;white-space:nowrap;font-weight:700;}
+        .pc-tabla tbody td{padding:8px 10px;border-bottom:1px solid #eef1f5;white-space:nowrap;}
+        .pc-tabla tbody tr.pc-fila{cursor:pointer;}
+        .pc-tabla tbody tr.pc-fila:hover{background:#f7faff;}
+        .pc-tabla .num{text-align:right;font-variant-numeric:tabular-nums;}
+        .pc-scroll{max-height:calc(100vh - 360px);overflow:auto;border:1px solid #e6e9ef;border-radius:10px;background:#fff;}
+        .pc-input{border:1px solid #dfe4ec;border-radius:8px;padding:6px 10px;font-size:12.5px;font-family:inherit;color:#1f2937;background:#fff;}
+        .pc-input:focus{outline:2px solid ${NAVY}22;border-color:${NAVY};}
+        .pc-btn{display:inline-block;border:1px solid ${NAVY};background:#fff;color:${NAVY};border-radius:8px;padding:6px 12px;
+          font-size:12.5px;font-weight:700;cursor:pointer;font-family:inherit;text-decoration:none;}
+        .pc-btn:hover{background:${NAVY};color:#fff;}
+        .pc-chip{border:1px solid #dfe4ec;background:#fff;border-radius:20px;padding:4px 11px;font-size:12px;
+          cursor:pointer;font-family:inherit;color:#64748b;font-weight:600;}
+        .pc-chip.on{background:${NAVY};border-color:${NAVY};color:#fff;}
+      `}</style>
+
+      {/* Cabecera */}
+      <div style={{ background: "#fff", borderBottom: "1px solid #e4e7ec", padding: "12px 24px" }}>
+        <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
+          <div>
+            <div style={{ fontSize: 18, fontWeight: 800, color: NAVY, letterSpacing: -.3 }}>PNR · Chile</div>
+            <div style={{ fontSize: 12, color: "#94a3b8", marginTop: 2 }}>
+              Reclamos de paquete no recibido · captura automática cada 5 min · plazo {SLA_H} h
+            </div>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: 11.5, color: GRIS, fontWeight: 700 }}>PERIODO</span>
+            <select className="pc-input" value={periodo} onChange={(e) => setPeriodo(e.target.value)}>
+              {periodos.map((p) => <option key={p} value={p}>{p}</option>)}
+            </select>
+            <button className="pc-btn" onClick={cargar}>Actualizar</button>
+          </div>
+        </div>
+        <div style={{ fontSize: 11, color: GRIS, marginTop: 6 }}>
+          {ultima ? `Leído a las ${fechaCL(ultima)}` : ""}
+        </div>
+      </div>
+
+      <div style={{ padding: "16px 24px", background: "#f4f6f9", minHeight: "100%" }}>
+        {error && (
+          <div style={{ background: LADRILLO_T, border: `1px solid ${LADRILLO}55`, color: LADRILLO, borderRadius: 10,
+            padding: "10px 14px", fontSize: 12.5, marginBottom: 12 }}>{error}</div>
+        )}
+
+        {cargando ? (
+          <div style={{ padding: 40, textAlign: "center", color: GRIS, fontSize: 13 }}>Cargando PNR…</div>
+        ) : !casos.length ? (
+          <div style={{ padding: 40, textAlign: "center", color: GRIS, fontSize: 13 }}>
+            Todavía no hay casos. Revisa que el proceso pnr-cl esté corriendo en el VPS de Chile.
+          </div>
+        ) : (
+          <>
+            {/* Tarjetas */}
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
+              {GRUPOS.map((g) => (
+                <Tarjeta key={g.clave} grupo={g} casos={totales[g.clave].casos} monto={totales[g.clave].monto}
+                  activa={grupo === g.clave} onClick={() => setGrupo(grupo === g.clave ? "todos" : g.clave)} />
+              ))}
+            </div>
+
+            {/* Filtros */}
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
+              <input className="pc-input" style={{ minWidth: 280 }} value={busqueda} onChange={(e) => setBusqueda(e.target.value)}
+                placeholder="Buscar caso, envío, conductor o ruta…" />
+              <select className="pc-input" value={sc} onChange={(e) => setSc(e.target.value)}>
+                <option value="todos">Todas las estaciones</option>
+                {scs.map((s) => <option key={s} value={s}>{s}</option>)}
+              </select>
+              {grupo !== "todos" && (
+                <button className="pc-chip on" onClick={() => setGrupo("todos")}>{POR_GRUPO[grupo].etiqueta} ✕</button>
+              )}
+              <span style={{ fontSize: 12, color: GRIS }}>{lista.length} casos</span>
+              {nSinVer > 0 && (
+                <span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ fontSize: 12, color: ORANGE, fontWeight: 700 }}>● {nSinVer} abiertos sin revisar</span>
+                  <button className="pc-btn" onClick={() => marcarVisto(delPeriodo.filter(sinVer).map((c) => c.case_id))}>
+                    Marcar todos como vistos
+                  </button>
+                </span>
+              )}
+            </div>
+
+            {/* Lista */}
+            <div className="pc-scroll">
+              <table className="pc-tabla">
+                <thead>
+                  <tr>
+                    <th style={{ width: 14 }}></th>
+                    <th>Estado</th>
+                    <th>Caso</th>
+                    <th>Creado</th>
+                    <th>Estación</th>
+                    <th>Ruta</th>
+                    <th>Conductor</th>
+                    <th className="num">Monto</th>
+                    <th className="num">Plazo</th>
+                    <th>Correo</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {lista.map((c) => {
+                    const av = avisos[c.case_id] || {};
+                    const nuevo = sinVer(c);
+                    return (
+                      <Fragment key={c.case_id}>
+                        <tr className="pc-fila" onClick={() => abrir(c)}
+                          style={{ background: abierta === c.case_id ? "#f2f6fc" : undefined }}>
+                          <td title={nuevo ? "Abierto y todavía sin revisar" : ""}>
+                            {nuevo && <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: 4, background: ORANGE }} />}
+                          </td>
+                          <td><Chip sub={c.sub_estado} /></td>
+                          <td style={{ fontWeight: nuevo ? 800 : 600, color: NAVY }}>{c.case_id}</td>
+                          <td style={{ color: "#475569" }}>{fechaCL(c.fecha_caso)}</td>
+                          <td>{c.service_center || "—"}</td>
+                          <td style={{ color: "#475569" }}>{c.route_code || c.route_id || "—"}</td>
+                          <td>{c.conductor || "—"}</td>
+                          <td className="num" style={{ fontWeight: 700 }}>{dinero(c.monto)}</td>
+                          <td className="num"><Reloj c={c} ahora={ahora} /></td>
+                          <td>
+                            {av.correo && !av.correo.error
+                              ? <span title={`Enviado ${fechaCL(av.correo.enviado_en)}`} style={{ color: VERDE, fontWeight: 700 }}>✓ Enviado</span>
+                              : av.correo && av.correo.error
+                                ? <span title={av.correo.error} style={{ color: LADRILLO, fontWeight: 700 }}>Falló</span>
+                                : <span style={{ color: "#cbd5e1" }}>—</span>}
+                          </td>
+                        </tr>
+                        {abierta === c.case_id && (
+                          <tr>
+                            <td colSpan={10} style={{ padding: 0, whiteSpace: "normal" }}>
+                              <Detalle c={c} historial={historiales[c.case_id]} aviso={av} />
+                            </td>
+                          </tr>
+                        )}
+                      </Fragment>
+                    );
+                  })}
+                  {!lista.length && (
+                    <tr><td colSpan={10} style={{ padding: 24, textAlign: "center", color: GRIS }}>Sin casos para este filtro.</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}

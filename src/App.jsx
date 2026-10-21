@@ -15,6 +15,7 @@ import ModuloPagosMadre from "./Pagos";
 import ModuloCertificacionesCL from "./cl/Certificaciones";
 import ModuloMaestroCL from "./cl/Maestro";
 import ModuloGpsSegurosCL from "./cl/GpsSeguros";
+import ModuloPnrCL from "./cl/PNR";
 const PIPE_ID = "306833898";
 
 // Devuelve el periodo "operativo" actual (mes en México) en formato YYYY-MM
@@ -113,7 +114,7 @@ const MODULOS_POR_PAIS = {
     prefacturas: ["pagos"],
   },
   "Chile": {
-    superadmin: ["certificaciones_cl", "mantenciones_cl", "maestro_cl", "gps_seguros_cl"],
+    superadmin: ["certificaciones_cl", "mantenciones_cl", "maestro_cl", "gps_seguros_cl", "pnr_cl"],
     certificacion: [],
     certificacion_full: ["certificaciones_cl"],
     certificacion_mant: ["certificaciones_cl", "mantenciones_cl", "gps_seguros_cl"],
@@ -130,6 +131,7 @@ const MODULOS_LABELS = {
   mantenciones_cl: "Mantenciones",
   maestro_cl: "Maestro Operaciones",
   gps_seguros_cl: "GPS y Seguros",
+  pnr_cl: "PNR",
   maestro: "Maestro Operaciones",
   mantenciones: "Mantenciones",
   alertas_portal: "Alertas Portal",
@@ -15528,6 +15530,7 @@ export default function App() {
         {tabActivo === "mantenciones_cl" && <ModuloMantencionesMadre usuario={usuario} />}
         {tabActivo === "maestro_cl" && <ModuloMaestroCL />}
         {tabActivo === "gps_seguros_cl" && <ModuloGpsSegurosCL />}
+        {tabActivo === "pnr_cl" && <ModuloPnrCL usuario={usuario} />}
         {tabActivo === "configuracion" && (
           <div className="pg" style={{ maxWidth: 700 }}>
             <div className="sec-title">Configuración</div>
