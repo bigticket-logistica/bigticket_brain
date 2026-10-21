@@ -154,7 +154,9 @@ const USUARIOS = {
   "camila.valenzuela@bigticket.cl":       { pass: "camila.2026",   rol: "superadmin", nombre: "Camila Valenzuela" },
   "galiz.martinez@bigticket.cl":         { pass: "Galiz.2026!",  rol: "superadmin", nombre: "Galiz Martínez" },
   "maycol.olavarria@bigticket.cl":       { pass: "Maycol.2026!", rol: "superadmin", nombre: "Maycol Olavarría" },
-  "katherine.ortega@bigticket.cl":       { pass: "katherine.2026!", rol: "superadmin", nombre: "Maycol Olavarría" },
+  "katherine.ortega@bigticket.cl":       { pass: "katherine.2026!", rol: "superadmin", nombre: "Katherine" },
+  "gabriela.aguirre@bigticket.cl":       { pass: "gabriela.2026!", rol: "superadmin", nombre: "Gabriela Aguirre =)" },
+  
 };
 
 const css = `
