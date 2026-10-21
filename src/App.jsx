@@ -131,7 +131,7 @@ const MODULOS_LABELS = {
   mantenciones_cl: "Mantenciones",
   maestro_cl: "Maestro Operaciones",
   gps_seguros_cl: "GPS y Seguros",
-  pnr_cl: "PNR",
+  pnr_cl: "Posventa",
   maestro: "Maestro Operaciones",
   mantenciones: "Mantenciones",
   alertas_portal: "Alertas Portal",
@@ -15530,7 +15530,7 @@ export default function App() {
         {tabActivo === "mantenciones_cl" && <ModuloMantencionesMadre usuario={usuario} />}
         {tabActivo === "maestro_cl" && <ModuloMaestroCL />}
         {tabActivo === "gps_seguros_cl" && <ModuloGpsSegurosCL />}
-        {tabActivo === "pnr_cl" && <ModuloPnrCL usuario={usuario} />}
+        {tabActivo === "pnr_cl" && <ModuloPnrCL />}
         {tabActivo === "configuracion" && (
           <div className="pg" style={{ maxWidth: 700 }}>
             <div className="sec-title">Configuración</div>
