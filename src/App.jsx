@@ -4,6 +4,7 @@ import ModuloMaestro from "./maestro";
 import { fechaHoyOperativa, fechaOperativaOffset, pct, Input, KpiCardMaestro, BadgeEstadoMaestro } from "./shared";
 // PNR ahora vive en la Torre; su pestaña la reemplaza Alertas Portal.
 import ModuloAlertasPortal from "./AlertasPortal";
+import ModuloReferidos from "./Referidos";
 import ModuloCertificaciones from "./Certificaciones";
 import ModuloEmpresas from "./Empresas";
 import ModuloAuditoriaMeli from "./AuditoriaMeli";
@@ -105,7 +106,7 @@ const PAIS_SELECT_CFG = {
 // propios (se irán agregando aquí); México conserva todo lo ya existente.
 const MODULOS_POR_PAIS = {
   "México": {
-    superadmin: ["pool_meli_mx", "pagos", "maestro", "certificaciones", "empresas", "alertas_portal", "auditoria_meli", "configuracion"],
+    superadmin: ["pool_meli_mx", "pagos", "maestro", "certificaciones", "empresas", "alertas_portal", "referidos", "auditoria_meli", "configuracion"],
     certificacion: ["certificaciones", "empresas"],
     certificacion_full: ["certificaciones", "empresas"],  // Certificaciones MX + CL (ver Chile abajo)
     certificacion_mant: ["certificaciones", "empresas"],  // Certificaciones MX + CL + Mantenciones CL
@@ -132,6 +133,7 @@ const MODULOS_LABELS = {
   maestro: "Maestro Operaciones",
   mantenciones: "Mantenciones",
   alertas_portal: "Alertas Portal",
+  referidos: "Referidos",
   auditoria_meli: "Auditoría MELI",
   pagos: "Administración",
   configuracion: "Configuración",
@@ -15427,6 +15429,18 @@ function SelectorPais({ usuario, onSelect, onLogout }) {
   );
 }
 
+// Identidad de quien está usando el Brain. Varios módulos escriben el autor de
+// lo que hacen (movimientos_etapa.movido_por, subido_por, enviado_por) leyendo
+// window.__PERFIL_EMAIL. Si no se llena, todo queda registrado como
+// "analista_brain" y el historial no sirve para saber quién hizo qué.
+function fijarPerfilGlobal(u) {
+  try {
+    window.__PERFIL_EMAIL  = u?.email || "";
+    window.__PERFIL_NOMBRE = u?.nombre || "";
+    window.__PERFIL_ROL    = u?.rol || "";
+  } catch {}
+}
+
 export default function App() {
   const [usuario, setUsuario] = useState(() => {
     try {
@@ -15442,14 +15456,20 @@ export default function App() {
     try { return localStorage.getItem("bt_pais") || null; } catch { return null; }
   });
 
+  // Se fija también al montar: si la persona recarga la página con la sesión
+  // ya iniciada, handleLogin no vuelve a correr y el perfil quedaría vacío.
+  useEffect(() => { fijarPerfilGlobal(usuario); }, [usuario]);
+
   const handleLogin = (u) => {
     localStorage.setItem("bt_usuario", JSON.stringify(u));
+    fijarPerfilGlobal(u);
     setUsuario(u);
   };
   const handleLogout = () => {
     localStorage.removeItem("bt_usuario");
     try { localStorage.removeItem("bt_nav_tab"); localStorage.removeItem("bt_nav_subtab_pagos"); localStorage.removeItem("bt_pais"); } catch {}
     setPaisState(null);
+    fijarPerfilGlobal(null);
     setUsuario(null);
   };
   // Elegir operación (país): fija el país y salta al primer módulo disponible.
@@ -15538,6 +15558,7 @@ export default function App() {
         )}
         {tabActivo === "maestro" && <ModuloMaestro usuario={usuario} />}
         {tabActivo === "alertas_portal" && <ModuloAlertasPortal usuario={usuario} />}
+        {tabActivo === "referidos" && <ModuloReferidos usuario={usuario} />}
         {tabActivo === "auditoria_meli" && <ModuloAuditoriaMeli />}
         {tabActivo === "pagos" && <ModuloPagosMadre usuario={usuario} />}
         {!tabActivo && (
