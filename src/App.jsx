@@ -148,8 +148,8 @@ const USUARIOS = {
   "eduardo.stine@bigticket.cl":     { pass: "eduardo.2026", rol: "superadmin", nombre: "Eduardo Stine" },
   "danny.calas@bigticket.cl":       { pass: "danny.2026",   rol: "prefacturas", nombre: "Danny Calas" },
   "roberto.sanmartin@bigticket.cl":       { pass: "robertosn.2026",   rol: "prefacturas", nombre: "Roberto San Martin" },
-  "antonio.mariangel@bigticket.cl":       { pass: "antonio.2026",  rol: "certificacion_full", nombre: "Antonio Mariangel" },
-  "camila.valenzuela@bigticket.cl":       { pass: "camila.2026",   rol: "certificacion_full", nombre: "Camila Valenzuela" },
+  "antonio.mariangel@bigticket.cl":       { pass: "antonio.2026",  rol: "superadmin", nombre: "Antonio Mariangel" },
+  "camila.valenzuela@bigticket.cl":       { pass: "camila.2026",   rol: "superadmin", nombre: "Camila Valenzuela" },
   "galiz.martinez@bigticket.cl":         { pass: "Galiz.2026!",  rol: "certificacion_full", nombre: "Galiz Martínez" },
   "maycol.olavarria@bigticket.cl":       { pass: "Maycol.2026!", rol: "superadmin", nombre: "Maycol Olavarría" },
 };
