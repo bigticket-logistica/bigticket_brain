@@ -150,7 +150,7 @@ const USUARIOS = {
   "roberto.sanmartin@bigticket.cl":       { pass: "robertosn.2026",   rol: "prefacturas", nombre: "Roberto San Martin" },
   "antonio.mariangel@bigticket.cl":       { pass: "antonio.2026",  rol: "superadmin", nombre: "Antonio Mariangel" },
   "camila.valenzuela@bigticket.cl":       { pass: "camila.2026",   rol: "superadmin", nombre: "Camila Valenzuela" },
-  "galiz.martinez@bigticket.cl":         { pass: "Galiz.2026!",  rol: "certificacion_full", nombre: "Galiz Martínez" },
+  "galiz.martinez@bigticket.cl":         { pass: "Galiz.2026!",  rol: "superadmin", nombre: "Galiz Martínez" },
   "maycol.olavarria@bigticket.cl":       { pass: "Maycol.2026!", rol: "superadmin", nombre: "Maycol Olavarría" },
 };
 
