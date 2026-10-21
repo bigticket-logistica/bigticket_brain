@@ -7,7 +7,9 @@
 //   Referidores quienes refieren, su código y su cuenta para pagarles.
 //   Oportunidades en qué centros se buscan transportistas, cuántos vehículos y
 //               de qué tipo. Se muestra en el portal de referidos y en la
-//               postulación.
+//               postulación. Cada centro tiene su propuesta económica
+//               (ref_propuestas), que el referido lee y acepta antes de dejar
+//               sus datos; se edita aquí con el mismo formato de campañas.
 //
 // Lee de las vistas vw_ref_brain_* y cambia el estado de un bono con la
 // función fn_ref_brain_premio (todo en Supabase, prefijo ref_).
@@ -54,22 +56,24 @@ export default function ModuloReferidos({ usuario }) {
   const [referidores, setReferidores] = useState([]);
   const [oportunidades, setOportunidades] = useState([]);
   const [centros, setCentros] = useState([]);
+  const [propuestas, setPropuestas] = useState([]);
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState("");
 
   const cargar = useCallback(async () => {
     setCargando(true); setError("");
-    const [b, r, p, o, c] = await Promise.all([
+    const [b, r, p, o, c, pr] = await Promise.all([
       sb.from("vw_ref_brain_premios").select("*").order("cumplido_at", { ascending: false }),
       sb.from("vw_ref_brain_referidos").select("*").order("creado_at", { ascending: false }),
       sb.from("vw_ref_brain_referidores").select("*").order("creado_at", { ascending: false }),
       sb.from("ref_oportunidades").select("*").order("sc"),
       sb.from("centros_mx").select("sc, nombre").eq("activo", true).order("nombre"),
+      sb.from("ref_propuestas").select("*"),
     ]);
-    const err = b.error || r.error || p.error || o.error || c.error;
+    const err = b.error || r.error || p.error || o.error || c.error || pr.error;
     if (err) setError(err.message);
     setBonos(b.data || []); setReferidos(r.data || []); setReferidores(p.data || []);
-    setOportunidades(o.data || []); setCentros(c.data || []);
+    setOportunidades(o.data || []); setCentros(c.data || []); setPropuestas(pr.data || []);
     setCargando(false);
   }, []);
   useEffect(() => { cargar(); }, [cargar]);
@@ -96,7 +100,7 @@ export default function ModuloReferidos({ usuario }) {
           {tab === "bonos" && <Bonos bonos={bonos} usuario={usuario} onCambio={cargar} />}
           {tab === "referidos" && <Referidos referidos={referidos} />}
           {tab === "referidores" && <Referidores referidores={referidores} />}
-          {tab === "oportunidades" && <Oportunidades lista={oportunidades} centros={centros} usuario={usuario} onCambio={cargar} />}
+          {tab === "oportunidades" && <Oportunidades lista={oportunidades} centros={centros} propuestas={propuestas} usuario={usuario} onCambio={cargar} />}
         </>
       )}
     </div>
@@ -263,7 +267,9 @@ function Referidores({ referidores }) {
 // Sugerencias para el tipo de vehículo; se puede escribir cualquier otro.
 const TIPOS_SUGERIDOS = ["Small Van", "Large Van", "Auto", "Moto", "Camioneta pickup", "Camión 3.5 t"];
 
-function Oportunidades({ lista, centros, usuario, onCambio }) {
+function Oportunidades({ lista, centros, propuestas, usuario, onCambio }) {
+  const [editando, setEditando] = useState(null);   // propuesta en edición
+  const [viendo, setViendo] = useState(null);       // propuesta en vista previa
   const [nuevo, setNuevo] = useState({ sc: "", tipo: "Small Van", cantidad: 1, tarifa: "", nota: "" });
   const [busy, setBusy] = useState(false);
   const nombreDe = (sc) => (centros.find((c) => c.sc === sc) || {}).nombre || sc;
@@ -296,6 +302,28 @@ function Oportunidades({ lista, centros, usuario, onCambio }) {
 
   const total = lista.filter((x) => x.activa && x.cantidad > 0).reduce((t, x) => t + x.cantidad, 0);
   const porCentro = lista.reduce((m, o) => { (m[o.sc] = m[o.sc] || []).push(o); return m; }, {});
+
+  // Propuesta del centro: si no existe se parte vacía, con una fila de tarifas
+  // por cada tipo de vehículo que se busca en ese centro.
+  const propuestaDe = (sc) => propuestas.find((p) => p.sc === sc);
+  const abrirPropuesta = (sc) => {
+    const p = propuestaDe(sc) || { sc, tarifas: [], semana_retenida: false };
+    const tarifas = [...(p.tarifas || [])];
+    for (const t of [...new Set((porCentro[sc] || []).map((o) => o.tipo_vehiculo))])
+      if (!tarifas.some((x) => x.categoria === t)) tarifas.push({ categoria: t, tramos: Object.fromEntries(TRAMOS.map((k) => [k, ""])) });
+    setEditando({ ...p, tarifas, nombre: `${nombreDe(sc)} (${sc})` });
+  };
+  const guardarPropuesta = async () => {
+    const e = editando;
+    if (!(e.cedis || "").trim()) { alert("Escribe el CEDIS."); return; }
+    if (!(e.tarifas || []).some((t) => Object.values(t.tramos || {}).some((v) => String(v).trim()))) { alert("Escribe al menos una tarifa por jornada."); return; }
+    setBusy(true);
+    const { nombre, sc, actualizado_at, actualizado_por, ...datos } = e;
+    const { error } = await sb.rpc("fn_ref_propuesta_guardar", { p_sc: sc, p_datos: datos, p_por: por });
+    setBusy(false);
+    if (error) { alert("No se pudo guardar la propuesta: " + error.message); return; }
+    setEditando(null); onCambio();
+  };
 
   return (
     <>
@@ -341,12 +369,29 @@ function Oportunidades({ lista, centros, usuario, onCambio }) {
             <thead><tr>{["Centro", "Tipo de vehículo", "Cantidad", "Tarifa por viaje", "Comentario", "En el portal", "Actualizado", ""].map((h) => <th key={h} style={th}>{h}</th>)}</tr></thead>
             <tbody>
               {Object.entries(porCentro).map(([sc, filas]) => filas.map((o, i) => (
-                <FilaOportunidad key={o.id} o={o} centro={i === 0 ? `${nombreDe(sc)} (${sc})` : ""} busy={busy} onGuardar={guardar} onBorrar={borrar} />
+                <FilaOportunidad key={o.id} o={o} busy={busy} onGuardar={guardar} onBorrar={borrar}
+                  centro={i === 0 ? (
+                    <>
+                      {nombreDe(sc)} ({sc})
+                      <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
+                        {propuestaDe(sc)
+                          ? <span style={{ fontSize: 11, fontWeight: 700, color: "#166534" }}>✓ Con propuesta</span>
+                          : <span style={{ fontSize: 11, fontWeight: 700, color: "#b42318" }}>Sin propuesta: no se puede postular</span>}
+                      </div>
+                      <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                        <button className="btn-blue" style={btnChico} onClick={() => abrirPropuesta(sc)}>📄 {propuestaDe(sc) ? "Editar propuesta" : "Crear propuesta"}</button>
+                        {propuestaDe(sc) && <button className="btn-back" style={btnChico} onClick={() => setViendo(propuestaDe(sc))}>👁 Ver</button>}
+                      </div>
+                    </>
+                  ) : ""} />
               )))}
             </tbody>
           </table>
         </div>
       )}
+      {viendo && <PropuestaVista p={viendo} onCerrar={() => setViendo(null)} />}
+      {editando && <PropuestaEditor e={editando} setE={setEditando} busy={busy} onGuardar={guardarPropuesta}
+        onVer={() => setViendo(editando)} onCerrar={() => setEditando(null)} />}
     </>
   );
 }
@@ -388,3 +433,195 @@ const th = { textAlign: "left", padding: "10px 12px", fontSize: 11, color: GRIS,
 const td = { padding: "10px 12px", verticalAlign: "top" };
 const sub = { fontSize: 11.5, color: GRIS, marginTop: 2 };
 const btnChico = { padding: "6px 12px", fontSize: 12 };
+
+// ── Propuesta económica por centro ─────────────────────────────────────────
+// Mismo formato que la propuesta de campañas (bigticket-portal): el editor y la
+// "Vista del conductor". La vista es la misma que ve el referido en el portal.
+const TRAMOS = ["0-100", "101-150", "151-200", "201-250", "251+"];
+
+function PropuestaVista({ p, onCerrar }) {
+  const titulo = (t) => (
+    <div style={{ fontSize: 14, fontWeight: 700, color: "#1a3a6b", marginBottom: 12, display: "flex", alignItems: "center", gap: 8 }}>
+      <div style={{ width: 4, height: 18, background: "#F47B20", borderRadius: 2 }} />{t}
+    </div>
+  );
+  const check = (items) => (
+    <div style={{ fontSize: 13, color: "#444", display: "flex", flexDirection: "column", gap: 8 }}>
+      {items.filter(Boolean).map((item, i) => (
+        <div key={i} style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+          <span style={{ color: "#27ae60", fontWeight: 700, flexShrink: 0 }}>✓</span><span>{item}</span>
+        </div>
+      ))}
+    </div>
+  );
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 210, overflowY: "auto", padding: "20px 16px" }}>
+      <div style={{ maxWidth: 680, margin: "0 auto", background: "#fff", borderRadius: 16, overflow: "hidden", boxShadow: "0 20px 60px rgba(0,0,0,0.3)" }}>
+        <div style={{ background: "#002f5d", padding: "14px 24px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <img src="https://psvdtgjvognbmxfvqbaa.supabase.co/storage/v1/object/public/assets/LOGO%20ENCUESTA%20Y%20PROPUESTA.png" alt="Bigticket" style={{ height: 34, objectFit: "contain" }} />
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <span style={{ color: "#fff", fontSize: 11, fontWeight: 600, letterSpacing: 1, textTransform: "uppercase" }}>Vista del Conductor</span>
+            <button onClick={onCerrar} style={{ background: "rgba(255,255,255,0.15)", border: "none", color: "#fff", borderRadius: "50%", width: 30, height: 30, cursor: "pointer", fontSize: 18 }}>×</button>
+          </div>
+        </div>
+        <div style={{ overflowY: "auto", maxHeight: "75vh" }}>
+          <div style={{ padding: "24px 24px 16px" }}>
+            <div style={{ fontSize: 22, fontWeight: 800, color: "#1a1a1a", marginBottom: 6 }}>Propuesta Económica</div>
+            <div style={{ width: 48, height: 3, background: "#F47B20", borderRadius: 2 }} />
+          </div>
+          <div style={{ padding: "0 24px 20px" }}>
+            {titulo("Condiciones Generales de la Operación")}
+            <div style={{ background: "#f8f9fa", borderRadius: 10, padding: "16px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, border: "0.5px solid #e4e7ec" }}>
+              {[["📍", "Dirección CEDIS", p.cedis], ["🕐", "Horario", p.horario], ["📦", "Entregas estimadas", p.entregas], ["🗓", "Devolución", p.devolucion]].map(([ic, l, v]) => v && (
+                <div key={l}>
+                  <div style={{ fontSize: 10, color: "#1a1a1a", fontWeight: 700, textTransform: "uppercase", marginBottom: 3 }}>{ic} {l}</div>
+                  <div style={{ fontSize: 13, fontWeight: 400, color: "#1a1a1a" }}>{v}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+          {p.tarifas?.length > 0 && (
+            <div style={{ padding: "0 24px 20px" }}>
+              {titulo("Tarifas por Jornada")}
+              <div style={{ overflowX: "auto", borderRadius: 10, border: "0.5px solid #e4e7ec" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                  <thead><tr style={{ background: "#1a3a6b", color: "#fff" }}>
+                    <th style={{ padding: "9px 12px", textAlign: "left" }}>Categoría</th>
+                    {TRAMOS.map((t) => <th key={t} style={{ padding: "9px 8px", textAlign: "center" }}>{t} km</th>)}
+                  </tr></thead>
+                  <tbody>
+                    {p.tarifas.map((t, i) => (
+                      <tr key={i} style={{ background: i % 2 === 0 ? "#f8f9fa" : "#fff", borderBottom: "0.5px solid #e4e7ec" }}>
+                        <td style={{ padding: "9px 12px", fontWeight: 700, color: "#1a1a1a" }}>{t.categoria}</td>
+                        {TRAMOS.map((k) => <td key={k} style={{ padding: "9px 8px", textAlign: "center", fontWeight: 600, color: "#1a1a1a" }}>{t.tramos?.[k] ? `$ ${t.tramos[k]}` : "—"}</td>)}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div style={{ fontSize: 11, color: "#888", marginTop: 6 }}>*Valores netos + IVA{p.auxiliar ? ` | Auxiliar: ${p.auxiliar}` : ""}</div>
+            </div>
+          )}
+          <div style={{ padding: "0 24px 20px" }}>
+            {titulo("Nivel de Servicio")}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 12 }}>
+              <div style={{ background: "#f0f2f5", borderRadius: 10, padding: "14px", textAlign: "center" }}>
+                <div style={{ fontSize: 10, color: "#888", fontWeight: 700, textTransform: "uppercase", marginBottom: 6 }}>Mínimo exigido</div>
+                <div style={{ fontSize: 22, fontWeight: 800, color: "#1a3a6b" }}>{p.ns_minimo || "99.00%"}</div>
+              </div>
+              <div style={{ background: "#f0fdf4", borderRadius: 10, padding: "14px", textAlign: "center", border: "1.5px solid #86efac" }}>
+                <div style={{ fontSize: 10, color: "#166534", fontWeight: 700, textTransform: "uppercase", marginBottom: 6 }}>Excelente 🏆</div>
+                <div style={{ fontSize: 16, fontWeight: 800, color: "#166534" }}>{p.ns_excelente}</div>
+                <div style={{ fontSize: 11, color: "#166534", marginTop: 4 }}>Premio: {p.ns_premio}</div>
+              </div>
+            </div>
+            <div style={{ background: "#fffbeb", borderRadius: 10, padding: "12px 16px", border: "1px solid #fde68a", display: "flex", gap: 8, alignItems: "flex-start" }}>
+              <span style={{ color: "#F47B20", flexShrink: 0 }}>⚠️</span>
+              <div style={{ fontSize: 12, color: "#92400e" }}><strong>Castigo:</strong> {p.ns_castigo}</div>
+            </div>
+          </div>
+          <div style={{ padding: "0 24px 20px" }}>
+            {titulo("Condiciones de Pago")}
+            {check(["Pago semanal cada viernes", "Transferencia bancaria, previa emisión de CFDI",
+              p.semana_retenida ? "Semana retenida al inicio como garantía" : null,
+              `Vigencia del contrato: ${p.vigencia || "12 meses"} condicionado al cumplimiento de los niveles de servicio.`])}
+          </div>
+          {p.requisitos && (
+            <div style={{ padding: "0 24px 20px" }}>
+              {titulo("Requisitos del Prestador")}
+              {check(p.requisitos.split("\n").filter(Boolean))}
+            </div>
+          )}
+          {p.notas && (
+            <div style={{ padding: "0 24px 20px" }}>
+              <div style={{ background: "#f0f9ff", borderRadius: 10, padding: "12px 16px", border: "1px solid #bae6fd", fontSize: 12, color: "#0369a1" }}>
+                <strong>📌 Nota:</strong> {p.notas}
+              </div>
+            </div>
+          )}
+        </div>
+        <div style={{ padding: "12px 24px", borderTop: "1px solid #e4e7ec", background: "#f8f9fa" }}>
+          <button onClick={onCerrar} className="btn-blue" style={{ width: "100%" }}>Cerrar preview</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PropuestaEditor({ e, setE, busy, onGuardar, onVer, onCerrar }) {
+  const upd = (k, v) => setE((p) => ({ ...p, [k]: v }));
+  const updTarifa = (ci, tramo, val) => setE((p) => {
+    const t = [...p.tarifas];
+    t[ci] = { ...t[ci], tramos: { ...t[ci].tramos, [tramo]: val } };
+    return { ...p, tarifas: t };
+  });
+  const campo = (k, label, ph) => (
+    <div className="field-row"><span className="field-label">{label}</span><input value={e[k] || ""} onChange={(x) => upd(k, x.target.value)} placeholder={ph} /></div>
+  );
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 200, overflowY: "auto", padding: "20px 16px" }}>
+      <div style={{ maxWidth: 680, margin: "0 auto", background: "#fff", borderRadius: 16, overflow: "hidden", boxShadow: "0 20px 60px rgba(0,0,0,0.3)" }}>
+        <div style={{ background: "#002f5d", padding: "16px 24px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div>
+            <div style={{ color: "#F47B20", fontSize: 11, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase" }}>Editar propuesta económica</div>
+            <div style={{ color: "#fff", fontSize: 16, fontWeight: 700, marginTop: 2 }}>{e.nombre}</div>
+          </div>
+          <button onClick={onCerrar} style={{ background: "rgba(255,255,255,0.15)", border: "none", color: "#fff", borderRadius: "50%", width: 32, height: 32, cursor: "pointer", fontSize: 18 }}>×</button>
+        </div>
+        <div style={{ padding: "20px 24px", overflowY: "auto", maxHeight: "70vh", display: "flex", flexDirection: "column", gap: 14 }}>
+          <div className="two-col">{campo("cliente", "Cliente / Operación", "Ej: MELI Querétaro")}{campo("cedis", "CEDIS *", "Ej: SQR1 | Av. Zaragoza 61")}</div>
+          <div className="two-col">{campo("horario", "Horario de presentación", "Por confirmar")}{campo("entregas", "Entregas estimadas", "80-100")}</div>
+          {campo("devolucion", "Devolución de mercancía no entregada", "Mismo SVC hasta las 22:00 hrs")}
+          <div>
+            <span className="field-label" style={{ fontSize: 13, fontWeight: 700, color: "#1a1a1a" }}>Tarifas por jornada *</span>
+            <div style={{ overflowX: "auto", marginTop: 8 }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                <thead><tr style={{ background: "#1a3a6b", color: "#fff" }}>
+                  <th style={{ padding: "8px 12px", textAlign: "left" }}>Categoría</th>
+                  {TRAMOS.map((t) => <th key={t} style={{ padding: "8px 10px", textAlign: "center" }}>{t} km</th>)}
+                </tr></thead>
+                <tbody>
+                  {(e.tarifas || []).map((cat, ci) => (
+                    <tr key={ci} style={{ background: ci % 2 === 0 ? "#f8f9fa" : "#fff" }}>
+                      <td style={{ padding: "8px 12px", fontWeight: 700, color: "#1a3a6b" }}>{cat.categoria}</td>
+                      {TRAMOS.map((t) => (
+                        <td key={t} style={{ padding: 4 }}>
+                          <input value={cat.tramos?.[t] || ""} onChange={(x) => updTarifa(ci, t, x.target.value)} placeholder="$0"
+                            style={{ width: "100%", padding: "5px 6px", border: "0.5px solid #d0d5dd", borderRadius: 6, fontSize: 12, textAlign: "center" }} />
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div style={{ fontSize: 11.5, color: GRIS, marginTop: 4 }}>Hay una fila por cada tipo de vehículo que se busca en este centro.</div>
+          </div>
+          {campo("auxiliar", "Tarifa auxiliar diario", "$300 MXN por día")}
+          <div className="two-col">{campo("ns_minimo", "NS mínimo", "99.00%")}{campo("ns_excelente", "NS excelente", "99.50% - 100%")}</div>
+          <div className="two-col">{campo("ns_premio", "Premio NS excelente", "5% sobre tarifa diaria")}{campo("ns_castigo", "Castigo bajo NS", "3% sobre tarifa base")}</div>
+          <div className="two-col">
+            {campo("vigencia", "Vigencia del contrato", "12 meses")}
+            <div className="field-row" style={{ display: "flex", alignItems: "center", paddingTop: 20 }}>
+              <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 13 }}>
+                <input type="checkbox" checked={e.semana_retenida || false} style={{ width: "auto" }} onChange={(x) => upd("semana_retenida", x.target.checked)} />
+                Semana retenida como garantía
+              </label>
+            </div>
+          </div>
+          <div className="field-row"><span className="field-label">Requisitos (uno por línea)</span>
+            <textarea value={e.requisitos || ""} onChange={(x) => upd("requisitos", x.target.value)} style={{ height: 100 }} placeholder={"Carta de no antecedentes penales\nLicencia vigente..."} />
+          </div>
+          <div className="field-row"><span className="field-label">Notas adicionales</span>
+            <textarea value={e.notas || ""} onChange={(x) => upd("notas", x.target.value)} style={{ height: 60 }} placeholder="Condiciones especiales..." />
+          </div>
+        </div>
+        <div style={{ padding: "12px 24px", borderTop: "1px solid #e4e7ec", background: "#f8f9fa", display: "flex", gap: 10 }}>
+          <button onClick={onCerrar} style={{ flex: 1, background: "#f4f5f7", border: "none", borderRadius: 10, padding: "11px", fontSize: 13, cursor: "pointer" }}>Cancelar</button>
+          <button onClick={onVer} className="btn-back" style={{ flex: 1 }}>👁 Vista previa</button>
+          <button onClick={onGuardar} disabled={busy} className="btn-blue" style={{ flex: 2 }}>💾 Guardar propuesta</button>
+        </div>
+      </div>
+    </div>
+  );
+}
