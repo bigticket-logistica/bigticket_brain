@@ -31,13 +31,24 @@ const C = {
 const SLA_H = 48;
 const REFRESCO_MS = 60 * 1000;
 
-async function api(path) {
+async function api(path, opciones) {
+  const o = opciones || {};
   const r = await fetch(`${CL_URL}/rest/v1/${path}`, {
-    headers: { apikey: CL_KEY, Authorization: `Bearer ${CL_KEY}` },
+    method: o.method || "GET",
+    headers: Object.assign({ apikey: CL_KEY, Authorization: `Bearer ${CL_KEY}`, "Content-Type": "application/json" }, o.headers || {}),
+    body: o.body,
   });
   if (!r.ok) throw new Error(`La consulta falló (HTTP ${r.status}). ${(await r.text()).slice(0, 250)}`);
-  return r.json();
+  const texto = await r.text();
+  return texto && texto.trim() ? JSON.parse(texto) : true;
 }
+
+// Origen del envío, legible para el informe.
+const nombreOrigen = (o) => {
+  if (!o) return "—";
+  if (o.startsWith("brain")) return "Botón Brain" + (o.includes("·") ? " ·" + o.split("·").slice(1).join("·") : "");
+  return { automatico: "Automático", analista: "Analista (manual)", vps_manual: "VPS manual" }[o] || o;
+};
 
 // Los ocho estados de MELI con el nombre de la planilla de la analista.
 const ESTADOS_PNR = [
@@ -143,8 +154,16 @@ function Reloj({ c, ahora }) {
 }
 
 // Aviso: una sola esfera. Verde con la fecha cuando el correo salió; hueca si no.
-function EsferaCorreo({ correo }) {
+function EsferaCorreo({ correo, solicitud }) {
   const enviado = correo && correo.enviado_en && !correo.error;
+  if (!enviado && solicitud && solicitud.estado === "pendiente") {
+    return (
+      <span style={{ display: "flex", flexDirection: "column", alignItems: "center", lineHeight: 1.2 }} title="En cola: el VPS lo envía en menos de un minuto">
+        <span style={{ width: 10, height: 10, borderRadius: 5, background: C.naranjaTenue, border: `1.5px solid ${C.naranja}` }} />
+        <span style={{ fontSize: 8.5, color: C.naranja, marginTop: 2 }}>en cola</span>
+      </span>
+    );
+  }
   return (
     <span style={{ display: "flex", flexDirection: "column", alignItems: "center", lineHeight: 1.2 }}
       title={enviado ? `Correo enviado ${fechaCorta(correo.enviado_en)}${correo.destino ? " a " + correo.destino : ""}`
@@ -407,7 +426,7 @@ function LineaTiempo({ movimientos }) {
   );
 }
 
-function Detalle({ c, raw, movimientos, correo, ahora }) {
+function Detalle({ c, raw, movimientos, correo, ahora, solicitud, onEnviar }) {
   const e = POR_ESTADO[c.sub_estado];
   const datos = datosRaw(raw);
   const transcurrido = c.fecha_caso ? (ahora - new Date(c.fecha_caso).getTime()) / 3600000 : null;
@@ -464,13 +483,31 @@ function Detalle({ c, raw, movimientos, correo, ahora }) {
             background: enviado ? C.verdeTenue : "#fff", padding: "9px 11px" }}>
             <div style={{ fontSize: 11, fontWeight: 600, color: enviado ? C.verde : C.suave, marginBottom: 6 }}>Correo a postventa</div>
             {enviado ? (
-              <div style={{ fontSize: 12, color: C.texto, lineHeight: 1.5 }}>
+              <div style={{ fontSize: 12, color: C.texto, lineHeight: 1.6 }}>
                 Enviado el {fechaCorta(correo.enviado_en)}{correo.destino ? <> a <strong>{correo.destino}</strong></> : null}.
+                {correo.ceco && <div><span style={{ color: C.suave }}>CECO</span> <strong>{correo.ceco}</strong>{correo.supervisor ? <> · {correo.supervisor}</> : null}</div>}
+                {correo.origen && <div style={{ color: C.suave }}>{nombreOrigen(correo.origen)}</div>}
+                {correo.asunto && <div style={{ fontSize: 11, color: C.tenue, marginTop: 2 }}>{correo.asunto}</div>}
               </div>
-            ) : correo && correo.error ? (
-              <div style={{ fontSize: 12, color: C.ladrillo }}>Falló: {correo.error}</div>
+            ) : solicitud && solicitud.estado === "pendiente" ? (
+              <div style={{ fontSize: 12, color: C.naranja }}>
+                En cola desde las {fechaCorta(solicitud.solicitado_en).split(" ").pop()}. El VPS lo envía en menos de un minuto.
+              </div>
             ) : (
-              <div style={{ fontSize: 12, color: C.tenue }}>Todavía no se envía.</div>
+              <>
+                {correo && correo.error && <div style={{ fontSize: 12, color: C.ladrillo, marginBottom: 6 }}>Falló: {correo.error}</div>}
+                {solicitud && solicitud.estado !== "enviado" && (
+                  <div style={{ fontSize: 11.5, color: solicitud.estado === "error" ? C.ladrillo : C.suave, marginBottom: 6 }}>
+                    Último intento desde el Brain ({fechaCorta(solicitud.procesado_en || solicitud.solicitado_en)}): {solicitud.resultado || solicitud.estado}
+                  </div>
+                )}
+                {!correo || !correo.error ? <div style={{ fontSize: 12, color: C.tenue, marginBottom: 8 }}>Todavía no se envía.</div> : null}
+                <button onClick={(e) => { e.stopPropagation(); onEnviar(c); }}
+                  style={{ width: "100%", fontSize: 12.5, fontWeight: 700, padding: "8px 12px", borderRadius: 8, cursor: "pointer",
+                    border: `1px solid ${C.naranja}`, background: C.naranja, color: "#fff", fontFamily: "inherit" }}>
+                  Enviar correo a postventa
+                </button>
+              </>
             )}
           </div>
 
@@ -482,7 +519,7 @@ function Detalle({ c, raw, movimientos, correo, ahora }) {
 
 const GRID = "14px 92px 168px minmax(118px,1fr) 150px 126px 90px 78px";
 
-function Fila({ c, abierta, onAbrir, ahora, movimientos, correo, raw, fueraDePeriodo }) {
+function Fila({ c, abierta, onAbrir, ahora, movimientos, correo, raw, fueraDePeriodo, solicitud, onEnviar }) {
   const ultimoMov = (movimientos || []).reduce((mx, m) => (!mx || new Date(m.cambiado_en) > new Date(mx) ? m.cambiado_en : mx), null);
   const color = COLOR_ESTADO[c.sub_estado] || C.gris;
   const h = hace(ultimoMov, ahora);
@@ -512,17 +549,162 @@ function Fila({ c, abierta, onAbrir, ahora, movimientos, correo, raw, fueraDePer
             <span style={{ display: "block", fontSize: 8.5, color: h.hoy ? C.naranja : C.tenue }}>{h.texto}</span>
           )}
         </span>
-        <EsferaCorreo correo={correo} />
+        <EsferaCorreo correo={correo} solicitud={solicitud} />
         <span style={{ textAlign: "right", fontSize: 13, fontWeight: 600, color: C.texto }}>{dinero(c.monto)}</span>
       </div>
-      {abierta && <Detalle c={c} raw={raw} movimientos={movimientos} correo={correo} ahora={ahora} />}
+      {abierta && <Detalle c={c} raw={raw} movimientos={movimientos} correo={correo} ahora={ahora} solicitud={solicitud} onEnviar={onEnviar} />}
     </Fragment>
+  );
+}
+
+// ── Informe de correos enviados ────────────────────────────────────────────
+
+const haceDias = (n) => {
+  const d = new Date(); d.setDate(d.getDate() - n);
+  return d.toLocaleDateString("en-CA", { timeZone: TZ });
+};
+const horaCL = (iso) => (iso ? new Intl.DateTimeFormat("es-CL", { timeZone: TZ, hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(iso)) : "");
+const fechaLarga = (iso) => (iso ? new Intl.DateTimeFormat("es-CL", { timeZone: TZ, day: "2-digit", month: "2-digit", year: "numeric" }).format(new Date(iso)) : "");
+
+function InformeEnviados({ casos, correos }) {
+  const [desde, setDesde] = useState(() => haceDias(6));
+  const [hasta, setHasta] = useState(() => hoyCL());
+  const [sc, setSc] = useState("todos");
+  const [ceco, setCeco] = useState("todos");
+  const [origen, setOrigen] = useState("todos");
+
+  const porId = useMemo(() => Object.fromEntries(casos.map((c) => [c.case_id, c])), [casos]);
+  const base = useMemo(() => Object.values(correos)
+    .filter((a) => a.enviado_en && !a.error)
+    .map((a) => ({ ...a, c: porId[a.case_id] || {} }))
+    .filter((r) => { const d = diaCL(r.enviado_en); return d >= desde && d <= hasta; }), [correos, porId, desde, hasta]);
+
+  const tipoOrigen = (o) => (!o ? "otro" : o.startsWith("brain") ? "brain" : o);
+  const filas = base
+    .filter((r) => sc === "todos" || r.c.service_center === sc)
+    .filter((r) => ceco === "todos" || (r.ceco || "Sin dato") === ceco)
+    .filter((r) => origen === "todos" || tipoOrigen(r.origen) === origen)
+    .sort((a, b) => new Date(b.enviado_en) - new Date(a.enviado_en));
+
+  const scs = [...new Set(base.map((r) => r.c.service_center).filter(Boolean))].sort();
+  const cecos = [...new Set(base.map((r) => r.ceco || "Sin dato"))].sort();
+  const monto = filas.reduce((s, r) => s + Number(r.c.monto || 0), 0);
+  const cuenta = (f) => filas.filter(f).length;
+  const porSc = {};
+  for (const r of filas) { const k = r.c.service_center || "—"; porSc[k] = porSc[k] || { n: 0, monto: 0 }; porSc[k].n++; porSc[k].monto += Number(r.c.monto || 0); }
+
+  const exportar = () => {
+    const cols = ["Fecha", "Hora", "Caso", "SC", "CECO", "Supervisor", "Conductor", "Patente", "Monto", "Estado actual", "Periodo", "Origen", "Destino", "Asunto"];
+    const q = (v) => `"${String(v == null ? "" : v).replace(/"/g, '""')}"`;
+    const lineas = filas.map((r) => [fechaLarga(r.enviado_en), horaCL(r.enviado_en), r.case_id, r.c.service_center, r.ceco, r.supervisor,
+      r.c.conductor, r.patente, Math.round(Number(r.c.monto || 0)), nombreEstado(r.c.sub_estado), r.c.periodo,
+      nombreOrigen(r.origen), r.destino, r.asunto].map(q).join(";"));
+    const blob = new Blob(["\ufeff" + [cols.map(q).join(";"), ...lineas].join("\n")], { type: "text/csv;charset=utf-8" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `pnr_correos_${desde}_a_${hasta}.csv`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  };
+
+  const sel = { fontSize: 12.5, padding: "6px 10px", borderRadius: 8, border: `1px solid ${C.borde}`, fontFamily: "inherit", background: "#fff" };
+  const caja = (titulo, valor, nota, color) => (
+    <div style={{ flex: 1, minWidth: 140, background: "#fff", border: `1px solid ${C.borde}`, borderTop: `3px solid ${color}`, borderRadius: 12, padding: "10px 14px" }}>
+      <div style={{ fontSize: 10.5, color: C.suave, textTransform: "uppercase", letterSpacing: .3 }}>{titulo}</div>
+      <div style={{ fontSize: 22, fontWeight: 600, color: C.texto, lineHeight: 1.3 }}>{valor}</div>
+      <div style={{ fontSize: 11, color: C.tenue }}>{nota}</div>
+    </div>
+  );
+  const GRID_I = "84px 46px 86px 52px 128px 132px minmax(140px,1fr) 64px 82px 128px 116px";
+
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
+        <span style={{ fontSize: 11.5, color: C.suave, fontWeight: 600 }}>DESDE</span>
+        <input type="date" value={desde} max={hasta} onChange={(e) => setDesde(e.target.value)} style={sel} />
+        <span style={{ fontSize: 11.5, color: C.suave, fontWeight: 600 }}>HASTA</span>
+        <input type="date" value={hasta} min={desde} max={hoyCL()} onChange={(e) => setHasta(e.target.value)} style={sel} />
+        <select value={sc} onChange={(e) => setSc(e.target.value)} style={sel}>
+          <option value="todos">Todas las SC</option>{scs.map((s) => <option key={s}>{s}</option>)}
+        </select>
+        <select value={ceco} onChange={(e) => setCeco(e.target.value)} style={sel}>
+          <option value="todos">Todos los CECO</option>{cecos.map((s) => <option key={s}>{s}</option>)}
+        </select>
+        <select value={origen} onChange={(e) => setOrigen(e.target.value)} style={sel}>
+          <option value="todos">Todos los orígenes</option>
+          <option value="automatico">Automático</option>
+          <option value="brain">Botón Brain</option>
+          <option value="analista">Analista (manual)</option>
+          <option value="vps_manual">VPS manual</option>
+        </select>
+        <button onClick={exportar} disabled={!filas.length}
+          style={{ marginLeft: "auto", fontSize: 12.5, padding: "6px 12px", borderRadius: 8, cursor: filas.length ? "pointer" : "default",
+            border: `1px solid ${C.navy}`, background: C.navy, color: "#fff", fontWeight: 700, fontFamily: "inherit", opacity: filas.length ? 1 : .5 }}>
+          Exportar CSV
+        </button>
+      </div>
+
+      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
+        {caja("Correos enviados", filas.length, `${fechaLarga(desde + "T12:00:00")} al ${fechaLarga(hasta + "T12:00:00")}`, C.verde)}
+        {caja("Monto reclamado", dinero(monto), "suma de los casos enviados", C.naranja)}
+        {caja("Automáticos", cuenta((r) => tipoOrigen(r.origen) === "automatico"), "sin intervención", C.navy)}
+        {caja("Desde el Brain", cuenta((r) => tipoOrigen(r.origen) === "brain"), "con el botón", C.navy)}
+        {caja("Por clasificar", cuenta((r) => r.ceco === "POR CLASIFICAR"), "CECO asignado a mano en Pipefy", C.ladrillo)}
+      </div>
+
+      {Object.keys(porSc).length > 0 && (
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
+          {Object.entries(porSc).sort((a, b) => b[1].n - a[1].n).map(([k, v]) => (
+            <span key={k} onClick={() => setSc(sc === k ? "todos" : k)}
+              style={{ fontSize: 11.5, padding: "4px 10px", borderRadius: 20, cursor: "pointer",
+                border: `1px solid ${sc === k ? C.navy : C.borde}`, background: sc === k ? C.navyTenue : "#fff", color: C.texto }}>
+              <strong>{k}</strong> {v.n} · {dinero(v.monto)}
+            </span>
+          ))}
+        </div>
+      )}
+
+      <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, overflow: "hidden" }}>
+        <div style={{ overflowX: "auto" }}>
+          <div style={{ minWidth: 1180 }}>
+            <div style={{ display: "grid", gridTemplateColumns: GRID_I, gap: 10, padding: "7px 16px", background: C.grisTenue,
+              fontSize: 9.5, letterSpacing: .3, textTransform: "uppercase", color: C.tenue, fontWeight: 600 }}>
+              <span>Fecha</span><span>Hora</span><span>Caso</span><span>SC</span><span>CECO</span><span>Supervisor</span>
+              <span>Conductor</span><span>Patente</span><span style={{ textAlign: "right" }}>Monto</span><span>Estado actual</span><span>Origen</span>
+            </div>
+            {!filas.length ? (
+              <div style={{ padding: 28, textAlign: "center", color: C.suave, fontSize: 13, borderTop: `1px solid ${C.borde}` }}>
+                No hay correos enviados con estos filtros.
+              </div>
+            ) : filas.map((r) => (
+              <div key={r.case_id} title={r.asunto || ""}
+                style={{ display: "grid", gridTemplateColumns: GRID_I, gap: 10, padding: "7px 16px", borderTop: `1px solid ${C.borde}`,
+                  fontSize: 12, alignItems: "center", color: C.texto }}>
+                <span style={{ fontVariantNumeric: "tabular-nums" }}>{fechaLarga(r.enviado_en)}</span>
+                <span style={{ color: C.suave, fontVariantNumeric: "tabular-nums" }}>{horaCL(r.enviado_en)}</span>
+                <span style={{ color: C.navy, fontWeight: 600 }}>{r.case_id}</span>
+                <span>{r.c.service_center || "—"}</span>
+                <span style={{ color: r.ceco === "POR CLASIFICAR" ? C.ladrillo : C.texto, fontWeight: r.ceco === "POR CLASIFICAR" ? 700 : 400 }}>{r.ceco || "—"}</span>
+                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.supervisor || "—"}</span>
+                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.c.conductor || "—"}</span>
+                <span style={{ color: C.suave }}>{r.patente || "—"}</span>
+                <span style={{ textAlign: "right", fontWeight: 600 }}>{dinero(r.c.monto)}</span>
+                <span style={{ color: COLOR_ESTADO[r.c.sub_estado] || C.gris, fontWeight: 600, fontSize: 11.5 }}>{nombreEstado(r.c.sub_estado)}</span>
+                <span style={{ color: C.suave, fontSize: 11.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{nombreOrigen(r.origen)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 
 // ── Pantalla ───────────────────────────────────────────────────────────────
 
-export default function ModuloPnrCL() {
+export default function ModuloPnrCL({ usuario }) {
+  const [vista, setVista] = useState("casos");
+  const [solicitudes, setSolicitudes] = useState({});
   const [casos, setCasos] = useState([]);
   const [historial, setHistorial] = useState({});
   const [correos, setCorreos] = useState({});
@@ -539,11 +721,15 @@ export default function ModuloPnrCL() {
 
   const cargar = useCallback(async () => {
     try {
-      const [filas, hist, avs] = await Promise.all([
+      const [filas, hist, avs, sols] = await Promise.all([
         api("pnr_casos_cl?select=case_id,tipo,fecha_caso,route_code,route_id,service_center,conductor,shipment_id,monto,moneda,estado,sub_estado,periodo,actualizado_en,creado_en&order=fecha_caso.desc&limit=5000"),
         api("pnr_historial_cl?select=id,case_id,sub_estado_desde,sub_estado_hacia,cambiado_en&order=cambiado_en.asc&limit=20000"),
-        api("pnr_avisos_cl?canal=eq.correo&select=case_id,destino,enviado_en,error&limit=10000"),
+        api("pnr_avisos_cl?canal=eq.correo&select=case_id,destino,enviado_en,error,asunto,ceco,supervisor,patente,origen&limit=10000"),
+        api("pnr_solicitudes_cl?select=id,case_id,estado,resultado,solicitado_en,solicitado_por,procesado_en&order=solicitado_en.desc&limit=500"),
       ]);
+      const so = {};
+      for (const s of sols || []) if (!so[s.case_id]) so[s.case_id] = s;   // la más reciente de cada caso
+      setSolicitudes(so);
       const h = {};
       for (const m of hist || []) (h[m.case_id] = h[m.case_id] || []).push(m);
       const co = {};
@@ -558,6 +744,30 @@ export default function ModuloPnrCL() {
 
   useEffect(() => { cargar(); const t = setInterval(cargar, REFRESCO_MS); return () => clearInterval(t); }, [cargar]);
   useEffect(() => { const t = setInterval(() => setAhora(Date.now()), 30000); return () => clearInterval(t); }, []);
+
+  // Mientras haya algo en cola se relee cada 10 s, para ver la esfera ponerse verde.
+  const hayEnCola = Object.values(solicitudes).some((s) => s.estado === "pendiente");
+  useEffect(() => {
+    if (!hayEnCola) return undefined;
+    const t = setInterval(cargar, 10000);
+    return () => clearInterval(t);
+  }, [hayEnCola, cargar]);
+
+  const enviarCorreo = async (c) => {
+    const quien = (usuario && (usuario.nombre || usuario.email)) || "Brain";
+    const ok = window.confirm(`¿Enviar el correo del caso ${c.case_id} a postventa@bigticket.cl?\n\n` +
+      `${c.service_center || ""} · ${c.conductor || ""} · ${dinero(c.monto)}\n\n` +
+      "Se crea la tarjeta en Pipefy, igual que con el envío automático.");
+    if (!ok) return;
+    try {
+      await api("pnr_solicitudes_cl", { method: "POST", headers: { Prefer: "return=minimal" },
+        body: JSON.stringify({ case_id: c.case_id, solicitado_por: quien }) });
+      setSolicitudes((p) => ({ ...p, [c.case_id]: { case_id: c.case_id, estado: "pendiente", solicitado_en: new Date().toISOString(), solicitado_por: quien } }));
+      cargar();
+    } catch (e) {
+      setError("No se pudo pedir el envío: " + e.message);
+    }
+  };
 
   const periodos = useMemo(() => [...new Set(casos.map((c) => c.periodo).filter(Boolean))].sort().reverse(), [casos]);
   useEffect(() => { if (!periodo && periodos.length) setPeriodo(periodos[0]); }, [periodos, periodo]);
@@ -637,14 +847,20 @@ export default function ModuloPnrCL() {
       {/* Cabecera */}
       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
         <span style={{ fontSize: 18, fontWeight: 800, color: C.navy, letterSpacing: -.3 }}>Posventa</span>
-        <span style={{ fontSize: 12, fontWeight: 700, color: "#fff", background: C.navy, borderRadius: 8, padding: "5px 12px" }}>PNR</span>
+        {[["casos", "PNR"], ["enviados", "Correos enviados"]].map(([k, et]) => (
+          <button key={k} onClick={() => setVista(k)}
+            style={{ fontSize: 12, fontWeight: 700, borderRadius: 8, padding: "5px 12px", cursor: "pointer", fontFamily: "inherit",
+              border: `1px solid ${C.navy}`, background: vista === k ? C.navy : "#fff", color: vista === k ? "#fff" : C.navy }}>
+            {et}
+          </button>
+        ))}
         <span style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
-          <input value={busqueda} onChange={(e) => setBusqueda(e.target.value)} placeholder="Buscar caso, envío, ruta o conductor"
-            style={{ fontSize: 12.5, padding: "6px 10px", borderRadius: 8, border: `1px solid ${C.borde}`, minWidth: 240, fontFamily: "inherit" }} />
-          <select value={periodo} onChange={(e) => setPeriodo(e.target.value)}
+          {vista === "casos" && <input value={busqueda} onChange={(e) => setBusqueda(e.target.value)} placeholder="Buscar caso, envío, ruta o conductor"
+            style={{ fontSize: 12.5, padding: "6px 10px", borderRadius: 8, border: `1px solid ${C.borde}`, minWidth: 240, fontFamily: "inherit" }} />}
+          {vista === "casos" && <select value={periodo} onChange={(e) => setPeriodo(e.target.value)}
             style={{ fontSize: 12.5, padding: "6px 10px", borderRadius: 8, border: `1px solid ${C.borde}`, fontFamily: "inherit" }}>
             {periodos.map((p) => <option key={p} value={p}>{p}</option>)}
-          </select>
+          </select>}
           <button onClick={cargar} style={{ fontSize: 12.5, padding: "6px 12px", borderRadius: 8, cursor: "pointer",
             border: `1px solid ${C.navy}`, background: "#fff", color: C.navy, fontWeight: 700, fontFamily: "inherit" }}>
             Actualizar
@@ -657,6 +873,9 @@ export default function ModuloPnrCL() {
           borderRadius: 10, padding: "10px 14px", fontSize: 12.5, marginBottom: 12 }}>{error}</div>
       )}
 
+      {vista === "enviados" && <InformeEnviados casos={casos} correos={correos} />}
+
+      {vista === "casos" && <>
       {/* Tarjetas: son el filtro */}
       <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 8 }}>
         {GRUPOS.map((g) => {
@@ -743,11 +962,13 @@ export default function ModuloPnrCL() {
             ) : lista.map((c) => (
               <Fila key={c.case_id} c={c} abierta={abiertas.has(c.case_id)} onAbrir={() => abrirFila(c)} ahora={ahora}
                 movimientos={historial[c.case_id]} correo={correos[c.case_id]} raw={raws[c.case_id]}
-                fueraDePeriodo={!!periodo && c.periodo !== periodo} />
+                fueraDePeriodo={!!periodo && c.periodo !== periodo}
+                solicitud={solicitudes[c.case_id]} onEnviar={enviarCorreo} />
             ))}
           </div>
         </div>
       </div>
+      </>}
     </div>
   );
 }

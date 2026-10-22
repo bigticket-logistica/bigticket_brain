@@ -15530,7 +15530,7 @@ export default function App() {
         {tabActivo === "mantenciones_cl" && <ModuloMantencionesMadre usuario={usuario} />}
         {tabActivo === "maestro_cl" && <ModuloMaestroCL />}
         {tabActivo === "gps_seguros_cl" && <ModuloGpsSegurosCL />}
-        {tabActivo === "pnr_cl" && <ModuloPnrCL />}
+        {tabActivo === "pnr_cl" && <ModuloPnrCL usuario={usuario} />}
         {tabActivo === "configuracion" && (
           <div className="pg" style={{ maxWidth: 700 }}>
             <div className="sec-title">Configuración</div>
