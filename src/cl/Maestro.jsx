@@ -221,6 +221,7 @@ function ModuloMaestroCL() {
   const [tarifaGuardando, setTarifaGuardando] = useState(null);
   const [tarifaMsg, setTarifaMsg] = useState("");
   const [tarifaServicio, setTarifaServicio] = useState("todos");
+  const [tarifaFiltros, setTarifaFiltros] = useState({});   // filtro por columna del tarifario
   const [tarifaNueva, setTarifaNueva] = useState(null);     // null = formulario cerrado
   const [adminCat, setAdminCat] = useState([]);             // nombres de cecos_admin para el alta
   // ── zona nueva + override de viaje ──
@@ -464,7 +465,8 @@ function ModuloMaestroCL() {
       await api(`tarifas?activa=eq.true`, {
         method: "PATCH", headers: { Prefer: "return=minimal" },
         body: JSON.stringify({ contingencia_activa: activar,
-          actualizado_at: new Date().toISOString(), actualizado_por: "brain" }),
+          // firma propia: el check verde marca solo las ediciones fila por fila
+          actualizado_at: new Date().toISOString(), actualizado_por: "brain_global" }),
       });
       await cargarTarifario();
       setTarifaMsg(`Contingencia ${activar ? "activada" : "desactivada"} en todas`);
@@ -1862,7 +1864,36 @@ function ModuloMaestroCL() {
             {tab === "tarifario" && (() => {
               const $m = (v) => v == null ? "—" :
                 "$" + Number(v).toLocaleString("es-CL", { maximumFractionDigits: 2 });
-              const visibles = tarifas.filter(t => tarifaServicio === "todos" || t.servicio === tarifaServicio);
+              // ── Filtros por columna ──
+              const editada = (t) => t.actualizado_por === "brain";   // editada o creada fila por fila en el Brain
+              const pagaDe = (t) => t.contingencia_activa ? "CONTINGENCIA" : "OFICIAL";
+              const cobrarDe = (t) => t.contingencia_activa ? t.cobrar_contingencia : t.cobrar_oficial;
+              const vigDe = (t) => `${t.vigente_desde || "—"} → ${t.vigente_hasta || "∞"}`;
+              const tipoDe = (t) => `${t.tipo_pago}${t.detalle ? " · " + t.detalle : ""}`;
+              const norm = (x) => String(x ?? "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+              const contiene = (valor, q) => !q || norm(valor).includes(norm(q));
+              const montoTxt = (v) => v == null ? "" : `${v} ${Number(v).toLocaleString("es-CL")}`;
+              const F = tarifaFiltros;
+              const setF = (k, v) => setTarifaFiltros(x => ({ ...x, [k]: v }));
+              const visibles = tarifas.filter(t =>
+                (tarifaServicio === "todos" || t.servicio === tarifaServicio)
+                && (!F.cecos || (F.cecos === "__todos__" ? !t.cecos_admin : t.cecos_admin === F.cecos))
+                && contiene(t.segmentacion, F.segmentacion)
+                && (!F.tipo || t.tipo_pago === F.tipo)
+                && (!F.vehiculo || t.tipo_vehiculo === F.vehiculo)
+                && contiene(montoTxt(t.tarifa_oficial), F.oficial)
+                && contiene(montoTxt(t.tarifa_contingencia), F.contingencia)
+                && (!F.paga || pagaDe(t) === F.paga)
+                && contiene(montoTxt(cobrarDe(t)), F.cobrar)
+                && contiene(vigDe(t), F.vigencia)
+                && (!F.estado || (F.estado === "ACTIVA") === !!t.activa)
+                && (!F.edicion || (F.edicion === "editadas") === editada(t)));
+              const opciones = (fn) => [...new Set(tarifas.map(fn).filter(Boolean))].sort();
+              const hayFiltros = tarifaServicio !== "todos" || Object.values(F).some(Boolean);
+              const nEditadas = tarifas.filter(editada).length;
+              const fil = { width: "100%", minWidth: 70, fontSize: 11, padding: "3px 5px",
+                            borderRadius: 5, border: "1px solid #cbd5e1", background: "#fff",
+                            color: "#1e293b", fontWeight: 500 };
               const conContingencia = tarifas.filter(t => t.activa && t.contingencia_activa).length;
               const inp = { fontSize: 11.5, width: 92, textAlign: "right" };
               return (
@@ -1980,6 +2011,17 @@ function ModuloMaestroCL() {
                     </div>
                   )}
 
+                  <div style={{ display: "flex", gap: 10, alignItems: "center", margin: "0 2px 6px",
+                                fontSize: 12, color: "#64748b" }}>
+                    <span>Mostrando <strong>{fmt(visibles.length)}</strong> de {fmt(tarifas.length)} tarifas
+                      {nEditadas ? <> · <span style={{ color: "#0d8043", fontWeight: 700 }}>✓ {nEditadas} editada{nEditadas === 1 ? "" : "s"}</span></> : null}</span>
+                    {hayFiltros && (
+                      <button className="mj-btn" style={{ padding: "2px 10px", fontSize: 11 }}
+                              onClick={() => { setTarifaFiltros({}); setTarifaServicio("todos"); }}>
+                        Limpiar filtros
+                      </button>
+                    )}
+                  </div>
                   <div style={{ background: "#fff", border: "1px solid #e6e9ef", borderRadius: 10, overflow: "hidden" }}>
                     <div style={{ overflowX: "auto" }}>
                       <table className="mj-tabla">
@@ -1993,12 +2035,58 @@ function ModuloMaestroCL() {
                             <th style={{ textAlign: "right" }}>Cobrar</th>
                             <th>Vigencia</th><th>Estado</th><th></th>
                           </tr>
+                          <tr>
+                            <th><select style={fil} value={tarifaServicio} onChange={e => setTarifaServicio(e.target.value)}>
+                              <option value="todos">todos</option>
+                              {opciones(t => t.servicio).map(v => <option key={v} value={v}>{v}</option>)}
+                            </select></th>
+                            <th><select style={fil} value={F.cecos || ""} onChange={e => setF("cecos", e.target.value)}>
+                              <option value="">todos</option>
+                              <option value="__todos__">(aplica a todos)</option>
+                              {opciones(t => t.cecos_admin).map(v => <option key={v} value={v}>{v}</option>)}
+                            </select></th>
+                            <th><input style={fil} placeholder="buscar…" value={F.segmentacion || ""}
+                                   onChange={e => setF("segmentacion", e.target.value)} /></th>
+                            <th><select style={fil} value={F.tipo || ""} onChange={e => setF("tipo", e.target.value)}>
+                              <option value="">todos</option>
+                              {opciones(t => t.tipo_pago).map(v => <option key={v} value={v}>{v}</option>)}
+                            </select></th>
+                            <th><select style={fil} value={F.vehiculo || ""} onChange={e => setF("vehiculo", e.target.value)}>
+                              <option value="">todos</option>
+                              {opciones(t => t.tipo_vehiculo).map(v => <option key={v} value={v}>{v}</option>)}
+                            </select></th>
+                            <th><input style={fil} placeholder="monto…" value={F.oficial || ""}
+                                   onChange={e => setF("oficial", e.target.value)} /></th>
+                            <th><input style={fil} placeholder="monto…" value={F.contingencia || ""}
+                                   onChange={e => setF("contingencia", e.target.value)} /></th>
+                            <th><select style={fil} value={F.paga || ""} onChange={e => setF("paga", e.target.value)}>
+                              <option value="">todas</option>
+                              <option value="CONTINGENCIA">CONTINGENCIA</option>
+                              <option value="OFICIAL">OFICIAL</option>
+                            </select></th>
+                            <th><input style={fil} placeholder="monto…" value={F.cobrar || ""}
+                                   onChange={e => setF("cobrar", e.target.value)} /></th>
+                            <th><input style={fil} placeholder="ej. 2026-08" value={F.vigencia || ""}
+                                   onChange={e => setF("vigencia", e.target.value)} /></th>
+                            <th><select style={fil} value={F.estado || ""} onChange={e => setF("estado", e.target.value)}>
+                              <option value="">todas</option>
+                              <option value="ACTIVA">ACTIVA</option>
+                              <option value="INACTIVA">INACTIVA</option>
+                            </select></th>
+                            <th><select style={fil} value={F.edicion || ""} onChange={e => setF("edicion", e.target.value)}
+                                    title="Editadas = modificadas o creadas fila por fila desde el Brain">
+                              <option value="">todas</option>
+                              <option value="editadas">✓ editadas ({nEditadas})</option>
+                              <option value="sin_editar">sin editar</option>
+                            </select></th>
+                          </tr>
                         </thead>
                         <tbody>
                           {visibles.map(t => {
                             const ed = tarifaEdit[t.id];
                             return (
-                              <tr key={t.id} style={!t.activa ? { opacity: 0.5 } : undefined}>
+                              <tr key={t.id} style={{ ...(!t.activa ? { opacity: 0.5 } : {}),
+                                                      ...(editada(t) ? { background: "#ecfdf3" } : {}) }}>
                                 <td>{t.servicio === "MELI ONE"
                                       ? <Etiqueta texto="MELI ONE" color="#5b21b6" fondo="#ede9fe" />
                                       : <span style={{ fontSize: 12, fontWeight: 600 }}>{t.servicio}</span>}</td>
@@ -2079,6 +2167,14 @@ function ModuloMaestroCL() {
                                       </button>
                                     </Fragment>
                                   ) : (
+                                    <Fragment>
+                                    {editada(t) && (
+                                      <span title={`Editada en el Brain el ${t.actualizado_at
+                                              ? new Date(t.actualizado_at).toLocaleString("es-CL") : "—"}`}
+                                            style={{ fontSize: 10.5, fontWeight: 800, color: "#0d8043",
+                                                     background: "#d1fadf", borderRadius: 10, padding: "2px 7px",
+                                                     marginRight: 5, whiteSpace: "nowrap" }}>✓ editada</span>
+                                    )}
                                     <button className="mj-btn" style={{ padding: "3px 10px", fontSize: 11 }}
                                       onClick={() => setTarifaEdit(x => ({ ...x, [t.id]: {
                                         tarifa_oficial: t.tarifa_oficial,
@@ -2088,6 +2184,7 @@ function ModuloMaestroCL() {
                                         activa: t.activa } }))}>
                                       Editar
                                     </button>
+                                    </Fragment>
                                   )}
                                 </td>
                               </tr>
@@ -2095,7 +2192,8 @@ function ModuloMaestroCL() {
                           })}
                           {visibles.length === 0 && (
                             <tr><td colSpan={12} style={{ textAlign: "center", color: "#94a3b8", padding: 18 }}>
-                              Sin tarifas cargadas (requiere las migraciones 32 y 37).
+                              {tarifas.length ? "Ninguna tarifa calza con estos filtros."
+                                              : "Sin tarifas cargadas (requiere las migraciones 32 y 37)."}
                             </td></tr>
                           )}
                         </tbody>
