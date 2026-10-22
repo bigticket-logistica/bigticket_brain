@@ -473,19 +473,6 @@ function Detalle({ c, raw, movimientos, correo, ahora }) {
             )}
           </div>
 
-          <a href={`https://envios.adminml.com/logistics/case-center/cases/${c.case_id}`} target="_blank" rel="noreferrer"
-            style={{ fontSize: 13, fontWeight: 600, padding: "9px 14px", borderRadius: 9, textAlign: "center",
-              border: `1px solid ${C.naranja}`, background: C.naranja, color: "#fff", textDecoration: "none" }}>
-            Abrir caso en MELI
-          </a>
-          {c.route_id && (
-            <a href={`https://envios.adminml.com/logistics/monitoring-distribution/detail/${c.route_id}?site=MLC`}
-              target="_blank" rel="noreferrer"
-              style={{ fontSize: 12.5, fontWeight: 600, padding: "8px 14px", borderRadius: 9, textAlign: "center",
-                border: `1px solid ${C.navy}`, background: "#fff", color: C.navy, textDecoration: "none" }}>
-              Ver ruta y mapa de entregas
-            </a>
-          )}
         </div>
       </div>
     </div>
