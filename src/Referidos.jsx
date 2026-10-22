@@ -57,30 +57,33 @@ export default function ModuloReferidos({ usuario }) {
   const [oportunidades, setOportunidades] = useState([]);
   const [centros, setCentros] = useState([]);
   const [propuestas, setPropuestas] = useState([]);
+  const [canales, setCanales] = useState([]);   // fuentes de Bigticket sin referidor (camioneta, Facebook)
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState("");
 
   const cargar = useCallback(async () => {
     setCargando(true); setError("");
-    const [b, r, p, o, c, pr] = await Promise.all([
+    const [b, r, p, o, c, pr, ca] = await Promise.all([
       sb.from("vw_ref_brain_premios").select("*").order("cumplido_at", { ascending: false }),
       sb.from("vw_ref_brain_referidos").select("*").order("creado_at", { ascending: false }),
       sb.from("vw_ref_brain_referidores").select("*").order("creado_at", { ascending: false }),
       sb.from("ref_oportunidades").select("*").order("sc"),
       sb.from("centros_mx").select("sc, nombre").eq("activo", true).order("nombre"),
       sb.from("ref_propuestas").select("*"),
+      sb.from("ref_canales").select("*").order("creado_at"),
     ]);
+    // Si ref_canales no se puede leer, la pestaña sigue funcionando sin las filas de canal.
     const err = b.error || r.error || p.error || o.error || c.error || pr.error;
     if (err) setError(err.message);
     setBonos(b.data || []); setReferidos(r.data || []); setReferidores(p.data || []);
-    setOportunidades(o.data || []); setCentros(c.data || []); setPropuestas(pr.data || []);
+    setOportunidades(o.data || []); setCentros(c.data || []); setPropuestas(pr.data || []); setCanales(ca.data || []);
     setCargando(false);
   }, []);
   useEffect(() => { cargar(); }, [cargar]);
 
   const porValidar = bonos.filter((x) => x.estado === "por_validar").length;
   const vacantes = oportunidades.filter((x) => x.activa && x.cantidad > 0).reduce((t, x) => t + x.cantidad, 0);
-  const TABS = [["bonos", "Bonos", porValidar], ["referidos", "Referidos", referidos.length], ["referidores", "Referidores", referidores.length], ["oportunidades", "Oportunidades", vacantes]];
+  const TABS = [["bonos", "Bonos", porValidar], ["referidos", "Referidos", referidos.length], ["referidores", "Referidores", referidores.length + canales.length], ["oportunidades", "Oportunidades", vacantes]];
 
   return (
     <div className="pg">
@@ -98,8 +101,8 @@ export default function ModuloReferidos({ usuario }) {
       {cargando ? <div className="loading">Cargando…</div> : (
         <>
           {tab === "bonos" && <Bonos bonos={bonos} usuario={usuario} onCambio={cargar} />}
-          {tab === "referidos" && <Referidos referidos={referidos} />}
-          {tab === "referidores" && <Referidores referidores={referidores} />}
+          {tab === "referidos" && <Referidos referidos={referidos} canales={canales} />}
+          {tab === "referidores" && <Referidores referidores={referidores} canales={canales} referidos={referidos} />}
           {tab === "oportunidades" && <Oportunidades lista={oportunidades} centros={centros} propuestas={propuestas} usuario={usuario} onCambio={cargar} />}
         </>
       )}
@@ -188,11 +191,12 @@ function Cifra({ t, v, c }) {
 }
 
 // ── Referidos ───────────────────────────────────────────────────────────────
-function Referidos({ referidos }) {
+function Referidos({ referidos, canales = [] }) {
+  const canalDe = (c) => (canales.find((x) => x.codigo === c) || {}).nombre || c;
   const [q, setQ] = useState("");
   const [etapa, setEtapa] = useState("");
   const lista = useMemo(() => referidos.filter((r) => {
-    const t = `${r.nombre} ${r.razon_social || ""} ${r.rfc} ${r.referidor} ${r.codigo}`.toLowerCase();
+    const t = `${r.nombre} ${r.razon_social || ""} ${r.rfc} ${r.referidor} ${r.codigo} ${r.canal || ""}`.toLowerCase();
     return (!q || t.includes(q.toLowerCase())) && (!etapa || r.etapa === etapa);
   }), [referidos, q, etapa]);
 
@@ -214,7 +218,7 @@ function Referidos({ referidos }) {
                 <tr key={r.referido_id} style={{ borderTop: `0.5px solid ${BORDE}` }}>
                   <td style={td}>{fecha(r.creado_at)}</td>
                   <td style={td}><b>{r.razon_social || r.nombre}</b><div style={sub}>{r.tipo === "persona_moral" ? "Persona moral" : "Persona física"} · RFC {r.rfc}</div></td>
-                  <td style={td}>{r.referidor}<div style={sub}>{r.codigo}</div></td>
+                  <td style={td}>{r.canal ? <>{canalDe(r.canal)}<div style={sub}>Canal Bigticket</div></> : <>{r.referidor}<div style={sub}>{r.codigo}</div></>}</td>
                   <td style={td}><Pill par={ETAPAS[r.etapa] || ETAPAS.registrado} /></td>
                   <td style={td}>{fecha(r.firmado_at)}</td>
                   <td style={td}>{fecha(r.primera_ruta)}</td>
@@ -230,17 +234,52 @@ function Referidos({ referidos }) {
 }
 
 // ── Referidores ─────────────────────────────────────────────────────────────
-function Referidores({ referidores }) {
+// Los canales de Bigticket (camioneta, Facebook) se muestran como un referidor
+// más, para ver cuántos referidos nacen de cada fuente. No generan bonos.
+const FIRMADO = ["contrato_firmado", "primera_ruta", "quince_rutas", "sin_meta_30_dias"];
+const EN_RUTA = ["primera_ruta", "quince_rutas", "sin_meta_30_dias"];
+
+function Referidores({ referidores, canales = [], referidos = [] }) {
   const [q, setQ] = useState("");
   const lista = referidores.filter((r) => !q || `${r.nombre} ${r.codigo} ${r.correo} ${r.telefono} ${r.curp}`.toLowerCase().includes(q.toLowerCase()));
+  const deCanal = (c) => referidos.filter((r) => r.canal === c);
+  const listaCanales = canales.filter((c) => !q || `${c.nombre} ${c.codigo}`.toLowerCase().includes(q.toLowerCase()));
+  const fuentes = [
+    ["Referidores", referidos.filter((r) => !r.canal).length],
+    ...canales.map((c) => [c.nombre, deCanal(c.codigo).length]),
+  ];
+  const totalRef = referidos.length || 1;
   return (
     <>
+      <div className="form-card" style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+        <span style={{ fontSize: 12, color: GRIS, fontWeight: 600, textTransform: "uppercase", letterSpacing: ".04em" }}>Referidos por fuente</span>
+        {fuentes.map(([n, k]) => (
+          <span key={n} style={{ background: "#f8f9fb", border: `0.5px solid ${BORDE}`, borderRadius: 20, padding: "5px 12px", fontSize: 13 }}>
+            {n}: <b style={{ color: AZUL }}>{k}</b> <span style={{ color: GRIS }}>({Math.round((k * 100) / totalRef)}%)</span>
+          </span>
+        ))}
+      </div>
       <input placeholder="Buscar por nombre, código, correo, teléfono o CURP…" value={q} onChange={(e) => setQ(e.target.value)} style={{ marginBottom: 12 }} />
-      {lista.length === 0 ? <div className="empty">No hay referidores con esa búsqueda.</div> : (
+      {lista.length + listaCanales.length === 0 ? <div className="empty">No hay referidores con esa búsqueda.</div> : (
         <div className="form-card" style={{ padding: 0, overflowX: "auto" }}>
           <table style={tabla}>
             <thead><tr>{["Inscrito", "Referidor", "Código", "Contacto", "Cuenta", "Referidos", "Ganado", "Pagado"].map((h) => <th key={h} style={th}>{h}</th>)}</tr></thead>
             <tbody>
+              {listaCanales.map((c) => {
+                const rs = deCanal(c.codigo);
+                return (
+                  <tr key={"canal-" + c.codigo} style={{ borderTop: `0.5px solid ${BORDE}`, background: "#f5f8ff" }}>
+                    <td style={td}>{fecha(c.creado_at)}</td>
+                    <td style={td}><b>{c.nombre}</b><div style={sub}>Canal Bigticket{c.activo ? "" : " · inactivo"}</div></td>
+                    <td style={{ ...td, fontWeight: 700 }}>/c/{c.codigo}</td>
+                    <td style={td}><span style={sub}>referidos.fleetbiggy.com/c/{c.codigo}</span></td>
+                    <td style={td}><span style={{ color: GRIS, fontSize: 12 }}>No genera bonos</span></td>
+                    <td style={td}>{rs.length}<div style={sub}>{rs.filter((r) => FIRMADO.includes(r.etapa)).length} firmados · {rs.filter((r) => EN_RUTA.includes(r.etapa)).length} en ruta</div></td>
+                    <td style={td}>—</td>
+                    <td style={td}>—</td>
+                  </tr>
+                );
+              })}
               {lista.map((r) => (
                 <tr key={r.id} style={{ borderTop: `0.5px solid ${BORDE}` }}>
                   <td style={td}>{fecha(r.creado_at)}</td>
@@ -320,6 +359,12 @@ function Oportunidades({ lista, centros, propuestas, usuario, onCambio }) {
   // Propuesta del centro: si no existe se parte vacía, con una fila de tarifas
   // por cada tipo de vehículo que se busca en ese centro.
   const propuestaDe = (sc) => propuestas.find((p) => p.sc === sc);
+  // Tipos que están en la tabla de tarifas de la propuesta pero no como oportunidad.
+  // El portal también los ofrece (con la tarifa de 0-100 km), así que aquí se muestran.
+  const numero = (v) => Number(String(v ?? "").replace(/\D/g, "")) || "";
+  const soloPropuesta = (sc) => ((propuestaDe(sc) || {}).tarifas || [])
+    .filter((t) => (t.categoria || "").trim() && !(porCentro[sc] || []).some((o) => o.tipo_vehiculo.toLowerCase() === t.categoria.trim().toLowerCase()))
+    .map((t) => ({ sc, tipo_vehiculo: t.categoria.trim(), tarifa: numero(t.tramos?.["0-100"]) }));
   const abrirPropuesta = (sc) => {
     const p = propuestaDe(sc) || { sc, tarifas: [], semana_retenida: false };
     const tarifas = [...(p.tarifas || [])];
@@ -392,9 +437,9 @@ function Oportunidades({ lista, centros, propuestas, usuario, onCambio }) {
           <table style={tabla}>
             <thead><tr>{["Centro", "Tipo de vehículo", "Cantidad", "Tarifa por viaje", "Comentario", "En el portal", "Actualizado", ""].map((h) => <th key={h} style={th}>{h}</th>)}</tr></thead>
             <tbody>
-              {Object.entries(porCentro).map(([sc, filas]) => filas.map((o, i) => (
-                <FilaOportunidad key={o.id} o={o} busy={busy} onGuardar={guardar} onBorrar={borrar}
-                  centro={i === 0 ? (
+              {Object.entries(porCentro).map(([sc, filas]) => {
+                const celda = (
+
                     <>
                       {nombreDe(sc)} ({sc})
                       <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
@@ -407,8 +452,17 @@ function Oportunidades({ lista, centros, propuestas, usuario, onCambio }) {
                         {propuestaDe(sc) && <button className="btn-back" style={btnChico} onClick={() => setViendo(propuestaDe(sc))}>👁 Ver</button>}
                       </div>
                     </>
-                  ) : ""} />
-              )))}
+                  
+                );
+                return [
+                  ...filas.map((o, i) => (
+                    <FilaOportunidad key={o.id} o={o} busy={busy} onGuardar={guardar} onBorrar={borrar} centro={i === 0 ? celda : ""} />
+                  )),
+                  ...soloPropuesta(sc).map((t) => (
+                    <FilaSoloPropuesta key={sc + t.tipo_vehiculo} t={t} busy={busy} onGuardar={guardar} />
+                  )),
+                ];
+              })}
             </tbody>
           </table>
         </div>
@@ -417,6 +471,35 @@ function Oportunidades({ lista, centros, propuestas, usuario, onCambio }) {
       {editando && <PropuestaEditor e={editando} setE={setEditando} busy={busy} onGuardar={guardarPropuesta}
         onVer={() => setViendo(editando)} onCerrar={() => setEditando(null)} />}
     </>
+  );
+}
+
+// Tipo que solo está en la propuesta: se ve y se puede pasar a oportunidad con su cantidad.
+function FilaSoloPropuesta({ t, busy, onGuardar }) {
+  const [cantidad, setCantidad] = useState("");
+  const [tarifa, setTarifa] = useState(t.tarifa);
+  const [nota, setNota] = useState("");
+  const agregar = () => {
+    if (!(Number(cantidad) > 0)) { alert("Escribe cuántos vehículos se buscan."); return; }
+    if (!(Number(tarifa) > 0)) { alert("Escribe la tarifa por viaje."); return; }
+    onGuardar(t.sc, t.tipo_vehiculo, cantidad, true, nota, tarifa);
+  };
+  return (
+    <tr style={{ borderTop: `0.5px solid ${BORDE}`, background: "#fffaf5" }}>
+      <td style={td} />
+      <td style={td}>{t.tipo_vehiculo}</td>
+      <td style={td}><input type="number" min="0" placeholder="—" value={cantidad} onChange={(e) => setCantidad(e.target.value)} style={{ width: 80 }} /></td>
+      <td style={td}>
+        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>$<input type="number" min="0" value={tarifa} onChange={(e) => setTarifa(e.target.value)} style={{ width: 90 }} /></div>
+        <div style={sub}>Tarifa 0-100 km de la propuesta</div>
+      </td>
+      <td style={td}><textarea rows={1} value={nota} onChange={(e) => setNota(e.target.value)} placeholder="—" style={{ minWidth: 180, resize: "vertical" }} /></td>
+      <td style={td}><span style={{ color: "#b45309", fontWeight: 700, fontSize: 12.5 }}>Se muestra<br />(desde la propuesta)</span></td>
+      <td style={td}><span style={sub}>Sin cantidad</span></td>
+      <td style={{ ...td, whiteSpace: "nowrap" }}>
+        <button className="btn-blue" style={btnChico} disabled={busy} onClick={agregar}>Agregar como oportunidad</button>
+      </td>
+    </tr>
   );
 }
 
