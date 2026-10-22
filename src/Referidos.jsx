@@ -270,19 +270,25 @@ const TIPOS_SUGERIDOS = ["Small Van", "Large Van", "Auto", "Moto", "Camioneta pi
 function Oportunidades({ lista, centros, propuestas, usuario, onCambio }) {
   const [editando, setEditando] = useState(null);   // propuesta en edición
   const [viendo, setViendo] = useState(null);       // propuesta en vista previa
-  const [nuevo, setNuevo] = useState({ sc: "", tipo: "Small Van", cantidad: 1, tarifa: "", nota: "" });
+  // Una oportunidad nueva puede traer varios tipos de vehículo a la vez (una fila por tipo).
+  const NUEVO = () => ({ sc: "", filas: [{ tipo: "Small Van", cantidad: 1, tarifa: "" }], nota: "" });
+  const [nuevo, setNuevo] = useState(NUEVO);
+  const setFila = (i, k, v) => setNuevo((n) => ({ ...n, filas: n.filas.map((f, j) => (j === i ? { ...f, [k]: v } : f)) }));
+  const otraFila = () => setNuevo((n) => ({ ...n, filas: [...n.filas, { tipo: "", cantidad: 1, tarifa: "" }] }));
+  const quitarFila = (i) => setNuevo((n) => ({ ...n, filas: n.filas.filter((_, j) => j !== i) }));
   const [busy, setBusy] = useState(false);
   const nombreDe = (sc) => (centros.find((c) => c.sc === sc) || {}).nombre || sc;
   const tipos = [...new Set([...TIPOS_SUGERIDOS, ...lista.map((x) => x.tipo_vehiculo)])];
   const por = usuario?.email || usuario?.nombre || "brain";
 
-  const guardar = async (sc, tipo, cantidad, activa, nota, tarifa) => {
+  const guardar = async (sc, tipo, cantidad, activa, nota, tarifa, recargar = true) => {
     setBusy(true);
     const t = tarifa === "" || tarifa == null ? null : Number(tarifa);
     const { error } = await sb.rpc("fn_ref_oportunidad_guardar", { p_sc: sc, p_tipo: tipo, p_cantidad: Number(cantidad) || 0, p_activa: activa, p_nota: nota || null, p_tarifa: t, p_por: por });
     setBusy(false);
-    if (error) { alert("No se pudo guardar: " + error.message); return false; }
-    onCambio(); return true;
+    if (error) { alert(`No se pudo guardar ${tipo}: ` + error.message); return false; }
+    if (recargar) onCambio();
+    return true;
   };
   const borrar = async (o) => {
     if (!confirm(`¿Quitar la oportunidad de ${o.tipo_vehiculo} en ${nombreDe(o.sc)}?`)) return;
@@ -294,10 +300,18 @@ function Oportunidades({ lista, centros, propuestas, usuario, onCambio }) {
   };
   const agregar = async () => {
     if (!nuevo.sc) { alert("Elige el centro."); return; }
-    if (nuevo.tipo.trim().length < 2) { alert("Escribe el tipo de vehículo."); return; }
-    if (!(Number(nuevo.cantidad) > 0)) { alert("Escribe cuántos vehículos se buscan."); return; }
-    if (!(Number(nuevo.tarifa) > 0)) { alert("Escribe la tarifa por viaje."); return; }
-    if (await guardar(nuevo.sc, nuevo.tipo.trim(), nuevo.cantidad, true, nuevo.nota, nuevo.tarifa)) setNuevo({ sc: "", tipo: "Small Van", cantidad: 1, tarifa: "", nota: "" });
+    const filas = nuevo.filas.map((f) => ({ ...f, tipo: f.tipo.trim() }));
+    for (const [i, f] of filas.entries()) {
+      const n = filas.length > 1 ? ` (fila ${i + 1})` : "";
+      if (f.tipo.length < 2) { alert("Escribe el tipo de vehículo" + n + "."); return; }
+      if (!(Number(f.cantidad) > 0)) { alert("Escribe cuántos vehículos se buscan" + n + "."); return; }
+      if (!(Number(f.tarifa) > 0)) { alert("Escribe la tarifa por viaje" + n + "."); return; }
+    }
+    if (new Set(filas.map((f) => f.tipo.toLowerCase())).size !== filas.length) { alert("Hay un tipo de vehículo repetido."); return; }
+    let ok = true;
+    for (const f of filas) ok = (await guardar(nuevo.sc, f.tipo, f.cantidad, true, nuevo.nota, f.tarifa, false)) && ok;
+    onCambio();
+    if (ok) setNuevo(NUEVO());
   };
 
   const total = lista.filter((x) => x.activa && x.cantidad > 0).reduce((t, x) => t + x.cantidad, 0);
@@ -316,6 +330,7 @@ function Oportunidades({ lista, centros, propuestas, usuario, onCambio }) {
   const guardarPropuesta = async () => {
     const e = editando;
     if (!(e.cedis || "").trim()) { alert("Escribe el CEDIS."); return; }
+    if ((e.tarifas || []).some((t) => !(t.categoria || "").trim())) { alert("Escribe el tipo de vehículo de cada fila de tarifas, o quita la fila vacía."); return; }
     if (!(e.tarifas || []).some((t) => Object.values(t.tramos || {}).some((v) => String(v).trim()))) { alert("Escribe al menos una tarifa por jornada."); return; }
     setBusy(true);
     const { nombre, sc, actualizado_at, actualizado_por, ...datos } = e;
@@ -332,26 +347,35 @@ function Oportunidades({ lista, centros, propuestas, usuario, onCambio }) {
         <div style={{ fontSize: 12.5, color: GRIS, marginBottom: 12 }}>
           Lo que esté activo y con cantidad aparece en el portal de referidos y en la postulación, con su tarifa por viaje y el comentario: el referido solo puede elegir estos centros y estos tipos de vehículo. Si el centro y el tipo ya existen, se actualizan sus datos.
         </div>
-        <div style={{ display: "grid", gridTemplateColumns: "1.8fr 1.2fr 0.7fr 1fr auto", gap: 10, alignItems: "end" }}>
-          <label style={lbl}>Centro
-            <select value={nuevo.sc} onChange={(e) => setNuevo({ ...nuevo, sc: e.target.value })}>
-              <option value="">Elige un centro</option>
-              {centros.map((c) => <option key={c.sc} value={c.sc}>{c.nombre} ({c.sc})</option>)}
-            </select>
-          </label>
-          <label style={lbl}>Tipo de vehículo
-            {/* Lista con sugerencias, pero se puede escribir un tipo nuevo. */}
-            <input list="ref-tipos-vehiculo" value={nuevo.tipo} placeholder="Elige o escribe"
-              onChange={(e) => setNuevo({ ...nuevo, tipo: e.target.value })} />
-            <datalist id="ref-tipos-vehiculo">{tipos.map((t) => <option key={t} value={t} />)}</datalist>
-          </label>
-          <label style={lbl}>Cantidad
-            <input type="number" min="1" value={nuevo.cantidad} onChange={(e) => setNuevo({ ...nuevo, cantidad: e.target.value })} />
-          </label>
-          <label style={lbl}>Tarifa por viaje (MXN)
-            <input type="number" min="0" step="1" placeholder="Ej. 1800" value={nuevo.tarifa} onChange={(e) => setNuevo({ ...nuevo, tarifa: e.target.value })} />
-          </label>
-          <button className="btn-orange" disabled={busy} onClick={agregar}>Agregar</button>
+        <label style={{ ...lbl, maxWidth: 420 }}>Centro
+          <select value={nuevo.sc} onChange={(e) => setNuevo({ ...nuevo, sc: e.target.value })}>
+            <option value="">Elige un centro</option>
+            {centros.map((c) => <option key={c.sc} value={c.sc}>{c.nombre} ({c.sc})</option>)}
+          </select>
+        </label>
+        <datalist id="ref-tipos-vehiculo">{tipos.map((t) => <option key={t} value={t} />)}</datalist>
+        {nuevo.filas.map((f, i) => (
+          <div key={i} style={{ display: "grid", gridTemplateColumns: "1.4fr 0.7fr 1fr 36px", gap: 10, alignItems: "end", marginTop: 10 }}>
+            <label style={lbl}>Tipo de vehículo
+              {/* Lista con sugerencias, pero se puede escribir un tipo nuevo. */}
+              <input list="ref-tipos-vehiculo" value={f.tipo} placeholder="Elige o escribe" onChange={(e) => setFila(i, "tipo", e.target.value)} />
+            </label>
+            <label style={lbl}>Cantidad
+              <input type="number" min="1" value={f.cantidad} onChange={(e) => setFila(i, "cantidad", e.target.value)} />
+            </label>
+            <label style={lbl}>Tarifa por viaje (MXN)
+              <input type="number" min="0" step="1" placeholder="Ej. 1800" value={f.tarifa} onChange={(e) => setFila(i, "tarifa", e.target.value)} />
+            </label>
+            {nuevo.filas.length > 1
+              ? <button className="btn-back" title="Quitar este tipo" style={{ color: "#b42318", padding: "8px 0" }} onClick={() => quitarFila(i)}>✕</button>
+              : <span />}
+          </div>
+        ))}
+        <div style={{ display: "flex", gap: 10, marginTop: 10, alignItems: "center" }}>
+          <button className="btn-back" onClick={otraFila}>＋ Otro tipo de vehículo</button>
+          <button className="btn-orange" disabled={busy} onClick={agregar} style={{ marginLeft: "auto" }}>
+            Agregar{nuevo.filas.length > 1 ? ` ${nuevo.filas.length} tipos` : ""}
+          </button>
         </div>
         <label style={{ ...lbl, marginTop: 10 }}>Comentario para más información (opcional)
           <textarea rows={2} placeholder="Por ejemplo: turno de mañana, salida a las 7:00, se paga semanal." value={nuevo.nota}
@@ -550,6 +574,9 @@ function PropuestaVista({ p, onCerrar }) {
 
 function PropuestaEditor({ e, setE, busy, onGuardar, onVer, onCerrar }) {
   const upd = (k, v) => setE((p) => ({ ...p, [k]: v }));
+  const updCategoria = (ci, v) => setE((p) => ({ ...p, tarifas: p.tarifas.map((t, j) => (j === ci ? { ...t, categoria: v } : t)) }));
+  const otraCategoria = () => setE((p) => ({ ...p, tarifas: [...(p.tarifas || []), { categoria: "", tramos: Object.fromEntries(TRAMOS.map((k) => [k, ""])) }] }));
+  const quitarCategoria = (ci) => setE((p) => ({ ...p, tarifas: p.tarifas.filter((_, j) => j !== ci) }));
   const updTarifa = (ci, tramo, val) => setE((p) => {
     const t = [...p.tarifas];
     t[ci] = { ...t[ci], tramos: { ...t[ci].tramos, [tramo]: val } };
@@ -579,23 +606,34 @@ function PropuestaEditor({ e, setE, busy, onGuardar, onVer, onCerrar }) {
                 <thead><tr style={{ background: "#1a3a6b", color: "#fff" }}>
                   <th style={{ padding: "8px 12px", textAlign: "left" }}>Categoría</th>
                   {TRAMOS.map((t) => <th key={t} style={{ padding: "8px 10px", textAlign: "center" }}>{t} km</th>)}
+                  <th />
                 </tr></thead>
                 <tbody>
                   {(e.tarifas || []).map((cat, ci) => (
                     <tr key={ci} style={{ background: ci % 2 === 0 ? "#f8f9fa" : "#fff" }}>
-                      <td style={{ padding: "8px 12px", fontWeight: 700, color: "#1a3a6b" }}>{cat.categoria}</td>
+                      <td style={{ padding: 4, minWidth: 120 }}>
+                        <input list="ref-tipos-vehiculo" value={cat.categoria} onChange={(x) => updCategoria(ci, x.target.value)} placeholder="Tipo de vehículo"
+                          style={{ width: "100%", padding: "5px 6px", border: "0.5px solid #d0d5dd", borderRadius: 6, fontSize: 12, fontWeight: 700, color: "#1a3a6b" }} />
+                      </td>
                       {TRAMOS.map((t) => (
                         <td key={t} style={{ padding: 4 }}>
                           <input value={cat.tramos?.[t] || ""} onChange={(x) => updTarifa(ci, t, x.target.value)} placeholder="$0"
                             style={{ width: "100%", padding: "5px 6px", border: "0.5px solid #d0d5dd", borderRadius: 6, fontSize: 12, textAlign: "center" }} />
                         </td>
                       ))}
+                      <td style={{ padding: 4 }}>
+                        <button type="button" title="Quitar este tipo" onClick={() => quitarCategoria(ci)}
+                          style={{ background: "none", border: "none", color: "#b42318", cursor: "pointer", fontSize: 14 }}>✕</button>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
-            <div style={{ fontSize: 11.5, color: GRIS, marginTop: 4 }}>Hay una fila por cada tipo de vehículo que se busca en este centro.</div>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 6 }}>
+              <button type="button" className="btn-back" onClick={otraCategoria}>＋ Agregar tipo de vehículo</button>
+              <span style={{ fontSize: 11.5, color: GRIS }}>Al abrir se agrega una fila por cada tipo que se busca en este centro.</span>
+            </div>
           </div>
           {campo("auxiliar", "Tarifa auxiliar diario", "$300 MXN por día")}
           <div className="two-col">{campo("ns_minimo", "NS mínimo", "99.00%")}{campo("ns_excelente", "NS excelente", "99.50% - 100%")}</div>
