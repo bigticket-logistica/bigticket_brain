@@ -28,7 +28,7 @@ const fecha = (v) => (v ? new Date(String(v).length <= 10 ? v + "T12:00:00" : v)
 const ETAPAS = {
   registrado: ["Registrado", "#f2f4f7", GRIS],
   en_revision: ["En revisión", "#fff4e5", "#b45309"],
-  entrevista_alta: ["Entrevista y alta", "#eef2ff", AZUL],
+  entrevista_alta: ["Solicitud de alta", "#eef2ff", AZUL],
   firma_contrato: ["Firma de contrato", "#eef2ff", AZUL],
   contrato_firmado: ["Contrato firmado", "#eef2ff", AZUL],
   primera_ruta: ["En ruta", "#e0f2fe", "#075985"],
