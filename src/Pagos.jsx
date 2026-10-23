@@ -834,11 +834,12 @@ const TORRE_NO_SALIO = new Set(["NO_SALIO", "PERDIDO", "SIN_ASIGNAR"]);
 const torreColor = (e) => (TORRE_ROJOS.has(e) ? "#b91c1c" : e === "POR_VENCER" ? "#b45309" : "#047857");
 const normPlacaTorre = (p) => String(p || "").toUpperCase().replace(/^(SDD|MLP|SPOT)-?/, "").replace(/[^A-Z0-9]/g, "");
 
+const TORRE_SELECT = "travel_id, sc, vehiculo, flota, estado, driver_name, vehicle_plate, id_ruta, pkg_total, pkg_delivered, chofer_cambiado, eta_visible";
 async function traerTorreDia(fecha, scId) {
   const clave = `${fecha}|${scId}`;
   if (cacheTorreFilas.has(clave)) return cacheTorreFilas.get(clave);
   const { data, error } = await sb.from("vw_torre_control_dia")
-    .select("travel_id, sc, vehiculo, flota, estado, driver_name, vehicle_plate, id_ruta, pkg_total, pkg_delivered, chofer_cambiado, eta_visible")
+    .select(TORRE_SELECT)
     .eq("sc", scId).eq("fecha_operativa", fecha).order("eta_visible");
   if (error) throw error;
   cacheTorreFilas.set(clave, data || []);
@@ -1705,12 +1706,13 @@ function PanelControlSupervisores() {
   const [error, setError] = useState(null);
   const [expandido, setExpandido] = useState(new Set());
   const [filtroSc, setFiltroSc] = useState("");  // "" = todos
-  const [filtroEvento, setFiltroEvento] = useState("todos");  // todos|bitacora|torre|ambulancias|patentes
+  const [filtroEvento, setFiltroEvento] = useState("todos");  // todos|bitacora|torre|ambulancias
   const [terceros6, setTerceros6] = useState({});   // {scId: {total, confirmadas, completo}}
   const [terceros6Rows, setTerceros6Rows] = useState({}); // {scId: filas} — se reusan al expandir
   const [t6Activo, setT6Activo] = useState(false);  // true solo cuando la fecha seleccionada es HOY (MX)
   const [refrescando, setRefrescando] = useState(false); // refresh silencioso (no desmonta la tabla)
   const [tick, setTick] = useState(0);              // fuerza recarga de los detalles expandidos
+  const [torreDia, setTorreDia] = useState({});     // {sc: viajes de vw_torre_control_dia} — para el semáforo
 
   // Fecha anterior (D-1) respecto a la seleccionada
   const fechaAyer = useMemo(() => {
@@ -1783,6 +1785,16 @@ function PanelControlSupervisores() {
         if (r.t) t6Idx[r.sc] = r.t;
         if (r.filas) t6Rows[r.sc] = r.filas;
       }
+
+      // Torre de Control del día completo (una sola consulta para todos los SC).
+      // La usa el semáforo de las tarjetas y se deja en la caché para que la
+      // sección Torre de cada SC no vuelva a consultar.
+      const torreIdx = {};
+      const { data: torreData } = await sb.from("vw_torre_control_dia")
+        .select(TORRE_SELECT).eq("fecha_operativa", fecha).order("eta_visible").limit(5000);
+      for (const v of torreData || []) (torreIdx[v.sc] = torreIdx[v.sc] || []).push(v);
+      for (const sc of scsUnicos) cacheTorreFilas.set(`${fecha}|${sc}`, torreIdx[sc] || []);
+      setTorreDia(torreIdx);
 
       setTerceros6Rows(t6Rows);
       setTerceros6(t6Idx);
@@ -1971,106 +1983,55 @@ function PanelControlSupervisores() {
     return { completaronHoy, conciliaronD1, total: supervisores.length };
   }, [supervisores, bitHoy, bitAyer, terceros6, t6Activo]);
 
-  const NOMBRES_ITEMS = {
-    ayudantes: "Ayudantes", ambulancias: "Ambulancias",
-    cancelaciones: "Cancelaciones", noshow: "No Show", pnr: "PNR",
+  // ─── Semáforo por SC (bitácora + Torre) ────────────────────────────
+  // Rojo: no completó la bitácora, o la Torre ve un no show que no declaró.
+  // Amarillo: bitácora parcial, o PNR marcados sin resolver.
+  // Verde: bitácora completa (o sin operación) y sin alertas.
+  const semaforoSC = (sc) => {
+    const row = bitHoy[sc];
+    const eh = estadoHoy(row);
+    const t6 = item6De(sc);
+    const totalItems = t6 ? 6 : 5;
+    const done = eh.completados + (t6 && t6.completo ? 1 : 0);
+    const completa = eh.sinOperacion || done === totalItems;
+    const nsSinDeclarar = noShowNoDeclarados(torreDia[sc], row).length;
+    const pnrSinResolver = (Array.isArray(row?.declarado_pnr_detalle) ? row.declarado_pnr_detalle : [])
+      .filter((d) => d.estado === "sin_resolver").length;
+    const motivos = [];
+    if (!eh.sinOperacion && done === 0) motivos.push("bitácora sin completar");
+    else if (!completa) motivos.push(`bitácora ${done}/${totalItems}`);
+    if (nsSinDeclarar) motivos.push(`${nsSinDeclarar} no show sin declarar`);
+    if (pnrSinResolver) motivos.push(`${pnrSinResolver} PNR sin resolver`);
+    let color = "verde";
+    if ((!eh.sinOperacion && done === 0) || nsSinDeclarar) color = "rojo";
+    else if (!completa || pnrSinResolver) color = "amarillo";
+    return { color, done, totalItems, sinOp: eh.sinOperacion, motivos };
   };
+  const tarjetasSC = useMemo(() => {
+    const orden = { rojo: 0, amarillo: 1, verde: 2 };
+    const vistos = new Set();
+    const out = [];
+    for (const s of supervisores) {
+      if (vistos.has(s.sc)) continue;
+      vistos.add(s.sc);
+      out.push({ sc: s.sc, ...semaforoSC(s.sc) });
+    }
+    return out.sort((a, b) => orden[a.color] - orden[b.color] || a.sc.localeCompare(b.sc));
+  }, [supervisores, bitHoy, torreDia, terceros6, t6Activo]);
+  const elegirSC = (sc) => {
+    if (filtroSc === sc) { setFiltroSc(""); setExpandido(new Set()); }
+    else { setFiltroSc(sc); setExpandido(new Set([sc])); }
+  };
+  const SEM_COLOR = { rojo: "#dc2626", amarillo: "#f59e0b", verde: "#16a34a" };
 
-  return (
-    <div className="pg">
-      <div className="sec-title">Consolidaciones Bitácora por SC</div>
-      <div className="sec-sub">Torre de control, ambulancias y bitácora del supervisor · por SC</div>
-      <div style={{ fontSize: 11, color: "#64748b", background: "#f8fafc", border: "1px solid #e4e7ec", borderRadius: 5, padding: "6px 10px", marginBottom: 10 }}>
-        🧑‍🔧 La aprobación del pago de ayudantes se hace ahora en la pestaña <b>Ayudantes</b>, junto a los números de entrega del día.
-      </div>
-
-      {/* Barra de control: fecha + refrescar */}
-      <div className="form-card" style={{ marginBottom: 12, display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <label style={{ fontSize: 13, fontWeight: 600, color: "#374151" }}>Fecha:</label>
-          <input type="date" value={fecha} onChange={(e) => setFecha(e.target.value)}
-            style={{ padding: "6px 10px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }} />
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <label style={{ fontSize: 13, fontWeight: 600, color: "#374151" }}>SC:</label>
-          <select value={filtroSc} onChange={(e) => setFiltroSc(e.target.value)}
-            style={{ padding: "6px 10px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }}>
-            <option value="">Todos</option>
-            {supervisores.map((s) => <option key={s.sc} value={s.sc}>{s.sc}</option>)}
-          </select>
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <label style={{ fontSize: 13, fontWeight: 600, color: "#374151" }}>Evento:</label>
-          <select value={filtroEvento} onChange={(e) => setFiltroEvento(e.target.value)}
-            style={{ padding: "6px 10px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }}>
-            <option value="todos">Todos</option>
-            <option value="bitacora">Bitácora del supervisor</option>
-            <option value="torre">Torre de Control</option>
-            <option value="ambulancias">Ambulancias</option>
-            <option value="patentes">Patentes nuevas</option>
-          </select>
-        </div>
-        <button onClick={() => { limpiarCacheTorre(); setTick((t) => t + 1); cargar(true); }} disabled={refrescando}
-          style={{ padding: "6px 14px", background: "#1e3a5f", color: "#fff", border: "none", borderRadius: 6, fontSize: 13, fontWeight: 600, cursor: refrescando ? "wait" : "pointer", opacity: refrescando ? 0.7 : 1 }}>
-          {refrescando ? "⏳ Actualizando…" : "🔄 Refrescar"}
-        </button>
-        <button onClick={descargarInforme} disabled={informeBusy || loading}
-          style={{ padding: "6px 14px", background: "#16a34a", color: "#fff", border: "none", borderRadius: 6, fontSize: 13, fontWeight: 600, cursor: informeBusy ? "wait" : "pointer", opacity: informeBusy || loading ? 0.7 : 1 }}>
-          {informeBusy ? "⏳ Generando…" : "⬇ Descargar informe"}
-        </button>
-        <div style={{ marginLeft: "auto", fontSize: 13, color: "#374151" }}>
-          <strong>{totales.completaronHoy}/{totales.total}</strong> completaron Hoy
-        </div>
-      </div>
-
-      {error && (
-        <div className="form-card" style={{ background: "#fef2f2", border: "1px solid #fecaca", marginBottom: 12 }}>
-          <div style={{ fontSize: 13, color: "#991b1b" }}>Error: {error}</div>
-        </div>
-      )}
-
-      {loading ? (
-        <div className="form-card" style={{ textAlign: "center", padding: 40, color: "#666" }}>
-          Cargando estados…
-        </div>
-      ) : (
-        <div className="form-card" style={{ padding: 0, overflow: "hidden" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-            <thead>
-              <tr style={{ background: "#f8fafc", borderBottom: "2px solid #e5e7eb" }}>
-                <th style={thPanel()}>SC</th>
-                <th style={thPanel()}>Supervisor</th>
-                <th style={thPanel("center")}>Hoy ({fecha})</th>
-                <th style={thPanel("center")}>Detalle</th>
-              </tr>
-            </thead>
-            <tbody>
-              {supervisores.filter((s) => !filtroSc || s.sc === filtroSc).map((s) => {
-                const eh = estadoHoy(bitHoy[s.sc]);
-                const ed = estadoD1(bitAyer[s.sc]);
-                const abierto = expandido.has(s.sc);
-                const sinOp = eh.sinOperacion;
-                const t6 = item6De(s.sc);
-                const totalItems = t6 ? 6 : 5;
-                const completadosItems = eh.completados + (t6 && t6.completo ? 1 : 0);
-                const hoyColor = sinOp ? "#b45309" : completadosItems === totalItems ? "#16a34a" : completadosItems === 0 ? "#dc2626" : "#d97706";
-                return (
-                  <Fragment key={s.sc}>
-                    <tr style={{ borderBottom: "1px solid #f1f5f9", cursor: "pointer", background: sinOp ? "#fff7ed" : undefined }} onClick={() => toggle(s.sc)}>
-                      <td style={{ ...tdPanel(), fontFamily: "monospace", fontWeight: 700 }}>{s.sc}</td>
-                      <td style={tdPanel()}>{s.nombre || "—"}</td>
-                      <td style={{ ...tdPanel("center"), fontWeight: 700, color: hoyColor }}>
-                        {sinOp
-                          ? "🚫 Sin op."
-                          : `${completadosItems === totalItems ? "✅" : completadosItems === 0 ? "❌" : "🟡"} ${completadosItems}/${totalItems}`}
-                      </td>
-                      <td style={tdPanel("center")}>
-                        <span style={{ fontSize: 11, color: "#6b7280" }}>{abierto ? "▲ cerrar" : "▼ ver"}</span>
-                      </td>
-                    </tr>
-                    {abierto && (
-                      <tr style={{ background: "#fafbfc" }}>
-                        <td key={tick} colSpan={4} style={{ padding: 14 }}>
+  // Detalle de un SC: lo usa la fila desplegada y la vista de un solo SC
+  // (cuando se toca su tarjeta), así las dos muestran exactamente lo mismo.
+  const renderDetalle = (s) => {
+    const eh = estadoHoy(bitHoy[s.sc]);
+    const sinOp = eh.sinOperacion;
+    const t6 = item6De(s.sc);
+    return (
+      <>
                           {/* Checklist de los 6 ítems: deja claro cuál está completado */}
                           <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 12 }}>
                             {[
@@ -2116,15 +2077,165 @@ function PanelControlSupervisores() {
                             <AmbulanciasSC scId={s.sc} fecha={fecha} />
                           )}
 
-                          {/* ─── Patentes nuevas del SC (hoy) ─── */}
-                          {(filtroEvento === "todos" || filtroEvento === "patentes") && (
-                            <PatentesNuevasSC scId={s.sc} decididoPor={null} />
-                          )}
-
                           {/* Contacto (para el WhatsApp futuro) */}
                           <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px solid #e5e7eb", fontSize: 11, color: "#6b7280" }}>
                             📧 {s.email || "sin email"} · 📱 {s.telefono || "sin teléfono cargado"}
                           </div>
+      </>
+    );
+  };
+
+  const NOMBRES_ITEMS = {
+    ayudantes: "Ayudantes", ambulancias: "Ambulancias",
+    cancelaciones: "Cancelaciones", noshow: "No Show", pnr: "PNR",
+  };
+
+  return (
+    <div className="pg">
+      <div className="sec-title">Consolidaciones Bitácora por SC</div>
+      <div className="sec-sub">Torre de control, ambulancias y bitácora del supervisor · por SC</div>
+      <div style={{ fontSize: 11, color: "#64748b", background: "#f8fafc", border: "1px solid #e4e7ec", borderRadius: 5, padding: "6px 10px", marginBottom: 10 }}>
+        🧑‍🔧 La aprobación del pago de ayudantes se hace ahora en la pestaña <b>Ayudantes</b>, junto a los números de entrega del día.
+      </div>
+
+      {/* Barra de control: fecha + refrescar */}
+      <div className="form-card" style={{ marginBottom: 12, display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <label style={{ fontSize: 13, fontWeight: 600, color: "#374151" }}>Fecha:</label>
+          <input type="date" value={fecha} onChange={(e) => setFecha(e.target.value)}
+            style={{ padding: "6px 10px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }} />
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <label style={{ fontSize: 13, fontWeight: 600, color: "#374151" }}>Evento:</label>
+          <select value={filtroEvento} onChange={(e) => setFiltroEvento(e.target.value)}
+            style={{ padding: "6px 10px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }}>
+            <option value="todos">Todos</option>
+            <option value="bitacora">Bitácora del supervisor</option>
+            <option value="torre">Torre de Control</option>
+            <option value="ambulancias">Ambulancias</option>
+          </select>
+        </div>
+        <button onClick={() => { limpiarCacheTorre(); setTick((t) => t + 1); cargar(true); }} disabled={refrescando}
+          style={{ padding: "6px 14px", background: "#1e3a5f", color: "#fff", border: "none", borderRadius: 6, fontSize: 13, fontWeight: 600, cursor: refrescando ? "wait" : "pointer", opacity: refrescando ? 0.7 : 1 }}>
+          {refrescando ? "⏳ Actualizando…" : "🔄 Refrescar"}
+        </button>
+        <button onClick={descargarInforme} disabled={informeBusy || loading}
+          style={{ padding: "6px 14px", background: "#16a34a", color: "#fff", border: "none", borderRadius: 6, fontSize: 13, fontWeight: 600, cursor: informeBusy ? "wait" : "pointer", opacity: informeBusy || loading ? 0.7 : 1 }}>
+          {informeBusy ? "⏳ Generando…" : "⬇ Descargar informe"}
+        </button>
+        <div style={{ marginLeft: "auto", fontSize: 13, color: "#374151" }}>
+          <strong>{totales.completaronHoy}/{totales.total}</strong> completaron Hoy
+        </div>
+      </div>
+
+      {/* Tarjetas de SC con semáforo — tocar una muestra solo ese SC */}
+      {!loading && tarjetasSC.length > 0 && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
+          {tarjetasSC.map((t) => {
+            const activo = filtroSc === t.sc;
+            const c = SEM_COLOR[t.color];
+            return (
+              <button key={t.sc} onClick={() => elegirSC(t.sc)}
+                title={t.motivos.length ? t.motivos.join(" · ") : "Todo en orden"}
+                style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", minWidth: 118,
+                  background: activo ? "#1a3a6b" : "#fff", color: activo ? "#fff" : "#1f2937",
+                  border: `1px solid ${activo ? "#1a3a6b" : "#e4e7ec"}`, borderRadius: 8, cursor: "pointer", textAlign: "left",
+                  opacity: filtroSc && !activo ? 0.55 : 1 }}>
+                <span style={{ width: 14, height: 14, borderRadius: "50%", background: c, flexShrink: 0,
+                  boxShadow: `0 0 0 3px ${c}33` }} />
+                <span>
+                  <span style={{ display: "block", fontFamily: "monospace", fontWeight: 700, fontSize: 13 }}>{t.sc}</span>
+                  <span style={{ display: "block", fontSize: 10, color: activo ? "#cbd5e1" : "#64748b" }}>
+                    {t.sinOp ? "Sin operación" : `${t.done}/${t.totalItems}`}{t.motivos.length && !t.sinOp ? " · " + t.motivos[t.motivos.length - 1] : ""}
+                  </span>
+                </span>
+              </button>
+            );
+          })}
+          {filtroSc && (
+            <button onClick={() => { setFiltroSc(""); setExpandido(new Set()); }}
+              style={{ padding: "8px 12px", background: "#f1f5f9", border: "1px solid #e4e7ec", borderRadius: 8, cursor: "pointer", fontSize: 12, fontWeight: 600, color: "#374151" }}>
+              Ver todos
+            </button>
+          )}
+        </div>
+      )}
+
+      {error && (
+        <div className="form-card" style={{ background: "#fef2f2", border: "1px solid #fecaca", marginBottom: 12 }}>
+          <div style={{ fontSize: 13, color: "#991b1b" }}>Error: {error}</div>
+        </div>
+      )}
+
+      {loading ? (
+        <div className="form-card" style={{ textAlign: "center", padding: 40, color: "#666" }}>
+          Cargando estados…
+        </div>
+      ) : (
+        filtroSc ? (() => {
+          // ── Vista de UN SC: encabezado con su semáforo y el detalle completo ──
+          const sem = semaforoSC(filtroSc);
+          const sups = supervisores.filter((x) => x.sc === filtroSc);
+          const c = SEM_COLOR[sem.color];
+          return (
+            <div className="form-card" style={{ padding: 0, overflow: "hidden" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 14, padding: "14px 18px", borderBottom: "1px solid #e5e7eb", background: "#f8fafc" }}>
+                <span style={{ width: 22, height: 22, borderRadius: "50%", background: c, boxShadow: `0 0 0 4px ${c}33`, flexShrink: 0 }} />
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontFamily: "monospace", fontWeight: 800, fontSize: 18, color: "#1a3a6b" }}>{filtroSc}</div>
+                  <div style={{ fontSize: 12, color: "#475569" }}>
+                    {sups.map((x) => x.nombre).filter(Boolean).join(" / ") || "Sin supervisor"}
+                    {" · "}{sem.sinOp ? "Sin operación" : `Bitácora ${sem.done}/${sem.totalItems}`}
+                  </div>
+                </div>
+                <div style={{ textAlign: "right", fontSize: 12, fontWeight: 600, color: sem.color === "verde" ? "#16a34a" : c }}>
+                  {sem.motivos.length ? sem.motivos.map((m, k) => <div key={k}>• {m}</div>) : "Todo en orden"}
+                </div>
+              </div>
+              <div key={tick} style={{ padding: 18 }}>
+                {renderDetalle(sups[0] || { sc: filtroSc })}
+              </div>
+            </div>
+          );
+        })() : (
+        <div className="form-card" style={{ padding: 0, overflow: "hidden" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+            <thead>
+              <tr style={{ background: "#f8fafc", borderBottom: "2px solid #e5e7eb" }}>
+                <th style={thPanel()}>SC</th>
+                <th style={thPanel()}>Supervisor</th>
+                <th style={thPanel("center")}>Hoy ({fecha})</th>
+                <th style={thPanel("center")}>Detalle</th>
+              </tr>
+            </thead>
+            <tbody>
+              {supervisores.filter((s) => !filtroSc || s.sc === filtroSc).map((s) => {
+                const eh = estadoHoy(bitHoy[s.sc]);
+                const ed = estadoD1(bitAyer[s.sc]);
+                const abierto = expandido.has(s.sc);
+                const sinOp = eh.sinOperacion;
+                const t6 = item6De(s.sc);
+                const totalItems = t6 ? 6 : 5;
+                const completadosItems = eh.completados + (t6 && t6.completo ? 1 : 0);
+                const hoyColor = sinOp ? "#b45309" : completadosItems === totalItems ? "#16a34a" : completadosItems === 0 ? "#dc2626" : "#d97706";
+                return (
+                  <Fragment key={s.sc}>
+                    <tr style={{ borderBottom: "1px solid #f1f5f9", cursor: "pointer", background: sinOp ? "#fff7ed" : undefined }} onClick={() => toggle(s.sc)}>
+                      <td style={{ ...tdPanel(), fontFamily: "monospace", fontWeight: 700 }}>{s.sc}</td>
+                      <td style={tdPanel()}>{s.nombre || "—"}</td>
+                      <td style={{ ...tdPanel("center"), fontWeight: 700, color: hoyColor }}>
+                        {sinOp
+                          ? "🚫 Sin op."
+                          : `${completadosItems === totalItems ? "✅" : completadosItems === 0 ? "❌" : "🟡"} ${completadosItems}/${totalItems}`}
+                      </td>
+                      <td style={tdPanel("center")}>
+                        <span style={{ fontSize: 11, color: "#6b7280" }}>{abierto ? "▲ cerrar" : "▼ ver"}</span>
+                      </td>
+                    </tr>
+                    {abierto && (
+                      <tr style={{ background: "#fafbfc" }}>
+                        <td key={tick} colSpan={4} style={{ padding: 14 }}>
+                          {renderDetalle(s)}
                         </td>
                       </tr>
                     )}
@@ -2137,6 +2248,7 @@ function PanelControlSupervisores() {
             </tbody>
           </table>
         </div>
+        )
       )}
     </div>
   );
