@@ -2198,55 +2198,14 @@ function PanelControlSupervisores() {
             </div>
           );
         })() : (
-        <div className="form-card" style={{ padding: 0, overflow: "hidden" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-            <thead>
-              <tr style={{ background: "#f8fafc", borderBottom: "2px solid #e5e7eb" }}>
-                <th style={thPanel()}>SC</th>
-                <th style={thPanel()}>Supervisor</th>
-                <th style={thPanel("center")}>Hoy ({fecha})</th>
-                <th style={thPanel("center")}>Detalle</th>
-              </tr>
-            </thead>
-            <tbody>
-              {supervisores.filter((s) => !filtroSc || s.sc === filtroSc).map((s) => {
-                const eh = estadoHoy(bitHoy[s.sc]);
-                const ed = estadoD1(bitAyer[s.sc]);
-                const abierto = expandido.has(s.sc);
-                const sinOp = eh.sinOperacion;
-                const t6 = item6De(s.sc);
-                const totalItems = t6 ? 6 : 5;
-                const completadosItems = eh.completados + (t6 && t6.completo ? 1 : 0);
-                const hoyColor = sinOp ? "#b45309" : completadosItems === totalItems ? "#16a34a" : completadosItems === 0 ? "#dc2626" : "#d97706";
-                return (
-                  <Fragment key={s.sc}>
-                    <tr style={{ borderBottom: "1px solid #f1f5f9", cursor: "pointer", background: sinOp ? "#fff7ed" : undefined }} onClick={() => toggle(s.sc)}>
-                      <td style={{ ...tdPanel(), fontFamily: "monospace", fontWeight: 700 }}>{s.sc}</td>
-                      <td style={tdPanel()}>{s.nombre || "—"}</td>
-                      <td style={{ ...tdPanel("center"), fontWeight: 700, color: hoyColor }}>
-                        {sinOp
-                          ? "🚫 Sin op."
-                          : `${completadosItems === totalItems ? "✅" : completadosItems === 0 ? "❌" : "🟡"} ${completadosItems}/${totalItems}`}
-                      </td>
-                      <td style={tdPanel("center")}>
-                        <span style={{ fontSize: 11, color: "#6b7280" }}>{abierto ? "▲ cerrar" : "▼ ver"}</span>
-                      </td>
-                    </tr>
-                    {abierto && (
-                      <tr style={{ background: "#fafbfc" }}>
-                        <td key={tick} colSpan={4} style={{ padding: 14 }}>
-                          {renderDetalle(s)}
-                        </td>
-                      </tr>
-                    )}
-                  </Fragment>
-                );
-              })}
-              {supervisores.length === 0 && (
-                <tr><td colSpan={4} style={{ padding: 30, textAlign: "center", color: "#9ca3af" }}>No hay supervisores activos.</td></tr>
-              )}
-            </tbody>
-          </table>
+        // Sin SC elegido no se lista nada: las tarjetas de arriba son el índice.
+        <div className="form-card" style={{ textAlign: "center", padding: 28, color: "#64748b", fontSize: 13 }}>
+          Toca un SC de arriba para ver su detalle.
+          <div style={{ fontSize: 11, marginTop: 6, color: "#94a3b8" }}>
+            {tarjetasSC.filter((t) => t.color === "rojo").length} en rojo ·{" "}
+            {tarjetasSC.filter((t) => t.color === "amarillo").length} en amarillo ·{" "}
+            {tarjetasSC.filter((t) => t.color === "verde").length} en verde
+          </div>
         </div>
         )
       )}
