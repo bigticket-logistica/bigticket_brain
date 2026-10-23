@@ -237,6 +237,44 @@ function DetalleCaso({ caso, quien, onCerrar, onCambio }) {
   const evento = async (tipo, detalle, visible = true) =>
     sb.from("diferencias_eventos").insert({ diferencia_id: caso.id, tipo, detalle, actor: quien, visible_tercero: visible });
 
+  // Devuelve el caso al supervisor cuando lo que entregó no alcanza para
+  // aprobar ni rechazar. Reabre su plazo de 48 h y borra su veredicto, para
+  // que tenga que volver a responder con lo que falta.
+  const devolverAlSupervisor = async () => {
+    const falta = prompt(
+      "Devolver el caso al supervisor.\n\n" +
+      "¿Qué antecedentes faltan para poder resolver? El supervisor verá este texto."
+    );
+    if (falta === null) return;
+    const txt = falta.trim();
+    if (!txt) { alert("Hay que indicar qué falta."); return; }
+    setTrabajando(true);
+    try {
+      const nuevoSla = new Date(Date.now() + 48 * 3600 * 1000).toISOString();
+      const previo = caso.supervisor_veredicto
+        ? (VEREDICTO[caso.supervisor_veredicto] || {}).l || caso.supervisor_veredicto
+        : "sin veredicto";
+      const { error } = await sb.from("diferencias").update({
+        fase: "supervisor",
+        estado: "en_revision",
+        supervisor_veredicto: null,
+        supervisor_nota: null,
+        supervisor_at: null,
+        sla_supervisor_at: nuevoSla,
+        sla_analista_at: null,
+      }).eq("id", caso.id);
+      if (error) throw error;
+      await evento("devuelta_al_supervisor",
+        `Faltan antecedentes: ${txt} · lo anterior fue: ${previo} · nuevo plazo hasta ${fechaHora(nuevoSla)}`);
+      const { data: ev } = await sb.from("diferencias_eventos")
+        .select("*").eq("diferencia_id", caso.id).order("created_at");
+      setEventos(ev || []);
+      if (onCambio) onCambio();
+      alert("El caso volvió al supervisor con 48 h de plazo.");
+    } catch (e) { alert("No se pudo devolver: " + (e.message || e)); }
+    setTrabajando(false);
+  };
+
   const resolverLinea = async (l, estado) => {
     let monto = null, resolucion = "";
     if (estado === "aceptada") {
@@ -476,10 +514,19 @@ function DetalleCaso({ caso, quien, onCerrar, onCambio }) {
 
           {/* Cerrar */}
           {["abierta", "en_revision"].includes(caso.estado) && caso.fase === "analista" && (
-            <button onClick={cerrarCaso} disabled={pendientes > 0 || trabajando}
-              style={{ width: "100%", marginTop: 14, padding: "11px", borderRadius: 6, border: "none", background: pendientes > 0 ? "#cbd5e1" : "#1a3a6b", color: "#fff", fontSize: 13, fontWeight: 700, cursor: pendientes > 0 ? "not-allowed" : "pointer" }}>
-              {pendientes > 0 ? `Falta resolver ${pendientes} línea(s)` : `Cerrar la diferencia · ${money(reconocido)} reconocido`}
-            </button>
+            <div style={{ marginTop: 14 }}>
+              <button onClick={cerrarCaso} disabled={pendientes > 0 || trabajando}
+                style={{ width: "100%", padding: "11px", borderRadius: 6, border: "none", background: pendientes > 0 ? "#cbd5e1" : "#1a3a6b", color: "#fff", fontSize: 13, fontWeight: 700, cursor: pendientes > 0 ? "not-allowed" : "pointer" }}>
+                {pendientes > 0 ? `Falta resolver ${pendientes} línea(s)` : `Cerrar la diferencia · ${money(reconocido)} reconocido`}
+              </button>
+              <button onClick={devolverAlSupervisor} disabled={trabajando}
+                style={{ width: "100%", marginTop: 8, padding: "10px", borderRadius: 6, border: "1px solid #fde68a", background: "#fffbeb", color: "#92400e", fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>
+                Devolver al supervisor · faltan antecedentes
+              </button>
+              <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 5, textAlign: "center" }}>
+                Úsalo cuando lo entregado no alcance para aprobar ni rechazar. Vuelve a él con 48 h de plazo.
+              </div>
+            </div>
           )}
 
           {/* Bitácora */}
