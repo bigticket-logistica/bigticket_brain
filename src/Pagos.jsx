@@ -1439,16 +1439,8 @@ function FormularioInicialSC({ scId, fecha, rowPrecargado = undefined }) {
           justif={row.noshow_justificacion}
           fotos={adj.noshow} />
 
-        {/* 5 · PNR */}
-        <ItemSimple nombre="5 · PNR"
-          valor={siNo(row.declarado_pnr_si_no)}
-          detalle={row.declarado_pnr_si_no === true
-            ? ((row.declarado_pnr_casos_abiertos != null || row.declarado_pnr_cantidad_total != null)
-                ? `${row.declarado_pnr_casos_abiertos ?? 0} abierto(s) de ${row.declarado_pnr_cantidad_total ?? 0} total`
-                : "Declaró PNR (sin cantidades)")
-            : null}
-          justif={row.pnr_justificacion}
-          fotos={adj.pnr} />
+        {/* 5 · PNR — detalle por caso, igual que lo marca el supervisor */}
+        <ItemPNRBrain row={row} fotos={adj.pnr} />
       </div>
     </div>
   );
@@ -1639,6 +1631,70 @@ function ItemCancelaciones({ row, adjCancelaciones }) {
   );
 }
 
+// Ítem 5 · PNR visto desde el Brain. Desde el 23-10-2026 la bitácora lista los
+// PNR del SC en Esperando comprobante y Con Penalidad (pnr_casos_mx) y el
+// supervisor marca cada uno como resuelto o sin resolver; eso queda en
+// declarado_pnr_detalle. Los días anteriores solo traen los totales.
+const PNR_ETIQ_BRAIN = { WAITING_RECEIPT: "Esperando comprobante", TO_BILL: "Con Penalidad" };
+function ItemPNRBrain({ row, fotos }) {
+  const [ver, setVer] = useState(false);
+  const det = Array.isArray(row.declarado_pnr_detalle) ? row.declarado_pnr_detalle : [];
+  const declarado = row.declarado_pnr_si_no !== null && row.declarado_pnr_si_no !== undefined;
+  const total = row.declarado_pnr_cantidad_total;
+  const abiertos = row.declarado_pnr_casos_abiertos;
+  let valor = "—";
+  if (declarado) valor = row.declarado_pnr_si_no ? "Sí" : "No";
+  let resumen = null;
+  if (row.declarado_pnr_si_no === false) resumen = "Sin PNR pendientes";
+  else if (row.declarado_pnr_si_no === true) {
+    resumen = (total != null || abiertos != null)
+      ? `${total ?? 0} PNR · ${abiertos ?? 0} sin resolver`
+      : "Declaró PNR (sin cantidades)";
+  }
+  const paths = Array.isArray(fotos) ? fotos.map((f) => (typeof f === "string" ? f : f?.path)).filter(Boolean) : [];
+  return (
+    <div style={{ fontSize: 12, padding: "5px 8px", background: "#fff", border: "1px solid #eef0f3", borderRadius: 5 }}>
+      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        <span style={{ fontWeight: 600, color: "#374151" }}>5 · PNR</span>
+        {det.length > 0 && (
+          <button onClick={() => setVer((v) => !v)}
+            style={{ fontSize: 10, color: "#1e3a5f", background: "none", border: "none", cursor: "pointer", fontWeight: 600, padding: 0 }}>
+            {ver ? "▲ ocultar" : `▼ ver ${det.length} caso(s)`}
+          </button>
+        )}
+        <span style={{ marginLeft: "auto", fontWeight: 700, color: declColor(valor) }}>{valor}</span>
+      </div>
+      {resumen && <div style={{ fontSize: 11, color: "#4b5563", marginTop: 2 }}>{resumen}</div>}
+      {ver && det.length > 0 && (
+        <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 3 }}>
+          {det.map((d, i) => {
+            const resuelto = d.estado === "resuelto";
+            return (
+              <div key={i} style={{ fontSize: 11, color: "#4b5563", padding: "3px 6px", background: "#f8fafc", borderRadius: 4, display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+                <span style={{ fontFamily: "monospace", fontWeight: 700 }}>#{d.case_id}</span>
+                <span style={{ fontSize: 9, background: d.sub_estado === "TO_BILL" ? "#fdeedf" : "#eff6ff", color: d.sub_estado === "TO_BILL" ? "#b8651c" : "#1e40af", padding: "0 5px", borderRadius: 3, fontWeight: 700 }}>
+                  {PNR_ETIQ_BRAIN[d.sub_estado] || d.sub_estado || "—"}
+                </span>
+                {d.shipment_id && <span>Envío {d.shipment_id}</span>}
+                {d.monto != null && <span>· ${Math.round(d.monto).toLocaleString("es-MX")}</span>}
+                <span style={{ marginLeft: "auto", fontWeight: 700, color: resuelto ? "#16a34a" : "#dc2626" }}>
+                  {resuelto ? "Resuelto" : "Sin resolver"}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {row.pnr_justificacion && row.pnr_justificacion.trim() && <div style={{ fontSize: 11, color: "#6b7280", marginTop: 2, fontStyle: "italic" }}>💬 {row.pnr_justificacion}</div>}
+      {paths.length > 0 && (
+        <div style={{ display: "flex", flexWrap: "wrap", marginTop: 4 }}>
+          {paths.map((p, i) => <FotoLink key={i} path={p} />)}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ItemSimple({ nombre, valor, detalle, justif, fotos }) {
   const paths = Array.isArray(fotos) ? fotos.map((f) => (typeof f === "string" ? f : f?.path)).filter(Boolean) : [];
   return (
@@ -1796,6 +1852,114 @@ function PanelControlSupervisores() {
 
   useEffect(() => { cargar(); }, [cargar]);
 
+  // ─── Informe descargable de la bitácora (formato Formato_Informe_Bitácoras) ───
+  // Tres hojas: Resumen (una fila por SC), Cancelaciones y No Show (una fila por
+  // placa). Todo sale de las mismas fuentes que ve el supervisor: la bitácora
+  // (vw_bitacora_panel = bitacora_diaria_sc), rutas de la Torre (cierre_rutas_mx),
+  // aprobaciones de ayudantes (aprobaciones_helper) y rechazos de MELI
+  // (mx_pedidos_estado, igual que la pestaña Rechazos MELI).
+  const [informeBusy, setInformeBusy] = useState(false);
+  const descargarInforme = async () => {
+    setInformeBusy(true);
+    try {
+      const [rutasR, aprobR, rechR] = await Promise.all([
+        sb.from("cierre_rutas_mx").select("service_center_id").eq("fecha", fecha).limit(10000),
+        sb.from("aprobaciones_helper").select("service_center_id").eq("fecha", fecha).eq("decision", "aprobado").limit(10000),
+        sb.from("mx_pedidos_estado").select("facility_id, es_sdd").eq("fecha_ruta", fecha).eq("status", "rejected").limit(10000),
+      ]);
+      if (rutasR.error) throw new Error("rutas: " + rutasR.error.message);
+      if (aprobR.error) throw new Error("aprobaciones: " + aprobR.error.message);
+      if (rechR.error) throw new Error("rechazos MELI: " + rechR.error.message);
+
+      const contar = (arr, campo) => {
+        const m = {};
+        for (const r of arr || []) { const k = r[campo]; if (k) m[k] = (m[k] || 0) + 1; }
+        return m;
+      };
+      const rutasSc = contar(rutasR.data, "service_center_id");
+      const aprobSc = contar(aprobR.data, "service_center_id");
+      const rechSdd = contar((rechR.data || []).filter((r) => r.es_sdd), "facility_id");
+      const rechSpot = contar((rechR.data || []).filter((r) => !r.es_sdd), "facility_id");
+
+      // Un SC puede tener más de un supervisor: se juntan los nombres
+      const porSc = {};
+      for (const s of supervisores) {
+        if (filtroSc && s.sc !== filtroSc) continue;
+        (porSc[s.sc] = porSc[s.sc] || []).push(s.nombre);
+      }
+      const scs = Object.keys(porSc).sort();
+
+      const arr = (v) => (Array.isArray(v) ? v : []);
+      const placaDe = (p) => String(typeof p === "string" ? p : (p?.placa || p?.patente || "")).trim().toUpperCase();
+      const norm = (p) => placaDe(p).replace(/^(SDD|MLP|SPOT)-?/, "").replace(/[^A-Z0-9]/g, "");
+      const tipoRuta = (placa, flota) => (flota === "SDD" || /^SDD/i.test(placa) ? "SDD" : "SPOT");
+      const cecos = (sc) => `ML_MX_${sc}`;
+
+      const resumen = [["SERVICIO", "FECHA", "CECOS", "SUPERVISOR", "BITACORA", "CANTIDAD RUTAS",
+        "AYUDANTES INFORMADOS", "AYUDANTES APROBADOS", "AMBULANCIAS", "CANCELACIONES", "NO SHOW", "PNR",
+        "RUTAS RECHAZADAS SDD", "RUTAS RECHAZADAS SPOT", "OBSERVACIONES"]];
+      const cancel = [["SERVICIO", "FECHA", "CECOS", "PATENTES", "TIPO RUTA", "INFORMADA EN BITACORA", "OBSERVACIONES"]];
+      const noshow = [["SERVICIO", "FECHA", "CECOS", "PATENTES", "TIPO RUTA", "INFORMADO EN BITÁCORA", "OBSERVACIONES"]];
+
+      for (const sc of scs) {
+        const row = bitHoy[sc] || null;
+        const est = estadoHoy(row);
+        const t6 = item6De(sc);
+        let bitacora = "Sin completar";
+        if (row?.sin_operacion === true) bitacora = "Sin Operación";
+        else if (est.completados === 5 && (!t6 || t6.completo)) bitacora = "Completa";
+        else if (est.completados > 0) bitacora = "Parcial";
+
+        const ayud = row?.declarado_ayudantes_si_no ? (row.declarado_ayudantes_cantidad ?? arr(row.declarado_ayudantes_detalle).length) : 0;
+        const amb = row?.declarado_ambulancias_si_no ? (row.declarado_ambulancias_cantidad ?? arr(row.declarado_ambulancias_detalle).length) : 0;
+        const cancDet = row?.declarado_cancelaciones_si_no ? arr(row.declarado_cancelaciones_detalle) : [];
+        const nsDecl = row?.declarado_noshow_si_no ? arr(row.declarado_noshow_patentes) : [];
+        const nsDet = arr(row?.detectado_noshow_patentes);
+        const declNorm = new Set(nsDecl.map(norm));
+        const nsSinInformar = nsDet.filter((p) => norm(p) && !declNorm.has(norm(p)));
+        const pnrDet = arr(row?.declarado_pnr_detalle);
+        const pnrSinResolver = pnrDet.filter((d) => d.estado === "sin_resolver").length;
+
+        const obs = [];
+        if (row?.sin_operacion === true && row.sin_operacion_motivo) obs.push(String(row.sin_operacion_motivo).trim());
+        if (nsSinInformar.length) obs.push(`Sistema entrega ${nsSinInformar.length} alerta(s) (posibles no show)`);
+        if (pnrSinResolver) obs.push(`${pnrSinResolver} PNR sin resolver`);
+
+        resumen.push(["UM", fecha, cecos(sc), porSc[sc].join(" / "), bitacora, rutasSc[sc] || 0,
+          ayud || 0, aprobSc[sc] || 0, amb || 0, cancDet.length, nsDecl.length,
+          row?.declarado_pnr_si_no === true ? "SI" : row?.declarado_pnr_si_no === false ? "NO" : "",
+          rechSdd[sc] || 0, rechSpot[sc] || 0, obs.join(" · ")]);
+
+        for (const d of cancDet) {
+          const placa = placaDe(d);
+          if (!placa) continue;
+          cancel.push(["UM", fecha, cecos(sc), placa, tipoRuta(placa, d?.flota), "SI", String(d?.justificacion || "").trim()]);
+        }
+        for (const p of nsDecl) {
+          const placa = placaDe(p);
+          if (placa) noshow.push(["UM", fecha, cecos(sc), placa, tipoRuta(placa), "SI", ""]);
+        }
+        for (const p of nsSinInformar) {
+          const placa = placaDe(p);
+          noshow.push(["UM", fecha, cecos(sc), placa, tipoRuta(placa), "NO", "Alerta de sistema, posible no show (Patente no realiza ruta)"]);
+        }
+      }
+
+      await descargarExcelMultihoja(
+        [
+          { nombre: "Resumen", datos: resumen },
+          { nombre: "Cancelaciones", datos: cancel },
+          { nombre: "No Show", datos: noshow },
+        ],
+        `informe_bitacoras_${fecha}${filtroSc ? "_" + filtroSc : ""}`
+      );
+    } catch (e) {
+      alert("No se pudo generar el informe: " + (e.message || e));
+    } finally {
+      setInformeBusy(false);
+    }
+  };
+
   // ─── Cálculo de estado HOY: cuántos de los 5 ítems declaró ──────────
   function estadoHoy(row) {
     if (!row) return { completados: 0, total: 5, items: itemsVacios(), sinOperacion: false, motivo: "" };
@@ -1901,6 +2065,10 @@ function PanelControlSupervisores() {
         <button onClick={() => { limpiarCacheTorre(); setTick((t) => t + 1); cargar(true); }} disabled={refrescando}
           style={{ padding: "6px 14px", background: "#1e3a5f", color: "#fff", border: "none", borderRadius: 6, fontSize: 13, fontWeight: 600, cursor: refrescando ? "wait" : "pointer", opacity: refrescando ? 0.7 : 1 }}>
           {refrescando ? "⏳ Actualizando…" : "🔄 Refrescar"}
+        </button>
+        <button onClick={descargarInforme} disabled={informeBusy || loading}
+          style={{ padding: "6px 14px", background: "#16a34a", color: "#fff", border: "none", borderRadius: 6, fontSize: 13, fontWeight: 600, cursor: informeBusy ? "wait" : "pointer", opacity: informeBusy || loading ? 0.7 : 1 }}>
+          {informeBusy ? "⏳ Generando…" : "⬇ Descargar informe"}
         </button>
         <div style={{ marginLeft: "auto", fontSize: 13, color: "#374151" }}>
           <strong>{totales.completaronHoy}/{totales.total}</strong> completaron Hoy
