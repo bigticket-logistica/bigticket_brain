@@ -819,203 +819,151 @@ async function traerTorreFilas(fecha, scId) {
   return data || [];
 }
 
-function TorreControlSC({ scId, fecha }) {
-  const [resumen, setResumen] = useState(null);
-  const [filas, setFilas] = useState([]);
-  const [loadingRes, setLoadingRes] = useState(false);
-  const [loadingFilas, setLoadingFilas] = useState(false);
-  const [intentado, setIntentado] = useState(false);
-  // El marcador de "ya lo pedí" va en un ref, NO en estado: si fuera estado,
-  // al setearlo se re-dispara este mismo efecto, la limpieza cancela la
-  // ejecución anterior y los datos que llegan se descartan.
-  const pedidoRef = useRef(null);
-  const [abierto, setAbierto] = useState(false);          // colapsado por defecto
-  const [bucketSel, setBucketSel] = useState(null);       // chip seleccionado para filtrar
-  const [msRes, setMsRes] = useState(null);               // ms de get_torre_resumen
-  const [msFilas, setMsFilas] = useState(null);           // ms de get_torre_3_pilares
-  const loading = loadingRes || loadingFilas;
+// ── Torre de Control del SC — MISMA fuente que la pestaña Torre de Control de
+// The Eyes: vw_torre_control_dia (rostering cada 5 min × detalle de ruta cada
+// 5 min), con los mismos estados y nombres. Además cruza contra lo que declaró
+// el supervisor en el ítem 4 (No Show): un viaje que no salió y cuya placa no
+// aparece en lo declarado se marca "no declarado".
+const TORRE_ESTADO_LABEL = {
+  PERDIDO: "Cita vencida", NO_SALIO: "No salió", SIN_ASIGNAR: "Sin chofer ni placa",
+  POR_VENCER: "Por vencer", SIN_RUTEAR: "Sin ruta", POR_SALIR: "Por salir",
+  OPERANDO: "En ruta", TERMINADO: "Terminado", SALIO_RETRASADO: "En ruta", CANCELADO: "Cancelado",
+};
+const TORRE_ROJOS = new Set(["NO_SALIO", "PERDIDO", "SIN_ASIGNAR", "SIN_RUTEAR", "CANCELADO"]);
+const TORRE_NO_SALIO = new Set(["NO_SALIO", "PERDIDO", "SIN_ASIGNAR"]);
+const torreColor = (e) => (TORRE_ROJOS.has(e) ? "#b91c1c" : e === "POR_VENCER" ? "#b45309" : "#047857");
+const normPlacaTorre = (p) => String(p || "").toUpperCase().replace(/^(SDD|MLP|SPOT)-?/, "").replace(/[^A-Z0-9]/g, "");
 
-  // Al cambiar de SC o fecha, se descarta lo cargado.
+async function traerTorreDia(fecha, scId) {
+  const clave = `${fecha}|${scId}`;
+  if (cacheTorreFilas.has(clave)) return cacheTorreFilas.get(clave);
+  const { data, error } = await sb.from("vw_torre_control_dia")
+    .select("travel_id, sc, vehiculo, flota, estado, driver_name, vehicle_plate, id_ruta, pkg_total, pkg_delivered, chofer_cambiado, eta_visible")
+    .eq("sc", scId).eq("fecha_operativa", fecha).order("eta_visible");
+  if (error) throw error;
+  cacheTorreFilas.set(clave, data || []);
+  return data || [];
+}
+
+// Cuántos viajes que no salieron NO declaró el supervisor (lo usa el semáforo)
+function noShowNoDeclarados(filas, row) {
+  const decl = new Set((Array.isArray(row?.declarado_noshow_patentes) ? row.declarado_noshow_patentes : [])
+    .map((p) => normPlacaTorre(typeof p === "string" ? p : p?.placa || p?.patente)));
+  return (filas || []).filter((f) => TORRE_NO_SALIO.has(f.estado)
+    && !(f.vehicle_plate && decl.has(normPlacaTorre(f.vehicle_plate))));
+}
+
+function TorreControlSC({ scId, fecha, row }) {
+  const [filas, setFilas] = useState(null);
+  const [error, setError] = useState(null);
+  const [abierto, setAbierto] = useState(true);
+  const [sel, setSel] = useState(null);
+
   useEffect(() => {
-    setIntentado(false); setResumen(null); setFilas([]);
-    setMsRes(null); setMsFilas(null);
-    pedidoRef.current = null;
+    let cancel = false;
+    setFilas(null); setError(null); setSel(null);
+    traerTorreDia(fecha, scId)
+      .then((d) => { if (!cancel) setFilas(d); })
+      .catch((e) => { if (!cancel) { setError(e.message || String(e)); setFilas([]); } });
+    return () => { cancel = true; };
   }, [scId, fecha]);
 
-  // CARGA PEREZOSA y en DOS PISTAS: el resumen del día y las rutas del SC se
-  // piden por separado, así lo primero que llega ya se muestra en vez de
-  // esperar a que terminen las dos. Ambas van por caché compartida.
-  useEffect(() => {
-    if (!abierto) return;
-    const clave = `${fecha}|${scId}`;
-    if (pedidoRef.current === clave) return;   // ya se pidió
-    pedidoRef.current = clave;
-    let cancel = false;
-    setLoadingRes(true);
-    setLoadingFilas(true);
-
-    const t0 = performance.now();
-    traerTorreResumen(fecha)
-      .then((d) => { if (!cancel) setResumen(((d && d.por_sc) || []).find((x) => x.sc === scId) || null); })
-      .catch((e) => console.error("Error torre resumen:", e))
-      .finally(() => {
-        if (cancel) return;
-        setMsRes(Math.round(performance.now() - t0));
-        setLoadingRes(false);
-        setIntentado(true);
-      });
-
-    const t1 = performance.now();
-    traerTorreFilas(fecha, scId)
-      .then((d) => { if (!cancel) setFilas(d); })
-      .catch((e) => console.error("Error torre 3 pilares:", e))
-      .finally(() => {
-        if (cancel) return;
-        setMsFilas(Math.round(performance.now() - t1));
-        setLoadingFilas(false);
-        setIntentado(true);
-      });
-
-    return () => { cancel = true; };
-  }, [abierto, scId, fecha]);
-
-  const tituloTorre = (
-    <button onClick={() => setAbierto((v) => !v)}
-      style={{ display: "flex", alignItems: "center", gap: 8, background: "none", border: "none", cursor: "pointer", padding: 0, fontSize: 12, fontWeight: 700, color: "#374151" }}>
-      <span>{abierto ? "▼" : "▶"}</span>
-      📊 Torre de Control · {scId}
-      {filas.length > 0 && <span style={{ fontSize: 10, fontWeight: 600, color: "#9ca3af" }}>({filas.length} rutas)</span>}
-    </button>
-  );
-
-  const textoCargando = loadingRes && loadingFilas
-    ? "Cargando torre de control…"
-    : loadingFilas ? "Cargando rutas del SC…" : "Cargando resumen del día…";
-
-  if (abierto && loading && !resumen && filas.length === 0) return (
-    <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid #e5e7eb" }}>
-      {tituloTorre}
-      <div style={{ fontSize: 12, color: "#9ca3af", padding: 8 }}>{textoCargando}</div>
-    </div>
-  );
-  if (abierto && intentado && !loading && !resumen && filas.length === 0) return (
-    <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid #e5e7eb" }}>
-      {tituloTorre}
-      <div style={{ fontSize: 12, color: "#9ca3af", marginTop: 4 }}>Sin datos de torre para este día.</div>
-    </div>
-  );
-
-  // Conteo real por bucket desde las filas (más confiable que el resumen)
-  const cuentaBucket = (bucketsArr) => filas.filter((f) => bucketsArr.includes(f.bucket)).length;
-  const cuentaIntradia = filas.filter((f) => f.cambio_intradia && String(f.cambio_intradia).trim() !== "").length;
-
-  // Cada chip mapea a uno o más buckets reales (para filtrar el detalle al clickear)
-  const chips = filas.length > 0 ? [
-    { id: "ok",        label: "OK",            color: "#047857", buckets: ["1_OK"] },
-    { id: "rf1",       label: "RF1 venc",      color: "#b91c1c", buckets: ["2A_RF1_VENCIDO"] },
-    { id: "rf1ev",     label: "RF1 evitado",   color: "#047857", buckets: ["2B_RF1_EVITADO"] },
-    { id: "rf2",       label: "RF2 NoShow",    color: "#b91c1c", buckets: ["3_RF2_NO_SHOW"] },
-    { id: "cancel",    label: "Cancel MELI",   color: "#b45309", buckets: ["4_CANCEL_MELI_PRE_ASIGNACION", "5_CANCEL_MELI_POST_ASIGNACION"] },
-    { id: "cambio",    label: "Cambio placa",  color: "#7c2d12", buckets: ["6_CAMBIO_PLACA"] },
-    { id: "parcial",   label: "Parcial",       color: "#7c2d12", buckets: ["7_PARCIAL"] },
-    { id: "pending",   label: "Pending Rost",  color: "#9333ea", buckets: ["8_PENDING_ROSTEREADO"] },
-    { id: "rechazado", label: "Rechazado",     color: "#475569", buckets: ["9_REJECTED_LIMPIO"] },
-    { id: "intradia",  label: "Cambios intradía", color: "#0891b2", buckets: null, esIntradia: true },
-  ].map((c) => ({ ...c, val: c.esIntradia ? cuentaIntradia : cuentaBucket(c.buckets) })) : [];
-
-  // Filas filtradas según el chip seleccionado
-  const chipActivo = chips.find((c) => c.id === bucketSel);
-  let filasMostrar = filas;
-  if (chipActivo) {
-    if (chipActivo.esIntradia) {
-      filasMostrar = filas.filter((f) => f.cambio_intradia && String(f.cambio_intradia).trim() !== "");
-    } else if (chipActivo.buckets) {
-      filasMostrar = filas.filter((f) => chipActivo.buckets.includes(f.bucket));
-    }
-  }
+  const lista = filas || [];
+  const sinDeclarar = new Set(noShowNoDeclarados(lista, row).map((f) => f.travel_id));
+  const grupos = [
+    { id: "ruta", label: "En ruta", estados: ["OPERANDO", "SALIO_RETRASADO"], color: "#047857" },
+    { id: "term", label: "Terminado", estados: ["TERMINADO"], color: "#047857" },
+    { id: "salir", label: "Por salir", estados: ["POR_SALIR"], color: "#047857" },
+    { id: "vencer", label: "Por vencer", estados: ["POR_VENCER"], color: "#b45309" },
+    { id: "nosalio", label: "No salió / cita vencida", estados: ["NO_SALIO", "PERDIDO"], color: "#b91c1c" },
+    { id: "asignar", label: "Sin chofer ni placa", estados: ["SIN_ASIGNAR"], color: "#b91c1c" },
+    { id: "rutear", label: "Sin ruta", estados: ["SIN_RUTEAR"], color: "#b91c1c" },
+    { id: "cancel", label: "Cancelado", estados: ["CANCELADO"], color: "#b91c1c" },
+  ].map((g) => ({ ...g, val: lista.filter((f) => g.estados.includes(f.estado)).length }));
+  const gSel = grupos.find((g) => g.id === sel);
+  const mostrar = gSel ? lista.filter((f) => gSel.estados.includes(f.estado)) : lista;
 
   return (
     <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid #e5e7eb" }}>
-      {/* Encabezado colapsable (el detalle se consulta sólo al abrirlo) */}
-      {tituloTorre}
-      {abierto && loading && (
-        <div style={{ fontSize: 11, color: "#9ca3af", padding: "4px 8px" }}>{textoCargando}</div>
-      )}
-      {abierto && !loading && (msRes != null || msFilas != null) && (
-        <div style={{ fontSize: 10, color: "#94a3b8", padding: "2px 8px 4px" }}>
-          {msRes != null && <>resumen del día: <b>{msRes} ms</b>{msRes < 30 ? " (de caché)" : ""}</>}
-          {msRes != null && msFilas != null && " · "}
-          {msFilas != null && <>rutas del SC: <b>{msFilas} ms</b>{msFilas < 30 ? " (de caché)" : ""}</>}
-        </div>
-      )}
-
+      <button onClick={() => setAbierto((v) => !v)}
+        style={{ display: "flex", alignItems: "center", gap: 8, background: "none", border: "none", cursor: "pointer", padding: 0, fontSize: 12, fontWeight: 700, color: "#374151" }}>
+        <span>{abierto ? "▼" : "▶"}</span>
+        📊 Torre de Control · {scId}
+        {filas && <span style={{ fontSize: 10, fontWeight: 600, color: "#9ca3af" }}>({lista.length} viajes)</span>}
+        {sinDeclarar.size > 0 && (
+          <span style={{ fontSize: 10, fontWeight: 700, color: "#fff", background: "#dc2626", borderRadius: 4, padding: "1px 6px" }}>
+            {sinDeclarar.size} no show sin declarar
+          </span>
+        )}
+      </button>
       {abierto && (
         <div style={{ marginTop: 8 }}>
-          {/* Chips clickeables */}
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
-            {chips.map((c) => {
-              const sel = bucketSel === c.id;
-              const clickable = (c.buckets || c.esIntradia) && c.val > 0;
-              return (
-                <span key={c.id}
-                  onClick={() => { if (clickable) setBucketSel(sel ? null : c.id); }}
-                  style={{
-                    fontSize: 11, padding: "3px 9px", borderRadius: 5, fontWeight: 700,
-                    cursor: clickable ? "pointer" : "default",
-                    background: sel ? c.color : (c.val > 0 ? "#fff" : "#f8fafc"),
-                    color: sel ? "#fff" : (c.val > 0 ? c.color : "#cbd5e1"),
-                    border: `1px solid ${sel ? c.color : (c.val > 0 ? c.color + "44" : "#e5e7eb")}`,
-                  }}>
-                  {c.label}: {c.val}
+          {filas === null && <div style={{ fontSize: 12, color: "#9ca3af" }}>Cargando Torre de Control…</div>}
+          {error && <div style={{ fontSize: 12, color: "#dc2626" }}>⚠ {error}</div>}
+          {filas && !error && lista.length === 0 && <div style={{ fontSize: 12, color: "#9ca3af" }}>Sin viajes en la Torre para este día.</div>}
+          {lista.length > 0 && (
+            <>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
+                {grupos.map((g) => {
+                  const activo = sel === g.id;
+                  return (
+                    <span key={g.id} onClick={() => { if (g.val > 0) setSel(activo ? null : g.id); }}
+                      style={{ fontSize: 11, padding: "3px 9px", borderRadius: 5, fontWeight: 700, cursor: g.val > 0 ? "pointer" : "default",
+                        background: activo ? g.color : (g.val > 0 ? "#fff" : "#f8fafc"),
+                        color: activo ? "#fff" : (g.val > 0 ? g.color : "#cbd5e1"),
+                        border: `1px solid ${activo ? g.color : (g.val > 0 ? g.color + "44" : "#e5e7eb")}` }}>
+                      {g.label}: {g.val}
+                    </span>
+                  );
+                })}
+                <span onClick={() => setSel(null)}
+                  style={{ fontSize: 11, padding: "3px 9px", borderRadius: 5, fontWeight: 700, cursor: "pointer",
+                    background: sel ? "#e5e7eb" : "#1a3a6b", color: sel ? "#374151" : "#fff" }}>
+                  Total: {lista.length}
                 </span>
-              );
-            })}
-            <span onClick={() => setBucketSel(null)}
-              style={{ fontSize: 11, padding: "3px 9px", borderRadius: 5, fontWeight: 700, background: bucketSel ? "#e5e7eb" : "#1a3a6b", color: bucketSel ? "#374151" : "#fff", cursor: "pointer" }}
-              title="Ver todas">
-              Total: {filas.length}
-            </span>
-          </div>
-
-          {/* Detalle ruta por ruta (filtrado por chip) */}
-          <div style={{ fontSize: 10, color: "#9ca3af", marginBottom: 4 }}>
-            {chipActivo ? `Mostrando: ${chipActivo.label} (${filasMostrar.length})` : `Todas las rutas (${filasMostrar.length})`}
-          </div>
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 10 }}>
-              <thead>
-                <tr style={{ background: "#f8fafc", borderBottom: "1px solid #e5e7eb" }}>
-                  <th style={{ padding: "5px 6px", textAlign: "left" }}>Ruta</th>
-                  <th style={{ padding: "5px 6px", textAlign: "left" }}>Estado</th>
-                  <th style={{ padding: "5px 6px", textAlign: "left" }}>Chofer</th>
-                  <th style={{ padding: "5px 6px", textAlign: "left" }}>Placa</th>
-                  <th style={{ padding: "5px 6px", textAlign: "center" }}>Carg.</th>
-                  <th style={{ padding: "5px 6px", textAlign: "center" }}>Entr.</th>
-                  <th style={{ padding: "5px 6px", textAlign: "center" }}>%</th>
-                  <th style={{ padding: "5px 6px", textAlign: "left" }}>Cambio intradía</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filasMostrar.map((f, i) => (
-                  <tr key={i} style={{ borderBottom: "0.5px solid #f1f5f9" }}>
-                    <td style={{ padding: "4px 6px", fontFamily: "monospace" }}>{f.travel_id}</td>
-                    <td style={{ padding: "4px 6px", fontWeight: 700, color: colorBucket(f.bucket) }}>
-                      {BUCKETS_LABELS[f.bucket] || f.bucket}
-                    </td>
-                    <td style={{ padding: "4px 6px" }}>{f.driver_name || "—"}</td>
-                    <td style={{ padding: "4px 6px", fontFamily: "monospace" }}>{f.vehicle_plate || "—"}</td>
-                    <td style={{ padding: "4px 6px", textAlign: "center" }}>{f.total_cargados || 0}</td>
-                    <td style={{ padding: "4px 6px", textAlign: "center" }}>{f.total_entregados || 0}</td>
-                    <td style={{ padding: "4px 6px", textAlign: "center" }}>{f.pct_entregado != null ? f.pct_entregado + "%" : "—"}</td>
-                    <td style={{ padding: "4px 6px", color: f.cambio_intradia ? "#0891b2" : "#cbd5e1" }}>{f.cambio_intradia || "—"}</td>
-                  </tr>
-                ))}
-                {filasMostrar.length === 0 && (
-                  <tr><td colSpan={8} style={{ padding: 12, textAlign: "center", color: "#9ca3af" }}>Sin rutas en este estado.</td></tr>
-                )}
-              </tbody>
-            </table>
-          </div>
+              </div>
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 10 }}>
+                  <thead>
+                    <tr style={{ background: "#f8fafc", borderBottom: "1px solid #e5e7eb" }}>
+                      <th style={{ padding: "5px 6px", textAlign: "left" }}>Viaje</th>
+                      <th style={{ padding: "5px 6px", textAlign: "left" }}>Ruta</th>
+                      <th style={{ padding: "5px 6px", textAlign: "left" }}>Estado</th>
+                      <th style={{ padding: "5px 6px", textAlign: "left" }}>Chofer</th>
+                      <th style={{ padding: "5px 6px", textAlign: "left" }}>Placa</th>
+                      <th style={{ padding: "5px 6px", textAlign: "left" }}>Vehículo</th>
+                      <th style={{ padding: "5px 6px", textAlign: "center" }}>Carg.</th>
+                      <th style={{ padding: "5px 6px", textAlign: "center" }}>Entr.</th>
+                      <th style={{ padding: "5px 6px", textAlign: "center" }}>%</th>
+                      <th style={{ padding: "5px 6px", textAlign: "left" }}>Bitácora</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {mostrar.map((f) => {
+                      const tot = Number(f.pkg_total || 0), ent = Number(f.pkg_delivered || 0);
+                      const noDecl = sinDeclarar.has(f.travel_id);
+                      return (
+                        <tr key={f.travel_id} style={{ borderBottom: "0.5px solid #f1f5f9", background: noDecl ? "#fef2f2" : undefined }}>
+                          <td style={{ padding: "4px 6px", fontFamily: "monospace" }}>{f.travel_id}</td>
+                          <td style={{ padding: "4px 6px", fontFamily: "monospace" }}>{f.id_ruta || "—"}</td>
+                          <td style={{ padding: "4px 6px", fontWeight: 700, color: torreColor(f.estado) }}>{TORRE_ESTADO_LABEL[f.estado] || f.estado}</td>
+                          <td style={{ padding: "4px 6px" }}>{f.driver_name || "—"}{f.chofer_cambiado ? " ↺" : ""}</td>
+                          <td style={{ padding: "4px 6px", fontFamily: "monospace" }}>{f.vehicle_plate || "—"}</td>
+                          <td style={{ padding: "4px 6px" }}>{f.vehiculo || "—"}</td>
+                          <td style={{ padding: "4px 6px", textAlign: "center" }}>{tot || "—"}</td>
+                          <td style={{ padding: "4px 6px", textAlign: "center" }}>{tot ? ent : "—"}</td>
+                          <td style={{ padding: "4px 6px", textAlign: "center" }}>{tot ? Math.round((ent / tot) * 100) + "%" : "—"}</td>
+                          <td style={{ padding: "4px 6px", fontWeight: 700, color: noDecl ? "#dc2626" : "#cbd5e1" }}>
+                            {noDecl ? "No show no declarado" : "—"}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
         </div>
       )}
     </div>
@@ -2160,7 +2108,7 @@ function PanelControlSupervisores() {
 
                           {/* ─── Torre de Control del SC (mismo día) ─── */}
                           {(filtroEvento === "todos" || filtroEvento === "torre") && (
-                            <TorreControlSC scId={s.sc} fecha={fecha} />
+                            <TorreControlSC scId={s.sc} fecha={fecha} row={bitHoy[s.sc] || null} />
                           )}
 
                           {/* ─── Ambulancias del SC (mismo día) ─── */}
