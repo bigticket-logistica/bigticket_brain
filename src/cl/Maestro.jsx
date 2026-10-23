@@ -215,6 +215,8 @@ function ModuloMaestroCL() {
   const [vehMasivo, setVehMasivo] = useState("");
   const [vehGuardando, setVehGuardando] = useState(null);
   const [vehMsg, setVehMsg] = useState("");
+  const [vehNueva, setVehNueva] = useState({ patente: "", proyecto: "COMBUSTION LARGE VAN" });
+  const [vehBuscar, setVehBuscar] = useState("");
   // ── Tarifario ──
   const [tarifas, setTarifas] = useState([]);
   const [tarifaEdit, setTarifaEdit] = useState({});        // id -> fila en edición
@@ -520,6 +522,36 @@ function ModuloMaestroCL() {
       setVehEdit(e => { const n = { ...e }; delete n[patente]; return n; });
       await cargarVehiculos();
       setVehMsg(`${patente} guardada`); setTimeout(() => setVehMsg(""), 3000);
+    } catch (e) { setError(e.message); }
+    finally { setVehGuardando(null); }
+  };
+
+  // ── Agregar una patente ──
+  const agregarVehiculo = async () => {
+    const pat = vehNueva.patente.toUpperCase().replace(/[^A-Z0-9]/g, "");
+    if (!/^[A-Z0-9]{5,8}$/.test(pat)) { setError("Patente inválida: usa entre 5 y 8 letras o números, sin guiones (ej. SLXZ99)."); return; }
+    if (vehiculos.some(v => v.patente === pat)) { setError(`La patente ${pat} ya está en la lista: edítala ahí.`); return; }
+    await guardarVehiculo(pat, { proyecto: vehNueva.proyecto, activo: true, nota: "Agregada desde el Brain." }, true);
+    setVehNueva(x => ({ ...x, patente: "" }));
+  };
+
+  // ── Eliminar una patente ──
+  // Pide el resultado del borrado: si la base devuelve una lista vacía, no se
+  // borró nada (falta el permiso de la migración 52) y se avisa en vez de
+  // mostrar un falso "eliminada".
+  const eliminarVehiculo = async (v) => {
+    if (!window.confirm(
+      `¿Eliminar la patente ${v.patente} (${v.proyecto}) de Vehículos BT?\n\n` +
+      `Si alguna vez hace un viaje con nosotros, se pagará como COMBUSTION (regla oficial).\n` +
+      `El borrado queda registrado y se puede deshacer volviendo a agregarla.`)) return;
+    setVehGuardando(v.patente);
+    try {
+      const r = await api(`tipo_vehiculo_bt?patente=eq.${encodeURIComponent(v.patente)}`, {
+        method: "DELETE", headers: { Prefer: "return=representation" } });
+      if (Array.isArray(r) && r.length === 0)
+        throw new Error(`No se eliminó ${v.patente}: la base no lo permitió (falta correr la migración 52).`);
+      await cargarVehiculos();
+      setVehMsg(`${v.patente} eliminada`); setTimeout(() => setVehMsg(""), 3000);
     } catch (e) { setError(e.message); }
     finally { setVehGuardando(null); }
   };
@@ -1794,13 +1826,44 @@ function ModuloMaestroCL() {
                   </div>
                 </div>
 
+                <div style={{ background: "#fff", border: "1px solid #e6e9ef", borderRadius: 10,
+                              padding: "11px 16px", marginBottom: 12, display: "flex", gap: 10,
+                              alignItems: "flex-end", flexWrap: "wrap" }}>
+                  <label style={{ fontSize: 10.5, color: "#64748b" }}>Patente<br/>
+                    <input className="mj-input" value={vehNueva.patente} placeholder="SLXZ99"
+                           onChange={e => setVehNueva(x => ({ ...x, patente: e.target.value }))}
+                           onKeyDown={e => { if (e.key === "Enter") agregarVehiculo(); }}
+                           style={{ width: 110, textTransform: "uppercase" }} /></label>
+                  <label style={{ fontSize: 10.5, color: "#64748b" }}>Tipo<br/>
+                    <select className="mj-input" value={vehNueva.proyecto}
+                            onChange={e => setVehNueva(x => ({ ...x, proyecto: e.target.value }))}>
+                      {TIPOS_VEH.map(t2 => <option key={t2} value={t2}>{t2}</option>)}
+                    </select></label>
+                  <button className="mj-btn" onClick={agregarVehiculo}
+                          disabled={!vehNueva.patente.trim() || !!vehGuardando}
+                          style={{ background: NAVY, color: "#fff", borderColor: NAVY, padding: "7px 14px" }}>
+                    ➕ Agregar patente
+                  </button>
+                  <span style={{ flex: 1 }} />
+                  <label style={{ fontSize: 10.5, color: "#64748b" }}>Buscar<br/>
+                    <input className="mj-input" value={vehBuscar} placeholder="patente o tipo…"
+                           onChange={e => setVehBuscar(e.target.value)} style={{ width: 180 }} /></label>
+                </div>
+
+                {(() => { const q = vehBuscar.trim().toUpperCase();
+                          const n = q ? vehiculos.filter(v => `${v.patente} ${v.proyecto}`.toUpperCase().includes(q)).length : vehiculos.length;
+                          return <div style={{ fontSize: 12, color: "#64748b", margin: "0 2px 6px" }}>
+                                   Mostrando <strong>{fmt(n)}</strong> de {fmt(vehiculos.length)} patentes</div>; })()}
+
                 <div style={{ background: "#fff", border: "1px solid #e6e9ef", borderRadius: 10, overflow: "hidden" }}>
                   <table className="mj-tabla">
                     <thead>
                       <tr><th>Patente</th><th>Tipo (proyecto)</th><th>Activa</th><th>Nota</th><th></th></tr>
                     </thead>
                     <tbody>
-                      {vehiculos.map(v => {
+                      {vehiculos.filter(v => !vehBuscar.trim() ||
+                          `${v.patente} ${v.proyecto}`.toUpperCase().includes(vehBuscar.trim().toUpperCase()))
+                        .map(v => {
                         const ed = vehEdit[v.patente];
                         return (
                           <tr key={v.patente}>
@@ -1840,10 +1903,19 @@ function ModuloMaestroCL() {
                                   </label>
                                 </Fragment>
                               ) : (
-                                <button className="mj-btn" style={{ padding: "3px 10px", fontSize: 11 }}
-                                  onClick={() => setVehEdit(x => ({ ...x, [v.patente]: { proyecto: v.proyecto, activo: v.activo } }))}>
-                                  Editar
-                                </button>
+                                <Fragment>
+                                  <button className="mj-btn" style={{ padding: "3px 10px", fontSize: 11 }}
+                                    onClick={() => setVehEdit(x => ({ ...x, [v.patente]: { proyecto: v.proyecto, activo: v.activo } }))}>
+                                    Editar
+                                  </button>
+                                  <button className="mj-btn" title="Eliminar esta patente de Vehículos BT"
+                                    style={{ padding: "3px 9px", fontSize: 11, marginLeft: 4,
+                                             color: "#b42318", borderColor: "#f3c9c4" }}
+                                    disabled={vehGuardando === v.patente}
+                                    onClick={() => eliminarVehiculo(v)}>
+                                    {vehGuardando === v.patente ? "…" : "Eliminar"}
+                                  </button>
+                                </Fragment>
                               )}
                             </td>
                           </tr>
