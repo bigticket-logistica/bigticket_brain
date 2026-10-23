@@ -109,8 +109,8 @@ const diasUso = (f) => (f.dias_sin_uso === null || f.dias_sin_uso === undefined 
 // ── Bandejas de trabajo ─────────────────────────────────────────────────────
 // Cada vehículo cae en la primera bandeja que le corresponde (no se repite).
 const BANDEJAS = [
-  { id: "critica",   titulo: "Trabajan sin GPS", color: "#991b1b", fondo: "#fee2e2",
-    que: "Hicieron ruta en los últimos 30 días y no tienen GPS activo. Exigible a toda la planta y al apoyo, temporada y esporádico desde 9 viajes en el mes. El seguro de carga siempre existe: BCI si está en la póliza, si no BT por defecto.",
+  { id: "critica",   titulo: "Trabajan sin GPS o sin seguro", color: "#991b1b", fondo: "#fee2e2",
+    que: "Hicieron ruta en los últimos 30 días y les falta GPS activo o seguro de carga. Exigible a toda la planta y al apoyo, temporada y esporádico desde 9 viajes en el mes. Seguro: BCI según la póliza oficial; si no está en BCI, lo que diga el Maestro (BT o nada).",
     entra: f => f.cobertura_critica },
   { id: "cortar",    titulo: "Se pagan y no se usan",  color: ROJO_,  fondo: "#fdecec",
     que: "GPS o seguro que se siguen pagando en vehículos sin ruta y sin movimiento de GPS hace 30 días o más. Corresponde pedir la baja.",
@@ -127,12 +127,13 @@ const BANDEJAS = [
 ];
 const bandejaDe = (f) => BANDEJAS.find(b => b.entra(f))?.id || null;
 const SUB_CRITICA = [
-  { id: "planta",  rotulo: "Planta sin GPS",                         entra: f => f.tipo === "PLANTA" },
-  { id: "apoyo",   rotulo: "Apoyo, temporada o esporádico (9+ viajes) sin GPS", entra: f => f.tipo !== "PLANTA" },
+  { id: "nada",   rotulo: "Sin GPS y sin seguro",          entra: f => f.falta_gps && f.falta_seguro },
+  { id: "gps",    rotulo: "Sin GPS (tienen seguro)",       entra: f => f.falta_gps && !f.falta_seguro },
+  { id: "seguro", rotulo: "Sin seguro (tienen GPS)",       entra: f => !f.falta_gps && f.falta_seguro },
 ];
 // Hallazgos del cruce entre el Maestro original y las pólizas BCI oficiales
 const HALLAZGO_BCI = {
-  SIN_POLIZA_BCI:     { rotulo: "Decía BCI y no está en la póliza", texto: "El Maestro decía seguro de carga BCI, pero la patente no está en ninguna póliza BCI vigente: queda con BT por defecto", color: ROJO_, fondo: "#fdecec" },
+  SIN_POLIZA_BCI:     { rotulo: "Dice BCI y no está en la póliza", texto: "El Maestro dice seguro de carga BCI, pero la patente no está en ninguna póliza BCI vigente: queda sin seguro (manda BCI)", color: ROJO_, fondo: "#fdecec" },
   BCI_DESACTUALIZADA: { rotulo: "Póliza BCI desactualizada",         texto: "Está en BCI, pero el Maestro tenía otro número de póliza o vencimiento", color: AMBAR_, fondo: "#fff6dc" },
   BCI_NO_REGISTRADO:  { rotulo: "BCI no registrado en el Maestro",   texto: "Está en una póliza BCI, pero el Maestro no lo registraba como BCI", color: AZUL_, fondo: "#eaf1ff" },
 };
@@ -160,7 +161,7 @@ const estadoCertronic = (c) => !c ? "nunca" : c.vigente ? "vigente" : "salio";
 const motivos = (f, u) => {
   const m = [];
   if (f.cobertura_critica) {
-    m.push(`Hizo ${fmt(f.viajes_30d)} viajes en 30 días y no tiene GPS activo`);
+    m.push(`Hizo ${fmt(f.viajes_30d)} viajes en 30 días y le falta ${[f.falta_gps ? "GPS activo" : null, f.falta_seguro ? (f.seg_carga_fuente === "BCI_NO_ESTA" ? "seguro (el Maestro dice BCI y no está en la póliza)" : "seguro de carga") : null].filter(Boolean).join(" y ")}`);
     if (f.tipo !== "PLANTA") m.push(`${f.tipo} con ${fmt(f.viajes_mes)} viajes este mes (desde ${u.viajes_mes_apoyo} debe estar cubierto)`);
     if (f.estado && f.estado !== "ACTIVA") m.push(`Figura ${f.estado} en el Maestro y está trabajando`);
   }
@@ -185,7 +186,7 @@ const TIPOS_ALERTA = {
   CORTAR_GPS:   { rotulo: "Cortar GPS",       color: ROJO_,  fondo: "#fdecec" },
   SACAR_SEGURO: { rotulo: "Sacar del seguro", color: ROJO_,  fondo: "#fdecec" },
   GPS_MUDO:     { rotulo: "GPS mudo",         color: AMBAR_, fondo: "#fff6dc" },
-  COBERTURA_CRITICA: { rotulo: "Trabaja sin GPS", color: "#991b1b", fondo: "#fee2e2" },
+  COBERTURA_CRITICA: { rotulo: "Trabaja sin GPS o seguro", color: "#991b1b", fondo: "#fee2e2" },
 };
 const textoAlerta = (a) => {
   const d = a.detalle || {};
@@ -195,7 +196,7 @@ const textoAlerta = (a) => {
     case "CORTAR_GPS": return `${fmt(d.dias_sin_uso)} días sin uso · dispositivo en ${d.gps_base || "—"}`;
     case "SACAR_SEGURO": return `${fmt(d.dias_sin_uso)} días sin uso · ${d.proveedor || ""} ${d.poliza || ""}`;
     case "GPS_MUDO": return `GPS sin comunicar hace ${fmt(d.gps_dias_sin_reportar)} días · ${fmt(d.viajes_30d)} viajes en 30 días`;
-    case "COBERTURA_CRITICA": return `${d.tipo || ""} ${d.estado && d.estado !== "ACTIVA" ? "(" + d.estado + ") " : ""}· ${fmt(d.viajes_30d)} viajes en 30 días · sin GPS activo · ${d.operacion || ""}`;
+    case "COBERTURA_CRITICA": return `${d.tipo || ""} ${d.estado && d.estado !== "ACTIVA" ? "(" + d.estado + ") " : ""}· ${fmt(d.viajes_30d)} viajes en 30 días · sin GPS o seguro · ${d.operacion || ""}`;
     default: return "";
   }
 };
@@ -223,8 +224,8 @@ const COLS_BANDEJA = (u) => [
   { titulo: "GPS activo en Geotab", campo: "gps_activo" }, { titulo: "Base Geotab", campo: "gps_base" },
   { titulo: "ID dispositivo", campo: "gps_dispositivo" }, { titulo: "Última comunicación GPS", valor: f => fchHora(f.gps_ultima_comunicacion) },
   { titulo: "Seguro de carga", campo: "seg_carga" }, { titulo: "Proveedor seguro", campo: "seg_carga_proveedor" },
-  { titulo: "Póliza", campo: "seg_carga_poliza" }, { titulo: "Vence seguro", campo: "seg_carga_vence" }, { titulo: "Fuente seguro carga", valor: f => f.seg_carga_fuente === "EXCEL" ? "BT según Excel (*)" : f.seg_carga_fuente === "DEFECTO" ? "BT por defecto" : f.seg_carga_fuente || "" },
-  { titulo: "Hallazgo cruce BCI", valor: f => HALLAZGO_BCI[f.bci_hallazgo_inicial]?.rotulo || "" },
+  { titulo: "Póliza", campo: "seg_carga_poliza" }, { titulo: "Vence seguro", campo: "seg_carga_vence" }, { titulo: "Fuente seguro carga", valor: f => f.seg_carga_fuente === "BCI" ? "BCI (póliza oficial)" : f.seg_carga_fuente === "BCI_NO_ESTA" ? "Maestro dice BCI, no está en la póliza" : "Maestro" },
+  { titulo: "Hallazgo cruce BCI", valor: f => HALLAZGO_BCI[f.bci_hallazgo_actual]?.rotulo || "" },
   { titulo: "Seguro de vehículo", campo: "seg_veh" }, { titulo: "Póliza vehículo", campo: "seg_veh_poliza" }, { titulo: "Vence seguro vehículo", campo: "seg_veh_vence" },
   { titulo: "Fuente seguro vehículo", valor: f => f.seg_veh_fuente === "EXCEL" ? "Excel (*)" : f.seg_veh_fuente || "" },
   { titulo: "Motivo", valor: f => motivos(f, u).join(" | ") },
@@ -748,10 +749,10 @@ function FlotaGps() {
     const prov = tipo === "carga" ? f.seg_carga_proveedor : f.seg_veh_proveedor;
     if (fuente === "BCI" && tiene === "SI")
       return <span>BCI · <a href="#" onClick={e => { e.preventDefault(); e.stopPropagation(); setFicha(pol); }} style={{ color: "#1F4E9E", fontWeight: 700 }}>{pol}</a> · vence {fch(vence)}</span>;
-    if (tipo === "carga" && fuente === "DEFECTO") return <span title="No está en ninguna póliza BCI: se asume el seguro de Bigticket por defecto">BT <span style={{ color: GRIS_ }}>(por defecto)</span></span>;
-    if (tipo === "carga" && fuente === "EXCEL") return <span title="El Maestro de Certificación indica seguro Bigticket (no verificado con la aseguradora)">BT{pol ? " · " + pol : ""} <strong style={{ color: AMBAR_ }}>*</strong></span>;
-    if (fuente === "BCI") return <span style={{ color: ROJO_ }}>Sin seguro (no está en BCI)</span>;
-    if (tiene) return <span title="Dato del Maestro de Certificación (Excel), no verificado con la aseguradora">{tiene === "SI" ? `${prov || "SI"}${pol ? " · " + pol : ""}${vence ? " · vence " + fch(vence) : ""}` : tiene} <strong style={{ color: AMBAR_ }}>*</strong></span>;
+    if (fuente === "BCI_NO_ESTA") return <span style={{ color: ROJO_ }} title="El Maestro dice BCI, pero la patente no está en ninguna póliza BCI vigente (manda BCI)">Sin seguro · <strong>el Maestro dice BCI y no está en la póliza</strong></span>;
+    if (tipo === "carga" && tiene === "SI") return <span title="Seguro informado por el Maestro de Certificación">BT{pol ? " · " + pol : ""}{vence ? " · vence " + fch(vence) : ""} <strong style={{ color: AMBAR_ }}>*</strong></span>;
+    if (tipo === "carga") return <span style={{ color: ROJO_ }}>Sin seguro (Maestro)</span>;
+    if (tiene) return <span title="Dato del Maestro de Certificación, no verificado con la aseguradora">{tiene === "SI" ? `${prov || "SI"}${pol ? " · " + pol : ""}${vence ? " · vence " + fch(vence) : ""}` : tiene} <strong style={{ color: AMBAR_ }}>*</strong></span>;
     return <span style={{ color: "#a8b2c1" }}>no informado</span>;
   };
   const enFlota = useMemo(() => Object.fromEntries(semaforo.map(f => [f.patente, f])), [semaforo]);
@@ -803,7 +804,7 @@ function FlotaGps() {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
         <div style={{ fontSize: 11.5, color: GRIS_ }}>
           Geotab al {fch(geotabFecha)} · BCI al {bciExt ? fchHora(bciExt.extraido_at) : "—"} · Maestro de Certificación: carga #{cargaVigente?.id || "—"} del {fch(cargaVigente?.cargado_at)}
-          {" "}· <strong style={{ color: AMBAR_ }}>*</strong> = seguro informado solo en el Excel (no verificado con la aseguradora)
+          {" "}· <strong style={{ color: AMBAR_ }}>*</strong> = seguro informado por el Maestro (BT u otros, no verificado con la aseguradora) · BCI = póliza oficial
           {" "}· sin uso = sin ruta MELI <strong>y</strong> sin movimiento de GPS
         </div>
         <button className="mj-btn" onClick={recalcular} disabled={recalculando}>{recalculando ? "Recalculando…" : "Recalcular ahora"}</button>
@@ -837,17 +838,18 @@ function FlotaGps() {
                 <div onClick={() => irA({ vista: "bandejas", bandeja: "critica" })}
                      style={{ display: "flex", gap: 10, alignItems: "baseline", padding: "6px 4px 8px", cursor: "pointer", borderBottom: "2px solid #fecaca", background: "#fff5f5", borderRadius: 6 }}>
                   <span style={{ fontSize: 26, fontWeight: 800, color: "#991b1b", minWidth: 48, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{fmt(resumen.porBandeja.critica)}</span>
-                  <span style={{ fontSize: 13, fontWeight: 700, color: "#1f2937", lineHeight: 1.35 }}>trabajan sin GPS
-                    <span style={{ display: "block", fontSize: 11, fontWeight: 400, color: GRIS_ }}>hicieron ruta en 30 días y deben tenerlo · se dividen así:</span></span>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: "#1f2937", lineHeight: 1.35 }}>trabajan sin la cobertura exigida
+                    <span style={{ display: "block", fontSize: 11, fontWeight: 400, color: GRIS_ }}>hicieron ruta en 30 días y les falta GPS o seguro · se dividen así:</span></span>
                   <span style={{ marginLeft: "auto", color: GRIS_, fontSize: 13 }}>›</span>
                 </div>
                 <div style={{ paddingLeft: 18, borderLeft: "2px solid #fee2e2", marginLeft: 26 }}>
-                  <Fila num={fmt(crit("planta"))} color="#991b1b" texto="de planta" onClick={() => irA({ vista: "bandejas", bandeja: "critica", sub: "planta" })} />
-                  <Fila num={fmt(crit("apoyo"))} color="#991b1b" texto="apoyo, temporada o esporádico con 9+ viajes en el mes" onClick={() => irA({ vista: "bandejas", bandeja: "critica", sub: "apoyo" })} />
+                  <Fila num={fmt(crit("nada"))} color="#991b1b" texto="sin GPS y sin seguro" onClick={() => irA({ vista: "bandejas", bandeja: "critica", sub: "nada" })} />
+                  <Fila num={fmt(crit("gps"))} color="#991b1b" texto="sin GPS (tienen seguro)" onClick={() => irA({ vista: "bandejas", bandeja: "critica", sub: "gps" })} />
+                  <Fila num={fmt(crit("seguro"))} color="#991b1b" texto="sin seguro (tienen GPS)" onClick={() => irA({ vista: "bandejas", bandeja: "critica", sub: "seguro" })} />
                 </div>
                 <div style={{ marginTop: 8, paddingTop: 4, borderTop: "1px dashed #e6e9ef" }}>
                   <Fila num={fmt(cuenta(f => f.tipo !== "PLANTA" && n(f.viajes_mes) >= n(u.viajes_mes_apoyo || 9) && f.seg_carga_fuente !== "BCI"))} color={AMBAR_}
-                        texto="apoyos con 9+ viajes que deberían certificarse y entrar a la póliza" sub="hoy solo tienen BT por defecto"
+                        texto="apoyos con 9+ viajes sin seguro BCI" sub="deberían certificarse y entrar a la póliza"
                         onClick={() => { irA({ vista: "detalle" }); setFTipo("APOYO"); }} />
                   <Fila num={fmt(fueraNomina.length)} color="#7c3aed" texto="trabajan sin estar registrados en el Maestro"
                         sub={`no se suman arriba · ${fmt(porEstadoCertronic.nunca)} nunca estuvieron en Certronic`}
@@ -863,13 +865,15 @@ function FlotaGps() {
                 <Fila num={fmt(resumen.solPend)} color={AZUL_} texto="solicitudes de baja o revisión pendientes" onClick={() => irA({ vista: "solicitudes" })} />
               </Col>
               <Col titulo="Seguros y datos" color={GRIS_}>
-                <Fila num={`${fmt(cuenta(f => f.tipo === "PLANTA" && f.estado === "ACTIVA" && f.seg_carga_fuente === "BCI"))} / ${fmt(cuenta(f => f.tipo === "PLANTA" && f.estado === "ACTIVA" && f.seg_carga_fuente !== "BCI"))}`}
-                      color={NAVY} texto="planta activa con seguro BCI / con BT" sub="sin BCI, el seguro de carga es BT por defecto"
+                <Fila num={`${fmt(cuenta(f => f.tipo === "PLANTA" && f.estado === "ACTIVA" && f.seg_carga_proveedor === "BCI"))} / ${fmt(cuenta(f => f.tipo === "PLANTA" && f.estado === "ACTIVA" && f.seg_carga_proveedor === "BIGTICKET"))} / ${fmt(cuenta(f => f.tipo === "PLANTA" && f.estado === "ACTIVA" && f.seg_carga !== "SI"))}`}
+                      color={NAVY} texto="planta activa: BCI / BT / sin seguro" sub="BCI según la póliza oficial; BT y sin seguro según el Maestro"
                       onClick={() => { irA({ vista: "detalle" }); setFTipo("PLANTA"); }} />
-                <Fila num={fmt(cuenta(f => f.bci_hallazgo_inicial === "SIN_POLIZA_BCI"))} color={ROJO_} texto="el Maestro decía BCI y no están en la póliza" sub="quedan con BT · ver hallazgos del cruce"
+                <Fila num={fmt(cuenta(f => f.bci_hallazgo_actual === "SIN_POLIZA_BCI"))} color={ROJO_} texto="el Maestro dice BCI y no están en la póliza" sub="quedan sin seguro (manda BCI) · ver hallazgos"
                       onClick={() => { irA({ vista: "config" }); setFHallazgo("SIN_POLIZA_BCI"); }} />
-                <Fila num={fmt(cuenta(f => f.bci_hallazgo_inicial === "BCI_DESACTUALIZADA"))} color={AMBAR_} texto="tenían la póliza BCI desactualizada en el Maestro"
-                      sub={`${fmt(cuenta(f => f.bci_hallazgo_inicial === "BCI_DESACTUALIZADA" && f.bci_hallazgo_actual === "OK"))} ya corregidas`}
+                <Fila num={fmt(cuenta(f => f.bci_hallazgo_actual === "BCI_NO_REGISTRADO"))} color={AZUL_} texto="están en BCI y el Maestro no los tiene como BCI"
+                      onClick={() => { irA({ vista: "config" }); setFHallazgo("BCI_NO_REGISTRADO"); }} />
+                <Fila num={fmt(cuenta(f => f.bci_hallazgo_actual === "BCI_DESACTUALIZADA"))} color={AMBAR_} texto="con póliza o vencimiento BCI desactualizado en el Maestro"
+                      sub="manda la fecha de BCI"
                       onClick={() => { irA({ vista: "config" }); setFHallazgo("BCI_DESACTUALIZADA"); }} />
                 <Fila num={fmt(resumen.porBandeja.nomina)} color={GRIS_} texto="datos a corregir en el Maestro" onClick={() => irA({ vista: "bandejas", bandeja: "nomina" })} />
                 <Fila num={fmt(alertas.length)} color={NAVY} texto="alertas abiertas" onClick={() => irA({ vista: "alertas" })} />
@@ -1039,9 +1043,9 @@ function FlotaGps() {
                         <div><strong>GPS:</strong> {f.gps_activo ? `activo en ${f.gps_base}` : f.gps_base ? "dado de baja en Geotab" : "sin dispositivo"} · última comunicación {fchHora(f.gps_ultima_comunicacion)}</div>
                         <div><strong>Seguro de carga:</strong> {seguroCelda(f, "carga")}</div>
                         <div><strong>Seguro de vehículo:</strong> {seguroCelda(f, "vehiculo")}</div>
-                        {f.bci_hallazgo_inicial && f.bci_hallazgo_inicial !== "OK" && HALLAZGO_BCI[f.bci_hallazgo_inicial] && (
-                          <div><strong>Cruce con BCI:</strong> <Etiqueta texto={HALLAZGO_BCI[f.bci_hallazgo_inicial].rotulo} color={HALLAZGO_BCI[f.bci_hallazgo_inicial].color} fondo={HALLAZGO_BCI[f.bci_hallazgo_inicial].fondo} />
-                            {" "}<span style={{ color: GRIS_ }}>{f.bci_hallazgo_actual && f.bci_hallazgo_actual !== "OK" ? "· sigue así en el Maestro actual" : "· ya corregido en el Maestro actual"}</span></div>
+                        {f.bci_hallazgo_actual && f.bci_hallazgo_actual !== "OK" && HALLAZGO_BCI[f.bci_hallazgo_actual] && (
+                          <div><strong>Cruce con BCI:</strong> <Etiqueta texto={HALLAZGO_BCI[f.bci_hallazgo_actual].rotulo} color={HALLAZGO_BCI[f.bci_hallazgo_actual].color} fondo={HALLAZGO_BCI[f.bci_hallazgo_actual].fondo} />
+                            {" "}<span style={{ color: GRIS_ }}>{HALLAZGO_BCI[f.bci_hallazgo_actual].texto}</span></div>
                         )}
                         <div><strong>Maestro:</strong> GPS {f.gps_nomina || "no informado"} {f.gps_dispositivo ? `(${f.gps_dispositivo})` : ""} · baja pedida {fch(f.baja_solicitada_el)}</div>
                       </div>
@@ -1099,7 +1103,7 @@ function FlotaGps() {
             case "APOYO_EXCESO": return { texto: `${fmt(f.viajes_mes)} viajes este mes (desde ${u.viajes_mes_apoyo ?? 9} debe estar certificado y cubierto)`, vivo: true };
             case "COBERTURA_CRITICA":
               if (!f.cobertura_critica) return { texto: "Ya cumple (tiene GPS o ya no es exigible): la alerta se cierra en el próximo recálculo", vivo: false };
-              return { texto: `Hizo ${fmt(f.viajes_30d)} viajes en 30 días y no tiene GPS activo${f.tipo !== "PLANTA" ? ` (${fmt(f.viajes_mes)} viajes este mes)` : ""}`, vivo: true };
+              return { texto: `Hizo ${fmt(f.viajes_30d)} viajes en 30 días y le falta ${[f.falta_gps ? "GPS activo" : null, f.falta_seguro ? "seguro de carga" : null].filter(Boolean).join(" y ")}${f.tipo !== "PLANTA" ? ` (${fmt(f.viajes_mes)} viajes este mes)` : ""}`, vivo: true };
             default: return { texto: textoAlerta(a), vivo: false };
           }
         };
@@ -1296,9 +1300,8 @@ function FlotaGps() {
           <div style={{ background: "#fff", border: "1px solid #e6e9ef", borderRadius: 10, padding: "13px 16px", marginBottom: 12 }}>
             <div style={{ fontSize: 13, fontWeight: 800, color: NAVY }}>Seguros BCI (fuente oficial) · regla del seguro de carga</div>
             <div style={{ fontSize: 12, color: "#334155", margin: "4px 0 6px", lineHeight: 1.6 }}>
-              <strong>Si la patente está en una póliza BCI vigente</strong>, su seguro de carga es BCI (con esa póliza y vencimiento).
-              {" "}<strong>Si no está en BCI</strong>, su seguro de carga es <strong>BT por defecto</strong> (seguro de Bigticket), aunque el Excel diga otra cosa.
-              {" "}Lo que diga el Excel sobre BCI no se usa.
+              <strong>BCI manda la API:</strong> si la patente está en una póliza BCI vigente, su seguro es BCI con esa póliza y vencimiento; si el Maestro dice BCI y no está en la póliza, queda <strong>sin seguro</strong> y se marca la diferencia.
+              {" "}<strong>Lo que no es BCI manda el Maestro</strong> (columna M de GPS y Seguros): BIGTICKET = seguro BT; vacío o NO = sin seguro.
             </div>
             <div style={{ fontSize: 11.5, color: "#64748b", margin: "3px 0 10px" }}>
               Se extraen del portal de BCI Seguros dos veces por semana. Una patente tiene seguro BCI solo si está en una de estas pólizas;
@@ -1321,43 +1324,43 @@ function FlotaGps() {
             </table>
           </div>
           {(() => {
-            const conH = semaforo.filter(f => f.bci_hallazgo_inicial && f.bci_hallazgo_inicial !== "OK");
-            const listaH = conH.filter(f => !fHallazgo || f.bci_hallazgo_inicial === fHallazgo).sort((a, b) => n(b.viajes_30d) - n(a.viajes_30d));
+            const conH = semaforo.filter(f => f.bci_hallazgo_actual && f.bci_hallazgo_actual !== "OK");
+            const listaH = conH.filter(f => !fHallazgo || f.bci_hallazgo_actual === fHallazgo).sort((a, b) => n(b.viajes_30d) - n(a.viajes_30d));
             return (
               <div style={{ background: "#fff", border: "1px solid #e6e9ef", borderRadius: 10, padding: "13px 16px", marginBottom: 12 }}>
                 <div style={{ fontSize: 13, fontWeight: 800, color: NAVY }}>Hallazgos del cruce entre el Maestro y BCI</div>
                 <div style={{ fontSize: 11.5, color: "#64748b", margin: "3px 0 8px" }}>
-                  Se comparan los seguros de carga que informaba el Maestro original (primera carga) con las pólizas BCI oficiales. La última columna dice si el Maestro actual ya lo corrigió.
+                  Se comparan los seguros de carga BCI del Maestro vigente con las pólizas BCI oficiales (manda BCI). La última columna dice si la diferencia ya existía en el Maestro original.
                 </div>
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginBottom: 8 }}>
                   {Object.entries(HALLAZGO_BCI).map(([k, v]) => {
-                    const c = conH.filter(f => f.bci_hallazgo_inicial === k).length;
+                    const c = conH.filter(f => f.bci_hallazgo_actual === k).length;
                     return <button key={k} title={v.texto} className={`mj-chip ${fHallazgo === k ? "on" : ""}`} onClick={() => setFHallazgo(fHallazgo === k ? "" : k)}>{v.rotulo} ({fmt(c)})</button>;
                   })}
                   <div style={{ flex: 1 }} />
                   <button className="mj-btn" onClick={() => descargarExcel(`hallazgos_bci_${hoyChile()}`, listaH, [
-                    { titulo: "Patente", campo: "patente" }, { titulo: "Hallazgo", valor: f => HALLAZGO_BCI[f.bci_hallazgo_inicial]?.texto || f.bci_hallazgo_inicial },
+                    { titulo: "Patente", campo: "patente" }, { titulo: "Hallazgo", valor: f => HALLAZGO_BCI[f.bci_hallazgo_actual]?.texto || f.bci_hallazgo_actual },
                     { titulo: "Tipo", campo: "tipo" }, { titulo: "Estado", campo: "estado" }, { titulo: "Operación", campo: "operacion" }, { titulo: "Tercero", campo: "tercero" },
-                    { titulo: "Viajes 30 días", campo: "viajes_30d" }, { titulo: "Seguro de carga hoy", valor: f => f.seg_carga_fuente === "BCI" ? `BCI ${f.seg_carga_poliza} (vence ${fch(f.seg_carga_vence)})` : "BT por defecto" },
-                    { titulo: "Corregido en el Maestro actual", valor: f => f.bci_hallazgo_actual === "OK" ? "SI" : "NO" },
+                    { titulo: "Viajes 30 días", campo: "viajes_30d" }, { titulo: "Seguro de carga hoy", valor: f => f.seg_carga_fuente === "BCI" ? `BCI ${f.seg_carga_poliza} (vence ${fch(f.seg_carga_vence)})` : f.seg_carga === "SI" ? "BT (Maestro)" : "Sin seguro" },
+                    { titulo: "Ya estaba en el Maestro original", valor: f => f.bci_hallazgo_inicial === f.bci_hallazgo_actual ? "SI" : "NO" },
                   ], "Hallazgos BCI")}>Descargar Excel</button>
                 </div>
                 {fHallazgo && <div style={{ fontSize: 12, color: "#334155", marginBottom: 6 }}>{HALLAZGO_BCI[fHallazgo]?.texto}.</div>}
                 <div className="mj-scroll" style={{ maxHeight: 360 }}>
                   <table className="mj-tabla">
-                    <thead><tr><th>Patente</th><th>Hallazgo</th><th>Tipo · estado</th><th>Operación</th><th className="num">Viajes 30d</th><th>Seguro de carga hoy</th><th>¿Corregido en el Maestro?</th></tr></thead>
+                    <thead><tr><th>Patente</th><th>Hallazgo</th><th>Tipo · estado</th><th>Operación</th><th className="num">Viajes 30d</th><th>Seguro de carga hoy</th><th>¿Ya estaba en el Maestro original?</th></tr></thead>
                     <tbody>
                       {listaH.map(f => {
-                        const h = HALLAZGO_BCI[f.bci_hallazgo_inicial];
+                        const h = HALLAZGO_BCI[f.bci_hallazgo_actual];
                         return (
                           <tr key={f.patente}>
                             <td style={{ fontWeight: 800, color: NAVY }}>{f.patente}</td>
-                            <td><Etiqueta texto={h?.rotulo || f.bci_hallazgo_inicial} color={h?.color} fondo={h?.fondo} /></td>
+                            <td><Etiqueta texto={h?.rotulo || f.bci_hallazgo_actual} color={h?.color} fondo={h?.fondo} /></td>
                             <td>{f.tipo || "—"} · <span style={{ color: f.estado === "ACTIVA" ? GRIS_ : ROJO_ }}>{f.estado || "—"}</span></td>
                             <td>{f.operacion || "—"}</td>
                             <td className="num" style={{ fontWeight: n(f.viajes_30d) ? 700 : 400 }}>{fmt(f.viajes_30d)}</td>
                             <td>{seguroCelda(f, "carga")}</td>
-                            <td>{f.bci_hallazgo_actual === "OK" ? <span style={{ color: VERDE_ }}>✓ sí</span> : <span style={{ color: ROJO_ }}>no</span>}</td>
+                            <td>{f.bci_hallazgo_inicial === f.bci_hallazgo_actual ? "sí, sigue sin corregir" : "no, es nueva"}</td>
                           </tr>
                         );
                       })}
