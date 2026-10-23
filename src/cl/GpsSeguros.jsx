@@ -116,7 +116,7 @@ const BANDEJAS = [
     que: "GPS o seguro que se siguen pagando en vehículos sin ruta y sin movimiento de GPS hace 30 días o más. Corresponde pedir la baja.",
     entra: f => f.cortar_gps || f.sacar_seguro },
   { id: "revisar",   titulo: "GPS mudo",  color: AMBAR_, fondo: "#fff6dc",
-    que: "El vehículo trabaja, pero su GPS no transmite hace 30 días o más: está desconectado o dañado. No se corta, se revisa.",
+    que: "El vehículo sigue haciendo ruta, pero su GPS dejó de transmitir (desde 3 días, umbral editable en Umbrales): está desconectado o dañado. No se corta, se revisa.",
     entra: f => f.gps_mudo },
   { id: "cobertura", titulo: "Planta detenida sin GPS o seguro",  color: AZUL_,  fondo: "#eaf1ff",
     que: "Planta ACTIVA sin GPS o sin seguro (o con póliza vencida) que no hizo ruta en los últimos 30 días: revisar si sigue vigente o completar antes de que vuelva a salir.",
@@ -207,6 +207,7 @@ const TIPOS_SOLICITUD = {
 };
 const ROTULO_UMBRAL = {
   dias_corte_gps:       { titulo: "Cortar GPS",          unidad: "días sin uso" },
+  dias_gps_mudo:        { titulo: "GPS mudo",            unidad: "días sin comunicar (vehículo trabajando)" },
   dias_corte_seguro:    { titulo: "Sacar del seguro",    unidad: "días sin uso" },
   dias_alerta_sin_ruta: { titulo: "Alerta sin ruta",     unidad: "días (planta activa)" },
   viajes_mes_apoyo:     { titulo: "Alerta apoyo",        unidad: "viajes en el mes" },
