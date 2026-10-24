@@ -3539,10 +3539,15 @@ const ORIGEN_CFG = {
   app_terceros: { label: "App Terceros", icon: "📱", bg: "#eef1f5", color: "#334155", border: "#cbd5e1" },
   // Postulación que llega por el link o el QR del portal de referidos.
   referidos: { label: "Referido", icon: "🤝", bg: "#fff4ec", color: "#b45309", border: "#fbd9c0" },
+  // Canales de Bigticket del portal de referidos (sin referidor, no generan bonos).
+  camioneta: { label: "Camioneta", icon: "🚐", bg: "#eef4ff", color: "#1e40af", border: "#c7d7fe" },
+  facebook: { label: "Facebook", icon: "📘", bg: "#eef2ff", color: "#3b4fc4", border: "#cdd5fb" },
 };
+// Postulaciones del portal de referidos: por un referidor o por un canal de Bigticket.
+const ORIGENES_REFERIDOS = ["referidos", "camioneta", "facebook"];
 // Badge de fuente para una tarjeta, distinguiendo el origen app.
 function fuenteBadge(card) {
-  if (card.origen === "referidos") return ORIGEN_CFG.referidos;
+  if (ORIGENES_REFERIDOS.includes(card.origen)) return ORIGEN_CFG[card.origen];
   if (card.fuente === "portal_cert" && card.origen === "app_terceros") return ORIGEN_CFG.app_terceros;
   return FUENTE_CFG[card.fuente] || FUENTE_CFG.prospeccion;
 }
@@ -7954,12 +7959,12 @@ function ModuloCertificaciones() {
     await cargar(true);
   };
 
-  // ── Biggy analiza solo las postulaciones de referidos ──
+  // ── Biggy analiza las postulaciones del portal de referidos (referidor, camioneta, Facebook) ──
   // Llegan directo a la Etapa 3 con sus documentos, pero el análisis lo dispara
   // el Brain: se corre una vez por tarjeta, de a pocas para no saturar n8n.
   const analizadosRef = useRef(new Set());
   useEffect(() => {
-    const pendientes = (items || []).filter((i) => i.fuente === "prospeccion" && i.origen === "referidos"
+    const pendientes = (items || []).filter((i) => i.fuente === "prospeccion" && ORIGENES_REFERIDOS.includes(i.origen)
       && i.etapa === "prevalidacion_biggy" && !i.raw?.claude_analisis && !analizadosRef.current.has(i.id));
     pendientes.slice(0, 3).forEach((c) => { analizadosRef.current.add(c.id); analizarProspecto(c); });
   }, [items]);
