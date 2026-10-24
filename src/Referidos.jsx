@@ -42,7 +42,7 @@ const ESTADOS_BONO = {
   pagado: ["Pagado", "#dcfce7", "#166534"],
   rechazado: ["Rechazado", "#fee2e2", "#b42318"],
 };
-const TRAMO = { firma_y_primera_ruta: "Primera ruta", quince_rutas_30_dias: "15 rutas en 30 días" };
+const TRAMO = { firma_y_primera_ruta: "Primera ruta", quince_rutas_30_dias: "20 rutas en 30 días" };
 
 function Pill({ par }) {
   const [t, bg, fg] = par;
@@ -88,7 +88,7 @@ export default function ModuloReferidos({ usuario }) {
   return (
     <div className="pg">
       <div className="sec-title">Referidos</div>
-      <div className="sec-sub">Programa de referidos MX: $500 por contrato firmado y primera ruta, y $1,500 por 15 rutas en 30 días.</div>
+      <div className="sec-sub">Programa de referidos MX: $500 por contrato firmado y primera ruta, y $1,500 por 20 rutas en 30 días.</div>
       <div style={{ display: "flex", gap: 6, marginBottom: 16, flexWrap: "wrap" }}>
         {TABS.map(([k, t, n]) => (
           <button key={k} onClick={() => setTab(k)} className={`nav-btn${tab === k ? " active" : ""}`} style={{ border: `0.5px solid ${BORDE}` }}>
@@ -222,7 +222,7 @@ function Referidos({ referidos, canales = [] }) {
                   <td style={td}><Pill par={ETAPAS[r.etapa] || ETAPAS.registrado} /></td>
                   <td style={td}>{fecha(r.firmado_at)}</td>
                   <td style={td}>{fecha(r.primera_ruta)}</td>
-                  <td style={td}>{r.primera_ruta ? `${r.rutas_30} de 15` : "—"}</td>
+                  <td style={td}>{r.primera_ruta ? `${r.rutas_30} de 20` : "—"}</td>
                 </tr>
               ))}
             </tbody>
