@@ -180,7 +180,7 @@ function Etiqueta({ texto, color, fondo }) {
 }
 
 // ── Módulo ─────────────────────────────────────────────────────────────────
-function ModuloMaestroCL() {
+function ModuloMaestroCL({ usuario } = {}) {
   const [dias, setDias] = useState([]);
   const [fecha, setFecha] = useState("");
   const [tab, setTab] = useState("jornada");
@@ -230,6 +230,14 @@ function ModuloMaestroCL() {
   const ZONA_NUEVA0 = { nombre: "", cecos: "", segmentacion: "", lat: "", lon: "", radio: 5000, nota: "" };
   const [zonaNueva, setZonaNueva] = useState(null);        // null = formulario cerrado
   const [mapaAbierto, setMapaAbierto] = useState(false);
+  // ── Revisión de zonas: el motor propone, el supervisor confirma, el analista decide ──
+  const [rev, setRev] = useState([]);
+  const [revFiltro, setRevFiltro] = useState({ estado: "pendientes", origen: "", cecos: "", busca: "" });
+  const [revSel, setRevSel] = useState({});          // id_ruta → segmentación elegida
+  const [revEditando, setRevEditando] = useState(null);
+  const [revGuardando, setRevGuardando] = useState(null);
+  const [revMsg, setRevMsg] = useState("");
+  const [revRuta, setRevRuta] = useState(null);      // viaje abierto en el mapa
   const [ovr, setOvr] = useState(null);                    // { id_viaje, segmentacion, motivo }
   const [ovrGuardando, setOvrGuardando] = useState(false);
   const [pagoFiltro, setPagoFiltro] = useState("todos");   // todos | pendientes | calculados
@@ -410,6 +418,61 @@ function ModuloMaestroCL() {
     if (fallos.length) setError("No se pudieron cargar: " + fallos.join(" | "));
   };
   useEffect(() => { if (tab === "pago") cargarPago(); }, [tab, fecha]);
+
+  // ── Revisión de zonas ──
+  // Lista los viajes que el motor resolvió fuera de la regla normal (alerta) o que ya
+  // pasaron por revisión. La decisión del analista se guarda como corrección de zona
+  // (viaje_zona_override): es la que paga.
+  const analista = (usuario && (usuario.nombre || usuario.email)) || "brain";
+  const cargarRevision = async () => {
+    if (!fecha) return;
+    const fallos = [];
+    const d = await apiSuave(
+      `vw_revision_zonas?fecha=eq.${fecha}&order=codigo_meli.asc.nullslast,id_ruta&limit=3000`, [], fallos);
+    setRev(d);
+    if (fallos.length) setError("No se pudieron cargar: " + fallos.join(" | "));
+  };
+  useEffect(() => {
+    if (tab === "revision") { cargarRevision(); if (!zonas.length || !segmentaciones.length) cargarZonas(); }
+  }, [tab, fecha]);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  const decidirZona = async (r, seg) => {
+    if (!seg) { setRevMsg("Elige una segmentación antes de confirmar."); return; }
+    setRevGuardando(r.id_ruta); setRevMsg("");
+    try {
+      await api("rpc/decidir_zona", { method: "POST", body: JSON.stringify({
+        p_fecha: r.fecha, p_id_ruta: r.id_ruta, p_segmentacion: seg, p_analista: analista,
+        p_nota: seg === r.propuesta_motor ? "Confirma la propuesta del motor"
+              : seg === r.supervisor_segmentacion ? "Confirma la propuesta del supervisor"
+              : "Decisión del analista" }) });
+      setRevMsg(`Viaje ${r.id_ruta} → ${seg}`);
+      setRevEditando(null);
+      await cargarRevision();
+    } catch (e) { setError(e.message); }
+    finally { setRevGuardando(null); }
+  };
+
+  const aprobarCoincidencias = async (cuantas) => {
+    if (!window.confirm(`Se aprobarán ${cuantas} viajes donde el supervisor confirmó la zona que propuso el motor. ¿Continuar?`)) return;
+    setRevGuardando("__bloque__"); setRevMsg("");
+    try {
+      const res = await api("rpc/aprobar_coincidencias", { method: "POST",
+        body: JSON.stringify({ p_fecha: fecha, p_analista: analista }) });
+      setRevMsg(typeof res === "string" ? res : "Coincidencias aprobadas");
+      await cargarRevision();
+    } catch (e) { setError(e.message); }
+    finally { setRevGuardando(null); }
+  };
+
+  const verRutaEnMapa = async (r) => {
+    try {
+      const pts = await api("rpc/puntos_ruta", { method: "POST",
+        body: JSON.stringify({ p_fecha: r.fecha, p_id_ruta: r.id_ruta }) });
+      if (!Array.isArray(pts) || !pts.length) { setRevMsg(`El viaje ${r.id_ruta} no tiene entregas con coordenadas.`); return; }
+      if (!zonas.length) await cargarZonas();
+      setRevRuta({ titulo: `Viaje ${r.id_ruta}${r.codigo_meli ? " · " + r.codigo_meli : ""}`, puntos: pts });
+    } catch (e) { setError(e.message); }
+  };
 
   // ── Vehículos BT: la tabla auxiliar de certificación ──
   const cargarVehiculos = async () => {
@@ -945,6 +1008,31 @@ function ModuloMaestroCL() {
     },
 ];
 
+  const ORIGEN_ZONA = {
+    punto_lejano: "Punto más lejano", otro_centro: "Zona de otro centro",
+    punto_alternativo: "Punto alternativo", comuna_historica: "Comuna histórica",
+    sin_zona: "Sin zona", analista: "Analista",
+  };
+  const ESTADO_REV = {
+    pendiente:           { t: "Pendiente",           c: AMBAR_, f: "#fdf6e3" },
+    supervisor_coincide: { t: "Supervisor coincide", c: VERDE_, f: "#e8f5ee" },
+    supervisor_discrepa: { t: "Supervisor discrepa", c: ROJO_,  f: "#fdecea" },
+    decidido:            { t: "Decidido",            c: NAVY,   f: "#eaf0f8" },
+  };
+  const normRev = (x) => String(x ?? "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  const revVista = rev.filter(r => {
+    const f = revFiltro;
+    if (f.estado === "pendientes" && r.estado_revision === "decidido") return false;
+    if (f.estado && f.estado !== "pendientes" && r.estado_revision !== f.estado) return false;
+    if (f.origen && r.origen_motor !== f.origen) return false;
+    if (f.cecos && r.codigo_meli !== f.cecos) return false;
+    if (f.busca && !normRev(`${r.id_ruta} ${r.conductor || ""} ${r.comuna_punto_lejano || ""}`)
+                      .includes(normRev(f.busca))) return false;
+    return true;
+  });
+  const revCuenta = (e) => rev.filter(r => r.estado_revision === e).length;
+  const revPendientes = rev.filter(r => r.estado_revision !== "decidido").length;
+
   const TABS = [
     { id: "jornada",    label: "Maestro Jornada", desc: "Una fila por viaje",        n: jornadaVista.length },
     { id: "devol",      label: "Devoluciones",    desc: "Detalle por folio",          n: devolVista.length },
@@ -953,6 +1041,7 @@ function ModuloMaestroCL() {
     { id: "cecos",      label: "CECOS",           desc: "Catálogo y clasificación",   n: cecosCat.length || null },
     { id: "zonas",      label: "Zonas de Pago",   desc: "Geografía y segmentación",   n: zonas.length || null },
     { id: "pago",       label: "Maestro Pago",    desc: "Modelo de tarificación",     n: pago.length || null },
+    { id: "revision",   label: "Revisión zonas",  desc: "Alertas del motor de zonas", n: revPendientes || null },
     { id: "vehiculos",  label: "Vehículos BT",    desc: "Clasificación por patente",  n: vehiculos.length || null },
     { id: "tarifario",  label: "Tarifario",       desc: "Tarifas por pagar y cobrar", n: tarifas.length || null },
   ];
@@ -1792,6 +1881,161 @@ function ModuloMaestroCL() {
             )}
 
             {/* ── Vehículos BT (tabla auxiliar de certificación) ── */}
+            {tab === "revision" && (
+              <Fragment>
+                {revRuta && (
+                  <MapaZonas zonas={zonas} segmentaciones={segmentaciones} api={api} ruta={revRuta}
+                             onCerrar={() => setRevRuta(null)} onCreada={cargarZonas} />
+                )}
+                <div style={{ background: "#fff", border: "1px solid #e6e9ef", borderRadius: 10,
+                              padding: "13px 16px", marginBottom: 12 }}>
+                  <div style={{ fontSize: 13, fontWeight: 800, color: NAVY }}>Revisión de zonas · {fecha}</div>
+                  <div style={{ fontSize: 12, color: "#64748b", lineHeight: 1.7, marginTop: 3, maxWidth: 940 }}>
+                    Viajes donde el motor asignó la zona <strong>fuera de la regla normal</strong> (punto más lejano
+                    en una zona de su centro). La columna Supervisor muestra lo que confirmó en la bitácora.
+                    <strong> Tu decisión es la que paga</strong>: se guarda como corrección de zona del viaje, y
+                    enseña al motor para los días siguientes. Abre el mapa para ver la ruta y su punto más lejano.
+                  </div>
+                  {revMsg && <div style={{ fontSize: 12, color: VERDE_, marginTop: 6 }}>✓ {revMsg}</div>}
+                </div>
+
+                <div style={{ display: "flex", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
+                  {Object.entries(ESTADO_REV).map(([k, v]) => (
+                    <div key={k} onClick={() => setRevFiltro(f => ({ ...f, estado: f.estado === k ? "pendientes" : k }))}
+                         style={{ background: revFiltro.estado === k ? v.f : "#fff", cursor: "pointer",
+                                  border: `1px solid ${revFiltro.estado === k ? v.c : "#e6e9ef"}`,
+                                  borderRadius: 10, padding: "9px 14px", minWidth: 150 }}>
+                      <div style={{ fontSize: 10.5, color: "#64748b", fontWeight: 700, textTransform: "uppercase",
+                                    letterSpacing: .4 }}>{v.t}</div>
+                      <div style={{ fontSize: 20, fontWeight: 800, color: v.c }}>{fmt(revCuenta(k))}</div>
+                    </div>
+                  ))}
+                </div>
+
+                <div style={{ background: "#fff", border: "1px solid #e6e9ef", borderRadius: 10,
+                              padding: "11px 16px", marginBottom: 12, display: "flex", gap: 10,
+                              alignItems: "center", flexWrap: "wrap" }}>
+                  <select className="mj-input" value={revFiltro.estado}
+                          onChange={e => setRevFiltro(f => ({ ...f, estado: e.target.value }))}>
+                    <option value="pendientes">Por decidir</option>
+                    <option value="">Todos</option>
+                    {Object.entries(ESTADO_REV).map(([k, v]) => <option key={k} value={k}>{v.t}</option>)}
+                  </select>
+                  <select className="mj-input" value={revFiltro.origen}
+                          onChange={e => setRevFiltro(f => ({ ...f, origen: e.target.value }))}>
+                    <option value="">Todas las alertas</option>
+                    {["otro_centro", "punto_alternativo", "comuna_historica", "sin_zona"].map(k =>
+                      <option key={k} value={k}>{ORIGEN_ZONA[k]}</option>)}
+                  </select>
+                  <select className="mj-input" value={revFiltro.cecos}
+                          onChange={e => setRevFiltro(f => ({ ...f, cecos: e.target.value }))}>
+                    <option value="">Todos los centros</option>
+                    {[...new Set(rev.map(r => r.codigo_meli).filter(Boolean))].sort().map(c =>
+                      <option key={c} value={c}>{c}</option>)}
+                  </select>
+                  <input className="mj-input" placeholder="Buscar viaje, conductor o comuna"
+                         value={revFiltro.busca} style={{ minWidth: 220 }}
+                         onChange={e => setRevFiltro(f => ({ ...f, busca: e.target.value }))} />
+                  <span style={{ fontSize: 12, color: "#64748b" }}>
+                    Mostrando {fmt(revVista.length)} de {fmt(rev.length)}
+                  </span>
+                  <span style={{ flex: 1 }} />
+                  {revCuenta("supervisor_coincide") > 0 && (
+                    <button className="mj-btn" disabled={revGuardando === "__bloque__"}
+                            onClick={() => aprobarCoincidencias(revCuenta("supervisor_coincide"))}
+                            style={{ background: VERDE_, color: "#fff", borderColor: VERDE_ }}>
+                      {revGuardando === "__bloque__" ? "Aprobando…"
+                        : `✓ Aprobar coincidencias (${revCuenta("supervisor_coincide")})`}
+                    </button>
+                  )}
+                  <button className="mj-btn" onClick={cargarRevision}>↻ Actualizar</button>
+                </div>
+
+                <div className="mj-scroll">
+                  <table className="mj-tabla">
+                    <thead><tr>
+                      <th>Viaje</th><th>Centro</th><th>Conductor</th><th>Comuna punto lejano</th>
+                      <th className="num">Km</th><th>Propuesta del motor</th><th>Supervisor</th>
+                      <th>Estado</th><th>Decisión</th><th></th>
+                    </tr></thead>
+                    <tbody>
+                      {revVista.map(r => {
+                        const est = ESTADO_REV[r.estado_revision] || ESTADO_REV.pendiente;
+                        const editando = r.estado_revision !== "decidido" || revEditando === r.id_ruta;
+                        const elegida = revSel[r.id_ruta] ??
+                          (r.analista_segmentacion || r.supervisor_segmentacion || r.propuesta_motor || "");
+                        return (
+                          <tr key={r.id_ruta}>
+                            <td style={{ fontWeight: 700 }}>{r.id_ruta}</td>
+                            <td>{r.codigo_meli || "—"}</td>
+                            <td style={{ maxWidth: 170, overflow: "hidden", textOverflow: "ellipsis" }}
+                                title={r.conductor || ""}>{r.conductor || "—"}</td>
+                            <td>{r.comuna_punto_lejano || "—"}</td>
+                            <td className="num">{r.km_punto_lejano ?? "—"}</td>
+                            <td>
+                              <strong>{r.propuesta_motor || "—"}</strong>
+                              {r.origen_motor && r.origen_motor !== "punto_lejano" && (
+                                <span style={{ marginLeft: 6 }}>
+                                  <Etiqueta texto={ORIGEN_ZONA[r.origen_motor] || r.origen_motor}
+                                            color={r.origen_motor === "sin_zona" ? ROJO_ : AMBAR_}
+                                            fondo={r.origen_motor === "sin_zona" ? "#fdecea" : "#fdf6e3"} />
+                                </span>
+                              )}
+                            </td>
+                            <td title={r.supervisor_comentario || ""}>
+                              {r.supervisor_segmentacion
+                                ? <span><strong>{r.supervisor_segmentacion}</strong>
+                                    <span style={{ color: "#8a94a6", marginLeft: 5 }}>
+                                      {r.supervisor_nombre || ""}{r.supervisor_comentario ? " 💬" : ""}</span></span>
+                                : <span style={{ color: "#a8b2c1" }}>sin respuesta</span>}
+                            </td>
+                            <td><Etiqueta texto={est.t} color={est.c} fondo={est.f} /></td>
+                            <td>
+                              {editando ? (
+                                <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+                                  <select className="mj-input" value={elegida} style={{ padding: "4px 6px", minWidth: 150 }}
+                                          onChange={e => setRevSel(s => ({ ...s, [r.id_ruta]: e.target.value }))}>
+                                    <option value="">— elegir —</option>
+                                    {segmentaciones.map(sg => <option key={sg.nombre} value={sg.nombre}>{sg.nombre}</option>)}
+                                  </select>
+                                  <button className="mj-btn" disabled={revGuardando === r.id_ruta || !elegida}
+                                          onClick={() => decidirZona(r, elegida)}
+                                          style={{ background: NAVY, color: "#fff", borderColor: NAVY, padding: "4px 10px" }}>
+                                    {revGuardando === r.id_ruta ? "…" : "Confirmar"}
+                                  </button>
+                                  {revEditando === r.id_ruta && (
+                                    <button className="mj-btn" style={{ padding: "4px 8px" }}
+                                            onClick={() => setRevEditando(null)}>✕</button>
+                                  )}
+                                </span>
+                              ) : (
+                                <span>
+                                  <strong style={{ color: VERDE_ }}>✓ {r.analista_segmentacion}</strong>
+                                  <span style={{ color: "#8a94a6", marginLeft: 5 }}>{r.analista_nombre || ""}</span>
+                                  <button className="mj-btn" style={{ padding: "2px 8px", marginLeft: 8 }}
+                                          onClick={() => setRevEditando(r.id_ruta)}>Cambiar</button>
+                                </span>
+                              )}
+                            </td>
+                            <td>
+                              <button className="mj-btn" style={{ padding: "4px 10px" }}
+                                      onClick={() => verRutaEnMapa(r)}>🗺 Mapa</button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                      {!revVista.length && (
+                        <tr><td colSpan={10} style={{ textAlign: "center", color: "#8a94a6", padding: 28 }}>
+                          {rev.length ? "Ningún viaje con estos filtros."
+                                      : "No hay viajes con alerta de zona este día."}
+                        </td></tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </Fragment>
+            )}
+
             {tab === "vehiculos" && (
               <Fragment>
                 <div style={{ background: "#fff", border: "1px solid #e6e9ef", borderRadius: 10,

@@ -18,12 +18,15 @@ import "leaflet/dist/leaflet.css";
 const NAVY = "#1a3a6b", ORANGE = "#F47B20", AMBAR = "#b45309", VIOLETA = "#5b21b6";
 const VERDE = "#0d8043";
 
-export default function MapaZonas({ zonas, segmentaciones, api, onCerrar, onCreada }) {
+// ruta (opcional): { titulo, puntos: [{ lat, lon, comuna, km, es_lejano }] } —
+// la abre la pestaña "Revisión zonas" para ver un viaje sobre las zonas.
+export default function MapaZonas({ zonas, segmentaciones, api, onCerrar, onCreada, ruta }) {
   const divRef = useRef(null);
   const mapRef = useRef(null);
   const capaZonas = useRef(null);
   const capaDibujo = useRef(null);
   const capaPuntos = useRef(null);
+  const capaRuta = useRef(null);
 
   const [modo, setModo] = useState("ver");
   const [cecosVista, setCecosVista] = useState("");        // filtro de zonas visibles
@@ -57,6 +60,7 @@ export default function MapaZonas({ zonas, segmentaciones, api, onCerrar, onCrea
     capaZonas.current = L.layerGroup().addTo(mapa);
     capaPuntos.current = L.layerGroup().addTo(mapa);
     capaDibujo.current = L.layerGroup().addTo(mapa);
+    capaRuta.current = L.layerGroup().addTo(mapa);
     mapRef.current = mapa;
 
     mapa.on("click", (e) => {
@@ -100,11 +104,36 @@ export default function MapaZonas({ zonas, segmentaciones, api, onCerrar, onCrea
         } catch { /* geojson inválido */ }
       }
     }
-    if (bordes.length) {
+    const hayRuta = ruta && ruta.puntos && ruta.puntos.length;
+    if (bordes.length && !hayRuta) {
       const todo = bordes.reduce((a, b) => a.extend(b), L.latLngBounds(bordes[0].getSouthWest(), bordes[0].getNorthEast()));
       mapa.fitBounds(todo, { padding: [30, 30], maxZoom: 12 });
     }
   }, [zonas, cecosVista]);
+
+  // ── la ruta en revisión: sus entregas y el punto que decidió la zona ──
+  useEffect(() => {
+    const mapa = mapRef.current;
+    if (!mapa || !capaRuta.current) return;
+    capaRuta.current.clearLayers();
+    if (!ruta || !ruta.puntos || !ruta.puntos.length) return;
+    const lejano = ruta.puntos.find(p => p.es_lejano);
+    for (const p of ruta.puntos) {
+      if (p.es_lejano) continue;
+      L.circleMarker([p.lat, p.lon], { radius: 5, color: "#fff", weight: 1.5,
+        fillColor: ORANGE, fillOpacity: 0.95 })
+        .bindTooltip(`${p.comuna || ""} · ${p.km} km`).addTo(capaRuta.current);
+    }
+    if (lejano) {
+      L.circleMarker([lejano.lat, lejano.lon], { radius: 10, color: "#fff", weight: 2.5,
+        fillColor: "#dc2626", fillOpacity: 1 })
+        .bindTooltip(`<strong>Punto más lejano</strong><br/>${lejano.comuna || ""} · ${lejano.km} km`,
+                     { permanent: true, direction: "top", offset: [0, -10] })
+        .addTo(capaRuta.current);
+    }
+    const b = L.latLngBounds(ruta.puntos.map(p => [p.lat, p.lon]));
+    mapa.fitBounds(b, { padding: [50, 50], maxZoom: 13 });
+  }, [ruta]);
 
   // ── redibujar lo que se está creando ──
   useEffect(() => {
@@ -204,6 +233,12 @@ export default function MapaZonas({ zonas, segmentaciones, api, onCerrar, onCrea
         <div style={{ padding: "11px 16px", display: "flex", gap: 9, alignItems: "center",
                       flexWrap: "wrap", borderBottom: "1px solid #eef1f5", flexShrink: 0 }}>
           <strong style={{ color: NAVY, fontSize: 14 }}>Zonas de pago</strong>
+          {ruta && (
+            <span style={{ fontSize: 12, fontWeight: 700, color: "#fff", background: "#dc2626",
+                           padding: "3px 10px", borderRadius: 12 }}>
+              {ruta.titulo} · {(ruta.puntos || []).length} entregas
+            </span>
+          )}
           <span style={btn(modo === "ver")}      onClick={() => cambiarModo("ver")}>Ver</span>
           <span style={btn(modo === "circulo")}  onClick={() => cambiarModo("circulo")}>⊕ Círculo</span>
           <span style={btn(modo === "poligono")} onClick={() => cambiarModo("poligono")}>▰ Polígono</span>
