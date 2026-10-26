@@ -1,12 +1,17 @@
 // ═══════════════════════════════════════════════════════════════════════════
 // POSVENTA · CHILE  (pestaña PNR)
 // Misma forma de leer los PNR que Posventa MX en The Eyes, con los colores del
-// Brain. Solo visual: no hay tareas, WhatsApp ni botones de notificar.
+// Brain. Cada caso en Esperando comprobante o Con Penalidad es una tarea del
+// supervisor de su CECO (pnr_tareas_cl, 72 h): sube las pruebas en su
+// bitácora y aquí el analista las aprueba o las devuelve.
 //
 // Datos (bigticket-cl), los escribe pnr-cl.cjs desde el VPS de Chile:
 //   pnr_casos_cl      una fila por caso
 //   pnr_historial_cl  cada cambio de estado (trigger trg_pnr_historial_cl)
 //   pnr_avisos_cl     avisos por caso y canal; acá solo se mira "correo"
+//   pnr_tareas_cl     tarea del supervisor (trigger trg_pnr_tarea_cl), fotos en
+//                     el bucket privado pnr-pruebas-cl; se revisa con
+//                     fn_pnr_tarea_cl_revisar
 //
 // Las tarjetas y la tabla "Estado de los casos" son el filtro de la lista.
 // La lista parte en Esperando comprobante + Con Penalidad: son los casos que
@@ -42,6 +47,90 @@ async function api(path, opciones) {
   if (!r.ok) throw new Error(`La consulta falló (HTTP ${r.status}). ${(await r.text()).slice(0, 250)}`);
   const texto = await r.text();
   return texto && texto.trim() ? JSON.parse(texto) : true;
+}
+
+// Fotos de las pruebas: el bucket es privado, se piden enlaces firmados por 1 hora.
+async function urlFoto(ruta) {
+  const r = await fetch(`${CL_URL}/storage/v1/object/sign/pnr-pruebas-cl/${ruta.split("/").map(encodeURIComponent).join("/")}`, {
+    method: "POST", headers: { apikey: CL_KEY, Authorization: `Bearer ${CL_KEY}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ expiresIn: 3600 }),
+  });
+  if (!r.ok) return null;
+  const j = await r.json();
+  return j.signedURL ? `${CL_URL}/storage/v1${j.signedURL}` : null;
+}
+
+const CLASIF_TAREA = {
+  caja_vacia: "Caja vacía", entrega_tercero: "Entrega a un tercero", paquete_incompleto: "Paquete incompleto",
+  paquete_danado: "Paquete dañado", paquete_extraviado: "Paquete extraviado", reclamo_proveedor: "Reclamo al proveedor", otros: "Otros",
+};
+const ESTADO_TAREA = {
+  pendiente: { t: "Esperando al supervisor", color: "#b8651c" },
+  completada: { t: "Pruebas enviadas · por revisar", color: "#1a3a6b" },
+  sin_pruebas: { t: "Sin pruebas · por revisar", color: "#9e3b1b" },
+  aprobada: { t: "Aprobada", color: "#1f7a5c" },
+};
+
+// Tarea del supervisor dentro del detalle del caso.
+function BloqueTarea({ tarea, onRevisar }) {
+  const [fotos, setFotos] = useState(null);
+  const [nota, setNota] = useState("");
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    let vivo = true;
+    if (!tarea || !(tarea.fotos || []).length) { setFotos([]); return undefined; }
+    Promise.all(tarea.fotos.map(urlFoto)).then((u) => { if (vivo) setFotos(u.filter(Boolean)); });
+    return () => { vivo = false; };
+  }, [tarea && tarea.id, tarea && (tarea.fotos || []).length]);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (!tarea) return (
+    <div style={{ border: `1px solid ${C.borde}`, borderRadius: 10, background: "#fff", padding: "9px 11px" }}>
+      <div style={{ fontSize: 11, fontWeight: 600, color: C.suave, marginBottom: 4 }}>Tarea del supervisor</div>
+      <div style={{ fontSize: 12, color: C.tenue }}>Sin tarea: el caso no está en Esperando comprobante ni Con Penalidad, o todavía no tiene CECO.</div>
+    </div>
+  );
+  const e = ESTADO_TAREA[tarea.estado] || { t: tarea.estado, color: C.gris };
+  const porRevisar = tarea.estado === "completada" || tarea.estado === "sin_pruebas";
+  const revisar = async (aprobar) => {
+    if (!aprobar && !nota.trim()) { window.alert("Escribe qué le falta al supervisor: se lo mostramos en su bitácora."); return; }
+    setBusy(true);
+    try { await onRevisar(tarea, aprobar, nota.trim()); setNota(""); } finally { setBusy(false); }
+  };
+  return (
+    <div style={{ border: `1px solid ${porRevisar ? C.navy : C.borde}`, borderRadius: 10, background: "#fff", padding: "9px 11px" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 6 }}>
+        <span style={{ fontSize: 11, fontWeight: 600, color: C.suave }}>Tarea del supervisor</span>
+        <span style={{ fontSize: 10.5, fontWeight: 600, color: e.color }}>{e.t}</span>
+      </div>
+      <div style={{ fontSize: 12, color: C.texto, lineHeight: 1.6 }}>
+        <div><span style={{ color: C.suave }}>Plazo</span> {fechaCorta(tarea.vence_en)}{tarea.cerrada_en ? <> · <span style={{ color: C.suave }}>cerrada</span> {fechaCorta(tarea.cerrada_en)}</> : null}</div>
+        {tarea.clasificacion && <div><span style={{ color: C.suave }}>Clasificación</span> <strong>{CLASIF_TAREA[tarea.clasificacion] || tarea.clasificacion}</strong>{tarea.clasificacion_nota ? ` · ${tarea.clasificacion_nota}` : ""}</div>}
+        {tarea.comentario && <div><span style={{ color: C.suave }}>Comentario</span> {tarea.comentario}</div>}
+        {tarea.completada_en && <div style={{ color: C.suave, fontSize: 11 }}>Enviado {fechaCorta(tarea.completada_en)} por {tarea.completada_por || "—"}</div>}
+        {tarea.veces_pedida > 1 && <div style={{ color: C.naranja, fontSize: 11 }}>Devuelta {tarea.veces_pedida - 1} vez(es){tarea.aprobada_nota ? `: ${tarea.aprobada_nota}` : ""}</div>}
+        {tarea.estado === "aprobada" && <div style={{ color: C.verde, fontSize: 11 }}>Aprobada {fechaCorta(tarea.aprobada_en)} por {tarea.aprobada_por || "—"}</div>}
+      </div>
+      {fotos === null ? <div style={{ fontSize: 11.5, color: C.tenue, marginTop: 6 }}>Cargando fotos…</div> : fotos.length > 0 && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
+          {fotos.map((u, i) => (
+            <a key={i} href={u} target="_blank" rel="noreferrer">
+              <img src={u} alt={`Prueba ${i + 1}`} style={{ width: 72, height: 72, objectFit: "cover", borderRadius: 8, border: `1px solid ${C.borde}` }} />
+            </a>
+          ))}
+        </div>
+      )}
+      {porRevisar && (
+        <div style={{ marginTop: 8 }}>
+          <textarea value={nota} onChange={(ev) => setNota(ev.target.value)} rows={2} placeholder="Si lo devuelves: qué le falta (lo ve el supervisor)"
+            style={{ width: "100%", boxSizing: "border-box", fontSize: 12, padding: "6px 8px", borderRadius: 8, border: `1px solid ${C.borde}`, fontFamily: "inherit", marginBottom: 6 }} />
+          <div style={{ display: "flex", gap: 6 }}>
+            <button disabled={busy} onClick={() => revisar(true)} style={{ flex: 1, background: C.verde, color: "#fff", border: "none", borderRadius: 8, padding: "7px 0", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>✓ Aprobar</button>
+            <button disabled={busy} onClick={() => revisar(false)} style={{ flex: 1, background: "#fff", color: C.ladrillo, border: `1px solid ${C.ladrillo}`, borderRadius: 8, padding: "7px 0", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>↩ Devolver</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 // CECOs válidos en las bodegas compartidas (mismo mapa que pnr-cl.cjs en el VPS).
@@ -487,7 +576,7 @@ function BloqueEnvio({ c, correo, onEnviar, supervisores }) {
   );
 }
 
-function Detalle({ c, raw, movimientos, correo, ahora, solicitud, onEnviar, supervisores }) {
+function Detalle({ c, raw, movimientos, correo, ahora, solicitud, onEnviar, supervisores, tarea, onRevisar }) {
   const e = POR_ESTADO[c.sub_estado];
   const datos = datosRaw(raw);
   const transcurrido = c.fecha_caso ? (ahora - new Date(c.fecha_caso).getTime()) / 3600000 : null;
@@ -571,6 +660,7 @@ function Detalle({ c, raw, movimientos, correo, ahora, solicitud, onEnviar, supe
             )}
           </div>
 
+          <BloqueTarea tarea={tarea} onRevisar={onRevisar} />
         </div>
       </div>
     </div>
@@ -579,7 +669,7 @@ function Detalle({ c, raw, movimientos, correo, ahora, solicitud, onEnviar, supe
 
 const GRID = "14px 92px 168px minmax(118px,1fr) 136px 150px 126px 90px 78px";
 
-function Fila({ c, abierta, onAbrir, ahora, movimientos, correo, raw, fueraDePeriodo, solicitud, onEnviar, supervisores }) {
+function Fila({ c, abierta, onAbrir, ahora, movimientos, correo, raw, fueraDePeriodo, solicitud, onEnviar, supervisores, tarea, onRevisar }) {
   const ultimoMov = (movimientos || []).reduce((mx, m) => (!mx || new Date(m.cambiado_en) > new Date(mx) ? m.cambiado_en : mx), null);
   const color = COLOR_ESTADO[c.sub_estado] || C.gris;
   const h = hace(ultimoMov, ahora);
@@ -596,6 +686,11 @@ function Fila({ c, abierta, onAbrir, ahora, movimientos, correo, raw, fueraDePer
         <Reloj c={c} ahora={ahora} />
         <span style={{ minWidth: 0, fontSize: 13, color: C.texto, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
           {c.conductor || "Sin conductor"}
+          {tarea && !tarea.cerrada_en && (
+            <span style={{ display: "block", fontSize: 9.5, fontWeight: 600, color: (ESTADO_TAREA[tarea.estado] || {}).color || C.gris }}>
+              {(ESTADO_TAREA[tarea.estado] || { t: tarea.estado }).t}
+            </span>
+          )}
         </span>
         <span style={{ fontSize: 12, color: C.suave, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
           {c.route_code || "—"} · {c.service_center || "—"}
@@ -621,7 +716,7 @@ function Fila({ c, abierta, onAbrir, ahora, movimientos, correo, raw, fueraDePer
         <EsferaCorreo correo={correo} solicitud={solicitud} />
         <span style={{ textAlign: "right", fontSize: 13, fontWeight: 600, color: C.texto }}>{dinero(c.monto)}</span>
       </div>
-      {abierta && <Detalle c={c} raw={raw} movimientos={movimientos} correo={correo} ahora={ahora} solicitud={solicitud} onEnviar={onEnviar} supervisores={supervisores} />}
+      {abierta && <Detalle c={c} raw={raw} movimientos={movimientos} correo={correo} ahora={ahora} solicitud={solicitud} onEnviar={onEnviar} supervisores={supervisores} tarea={tarea} onRevisar={onRevisar} />}
     </Fragment>
   );
 }
@@ -775,6 +870,7 @@ export default function ModuloPnrCL({ usuario }) {
   const [vista, setVista] = useState("casos");
   const [solicitudes, setSolicitudes] = useState({});
   const [supervisores, setSupervisores] = useState({});
+  const [tareas, setTareas] = useState({});   // tarea del supervisor por case_id
   const [casos, setCasos] = useState([]);
   const [historial, setHistorial] = useState({});
   const [correos, setCorreos] = useState({});
@@ -792,13 +888,15 @@ export default function ModuloPnrCL({ usuario }) {
 
   const cargar = useCallback(async () => {
     try {
-      const [filas, hist, avs, sols, sups] = await Promise.all([
+      const [filas, hist, avs, sols, sups, tars] = await Promise.all([
         api("pnr_casos_cl?select=case_id,tipo,fecha_caso,route_code,route_id,service_center,conductor,shipment_id,monto,moneda,estado,sub_estado,periodo,actualizado_en,creado_en,ceco,supervisor,ceco_como&order=fecha_caso.desc&limit=5000"),
         api("pnr_historial_cl?select=id,case_id,sub_estado_desde,sub_estado_hacia,cambiado_en&order=cambiado_en.asc&limit=20000"),
         api("pnr_avisos_cl?canal=eq.correo&select=case_id,destino,enviado_en,error,asunto,ceco,supervisor,patente,origen&limit=10000"),
         api("pnr_solicitudes_cl?select=id,case_id,estado,resultado,solicitado_en,solicitado_por,procesado_en&order=solicitado_en.desc&limit=500"),
         api("pnr_supervisor_cl?select=ceco,supervisor,lider"),
+        api("pnr_tareas_cl?select=*&order=creada_en.desc&limit=5000").catch(() => []),
       ]);
+      setTareas(Object.fromEntries((tars || []).map((t) => [t.case_id, t])));
       setSupervisores(Object.fromEntries((sups || []).map((s) => [s.ceco, s])));
       const so = {};
       for (const s of sols || []) if (!so[s.case_id]) so[s.case_id] = s;   // la más reciente de cada caso
@@ -841,6 +939,17 @@ export default function ModuloPnrCL({ usuario }) {
       cargar();
     } catch (e) {
       setError("No se pudo pedir el envío: " + e.message);
+    }
+  };
+
+  const revisarTarea = async (t, aprobar, nota) => {
+    const quien = (usuario && (usuario.nombre || usuario.email)) || "Brain";
+    try {
+      await api("rpc/fn_pnr_tarea_cl_revisar", { method: "POST",
+        body: JSON.stringify({ p_id: t.id, p_aprobar: aprobar, p_nota: nota || null, p_por: quien }) });
+      cargar();
+    } catch (e) {
+      setError("No se pudo guardar la revisión: " + e.message);
     }
   };
 
@@ -1070,7 +1179,7 @@ export default function ModuloPnrCL({ usuario }) {
               <Fila key={c.case_id} c={c} abierta={abiertas.has(c.case_id)} onAbrir={() => abrirFila(c)} ahora={ahora}
                 movimientos={historial[c.case_id]} correo={correos[c.case_id]} raw={raws[c.case_id]}
                 fueraDePeriodo={!!periodo && c.periodo !== periodo}
-                solicitud={solicitudes[c.case_id]} onEnviar={enviarCorreo} supervisores={supervisores} />
+                solicitud={solicitudes[c.case_id]} onEnviar={enviarCorreo} supervisores={supervisores} tarea={tareas[c.case_id]} onRevisar={revisarTarea} />
             ))}
           </div>
         </div>
