@@ -13,7 +13,7 @@
 //
 // Datos: ref_requerimientos (lectura) · fn_ref_req_crear · fn_ref_req_estado
 // ═══════════════════════════════════════════════════════════════════════════
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { sb } from "./shared";
 
 const AZUL = "#1a3a6b", NARANJA = "#F47B20", GRIS = "#64748b", BORDE = "#e4e7ec";
@@ -28,7 +28,9 @@ const ESTADOS = {
 const abierto = (r) => r.estado === "pendiente" || r.estado === "en_proceso";
 const fecha = (d) => (d ? new Date(d + (String(d).length === 10 ? "T12:00:00" : "")).toLocaleDateString("es-MX", { day: "2-digit", month: "short" }) : "—");
 const fechaHora = (d) => (d ? new Date(d).toLocaleString("es-MX", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : "—");
-const lbl = { display: "flex", flexDirection: "column", gap: 4, fontSize: 12, color: GRIS, fontWeight: 600 };
+const lbl = { display: "flex", flexDirection: "column", gap: 6, fontSize: 12, color: "#344054", fontWeight: 600 };
+const INP = { height: 40, border: "1px solid #d0d5dd", borderRadius: 8, padding: "0 10px", fontSize: 13.5, width: "100%", boxSizing: "border-box", background: "#fff", fontFamily: "inherit", color: "#101828" };
+const AREA = { ...INP, height: "auto", minHeight: 64, padding: "8px 10px", resize: "vertical" };
 const chip = ([t, c, bg]) => <span style={{ background: bg, color: c, borderRadius: 20, padding: "3px 10px", fontSize: 11.5, fontWeight: 700, whiteSpace: "nowrap" }}>{t}</span>;
 
 function Sla({ r, ahora }) {
@@ -98,49 +100,58 @@ export default function Requerimientos({ usuario, modo = "jefe", onCrearCampana 
           {vista === "abiertos" ? "No hay requerimientos abiertos." : "Todavía no hay requerimientos cerrados."}
         </div>
       ) : (
-        <div style={{ background: "#fff", border: `0.5px solid ${BORDE}`, borderRadius: 12, overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-            <thead><tr style={{ background: "#f8fafc", color: GRIS, fontSize: 11, textTransform: "uppercase", letterSpacing: ".04em" }}>
-              {["#", "SC", "Vehículos", "Urgencia", "Para cuándo", "Comentario", "Pidió", "SLA", "Estado", ""].map((h) => <th key={h} style={{ padding: "10px 12px", textAlign: "left", fontWeight: 600 }}>{h}</th>)}
-            </tr></thead>
-            <tbody>
-              {filas.map((r) => (
-                <Fila key={r.id} r={r} ahora={ahora} modo={modo} busy={busy} nombreSc={nombreSc}
-                  onEstado={cambiarEstado} onCrearCampana={onCrearCampana} />
-              ))}
-            </tbody>
-          </table>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(360px, 1fr))", gap: 12 }}>
+          {filas.map((r) => (
+            <Tarjeta key={r.id} r={r} ahora={ahora} modo={modo} busy={busy} nombreSc={nombreSc}
+              onEstado={cambiarEstado} onCrearCampana={onCrearCampana} />
+          ))}
         </div>
       )}
     </div>
   );
 }
 
-function Fila({ r, ahora, modo, busy, nombreSc, onEstado, onCrearCampana }) {
-  const td = { padding: "10px 12px", borderTop: `0.5px solid ${BORDE}`, verticalAlign: "top" };
+function Tarjeta({ r, ahora, modo, busy, nombreSc, onEstado, onCrearCampana }) {
   const vencido = abierto(r) && new Date(r.vence_en) < ahora;
+  const fila = (t, v) => (
+    <div style={{ display: "flex", gap: 8, fontSize: 13, lineHeight: 1.45 }}>
+      <span style={{ width: 92, flexShrink: 0, color: GRIS }}>{t}</span><span style={{ color: "#101828", minWidth: 0 }}>{v}</span>
+    </div>
+  );
   return (
-    <Fragment>
-      <tr style={{ background: vencido ? "#fffafa" : "#fff" }}>
-        <td style={{ ...td, color: GRIS }}>{r.id}</td>
-        <td style={td}><b>{nombreSc(r.sc)}</b><div style={{ fontSize: 11, color: GRIS }}>{r.sc}</div></td>
-        <td style={td}>{(r.vehiculos || []).map((v, i) => <div key={i}><b>{v.cantidad}</b> {v.tipo}</div>)}</td>
-        <td style={td}>{chip(URGENCIAS[r.urgencia] || [r.urgencia, GRIS, "#f1f5f9"])}</td>
-        <td style={td}>{fecha(r.fecha_requerida)}</td>
-        <td style={{ ...td, maxWidth: 280, whiteSpace: "pre-wrap" }}>{r.comentario}{r.nota_analista && <div style={{ marginTop: 4, fontSize: 12, color: AZUL }}>Referidos: {r.nota_analista}</div>}</td>
-        <td style={td}>{r.solicitado_por}<div style={{ fontSize: 11, color: GRIS }}>{fechaHora(r.creado_en)}</div></td>
-        <td style={td}><Sla r={r} ahora={ahora} /></td>
-        <td style={td}>{chip(ESTADOS[r.estado] || [r.estado, GRIS, "#f1f5f9"])}{r.atendido_por && !abierto(r) && <div style={{ fontSize: 11, color: GRIS, marginTop: 4 }}>{r.atendido_por}</div>}</td>
-        <td style={{ ...td, whiteSpace: "nowrap" }}>
-          {abierto(r) && modo === "analista" && onCrearCampana && (
-            <button disabled={busy} onClick={() => onCrearCampana(r)} style={btn(NARANJA)}>Crear campaña</button>
-          )}
-          {abierto(r) && modo === "jefe" && (
-            <button disabled={busy} onClick={() => { if (window.confirm("¿Cancelar este requerimiento?")) onEstado(r, "cancelado"); }} style={btn("#b42318", true)}>Cancelar</button>
-          )}
-        </td>
-      </tr>
-    </Fragment>
+    <div style={{ background: "#fff", border: `1px solid ${vencido ? "#f4c7c3" : BORDE}`, borderLeft: `4px solid ${vencido ? "#b42318" : abierto(r) ? NARANJA : "#cbd5e1"}`,
+      borderRadius: 12, padding: 14, display: "flex", flexDirection: "column", gap: 10 }}>
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10 }}>
+        <div>
+          <div style={{ fontSize: 11, color: GRIS, fontWeight: 600 }}>REQUERIMIENTO #{r.id}</div>
+          <div style={{ fontSize: 16, fontWeight: 700, color: AZUL }}>{nombreSc(r.sc)} <span style={{ fontSize: 12, color: GRIS, fontWeight: 500 }}>{r.sc}</span></div>
+        </div>
+        <div style={{ textAlign: "right" }}>
+          <div style={{ fontSize: 10.5, color: GRIS, fontWeight: 600, marginBottom: 2 }}>{abierto(r) ? "SLA 24 H" : "RESULTADO"}</div>
+          <Sla r={r} ahora={ahora} />
+        </div>
+      </div>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+        {chip(URGENCIAS[r.urgencia] || [r.urgencia, GRIS, "#f1f5f9"])}
+        {chip(ESTADOS[r.estado] || [r.estado, GRIS, "#f1f5f9"])}
+        {(r.vehiculos || []).map((v, i) => (
+          <span key={i} style={{ background: "#eef2f8", color: AZUL, borderRadius: 20, padding: "3px 10px", fontSize: 11.5, fontWeight: 700 }}>{v.cantidad} {v.tipo}</span>
+        ))}
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 4, borderTop: `1px solid ${BORDE}`, paddingTop: 10 }}>
+        {fila("Para cuándo", fecha(r.fecha_requerida))}
+        {fila("Comentario", <span style={{ whiteSpace: "pre-wrap" }}>{r.comentario}</span>)}
+        {fila("Pidió", <>{r.solicitado_por} <span style={{ color: GRIS }}>· {fechaHora(r.creado_en)}</span></>)}
+        {r.nota_analista && fila("Referidos", <span style={{ color: AZUL }}>{r.nota_analista}</span>)}
+        {r.atendido_por && !abierto(r) && fila("Atendió", <>{r.atendido_por} <span style={{ color: GRIS }}>· {fechaHora(r.atendido_en)}</span></>)}
+      </div>
+      {abierto(r) && (modo === "analista" ? onCrearCampana && (
+        <button disabled={busy} onClick={() => onCrearCampana(r)} style={{ ...btn(NARANJA), padding: "9px 0", fontSize: 13 }}>Crear campaña</button>
+      ) : (
+        <button disabled={busy} onClick={() => { if (window.confirm("¿Cancelar este requerimiento?")) onEstado(r, "cancelado"); }}
+          style={{ ...btn("#b42318", true), alignSelf: "flex-end" }}>Cancelar</button>
+      ))}
+    </div>
   );
 }
 
@@ -172,39 +183,59 @@ function Formulario({ centros, por, onCreado }) {
   };
 
   return (
-    <div style={{ background: "#fff", border: `0.5px solid ${BORDE}`, borderRadius: 12, padding: 16, marginBottom: 16 }}>
-      <div style={{ fontSize: 15, fontWeight: 700, color: AZUL, marginBottom: 2 }}>Pedir transportistas a Referidos</div>
-      <div style={{ fontSize: 12, color: GRIS, marginBottom: 12 }}>Todos los campos son obligatorios. Referidos tiene 24 h para crear la campaña.</div>
-      <div style={{ display: "grid", gridTemplateColumns: "1.3fr 1fr 1fr", gap: 12 }}>
-        <label style={lbl}>Service Center *
-          <select value={f.sc} onChange={(e) => setF({ ...f, sc: e.target.value })}>
+    <div style={{ background: "#fff", border: `1px solid ${BORDE}`, borderRadius: 12, padding: 18, marginBottom: 18 }}>
+      <div style={{ fontSize: 15, fontWeight: 700, color: AZUL }}>Pedir transportistas a Referidos</div>
+      <div style={{ fontSize: 12.5, color: GRIS, margin: "2px 0 14px" }}>Todos los campos son obligatorios. Referidos tiene 24 h para crear la campaña.</div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 14 }}>
+        <label style={lbl}>Service Center
+          <select style={INP} value={f.sc} onChange={(e) => setF({ ...f, sc: e.target.value })}>
             <option value="">Elige un SC</option>
             {centros.map((c) => <option key={c.sc} value={c.sc}>{c.nombre} ({c.sc})</option>)}
           </select>
         </label>
-        <label style={lbl}>Urgencia *
-          <select value={f.urgencia} onChange={(e) => setF({ ...f, urgencia: e.target.value })}>
+        <label style={lbl}>Urgencia
+          <select style={INP} value={f.urgencia} onChange={(e) => setF({ ...f, urgencia: e.target.value })}>
             <option value="">Elige</option><option value="alta">Alta</option><option value="media">Media</option><option value="baja">Baja</option>
           </select>
         </label>
-        <label style={lbl}>¿Para cuándo? *
-          <input type="date" min={hoy} value={f.fecha} onChange={(e) => setF({ ...f, fecha: e.target.value })} />
+        <label style={lbl}>¿Para cuándo?
+          <input style={INP} type="date" min={hoy} value={f.fecha} onChange={(e) => setF({ ...f, fecha: e.target.value })} />
         </label>
       </div>
-      <datalist id="req-tipos">{TIPOS.map((t) => <option key={t} value={t} />)}</datalist>
+
+      <div style={{ marginTop: 14, fontSize: 12, color: "#344054", fontWeight: 600 }}>Vehículos</div>
       {f.vehiculos.map((v, i) => (
-        <div key={i} style={{ display: "grid", gridTemplateColumns: "1.3fr 0.6fr 36px", gap: 12, marginTop: 10, alignItems: "end" }}>
-          <label style={lbl}>Tipo de vehículo *<input list="req-tipos" value={v.tipo} placeholder="Elige o escribe" onChange={(e) => setV(i, "tipo", e.target.value)} /></label>
-          <label style={lbl}>Cantidad *<input type="number" min="1" value={v.cantidad} onChange={(e) => setV(i, "cantidad", e.target.value)} /></label>
-          {f.vehiculos.length > 1 ? <button onClick={() => setF((x) => ({ ...x, vehiculos: x.vehiculos.filter((_, j) => j !== i) }))} style={{ ...btn("#b42318", true), padding: "8px 0" }}>✕</button> : <span />}
+        <div key={i} style={{ display: "grid", gridTemplateColumns: "minmax(0,2fr) minmax(0,1fr) 40px", gap: 10, marginTop: 6 }}>
+          {/* Lista de tipos conocidos; si no está, "Otro" deja escribirlo a mano. */}
+          {v.otro ? (
+            <div style={{ display: "flex", gap: 6 }}>
+              <input style={INP} autoFocus value={v.tipo} placeholder="Escribe el tipo de vehículo" onChange={(e) => setV(i, "tipo", e.target.value)} />
+              <button title="Volver a la lista" onClick={() => setF((x) => ({ ...x, vehiculos: x.vehiculos.map((r, j) => (j === i ? { ...r, otro: false, tipo: "" } : r)) }))}
+                style={{ ...btn(GRIS, true), height: 40, padding: "0 10px", whiteSpace: "nowrap" }}>Lista</button>
+            </div>
+          ) : (
+            <select style={INP} value={v.tipo} onChange={(e) => (e.target.value === "__otro"
+              ? setF((x) => ({ ...x, vehiculos: x.vehiculos.map((r, j) => (j === i ? { ...r, otro: true, tipo: "" } : r)) }))
+              : setV(i, "tipo", e.target.value))}>
+              <option value="">Tipo de vehículo</option>
+              {TIPOS.map((t) => <option key={t} value={t}>{t}</option>)}
+              <option value="__otro">Otro (escribir a mano)…</option>
+            </select>
+          )}
+          <input style={INP} type="number" min="1" value={v.cantidad} placeholder="Cantidad" onChange={(e) => setV(i, "cantidad", e.target.value)} />
+          {f.vehiculos.length > 1
+            ? <button title="Quitar" onClick={() => setF((x) => ({ ...x, vehiculos: x.vehiculos.filter((_, j) => j !== i) }))} style={{ ...btn("#b42318", true), height: 40, padding: 0 }}>✕</button>
+            : <span />}
         </div>
       ))}
-      <button onClick={() => setF((x) => ({ ...x, vehiculos: [...x.vehiculos, { tipo: "", cantidad: "" }] }))} style={{ ...btn(AZUL, true), marginTop: 10 }}>＋ Otro tipo de vehículo</button>
-      <label style={{ ...lbl, marginTop: 12 }}>Comentario *
-        <textarea rows={2} value={f.comentario} onChange={(e) => setF({ ...f, comentario: e.target.value })} placeholder="Turno, horario, zona, por qué se necesita…" />
+      <button onClick={() => setF((x) => ({ ...x, vehiculos: [...x.vehiculos, { tipo: "", cantidad: "" }] }))}
+        style={{ background: "none", border: "none", color: AZUL, fontWeight: 600, fontSize: 13, cursor: "pointer", padding: "8px 0 0" }}>＋ Otro tipo de vehículo</button>
+
+      <label style={{ ...lbl, marginTop: 12 }}>Comentario
+        <textarea style={AREA} value={f.comentario} onChange={(e) => setF({ ...f, comentario: e.target.value })} placeholder="Turno, horario, zona, por qué se necesita…" />
       </label>
-      <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 12 }}>
-        <button disabled={busy} onClick={crear} style={{ ...btn(NARANJA), padding: "10px 20px", fontSize: 13 }}>{busy ? "Enviando…" : "Enviar a Referidos"}</button>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 14 }}>
+        <button disabled={busy} onClick={crear} style={{ ...btn(NARANJA), padding: "11px 22px", fontSize: 13.5 }}>{busy ? "Enviando…" : "Enviar a Referidos"}</button>
         {msg && <span style={{ fontSize: 13, color: msg.startsWith("✓") ? "#166534" : "#b42318" }}>{msg}</span>}
       </div>
     </div>
