@@ -7,7 +7,7 @@
 //   correo      lo que Canon escribe a postventa@bigticket.cl (pipe Postventa)
 // Región, comuna y estado del pedido vienen de DispatchTrack.
 //
-// Plazo: 24 horas sin contar domingos, desde que nace el caso.
+// Plazo: el que definan los analistas por canal (48 h por defecto).
 // ═══════════════════════════════════════════════════════════════════════════
 import { useState, useEffect, useMemo, useCallback, Fragment } from "react";
 
@@ -23,7 +23,8 @@ const C = {
   gris: "#8a94a6", grisTenue: "#f4f6f9",
   borde: "#e4e7ec", texto: "#1f2937", suave: "#475569", tenue: "#94a3b8",
 };
-const SLA_H = 24;
+// Plazos por canal desde postventa_sla_cl (editables en "Plazos" de la bandeja).
+let CFG = { formulario: { sla: 48, dom: false }, correo: { sla: 48, dom: false } };
 const TZ = "America/Santiago";
 const REFRESCO_MS = 60 * 1000;
 
@@ -44,8 +45,9 @@ const hhmm = (h) => `${Math.floor(h)}:${String(Math.floor((h % 1) * 60)).padStar
 const diaSemana = (ms) => new Intl.DateTimeFormat("en-US", { timeZone: TZ, weekday: "short" }).format(new Date(ms));
 
 // Horas transcurridas sin contar domingos (hora de Chile), en tramos de 15 min.
-function horasSinDomingo(desdeIso, hastaMs) {
+function horasSinDomingo(desdeIso, hastaMs, descontar = true) {
   if (!desdeIso) return 0;
+  if (!descontar) return Math.max(0, (hastaMs - new Date(desdeIso).getTime()) / 3600000);
   const PASO = 15 * 60000;
   let t = new Date(desdeIso).getTime(), total = 0;
   while (t < hastaMs) {
@@ -81,13 +83,15 @@ const ORDEN_ESTADOS = ["por_clasificar", "pendiente", "respondido", "derivado", 
 function Plazo({ c, ahora }) {
   const e = ESTADOS[estadoDe(c)];
   if (!e.reloj) return <span style={{ fontSize: 11, color: C.gris }}>—</span>;
-  const usado = horasSinDomingo(c.creado_en, ahora);
+  const cf = CFG[c.canal] || CFG.formulario;
+  const SLA_H = cf.sla;
+  const usado = horasSinDomingo(c.creado_en, ahora, cf.dom);
   const resta = SLA_H - usado;
   const vencido = resta <= 0;
   const color = vencido ? C.ladrillo : resta < 4 ? C.ladrillo : resta < 8 ? C.naranja : C.navy;
   const ancho = Math.max(0, Math.min(100, (usado / SLA_H) * 100));
   return (
-    <span style={{ display: "block" }} title="Plazo de 24 h sin contar domingos">
+    <span style={{ display: "block" }} title={`Plazo de ${SLA_H} h${cf.dom ? " sin contar domingos" : ""}`}>
       <span style={{ fontSize: 12, fontWeight: 700, color, fontVariantNumeric: "tabular-nums" }}>
         {vencido ? `vencido +${hhmm(-resta)}` : hhmm(resta)}
       </span>
@@ -182,6 +186,10 @@ export default function ModuloCanonCL() {
   const cargar = useCallback(async () => {
     try {
       const filas = await api("canon_casos_cl?select=card_id,canal,creado_en,fase,titulo,mandante,pedido,remitente,correo,motivo,texto,ceco,supervisor,fecha_limite,respuesta,region,comuna,estado_pedido&order=creado_en.desc&limit=3000");
+      try {
+        const sla = await api("postventa_sla_cl?origen=in.(canon_formulario,canon_correo)&select=origen,sla_horas,sin_domingos");
+        for (const x of sla || []) CFG[x.origen === "canon_correo" ? "correo" : "formulario"] = { sla: Number(x.sla_horas) || 48, dom: !!x.sin_domingos };
+      } catch (e) {}
       setCasos((filas || []).filter(esCanon));
       setError("");
     } catch (e) { setError(e.message); } finally { setCargando(false); }
@@ -241,7 +249,8 @@ export default function ModuloCanonCL() {
       m[k] = m[k] || { abiertos: 0, vencidos: 0, sugeridos: 0 };
       m[k].abiertos++;
       if (c._sugerido) m[k].sugeridos++;
-      if (horasSinDomingo(c.creado_en, ahora) >= SLA_H) m[k].vencidos++;
+      const cf = CFG[c.canal] || CFG.formulario;
+      if (horasSinDomingo(c.creado_en, ahora, cf.dom) >= cf.sla) m[k].vencidos++;
     }
     return Object.entries(m).sort((a, b) => b[1].vencidos - a[1].vencidos || b[1].abiertos - a[1].abiertos);
   }, [conEstado, ahora]);
@@ -333,7 +342,7 @@ export default function ModuloCanonCL() {
             <div style={{ display: "grid", gridTemplateColumns: GRID, gap: 10, padding: "6px 16px", borderTop: `1px solid ${C.borde}`,
               background: C.grisTenue, fontSize: 9.5, letterSpacing: .3, textTransform: "uppercase", color: C.tenue, fontWeight: 600 }}>
               <span /><span>Creado</span><span>Canal</span><span>Pedido</span><span>Cliente / asunto</span>
-              <span>CECO</span><span>Supervisor</span><span>Estado</span><span>Plazo 24 h</span>
+              <span>CECO</span><span>Supervisor</span><span>Estado</span><span>Plazo</span>
             </div>
             {cargando ? (
               <div style={{ padding: 28, textAlign: "center", color: C.suave, fontSize: 13, borderTop: `1px solid ${C.borde}` }}>Cargando casos…</div>
