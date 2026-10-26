@@ -122,6 +122,8 @@ function TareasJefeOperaciones() {
   const [items, setItems] = useState({});       // borrador de items por tarea id
   const [busyId, setBusyId] = useState(null);
   const [verHistorial, setVerHistorial] = useState(false);
+  const [devolverId, setDevolverId] = useState(null);   // tarea con el panel de devolución abierto
+  const [motivoDev, setMotivoDev] = useState("");
   const [ahora, setAhora] = useState(Date.now());
 
   useEffect(() => {
@@ -293,6 +295,27 @@ function TareasJefeOperaciones() {
       if (eLin) alert("Los items se guardaron, pero las líneas del Anexo A no: " + eLin.message + "\n\nEl analista tendrá que completarlas en la Etapa 8.");
       await cargar();
     } catch (e) { alert("Error: " + e.message); }
+    finally { setBusyId(null); }
+  };
+
+  // Devuelve la tarea al supervisor cuando a la entrevista le falta información.
+  // La RPC cierra esta tarea como "devuelta", deja pendiente la entrevista del
+  // supervisor con el motivo y regresa la tarjeta a Entrevista operaciones.
+  // Cuando el supervisor la vuelva a completar, al Jefe le llega una tarea nueva.
+  const devolverTarea = async (t) => {
+    const motivo = motivoDev.trim();
+    if (motivo.length < 10) return;
+    setBusyId(t.id);
+    try {
+      const { data, error } = await sb.rpc("devolver_alta_operacional", {
+        p_tarea_id: t.id, p_motivo: motivo,
+        p_email: window.__PERFIL_EMAIL || "", p_nombre: window.__PERFIL_NOMBRE || "",
+      });
+      if (error) throw new Error(error.message);
+      if (!data || data.ok !== true) throw new Error((data && data.error) || "no se pudo devolver");
+      setDevolverId(null); setMotivoDev("");
+      await cargar();
+    } catch (e) { alert("No se pudo devolver la tarea: " + e.message); }
     finally { setBusyId(null); }
   };
 
@@ -549,6 +572,32 @@ function TareasJefeOperaciones() {
               style={{ width: "100%", marginTop: 10, background: faltantes(it).length ? "#b9c6c3" : "#0f766e", color: "#fff", border: "none", borderRadius: 8, padding: "12px", fontSize: 13, fontWeight: 700, cursor: faltantes(it).length ? "not-allowed" : "pointer", opacity: busyId === t.id ? 0.6 : 1, fontFamily: "'Geist',sans-serif" }}>
               {busyId === t.id ? "Guardando…" : faltantes(it).length ? "Completa los datos marcados" : "✓ Completar items del contrato"}
             </button>
+            {devolverId === t.id ? (
+              <div style={{ marginTop: 10, border: "1px solid #f5c2c0", background: "#fff5f5", borderRadius: 8, padding: 12 }}>
+                <div style={{ fontSize: 13, fontWeight: 800, color: "#9b1c1c", marginBottom: 4 }}>↩ Devolver al supervisor</div>
+                <div style={{ fontSize: 12, color: "#7f1d1d", marginBottom: 8, lineHeight: 1.45 }}>
+                  La entrevista vuelve como pendiente al supervisor de {t.sc}, con este motivo, y la tarjeta regresa a Entrevista operaciones.
+                </div>
+                <textarea value={motivoDev} onChange={(e) => setMotivoDev(e.target.value)} rows={3}
+                  placeholder="Qué información falta o qué debe corregir el supervisor (mínimo 10 caracteres)"
+                  style={{ width: "100%", boxSizing: "border-box", border: "1px solid #f0b4b1", borderRadius: 6, padding: "8px 10px", fontSize: 13, fontFamily: "'Geist',sans-serif", resize: "vertical" }} />
+                <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                  <button onClick={() => devolverTarea(t)} disabled={busyId === t.id || motivoDev.trim().length < 10}
+                    style={{ flex: 1, background: motivoDev.trim().length < 10 ? "#e5b3b0" : "#b91c1c", color: "#fff", border: "none", borderRadius: 8, padding: "10px", fontSize: 13, fontWeight: 700, cursor: motivoDev.trim().length < 10 ? "not-allowed" : "pointer", fontFamily: "'Geist',sans-serif" }}>
+                    {busyId === t.id ? "Devolviendo…" : "Confirmar devolución"}
+                  </button>
+                  <button onClick={() => { setDevolverId(null); setMotivoDev(""); }}
+                    style={{ background: "#fff", color: "#555", border: "1px solid #ddd", borderRadius: 8, padding: "10px 16px", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "'Geist',sans-serif" }}>
+                    Cancelar
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button onClick={() => { setDevolverId(t.id); setMotivoDev(""); }} disabled={busyId === t.id}
+                style={{ width: "100%", marginTop: 8, background: "#fff", color: "#b91c1c", border: "1px solid #f0b4b1", borderRadius: 8, padding: "10px", fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "'Geist',sans-serif" }}>
+                ↩ Devolver al supervisor (falta información)
+              </button>
+            )}
           </div>
         );
       })}
