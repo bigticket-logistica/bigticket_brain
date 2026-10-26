@@ -2,6 +2,7 @@ import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { descargarExcelMeli, descargarExcelMultihoja, fechaHoyOperativa, fechaOperativaOffset, pct, sb } from "./shared";
 import RechazosMeliMX, { rmResumenPerdidas } from "./RechazosMeli";
 import CapacidadMX from "./CapacidadMX";
+import Requerimientos from "./Requerimientos";
 
 // ═══════════════════════════════════════════════════════════════════
 //  TAREAS DEL JEFE DE SUPERVISORES — Alta Operacional (Etapa 7)
@@ -645,6 +646,7 @@ function IndicadoresOperacionalesMX({ usuario }) {
     { id: "vendor_score", label: "Vendor Score", desc: "Nota semanal MELI · aproximada" },
     { id: "control_helper", label: "Control Helper", desc: "Helpers no autorizados / certificados / fantasmas" },
     { id: "tareas", label: "📋 Tareas", desc: "Altas operacionales · SLA 24 h" },
+    { id: "requerimientos", label: "🙋 Requerimientos", desc: "Pedir gente a Referidos · SLA 24 h" },
   ];
 
 
@@ -692,6 +694,7 @@ function IndicadoresOperacionalesMX({ usuario }) {
       {vista === "torre_d1" && <TorreTresPilares />}
       {vista === "validacion_bt" && <PoolMeliValidacionBT usuario={usuario} />}
       {vista === "tareas" && <div style={{ padding: 24 }}><TareasJefeOperaciones /></div>}
+      {vista === "requerimientos" && <div style={{ padding: 24 }}><Requerimientos usuario={usuario} modo="jefe" /></div>}
 
     </div>
   );
