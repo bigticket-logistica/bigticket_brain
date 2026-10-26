@@ -28,7 +28,7 @@ const C = {
   borde: "#e4e7ec", texto: "#1f2937", suave: "#475569", tenue: "#94a3b8",
 };
 
-const SLA_H = 48;
+const SLA_H = 72;   // plazo de MELI Chile para cargar el comprobante
 const REFRESCO_MS = 60 * 1000;
 
 async function api(path, opciones) {
@@ -129,7 +129,7 @@ function VidaCaso({ c, ahora }) {
   );
 }
 
-// Plazo de 48 h con su barra. Solo corre donde nos toca mover.
+// Plazo de 72 h con su barra. Solo corre donde nos toca mover.
 function Reloj({ c, ahora }) {
   if (!conReloj(c)) {
     return (
@@ -512,6 +512,9 @@ function Detalle({ c, raw, movimientos, correo, ahora, solicitud, onEnviar, supe
               <Dato etiqueta="Nace" valor={fechaCorta(c.fecha_caso)} />
               <Dato etiqueta="Edad" valor={transcurrido != null ? `${hhmm(transcurrido)} h` : "—"} />
               <Dato etiqueta="Estación" valor={c.service_center} />
+              <Dato etiqueta="CECO" valor={c.ceco} />
+              <Dato etiqueta="Supervisor" valor={c.supervisor} />
+              <Dato etiqueta="CECO resuelto por" valor={c.ceco_como} />
               <Dato etiqueta="Ruta" valor={`${c.route_code || "—"} · ${c.route_id || "—"}`} />
               <Dato etiqueta="Conductor" valor={c.conductor} />
               <Dato etiqueta="Estado MELI" valor={e ? e.etiqueta : c.sub_estado} />
@@ -573,7 +576,7 @@ function Detalle({ c, raw, movimientos, correo, ahora, solicitud, onEnviar, supe
   );
 }
 
-const GRID = "14px 92px 168px minmax(118px,1fr) 150px 126px 90px 78px";
+const GRID = "14px 92px 168px minmax(118px,1fr) 136px 150px 126px 90px 78px";
 
 function Fila({ c, abierta, onAbrir, ahora, movimientos, correo, raw, fueraDePeriodo, solicitud, onEnviar, supervisores }) {
   const ultimoMov = (movimientos || []).reduce((mx, m) => (!mx || new Date(m.cambiado_en) > new Date(mx) ? m.cambiado_en : mx), null);
@@ -595,6 +598,15 @@ function Fila({ c, abierta, onAbrir, ahora, movimientos, correo, raw, fueraDePer
         </span>
         <span style={{ fontSize: 12, color: C.suave, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
           {c.route_code || "—"} · {c.service_center || "—"}
+        </span>
+        <span style={{ minWidth: 0, lineHeight: 1.25 }} title={c.ceco_como ? `CECO por ${c.ceco_como}` : ""}>
+          <span style={{ display: "block", fontSize: 11.5, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+            color: c.ceco === "POR CLASIFICAR" ? C.ladrillo : c.ceco ? C.texto : C.tenue }}>
+            {c.ceco || "calculando…"}
+          </span>
+          <span style={{ display: "block", fontSize: 10, color: C.suave, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+            {c.supervisor || (c.ceco === "POR CLASIFICAR" ? "sin supervisor" : "")}
+          </span>
         </span>
         <span style={{ textAlign: "center", lineHeight: 1.2, overflow: "hidden" }}>
           <span style={{ display: "inline-block", fontSize: 10.5, fontWeight: 600, color, border: `1px solid ${color}`,
@@ -770,6 +782,7 @@ export default function ModuloPnrCL({ usuario }) {
   const [error, setError] = useState("");
   const [periodo, setPeriodo] = useState("");
   const [busqueda, setBusqueda] = useState("");
+  const [supFiltro, setSupFiltro] = useState("todos");
   const [filtro, setFiltro] = useState({ tipo: "grupo", valor: "responder" });
   const [orden, setOrden] = useState({ campo: "sla", dir: "asc" });
   const [abiertas, setAbiertas] = useState(new Set());
@@ -779,7 +792,7 @@ export default function ModuloPnrCL({ usuario }) {
   const cargar = useCallback(async () => {
     try {
       const [filas, hist, avs, sols, sups] = await Promise.all([
-        api("pnr_casos_cl?select=case_id,tipo,fecha_caso,route_code,route_id,service_center,conductor,shipment_id,monto,moneda,estado,sub_estado,periodo,actualizado_en,creado_en&order=fecha_caso.desc&limit=5000"),
+        api("pnr_casos_cl?select=case_id,tipo,fecha_caso,route_code,route_id,service_center,conductor,shipment_id,monto,moneda,estado,sub_estado,periodo,actualizado_en,creado_en,ceco,supervisor,ceco_como&order=fecha_caso.desc&limit=5000"),
         api("pnr_historial_cl?select=id,case_id,sub_estado_desde,sub_estado_hacia,cambiado_en&order=cambiado_en.asc&limit=20000"),
         api("pnr_avisos_cl?canal=eq.correo&select=case_id,destino,enviado_en,error,asunto,ceco,supervisor,patente,origen&limit=10000"),
         api("pnr_solicitudes_cl?select=id,case_id,estado,resultado,solicitado_en,solicitado_por,procesado_en&order=solicitado_en.desc&limit=500"),
@@ -870,8 +883,11 @@ export default function ModuloPnrCL({ usuario }) {
       if (!conReloj(c) || !c.fecha_caso) return 1e12 - new Date(c.fecha_caso || 0).getTime() / 1000;
       return new Date(c.fecha_caso).getTime() / 1000;   // más viejo = menos plazo = arriba
     };
-    return base.slice().sort((a, b) => { const d = valor(a) - valor(b); return orden.dir === "asc" ? d : -d; });
-  }, [casos, paraLista, filtro, busqueda, buscando, orden, historial, diaMov, periodo, correos, solicitudes]);
+    return base
+      .filter((c) => supFiltro === "todos" || (supFiltro === "__sin" ? !c.supervisor : c.supervisor === supFiltro))
+      .slice().sort((a, b) => { const d = valor(a) - valor(b); return orden.dir === "asc" ? d : -d; });
+  }, [casos, paraLista, filtro, busqueda, buscando, orden, historial, diaMov, periodo, correos, solicitudes, supFiltro]);
+  const listaSupervisores = useMemo(() => [...new Set(casos.map((c) => c.supervisor).filter(Boolean))].sort(), [casos]);
 
   const nSinCeco = casos.filter((c) => esSinCeco(correos[c.case_id]) && !(solicitudes[c.case_id] && solicitudes[c.case_id].estado === "pendiente")).length;
 
@@ -1013,13 +1029,20 @@ export default function ModuloPnrCL({ usuario }) {
           <button onClick={() => fijar({ tipo: "todos", valor: null })}
             style={pastilla(!buscando && filtro.tipo === "todos", C.navy, C.navyTenue)}>Todos</button>
 
-          <span style={{ marginLeft: "auto", fontSize: 11.5, color: C.tenue }}>
+          <select value={supFiltro} onChange={(e) => setSupFiltro(e.target.value)}
+            style={{ marginLeft: "auto", fontSize: 11.5, padding: "4px 8px", borderRadius: 20, fontFamily: "inherit",
+              border: `1px solid ${supFiltro !== "todos" ? C.navy : C.borde}`, color: supFiltro !== "todos" ? C.navy : C.suave, background: "#fff" }}>
+            <option value="todos">Todos los supervisores</option>
+            {listaSupervisores.map((s) => <option key={s} value={s}>{s}</option>)}
+            <option value="__sin">Sin supervisor</option>
+          </select>
+          <span style={{ fontSize: 11.5, color: C.tenue }}>
             {lista.length} en pantalla{buscando ? " · todos los periodos" : ""}
           </span>
         </div>
 
         <div style={{ overflowX: "auto" }}>
-          <div style={{ minWidth: 1000 }}>
+          <div style={{ minWidth: 1140 }}>
             <div style={{ display: "grid", gridTemplateColumns: GRID, gap: 10, padding: "6px 16px",
               borderTop: `1px solid ${C.borde}`, background: C.grisTenue, fontSize: 9.5, letterSpacing: .3,
               textTransform: "uppercase", color: C.tenue, fontWeight: 600 }}>
@@ -1028,6 +1051,7 @@ export default function ModuloPnrCL({ usuario }) {
               <ColOrden campo="sla" orden={orden} onClick={ordenar}>SLA</ColOrden>
               <span>Conductor</span>
               <span>Ruta · estación</span>
+              <span>CECO · supervisor</span>
               <span style={{ textAlign: "center" }}>Estado</span>
               <span style={{ textAlign: "center" }}>Aviso</span>
               <ColOrden campo="monto" orden={orden} onClick={ordenar} derecha>Monto</ColOrden>
