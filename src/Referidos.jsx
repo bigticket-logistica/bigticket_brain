@@ -16,6 +16,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { sb } from "./shared";
+import Requerimientos from "./Requerimientos";
 
 const AZUL = "#1a3a6b";
 const NARANJA = "#F47B20";
@@ -58,6 +59,8 @@ export default function ModuloReferidos({ usuario }) {
   const [centros, setCentros] = useState([]);
   const [propuestas, setPropuestas] = useState([]);
   const [canales, setCanales] = useState([]);   // fuentes de Bigticket sin referidor (camioneta, Facebook)
+  const [reqAbiertos, setReqAbiertos] = useState(0);   // requerimientos del jefe de operaciones sin atender
+  const [campana, setCampana] = useState(null);        // requerimiento que se está convirtiendo en campaña
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState("");
 
@@ -72,6 +75,8 @@ export default function ModuloReferidos({ usuario }) {
       sb.from("ref_propuestas").select("*"),
       sb.from("ref_canales").select("*").order("creado_at"),
     ]);
+    const rq = await sb.from("ref_requerimientos").select("id", { count: "exact", head: true }).in("estado", ["pendiente", "en_proceso"]);
+    setReqAbiertos(rq.count || 0);
     // Si ref_canales no se puede leer, la pestaña sigue funcionando sin las filas de canal.
     const err = b.error || r.error || p.error || o.error || c.error || pr.error;
     if (err) setError(err.message);
@@ -83,7 +88,7 @@ export default function ModuloReferidos({ usuario }) {
 
   const porValidar = bonos.filter((x) => x.estado === "por_validar").length;
   const vacantes = oportunidades.filter((x) => x.activa && x.cantidad > 0).reduce((t, x) => t + x.cantidad, 0);
-  const TABS = [["bonos", "Bonos", porValidar], ["referidos", "Referidos", referidos.length], ["referidores", "Referidores", referidores.length + canales.length], ["oportunidades", "Oportunidades", vacantes]];
+  const TABS = [["bonos", "Bonos", porValidar], ["referidos", "Referidos", referidos.length], ["referidores", "Referidores", referidores.length + canales.length], ["oportunidades", "Oportunidades", vacantes], ["requerimientos", "Requerimientos", reqAbiertos]];
 
   return (
     <div className="pg">
@@ -92,7 +97,7 @@ export default function ModuloReferidos({ usuario }) {
       <div style={{ display: "flex", gap: 6, marginBottom: 16, flexWrap: "wrap" }}>
         {TABS.map(([k, t, n]) => (
           <button key={k} onClick={() => setTab(k)} className={`nav-btn${tab === k ? " active" : ""}`} style={{ border: `0.5px solid ${BORDE}` }}>
-            {t} {n > 0 && <span style={{ marginLeft: 6, background: k === "bonos" ? NARANJA : "#e4e7ec", color: k === "bonos" ? "#fff" : AZUL, borderRadius: 10, padding: "1px 7px", fontSize: 11, fontWeight: 700 }}>{n}</span>}
+            {t} {n > 0 && <span style={{ marginLeft: 6, background: k === "bonos" || k === "requerimientos" ? NARANJA : "#e4e7ec", color: k === "bonos" || k === "requerimientos" ? "#fff" : AZUL, borderRadius: 10, padding: "1px 7px", fontSize: 11, fontWeight: 700 }}>{n}</span>}
           </button>
         ))}
         <button onClick={cargar} className="btn-back" style={{ marginLeft: "auto" }}>↻ Actualizar</button>
@@ -103,7 +108,12 @@ export default function ModuloReferidos({ usuario }) {
           {tab === "bonos" && <Bonos bonos={bonos} usuario={usuario} onCambio={cargar} />}
           {tab === "referidos" && <Referidos referidos={referidos} canales={canales} />}
           {tab === "referidores" && <Referidores referidores={referidores} canales={canales} referidos={referidos} />}
-          {tab === "oportunidades" && <Oportunidades lista={oportunidades} centros={centros} propuestas={propuestas} usuario={usuario} onCambio={cargar} />}
+          {tab === "oportunidades" && <Oportunidades lista={oportunidades} centros={centros} propuestas={propuestas} usuario={usuario} onCambio={cargar}
+            campana={campana} onCampanaLista={() => { setCampana(null); setTab("requerimientos"); }} onCampanaCancelar={() => setCampana(null)} />}
+          {tab === "requerimientos" && <Requerimientos usuario={usuario} modo="analista" onCrearCampana={(r) => {
+            setCampana({ reqId: r.id, sc: r.sc, nota: r.comentario, filas: (r.vehiculos || []).map((v) => ({ tipo: v.tipo, cantidad: v.cantidad, tarifa: "" })) });
+            setTab("oportunidades");
+          }} />}
         </>
       )}
     </div>
@@ -306,12 +316,16 @@ function Referidores({ referidores, canales = [], referidos = [] }) {
 // Sugerencias para el tipo de vehículo; se puede escribir cualquier otro.
 const TIPOS_SUGERIDOS = ["Small Van", "Large Van", "Auto", "Moto", "Camioneta pickup", "Camión 3.5 t"];
 
-function Oportunidades({ lista, centros, propuestas, usuario, onCambio }) {
+function Oportunidades({ lista, centros, propuestas, usuario, onCambio, campana, onCampanaLista, onCampanaCancelar }) {
   const [editando, setEditando] = useState(null);   // propuesta en edición
   const [viendo, setViendo] = useState(null);       // propuesta en vista previa
   // Una oportunidad nueva puede traer varios tipos de vehículo a la vez (una fila por tipo).
   const NUEVO = () => ({ sc: "", filas: [{ tipo: "Small Van", cantidad: 1, tarifa: "" }], nota: "" });
   const [nuevo, setNuevo] = useState(NUEVO);
+  // Viene de Requerimientos: el formulario se abre con el SC, los vehículos y el comentario del jefe.
+  useEffect(() => {
+    if (campana) setNuevo({ sc: campana.sc, filas: campana.filas.map((f) => ({ ...f })), nota: campana.nota || "" });
+  }, [campana && campana.reqId]);   // eslint-disable-line react-hooks/exhaustive-deps
   const setFila = (i, k, v) => setNuevo((n) => ({ ...n, filas: n.filas.map((f, j) => (j === i ? { ...f, [k]: v } : f)) }));
   const otraFila = () => setNuevo((n) => ({ ...n, filas: [...n.filas, { tipo: "", cantidad: 1, tarifa: "" }] }));
   const quitarFila = (i) => setNuevo((n) => ({ ...n, filas: n.filas.filter((_, j) => j !== i) }));
@@ -349,8 +363,14 @@ function Oportunidades({ lista, centros, propuestas, usuario, onCambio }) {
     if (new Set(filas.map((f) => f.tipo.toLowerCase())).size !== filas.length) { alert("Hay un tipo de vehículo repetido."); return; }
     let ok = true;
     for (const f of filas) ok = (await guardar(nuevo.sc, f.tipo, f.cantidad, true, nuevo.nota, f.tarifa, false)) && ok;
+    // Si la campaña nace de un requerimiento, ese requerimiento queda realizado.
+    if (ok && campana) {
+      const resumen = "Campaña creada: " + filas.map((f) => `${f.cantidad} ${f.tipo} a $${Number(f.tarifa).toLocaleString("es-MX")} por viaje`).join(" · ");
+      const { error: e } = await sb.rpc("fn_ref_req_estado", { p_id: campana.reqId, p_estado: "campana_creada", p_nota: resumen, p_por: por });
+      if (e) alert("La campaña se creó, pero no se pudo cerrar el requerimiento: " + e.message);
+    }
     onCambio();
-    if (ok) setNuevo(NUEVO());
+    if (ok) { setNuevo(NUEVO()); if (campana) onCampanaLista(); }
   };
 
   const total = lista.filter((x) => x.activa && x.cantidad > 0).reduce((t, x) => t + x.cantidad, 0);
@@ -388,6 +408,12 @@ function Oportunidades({ lista, centros, propuestas, usuario, onCambio }) {
   return (
     <>
       <div className="form-card">
+        {campana && (
+          <div style={{ background: "#fff4e5", border: "1px solid #fbd9c0", borderRadius: 10, padding: "10px 12px", marginBottom: 10, fontSize: 13, color: "#92400e", display: "flex", gap: 10, alignItems: "center" }}>
+            <span style={{ flex: 1 }}>Creando la campaña del <b>requerimiento #{campana.reqId}</b> del jefe de operaciones. Revisa los datos, pon la tarifa por viaje y aprieta <b>Agregar</b>: el requerimiento queda realizado.</span>
+            <button className="btn-back" onClick={onCampanaCancelar}>Cancelar</button>
+          </div>
+        )}
         <div style={{ fontWeight: 700, color: AZUL, marginBottom: 4 }}>Agregar una oportunidad</div>
         <div style={{ fontSize: 12.5, color: GRIS, marginBottom: 12 }}>
           Lo que esté activo y con cantidad aparece en el portal de referidos y en la postulación, con su tarifa por viaje y el comentario: el referido solo puede elegir estos centros y estos tipos de vehículo. Si el centro y el tipo ya existen, se actualizan sus datos.

@@ -3,8 +3,9 @@
 //
 // El jefe de operaciones pide a Referidos que busque transportistas: SC,
 // vehículos (tipo y cantidad), urgencia, para cuándo y un comentario. Cada
-// solicitud tiene SLA de 24 h. El analista de Referidos la toma, crea la
-// campaña (oportunidades + propuesta) y la marca como "campaña creada".
+// solicitud tiene SLA de 24 h. El analista de Referidos aprieta "Crear
+// campaña": se abre Oportunidades con el SC y los vehículos cargados, y al
+// guardar la campaña el requerimiento queda realizado solo ("campaña creada").
 //
 // Un solo componente para las dos pestañas:
 //   Pool      → <Requerimientos modo="jefe" />      crea y ve la tabla
@@ -116,8 +117,6 @@ export default function Requerimientos({ usuario, modo = "jefe", onCrearCampana 
 }
 
 function Fila({ r, ahora, modo, busy, nombreSc, onEstado, onCrearCampana }) {
-  const [nota, setNota] = useState("");
-  const [cerrando, setCerrando] = useState(false);
   const td = { padding: "10px 12px", borderTop: `0.5px solid ${BORDE}`, verticalAlign: "top" };
   const vencido = abierto(r) && new Date(r.vence_en) < ahora;
   return (
@@ -133,26 +132,14 @@ function Fila({ r, ahora, modo, busy, nombreSc, onEstado, onCrearCampana }) {
         <td style={td}><Sla r={r} ahora={ahora} /></td>
         <td style={td}>{chip(ESTADOS[r.estado] || [r.estado, GRIS, "#f1f5f9"])}{r.atendido_por && !abierto(r) && <div style={{ fontSize: 11, color: GRIS, marginTop: 4 }}>{r.atendido_por}</div>}</td>
         <td style={{ ...td, whiteSpace: "nowrap" }}>
-          {abierto(r) && modo === "analista" && (
-            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              {r.estado === "pendiente" && <button disabled={busy} onClick={() => onEstado(r, "en_proceso")} style={btn(AZUL)}>Tomar</button>}
-              {onCrearCampana && <button disabled={busy} onClick={() => onCrearCampana(r)} style={btn(NARANJA)}>Crear campaña</button>}
-              <button disabled={busy} onClick={() => setCerrando((x) => !x)} style={btn("#166534", true)}>✓ Campaña creada</button>
-            </div>
+          {abierto(r) && modo === "analista" && onCrearCampana && (
+            <button disabled={busy} onClick={() => onCrearCampana(r)} style={btn(NARANJA)}>Crear campaña</button>
           )}
           {abierto(r) && modo === "jefe" && (
             <button disabled={busy} onClick={() => { if (window.confirm("¿Cancelar este requerimiento?")) onEstado(r, "cancelado"); }} style={btn("#b42318", true)}>Cancelar</button>
           )}
         </td>
       </tr>
-      {cerrando && (
-        <tr><td colSpan={10} style={{ ...td, background: "#f8fafc" }}>
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <input value={nota} onChange={(e) => setNota(e.target.value)} placeholder="Nota para el jefe (obligatoria): qué campaña se creó, con qué tarifa…" style={{ flex: 1 }} />
-            <button disabled={busy} onClick={() => { if (!nota.trim()) { alert("Escribe la nota para el jefe."); return; } onEstado(r, "campana_creada", nota); }} style={btn("#166534")}>Confirmar</button>
-          </div>
-        </td></tr>
-      )}
     </Fragment>
   );
 }
