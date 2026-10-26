@@ -43,6 +43,15 @@ async function api(path, opciones) {
   return texto && texto.trim() ? JSON.parse(texto) : true;
 }
 
+// CECOs válidos en las bodegas compartidas (mismo mapa que pnr-cl.cjs en el VPS).
+const CECOS_COMPARTIDAS = {
+  SRM1: ["ML_RM_SRM1", "ML_CORDILLERA", "ML_PICHILEMU", "ML_SALAMANCA"],
+  SRM2: ["ML_RM_SRM2", "ML_MELIPILLA", "ML_SAN_ANTONIO"],
+  SRM3: ["ML_RM_SRM3", "ML_MELIPILLA"],
+  SBB1: ["ML_ARAUCO", "ML_CAÑETE"],
+};
+const esSinCeco = (correo) => !!(correo && correo.destino === "sin_ceco" && !correo.enviado_en);
+
 // Origen del envío, legible para el informe.
 const nombreOrigen = (o) => {
   if (!o) return "—";
@@ -156,6 +165,15 @@ function Reloj({ c, ahora }) {
 // Aviso: una sola esfera. Verde con la fecha cuando el correo salió; hueca si no.
 function EsferaCorreo({ correo, solicitud }) {
   const enviado = correo && correo.enviado_en && !correo.error;
+  if (!enviado && esSinCeco(correo) && !(solicitud && solicitud.estado === "pendiente")) {
+    return (
+      <span style={{ display: "flex", flexDirection: "column", alignItems: "center", lineHeight: 1.2 }}
+        title={`No se envió: no se pudo asignar el CECO. ${correo.error || ""}`}>
+        <span style={{ width: 10, height: 10, borderRadius: 5, background: C.ladrillo, border: `1.5px solid ${C.ladrillo}` }} />
+        <span style={{ fontSize: 8.5, color: C.ladrillo, marginTop: 2, fontWeight: 700 }}>sin CECO</span>
+      </span>
+    );
+  }
   if (!enviado && solicitud && solicitud.estado === "pendiente") {
     return (
       <span style={{ display: "flex", flexDirection: "column", alignItems: "center", lineHeight: 1.2 }} title="En cola: el VPS lo envía en menos de un minuto">
@@ -426,7 +444,49 @@ function LineaTiempo({ movimientos }) {
   );
 }
 
-function Detalle({ c, raw, movimientos, correo, ahora, solicitud, onEnviar }) {
+// Envío desde el Brain: CECO automático o elegido, con su supervisor a la vista.
+function BloqueEnvio({ c, correo, onEnviar, supervisores }) {
+  const sinCeco = esSinCeco(correo);
+  const opciones = CECOS_COMPARTIDAS[c.service_center] || Object.keys(supervisores).sort();
+  const [ceco, setCeco] = useState("");
+  const [recordar, setRecordar] = useState(true);
+  const sup = ceco && supervisores[ceco];
+  return (
+    <div onClick={(e) => e.stopPropagation()}>
+      {sinCeco && (
+        <div style={{ fontSize: 12, color: C.ladrillo, background: C.ladrilloTenue, borderRadius: 8, padding: "7px 9px", marginBottom: 8 }}>
+          <strong>No se pudo asignar el CECO</strong>, así que el correo no salió.
+          {correo.error && <div style={{ fontSize: 11, marginTop: 3 }}>{correo.error}</div>}
+        </div>
+      )}
+      <div style={{ fontSize: 10, color: C.tenue, textTransform: "uppercase", letterSpacing: .3, fontWeight: 600, marginBottom: 3 }}>CECO</div>
+      <select value={ceco} onChange={(e) => setCeco(e.target.value)}
+        style={{ width: "100%", fontSize: 12.5, padding: "6px 8px", borderRadius: 8, border: `1px solid ${sinCeco && !ceco ? C.ladrillo : C.borde}`, fontFamily: "inherit", marginBottom: 6 }}>
+        <option value="">{sinCeco ? "Elige el CECO…" : "Automático (lo resuelve el sistema)"}</option>
+        {opciones.map((o) => <option key={o} value={o}>{o}</option>)}
+      </select>
+      {ceco && (
+        <div style={{ fontSize: 12, color: C.texto, marginBottom: 6 }}>
+          Supervisor: <strong>{sup ? sup.supervisor : "sin supervisor cargado"}</strong>
+        </div>
+      )}
+      {ceco && (
+        <label style={{ display: "flex", gap: 6, alignItems: "flex-start", fontSize: 11.5, color: C.suave, marginBottom: 8, cursor: "pointer" }}>
+          <input type="checkbox" checked={recordar} onChange={(e) => setRecordar(e.target.checked)} style={{ marginTop: 2 }} />
+          Recordar este CECO para la patente y el conductor de este caso
+        </label>
+      )}
+      <button disabled={sinCeco && !ceco} onClick={() => onEnviar(c, ceco || null, recordar)}
+        style={{ width: "100%", fontSize: 12.5, fontWeight: 700, padding: "8px 12px", borderRadius: 8,
+          cursor: sinCeco && !ceco ? "default" : "pointer", opacity: sinCeco && !ceco ? .5 : 1,
+          border: `1px solid ${C.naranja}`, background: C.naranja, color: "#fff", fontFamily: "inherit" }}>
+        {sinCeco || ceco ? "Asignar y enviar" : "Enviar correo a postventa"}
+      </button>
+    </div>
+  );
+}
+
+function Detalle({ c, raw, movimientos, correo, ahora, solicitud, onEnviar, supervisores }) {
   const e = POR_ESTADO[c.sub_estado];
   const datos = datosRaw(raw);
   const transcurrido = c.fecha_caso ? (ahora - new Date(c.fecha_caso).getTime()) / 3600000 : null;
@@ -495,18 +555,14 @@ function Detalle({ c, raw, movimientos, correo, ahora, solicitud, onEnviar }) {
               </div>
             ) : (
               <>
-                {correo && correo.error && <div style={{ fontSize: 12, color: C.ladrillo, marginBottom: 6 }}>Falló: {correo.error}</div>}
+                {correo && correo.error && !esSinCeco(correo) && <div style={{ fontSize: 12, color: C.ladrillo, marginBottom: 6 }}>Falló: {correo.error}</div>}
                 {solicitud && solicitud.estado !== "enviado" && (
                   <div style={{ fontSize: 11.5, color: solicitud.estado === "error" ? C.ladrillo : C.suave, marginBottom: 6 }}>
                     Último intento desde el Brain ({fechaCorta(solicitud.procesado_en || solicitud.solicitado_en)}): {solicitud.resultado || solicitud.estado}
                   </div>
                 )}
-                {!correo || !correo.error ? <div style={{ fontSize: 12, color: C.tenue, marginBottom: 8 }}>Todavía no se envía.</div> : null}
-                <button onClick={(e) => { e.stopPropagation(); onEnviar(c); }}
-                  style={{ width: "100%", fontSize: 12.5, fontWeight: 700, padding: "8px 12px", borderRadius: 8, cursor: "pointer",
-                    border: `1px solid ${C.naranja}`, background: C.naranja, color: "#fff", fontFamily: "inherit" }}>
-                  Enviar correo a postventa
-                </button>
+                {!correo ? <div style={{ fontSize: 12, color: C.tenue, marginBottom: 8 }}>Todavía no se envía.</div> : null}
+                <BloqueEnvio c={c} correo={correo} onEnviar={onEnviar} supervisores={supervisores || {}} />
               </>
             )}
           </div>
@@ -519,7 +575,7 @@ function Detalle({ c, raw, movimientos, correo, ahora, solicitud, onEnviar }) {
 
 const GRID = "14px 92px 168px minmax(118px,1fr) 150px 126px 90px 78px";
 
-function Fila({ c, abierta, onAbrir, ahora, movimientos, correo, raw, fueraDePeriodo, solicitud, onEnviar }) {
+function Fila({ c, abierta, onAbrir, ahora, movimientos, correo, raw, fueraDePeriodo, solicitud, onEnviar, supervisores }) {
   const ultimoMov = (movimientos || []).reduce((mx, m) => (!mx || new Date(m.cambiado_en) > new Date(mx) ? m.cambiado_en : mx), null);
   const color = COLOR_ESTADO[c.sub_estado] || C.gris;
   const h = hace(ultimoMov, ahora);
@@ -552,7 +608,7 @@ function Fila({ c, abierta, onAbrir, ahora, movimientos, correo, raw, fueraDePer
         <EsferaCorreo correo={correo} solicitud={solicitud} />
         <span style={{ textAlign: "right", fontSize: 13, fontWeight: 600, color: C.texto }}>{dinero(c.monto)}</span>
       </div>
-      {abierta && <Detalle c={c} raw={raw} movimientos={movimientos} correo={correo} ahora={ahora} solicitud={solicitud} onEnviar={onEnviar} />}
+      {abierta && <Detalle c={c} raw={raw} movimientos={movimientos} correo={correo} ahora={ahora} solicitud={solicitud} onEnviar={onEnviar} supervisores={supervisores} />}
     </Fragment>
   );
 }
@@ -705,6 +761,7 @@ function InformeEnviados({ casos, correos }) {
 export default function ModuloPnrCL({ usuario }) {
   const [vista, setVista] = useState("casos");
   const [solicitudes, setSolicitudes] = useState({});
+  const [supervisores, setSupervisores] = useState({});
   const [casos, setCasos] = useState([]);
   const [historial, setHistorial] = useState({});
   const [correos, setCorreos] = useState({});
@@ -721,12 +778,14 @@ export default function ModuloPnrCL({ usuario }) {
 
   const cargar = useCallback(async () => {
     try {
-      const [filas, hist, avs, sols] = await Promise.all([
+      const [filas, hist, avs, sols, sups] = await Promise.all([
         api("pnr_casos_cl?select=case_id,tipo,fecha_caso,route_code,route_id,service_center,conductor,shipment_id,monto,moneda,estado,sub_estado,periodo,actualizado_en,creado_en&order=fecha_caso.desc&limit=5000"),
         api("pnr_historial_cl?select=id,case_id,sub_estado_desde,sub_estado_hacia,cambiado_en&order=cambiado_en.asc&limit=20000"),
         api("pnr_avisos_cl?canal=eq.correo&select=case_id,destino,enviado_en,error,asunto,ceco,supervisor,patente,origen&limit=10000"),
         api("pnr_solicitudes_cl?select=id,case_id,estado,resultado,solicitado_en,solicitado_por,procesado_en&order=solicitado_en.desc&limit=500"),
+        api("pnr_supervisor_cl?select=ceco,supervisor,lider"),
       ]);
+      setSupervisores(Object.fromEntries((sups || []).map((s) => [s.ceco, s])));
       const so = {};
       for (const s of sols || []) if (!so[s.case_id]) so[s.case_id] = s;   // la más reciente de cada caso
       setSolicitudes(so);
@@ -753,15 +812,17 @@ export default function ModuloPnrCL({ usuario }) {
     return () => clearInterval(t);
   }, [hayEnCola, cargar]);
 
-  const enviarCorreo = async (c) => {
+  const enviarCorreo = async (c, ceco, recordar) => {
     const quien = (usuario && (usuario.nombre || usuario.email)) || "Brain";
+    const sup = ceco && supervisores[ceco];
     const ok = window.confirm(`¿Enviar el correo del caso ${c.case_id} a postventa@bigticket.cl?\n\n` +
-      `${c.service_center || ""} · ${c.conductor || ""} · ${dinero(c.monto)}\n\n` +
-      "Se crea la tarjeta en Pipefy, igual que con el envío automático.");
+      `${c.service_center || ""} · ${c.conductor || ""} · ${dinero(c.monto)}\n` +
+      (ceco ? `CECO ${ceco}${sup ? " · supervisor " + sup.supervisor : ""}${recordar ? "\nSe recordará para la patente y el conductor." : ""}\n` : "CECO automático\n") +
+      "\nSe crea la tarjeta en Pipefy, igual que con el envío automático.");
     if (!ok) return;
     try {
       await api("pnr_solicitudes_cl", { method: "POST", headers: { Prefer: "return=minimal" },
-        body: JSON.stringify({ case_id: c.case_id, solicitado_por: quien }) });
+        body: JSON.stringify({ case_id: c.case_id, solicitado_por: quien, ceco: ceco || null, recordar: !!recordar }) });
       setSolicitudes((p) => ({ ...p, [c.case_id]: { case_id: c.case_id, estado: "pendiente", solicitado_en: new Date().toISOString(), solicitado_por: quien } }));
       cargar();
     } catch (e) {
@@ -799,6 +860,7 @@ export default function ModuloPnrCL({ usuario }) {
           if (filtro.tipo === "movidos_estado") return (historial[c.case_id] || []).some((m) => m.sub_estado_hacia === filtro.valor && diaCL(m.cambiado_en) === diaMov);
           if (filtro.tipo === "movidos") return (historial[c.case_id] || []).some((m) => diaCL(m.cambiado_en) === diaMov);
           if (filtro.tipo === "estado") return c.sub_estado === filtro.valor;
+          if (filtro.tipo === "sin_ceco") return esSinCeco(correos[c.case_id]) && !(solicitudes[c.case_id] && solicitudes[c.case_id].estado === "pendiente");
           if (filtro.valor === "responder") { const g = clasificar(c); return g === "responder" || g === "penalidad"; }
           return clasificar(c) === filtro.valor;
         });
@@ -809,7 +871,9 @@ export default function ModuloPnrCL({ usuario }) {
       return new Date(c.fecha_caso).getTime() / 1000;   // más viejo = menos plazo = arriba
     };
     return base.slice().sort((a, b) => { const d = valor(a) - valor(b); return orden.dir === "asc" ? d : -d; });
-  }, [casos, paraLista, filtro, busqueda, buscando, orden, historial, diaMov, periodo]);
+  }, [casos, paraLista, filtro, busqueda, buscando, orden, historial, diaMov, periodo, correos, solicitudes]);
+
+  const nSinCeco = casos.filter((c) => esSinCeco(correos[c.case_id]) && !(solicitudes[c.case_id] && solicitudes[c.case_id].estado === "pendiente")).length;
 
   const ordenar = (campo) => setOrden((o) => (o.campo === campo ? { campo, dir: o.dir === "asc" ? "desc" : "asc" } : { campo, dir: "asc" }));
   const fijar = (f) => { setBusqueda(""); setFiltro(f); setAbiertas(new Set()); };
@@ -831,6 +895,7 @@ export default function ModuloPnrCL({ usuario }) {
     : filtro.tipo === "movidos_estado" ? `Pasaron a ${nombreEstado(filtro.valor)}`
     : filtro.tipo === "movidos" ? "Movidos del día"
     : filtro.tipo === "todos" ? "Todos"
+    : filtro.tipo === "sin_ceco" ? "Sin CECO: asignar y enviar"
     : filtro.valor === "responder" ? "Por responder y con penalidad"
     : (POR_CLAVE[filtro.valor] || {}).etiqueta || "Casos";
 
@@ -871,6 +936,21 @@ export default function ModuloPnrCL({ usuario }) {
       {error && (
         <div style={{ background: C.ladrilloTenue, border: `1px solid ${C.ladrillo}55`, color: C.ladrillo,
           borderRadius: 10, padding: "10px 14px", fontSize: 12.5, marginBottom: 12 }}>{error}</div>
+      )}
+
+      {nSinCeco > 0 && (
+        <div style={{ display: "flex", alignItems: "center", gap: 12, background: C.ladrilloTenue, border: `1px solid ${C.ladrillo}66`,
+          borderRadius: 10, padding: "10px 14px", marginBottom: 12, flexWrap: "wrap" }}>
+          <span style={{ width: 10, height: 10, borderRadius: 5, background: C.ladrillo }} />
+          <span style={{ fontSize: 13, color: C.ladrillo }}>
+            <strong>{nSinCeco} {nSinCeco === 1 ? "caso sin CECO" : "casos sin CECO"}</strong>: el sistema no pudo asignarlos y el correo no salió. Elige el CECO y envíalo.
+          </span>
+          <button onClick={() => { setVista("casos"); fijar({ tipo: "sin_ceco", valor: null }); }}
+            style={{ marginLeft: "auto", fontSize: 12.5, fontWeight: 700, padding: "6px 12px", borderRadius: 8, cursor: "pointer",
+              border: `1px solid ${C.ladrillo}`, background: C.ladrillo, color: "#fff", fontFamily: "inherit" }}>
+            Ver y asignar
+          </button>
+        </div>
       )}
 
       {vista === "enviados" && <InformeEnviados casos={casos} correos={correos} />}
@@ -963,7 +1043,7 @@ export default function ModuloPnrCL({ usuario }) {
               <Fila key={c.case_id} c={c} abierta={abiertas.has(c.case_id)} onAbrir={() => abrirFila(c)} ahora={ahora}
                 movimientos={historial[c.case_id]} correo={correos[c.case_id]} raw={raws[c.case_id]}
                 fueraDePeriodo={!!periodo && c.periodo !== periodo}
-                solicitud={solicitudes[c.case_id]} onEnviar={enviarCorreo} />
+                solicitud={solicitudes[c.case_id]} onEnviar={enviarCorreo} supervisores={supervisores} />
             ))}
           </div>
         </div>
