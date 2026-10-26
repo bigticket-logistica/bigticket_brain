@@ -13,6 +13,7 @@
 // generan correo a postventa y donde se trabaja.
 // ═══════════════════════════════════════════════════════════════════════════
 import { useState, useEffect, useMemo, useCallback, Fragment } from "react";
+import ModuloCanonCL from "./Canon";
 
 const CL_URL = "https://hmowsazntdjtsvdfgutn.supabase.co";
 const CL_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imhtb3dzYXpudGRqdHN2ZGZndXRuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQ5MTc4NzgsImV4cCI6MjEwMDQ5Mzg3OH0.xAJokU0eFhof--d8R4uCRBr2-CJLzC5re0w1IPRqQR8";
@@ -928,7 +929,7 @@ export default function ModuloPnrCL({ usuario }) {
       {/* Cabecera */}
       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
         <span style={{ fontSize: 18, fontWeight: 800, color: C.navy, letterSpacing: -.3 }}>Posventa</span>
-        {[["casos", "PNR"], ["enviados", "Correos enviados"]].map(([k, et]) => (
+        {[["casos", "PNR"], ["enviados", "Correos enviados"], ["canon", "Canon"]].map(([k, et]) => (
           <button key={k} onClick={() => setVista(k)}
             style={{ fontSize: 12, fontWeight: 700, borderRadius: 8, padding: "5px 12px", cursor: "pointer", fontFamily: "inherit",
               border: `1px solid ${C.navy}`, background: vista === k ? C.navy : "#fff", color: vista === k ? "#fff" : C.navy }}>
@@ -954,7 +955,7 @@ export default function ModuloPnrCL({ usuario }) {
           borderRadius: 10, padding: "10px 14px", fontSize: 12.5, marginBottom: 12 }}>{error}</div>
       )}
 
-      {nSinCeco > 0 && (
+      {nSinCeco > 0 && vista !== "canon" && (
         <div style={{ display: "flex", alignItems: "center", gap: 12, background: C.ladrilloTenue, border: `1px solid ${C.ladrillo}66`,
           borderRadius: 10, padding: "10px 14px", marginBottom: 12, flexWrap: "wrap" }}>
           <span style={{ width: 10, height: 10, borderRadius: 5, background: C.ladrillo }} />
@@ -970,6 +971,8 @@ export default function ModuloPnrCL({ usuario }) {
       )}
 
       {vista === "enviados" && <InformeEnviados casos={casos} correos={correos} />}
+
+      {vista === "canon" && <ModuloCanonCL />}
 
       {vista === "casos" && <>
       {/* Tarjetas: son el filtro */}
