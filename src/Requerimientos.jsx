@@ -82,7 +82,7 @@ export default function Requerimientos({ usuario, modo = "jefe", onCrearCampana 
   const nVencidos = (lista || []).filter((r) => abierto(r) && new Date(r.vence_en) < ahora).length;
 
   return (
-    <div>
+    <div style={{ maxWidth: 1180 }}>
       {modo === "jefe" && <Formulario centros={centros} por={por} onCreado={cargar} />}
 
       <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "4px 0 12px", flexWrap: "wrap" }}>
@@ -183,10 +183,10 @@ function Formulario({ centros, por, onCreado }) {
   };
 
   return (
-    <div style={{ background: "#fff", border: `1px solid ${BORDE}`, borderRadius: 12, padding: 18, marginBottom: 18 }}>
+    <div style={{ background: "#fff", border: `1px solid ${BORDE}`, borderRadius: 12, padding: 18, marginBottom: 18, maxWidth: 760 }}>
       <div style={{ fontSize: 15, fontWeight: 700, color: AZUL }}>Pedir transportistas a Referidos</div>
       <div style={{ fontSize: 12.5, color: GRIS, margin: "2px 0 14px" }}>Todos los campos son obligatorios. Referidos tiene 24 h para crear la campaña.</div>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 14 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "minmax(220px, 320px) minmax(140px, 170px) minmax(160px, 190px)", gap: 14, justifyContent: "start" }}>
         <label style={lbl}>Service Center
           <select style={INP} value={f.sc} onChange={(e) => setF({ ...f, sc: e.target.value })}>
             <option value="">Elige un SC</option>
@@ -205,7 +205,7 @@ function Formulario({ centros, por, onCreado }) {
 
       <div style={{ marginTop: 14, fontSize: 12, color: "#344054", fontWeight: 600 }}>Vehículos</div>
       {f.vehiculos.map((v, i) => (
-        <div key={i} style={{ display: "grid", gridTemplateColumns: "minmax(0,2fr) minmax(0,1fr) 40px", gap: 10, marginTop: 6 }}>
+        <div key={i} style={{ display: "grid", gridTemplateColumns: "minmax(220px, 320px) 120px 40px", gap: 10, marginTop: 6, justifyContent: "start" }}>
           {/* Lista de tipos conocidos; si no está, "Otro" deja escribirlo a mano. */}
           {v.otro ? (
             <div style={{ display: "flex", gap: 6 }}>
@@ -231,7 +231,7 @@ function Formulario({ centros, por, onCreado }) {
       <button onClick={() => setF((x) => ({ ...x, vehiculos: [...x.vehiculos, { tipo: "", cantidad: "" }] }))}
         style={{ background: "none", border: "none", color: AZUL, fontWeight: 600, fontSize: 13, cursor: "pointer", padding: "8px 0 0" }}>＋ Otro tipo de vehículo</button>
 
-      <label style={{ ...lbl, marginTop: 12 }}>Comentario
+      <label style={{ ...lbl, marginTop: 12, maxWidth: 700 }}>Comentario
         <textarea style={AREA} value={f.comentario} onChange={(e) => setF({ ...f, comentario: e.target.value })} placeholder="Turno, horario, zona, por qué se necesita…" />
       </label>
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 14 }}>
