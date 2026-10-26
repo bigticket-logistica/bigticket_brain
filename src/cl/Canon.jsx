@@ -117,6 +117,7 @@ function Dato({ etiqueta, valor }) {
 }
 
 function Detalle({ c }) {
+  const sup = c._sup ? `${c._sup}${c._sugerido ? " (sugerido por el CECO; en Pipefy todavía no está asignado)" : ""}` : null;
   return (
     <div style={{ padding: "12px 16px 14px 44px", background: C.grisTenue, borderTop: `1px solid ${C.borde}` }}>
       <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1.6fr) minmax(240px,1fr)", gap: 12 }}>
@@ -147,6 +148,8 @@ function Detalle({ c }) {
             <Dato etiqueta="Región" valor={c.region} />
             <Dato etiqueta="Comuna" valor={c.comuna} />
             <Dato etiqueta="Estado del pedido" valor={c.estado_pedido} />
+            <Dato etiqueta="CECO" valor={c.ceco} />
+            <Dato etiqueta="Supervisor" valor={sup} />
             <Dato etiqueta="Fase en Pipefy" valor={c.fase} />
             <Dato etiqueta="Fecha límite Pipefy" valor={c.fecha_limite} />
             <Dato etiqueta="Creado" valor={fechaCorta(c.creado_en)} />
@@ -186,7 +189,25 @@ export default function ModuloCanonCL() {
   useEffect(() => { cargar(); const t = setInterval(cargar, REFRESCO_MS); return () => clearInterval(t); }, [cargar]);
   useEffect(() => { const t = setInterval(() => setAhora(Date.now()), 60000); return () => clearInterval(t); }, []);
 
-  const conEstado = useMemo(() => casos.map((c) => ({ ...c, _estado: estadoDe(c) })), [casos]);
+  // Supervisor sugerido por CECO: el más frecuente entre los casos que ya
+  // tienen supervisor asignado en Pipefy. Se ajusta solo si cambia la asignación.
+  const supervisorPorCeco = useMemo(() => {
+    const cuenta = {};
+    for (const c of casos) {
+      if (!c.ceco || !c.supervisor) continue;
+      cuenta[c.ceco] = cuenta[c.ceco] || {};
+      cuenta[c.ceco][c.supervisor] = (cuenta[c.ceco][c.supervisor] || 0) + 1;
+    }
+    return Object.fromEntries(Object.entries(cuenta).map(([k, v]) => [k, Object.entries(v).sort((a, b) => b[1] - a[1])[0][0]]));
+  }, [casos]);
+
+  const conEstado = useMemo(() => casos.map((c) => {
+    const _estado = estadoDe(c);
+    // Solo se sugiere donde corresponde un supervisor: casos de entrega abiertos o respondidos.
+    const aplica = ["pendiente", "respondido"].includes(_estado);
+    const sugerido = !c.supervisor && aplica && c.ceco ? supervisorPorCeco[c.ceco] || null : null;
+    return { ...c, _estado, _sup: c.supervisor || sugerido, _sugerido: !!sugerido };
+  }), [casos, supervisorPorCeco]);
   const conteo = useMemo(() => {
     const t = Object.fromEntries(ORDEN_ESTADOS.map((k) => [k, 0]));
     for (const c of conEstado) t[c._estado]++;
@@ -194,7 +215,7 @@ export default function ModuloCanonCL() {
   }, [conEstado]);
 
   const cecos = [...new Set(conEstado.map((c) => c.ceco).filter(Boolean))].sort();
-  const supervisores = [...new Set(conEstado.map((c) => c.supervisor).filter(Boolean))].sort();
+  const supervisores = [...new Set(conEstado.map((c) => c._sup).filter(Boolean))].sort();
 
   const lista = useMemo(() => {
     const q = busqueda.trim().toLowerCase();
@@ -202,7 +223,7 @@ export default function ModuloCanonCL() {
       .filter((c) => estado === "todos" ? true : estado === "abiertos" ? !!ESTADOS[c._estado].reloj : c._estado === estado)
       .filter((c) => canal === "todos" || c.canal === canal)
       .filter((c) => ceco === "todos" || (ceco === "__sin" ? !c.ceco : c.ceco === ceco))
-      .filter((c) => supervisor === "todos" || (supervisor === "__sin" ? !c.supervisor : c.supervisor === supervisor))
+      .filter((c) => supervisor === "todos" || (supervisor === "__sin" ? !c._sup : c._sup === supervisor))
       .filter((c) => !q || [c.pedido, c.remitente, c.correo, c.titulo, c.texto, c.card_id].some((v) => String(v || "").toLowerCase().includes(q)))
       .sort((a, b) => {
         const ra = ESTADOS[a._estado].reloj ? 0 : 1, rb = ESTADOS[b._estado].reloj ? 0 : 1;
@@ -216,9 +237,10 @@ export default function ModuloCanonCL() {
     const m = {};
     for (const c of conEstado) {
       if (!ESTADOS[c._estado].reloj) continue;
-      const k = c.supervisor || "Sin supervisor";
-      m[k] = m[k] || { abiertos: 0, vencidos: 0 };
+      const k = c._sup || "Sin supervisor";
+      m[k] = m[k] || { abiertos: 0, vencidos: 0, sugeridos: 0 };
       m[k].abiertos++;
+      if (c._sugerido) m[k].sugeridos++;
       if (horasSinDomingo(c.creado_en, ahora) >= SLA_H) m[k].vencidos++;
     }
     return Object.entries(m).sort((a, b) => b[1].vencidos - a[1].vencidos || b[1].abiertos - a[1].abiertos);
@@ -268,6 +290,7 @@ export default function ModuloCanonCL() {
                     background: activo ? C.navyTenue : "#fff", color: C.texto }}>
                   <strong>{s}</strong> {v.abiertos}
                   {v.vencidos > 0 && <span style={{ color: C.ladrillo, fontWeight: 700 }}> · {v.vencidos} vencidos</span>}
+                  {v.sugeridos > 0 && <span style={{ color: C.naranja }}> · {v.sugeridos} sin asignar en Pipefy</span>}
                 </span>
               );
             })}
@@ -338,7 +361,10 @@ export default function ModuloCanonCL() {
                       </span>
                     </span>
                     <span style={{ fontSize: 12, fontWeight: 600, color: c.ceco ? C.texto : C.tenue }}>{c.ceco || "—"}</span>
-                    <span style={{ fontSize: 12, color: c.supervisor ? C.texto : C.tenue, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.supervisor || "—"}</span>
+                    <span style={{ minWidth: 0, lineHeight: 1.2 }} title={c._sugerido ? "Sugerido por el CECO: en Pipefy todavía no está asignado" : ""}>
+                      <span style={{ display: "block", fontSize: 12, color: c._sup ? C.texto : C.tenue, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c._sup || "—"}</span>
+                      {c._sugerido && <span style={{ display: "block", fontSize: 9.5, color: C.naranja, fontWeight: 700 }}>sugerido · sin asignar en Pipefy</span>}
+                    </span>
                     <span><Chip estado={c._estado} /></span>
                     <Plazo c={c} ahora={ahora} />
                   </div>
