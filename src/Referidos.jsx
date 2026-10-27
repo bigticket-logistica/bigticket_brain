@@ -60,7 +60,8 @@ export default function ModuloReferidos({ usuario }) {
   const [propuestas, setPropuestas] = useState([]);
   const [canales, setCanales] = useState([]);   // fuentes de Bigticket sin referidor (camioneta, Facebook)
   const [reqAbiertos, setReqAbiertos] = useState(0);
-  const [eliminados, setEliminados] = useState([]);   // referidos y referidores eliminados desde el Brain (ref_eliminados)   // requerimientos del jefe de operaciones sin atender
+  const [eliminados, setEliminados] = useState([]);
+  const [anfitriones, setAnfitriones] = useState([]);   // referidores con "¿por dónde te enteraste?" (vw_ref_brain_anfitriones)   // referidos y referidores eliminados desde el Brain (ref_eliminados)   // requerimientos del jefe de operaciones sin atender
   const [campana, setCampana] = useState(null);        // requerimiento que se está convirtiendo en campaña
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState("");
@@ -76,8 +77,11 @@ export default function ModuloReferidos({ usuario }) {
       sb.from("ref_propuestas").select("*"),
       sb.from("ref_canales").select("*").order("creado_at"),
     ]);
-    const el = await sb.from("ref_eliminados").select("*");
-    setEliminados(el.data || []);
+    const [el, an] = await Promise.all([
+      sb.from("ref_eliminados").select("*"),
+      sb.from("vw_ref_brain_anfitriones").select("*"),
+    ]);
+    setEliminados(el.data || []); setAnfitriones(an.data || []);
     const rq = await sb.from("ref_requerimientos").select("id", { count: "exact", head: true }).in("estado", ["pendiente", "en_proceso"]);
     setReqAbiertos(rq.count || 0);
     // Si ref_canales no se puede leer, la pestaña sigue funcionando sin las filas de canal.
@@ -102,7 +106,7 @@ export default function ModuloReferidos({ usuario }) {
     if (error) { alert("No se pudo eliminar: " + error.message); return false; }
     cargar(); return true;
   };
-  const TABS = [["bonos", "Bonos", porValidar], ["referidos", "Referidos", referidosVivos.length], ["referidores", "Referidores", referidoresVivos.length + canales.length], ["oportunidades", "Oportunidades", vacantes], ["requerimientos", "Requerimientos", reqAbiertos]];
+  const TABS = [["bonos", "Bonos", porValidar], ["referidos", "Referidos", referidosVivos.length], ["referidores", "Referidores", referidoresVivos.length + canales.length], ["anfitriones", "Anfitriones", null], ["oportunidades", "Oportunidades", vacantes], ["requerimientos", "Requerimientos", reqAbiertos]];
 
   return (
     <div className="pg">
@@ -121,6 +125,7 @@ export default function ModuloReferidos({ usuario }) {
         <>
           {tab === "bonos" && <Bonos bonos={bonos} usuario={usuario} onCambio={cargar} />}
           {tab === "referidos" && <Referidos referidos={referidos} canales={canales} eliminados={elimReferidos} onEliminar={(id, m) => eliminar("referido", id, m)} />}
+          {tab === "anfitriones" && <Anfitriones lista={anfitriones.filter((a) => !elimReferidores.has(String(a.id)))} />}
           {tab === "referidores" && <Referidores referidores={referidores} canales={canales} referidos={referidosVivos} eliminados={elimReferidores} onEliminar={(id, m) => eliminar("referidor", id, m)} />}
           {tab === "oportunidades" && <Oportunidades lista={oportunidades} centros={centros} propuestas={propuestas} usuario={usuario} onCambio={cargar}
             campana={campana} onCampanaLista={() => { setCampana(null); setTab("requerimientos"); }} onCampanaCancelar={() => setCampana(null)} />}
@@ -271,6 +276,66 @@ function Referidos({ referidos, canales = [], eliminados = new Map(), onEliminar
 }
 
 // ── Referidores ─────────────────────────────────────────────────────────────
+// ── Anfitriones: por dónde se enteró cada referidor de la campaña ──────────
+// Cada referidor puede marcar varias fuentes; cuenta en cada una que marcó.
+// Los inscritos antes de que existiera la pregunta quedan en "Sin dato".
+const FUENTES_REF = [
+  ["facebook", "Facebook", "📘"], ["whatsapp", "WhatsApp", "💬"], ["amigo", "Un amigo", "🤝"],
+  ["supervisor", "Supervisor BigTicket", "🦺"], ["otro", "Otro", "✳️"], ["sin_dato", "Sin dato", "—"],
+];
+
+function Anfitriones({ lista }) {
+  const [abierta, setAbierta] = useState(null);
+  const grupos = FUENTES_REF.map(([k, t, ico]) => {
+    const refs = lista.filter((a) => (k === "sin_dato" ? !(a.fuentes || []).length : (a.fuentes || []).includes(k)))
+      .sort((x, y) => Number(y.n_referidos) - Number(x.n_referidos));
+    return { k, t, ico, refs, referidos: refs.reduce((n, a) => n + Number(a.n_referidos || 0), 0) };
+  });
+  const totalRefs = lista.length || 1;
+  return (
+    <>
+      <div style={{ fontSize: 13, color: GRIS, marginBottom: 12 }}>
+        Por dónde se enteraron los referidores de la campaña. Un referidor que marcó varias fuentes cuenta en cada una.
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 10, marginBottom: 16 }}>
+        {grupos.map((g) => (
+          <button key={g.k} onClick={() => setAbierta(abierta === g.k ? null : g.k)}
+            style={{ textAlign: "left", background: abierta === g.k ? "#eef2f8" : "#fff", border: `1px solid ${abierta === g.k ? AZUL : BORDE}`,
+              borderRadius: 12, padding: 14, cursor: "pointer", opacity: g.refs.length ? 1 : 0.6 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: AZUL }}>{g.ico} {g.t}</div>
+            <div style={{ display: "flex", gap: 18, marginTop: 8 }}>
+              <div><div style={{ fontSize: 24, fontWeight: 800, color: AZUL }}>{g.refs.length}</div><div style={{ fontSize: 11, color: GRIS }}>referidores · {Math.round((g.refs.length * 100) / totalRefs)}%</div></div>
+              <div><div style={{ fontSize: 24, fontWeight: 800, color: NARANJA }}>{g.referidos}</div><div style={{ fontSize: 11, color: GRIS }}>referidos</div></div>
+            </div>
+          </button>
+        ))}
+      </div>
+      {abierta && (() => {
+        const g = grupos.find((x) => x.k === abierta);
+        return g.refs.length === 0 ? <div className="empty">Ningún referidor llegó por {g.t}.</div> : (
+          <div className="form-card" style={{ padding: 0, overflowX: "auto" }}>
+            <table style={tabla}>
+              <thead><tr>{["Referidor", "Código", "Inscrito", abierta === "otro" ? "¿Por dónde?" : "También marcó", "Referidos"].map((h) => <th key={h} style={th}>{h}</th>)}</tr></thead>
+              <tbody>
+                {g.refs.map((a) => (
+                  <tr key={a.id} style={{ borderTop: `0.5px solid ${BORDE}` }}>
+                    <td style={td}><b>{a.nombre}</b></td>
+                    <td style={{ ...td, fontWeight: 700 }}>{a.codigo}</td>
+                    <td style={td}>{fecha(a.creado_at)}</td>
+                    <td style={td}>{abierta === "otro" ? (a.otro || "—")
+                      : (a.fuentes || []).filter((f) => f !== abierta).map((f) => (FUENTES_REF.find((x) => x[0] === f) || [f, f])[1]).join(", ") || "—"}</td>
+                    <td style={{ ...td, fontWeight: 700, color: Number(a.n_referidos) ? NARANJA : GRIS }}>{a.n_referidos}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        );
+      })()}
+    </>
+  );
+}
+
 // ── Eliminar referidos y referidores (quedan en ref_eliminados con su motivo) ──
 function BotonEliminados({ ver, setVer, n }) {
   return (
