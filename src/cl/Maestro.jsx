@@ -503,6 +503,19 @@ function ModuloMaestroCL({ usuario } = {}) {
   };
   useEffect(() => { if (tab === "tarifario") cargarTarifario(); }, [tab]);
 
+  // Traduce los rechazos de la base (reglas de la tabla tarifas) a algo que se entienda
+  const errorTarifa = (e) => {
+    const m = String((e && e.message) || e || "");
+    if (m.includes("tarifas_piso_chk"))
+      return "Tarifa PISO: faltan las entregas que cubre el piso o el $ por entrega adicional (0 si es monto fijo).";
+    if (m.includes("tarifas_servicio_chk")) return "El servicio elegido no es válido para la tabla de tarifas.";
+    if (m.includes("tarifas_tipo_chk")) return "El tipo de pago elegido no es válido (GUIAS, ARRIENDO o PISO).";
+    if (m.includes("23505") || m.toLowerCase().includes("duplicate key"))
+      return "Ya existe otra tarifa con la misma llave (servicio, CECOS, segmentación, tipo, detalle y vehículo) " +
+             "en esa vigencia. Revisa la otra fila o ajusta las fechas.";
+    return m;
+  };
+
   const guardarTarifa = async (id, campos) => {
     setTarifaGuardando(id);
     try {
@@ -514,7 +527,7 @@ function ModuloMaestroCL({ usuario } = {}) {
       setTarifaEdit(e => { const x = { ...e }; delete x[id]; return x; });
       await cargarTarifario();
       setTarifaMsg("Tarifa guardada"); setTimeout(() => setTarifaMsg(""), 3000);
-    } catch (e) { setError(e.message); }
+    } catch (e) { setError(errorTarifa(e)); }
     finally { setTarifaGuardando(null); }
   };
 
@@ -575,7 +588,7 @@ function ModuloMaestroCL({ usuario } = {}) {
       setTarifaNueva(null);
       await cargarTarifario();
       setTarifaMsg("Tarifa creada"); setTimeout(() => setTarifaMsg(""), 3000);
-    } catch (e) { setError(e.message); }
+    } catch (e) { setError(errorTarifa(e)); }
     finally { setTarifaGuardando(null); }
   };
 
@@ -2191,6 +2204,48 @@ function ModuloMaestroCL({ usuario } = {}) {
                 "$" + Number(v).toLocaleString("es-CL", { maximumFractionDigits: 2 });
               // ── Filtros por columna ──
               const editada = (t) => t.actualizado_por === "brain";   // editada o creada fila por fila en el Brain
+              // ── edición completa de una fila ──
+              const aTexto = (v) => v == null ? "" : String(v);
+              const tarifaAEdicion = (t) => ({
+                servicio: t.servicio, cecos_admin: aTexto(t.cecos_admin), segmentacion: aTexto(t.segmentacion),
+                tipo_pago: t.tipo_pago, detalle: aTexto(t.detalle), tipo_vehiculo: t.tipo_vehiculo,
+                tarifa_oficial: aTexto(t.tarifa_oficial), tarifa_contingencia: aTexto(t.tarifa_contingencia),
+                contingencia_activa: !!t.contingencia_activa,
+                cobrar_oficial: aTexto(t.cobrar_oficial), cobrar_contingencia: aTexto(t.cobrar_contingencia),
+                entregas_base: aTexto(t.entregas_base), tarifa_adicional: aTexto(t.tarifa_adicional),
+                vigente_desde: t.vigente_desde, vigente_hasta: t.vigente_hasta, activa: !!t.activa });
+              const normLlave = (v) => (v === "" || v == null) ? null : String(v).trim();
+              const guardarEdicion = (t, ed) => {
+                const num = (v) => (v === "" || v == null) ? null : Number(v);
+                const esPiso = ed.tipo_pago === "PISO";
+                if (ed.tarifa_oficial === "" || ed.tarifa_oficial == null) { setError("Falta el monto oficial."); return; }
+                if (esPiso && (ed.entregas_base === "" || ed.tarifa_adicional === "")) {
+                  setError("Tarifa PISO: indica cuántas entregas cubre el piso y el $ por cada entrega adicional " +
+                           "(si es un monto fijo, pon 0 en ambos)."); return;
+                }
+                const datos = {
+                  servicio: ed.servicio, cecos_admin: normLlave(ed.cecos_admin), segmentacion: normLlave(ed.segmentacion),
+                  tipo_pago: ed.tipo_pago, detalle: normLlave(ed.detalle), tipo_vehiculo: ed.tipo_vehiculo,
+                  tarifa_oficial: Number(ed.tarifa_oficial), tarifa_contingencia: num(ed.tarifa_contingencia),
+                  contingencia_activa: !!ed.contingencia_activa,
+                  cobrar_oficial: num(ed.cobrar_oficial), cobrar_contingencia: num(ed.cobrar_contingencia),
+                  entregas_base: esPiso ? Math.round(Number(ed.entregas_base)) : null,
+                  tarifa_adicional: esPiso ? Number(ed.tarifa_adicional) : null,
+                  vigente_desde: ed.vigente_desde || t.vigente_desde, vigente_hasta: ed.vigente_hasta || null,
+                  activa: !!ed.activa };
+                const NOMBRES = { servicio: "servicio", cecos_admin: "CECOS", segmentacion: "segmentación",
+                                  tipo_pago: "tipo de pago", detalle: "detalle", tipo_vehiculo: "vehículo" };
+                const cambia = Object.keys(NOMBRES).filter(k => normLlave(datos[k]) !== normLlave(t[k]));
+                if (cambia.length && !window.confirm(
+                  `Vas a cambiar ${cambia.map(k => NOMBRES[k]).join(", ")} de esta tarifa.\n\n` +
+                  `El cambio rige para TODOS los días de su vigencia (${vigDe(t)}): el pago de esos días se ` +
+                  `recalcula con la nueva llave.\n\nSi lo que buscas es un cambio desde una fecha en adelante, ` +
+                  `cancela, cierra la vigencia de esta fila y crea una tarifa nueva.\n\n¿Continuar?`)) return;
+                guardarTarifa(t.id, datos);
+              };
+              const setEd = (id, campo, valor) =>
+                setTarifaEdit(x => ({ ...x, [id]: { ...x[id], [campo]: valor } }));
+              const selE = { fontSize: 11, padding: "3px 4px", maxWidth: 140 };
               const pagaDe = (t) => t.contingencia_activa ? "CONTINGENCIA" : "OFICIAL";
               const cobrarDe = (t) => t.contingencia_activa ? t.cobrar_contingencia : t.cobrar_oficial;
               const vigDe = (t) => `${t.vigente_desde || "—"} → ${t.vigente_hasta || "∞"}`;
@@ -2426,26 +2481,79 @@ function ModuloMaestroCL({ usuario } = {}) {
                             return (
                               <tr key={t.id} style={{ ...(!t.activa ? { opacity: 0.5 } : {}),
                                                       ...(editada(t) ? { background: "#ecfdf3" } : {}) }}>
-                                <td>{t.servicio === "MELI ONE"
+                                <td>{ed ? (
+                                      <select className="mj-input" style={selE} value={ed.servicio}
+                                              onChange={e => setEd(t.id, "servicio", e.target.value)}>
+                                        {SERVICIOS_TARIFA.map(v => <option key={v} value={v}>{v}</option>)}
+                                      </select>
+                                    ) : t.servicio === "MELI ONE"
                                       ? <Etiqueta texto="MELI ONE" color="#5b21b6" fondo="#ede9fe" />
                                       : <span style={{ fontSize: 12, fontWeight: 600 }}>{t.servicio}</span>}</td>
-                                <td style={{ fontSize: 12 }}>{t.cecos_admin || <span style={{ color: "#94a3b8" }}>todos</span>}</td>
-                                <td style={{ fontSize: 12 }}>{t.segmentacion || "—"}</td>
-                                <td style={{ fontSize: 11.5 }}>{t.tipo_pago}{t.detalle ? ` · ${t.detalle}` : ""}
-                                    {t.tipo_pago === "PISO" &&
-                                      <span style={{ color: "#94a3b8" }} title={`cubre ${t.entregas_base} entregas · adicional ${$m(t.tarifa_adicional)}`}> ⓘ</span>}</td>
-                                <td style={{ fontSize: 11.5 }}>{t.tipo_vehiculo === "ELECTRICA"
+                                <td style={{ fontSize: 12 }}>{ed ? (
+                                      <select className="mj-input" style={selE} value={ed.cecos_admin}
+                                              onChange={e => setEd(t.id, "cecos_admin", e.target.value)}>
+                                        <option value="">— todos —</option>
+                                        {[...new Set([...adminCat, ed.cecos_admin].filter(Boolean))].map(a =>
+                                          <option key={a} value={a}>{a}</option>)}
+                                      </select>
+                                    ) : (t.cecos_admin || <span style={{ color: "#94a3b8" }}>todos</span>)}</td>
+                                <td style={{ fontSize: 12 }}>{ed ? (
+                                      <select className="mj-input" style={selE} value={ed.segmentacion}
+                                              onChange={e => setEd(t.id, "segmentacion", e.target.value)}>
+                                        <option value="">— sin —</option>
+                                        {[...new Set([...segmentaciones.map(sg => sg.nombre), ed.segmentacion].filter(Boolean))].map(sg =>
+                                          <option key={sg} value={sg}>{sg}</option>)}
+                                      </select>
+                                    ) : (t.segmentacion || "—")}</td>
+                                <td style={{ fontSize: 11.5 }}>{ed ? (
+                                      <span style={{ display: "inline-flex", flexDirection: "column", gap: 3 }}>
+                                        <select className="mj-input" style={selE} value={ed.tipo_pago}
+                                                onChange={e => setEd(t.id, "tipo_pago", e.target.value)}>
+                                          {TIPOS_PAGO.map(v => <option key={v} value={v}>{v}</option>)}
+                                        </select>
+                                        <input className="mj-input" style={{ ...selE, width: 110 }} value={ed.detalle}
+                                               placeholder="detalle (ej. 14 POS.)"
+                                               onChange={e => setEd(t.id, "detalle", e.target.value)} />
+                                        {ed.tipo_pago === "PISO" && (
+                                          <Fragment>
+                                            <input className="mj-input" type="number" step="1" min="0"
+                                                   style={{ ...selE, width: 110, borderColor: "#f59e0b" }}
+                                                   value={ed.entregas_base} placeholder="entregas base *"
+                                                   title="Entregas que cubre el piso (0 si es monto fijo)"
+                                                   onChange={e => setEd(t.id, "entregas_base", e.target.value)} />
+                                            <input className="mj-input" type="number" step="0.01" min="0"
+                                                   style={{ ...selE, width: 110, borderColor: "#f59e0b" }}
+                                                   value={ed.tarifa_adicional} placeholder="$ adicional *"
+                                                   title="$ por cada entrega sobre el piso (0 si es monto fijo)"
+                                                   onChange={e => setEd(t.id, "tarifa_adicional", e.target.value)} />
+                                          </Fragment>
+                                        )}
+                                      </span>
+                                    ) : (
+                                      <Fragment>
+                                        {t.tipo_pago}{t.detalle ? ` · ${t.detalle}` : ""}
+                                        {t.tipo_pago === "PISO" &&
+                                          <span style={{ color: "#94a3b8" }} title={`cubre ${t.entregas_base} entregas · adicional ${$m(t.tarifa_adicional)}`}> ⓘ</span>}
+                                      </Fragment>
+                                    )}</td>
+                                <td style={{ fontSize: 11.5 }}>{ed ? (
+                                      <select className="mj-input" style={selE} value={ed.tipo_vehiculo}
+                                              onChange={e => setEd(t.id, "tipo_vehiculo", e.target.value)}>
+                                        {[...new Set([...VEHICULOS_TARIFA, ed.tipo_vehiculo].filter(Boolean))].map(v =>
+                                          <option key={v} value={v}>{v}</option>)}
+                                      </select>
+                                    ) : t.tipo_vehiculo === "ELECTRICA"
                                       ? <Etiqueta texto="ELECTRICA" color="#0d8043" fondo="#e7f6ec" /> : t.tipo_vehiculo}</td>
                                 <td className="num">
                                   {ed ? <input className="mj-input" type="number" step="0.01"
                                           value={ed.tarifa_oficial}
-                                          onChange={e => setTarifaEdit(x => ({ ...x, [t.id]: { ...ed, tarifa_oficial: e.target.value } }))}
+                                          onChange={e => setEd(t.id, "tarifa_oficial", e.target.value)}
                                           style={inp} />
                                       : $m(t.tarifa_oficial)}</td>
                                 <td className="num">
                                   {ed ? <input className="mj-input" type="number" step="0.01"
                                           value={ed.tarifa_contingencia ?? ""}
-                                          onChange={e => setTarifaEdit(x => ({ ...x, [t.id]: { ...ed, tarifa_contingencia: e.target.value } }))}
+                                          onChange={e => setEd(t.id, "tarifa_contingencia", e.target.value)}
                                           style={inp} />
                                       : $m(t.tarifa_contingencia)}</td>
                                 <td>
@@ -2460,7 +2568,16 @@ function ModuloMaestroCL({ usuario } = {}) {
                                 </td>
                                 <td className="num" style={{ fontSize: 11.5, color: "#64748b" }}
                                     title={`oficial ${$m(t.cobrar_oficial)} · contingencia ${$m(t.cobrar_contingencia)}`}>
-                                  {$m(t.contingencia_activa ? t.cobrar_contingencia : t.cobrar_oficial)}
+                                  {ed ? (
+                                    <span style={{ display: "inline-flex", flexDirection: "column", gap: 3 }}>
+                                      <input className="mj-input" type="number" step="0.01" value={ed.cobrar_oficial}
+                                             placeholder="cobrar oficial" title="Cobrar (oficial)"
+                                             onChange={e => setEd(t.id, "cobrar_oficial", e.target.value)} style={inp} />
+                                      <input className="mj-input" type="number" step="0.01" value={ed.cobrar_contingencia}
+                                             placeholder="cobrar conting." title="Cobrar (contingencia)"
+                                             onChange={e => setEd(t.id, "cobrar_contingencia", e.target.value)} style={inp} />
+                                    </span>
+                                  ) : $m(t.contingencia_activa ? t.cobrar_contingencia : t.cobrar_oficial)}
                                 </td>
                                 <td style={{ fontSize: 11, color: "#64748b", whiteSpace: "nowrap" }}>
                                   {ed ? (
@@ -2489,15 +2606,7 @@ function ModuloMaestroCL({ usuario } = {}) {
                                       <button className="mj-btn" style={{ padding: "3px 10px", fontSize: 11,
                                           background: NAVY, color: "#fff", borderColor: NAVY }}
                                         disabled={tarifaGuardando === t.id}
-                                        onClick={() => guardarTarifa(t.id, {
-                                          tarifa_oficial: Number(ed.tarifa_oficial),
-                                          tarifa_contingencia: ed.tarifa_contingencia === "" || ed.tarifa_contingencia == null
-                                            ? null : Number(ed.tarifa_contingencia),
-                                          contingencia_activa: ed.contingencia_activa,
-                                          vigente_desde: ed.vigente_desde || t.vigente_desde,
-                                          vigente_hasta: ed.vigente_hasta || null,
-                                          activa: ed.activa,
-                                        })}>
+                                        onClick={() => guardarEdicion(t, ed)}>
                                         {tarifaGuardando === t.id ? "…" : "Guardar"}
                                       </button>
                                       <button className="mj-btn" style={{ padding: "3px 8px", fontSize: 11, marginLeft: 4 }}
@@ -2515,12 +2624,7 @@ function ModuloMaestroCL({ usuario } = {}) {
                                                      marginRight: 5, whiteSpace: "nowrap" }}>✓ editada</span>
                                     )}
                                     <button className="mj-btn" style={{ padding: "3px 10px", fontSize: 11 }}
-                                      onClick={() => setTarifaEdit(x => ({ ...x, [t.id]: {
-                                        tarifa_oficial: t.tarifa_oficial,
-                                        tarifa_contingencia: t.tarifa_contingencia,
-                                        contingencia_activa: t.contingencia_activa,
-                                        vigente_desde: t.vigente_desde, vigente_hasta: t.vigente_hasta,
-                                        activa: t.activa } }))}>
+                                      onClick={() => setTarifaEdit(x => ({ ...x, [t.id]: tarifaAEdicion(t) }))}>
                                       Editar
                                     </button>
                                     </Fragment>
