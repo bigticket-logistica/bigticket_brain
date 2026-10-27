@@ -255,7 +255,18 @@ function ModuloMaestroCL({ usuario } = {}) {
   const [servActivos, setServActivos] = useState([]);    // catálogo de servicios activos, para confirmar el tipo
   const [tipoEdit, setTipoEdit] = useState(null);        // viaje con el selector de tipo abierto
   const [tipoGuardando, setTipoGuardando] = useState(null);
-  const [certPat, setCertPat] = useState({});            // patente → empresa según Certronic (vw_cert_vehiculo_vigente)
+  const [certPat, setCertPat] = useState({});
+  // ── No salidas a ruta (migración 69) ──
+  const [nsFilas, setNsFilas] = useState([]);
+  const [nsMotivos, setNsMotivos] = useState([]);
+  const [nsSupervisores, setNsSupervisores] = useState([]);
+  const [nsFiltro, setNsFiltro] = useState({ supervisor: "", estado: "", busca: "" });
+  const [nsEdit, setNsEdit] = useState({});             // patente → { motivo, comentario }
+  const [nsGuardando, setNsGuardando] = useState(null);
+  const [nsMsg, setNsMsg] = useState("");
+  const [nsCargando, setNsCargando] = useState(false);
+  const [motPanel, setMotPanel] = useState(false);
+  const [motNuevo, setMotNuevo] = useState({ codigo: "", descripcion: "", genera_multa: false });            // patente → empresa según Certronic (vw_cert_vehiculo_vigente)
   // ── Tarifario ──
   const [tarifas, setTarifas] = useState([]);
   const [tarifaEdit, setTarifaEdit] = useState({});        // id -> fila en edición
@@ -483,6 +494,70 @@ function ModuloMaestroCL({ usuario } = {}) {
     if (fallos.length) setError("No se pudieron cargar: " + fallos.join(" | "));
   };
   useEffect(() => { if (tab === "pago") cargarPago(); }, [tab, fecha]);
+
+  // ── No salidas a ruta: la flota propia sin ruta del día, con su motivo ──
+  // El supervisor lo registrará desde su bitácora (flota_sin_ruta con su id); aquí el
+  // analista ve a todos los supervisores y puede registrar o corregir.
+  const cargarNoSalidas = async () => {
+    if (!fecha) return;
+    setNsCargando(true);
+    const fallos = [];
+    try {
+      const [filas, mot, sup] = await Promise.all([
+        api("rpc/flota_sin_ruta", { method: "POST", body: JSON.stringify({ p_fecha: fecha }) })
+          .catch(e => { fallos.push("flota_sin_ruta: " + e.message); return []; }),
+        apiSuave("motivos_no_salida?order=orden,codigo", [], fallos),
+        apiSuave("supervisores_cl?order=nombre", [], fallos),
+      ]);
+      setNsFilas(Array.isArray(filas) ? filas : []);
+      setNsMotivos(mot || []); setNsSupervisores(sup || []);
+      if (fallos.length) setError("No salidas: " + fallos.join(" | "));
+    } finally { setNsCargando(false); }
+  };
+  useEffect(() => { if (tab === "nosalidas") cargarNoSalidas(); }, [tab, fecha]);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  const registrarNoSalida = async (f, motivo, comentario) => {
+    if (!motivo) { setError("Elige el motivo de la no salida."); return; }
+    setNsGuardando(f.patente);
+    try {
+      await api("rpc/registrar_no_salida", { method: "POST", body: JSON.stringify({
+        p_fecha: fecha, p_patente: f.patente, p_motivo: motivo, p_usuario: analista,
+        p_rol: "analista", p_comentario: comentario || null }) });
+      setNsEdit(e => { const n = { ...e }; delete n[f.patente]; return n; });
+      setNsMsg(`${f.patente}: ${motivo}`); setTimeout(() => setNsMsg(""), 3000);
+      await cargarNoSalidas();
+    } catch (e) { setError(e.message); }
+    finally { setNsGuardando(null); }
+  };
+  const quitarNoSalida = async (f) => {
+    if (!window.confirm(`¿Quitar el registro de no salida de ${f.patente} (${f.motivo}) del ${fecha}?`)) return;
+    setNsGuardando(f.patente);
+    try {
+      await api(`no_salidas?fecha=eq.${fecha}&patente=eq.${encodeURIComponent(f.patente)}`, {
+        method: "DELETE", headers: { Prefer: "return=minimal" } });
+      await cargarNoSalidas();
+    } catch (e) { setError(e.message); }
+    finally { setNsGuardando(null); }
+  };
+  const agregarMotivo = async () => {
+    const codigo = motNuevo.codigo.trim().toUpperCase().replace(/\s+/g, " ");
+    if (codigo.length < 2) { setError("El motivo debe tener al menos 2 letras."); return; }
+    if (nsMotivos.some(m => m.codigo === codigo)) { setError(`El motivo ${codigo} ya existe.`); return; }
+    try {
+      await api("motivos_no_salida", { method: "POST", headers: { Prefer: "return=minimal" },
+        body: JSON.stringify({ codigo, descripcion: motNuevo.descripcion.trim() || null,
+          genera_multa: !!motNuevo.genera_multa, orden: Math.max(0, ...nsMotivos.map(m => m.orden || 0)) + 10 }) });
+      setMotNuevo({ codigo: "", descripcion: "", genera_multa: false });
+      await cargarNoSalidas();
+    } catch (e) { setError(e.message); }
+  };
+  const actualizarMotivo = async (codigo, campos) => {
+    try {
+      await api(`motivos_no_salida?codigo=eq.${encodeURIComponent(codigo)}`, {
+        method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify(campos) });
+      await cargarNoSalidas();
+    } catch (e) { setError(e.message); }
+  };
 
   // ── Tipo de ruta: el analista confirma o corrige (la bitácora lo hará el supervisor) ──
   const confirmarTipo = async (r, tipo) => {
@@ -1318,7 +1393,7 @@ function ModuloMaestroCL({ usuario } = {}) {
     { id: "jornada",    label: "Maestro Jornada", desc: "Una fila por viaje",        n: jornadaVista.length },
     { id: "devol",      label: "Devoluciones",    desc: "Detalle por folio",          n: devolVista.length },
     { id: "traspasos",  label: "Traspasos",       desc: "Origen → destino",           n: traspVista.length },
-    { id: "nosalidas",  label: "No Salidas a Ruta", desc: "Carga manual",             n: null },
+    { id: "nosalidas",  label: "No Salidas a Ruta", desc: "Flota propia sin ruta",     n: nsFilas.filter(x => !x.motivo && !x.salio).length || null },
     { id: "cecos",      label: "CECOS",           desc: "Catálogo y clasificación",   n: cecosCat.length || null },
     { id: "zonas",      label: "Zonas de Pago",   desc: "Geografía y segmentación",   n: zonas.length || null },
     { id: "pago",       label: "Maestro Pago",    desc: "Modelo de tarificación",     n: pago.length || null },
@@ -3177,20 +3252,172 @@ function ModuloMaestroCL({ usuario } = {}) {
               );
             })()}
 
-            {/* ── No Salidas a Ruta ── */}
-            {tab === "nosalidas" && (
-              <div style={{ background: "#fff", border: "1px dashed #dfe4ec", borderRadius: 10, padding: 22, maxWidth: 700 }}>
-                <div style={{ fontWeight: 800, color: NAVY, fontSize: 14 }}>No Salidas a Ruta</div>
-                <div style={{ fontSize: 13, color: "#64748b", marginTop: 8, lineHeight: 1.9 }}>
-                  MELI no informa las no salidas: un conductor o una patente que no salió simplemente no aparece
-                  en el monitoreo. Este dato lo tienen los supervisores, así que sigue siendo carga manual —
-                  con conductor o patente, el motivo y la fecha.
+            {/* ── No Salidas a Ruta (migración 69) ── */}
+            {tab === "nosalidas" && (() => {
+              const hoyCl = new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10);
+              const F = nsFiltro;
+              const vista = nsFilas.filter(x =>
+                (!F.supervisor || String(x.supervisor_id) === F.supervisor) &&
+                (!F.estado || (F.estado === "pendiente" ? !x.motivo : F.estado === "multa" ? x.genera_multa : !!x.motivo)) &&
+                (!F.busca || `${x.patente} ${x.cecos_operacion || ""} ${x.empresa || ""}`.toUpperCase().includes(F.busca.trim().toUpperCase())));
+              const nPend = nsFilas.filter(x => !x.motivo && !x.salio).length;
+              const nReg = nsFilas.filter(x => x.motivo).length;
+              const nMulta = nsFilas.filter(x => x.genera_multa).length;
+              const motActivos = nsMotivos.filter(m => m.activo);
+              return (
+              <Fragment>
+                <div style={{ background: "#fff", border: "1px solid #e6e9ef", borderRadius: 10, padding: "13px 16px", marginBottom: 12 }}>
+                  <div style={{ fontSize: 13, fontWeight: 800, color: NAVY }}>No salidas a ruta · flota propia · {fecha}</div>
+                  <div style={{ fontSize: 12, color: "#64748b", lineHeight: 1.7, marginTop: 3, maxWidth: 960 }}>
+                    Vehículos BigTicket (operación MELI, activos en Vehículos BT) que <strong>no tuvieron ninguna ruta</strong> este
+                    día. La flota opera tercerizada: el motivo define la consecuencia — <strong>FALTA TERCERO sostiene la multa</strong> a
+                    la empresa; el resto queda como registro operativo. El supervisor lo registrará desde su bitácora para sus
+                    patentes; aquí se ve a todos y el analista puede registrar o corregir.
+                    {fecha === hoyCl && <span style={{ color: AMBAR_ }}> · <strong>Día en curso:</strong> la lista es provisoria, un vehículo puede salir más tarde.</span>}
+                  </div>
+                  {nsMsg && <div style={{ fontSize: 12, color: VERDE_, marginTop: 6 }}>✓ {nsMsg}</div>}
                 </div>
-                <div style={{ fontSize: 12, color: "#94a3b8", marginTop: 12, fontStyle: "italic" }}>
-                  Pendiente: crear el mantenedor para registrarlas desde aquí.
+
+                <div style={{ display: "flex", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
+                  {[["Sin ruta", nsFilas.filter(x => !x.salio).length, NAVY, ""],
+                    ["Pendientes de motivo", nPend, AMBAR_, "pendiente"],
+                    ["Registradas", nReg, VERDE_, "registrada"],
+                    ["Con multa", nMulta, ROJO_, "multa"]].map(([t, v, c, k]) => (
+                    <div key={t} onClick={() => setNsFiltro(x => ({ ...x, estado: x.estado === k ? "" : k }))}
+                         style={{ background: F.estado === k && k ? "#f8fafc" : "#fff", cursor: k ? "pointer" : "default",
+                                  border: `1px solid ${F.estado === k && k ? c : "#e6e9ef"}`, borderRadius: 10, padding: "9px 14px", minWidth: 150 }}>
+                      <div style={{ fontSize: 10.5, color: "#64748b", fontWeight: 700, textTransform: "uppercase", letterSpacing: .4 }}>{t}</div>
+                      <div style={{ fontSize: 20, fontWeight: 800, color: c }}>{fmt(v)}</div>
+                    </div>
+                  ))}
                 </div>
-              </div>
-            )}
+
+                <div style={{ background: "#fff", border: "1px solid #e6e9ef", borderRadius: 10, padding: "11px 16px",
+                              marginBottom: 12, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                  <select className="mj-input" value={F.supervisor} onChange={e => setNsFiltro(x => ({ ...x, supervisor: e.target.value }))}>
+                    <option value="">Todos los supervisores</option>
+                    {nsSupervisores.filter(sp => sp.activo).map(sp => <option key={sp.id} value={String(sp.id)}>{sp.nombre}</option>)}
+                  </select>
+                  <input className="mj-input" placeholder="Buscar patente, operación o empresa" value={F.busca}
+                         onChange={e => setNsFiltro(x => ({ ...x, busca: e.target.value }))} style={{ minWidth: 240 }} />
+                  <span style={{ fontSize: 12, color: "#64748b" }}>Mostrando {fmt(vista.length)} de {fmt(nsFilas.length)}</span>
+                  <span style={{ flex: 1 }} />
+                  <button className="mj-btn" onClick={() => setMotPanel(v => !v)}>{motPanel ? "Cerrar motivos" : `⚙ Motivos (${motActivos.length})`}</button>
+                  <button className="mj-btn" onClick={cargarNoSalidas}>{nsCargando ? "Cargando…" : "↻ Actualizar"}</button>
+                </div>
+
+                {motPanel && (
+                  <div style={{ background: "#fff", border: "1px solid #e6e9ef", borderRadius: 10, padding: "12px 16px", marginBottom: 12 }}>
+                    <div style={{ fontSize: 13, fontWeight: 800, color: NAVY }}>Motivos de no salida</div>
+                    <div style={{ fontSize: 12, color: "#64748b", margin: "3px 0 10px" }}>
+                      Los motivos no se borran: se desactivan (los registros antiguos conservan el suyo).
+                    </div>
+                    <table className="mj-tabla" style={{ marginBottom: 10 }}>
+                      <thead><tr><th>Motivo</th><th>Descripción</th><th>Genera multa</th><th>Estado</th></tr></thead>
+                      <tbody>
+                        {nsMotivos.map(m => (
+                          <tr key={m.codigo} style={!m.activo ? { opacity: 0.55 } : {}}>
+                            <td style={{ fontWeight: 700 }}>{m.codigo}</td>
+                            <td><input className="mj-input" defaultValue={m.descripcion || ""} style={{ fontSize: 12, minWidth: 280 }}
+                                       onBlur={e => { const v = e.target.value.trim(); if (v !== (m.descripcion || "")) actualizarMotivo(m.codigo, { descripcion: v || null }); }} /></td>
+                            <td><input type="checkbox" checked={!!m.genera_multa} onChange={e => actualizarMotivo(m.codigo, { genera_multa: e.target.checked })} /></td>
+                            <td><label style={{ fontSize: 11.5, color: "#64748b" }}>
+                              <input type="checkbox" checked={!!m.activo} onChange={e => actualizarMotivo(m.codigo, { activo: e.target.checked })} /> {m.activo ? "activo" : "inactivo"}
+                            </label></td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    <div style={{ display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap" }}>
+                      <label style={{ fontSize: 10.5, color: "#64748b" }}>Motivo nuevo<br/>
+                        <input className="mj-input" value={motNuevo.codigo} placeholder="SIN CONDUCTOR"
+                               onChange={e => setMotNuevo(x => ({ ...x, codigo: e.target.value.toUpperCase() }))} style={{ width: 170 }} /></label>
+                      <label style={{ fontSize: 10.5, color: "#64748b" }}>Descripción<br/>
+                        <input className="mj-input" value={motNuevo.descripcion}
+                               onChange={e => setMotNuevo(x => ({ ...x, descripcion: e.target.value }))} style={{ width: 260 }} /></label>
+                      <label style={{ fontSize: 11.5, color: "#64748b", paddingBottom: 6 }}>
+                        <input type="checkbox" checked={motNuevo.genera_multa}
+                               onChange={e => setMotNuevo(x => ({ ...x, genera_multa: e.target.checked }))} /> genera multa</label>
+                      <button className="mj-btn" onClick={agregarMotivo} disabled={!motNuevo.codigo.trim()}
+                              style={{ background: NAVY, color: "#fff", borderColor: NAVY }}>➕ Agregar motivo</button>
+                    </div>
+                  </div>
+                )}
+
+                <div className="mj-scroll">
+                  <table className="mj-tabla">
+                    <thead><tr>
+                      <th>Patente</th><th>Operación</th><th>Supervisor</th><th>Empresa (Certronic)</th><th>Motivo</th><th></th>
+                    </tr></thead>
+                    <tbody>
+                      {vista.map(x => {
+                        const ed = nsEdit[x.patente];
+                        const editando = !x.motivo || ed;
+                        return (
+                          <tr key={x.patente}>
+                            <td style={{ fontWeight: 700 }}>{x.patente}
+                              {x.salio && <div style={{ fontSize: 10.5, color: AMBAR_ }} title="Tiene registro de no salida, pero aparece en una ruta de este día: revisar">⚠ salió después</div>}
+                            </td>
+                            <td>{x.cecos_operacion ? <Etiqueta texto={x.cecos_operacion} /> : "—"}</td>
+                            <td style={{ fontSize: 12 }}>{x.supervisor || <span style={{ color: AMBAR_ }}>⚠ sin supervisor</span>}</td>
+                            <td style={{ fontSize: 12 }}>{x.empresa || <Etiqueta texto="SIN REGISTRO" color={AMBAR_} fondo="#fdf6e3" />}
+                              {x.estado_certronic && x.estado_certronic !== "ACTIVA" && <span style={{ marginLeft: 5 }}><Etiqueta texto={x.estado_certronic} color="#b42318" fondo="#fdecea" /></span>}
+                            </td>
+                            <td>
+                              {editando ? (
+                                <span style={{ display: "inline-flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                                  <select className="mj-input" style={{ fontSize: 12, padding: "3px 4px" }}
+                                          value={(ed && ed.motivo) || ""}
+                                          onChange={e => setNsEdit(m => ({ ...m, [x.patente]: { ...(m[x.patente] || {}), motivo: e.target.value } }))}>
+                                    <option value="">— motivo —</option>
+                                    {motActivos.map(m => <option key={m.codigo} value={m.codigo}>{m.codigo}{m.genera_multa ? " · con multa" : ""}</option>)}
+                                  </select>
+                                  <input className="mj-input" placeholder="comentario (opcional)" style={{ fontSize: 12, width: 180 }}
+                                         value={(ed && ed.comentario) || ""}
+                                         onChange={e => setNsEdit(m => ({ ...m, [x.patente]: { ...(m[x.patente] || {}), comentario: e.target.value } }))} />
+                                </span>
+                              ) : (
+                                <span title={`${x.comentario ? x.comentario + " · " : ""}registrado por ${x.registrado_por} (${x.rol})`}>
+                                  <Etiqueta texto={x.motivo} color={x.genera_multa ? "#b42318" : NAVY} fondo={x.genera_multa ? "#fdecea" : "#eaf0f8"} />
+                                  {x.genera_multa && <span style={{ marginLeft: 5, fontSize: 11, color: "#b42318", fontWeight: 700 }}>multa</span>}
+                                  <span style={{ marginLeft: 6, fontSize: 11, color: "#94a3b8" }}>{x.registrado_por}</span>
+                                </span>
+                              )}
+                            </td>
+                            <td style={{ whiteSpace: "nowrap" }}>
+                              {editando ? (
+                                <Fragment>
+                                  <button className="mj-btn" disabled={nsGuardando === x.patente || !(ed && ed.motivo)}
+                                          style={{ padding: "3px 10px", fontSize: 11, background: NAVY, color: "#fff", borderColor: NAVY }}
+                                          onClick={() => registrarNoSalida(x, ed && ed.motivo, ed && ed.comentario)}>
+                                    {nsGuardando === x.patente ? "…" : "Registrar"}</button>
+                                  {x.motivo && <button className="mj-btn" style={{ padding: "3px 8px", fontSize: 11, marginLeft: 4 }}
+                                          onClick={() => setNsEdit(m => { const n = { ...m }; delete n[x.patente]; return n; })}>Cancelar</button>}
+                                </Fragment>
+                              ) : (
+                                <Fragment>
+                                  <button className="mj-btn" style={{ padding: "3px 10px", fontSize: 11 }}
+                                          onClick={() => setNsEdit(m => ({ ...m, [x.patente]: { motivo: x.motivo, comentario: x.comentario || "" } }))}>Cambiar</button>
+                                  <button className="mj-btn" style={{ padding: "3px 9px", fontSize: 11, marginLeft: 4, color: "#b42318", borderColor: "#f3c9c4" }}
+                                          disabled={nsGuardando === x.patente} onClick={() => quitarNoSalida(x)}>Quitar</button>
+                                </Fragment>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                      {!vista.length && (
+                        <tr><td colSpan={6} style={{ textAlign: "center", color: "#8a94a6", padding: 24 }}>
+                          {nsCargando ? "Cargando…" : nsFilas.length ? "Ningún vehículo con estos filtros."
+                            : "Toda la flota propia tuvo ruta este día (o falta la migración 69)."}
+                        </td></tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </Fragment>
+              );
+            })()}
           </Fragment>
         )}
       </div>
