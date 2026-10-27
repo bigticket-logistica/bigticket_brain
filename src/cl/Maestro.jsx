@@ -338,7 +338,7 @@ function ModuloMaestroCL({ usuario } = {}) {
           apiSuave(`ruta_zona_dia?fecha=eq.${fecha}&select=id_ruta,cecos_admin,segmentacion,zona_principal,origen_zona,alerta,cecos_fuente&limit=3000`, [], fallos),
           apiSuave("vw_vehiculos_bt?select=patente,supervisor,cecos_operacion&limit=3000", [], fallos),
           apiSuave("vw_cert_vehiculo_vigente?select=patente,tercero,rut_tercero,estado&limit=5000", [], fallos),
-          apiSuave(`vw_tipo_ruta_dia?fecha=eq.${fecha}&select=id_ruta,tipo_sugerido,tipo_confirmado,tipo_ruta,estado_tipo,no_planificada,nombre_ruta,line_haul,confirmado_por,rol,nota&limit=3000`, [], fallos),
+          apiSuave(`vw_tipo_ruta_dia?fecha=eq.${fecha}&select=id_ruta,tipo_sugerido,tipo_confirmado,tipo_ruta,estado_tipo,no_planificada,nombre_ruta,line_haul,con_ambulancia,confirmado_por,rol,nota&limit=3000`, [], fallos),
           apiSuave("servicios_tarifa?activo=eq.true&select=codigo,descripcion&order=orden,codigo", [], fallos),
         ]);
         if (fallos.length) setError("Algunas consultas no respondieron: " + fallos.join(" | "));
@@ -375,7 +375,7 @@ function ModuloMaestroCL({ usuario } = {}) {
         apiSuave(`ruta_zona_dia?fecha=eq.${fecha}&select=id_ruta,cecos_admin,segmentacion,zona_principal,origen_zona,alerta,cecos_fuente&limit=3000`, [], fallos),
         apiSuave("vw_vehiculos_bt?select=patente,supervisor,cecos_operacion&limit=3000", [], fallos),
         apiSuave("vw_cert_vehiculo_vigente?select=patente,tercero,rut_tercero,estado&limit=5000", [], fallos),
-        apiSuave(`vw_tipo_ruta_dia?fecha=eq.${fecha}&select=id_ruta,tipo_sugerido,tipo_confirmado,tipo_ruta,estado_tipo,no_planificada,nombre_ruta,line_haul,confirmado_por,rol,nota&limit=3000`, [], fallos),
+        apiSuave(`vw_tipo_ruta_dia?fecha=eq.${fecha}&select=id_ruta,tipo_sugerido,tipo_confirmado,tipo_ruta,estado_tipo,no_planificada,nombre_ruta,line_haul,con_ambulancia,confirmado_por,rol,nota&limit=3000`, [], fallos),
       ]);
       setError(fallos.length ? "Algunas consultas no respondieron: " + fallos.join(" | ") : "");
       setResumen(res[0] || null); setJornada(jor);
@@ -1163,7 +1163,8 @@ function ModuloMaestroCL({ usuario } = {}) {
                const base = r.tipo === "melione" ? "MELI ONE" : r.tipo === "last_mile" ? "UM" : null;
                return { tipo_ruta: t ? t.tipo_ruta : base, estado_tipo: t ? t.estado_tipo : (base ? "detectado" : null),
                         tipo_sugerido: t ? t.tipo_sugerido : base, tipo_por: t?.confirmado_por || null,
-                        tipo_rol: t?.rol || null, nombre_ruta: t?.nombre_ruta || null };
+                        tipo_rol: t?.rol || null, nombre_ruta: t?.nombre_ruta || null,
+                        no_planificada: !!t?.no_planificada, con_ambulancia: !!t?.con_ambulancia };
              })(),
              servicio_txt: r.tipo === "melione" ? "MELI ONE" : r.tipo === "last_mile" ? "ULTIMA MILLA" : (r.tipo_servicio || "") };
   });
@@ -1508,7 +1509,7 @@ function ModuloMaestroCL({ usuario } = {}) {
                             <span style={{ display: "inline-flex", flexDirection: "column", gap: 3 }}>
                               {r.estado_tipo === "por_confirmar" && (
                                 <span style={{ fontSize: 11, color: AMBAR_, fontWeight: 700 }}
-                                      title="La ruta viene sin nombre en MELI: no fue planificada. Confirma si fue Spot o Ambulancia.">
+                                      title="La ruta viene sin nombre en MELI (no planificada) y sin marca de ambulancia: probablemente Spot. Confírmalo.">
                                   «Ruta no planificada» → SPOT/Ambulancia</span>
                               )}
                               <span style={{ display: "inline-flex", gap: 4 }}>
@@ -1532,7 +1533,9 @@ function ModuloMaestroCL({ usuario } = {}) {
                             <span title={r.estado_tipo === "confirmado"
                                            ? `Confirmado por ${r.tipo_por || "—"} (${r.tipo_rol || "—"})`
                                              + (r.tipo_sugerido && r.tipo_sugerido !== r.tipo_ruta ? ` · el sistema sugería ${etiquetaTipo(r.tipo_sugerido).t}` : "")
-                                           : `Detectado por el sistema${r.nombre_ruta ? ` (ruta ${r.nombre_ruta})` : ""}`}>
+                                           : r.tipo_ruta === "AMBULANCIA" && r.no_planificada
+                                             ? "Detectado por MELI: ruta no planificada marcada como ambulancia («Ambulancia entre paradas»)"
+                                             : `Detectado por el sistema${r.nombre_ruta ? ` (ruta ${r.nombre_ruta})` : ""}`}>
                               <Etiqueta texto={etiquetaTipo(r.tipo_ruta).t} color={etiquetaTipo(r.tipo_ruta).c} fondo={etiquetaTipo(r.tipo_ruta).f} />
                               {r.estado_tipo === "confirmado" && <span style={{ color: "#0d8043", fontWeight: 800, marginLeft: 3 }}>✓</span>}
                             </span>
@@ -1542,6 +1545,7 @@ function ModuloMaestroCL({ usuario } = {}) {
                                     style={{ padding: "0 5px", fontSize: 10.5, marginLeft: 4, border: "none", background: "transparent", color: "#94a3b8" }}
                                     onClick={() => setTipoEdit(r.id_viaje)}>✎</button>
                           )}
+                          {r.con_ambulancia && <span style={{ marginLeft: 5 }} title="Ruta planificada que recibió apoyo de una ambulancia"><Etiqueta texto="+AMB" color="#b42318" fondo="#fdecea" /></span>}
                           {r.is_line_haul && <span style={{ marginLeft: 5 }} title="Line Haul: marca de MELI sobre la ruta"><Etiqueta texto="LH" color="#7a5b16" fondo="#fdf3d8" /></span>}
                           {r.entrega_y_retira && <span style={{ marginLeft: 5 }} title="Entrega y además pasa a retirar"><Etiqueta texto="E+R" color="#0e7490" fondo="#e0f2fe" /></span>}
                         </td>
@@ -3203,6 +3207,7 @@ const COLS_JORNADA = [
   { titulo: "SUPERVISOR", valor: r => r.supervisor || "" },
   { titulo: "TIPO_RUTA", valor: r => r.tipo_ruta ? etiquetaTipo(r.tipo_ruta).t : (r.estado_tipo === "por_confirmar" ? "NO PLANIFICADA (por confirmar)" : "") },
   { titulo: "TIPO_RUTA_ESTADO", valor: r => r.estado_tipo || "" },
+  { titulo: "CON_AMBULANCIA", valor: r => r.con_ambulancia ? "SI" : "" },
   { titulo: "SERVICIO_MELI", valor: r => r.servicio_txt || "" },
   { titulo: "SEGMENTACION", valor: r => r.segmentacion || "" },
   { titulo: "EMPRESA", valor: r => r.empresa || (r.patente ? "SIN REGISTRO" : "") },
