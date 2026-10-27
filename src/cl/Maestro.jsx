@@ -170,6 +170,19 @@ function PanelKpi({ kpi, onCerrar }) {
   );
 }
 
+// Patente normalizada: mayúsculas, solo letras y números (igual que la base).
+const normPatente = (p) => String(p || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+// Certronic por patente, con la misma regla que PNR: la fila ACTIVA si existe; si no, la primera.
+const indiceCertronic = (filas) => {
+  const m = {};
+  for (const x of filas || []) {
+    const k = normPatente(x.patente);
+    if (!k) continue;
+    if (!m[k] || (m[k].estado !== "ACTIVA" && x.estado === "ACTIVA")) m[k] = x;
+  }
+  return m;
+};
+
 function Etiqueta({ texto, color, fondo }) {
   return (
     <span style={{
@@ -217,6 +230,15 @@ function ModuloMaestroCL({ usuario } = {}) {
   const [vehMsg, setVehMsg] = useState("");
   const [vehNueva, setVehNueva] = useState({ patente: "", proyecto: "COMBUSTION LARGE VAN" });
   const [vehBuscar, setVehBuscar] = useState("");
+  // operación y supervisor por patente (migración 65)
+  const [vehOps, setVehOps] = useState({});              // patente → fila de vw_vehiculos_bt
+  const [supervisores, setSupervisores] = useState([]);
+  const [cecosNombres, setCecosNombres] = useState([]);
+  const [supPanel, setSupPanel] = useState(false);
+  const [supNuevo, setSupNuevo] = useState({ nombre: "", correo: "", telefono: "" });
+  const [supGuardando, setSupGuardando] = useState(null);
+  const [vehSup, setVehSup] = useState({});              // patente → supervisor, para el Maestro Jornada
+  const [certPat, setCertPat] = useState({});            // patente → empresa según Certronic (vw_cert_vehiculo_vigente)
   // ── Tarifario ──
   const [tarifas, setTarifas] = useState([]);
   const [tarifaEdit, setTarifaEdit] = useState({});        // id -> fila en edición
@@ -288,7 +310,7 @@ function ModuloMaestroCL({ usuario } = {}) {
     (async () => {
       try {
         const fallos = [];
-        const [res, jor, dev, tra, rec, cua, rr, zr] = await Promise.all([
+        const [res, jor, dev, tra, rec, cua, rr, zr, vs, ct] = await Promise.all([
           apiSuave(`vw_maestro_resumen_dia?fecha=eq.${fecha}`, [], fallos),
           apiSuave(`vw_maestro_jornada?fecha=eq.${fecha}&order=cargados.desc.nullslast&limit=3000`, [], fallos),
           apiSuave(`vw_maestro_devoluciones?fecha=eq.${fecha}&order=cecos.asc&limit=8000`, [], fallos),
@@ -297,11 +319,15 @@ function ModuloMaestroCL({ usuario } = {}) {
           apiSuave(`vw_rutas_a_cuadrar?fecha=eq.${fecha}&select=id_ruta,cecos,conductor,status,cargados,entregados,pendientes,motivos&limit=500`, [], fallos),
           apiSuave(`vw_estado_recuadre_ruta?fecha_operativa=eq.${fecha}&limit=500`, [], fallos),
           apiSuave(`ruta_zona_dia?fecha=eq.${fecha}&select=id_ruta,cecos_admin,segmentacion,zona_principal,origen_zona,alerta,cecos_fuente&limit=3000`, [], fallos),
+          apiSuave("vw_vehiculos_bt?select=patente,supervisor,cecos_operacion&limit=3000", [], fallos),
+          apiSuave("vw_cert_vehiculo_vigente?select=patente,tercero,rut_tercero,estado&limit=5000", [], fallos),
         ]);
         if (fallos.length) setError("Algunas consultas no respondieron: " + fallos.join(" | "));
         if (!vivo) return;
         setResumen(res[0] || null); setJornada(jor); setDevol(dev); setTrasp(tra);
         setZonaRuta(Object.fromEntries((zr || []).map(x => [String(x.id_ruta), x])));
+        setVehSup(Object.fromEntries((vs || []).map(x => [normPatente(x.patente), x])));
+        setCertPat(indiceCertronic(ct));
         setRecuadre(rec[0] || null); setACuadrar(cua);
         setRecRuta(Object.fromEntries((rr || []).map(x => [String(x.id_ruta), x])));
         setLeidoAt(new Date());
@@ -319,17 +345,21 @@ function ModuloMaestroCL({ usuario } = {}) {
     setRecargando(true);
     try {
       const fallos = [];
-      const [res, jor, rec, cua, rr, zr] = await Promise.all([
+      const [res, jor, rec, cua, rr, zr, vs, ct] = await Promise.all([
         apiSuave(`vw_maestro_resumen_dia?fecha=eq.${fecha}`, [], fallos),
         apiSuave(`vw_maestro_jornada?fecha=eq.${fecha}&order=cargados.desc.nullslast&limit=3000`, [], fallos),
         apiSuave(`vw_estado_recuadre?fecha_operativa=eq.${fecha}`, [], fallos),
         apiSuave(`vw_rutas_a_cuadrar?fecha=eq.${fecha}&select=id_ruta,cecos,conductor,status,cargados,entregados,pendientes,motivos&limit=500`, [], fallos),
         apiSuave(`vw_estado_recuadre_ruta?fecha_operativa=eq.${fecha}&limit=500`, [], fallos),
         apiSuave(`ruta_zona_dia?fecha=eq.${fecha}&select=id_ruta,cecos_admin,segmentacion,zona_principal,origen_zona,alerta,cecos_fuente&limit=3000`, [], fallos),
+        apiSuave("vw_vehiculos_bt?select=patente,supervisor,cecos_operacion&limit=3000", [], fallos),
+        apiSuave("vw_cert_vehiculo_vigente?select=patente,tercero,rut_tercero,estado&limit=5000", [], fallos),
       ]);
       setError(fallos.length ? "Algunas consultas no respondieron: " + fallos.join(" | ") : "");
       setResumen(res[0] || null); setJornada(jor);
       setZonaRuta(Object.fromEntries((zr || []).map(x => [String(x.id_ruta), x])));
+      setVehSup(Object.fromEntries((vs || []).map(x => [normPatente(x.patente), x])));
+      setCertPat(indiceCertronic(ct));
       setRecuadre(rec[0] || null); setACuadrar(cua);
       setRecRuta(Object.fromEntries((rr || []).map(x => [String(x.id_ruta), x])));
       setLeidoAt(new Date());
@@ -488,7 +518,17 @@ function ModuloMaestroCL({ usuario } = {}) {
 
   // ── Vehículos BT: la tabla auxiliar de certificación ──
   const cargarVehiculos = async () => {
-    setVehiculos(await apiSuave("tipo_vehiculo_bt?order=proyecto,patente&limit=500", []));
+    const [tv, vo, sp, ca] = await Promise.all([
+      apiSuave("tipo_vehiculo_bt?order=proyecto,patente&limit=500", []),
+      apiSuave("vw_vehiculos_bt?limit=3000", []),
+      apiSuave("supervisores_cl?order=nombre", []),
+      apiSuave("cecos_admin?select=nombre&order=nombre", []),
+    ]);
+    setVehiculos(tv);
+    setVehOps(Object.fromEntries((vo || []).filter(x => x.cecos_operacion || x.supervisor_id || x.marca || x.estado_pipefy)
+                                           .map(x => [x.patente, x])));
+    setSupervisores(sp || []);
+    setCecosNombres([...new Set((ca || []).map(x => x.nombre))]);
   };
   useEffect(() => { if (tab === "vehiculos") cargarVehiculos(); }, [tab]);
 
@@ -733,6 +773,108 @@ function ModuloMaestroCL({ usuario } = {}) {
     finally { setOvrGuardando(false); }
   };
 
+  // ── Operación y supervisor de una patente (vehiculo_operacion) ──
+  const guardarFilaVehiculo = async (patente, tarifa, op, ed) => {
+    setVehGuardando(patente);
+    try {
+      // clasificación de tarifa: alta si no existía, cambio si existía
+      if (ed.proyecto && !tarifa) {
+        await api("tipo_vehiculo_bt", { method: "POST", headers: { Prefer: "return=minimal" },
+          body: JSON.stringify({ patente, proyecto: ed.proyecto, activo: true,
+                                 nota: "Clasificada desde el Brain.", actualizado_por: "brain" }) });
+      } else if (tarifa && ed.proyecto && (ed.proyecto !== tarifa.proyecto || !!ed.activo !== !!tarifa.activo)) {
+        await api(`tipo_vehiculo_bt?patente=eq.${encodeURIComponent(patente)}`, {
+          method: "PATCH", headers: { Prefer: "return=minimal" },
+          body: JSON.stringify({ proyecto: ed.proyecto, activo: !!ed.activo,
+                                 actualizado_at: new Date().toISOString(), actualizado_por: "brain" }) });
+      }
+      // operación y supervisor
+      const cec = ed.cecos_operacion || null;
+      const sid = ed.supervisor_id ? Number(ed.supervisor_id) : null;
+      if (cec !== (op?.cecos_operacion || null) || sid !== (op?.supervisor_id || null)) {
+        await api("vehiculo_operacion?on_conflict=patente", { method: "POST",
+          headers: { Prefer: "return=minimal,resolution=merge-duplicates" },
+          body: JSON.stringify({ patente, cecos_operacion: cec, supervisor_id: sid,
+                                 actualizado_at: new Date().toISOString(), actualizado_por: analista }) });
+      }
+      setVehEdit(e => { const n = { ...e }; delete n[patente]; return n; });
+      await cargarVehiculos();
+      setVehMsg(`${patente} guardada`); setTimeout(() => setVehMsg(""), 3000);
+    } catch (e) { setError(e.message); }
+    finally { setVehGuardando(null); }
+  };
+
+  // ── Subir el informe de Pipefy "Vehículos Bigticket" (.xlsx) ──
+  // Se lee en el navegador (exceljs se carga solo en este momento) y se envía a
+  // cargar_vehiculos_pipefy, la misma función de la carga inicial (migración 65).
+  const subirPipefy = async (archivo) => {
+    if (!archivo) return;
+    setVehGuardando("__pipefy__"); setVehMsg("");
+    try {
+      const ExcelJS = (await import("exceljs")).default;
+      const libro = new ExcelJS.Workbook();
+      await libro.xlsx.load(await archivo.arrayBuffer());
+      const hoja = libro.worksheets[0];
+      if (!hoja) throw new Error("El archivo no tiene hojas.");
+      const enc = [];
+      hoja.getRow(1).eachCell({ includeEmpty: true }, (c, i) => { enc[i] = String(c.text || "").trim(); });
+      if (!enc.includes("Patente") || !enc.includes("Centro de Costo") || !enc.includes("Supervisor Encargado"))
+        throw new Error("No parece el informe de Pipefy: faltan las columnas Patente, Centro de Costo o Supervisor Encargado.");
+      const filas = [];
+      hoja.eachRow((fila, n) => {
+        if (n === 1) return;
+        const o = {};
+        fila.eachCell({ includeEmpty: true }, (c, i) => { if (enc[i]) o[enc[i]] = String(c.text ?? "").trim() || null; });
+        if (o["Patente"]) filas.push(o);
+      });
+      if (!filas.length) throw new Error("El informe no trae filas con patente.");
+      if (!window.confirm(`Se cargarán ${filas.length} filas del informe de Pipefy.\n\n` +
+            `La operación y el supervisor de cada patente se reemplazan por los del informe ` +
+            `(la clasificación de tarifa no se toca). Los supervisores que no existan se crean.\n\n¿Continuar?`)) return;
+      const r = await api("rpc/cargar_vehiculos_pipefy", { method: "POST",
+        body: JSON.stringify({ filas, p_usuario: analista }) });
+      await cargarVehiculos();
+      const desc = (r && r.descartadas) || [];
+      setVehMsg(`Pipefy: ${r.vehiculos_nuevos} patentes nuevas, ${r.vehiculos_actualizados} actualizadas, ` +
+                `${r.supervisores_nuevos} supervisores nuevos` +
+                (desc.length ? ` · omitidas ${desc.length} filas sin patente válida (${desc.join(", ")})` : ""));
+    } catch (e) { setError("Carga de Pipefy: " + e.message); }
+    finally { setVehGuardando(null); }
+  };
+
+  // ── Mantenedor de supervisores ──
+  const errorSup = (e) => {
+    const m = String((e && e.message) || e || "");
+    if (m.includes("supervisores_cl_nombre_uq") || m.includes("23505")) return "Ya existe un supervisor con ese nombre.";
+    if (m.includes("supervisores_cl_nombre_chk")) return "El nombre del supervisor debe tener al menos 3 letras.";
+    return m;
+  };
+  const agregarSupervisor = async () => {
+    const nombre = supNuevo.nombre.trim().replace(/\s+/g, " ");
+    if (nombre.length < 3) { setError("El nombre del supervisor debe tener al menos 3 letras."); return; }
+    if (supervisores.some(x => x.nombre.trim().toUpperCase() === nombre.toUpperCase())) {
+      setError(`Ya existe el supervisor ${nombre}.`); return; }
+    setSupGuardando("__nuevo__");
+    try {
+      await api("supervisores_cl", { method: "POST", headers: { Prefer: "return=minimal" },
+        body: JSON.stringify({ nombre, correo: supNuevo.correo.trim() || null,
+                               telefono: supNuevo.telefono.trim() || null, actualizado_por: analista }) });
+      setSupNuevo({ nombre: "", correo: "", telefono: "" });
+      await cargarVehiculos();
+      setVehMsg(`Supervisor ${nombre} agregado`); setTimeout(() => setVehMsg(""), 3000);
+    } catch (e) { setError(errorSup(e)); }
+    finally { setSupGuardando(null); }
+  };
+  const actualizarSupervisor = async (id, campos) => {
+    setSupGuardando(id);
+    try {
+      await api(`supervisores_cl?id=eq.${id}`, { method: "PATCH", headers: { Prefer: "return=minimal" },
+        body: JSON.stringify({ ...campos, actualizado_at: new Date().toISOString(), actualizado_por: analista }) });
+      await cargarVehiculos();
+    } catch (e) { setError(errorSup(e)); }
+    finally { setSupGuardando(null); }
+  };
+
   // Carga masiva de vehículos: "PATENTE, TIPO" por línea.
   const TIPOS_VEH = ["ELECTRICA", "BIG VAN", "COMBUSTION LARGE VAN", "COMBUSTION"];
   const cargarVehMasivo = async () => {
@@ -974,6 +1116,10 @@ function ModuloMaestroCL({ usuario } = {}) {
              segmentacion: z?.segmentacion || null, zona_pago: z?.zona_principal || null,
              alerta_zona: z?.alerta || null, origen_zona: z?.origen_zona || null,
              cecos_fuente: z?.cecos_fuente || null,
+             supervisor: vehSup[normPatente(r.patente)]?.supervisor || null,
+             empresa: certPat[normPatente(r.patente)]?.tercero || null,
+             empresa_rut: certPat[normPatente(r.patente)]?.rut_tercero || null,
+             empresa_estado: certPat[normPatente(r.patente)]?.estado || null,
              servicio_txt: r.tipo === "melione" ? "MELI ONE" : r.tipo === "last_mile" ? "ULTIMA MILLA" : (r.tipo_servicio || "") };
   });
   const jornadaVista = jornadaZ
@@ -982,7 +1128,7 @@ function ModuloMaestroCL({ usuario } = {}) {
     .filter(r => (!soloReparto || r.is_line_haul !== true))
     .filter(r => (tipoServicio === "todos" || r.tipo_servicio === tipoServicio))
     .filter(r => !cecos || (r.cecos_real || r.centro_meli) === cecos)
-    .filter(r => coincide(r.id_viaje, r.patente, r.conductor, r.cecos_real, r.centro_meli, r.segmentacion,
+    .filter(r => coincide(r.id_viaje, r.patente, r.conductor, r.cecos_real, r.centro_meli, r.segmentacion, r.supervisor, r.empresa,
                           r.comuna_primera_parada, r.comuna_ultima_parada, r.ciclo));
   const devolVista = devol
     .filter(r => !cecos || r.cecos === cecos)
@@ -1274,7 +1420,7 @@ function ModuloMaestroCL({ usuario } = {}) {
                 <table className="mj-tabla">
                   <thead>
                     <tr>
-                      <th>ID Viaje</th><th>CECOS</th><th>Servicio</th><th>Segmentación</th><th>Tercero</th><th>Patente</th><th>Conductor</th>
+                      <th>ID Viaje</th><th>CECOS</th><th>Supervisor</th><th>Servicio</th><th>Segmentación</th><th>Empresa</th><th>Patente</th><th>Conductor</th>
                       <th>Ayud.</th><th className="num">Paradas</th><th className="num">Cargados</th>
                       <th className="num">Entregados</th><th className="num">Devueltos</th><th className="num">Traspasos</th>
                       <th className="num">%</th>
@@ -1299,6 +1445,14 @@ function ModuloMaestroCL({ usuario } = {}) {
                             : <Etiqueta texto="sin CECOS" color={AMBAR_} fondo="#fdf6e3" />}
                           <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 2 }}>{r.centro_meli || ""}</div>
                         </td>
+                        <td style={{ fontSize: 11.5, maxWidth: 170 }}>
+                          {r.supervisor
+                            ? <span style={{ color: "#334155" }}>{r.supervisor}</span>
+                            : r.patente
+                              ? <span style={{ color: AMBAR_, whiteSpace: "nowrap" }}
+                                      title={`La patente ${r.patente} no tiene supervisor: asígnalo en Vehículos BT`}>⚠ Asignar en Vehículos BT</span>
+                              : <span style={{ color: "#cbd5e1" }}>—</span>}
+                        </td>
                         <td style={{ whiteSpace: "nowrap" }}>
                           {/* Tipo de servicio que informa MELI, más las banderas que lo acompañan.
                               El tipo y el Line Haul son dimensiones independientes: hay rutas
@@ -1321,7 +1475,21 @@ function ModuloMaestroCL({ usuario } = {}) {
                                   title="El motor de zonas marcó este viaje para revisión (pestaña Revisión zonas)">⚠</span>
                           )}
                         </td>
-                        <td style={{ color: "#475569" }}>{r.tercero || "—"}</td>
+                        <td style={{ fontSize: 11.5, maxWidth: 200 }}
+                            title={[r.empresa_rut && `RUT ${r.empresa_rut}`,
+                                    r.empresa_estado && `Certronic: ${r.empresa_estado}`,
+                                    r.tercero && `Tercero según MELI: ${r.tercero}`].filter(Boolean).join(" · ")}>
+                          {r.empresa
+                            ? <span style={{ color: "#334155" }}>{r.empresa}</span>
+                            : r.patente
+                              ? <Etiqueta texto="SIN REGISTRO" color={AMBAR_} fondo="#fdf6e3" />
+                              : <span style={{ color: "#cbd5e1" }}>—</span>}
+                          {r.empresa && r.empresa_estado && r.empresa_estado !== "ACTIVA" && (
+                            <div style={{ marginTop: 2 }}>
+                              <Etiqueta texto={r.empresa_estado} color="#b42318" fondo="#fdecea" />
+                            </div>
+                          )}
+                        </td>
                         <td style={{ fontWeight: 600 }}>{r.patente || "—"}</td>
                         <td style={{ color: "#334155", maxWidth: 190, overflow: "hidden", textOverflow: "ellipsis" }}>{r.conductor || "—"}</td>
                         <td>{r.con_ayudante ? <Etiqueta texto="Sí" color="#0d8043" fondo="#e7f6ec" /> : <span style={{ color: "#cbd5e1" }}>—</span>}</td>
@@ -1351,7 +1519,7 @@ function ModuloMaestroCL({ usuario } = {}) {
                       </tr>
                     ))}
                     {!jornadaVista.length && (
-                      <tr><td colSpan={21} style={{ padding: 20, color: "#8a94a6", textAlign: "center" }}>
+                      <tr><td colSpan={22} style={{ padding: 20, color: "#8a94a6", textAlign: "center" }}>
                         Ningún viaje coincide con los filtros. Prueba limpiando la búsqueda o el CECOS.
                       </td></tr>
                     )}
@@ -1464,7 +1632,7 @@ function ModuloMaestroCL({ usuario } = {}) {
                   <div style={{ fontSize: 12, color: "#64748b", lineHeight: 1.7, marginTop: 3, maxWidth: 900 }}>
                     Los códigos llegan solos desde el portal de MELI: cada CECOS que el maestro ve queda
                     registrado acá, pendiente de clasificar. Completa el <strong>nombre administrativo</strong> (el del
-                    tarifario, ej. ML_RM_1) y marca si es <strong>operación Bigticket</strong> — solo esos entran al motor
+                    tarifario, ej. ML_RM_SRM1) y marca si es <strong>operación Bigticket</strong> — solo esos entran al motor
                     de pago. La columna Carriers ayuda a decidir: si solo aparecen terceros ajenos, no es tuyo.
                   </div>
                   {cecosMsg && <div style={{ fontSize: 12, color: VERDE_, marginTop: 6 }}>✓ {cecosMsg}</div>}
@@ -1477,7 +1645,7 @@ function ModuloMaestroCL({ usuario } = {}) {
                     <div style={{ fontSize: 12, fontWeight: 800, color: NAVY, marginBottom: 4 }}>Carga masiva</div>
                     <textarea className="mj-input" rows={3} value={cecosMasivo}
                       onChange={e => setCecosMasivo(e.target.value)}
-                      placeholder={"Un código por línea. Opcional el nombre admin separado por coma:\nSRM1, ML_RM_1\nSBB2, ML_CAÑETE\nSPO1"}
+                      placeholder={"Un código por línea. Opcional el nombre admin separado por coma:\nSRM1, ML_RM_SRM1\nSBB2, ML_CAÑETE\nSPO1"}
                       style={{ width: "100%", fontFamily: "inherit", fontSize: 12, resize: "vertical" }} />
                   </div>
                   <div style={{ display: "flex", flexDirection: "column", justifyContent: "flex-end", gap: 6 }}>
@@ -2147,11 +2315,13 @@ function ModuloMaestroCL({ usuario } = {}) {
               <Fragment>
                 <div style={{ background: "#fff", border: "1px solid #e6e9ef", borderRadius: 10,
                               padding: "13px 16px", marginBottom: 12 }}>
-                  <div style={{ fontSize: 13, fontWeight: 800, color: NAVY }}>Clasificación BT por patente</div>
+                  <div style={{ fontSize: 13, fontWeight: 800, color: NAVY }}>Vehículos BT · clasificación, operación y supervisor</div>
                   <div style={{ fontSize: 12, color: "#64748b", lineHeight: 1.7, marginTop: 3, maxWidth: 900 }}>
                     Define el tipo de vehículo para la llave de tarifa. <strong>Regla oficial: toda patente
                     que no esté acá paga como COMBUSTION</strong> — una eléctrica nueva sin registrar se paga
                     mal en silencio, así que las altas de flota deben pasar por esta tabla. La mantiene certificación.
+                    Cada patente además tiene su <strong>operación (CECOS) y su supervisor</strong>, que se ven en el
+                    Maestro Jornada: se cargan subiendo el informe de Pipefy "Vehículos Bigticket" o editando la fila.
                   </div>
                   {vehMsg && <div style={{ fontSize: 12, color: VERDE_, marginTop: 6 }}>✓ {vehMsg}</div>}
                 </div>
@@ -2195,91 +2365,213 @@ function ModuloMaestroCL({ usuario } = {}) {
                           style={{ background: NAVY, color: "#fff", borderColor: NAVY, padding: "7px 14px" }}>
                     ➕ Agregar patente
                   </button>
+                  <label className="mj-btn" style={{ padding: "7px 14px", cursor: "pointer",
+                         opacity: vehGuardando === "__pipefy__" ? 0.6 : 1 }}
+                         title='Informe de Pipefy "Vehículos Bigticket" tal cual se descarga (.xlsx)'>
+                    {vehGuardando === "__pipefy__" ? "Leyendo informe…" : "⬆ Subir informe Pipefy (.xlsx)"}
+                    <input type="file" accept=".xlsx" style={{ display: "none" }}
+                           disabled={vehGuardando === "__pipefy__"}
+                           onChange={e => { const a = e.target.files && e.target.files[0]; e.target.value = ""; subirPipefy(a); }} />
+                  </label>
+                  <button className="mj-btn" onClick={() => setSupPanel(v => !v)} style={{ padding: "7px 14px" }}>
+                    {supPanel ? "Cerrar supervisores" : `👤 Supervisores (${supervisores.filter(x => x.activo).length})`}
+                  </button>
                   <span style={{ flex: 1 }} />
                   <label style={{ fontSize: 10.5, color: "#64748b" }}>Buscar<br/>
-                    <input className="mj-input" value={vehBuscar} placeholder="patente o tipo…"
+                    <input className="mj-input" value={vehBuscar} placeholder="patente, tipo, operación, supervisor…"
                            onChange={e => setVehBuscar(e.target.value)} style={{ width: 180 }} /></label>
                 </div>
 
-                {(() => { const q = vehBuscar.trim().toUpperCase();
-                          const n = q ? vehiculos.filter(v => `${v.patente} ${v.proyecto}`.toUpperCase().includes(q)).length : vehiculos.length;
-                          return <div style={{ fontSize: 12, color: "#64748b", margin: "0 2px 6px" }}>
-                                   Mostrando <strong>{fmt(n)}</strong> de {fmt(vehiculos.length)} patentes</div>; })()}
+                {supPanel && (
+                  <div style={{ background: "#fff", border: "1px solid #e6e9ef", borderRadius: 10,
+                                padding: "12px 16px", marginBottom: 12 }}>
+                    <div style={{ fontSize: 13, fontWeight: 800, color: NAVY }}>Supervisores</div>
+                    <div style={{ fontSize: 12, color: "#64748b", lineHeight: 1.6, margin: "3px 0 10px" }}>
+                      Cambiar un nombre se refleja en todos sus vehículos y en el Maestro. Un supervisor que deja
+                      la operación se desactiva (no se borra): sus vehículos conservan el historial.
+                    </div>
+                    {!supervisores.length ? (
+                      <div style={{ fontSize: 12, color: AMBAR_ }}>Todavía no hay supervisores (falta la migración 65 o la carga de Pipefy).</div>
+                    ) : (
+                      <table className="mj-tabla" style={{ marginBottom: 10 }}>
+                        <thead><tr><th>Nombre</th><th>Correo</th><th>Teléfono</th>
+                          <th className="num">Vehículos</th><th>Estado</th></tr></thead>
+                        <tbody>
+                          {supervisores.map(sp => (
+                            <tr key={sp.id} style={!sp.activo ? { opacity: 0.55 } : {}}>
+                              <td><input className="mj-input" defaultValue={sp.nombre} style={{ fontSize: 12, minWidth: 230 }}
+                                     onBlur={e => { const v = e.target.value.trim().replace(/\s+/g, " ");
+                                       if (v && v !== sp.nombre) actualizarSupervisor(sp.id, { nombre: v }); }} /></td>
+                              <td><input className="mj-input" defaultValue={sp.correo || ""} placeholder="correo"
+                                     style={{ fontSize: 12, minWidth: 200 }}
+                                     onBlur={e => { const v = e.target.value.trim();
+                                       if (v !== (sp.correo || "")) actualizarSupervisor(sp.id, { correo: v || null }); }} /></td>
+                              <td><input className="mj-input" defaultValue={sp.telefono || ""} placeholder="teléfono"
+                                     style={{ fontSize: 12, width: 130 }}
+                                     onBlur={e => { const v = e.target.value.trim();
+                                       if (v !== (sp.telefono || "")) actualizarSupervisor(sp.id, { telefono: v || null }); }} /></td>
+                              <td className="num">{fmt(Object.values(vehOps).filter(x => x.supervisor_id === sp.id).length)}</td>
+                              <td>
+                                <label style={{ fontSize: 11.5, color: "#64748b", whiteSpace: "nowrap" }}>
+                                  <input type="checkbox" checked={!!sp.activo} disabled={supGuardando === sp.id}
+                                         onChange={e => actualizarSupervisor(sp.id, { activo: e.target.checked })} />
+                                  {" "}{sp.activo ? "activo" : "inactivo"}
+                                </label>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
+                    <div style={{ display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap" }}>
+                      <label style={{ fontSize: 10.5, color: "#64748b" }}>Nombre<br/>
+                        <input className="mj-input" value={supNuevo.nombre} placeholder="NOMBRE APELLIDO APELLIDO"
+                               onChange={e => setSupNuevo(x => ({ ...x, nombre: e.target.value }))} style={{ width: 240 }} /></label>
+                      <label style={{ fontSize: 10.5, color: "#64748b" }}>Correo<br/>
+                        <input className="mj-input" value={supNuevo.correo} placeholder="nombre@bigticket.cl"
+                               onChange={e => setSupNuevo(x => ({ ...x, correo: e.target.value }))} style={{ width: 210 }} /></label>
+                      <label style={{ fontSize: 10.5, color: "#64748b" }}>Teléfono<br/>
+                        <input className="mj-input" value={supNuevo.telefono} placeholder="+56 9…"
+                               onChange={e => setSupNuevo(x => ({ ...x, telefono: e.target.value }))} style={{ width: 130 }} /></label>
+                      <button className="mj-btn" onClick={agregarSupervisor}
+                              disabled={supGuardando === "__nuevo__" || !supNuevo.nombre.trim()}
+                              style={{ background: NAVY, color: "#fff", borderColor: NAVY }}>
+                        {supGuardando === "__nuevo__" ? "Agregando…" : "➕ Agregar supervisor"}
+                      </button>
+                    </div>
+                  </div>
+                )}
 
-                <div style={{ background: "#fff", border: "1px solid #e6e9ef", borderRadius: 10, overflow: "hidden" }}>
+                {(() => {
+                  // Una fila por patente: las que tienen clasificación de tarifa y las que vienen de Pipefy
+                  const tarifaDe = Object.fromEntries(vehiculos.map(v => [v.patente, v]));
+                  const pats = [...new Set([...vehiculos.map(v => v.patente), ...Object.keys(vehOps)])];
+                  const qv = vehBuscar.trim().toUpperCase();
+                  const filasVeh = pats.map(p => ({ patente: p, tarifa: tarifaDe[p] || null, op: vehOps[p] || null }))
+                    .filter(f => !qv || `${f.patente} ${f.tarifa?.proyecto || ""} ${f.op?.cecos_operacion || ""} ${f.op?.supervisor || ""} ${f.op?.marca || ""} ${f.op?.modelo || ""}`.toUpperCase().includes(qv))
+                    .sort((a, b) => (a.op?.cecos_operacion || "~").localeCompare(b.op?.cecos_operacion || "~") || a.patente.localeCompare(b.patente));
+                  const cecosOpc = (ed) => [...new Set([...cecosNombres, ...Object.values(vehOps).map(x => x.cecos_operacion), ed.cecos_operacion].filter(Boolean))].sort();
+                  return (
+                    <Fragment>
+                      <div style={{ fontSize: 12, color: "#64748b", margin: "0 2px 6px" }}>
+                        Mostrando <strong>{fmt(filasVeh.length)}</strong> de {fmt(pats.length)} patentes
+                        {" · "}{fmt(pats.filter(p => vehOps[p]?.supervisor).length)} con supervisor
+                        {" · "}{fmt(pats.filter(p => !tarifaDe[p]).length)} sin clasificación de tarifa
+                      </div>
+                      <div style={{ background: "#fff", border: "1px solid #e6e9ef", borderRadius: 10, overflow: "auto" }}>
                   <table className="mj-tabla">
                     <thead>
-                      <tr><th>Patente</th><th>Tipo (proyecto)</th><th>Activa</th><th>Nota</th><th></th></tr>
+                      <tr><th>Patente</th><th>Tipo (tarifa)</th><th>Operación</th><th>Supervisor</th>
+                          <th>Vehículo</th><th>Activa</th><th>Nota</th><th></th></tr>
                     </thead>
                     <tbody>
-                      {vehiculos.filter(v => !vehBuscar.trim() ||
-                          `${v.patente} ${v.proyecto}`.toUpperCase().includes(vehBuscar.trim().toUpperCase()))
-                        .map(v => {
-                        const ed = vehEdit[v.patente];
+                      {filasVeh.map(({ patente, tarifa: v, op }) => {
+                        const ed = vehEdit[patente];
+                        const sel = { fontSize: 12, padding: "3px 4px", maxWidth: 210 };
+                        const setE = (campo, valor) => setVehEdit(x => ({ ...x, [patente]: { ...x[patente], [campo]: valor } }));
                         return (
-                          <tr key={v.patente}>
-                            <td style={{ fontWeight: 700 }}>{v.patente}</td>
+                          <tr key={patente} style={op && op.activo_operacion === false ? { opacity: 0.6 } : {}}>
+                            <td style={{ fontWeight: 700 }}>{patente}</td>
                             <td>
                               {ed ? (
-                                <select className="mj-input" value={ed.proyecto}
-                                  onChange={e => setVehEdit(x => ({ ...x, [v.patente]: { ...ed, proyecto: e.target.value } }))}
-                                  style={{ fontSize: 12 }}>
+                                <select className="mj-input" value={ed.proyecto} style={sel}
+                                        onChange={e => setE("proyecto", e.target.value)}>
+                                  {!v && <option value="">— sin clasificar —</option>}
                                   {TIPOS_VEH.map(t2 => <option key={t2} value={t2}>{t2}</option>)}
                                 </select>
-                              ) : (v.proyecto === "ELECTRICA"
+                              ) : v ? (v.proyecto === "ELECTRICA"
                                     ? <Etiqueta texto="ELECTRICA" color="#0d8043" fondo="#e7f6ec" />
-                                    : <span style={{ fontSize: 12 }}>{v.proyecto}</span>)}
+                                    : <span style={{ fontSize: 12 }}>{v.proyecto}</span>)
+                                : <span style={{ fontSize: 11, color: AMBAR_ }} title="Sin clasificación de tarifa: paga como COMBUSTION">sin clasificar</span>}
                             </td>
-                            <td>{v.activo
+                            <td>
+                              {ed ? (
+                                <select className="mj-input" value={ed.cecos_operacion} style={sel}
+                                        onChange={e => setE("cecos_operacion", e.target.value)}>
+                                  <option value="">— sin operación —</option>
+                                  {cecosOpc(ed).map(c => <option key={c} value={c}>{c}</option>)}
+                                </select>
+                              ) : op?.cecos_operacion
+                                ? <Etiqueta texto={op.cecos_operacion} />
+                                : <span style={{ color: "#cbd5e1" }}>—</span>}
+                            </td>
+                            <td style={{ fontSize: 12 }}>
+                              {ed ? (
+                                <select className="mj-input" value={ed.supervisor_id} style={sel}
+                                        onChange={e => setE("supervisor_id", e.target.value)}>
+                                  <option value="">— sin supervisor —</option>
+                                  {supervisores.filter(sp => sp.activo || String(sp.id) === String(ed.supervisor_id)).map(sp =>
+                                    <option key={sp.id} value={sp.id}>{sp.nombre}</option>)}
+                                </select>
+                              ) : (op?.supervisor || <span style={{ color: "#cbd5e1" }}>—</span>)}
+                            </td>
+                            <td style={{ fontSize: 11, color: "#64748b" }}>
+                              {op && (op.tipo || op.marca)
+                                ? <span title={`${op.energia || ""} · ${op.region || ""}${op.tiene_gps === false ? " · sin GPS" : ""}`}>
+                                    {[op.tipo, op.marca, op.modelo, op.anio].filter(Boolean).join(" · ")}</span>
+                                : <span style={{ color: "#cbd5e1" }}>—</span>}
+                            </td>
+                            <td>
+                              {ed && v ? (
+                                <label style={{ fontSize: 10.5, color: "#64748b" }}>
+                                  <input type="checkbox" checked={!!ed.activo} onChange={e => setE("activo", e.target.checked)} /> activa
+                                </label>
+                              ) : v ? (v.activo
                                   ? <Etiqueta texto="ACTIVA" color="#0d8043" fondo="#e7f6ec" />
-                                  : <Etiqueta texto="INACTIVA" color="#8a94a6" fondo="#f1f5f9" />}</td>
-                            <td style={{ fontSize: 11, color: "#94a3b8", maxWidth: 320 }}>{v.nota || ""}</td>
+                                  : <Etiqueta texto="INACTIVA" color="#8a94a6" fondo="#f1f5f9" />)
+                                : op?.estado_pipefy
+                                  ? <span style={{ fontSize: 11, color: "#94a3b8" }}>Pipefy: {op.estado_pipefy}</span> : null}
+                            </td>
+                            <td style={{ fontSize: 11, color: "#94a3b8", maxWidth: 260 }}>{v?.nota || ""}</td>
                             <td style={{ whiteSpace: "nowrap" }}>
                               {ed ? (
                                 <Fragment>
                                   <button className="mj-btn" style={{ padding: "3px 10px", fontSize: 11,
                                       background: NAVY, color: "#fff", borderColor: NAVY }}
-                                    disabled={vehGuardando === v.patente}
-                                    onClick={() => guardarVehiculo(v.patente, {
-                                      proyecto: ed.proyecto, activo: ed.activo }, false)}>
-                                    {vehGuardando === v.patente ? "…" : "Guardar"}
+                                    disabled={vehGuardando === patente}
+                                    onClick={() => guardarFilaVehiculo(patente, v, op, ed)}>
+                                    {vehGuardando === patente ? "…" : "Guardar"}
                                   </button>
                                   <button className="mj-btn" style={{ padding: "3px 8px", fontSize: 11, marginLeft: 4 }}
-                                    onClick={() => setVehEdit(x => { const n = { ...x }; delete n[v.patente]; return n; })}>
+                                    onClick={() => setVehEdit(x => { const n = { ...x }; delete n[patente]; return n; })}>
                                     Cancelar
                                   </button>
-                                  <label style={{ fontSize: 10.5, marginLeft: 8, color: "#64748b" }}>
-                                    <input type="checkbox" checked={!!ed.activo}
-                                      onChange={e => setVehEdit(x => ({ ...x, [v.patente]: { ...ed, activo: e.target.checked } }))} /> activa
-                                  </label>
                                 </Fragment>
                               ) : (
                                 <Fragment>
                                   <button className="mj-btn" style={{ padding: "3px 10px", fontSize: 11 }}
-                                    onClick={() => setVehEdit(x => ({ ...x, [v.patente]: { proyecto: v.proyecto, activo: v.activo } }))}>
+                                    onClick={() => setVehEdit(x => ({ ...x, [patente]: {
+                                      proyecto: v?.proyecto || "", activo: v ? v.activo : true,
+                                      cecos_operacion: op?.cecos_operacion || "",
+                                      supervisor_id: op?.supervisor_id ? String(op.supervisor_id) : "" } }))}>
                                     Editar
                                   </button>
-                                  <button className="mj-btn" title="Eliminar esta patente de Vehículos BT"
-                                    style={{ padding: "3px 9px", fontSize: 11, marginLeft: 4,
-                                             color: "#b42318", borderColor: "#f3c9c4" }}
-                                    disabled={vehGuardando === v.patente}
-                                    onClick={() => eliminarVehiculo(v)}>
-                                    {vehGuardando === v.patente ? "…" : "Eliminar"}
-                                  </button>
+                                  {v && (
+                                    <button className="mj-btn" title="Quitar la clasificación de tarifa de esta patente"
+                                      style={{ padding: "3px 9px", fontSize: 11, marginLeft: 4,
+                                               color: "#b42318", borderColor: "#f3c9c4" }}
+                                      disabled={vehGuardando === patente}
+                                      onClick={() => eliminarVehiculo(v)}>
+                                      {vehGuardando === patente ? "…" : "Eliminar"}
+                                    </button>
+                                  )}
                                 </Fragment>
                               )}
                             </td>
                           </tr>
                         );
                       })}
-                      {vehiculos.length === 0 && (
-                        <tr><td colSpan={5} style={{ textAlign: "center", color: "#94a3b8", padding: 18 }}>
-                          Cargando… (requiere la migración 31)
+                      {pats.length === 0 && (
+                        <tr><td colSpan={8} style={{ textAlign: "center", color: "#94a3b8", padding: 18 }}>
+                          Cargando… (requiere las migraciones 31 y 65)
                         </td></tr>
                       )}
                     </tbody>
                   </table>
-                </div>
+                      </div>
+                    </Fragment>
+                  );
+                })()}
               </Fragment>
             )}
 
@@ -2828,9 +3120,13 @@ const COLS_JORNADA = [
   { titulo: "ID_VIAJE", campo: "id_viaje" },
   { titulo: "CECOS", valor: r => r.cecos_real || "" },
   { titulo: "CENTRO_MELI", campo: "centro_meli" },
+  { titulo: "SUPERVISOR", valor: r => r.supervisor || "" },
   { titulo: "SERVICIO", valor: r => r.servicio_txt || "" },
   { titulo: "SEGMENTACION", valor: r => r.segmentacion || "" },
-  { titulo: "TERCERO", campo: "tercero" },
+  { titulo: "EMPRESA", valor: r => r.empresa || (r.patente ? "SIN REGISTRO" : "") },
+  { titulo: "RUT_EMPRESA", valor: r => r.empresa_rut || "" },
+  { titulo: "ESTADO_CERTRONIC", valor: r => r.empresa_estado || "" },
+  { titulo: "TERCERO_MELI", campo: "tercero" },
   { titulo: "PATENTE", campo: "patente" },
   { titulo: "CONDUCTOR", campo: "conductor" },
   { titulo: "CON_AYUDANTE", valor: r => (r.con_ayudante ? "SI" : "NO") },
