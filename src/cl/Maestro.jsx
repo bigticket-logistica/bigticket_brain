@@ -172,6 +172,19 @@ function PanelKpi({ kpi, onCerrar }) {
 
 // Patente normalizada: mayúsculas, solo letras y números (igual que la base).
 const normPatente = (p) => String(p || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+// Tipo de ruta: cómo se muestra cada código del catálogo de servicios.
+const ETIQUETA_TIPO = {
+  "UM": { t: "Última milla · Meli 1", c: "#1a3a6b", f: "#e8edf5" },
+  "MELI ONE": { t: "Meli One", c: "#5b21b6", f: "#ede9fe" },
+  "SPOT": { t: "Spot", c: "#9a3412", f: "#ffedd5" },
+  "AMBULANCIA": { t: "Ambulancia", c: "#b42318", f: "#fdecea" },
+  "RECOLECTA": { t: "Recolecta", c: "#0e7490", f: "#e0f2fe" },
+  "SAME DAY": { t: "Same Day", c: "#0d8043", f: "#e7f6ec" },
+  "TRONCAL": { t: "Troncal", c: "#7a5b16", f: "#fdf3d8" },
+  "SORTEO": { t: "Sorteo", c: "#475569", f: "#eef2f9" },
+};
+const etiquetaTipo = (cod) => ETIQUETA_TIPO[cod] || { t: cod, c: "#475569", f: "#eef2f9" };
+
 // Certronic por patente, con la misma regla que PNR: la fila ACTIVA si existe; si no, la primera.
 const indiceCertronic = (filas) => {
   const m = {};
@@ -238,6 +251,10 @@ function ModuloMaestroCL({ usuario } = {}) {
   const [supNuevo, setSupNuevo] = useState({ nombre: "", correo: "", telefono: "" });
   const [supGuardando, setSupGuardando] = useState(null);
   const [vehSup, setVehSup] = useState({});              // patente → supervisor, para el Maestro Jornada
+  const [tipoRuta, setTipoRuta] = useState({});          // id_ruta → tipo de ruta (vw_tipo_ruta_dia, migración 67)
+  const [servActivos, setServActivos] = useState([]);    // catálogo de servicios activos, para confirmar el tipo
+  const [tipoEdit, setTipoEdit] = useState(null);        // viaje con el selector de tipo abierto
+  const [tipoGuardando, setTipoGuardando] = useState(null);
   const [certPat, setCertPat] = useState({});            // patente → empresa según Certronic (vw_cert_vehiculo_vigente)
   // ── Tarifario ──
   const [tarifas, setTarifas] = useState([]);
@@ -310,7 +327,7 @@ function ModuloMaestroCL({ usuario } = {}) {
     (async () => {
       try {
         const fallos = [];
-        const [res, jor, dev, tra, rec, cua, rr, zr, vs, ct] = await Promise.all([
+        const [res, jor, dev, tra, rec, cua, rr, zr, vs, ct, tr, sa] = await Promise.all([
           apiSuave(`vw_maestro_resumen_dia?fecha=eq.${fecha}`, [], fallos),
           apiSuave(`vw_maestro_jornada?fecha=eq.${fecha}&order=cargados.desc.nullslast&limit=3000`, [], fallos),
           apiSuave(`vw_maestro_devoluciones?fecha=eq.${fecha}&order=cecos.asc&limit=8000`, [], fallos),
@@ -321,6 +338,8 @@ function ModuloMaestroCL({ usuario } = {}) {
           apiSuave(`ruta_zona_dia?fecha=eq.${fecha}&select=id_ruta,cecos_admin,segmentacion,zona_principal,origen_zona,alerta,cecos_fuente&limit=3000`, [], fallos),
           apiSuave("vw_vehiculos_bt?select=patente,supervisor,cecos_operacion&limit=3000", [], fallos),
           apiSuave("vw_cert_vehiculo_vigente?select=patente,tercero,rut_tercero,estado&limit=5000", [], fallos),
+          apiSuave(`vw_tipo_ruta_dia?fecha=eq.${fecha}&select=id_ruta,tipo_sugerido,tipo_confirmado,tipo_ruta,estado_tipo,no_planificada,nombre_ruta,line_haul,confirmado_por,rol,nota&limit=3000`, [], fallos),
+          apiSuave("servicios_tarifa?activo=eq.true&select=codigo,descripcion&order=orden,codigo", [], fallos),
         ]);
         if (fallos.length) setError("Algunas consultas no respondieron: " + fallos.join(" | "));
         if (!vivo) return;
@@ -328,6 +347,8 @@ function ModuloMaestroCL({ usuario } = {}) {
         setZonaRuta(Object.fromEntries((zr || []).map(x => [String(x.id_ruta), x])));
         setVehSup(Object.fromEntries((vs || []).map(x => [normPatente(x.patente), x])));
         setCertPat(indiceCertronic(ct));
+        setTipoRuta(Object.fromEntries((tr || []).map(x => [String(x.id_ruta), x])));
+        setServActivos(sa || []);
         setRecuadre(rec[0] || null); setACuadrar(cua);
         setRecRuta(Object.fromEntries((rr || []).map(x => [String(x.id_ruta), x])));
         setLeidoAt(new Date());
@@ -345,7 +366,7 @@ function ModuloMaestroCL({ usuario } = {}) {
     setRecargando(true);
     try {
       const fallos = [];
-      const [res, jor, rec, cua, rr, zr, vs, ct] = await Promise.all([
+      const [res, jor, rec, cua, rr, zr, vs, ct, tr] = await Promise.all([
         apiSuave(`vw_maestro_resumen_dia?fecha=eq.${fecha}`, [], fallos),
         apiSuave(`vw_maestro_jornada?fecha=eq.${fecha}&order=cargados.desc.nullslast&limit=3000`, [], fallos),
         apiSuave(`vw_estado_recuadre?fecha_operativa=eq.${fecha}`, [], fallos),
@@ -354,12 +375,14 @@ function ModuloMaestroCL({ usuario } = {}) {
         apiSuave(`ruta_zona_dia?fecha=eq.${fecha}&select=id_ruta,cecos_admin,segmentacion,zona_principal,origen_zona,alerta,cecos_fuente&limit=3000`, [], fallos),
         apiSuave("vw_vehiculos_bt?select=patente,supervisor,cecos_operacion&limit=3000", [], fallos),
         apiSuave("vw_cert_vehiculo_vigente?select=patente,tercero,rut_tercero,estado&limit=5000", [], fallos),
+        apiSuave(`vw_tipo_ruta_dia?fecha=eq.${fecha}&select=id_ruta,tipo_sugerido,tipo_confirmado,tipo_ruta,estado_tipo,no_planificada,nombre_ruta,line_haul,confirmado_por,rol,nota&limit=3000`, [], fallos),
       ]);
       setError(fallos.length ? "Algunas consultas no respondieron: " + fallos.join(" | ") : "");
       setResumen(res[0] || null); setJornada(jor);
       setZonaRuta(Object.fromEntries((zr || []).map(x => [String(x.id_ruta), x])));
       setVehSup(Object.fromEntries((vs || []).map(x => [normPatente(x.patente), x])));
       setCertPat(indiceCertronic(ct));
+      setTipoRuta(Object.fromEntries((tr || []).map(x => [String(x.id_ruta), x])));
       setRecuadre(rec[0] || null); setACuadrar(cua);
       setRecRuta(Object.fromEntries((rr || []).map(x => [String(x.id_ruta), x])));
       setLeidoAt(new Date());
@@ -460,6 +483,20 @@ function ModuloMaestroCL({ usuario } = {}) {
     if (fallos.length) setError("No se pudieron cargar: " + fallos.join(" | "));
   };
   useEffect(() => { if (tab === "pago") cargarPago(); }, [tab, fecha]);
+
+  // ── Tipo de ruta: el analista confirma o corrige (la bitácora lo hará el supervisor) ──
+  const confirmarTipo = async (r, tipo) => {
+    if (!tipo) return;
+    setTipoGuardando(r.id_viaje);
+    try {
+      await api("rpc/confirmar_tipo_ruta", { method: "POST", body: JSON.stringify({
+        p_fecha: r.fecha, p_id_ruta: Number(r.id_viaje), p_tipo: tipo, p_usuario: analista, p_rol: "analista" }) });
+      setTipoRuta(m => ({ ...m, [String(r.id_viaje)]: { ...(m[String(r.id_viaje)] || {}),
+        tipo_confirmado: tipo, tipo_ruta: tipo, estado_tipo: "confirmado", confirmado_por: analista, rol: "analista" } }));
+      setTipoEdit(null);
+    } catch (e) { setError(e.message); }
+    finally { setTipoGuardando(null); }
+  };
 
   // ── Revisión de zonas ──
   // Lista los viajes que el motor resolvió fuera de la regla normal (alerta) o que ya
@@ -1120,6 +1157,14 @@ function ModuloMaestroCL({ usuario } = {}) {
              empresa: certPat[normPatente(r.patente)]?.tercero || null,
              empresa_rut: certPat[normPatente(r.patente)]?.rut_tercero || null,
              empresa_estado: certPat[normPatente(r.patente)]?.estado || null,
+             ...(() => {
+               const t = tipoRuta[String(r.id_viaje)];
+               // sin dato del día (ruta que no pasó por las fotos): lo que informa MELI en el maestro
+               const base = r.tipo === "melione" ? "MELI ONE" : r.tipo === "last_mile" ? "UM" : null;
+               return { tipo_ruta: t ? t.tipo_ruta : base, estado_tipo: t ? t.estado_tipo : (base ? "detectado" : null),
+                        tipo_sugerido: t ? t.tipo_sugerido : base, tipo_por: t?.confirmado_por || null,
+                        tipo_rol: t?.rol || null, nombre_ruta: t?.nombre_ruta || null };
+             })(),
              servicio_txt: r.tipo === "melione" ? "MELI ONE" : r.tipo === "last_mile" ? "ULTIMA MILLA" : (r.tipo_servicio || "") };
   });
   const jornadaVista = jornadaZ
@@ -1129,6 +1174,7 @@ function ModuloMaestroCL({ usuario } = {}) {
     .filter(r => (tipoServicio === "todos" || r.tipo_servicio === tipoServicio))
     .filter(r => !cecos || (r.cecos_real || r.centro_meli) === cecos)
     .filter(r => coincide(r.id_viaje, r.patente, r.conductor, r.cecos_real, r.centro_meli, r.segmentacion, r.supervisor, r.empresa,
+                          r.tipo_ruta ? etiquetaTipo(r.tipo_ruta).t : (r.estado_tipo === "por_confirmar" ? "no planificada" : ""),
                           r.comuna_primera_parada, r.comuna_ultima_parada, r.ciclo));
   const devolVista = devol
     .filter(r => !cecos || r.cecos === cecos)
@@ -1317,7 +1363,7 @@ function ModuloMaestroCL({ usuario } = {}) {
           <div>
             <div style={{ fontSize: 18, fontWeight: 800, color: NAVY, letterSpacing: -.3 }}>Maestro de Operaciones · Chile</div>
             <div style={{ fontSize: 12, color: "#94a3b8", marginTop: 2 }}>
-              Jornada consolidada desde MELI · reemplaza la carga manual del Excel
+              Jornada consolidada desde MELI · reemplaza la carga manual del Excel · <strong>Solo operación MELI (ML_* · SRM1–SRM4)</strong>
             </div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 8, paddingBottom: 8 }}>
@@ -1420,10 +1466,12 @@ function ModuloMaestroCL({ usuario } = {}) {
                 <table className="mj-tabla">
                   <thead>
                     <tr>
-                      <th>ID Viaje</th><th>CECOS</th><th>Supervisor</th><th>Servicio</th><th>Segmentación</th><th>Empresa</th><th>Patente</th><th>Conductor</th>
+                      <th>ID Viaje</th><th title="Bodega de origen en MELI (lo que antes se mostraba como CECOS)">Bodega</th>
+                      <th>CECO real</th><th>Supervisor</th><th>Tipo de ruta</th><th>Empresa (Certronic)</th><th>Patente</th><th>Conductor</th>
                       <th>Ayud.</th><th className="num">Paradas</th><th className="num">Cargados</th>
                       <th className="num">Entregados</th><th className="num">Devueltos</th><th className="num">Traspasos</th>
-                      <th className="num">%</th>
+                      <th className="num" title="NS ácido: entregados / cargados. Los justificados del maestro manual no se consideran.">% NS</th>
+                      <th>Seg. zonal</th>
                       <th>Hora 1ª</th><th>1ª Parada</th>
                       <th>Hora últ.</th><th>Última Parada</th>
                       <th className="num">Hrs ruta</th><th>Ciclo</th><th>Estado</th>
@@ -1435,6 +1483,7 @@ function ModuloMaestroCL({ usuario } = {}) {
                         <td style={{ fontWeight: 700, color: NAVY }}>
                           {r.id_viaje}
                         </td>
+                        <td><Etiqueta texto={r.centro_meli || "—"} color="#64748b" fondo="#f1f5f9" /></td>
                         <td style={{ whiteSpace: "nowrap" }}
                             title={r.cecos_fuente === "meli_destino" ? "CECOS informado por MELI (destino de la ruta)"
                                  : r.cecos_fuente === "meli_centro" ? "CECOS informado por MELI (centro de una sola operación)"
@@ -1443,7 +1492,6 @@ function ModuloMaestroCL({ usuario } = {}) {
                           {r.cecos_real
                             ? <Etiqueta texto={r.cecos_real} />
                             : <Etiqueta texto="sin CECOS" color={AMBAR_} fondo="#fdf6e3" />}
-                          <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 2 }}>{r.centro_meli || ""}</div>
                         </td>
                         <td style={{ fontSize: 11.5, maxWidth: 170 }}>
                           {r.supervisor
@@ -1454,26 +1502,48 @@ function ModuloMaestroCL({ usuario } = {}) {
                               : <span style={{ color: "#cbd5e1" }}>—</span>}
                         </td>
                         <td style={{ whiteSpace: "nowrap" }}>
-                          {/* Tipo de servicio que informa MELI, más las banderas que lo acompañan.
-                              El tipo y el Line Haul son dimensiones independientes: hay rutas
-                              last_mile que además son Line Haul. */}
-                          {r.tipo === "melione"
-                            ? <Etiqueta texto="MELI ONE" color="#5b21b6" fondo="#ede9fe" />
-                            : r.tipo === "last_mile"
-                              ? <Etiqueta texto="ÚLTIMA MILLA" color="#1a3a6b" fondo="#e8edf5" />
-                              : <span style={{ color: "#cbd5e1" }}>—</span>}
-                          {r.is_line_haul && <span style={{ marginLeft: 5 }} title="Line Haul: transferencia entre centros, no reparto a clientes"><Etiqueta texto="LH" color="#7a5b16" fondo="#fdf3d8" /></span>}
-                          {r.entrega_y_retira && <span style={{ marginLeft: 5 }} title="Entrega y además pasa a retirar"><Etiqueta texto="E+R" color="#0e7490" fondo="#e0f2fe" /></span>}
-                        </td>
-                        <td style={{ whiteSpace: "nowrap", fontSize: 12 }}
-                            title={r.zona_pago ? `Zona: ${r.zona_pago}` : ""}>
-                          {r.segmentacion
-                            ? <span style={{ fontWeight: 600, color: "#334155" }}>{r.segmentacion}</span>
-                            : <span style={{ color: "#cbd5e1" }}>—</span>}
-                          {r.alerta_zona && (
-                            <span style={{ marginLeft: 5, color: r.alerta_zona === "sin_zona" ? "#b42318" : AMBAR_ }}
-                                  title="El motor de zonas marcó este viaje para revisión (pestaña Revisión zonas)">⚠</span>
+                          {/* Tipo de ruta (migración 67): el sistema lo sugiere, una persona lo confirma.
+                              Las rutas sin nombre en MELI son "no planificadas": Spot o Ambulancia. */}
+                          {tipoEdit === r.id_viaje || (r.estado_tipo === "por_confirmar" && !r.tipo_ruta) ? (
+                            <span style={{ display: "inline-flex", flexDirection: "column", gap: 3 }}>
+                              {r.estado_tipo === "por_confirmar" && (
+                                <span style={{ fontSize: 11, color: AMBAR_, fontWeight: 700 }}
+                                      title="La ruta viene sin nombre en MELI: no fue planificada. Confirma si fue Spot o Ambulancia.">
+                                  «Ruta no planificada» → SPOT/Ambulancia</span>
+                              )}
+                              <span style={{ display: "inline-flex", gap: 4 }}>
+                                <select className="mj-input" value="" disabled={tipoGuardando === r.id_viaje}
+                                        style={{ fontSize: 11, padding: "2px 4px" }}
+                                        onChange={e => confirmarTipo(r, e.target.value)}>
+                                  <option value="">{tipoGuardando === r.id_viaje ? "Guardando…" : "— confirmar tipo —"}</option>
+                                  {(r.estado_tipo === "por_confirmar"
+                                      ? [...servActivos.filter(x => ["SPOT", "AMBULANCIA"].includes(x.codigo)),
+                                         ...servActivos.filter(x => !["SPOT", "AMBULANCIA"].includes(x.codigo))]
+                                      : servActivos).map(x =>
+                                    <option key={x.codigo} value={x.codigo}>{etiquetaTipo(x.codigo).t}</option>)}
+                                </select>
+                                {tipoEdit === r.id_viaje && (
+                                  <button className="mj-btn" style={{ padding: "1px 6px", fontSize: 11 }}
+                                          onClick={() => setTipoEdit(null)}>✕</button>
+                                )}
+                              </span>
+                            </span>
+                          ) : r.tipo_ruta ? (
+                            <span title={r.estado_tipo === "confirmado"
+                                           ? `Confirmado por ${r.tipo_por || "—"} (${r.tipo_rol || "—"})`
+                                             + (r.tipo_sugerido && r.tipo_sugerido !== r.tipo_ruta ? ` · el sistema sugería ${etiquetaTipo(r.tipo_sugerido).t}` : "")
+                                           : `Detectado por el sistema${r.nombre_ruta ? ` (ruta ${r.nombre_ruta})` : ""}`}>
+                              <Etiqueta texto={etiquetaTipo(r.tipo_ruta).t} color={etiquetaTipo(r.tipo_ruta).c} fondo={etiquetaTipo(r.tipo_ruta).f} />
+                              {r.estado_tipo === "confirmado" && <span style={{ color: "#0d8043", fontWeight: 800, marginLeft: 3 }}>✓</span>}
+                            </span>
+                          ) : <span style={{ color: "#cbd5e1" }}>—</span>}
+                          {tipoEdit !== r.id_viaje && r.tipo_ruta && (
+                            <button className="mj-btn" title="Corregir el tipo de ruta"
+                                    style={{ padding: "0 5px", fontSize: 10.5, marginLeft: 4, border: "none", background: "transparent", color: "#94a3b8" }}
+                                    onClick={() => setTipoEdit(r.id_viaje)}>✎</button>
                           )}
+                          {r.is_line_haul && <span style={{ marginLeft: 5 }} title="Line Haul: marca de MELI sobre la ruta"><Etiqueta texto="LH" color="#7a5b16" fondo="#fdf3d8" /></span>}
+                          {r.entrega_y_retira && <span style={{ marginLeft: 5 }} title="Entrega y además pasa a retirar"><Etiqueta texto="E+R" color="#0e7490" fondo="#e0f2fe" /></span>}
                         </td>
                         <td style={{ fontSize: 11.5, maxWidth: 200 }}
                             title={[r.empresa_rut && `RUT ${r.empresa_rut}`,
@@ -1501,6 +1571,16 @@ function ModuloMaestroCL({ usuario } = {}) {
                         <td className="num" style={{ fontWeight: 700, color: n(r.pct_entrega) >= 98 ? "#0d8043" : n(r.pct_entrega) >= 90 ? "#7a5b16" : "#b42318" }}>
                           {r.pct_entrega === null ? "—" : `${r.pct_entrega}%`}
                         </td>
+                        <td style={{ whiteSpace: "nowrap", fontSize: 12 }}
+                            title={r.zona_pago ? `Zona: ${r.zona_pago}` : ""}>
+                          {r.segmentacion
+                            ? <span style={{ fontWeight: 600, color: "#334155" }}>{r.segmentacion}</span>
+                            : <span style={{ color: "#cbd5e1" }}>—</span>}
+                          {r.alerta_zona && (
+                            <span style={{ marginLeft: 5, color: r.alerta_zona === "sin_zona" ? "#b42318" : AMBAR_ }}
+                                  title="El motor de zonas marcó este viaje para revisión (pestaña Revisión zonas)">⚠</span>
+                          )}
+                        </td>
                         <td style={{ fontWeight: 700, color: r.hora_primera_parada ? NAVY : "#cbd5e1", fontVariantNumeric: "tabular-nums" }}>
                           {r.hora_primera_parada || "—"}
                         </td>
@@ -1519,7 +1599,7 @@ function ModuloMaestroCL({ usuario } = {}) {
                       </tr>
                     ))}
                     {!jornadaVista.length && (
-                      <tr><td colSpan={22} style={{ padding: 20, color: "#8a94a6", textAlign: "center" }}>
+                      <tr><td colSpan={23} style={{ padding: 20, color: "#8a94a6", textAlign: "center" }}>
                         Ningún viaje coincide con los filtros. Prueba limpiando la búsqueda o el CECOS.
                       </td></tr>
                     )}
@@ -3119,9 +3199,11 @@ const COLS_JORNADA = [
   { titulo: "FECHA", campo: "fecha" },
   { titulo: "ID_VIAJE", campo: "id_viaje" },
   { titulo: "CECOS", valor: r => r.cecos_real || "" },
-  { titulo: "CENTRO_MELI", campo: "centro_meli" },
+  { titulo: "BODEGA", campo: "centro_meli" },
   { titulo: "SUPERVISOR", valor: r => r.supervisor || "" },
-  { titulo: "SERVICIO", valor: r => r.servicio_txt || "" },
+  { titulo: "TIPO_RUTA", valor: r => r.tipo_ruta ? etiquetaTipo(r.tipo_ruta).t : (r.estado_tipo === "por_confirmar" ? "NO PLANIFICADA (por confirmar)" : "") },
+  { titulo: "TIPO_RUTA_ESTADO", valor: r => r.estado_tipo || "" },
+  { titulo: "SERVICIO_MELI", valor: r => r.servicio_txt || "" },
   { titulo: "SEGMENTACION", valor: r => r.segmentacion || "" },
   { titulo: "EMPRESA", valor: r => r.empresa || (r.patente ? "SIN REGISTRO" : "") },
   { titulo: "RUT_EMPRESA", valor: r => r.empresa_rut || "" },
