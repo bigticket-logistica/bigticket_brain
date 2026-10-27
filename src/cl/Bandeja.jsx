@@ -133,6 +133,9 @@ function filaCanon(c, supSugerido) {
     else if (/sin pedido|sin región/i.test(c.region || "")) { manual = "Sin número de orden identificable"; accion = c.canal === "correo" ? "Revisar el correo" : "Buscar y asignar"; }
     else if (!c.ceco && c.region) { manual = `Región ${c.region}: no corresponde a C_RM ni C_VIÑA`; accion = "Asignar CECO"; }
   }
+  if (!resuelto && !manual && c.respuesta && c.revision_calificacion === "fuera_de_lugar" && c.revision_de === c.respuesta) {
+    manual = `Respuesta fuera de lugar: ${c.revision_razon || "no responde lo pedido"}`; accion = "Revisar la respuesta";
+  }
   if (!resuelto && c.canal === "correo" && !manual && c.ordenes_resumen) {
     if (/sin orden/i.test(c.ordenes_resumen)) { manual = "Correo sin orden identificable: no se encontró ninguna orden en DispatchTrack"; accion = "Revisar el correo"; }
     else if (/no encontrada/i.test(c.ordenes_resumen)) { manual = `Hay órdenes que no existen en DispatchTrack (${c.ordenes_resumen})`; accion = "Revisar órdenes"; }
@@ -154,7 +157,8 @@ function filaCanon(c, supSugerido) {
     biggy, ejecutiva: c.ejecutiva_clasificacion || null,
     biggyRazon: c.biggy_razon, biggyResumen: c.biggy_resumen,
     creado: c.creado_en, abierto, cerrado: resuelto, estado,
-    revision: !deSupervisor ? { txt: "No aplica", tono: "neutro" } : c.respuesta ? { txt: "Con respuesta", tono: "bueno" } : { txt: "Sin respuesta", tono: "neutro" },
+    revision: !deSupervisor ? { txt: "No aplica", tono: "neutro" } : c.respuesta ? (revisionBiggy(c) || { txt: "Por revisar", tono: "neutro" }) : { txt: "Sin respuesta", tono: "neutro" },
+    calificacion: c.respuesta ? c.revision_calificacion : null, revisionRazon: c.revision_razon,
     manual, accionManual: accion,
     pipefy: `https://app.pipefy.com/open-cards/${c.card_id}`,
     buscar: [c.pedido, c.remitente, c.titulo, c.texto, c.ceco, c.supervisor, c.card_id].join(" "),
@@ -179,7 +183,8 @@ function filaPortal(c) {
     clasificacion: cancelacion ? "Cancelación de envío" : (String(c.motivo || "").split(" · ")[1] || "Reclamo portal"),
     ceco: c.ceco, responsable: nombrePropio(c.supervisor) || "—",
     creado: c.creado_en, abierto, cerrado, estado: cerrado ? "Cerrado" : c.respuesta ? "Respondido" : c.supervisor ? "Asignado" : "Sin asignar",
-    revision: c.respuesta ? { txt: "Con respuesta", tono: "bueno" } : abierto ? { txt: "Sin respuesta", tono: "neutro" } : null,
+    revision: c.respuesta ? (revisionBiggy(c) || { txt: "Por revisar", tono: "neutro" }) : abierto ? { txt: "Sin respuesta", tono: "neutro" } : null,
+    calificacion: c.respuesta ? c.revision_calificacion : null, revisionRazon: c.revision_razon,
     manual: abierto && cancelacion && !c.supervisor ? "Cancelación sin asignar: hay que frenar el envío cuanto antes" : null,
     accionManual: "Ver caso",
     pipefy: `https://app.pipefy.com/open-cards/${c.card_id}`,
@@ -201,7 +206,15 @@ function Pastilla({ txt, color, fondo, title }) {
   );
 }
 const colorOrigen = (o) => (o === "pnr_meli" ? [C.amarillo, C.amarilloTenue] : /^portal/.test(o) ? ["#6b4fa0", "#f1edf8"] : [C.azul, C.azulTenue]);
-const colorRevision = (t) => (t === "bueno" ? [C.verde, C.verdeTenue] : t === "malo" ? [C.ambar, C.ambarTenue] : [C.gris, C.grisTenue]);
+const colorRevision = (t) => (t === "bueno" ? [C.verde, C.verdeTenue] : t === "malo" ? [C.ambar, C.ambarTenue] : t === "rojo" ? [C.rojo, C.rojoTenue] : [C.gris, C.grisTenue]);
+
+// Calificación del Biggy revisor (modo sombra) → pastilla de la columna "Revisión de la respuesta".
+function revisionBiggy(c) {
+  if (!c.revision_calificacion || c.revision_de !== c.respuesta) return null;
+  if (c.revision_calificacion === "correcta") return { txt: "Correcta", tono: "bueno" };
+  if (c.revision_calificacion === "incompleta") return { txt: `Incompleta${c.revision_falta ? ": falta " + c.revision_falta : ""}`, tono: "malo" };
+  return { txt: "Fuera de lugar", tono: "rojo" };
+}
 
 function PastillaSla({ f, cfg, urg, ahora }) {
   if (!f.abierto) return <Pastilla txt="No aplica" color={C.gris} fondo={C.grisTenue} />;
@@ -350,6 +363,13 @@ function Detalle({ f, urg, onUrgente, supPorCeco }) {
           <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, padding: "12px 14px" }}>
             <div style={{ fontSize: 13, fontWeight: 700, color: C.texto, marginBottom: 6 }}>Respuesta del supervisor</div>
             <div style={{ fontSize: 13.5, color: f.respuesta ? C.texto : C.tenue, whiteSpace: "pre-wrap" }}>{f.respuesta || (f.origen === "pnr_meli" ? "Se responde en Logistic cargando el comprobante." : "Todavía sin respuesta.")}</div>
+            {f.calificacion && f.revision && (
+              <div style={{ marginTop: 8, fontSize: 12.5 }}>
+                <strong>Revisión del Biggy:</strong>{" "}
+                <span style={{ color: colorRevision(f.revision.tono)[0], fontWeight: 700 }}>{f.revision.txt}</span>
+                {f.revisionRazon && <div style={{ color: C.suave, marginTop: 2 }}>{f.revisionRazon}</div>}
+              </div>
+            )}
           </div>
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
@@ -409,7 +429,7 @@ export default function BandejaPostventa({ usuario, onIrA }) {
       const [p, a, c, s, u] = await Promise.all([
         api("pnr_casos_cl?select=case_id,sub_estado,service_center,route_code,conductor,ceco,supervisor,ceco_como,fecha_caso,monto&order=fecha_caso.desc&limit=3000"),
         api("pnr_avisos_cl?canal=eq.correo&select=case_id,destino,enviado_en&limit=10000"),
-        api("canon_casos_cl?select=card_id,canal,creado_en,fase,titulo,mandante,pedido,remitente,correo,motivo,texto,ceco,supervisor,respuesta,region,comuna,estado_pedido,ordenes_resumen,biggy_clasificacion,biggy_razon,biggy_resumen,ejecutiva_clasificacion&order=creado_en.desc&limit=3000"),
+        api("canon_casos_cl?select=card_id,canal,creado_en,fase,titulo,mandante,pedido,remitente,correo,motivo,texto,ceco,supervisor,respuesta,region,comuna,estado_pedido,ordenes_resumen,revision_calificacion,revision_falta,revision_razon,revision_de,biggy_clasificacion,biggy_razon,biggy_resumen,ejecutiva_clasificacion&order=creado_en.desc&limit=3000"),
         api("postventa_sla_cl?select=*&order=origen"),
         api("postventa_urgentes_cl?urgente=eq.true&select=*"),
       ]);
@@ -457,6 +477,10 @@ export default function BandejaPostventa({ usuario, onIrA }) {
   };
   const cuenta = { todos: filas.length, pnr: filas.filter((f) => f.origen === "pnr_meli").length,
     canon: filas.filter((f) => f.tipo === "Canon").length, portal: filas.filter((f) => f.tipo === "Portal").length, manual: manuales.length };
+
+  // Revisor en sombra: incompletas y fuera de lugar son las que volverían al supervisor.
+  const revisadas = filas.filter((f) => f.calificacion).length;
+  const devueltas = filas.filter((f) => f.calificacion === "incompleta" || f.calificacion === "fuera_de_lugar").length;
 
   // Coincidencia del Biggy con la ejecutiva (modo sombra), donde los dos clasificaron.
   const comparables = filas.filter((f) => f.biggy && f.ejecutiva && f.biggy !== "revision_manual");
@@ -523,7 +547,8 @@ export default function BandejaPostventa({ usuario, onIrA }) {
         <Indicador etiqueta="Casos abiertos" valor={ind.abiertos} />
         <Indicador etiqueta="Por vencer (menos de 24 h)" valor={ind.porVencer} color={C.ambar} />
         <Indicador etiqueta="Vencidos" valor={ind.vencidos} color={C.rojo} />
-        <Indicador etiqueta="Respuestas devueltas por incompletas" valor="—" color={C.ambar} nota="cuando el Biggy revise respuestas" />
+        <Indicador etiqueta="Respuestas que el Biggy devolvería" valor={revisadas ? devueltas : "—"} color={C.ambar}
+          nota={revisadas ? `${Math.round((devueltas * 100) / revisadas)}% de ${revisadas} revisadas · modo sombra` : "revisando…"} />
         <Indicador etiqueta="El Biggy coincide con la ejecutiva" valor={coincidencia == null ? "—" : `${coincidencia}%`} color={C.verde}
           nota={coincidencia == null ? "clasificando…" : `en ${comparables.length} formularios de Canon · modo sombra`} />
       </div>
