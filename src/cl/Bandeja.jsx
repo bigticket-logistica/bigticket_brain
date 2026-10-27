@@ -133,6 +133,10 @@ function filaCanon(c, supSugerido) {
     else if (/sin pedido|sin región/i.test(c.region || "")) { manual = "Sin número de orden identificable"; accion = c.canal === "correo" ? "Revisar el correo" : "Buscar y asignar"; }
     else if (!c.ceco && c.region) { manual = `Región ${c.region}: no corresponde a C_RM ni C_VIÑA`; accion = "Asignar CECO"; }
   }
+  if (!resuelto && c.canal === "correo" && !manual && c.ordenes_resumen) {
+    if (/sin orden/i.test(c.ordenes_resumen)) { manual = "Correo sin orden identificable: no se encontró ninguna orden en DispatchTrack"; accion = "Revisar el correo"; }
+    else if (/no encontrada/i.test(c.ordenes_resumen)) { manual = `Hay órdenes que no existen en DispatchTrack (${c.ordenes_resumen})`; accion = "Revisar órdenes"; }
+  }
   if (clas === "Por clasificar" && !manual) {
     manual = biggy === "revision_manual"
       ? `El Biggy no pudo decidir: ${c.biggy_razon || "mensaje ambiguo"}`
@@ -144,7 +148,8 @@ function filaCanon(c, supSugerido) {
   return {
     clave: `canon:${c.card_id}`, origen, origenTxt: c.canal === "correo" ? "Canon · Correo" : "Canon · Formulario", tipo: "Canon",
     titulo: c.canal === "correo" ? "Correo Canon" : `Formulario · ${c.pedido || "sin pedido"}`,
-    sub: c.canal === "correo" ? (c.titulo || "") : "Cliente final",
+    sub: c.canal === "correo" ? (c.ordenes_resumen ? `${c.ordenes_resumen} · ${c.titulo || ""}` : (c.titulo || "")) : "Cliente final",
+    cardId: c.card_id, ordenesResumen: c.ordenes_resumen,
     clasificacion: biggy ? NOMBRE_CLAS[biggy] : clas, ceco: clas === "Postventa mandante" ? "Mandante" : c.ceco, responsable,
     biggy, ejecutiva: c.ejecutiva_clasificacion || null,
     biggyRazon: c.biggy_razon, biggyResumen: c.biggy_resumen,
@@ -274,8 +279,43 @@ function EditorPlazos({ sla, usuario, onCerrar, onGuardado }) {
   );
 }
 
+// Órdenes de un correo de Canon, agrupadas por CECO: cada grupo es la tarea de un supervisor.
+function OrdenesCorreo({ cardId, supPorCeco }) {
+  const [ordenes, setOrdenes] = useState(null);
+  useEffect(() => {
+    api(`canon_ordenes_cl?card_id=eq.${cardId}&select=orden,fuente,encontrada,region,comuna,estado,ceco&order=ceco`)
+      .then((x) => setOrdenes(x || [])).catch(() => setOrdenes([]));
+  }, [cardId]);
+  if (ordenes === null) return <div style={{ fontSize: 12.5, color: C.tenue }}>Leyendo órdenes…</div>;
+  if (!ordenes.length) return <div style={{ fontSize: 12.5, color: C.tenue }}>El lector todavía no procesó este correo, o no encontró órdenes.</div>;
+  const grupos = {};
+  for (const o of ordenes) { const k = o.encontrada ? (o.ceco || "Otra región") : "No encontradas en DispatchTrack"; (grupos[k] = grupos[k] || []).push(o); }
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      {Object.entries(grupos).map(([k, lista]) => {
+        const malo = k.startsWith("No encontradas") || k === "Otra región";
+        const sup = supPorCeco[k];
+        return (
+          <div key={k} style={{ border: `1px solid ${malo ? C.naranja + "66" : C.borde}`, borderRadius: 10, padding: "8px 10px", background: malo ? C.ambarTenue : "#fff" }}>
+            <div style={{ fontSize: 12.5, fontWeight: 700, color: malo ? C.ambar : C.navy, marginBottom: 4 }}>
+              {k}{!malo && sup ? ` · tarea para ${nombrePropio(sup)}` : ""} · {lista.length} {lista.length === 1 ? "orden" : "órdenes"}
+            </div>
+            {lista.map((o) => (
+              <div key={o.orden} style={{ display: "grid", gridTemplateColumns: "110px 1fr 1fr", gap: 8, fontSize: 12, padding: "2px 0" }}>
+                <span style={{ fontFamily: MONO }}>{o.orden}</span>
+                <span style={{ color: C.suave }}>{o.encontrada ? [o.comuna, o.region].filter(Boolean).join(", ") : "no existe en DispatchTrack"}</span>
+                <span style={{ color: C.suave }}>{o.estado || (o.fuente === "adjunto" ? "desde el adjunto" : "")}</span>
+              </div>
+            ))}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 // Detalle del caso: datos, texto de origen, respuesta y marca de urgente.
-function Detalle({ f, urg, onUrgente }) {
+function Detalle({ f, urg, onUrgente, supPorCeco }) {
   const [horas, setHoras] = useState(urg ? String(urg.sla_horas) : "12");
   return (
     <div style={{ padding: "14px 20px 18px", background: C.fondo, borderTop: `1px solid ${C.borde}` }}>
@@ -293,6 +333,12 @@ function Detalle({ f, urg, onUrgente }) {
               </div>
               {f.biggyRazon && <div style={{ fontSize: 12.5, color: C.suave }}>Por qué: {f.biggyRazon}</div>}
               {f.biggyResumen && <div style={{ fontSize: 13, color: C.texto, marginTop: 6 }}>{f.biggyResumen}</div>}
+            </div>
+          )}
+          {f.origen === "canon_correo" && f.cardId && (
+            <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, padding: "12px 14px", marginBottom: 10 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: C.texto, marginBottom: 8 }}>Órdenes del correo</div>
+              <OrdenesCorreo cardId={f.cardId} supPorCeco={supPorCeco || {}} />
             </div>
           )}
           {f.texto && (
@@ -363,7 +409,7 @@ export default function BandejaPostventa({ usuario, onIrA }) {
       const [p, a, c, s, u] = await Promise.all([
         api("pnr_casos_cl?select=case_id,sub_estado,service_center,route_code,conductor,ceco,supervisor,ceco_como,fecha_caso,monto&order=fecha_caso.desc&limit=3000"),
         api("pnr_avisos_cl?canal=eq.correo&select=case_id,destino,enviado_en&limit=10000"),
-        api("canon_casos_cl?select=card_id,canal,creado_en,fase,titulo,mandante,pedido,remitente,correo,motivo,texto,ceco,supervisor,respuesta,region,comuna,estado_pedido,biggy_clasificacion,biggy_razon,biggy_resumen,ejecutiva_clasificacion&order=creado_en.desc&limit=3000"),
+        api("canon_casos_cl?select=card_id,canal,creado_en,fase,titulo,mandante,pedido,remitente,correo,motivo,texto,ceco,supervisor,respuesta,region,comuna,estado_pedido,ordenes_resumen,biggy_clasificacion,biggy_razon,biggy_resumen,ejecutiva_clasificacion&order=creado_en.desc&limit=3000"),
         api("postventa_sla_cl?select=*&order=origen"),
         api("postventa_urgentes_cl?urgente=eq.true&select=*"),
       ]);
@@ -534,7 +580,7 @@ export default function BandejaPostventa({ usuario, onIrA }) {
                     <span>{f.revision ? <Pastilla txt={f.revision.txt} color={rc} fondo={rf} /> : <Pastilla txt="No aplica" color={C.gris} fondo={C.grisTenue} />}</span>
                     <span style={{ fontSize: 13.5, color: f.manual ? C.ambar : C.texto, fontWeight: f.manual ? 600 : 400 }}>{f.manual ? "Revisión manual" : f.estado}</span>
                   </div>
-                  {esta && <Detalle f={f} urg={urg} onUrgente={marcarUrgente} />}
+                  {esta && <Detalle f={f} urg={urg} onUrgente={marcarUrgente} supPorCeco={supPorCeco} />}
                 </Fragment>
               );
             })}
