@@ -248,6 +248,8 @@ function ModuloMaestroCL({ usuario } = {}) {
 
   const [resumen, setResumen] = useState(null);
   const [jornada, setJornada] = useState([]);
+  // CECOS real, segmentación y alerta de cada viaje, desde el motor de zonas (ruta_zona_dia)
+  const [zonaRuta, setZonaRuta] = useState({});
   const [devol, setDevol] = useState([]);
   const [trasp, setTrasp] = useState([]);
   const [cargando, setCargando] = useState(true);
@@ -286,7 +288,7 @@ function ModuloMaestroCL({ usuario } = {}) {
     (async () => {
       try {
         const fallos = [];
-        const [res, jor, dev, tra, rec, cua, rr] = await Promise.all([
+        const [res, jor, dev, tra, rec, cua, rr, zr] = await Promise.all([
           apiSuave(`vw_maestro_resumen_dia?fecha=eq.${fecha}`, [], fallos),
           apiSuave(`vw_maestro_jornada?fecha=eq.${fecha}&order=cargados.desc.nullslast&limit=3000`, [], fallos),
           apiSuave(`vw_maestro_devoluciones?fecha=eq.${fecha}&order=cecos.asc&limit=8000`, [], fallos),
@@ -294,10 +296,12 @@ function ModuloMaestroCL({ usuario } = {}) {
           apiSuave(`vw_estado_recuadre?fecha_operativa=eq.${fecha}`, [], fallos),
           apiSuave(`vw_rutas_a_cuadrar?fecha=eq.${fecha}&select=id_ruta,cecos,conductor,status,cargados,entregados,pendientes,motivos&limit=500`, [], fallos),
           apiSuave(`vw_estado_recuadre_ruta?fecha_operativa=eq.${fecha}&limit=500`, [], fallos),
+          apiSuave(`ruta_zona_dia?fecha=eq.${fecha}&select=id_ruta,cecos_admin,segmentacion,zona_principal,origen_zona,alerta,cecos_fuente&limit=3000`, [], fallos),
         ]);
         if (fallos.length) setError("Algunas consultas no respondieron: " + fallos.join(" | "));
         if (!vivo) return;
         setResumen(res[0] || null); setJornada(jor); setDevol(dev); setTrasp(tra);
+        setZonaRuta(Object.fromEntries((zr || []).map(x => [String(x.id_ruta), x])));
         setRecuadre(rec[0] || null); setACuadrar(cua);
         setRecRuta(Object.fromEntries((rr || []).map(x => [String(x.id_ruta), x])));
         setLeidoAt(new Date());
@@ -307,21 +311,25 @@ function ModuloMaestroCL({ usuario } = {}) {
     return () => { vivo = false; };
   }, [fecha]);
 
+  useEffect(() => { setCecos(""); }, [tab]);   // eslint-disable-line react-hooks/exhaustive-deps
+
   // Recarga los datos del día seleccionado (sin recargar la página).
   const recargar = async () => {
     if (!fecha) return;
     setRecargando(true);
     try {
       const fallos = [];
-      const [res, jor, rec, cua, rr] = await Promise.all([
+      const [res, jor, rec, cua, rr, zr] = await Promise.all([
         apiSuave(`vw_maestro_resumen_dia?fecha=eq.${fecha}`, [], fallos),
         apiSuave(`vw_maestro_jornada?fecha=eq.${fecha}&order=cargados.desc.nullslast&limit=3000`, [], fallos),
         apiSuave(`vw_estado_recuadre?fecha_operativa=eq.${fecha}`, [], fallos),
         apiSuave(`vw_rutas_a_cuadrar?fecha=eq.${fecha}&select=id_ruta,cecos,conductor,status,cargados,entregados,pendientes,motivos&limit=500`, [], fallos),
         apiSuave(`vw_estado_recuadre_ruta?fecha_operativa=eq.${fecha}&limit=500`, [], fallos),
+        apiSuave(`ruta_zona_dia?fecha=eq.${fecha}&select=id_ruta,cecos_admin,segmentacion,zona_principal,origen_zona,alerta,cecos_fuente&limit=3000`, [], fallos),
       ]);
       setError(fallos.length ? "Algunas consultas no respondieron: " + fallos.join(" | ") : "");
       setResumen(res[0] || null); setJornada(jor);
+      setZonaRuta(Object.fromEntries((zr || []).map(x => [String(x.id_ruta), x])));
       setRecuadre(rec[0] || null); setACuadrar(cua);
       setRecRuta(Object.fromEntries((rr || []).map(x => [String(x.id_ruta), x])));
       setLeidoAt(new Date());
@@ -958,13 +966,24 @@ function ModuloMaestroCL({ usuario } = {}) {
   // Filtros en cliente
   const texto = busca.trim().toLowerCase();
   const coincide = (...campos) => !texto || campos.some(c => String(c ?? "").toLowerCase().includes(texto));
-  const jornadaVista = jornada
+  // Cada viaje con su CECOS real, segmentación y alerta del motor de zonas.
+  // centro_meli guarda el código del centro de MELI (SRM1, SIL1…) que antes se mostraba como CECOS.
+  const jornadaZ = jornada.map(r => {
+    const z = zonaRuta[String(r.id_viaje)];
+    return { ...r, centro_meli: r.cecos, cecos_real: z?.cecos_admin || null,
+             segmentacion: z?.segmentacion || null, zona_pago: z?.zona_principal || null,
+             alerta_zona: z?.alerta || null, origen_zona: z?.origen_zona || null,
+             cecos_fuente: z?.cecos_fuente || null,
+             servicio_txt: r.tipo === "melione" ? "MELI ONE" : r.tipo === "last_mile" ? "ULTIMA MILLA" : (r.tipo_servicio || "") };
+  });
+  const jornadaVista = jornadaZ
     // Tolerante a NULL a propósito: una ruta sin clasificar se trata como última
     // milla en vez de desaparecer de la vista sin explicación.
     .filter(r => (!soloReparto || r.is_line_haul !== true))
     .filter(r => (tipoServicio === "todos" || r.tipo_servicio === tipoServicio))
-    .filter(r => !cecos || r.cecos === cecos)
-    .filter(r => coincide(r.id_viaje, r.patente, r.conductor, r.cecos, r.comuna_primera_parada, r.comuna_ultima_parada, r.ciclo));
+    .filter(r => !cecos || (r.cecos_real || r.centro_meli) === cecos)
+    .filter(r => coincide(r.id_viaje, r.patente, r.conductor, r.cecos_real, r.centro_meli, r.segmentacion,
+                          r.comuna_primera_parada, r.comuna_ultima_parada, r.ciclo));
   const devolVista = devol
     .filter(r => !cecos || r.cecos === cecos)
     .filter(r => coincide(r.id_viaje, r.folio_guia, r.patente, r.conductor, r.motivo, r.comuna, r.receptor));
@@ -972,7 +991,10 @@ function ModuloMaestroCL({ usuario } = {}) {
     .filter(r => !cecos || r.sc_origen === cecos || r.sc_destino === cecos)
     .filter(r => coincide(r.ruta_origen, r.ruta_destino, r.chofer_origen, r.chofer_destino, r.patente_origen, r.patente_destino));
 
-  const listaCecos = [...new Set(jornada.map(r => r.cecos).filter(Boolean))].sort();
+  // En Jornada se filtra por CECOS real; en Devoluciones y Traspasos, por centro de MELI.
+  const listaCecos = tab === "jornada"
+    ? [...new Set(jornadaZ.map(r => r.cecos_real || r.centro_meli).filter(Boolean))].sort()
+    : [...new Set(jornada.map(r => r.cecos).filter(Boolean))].sort();
   const nLineHaul = jornada.filter(r => r.is_line_haul === true).length;
   // MELI distingue last_mile de melione (MELI ONE) en el campo tipo.
   const tiposServicio = [...new Set(jornada.map(r => r.tipo_servicio).filter(Boolean))].sort();
@@ -1252,7 +1274,7 @@ function ModuloMaestroCL({ usuario } = {}) {
                 <table className="mj-tabla">
                   <thead>
                     <tr>
-                      <th>ID Viaje</th><th>CECOS</th><th>Tipo de Ruta</th><th>Tercero</th><th>Patente</th><th>Conductor</th>
+                      <th>ID Viaje</th><th>CECOS</th><th>Servicio</th><th>Segmentación</th><th>Tercero</th><th>Patente</th><th>Conductor</th>
                       <th>Ayud.</th><th className="num">Paradas</th><th className="num">Cargados</th>
                       <th className="num">Entregados</th><th className="num">Devueltos</th><th className="num">Traspasos</th>
                       <th className="num">%</th>
@@ -1267,7 +1289,16 @@ function ModuloMaestroCL({ usuario } = {}) {
                         <td style={{ fontWeight: 700, color: NAVY }}>
                           {r.id_viaje}
                         </td>
-                        <td><Etiqueta texto={r.cecos || "—"} /></td>
+                        <td style={{ whiteSpace: "nowrap" }}
+                            title={r.cecos_fuente === "meli_destino" ? "CECOS informado por MELI (destino de la ruta)"
+                                 : r.cecos_fuente === "meli_centro" ? "CECOS informado por MELI (centro de una sola operación)"
+                                 : r.cecos_fuente === "analista" ? "CECOS definido por el analista"
+                                 : r.cecos_fuente === "mapa" ? "CECOS deducido del mapa de zonas" : ""}>
+                          {r.cecos_real
+                            ? <Etiqueta texto={r.cecos_real} />
+                            : <Etiqueta texto="sin CECOS" color={AMBAR_} fondo="#fdf6e3" />}
+                          <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 2 }}>{r.centro_meli || ""}</div>
+                        </td>
                         <td style={{ whiteSpace: "nowrap" }}>
                           {/* Tipo de servicio que informa MELI, más las banderas que lo acompañan.
                               El tipo y el Line Haul son dimensiones independientes: hay rutas
@@ -1275,10 +1306,20 @@ function ModuloMaestroCL({ usuario } = {}) {
                           {r.tipo === "melione"
                             ? <Etiqueta texto="MELI ONE" color="#5b21b6" fondo="#ede9fe" />
                             : r.tipo === "last_mile"
-                              ? <span style={{ fontSize: 11.5, color: "#475569" }}>Última milla</span>
+                              ? <Etiqueta texto="ÚLTIMA MILLA" color="#1a3a6b" fondo="#e8edf5" />
                               : <span style={{ color: "#cbd5e1" }}>—</span>}
                           {r.is_line_haul && <span style={{ marginLeft: 5 }} title="Line Haul: transferencia entre centros, no reparto a clientes"><Etiqueta texto="LH" color="#7a5b16" fondo="#fdf3d8" /></span>}
                           {r.entrega_y_retira && <span style={{ marginLeft: 5 }} title="Entrega y además pasa a retirar"><Etiqueta texto="E+R" color="#0e7490" fondo="#e0f2fe" /></span>}
+                        </td>
+                        <td style={{ whiteSpace: "nowrap", fontSize: 12 }}
+                            title={r.zona_pago ? `Zona: ${r.zona_pago}` : ""}>
+                          {r.segmentacion
+                            ? <span style={{ fontWeight: 600, color: "#334155" }}>{r.segmentacion}</span>
+                            : <span style={{ color: "#cbd5e1" }}>—</span>}
+                          {r.alerta_zona && (
+                            <span style={{ marginLeft: 5, color: r.alerta_zona === "sin_zona" ? "#b42318" : AMBAR_ }}
+                                  title="El motor de zonas marcó este viaje para revisión (pestaña Revisión zonas)">⚠</span>
+                          )}
                         </td>
                         <td style={{ color: "#475569" }}>{r.tercero || "—"}</td>
                         <td style={{ fontWeight: 600 }}>{r.patente || "—"}</td>
@@ -1310,7 +1351,7 @@ function ModuloMaestroCL({ usuario } = {}) {
                       </tr>
                     ))}
                     {!jornadaVista.length && (
-                      <tr><td colSpan={19} style={{ padding: 20, color: "#8a94a6", textAlign: "center" }}>
+                      <tr><td colSpan={21} style={{ padding: 20, color: "#8a94a6", textAlign: "center" }}>
                         Ningún viaje coincide con los filtros. Prueba limpiando la búsqueda o el CECOS.
                       </td></tr>
                     )}
@@ -2785,8 +2826,10 @@ function ModuloMaestroCL({ usuario } = {}) {
 const COLS_JORNADA = [
   { titulo: "FECHA", campo: "fecha" },
   { titulo: "ID_VIAJE", campo: "id_viaje" },
-  { titulo: "CECOS", campo: "cecos" },
-  { titulo: "SERVICIO", campo: "tipo_servicio" },
+  { titulo: "CECOS", valor: r => r.cecos_real || "" },
+  { titulo: "CENTRO_MELI", campo: "centro_meli" },
+  { titulo: "SERVICIO", valor: r => r.servicio_txt || "" },
+  { titulo: "SEGMENTACION", valor: r => r.segmentacion || "" },
   { titulo: "TERCERO", campo: "tercero" },
   { titulo: "PATENTE", campo: "patente" },
   { titulo: "CONDUCTOR", campo: "conductor" },
