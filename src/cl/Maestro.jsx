@@ -225,6 +225,10 @@ function ModuloMaestroCL({ usuario } = {}) {
   const [tarifaServicio, setTarifaServicio] = useState("todos");
   const [tarifaFiltros, setTarifaFiltros] = useState({});   // filtro por columna del tarifario
   const [tarifaNueva, setTarifaNueva] = useState(null);     // null = formulario cerrado
+  const [serviciosCat, setServiciosCat] = useState([]);     // catálogo servicios_tarifa (migración 63)
+  const [servPanel, setServPanel] = useState(false);
+  const [servNuevo, setServNuevo] = useState({ codigo: "", descripcion: "" });
+  const [servGuardando, setServGuardando] = useState(null);
   const [adminCat, setAdminCat] = useState([]);             // nombres de cecos_admin para el alta
   // ── zona nueva + override de viaje ──
   const ZONA_NUEVA0 = { nombre: "", cecos: "", segmentacion: "", lat: "", lon: "", radio: 5000, nota: "" };
@@ -491,12 +495,14 @@ function ModuloMaestroCL({ usuario } = {}) {
 
   const cargarTarifario = async () => {
     const fallos = [];
-    const [t, seg, adm] = await Promise.all([
+    const [t, seg, adm, sv] = await Promise.all([
       apiSuave("tarifas?order=servicio,cecos_admin.nullsfirst,segmentacion,tipo_vehiculo,detalle&limit=500", [], fallos),
       apiSuave("segmentaciones?order=nombre&activo=eq.true", [], fallos),
       apiSuave("cecos_admin?select=nombre&order=nombre", [], fallos),
+      apiSuave("servicios_tarifa?order=orden,codigo", [], fallos),
     ]);
     setTarifas(t);
+    setServiciosCat(sv);
     if (seg.length) setSegmentaciones(seg);
     setAdminCat([...new Set(adm.map(a => a.nombre))]);
     if (fallos.length) setError("No se pudieron cargar: " + fallos.join(" | "));
@@ -552,6 +558,44 @@ function ModuloMaestroCL({ usuario } = {}) {
       setTimeout(() => setTarifaMsg(""), 4000);
     } catch (e) { setError(e.message); }
     finally { setTarifaGuardando(null); }
+  };
+
+  // ── Catálogo de tipos de servicio ──
+  // Opciones para elegir: los activos del catálogo; si el catálogo aún no existe
+  // (migración 63 sin correr), la lista de siempre.
+  const serviciosOpc = serviciosCat.length
+    ? serviciosCat.filter(x => x.activo).map(x => x.codigo)
+    : SERVICIOS_TARIFA;
+  const normCodigoServ = (c) => String(c || "").trim().toUpperCase().replace(/\s+/g, " ");
+  const errorServicio = (e) => {
+    const m = String((e && e.message) || e || "");
+    if (m.includes("23505") || m.toLowerCase().includes("duplicate key")) return "Ese tipo de servicio ya existe.";
+    if (m.includes("servicios_tarifa_codigo_chk")) return "El código debe tener entre 2 y 30 caracteres.";
+    return m;
+  };
+  const agregarServicio = async () => {
+    const codigo = normCodigoServ(servNuevo.codigo);
+    if (codigo.length < 2 || codigo.length > 30) { setError("El código del servicio debe tener entre 2 y 30 caracteres."); return; }
+    if (serviciosCat.some(x => x.codigo === codigo)) { setError(`El servicio ${codigo} ya existe.`); return; }
+    setServGuardando("__nuevo__");
+    try {
+      await api("servicios_tarifa", { method: "POST", headers: { Prefer: "return=minimal" },
+        body: JSON.stringify({ codigo, descripcion: servNuevo.descripcion.trim() || null,
+          orden: Math.max(0, ...serviciosCat.map(x => x.orden || 0)) + 10, creado_por: analista }) });
+      setServNuevo({ codigo: "", descripcion: "" });
+      await cargarTarifario();
+      setTarifaMsg(`Servicio ${codigo} agregado`); setTimeout(() => setTarifaMsg(""), 3000);
+    } catch (e) { setError(errorServicio(e)); }
+    finally { setServGuardando(null); }
+  };
+  const actualizarServicio = async (codigo, campos) => {
+    setServGuardando(codigo);
+    try {
+      await api(`servicios_tarifa?codigo=eq.${encodeURIComponent(codigo)}`, {
+        method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify(campos) });
+      await cargarTarifario();
+    } catch (e) { setError(errorServicio(e)); }
+    finally { setServGuardando(null); }
   };
 
   const crearTarifa = async () => {
@@ -2296,7 +2340,7 @@ function ModuloMaestroCL({ usuario } = {}) {
                         <select className="mj-input" value={tarifaServicio}
                                 onChange={e => setTarifaServicio(e.target.value)}>
                           <option value="todos">Todos los servicios ({fmt(tarifas.length)})</option>
-                          {SERVICIOS_TARIFA.map(sv => {
+                          {[...new Set([...serviciosCat.map(x => x.codigo), ...SERVICIOS_TARIFA, ...tarifas.map(t => t.servicio)])].map(sv => {
                             const c = tarifas.filter(t => t.servicio === sv).length;
                             return c ? <option key={sv} value={sv}>{sv} ({c})</option> : null;
                           })}
@@ -2304,6 +2348,9 @@ function ModuloMaestroCL({ usuario } = {}) {
                         <button className="mj-btn" onClick={() => setTarifaNueva(tarifaNueva ? null : { ...TARIFA_NUEVA0 })}
                                 style={{ background: NAVY, color: "#fff", borderColor: NAVY }}>
                           {tarifaNueva ? "Cerrar" : "➕ Nueva tarifa"}
+                        </button>
+                        <button className="mj-btn" onClick={() => setServPanel(v => !v)}>
+                          {servPanel ? "Cerrar servicios" : "⚙ Tipos de servicio"}
                         </button>
                       </div>
                     </div>
@@ -2326,6 +2373,71 @@ function ModuloMaestroCL({ usuario } = {}) {
                     </div>
                   </div>
 
+                  {servPanel && (
+                    <div style={{ background: "#fff", border: "1px solid #e6e9ef", borderRadius: 10,
+                                  padding: "12px 16px", marginBottom: 12 }}>
+                      <div style={{ fontSize: 13, fontWeight: 800, color: NAVY }}>Tipos de servicio</div>
+                      <div style={{ fontSize: 12, color: "#64748b", lineHeight: 1.6, margin: "3px 0 10px" }}>
+                        Los servicios que puede tener una tarifa. Un servicio con tarifas no se borra: se
+                        desactiva, y deja de ofrecerse al crear tarifas nuevas (las existentes no cambian).
+                      </div>
+                      {!serviciosCat.length ? (
+                        <div style={{ fontSize: 12, color: AMBAR_ }}>
+                          El catálogo todavía no existe en la base (falta correr la migración 63).
+                        </div>
+                      ) : (
+                        <table className="mj-tabla" style={{ marginBottom: 10 }}>
+                          <thead><tr><th>Código</th><th>Descripción</th><th className="num">Orden</th>
+                            <th className="num">Tarifas</th><th>Estado</th></tr></thead>
+                          <tbody>
+                            {serviciosCat.map(sv => (
+                              <tr key={sv.codigo} style={!sv.activo ? { opacity: 0.55 } : {}}>
+                                <td style={{ fontWeight: 700 }}>{sv.codigo}</td>
+                                <td>
+                                  <input className="mj-input" defaultValue={sv.descripcion || ""}
+                                         style={{ fontSize: 12, minWidth: 240 }} placeholder="descripción"
+                                         onBlur={e => { if (e.target.value.trim() !== (sv.descripcion || ""))
+                                           actualizarServicio(sv.codigo, { descripcion: e.target.value.trim() || null }); }} />
+                                </td>
+                                <td className="num">
+                                  <input className="mj-input" type="number" step="10" defaultValue={sv.orden}
+                                         style={{ fontSize: 12, width: 64, textAlign: "right" }}
+                                         onBlur={e => { const o = Math.round(Number(e.target.value));
+                                           if (Number.isFinite(o) && o !== sv.orden) actualizarServicio(sv.codigo, { orden: o }); }} />
+                                </td>
+                                <td className="num">{fmt(tarifas.filter(t => t.servicio === sv.codigo).length)}</td>
+                                <td>
+                                  <label style={{ fontSize: 11.5, color: "#64748b", whiteSpace: "nowrap" }}>
+                                    <input type="checkbox" checked={!!sv.activo} disabled={servGuardando === sv.codigo}
+                                           onChange={e => actualizarServicio(sv.codigo, { activo: e.target.checked })} />
+                                    {" "}{sv.activo ? "activo" : "inactivo"}
+                                  </label>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      )}
+                      {serviciosCat.length > 0 && (
+                        <div style={{ display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap" }}>
+                          <label style={{ fontSize: 10.5, color: "#64748b" }}>Código nuevo<br/>
+                            <input className="mj-input" value={servNuevo.codigo} placeholder="SAME DAY"
+                                   onChange={e => setServNuevo(x => ({ ...x, codigo: e.target.value.toUpperCase() }))}
+                                   style={{ width: 140 }} /></label>
+                          <label style={{ fontSize: 10.5, color: "#64748b" }}>Descripción<br/>
+                            <input className="mj-input" value={servNuevo.descripcion} placeholder="Entrega el mismo día"
+                                   onChange={e => setServNuevo(x => ({ ...x, descripcion: e.target.value }))}
+                                   style={{ width: 260 }} /></label>
+                          <button className="mj-btn" onClick={agregarServicio}
+                                  disabled={servGuardando === "__nuevo__" || !servNuevo.codigo.trim()}
+                                  style={{ background: NAVY, color: "#fff", borderColor: NAVY }}>
+                            {servGuardando === "__nuevo__" ? "Agregando…" : "➕ Agregar servicio"}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   {tarifaNueva && (
                     <div style={{ background: "#fdf6e3", border: "1px solid #f3e2b8", borderRadius: 10,
                                   padding: "12px 16px", marginBottom: 12, display: "flex", gap: 8,
@@ -2347,7 +2459,7 @@ function ModuloMaestroCL({ usuario } = {}) {
                       <label style={{ fontSize: 10.5, color: "#64748b" }}>Servicio<br/>
                         <select className="mj-input" value={tarifaNueva.servicio}
                                 onChange={e => setTarifaNueva(t => ({ ...t, servicio: e.target.value }))}>
-                          {SERVICIOS_TARIFA.map(sv => <option key={sv} value={sv}>{sv}</option>)}
+                          {serviciosOpc.map(sv => <option key={sv} value={sv}>{sv}</option>)}
                         </select></label>
                       <label style={{ fontSize: 10.5, color: "#64748b" }}>Tipo pago<br/>
                         <select className="mj-input" value={tarifaNueva.tipo_pago}
@@ -2484,7 +2596,8 @@ function ModuloMaestroCL({ usuario } = {}) {
                                 <td>{ed ? (
                                       <select className="mj-input" style={selE} value={ed.servicio}
                                               onChange={e => setEd(t.id, "servicio", e.target.value)}>
-                                        {SERVICIOS_TARIFA.map(v => <option key={v} value={v}>{v}</option>)}
+                                        {[...new Set([...serviciosOpc, ed.servicio].filter(Boolean))].map(v =>
+                                          <option key={v} value={v}>{v}</option>)}
                                       </select>
                                     ) : t.servicio === "MELI ONE"
                                       ? <Etiqueta texto="MELI ONE" color="#5b21b6" fondo="#ede9fe" />
