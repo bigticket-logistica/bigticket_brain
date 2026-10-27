@@ -559,6 +559,18 @@ function ModuloMaestroCL({ usuario } = {}) {
     } catch (e) { setError(e.message); }
   };
 
+  // ── Desde el Maestro Pago: crear la tarifa que falta, ya rellenada ──
+  const crearTarifaDesdePago = (r) => {
+    setTarifaNueva({ ...TARIFA_NUEVA0, cecos_admin: r.cecos || "", segmentacion: r.segmentacion_zonal || "",
+                     servicio: r.servicio || "", tipo_vehiculo: r.tipo_vehiculo_bt || "", vigente_desde: r.fecha || "" });
+    setTab("tarifario");
+    setTarifaMsg(`Tarifa que falta para el viaje ${r.id_viaje}: completa el tipo de pago y el valor, y presiona Crear tarifa.`);
+  };
+  const confirmarTipoDesdePago = async (r, tipo) => {
+    await confirmarTipo({ id_viaje: r.id_viaje, fecha: r.fecha }, tipo);
+    await cargarPago();
+  };
+
   // ── Tipo de ruta: el analista confirma o corrige (la bitácora lo hará el supervisor) ──
   const confirmarTipo = async (r, tipo) => {
     if (!tipo) return;
@@ -2172,7 +2184,8 @@ function ModuloMaestroCL({ usuario } = {}) {
                         "KM PLANIFICADOS": r.km_planificados,
                         "NIVEL DE SERVICIO": r.nivel_servicio,
                         "TIPO PAGO": r.tipo_pago, "TARIFA": r.tarifa_aplicada,
-                        "PAGO": r.pago, "ESTADO PAGO": r.estado_pago })),
+                        "PAGO": r.pago, "ESTADO PAGO": r.estado_pago,
+                        "SERVICIO MELI": r.servicio_meli || "", "ALERTA": r.alerta_pago || "" })),
                       `maestro_pago_${fecha}.csv`)}>
                       Descargar CSV
                     </button>
@@ -2231,7 +2244,7 @@ function ModuloMaestroCL({ usuario } = {}) {
                         <span style={chip(pagoFiltro === "calculados")} onClick={() => setPagoFiltro("calculados")}>
                           Calculados ({fmt(calculados.length)})</span>
                         <span style={chip(pagoFiltro === "pendientes")} onClick={() => setPagoFiltro("pendientes")}
-                              title="Sin resolver (falta zona: se corrige acá mismo con ✎) o sin tarifa (falta la fila en el tarifario)">
+                              title="No se pagan hasta resolverlos: sin resolver (falta zona: ✎), sin tarifa (➕ Crear tarifa) o tipo por confirmar (elegir el tipo).">
                           ⚠ Pendientes ({fmt(pendientes.length)})</span>
                       </div>
                       <div style={{ background: "#fff", border: "1px solid #e6e9ef", borderRadius: 10, overflow: "hidden" }}>
@@ -2253,9 +2266,10 @@ function ModuloMaestroCL({ usuario } = {}) {
                             <tbody>
                               {filtrado.map(r => (
                                 <tr key={r.id_viaje} style={r.estado_resolucion !== "resuelto" ? { background: "#fffdf4" } : undefined}>
-                                  <td>{r.servicio === "MELI ONE"
-                                        ? <Etiqueta texto="MELI ONE" color="#5b21b6" fondo="#ede9fe" />
-                                        : <span style={{ fontSize: 12 }}>{r.servicio}</span>}</td>
+                                  <td title={r.servicio_meli && r.servicio !== r.servicio_meli ? `MELI lo informa como ${etiquetaTipo(r.servicio_meli).t}` : ""}>
+                                    {r.servicio
+                                      ? <Etiqueta texto={etiquetaTipo(r.servicio).t} color={etiquetaTipo(r.servicio).c} fondo={etiquetaTipo(r.servicio).f} />
+                                      : <span style={{ fontSize: 11, color: AMBAR_, fontWeight: 700 }}>por confirmar</span>}</td>
                                   <td style={{ fontSize: 12, fontWeight: 600 }}>{r.cecos || <span style={{ color: "#cbd5e1" }}>—</span>}</td>
                                   <td style={{ fontWeight: 600 }}>{r.id_viaje}</td>
                                   <td>{r.patente || "—"}</td>
@@ -2281,14 +2295,32 @@ function ModuloMaestroCL({ usuario } = {}) {
                                     {r.estado_pago === "calculado"
                                       ? <Etiqueta texto="CALCULADO" color="#0d8043" fondo="#e7f6ec" />
                                       : r.estado_pago === "sin tarifa"
-                                        ? <span title={`No existe la llave ${r.cecos || "?"} · ${r.servicio} · ${r.segmentacion_zonal || "?"} · ${r.tipo_vehiculo_bt} en el tarifario: hay que agregarla (autorizan Nicole o Esteban)`}>
+                                        ? <span title={r.alerta_pago || `No existe la llave ${r.cecos || "?"} · ${r.servicio} · ${r.segmentacion_zonal || "?"} · ${r.tipo_vehiculo_bt} en el tarifario: hay que agregarla`}>
                                             <Etiqueta texto="SIN TARIFA" color="#b45309" fondo="#fef3c7" /></span>
+                                      : r.estado_pago === "tipo por confirmar"
+                                        ? <span title={r.alerta_pago || "Ruta no planificada: confirma si fue Spot o Ambulancia."}>
+                                            <Etiqueta texto="POR CONFIRMAR TIPO" color={AMBAR_} fondo="#fdf6e3" /></span>
                                         : <span title="Falta la zona: corrígelo con el botón ✎ de esta fila, o crea la zona en la pestaña Zonas de Pago">
                                             <Etiqueta texto="SIN RESOLVER" color="#b42318" fondo="#fdecea" /></span>}
                                     {r.zona_manual && <span style={{ marginLeft: 4 }} title={r.motivo_manual || "Corrección manual"}>
                                         <Etiqueta texto="MANUAL" color="#5b21b6" fondo="#ede9fe" /></span>}
                                   </td>
-                                  <td>
+                                  <td style={{ whiteSpace: "nowrap" }}>
+                                    {r.estado_pago === "sin tarifa" && r.servicio && (
+                                      <button className="mj-btn" style={{ padding: "2px 8px", fontSize: 11 }}
+                                        title={(r.alerta_pago || "") + " Abre el Tarifario con esta llave ya rellenada."}
+                                        onClick={() => crearTarifaDesdePago(r)}>➕ Crear tarifa</button>
+                                    )}
+                                    {r.estado_pago === "tipo por confirmar" && (
+                                      <select className="mj-input" value="" disabled={tipoGuardando === r.id_viaje}
+                                              style={{ fontSize: 11, padding: "2px 4px" }}
+                                              onChange={e => confirmarTipoDesdePago(r, e.target.value)}>
+                                        <option value="">{tipoGuardando === r.id_viaje ? "Guardando…" : "— confirmar tipo —"}</option>
+                                        {[...servActivos.filter(x => ["SPOT", "AMBULANCIA"].includes(x.codigo)),
+                                          ...servActivos.filter(x => !["SPOT", "AMBULANCIA"].includes(x.codigo))].map(x =>
+                                          <option key={x.codigo} value={x.codigo}>{etiquetaTipo(x.codigo).t}</option>)}
+                                      </select>
+                                    )}
                                     {r.estado_pago === "sin resolver" && (
                                       <button className="mj-btn" style={{ padding: "2px 8px", fontSize: 11 }}
                                         title="Corregir la zona de este viaje"
