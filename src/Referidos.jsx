@@ -14,7 +14,7 @@
 // Lee de las vistas vw_ref_brain_* y cambia el estado de un bono con la
 // función fn_ref_brain_premio (todo en Supabase, prefijo ref_).
 // ═══════════════════════════════════════════════════════════════════════════
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { sb } from "./shared";
 import Requerimientos from "./Requerimientos";
 
@@ -59,7 +59,8 @@ export default function ModuloReferidos({ usuario }) {
   const [centros, setCentros] = useState([]);
   const [propuestas, setPropuestas] = useState([]);
   const [canales, setCanales] = useState([]);   // fuentes de Bigticket sin referidor (camioneta, Facebook)
-  const [reqAbiertos, setReqAbiertos] = useState(0);   // requerimientos del jefe de operaciones sin atender
+  const [reqAbiertos, setReqAbiertos] = useState(0);
+  const [eliminados, setEliminados] = useState([]);   // referidos y referidores eliminados desde el Brain (ref_eliminados)   // requerimientos del jefe de operaciones sin atender
   const [campana, setCampana] = useState(null);        // requerimiento que se está convirtiendo en campaña
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState("");
@@ -75,6 +76,8 @@ export default function ModuloReferidos({ usuario }) {
       sb.from("ref_propuestas").select("*"),
       sb.from("ref_canales").select("*").order("creado_at"),
     ]);
+    const el = await sb.from("ref_eliminados").select("*");
+    setEliminados(el.data || []);
     const rq = await sb.from("ref_requerimientos").select("id", { count: "exact", head: true }).in("estado", ["pendiente", "en_proceso"]);
     setReqAbiertos(rq.count || 0);
     // Si ref_canales no se puede leer, la pestaña sigue funcionando sin las filas de canal.
@@ -88,7 +91,18 @@ export default function ModuloReferidos({ usuario }) {
 
   const porValidar = bonos.filter((x) => x.estado === "por_validar").length;
   const vacantes = oportunidades.filter((x) => x.activa && x.cantidad > 0).reduce((t, x) => t + x.cantidad, 0);
-  const TABS = [["bonos", "Bonos", porValidar], ["referidos", "Referidos", referidos.length], ["referidores", "Referidores", referidores.length + canales.length], ["oportunidades", "Oportunidades", vacantes], ["requerimientos", "Requerimientos", reqAbiertos]];
+  // Eliminados: no se cuentan ni se muestran (salvo en "Ver eliminados").
+  const elim = (tipo) => new Map(eliminados.filter((e) => e.tipo === tipo).map((e) => [String(e.ref_id), e]));
+  const elimReferidos = elim("referido"), elimReferidores = elim("referidor");
+  const referidosVivos = referidos.filter((r) => !elimReferidos.has(String(r.referido_id)));
+  const referidoresVivos = referidores.filter((r) => !elimReferidores.has(String(r.id)));
+  const eliminar = async (tipo, id, motivo) => {
+    const por = usuario?.email || usuario?.nombre || "brain";
+    const { error } = await sb.rpc("fn_ref_eliminar", { p_tipo: tipo, p_id: String(id), p_motivo: motivo, p_por: por });
+    if (error) { alert("No se pudo eliminar: " + error.message); return false; }
+    cargar(); return true;
+  };
+  const TABS = [["bonos", "Bonos", porValidar], ["referidos", "Referidos", referidosVivos.length], ["referidores", "Referidores", referidoresVivos.length + canales.length], ["oportunidades", "Oportunidades", vacantes], ["requerimientos", "Requerimientos", reqAbiertos]];
 
   return (
     <div className="pg">
@@ -106,8 +120,8 @@ export default function ModuloReferidos({ usuario }) {
       {cargando ? <div className="loading">Cargando…</div> : (
         <>
           {tab === "bonos" && <Bonos bonos={bonos} usuario={usuario} onCambio={cargar} />}
-          {tab === "referidos" && <Referidos referidos={referidos} canales={canales} />}
-          {tab === "referidores" && <Referidores referidores={referidores} canales={canales} referidos={referidos} />}
+          {tab === "referidos" && <Referidos referidos={referidos} canales={canales} eliminados={elimReferidos} onEliminar={(id, m) => eliminar("referido", id, m)} />}
+          {tab === "referidores" && <Referidores referidores={referidores} canales={canales} referidos={referidosVivos} eliminados={elimReferidores} onEliminar={(id, m) => eliminar("referidor", id, m)} />}
           {tab === "oportunidades" && <Oportunidades lista={oportunidades} centros={centros} propuestas={propuestas} usuario={usuario} onCambio={cargar}
             campana={campana} onCampanaLista={() => { setCampana(null); setTab("requerimientos"); }} onCampanaCancelar={() => setCampana(null)} />}
           {tab === "requerimientos" && <Requerimientos usuario={usuario} modo="analista" onCrearCampana={(r) => {
@@ -201,31 +215,35 @@ function Cifra({ t, v, c }) {
 }
 
 // ── Referidos ───────────────────────────────────────────────────────────────
-function Referidos({ referidos, canales = [] }) {
+function Referidos({ referidos, canales = [], eliminados = new Map(), onEliminar }) {
   const canalDe = (c) => (canales.find((x) => x.codigo === c) || {}).nombre || c;
   const [q, setQ] = useState("");
   const [etapa, setEtapa] = useState("");
+  const [verElim, setVerElim] = useState(false);
+  const [borrando, setBorrando] = useState(null);   // referido_id con el motivo abierto
   const lista = useMemo(() => referidos.filter((r) => {
     const t = `${r.nombre} ${r.razon_social || ""} ${r.rfc} ${r.referidor} ${r.codigo} ${r.canal || ""}`.toLowerCase();
-    return (!q || t.includes(q.toLowerCase())) && (!etapa || r.etapa === etapa);
-  }), [referidos, q, etapa]);
+    return eliminados.has(String(r.referido_id)) === verElim && (!q || t.includes(q.toLowerCase())) && (!etapa || r.etapa === etapa);
+  }), [referidos, q, etapa, verElim, eliminados]);
 
   return (
     <>
-      <div className="two-col" style={{ marginBottom: 12 }}>
+      <div className="two-col" style={{ marginBottom: 8 }}>
         <input placeholder="Buscar por nombre, RFC, referidor o código…" value={q} onChange={(e) => setQ(e.target.value)} />
         <select value={etapa} onChange={(e) => setEtapa(e.target.value)}>
           <option value="">Todas las etapas</option>
           {Object.entries(ETAPAS).map(([k, [t]]) => <option key={k} value={k}>{t}</option>)}
         </select>
       </div>
-      {lista.length === 0 ? <div className="empty">No hay referidos con esos filtros.</div> : (
+      <BotonEliminados ver={verElim} setVer={setVerElim} n={eliminados.size} />
+      {lista.length === 0 ? <div className="empty">{verElim ? "No hay referidos eliminados." : "No hay referidos con esos filtros."}</div> : (
         <div className="form-card" style={{ padding: 0, overflowX: "auto" }}>
           <table style={tabla}>
-            <thead><tr>{["Registrado", "Referido", "Referidor", "Etapa", "Contrato", "Primera ruta", "Rutas 30 días"].map((h) => <th key={h} style={th}>{h}</th>)}</tr></thead>
+            <thead><tr>{["Registrado", "Referido", "Referidor", "Etapa", "Contrato", "Primera ruta", "Rutas 30 días", ""].map((h, i) => <th key={i} style={th}>{h}</th>)}</tr></thead>
             <tbody>
               {lista.map((r) => (
-                <tr key={r.referido_id} style={{ borderTop: `0.5px solid ${BORDE}` }}>
+                <Fragment key={r.referido_id}>
+                <tr style={{ borderTop: `0.5px solid ${BORDE}`, opacity: verElim ? 0.75 : 1 }}>
                   <td style={td}>{fecha(r.creado_at)}</td>
                   <td style={td}><b>{r.razon_social || r.nombre}</b><div style={sub}>{r.tipo === "persona_moral" ? "Persona moral" : "Persona física"} · RFC {r.rfc}</div></td>
                   <td style={td}>{r.canal ? <>{canalDe(r.canal)}<div style={sub}>Canal Bigticket</div></> : <>{r.referidor}<div style={sub}>{r.codigo}</div></>}</td>
@@ -233,7 +251,16 @@ function Referidos({ referidos, canales = [] }) {
                   <td style={td}>{fecha(r.firmado_at)}</td>
                   <td style={td}>{fecha(r.primera_ruta)}</td>
                   <td style={td}>{r.primera_ruta ? `${r.rutas_30} de 20` : "—"}</td>
+                  <td style={td}>
+                    {verElim ? <InfoEliminado e={eliminados.get(String(r.referido_id))} />
+                      : <button className="btn-back" style={{ ...btnChico, color: "#b42318" }} onClick={() => setBorrando(borrando === r.referido_id ? null : r.referido_id)}>Eliminar</button>}
+                  </td>
                 </tr>
+                {borrando === r.referido_id && (
+                  <FilaMotivo cols={8} quien={r.razon_social || r.nombre} onCancelar={() => setBorrando(null)}
+                    onConfirmar={async (m) => { if (await onEliminar(r.referido_id, m)) setBorrando(null); }} />
+                )}
+                </Fragment>
               ))}
             </tbody>
           </table>
@@ -244,14 +271,58 @@ function Referidos({ referidos, canales = [] }) {
 }
 
 // ── Referidores ─────────────────────────────────────────────────────────────
+// ── Eliminar referidos y referidores (quedan en ref_eliminados con su motivo) ──
+function BotonEliminados({ ver, setVer, n }) {
+  return (
+    <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 10 }}>
+      <button className="btn-back" style={btnChico} onClick={() => setVer(!ver)} disabled={!n && !ver}>
+        {ver ? "← Volver a la lista" : `Ver eliminados (${n})`}
+      </button>
+    </div>
+  );
+}
+
+function InfoEliminado({ e }) {
+  if (!e) return null;
+  return (
+    <div style={{ fontSize: 12, color: "#b42318", minWidth: 160 }}>
+      <b>Eliminado</b> · {fecha(e.eliminado_at)}
+      <div style={{ color: GRIS }}>{e.motivo}</div>
+      <div style={{ color: GRIS, fontSize: 11 }}>{e.eliminado_por}</div>
+    </div>
+  );
+}
+
+function FilaMotivo({ cols, quien, aviso, onCancelar, onConfirmar }) {
+  const [motivo, setMotivo] = useState("");
+  const [busy, setBusy] = useState(false);
+  return (
+    <tr><td colSpan={cols} style={{ ...td, background: "#fdf3f2" }}>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <span style={{ fontSize: 13, color: "#b42318", fontWeight: 600 }}>Eliminar a {quien}.{aviso ? ` ${aviso}` : ""}</span>
+        <input autoFocus value={motivo} onChange={(e) => setMotivo(e.target.value)} placeholder="Motivo (obligatorio), por ejemplo: registro de prueba"
+          style={{ flex: 1, minWidth: 260 }} />
+        <button className="btn-back" style={btnChico} onClick={onCancelar}>Cancelar</button>
+        <button style={{ ...btnChico, background: "#b42318", color: "#fff", border: "none", borderRadius: 8 }} disabled={busy}
+          onClick={async () => { if (!motivo.trim()) { alert("Escribe el motivo."); return; } setBusy(true); await onConfirmar(motivo.trim()); setBusy(false); }}>
+          Confirmar eliminación
+        </button>
+      </div>
+    </td></tr>
+  );
+}
+
 // Los canales de Bigticket (camioneta, Facebook) se muestran como un referidor
 // más, para ver cuántos referidos nacen de cada fuente. No generan bonos.
 const FIRMADO = ["contrato_firmado", "primera_ruta", "quince_rutas", "sin_meta_30_dias"];
 const EN_RUTA = ["primera_ruta", "quince_rutas", "sin_meta_30_dias"];
 
-function Referidores({ referidores, canales = [], referidos = [] }) {
+function Referidores({ referidores, canales = [], referidos = [], eliminados = new Map(), onEliminar }) {
   const [q, setQ] = useState("");
-  const lista = referidores.filter((r) => !q || `${r.nombre} ${r.codigo} ${r.correo} ${r.telefono} ${r.curp}`.toLowerCase().includes(q.toLowerCase()));
+  const [verElim, setVerElim] = useState(false);
+  const [borrando, setBorrando] = useState(null);
+  const lista = referidores.filter((r) => eliminados.has(String(r.id)) === verElim
+    && (!q || `${r.nombre} ${r.codigo} ${r.correo} ${r.telefono} ${r.curp}`.toLowerCase().includes(q.toLowerCase())));
   const deCanal = (c) => referidos.filter((r) => r.canal === c);
   const listaCanales = canales.filter((c) => !q || `${c.nombre} ${c.codigo}`.toLowerCase().includes(q.toLowerCase()));
   const fuentes = [
@@ -269,13 +340,14 @@ function Referidores({ referidores, canales = [], referidos = [] }) {
           </span>
         ))}
       </div>
-      <input placeholder="Buscar por nombre, código, correo, teléfono o CURP…" value={q} onChange={(e) => setQ(e.target.value)} style={{ marginBottom: 12 }} />
-      {lista.length + listaCanales.length === 0 ? <div className="empty">No hay referidores con esa búsqueda.</div> : (
+      <input placeholder="Buscar por nombre, código, correo, teléfono o CURP…" value={q} onChange={(e) => setQ(e.target.value)} style={{ marginBottom: 8 }} />
+      <BotonEliminados ver={verElim} setVer={setVerElim} n={eliminados.size} />
+      {lista.length + (verElim ? 0 : listaCanales.length) === 0 ? <div className="empty">{verElim ? "No hay referidores eliminados." : "No hay referidores con esa búsqueda."}</div> : (
         <div className="form-card" style={{ padding: 0, overflowX: "auto" }}>
           <table style={tabla}>
-            <thead><tr>{["Inscrito", "Referidor", "Código", "Contacto", "Cuenta", "Referidos", "Ganado", "Pagado"].map((h) => <th key={h} style={th}>{h}</th>)}</tr></thead>
+            <thead><tr>{["Inscrito", "Referidor", "Código", "Contacto", "Cuenta", "Referidos", "Ganado", "Pagado", ""].map((h, i) => <th key={i} style={th}>{h}</th>)}</tr></thead>
             <tbody>
-              {listaCanales.map((c) => {
+              {!verElim && listaCanales.map((c) => {
                 const rs = deCanal(c.codigo);
                 return (
                   <tr key={"canal-" + c.codigo} style={{ borderTop: `0.5px solid ${BORDE}`, background: "#f5f8ff" }}>
@@ -287,11 +359,13 @@ function Referidores({ referidores, canales = [], referidos = [] }) {
                     <td style={td}>{rs.length}<div style={sub}>{rs.filter((r) => FIRMADO.includes(r.etapa)).length} firmados · {rs.filter((r) => EN_RUTA.includes(r.etapa)).length} en ruta</div></td>
                     <td style={td}>—</td>
                     <td style={td}>—</td>
+                    <td style={td} />
                   </tr>
                 );
               })}
               {lista.map((r) => (
-                <tr key={r.id} style={{ borderTop: `0.5px solid ${BORDE}` }}>
+                <Fragment key={r.id}>
+                <tr style={{ borderTop: `0.5px solid ${BORDE}`, opacity: verElim ? 0.75 : 1 }}>
                   <td style={td}>{fecha(r.creado_at)}</td>
                   <td style={td}><b>{r.nombre}</b><div style={sub}>CURP {r.curp}{r.es_chofer_bt ? " · chofer BT" : ""}{r.tercero_id ? " · empresa BT" : ""}</div></td>
                   <td style={{ ...td, fontWeight: 700 }}>{r.codigo}</td>
@@ -300,7 +374,16 @@ function Referidores({ referidores, canales = [], referidos = [] }) {
                   <td style={td}>{r.n_referidos}</td>
                   <td style={td}>{pesos(r.ganado)}</td>
                   <td style={td}>{pesos(r.pagado)}</td>
+                  <td style={td}>
+                    {verElim ? <InfoEliminado e={eliminados.get(String(r.id))} />
+                      : <button className="btn-back" style={{ ...btnChico, color: "#b42318" }} onClick={() => setBorrando(borrando === r.id ? null : r.id)}>Eliminar</button>}
+                  </td>
                 </tr>
+                {borrando === r.id && (
+                  <FilaMotivo cols={9} quien={`${r.nombre} (${r.codigo})`} aviso="Su link y su QR dejan de funcionar."
+                    onCancelar={() => setBorrando(null)} onConfirmar={async (m) => { if (await onEliminar(r.id, m)) setBorrando(null); }} />
+                )}
+                </Fragment>
               ))}
             </tbody>
           </table>
