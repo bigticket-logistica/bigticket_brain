@@ -61,7 +61,9 @@ export default function ModuloReferidos({ usuario }) {
   const [canales, setCanales] = useState([]);   // fuentes de Bigticket sin referidor (camioneta, Facebook)
   const [reqAbiertos, setReqAbiertos] = useState(0);
   const [eliminados, setEliminados] = useState([]);
-  const [anfitriones, setAnfitriones] = useState([]);   // referidores con "¿por dónde te enteraste?" (vw_ref_brain_anfitriones)   // referidos y referidores eliminados desde el Brain (ref_eliminados)   // requerimientos del jefe de operaciones sin atender
+  const [anfitriones, setAnfitriones] = useState([]);
+  const [mensajes, setMensajes] = useState([]);   // conversación Bigticket ↔ referidor (ref_mensajes)
+  const [chatCon, setChatCon] = useState(null);   // referidor abierto en Mensajes   // referidores con "¿por dónde te enteraste?" (vw_ref_brain_anfitriones)   // referidos y referidores eliminados desde el Brain (ref_eliminados)   // requerimientos del jefe de operaciones sin atender
   const [campana, setCampana] = useState(null);        // requerimiento que se está convirtiendo en campaña
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState("");
@@ -77,11 +79,12 @@ export default function ModuloReferidos({ usuario }) {
       sb.from("ref_propuestas").select("*"),
       sb.from("ref_canales").select("*").order("creado_at"),
     ]);
-    const [el, an] = await Promise.all([
+    const [el, an, ms] = await Promise.all([
       sb.from("ref_eliminados").select("*"),
       sb.from("vw_ref_brain_anfitriones").select("*"),
+      sb.from("ref_mensajes").select("*").order("creado_at").limit(5000),
     ]);
-    setEliminados(el.data || []); setAnfitriones(an.data || []);
+    setEliminados(el.data || []); setAnfitriones(an.data || []); setMensajes(ms.data || []);
     const rq = await sb.from("ref_requerimientos").select("id", { count: "exact", head: true }).in("estado", ["pendiente", "en_proceso"]);
     setReqAbiertos(rq.count || 0);
     // Si ref_canales no se puede leer, la pestaña sigue funcionando sin las filas de canal.
@@ -106,7 +109,7 @@ export default function ModuloReferidos({ usuario }) {
     if (error) { alert("No se pudo eliminar: " + error.message); return false; }
     cargar(); return true;
   };
-  const TABS = [["bonos", "Bonos", porValidar], ["referidos", "Referidos", referidosVivos.length], ["referidores", "Referidores", referidoresVivos.length + canales.length], ["anfitriones", "Anfitriones", null], ["oportunidades", "Oportunidades", vacantes], ["requerimientos", "Requerimientos", reqAbiertos]];
+  const TABS = [["bonos", "Bonos", porValidar], ["referidos", "Referidos", referidosVivos.length], ["referidores", "Referidores", referidoresVivos.length + canales.length], ["anfitriones", "Anfitriones", null], ["mensajes", "Mensajes", mensajes.filter((m) => m.de === "referidor" && !m.leido_at).length], ["oportunidades", "Oportunidades", vacantes], ["requerimientos", "Requerimientos", reqAbiertos]];
 
   return (
     <div className="pg">
@@ -115,7 +118,7 @@ export default function ModuloReferidos({ usuario }) {
       <div style={{ display: "flex", gap: 6, marginBottom: 16, flexWrap: "wrap" }}>
         {TABS.map(([k, t, n]) => (
           <button key={k} onClick={() => setTab(k)} className={`nav-btn${tab === k ? " active" : ""}`} style={{ border: `0.5px solid ${BORDE}` }}>
-            {t} {n > 0 && <span style={{ marginLeft: 6, background: k === "bonos" || k === "requerimientos" ? NARANJA : "#e4e7ec", color: k === "bonos" || k === "requerimientos" ? "#fff" : AZUL, borderRadius: 10, padding: "1px 7px", fontSize: 11, fontWeight: 700 }}>{n}</span>}
+            {t} {n > 0 && <span style={{ marginLeft: 6, background: ["bonos", "requerimientos", "mensajes"].includes(k) ? NARANJA : "#e4e7ec", color: ["bonos", "requerimientos", "mensajes"].includes(k) ? "#fff" : AZUL, borderRadius: 10, padding: "1px 7px", fontSize: 11, fontWeight: 700 }}>{n}</span>}
           </button>
         ))}
         <button onClick={cargar} className="btn-back" style={{ marginLeft: "auto" }}>↻ Actualizar</button>
@@ -125,8 +128,10 @@ export default function ModuloReferidos({ usuario }) {
         <>
           {tab === "bonos" && <Bonos bonos={bonos} usuario={usuario} onCambio={cargar} />}
           {tab === "referidos" && <Referidos referidos={referidos} canales={canales} eliminados={elimReferidos} onEliminar={(id, m) => eliminar("referido", id, m)} />}
+          {tab === "mensajes" && <Mensajes referidores={referidoresVivos} mensajes={mensajes} abierto={chatCon} setAbierto={setChatCon} usuario={usuario} onCambio={cargar} />}
           {tab === "anfitriones" && <Anfitriones lista={anfitriones.filter((a) => !elimReferidores.has(String(a.id)))} />}
-          {tab === "referidores" && <Referidores referidores={referidores} canales={canales} referidos={referidosVivos} eliminados={elimReferidores} onEliminar={(id, m) => eliminar("referidor", id, m)} />}
+          {tab === "referidores" && <Referidores referidores={referidores} canales={canales} referidos={referidosVivos} eliminados={elimReferidores} onEliminar={(id, m) => eliminar("referidor", id, m)}
+            onMensaje={(id) => { setChatCon(id); setTab("mensajes"); }} />}
           {tab === "oportunidades" && <Oportunidades lista={oportunidades} centros={centros} propuestas={propuestas} usuario={usuario} onCambio={cargar}
             campana={campana} onCampanaLista={() => { setCampana(null); setTab("requerimientos"); }} onCampanaCancelar={() => setCampana(null)} />}
           {tab === "requerimientos" && <Requerimientos usuario={usuario} modo="analista" onCrearCampana={(r) => {
@@ -276,6 +281,97 @@ function Referidos({ referidos, canales = [], eliminados = new Map(), onEliminar
 }
 
 // ── Referidores ─────────────────────────────────────────────────────────────
+// ── Mensajes: conversación con cada referidor ───────────────────────────────
+// Lo que escribe Bigticket llega a la campana del portal y por correo al
+// referidor (trigger trg_ref_mensaje_aviso). El referidor responde desde el portal.
+const PLANTILLAS_MSG = [
+  ["Registrar CLABE", "Hola, para poder pagarte tus bonos necesitamos tu cuenta CLABE. Regístrala en tu portal, en Cuenta → Registrar cuenta. ¡Gracias!"],
+  ["Completar datos", "Hola, te faltan algunos datos en tu perfil de referidor. Entra a tu portal y complétalos para no atrasar tus bonos."],
+  ["Comparte tu QR", "¡Hola! Recuerda que puedes compartir tu QR o tu link por WhatsApp desde la pantalla Mi QR. Por cada transportista que entre a rutear ganas hasta $2,000."],
+];
+
+function Mensajes({ referidores, mensajes, abierto, setAbierto, usuario, onCambio }) {
+  const [q, setQ] = useState("");
+  const [texto, setTexto] = useState("");
+  const [busy, setBusy] = useState(false);
+  const porRef = useMemo(() => {
+    const m = {};
+    for (const x of mensajes) (m[x.referidor_id] = m[x.referidor_id] || []).push(x);
+    return m;
+  }, [mensajes]);
+  const lista = referidores
+    .filter((r) => !q || `${r.nombre} ${r.codigo} ${r.correo}`.toLowerCase().includes(q.toLowerCase()))
+    .map((r) => {
+      const conv = porRef[r.id] || [];
+      return { r, ult: conv[conv.length - 1], sinLeer: conv.filter((x) => x.de === "referidor" && !x.leido_at).length };
+    })
+    .sort((a, b) => (b.sinLeer - a.sinLeer) || (new Date(b.ult?.creado_at || 0) - new Date(a.ult?.creado_at || 0)));
+  const sel = referidores.find((r) => r.id === abierto);
+  const conv = sel ? porRef[sel.id] || [] : [];
+
+  const enviar = async () => {
+    if (!texto.trim() || !sel) return;
+    setBusy(true);
+    const { error } = await sb.rpc("fn_ref_mensaje_enviar", { p_referidor: sel.id, p_texto: texto.trim(), p_por: usuario?.email || usuario?.nombre || "brain" });
+    setBusy(false);
+    if (error) { alert("No se pudo enviar: " + error.message); return; }
+    setTexto(""); onCambio();
+  };
+
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "minmax(260px, 340px) 1fr", gap: 12, alignItems: "start" }}>
+      <div className="form-card" style={{ padding: 0, maxHeight: 620, overflowY: "auto" }}>
+        <div style={{ padding: 10, borderBottom: `0.5px solid ${BORDE}` }}>
+          <input placeholder="Buscar referidor…" value={q} onChange={(e) => setQ(e.target.value)} />
+        </div>
+        {lista.map(({ r, ult, sinLeer }) => (
+          <button key={r.id} onClick={() => setAbierto(r.id)}
+            style={{ display: "block", width: "100%", textAlign: "left", border: "none", borderBottom: `0.5px solid ${BORDE}`, padding: "10px 12px", cursor: "pointer",
+              background: abierto === r.id ? "#eef2f8" : "#fff" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+              <b style={{ fontSize: 13, color: AZUL }}>{r.nombre}</b>
+              {sinLeer > 0 && <span style={{ background: NARANJA, color: "#fff", borderRadius: 10, padding: "0 7px", fontSize: 11, fontWeight: 700 }}>{sinLeer}</span>}
+            </div>
+            <div style={{ ...sub, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+              {ult ? `${ult.de === "bigticket" ? "Tú: " : ""}${ult.texto}` : `${r.codigo} · sin mensajes`}
+            </div>
+          </button>
+        ))}
+      </div>
+
+      <div className="form-card" style={{ minHeight: 420, display: "flex", flexDirection: "column" }}>
+        {!sel ? <div className="empty">Elige un referidor para ver la conversación o escribirle.</div> : (
+          <>
+            <div style={{ borderBottom: `0.5px solid ${BORDE}`, paddingBottom: 8, marginBottom: 8 }}>
+              <b style={{ color: AZUL }}>{sel.nombre}</b> <span style={sub}>{sel.codigo} · {sel.correo} · {sel.clabe ? "con CLABE" : "sin CLABE"}</span>
+            </div>
+            <div style={{ flex: 1, overflowY: "auto", maxHeight: 380, display: "flex", flexDirection: "column", gap: 8, padding: "4px 2px" }}>
+              {conv.length === 0 && <div style={{ ...sub, textAlign: "center", padding: 20 }}>Todavía no hay mensajes con este referidor.</div>}
+              {conv.map((m) => (
+                <div key={m.id} style={{ alignSelf: m.de === "bigticket" ? "flex-end" : "flex-start", maxWidth: "75%",
+                  background: m.de === "bigticket" ? "#eef2f8" : "#fff4ec", border: `0.5px solid ${BORDE}`, borderRadius: 12, padding: "8px 11px" }}>
+                  <div style={{ fontSize: 13, whiteSpace: "pre-wrap" }}>{m.texto}</div>
+                  <div style={{ fontSize: 10.5, color: GRIS, marginTop: 3, textAlign: "right" }}>
+                    {m.de === "bigticket" ? (m.creado_por || "Bigticket") : sel.nombre.split(" ")[0]} · {new Date(m.creado_at).toLocaleString("es-MX", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}
+                    {m.de === "bigticket" && (m.leido_at ? " · ✓ leído" : " · enviado")}
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", margin: "10px 0 6px" }}>
+              {PLANTILLAS_MSG.map(([t, txt]) => <button key={t} className="btn-back" style={btnChico} onClick={() => setTexto(txt)}>{t}</button>)}
+            </div>
+            <textarea rows={3} value={texto} onChange={(e) => setTexto(e.target.value)} placeholder="Escribe el mensaje. Le llega al portal y por correo." />
+            <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 8 }}>
+              <button className="btn-blue" disabled={busy || !texto.trim()} onClick={enviar}>{busy ? "Enviando…" : "Enviar mensaje"}</button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── Anfitriones: por dónde se enteró cada referidor de la campaña ──────────
 // Cada referidor puede marcar varias fuentes; cuenta en cada una que marcó.
 // Los inscritos antes de que existiera la pregunta quedan en "Sin dato".
@@ -382,7 +478,7 @@ function FilaMotivo({ cols, quien, aviso, onCancelar, onConfirmar }) {
 const FIRMADO = ["contrato_firmado", "primera_ruta", "quince_rutas", "sin_meta_30_dias"];
 const EN_RUTA = ["primera_ruta", "quince_rutas", "sin_meta_30_dias"];
 
-function Referidores({ referidores, canales = [], referidos = [], eliminados = new Map(), onEliminar }) {
+function Referidores({ referidores, canales = [], referidos = [], eliminados = new Map(), onEliminar, onMensaje }) {
   const [q, setQ] = useState("");
   const [verElim, setVerElim] = useState(false);
   const [borrando, setBorrando] = useState(null);
@@ -440,8 +536,12 @@ function Referidores({ referidores, canales = [], referidos = [], eliminados = n
                   <td style={td}>{pesos(r.ganado)}</td>
                   <td style={td}>{pesos(r.pagado)}</td>
                   <td style={td}>
-                    {verElim ? <InfoEliminado e={eliminados.get(String(r.id))} />
-                      : <button className="btn-back" style={{ ...btnChico, color: "#b42318" }} onClick={() => setBorrando(borrando === r.id ? null : r.id)}>Eliminar</button>}
+                    {verElim ? <InfoEliminado e={eliminados.get(String(r.id))} /> : (
+                      <div style={{ display: "flex", gap: 6 }}>
+                        <button className="btn-back" style={btnChico} onClick={() => onMensaje && onMensaje(r.id)}>✉ Mensaje</button>
+                        <button className="btn-back" style={{ ...btnChico, color: "#b42318" }} onClick={() => setBorrando(borrando === r.id ? null : r.id)}>Eliminar</button>
+                      </div>
+                    )}
                   </td>
                 </tr>
                 {borrando === r.id && (
