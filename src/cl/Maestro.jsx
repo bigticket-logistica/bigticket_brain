@@ -486,7 +486,8 @@ function ModuloMaestroCL({ usuario } = {}) {
   const VEHICULOS_TARIFA = ["COMBUSTION", "BIG VAN", "COMBUSTION LARGE VAN", "ELECTRICA"];
   const TARIFA_NUEVA0 = { cecos_admin: "", segmentacion: "", servicio: "UM", tipo_pago: "GUIAS",
     detalle: "", tipo_vehiculo: "COMBUSTION", tarifa_oficial: "", tarifa_contingencia: "",
-    cobrar_oficial: "", cobrar_contingencia: "", vigente_desde: "", nota: "" };
+    cobrar_oficial: "", cobrar_contingencia: "", vigente_desde: "", nota: "",
+    entregas_base: "", tarifa_adicional: "" };   // solo PISO: el piso cubre N entregas, cada extra se paga aparte
 
   const cargarTarifario = async () => {
     const fallos = [];
@@ -545,6 +546,12 @@ function ModuloMaestroCL({ usuario } = {}) {
     if (!t.servicio || !t.tipo_pago || !t.tipo_vehiculo || t.tarifa_oficial === "") {
       setError("Tarifa nueva: faltan servicio, tipo de pago, vehículo o el monto oficial."); return;
     }
+    // la base exige ambos datos en PISO (regla tarifas_piso_chk): se avisa antes de enviar
+    const esPiso = t.tipo_pago === "PISO";
+    if (esPiso && (t.entregas_base === "" || t.tarifa_adicional === "")) {
+      setError("Tarifa PISO: indica cuántas entregas cubre el piso y el $ por cada entrega adicional " +
+               "(si es un monto fijo, pon 0 en ambos)."); return;
+    }
     setTarifaGuardando("__nueva__");
     try {
       await api("tarifas", {
@@ -558,6 +565,8 @@ function ModuloMaestroCL({ usuario } = {}) {
           tarifa_contingencia: t.tarifa_contingencia === "" ? Number(t.tarifa_oficial) : Number(t.tarifa_contingencia),
           cobrar_oficial: t.cobrar_oficial === "" ? null : Number(t.cobrar_oficial),
           cobrar_contingencia: t.cobrar_contingencia === "" ? null : Number(t.cobrar_contingencia),
+          entregas_base: esPiso ? Math.round(Number(t.entregas_base)) : null,
+          tarifa_adicional: esPiso ? Number(t.tarifa_adicional) : null,
           vigente_desde: t.vigente_desde || undefined,
           nota: t.nota || "Creada desde el Brain.",
           actualizado_por: "brain",
@@ -2290,6 +2299,20 @@ function ModuloMaestroCL({ usuario } = {}) {
                                 onChange={e => setTarifaNueva(t => ({ ...t, tipo_pago: e.target.value }))}>
                           {TIPOS_PAGO.map(tp => <option key={tp} value={tp}>{tp}</option>)}
                         </select></label>
+                      {tarifaNueva.tipo_pago === "PISO" && (
+                        <Fragment>
+                          <label style={{ fontSize: 10.5, color: "#b45309", fontWeight: 700 }}>Entregas base *<br/>
+                            <input className="mj-input" type="number" step="1" min="0" value={tarifaNueva.entregas_base}
+                                   placeholder="75" title="Entregas que cubre el piso (0 si es monto fijo)"
+                                   onChange={e => setTarifaNueva(t => ({ ...t, entregas_base: e.target.value }))}
+                                   style={{ ...inp, borderColor: "#f59e0b" }} /></label>
+                          <label style={{ fontSize: 10.5, color: "#b45309", fontWeight: 700 }}>$ Adicional *<br/>
+                            <input className="mj-input" type="number" step="0.01" min="0" value={tarifaNueva.tarifa_adicional}
+                                   placeholder="por entrega extra" title="$ por cada entrega sobre el piso (0 si es monto fijo)"
+                                   onChange={e => setTarifaNueva(t => ({ ...t, tarifa_adicional: e.target.value }))}
+                                   style={{ ...inp, borderColor: "#f59e0b" }} /></label>
+                        </Fragment>
+                      )}
                       <label style={{ fontSize: 10.5, color: "#64748b" }}>Vehículo<br/>
                         <select className="mj-input" value={tarifaNueva.tipo_vehiculo}
                                 onChange={e => setTarifaNueva(t => ({ ...t, tipo_vehiculo: e.target.value }))}>
