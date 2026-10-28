@@ -266,7 +266,7 @@ function ModuloMaestroCL({ usuario } = {}) {
   const [nsMsg, setNsMsg] = useState("");
   const [nsCargando, setNsCargando] = useState(false);
   const [motPanel, setMotPanel] = useState(false);
-  const [motNuevo, setMotNuevo] = useState({ codigo: "", descripcion: "", genera_multa: false });            // patente → empresa según Certronic (vw_cert_vehiculo_vigente)
+  const [motNuevo, setMotNuevo] = useState({ codigo: "", descripcion: "", genera_multa: false, pide_comentario: false });            // patente → empresa según Certronic (vw_cert_vehiculo_vigente)
   // ── Tarifario ──
   const [tarifas, setTarifas] = useState([]);
   const [tarifaEdit, setTarifaEdit] = useState({});        // id -> fila en edición
@@ -551,8 +551,9 @@ function ModuloMaestroCL({ usuario } = {}) {
     try {
       await api("motivos_no_salida", { method: "POST", headers: { Prefer: "return=minimal" },
         body: JSON.stringify({ codigo, descripcion: motNuevo.descripcion.trim() || null,
-          genera_multa: !!motNuevo.genera_multa, orden: Math.max(0, ...nsMotivos.map(m => m.orden || 0)) + 10 }) });
-      setMotNuevo({ codigo: "", descripcion: "", genera_multa: false });
+          genera_multa: !!motNuevo.genera_multa, pide_comentario: !!motNuevo.pide_comentario,
+          orden: Math.max(0, ...nsMotivos.map(m => m.orden || 0)) + 10 }) });
+      setMotNuevo({ codigo: "", descripcion: "", genera_multa: false, pide_comentario: false });
       await cargarNoSalidas();
     } catch (e) { setError(e.message); }
   };
@@ -3489,7 +3490,7 @@ function ModuloMaestroCL({ usuario } = {}) {
                       Los motivos no se borran: se desactivan (los registros antiguos conservan el suyo).
                     </div>
                     <table className="mj-tabla" style={{ marginBottom: 10 }}>
-                      <thead><tr><th>Motivo</th><th>Descripción</th><th>Genera multa</th><th>Estado</th></tr></thead>
+                      <thead><tr><th>Motivo</th><th>Descripción</th><th>Genera multa</th><th>Pide comentario</th><th>Estado</th></tr></thead>
                       <tbody>
                         {nsMotivos.map(m => (
                           <tr key={m.codigo} style={!m.activo ? { opacity: 0.55 } : {}}>
@@ -3497,6 +3498,8 @@ function ModuloMaestroCL({ usuario } = {}) {
                             <td><input className="mj-input" defaultValue={m.descripcion || ""} style={{ fontSize: 12, minWidth: 280 }}
                                        onBlur={e => { const v = e.target.value.trim(); if (v !== (m.descripcion || "")) actualizarMotivo(m.codigo, { descripcion: v || null }); }} /></td>
                             <td><input type="checkbox" checked={!!m.genera_multa} onChange={e => actualizarMotivo(m.codigo, { genera_multa: e.target.checked })} /></td>
+                            <td><input type="checkbox" checked={!!m.pide_comentario} title="El supervisor o el analista deben escribir qué pasó"
+                                       onChange={e => actualizarMotivo(m.codigo, { pide_comentario: e.target.checked })} /></td>
                             <td><label style={{ fontSize: 11.5, color: "#64748b" }}>
                               <input type="checkbox" checked={!!m.activo} onChange={e => actualizarMotivo(m.codigo, { activo: e.target.checked })} /> {m.activo ? "activo" : "inactivo"}
                             </label></td>
@@ -3514,6 +3517,9 @@ function ModuloMaestroCL({ usuario } = {}) {
                       <label style={{ fontSize: 11.5, color: "#64748b", paddingBottom: 6 }}>
                         <input type="checkbox" checked={motNuevo.genera_multa}
                                onChange={e => setMotNuevo(x => ({ ...x, genera_multa: e.target.checked }))} /> genera multa</label>
+                      <label style={{ fontSize: 11.5, color: "#64748b", paddingBottom: 6 }}>
+                        <input type="checkbox" checked={motNuevo.pide_comentario}
+                               onChange={e => setMotNuevo(x => ({ ...x, pide_comentario: e.target.checked }))} /> pide comentario</label>
                       <button className="mj-btn" onClick={agregarMotivo} disabled={!motNuevo.codigo.trim()}
                               style={{ background: NAVY, color: "#fff", borderColor: NAVY }}>➕ Agregar motivo</button>
                     </div>
@@ -3548,7 +3554,8 @@ function ModuloMaestroCL({ usuario } = {}) {
                                     <option value="">— motivo —</option>
                                     {motActivos.map(m => <option key={m.codigo} value={m.codigo}>{m.codigo}{m.genera_multa ? " · con multa" : ""}</option>)}
                                   </select>
-                                  <input className="mj-input" placeholder="comentario (opcional)" style={{ fontSize: 12, width: 180 }}
+                                  <input className="mj-input" style={{ fontSize: 12, width: 180 }}
+                                         placeholder={motActivos.find(m => m.codigo === (ed && ed.motivo))?.pide_comentario ? "comentario (obligatorio)" : "comentario (opcional)"}
                                          value={(ed && ed.comentario) || ""}
                                          onChange={e => setNsEdit(m => ({ ...m, [x.patente]: { ...(m[x.patente] || {}), comentario: e.target.value } }))} />
                                 </span>
