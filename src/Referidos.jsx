@@ -62,6 +62,7 @@ export default function ModuloReferidos({ usuario }) {
   const [reqAbiertos, setReqAbiertos] = useState(0);
   const [eliminados, setEliminados] = useState([]);
   const [anfitriones, setAnfitriones] = useState([]);
+  const [listaAnf, setListaAnf] = useState([]);   // supervisores y comercios aliados (vw_ref_brain_lista_anfitriones)
   const [mensajes, setMensajes] = useState([]);   // conversación Bigticket ↔ referidor (ref_mensajes)
   const [chatCon, setChatCon] = useState(null);   // referidor abierto en Mensajes   // referidores con "¿por dónde te enteraste?" (vw_ref_brain_anfitriones)   // referidos y referidores eliminados desde el Brain (ref_eliminados)   // requerimientos del jefe de operaciones sin atender
   const [campana, setCampana] = useState(null);        // requerimiento que se está convirtiendo en campaña
@@ -79,12 +80,13 @@ export default function ModuloReferidos({ usuario }) {
       sb.from("ref_propuestas").select("*"),
       sb.from("ref_canales").select("*").order("creado_at"),
     ]);
-    const [el, an, ms] = await Promise.all([
+    const [el, an, ms, la] = await Promise.all([
       sb.from("ref_eliminados").select("*"),
       sb.from("vw_ref_brain_anfitriones").select("*"),
       sb.from("ref_mensajes").select("*").order("creado_at").limit(5000),
+      sb.from("vw_ref_brain_lista_anfitriones").select("*"),
     ]);
-    setEliminados(el.data || []); setAnfitriones(an.data || []); setMensajes(ms.data || []);
+    setEliminados(el.data || []); setAnfitriones(an.data || []); setMensajes(ms.data || []); setListaAnf(la.data || []);
     const rq = await sb.from("ref_requerimientos").select("id", { count: "exact", head: true }).in("estado", ["pendiente", "en_proceso"]);
     setReqAbiertos(rq.count || 0);
     // Si ref_canales no se puede leer, la pestaña sigue funcionando sin las filas de canal.
@@ -129,7 +131,7 @@ export default function ModuloReferidos({ usuario }) {
           {tab === "bonos" && <Bonos bonos={bonos} usuario={usuario} onCambio={cargar} />}
           {tab === "referidos" && <Referidos referidos={referidos} canales={canales} eliminados={elimReferidos} onEliminar={(id, m) => eliminar("referido", id, m)} />}
           {tab === "mensajes" && <Mensajes referidores={referidoresVivos} mensajes={mensajes} abierto={chatCon} setAbierto={setChatCon} usuario={usuario} onCambio={cargar} />}
-          {tab === "anfitriones" && <Anfitriones lista={anfitriones.filter((a) => !elimReferidores.has(String(a.id)))} />}
+          {tab === "anfitriones" && <Anfitriones lista={anfitriones.filter((a) => !elimReferidores.has(String(a.id)))} anfitriones={listaAnf} />}
           {tab === "referidores" && <Referidores referidores={referidores} canales={canales} referidos={referidosVivos} eliminados={elimReferidores} onEliminar={(id, m) => eliminar("referidor", id, m)}
             onMensaje={(id) => { setChatCon(id); setTab("mensajes"); }} />}
           {tab === "oportunidades" && <Oportunidades lista={oportunidades} centros={centros} propuestas={propuestas} usuario={usuario} onCambio={cargar}
@@ -380,8 +382,17 @@ const FUENTES_REF = [
   ["supervisor", "Supervisor BigTicket", "🦺"], ["otro", "Otro", "✳️"], ["sin_dato", "Sin dato", "—"],
 ];
 
-function Anfitriones({ lista }) {
+function Anfitriones({ lista, anfitriones = [] }) {
+  const [vista, setVista] = useState("anfitrion");   // anfitrion · fuente
   const [abierta, setAbierta] = useState(null);
+  const selector = (
+    <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+      {[["anfitrion", "Por anfitrión"], ["fuente", "Por dónde se enteraron"]].map(([k, t]) => (
+        <button key={k} onClick={() => { setVista(k); setAbierta(null); }} className={`nav-btn${vista === k ? " active" : ""}`} style={{ border: `0.5px solid ${BORDE}` }}>{t}</button>
+      ))}
+    </div>
+  );
+  if (vista === "anfitrion") return <>{selector}<PorAnfitrion lista={lista} anfitriones={anfitriones} /></>;
   const grupos = FUENTES_REF.map(([k, t, ico]) => {
     const refs = lista.filter((a) => (k === "sin_dato" ? !(a.fuentes || []).length : (a.fuentes || []).includes(k)))
       .sort((x, y) => Number(y.n_referidos) - Number(x.n_referidos));
@@ -390,6 +401,7 @@ function Anfitriones({ lista }) {
   const totalRefs = lista.length || 1;
   return (
     <>
+      {selector}
       <div style={{ fontSize: 13, color: GRIS, marginBottom: 12 }}>
         Por dónde se enteraron los referidores de la campaña. Un referidor que marcó varias fuentes cuenta en cada una.
       </div>
@@ -428,6 +440,64 @@ function Anfitriones({ lista }) {
           </div>
         );
       })()}
+    </>
+  );
+}
+
+// Por anfitrión: cada supervisor (código A0005…) y cada comercio aliado
+// (COMERCIO…) con los referidores que se inscribieron por su link.
+function PorAnfitrion({ lista, anfitriones }) {
+  const [abierto, setAbierto] = useState(null);
+  const filas = anfitriones.map((a) => {
+    const refs = lista.filter((r) => r.anfitrion === a.codigo).sort((x, y) => Number(y.n_referidos) - Number(x.n_referidos));
+    return { ...a, refs, referidos: refs.reduce((n, r) => n + Number(r.n_referidos || 0), 0) };
+  }).sort((x, y) => (y.refs.length - x.refs.length) || (y.referidos - x.referidos) || String(x.nombre).localeCompare(String(y.nombre)));
+  const sinAnf = lista.filter((r) => !r.anfitrion).length;
+  const conAnf = lista.length - sinAnf;
+  return (
+    <>
+      <div style={{ fontSize: 13, color: GRIS, marginBottom: 12 }}>
+        Los anfitriones invitan a ser referidor con su link (supervisores y comercios aliados); no cobran bonos.
+        {" "}<b>{conAnf}</b> referidor(es) llegaron por un anfitrión y <b>{sinAnf}</b> por el link normal.
+      </div>
+      <div className="form-card" style={{ padding: 0, overflowX: "auto" }}>
+        <table style={tabla}>
+          <thead><tr>{["Anfitrión", "Código", "Tipo", "Referidores", "Referidos de sus referidores", ""].map((h, i) => <th key={i} style={th}>{h}</th>)}</tr></thead>
+          <tbody>
+            {filas.map((a) => (
+              <Fragment key={a.codigo}>
+                <tr style={{ borderTop: `0.5px solid ${BORDE}`, opacity: a.refs.length ? 1 : 0.55 }}>
+                  <td style={td}><b>{a.tipo === "supervisor" ? a.nombre : `🌮 ${a.nombre}`}</b></td>
+                  <td style={{ ...td, fontWeight: 700 }}>{a.codigo}</td>
+                  <td style={td}>{a.tipo === "supervisor" ? "Supervisor" : "Comercio aliado"}</td>
+                  <td style={{ ...td, fontWeight: 800, color: a.refs.length ? AZUL : GRIS }}>{a.refs.length}</td>
+                  <td style={{ ...td, fontWeight: 800, color: a.referidos ? NARANJA : GRIS }}>{a.referidos}</td>
+                  <td style={td}>{a.refs.length > 0 && (
+                    <button className="btn-back" style={btnChico} onClick={() => setAbierto(abierto === a.codigo ? null : a.codigo)}>{abierto === a.codigo ? "Ocultar" : "Ver referidores"}</button>
+                  )}</td>
+                </tr>
+                {abierto === a.codigo && (
+                  <tr><td colSpan={6} style={{ ...td, background: "#f8fafc" }}>
+                    <table style={tabla}>
+                      <thead><tr>{["Referidor", "Código", "Inscrito", "Referidos"].map((h) => <th key={h} style={th}>{h}</th>)}</tr></thead>
+                      <tbody>
+                        {a.refs.map((r) => (
+                          <tr key={r.id} style={{ borderTop: `0.5px solid ${BORDE}` }}>
+                            <td style={td}>{r.nombre}</td>
+                            <td style={{ ...td, fontWeight: 700 }}>{r.codigo}</td>
+                            <td style={td}>{fecha(r.creado_at)}</td>
+                            <td style={{ ...td, fontWeight: 700, color: Number(r.n_referidos) ? NARANJA : GRIS }}>{r.n_referidos}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </td></tr>
+                )}
+              </Fragment>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </>
   );
 }
