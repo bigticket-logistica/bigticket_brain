@@ -15528,7 +15528,7 @@ export default function App() {
         {tabActivo === "empresas" && <ModuloEmpresas />}
         {tabActivo === "certificaciones_cl" && <ModuloCertificacionesCL certronicSlot={<ModuloPagos />} />}
         {tabActivo === "mantenciones_cl" && <ModuloMantencionesMadre usuario={usuario} />}
-        {tabActivo === "maestro_cl" && <ModuloMaestroCL />}
+        {tabActivo === "maestro_cl" && <ModuloMaestroCL usuario={usuario} />}
         {tabActivo === "gps_seguros_cl" && <ModuloGpsSegurosCL />}
         {tabActivo === "pnr_cl" && <ModuloPnrCL usuario={usuario} />}
         {tabActivo === "configuracion" && (
