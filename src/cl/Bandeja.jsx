@@ -113,7 +113,25 @@ const NOMBRE_CLAS = {
   comentario: "Comentario o sugerencia", revision_manual: "Revisión manual",
 };
 
-function filaCanon(c, supSugerido) {
+// Estado del caso según sus tareas en la Bitácora (una por CECO).
+function estadoTareas(ts) {
+  if (!ts || !ts.length) return null;
+  const hay = (e) => ts.some((t) => t.estado === e);
+  if (hay("revision_manual")) return { estado: "Revisión manual de la respuesta", revision: { txt: "Fuera de lugar", tono: "rojo" }, manual: true };
+  if (hay("devuelta")) {
+    const d = ts.find((t) => t.estado === "devuelta");
+    return { estado: "Devuelta al supervisor", revision: { txt: `Incompleta${d.revision_falta ? ": falta " + d.revision_falta : ""}`, tono: "malo" } };
+  }
+  if (ts.every((t) => t.estado === "aprobada")) {
+    return ts.every((t) => t.correo_enviado_en)
+      ? { estado: "Respondido por correo", revision: { txt: "Correcta", tono: "bueno" }, cerradoBiggy: true }
+      : { estado: "Aprobada · enviando correo", revision: { txt: "Correcta", tono: "bueno" } };
+  }
+  if (hay("respondida")) return { estado: "Respondida · el Biggy revisa", revision: { txt: "Por revisar", tono: "neutro" } };
+  return { estado: "Asignada en la Bitácora", revision: { txt: "Sin respuesta", tono: "neutro" } };
+}
+
+function filaCanon(c, supSugerido, tareasCaso) {
   const clas = clasificacionCanon(c);
   const biggy = c.canal === "formulario" && c.biggy_clasificacion && c.biggy_clasificacion !== "error" ? c.biggy_clasificacion : null;
   const resuelto = /resuelt/i.test(c.fase || "");
@@ -148,16 +166,21 @@ function filaCanon(c, supSugerido) {
   }
 
   const origen = c.canal === "correo" ? "canon_correo" : "canon_formulario";
+  const et = estadoTareas(tareasCaso);
+  if (et && et.manual && !manual) { manual = "La respuesta del supervisor quedó en revisión manual"; accion = "Revisar la respuesta"; }
   return {
     clave: `canon:${c.card_id}`, origen, origenTxt: c.canal === "correo" ? "Canon · Correo" : "Canon · Formulario", tipo: "Canon",
+    cardId: c.card_id,
     titulo: c.canal === "correo" ? "Correo Canon" : `Formulario · ${c.pedido || "sin pedido"}`,
     sub: c.canal === "correo" ? (c.ordenes_resumen ? `${c.ordenes_resumen} · ${c.titulo || ""}` : (c.titulo || "")) : "Cliente final",
-    cardId: c.card_id, ordenesResumen: c.ordenes_resumen,
+    ordenesResumen: c.ordenes_resumen,
     clasificacion: biggy ? NOMBRE_CLAS[biggy] : clas, ceco: clas === "Postventa mandante" ? "Mandante" : c.ceco, responsable,
     biggy, ejecutiva: c.ejecutiva_clasificacion || null,
     biggyRazon: c.biggy_razon, biggyResumen: c.biggy_resumen,
-    creado: c.creado_en, abierto, cerrado: resuelto, estado,
-    revision: !deSupervisor ? { txt: "No aplica", tono: "neutro" } : c.respuesta ? (revisionBiggy(c) || { txt: "Por revisar", tono: "neutro" }) : { txt: "Sin respuesta", tono: "neutro" },
+    creado: c.creado_en, abierto: et && et.cerradoBiggy ? false : abierto, cerrado: resuelto || !!(et && et.cerradoBiggy),
+    estado: et ? et.estado : estado,
+    revision: et ? et.revision : !deSupervisor ? { txt: "No aplica", tono: "neutro" } : c.respuesta ? (revisionBiggy(c) || { txt: "Por revisar", tono: "neutro" }) : { txt: "Sin respuesta", tono: "neutro" },
+    tareas: tareasCaso || [],
     calificacion: c.respuesta ? c.revision_calificacion : null, revisionRazon: c.revision_razon,
     manual, accionManual: accion,
     pipefy: `https://app.pipefy.com/open-cards/${c.card_id}`,
@@ -292,6 +315,29 @@ function EditorPlazos({ sla, usuario, onCerrar, onGuardado }) {
   );
 }
 
+// Historial de lo que hizo el Biggy con el caso (postventa_eventos_cl).
+const ICONO_EVENTO = { clasificacion: "🏷️", ordenes: "📦", tarea: "📋", revision: "🔎", correo: "✉️" };
+function HistorialBiggy({ cardId }) {
+  const [ev, setEv] = useState(null);
+  useEffect(() => {
+    api(`postventa_eventos_cl?card_id=eq.${cardId}&select=tipo,detalle,creado_en&order=creado_en`)
+      .then((x) => setEv(x || [])).catch(() => setEv([]));
+  }, [cardId]);
+  if (ev === null) return <div style={{ fontSize: 12.5, color: C.tenue }}>Cargando…</div>;
+  if (!ev.length) return <div style={{ fontSize: 12.5, color: C.tenue }}>El Biggy todavía no registra acciones en este caso.</div>;
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+      {ev.map((e, i) => (
+        <div key={i} style={{ display: "grid", gridTemplateColumns: "22px 92px 1fr", gap: 6, fontSize: 12.5, alignItems: "start" }}>
+          <span>{ICONO_EVENTO[e.tipo] || "•"}</span>
+          <span style={{ color: C.tenue, fontVariantNumeric: "tabular-nums" }}>{fechaCorta(e.creado_en)}</span>
+          <span style={{ color: C.texto }}>{e.detalle}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // Órdenes de un correo de Canon, agrupadas por CECO: cada grupo es la tarea de un supervisor.
 function OrdenesCorreo({ cardId, supPorCeco }) {
   const [ordenes, setOrdenes] = useState(null);
@@ -346,6 +392,12 @@ function Detalle({ f, urg, onUrgente, supPorCeco }) {
               </div>
               {f.biggyRazon && <div style={{ fontSize: 12.5, color: C.suave }}>Por qué: {f.biggyRazon}</div>}
               {f.biggyResumen && <div style={{ fontSize: 13, color: C.texto, marginTop: 6 }}>{f.biggyResumen}</div>}
+            </div>
+          )}
+          {f.cardId && (
+            <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, padding: "12px 14px", marginBottom: 10 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: C.texto, marginBottom: 8 }}>Lo que hizo el Biggy</div>
+              <HistorialBiggy cardId={f.cardId} />
             </div>
           )}
           {f.origen === "canon_correo" && f.cardId && (
@@ -410,6 +462,7 @@ export default function BandejaPostventa({ usuario, onIrA }) {
   const [canon, setCanon] = useState([]);
   const [sla, setSla] = useState([]);
   const [urgentes, setUrgentes] = useState({});
+  const [tareas, setTareas] = useState([]);
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState("");
   const [ultima, setUltima] = useState(null);
@@ -426,13 +479,15 @@ export default function BandejaPostventa({ usuario, onIrA }) {
 
   const cargar = useCallback(async () => {
     try {
-      const [p, a, c, s, u] = await Promise.all([
+      const [p, a, c, s, u, tk] = await Promise.all([
         api("pnr_casos_cl?select=case_id,sub_estado,service_center,route_code,conductor,ceco,supervisor,ceco_como,fecha_caso,monto&order=fecha_caso.desc&limit=3000"),
         api("pnr_avisos_cl?canal=eq.correo&select=case_id,destino,enviado_en&limit=10000"),
         api("canon_casos_cl?select=card_id,canal,creado_en,fase,titulo,mandante,pedido,remitente,correo,motivo,texto,ceco,supervisor,respuesta,region,comuna,estado_pedido,ordenes_resumen,revision_calificacion,revision_falta,revision_razon,revision_de,biggy_clasificacion,biggy_razon,biggy_resumen,ejecutiva_clasificacion&order=creado_en.desc&limit=3000"),
         api("postventa_sla_cl?select=*&order=origen"),
         api("postventa_urgentes_cl?urgente=eq.true&select=*"),
+        api("postventa_tareas_cl?select=id,card_id,ceco,estado,revision_falta,veces_devuelta,correo_enviado_en,respondida_en&limit=5000"),
       ]);
+      setTareas(tk || []);
       setPnr(p || []);
       setAvisos(Object.fromEntries((a || []).map((x) => [x.case_id, x])));
       setCanon((c || []).filter((x) => x.canal === "portal" || /canontex/i.test(x.mandante || "") || /@canontex\.cl\s*$/i.test(x.correo || "")));
@@ -457,11 +512,17 @@ export default function BandejaPostventa({ usuario, onIrA }) {
     return Object.fromEntries(Object.entries(k).map(([ce, v]) => [ce, Object.entries(v).sort((a, b) => b[1] - a[1])[0][0]]));
   }, [canon]);
 
+  const tareasPorCard = useMemo(() => {
+    const m = {};
+    for (const t of tareas) (m[t.card_id] = m[t.card_id] || []).push(t);
+    return m;
+  }, [tareas]);
+
   const filas = useMemo(() => [
     ...pnr.map((c) => filaPnr(c, avisos[c.case_id])),
-    ...canon.filter((c) => c.canal !== "portal").map((c) => filaCanon(c, c.ceco ? supPorCeco[c.ceco] : null)),
+    ...canon.filter((c) => c.canal !== "portal").map((c) => filaCanon(c, c.ceco ? supPorCeco[c.ceco] : null, tareasPorCard[c.card_id])),
     ...canon.filter((c) => c.canal === "portal").map(filaPortal),
-  ], [pnr, avisos, canon, supPorCeco]);
+  ], [pnr, avisos, canon, supPorCeco, tareasPorCard]);
 
   const resta = useCallback((f) => {
     const c = cfg(f.origen), u = urgentes[f.clave];
@@ -478,9 +539,12 @@ export default function BandejaPostventa({ usuario, onIrA }) {
   const cuenta = { todos: filas.length, pnr: filas.filter((f) => f.origen === "pnr_meli").length,
     canon: filas.filter((f) => f.tipo === "Canon").length, portal: filas.filter((f) => f.tipo === "Portal").length, manual: manuales.length };
 
-  // Revisor en sombra: incompletas y fuera de lugar son las que volverían al supervisor.
-  const revisadas = filas.filter((f) => f.calificacion).length;
-  const devueltas = filas.filter((f) => f.calificacion === "incompleta" || f.calificacion === "fuera_de_lugar").length;
+  // Indicadores reales, desde las tareas de la Bitácora.
+  const devueltas = tareas.filter((t) => Number(t.veces_devuelta || 0) > 0).length;
+  const respondidas = tareas.filter((t) => t.respondida_en).length;
+  const resueltasBiggy = tareas.filter((t) => t.estado === "aprobada").length;
+  const enManual = tareas.filter((t) => t.estado === "revision_manual").length;
+  const pctSinIntervencion = resueltasBiggy + enManual ? Math.round((resueltasBiggy * 100) / (resueltasBiggy + enManual)) : null;
 
   // Coincidencia del Biggy con la ejecutiva (modo sombra), donde los dos clasificaron.
   const comparables = filas.filter((f) => f.biggy && f.ejecutiva && f.biggy !== "revision_manual");
@@ -547,10 +611,10 @@ export default function BandejaPostventa({ usuario, onIrA }) {
         <Indicador etiqueta="Casos abiertos" valor={ind.abiertos} />
         <Indicador etiqueta="Por vencer (menos de 24 h)" valor={ind.porVencer} color={C.ambar} />
         <Indicador etiqueta="Vencidos" valor={ind.vencidos} color={C.rojo} />
-        <Indicador etiqueta="Respuestas que el Biggy devolvería" valor={revisadas ? devueltas : "—"} color={C.ambar}
-          nota={revisadas ? `${Math.round((devueltas * 100) / revisadas)}% de ${revisadas} revisadas · modo sombra` : "revisando…"} />
-        <Indicador etiqueta="El Biggy coincide con la ejecutiva" valor={coincidencia == null ? "—" : `${coincidencia}%`} color={C.verde}
-          nota={coincidencia == null ? "clasificando…" : `en ${comparables.length} formularios de Canon · modo sombra`} />
+        <Indicador etiqueta="Respuestas devueltas por incompletas" valor={respondidas ? devueltas : "—"} color={C.ambar}
+          nota={respondidas ? `de ${respondidas} respuestas de supervisores` : "aún no hay respuestas en la Bitácora"} />
+        <Indicador etiqueta="Resuelto por el Biggy sin intervención" valor={pctSinIntervencion == null ? "—" : `${pctSinIntervencion}%`} color={C.verde}
+          nota={pctSinIntervencion == null ? "meta del instructivo: 90%" : `${resueltasBiggy} de ${resueltasBiggy + enManual} · meta 90% · clasificación coincide ${coincidencia ?? "—"}%`} />
       </div>
 
       {/* Filtros y tabla */}
