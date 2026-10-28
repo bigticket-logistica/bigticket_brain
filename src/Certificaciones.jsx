@@ -3542,9 +3542,10 @@ const ORIGEN_CFG = {
   // Canales de Bigticket del portal de referidos (sin referidor, no generan bonos).
   camioneta: { label: "Camioneta", icon: "🚐", bg: "#eef4ff", color: "#1e40af", border: "#c7d7fe" },
   facebook: { label: "Facebook", icon: "📘", bg: "#eef2ff", color: "#3b4fc4", border: "#cdd5fb" },
+  comercio: { label: "Comercio", icon: "🌮", bg: "#fff7e6", color: "#b45309", border: "#fde3b5" },
 };
 // Postulaciones del portal de referidos: por un referidor o por un canal de Bigticket.
-const ORIGENES_REFERIDOS = ["referidos", "camioneta", "facebook"];
+const ORIGENES_REFERIDOS = ["referidos", "camioneta", "facebook", "comercio"];
 // Badge de fuente para una tarjeta, distinguiendo el origen app.
 function fuenteBadge(card) {
   if (ORIGENES_REFERIDOS.includes(card.origen)) return ORIGEN_CFG[card.origen];
