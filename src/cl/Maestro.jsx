@@ -279,6 +279,11 @@ function ModuloMaestroCL({ usuario } = {}) {
   const [servPanel, setServPanel] = useState(false);
   const [servNuevo, setServNuevo] = useState({ codigo: "", descripcion: "" });
   const [servGuardando, setServGuardando] = useState(null);
+  const [bonoNs, setBonoNs] = useState([]);              // tramos de bono/castigo por NS (migración 74)
+  const [bonoPanel, setBonoPanel] = useState(false);
+  const BONO_NUEVO0 = { ns_desde: "", ns_hasta: "", factor: "", servicio: "", cecos_admin: "", vigente_desde: "2026-11-01", vigente_hasta: "", nota: "" };
+  const [bonoNuevo, setBonoNuevo] = useState(BONO_NUEVO0);
+  const [bonoGuardando, setBonoGuardando] = useState(null);
   const [adminCat, setAdminCat] = useState([]);             // nombres de cecos_admin para el alta
   // ── zona nueva + override de viaje ──
   const ZONA_NUEVA0 = { nombre: "", cecos: "", segmentacion: "", lat: "", lon: "", radio: 5000, nota: "" };
@@ -667,14 +672,16 @@ function ModuloMaestroCL({ usuario } = {}) {
 
   const cargarTarifario = async () => {
     const fallos = [];
-    const [t, seg, adm, sv] = await Promise.all([
+    const [t, seg, adm, sv, bn] = await Promise.all([
       apiSuave("tarifas?order=servicio,cecos_admin.nullsfirst,segmentacion,tipo_vehiculo,detalle&limit=500", [], fallos),
       apiSuave("segmentaciones?order=nombre&activo=eq.true", [], fallos),
       apiSuave("cecos_admin?select=nombre&order=nombre", [], fallos),
       apiSuave("servicios_tarifa?order=orden,codigo", [], fallos),
+      apiSuave("bono_ns_tramos?order=activo.desc,servicio.nullsfirst,cecos_admin.nullsfirst,ns_desde.desc", [], fallos),
     ]);
     setTarifas(t);
     setServiciosCat(sv);
+    setBonoNs(bn || []);
     if (seg.length) setSegmentaciones(seg);
     setAdminCat([...new Set(adm.map(a => a.nombre))]);
     if (fallos.length) setError("No se pudieron cargar: " + fallos.join(" | "));
@@ -730,6 +737,45 @@ function ModuloMaestroCL({ usuario } = {}) {
       setTimeout(() => setTarifaMsg(""), 4000);
     } catch (e) { setError(e.message); }
     finally { setTarifaGuardando(null); }
+  };
+
+  // ── Bono / castigo por nivel de servicio (bono_ns_tramos) ──
+  const numOVacio = (v) => (v === "" || v === null || v === undefined) ? null : Number(String(v).replace(",", "."));
+  const validarTramo = (b) => {
+    const d = numOVacio(b.ns_desde), h = numOVacio(b.ns_hasta), f = numOVacio(b.factor);
+    if (d === null || Number.isNaN(d) || d < 0 || d > 100) return "El % NS desde debe estar entre 0 y 100.";
+    if (h !== null && (Number.isNaN(h) || h <= d || h > 100)) return "El % NS hasta debe ser mayor que el desde y no pasar de 100 (vacío = sin tope).";
+    if (f === null || Number.isNaN(f) || f <= 0 || f > 2) return "El factor debe estar entre 0 y 2 (1,05 = bono de 5%; 0,95 = castigo de 5%).";
+    if (!b.vigente_desde) return "Indica desde cuándo rige el tramo.";
+    if (b.vigente_hasta && b.vigente_hasta < b.vigente_desde) return "La vigencia hasta no puede ser anterior a la vigencia desde.";
+    return null;
+  };
+  const filaTramo = (b) => ({ ns_desde: numOVacio(b.ns_desde), ns_hasta: numOVacio(b.ns_hasta), factor: numOVacio(b.factor),
+    servicio: b.servicio || null, cecos_admin: b.cecos_admin || null, vigente_desde: b.vigente_desde,
+    vigente_hasta: b.vigente_hasta || null, nota: (b.nota || "").trim() || null });
+  const agregarTramo = async () => {
+    const e = validarTramo(bonoNuevo); if (e) { setError(e); return; }
+    setBonoGuardando("__nuevo__");
+    try {
+      await api("bono_ns_tramos", { method: "POST", headers: { Prefer: "return=minimal" },
+        body: JSON.stringify({ ...filaTramo(bonoNuevo), actualizado_por: analista }) });
+      setBonoNuevo(BONO_NUEVO0);
+      await cargarTarifario();
+      setTarifaMsg("Tramo de bono NS agregado"); setTimeout(() => setTarifaMsg(""), 3000);
+    } catch (e) { setError(e.message); }
+    finally { setBonoGuardando(null); }
+  };
+  const actualizarTramo = async (b, campos) => {
+    const nuevo = { ...b, ...campos };
+    const e = validarTramo({ ...nuevo, ns_hasta: nuevo.ns_hasta ?? "", vigente_hasta: nuevo.vigente_hasta || "" });
+    if (e && !("activo" in campos)) { setError(e); return; }
+    setBonoGuardando(b.id);
+    try {
+      await api(`bono_ns_tramos?id=eq.${b.id}`, { method: "PATCH", headers: { Prefer: "return=minimal" },
+        body: JSON.stringify({ ...campos, actualizado_at: new Date().toISOString(), actualizado_por: analista }) });
+      await cargarTarifario();
+    } catch (e) { setError(e.message); }
+    finally { setBonoGuardando(null); }
   };
 
   // ── Catálogo de tipos de servicio ──
@@ -2191,7 +2237,8 @@ function ModuloMaestroCL({ usuario } = {}) {
                         "NIVEL DE SERVICIO": r.nivel_servicio,
                         "TIPO PAGO": r.tipo_pago, "TARIFA": r.tarifa_aplicada,
                         "PAGO": r.pago, "ESTADO PAGO": r.estado_pago,
-                        "SERVICIO MELI": r.servicio_meli || "", "ALERTA": r.alerta_pago || "" })),
+                        "SERVICIO MELI": r.servicio_meli || "", "ALERTA": r.alerta_pago || "",
+                        "NS %": r.ns_pct ?? "", "FACTOR NS": r.factor_ns ?? "" })),
                       `maestro_pago_${fecha}.csv`)}>
                       Descargar CSV
                     </button>
@@ -2296,7 +2343,12 @@ function ModuloMaestroCL({ usuario } = {}) {
                                   <td className="num" style={{ fontSize: 11.5 }}>
                                     {r.tarifa_aplicada != null ? "$" + fmt(Math.round(r.tarifa_aplicada)) : "—"}</td>
                                   <td className="num" style={{ fontWeight: 800, color: r.pago ? "#0d8043" : "#cbd5e1" }}>
-                                    {r.pago ? "$" + fmt(Math.round(r.pago)) : "—"}</td>
+                                    {r.pago ? "$" + fmt(Math.round(r.pago)) : "—"}
+                                    {r.factor_ns != null && Number(r.factor_ns) !== 1 && (
+                                      <div style={{ fontSize: 10.5, fontWeight: 700, color: Number(r.factor_ns) > 1 ? "#0d8043" : "#b42318" }}
+                                           title={`Bono NS: NS ${r.ns_pct ?? "—"}% → factor ${r.factor_ns}`}>
+                                        × {String(r.factor_ns).replace(".", ",")} · NS {r.ns_pct ?? "—"}%</div>
+                                    )}</td>
                                   <td>
                                     {r.estado_pago === "calculado"
                                       ? <Etiqueta texto="CALCULADO" color="#0d8043" fondo="#e7f6ec" />
@@ -2882,6 +2934,9 @@ function ModuloMaestroCL({ usuario } = {}) {
                         <button className="mj-btn" onClick={() => setServPanel(v => !v)}>
                           {servPanel ? "Cerrar servicios" : "⚙ Tipos de servicio"}
                         </button>
+                        <button className="mj-btn" onClick={() => setBonoPanel(v => !v)}>
+                          {bonoPanel ? "Cerrar bono NS" : `⚖ Bono NS (${bonoNs.filter(b => b.activo).length})`}
+                        </button>
                       </div>
                     </div>
                     <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 10,
@@ -2902,6 +2957,89 @@ function ModuloMaestroCL({ usuario } = {}) {
                       </span>
                     </div>
                   </div>
+
+                  {bonoPanel && (
+                    <div style={{ background: "#fff", border: "1px solid #e6e9ef", borderRadius: 10,
+                                  padding: "12px 16px", marginBottom: 12 }}>
+                      <div style={{ fontSize: 13, fontWeight: 800, color: NAVY }}>Bono / castigo por nivel de servicio</div>
+                      <div style={{ fontSize: 12, color: "#64748b", lineHeight: 1.6, margin: "3px 0 10px", maxWidth: 940 }}>
+                        El factor multiplica el pago del viaje cuando su NS ácido (entregados ÷ cargados; en colectas,
+                        recolectados ÷ estimados) cae en el rango: <strong>desde ≤ NS &lt; hasta</strong> (hasta vacío = sin tope).
+                        1,05 = bono de 5%; 0,95 = castigo de 5%. Si calzan varios tramos, gana el más específico
+                        (con servicio, luego con CECOS). <strong>Sin tramos activos, el factor es 1,00</strong> y el pago no cambia.
+                      </div>
+                      {bonoNs.length > 0 && (
+                        <table className="mj-tabla" style={{ marginBottom: 10 }}>
+                          <thead><tr><th className="num">% NS desde</th><th className="num">% NS hasta</th><th className="num">Factor</th>
+                            <th>Servicio</th><th>CECOS</th><th>Vigente desde</th><th>Hasta</th><th>Nota</th><th>Estado</th></tr></thead>
+                          <tbody>
+                            {bonoNs.map(b => (
+                              <tr key={b.id} style={!b.activo ? { opacity: 0.55 } : {}}>
+                                <td className="num"><input className="mj-input" defaultValue={b.ns_desde ?? ""} style={{ width: 64, textAlign: "right", fontSize: 12 }}
+                                  onBlur={e => { const v = numOVacio(e.target.value); if (v !== Number(b.ns_desde)) actualizarTramo(b, { ns_desde: v }); }} /></td>
+                                <td className="num"><input className="mj-input" defaultValue={b.ns_hasta ?? ""} placeholder="sin tope" style={{ width: 70, textAlign: "right", fontSize: 12 }}
+                                  onBlur={e => { const v = numOVacio(e.target.value); if (v !== (b.ns_hasta === null ? null : Number(b.ns_hasta))) actualizarTramo(b, { ns_hasta: v }); }} /></td>
+                                <td className="num"><input className="mj-input" defaultValue={b.factor ?? ""} style={{ width: 64, textAlign: "right", fontSize: 12, fontWeight: 700,
+                                    color: Number(b.factor) > 1 ? "#0d8043" : Number(b.factor) < 1 ? "#b42318" : undefined }}
+                                  onBlur={e => { const v = numOVacio(e.target.value); if (v !== Number(b.factor)) actualizarTramo(b, { factor: v }); }} /></td>
+                                <td><select className="mj-input" value={b.servicio || ""} style={{ fontSize: 12 }}
+                                  onChange={e => actualizarTramo(b, { servicio: e.target.value || null })}>
+                                  <option value="">Todos</option>
+                                  {serviciosOpc.map(sv => <option key={sv} value={sv}>{etiquetaTipo(sv).t}</option>)}
+                                </select></td>
+                                <td><select className="mj-input" value={b.cecos_admin || ""} style={{ fontSize: 12 }}
+                                  onChange={e => actualizarTramo(b, { cecos_admin: e.target.value || null })}>
+                                  <option value="">Todos</option>
+                                  {[...new Set([...adminCat, b.cecos_admin].filter(Boolean))].map(c => <option key={c} value={c}>{c}</option>)}
+                                </select></td>
+                                <td><input className="mj-input" type="date" defaultValue={b.vigente_desde || ""} style={{ fontSize: 12 }}
+                                  onBlur={e => { if (e.target.value && e.target.value !== b.vigente_desde) actualizarTramo(b, { vigente_desde: e.target.value }); }} /></td>
+                                <td><input className="mj-input" type="date" defaultValue={b.vigente_hasta || ""} style={{ fontSize: 12 }}
+                                  onBlur={e => { const v = e.target.value || null; if (v !== (b.vigente_hasta || null)) actualizarTramo(b, { vigente_hasta: v }); }} /></td>
+                                <td><input className="mj-input" defaultValue={b.nota || ""} style={{ fontSize: 12, width: 160 }}
+                                  onBlur={e => { const v = e.target.value.trim() || null; if (v !== (b.nota || null)) actualizarTramo(b, { nota: v }); }} /></td>
+                                <td><label style={{ fontSize: 11.5, color: "#64748b", whiteSpace: "nowrap" }}>
+                                  <input type="checkbox" checked={!!b.activo} disabled={bonoGuardando === b.id}
+                                         onChange={e => actualizarTramo(b, { activo: e.target.checked })} /> {b.activo ? "activo" : "inactivo"}
+                                </label></td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      )}
+                      <div style={{ display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap" }}>
+                        {[["ns_desde", "% NS desde", "98", 70], ["ns_hasta", "% NS hasta", "sin tope", 70], ["factor", "Factor", "1,05", 64]].map(([k, t, ph, w]) => (
+                          <label key={k} style={{ fontSize: 10.5, color: "#64748b" }}>{t}<br/>
+                            <input className="mj-input" value={bonoNuevo[k]} placeholder={ph} style={{ width: w }}
+                                   onChange={e => setBonoNuevo(x => ({ ...x, [k]: e.target.value }))} /></label>
+                        ))}
+                        <label style={{ fontSize: 10.5, color: "#64748b" }}>Servicio<br/>
+                          <select className="mj-input" value={bonoNuevo.servicio} onChange={e => setBonoNuevo(x => ({ ...x, servicio: e.target.value }))}>
+                            <option value="">Todos</option>
+                            {serviciosOpc.map(sv => <option key={sv} value={sv}>{etiquetaTipo(sv).t}</option>)}
+                          </select></label>
+                        <label style={{ fontSize: 10.5, color: "#64748b" }}>CECOS<br/>
+                          <select className="mj-input" value={bonoNuevo.cecos_admin} onChange={e => setBonoNuevo(x => ({ ...x, cecos_admin: e.target.value }))}>
+                            <option value="">Todos</option>
+                            {adminCat.map(c => <option key={c} value={c}>{c}</option>)}
+                          </select></label>
+                        <label style={{ fontSize: 10.5, color: "#64748b" }}>Vigente desde<br/>
+                          <input className="mj-input" type="date" value={bonoNuevo.vigente_desde}
+                                 onChange={e => setBonoNuevo(x => ({ ...x, vigente_desde: e.target.value }))} /></label>
+                        <label style={{ fontSize: 10.5, color: "#64748b" }}>Hasta<br/>
+                          <input className="mj-input" type="date" value={bonoNuevo.vigente_hasta}
+                                 onChange={e => setBonoNuevo(x => ({ ...x, vigente_hasta: e.target.value }))} /></label>
+                        <label style={{ fontSize: 10.5, color: "#64748b" }}>Nota<br/>
+                          <input className="mj-input" value={bonoNuevo.nota} placeholder="acuerdo, correo…" style={{ width: 160 }}
+                                 onChange={e => setBonoNuevo(x => ({ ...x, nota: e.target.value }))} /></label>
+                        <button className="mj-btn" onClick={agregarTramo}
+                                disabled={bonoGuardando === "__nuevo__" || bonoNuevo.ns_desde === "" || bonoNuevo.factor === ""}
+                                style={{ background: NAVY, color: "#fff", borderColor: NAVY }}>
+                          {bonoGuardando === "__nuevo__" ? "Agregando…" : "➕ Agregar tramo"}
+                        </button>
+                      </div>
+                    </div>
+                  )}
 
                   {servPanel && (
                     <div style={{ background: "#fff", border: "1px solid #e6e9ef", borderRadius: 10,
