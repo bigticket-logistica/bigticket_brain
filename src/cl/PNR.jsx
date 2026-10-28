@@ -15,6 +15,11 @@
 import { useState, useEffect, useMemo, useCallback, Fragment } from "react";
 import ModuloCanonCL from "./Canon";
 import BandejaPostventa from "./Bandeja";
+import EvaluacionBiggy from "./Evaluacion";
+
+// Quiénes ven "Biggy vs ejecutiva" (evaluación del Biggy). Para sumar a alguien,
+// agrega su correo del Brain a esta lista.
+const PUEDEN_EVALUAR = ["adriana.giummarra@bigticket.cl", "eduardo.stine@bigticket.cl"];
 
 const CL_URL = "https://hmowsazntdjtsvdfgutn.supabase.co";
 const CL_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imhtb3dzYXpudGRqdHN2ZGZndXRuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQ5MTc4NzgsImV4cCI6MjEwMDQ5Mzg3OH0.xAJokU0eFhof--d8R4uCRBr2-CJLzC5re0w1IPRqQR8";
@@ -774,6 +779,7 @@ function InformeEnviados({ casos, correos }) {
 
 export default function ModuloPnrCL({ usuario }) {
   const [vista, setVista] = useState("bandeja");
+  const puedeEvaluar = PUEDEN_EVALUAR.includes(String((usuario && usuario.email) || "").toLowerCase().trim());
   const [slaPnr, setSlaPnr] = useState(96);
   SLA_H = slaPnr;
   const [solicitudes, setSolicitudes] = useState({});
@@ -933,7 +939,8 @@ export default function ModuloPnrCL({ usuario }) {
       {/* Cabecera */}
       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
         <span style={{ fontSize: 18, fontWeight: 800, color: C.navy, letterSpacing: -.3 }}>Posventa</span>
-        {[["bandeja", "Bandeja"], ["casos", "PNR MELI"], ["canon", "Canon"], ["enviados", "Correos enviados"]].map(([k, et]) => (
+        {[["bandeja", "Bandeja"], ["casos", "PNR MELI"], ["canon", "Canon"], ["enviados", "Correos enviados"],
+          ...(puedeEvaluar ? [["evaluacion", "Biggy vs ejecutiva"]] : [])].map(([k, et]) => (
           <button key={k} onClick={() => setVista(k)}
             style={{ fontSize: 12, fontWeight: 700, borderRadius: 8, padding: "5px 12px", cursor: "pointer", fontFamily: "inherit",
               border: `1px solid ${C.navy}`, background: vista === k ? C.navy : "#fff", color: vista === k ? "#fff" : C.navy }}>
@@ -977,6 +984,8 @@ export default function ModuloPnrCL({ usuario }) {
       {vista === "enviados" && <InformeEnviados casos={casos} correos={correos} />}
 
       {vista === "canon" && <ModuloCanonCL />}
+
+      {vista === "evaluacion" && puedeEvaluar && <EvaluacionBiggy usuario={usuario} />}
 
       {vista === "bandeja" && <BandejaPostventa usuario={usuario} onIrA={(v) => { setVista(v); if (v === "casos") fijar({ tipo: "sin_ceco", valor: null }); }} />}
 
