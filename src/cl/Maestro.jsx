@@ -1582,12 +1582,14 @@ function ModuloMaestroCL({ usuario } = {}) {
                             : <Etiqueta texto="sin CECOS" color={AMBAR_} fondo="#fdf6e3" />}
                         </td>
                         <td style={{ fontSize: 11.5, maxWidth: 170 }}>
+                          {/* El supervisor se asigna por patente solo a la flota propia: el aviso aparece
+                              cuando Certronic dice que el vehículo es de Bigticket y falta en Vehículos BT. */}
                           {r.supervisor
                             ? <span style={{ color: "#334155" }}>{r.supervisor}</span>
-                            : r.patente
+                            : r.patente && /bigticket/i.test(r.empresa || "")
                               ? <span style={{ color: AMBAR_, whiteSpace: "nowrap" }}
-                                      title={`La patente ${r.patente} no tiene supervisor: asígnalo en Vehículos BT`}>⚠ Asignar en Vehículos BT</span>
-                              : <span style={{ color: "#cbd5e1" }}>—</span>}
+                                      title={`La patente ${r.patente} es de Bigticket y no tiene supervisor: asígnalo en Vehículos BT`}>⚠ Asignar en Vehículos BT</span>
+                              : <span style={{ color: "#cbd5e1" }} title="Vehículo de tercero: no tiene supervisor por patente">—</span>}
                         </td>
                         <td style={{ whiteSpace: "nowrap" }}>
                           {/* Tipo de ruta (migración 67): el sistema lo sugiere, una persona lo confirma.
