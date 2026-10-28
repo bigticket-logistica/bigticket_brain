@@ -1638,12 +1638,16 @@ function ModuloMaestroCL({ usuario } = {}) {
                           {r.is_line_haul && <span style={{ marginLeft: 5 }} title="Line Haul: marca de MELI sobre la ruta"><Etiqueta texto="LH" color="#7a5b16" fondo="#fdf3d8" /></span>}
                           {r.entrega_y_retira && <span style={{ marginLeft: 5 }} title="Entrega y además pasa a retirar"><Etiqueta texto="E+R" color="#0e7490" fondo="#e0f2fe" /></span>}
                         </td>
-                        <td style={{ fontSize: 11.5, maxWidth: 200 }}
-                            title={[r.empresa_rut && `RUT ${r.empresa_rut}`,
+                        <td style={{ fontSize: 11, minWidth: 190, maxWidth: 210 }}
+                            title={[r.empresa, r.empresa_rut && `RUT ${r.empresa_rut}`,
                                     r.empresa_estado && `Certronic: ${r.empresa_estado}`,
                                     r.tercero && `Tercero según MELI: ${r.tercero}`].filter(Boolean).join(" · ")}>
+                          {/* nombres largos: hasta 2 líneas y "…"; completo al pasar el mouse */}
                           {r.empresa
-                            ? <span style={{ color: "#334155" }}>{r.empresa}</span>
+                            ? <div style={{ color: "#334155", width: 200, whiteSpace: "normal", lineHeight: 1.25,
+                                            overflow: "hidden", display: "-webkit-box",
+                                            WebkitLineClamp: 2, WebkitBoxOrient: "vertical", wordBreak: "break-word" }}>
+                                {r.empresa}</div>
                             : r.patente
                               ? <Etiqueta texto="SIN REGISTRO" color={AMBAR_} fondo="#fdf6e3" />
                               : <span style={{ color: "#cbd5e1" }}>—</span>}
