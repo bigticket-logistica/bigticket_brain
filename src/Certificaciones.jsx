@@ -4399,6 +4399,8 @@ function KanbanBoard({ items, columnas = COLUMNAS, onCardClick, onMover, onElimi
               const tc = TIPO_CFG[card.tipo] || TIPO_CFG.conductor;
               const esVeh = card.tipo === "vehiculo";
               const esRechazo = col.id === "rechazado";
+              // Flujo corto (origen referidos / camioneta / facebook): lo calcula la base en flujo_corto
+              const flujoCorto = card.raw?.flujo_corto === true;
               // Sin arrastre: el avance de etapa lo dan los botones de cada
               // etapa, que además ejecutan lo que corresponde (crear empresa,
               // enviar a firma, validar). Arrastrar saltaba esos pasos y dejaba
@@ -4422,6 +4424,12 @@ function KanbanBoard({ items, columnas = COLUMNAS, onCardClick, onMover, onElimi
                     <span style={{ fontSize: 9, fontWeight: 700, padding: "2px 6px", borderRadius: 6, flexShrink: 0, background: fc.bg, color: fc.color, border: `1px solid ${fc.border}` }}>
                       {fc.icon} {fc.label}
                     </span>
+                    {flujoCorto && (
+                      <span title="Referidos / camioneta / Facebook: la entrevista la hace Jorge Arellano con SLA de 24 h"
+                        style={{ fontSize: 9, fontWeight: 800, padding: "2px 6px", borderRadius: 6, flexShrink: 0, background: "#fef3c7", color: "#92400e", border: "1px solid #fcd34d" }}>
+                        ⚡ Flujo corto
+                      </span>
+                    )}
                   </div>
                   {/* Fecha y hora de entrada al flujo (sirve para medir antigüedad) */}
                   {card.creado && (
