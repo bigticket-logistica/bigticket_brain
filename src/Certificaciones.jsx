@@ -8015,17 +8015,29 @@ function ModuloCertificaciones() {
       if (enValidacion.length === 0) return;
 
       const { data: existentes } = await sb
-        .from("certificaciones_mx").select("lead_crm_id").not("lead_crm_id", "is", null);
-      const idsExistentes = (existentes || []).map(e => e.lead_crm_id);
+        .from("certificaciones_mx").select("lead_crm_id, curp");
+      const idsExistentes = (existentes || []).map(e => e.lead_crm_id).filter(Boolean);
+      // Un mismo conductor puede tener dos leads en el CRM (caso Esmeralda Jiménez).
+      // Si ya existe una tarjeta con su CURP, venga del lead que venga, no se crea otra.
+      const normCurp = (c) => String(c || "").trim().toUpperCase();
+      const curpsExistentes = new Set((existentes || []).map(e => normCurp(e.curp)).filter(Boolean));
 
-      const nuevos = enValidacion.filter(o => !idsExistentes.includes(o.lead_id));
+      const nuevos = enValidacion.filter(o => {
+        if (idsExistentes.includes(o.lead_id)) return false;
+        const curp = normCurp(o.curp || o.leads?.curp);
+        if (curp && curpsExistentes.has(curp)) {
+          console.warn("Auto-sync CRM: lead", o.lead_id, "omitido, ya existe una tarjeta con el CURP", curp);
+          return false;
+        }
+        return true;
+      });
       if (nuevos.length === 0) return;
 
       const registros = nuevos.map(o => ({
         lead_crm_id:  o.lead_id,
         nombre:       ([o.nombre, o.apellidos].filter(Boolean).join(" ").replace(/\s+/g, " ").trim())
                         || (o.leads?.nombre || "").trim(),
-        curp:         o.curp         || o.leads?.curp      || "",
+        curp:         normCurp(o.curp || o.leads?.curp),
         rfc:          o.rfc          || "",
         ine:          o.rut          || "",
         licencia:     o.licencia     || "",
