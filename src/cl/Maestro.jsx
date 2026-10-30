@@ -251,6 +251,8 @@ function ModuloMaestroCL({ usuario } = {}) {
   const [supNuevo, setSupNuevo] = useState({ nombre: "", correo: "", telefono: "" });
   const [supGuardando, setSupGuardando] = useState(null);
   const [vehSup, setVehSup] = useState({});              // patente → supervisor, para el Maestro Jornada
+  const [supCeco, setSupCeco] = useState({});            // CECO → supervisor(es) de la bitácora (migración 78)
+  const [supBit, setSupBit] = useState([]);              // supervisores de la bitácora (supervisores_bt)
   const [tipoRuta, setTipoRuta] = useState({});          // id_ruta → tipo de ruta (vw_tipo_ruta_dia, migración 67)
   const [servActivos, setServActivos] = useState([]);    // catálogo de servicios activos, para confirmar el tipo
   const [tipoEdit, setTipoEdit] = useState(null);        // viaje con el selector de tipo abierto
@@ -662,6 +664,24 @@ function ModuloMaestroCL({ usuario } = {}) {
       if (!Array.isArray(pts) || !pts.length) { setRevMsg(`El viaje ${r.id_ruta} no tiene entregas con coordenadas.`); return; }
       if (!zonas.length) await cargarZonas();
       setRevRuta({ titulo: `Viaje ${r.id_ruta}${r.codigo_meli ? " · " + r.codigo_meli : ""}`, puntos: pts });
+    } catch (e) { setError(e.message); }
+  };
+
+  // ── Supervisor a cargo de cada CECO, según la bitácora (no depende de la fecha) ──
+  const cargarSupCeco = async () => {
+    const [sc, sb] = await Promise.all([
+      apiSuave("vw_supervisor_ceco?select=ceco,supervisor,cantidad", []),
+      apiSuave("supervisores_bt?select=email,nombre,scs_asignados,activo,es_prueba&order=nombre", []),
+    ]);
+    setSupCeco(Object.fromEntries((sc || []).map(x => [x.ceco, x.supervisor])));
+    setSupBit(sb || []);
+  };
+  useEffect(() => { cargarSupCeco(); }, []);   // eslint-disable-line react-hooks/exhaustive-deps
+  const actualizarSupBit = async (email, campos) => {
+    try {
+      await api(`supervisores_bt?email=eq.${encodeURIComponent(email)}`, { method: "PATCH",
+        headers: { Prefer: "return=minimal" }, body: JSON.stringify(campos) });
+      await cargarSupCeco();
     } catch (e) { setError(e.message); }
   };
 
@@ -1306,7 +1326,10 @@ function ModuloMaestroCL({ usuario } = {}) {
              segmentacion: z?.segmentacion || null, zona_pago: z?.zona_principal || null,
              alerta_zona: z?.alerta || null, origen_zona: z?.origen_zona || null,
              cecos_fuente: z?.cecos_fuente || null,
-             supervisor: vehSup[normPatente(r.patente)]?.supervisor || null,
+             // por patente (Vehículos BT); si no, el supervisor a cargo del CECO (bitácora)
+             supervisor: vehSup[normPatente(r.patente)]?.supervisor || (z?.cecos_admin && supCeco[z.cecos_admin]) || null,
+             supervisor_fuente: vehSup[normPatente(r.patente)]?.supervisor ? "patente"
+                              : (z?.cecos_admin && supCeco[z.cecos_admin]) ? "ceco" : null,
              empresa: certPat[normPatente(r.patente)]?.tercero || null,
              empresa_rut: certPat[normPatente(r.patente)]?.rut_tercero || null,
              empresa_estado: certPat[normPatente(r.patente)]?.estado || null,
@@ -1650,12 +1673,16 @@ function ModuloMaestroCL({ usuario } = {}) {
                         <td style={{ fontSize: 11.5, maxWidth: 170 }}>
                           {/* El supervisor se asigna por patente solo a la flota propia: el aviso aparece
                               cuando Certronic dice que el vehículo es de Bigticket y falta en Vehículos BT. */}
-                          {r.supervisor
-                            ? <span style={{ color: "#334155" }}>{r.supervisor}</span>
-                            : r.patente && /bigticket/i.test(r.empresa || "")
-                              ? <span style={{ color: AMBAR_, whiteSpace: "nowrap" }}
-                                      title={`La patente ${r.patente} es de Bigticket y no tiene supervisor: asígnalo en Vehículos BT`}>⚠ Asignar en Vehículos BT</span>
-                              : <span style={{ color: "#cbd5e1" }} title="Vehículo de tercero: no tiene supervisor por patente">—</span>}
+                          {r.patente && /bigticket/i.test(r.empresa || "") && r.supervisor_fuente !== "patente"
+                            ? <span style={{ color: AMBAR_, whiteSpace: "nowrap" }}
+                                    title={`La patente ${r.patente} es de Bigticket y no tiene supervisor: asígnalo en Vehículos BT`}>⚠ Asignar en Vehículos BT</span>
+                            : r.supervisor
+                              ? <span style={{ color: "#334155" }}
+                                      title={r.supervisor_fuente === "ceco" ? `Supervisor a cargo de ${r.cecos_real} (asignado en la bitácora)` : "Supervisor de la patente (Vehículos BT)"}>{r.supervisor}</span>
+                              : r.cecos_real
+                                ? <span style={{ color: AMBAR_, whiteSpace: "nowrap" }}
+                                        title={`Nadie tiene asignado ${r.cecos_real}: asígnalo en Vehículos BT → Supervisores`}>⚠ CECO sin supervisor</span>
+                                : <span style={{ color: "#cbd5e1" }}>—</span>}
                         </td>
                         <td style={{ whiteSpace: "nowrap" }}>
                           {/* Tipo de ruta (migración 67): el sistema lo sugiere, una persona lo confirma.
@@ -2743,6 +2770,47 @@ function ModuloMaestroCL({ usuario } = {}) {
                         {supGuardando === "__nuevo__" ? "Agregando…" : "➕ Agregar supervisor"}
                       </button>
                     </div>
+
+                    <div style={{ fontSize: 13, fontWeight: 800, color: NAVY, marginTop: 18 }}>Supervisores por CECO (bitácora)</div>
+                    <div style={{ fontSize: 12, color: "#64748b", lineHeight: 1.6, margin: "3px 0 10px", maxWidth: 940 }}>
+                      Un viaje sin supervisor por patente toma al supervisor a cargo de su CECO. Son los CECOS que cada
+                      supervisor tiene en la bitácora: <strong>cambiarlos aquí también cambia lo que ve en la bitácora</strong>.
+                      Los usuarios de prueba siguen en la bitácora, pero no aparecen en el Maestro.
+                    </div>
+                    {(() => {
+                      const norm = (c) => String(c || "").toUpperCase().replace(/[_ ]/g, "");
+                      const cubiertos = new Set(supBit.filter(b => b.activo && !b.es_prueba).flatMap(b => (Array.isArray(b.scs_asignados) ? b.scs_asignados : []).map(norm)));
+                      const sinSup = cecosNombres.filter(c => /^ML_/.test(c) && !cubiertos.has(norm(c)));
+                      return sinSup.length > 0 && (
+                        <div style={{ fontSize: 12, color: AMBAR_, marginBottom: 8 }}>
+                          ⚠ CECOS sin supervisor: <strong>{sinSup.join(", ")}</strong>
+                        </div>
+                      );
+                    })()}
+                    {!supBit.length ? (
+                      <div style={{ fontSize: 12, color: "#94a3b8" }}>No se pudo leer la lista de la bitácora (falta la migración 78).</div>
+                    ) : (
+                      <table className="mj-tabla">
+                        <thead><tr><th>Supervisor</th><th>Correo</th><th>CECOS a cargo (separados por coma)</th><th>Prueba</th></tr></thead>
+                        <tbody>
+                          {supBit.filter(b => b.activo).map(b => (
+                            <tr key={b.email} style={b.es_prueba ? { opacity: 0.55 } : {}}>
+                              <td style={{ fontWeight: 600 }}>{b.nombre}</td>
+                              <td style={{ fontSize: 11.5, color: "#64748b" }}>{b.email}</td>
+                              <td><input className="mj-input" defaultValue={(Array.isArray(b.scs_asignados) ? b.scs_asignados : []).join(", ")} style={{ fontSize: 12, minWidth: 280 }}
+                                     onBlur={e => {
+                                       const lista = e.target.value.split(",").map(x => x.trim().toUpperCase()).filter(Boolean);
+                                       if (lista.join(",") !== (Array.isArray(b.scs_asignados) ? b.scs_asignados : []).join(",")) actualizarSupBit(b.email, { scs_asignados: lista });
+                                     }} /></td>
+                              <td><label style={{ fontSize: 11.5, color: "#64748b", whiteSpace: "nowrap" }}>
+                                <input type="checkbox" checked={!!b.es_prueba} onChange={e => actualizarSupBit(b.email, { es_prueba: e.target.checked })} />
+                                {" "}{b.es_prueba ? "de prueba" : "oficial"}
+                              </label></td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
                   </div>
                 )}
 
