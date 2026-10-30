@@ -17,7 +17,9 @@ const ANCLA = "2026-11-02"; // lunes desde el que se cuenta la rotación de desc
 // SC que comparten vehículos: se planifican como un solo grupo
 const GRUPOS_JUNTOS = [["SMX10", "SMX20", "SMX22", "SMXRV1"], ["SMX2", "SMX9"]];
 const EXCLUIR = ["SIL1", "SLT1", "SBB1", "SRM1", "SRM2", "SRM3", "SRM4", "SAR1", "SLS1", "SVP3", "ERM2", "ERM4", "ERM5", "EXB1", "EXB2"];
-const SEMANAS_DEMANDA = 12, DIAS_FLOTA = 14, MIN_RUTAS_SEMANA = 7;
+// Ajustado con la prueba de octubre 2026: 8 semanas, las recientes pesan más (vida media de 1 semana)
+// y cada SC se cuenta desde su primer día con pedidos. Error del pronóstico: 43% → 30%.
+const SEMANAS_DEMANDA = 8, VIDA_MEDIA = 1, DIAS_FLOTA = 14, MIN_RUTAS_SEMANA = 7;
 
 const sumarDias = (iso, n) => { const d = new Date(iso + "T12:00:00Z"); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
 const lunesDe = iso => { const d = new Date(iso + "T12:00:00Z"); const w = (d.getUTCDay() + 6) % 7; return sumarDias(iso, -w); };
@@ -25,7 +27,7 @@ const diaSemana = iso => (new Date(iso + "T12:00:00Z").getUTCDay() + 6) % 7;
 const fechaCorta = iso => `${iso.slice(8, 10)}/${iso.slice(5, 7)}`;
 const normPlaca = p => String(p || "").toUpperCase().replace(/[^A-Z0-9]/g, "").replace(/^SDD/, "");
 const grupoDe = sc => { const g = GRUPOS_JUNTOS.find(x => x.includes(sc)); return g ? g.join(" · ") : sc; };
-const percentil = (arr, p) => { if (!arr.length) return 0; const s = [...arr].sort((a, b) => a - b); const i = (s.length - 1) * p, lo = Math.floor(i), hi = Math.ceil(i); return s[lo] + (s[hi] - s[lo]) * (i - lo); };
+const percentilPond = (vals, pesos, p) => { if (!vals.length) return 0; const o = vals.map((v, i) => [v, pesos[i]]).sort((a, b) => a[0] - b[0]); const tot = o.reduce((a, x) => a + x[1], 0); let acc = 0; for (const [v, w] of o) { acc += w; if (acc / tot >= p) return v; } return o[o.length - 1][0]; };
 
 async function traerTodo(tabla, cols, filtro) {
   const out = [];
@@ -90,6 +92,107 @@ function armarMalla(g, lunes) {
   return { N, descansos, filas, trabajan, llamados, necesidad, faltaReserva, vacFijos: Math.max(0, N - fijos.length), reservaMax: Math.max(...necesidad, 0) };
 }
 
+
+// Demanda, flota y supervisor por grupo de SC, para una ventana de fechas
+function construirGrupos(datos, desdeDem, hastaDem, desdeFlota, hastaFlota) {
+  const { ped, rutas, inv, sup } = datos;
+  // Demanda por SC y fecha
+  const porFecha = {}, inicioSc = {};
+  for (const p of ped) {
+    if (!p.facility_id || EXCLUIR.includes(p.facility_id) || p.status === "pending" || p.fecha_ruta < desdeDem || p.fecha_ruta > hastaDem) continue;
+    const k = `${p.facility_id}|${p.fecha_ruta}`;
+    const x = (porFecha[k] = porFecha[k] || { reg: 0, urg: 0 });
+    if (p.tipo === "urgent") x.urg++; else x.reg++;
+    if (!inicioSc[p.facility_id] || p.fecha_ruta < inicioSc[p.facility_id]) inicioSc[p.facility_id] = p.fecha_ruta;
+  }
+  const ref = sumarDias(hastaDem, 1);
+  const nombresG = [...new Set(Object.keys(inicioSc).map(grupoDe))];
+  const diasPlaca = {};
+  for (const r of rutas) {
+    if (!r.placa_norm || EXCLUIR.includes(r.svc) || r.fecha < desdeFlota || r.fecha > hastaFlota) continue;
+    const k = `${r.placa_norm}|${r.svc}`;
+    (diasPlaca[k] = diasPlaca[k] || new Set()).add(r.fecha);
+  }
+  const porPlaca = {};
+  for (const [k, set] of Object.entries(diasPlaca)) {
+    const [p, sc] = k.split("|");
+    const x = (porPlaca[p] = porPlaca[p] || { placa: p, total: 0, mejorSc: sc, mejorN: 0 });
+    x.total += set.size;
+    if (set.size > x.mejorN) { x.mejorN = set.size; x.mejorSc = sc; }
+  }
+  const invMap = {};
+  for (const v of inv) invMap[normPlaca(v.placa)] = v;
+  const supMap = {};
+  for (const s of sup) for (const sc of (Array.isArray(s.scs_asignados) ? s.scs_asignados : [])) (supMap[sc] = supMap[sc] || []).push(s.nombre);
+  return nombresG.map(nombre => {
+    const scs = nombre.split(" · ");
+    // Cada SC desde su primer día con pedidos; las semanas recientes pesan más (vida media VIDA_MEDIA)
+    const B = Array(7).fill(0), P = Array(7).fill(0), U = Array(7).fill(0);
+    for (const sc of scs) {
+      if (!inicioSc[sc]) continue;
+      for (let d = 0; d < 7; d++) {
+        const reg = [], urg = [], w = [];
+        for (let f = inicioSc[sc]; f <= hastaDem; f = sumarDias(f, 1)) {
+          if (diaSemana(f) !== d) continue;
+          const x = porFecha[`${sc}|${f}`] || { reg: 0, urg: 0 };
+          const edad = (new Date(ref + "T12:00:00Z") - new Date(f + "T12:00:00Z")) / (7 * 864e5);
+          reg.push(x.reg); urg.push(x.urg); w.push(Math.pow(0.5, edad / VIDA_MEDIA));
+        }
+        if (!reg.length) continue;
+        const tw = w.reduce((a, b) => a + b, 0);
+        B[d] += reg.reduce((a, v, i) => a + v * w[i], 0) / tw;
+        U[d] += urg.reduce((a, v, i) => a + v * w[i], 0) / tw;
+        P[d] += percentilPond(reg, w, 0.8);
+      }
+    }
+    const base = B.map(v => Math.floor(v + 1e-9)), pico = P.map((v, d) => Math.ceil(v + U[d] - 1e-9));
+    const vehiculos = Object.values(porPlaca).filter(v => grupoDe(v.mejorSc) === nombre)
+      .map(v => { const i = invMap[v.placa] || {}; return { placa: v.placa, dias: v.total, empresa: i.empresa || "No está en el inventario", tipo: i.tipo || "—", estado: i.status ? i.status : (i.placa ? "ACTIVO" : "—"), k: v.placa }; })
+      .sort((a, b) => b.dias - a.dias);
+    const supervisores = [...new Set(scs.flatMap(sc => supMap[sc] || []))];
+    return { nombre, scs, base, pico, vehiculos, supervisor: supervisores.join(" · ") || "—" };
+  }).filter(g => g.base.reduce((a, b) => a + b, 0) >= MIN_RUTAS_SEMANA)
+    .sort((a, b) => b.base.reduce((x, y) => x + y, 0) - a.base.reduce((x, y) => x + y, 0));
+}
+
+// Prueba con lo que pasó: para cada semana, la malla se arma solo con los datos anteriores a esa semana
+// y se compara su capacidad con lo que MELI ofreció y lo que se aceptó, rechazó y ejecutó de verdad.
+const SEMANAS_PRUEBA = 4;
+function probarMalla(datos, hoy) {
+  const real = {};
+  for (const p of datos.ped) {
+    if (!p.facility_id || EXCLUIR.includes(p.facility_id) || p.status === "pending") continue;
+    const k = `${grupoDe(p.facility_id)}|${p.fecha_ruta}`;
+    const x = (real[k] = real[k] || { of: 0, ac: 0, ej: 0, naReg: 0, naUrg: 0 });
+    x.of++;
+    if (p.status === "accepted") { x.ac++; if (["started", "finished"].includes(p.travel_status_final)) x.ej++; }
+    if (p.status === "rejected" || p.status === "expired") p.tipo === "urgent" ? x.naUrg++ : x.naReg++;
+  }
+  const lunesHoy = lunesDe(hoy), desde = sumarDias(lunesHoy, -7 * SEMANAS_PRUEBA), hasta = sumarDias(hoy, -1);
+  const acc = {};
+  for (let w = SEMANAS_PRUEBA; w >= 0; w--) {
+    const lunes = sumarDias(lunesHoy, -7 * w);
+    const gs = construirGrupos(datos, sumarDias(lunes, -7 * SEMANAS_DEMANDA), sumarDias(lunes, -1), sumarDias(lunes, -DIAS_FLOTA), sumarDias(lunes, -1));
+    for (const g of gs) {
+      const m = armarMalla(g, lunes);
+      const a = (acc[g.nombre] = acc[g.nombre] || { nombre: g.nombre, of: 0, ac: 0, ej: 0, cap: 0, naReg: 0, naUrg: 0, cubReg: 0, cubUrg: 0, dias: 0, diasOk: 0, sobre: 0, noShow: 0 });
+      for (let d = 0; d < 7; d++) {
+        const f = sumarDias(lunes, d);
+        if (f >= hoy) continue;
+        const r = real[`${g.nombre}|${f}`] || { of: 0, ac: 0, ej: 0, naReg: 0, naUrg: 0 };
+        const cap = m.trabajan[d] + m.llamados[d];
+        const libre = Math.max(0, cap - r.ac);           // lo que la malla podía tomar además de lo aceptado
+        const cReg = Math.min(r.naReg, libre), cUrg = Math.min(r.naUrg, libre - cReg);
+        a.of += r.of; a.ac += r.ac; a.ej += r.ej; a.cap += cap; a.naReg += r.naReg; a.naUrg += r.naUrg; a.cubReg += cReg; a.cubUrg += cUrg;
+        a.dias++; if (r.of <= cap) a.diasOk++;
+        a.sobre += Math.max(0, r.ac - cap); a.noShow += r.ac - r.ej;
+      }
+    }
+  }
+  const filas = Object.values(acc).filter(a => a.dias > 0).sort((x, y) => (y.naReg + y.naUrg) - (x.naReg + x.naUrg));
+  return { desde, hasta, filas };
+}
+
 export default function MallaTurnosMX() {
   const hoy = fechaHoyOperativa();
   const [datos, setDatos] = useState(null);
@@ -102,10 +205,10 @@ export default function MallaTurnosMX() {
     let vivo = true;
     (async () => {
       try {
-        const desdeDem = sumarDias(lunesDe(hoy), -7 * SEMANAS_DEMANDA), hastaDem = sumarDias(hoy, -1);
-        const desdeFlota = sumarDias(hoy, -DIAS_FLOTA), hastaFlota = sumarDias(hoy, -1);
+        const desdeDem = sumarDias(lunesDe(hoy), -7 * (SEMANAS_DEMANDA + 4)), hastaDem = sumarDias(hoy, -1);
+        const desdeFlota = sumarDias(hoy, -DIAS_FLOTA - 7 * 4), hastaFlota = sumarDias(hoy, -1);
         const [ped, rutas, inv, sup] = await Promise.all([
-          traerTodo("mx_pedidos_estado", "facility_id, fecha_ruta, status, tipo", q => q.gte("fecha_ruta", desdeDem).lte("fecha_ruta", hastaDem).neq("status", "canceled").order("request_id")),
+          traerTodo("mx_pedidos_estado", "facility_id, fecha_ruta, status, tipo, travel_status_final", q => q.gte("fecha_ruta", desdeDem).lte("fecha_ruta", hastaDem).neq("status", "canceled").order("request_id")),
           traerTodo("vs_rutas_ejecutadas", "fecha, svc, placa_norm", q => q.gte("fecha", desdeFlota).lte("fecha", hastaFlota).order("fecha")),
           traerTodo("inventario_flota", "placa, empresa, tipo, status", q => q),
           sb.from("supervisores_bt").select("nombre, scs_asignados").eq("activo", true).then(r => r.data || []),
@@ -116,57 +219,9 @@ export default function MallaTurnosMX() {
     return () => { vivo = false; };
   }, [hoy]);
 
-  const grupos = useMemo(() => {
-    if (!datos) return [];
-    const { ped, rutas, inv, sup, desdeDem, hastaDem } = datos;
-    // Demanda por grupo y fecha
-    const porFecha = {};
-    for (const p of ped) {
-      if (!p.facility_id || EXCLUIR.includes(p.facility_id) || p.status === "pending") continue;
-      const g = grupoDe(p.facility_id), k = `${g}|${p.fecha_ruta}`;
-      const x = (porFecha[k] = porFecha[k] || { reg: 0, urg: 0 });
-      if (p.tipo === "urgent") x.urg++; else x.reg++;
-    }
-    const fechas = []; for (let f = desdeDem; f <= hastaDem; f = sumarDias(f, 1)) fechas.push(f);
-    const nombresG = [...new Set(Object.keys(porFecha).map(k => k.split("|")[0]))];
-    // Flota: días trabajados por placa y SC
-    const diasPlaca = {};
-    for (const r of rutas) {
-      if (!r.placa_norm || EXCLUIR.includes(r.svc)) continue;
-      const k = `${r.placa_norm}|${r.svc}`;
-      (diasPlaca[k] = diasPlaca[k] || new Set()).add(r.fecha);
-    }
-    const porPlaca = {};
-    for (const [k, set] of Object.entries(diasPlaca)) {
-      const [p, sc] = k.split("|");
-      const x = (porPlaca[p] = porPlaca[p] || { placa: p, total: 0, mejorSc: sc, mejorN: 0 });
-      x.total += set.size;
-      if (set.size > x.mejorN) { x.mejorN = set.size; x.mejorSc = sc; }
-    }
-    const invMap = {};
-    for (const v of inv) invMap[normPlaca(v.placa)] = v;
-    const supMap = {};
-    for (const s of sup) for (const sc of (Array.isArray(s.scs_asignados) ? s.scs_asignados : [])) (supMap[sc] = supMap[sc] || []).push(s.nombre);
-
-    return nombresG.map(nombre => {
-      const scs = nombre.split(" · ");
-      const base = [], pico = [];
-      for (let d = 0; d < 7; d++) {
-        const reg = [], urg = [];
-        for (const f of fechas) if (diaSemana(f) === d) { const x = porFecha[`${nombre}|${f}`] || { reg: 0, urg: 0 }; reg.push(x.reg); urg.push(x.urg); }
-        const prom = reg.reduce((a, b) => a + b, 0) / Math.max(1, reg.length);
-        const promUrg = urg.reduce((a, b) => a + b, 0) / Math.max(1, urg.length);
-        base.push(Math.floor(prom));
-        pico.push(Math.ceil(percentil(reg, 0.8) + promUrg));
-      }
-      const vehiculos = Object.values(porPlaca).filter(v => grupoDe(v.mejorSc) === nombre)
-        .map(v => { const i = invMap[v.placa] || {}; return { placa: v.placa, dias: v.total, empresa: i.empresa || "No está en el inventario", tipo: i.tipo || "—", estado: i.status ? i.status : (i.placa ? "ACTIVO" : "—"), k: v.placa }; })
-        .sort((a, b) => b.dias - a.dias);
-      const supervisores = [...new Set(scs.flatMap(sc => supMap[sc] || []))];
-      return { nombre, scs, base, pico, vehiculos, supervisor: supervisores.join(" · ") || "—" };
-    }).filter(g => g.base.reduce((a, b) => a + b, 0) >= MIN_RUTAS_SEMANA)
-      .sort((a, b) => b.base.reduce((x, y) => x + y, 0) - a.base.reduce((x, y) => x + y, 0));
-  }, [datos]);
+  const vent = useMemo(() => ({ dDem: sumarDias(lunesDe(hoy), -7 * SEMANAS_DEMANDA), hDem: sumarDias(hoy, -1), dFlo: sumarDias(hoy, -DIAS_FLOTA), hFlo: sumarDias(hoy, -1) }), [hoy]);
+  const grupos = useMemo(() => (datos ? construirGrupos(datos, vent.dDem, vent.hDem, vent.dFlo, vent.hFlo) : []), [datos, vent]);
+  const prueba = useMemo(() => (datos ? probarMalla(datos, hoy) : null), [datos, hoy]);
 
   const lunesBase = lunesDe(hoy);
   const semanas = [0, 1, 2, 3].map(i => sumarDias(lunesBase, 7 * i));
@@ -191,7 +246,7 @@ export default function MallaTurnosMX() {
           <div>
             <div style={{ fontSize: 20, fontWeight: 800, color: NAVY }}>Malla de turnos</div>
             <div style={{ fontSize: 13, color: MUTED, marginTop: 4 }}>
-              Grupo fijo que sale 6 días con descanso rotativo, y reserva para los días pico. Se recalcula sola cada vez que se abre: demanda de las últimas {SEMANAS_DEMANDA} semanas ({fechaCorta(datos.desdeDem)} al {fechaCorta(datos.hastaDem)}) y flota que trabajó del {fechaCorta(datos.desdeFlota)} al {fechaCorta(datos.hastaFlota)}.
+              Grupo fijo que sale 6 días con descanso rotativo, y reserva para los días pico. Se recalcula sola cada vez que se abre: demanda de las últimas {SEMANAS_DEMANDA} semanas ({fechaCorta(vent.dDem)} al {fechaCorta(vent.hDem)}) y flota que trabajó del {fechaCorta(vent.dFlo)} al {fechaCorta(vent.hFlo)}.
             </div>
           </div>
           <div style={{ display: "flex", gap: 6 }}>
@@ -213,7 +268,7 @@ export default function MallaTurnosMX() {
         <button onClick={() => setVerComo(!verComo)} style={{ marginTop: 12, background: "none", border: "none", color: NAVY, fontSize: 13, fontWeight: 600, cursor: "pointer", padding: 0 }}>{verComo ? "▾" : "▸"} Cómo se calcula</button>
         {verComo && (
           <div style={{ fontSize: 13, color: "#2b3038", lineHeight: 1.6, marginTop: 6 }}>
-            <b>1. Demanda:</b> para cada SC y día de la semana se toman las rutas regulares que ofreció MELI en las últimas {SEMANAS_DEMANDA} semanas. <b>Base</b> = el promedio, redondeado hacia abajo (lo que llega casi siempre). <b>Pico</b> = el nivel que se supera 1 de cada 5 días, más los urgentes.<br />
+            <b>1. Demanda:</b> para cada SC y día de la semana se toman las rutas regulares que ofreció MELI en las últimas {SEMANAS_DEMANDA} semanas. Las semanas recientes pesan más (la de hace una semana vale la mitad que la última), y cada SC se cuenta desde su primer día con pedidos. <b>Base</b> = el promedio, redondeado hacia abajo (lo que llega casi siempre). <b>Pico</b> = el nivel que se supera 1 de cada 5 días, más los urgentes.<br />
             <b>2. Grupo fijo:</b> rutas base de la semana ÷ 6 días de trabajo. Así, cada vehículo fijo tiene trabajo los 6 días que le toca salir.<br />
             <b>3. Descansos:</b> uno por vehículo, en los días de menos demanda. Cada semana, cada vehículo avanza un lugar en la lista, para que nadie tenga siempre el mismo día.<br />
             <b>4. Quién es fijo:</b> los vehículos que más días trabajaron en las últimas 2 semanas. El resto queda como reserva. Si no alcanzan, aparece una <b>vacante</b>.<br />
@@ -255,6 +310,59 @@ export default function MallaTurnosMX() {
           </table>
         </div>
       </div>
+
+      {prueba && prueba.filas.length > 0 && (() => {
+        const t = prueba.filas.reduce((x, a) => { for (const k of Object.keys(a)) if (typeof a[k] === "number") x[k] = (x[k] || 0) + a[k]; return x; }, {});
+        const pct = (a, b) => (b ? `${Math.round((a / b) * 100)}%` : "—");
+        const na = a => a.naReg + a.naUrg, cub = a => a.cubReg + a.cubUrg;
+        return (
+          <div style={card}>
+            <div style={{ fontSize: 16, fontWeight: 700 }}>¿La malla habría cubierto los rechazos? · prueba del {fechaCorta(prueba.desde)} al {fechaCorta(prueba.hasta)}</div>
+            <div style={{ fontSize: 13, color: MUTED, marginTop: 4, lineHeight: 1.5 }}>
+              Para cada semana, la malla se arma solo con los datos que había antes de esa semana, y se compara con lo que pasó de verdad. Un rechazo cuenta como cubierto si ese día la malla tenía capacidad libre, además de lo que se aceptó.
+            </div>
+            <div style={{ display: "flex", gap: 12, marginTop: 12, flexWrap: "wrap" }}>
+              {[["Rechazos y vencidos reales", na(t), "#1f2937"], ["Que la malla cubría", `${cub(t)} · ${pct(cub(t), na(t))}`, "#15803d"], ["Regulares cubiertos", `${t.cubReg} de ${t.naReg} · ${pct(t.cubReg, t.naReg)}`, NAVY], ["Urgentes cubiertos", `${t.cubUrg} de ${t.naUrg} · ${pct(t.cubUrg, t.naUrg)}`, "#9a3c06"], ["Días en que la capacidad alcanzaba", pct(t.diasOk, t.dias), NAVY]].map(([tt, v, c]) => (
+                <div key={tt} style={{ flex: "1 1 170px", background: "#f6f7f9", borderRadius: 10, padding: "10px 14px" }}>
+                  <div style={{ fontSize: 12, color: MUTED }}>{tt}</div>
+                  <div style={{ fontSize: 20, fontWeight: 800, color: c }}>{v}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{ overflowX: "auto", marginTop: 12 }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 940 }}>
+                <thead><tr>
+                  {["SC", "Rutas ofrecidas", "Ejecutadas (real)", "Capacidad de la malla", "Rechazos y vencidos", "Cubiertos por la malla", "% cubierto", "Regulares cubiertos", "Urgentes cubiertos", "Días que alcanzaba", "Aceptadas sobre la capacidad", "No show (real)"].map(h => <th key={h} style={{ ...th, textAlign: h === "SC" ? "left" : "center" }}>{h}</th>)}
+                </tr></thead>
+                <tbody>
+                  {[...prueba.filas, { ...t, nombre: "Total" }].map(a => {
+                    const p = na(a) ? cub(a) / na(a) : 1;
+                    return (
+                      <tr key={a.nombre} style={{ background: a.nombre === "Total" ? "#fafafa" : "transparent", fontWeight: a.nombre === "Total" ? 800 : 400 }}>
+                        <td style={{ ...td, textAlign: "left", fontWeight: 700 }}>{a.nombre}</td>
+                        <td style={td}>{a.of}</td>
+                        <td style={td}>{a.ej}</td>
+                        <td style={td}>{a.cap}</td>
+                        <td style={td}>{na(a)}</td>
+                        <td style={{ ...td, color: "#15803d", fontWeight: 700 }}>{cub(a)}</td>
+                        <td style={{ ...td, fontWeight: 800, color: p >= 0.7 ? "#15803d" : p >= 0.4 ? "#b45309" : "#b42318" }}>{pct(cub(a), na(a))}</td>
+                        <td style={td}>{a.cubReg} / {a.naReg}</td>
+                        <td style={td}>{a.cubUrg} / {a.naUrg}</td>
+                        <td style={td}>{pct(a.diasOk, a.dias)}</td>
+                        <td style={{ ...td, color: a.sobre ? "#9a3c06" : MUTED }}>{a.sobre || "—"}</td>
+                        <td style={td}>{a.noShow || "—"}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            <div style={{ fontSize: 12, color: MUTED, marginTop: 8, lineHeight: 1.5 }}>
+              <b>Aceptadas sobre la capacidad:</b> días en que se aceptaron más rutas de las que la malla podía cubrir; con la malla se habrían rechazado a tiempo, y compararlas con los no show reales muestra cuántos no show se habrían evitado. La prueba se recalcula sola cada día con las últimas {SEMANAS_PRUEBA} semanas.
+            </div>
+          </div>
+        );
+      })()}
 
       {sel && (() => {
         const { g, m } = sel;
