@@ -1589,16 +1589,19 @@ function ModuloMaestroCL({ usuario } = {}) {
       </div>
 
       <div className="mj-wrap" style={{ padding: "16px 24px 28px" }}>
-        {error && (
+        {/* CANON: su propio maestro, sin esperar ni mostrar nada de MELI */}
+        {cliente === "canon" && fecha && <MaestroCanon fecha={fecha} api={api} apiSuave={apiSuave} descargarCSV={descargarCSV} />}
+
+        {cliente === "meli" && error && (
           <div style={{ background: "#fff4f4", border: "1px solid #f2c9c9", borderRadius: 10, padding: "12px 14px", marginBottom: 14 }}>
             <div style={{ fontWeight: 700, color: "#b42318", fontSize: 13 }}>No se pudieron cargar los datos</div>
             <div style={{ fontSize: 12, color: "#7a2a22", marginTop: 3 }}>{error}</div>
           </div>
         )}
 
-        {cargando && <div style={{ color: "#8a94a6", fontSize: 13, padding: "24px 0" }}>Cargando la jornada…</div>}
+        {cliente === "meli" && cargando && <div style={{ color: "#8a94a6", fontSize: 13, padding: "24px 0" }}>Cargando la jornada…</div>}
 
-        {!cargando && !fecha && !error && (
+        {cliente === "meli" && !cargando && !fecha && !error && (
           <div style={{ background: "#fff", border: "1px dashed #dfe4ec", borderRadius: 10, padding: 24, maxWidth: 620 }}>
             <div style={{ fontWeight: 700, color: NAVY, fontSize: 14 }}>Todavía no hay jornadas cargadas</div>
             <div style={{ fontSize: 13, color: "#64748b", marginTop: 6, lineHeight: 1.8 }}>
@@ -1607,8 +1610,11 @@ function ModuloMaestroCL({ usuario } = {}) {
           </div>
         )}
 
-        {!cargando && fecha && (
+        {cliente === "meli" && !cargando && fecha && (
           <Fragment>
+            {/* Indicadores y filtros de MELI: no aplican a Canon */}
+            {cliente === "meli" && (
+              <Fragment>
             {/* Indicadores · una sola fila; cada tarjeta se abre y se explica */}
             <div className="mj-kpis">
               {KPIS.map(k => (
@@ -1655,6 +1661,8 @@ function ModuloMaestroCL({ usuario } = {}) {
                 </button>
               )}
             </div>
+              </Fragment>
+            )}
 
             {/* ── Maestro Jornada ── */}
             {tab === "jornada" && (
@@ -2967,8 +2975,6 @@ function ModuloMaestroCL({ usuario } = {}) {
             )}
 
             {/* ── Tarifario ── */}
-            {tab === "canon" && <MaestroCanon fecha={fecha} apiSuave={apiSuave} descargarCSV={descargarCSV} />}
-
             {tab === "tarifario" && (() => {
               const $m = (v) => v == null ? "—" :
                 "$" + Number(v).toLocaleString("es-CL", { maximumFractionDigits: 2 });

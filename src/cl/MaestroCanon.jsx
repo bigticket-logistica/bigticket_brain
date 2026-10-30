@@ -53,10 +53,222 @@ function Kpi({ titulo, valor, sub, color }) {
   );
 }
 
-export default function MaestroCanon({ fecha, apiSuave, descargarCSV }) {
+// ── Comparación con el maestro manual de los supervisores (migración 82) ──
+const TIPO_DIF = {
+  distinto:        { t: "Con diferencias",  c: AMBAR, d: "La guía está en los dos, con algún valor distinto" },
+  solo_automatico: { t: "Solo automático",  c: NAVY,  d: "Está en DispatchTrack y el supervisor no la anotó" },
+  solo_manual:     { t: "Solo manual",      c: ROJO,  d: "La anotó el supervisor y no está en DispatchTrack ese día y viaje" },
+  otra_ruta:       { t: "En otro viaje",    c: AMBAR, d: "Misma guía y día, en un viaje distinto" },
+  igual:           { t: "Iguales",          c: VERDE, d: "Calzan en todo" },
+};
+const CAMPOS = ["cargados", "entregados", "devueltos", "volumen", "cecos", "servicio", "patente"];
+
+// Lee el Excel de los supervisores en el navegador: una fila por guía, 14 columnas
+export async function leerManual(archivo) {
+  const ExcelJS = (await import("exceljs")).default;
+  const libro = new ExcelJS.Workbook();
+  await libro.xlsx.load(await archivo.arrayBuffer());
+  const hoja = libro.worksheets[0];
+  if (!hoja) throw new Error("El archivo no tiene hojas.");
+  const enc = [];
+  hoja.getRow(1).eachCell({ includeEmpty: true }, (c, i) => { enc[i] = String(c.text || "").trim(); });
+  const faltan = ["idViajes", "FOLIO_GUIA", "fecha"].filter((c) => !enc.includes(c));
+  if (faltan.length) throw new Error(`No parece el maestro de Canon: faltan las columnas ${faltan.join(", ")}.`);
+  const valor = (v) => {
+    if (v === null || v === undefined) return null;
+    if (v instanceof Date) return v.toISOString().slice(0, 10);              // las fechas de Excel vienen en UTC
+    if (typeof v === "object") return v.result !== undefined ? valor(v.result) : (v.text ?? (v.richText || []).map((x) => x.text).join(""));
+    return String(v).trim();
+  };
+  const filas = [];
+  hoja.eachRow((fila, n) => {
+    if (n === 1) return;
+    const o = {};
+    fila.eachCell({ includeEmpty: true }, (c, i) => { if (enc[i]) o[enc[i]] = valor(c.value); });
+    if (o.idViajes && o.FOLIO_GUIA && o.fecha) {
+      // fecha como texto dd-mm-aaaa o dd/mm/aaaa → aaaa-mm-dd
+      const m = /^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/.exec(o.fecha);
+      if (m) o.fecha = `${m[3]}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}`;
+      filas.push(o);
+    }
+  });
+  if (!filas.length) throw new Error("El archivo no trae guías (filas con idViajes, FOLIO_GUIA y fecha).");
+  return filas;
+}
+
+function CompararManual({ fecha, api, descargarCSV }) {
+  const [desde, setDesde] = useState(fecha);
+  const [hasta, setHasta] = useState(fecha);
+  const [filas, setFilas] = useState(null);
+  const [msg, setMsg] = useState("");
+  const [error, setError] = useState("");
+  const [ocupado, setOcupado] = useState("");
+  const [filtro, setFiltro] = useState({ tipo: "", campo: "", busca: "" });
+
+  const comparar = async (d = desde, h = hasta) => {
+    setOcupado("comparar"); setError("");
+    try {
+      const r = await api("rpc/comparar_canon", { method: "POST", body: JSON.stringify({ p_desde: d, p_hasta: h }) });
+      setFilas(r || []);
+    } catch (e) { setError("No se pudo comparar: " + e.message + " (¿falta la migración 82?)"); }
+    finally { setOcupado(""); }
+  };
+  useEffect(() => { setDesde(fecha); setHasta(fecha); comparar(fecha, fecha); }, [fecha]);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  const subir = async (archivo) => {
+    if (!archivo) return;
+    setOcupado("subir"); setError(""); setMsg("");
+    try {
+      const todas = await leerManual(archivo);
+      const dias = [...new Set(todas.map((f) => f.fecha))].sort();
+      if (!window.confirm(`Se cargarán ${todas.length.toLocaleString("es-CL")} guías de ${dias.length} días ` +
+            `(${dias[0]} a ${dias[dias.length - 1]}).\n\nLos días que ya estaban cargados se reemplazan por los del archivo.\n\n¿Continuar?`)) return;
+      // por días completos, en tandas de hasta ~3.000 guías (subir un día reemplaza ese día)
+      const porDia = dias.map((d) => todas.filter((f) => f.fecha === d));
+      let tanda = [], total = 0;
+      const enviar = async () => {
+        if (!tanda.length) return;
+        const r = await api("rpc/cargar_maestro_canon_manual", { method: "POST", body: JSON.stringify({ filas: tanda, p_usuario: "brain" }) });
+        total += (r && r.filas) || 0; tanda = [];
+      };
+      for (const d of porDia) { if (tanda.length + d.length > 3000) await enviar(); tanda = tanda.concat(d); }
+      await enviar();
+      setMsg(`Maestro manual cargado: ${total.toLocaleString("es-CL")} guías de ${dias.length} días.`);
+      setDesde(dias[0]); setHasta(dias[dias.length - 1]);
+      await comparar(dias[0], dias[dias.length - 1]);
+    } catch (e) { setError(e.message); }
+    finally { setOcupado(""); }
+  };
+
+  const cuenta = (t) => (filas || []).filter((r) => r.tipo === t).length;
+  const texto = filtro.busca.trim().toLowerCase();
+  const vistas = (filas || []).filter((r) => r.tipo !== "igual" &&
+    (!filtro.tipo || r.tipo === filtro.tipo) &&
+    (!filtro.campo || (r.diferencias || []).includes(filtro.campo)) &&
+    (!texto || [r.id_ruta, r.folio, r.a_patente, r.m_patente, r.conductor, r.direccion].some((c) => String(c ?? "").toLowerCase().includes(texto))));
+  const total = (filas || []).length;
+  const iguales = cuenta("igual");
+  const par = (a, m, esVol) => {
+    const fa = esVol ? (a == null ? "—" : vol(a)) : (a ?? "—"), fm = esVol ? (m == null ? "—" : vol(m)) : (m ?? "—");
+    return String(fa) === String(fm) ? <span style={{ color: "#94a3b8" }}>{fa}</span>
+      : <span><b style={{ color: NAVY }}>{fa}</b> <span style={{ color: "#94a3b8" }}>·</span> <b style={{ color: ROJO }}>{fm}</b></span>;
+  };
+
+  return (
+    <div>
+      <div style={{ background: "#fff", border: "1px solid #e6e9ef", borderRadius: 10, padding: "12px 16px", marginBottom: 12 }}>
+        <div style={{ fontSize: 13, fontWeight: 800, color: NAVY }}>Comparar con el maestro manual de los supervisores</div>
+        <div style={{ fontSize: 12, color: "#64748b", lineHeight: 1.6, marginTop: 3, maxWidth: 980 }}>
+          Sube el Excel que llenan los supervisores (las 14 columnas de siempre). El Brain lo cruza con el automático guía por
+          guía, por día, viaje y folio (sin importar los ceros a la izquierda). Solo última milla: el manual no trae troncales.
+          Subir un día de nuevo lo reemplaza. En cada fila, <b style={{ color: NAVY }}>azul es el automático</b> y{" "}
+          <b style={{ color: ROJO }}>rojo es el manual</b>.
+        </div>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 10 }}>
+          <label className="mj-btn" style={{ cursor: "pointer", background: NAVY, color: "#fff", borderColor: NAVY, opacity: ocupado === "subir" ? 0.6 : 1 }}>
+            {ocupado === "subir" ? "Leyendo y cargando…" : "⬆ Subir maestro manual (.xlsx)"}
+            <input type="file" accept=".xlsx" style={{ display: "none" }} disabled={ocupado === "subir"}
+                   onChange={(e) => { const a = e.target.files && e.target.files[0]; e.target.value = ""; subir(a); }} />
+          </label>
+          <span style={{ fontSize: 12, color: "#64748b" }}>Comparar del</span>
+          <input className="mj-input" type="date" value={desde} onChange={(e) => setDesde(e.target.value)} />
+          <span style={{ fontSize: 12, color: "#64748b" }}>al</span>
+          <input className="mj-input" type="date" value={hasta} onChange={(e) => setHasta(e.target.value)} />
+          <button className="mj-btn" onClick={() => comparar()} disabled={ocupado === "comparar"}>
+            {ocupado === "comparar" ? "Comparando…" : "Comparar"}</button>
+          <span style={{ flex: 1 }} />
+          <button className="mj-btn" disabled={!vistas.length}
+                  onClick={() => descargarCSV(`diferencias_canon_${desde}_${hasta}`, vistas, [
+                    { titulo: "fecha", campo: "fecha" }, { titulo: "idViajes", campo: "id_ruta" }, { titulo: "FOLIO_GUIA", campo: "folio" },
+                    { titulo: "tipo", valor: (r) => (TIPO_DIF[r.tipo] || {}).t || r.tipo },
+                    { titulo: "diferencias", valor: (r) => (r.diferencias || []).join(" · ") },
+                    { titulo: "viaje manual", campo: "ruta_manual" },
+                    ...["patente", "cecos", "servicio", "cargados", "entregados", "devueltos", "volumen"].flatMap((c) => [
+                      { titulo: `${c} automático`, valor: (r) => (c === "volumen" && r[`a_${c}`] != null ? String(r[`a_${c}`]).replace(".", ",") : r[`a_${c}`]) },
+                      { titulo: `${c} manual`, valor: (r) => (c === "volumen" && r[`m_${c}`] != null ? String(r[`m_${c}`]).replace(".", ",") : r[`m_${c}`]) }]),
+                    { titulo: "estado", campo: "estado" }, { titulo: "conductor", campo: "conductor" }])}>Descargar diferencias</button>
+        </div>
+        {msg && <div style={{ fontSize: 12, color: VERDE, marginTop: 6 }}>✓ {msg}</div>}
+        {error && <div style={{ fontSize: 12, color: ROJO, marginTop: 6 }}>{error}</div>}
+      </div>
+
+      {filas !== null && !total && !error && (
+        <div style={{ background: "#fff", border: "1px solid #e6e9ef", borderRadius: 10, padding: 18, fontSize: 13, color: "#64748b" }}>
+          No hay maestro manual cargado para {desde === hasta ? `el ${desde}` : `del ${desde} al ${hasta}`}. Súbelo con el botón de arriba.
+        </div>
+      )}
+
+      {total > 0 && (
+        <>
+          <div style={{ display: "flex", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
+            <Kpi titulo="Guías comparadas" valor={fmt(total)}
+                 sub={`${(100 * iguales / total).toLocaleString("es-CL", { maximumFractionDigits: 1 })}% calzan exacto`} color={NAVY} />
+            {["distinto", "solo_automatico", "solo_manual", "otra_ruta"].map((t) => (
+              <div key={t} onClick={() => setFiltro((x) => ({ ...x, tipo: x.tipo === t ? "" : t }))} style={{ cursor: "pointer", flex: 1, minWidth: 150 }}
+                   title={TIPO_DIF[t].d}>
+                <Kpi titulo={TIPO_DIF[t].t + (filtro.tipo === t ? " ✓" : "")} valor={fmt(cuenta(t))} sub={TIPO_DIF[t].d} color={TIPO_DIF[t].c} />
+              </div>
+            ))}
+          </div>
+
+          <div style={{ background: "#fff", border: "1px solid #e6e9ef", borderRadius: 10, padding: "10px 16px", marginBottom: 12,
+                        display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <span style={{ fontSize: 12, color: "#64748b" }}>Diferencia en:</span>
+            {CAMPOS.map((c) => {
+              const nC = (filas || []).filter((r) => (r.diferencias || []).includes(c)).length;
+              return nC ? (
+                <button key={c} className="mj-btn" onClick={() => setFiltro((x) => ({ ...x, campo: x.campo === c ? "" : c }))}
+                        style={filtro.campo === c ? { background: AMBAR, color: "#fff", borderColor: AMBAR } : {}}>{c} ({fmt(nC)})</button>
+              ) : null;
+            })}
+            <input className="mj-input" placeholder="Buscar viaje, folio, patente, conductor…" value={filtro.busca}
+                   onChange={(e) => setFiltro((x) => ({ ...x, busca: e.target.value }))} style={{ minWidth: 260, flex: 1 }} />
+          </div>
+
+          {!vistas.length ? (
+            <div style={{ background: "#fff", border: "1px solid #e6e9ef", borderRadius: 10, padding: 18, fontSize: 13, color: VERDE }}>
+              {total === iguales ? "✓ El automático y el manual calzan en todas las guías." : "No hay diferencias con estos filtros."}
+            </div>
+          ) : (
+            <div style={{ overflowX: "auto" }}>
+              <table className="mj-tabla">
+                <thead><tr><th>Fecha</th><th>ID viaje</th><th>Folio guía</th><th>Tipo</th><th>Diferencia en</th>
+                  <th>Patente</th><th>CECO</th><th className="num">Carg.</th><th className="num">Entr.</th><th className="num">Dev.</th>
+                  <th className="num">Volumen</th><th>Estado (DispatchTrack)</th></tr></thead>
+                <tbody>
+                  {vistas.slice(0, 3000).map((r) => (
+                    <tr key={`${r.fecha}-${r.id_ruta}-${r.folio}-${r.tipo}`}>
+                      <td style={{ whiteSpace: "nowrap" }}>{r.fecha}</td>
+                      <td style={{ fontWeight: 700 }}>{r.id_ruta}{r.ruta_manual ? <div style={{ fontSize: 11, color: ROJO }}>manual: {r.ruta_manual}</div> : null}</td>
+                      <td style={{ fontFamily: "ui-monospace, monospace", fontSize: 12 }}>{r.folio}</td>
+                      <td style={{ color: (TIPO_DIF[r.tipo] || {}).c, fontWeight: 700, whiteSpace: "nowrap" }} title={(TIPO_DIF[r.tipo] || {}).d}>
+                        {(TIPO_DIF[r.tipo] || {}).t || r.tipo}</td>
+                      <td style={{ fontSize: 12 }}>{(r.diferencias || []).join(" · ")}</td>
+                      <td style={{ fontSize: 12 }}>{par(r.a_patente, r.m_patente)}</td>
+                      <td style={{ fontSize: 12 }}>{par(r.a_cecos, r.m_cecos)}</td>
+                      <td className="num">{par(r.a_cargados, r.m_cargados)}</td>
+                      <td className="num">{par(r.a_entregados, r.m_entregados)}</td>
+                      <td className="num">{par(r.a_devueltos, r.m_devueltos)}</td>
+                      <td className="num">{par(r.a_volumen, r.m_volumen, true)}</td>
+                      <td style={{ fontSize: 12, color: (ESTADO[r.estado] || {}).c || "#64748b", whiteSpace: "nowrap" }}>
+                        {(ESTADO[r.estado] || {}).t || r.estado || "—"}{r.subestado ? ` · ${r.subestado}` : ""}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {vistas.length > 3000 && <div style={{ fontSize: 12, color: "#64748b", padding: 8 }}>Se muestran 3.000 de {fmt(vistas.length)}: usa los filtros o descarga las diferencias.</div>}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+export default function MaestroCanon({ fecha, api, apiSuave, descargarCSV }) {
   const [filas, setFilas] = useState(null);
   const [error, setError] = useState("");
-  const [vista, setVista] = useState("guias");
+  const [vista, setVista] = useState("guias");   // guias · rutas · comparar
   const [f, setF] = useState({ servicio: "", cecos: "", busca: "", soloAlertas: false });
 
   const cargar = async () => {
@@ -118,7 +330,7 @@ export default function MaestroCanon({ fecha, apiSuave, descargarCSV }) {
         {error && <div style={{ fontSize: 12, color: ROJO, marginTop: 6 }}>{error}</div>}
       </div>
 
-      <div style={{ display: "flex", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
+      {vista !== "comparar" && <div style={{ display: "flex", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
         <Kpi titulo="Guías UM" valor={fmt(um.length)} sub={`${fmt(tr.length)} troncales · ${fmt(rutasIds.length)} rutas`} />
         <Kpi titulo="Cargados UM" valor={fmt(cargUM)} sub="líneas de producto" />
         <Kpi titulo="Entregados UM" valor={fmt(suma(um, "entregados"))} color={VERDE}
@@ -126,24 +338,32 @@ export default function MaestroCanon({ fecha, apiSuave, descargarCSV }) {
         <Kpi titulo="Devueltos UM" valor={fmt(suma(um, "devueltos"))} color={ROJO} sub="líneas no entregadas" />
         <Kpi titulo="Volumen UM" valor={vol(suma(um, "VOLUMEN"))} sub={`troncal ${vol(suma(tr, "VOLUMEN"))}`} />
         <Kpi titulo="Alertas" valor={fmt(alertas.length)} color={alertas.length ? AMBAR : VERDE} sub="guías para revisar" />
-      </div>
+      </div>}
 
       <div style={{ background: "#fff", border: "1px solid #e6e9ef", borderRadius: 10, padding: "10px 16px", marginBottom: 12,
                     display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        {vista !== "comparar" && <>
         <input className="mj-input" placeholder="Buscar ruta, folio, patente, conductor o dirección…" value={f.busca}
                onChange={(e) => setF((x) => ({ ...x, busca: e.target.value }))} style={{ minWidth: 300, flex: 1 }} />
         {chip("servicio", "UM", "UM")}{chip("servicio", "TRONCAL", "Troncal")}
         {chip("cecos", "C_RM", "C_RM")}{chip("cecos", "C_VIÑA", "C_VIÑA")}{chip("cecos", "_sin", "Sin CECO")}
         <button className="mj-btn" onClick={() => setF((x) => ({ ...x, soloAlertas: !x.soloAlertas }))}
                 style={f.soloAlertas ? { background: AMBAR, color: "#fff", borderColor: AMBAR } : {}}>⚠ Solo alertas</button>
+        </>}
         <span style={{ flex: 1 }} />
-        <button className="mj-btn" onClick={() => setVista((v) => (v === "guias" ? "rutas" : "guias"))}>
-          {vista === "guias" ? "Ver por ruta" : "Ver por guía"}</button>
+        {[["guias", "Por guía"], ["rutas", "Por ruta"], ["comparar", "Comparar con manual"]].map(([k, t]) => (
+          <button key={k} className="mj-btn" onClick={() => setVista(k)}
+                  style={vista === k ? { background: NAVY, color: "#fff", borderColor: NAVY } : {}}>{t}</button>
+        ))}
+        {vista !== "comparar" && <>
         <button className="mj-btn" onClick={descargar} disabled={!vistaFilas.length}>Descargar CSV</button>
         <button className="mj-btn" onClick={cargar}>↻ Actualizar</button>
+        </>}
       </div>
 
-      {!filas.length && !error && (
+      {vista === "comparar" && <CompararManual fecha={fecha} api={api} descargarCSV={descargarCSV} />}
+
+      {vista !== "comparar" && !filas.length && !error && (
         <div style={{ background: "#fff", border: "1px solid #e6e9ef", borderRadius: 10, padding: 18, fontSize: 13, color: "#64748b" }}>
           No hay guías de Canon para el {fecha}.
         </div>
