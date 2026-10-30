@@ -291,6 +291,8 @@ function ModuloMaestroCL({ usuario } = {}) {
   const [mapaAbierto, setMapaAbierto] = useState(false);
   // ── Revisión de zonas: el motor propone, el supervisor confirma, el analista decide ──
   const [rev, setRev] = useState([]);
+  const [aprendido, setAprendido] = useState([]);       // reglas aprendidas (migración 76)
+  const [apPanel, setApPanel] = useState(false);
   const [revFiltro, setRevFiltro] = useState({ estado: "pendientes", origen: "", cecos: "", busca: "" });
   const [revSel, setRevSel] = useState({});          // id_ruta → segmentación elegida
   const [revEditando, setRevEditando] = useState(null);
@@ -599,14 +601,31 @@ function ModuloMaestroCL({ usuario } = {}) {
   const cargarRevision = async () => {
     if (!fecha) return;
     const fallos = [];
-    const d = await apiSuave(
-      `vw_revision_zonas?fecha=eq.${fecha}&order=codigo_meli.asc.nullslast,id_ruta&limit=3000`, [], fallos);
+    const [d, ap] = await Promise.all([
+      apiSuave(`vw_revision_zonas?fecha=eq.${fecha}&order=codigo_meli.asc.nullslast,id_ruta&limit=3000`, [], fallos),
+      apiSuave("aprendizaje_zona?order=activo.desc,decisiones.desc,comuna", [], fallos),
+    ]);
     setRev(d);
+    setAprendido(ap || []);
     if (fallos.length) setError("No se pudieron cargar: " + fallos.join(" | "));
   };
   useEffect(() => {
     if (tab === "revision") { cargarRevision(); if (!zonas.length || !segmentaciones.length) cargarZonas(); }
   }, [tab, fecha]);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Activar o desactivar una regla aprendida. Desactivada a mano queda bloqueada:
+  // nuevas decisiones no la reactivan hasta que el analista la vuelva a activar.
+  const cambiarAprendido = async (a, activo) => {
+    try {
+      await api(`aprendizaje_zona?comuna=eq.${encodeURIComponent(a.comuna)}`, {
+        method: "PATCH", headers: { Prefer: "return=minimal" },
+        body: JSON.stringify({ activo, bloqueado: !activo,
+          nota: activo ? null : `Desactivada por ${analista}`,
+          actualizado_at: new Date().toISOString(), actualizado_por: analista }) });
+      await cargarRevision();
+      setRevMsg(activo ? `Regla de ${a.comuna} activada` : `Regla de ${a.comuna} desactivada: el motor volverá a pedir revisión`);
+    } catch (e) { setError(e.message); }
+  };
 
   const decidirZona = async (r, seg) => {
     if (!seg) { setRevMsg("Elige una segmentación antes de confirmar."); return; }
@@ -1426,7 +1445,7 @@ function ModuloMaestroCL({ usuario } = {}) {
   const ORIGEN_ZONA = {
     punto_lejano: "Punto más lejano", otro_centro: "Zona de otro centro",
     punto_alternativo: "Punto alternativo", comuna_historica: "Comuna histórica",
-    sin_zona: "Sin zona", analista: "Analista",
+    sin_zona: "Sin zona", analista: "Analista", aprendido: "Aprendido del analista",
   };
   const ESTADO_REV = {
     pendiente:           { t: "Pendiente",           c: AMBAR_, f: "#fdf6e3" },
@@ -2419,8 +2438,43 @@ function ModuloMaestroCL({ usuario } = {}) {
                     Viajes donde el motor asignó la zona <strong>fuera de la regla normal</strong> (punto más lejano
                     en una zona de su centro). La columna Supervisor muestra lo que confirmó en la bitácora.
                     <strong> Tu decisión es la que paga</strong>: se guarda como corrección de zona del viaje, y
-                    enseña al motor para los días siguientes. Abre el mapa para ver la ruta y su punto más lejano.
+                    enseña al motor: cuando decides <strong>2 veces lo mismo para una comuna, sin contradecirte</strong>,
+                    el motor lo aprende y deja de preguntar por esa comuna. Abre el mapa para ver la ruta y su punto más lejano.
                   </div>
+                  <button className="mj-btn" style={{ marginTop: 8 }} onClick={() => setApPanel(v => !v)}>
+                    {apPanel ? "Cerrar lo aprendido" : `🧠 Aprendido (${aprendido.filter(a => a.activo).length})`}
+                  </button>
+                  {apPanel && (
+                    <div style={{ marginTop: 10 }}>
+                      <div style={{ fontSize: 12, color: "#64748b", lineHeight: 1.6, marginBottom: 8, maxWidth: 940 }}>
+                        Solo se aplica cuando el motor iba a pedir revisión: nunca cambia un viaje cuyo punto más lejano
+                        cae en una zona de su centro. Si decides distinto para una comuna, su regla se apaga sola.
+                        Si la desactivas a mano, no se reactiva hasta que la vuelvas a activar.
+                      </div>
+                      {!aprendido.length ? (
+                        <div style={{ fontSize: 12, color: "#94a3b8" }}>Todavía no hay reglas: se crean al decidir viajes.</div>
+                      ) : (
+                        <table className="mj-tabla">
+                          <thead><tr><th>Comuna del punto más lejano</th><th>Segmentación aprendida</th>
+                            <th className="num">Decisiones</th><th>Nota</th><th>Estado</th></tr></thead>
+                          <tbody>
+                            {aprendido.map(a => (
+                              <tr key={a.comuna} style={!a.activo ? { opacity: 0.55 } : {}}>
+                                <td style={{ fontWeight: 700 }}>{a.comuna}</td>
+                                <td><Etiqueta texto={a.segmentacion} /></td>
+                                <td className="num">{fmt(a.decisiones)}</td>
+                                <td style={{ fontSize: 11.5, color: "#64748b" }}>{a.nota || ""}</td>
+                                <td><label style={{ fontSize: 11.5, color: "#64748b", whiteSpace: "nowrap" }}>
+                                  <input type="checkbox" checked={!!a.activo} onChange={e => cambiarAprendido(a, e.target.checked)} />
+                                  {" "}{a.activo ? "activa" : a.bloqueado ? "desactivada" : "apagada"}
+                                </label></td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      )}
+                    </div>
+                  )}
                   {revMsg && <div style={{ fontSize: 12, color: VERDE_, marginTop: 6 }}>✓ {revMsg}</div>}
                 </div>
 
