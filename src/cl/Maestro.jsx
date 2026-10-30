@@ -13,6 +13,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 import { useState, useEffect, Fragment } from "react";
 import MapaZonas from "./MapaZonas";   // editor de mapa · requiere: npm install leaflet
+import MaestroCanon from "./MaestroCanon";   // maestro de Canon desde DispatchTrack (migraciones 80-81)
 
 const CL_URL = "https://hmowsazntdjtsvdfgutn.supabase.co";
 const CL_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imhtb3dzYXpudGRqdHN2ZGZndXRuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQ5MTc4NzgsImV4cCI6MjEwMDQ5Mzg3OH0.xAJokU0eFhof--d8R4uCRBr2-CJLzC5re0w1IPRqQR8";
@@ -210,6 +211,7 @@ function ModuloMaestroCL({ usuario } = {}) {
   const [dias, setDias] = useState([]);
   const [fecha, setFecha] = useState("");
   const [tab, setTab] = useState("jornada");
+  const [cliente, setCliente] = useState("meli");          // MELI o CANON
   const [soloReparto, setSoloReparto] = useState(true);
   const [tipoServicio, setTipoServicio] = useState("todos");   // todos | Última milla | MELI ONE
   const [cecos, setCecos] = useState("");
@@ -1490,6 +1492,13 @@ function ModuloMaestroCL({ usuario } = {}) {
   const revCuenta = (e) => rev.filter(r => r.estado_revision === e).length;
   const revPendientes = rev.filter(r => r.estado_revision !== "decidido").length;
 
+  // Cliente del maestro: MELI (todas las pestañas de siempre) o CANON (DispatchTrack)
+  const CLIENTES = [
+    { id: "meli",  label: "MELI",  sub: "Jornada consolidada desde MELI · reemplaza la carga manual del Excel · Solo operación MELI (ML_* · SRM1–SRM4)" },
+    { id: "canon", label: "CANON", sub: "Canon · DispatchTrack · una línea por guía · reemplaza el maestro manual de los supervisores (C_RM · C_VIÑA)" },
+  ];
+  const elegirCliente = (c) => { setCliente(c); setTab(c === "canon" ? "canon" : "jornada"); };
+
   const TABS = [
     { id: "jornada",    label: "Maestro Jornada", desc: "Una fila por viaje",        n: jornadaVista.length },
     { id: "devol",      label: "Devoluciones",    desc: "Detalle por folio",          n: devolVista.length },
@@ -1540,19 +1549,29 @@ function ModuloMaestroCL({ usuario } = {}) {
           <div>
             <div style={{ fontSize: 18, fontWeight: 800, color: NAVY, letterSpacing: -.3 }}>Maestro de Operaciones · Chile</div>
             <div style={{ fontSize: 12, color: "#94a3b8", marginTop: 2 }}>
-              Jornada consolidada desde MELI · reemplaza la carga manual del Excel · <strong>Solo operación MELI (ML_* · SRM1–SRM4)</strong>
+              {CLIENTES.find(c => c.id === cliente).sub}
+            </div>
+            <div style={{ display: "flex", gap: 6, marginTop: 10 }}>
+              {CLIENTES.map(c => (
+                <button key={c.id} onClick={() => elegirCliente(c.id)}
+                        style={{ border: `1px solid ${cliente === c.id ? NAVY : "#d8dee8"}`, background: cliente === c.id ? NAVY : "#fff",
+                                 color: cliente === c.id ? "#fff" : NAVY, borderRadius: 8, padding: "6px 18px", fontSize: 12.5,
+                                 fontWeight: 800, letterSpacing: .5, cursor: "pointer" }}>
+                  {c.label}
+                </button>
+              ))}
             </div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 8, paddingBottom: 8 }}>
             <span style={{ fontSize: 11.5, color: "#8a94a6", fontWeight: 700 }}>DÍA OPERATIVO</span>
             <input className="mj-input" type="date" value={fecha}
-                   min={dias.length ? dias[dias.length - 1] : undefined}
-                   max={dias.length ? dias[0] : undefined}
+                   min={cliente === "meli" && dias.length ? dias[dias.length - 1] : undefined}
+                   max={cliente === "meli" && dias.length ? dias[0] : undefined}
                    onChange={e => e.target.value && setFecha(e.target.value)} />
-            {dias.length > 0 && !dias.includes(fecha) && (
+            {cliente === "meli" && dias.length > 0 && !dias.includes(fecha) && (
               <span style={{ fontSize: 11, color: "#a16207" }}>sin datos ese día</span>
             )}
-            {resumen?.ultima_captura && (
+            {cliente === "meli" && resumen?.ultima_captura && (
               <span style={{ fontSize: 11, color: "#94a3b8" }}>
                 última captura {resumen.ultima_captura_chile || horaChile(resumen.ultima_captura)}
               </span>
@@ -1560,7 +1579,7 @@ function ModuloMaestroCL({ usuario } = {}) {
           </div>
         </div>
         <div style={{ display: "flex", gap: 0, borderBottom: "2px solid #e4e7ec", marginTop: 8, flexWrap: "wrap" }}>
-          {TABS.map(t => (
+          {cliente === "meli" && TABS.map(t => (
             <button key={t.id} className={`mj-tab ${tab === t.id ? "on" : ""}`} onClick={() => setTab(t.id)}>
               <div>{t.label}{t.n !== null && <span style={{ color: "#94a3b8", fontWeight: 600 }}> ({fmt(t.n)})</span>}</div>
               <div style={{ fontSize: 10, color: "#a8b2c1", fontWeight: 400, marginTop: 1 }}>{t.desc}</div>
@@ -2948,6 +2967,8 @@ function ModuloMaestroCL({ usuario } = {}) {
             )}
 
             {/* ── Tarifario ── */}
+            {tab === "canon" && <MaestroCanon fecha={fecha} apiSuave={apiSuave} descargarCSV={descargarCSV} />}
+
             {tab === "tarifario" && (() => {
               const $m = (v) => v == null ? "—" :
                 "$" + Number(v).toLocaleString("es-CL", { maximumFractionDigits: 2 });
