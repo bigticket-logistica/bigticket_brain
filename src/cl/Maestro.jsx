@@ -1445,7 +1445,7 @@ function ModuloMaestroCL({ usuario } = {}) {
   const ORIGEN_ZONA = {
     punto_lejano: "Punto más lejano", otro_centro: "Zona de otro centro",
     punto_alternativo: "Punto alternativo", comuna_historica: "Comuna histórica",
-    sin_zona: "Sin zona", analista: "Analista", aprendido: "Aprendido del analista",
+    sin_zona: "Sin zona", analista: "Analista", aprendido: "Aprendido del analista", meli: "Lo informa MELI",
   };
   const ESTADO_REV = {
     pendiente:           { t: "Pendiente",           c: AMBAR_, f: "#fdf6e3" },
