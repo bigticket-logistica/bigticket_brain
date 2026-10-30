@@ -2720,14 +2720,19 @@ function EvidenciaMinuta({ minuta }) {
     if (!paths.length) return;
     setCargando(true);
     const m = {};
-    for (const path of paths) {
-      // Las fotos de terreno viven en el bucket de la bitácora
-      for (const bucket of ["bitacora-cancelaciones-meli", "archivador_empresas", "proceso_certificacion_bt"]) {
-        try {
-          const { data, error } = await sb.storage.from(bucket).createSignedUrl(path, 3600);
-          if (!error && data?.signedUrl) { m[path] = data.signedUrl; break; }
-        } catch (e) { /* siguiente bucket */ }
-      }
+    // Las fotos de la minuta viven en proceso_certificacion_bt; los otros dos
+    // buckets quedan de respaldo para minutas antiguas. Se firman todas las
+    // fotos de un bucket en UNA petición, en vez de una por foto.
+    let pendientes = [...paths];
+    for (const bucket of ["proceso_certificacion_bt", "bitacora-cancelaciones-meli", "archivador_empresas"]) {
+      if (!pendientes.length) break;
+      try {
+        const { data } = await sb.storage.from(bucket).createSignedUrls(pendientes, 3600);
+        for (const r of data || []) {
+          if (r?.signedUrl && !r.error) m[r.path] = r.signedUrl;
+        }
+        pendientes = pendientes.filter((p) => !m[p]);
+      } catch (e) { /* siguiente bucket */ }
     }
     setUrls(m); setCargando(false);
   })(); }, [minuta?.id]);
