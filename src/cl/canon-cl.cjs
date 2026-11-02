@@ -750,8 +750,9 @@ async function revisarTareas() {
 
 // ── Horario de envío de correos (postventa_config_cl, editable en el Brain) ──
 // Fuera del horario no se envía nada: los correos quedan pendientes y salen
-// en la primera vuelta después de que se abre. Por defecto 08:00 a 21:00 Chile.
-let horarioCache = { desde: "08:00", hasta: "21:00", leido: 0 };
+// en la primera vuelta después de que se abre. Si "desde" y "hasta" son iguales
+// (por defecto 00:00 y 00:00), no hay restricción: envía las 24 horas.
+let horarioCache = { desde: "00:00", hasta: "00:00", leido: 0 };
 async function enHorarioDeEnvio() {
   if (Date.now() - horarioCache.leido > 5 * 60000) {
     try {
@@ -766,6 +767,7 @@ async function enHorarioDeEnvio() {
   }
   const ahora = new Intl.DateTimeFormat("en-GB", { timeZone: "America/Santiago", hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date());
   const { desde, hasta } = horarioCache;
+  if (desde === hasta) return true;                    // desde = hasta: sin restricción (24 horas), como funcionaba antes
   return desde <= hasta ? ahora >= desde && ahora < hasta : ahora >= desde || ahora < hasta;   // también sirve si cruza medianoche
 }
 

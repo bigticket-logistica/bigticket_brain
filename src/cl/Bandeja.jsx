@@ -272,8 +272,9 @@ const control = { fontSize: 13.5, padding: "9px 11px", borderRadius: 9, border: 
 // Editor de plazos: los analistas cambian horas, aviso y domingos por origen.
 function EditorPlazos({ sla, horario, usuario, onCerrar, onGuardado }) {
   const [filas, setFilas] = useState(() => sla.map((s) => ({ ...s })));
-  const [desde, setDesde] = useState(horario.desde || "08:00");
-  const [hasta, setHasta] = useState(horario.hasta || "21:00");
+  const [desde, setDesde] = useState(horario.desde || "00:00");
+  const [hasta, setHasta] = useState(horario.hasta || "00:00");
+  const [sinHorario, setSinHorario] = useState((horario.desde || "00:00") === (horario.hasta || "00:00"));
   const [guardando, setGuardando] = useState(false);
   const [error, setError] = useState("");
   const nombre = { pnr_meli: "PNR MELI", canon_formulario: "Canon · Formulario", canon_correo: "Canon · Correo",
@@ -283,8 +284,8 @@ function EditorPlazos({ sla, horario, usuario, onCerrar, onGuardado }) {
     try {
       const quien = (usuario && (usuario.nombre || usuario.email)) || "Brain";
       await api("postventa_config_cl?on_conflict=clave", { method: "POST", headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
-        body: JSON.stringify([{ clave: "envio_desde", valor: desde, actualizado_por: quien, actualizado_en: new Date().toISOString() },
-                              { clave: "envio_hasta", valor: hasta, actualizado_por: quien, actualizado_en: new Date().toISOString() }]) });
+        body: JSON.stringify([{ clave: "envio_desde", valor: sinHorario ? "00:00" : desde, actualizado_por: quien, actualizado_en: new Date().toISOString() },
+                              { clave: "envio_hasta", valor: sinHorario ? "00:00" : hasta, actualizado_por: quien, actualizado_en: new Date().toISOString() }]) });
       for (const f of filas) {
         await api(`postventa_sla_cl?origen=eq.${f.origen}`, { method: "PATCH", headers: { Prefer: "return=minimal" },
           body: JSON.stringify({ sla_horas: Number(f.sla_horas), aviso_horas: Number(f.aviso_horas), sin_domingos: !!f.sin_domingos,
@@ -314,7 +315,11 @@ function EditorPlazos({ sla, horario, usuario, onCerrar, onGuardado }) {
           <div style={{ fontSize: 12.5, color: C.suave, margin: "2px 0 10px" }}>
             Fuera de este horario los correos automáticos (PNR a postventa y respuestas del Biggy) quedan guardados y salen apenas se abre. Hora de Chile.
           </div>
-          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 13.5, marginBottom: 8, cursor: "pointer" }}>
+            <input type="checkbox" checked={sinHorario} onChange={(e) => setSinHorario(e.target.checked)} style={{ width: 18, height: 18 }} />
+            Enviar a cualquier hora (sin restricción)
+          </label>
+          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", opacity: sinHorario ? 0.4 : 1, pointerEvents: sinHorario ? "none" : "auto" }}>
             <span style={{ fontSize: 13 }}>Desde</span>
             <input type="time" value={desde} onChange={(e) => setDesde(e.target.value)} style={control} />
             <span style={{ fontSize: 13 }}>hasta</span>
@@ -481,7 +486,7 @@ export default function BandejaPostventa({ usuario, onIrA }) {
   const [sla, setSla] = useState([]);
   const [urgentes, setUrgentes] = useState({});
   const [tareas, setTareas] = useState([]);
-  const [horario, setHorario] = useState({ desde: "08:00", hasta: "21:00" });
+  const [horario, setHorario] = useState({ desde: "00:00", hasta: "00:00" });
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState("");
   const [ultima, setUltima] = useState(null);
@@ -509,7 +514,7 @@ export default function BandejaPostventa({ usuario, onIrA }) {
       setTareas(tk || []);
       api("postventa_config_cl?clave=in.(envio_desde,envio_hasta)&select=clave,valor").then((x) => {
         const m = Object.fromEntries((x || []).map((r) => [r.clave, r.valor]));
-        setHorario({ desde: m.envio_desde || "08:00", hasta: m.envio_hasta || "21:00" });
+        setHorario({ desde: m.envio_desde || "00:00", hasta: m.envio_hasta || "00:00" });
       }).catch(() => {});
       setPnr(p || []);
       setAvisos(Object.fromEntries((a || []).map((x) => [x.case_id, x])));
@@ -607,7 +612,7 @@ export default function BandejaPostventa({ usuario, onIrA }) {
         <div>
           <div style={{ fontSize: 30, fontWeight: 800, color: C.texto, letterSpacing: -.5 }}>Postventa Chile</div>
           <div style={{ fontSize: 14, color: C.suave, marginTop: 2 }}>
-            Correos automáticos de {horario.desde} a {horario.hasta} · Todos los casos de MELI, Canon y el Portal OL{minutosDesde != null ? ` · actualizado hace ${minutosDesde} min` : ""}
+            {horario.desde === horario.hasta || (horario.desde === "00:00" && horario.hasta === "23:59") ? "Correos automáticos a cualquier hora" : `Correos automáticos de ${horario.desde} a ${horario.hasta}`} · Todos los casos de MELI, Canon y el Portal OL{minutosDesde != null ? ` · actualizado hace ${minutosDesde} min` : ""}
           </div>
         </div>
         <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
