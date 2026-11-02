@@ -18,6 +18,25 @@ import { avisarPortal } from "./avisarPortal";
 const money = (n) => "$" + Number(n || 0).toLocaleString("es-MX", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const fecha = (s) => s ? new Date(s).toLocaleDateString("es-MX", { day: "2-digit", month: "short", year: "2-digit" }) : "—";
 const BRAIN_API = "/api/reportes/validar-cfdi";
+// Un solo webhook para los correos de esta pestaña (rechazo y pago): n8n solo
+// recibe destinatarios, asunto y cuerpo, y los manda por Brevo.
+const WEBHOOK_CORREO = "https://bigticket2026.app.n8n.cloud/webhook/facturacion-terceros-mx";
+const REMITENTE = "conciliacionesmx@bigticket.mx";
+const PORTAL_URL = "https://prospeccionbtinterna.vercel.app";
+
+// Si el correo falla, lo guardado en la base no se deshace: se avisa al
+// analista y sigue. Devuelve true si n8n confirmó el envío.
+async function enviarCorreo({ tipo, correoTo, cc, asunto, cuerpo, idRef }) {
+  if (!correoTo) return false;
+  try {
+    const r = await fetch(WEBHOOK_CORREO, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tipo, remitente: REMITENTE, correoTo, cc: cc || "", asunto, cuerpo, idRef }),
+    });
+    const j = await r.json().catch(() => ({}));
+    return r.ok && j.ok === true;
+  } catch { return false; }
+}
 
 export default function FacturacionTerceros({ usuario }) {
   const [semana, setSemana] = useState(null);
@@ -29,13 +48,17 @@ export default function FacturacionTerceros({ usuario }) {
   const [sel, setSel] = useState({});        // id de prefactura -> marcada para pagar
   const [pagando, setPagando] = useState(false);
   const [msg, setMsg] = useState(null);
+  const [rechazo, setRechazo] = useState(null); // { p, f } mientras se escribe el motivo
+  const [motivo, setMotivo] = useState("");
+  const [revisando, setRevisando] = useState(null);
+  const quien = () => (usuario && (usuario.nombre || usuario.email)) || "Brain";
 
   const cargar = useCallback(async () => {
     setFilas(null);
     // Se parte de las prefacturas enviadas: la pregunta del analista es "¿quién
     // me falta por facturar?", no "¿qué facturas llegaron?".
     let q = sb.from("conciliaciones_terceros")
-      .select("id, semana, empresa_nombre, service_center, liquido_pago, enviado_at, tercero_id, pagado_at, pagado_por, pago_referencia")
+      .select("id, semana, empresa_nombre, service_center, liquido_pago, enviado_at, tercero_id, pagado_at, pagado_por, pago_referencia, correo_to, correo_cc")
       .eq("estado", "enviada").not("tercero_id", "is", null)
       .order("semana", { ascending: false });
     if (semana) q = q.eq("semana", semana);
@@ -48,6 +71,9 @@ export default function FacturacionTerceros({ usuario }) {
       facts = data || [];
     }
     const porPref = {};
+    // La más reciente primero: si el tercero sube otra después de un rechazo,
+    // la pantalla tiene que mostrar la nueva, no la rechazada.
+    facts.sort((a, b) => Number(b.id) - Number(a.id));
     for (const f of facts) (porPref[f.conciliacion_id] = porPref[f.conciliacion_id] || []).push(f);
 
     setFilas((prefs || []).map(p => ({ ...p, facturas: porPref[p.id] || [] })));
@@ -88,7 +114,7 @@ export default function FacturacionTerceros({ usuario }) {
     const total = filasSel.reduce((t, f) => t + Number(f.liquido_pago || 0), 0);
     // Pagar sin factura conforme deja al tercero cobrado sin comprobante
     // válido: se puede, pero no en silencio.
-    const flojas = filasSel.filter(f => estadoDe(f) !== "conforme");
+    const flojas = filasSel.filter(f => !["conforme", "aprobada"].includes(estadoDe(f)));
     if (flojas.length && !window.confirm(
       `${flojas.length} de las ${ids.length} prefacturas marcadas no tienen una factura conforme:\n\n` +
       flojas.slice(0, 8).map(f => `· ${f.empresa_nombre} — ${ESTADOS[estadoDe(f)].l}`).join("\n") +
@@ -103,13 +129,28 @@ export default function FacturacionTerceros({ usuario }) {
     try {
       const { error } = await sb.from("conciliaciones_terceros").update({
         pagado_at: new Date().toISOString(),
-        pagado_por: (usuario && (usuario.nombre || usuario.email)) || "Brain",
+        pagado_por: quien(),
         pago_referencia: ref.trim() || null,
       }).in("id", ids);
       if (error) throw error;
       // El pago es la noticia que el tercero más espera: va al teléfono.
       avisarPortal("pago", { prefacturas: ids.length });
-      setMsg({ ok: true, txt: `${ids.length} prefactura(s) marcadas como pagadas por ${money(total)}. El tercero ya lo ve en su portal.` });
+      // Y también al correo, uno por prefactura, a los mismos destinatarios
+      // que recibieron la prefactura.
+      let sinCorreo = 0;
+      for (const f of filasSel) {
+        const ok = await enviarCorreo({
+          tipo: "pago_realizado", correoTo: f.correo_to, cc: f.correo_cc, idRef: `pago|${f.id}`,
+          asunto: `Pago realizado · semana ${f.semana} · ${f.empresa_nombre}`,
+          cuerpo: `Hola,\n\nTe informamos que se realizó el pago de tu prefactura de la semana ${f.semana} ` +
+            `(${f.service_center}) por ${money(f.liquido_pago)}.` +
+            (ref.trim() ? `\n\nReferencia de la transferencia: ${ref.trim()}` : "") +
+            `\n\nPuedes ver el detalle en tu portal: ${PORTAL_URL}\n\nEquipo de Conciliaciones Bigticket`,
+        });
+        if (!ok) sinCorreo++;
+      }
+      setMsg({ ok: sinCorreo === 0, txt: `${ids.length} prefactura(s) marcadas como pagadas por ${money(total)}. El tercero ya lo ve en su portal.` +
+        (sinCorreo ? ` Ojo: ${sinCorreo} correo(s) de pago no se pudieron enviar.` : " Se le envió el correo.") });
       setSel({});
       await cargar();
     } catch (e) { setMsg({ ok: false, txt: "No se pudo marcar el pago: " + (e.message || e) }); }
@@ -117,6 +158,43 @@ export default function FacturacionTerceros({ usuario }) {
   };
 
   const nSel = Object.values(sel).filter(Boolean).length;
+
+  // Aprobar es solo una marca del analista: no avisa al tercero.
+  const aprobar = async (f) => {
+    setRevisando(f.id); setMsg(null);
+    const { error } = await sb.from("facturas_tercero").update({
+      revision: "aprobada", revision_motivo: null, revision_por: quien(), revision_at: new Date().toISOString(),
+    }).eq("id", f.id);
+    setMsg(error ? { ok: false, txt: "No se pudo aprobar: " + error.message } : { ok: true, txt: `Factura ${f.serie_folio || f.uuid || ""} aprobada.` });
+    setRevisando(null);
+    await cargar();
+  };
+
+  // Rechazar guarda el motivo, manda el correo y avisa al portal. El tercero
+  // corrige y sube otra factura contra la misma prefactura.
+  const enviarRechazo = async () => {
+    const { p, f } = rechazo;
+    const m = motivo.trim();
+    if (!m) return;
+    setRevisando(f.id); setMsg(null);
+    const { error } = await sb.from("facturas_tercero").update({
+      revision: "rechazada", revision_motivo: m, revision_por: quien(), revision_at: new Date().toISOString(),
+    }).eq("id", f.id);
+    if (error) { setMsg({ ok: false, txt: "No se pudo rechazar: " + error.message }); setRevisando(null); return; }
+    avisarPortal("factura_rechazada", { tercero_id: p.tercero_id, conciliacion_id: p.id });
+    const ok = await enviarCorreo({
+      tipo: "factura_rechazada", correoTo: p.correo_to, cc: p.correo_cc, idRef: `rechazo|${f.id}`,
+      asunto: `Factura rechazada · semana ${p.semana} · ${p.empresa_nombre}`,
+      cuerpo: `Hola,\n\nRevisamos la factura ${f.serie_folio || f.uuid || ""} que subiste para la prefactura de la semana ` +
+        `${p.semana} (${p.service_center}, ${money(p.liquido_pago)}) y no pudimos aceptarla.\n\nMotivo: ${m}\n\n` +
+        `Por favor sube una factura corregida desde tu portal: ${PORTAL_URL}\n\nEquipo de Conciliaciones Bigticket`,
+    });
+    setMsg(ok
+      ? { ok: true, txt: `Factura rechazada. Se envió el correo a ${p.correo_to} y el aviso al portal.` }
+      : { ok: false, txt: `Factura rechazada y avisada en el portal, pero el correo no se pudo enviar${p.correo_to ? "" : " (la prefactura no tiene correo)"}.` });
+    setRechazo(null); setMotivo(""); setRevisando(null);
+    await cargar();
+  };
 
   const validarPendientes = async () => {
     setValidando("todas"); setMsg(null);
@@ -135,6 +213,9 @@ export default function FacturacionTerceros({ usuario }) {
   const estadoDe = (p) => {
     if (!p.facturas.length) return "sin_factura";
     const f = p.facturas[0];
+    // La revisión del analista manda sobre las validaciones automáticas.
+    if (f.revision === "rechazada") return "rechazada";
+    if (f.revision === "aprobada") return "aprobada";
     if (f.sat_estado && String(f.sat_estado).toLowerCase() !== "vigente") return "sat_problema";
     if (f.diferencia != null && Math.abs(Number(f.diferencia)) > 1) return "descuadre";
     if (!f.uuid) return "sin_xml";
@@ -149,6 +230,8 @@ export default function FacturacionTerceros({ usuario }) {
     descuadre:    { l: "No cuadra",        bg: "#fef3c7", fg: "#92400e" },
     sat_problema: { l: "Rechazada por SAT", bg: "#fee2e2", fg: "#991b1b" },
     conforme:     { l: "Conforme",         bg: "#dcfce7", fg: "#166534" },
+    aprobada:     { l: "Aprobada",         bg: "#16a34a", fg: "#fff" },
+    rechazada:    { l: "Rechazada",        bg: "#dc2626", fg: "#fff" },
   };
 
   const { visibles, resumen } = useMemo(() => {
@@ -218,7 +301,7 @@ export default function FacturacionTerceros({ usuario }) {
           {semanas.map(w => <option key={w} value={w}>Semana {w}</option>)}
         </select>
         {[["todas", "Todas"], ["sin_factura", "Sin factura"], ["descuadre", "No cuadran"],
-          ["sat_problema", "SAT"], ["sin_validar", "Por validar"], ["conforme", "Conformes"],
+          ["sat_problema", "SAT"], ["aprobada", "Aprobadas"], ["rechazada", "Rechazadas"], ["sin_validar", "Por validar"], ["conforme", "Conformes"],
           ["por_pagar", "Por pagar"], ["pagadas", "Pagadas"]].map(([id, l]) => (
           <button key={id} onClick={() => setFiltro(id)}
             style={{ padding: "6px 13px", borderRadius: 16, fontSize: 11.5, fontWeight: 700, cursor: "pointer",
@@ -314,6 +397,12 @@ export default function FacturacionTerceros({ usuario }) {
                           SAT {fecha(f.sat_validado_at)}
                         </div>
                       )}
+                      {f?.revision && (
+                        <div style={{ fontSize: 9.5, color: "#94a3b8", marginTop: 2, maxWidth: 220 }}>
+                          {f.revision_por} · {fecha(f.revision_at)}
+                          {f.revision_motivo && <div style={{ color: "#991b1b" }}>“{f.revision_motivo}”</div>}
+                        </div>
+                      )}
                     </td>
                     <td style={{ ...td, whiteSpace: "nowrap", textAlign: "right" }}>
                       {p.pagado_at && (
@@ -336,6 +425,24 @@ export default function FacturacionTerceros({ usuario }) {
                               {validando === f.id ? "…" : "SAT"}
                             </button>
                           )}
+                          {/* Una prefactura pagada ya no se revisa. */}
+                          {!p.pagado_at && (
+                            <div style={{ marginTop: 4 }}>
+                              <button onClick={() => aprobar(f)} disabled={revisando !== null || f.revision === "aprobada"}
+                                style={{ border: "1px solid #16a34a", borderRadius: 5, padding: "4px 10px", fontSize: 10.5,
+                                  background: f.revision === "aprobada" ? "#16a34a" : "#fff",
+                                  color: f.revision === "aprobada" ? "#fff" : "#16a34a", cursor: "pointer" }}>
+                                {revisando === f.id ? "…" : "Aprobar"}
+                              </button>
+                              <button onClick={() => { setRechazo({ p, f }); setMotivo(f.revision_motivo || ""); }}
+                                disabled={revisando !== null}
+                                style={{ marginLeft: 4, border: "1px solid #dc2626", borderRadius: 5, padding: "4px 10px", fontSize: 10.5,
+                                  background: f.revision === "rechazada" ? "#dc2626" : "#fff",
+                                  color: f.revision === "rechazada" ? "#fff" : "#dc2626", cursor: "pointer" }}>
+                                Rechazar
+                              </button>
+                            </div>
+                          )}
                         </>
                       )}
                     </td>
@@ -344,6 +451,37 @@ export default function FacturacionTerceros({ usuario }) {
               })}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {rechazo && (
+        <div onClick={() => revisando === null && setRechazo(null)}
+          style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,.45)", display: "flex",
+            alignItems: "center", justifyContent: "center", zIndex: 50 }}>
+          <div onClick={e => e.stopPropagation()}
+            style={{ background: "#fff", borderRadius: 12, padding: 22, width: 460, maxWidth: "92vw" }}>
+            <div style={{ fontSize: 16, fontWeight: 700, color: "#991b1b" }}>Rechazar factura</div>
+            <div style={{ fontSize: 12, color: "#64748b", marginTop: 4, lineHeight: 1.5 }}>
+              {rechazo.p.empresa_nombre} · semana {rechazo.p.semana} · {rechazo.p.service_center}<br />
+              Se enviará a <strong>{rechazo.p.correo_to || "— sin correo —"}</strong>
+              {rechazo.p.correo_cc ? ` (cc ${rechazo.p.correo_cc})` : ""} y le llegará el aviso en el portal y la app.
+            </div>
+            <textarea value={motivo} onChange={e => setMotivo(e.target.value)} autoFocus rows={5}
+              placeholder="Motivo del rechazo (lo verá el tercero)"
+              style={{ width: "100%", boxSizing: "border-box", marginTop: 12, border: "1px solid #e4e7ec",
+                borderRadius: 8, padding: 10, fontSize: 13, fontFamily: "inherit", resize: "vertical" }} />
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 12 }}>
+              <button onClick={() => setRechazo(null)} disabled={revisando !== null}
+                style={{ padding: "8px 16px", borderRadius: 8, border: "1px solid #e4e7ec", background: "#fff",
+                  color: "#64748b", fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>Cancelar</button>
+              <button onClick={enviarRechazo} disabled={revisando !== null || !motivo.trim()}
+                style={{ padding: "8px 16px", borderRadius: 8, border: "none", fontSize: 12.5, fontWeight: 700, color: "#fff",
+                  background: revisando !== null || !motivo.trim() ? "#fca5a5" : "#dc2626",
+                  cursor: revisando !== null || !motivo.trim() ? "not-allowed" : "pointer" }}>
+                {revisando !== null ? "Enviando…" : "Enviar rechazo"}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>
