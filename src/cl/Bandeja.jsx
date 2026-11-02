@@ -270,8 +270,10 @@ function Campo({ etiqueta, children }) {
 const control = { fontSize: 13.5, padding: "9px 11px", borderRadius: 9, border: `1px solid ${C.borde}`, background: "#fff", fontFamily: FUENTE, color: C.texto };
 
 // Editor de plazos: los analistas cambian horas, aviso y domingos por origen.
-function EditorPlazos({ sla, usuario, onCerrar, onGuardado }) {
+function EditorPlazos({ sla, horario, usuario, onCerrar, onGuardado }) {
   const [filas, setFilas] = useState(() => sla.map((s) => ({ ...s })));
+  const [desde, setDesde] = useState(horario.desde || "08:00");
+  const [hasta, setHasta] = useState(horario.hasta || "21:00");
   const [guardando, setGuardando] = useState(false);
   const [error, setError] = useState("");
   const nombre = { pnr_meli: "PNR MELI", canon_formulario: "Canon · Formulario", canon_correo: "Canon · Correo",
@@ -279,6 +281,10 @@ function EditorPlazos({ sla, usuario, onCerrar, onGuardado }) {
   const guardar = async () => {
     setGuardando(true); setError("");
     try {
+      const quien = (usuario && (usuario.nombre || usuario.email)) || "Brain";
+      await api("postventa_config_cl?on_conflict=clave", { method: "POST", headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+        body: JSON.stringify([{ clave: "envio_desde", valor: desde, actualizado_por: quien, actualizado_en: new Date().toISOString() },
+                              { clave: "envio_hasta", valor: hasta, actualizado_por: quien, actualizado_en: new Date().toISOString() }]) });
       for (const f of filas) {
         await api(`postventa_sla_cl?origen=eq.${f.origen}`, { method: "PATCH", headers: { Prefer: "return=minimal" },
           body: JSON.stringify({ sla_horas: Number(f.sla_horas), aviso_horas: Number(f.aviso_horas), sin_domingos: !!f.sin_domingos,
@@ -290,7 +296,7 @@ function EditorPlazos({ sla, usuario, onCerrar, onGuardado }) {
   return (
     <div onClick={onCerrar} style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,.35)", zIndex: 50, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
       <div onClick={(e) => e.stopPropagation()} style={{ background: "#fff", borderRadius: 16, padding: 22, width: "min(620px,100%)", fontFamily: FUENTE }}>
-        <div style={{ fontSize: 19, fontWeight: 700, color: C.navy }}>Plazos de respuesta</div>
+        <div style={{ fontSize: 19, fontWeight: 700, color: C.navy }}>Plazos y horario</div>
         <div style={{ fontSize: 13, color: C.suave, margin: "4px 0 16px" }}>Rigen para todos los casos abiertos apenas los guardas. Un caso urgente usa su propio plazo.</div>
         <div style={{ display: "grid", gridTemplateColumns: "1.3fr .8fr .8fr .9fr", gap: 10, fontSize: 12, color: C.suave, marginBottom: 6 }}>
           <span>Origen</span><span>Plazo (horas)</span><span>Avisar con (horas)</span><span>Descontar domingos</span>
@@ -303,6 +309,18 @@ function EditorPlazos({ sla, usuario, onCerrar, onGuardado }) {
             <input type="checkbox" checked={!!f.sin_domingos} onChange={(e) => setFilas((p) => p.map((x, j) => j === i ? { ...x, sin_domingos: e.target.checked } : x))} style={{ width: 18, height: 18 }} />
           </div>
         ))}
+        <div style={{ borderTop: `1px solid ${C.borde}`, marginTop: 14, paddingTop: 14 }}>
+          <div style={{ fontSize: 15, fontWeight: 700, color: C.navy }}>Horario de envío de correos</div>
+          <div style={{ fontSize: 12.5, color: C.suave, margin: "2px 0 10px" }}>
+            Fuera de este horario los correos automáticos (PNR a postventa y respuestas del Biggy) quedan guardados y salen apenas se abre. Hora de Chile.
+          </div>
+          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            <span style={{ fontSize: 13 }}>Desde</span>
+            <input type="time" value={desde} onChange={(e) => setDesde(e.target.value)} style={control} />
+            <span style={{ fontSize: 13 }}>hasta</span>
+            <input type="time" value={hasta} onChange={(e) => setHasta(e.target.value)} style={control} />
+          </div>
+        </div>
         {error && <div style={{ color: C.rojo, fontSize: 12.5, marginTop: 10 }}>{error}</div>}
         <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 18 }}>
           <button onClick={onCerrar} style={{ ...control, cursor: "pointer" }}>Cancelar</button>
@@ -463,6 +481,7 @@ export default function BandejaPostventa({ usuario, onIrA }) {
   const [sla, setSla] = useState([]);
   const [urgentes, setUrgentes] = useState({});
   const [tareas, setTareas] = useState([]);
+  const [horario, setHorario] = useState({ desde: "08:00", hasta: "21:00" });
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState("");
   const [ultima, setUltima] = useState(null);
@@ -488,6 +507,10 @@ export default function BandejaPostventa({ usuario, onIrA }) {
         api("postventa_tareas_cl?select=id,card_id,ceco,estado,revision_falta,veces_devuelta,correo_enviado_en,respondida_en&limit=5000"),
       ]);
       setTareas(tk || []);
+      api("postventa_config_cl?clave=in.(envio_desde,envio_hasta)&select=clave,valor").then((x) => {
+        const m = Object.fromEntries((x || []).map((r) => [r.clave, r.valor]));
+        setHorario({ desde: m.envio_desde || "08:00", hasta: m.envio_hasta || "21:00" });
+      }).catch(() => {});
       setPnr(p || []);
       setAvisos(Object.fromEntries((a || []).map((x) => [x.case_id, x])));
       setCanon((c || []).filter((x) => x.canal === "portal" || /canontex/i.test(x.mandante || "") || /@canontex\.cl\s*$/i.test(x.correo || "")));
@@ -584,7 +607,7 @@ export default function BandejaPostventa({ usuario, onIrA }) {
         <div>
           <div style={{ fontSize: 30, fontWeight: 800, color: C.texto, letterSpacing: -.5 }}>Postventa Chile</div>
           <div style={{ fontSize: 14, color: C.suave, marginTop: 2 }}>
-            Todos los casos de MELI, Canon y el Portal OL{minutosDesde != null ? ` · actualizado hace ${minutosDesde} min` : ""}
+            Correos automáticos de {horario.desde} a {horario.hasta} · Todos los casos de MELI, Canon y el Portal OL{minutosDesde != null ? ` · actualizado hace ${minutosDesde} min` : ""}
           </div>
         </div>
         <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
@@ -706,7 +729,7 @@ export default function BandejaPostventa({ usuario, onIrA }) {
         </div>
       )}
 
-      {editarPlazos && <EditorPlazos sla={sla} usuario={usuario} onCerrar={() => setEditarPlazos(false)} onGuardado={cargar} />}
+      {editarPlazos && <EditorPlazos sla={sla} horario={horario} usuario={usuario} onCerrar={() => setEditarPlazos(false)} onGuardado={cargar} />}
     </div>
   );
 }
