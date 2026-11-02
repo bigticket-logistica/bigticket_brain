@@ -308,7 +308,7 @@ export default function FacturacionTerceros({ usuario }) {
           style={{ padding: "9px 18px", borderRadius: 8, border: "none", fontSize: 12.5, fontWeight: 700,
             background: validando ? "#cbd5e1" : "#1a3a6b", color: "#fff",
             cursor: validando ? "not-allowed" : "pointer" }}>
-          {validando === "todas" ? "Consultando al SAT…" : "Validar las pendientes"}
+          {validando === "todas" ? "Revisando…" : "Revisar todas las pendientes"}
         </button>
       </div>
 
@@ -386,11 +386,9 @@ export default function FacturacionTerceros({ usuario }) {
                     {/* Arriba el neto (lo que se compara); abajo, chico, el total con IVA. */}
                     <td style={{ ...td, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
                       {p.total_neto != null ? money(p.total_neto) : "—"}
-                      <div style={{ fontSize: 9.5, color: "#94a3b8" }}>líquido {money(p.liquido_pago)}</div>
                     </td>
                     <td style={{ ...td, textAlign: "right", fontVariantNumeric: "tabular-nums", color: f?.subtotal_factura != null || f?.monto_factura != null ? "#334155" : "#cbd5e1" }}>
                       {f?.subtotal_factura != null ? money(f.subtotal_factura) : "—"}
-                      {f?.monto_factura != null && <div style={{ fontSize: 9.5, color: "#94a3b8" }}>total {money(f.monto_factura)}</div>}
                     </td>
                     <td style={{ ...td, textAlign: "right", fontVariantNumeric: "tabular-nums", fontWeight: 700,
                       color: dif == null ? "#cbd5e1" : Math.abs(dif) <= 1 ? "#16a34a" : "#b45309" }}>
