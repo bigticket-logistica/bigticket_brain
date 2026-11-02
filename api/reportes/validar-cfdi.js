@@ -19,6 +19,19 @@ const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_S
 const sb = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 const SAT_URL = "https://consultaqr.facturaelectronica.sat.gob.mx/ConsultaCFDIService.svc";
+// "Efecto de comprobante: Ingreso" (formato SAT) o "Tipo de Comprobante: I - Ingreso".
+// En el XML viene como TipoDeComprobante="I".
+const TIPOS_XML = { I: "Ingreso", E: "Egreso", P: "Pago", N: "Nómina", T: "Traslado" };
+const normalizaEfecto = (t) => {
+  if (!t) return null;
+  const x = String(t).trim().toLowerCase();
+  if (x.startsWith("ingr")) return "Ingreso";
+  if (x.startsWith("egr")) return "Egreso";
+  if (x.startsWith("pag")) return "Pago";
+  if (x.startsWith("n")) return "Nómina";
+  if (x.startsWith("tra")) return "Traslado";
+  return null;
+};
 
 // ── Leer el CFDI desde el PDF ────────────────────────────────────────────────
 // Varios terceros suben solo la representación impresa, sin el XML. Ese PDF
@@ -34,6 +47,8 @@ const RE = {
   subtotal: /\bSub\s*total\b[^\d$]{0,40}\$?\s*(\d[\d,]*(?:\.\d{1,6})?)/i,
   total: /\bTotal\b[^\d$]{0,40}\$?\s*(\d[\d,]*(?:\.\d{1,6})?)/i,
   fecha: /(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})/,
+  efecto: /Efecto\s+de(?:l)?\s+comprobante\s*:?\s*([A-Za-zÁÉÍÓÚáéíóúÑñ]+)/i,
+  tipoComprobante: /Tipo\s+de\s+comprobante\s*:?\s*(?:[IEPNT]\s*-\s*)?([A-Za-zÁÉÍÓÚáéíóúÑñ]+)/i,
   fechaDmy: /(\d{2})\/(\d{2})\/(\d{4})\s+(\d{2}:\d{2}:\d{2})/,
   rfcCualquiera: /\bRFC\b\s*:?\s*([A-ZÑ&]{3,4}\d{6}[A-Z0-9]{3})\b/gi,
 };
@@ -70,6 +85,7 @@ async function leerPdf(buffer) {
     rfc_receptor: rfcReceptor,
     total: total ? Number(total.replace(/,/g, "")) : null,
     subtotal: subtotal ? Number(subtotal.replace(/,/g, "")) : null,
+    efecto: normalizaEfecto(uno(RE.efecto) || uno(RE.tipoComprobante)),
     // Sin centavos el total es aproximado: sirve para ver si cuadra con la
     // prefactura, pero no para el SAT, que compara el total exacto.
     total_redondeado: total ? !total.includes(".") : false,
@@ -111,7 +127,7 @@ async function consultarSat(datos) {
   const ctrl = new AbortController();
   // El SAT se cae o se pone lento con frecuencia. Mejor cortar y reintentar
   // después que dejar la petición colgada.
-  const reloj = setTimeout(() => ctrl.abort(), 15000);
+  const reloj = setTimeout(() => ctrl.abort(), 8000);
   try {
     const r = await fetch(SAT_URL, {
       method: "POST",
@@ -134,19 +150,43 @@ async function consultarSat(datos) {
   } finally { clearTimeout(reloj); }
 }
 
+// Biggy prerrechaza lo que no es una factura de Ingreso (un complemento de
+// pago, una nota de crédito…). No la rechaza: no cambia el estado ni avisa al
+// tercero. Solo la marca en rojo con el motivo para que el analista decida;
+// si la rechaza, el motivo ya viene escrito.
+async function prerrechazar(f, efecto) {
+  const motivo = `El comprobante que subiste es de tipo "${efecto}", no de Ingreso. ` +
+    "Sube la factura de Ingreso que corresponde a esta prefactura.";
+  const validaciones = { ...(f.validaciones || {}),
+    prerechazo: { motivo, por: "Biggy", at: new Date().toISOString() } };
+  await sb.from("facturas_tercero").update({ validaciones }).eq("id", f.id);
+  f.validaciones = validaciones;
+  return motivo;
+}
+
 export default async function handler(req, res) {
   try {
-    const { factura_id, reintentar } = req.query || {};
+    const { factura_id, reintentar, solo_lectura } = req.query || {};
 
     // Una factura puntual, o las que quedaron sin validar. Lo segundo es para
     // el reintento: una factura recién timbrada puede tardar en aparecer en el
     // SAT, así que un "no encontrado" al subirla no significa que sea falsa.
     let q = sb.from("facturas_tercero")
-      .select("id, uuid, rfc_emisor, rfc_receptor, monto_factura, monto_prefactura, nombre_archivo, storage_path, tercero_id, validaciones, subtotal_factura, sat_estado");
+      .select("id, uuid, rfc_emisor, rfc_receptor, monto_factura, monto_prefactura, nombre_archivo, storage_path, tercero_id, validaciones, subtotal_factura, sat_estado, estado, conciliacion_id");
     if (factura_id) q = q.eq("id", factura_id);
     // El botón general toma todo lo que falta: sin leer, sin neto o sin SAT.
-    else if (reintentar) q = q.or("sat_validado_at.is.null,subtotal_factura.is.null,uuid.is.null")
+    // La lectura es rápida (50 por vuelta); el SAT es lento y la función tiene
+    // tiempo límite, así que va de a 5 y el Brain repite si quedan.
+    // Lectura: todo lo que falta leer (sin folio, sin neto o sin el tipo de
+    // comprobante). SAT: solo lo que ya tiene datos y nunca se consultó, para
+    // que una factura imposible de validar no tape a las demás.
+    else if (reintentar && solo_lectura) q = q
+      .or("subtotal_factura.is.null,uuid.is.null,validaciones->>efecto.is.null")
       .neq("estado", "rechazada").limit(50);
+    else if (reintentar) q = q
+      .is("sat_validado_at", null).not("uuid", "is", null)
+      .or("validaciones->>total_redondeado.is.null,validaciones->>total_redondeado.eq.false")
+      .neq("estado", "rechazada").limit(5);
     else return res.status(200).json({ ok: false, error: "Pasa factura_id, o reintentar=1 para las pendientes." });
 
     const { data: facturas, error } = await q;
@@ -157,15 +197,22 @@ export default async function handler(req, res) {
     for (const f of facturas) {
       // Si subieron el XML, el portal ya guardó todo menos (en las antiguas) el
       // subtotal: se saca del atributo SubTotal.
-      if (f.subtotal_factura == null && /\.xml$/i.test(f.storage_path || "")) {
+      if ((f.subtotal_factura == null || f.validaciones?.efecto == null) && /\.xml$/i.test(f.storage_path || "")) {
         try {
           const { data: blob } = await sb.storage.from("proceso_certificacion_bt").download(f.storage_path);
-          const m = (await blob.text()).match(/\bSubTotal\s*=\s*"([\d.]+)"/);
-          if (m) await sb.from("facturas_tercero").update({ subtotal_factura: Number(m[1]) }).eq("id", f.id);
+          const txt = await blob.text();
+          const m = txt.match(/\bSubTotal\s*=\s*"([\d.]+)"/);
+          const t = txt.match(/\bTipoDeComprobante\s*=\s*"([A-Z])"/);
+          const validaciones = { ...(f.validaciones || {}), efecto: t ? (TIPOS_XML[t[1]] || t[1]) : "desconocido" };
+          await sb.from("facturas_tercero").update({
+            ...(m ? { subtotal_factura: Number(m[1]) } : {}), validaciones,
+          }).eq("id", f.id);
+          f.validaciones = validaciones;
+          if (m) f.subtotal_factura = Number(m[1]);
         } catch (e) { console.error("No se pudo leer el XML de", f.id, e); }
       }
       // Si vino solo el PDF, se leen los datos de ahí antes de preguntar al SAT.
-      if ((!f.uuid || f.monto_factura == null || f.subtotal_factura == null)
+      if ((!f.uuid || f.monto_factura == null || f.subtotal_factura == null || f.validaciones?.efecto == null)
           && /\.pdf$/i.test(f.storage_path || "")) {
         try {
           const { data: blob, error: eDl } = await sb.storage
@@ -175,24 +222,46 @@ export default async function handler(req, res) {
           if (leido?.uuid) {
             const dif = leido.total != null
               ? Number((leido.total - Number(f.monto_prefactura || 0)).toFixed(2)) : null;
-            await sb.from("facturas_tercero").update({
+            const validaciones = { leido_de: "pdf", problemas: [], total_redondeado: leido.total_redondeado, efecto: leido.efecto || "desconocido" };
+            const datos = {
               uuid: leido.uuid, rfc_emisor: leido.rfc_emisor,
               rfc_receptor: leido.rfc_receptor, monto_factura: leido.total,
               fecha_emision: leido.fecha_emision, diferencia: dif,
-              subtotal_factura: leido.subtotal,
-              validaciones: { leido_de: "pdf", problemas: [], total_redondeado: leido.total_redondeado },
-            }).eq("id", f.id);
-            Object.assign(f, {
-              uuid: leido.uuid, rfc_emisor: leido.rfc_emisor,
-              rfc_receptor: leido.rfc_receptor, monto_factura: leido.total,
-              _redondeado: leido.total_redondeado,
-            });
+              subtotal_factura: leido.subtotal, validaciones,
+            };
+            const { error: eUp } = await sb.from("facturas_tercero").update(datos).eq("id", f.id);
+            // El mismo folio fiscal ya está en otra prefactura (la base no deja
+            // repetirlo): se guarda todo menos el folio y se deja anotado.
+            if (eUp && eUp.code === "23505") {
+              const { uuid, ...sinFolio } = datos;
+              sinFolio.validaciones = { ...validaciones, folio_repetido: leido.uuid };
+              await sb.from("facturas_tercero").update(sinFolio).eq("id", f.id);
+              Object.assign(f, sinFolio, { uuid: null });
+            } else {
+              Object.assign(f, datos);
+            }
+            f._redondeado = leido.total_redondeado;
           }
         } catch (e) {
           console.error("No se pudo leer el PDF de", f.id, e);
         }
       }
 
+      // Lo que no es Ingreso se prerrechaza antes de cualquier otra cosa.
+      const efecto = f.validaciones?.efecto;
+      if (efecto && efecto !== "desconocido" && efecto !== "Ingreso" && !["rechazada", "aprobada"].includes(f.estado)) {
+        const nueva = !f.validaciones?.prerechazo;
+        const motivo = nueva ? await prerrechazar(f, efecto) : f.validaciones.prerechazo.motivo;
+        resultados.push({ id: f.id, uuid: f.uuid, estado: null, prerechazada: nueva, nota: motivo });
+        continue;
+      }
+      if (solo_lectura) { resultados.push({ id: f.id, uuid: f.uuid, leida: true }); continue; }
+
+      if (f.validaciones?.folio_repetido) {
+        resultados.push({ id: f.id, uuid: null, estado: null,
+          nota: "Este folio fiscal ya está subido en otra prefactura." });
+        continue;
+      }
       if (!f.uuid || !f.rfc_emisor || !f.rfc_receptor || f.monto_factura == null) {
         resultados.push({ id: f.id, uuid: f.uuid, estado: null,
           nota: "No se pudieron leer los datos del comprobante. Si es un escaneo, hay que subir el XML." });
@@ -252,6 +321,7 @@ export default async function handler(req, res) {
       vigentes: resultados.filter(r => r.vigente).length,
       con_problema: resultados.filter(r => r.estado && !r.vigente).length,
       sin_respuesta: resultados.filter(r => r.error).length,
+      prerechazadas: resultados.filter(r => r.prerechazada).length,
       resultados,
     });
   } catch (e) {
