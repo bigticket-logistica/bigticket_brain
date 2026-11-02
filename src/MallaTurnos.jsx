@@ -16,7 +16,9 @@ const DIAS = ["Lu", "Ma", "Mi", "Ju", "Vi", "Sá", "Do"];
 const ANCLA = "2026-11-02"; // lunes desde el que se cuenta la rotación de descansos
 // SC que comparten vehículos: se planifican como un solo grupo
 const GRUPOS_JUNTOS = [["SMX10", "SMX20", "SMX22", "SMXRV1"], ["SMX2", "SMX9"]];
-const EXCLUIR = ["SIL1", "SLT1", "SBB1", "SRM1", "SRM2", "SRM3", "SRM4", "SAR1", "SLS1", "SVP3", "ERM2", "ERM4", "ERM5", "EXB1", "EXB2"];
+// SC de Chile que se cuelan en los pedidos: los de la lista y cualquiera que empiece con "E"
+const LISTA_CHILE = ["SIL1", "SLT1", "SBB1", "SRM1", "SRM2", "SRM3", "SRM4", "SAR1", "SLS1", "SVP3"];
+const EXCLUIR = { includes: sc => !sc || LISTA_CHILE.includes(sc) || String(sc).startsWith("E") };
 // Ajustado con la prueba de octubre 2026: 8 semanas, las recientes pesan más (vida media de 1 semana)
 // y cada SC se cuenta desde su primer día con pedidos. Error del pronóstico: 43% → 30%.
 const SEMANAS_DEMANDA = 8, VIDA_MEDIA = 1, DIAS_FLOTA = 14, MIN_RUTAS_SEMANA = 7;
@@ -145,14 +147,67 @@ function construirGrupos(datos, desdeDem, hastaDem, desdeFlota, hastaFlota) {
         P[d] += percentilPond(reg, w, 0.8);
       }
     }
-    const base = B.map(v => Math.floor(v + 1e-9)), pico = P.map((v, d) => Math.ceil(v + U[d] - 1e-9));
+    // Pronóstico ingenuo: las rutas regulares del mismo día de la semana más reciente
+    const I = Array(7).fill(0);
+    for (const sc of scs) for (let f = sumarDias(hastaDem, -6); f <= hastaDem; f = sumarDias(f, 1)) I[diaSemana(f)] += (porFecha[`${sc}|${f}`] || { reg: 0 }).reg;
+    const baseModelo = B.map(v => Math.floor(v + 1e-9)), baseModeloExacta = B, baseIngenuo = I;
+    const picoReg = P.map(v => Math.ceil(v - 1e-9)), pico = P.map((v, d) => Math.ceil(v + U[d] - 1e-9));
+    const base = baseModelo;
     const vehiculos = Object.values(porPlaca).filter(v => grupoDe(v.mejorSc) === nombre)
       .map(v => { const i = invMap[v.placa] || {}; return { placa: v.placa, dias: v.total, empresa: i.empresa || "No está en el inventario", tipo: i.tipo || "—", estado: i.status ? i.status : (i.placa ? "ACTIVO" : "—"), k: v.placa }; })
       .sort((a, b) => b.dias - a.dias);
     const supervisores = [...new Set(scs.flatMap(sc => supMap[sc] || []))];
-    return { nombre, scs, base, pico, vehiculos, supervisor: supervisores.join(" · ") || "—" };
+    return { nombre, scs, base, pico, picoReg, baseModelo, baseModeloExacta, baseIngenuo, vehiculos, supervisor: supervisores.join(" · ") || "—" };
   }).filter(g => g.base.reduce((a, b) => a + b, 0) >= MIN_RUTAS_SEMANA)
     .sort((a, b) => b.base.reduce((x, y) => x + y, 0) - a.base.reduce((x, y) => x + y, 0));
+}
+
+// ¿Qué pronóstico le acierta más a cada SC? Se compara en las últimas 4 semanas completas, cada una
+// pronosticada solo con lo anterior. La malla usa el que ganó en cada SC (así aprende con evidencia).
+// Alarmas: error de más del 35% o pico regular cumplido menos del 70% de los días en las últimas 2 semanas.
+const ERROR_MAX = 0.35, PICO_MIN = 0.7, VENTAJA_MIN = 0.03;
+function evaluarPronosticos(datos, hoy) {
+  const regReal = {};
+  for (const p of datos.ped) {
+    if (!p.facility_id || EXCLUIR.includes(p.facility_id) || p.status === "pending" || p.tipo === "urgent") continue;
+    const k = `${grupoDe(p.facility_id)}|${p.fecha_ruta}`; regReal[k] = (regReal[k] || 0) + 1;
+  }
+  const lunesHoy = lunesDe(hoy), acc = {};
+  for (let w = 4; w >= 1; w--) {
+    const lunes = sumarDias(lunesHoy, -7 * w);
+    const gs = construirGrupos(datos, sumarDias(lunes, -7 * SEMANAS_DEMANDA), sumarDias(lunes, -1), sumarDias(lunes, -DIAS_FLOTA), sumarDias(lunes, -1));
+    for (const g of gs) {
+      const a = (acc[g.nombre] = acc[g.nombre] || { real: 0, eM: 0, eI: 0, real2: 0, eM2: 0, eI2: 0, dias2: 0, pico2: 0 });
+      for (let d = 0; d < 7; d++) {
+        const f = sumarDias(lunes, d); if (f >= hoy) continue;
+        const r = regReal[`${g.nombre}|${f}`] || 0;
+        const eM = Math.abs(r - g.baseModeloExacta[d]), eI = Math.abs(r - g.baseIngenuo[d]);
+        a.real += r; a.eM += eM; a.eI += eI;
+        if (w <= 2) { a.real2 += r; a.eM2 += eM; a.eI2 += eI; a.dias2++; if (r <= g.picoReg[d]) a.pico2++; }
+      }
+    }
+  }
+  const out = {};
+  for (const [nombre, a] of Object.entries(acc)) {
+    const errM = a.real ? a.eM / a.real : null, errI = a.real ? a.eI / a.real : null;
+    // Probado 26 sep–1 nov 2026: "la semana pasada" ganó 4 de 5 semanas. Queda como base y el promedio
+    // ponderado solo la reemplaza en un SC si le gana por 3 puntos o más en las últimas 4 semanas.
+    const metodo = errM !== null && errI !== null && errM <= errI - VENTAJA_MIN ? "malla" : "ingenuo";
+    const err2 = a.real2 ? (metodo === "ingenuo" ? a.eI2 : a.eM2) / a.real2 : null;
+    const pico2 = a.dias2 ? a.pico2 / a.dias2 : null;
+    const alarmas = [];
+    if (err2 !== null && err2 > ERROR_MAX) alarmas.push(`error del ${Math.round(err2 * 100)}% en 2 semanas`);
+    if (pico2 !== null && pico2 < PICO_MIN) alarmas.push(`el pico alcanzó solo el ${Math.round(pico2 * 100)}% de los días`);
+    out[nombre] = { errM, errI, metodo, err2, pico2, alarmas };
+  }
+  return out;
+}
+// Aplica a cada SC el pronóstico que ganó
+function aplicarMetodo(g, ev) {
+  const e = ev && ev[g.nombre];
+  if (e && e.metodo === "malla") return { ...g, metodo: "malla" };
+  const base = g.baseIngenuo.map(v => Math.round(v));
+  return { ...g, base, pico: g.pico.map((v, d) => Math.max(v, base[d])), metodo: "ingenuo" };
 }
 
 // Prueba con lo que pasó: para cada semana, la malla se arma solo con los datos anteriores a esa semana
@@ -220,7 +275,8 @@ export default function MallaTurnosMX() {
   }, [hoy]);
 
   const vent = useMemo(() => ({ dDem: sumarDias(lunesDe(hoy), -7 * SEMANAS_DEMANDA), hDem: sumarDias(hoy, -1), dFlo: sumarDias(hoy, -DIAS_FLOTA), hFlo: sumarDias(hoy, -1) }), [hoy]);
-  const grupos = useMemo(() => (datos ? construirGrupos(datos, vent.dDem, vent.hDem, vent.dFlo, vent.hFlo) : []), [datos, vent]);
+  const evaluacion = useMemo(() => (datos ? evaluarPronosticos(datos, hoy) : null), [datos, hoy]);
+  const grupos = useMemo(() => (datos ? construirGrupos(datos, vent.dDem, vent.hDem, vent.dFlo, vent.hFlo).map(g => aplicarMetodo(g, evaluacion)) : []), [datos, vent, evaluacion]);
   const prueba = useMemo(() => (datos ? probarMalla(datos, hoy) : null), [datos, hoy]);
 
   const lunesBase = lunesDe(hoy);
@@ -268,7 +324,7 @@ export default function MallaTurnosMX() {
         <button onClick={() => setVerComo(!verComo)} style={{ marginTop: 12, background: "none", border: "none", color: NAVY, fontSize: 13, fontWeight: 600, cursor: "pointer", padding: 0 }}>{verComo ? "▾" : "▸"} Cómo se calcula</button>
         {verComo && (
           <div style={{ fontSize: 13, color: "#2b3038", lineHeight: 1.6, marginTop: 6 }}>
-            <b>1. Demanda:</b> para cada SC y día de la semana se toman las rutas regulares que ofreció MELI en las últimas {SEMANAS_DEMANDA} semanas. Las semanas recientes pesan más (la de hace una semana vale la mitad que la última), y cada SC se cuenta desde su primer día con pedidos. <b>Base</b> = el promedio, redondeado hacia abajo (lo que llega casi siempre). <b>Pico</b> = el nivel que se supera 1 de cada 5 días, más los urgentes.<br />
+            <b>1. Demanda:</b> <b>Base</b> = las rutas regulares que MELI ofreció el mismo día de la semana pasada (la prueba de octubre mostró que es lo que mejor acierta). Si en un SC el promedio de las últimas {SEMANAS_DEMANDA} semanas, con más peso a las recientes, acierta 3 puntos más, se usa ese. <b>Pico</b> = el nivel que se supera 1 de cada 5 días en esas semanas, más los urgentes<br />
             <b>2. Grupo fijo:</b> rutas base de la semana ÷ 6 días de trabajo. Así, cada vehículo fijo tiene trabajo los 6 días que le toca salir.<br />
             <b>3. Descansos:</b> uno por vehículo, en los días de menos demanda. Cada semana, cada vehículo avanza un lugar en la lista, para que nadie tenga siempre el mismo día.<br />
             <b>4. Quién es fijo:</b> los vehículos que más días trabajaron en las últimas 2 semanas. El resto queda como reserva. Si no alcanzan, aparece una <b>vacante</b>.<br />
@@ -284,7 +340,7 @@ export default function MallaTurnosMX() {
         <div style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 860 }}>
             <thead><tr>
-              {["SC", "Supervisor", "Vehículos que trabajaron", "Grupo fijo", "Vacantes fijo", "Reserva necesaria", "Reserva disponible", "Reserva que falta", "Rutas base / semana", "Rutas pico / semana", ""].map(h => <th key={h} style={{ ...th, textAlign: h === "SC" || h === "Supervisor" ? "left" : "center" }}>{h}</th>)}
+              {["SC", "Supervisor", "Vehículos que trabajaron", "Grupo fijo", "Vacantes fijo", "Reserva necesaria", "Reserva disponible", "Reserva que falta", "Rutas base / semana", "Rutas pico / semana", "Pronóstico", "Alerta", ""].map(h => <th key={h} style={{ ...th, textAlign: h === "SC" || h === "Supervisor" ? "left" : "center" }}>{h}</th>)}
             </tr></thead>
             <tbody>
               {resumen.map(({ g, m }) => {
@@ -302,6 +358,8 @@ export default function MallaTurnosMX() {
                     <td style={{ ...td, color: faltaR ? "#9a3c06" : "#15803d", fontWeight: 700 }}>{faltaR || "—"}</td>
                     <td style={td}>{g.base.reduce((a, b) => a + b, 0)}</td>
                     <td style={td}>{g.pico.reduce((a, b) => a + b, 0)}</td>
+                    <td style={{ ...td, color: MUTED }}>{g.metodo === "ingenuo" ? "Semana pasada" : "Malla"}</td>
+                    {(() => { const al = evaluacion && evaluacion[g.nombre] ? evaluacion[g.nombre].alarmas : []; return <td style={{ ...td, color: al.length ? "#b42318" : "#15803d", fontWeight: 700 }} title={al.join(" · ")}>{al.length ? "Revisar" : "OK"}</td>; })()}
                     <td style={{ ...td, color: NAVY, fontWeight: 600 }}>Ver malla ›</td>
                   </tr>
                 );
@@ -310,6 +368,39 @@ export default function MallaTurnosMX() {
           </table>
         </div>
       </div>
+
+      {evaluacion && Object.keys(evaluacion).length > 0 && (() => {
+        const filas = resumen.map(({ g }) => ({ g, e: evaluacion[g.nombre] })).filter(x => x.e);
+        const pct = v => (v === null || v === undefined ? "—" : `${Math.round(v * 100)}%`);
+        const conAlerta = filas.filter(x => x.e.alarmas.length);
+        return (
+          <div style={card}>
+            <div style={{ fontSize: 16, fontWeight: 700 }}>¿Qué tan bien pronostica? · últimas 4 semanas</div>
+            <div style={{ fontSize: 13, color: MUTED, marginTop: 4, lineHeight: 1.5 }}>
+              Cada semana se pronosticó solo con lo anterior, con dos métodos: "la semana pasada" (las mismas rutas que el mismo día de la semana anterior), que es la base, y el promedio de las últimas semanas, con más peso a las recientes. Un SC usa el promedio solo si acierta al menos 3 puntos más. Alerta si el error supera el {Math.round(ERROR_MAX * 100)}% o si el pico alcanzó menos del {Math.round(PICO_MIN * 100)}% de los días en las últimas 2 semanas.
+            </div>
+            {conAlerta.length > 0 && <div style={{ marginTop: 10, background: "#fdecec", border: "1px solid #f5c2c0", color: "#b42318", borderRadius: 8, padding: "8px 12px", fontSize: 13 }}><b>Revisar:</b> {conAlerta.map(x => `${x.g.nombre} (${x.e.alarmas.join(", ")})`).join(" · ")}</div>}
+            <div style={{ overflowX: "auto", marginTop: 10 }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 760 }}>
+                <thead><tr>{["SC", "Error de la malla", "Error de la semana pasada", "Usa", "Error en 2 semanas", "Días que alcanzó el pico (2 sem.)", "Alerta"].map(h => <th key={h} style={{ ...th, textAlign: h === "SC" ? "left" : "center" }}>{h}</th>)}</tr></thead>
+                <tbody>
+                  {filas.map(({ g, e }) => (
+                    <tr key={g.nombre}>
+                      <td style={{ ...td, textAlign: "left", fontWeight: 700 }}>{g.nombre}</td>
+                      <td style={{ ...td, fontWeight: e.metodo === "malla" ? 800 : 400 }}>{pct(e.errM)}</td>
+                      <td style={{ ...td, fontWeight: e.metodo === "ingenuo" ? 800 : 400 }}>{pct(e.errI)}</td>
+                      <td style={{ ...td, color: NAVY, fontWeight: 600 }}>{e.metodo === "ingenuo" ? "Semana pasada" : "Malla"}</td>
+                      <td style={{ ...td, color: e.err2 > ERROR_MAX ? "#b42318" : "#1f2937" }}>{pct(e.err2)}</td>
+                      <td style={{ ...td, color: e.pico2 !== null && e.pico2 < PICO_MIN ? "#b42318" : "#1f2937" }}>{pct(e.pico2)}</td>
+                      <td style={{ ...td, color: e.alarmas.length ? "#b42318" : "#15803d", fontWeight: 700 }}>{e.alarmas.length ? e.alarmas.join(" · ") : "OK"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        );
+      })()}
 
       {prueba && prueba.filas.length > 0 && (() => {
         const t = prueba.filas.reduce((x, a) => { for (const k of Object.keys(a)) if (typeof a[k] === "number") x[k] = (x[k] || 0) + a[k]; return x; }, {});
