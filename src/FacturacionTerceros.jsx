@@ -202,9 +202,17 @@ export default function FacturacionTerceros({ usuario }) {
     // SAT); en esa misma vuelta Biggy prerrechaza lo que no es Ingreso. Después
     // se consulta al SAT de a 5, que es lento: si quedan, se vuelve a apretar.
     try {
-      const r1 = await fetch(`${BRAIN_API}?reintentar=1&solo_lectura=1`);
-      const l = await r1.json();
-      if (!l.ok) throw new Error(l.error || "Sin detalle");
+      // La lectura va de a 10 por llamada (el servidor tiene tiempo límite):
+      // se repite hasta que no quede ninguna por leer.
+      const l = { revisadas: 0, prerechazadas: 0 };
+      for (let vuelta = 0; vuelta < 30; vuelta++) {
+        setMsg({ ok: true, txt: `Leyendo facturas… ${l.revisadas} leída(s)` });
+        const r1 = await fetch(`${BRAIN_API}?reintentar=1&solo_lectura=1`);
+        const j1 = await r1.json();
+        if (!j1.ok) throw new Error(j1.error || "Sin detalle");
+        l.revisadas += j1.revisadas; l.prerechazadas += j1.prerechazadas || 0;
+        if (j1.revisadas < 10) break;
+      }
       await cargar();
       let txtSat = "";
       try {
