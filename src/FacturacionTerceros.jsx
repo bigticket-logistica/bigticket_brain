@@ -198,13 +198,28 @@ export default function FacturacionTerceros({ usuario }) {
 
   const validarPendientes = async () => {
     setValidando("todas"); setMsg(null);
+    // Primero se leen todas y se comparan los netos (rápido, no depende del
+    // SAT); en esa misma vuelta Biggy prerrechaza lo que no es Ingreso. Después
+    // se consulta al SAT de a 5, que es lento: si quedan, se vuelve a apretar.
     try {
-      const r = await fetch(`${BRAIN_API}?reintentar=1`);
-      const j = await r.json();
-      if (!j.ok) throw new Error(j.error || "Sin detalle");
-      setMsg({ ok: true, txt: `${j.revisadas} revisada(s): ${j.vigentes} vigentes, ${j.con_problema} con problema, ${j.sin_respuesta} sin respuesta del SAT.` });
+      const r1 = await fetch(`${BRAIN_API}?reintentar=1&solo_lectura=1`);
+      const l = await r1.json();
+      if (!l.ok) throw new Error(l.error || "Sin detalle");
       await cargar();
-    } catch (e) { setMsg({ ok: false, txt: "No se pudo consultar al SAT: " + (e.message || e) }); }
+      let txtSat = "";
+      try {
+        const r2 = await fetch(`${BRAIN_API}?reintentar=1`);
+        const j = await r2.json();
+        if (!j.ok) throw new Error(j.error || "Sin detalle");
+        txtSat = j.revisadas
+          ? ` SAT: ${j.vigentes} vigentes, ${j.con_problema} con problema, ${j.sin_respuesta} sin respuesta` +
+            (j.revisadas === 5 ? " · quedan más, vuelve a apretar." : ".")
+          : " SAT: no hay pendientes.";
+      } catch (e) { txtSat = " El SAT no respondió; vuelve a intentar en un rato."; }
+      setMsg({ ok: true, txt: `${l.revisadas} leída(s)` +
+        (l.prerechazadas ? `, ${l.prerechazadas} prerrechazada(s) por Biggy para tu revisión (no son de Ingreso)` : "") + "." + txtSat });
+      await cargar();
+    } catch (e) { setMsg({ ok: false, txt: "No se pudieron revisar: " + (e.message || e) }); }
     setValidando(null);
   };
 
@@ -228,6 +243,8 @@ export default function FacturacionTerceros({ usuario }) {
     // "rechazada" la devuelve a Por facturar, en rojo.
     if (f.estado === "rechazada") return "rechazada";
     if (f.estado === "aprobada") return "aprobada";
+    // Marcada por Biggy (no es de Ingreso): espera la decisión del analista.
+    if (f.validaciones?.prerechazo) return "prerechazada";
     if (f.sat_estado && String(f.sat_estado).toLowerCase() !== "vigente") return "sat_problema";
     const { dif } = difDe(p, f);
     if (dif != null && Math.abs(dif) > 1) return "descuadre";
@@ -245,6 +262,7 @@ export default function FacturacionTerceros({ usuario }) {
     conforme:     { l: "Conforme",         bg: "#dcfce7", fg: "#166534" },
     aprobada:     { l: "Aprobada",         bg: "#16a34a", fg: "#fff" },
     rechazada:    { l: "Rechazada",        bg: "#dc2626", fg: "#fff" },
+    prerechazada: { l: "Prerrechazada",    bg: "#fee2e2", fg: "#b91c1c" },
   };
 
   const { visibles, resumen } = useMemo(() => {
@@ -325,7 +343,7 @@ export default function FacturacionTerceros({ usuario }) {
           {semanas.map(w => <option key={w} value={w}>Semana {w}</option>)}
         </select>
         {[["todas", "Todas"], ["sin_factura", "Sin factura"], ["descuadre", "No cuadran"],
-          ["sat_problema", "SAT"], ["aprobada", "Aprobadas"], ["rechazada", "Rechazadas"], ["sin_validar", "Por validar"], ["conforme", "Conformes"],
+          ["sat_problema", "SAT"], ["prerechazada", "Prerrechazadas"], ["aprobada", "Aprobadas"], ["rechazada", "Rechazadas"], ["sin_validar", "Por validar"], ["conforme", "Conformes"],
           ["por_pagar", "Por pagar"], ["pagadas", "Pagadas"]].map(([id, l]) => (
           <button key={id} onClick={() => setFiltro(id)}
             style={{ padding: "6px 13px", borderRadius: 16, fontSize: 11.5, fontWeight: 700, cursor: "pointer",
@@ -397,7 +415,16 @@ export default function FacturacionTerceros({ usuario }) {
                     </td>
                     <td style={{ ...td, color: "#94a3b8", fontSize: 10.5 }}>
                       {f?.serie_folio && <div style={{ color: "#334155", fontSize: 11.5 }}>{f.serie_folio}</div>}
-                      {f?.uuid || (f ? "sin leer" : "—")}
+                      {f?.uuid || (f ? (f.validaciones?.folio_repetido ? "" : "sin leer") : "—")}
+                      {f?.validaciones?.folio_repetido && (
+                        <div style={{ color: "#b45309" }}>Folio {f.validaciones.folio_repetido.slice(0, 8)}… ya subido en otra prefactura</div>
+                      )}
+                      {f?.validaciones?.efecto && !["Ingreso", "desconocido"].includes(f.validaciones.efecto) && (
+                        <div style={{ color: "#dc2626", fontWeight: 600 }}>Comprobante de {f.validaciones.efecto}</div>
+                      )}
+                      {f?.validaciones?.prerechazo && !["rechazada", "aprobada"].includes(f.estado) && (
+                        <div style={{ color: "#b91c1c", marginTop: 2 }}>Biggy: no es de Ingreso. Revisa y decide.</div>
+                      )}
                       {f?.rfc_emisor && <div>RFC {f.rfc_emisor}</div>}
                     </td>
                     {/* Dos validaciones distintas: que el monto cuadre con la
@@ -471,7 +498,7 @@ export default function FacturacionTerceros({ usuario }) {
                                   color: f.estado === "aprobada" ? "#fff" : "#16a34a", cursor: "pointer" }}>
                                 {revisando === f.id ? "…" : "Aprobar"}
                               </button>
-                              <button onClick={() => { setRechazo({ p, f }); setMotivo(f.revision_motivo || ""); }}
+                              <button onClick={() => { setRechazo({ p, f }); setMotivo(f.revision_motivo || f.validaciones?.prerechazo?.motivo || ""); }}
                                 disabled={revisando !== null}
                                 style={{ marginLeft: 4, border: "1px solid #dc2626", borderRadius: 5, padding: "4px 10px", fontSize: 10.5,
                                   background: f.estado === "rechazada" ? "#dc2626" : "#fff",
