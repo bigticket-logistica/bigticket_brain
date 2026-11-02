@@ -17865,3 +17865,5 @@ const CONFIG_IMPORTADOR_CL = {
 };
 
 export default ModuloPagosMadre;
+// También se muestra en Indicadores Operacionales MX, para el jefe de operaciones.
+export { PanelControlSupervisores };

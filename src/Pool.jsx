@@ -3,6 +3,8 @@ import { descargarExcelMeli, descargarExcelMultihoja, fechaHoyOperativa, fechaOp
 import RechazosMeliMX, { rmResumenPerdidas } from "./RechazosMeli";
 import CapacidadMX from "./CapacidadMX";
 import MallaTurnosMX from "./MallaTurnos";
+// La misma vista de Administración → Consolidaciones Bitácora, sin duplicar código.
+import { PanelControlSupervisores } from "./Pagos";
 
 // ═══════════════════════════════════════════════════════════════════
 //  TAREAS DEL JEFE DE SUPERVISORES — Alta Operacional (Etapa 7)
@@ -598,6 +600,7 @@ function IndicadoresOperacionalesMX({ usuario }) {
     { id: "vendor_score", label: "Vendor Score", desc: "Nota semanal MELI · aproximada" },
     { id: "control_helper", label: "Control Helper", desc: "Helpers no autorizados / certificados / fantasmas" },
     { id: "tareas", label: "📋 Tareas", desc: "Altas operacionales · SLA 24 h" },
+    { id: "consolidaciones_bitacora", label: "Consolidaciones Bitácora", desc: "Consolidado por SC: torre de control, ambulancias y bitácora del supervisor" },
   ];
 
 
@@ -646,6 +649,7 @@ function IndicadoresOperacionalesMX({ usuario }) {
       {vista === "torre_d1" && <TorreTresPilares />}
       {vista === "validacion_bt" && <PoolMeliValidacionBT usuario={usuario} />}
       {vista === "tareas" && <div style={{ padding: 24 }}><TareasJefeOperaciones /></div>}
+      {vista === "consolidaciones_bitacora" && <PanelControlSupervisores />}
 
     </div>
   );
