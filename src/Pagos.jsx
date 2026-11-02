@@ -4,7 +4,6 @@ import ModuloCobrosMermas from "./Mermas";
 import CobrosTerceros from "./PnrCobros";
 import Diferencias from "./Diferencias";
 import Comparativa from "./Comparativa";
-import FacturacionTerceros from "./FacturacionTerceros";
 import { avisarPortal } from "./avisarPortal";
 import RechazosMeliMX from "./RechazosMeli";
 
@@ -6169,7 +6168,11 @@ function ModuloPagosMadre({ usuario }) {
 
   const [subtab, setSubtabState] = useState(() => {
     if (rolLimitadoAPrefacturas) return "prefacturas";
-    try { return localStorage.getItem("bt_nav_subtab_pagos") || "listado"; } catch { return "listado"; }
+    try {
+      const guardada = localStorage.getItem("bt_nav_subtab_pagos") || "listado";
+      // Facturación Terceros se movió a Contabilidad: quien la tenía abierta vuelve a Listado.
+      return guardada === "facturacion_terceros" ? "listado" : guardada;
+    } catch { return "listado"; }
   });
   const setSubtab = (t) => { try { localStorage.setItem("bt_nav_subtab_pagos", t); } catch {} setSubtabState(t); };
   const tabs = [
@@ -6178,7 +6181,6 @@ function ModuloPagosMadre({ usuario }) {
     { id: "torre_3p",    label: "Torre de Control Pagos", desc: "3 Pilares · MELI vs Operación" },
     { id: "terceros",    label: "Terceros",              desc: "Empresas subcontratadas por patente" },
     { id: "conciliacion", label: "Conciliación Terceros", desc: "Conciliación semanal por empresa" },
-    { id: "facturacion_terceros", label: "Facturación Terceros", desc: "Facturas que suben los terceros contra cada prefactura" },
     { id: "pnr_cobros",  label: "Cobros",                desc: "PNR, robos y extravíos, no show" },
     { id: "rechazos_meli", label: "Rechazos MELI",      desc: "Rutas no aceptadas por mes, día y SC · SDD y Spot" },
     { id: "diferencias", label: "Diferencias",           desc: "Reclamos de terceros sobre pagos y cobros" },
@@ -6236,7 +6238,6 @@ function ModuloPagosMadre({ usuario }) {
           {subtab === "torre_3p"    && <TorreTresPilares />}
           {subtab === "terceros"    && <TercerosMX />}
           {subtab === "conciliacion" && <ConciliacionTercerosMX usuario={usuario} />}
-          {subtab === "facturacion_terceros" && <FacturacionTerceros usuario={usuario} />}
           {subtab === "pnr_cobros"  && <CobrosTerceros usuario={usuario} />}
       {subtab === "rechazos_meli" && <RechazosMeliMX usuario={usuario} />}
           {subtab === "diferencias" && <Diferencias usuario={usuario} />}

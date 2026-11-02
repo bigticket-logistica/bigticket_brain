@@ -12,6 +12,7 @@ import { sb, BIGGY_IMG } from "./shared";
 import ModuloPoolMeliMX from "./Pool";
 import { descargarExcelMeli, descargarExcelMultihoja } from "./shared";
 import ModuloPagosMadre from "./Pagos";
+import ModuloContabilidad from "./Contabilidad";
 import ModuloCertificacionesCL from "./cl/Certificaciones";
 import ModuloMaestroCL from "./cl/Maestro";
 import ModuloGpsSegurosCL from "./cl/GpsSeguros";
@@ -107,7 +108,7 @@ const PAIS_SELECT_CFG = {
 // propios (se irán agregando aquí); México conserva todo lo ya existente.
 const MODULOS_POR_PAIS = {
   "México": {
-    superadmin: ["pool_meli_mx", "pagos", "maestro", "certificaciones", "empresas", "alertas_portal", "referidos", "auditoria_meli", "configuracion"],
+    superadmin: ["pool_meli_mx", "pagos", "contabilidad", "maestro", "certificaciones", "empresas", "alertas_portal", "referidos", "auditoria_meli", "configuracion"],
     certificacion: ["certificaciones", "empresas"],
     certificacion_full: ["certificaciones", "empresas"],  // Certificaciones MX + CL (ver Chile abajo)
     certificacion_mant: ["certificaciones", "empresas"],  // Certificaciones MX + CL + Mantenciones CL
@@ -138,6 +139,7 @@ const MODULOS_LABELS = {
   referidos: "Referidos",
   auditoria_meli: "Auditoría MELI",
   pagos: "Administración",
+  contabilidad: "Contabilidad",
   configuracion: "Configuración",
 };
 const USUARIOS = {
@@ -15566,6 +15568,7 @@ export default function App() {
         {tabActivo === "referidos" && <ModuloReferidos usuario={usuario} />}
         {tabActivo === "auditoria_meli" && <ModuloAuditoriaMeli />}
         {tabActivo === "pagos" && <ModuloPagosMadre usuario={usuario} />}
+        {tabActivo === "contabilidad" && <ModuloContabilidad usuario={usuario} />}
         {!tabActivo && (
           <div className="pg" style={{ maxWidth: 720 }}>
             <div className="sec-title">Operación {pais}</div>
