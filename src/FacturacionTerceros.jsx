@@ -58,7 +58,7 @@ export default function FacturacionTerceros({ usuario }) {
     // Se parte de las prefacturas enviadas: la pregunta del analista es "¿quién
     // me falta por facturar?", no "¿qué facturas llegaron?".
     let q = sb.from("conciliaciones_terceros")
-      .select("id, semana, empresa_nombre, service_center, liquido_pago, enviado_at, tercero_id, pagado_at, pagado_por, pago_referencia, correo_to, correo_cc")
+      .select("id, semana, empresa_nombre, service_center, liquido_pago, enviado_at, tercero_id, pagado_at, pagado_por, pago_referencia, correo_to, correo_cc, pdf_url, total_neto")
       .eq("estado", "enviada").not("tercero_id", "is", null)
       .order("semana", { ascending: false });
     if (semana) q = q.eq("semana", semana);
@@ -208,6 +208,16 @@ export default function FacturacionTerceros({ usuario }) {
     setValidando(null);
   };
 
+  // Lo que se compara es el neto: subtotal de la factura contra el neto de la
+  // prefactura, antes de IVA y de retenciones. Si la factura todavía no tiene
+  // el subtotal leído, se cae a la comparación de totales que había antes.
+  const difDe = (p, f) => {
+    if (!f) return { dif: null, neto: false };
+    if (f.subtotal_factura != null && p.total_neto != null)
+      return { dif: Math.round((Number(f.subtotal_factura) - Number(p.total_neto)) * 100) / 100, neto: true };
+    return { dif: f.diferencia != null ? Number(f.diferencia) : null, neto: false };
+  };
+
   // El estado de cada prefactura se decide por su factura: sin factura, con
   // diferencia de monto, rechazada por el SAT, o conforme.
   const estadoDe = (p) => {
@@ -219,7 +229,8 @@ export default function FacturacionTerceros({ usuario }) {
     if (f.estado === "rechazada") return "rechazada";
     if (f.estado === "aprobada") return "aprobada";
     if (f.sat_estado && String(f.sat_estado).toLowerCase() !== "vigente") return "sat_problema";
-    if (f.diferencia != null && Math.abs(Number(f.diferencia)) > 1) return "descuadre";
+    const { dif } = difDe(p, f);
+    if (dif != null && Math.abs(dif) > 1) return "descuadre";
     if (!f.uuid) return "sin_xml";
     if (!f.sat_estado) return "sin_validar";
     return "conforme";
@@ -337,8 +348,8 @@ export default function FacturacionTerceros({ usuario }) {
                 {/* Marca todas las de la pantalla; las ya pagadas quedan fuera. */}
               </th>
               <th style={th}>Sem</th><th style={th}>Empresa</th><th style={th}>SC</th>
-              <th style={{ ...th, textAlign: "right" }}>Prefactura</th>
-              <th style={{ ...th, textAlign: "right" }}>Factura</th>
+              <th style={{ ...th, textAlign: "right" }}>Neto prefactura</th>
+              <th style={{ ...th, textAlign: "right" }}>Neto factura</th>
               <th style={{ ...th, textAlign: "right" }}>Dif.</th>
               <th style={th}>Folio fiscal</th>
               <th style={{ ...th, textAlign: "center" }}>Monto</th>
@@ -349,6 +360,7 @@ export default function FacturacionTerceros({ usuario }) {
               {visibles.map(p => {
                 const f = p.facturas[0];
                 const e = ESTADOS[p._estado];
+                const { dif, neto } = difDe(p, f);
                 return (
                   <tr key={p.id} style={{ background: p.pagado_at ? "#f0fdf4" : "#fff" }}>
                     <td style={td}>
@@ -360,13 +372,19 @@ export default function FacturacionTerceros({ usuario }) {
                     <td style={{ ...td, color: "#64748b" }}>{p.semana}</td>
                     <td style={{ ...td, fontWeight: 600, color: "#334155" }}>{p.empresa_nombre}</td>
                     <td style={{ ...td, color: "#64748b" }}>{p.service_center}</td>
-                    <td style={{ ...td, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{money(p.liquido_pago)}</td>
-                    <td style={{ ...td, textAlign: "right", fontVariantNumeric: "tabular-nums", color: f?.monto_factura ? "#334155" : "#cbd5e1" }}>
-                      {f?.monto_factura != null ? money(f.monto_factura) : "—"}
+                    {/* Arriba el neto (lo que se compara); abajo, chico, el total con IVA. */}
+                    <td style={{ ...td, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
+                      {p.total_neto != null ? money(p.total_neto) : "—"}
+                      <div style={{ fontSize: 9.5, color: "#94a3b8" }}>líquido {money(p.liquido_pago)}</div>
+                    </td>
+                    <td style={{ ...td, textAlign: "right", fontVariantNumeric: "tabular-nums", color: f?.subtotal_factura != null || f?.monto_factura != null ? "#334155" : "#cbd5e1" }}>
+                      {f?.subtotal_factura != null ? money(f.subtotal_factura) : "—"}
+                      {f?.monto_factura != null && <div style={{ fontSize: 9.5, color: "#94a3b8" }}>total {money(f.monto_factura)}</div>}
                     </td>
                     <td style={{ ...td, textAlign: "right", fontVariantNumeric: "tabular-nums", fontWeight: 700,
-                      color: f?.diferencia == null ? "#cbd5e1" : Math.abs(Number(f.diferencia)) <= 1 ? "#16a34a" : "#b45309" }}>
-                      {f?.diferencia != null ? money(f.diferencia) : "—"}
+                      color: dif == null ? "#cbd5e1" : Math.abs(dif) <= 1 ? "#16a34a" : "#b45309" }}>
+                      {dif != null ? money(dif) : "—"}
+                      {dif != null && !neto && <div style={{ fontSize: 9.5, fontWeight: 400, color: "#94a3b8" }}>en totales</div>}
                     </td>
                     <td style={{ ...td, color: "#94a3b8", fontSize: 10.5 }}>
                       {f?.serie_folio && <div style={{ color: "#334155", fontSize: 11.5 }}>{f.serie_folio}</div>}
@@ -378,10 +396,10 @@ export default function FacturacionTerceros({ usuario }) {
                         puede pasar y la otra no. */}
                     <td style={{ ...td, textAlign: "center", fontSize: 15 }}>
                       {!f ? <span style={{ color: "#cbd5e1" }}>—</span>
-                        : f.diferencia == null ? <span title="No se pudo leer el monto" style={{ color: "#94a3b8" }}>?</span>
-                        : Math.abs(Number(f.diferencia)) <= 1
-                          ? <span title="Cuadra con la prefactura" style={{ color: "#16a34a" }}>✓</span>
-                          : <span title={`Difiere en ${money(f.diferencia)}`} style={{ color: "#dc2626" }}>✗</span>}
+                        : dif == null ? <span title="No se pudo leer el monto" style={{ color: "#94a3b8" }}>?</span>
+                        : Math.abs(dif) <= 1
+                          ? <span title={neto ? "El neto cuadra con la prefactura" : "El total cuadra con la prefactura"} style={{ color: "#16a34a" }}>✓</span>
+                          : <span title={`Difiere en ${money(dif)}`} style={{ color: "#dc2626" }}>✗</span>}
                     </td>
                     <td style={{ ...td, textAlign: "center", fontSize: 15 }}>
                       {!f ? <span style={{ color: "#cbd5e1" }}>—</span>
@@ -413,12 +431,20 @@ export default function FacturacionTerceros({ usuario }) {
                           {p.pago_referencia && <div style={{ fontWeight: 400, color: "#94a3b8" }}>{p.pago_referencia}</div>}
                         </div>
                       )}
+                      {/* La prefactura que se le envió al tercero, para compararla con su factura. */}
+                      {p.pdf_url && (
+                        <button onClick={() => abrir(p.pdf_url)}
+                          style={{ border: "1px solid #F47B20", background: "#fff", color: "#F47B20",
+                            borderRadius: 5, padding: "4px 10px", fontSize: 10.5, cursor: "pointer", marginRight: 4 }}>
+                          Prefactura
+                        </button>
+                      )}
                       {f && (
                         <>
                           <button onClick={() => abrir(f.storage_path)}
                             style={{ border: "1px solid #e4e7ec", background: "#fff", color: "#1a3a6b",
                               borderRadius: 5, padding: "4px 10px", fontSize: 10.5, cursor: "pointer" }}>
-                            Ver
+                            Ver factura
                           </button>
                           {f.uuid && (
                             <button onClick={() => validar(f)} disabled={validando !== null}
