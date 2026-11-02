@@ -250,7 +250,9 @@ function ModuloMaestroCL({ usuario } = {}) {
   const [supervisores, setSupervisores] = useState([]);
   const [cecosNombres, setCecosNombres] = useState([]);
   const [supPanel, setSupPanel] = useState(false);
-  const [supNuevo, setSupNuevo] = useState({ nombre: "", correo: "", telefono: "" });
+  const [supNuevo, setSupNuevo] = useState({ nombre: "", correo: "", telefono: "", cecos: "" });
+  // "ML_MELIPILLA, ml_san antonio" → ["ML_MELIPILLA", "ML_SAN ANTONIO"]
+  const listaCecosTxt = (t) => [...new Set(String(t || "").split(",").map(x => x.trim().toUpperCase().replace(/\s+/g, " ")).filter(Boolean))];
   const [supGuardando, setSupGuardando] = useState(null);
   const [vehSup, setVehSup] = useState({});              // patente → supervisor, para el Maestro Jornada
   const [supCeco, setSupCeco] = useState({});            // CECO → supervisor(es) de la bitácora (migración 78)
@@ -1070,9 +1072,11 @@ function ModuloMaestroCL({ usuario } = {}) {
     try {
       await api("supervisores_cl", { method: "POST", headers: { Prefer: "return=minimal" },
         body: JSON.stringify({ nombre, correo: supNuevo.correo.trim() || null,
-                               telefono: supNuevo.telefono.trim() || null, actualizado_por: analista }) });
-      setSupNuevo({ nombre: "", correo: "", telefono: "" });
+                               telefono: supNuevo.telefono.trim() || null, cecos_a_cargo: listaCecosTxt(supNuevo.cecos),
+                               actualizado_por: analista }) });
+      setSupNuevo({ nombre: "", correo: "", telefono: "", cecos: "" });
       await cargarVehiculos();
+      await cargarSupCeco();
       setVehMsg(`Supervisor ${nombre} agregado`); setTimeout(() => setVehMsg(""), 3000);
     } catch (e) { setError(errorSup(e)); }
     finally { setSupGuardando(null); }
@@ -2752,7 +2756,10 @@ function ModuloMaestroCL({ usuario } = {}) {
                       <div style={{ fontSize: 12, color: AMBAR_ }}>Todavía no hay supervisores (falta la migración 65 o la carga de Pipefy).</div>
                     ) : (
                       <table className="mj-tabla" style={{ marginBottom: 10 }}>
-                        <thead><tr><th>Nombre</th><th>Correo</th><th>Teléfono</th>
+                        <thead><tr><th>Nombre completo</th>
+                          <th title="Como aparece en el Maestro y en el export: nombre y primer apellido. Se llena solo; corrígelo si sale mal.">Nombre en el maestro</th>
+                          <th>Correo</th><th>Teléfono</th>
+                          <th title="CECOS que supervisa, aunque no use la bitácora. Separados por coma.">CECOS a cargo</th>
                           <th className="num">Vehículos</th><th>Estado</th></tr></thead>
                         <tbody>
                           {supervisores.map(sp => (
@@ -2760,6 +2767,10 @@ function ModuloMaestroCL({ usuario } = {}) {
                               <td><input className="mj-input" defaultValue={sp.nombre} style={{ fontSize: 12, minWidth: 230 }}
                                      onBlur={e => { const v = e.target.value.trim().replace(/\s+/g, " ");
                                        if (v && v !== sp.nombre) actualizarSupervisor(sp.id, { nombre: v }); }} /></td>
+                              <td><input className="mj-input" defaultValue={sp.nombre_corto || ""} placeholder="NOMBRE APELLIDO"
+                                     style={{ fontSize: 12, minWidth: 160, fontWeight: 700 }}
+                                     onBlur={async e => { const v = e.target.value.trim().replace(/\s+/g, " ").toUpperCase();
+                                       if (v && v !== (sp.nombre_corto || "")) { await actualizarSupervisor(sp.id, { nombre_corto: v }); await cargarSupCeco(); } }} /></td>
                               <td><input className="mj-input" defaultValue={sp.correo || ""} placeholder="correo"
                                      style={{ fontSize: 12, minWidth: 200 }}
                                      onBlur={e => { const v = e.target.value.trim();
@@ -2768,6 +2779,11 @@ function ModuloMaestroCL({ usuario } = {}) {
                                      style={{ fontSize: 12, width: 130 }}
                                      onBlur={e => { const v = e.target.value.trim();
                                        if (v !== (sp.telefono || "")) actualizarSupervisor(sp.id, { telefono: v || null }); }} /></td>
+                              <td><input className="mj-input" defaultValue={(sp.cecos_a_cargo || []).join(", ")} placeholder="ej. ML_MELIPILLA"
+                                     style={{ fontSize: 12, minWidth: 180 }}
+                                     onBlur={async e => { const v = listaCecosTxt(e.target.value);
+                                       if (v.join(",") !== (sp.cecos_a_cargo || []).join(",")) {
+                                         await actualizarSupervisor(sp.id, { cecos_a_cargo: v }); await cargarSupCeco(); } }} /></td>
                               <td className="num">{fmt(Object.values(vehOps).filter(x => x.supervisor_id === sp.id).length)}</td>
                               <td>
                                 <label style={{ fontSize: 11.5, color: "#64748b", whiteSpace: "nowrap" }}>
@@ -2791,6 +2807,9 @@ function ModuloMaestroCL({ usuario } = {}) {
                       <label style={{ fontSize: 10.5, color: "#64748b" }}>Teléfono<br/>
                         <input className="mj-input" value={supNuevo.telefono} placeholder="+56 9…"
                                onChange={e => setSupNuevo(x => ({ ...x, telefono: e.target.value }))} style={{ width: 130 }} /></label>
+                      <label style={{ fontSize: 10.5, color: "#64748b" }}>CECOS a cargo<br/>
+                        <input className="mj-input" value={supNuevo.cecos} placeholder="ML_MELIPILLA"
+                               onChange={e => setSupNuevo(x => ({ ...x, cecos: e.target.value }))} /></label>
                       <button className="mj-btn" onClick={agregarSupervisor}
                               disabled={supGuardando === "__nuevo__" || !supNuevo.nombre.trim()}
                               style={{ background: NAVY, color: "#fff", borderColor: NAVY }}>
@@ -2806,7 +2825,9 @@ function ModuloMaestroCL({ usuario } = {}) {
                     </div>
                     {(() => {
                       const norm = (c) => String(c || "").toUpperCase().replace(/[_ ]/g, "");
-                      const cubiertos = new Set(supBit.filter(b => b.activo && !b.es_prueba).flatMap(b => (Array.isArray(b.scs_asignados) ? b.scs_asignados : []).map(norm)));
+                      const cubiertos = new Set([
+                        ...supBit.filter(b => b.activo && !b.es_prueba).flatMap(b => (Array.isArray(b.scs_asignados) ? b.scs_asignados : []).map(norm)),
+                        ...supervisores.filter(x => x.activo).flatMap(x => (x.cecos_a_cargo || []).map(norm)) ]);
                       const sinSup = cecosNombres.filter(c => /^ML_/.test(c) && !cubiertos.has(norm(c)));
                       return sinSup.length > 0 && (
                         <div style={{ fontSize: 12, color: AMBAR_, marginBottom: 8 }}>
