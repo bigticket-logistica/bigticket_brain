@@ -30,6 +30,8 @@ const RE = {
   rfcEmisor: /RFC\s*emisor\s*:?\s*([A-ZÑ&]{3,4}\d{6}[A-Z0-9]{3})/i,
   rfcReceptor: /RFC\s*receptor\s*:?\s*([A-ZÑ&]{3,4}\d{6}[A-Z0-9]{3})/i,
   // Algunos facturadores imprimen el total redondeado, sin centavos ("$ 14,557").
+  // El neto antes de impuestos y retenciones: es lo que se compara con la prefactura.
+  subtotal: /\bSub\s*total\b[^\d$]{0,40}\$?\s*(\d[\d,]*(?:\.\d{1,6})?)/i,
   total: /\bTotal\b[^\d$]{0,40}\$?\s*(\d[\d,]*(?:\.\d{1,6})?)/i,
   fecha: /(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})/,
   fechaDmy: /(\d{2})\/(\d{2})\/(\d{4})\s+(\d{2}:\d{2}:\d{2})/,
@@ -52,6 +54,7 @@ async function leerPdf(buffer) {
 
   const uno = (re) => { const m = text.match(re); return m ? m[1] : null; };
   const total = uno(RE.total);
+  const subtotal = uno(RE.subtotal);
 
   // Si el PDF no dice "RFC emisor" / "RFC receptor", se toman los RFC
   // etiquetados en orden: el primero es el del emisor (encabezado) y el
@@ -66,6 +69,7 @@ async function leerPdf(buffer) {
     rfc_emisor: rfcEmisor,
     rfc_receptor: rfcReceptor,
     total: total ? Number(total.replace(/,/g, "")) : null,
+    subtotal: subtotal ? Number(subtotal.replace(/,/g, "")) : null,
     // Sin centavos el total es aproximado: sirve para ver si cuadra con la
     // prefactura, pero no para el SAT, que compara el total exacto.
     total_redondeado: total ? !total.includes(".") : false,
@@ -138,7 +142,7 @@ export default async function handler(req, res) {
     // el reintento: una factura recién timbrada puede tardar en aparecer en el
     // SAT, así que un "no encontrado" al subirla no significa que sea falsa.
     let q = sb.from("facturas_tercero")
-      .select("id, uuid, rfc_emisor, rfc_receptor, monto_factura, monto_prefactura, nombre_archivo, storage_path, tercero_id, validaciones");
+      .select("id, uuid, rfc_emisor, rfc_receptor, monto_factura, monto_prefactura, nombre_archivo, storage_path, tercero_id, validaciones, subtotal_factura");
     if (factura_id) q = q.eq("id", factura_id);
     else if (reintentar) q = q.is("sat_validado_at", null).limit(50);
     else return res.status(200).json({ ok: false, error: "Pasa factura_id, o reintentar=1 para las pendientes." });
@@ -149,8 +153,18 @@ export default async function handler(req, res) {
 
     const resultados = [];
     for (const f of facturas) {
+      // Si subieron el XML, el portal ya guardó todo menos (en las antiguas) el
+      // subtotal: se saca del atributo SubTotal.
+      if (f.subtotal_factura == null && /\.xml$/i.test(f.storage_path || "")) {
+        try {
+          const { data: blob } = await sb.storage.from("proceso_certificacion_bt").download(f.storage_path);
+          const m = (await blob.text()).match(/\bSubTotal\s*=\s*"([\d.]+)"/);
+          if (m) await sb.from("facturas_tercero").update({ subtotal_factura: Number(m[1]) }).eq("id", f.id);
+        } catch (e) { console.error("No se pudo leer el XML de", f.id, e); }
+      }
       // Si vino solo el PDF, se leen los datos de ahí antes de preguntar al SAT.
-      if ((!f.uuid || f.monto_factura == null) && f.storage_path) {
+      if ((!f.uuid || f.monto_factura == null || f.subtotal_factura == null)
+          && /\.pdf$/i.test(f.storage_path || "")) {
         try {
           const { data: blob, error: eDl } = await sb.storage
             .from("proceso_certificacion_bt").download(f.storage_path);
@@ -163,6 +177,7 @@ export default async function handler(req, res) {
               uuid: leido.uuid, rfc_emisor: leido.rfc_emisor,
               rfc_receptor: leido.rfc_receptor, monto_factura: leido.total,
               fecha_emision: leido.fecha_emision, diferencia: dif,
+              subtotal_factura: leido.subtotal,
               validaciones: { leido_de: "pdf", problemas: [], total_redondeado: leido.total_redondeado },
             }).eq("id", f.id);
             Object.assign(f, {
