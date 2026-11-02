@@ -163,7 +163,7 @@ export default function FacturacionTerceros({ usuario }) {
   const aprobar = async (f) => {
     setRevisando(f.id); setMsg(null);
     const { error } = await sb.from("facturas_tercero").update({
-      revision: "aprobada", revision_motivo: null, revision_por: quien(), revision_at: new Date().toISOString(),
+      estado: "aprobada", revision_motivo: null, revision_por: quien(), revision_at: new Date().toISOString(),
     }).eq("id", f.id);
     setMsg(error ? { ok: false, txt: "No se pudo aprobar: " + error.message } : { ok: true, txt: `Factura ${f.serie_folio || f.uuid || ""} aprobada.` });
     setRevisando(null);
@@ -178,7 +178,7 @@ export default function FacturacionTerceros({ usuario }) {
     if (!m) return;
     setRevisando(f.id); setMsg(null);
     const { error } = await sb.from("facturas_tercero").update({
-      revision: "rechazada", revision_motivo: m, revision_por: quien(), revision_at: new Date().toISOString(),
+      estado: "rechazada", revision_motivo: m, revision_por: quien(), revision_at: new Date().toISOString(),
     }).eq("id", f.id);
     if (error) { setMsg({ ok: false, txt: "No se pudo rechazar: " + error.message }); setRevisando(null); return; }
     avisarPortal("factura_rechazada", { tercero_id: p.tercero_id, conciliacion_id: p.id });
@@ -213,9 +213,11 @@ export default function FacturacionTerceros({ usuario }) {
   const estadoDe = (p) => {
     if (!p.facturas.length) return "sin_factura";
     const f = p.facturas[0];
-    // La revisión del analista manda sobre las validaciones automáticas.
-    if (f.revision === "rechazada") return "rechazada";
-    if (f.revision === "aprobada") return "aprobada";
+    // La revisión del analista manda sobre las validaciones automáticas. Es el
+    // mismo campo `estado` que lee el portal: "aprobada" la pasa a Facturado y
+    // "rechazada" la devuelve a Por facturar, en rojo.
+    if (f.estado === "rechazada") return "rechazada";
+    if (f.estado === "aprobada") return "aprobada";
     if (f.sat_estado && String(f.sat_estado).toLowerCase() !== "vigente") return "sat_problema";
     if (f.diferencia != null && Math.abs(Number(f.diferencia)) > 1) return "descuadre";
     if (!f.uuid) return "sin_xml";
@@ -397,7 +399,7 @@ export default function FacturacionTerceros({ usuario }) {
                           SAT {fecha(f.sat_validado_at)}
                         </div>
                       )}
-                      {f?.revision && (
+                      {f?.revision_at && ["rechazada", "aprobada"].includes(f.estado) && (
                         <div style={{ fontSize: 9.5, color: "#94a3b8", marginTop: 2, maxWidth: 220 }}>
                           {f.revision_por} · {fecha(f.revision_at)}
                           {f.revision_motivo && <div style={{ color: "#991b1b" }}>“{f.revision_motivo}”</div>}
@@ -428,17 +430,17 @@ export default function FacturacionTerceros({ usuario }) {
                           {/* Una prefactura pagada ya no se revisa. */}
                           {!p.pagado_at && (
                             <div style={{ marginTop: 4 }}>
-                              <button onClick={() => aprobar(f)} disabled={revisando !== null || f.revision === "aprobada"}
+                              <button onClick={() => aprobar(f)} disabled={revisando !== null || f.estado === "aprobada"}
                                 style={{ border: "1px solid #16a34a", borderRadius: 5, padding: "4px 10px", fontSize: 10.5,
-                                  background: f.revision === "aprobada" ? "#16a34a" : "#fff",
-                                  color: f.revision === "aprobada" ? "#fff" : "#16a34a", cursor: "pointer" }}>
+                                  background: f.estado === "aprobada" ? "#16a34a" : "#fff",
+                                  color: f.estado === "aprobada" ? "#fff" : "#16a34a", cursor: "pointer" }}>
                                 {revisando === f.id ? "…" : "Aprobar"}
                               </button>
                               <button onClick={() => { setRechazo({ p, f }); setMotivo(f.revision_motivo || ""); }}
                                 disabled={revisando !== null}
                                 style={{ marginLeft: 4, border: "1px solid #dc2626", borderRadius: 5, padding: "4px 10px", fontSize: 10.5,
-                                  background: f.revision === "rechazada" ? "#dc2626" : "#fff",
-                                  color: f.revision === "rechazada" ? "#fff" : "#dc2626", cursor: "pointer" }}>
+                                  background: f.estado === "rechazada" ? "#dc2626" : "#fff",
+                                  color: f.estado === "rechazada" ? "#fff" : "#dc2626", cursor: "pointer" }}>
                                 Rechazar
                               </button>
                             </div>
