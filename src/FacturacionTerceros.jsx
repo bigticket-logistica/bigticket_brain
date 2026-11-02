@@ -266,7 +266,18 @@ export default function FacturacionTerceros({ usuario }) {
     return { visibles: v, resumen: r };
   }, [filas, filtro, busca]);
 
+  // La prefactura se guarda como .html y Supabase la entrega como texto plano
+  // (por eso se veía el código). Se descarga y se abre como página. La ventana
+  // se abre antes de esperar la descarga para que el navegador no la bloquee.
   const abrir = async (path) => {
+    if (/\.html?$/i.test(path || "")) {
+      const ventana = window.open("", "_blank");
+      const { data: blob, error } = await sb.storage.from("proceso_certificacion_bt").download(path);
+      if (error || !blob) { if (ventana) ventana.close(); setMsg({ ok: false, txt: "No se pudo abrir la prefactura." }); return; }
+      const url = URL.createObjectURL(new Blob([await blob.text()], { type: "text/html;charset=utf-8" }));
+      if (ventana) ventana.location.href = url; else window.open(url, "_blank");
+      return;
+    }
     const { data } = await sb.storage.from("proceso_certificacion_bt").createSignedUrl(path, 300);
     if (data?.signedUrl) window.open(data.signedUrl, "_blank");
   };
