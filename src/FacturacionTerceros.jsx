@@ -202,22 +202,26 @@ export default function FacturacionTerceros({ usuario }) {
   // 1) Leer y comparar: lee cada factura, compara los netos y Biggy marca en
   // rojo lo que no es de Ingreso. Va de a 10 por llamada (el servidor tiene
   // tiempo límite) y se repite hasta que no quede ninguna por leer.
+  // Solo la semana elegida en el selector; con "Todas las semanas", todo.
+  const filtroSemana = semana != null ? `&semana=${semana}` : "";
+  const deLaSemana = semana != null ? ` de la semana ${semana}` : "";
+
   const leerPendientes = async () => {
     setValidando("leer"); setMsg(null);
     try {
       const l = { revisadas: 0, prerechazadas: 0 };
       for (let vuelta = 0; vuelta < 30; vuelta++) {
         setMsg({ ok: true, txt: `Leyendo facturas… ${l.revisadas} leída(s)` });
-        const r = await fetch(`${BRAIN_API}?reintentar=1&solo_lectura=1`);
+        const r = await fetch(`${BRAIN_API}?reintentar=1&solo_lectura=1${filtroSemana}`);
         const j = await r.json();
         if (!j.ok) throw new Error(j.error || "Sin detalle");
         l.revisadas += j.revisadas; l.prerechazadas += j.prerechazadas || 0;
         if (j.revisadas < 10) break;
       }
       setMsg({ ok: true, txt: l.revisadas
-        ? `${l.revisadas} factura(s) leída(s) y comparada(s)` +
+        ? `${l.revisadas} factura(s)${deLaSemana} leída(s) y comparada(s)` +
           (l.prerechazadas ? `, ${l.prerechazadas} prerrechazada(s) por Biggy para tu revisión (no son de Ingreso).` : ".")
-        : "No hay facturas nuevas por leer." });
+        : `No hay facturas nuevas por leer${deLaSemana}.` });
       await cargar();
     } catch (e) { setMsg({ ok: false, txt: "No se pudieron leer: " + (e.message || e) }); }
     setValidando(null);
@@ -228,13 +232,13 @@ export default function FacturacionTerceros({ usuario }) {
   const validarSat = async () => {
     setValidando("sat"); setMsg({ ok: true, txt: "Consultando al SAT…" });
     try {
-      const r = await fetch(`${BRAIN_API}?reintentar=1`);
+      const r = await fetch(`${BRAIN_API}?reintentar=1${filtroSemana}`);
       const j = await r.json();
       if (!j.ok) throw new Error(j.error || "Sin detalle");
       setMsg({ ok: true, txt: j.revisadas
         ? `SAT: ${j.vigentes} vigentes, ${j.con_problema} con problema, ${j.sin_respuesta} sin respuesta` +
           (j.revisadas === 5 ? ". Quedan más: vuelve a apretar." : ".")
-        : "SAT: no hay facturas pendientes de validar." });
+        : `SAT: no hay facturas pendientes de validar${deLaSemana}.` });
       await cargar();
     } catch (e) { setMsg({ ok: false, txt: "El SAT no respondió; vuelve a intentar en un rato. (" + (e.message || e) + ")" }); }
     setValidando(null);
