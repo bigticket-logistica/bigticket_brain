@@ -166,13 +166,16 @@ async function prerrechazar(f, efecto) {
 
 export default async function handler(req, res) {
   try {
-    const { factura_id, reintentar, solo_lectura } = req.query || {};
+    const { factura_id, reintentar, solo_lectura, semana } = req.query || {};
 
     // Una factura puntual, o las que quedaron sin validar. Lo segundo es para
     // el reintento: una factura recién timbrada puede tardar en aparecer en el
     // SAT, así que un "no encontrado" al subirla no significa que sea falsa.
     let q = sb.from("facturas_tercero")
       .select("id, uuid, rfc_emisor, rfc_receptor, monto_factura, monto_prefactura, nombre_archivo, storage_path, tercero_id, validaciones, subtotal_factura, sat_estado, estado, conciliacion_id");
+    // Los botones generales trabajan sobre la semana que el analista tiene
+    // elegida; sin semana (Todas las semanas) toman todo lo pendiente.
+    if (!factura_id && semana) q = q.eq("semana", Number(semana));
     if (factura_id) q = q.eq("id", factura_id);
     // El botón general toma todo lo que falta: sin leer, sin neto o sin SAT.
     // La lectura es rápida (50 por vuelta); el SAT es lento y la función tiene
