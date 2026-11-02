@@ -180,9 +180,11 @@ export default async function handler(req, res) {
     // Lectura: todo lo que falta leer (sin folio, sin neto o sin el tipo de
     // comprobante). SAT: solo lo que ya tiene datos y nunca se consultó, para
     // que una factura imposible de validar no tape a las demás.
+    // Una factura queda "leída" cuando tiene anotado el tipo de comprobante
+    // (aunque sea "desconocido"): así las ilegibles no se repiten en cada vuelta.
     else if (reintentar && solo_lectura) q = q
-      .or("subtotal_factura.is.null,uuid.is.null,validaciones->>efecto.is.null")
-      .neq("estado", "rechazada").limit(50);
+      .is("validaciones->>efecto", null)
+      .neq("estado", "rechazada").limit(10);
     else if (reintentar) q = q
       .is("sat_validado_at", null).not("uuid", "is", null)
       .or("validaciones->>total_redondeado.is.null,validaciones->>total_redondeado.eq.false")
@@ -209,7 +211,17 @@ export default async function handler(req, res) {
           }).eq("id", f.id);
           f.validaciones = validaciones;
           if (m) f.subtotal_factura = Number(m[1]);
-        } catch (e) { console.error("No se pudo leer el XML de", f.id, e); }
+        } catch (e) {
+          console.error("No se pudo leer el XML de", f.id, e);
+          const validaciones = { ...(f.validaciones || {}), efecto: "desconocido", error_lectura: String(e.message || e).slice(0, 200) };
+          await sb.from("facturas_tercero").update({ validaciones }).eq("id", f.id);
+          f.validaciones = validaciones;
+        }
+      }
+      if (f.validaciones?.efecto == null && !/\.(pdf|xml)$/i.test(f.storage_path || "")) {
+        const validaciones = { ...(f.validaciones || {}), efecto: "desconocido" };
+        await sb.from("facturas_tercero").update({ validaciones }).eq("id", f.id);
+        f.validaciones = validaciones;
       }
       // Si vino solo el PDF, se leen los datos de ahí antes de preguntar al SAT.
       if ((!f.uuid || f.monto_factura == null || f.subtotal_factura == null || f.validaciones?.efecto == null)
@@ -241,9 +253,19 @@ export default async function handler(req, res) {
               Object.assign(f, datos);
             }
             f._redondeado = leido.total_redondeado;
+          } else {
+            // Sin folio (escaneo o formato raro): igual se guarda el tipo de
+            // comprobante si se leyó, para el prerrechazo y para no releerla
+            // en cada vuelta.
+            const validaciones = { ...(f.validaciones || {}), leido_de: "pdf", efecto: leido?.efecto || "desconocido" };
+            await sb.from("facturas_tercero").update({ validaciones }).eq("id", f.id);
+            f.validaciones = validaciones;
           }
         } catch (e) {
           console.error("No se pudo leer el PDF de", f.id, e);
+          const validaciones = { ...(f.validaciones || {}), efecto: "desconocido", error_lectura: String(e.message || e).slice(0, 200) };
+          await sb.from("facturas_tercero").update({ validaciones }).eq("id", f.id);
+          f.validaciones = validaciones;
         }
       }
 
