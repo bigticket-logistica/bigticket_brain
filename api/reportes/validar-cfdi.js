@@ -31,25 +31,45 @@ const RE = {
   rfcReceptor: /RFC\s*receptor\s*:?\s*([A-ZÑ&]{3,4}\d{6}[A-Z0-9]{3})/i,
   total: /\bTotal\b[^\d$]{0,40}\$?\s*([\d,]+\.\d{2})/i,
   fecha: /(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})/,
+  fechaDmy: /(\d{2})\/(\d{2})\/(\d{4})\s+(\d{2}:\d{2}:\d{2})/,
+  rfcCualquiera: /\bRFC\b\s*:?\s*([A-ZÑ&]{3,4}\d{6}[A-Z0-9]{3})\b/gi,
 };
 
 async function leerPdf(buffer) {
   // pdf-parse extrae la capa de texto. Si el PDF es un escaneo no hay capa y
   // devuelve vacío: ahí no se puede validar y hay que pedir el XML.
   const pdfParse = (await import("pdf-parse")).default;
-  const { text } = await pdfParse(buffer);
-  if (!text || text.trim().length < 50) return null;
+  const { text: crudo } = await pdfParse(buffer);
+  if (!crudo || crudo.trim().length < 50) return null;
+
+  // Cada facturador arma el PDF a su manera. Se normaliza lo que rompía la
+  // lectura: guiones tipográficos (‐ – —) en el folio fiscal en vez del guion
+  // común, y palabras con letras separadas ("T O T A L").
+  const text = crudo
+    .replace(/[\u2010-\u2015\u2212]/g, "-")
+    .replace(/T\s+O\s+T\s+A\s+L/gi, "TOTAL");
 
   const uno = (re) => { const m = text.match(re); return m ? m[1] : null; };
   const total = uno(RE.total);
+
+  // Si el PDF no dice "RFC emisor" / "RFC receptor", se toman los RFC
+  // etiquetados en orden: el primero es el del emisor (encabezado) y el
+  // siguiente distinto, el del cliente. El RFC del PAC en la cadena original
+  // no lleva la etiqueta "RFC", así que no entra.
+  const etiquetados = [...text.matchAll(RE.rfcCualquiera)].map(m => m[1].toUpperCase());
+  const rfcEmisor = (uno(RE.rfcEmisor) || etiquetados[0] || "").toUpperCase() || null;
+  const rfcReceptor = (uno(RE.rfcReceptor) || etiquetados.find(r => r !== rfcEmisor) || "").toUpperCase() || null;
+
   return {
     uuid: (uno(RE.uuid) || "").toUpperCase() || null,
-    rfc_emisor: (uno(RE.rfcEmisor) || "").toUpperCase() || null,
-    rfc_receptor: (uno(RE.rfcReceptor) || "").toUpperCase() || null,
+    rfc_emisor: rfcEmisor,
+    rfc_receptor: rfcReceptor,
     total: total ? Number(total.replace(/,/g, "")) : null,
     fecha_emision: (() => {
       const m = text.match(RE.fecha);
-      return m ? `${m[1]}T${m[2]}` : null;
+      if (m) return `${m[1]}T${m[2]}`;
+      const d = text.match(RE.fechaDmy);   // 28/10/2026 10:51:30
+      return d ? `${d[3]}-${d[2]}-${d[1]}T${d[4]}` : null;
     })(),
   };
 }
