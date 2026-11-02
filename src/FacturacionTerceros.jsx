@@ -196,38 +196,47 @@ export default function FacturacionTerceros({ usuario }) {
     await cargar();
   };
 
-  const validarPendientes = async () => {
-    setValidando("todas"); setMsg(null);
-    // Primero se leen todas y se comparan los netos (rápido, no depende del
-    // SAT); en esa misma vuelta Biggy prerrechaza lo que no es Ingreso. Después
-    // se consulta al SAT de a 5, que es lento: si quedan, se vuelve a apretar.
+  // Dos botones separados: leer es rápido y no depende del SAT; el SAT es
+  // lento y se cae seguido, así que no debe trabar la lectura.
+
+  // 1) Leer y comparar: lee cada factura, compara los netos y Biggy marca en
+  // rojo lo que no es de Ingreso. Va de a 10 por llamada (el servidor tiene
+  // tiempo límite) y se repite hasta que no quede ninguna por leer.
+  const leerPendientes = async () => {
+    setValidando("leer"); setMsg(null);
     try {
-      // La lectura va de a 10 por llamada (el servidor tiene tiempo límite):
-      // se repite hasta que no quede ninguna por leer.
       const l = { revisadas: 0, prerechazadas: 0 };
       for (let vuelta = 0; vuelta < 30; vuelta++) {
         setMsg({ ok: true, txt: `Leyendo facturas… ${l.revisadas} leída(s)` });
-        const r1 = await fetch(`${BRAIN_API}?reintentar=1&solo_lectura=1`);
-        const j1 = await r1.json();
-        if (!j1.ok) throw new Error(j1.error || "Sin detalle");
-        l.revisadas += j1.revisadas; l.prerechazadas += j1.prerechazadas || 0;
-        if (j1.revisadas < 10) break;
-      }
-      await cargar();
-      let txtSat = "";
-      try {
-        const r2 = await fetch(`${BRAIN_API}?reintentar=1`);
-        const j = await r2.json();
+        const r = await fetch(`${BRAIN_API}?reintentar=1&solo_lectura=1`);
+        const j = await r.json();
         if (!j.ok) throw new Error(j.error || "Sin detalle");
-        txtSat = j.revisadas
-          ? ` SAT: ${j.vigentes} vigentes, ${j.con_problema} con problema, ${j.sin_respuesta} sin respuesta` +
-            (j.revisadas === 5 ? " · quedan más, vuelve a apretar." : ".")
-          : " SAT: no hay pendientes.";
-      } catch (e) { txtSat = " El SAT no respondió; vuelve a intentar en un rato."; }
-      setMsg({ ok: true, txt: `${l.revisadas} leída(s)` +
-        (l.prerechazadas ? `, ${l.prerechazadas} prerrechazada(s) por Biggy para tu revisión (no son de Ingreso)` : "") + "." + txtSat });
+        l.revisadas += j.revisadas; l.prerechazadas += j.prerechazadas || 0;
+        if (j.revisadas < 10) break;
+      }
+      setMsg({ ok: true, txt: l.revisadas
+        ? `${l.revisadas} factura(s) leída(s) y comparada(s)` +
+          (l.prerechazadas ? `, ${l.prerechazadas} prerrechazada(s) por Biggy para tu revisión (no son de Ingreso).` : ".")
+        : "No hay facturas nuevas por leer." });
       await cargar();
-    } catch (e) { setMsg({ ok: false, txt: "No se pudieron revisar: " + (e.message || e) }); }
+    } catch (e) { setMsg({ ok: false, txt: "No se pudieron leer: " + (e.message || e) }); }
+    setValidando(null);
+  };
+
+  // 2) Validar en el SAT: solo las que ya tienen datos y nunca se consultaron,
+  // de a 5 por vez. Si quedan, se vuelve a apretar.
+  const validarSat = async () => {
+    setValidando("sat"); setMsg({ ok: true, txt: "Consultando al SAT…" });
+    try {
+      const r = await fetch(`${BRAIN_API}?reintentar=1`);
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || "Sin detalle");
+      setMsg({ ok: true, txt: j.revisadas
+        ? `SAT: ${j.vigentes} vigentes, ${j.con_problema} con problema, ${j.sin_respuesta} sin respuesta` +
+          (j.revisadas === 5 ? ". Quedan más: vuelve a apretar." : ".")
+        : "SAT: no hay facturas pendientes de validar." });
+      await cargar();
+    } catch (e) { setMsg({ ok: false, txt: "El SAT no respondió; vuelve a intentar en un rato. (" + (e.message || e) + ")" }); }
     setValidando(null);
   };
 
@@ -330,11 +339,17 @@ export default function FacturacionTerceros({ usuario }) {
             cursor: pagando || nSel === 0 ? "not-allowed" : "pointer" }}>
           {pagando ? "Marcando…" : nSel === 0 ? "Marcar como pagadas" : `Marcar ${nSel} como pagadas`}
         </button>
-        <button onClick={validarPendientes} disabled={validando !== null}
+        <button onClick={leerPendientes} disabled={validando !== null}
           style={{ padding: "9px 18px", borderRadius: 8, border: "none", fontSize: 12.5, fontWeight: 700,
-            background: validando ? "#cbd5e1" : "#1a3a6b", color: "#fff",
+            background: validando ? "#cbd5e1" : "#1a3a6b", color: "#fff", marginRight: 8,
             cursor: validando ? "not-allowed" : "pointer" }}>
-          {validando === "todas" ? "Revisando…" : "Revisar todas las pendientes"}
+          {validando === "leer" ? "Leyendo…" : "Leer y comparar"}
+        </button>
+        <button onClick={validarSat} disabled={validando !== null}
+          style={{ padding: "9px 18px", borderRadius: 8, border: "1px solid #1a3a6b", fontSize: 12.5, fontWeight: 700,
+            background: validando ? "#f1f5f9" : "#fff", color: "#1a3a6b",
+            cursor: validando ? "not-allowed" : "pointer" }}>
+          {validando === "sat" ? "Consultando…" : "Validar en el SAT"}
         </button>
       </div>
 
