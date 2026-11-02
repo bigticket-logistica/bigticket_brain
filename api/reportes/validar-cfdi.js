@@ -142,9 +142,11 @@ export default async function handler(req, res) {
     // el reintento: una factura recién timbrada puede tardar en aparecer en el
     // SAT, así que un "no encontrado" al subirla no significa que sea falsa.
     let q = sb.from("facturas_tercero")
-      .select("id, uuid, rfc_emisor, rfc_receptor, monto_factura, monto_prefactura, nombre_archivo, storage_path, tercero_id, validaciones, subtotal_factura");
+      .select("id, uuid, rfc_emisor, rfc_receptor, monto_factura, monto_prefactura, nombre_archivo, storage_path, tercero_id, validaciones, subtotal_factura, sat_estado");
     if (factura_id) q = q.eq("id", factura_id);
-    else if (reintentar) q = q.is("sat_validado_at", null).limit(50);
+    // El botón general toma todo lo que falta: sin leer, sin neto o sin SAT.
+    else if (reintentar) q = q.or("sat_validado_at.is.null,subtotal_factura.is.null,uuid.is.null")
+      .neq("estado", "rechazada").limit(50);
     else return res.status(200).json({ ok: false, error: "Pasa factura_id, o reintentar=1 para las pendientes." });
 
     const { data: facturas, error } = await q;
@@ -194,6 +196,13 @@ export default async function handler(req, res) {
       if (!f.uuid || !f.rfc_emisor || !f.rfc_receptor || f.monto_factura == null) {
         resultados.push({ id: f.id, uuid: f.uuid, estado: null,
           nota: "No se pudieron leer los datos del comprobante. Si es un escaneo, hay que subir el XML." });
+        continue;
+      }
+      // En el botón general, una factura que el SAT ya dio vigente no se le
+      // vuelve a preguntar: solo faltaba leerle el neto. El botón SAT de la
+      // fila (factura_id) sí consulta siempre.
+      if (!factura_id && String(f.sat_estado || "").toLowerCase() === "vigente") {
+        resultados.push({ id: f.id, uuid: f.uuid, estado: f.sat_estado, vigente: true, nota: "Ya validada; se completó la lectura." });
         continue;
       }
       // Con el total redondeado el SAT respondería "no encontrada" aunque la
