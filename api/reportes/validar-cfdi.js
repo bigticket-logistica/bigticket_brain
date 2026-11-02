@@ -29,7 +29,8 @@ const RE = {
   uuid: /\b([0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{8,12})\b/i,
   rfcEmisor: /RFC\s*emisor\s*:?\s*([A-ZÑ&]{3,4}\d{6}[A-Z0-9]{3})/i,
   rfcReceptor: /RFC\s*receptor\s*:?\s*([A-ZÑ&]{3,4}\d{6}[A-Z0-9]{3})/i,
-  total: /\bTotal\b[^\d$]{0,40}\$?\s*([\d,]+\.\d{2})/i,
+  // Algunos facturadores imprimen el total redondeado, sin centavos ("$ 14,557").
+  total: /\bTotal\b[^\d$]{0,40}\$?\s*(\d[\d,]*(?:\.\d{1,6})?)/i,
   fecha: /(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})/,
   fechaDmy: /(\d{2})\/(\d{2})\/(\d{4})\s+(\d{2}:\d{2}:\d{2})/,
   rfcCualquiera: /\bRFC\b\s*:?\s*([A-ZÑ&]{3,4}\d{6}[A-Z0-9]{3})\b/gi,
@@ -65,6 +66,9 @@ async function leerPdf(buffer) {
     rfc_emisor: rfcEmisor,
     rfc_receptor: rfcReceptor,
     total: total ? Number(total.replace(/,/g, "")) : null,
+    // Sin centavos el total es aproximado: sirve para ver si cuadra con la
+    // prefactura, pero no para el SAT, que compara el total exacto.
+    total_redondeado: total ? !total.includes(".") : false,
     fecha_emision: (() => {
       const m = text.match(RE.fecha);
       if (m) return `${m[1]}T${m[2]}`;
@@ -134,7 +138,7 @@ export default async function handler(req, res) {
     // el reintento: una factura recién timbrada puede tardar en aparecer en el
     // SAT, así que un "no encontrado" al subirla no significa que sea falsa.
     let q = sb.from("facturas_tercero")
-      .select("id, uuid, rfc_emisor, rfc_receptor, monto_factura, monto_prefactura, nombre_archivo, storage_path, tercero_id");
+      .select("id, uuid, rfc_emisor, rfc_receptor, monto_factura, monto_prefactura, nombre_archivo, storage_path, tercero_id, validaciones");
     if (factura_id) q = q.eq("id", factura_id);
     else if (reintentar) q = q.is("sat_validado_at", null).limit(50);
     else return res.status(200).json({ ok: false, error: "Pasa factura_id, o reintentar=1 para las pendientes." });
@@ -159,11 +163,12 @@ export default async function handler(req, res) {
               uuid: leido.uuid, rfc_emisor: leido.rfc_emisor,
               rfc_receptor: leido.rfc_receptor, monto_factura: leido.total,
               fecha_emision: leido.fecha_emision, diferencia: dif,
-              validaciones: { leido_de: "pdf", problemas: [] },
+              validaciones: { leido_de: "pdf", problemas: [], total_redondeado: leido.total_redondeado },
             }).eq("id", f.id);
             Object.assign(f, {
               uuid: leido.uuid, rfc_emisor: leido.rfc_emisor,
               rfc_receptor: leido.rfc_receptor, monto_factura: leido.total,
+              _redondeado: leido.total_redondeado,
             });
           }
         } catch (e) {
@@ -174,6 +179,14 @@ export default async function handler(req, res) {
       if (!f.uuid || !f.rfc_emisor || !f.rfc_receptor || f.monto_factura == null) {
         resultados.push({ id: f.id, uuid: f.uuid, estado: null,
           nota: "No se pudieron leer los datos del comprobante. Si es un escaneo, hay que subir el XML." });
+        continue;
+      }
+      // Con el total redondeado el SAT respondería "no encontrada" aunque la
+      // factura sea buena. Se deja el monto para ver si cuadra y se pide el XML.
+      // Se mira también lo guardado: en el reintento el PDF ya no se vuelve a leer.
+      if (f._redondeado || f.validaciones?.total_redondeado) {
+        resultados.push({ id: f.id, uuid: f.uuid, estado: null,
+          nota: "El PDF trae el total sin centavos: se ve si cuadra, pero para validar ante el SAT hace falta el XML." });
         continue;
       }
       try {
