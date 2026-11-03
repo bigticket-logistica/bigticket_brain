@@ -100,7 +100,7 @@ export default function EvaluacionBiggy({ usuario }) {
   const cargar = useCallback(async () => {
     try {
       const [c, t, e] = await Promise.all([
-        api("canon_casos_cl?select=card_id,canal,creado_en,pedido,motivo,texto,titulo,respuesta,biggy_clasificacion,biggy_razon,ejecutiva_clasificacion,revision_calificacion,revision_falta,revision_razon,revision_de&order=creado_en.desc&limit=2000"),
+        api("canon_casos_cl?select=card_id,canal,creado_en,pedido,motivo,texto,titulo,respuesta,fase,cerrado_en,supervisor,biggy_clasificacion,biggy_razon,ejecutiva_clasificacion,revision_calificacion,revision_falta,revision_razon,revision_de&order=creado_en.desc&limit=2000"),
         api("postventa_tareas_cl?revision_calificacion=not.is.null&select=id,card_id,ceco,titulo,que_pide,respuesta,revision_calificacion,revision_falta,revision_razon,revisada_en&order=revisada_en.desc&limit=500"),
         api("postventa_evaluacion_cl?select=*&order=creado_en"),
       ]);
@@ -217,6 +217,17 @@ export default function EvaluacionBiggy({ usuario }) {
               <div style={{ border: `1px solid ${C.borde}`, borderRadius: 10, padding: "8px 12px" }}>
                 <div style={{ fontSize: 11.5, color: C.suave, fontWeight: 600 }}>EJECUTIVA</div>
                 <div style={{ fontSize: 14, fontWeight: 700, color: C.navy }}>{CLAS[c.ejecutiva_clasificacion] || c.ejecutiva_clasificacion}</div>
+                <div style={{ fontSize: 12.5, color: C.suave, marginTop: 4 }}>
+                  Fase en Pipefy: <b style={{ color: C.texto }}>{c.fase || "—"}</b>
+                  {c.cerrado_en ? ` · cerrado el ${fecha(c.cerrado_en)}` : ""}
+                  {c.supervisor ? ` · supervisor: ${c.supervisor}` : ""}
+                </div>
+                <div style={{ fontSize: 11.5, color: C.suave, fontWeight: 600, marginTop: 8 }}>RESPUESTA EN PIPEFY</div>
+                <div style={{ fontSize: 13, color: c.respuesta ? C.texto : C.tenue, whiteSpace: "pre-wrap", maxHeight: 140, overflow: "auto", lineHeight: 1.45 }}>
+                  {c.respuesta || "Sin respuesta registrada en la tarjeta"}
+                </div>
+                <a href={`https://app.pipefy.com/open-cards/${c.card_id}`} target="_blank" rel="noreferrer"
+                  style={{ display: "inline-block", marginTop: 6, fontSize: 12.5, fontWeight: 600, color: C.navy }}>Ver tarjeta en Pipefy ↗</a>
               </div>
               <div style={{ border: `1px solid ${C.borde}`, borderRadius: 10, padding: "8px 12px" }}>
                 <div style={{ fontSize: 11.5, color: C.suave, fontWeight: 600 }}>BIGGY</div>
