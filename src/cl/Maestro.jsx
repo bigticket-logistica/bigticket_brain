@@ -218,6 +218,12 @@ async function indiceCertronicCompleto(filasExcel, jornada) {
   return m;
 }
 
+// Para otros maestros (Canon): empresa de una lista de patentes con la misma regla.
+async function empresasDePatentes(patentes) {
+  const excel = await apiSuave("vw_cert_vehiculo_vigente?select=patente,tercero,rut_tercero,estado&limit=5000", []);
+  return indiceCertronicCompleto(excel, (patentes || []).map(p => ({ patente: p })));
+}
+
 function Etiqueta({ texto, color, fondo }) {
   return (
     <span style={{
@@ -1615,7 +1621,7 @@ function ModuloMaestroCL({ usuario } = {}) {
 
       <div className="mj-wrap" style={{ padding: "16px 24px 28px" }}>
         {/* CANON: su propio maestro, sin esperar ni mostrar nada de MELI */}
-        {cliente === "canon" && fecha && <MaestroCanon fecha={fecha} api={api} apiSuave={apiSuave} descargarCSV={descargarCSV} />}
+        {cliente === "canon" && fecha && <MaestroCanon fecha={fecha} api={api} apiSuave={apiSuave} descargarCSV={descargarCSV} empresasDePatentes={empresasDePatentes} />}
 
         {cliente === "meli" && error && (
           <div style={{ background: "#fff4f4", border: "1px solid #f2c9c9", borderRadius: 10, padding: "12px 14px", marginBottom: 14 }}>

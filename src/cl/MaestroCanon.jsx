@@ -9,6 +9,10 @@
 // Mientras el analista compara con el maestro manual, lo dudoso se marca como
 // alerta: guías sin cerrar, región sin CECO, patente no válida, líneas que no
 // cuadran. El maestro trae TODO; las alertas no quitan filas.
+//
+// Empresa de cada patente: la misma regla que el maestro de MELI (función
+// empresasDePatentes de Maestro.jsx): manda Certronic (certronic_vehiculos_cl) y,
+// si la patente no está, el Excel Maestro Certificación.
 // ═══════════════════════════════════════════════════════════════════════════
 import { useEffect, useState } from "react";
 
@@ -31,6 +35,8 @@ const hoyCL = () => new Intl.DateTimeFormat("en-CA", { timeZone: "America/Santia
   month: "2-digit", day: "2-digit" }).format(new Date());
 
 // Patente chilena: 4 letras + 2 números (nueva) o 2 letras + 4 números (antigua)
+// Una guía puede traer más de una patente en "patentes"
+const listaPatentes = (s) => String(s || "").split(/[,;/|]+/).map((p) => p.toUpperCase().replace(/[^A-Z0-9]/g, "")).filter(Boolean);
 const patenteValida = (p) => /^([A-Z]{4}\d{2}|[A-Z]{2}\d{4})$/.test(String(p || "").toUpperCase().replace(/[^A-Z0-9]/g, ""));
 
 // Alertas para el analista: no quitan la guía del maestro
@@ -265,8 +271,38 @@ function CompararManual({ fecha, api, descargarCSV }) {
   );
 }
 
-export default function MaestroCanon({ fecha, api, apiSuave, descargarCSV }) {
+// Empresa (Certronic) de las patentes de una guía o ruta, como en el maestro de MELI
+function Empresa({ patentes, emp }) {
+  const ps = listaPatentes(patentes);
+  if (!ps.length) return <span style={{ color: "#cbd5e1" }}>—</span>;
+  return (
+    <div style={{ display: "grid", gap: 2, minWidth: 170, maxWidth: 220 }}>
+      {ps.map((p) => {
+        const e = emp[p];
+        if (!e) return <span key={p}><EtiquetaC texto="SIN REGISTRO" color={AMBAR} fondo="#fdf6e3" />{ps.length > 1 ? ` ${p}` : ""}</span>;
+        return (
+          <div key={p} style={{ fontSize: 11.5, color: "#334155", lineHeight: 1.25 }}
+               title={[e.tercero, e.rut_tercero && `RUT ${e.rut_tercero}`, e.estado && `Certronic: ${e.estado}`].filter(Boolean).join(" · ")}>
+            {ps.length > 1 && <b>{p}: </b>}{e.tercero}
+            {e.estado && e.estado !== "ACTIVA" && <span style={{ marginLeft: 5 }}><EtiquetaC texto={e.estado} color={ROJO} fondo="#fdecea" /></span>}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+function EtiquetaC({ texto, color, fondo }) {
+  return <span style={{ display: "inline-block", padding: "1px 7px", borderRadius: 10, fontSize: 10.5, fontWeight: 700,
+                        color, background: fondo, whiteSpace: "nowrap" }}>{texto}</span>;
+}
+const textoEmpresa = (patentes, emp) => {
+  const ps = listaPatentes(patentes);
+  return ps.length ? ps.map((p) => (emp[p] ? emp[p].tercero : "SIN REGISTRO")).join(" / ") : "";
+};
+
+export default function MaestroCanon({ fecha, api, apiSuave, descargarCSV, empresasDePatentes }) {
   const [filas, setFilas] = useState(null);
+  const [emp, setEmp] = useState({});   // patente → { tercero, rut_tercero, estado }
   const [error, setError] = useState("");
   const [vista, setVista] = useState("guias");   // guias · rutas · comparar
   const [f, setF] = useState({ servicio: "", cecos: "", busca: "", soloAlertas: false });
@@ -277,6 +313,11 @@ export default function MaestroCanon({ fecha, api, apiSuave, descargarCSV }) {
     const d = await apiSuave(`vw_maestro_canon?fecha=eq.${fecha}&order=idViajes.asc,FOLIO_GUIA.asc&limit=20000`, null, fallos);
     if (d === null) { setError("No se pudo leer el maestro de Canon" + (fallos.length ? ": " + fallos.join(" | ") : "") + ". ¿Falta correr la migración 80?"); setFilas([]); return; }
     setError(""); setFilas(d);
+    // Empresa de cada patente del día (Certronic y, si falta, el Excel de Certificación)
+    if (empresasDePatentes) {
+      try { setEmp(await empresasDePatentes([...new Set(d.flatMap((r) => listaPatentes(r.patentes)))])); }
+      catch (e) { setEmp({}); }
+    }
   };
   useEffect(() => { setFilas(null); cargar(); const t = setInterval(cargar, 5 * 60 * 1000); return () => clearInterval(t); }, [fecha]);   // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -289,7 +330,7 @@ export default function MaestroCanon({ fecha, api, apiSuave, descargarCSV }) {
     (!f.servicio || r.servicio === f.servicio) &&
     (!f.cecos || (f.cecos === "_sin" ? !r.cecos : r.cecos === f.cecos)) &&
     (!f.soloAlertas || r._alertas.length) &&
-    (!texto || [r.idViajes, r.FOLIO_GUIA, r.patentes, r.conductor, r.DIRECCION, r.comuna]
+    (!texto || [r.idViajes, r.FOLIO_GUIA, r.patentes, r.conductor, r.DIRECCION, r.comuna, textoEmpresa(r.patentes, emp)]
       .some((c) => String(c ?? "").toLowerCase().includes(texto))));
 
   const um = vistaFilas.filter((r) => r.servicio === "UM");
@@ -310,7 +351,8 @@ export default function MaestroCanon({ fecha, api, apiSuave, descargarCSV }) {
   }).sort((a, b) => b.um + b.troncal - (a.um + a.troncal));
 
   const descargar = () => descargarCSV(`maestro_canon_${fecha}`, vistaFilas,
-    COLUMNAS_MAESTRO.map((c) => ({ titulo: c, valor: (r) => (c === "VOLUMEN" ? String(r[c] ?? "").replace(".", ",") : r[c]) })));
+    [...COLUMNAS_MAESTRO.map((c) => ({ titulo: c, valor: (r) => (c === "VOLUMEN" ? String(r[c] ?? "").replace(".", ",") : r[c]) })),
+     { titulo: "EMPRESA", valor: (r) => textoEmpresa(r.patentes, emp) }]);
 
   const chip = (k, v, t) => (
     <button key={v} className="mj-btn" onClick={() => setF((x) => ({ ...x, [k]: x[k] === v ? "" : v }))}
@@ -343,7 +385,7 @@ export default function MaestroCanon({ fecha, api, apiSuave, descargarCSV }) {
       <div style={{ background: "#fff", border: "1px solid #e6e9ef", borderRadius: 10, padding: "10px 16px", marginBottom: 12,
                     display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
         {vista !== "comparar" && <>
-        <input className="mj-input" placeholder="Buscar ruta, folio, patente, conductor o dirección…" value={f.busca}
+        <input className="mj-input" placeholder="Buscar ruta, folio, patente, empresa, conductor o dirección…" value={f.busca}
                onChange={(e) => setF((x) => ({ ...x, busca: e.target.value }))} style={{ minWidth: 300, flex: 1 }} />
         {chip("servicio", "UM", "UM")}{chip("servicio", "TRONCAL", "Troncal")}
         {chip("cecos", "C_RM", "C_RM")}{chip("cecos", "C_VIÑA", "C_VIÑA")}{chip("cecos", "_sin", "Sin CECO")}
@@ -372,7 +414,7 @@ export default function MaestroCanon({ fecha, api, apiSuave, descargarCSV }) {
       {filas.length > 0 && vista === "rutas" && (
         <div style={{ overflowX: "auto" }}>
           <table className="mj-tabla">
-            <thead><tr><th>ID viaje</th><th>Patente</th><th>Conductor</th><th>CECO</th><th className="num">Guías UM</th>
+            <thead><tr><th>ID viaje</th><th>Patente</th><th>Empresa (Certronic)</th><th>Conductor</th><th>CECO</th><th className="num">Guías UM</th>
               <th className="num">Troncal</th><th className="num">Carg.</th><th className="num">Entr.</th><th className="num">Dev.</th>
               <th className="num">Volumen</th><th>Alertas</th></tr></thead>
             <tbody>
@@ -380,6 +422,7 @@ export default function MaestroCanon({ fecha, api, apiSuave, descargarCSV }) {
                 <tr key={r.idViajes}>
                   <td style={{ fontWeight: 700 }}>{r.idViajes}</td>
                   <td style={{ fontWeight: 700, color: patenteValida(r.patentes) ? undefined : AMBAR }}>{r.patentes || "—"}</td>
+                  <td><Empresa patentes={r.patentes} emp={emp} /></td>
                   <td>{r.conductor || "—"}</td><td>{r.cecos}</td>
                   <td className="num">{fmt(r.um)}</td><td className="num">{fmt(r.troncal)}</td>
                   <td className="num">{fmt(r.cargados)}</td><td className="num" style={{ color: VERDE }}>{fmt(r.entregados)}</td>
@@ -397,7 +440,7 @@ export default function MaestroCanon({ fecha, api, apiSuave, descargarCSV }) {
         <div style={{ overflowX: "auto" }}>
           <table className="mj-tabla">
             <thead><tr>
-              <th>ID viaje</th><th>Folio guía</th><th>Servicio</th><th>CECO</th><th>Patente</th><th>Conductor</th>
+              <th>ID viaje</th><th>Folio guía</th><th>Servicio</th><th>CECO</th><th>Patente</th><th>Empresa (Certronic)</th><th>Conductor</th>
               <th className="num">Par.</th><th className="num">Carg.</th><th className="num">Entr.</th><th className="num">Dev.</th>
               <th>Seg. zonal</th><th>Tipo</th><th className="num">Volumen</th><th>Dirección</th><th>Estado</th><th>Alertas</th>
             </tr></thead>
@@ -409,6 +452,7 @@ export default function MaestroCanon({ fecha, api, apiSuave, descargarCSV }) {
                   <td>{r.servicio === "TRONCAL" ? <span style={{ color: NAVY, fontWeight: 700 }}>Troncal</span> : "UM"}</td>
                   <td>{r.cecos || <span style={{ color: AMBAR }}>sin CECO</span>}</td>
                   <td style={{ fontWeight: 700 }}>{r.patentes || "—"}</td>
+                  <td><Empresa patentes={r.patentes} emp={emp} /></td>
                   <td style={{ fontSize: 12 }}>{r.conductor || "—"}</td>
                   <td className="num">{r.paradas}</td>
                   <td className="num">{fmt(r.cargados)}</td>
