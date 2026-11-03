@@ -62,7 +62,8 @@ export default function ModuloReferidos({ usuario }) {
   const [reqAbiertos, setReqAbiertos] = useState(0);
   const [eliminados, setEliminados] = useState([]);
   const [anfitriones, setAnfitriones] = useState([]);
-  const [listaAnf, setListaAnf] = useState([]);   // supervisores y comercios aliados (vw_ref_brain_lista_anfitriones)
+  const [listaAnf, setListaAnf] = useState([]);
+  const [embudo, setEmbudo] = useState({ anf: [], canal: [] });   // vw_ref_brain_embudo_anfitrion / _canal   // supervisores y comercios aliados (vw_ref_brain_lista_anfitriones)
   const [mensajes, setMensajes] = useState([]);   // conversación Bigticket ↔ referidor (ref_mensajes)
   const [chatCon, setChatCon] = useState(null);   // referidor abierto en Mensajes   // referidores con "¿por dónde te enteraste?" (vw_ref_brain_anfitriones)   // referidos y referidores eliminados desde el Brain (ref_eliminados)   // requerimientos del jefe de operaciones sin atender
   const [campana, setCampana] = useState(null);        // requerimiento que se está convirtiendo en campaña
@@ -80,13 +81,16 @@ export default function ModuloReferidos({ usuario }) {
       sb.from("ref_propuestas").select("*"),
       sb.from("ref_canales").select("*").order("creado_at"),
     ]);
-    const [el, an, ms, la] = await Promise.all([
+    const [el, an, ms, la, ea, ec] = await Promise.all([
       sb.from("ref_eliminados").select("*"),
       sb.from("vw_ref_brain_anfitriones").select("*"),
       sb.from("ref_mensajes").select("*").order("creado_at").limit(5000),
       sb.from("vw_ref_brain_lista_anfitriones").select("*"),
+      sb.from("vw_ref_brain_embudo_anfitrion").select("*"),
+      sb.from("vw_ref_brain_embudo_canal").select("*"),
     ]);
     setEliminados(el.data || []); setAnfitriones(an.data || []); setMensajes(ms.data || []); setListaAnf(la.data || []);
+    setEmbudo({ anf: ea.data || [], canal: ec.data || [] });
     const rq = await sb.from("ref_requerimientos").select("id", { count: "exact", head: true }).in("estado", ["pendiente", "en_proceso"]);
     setReqAbiertos(rq.count || 0);
     // Si ref_canales no se puede leer, la pestaña sigue funcionando sin las filas de canal.
@@ -131,7 +135,7 @@ export default function ModuloReferidos({ usuario }) {
           {tab === "bonos" && <Bonos bonos={bonos} usuario={usuario} onCambio={cargar} />}
           {tab === "referidos" && <Referidos referidos={referidos} canales={canales} eliminados={elimReferidos} onEliminar={(id, m) => eliminar("referido", id, m)} />}
           {tab === "mensajes" && <Mensajes referidores={referidoresVivos} mensajes={mensajes} abierto={chatCon} setAbierto={setChatCon} usuario={usuario} onCambio={cargar} />}
-          {tab === "anfitriones" && <Anfitriones lista={anfitriones.filter((a) => !elimReferidores.has(String(a.id)))} anfitriones={listaAnf} />}
+          {tab === "anfitriones" && <Anfitriones lista={anfitriones.filter((a) => !elimReferidores.has(String(a.id)))} anfitriones={listaAnf} embudo={embudo} canales={canales} />}
           {tab === "referidores" && <Referidores referidores={referidores} canales={canales} referidos={referidosVivos} eliminados={elimReferidores} onEliminar={(id, m) => eliminar("referidor", id, m)}
             onMensaje={(id) => { setChatCon(id); setTab("mensajes"); }} />}
           {tab === "oportunidades" && <Oportunidades lista={oportunidades} centros={centros} propuestas={propuestas} usuario={usuario} onCambio={cargar}
@@ -382,7 +386,7 @@ const FUENTES_REF = [
   ["supervisor", "Supervisor BigTicket", "🦺"], ["otro", "Otro", "✳️"], ["sin_dato", "Sin dato", "—"],
 ];
 
-function Anfitriones({ lista, anfitriones = [] }) {
+function Anfitriones({ lista, anfitriones = [], embudo = { anf: [], canal: [] }, canales = [] }) {
   const [vista, setVista] = useState("anfitrion");   // anfitrion · fuente
   const [abierta, setAbierta] = useState(null);
   const selector = (
@@ -392,7 +396,7 @@ function Anfitriones({ lista, anfitriones = [] }) {
       ))}
     </div>
   );
-  if (vista === "anfitrion") return <>{selector}<PorAnfitrion lista={lista} anfitriones={anfitriones} /></>;
+  if (vista === "anfitrion") return <>{selector}<PorAnfitrion lista={lista} anfitriones={anfitriones} embudo={embudo} canales={canales} /></>;
   const grupos = FUENTES_REF.map(([k, t, ico]) => {
     const refs = lista.filter((a) => (k === "sin_dato" ? !(a.fuentes || []).length : (a.fuentes || []).includes(k)))
       .sort((x, y) => Number(y.n_referidos) - Number(x.n_referidos));
@@ -446,38 +450,51 @@ function Anfitriones({ lista, anfitriones = [] }) {
 
 // Por anfitrión: cada supervisor (código A0005…) y cada comercio aliado
 // (COMERCIO…) con los referidores que se inscribieron por su link.
-function PorAnfitrion({ lista, anfitriones }) {
+function PorAnfitrion({ lista, anfitriones, embudo = { anf: [], canal: [] }, canales = [] }) {
   const [abierto, setAbierto] = useState(null);
+  const em = Object.fromEntries((embudo.anf || []).map((e) => [e.codigo, e]));
+  const n = (v) => Number(v || 0);
   const filas = anfitriones.map((a) => {
     const refs = lista.filter((r) => r.anfitrion === a.codigo).sort((x, y) => Number(y.n_referidos) - Number(x.n_referidos));
-    return { ...a, refs, referidos: refs.reduce((n, r) => n + Number(r.n_referidos || 0), 0) };
-  }).sort((x, y) => (y.refs.length - x.refs.length) || (y.referidos - x.referidos) || String(x.nombre).localeCompare(String(y.nombre)));
+    return { ...a, refs, referidos: refs.reduce((t, r) => t + Number(r.n_referidos || 0), 0), e: em[a.codigo] || {} };
+  }).sort((x, y) => (n(y.e.compartidos) - n(x.e.compartidos)) || (y.refs.length - x.refs.length) || String(x.nombre).localeCompare(String(y.nombre)));
+  const activo = (c) => (canales.find((x) => x.codigo === c.codigo) || {}).activo !== false;
+  const canalesEmb = (embudo.canal || []).filter(activo);
+  const pct = (a, b) => (b ? ` · ${Math.round((a * 100) / b)}%` : "");
   const sinAnf = lista.filter((r) => !r.anfitrion).length;
   const conAnf = lista.length - sinAnf;
   return (
     <>
       <div style={{ fontSize: 13, color: GRIS, marginBottom: 12 }}>
-        Los anfitriones invitan a ser referidor con su link (supervisores y comercios aliados); no cobran bonos.
+        Los anfitriones invitan a ser referidor con su link (supervisores y aliados); no cobran bonos.
         {" "}<b>{conAnf}</b> referidor(es) llegaron por un anfitrión y <b>{sinAnf}</b> por el link normal.
+        <div style={{ marginTop: 4 }}>
+          <b>Compartió</b> = toques en Compartir / Copiar / QR en la bitácora (no dice a cuántos contactos llegó). <b>Pueden / No pueden facturar</b> = respuestas de los
+          transportistas que abrieron la postulación de los referidores de ese anfitrión. Se cuenta desde el 3-nov-2026.
+        </div>
       </div>
       <div className="form-card" style={{ padding: 0, overflowX: "auto" }}>
         <table style={tabla}>
-          <thead><tr>{["Anfitrión", "Código", "Tipo", "Referidores", "Referidos de sus referidores", ""].map((h, i) => <th key={i} style={th}>{h}</th>)}</tr></thead>
+          <thead><tr>{["Anfitrión", "Código", "Compartió", "Visitas a su link", "Referidores", "Abrieron postulación", "✅ Pueden facturar", "❌ No pueden facturar", "Postularon", ""].map((h, i) => <th key={i} style={th}>{h}</th>)}</tr></thead>
           <tbody>
             {filas.map((a) => (
               <Fragment key={a.codigo}>
-                <tr style={{ borderTop: `0.5px solid ${BORDE}`, opacity: a.refs.length ? 1 : 0.55 }}>
-                  <td style={td}><b>{a.tipo === "supervisor" ? a.nombre : `🌮 ${a.nombre}`}</b></td>
+                <tr style={{ borderTop: `0.5px solid ${BORDE}`, opacity: n(a.e.compartidos) || a.refs.length ? 1 : 0.55 }}>
+                  <td style={td}><b>{a.tipo === "supervisor" ? a.nombre : `${a.tipo === "facebook" ? "📘" : "🌮"} ${a.nombre}`}</b><div style={sub}>{a.tipo === "supervisor" ? "Supervisor" : "Aliado"}</div></td>
                   <td style={{ ...td, fontWeight: 700 }}>{a.codigo}</td>
-                  <td style={td}>{a.tipo === "supervisor" ? "Supervisor" : "Comercio aliado"}</td>
+                  <td style={{ ...td, fontWeight: 800, color: n(a.e.compartidos) ? AZUL : GRIS }}>{n(a.e.compartidos)}</td>
+                  <td style={td}>{n(a.e.visitas)}</td>
                   <td style={{ ...td, fontWeight: 800, color: a.refs.length ? AZUL : GRIS }}>{a.refs.length}</td>
-                  <td style={{ ...td, fontWeight: 800, color: a.referidos ? NARANJA : GRIS }}>{a.referidos}</td>
+                  <td style={td}>{n(a.e.visitas_postulacion)}</td>
+                  <td style={{ ...td, fontWeight: 700, color: n(a.e.factura_si) ? "#166534" : GRIS }}>{n(a.e.factura_si)}{pct(n(a.e.factura_si), n(a.e.factura_si) + n(a.e.factura_no))}</td>
+                  <td style={{ ...td, fontWeight: 700, color: n(a.e.factura_no) ? "#b42318" : GRIS }}>{n(a.e.factura_no)}{pct(n(a.e.factura_no), n(a.e.factura_si) + n(a.e.factura_no))}</td>
+                  <td style={{ ...td, fontWeight: 800, color: n(a.e.postularon) ? NARANJA : GRIS }}>{n(a.e.postularon)}</td>
                   <td style={td}>{a.refs.length > 0 && (
                     <button className="btn-back" style={btnChico} onClick={() => setAbierto(abierto === a.codigo ? null : a.codigo)}>{abierto === a.codigo ? "Ocultar" : "Ver referidores"}</button>
                   )}</td>
                 </tr>
                 {abierto === a.codigo && (
-                  <tr><td colSpan={6} style={{ ...td, background: "#f8fafc" }}>
+                  <tr><td colSpan={10} style={{ ...td, background: "#f8fafc" }}>
                     <table style={tabla}>
                       <thead><tr>{["Referidor", "Código", "Inscrito", "Referidos"].map((h) => <th key={h} style={th}>{h}</th>)}</tr></thead>
                       <tbody>
@@ -495,6 +512,26 @@ function PorAnfitrion({ lista, anfitriones }) {
                 )}
               </Fragment>
             ))}
+          </tbody>
+        </table>
+      </div>
+      <div style={{ fontWeight: 700, color: AZUL, margin: "18px 0 8px" }}>Canales de BigTicket (postulación directa de transportistas)</div>
+      <div className="form-card" style={{ padding: 0, overflowX: "auto" }}>
+        <table style={tabla}>
+          <thead><tr>{["Canal", "Abrieron postulación", "✅ Pueden facturar", "❌ No pueden facturar", "Postularon"].map((h) => <th key={h} style={th}>{h}</th>)}</tr></thead>
+          <tbody>
+            {canalesEmb.map((c) => {
+              const si = n(c.factura_si), no = n(c.factura_no);
+              return (
+                <tr key={c.codigo} style={{ borderTop: `0.5px solid ${BORDE}` }}>
+                  <td style={td}><b>{c.codigo === "facebook" ? "📘 " : c.codigo === "camioneta" ? "🚐 " : ""}{c.nombre}</b><div style={sub}>/c/{c.codigo}</div></td>
+                  <td style={td}>{n(c.visitas)}</td>
+                  <td style={{ ...td, fontWeight: 700, color: si ? "#166534" : GRIS }}>{si}{pct(si, si + no)}</td>
+                  <td style={{ ...td, fontWeight: 700, color: no ? "#b42318" : GRIS }}>{no}{pct(no, si + no)}</td>
+                  <td style={{ ...td, fontWeight: 800, color: n(c.postularon) ? NARANJA : GRIS }}>{n(c.postularon)}</td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
