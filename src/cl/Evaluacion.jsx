@@ -43,6 +43,7 @@ const CLAS = {
 const ORDEN_CLAS = ["supervisor", "consulta", "mandante", "comentario", "revision_manual"];
 const VEREDICTOS_CLAS = [["biggy", "Tenía razón el Biggy", C.verde], ["ejecutiva", "Tenía razón la ejecutiva", C.navy], ["ambos", "Ambas sirven", C.gris], ["ninguno", "Ninguno", C.rojo]];
 const VEREDICTOS_REV = [["justa", "Revisión justa", C.verde], ["exagerada", "Demasiado exigente", C.ambar], ["blanda", "Debió ser más exigente", C.rojo]];
+const VEREDICTOS_RESP = [["biggy", "Mejor la del Biggy", C.verde], ["ejecutiva", "Mejor la de la ejecutiva", C.navy], ["iguales", "Equivalentes", C.gris], ["ninguna", "Ninguna sirve", C.rojo]];
 const CALIF = { correcta: ["Correcta", C.verde], incompleta: ["Incompleta", C.ambar], fuera_de_lugar: ["Fuera de lugar", C.rojo] };
 
 const control = { fontSize: 13, padding: "8px 11px", borderRadius: 9, border: `1px solid ${C.borde}`, background: "#fff", fontFamily: FUENTE, color: C.texto };
@@ -100,7 +101,7 @@ export default function EvaluacionBiggy({ usuario }) {
   const cargar = useCallback(async () => {
     try {
       const [c, t, e] = await Promise.all([
-        api("canon_casos_cl?select=card_id,canal,creado_en,pedido,motivo,texto,titulo,respuesta,fase,cerrado_en,supervisor,biggy_clasificacion,biggy_razon,ejecutiva_clasificacion,revision_calificacion,revision_falta,revision_razon,revision_de&order=creado_en.desc&limit=2000"),
+        api("canon_casos_cl?select=card_id,canal,creado_en,pedido,motivo,texto,titulo,respuesta,fase,cerrado_en,supervisor,biggy_borrador,biggy_borrador_en,biggy_clasificacion,biggy_razon,ejecutiva_clasificacion,revision_calificacion,revision_falta,revision_razon,revision_de&order=creado_en.desc&limit=2000"),
         api("postventa_tareas_cl?revision_calificacion=not.is.null&select=id,card_id,ceco,titulo,que_pide,respuesta,revision_calificacion,revision_falta,revision_razon,revisada_en&order=revisada_en.desc&limit=500"),
         api("postventa_evaluacion_cl?select=*&order=creado_en"),
       ]);
@@ -140,6 +141,11 @@ export default function EvaluacionBiggy({ usuario }) {
   ], [tareas, casos]);
   const evalRev = revisiones.map((r) => evals[`revision:${r.clave}`]).filter(Boolean);
 
+  // ── Respuestas: lo que respondió la ejecutiva o el supervisor en Pipefy vs lo que habría respondido el Biggy ──
+  const conBorrador = useMemo(() => casos.filter((c) => c.respuesta && c.biggy_borrador), [casos]);
+  const evalResp = conBorrador.map((c) => evals[`respuesta:${c.card_id}`]).filter(Boolean);
+  const listaResp = conBorrador.filter((c) => filtro === "todos" || (filtro === "pendientes" ? !evals[`respuesta:${c.card_id}`] : !!evals[`respuesta:${c.card_id}`]));
+
   const listaClas = diferencias.filter((c) => filtro === "todos" || (filtro === "pendientes" ? !evals[`clasificacion:${c.card_id}`] : !!evals[`clasificacion:${c.card_id}`]));
   const listaRev = revisiones.filter((r) => filtro === "todos" || (filtro === "pendientes" ? !evals[`revision:${r.clave}`] : !!evals[`revision:${r.clave}`]));
   const cuenta = (lista, f) => lista.filter(f).length;
@@ -152,7 +158,7 @@ export default function EvaluacionBiggy({ usuario }) {
           <div style={{ fontSize: 13.5, color: C.suave }}>Compara las decisiones del Biggy con las de la ejecutiva. Cada evaluación con comentario ajusta su criterio.</div>
         </div>
         <div style={{ display: "flex", background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, padding: 4 }}>
-          {[["clasificacion", "Clasificación"], ["revision", "Revisión de respuestas"]].map(([k, et]) => (
+          {[["clasificacion", "Clasificación"], ["respuesta", "Respuestas"], ["revision", "Revisión de respuestas"]].map(([k, et]) => (
             <button key={k} onClick={() => setTema(k)} style={{ fontFamily: FUENTE, fontSize: 13.5, fontWeight: tema === k ? 700 : 500, border: "none", cursor: "pointer",
               borderRadius: 9, padding: "8px 14px", background: tema === k ? C.navy : "transparent", color: tema === k ? "#fff" : C.texto }}>{et}</button>
           ))}
@@ -187,6 +193,19 @@ export default function EvaluacionBiggy({ usuario }) {
                 ))}
               </tbody>
             </table>
+          </div>
+        </>
+      ) : tema === "respuesta" ? (
+        <>
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 10 }}>
+            <Tarjeta titulo="Casos comparados" valor={conBorrador.length} nota="respondidos en Pipefy, con borrador del Biggy" />
+            <Tarjeta titulo="Evaluados por ti" valor={`${evalResp.length}/${conBorrador.length}`} />
+            <Tarjeta titulo="Mejor la del Biggy" valor={cuenta(evalResp, (e) => e.veredicto === "biggy")} color={C.verde} />
+            <Tarjeta titulo="Mejor la de la ejecutiva" valor={cuenta(evalResp, (e) => e.veredicto === "ejecutiva")} color={C.navy} />
+          </div>
+          <div style={{ fontSize: 12.5, color: C.suave, marginBottom: 14, maxWidth: 900 }}>
+            El Biggy no envió estos correos: los redactó en sombra a partir de lo que quedó registrado en Pipefy. No sabe por sí solo qué pasó en la operación,
+            así que se compara si responde lo que pidió el cliente, la claridad, el tono y que no falte información.
           </div>
         </>
       ) : (
@@ -239,6 +258,40 @@ export default function EvaluacionBiggy({ usuario }) {
           </div>
         ))}
 
+        {tema === "respuesta" && listaResp.slice(0, 60).map((c) => {
+          const [et, col] = CALIF[c.revision_calificacion] || [null, C.gris];
+          return (
+            <div key={c.card_id} style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 14, padding: "14px 16px" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
+                <div style={{ fontSize: 15, fontWeight: 700 }}>{c.canal === "correo" ? (c.titulo || "Correo de Canon") : `Pedido ${c.pedido || "—"}`}</div>
+                <div style={{ fontSize: 12, color: C.tenue }}>{c.canal === "correo" ? "Correo de Canon" : "Formulario del cliente"} · {fecha(c.creado_en)}</div>
+              </div>
+              <div style={{ marginTop: 8, background: C.grisTenue, borderRadius: 10, padding: "10px 12px", fontSize: 13, whiteSpace: "pre-wrap", maxHeight: 110, overflow: "auto", lineHeight: 1.45 }}>
+                <b>Lo que pidió:</b> {String(c.texto || c.titulo || "—").slice(0, 900)}
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 10 }}>
+                <div style={{ border: `1px solid ${C.borde}`, borderRadius: 10, padding: "8px 12px" }}>
+                  <div style={{ fontSize: 11.5, color: C.suave, fontWeight: 600 }}>EJECUTIVA O SUPERVISOR · PIPEFY</div>
+                  <div style={{ fontSize: 13, whiteSpace: "pre-wrap", lineHeight: 1.5, marginTop: 4 }}>{c.respuesta}</div>
+                  <a href={`https://app.pipefy.com/open-cards/${c.card_id}`} target="_blank" rel="noreferrer"
+                    style={{ display: "inline-block", marginTop: 6, fontSize: 12.5, fontWeight: 600, color: C.navy }}>Ver tarjeta en Pipefy ↗</a>
+                </div>
+                <div style={{ border: `1px solid ${C.borde}`, borderRadius: 10, padding: "8px 12px", background: "#fffaf5" }}>
+                  <div style={{ fontSize: 11.5, color: C.suave, fontWeight: 600 }}>LO QUE HABRÍA RESPONDIDO EL BIGGY</div>
+                  <div style={{ fontSize: 13, whiteSpace: "pre-wrap", lineHeight: 1.5, marginTop: 4 }}>{c.biggy_borrador}</div>
+                </div>
+              </div>
+              {et && (
+                <div style={{ marginTop: 8, fontSize: 12.5 }}>
+                  <b>El Biggy calificó la respuesta de Pipefy:</b> <span style={{ color: col, fontWeight: 700 }}>{et}</span>
+                  {c.revision_falta && <span> · falta: {c.revision_falta}</span>}
+                </div>
+              )}
+              <Evaluar opciones={VEREDICTOS_RESP} previa={evals[`respuesta:${c.card_id}`]} onGuardar={guardar("respuesta", c.card_id)} />
+            </div>
+          );
+        })}
+
         {tema === "revision" && listaRev.slice(0, 60).map((r) => {
           const [et, col] = CALIF[r.calif] || [r.calif, C.gris];
           return (
@@ -259,7 +312,7 @@ export default function EvaluacionBiggy({ usuario }) {
           );
         })}
 
-        {((tema === "clasificacion" && !listaClas.length) || (tema === "revision" && !listaRev.length)) && (
+        {((tema === "clasificacion" && !listaClas.length) || (tema === "revision" && !listaRev.length) || (tema === "respuesta" && !listaResp.length)) && (
           <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 14, padding: 24, textAlign: "center", color: C.suave }}>
             {filtro === "pendientes" ? "No quedan casos por evaluar. ¡Al día!" : "No hay casos en esta lista."}
           </div>
