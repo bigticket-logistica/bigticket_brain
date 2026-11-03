@@ -197,21 +197,22 @@ const indiceCertronic = (filas) => {
   return m;
 };
 
-// Las patentes que no están en vw_cert_vehiculo_vigente se buscan en el scraper
-// diario de Certronic (vw_certronic_vehiculo_ultimo). Así una alta reciente
-// aparece apenas la toma la corrida completa, sin esperar la otra carga.
-async function indiceCertronicCompleto(filasCert, jornada) {
-  const m = indiceCertronic(filasCert);
-  const faltan = [...new Set((jornada || []).map(r => normPatente(r.patente)).filter(p => p && !m[p]))];
-  for (let i = 0; i < faltan.length; i += 100) {
-    const lote = faltan.slice(i, i + 100);
-    const filas = await apiSuave(`vw_certronic_vehiculo_ultimo?select=patente,contratista,vigente&patente=in.(${lote.join(",")})`, []);
+// Empresa de cada patente: manda Certronic (certronic_vehiculos_cl, copia horaria
+// del scraper que hace sync-vehiculos-cl en el VPS de México). Si la patente no
+// está en Certronic, se usa el Excel Maestro Certificación (vw_cert_vehiculo_vigente),
+// que además aporta el RUT del tercero.
+async function indiceCertronicCompleto(filasExcel, jornada) {
+  const m = indiceCertronic(filasExcel);
+  const patentes = [...new Set((jornada || []).map(r => normPatente(r.patente)).filter(Boolean))];
+  for (let i = 0; i < patentes.length; i += 100) {
+    const lote = patentes.slice(i, i + 100);
+    const filas = await apiSuave(`certronic_vehiculos_cl?select=patente,contratista,vigente&patente=in.(${lote.join(",")})`, []);
     for (const x of filas || []) {
       const k = normPatente(x.patente);
-      if (k && !m[k] && x.contratista) {
-        m[k] = { patente: x.patente, tercero: String(x.contratista).toUpperCase(), rut_tercero: null,
-                 estado: x.vigente ? "ACTIVA" : "NO VIGENTE", fuente: "scraper" };
-      }
+      if (!k || !x.contratista) continue;
+      m[k] = { patente: x.patente, tercero: String(x.contratista).toUpperCase(),
+               rut_tercero: m[k]?.rut_tercero || null,
+               estado: x.vigente ? "ACTIVA" : "NO VIGENTE", fuente: "certronic" };
     }
   }
   return m;
