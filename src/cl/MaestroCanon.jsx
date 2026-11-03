@@ -276,15 +276,18 @@ function Empresa({ patentes, emp }) {
   const ps = listaPatentes(patentes);
   if (!ps.length) return <span style={{ color: "#cbd5e1" }}>—</span>;
   return (
-    <div style={{ display: "grid", gap: 2, minWidth: 170, maxWidth: 220 }}>
+    <div style={{ display: "grid", gap: 2, width: 200, paddingRight: 10 }}>
       {ps.map((p) => {
         const e = emp[p];
         if (!e) return <span key={p}><EtiquetaC texto="SIN REGISTRO" color={AMBAR} fondo="#fdf6e3" />{ps.length > 1 ? ` ${p}` : ""}</span>;
         return (
-          <div key={p} style={{ fontSize: 11.5, color: "#334155", lineHeight: 1.25 }}
-               title={[e.tercero, e.rut_tercero && `RUT ${e.rut_tercero}`, e.estado && `Certronic: ${e.estado}`].filter(Boolean).join(" · ")}>
-            {ps.length > 1 && <b>{p}: </b>}{e.tercero}
-            {e.estado && e.estado !== "ACTIVA" && <span style={{ marginLeft: 5 }}><EtiquetaC texto={e.estado} color={ROJO} fondo="#fdecea" /></span>}
+          <div key={p} title={[e.tercero, e.rut_tercero && `RUT ${e.rut_tercero}`, e.estado && `Certronic: ${e.estado}`].filter(Boolean).join(" · ")}>
+            {/* nombres largos: hasta 2 líneas y "…"; completo al pasar el mouse (igual que en MELI) */}
+            <div style={{ fontSize: 11.5, color: "#334155", lineHeight: 1.25, whiteSpace: "normal", overflow: "hidden",
+                          display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", wordBreak: "break-word" }}>
+              {ps.length > 1 && <b>{p}: </b>}{e.tercero}
+            </div>
+            {e.estado && e.estado !== "ACTIVA" && <div style={{ marginTop: 2 }}><EtiquetaC texto={e.estado} color={ROJO} fondo="#fdecea" /></div>}
           </div>
         );
       })}
