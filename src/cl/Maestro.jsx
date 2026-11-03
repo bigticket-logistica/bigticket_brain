@@ -197,6 +197,26 @@ const indiceCertronic = (filas) => {
   return m;
 };
 
+// Las patentes que no están en vw_cert_vehiculo_vigente se buscan en el scraper
+// diario de Certronic (vw_certronic_vehiculo_ultimo). Así una alta reciente
+// aparece apenas la toma la corrida completa, sin esperar la otra carga.
+async function indiceCertronicCompleto(filasCert, jornada) {
+  const m = indiceCertronic(filasCert);
+  const faltan = [...new Set((jornada || []).map(r => normPatente(r.patente)).filter(p => p && !m[p]))];
+  for (let i = 0; i < faltan.length; i += 100) {
+    const lote = faltan.slice(i, i + 100);
+    const filas = await apiSuave(`vw_certronic_vehiculo_ultimo?select=patente,contratista,vigente&patente=in.(${lote.join(",")})`, []);
+    for (const x of filas || []) {
+      const k = normPatente(x.patente);
+      if (k && !m[k] && x.contratista) {
+        m[k] = { patente: x.patente, tercero: String(x.contratista).toUpperCase(), rut_tercero: null,
+                 estado: x.vigente ? "ACTIVA" : "NO VIGENTE", fuente: "scraper" };
+      }
+    }
+  }
+  return m;
+}
+
 function Etiqueta({ texto, color, fondo }) {
   return (
     <span style={{
@@ -370,7 +390,7 @@ function ModuloMaestroCL({ usuario } = {}) {
         setResumen(res[0] || null); setJornada(jor); setDevol(dev); setTrasp(tra);
         setZonaRuta(Object.fromEntries((zr || []).map(x => [String(x.id_ruta), x])));
         setVehSup(Object.fromEntries((vs || []).map(x => [normPatente(x.patente), x])));
-        setCertPat(indiceCertronic(ct));
+        setCertPat(await indiceCertronicCompleto(ct, jor));
         setTipoRuta(Object.fromEntries((tr || []).map(x => [String(x.id_ruta), x])));
         setServActivos(sa || []);
         setRecuadre(rec[0] || null); setACuadrar(cua);
@@ -405,7 +425,7 @@ function ModuloMaestroCL({ usuario } = {}) {
       setResumen(res[0] || null); setJornada(jor);
       setZonaRuta(Object.fromEntries((zr || []).map(x => [String(x.id_ruta), x])));
       setVehSup(Object.fromEntries((vs || []).map(x => [normPatente(x.patente), x])));
-      setCertPat(indiceCertronic(ct));
+      setCertPat(await indiceCertronicCompleto(ct, jor));
       setTipoRuta(Object.fromEntries((tr || []).map(x => [String(x.id_ruta), x])));
       setRecuadre(rec[0] || null); setACuadrar(cua);
       setRecRuta(Object.fromEntries((rr || []).map(x => [String(x.id_ruta), x])));
