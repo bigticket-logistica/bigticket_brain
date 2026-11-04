@@ -496,7 +496,8 @@ const VistaSnapshotSupervisores = ({ fecha, pais }) => {
   const VISTAS = {
     ingreso:      { tabla: "vw_maestro_supervisores_auto", label: "Ingreso Maestro", rpc: "get_maestro_supervisores_dia" },
     rutas:        { tabla: "vw_rutas_citadas_auto",        label: "Rutas Citadas"  },
-    noshow:       { tabla: "vw_rostering_vs_operativo",    label: "No Show"        },
+    // No Show: función por día (la vista calculaba todo el histórico y pasaba el tope de 8 s).
+    noshow:       { tabla: "vw_rostering_vs_operativo",    label: "No Show",        rpc: "get_rostering_vs_operativo" },
     devoluciones: { tabla: "vw_devoluciones_auto",         label: "Devoluciones"   },
   };
 
@@ -608,7 +609,7 @@ const VistaSnapshotSupervisores = ({ fecha, pais }) => {
           traerDia("Rutas Citadas", dia, d =>
             sb.from("vw_rutas_citadas_auto").select("*").eq("fecha", d).limit(20000)),
           traerDia("No Show", dia, d =>
-            sb.from("vw_rostering_vs_operativo").select("*").eq("fecha", d).limit(20000)),
+            sb.rpc("get_rostering_vs_operativo", { p_fecha: d })),
           traerDia("Devoluciones", dia, d =>
             sb.from("vw_devoluciones_auto").select("*").eq("fecha", d).limit(20000)),
         ]);
