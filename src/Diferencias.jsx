@@ -17,7 +17,7 @@ const ESTADOS = {
   rechazada:   { l: "Rechazada",   bg: "#fee2e2", fg: "#991b1b" },
   vencida:     { l: "Vencida",     bg: "#f1f5f9", fg: "#64748b" },
 };
-const TIPO_LINEA = { ruta: "Ruta", cobro: "Cobro", faltante: "Ruta faltante" };
+const TIPO_LINEA = { ruta: "Ruta", cobro: "Cobro", faltante: "Ruta faltante", concepto: "Concepto que falta" };
 const FASES = {
   supervisor: { l: "Con el supervisor", bg: "#fef3c7", fg: "#92400e" },
   analista:   { l: "Te toca a ti",      bg: "#dbeafe", fg: "#1e40af" },
@@ -280,7 +280,7 @@ function DetalleCaso({ caso, quien, onCerrar, onCambio }) {
     if (estado === "aceptada") {
       const pregunta = l.tipo === "cobro"
         ? `Aceptar el reclamo del descuento (${l.concepto || "cobro " + l.cobro_id}).\n\nMonto a DEVOLVER al tercero — entra como abono en la prefactura de la semana ${semanaBrainDe(hoyMx())}:`
-        : `Aceptar el reclamo de pago (${TIPO_LINEA[l.tipo]} ${l.id_ruta || l.placa}).\n\nMonto a PAGAR al tercero — entra como abono en la prefactura de la semana ${semanaBrainDe(hoyMx())}:`;
+        : `Aceptar el reclamo de pago (${TIPO_LINEA[l.tipo]} ${l.tipo === "concepto" ? (l.concepto || "") : (l.id_ruta || l.placa)}).\n\nMonto a PAGAR al tercero — entra como abono en la prefactura de la semana ${semanaBrainDe(hoyMx())}:`;
       const m = prompt(pregunta, l.monto_ref || "");
       if (m === null) return;
       monto = Number(String(m).replace(/[^\d.\-]/g, ""));
@@ -309,7 +309,7 @@ function DetalleCaso({ caso, quien, onCerrar, onCambio }) {
           fecha: hoy, fecha_origen: l.fecha, monto,
           concepto: l.tipo === "cobro"
             ? `Devolución diferencia #${caso.folio} · ${l.concepto || "cobro " + l.cobro_id}${l.fecha ? ` · ruta del ${l.fecha}` : ""}`
-            : `Diferencia #${caso.folio} · ${TIPO_LINEA[l.tipo]}${l.id_ruta ? ` ${l.id_ruta}` : ""}${l.fecha ? ` del ${l.fecha}` : ""}`,
+            : `Diferencia #${caso.folio} · ${TIPO_LINEA[l.tipo]}${l.tipo === "concepto" && l.concepto ? `: ${l.concepto}` : ""}${l.id_ruta ? ` ${l.id_ruta}` : ""}${l.fecha ? ` del ${l.fecha}` : ""}`,
           diferencia_id: caso.id, linea_id: l.id, creado_por: quien,
         });
         if (eAj) alert("La línea quedó aceptada, pero NO se generó el ajuste:\n\n" + eAj.message + "\n\nCréalo a mano en la prefactura.");
@@ -420,7 +420,7 @@ function DetalleCaso({ caso, quien, onCerrar, onCambio }) {
                     <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 3, background: "#e2e8f0", color: "#475569" }}>
                       {TIPO_LINEA[l.tipo]}
                     </span>
-                    <span style={{ fontSize: 13, fontWeight: 600, color: "#334155", marginLeft: 8 }}>{l.placa || "—"}</span>
+                    <span style={{ fontSize: 13, fontWeight: 600, color: "#334155", marginLeft: 8 }}>{l.tipo === "concepto" ? (l.concepto || "—") : (l.placa || "—")}</span>
                     <span style={{ fontSize: 12, color: "#94a3b8", marginLeft: 8 }}>
                       {l.id_ruta ? `Ruta ${l.id_ruta}` : l.cobro_id ? `Cobro ${l.cobro_id}` : ""} · {l.tipo === "cobro" ? "ruta del " : ""}{l.fecha || "sin fecha"}
                     </span>
