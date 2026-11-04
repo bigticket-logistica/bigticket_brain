@@ -137,6 +137,7 @@ export default function ModuloReferidos({ usuario }) {
           {tab === "mensajes" && <Mensajes referidores={referidoresVivos} mensajes={mensajes} abierto={chatCon} setAbierto={setChatCon} usuario={usuario} onCambio={cargar} />}
           {tab === "anfitriones" && <Anfitriones lista={anfitriones.filter((a) => !elimReferidores.has(String(a.id)))} anfitriones={listaAnf} embudo={embudo} canales={canales} />}
           {tab === "referidores" && <Referidores referidores={referidores} canales={canales} referidos={referidosVivos} eliminados={elimReferidores} onEliminar={(id, m) => eliminar("referidor", id, m)}
+            origen={Object.fromEntries(anfitriones.map((a) => [String(a.id), a]))} listaAnf={listaAnf}
             onMensaje={(id) => { setChatCon(id); setTab("mensajes"); }} />}
           {tab === "oportunidades" && <Oportunidades lista={oportunidades} centros={centros} propuestas={propuestas} usuario={usuario} onCambio={cargar}
             campana={campana} onCampanaLista={() => { setCampana(null); setTab("requerimientos"); }} onCampanaCancelar={() => setCampana(null)} />}
@@ -585,7 +586,24 @@ function FilaMotivo({ cols, quien, aviso, onCancelar, onConfirmar }) {
 const FIRMADO = ["contrato_firmado", "primera_ruta", "quince_rutas", "sin_meta_30_dias"];
 const EN_RUTA = ["primera_ruta", "quince_rutas", "sin_meta_30_dias"];
 
-function Referidores({ referidores, canales = [], referidos = [], eliminados = new Map(), onEliminar, onMensaje }) {
+// "Llegó por": el link del anfitrión si lo tiene (exacto); si no, "Link general",
+// con lo que declaró en "¿Por dónde te enteraste?" debajo.
+const FUENTE_TXT = { facebook: "Facebook", whatsapp: "WhatsApp", amigo: "Un amigo", supervisor: "Supervisor BigTicket", otro: "Otro" };
+function LlegoPor({ o, listaAnf = [] }) {
+  if (!o) return <span style={{ color: GRIS, fontSize: 12 }}>Link general</span>;
+  const a = o.anfitrion ? listaAnf.find((x) => x.codigo === o.anfitrion) : null;
+  const decl = (o.fuentes || []).map((f) => (f === "otro" && o.otro ? `Otro: ${o.otro}` : FUENTE_TXT[f] || f)).join(", ");
+  return (
+    <>
+      {o.anfitrion
+        ? <b style={{ color: AZUL, fontSize: 12.5 }}>{a ? (a.tipo === "supervisor" ? a.nombre : `${a.tipo === "facebook" ? "📘" : "🌮"} ${a.nombre}`) : o.anfitrion}<span style={{ color: GRIS, fontWeight: 400 }}> · {o.anfitrion}</span></b>
+        : <span style={{ fontSize: 12.5 }}>Link general</span>}
+      <div style={sub}>{decl ? `Declaró: ${decl}` : "No declaró"}</div>
+    </>
+  );
+}
+
+function Referidores({ referidores, canales = [], referidos = [], eliminados = new Map(), onEliminar, onMensaje, origen = {}, listaAnf = [] }) {
   const [q, setQ] = useState("");
   const [verElim, setVerElim] = useState(false);
   const [borrando, setBorrando] = useState(null);
@@ -613,7 +631,7 @@ function Referidores({ referidores, canales = [], referidos = [], eliminados = n
       {lista.length + (verElim ? 0 : listaCanales.length) === 0 ? <div className="empty">{verElim ? "No hay referidores eliminados." : "No hay referidores con esa búsqueda."}</div> : (
         <div className="form-card" style={{ padding: 0, overflowX: "auto" }}>
           <table style={tabla}>
-            <thead><tr>{["Inscrito", "Referidor", "Código", "Contacto", "Cuenta", "Referidos", "Ganado", "Pagado", ""].map((h, i) => <th key={i} style={th}>{h}</th>)}</tr></thead>
+            <thead><tr>{["Inscrito", "Referidor", "Código", "Llegó por", "Contacto", "Cuenta", "Referidos", "Ganado", "Pagado", ""].map((h, i) => <th key={i} style={th}>{h}</th>)}</tr></thead>
             <tbody>
               {!verElim && listaCanales.map((c) => {
                 const rs = deCanal(c.codigo);
@@ -622,6 +640,7 @@ function Referidores({ referidores, canales = [], referidos = [], eliminados = n
                     <td style={td}>{fecha(c.creado_at)}</td>
                     <td style={td}><b>{c.nombre}</b><div style={sub}>Canal Bigticket{c.activo ? "" : " · inactivo"}</div></td>
                     <td style={{ ...td, fontWeight: 700 }}>/c/{c.codigo}</td>
+                    <td style={td}><span style={{ color: GRIS, fontSize: 12 }}>—</span></td>
                     <td style={td}><span style={sub}>referidos.fleetbiggy.com/c/{c.codigo}</span></td>
                     <td style={td}><span style={{ color: GRIS, fontSize: 12 }}>No genera bonos</span></td>
                     <td style={td}>{rs.length}<div style={sub}>{rs.filter((r) => FIRMADO.includes(r.etapa)).length} firmados · {rs.filter((r) => EN_RUTA.includes(r.etapa)).length} en ruta</div></td>
@@ -637,6 +656,7 @@ function Referidores({ referidores, canales = [], referidos = [], eliminados = n
                   <td style={td}>{fecha(r.creado_at)}</td>
                   <td style={td}><b>{r.nombre}</b><div style={sub}>CURP {r.curp}{r.es_chofer_bt ? " · chofer BT" : ""}{r.tercero_id ? " · empresa BT" : ""}</div></td>
                   <td style={{ ...td, fontWeight: 700 }}>{r.codigo}</td>
+                  <td style={td}><LlegoPor o={origen[String(r.id)]} listaAnf={listaAnf} /></td>
                   <td style={td}>{r.telefono}<div style={sub}>{r.correo}</div></td>
                   <td style={td}>{r.clabe ? <>{r.banco || "—"}<div style={sub}>{r.titular} · {r.clabe}</div></> : <span style={{ color: GRIS, fontSize: 12 }}>Sin CLABE</span>}</td>
                   <td style={td}>{r.n_referidos}</td>
@@ -652,7 +672,7 @@ function Referidores({ referidores, canales = [], referidos = [], eliminados = n
                   </td>
                 </tr>
                 {borrando === r.id && (
-                  <FilaMotivo cols={9} quien={`${r.nombre} (${r.codigo})`} aviso="Su link y su QR dejan de funcionar."
+                  <FilaMotivo cols={10} quien={`${r.nombre} (${r.codigo})`} aviso="Su link y su QR dejan de funcionar."
                     onCancelar={() => setBorrando(null)} onConfirmar={async (m) => { if (await onEliminar(r.id, m)) setBorrando(null); }} />
                 )}
                 </Fragment>
