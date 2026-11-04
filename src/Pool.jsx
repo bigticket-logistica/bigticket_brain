@@ -580,7 +580,7 @@ function TareasJefeOperaciones() {
 }
 
 function IndicadoresOperacionalesMX({ usuario }) {
-  const [vista, setVista] = useState("compromiso");
+  const [vista, setVista] = useState("torre");
 
 
 
@@ -589,13 +589,11 @@ function IndicadoresOperacionalesMX({ usuario }) {
   // Nota: pestaña "validacion_bt" oculta del menú (render condicional abajo queda intacto).
   // El Padrón MELI (altas/bajas/cambios) se movió a Administración → "Padrón MELI".
   const tabs = [
-    { id: "compromiso", label: "Torre de Control Compromiso", desc: "Compromiso MELI · SDD vs SPOT" },
+    { id: "torre", label: "Torre de Control", desc: "Hoy en vivo · D-1 tres pilares · compromiso de mañana" },
     { id: "pedidos_vivo", label: "Pedidos en vivo", desc: "Aceptación cada 5 min · alertas" },
     { id: "capacidad_mx", label: "Capacidad MX", desc: "Demanda estimada · flota · 9 días" },
     { id: "malla_turnos", label: "Malla de turnos", desc: "Grupo fijo, descansos y reserva por SC" },
     { id: "rechazos_meli", label: "Rechazos MELI", desc: "Rutas no aceptadas y no hechas · pérdida en $" },
-    { id: "torre_rostering_hoy", label: "Torre de Control Rostering Hoy", desc: "Operativo en vivo · cronómetros + alertas SDD" },
-    { id: "torre_d1", label: "Torre Control D-1", desc: "3 Pilares · MELI × Rostering × Operación" },
     { id: "kpi_operacion", label: "KPI de Operación", desc: "NS Informe MELI vs Snapshots" },
     { id: "vendor_score", label: "Vendor Score", desc: "Nota semanal MELI · aproximada" },
     { id: "control_helper", label: "Control Helper", desc: "Helpers no autorizados / certificados / fantasmas" },
@@ -635,7 +633,7 @@ function IndicadoresOperacionalesMX({ usuario }) {
         </div>
       </div>
 
-      {vista === "compromiso" && <PoolMeliCompromiso />}
+      {vista === "torre" && <TorreControlMX />}
       {vista === "pedidos_vivo" && <PedidosEnVivoMX />}
       {vista === "capacidad_mx" && <CapacidadMX />}
       {vista === "malla_turnos" && <MallaTurnosMX />}
@@ -645,12 +643,42 @@ function IndicadoresOperacionalesMX({ usuario }) {
       {vista === "diferencias" && <PoolMeliDiferenciasMaestros />}
 
       {vista === "control_helper" && <PoolMeliControlHelper />}
-      {vista === "torre_rostering_hoy" && <TorreRosteringHoy />}
-      {vista === "torre_d1" && <TorreTresPilares />}
       {vista === "validacion_bt" && <PoolMeliValidacionBT usuario={usuario} />}
       {vista === "tareas" && <div style={{ padding: 24 }}><TareasJefeOperaciones /></div>}
       {vista === "consolidaciones_bitacora" && <PanelControlSupervisores />}
 
+    </div>
+  );
+}
+
+// Torre de Control MX: una sola pestaña para lo que antes eran tres
+// (Rostering Hoy, D-1 y Compromiso). Primer paso: un contenedor con las tres
+// vistas tal como estaban; el segundo paso es dejarlas sobre una sola fuente
+// (pedidos, rostering y ejecución) y fundir los tres componentes en uno.
+function TorreControlMX() {
+  const [modo, setModo] = useState("hoy");
+  const modos = [
+    { id: "hoy", label: "Hoy en vivo", desc: "Rostering y salida de rutas, en vivo" },
+    { id: "d1", label: "D-1", desc: "Tres pilares: MELI × rostering × operación" },
+    { id: "compromiso", label: "Compromiso", desc: "SDD vs Spot comprometidos para mañana" },
+  ];
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 8, padding: "12px 24px 0", flexWrap: "wrap" }}>
+        {modos.map(m => (
+          <button key={m.id} onClick={() => setModo(m.id)} title={m.desc}
+            style={{
+              background: modo === m.id ? "#1a3a6b" : "#fff", color: modo === m.id ? "#fff" : "#1a3a6b",
+              border: "1px solid #1a3a6b", borderRadius: 6, padding: "6px 14px",
+              fontSize: 12, fontWeight: 600, cursor: "pointer",
+            }}>
+            {m.label}
+          </button>
+        ))}
+      </div>
+      {modo === "hoy" && <TorreRosteringHoy />}
+      {modo === "d1" && <TorreTresPilares />}
+      {modo === "compromiso" && <PoolMeliCompromiso />}
     </div>
   );
 }
