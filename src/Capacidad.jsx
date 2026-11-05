@@ -35,7 +35,6 @@ const CATEGORIA = {
   pendiente: ["Pendiente", "#7c3aed", "#f3e8ff"],
   no_show_soft: ["Soft no show", "#b45309", "#fef3c7"],
   no_show_hard: ["Hard no show", "#b91c1c", "#fee2e2"],
-  spot_no_salio: ["Spot · no salió", "#475569", "#f1f5f9"],
   cancelado_hard: ["Cancelación", "#b91c1c", "#fee2e2"],
   sin_responder: ["No salió · sin clasificar", "#9f1239", "#ffe4e6"],
   otro: ["Otro", "#475569", "#f1f5f9"],
@@ -53,7 +52,6 @@ const VER = [
   ["no_ejecutado", "No ejecutados"],
   ["soft", "Soft no show"],
   ["no_show_hard", "Hard no show"],
-  ["spot_no_salio", "Spot que no salió"],
   ["cancelado_hard", "Cancelación"],
   ["sin_responder", "No salió sin clasificar"],
   ["pendiente", "Pendientes"],
@@ -97,13 +95,17 @@ function Tarjeta({ titulo, total, filas }) {
 // Totales con las mismas reglas que se cuadraron contra MELI.
 function sumar(filas) {
   const t = { solicitado: filas.length, confirmado: 0, asignado: 0, ejecutado: 0, pendiente: 0,
-    no_show_soft: 0, no_show_hard: 0, cancelado_hard: 0, sin_responder: 0, spot_no_salio: 0 };
+    no_show_soft: 0, no_show_hard: 0, no_show_hard_sdd: 0, no_show_hard_spot: 0,
+    cancelado_hard: 0, cancelado_sdd: 0, cancelado_spot: 0, sin_responder: 0 };
   for (const f of filas) {
     const acept = f.confirmado === "Aceptado";
+    const sdd = f.modelo === "SDD";
     if (acept) t.confirmado++;
     if (acept && f.asignado) t.asignado++;
     if (acept && f.ejecutado) t.ejecutado++;
-    if (t[f.categoria] !== undefined && f.categoria !== "ejecutado") t[f.categoria]++;
+    if (f.categoria === "no_show_hard") { t.no_show_hard++; if (sdd) t.no_show_hard_sdd++; else t.no_show_hard_spot++; }
+    else if (f.categoria === "cancelado_hard") { t.cancelado_hard++; if (sdd) t.cancelado_sdd++; else t.cancelado_spot++; }
+    else if (t[f.categoria] !== undefined && f.categoria !== "ejecutado") t[f.categoria]++;
   }
   return t;
 }
@@ -197,11 +199,11 @@ export default function Capacidad() {
         f.chofer || "", f.driver_id || "", f.id_ruta || "", f.confirmado || "", f.asignado ? "SI" : "NO", f.ejecutado ? "SI" : "NO",
         f.estado_torre || "", (CATEGORIA[f.categoria] || [f.categoria])[0], f.resultado_supervisor || "", f.pruebas || 0]);
       const res = [["SC", "SOLICITADO", "CONFIRMADO", "ASIGNADO", "EJECUTADO", "% EJECUTADO / CONFIRMADO", "SOFT NO SHOW",
-"HARD NO SHOW", "CANCELACION", "NO SALIO SIN CLASIFICAR", "SPOT NO SALIO", "PENDIENTE"]];
+"HARD NO SHOW SDD", "HARD NO SHOW SPOT", "CANCELACION SDD", "CANCELACION SPOT", "NO SALIO SIN CLASIFICAR", "PENDIENTE"]];
       for (const x of porSc) {
         if (sc && x.sc !== sc) continue;
         res.push([x.sc, x.solicitado, x.confirmado, x.asignado, x.ejecutado, pct(x.ejecutado, x.confirmado), x.no_show_soft,
-          x.no_show_hard, x.cancelado_hard, x.sin_responder, x.spot_no_salio, x.pendiente]);
+          x.no_show_hard_sdd, x.no_show_hard_spot, x.cancelado_sdd, x.cancelado_spot, x.sin_responder, x.pendiente]);
       }
       await descargarExcelMultihoja([{ nombre: "Por SC", datos: res }, { nombre: "Detalle", datos: det }],
         `capacidad_${d1 === d2 ? d1 : d1 + "_a_" + d2}${modelo ? "_" + modelo : ""}${sc ? "_" + sc : ""}`);
@@ -285,16 +287,18 @@ export default function Capacidad() {
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           <Tarjeta titulo="No show" total={(tot.no_show_hard || 0) + (tot.no_show_soft || 0)} filas={[
-            ["Hard no show", tot.no_show_hard || 0, "SDD aceptado que no se hizo"],
+            ["Hard no show SDD", tot.no_show_hard_sdd || 0, "SDD aceptado que no se hizo (el supervisor lo marcó No Show; antes del 4-nov-2026, todo aceptado que no salió)"],
+            ["Hard no show Spot", tot.no_show_hard_spot || 0, "Spot aceptado que no se hizo (el supervisor lo marcó No Show)"],
             ["Soft no show", tot.no_show_soft || 0, "SDD solicitado que no confirmamos"],
           ]} />
-          <Tarjeta titulo="SDD aceptado que no salió" total={(tot.no_show_hard || 0) + (tot.cancelado_hard || 0) + (tot.sin_responder || 0)} filas={[
-            ["Hard no show", tot.no_show_hard || 0, "SDD aceptado que no se hizo: el supervisor lo marcó como No Show (antes del 4-nov-2026: todo SDD aceptado que no salió)"],
-            ["Cancelación", tot.cancelado_hard || 0, "El supervisor lo marcó como Cancelación en la Bitácora"],
-            ["Sin clasificar por el supervisor", tot.sin_responder || 0, "No salió y el supervisor todavía no lo clasifica en la Bitácora (viajes desde el 4-nov-2026)"],
+          <Tarjeta titulo="Cancelaciones" total={tot.cancelado_hard || 0} filas={[
+            ["SDD", tot.cancelado_sdd || 0, "Aceptado que no salió y el supervisor marcó Cancelación"],
+            ["Spot", tot.cancelado_spot || 0, "Aceptado que no salió y el supervisor marcó Cancelación"],
           ]} />
-          {(tot.spot_no_salio || 0) > 0 && <Tarjeta titulo="Spot aceptado que no salió" total={tot.spot_no_salio} filas={[["No cuenta como no show", tot.spot_no_salio, "MELI solo cobra el no show en SDD; igual baja el Ejecutado"]]} />}
-          {(tot.pendiente || 0) > 0 && <Tarjeta titulo="Pendiente de hoy" total={tot.pendiente} filas={[["Todavía puede salir", tot.pendiente, ""]]} />}
+          <Tarjeta titulo="Sin clasificar por el supervisor" total={(tot.sin_responder || 0) + (tot.pendiente || 0)} filas={[
+            ["Aceptados que no salieron", tot.sin_responder || 0, "Esperan la respuesta del supervisor en la Bitácora (ítem No Salidas a Ruta, viajes desde el 4-nov-2026)"],
+            ["Pendientes de hoy", tot.pendiente || 0, "Todavía pueden salir"],
+          ]} />
         </div>
       </div>
 
