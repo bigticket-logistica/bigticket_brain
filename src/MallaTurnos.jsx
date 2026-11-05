@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { fechaHoyOperativa, sb } from "./shared";
 
 // ═══════════════════════════════════════════════════════════════════
@@ -248,6 +248,52 @@ function probarMalla(datos, hoy) {
   return { desde, hasta, filas };
 }
 
+// ─── Mañana: las tres capas del día siguiente, con lo ya publicado por MELI ───────────────
+// Probado con octubre 2026: Spot de mañana = publicado a las 18:00 + 0,75 × (lo que llegó después, 25% la
+// semana pasada y 75% ayer) + colchón (error no superado 9 de cada 10 días en las últimas 4 semanas).
+const TZ_MX_MS = -6 * 3600e3; // Ciudad de México, sin horario de verano
+const PESO_FALTA = 0.75, PESO_SEM_PASADA = 0.25, META_COLCHON = 0.9, DIAS_COLCHON = 28, DIAS_GUARDIA = 14;
+function planManana(datos, hoy, grupos, evaluacion, publicadas = {}) {
+  const manana = sumarDias(hoy, 1);
+  const capa = p => (p.tipo === "urgent" ? "urg" : p.es_sdd ? "sdd" : "spot");
+  // Por grupo y fecha: total por capa, y Spot publicado antes de las 18:00 del día anterior
+  const T = {};
+  for (const p of datos.ped) {
+    if (!p.facility_id || EXCLUIR.includes(p.facility_id)) continue;
+    const g = grupoDe(p.facility_id), f = p.fecha_ruta, c = capa(p);
+    const x = (T[`${g}|${f}`] = T[`${g}|${f}`] || { sdd: 0, spot: 0, urg: 0, spot18: 0, urgMismoDia: 0 });
+    if (p.status === "pending" && f < manana) continue;
+    x[c]++;
+    const creado = p.creado_meli ? new Date(new Date(p.creado_meli).getTime() + TZ_MX_MS) : null;
+    const corte = new Date(sumarDias(f, -1) + "T18:00:00Z");
+    if (c === "spot" && (!creado || creado < corte)) x.spot18++;
+    if (c === "urg" && creado && creado.toISOString().slice(0, 10) >= f) x.urgMismoDia++;
+  }
+  const v = (g, f, c) => (T[`${g}|${f}`] || {})[c] || 0;
+  const falta = (g, f) => v(g, f, "spot") - v(g, f, "spot18");
+  const estimaFalta = (g, f) => PESO_FALTA * (PESO_SEM_PASADA * falta(g, sumarDias(f, -7)) + (1 - PESO_SEM_PASADA) * falta(g, sumarDias(f, -1)));
+  const cuantil = (arr, q) => { if (!arr.length) return 0; const s = [...arr].sort((a, b) => a - b); return s[Math.min(s.length - 1, Math.ceil(q * s.length) - 1)]; };
+  return grupos.map(g => {
+    const n = g.nombre;
+    // SDD: contrato = lo ofrecido el mismo día de la semana pasada; y lo ya publicado para mañana
+    const sddContrato = v(n, sumarDias(manana, -7), "sdd"), sddPublicado = v(n, manana, "sdd");
+    const spotPublicado = v(n, manana, "spot"), spotFalta = Math.round(estimaFalta(n, manana));
+    const res = []; for (let j = 1; j <= DIAS_COLCHON; j++) { const f = sumarDias(manana, -j); res.push(v(n, f, "spot") - (v(n, f, "spot18") + estimaFalta(n, f))); }
+    const colchon = Math.max(0, Math.ceil(cuantil(res, META_COLCHON)));
+    const urgAvisados = v(n, manana, "urg");
+    // Guardia para urgentes del mismo día: percentil 90 de los últimos 14 días (binomial negativa aproximada por cuantil empírico)
+    const mismo = []; for (let j = 1; j <= DIAS_GUARDIA; j++) mismo.push(v(n, sumarDias(manana, -j), "urgMismoDia"));
+    const guardia = Math.ceil(cuantil(mismo, 0.9));
+    const total = Math.max(sddContrato, sddPublicado) + spotPublicado + spotFalta + colchon + urgAvisados;
+    // Vehículos de la malla para mañana
+    const d = diaSemana(manana), pub = publicadas[`${lunesDe(manana)}|${n}`];
+    let fijos, reserva;
+    if (pub) { fijos = pub.filas.filter(f => f.rol === "Fijo" && f.dias7[d] === "T").length; reserva = pub.filas.filter(f => f.rol === "Reserva" && !f.vacante).length; }
+    else { const m = armarMalla(g, lunesDe(manana)); fijos = m.trabajan[d]; reserva = m.filas.filter(f => f.rol === "Reserva").length; }
+    return { nombre: n, supervisor: g.supervisor, sddContrato, sddPublicado, spotPublicado, spotFalta, colchon, urgAvisados, total, fijos, reserva, brecha: total - fijos - reserva, guardia };
+  });
+}
+
 export default function MallaTurnosMX() {
   const hoy = fechaHoyOperativa();
   const [datos, setDatos] = useState(null);
@@ -255,6 +301,15 @@ export default function MallaTurnosMX() {
   const [grupoSel, setGrupoSel] = useState(null);
   const [semanaSel, setSemanaSel] = useState(0);
   const [verComo, setVerComo] = useState(false);
+  const [publicadas, setPublicadas] = useState({});   // { `${semana}|${grupo}`: { filas, base, pico, publicado_por, publicado_at, actualizado_at } }
+  const [edicion, setEdicion] = useState(null);        // filas en edición de la malla publicada que se está viendo
+  const [guardando, setGuardando] = useState(false);
+  const cargarPublicadas = useCallback(async () => {
+    const desde = lunesDe(hoy), hasta = sumarDias(desde, 21);
+    const { data } = await sb.from("malla_publicada").select("semana, grupo, filas, base, pico, publicado_por, publicado_at, actualizado_at").gte("semana", desde).lte("semana", hasta);
+    const m = {}; for (const r of (data || [])) m[`${r.semana}|${r.grupo}`] = r; setPublicadas(m);
+  }, [hoy]);
+  useEffect(() => { cargarPublicadas(); }, [cargarPublicadas]);
 
   useEffect(() => {
     let vivo = true;
@@ -263,7 +318,7 @@ export default function MallaTurnosMX() {
         const desdeDem = sumarDias(lunesDe(hoy), -7 * (SEMANAS_DEMANDA + 4)), hastaDem = sumarDias(hoy, -1);
         const desdeFlota = sumarDias(hoy, -DIAS_FLOTA - 7 * 4), hastaFlota = sumarDias(hoy, -1);
         const [ped, rutas, inv, sup] = await Promise.all([
-          traerTodo("mx_pedidos_estado", "facility_id, fecha_ruta, status, tipo, travel_status_final", q => q.gte("fecha_ruta", desdeDem).lte("fecha_ruta", hastaDem).neq("status", "canceled").order("request_id")),
+          traerTodo("mx_pedidos_estado", "facility_id, fecha_ruta, status, tipo, es_sdd, creado_meli, travel_status_final", q => q.gte("fecha_ruta", desdeDem).lte("fecha_ruta", sumarDias(hoy, 1)).neq("status", "canceled").order("request_id")),
           traerTodo("vs_rutas_ejecutadas", "fecha, svc, placa_norm", q => q.gte("fecha", desdeFlota).lte("fecha", hastaFlota).order("fecha")),
           traerTodo("inventario_flota", "placa, empresa, tipo, status", q => q),
           sb.from("supervisores_bt").select("nombre, scs_asignados").eq("activo", true).then(r => r.data || []),
@@ -278,12 +333,48 @@ export default function MallaTurnosMX() {
   const evaluacion = useMemo(() => (datos ? evaluarPronosticos(datos, hoy) : null), [datos, hoy]);
   const grupos = useMemo(() => (datos ? construirGrupos(datos, vent.dDem, vent.hDem, vent.dFlo, vent.hFlo).map(g => aplicarMetodo(g, evaluacion)) : []), [datos, vent, evaluacion]);
   const prueba = useMemo(() => (datos ? probarMalla(datos, hoy) : null), [datos, hoy]);
+  const manana = useMemo(() => (datos && grupos.length ? planManana(datos, hoy, grupos, evaluacion, publicadas) : []), [datos, hoy, grupos, evaluacion, publicadas]);
 
   const lunesBase = lunesDe(hoy);
   const semanas = [0, 1, 2, 3].map(i => sumarDias(lunesBase, 7 * i));
   const lunes = semanas[semanaSel];
-  const resumen = useMemo(() => grupos.map(g => ({ g, m: armarMalla(g, lunes) })), [grupos, lunes]);
+  const resumen = useMemo(() => grupos.map(g => {
+    const pub = publicadas[`${lunes}|${g.nombre}`];
+    if (!pub) return { g, m: armarMalla(g, lunes), pub: null };
+    const filas = pub.filas;
+    const trabajan = DIAS.map((_, d) => filas.filter(f => f.rol === "Fijo" && f.dias7[d] === "T").length);
+    const llamados = DIAS.map((_, d) => filas.filter(f => f.rol === "Reserva" && f.dias7[d] === "R").length);
+    const necesidad = DIAS.map((_, d) => Math.max(0, (pub.pico || g.pico)[d] - trabajan[d]));
+    const N = filas.filter(f => f.rol === "Fijo").length, vacFijos = filas.filter(f => f.rol === "Fijo" && f.vacante).length;
+    return { g: { ...g, base: pub.base || g.base, pico: pub.pico || g.pico }, m: { N, filas, trabajan, llamados, necesidad, faltaReserva: necesidad.map((k, d) => Math.max(0, k - llamados[d])), vacFijos, reservaMax: Math.max(...necesidad, 0) }, pub };
+  }), [grupos, lunes, publicadas]);
   const sel = resumen.find(x => x.g.nombre === grupoSel) || resumen[0];
+  useEffect(() => { setEdicion(null); }, [grupoSel, semanaSel]);
+  const usuario = () => { try { return window.localStorage.getItem("usuario") || window.localStorage.getItem("brain_usuario") || "Brain"; } catch { return "Brain"; } };
+  const publicar = async () => {
+    if (!sel || guardando) return; setGuardando(true);
+    const filas = sel.m.filas.map(f => ({ placa: f.placa, empresa: f.empresa, tipo: f.tipo, estado: f.estado, dias: f.dias, rol: f.rol, vacante: !!f.vacante, k: f.k, dias7: f.dias7 }));
+    const { error: e } = await sb.from("malla_publicada").upsert({ semana: lunes, grupo: sel.g.nombre, filas, base: sel.g.base, pico: sel.g.pico, publicado_por: usuario(), publicado_at: new Date().toISOString(), actualizado_at: new Date().toISOString() }, { onConflict: "semana,grupo" });
+    setGuardando(false);
+    if (e) { alert("No se pudo publicar: " + e.message); return; }
+    await cargarPublicadas();
+  };
+  const guardarCambios = async () => {
+    if (!sel || !edicion || guardando) return; setGuardando(true);
+    const { error: e } = await sb.from("malla_publicada").update({ filas: edicion, actualizado_at: new Date().toISOString() }).eq("semana", lunes).eq("grupo", sel.g.nombre);
+    setGuardando(false);
+    if (e) { alert("No se pudo guardar: " + e.message); return; }
+    setEdicion(null); await cargarPublicadas();
+  };
+  const volverACalcular = async () => {
+    if (!sel || !window.confirm("Se borra la malla publicada de esta semana y se vuelve a calcular con los datos de hoy. ¿Seguir?")) return;
+    const { error: e } = await sb.from("malla_publicada").delete().eq("semana", lunes).eq("grupo", sel.g.nombre);
+    if (e) { alert("No se pudo borrar: " + e.message); return; }
+    setEdicion(null); await cargarPublicadas();
+  };
+  const SIG = { T: "D", D: "R", R: "—", "—": "T" };
+  const tocarDia = (i, d) => { const base = edicion || sel.m.filas; const nuevo = base.map((f, j) => (j === i ? { ...f, dias7: f.dias7.map((v, k) => (k === d ? SIG[v] || "T" : v)) } : f)); setEdicion(nuevo); };
+  const tocarRol = i => { const base = edicion || sel.m.filas; setEdicion(base.map((f, j) => (j === i ? { ...f, rol: f.rol === "Fijo" ? "Reserva" : "Fijo" } : f))); };
 
   const card = { background: "#fff", border: `1px solid ${BORDER}`, borderRadius: 12, padding: "18px 22px" };
   const th = { padding: "7px 8px", fontSize: 11, color: MUTED, fontWeight: 600, textAlign: "center", borderBottom: `1px solid ${BORDER}` };
@@ -335,6 +426,56 @@ export default function MallaTurnosMX() {
         )}
       </div>
 
+      {manana.length > 0 && (() => {
+        const f = sumarDias(hoy, 1), t = manana.reduce((x, r) => { for (const k of Object.keys(r)) if (typeof r[k] === "number") x[k] = (x[k] || 0) + r[k]; return x; }, {});
+        const n = v => (v ? v : "—");
+        const filas = [...manana].sort((a, b) => b.total - a.total);
+        return (
+          <div style={{ ...card, borderColor: "#c7d6f2", background: "#f8faff" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
+              <div style={{ fontSize: 16, fontWeight: 700 }}>Mañana · {DIAS[diaSemana(f)]} {fechaCorta(f)} · qué hay que cubrir y con qué</div>
+              <div style={{ fontSize: 12, color: MUTED }}>Se calcula con lo que MELI ya publicó hasta ahora; a las 18:00 queda casi completo</div>
+            </div>
+            <div style={{ display: "flex", gap: 12, marginTop: 12, flexWrap: "wrap" }}>
+              {[["Rutas a cubrir mañana", t.total, NAVY], ["SDD (contrato)", Math.max(t.sddContrato, t.sddPublicado), "#1f2937"], ["Spot: publicado + por llegar + colchón", t.spotPublicado + t.spotFalta + t.colchon, "#2f6fbf"], ["Urgentes ya avisados", t.urgAvisados, "#9a3c06"], ["Vehículos en la malla", t.fijos + t.reserva, "#15803d"], [t.brecha > 0 ? "Faltan" : "Sobran", Math.abs(t.brecha), t.brecha > 0 ? "#b42318" : "#15803d"]].map(([tt, v, c]) => (
+                <div key={tt} style={{ flex: "1 1 150px", background: "#fff", border: `1px solid ${BORDER}`, borderRadius: 10, padding: "10px 14px" }}>
+                  <div style={{ fontSize: 12, color: MUTED }}>{tt}</div>
+                  <div style={{ fontSize: 22, fontWeight: 800, color: c }}>{v}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{ overflowX: "auto", marginTop: 12 }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 980, background: "#fff" }}>
+                <thead><tr>
+                  {["SC", "SDD contrato", "SDD publicadas", "Spot publicado", "Spot por llegar", "Colchón", "Urgentes avisados", "Total a cubrir", "Fijos que trabajan", "Reserva", "Faltan / sobran", "Guardia para urgentes del día"].map(h => <th key={h} style={{ ...th, textAlign: h === "SC" ? "left" : "center" }}>{h}</th>)}
+                </tr></thead>
+                <tbody>
+                  {filas.map(r => (
+                    <tr key={r.nombre}>
+                      <td style={{ ...td, textAlign: "left", fontWeight: 700 }}>{r.nombre}</td>
+                      <td style={td}>{n(r.sddContrato)}</td>
+                      <td style={{ ...td, color: r.sddPublicado < r.sddContrato ? "#b45309" : "#1f2937" }}>{n(r.sddPublicado)}</td>
+                      <td style={td}>{n(r.spotPublicado)}</td>
+                      <td style={{ ...td, color: MUTED }}>{n(r.spotFalta)}</td>
+                      <td style={{ ...td, color: MUTED }}>{n(r.colchon)}</td>
+                      <td style={{ ...td, color: "#9a3c06" }}>{n(r.urgAvisados)}</td>
+                      <td style={{ ...td, fontWeight: 800 }}>{r.total}</td>
+                      <td style={td}>{r.fijos}</td>
+                      <td style={td}>{n(r.reserva)}</td>
+                      <td style={{ ...td, fontWeight: 800, color: r.brecha > 0 ? "#b42318" : "#15803d" }}>{r.brecha > 0 ? `faltan ${r.brecha}` : r.brecha < 0 ? `sobran ${-r.brecha}` : "justo"}</td>
+                      <td style={{ ...td, color: "#9a3c06" }}>{n(r.guardia)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div style={{ fontSize: 12, color: MUTED, marginTop: 8, lineHeight: 1.5 }}>
+              <b>SDD contrato</b> = lo ofrecido el mismo día de la semana pasada. <b>Spot por llegar</b> = lo que suele publicarse después de las 18:00 (75% de peso a ayer, 25% a la semana pasada). <b>Colchón</b> = el error del Spot que no se superó 9 de cada 10 días en las últimas 4 semanas. <b>Guardia</b> = urgentes del mismo día que no se superaron 9 de cada 10 días en las últimas 2 semanas: es lo que conviene tener de guardia de 06:00 a 09:00, y se ajusta a las 09:00 con lo que ya llegó.
+            </div>
+          </div>
+        );
+      })()}
+
       <div style={card}>
         <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 8 }}>Resumen por SC · semana del {fechaCorta(lunes)}</div>
         <div style={{ overflowX: "auto" }}>
@@ -360,7 +501,7 @@ export default function MallaTurnosMX() {
                     <td style={td}>{g.pico.reduce((a, b) => a + b, 0)}</td>
                     <td style={{ ...td, color: MUTED }}>{g.metodo === "ingenuo" ? "Semana pasada" : "Malla"}</td>
                     {(() => { const al = evaluacion && evaluacion[g.nombre] ? evaluacion[g.nombre].alarmas : []; return <td style={{ ...td, color: al.length ? "#b42318" : "#15803d", fontWeight: 700 }} title={al.join(" · ")}>{al.length ? "Revisar" : "OK"}</td>; })()}
-                    <td style={{ ...td, color: NAVY, fontWeight: 600 }}>Ver malla ›</td>
+                    <td style={{ ...td, color: NAVY, fontWeight: 600, whiteSpace: "nowrap" }}>{resumen.find(x => x.g.nombre === g.nombre)?.pub ? <span style={{ color: "#15803d" }}>✓ Publicada · </span> : null}Ver malla ›</td>
                   </tr>
                 );
               })}
@@ -460,10 +601,28 @@ export default function MallaTurnosMX() {
         const fechasSem = DIAS.map((_, d) => sumarDias(lunes, d));
         return (
           <div style={card}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
-              <div style={{ fontSize: 16, fontWeight: 700 }}>Malla de {g.nombre} · semana del {fechaCorta(lunes)}</div>
-              <div style={{ fontSize: 12, color: MUTED }}>Supervisor: {g.supervisor} · T = trabaja · D = descansa · R = reserva llamada</div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+              <div>
+                <div style={{ fontSize: 16, fontWeight: 700 }}>Malla de {g.nombre} · semana del {fechaCorta(lunes)}</div>
+                <div style={{ fontSize: 12, color: MUTED, marginTop: 2 }}>Supervisor: {g.supervisor} · T = trabaja · D = descansa · R = reserva llamada</div>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                {sel.pub ? (
+                  <>
+                    <span style={{ fontSize: 12, color: "#15803d", fontWeight: 700, background: "#ecfdf3", border: "1px solid #a6e3bf", borderRadius: 999, padding: "4px 10px" }}>Publicada el {fechaCorta(sel.pub.publicado_at.slice(0, 10))} por {sel.pub.publicado_por}{sel.pub.actualizado_at > sel.pub.publicado_at ? " · ajustada" : ""}</span>
+                    {edicion && <button onClick={guardarCambios} disabled={guardando} style={{ padding: "6px 12px", borderRadius: 8, border: "none", background: "#15803d", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>{guardando ? "Guardando…" : "Guardar cambios"}</button>}
+                    {edicion && <button onClick={() => setEdicion(null)} style={{ padding: "6px 12px", borderRadius: 8, border: `1px solid ${BORDER}`, background: "#fff", color: MUTED, fontSize: 12, cursor: "pointer" }}>Descartar</button>}
+                    <button onClick={volverACalcular} style={{ padding: "6px 12px", borderRadius: 8, border: `1px solid ${BORDER}`, background: "#fff", color: "#b42318", fontSize: 12, cursor: "pointer" }}>Volver a calcular</button>
+                  </>
+                ) : (
+                  <>
+                    <span style={{ fontSize: 12, color: MUTED }}>Calculada hoy · cambia con los datos</span>
+                    <button onClick={publicar} disabled={guardando} style={{ padding: "7px 14px", borderRadius: 8, border: "none", background: NAVY, color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>{guardando ? "Publicando…" : "Publicar esta semana"}</button>
+                  </>
+                )}
+              </div>
             </div>
+            {sel.pub && <div style={{ fontSize: 12, color: MUTED, marginTop: 6 }}>Esta malla queda fija para la semana. Para ajustarla, haz clic en una letra (cambia T → D → R → —) o en el rol (Fijo ↔ Reserva), y después "Guardar cambios".</div>}
             <div style={{ overflowX: "auto", marginTop: 10 }}>
               <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 900 }}>
                 <thead><tr>
@@ -471,25 +630,29 @@ export default function MallaTurnosMX() {
                   {fechasSem.map((f, d) => <th key={f} style={th}>{DIAS[d]} {f.slice(8, 10)}</th>)}
                 </tr></thead>
                 <tbody>
-                  {m.filas.map(f => (
+                  {(edicion || m.filas).map((f, i) => (
                     <tr key={f.k}>
                       <td style={{ ...td, textAlign: "left", fontWeight: 700, color: f.vacante ? "#b42318" : "#1f2937" }}>{f.placa}</td>
                       <td style={{ ...td, textAlign: "left", color: f.vacante ? "#b42318" : MUTED, maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.empresa}</td>
                       <td style={{ ...td, textAlign: "left" }}>{f.tipo || ""}</td>
                       <td style={{ ...td, textAlign: "left", color: f.estado === "INACTIVO" ? "#9a3c06" : MUTED, fontWeight: f.estado === "INACTIVO" ? 700 : 400 }} title={f.estado === "INACTIVO" ? "Figura INACTIVO en el inventario de flota, pero trabajó según MELI. Revisar con Terceros." : ""}>{f.estado || ""}</td>
                       <td style={td}>{f.dias ?? ""}</td>
-                      <td style={{ ...td, textAlign: "left", fontWeight: 600, color: f.rol === "Fijo" ? NAVY : "#9a3c06" }}>{f.rol}</td>
-                      {f.dias7.map((v, d) => <td key={d} style={{ ...td, ...color(v) }}>{v}</td>)}
+                      <td onClick={() => sel.pub && tocarRol(i)} style={{ ...td, textAlign: "left", fontWeight: 600, color: f.rol === "Fijo" ? NAVY : "#9a3c06", cursor: sel.pub ? "pointer" : "default" }}>{f.rol}</td>
+                      {f.dias7.map((v, d) => <td key={d} onClick={() => sel.pub && tocarDia(i, d)} style={{ ...td, ...color(v), cursor: sel.pub ? "pointer" : "default", userSelect: "none" }}>{v}</td>)}
                     </tr>
                   ))}
-                  {[
-                    ["Fijos que trabajan", m.trabajan, {}],
-                    ["Reserva llamada", m.llamados, {}],
-                    ["Capacidad del día", DIAS.map((_, d) => m.trabajan[d] + m.llamados[d]), { fontWeight: 800 }],
+                  {(() => {
+                    const filasV = edicion || m.filas;
+                    const trab = DIAS.map((_, d) => filasV.filter(f => f.rol === "Fijo" && f.dias7[d] === "T").length);
+                    const llam = DIAS.map((_, d) => filasV.filter(f => f.rol !== "Fijo" && f.dias7[d] === "R").length);
+                    return [
+                    ["Fijos que trabajan", trab, {}],
+                    ["Reserva llamada", llam, {}],
+                    ["Capacidad del día", DIAS.map((_, d) => trab[d] + llam[d]), { fontWeight: 800 }],
                     ["Rutas base (pronóstico)", g.base, { color: MUTED }],
                     ["Rutas pico (pronóstico)", g.pico, { color: MUTED }],
-                    ["Faltan para el pico", DIAS.map((_, d) => Math.max(0, g.pico[d] - m.trabajan[d] - m.llamados[d])), { color: "#b42318", fontWeight: 800 }],
-                  ].map(([t, vals, st]) => (
+                    ["Faltan para el pico", DIAS.map((_, d) => Math.max(0, g.pico[d] - trab[d] - llam[d])), { color: "#b42318", fontWeight: 800 }],
+                  ]; })().map(([t, vals, st]) => (
                     <tr key={t} style={{ background: "#fafafa" }}>
                       <td colSpan={6} style={{ ...td, textAlign: "right", fontWeight: 700, color: NAVY }}>{t}</td>
                       {vals.map((v, d) => <td key={d} style={{ ...td, ...st }}>{v || (t === "Faltan para el pico" ? "—" : v)}</td>)}
