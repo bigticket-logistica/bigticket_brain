@@ -15,7 +15,7 @@
 //   Ejecutado   = aceptados que salieron
 //   Soft no show = SDD no aceptado (Solicitado − Confirmado)
 // ═══════════════════════════════════════════════════════════════════════════
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { descargarExcelMultihoja, fechaOperativaOffset, sb } from "./shared";
 
 const AZUL = "#1a3a6b";
@@ -36,7 +36,7 @@ const CATEGORIA = {
   no_show_soft: ["Soft no show", "#b45309", "#fef3c7"],
   no_show_hard: ["Hard no show", "#b91c1c", "#fee2e2"],
   cancelado_hard: ["Cancelación", "#b91c1c", "#fee2e2"],
-  sin_responder: ["Sin responder supervisor", "#9f1239", "#ffe4e6"],
+  sin_responder: ["No salió · sin clasificar", "#9f1239", "#ffe4e6"],
   otro: ["Otro", "#475569", "#f1f5f9"],
 };
 
@@ -54,7 +54,7 @@ const VER = [
   ["soft", "Soft no show"],
   ["no_show_hard", "Hard no show"],
   ["cancelado_hard", "Cancelación"],
-  ["sin_responder", "Sin responder supervisor"],
+  ["sin_responder", "No salió sin clasificar"],
   ["pendiente", "Pendientes"],
 ];
 
@@ -67,6 +67,7 @@ const pasaVer = (f, v) => {
 
 const pct = (a, b) => (b ? Math.round((a * 100) / b) + "%" : "—");
 const fCorta = (d) => (d ? new Date(d + "T12:00:00").toLocaleDateString("es-MX", { day: "2-digit", month: "short" }) : "");
+const fLarga = (d) => (d ? new Date(d + "T12:00:00").toLocaleDateString("es-MX", { weekday: "long", day: "numeric", month: "long", year: "numeric" }) : "");
 
 function Pill({ t, c, bg }) {
   return <span style={{ background: bg, color: c, fontSize: 10.5, fontWeight: 700, padding: "2px 8px", borderRadius: 10, whiteSpace: "nowrap" }}>{t}</span>;
@@ -108,8 +109,14 @@ function sumar(filas) {
 
 export default function Capacidad() {
   const ayer = fechaOperativaOffset(-1);
-  const [desde, setDesde] = useState(ayer);
-  const [hasta, setHasta] = useState(ayer);
+  // Lo que el usuario elige en los calendarios…
+  const [fechaSel, setFechaSel] = useState(ayer);
+  const [hastaSel, setHastaSel] = useState(ayer);
+  const [esRango, setEsRango] = useState(false);
+  // …y lo que realmente se consultó (solo cambia con Aplicar).
+  const [aplicado, setAplicado] = useState({ d1: ayer, d2: ayer });
+  const [segundos, setSegundos] = useState(null);
+  const ultimaPeticion = useRef(0);
   const [modelo, setModelo] = useState("");
   const [sc, setSc] = useState("");
   const [todas, setTodas] = useState([]);
@@ -120,20 +127,30 @@ export default function Capacidad() {
   const [error, setError] = useState(null);
   const [excelBusy, setExcelBusy] = useState(false);
 
-  const d1 = desde <= hasta ? desde : hasta;
-  const d2 = hasta >= desde ? hasta : desde;
+  const { d1, d2 } = aplicado;
+  const fechasValidas = /^\d{4}-\d{2}-\d{2}$/.test(fechaSel) && (!esRango || /^\d{4}-\d{2}-\d{2}$/.test(hastaSel));
+  const aplicar = () => {
+    if (!fechasValidas) return;
+    const a = fechaSel, b = esRango ? hastaSel : fechaSel;
+    setAplicado({ d1: a <= b ? a : b, d2: b >= a ? b : a });
+  };
 
   const cargar = useCallback(async () => {
+    // Si llegan dos respuestas, solo vale la de la última petición.
+    const id = ++ultimaPeticion.current;
+    const t0 = Date.now();
     setLoading(true); setError(null);
     try {
       // Una sola llamada por rango de fechas; modelo y SC se filtran en pantalla.
       const { data, error: err } = await sb.rpc("fn_capacidad", { p_desde: d1, p_hasta: d2 });
+      if (id !== ultimaPeticion.current) return;
       if (err) throw err;
       setTodas(Array.isArray(data) ? data : []);
+      setSegundos(((Date.now() - t0) / 1000).toFixed(1));
     } catch (e) {
-      setError(e.message || String(e));
+      if (id === ultimaPeticion.current) setError(e.message || String(e));
     } finally {
-      setLoading(false);
+      if (id === ultimaPeticion.current) setLoading(false);
     }
   }, [d1, d2]);
   useEffect(() => { cargar(); }, [cargar]);
@@ -163,12 +180,12 @@ export default function Capacidad() {
     setExcelBusy(true);
     try {
       const det = [["FECHA", "SC", "MODELO", "REQUEST ID", "TRAVEL ID", "VEHICULO", "PLACA", "CHOFER", "DRIVER ID", "ID RUTA",
-        "CONFIRMADO", "ASIGNADO", "EJECUTADO", "ESTADO TORRE", "CATEGORIA", "RESPUESTA SUPERVISOR", "PRUEBAS"]];
+        "CONFIRMADO", "ASIGNADO", "EJECUTADO", "ESTADO TORRE", "RESULTADO", "RESPUESTA SUPERVISOR", "PRUEBAS"]];
       for (const f of filtradas) det.push([f.fecha, f.sc, f.modelo, f.request_id ?? "", f.travel_id || "", f.vehiculo || "", f.placa || "",
         f.chofer || "", f.driver_id || "", f.id_ruta || "", f.confirmado || "", f.asignado ? "SI" : "NO", f.ejecutado ? "SI" : "NO",
         f.estado_torre || "", (CATEGORIA[f.categoria] || [f.categoria])[0], f.resultado_supervisor || "", f.pruebas || 0]);
       const res = [["SC", "SOLICITADO", "CONFIRMADO", "ASIGNADO", "EJECUTADO", "% EJECUTADO / CONFIRMADO", "SOFT NO SHOW",
-        "HARD NO SHOW", "CANCELACION", "SIN RESPONDER SUPERVISOR", "PENDIENTE"]];
+        "HARD NO SHOW", "CANCELACION", "NO SALIO SIN CLASIFICAR", "PENDIENTE"]];
       for (const x of porSc) {
         if (sc && x.sc !== sc) continue;
         res.push([x.sc, x.solicitado, x.confirmado, x.asignado, x.ejecutado, pct(x.ejecutado, x.confirmado), x.no_show_soft,
@@ -194,8 +211,15 @@ export default function Capacidad() {
     <div className="pg">
       {/* Filtros */}
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end", marginBottom: 12 }}>
-        <label style={{ fontSize: 11, color: GRIS }}>Desde<br /><input type="date" value={desde} onChange={(e) => setDesde(e.target.value)} style={input} /></label>
-        <label style={{ fontSize: 11, color: GRIS }}>Hasta<br /><input type="date" value={hasta} onChange={(e) => setHasta(e.target.value)} style={input} /></label>
+        <label style={{ fontSize: 11, color: GRIS }}>{esRango ? "Desde" : "Día"}<br />
+          <input type="date" value={fechaSel} onChange={(e) => setFechaSel(e.target.value)} style={input} /></label>
+        {esRango && <label style={{ fontSize: 11, color: GRIS }}>Hasta<br />
+          <input type="date" value={hastaSel} onChange={(e) => setHastaSel(e.target.value)} style={input} /></label>}
+        <label style={{ fontSize: 11, color: GRIS, display: "flex", alignItems: "center", gap: 4, paddingBottom: 7 }}>
+          <input type="checkbox" checked={esRango} onChange={(e) => { setEsRango(e.target.checked); if (e.target.checked && hastaSel < fechaSel) setHastaSel(fechaSel); }} /> Rango
+        </label>
+        <button onClick={aplicar} disabled={loading || !fechasValidas}
+          style={{ ...input, background: AZUL, color: "#fff", border: "none", cursor: "pointer", fontWeight: 600 }}>Aplicar</button>
         <label style={{ fontSize: 11, color: GRIS }}>Modelo de contratación<br />
           <select value={modelo} onChange={(e) => setModelo(e.target.value)} style={input}>
             <option value="">Todos</option><option value="SDD">SDD</option><option value="SPOT">Spot</option>
@@ -209,9 +233,16 @@ export default function Capacidad() {
         </label>
         <button onClick={cargar} disabled={loading} style={{ ...input, background: "#fff", cursor: "pointer" }}>↻ Actualizar</button>
         <button onClick={descargarExcel} disabled={excelBusy || loading}
-          style={{ ...input, background: AZUL, color: "#fff", border: "none", cursor: "pointer", fontWeight: 600 }}>
+          style={{ ...input, background: "#fff", cursor: "pointer", fontWeight: 600 }}>
           {excelBusy ? "Generando…" : "⬇ Descargar Excel"}
         </button>
+      </div>
+      {/* Qué está mostrando la pantalla: evita confundir lo elegido con lo cargado */}
+      <div style={{ fontSize: 12, color: "#334155", marginBottom: 12 }}>
+        Mostrando <b>{d1 === d2 ? fLarga(d1) : `${fLarga(d1)} al ${fLarga(d2)}`}</b>
+        {modelo ? ` · ${modelo === "SDD" ? "SDD" : "Spot"}` : " · SDD y Spot"}{sc ? ` · ${sc}` : ""}
+        {!loading && <span style={{ color: GRIS }}> · {todas.length} viajes{segundos ? ` · cargado en ${segundos} s` : ""}</span>}
+        {(fechaSel !== d1 || (esRango ? hastaSel : fechaSel) !== d2) && <span style={{ color: "#b45309", fontWeight: 600 }}> · cambiaste la fecha: presiona Aplicar</span>}
       </div>
 
       {error && <div style={{ background: "#fee2e2", color: "#b91c1c", padding: 10, borderRadius: 8, fontSize: 12, marginBottom: 12 }}>Error: {error}</div>}
@@ -243,13 +274,12 @@ export default function Capacidad() {
             ["Hard no show", tot.no_show_hard || 0, "Aceptado, no salió y el supervisor marcó No Show"],
             ["Soft no show", tot.no_show_soft || 0, "SDD que Bigticket no aceptó (rechazado, vencido, cancelado o sin responder)"],
           ]} />
-          <Tarjeta titulo="Cancelado" total={tot.cancelado_hard || 0} filas={[
-            ["Hard cancelado", tot.cancelado_hard || 0, "Aceptado, no salió y el supervisor marcó Cancelación"],
+          <Tarjeta titulo="No salió (aceptado)" total={(tot.no_show_hard || 0) + (tot.cancelado_hard || 0) + (tot.sin_responder || 0)} filas={[
+            ["Hard no show", tot.no_show_hard || 0, "El supervisor lo marcó como No Show en la Bitácora"],
+            ["Cancelación", tot.cancelado_hard || 0, "El supervisor lo marcó como Cancelación en la Bitácora"],
+            ["Sin clasificar por el supervisor", tot.sin_responder || 0, "La Torre vio que no salió y el supervisor no lo ha clasificado en la Bitácora (el ítem No Salidas a Ruta existe desde el 5-nov-2026)"],
           ]} />
-          <Tarjeta titulo="Por revisar" total={(tot.sin_responder || 0) + (tot.pendiente || 0)} filas={[
-            ["Sin responder supervisor", tot.sin_responder || 0, "Aceptado, no salió y el supervisor no ha respondido en la Bitácora"],
-            ["Pendiente de hoy", tot.pendiente || 0, "Todavía puede salir"],
-          ]} />
+          {(tot.pendiente || 0) > 0 && <Tarjeta titulo="Pendiente de hoy" total={tot.pendiente} filas={[["Todavía puede salir", tot.pendiente, ""]]} />}
         </div>
       </div>
 
@@ -261,7 +291,7 @@ export default function Capacidad() {
             <thead><tr>
               <th style={th}>SC</th><th style={thC}>Solicitado</th><th style={thC}>Confirmado</th><th style={thC}>Asignado</th>
               <th style={thC}>Ejecutado</th><th style={thC}>% Ejecutado</th><th style={thC}>Soft no show</th><th style={thC}>Hard no show</th>
-              <th style={thC}>Cancelación</th><th style={thC}>Sin responder</th>
+              <th style={thC}>Cancelación</th><th style={thC}>Sin clasificar</th>
             </tr></thead>
             <tbody>
               {[...porSc].sort((a, b) => (b.no_show_hard + b.no_show_soft + b.cancelado_hard + b.sin_responder)
