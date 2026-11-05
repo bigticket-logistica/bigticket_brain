@@ -1,7 +1,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 // Capacidad.jsx — Administración → Pagos → Capacidad.
 //
-// Réplica del reporte "Resumen de ejecución de rutas" de MELI con datos propios:
+// Réplica del reporte "Resumen de ejecución de rutas" de MELI con datos propos:
 //   · fn_capacidad(desde, hasta) → una fila por pedido del rango (máx. 31 días), en
 //     una sola llamada. Lee solo el rango pedido, nunca el histórico completo.
 //   El embudo, las tarjetas y el ranking se suman aquí, y el modelo y el SC se
