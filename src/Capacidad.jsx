@@ -66,6 +66,7 @@ const pasaVer = (f, v) => {
 
 const pct = (a, b) => (b ? Math.round((a * 100) / b) + "%" : "—");
 const fCorta = (d) => (d ? new Date(d + "T12:00:00").toLocaleDateString("es-MX", { day: "2-digit", month: "short" }) : "");
+const fHora = (v) => (v ? new Date(v).toLocaleString("es-MX", { timeZone: "America/Mexico_City", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : "");
 const fLarga = (d) => (d ? new Date(d + "T12:00:00").toLocaleDateString("es-MX", { weekday: "long", day: "numeric", month: "long", year: "numeric" }) : "");
 
 function Pill({ t, c, bg }) {
@@ -194,10 +195,11 @@ export default function Capacidad() {
     setExcelBusy(true);
     try {
       const det = [["FECHA", "SC", "MODELO", "REQUEST ID", "TRAVEL ID", "VEHICULO", "PLACA", "CHOFER", "DRIVER ID", "ID RUTA",
-        "CONFIRMADO", "ASIGNADO", "EJECUTADO", "ESTADO TORRE", "RESULTADO", "RESPUESTA SUPERVISOR", "PRUEBAS"]];
+        "CONFIRMADO", "ASIGNADO", "EJECUTADO", "ESTADO TORRE", "RESULTADO", "RESPUESTA SUPERVISOR", "RESPONDIDO POR", "RESPONDIDO EL", "PRUEBAS"]];
       for (const f of filtradas) det.push([f.fecha, f.sc, f.modelo, f.request_id ?? "", f.travel_id || "", f.vehiculo || "", f.placa || "",
         f.chofer || "", f.driver_id || "", f.id_ruta || "", f.confirmado || "", f.asignado ? "SI" : "NO", f.ejecutado ? "SI" : "NO",
-        f.estado_torre || "", (CATEGORIA[f.categoria] || [f.categoria])[0], f.resultado_supervisor || "", f.pruebas || 0]);
+        f.estado_torre || "", (CATEGORIA[f.categoria] || [f.categoria])[0], f.resultado_supervisor || "",
+        f.respondido_por || "", f.respondido_at ? fHora(f.respondido_at) : "", f.pruebas || 0]);
       const res = [["SC", "SOLICITADO", "CONFIRMADO", "ASIGNADO", "EJECUTADO", "% EJECUTADO / CONFIRMADO", "SOFT NO SHOW",
 "HARD NO SHOW SDD", "HARD NO SHOW SPOT", "CANCELACION SDD", "CANCELACION SPOT", "NO SALIO SIN CLASIFICAR", "PENDIENTE"]];
       for (const x of porSc) {
@@ -361,7 +363,14 @@ export default function Capacidad() {
                   <td style={tdC}>{f.confirmado ? <Pill t={f.confirmado} c={conf[0]} bg={conf[1]} /> : "—"}</td>
                   <td style={tdC}><Check v={f.asignado} /></td>
                   <td style={tdC}><Check v={f.ejecutado} /></td>
-                  <td style={td}><Pill t={cat[0]} c={cat[1]} bg={cat[2]} /></td>
+                  <td style={td}>
+                    <Pill t={cat[0]} c={cat[1]} bg={cat[2]} />
+                    {f.respondido_at && <div style={{ fontSize: 10.5, color: GRIS, marginTop: 3 }}>
+                      {f.resultado_supervisor === "si_salio" ? "Sí salió" : f.resultado_supervisor === "no_show" ? "No Show" : f.resultado_supervisor === "cancelacion" ? "Cancelación" : f.resultado_supervisor}
+                      {" · "}{f.respondido_por || "supervisor"} · {fHora(f.respondido_at)}{f.pruebas ? ` · ${f.pruebas} prueba${f.pruebas > 1 ? "s" : ""}` : ""}
+                    </div>}
+                    {!f.respondido_at && f.categoria === "sin_responder" && <div style={{ fontSize: 10.5, color: "#9f1239", marginTop: 3 }}>Sin respuesta en la Bitácora</div>}
+                  </td>
                 </tr>
               );
             })}
