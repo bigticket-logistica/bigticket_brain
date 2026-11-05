@@ -1,7 +1,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 // Capacidad.jsx — Administración → Pagos → Capacidad.
 //
-// Réplica del reporte "Resumen de ejecución de rutas" de MELI con datos propos:
+// Réplica del reporte "Resumen de ejecución de rutas" de MELI con datos propios:
 //   · fn_capacidad(desde, hasta) → una fila por pedido del rango (máx. 31 días), en
 //     una sola llamada. Lee solo el rango pedido, nunca el histórico completo.
 //   El embudo, las tarjetas y el ranking se suman aquí, y el modelo y el SC se
@@ -33,10 +33,10 @@ const BARRAS = [
 const CATEGORIA = {
   ejecutado: ["Ejecutado", "#047857", "#d1fae5"],
   pendiente: ["Pendiente", "#7c3aed", "#f3e8ff"],
-  no_show_soft: ["Soft no show", "#b45309", "#fef3c7"],
-  no_show_hard: ["Hard no show", "#b91c1c", "#fee2e2"],
+  no_show_soft: ["No confirmada (soft no show)", "#b45309", "#fef3c7"],
+  no_show_hard: ["No show (hard)", "#b91c1c", "#fee2e2"],
   cancelado_hard: ["Cancelación", "#b91c1c", "#fee2e2"],
-  sin_responder: ["No salió · sin clasificar", "#9f1239", "#ffe4e6"],
+  sin_responder: ["No salió · sin respuesta del supervisor", "#9f1239", "#ffe4e6"],
   otro: ["Otro", "#475569", "#f1f5f9"],
 };
 
@@ -50,10 +50,10 @@ const VER = [
   ["todos", "Todos"],
   ["ejecutado", "Ejecutados"],
   ["no_ejecutado", "No ejecutados"],
-  ["soft", "Soft no show"],
-  ["no_show_hard", "Hard no show"],
+  ["soft", "No confirmadas (soft no show)"],
+  ["no_show_hard", "No show (hard)"],
   ["cancelado_hard", "Cancelación"],
-  ["sin_responder", "No salió sin clasificar"],
+  ["sin_responder", "No salió · sin respuesta del supervisor"],
   ["pendiente", "Pendientes"],
 ];
 
@@ -77,16 +77,18 @@ function Check({ v }) {
   return v ? <span style={{ color: "#047857", fontWeight: 800 }}>✓</span> : <span style={{ color: "#cbd5e1" }}>—</span>;
 }
 
-function Tarjeta({ titulo, total, filas }) {
+function Tarjeta({ titulo, total, sub, filas }) {
   return (
-    <div style={{ background: "#fff", border: `1px solid ${BORDE}`, borderRadius: 10, padding: "12px 14px", minWidth: 210 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 700, color: AZUL, fontSize: 13 }}>
-        <span>{titulo}</span><span>{total}</span>
+    <div style={{ background: "#fff", border: `1px solid ${BORDE}`, borderRadius: 10, padding: "12px 14px", minWidth: 230, maxWidth: 300 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12, fontWeight: 700, color: AZUL, fontSize: 13 }}>
+        <span>{titulo}</span><span style={{ fontSize: 18, whiteSpace: "nowrap" }}>{total}</span>
       </div>
-      <div style={{ borderTop: `1px solid ${BORDE}`, margin: "8px 0 4px" }} />
+      {sub && <div style={{ fontSize: 11, color: GRIS, marginTop: 2 }}>{sub}</div>}
+      {filas.length > 0 && <div style={{ borderTop: `1px solid ${BORDE}`, margin: "8px 0 4px" }} />}
       {filas.map(([t, v, ayuda]) => (
-        <div key={t} title={ayuda} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: GRIS, padding: "3px 0" }}>
-          <span>{t}</span><span style={{ fontWeight: 700, color: "#334155" }}>{v}</span>
+        <div key={t} title={ayuda} style={{ display: "flex", justifyContent: "space-between", gap: 12, fontSize: 12, color: GRIS, padding: "3px 0",
+          whiteSpace: "pre", ...(v === "" ? { fontSize: 11, fontWeight: 600, color: AZUL, marginTop: 6 } : {}) }}>
+          <span>{t}</span><span style={{ fontWeight: 700, color: "#334155", whiteSpace: "nowrap" }}>{v}</span>
         </div>
       ))}
     </div>
@@ -97,13 +99,15 @@ function Tarjeta({ titulo, total, filas }) {
 function sumar(filas) {
   const t = { solicitado: filas.length, confirmado: 0, asignado: 0, ejecutado: 0, pendiente: 0,
     no_show_soft: 0, no_show_hard: 0, no_show_hard_sdd: 0, no_show_hard_spot: 0,
-    cancelado_hard: 0, cancelado_sdd: 0, cancelado_spot: 0, sin_responder: 0 };
+    cancelado_hard: 0, cancelado_sdd: 0, cancelado_spot: 0, sin_responder: 0, no_salio_sdd: 0, no_salio_spot: 0 };
   for (const f of filas) {
     const acept = f.confirmado === "Aceptado";
     const sdd = f.modelo === "SDD";
     if (acept) t.confirmado++;
     if (acept && f.asignado) t.asignado++;
     if (acept && f.ejecutado) t.ejecutado++;
+    // Aceptada que no salió, según la Torre (sin esperar al supervisor)
+    if (acept && !f.ejecutado && f.categoria !== "pendiente") { if (sdd) t.no_salio_sdd++; else t.no_salio_spot++; }
     if (f.categoria === "no_show_hard") { t.no_show_hard++; if (sdd) t.no_show_hard_sdd++; else t.no_show_hard_spot++; }
     else if (f.categoria === "cancelado_hard") { t.cancelado_hard++; if (sdd) t.cancelado_sdd++; else t.cancelado_spot++; }
     else if (t[f.categoria] !== undefined && f.categoria !== "ejecutado") t[f.categoria]++;
@@ -288,18 +292,17 @@ export default function Capacidad() {
           </div>
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          <Tarjeta titulo="No show" total={(tot.no_show_hard || 0) + (tot.no_show_soft || 0)} filas={[
-            ["Hard no show SDD", tot.no_show_hard_sdd || 0, "SDD aceptado que no se hizo (el supervisor lo marcó No Show; antes del 4-nov-2026, todo aceptado que no salió)"],
-            ["Hard no show Spot", tot.no_show_hard_spot || 0, "Spot aceptado que no se hizo (el supervisor lo marcó No Show)"],
-            ["Soft no show", tot.no_show_soft || 0, "SDD solicitado que no confirmamos"],
-          ]} />
-          <Tarjeta titulo="Cancelaciones" total={tot.cancelado_hard || 0} filas={[
-            ["SDD", tot.cancelado_sdd || 0, "Aceptado que no salió y el supervisor marcó Cancelación"],
-            ["Spot", tot.cancelado_spot || 0, "Aceptado que no salió y el supervisor marcó Cancelación"],
-          ]} />
-          <Tarjeta titulo="Sin clasificar por el supervisor" total={(tot.sin_responder || 0) + (tot.pendiente || 0)} filas={[
-            ["Aceptados que no salieron", tot.sin_responder || 0, "Esperan la respuesta del supervisor en la Bitácora (ítem No Salidas a Ruta, viajes desde el 4-nov-2026)"],
-            ["Pendientes de hoy", tot.pendiente || 0, "Todavía pueden salir"],
+          <Tarjeta titulo="No confirmadas (SDD)" total={tot.no_show_soft || 0}
+            sub="Solicitadas que no aceptamos. MELI las cuenta como soft no show." filas={[]} />
+          <Tarjeta titulo="Aceptadas que no salieron" total={`${(tot.no_salio_sdd || 0) + (tot.no_salio_spot || 0)} de ${tot.confirmado || 0}`}
+            sub="Con placa y chofer, pero la ruta no salió (lo detecta la Torre)." filas={[
+            ["SDD", tot.no_salio_sdd || 0, "SDD aceptada que no se hizo: MELI la cobra como hard no show"],
+            ["Spot", tot.no_salio_spot || 0, "Spot aceptada que no se hizo"],
+            ["Según el supervisor en la Bitácora", "", ""],
+            ["   No show", `${tot.no_show_hard || 0}${tot.no_show_hard ? ` (${tot.no_show_hard_sdd || 0} SDD · ${tot.no_show_hard_spot || 0} Spot)` : ""}`, "El supervisor marcó No Show"],
+            ["   Cancelación", `${tot.cancelado_hard || 0}${tot.cancelado_hard ? ` (${tot.cancelado_sdd || 0} SDD · ${tot.cancelado_spot || 0} Spot)` : ""}`, "El supervisor marcó Cancelación"],
+            ["   Sin respuesta", tot.sin_responder || 0, "Esperan la respuesta en la Bitácora (ítem No Salidas a Ruta, viajes desde el 4-nov-2026)"],
+            ...((tot.pendiente || 0) > 0 ? [["Pendientes de hoy (todavía pueden salir)", tot.pendiente, ""]] : []),
           ]} />
         </div>
       </div>
@@ -311,8 +314,8 @@ export default function Capacidad() {
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead><tr>
               <th style={th}>SC</th><th style={thC}>Solicitado</th><th style={thC}>Confirmado</th><th style={thC}>Asignado</th>
-              <th style={thC}>Ejecutado</th><th style={thC}>% Ejecutado</th><th style={thC}>Soft no show</th><th style={thC}>Hard no show</th>
-              <th style={thC}>Cancelación</th><th style={thC}>Sin clasificar</th>
+              <th style={thC}>Ejecutado</th><th style={thC}>% Ejecutado</th><th style={thC}>No confirmadas</th><th style={thC}>No show</th>
+              <th style={thC}>Cancelación</th><th style={thC}>Sin respuesta</th>
             </tr></thead>
             <tbody>
               {[...porSc].sort((a, b) => (b.no_show_hard + b.no_show_soft + b.cancelado_hard + b.sin_responder)

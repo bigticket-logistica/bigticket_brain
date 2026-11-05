@@ -5,9 +5,6 @@
 //               rechazar y marcar pagados.
 //   Referidos   cada transportista referido y en qué etapa va.
 //   Referidores quienes refieren, su código y su cuenta para pagarles.
-//   Interesados quienes abrieron la postulación (ref_interesados), con o sin
-//               postular: si pueden facturar, hasta dónde llegaron y por qué
-//               link entraron. Lee de fn_brain_ref_interesados().
 //   Oportunidades en qué centros se buscan transportistas, cuántos vehículos y
 //               de qué tipo. Se muestra en el portal de referidos y en la
 //               postulación. Cada centro tiene su propuesta económica
@@ -67,7 +64,6 @@ export default function ModuloReferidos({ usuario }) {
   const [anfitriones, setAnfitriones] = useState([]);
   const [listaAnf, setListaAnf] = useState([]);
   const [embudo, setEmbudo] = useState({ anf: [], canal: [] });   // vw_ref_brain_embudo_anfitrion / _canal   // supervisores y comercios aliados (vw_ref_brain_lista_anfitriones)
-  const [interesados, setInteresados] = useState([]);   // postulaciones abiertas (fn_brain_ref_interesados)
   const [mensajes, setMensajes] = useState([]);   // conversación Bigticket ↔ referidor (ref_mensajes)
   const [chatCon, setChatCon] = useState(null);   // referidor abierto en Mensajes   // referidores con "¿por dónde te enteraste?" (vw_ref_brain_anfitriones)   // referidos y referidores eliminados desde el Brain (ref_eliminados)   // requerimientos del jefe de operaciones sin atender
   const [campana, setCampana] = useState(null);        // requerimiento que se está convirtiendo en campaña
@@ -85,18 +81,16 @@ export default function ModuloReferidos({ usuario }) {
       sb.from("ref_propuestas").select("*"),
       sb.from("ref_canales").select("*").order("creado_at"),
     ]);
-    const [el, an, ms, la, ea, ec, iv] = await Promise.all([
+    const [el, an, ms, la, ea, ec] = await Promise.all([
       sb.from("ref_eliminados").select("*"),
       sb.from("vw_ref_brain_anfitriones").select("*"),
       sb.from("ref_mensajes").select("*").order("creado_at").limit(5000),
       sb.from("vw_ref_brain_lista_anfitriones").select("*"),
       sb.from("vw_ref_brain_embudo_anfitrion").select("*"),
       sb.from("vw_ref_brain_embudo_canal").select("*"),
-      sb.rpc("fn_brain_ref_interesados"),
     ]);
     setEliminados(el.data || []); setAnfitriones(an.data || []); setMensajes(ms.data || []); setListaAnf(la.data || []);
     setEmbudo({ anf: ea.data || [], canal: ec.data || [] });
-    setInteresados(iv.data || []);
     const rq = await sb.from("ref_requerimientos").select("id", { count: "exact", head: true }).in("estado", ["pendiente", "en_proceso"]);
     setReqAbiertos(rq.count || 0);
     // Si ref_canales no se puede leer, la pestaña sigue funcionando sin las filas de canal.
@@ -121,7 +115,7 @@ export default function ModuloReferidos({ usuario }) {
     if (error) { alert("No se pudo eliminar: " + error.message); return false; }
     cargar(); return true;
   };
-  const TABS = [["bonos", "Bonos", porValidar], ["referidos", "Referidos", referidosVivos.length], ["interesados", "Interesados", interesados.length], ["referidores", "Referidores", referidoresVivos.length + canales.length], ["anfitriones", "Anfitriones", null], ["mensajes", "Mensajes", mensajes.filter((m) => m.de === "referidor" && !m.leido_at).length], ["oportunidades", "Oportunidades", vacantes], ["requerimientos", "Requerimientos", reqAbiertos]];
+  const TABS = [["bonos", "Bonos", porValidar], ["referidos", "Referidos", referidosVivos.length], ["referidores", "Referidores", referidoresVivos.length + canales.length], ["anfitriones", "Anfitriones", null], ["mensajes", "Mensajes", mensajes.filter((m) => m.de === "referidor" && !m.leido_at).length], ["oportunidades", "Oportunidades", vacantes], ["requerimientos", "Requerimientos", reqAbiertos]];
 
   return (
     <div className="pg">
@@ -140,8 +134,6 @@ export default function ModuloReferidos({ usuario }) {
         <>
           {tab === "bonos" && <Bonos bonos={bonos} usuario={usuario} onCambio={cargar} />}
           {tab === "referidos" && <Referidos referidos={referidos} canales={canales} eliminados={elimReferidos} onEliminar={(id, m) => eliminar("referido", id, m)} />}
-          {tab === "interesados" && <Interesados lista={interesados} referidores={referidores} canales={canales} listaAnf={listaAnf}
-            origen={Object.fromEntries(anfitriones.map((a) => [String(a.id), a]))} />}
           {tab === "mensajes" && <Mensajes referidores={referidoresVivos} mensajes={mensajes} abierto={chatCon} setAbierto={setChatCon} usuario={usuario} onCambio={cargar} />}
           {tab === "anfitriones" && <Anfitriones lista={anfitriones.filter((a) => !elimReferidores.has(String(a.id)))} anfitriones={listaAnf} embudo={embudo} canales={canales} />}
           {tab === "referidores" && <Referidores referidores={referidores} canales={canales} referidos={referidosVivos} eliminados={elimReferidores} onEliminar={(id, m) => eliminar("referidor", id, m)}
@@ -286,128 +278,6 @@ function Referidos({ referidos, canales = [], eliminados = new Map(), onEliminar
                     onConfirmar={async (m) => { if (await onEliminar(r.referido_id, m)) setBorrando(null); }} />
                 )}
                 </Fragment>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </>
-  );
-}
-
-// ── Interesados ─────────────────────────────────────────────────────────────
-// Todos los que abrieron la postulación por un link (de referidor o de canal),
-// postularan o no. Cada paso se guarda en ref_interesados; la función
-// fn_brain_ref_interesados() agrega "paso" (1 a 4) y "estado":
-//   no_factura  respondió que no puede facturar
-//   no_termino  puede facturar (o aún no responde) y no terminó
-//   postulo     terminó la postulación
-const ESTADO_INT = {
-  no_factura: ["No puede facturar", "#fee2e2", "#b42318"],
-  no_termino: ["No terminó", "#fff4e5", "#b45309"],
-  postulo: ["Postuló", "#dcfce7", "#166534"],
-};
-const PASO_TXT = { 1: "Dejó sus datos", 2: "Respondió si factura", 3: "Indicó unidades", 4: "Postuló" };
-
-// unidades es jsonb: acepta [{tipo, cantidad}] o {"Large Van": 2, ...}.
-function unidadesTxt(u) {
-  if (!u) return "—";
-  if (Array.isArray(u)) return u.map((x) => (x && typeof x === "object" ? `${x.cantidad ?? x.n ?? 1} ${x.tipo ?? ""}`.trim() : String(x))).join(", ") || "—";
-  if (typeof u === "object") return Object.entries(u).filter(([, v]) => Number(v) > 0).map(([k, v]) => `${v} ${k}`).join(", ") || "—";
-  return String(u);
-}
-
-// WhatsApp de México: si vienen 10 dígitos se antepone 52.
-const waNumero = (t) => { const d = String(t || "").replace(/\D/g, ""); return d.length === 10 ? "52" + d : d; };
-
-function Interesados({ lista, referidores = [], canales = [], listaAnf = [], origen = {} }) {
-  const [filtro, setFiltro] = useState("todos");
-  const [q, setQ] = useState("");
-  const [verLinks, setVerLinks] = useState(false);
-
-  // Por qué link llegó: canal de Bigticket o referidor (y el anfitrión de ese referidor).
-  const link = (i) => {
-    if (i.es_canal) {
-      const c = canales.find((x) => x.codigo === i.codigo);
-      return { clave: "c:" + i.codigo, titulo: c ? c.nombre : i.codigo, detalle: `Canal Bigticket · /c/${i.codigo}` };
-    }
-    const r = referidores.find((x) => x.codigo === i.codigo);
-    if (!r) return { clave: "r:" + i.codigo, titulo: i.codigo || "Sin código", detalle: "Referidor no encontrado" };
-    const anf = (origen[String(r.id)] || {}).anfitrion;
-    const a = anf ? listaAnf.find((x) => x.codigo === anf) : null;
-    return { clave: "r:" + i.codigo, titulo: r.nombre, detalle: `${r.codigo} · ${anf ? `anfitrión ${a ? a.nombre : anf}` : "link general"}` };
-  };
-
-  const conLink = useMemo(() => lista.map((i) => ({ ...i, l: link(i) })), [lista, referidores, canales, listaAnf, origen]);
-  const cuenta = (k) => (k === "todos" ? conLink.length : conLink.filter((i) => i.estado === k).length);
-  const filtrados = conLink.filter((i) => (filtro === "todos" || i.estado === filtro)
-    && (!q || `${i.nombre} ${i.whatsapp} ${i.zona} ${i.codigo} ${i.l.titulo}`.toLowerCase().includes(q.toLowerCase())));
-
-  // Resumen por link: cuántos entraron y en qué quedaron.
-  const porLink = Object.values(conLink.reduce((m, i) => {
-    const g = m[i.l.clave] || (m[i.l.clave] = { ...i.l, total: 0, no_factura: 0, no_termino: 0, postulo: 0 });
-    g.total += 1; g[i.estado] = (g[i.estado] || 0) + 1;
-    return m;
-  }, {})).sort((a, b) => b.total - a.total);
-
-  const abrirWa = (i) => {
-    const nombre = String(i.nombre || "").trim().split(/\s+/)[0] || "";
-    const msg = `Hola ${nombre}, te escribimos de BigTicket por tu interés en trabajar con nosotros${i.zona ? ` en ${i.zona}` : ""}. ¿Tienes unos minutos para conversar?`;
-    window.open(`https://wa.me/${waNumero(i.whatsapp)}?text=${encodeURIComponent(msg)}`, "_blank");
-  };
-
-  return (
-    <>
-      <div style={{ fontSize: 13, color: GRIS, marginBottom: 12 }}>
-        Personas que abrieron la postulación, hayan postulado o no. Se guarda cada paso, también de quienes no pueden facturar.
-      </div>
-      <div style={{ display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap" }}>
-        {[["todos", "Todos"], ["no_factura", "No pueden facturar"], ["no_termino", "Pueden pero no terminaron"], ["postulo", "Postularon"]].map(([k, t]) => (
-          <button key={k} onClick={() => setFiltro(k)} className={`nav-btn${filtro === k ? " active" : ""}`} style={{ border: `0.5px solid ${BORDE}` }}>
-            {t} <span style={{ marginLeft: 6, background: "#e4e7ec", color: AZUL, borderRadius: 10, padding: "1px 7px", fontSize: 11, fontWeight: 700 }}>{cuenta(k)}</span>
-          </button>
-        ))}
-        <button onClick={() => setVerLinks(!verLinks)} className="btn-back" style={{ marginLeft: "auto" }}>{verLinks ? "Ocultar resumen por link" : "Ver resumen por link"}</button>
-      </div>
-
-      {verLinks && (porLink.length === 0 ? null : (
-        <div className="form-card" style={{ padding: 0, overflowX: "auto" }}>
-          <table style={tabla}>
-            <thead><tr>{["Llegó por", "Interesados", "❌ No pueden facturar", "No terminaron", "Postularon"].map((h) => <th key={h} style={th}>{h}</th>)}</tr></thead>
-            <tbody>
-              {porLink.map((g) => (
-                <tr key={g.clave} style={{ borderTop: `0.5px solid ${BORDE}` }}>
-                  <td style={td}><b>{g.titulo}</b><div style={sub}>{g.detalle}</div></td>
-                  <td style={{ ...td, fontWeight: 800, color: AZUL }}>{g.total}</td>
-                  <td style={{ ...td, fontWeight: 700, color: g.no_factura ? "#b42318" : GRIS }}>{g.no_factura} · {Math.round((g.no_factura * 100) / g.total)}%</td>
-                  <td style={{ ...td, color: g.no_termino ? "#b45309" : GRIS }}>{g.no_termino}</td>
-                  <td style={{ ...td, fontWeight: 800, color: g.postulo ? NARANJA : GRIS }}>{g.postulo}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      ))}
-
-      <input placeholder="Buscar por nombre, WhatsApp, zona, código o referidor…" value={q} onChange={(e) => setQ(e.target.value)} style={{ marginBottom: 8 }} />
-      {filtrados.length === 0 ? <div className="empty">No hay interesados con esos filtros.</div> : (
-        <div className="form-card" style={{ padding: 0, overflowX: "auto" }}>
-          <table style={tabla}>
-            <thead><tr>{["Última actividad", "Interesado", "Zona", "¿Factura?", "Unidades", "Estado", "Llegó por", ""].map((h, i) => <th key={i} style={th}>{h}</th>)}</tr></thead>
-            <tbody>
-              {filtrados.map((i) => (
-                <tr key={i.id} style={{ borderTop: `0.5px solid ${BORDE}` }}>
-                  <td style={td}>{fecha(i.actualizado_at || i.creado_at)}<div style={sub}>Entró {fecha(i.creado_at)}</div></td>
-                  <td style={td}><b>{i.nombre || "—"}</b><div style={sub}>{i.whatsapp || "Sin WhatsApp"}</div></td>
-                  <td style={td}>{i.zona || "—"}</td>
-                  <td style={td}>{i.factura === true ? <span style={{ color: "#166534", fontWeight: 700 }}>Sí</span> : i.factura === false ? <span style={{ color: "#b42318", fontWeight: 700 }}>No</span> : <span style={{ color: GRIS }}>Sin responder</span>}</td>
-                  <td style={td}>{unidadesTxt(i.unidades)}</td>
-                  <td style={td}><Pill par={ESTADO_INT[i.estado] || ESTADO_INT.no_termino} /><div style={sub}>{PASO_TXT[i.paso] || ""}</div></td>
-                  <td style={td}><b style={{ fontSize: 12.5 }}>{i.l.titulo}</b><div style={sub}>{i.l.detalle}{i.origen ? ` · ${i.origen}` : ""}</div></td>
-                  <td style={td}>{waNumero(i.whatsapp).length >= 12 && (
-                    <button className="btn-blue" style={{ ...btnChico, background: "#25D366", border: "none", whiteSpace: "nowrap" }} onClick={() => abrirWa(i)}>WhatsApp</button>
-                  )}</td>
-                </tr>
               ))}
             </tbody>
           </table>
@@ -585,7 +455,9 @@ function PorAnfitrion({ lista, anfitriones, embudo = { anf: [], canal: [] }, can
   const [abierto, setAbierto] = useState(null);
   const em = Object.fromEntries((embudo.anf || []).map((e) => [e.codigo, e]));
   const n = (v) => Number(v || 0);
-  const filas = anfitriones.map((a) => {
+  // Solo los anfitriones vigentes (vw_ref_brain_lista_anfitriones.en_panel). Los que
+  // ya no van conservan su código: sus referidores siguen atribuidos en "Llegó por".
+  const filas = anfitriones.filter((a) => a.en_panel !== false).map((a) => {
     const refs = lista.filter((r) => r.anfitrion === a.codigo).sort((x, y) => Number(y.n_referidos) - Number(x.n_referidos));
     return { ...a, refs, referidos: refs.reduce((t, r) => t + Number(r.n_referidos || 0), 0), e: em[a.codigo] || {} };
   }).sort((x, y) => (n(y.e.compartidos) - n(x.e.compartidos)) || (y.refs.length - x.refs.length) || String(x.nombre).localeCompare(String(y.nombre)));
