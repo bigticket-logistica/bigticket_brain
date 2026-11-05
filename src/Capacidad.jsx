@@ -116,6 +116,7 @@ export default function Capacidad() {
   // …y lo que realmente se consultó (solo cambia con Aplicar).
   const [aplicado, setAplicado] = useState({ d1: ayer, d2: ayer });
   const [segundos, setSegundos] = useState(null);
+  const [esperando, setEsperando] = useState(0); // segundos que lleva la carga actual
   const ultimaPeticion = useRef(0);
   const [modelo, setModelo] = useState("");
   const [sc, setSc] = useState("");
@@ -129,31 +130,41 @@ export default function Capacidad() {
 
   const { d1, d2 } = aplicado;
   const fechasValidas = /^\d{4}-\d{2}-\d{2}$/.test(fechaSel) && (!esRango || /^\d{4}-\d{2}-\d{2}$/.test(hastaSel));
-  const aplicar = () => {
-    if (!fechasValidas) return;
-    const a = fechaSel, b = esRango ? hastaSel : fechaSel;
-    setAplicado({ d1: a <= b ? a : b, d2: b >= a ? b : a });
-  };
-
   const cargar = useCallback(async () => {
     // Si llegan dos respuestas, solo vale la de la última petición.
     const id = ++ultimaPeticion.current;
     const t0 = Date.now();
-    setLoading(true); setError(null);
+    setLoading(true); setError(null); setEsperando(0);
+    const reloj = setInterval(() => setEsperando(Math.round((Date.now() - t0) / 1000)), 1000);
     try {
       // Una sola llamada por rango de fechas; modelo y SC se filtran en pantalla.
-      const { data, error: err } = await sb.rpc("fn_capacidad", { p_desde: d1, p_hasta: d2 });
+      // Tope de 40 s: si Supabase no responde, se muestra el error en vez de quedar "Cargando…".
+      const r = await Promise.race([
+        sb.rpc("fn_capacidad", { p_desde: d1, p_hasta: d2 }),
+        new Promise((_, rej) => setTimeout(() => rej(new Error("Supabase no respondió en 40 segundos")), 40000)),
+      ]);
       if (id !== ultimaPeticion.current) return;
-      if (err) throw err;
-      setTodas(Array.isArray(data) ? data : []);
+      if (r.error) throw new Error(`${r.error.message || r.error}${r.error.code ? ` (código ${r.error.code})` : ""}${r.error.hint ? ` · ${r.error.hint}` : ""}`);
+      if (!Array.isArray(r.data)) throw new Error("Supabase respondió, pero no con una lista de viajes: " + JSON.stringify(r.data).slice(0, 200));
+      setTodas(r.data);
       setSegundos(((Date.now() - t0) / 1000).toFixed(1));
     } catch (e) {
+      console.error("Capacidad · fn_capacidad", d1, d2, e);
       if (id === ultimaPeticion.current) setError(e.message || String(e));
     } finally {
+      clearInterval(reloj);
       if (id === ultimaPeticion.current) setLoading(false);
     }
   }, [d1, d2]);
   useEffect(() => { cargar(); }, [cargar]);
+  const aplicar = () => {
+    if (!fechasValidas) return;
+    const a = fechaSel, b = esRango ? hastaSel : fechaSel;
+    const nuevo = { d1: a <= b ? a : b, d2: b >= a ? b : a };
+    // Si se aplica la misma fecha, igual vuelve a consultar.
+    if (nuevo.d1 === aplicado.d1 && nuevo.d2 === aplicado.d2) cargar(); else setAplicado(nuevo);
+  };
+
 
   const delModelo = useMemo(() => (modelo ? todas.filter((f) => f.modelo === modelo) : todas), [todas, modelo]);
   const filas = useMemo(() => (sc ? delModelo.filter((f) => f.sc === sc) : delModelo), [delModelo, sc]);
@@ -218,7 +229,7 @@ export default function Capacidad() {
         <label style={{ fontSize: 11, color: GRIS, display: "flex", alignItems: "center", gap: 4, paddingBottom: 7 }}>
           <input type="checkbox" checked={esRango} onChange={(e) => { setEsRango(e.target.checked); if (e.target.checked && hastaSel < fechaSel) setHastaSel(fechaSel); }} /> Rango
         </label>
-        <button onClick={aplicar} disabled={loading || !fechasValidas}
+        <button onClick={aplicar} disabled={!fechasValidas}
           style={{ ...input, background: AZUL, color: "#fff", border: "none", cursor: "pointer", fontWeight: 600 }}>Aplicar</button>
         <label style={{ fontSize: 11, color: GRIS }}>Modelo de contratación<br />
           <select value={modelo} onChange={(e) => setModelo(e.target.value)} style={input}>
@@ -245,8 +256,10 @@ export default function Capacidad() {
         {(fechaSel !== d1 || (esRango ? hastaSel : fechaSel) !== d2) && <span style={{ color: "#b45309", fontWeight: 600 }}> · cambiaste la fecha: presiona Aplicar</span>}
       </div>
 
-      {error && <div style={{ background: "#fee2e2", color: "#b91c1c", padding: 10, borderRadius: 8, fontSize: 12, marginBottom: 12 }}>Error: {error}</div>}
-      {loading && <div style={{ color: GRIS, fontSize: 12, marginBottom: 12 }}>Cargando…</div>}
+      {error && <div style={{ background: "#fee2e2", color: "#b91c1c", padding: 10, borderRadius: 8, fontSize: 12, marginBottom: 12 }}>
+        <b>No se pudo cargar {d1 === d2 ? d1 : `${d1} al ${d2}`}:</b> {error}
+      </div>}
+      {loading && <div style={{ color: GRIS, fontSize: 12, marginBottom: 12 }}>Consultando fn_capacidad({d1}, {d2})… {esperando} s</div>}
 
       {/* Embudo + tarjetas */}
       <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 14 }}>
@@ -275,9 +288,9 @@ export default function Capacidad() {
             ["Soft no show", tot.no_show_soft || 0, "SDD que Bigticket no aceptó (rechazado, vencido, cancelado o sin responder)"],
           ]} />
           <Tarjeta titulo="No salió (aceptado)" total={(tot.no_show_hard || 0) + (tot.cancelado_hard || 0) + (tot.sin_responder || 0)} filas={[
-            ["Hard no show", tot.no_show_hard || 0, "El supervisor lo marcó como No Show en la Bitácora"],
+            ["Hard no show", tot.no_show_hard || 0, "El supervisor lo marcó como No Show en la Bitácora (antes del 4-nov-2026: todo aceptado que no salió)"],
             ["Cancelación", tot.cancelado_hard || 0, "El supervisor lo marcó como Cancelación en la Bitácora"],
-            ["Sin clasificar por el supervisor", tot.sin_responder || 0, "La Torre vio que no salió y el supervisor no lo ha clasificado en la Bitácora (el ítem No Salidas a Ruta existe desde el 5-nov-2026)"],
+            ["Sin clasificar por el supervisor", tot.sin_responder || 0, "La Torre vio que no salió y el supervisor todavía no lo clasifica en la Bitácora (viajes desde el 4-nov-2026; antes de esa fecha cuentan como hard no show)"],
           ]} />
           {(tot.pendiente || 0) > 0 && <Tarjeta titulo="Pendiente de hoy" total={tot.pendiente} filas={[["Todavía puede salir", tot.pendiente, ""]]} />}
         </div>
