@@ -137,7 +137,6 @@ export default function Capacidad() {
     }
   }, [d1, d2]);
   useEffect(() => { cargar(); }, [cargar]);
-  useEffect(() => { setPagina(1); }, [ver, buscar, filas]);
 
   const delModelo = useMemo(() => (modelo ? todas.filter((f) => f.modelo === modelo) : todas), [todas, modelo]);
   const filas = useMemo(() => (sc ? delModelo.filter((f) => f.sc === sc) : delModelo), [delModelo, sc]);
@@ -148,6 +147,8 @@ export default function Capacidad() {
   }, [delModelo]);
   const listaSc = useMemo(() => [...new Set(todas.map((f) => f.sc).filter(Boolean))].sort(), [todas]);
   const tot = useMemo(() => sumar(filas), [filas]);
+  // Al cambiar filtros o datos, vuelve a la primera página (va después de declarar filas).
+  useEffect(() => { setPagina(1); }, [ver, buscar, filas]);
   const maxBarra = Math.max(1, ...BARRAS.map(([k]) => tot[k] || 0));
 
   const filtradas = useMemo(() => {
