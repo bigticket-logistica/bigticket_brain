@@ -6,6 +6,7 @@ import Diferencias from "./Diferencias";
 import Comparativa from "./Comparativa";
 import { avisarPortal } from "./avisarPortal";
 import RechazosMeliMX from "./RechazosMeli";
+import Capacidad from "./Capacidad";
 
 function BotonDescargarExcel({ onClick, disabled, label = "Descargar Excel" }) {
   return (
@@ -6272,7 +6273,7 @@ function ModuloPagosMadre({ usuario }) {
   const tabs = [
     { id: "listado",     label: "Listado de Pagos",      desc: "Cálculo diario por contratista" },
     { id: "pagos_pausados", label: "Pagos pausados",     desc: "Rutas con el pago retenido · por día y motivo" },
-    { id: "torre_3p",    label: "Torre de Control Pagos", desc: "3 Pilares · MELI vs Operación" },
+    { id: "torre_3p",    label: "Capacidad", desc: "Solicitado → Confirmado → Asignado → Ejecutado" },
     { id: "terceros",    label: "Terceros",              desc: "Empresas subcontratadas por patente" },
     { id: "conciliacion", label: "Conciliación Terceros", desc: "Conciliación semanal por empresa" },
     { id: "pnr_cobros",  label: "Cobros",                desc: "PNR, robos y extravíos, no show" },
@@ -6329,7 +6330,8 @@ function ModuloPagosMadre({ usuario }) {
         <>
           {subtab === "listado"     && <ListadoPagosDiarios usuario={usuario} />}
           {subtab === "pagos_pausados" && <PagosPausados usuario={usuario} />}
-          {subtab === "torre_3p"    && <TorreTresPilares />}
+          {/* Desde nov-2026 lee la fuente unificada (Torre de Control + No Salidas a Ruta). TorreTresPilares queda sin usar. */}
+          {subtab === "torre_3p"    && <Capacidad />}
           {subtab === "terceros"    && <TercerosMX />}
           {subtab === "conciliacion" && <ConciliacionTercerosMX usuario={usuario} />}
           {subtab === "pnr_cobros"  && <CobrosTerceros usuario={usuario} />}
