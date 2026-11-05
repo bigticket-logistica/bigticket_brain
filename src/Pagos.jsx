@@ -869,7 +869,10 @@ function TorreControlSC({ scId, fecha, row }) {
   }, [scId, fecha]);
 
   const lista = filas || [];
-  const sinDeclarar = new Set(noShowNoDeclarados(lista, row).map((f) => f.travel_id));
+  // Desde nov-2026 las rutas que no salieron las responde el supervisor en el
+  // ítem "No Salidas a Ruta" (al día siguiente); la Torre ya no las compara
+  // contra los no show declarados.
+  const sinDeclarar = new Set();
   const grupos = [
     { id: "ruta", label: "En ruta", estados: ["OPERANDO", "SALIO_RETRASADO"], color: "#047857" },
     { id: "term", label: "Terminado", estados: ["TERMINADO"], color: "#047857" },
@@ -1378,18 +1381,94 @@ function FormularioInicialSC({ scId, fecha, rowPrecargado = undefined }) {
         {/* 2 · Ambulancias (detalle completo: patente a pagar, justificación y fotos) */}
         <ItemAmbulancias row={row} />
 
-        {/* 3 · Cancelaciones */}
-        <ItemCancelaciones row={row} adjCancelaciones={adj.cancelaciones || []} />
-
-        {/* 4 · No Show con patentes */}
-        <ItemSimple nombre="4 · No Show" valor={siNo(row.declarado_noshow_si_no)}
-          detalle={noshowPatentes.length > 0 ? `Patentes: ${noshowPatentes.map((p) => (typeof p === "string" ? p : p.placa || p.patente || "")).filter(Boolean).join(", ")}` : null}
-          justif={row.noshow_justificacion}
-          fotos={adj.noshow} />
+        {/* Cancelaciones y No Show del formato anterior: solo en días que los tienen.
+            Desde nov-2026 los reemplaza "No Salidas a Ruta" (sección aparte). */}
+        {row.declarado_cancelaciones_si_no != null && (
+          <ItemCancelaciones row={row} adjCancelaciones={adj.cancelaciones || []} />
+        )}
+        {row.declarado_noshow_si_no != null && (
+          <ItemSimple nombre="No Show (formato anterior)" valor={siNo(row.declarado_noshow_si_no)}
+            detalle={noshowPatentes.length > 0 ? `Patentes: ${noshowPatentes.map((p) => (typeof p === "string" ? p : p.placa || p.patente || "")).filter(Boolean).join(", ")}` : null}
+            justif={row.noshow_justificacion}
+            fotos={adj.noshow} />
+        )}
 
         {/* 5 · PNR — detalle por caso, igual que lo marca el supervisor */}
         <ItemPNRBrain row={row} fotos={adj.pnr} />
       </div>
+    </div>
+  );
+}
+
+// ── No Salidas a Ruta (Bitácora, desde nov-2026) ─────────────────────────
+// Rutas que no salieron (no rosterizadas o rosterizadas sin ruta, según la
+// Torre) y lo que respondió el supervisor al día siguiente. Fuente:
+// fn_no_salidas_dia (vw_torre_control_dia + bitacora_no_salidas_mx).
+// Primera bitácora con el ítem: la del 5-nov-2026 (responde las rutas del 4-nov).
+// Antes de esa fecha el panel no muestra no salidas pendientes.
+const NOSAL_DESDE = "2026-11-05";
+const NOSAL_CASO = { sin_rostering: "No rosterizada", sin_salida: "Rosterizada sin ruta" };
+const NOSAL_MOTIVO = { no_show: "No Show", cancelacion: "Cancelación", si_salio: "Sí salió a ruta" };
+const NOSAL_COLOR = { no_show: "#b91c1c", cancelacion: "#b45309", si_salio: "#047857" };
+
+function NoSalidasSC({ filas = [], fechaRuta, noAplica = false }) {
+  if (noAplica) return (
+    <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid #e5e7eb", fontSize: 12, color: "#9ca3af" }}>
+      🚫 No Salidas a Ruta: este ítem existe desde la bitácora del {NOSAL_DESDE}. Para días anteriores ve Cancelaciones y No Show en el formulario.
+    </div>
+  );
+  const [abierto, setAbierto] = useState(true);
+  const resp = filas.filter((f) => f.guardado_at).length;
+  const pend = filas.length - resp;
+  const fh = (v) => (v ? new Date(v).toLocaleString("es-MX", { timeZone: "America/Mexico_City", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : "");
+  return (
+    <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid #e5e7eb" }}>
+      <button onClick={() => setAbierto((v) => !v)}
+        style={{ display: "flex", alignItems: "center", gap: 8, background: "none", border: "none", cursor: "pointer", padding: 0, fontSize: 12, fontWeight: 700, color: "#374151" }}>
+        <span>{abierto ? "▼" : "▶"}</span>
+        🚫 3 · No Salidas a Ruta del {fechaRuta}
+        <span style={{ fontSize: 10, fontWeight: 600, color: "#9ca3af" }}>(se responden en esta bitácora)</span>
+        {pend > 0 && <span style={{ fontSize: 10, fontWeight: 700, color: "#fff", background: "#dc2626", borderRadius: 4, padding: "1px 6px" }}>{pend} sin responder</span>}
+        {filas.length > 0 && pend === 0 && <span style={{ fontSize: 10, fontWeight: 700, color: "#166534", background: "#dcfce7", borderRadius: 4, padding: "1px 6px" }}>todas respondidas</span>}
+      </button>
+      {abierto && (filas.length === 0 ? (
+        <div style={{ fontSize: 12, color: "#6b7280", marginTop: 8 }}>Ese día no hubo rutas sin salir en este SC.</div>
+      ) : (
+        <div style={{ marginTop: 8, overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11.5 }}>
+            <thead><tr style={{ background: "#f8fafc", color: "#64748b", textAlign: "left" }}>
+              {["Placa / chofer", "Caso", "Qué pasó", "Tipo", "Vehículo", "Empresa", "Pruebas", "Respondió"].map((h) => (
+                <th key={h} style={{ padding: "6px 8px", fontWeight: 600, whiteSpace: "nowrap" }}>{h}</th>
+              ))}
+            </tr></thead>
+            <tbody>
+              {filas.map((f) => (
+                <tr key={f.travel_id} style={{ borderTop: "1px solid #eef0f3", background: f.guardado_at ? "#fff" : "#fff7ed", verticalAlign: "top" }}>
+                  <td style={{ padding: "6px 8px" }}>
+                    <span style={{ fontFamily: "monospace", fontWeight: 700 }}>{f.placa || "Sin placa"}</span>
+                    <div style={{ color: "#6b7280" }}>{f.chofer || "Sin chofer"}{f.eta ? ` · ${String(f.eta).slice(0, 5)}` : ""}</div>
+                  </td>
+                  <td style={{ padding: "6px 8px", whiteSpace: "nowrap" }}>{NOSAL_CASO[f.caso] || f.caso}<div style={{ color: "#9ca3af", fontSize: 10 }}>{f.estado}</div></td>
+                  <td style={{ padding: "6px 8px" }}>
+                    {f.motivo
+                      ? <b style={{ color: NOSAL_COLOR[f.motivo] || "#374151" }}>{NOSAL_MOTIVO[f.motivo] || f.motivo}</b>
+                      : <span style={{ color: "#dc2626", fontWeight: 700 }}>Sin responder</span>}
+                    {f.motivo === "si_salio" && f.ruta_declarada && <div style={{ color: "#6b7280" }}>Ruta {f.ruta_declarada}</div>}
+                  </td>
+                  <td style={{ padding: "6px 8px" }}>{f.tipo_ruta === "SPOT" ? "Spot" : f.tipo_ruta || "—"}</td>
+                  <td style={{ padding: "6px 8px" }}>{f.vehiculo || "—"}{f.vehiculo_meli && <div style={{ color: "#9ca3af", fontSize: 10 }}>MELI: {f.vehiculo_meli}</div>}</td>
+                  <td style={{ padding: "6px 8px" }}>{f.empresa || "—"}{f.empresa && !f.tercero_id && <div style={{ color: "#b45309", fontSize: 10 }}>escrita a mano</div>}</td>
+                  <td style={{ padding: "6px 8px" }}>
+                    {(Array.isArray(f.adjuntos) ? f.adjuntos : []).map((a, i) => <FotoLink key={i} path={typeof a === "string" ? a : a?.path} />)}
+                    {!(Array.isArray(f.adjuntos) && f.adjuntos.length) && <span style={{ color: "#9ca3af" }}>—</span>}
+                  </td>
+                  <td style={{ padding: "6px 8px", color: "#6b7280", whiteSpace: "nowrap" }}>{f.guardado_por || "—"}<div style={{ fontSize: 10 }}>{fh(f.guardado_at)}</div></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ))}
     </div>
   );
 }
@@ -1712,6 +1791,7 @@ function PanelControlSupervisores() {
   const [refrescando, setRefrescando] = useState(false); // refresh silencioso (no desmonta la tabla)
   const [tick, setTick] = useState(0);              // fuerza recarga de los detalles expandidos
   const [torreDia, setTorreDia] = useState({});     // {sc: viajes de vw_torre_control_dia} — para el semáforo
+  const [noSalDia, setNoSalDia] = useState({});     // {sc: no salidas del día anterior (fn_no_salidas_dia)}
 
   // Fecha anterior (D-1) respecto a la seleccionada
   const fechaAyer = useMemo(() => {
@@ -1725,13 +1805,21 @@ function PanelControlSupervisores() {
     else setLoading(true);
     setError(null);
     try {
-      const [supsR, hoyR, ayerR] = await Promise.all([
+      const [supsR, hoyR, ayerR, nsR] = await Promise.all([
         sb.from("vw_supervisores_panel")
           .select("nombre, email, telefono, scs_asignados, rol"),
         sb.from("vw_bitacora_panel").select("*").eq("fecha", fecha),
         sb.from("vw_bitacora_panel").select("*").eq("fecha", fechaAyer),
+        // No Salidas a Ruta: la bitácora del día elegido responde las rutas del
+        // día anterior. Una sola consulta para todos los SC, solo ese día.
+        fecha >= NOSAL_DESDE
+          ? sb.rpc("fn_no_salidas_dia", { p_sc: null, p_fecha: fechaAyer })
+          : Promise.resolve({ data: [] }),
       ]);
       if (supsR.error) throw supsR.error;
+      const nsIdx = {};
+      for (const r of nsR.data || []) (nsIdx[r.sc] = nsIdx[r.sc] || []).push(r);
+      setNoSalDia(nsIdx);
 
       // Armar lista plana: 1 entrada por SC (un supervisor puede tener varios)
       const lista = [];
@@ -1812,8 +1900,9 @@ function PanelControlSupervisores() {
   useEffect(() => { cargar(); }, [cargar]);
 
   // ─── Informe descargable de la bitácora (formato Formato_Informe_Bitácoras) ───
-  // Tres hojas: Resumen (una fila por SC), Cancelaciones y No Show (una fila por
-  // placa). Todo sale de las mismas fuentes que ve el supervisor: la bitácora
+  // Dos hojas: Resumen (una fila por SC) y No Salidas a Ruta (una fila por ruta
+  // del día anterior, con lo que respondió el supervisor en esta bitácora).
+  // Antes eran Cancelaciones y No Show por separado. Todo sale de las mismas fuentes que ve el supervisor: la bitácora
   // (vw_bitacora_panel = bitacora_diaria_sc), rutas de la Torre (cierre_rutas_mx),
   // aprobaciones de ayudantes (aprobaciones_helper) y rechazos de MELI
   // (mx_pedidos_estado, igual que la pestaña Rechazos MELI).
@@ -1855,10 +1944,12 @@ function PanelControlSupervisores() {
       const cecos = (sc) => `ML_MX_${sc}`;
 
       const resumen = [["SERVICIO", "FECHA", "CECOS", "SUPERVISOR", "BITACORA", "CANTIDAD RUTAS",
-        "AYUDANTES INFORMADOS", "AYUDANTES APROBADOS", "AMBULANCIAS", "CANCELACIONES", "NO SHOW", "PNR",
+        "AYUDANTES INFORMADOS", "AYUDANTES APROBADOS", "AMBULANCIAS",
+        "FECHA NO SALIDAS", "NO SALIDAS A RUTA", "NO SHOW", "CANCELACIONES", "SI SALIO A RUTA", "SIN RESPONDER", "PNR",
         "RUTAS RECHAZADAS SDD", "RUTAS RECHAZADAS SPOT", "OBSERVACIONES"]];
-      const cancel = [["SERVICIO", "FECHA", "CECOS", "PATENTES", "TIPO RUTA", "INFORMADA EN BITACORA", "OBSERVACIONES"]];
-      const noshow = [["SERVICIO", "FECHA", "CECOS", "PATENTES", "TIPO RUTA", "INFORMADO EN BITÁCORA", "OBSERVACIONES"]];
+      const nosal = [["SERVICIO", "FECHA RUTA", "FECHA BITACORA", "CECOS", "SUPERVISOR", "PATENTE", "CHOFER", "HORA PACTADA",
+        "CASO", "ESTADO TORRE", "QUE PASO", "ID RUTA DECLARADA", "TIPO RUTA", "TIPO VEHICULO", "VEHICULO MELI",
+        "EMPRESA", "EMPRESA EN LISTADO", "PRUEBAS", "RESPONDIDO POR", "RESPONDIDO EL"]];
 
       for (const sc of scs) {
         const row = bitHoy[sc] || null;
@@ -1866,49 +1957,43 @@ function PanelControlSupervisores() {
         const t6 = item6De(sc);
         let bitacora = "Sin completar";
         if (row?.sin_operacion === true) bitacora = "Sin Operación";
-        else if (est.completados === 5 && (!t6 || t6.completo)) bitacora = "Completa";
+        else if (est.completados === est.total && (!t6 || t6.completo)) bitacora = "Completa";
         else if (est.completados > 0) bitacora = "Parcial";
 
         const ayud = row?.declarado_ayudantes_si_no ? (row.declarado_ayudantes_cantidad ?? arr(row.declarado_ayudantes_detalle).length) : 0;
         const amb = row?.declarado_ambulancias_si_no ? (row.declarado_ambulancias_cantidad ?? arr(row.declarado_ambulancias_detalle).length) : 0;
-        const cancDet = row?.declarado_cancelaciones_si_no ? arr(row.declarado_cancelaciones_detalle) : [];
-        const nsDecl = row?.declarado_noshow_si_no ? arr(row.declarado_noshow_patentes) : [];
-        const nsDet = arr(row?.detectado_noshow_patentes);
-        const declNorm = new Set(nsDecl.map(norm));
-        const nsSinInformar = nsDet.filter((p) => norm(p) && !declNorm.has(norm(p)));
+        const ns = noSalDia[sc] || [];
+        const nsCuenta = (m) => ns.filter((x) => x.motivo === m).length;
+        const nsPend = ns.filter((x) => !x.guardado_at).length;
         const pnrDet = arr(row?.declarado_pnr_detalle);
         const pnrSinResolver = pnrDet.filter((d) => d.estado === "sin_resolver").length;
 
         const obs = [];
         if (row?.sin_operacion === true && row.sin_operacion_motivo) obs.push(String(row.sin_operacion_motivo).trim());
-        if (nsSinInformar.length) obs.push(`Sistema entrega ${nsSinInformar.length} alerta(s) (posibles no show)`);
+        if (nsPend) obs.push(`${nsPend} no salida(s) del ${fechaAyer} sin responder`);
         if (pnrSinResolver) obs.push(`${pnrSinResolver} PNR sin resolver`);
 
         resumen.push(["UM", fecha, cecos(sc), porSc[sc].join(" / "), bitacora, rutasSc[sc] || 0,
-          ayud || 0, aprobSc[sc] || 0, amb || 0, cancDet.length, nsDecl.length,
+          ayud || 0, aprobSc[sc] || 0, amb || 0,
+          fechaAyer, ns.length, nsCuenta("no_show"), nsCuenta("cancelacion"), nsCuenta("si_salio"), nsPend,
           row?.declarado_pnr_si_no === true ? "SI" : row?.declarado_pnr_si_no === false ? "NO" : "",
           rechSdd[sc] || 0, rechSpot[sc] || 0, obs.join(" · ")]);
 
-        for (const d of cancDet) {
-          const placa = placaDe(d);
-          if (!placa) continue;
-          cancel.push(["UM", fecha, cecos(sc), placa, tipoRuta(placa, d?.flota), "SI", String(d?.justificacion || "").trim()]);
-        }
-        for (const p of nsDecl) {
-          const placa = placaDe(p);
-          if (placa) noshow.push(["UM", fecha, cecos(sc), placa, tipoRuta(placa), "SI", ""]);
-        }
-        for (const p of nsSinInformar) {
-          const placa = placaDe(p);
-          noshow.push(["UM", fecha, cecos(sc), placa, tipoRuta(placa), "NO", "Alerta de sistema, posible no show (Patente no realiza ruta)"]);
+        for (const x of ns) {
+          nosal.push(["UM", fechaAyer, fecha, cecos(sc), porSc[sc].join(" / "), x.placa || "", x.chofer || "",
+            x.eta ? String(x.eta).slice(0, 5) : "", NOSAL_CASO[x.caso] || x.caso, x.estado || "",
+            x.motivo ? (NOSAL_MOTIVO[x.motivo] || x.motivo) : "SIN RESPONDER", x.ruta_declarada || "",
+            x.tipo_ruta || "", x.vehiculo || "", x.vehiculo_meli || "",
+            x.empresa || "", x.empresa ? (x.tercero_id ? "SI" : "NO") : "",
+            arr(x.adjuntos).length, x.guardado_por || "",
+            x.guardado_at ? new Date(x.guardado_at).toLocaleString("es-MX", { timeZone: "America/Mexico_City" }) : ""]);
         }
       }
 
       await descargarExcelMultihoja(
         [
           { nombre: "Resumen", datos: resumen },
-          { nombre: "Cancelaciones", datos: cancel },
-          { nombre: "No Show", datos: noshow },
+          { nombre: "No Salidas a Ruta", datos: nosal },
         ],
         `informe_bitacoras_${fecha}${filtroSc ? "_" + filtroSc : ""}`
       );
@@ -1921,19 +2006,21 @@ function PanelControlSupervisores() {
 
   // ─── Cálculo de estado HOY: cuántos de los 5 ítems declaró ──────────
   function estadoHoy(row) {
-    if (!row) return { completados: 0, total: 5, items: itemsVacios(), sinOperacion: false, motivo: "" };
+    // Ítems: Ayudantes, Ambulancias, No Salidas a Ruta, PNR (+ Inventario de
+    // Flota aparte). Igual que en la bitácora, No Salidas a Ruta nunca impide
+    // completar: cuenta como hecho y lo pendiente se ve en el semáforo.
+    if (!row) return { completados: 0, total: 4, items: itemsVacios(), sinOperacion: false, motivo: "" };
     const items = {
       ayudantes: row.declarado_ayudantes_si_no !== null && row.declarado_ayudantes_si_no !== undefined,
       ambulancias: row.declarado_ambulancias_si_no !== null && row.declarado_ambulancias_si_no !== undefined,
-      cancelaciones: row.declarado_cancelaciones_si_no !== null && row.declarado_cancelaciones_si_no !== undefined,
-      noshow: row.declarado_noshow_si_no !== null && row.declarado_noshow_si_no !== undefined,
+      nosalidas: true,
       pnr: row.declarado_pnr_si_no !== null && row.declarado_pnr_si_no !== undefined,
     };
     const completados = Object.values(items).filter(Boolean).length;
-    return { completados, total: 5, items, sinOperacion: row.sin_operacion === true, motivo: row.sin_operacion_motivo || "" };
+    return { completados, total: 4, items, sinOperacion: row.sin_operacion === true, motivo: row.sin_operacion_motivo || "" };
   }
   function itemsVacios() {
-    return { ayudantes: false, ambulancias: false, cancelaciones: false, noshow: false, pnr: false };
+    return { ayudantes: false, ambulancias: false, nosalidas: false, pnr: false };
   }
 
   // Item 6 (terceros) de un SC: null = sin datos (fecha sin confirmaciones)
@@ -1973,7 +2060,7 @@ function PanelControlSupervisores() {
     for (const s of supervisores) {
       const eh = estadoHoy(bitHoy[s.sc]);
       const t6 = item6De(s.sc);
-      const totalItems = t6 ? 6 : 5;
+      const totalItems = t6 ? 5 : 4;
       const done = eh.completados + (t6 && t6.completo ? 1 : 0);
       if (done === totalItems || eh.sinOperacion) completaronHoy++;
       const ed = estadoD1(bitAyer[s.sc]);
@@ -1990,16 +2077,17 @@ function PanelControlSupervisores() {
     const row = bitHoy[sc];
     const eh = estadoHoy(row);
     const t6 = item6De(sc);
-    const totalItems = t6 ? 6 : 5;
+    const totalItems = t6 ? 5 : 4;
     const done = eh.completados + (t6 && t6.completo ? 1 : 0);
     const completa = eh.sinOperacion || done === totalItems;
-    const nsSinDeclarar = noShowNoDeclarados(torreDia[sc], row).length;
+    // No salidas del día anterior que el supervisor no ha respondido
+    const nsSinDeclarar = (noSalDia[sc] || []).filter((x) => !x.guardado_at).length;
     const pnrSinResolver = (Array.isArray(row?.declarado_pnr_detalle) ? row.declarado_pnr_detalle : [])
       .filter((d) => d.estado === "sin_resolver").length;
     const motivos = [];
     if (!eh.sinOperacion && done === 0) motivos.push("bitácora sin completar");
     else if (!completa) motivos.push(`bitácora ${done}/${totalItems}`);
-    if (nsSinDeclarar) motivos.push(`${nsSinDeclarar} no show sin declarar`);
+    if (nsSinDeclarar) motivos.push(`${nsSinDeclarar} no salida(s) sin responder`);
     if (pnrSinResolver) motivos.push(`${pnrSinResolver} PNR sin resolver`);
     let color = "verde";
     if ((!eh.sinOperacion && done === 0) || nsSinDeclarar) color = "rojo";
@@ -2016,7 +2104,7 @@ function PanelControlSupervisores() {
       out.push({ sc: s.sc, ...semaforoSC(s.sc) });
     }
     return out.sort((a, b) => orden[a.color] - orden[b.color] || a.sc.localeCompare(b.sc));
-  }, [supervisores, bitHoy, torreDia, terceros6, t6Activo]);
+  }, [supervisores, bitHoy, torreDia, noSalDia, terceros6, t6Activo]);
   const elegirSC = (sc) => {
     if (filtroSc === sc) { setFiltroSc(""); setExpandido(new Set()); }
     else { setFiltroSc(sc); setExpandido(new Set([sc])); }
@@ -2029,6 +2117,8 @@ function PanelControlSupervisores() {
     const eh = estadoHoy(bitHoy[s.sc]);
     const sinOp = eh.sinOperacion;
     const t6 = item6De(s.sc);
+    const ns = noSalDia[s.sc] || [];
+    const nsResp = ns.filter((x) => x.guardado_at).length;
     return (
       <>
                           {/* Checklist de los 6 ítems: deja claro cuál está completado */}
@@ -2036,10 +2126,9 @@ function PanelControlSupervisores() {
                             {[
                               { n: "1 · Ayudantes", ok: sinOp || eh.items.ayudantes },
                               { n: "2 · Ambulancias", ok: sinOp || eh.items.ambulancias },
-                              { n: "3 · Cancelaciones MELI", ok: sinOp || eh.items.cancelaciones },
-                              { n: "4 · No Show", ok: sinOp || eh.items.noshow },
-                              { n: "5 · PNR", ok: sinOp || eh.items.pnr },
-                              { n: "6 · Confirmación de Terceros", ok: !!(t6 && t6.completo), na: !t6 },
+                              { n: "3 · No Salidas a Ruta", ok: nsResp === ns.length, na: fecha < NOSAL_DESDE, extra: ns.length ? ` (${nsResp}/${ns.length})` : " (sin casos)" },
+                              { n: "4 · PNR", ok: sinOp || eh.items.pnr },
+                              { n: "5 · Inventario de Flota", ok: !!(t6 && t6.completo), na: !t6, extra: t6 ? ` (${t6.confirmadas}/${t6.total})` : "" },
                             ].map((it, k) => (
                               <span key={k} style={{
                                 fontSize: 11, fontWeight: 600, padding: "3px 9px", borderRadius: 14,
@@ -2048,7 +2137,7 @@ function PanelControlSupervisores() {
                                 color: it.na ? "#9ca3af" : it.ok ? "#166534" : "#b91c1c",
                               }}>
                                 {it.na ? "—" : it.ok ? "✓" : "○"} {it.n}
-                                {it.n.startsWith("6") && t6 && ` (${t6.confirmadas}/${t6.total})`}
+                                {it.extra || ""}
                               </span>
                             ))}
                           </div>
@@ -2056,6 +2145,11 @@ function PanelControlSupervisores() {
                           {/* Formulario inicial del supervisor (del día elegido) */}
                           {(filtroEvento === "todos" || filtroEvento === "bitacora") && (
                             <FormularioInicialSC scId={s.sc} fecha={fecha} rowPrecargado={bitHoy[s.sc] || null} />
+                          )}
+
+                          {/* ─── 3 · No Salidas a Ruta (rutas del día anterior) ─── */}
+                          {(filtroEvento === "todos" || filtroEvento === "bitacora") && (
+                            <NoSalidasSC filas={ns} fechaRuta={fechaAyer} noAplica={fecha < NOSAL_DESDE} />
                           )}
 
                           {/* ─── 6 · Confirmación de Terceros (independiente del formulario) ─── */}
@@ -2086,7 +2180,7 @@ function PanelControlSupervisores() {
 
   const NOMBRES_ITEMS = {
     ayudantes: "Ayudantes", ambulancias: "Ambulancias",
-    cancelaciones: "Cancelaciones", noshow: "No Show", pnr: "PNR",
+    nosalidas: "No Salidas a Ruta", pnr: "PNR",
   };
 
   return (
