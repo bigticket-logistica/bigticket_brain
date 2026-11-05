@@ -201,7 +201,7 @@ export default function Capacidad() {
 
   const filtradas = useMemo(() => {
     const q = buscar.trim().toLowerCase();
-    return filas.filter((f) => pasaVer(f, ver) && (!q || [f.sc, f.placa, f.chofer, f.driver_id, f.id_ruta, f.travel_id, f.vehiculo]
+    return filas.filter((f) => pasaVer(f, ver) && (!q || [f.sc, f.placa, f.chofer, f.driver_id, f.id_ruta, f.travel_id, f.request_id, f.vehiculo]
       .some((x) => x && String(x).toLowerCase().includes(q))));
   }, [filas, ver, buscar]);
   const paginas = Math.max(1, Math.ceil(filtradas.length / POR_PAGINA));
@@ -379,7 +379,7 @@ export default function Capacidad() {
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 8 }}>
           <div style={{ fontWeight: 700, color: AZUL, fontSize: 14 }}>Detalle por estado {sc && <span style={{ color: GRIS, fontWeight: 400 }}>· {sc} <a href="#" onClick={(e) => { e.preventDefault(); setSc(""); }}>(ver todos)</a></span>}</div>
           <div style={{ display: "flex", gap: 8 }}>
-            <input placeholder="Filtrar: placa, chofer, ruta…" value={buscar} onChange={(e) => setBuscar(e.target.value)} style={{ ...input, width: 200 }} />
+            <input placeholder="Filtrar: placa, chofer, ruta, viaje, solicitud…" value={buscar} onChange={(e) => setBuscar(e.target.value)} style={{ ...input, width: 200 }} />
             <select value={ver} onChange={(e) => setVer(e.target.value)} style={input}>
               {VER.map(([k, t]) => <option key={k} value={k}>Ver servicios: {t} ({filas.filter((f) => pasaVer(f, k)).length})</option>)}
             </select>
@@ -400,7 +400,12 @@ export default function Capacidad() {
                   <td style={{ ...td, fontWeight: 700 }}>{f.sc}</td>
                   <td style={td}>{f.vehiculo || "—"} <span style={{ color: GRIS }}>{f.modelo}</span><br /><b>{f.placa || ""}</b></td>
                   <td style={td}>{f.chofer || ""}<br /><b>{f.driver_id || ""}</b></td>
-                  <td style={td}>{f.id_ruta || ""}</td>
+                  <td style={td}>
+                    <b>{f.id_ruta || ""}</b>
+                    <div style={{ fontSize: 10.5, color: GRIS, whiteSpace: "nowrap" }}>
+                      {f.travel_id && <>Viaje {f.travel_id}</>}{f.travel_id && f.request_id != null && " · "}{f.request_id != null && <>Solicitud {f.request_id}</>}
+                    </div>
+                  </td>
                   <td style={tdC}>{f.confirmado ? <Pill t={f.confirmado} c={conf[0]} bg={conf[1]} /> : "—"}</td>
                   <td style={tdC}><Check v={f.asignado} /></td>
                   <td style={tdC}><Check v={f.ejecutado} /></td>
