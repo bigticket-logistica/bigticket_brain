@@ -2,15 +2,18 @@
 // Capacidad.jsx — Administración → Pagos → Capacidad.
 //
 // Réplica del reporte "Resumen de ejecución de rutas" de MELI con datos propios:
-//   · fn_capacidad_resumen(desde, hasta, modelo, sc) → embudo, tarjetas y ranking por SC
-//   · fn_capacidad_detalle(desde, hasta, modelo, sc) → una fila por pedido
+//   · fn_capacidad(desde, hasta) → una fila por pedido del rango (máx. 31 días), en
+//     una sola llamada. Lee solo el rango pedido, nunca el histórico completo.
+//   El embudo, las tarjetas y el ranking se suman aquí, y el modelo y el SC se
+//   filtran en pantalla sin volver a consultar.
 // Fuentes: mx_pedidos_estado (pedidos de MELI) × vw_torre_control_dia (Torre)
 //          × bitacora_no_salidas_mx (respuesta del supervisor).
 // Reglas (cuadradas contra MELI el 3-nov SDD):
-//   Solicitado  = pedidos, menos los cancelados por MELI que no salieron
+//   Universo    = SDD completo + Spot aceptado (Spot no aceptado no cuenta)
+//   Aceptados   = viajes de la Torre (vw_torre_control_dia)
 //   Confirmado  = aceptados · Asignado = aceptados con chofer y placa
 //   Ejecutado   = aceptados que salieron
-//   Soft no show = solicitado no aceptado (Solicitado − Confirmado)
+//   Soft no show = SDD no aceptado (Solicitado − Confirmado)
 // ═══════════════════════════════════════════════════════════════════════════
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { descargarExcelMultihoja, fechaOperativaOffset, sb } from "./shared";
@@ -31,10 +34,8 @@ const CATEGORIA = {
   ejecutado: ["Ejecutado", "#047857", "#d1fae5"],
   pendiente: ["Pendiente", "#7c3aed", "#f3e8ff"],
   no_show_soft: ["Soft no show", "#b45309", "#fef3c7"],
-  cancelado_salio: ["Cancelado por MELI, salió", "#b45309", "#fef3c7"],
   no_show_hard: ["Hard no show", "#b91c1c", "#fee2e2"],
   cancelado_hard: ["Cancelación", "#b91c1c", "#fee2e2"],
-  cancelado_soft: ["Cancelado por MELI", "#475569", "#f1f5f9"],
   sin_responder: ["Sin responder supervisor", "#9f1239", "#ffe4e6"],
   otro: ["Otro", "#475569", "#f1f5f9"],
 };
@@ -54,14 +55,13 @@ const VER = [
   ["no_show_hard", "Hard no show"],
   ["cancelado_hard", "Cancelación"],
   ["sin_responder", "Sin responder supervisor"],
-  ["cancelado_soft", "Cancelados por MELI"],
   ["pendiente", "Pendientes"],
 ];
 
 const pasaVer = (f, v) => {
   if (v === "todos") return true;
-  if (v === "no_ejecutado") return !f.ejecutado && f.categoria !== "cancelado_soft";
-  if (v === "soft") return f.categoria === "no_show_soft" || f.categoria === "cancelado_salio";
+  if (v === "no_ejecutado") return !f.ejecutado;
+  if (v === "soft") return f.categoria === "no_show_soft";
   return f.categoria === v;
 };
 
@@ -92,17 +92,18 @@ function Tarjeta({ titulo, total, filas }) {
   );
 }
 
-// PostgREST corta en 1.000 filas: se pide por páginas.
-async function traerDetalle(desde, hasta, modelo, sc) {
-  const out = [];
-  for (let i = 0; i < 50; i++) {
-    const { data, error } = await sb.rpc("fn_capacidad_detalle", { p_desde: desde, p_hasta: hasta, p_modelo: modelo || null, p_sc: sc || null })
-      .range(i * 1000, i * 1000 + 999);
-    if (error) throw error;
-    out.push(...(data || []));
-    if (!data || data.length < 1000) break;
+// Totales con las mismas reglas que se cuadraron contra MELI.
+function sumar(filas) {
+  const t = { solicitado: filas.length, confirmado: 0, asignado: 0, ejecutado: 0, pendiente: 0,
+    no_show_soft: 0, no_show_hard: 0, cancelado_hard: 0, sin_responder: 0 };
+  for (const f of filas) {
+    const acept = f.confirmado === "Aceptado";
+    if (acept) t.confirmado++;
+    if (acept && f.asignado) t.asignado++;
+    if (acept && f.ejecutado) t.ejecutado++;
+    if (t[f.categoria] !== undefined && f.categoria !== "ejecutado") t[f.categoria]++;
   }
-  return out;
+  return t;
 }
 
 export default function Capacidad() {
@@ -111,8 +112,7 @@ export default function Capacidad() {
   const [hasta, setHasta] = useState(ayer);
   const [modelo, setModelo] = useState("");
   const [sc, setSc] = useState("");
-  const [resumen, setResumen] = useState(null);
-  const [filas, setFilas] = useState([]);
+  const [todas, setTodas] = useState([]);
   const [ver, setVer] = useState("todos");
   const [buscar, setBuscar] = useState("");
   const [pagina, setPagina] = useState(1);
@@ -126,26 +126,28 @@ export default function Capacidad() {
   const cargar = useCallback(async () => {
     setLoading(true); setError(null);
     try {
-      // El resumen se pide sin SC para tener el ranking y la lista de SC completos.
-      const [r, f] = await Promise.all([
-        sb.rpc("fn_capacidad_resumen", { p_desde: d1, p_hasta: d2, p_modelo: modelo || null, p_sc: null }),
-        traerDetalle(d1, d2, modelo, sc),
-      ]);
-      if (r.error) throw r.error;
-      setResumen(r.data);
-      setFilas(f);
+      // Una sola llamada por rango de fechas; modelo y SC se filtran en pantalla.
+      const { data, error: err } = await sb.rpc("fn_capacidad", { p_desde: d1, p_hasta: d2 });
+      if (err) throw err;
+      setTodas(Array.isArray(data) ? data : []);
     } catch (e) {
       setError(e.message || String(e));
     } finally {
       setLoading(false);
     }
-  }, [d1, d2, modelo, sc]);
+  }, [d1, d2]);
   useEffect(() => { cargar(); }, [cargar]);
   useEffect(() => { setPagina(1); }, [ver, buscar, filas]);
 
-  const porSc = resumen?.por_sc || [];
-  const listaSc = useMemo(() => porSc.map((x) => x.sc).sort(), [porSc]);
-  const tot = useMemo(() => (sc ? porSc.find((x) => x.sc === sc) || {} : resumen?.totales || {}), [resumen, sc, porSc]);
+  const delModelo = useMemo(() => (modelo ? todas.filter((f) => f.modelo === modelo) : todas), [todas, modelo]);
+  const filas = useMemo(() => (sc ? delModelo.filter((f) => f.sc === sc) : delModelo), [delModelo, sc]);
+  const porSc = useMemo(() => {
+    const g = {};
+    for (const f of delModelo) if (f.sc) (g[f.sc] = g[f.sc] || []).push(f);
+    return Object.entries(g).map(([k, v]) => ({ sc: k, ...sumar(v) }));
+  }, [delModelo]);
+  const listaSc = useMemo(() => [...new Set(todas.map((f) => f.sc).filter(Boolean))].sort(), [todas]);
+  const tot = useMemo(() => sumar(filas), [filas]);
   const maxBarra = Math.max(1, ...BARRAS.map(([k]) => tot[k] || 0));
 
   const filtradas = useMemo(() => {
@@ -165,11 +167,11 @@ export default function Capacidad() {
         f.chofer || "", f.driver_id || "", f.id_ruta || "", f.confirmado || "", f.asignado ? "SI" : "NO", f.ejecutado ? "SI" : "NO",
         f.estado_torre || "", (CATEGORIA[f.categoria] || [f.categoria])[0], f.resultado_supervisor || "", f.pruebas || 0]);
       const res = [["SC", "SOLICITADO", "CONFIRMADO", "ASIGNADO", "EJECUTADO", "% EJECUTADO / CONFIRMADO", "SOFT NO SHOW",
-        "HARD NO SHOW", "CANCELACION", "SIN RESPONDER SUPERVISOR", "CANCELADO POR MELI", "PENDIENTE"]];
+        "HARD NO SHOW", "CANCELACION", "SIN RESPONDER SUPERVISOR", "PENDIENTE"]];
       for (const x of porSc) {
         if (sc && x.sc !== sc) continue;
         res.push([x.sc, x.solicitado, x.confirmado, x.asignado, x.ejecutado, pct(x.ejecutado, x.confirmado), x.no_show_soft,
-          x.no_show_hard, x.cancelado_hard, x.sin_responder, x.cancelado_soft, x.pendiente]);
+          x.no_show_hard, x.cancelado_hard, x.sin_responder, x.pendiente]);
       }
       await descargarExcelMultihoja([{ nombre: "Por SC", datos: res }, { nombre: "Detalle", datos: det }],
         `capacidad_${d1 === d2 ? d1 : d1 + "_a_" + d2}${modelo ? "_" + modelo : ""}${sc ? "_" + sc : ""}`);
@@ -238,11 +240,10 @@ export default function Capacidad() {
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           <Tarjeta titulo="No show" total={(tot.no_show_hard || 0) + (tot.no_show_soft || 0)} filas={[
             ["Hard no show", tot.no_show_hard || 0, "Aceptado, no salió y el supervisor marcó No Show"],
-            ["Soft no show", tot.no_show_soft || 0, "Solicitado que Bigticket no aceptó (rechazado, vencido o cancelado por MELI que salió)"],
+            ["Soft no show", tot.no_show_soft || 0, "SDD que Bigticket no aceptó (rechazado, vencido, cancelado o sin responder)"],
           ]} />
           <Tarjeta titulo="Cancelado" total={tot.cancelado_hard || 0} filas={[
             ["Hard cancelado", tot.cancelado_hard || 0, "Aceptado, no salió y el supervisor marcó Cancelación"],
-            ["Por MELI (fuera del embudo)", tot.cancelado_soft || 0, "MELI canceló el pedido antes de que saliera"],
           ]} />
           <Tarjeta titulo="Por revisar" total={(tot.sin_responder || 0) + (tot.pendiente || 0)} filas={[
             ["Sin responder supervisor", tot.sin_responder || 0, "Aceptado, no salió y el supervisor no ha respondido en la Bitácora"],
@@ -327,7 +328,7 @@ export default function Capacidad() {
       </div>
 
       <div style={{ fontSize: 10.5, color: GRIS, marginTop: 10 }}>
-        Fuente: fn_capacidad_resumen / fn_capacidad_detalle · mx_pedidos_estado (pedidos de MELI) + vw_torre_control_dia (Torre, últimos 30 días)
+        Fuente: fn_capacidad (solo el rango pedido, máx. 31 días) · SDD completo + Spot aceptado · vw_torre_control_dia (Torre, últimos 30 días) + mx_pedidos_estado (SDD no aceptados)
         + bitacora_no_salidas_mx (respuesta del supervisor). Acordado y Escaneado no se muestran todavía.
       </div>
     </div>
