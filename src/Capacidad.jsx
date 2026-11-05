@@ -17,6 +17,10 @@
 // ═══════════════════════════════════════════════════════════════════════════
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { descargarExcelMultihoja, fechaOperativaOffset, sb } from "./shared";
+import { NoSalidasSC } from "./NoSalidas";
+
+// Primeras rutas con el ítem "No Salidas a Ruta" en la Bitácora: las del 4-nov-2026 (se responden el 5).
+const NOSAL_RUTAS_DESDE = "2026-11-04";
 
 const AZUL = "#1a3a6b";
 const GRIS = "#64748b";
@@ -129,6 +133,8 @@ export default function Capacidad() {
   const [modelo, setModelo] = useState("");
   const [sc, setSc] = useState("");
   const [todas, setTodas] = useState([]);
+  const [noSal, setNoSal] = useState([]);       // No Salidas a Ruta del día (fn_no_salidas_dia), solo cuando se consulta un día
+  const [verBitacora, setVerBitacora] = useState(true);
   const [ver, setVer] = useState("todos");
   const [buscar, setBuscar] = useState("");
   const [pagina, setPagina] = useState(1);
@@ -147,14 +153,20 @@ export default function Capacidad() {
     try {
       // Una sola llamada por rango de fechas; modelo y SC se filtran en pantalla.
       // Tope de 40 s: si Supabase no responde, se muestra el error en vez de quedar "Cargando…".
-      const r = await Promise.race([
-        sb.rpc("fn_capacidad", { p_desde: d1, p_hasta: d2 }),
+      // Para un solo día se trae además el ítem "No Salidas a Ruta" de la Bitácora
+      // (la misma tabla que ven el analista y el jefe en Consolidaciones Bitácora).
+      const [r, ns] = await Promise.race([
+        Promise.all([
+          sb.rpc("fn_capacidad", { p_desde: d1, p_hasta: d2 }),
+          d1 === d2 ? sb.rpc("fn_no_salidas_dia", { p_sc: null, p_fecha: d1 }) : Promise.resolve({ data: [] }),
+        ]),
         new Promise((_, rej) => setTimeout(() => rej(new Error("Supabase no respondió en 40 segundos")), 40000)),
       ]);
       if (id !== ultimaPeticion.current) return;
       if (r.error) throw new Error(`${r.error.message || r.error}${r.error.code ? ` (código ${r.error.code})` : ""}${r.error.hint ? ` · ${r.error.hint}` : ""}`);
       if (!Array.isArray(r.data)) throw new Error("Supabase respondió, pero no con una lista de viajes: " + JSON.stringify(r.data).slice(0, 200));
       setTodas(r.data);
+      setNoSal(Array.isArray(ns?.data) ? ns.data : []);
       setSegundos(((Date.now() - t0) / 1000).toFixed(1));
     } catch (e) {
       console.error("Capacidad · fn_capacidad", d1, d2, e);
@@ -292,13 +304,14 @@ export default function Capacidad() {
           </div>
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          <Tarjeta titulo="No confirmadas (SDD)" total={tot.no_show_soft || 0}
-            sub="Solicitadas que no aceptamos. MELI las cuenta como soft no show." filas={[]} />
-          <Tarjeta titulo="Aceptadas que no salieron" total={`${(tot.no_salio_sdd || 0) + (tot.no_salio_spot || 0)} de ${tot.confirmado || 0}`}
-            sub="Con placa y chofer, pero la ruta no salió (lo detecta la Torre)." filas={[
+          <Tarjeta titulo="No show SDD" total={(tot.no_show_soft || 0) + (tot.no_salio_sdd || 0)} filas={[
+            ["Soft · no confirmadas", tot.no_show_soft || 0, "Pedidos SDD que MELI solicitó y no aceptamos"],
+            ["Hard · aceptadas que no salieron", tot.no_salio_sdd || 0, "SDD con placa y chofer cuya ruta no salió"],
+          ]} />
+          <Tarjeta titulo="Aceptadas que no salieron" total={`${(tot.no_salio_sdd || 0) + (tot.no_salio_spot || 0)} de ${tot.confirmado || 0}`} filas={[
             ["SDD", tot.no_salio_sdd || 0, "SDD aceptada que no se hizo: MELI la cobra como hard no show"],
             ["Spot", tot.no_salio_spot || 0, "Spot aceptada que no se hizo"],
-            ["Según el supervisor en la Bitácora", "", ""],
+            ["Respuesta del supervisor (Bitácora)", "", ""],
             ["   No show", `${tot.no_show_hard || 0}${tot.no_show_hard ? ` (${tot.no_show_hard_sdd || 0} SDD · ${tot.no_show_hard_spot || 0} Spot)` : ""}`, "El supervisor marcó No Show"],
             ["   Cancelación", `${tot.cancelado_hard || 0}${tot.cancelado_hard ? ` (${tot.cancelado_sdd || 0} SDD · ${tot.cancelado_spot || 0} Spot)` : ""}`, "El supervisor marcó Cancelación"],
             ["   Sin respuesta", tot.sin_responder || 0, "Esperan la respuesta en la Bitácora (ítem No Salidas a Ruta, viajes desde el 4-nov-2026)"],
@@ -333,6 +346,31 @@ export default function Capacidad() {
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {/* No Salidas a Ruta: lo que respondió cada supervisor en la Bitácora (misma tabla que Consolidaciones Bitácora) */}
+      {d1 === d2 && (
+        <div style={{ ...caja, marginBottom: 14 }}>
+          <button onClick={() => setVerBitacora((v) => !v)}
+            style={{ background: "none", border: "none", padding: 0, cursor: "pointer", fontWeight: 700, color: AZUL, fontSize: 14, display: "flex", gap: 8, alignItems: "center" }}>
+            <span>{verBitacora ? "▼" : "▶"}</span> No Salidas a Ruta · respuesta del supervisor en la Bitácora
+            <span style={{ fontSize: 11, fontWeight: 600, color: GRIS }}>
+              {noSal.length} ruta{noSal.length === 1 ? "" : "s"} · {noSal.filter((x) => x.guardado_at).length} respondidas
+            </span>
+          </button>
+          {verBitacora && (d1 < NOSAL_RUTAS_DESDE ? (
+            <div style={{ fontSize: 12, color: GRIS, marginTop: 8 }}>Este ítem existe en la Bitácora para viajes desde el 4-nov-2026.</div>
+          ) : noSal.length === 0 ? (
+            <div style={{ fontSize: 12, color: GRIS, marginTop: 8 }}>Ese día no hubo rutas sin salir.</div>
+          ) : (
+            [...new Set(noSal.map((x) => x.sc))].sort().filter((s) => !sc || s === sc).map((s) => (
+              <div key={s}>
+                <div style={{ fontWeight: 700, fontSize: 12.5, color: "#334155", marginTop: 12 }}>{s}</div>
+                <NoSalidasSC filas={noSal.filter((x) => x.sc === s)} fechaRuta={fCorta(d1)} />
+              </div>
+            ))
+          ))}
         </div>
       )}
 
