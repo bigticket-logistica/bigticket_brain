@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { registrarSubtabs, useSubtab } from "../shared/subtabs";
 import AccesosPortalCL from "./AccesosPortal";
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -28,30 +28,19 @@ function SeccionEnConstruccion({ titulo, descripcion }) {
 }
 
 // Componente raíz del módulo (madre con sub-pestañas).
+const TABS_CERT_CL = [
+  { id: "pagos", label: "Certificación para Pagos", desc: "Contratistas Chile (Certronic)" },
+  { id: "accesos", label: "Accesos al portal", desc: "Claves del Portal Transportista" },
+];
+registrarSubtabs("certificaciones_cl", TABS_CERT_CL, "pagos");
+
 function ModuloCertificacionesCL({ certronicSlot, usuario }) {
-  const [subtab, setSubtab] = useState("pagos");
-  const tabs = [
-    { id: "pagos", label: "Certificación para Pagos", desc: "Contratistas Chile (Certronic)" },
-    { id: "accesos", label: "Accesos al portal", desc: "Claves del Portal Transportista" },
-  ];
+  const [subtab] = useSubtab("certificaciones_cl");
   return (
     <div style={{ padding: 0 }}>
       <div style={{ background: "#fff", borderBottom: "1px solid #e4e7ec", padding: "12px 24px" }}>
         <div style={{ fontSize: 18, fontWeight: 700, color: "#002E5D", marginBottom: 10 }}>Certificaciones · Chile</div>
-        <div style={{ display: "flex", gap: 0, borderBottom: "2px solid #e4e7ec", marginLeft: -8, flexWrap: "wrap" }}>
-          {tabs.map(t => (
-            <button key={t.id} onClick={() => setSubtab(t.id)}
-              style={{
-                background: "transparent", border: "none", padding: "10px 16px",
-                fontSize: 13, fontWeight: 600, cursor: "pointer", color: subtab === t.id ? "#002E5D" : "#64748b",
-                borderBottom: subtab === t.id ? "2px solid #002E5D" : "2px solid transparent",
-                marginBottom: -2, transition: "all 0.15s",
-              }}>
-              <div>{t.label}</div>
-              <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 400, marginTop: 2 }}>{t.desc}</div>
-            </button>
-          ))}
-        </div>
+        <div style={{ fontSize: 15, fontWeight: 700, color: "#FF6600", fontFamily: "Poppins, 'Open Sans', sans-serif", marginTop: 2 }}>{(TABS_CERT_CL.find((t) => t.id === subtab) || {}).label}</div>
       </div>
       {subtab === "accesos" && <AccesosPortalCL usuario={usuario} />}
       {subtab === "pagos" && (
