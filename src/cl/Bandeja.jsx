@@ -277,7 +277,7 @@ function EditorPlazos({ sla, horario, usuario, onCerrar, onGuardado }) {
   const [sinHorario, setSinHorario] = useState((horario.desde || "00:00") === (horario.hasta || "00:00"));
   const [guardando, setGuardando] = useState(false);
   const [error, setError] = useState("");
-  const nombre = { pnr_meli: "PNR MELI", canon_formulario: "Canon · Formulario", canon_correo: "Canon · Correo",
+  const nombre = { pnr_meli: "PNR MELI (plazo MELI)", pnr_supervisor: "PNR MELI · supervisor (carga en Logistic)", canon_formulario: "Canon · Formulario", canon_correo: "Canon · Correo",
     portal_reclamo: "Portal OL · Reclamo", portal_cancelacion: "Portal OL · Cancelación" };
   const guardar = async () => {
     setGuardando(true); setError("");
@@ -529,7 +529,7 @@ export default function BandejaPostventa({ usuario, onIrA }) {
 
   const cfg = useMemo(() => {
     const m = Object.fromEntries(sla.map((s) => [s.origen, s]));
-    const def = { pnr_meli: 96, canon_formulario: 48, canon_correo: 48, portal_reclamo: 48, portal_cancelacion: 4 };
+    const def = { pnr_meli: 96, pnr_supervisor: 72, canon_formulario: 48, canon_correo: 48, portal_reclamo: 48, portal_cancelacion: 4 };
     return (o) => m[o] || { origen: o, sla_horas: def[o] || 48, aviso_horas: 24, sin_domingos: false };
   }, [sla]);
 

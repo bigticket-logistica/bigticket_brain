@@ -35,7 +35,8 @@ const C = {
   borde: "#e4e7ec", texto: "#1f2937", suave: "#475569", tenue: "#94a3b8",
 };
 
-let SLA_H = 96;   // plazo PNR MELI; se toma de postventa_sla_cl (editable en "Plazos")
+let SLA_H = 72;   // plazo del SUPERVISOR para cargar el comprobante (pnr_supervisor en postventa_sla_cl, editable en "Plazos").
+                  // MELI da 96 h; el supervisor tiene 24 h menos para que el área alcance a responder.
 const REFRESCO_MS = 60 * 1000;
 
 async function api(path, opciones) {
@@ -780,7 +781,7 @@ function InformeEnviados({ casos, correos }) {
 export default function ModuloPnrCL({ usuario }) {
   const [vista, setVista] = useState("bandeja");
   const puedeEvaluar = PUEDEN_EVALUAR.includes(String((usuario && usuario.email) || "").toLowerCase().trim());
-  const [slaPnr, setSlaPnr] = useState(96);
+  const [slaPnr, setSlaPnr] = useState(72);
   SLA_H = slaPnr;
   const [solicitudes, setSolicitudes] = useState({});
   const [supervisores, setSupervisores] = useState({});
@@ -808,7 +809,7 @@ export default function ModuloPnrCL({ usuario }) {
         api("pnr_solicitudes_cl?select=id,case_id,estado,resultado,solicitado_en,solicitado_por,procesado_en&order=solicitado_en.desc&limit=500"),
         api("pnr_supervisor_cl?select=ceco,supervisor,lider"),
       ]);
-      api("postventa_sla_cl?origen=eq.pnr_meli&select=sla_horas").then((x) => { if (x && x[0]) setSlaPnr(Number(x[0].sla_horas) || 96); }).catch(() => {});
+      api("postventa_sla_cl?origen=eq.pnr_supervisor&select=sla_horas").then((x) => { if (x && x[0]) setSlaPnr(Number(x[0].sla_horas) || 72); }).catch(() => {});
       setSupervisores(Object.fromEntries((sups || []).map((s) => [s.ceco, s])));
       const so = {};
       for (const s of sols || []) if (!so[s.case_id]) so[s.case_id] = s;   // la más reciente de cada caso
