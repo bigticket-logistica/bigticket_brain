@@ -10,6 +10,7 @@ import ModuloEmpresas from "./Empresas";
 import ModuloAuditoriaMeli from "./AuditoriaMeli";
 import { sb, BIGGY_IMG } from "./shared";
 import { ShellBrain } from "./shared/shell";
+import { registrarSubtabs, useSubtab } from "./shared/subtabs";
 import ModuloPoolMeliMX from "./Pool";
 import { descargarExcelMeli, descargarExcelMultihoja } from "./shared";
 import ModuloPagosMadre from "./Pagos";
@@ -9146,30 +9147,18 @@ function DetalleVariacionContratista({ contratista, fechaHoy, fechaAyer }) {
   );
 }
 
+const TABS_CERT_MX = [
+  { id: "ingresos",    label: "Proceso de Certificaciones MX", desc: "Drivers MX (Mercado Libre)" },
+];
+registrarSubtabs("certificaciones", TABS_CERT_MX, "ingresos");
+
 function ModuloCertificacionesMadre() {
-  const [subtab, setSubtab] = useState("ingresos");
-  const tabs = [
-    { id: "ingresos",    label: "Proceso de Certificaciones MX", desc: "Drivers MX (Mercado Libre)" },
-  ];
+  const [subtab] = useSubtab("certificaciones");
   return (
     <div style={{ padding: 0 }}>
       <div style={{ background: "#fff", borderBottom: "1px solid #e4e7ec", padding: "12px 24px" }}>
         <div style={{ fontSize: 18, fontWeight: 700, color: "#002E5D", marginBottom: 10 }}>Certificaciones</div>
-        <div style={{ display: "flex", gap: 0, borderBottom: "2px solid #e4e7ec", marginLeft: -8, flexWrap: "wrap" }}>
-          {tabs.map(t => (
-            <button key={t.id} onClick={() => setSubtab(t.id)}
-              style={{
-                background: "transparent", border: "none", padding: "10px 16px",
-                fontSize: 13, fontWeight: 600, cursor: "pointer", color: subtab === t.id ? "#002E5D" : "#64748b",
-                borderBottom: subtab === t.id ? "2px solid #002E5D" : "2px solid transparent",
-                marginBottom: -2,
-                transition: "all 0.15s",
-              }}>
-              <div>{t.label}</div>
-              <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 400, marginTop: 2 }}>{t.desc}</div>
-            </button>
-          ))}
-        </div>
+        <div style={{ fontSize: 15, fontWeight: 700, color: "#FF6600", fontFamily: "Poppins, 'Open Sans', sans-serif", marginTop: 2 }}>{(TABS_CERT_MX.find((t) => t.id === subtab) || {}).label}</div>
       </div>
       {subtab === "ingresos"    && <ModuloCertificaciones />}
     </div>
@@ -15190,33 +15179,26 @@ function MantenedorSupervisores() {
   );
 }
 
+const TABS_CUIDADO_CL = [
+  { id: "ca_tareas", label: "Tareas del supervisor", desc: "Detenciones, hallazgos y avisos al supervisor" },
+  { id: "ca_nosalidas", label: "No salidas", desc: "Flota propia sin ruta y su motivo" },
+  { id: "ca_incumplimientos", label: "Incumplimientos", desc: "Tareas vencidas por supervisor y mes" },
+  { id: "ca_config", label: "Configuración", desc: "Plazos, justificaciones y correos" },
+  { id: "verificador", label: "Verificador de Componentes", desc: "Vida útil de componentes" },
+  { id: "ficha",       label: "Ficha Vehículo", desc: "Datos, documentos e historial" },
+  { id: "costos",      label: "Flujo de Caja", desc: "Gastos de mantención" },
+  { id: "bitacora",    label: "Bitácora", desc: "Aprobación de solicitudes" },
+  { id: "supervisores", label: "Supervisores", desc: "Supervisores por CECO" },
+];
+registrarSubtabs("mantenciones_cl", TABS_CUIDADO_CL, "ca_tareas");
+
 function ModuloMantencionesMadre({ usuario }) {
-  const [sub, setSub] = useState("ca_tareas");
-  const tabs = [
-    { id: "ca_tareas", label: "Tareas del supervisor" },
-    { id: "ca_nosalidas", label: "No salidas" },
-    { id: "ca_incumplimientos", label: "Incumplimientos" },
-    { id: "ca_config", label: "Configuración" },
-    { id: "verificador", label: "Verificador de Componentes" },
-    { id: "ficha",       label: "Ficha Vehículo" },
-    { id: "costos",      label: "Flujo de Caja" },
-    { id: "bitacora",    label: "Bitácora" },
-    { id: "supervisores", label: "Supervisores" },
-  ];
+  const [sub] = useSubtab("mantenciones_cl");
   return (
     <div className="pg">
       <div className="sec-title">Cuidado de Activo</div>
       <div className="sec-sub">Flota propia Chile: tareas al supervisor, no salidas, mantenciones y protocolo de flota</div>
-      <div style={{ display:"flex", gap:4, borderBottom:"1px solid #e4e7ec", marginBottom:20, overflowX:"auto" }}>
-        {tabs.map(t => (
-          <button key={t.id} onClick={()=>setSub(t.id)} style={{
-            padding:"10px 16px", background:"none", border:"none",
-            borderBottom: sub===t.id ? "2px solid #002E5D" : "2px solid transparent",
-            color: sub===t.id ? "#002E5D" : "#64748b", fontSize:13, fontWeight:700,
-            cursor:"pointer", whiteSpace:"nowrap", marginBottom:-1, fontFamily:"'Open Sans',sans-serif"
-          }}>{t.label}</button>
-        ))}
-      </div>
+      <div style={{ marginBottom: 16 }}><div style={{ fontSize: 15, fontWeight: 700, color: "#FF6600", fontFamily: "Poppins, 'Open Sans', sans-serif", marginTop: 2 }}>{(TABS_CUIDADO_CL.find((t) => t.id === sub) || {}).label}</div></div>
       {sub.startsWith("ca_") && <CuidadoActivoCL usuario={usuario} sub={sub} />}
       {sub === "verificador" && <VerificadorComponentes usuario={usuario} />}
       {sub === "ficha"       && <FichaVehiculo usuario={usuario} />}

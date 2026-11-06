@@ -1,3 +1,4 @@
+import { registrarSubtabs, useSubtab } from "./shared/subtabs";
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { descargarExcelMeli, descargarExcelMultihoja, fechaHoyOperativa, fechaOperativaOffset, pct, sb } from "./shared";
 import RechazosMeliMX, { rmResumenPerdidas } from "./RechazosMeli";
@@ -579,8 +580,23 @@ function TareasJefeOperaciones() {
   );
 }
 
+// Subpestañas de Indicadores: el menú lateral del Brain las muestra desplegadas.
+const TABS_INDICADORES = [
+  { id: "torre", label: "Torre de Control", desc: "Hoy en vivo · D-1 tres pilares · compromiso de mañana" },
+  { id: "pedidos_vivo", label: "Pedidos en vivo", desc: "Aceptación cada 5 min · alertas" },
+  { id: "capacidad_mx", label: "Capacidad MX", desc: "Demanda estimada · flota · 9 días" },
+  { id: "malla_turnos", label: "Malla de turnos", desc: "Grupo fijo, descansos y reserva por SC" },
+  { id: "rechazos_meli", label: "Rechazos MELI", desc: "Rutas no aceptadas y no hechas · pérdida en $" },
+  { id: "kpi_operacion", label: "KPI de Operación", desc: "NS Informe MELI vs Snapshots" },
+  { id: "vendor_score", label: "Vendor Score", desc: "Nota semanal MELI · aproximada" },
+  { id: "control_helper", label: "Control Helper", desc: "Helpers no autorizados / certificados / fantasmas" },
+  { id: "tareas", label: "📋 Tareas", desc: "Altas operacionales · SLA 24 h" },
+  { id: "consolidaciones_bitacora", label: "Consolidaciones Bitácora", desc: "Consolidado por SC: torre de control, ambulancias y bitácora del supervisor" },
+];
+registrarSubtabs("pool_meli_mx", TABS_INDICADORES, "torre");
+
 function IndicadoresOperacionalesMX({ usuario }) {
-  const [vista, setVista] = useState("torre");
+  const [vista, setVista] = useSubtab("pool_meli_mx");
 
 
 
@@ -588,18 +604,6 @@ function IndicadoresOperacionalesMX({ usuario }) {
   // Tabs: Compromiso MELI, KPI de Operación, Diferencias Maestros, Inventario, Control Helper
   // Nota: pestaña "validacion_bt" oculta del menú (render condicional abajo queda intacto).
   // El Padrón MELI (altas/bajas/cambios) se movió a Administración → "Padrón MELI".
-  const tabs = [
-    { id: "torre", label: "Torre de Control", desc: "Hoy en vivo · D-1 tres pilares · compromiso de mañana" },
-    { id: "pedidos_vivo", label: "Pedidos en vivo", desc: "Aceptación cada 5 min · alertas" },
-    { id: "capacidad_mx", label: "Capacidad MX", desc: "Demanda estimada · flota · 9 días" },
-    { id: "malla_turnos", label: "Malla de turnos", desc: "Grupo fijo, descansos y reserva por SC" },
-    { id: "rechazos_meli", label: "Rechazos MELI", desc: "Rutas no aceptadas y no hechas · pérdida en $" },
-    { id: "kpi_operacion", label: "KPI de Operación", desc: "NS Informe MELI vs Snapshots" },
-    { id: "vendor_score", label: "Vendor Score", desc: "Nota semanal MELI · aproximada" },
-    { id: "control_helper", label: "Control Helper", desc: "Helpers no autorizados / certificados / fantasmas" },
-    { id: "tareas", label: "📋 Tareas", desc: "Altas operacionales · SLA 24 h" },
-    { id: "consolidaciones_bitacora", label: "Consolidaciones Bitácora", desc: "Consolidado por SC: torre de control, ambulancias y bitácora del supervisor" },
-  ];
 
 
 
@@ -614,23 +618,7 @@ function IndicadoresOperacionalesMX({ usuario }) {
         <div style={{ fontSize: 12, color: "#64748b", marginBottom: 10 }}>
           Pool Mercado Libre · cruce de 6 fuentes operativas
         </div>
-        <div style={{ display: "flex", gap: 0, borderBottom: "2px solid #e4e7ec", marginLeft: -8, flexWrap: "wrap", alignItems: "flex-end", justifyContent: "space-between" }}>
-          <div style={{ display: "flex", gap: 0, flexWrap: "wrap" }}>
-            {tabs.map(t => (
-              <button key={t.id} onClick={() => setVista(t.id)}
-                style={{
-                  background: "transparent", border: "none", padding: "10px 16px",
-                  fontSize: 13, fontWeight: 600, cursor: "pointer", color: vista === t.id ? "#002E5D" : "#64748b",
-                  borderBottom: vista === t.id ? "2px solid #002E5D" : "2px solid transparent",
-                  marginBottom: -2,
-                }}>
-                <div>{t.label}</div>
-                <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 400, marginTop: 2 }}>{t.desc}</div>
-              </button>
-            ))}
-          </div>
-
-        </div>
+        <div style={{ fontSize: 15, fontWeight: 700, color: "#FF6600", fontFamily: "Poppins, 'Open Sans', sans-serif", marginTop: 2 }}>{(TABS_INDICADORES.find((t) => t.id === vista) || {}).label}</div>
       </div>
 
       {vista === "torre" && <TorreControlMX />}

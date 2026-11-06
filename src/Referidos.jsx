@@ -14,6 +14,7 @@
 // Lee de las vistas vw_ref_brain_* y cambia el estado de un bono con la
 // función fn_ref_brain_premio (todo en Supabase, prefijo ref_).
 // ═══════════════════════════════════════════════════════════════════════════
+import { registrarSubtabs, useSubtab } from "./shared/subtabs";
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { sb } from "./shared";
 import Requerimientos from "./Requerimientos";
@@ -50,8 +51,20 @@ function Pill({ par }) {
   return <span style={{ background: bg, color: fg, fontSize: 11, fontWeight: 700, padding: "3px 10px", borderRadius: 20, whiteSpace: "nowrap" }}>{t}</span>;
 }
 
+// Subpestañas de Referidos: el menú lateral las muestra, con sus contadores.
+const TABS_REFERIDOS = [
+  { id: "bonos", label: "Bonos", desc: "Bonos por validar y pagar" },
+  { id: "referidos", label: "Referidos", desc: "Choferes referidos y su avance" },
+  { id: "referidores", label: "Referidores", desc: "Quién refiere y sus canales" },
+  { id: "anfitriones", label: "Anfitriones", desc: "Supervisores con código anfitrión" },
+  { id: "mensajes", label: "Mensajes", desc: "Chat con los referidores" },
+  { id: "oportunidades", label: "Oportunidades", desc: "Vacantes por SC" },
+  { id: "requerimientos", label: "Requerimientos", desc: "Pedidos de choferes por SC" },
+];
+registrarSubtabs("referidos", TABS_REFERIDOS, "bonos");
+
 export default function ModuloReferidos({ usuario }) {
-  const [tab, setTab] = useState("bonos");
+  const [tab, setTab] = useSubtab("referidos");
   const [bonos, setBonos] = useState([]);
   const [referidos, setReferidos] = useState([]);
   const [referidores, setReferidores] = useState([]);
@@ -116,17 +129,16 @@ export default function ModuloReferidos({ usuario }) {
     cargar(); return true;
   };
   const TABS = [["bonos", "Bonos", porValidar], ["referidos", "Referidos", referidosVivos.length], ["referidores", "Referidores", referidoresVivos.length + canales.length], ["anfitriones", "Anfitriones", null], ["mensajes", "Mensajes", mensajes.filter((m) => m.de === "referidor" && !m.leido_at).length], ["oportunidades", "Oportunidades", vacantes], ["requerimientos", "Requerimientos", reqAbiertos]];
+  // Contadores al menú lateral (solo cuando cambian)
+  const conteos = JSON.stringify(TABS.map(([, , n]) => n || 0));
+  useEffect(() => { registrarSubtabs("referidos", TABS_REFERIDOS.map((t, i) => ({ ...t, n: TABS[i] ? TABS[i][2] : null }))); }, [conteos]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="pg">
       <div className="sec-title">Referidos</div>
       <div className="sec-sub">Programa de referidos MX: $500 por contrato firmado y primera ruta, y $1,500 por 20 rutas en 30 días.</div>
       <div style={{ display: "flex", gap: 6, marginBottom: 16, flexWrap: "wrap" }}>
-        {TABS.map(([k, t, n]) => (
-          <button key={k} onClick={() => setTab(k)} className={`nav-btn${tab === k ? " active" : ""}`} style={{ border: `0.5px solid ${BORDE}` }}>
-            {t} {n > 0 && <span style={{ marginLeft: 6, background: ["bonos", "requerimientos", "mensajes"].includes(k) ? NARANJA : "#e4e7ec", color: ["bonos", "requerimientos", "mensajes"].includes(k) ? "#fff" : AZUL, borderRadius: 10, padding: "1px 7px", fontSize: 11, fontWeight: 700 }}>{n}</span>}
-          </button>
-        ))}
+        <div style={{ fontSize: 15, fontWeight: 700, color: "#FF6600", fontFamily: "Poppins, 'Open Sans', sans-serif" }}>{(TABS_REFERIDOS.find((t) => t.id === tab) || {}).label}</div>
         <button onClick={cargar} className="btn-back" style={{ marginLeft: "auto" }}>↻ Actualizar</button>
       </div>
       {error && <div className="form-card" style={{ color: "#b42318" }}>No se pudo cargar: {error}</div>}

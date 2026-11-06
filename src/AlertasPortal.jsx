@@ -10,6 +10,7 @@
 // Avisos puntuales: mensajes que no nacen de una acción del sistema. Van a
 // todos, a un centro o a una empresa, con fecha de inicio y de fin.
 // ═══════════════════════════════════════════════════════════════════════════
+import { registrarSubtabs, useSubtab } from "./shared/subtabs";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { sb } from "./shared";
 
@@ -46,23 +47,21 @@ const rellenar = (t) => String(t || "").replace(/\{(\w+)\}/g, (m, k) => EJEMPLO[
 const input = { width: "100%", border: `1px solid ${BORDE}`, borderRadius: 7, padding: "7px 9px", fontSize: 13, boxSizing: "border-box" };
 const label = { fontSize: 11, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: ".04em", marginBottom: 4, display: "block" };
 
+const TABS_ALERTAS = [
+  { id: "catalogo", label: "Catálogo de alertas", desc: "Reglas que llegan a la campana del tercero" },
+  { id: "avisos", label: "Avisos puntuales", desc: "Mensajes manuales a uno o varios terceros" },
+];
+registrarSubtabs("alertas_portal", TABS_ALERTAS, "catalogo");
+
 export default function ModuloAlertasPortal({ usuario }) {
-  const [pestana, setPestana] = useState("catalogo");
+  const [pestana] = useSubtab("alertas_portal");
   return (
     <div style={{ padding: "18px 22px", maxWidth: 1180, margin: "0 auto" }}>
       <div style={{ fontSize: 20, fontWeight: 700, color: AZUL }}>Alertas del portal de terceros</div>
       <div style={{ fontSize: 13, color: "#64748b", margin: "4px 0 16px" }}>
         Lo que le llega a cada transportista en la campana y en el inicio de su portal.
       </div>
-      <div style={{ display: "flex", gap: 6, borderBottom: `1px solid ${BORDE}`, marginBottom: 18 }}>
-        {[["catalogo", "Catálogo de alertas"], ["avisos", "Avisos puntuales"]].map(([k, l]) => (
-          <button key={k} onClick={() => setPestana(k)} style={{
-            border: "none", background: "none", padding: "9px 14px", fontSize: 14, cursor: "pointer",
-            fontWeight: pestana === k ? 700 : 500, color: pestana === k ? AZUL : "#64748b",
-            borderBottom: `2px solid ${pestana === k ? AZUL : "transparent"}`, marginBottom: -1,
-          }}>{l}</button>
-        ))}
-      </div>
+      <div style={{ fontSize: 15, fontWeight: 700, color: "#FF6600", fontFamily: "Poppins, 'Open Sans', sans-serif", marginBottom: 12 }}>{(TABS_ALERTAS.find((t) => t.id === pestana) || {}).label}</div>
       {pestana === "catalogo" ? <Catalogo usuario={usuario} /> : <Avisos usuario={usuario} />}
     </div>
   );
