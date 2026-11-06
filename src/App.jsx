@@ -15538,7 +15538,7 @@ export default function App() {
         {tabActivo === "pool_meli_mx" && <ModuloPoolMeliMX usuario={usuario} />}
         {tabActivo === "certificaciones" && <ModuloCertificacionesMadre />}
         {tabActivo === "empresas" && <ModuloEmpresas />}
-        {tabActivo === "certificaciones_cl" && <ModuloCertificacionesCL certronicSlot={<ModuloPagos />} />}
+        {tabActivo === "certificaciones_cl" && <ModuloCertificacionesCL certronicSlot={<ModuloPagos />} usuario={usuario} />}
         {tabActivo === "mantenciones_cl" && <ModuloMantencionesMadre usuario={usuario} />}
         {tabActivo === "maestro_cl" && <ModuloMaestroCL usuario={usuario} />}
         {tabActivo === "gps_seguros_cl" && <ModuloGpsSegurosCL />}
