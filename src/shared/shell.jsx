@@ -5,6 +5,7 @@
 // Mismos colores (#002E5D / #FF6600), tipografías (Poppins / Open Sans) y medidas.
 // ═══════════════════════════════════════════════════════════════════════════
 import { useEffect, useState } from "react";
+import { useMenuSubtabs } from "./subtabs";
 
 // Logo desde el Portal Transportista (ya publicado ahí): el Brain no necesita carpeta public.
 const LOGO = "https://app.fleetbiggy.com/logo-bigticket-blanco.png";
@@ -24,7 +25,11 @@ export function ShellBrain({ pais, paisCode, usuario, mods, labels, tab, onTab, 
   const [panel, setPanel] = useState(false);
   const [hora, setHora] = useState(horaDe(pais));
   useEffect(() => { setHora(horaDe(pais)); const t = setInterval(() => setHora(horaDe(pais)), 30000); return () => clearInterval(t); }, [pais]);
+  const { listas, activas, elegir } = useMenuSubtabs();
+  const [abierto, setAbierto] = useState(tab);           // madre desplegada en el menú
+  useEffect(() => { setAbierto(tab); }, [tab]);
   const ir = (k) => { setMenu(false); onTab(k); window.scrollTo(0, 0); };
+  const irSub = (k, id) => { elegir(k, id); ir(k); };
   return (
     <div className="bs-shell">
       <style>{CSS_BS}</style>
@@ -66,11 +71,29 @@ export function ShellBrain({ pais, paisCode, usuario, mods, labels, tab, onTab, 
         {menu && <div className="bs-velo" onClick={() => setMenu(false)} />}
         <aside className={`bs-lateral${menu ? " abierto" : ""}`}>
           <nav className="bs-nav">
-            {mods.map((k) => (
-              <button key={k} className={`bs-item${tab === k ? " on" : ""}`} aria-current={tab === k ? "page" : undefined} onClick={() => ir(k)}>
-                {labels[k] || k}
-              </button>
-            ))}
+            {mods.map((k) => {
+              const subs = listas[k];
+              const open = !!subs && abierto === k;
+              return (
+                <div key={k}>
+                  <button className={`bs-item${tab === k ? " on" : ""}`} aria-current={tab === k && !subs ? "page" : undefined}
+                    onClick={() => { if (subs) { setAbierto(open ? null : k); if (tab !== k) ir(k); } else ir(k); }}>
+                    <span>{labels[k] || k}</span>
+                    {subs && <svg className="bs-chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ transform: `rotate(${open ? 180 : 0}deg)` }}><path d="m6 9 6 6 6-6" /></svg>}
+                  </button>
+                  {open && (
+                    <div className="bs-sub">
+                      {subs.map((t) => (
+                        <button key={t.id} className={`bs-sub-btn${tab === k && activas[k] === t.id ? " on" : ""}`} aria-current={tab === k && activas[k] === t.id ? "page" : undefined} onClick={() => irSub(k, t.id)}>
+                          <span className="bs-sub-t">{t.label}</span>
+                          {t.desc && <span className="bs-sub-d">{t.desc}</span>}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </nav>
         </aside>
         <main className="bs-main">{children}</main>
@@ -103,11 +126,20 @@ const CSS_BS = `
 .bs-desp-item .d { display:block; font-size:12px; color:var(--muted); margin-top:2px; }
 .bs-franja { display:flex; justify-content:flex-end; gap:8px; align-items:center; padding:8px 28px; border-bottom:1px solid var(--line); background:#fff; font-size:12px; color:#4A5058; white-space:nowrap; position:sticky; top:64px; z-index:19; }
 .bs-cuerpo { display:flex; align-items:flex-start; }
-.bs-lateral { width:248px; flex-shrink:0; position:sticky; top:97px; height:calc(100vh - 97px); overflow-y:auto; background:#fff; border-right:1px solid var(--line); padding:20px 14px 40px; }
+.bs-lateral { width:272px; flex-shrink:0; position:sticky; top:97px; height:calc(100vh - 97px); overflow-y:auto; background:#fff; border-right:1px solid var(--line); padding:20px 14px 40px; }
 .bs-nav { display:flex; flex-direction:column; gap:4px; }
 .bs-item { width:100%; border:none; background:transparent; border-radius:10px; padding:12px 14px; font-weight:600; font-size:14.5px; cursor:pointer; color:#8B8B8B; text-align:left; }
 .bs-item:hover { background:#F4F3F3; }
+.bs-item { display:flex; align-items:center; justify-content:space-between; gap:8px; }
 .bs-item.on { color:var(--navy); font-weight:700; background:rgba(0,46,93,.06); box-shadow:inset 3px 0 0 var(--orange); }
+.bs-chev { flex-shrink:0; transition:transform .15s ease; }
+.bs-sub { display:flex; flex-direction:column; gap:2px; padding:4px 0 8px 13px; margin-left:14px; border-left:1px solid var(--line); }
+.bs-sub-btn { width:100%; text-align:left; background:transparent; border:none; border-radius:8px; padding:8px 10px; cursor:pointer; display:flex; flex-direction:column; }
+.bs-sub-btn:hover { background:#F4F3F3; }
+.bs-sub-btn.on { background:rgba(255,102,0,.08); }
+.bs-sub-t { font-family:Poppins,sans-serif; font-weight:700; font-size:13px; color:var(--navy); }
+.bs-sub-btn.on .bs-sub-t { color:var(--orange); }
+.bs-sub-d { font-size:11.5px; color:var(--muted); margin-top:2px; line-height:1.35; }
 .bs-velo { display:none; }
 .bs-main { flex:1; min-width:0; }
 @media (max-width: 860px) {
