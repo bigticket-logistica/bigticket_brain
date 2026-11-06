@@ -22,7 +22,7 @@ import { NoSalidasSC } from "./NoSalidas";
 // Primeras rutas con el ítem "No Salidas a Ruta" en la Bitácora: las del 4-nov-2026 (se responden el 5).
 const NOSAL_RUTAS_DESDE = "2026-11-04";
 
-const AZUL = "#1a3a6b";
+const AZUL = "#002E5D";
 const GRIS = "#64748b";
 const BORDE = "#e4e7ec";
 const POR_PAGINA = 10;

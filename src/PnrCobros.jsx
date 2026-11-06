@@ -68,7 +68,7 @@ function recalcSC(filas, cobros) {
 }
 
 const MOTIVOS = {
-  BILLED: { label: "Enviado a facturación", corto: "facturación", color: "#1a3a6b", bg: "#e8eef7", concepto: "PNR facturado" },
+  BILLED: { label: "Enviado a facturación", corto: "facturación", color: "#002E5D", bg: "#e8eef7", concepto: "PNR facturado" },
   WITHOUT_RECEIPT: { label: "Sin comprobante cargado", corto: "sin comprobante", color: "#92400e", bg: "#fef3c7", concepto: "PNR sin comprobante" },
 };
 const SUB_COBRABLES = Object.keys(MOTIVOS);
@@ -122,7 +122,7 @@ function Kpi({ label, valor, sub }) {
   return (
     <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10, padding: "12px 16px", minWidth: 150 }}>
       <div style={{ fontSize: 10, color: "#64748b", fontWeight: 600 }}>{label}</div>
-      <div style={{ fontSize: 20, fontWeight: 700, color: "#1a3a6b", marginTop: 2 }}>{valor}</div>
+      <div style={{ fontSize: 20, fontWeight: 700, color: "#002E5D", marginTop: 2 }}>{valor}</div>
       {sub ? <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 2 }}>{sub}</div> : null}
     </div>
   );
@@ -185,8 +185,8 @@ export default function CobrosTerceros({ usuario }) {
           <button key={t.id} onClick={() => setSub(t.id)} title={t.desc}
             style={{
               padding: "8px 18px", borderRadius: 8, fontSize: 12.5, fontWeight: 700, cursor: "pointer",
-              border: `1px solid ${sub === t.id ? "#1a3a6b" : "#e4e7ec"}`,
-              background: sub === t.id ? "#1a3a6b" : "#fff",
+              border: `1px solid ${sub === t.id ? "#002E5D" : "#e4e7ec"}`,
+              background: sub === t.id ? "#002E5D" : "#fff",
               color: sub === t.id ? "#fff" : "#64748b",
             }}>
             {t.label}
@@ -359,7 +359,7 @@ function ModuloRobos({ usuario }) {
     <div style={{ padding: 24 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap", marginBottom: 14 }}>
         <div>
-          <div style={{ fontSize: 17, fontWeight: 700, color: "#1a3a6b" }}>Robos y extravíos</div>
+          <div style={{ fontSize: 17, fontWeight: 700, color: "#002E5D" }}>Robos y extravíos</div>
           <div style={{ fontSize: 11.5, color: "#94a3b8", marginTop: 2, maxWidth: 640, lineHeight: 1.5 }}>
             El paquete se declara perdido a los dos o tres días; el monto llega semanas después en
             el acumulado de MELI. Se avisa primero y se cobra cuando hay precio.
@@ -367,7 +367,7 @@ function ModuloRobos({ usuario }) {
         </div>
         <button onClick={traerDeMeli} disabled={trayendo}
           style={{ padding: "9px 18px", borderRadius: 8, border: "none", fontSize: 12.5, fontWeight: 700,
-            background: trayendo ? "#cbd5e1" : "#1a3a6b", color: "#fff", cursor: trayendo ? "not-allowed" : "pointer" }}>
+            background: trayendo ? "#cbd5e1" : "#002E5D", color: "#fff", cursor: trayendo ? "not-allowed" : "pointer" }}>
           {trayendo ? "Consultando a MELI…" : "↓ Traer montos de MELI"}
         </button>
       </div>
@@ -382,8 +382,8 @@ function ModuloRobos({ usuario }) {
         {TABS.map(t => (
           <button key={t.id} onClick={() => setFase(t.id)} title={t.ayuda}
             style={{ padding: "7px 15px", borderRadius: 16, fontSize: 11.5, fontWeight: 700, cursor: "pointer",
-              border: `1px solid ${fase === t.id ? "#1a3a6b" : "#e4e7ec"}`,
-              background: fase === t.id ? "#1a3a6b" : "#fff", color: fase === t.id ? "#fff" : "#64748b" }}>
+              border: `1px solid ${fase === t.id ? "#002E5D" : "#e4e7ec"}`,
+              background: fase === t.id ? "#002E5D" : "#fff", color: fase === t.id ? "#fff" : "#64748b" }}>
             {t.l}{t.n > 0 ? ` (${t.n})` : ""}
           </button>
         ))}
@@ -416,7 +416,7 @@ function ModuloRobos({ usuario }) {
                 const avisado = !!f.aviso_at;
                 return (
                   <tr key={f.folio_guia} style={{ background: ya ? "#fbfdfb" : "#fff" }}>
-                    <td style={{ ...td, fontWeight: 600, color: "#1a3a6b" }}>
+                    <td style={{ ...td, fontWeight: 600, color: "#002E5D" }}>
                       {f.folio_guia}
                       {f.id_ruta && <div style={{ fontSize: 9.5, color: "#94a3b8", fontWeight: 400 }}>ruta {f.id_ruta}</div>}
                     </td>
@@ -489,7 +489,7 @@ function ModuloRobos({ usuario }) {
                           <div>
                             <button onClick={() => avisarPerdido(f)} disabled={guardando === f.folio_guia}
                               style={{ padding: "5px 12px", fontSize: 10.5, fontWeight: 700, borderRadius: 6,
-                                border: "1px solid #1a3a6b", background: "#fff", color: "#1a3a6b", cursor: "pointer" }}>
+                                border: "1px solid #002E5D", background: "#fff", color: "#002E5D", cursor: "pointer" }}>
                               {guardando === f.folio_guia ? "…" : "Avisar al tercero"}
                             </button>
                             <div style={{ fontSize: 8.5, color: "#94a3b8", marginTop: 2 }}>sin monto todavía</div>
@@ -668,7 +668,7 @@ function ModuloNoShow({ usuario }) {
   return (
     <div style={{ padding: 24 }}>
       <div style={{ marginBottom: 14 }}>
-        <div style={{ fontSize: 17, fontWeight: 700, color: "#1a3a6b" }}>No Show</div>
+        <div style={{ fontSize: 17, fontWeight: 700, color: "#002E5D" }}>No Show</div>
         <div style={{ fontSize: 11.5, color: "#94a3b8", marginTop: 2, maxWidth: 640, lineHeight: 1.5 }}>
           Placas que el supervisor declaró como no presentadas en su bitácora del día.
           El monto lo pones tú: no hay tarifa fija todavía.
@@ -685,8 +685,8 @@ function ModuloNoShow({ usuario }) {
         {[["pendientes", "Sin cobrar"], ["publicados", "En el portal"], ["todas", "Todas"]].map(([id, l]) => (
           <button key={id} onClick={() => setFiltro(id)}
             style={{ padding: "6px 14px", borderRadius: 16, fontSize: 11.5, fontWeight: 700, cursor: "pointer",
-              border: `1px solid ${filtro === id ? "#1a3a6b" : "#e4e7ec"}`,
-              background: filtro === id ? "#1a3a6b" : "#fff", color: filtro === id ? "#fff" : "#64748b" }}>{l}</button>
+              border: `1px solid ${filtro === id ? "#002E5D" : "#e4e7ec"}`,
+              background: filtro === id ? "#002E5D" : "#fff", color: filtro === id ? "#fff" : "#64748b" }}>{l}</button>
         ))}
         <span style={{ fontSize: 11.5, color: "#64748b", marginLeft: "auto" }}>
           Cobrado: <b style={{ color: "#b91c1c" }}>{money(totPub)}</b>
@@ -715,7 +715,7 @@ function ModuloNoShow({ usuario }) {
                   <tr key={clave(f)} style={{ background: pub ? "#fbfdfb" : "#fff" }}>
                     <td style={{ ...td, color: "#64748b", whiteSpace: "nowrap" }}>{f.fecha}</td>
                     <td style={{ ...td, color: "#64748b" }}>{f.sc}</td>
-                    <td style={{ ...td, fontWeight: 600, color: "#1a3a6b" }}>{f.placa}</td>
+                    <td style={{ ...td, fontWeight: 600, color: "#002E5D" }}>{f.placa}</td>
                     <td style={{ ...td, color: f.empresa ? "#334155" : "#b45309", fontWeight: f.empresa ? 400 : 600 }}>
                       {f.empresa || "⚠️ sin empresa en el padrón"}
                     </td>
@@ -777,7 +777,7 @@ function ModuloNoShow({ usuario }) {
 function EnConstruccion({ titulo, nota }) {
   return (
     <div style={{ padding: 40, textAlign: "center" }}>
-      <div style={{ fontSize: 16, fontWeight: 700, color: "#1a3a6b" }}>{titulo}</div>
+      <div style={{ fontSize: 16, fontWeight: 700, color: "#002E5D" }}>{titulo}</div>
       <div style={{ fontSize: 13, color: "#94a3b8", marginTop: 8, maxWidth: 520, margin: "8px auto 0", lineHeight: 1.6 }}>
         {nota}
       </div>
@@ -1502,10 +1502,10 @@ function ModuloPnr({ usuario }) {
   const totalSemana = montoCobrado + totalPend;
 
   return (
-    <div style={{ padding: 24, fontFamily: "Geist, sans-serif" }}>
+    <div style={{ padding: 24, fontFamily: "'Open Sans', sans-serif" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 14 }}>
         <div>
-          <div style={{ fontSize: 16, fontWeight: 700, color: "#1a3a6b" }}>PNR — cobro a terceros</div>
+          <div style={{ fontSize: 16, fontWeight: 700, color: "#002E5D" }}>PNR — cobro a terceros</div>
           <div style={{ fontSize: 11, color: "#64748b" }}>
             PNR que se volvieron cobrables en esta semana, por envío a facturación o por quedar sin comprobante cargado. Cada caso aparece en una sola semana. Agregar carga el cobro en la conciliación como línea negativa.
           </div>
@@ -1515,7 +1515,7 @@ function ModuloPnr({ usuario }) {
           style={{ padding: "6px 10px", fontSize: 12, border: "1px solid #e4e7ec", background: "#fff", borderRadius: 6, cursor: "pointer" }}>
           ←
         </button>
-        <div style={{ fontSize: 13, fontWeight: 600, color: "#1a3a6b", minWidth: 150, textAlign: "center" }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: "#002E5D", minWidth: 150, textAlign: "center" }}>
           Semana {semana}
           <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 400 }}>{etiquetaSemana(semana)}</div>
         </div>
@@ -1532,7 +1532,7 @@ function ModuloPnr({ usuario }) {
             style={{ width: 64, padding: "5px 6px", fontSize: 12, border: "1px solid #e4e7ec", borderRadius: 6 }} />
         </div>
         <button onClick={exportar} disabled={loading || !visibles.length}
-          style={{ padding: "7px 14px", fontSize: 11, fontWeight: 600, background: "#fff", color: "#1a3a6b", border: "1px solid #1a3a6b", borderRadius: 6, cursor: (loading || !visibles.length) ? "not-allowed" : "pointer", opacity: (loading || !visibles.length) ? 0.5 : 1 }}>
+          style={{ padding: "7px 14px", fontSize: 11, fontWeight: 600, background: "#fff", color: "#002E5D", border: "1px solid #002E5D", borderRadius: 6, cursor: (loading || !visibles.length) ? "not-allowed" : "pointer", opacity: (loading || !visibles.length) ? 0.5 : 1 }}>
           Descargar Excel
         </button>
         <button onClick={agregarSeleccionados} disabled={!!guardando || loading || !nSeleccionados}
@@ -1541,7 +1541,7 @@ function ModuloPnr({ usuario }) {
           {guardando === "todos" ? "Agregando…" : `Agregar seleccionados (${nSeleccionados})`}
         </button>
         <button onClick={() => cargar(semana)} disabled={loading}
-          style={{ padding: "7px 14px", fontSize: 11, fontWeight: 600, background: "#1a3a6b", color: "#fff", border: "none", borderRadius: 6, cursor: loading ? "not-allowed" : "pointer", opacity: loading ? 0.5 : 1 }}>
+          style={{ padding: "7px 14px", fontSize: 11, fontWeight: 600, background: "#002E5D", color: "#fff", border: "none", borderRadius: 6, cursor: loading ? "not-allowed" : "pointer", opacity: loading ? 0.5 : 1 }}>
           {loading ? "Cargando…" : "Actualizar"}
         </button>
       </div>
@@ -1709,7 +1709,7 @@ function ModuloPnr({ usuario }) {
                                 <button onClick={() => agregar(f)} disabled={guardando === f.case_id || !empresaDe(f) || !f.sub_cobro}
                                   title="Agregar como línea negativa a la prefactura de la semana"
                                   style={{ width: "100%", padding: "5px 10px", fontSize: 10.5, fontWeight: 700, borderRadius: 6, border: "none",
-                                    background: (empresaDe(f) && f.sub_cobro) ? "#1a3a6b" : "#e4e7ec",
+                                    background: (empresaDe(f) && f.sub_cobro) ? "#002E5D" : "#e4e7ec",
                                     color: (empresaDe(f) && f.sub_cobro) ? "#fff" : "#94a3b8",
                                     cursor: (guardando === f.case_id || !empresaDe(f) || !f.sub_cobro) ? "not-allowed" : "pointer" }}>
                                   {guardando === f.case_id ? "…" : "Agregar a prefactura"}
@@ -1745,7 +1745,7 @@ function ModuloPnr({ usuario }) {
                               title={!f.sub_cobro ? "El caso ya no está en un estado cobrable" : (!empresaDe(f) ? "Falta resolver la empresa transportista" : "Agregar como línea negativa a la prefactura de la semana")}
                               style={{
                                 width: "100%", padding: "5px 10px", fontSize: 10.5, fontWeight: 700, borderRadius: 6, border: "none",
-                                background: (empresaDe(f) && f.sub_cobro) ? "#1a3a6b" : "#e4e7ec", color: (empresaDe(f) && f.sub_cobro) ? "#fff" : "#94a3b8",
+                                background: (empresaDe(f) && f.sub_cobro) ? "#002E5D" : "#e4e7ec", color: (empresaDe(f) && f.sub_cobro) ? "#fff" : "#94a3b8",
                                 cursor: (guardando === f.case_id || !empresaDe(f) || !f.sub_cobro) ? "not-allowed" : "pointer",
                               }}>
                               {guardando === f.case_id ? "…" : "Agregar a prefactura"}
@@ -1753,7 +1753,7 @@ function ModuloPnr({ usuario }) {
                             <div style={{ fontSize: 8.5, color: "#94a3b8", textAlign: "center", marginTop: 2 }}>semanal · carril A</div>
                             <div onClick={() => guardando ? null : agregarForzando(f)}
                               title="Elegir a mano el SC donde se descuenta"
-                              style={{ marginTop: 2, fontSize: 9, color: "#1a3a6b", textDecoration: "underline", cursor: guardando ? "default" : "pointer", textAlign: "center" }}>
+                              style={{ marginTop: 2, fontSize: 9, color: "#002E5D", textDecoration: "underline", cursor: guardando ? "default" : "pointer", textAlign: "center" }}>
                               forzar SC
                             </div>
                           </div>

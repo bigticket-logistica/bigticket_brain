@@ -145,7 +145,7 @@ export default function Diferencias({ usuario }) {
     <div style={{ padding: 24 }}>
       <div style={{ display: "flex", alignItems: "baseline", gap: 12, flexWrap: "wrap", marginBottom: 14 }}>
         <div>
-          <div style={{ fontSize: 18, fontWeight: 700, color: "#1a3a6b" }}>Diferencias</div>
+          <div style={{ fontSize: 18, fontWeight: 700, color: "#002E5D" }}>Diferencias</div>
           <div style={{ fontSize: 12, color: "#94a3b8" }}>
             Reclamos de los terceros sobre pagos y cobros. Lo aceptado entra como ajuste en la prefactura vigente.
           </div>
@@ -163,8 +163,8 @@ export default function Diferencias({ usuario }) {
           <button key={id} onClick={() => setFiltro(id)}
             style={{
               padding: "6px 14px", borderRadius: 16, fontSize: 12, fontWeight: 600, cursor: "pointer",
-              border: "1px solid " + (filtro === id ? "#1a3a6b" : "#e4e7ec"),
-              background: filtro === id ? "#1a3a6b" : "#fff", color: filtro === id ? "#fff" : "#64748b",
+              border: "1px solid " + (filtro === id ? "#002E5D" : "#e4e7ec"),
+              background: filtro === id ? "#002E5D" : "#fff", color: filtro === id ? "#fff" : "#64748b",
             }}>{l}</button>
         ))}
         <button onClick={cargar} style={{ padding: "6px 14px", borderRadius: 16, fontSize: 12, border: "1px solid #e4e7ec", background: "#fff", color: "#64748b", cursor: "pointer" }}>
@@ -191,7 +191,7 @@ export default function Diferencias({ usuario }) {
             return (
               <button key={c.id} onClick={() => abrir(c)}
                 style={{ width: "100%", display: "grid", gridTemplateColumns: "70px 1.6fr 90px 1fr 110px 110px 100px", gap: 10, padding: "11px 14px", borderTop: "1px solid #f1f5f9", background: "#fff", border: "none", borderLeft: "3px solid " + (sinResolver && venceEn(c.fase === "analista" ? c.sla_analista_at : c.sla_supervisor_at)?.vencido ? "#dc2626" : "transparent"), textAlign: "left", fontSize: 12, alignItems: "center", cursor: "pointer" }}>
-                <span style={{ fontWeight: 700, color: "#1a3a6b" }}>#{c.folio}</span>
+                <span style={{ fontWeight: 700, color: "#002E5D" }}>#{c.folio}</span>
                 <span style={{ color: "#334155" }}>{c.terceros?.nombre || "—"}</span>
                 <span style={{ color: "#64748b" }}>{c.service_center || "varios"}</span>
                 <span style={{ color: "#64748b" }}>
@@ -361,7 +361,7 @@ function DetalleCaso({ caso, quien, onCerrar, onCambio }) {
   return (
     <div onClick={onCerrar} style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,.45)", zIndex: 60, display: "flex", justifyContent: "flex-end" }}>
       <div onClick={e => e.stopPropagation()} style={{ width: "min(760px, 100%)", background: "#f8fafc", height: "100%", overflowY: "auto" }}>
-        <div style={{ background: "#1a3a6b", color: "#fff", padding: "16px 20px", position: "sticky", top: 0, zIndex: 2 }}>
+        <div style={{ background: "#002E5D", color: "#fff", padding: "16px 20px", position: "sticky", top: 0, zIndex: 2 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
             <div>
               <div style={{ fontSize: 16, fontWeight: 700 }}>Diferencia #{caso.folio}</div>
@@ -399,7 +399,7 @@ function DetalleCaso({ caso, quien, onCerrar, onCambio }) {
           ) : null}
 
           {/* Líneas */}
-          <div style={{ fontSize: 13, fontWeight: 700, color: "#1a3a6b", marginBottom: 8 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#002E5D", marginBottom: 8 }}>
             Qué reclama ({lineas.length})
           </div>
           {lineas.map(l => {
@@ -498,13 +498,13 @@ function DetalleCaso({ caso, quien, onCerrar, onCambio }) {
           {/* Evidencia */}
           {caso.adjuntos.length > 0 && (
             <>
-              <div style={{ fontSize: 13, fontWeight: 700, color: "#1a3a6b", margin: "14px 0 8px" }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: "#002E5D", margin: "14px 0 8px" }}>
                 Evidencia <span style={{ fontWeight: 400, fontSize: 11, color: "#94a3b8" }}>· la marcada [supervisor] la subió él en la Bitácora</span>
               </div>
               <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                 {caso.adjuntos.map(a => (
                   <button key={a.id} onClick={() => verAdjunto(a)}
-                    style={{ border: "1px solid #e4e7ec", background: "#fff", borderRadius: 6, padding: "7px 12px", fontSize: 12, color: "#1a3a6b", cursor: "pointer" }}>
+                    style={{ border: "1px solid #e4e7ec", background: "#fff", borderRadius: 6, padding: "7px 12px", fontSize: 12, color: "#002E5D", cursor: "pointer" }}>
                     📎 {a.nombre || "adjunto"}
                   </button>
                 ))}
@@ -516,7 +516,7 @@ function DetalleCaso({ caso, quien, onCerrar, onCambio }) {
           {["abierta", "en_revision"].includes(caso.estado) && caso.fase === "analista" && (
             <div style={{ marginTop: 14 }}>
               <button onClick={cerrarCaso} disabled={pendientes > 0 || trabajando}
-                style={{ width: "100%", padding: "11px", borderRadius: 6, border: "none", background: pendientes > 0 ? "#cbd5e1" : "#1a3a6b", color: "#fff", fontSize: 13, fontWeight: 700, cursor: pendientes > 0 ? "not-allowed" : "pointer" }}>
+                style={{ width: "100%", padding: "11px", borderRadius: 6, border: "none", background: pendientes > 0 ? "#cbd5e1" : "#002E5D", color: "#fff", fontSize: 13, fontWeight: 700, cursor: pendientes > 0 ? "not-allowed" : "pointer" }}>
                 {pendientes > 0 ? `Falta resolver ${pendientes} línea(s)` : `Cerrar la diferencia · ${money(reconocido)} reconocido`}
               </button>
               <button onClick={devolverAlSupervisor} disabled={trabajando}
@@ -530,7 +530,7 @@ function DetalleCaso({ caso, quien, onCerrar, onCambio }) {
           )}
 
           {/* Bitácora */}
-          <div style={{ fontSize: 13, fontWeight: 700, color: "#1a3a6b", margin: "18px 0 8px" }}>Bitácora del caso</div>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#002E5D", margin: "18px 0 8px" }}>Bitácora del caso</div>
           <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 8, overflow: "hidden" }}>
             {eventos.map(ev => (
               <div key={ev.id} style={{ padding: "9px 12px", borderBottom: "1px solid #f1f5f9", fontSize: 12 }}>
@@ -552,7 +552,7 @@ function DetalleCaso({ caso, quien, onCerrar, onCambio }) {
               placeholder="Agregar una nota al caso…"
               style={{ flex: 1, border: "1px solid #e4e7ec", borderRadius: 6, padding: "8px 10px", fontSize: 12.5, resize: "vertical" }} />
             <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-              <button onClick={agregarNota} style={{ border: "none", background: "#1a3a6b", color: "#fff", fontSize: 12, fontWeight: 600, borderRadius: 4, padding: "8px 14px", cursor: "pointer" }}>
+              <button onClick={agregarNota} style={{ border: "none", background: "#002E5D", color: "#fff", fontSize: 12, fontWeight: 600, borderRadius: 4, padding: "8px 14px", cursor: "pointer" }}>
                 Agregar
               </button>
               <label style={{ fontSize: 10.5, color: "#64748b", display: "flex", alignItems: "center", gap: 4 }}>
@@ -625,7 +625,7 @@ function SiSeAcepta({ l, c }) {
   }
   return (
     <div style={{ marginTop: 8, background: "#f8fafc", border: "1px dashed #cbd5e1", borderRadius: 6, padding: "8px 10px", fontSize: 11.5, color: "#475569" }}>
-      <b style={{ color: "#1a3a6b" }}>Si lo aceptas:</b> se le {r.verbo} {l.monto_ref != null ? money(l.monto_ref) : "el monto que reconozcas"} como
+      <b style={{ color: "#002E5D" }}>Si lo aceptas:</b> se le {r.verbo} {l.monto_ref != null ? money(l.monto_ref) : "el monto que reconozcas"} como
       abono en la prefactura de la semana {semHoy} ({l.tipo === "cobro" && c?.service_center ? c.service_center : "su centro"}).{extra}
     </div>
   );

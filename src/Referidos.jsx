@@ -18,8 +18,8 @@ import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { sb } from "./shared";
 import Requerimientos from "./Requerimientos";
 
-const AZUL = "#1a3a6b";
-const NARANJA = "#F47B20";
+const AZUL = "#002E5D";
+const NARANJA = "#FF6600";
 const BORDE = "#e4e7ec";
 const GRIS = "#667085";
 
@@ -951,8 +951,8 @@ const TRAMOS = ["0-100", "101-150", "151-200", "201-250", "251+"];
 
 function PropuestaVista({ p, onCerrar }) {
   const titulo = (t) => (
-    <div style={{ fontSize: 14, fontWeight: 700, color: "#1a3a6b", marginBottom: 12, display: "flex", alignItems: "center", gap: 8 }}>
-      <div style={{ width: 4, height: 18, background: "#F47B20", borderRadius: 2 }} />{t}
+    <div style={{ fontSize: 14, fontWeight: 700, color: "#002E5D", marginBottom: 12, display: "flex", alignItems: "center", gap: 8 }}>
+      <div style={{ width: 4, height: 18, background: "#FF6600", borderRadius: 2 }} />{t}
     </div>
   );
   const check = (items) => (
@@ -977,7 +977,7 @@ function PropuestaVista({ p, onCerrar }) {
         <div style={{ overflowY: "auto", maxHeight: "75vh" }}>
           <div style={{ padding: "24px 24px 16px" }}>
             <div style={{ fontSize: 22, fontWeight: 800, color: "#1a1a1a", marginBottom: 6 }}>Propuesta Económica</div>
-            <div style={{ width: 48, height: 3, background: "#F47B20", borderRadius: 2 }} />
+            <div style={{ width: 48, height: 3, background: "#FF6600", borderRadius: 2 }} />
           </div>
           <div style={{ padding: "0 24px 20px" }}>
             {titulo("Condiciones Generales de la Operación")}
@@ -995,7 +995,7 @@ function PropuestaVista({ p, onCerrar }) {
               {titulo("Tarifas por Jornada")}
               <div style={{ overflowX: "auto", borderRadius: 10, border: "0.5px solid #e4e7ec" }}>
                 <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-                  <thead><tr style={{ background: "#1a3a6b", color: "#fff" }}>
+                  <thead><tr style={{ background: "#002E5D", color: "#fff" }}>
                     <th style={{ padding: "9px 12px", textAlign: "left" }}>Categoría</th>
                     {TRAMOS.map((t) => <th key={t} style={{ padding: "9px 8px", textAlign: "center" }}>{t} km</th>)}
                   </tr></thead>
@@ -1017,7 +1017,7 @@ function PropuestaVista({ p, onCerrar }) {
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 12 }}>
               <div style={{ background: "#f0f2f5", borderRadius: 10, padding: "14px", textAlign: "center" }}>
                 <div style={{ fontSize: 10, color: "#888", fontWeight: 700, textTransform: "uppercase", marginBottom: 6 }}>Mínimo exigido</div>
-                <div style={{ fontSize: 22, fontWeight: 800, color: "#1a3a6b" }}>{p.ns_minimo || "99.00%"}</div>
+                <div style={{ fontSize: 22, fontWeight: 800, color: "#002E5D" }}>{p.ns_minimo || "99.00%"}</div>
               </div>
               <div style={{ background: "#f0fdf4", borderRadius: 10, padding: "14px", textAlign: "center", border: "1.5px solid #86efac" }}>
                 <div style={{ fontSize: 10, color: "#166534", fontWeight: 700, textTransform: "uppercase", marginBottom: 6 }}>Excelente 🏆</div>
@@ -1026,7 +1026,7 @@ function PropuestaVista({ p, onCerrar }) {
               </div>
             </div>
             <div style={{ background: "#fffbeb", borderRadius: 10, padding: "12px 16px", border: "1px solid #fde68a", display: "flex", gap: 8, alignItems: "flex-start" }}>
-              <span style={{ color: "#F47B20", flexShrink: 0 }}>⚠️</span>
+              <span style={{ color: "#FF6600", flexShrink: 0 }}>⚠️</span>
               <div style={{ fontSize: 12, color: "#92400e" }}><strong>Castigo:</strong> {p.ns_castigo}</div>
             </div>
           </div>
@@ -1076,7 +1076,7 @@ function PropuestaEditor({ e, setE, busy, onGuardar, onVer, onCerrar }) {
       <div style={{ maxWidth: 680, margin: "0 auto", background: "#fff", borderRadius: 16, overflow: "hidden", boxShadow: "0 20px 60px rgba(0,0,0,0.3)" }}>
         <div style={{ background: "#002f5d", padding: "16px 24px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <div>
-            <div style={{ color: "#F47B20", fontSize: 11, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase" }}>Editar propuesta económica</div>
+            <div style={{ color: "#FF6600", fontSize: 11, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase" }}>Editar propuesta económica</div>
             <div style={{ color: "#fff", fontSize: 16, fontWeight: 700, marginTop: 2 }}>{e.nombre}</div>
           </div>
           <button onClick={onCerrar} style={{ background: "rgba(255,255,255,0.15)", border: "none", color: "#fff", borderRadius: "50%", width: 32, height: 32, cursor: "pointer", fontSize: 18 }}>×</button>
@@ -1089,7 +1089,7 @@ function PropuestaEditor({ e, setE, busy, onGuardar, onVer, onCerrar }) {
             <span className="field-label" style={{ fontSize: 13, fontWeight: 700, color: "#1a1a1a" }}>Tarifas por jornada *</span>
             <div style={{ overflowX: "auto", marginTop: 8 }}>
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-                <thead><tr style={{ background: "#1a3a6b", color: "#fff" }}>
+                <thead><tr style={{ background: "#002E5D", color: "#fff" }}>
                   <th style={{ padding: "8px 12px", textAlign: "left" }}>Categoría</th>
                   {TRAMOS.map((t) => <th key={t} style={{ padding: "8px 10px", textAlign: "center" }}>{t} km</th>)}
                   <th />
@@ -1099,7 +1099,7 @@ function PropuestaEditor({ e, setE, busy, onGuardar, onVer, onCerrar }) {
                     <tr key={ci} style={{ background: ci % 2 === 0 ? "#f8f9fa" : "#fff" }}>
                       <td style={{ padding: 4, minWidth: 120 }}>
                         <input list="ref-tipos-vehiculo" value={cat.categoria} onChange={(x) => updCategoria(ci, x.target.value)} placeholder="Tipo de vehículo"
-                          style={{ width: "100%", padding: "5px 6px", border: "0.5px solid #d0d5dd", borderRadius: 6, fontSize: 12, fontWeight: 700, color: "#1a3a6b" }} />
+                          style={{ width: "100%", padding: "5px 6px", border: "0.5px solid #d0d5dd", borderRadius: 6, fontSize: 12, fontWeight: 700, color: "#002E5D" }} />
                       </td>
                       {TRAMOS.map((t) => (
                         <td key={t} style={{ padding: 4 }}>

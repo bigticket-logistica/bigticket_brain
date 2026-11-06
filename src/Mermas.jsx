@@ -84,10 +84,10 @@ export default function ModuloCobrosMermas({ usuario, logoB64 = "" }) {
             <button key={t.id} onClick={() => cambiar(t.id)}
               style={{
                 padding: "8px 16px", borderRadius: 8,
-                border: `1px solid ${subtab === t.id ? "#1a3a6b" : "#e4e7ec"}`,
-                background: subtab === t.id ? "#1a3a6b" : "#fff",
+                border: `1px solid ${subtab === t.id ? "#002E5D" : "#e4e7ec"}`,
+                background: subtab === t.id ? "#002E5D" : "#fff",
                 color: subtab === t.id ? "#fff" : "#475569",
-                fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "Geist, sans-serif",
+                fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "'Open Sans', sans-serif",
               }}>
               {t.icon} {t.label}
             </button>
@@ -594,13 +594,13 @@ function MermasCargaYEnvio({ usuario, logoB64 = "" }) {
         onDrop={e => { e.preventDefault(); e.stopPropagation(); setArrastrando(false); onDrop(e.dataTransfer.files); }}
         onClick={() => inputRef.current?.click()}
         style={{
-          border: `3px dashed ${arrastrando ? "#F47B20" : "#1a3a6b"}`, borderRadius: 16,
+          border: `3px dashed ${arrastrando ? "#FF6600" : "#002E5D"}`, borderRadius: 16,
           padding: cargado ? "22px 24px" : "40px 24px", textAlign: "center", cursor: "pointer",
           background: arrastrando ? "#fff7ed" : "#f8fafc", transition: "all 0.2s", marginBottom: 16,
         }}
       >
         <div style={{ fontSize: cargado ? 30 : 48, marginBottom: 8 }}>📊</div>
-        <div style={{ fontSize: 17, color: "#1a3a6b", fontWeight: 700, marginBottom: 6 }}>
+        <div style={{ fontSize: 17, color: "#002E5D", fontWeight: 700, marginBottom: 6 }}>
           {leyendo ? "Leyendo el archivo..." : arrastrando ? "Soltá el Excel aquí" : cargado ? `✓ ${archivo.nombre}` : "Arrastrá el Excel de mermas"}
         </div>
         <div style={{ fontSize: 13, color: "#64748b" }}>
@@ -610,7 +610,7 @@ function MermasCargaYEnvio({ usuario, logoB64 = "" }) {
         </div>
         {cargado && (
           <button onClick={e => { e.stopPropagation(); limpiarTodo(); }}
-            style={{ marginTop: 12, background: "#fee2e2", border: "none", borderRadius: 6, padding: "4px 10px", fontSize: 11, color: "#991b1b", cursor: "pointer", fontWeight: 600, fontFamily: "Geist, sans-serif" }}>
+            style={{ marginTop: 12, background: "#fee2e2", border: "none", borderRadius: 6, padding: "4px 10px", fontSize: 11, color: "#991b1b", cursor: "pointer", fontWeight: 600, fontFamily: "'Open Sans', sans-serif" }}>
             Quitar archivo
           </button>
         )}
@@ -667,7 +667,7 @@ function MermasCargaYEnvio({ usuario, logoB64 = "" }) {
                         border: `1px solid ${activo ? (riesgoso ? "#dc2626" : "#16a34a") : "#e4e7ec"}`,
                         background: activo ? (riesgoso ? "#fee2e2" : "#f0fdf4") : "#fff",
                         color: activo ? (riesgoso ? "#991b1b" : "#166534") : "#64748b",
-                        fontSize: 12, fontWeight: 600, fontFamily: "Geist, sans-serif",
+                        fontSize: 12, fontWeight: 600, fontFamily: "'Open Sans', sans-serif",
                       }}>
                       {activo ? "✓ " : ""}{est}
                       <span style={{ opacity: 0.7, marginLeft: 6, fontWeight: 400 }}>
@@ -691,7 +691,7 @@ function MermasCargaYEnvio({ usuario, logoB64 = "" }) {
               <button onClick={() => {
                 if (!confirm("¿Restaurar asunto y cuerpo al valor por defecto?")) return;
                 setAsuntoLote(ASUNTO_DEFAULT); setCuerpoLote(CUERPO_DEFAULT);
-              }} style={{ background: "transparent", border: "1px solid #e4e7ec", borderRadius: 6, padding: "4px 10px", fontSize: 11, color: "#64748b", cursor: "pointer", fontWeight: 600, fontFamily: "Geist, sans-serif" }}>
+              }} style={{ background: "transparent", border: "1px solid #e4e7ec", borderRadius: 6, padding: "4px 10px", fontSize: 11, color: "#64748b", cursor: "pointer", fontWeight: 600, fontFamily: "'Open Sans', sans-serif" }}>
                 ↺ Restaurar default
               </button>
             </div>
@@ -707,7 +707,7 @@ function MermasCargaYEnvio({ usuario, logoB64 = "" }) {
             <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center", marginTop: 8 }}>
               <span style={{ fontSize: 11, color: "#64748b", fontWeight: 600 }}>Variables:</span>
               {VARIABLES.map(v => (
-                <code key={v} style={{ background: "#eef2ff", color: "#1a3a6b", padding: "2px 8px", borderRadius: 4, fontSize: 11, fontFamily: "monospace" }}>
+                <code key={v} style={{ background: "#eef2ff", color: "#002E5D", padding: "2px 8px", borderRadius: 4, fontSize: 11, fontFamily: "monospace" }}>
                   {"{" + v + "}"}
                 </code>
               ))}
@@ -716,8 +716,8 @@ function MermasCargaYEnvio({ usuario, logoB64 = "" }) {
 
           {/* ═══ INDICADORES ═══════════════════════════════════════════════ */}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 10, marginBottom: 14 }}>
-            <Ind label="Empresas a cobrar" valor={stats.empresas} sub={`${stats.cobros} cobros`} color="#1a3a6b" />
-            <Ind label="Monto total" valor={mmFmtMon(stats.total)} color="#1a3a6b" />
+            <Ind label="Empresas a cobrar" valor={stats.empresas} sub={`${stats.cobros} cobros`} color="#002E5D" />
+            <Ind label="Monto total" valor={mmFmtMon(stats.total)} color="#002E5D" />
             <Ind label="Listas para enviar" valor={stats.listos} sub={mmFmtMon(stats.montoListos)} color="#16a34a" />
             <Ind label="Bloqueadas" valor={stats.bloqueados} sub={mmFmtMon(stats.montoBloqueados)} color="#dc2626" />
             {(stats.enviados > 0 || stats.fallidos > 0) && (
@@ -771,7 +771,7 @@ function MermasCargaYEnvio({ usuario, logoB64 = "" }) {
                   Enviando {progreso.actual} de {progreso.total}...
                 </div>
                 <div style={{ height: 8, background: "#fef3c7", borderRadius: 4, overflow: "hidden" }}>
-                  <div style={{ width: `${(progreso.actual / Math.max(progreso.total, 1)) * 100}%`, height: "100%", background: "#F47B20", transition: "width 0.3s" }} />
+                  <div style={{ width: `${(progreso.actual / Math.max(progreso.total, 1)) * 100}%`, height: "100%", background: "#FF6600", transition: "width 0.3s" }} />
                 </div>
               </div>
             )}
@@ -867,14 +867,14 @@ function FilaGrupo({ g, seleccionado, onToggle, onVerPDF, onEditar, enviando }) 
               <span key={s.ceco} title={`${s.lineas.length} cobros · ${mmFmtMon(s.subtotal)}`}
                 style={{
                   background: (g.sitesInfo.find(x => x.ceco === s.ceco)?.param) ? "#eef2ff" : "#fff7ed",
-                  color: (g.sitesInfo.find(x => x.ceco === s.ceco)?.param) ? "#1a3a6b" : "#9a3412",
+                  color: (g.sitesInfo.find(x => x.ceco === s.ceco)?.param) ? "#002E5D" : "#9a3412",
                   padding: "2px 6px", borderRadius: 4, fontSize: 10, fontWeight: 600,
                 }}>{s.ceco}</span>
             ))}
           </div>
         </td>
         <td style={{ ...td("right"), fontWeight: 600 }}>{g.nLineas}</td>
-        <td style={{ ...td("right"), fontWeight: 700, color: "#1a3a6b" }}>{mmFmtMon(g.total)}</td>
+        <td style={{ ...td("right"), fontWeight: 700, color: "#002E5D" }}>{mmFmtMon(g.total)}</td>
         <td style={td()}>
           <div style={{ wordBreak: "break-all", maxWidth: 190, fontSize: 11 }}>
             {g.to || <em style={{ color: "#dc2626" }}>vacío</em>}
@@ -885,7 +885,7 @@ function FilaGrupo({ g, seleccionado, onToggle, onVerPDF, onEditar, enviando }) 
         </td>
         <td style={td()}>
           <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-            <button onClick={onVerPDF} style={btnMini("#1a3a6b")}>Ver PDF</button>
+            <button onClick={onVerPDF} style={btnMini("#002E5D")}>Ver PDF</button>
             <button onClick={onEditar} disabled={enviando || g.estadoEnvio === "ok"} style={btnMini("#0891b2", enviando || g.estadoEnvio === "ok")}>
               {g.trans ? "Editar correos" : "Asignar / correos"}
             </button>
@@ -900,7 +900,7 @@ function FilaGrupo({ g, seleccionado, onToggle, onVerPDF, onEditar, enviando }) 
           <td colSpan={9} style={{ padding: "10px 16px", background: "#f8fafc", borderBottom: "1px solid #e4e7ec" }}>
             {g.sites.map(s => (
               <div key={s.ceco} style={{ marginBottom: 10 }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: "#1a3a6b", marginBottom: 4 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#002E5D", marginBottom: 4 }}>
                   {s.ceco} — {s.lineas.length} cobro(s) · {mmFmtMon(s.subtotal)}
                 </div>
                 <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
@@ -1019,7 +1019,7 @@ function ModalEditarGrupo({ g, transportistas, onCancelar, onGuardar }) {
       style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 20 }}
     >
       <div style={{ background: "#fff", borderRadius: 14, padding: 24, maxWidth: 780, width: "100%", maxHeight: "90vh", overflowY: "auto" }}>
-        <div style={{ fontSize: 16, fontWeight: 700, color: "#1a3a6b", marginBottom: 4 }}>{g.empresa}</div>
+        <div style={{ fontSize: 16, fontWeight: 700, color: "#002E5D", marginBottom: 4 }}>{g.empresa}</div>
         <div style={{ fontSize: 12, color: "#64748b", marginBottom: 16 }}>
           {g.nLineas} cobro(s) · {mmFmtMon(g.total)} · sites {g.sites.map(s => s.ceco).join(", ")}
         </div>
@@ -1101,14 +1101,14 @@ function Ind({ label, valor, sub, color }) {
 
 const btnGhost = {
   background: "#fff", border: "1px solid #e4e7ec", borderRadius: 8, padding: "7px 12px",
-  fontSize: 11.5, color: "#475569", cursor: "pointer", fontFamily: "Geist, sans-serif", fontWeight: 600,
+  fontSize: 11.5, color: "#475569", cursor: "pointer", fontFamily: "'Open Sans', sans-serif", fontWeight: 600,
 };
 
 function btnMini(color, disabled) {
   return {
     background: "transparent", border: `1px solid ${disabled ? "#e4e7ec" : color}`, borderRadius: 6,
     padding: "3px 8px", fontSize: 10.5, color: disabled ? "#94a3b8" : color,
-    cursor: disabled ? "default" : "pointer", fontFamily: "Geist, sans-serif", fontWeight: 600,
+    cursor: disabled ? "default" : "pointer", fontFamily: "'Open Sans', sans-serif", fontWeight: 600,
     opacity: disabled ? 0.5 : 1, whiteSpace: "nowrap",
   };
 }
@@ -1226,8 +1226,8 @@ function MermasHistorialCargas() {
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 10, marginBottom: 14 }}>
-        <Ind label="Cargas" valor={totales.cargas} color="#1a3a6b" />
-        <Ind label="Filas acumuladas" valor={totales.filas.toLocaleString("es-MX")} color="#1a3a6b" />
+        <Ind label="Cargas" valor={totales.cargas} color="#002E5D" />
+        <Ind label="Filas acumuladas" valor={totales.filas.toLocaleString("es-MX")} color="#002E5D" />
         <Ind label="Monto pendiente acumulado" valor={mmFmtMon(totales.pendiente)} color="#dc2626" />
       </div>
 
@@ -1286,7 +1286,7 @@ function MermasHistorialCargas() {
                           {c.filas_cobrado} cobr · {c.filas_asume} asume
                         </div>
                       </td>
-                      <td style={{ ...td("right"), fontWeight: 700, color: "#1a3a6b" }}>{mmFmtMon(c.monto_pendiente)}</td>
+                      <td style={{ ...td("right"), fontWeight: 700, color: "#002E5D" }}>{mmFmtMon(c.monto_pendiente)}</td>
                       <td style={td("right")}>{c.empresas_pendientes ?? "—"}</td>
                       <td style={td()}>
                         {c.avisos
@@ -1295,7 +1295,7 @@ function MermasHistorialCargas() {
                       </td>
                       <td style={td()}>
                         <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-                          <button onClick={() => abrir(c.id)} style={btnMini("#1a3a6b")}>
+                          <button onClick={() => abrir(c.id)} style={btnMini("#002E5D")}>
                             {abierta === c.id ? "Ocultar" : "Ver detalle"}
                           </button>
                           <button onClick={() => descargar(c)} style={btnMini("#0891b2")}>⬇ Excel</button>
@@ -1453,10 +1453,10 @@ function MermasHistorialEnvios() {
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 10, marginBottom: 14 }}>
-        <Ind label="Envíos" valor={stats.total} color="#1a3a6b" />
+        <Ind label="Envíos" valor={stats.total} color="#002E5D" />
         <Ind label="Enviados OK" valor={stats.ok} sub={`${stats.cobros} cobros`} color="#16a34a" />
         <Ind label="Fallidos" valor={stats.err} color="#dc2626" />
-        <Ind label="Monto cobrado" valor={mmFmtMon(stats.monto)} color="#1a3a6b" />
+        <Ind label="Monto cobrado" valor={mmFmtMon(stats.monto)} color="#002E5D" />
       </div>
 
       <div className="form-card" style={{ padding: "12px 16px" }}>
@@ -1524,7 +1524,7 @@ function MermasHistorialEnvios() {
                       </td>
                       <td style={td()}><span style={{ fontSize: 10.5, color: "#475569" }}>{l.sites || "—"}</span></td>
                       <td style={td("right")}>{l.n_cobros}</td>
-                      <td style={{ ...td("right"), fontWeight: 700, color: "#1a3a6b" }}>{mmFmtMon(l.monto_total)}</td>
+                      <td style={{ ...td("right"), fontWeight: 700, color: "#002E5D" }}>{mmFmtMon(l.monto_total)}</td>
                       <td style={td()}>
                         <div style={{ fontSize: 10.5, wordBreak: "break-all", maxWidth: 210 }}>{l.correo_to}</div>
                         {l.correo_cc && <div style={{ fontSize: 9, color: "#94a3b8", wordBreak: "break-all", maxWidth: 210 }}>cc: {l.correo_cc}</div>}

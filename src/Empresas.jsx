@@ -15,8 +15,8 @@ import { sb } from "./shared";
 // eventos y vw_terceros_360 v2).
 // ═══════════════════════════════════════════════════════════════════════════
 
-const NAVY = "#1a3a6b";
-const ORANGE = "#F47B20";
+const NAVY = "#002E5D";
+const ORANGE = "#FF6600";
 
 const ESTADO_EMPRESA = {
   activa:  { label: "ACTIVA",  bg: "#e8f5ec", fg: "#166534" },
@@ -39,12 +39,12 @@ function DocPerfil({ ic, titulo, path, color, bg, borde, cargando, onVer, onBaja
       </div>
       <button onClick={onVer} disabled={cargando}
         style={{ border: "1px solid " + color, background: "#fff", color, borderRadius: 8,
-          padding: "7px 14px", fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: "'Geist',sans-serif" }}>
+          padding: "7px 14px", fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: "'Open Sans',sans-serif" }}>
         {cargando ? "Abriendo\u2026" : "\u{1F441} Ver"}
       </button>
       <button onClick={onBajar} disabled={cargando}
         style={{ border: "none", background: color, color: "#fff", borderRadius: 8,
-          padding: "7px 14px", fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: "'Geist',sans-serif" }}>
+          padding: "7px 14px", fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: "'Open Sans',sans-serif" }}>
         \u2B07 Descargar
       </button>
     </div>
@@ -58,7 +58,7 @@ function Chip({ texto, bg, fg }) {
 function Kpi({ n, label, color, onClick, activo }) {
   return (
     <div onClick={onClick} title="Clic para filtrar el listado"
-      style={{ background: activo ? "#eef2f7" : "#fff", border: activo ? "1.5px solid #1a3a6b" : "0.5px solid #e4e7ec", borderRadius: 12, padding: "14px 18px", textAlign: "center", minWidth: 120, cursor: onClick ? "pointer" : "default" }}>
+      style={{ background: activo ? "#eef2f7" : "#fff", border: activo ? "1.5px solid #002E5D" : "0.5px solid #e4e7ec", borderRadius: 12, padding: "14px 18px", textAlign: "center", minWidth: 120, cursor: onClick ? "pointer" : "default" }}>
       <div style={{ fontSize: 24, fontWeight: 800, color: color || NAVY }}>{n}</div>
       <div style={{ fontSize: 10.5, color: "#667085", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>{label}</div>
     </div>
@@ -143,7 +143,7 @@ function PanelRazonSocial({ empresa, onActualizada }) {
   };
 
   const inp = { width: "100%", boxSizing: "border-box", border: "1px solid #dfe5ee", borderRadius: 8,
-    padding: "9px 11px", fontSize: 13, fontFamily: "'Geist',sans-serif", background: "#fff" };
+    padding: "9px 11px", fontSize: 13, fontFamily: "'Open Sans',sans-serif", background: "#fff" };
   const lbl = { fontSize: 10, fontWeight: 700, color: "#667085", textTransform: "uppercase",
     letterSpacing: ".04em", display: "block", marginBottom: 4 };
 
@@ -160,9 +160,9 @@ function PanelRazonSocial({ empresa, onActualizada }) {
           </div>
         </div>
         <button onClick={() => { setAbierto(!abierto); setMsg(null); }}
-          style={{ padding: "9px 16px", borderRadius: 8, border: "1.5px solid #1a3a6b", background: abierto ? "#1a3a6b" : "#fff",
-            color: abierto ? "#fff" : "#1a3a6b", fontWeight: 700, fontSize: 12.5, cursor: "pointer",
-            fontFamily: "'Geist',sans-serif", whiteSpace: "nowrap" }}>
+          style={{ padding: "9px 16px", borderRadius: 8, border: "1.5px solid #002E5D", background: abierto ? "#002E5D" : "#fff",
+            color: abierto ? "#fff" : "#002E5D", fontWeight: 700, fontSize: 12.5, cursor: "pointer",
+            fontFamily: "'Open Sans',sans-serif", whiteSpace: "nowrap" }}>
           {abierto ? "Cerrar" : "✏️ Cambiar razón social"}
         </button>
       </div>
@@ -170,7 +170,7 @@ function PanelRazonSocial({ empresa, onActualizada }) {
       {abierto && (
         <div style={{ marginTop: 14, paddingTop: 14, borderTop: "1px solid #f0f1f3" }}>
           <div style={{ background: "#eef2f9", border: "1px solid #c7d7f9", borderRadius: 9, padding: "10px 12px",
-            fontSize: 11.5, color: "#1a3a6b", lineHeight: 1.55, marginBottom: 12 }}>
+            fontSize: 11.5, color: "#002E5D", lineHeight: 1.55, marginBottom: 12 }}>
             <b>No crees una empresa nueva para un cambio de nombre.</b> Renombrar aquí mantiene el acceso al
             portal, el correo, los contratos firmados y las placas. El nombre anterior se guarda como alias,
             porque MELI sigue usándolo en sus reportes por un tiempo.
@@ -200,9 +200,9 @@ function PanelRazonSocial({ empresa, onActualizada }) {
             </div>
           )}
           <button onClick={guardar} disabled={guardando || sinCambios || corto}
-            style={{ width: "100%", marginTop: 12, background: (sinCambios || corto) ? "#c9d2e0" : "#1a3a6b",
+            style={{ width: "100%", marginTop: 12, background: (sinCambios || corto) ? "#c9d2e0" : "#002E5D",
               color: "#fff", border: "none", borderRadius: 9, padding: "11px", fontSize: 13, fontWeight: 800,
-              cursor: (guardando || sinCambios || corto) ? "not-allowed" : "pointer", fontFamily: "'Geist',sans-serif" }}>
+              cursor: (guardando || sinCambios || corto) ? "not-allowed" : "pointer", fontFamily: "'Open Sans',sans-serif" }}>
             {guardando ? "Guardando…" : "💾 Guardar razón social"}
           </button>
         </div>
@@ -520,7 +520,7 @@ function DetalleEmpresa({ empresa, onVolver, onActualizada }) {
 
   return (
     <div>
-      <button onClick={onVolver} style={{ background: "none", border: "none", color: NAVY, fontSize: 13, fontWeight: 700, cursor: "pointer", padding: 0, marginBottom: 12, fontFamily: "'Geist',sans-serif" }}>← Volver a Empresas</button>
+      <button onClick={onVolver} style={{ background: "none", border: "none", color: NAVY, fontSize: 13, fontWeight: 700, cursor: "pointer", padding: 0, marginBottom: 12, fontFamily: "'Open Sans',sans-serif" }}>← Volver a Empresas</button>
 
       {/* Encabezado */}
       <div style={{ background: "#fff", border: "0.5px solid #e4e7ec", borderRadius: 12, padding: "16px 20px", marginBottom: 12, display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
@@ -540,7 +540,7 @@ function DetalleEmpresa({ empresa, onVolver, onActualizada }) {
       <div style={{ display: "flex", gap: 6, marginBottom: 14, flexWrap: "wrap" }}>
         {TABS.map(([id, l]) => (
           <button key={id} onClick={() => setTab(id)}
-            style={{ padding: "8px 14px", borderRadius: 8, cursor: "pointer", fontSize: 12.5, fontFamily: "'Geist',sans-serif",
+            style={{ padding: "8px 14px", borderRadius: 8, cursor: "pointer", fontSize: 12.5, fontFamily: "'Open Sans',sans-serif",
               fontWeight: tab === id ? 700 : 500, background: tab === id ? NAVY : "#fff",
               color: tab === id ? "#fff" : "#555", border: tab === id ? "1.5px solid " + NAVY : "1px solid #e4e7ec" }}>
             {l}
@@ -560,17 +560,17 @@ function DetalleEmpresa({ empresa, onVolver, onActualizada }) {
             )}
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
               {(empresa.estado_operacional || "activa") === "activa" ? (
-                <button onClick={() => cambiarEstado("pausada")} style={{ padding: "10px", borderRadius: 8, border: "1.5px solid #b45309", background: "#fff", color: "#b45309", fontWeight: 700, fontSize: 12.5, cursor: "pointer", fontFamily: "'Geist',sans-serif" }}>⏸ Pausar empresa</button>
+                <button onClick={() => cambiarEstado("pausada")} style={{ padding: "10px", borderRadius: 8, border: "1.5px solid #b45309", background: "#fff", color: "#b45309", fontWeight: 700, fontSize: 12.5, cursor: "pointer", fontFamily: "'Open Sans',sans-serif" }}>⏸ Pausar empresa</button>
               ) : (
-                <button onClick={() => cambiarEstado("activa")} style={{ padding: "10px", borderRadius: 8, border: "1.5px solid #166534", background: "#fff", color: "#166534", fontWeight: 700, fontSize: 12.5, cursor: "pointer", fontFamily: "'Geist',sans-serif" }}>▶️ Reactivar empresa</button>
+                <button onClick={() => cambiarEstado("activa")} style={{ padding: "10px", borderRadius: 8, border: "1.5px solid #166534", background: "#fff", color: "#166534", fontWeight: 700, fontSize: 12.5, cursor: "pointer", fontFamily: "'Open Sans',sans-serif" }}>▶️ Reactivar empresa</button>
               )}
               {empresa.pagos_pausados ? (
-                <button onClick={() => cambiarEstado(false, true)} style={{ padding: "10px", borderRadius: 8, border: "1.5px solid #166534", background: "#fff", color: "#166534", fontWeight: 700, fontSize: 12.5, cursor: "pointer", fontFamily: "'Geist',sans-serif" }}>💸▶️ Reactivar pagos</button>
+                <button onClick={() => cambiarEstado(false, true)} style={{ padding: "10px", borderRadius: 8, border: "1.5px solid #166534", background: "#fff", color: "#166534", fontWeight: 700, fontSize: 12.5, cursor: "pointer", fontFamily: "'Open Sans',sans-serif" }}>💸▶️ Reactivar pagos</button>
               ) : (
-                <button onClick={() => cambiarEstado(true, true)} style={{ padding: "10px", borderRadius: 8, border: "1.5px solid #c0392b", background: "#fff", color: "#c0392b", fontWeight: 700, fontSize: 12.5, cursor: "pointer", fontFamily: "'Geist',sans-serif" }}>💸⏸ Pausar pagos (p. ej. contrato sin firmar)</button>
+                <button onClick={() => cambiarEstado(true, true)} style={{ padding: "10px", borderRadius: 8, border: "1.5px solid #c0392b", background: "#fff", color: "#c0392b", fontWeight: 700, fontSize: 12.5, cursor: "pointer", fontFamily: "'Open Sans',sans-serif" }}>💸⏸ Pausar pagos (p. ej. contrato sin firmar)</button>
               )}
               {(empresa.estado_operacional || "activa") !== "baja" && (
-                <button onClick={() => cambiarEstado("baja")} style={{ padding: "10px", borderRadius: 8, border: "1px solid #e4e7ec", background: "#fff", color: "#c0392b", fontWeight: 600, fontSize: 12, cursor: "pointer", fontFamily: "'Geist',sans-serif" }}>🛑 Dar de baja la empresa</button>
+                <button onClick={() => cambiarEstado("baja")} style={{ padding: "10px", borderRadius: 8, border: "1px solid #e4e7ec", background: "#fff", color: "#c0392b", fontWeight: 600, fontSize: 12, cursor: "pointer", fontFamily: "'Open Sans',sans-serif" }}>🛑 Dar de baja la empresa</button>
               )}
             </div>
             <div style={{ fontSize: 10.5, color: "#98a2b3", marginTop: 10, lineHeight: 1.5 }}>
@@ -649,7 +649,7 @@ function DetalleEmpresa({ empresa, onVolver, onActualizada }) {
               {perfil.figura_juridica === "moral" ? (
                 perfil.acta_constitutiva_path ? (
                   <DocPerfil ic="🏛️" titulo="Acta constitutiva" path={perfil.acta_constitutiva_path}
-                    color="#1a3a6b" bg="#f5f8fd" borde="#c7d7f9" cargando={cargandoEvidencia}
+                    color="#002E5D" bg="#f5f8fd" borde="#c7d7f9" cargando={cargandoEvidencia}
                     onVer={() => abrirDocPerfil(perfil.acta_constitutiva_path, false, "acta_constitutiva")}
                     onBajar={() => abrirDocPerfil(perfil.acta_constitutiva_path, true, "acta_constitutiva")} />
                 ) : (
@@ -684,7 +684,7 @@ function DetalleEmpresa({ empresa, onVolver, onActualizada }) {
                     style={{ background: NAVY, color: "#fff", border: "none", borderRadius: 9,
                       padding: "11px 20px", fontSize: 12.5, fontWeight: 800,
                       cursor: enviandoFicha ? "wait" : "pointer", opacity: enviandoFicha ? 0.6 : 1,
-                      fontFamily: "'Geist',sans-serif", whiteSpace: "nowrap" }}>
+                      fontFamily: "'Open Sans',sans-serif", whiteSpace: "nowrap" }}>
                     {enviandoFicha ? "Enviando…" : "📨 Enviar a Finanzas"}
                   </button>
                 </div>
@@ -742,13 +742,13 @@ function DetalleEmpresa({ empresa, onVolver, onActualizada }) {
                     <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                       {(r.documentos || []).map((d, i) => (
                         <button key={"a" + i} onClick={() => verDoc(d)}
-                          style={{ background: "#fff", border: "1px solid #dbe3ee", color: NAVY, borderRadius: 7, padding: "5px 11px", fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "'Geist',sans-serif" }}>
+                          style={{ background: "#fff", border: "1px solid #dbe3ee", color: NAVY, borderRadius: 7, padding: "5px 11px", fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "'Open Sans',sans-serif" }}>
                           📎 {d.label || d.tipo}
                         </button>
                       ))}
                       {(docsFicha[r.id] || []).map((d, i) => (
                         <button key={"c" + i} onClick={() => verDocCert(d)}
-                          style={{ background: "#fff", border: "1px solid #cfe3d4", color: "#166534", borderRadius: 7, padding: "5px 11px", fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "'Geist',sans-serif" }}>
+                          style={{ background: "#fff", border: "1px solid #cfe3d4", color: "#166534", borderRadius: 7, padding: "5px 11px", fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "'Open Sans',sans-serif" }}>
                           ✅ {(d.tipo_documento || "doc").replace(/_/g, " ")}
                         </button>
                       ))}
@@ -778,7 +778,7 @@ function DetalleEmpresa({ empresa, onVolver, onActualizada }) {
                   <div style={{ fontSize: 12.5, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{d.nombre_archivo || d.storage_path}</div>
                   <div style={{ fontSize: 10.5, color: "#98a2b3" }}>{d.categoria || "—"}{d.confidencial ? " · 🔒 confidencial" : ""} · {fmtF(d.created_at)}{d.referencia ? " · " + d.referencia : ""}</div>
                 </div>
-                <button onClick={() => verDoc(d)} style={{ background: "#fff", border: "1px solid #dbe3ee", color: NAVY, borderRadius: 7, padding: "5px 12px", fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "'Geist',sans-serif" }}>Ver</button>
+                <button onClick={() => verDoc(d)} style={{ background: "#fff", border: "1px solid #dbe3ee", color: NAVY, borderRadius: 7, padding: "5px 12px", fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "'Open Sans',sans-serif" }}>Ver</button>
               </div>
             ))}
         </div>
@@ -837,8 +837,8 @@ function DetalleEmpresa({ empresa, onVolver, onActualizada }) {
                   </div>
                   {pendiente ? (
                     <div style={{ display: "flex", gap: 6 }}>
-                      <button onClick={() => resolverSolicitud(s, true)} style={{ background: "#166534", color: "#fff", border: "none", borderRadius: 7, padding: "6px 12px", fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: "'Geist',sans-serif" }}>✓ Aprobar baja</button>
-                      <button onClick={() => resolverSolicitud(s, false)} style={{ background: "#fff", color: "#c0392b", border: "1.5px solid #c0392b", borderRadius: 7, padding: "6px 12px", fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: "'Geist',sans-serif" }}>✕ Rechazar</button>
+                      <button onClick={() => resolverSolicitud(s, true)} style={{ background: "#166534", color: "#fff", border: "none", borderRadius: 7, padding: "6px 12px", fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: "'Open Sans',sans-serif" }}>✓ Aprobar baja</button>
+                      <button onClick={() => resolverSolicitud(s, false)} style={{ background: "#fff", color: "#c0392b", border: "1.5px solid #c0392b", borderRadius: 7, padding: "6px 12px", fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: "'Open Sans',sans-serif" }}>✕ Rechazar</button>
                     </div>
                   ) : (
                     <Chip texto={s.estado === "completada" ? "COMPLETADA" : "RECHAZADA"} bg={s.estado === "completada" ? "#e8f5ec" : "#fdecea"} fg={s.estado === "completada" ? "#166534" : "#c0392b"} />
@@ -869,7 +869,7 @@ function DetalleEmpresa({ empresa, onVolver, onActualizada }) {
 
               <label style={{ fontSize: 10.5, fontWeight: 700, color: "#667085", textTransform: "uppercase", display: "block", marginBottom: 4 }}>Correo de acceso</label>
               <input value={accEmail} onChange={(e) => setAccEmail(e.target.value)} placeholder="correo@empresa.com"
-                style={{ width: "100%", boxSizing: "border-box", border: "0.5px solid #e4e7ec", borderRadius: 8, padding: "9px 11px", fontSize: 13, fontFamily: "'Geist',sans-serif", marginBottom: 4 }} />
+                style={{ width: "100%", boxSizing: "border-box", border: "0.5px solid #e4e7ec", borderRadius: 8, padding: "9px 11px", fontSize: 13, fontFamily: "'Open Sans',sans-serif", marginBottom: 4 }} />
               <div style={{ fontSize: 10.5, color: "#98a2b3", marginBottom: 10 }}>
                 {acceso.cuentas.some((c) => c.auth_email === accEmail.trim().toLowerCase())
                   ? "Es la cuenta actual de la empresa: puedes fijarle una contraseña nueva."
@@ -887,12 +887,12 @@ function DetalleEmpresa({ empresa, onVolver, onActualizada }) {
 
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                 <button disabled={accBusy || !accEmail.includes("@") || accPass.length < 8} onClick={crearAcceso}
-                  style={{ background: NAVY, color: "#fff", border: "none", borderRadius: 9, padding: "11px 18px", fontSize: 13, fontWeight: 700, cursor: "pointer", opacity: accBusy ? 0.6 : 1, fontFamily: "'Geist',sans-serif" }}>
+                  style={{ background: NAVY, color: "#fff", border: "none", borderRadius: 9, padding: "11px 18px", fontSize: 13, fontWeight: 700, cursor: "pointer", opacity: accBusy ? 0.6 : 1, fontFamily: "'Open Sans',sans-serif" }}>
                   {accBusy ? "Creando…" : acceso.cuentas.length ? "🔑 Crear cuenta adicional (otro correo)" : "🔑 Crear acceso al portal"}
                 </button>
                 {acceso.cuentas.length > 0 && (
                   <button disabled={accBusy || !accEmail.includes("@") || accPass.length < 8} onClick={cambiarClave}
-                    style={{ background: "#F47B20", color: "#fff", border: "none", borderRadius: 9, padding: "11px 18px", fontSize: 13, fontWeight: 700, cursor: "pointer", opacity: accBusy ? 0.6 : 1, fontFamily: "'Geist',sans-serif" }}>
+                    style={{ background: "#FF6600", color: "#fff", border: "none", borderRadius: 9, padding: "11px 18px", fontSize: 13, fontWeight: 700, cursor: "pointer", opacity: accBusy ? 0.6 : 1, fontFamily: "'Open Sans',sans-serif" }}>
                     🔧 Cambiar contraseña ahora
                   </button>
                 )}
@@ -999,7 +999,7 @@ export default function ModuloEmpresas() {
   });
 
   if (selected) return (
-    <div style={{ fontFamily: "'Geist',sans-serif", padding: "6px 2px" }}>
+    <div style={{ fontFamily: "'Open Sans',sans-serif", padding: "6px 2px" }}>
       <DetalleEmpresa empresa={selected} onVolver={() => { setSelected(null); cargar(); }}
         onActualizada={(e) => { setSelected(e); }} />
     </div>
@@ -1008,13 +1008,13 @@ export default function ModuloEmpresas() {
   const n = (f) => (empresas || []).filter(f).length;
 
   return (
-    <div style={{ fontFamily: "'Geist',sans-serif", padding: "6px 2px" }}>
+    <div style={{ fontFamily: "'Open Sans',sans-serif", padding: "6px 2px" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 14, flexWrap: "wrap" }}>
         <div>
           <div style={{ fontSize: 19, fontWeight: 800, color: NAVY }}>🏢 Empresas</div>
           <div style={{ fontSize: 12, color: "#667085" }}>Administración central de terceros: ficha 360, estado, pagos, documentos y solicitudes.</div>
         </div>
-        <button onClick={cargar} style={{ marginLeft: "auto", background: "#fff", border: "1px solid #e4e7ec", color: NAVY, borderRadius: 8, padding: "8px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "'Geist',sans-serif" }}>🔄 Actualizar</button>
+        <button onClick={cargar} style={{ marginLeft: "auto", background: "#fff", border: "1px solid #e4e7ec", color: NAVY, borderRadius: 8, padding: "8px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "'Open Sans',sans-serif" }}>🔄 Actualizar</button>
       </div>
 
       {/* KPIs — clic para filtrar el listado */}
@@ -1059,9 +1059,9 @@ export default function ModuloEmpresas() {
       {/* Buscador + filtros */}
       <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
         <input value={busca} onChange={(e) => setBusca(e.target.value)} placeholder="🔍 Buscar por nombre o RFC…"
-          style={{ flex: 1, minWidth: 240, border: "0.5px solid #e4e7ec", borderRadius: 10, padding: "10px 14px", fontSize: 13, fontFamily: "'Geist',sans-serif" }} />
+          style={{ flex: 1, minWidth: 240, border: "0.5px solid #e4e7ec", borderRadius: 10, padding: "10px 14px", fontSize: 13, fontFamily: "'Open Sans',sans-serif" }} />
         <select value={filtro} onChange={(e) => setFiltro(e.target.value)}
-          style={{ border: "0.5px solid #e4e7ec", borderRadius: 10, padding: "10px 12px", fontSize: 12.5, fontFamily: "'Geist',sans-serif" }}>
+          style={{ border: "0.5px solid #e4e7ec", borderRadius: 10, padding: "10px 12px", fontSize: 12.5, fontFamily: "'Open Sans',sans-serif" }}>
           <option value="todas">Todas</option>
           <option value="activa">Activas</option>
           <option value="pausada">Pausadas</option>

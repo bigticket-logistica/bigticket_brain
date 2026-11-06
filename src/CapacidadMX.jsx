@@ -19,7 +19,7 @@ import { fechaHoyOperativa, sb } from "./shared";
 
 const CAP_DIAS = 10;               // hoy + 9 días
 const CAP_ALERTA_MIN = 45;         // el estimador corre cada 30 min: más de 45 es señal de falla
-const CAP_NAVY = "#1a3a6b";
+const CAP_NAVY = "#002E5D";
 const CAP_MUTED = "#5b6474";
 const CAP_BORDER = "#e4e7ec";
 const CAP_ESTADOS = {
@@ -342,7 +342,7 @@ export default function CapacidadMX() {
             {[
               { id: "sdd", color: CAP_NAVY, num: CAP_NAVY, titulo: "SDD esperada para mañana",
                 valor: Math.round(tarjetas.sdd), pie: "La tarde anterior ya está toda a la vista" },
-              { id: "spot", color: "#F47B20", num: "#9a4a0c", titulo: "Spot ofrecido para mañana",
+              { id: "spot", color: "#FF6600", num: "#9a4a0c", titulo: "Spot ofrecido para mañana",
                 valor: `≈ ${Math.round(tarjetas.spot)}`, pie: `${tarjetas.spotRec} ya recibidas · ${tarjetas.spotAcep} aceptadas` },
               { id: "rojos", color: "#b42318", num: "#b42318", titulo: "Sites que no alcanzan mañana",
                 valor: tarjetas.rojos.length, pie: tarjetas.rojos.length ? tarjetas.rojos.join(" · ") : "Ninguno: la SDD y lo aceptado caben en todos" },

@@ -1144,7 +1144,7 @@ const SnapNoShow = ({ filas, loading }) => {
                   background: bgColor, border: `1px solid ${borderColor}`, borderRadius: 8,
                   padding: 8, fontSize: 11
                 }}>
-                  <div style={{ fontWeight: 700, fontSize: 13, color: "#1a3a6b", marginBottom: 4 }}>
+                  <div style={{ fontWeight: 700, fontSize: 13, color: "#002E5D", marginBottom: 4 }}>
                     {sc.sc}
                   </div>
                   <div style={{ display: "flex", gap: 6, flexWrap: "wrap", fontSize: 10 }}>
@@ -1169,7 +1169,7 @@ const SnapNoShow = ({ filas, loading }) => {
           { id: "PARCIAL", label: `⚠️ Parcial (${kpis.parcial})`, color: "#b45309" },
           { id: "CAMBIO_PLACA", label: `🔄 Cambio placa (${kpis.cambio})`, color: "#1d4ed8" },
           { id: "OK", label: `✅ OK (${kpis.ok})`, color: "#15803d" },
-          { id: "TODOS", label: `Todos (${kpis.total})`, color: "#1a3a6b" },
+          { id: "TODOS", label: `Todos (${kpis.total})`, color: "#002E5D" },
         ].map(b => (
           <button key={b.id} onClick={() => setFiltroCat(b.id)} style={{
             padding: "6px 12px",
@@ -1225,7 +1225,7 @@ const SnapNoShow = ({ filas, loading }) => {
                 return (
                   <tr key={i} style={{ borderBottom: "1px solid #f1f5f9",
                     background: i % 2 === 0 ? "#fff" : "#fafbfc" }}>
-                    <td style={{ ...tdCenter, fontWeight: 700, color: "#1a3a6b" }}>{f.facility}</td>
+                    <td style={{ ...tdCenter, fontWeight: 700, color: "#002E5D" }}>{f.facility}</td>
                     <td style={tdLeft}>{f.driver_name || "—"}</td>
                     <td style={{ ...tdCenter, color: "#94a3b8", fontSize: 10, fontFamily: "monospace" }}>
                       {f.driver_id || "—"}
@@ -1478,8 +1478,8 @@ const ModuloMaestro = ({ usuario }) => {
         {tabs.map(t => (
           <button key={t.id} onClick={() => setVista(t.id)}
             style={{ padding: "10px 22px", background: "none", border: "none",
-              borderBottom: vista === t.id ? "2px solid #1a3a6b" : "2px solid transparent",
-              color: vista === t.id ? "#1a3a6b" : "#555",
+              borderBottom: vista === t.id ? "2px solid #002E5D" : "2px solid transparent",
+              color: vista === t.id ? "#002E5D" : "#555",
               fontSize: 12, fontWeight: 700, cursor: "pointer",
               marginBottom: -2 }}>
             {t.label}

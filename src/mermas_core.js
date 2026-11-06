@@ -452,7 +452,7 @@ export function mmConstruirHTML(grupo, opts = {}) {
 <style>
   * { margin:0; padding:0; box-sizing:border-box; font-family: Arial, Helvetica, sans-serif; }
   body { padding: 28px 32px; color:#1a1a1a; font-size:11px; }
-  .head { display:flex; justify-content:space-between; align-items:flex-start; background:#F47B20; color:#fff; padding:14px 18px; border-radius:4px; }
+  .head { display:flex; justify-content:space-between; align-items:flex-start; background:#FF6600; color:#fff; padding:14px 18px; border-radius:4px; }
   .head h1 { font-size:24px; letter-spacing:1px; }
   .head .sub { font-size:9px; margin-top:4px; line-height:1.5; font-weight:600; }
   .cols { display:flex; justify-content:space-between; gap:24px; margin-top:16px; }
@@ -467,12 +467,12 @@ export function mmConstruirHTML(grupo, opts = {}) {
   .tot td { border:1px solid #cdd3dc; padding:4px 8px; font-size:10px; }
   .tot td.k { background:#e8ebf0; font-weight:700; width:170px; }
   .tot td.v { background:#f5f6f8; text-align:right; width:110px; font-weight:700; }
-  .tot tr.big td.k { background:#1a3a6b; color:#fff; }
-  .tot tr.big td.v { background:#eef2ff; color:#1a3a6b; }
+  .tot tr.big td.k { background:#002E5D; color:#fff; }
+  .tot tr.big td.v { background:#eef2ff; color:#002E5D; }
   .blk { margin-top:20px; page-break-inside:avoid; }
   .det { width:100%; }
-  .det-title { font-weight:800; font-size:10px; margin-bottom:4px; color:#1a3a6b; }
-  .det th { background:#F47B20; color:#fff; padding:5px 6px; font-size:9px; }
+  .det-title { font-weight:800; font-size:10px; margin-bottom:4px; color:#002E5D; }
+  .det th { background:#FF6600; color:#fff; padding:5px 6px; font-size:9px; }
   .det td { padding:4px 6px; text-align:center; border-bottom:1px solid #eef0f3; font-size:10px; }
   .det tr.sub td { background:#e8ebf0; font-weight:700; text-align:right; font-size:10px; border-bottom:none; }
   .nota { margin-top:18px; border:1px solid #fdba74; background:#fff7ed; border-radius:4px; padding:10px 12px; }
@@ -480,7 +480,7 @@ export function mmConstruirHTML(grupo, opts = {}) {
   .nota-row { font-size:10px; color:#7c2d12; padding:2px 0; }
   .pie { margin-top:22px; font-size:9px; color:#64748b; border-top:1px solid #e4e7ec; padding-top:8px; }
   @media print { body { padding: 10mm 12mm; } .noprint { display:none; } }
-  .noprint { margin-top:24px; } .noprint button { padding:8px 18px; background:#1a3a6b; color:#fff; border:none; border-radius:6px; font-size:13px; cursor:pointer; }
+  .noprint { margin-top:24px; } .noprint button { padding:8px 18px; background:#002E5D; color:#fff; border:none; border-radius:6px; font-size:13px; cursor:pointer; }
 </style></head><body>
   <div class="head">
     <div>

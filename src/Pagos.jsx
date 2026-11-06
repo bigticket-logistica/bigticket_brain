@@ -14,9 +14,9 @@ function BotonDescargarExcel({ onClick, disabled, label = "Descargar Excel" }) {
     <button onClick={onClick} disabled={disabled} className="btn-blue"
       style={{
         padding: "7px 14px", fontSize: 11, fontWeight: 600,
-        background: "#1a3a6b", color: "#fff", border: "none",
+        background: "#002E5D", color: "#fff", border: "none",
         borderRadius: 6, cursor: disabled ? "not-allowed" : "pointer",
-        opacity: disabled ? 0.5 : 1, fontFamily: "Geist, sans-serif",
+        opacity: disabled ? 0.5 : 1, fontFamily: "'Open Sans', sans-serif",
         whiteSpace: "nowrap",
       }}>
       📥 {label}
@@ -270,7 +270,7 @@ function TorreTresPilares() {
             style={{
               padding: "6px 10px", fontSize: 12,
               border: "1px solid #e4e7ec", borderRadius: 6,
-              fontFamily: "'Geist', sans-serif",
+              fontFamily: "'Open Sans', sans-serif",
             }}
           />
           <select
@@ -279,7 +279,7 @@ function TorreTresPilares() {
             style={{
               padding: "6px 10px", fontSize: 12,
               border: "1px solid #e4e7ec", borderRadius: 6,
-              fontFamily: "'Geist', sans-serif", minWidth: 120,
+              fontFamily: "'Open Sans', sans-serif", minWidth: 120,
             }}
           >
             <option value="">Todas las SCs</option>
@@ -289,9 +289,9 @@ function TorreTresPilares() {
             onClick={() => setRefreshKey(k => k + 1)}
             style={{
               padding: "6px 12px", fontSize: 12, fontWeight: 600,
-              background: "#fff", color: "#1a3a6b",
+              background: "#fff", color: "#002E5D",
               border: "1px solid #e4e7ec", borderRadius: 6, cursor: "pointer",
-              fontFamily: "'Geist', sans-serif",
+              fontFamily: "'Open Sans', sans-serif",
             }}
             title="Recargar"
           >↻ Refrescar</button>
@@ -302,7 +302,7 @@ function TorreTresPilares() {
           <input type="date" value={excelHasta} onChange={e => setExcelHasta(e.target.value)}
             style={{ padding: "5px 8px", borderRadius: 4, border: "1px solid #e4e7ec", fontSize: 12, color: "#1a1a1a" }} />
           <button onClick={descargarExcel} disabled={excelBusy}
-            style={{ padding: "7px 14px", borderRadius: 6, border: "1px solid #16a34a", background: excelBusy ? "#9ca3af" : "#16a34a", color: "#fff", fontSize: 12, fontWeight: 700, cursor: excelBusy ? "wait" : "pointer", display: "flex", alignItems: "center", gap: 6, fontFamily: "'Geist', sans-serif" }}>
+            style={{ padding: "7px 14px", borderRadius: 6, border: "1px solid #16a34a", background: excelBusy ? "#9ca3af" : "#16a34a", color: "#fff", fontSize: 12, fontWeight: 700, cursor: excelBusy ? "wait" : "pointer", display: "flex", alignItems: "center", gap: 6, fontFamily: "'Open Sans', sans-serif" }}>
             {excelBusy ? "⏳ Generando..." : "📥 Descargar Excel"}
           </button>
         </div>
@@ -311,11 +311,11 @@ function TorreTresPilares() {
       {/* ─── 3 PILARES · TARJETAS GRANDES ─── */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12, marginBottom: 16 }}>
         {/* Pilar 1 */}
-        <div className="form-card" style={{ marginBottom: 0, padding: 20, borderTop: "4px solid #1a3a6b" }}>
-          <div style={{ fontSize: 10, fontWeight: 700, color: "#1a3a6b", textTransform: "uppercase", letterSpacing: 1, marginBottom: 8 }}>
+        <div className="form-card" style={{ marginBottom: 0, padding: 20, borderTop: "4px solid #002E5D" }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: "#002E5D", textTransform: "uppercase", letterSpacing: 1, marginBottom: 8 }}>
             Pilar 1 · Compromiso
           </div>
-          <div style={{ fontSize: 36, fontWeight: 700, lineHeight: 1, marginBottom: 8, color: "#1a3a6b" }}>
+          <div style={{ fontSize: 36, fontWeight: 700, lineHeight: 1, marginBottom: 8, color: "#002E5D" }}>
             {kpis?.aceptadas ?? 0}
           </div>
           <div style={{ fontSize: 12, color: "#334155", marginBottom: 4 }}>
@@ -332,7 +332,7 @@ function TorreTresPilares() {
             Pilar 2 · Rostering
           </div>
           <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 8 }}>
-            <div style={{ fontSize: 36, fontWeight: 700, lineHeight: 1, color: "#1a3a6b" }}>
+            <div style={{ fontSize: 36, fontWeight: 700, lineHeight: 1, color: "#002E5D" }}>
               {kpis?.asignadas ?? 0}
             </div>
             <div style={{ fontSize: 18, fontWeight: 600, color: colorPct(kpis?.pctAsignacion) }}>
@@ -353,7 +353,7 @@ function TorreTresPilares() {
             Pilar 3 · Ejecución
           </div>
           <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 8 }}>
-            <div style={{ fontSize: 36, fontWeight: 700, lineHeight: 1, color: "#1a3a6b" }}>
+            <div style={{ fontSize: 36, fontWeight: 700, lineHeight: 1, color: "#002E5D" }}>
               {kpis?.ok ?? 0}
             </div>
             <div style={{ fontSize: 18, fontWeight: 600, color: colorPct(kpis?.pctOperacion) }}>
@@ -372,7 +372,7 @@ function TorreTresPilares() {
       {/* ─── % CADENA TOTAL ─── */}
       <div className="form-card" style={{
         marginBottom: 16, padding: 16,
-        background: "linear-gradient(135deg, #1a3a6b 0%, #0f2647 100%)",
+        background: "linear-gradient(135deg, #002E5D 0%, #0f2647 100%)",
         color: "#fff",
       }}>
         <div style={{ display: "grid", gridTemplateColumns: "auto 1fr auto", gap: 20, alignItems: "center" }}>
@@ -405,7 +405,7 @@ function TorreTresPilares() {
             onClick={() => setBucketSeleccionado(null)}
             style={{
               padding: "4px 10px", fontSize: 11, fontWeight: 600,
-              background: "#fff", color: "#1a3a6b",
+              background: "#fff", color: "#002E5D",
               border: "1px solid #e4e7ec", borderRadius: 6, cursor: "pointer",
             }}
           >× Limpiar filtro</button>
@@ -472,7 +472,7 @@ function TorreTresPilares() {
                 <th style={{ padding: "8px 6px", textAlign: "center", fontWeight: 600, color: "#9333ea" }}>Pending Rost</th>
                 <th style={{ padding: "8px 6px", textAlign: "center", fontWeight: 600, color: "#1e40af" }}>Rech SDD</th>
                 <th style={{ padding: "8px 6px", textAlign: "center", fontWeight: 600, color: "#475569" }}>Rech SPOT</th>
-                <th style={{ padding: "8px 6px", textAlign: "center", fontWeight: 700, color: "#1a3a6b", borderLeft: "2px solid #e4e7ec" }}>Total</th>
+                <th style={{ padding: "8px 6px", textAlign: "center", fontWeight: 700, color: "#002E5D", borderLeft: "2px solid #e4e7ec" }}>Total</th>
                 <th style={{ padding: "8px 6px", textAlign: "center", fontWeight: 600, color: "#0891b2", borderLeft: "2px dashed #cbd5e1" }} title="Cambios entre primera y última captura del día · métrica aparte, no suma al total">ℹ Cambio intradía</th>
               </tr>
             </thead>
@@ -497,7 +497,7 @@ function TorreTresPilares() {
                   <td style={{ padding: "6px 6px", textAlign: "center", color: s.pending_rost > 0 ? "#9333ea" : "#94a3b8", fontWeight: s.pending_rost > 0 ? 700 : 400 }} title="MELI rosterió la ruta pero BT nunca confirmó aceptación">{s.pending_rost}</td>
                   <td style={{ padding: "6px 6px", textAlign: "center", color: (s.rejected_sdd || 0) > 0 ? "#1e40af" : "#94a3b8", fontWeight: (s.rejected_sdd || 0) > 0 ? 600 : 400 }} title="Rechazos SDD limpios (BT rechazó antes del plazo)">{s.rejected_sdd || 0}</td>
                   <td style={{ padding: "6px 6px", textAlign: "center", color: (s.rejected_spot || 0) > 0 ? "#475569" : "#94a3b8" }} title="Rechazos Variable/SPOT limpios">{s.rejected_spot || 0}</td>
-                  <td style={{ padding: "6px 6px", textAlign: "center", fontWeight: 700, color: "#1a3a6b", borderLeft: "2px solid #e4e7ec" }}>{s.total}</td>
+                  <td style={{ padding: "6px 6px", textAlign: "center", fontWeight: 700, color: "#002E5D", borderLeft: "2px solid #e4e7ec" }}>{s.total}</td>
                   <td style={{ padding: "6px 6px", textAlign: "center", color: (s.cambios_intradia || 0) > 0 ? "#0891b2" : "#94a3b8", fontWeight: (s.cambios_intradia || 0) > 0 ? 600 : 400, borderLeft: "2px dashed #cbd5e1", fontStyle: "italic" }} title="Métrica aparte: no suma al total">{s.cambios_intradia || 0}</td>
                 </tr>
               ))}
@@ -533,7 +533,7 @@ function TorreTresPilares() {
               style={{
                 padding: "5px 10px", fontSize: 12, borderRadius: 6,
                 border: "1px solid #cbd5e1", background: "#fff",
-                color: "#1a3a6b", fontWeight: 600, cursor: "pointer", minWidth: 110
+                color: "#002E5D", fontWeight: 600, cursor: "pointer", minWidth: 110
               }}>
               <option value="">Todas las SCs</option>
               {(resumen?.por_sc || []).map(s => (
@@ -623,7 +623,7 @@ function TorreTresPilares() {
                       <tr>
                         <td colSpan={11} style={{ padding: 0, background: "#f8fafc", borderBottom: "1px solid #e4e7ec" }}>
                           <div style={{ padding: "12px 20px" }}>
-                            <div style={{ fontSize: 11, fontWeight: 600, color: "#1a3a6b", marginBottom: 8 }}>
+                            <div style={{ fontSize: 11, fontWeight: 600, color: "#002E5D", marginBottom: 8 }}>
                               🕐 Historial del travel {f.travel_id} · {f.sc} · {fecha}
                             </div>
                             {hist?.loading && (
@@ -696,7 +696,7 @@ function TorreTresPilares() {
                                         borderBottom: "0.5px solid #e4e7ec",
                                         background: h.cambio_vs_anterior ? "#fef9c3" : "transparent"
                                       }}>
-                                        <td style={{ padding: "4px 6px", fontWeight: 600, color: "#1a3a6b" }}>{h.captura}</td>
+                                        <td style={{ padding: "4px 6px", fontWeight: 600, color: "#002E5D" }}>{h.captura}</td>
                                         <td style={{ padding: "4px 6px", fontFamily: "monospace", color: "#64748b" }}>{h.hora_mx}</td>
                                         <td style={{ padding: "4px 6px", color: "#334155" }}>{h.driver_name || "—"}</td>
                                         <td style={{ padding: "4px 6px", fontFamily: "monospace", color: "#475569" }}>{h.vehicle_plate || "—"}</td>
@@ -722,7 +722,7 @@ function TorreTresPilares() {
                                         }}>
                                           {h.min_a_lockdate !== null && h.min_a_lockdate !== undefined ? `${h.min_a_lockdate}'` : "—"}
                                         </td>
-                                        <td style={{ padding: "4px 6px", color: "#1a3a6b", fontWeight: 600, fontSize: 10 }}>
+                                        <td style={{ padding: "4px 6px", color: "#002E5D", fontWeight: 600, fontSize: 10 }}>
                                           {h.cambio_vs_anterior || ""}
                                         </td>
                                       </tr>
@@ -923,7 +923,7 @@ function TorreControlSC({ scId, fecha, row }) {
                 })}
                 <span onClick={() => setSel(null)}
                   style={{ fontSize: 11, padding: "3px 9px", borderRadius: 5, fontWeight: 700, cursor: "pointer",
-                    background: sel ? "#e5e7eb" : "#1a3a6b", color: sel ? "#374151" : "#fff" }}>
+                    background: sel ? "#e5e7eb" : "#002E5D", color: sel ? "#374151" : "#fff" }}>
                   Total: {lista.length}
                 </span>
               </div>
@@ -2131,8 +2131,8 @@ function PanelControlSupervisores() {
               <button key={t.sc} onClick={() => elegirSC(t.sc)}
                 title={t.motivos.length ? t.motivos.join(" · ") : "Todo en orden"}
                 style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", minWidth: 118,
-                  background: activo ? "#1a3a6b" : "#fff", color: activo ? "#fff" : "#1f2937",
-                  border: `1px solid ${activo ? "#1a3a6b" : "#e4e7ec"}`, borderRadius: 8, cursor: "pointer", textAlign: "left",
+                  background: activo ? "#002E5D" : "#fff", color: activo ? "#fff" : "#1f2937",
+                  border: `1px solid ${activo ? "#002E5D" : "#e4e7ec"}`, borderRadius: 8, cursor: "pointer", textAlign: "left",
                   opacity: filtroSc && !activo ? 0.55 : 1 }}>
                 <span style={{ width: 14, height: 14, borderRadius: "50%", background: c, flexShrink: 0,
                   boxShadow: `0 0 0 3px ${c}33` }} />
@@ -2175,7 +2175,7 @@ function PanelControlSupervisores() {
               <div style={{ display: "flex", alignItems: "center", gap: 14, padding: "14px 18px", borderBottom: "1px solid #e5e7eb", background: "#f8fafc" }}>
                 <span style={{ width: 22, height: 22, borderRadius: "50%", background: c, boxShadow: `0 0 0 4px ${c}33`, flexShrink: 0 }} />
                 <div style={{ flex: 1 }}>
-                  <div style={{ fontFamily: "monospace", fontWeight: 800, fontSize: 18, color: "#1a3a6b" }}>{filtroSc}</div>
+                  <div style={{ fontFamily: "monospace", fontWeight: 800, fontSize: 18, color: "#002E5D" }}>{filtroSc}</div>
                   <div style={{ fontSize: 12, color: "#475569" }}>
                     {sups.map((x) => x.nombre).filter(Boolean).join(" / ") || "Sin supervisor"}
                     {" · "}{sem.sinOp ? "Sin operación" : `Bitácora ${sem.done}/${sem.totalItems}`}
@@ -2399,7 +2399,7 @@ function PoolMeliAmbulancias() {
           <input type="date" value={fecha} onChange={e => setFecha(e.target.value)}
             style={{ background: "#f8fafc", border: "1px solid #e4e7ec", borderRadius: 4, padding: "6px 10px", fontSize: 12 }} />
           <select value={scFiltro} onChange={e => setScFiltro(e.target.value)}
-            style={{ background: "#f8fafc", border: "1px solid #e4e7ec", borderRadius: 4, padding: "6px 10px", fontSize: 12, fontWeight: 600, color: "#1a3a6b", cursor: "pointer" }}>
+            style={{ background: "#f8fafc", border: "1px solid #e4e7ec", borderRadius: 4, padding: "6px 10px", fontSize: 12, fontWeight: 600, color: "#002E5D", cursor: "pointer" }}>
             {scsDisponibles.map(sc => (
               <option key={sc} value={sc}>{sc === "TODOS" ? "Todos los SC" : sc}</option>
             ))}
@@ -2429,7 +2429,7 @@ function PoolMeliAmbulancias() {
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 10, marginBottom: 14 }}>
             {[
               { label: "Traspasos", valor: kpis.traspasos, sub: "ruta → ruta", color: "#1a1a1a" },
-              { label: "Paquetes movidos", valor: kpis.paquetes, sub: "deduplicados", color: "#1a3a6b" },
+              { label: "Paquetes movidos", valor: kpis.paquetes, sub: "deduplicados", color: "#002E5D" },
               { label: "Con receptor", valor: kpis.conReceptor, sub: "identificamos quién recibió", color: "#16a34a" },
               { label: "Swaps recíprocos", valor: kpis.swaps, sub: "rebalanceo entre hermanas", color: "#1a1a1a" },
               { label: "Sin receptor", valor: kpis.sinReceptor, sub: "pkgs · ruta sin scrapear", color: kpis.sinReceptor > 0 ? "#c0392b" : "#16a34a" },
@@ -2477,7 +2477,7 @@ function PoolMeliAmbulancias() {
                           padding: "10px 12px", textTransform: "none", letterSpacing: 0,
                           fontWeight: 400, color: "#1a1a1a", fontSize: 11, lineHeight: 1.5,
                         }}>
-                          <div style={{ fontWeight: 700, color: "#1a3a6b", marginBottom: 6, fontSize: 11 }}>¿Qué significa cada patrón?</div>
+                          <div style={{ fontWeight: 700, color: "#002E5D", marginBottom: 6, fontSize: 11 }}>¿Qué significa cada patrón?</div>
                           <div style={{ marginBottom: 6 }}>
                             <span style={{ fontWeight: 700, color: "#991b1b" }}>Rescate masivo</span>: traspaso en un solo sentido de muchos paquetes (≥30) hacia una ruta de rescate dedicada. Una ruta que no dio abasto y mandó su carga a otra.
                           </div>
@@ -2498,10 +2498,10 @@ function PoolMeliAmbulancias() {
                     return (
                       <tr key={`${f.ruta_origen}-${f.ruta_destino}-${i}`}
                         style={{ borderBottom: i === filasFiltradas.length - 1 ? "none" : "1px solid #e4e7ec" }}>
-                        <td style={{ padding: "10px 12px", fontWeight: 700, color: "#1a3a6b" }}>{f.service_center_id || "—"}</td>
+                        <td style={{ padding: "10px 12px", fontWeight: 700, color: "#002E5D" }}>{f.service_center_id || "—"}</td>
                         <td style={{ padding: "10px 12px" }}>{ambPersona({ nombre: f.driver_origen, ruta: f.ruta_origen, patente: f.patente_origen })}</td>
                         <td style={{ padding: "10px 12px", textAlign: "center", whiteSpace: "nowrap" }}>
-                          <span style={{ display: "inline-block", minWidth: 30, padding: "3px 10px", borderRadius: 14, background: "#1a3a6b", color: "#fff", fontWeight: 800, fontSize: 13, fontVariantNumeric: "tabular-nums" }}>{f.paquetes_traspasados}</span>
+                          <span style={{ display: "inline-block", minWidth: 30, padding: "3px 10px", borderRadius: 14, background: "#002E5D", color: "#fff", fontWeight: 800, fontSize: 13, fontVariantNumeric: "tabular-nums" }}>{f.paquetes_traspasados}</span>
                           <div style={{ fontSize: 14, color: "#94a3b8", lineHeight: 1, marginTop: 2 }}>→</div>
                         </td>
                         <td style={{ padding: "10px 12px" }}>{ambPersona({ nombre: f.driver_destino, ruta: f.ruta_destino, patente: f.patente_destino, origenDato: f.receptor_origen_dato, fechaDato: f.receptor_fecha_dato })}</td>
@@ -2612,23 +2612,23 @@ function HistorialPagoMX({ usuario }) {
   const tbl = { width: "100%", borderCollapse: "collapse", fontSize: 12, background: "#fff" };
   const th = { textAlign: "left", padding: "6px 8px", color: "#64748b", fontSize: 10, textTransform: "uppercase", borderBottom: "1px solid #e4e7ec" };
   const tdS = { padding: "6px 8px", borderBottom: "1px solid #f1f5f9" };
-  const btn = { padding: "4px 10px", border: "1px solid #1a3a6b", background: "#fff", color: "#1a3a6b", borderRadius: 6, cursor: "pointer", fontSize: 11, fontWeight: 700 };
-  const Seccion = ({ titulo, children }) => (<div style={{ marginBottom: 18 }}><div style={{ fontSize: 13, fontWeight: 800, color: "#1a3a6b", marginBottom: 8 }}>{titulo}</div><div style={{ border: "1px solid #e4e7ec", borderRadius: 10, overflow: "hidden" }}>{children}</div></div>);
+  const btn = { padding: "4px 10px", border: "1px solid #002E5D", background: "#fff", color: "#002E5D", borderRadius: 6, cursor: "pointer", fontSize: 11, fontWeight: 700 };
+  const Seccion = ({ titulo, children }) => (<div style={{ marginBottom: 18 }}><div style={{ fontSize: 13, fontWeight: 800, color: "#002E5D", marginBottom: 8 }}>{titulo}</div><div style={{ border: "1px solid #e4e7ec", borderRadius: 10, overflow: "hidden" }}>{children}</div></div>);
   const Vacio = ({ txt }) => <div style={{ padding: 16, color: "#94a3b8", fontSize: 12 }}>{txt}</div>;
   const card = (label, val, color) => (<div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10, padding: "12px 14px", minWidth: 110 }}><div style={{ fontSize: 10, color: "#94a3b8", textTransform: "uppercase", fontWeight: 700 }}>{label}</div><div style={{ fontSize: 20, fontWeight: 800, color }}>{val}</div></div>);
   return (
     <div style={{ padding: 24 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16, flexWrap: "wrap" }}>
-        <div style={{ fontSize: 18, fontWeight: 800, color: "#1a3a6b" }}>Historial de Pago</div>
+        <div style={{ fontSize: 18, fontWeight: 800, color: "#002E5D" }}>Historial de Pago</div>
         <button onClick={() => setSemana(s => s - 1)} style={{ padding: "6px 10px", border: "1px solid #e4e7ec", background: "#fff", borderRadius: 6, cursor: "pointer", fontWeight: 700 }}>‹</button>
-        <div style={{ textAlign: "center" }}><div style={{ fontWeight: 800, color: "#1a3a6b" }}>Semana {semana}</div><div style={{ fontSize: 11, color: "#64748b" }}>{etiquetaSemanaInventario(semana)}</div></div>
+        <div style={{ textAlign: "center" }}><div style={{ fontWeight: 800, color: "#002E5D" }}>Semana {semana}</div><div style={{ fontSize: 11, color: "#64748b" }}>{etiquetaSemanaInventario(semana)}</div></div>
         <button onClick={() => setSemana(s => s + 1)} style={{ padding: "6px 10px", border: "1px solid #e4e7ec", background: "#fff", borderRadius: 6, cursor: "pointer", fontWeight: 700 }}>›</button>
-        <button onClick={() => cargar(semana)} style={{ padding: "6px 12px", border: "1px solid #1a3a6b", background: "#fff", color: "#1a3a6b", borderRadius: 6, cursor: "pointer", fontWeight: 700, fontSize: 12 }}>↻ Actualizar</button>
+        <button onClick={() => cargar(semana)} style={{ padding: "6px 12px", border: "1px solid #002E5D", background: "#fff", color: "#002E5D", borderRadius: 6, cursor: "pointer", fontWeight: 700, fontSize: 12 }}>↻ Actualizar</button>
       </div>
       {loading ? <div style={{ color: "#64748b" }}>Cargando…</div> : (
         <>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 18 }}>
-            {card("Creadas", d.prefacturas.length, "#1a3a6b")}
+            {card("Creadas", d.prefacturas.length, "#002E5D")}
             {card("Cerradas", porEstado("cerrada"), "#166534")}
             {card("Enviadas", porEstado("enviada"), "#1e40af")}
             {card("Pend. concil.", porEstado("pendiente_conciliacion"), "#9a3412")}
@@ -4358,7 +4358,7 @@ function ConciliacionTercerosMX({ usuario }) {
      cabecera naranja sale gris y la tabla de 13 columnas queda comprimida. */
   @page { size: A4 landscape; margin: 8mm 10mm; }
   body { padding: 28px 32px; color:#1a1a1a; font-size:11px; }
-  .head { display:flex; justify-content:space-between; align-items:flex-start; background:#F47B20; color:#fff; padding:14px 18px; border-radius:4px; }
+  .head { display:flex; justify-content:space-between; align-items:flex-start; background:#FF6600; color:#fff; padding:14px 18px; border-radius:4px; }
   .head h1 { font-size:26px; letter-spacing:1px; }
   .head .sub { font-size:9px; margin-top:4px; line-height:1.5; font-weight:600; }
   .logo { font-size:26px; font-weight:800; font-style:italic; }
@@ -4376,8 +4376,8 @@ function ConciliacionTercerosMX({ usuario }) {
   .tot td.k { background:#e8ebf0; font-weight:700; width:170px; }
   .tot td.v { background:#f5f6f8; text-align:right; width:110px; font-weight:700; }
   .det { margin-top:22px; width:100%; }
-  .det-title { font-weight:800; font-size:10px; margin-bottom:4px; color:#1a3a6b; }
-  .det th { background:#F47B20; color:#fff; padding:5px 6px; font-size:9px; }
+  .det-title { font-weight:800; font-size:10px; margin-bottom:4px; color:#002E5D; }
+  .det th { background:#FF6600; color:#fff; padding:5px 6px; font-size:9px; }
   .det td { padding:4px 6px; text-align:center; border-bottom:1px solid #eef0f3; font-size:10px; }
   .obs { margin-top:18px; border:1px solid #fca5a5; background:#fef2f2; border-radius:4px; padding:10px 12px; }
   .obs-title { font-weight:800; font-size:10px; color:#991b1b; margin-bottom:6px; }
@@ -4387,12 +4387,12 @@ function ConciliacionTercerosMX({ usuario }) {
   .bono-row { font-size:10px; color:#14532d; padding:2px 0; }
   .pnr-page { page-break-before: always; padding-top: 6px; }
   .pnr-box { margin-top:12px; border:1px solid #cdd3dc; border-radius:4px; padding:8px 10px; }
-  .pnr-box-tit { font-size:10px; font-weight:800; color:#1a3a6b; margin-bottom:4px; }
+  .pnr-box-tit { font-size:10px; font-weight:800; color:#002E5D; margin-bottom:4px; }
   .pnr-av { font-size:9px; color:#444; padding:1px 0; }
   .pnr-av b { color:#1a1a1a; }
   .pnr-sin { font-size:9px; color:#991b1b; }
   @media print { body { padding: 0; } .noprint { display:none; } }
-  .noprint { margin-top:24px; } .noprint button { padding:8px 18px; background:#1a3a6b; color:#fff; border:none; border-radius:6px; font-size:13px; cursor:pointer; }
+  .noprint { margin-top:24px; } .noprint button { padding:8px 18px; background:#002E5D; color:#fff; border:none; border-radius:6px; font-size:13px; cursor:pointer; }
 </style></head><body>
   <div class="head">
     <div>
@@ -4795,7 +4795,7 @@ function ConciliacionTercerosMX({ usuario }) {
             </div>
             <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
               <button onClick={guardarLineaNueva} disabled={guardandoEdit === clave}
-                style={{ padding: "6px 14px", background: "#1a3a6b", color: "#fff", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer", opacity: guardandoEdit === clave ? 0.6 : 1 }}>{guardandoEdit === clave ? "Guardando..." : "Agregar"}</button>
+                style={{ padding: "6px 14px", background: "#002E5D", color: "#fff", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer", opacity: guardandoEdit === clave ? 0.6 : 1 }}>{guardandoEdit === clave ? "Guardando..." : "Agregar"}</button>
               <button onClick={() => setFormLinea(null)} style={{ padding: "6px 14px", background: "#fff", color: "#475569", border: "1px solid #e4e7ec", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Cancelar</button>
             </div>
           </div>
@@ -4807,7 +4807,7 @@ function ConciliacionTercerosMX({ usuario }) {
     <div style={{ overflowX: "auto", marginTop: 10 }}>
       <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
         <thead>
-          <tr style={{ background: "#1a3a6b", color: "#fff" }}>
+          <tr style={{ background: "#002E5D", color: "#fff" }}>
             {["Fecha", "Patente", "ID Ruta", "Conductor", "Aux", "SC", "Cargado", "Entregado", "% Entrega", "% Visita", "KM Pago", "KM Real", "Factor", "Bonif.", "Monto", ...(opts.editable ? ["✕"] : [])].map(h => (
               <th key={h} style={{ padding: "6px 8px", fontSize: 10, textAlign: h === "Conductor" ? "left" : "center", whiteSpace: "nowrap" }}>{h}</th>
             ))}
@@ -4859,24 +4859,24 @@ function ConciliacionTercerosMX({ usuario }) {
       {/* Header + selector de semana */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 12, marginBottom: 14 }}>
         <div>
-          <div style={{ fontSize: 15, fontWeight: 700, color: "#1a3a6b" }}>Conciliación Semanal Terceros</div>
+          <div style={{ fontSize: 15, fontWeight: 700, color: "#002E5D" }}>Conciliación Semanal Terceros</div>
           <div style={{ fontSize: 11, color: "#94a3b8" }}>Viajes del Listado de Pagos agrupados por empresa y separados por SC · una prefactura PDF por cada empresa + SC</div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <button onClick={() => setSemana(s => s - 1)} style={{ padding: "6px 10px", border: "1px solid #e4e7ec", background: "#fff", borderRadius: 6, cursor: "pointer", fontWeight: 700 }}>‹</button>
           <div style={{ textAlign: "center", minWidth: 150 }}>
-            <div style={{ fontSize: 13, fontWeight: 800, color: "#1a3a6b" }}>Semana {semana}</div>
+            <div style={{ fontSize: 13, fontWeight: 800, color: "#002E5D" }}>Semana {semana}</div>
             <div style={{ fontSize: 11, color: "#64748b" }}>{etiquetaSemanaInventario(semana)} · lun–dom</div>
           </div>
           <button onClick={() => setSemana(s => s + 1)} style={{ padding: "6px 10px", border: "1px solid #e4e7ec", background: "#fff", borderRadius: 6, cursor: "pointer", fontWeight: 700 }}>›</button>
-          <button onClick={refrescarTodo} style={{ marginLeft: 6, padding: "6px 12px", border: "1px solid #1a3a6b", background: "#fff", color: "#1a3a6b", borderRadius: 6, cursor: "pointer", fontSize: 12, fontWeight: 700 }}>↻ Refrescar</button>
-          <button onClick={() => setEditorCorreoOpen(o => !o)} style={{ padding: "6px 12px", border: "1px solid #1a3a6b", background: editorCorreoOpen ? "#1a3a6b" : "#fff", color: editorCorreoOpen ? "#fff" : "#1a3a6b", borderRadius: 6, cursor: "pointer", fontSize: 12, fontWeight: 700 }}>✉️ Cuerpo del correo</button>
+          <button onClick={refrescarTodo} style={{ marginLeft: 6, padding: "6px 12px", border: "1px solid #002E5D", background: "#fff", color: "#002E5D", borderRadius: 6, cursor: "pointer", fontSize: 12, fontWeight: 700 }}>↻ Refrescar</button>
+          <button onClick={() => setEditorCorreoOpen(o => !o)} style={{ padding: "6px 12px", border: "1px solid #002E5D", background: editorCorreoOpen ? "#002E5D" : "#fff", color: editorCorreoOpen ? "#fff" : "#002E5D", borderRadius: 6, cursor: "pointer", fontSize: 12, fontWeight: 700 }}>✉️ Cuerpo del correo</button>
         </div>
       </div>
 
       {editorCorreoOpen && (
         <div style={{ border: "1px solid #e4e7ec", background: "#f8fafc", borderRadius: 10, padding: 14, marginBottom: 14 }}>
-          <div style={{ fontSize: 13, fontWeight: 800, color: "#1a3a6b", marginBottom: 2 }}>✉️ Cuerpo del correo (se aplica a TODAS las empresas y SC)</div>
+          <div style={{ fontSize: 13, fontWeight: 800, color: "#002E5D", marginBottom: 2 }}>✉️ Cuerpo del correo (se aplica a TODAS las empresas y SC)</div>
           <div style={{ fontSize: 11, color: "#64748b", marginBottom: 10 }}>Variables que se reemplazan por empresa/SC al enviar: <code>{"{TRANSPORTISTA}"}</code> = empresa · <code>{"{CECO}"}</code> = SC · <code>{"{PERIODO}"}</code> = semana · <code>{"{OPERACION}"}</code>. Las fechas XX/XX se editan a mano. El correo destino se define por empresa en su ficha.</div>
           <div style={{ fontSize: 11, fontWeight: 700, color: "#475569", marginBottom: 4 }}>Asunto</div>
           <input value={asuntoLote} onChange={e => setAsuntoLote(e.target.value)} style={{ width: "100%", padding: "8px 10px", border: "1px solid #e4e7ec", borderRadius: 6, fontSize: 13, marginBottom: 10, boxSizing: "border-box" }} />
@@ -4884,7 +4884,7 @@ function ConciliacionTercerosMX({ usuario }) {
           <textarea value={cuerpoLote} onChange={e => setCuerpoLote(e.target.value)} rows={12} style={{ width: "100%", padding: "8px 10px", border: "1px solid #e4e7ec", borderRadius: 6, fontSize: 13, fontFamily: "inherit", resize: "vertical", boxSizing: "border-box" }} />
           <div style={{ display: "flex", justifyContent: "space-between", marginTop: 10 }}>
             <button onClick={() => { setAsuntoLote(ASUNTO_DEFAULT); setCuerpoLote(CUERPO_DEFAULT); }} style={{ padding: "6px 12px", background: "#fff", color: "#64748b", border: "1px solid #cbd5e1", borderRadius: 6, fontSize: 12, cursor: "pointer" }}>↺ Restaurar plantilla</button>
-            <button onClick={() => setEditorCorreoOpen(false)} style={{ padding: "6px 12px", background: "#1a3a6b", color: "#fff", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Listo</button>
+            <button onClick={() => setEditorCorreoOpen(false)} style={{ padding: "6px 12px", background: "#002E5D", color: "#fff", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Listo</button>
           </div>
         </div>
       )}
@@ -4902,8 +4902,8 @@ function ConciliacionTercerosMX({ usuario }) {
         <button onClick={abrirTodo} disabled={cerrando === "__abrir__"} style={{ padding: "8px 16px", background: cerrando === "__abrir__" ? "#94a3b8" : "#fff", color: cerrando === "__abrir__" ? "#fff" : "#9a3412", border: "1px solid #fdba74", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>{cerrando === "__abrir__" ? "Abriendo..." : "🔓 Abrir todo"}</button>
         <button onClick={cerrarTodo} disabled={cerrando === "__todo__"} style={{ padding: "8px 16px", background: cerrando === "__todo__" ? "#94a3b8" : "#166534", color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>{cerrando === "__todo__" ? "Cerrando..." : "🔒 Cerrar todo"}</button>
         <button onClick={enviarTodo} disabled={enviando === "__todo__"} style={{ padding: "8px 16px", background: enviando === "__todo__" ? "#94a3b8" : "#1e40af", color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>{enviando === "__todo__" ? "Enviando..." : "📧 Enviar todo"}</button>
-        <button onClick={() => generarReporteCierre({})} title="Genera y envía el informe consolidado de la semana a los destinatarios de arriba" style={{ padding: "8px 16px", background: "#fff", color: "#1a3a6b", border: "1px solid #1a3a6b", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>📄 Reporte</button>
-        <button onClick={() => { setImportRows(null); setImportOpen(true); }} style={{ padding: "8px 16px", background: "#1a3a6b", color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>📥 Importar ajustes (Excel)</button>
+        <button onClick={() => generarReporteCierre({})} title="Genera y envía el informe consolidado de la semana a los destinatarios de arriba" style={{ padding: "8px 16px", background: "#fff", color: "#002E5D", border: "1px solid #002E5D", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>📄 Reporte</button>
+        <button onClick={() => { setImportRows(null); setImportOpen(true); }} style={{ padding: "8px 16px", background: "#002E5D", color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>📥 Importar ajustes (Excel)</button>
         {ajustesPend.length > 0 && (
           <button onClick={aplicarAjustesDiferencias} disabled={aplicandoDif}
             title={ajustesPend.map(x => `${x.empresa || "sin empresa"} · ${x.sc} · ${x.concepto}`).join("\n")}
@@ -4917,10 +4917,10 @@ function ConciliacionTercerosMX({ usuario }) {
       {importOpen && (
         <div onClick={() => !importBusy && setImportOpen(false)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }}>
           <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 12, padding: 20, width: "min(900px, 94vw)", maxHeight: "88vh", overflow: "auto" }}>
-            <div style={{ fontSize: 16, fontWeight: 800, color: "#1a3a6b", marginBottom: 4 }}>Importar ajustes a prefacturas</div>
+            <div style={{ fontSize: 16, fontWeight: 800, color: "#002E5D", marginBottom: 4 }}>Importar ajustes a prefacturas</div>
             <div style={{ fontSize: 12, color: "#64748b", marginBottom: 12 }}>Carga viajes, cargos o descuentos a la semana abierta. El <b>signo del monto manda</b> (+ suma, − resta, 0 también). Los avisos (ruta repetida, empresa nueva) <b>NO bloquean</b>: el analista decide. Empresa no registrada se crea como prefactura nueva.</div>
             <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 14, flexWrap: "wrap" }}>
-              <button onClick={descargarPlantillaAjustes} style={{ padding: "6px 12px", background: "#fff", color: "#1a3a6b", border: "1px solid #1a3a6b", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>⬇ Descargar plantilla</button>
+              <button onClick={descargarPlantillaAjustes} style={{ padding: "6px 12px", background: "#fff", color: "#002E5D", border: "1px solid #002E5D", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>⬇ Descargar plantilla</button>
               <button onClick={quitarImportados} disabled={importBusy} style={{ padding: "6px 12px", background: "#fff", color: "#b91c1c", border: "1px solid #fca5a5", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>🗑 Quitar líneas importadas (semana)</button>
               <input type="file" accept=".xlsx,.xls" onChange={onArchivoAjustes} style={{ fontSize: 12 }} />
             </div>
@@ -5122,7 +5122,7 @@ function ConciliacionTercerosMX({ usuario }) {
                                 </select>
                                 <button onClick={() => agregarArrastre(placa, filas)} disabled={asignando === placa}
                                   title={`Agrega estos viajes como l\u00edneas \u26a0 en la prefactura de la semana actual (${semana}) del transportista elegido`}
-                                  style={{ padding: "5px 12px", background: "#F47B20", color: "#fff", border: "none", borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: "pointer", opacity: asignando === placa ? 0.6 : 1, whiteSpace: "nowrap" }}>
+                                  style={{ padding: "5px 12px", background: "#FF6600", color: "#fff", border: "none", borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: "pointer", opacity: asignando === placa ? 0.6 : 1, whiteSpace: "nowrap" }}>
                                   {asignando === placa ? "..." : `Agregar a sem. ${semana}`}</button>
                                 <button onClick={() => marcarPagadoExterno(placa, pend)} disabled={asignando === placa}
                                   title="Marcar como YA PAGADO por otro medio (transferencia directa, efectivo, otra prefactura, etc.). Queda auditado y deja de contar como pendiente."
@@ -5189,7 +5189,7 @@ function ConciliacionTercerosMX({ usuario }) {
 
       {trasp && (
         <div style={{ background: "#fff", border: "2px solid #9f1239", borderRadius: 12, padding: 20, marginBottom: 14, boxShadow: "0 4px 14px rgba(159,18,57,0.12)" }}>
-            <div style={{ fontSize: 16, fontWeight: 800, color: "#1a3a6b", marginBottom: 2, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>🚚 Traspasador de viajes — placa {trasp.placa} <span style={{ background: "#1a3a6b", color: "#fff", borderRadius: 6, padding: "2px 8px", fontSize: 10, fontWeight: 800 }}>v4</span><button onClick={() => !traspasando && setTrasp(null)} style={{ marginLeft: "auto", padding: "4px 12px", background: "#fff", color: "#64748b", border: "1px solid #cbd5e1", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>✕ Cerrar</button></div>
+            <div style={{ fontSize: 16, fontWeight: 800, color: "#002E5D", marginBottom: 2, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>🚚 Traspasador de viajes — placa {trasp.placa} <span style={{ background: "#002E5D", color: "#fff", borderRadius: 6, padding: "2px 8px", fontSize: 10, fontWeight: 800 }}>v4</span><button onClick={() => !traspasando && setTrasp(null)} style={{ marginLeft: "auto", padding: "4px 12px", background: "#fff", color: "#64748b", border: "1px solid #cbd5e1", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>✕ Cerrar</button></div>
             <div style={{ fontSize: 12, color: "#64748b", marginBottom: 14 }}>Semana {semana} ({etiquetaSemanaInventario(semana)}). Marcá los viajes a mover y elegí la empresa destino: se <b>restan</b> del origen y se <b>suman</b> al destino. Los viajes de prefacturas <b>enviadas</b> no se pueden mover (reabrilas primero).</div>
             {trasp.error ? (
               <div style={{ background: "#fef2f2", border: "1px solid #fca5a5", color: "#991b1b", borderRadius: 8, padding: 12, fontSize: 12 }}>Error cargando los viajes: {trasp.error}. Probá "Reanalizar" y volvé a abrir; si persiste, revisá la consola (F12).</div>
@@ -5210,7 +5210,7 @@ function ConciliacionTercerosMX({ usuario }) {
                   return (
                     <div key={gi} style={{ border: "1px solid #e4e7ec", borderRadius: 10, marginBottom: 12, overflow: "hidden" }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", background: "#f8fafc", borderBottom: "1px solid #e4e7ec", flexWrap: "wrap" }}>
-                        <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: movibles.length ? "pointer" : "default", fontSize: 13, fontWeight: 800, color: "#1a3a6b" }}>
+                        <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: movibles.length ? "pointer" : "default", fontSize: 13, fontWeight: 800, color: "#002E5D" }}>
                           <input type="checkbox" checked={todasSel} disabled={!movibles.length} onChange={e => toggleTraspGrupo(g, e.target.checked)} />
                           {g.empresa}
                         </label>
@@ -5301,11 +5301,11 @@ function ConciliacionTercerosMX({ usuario }) {
       {!loading && resumen.length > 0 && (
         <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
           {[
-            { label: "Empresas", valor: empresasAgrupadas.filter(g => g.empresa !== SIN_EMPRESA).length, color: "#1a3a6b" },
+            { label: "Empresas", valor: empresasAgrupadas.filter(g => g.empresa !== SIN_EMPRESA).length, color: "#002E5D" },
             { label: "Prefacturas (empresa+SC)", valor: resumen.filter(r => r.empresa !== SIN_EMPRESA).length, color: "#7c3aed" },
             { label: "Viajes", valor: totalViajes.toLocaleString("es-MX"), color: "#3B82F6" },
             { label: "Neto semana", valor: fmtMon(totalSemana), color: "#16a34a" },
-            { label: "Placas sin empresa", valor: sinEmpresaG ? sinEmpresaG.nPlacas : 0, color: sinEmpresaG ? "#F47B20" : "#94a3b8" },
+            { label: "Placas sin empresa", valor: sinEmpresaG ? sinEmpresaG.nPlacas : 0, color: sinEmpresaG ? "#FF6600" : "#94a3b8" },
           ].map(k => (
             <div key={k.label} style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10, padding: "10px 18px", minWidth: 130 }}>
               <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 700, textTransform: "uppercase" }}>{k.label}</div>
@@ -5375,11 +5375,11 @@ function ConciliacionTercerosMX({ usuario }) {
           }
 
           return (
-            <div key={g.empresa} style={{ background: "#fff", borderRadius: 10, overflow: "hidden", border: esSinEmpresa ? "2px solid #F47B20" : "1px solid #e4e7ec" }}>
+            <div key={g.empresa} style={{ background: "#fff", borderRadius: 10, overflow: "hidden", border: esSinEmpresa ? "2px solid #FF6600" : "1px solid #e4e7ec" }}>
               {/* Fila resumen empresa */}
               <div onClick={() => toggleEmpresa(g.empresa)} style={{ display: "flex", alignItems: "center", gap: 14, padding: "12px 16px", cursor: "pointer", flexWrap: "wrap", background: esSinEmpresa ? "#fff7ed" : "#fff" }}>
                 <div style={{ flex: "1 1 260px", minWidth: 220 }}>
-                  <div style={{ fontSize: 13, fontWeight: 800, color: esSinEmpresa ? "#c2410c" : "#1a3a6b", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                  <div style={{ fontSize: 13, fontWeight: 800, color: esSinEmpresa ? "#c2410c" : "#002E5D", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                     {esSinEmpresa ? "⚠️ " + g.empresa : g.empresa}
                     {esSinEmpresa && det && Object.keys(porPlaca).some(p => placasViejas[p]) && <span style={{ fontSize: 11, fontWeight: 700, color: "#9a3412", background: "#ffedd5", padding: "1px 7px", borderRadius: 8 }}>⚠️ {Object.keys(porPlaca).filter(p => placasViejas[p]).length} de semanas anteriores</span>}
                     {!esSinEmpresa && <span style={{ fontSize: 11, fontWeight: 600, color: "#7c3aed", background: "#f3e8ff", padding: "1px 7px", borderRadius: 8 }}>{g.filasSC.length} SC</span>}
@@ -5467,7 +5467,7 @@ function ConciliacionTercerosMX({ usuario }) {
                           <div key={rSC.service_center} style={{ border: "1px solid #e4e7ec", borderRadius: 8, marginBottom: 12, overflow: "hidden" }}>
                             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, background: "#eef2f7", padding: "8px 12px" }}>
                               <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-                                <span style={{ fontWeight: 800, color: "#1a3a6b", fontSize: 13 }}>SC {rSC.service_center}</span>
+                                <span style={{ fontWeight: 800, color: "#002E5D", fontSize: 13 }}>SC {rSC.service_center}</span>
                                 {chipEstado(rSC.estado_conciliacion)}
                                 <span style={{ fontSize: 11, color: "#64748b" }}>
                                   Sup: {rSC.supervisor || "—"} · {_viajesSC} viajes · {rSC.n_no_pago} no pago{(ajustesSC[`${norm(g.empresa)}||${norm(rSC.service_center)}`] || 0) > 0 ? ` · ${ajustesSC[`${norm(g.empresa)}||${norm(rSC.service_center)}`]} ajuste(s)` : ""} · Neto {fmtMon(_netoViajesSC)} · Bruto {fmtMon(_brutoBaseSC)}{rSC.tiene_ajustes ? " · ✏️ ajustada" : ""}{rSC.enviado_at ? " · 📤 " + new Date(rSC.enviado_at).toLocaleDateString("es-CL") : ""}{rSC.sync_veces > 0 ? (() => {
@@ -5484,7 +5484,7 @@ function ConciliacionTercerosMX({ usuario }) {
                               </div>
                               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                                 <button onClick={(e) => { e.stopPropagation(); generarPDF(g.empresa, rSC.service_center, filasSC, rSC); }}
-                                  style={{ padding: "6px 12px", background: "#F47B20", color: "#fff", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>📄 PDF {rSC.service_center}</button>
+                                  style={{ padding: "6px 12px", background: "#FF6600", color: "#fff", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>📄 PDF {rSC.service_center}</button>
                                 {rSC.estado_conciliacion && rSC.estado_conciliacion !== "sin_generar" && rSC.estado_conciliacion !== "enviada" && (
                                   <button onClick={(e) => { e.stopPropagation(); sincronizarConMotor(g.empresa, rSC.service_center); }} disabled={sincronizando === clave}
                                     title="La prefactura está congelada: trae del Motor de pagos los montos recalculados y los viajes nuevos, sin tocar ediciones manuales, importados, traspasos ni eliminados"
@@ -5493,11 +5493,11 @@ function ConciliacionTercerosMX({ usuario }) {
                                 )}
                                 {(rSC.estado_conciliacion === "sin_generar" || rSC.estado_conciliacion === "borrador") ? (
                                   <button onClick={(e) => { e.stopPropagation(); cerrarConciliacion(g.empresa, rSC.service_center, rSC, filasSC); }} disabled={cerrando === clave}
-                                    style={{ padding: "6px 12px", background: "#1a3a6b", color: "#fff", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer", opacity: cerrando === clave ? 0.6 : 1 }}>
+                                    style={{ padding: "6px 12px", background: "#002E5D", color: "#fff", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer", opacity: cerrando === clave ? 0.6 : 1 }}>
                                     {cerrando === clave ? "Cerrando..." : "🔒 Cerrar"}</button>
                                 ) : (
                                   <button onClick={(e) => { e.stopPropagation(); reabrirConciliacion(g.empresa, rSC.service_center); }}
-                                    style={{ padding: "6px 12px", background: "#fff", color: "#1a3a6b", border: "1px solid #1a3a6b", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Reabrir</button>
+                                    style={{ padding: "6px 12px", background: "#fff", color: "#002E5D", border: "1px solid #002E5D", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Reabrir</button>
                                 )}
                                 {(rSC.estado_conciliacion === "cerrada" || rSC.estado_conciliacion === "enviada") && (
                                   <>
@@ -5622,7 +5622,7 @@ function ConciliacionTercerosMX({ usuario }) {
                           const scs = [...new Set(filas.map(f => f.service_center_id).filter(Boolean))];
                           return (
                             <div key={placa} style={{ display: "flex", alignItems: "center", gap: 12, background: "#fff", border: "1px solid #fed7aa", borderRadius: 8, padding: "8px 12px", flexWrap: "wrap" }}>
-                              <div style={{ minWidth: 90, fontWeight: 800, color: "#1a3a6b" }}>{placa}</div>
+                              <div style={{ minWidth: 90, fontWeight: 800, color: "#002E5D" }}>{placa}</div>
                               {placasViejas[placa] && <span style={{ fontSize: 10, fontWeight: 700, color: "#9a3412", background: "#ffedd5", padding: "1px 6px", borderRadius: 8 }}>⚠️ desde sem {placasViejas[placa]}</span>}
                               <div style={{ fontSize: 11, color: "#64748b", flex: "1 1 200px" }}>
                                 {filas.length} viaje{filas.length !== 1 ? "s" : ""} · SC {scs.join(", ") || "—"} · Neto {fmtMon(neto)} · {[...new Set(filas.map(f => f.driver_name).filter(Boolean))].slice(0, 2).join(", ")}
@@ -5635,7 +5635,7 @@ function ConciliacionTercerosMX({ usuario }) {
                                 <option value="__nueva__">＋ Nuevo transportista...</option>
                               </select>
                               <button onClick={(e) => { e.stopPropagation(); asignarPlaca(placa, filas); }} disabled={asignando === placa}
-                                style={{ padding: "6px 14px", background: "#F47B20", color: "#fff", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer", opacity: asignando === placa ? 0.6 : 1 }}>
+                                style={{ padding: "6px 14px", background: "#FF6600", color: "#fff", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer", opacity: asignando === placa ? 0.6 : 1 }}>
                                 {asignando === placa ? "Asignando..." : "Asignar"}
                               </button>
                             </div>
@@ -5643,7 +5643,7 @@ function ConciliacionTercerosMX({ usuario }) {
                         })}
                       </div>
                       <div style={{ marginTop: 14 }}>
-                        <div style={{ fontSize: 11, fontWeight: 800, color: "#1a3a6b", marginBottom: 4 }}>Viajes de estas placas en la semana:</div>
+                        <div style={{ fontSize: 11, fontWeight: 800, color: "#002E5D", marginBottom: 4 }}>Viajes de estas placas en la semana:</div>
                         {renderTablaDetalle(det)}
                       </div>
                     </>
@@ -5659,7 +5659,7 @@ function ConciliacionTercerosMX({ usuario }) {
       {modalEnvio && (
         <div onClick={() => enviando ? null : setModalEnvio(null)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}>
           <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 12, padding: 22, width: 560, maxWidth: "100%", maxHeight: "90vh", overflowY: "auto" }}>
-            <div style={{ fontSize: 15, fontWeight: 800, color: "#1a3a6b", marginBottom: 4 }}>📧 Enviar prefactura</div>
+            <div style={{ fontSize: 15, fontWeight: 800, color: "#002E5D", marginBottom: 4 }}>📧 Enviar prefactura</div>
             <div style={{ fontSize: 12, color: "#64748b", marginBottom: 14 }}>{modalEnvio.empresa} · SC {modalEnvio.sc}</div>
             <label style={{ fontSize: 12, fontWeight: 700, color: "#475569" }}>Para (correo_to)</label>
             <input value={modalEnvio.to} onChange={e => setModalEnvio({ ...modalEnvio, to: e.target.value })} style={{ width: "100%", padding: "8px 10px", border: "1px solid #e4e7ec", borderRadius: 6, fontSize: 13, marginBottom: 10, boxSizing: "border-box" }} />
@@ -5690,7 +5690,7 @@ function ConciliacionTercerosMX({ usuario }) {
       {traslado && (
         <div onClick={() => !trasladando && setTraslado(null)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}>
           <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 12, padding: 20, width: "min(480px, 92vw)" }}>
-            <div style={{ fontSize: 15, fontWeight: 800, color: "#1a3a6b", marginBottom: 4 }}>⇄ Trasladar viaje a otra empresa</div>
+            <div style={{ fontSize: 15, fontWeight: 800, color: "#002E5D", marginBottom: 4 }}>⇄ Trasladar viaje a otra empresa</div>
             <div style={{ fontSize: 12, color: "#64748b", marginBottom: 12 }}>Se resta de la prefactura de origen y se suma a la de destino (mismo SC). Queda auditado y ambas vuelven a borrador.</div>
             <div style={{ background: "#f8fafc", border: "1px solid #e4e7ec", borderRadius: 8, padding: 10, fontSize: 12, marginBottom: 12 }}>
               <div><b>{traslado.linea.driver_name || "—"}</b> · placa {traslado.linea.placa || "—"}</div>
@@ -5718,7 +5718,7 @@ function ConciliacionTercerosMX({ usuario }) {
         <div onMouseDown={e => { if (e.target === e.currentTarget && !guardandoTransp) setFormTransp(null); }}
           style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}>
           <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 12, padding: 22, width: 460, maxWidth: "100%", maxHeight: "90vh", overflowY: "auto" }}>
-            <div style={{ fontSize: 15, fontWeight: 800, color: "#1a3a6b", marginBottom: 4 }}>{formTransp.id ? "Editar transportista" : "Nuevo transportista"}</div>
+            <div style={{ fontSize: 15, fontWeight: 800, color: "#002E5D", marginBottom: 4 }}>{formTransp.id ? "Editar transportista" : "Nuevo transportista"}</div>
             <div style={{ fontSize: 11, color: "#94a3b8", marginBottom: 14 }}>Se guarda en la base de Prefacturas (la misma que usa el envío masivo). Alimenta el header del PDF y los destinatarios.</div>
             {[
               { k: "nombre", label: "Razón social *", ph: "JUAN JOSE MENESES OLVERA" },
@@ -5760,7 +5760,7 @@ function ConciliacionTercerosMX({ usuario }) {
               <button onClick={() => setFormTransp(null)} disabled={guardandoTransp}
                 style={{ padding: "8px 16px", background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, fontSize: 13, cursor: "pointer", color: "#475569" }}>Cancelar</button>
               <button onClick={guardarTransp} disabled={guardandoTransp}
-                style={{ padding: "8px 16px", background: "#1a3a6b", color: "#fff", border: "none", borderRadius: 6, fontSize: 13, fontWeight: 700, cursor: "pointer", opacity: guardandoTransp ? 0.6 : 1 }}>
+                style={{ padding: "8px 16px", background: "#002E5D", color: "#fff", border: "none", borderRadius: 6, fontSize: 13, fontWeight: 700, cursor: "pointer", opacity: guardandoTransp ? 0.6 : 1 }}>
                 {guardandoTransp ? "Guardando..." : "Guardar"}
               </button>
             </div>
@@ -5991,7 +5991,7 @@ function TercerosMX() {
       <input ref={fileRef} type="file" accept=".xlsx,.xls" style={{ display: "none" }} onChange={e => cargarExcel(e.target.files && e.target.files[0])} />
 
       <div style={{ marginBottom: 14 }}>
-        <div style={{ fontSize: 15, fontWeight: 700, color: "#1a3a6b" }}>Terceros — Inventario de flota por semana</div>
+        <div style={{ fontSize: 15, fontWeight: 700, color: "#002E5D" }}>Terceros — Inventario de flota por semana</div>
         <div style={{ fontSize: 11, color: "#94a3b8" }}>El inventario de cada semana operada alimenta la empresa por patente en el Listado de Pagos</div>
       </div>
 
@@ -6039,7 +6039,7 @@ function TercerosMX() {
       <div style={{ display: "flex", gap: 6, marginBottom: 14, borderBottom: "1px solid #e4e7ec" }}>
         {[["inventario", "Inventario de Flota"], ["variaciones", "Variaciones"]].map(([id, lbl]) => (
           <button key={id} onClick={() => setTab(id)}
-            style={{ padding: "8px 16px", border: "none", borderBottom: tab === id ? "2px solid #1a3a6b" : "2px solid transparent", background: "none", color: tab === id ? "#1a3a6b" : "#94a3b8", fontSize: 13, fontWeight: 600, cursor: "pointer", marginBottom: -1 }}>
+            style={{ padding: "8px 16px", border: "none", borderBottom: tab === id ? "2px solid #002E5D" : "2px solid transparent", background: "none", color: tab === id ? "#002E5D" : "#94a3b8", fontSize: 13, fontWeight: 600, cursor: "pointer", marginBottom: -1 }}>
             {lbl}
           </button>
         ))}
@@ -6059,7 +6059,7 @@ function TercerosMX() {
                 <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px" }}>
                   <div style={{ width: 10, height: 10, borderRadius: "50%", background: cargado ? "#16a34a" : "#f59e0b", flexShrink: 0 }} />
                   <div style={{ flex: 1, minWidth: 200 }}>
-                    <div style={{ fontSize: 14, fontWeight: 700, color: "#1a3a6b" }}>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: "#002E5D" }}>
                       Semana {etiquetaSemanaInventario(s)}
                       {esActual && <span style={{ marginLeft: 8, fontSize: 9, fontWeight: 700, color: "#1d4ed8", background: "#dbeafe", padding: "2px 6px", borderRadius: 10, textTransform: "uppercase" }}>En curso</span>}
                       <span style={{ marginLeft: 8, fontSize: 10, color: "#94a3b8", fontWeight: 500 }}>· sem {s}</span>
@@ -6195,14 +6195,14 @@ function ModuloPagosMadre({ usuario }) {
   return (
     <div style={{ padding: 0 }}>
       <div style={{ background: "#fff", borderBottom: "1px solid #e4e7ec", padding: "12px 24px" }}>
-        <div style={{ fontSize: 18, fontWeight: 700, color: "#1a3a6b", marginBottom: 10 }}>Administración</div>
+        <div style={{ fontSize: 18, fontWeight: 700, color: "#002E5D", marginBottom: 10 }}>Administración</div>
         <div style={{ display: "flex", gap: 0, borderBottom: "2px solid #e4e7ec", marginLeft: -8, flexWrap: "wrap" }}>
           {tabs.map(t => (
             <button key={t.id} onClick={() => setSubtab(t.id)}
               style={{
                 background: "transparent", border: "none", padding: "10px 16px",
-                fontSize: 13, fontWeight: 600, cursor: "pointer", color: subtab === t.id ? "#1a3a6b" : "#64748b",
-                borderBottom: subtab === t.id ? "2px solid #1a3a6b" : "2px solid transparent",
+                fontSize: 13, fontWeight: 600, cursor: "pointer", color: subtab === t.id ? "#002E5D" : "#64748b",
+                borderBottom: subtab === t.id ? "2px solid #002E5D" : "2px solid transparent",
                 marginBottom: -2,
               }}>
               <div>{t.label}</div>
@@ -6217,7 +6217,7 @@ function ModuloPagosMadre({ usuario }) {
           margin: "24px", borderRadius: 12, border: "1px solid #e4e7ec",
         }}>
           <div style={{ fontSize: 48, marginBottom: 12 }}>🔒</div>
-          <div style={{ fontSize: 16, fontWeight: 700, color: "#1a3a6b", marginBottom: 6 }}>
+          <div style={{ fontSize: 16, fontWeight: 700, color: "#002E5D", marginBottom: 6 }}>
             Usuario sin credenciales para esta pestaña
           </div>
           <div style={{ fontSize: 13, color: "#64748b", maxWidth: 480, margin: "0 auto" }}>
@@ -6923,17 +6923,17 @@ function ConfigBonificaciones() {
     <div>
       <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: 14, marginBottom: 14, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
         <div style={{ flex: 1, minWidth: 240 }}>
-          <div style={{ fontSize: 14, fontWeight: 700, color: "#1a3a6b", marginBottom: 4 }}>Bonificaciones especiales de pago</div>
+          <div style={{ fontSize: 14, fontWeight: 700, color: "#002E5D", marginBottom: 4 }}>Bonificaciones especiales de pago</div>
           <div style={{ fontSize: 11, color: "#94a3b8" }}>Aumentos por SC, tipo de ruta y rango de KM, activables por toggle o rango de fechas · se muestran como columna en Listado de Pagos</div>
         </div>
-        {!editando && <button onClick={nuevo} style={{ padding: "8px 16px", borderRadius: 4, border: "none", background: "#1a3a6b", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>+ Nueva bonificación</button>}
+        {!editando && <button onClick={nuevo} style={{ padding: "8px 16px", borderRadius: 4, border: "none", background: "#002E5D", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>+ Nueva bonificación</button>}
       </div>
 
       {msg && (<div style={{ background: msg.ok ? "#ecfdf5" : "#fef2f2", border: `1px solid ${msg.ok ? "#a7f3d0" : "#fca5a5"}`, color: msg.ok ? "#065f46" : "#991b1b", borderRadius: 6, padding: 10, marginBottom: 14, fontSize: 12 }}>{msg.txt}</div>)}
 
       {editando && (
         <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: 18, marginBottom: 14 }}>
-          <div style={{ fontSize: 13, fontWeight: 700, color: "#1a3a6b", marginBottom: 14 }}>{editando.id ? "Editar bonificación" : "Nueva bonificación"}</div>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#002E5D", marginBottom: 14 }}>{editando.id ? "Editar bonificación" : "Nueva bonificación"}</div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 14, marginBottom: 14 }}>
             <div style={{ gridColumn: "1 / -1" }}>
               <div style={lbl}>Nombre de la bonificación</div>
@@ -6980,7 +6980,7 @@ function ConfigBonificaciones() {
                 const on = (editando.scs || []).includes(sc);
                 return (
                   <button key={sc} onClick={() => toggleSC(sc)}
-                    style={{ padding: "5px 11px", borderRadius: 14, border: `1px solid ${on ? "#1a3a6b" : "#e4e7ec"}`, background: on ? "#1a3a6b" : "#fff", color: on ? "#fff" : "#475569", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>
+                    style={{ padding: "5px 11px", borderRadius: 14, border: `1px solid ${on ? "#002E5D" : "#e4e7ec"}`, background: on ? "#002E5D" : "#fff", color: on ? "#fff" : "#475569", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>
                     {sc}
                   </button>
                 );
@@ -7026,7 +7026,7 @@ function ConfigBonificaciones() {
                       <span style={{ position: "absolute", top: 2, left: b.activo ? 20 : 2, width: 18, height: 18, borderRadius: "50%", background: "#fff", transition: "left .15s" }} />
                     </button>
                   </td>
-                  <td style={{ padding: "9px 12px", fontWeight: 600, color: "#1a3a6b" }}>{b.nombre}</td>
+                  <td style={{ padding: "9px 12px", fontWeight: 600, color: "#002E5D" }}>{b.nombre}</td>
                   <td style={{ padding: "9px 12px", color: "#475569" }}>{fmtRango(b)}</td>
                   <td style={{ padding: "9px 12px" }}>
                     <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 4, background: "#ede9fe", color: "#6d28d9" }}>{b.tipo_ruta}</span>
@@ -7037,7 +7037,7 @@ function ConfigBonificaciones() {
                   </td>
                   <td style={{ padding: "9px 12px", textAlign: "right", fontWeight: 700, color: "#7c3aed" }}>+{Number(b.pct_aumento || 0)}%</td>
                   <td style={{ padding: "9px 12px", textAlign: "right", whiteSpace: "nowrap" }}>
-                    <button onClick={() => editar(b)} style={{ padding: "5px 10px", marginRight: 6, borderRadius: 4, border: "1px solid #e4e7ec", background: "#fff", color: "#1a3a6b", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>Editar</button>
+                    <button onClick={() => editar(b)} style={{ padding: "5px 10px", marginRight: 6, borderRadius: 4, border: "1px solid #e4e7ec", background: "#fff", color: "#002E5D", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>Editar</button>
                     <button onClick={() => eliminar(b)} style={{ padding: "5px 10px", borderRadius: 4, border: "1px solid #fca5a5", background: "#fff", color: "#dc2626", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>Eliminar</button>
                   </td>
                 </tr>
@@ -7970,7 +7970,7 @@ function ListadoPagosDiarios({ usuario }) {
             Exportar Excel
           </button>
           <button onClick={calcularDia} disabled={calculando}
-            style={{ padding: "8px 16px", borderRadius: 4, border: "none", background: calculando ? "#94a3b8" : "#F47B20", color: "#fff", fontSize: 12, fontWeight: 600, cursor: calculando ? "wait" : "pointer" }}>
+            style={{ padding: "8px 16px", borderRadius: 4, border: "none", background: calculando ? "#94a3b8" : "#FF6600", color: "#fff", fontSize: 12, fontWeight: 600, cursor: calculando ? "wait" : "pointer" }}>
             {calculando ? "Calculando..." : pagos.length > 0 ? "Recalcular día" : "Calcular pagos del día"}
           </button>
           <button onClick={guardarTarifado} disabled={guardandoTarifado || pagos.length === 0}
@@ -7984,7 +7984,7 @@ function ListadoPagosDiarios({ usuario }) {
       <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 8, padding: 14, marginBottom: 14 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
           <div>
-            <div style={{ fontSize: 13, fontWeight: 700, color: "#1a3a6b" }}>Publicación al portal de terceros</div>
+            <div style={{ fontSize: 13, fontWeight: 700, color: "#002E5D" }}>Publicación al portal de terceros</div>
             <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 2 }}>
               Se publica lo guardado en tarifado. Guardar no publica.
             </div>
@@ -8091,7 +8091,7 @@ function ListadoPagosDiarios({ usuario }) {
                             )}
                             {nMarc > 0 && (
                               <>
-                                <span style={{ color: "#1a3a6b", fontWeight: 700 }}>{nMarc} marcada(s) para republicar</span>
+                                <span style={{ color: "#002E5D", fontWeight: 700 }}>{nMarc} marcada(s) para republicar</span>
                                 <button onClick={() => setMarcadas(m => { const n = { ...m }; for (const d of det) delete n[d.id_ruta]; return n; })}
                                   style={{ border: "1px solid #e4e7ec", background: "#fff", color: "#64748b", fontSize: 11, borderRadius: 4, padding: "4px 10px", cursor: "pointer" }}>
                                   Quitar marcas
@@ -8142,7 +8142,7 @@ function ListadoPagosDiarios({ usuario }) {
                   <button onClick={() => publicarSC(sc)} disabled={enCurso || sinGuardar || publicando !== null}
                     style={{
                       marginTop: 8, width: "100%", padding: "6px 10px", borderRadius: 4, border: "none",
-                      background: (enCurso || sinGuardar || publicando !== null) ? "#cbd5e1" : pub ? "#1a3a6b" : "#64748b",
+                      background: (enCurso || sinGuardar || publicando !== null) ? "#cbd5e1" : pub ? "#002E5D" : "#64748b",
                       color: "#fff", fontSize: 11.5, fontWeight: 600,
                       cursor: (enCurso || sinGuardar || publicando !== null) ? "not-allowed" : "pointer",
                     }}>
@@ -8166,7 +8166,7 @@ function ListadoPagosDiarios({ usuario }) {
             <input type="date" value={dupDesde || fechaOperativaOffset(-13)} onChange={e => setDupDesde(e.target.value)} style={{ border: "1px solid #e4e7ec", borderRadius: 4, padding: "5px 8px", fontSize: 12 }} />
             <span style={{ fontSize: 11, color: "#94a3b8" }}>a</span>
             <input type="date" value={dupHasta || fecha} onChange={e => setDupHasta(e.target.value)} style={{ border: "1px solid #e4e7ec", borderRadius: 4, padding: "5px 8px", fontSize: 12 }} />
-            <button onClick={analizarDuplicados} disabled={dupBusy} style={{ padding: "6px 14px", borderRadius: 4, border: "none", background: dupBusy ? "#94a3b8" : "#F47B20", color: "#fff", fontSize: 12, fontWeight: 700, cursor: dupBusy ? "wait" : "pointer" }}>{dupBusy ? "Analizando..." : "Analizar"}</button>
+            <button onClick={analizarDuplicados} disabled={dupBusy} style={{ padding: "6px 14px", borderRadius: 4, border: "none", background: dupBusy ? "#94a3b8" : "#FF6600", color: "#fff", fontSize: 12, fontWeight: 700, cursor: dupBusy ? "wait" : "pointer" }}>{dupBusy ? "Analizando..." : "Analizar"}</button>
           </span>
         </div>
         {dupRows && dupOpen && (
@@ -8215,11 +8215,11 @@ function ListadoPagosDiarios({ usuario }) {
       {excelOpen && (
         <div onClick={() => !excelBusy && setExcelOpen(false)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }}>
           <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 8, padding: 22, width: 380, maxWidth: "90vw", boxShadow: "0 10px 40px rgba(0,0,0,0.2)" }}>
-            <div style={{ fontSize: 15, fontWeight: 700, color: "#1a3a6b", marginBottom: 4 }}>Exportar a Excel</div>
+            <div style={{ fontSize: 15, fontWeight: 700, color: "#002E5D", marginBottom: 4 }}>Exportar a Excel</div>
             <div style={{ fontSize: 11, color: "#94a3b8", marginBottom: 16 }}>Descarga los pagos guardados de un día o un rango de fechas.</div>
             <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
-              <button onClick={() => setExcelMode("dia")} style={{ flex: 1, padding: "8px", borderRadius: 4, border: `1px solid ${excelMode === "dia" ? "#1a3a6b" : "#e4e7ec"}`, background: excelMode === "dia" ? "#1a3a6b" : "#fff", color: excelMode === "dia" ? "#fff" : "#475569", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Un día</button>
-              <button onClick={() => setExcelMode("rango")} style={{ flex: 1, padding: "8px", borderRadius: 4, border: `1px solid ${excelMode === "rango" ? "#1a3a6b" : "#e4e7ec"}`, background: excelMode === "rango" ? "#1a3a6b" : "#fff", color: excelMode === "rango" ? "#fff" : "#475569", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Rango de fechas</button>
+              <button onClick={() => setExcelMode("dia")} style={{ flex: 1, padding: "8px", borderRadius: 4, border: `1px solid ${excelMode === "dia" ? "#002E5D" : "#e4e7ec"}`, background: excelMode === "dia" ? "#002E5D" : "#fff", color: excelMode === "dia" ? "#fff" : "#475569", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Un día</button>
+              <button onClick={() => setExcelMode("rango")} style={{ flex: 1, padding: "8px", borderRadius: 4, border: `1px solid ${excelMode === "rango" ? "#002E5D" : "#e4e7ec"}`, background: excelMode === "rango" ? "#002E5D" : "#fff", color: excelMode === "rango" ? "#fff" : "#475569", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Rango de fechas</button>
             </div>
             {excelMode === "dia" ? (
               <div style={{ marginBottom: 18 }}>
@@ -8285,7 +8285,7 @@ function ListadoPagosDiarios({ usuario }) {
         {(() => {
           const card = (extra) => ({ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: "8px 10px", ...extra });
           const lbl = (c) => ({ fontSize: 9, color: c || "#94a3b8", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.4, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" });
-          const big = (c) => ({ fontSize: 17, fontWeight: 700, color: c || "#1a3a6b", marginTop: 2 });
+          const big = (c) => ({ fontSize: 17, fontWeight: 700, color: c || "#002E5D", marginTop: 2 });
           const mon = (c) => ({ fontSize: 14, fontWeight: 700, color: c || "#475569", marginTop: 3 });
           const hint = (c) => ({ fontSize: 8.5, color: c, marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" });
           return (
@@ -8407,8 +8407,8 @@ function ListadoPagosDiarios({ usuario }) {
         ].map(({ id, l }) => (
           <button key={id} onClick={() => setFiltroEstado(id)}
             style={{ padding: "5px 12px", borderRadius: 4,
-              border: `1px solid ${filtroEstado === id ? "#1a3a6b" : "#e4e7ec"}`,
-              background: filtroEstado === id ? "#1a3a6b" : "#fff",
+              border: `1px solid ${filtroEstado === id ? "#002E5D" : "#e4e7ec"}`,
+              background: filtroEstado === id ? "#002E5D" : "#fff",
               color: filtroEstado === id ? "#fff" : "#475569",
               fontSize: 11, fontWeight: 600, cursor: "pointer" }}>
             {l}
@@ -8521,7 +8521,7 @@ function ListadoPagosDiarios({ usuario }) {
                       <span style={{ fontSize: 9, fontWeight: 700, padding: "1px 6px", borderRadius: 3, background: r.tipo_ruta_sdd === "SDD" ? "#fde68a" : r.tipo_ruta_sdd === "SPOT" ? "#e5e7eb" : "#f1f5f9", color: r.tipo_ruta_sdd === "SDD" ? "#92400e" : r.tipo_ruta_sdd === "SPOT" ? "#475569" : "#94a3b8" }}>{r.tipo_ruta_sdd || "—"}</span>
                     </td>
                     <td style={{ ...tdStyle(), textAlign: "center" }}>
-                      <div style={{ fontWeight: 700, color: "#1a3a6b" }}>{r.service_center_id}</div>
+                      <div style={{ fontWeight: 700, color: "#002E5D" }}>{r.service_center_id}</div>
                       <span style={{ fontSize: 9, padding: "1px 6px", borderRadius: 3, background: "#e0e7ff", color: "#3730a3", fontWeight: 600 }}>{r.zona || "?"}</span>
                     </td>
                     <td style={{ ...tdStyle(), fontFamily: "monospace", fontSize: 10 }}>{r.id_ruta}</td>
@@ -8608,21 +8608,21 @@ function ListadoPagosDiarios({ usuario }) {
               {/* Fila de totales */}
               {filasFiltradas.length > 0 && (
                 <tr style={{ background: "#f1f5f9", borderTop: "2px solid #cbd5e1", fontWeight: 700 }}>
-                  <td colSpan={11} style={{ ...tdStyle(), textAlign: "right", color: "#1a3a6b" }}>
+                  <td colSpan={11} style={{ ...tdStyle(), textAlign: "right", color: "#002E5D" }}>
                     TOTAL · {filasFiltradas.length} rutas · {totales.choferes} choferes
                   </td>
-                  <td style={{ ...tdStyle(), textAlign: "right", color: "#1a3a6b" }}>{fmtMXN(totales.tarifaBase)}</td>
+                  <td style={{ ...tdStyle(), textAlign: "right", color: "#002E5D" }}>{fmtMXN(totales.tarifaBase)}</td>
                   <td style={{ ...tdStyle(), textAlign: "right", color: totales.ajusteNS >= 0 ? "#16a34a" : "#dc2626" }}>
                     {totales.ajusteNS >= 0 ? "+" : ""}{fmtMXN(totales.ajusteNS)}
                   </td>
                   <td style={tdStyle()}></td>
                   <td style={tdStyle()}></td>
-                  <td style={{ ...tdStyle(), textAlign: "right", color: "#1a3a6b" }}>{fmtMXN(totales.auxiliar)}</td>
+                  <td style={{ ...tdStyle(), textAlign: "right", color: "#002E5D" }}>{fmtMXN(totales.auxiliar)}</td>
                   <td style={tdStyle()}></td>{/* Ayudante(s) */}
                   <td style={tdStyle()}></td>{/* % Ayudante(s) */}
                   <td style={{ ...tdStyle(), textAlign: "right", color: "#16a34a", fontSize: 13 }}>{fmtMXN(totales.pagoNeto)}</td>
-                  <td style={{ ...tdStyle(), textAlign: "right", color: "#1a3a6b" }}>{totales.pagoMeli > 0 ? fmtMXN(totales.pagoMeli) : "—"}</td>
-                  <td style={{ ...tdStyle(), textAlign: "right", color: "#1a3a6b" }}>{totales.margenPct != null ? `${totales.margenPct.toFixed(1)}%` : "—"}</td>
+                  <td style={{ ...tdStyle(), textAlign: "right", color: "#002E5D" }}>{totales.pagoMeli > 0 ? fmtMXN(totales.pagoMeli) : "—"}</td>
+                  <td style={{ ...tdStyle(), textAlign: "right", color: "#002E5D" }}>{totales.margenPct != null ? `${totales.margenPct.toFixed(1)}%` : "—"}</td>
                   <td style={tdStyle()}></td>
                   <td style={tdStyle()}></td>
                 </tr>
@@ -8767,7 +8767,7 @@ function CierreDelDia() {
       ok:    { borde: "#a7f3d0", bg: "#f0fdf4", num: "#065f46" },
       warn:  { borde: "#fde68a", bg: "#fffbeb", num: "#92400e" },
       bad:   { borde: "#fecaca", bg: "#fef2f2", num: "#991b1b" },
-      neutro:{ borde: "#e4e7ec", bg: "#fff",    num: "#1a3a6b" },
+      neutro:{ borde: "#e4e7ec", bg: "#fff",    num: "#002E5D" },
     }[tono || "neutro"];
     return (
       <div style={{ flex: 1, minWidth: 130, background: colores.bg, border: `1px solid ${colores.borde}`,
@@ -8793,7 +8793,7 @@ function CierreDelDia() {
       {/* Encabezado con fecha ESPECÍFICA */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10, marginBottom: 14 }}>
         <div>
-          <div style={{ fontSize: 16, fontWeight: 700, color: "#1a3a6b" }}>Cierre del Día · Conciliación de fuentes</div>
+          <div style={{ fontSize: 16, fontWeight: 700, color: "#002E5D" }}>Cierre del Día · Conciliación de fuentes</div>
           <div style={{ fontSize: 12, color: "#64748b", marginTop: 2 }}>
             Torre (cierre_rutas_mx) vs KM de pago vs Informe de cierre vs escaneos — una fecha a la vez
             {cargadoAt && ` · consultado ${cargadoAt.toLocaleTimeString("es-CL")}`}
@@ -8801,9 +8801,9 @@ function CierreDelDia() {
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           <input type="date" value={fecha} onChange={(e) => setFecha(e.target.value)}
-            style={{ padding: "7px 10px", border: "1px solid #e4e7ec", borderRadius: 6, fontSize: 13, color: "#1a3a6b", fontWeight: 600 }} />
+            style={{ padding: "7px 10px", border: "1px solid #e4e7ec", borderRadius: 6, fontSize: 13, color: "#002E5D", fontWeight: 600 }} />
           <button onClick={() => cargar()} disabled={loading}
-            style={{ padding: "8px 14px", background: loading ? "#94a3b8" : "#1a3a6b", color: "#fff", border: "none",
+            style={{ padding: "8px 14px", background: loading ? "#94a3b8" : "#002E5D", color: "#fff", border: "none",
               borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: loading ? "wait" : "pointer" }}>
             {loading ? "Cargando…" : "↻ Refrescar"}
           </button>
@@ -8830,7 +8830,7 @@ function CierreDelDia() {
       <div style={{ background: nRevisar > 0 ? "#fffbeb" : "#f8fafc",
         border: `1px solid ${nRevisar > 0 ? "#fde68a" : "#e4e7ec"}`,
         borderRadius: 8, padding: "12px 16px", marginBottom: 14,
-        fontSize: 14, fontWeight: 700, color: nRevisar > 0 ? "#92400e" : "#1a3a6b" }}>
+        fontSize: 14, fontWeight: 700, color: nRevisar > 0 ? "#92400e" : "#002E5D" }}>
         {titular}
       </div>
 
@@ -8868,7 +8868,7 @@ function CierreDelDia() {
                       border: `1px solid ${reciente ? "#a7f3d0" : "#e4e7ec"}`, borderRadius: 8,
                       padding: "9px 11px", cursor: "pointer", flexShrink: 0 }}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-                      <span style={{ fontSize: 12, fontWeight: 700, color: "#1a3a6b" }}>{f.id_ruta}</span>
+                      <span style={{ fontSize: 12, fontWeight: 700, color: "#002E5D" }}>{f.id_ruta}</span>
                       <span style={{ fontSize: 10, color: reciente ? "#065f46" : "#94a3b8", fontWeight: 600 }}>
                         {reciente ? "🟢 " : ""}hace {mins < 60 ? `${mins} min` : `${Math.round(mins / 60)} h`}
                       </span>
@@ -8895,7 +8895,7 @@ function CierreDelDia() {
       <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10 }}>
         <button onClick={() => setSoloDif(!soloDif)}
           style={{ padding: "6px 12px", background: "none", border: "1px solid #e4e7ec", borderRadius: 6,
-            fontSize: 12, fontWeight: 600, color: "#1a3a6b", cursor: "pointer" }}>
+            fontSize: 12, fontWeight: 600, color: "#002E5D", cursor: "pointer" }}>
           {soloDif ? `Mostrando solo las que requieren revisión (${visibles.length}) · ver todas las rutas` : `Mostrando todas (${visibles.length}) · ver solo las que requieren revisión`}
         </button>
       </div>
@@ -8921,7 +8921,7 @@ function CierreDelDia() {
                 <tr onClick={() => setAbierta(abierta === f.id_ruta ? null : f.id_ruta)}
                   style={{ cursor: "pointer", background: (f.discrepancias || 0) > 0 ? "#fffdf5" : "#fff",
                     borderBottom: "1px solid #f1f5f9" }}>
-                  <td style={{ padding: "7px 10px", fontWeight: 700, color: "#1a3a6b" }}>{f.id_ruta}</td>
+                  <td style={{ padding: "7px 10px", fontWeight: 700, color: "#002E5D" }}>{f.id_ruta}</td>
                   <td style={{ padding: "7px 10px" }}>{f.sc}</td>
                   <td style={{ padding: "7px 10px", maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.driver_name || "—"}</td>
                   <td style={{ padding: "7px 10px", whiteSpace: "nowrap" }}>
@@ -8966,18 +8966,18 @@ function CierreDelDia() {
                     <td colSpan={10} style={{ padding: "12px 16px", borderBottom: "1px solid #e4e7ec" }}>
                       <div style={{ display: "flex", gap: 24, flexWrap: "wrap", fontSize: 12, color: "#334155" }}>
                         <div>
-                          <div style={{ fontWeight: 700, color: "#1a3a6b", marginBottom: 4 }}>Torre / cierre_rutas_mx</div>
+                          <div style={{ fontWeight: 700, color: "#002E5D", marginBottom: 4 }}>Torre / cierre_rutas_mx</div>
                           <div>Entregados: {f.entreg_torre ?? "—"} / {f.total_torre ?? "—"}</div>
                           <div>Helper día: {f.tuvo_helper ? "sí" : "no"} · Capturas: {f.capturas_torre ?? "—"}</div>
                           <div>Fuente fila: {f.fuente_cierre}</div>
                         </div>
                         <div>
-                          <div style={{ fontWeight: 700, color: "#1a3a6b", marginBottom: 4 }}>KM de pago (meli_ruta_detalle)</div>
+                          <div style={{ fontWeight: 700, color: "#002E5D", marginBottom: 4 }}>KM de pago (meli_ruta_detalle)</div>
                           <div>KM: {fmtKm(f.km_pago)} · Fuente: {f.km_fuente || "—"}</div>
                           <div>Entregados detalle: {f.entreg_detalle ?? "—"}</div>
                         </div>
                         <div>
-                          <div style={{ fontWeight: 700, color: "#1a3a6b", marginBottom: 4 }}>Informe cola cierre</div>
+                          <div style={{ fontWeight: 700, color: "#002E5D", marginBottom: 4 }}>Informe cola cierre</div>
                           {f.en_informe ? (
                             <>
                               <div>KM MELI: {fmtKm(f.km_informe)} · NS: {f.ns_informe != null ? `${Number(f.ns_informe).toFixed(1)}%` : "—"}</div>
@@ -8987,7 +8987,7 @@ function CierreDelDia() {
                           ) : <div style={{ color: "#92400e" }}>Ruta aún no procesada por la cola de cierre (corre cada 30 min sobre rutas cerradas).</div>}
                         </div>
                         <div>
-                          <div style={{ fontWeight: 700, color: "#1a3a6b", marginBottom: 4 }}>Escaneos</div>
+                          <div style={{ fontWeight: 700, color: "#002E5D", marginBottom: 4 }}>Escaneos</div>
                           <div>Total: {f.escaneos} · De ayudante: {f.escaneos_helper}</div>
                         </div>
                       </div>
@@ -9894,7 +9894,7 @@ function AyudantesDetalleDia({ usuario }) {
 
   const pctBadge = (pct) => {
     if (pct == null) return <span style={{ color: "#94a3b8" }}>—</span>;
-    const color = pct >= 50 ? "#16a34a" : pct >= 20 ? "#1a3a6b" : "#64748b";
+    const color = pct >= 50 ? "#16a34a" : pct >= 20 ? "#002E5D" : "#64748b";
     return <span style={{ fontWeight: 700, color }}>{pct}%</span>;
   };
 
@@ -9939,7 +9939,7 @@ function AyudantesDetalleDia({ usuario }) {
           <button onClick={ejecutarFlujo}
             disabled={disparando || (flujoMonitor && (flujoMonitor.estado === "esperando" || flujoMonitor.estado === "corriendo"))}
             style={{ padding: "9px 16px",
-              background: (disparando || (flujoMonitor && (flujoMonitor.estado === "esperando" || flujoMonitor.estado === "corriendo"))) ? "#94a3b8" : "#F47B20",
+              background: (disparando || (flujoMonitor && (flujoMonitor.estado === "esperando" || flujoMonitor.estado === "corriendo"))) ? "#94a3b8" : "#FF6600",
               border: "none", borderRadius: 6, fontSize: 12, fontWeight: 700, color: "#fff",
               cursor: (disparando || (flujoMonitor && (flujoMonitor.estado === "esperando" || flujoMonitor.estado === "corriendo"))) ? "not-allowed" : "pointer",
               whiteSpace: "nowrap" }}>
@@ -9995,10 +9995,10 @@ function AyudantesDetalleDia({ usuario }) {
       </div>
 
       {/* ══ Los números del pago del ayudante ══ */}
-          <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderLeft: "3px solid #1a3a6b", borderRadius: 6, padding: "12px 14px", marginBottom: 12 }}>
+          <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderLeft: "3px solid #002E5D", borderRadius: 6, padding: "12px 14px", marginBottom: 12 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
               <div>
-                <div style={{ fontSize: 12, fontWeight: 700, color: "#1a3a6b" }}>Pago del ayudante · {fecha}</div>
+                <div style={{ fontSize: 12, fontWeight: 700, color: "#002E5D" }}>Pago del ayudante · {fecha}</div>
                 <div style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}>
                   Solo se listan las rutas con el <b>flag de ayudante activo</b> al cierre. Sin decisión del analista no se paga.
                 </div>
@@ -10066,14 +10066,14 @@ function AyudantesDetalleDia({ usuario }) {
 
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 10, marginTop: 12 }}>
               {[
-                { l: "Pagan según Maestro", v: cargandoMaestro ? "…" : !gatilloDisponible ? "?" : numerosPago.paganMaestro, c: "#1a3a6b" },
+                { l: "Pagan según Maestro", v: cargandoMaestro ? "…" : !gatilloDisponible ? "?" : numerosPago.paganMaestro, c: "#002E5D" },
                 { l: "Sin decidir", v: cargandoMaestro ? "…" : numerosPago.pendientes, c: numerosPago.pendientes > 0 ? "#b45309" : "#64748b",
                   sub: numerosPago.bloqueadas > 0 ? `${numerosPago.bloqueadas} bloqueada(s)` : null },
                 { l: "Aprobadas", v: cargandoMaestro ? "…" : numerosPago.aprobadas, c: "#16a34a" },
                 { l: "Rechazadas", v: cargandoMaestro ? "…" : numerosPago.rechazadas, c: "#dc2626" },
                 { l: "A pagar", v: cargandoMaestro ? "…" : !gatilloDisponible ? "?" : `$${numerosPago.aPagar.toLocaleString("es-MX")}`, c: "#16a34a", sub: `$${cfgAux.pagar} por ruta` },
-                { l: "MELI nos paga", v: cargandoMaestro ? "…" : !gatilloDisponible ? "?" : `$${numerosPago.aCobrar.toLocaleString("es-MX")}`, c: "#1a3a6b", sub: `$${cfgAux.cobrar} por ruta con ayudante` },
-                { l: "Margen", v: cargandoMaestro ? "…" : !gatilloDisponible ? "?" : `$${numerosPago.margen.toLocaleString("es-MX")}`, c: "#F47B20", sub: "MELI cobra igual si rechazás" },
+                { l: "MELI nos paga", v: cargandoMaestro ? "…" : !gatilloDisponible ? "?" : `$${numerosPago.aCobrar.toLocaleString("es-MX")}`, c: "#002E5D", sub: `$${cfgAux.cobrar} por ruta con ayudante` },
+                { l: "Margen", v: cargandoMaestro ? "…" : !gatilloDisponible ? "?" : `$${numerosPago.margen.toLocaleString("es-MX")}`, c: "#FF6600", sub: "MELI cobra igual si rechazás" },
               ].map((k, i) => (
                 <div key={i} style={{ background: "#f8fafc", border: "1px solid #e4e7ec", borderRadius: 5, padding: "8px 10px" }}>
                   <div style={{ fontSize: 9, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase" }}>{k.l}</div>
@@ -10092,9 +10092,9 @@ function AyudantesDetalleDia({ usuario }) {
 
           {/* KPIs vista entregas */}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 10, marginBottom: 14 }}>
-            <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderLeft: "3px solid #1a3a6b", borderRadius: 6, padding: "12px 14px" }}>
+            <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderLeft: "3px solid #002E5D", borderRadius: 6, padding: "12px 14px" }}>
               <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase" }}>Rutas con helper</div>
-              <div style={{ fontSize: 22, fontWeight: 700, color: "#1a3a6b", marginTop: 2 }}>{detalleEntregas.length}</div>
+              <div style={{ fontSize: 22, fontWeight: 700, color: "#002E5D", marginTop: 2 }}>{detalleEntregas.length}</div>
             </div>
             <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderLeft: "3px solid #16a34a", borderRadius: 6, padding: "12px 14px" }}>
               <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase" }}>Con detalle OK</div>
@@ -10105,9 +10105,9 @@ function AyudantesDetalleDia({ usuario }) {
               <div style={{ fontSize: 22, fontWeight: 700, color: "#b45309", marginTop: 2 }}>{detalleEntregas.filter(f => f.estado === "INCOMPLETO").length}</div>
               <div style={{ fontSize: 10, color: "#94a3b8" }}>cobertura &lt;95% vs snapshot</div>
             </div>
-            <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderLeft: "3px solid #F47B20", borderRadius: 6, padding: "12px 14px" }}>
+            <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderLeft: "3px solid #FF6600", borderRadius: 6, padding: "12px 14px" }}>
               <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600, textTransform: "uppercase" }}>Solo driver</div>
-              <div style={{ fontSize: 22, fontWeight: 700, color: "#F47B20", marginTop: 2 }}>{detalleEntregas.filter(f => f.estado === "SOLO_DRIVER").length}</div>
+              <div style={{ fontSize: 22, fontWeight: 700, color: "#FF6600", marginTop: 2 }}>{detalleEntregas.filter(f => f.estado === "SOLO_DRIVER").length}</div>
               <div style={{ fontSize: 10, color: "#94a3b8" }}>helper en snapshot, sin entregas</div>
             </div>
             <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderLeft: "3px solid #dc2626", borderRadius: 6, padding: "12px 14px" }}>
@@ -10195,7 +10195,7 @@ function AyudantesDetalleDia({ usuario }) {
                         <td style={{ padding: "8px", fontFamily: "monospace", color: "#64748b", fontSize: 11 }}>
                           <button onClick={() => setFilaAbierta(abierta ? null : tid)}
                             title="Ver comentario, aviso y paquetes"
-                            style={{ background: "none", border: "none", padding: 0, cursor: "pointer", fontFamily: "monospace", fontSize: 11, color: "#1a3a6b", fontWeight: 600 }}>
+                            style={{ background: "none", border: "none", padding: 0, cursor: "pointer", fontFamily: "monospace", fontSize: 11, color: "#002E5D", fontWeight: 600 }}>
                             {abierta ? "▼" : "▶"} {f.id_ruta}
                           </button>
                           {f.alertas.length > 0 && (
@@ -10339,9 +10339,9 @@ function AyudantesDetalleDia({ usuario }) {
                             <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                               <button onClick={() => notificar(f)} disabled={notificando === tid}
                                 style={{ padding: "6px 12px", fontSize: 11, fontWeight: 700, borderRadius: 5, border: "none",
-                                  background: f.notificado_at ? "#fff" : "#1a3a6b",
-                                  color: f.notificado_at ? "#1a3a6b" : "#fff",
-                                  boxShadow: f.notificado_at ? "inset 0 0 0 1px #1a3a6b" : "none",
+                                  background: f.notificado_at ? "#fff" : "#002E5D",
+                                  color: f.notificado_at ? "#002E5D" : "#fff",
+                                  boxShadow: f.notificado_at ? "inset 0 0 0 1px #002E5D" : "none",
                                   cursor: notificando === tid ? "wait" : "pointer" }}>
                                 {notificando === tid ? "Enviando…" : f.notificado_at ? "↻ Reenviar aviso" : "📲 Avisar al supervisor"}
                               </button>
@@ -10424,7 +10424,7 @@ function PagosPausados({ usuario }) {
           <label style={{ fontSize: 12, color: "#475569", display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
             <input type="checkbox" checked={incluirLiberados} onChange={e => setIncluirLiberados(e.target.checked)} /> incluir liberados
           </label>
-          <button onClick={cargar} style={{ padding: "7px 14px", border: "1px solid #1a3a6b", background: "#fff", color: "#1a3a6b", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>↻ Actualizar</button>
+          <button onClick={cargar} style={{ padding: "7px 14px", border: "1px solid #002E5D", background: "#fff", color: "#002E5D", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>↻ Actualizar</button>
           <div style={{ background: "#fff7ed", border: "1px solid #fdba74", borderRadius: 6, padding: "8px 14px" }}>
             <div style={{ fontSize: 10, color: "#9a3412", fontWeight: 700, textTransform: "uppercase" }}>Pausados</div>
             <div style={{ fontSize: 20, fontWeight: 800, color: "#9a3412" }}>{pausCount}</div>
@@ -10435,7 +10435,7 @@ function PagosPausados({ usuario }) {
         <div style={{ padding: 30, textAlign: "center", color: "#94a3b8", border: "1px solid #e4e7ec", borderRadius: 8, background: "#fff" }}>No hay pagos pausados.</div>
       ) : dias.map(dia => (
         <div key={dia} style={{ marginBottom: 16 }}>
-          <div style={{ fontSize: 13, fontWeight: 800, color: "#1a3a6b", marginBottom: 6 }}>{dia} · {porDia[dia].length} ruta(s)</div>
+          <div style={{ fontSize: 13, fontWeight: 800, color: "#002E5D", marginBottom: 6 }}>{dia} · {porDia[dia].length} ruta(s)</div>
           <div style={{ border: "1px solid #e4e7ec", borderRadius: 8, overflow: "hidden", background: "#fff" }}>
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead><tr>{["Chofer", "Patente", "SC", "Ruta", "Pago neto", "Motivo", "Pausado por", "Cuando", "Estado", ""].map(h => <th key={h} style={th}>{h}</th>)}</tr></thead>
@@ -10510,7 +10510,7 @@ function ConfigAlertas() {
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
         <div style={{ fontSize: 12, color: "#64748b", maxWidth: 720 }}>Reglas que marcan una línea del Listado de Pagos como <b>alerta</b>. El analista las usa para revisar y (próximamente) pausar pagos. Una línea con alerta es la que cumple <b>cualquiera</b> de las reglas activas.</div>
-        <button onClick={agregar} style={{ padding: "7px 14px", background: "#1a3a6b", color: "#fff", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>+ Agregar regla</button>
+        <button onClick={agregar} style={{ padding: "7px 14px", background: "#002E5D", color: "#fff", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>+ Agregar regla</button>
       </div>
       {loading ? <div style={{ color: "#94a3b8", padding: 20 }}>Cargando…</div> : (
         <div style={{ border: "1px solid #e4e7ec", borderRadius: 8, overflow: "hidden", background: "#fff" }}>
@@ -10559,8 +10559,8 @@ function ConfiguracionPagos({ usuario }) {
           { id: "alertas", l: "Alertas" },
         ].map(t => (
           <button key={t.id} onClick={() => setSubtab(t.id)}
-            style={{ padding: "7px 14px", borderRadius: 4, border: `1px solid ${subtab === t.id ? "#1a3a6b" : "#e4e7ec"}`,
-              background: subtab === t.id ? "#1a3a6b" : "#fff", color: subtab === t.id ? "#fff" : "#475569",
+            style={{ padding: "7px 14px", borderRadius: 4, border: `1px solid ${subtab === t.id ? "#002E5D" : "#e4e7ec"}`,
+              background: subtab === t.id ? "#002E5D" : "#fff", color: subtab === t.id ? "#fff" : "#475569",
               fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
             {t.l}
           </button>
@@ -10667,7 +10667,7 @@ function ConfigPorPagar({ usuario }) {
     <div>
       <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: 14, marginBottom: 14, display: "flex", alignItems: "center", gap: 12 }}>
         <div style={{ flex: 1 }}>
-          <div style={{ fontSize: 14, fontWeight: 700, color: "#1a3a6b", marginBottom: 4 }}>Tarifario por Pagar (costo)</div>
+          <div style={{ fontSize: 14, fontWeight: 700, color: "#002E5D", marginBottom: 4 }}>Tarifario por Pagar (costo)</div>
           <div style={{ fontSize: 11, color: "#94a3b8" }}>Lo que le pagamos al chofer · tabla viva matriz_precios · MXN · editable</div>
         </div>
         <button onClick={guardar} disabled={guardando}
@@ -10680,21 +10680,21 @@ function ConfigPorPagar({ usuario }) {
           <span style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase" }}>Nueva categoría</span>
           <div style={{ display: "flex", gap: 6 }}>
             <input value={newCat} onChange={e => setNewCat(e.target.value)} placeholder="Ej: MOTO" style={{ border: "1px solid #e4e7ec", borderRadius: 4, padding: "5px 8px", fontSize: 12 }} />
-            <button onClick={agregarCat} style={{ padding: "5px 10px", borderRadius: 4, border: "1px solid #1a3a6b", background: "#fff", color: "#1a3a6b", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>+ Categoría</button>
+            <button onClick={agregarCat} style={{ padding: "5px 10px", borderRadius: 4, border: "1px solid #002E5D", background: "#fff", color: "#002E5D", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>+ Categoría</button>
           </div>
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           <span style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase" }}>Nuevo rango de km</span>
           <div style={{ display: "flex", gap: 6 }}>
             <input value={newTramo} onChange={e => setNewTramo(e.target.value)} placeholder="Ej: 251-300 o 301+" style={{ border: "1px solid #e4e7ec", borderRadius: 4, padding: "5px 8px", fontSize: 12 }} />
-            <button onClick={agregarTramo} style={{ padding: "5px 10px", borderRadius: 4, border: "1px solid #1a3a6b", background: "#fff", color: "#1a3a6b", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>+ Rango</button>
+            <button onClick={agregarTramo} style={{ padding: "5px 10px", borderRadius: 4, border: "1px solid #002E5D", background: "#fff", color: "#002E5D", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>+ Rango</button>
           </div>
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           <span style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase" }}>Nueva zona</span>
           <div style={{ display: "flex", gap: 6 }}>
             <input value={newZona} onChange={e => setNewZona(e.target.value)} placeholder="Ej: L5" style={{ border: "1px solid #e4e7ec", borderRadius: 4, padding: "5px 8px", fontSize: 12 }} />
-            <button onClick={agregarZona} style={{ padding: "5px 10px", borderRadius: 4, border: "1px solid #1a3a6b", background: "#fff", color: "#1a3a6b", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>+ Zona</button>
+            <button onClick={agregarZona} style={{ padding: "5px 10px", borderRadius: 4, border: "1px solid #002E5D", background: "#fff", color: "#002E5D", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>+ Zona</button>
           </div>
         </div>
         <div style={{ fontSize: 10, color: "#94a3b8", flexBasis: "100%" }}>Agregá la categoría/rango/zona, completá sus valores en la tabla y apretá "Guardar cambios". Se guarda en matriz_precios y el motor de pago lo toma automáticamente.</div>
@@ -10722,7 +10722,7 @@ function ConfigPorPagar({ usuario }) {
 
       <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: 12, marginBottom: 14, display: "flex", alignItems: "center", gap: 10 }}>
         <div style={{ flex: 1 }}>
-          <div style={{ fontSize: 13, fontWeight: 700, color: "#1a3a6b" }}>Tarifa base por zona</div>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#002E5D" }}>Tarifa base por zona</div>
           <div style={{ fontSize: 11, color: "#94a3b8" }}>Se aplica a los SC que todavía no tienen tarifas cargadas</div>
         </div>
         <button onClick={() => setVerZonas(v => !v)}
@@ -10733,7 +10733,7 @@ function ConfigPorPagar({ usuario }) {
 
       {verZonas && zonas.map(z => (
         <div key={z} style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: 14, marginBottom: 14 }}>
-          <div style={{ fontSize: 13, fontWeight: 700, color: "#1a3a6b", marginBottom: 10 }}>Zona {z}</div>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#002E5D", marginBottom: 10 }}>Zona {z}</div>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
             <thead>
               <tr style={{ background: "#f8fafc", borderBottom: "1px solid #e4e7ec" }}>
@@ -11090,7 +11090,7 @@ function TarifasPorSC({ usuario, onCambio }) {
   };
 
   const cardS = { background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: 14, marginBottom: 14 };
-  const btnP = { padding: "7px 14px", background: "#F47B20", color: "#fff", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer" };
+  const btnP = { padding: "7px 14px", background: "#FF6600", color: "#fff", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer" };
   const btnS = { padding: "5px 11px", background: "#eff6ff", color: "#1d4ed8", border: "1px solid #bfdbfe", borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: "pointer" };
   const thS = { padding: "5px 8px", textAlign: "left", fontSize: 10, color: "#64748b", fontWeight: 600 };
   const tdS = { padding: "5px 8px", fontSize: 11, borderBottom: "1px solid #f4f6f8" };
@@ -11102,7 +11102,7 @@ function TarifasPorSC({ usuario, onCambio }) {
     <div>
       <div style={{ ...cardS, display: "flex", alignItems: "center", gap: 10 }}>
         <div style={{ flex: 1 }}>
-          <div style={{ fontSize: 14, fontWeight: 700, color: "#1a3a6b" }}>Tarifas por service center</div>
+          <div style={{ fontSize: 14, fontWeight: 700, color: "#002E5D" }}>Tarifas por service center</div>
           <div style={{ fontSize: 11, color: "#94a3b8" }}>Elige un SC y edita sus tarifas, o cárgalas en bloque desde el Excel</div>
         </div>
         <button onClick={() => setVista(vista === "historial" ? "tarjetas" : "historial")} style={{ ...btnS, padding: "7px 14px", fontSize: 12 }}>
@@ -11136,7 +11136,7 @@ function TarifasPorSC({ usuario, onCambio }) {
         <div style={{ ...cardS, borderColor: "#fcd9a6" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10, flexWrap: "wrap" }}>
             <div style={{ flex: 1, minWidth: 220 }}>
-              <div style={{ fontSize: 13, fontWeight: 700, color: "#1a3a6b" }}>{imp.archivo}</div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: "#002E5D" }}>{imp.archivo}</div>
               <div style={{ fontSize: 11, color: "#94a3b8" }}>{imp.leidas} filas leídas · nada se guarda hasta confirmar</div>
             </div>
             <label style={{ fontSize: 11, color: "#475569", fontWeight: 700 }}>Vigente desde</label>
@@ -11194,7 +11194,7 @@ function TarifasPorSC({ usuario, onCambio }) {
 
       {vista === "historial" ? (
         <div style={cardS}>
-          <div style={{ fontSize: 13, fontWeight: 700, color: "#1a3a6b", marginBottom: 10 }}>Historial de cargas</div>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#002E5D", marginBottom: 10 }}>Historial de cargas</div>
           {!cargas.length && <div style={{ fontSize: 12, color: "#94a3b8" }}>Todavía no hay cargas registradas.</div>}
           {!!cargas.length && (
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
@@ -11268,7 +11268,7 @@ function TarifasPorSC({ usuario, onCambio }) {
             return (
               <div style={{ background: "#fff", border: `1px solid ${propia ? "#fcd9a6" : "#e4e7ec"}`, borderRadius: 6, overflow: "hidden", marginBottom: 14 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "12px 16px", background: propia ? "#fffbeb" : "#f8fafc", borderBottom: "1px solid #eef0f3", flexWrap: "wrap" }}>
-                  <div style={{ fontSize: 16, fontWeight: 700, color: "#1a3a6b" }}>{site}</div>
+                  <div style={{ fontSize: 16, fontWeight: 700, color: "#002E5D" }}>{site}</div>
                   <span style={{ fontSize: 10, fontWeight: 700, padding: "3px 8px", borderRadius: 4, background: "#e2e8f0", color: "#475569" }}>zona {zona}</span>
                   {esTop && <span style={{ fontSize: 10, fontWeight: 700, padding: "3px 8px", borderRadius: 4, background: "#dbeafe", color: "#1e40af" }}>más operación</span>}
                   <span style={{ fontSize: 11, color: "#64748b" }}>
@@ -11277,7 +11277,7 @@ function TarifasPorSC({ usuario, onCambio }) {
                   <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
                     {[["SPOT", "SPOT"], ["SDD", "SDD"], ["CANCEL", "Cancelación"]].map(([v, lbl]) => (
                       <button key={v} onClick={() => { setFTipo(v); if (editando) abrirEdicion(site, v); }}
-                        style={{ ...btnS, background: fTipo === v ? "#1a3a6b" : "#eff6ff", color: fTipo === v ? "#fff" : "#1d4ed8" }}>{lbl}</button>
+                        style={{ ...btnS, background: fTipo === v ? "#002E5D" : "#eff6ff", color: fTipo === v ? "#fff" : "#1d4ed8" }}>{lbl}</button>
                     ))}
                     {!editando && <button onClick={() => abrirEdicion(site, fTipo)} style={btnS}>Editar</button>}
                     {propia && !editando && <button onClick={() => quitarExcepcion(site)} style={{ ...btnS, background: "#fff", color: "#b91c1c", borderColor: "#fecaca" }}>Borrar tarifas de {site}</button>}
@@ -11360,7 +11360,7 @@ function TarifasPorSC({ usuario, onCambio }) {
 
           {scsFiltrados.length > 1 && (
             <div>
-              <div style={{ fontSize: 12, fontWeight: 700, color: "#1a3a6b", marginBottom: 8 }}>Otros SC {fSoloOp ? "con operación" : ""}</div>
+              <div style={{ fontSize: 12, fontWeight: 700, color: "#002E5D", marginBottom: 8 }}>Otros SC {fSoloOp ? "con operación" : ""}</div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 10 }}>
                 {scsFiltrados.filter(s => s !== scSel).slice(0, tope).map(site => {
                   const propia = scsConExcepcion.includes(site);
@@ -11370,7 +11370,7 @@ function TarifasPorSC({ usuario, onCambio }) {
                     <div key={site} onClick={() => { setScSel(site); setEditSC(null); }}
                       style={{ background: "#fff", border: `1px solid ${propia ? "#fcd9a6" : "#e4e7ec"}`, borderRadius: 6, padding: "10px 12px", cursor: "pointer" }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
-                        <div style={{ fontSize: 13, fontWeight: 700, color: "#1a3a6b" }}>{site}</div>
+                        <div style={{ fontSize: 13, fontWeight: 700, color: "#002E5D" }}>{site}</div>
                         <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 7px", borderRadius: 4, background: "#e2e8f0", color: "#475569" }}>{scZonas[site]}</span>
                         <span style={{ marginLeft: "auto", fontSize: 10, color: "#94a3b8" }}>{uso[site] ? `${uso[site]} rutas` : ""}</span>
                       </div>
@@ -11465,7 +11465,7 @@ function ConfigPorCobrarMeli() {
     <div>
       <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: 14, marginBottom: 14, display: "flex", alignItems: "center", gap: 12 }}>
         <div style={{ flex: 1 }}>
-          <div style={{ fontSize: 14, fontWeight: 700, color: "#1a3a6b", marginBottom: 4 }}>Tarifas por Cobrar a MELI</div>
+          <div style={{ fontSize: 14, fontWeight: 700, color: "#002E5D", marginBottom: 4 }}>Tarifas por Cobrar a MELI</div>
           <div style={{ fontSize: 11, color: "#94a3b8" }}>Lo que MELI nos paga · categoría × zona × tramo km · MXN · editable</div>
         </div>
         <button onClick={guardar} disabled={guardando}
@@ -11482,21 +11482,21 @@ function ConfigPorCobrarMeli() {
           <span style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase" }}>Nueva categoría</span>
           <div style={{ display: "flex", gap: 6 }}>
             <input value={newCat} onChange={e => setNewCat(e.target.value)} placeholder="Ej: MOTO" style={{ border: "1px solid #e4e7ec", borderRadius: 4, padding: "5px 8px", fontSize: 12 }} />
-            <button onClick={agregarCat} style={{ padding: "5px 10px", borderRadius: 4, border: "1px solid #1a3a6b", background: "#fff", color: "#1a3a6b", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>+ Categoría</button>
+            <button onClick={agregarCat} style={{ padding: "5px 10px", borderRadius: 4, border: "1px solid #002E5D", background: "#fff", color: "#002E5D", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>+ Categoría</button>
           </div>
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           <span style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase" }}>Nuevo rango de km</span>
           <div style={{ display: "flex", gap: 6 }}>
             <input value={newTramo} onChange={e => setNewTramo(e.target.value)} placeholder="Ej: 251-300 o 301+" style={{ border: "1px solid #e4e7ec", borderRadius: 4, padding: "5px 8px", fontSize: 12 }} />
-            <button onClick={agregarTramo} style={{ padding: "5px 10px", borderRadius: 4, border: "1px solid #1a3a6b", background: "#fff", color: "#1a3a6b", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>+ Rango</button>
+            <button onClick={agregarTramo} style={{ padding: "5px 10px", borderRadius: 4, border: "1px solid #002E5D", background: "#fff", color: "#002E5D", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>+ Rango</button>
           </div>
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           <span style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase" }}>Nueva zona</span>
           <div style={{ display: "flex", gap: 6 }}>
             <input value={newZona} onChange={e => setNewZona(e.target.value)} placeholder="Ej: L5" style={{ border: "1px solid #e4e7ec", borderRadius: 4, padding: "5px 8px", fontSize: 12 }} />
-            <button onClick={agregarZona} style={{ padding: "5px 10px", borderRadius: 4, border: "1px solid #1a3a6b", background: "#fff", color: "#1a3a6b", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>+ Zona</button>
+            <button onClick={agregarZona} style={{ padding: "5px 10px", borderRadius: 4, border: "1px solid #002E5D", background: "#fff", color: "#002E5D", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>+ Zona</button>
           </div>
         </div>
         <div style={{ fontSize: 10, color: "#94a3b8", flexBasis: "100%" }}>Se guarda en tarifas_cobrar_meli_mx. Completá los valores de la nueva fila/columna y apretá "Guardar cambios".</div>
@@ -11519,7 +11519,7 @@ function ConfigPorCobrarMeli() {
       </div>
       {zonas.map(z => (
         <div key={z} style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: 14, marginBottom: 14 }}>
-          <div style={{ fontSize: 13, fontWeight: 700, color: "#1a3a6b", marginBottom: 10 }}>Zona {z}</div>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#002E5D", marginBottom: 10 }}>Zona {z}</div>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
             <thead>
               <tr style={{ background: "#f8fafc", borderBottom: "1px solid #e4e7ec" }}>
@@ -11616,10 +11616,10 @@ function ConfigTarifasEspeciales() {
     <div>
       <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: 14, marginBottom: 14, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
         <div style={{ flex: 1, minWidth: 240 }}>
-          <div style={{ fontSize: 14, fontWeight: 700, color: "#1a3a6b", marginBottom: 4 }}>Tarifas Especiales por Empresa</div>
+          <div style={{ fontSize: 14, fontWeight: 700, color: "#002E5D", marginBottom: 4 }}>Tarifas Especiales por Empresa</div>
           <div style={{ fontSize: 11, color: "#94a3b8" }}>Override de tarifa por empresa (patente → empresa) · gana sobre el tarifario general · {rows.length} reglas · editable</div>
         </div>
-        <button onClick={addRow} style={{ padding: "8px 14px", borderRadius: 4, border: "1px solid #1a3a6b", background: "#fff", color: "#1a3a6b", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>+ Agregar regla</button>
+        <button onClick={addRow} style={{ padding: "8px 14px", borderRadius: 4, border: "1px solid #002E5D", background: "#fff", color: "#002E5D", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>+ Agregar regla</button>
         <button onClick={guardar} disabled={guardando} style={{ padding: "8px 16px", borderRadius: 4, border: "none", background: guardando ? "#94a3b8" : "#16a34a", color: "#fff", fontSize: 12, fontWeight: 600, cursor: guardando ? "wait" : "pointer" }}>{guardando ? "Guardando..." : "Guardar cambios"}</button>
       </div>
       {msg && (<div style={{ background: msg.ok ? "#ecfdf5" : "#fef2f2", border: `1px solid ${msg.ok ? "#a7f3d0" : "#fca5a5"}`, color: msg.ok ? "#065f46" : "#991b1b", borderRadius: 6, padding: 10, marginBottom: 14, fontSize: 12 }}>{msg.txt}</div>)}
@@ -11829,7 +11829,7 @@ function ConfigZonas() {
                   </div>
                 </div>
                 <button onClick={() => abrirCrear(h.sc)}
-                  style={{ padding: "5px 10px", borderRadius: 4, border: "none", background: "#F47B20", color: "#fff", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>
+                  style={{ padding: "5px 10px", borderRadius: 4, border: "none", background: "#FF6600", color: "#fff", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>
                   Mapear
                 </button>
               </div>
@@ -11850,23 +11850,23 @@ function ConfigZonas() {
       <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: 14, marginBottom: 14 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12, flexWrap: "wrap", gap: 10 }}>
           <div>
-            <div style={{ fontSize: 14, fontWeight: 700, color: "#1a3a6b", marginBottom: 4 }}>Mapeo Service Center ↔ Zona</div>
+            <div style={{ fontSize: 14, fontWeight: 700, color: "#002E5D", marginBottom: 4 }}>Mapeo Service Center ↔ Zona</div>
             <div style={{ fontSize: 11, color: "#94a3b8" }}>{activos} Service Centers activos · {data.length} totales</div>
           </div>
           <button onClick={() => abrirCrear()}
-            style={{ padding: "8px 16px", borderRadius: 4, border: "none", background: "#1a3a6b", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+            style={{ padding: "8px 16px", borderRadius: 4, border: "none", background: "#002E5D", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
             + Agregar Service Center
           </button>
         </div>
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
           <button onClick={() => setFiltroZona("todas")}
-            style={{ padding: "5px 12px", borderRadius: 4, border: `1px solid ${filtroZona === "todas" ? "#1a3a6b" : "#e4e7ec"}`,
-              background: filtroZona === "todas" ? "#1a3a6b" : "#fff", color: filtroZona === "todas" ? "#fff" : "#475569",
+            style={{ padding: "5px 12px", borderRadius: 4, border: `1px solid ${filtroZona === "todas" ? "#002E5D" : "#e4e7ec"}`,
+              background: filtroZona === "todas" ? "#002E5D" : "#fff", color: filtroZona === "todas" ? "#fff" : "#475569",
               fontSize: 11, fontWeight: 600, cursor: "pointer" }}>Todas ({data.length})</button>
           {["L1", "L2", "L3", "L4"].map(z => (
             <button key={z} onClick={() => setFiltroZona(z)}
-              style={{ padding: "5px 12px", borderRadius: 4, border: `1px solid ${filtroZona === z ? "#1a3a6b" : "#e4e7ec"}`,
-                background: filtroZona === z ? "#1a3a6b" : "#fff", color: filtroZona === z ? "#fff" : "#475569",
+              style={{ padding: "5px 12px", borderRadius: 4, border: `1px solid ${filtroZona === z ? "#002E5D" : "#e4e7ec"}`,
+                background: filtroZona === z ? "#002E5D" : "#fff", color: filtroZona === z ? "#fff" : "#475569",
                 fontSize: 11, fontWeight: 600, cursor: "pointer" }}>{z} ({conteo[z] || 0})</button>
           ))}
         </div>
@@ -11895,9 +11895,9 @@ function ConfigZonas() {
                 const dadoBaja = sc.vigente_hasta && new Date(sc.vigente_hasta) <= new Date();
                 return (
                   <tr key={sc.id} style={{ borderBottom: "1px solid #f0f0f0", opacity: dadoBaja ? 0.5 : 1 }}>
-                    <td style={{ padding: "10px 14px", fontFamily: "monospace", fontWeight: 700, color: "#1a3a6b" }}>{sc.service_center_id}</td>
+                    <td style={{ padding: "10px 14px", fontFamily: "monospace", fontWeight: 700, color: "#002E5D" }}>{sc.service_center_id}</td>
                     <td style={{ padding: "10px 14px", textAlign: "center" }}>
-                      <span style={{ fontSize: 11, padding: "3px 10px", borderRadius: 4, background: "#1a3a6b", color: "#fff", fontWeight: 600 }}>{sc.zona}</span>
+                      <span style={{ fontSize: 11, padding: "3px 10px", borderRadius: 4, background: "#002E5D", color: "#fff", fontWeight: 600 }}>{sc.zona}</span>
                     </td>
                     <td style={{ padding: "10px 14px", color: sc.ciudad ? "#1f2937" : "#cbd5e1" }}>{sc.ciudad || "—"}</td>
                     <td style={{ padding: "10px 14px", fontSize: 11, color: "#64748b" }}>{sc.observaciones || ""}</td>
@@ -11934,7 +11934,7 @@ function ConfigZonas() {
           style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }}>
           <div onClick={e => e.stopPropagation()}
             style={{ background: "#fff", borderRadius: 8, padding: 20, width: "90%", maxWidth: 480, boxShadow: "0 20px 25px -5px rgba(0,0,0,0.1)" }}>
-            <div style={{ fontSize: 16, fontWeight: 700, color: "#1a3a6b", marginBottom: 16 }}>
+            <div style={{ fontSize: 16, fontWeight: 700, color: "#002E5D", marginBottom: 16 }}>
               {modal.mode === "create" ? "Agregar Service Center" : `Editar ${modal.data.service_center_id}`}
             </div>
 
@@ -11951,8 +11951,8 @@ function ConfigZonas() {
               <div style={{ display: "flex", gap: 6 }}>
                 {["L1", "L2", "L3", "L4"].map(z => (
                   <button key={z} onClick={() => setModal({ ...modal, data: { ...modal.data, zona: z } })}
-                    style={{ flex: 1, padding: "8px 0", borderRadius: 4, border: `1px solid ${modal.data.zona === z ? "#1a3a6b" : "#e4e7ec"}`,
-                      background: modal.data.zona === z ? "#1a3a6b" : "#fff", color: modal.data.zona === z ? "#fff" : "#475569",
+                    style={{ flex: 1, padding: "8px 0", borderRadius: 4, border: `1px solid ${modal.data.zona === z ? "#002E5D" : "#e4e7ec"}`,
+                      background: modal.data.zona === z ? "#002E5D" : "#fff", color: modal.data.zona === z ? "#fff" : "#475569",
                       fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
                     {z}
                   </button>
@@ -11989,7 +11989,7 @@ function ConfigZonas() {
                 Cancelar
               </button>
               <button onClick={guardar} disabled={guardando}
-                style={{ padding: "8px 16px", borderRadius: 4, border: "none", background: guardando ? "#94a3b8" : "#1a3a6b", color: "#fff", fontSize: 12, fontWeight: 600, cursor: guardando ? "wait" : "pointer" }}>
+                style={{ padding: "8px 16px", borderRadius: 4, border: "none", background: guardando ? "#94a3b8" : "#002E5D", color: "#fff", fontSize: 12, fontWeight: 600, cursor: guardando ? "wait" : "pointer" }}>
                 {guardando ? "Guardando..." : modal.mode === "create" ? "Crear" : "Guardar cambios"}
               </button>
             </div>
@@ -12037,7 +12037,7 @@ function ConfigMatrizAuxiliares() {
   return (
     <div>
       <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: 14, marginBottom: 14 }}>
-        <div style={{ fontSize: 14, fontWeight: 700, color: "#1a3a6b", marginBottom: 4 }}>Montos de Auxiliar (Helper)</div>
+        <div style={{ fontSize: 14, fontWeight: 700, color: "#002E5D", marginBottom: 4 }}>Montos de Auxiliar (Helper)</div>
         <div style={{ fontSize: 11, color: "#94a3b8" }}>Lo que se le paga al chofer y lo que MELI nos paga por ruta con helper · alimenta el cálculo</div>
       </div>
       {msg && (<div style={{ background: msg.ok ? "#ecfdf5" : "#fef2f2", border: `1px solid ${msg.ok ? "#a7f3d0" : "#fca5a5"}`, color: msg.ok ? "#065f46" : "#991b1b", borderRadius: 6, padding: 10, marginBottom: 14, fontSize: 12 }}>{msg.txt}</div>)}
@@ -12103,7 +12103,7 @@ function ConfigReglasNS() {
     <div>
       <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: 14, marginBottom: 14, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
         <div style={{ flex: 1, minWidth: 240 }}>
-          <div style={{ fontSize: 14, fontWeight: 700, color: "#1a3a6b", marginBottom: 4 }}>Reglas de Ajuste (Visitado × NS)</div>
+          <div style={{ fontSize: 14, fontWeight: 700, color: "#002E5D", marginBottom: 4 }}>Reglas de Ajuste (Visitado × NS)</div>
           <div style={{ fontSize: 11, color: "#94a3b8" }}>Premio/castigo sobre la tarifa según % visitado y nivel de servicio · alimenta el cálculo</div>
         </div>
         <button onClick={guardar} disabled={guardando} style={{ padding: "8px 16px", borderRadius: 4, border: "none", background: guardando ? "#94a3b8" : "#16a34a", color: "#fff", fontSize: 12, fontWeight: 600, cursor: guardando ? "wait" : "pointer" }}>{guardando ? "Guardando..." : "Guardar"}</button>
@@ -12119,7 +12119,7 @@ function ConfigReglasNS() {
         ))}
       </div>
       <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 6, padding: 14 }}>
-        <div style={{ fontSize: 12, fontWeight: 700, color: "#1a3a6b", marginBottom: 8 }}>Matriz resultante (lo que aplica el cálculo)</div>
+        <div style={{ fontSize: 12, fontWeight: 700, color: "#002E5D", marginBottom: 8 }}>Matriz resultante (lo que aplica el cálculo)</div>
         <div style={{ fontSize: 12, color: "#475569", lineHeight: 1.9 }}>
           <div>· Visitado &lt; {g("vis_min_pago", 90)}% → <b style={{ color: "#991b1b" }}>NO PAGA</b></div>
           <div>· Visitado ≥ {g("vis_premio_min", 99.5)}% y NS &gt; {g("ns_premio_min", 99.5)}% → <b style={{ color: "#16a34a" }}>+{g("ns_premio_pct", 5)}%</b></div>
@@ -12208,8 +12208,8 @@ async function padronTraerTodo(construir) {
   return acumulado;
 }
 function padronRolMeta(isOnlyHelper) {
-  if (isOnlyHelper === true)  return { label: "Helper", color: "#F47B20", bg: "#fff3e6" };
-  if (isOnlyHelper === false) return { label: "Driver", color: "#1a3a6b", bg: "#e8edf5" };
+  if (isOnlyHelper === true)  return { label: "Helper", color: "#FF6600", bg: "#fff3e6" };
+  if (isOnlyHelper === false) return { label: "Driver", color: "#002E5D", bg: "#e8edf5" };
   return { label: "Sin dato", color: "#94a3b8", bg: "#f1f5f9" };
 }
 
@@ -12237,7 +12237,7 @@ function PadronDriversData({ fecha }) {
   const [soloInfractores, setSoloInfractores] = useState(false);
   const [expandidos, setExpandidos] = useState(new Set());
 
-  const PNAVY = "#1a3a6b", PMUTED = "#64748b", PLIGHT = "#94a3b8", PBORDER = "#e4e7ec";
+  const PNAVY = "#002E5D", PMUTED = "#64748b", PLIGHT = "#94a3b8", PBORDER = "#e4e7ec";
 
   useEffect(() => {
     if (!fecha) return;
@@ -12355,19 +12355,19 @@ function PadronDriversData({ fecha }) {
       {/* Toolbar */}
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10, flexWrap: "wrap" }}>
         <input value={busqueda} onChange={e => setBusqueda(e.target.value)} placeholder={`Buscar por nombre, CURP, correo, teléfono o ID…`}
-          style={{ flex: 1, minWidth: 240, maxWidth: 400, padding: "7px 10px", border: `1px solid #d0d5dd`, borderRadius: 6, fontSize: 12, fontFamily: "'Geist', sans-serif" }} />
+          style={{ flex: 1, minWidth: 240, maxWidth: 400, padding: "7px 10px", border: `1px solid #d0d5dd`, borderRadius: 6, fontSize: 12, fontFamily: "'Open Sans', sans-serif" }} />
         <button onClick={() => setSoloInfractores(v => !v)} style={{
           fontSize: 12, fontWeight: 700, padding: "7px 12px", borderRadius: 8, cursor: "pointer",
           border: soloInfractores ? "none" : `1px solid ${PBORDER}`,
           background: soloInfractores ? "#d97706" : "#fff",
           color: soloInfractores ? "#fff" : PMUTED,
-          fontFamily: "'Geist', sans-serif", display: "inline-flex", alignItems: "center", gap: 6,
+          fontFamily: "'Open Sans', sans-serif", display: "inline-flex", alignItems: "center", gap: 6,
         }}>
           <i className="ti ti-alert-triangle" style={{ fontSize: 14 }} />
           {soloInfractores ? `Mostrando infractores (${kpis.infractores})` : "Solo infractores"}
         </button>
         <span style={{ fontSize: 12, color: PMUTED }}>{filtradas.length} de {rows.length}</span>
-        <button onClick={exportar} style={{ marginLeft: "auto", fontSize: 11, fontWeight: 600, padding: "6px 11px", borderRadius: 6, border: "none", background: PNAVY, color: "#fff", cursor: "pointer", fontFamily: "'Geist', sans-serif", display: "inline-flex", alignItems: "center", gap: 5 }}>
+        <button onClick={exportar} style={{ marginLeft: "auto", fontSize: 11, fontWeight: 600, padding: "6px 11px", borderRadius: 6, border: "none", background: PNAVY, color: "#fff", cursor: "pointer", fontFamily: "'Open Sans', sans-serif", display: "inline-flex", alignItems: "center", gap: 5 }}>
           <i className="ti ti-download" style={{ fontSize: 12 }} />Exportar CSV
         </button>
       </div>
@@ -12458,7 +12458,7 @@ function PadronCursos() {
   const [error, setError] = useState(null);
   const [busqueda, setBusqueda] = useState("");
   const [soloOperan, setSoloOperan] = useState(false);
-  const PNAVY = "#1a3a6b", PMUTED = "#64748b", PLIGHT = "#94a3b8", PBORDER = "#e4e7ec";
+  const PNAVY = "#002E5D", PMUTED = "#64748b", PLIGHT = "#94a3b8", PBORDER = "#e4e7ec";
 
   useEffect(() => {
     let alive = true;
@@ -12508,15 +12508,15 @@ function PadronCursos() {
 
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10, flexWrap: "wrap" }}>
         <input value={busqueda} onChange={e => setBusqueda(e.target.value)} placeholder="Buscar por nombre, ID, correo, teléfono…"
-          style={{ flex: 1, minWidth: 240, maxWidth: 400, padding: "7px 10px", border: "1px solid #d0d5dd", borderRadius: 6, fontSize: 12, fontFamily: "'Geist', sans-serif" }} />
+          style={{ flex: 1, minWidth: 240, maxWidth: 400, padding: "7px 10px", border: "1px solid #d0d5dd", borderRadius: 6, fontSize: 12, fontFamily: "'Open Sans', sans-serif" }} />
         <button onClick={() => setSoloOperan(v => !v)} style={{
           fontSize: 12, fontWeight: 700, padding: "7px 12px", borderRadius: 8, cursor: "pointer",
           border: soloOperan ? "none" : `1px solid ${PBORDER}`,
           background: soloOperan ? "#d97706" : "#fff", color: soloOperan ? "#fff" : PMUTED,
-          fontFamily: "'Geist', sans-serif",
+          fontFamily: "'Open Sans', sans-serif",
         }}>{soloOperan ? `Mostrando operativos (${kpis.operan})` : "Solo los que operan hoy"}</button>
         <span style={{ fontSize: 12, color: PMUTED }}>{filtradas.length} de {rows.length}</span>
-        <button onClick={exportar} style={{ marginLeft: "auto", fontSize: 11, fontWeight: 600, padding: "6px 11px", borderRadius: 6, border: "none", background: PNAVY, color: "#fff", cursor: "pointer", fontFamily: "'Geist', sans-serif", display: "inline-flex", alignItems: "center", gap: 5 }}>
+        <button onClick={exportar} style={{ marginLeft: "auto", fontSize: 11, fontWeight: 600, padding: "6px 11px", borderRadius: 6, border: "none", background: PNAVY, color: "#fff", cursor: "pointer", fontFamily: "'Open Sans', sans-serif", display: "inline-flex", alignItems: "center", gap: 5 }}>
           <i className="ti ti-download" style={{ fontSize: 12 }} />Exportar CSV
         </button>
       </div>
@@ -12574,7 +12574,7 @@ function PadronRechazados() {
   const [cargando, setCargando] = useState(false);
   const [msg, setMsg] = useState(null);
   const fileRef = useRef(null);
-  const PNAVY = "#1a3a6b", PMUTED = "#64748b", PLIGHT = "#94a3b8", PBORDER = "#e4e7ec";
+  const PNAVY = "#002E5D", PMUTED = "#64748b", PLIGHT = "#94a3b8", PBORDER = "#e4e7ec";
 
   async function cargar() {
     setLoading(true); setError(null);
@@ -12715,8 +12715,8 @@ function PadronRechazados() {
         <input ref={fileRef} type="file" accept=".xlsx,.xls" onChange={onArchivo} style={{ display: "none" }} id="rech-file" />
         <button onClick={() => fileRef.current && fileRef.current.click()} disabled={cargando} style={{
           fontSize: 12, fontWeight: 700, padding: "9px 16px", borderRadius: 8, border: "none",
-          background: cargando ? "#94a3b8" : "#F47B20", color: "#fff", cursor: cargando ? "default" : "pointer",
-          fontFamily: "'Geist', sans-serif", display: "inline-flex", alignItems: "center", gap: 6,
+          background: cargando ? "#94a3b8" : "#FF6600", color: "#fff", cursor: cargando ? "default" : "pointer",
+          fontFamily: "'Open Sans', sans-serif", display: "inline-flex", alignItems: "center", gap: 6,
         }}>
           <i className={`ti ${cargando ? "ti-loader-2" : "ti-upload"}`} style={{ fontSize: 15 }} />
           {cargando ? "Procesando…" : "Cargar Excel"}
@@ -12735,15 +12735,15 @@ function PadronRechazados() {
 
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10, flexWrap: "wrap" }}>
         <input value={busqueda} onChange={e => setBusqueda(e.target.value)} placeholder="Buscar por CURP, nombre, empresa, SC, supervisor…"
-          style={{ flex: 1, minWidth: 240, maxWidth: 400, padding: "7px 10px", border: "1px solid #d0d5dd", borderRadius: 6, fontSize: 12, fontFamily: "'Geist', sans-serif" }} />
+          style={{ flex: 1, minWidth: 240, maxWidth: 400, padding: "7px 10px", border: "1px solid #d0d5dd", borderRadius: 6, fontSize: 12, fontFamily: "'Open Sans', sans-serif" }} />
         <button onClick={() => setSoloActivos(v => !v)} style={{
           fontSize: 12, fontWeight: 700, padding: "7px 12px", borderRadius: 8, cursor: "pointer",
           border: soloActivos ? "none" : `1px solid ${PBORDER}`,
           background: soloActivos ? "#c0392b" : "#fff", color: soloActivos ? "#fff" : PMUTED,
-          fontFamily: "'Geist', sans-serif",
+          fontFamily: "'Open Sans', sans-serif",
         }}>{soloActivos ? `Solo con viajes (${kpis.con_act})` : "Solo con viajes"}</button>
         <span style={{ fontSize: 12, color: PMUTED }}>{filtradas.length} de {rowsUnicas.length}</span>
-        <button onClick={exportar} style={{ marginLeft: "auto", fontSize: 11, fontWeight: 600, padding: "6px 11px", borderRadius: 6, border: "none", background: PNAVY, color: "#fff", cursor: "pointer", fontFamily: "'Geist', sans-serif", display: "inline-flex", alignItems: "center", gap: 5 }}>
+        <button onClick={exportar} style={{ marginLeft: "auto", fontSize: 11, fontWeight: 600, padding: "6px 11px", borderRadius: 6, border: "none", background: PNAVY, color: "#fff", cursor: "pointer", fontFamily: "'Open Sans', sans-serif", display: "inline-flex", alignItems: "center", gap: 5 }}>
           <i className="ti ti-download" style={{ fontSize: 12 }} />Exportar CSV
         </button>
       </div>
@@ -12809,7 +12809,7 @@ function PadronLimpieza() {
   const [error, setError] = useState(null);
   const [busqueda, setBusqueda] = useState("");
   const [filtroEsc, setFiltroEsc] = useState(null); // escalón seleccionado del embudo
-  const PNAVY = "#1a3a6b", PMUTED = "#64748b", PLIGHT = "#94a3b8", PBORDER = "#e4e7ec";
+  const PNAVY = "#002E5D", PMUTED = "#64748b", PLIGHT = "#94a3b8", PBORDER = "#e4e7ec";
 
   useEffect(() => {
     let alive = true;
@@ -12973,17 +12973,17 @@ function PadronLimpieza() {
       {/* Toolbar */}
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10, flexWrap: "wrap" }}>
         <input value={busqueda} onChange={e => setBusqueda(e.target.value)} placeholder="Buscar por nombre o ID…"
-          style={{ flex: 1, minWidth: 220, maxWidth: 360, padding: "7px 10px", border: "1px solid #d0d5dd", borderRadius: 6, fontSize: 12, fontFamily: "'Geist', sans-serif" }} />
+          style={{ flex: 1, minWidth: 220, maxWidth: 360, padding: "7px 10px", border: "1px solid #d0d5dd", borderRadius: 6, fontSize: 12, fontFamily: "'Open Sans', sans-serif" }} />
         {filtroEsc && (
-          <button onClick={() => setFiltroEsc(null)} style={{ fontSize: 12, fontWeight: 700, padding: "7px 12px", borderRadius: 8, cursor: "pointer", border: "none", background: escMeta(filtroEsc).color, color: "#fff", fontFamily: "'Geist', sans-serif", display: "inline-flex", alignItems: "center", gap: 6 }}>
+          <button onClick={() => setFiltroEsc(null)} style={{ fontSize: 12, fontWeight: 700, padding: "7px 12px", borderRadius: 8, cursor: "pointer", border: "none", background: escMeta(filtroEsc).color, color: "#fff", fontFamily: "'Open Sans', sans-serif", display: "inline-flex", alignItems: "center", gap: 6 }}>
             {escMeta(filtroEsc).label} <i className="ti ti-x" style={{ fontSize: 13 }} />
           </button>
         )}
         <span style={{ fontSize: 12, color: PMUTED }}>{filtradas.length} de {total}</span>
-        <button onClick={descargarExcelPorEscalon} style={{ marginLeft: "auto", fontSize: 11, fontWeight: 700, padding: "6px 12px", borderRadius: 6, border: "none", background: "#1f7a4d", color: "#fff", cursor: "pointer", fontFamily: "'Geist', sans-serif", display: "inline-flex", alignItems: "center", gap: 5 }}>
+        <button onClick={descargarExcelPorEscalon} style={{ marginLeft: "auto", fontSize: 11, fontWeight: 700, padding: "6px 12px", borderRadius: 6, border: "none", background: "#1f7a4d", color: "#fff", cursor: "pointer", fontFamily: "'Open Sans', sans-serif", display: "inline-flex", alignItems: "center", gap: 5 }}>
           <i className="ti ti-file-spreadsheet" style={{ fontSize: 13 }} />Excel por escalón
         </button>
-        <button onClick={exportar} style={{ fontSize: 11, fontWeight: 600, padding: "6px 11px", borderRadius: 6, border: `1px solid ${PBORDER}`, background: "#fff", color: PMUTED, cursor: "pointer", fontFamily: "'Geist', sans-serif", display: "inline-flex", alignItems: "center", gap: 5 }}>
+        <button onClick={exportar} style={{ fontSize: 11, fontWeight: 600, padding: "6px 11px", borderRadius: 6, border: `1px solid ${PBORDER}`, background: "#fff", color: PMUTED, cursor: "pointer", fontFamily: "'Open Sans', sans-serif", display: "inline-flex", alignItems: "center", gap: 5 }}>
           <i className="ti ti-download" style={{ fontSize: 12 }} />CSV vista
         </button>
       </div>
@@ -13137,7 +13137,7 @@ function PadronSaludFlujos() {
           <span style={{ fontSize: 11, color: "#94a3b8" }}>verificado {psFechaHoraCL(chequeado.toISOString()).slice(11)} hrs</span>
         )}
         <button onClick={cargar} disabled={cargando}
-          style={{ marginLeft: "auto", border: "1px solid #e4e7ec", background: "#fff", color: "#64748b", cursor: cargando ? "default" : "pointer", padding: "5px 10px", borderRadius: 6, fontSize: 11, fontWeight: 700, fontFamily: "'Geist', sans-serif", display: "inline-flex", alignItems: "center", gap: 5 }}>
+          style={{ marginLeft: "auto", border: "1px solid #e4e7ec", background: "#fff", color: "#64748b", cursor: cargando ? "default" : "pointer", padding: "5px 10px", borderRadius: 6, fontSize: 11, fontWeight: 700, fontFamily: "'Open Sans', sans-serif", display: "inline-flex", alignItems: "center", gap: 5 }}>
           <i className={`ti ${cargando ? "ti-loader-2" : "ti-refresh"}`} style={{ fontSize: 13 }} />Verificar
         </button>
       </div>
@@ -13150,19 +13150,19 @@ function PadronSaludFlujos() {
       {!cargando && f && (
         <div style={{ marginTop: 9, display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap", background: vig.bg, border: `1px solid ${vig.color}22`, borderRadius: 8, padding: "8px 12px" }}>
           <span style={{ fontSize: 11.5, color: "#64748b" }}>
-            Snapshot vigente <strong style={{ color: "#1a3a6b", fontSize: 12.5 }}>{f.drv && !f.drv._err ? (f.drv.fecha || "—") : "—"}</strong>
+            Snapshot vigente <strong style={{ color: "#002E5D", fontSize: 12.5 }}>{f.drv && !f.drv._err ? (f.drv.fecha || "—") : "—"}</strong>
           </span>
           <span style={{ fontSize: 11.5, color: "#475569", display: "inline-flex", alignItems: "center", gap: 5 }}>
-            <i className="ti ti-user" style={{ fontSize: 13, color: "#1a3a6b" }} />
-            <strong style={{ color: "#1a3a6b" }}>{f.drv && !f.drv._err ? num(f.drv.n) : "—"}</strong> conductores
+            <i className="ti ti-user" style={{ fontSize: 13, color: "#002E5D" }} />
+            <strong style={{ color: "#002E5D" }}>{f.drv && !f.drv._err ? num(f.drv.n) : "—"}</strong> conductores
           </span>
           <span style={{ fontSize: 11.5, color: "#475569", display: "inline-flex", alignItems: "center", gap: 5 }}>
-            <i className="ti ti-truck" style={{ fontSize: 13, color: "#1a3a6b" }} />
-            <strong style={{ color: "#1a3a6b" }}>{f.veh && !f.veh._err ? num(f.veh.n) : "—"}</strong> vehículos
+            <i className="ti ti-truck" style={{ fontSize: 13, color: "#002E5D" }} />
+            <strong style={{ color: "#002E5D" }}>{f.veh && !f.veh._err ? num(f.veh.n) : "—"}</strong> vehículos
           </span>
           <span style={{ fontSize: 11.5, color: "#475569", display: "inline-flex", alignItems: "center", gap: 5 }}>
-            <i className="ti ti-id" style={{ fontSize: 13, color: "#1a3a6b" }} />
-            <strong style={{ color: "#1a3a6b" }}>{f.det && !f.det._err ? num(f.det.n) : "—"}</strong> con data completa
+            <i className="ti ti-id" style={{ fontSize: 13, color: "#002E5D" }} />
+            <strong style={{ color: "#002E5D" }}>{f.det && !f.det._err ? num(f.det.n) : "—"}</strong> con data completa
           </span>
           <span style={{ fontSize: 10.5, color: "#94a3b8", marginLeft: "auto" }}>
             conductores y vehículos salen del mismo flujo master
@@ -13180,7 +13180,7 @@ function PadronSaludFlujos() {
             <div key={fu.k} style={{ background: "#f8fafc", border: "1px solid #e4e7ec", borderLeft: "3px solid #94a3b8", borderRadius: 8, padding: "8px 11px" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 3 }}>
                 <i className={`ti ${fu.icon}`} style={{ fontSize: 13, color: "#64748b" }} />
-                <span style={{ fontSize: 11.5, fontWeight: 800, color: "#1a3a6b" }}>{fu.label}</span>
+                <span style={{ fontSize: 11.5, fontWeight: 800, color: "#002E5D" }}>{fu.label}</span>
               </div>
               <div style={{ fontSize: 11, fontWeight: 800, color: "#334155", marginBottom: 2 }}>
                 {cargando ? "…" : (d && d._err ? "Error" : dias === 0 ? "Hoy" : dias == null ? "Sin datos" : `hace ${dias} d`)}
@@ -13359,7 +13359,7 @@ function PadronCorridasHoy() {
   const btnStyle = {
     border: "none", color: "#fff",
     padding: "7px 14px", borderRadius: 7, fontSize: 12, fontWeight: 800,
-    fontFamily: "'Geist', sans-serif", display: "inline-flex", alignItems: "center", gap: 6,
+    fontFamily: "'Open Sans', sans-serif", display: "inline-flex", alignItems: "center", gap: 6,
   };
 
   return (
@@ -13373,14 +13373,14 @@ function PadronCorridasHoy() {
           title={corriendo ? "Ya hay una corrida en curso" : "Corre el flujo master en este momento (queda como corrida manual)"}
           style={{
             ...btnStyle, marginLeft: "auto",
-            background: (ejecutando || corriendo) ? "#94a3b8" : "#F47B20",
+            background: (ejecutando || corriendo) ? "#94a3b8" : "#FF6600",
             cursor: (ejecutando || corriendo) ? "not-allowed" : "pointer",
           }}>
           <i className={`ti ${(ejecutando || corriendo) ? "ti-loader-2" : "ti-player-play"}`} style={{ fontSize: 14 }} />
           {ejecutando ? "Disparando…" : corriendo ? `Corriendo… ${Math.floor(vuelta * 15 / 60)} min` : "Ejecutar ahora"}
         </button>
         <button onClick={() => { cargar(); cargarSesion(); }} disabled={cargando}
-          style={{ border: "1px solid #e4e7ec", background: "#fff", color: "#64748b", cursor: cargando ? "default" : "pointer", padding: "6px 11px", borderRadius: 6, fontSize: 11, fontWeight: 700, fontFamily: "'Geist', sans-serif", display: "inline-flex", alignItems: "center", gap: 5 }}>
+          style={{ border: "1px solid #e4e7ec", background: "#fff", color: "#64748b", cursor: cargando ? "default" : "pointer", padding: "6px 11px", borderRadius: 6, fontSize: 11, fontWeight: 700, fontFamily: "'Open Sans', sans-serif", display: "inline-flex", alignItems: "center", gap: 5 }}>
           <i className={`ti ${cargando ? "ti-loader-2" : "ti-refresh"}`} style={{ fontSize: 13 }} />Actualizar
         </button>
       </div>
@@ -13438,7 +13438,7 @@ function PadronCorridasHoy() {
               background: m.ok ? "#f6fdf9" : "#fef6f5", border: "1px solid #e4e7ec",
               borderLeft: `3px solid ${m.ok ? "#10b981" : "#ef4444"}`, borderRadius: 8, padding: "7px 12px",
             }}>
-              <span style={{ fontSize: 13, fontWeight: 800, color: "#1a3a6b", minWidth: 52, fontVariantNumeric: "tabular-nums" }}>{pcHoraCL(m.ejecutado_at)}</span>
+              <span style={{ fontSize: 13, fontWeight: 800, color: "#002E5D", minWidth: 52, fontVariantNumeric: "tabular-nums" }}>{pcHoraCL(m.ejecutado_at)}</span>
               <span style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "#fff", border: `1px solid ${m.ok ? "#10b98144" : "#ef444444"}`, color: m.ok ? "#065f46" : "#991b1b", fontSize: 11, fontWeight: 800, padding: "3px 9px", borderRadius: 999, minWidth: 100, justifyContent: "center" }}>
                 <i className={`ti ${m.ok ? "ti-circle-check" : "ti-circle-x"}`} style={{ fontSize: 13 }} />{m.ok ? "OK" : "Falló"}
               </span>
@@ -13459,7 +13459,7 @@ function PadronCorridasHoy() {
 function PadronMeliAdmin({ usuario }) {
   const [mundo, setMundo] = useState("drivers"); // drivers (principal) | vehiculos
   return (
-    <div style={{ fontFamily: "'Geist', sans-serif", background: "#f0f2f5", minHeight: "60vh" }}>
+    <div style={{ fontFamily: "'Open Sans', sans-serif", background: "#f0f2f5", minHeight: "60vh" }}>
       <PadronSaludFlujos />
       <PadronCorridasHoy />
       <div style={{ background: "#fff", borderBottom: "1px solid #e4e7ec", padding: "10px 24px", display: "flex", gap: 8, alignItems: "center" }}>
@@ -13473,8 +13473,8 @@ function PadronMeliAdmin({ usuario }) {
         ].map(m => (
           <button key={m.id} onClick={() => setMundo(m.id)} style={{
             border: "none", cursor: "pointer", padding: "7px 16px", borderRadius: 8,
-            fontSize: 13, fontWeight: 700, fontFamily: "'Geist', sans-serif",
-            background: mundo === m.id ? "#1a3a6b" : "#eef2f7",
+            fontSize: 13, fontWeight: 700, fontFamily: "'Open Sans', sans-serif",
+            background: mundo === m.id ? "#002E5D" : "#eef2f7",
             color: mundo === m.id ? "#fff" : "#64748b",
             display: "inline-flex", alignItems: "center", gap: 6,
           }}>
@@ -13670,7 +13670,7 @@ function PadronMundo({ tipo }) {
     return dataRows.filter(r => cfg.cols.some(c => String(r[c] ?? "").toLowerCase().includes(q)));
   }, [dataRows, busqueda, tipo]);
 
-  const PNAVY = "#1a3a6b", PMUTED = "#64748b", PLIGHT = "#94a3b8", PBORDER = "#e4e7ec", PORANGE = "#F47B20";
+  const PNAVY = "#002E5D", PMUTED = "#64748b", PLIGHT = "#94a3b8", PBORDER = "#e4e7ec", PORANGE = "#FF6600";
 
   const subTabs = [
     { id: "data", label: "Data completa", icon: "ti-table" },
@@ -13682,7 +13682,7 @@ function PadronMundo({ tipo }) {
   const selStyle = {
     fontSize: 12, fontWeight: 600, padding: "6px 10px", borderRadius: 6,
     border: `1px solid ${PBORDER}`, background: "#fff", color: PNAVY,
-    fontFamily: "'Geist', sans-serif", cursor: "pointer", outline: "none",
+    fontFamily: "'Open Sans', sans-serif", cursor: "pointer", outline: "none",
   };
 
   return (
@@ -13743,10 +13743,10 @@ function PadronMundo({ tipo }) {
               <div>
                 <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
                   <input value={busqueda} onChange={e => setBusqueda(e.target.value)} placeholder={`Buscar en ${dataRows.length} ${cfg.label}…`}
-                    style={{ flex: 1, maxWidth: 360, padding: "7px 10px", border: `1px solid #d0d5dd`, borderRadius: 6, fontSize: 12, fontFamily: "'Geist', sans-serif" }} />
+                    style={{ flex: 1, maxWidth: 360, padding: "7px 10px", border: `1px solid #d0d5dd`, borderRadius: 6, fontSize: 12, fontFamily: "'Open Sans', sans-serif" }} />
                   <span style={{ fontSize: 12, color: PMUTED }}>{dataFiltrada.length} de {dataRows.length}</span>
                   <button onClick={() => padronCsv(cfg.cols, dataFiltrada.map(r => cfg.cols.map(c => padronFmt(r[c]))), `padron_${tipo}`)}
-                    style={{ marginLeft: "auto", fontSize: 11, fontWeight: 600, padding: "6px 11px", borderRadius: 6, border: "none", background: PNAVY, color: "#fff", cursor: "pointer", fontFamily: "'Geist', sans-serif", display: "inline-flex", alignItems: "center", gap: 5 }}>
+                    style={{ marginLeft: "auto", fontSize: 11, fontWeight: 600, padding: "6px 11px", borderRadius: 6, border: "none", background: PNAVY, color: "#fff", cursor: "pointer", fontFamily: "'Open Sans', sans-serif", display: "inline-flex", alignItems: "center", gap: 5 }}>
                     <i className="ti ti-download" style={{ fontSize: 12 }} />Exportar CSV
                   </button>
                 </div>
@@ -13811,7 +13811,7 @@ function PadronMundo({ tipo }) {
                   <div style={{ padding: "8px 14px", borderBottom: `1px solid ${PBORDER}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                     <div style={{ fontSize: 11, color: PMUTED }}>{repRows.length} placas con variante normal + SDD · snapshot {fechaSel}</div>
                     <button onClick={() => padronCsv(["placa", "variantes", "mismo_tipo_base", "detalle"], repRows.map(r => [r.placa_norm, r.variantes, r.mismo_tipo ? "Sí" : "No", r.detalle]), "placas_repetidas_sdd")}
-                      style={{ fontSize: 11, fontWeight: 600, padding: "5px 10px", borderRadius: 6, border: "none", background: PNAVY, color: "#fff", cursor: "pointer", fontFamily: "'Geist', sans-serif", display: "inline-flex", alignItems: "center", gap: 5 }}>
+                      style={{ fontSize: 11, fontWeight: 600, padding: "5px 10px", borderRadius: 6, border: "none", background: PNAVY, color: "#fff", cursor: "pointer", fontFamily: "'Open Sans', sans-serif", display: "inline-flex", alignItems: "center", gap: 5 }}>
                       <i className="ti ti-download" style={{ fontSize: 12 }} />Exportar CSV
                     </button>
                   </div>
@@ -13903,7 +13903,7 @@ function PadronMundo({ tipo }) {
 }
 
 function PadronDiffTabla({ titulo, rows, cols, tipo, archivo, vacio }) {
-  const color = titulo === "Altas" ? "#10b981" : titulo === "Bajas" ? "#dc2626" : "#F47B20";
+  const color = titulo === "Altas" ? "#10b981" : titulo === "Bajas" ? "#dc2626" : "#FF6600";
   const exportar = () => padronCsv(
     cols.map(c => c.l),
     rows.map(r => cols.map(c => r[c.k] == null ? "" : r[c.k])),
@@ -13912,12 +13912,12 @@ function PadronDiffTabla({ titulo, rows, cols, tipo, archivo, vacio }) {
   return (
     <div style={{ background: "#fff", borderRadius: 12, border: "0.5px solid #e4e7ec", overflow: "hidden" }}>
       <div style={{ padding: "8px 14px", borderBottom: "1px solid #e4e7ec", display: "flex", justifyContent: "space-between", alignItems: "center", background: "#f8fafc" }}>
-        <div style={{ fontSize: 12, fontWeight: 700, color: "#1a3a6b", display: "inline-flex", alignItems: "center", gap: 6 }}>
+        <div style={{ fontSize: 12, fontWeight: 700, color: "#002E5D", display: "inline-flex", alignItems: "center", gap: 6 }}>
           <span style={{ width: 8, height: 8, borderRadius: "50%", background: color, display: "inline-block" }} />
           {titulo} <span style={{ color: "#94a3b8", fontWeight: 600 }}>({rows.length})</span>
         </div>
         {rows.length > 0 && (
-          <button onClick={exportar} style={{ fontSize: 11, fontWeight: 600, padding: "5px 10px", borderRadius: 6, border: "none", background: "#1a3a6b", color: "#fff", cursor: "pointer", fontFamily: "'Geist', sans-serif", display: "inline-flex", alignItems: "center", gap: 5 }}>
+          <button onClick={exportar} style={{ fontSize: 11, fontWeight: 600, padding: "5px 10px", borderRadius: 6, border: "none", background: "#002E5D", color: "#fff", cursor: "pointer", fontFamily: "'Open Sans', sans-serif", display: "inline-flex", alignItems: "center", gap: 5 }}>
             <i className="ti ti-download" style={{ fontSize: 12 }} />CSV
           </button>
         )}
@@ -13965,7 +13965,7 @@ function ApTh({ children }) {
 }
 
 function ApTd({ children, bold, muted, mono, center, small }) {
-  return <td style={{ padding: '8px 10px', fontSize: small ? 11 : 12, fontFamily: mono ? 'monospace' : "'Geist', sans-serif", color: muted ? '#64748b' : '#1a1a1a', fontWeight: bold ? 600 : 'normal', textAlign: center ? 'center' : 'left' }}>{children}</td>;
+  return <td style={{ padding: '8px 10px', fontSize: small ? 11 : 12, fontFamily: mono ? 'monospace' : "'Open Sans', sans-serif", color: muted ? '#64748b' : '#1a1a1a', fontWeight: bold ? 600 : 'normal', textAlign: center ? 'center' : 'left' }}>{children}</td>;
 }
 
 const PREFACTURAS_WEBHOOK = "https://bigticket2026.app.n8n.cloud/webhook/prefacturas-enviar-mx";
@@ -14169,11 +14169,11 @@ function ModuloPrefacturasMX({ usuario }) {
             <button key={t.id} onClick={() => setSubtab(t.id)}
               style={{
                 padding: "8px 16px", borderRadius: 8,
-                border: `1px solid ${subtab === t.id ? "#1a3a6b" : "#e4e7ec"}`,
-                background: subtab === t.id ? "#1a3a6b" : "#fff",
+                border: `1px solid ${subtab === t.id ? "#002E5D" : "#e4e7ec"}`,
+                background: subtab === t.id ? "#002E5D" : "#fff",
                 color: subtab === t.id ? "#fff" : "#475569",
                 fontSize: 12, fontWeight: 600, cursor: "pointer",
-                fontFamily: "Geist, sans-serif",
+                fontFamily: "'Open Sans', sans-serif",
               }}>
               {t.icon} {t.label}
             </button>
@@ -14581,7 +14581,7 @@ function PrefEnvioMasivo({ transportistas, parametros, usuario, onActualizarMaes
         }}
         onClick={() => pdfInputRef.current?.click()}
         style={{
-          border: `3px dashed ${arrastrando ? "#F47B20" : "#1a3a6b"}`,
+          border: `3px dashed ${arrastrando ? "#FF6600" : "#002E5D"}`,
           borderRadius: 16,
           padding: "40px 24px",
           textAlign: "center",
@@ -14592,7 +14592,7 @@ function PrefEnvioMasivo({ transportistas, parametros, usuario, onActualizarMaes
         }}
       >
         <div style={{ fontSize: 48, marginBottom: 10 }}>📄</div>
-        <div style={{ fontSize: 17, color: "#1a3a6b", fontWeight: 700, marginBottom: 6 }}>
+        <div style={{ fontSize: 17, color: "#002E5D", fontWeight: 700, marginBottom: 6 }}>
           {pdfsEnProceso > 0
             ? `Procesando PDFs... (${pdfsEnProceso} pendientes)`
             : arrastrando
@@ -14607,17 +14607,17 @@ function PrefEnvioMasivo({ transportistas, parametros, usuario, onActualizarMaes
         {filas.length > 0 && pdfsEnProceso === 0 && (
           <div style={{
             marginTop: 16, padding: "8px 14px", background: "#fff",
-            border: "1px solid #1a3a6b", borderRadius: 10,
+            border: "1px solid #002E5D", borderRadius: 10,
             display: "inline-flex", alignItems: "center", gap: 12,
           }}>
-            <span style={{ fontSize: 13, color: "#1a3a6b", fontWeight: 700 }}>
+            <span style={{ fontSize: 13, color: "#002E5D", fontWeight: 700 }}>
               ✓ {filas.length} PDF{filas.length === 1 ? "" : "s"} cargado{filas.length === 1 ? "" : "s"}
             </span>
             <button onClick={e => { e.stopPropagation(); limpiarTodo(); }}
               style={{
                 background: "#fee2e2", border: "none", borderRadius: 6,
                 padding: "4px 10px", fontSize: 11, color: "#991b1b",
-                cursor: "pointer", fontWeight: 600, fontFamily: "Geist, sans-serif",
+                cursor: "pointer", fontWeight: 600, fontFamily: "'Open Sans', sans-serif",
               }}>Quitar todos</button>
           </div>
         )}
@@ -14641,7 +14641,7 @@ function PrefEnvioMasivo({ transportistas, parametros, usuario, onActualizarMaes
             style={{
               background: "transparent", border: "1px solid #e4e7ec", borderRadius: 6,
               padding: "4px 10px", fontSize: 11, color: "#64748b", cursor: "pointer",
-              fontWeight: 600, fontFamily: "Geist, sans-serif",
+              fontWeight: 600, fontFamily: "'Open Sans', sans-serif",
             }}>↺ Restaurar default</button>
         </div>
 
@@ -14672,7 +14672,7 @@ function PrefEnvioMasivo({ transportistas, parametros, usuario, onActualizarMaes
           <span style={{ fontSize: 11, color: "#64748b", fontWeight: 600 }}>Variables disponibles:</span>
           {VARIABLES_PLANTILLA.map(v => (
             <code key={v} style={{
-              background: "#eef2ff", color: "#1a3a6b", padding: "2px 8px",
+              background: "#eef2ff", color: "#002E5D", padding: "2px 8px",
               borderRadius: 4, fontSize: 11, fontFamily: "monospace",
             }}>{"{" + v + "}"}</code>
           ))}
@@ -14680,7 +14680,7 @@ function PrefEnvioMasivo({ transportistas, parametros, usuario, onActualizarMaes
 
         <div style={{
           marginTop: 12, padding: "10px 12px", background: "#eef2ff", borderRadius: 8,
-          fontSize: 11, color: "#1a3a6b",
+          fontSize: 11, color: "#002E5D",
         }}>
           💡 Las variables se reemplazan automáticamente con los datos extraídos de cada PDF.
           Tus cambios se guardan automáticamente en este navegador para la próxima vez.
@@ -14693,7 +14693,7 @@ function PrefEnvioMasivo({ transportistas, parametros, usuario, onActualizarMaes
           display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
           gap: 10, marginBottom: 14,
         }}>
-          <IndicadorPF label="PDFs procesados" valor={filas.length} color="#1a3a6b" />
+          <IndicadorPF label="PDFs procesados" valor={filas.length} color="#002E5D" />
           <IndicadorPF label="Listas para enviar" valor={totalListos} color="#16a34a" />
           <IndicadorPF label="Con errores" valor={totalConErrores} color="#dc2626" />
         </div>
@@ -14733,7 +14733,7 @@ function PrefEnvioMasivo({ transportistas, parametros, usuario, onActualizarMaes
               <div style={{ height: 8, background: "#fef3c7", borderRadius: 4, overflow: "hidden" }}>
                 <div style={{
                   width: `${(progreso.actual / progreso.total) * 100}%`,
-                  height: "100%", background: "#F47B20", transition: "width 0.3s",
+                  height: "100%", background: "#FF6600", transition: "width 0.3s",
                 }} />
               </div>
             </div>
@@ -14883,8 +14883,8 @@ function FilaPrefactura({ fila, enEdicion, onEdit, onGuardar, onCancelar, onElim
   if (enEdicion) {
     return (
       <tr style={{ background: "#eff6ff" }}>
-        <td colSpan={7} style={{ padding: 14, borderBottom: "2px solid #1a3a6b" }}>
-          <div style={{ fontSize: 12, fontWeight: 700, color: "#1a3a6b", marginBottom: 10 }}>
+        <td colSpan={7} style={{ padding: 14, borderBottom: "2px solid #002E5D" }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: "#002E5D", marginBottom: 10 }}>
             ✏️ Editando: {fila.parsed.transportista || fila.nombre} · {fila.parsed.ceco || "—"} · {fila.parsed.periodo || "—"}
           </div>
           <div className="two-col" style={{ marginBottom: 10 }}>
@@ -14919,7 +14919,7 @@ function FilaPrefactura({ fila, enEdicion, onEdit, onGuardar, onCancelar, onElim
               style={{
                 background: "#fff", border: "1px solid #e4e7ec", borderRadius: 8,
                 padding: "7px 14px", fontSize: 12, color: "#475569", cursor: "pointer",
-                fontFamily: "Geist, sans-serif", fontWeight: 600,
+                fontFamily: "'Open Sans', sans-serif", fontWeight: 600,
               }}>Cancelar</button>
             <button onClick={() => onGuardar({
               editTo: to, editCc: cc, editBcc: bcc,
@@ -14950,7 +14950,7 @@ function FilaPrefactura({ fila, enEdicion, onEdit, onGuardar, onCancelar, onElim
             style={{
               marginTop: 4, background: "#fef2f2", border: "1px solid #fca5a5",
               borderRadius: 6, padding: "2px 8px", fontSize: 10, color: "#991b1b",
-              cursor: "pointer", fontWeight: 600, fontFamily: "Geist, sans-serif",
+              cursor: "pointer", fontWeight: 600, fontFamily: "'Open Sans', sans-serif",
             }}>+ Agregar a Supabase</button>
         )}
       </td>
@@ -14959,7 +14959,7 @@ function FilaPrefactura({ fila, enEdicion, onEdit, onGuardar, onCancelar, onElim
           <>
             <span style={{
               background: fila.param ? "#eef2ff" : "#fef2f2",
-              color: fila.param ? "#1a3a6b" : "#991b1b",
+              color: fila.param ? "#002E5D" : "#991b1b",
               padding: "2px 8px", borderRadius: 4, fontSize: 11, fontWeight: 600,
             }}>{fila.parsed.ceco}</span>
             {tieneCECONoRegistrado && (
@@ -14968,7 +14968,7 @@ function FilaPrefactura({ fila, enEdicion, onEdit, onGuardar, onCancelar, onElim
                   display: "block", marginTop: 4,
                   background: "#fef2f2", border: "1px solid #fca5a5",
                   borderRadius: 6, padding: "2px 8px", fontSize: 10, color: "#991b1b",
-                  cursor: "pointer", fontWeight: 600, fontFamily: "Geist, sans-serif",
+                  cursor: "pointer", fontWeight: 600, fontFamily: "'Open Sans', sans-serif",
                 }}>+ Agregar CECO</button>
             )}
           </>
@@ -14996,15 +14996,15 @@ function FilaPrefactura({ fila, enEdicion, onEdit, onGuardar, onCancelar, onElim
             disabled={enviando || fila.estadoEnvio === "ok"}
             style={{
               background: "transparent", border: "1px solid #e4e7ec", borderRadius: 6,
-              padding: "3px 8px", fontSize: 11, color: "#1a3a6b", cursor: "pointer",
-              fontFamily: "Geist, sans-serif", fontWeight: 600,
+              padding: "3px 8px", fontSize: 11, color: "#002E5D", cursor: "pointer",
+              fontFamily: "'Open Sans', sans-serif", fontWeight: 600,
               opacity: (enviando || fila.estadoEnvio === "ok") ? 0.4 : 1,
             }}>Editar</button>
           <button onClick={onEliminar} disabled={enviando}
             style={{
               background: "transparent", border: "1px solid #fca5a5", borderRadius: 6,
               padding: "3px 8px", fontSize: 11, color: "#991b1b", cursor: "pointer",
-              fontFamily: "Geist, sans-serif", fontWeight: 600,
+              fontFamily: "'Open Sans', sans-serif", fontWeight: 600,
               opacity: enviando ? 0.4 : 1,
             }}>Quitar</button>
         </div>
@@ -15132,9 +15132,9 @@ function PrefTransportistas({ data, onChange }) {
           />
           <button onClick={() => setMostrarImportador(true)}
             style={{
-              background: "#fff", border: "1px solid #1a3a6b", borderRadius: 8,
-              padding: "9px 16px", fontSize: 13, color: "#1a3a6b", cursor: "pointer",
-              fontFamily: "Geist, sans-serif", fontWeight: 600,
+              background: "#fff", border: "1px solid #002E5D", borderRadius: 8,
+              padding: "9px 16px", fontSize: 13, color: "#002E5D", cursor: "pointer",
+              fontFamily: "'Open Sans', sans-serif", fontWeight: 600,
             }}>
             📤 Importar Excel
           </button>
@@ -15217,14 +15217,14 @@ function PrefTransportistas({ data, onChange }) {
                       <button onClick={() => setEditando(t.id)}
                         style={{
                           background: "transparent", border: "1px solid #e4e7ec", borderRadius: 6,
-                          padding: "3px 8px", fontSize: 11, color: "#1a3a6b", cursor: "pointer",
-                          fontWeight: 600, fontFamily: "Geist, sans-serif",
+                          padding: "3px 8px", fontSize: 11, color: "#002E5D", cursor: "pointer",
+                          fontWeight: 600, fontFamily: "'Open Sans', sans-serif",
                         }}>Editar</button>
                       <button onClick={() => handleEliminar(t.id, t.nombre)}
                         style={{
                           background: "transparent", border: "1px solid #fca5a5", borderRadius: 6,
                           padding: "3px 8px", fontSize: 11, color: "#991b1b", cursor: "pointer",
-                          fontWeight: 600, fontFamily: "Geist, sans-serif",
+                          fontWeight: 600, fontFamily: "'Open Sans', sans-serif",
                         }}>Eliminar</button>
                     </div>
                   </td>
@@ -15298,7 +15298,7 @@ function ModalEdicionTransportista({ inicial, esNuevo, editandoId, onCancelar, o
         background: "#fff", borderRadius: 14, padding: 24, maxWidth: 600, width: "100%",
         maxHeight: "90vh", overflowY: "auto",
       }}>
-        <div style={{ fontSize: 16, fontWeight: 700, color: "#1a3a6b", marginBottom: 16 }}>
+        <div style={{ fontSize: 16, fontWeight: 700, color: "#002E5D", marginBottom: 16 }}>
           {esNuevo ? "Nuevo transportista" : "Editar transportista"}
         </div>
         <div className="field-row">
@@ -15345,7 +15345,7 @@ function ModalEdicionTransportista({ inicial, esNuevo, editandoId, onCancelar, o
             style={{
               background: "#fff", border: "1px solid #e4e7ec", borderRadius: 8,
               padding: "8px 14px", fontSize: 12, color: "#475569", cursor: "pointer",
-              fontFamily: "Geist, sans-serif", fontWeight: 600,
+              fontFamily: "'Open Sans', sans-serif", fontWeight: 600,
             }}>Cancelar</button>
           <button onClick={handleGuardar} disabled={guardando} className="btn-blue"
             style={{ padding: "8px 14px", fontSize: 12 }}>
@@ -15391,7 +15391,7 @@ function PrefParametros({ data, onChange }) {
       </div>
 
       <div className="form-card" style={{ background: "#eff6ff", borderColor: "#bfdbfe" }}>
-        <div style={{ fontSize: 13, fontWeight: 700, color: "#1a3a6b", marginBottom: 6 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: "#002E5D", marginBottom: 6 }}>
           💡 Sobre el asunto y cuerpo del correo
         </div>
         <div style={{ fontSize: 12, color: "#1e40af" }}>
@@ -15422,7 +15422,7 @@ function PrefParametros({ data, onChange }) {
                 <tr key={p.id}>
                   <td style={pf_td()}>
                     <span style={{
-                      background: "#eef2ff", color: "#1a3a6b", padding: "3px 10px",
+                      background: "#eef2ff", color: "#002E5D", padding: "3px 10px",
                       borderRadius: 4, fontSize: 12, fontWeight: 700,
                     }}>{p.ceco}</span>
                   </td>
@@ -15440,14 +15440,14 @@ function PrefParametros({ data, onChange }) {
                       <button onClick={() => setEditando(p.id)}
                         style={{
                           background: "transparent", border: "1px solid #e4e7ec", borderRadius: 6,
-                          padding: "3px 8px", fontSize: 11, color: "#1a3a6b", cursor: "pointer",
-                          fontWeight: 600, fontFamily: "Geist, sans-serif",
+                          padding: "3px 8px", fontSize: 11, color: "#002E5D", cursor: "pointer",
+                          fontWeight: 600, fontFamily: "'Open Sans', sans-serif",
                         }}>Editar</button>
                       <button onClick={() => handleEliminar(p.id, p.ceco)}
                         style={{
                           background: "transparent", border: "1px solid #fca5a5", borderRadius: 6,
                           padding: "3px 8px", fontSize: 11, color: "#991b1b", cursor: "pointer",
-                          fontWeight: 600, fontFamily: "Geist, sans-serif",
+                          fontWeight: 600, fontFamily: "'Open Sans', sans-serif",
                         }}>Eliminar</button>
                     </div>
                   </td>
@@ -15509,7 +15509,7 @@ function ModalEdicionParametro({ inicial, esNuevo, editandoId, onCancelar, onGua
         background: "#fff", borderRadius: 14, padding: 24, maxWidth: 600, width: "100%",
         maxHeight: "90vh", overflowY: "auto",
       }}>
-        <div style={{ fontSize: 16, fontWeight: 700, color: "#1a3a6b", marginBottom: 16 }}>
+        <div style={{ fontSize: 16, fontWeight: 700, color: "#002E5D", marginBottom: 16 }}>
           {esNuevo ? "Nuevo CECO" : "Editar parámetros del CECO"}
         </div>
         <div className="two-col">
@@ -15537,7 +15537,7 @@ function ModalEdicionParametro({ inicial, esNuevo, editandoId, onCancelar, onGua
         </div>
         <div style={{
           marginTop: 8, padding: "10px 12px", background: "#eff6ff", borderRadius: 8,
-          fontSize: 11, color: "#1a3a6b",
+          fontSize: 11, color: "#002E5D",
         }}>
           💡 El asunto y cuerpo del correo se editan en la sub-tab "Envío masivo" antes de cada lote.
         </div>
@@ -15546,7 +15546,7 @@ function ModalEdicionParametro({ inicial, esNuevo, editandoId, onCancelar, onGua
             style={{
               background: "#fff", border: "1px solid #e4e7ec", borderRadius: 8,
               padding: "8px 14px", fontSize: 12, color: "#475569", cursor: "pointer",
-              fontFamily: "Geist, sans-serif", fontWeight: 600,
+              fontFamily: "'Open Sans', sans-serif", fontWeight: 600,
             }}>Cancelar</button>
           <button onClick={handleGuardar} disabled={guardando} className="btn-blue"
             style={{ padding: "8px 14px", fontSize: 12 }}>
@@ -15610,7 +15610,7 @@ function PrefHistorial({ pais = "MX" }) {
         display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
         gap: 10, marginBottom: 14,
       }}>
-        <IndicadorPF label="Total registros" valor={stats.total} color="#1a3a6b" />
+        <IndicadorPF label="Total registros" valor={stats.total} color="#002E5D" />
         <IndicadorPF label="Enviados OK" valor={stats.ok} color="#16a34a" />
         <IndicadorPF label="Fallidos" valor={stats.err} color="#dc2626" />
       </div>
@@ -15635,7 +15635,7 @@ function PrefHistorial({ pais = "MX" }) {
           <button onClick={cargar} style={{
             background: "#fff", border: "1px solid #e4e7ec", borderRadius: 8,
             padding: "8px 14px", fontSize: 12, color: "#475569", cursor: "pointer",
-            fontFamily: "Geist, sans-serif", fontWeight: 600,
+            fontFamily: "'Open Sans', sans-serif", fontWeight: 600,
           }}>🔄 Refrescar</button>
         </div>
       </div>
@@ -15680,7 +15680,7 @@ function PrefHistorial({ pais = "MX" }) {
                     <td style={pf_td()}>{l.transportista || "—"}</td>
                     <td style={pf_td()}>
                       <span style={{
-                        background: "#eef2ff", color: "#1a3a6b", padding: "2px 8px",
+                        background: "#eef2ff", color: "#002E5D", padding: "2px 8px",
                         borderRadius: 4, fontSize: 11, fontWeight: 600,
                       }}>{l.ceco || "—"}</span>
                     </td>
@@ -15733,22 +15733,22 @@ function ModuloPrefacturasEnvio({ usuario }) {
           <button onClick={() => setPais("MX")}
             style={{
               padding: "8px 18px", borderRadius: 8,
-              border: `1px solid ${pais === "MX" ? "#1a3a6b" : "#e4e7ec"}`,
-              background: pais === "MX" ? "#1a3a6b" : "#fff",
+              border: `1px solid ${pais === "MX" ? "#002E5D" : "#e4e7ec"}`,
+              background: pais === "MX" ? "#002E5D" : "#fff",
               color: pais === "MX" ? "#fff" : "#475569",
               fontSize: 13, fontWeight: 600, cursor: "pointer",
-              fontFamily: "Geist, sans-serif",
+              fontFamily: "'Open Sans', sans-serif",
             }}>
             🇲🇽 México
           </button>
           <button onClick={() => setPais("CL")}
             style={{
               padding: "8px 18px", borderRadius: 8,
-              border: `1px solid ${pais === "CL" ? "#1a3a6b" : "#e4e7ec"}`,
-              background: pais === "CL" ? "#1a3a6b" : "#fff",
+              border: `1px solid ${pais === "CL" ? "#002E5D" : "#e4e7ec"}`,
+              background: pais === "CL" ? "#002E5D" : "#fff",
               color: pais === "CL" ? "#fff" : "#475569",
               fontSize: 13, fontWeight: 600, cursor: "pointer",
-              fontFamily: "Geist, sans-serif",
+              fontFamily: "'Open Sans', sans-serif",
             }}>
             🇨🇱 Chile
           </button>
@@ -15896,11 +15896,11 @@ function ModuloPrefacturasCL({ usuario }) {
             <button key={t.id} onClick={() => setSubtab(t.id)}
               style={{
                 padding: "8px 16px", borderRadius: 8,
-                border: `1px solid ${subtab === t.id ? "#1a3a6b" : "#e4e7ec"}`,
-                background: subtab === t.id ? "#1a3a6b" : "#fff",
+                border: `1px solid ${subtab === t.id ? "#002E5D" : "#e4e7ec"}`,
+                background: subtab === t.id ? "#002E5D" : "#fff",
                 color: subtab === t.id ? "#fff" : "#475569",
                 fontSize: 12, fontWeight: 600, cursor: "pointer",
-                fontFamily: "Geist, sans-serif",
+                fontFamily: "'Open Sans', sans-serif",
               }}>
               {t.icon} {t.label}
             </button>
@@ -16292,7 +16292,7 @@ function PrefCLEnvioMasivo({ transportistas, parametros, usuario, onActualizarMa
         }}
         onClick={() => pdfInputRef.current?.click()}
         style={{
-          border: `3px dashed ${arrastrando ? "#F47B20" : "#1a3a6b"}`,
+          border: `3px dashed ${arrastrando ? "#FF6600" : "#002E5D"}`,
           borderRadius: 16,
           padding: "40px 24px",
           textAlign: "center",
@@ -16303,7 +16303,7 @@ function PrefCLEnvioMasivo({ transportistas, parametros, usuario, onActualizarMa
         }}
       >
         <div style={{ fontSize: 48, marginBottom: 10 }}>📄</div>
-        <div style={{ fontSize: 17, color: "#1a3a6b", fontWeight: 700, marginBottom: 6 }}>
+        <div style={{ fontSize: 17, color: "#002E5D", fontWeight: 700, marginBottom: 6 }}>
           {pdfsEnProceso > 0
             ? `Procesando PDFs... (${pdfsEnProceso} pendientes)`
             : arrastrando
@@ -16318,17 +16318,17 @@ function PrefCLEnvioMasivo({ transportistas, parametros, usuario, onActualizarMa
         {filas.length > 0 && pdfsEnProceso === 0 && (
           <div style={{
             marginTop: 16, padding: "8px 14px", background: "#fff",
-            border: "1px solid #1a3a6b", borderRadius: 10,
+            border: "1px solid #002E5D", borderRadius: 10,
             display: "inline-flex", alignItems: "center", gap: 12,
           }}>
-            <span style={{ fontSize: 13, color: "#1a3a6b", fontWeight: 700 }}>
+            <span style={{ fontSize: 13, color: "#002E5D", fontWeight: 700 }}>
               ✓ {filas.length} PDF{filas.length === 1 ? "" : "s"} cargado{filas.length === 1 ? "" : "s"}
             </span>
             <button onClick={e => { e.stopPropagation(); limpiarTodo(); }}
               style={{
                 background: "#fee2e2", border: "none", borderRadius: 6,
                 padding: "4px 10px", fontSize: 11, color: "#991b1b",
-                cursor: "pointer", fontWeight: 600, fontFamily: "Geist, sans-serif",
+                cursor: "pointer", fontWeight: 600, fontFamily: "'Open Sans', sans-serif",
               }}>Quitar todos</button>
           </div>
         )}
@@ -16352,7 +16352,7 @@ function PrefCLEnvioMasivo({ transportistas, parametros, usuario, onActualizarMa
             style={{
               background: "transparent", border: "1px solid #e4e7ec", borderRadius: 6,
               padding: "4px 10px", fontSize: 11, color: "#64748b", cursor: "pointer",
-              fontWeight: 600, fontFamily: "Geist, sans-serif",
+              fontWeight: 600, fontFamily: "'Open Sans', sans-serif",
             }}>↺ Restaurar default</button>
         </div>
 
@@ -16380,7 +16380,7 @@ function PrefCLEnvioMasivo({ transportistas, parametros, usuario, onActualizarMa
           <span style={{ fontSize: 11, color: "#64748b", fontWeight: 600 }}>Variables disponibles:</span>
           {VARIABLES_PLANTILLA_CL.map(v => (
             <code key={v} style={{
-              background: "#eef2ff", color: "#1a3a6b", padding: "2px 8px",
+              background: "#eef2ff", color: "#002E5D", padding: "2px 8px",
               borderRadius: 4, fontSize: 11, fontFamily: "monospace",
             }}>{"{" + v + "}"}</code>
           ))}
@@ -16388,7 +16388,7 @@ function PrefCLEnvioMasivo({ transportistas, parametros, usuario, onActualizarMa
 
         <div style={{
           marginTop: 12, padding: "10px 12px", background: "#eef2ff", borderRadius: 8,
-          fontSize: 11, color: "#1a3a6b",
+          fontSize: 11, color: "#002E5D",
         }}>
           💡 Las variables se reemplazan automáticamente con los datos extraídos de cada PDF.
           Tus cambios se guardan automáticamente en este navegador para la próxima vez.
@@ -16400,7 +16400,7 @@ function PrefCLEnvioMasivo({ transportistas, parametros, usuario, onActualizarMa
           display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
           gap: 10, marginBottom: 14,
         }}>
-          <IndicadorPF label="PDFs procesados" valor={filas.length} color="#1a3a6b" />
+          <IndicadorPF label="PDFs procesados" valor={filas.length} color="#002E5D" />
           <IndicadorPF label="Listas para enviar" valor={totalListos} color="#16a34a" />
           <IndicadorPF label="Con errores" valor={totalConErrores} color="#dc2626" />
         </div>
@@ -16439,7 +16439,7 @@ function PrefCLEnvioMasivo({ transportistas, parametros, usuario, onActualizarMa
               <div style={{ height: 8, background: "#fef3c7", borderRadius: 4, overflow: "hidden" }}>
                 <div style={{
                   width: `${(progreso.actual / progreso.total) * 100}%`,
-                  height: "100%", background: "#F47B20", transition: "width 0.3s",
+                  height: "100%", background: "#FF6600", transition: "width 0.3s",
                 }} />
               </div>
             </div>
@@ -16561,8 +16561,8 @@ function FilaPrefacturaCL({ fila, enEdicion, onEdit, onGuardar, onCancelar, onEl
   if (enEdicion) {
     return (
       <tr style={{ background: "#eff6ff" }}>
-        <td colSpan={7} style={{ padding: 14, borderBottom: "2px solid #1a3a6b" }}>
-          <div style={{ fontSize: 12, fontWeight: 700, color: "#1a3a6b", marginBottom: 10 }}>
+        <td colSpan={7} style={{ padding: 14, borderBottom: "2px solid #002E5D" }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: "#002E5D", marginBottom: 10 }}>
             ✏️ Editando: {fila.parsed.transportista || fila.nombre} · {fila.parsed.operacion || "—"} · {fila.parsed.mesFactura || "—"}
           </div>
           <div className="two-col" style={{ marginBottom: 10 }}>
@@ -16596,7 +16596,7 @@ function FilaPrefacturaCL({ fila, enEdicion, onEdit, onGuardar, onCancelar, onEl
               style={{
                 background: "#fff", border: "1px solid #e4e7ec", borderRadius: 8,
                 padding: "7px 14px", fontSize: 12, color: "#475569", cursor: "pointer",
-                fontFamily: "Geist, sans-serif", fontWeight: 600,
+                fontFamily: "'Open Sans', sans-serif", fontWeight: 600,
               }}>Cancelar</button>
             <button onClick={() => onGuardar({
               editTo: to, editCc: cc, editBcc: bcc,
@@ -16628,7 +16628,7 @@ function FilaPrefacturaCL({ fila, enEdicion, onEdit, onGuardar, onCancelar, onEl
             style={{
               marginTop: 4, background: "#fef2f2", border: "1px solid #fca5a5",
               borderRadius: 6, padding: "2px 8px", fontSize: 10, color: "#991b1b",
-              cursor: "pointer", fontWeight: 600, fontFamily: "Geist, sans-serif",
+              cursor: "pointer", fontWeight: 600, fontFamily: "'Open Sans', sans-serif",
             }}>+ Agregar a Supabase</button>
         )}
         {transBloqueado && (
@@ -16642,7 +16642,7 @@ function FilaPrefacturaCL({ fila, enEdicion, onEdit, onGuardar, onCancelar, onEl
           <>
             <span style={{
               background: fila.param ? "#eef2ff" : "#fef2f2",
-              color: fila.param ? "#1a3a6b" : "#991b1b",
+              color: fila.param ? "#002E5D" : "#991b1b",
               padding: "2px 8px", borderRadius: 4, fontSize: 11, fontWeight: 600,
             }}>{fila.parsed.operacion}</span>
             {opNoReg && (
@@ -16651,7 +16651,7 @@ function FilaPrefacturaCL({ fila, enEdicion, onEdit, onGuardar, onCancelar, onEl
                   display: "block", marginTop: 4,
                   background: "#fef2f2", border: "1px solid #fca5a5",
                   borderRadius: 6, padding: "2px 8px", fontSize: 10, color: "#991b1b",
-                  cursor: "pointer", fontWeight: 600, fontFamily: "Geist, sans-serif",
+                  cursor: "pointer", fontWeight: 600, fontFamily: "'Open Sans', sans-serif",
                 }}>+ Agregar Operación</button>
             )}
           </>
@@ -16680,15 +16680,15 @@ function FilaPrefacturaCL({ fila, enEdicion, onEdit, onGuardar, onCancelar, onEl
             disabled={enviando || fila.estadoEnvio === "ok"}
             style={{
               background: "transparent", border: "1px solid #e4e7ec", borderRadius: 6,
-              padding: "3px 8px", fontSize: 11, color: "#1a3a6b", cursor: "pointer",
-              fontFamily: "Geist, sans-serif", fontWeight: 600,
+              padding: "3px 8px", fontSize: 11, color: "#002E5D", cursor: "pointer",
+              fontFamily: "'Open Sans', sans-serif", fontWeight: 600,
               opacity: (enviando || fila.estadoEnvio === "ok") ? 0.4 : 1,
             }}>Editar</button>
           <button onClick={onEliminar} disabled={enviando}
             style={{
               background: "transparent", border: "1px solid #fca5a5", borderRadius: 6,
               padding: "3px 8px", fontSize: 11, color: "#991b1b", cursor: "pointer",
-              fontFamily: "Geist, sans-serif", fontWeight: 600,
+              fontFamily: "'Open Sans', sans-serif", fontWeight: 600,
               opacity: enviando ? 0.4 : 1,
             }}>Quitar</button>
         </div>
@@ -16815,9 +16815,9 @@ function PrefCLTransportistas({ data, onChange }) {
           />
           <button onClick={() => setMostrarImportador(true)}
             style={{
-              background: "#fff", border: "1px solid #1a3a6b", borderRadius: 8,
-              padding: "9px 16px", fontSize: 13, color: "#1a3a6b", cursor: "pointer",
-              fontFamily: "Geist, sans-serif", fontWeight: 600,
+              background: "#fff", border: "1px solid #002E5D", borderRadius: 8,
+              padding: "9px 16px", fontSize: 13, color: "#002E5D", cursor: "pointer",
+              fontFamily: "'Open Sans', sans-serif", fontWeight: 600,
             }}>
             📤 Importar Excel
           </button>
@@ -16896,14 +16896,14 @@ function PrefCLTransportistas({ data, onChange }) {
                       <button onClick={() => setEditando(t.id)}
                         style={{
                           background: "transparent", border: "1px solid #e4e7ec", borderRadius: 6,
-                          padding: "3px 8px", fontSize: 11, color: "#1a3a6b", cursor: "pointer",
-                          fontWeight: 600, fontFamily: "Geist, sans-serif",
+                          padding: "3px 8px", fontSize: 11, color: "#002E5D", cursor: "pointer",
+                          fontWeight: 600, fontFamily: "'Open Sans', sans-serif",
                         }}>Editar</button>
                       <button onClick={() => handleEliminar(t.id, t.nombre)}
                         style={{
                           background: "transparent", border: "1px solid #fca5a5", borderRadius: 6,
                           padding: "3px 8px", fontSize: 11, color: "#991b1b", cursor: "pointer",
-                          fontWeight: 600, fontFamily: "Geist, sans-serif",
+                          fontWeight: 600, fontFamily: "'Open Sans', sans-serif",
                         }}>Eliminar</button>
                     </div>
                   </td>
@@ -16977,7 +16977,7 @@ function ModalEdicionTransportistaCL({ inicial, esNuevo, editandoId, onCancelar,
         background: "#fff", borderRadius: 14, padding: 24, maxWidth: 600, width: "100%",
         maxHeight: "90vh", overflowY: "auto",
       }}>
-        <div style={{ fontSize: 16, fontWeight: 700, color: "#1a3a6b", marginBottom: 16 }}>
+        <div style={{ fontSize: 16, fontWeight: 700, color: "#002E5D", marginBottom: 16 }}>
           {esNuevo ? "Nuevo transportista Chile" : "Editar transportista"}
         </div>
         <div className="field-row">
@@ -17026,7 +17026,7 @@ function ModalEdicionTransportistaCL({ inicial, esNuevo, editandoId, onCancelar,
             style={{
               background: "#fff", border: "1px solid #e4e7ec", borderRadius: 8,
               padding: "8px 14px", fontSize: 12, color: "#475569", cursor: "pointer",
-              fontFamily: "Geist, sans-serif", fontWeight: 600,
+              fontFamily: "'Open Sans', sans-serif", fontWeight: 600,
             }}>Cancelar</button>
           <button onClick={handleGuardar} disabled={guardando} className="btn-blue"
             style={{ padding: "8px 14px", fontSize: 12 }}>
@@ -17117,7 +17117,7 @@ function PrefCLParametros({ data, onChange }) {
                 <tr key={p.id}>
                   <td style={pf_td()}>
                     <span style={{
-                      background: "#eef2ff", color: "#1a3a6b", padding: "3px 10px",
+                      background: "#eef2ff", color: "#002E5D", padding: "3px 10px",
                       borderRadius: 4, fontSize: 11, fontWeight: 700,
                     }}>{p.operacion}</span>
                   </td>
@@ -17142,14 +17142,14 @@ function PrefCLParametros({ data, onChange }) {
                       <button onClick={() => setEditando(p.id)}
                         style={{
                           background: "transparent", border: "1px solid #e4e7ec", borderRadius: 6,
-                          padding: "3px 8px", fontSize: 11, color: "#1a3a6b", cursor: "pointer",
-                          fontWeight: 600, fontFamily: "Geist, sans-serif",
+                          padding: "3px 8px", fontSize: 11, color: "#002E5D", cursor: "pointer",
+                          fontWeight: 600, fontFamily: "'Open Sans', sans-serif",
                         }}>Editar</button>
                       <button onClick={() => handleEliminar(p.id, p.operacion)}
                         style={{
                           background: "transparent", border: "1px solid #fca5a5", borderRadius: 6,
                           padding: "3px 8px", fontSize: 11, color: "#991b1b", cursor: "pointer",
-                          fontWeight: 600, fontFamily: "Geist, sans-serif",
+                          fontWeight: 600, fontFamily: "'Open Sans', sans-serif",
                         }}>Eliminar</button>
                     </div>
                   </td>
@@ -17215,7 +17215,7 @@ function ModalEdicionParametroCL({ inicial, esNuevo, editandoId, onCancelar, onG
         background: "#fff", borderRadius: 14, padding: 24, maxWidth: 700, width: "100%",
         maxHeight: "90vh", overflowY: "auto",
       }}>
-        <div style={{ fontSize: 16, fontWeight: 700, color: "#1a3a6b", marginBottom: 16 }}>
+        <div style={{ fontSize: 16, fontWeight: 700, color: "#002E5D", marginBottom: 16 }}>
           {esNuevo ? "Nueva operación Chile" : "Editar operación"}
         </div>
         <div className="field-row">
@@ -17268,7 +17268,7 @@ function ModalEdicionParametroCL({ inicial, esNuevo, editandoId, onCancelar, onG
             style={{
               background: "#fff", border: "1px solid #e4e7ec", borderRadius: 8,
               padding: "8px 14px", fontSize: 12, color: "#475569", cursor: "pointer",
-              fontFamily: "Geist, sans-serif", fontWeight: 600,
+              fontFamily: "'Open Sans', sans-serif", fontWeight: 600,
             }}>Cancelar</button>
           <button onClick={handleGuardar} disabled={guardando} className="btn-blue"
             style={{ padding: "8px 14px", fontSize: 12 }}>
@@ -17543,7 +17543,7 @@ function ModalImportadorTransportistas({ config, dataExistente, onCancelar, onIm
       }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 8 }}>
           <div>
-            <div style={{ fontSize: 16, fontWeight: 700, color: "#1a3a6b" }}>
+            <div style={{ fontSize: 16, fontWeight: 700, color: "#002E5D" }}>
               Importador masivo · Transportistas {config.pais}
             </div>
             <div style={{ fontSize: 12, color: "#64748b", marginTop: 4 }}>
@@ -17552,9 +17552,9 @@ function ModalImportadorTransportistas({ config, dataExistente, onCancelar, onIm
           </div>
           <button onClick={descargarPlantilla}
             style={{
-              background: "#fff", border: "1px solid #1a3a6b", borderRadius: 8,
-              padding: "8px 14px", fontSize: 12, color: "#1a3a6b", cursor: "pointer",
-              fontFamily: "Geist, sans-serif", fontWeight: 600,
+              background: "#fff", border: "1px solid #002E5D", borderRadius: 8,
+              padding: "8px 14px", fontSize: 12, color: "#002E5D", cursor: "pointer",
+              fontFamily: "'Open Sans', sans-serif", fontWeight: 600,
             }}>
             📋 Descargar plantilla
           </button>
@@ -17580,14 +17580,14 @@ function ModalImportadorTransportistas({ config, dataExistente, onCancelar, onIm
               }}
               onClick={() => fileInputRef.current?.click()}
               style={{
-                border: `3px dashed ${arrastrando ? "#F47B20" : "#1a3a6b"}`,
+                border: `3px dashed ${arrastrando ? "#FF6600" : "#002E5D"}`,
                 borderRadius: 12, padding: "40px 24px", textAlign: "center",
                 cursor: "pointer", background: arrastrando ? "#fff7ed" : "#f8fafc",
                 marginBottom: 16, transition: "all 0.2s",
               }}
             >
               <div style={{ fontSize: 40, marginBottom: 10 }}>📤</div>
-              <div style={{ fontSize: 15, color: "#1a3a6b", fontWeight: 700, marginBottom: 4 }}>
+              <div style={{ fontSize: 15, color: "#002E5D", fontWeight: 700, marginBottom: 4 }}>
                 {analizando
                   ? "Analizando Excel..."
                   : arrastrando
@@ -17607,7 +17607,7 @@ function ModalImportadorTransportistas({ config, dataExistente, onCancelar, onIm
             {/* Instrucciones */}
             <div style={{
               background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 8,
-              padding: 14, fontSize: 12, color: "#1a3a6b", lineHeight: 1.6,
+              padding: 14, fontSize: 12, color: "#002E5D", lineHeight: 1.6,
             }}>
               <div style={{ fontWeight: 700, marginBottom: 6 }}>💡 Formato esperado del Excel:</div>
               <div>El archivo debe tener una hoja con las siguientes columnas (en la primera fila):</div>
@@ -17635,7 +17635,7 @@ function ModalImportadorTransportistas({ config, dataExistente, onCancelar, onIm
               display: "grid", gridTemplateColumns: "repeat(4, 1fr)",
               gap: 10, marginBottom: 16,
             }}>
-              <IndicadorImp label="Total" valor={stats.total} color="#1a3a6b" />
+              <IndicadorImp label="Total" valor={stats.total} color="#002E5D" />
               <IndicadorImp label="Nuevos" valor={stats.nuevos} color="#16a34a" />
               <IndicadorImp label="Duplicados" valor={stats.duplicados} color="#f59e0b" />
               <IndicadorImp label="Con errores" valor={stats.conError} color="#dc2626" />
@@ -17757,7 +17757,7 @@ function ModalImportadorTransportistas({ config, dataExistente, onCancelar, onIm
               style={{
                 background: "#fff", border: "1px solid #e4e7ec", borderRadius: 8,
                 padding: "9px 14px", fontSize: 12, color: "#475569", cursor: "pointer",
-                fontFamily: "Geist, sans-serif", fontWeight: 600,
+                fontFamily: "'Open Sans', sans-serif", fontWeight: 600,
               }}>Cancelar</button>
           ) : (
             <>
@@ -17766,14 +17766,14 @@ function ModalImportadorTransportistas({ config, dataExistente, onCancelar, onIm
                 style={{
                   background: "#fff", border: "1px solid #e4e7ec", borderRadius: 8,
                   padding: "9px 14px", fontSize: 12, color: "#475569", cursor: "pointer",
-                  fontFamily: "Geist, sans-serif", fontWeight: 600,
+                  fontFamily: "'Open Sans', sans-serif", fontWeight: 600,
                   opacity: importando ? 0.4 : 1,
                 }}>← Subir otro Excel</button>
               <button onClick={onCancelar} disabled={importando}
                 style={{
                   background: "#fff", border: "1px solid #e4e7ec", borderRadius: 8,
                   padding: "9px 14px", fontSize: 12, color: "#475569", cursor: "pointer",
-                  fontFamily: "Geist, sans-serif", fontWeight: 600,
+                  fontFamily: "'Open Sans', sans-serif", fontWeight: 600,
                   opacity: importando ? 0.4 : 1,
                 }}>Cancelar</button>
               <button onClick={importar}

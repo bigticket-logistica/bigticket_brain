@@ -96,7 +96,7 @@ export default function Comparativa() {
   return (
     <div style={{ padding: 24 }}>
       <div style={{ marginBottom: 14 }}>
-        <div style={{ fontSize: 18, fontWeight: 700, color: "#1a3a6b" }}>Comparativa de prefacturas</div>
+        <div style={{ fontSize: 18, fontWeight: 700, color: "#002E5D" }}>Comparativa de prefacturas</div>
         <div style={{ fontSize: 12, color: "#94a3b8", marginTop: 2, maxWidth: 720, lineHeight: 1.5 }}>
           La prefactura que se arma el lunes contra la que se acumula día a día desde lo publicado.
           Los dos salen del tarifado, así que deberían cuadrar. Lo que no cuadra suele ser un SC sin
@@ -108,7 +108,7 @@ export default function Comparativa() {
         <button onClick={() => setSemana(s => Math.max(SEMANA_INICIO, s - 1))}
           disabled={semana <= SEMANA_INICIO}
           style={{ ...btn, opacity: semana <= SEMANA_INICIO ? .4 : 1 }}>‹</button>
-        <span style={{ fontSize: 14, fontWeight: 700, color: "#1a3a6b", minWidth: 96, textAlign: "center" }}>
+        <span style={{ fontSize: 14, fontWeight: 700, color: "#002E5D", minWidth: 96, textAlign: "center" }}>
           Semana {semana}
         </span>
         <button onClick={() => setSemana(s => s + 1)} style={btn}>›</button>
@@ -141,7 +141,7 @@ export default function Comparativa() {
           {tot.sinPref > 0 && (
             <div style={{ background: "#f8fafc", border: "1px solid #e4e7ec", borderRadius: 10,
               padding: "11px 14px", marginBottom: 12, fontSize: 12.5, color: "#64748b", lineHeight: 1.5 }}>
-              <b style={{ color: "#1a3a6b" }}>{tot.sinPref} publicación(es) sin prefactura todavía</b>, por {money(tot.sinPrefMonto)}.
+              <b style={{ color: "#002E5D" }}>{tot.sinPref} publicación(es) sin prefactura todavía</b>, por {money(tot.sinPrefMonto)}.
               No son descuadres: el lunes todavía no se generó la prefactura de esas empresas.
             </div>
           )}
@@ -217,9 +217,9 @@ function Kpi({ label, valor, color }) {
   return (
     <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10, padding: "12px 14px" }}>
       <div style={{ fontSize: 10.5, color: "#94a3b8", textTransform: "uppercase", letterSpacing: .4 }}>{label}</div>
-      <div style={{ fontSize: 19, fontWeight: 700, marginTop: 4, color: color || "#1a3a6b", fontVariantNumeric: "tabular-nums" }}>{valor}</div>
+      <div style={{ fontSize: 19, fontWeight: 700, marginTop: 4, color: color || "#002E5D", fontVariantNumeric: "tabular-nums" }}>{valor}</div>
     </div>
   );
 }
 
-const btn = { border: "1px solid #e4e7ec", background: "#fff", color: "#1a3a6b", borderRadius: 8, width: 32, height: 32, fontSize: 15, fontWeight: 700, cursor: "pointer" };
+const btn = { border: "1px solid #e4e7ec", background: "#fff", color: "#002E5D", borderRadius: 8, width: 32, height: 32, fontSize: 15, fontWeight: 700, cursor: "pointer" };

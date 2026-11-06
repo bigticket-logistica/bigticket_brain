@@ -302,14 +302,14 @@ function TareasJefeOperaciones() {
   const pendientes = (tareas || []).filter((t) => t.estado === "pendiente");
   const resueltas = (tareas || []).filter((t) => t.estado !== "pendiente");
 
-  const inputStyle = { width: "100%", boxSizing: "border-box", border: "1px solid #e4e7ec", borderRadius: 8, padding: "9px 11px", fontSize: 13, fontFamily: "'Geist',sans-serif", background: "#fff" };
+  const inputStyle = { width: "100%", boxSizing: "border-box", border: "1px solid #e4e7ec", borderRadius: 8, padding: "9px 11px", fontSize: 13, fontFamily: "'Open Sans',sans-serif", background: "#fff" };
   const lbl = { fontSize: 10, fontWeight: 700, color: "#888", textTransform: "uppercase", marginBottom: 4, display: "block" };
 
   const SlaBadge = ({ t }) => {
     const ms = new Date(t.sla_vence_at).getTime() - ahora;
     const vencida = ms < 0;
     const critica = !vencida && ms < 4 * 3600000;
-    const color = vencida ? "#c0392b" : critica ? "#F47B20" : "#1a3a6b";
+    const color = vencida ? "#c0392b" : critica ? "#FF6600" : "#002E5D";
     const bg = vencida ? "#fbeaea" : critica ? "#fff4ec" : "#eef2f7";
     return (
       <div style={{ textAlign: "center", flexShrink: 0 }}>
@@ -343,7 +343,7 @@ function TareasJefeOperaciones() {
               <div style={{ flex: 1, minWidth: 220 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 3 }}>
                   <span style={{ fontSize: 15, fontWeight: 800 }}>🏗 Alta Operacional</span>
-                  <span style={{ background: "#1a3a6b", color: "#fff", borderRadius: 6, padding: "3px 9px", fontSize: 11, fontWeight: 700 }}>{t.sc || "SIN SC"}</span>
+                  <span style={{ background: "#002E5D", color: "#fff", borderRadius: 6, padding: "3px 9px", fontSize: 11, fontWeight: 700 }}>{t.sc || "SIN SC"}</span>
                 </div>
                 <div style={{ fontSize: 13, fontWeight: 700 }}>{t.titulo || "Prospecto sin nombre"}</div>
                 <div style={{ fontSize: 12, color: "#888" }}>{t.puesto || "—"} · entrevista aprobada el {new Date(t.created_at).toLocaleString("es-MX", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}</div>
@@ -432,7 +432,7 @@ function TareasJefeOperaciones() {
                         </span>
                         {(it.lineas || []).length > 1 && (
                           <button onClick={() => delLinea(t.id, i)}
-                            style={{ border: "none", background: "none", color: "#c0392b", fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: "'Geist',sans-serif" }}>Quitar</button>
+                            style={{ border: "none", background: "none", color: "#c0392b", fontSize: 11.5, fontWeight: 700, cursor: "pointer", fontFamily: "'Open Sans',sans-serif" }}>Quitar</button>
                         )}
                       </div>
                       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: 8 }}>
@@ -467,7 +467,7 @@ function TareasJefeOperaciones() {
                 })}
                 {(it.lineas || []).length < MAX_LINEAS ? (
                   <button onClick={() => addLinea(t.id)}
-                    style={{ border: "1.5px dashed #c4e6df", background: "#f4faf8", color: "#0f766e", borderRadius: 8, padding: "8px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "'Geist',sans-serif" }}>
+                    style={{ border: "1.5px dashed #c4e6df", background: "#f4faf8", color: "#0f766e", borderRadius: 8, padding: "8px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "'Open Sans',sans-serif" }}>
                     + Agregar línea
                   </button>
                 ) : (
@@ -549,7 +549,7 @@ function TareasJefeOperaciones() {
               </div>
             )}
             <button onClick={() => completar(t)} disabled={busyId === t.id || faltantes(it).length > 0}
-              style={{ width: "100%", marginTop: 10, background: faltantes(it).length ? "#b9c6c3" : "#0f766e", color: "#fff", border: "none", borderRadius: 8, padding: "12px", fontSize: 13, fontWeight: 700, cursor: faltantes(it).length ? "not-allowed" : "pointer", opacity: busyId === t.id ? 0.6 : 1, fontFamily: "'Geist',sans-serif" }}>
+              style={{ width: "100%", marginTop: 10, background: faltantes(it).length ? "#b9c6c3" : "#0f766e", color: "#fff", border: "none", borderRadius: 8, padding: "12px", fontSize: 13, fontWeight: 700, cursor: faltantes(it).length ? "not-allowed" : "pointer", opacity: busyId === t.id ? 0.6 : 1, fontFamily: "'Open Sans',sans-serif" }}>
               {busyId === t.id ? "Guardando…" : faltantes(it).length ? "Completa los datos marcados" : "✓ Completar items del contrato"}
             </button>
           </div>
@@ -559,14 +559,14 @@ function TareasJefeOperaciones() {
       {resueltas.length > 0 && (
         <div style={{ marginTop: 18 }}>
           <button onClick={() => setVerHistorial(!verHistorial)}
-            style={{ background: "transparent", border: "none", color: "#1a3a6b", fontSize: 13, fontWeight: 700, cursor: "pointer", padding: 0, fontFamily: "'Geist',sans-serif" }}>
+            style={{ background: "transparent", border: "none", color: "#002E5D", fontSize: 13, fontWeight: 700, cursor: "pointer", padding: 0, fontFamily: "'Open Sans',sans-serif" }}>
             {verHistorial ? "▾" : "▸"} Historial ({resueltas.length})
           </button>
           {verHistorial && resueltas.map((t) => (
             <div key={t.id} style={{ background: "#fff", border: "0.5px solid #e4e7ec", borderRadius: 10, padding: 14, marginTop: 8, opacity: 0.85 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", fontSize: 13 }}>
                 <span style={{ fontWeight: 700 }}>🏗 {t.titulo || "—"}</span>
-                <span style={{ background: "#1a3a6b", color: "#fff", borderRadius: 6, padding: "2px 8px", fontSize: 10, fontWeight: 700 }}>{t.sc || "—"}</span>
+                <span style={{ background: "#002E5D", color: "#fff", borderRadius: 6, padding: "2px 8px", fontSize: 10, fontWeight: 700 }}>{t.sc || "—"}</span>
                 <span style={{ fontSize: 11, fontWeight: 700, padding: "3px 10px", borderRadius: 20, color: "#166534", background: "#e8f5ec" }}>✓ Completada</span>
                 <span style={{ fontSize: 11, color: "#888" }}>{t.resuelto_at ? new Date(t.resuelto_at).toLocaleString("es-MX", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : ""} · {t.resuelto_por || ""}</span>
               </div>
@@ -608,7 +608,7 @@ function IndicadoresOperacionalesMX({ usuario }) {
   return (
     <div style={{ padding: 0 }}>
       <div style={{ background: "#fff", borderBottom: "1px solid #e4e7ec", padding: "12px 24px" }}>
-        <div style={{ fontSize: 18, fontWeight: 700, color: "#1a3a6b", marginBottom: 4 }}>
+        <div style={{ fontSize: 18, fontWeight: 700, color: "#002E5D", marginBottom: 4 }}>
           Indicadores Operacionales MX
         </div>
         <div style={{ fontSize: 12, color: "#64748b", marginBottom: 10 }}>
@@ -620,8 +620,8 @@ function IndicadoresOperacionalesMX({ usuario }) {
               <button key={t.id} onClick={() => setVista(t.id)}
                 style={{
                   background: "transparent", border: "none", padding: "10px 16px",
-                  fontSize: 13, fontWeight: 600, cursor: "pointer", color: vista === t.id ? "#1a3a6b" : "#64748b",
-                  borderBottom: vista === t.id ? "2px solid #1a3a6b" : "2px solid transparent",
+                  fontSize: 13, fontWeight: 600, cursor: "pointer", color: vista === t.id ? "#002E5D" : "#64748b",
+                  borderBottom: vista === t.id ? "2px solid #002E5D" : "2px solid transparent",
                   marginBottom: -2,
                 }}>
                 <div>{t.label}</div>
@@ -668,8 +668,8 @@ function TorreControlMX() {
         {modos.map(m => (
           <button key={m.id} onClick={() => setModo(m.id)} title={m.desc}
             style={{
-              background: modo === m.id ? "#1a3a6b" : "#fff", color: modo === m.id ? "#fff" : "#1a3a6b",
-              border: "1px solid #1a3a6b", borderRadius: 6, padding: "6px 14px",
+              background: modo === m.id ? "#002E5D" : "#fff", color: modo === m.id ? "#fff" : "#002E5D",
+              border: "1px solid #002E5D", borderRadius: 6, padding: "6px 14px",
               fontSize: 12, fontWeight: 600, cursor: "pointer",
             }}>
             {m.label}
@@ -821,11 +821,11 @@ function TorreRosteringHoy() {
   const scsOrdenadas = scsConDatos.sort((a, b) => urgenciaSc(b) - urgenciaSc(a));
 
   return (
-    <div style={{ padding: 20, fontFamily: "'Geist', sans-serif" }}>
+    <div style={{ padding: 20, fontFamily: "'Open Sans', sans-serif" }}>
       {/* Header */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 16 }}>
         <div>
-          <div style={{ fontSize: 18, fontWeight: 700, color: "#1a3a6b" }}>Torre Control Rostering HOY</div>
+          <div style={{ fontSize: 18, fontWeight: 700, color: "#002E5D" }}>Torre Control Rostering HOY</div>
           <div style={{ fontSize: 12, color: "#64748b" }}>
             Fecha operativa: <strong>{meta.fecha || "—"}</strong>
             {" · "}Última captura: <strong>{meta.captura_hora || "—"}</strong>
@@ -844,9 +844,9 @@ function TorreRosteringHoy() {
           <button onClick={cargar} disabled={loading}
             style={{
               padding: "6px 14px", borderRadius: 6,
-              border: loading ? "1px solid #cbd5e1" : "1px solid #1a3a6b",
+              border: loading ? "1px solid #cbd5e1" : "1px solid #002E5D",
               background: loading ? "#f1f5f9" : (toastVisible ? "#d1fae5" : "#fff"),
-              color: loading ? "#94a3b8" : (toastVisible ? "#047857" : "#1a3a6b"),
+              color: loading ? "#94a3b8" : (toastVisible ? "#047857" : "#002E5D"),
               fontWeight: 600, fontSize: 12,
               cursor: loading ? "wait" : "pointer",
               transition: "all 0.3s ease",
@@ -958,7 +958,7 @@ function TorreRosteringHoy() {
                 borderBottom: expandido ? "1px solid #e4e7ec" : "none"
               }}>
               <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                <span style={{ fontSize: 14, fontWeight: 700, color: "#1a3a6b" }}>{sc}</span>
+                <span style={{ fontSize: 14, fontWeight: 700, color: "#002E5D" }}>{sc}</span>
                 <span style={{ fontSize: 11, color: "#64748b" }}>{filasSc.length} rutas</span>
               </div>
               <div style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 11, flexWrap: "wrap", justifyContent: "flex-end" }}>
@@ -1037,10 +1037,10 @@ function TorreRosteringHoy() {
                             {f.flota || "—"}
                           </span>
                         </td>
-                        <td style={{ padding: "5px 10px", color: f.driver_name ? "#1a3a6b" : "#b91c1c", fontWeight: f.driver_name ? 500 : 700 }}>
+                        <td style={{ padding: "5px 10px", color: f.driver_name ? "#002E5D" : "#b91c1c", fontWeight: f.driver_name ? 500 : 700 }}>
                           {f.driver_name || "🔴 SIN ASIGNAR"}
                         </td>
-                        <td style={{ padding: "5px 10px", fontFamily: "monospace", color: f.vehicle_plate ? "#1a3a6b" : "#b91c1c", fontWeight: f.vehicle_plate ? 500 : 700 }}>
+                        <td style={{ padding: "5px 10px", fontFamily: "monospace", color: f.vehicle_plate ? "#002E5D" : "#b91c1c", fontWeight: f.vehicle_plate ? 500 : 700 }}>
                           {f.vehicle_plate || "🔴 SIN PLACA"}
                         </td>
                         <td style={{ padding: "5px 10px", textAlign: "center", color: "#64748b" }}>
@@ -1095,9 +1095,9 @@ const ESTADOS_INFO = {
   "Z_OTRO":                  { emoji: "❓", color: "#94a3b8", label: "Otro" },
 };
 
-const CH_NAVY = "#1a3a6b";
+const CH_NAVY = "#002E5D";
 
-const CH_ORANGE = "#F47B20";
+const CH_ORANGE = "#FF6600";
 
 const CH_BG = "#f0f2f5";
 
@@ -1312,11 +1312,11 @@ function PoolMeliControlHelper() {
   ];
 
   if (loading) {
-    return <div style={{ padding: 40, textAlign: 'center', color: CH_MUTED, fontSize: 13, fontFamily: "'Geist', sans-serif" }}>Cargando datos del {fecha}…</div>;
+    return <div style={{ padding: 40, textAlign: 'center', color: CH_MUTED, fontSize: 13, fontFamily: "'Open Sans', sans-serif" }}>Cargando datos del {fecha}…</div>;
   }
   if (error) {
     return (
-      <div style={{ padding: 24, fontFamily: "'Geist', sans-serif" }}>
+      <div style={{ padding: 24, fontFamily: "'Open Sans', sans-serif" }}>
         <div style={{ background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 12, padding: 16 }}>
           <div style={{ fontSize: 13, fontWeight: 600, color: '#991b1b', marginBottom: 6 }}>No se pudo cargar Control Helper</div>
           <div style={{ fontSize: 12, color: '#7f1d1d', lineHeight: 1.6 }}>
@@ -1332,7 +1332,7 @@ function PoolMeliControlHelper() {
   const curSerieKey = universo === 0 ? 'total' : ['U1', 'U2', 'U3'][universo - 1];
 
   return (
-    <div style={{ fontFamily: "'Geist', sans-serif", background: CH_BG, color: CH_TEXT }}>
+    <div style={{ fontFamily: "'Open Sans', sans-serif", background: CH_BG, color: CH_TEXT }}>
 
       {/* TAB-BAR (U0/U1/U2/U3) */}
       <div style={{ background: CH_CARD, borderBottom: `1px solid ${CH_BORDER}`, padding: '0 24px', display: 'flex', gap: 2 }}>
@@ -1368,7 +1368,7 @@ function PoolMeliControlHelper() {
           }} style={{
             fontSize: 11, fontWeight: 600, padding: '6px 12px', borderRadius: 6,
             border: `1px solid ${CH_BORDER}`, background: '#f8fafc', color: CH_MUTED,
-            cursor: 'pointer', fontFamily: "'Geist', sans-serif",
+            cursor: 'pointer', fontFamily: "'Open Sans', sans-serif",
             whiteSpace: 'nowrap', lineHeight: 1, height: 28,
             display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
           }}>D-1</button>
@@ -1379,14 +1379,14 @@ function PoolMeliControlHelper() {
           }} style={{
             fontSize: 11, fontWeight: 600, padding: '6px 12px', borderRadius: 6,
             border: `1px solid ${CH_BORDER}`, background: '#f8fafc', color: CH_MUTED,
-            cursor: 'pointer', fontFamily: "'Geist', sans-serif",
+            cursor: 'pointer', fontFamily: "'Open Sans', sans-serif",
             whiteSpace: 'nowrap', lineHeight: 1, height: 28,
             display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
           }}>Hoy</button>
           <input type="date" value={fecha} onChange={e => setFecha(e.target.value)} style={{
             fontSize: 12, fontWeight: 600, padding: '5px 10px', borderRadius: 6,
             border: `1px solid ${CH_BORDER}`, background: CH_CARD, color: CH_NAVY,
-            fontFamily: "'Geist', sans-serif", cursor: 'pointer', outline: 'none',
+            fontFamily: "'Open Sans', sans-serif", cursor: 'pointer', outline: 'none',
             colorScheme: 'light',
           }} />
         </div>
@@ -2048,7 +2048,7 @@ function DrillWrap({ dd, fecha, onClose, icon, onExport, children }) {
           </span>
           <button onClick={onExport} style={{
             display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, fontWeight: 600,
-            fontFamily: "'Geist', sans-serif", color: '#fff', border: 'none',
+            fontFamily: "'Open Sans', sans-serif", color: '#fff', border: 'none',
             borderRadius: 6, padding: '7px 14px', cursor: 'pointer', background: CH_NAVY,
           }}>
             <i className="ti ti-download" style={{ fontSize: 14 }} />Exportar CSV
@@ -2222,7 +2222,7 @@ function ThDt({ children }) {
 function TdDt({ children, mono, bold, muted, center, action, rowSpan }) {
   return <td rowSpan={rowSpan} style={{
     padding: '9px 12px', borderBottom: '0.5px solid #f4f5f7', fontSize: 12,
-    fontFamily: mono ? 'monospace' : "'Geist', sans-serif",
+    fontFamily: mono ? 'monospace' : "'Open Sans', sans-serif",
     color: action ? CH_NAVY : muted ? CH_MUTED : CH_TEXT,
     fontWeight: bold || action ? 600 : 'normal',
     textAlign: center ? 'center' : 'left',
@@ -2461,9 +2461,9 @@ function exportCH(headers, rows, filename) {
   a.click();
 }
 
-const VBT_NAVY = "#1a3a6b";
+const VBT_NAVY = "#002E5D";
 
-const VBT_ORANGE = "#F47B20";
+const VBT_ORANGE = "#FF6600";
 
 const VBT_BG = "#f0f2f5";
 
@@ -2557,9 +2557,9 @@ function PoolMeliValidacionBT({ usuario }) {
 
   const svcs = useMemo(() => [...new Set(bt.map(b => b.svc).filter(Boolean))].sort(), [bt]);
 
-  if (loading) return <div style={{ padding: 40, textAlign: 'center', color: VBT_MUTED, fontSize: 13, fontFamily: "'Geist', sans-serif" }}>Cargando datos BT…</div>;
+  if (loading) return <div style={{ padding: 40, textAlign: 'center', color: VBT_MUTED, fontSize: 13, fontFamily: "'Open Sans', sans-serif" }}>Cargando datos BT…</div>;
   if (error) return (
-    <div style={{ padding: 24, fontFamily: "'Geist', sans-serif" }}>
+    <div style={{ padding: 24, fontFamily: "'Open Sans', sans-serif" }}>
       <div style={{ background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 12, padding: 16 }}>
         <div style={{ fontSize: 13, fontWeight: 600, color: '#991b1b', marginBottom: 6 }}>No se pudo cargar Validación BT</div>
         <div style={{ fontSize: 12, color: '#7f1d1d', lineHeight: 1.6 }}>
@@ -2571,7 +2571,7 @@ function PoolMeliValidacionBT({ usuario }) {
   );
 
   return (
-    <div style={{ fontFamily: "'Geist', sans-serif", background: VBT_BG, color: VBT_TEXT }}>
+    <div style={{ fontFamily: "'Open Sans', sans-serif", background: VBT_BG, color: VBT_TEXT }}>
       <div style={{ background: VBT_CARD, borderBottom: `1px solid ${VBT_BORDER}`, padding: '0 24px', display: 'flex', gap: 2 }}>
         {['Resumen', 'Operando (rechazados/pendientes)', 'Listado completo'].map((label, i) => (
           <div key={i} onClick={() => setTab(i)} style={{
@@ -2586,7 +2586,7 @@ function PoolMeliValidacionBT({ usuario }) {
             <button onClick={() => setShowUpload(true)} style={{
               fontSize: 11, fontWeight: 600, padding: '6px 12px', borderRadius: 6,
               border: `1px solid ${VBT_NAVY}`, background: VBT_NAVY, color: '#fff',
-              cursor: 'pointer', fontFamily: "'Geist', sans-serif", whiteSpace: 'nowrap',
+              cursor: 'pointer', fontFamily: "'Open Sans', sans-serif", whiteSpace: 'nowrap',
               display: 'inline-flex', alignItems: 'center', gap: 5, height: 28, lineHeight: 1,
             }}>
               <i className="ti ti-upload" style={{ fontSize: 13 }} />
@@ -2759,7 +2759,7 @@ function OperandoBT({ operando, onSelectCurp }) {
         <button onClick={exportar} style={{
           fontSize: 11, fontWeight: 600, padding: '6px 12px', borderRadius: 6,
           border: 'none', background: VBT_NAVY, color: '#fff', cursor: 'pointer',
-          fontFamily: "'Geist', sans-serif",
+          fontFamily: "'Open Sans', sans-serif",
           display: 'inline-flex', alignItems: 'center', gap: 5,
         }}>
           <i className="ti ti-download" style={{ fontSize: 13 }} />Exportar CSV
@@ -2813,9 +2813,9 @@ function ListadoBT({ bt, svcs, filtroGrav, setFiltroGrav, filtroSvc, setFiltroSv
     <div>
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
         <input value={busqueda} onChange={e => setBusqueda(e.target.value)} placeholder="Buscar por nombre o CURP..."
-          style={{ fontSize: 12, padding: '6px 10px', borderRadius: 6, border: `1px solid ${VBT_BORDER}`, width: 220, fontFamily: "'Geist', sans-serif", outline: 'none' }} />
+          style={{ fontSize: 12, padding: '6px 10px', borderRadius: 6, border: `1px solid ${VBT_BORDER}`, width: 220, fontFamily: "'Open Sans', sans-serif", outline: 'none' }} />
         <select value={filtroGrav} onChange={e => setFiltroGrav(e.target.value)}
-          style={{ fontSize: 12, padding: '6px 10px', borderRadius: 6, border: `1px solid ${VBT_BORDER}`, fontFamily: "'Geist', sans-serif", outline: 'none', cursor: 'pointer' }}>
+          style={{ fontSize: 12, padding: '6px 10px', borderRadius: 6, border: `1px solid ${VBT_BORDER}`, fontFamily: "'Open Sans', sans-serif", outline: 'none', cursor: 'pointer' }}>
           <option value="TODOS">Todas las gravedades</option>
           <option value="CRITICO">🔴 Crítico</option>
           <option value="ALTO">🟠 Alto</option>
@@ -2823,7 +2823,7 @@ function ListadoBT({ bt, svcs, filtroGrav, setFiltroGrav, filtroSvc, setFiltroSv
           <option value="OK">🟢 OK</option>
         </select>
         <select value={filtroSvc} onChange={e => setFiltroSvc(e.target.value)}
-          style={{ fontSize: 12, padding: '6px 10px', borderRadius: 6, border: `1px solid ${VBT_BORDER}`, fontFamily: "'Geist', sans-serif", outline: 'none', cursor: 'pointer' }}>
+          style={{ fontSize: 12, padding: '6px 10px', borderRadius: 6, border: `1px solid ${VBT_BORDER}`, fontFamily: "'Open Sans', sans-serif", outline: 'none', cursor: 'pointer' }}>
           <option value="TODOS">Todos los SC</option>
           {svcs.map(s => <option key={s} value={s}>{s}</option>)}
         </select>
@@ -2831,7 +2831,7 @@ function ListadoBT({ bt, svcs, filtroGrav, setFiltroGrav, filtroSvc, setFiltroSv
         <button onClick={exportar} style={{
           marginLeft: 'auto', fontSize: 11, fontWeight: 600, padding: '6px 12px', borderRadius: 6,
           border: 'none', background: VBT_NAVY, color: '#fff', cursor: 'pointer',
-          fontFamily: "'Geist', sans-serif", display: 'inline-flex', alignItems: 'center', gap: 5,
+          fontFamily: "'Open Sans', sans-serif", display: 'inline-flex', alignItems: 'center', gap: 5,
         }}>
           <i className="ti ti-download" style={{ fontSize: 13 }} />Exportar CSV
         </button>
@@ -2898,7 +2898,7 @@ function HistorialPersonaModal({ curp, onClose }) {
 
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }} onClick={onClose}>
-      <div onClick={e => e.stopPropagation()} style={{ background: '#fff', borderRadius: 14, padding: 24, minWidth: 720, maxWidth: '90vw', maxHeight: '90vh', overflowY: 'auto', fontFamily: "'Geist', sans-serif" }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: '#fff', borderRadius: 14, padding: 24, minWidth: 720, maxWidth: '90vw', maxHeight: '90vh', overflowY: 'auto', fontFamily: "'Open Sans', sans-serif" }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 14 }}>
           <div>
             <div style={{ fontSize: 16, fontWeight: 700, color: VBT_NAVY, marginBottom: 4 }}>{persona.nombre || 'Historial de la persona'}</div>
@@ -3083,7 +3083,7 @@ function UploadExcelBT({ onClose }) {
 
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }} onClick={status === 'idle' || status === 'done' || status === 'error' ? onClose : undefined}>
-      <div onClick={e => e.stopPropagation()} style={{ background: '#fff', borderRadius: 14, padding: 24, minWidth: 500, maxWidth: 600, fontFamily: "'Geist', sans-serif" }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: '#fff', borderRadius: 14, padding: 24, minWidth: 500, maxWidth: 600, fontFamily: "'Open Sans', sans-serif" }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
           <div style={{ fontSize: 16, fontWeight: 700, color: VBT_NAVY }}>Subir BBDD BT</div>
           <button onClick={onClose} style={{ background: 'transparent', border: 'none', cursor: 'pointer', fontSize: 18, color: VBT_MUTED }}>✕</button>
@@ -3118,7 +3118,7 @@ function UploadExcelBT({ onClose }) {
           <div style={{ padding: 20, textAlign: 'center' }}>
             <i className="ti ti-circle-check" style={{ fontSize: 40, color: VBT_GREEN }} />
             <div style={{ fontSize: 14, fontWeight: 600, color: VBT_TEXT, marginTop: 8 }}>{msg}</div>
-            <button onClick={onClose} style={{ marginTop: 14, fontSize: 12, fontWeight: 600, padding: '8px 18px', borderRadius: 6, border: 'none', background: VBT_NAVY, color: '#fff', cursor: 'pointer', fontFamily: "'Geist', sans-serif" }}>Cerrar y refrescar</button>
+            <button onClick={onClose} style={{ marginTop: 14, fontSize: 12, fontWeight: 600, padding: '8px 18px', borderRadius: 6, border: 'none', background: VBT_NAVY, color: '#fff', cursor: 'pointer', fontFamily: "'Open Sans', sans-serif" }}>Cerrar y refrescar</button>
           </div>
         )}
 
@@ -3128,7 +3128,7 @@ function UploadExcelBT({ onClose }) {
               <div style={{ fontSize: 13, fontWeight: 600, color: '#991b1b' }}>{msg}</div>
               {errores.length > 0 && (<div style={{ fontSize: 11, color: '#7f1d1d', marginTop: 6, maxHeight: 100, overflowY: 'auto' }}>{errores.map((e, i) => <div key={i}>{e}</div>)}</div>)}
             </div>
-            <button onClick={() => { setStatus('idle'); setMsg(''); setErrores([]); }} style={{ fontSize: 12, fontWeight: 600, padding: '8px 18px', borderRadius: 6, border: `1px solid ${VBT_BORDER}`, background: VBT_CARD, color: VBT_TEXT, cursor: 'pointer', fontFamily: "'Geist', sans-serif" }}>Reintentar</button>
+            <button onClick={() => { setStatus('idle'); setMsg(''); setErrores([]); }} style={{ fontSize: 12, fontWeight: 600, padding: '8px 18px', borderRadius: 6, border: `1px solid ${VBT_BORDER}`, background: VBT_CARD, color: VBT_TEXT, cursor: 'pointer', fontFamily: "'Open Sans', sans-serif" }}>Reintentar</button>
           </div>
         )}
       </div>
@@ -3168,7 +3168,7 @@ function VBT_KPI({ l, v, s, accent, info, onClick }) {
           >
             i
             {tooltipOpen && (
-              <div style={{ position: 'absolute', top: 'calc(100% + 8px)', right: -4, width: 260, background: '#1a1a1a', color: '#fff', fontSize: 11, lineHeight: 1.5, padding: '10px 12px', borderRadius: 8, boxShadow: '0 8px 24px rgba(0,0,0,0.25)', zIndex: 50, fontWeight: 400, fontFamily: "'Geist', sans-serif", textTransform: 'none', letterSpacing: 0, fontStyle: 'normal' }}>
+              <div style={{ position: 'absolute', top: 'calc(100% + 8px)', right: -4, width: 260, background: '#1a1a1a', color: '#fff', fontSize: 11, lineHeight: 1.5, padding: '10px 12px', borderRadius: 8, boxShadow: '0 8px 24px rgba(0,0,0,0.25)', zIndex: 50, fontWeight: 400, fontFamily: "'Open Sans', sans-serif", textTransform: 'none', letterSpacing: 0, fontStyle: 'normal' }}>
                 <div style={{ position: 'absolute', top: -4, right: 8, width: 8, height: 8, background: '#1a1a1a', transform: 'rotate(45deg)' }} />
                 {info}
               </div>
@@ -3192,7 +3192,7 @@ function VBT_ThS({ children }) {
 }
 
 function VBT_TdS({ children, bold, muted, mono, center, strong, small }) {
-  return <td style={{ padding: '8px 10px', fontSize: small ? 11 : 12, fontFamily: mono ? 'monospace' : "'Geist', sans-serif", color: muted ? VBT_MUTED : strong ? VBT_NAVY : VBT_TEXT, fontWeight: bold || strong ? 600 : 'normal', textAlign: center ? 'center' : 'left' }}>{children}</td>;
+  return <td style={{ padding: '8px 10px', fontSize: small ? 11 : 12, fontFamily: mono ? 'monospace' : "'Open Sans', sans-serif", color: muted ? VBT_MUTED : strong ? VBT_NAVY : VBT_TEXT, fontWeight: bold || strong ? 600 : 'normal', textAlign: center ? 'center' : 'left' }}>{children}</td>;
 }
 
 function VBT_Pill({ children, type }) {
@@ -3224,7 +3224,7 @@ function MultiDriverIdModal({ data, sinBt, onClose, onSelectCurp }) {
   };
 
   return (
-    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20, fontFamily: "'Geist', sans-serif" }}>
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20, fontFamily: "'Open Sans', sans-serif" }}>
       <div onClick={e => e.stopPropagation()} style={{ background: '#fff', borderRadius: 12, width: '100%', maxWidth: 1100, maxHeight: '90vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         {/* Header */}
         <div style={{ padding: '16px 20px', borderBottom: `1px solid ${VBT_BORDER}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'linear-gradient(135deg, #f8f7ff 0%, #fff 100%)' }}>
@@ -3240,7 +3240,7 @@ function MultiDriverIdModal({ data, sinBt, onClose, onSelectCurp }) {
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
             {(data || []).length > 0 && (
-              <button onClick={exportarCSV} style={{ fontSize: 11, fontWeight: 600, padding: '6px 12px', borderRadius: 6, border: `1px solid ${VBT_BORDER}`, background: '#fff', color: VBT_NAVY, cursor: 'pointer', fontFamily: "'Geist', sans-serif", display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+              <button onClick={exportarCSV} style={{ fontSize: 11, fontWeight: 600, padding: '6px 12px', borderRadius: 6, border: `1px solid ${VBT_BORDER}`, background: '#fff', color: VBT_NAVY, cursor: 'pointer', fontFamily: "'Open Sans', sans-serif", display: 'inline-flex', alignItems: 'center', gap: 5 }}>
                 <i className="ti ti-download" style={{ fontSize: 13 }} />
                 Exportar CSV
               </button>
@@ -3632,7 +3632,7 @@ function TorreTresPilares() {
             style={{
               padding: "6px 10px", fontSize: 12,
               border: "1px solid #e4e7ec", borderRadius: 6,
-              fontFamily: "'Geist', sans-serif",
+              fontFamily: "'Open Sans', sans-serif",
             }}
           />
           <select
@@ -3641,7 +3641,7 @@ function TorreTresPilares() {
             style={{
               padding: "6px 10px", fontSize: 12,
               border: "1px solid #e4e7ec", borderRadius: 6,
-              fontFamily: "'Geist', sans-serif", minWidth: 120,
+              fontFamily: "'Open Sans', sans-serif", minWidth: 120,
             }}
           >
             <option value="">Todas las SCs</option>
@@ -3651,9 +3651,9 @@ function TorreTresPilares() {
             onClick={() => setRefreshKey(k => k + 1)}
             style={{
               padding: "6px 12px", fontSize: 12, fontWeight: 600,
-              background: "#fff", color: "#1a3a6b",
+              background: "#fff", color: "#002E5D",
               border: "1px solid #e4e7ec", borderRadius: 6, cursor: "pointer",
-              fontFamily: "'Geist', sans-serif",
+              fontFamily: "'Open Sans', sans-serif",
             }}
             title="Recargar"
           >↻ Refrescar</button>
@@ -3664,7 +3664,7 @@ function TorreTresPilares() {
           <input type="date" value={excelHasta} onChange={e => setExcelHasta(e.target.value)}
             style={{ padding: "5px 8px", borderRadius: 4, border: "1px solid #e4e7ec", fontSize: 12, color: "#1a1a1a" }} />
           <button onClick={descargarExcel} disabled={excelBusy}
-            style={{ padding: "7px 14px", borderRadius: 6, border: "1px solid #16a34a", background: excelBusy ? "#9ca3af" : "#16a34a", color: "#fff", fontSize: 12, fontWeight: 700, cursor: excelBusy ? "wait" : "pointer", display: "flex", alignItems: "center", gap: 6, fontFamily: "'Geist', sans-serif" }}>
+            style={{ padding: "7px 14px", borderRadius: 6, border: "1px solid #16a34a", background: excelBusy ? "#9ca3af" : "#16a34a", color: "#fff", fontSize: 12, fontWeight: 700, cursor: excelBusy ? "wait" : "pointer", display: "flex", alignItems: "center", gap: 6, fontFamily: "'Open Sans', sans-serif" }}>
             {excelBusy ? "⏳ Generando..." : "📥 Descargar Excel"}
           </button>
         </div>
@@ -3673,11 +3673,11 @@ function TorreTresPilares() {
       {/* ─── 3 PILARES · TARJETAS GRANDES ─── */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12, marginBottom: 16 }}>
         {/* Pilar 1 */}
-        <div className="form-card" style={{ marginBottom: 0, padding: 20, borderTop: "4px solid #1a3a6b" }}>
-          <div style={{ fontSize: 10, fontWeight: 700, color: "#1a3a6b", textTransform: "uppercase", letterSpacing: 1, marginBottom: 8 }}>
+        <div className="form-card" style={{ marginBottom: 0, padding: 20, borderTop: "4px solid #002E5D" }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: "#002E5D", textTransform: "uppercase", letterSpacing: 1, marginBottom: 8 }}>
             Pilar 1 · Compromiso
           </div>
-          <div style={{ fontSize: 36, fontWeight: 700, lineHeight: 1, marginBottom: 8, color: "#1a3a6b" }}>
+          <div style={{ fontSize: 36, fontWeight: 700, lineHeight: 1, marginBottom: 8, color: "#002E5D" }}>
             {kpis?.aceptadas ?? 0}
           </div>
           <div style={{ fontSize: 12, color: "#334155", marginBottom: 4 }}>
@@ -3694,7 +3694,7 @@ function TorreTresPilares() {
             Pilar 2 · Rostering
           </div>
           <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 8 }}>
-            <div style={{ fontSize: 36, fontWeight: 700, lineHeight: 1, color: "#1a3a6b" }}>
+            <div style={{ fontSize: 36, fontWeight: 700, lineHeight: 1, color: "#002E5D" }}>
               {kpis?.asignadas ?? 0}
             </div>
             <div style={{ fontSize: 18, fontWeight: 600, color: colorPct(kpis?.pctAsignacion) }}>
@@ -3715,7 +3715,7 @@ function TorreTresPilares() {
             Pilar 3 · Ejecución
           </div>
           <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 8 }}>
-            <div style={{ fontSize: 36, fontWeight: 700, lineHeight: 1, color: "#1a3a6b" }}>
+            <div style={{ fontSize: 36, fontWeight: 700, lineHeight: 1, color: "#002E5D" }}>
               {kpis?.ok ?? 0}
             </div>
             <div style={{ fontSize: 18, fontWeight: 600, color: colorPct(kpis?.pctOperacion) }}>
@@ -3734,7 +3734,7 @@ function TorreTresPilares() {
       {/* ─── % CADENA TOTAL ─── */}
       <div className="form-card" style={{
         marginBottom: 16, padding: 16,
-        background: "linear-gradient(135deg, #1a3a6b 0%, #0f2647 100%)",
+        background: "linear-gradient(135deg, #002E5D 0%, #0f2647 100%)",
         color: "#fff",
       }}>
         <div style={{ display: "grid", gridTemplateColumns: "auto 1fr auto", gap: 20, alignItems: "center" }}>
@@ -3767,7 +3767,7 @@ function TorreTresPilares() {
             onClick={() => setBucketSeleccionado(null)}
             style={{
               padding: "4px 10px", fontSize: 11, fontWeight: 600,
-              background: "#fff", color: "#1a3a6b",
+              background: "#fff", color: "#002E5D",
               border: "1px solid #e4e7ec", borderRadius: 6, cursor: "pointer",
             }}
           >× Limpiar filtro</button>
@@ -3834,7 +3834,7 @@ function TorreTresPilares() {
                 <th style={{ padding: "8px 6px", textAlign: "center", fontWeight: 600, color: "#9333ea" }}>Pending Rost</th>
                 <th style={{ padding: "8px 6px", textAlign: "center", fontWeight: 600, color: "#1e40af" }}>Rech SDD</th>
                 <th style={{ padding: "8px 6px", textAlign: "center", fontWeight: 600, color: "#475569" }}>Rech SPOT</th>
-                <th style={{ padding: "8px 6px", textAlign: "center", fontWeight: 700, color: "#1a3a6b", borderLeft: "2px solid #e4e7ec" }}>Total</th>
+                <th style={{ padding: "8px 6px", textAlign: "center", fontWeight: 700, color: "#002E5D", borderLeft: "2px solid #e4e7ec" }}>Total</th>
                 <th style={{ padding: "8px 6px", textAlign: "center", fontWeight: 600, color: "#0891b2", borderLeft: "2px dashed #cbd5e1" }} title="Cambios entre primera y última captura del día · métrica aparte, no suma al total">ℹ Cambio intradía</th>
               </tr>
             </thead>
@@ -3859,7 +3859,7 @@ function TorreTresPilares() {
                   <td style={{ padding: "6px 6px", textAlign: "center", color: s.pending_rost > 0 ? "#9333ea" : "#94a3b8", fontWeight: s.pending_rost > 0 ? 700 : 400 }} title="MELI rosterió la ruta pero BT nunca confirmó aceptación">{s.pending_rost}</td>
                   <td style={{ padding: "6px 6px", textAlign: "center", color: (s.rejected_sdd || 0) > 0 ? "#1e40af" : "#94a3b8", fontWeight: (s.rejected_sdd || 0) > 0 ? 600 : 400 }} title="Rechazos SDD limpios (BT rechazó antes del plazo)">{s.rejected_sdd || 0}</td>
                   <td style={{ padding: "6px 6px", textAlign: "center", color: (s.rejected_spot || 0) > 0 ? "#475569" : "#94a3b8" }} title="Rechazos Variable/SPOT limpios">{s.rejected_spot || 0}</td>
-                  <td style={{ padding: "6px 6px", textAlign: "center", fontWeight: 700, color: "#1a3a6b", borderLeft: "2px solid #e4e7ec" }}>{s.total}</td>
+                  <td style={{ padding: "6px 6px", textAlign: "center", fontWeight: 700, color: "#002E5D", borderLeft: "2px solid #e4e7ec" }}>{s.total}</td>
                   <td style={{ padding: "6px 6px", textAlign: "center", color: (s.cambios_intradia || 0) > 0 ? "#0891b2" : "#94a3b8", fontWeight: (s.cambios_intradia || 0) > 0 ? 600 : 400, borderLeft: "2px dashed #cbd5e1", fontStyle: "italic" }} title="Métrica aparte: no suma al total">{s.cambios_intradia || 0}</td>
                 </tr>
               ))}
@@ -3895,7 +3895,7 @@ function TorreTresPilares() {
               style={{
                 padding: "5px 10px", fontSize: 12, borderRadius: 6,
                 border: "1px solid #cbd5e1", background: "#fff",
-                color: "#1a3a6b", fontWeight: 600, cursor: "pointer", minWidth: 110
+                color: "#002E5D", fontWeight: 600, cursor: "pointer", minWidth: 110
               }}>
               <option value="">Todas las SCs</option>
               {(resumen?.por_sc || []).map(s => (
@@ -3985,7 +3985,7 @@ function TorreTresPilares() {
                       <tr>
                         <td colSpan={11} style={{ padding: 0, background: "#f8fafc", borderBottom: "1px solid #e4e7ec" }}>
                           <div style={{ padding: "12px 20px" }}>
-                            <div style={{ fontSize: 11, fontWeight: 600, color: "#1a3a6b", marginBottom: 8 }}>
+                            <div style={{ fontSize: 11, fontWeight: 600, color: "#002E5D", marginBottom: 8 }}>
                               🕐 Historial del travel {f.travel_id} · {f.sc} · {fecha}
                             </div>
                             {hist?.loading && (
@@ -4058,7 +4058,7 @@ function TorreTresPilares() {
                                         borderBottom: "0.5px solid #e4e7ec",
                                         background: h.cambio_vs_anterior ? "#fef9c3" : "transparent"
                                       }}>
-                                        <td style={{ padding: "4px 6px", fontWeight: 600, color: "#1a3a6b" }}>{h.captura}</td>
+                                        <td style={{ padding: "4px 6px", fontWeight: 600, color: "#002E5D" }}>{h.captura}</td>
                                         <td style={{ padding: "4px 6px", fontFamily: "monospace", color: "#64748b" }}>{h.hora_mx}</td>
                                         <td style={{ padding: "4px 6px", color: "#334155" }}>{h.driver_name || "—"}</td>
                                         <td style={{ padding: "4px 6px", fontFamily: "monospace", color: "#475569" }}>{h.vehicle_plate || "—"}</td>
@@ -4084,7 +4084,7 @@ function TorreTresPilares() {
                                         }}>
                                           {h.min_a_lockdate !== null && h.min_a_lockdate !== undefined ? `${h.min_a_lockdate}'` : "—"}
                                         </td>
-                                        <td style={{ padding: "4px 6px", color: "#1a3a6b", fontWeight: 600, fontSize: 10 }}>
+                                        <td style={{ padding: "4px 6px", color: "#002E5D", fontWeight: 600, fontSize: 10 }}>
                                           {h.cambio_vs_anterior || ""}
                                         </td>
                                       </tr>
@@ -4242,7 +4242,7 @@ function PoolMeliCompromiso() {
         {fechaVista && (
           <div style={{ marginTop: 16 }}>
             <button onClick={() => setFechaVista("")}
-              style={{ padding: "8px 14px", borderRadius: 6, border: "1px solid #1a3a6b", background: "#1a3a6b", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "'Geist', sans-serif" }}>
+              style={{ padding: "8px 14px", borderRadius: 6, border: "1px solid #002E5D", background: "#002E5D", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "'Open Sans', sans-serif" }}>
               ← Volver a la operativa de mañana
             </button>
           </div>
@@ -4403,16 +4403,16 @@ function PoolMeliCompromiso() {
           <input type="date" value={excelHasta} onChange={e => setExcelHasta(e.target.value)}
             style={{ padding: "5px 8px", borderRadius: 4, border: "1px solid #e4e7ec", fontSize: 12, color: "#1a1a1a" }} />
           <button onClick={exportarHistorico} disabled={excelHistBusy}
-            style={{ padding: "7px 14px", borderRadius: 6, border: "1px solid #16a34a", background: excelHistBusy ? "#9ca3af" : "#16a34a", color: "#fff", fontSize: 12, fontWeight: 700, cursor: excelHistBusy ? "wait" : "pointer", display: "flex", alignItems: "center", gap: 6, fontFamily: "'Geist', sans-serif" }}
+            style={{ padding: "7px 14px", borderRadius: 6, border: "1px solid #16a34a", background: excelHistBusy ? "#9ca3af" : "#16a34a", color: "#fff", fontSize: 12, fontWeight: 700, cursor: excelHistBusy ? "wait" : "pointer", display: "flex", alignItems: "center", gap: 6, fontFamily: "'Open Sans', sans-serif" }}
             title="Excel por rango desde la tabla histórica (se llena a diario)"
           >{excelHistBusy ? "⏳ Generando..." : "📥 Descargar Excel"}</button>
           <button
             onClick={exportarExcel}
             style={{
               padding: "8px 14px", fontSize: 12, fontWeight: 600,
-              background: "#fff", color: "#1a3a6b",
+              background: "#fff", color: "#002E5D",
               border: "1px solid #e4e7ec", borderRadius: 6,
-              cursor: "pointer", fontFamily: "'Geist', sans-serif",
+              cursor: "pointer", fontFamily: "'Open Sans', sans-serif",
               display: "flex", alignItems: "center", gap: 6,
             }}
             title="Excel de la foto de mañana (un día)"
@@ -4421,9 +4421,9 @@ function PoolMeliCompromiso() {
             onClick={() => setRefreshKey(k => k + 1)}
             style={{
               padding: "8px 14px", fontSize: 12, fontWeight: 600,
-              background: "#fff", color: "#1a3a6b",
+              background: "#fff", color: "#002E5D",
               border: "1px solid #e4e7ec", borderRadius: 6,
-              cursor: "pointer", fontFamily: "'Geist', sans-serif",
+              cursor: "pointer", fontFamily: "'Open Sans', sans-serif",
               display: "flex", alignItems: "center", gap: 6,
             }}
             title="Recargar datos"
@@ -4434,9 +4434,9 @@ function PoolMeliCompromiso() {
             disabled={scraping}
             style={{
               padding: "8px 14px", fontSize: 12, fontWeight: 700,
-              background: scraping ? "#f0a875" : "#F47B20", color: "#fff",
-              border: "1px solid #F47B20", borderRadius: 6,
-              cursor: scraping ? "wait" : "pointer", fontFamily: "'Geist', sans-serif",
+              background: scraping ? "#f0a875" : "#FF6600", color: "#fff",
+              border: "1px solid #FF6600", borderRadius: 6,
+              cursor: scraping ? "wait" : "pointer", fontFamily: "'Open Sans', sans-serif",
               display: "flex", alignItems: "center", gap: 6,
             }}
             title="Vuelve a scrapear MELI con las cookies vigentes y recarga (~30s)"
@@ -4446,18 +4446,18 @@ function PoolMeliCompromiso() {
       </div>
 
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16, padding: "10px 14px", background: "#f8fafc", border: "1px solid #e4e7ec", borderRadius: 8, flexWrap: "wrap" }}>
-        <span style={{ fontSize: 11, fontWeight: 700, color: "#1a3a6b", textTransform: "uppercase", letterSpacing: 0.5 }}>Ver operativa de:</span>
+        <span style={{ fontSize: 11, fontWeight: 700, color: "#002E5D", textTransform: "uppercase", letterSpacing: 0.5 }}>Ver operativa de:</span>
         <input type="date" value={fechaVista} max={fechaHoyOperativa()} onChange={e => setFechaVista(e.target.value)}
-          style={{ padding: "6px 10px", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: 13, color: "#1a1a1a", fontFamily: "'Geist', sans-serif" }} />
+          style={{ padding: "6px 10px", borderRadius: 6, border: "1px solid #cbd5e1", fontSize: 13, color: "#1a1a1a", fontFamily: "'Open Sans', sans-serif" }} />
         {fechaVista ? (
           <>
-            <span style={{ fontSize: 12, fontWeight: 600, color: "#F47B20" }}>📅 Viendo histórico</span>
+            <span style={{ fontSize: 12, fontWeight: 600, color: "#FF6600" }}>📅 Viendo histórico</span>
             <button onClick={() => setFechaVista("")}
-              style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid #1a3a6b", background: "#1a3a6b", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "'Geist', sans-serif" }}>
+              style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid #002E5D", background: "#002E5D", color: "#fff", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "'Open Sans', sans-serif" }}>
               ← Volver a mañana (en vivo)
             </button>
             <button onClick={recalcularDia} disabled={recalc}
-              style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid #F47B20", background: recalc ? "#f0a875" : "#F47B20", color: "#fff", fontSize: 12, fontWeight: 700, cursor: recalc ? "wait" : "pointer", fontFamily: "'Geist', sans-serif" }}
+              style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid #FF6600", background: recalc ? "#f0a875" : "#FF6600", color: "#fff", fontSize: 12, fontWeight: 700, cursor: recalc ? "wait" : "pointer", fontFamily: "'Open Sans', sans-serif" }}
               title="Recalcula el total del día desde los datos crudos de MELI (meli_travel_requests)">
               {recalc ? "⏳ Recalculando…" : "🔁 Recalcular y guardar (crudo MELI)"}
             </button>
@@ -4479,7 +4479,7 @@ function PoolMeliCompromiso() {
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12, marginBottom: 20 }}>
         <div className="form-card" style={{
           marginBottom: 0,
-          background: "linear-gradient(135deg, #1a3a6b 0%, #0f2647 100%)",
+          background: "linear-gradient(135deg, #002E5D 0%, #0f2647 100%)",
           color: "#fff", padding: 20,
         }}>
           <div style={{ fontSize: 10, fontWeight: 700, opacity: 0.8, textTransform: "uppercase", letterSpacing: 1, marginBottom: 8 }}>
@@ -4534,7 +4534,7 @@ function PoolMeliCompromiso() {
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 12, marginBottom: 20 }}>
-        <CompromisoTarjeta label="Ofrecidas" sublabel="Total por MELI" total={ofrecidasTotal} sdd={c.ofrecidas_sdd || 0} spot={c.ofrecidas_spot || 0} color="#1a3a6b" />
+        <CompromisoTarjeta label="Ofrecidas" sublabel="Total por MELI" total={ofrecidasTotal} sdd={c.ofrecidas_sdd || 0} spot={c.ofrecidas_spot || 0} color="#002E5D" />
         <CompromisoTarjeta label="Para responder" sublabel="Pendientes" total={pendientesTotal} sdd={c.pendientes_sdd || 0} spot={c.pendientes_spot || 0} color="#ca8a04" />
         <CompromisoTarjeta label="Aceptadas" sublabel="Por nosotros" total={aceptadasTotal} sdd={c.aceptadas_sdd || 0} spot={c.aceptadas_spot || 0} color="#047857" />
         <CompromisoTarjeta label="Rechazadas" sublabel="Por nosotros" total={rechazadasTotal} sdd={c.rechazadas_sdd || 0} spot={c.rechazadas_spot || 0} color="#b91c1c" />
@@ -4889,13 +4889,13 @@ function PoolMeliKPIOperacion() {
   }, [pnrCasos, rutaToSc, fechaAyer]);
 
   if (loading) {
-    return <div className="pg" style={{ padding: 60, textAlign: "center", color: "#888", fontFamily: "'Geist', sans-serif" }}>Cargando KPI de operación…</div>;
+    return <div className="pg" style={{ padding: 60, textAlign: "center", color: "#888", fontFamily: "'Open Sans', sans-serif" }}>Cargando KPI de operación…</div>;
   }
   if (error) {
-    return <div className="pg" style={{ padding: 40, color: "#c0392b", fontFamily: "'Geist', sans-serif" }}>Error: {error}</div>;
+    return <div className="pg" style={{ padding: 40, color: "#c0392b", fontFamily: "'Open Sans', sans-serif" }}>Error: {error}</div>;
   }
   if (!data) {
-    return <div className="pg" style={{ padding: 40, color: "#888", fontFamily: "'Geist', sans-serif" }}>Sin datos</div>;
+    return <div className="pg" style={{ padding: 40, color: "#888", fontFamily: "'Open Sans', sans-serif" }}>Sin datos</div>;
   }
 
   // ═══ Extracción de datos del día (RPC comparativo) ═══════════════════════
@@ -4948,7 +4948,7 @@ function PoolMeliKPIOperacion() {
   const cumpleDev = (pct) => pct != null && Number(pct) < 2;
   const cumpleNoVis = (pct) => pct != null && Number(pct) <= 0.5;
 
-  // Badges: usa paleta de severidad del Brain (verde #16a34a / naranja #F47B20 / rojo #c0392b)
+  // Badges: usa paleta de severidad del Brain (verde #16a34a / naranja #FF6600 / rojo #c0392b)
   const badge = (tipo, txt) => {
     const styles = {
       ok:   { bg: "#dcfce7", color: "#166534" },
@@ -4960,13 +4960,13 @@ function PoolMeliKPIOperacion() {
       <span style={{
         fontSize: 9, fontWeight: 600, padding: "2px 7px", borderRadius: 4,
         textTransform: "uppercase", whiteSpace: "nowrap", letterSpacing: 0.3,
-        background: s.bg, color: s.color, fontFamily: "'Geist', sans-serif",
+        background: s.bg, color: s.color, fontFamily: "'Open Sans', sans-serif",
       }}>{txt}</span>
     );
   };
 
   // Color de borde izquierdo según severidad (Brain colors)
-  const borderColors = { bad: "#c0392b", warn: "#F47B20", ok: "#16a34a" };
+  const borderColors = { bad: "#c0392b", warn: "#FF6600", ok: "#16a34a" };
 
   // ═══ Procesado de histórico ══════════════════════════════════════════════
   // (los useMemo de histPeriodo/histPrev/rankingsDia se calculan arriba, antes de los returns)
@@ -5019,8 +5019,8 @@ function PoolMeliKPIOperacion() {
 
   // ═══ Estilos inline reutilizables (paleta Brain) ═════════════════════════
   const S = {
-    NAVY: "#1a3a6b",
-    ORANGE: "#F47B20",
+    NAVY: "#002E5D",
+    ORANGE: "#FF6600",
     BG: "#f0f2f5",
     BORDER: "#e4e7ec",
     TEXT_MAIN: "#1a1a1a",
@@ -5028,13 +5028,13 @@ function PoolMeliKPIOperacion() {
     TEXT_MUTED: "#94a3b8",
     TEXT_LBL: "#64748b",
     OK: "#16a34a",
-    WARN: "#F47B20",
+    WARN: "#FF6600",
     BAD: "#c0392b",
-    INFO: "#1a3a6b",
+    INFO: "#002E5D",
   };
 
   return (
-    <div style={{ fontFamily: "'Geist', sans-serif", background: S.BG, paddingBottom: 40 }}>
+    <div style={{ fontFamily: "'Open Sans', sans-serif", background: S.BG, paddingBottom: 40 }}>
       {/* ═══ CONTEXT BAR ═══ */}
       <div style={{
         background: "#fff", borderBottom: `1px solid ${S.BORDER}`,
@@ -5066,14 +5066,14 @@ function PoolMeliKPIOperacion() {
                 borderRadius: 6, border: `1px solid ${periodo === n ? S.NAVY : S.BORDER}`,
                 background: periodo === n ? S.NAVY : "#fff",
                 color: periodo === n ? "#fff" : "#475569",
-                cursor: "pointer", fontFamily: "'Geist', sans-serif",
+                cursor: "pointer", fontFamily: "'Open Sans', sans-serif",
               }}>D-{n}</button>
           ))}
           <button onClick={() => setRefreshKey(k => k + 1)}
             style={{
               marginLeft: 8, fontSize: 11, fontWeight: 600, padding: "5px 10px",
               background: "#fff", color: S.NAVY, border: `1px solid ${S.BORDER}`,
-              borderRadius: 6, cursor: "pointer", fontFamily: "'Geist', sans-serif",
+              borderRadius: 6, cursor: "pointer", fontFamily: "'Open Sans', sans-serif",
             }}>↻ Refrescar</button>
         </div>
       </div>
@@ -5363,13 +5363,13 @@ function PoolMeliKPIOperacion() {
                 <div style={{ fontSize: 10, color: "#9CA3AF" }}>
                   {pnrStats.porSC.length} SC con casos
                   {pnrStats.porSC.some(s => s.sc === "SIN_SC") && (
-                    <span style={{ color: "#F47B20", marginLeft: 8 }}>
+                    <span style={{ color: "#FF6600", marginLeft: 8 }}>
                       · {pnrStats.porSC.find(s => s.sc === "SIN_SC")?.total || 0} casos sin mapeo de ruta
                     </span>
                   )}
                 </div>
               </div>
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, fontFamily: "'Geist', sans-serif" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, fontFamily: "'Open Sans', sans-serif" }}>
                 <thead>
                   <tr style={{ borderBottom: `1px solid ${S.BORDER}`, textAlign: "left" }}>
                     <th style={{ padding: "8px 10px", fontSize: 10, color: "#6B7280", textTransform: "uppercase", letterSpacing: 0.4, fontWeight: 600 }}>SC</th>
@@ -5386,7 +5386,7 @@ function PoolMeliKPIOperacion() {
                 <tbody>
                   {pnrStats.porSC.map((s, i) => (
                     <tr key={s.sc} style={{ borderBottom: i === pnrStats.porSC.length - 1 ? "none" : `1px solid ${S.BORDER}` }}>
-                      <td style={{ padding: "8px 10px", fontWeight: 700, color: s.sc === "SIN_SC" ? "#F47B20" : "#1a3a6b" }}>
+                      <td style={{ padding: "8px 10px", fontWeight: 700, color: s.sc === "SIN_SC" ? "#FF6600" : "#002E5D" }}>
                         {s.sc === "SIN_SC" ? "— Sin mapeo" : s.sc}
                       </td>
                       <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 700, color: "#111827", fontVariantNumeric: "tabular-nums" }}>{s.total}</td>
@@ -5396,7 +5396,7 @@ function PoolMeliKPIOperacion() {
                       <td style={{ padding: "8px 10px", textAlign: "right", color: s.sinComprobante > 0 ? "#c0392b" : "#cbd5e1", fontVariantNumeric: "tabular-nums" }}>{s.sinComprobante || "—"}</td>
                       <td style={{ padding: "8px 10px", textAlign: "right", color: s.aCobro > 0 ? "#991b1b" : "#cbd5e1", fontWeight: s.aCobro > 0 ? 700 : 400, fontVariantNumeric: "tabular-nums" }}>{s.aCobro || "—"}</td>
                       <td style={{ padding: "8px 10px", textAlign: "right", color: s.cerrados > 0 ? "#475569" : "#cbd5e1", fontVariantNumeric: "tabular-nums" }}>{s.cerrados || "—"}</td>
-                      <td style={{ padding: "8px 10px", textAlign: "right", color: "#1a3a6b", fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>
+                      <td style={{ padding: "8px 10px", textAlign: "right", color: "#002E5D", fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>
                         ${Math.round(s.valor).toLocaleString("es-MX")}
                       </td>
                     </tr>
@@ -5474,7 +5474,7 @@ function GrupoTitulo({ icon, titulo }) {
 }
 
 function CardWrap({ S, tipo, children, height }) {
-  const borderColors = { bad: "#c0392b", warn: "#F47B20", ok: "#16a34a" };
+  const borderColors = { bad: "#c0392b", warn: "#FF6600", ok: "#16a34a" };
   const bc = tipo ? borderColors[tipo] : null;
   return (
     <div style={{
@@ -5554,7 +5554,7 @@ function Sparkline({ vals, allVals, meta, prevVals, height = 52, color = "#9CA3A
   if (!vals || vals.length < 3) {
     return (
       <svg width="100%" height={height} viewBox={`0 0 400 ${height}`} preserveAspectRatio="none" style={{ overflow: "visible" }}>
-        <text x="200" y={height / 2 + 4} textAnchor="middle" fontSize="9" fill="#cbd5e1" fontFamily="'Geist', sans-serif">
+        <text x="200" y={height / 2 + 4} textAnchor="middle" fontSize="9" fill="#cbd5e1" fontFamily="'Open Sans', sans-serif">
           {(vals?.length || 0) === 0 ? "sin histórico" : "datos insuficientes"}
         </text>
       </svg>
@@ -5604,7 +5604,7 @@ function Sparkline({ vals, allVals, meta, prevVals, height = 52, color = "#9CA3A
       })()}
       {secondaryVals?.length >= 3 && (() => {
         const { d } = buildPath(secondaryVals);
-        return <path d={d} fill="none" stroke="#1a3a6b" strokeWidth="1.3" strokeDasharray="2,3" strokeLinejoin="round" strokeLinecap="round" opacity="0.55" />;
+        return <path d={d} fill="none" stroke="#002E5D" strokeWidth="1.3" strokeDasharray="2,3" strokeLinejoin="round" strokeLinecap="round" opacity="0.55" />;
       })()}
       {(() => {
         const { d, lx, ly, x0 } = buildPath(vals);
@@ -5822,7 +5822,7 @@ function PoolMeliDiferenciasMaestros() {
     fechaTexto = `${dias[fechaObj.getDay()]} ${d} de ${meses[m - 1]} de ${y}`;
   }
 
-  const colorPctMatch = pctMatch >= 95 ? "#047857" : pctMatch >= 85 ? "#1A3A6B" : "#b91c1c";
+  const colorPctMatch = pctMatch >= 95 ? "#047857" : pctMatch >= 85 ? "#002E5D" : "#b91c1c";
 
   return (
     <div className="pg">
@@ -5847,16 +5847,16 @@ function PoolMeliDiferenciasMaestros() {
             style={{
               padding: "6px 10px", fontSize: 12,
               border: "1px solid #e4e7ec", borderRadius: 6,
-              fontFamily: "'Geist', sans-serif", color: "#1a3a6b",
+              fontFamily: "'Open Sans', sans-serif", color: "#002E5D",
             }}
           />
           <button
             onClick={() => setRefreshKey(k => k + 1)}
             style={{
               padding: "8px 14px", fontSize: 12, fontWeight: 600,
-              background: "#fff", color: "#1a3a6b",
+              background: "#fff", color: "#002E5D",
               border: "1px solid #e4e7ec", borderRadius: 6,
-              cursor: "pointer", fontFamily: "'Geist', sans-serif",
+              cursor: "pointer", fontFamily: "'Open Sans', sans-serif",
             }}
             title="Recargar datos"
           >
@@ -5867,11 +5867,11 @@ function PoolMeliDiferenciasMaestros() {
 
       {/* KPIs principales */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 12, marginBottom: 20 }}>
-        <div className="form-card" style={{ marginBottom: 0, padding: 16, borderTop: "3px solid #1A3A6B" }}>
+        <div className="form-card" style={{ marginBottom: 0, padding: 16, borderTop: "3px solid #002E5D" }}>
           <div style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>
             Total de Rutas
           </div>
-          <div style={{ fontSize: 32, fontWeight: 700, color: "#1A3A6B", lineHeight: 1, marginBottom: 4 }}>
+          <div style={{ fontSize: 32, fontWeight: 700, color: "#002E5D", lineHeight: 1, marginBottom: 4 }}>
             {totalRutas}
           </div>
           <div style={{ fontSize: 10, color: "#94a3b8" }}>
@@ -5889,11 +5889,11 @@ function PoolMeliDiferenciasMaestros() {
             {rutasMatch} de {totalRutas} cuadran
           </div>
         </div>
-        <div className="form-card" style={{ marginBottom: 0, padding: 16, borderTop: "3px solid #F47B20" }}>
+        <div className="form-card" style={{ marginBottom: 0, padding: 16, borderTop: "3px solid #FF6600" }}>
           <div style={{ fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>
             Con diferencias
           </div>
-          <div style={{ fontSize: 32, fontWeight: 700, color: "#F47B20", lineHeight: 1, marginBottom: 4 }}>
+          <div style={{ fontSize: 32, fontWeight: 700, color: "#FF6600", lineHeight: 1, marginBottom: 4 }}>
             {rutasConDif}
           </div>
           <div style={{ fontSize: 10, color: "#94a3b8" }}>
@@ -5948,7 +5948,7 @@ function PoolMeliDiferenciasMaestros() {
                 { label: "Devueltos", meli: resumen.total_devueltos_meli, snap: resumen.total_devueltos_snap },
               ].map((row, i) => {
                 const dif = (row.snap || 0) - (row.meli || 0);
-                const colorDif = dif > 0 ? "#F47B20" : dif < 0 ? "#b91c1c" : "#94a3b8";
+                const colorDif = dif > 0 ? "#FF6600" : dif < 0 ? "#b91c1c" : "#94a3b8";
                 return (
                   <tr key={i} style={{ borderBottom: "1px solid #f1f5f9" }}>
                     <td style={{ padding: "10px", fontWeight: 600, color: "#0f172a" }}>{row.label}</td>
@@ -5994,7 +5994,7 @@ function PoolMeliDiferenciasMaestros() {
                     <td style={{ padding: "8px 10px", fontWeight: 700, color: "#0f172a" }}>{sc.sc}</td>
                     <td style={{ padding: "8px 10px", textAlign: "center", color: "#475569", fontVariantNumeric: "tabular-nums" }}>{sc.rutas}</td>
                     <td style={{ padding: "8px 10px", textAlign: "center", color: "#047857", fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>{sc.match}</td>
-                    <td style={{ padding: "8px 10px", textAlign: "center", color: (sc.con_dif || 0) > 0 ? "#F47B20" : "#94a3b8", fontWeight: (sc.con_dif || 0) > 0 ? 700 : 400, fontVariantNumeric: "tabular-nums" }}>
+                    <td style={{ padding: "8px 10px", textAlign: "center", color: (sc.con_dif || 0) > 0 ? "#FF6600" : "#94a3b8", fontWeight: (sc.con_dif || 0) > 0 ? 700 : 400, fontVariantNumeric: "tabular-nums" }}>
                       {sc.con_dif || 0}
                     </td>
                     <td style={{ padding: "8px 10px", textAlign: "center", color: (sc.solo_snap || 0) > 0 ? "#b91c1c" : "#94a3b8", fontWeight: (sc.solo_snap || 0) > 0 ? 700 : 400, fontVariantNumeric: "tabular-nums" }}>
@@ -6003,7 +6003,7 @@ function PoolMeliDiferenciasMaestros() {
                     <td style={{ padding: "8px 10px", textAlign: "center", color: (sc.solo_meli || 0) > 0 ? "#b91c1c" : "#94a3b8", fontWeight: (sc.solo_meli || 0) > 0 ? 700 : 400, fontVariantNumeric: "tabular-nums" }}>
                       {sc.solo_meli || 0}
                     </td>
-                    <td style={{ padding: "8px 10px", textAlign: "right", color: tieneIssues ? "#F47B20" : "#94a3b8", fontWeight: tieneIssues ? 700 : 400, fontVariantNumeric: "tabular-nums" }}>
+                    <td style={{ padding: "8px 10px", textAlign: "right", color: tieneIssues ? "#FF6600" : "#94a3b8", fontWeight: tieneIssues ? 700 : 400, fontVariantNumeric: "tabular-nums" }}>
                       {sc.total_dif_cargados || 0}
                     </td>
                   </tr>
@@ -6056,19 +6056,19 @@ function PoolMeliDiferenciasMaestros() {
                     <td style={{ padding: "8px 6px", textAlign: "right", color: "#475569", fontVariantNumeric: "tabular-nums" }}>
                       {r.cargados_meli ?? "—"} / {r.cargados_snap ?? "—"}
                     </td>
-                    <td style={{ padding: "8px 6px", textAlign: "right", color: "#F47B20", fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>
+                    <td style={{ padding: "8px 6px", textAlign: "right", color: "#FF6600", fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>
                       {r.dif_cargados > 0 ? "+" : ""}{r.dif_cargados}
                     </td>
                     <td style={{ padding: "8px 6px", textAlign: "right", color: "#475569", fontVariantNumeric: "tabular-nums" }}>
                       {r.entregados_meli ?? "—"} / {r.entregados_snap ?? "—"}
                     </td>
-                    <td style={{ padding: "8px 6px", textAlign: "right", color: r.dif_entregados !== 0 ? "#F47B20" : "#94a3b8", fontWeight: r.dif_entregados !== 0 ? 700 : 400, fontVariantNumeric: "tabular-nums" }}>
+                    <td style={{ padding: "8px 6px", textAlign: "right", color: r.dif_entregados !== 0 ? "#FF6600" : "#94a3b8", fontWeight: r.dif_entregados !== 0 ? 700 : 400, fontVariantNumeric: "tabular-nums" }}>
                       {r.dif_entregados > 0 ? "+" : ""}{r.dif_entregados}
                     </td>
                     <td style={{ padding: "8px 6px", textAlign: "right", color: "#475569", fontVariantNumeric: "tabular-nums" }}>
                       {r.devueltos_meli ?? "—"} / {r.devueltos_snap ?? "—"}
                     </td>
-                    <td style={{ padding: "8px 6px", textAlign: "right", color: r.dif_devueltos !== 0 ? "#F47B20" : "#94a3b8", fontWeight: r.dif_devueltos !== 0 ? 700 : 400, fontVariantNumeric: "tabular-nums" }}>
+                    <td style={{ padding: "8px 6px", textAlign: "right", color: r.dif_devueltos !== 0 ? "#FF6600" : "#94a3b8", fontWeight: r.dif_devueltos !== 0 ? 700 : 400, fontVariantNumeric: "tabular-nums" }}>
                       {r.dif_devueltos > 0 ? "+" : ""}{r.dif_devueltos}
                     </td>
                   </tr>
@@ -6116,7 +6116,7 @@ function PoolMeliDiferenciasMaestros() {
                       )}
                     </td>
                     <td style={{ padding: "8px 6px", color: "#475569" }}>{r.driver_name || "—"}</td>
-                    <td style={{ padding: "8px 6px", textAlign: "right", color: "#1A3A6B", fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>{r.cargados_snap}</td>
+                    <td style={{ padding: "8px 6px", textAlign: "right", color: "#002E5D", fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>{r.cargados_snap}</td>
                     <td style={{ padding: "8px 6px", textAlign: "right", color: "#475569", fontVariantNumeric: "tabular-nums" }}>{r.entregados_snap}</td>
                     <td style={{ padding: "8px 6px", textAlign: "right", color: "#475569", fontVariantNumeric: "tabular-nums" }}>{r.devueltos_snap}</td>
                     <td style={{ padding: "8px 6px", textAlign: "center", fontSize: 10, color: "#94a3b8" }}>{r.status_final || "—"}</td>
@@ -6162,7 +6162,7 @@ function PoolMeliDiferenciasMaestros() {
                         </span>
                       )}
                     </td>
-                    <td style={{ padding: "8px 6px", textAlign: "right", color: "#1A3A6B", fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>{r.cargados_meli}</td>
+                    <td style={{ padding: "8px 6px", textAlign: "right", color: "#002E5D", fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>{r.cargados_meli}</td>
                     <td style={{ padding: "8px 6px", textAlign: "right", color: "#475569", fontVariantNumeric: "tabular-nums" }}>{r.entregados_meli}</td>
                     <td style={{ padding: "8px 6px", textAlign: "right", color: "#475569", fontVariantNumeric: "tabular-nums" }}>{r.devueltos_meli}</td>
                   </tr>
@@ -6247,7 +6247,7 @@ function PedidosEnVivoMX() {
     <div style={{ padding: 24, background: "#f0f2f5", minHeight: "100%", display: "flex", flexDirection: "column", gap: 18 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", gap: 16, flexWrap: "wrap" }}>
         <div>
-          <div style={{ fontSize: 24, fontWeight: 700, color: "#1a3a6b" }}>Pedidos de vehículos en vivo</div>
+          <div style={{ fontSize: 24, fontWeight: 700, color: "#002E5D" }}>Pedidos de vehículos en vivo</div>
           <div style={{ fontSize: 13, color: "#5b6474", marginTop: 4 }}>
             Se actualiza cada 5 minutos de 05:00 a 23:59 (México) directo desde MELI.{" "}
             {minDesde != null && <b style={{ color: minDesde > 15 ? "#b42318" : "#15803d" }}>Último dato hace {minDesde} min{minDesde > 15 ? " · revisar el proceso" : ""}</b>}
@@ -6256,7 +6256,7 @@ function PedidosEnVivoMX() {
         <div style={{ display: "flex", gap: 8 }}>
           {[0, 1, 2].map(n => {
             const f = sumar(hoy, n), act = f === fecha;
-            return <button key={f} onClick={() => setFecha(f)} style={{ border: `1px solid ${act ? "#1a3a6b" : "#e4e7ec"}`, background: act ? "#1a3a6b" : "#fff", color: act ? "#fff" : "#1a1a1a", borderRadius: 999, padding: "6px 14px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+            return <button key={f} onClick={() => setFecha(f)} style={{ border: `1px solid ${act ? "#002E5D" : "#e4e7ec"}`, background: act ? "#002E5D" : "#fff", color: act ? "#fff" : "#1a1a1a", borderRadius: 999, padding: "6px 14px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
               {n === 0 ? "Hoy" : n === 1 ? "Mañana" : "Pasado mañana"} · {f.slice(8, 10)}/{f.slice(5, 7)}
             </button>;
           })}
@@ -6389,8 +6389,8 @@ async function vsAjustarFotos(fotos, desde, hasta) {
   });
 }
 const vsNotaBT = t => vsRedondear(VS_ORDEN_BT.reduce((a, c) => a + VS_PESOS_BT[c] * ({ ER: t.er, AR: t.ar, BPP: t.bpp, DS: t.ds }[c] ?? 0) / 100, 0));
-const VS_NAVY = "#1a3a6b";
-const VS_ORANGE = "#F47B20";
+const VS_NAVY = "#002E5D";
+const VS_ORANGE = "#FF6600";
 const VS_BORDER = "#e4e7ec";
 const VS_MUTED = "#5b6474";
 const VS_TEXT = "#1a1a1a";

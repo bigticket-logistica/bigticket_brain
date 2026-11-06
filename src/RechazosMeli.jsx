@@ -34,7 +34,7 @@ const RM_TC_RESPALDO = { usd: 0.054, clp: 53.81, fecha: null, fuente: "referenci
 const rmPesos = v => "$" + Math.round(v || 0).toLocaleString("es-MX");
 const RM_MESES = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"];
 const RM_DIAS = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"];
-const RM_NAVY = "#1a3a6b", RM_ORANGE = "#F47B20", RM_MUTED = "#5b6474", RM_BORDER = "#e4e7ec";
+const RM_NAVY = "#002E5D", RM_ORANGE = "#FF6600", RM_MUTED = "#5b6474", RM_BORDER = "#e4e7ec";
 
 function rmBase() { return { total: 0, cancel: 0, acept: 0, rech: 0, venc: 0, pend: 0, na_sdd: 0, na_spot: 0, ef_sdd: 0, ef_spot: 0, hard_sdd: 0, hard_spot: 0, ss_sdd: 0, ss_spot: 0 }; }
 function rmSumar(b, p) {
@@ -492,7 +492,7 @@ function RechazosMeliMX({ usuario }) {
                       return (
                         <div style={{ marginTop: 16 }}>
                           <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-                            {caja("Por no aceptar", "Soft", tot.soft_sdd, tot.soft_spot, pt.soft, "#F47B20", "#fff7ef")}
+                            {caja("Por no aceptar", "Soft", tot.soft_sdd, tot.soft_spot, pt.soft, "#FF6600", "#fff7ef")}
                             {caja("Por no ejecutar lo aceptado", "Hard", tot.hard_sdd, tot.hard_spot, hard, "#7f1d1d", "#fdf2f2")}
                             <div style={{ flex: "1 1 260px", background: "#A32D2D", color: "#fff", borderRadius: 10, padding: "14px 16px" }}>
                               <div style={{ fontSize: 14, fontWeight: 700 }}>Lo que nos va a descontar MELI</div>

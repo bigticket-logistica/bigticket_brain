@@ -13,7 +13,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { sb } from "./shared";
 
-const AZUL = "#1a3a6b";
+const AZUL = "#002E5D";
 const BORDE = "#e4e7ec";
 
 // Colores del portal (maqueta de marketing y manual de marca).

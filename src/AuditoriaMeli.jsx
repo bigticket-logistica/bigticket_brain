@@ -5,8 +5,8 @@ import { sb, fechaHoyOperativa } from "./shared";
 const CATEGORIAS = {
   aceptacion_ruta:      { label: "Aceptación de ruta",       icon: "✅", color: "#166534" },
   rechazo_ruta:         { label: "Rechazo de ruta",          icon: "⛔", color: "#c0392b" },
-  alta_padron:          { label: "Alta en padrón",           icon: "➕", color: "#1a3a6b" },
-  modificacion_vehiculo:{ label: "Modificación de vehículo", icon: "🚚", color: "#F47B20" },
+  alta_padron:          { label: "Alta en padrón",           icon: "➕", color: "#002E5D" },
+  modificacion_vehiculo:{ label: "Modificación de vehículo", icon: "🚚", color: "#FF6600" },
   baja_conductor:       { label: "Baja de conductor",        icon: "🗑️", color: "#7c3aed" },
   alta_vehiculo:        { label: "Alta de vehículo",         icon: "🆕", color: "#0e7490" },
   baja_vehiculo:        { label: "Baja de vehículo",         icon: "🗑️", color: "#9f1239" },
@@ -92,11 +92,11 @@ function describirCambio(a) {
 function BadgePlataforma({ p }) {
   const map = {
     android_app:      { label: "App",    bg: "#e8f5ec", color: "#166534" },
-    chrome_desktop:   { label: "Web",    bg: "#eef2f7", color: "#1a3a6b" },
-    chrome_extension: { label: "Web",    bg: "#eef2f7", color: "#1a3a6b" },
+    chrome_desktop:   { label: "Web",    bg: "#eef2f7", color: "#002E5D" },
+    chrome_extension: { label: "Web",    bg: "#eef2f7", color: "#002E5D" },
   };
   // null / vacío / valor no mapeado → Web (extensión Chrome)
-  const s = map[p] || { label: "Web", bg: "#eef2f7", color: "#1a3a6b" };
+  const s = map[p] || { label: "Web", bg: "#eef2f7", color: "#002E5D" };
   return (
     <span style={{ background: s.bg, color: s.color, borderRadius: 20, padding: "2px 9px", fontSize: 10, fontWeight: 700 }}>
       {s.label}
@@ -312,8 +312,8 @@ function ModuloAuditoriaMeli() {
         <div style={{ display: "flex", background: "#fff", borderRadius: 8, border: "0.5px solid #e4e7ec", overflow: "hidden" }}>
           {[["listado", "Listado"], ["ranking", "Ranking"]].map(([v, l]) => (
             <button key={v} onClick={() => setVista(v)}
-              style={{ padding: "7px 16px", border: "none", cursor: "pointer", fontSize: 12, fontFamily: "'Geist',sans-serif",
-                background: vista === v ? "#1a3a6b" : "#fff", color: vista === v ? "#fff" : "#666", fontWeight: vista === v ? 600 : 400 }}>
+              style={{ padding: "7px 16px", border: "none", cursor: "pointer", fontSize: 12, fontFamily: "'Open Sans',sans-serif",
+                background: vista === v ? "#002E5D" : "#fff", color: vista === v ? "#fff" : "#666", fontWeight: vista === v ? 600 : 400 }}>
               {l}
             </button>
           ))}
@@ -326,12 +326,12 @@ function ModuloAuditoriaMeli() {
           <span style={{ fontSize: 12, color: "#666", fontWeight: 600 }}>📅 Fecha</span>
           <input type="date" value={fecha} max={fechaHoyOperativa()}
             onChange={(e) => setFecha(e.target.value)}
-            style={{ border: "none", background: "transparent", fontSize: 13, fontFamily: "'Geist',sans-serif", color: "#1a1a1a", cursor: "pointer" }} />
-          {esHoy && <span style={{ background: "#F47B20", color: "#fff", borderRadius: 20, padding: "2px 9px", fontSize: 10, fontWeight: 700 }}>HOY</span>}
+            style={{ border: "none", background: "transparent", fontSize: 13, fontFamily: "'Open Sans',sans-serif", color: "#1a1a1a", cursor: "pointer" }} />
+          {esHoy && <span style={{ background: "#FF6600", color: "#fff", borderRadius: 20, padding: "2px 9px", fontSize: 10, fontWeight: 700 }}>HOY</span>}
         </div>
         {!esHoy && (
           <button onClick={() => setFecha(fechaHoyOperativa())}
-            style={{ background: "#f4f5f7", border: "0.5px solid #e4e7ec", borderRadius: 8, padding: "8px 14px", fontSize: 12, cursor: "pointer", color: "#666", fontFamily: "'Geist',sans-serif" }}>
+            style={{ background: "#f4f5f7", border: "0.5px solid #e4e7ec", borderRadius: 8, padding: "8px 14px", fontSize: 12, cursor: "pointer", color: "#666", fontFamily: "'Open Sans',sans-serif" }}>
             Volver a hoy
           </button>
         )}
@@ -339,7 +339,7 @@ function ModuloAuditoriaMeli() {
 
       {/* ── KPIs por categoría ── */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 10, marginBottom: 18 }}>
-        {[["Total", kpis.total, "#1a3a6b"],
+        {[["Total", kpis.total, "#002E5D"],
           ...Object.entries(CATEGORIAS).map(([k, info]) => [info.label, kpis[k], info.color])
         ].map(([l, v, c]) => (
           <div key={l} style={{ background: "#fff", border: "0.5px solid #e4e7ec", borderRadius: 10, padding: "12px", textAlign: "center" }}>
@@ -432,7 +432,7 @@ function BloqueConexionesApp() {
     <div style={{ marginTop: 28 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10, marginBottom: 12 }}>
         <div>
-          <div style={{ fontSize: 14, fontWeight: 700, color: "#1a3a6b" }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: "#002E5D" }}>
             📱 Conexiones vía app (celular)
           </div>
           <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>
@@ -444,7 +444,7 @@ function BloqueConexionesApp() {
             {activos} activo{activos === 1 ? "" : "s"}
           </span>
           <button onClick={cargar} disabled={cargando}
-            style={{ background: "#f4f5f7", border: "0.5px solid #e4e7ec", borderRadius: 8, padding: "7px 12px", fontSize: 12, cursor: cargando ? "default" : "pointer", color: "#666", fontFamily: "'Geist',sans-serif" }}>
+            style={{ background: "#f4f5f7", border: "0.5px solid #e4e7ec", borderRadius: 8, padding: "7px 12px", fontSize: 12, cursor: cargando ? "default" : "pointer", color: "#666", fontFamily: "'Open Sans',sans-serif" }}>
             {cargando ? "Actualizando…" : "↻ Actualizar"}
           </button>
         </div>
@@ -464,7 +464,7 @@ function BloqueConexionesApp() {
         <div style={{ background: "#fff", border: "0.5px solid #e4e7ec", borderRadius: 12, overflow: "hidden" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
             <thead>
-              <tr style={{ background: "#1a3a6b", color: "#fff", textAlign: "left" }}>
+              <tr style={{ background: "#002E5D", color: "#fff", textAlign: "left" }}>
                 <th style={thStyle}>Usuario</th>
                 <th style={thStyle}>Último uso (MX)</th>
                 <th style={thStyle}>Antigüedad</th>
@@ -554,7 +554,7 @@ function BloqueSesionesWeb() {
       {/* Encabezado del bloque */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10, marginBottom: 12 }}>
         <div>
-          <div style={{ fontSize: 14, fontWeight: 700, color: "#1a3a6b" }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: "#002E5D" }}>
             🌐 Conexiones vía web (extensión)
           </div>
           <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>
@@ -571,7 +571,7 @@ function BloqueSesionesWeb() {
             </span>
           )}
           <button onClick={cargar} disabled={cargando}
-            style={{ background: "#f4f5f7", border: "0.5px solid #e4e7ec", borderRadius: 8, padding: "7px 12px", fontSize: 12, cursor: cargando ? "default" : "pointer", color: "#666", fontFamily: "'Geist',sans-serif" }}>
+            style={{ background: "#f4f5f7", border: "0.5px solid #e4e7ec", borderRadius: 8, padding: "7px 12px", fontSize: 12, cursor: cargando ? "default" : "pointer", color: "#666", fontFamily: "'Open Sans',sans-serif" }}>
             {cargando ? "Actualizando…" : "↻ Actualizar"}
           </button>
         </div>
@@ -591,7 +591,7 @@ function BloqueSesionesWeb() {
         <div style={{ background: "#fff", border: "0.5px solid #e4e7ec", borderRadius: 12, overflow: "hidden" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
             <thead>
-              <tr style={{ background: "#1a3a6b", color: "#fff", textAlign: "left" }}>
+              <tr style={{ background: "#002E5D", color: "#fff", textAlign: "left" }}>
                 <th style={thStyle}>Usuario</th>
                 <th style={{ ...thStyle, textAlign: "center" }}>Cookies</th>
                 <th style={thStyle}>Último refresco (MX)</th>
@@ -643,7 +643,7 @@ function VistaListado({ acciones, filtroCat, setFiltroCat }) {
       {/* Filtro por tipo de cambio */}
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 12 }}>
         <select value={filtroCat} onChange={(e) => setFiltroCat(e.target.value)}
-          style={{ background: "#fff", border: "0.5px solid #e4e7ec", borderRadius: 8, padding: "9px 12px", fontSize: 12, fontFamily: "'Geist',sans-serif", color: "#333" }}>
+          style={{ background: "#fff", border: "0.5px solid #e4e7ec", borderRadius: 8, padding: "9px 12px", fontSize: 12, fontFamily: "'Open Sans',sans-serif", color: "#333" }}>
           <option value="todas">Todos los tipos de cambio</option>
           {Object.entries(CATEGORIAS).map(([k, info]) => (
             <option key={k} value={k}>{info.icon} {info.label}</option>
@@ -661,7 +661,7 @@ function VistaListado({ acciones, filtroCat, setFiltroCat }) {
         <div style={{ background: "#fff", border: "0.5px solid #e4e7ec", borderRadius: 12, overflow: "hidden" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
             <thead>
-              <tr style={{ background: "#1a3a6b", color: "#fff", textAlign: "left" }}>
+              <tr style={{ background: "#002E5D", color: "#fff", textAlign: "left" }}>
                 <th style={{ ...thStyle, width: 34 }}></th>
                 <th style={thStyle}>Quién</th>
                 <th style={thStyle}>Tipo de cambio</th>
@@ -743,7 +743,7 @@ function VistaRanking({ acciones }) {
     <>
       {/* Top 3 */}
       <div style={{ marginBottom: 24 }}>
-        <div style={{ fontSize: 13, fontWeight: 700, color: "#1a3a6b", marginBottom: 12 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: "#002E5D", marginBottom: 12 }}>
           🏆 Top 3 — quién efectúa más modificaciones
         </div>
         {top3.length === 0 ? (
@@ -755,7 +755,7 @@ function VistaRanking({ acciones }) {
                 <div style={{ position: "absolute", top: 10, right: 14, fontSize: 28 }}>{medallas[i]}</div>
                 <div style={{ fontSize: 12, color: "#888", fontWeight: 600, marginBottom: 4 }}>#{i + 1}</div>
                 <div style={{ fontSize: 14, fontWeight: 700, color: "#1a1a1a", marginBottom: 8, paddingRight: 36, wordBreak: "break-word" }}>{s.nombre}</div>
-                <div style={{ fontSize: 30, fontWeight: 800, color: "#F47B20" }}>{s.total}</div>
+                <div style={{ fontSize: 30, fontWeight: 800, color: "#FF6600" }}>{s.total}</div>
                 <div style={{ fontSize: 11, color: "#888" }}>acciones</div>
               </div>
             ))}
@@ -766,13 +766,13 @@ function VistaRanking({ acciones }) {
       {/* Ranking completo */}
       {ranking.length > 0 && (
         <div style={{ marginBottom: 24 }}>
-          <div style={{ fontSize: 13, fontWeight: 700, color: "#1a3a6b", marginBottom: 12 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#002E5D", marginBottom: 12 }}>
             Todos los supervisores
           </div>
           <div style={{ background: "#fff", border: "0.5px solid #e4e7ec", borderRadius: 12, overflow: "hidden" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
               <thead>
-                <tr style={{ background: "#1a3a6b", color: "#fff", textAlign: "left" }}>
+                <tr style={{ background: "#002E5D", color: "#fff", textAlign: "left" }}>
                   <th style={thStyle}>#</th>
                   <th style={thStyle}>Supervisor</th>
                   <th style={{ ...thStyle, width: "45%" }}>Total de acciones</th>
@@ -786,7 +786,7 @@ function VistaRanking({ acciones }) {
                     <td style={tdStyle}>
                       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                         <div style={{ flex: 1, background: "#eef2f7", borderRadius: 6, height: 10, overflow: "hidden", maxWidth: 240 }}>
-                          <div style={{ width: `${maxTotal ? (s.total / maxTotal) * 100 : 0}%`, background: "#F47B20", height: "100%" }} />
+                          <div style={{ width: `${maxTotal ? (s.total / maxTotal) * 100 : 0}%`, background: "#FF6600", height: "100%" }} />
                         </div>
                         <span style={{ fontWeight: 700, color: "#1a1a1a", minWidth: 24 }}>{s.total}</span>
                       </div>
@@ -801,7 +801,7 @@ function VistaRanking({ acciones }) {
 
       {/* Distribución por tipo de cambio */}
       <div>
-        <div style={{ fontSize: 13, fontWeight: 700, color: "#1a3a6b", marginBottom: 12 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: "#002E5D", marginBottom: 12 }}>
           Distribución por tipo de cambio
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 10 }}>

@@ -328,7 +328,7 @@ export default function FacturacionTerceros({ usuario }) {
     <div style={{ padding: 24 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap", marginBottom: 14 }}>
         <div>
-          <div style={{ fontSize: 18, fontWeight: 700, color: "#1a3a6b" }}>Facturación de terceros</div>
+          <div style={{ fontSize: 18, fontWeight: 700, color: "#002E5D" }}>Facturación de terceros</div>
           <div style={{ fontSize: 12, color: "#94a3b8", marginTop: 2, maxWidth: 680, lineHeight: 1.5 }}>
             Las facturas que suben desde su portal contra cada prefactura enviada. El monto y el RFC
             se comparan al subirla; el estado lo confirma el SAT.
@@ -345,13 +345,13 @@ export default function FacturacionTerceros({ usuario }) {
         </button>
         <button onClick={leerPendientes} disabled={validando !== null}
           style={{ padding: "9px 18px", borderRadius: 8, border: "none", fontSize: 12.5, fontWeight: 700,
-            background: validando ? "#cbd5e1" : "#1a3a6b", color: "#fff", marginRight: 8,
+            background: validando ? "#cbd5e1" : "#002E5D", color: "#fff", marginRight: 8,
             cursor: validando ? "not-allowed" : "pointer" }}>
           {validando === "leer" ? "Leyendo…" : "Leer y comparar"}
         </button>
         <button onClick={validarSat} disabled={validando !== null}
-          style={{ padding: "9px 18px", borderRadius: 8, border: "1px solid #1a3a6b", fontSize: 12.5, fontWeight: 700,
-            background: validando ? "#f1f5f9" : "#fff", color: "#1a3a6b",
+          style={{ padding: "9px 18px", borderRadius: 8, border: "1px solid #002E5D", fontSize: 12.5, fontWeight: 700,
+            background: validando ? "#f1f5f9" : "#fff", color: "#002E5D",
             cursor: validando ? "not-allowed" : "pointer" }}>
           {validando === "sat" ? "Consultando…" : "Validar en el SAT"}
         </button>
@@ -374,8 +374,8 @@ export default function FacturacionTerceros({ usuario }) {
           ["por_pagar", "Por pagar"], ["pagadas", "Pagadas"]].map(([id, l]) => (
           <button key={id} onClick={() => setFiltro(id)}
             style={{ padding: "6px 13px", borderRadius: 16, fontSize: 11.5, fontWeight: 700, cursor: "pointer",
-              border: `1px solid ${filtro === id ? "#1a3a6b" : "#e4e7ec"}`,
-              background: filtro === id ? "#1a3a6b" : "#fff", color: filtro === id ? "#fff" : "#64748b" }}>
+              border: `1px solid ${filtro === id ? "#002E5D" : "#e4e7ec"}`,
+              background: filtro === id ? "#002E5D" : "#fff", color: filtro === id ? "#fff" : "#64748b" }}>
             {l}{resumen[id] ? ` (${resumen[id]})` : ""}
           </button>
         ))}
@@ -497,7 +497,7 @@ export default function FacturacionTerceros({ usuario }) {
                       {/* La prefactura que se le envió al tercero, para compararla con su factura. */}
                       {p.pdf_url && (
                         <button onClick={() => abrir(p.pdf_url)}
-                          style={{ border: "1px solid #F47B20", background: "#fff", color: "#F47B20",
+                          style={{ border: "1px solid #FF6600", background: "#fff", color: "#FF6600",
                             borderRadius: 5, padding: "4px 10px", fontSize: 10.5, cursor: "pointer", marginRight: 4 }}>
                           Prefactura
                         </button>
@@ -505,13 +505,13 @@ export default function FacturacionTerceros({ usuario }) {
                       {f && (
                         <>
                           <button onClick={() => abrir(f.storage_path)}
-                            style={{ border: "1px solid #e4e7ec", background: "#fff", color: "#1a3a6b",
+                            style={{ border: "1px solid #e4e7ec", background: "#fff", color: "#002E5D",
                               borderRadius: 5, padding: "4px 10px", fontSize: 10.5, cursor: "pointer" }}>
                             Ver factura
                           </button>
                           {f.uuid && (
                             <button onClick={() => validar(f)} disabled={validando !== null}
-                              style={{ marginLeft: 4, border: "1px solid #1a3a6b", background: "#fff", color: "#1a3a6b",
+                              style={{ marginLeft: 4, border: "1px solid #002E5D", background: "#fff", color: "#002E5D",
                                 borderRadius: 5, padding: "4px 10px", fontSize: 10.5, cursor: "pointer" }}>
                               {validando === f.id ? "…" : "SAT"}
                             </button>

@@ -11,7 +11,7 @@ import { fechaHoyOperativa, sb } from "./shared";
 //   · Supervisor: supervisores_bt
 // ═══════════════════════════════════════════════════════════════════
 
-const NAVY = "#1a3a6b", MUTED = "#5b6474", BORDER = "#e4e7ec";
+const NAVY = "#002E5D", MUTED = "#5b6474", BORDER = "#e4e7ec";
 const DIAS = ["Lu", "Ma", "Mi", "Ju", "Vi", "Sá", "Do"];
 const ANCLA = "2026-11-02"; // lunes desde el que se cuenta la rotación de descansos
 // SC que comparten vehículos: se planifican como un solo grupo

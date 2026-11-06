@@ -16,7 +16,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { sb } from "./shared";
 
-const AZUL = "#1a3a6b", NARANJA = "#F47B20", GRIS = "#64748b", BORDE = "#e4e7ec";
+const AZUL = "#002E5D", NARANJA = "#FF6600", GRIS = "#64748b", BORDE = "#e4e7ec";
 const TIPOS = ["Small Van", "Large Van", "Auto", "Moto", "Camioneta pickup", "Camión 3.5 t"];
 const URGENCIAS = { alta: ["Alta", "#b42318", "#fdecea"], media: ["Media", "#b45309", "#fff4e5"], baja: ["Baja", "#166534", "#e9f7ef"] };
 const ESTADOS = {
