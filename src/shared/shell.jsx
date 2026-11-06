@@ -85,7 +85,7 @@ export function ShellBrain({ pais, paisCode, usuario, mods, labels, tab, onTab, 
                     <div className="bs-sub">
                       {subs.map((t) => (
                         <button key={t.id} className={`bs-sub-btn${tab === k && activas[k] === t.id ? " on" : ""}`} aria-current={tab === k && activas[k] === t.id ? "page" : undefined} onClick={() => irSub(k, t.id)}>
-                          <span className="bs-sub-t">{t.label}</span>
+                          <span className="bs-sub-t">{t.label}{Number(t.n) > 0 && <span className="bs-sub-n">{t.n}</span>}</span>
                           {t.desc && <span className="bs-sub-d">{t.desc}</span>}
                         </button>
                       ))}
@@ -139,6 +139,7 @@ const CSS_BS = `
 .bs-sub-btn.on { background:rgba(255,102,0,.08); }
 .bs-sub-t { font-family:Poppins,sans-serif; font-weight:700; font-size:13px; color:var(--navy); }
 .bs-sub-btn.on .bs-sub-t { color:var(--orange); }
+.bs-sub-n { display:inline-flex; align-items:center; justify-content:center; margin-left:8px; min-width:18px; height:18px; padding:0 5px; border-radius:9px; background:var(--orange); color:#fff; font-size:10.5px; font-weight:700; vertical-align:1px; }
 .bs-sub-d { font-size:11.5px; color:var(--muted); margin-top:2px; line-height:1.35; }
 .bs-velo { display:none; }
 .bs-main { flex:1; min-width:0; }
