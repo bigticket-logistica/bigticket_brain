@@ -6,7 +6,8 @@
 // ═══════════════════════════════════════════════════════════════════════════
 import { useEffect, useState } from "react";
 
-const LOGO = "/logo-bigticket-blanco.png";
+// Logo desde el Portal Transportista (ya publicado ahí): el Brain no necesita carpeta public.
+const LOGO = "https://app.fleetbiggy.com/logo-bigticket-blanco.png";
 
 function horaDe(pais) {
   const cl = pais === "Chile";
