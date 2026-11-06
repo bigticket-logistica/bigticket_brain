@@ -16,7 +16,7 @@
 import { useState, useEffect, useMemo, Fragment } from "react";
 import { cargarSheetJS, sb } from "../shared";
 
-const NAVY = "#1a3a6b";
+const NAVY = "#002E5D";
 const VERDE_ = "#0d8043";
 const ROJO_ = "#b42318";
 const AMBAR_ = "#a16207";
@@ -1473,7 +1473,7 @@ function FlotaGps() {
 // ── Módulo: cabecera + estilos (los mismos del Maestro) + contenido ─────────
 export default function ModuloGpsSegurosCL() {
   return (
-    <div style={{ padding: 0, fontFamily: "'Geist', system-ui, -apple-system, sans-serif" }}>
+    <div style={{ padding: 0, fontFamily: "'Open Sans', system-ui, -apple-system, sans-serif" }}>
       <style>{`
         .mj-wrap{background:#f4f6f9;min-height:100%;}
         .mj-tabla{width:100%;border-collapse:collapse;font-size:12px;background:#fff;}

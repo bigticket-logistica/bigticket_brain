@@ -17,7 +17,7 @@
 import { useState, useEffect, useMemo, Fragment } from "react";
 import { cargarSheetJS } from "../shared";
 
-const NAVY = "#1a3a6b";
+const NAVY = "#002E5D";
 const VERDE_ = "#0d8043";
 const ROJO_ = "#b42318";
 const AMBAR_ = "#a16207";

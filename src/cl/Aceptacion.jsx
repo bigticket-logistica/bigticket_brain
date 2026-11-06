@@ -16,7 +16,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 import { useState, useEffect, useMemo } from "react";
 
-const NAVY = "#1a3a6b";
+const NAVY = "#002E5D";
 const VERDE = "#0d8043";
 const ROJO = "#b42318";
 const AMBAR = "#a16207";

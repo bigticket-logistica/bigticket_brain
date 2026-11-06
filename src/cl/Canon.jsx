@@ -15,8 +15,8 @@ const CL_URL = "https://hmowsazntdjtsvdfgutn.supabase.co";
 const CL_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imhtb3dzYXpudGRqdHN2ZGZndXRuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQ5MTc4NzgsImV4cCI6MjEwMDQ5Mzg3OH0.xAJokU0eFhof--d8R4uCRBr2-CJLzC5re0w1IPRqQR8";
 
 const C = {
-  navy: "#1a3a6b", navyTenue: "#eef2f8",
-  naranja: "#F47B20", naranjaTenue: "#fdf1e6",
+  navy: "#002E5D", navyTenue: "#eef2f8",
+  naranja: "#FF6600", naranjaTenue: "#fdf1e6",
   ladrillo: "#9e3b1b", ladrilloTenue: "#faece6",
   verde: "#1f7a5c", verdeTenue: "#e9f3ef",
   morado: "#6b4fa0", moradoTenue: "#f1edf8",

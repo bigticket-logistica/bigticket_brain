@@ -16,7 +16,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 import { useEffect, useState } from "react";
 
-const NAVY = "#1a3a6b", AMBAR = "#a16207", VERDE = "#0d8043", ROJO = "#b42318";
+const NAVY = "#002E5D", AMBAR = "#a16207", VERDE = "#0d8043", ROJO = "#b42318";
 const n = (v) => (v === null || v === undefined || v === "" ? 0 : Number(v));
 const fmt = (v) => n(v).toLocaleString("es-CL");
 const vol = (v) => n(v).toLocaleString("es-CL", { minimumFractionDigits: 2, maximumFractionDigits: 3 });

@@ -13,7 +13,7 @@ import { useState, useEffect, Fragment, useCallback } from "react";
 const CL_URL = "https://hmowsazntdjtsvdfgutn.supabase.co";
 const CL_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imhtb3dzYXpudGRqdHN2ZGZndXRuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQ5MTc4NzgsImV4cCI6MjEwMDQ5Mzg3OH0.xAJokU0eFhof--d8R4uCRBr2-CJLzC5re0w1IPRqQR8";
 
-const NAVY = "#1a3a6b", ORANGE = "#F47B20";
+const NAVY = "#002E5D", ORANGE = "#FF6600";
 const VERDE = "#0d8043", ROJO = "#b42318", AMBAR = "#a16207", GRIS = "#64748b";
 
 // PostgREST manda numeric y bigint como texto: siempre convertir antes de operar.
@@ -426,7 +426,7 @@ function ModuloAnalisisCL() {
   ];
 
   return (
-    <div style={{ padding: 0, fontFamily: "'Geist', system-ui, -apple-system, sans-serif" }}>
+    <div style={{ padding: 0, fontFamily: "'Open Sans', system-ui, -apple-system, sans-serif" }}>
       <style>{`
         .an-wrap{background:#f4f6f9;min-height:100%;}
         .an-tab{background:transparent;border:none;padding:9px 15px;font-size:13px;font-weight:600;cursor:pointer;

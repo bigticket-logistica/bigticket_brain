@@ -31,8 +31,8 @@ const horaChile = (ts) => {
       hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(ts));
   } catch (e) { return "—"; }
 };
-const NAVY = "#1a3a6b";
-const ORANGE = "#F47B20";
+const NAVY = "#002E5D";
+const ORANGE = "#FF6600";
 const AMBAR_ = "#a16207";
 const GRIS_ = "#8a94a6";
 const VERDE_ = "#0d8043";
@@ -175,7 +175,7 @@ function PanelKpi({ kpi, onCerrar }) {
 const normPatente = (p) => String(p || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
 // Tipo de ruta: cómo se muestra cada código del catálogo de servicios.
 const ETIQUETA_TIPO = {
-  "UM": { t: "Última milla · Meli 1", c: "#1a3a6b", f: "#e8edf5" },
+  "UM": { t: "Última milla · Meli 1", c: "#002E5D", f: "#e8edf5" },
   "MELI ONE": { t: "Meli One", c: "#5b21b6", f: "#ede9fe" },
   "SPOT": { t: "Spot", c: "#9a3412", f: "#ffedd5" },
   "AMBULANCIA": { t: "Ambulancia", c: "#b42318", f: "#fdecea" },
@@ -1544,7 +1544,7 @@ function ModuloMaestroCL({ usuario } = {}) {
   ];
 
   return (
-    <div style={{ padding: 0, fontFamily: "'Geist', system-ui, -apple-system, sans-serif" }}>
+    <div style={{ padding: 0, fontFamily: "'Open Sans', system-ui, -apple-system, sans-serif" }}>
       <style>{`
         .mj-wrap{background:#f4f6f9;min-height:100%;}
         .mj-tab{background:transparent;border:none;padding:9px 16px;font-size:13px;font-weight:600;cursor:pointer;
@@ -3543,7 +3543,7 @@ function ModuloMaestroCL({ usuario } = {}) {
                                     </label>
                                   ) : (t.contingencia_activa
                                         ? <Etiqueta texto="CONTINGENCIA" color="#b45309" fondo="#fef3c7" />
-                                        : <Etiqueta texto="OFICIAL" color="#1a3a6b" fondo="#e8edf5" />)}
+                                        : <Etiqueta texto="OFICIAL" color="#002E5D" fondo="#e8edf5" />)}
                                 </td>
                                 <td className="num" style={{ fontSize: 11.5, color: "#64748b" }}
                                     title={`oficial ${$m(t.cobrar_oficial)} · contingencia ${$m(t.cobrar_contingencia)}`}>

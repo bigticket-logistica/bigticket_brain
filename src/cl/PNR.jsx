@@ -26,8 +26,8 @@ const CL_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJ
 
 // Paleta del Brain. El verde queda para una sola cosa: el correo enviado.
 const C = {
-  navy: "#1a3a6b", navyTenue: "#eef2f8",
-  naranja: "#F47B20", naranjaTenue: "#fdf1e6",
+  navy: "#002E5D", navyTenue: "#eef2f8",
+  naranja: "#FF6600", naranjaTenue: "#fdf1e6",
   penalidad: "#b8651c", penalidadTenue: "#fdf3e8",
   ladrillo: "#9e3b1b", ladrilloTenue: "#faece6",
   verde: "#1f7a5c", verdeTenue: "#e9f3ef",
@@ -935,7 +935,7 @@ export default function ModuloPnrCL({ usuario }) {
 
   return (
     <div style={{ padding: "14px 24px 24px", background: C.grisTenue, minHeight: "100%",
-      fontFamily: "'Geist', system-ui, -apple-system, sans-serif" }}>
+      fontFamily: "'Open Sans', system-ui, -apple-system, sans-serif" }}>
 
       {/* Cabecera */}
       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>

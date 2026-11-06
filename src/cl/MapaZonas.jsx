@@ -15,7 +15,7 @@ import { useEffect, useRef, useState, Fragment } from "react";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 
-const NAVY = "#1a3a6b", ORANGE = "#F47B20", AMBAR = "#b45309", VIOLETA = "#5b21b6";
+const NAVY = "#002E5D", ORANGE = "#FF6600", AMBAR = "#b45309", VIOLETA = "#5b21b6";
 const VERDE = "#0d8043";
 
 // ruta (opcional): { titulo, puntos: [{ lat, lon, comuna, km, es_lejano }] } —

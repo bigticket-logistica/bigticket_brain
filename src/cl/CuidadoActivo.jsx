@@ -14,7 +14,7 @@ import { useEffect, useMemo, useState } from "react";
 
 const CL_URL = "https://hmowsazntdjtsvdfgutn.supabase.co";
 const CL_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imhtb3dzYXpudGRqdHN2ZGZndXRuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQ5MTc4NzgsImV4cCI6MjEwMDQ5Mzg3OH0.xAJokU0eFhof--d8R4uCRBr2-CJLzC5re0w1IPRqQR8";
-const C = { navy: "#1a3a6b", naranja: "#F47B20", borde: "#e4e7ec", suave: "#475569", tenue: "#94a3b8", texto: "#1f2937", fondo: "#f4f6f9", rojo: "#9e3b1b", rojoT: "#faece6", verde: "#1f7a5c", verdeT: "#e9f3ef", ambar: "#b8651c", ambarT: "#fdf3e8" };
+const C = { navy: "#002E5D", naranja: "#FF6600", borde: "#e4e7ec", suave: "#475569", tenue: "#94a3b8", texto: "#1f2937", fondo: "#f4f6f9", rojo: "#9e3b1b", rojoT: "#faece6", verde: "#1f7a5c", verdeT: "#e9f3ef", ambar: "#b8651c", ambarT: "#fdf3e8" };
 
 async function api(path, o = {}) {
   const r = await fetch(`${CL_URL}/rest/v1/${path}`, {
