@@ -18,6 +18,7 @@ import ModuloMaestroCL from "./cl/Maestro";
 import ModuloGpsSegurosCL from "./cl/GpsSeguros";
 import ModuloPnrCL from "./cl/PNR";
 import ModuloAceptacionCL from "./cl/Aceptacion";
+import CuidadoActivoCL from "./cl/CuidadoActivo";
 const PIPE_ID = "306833898";
 
 // Devuelve el periodo "operativo" actual (mes en México) en formato YYYY-MM
@@ -130,7 +131,7 @@ const MODULOS_LABELS = {
   certificaciones: "Certificaciones",
   empresas: "Empresas",
   certificaciones_cl: "Certificaciones",
-  mantenciones_cl: "Mantenciones",
+  mantenciones_cl: "Cuidado de Activo",
   maestro_cl: "Maestro Operaciones",
   gps_seguros_cl: "GPS y Seguros",
   pnr_cl: "Posventa",
@@ -15189,8 +15190,12 @@ function MantenedorSupervisores() {
 }
 
 function ModuloMantencionesMadre({ usuario }) {
-  const [sub, setSub] = useState("verificador");
+  const [sub, setSub] = useState("ca_tareas");
   const tabs = [
+    { id: "ca_tareas", label: "Tareas del supervisor" },
+    { id: "ca_nosalidas", label: "No salidas" },
+    { id: "ca_incumplimientos", label: "Incumplimientos" },
+    { id: "ca_config", label: "Configuración" },
     { id: "verificador", label: "Verificador de Componentes" },
     { id: "ficha",       label: "Ficha Vehículo" },
     { id: "costos",      label: "Flujo de Caja" },
@@ -15199,8 +15204,8 @@ function ModuloMantencionesMadre({ usuario }) {
   ];
   return (
     <div className="pg">
-      <div className="sec-title">Mantenciones · Cuidado de Activo</div>
-      <div className="sec-sub">Control de protocolo de flota — Bigticket</div>
+      <div className="sec-title">Cuidado de Activo</div>
+      <div className="sec-sub">Flota propia Chile: tareas al supervisor, no salidas, mantenciones y protocolo de flota</div>
       <div style={{ display:"flex", gap:4, borderBottom:"1px solid #e4e7ec", marginBottom:20, overflowX:"auto" }}>
         {tabs.map(t => (
           <button key={t.id} onClick={()=>setSub(t.id)} style={{
@@ -15211,6 +15216,7 @@ function ModuloMantencionesMadre({ usuario }) {
           }}>{t.label}</button>
         ))}
       </div>
+      {sub.startsWith("ca_") && <CuidadoActivoCL usuario={usuario} sub={sub} />}
       {sub === "verificador" && <VerificadorComponentes usuario={usuario} />}
       {sub === "ficha"       && <FichaVehiculo usuario={usuario} />}
       {sub === "costos"      && <FlujoCaja />}
