@@ -1,3 +1,4 @@
+import { registrarSubtabs, useSubtab } from "./shared/subtabs";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { descargarExcelMultihoja, fechaHoyOperativa, fechaOperativaOffset, sb } from "./shared";
 import ModuloCobrosMermas from "./Mermas";
@@ -6154,62 +6155,49 @@ function TercerosMX() {
   );
 }
 
+// Subpestañas de Administración: el menú lateral del Brain las muestra desplegadas.
+const TABS_ADMIN = [
+  { id: "listado",     label: "Listado de Pagos",      desc: "Cálculo diario por contratista" },
+  { id: "pagos_pausados", label: "Pagos pausados",     desc: "Rutas con el pago retenido · por día y motivo" },
+  { id: "torre_3p",    label: "Capacidad", desc: "Solicitado → Confirmado → Asignado → Ejecutado" },
+  { id: "terceros",    label: "Terceros",              desc: "Empresas subcontratadas por patente" },
+  { id: "conciliacion", label: "Conciliación Terceros", desc: "Conciliación semanal por empresa" },
+  { id: "pnr_cobros",  label: "Cobros",                desc: "PNR, robos y extravíos, no show" },
+  { id: "rechazos_meli", label: "Rechazos MELI",      desc: "Rutas no aceptadas por mes, día y SC · SDD y Spot" },
+  { id: "diferencias", label: "Diferencias",           desc: "Reclamos de terceros sobre pagos y cobros" },
+  { id: "comparativa", label: "Comparativa",          desc: "Prefactura del lunes vs acumulado diario" },
+  { id: "historial_pago", label: "Historial de Pago", desc: "Resumen semanal: cierres, cambios, saldos y reporte" },
+  { id: "ayudantes",   label: "Ayudantes",             desc: "Números del día y aprobación del pago del ayudante" },
+  { id: "cierre_dia",  label: "Cierre del Día",        desc: "Salud del día por ruta: conciliación entre Torre, KM, informe y escaneos" },
+  { id: "ambulancias", label: "Ambulancias",           desc: "Traspasos internos ruta→ruta" },
+  { id: "supervisores", label: "Consolidaciones Bitácora",   desc: "Consolidado por SC: torre de control, ambulancias y bitácora del supervisor" },
+  { id: "padron_meli", label: "Padrón MELI",         desc: "Conductores y vehículos · altas, bajas y cambios diarios" },
+  { id: "prefacturas", label: "Prefacturas",           desc: "Envío masivo de prefacturas MX" },
+  { id: "mermas",      label: "Cobros Mermas",         desc: "Cobro de mermas a terceros por SC" },
+  { id: "config",      label: "Configuración",         desc: "Tarifario, zonas y reglas" },
+];
+registrarSubtabs("pagos", TABS_ADMIN, "listado");
+
 function ModuloPagosMadre({ usuario }) {
   // Si el usuario tiene rol "prefacturas", solo puede acceder a la sub-tab Prefacturas.
   // Las otras sub-tabs siguen visibles pero al hacer click muestran un mensaje de bloqueo.
   const rolLimitadoAPrefacturas = usuario?.rol === "prefacturas";
   const subtabsPermitidas = rolLimitadoAPrefacturas ? ["prefacturas", "mermas"] : null; // null = todas
 
-  const [subtab, setSubtabState] = useState(() => {
-    if (rolLimitadoAPrefacturas) return "prefacturas";
-    try {
-      const guardada = localStorage.getItem("bt_nav_subtab_pagos") || "listado";
-      // Facturación Terceros se movió a Contabilidad: quien la tenía abierta vuelve a Listado.
-      return guardada === "facturacion_terceros" ? "listado" : guardada;
-    } catch { return "listado"; }
-  });
-  const setSubtab = (t) => { try { localStorage.setItem("bt_nav_subtab_pagos", t); } catch {} setSubtabState(t); };
-  const tabs = [
-    { id: "listado",     label: "Listado de Pagos",      desc: "Cálculo diario por contratista" },
-    { id: "pagos_pausados", label: "Pagos pausados",     desc: "Rutas con el pago retenido · por día y motivo" },
-    { id: "torre_3p",    label: "Capacidad", desc: "Solicitado → Confirmado → Asignado → Ejecutado" },
-    { id: "terceros",    label: "Terceros",              desc: "Empresas subcontratadas por patente" },
-    { id: "conciliacion", label: "Conciliación Terceros", desc: "Conciliación semanal por empresa" },
-    { id: "pnr_cobros",  label: "Cobros",                desc: "PNR, robos y extravíos, no show" },
-    { id: "rechazos_meli", label: "Rechazos MELI",      desc: "Rutas no aceptadas por mes, día y SC · SDD y Spot" },
-    { id: "diferencias", label: "Diferencias",           desc: "Reclamos de terceros sobre pagos y cobros" },
-    { id: "comparativa", label: "Comparativa",          desc: "Prefactura del lunes vs acumulado diario" },
-    { id: "historial_pago", label: "Historial de Pago", desc: "Resumen semanal: cierres, cambios, saldos y reporte" },
-    { id: "ayudantes",   label: "Ayudantes",             desc: "Números del día y aprobación del pago del ayudante" },
-    { id: "cierre_dia",  label: "Cierre del Día",        desc: "Salud del día por ruta: conciliación entre Torre, KM, informe y escaneos" },
-    { id: "ambulancias", label: "Ambulancias",           desc: "Traspasos internos ruta→ruta" },
-    { id: "supervisores", label: "Consolidaciones Bitácora",   desc: "Consolidado por SC: torre de control, ambulancias y bitácora del supervisor" },
-    { id: "padron_meli", label: "Padrón MELI",         desc: "Conductores y vehículos · altas, bajas y cambios diarios" },
-    { id: "prefacturas", label: "Prefacturas",           desc: "Envío masivo de prefacturas MX" },
-    { id: "mermas",      label: "Cobros Mermas",         desc: "Cobro de mermas a terceros por SC" },
-    { id: "config",      label: "Configuración",         desc: "Tarifario, zonas y reglas" },
-  ];
+  // La subpestaña la elige el menú lateral (shared/subtabs.js).
+  const [subtabMenu, setSubtab] = useSubtab("pagos");
+  const subtab = rolLimitadoAPrefacturas && !["prefacturas", "mermas"].includes(subtabMenu) ? "prefacturas" : subtabMenu;
+  const actual = TABS_ADMIN.find((t) => t.id === subtab);
 
   const subtabPermitida = (id) => subtabsPermitidas === null || subtabsPermitidas.includes(id);
 
   return (
     <div style={{ padding: 0 }}>
       <div style={{ background: "#fff", borderBottom: "1px solid #e4e7ec", padding: "12px 24px" }}>
-        <div style={{ fontSize: 18, fontWeight: 700, color: "#002E5D", marginBottom: 10 }}>Administración</div>
-        <div style={{ display: "flex", gap: 0, borderBottom: "2px solid #e4e7ec", marginLeft: -8, flexWrap: "wrap" }}>
-          {tabs.map(t => (
-            <button key={t.id} onClick={() => setSubtab(t.id)}
-              style={{
-                background: "transparent", border: "none", padding: "10px 16px",
-                fontSize: 13, fontWeight: 600, cursor: "pointer", color: subtab === t.id ? "#002E5D" : "#64748b",
-                borderBottom: subtab === t.id ? "2px solid #002E5D" : "2px solid transparent",
-                marginBottom: -2,
-              }}>
-              <div>{t.label}</div>
-              <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 400, marginTop: 2 }}>{t.desc}</div>
-            </button>
-          ))}
-        </div>
+        {/* Las subpestañas están en el menú lateral; aquí solo el título de la elegida. */}
+        <div style={{ fontSize: 12, color: "#64748b", fontWeight: 600 }}>Administración</div>
+        <div style={{ fontSize: 20, fontWeight: 700, color: "#002E5D", fontFamily: "Poppins, 'Open Sans', sans-serif" }}>{actual?.label || "Administración"}</div>
+        {actual?.desc && <div style={{ fontSize: 12.5, color: "#64748b", marginTop: 2 }}>{actual.desc}</div>}
       </div>
       {!subtabPermitida(subtab) ? (
         <div style={{
