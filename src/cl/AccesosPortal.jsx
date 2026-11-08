@@ -28,7 +28,7 @@ export default function AccesosPortalCL({ usuario }) {
   const [error, setError] = useState("");
   const [pin, setPin] = useState("");
   const [f, setF] = useState({ texto: "", estado: "activas", acceso: "todos" });
-  const [enviar, setEnviar] = useState(true);
+  const [enviar, setEnviar] = useState(false);   // apagado: el envío se activa cuando el portal esté listo
   const [busy, setBusy] = useState("");
   const [resultado, setResultado] = useState(null);   // { rut, empresa, clave, enviada, enviada_a }
   const [lote, setLote] = useState(null);             // resultados de la creación masiva
@@ -97,7 +97,7 @@ export default function AccesosPortalCL({ usuario }) {
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 12 }}>
         <input type="password" style={{ ...inp, width: 160 }} placeholder="PIN de administración" value={pin} onChange={(e) => setPin(e.target.value)} autoComplete="off" />
         <label style={{ fontSize: 12.5, color: C.suave, display: "flex", gap: 6, alignItems: "center" }}>
-          <input type="checkbox" checked={enviar} onChange={(e) => setEnviar(e.target.checked)} /> Enviar la clave por correo a la empresa
+          <input type="checkbox" checked={enviar} onChange={(e) => setEnviar(e.target.checked)} /> Enviar la clave por correo a la empresa (apagado por ahora)
         </label>
         <span style={{ flex: 1 }} />
         <button style={btn("naranja")} disabled={!!busy} onClick={crearTodas}>Crear clave a todas las activas sin acceso</button>
