@@ -437,9 +437,9 @@ function DetalleAuditoria({ a, quien, onListo }) {
           placeholder="Motivo para el transportista (si no cumple) o descripción del hallazgo" />
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6, alignItems: "center" }}>
           <button style={btn("verde")} disabled={busy} onClick={() => veredicto("cumple")}>Cumple</button>
-          <button style={{ ...btn(), background: C.ambar }} disabled={busy} onClick={() => veredicto("cumple_hallazgo")}>Cumple con hallazgo</button>
+          <button style={{ ...btn(), background: C.ambar }} disabled={busy} onClick={() => { if (window.confirm("Se crea una tarea de hallazgo al supervisor (48 h) y se le avisa por correo según el modo de correos (en prueba solo te llega a ti). ¿Seguir?")) veredicto("cumple_hallazgo"); }}>Cumple con hallazgo</button>
           <button style={btn("rojo")} disabled={busy} onClick={() => veredicto("no_cumple")}>No cumple · repetir {marcadas} foto{marcadas === 1 ? "" : "s"}</button>
-          <span style={{ fontSize: 12, color: C.tenue }}>No se envían correos. Si no cumple, el tercero ve en su portal qué fotos repetir.</span>
+          <span style={{ fontSize: 12, color: C.tenue }}>Si no cumple, el tercero ve en su portal qué fotos repetir (sin correo). Con hallazgo se crea la tarea al supervisor.</span>
         </div>
         {msg && <div style={{ color: C.rojo, fontSize: 13, marginTop: 8 }}>{msg}</div>}
       </div>
