@@ -3,6 +3,7 @@ import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { descargarExcelMeli, descargarExcelMultihoja, fechaHoyOperativa, fechaOperativaOffset, pct, sb } from "./shared";
 import RechazosMeliMX, { rmResumenPerdidas } from "./RechazosMeli";
 import CapacidadMX from "./CapacidadMX";
+import Capacidad from "./Capacidad";
 import MallaTurnosMX from "./MallaTurnos";
 // La misma vista de Administración → Consolidaciones Bitácora, sin duplicar código.
 import { PanelControlSupervisores } from "./Pagos";
@@ -584,7 +585,8 @@ function TareasJefeOperaciones() {
 const TABS_INDICADORES = [
   { id: "torre", label: "Torre de Control", desc: "Hoy en vivo · D-1 tres pilares · compromiso de mañana" },
   { id: "pedidos_vivo", label: "Pedidos en vivo", desc: "Aceptación cada 5 min · alertas" },
-  { id: "capacidad_mx", label: "Capacidad MX", desc: "Demanda estimada · flota · 9 días" },
+  { id: "capacidad_mx", label: "Planificación de flota", desc: "Demanda estimada · flota · 9 días" },
+  { id: "capacidad", label: "Capacidad", desc: "Comprometido → Acordado → Solicitado → Confirmado → Asignado → Ejecutado · Brain y MELI" },
   { id: "malla_turnos", label: "Malla de turnos", desc: "Grupo fijo, descansos y reserva por SC" },
   { id: "rechazos_meli", label: "Rechazos MELI", desc: "Rutas no aceptadas y no hechas · pérdida en $" },
   { id: "kpi_operacion", label: "KPI de Operación", desc: "NS Informe MELI vs Snapshots" },
@@ -624,6 +626,7 @@ function IndicadoresOperacionalesMX({ usuario }) {
       {vista === "torre" && <TorreControlMX />}
       {vista === "pedidos_vivo" && <PedidosEnVivoMX />}
       {vista === "capacidad_mx" && <CapacidadMX />}
+      {vista === "capacidad" && <Capacidad usuario={usuario} />}
       {vista === "malla_turnos" && <MallaTurnosMX />}
       {vista === "rechazos_meli" && <RechazosMeliMX usuario={usuario} />}
       {vista === "kpi_operacion" && <PoolMeliKPIOperacion />}

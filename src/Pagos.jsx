@@ -6159,7 +6159,7 @@ function TercerosMX() {
 const TABS_ADMIN = [
   { id: "listado",     label: "Listado de Pagos",      desc: "Cálculo diario por contratista" },
   { id: "pagos_pausados", label: "Pagos pausados",     desc: "Rutas con el pago retenido · por día y motivo" },
-  { id: "torre_3p",    label: "Capacidad", desc: "Solicitado → Confirmado → Asignado → Ejecutado" },
+  { id: "torre_3p",    label: "Capacidad", desc: "Comprometido → Acordado → Solicitado → Confirmado → Asignado → Ejecutado · Brain y MELI" },
   { id: "terceros",    label: "Terceros",              desc: "Empresas subcontratadas por patente" },
   { id: "conciliacion", label: "Conciliación Terceros", desc: "Conciliación semanal por empresa" },
   { id: "pnr_cobros",  label: "Cobros",                desc: "PNR, robos y extravíos, no show" },
@@ -6218,7 +6218,7 @@ function ModuloPagosMadre({ usuario }) {
           {subtab === "listado"     && <ListadoPagosDiarios usuario={usuario} />}
           {subtab === "pagos_pausados" && <PagosPausados usuario={usuario} />}
           {/* Desde nov-2026 lee la fuente unificada (Torre de Control + No Salidas a Ruta). TorreTresPilares queda sin usar. */}
-          {subtab === "torre_3p"    && <Capacidad />}
+          {subtab === "torre_3p"    && <Capacidad usuario={usuario} />}
           {subtab === "terceros"    && <TercerosMX />}
           {subtab === "conciliacion" && <ConciliacionTercerosMX usuario={usuario} />}
           {subtab === "pnr_cobros"  && <CobrosTerceros usuario={usuario} />}

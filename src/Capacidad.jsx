@@ -1,72 +1,61 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// Capacidad.jsx — Administración → Pagos → Capacidad.
+// Capacidad.jsx — una sola pantalla para Administración → Pagos → Capacidad y
+// para Indicadores Operacionales MX → Capacidad (mismo componente, dos menús).
 //
-// Réplica del reporte "Resumen de ejecución de rutas" de MELI con datos propios:
-//   · fn_capacidad(desde, hasta) → una fila por pedido del rango (máx. 31 días), en
-//     una sola llamada. Lee solo el rango pedido, nunca el histórico completo.
-//   El embudo, las tarjetas y el ranking se suman aquí, y el modelo y el SC se
-//   filtran en pantalla sin volver a consultar.
-// Fuentes: mx_pedidos_estado (pedidos de MELI) × vw_torre_control_dia (Torre)
-//          × bitacora_no_salidas_mx (respuesta del supervisor).
-// Reglas (cuadradas contra MELI el 3-nov SDD):
-//   Universo    = SDD completo + Spot aceptado (Spot no aceptado no cuenta)
-//   Aceptados   = rostering del día cruzado con las rutas que salieron (misma lógica de la Torre)
-//   Confirmado  = aceptados · Asignado = aceptados con chofer y placa
-//   Ejecutado   = aceptados que salieron
-//   Soft no show = SDD no aceptado (Solicitado − Confirmado)
+// La cadena completa por día y SC, con los dos mundos lado a lado:
+//   Comprometido (planilla) → Acordado (MELI) → Solicitado → Confirmado → Asignado → Ejecutado
+//   Brain = nuestros datos (pedidos, rostering, Torre, Bitácora)   · azul
+//   MELI  = foto diaria del reporte de Capacidad de MELI (robot)    · naranja
+// Fuentes:
+//   · fn_capacidad(desde, hasta)            una fila por viaje (SDD completo + Spot aceptado)
+//   · fn_meli_capacidad(desde, hasta)       gráfico total, gráfico por SC y detalle por ruta, según MELI
+//   · fn_capacidad_prometida(desde, hasta)  compromisos con MELI y comprometido por SC × día
+//   · fn_no_salidas_dia(sc, fecha)          respuesta del supervisor (solo con un día)
 // ═══════════════════════════════════════════════════════════════════════════
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { descargarExcelMultihoja, fechaOperativaOffset, sb } from "./shared";
 import { NoSalidasSC, etiquetaNosal } from "./NoSalidas";
 
-// Primeras rutas con el ítem "No Salidas a Ruta" en la Bitácora: las del 4-nov-2026 (se responden el 5).
-const NOSAL_RUTAS_DESDE = "2026-11-04";
-
+const NOSAL_RUTAS_DESDE = "2026-11-04";   // primeras rutas con el ítem "No Salidas a Ruta" en la Bitácora
 const AZUL = "#002E5D";
+const NARANJA = "#FF6600";
 const GRIS = "#64748b";
 const BORDE = "#e4e7ec";
 const POR_PAGINA = 10;
+const BUCKET_EVIDENCIAS = "evidencias-meli";
+const VEHICULOS = ["Large Van MLP", "Small Van MLP", "Large Van", "Small Van", "Car", "Moto"];
 
-const BARRAS = [
-  ["solicitado", "Solicitado", "#93c5fd"],
-  ["confirmado", "Confirmado", "#3b82f6"],
-  ["asignado", "Asignado", "#1d4ed8"],
-  ["ejecutado", "Ejecutado", "#059669"],
+// Pasos del embudo: [clave, título, Brain?, MELI?]
+const PASOS = [
+  ["comprometido", "Comprometido", true, false],
+  ["acordado", "Acordado", false, true],
+  ["solicitado", "Solicitado", true, true],
+  ["confirmado", "Confirmado", true, true],
+  ["asignado", "Asignado", true, true],
+  ["ejecutado", "Ejecutado", true, true],
 ];
 
 const CATEGORIA = {
   ejecutado: ["Ejecutado", "#047857", "#d1fae5"],
   pendiente: ["Pendiente", "#7c3aed", "#f3e8ff"],
-  no_show_soft: ["No confirmada (soft no show)", "#b45309", "#fef3c7"],
+  no_show_soft: ["No confirmada (soft)", "#b45309", "#fef3c7"],
   no_show_hard: ["No show (hard)", "#b91c1c", "#fee2e2"],
   cancelado_hard: ["Cancelación", "#b91c1c", "#fee2e2"],
   no_salio_otro: ["No salió · otros", "#475569", "#f1f5f9"],
-  sin_responder: ["No salió · sin respuesta del supervisor", "#9f1239", "#ffe4e6"],
+  sin_responder: ["No salió · sin respuesta", "#9f1239", "#ffe4e6"],
   otro: ["Otro", "#475569", "#f1f5f9"],
 };
-
-const CONFIRMADO = {
-  Aceptado: ["#047857", "#d1fae5"],
-  "No confirmado": ["#b45309", "#fef3c7"],
-  "Sin responder": ["#7c3aed", "#f3e8ff"],
-};
-
+const CONFIRMADO = { Aceptado: ["#047857", "#d1fae5"], "No confirmado": ["#b45309", "#fef3c7"], "Sin responder": ["#7c3aed", "#f3e8ff"] };
 const VER = [
-  ["todos", "Todos"],
-  ["ejecutado", "Ejecutados"],
-  ["no_ejecutado", "No ejecutados"],
-  ["soft", "No confirmadas (soft no show)"],
-  ["no_show_hard", "No show (hard)"],
-  ["cancelado_hard", "Cancelación"],
-  ["no_salio_otro", "No salió · otros"],
-  ["sin_responder", "No salió · sin respuesta del supervisor"],
-  ["pendiente", "Pendientes"],
+  ["todos", "Todos"], ["ejecutado", "Ejecutados"], ["no_ejecutado", "No ejecutados"], ["soft", "No confirmadas (soft)"],
+  ["no_show_hard", "No show (hard)"], ["cancelado_hard", "Cancelación"], ["no_salio_otro", "No salió · otros"],
+  ["sin_responder", "No salió · sin respuesta"], ["pendiente", "Pendientes"], ["difieren", "Difieren con MELI"],
 ];
-
 const pasaVer = (f, v) => {
   if (v === "todos") return true;
   if (v === "no_ejecutado") return !f.ejecutado;
   if (v === "soft") return f.categoria === "no_show_soft";
+  if (v === "difieren") return f.meli && f.meli.ejecutada !== null && f.meli.ejecutada !== !!f.ejecutado;
   return f.categoria === v;
 };
 
@@ -74,104 +63,154 @@ const pct = (a, b) => (b ? Math.round((a * 100) / b) + "%" : "—");
 const fCorta = (d) => (d ? new Date(d + "T12:00:00").toLocaleDateString("es-MX", { day: "2-digit", month: "short" }) : "");
 const fHora = (v) => (v ? new Date(v).toLocaleString("es-MX", { timeZone: "America/Mexico_City", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : "");
 const fLarga = (d) => (d ? new Date(d + "T12:00:00").toLocaleDateString("es-MX", { weekday: "long", day: "numeric", month: "long", year: "numeric" }) : "");
+const placaNorm = (p) => String(p || "").toUpperCase().replace(/^SDD-/, "").replace(/[^A-Z0-9]/g, "");
 
 function Pill({ t, c, bg }) {
   return <span style={{ background: bg, color: c, fontSize: 10.5, fontWeight: 700, padding: "2px 8px", borderRadius: 10, whiteSpace: "nowrap" }}>{t}</span>;
 }
-
 function Check({ v }) {
   return v ? <span style={{ color: "#047857", fontWeight: 800 }}>✓</span> : <span style={{ color: "#cbd5e1" }}>—</span>;
 }
-
-function Tarjeta({ titulo, total, sub, filas }) {
+// Valor Brain con el de MELI debajo cuando difiere
+function Dos({ brain, meli, pequeno }) {
+  const dif = meli != null && brain != null && meli !== brain;
   return (
-    <div style={{ background: "#fff", border: `1px solid ${BORDE}`, borderRadius: 10, padding: "12px 14px", minWidth: 230, maxWidth: 300 }}>
+    <span style={{ display: "inline-flex", flexDirection: "column", alignItems: "center", lineHeight: 1.15 }}>
+      <span style={{ fontWeight: 700, color: "#334155", fontSize: pequeno ? 11.5 : 12 }}>{brain ?? "—"}</span>
+      {meli != null && <span style={{ fontSize: 10, color: dif ? NARANJA : "#94a3b8", fontWeight: dif ? 700 : 400 }}>MELI {meli}</span>}
+    </span>
+  );
+}
+function Tarjeta({ titulo, total, filas }) {
+  return (
+    <div style={{ background: "#fff", border: `1px solid ${BORDE}`, borderRadius: 10, padding: "12px 14px", minWidth: 250, maxWidth: 320 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12, fontWeight: 700, color: AZUL, fontSize: 13 }}>
         <span>{titulo}</span><span style={{ fontSize: 18, whiteSpace: "nowrap" }}>{total}</span>
       </div>
-      {sub && <div style={{ fontSize: 11, color: GRIS, marginTop: 2 }}>{sub}</div>}
-      {filas.length > 0 && <div style={{ borderTop: `1px solid ${BORDE}`, margin: "8px 0 4px" }} />}
+      <div style={{ borderTop: `1px solid ${BORDE}`, margin: "8px 0 4px" }} />
       {filas.map(([t, v, ayuda]) => (
-        <div key={t} title={ayuda} style={{ display: "flex", justifyContent: "space-between", gap: 12, fontSize: 12, color: GRIS, padding: "3px 0",
-          whiteSpace: "pre", ...(v === "" ? { fontSize: 11, fontWeight: 600, color: AZUL, marginTop: 6 } : {}) }}>
-          <span>{t}</span><span style={{ fontWeight: 700, color: "#334155", whiteSpace: "nowrap" }}>{v}</span>
+        <div key={t} title={ayuda} style={{ display: "flex", justifyContent: "space-between", gap: 12, fontSize: 12, color: GRIS, padding: "3px 0", whiteSpace: "pre",
+          ...(v === "" ? { fontSize: 11, fontWeight: 600, color: AZUL, marginTop: 6 } : {}) }}>
+          <span>{t}</span><span style={{ fontWeight: 700, color: "#334155", whiteSpace: "nowrap", textAlign: "right" }}>{v}</span>
         </div>
       ))}
     </div>
   );
 }
+function LinkEvidencia({ path, nombre }) {
+  const [url, setUrl] = useState(null);
+  useEffect(() => {
+    if (!path) return;
+    let vivo = true;
+    sb.storage.from(BUCKET_EVIDENCIAS).createSignedUrl(path, 3600).then(({ data }) => { if (vivo && data?.signedUrl) setUrl(data.signedUrl); });
+    return () => { vivo = false; };
+  }, [path]);
+  if (!path) return <span style={{ color: "#94a3b8" }}>—</span>;
+  return url ? <a href={url} target="_blank" rel="noreferrer" style={{ color: AZUL }}>📎 {nombre || "ver"}</a> : <span style={{ color: GRIS }}>…</span>;
+}
 
-// Totales con las mismas reglas que se cuadraron contra MELI.
+// Totales Brain con las mismas reglas que se cuadraron contra MELI
 function sumar(filas) {
   const t = { solicitado: filas.length, confirmado: 0, asignado: 0, ejecutado: 0, pendiente: 0,
     no_show_soft: 0, no_show_hard: 0, no_show_hard_sdd: 0, no_show_hard_spot: 0,
-    cancelado_hard: 0, cancelado_sdd: 0, cancelado_spot: 0, no_salio_otro: 0, sin_responder: 0, no_salio_sdd: 0, no_salio_spot: 0 };
+    cancelado_hard: 0, cancelado_sdd: 0, cancelado_spot: 0, no_salio_otro: 0, sin_responder: 0, no_salio_sdd: 0, no_salio_spot: 0, difieren: 0 };
   for (const f of filas) {
-    const acept = f.confirmado === "Aceptado";
-    const sdd = f.modelo === "SDD";
+    const acept = f.confirmado === "Aceptado", sdd = f.modelo === "SDD";
     if (acept) t.confirmado++;
     if (acept && f.asignado) t.asignado++;
     if (acept && f.ejecutado) t.ejecutado++;
-    // Aceptada que no salió, según la Torre (sin esperar al supervisor)
     if (acept && !f.ejecutado && f.categoria !== "pendiente") { if (sdd) t.no_salio_sdd++; else t.no_salio_spot++; }
     if (f.categoria === "no_show_hard") { t.no_show_hard++; if (sdd) t.no_show_hard_sdd++; else t.no_show_hard_spot++; }
     else if (f.categoria === "cancelado_hard") { t.cancelado_hard++; if (sdd) t.cancelado_sdd++; else t.cancelado_spot++; }
     else if (t[f.categoria] !== undefined && f.categoria !== "ejecutado") t[f.categoria]++;
+    if (f.meli && f.meli.ejecutada !== null && f.meli.ejecutada !== !!f.ejecutado) t.difieren++;
   }
   return t;
 }
+// Totales MELI (gráfico) sumando fechas y modelos; por SC usa el gráfico de ese SC.
+// Mismo universo que Brain: en Spot solo cuentan las aceptadas (MELI ofrece el mismo viaje a varias
+// transportistas), así que "Solicitado" MELI en Spot = confirmadas. Acordado y soft solo existen en SDD.
+function sumarMeli(entradas, sc) {
+  const t = { acordado: null, solicitado: 0, confirmado: 0, asignado: 0, ejecutado: 0, soft: 0, hard: 0, n: 0, solicitado_sdd: 0, solicitado_spot: 0 };
+  for (const e of entradas) {
+    const ch = sc ? (e.por_sc || []).find((x) => x.sc === sc)?.chart : e.chart;
+    if (!ch) continue;
+    t.n++;
+    if (e.modelo === "SDD") { t.acordado = (t.acordado || 0) + (ch.negotiated || 0); t.solicitado += ch.requested || 0; t.solicitado_sdd += ch.requested || 0; t.soft += ch.soft_no_show || 0; }
+    else { t.solicitado += ch.confirmed || 0; t.solicitado_spot += ch.requested || 0; }
+    t.confirmado += ch.confirmed || 0; t.asignado += ch.rostered || 0; t.ejecutado += ch.executed || 0; t.hard += ch.hard_no_show || 0;
+  }
+  return t.n ? t : null;
+}
+// Pedidas por sobre lo prometido: SDD contra el compromiso cargado (o el acordado de MELI si no hay);
+// Spot solo contra el compromiso cargado (MELI no registra acordado en Spot)
+function pedidasDeMas(m, compSdd, compSpot) {
+  if (!m) return 0;
+  const sdd = Math.max(m.solicitado_sdd - (compSdd ?? m.acordado ?? m.solicitado_sdd), 0);
+  const spot = compSpot != null ? Math.max(m.solicitado_spot - compSpot, 0) : 0;
+  return sdd + spot;
+}
 
-export default function Capacidad() {
+export default function Capacidad({ usuario }) {
   const ayer = fechaOperativaOffset(-1);
-  // Lo que el usuario elige en los calendarios…
+  const hoy = fechaOperativaOffset(0);
+  const quien = (usuario && (usuario.nombre || usuario.email)) || "Brain";
   const [fechaSel, setFechaSel] = useState(ayer);
   const [hastaSel, setHastaSel] = useState(ayer);
   const [esRango, setEsRango] = useState(false);
-  // …y lo que realmente se consultó (solo cambia con Aplicar).
   const [aplicado, setAplicado] = useState({ d1: ayer, d2: ayer });
   const [segundos, setSegundos] = useState(null);
-  const [esperando, setEsperando] = useState(0); // segundos que lleva la carga actual
+  const [esperando, setEsperando] = useState(0);
   const ultimaPeticion = useRef(0);
   const [modelo, setModelo] = useState("");
   const [sc, setSc] = useState("");
   const [todas, setTodas] = useState([]);
-  const [noSal, setNoSal] = useState([]);       // No Salidas a Ruta del día (fn_no_salidas_dia), solo cuando se consulta un día
+  const [meli, setMeli] = useState([]);
+  const [prom, setProm] = useState({ compromisos: [], cruce: [] });
+  const [noSal, setNoSal] = useState([]);
   const [verBitacora, setVerBitacora] = useState(true);
+  const [verCompromisos, setVerCompromisos] = useState(false);
   const [ver, setVer] = useState("todos");
   const [buscar, setBuscar] = useState("");
   const [pagina, setPagina] = useState(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [excelBusy, setExcelBusy] = useState(false);
+  // Formulario de compromisos
+  const [form, setForm] = useState({ sc: "", vehiculo: "", vehiculoOtro: "", modelo: "SDD", cantidad: "", vigencia: hoy, nota: "" });
+  const [archivo, setArchivo] = useState(null);
+  const [guardando, setGuardando] = useState(false);
+  const [msg, setMsg] = useState(null);
+  const inputArchivo = useRef(null);
 
   const { d1, d2 } = aplicado;
   const fechasValidas = /^\d{4}-\d{2}-\d{2}$/.test(fechaSel) && (!esRango || /^\d{4}-\d{2}-\d{2}$/.test(hastaSel));
+
   const cargar = useCallback(async () => {
-    // Si llegan dos respuestas, solo vale la de la última petición.
     const id = ++ultimaPeticion.current;
     const t0 = Date.now();
     setLoading(true); setError(null); setEsperando(0);
     const reloj = setInterval(() => setEsperando(Math.round((Date.now() - t0) / 1000)), 1000);
     try {
-      // Una sola llamada por rango de fechas; modelo y SC se filtran en pantalla.
-      // Tope de 40 s: si Supabase no responde, se muestra el error en vez de quedar "Cargando…".
-      // Para un solo día se trae además el ítem "No Salidas a Ruta" de la Bitácora
-      // (la misma tabla que ven el analista y el jefe en Consolidaciones Bitácora).
-      const [r, ns] = await Promise.race([
+      const [r, m, p, ns] = await Promise.race([
         Promise.all([
           sb.rpc("fn_capacidad", { p_desde: d1, p_hasta: d2 }),
+          sb.rpc("fn_meli_capacidad", { p_desde: d1, p_hasta: d2 }),
+          sb.rpc("fn_capacidad_prometida", { p_desde: d1, p_hasta: d2 }),
           d1 === d2 ? sb.rpc("fn_no_salidas_dia", { p_sc: null, p_fecha: d1 }) : Promise.resolve({ data: [] }),
         ]),
         new Promise((_, rej) => setTimeout(() => rej(new Error("Supabase no respondió en 40 segundos")), 40000)),
       ]);
       if (id !== ultimaPeticion.current) return;
-      if (r.error) throw new Error(`${r.error.message || r.error}${r.error.code ? ` (código ${r.error.code})` : ""}${r.error.hint ? ` · ${r.error.hint}` : ""}`);
-      if (!Array.isArray(r.data)) throw new Error("Supabase respondió, pero no con una lista de viajes: " + JSON.stringify(r.data).slice(0, 200));
+      if (r.error) throw new Error(`${r.error.message || r.error}${r.error.code ? ` (código ${r.error.code})` : ""}`);
+      if (!Array.isArray(r.data)) throw new Error("fn_capacidad no devolvió una lista");
       setTodas(r.data);
+      setMeli(Array.isArray(m?.data) ? m.data : []);
+      setProm(p?.data && typeof p.data === "object" ? { compromisos: p.data.compromisos || [], cruce: p.data.cruce || [] } : { compromisos: [], cruce: [] });
       setNoSal(Array.isArray(ns?.data) ? ns.data : []);
       setSegundos(((Date.now() - t0) / 1000).toFixed(1));
     } catch (e) {
-      console.error("Capacidad · fn_capacidad", d1, d2, e);
+      console.error("Capacidad", d1, d2, e);
       if (id === ultimaPeticion.current) setError(e.message || String(e));
     } finally {
       clearInterval(reloj);
@@ -179,245 +218,351 @@ export default function Capacidad() {
     }
   }, [d1, d2]);
   useEffect(() => { cargar(); }, [cargar]);
+
   const aplicar = () => {
     if (!fechasValidas) return;
     const a = fechaSel, b = esRango ? hastaSel : fechaSel;
     const nuevo = { d1: a <= b ? a : b, d2: b >= a ? b : a };
-    // Si se aplica la misma fecha, igual vuelve a consultar.
     if (nuevo.d1 === aplicado.d1 && nuevo.d2 === aplicado.d2) cargar(); else setAplicado(nuevo);
   };
 
+  // ── Cruce por ruta con el detalle de MELI (fecha + placa, o route_id) ──
+  const meliPorRuta = useMemo(() => {
+    const porPlaca = new Map(), porRuta = new Map();
+    for (const e of meli) for (const d of e.detalle || []) {
+      const fila = { ejecutada: d.executed === "✓", confirmada: d.confirmed === "✓", rosterizada: d.rostered === "✓", route_id: d.route_id || null, sc: d.service_center };
+      if (d.route_id) porRuta.set(String(d.route_id), fila);
+      const p = placaNorm(d.vehicle_plate);
+      if (p) porPlaca.set(`${e.fecha}|${p}`, fila);
+    }
+    return { porPlaca, porRuta };
+  }, [meli]);
+  const filasBase = useMemo(() => todas.map((f) => {
+    const m = (f.id_ruta && meliPorRuta.porRuta.get(String(f.id_ruta))) || (f.placa && meliPorRuta.porPlaca.get(`${f.fecha}|${placaNorm(f.placa)}`)) || null;
+    return { ...f, meli: m ? { ...m } : (f.confirmado === "Aceptado" && meli.length ? { ejecutada: null, sinRegistro: true } : null) };
+  }), [todas, meli, meliPorRuta]);
 
-  const delModelo = useMemo(() => (modelo ? todas.filter((f) => f.modelo === modelo) : todas), [todas, modelo]);
+  const delModelo = useMemo(() => (modelo ? filasBase.filter((f) => f.modelo === modelo) : filasBase), [filasBase, modelo]);
   const filas = useMemo(() => (sc ? delModelo.filter((f) => f.sc === sc) : delModelo), [delModelo, sc]);
+  const meliFiltrado = useMemo(() => (modelo ? meli.filter((e) => e.modelo === modelo) : meli), [meli, modelo]);
+  const meliTot = useMemo(() => sumarMeli(meliFiltrado, sc || null), [meliFiltrado, sc]);
+  const cruceFiltrado = useMemo(() => prom.cruce.filter((x) => (!modelo || x.modelo === modelo) && (!sc || x.sc === sc)), [prom, modelo, sc]);
+  const comprometido = useMemo(() => cruceFiltrado.reduce((t, x) => t + (x.comprometido || 0), 0), [cruceFiltrado]);
+  const hayCompromiso = useMemo(() => cruceFiltrado.some((x) => x.comprometido != null), [cruceFiltrado]);
+  const compPor = (lista, m) => { const l = lista.filter((x) => x.modelo === m); return l.some((x) => x.comprometido != null) ? l.reduce((t, x) => t + (x.comprometido || 0), 0) : null; };
+  const tot = useMemo(() => sumar(filas), [filas]);
+  const listaSc = useMemo(() => [...new Set([...todas.map((f) => f.sc), ...meli.flatMap((e) => (e.por_sc || []).map((x) => x.sc))].filter(Boolean))].sort(), [todas, meli]);
+
   const porSc = useMemo(() => {
     const g = {};
     for (const f of delModelo) if (f.sc) (g[f.sc] = g[f.sc] || []).push(f);
-    return Object.entries(g).map(([k, v]) => ({ sc: k, ...sumar(v) }));
-  }, [delModelo]);
-  const listaSc = useMemo(() => [...new Set(todas.map((f) => f.sc).filter(Boolean))].sort(), [todas]);
-  const tot = useMemo(() => sumar(filas), [filas]);
-  // Al cambiar filtros o datos, vuelve a la primera página (va después de declarar filas).
-  useEffect(() => { setPagina(1); }, [ver, buscar, filas]);
-  const maxBarra = Math.max(1, ...BARRAS.map(([k]) => tot[k] || 0));
+    const scs = new Set([...Object.keys(g), ...meliFiltrado.flatMap((e) => (e.por_sc || []).map((x) => x.sc))]);
+    return [...scs].map((k) => {
+      const cr = prom.cruce.filter((x) => x.sc === k && (!modelo || x.modelo === modelo));
+      const m = sumarMeli(meliFiltrado, k);
+      return { sc: k, ...sumar(g[k] || []), meli: m, comprometido: cr.some((x) => x.comprometido != null) ? cr.reduce((t, x) => t + (x.comprometido || 0), 0) : null,
+        de_mas: pedidasDeMas(m, compPor(cr, "SDD"), compPor(cr, "SPOT")) };
+    });
+  }, [delModelo, meliFiltrado, prom, modelo]);
 
+  // Pedidas de más: suma por SC (cada SC contra su propio compromiso o acordado)
+  const deMasTotal = useMemo(() => porSc.filter((x) => !sc || x.sc === sc).reduce((t, x) => t + (x.de_mas || 0), 0), [porSc, sc]);
+  useEffect(() => { setPagina(1); }, [ver, buscar, filas]);
   const filtradas = useMemo(() => {
     const q = buscar.trim().toLowerCase();
-    return filas.filter((f) => pasaVer(f, ver) && (!q || [f.sc, f.placa, f.chofer, f.driver_id, f.id_ruta, f.travel_id, f.request_id, f.vehiculo]
-      .some((x) => x && String(x).toLowerCase().includes(q))));
+    return filas.filter((f) => pasaVer(f, ver) && (!q || [f.sc, f.placa, f.chofer, f.driver_id, f.id_ruta, f.travel_id, f.request_id, f.vehiculo].some((x) => x && String(x).toLowerCase().includes(q))));
   }, [filas, ver, buscar]);
   const paginas = Math.max(1, Math.ceil(filtradas.length / POR_PAGINA));
   const visibles = filtradas.slice((pagina - 1) * POR_PAGINA, pagina * POR_PAGINA);
 
+  const vigentes = useMemo(() => prom.compromisos.filter((c) => c.activo && (!c.vigencia_hasta || c.vigencia_hasta >= hoy)), [prom, hoy]);
+  const scsForm = useMemo(() => [...new Set(["SCY1", "SHP1", "SMX1", "SMX10", "SMX2", "SMX20", "SMX22", "SMX7", "SMX8", "SMX9", "SPY1", "SQR1", "STL1", "STX1", "SVH1", ...listaSc])].sort(), [listaSc]);
+
+  async function guardarCompromiso() {
+    setMsg(null);
+    const vehiculo = form.vehiculo === "_otro" ? form.vehiculoOtro.trim() : form.vehiculo;
+    const faltan = [];
+    if (!form.sc) faltan.push("SC"); if (!vehiculo) faltan.push("vehículo");
+    if (form.cantidad === "" || Number(form.cantidad) < 0) faltan.push("cantidad"); if (!form.vigencia) faltan.push("vigencia");
+    if (faltan.length) { setMsg({ tipo: "error", texto: "Falta: " + faltan.join(", ") + "." }); return; }
+    setGuardando(true);
+    try {
+      let path = null, nombre = null;
+      if (archivo) {
+        path = `compromisos/${form.sc}/${Date.now()}_${archivo.name.replace(/[^a-zA-Z0-9.\-_]/g, "_")}`;
+        const { error: eUp } = await sb.storage.from(BUCKET_EVIDENCIAS).upload(path, archivo, { contentType: archivo.type || "application/octet-stream", upsert: false });
+        if (eUp) throw new Error("No se pudo subir el adjunto: " + eUp.message);
+        nombre = archivo.name;
+      }
+      const { error: err } = await sb.rpc("fn_capacidad_prometida_guardar", {
+        p_sc: form.sc, p_vehiculo: vehiculo, p_modelo: form.modelo, p_cantidad: Number(form.cantidad), p_vigencia_desde: form.vigencia,
+        p_evidencia_path: path, p_evidencia_nombre: nombre, p_nota: form.nota, p_por: quien,
+      });
+      if (err) throw err;
+      setMsg({ tipo: "ok", texto: `Guardado: ${form.sc} · ${vehiculo} · ${form.modelo} · ${form.cantidad} por día desde ${fCorta(form.vigencia)}.` });
+      setForm((f) => ({ ...f, cantidad: "", nota: "" })); setArchivo(null); if (inputArchivo.current) inputArchivo.current.value = "";
+      await cargar();
+    } catch (e) { setMsg({ tipo: "error", texto: e.message || String(e) }); }
+    finally { setGuardando(false); }
+  }
+  async function cerrarCompromiso(c) {
+    const h = window.prompt(`¿Hasta qué fecha rige ${c.sc} · ${c.vehiculo} · ${c.modelo} (${c.cantidad} por día)? AAAA-MM-DD, o vacío para anularlo.`, hoy);
+    if (h === null) return;
+    const { error: err } = await sb.rpc("fn_capacidad_prometida_cerrar", { p_id: c.id, p_hasta: h.trim() || null, p_por: quien });
+    if (err) { setMsg({ tipo: "error", texto: err.message }); return; }
+    await cargar();
+  }
+
   const descargarExcel = async () => {
     setExcelBusy(true);
     try {
-      const det = [["FECHA", "SC", "MODELO", "REQUEST ID", "TRAVEL ID", "VEHICULO", "PLACA", "CHOFER", "DRIVER ID", "ID RUTA",
-        "CONFIRMADO", "ASIGNADO", "EJECUTADO", "ESTADO TORRE", "RESULTADO", "RESPUESTA SUPERVISOR", "MOTIVO", "COMENTARIO", "RESPONDIDO POR", "RESPONDIDO EL", "PRUEBAS"]];
-      for (const f of filtradas) det.push([f.fecha, f.sc, f.modelo, f.request_id ?? "", f.travel_id || "", f.vehiculo || "", f.placa || "",
-        f.chofer || "", f.driver_id || "", f.id_ruta || "", f.confirmado || "", f.asignado ? "SI" : "NO", f.ejecutado ? "SI" : "NO",
+      const det = [["FECHA", "SC", "MODELO", "REQUEST ID", "TRAVEL ID", "VEHICULO", "PLACA", "CHOFER", "DRIVER ID", "ID RUTA", "CONFIRMADO", "ASIGNADO", "EJECUTADO",
+        "MELI EJECUTADA", "ESTADO TORRE", "RESULTADO", "RESPUESTA SUPERVISOR", "MOTIVO", "COMENTARIO", "RESPONDIDO POR", "RESPONDIDO EL", "PRUEBAS"]];
+      for (const f of filtradas) det.push([f.fecha, f.sc, f.modelo, f.request_id ?? "", f.travel_id || "", f.vehiculo || "", f.placa || "", f.chofer || "", f.driver_id || "", f.id_ruta || "",
+        f.confirmado || "", f.asignado ? "SI" : "NO", f.ejecutado ? "SI" : "NO", f.meli ? (f.meli.ejecutada === null ? "SIN REGISTRO" : f.meli.ejecutada ? "SI" : "NO") : "",
         f.estado_torre || "", (CATEGORIA[f.categoria] || [f.categoria])[0], f.resultado_supervisor || "", etiquetaNosal(f.etiqueta), f.comentario || "",
         f.respondido_por || "", f.respondido_at ? fHora(f.respondido_at) : "", f.pruebas || 0]);
-      const res = [["SC", "SOLICITADO", "CONFIRMADO", "ASIGNADO", "EJECUTADO", "% EJECUTADO / CONFIRMADO", "SOFT NO SHOW",
-"HARD NO SHOW SDD", "HARD NO SHOW SPOT", "CANCELACION SDD", "CANCELACION SPOT", "OTROS", "NO SALIO SIN CLASIFICAR", "PENDIENTE"]];
+      const res = [["SC", "COMPROMETIDO", "ACORDADO MELI", "SOLICITADO", "SOLICITADO MELI", "CONFIRMADO", "CONFIRMADO MELI", "ASIGNADO", "ASIGNADO MELI", "EJECUTADO", "EJECUTADO MELI",
+        "% EJECUTADO / CONFIRMADO", "NO CONFIRMADAS (SOFT)", "SOFT MELI", "HARD NO SHOW", "HARD MELI", "CANCELACION", "OTROS", "SIN RESPUESTA", "DIFIEREN CON MELI"]];
+      res[0].push("PEDIDAS DE MAS");
       for (const x of porSc) {
         if (sc && x.sc !== sc) continue;
-        res.push([x.sc, x.solicitado, x.confirmado, x.asignado, x.ejecutado, pct(x.ejecutado, x.confirmado), x.no_show_soft,
-          x.no_show_hard_sdd, x.no_show_hard_spot, x.cancelado_sdd, x.cancelado_spot, x.no_salio_otro, x.sin_responder, x.pendiente]);
+        const m = x.meli || {};
+        res.push([x.sc, x.comprometido ?? "", m.acordado ?? "", x.solicitado, m.solicitado ?? "", x.confirmado, m.confirmado ?? "", x.asignado, m.asignado ?? "", x.ejecutado, m.ejecutado ?? "",
+          pct(x.ejecutado, x.confirmado), x.no_show_soft, m.soft ?? "", x.no_show_hard, m.hard ?? "", x.cancelado_hard, x.no_salio_otro, x.sin_responder, x.difieren, x.de_mas || 0]);
       }
-      await descargarExcelMultihoja([{ nombre: "Por SC", datos: res }, { nombre: "Detalle", datos: det }],
+      const comp = [["SC", "VEHICULO", "MODELO", "COMPROMETIDO POR DIA", "VIGENCIA DESDE", "VIGENCIA HASTA", "EVIDENCIA", "NOTA", "CARGO", "CARGADO EL"]];
+      for (const c of prom.compromisos) comp.push([c.sc, c.vehiculo, c.modelo, c.cantidad, c.vigencia_desde, c.vigencia_hasta || "", c.evidencia_nombre || "", c.nota || "", c.cargado_por, fHora(c.cargado_at)]);
+      await descargarExcelMultihoja([{ nombre: "Por SC", datos: res }, { nombre: "Detalle", datos: det }, { nombre: "Compromisos", datos: comp }],
         `capacidad_${d1 === d2 ? d1 : d1 + "_a_" + d2}${modelo ? "_" + modelo : ""}${sc ? "_" + sc : ""}`);
-    } catch (e) {
-      alert("No se pudo generar el Excel: " + (e.message || e));
-    } finally {
-      setExcelBusy(false);
-    }
+    } catch (e) { alert("No se pudo generar el Excel: " + (e.message || e)); }
+    finally { setExcelBusy(false); }
   };
 
   const th = { padding: "8px 8px", fontSize: 10.5, color: GRIS, fontWeight: 600, textAlign: "left", whiteSpace: "nowrap", background: "#f8fafc" };
   const thC = { ...th, textAlign: "center" };
   const td = { padding: "7px 8px", fontSize: 11.5, verticalAlign: "middle", borderTop: `1px solid ${BORDE}` };
   const tdC = { ...td, textAlign: "center" };
-  const input = { border: `1px solid ${BORDE}`, borderRadius: 8, padding: "6px 8px", fontSize: 12 };
+  const input = { border: `1px solid ${BORDE}`, borderRadius: 8, padding: "6px 8px", fontSize: 12, background: "#fff" };
   const caja = { background: "#fff", border: `1px solid ${BORDE}`, borderRadius: 10, padding: 14 };
+  const boton = (activo) => ({ padding: "7px 14px", fontSize: 12.5, fontWeight: 600, border: "none", borderRadius: 8, cursor: "pointer", background: activo ? AZUL : "#f1f5f9", color: activo ? "#fff" : "#334155" });
+  const valores = { comprometido: { brain: hayCompromiso ? comprometido : null, meli: null }, acordado: { brain: null, meli: meliTot?.acordado ?? null },
+    solicitado: { brain: tot.solicitado, meli: meliTot?.solicitado ?? null }, confirmado: { brain: tot.confirmado, meli: meliTot?.confirmado ?? null },
+    asignado: { brain: tot.asignado, meli: meliTot?.asignado ?? null }, ejecutado: { brain: tot.ejecutado, meli: meliTot?.ejecutado ?? null } };
+  const maxBarra = Math.max(1, ...Object.values(valores).flatMap((v) => [v.brain || 0, v.meli || 0]));
 
   return (
     <div className="pg">
       {/* Filtros */}
-      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end", marginBottom: 12 }}>
-        <label style={{ fontSize: 11, color: GRIS }}>{esRango ? "Desde" : "Día"}<br />
-          <input type="date" value={fechaSel} onChange={(e) => setFechaSel(e.target.value)} style={input} /></label>
-        {esRango && <label style={{ fontSize: 11, color: GRIS }}>Hasta<br />
-          <input type="date" value={hastaSel} onChange={(e) => setHastaSel(e.target.value)} style={input} /></label>}
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end", marginBottom: 10 }}>
+        <label style={{ fontSize: 11, color: GRIS }}>{esRango ? "Desde" : "Día"}<br /><input type="date" value={fechaSel} onChange={(e) => setFechaSel(e.target.value)} style={input} /></label>
+        {esRango && <label style={{ fontSize: 11, color: GRIS }}>Hasta<br /><input type="date" value={hastaSel} onChange={(e) => setHastaSel(e.target.value)} style={input} /></label>}
         <label style={{ fontSize: 11, color: GRIS, display: "flex", alignItems: "center", gap: 4, paddingBottom: 7 }}>
           <input type="checkbox" checked={esRango} onChange={(e) => { setEsRango(e.target.checked); if (e.target.checked && hastaSel < fechaSel) setHastaSel(fechaSel); }} /> Rango
         </label>
-        <button onClick={aplicar} disabled={!fechasValidas}
-          style={{ ...input, background: AZUL, color: "#fff", border: "none", cursor: "pointer", fontWeight: 600 }}>Aplicar</button>
-        <label style={{ fontSize: 11, color: GRIS }}>Modelo de contratación<br />
-          <select value={modelo} onChange={(e) => setModelo(e.target.value)} style={input}>
-            <option value="">Todos</option><option value="SDD">SDD</option><option value="SPOT">Spot</option>
-          </select>
-        </label>
+        <button onClick={aplicar} disabled={!fechasValidas} style={{ ...input, background: AZUL, color: "#fff", border: "none", cursor: "pointer", fontWeight: 600 }}>Aplicar</button>
+        <label style={{ fontSize: 11, color: GRIS }}>Modelo<br />
+          <select value={modelo} onChange={(e) => setModelo(e.target.value)} style={input}><option value="">Todos</option><option value="SDD">SDD</option><option value="SPOT">Spot</option></select></label>
         <label style={{ fontSize: 11, color: GRIS }}>Service Center<br />
-          <select value={sc} onChange={(e) => setSc(e.target.value)} style={input}>
-            <option value="">Todos</option>
-            {listaSc.map((s) => <option key={s} value={s}>{s}</option>)}
-          </select>
-        </label>
-        <button onClick={cargar} disabled={loading} style={{ ...input, background: "#fff", cursor: "pointer" }}>↻ Actualizar</button>
-        <button onClick={descargarExcel} disabled={excelBusy || loading}
-          style={{ ...input, background: "#fff", cursor: "pointer", fontWeight: 600 }}>
-          {excelBusy ? "Generando…" : "⬇ Descargar Excel"}
-        </button>
+          <select value={sc} onChange={(e) => setSc(e.target.value)} style={input}><option value="">Todos</option>{listaSc.map((s) => <option key={s} value={s}>{s}</option>)}</select></label>
+        <button onClick={cargar} disabled={loading} style={{ ...input, cursor: "pointer" }}>↻ Actualizar</button>
+        <button onClick={descargarExcel} disabled={excelBusy || loading} style={{ ...input, cursor: "pointer", fontWeight: 600 }}>{excelBusy ? "Generando…" : "⬇ Excel"}</button>
       </div>
-      {/* Qué está mostrando la pantalla: evita confundir lo elegido con lo cargado */}
-      <div style={{ fontSize: 12, color: "#334155", marginBottom: 12 }}>
-        Mostrando <b>{d1 === d2 ? fLarga(d1) : `${fLarga(d1)} al ${fLarga(d2)}`}</b>
-        {modelo ? ` · ${modelo === "SDD" ? "SDD" : "Spot"}` : " · SDD y Spot"}{sc ? ` · ${sc}` : ""}
-        {!loading && <span style={{ color: GRIS }}> · {todas.length} viajes{segundos ? ` · cargado en ${segundos} s` : ""}</span>}
-        {(fechaSel !== d1 || (esRango ? hastaSel : fechaSel) !== d2) && <span style={{ color: "#b45309", fontWeight: 600 }}> · cambiaste la fecha: presiona Aplicar</span>}
+      <div style={{ fontSize: 12, color: "#334155", marginBottom: 12, display: "flex", gap: 14, flexWrap: "wrap", alignItems: "center" }}>
+        <span><b>{d1 === d2 ? fLarga(d1) : `${fLarga(d1)} al ${fLarga(d2)}`}</b>{modelo ? ` · ${modelo === "SDD" ? "SDD" : "Spot"}` : " · SDD y Spot"}{sc ? ` · ${sc}` : ""}
+          {!loading && <span style={{ color: GRIS }}> · {todas.length} viajes · {segundos ? `${segundos} s` : ""}</span>}
+          {(fechaSel !== d1 || (esRango ? hastaSel : fechaSel) !== d2) && <span style={{ color: "#b45309", fontWeight: 600 }}> · presiona Aplicar</span>}</span>
+        <span style={{ display: "flex", gap: 10, fontSize: 11 }}>
+          <span><span style={{ display: "inline-block", width: 10, height: 10, background: AZUL, borderRadius: 2, marginRight: 4 }} />Brain</span>
+          <span><span style={{ display: "inline-block", width: 10, height: 10, background: NARANJA, borderRadius: 2, marginRight: 4 }} />MELI{meliTot ? "" : " (sin foto)"}</span>
+        </span>
       </div>
-
-      {error && <div style={{ background: "#fee2e2", color: "#b91c1c", padding: 10, borderRadius: 8, fontSize: 12, marginBottom: 12 }}>
-        <b>No se pudo cargar {d1 === d2 ? d1 : `${d1} al ${d2}`}:</b> {error}
-      </div>}
-      {loading && <div style={{ color: GRIS, fontSize: 12, marginBottom: 12 }}>Consultando fn_capacidad({d1}, {d2})… {esperando} s</div>}
+      {error && <div style={{ background: "#fee2e2", color: "#b91c1c", padding: 10, borderRadius: 8, fontSize: 12, marginBottom: 12 }}><b>No se pudo cargar {d1 === d2 ? d1 : `${d1} al ${d2}`}:</b> {error}</div>}
+      {loading && <div style={{ color: GRIS, fontSize: 12, marginBottom: 12 }}>Consultando… {esperando} s</div>}
 
       {/* Embudo + tarjetas */}
       <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 14 }}>
-        <div style={{ ...caja, flex: "1 1 520px" }}>
-          <div style={{ fontWeight: 700, color: AZUL, fontSize: 14, marginBottom: 10 }}>Resumen de ejecución de rutas</div>
-          <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-around", height: 180, borderBottom: `1px solid ${BORDE}` }}>
-            {BARRAS.map(([k, t, color]) => (
-              <div key={k} style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-end", height: "100%", width: 70 }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: "#334155", marginBottom: 4 }}>{tot[k] || 0}</div>
-                <div style={{ width: 28, height: `${((tot[k] || 0) / maxBarra) * 150}px`, background: color, borderRadius: "4px 4px 0 0", minHeight: 2 }} />
-              </div>
-            ))}
+        <div style={{ ...caja, flex: "1 1 620px" }}>
+          <div style={{ fontWeight: 700, color: AZUL, fontSize: 14, marginBottom: 10 }}>Ejecución de rutas</div>
+          <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-around", height: 190, borderBottom: `1px solid ${BORDE}` }}>
+            {PASOS.map(([k, t, esBrain, esMeli]) => {
+              const v = valores[k];
+              return (
+                <div key={k} style={{ display: "flex", alignItems: "flex-end", justifyContent: "center", gap: 6, height: "100%", width: 96 }}>
+                  {esBrain && <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-end", height: "100%" }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: AZUL, marginBottom: 3 }}>{v.brain ?? "—"}</div>
+                    <div style={{ width: 26, height: `${((v.brain || 0) / maxBarra) * 150}px`, background: AZUL, borderRadius: "4px 4px 0 0", minHeight: 2, opacity: v.brain == null ? 0.15 : 1 }} />
+                  </div>}
+                  {esMeli && <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-end", height: "100%" }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: NARANJA, marginBottom: 3 }}>{v.meli ?? "—"}</div>
+                    <div style={{ width: 26, height: `${((v.meli || 0) / maxBarra) * 150}px`, background: NARANJA, borderRadius: "4px 4px 0 0", minHeight: 2, opacity: v.meli == null ? 0.15 : 1 }} />
+                  </div>}
+                </div>
+              );
+            })}
           </div>
           <div style={{ display: "flex", justifyContent: "space-around", marginTop: 6 }}>
-            {BARRAS.map(([k, t]) => (
-              <div key={k} style={{ width: 70, textAlign: "center", fontSize: 11, color: GRIS }}>
-                {t}<br /><b style={{ color: "#334155", fontSize: 12 }}>{tot[k] || 0}</b>
-                {k !== "solicitado" && <div style={{ fontSize: 10 }}>{pct(tot[k] || 0, tot.solicitado || 0)}</div>}
-              </div>
-            ))}
+            {PASOS.map(([k, t, esBrain]) => {
+              const v = valores[k];
+              const dif = v.brain != null && v.meli != null && v.brain !== v.meli;
+              return (
+                <div key={k} style={{ width: 96, textAlign: "center", fontSize: 11, color: GRIS }}>
+                  {t}
+                  {esBrain && k !== "comprometido" && <div style={{ fontSize: 10 }}>{pct(v.brain || 0, tot.solicitado || 0)}</div>}
+                  {dif && <div style={{ fontSize: 10, color: "#b91c1c", fontWeight: 700 }}>≠ {v.meli - v.brain > 0 ? "+" : ""}{v.meli - v.brain}</div>}
+                </div>
+              );
+            })}
           </div>
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          <Tarjeta titulo="No show SDD" total={(tot.no_show_soft || 0) + (tot.no_salio_sdd || 0)} filas={[
-            ["Soft · no confirmadas", tot.no_show_soft || 0, "Pedidos SDD que MELI solicitó y no aceptamos"],
-            ["Hard · aceptadas que no salieron", tot.no_salio_sdd || 0, "SDD con placa y chofer cuya ruta no salió"],
+          <Tarjeta titulo="No show" total={`${(tot.no_show_soft || 0) + (tot.no_salio_sdd || 0) + (tot.no_salio_spot || 0)}${meliTot ? ` · MELI ${meliTot.soft + meliTot.hard}` : ""}`} filas={[
+            ["Soft · no confirmadas", `${tot.no_show_soft || 0}${meliTot ? `  ·  MELI ${meliTot.soft}` : ""}`, "SDD solicitado que no confirmamos"],
+            ["Hard · aceptadas que no salieron", `${(tot.no_salio_sdd || 0) + (tot.no_salio_spot || 0)}${meliTot ? `  ·  MELI ${meliTot.hard}` : ""}`, "Brain: SDD y Spot con placa y chofer que no salieron · MELI: hard no show del reporte"],
+            ["   SDD", tot.no_salio_sdd || 0, ""], ["   Spot", tot.no_salio_spot || 0, ""],
           ]} />
-          <Tarjeta titulo="Aceptadas que no salieron" total={`${(tot.no_salio_sdd || 0) + (tot.no_salio_spot || 0)} de ${tot.confirmado || 0}`} filas={[
-            ["SDD", tot.no_salio_sdd || 0, "SDD aceptada que no se hizo: MELI la cobra como hard no show"],
-            ["Spot", tot.no_salio_spot || 0, "Spot aceptada que no se hizo"],
-            ["Respuesta del supervisor (Bitácora)", "", ""],
-            ["   No show", `${tot.no_show_hard || 0}${tot.no_show_hard ? ` (${tot.no_show_hard_sdd || 0} SDD · ${tot.no_show_hard_spot || 0} Spot)` : ""}`, "El supervisor marcó No Show"],
-            ["   Cancelación", `${tot.cancelado_hard || 0}${tot.cancelado_hard ? ` (${tot.cancelado_sdd || 0} SDD · ${tot.cancelado_spot || 0} Spot)` : ""}`, "El supervisor marcó Cancelación"],
-            ["   Otros", tot.no_salio_otro || 0, "El supervisor respondió Otros, con comentario"],
-            ["   Sin respuesta", tot.sin_responder || 0, "Esperan la respuesta en la Bitácora (ítem No Salidas a Ruta, viajes desde el 4-nov-2026)"],
-            ...((tot.pendiente || 0) > 0 ? [["Pendientes de hoy (todavía pueden salir)", tot.pendiente, ""]] : []),
+          <Tarjeta titulo="Respuesta del supervisor" total={`${(tot.no_salio_sdd || 0) + (tot.no_salio_spot || 0) - (tot.sin_responder || 0)} de ${(tot.no_salio_sdd || 0) + (tot.no_salio_spot || 0)}`} filas={[
+            ["No show", `${tot.no_show_hard || 0}${tot.no_show_hard ? ` (${tot.no_show_hard_sdd || 0} SDD · ${tot.no_show_hard_spot || 0} Spot)` : ""}`, ""],
+            ["Cancelación", `${tot.cancelado_hard || 0}${tot.cancelado_hard ? ` (${tot.cancelado_sdd || 0} SDD · ${tot.cancelado_spot || 0} Spot)` : ""}`, ""],
+            ["Otros", tot.no_salio_otro || 0, ""], ["Sin respuesta", tot.sin_responder || 0, ""],
+            ...((tot.pendiente || 0) > 0 ? [["Pendientes de hoy", tot.pendiente, ""]] : []),
           ]} />
+          {meliTot && <Tarjeta titulo="MELI" total="" filas={[
+            ["Pedidas por sobre lo prometido", deMasTotal, "Solicitado por MELI por encima del compromiso (SDD contra el compromiso o el acordado; Spot solo contra el compromiso cargado)"],
+            ["Rutas con resultado distinto", tot.difieren || 0, "Brain dice que salió y MELI que no, o al revés"],
+          ]} />}
         </div>
+      </div>
+
+      {/* Compromisos con MELI */}
+      <div style={{ ...caja, marginBottom: 14 }}>
+        <button onClick={() => setVerCompromisos((v) => !v)} style={{ background: "none", border: "none", padding: 0, cursor: "pointer", fontWeight: 700, color: AZUL, fontSize: 14, display: "flex", gap: 8, alignItems: "center" }}>
+          <span>{verCompromisos ? "▼" : "▶"}</span> Compromisos con MELI
+          <span style={{ fontSize: 11, fontWeight: 600, color: GRIS }}>{vigentes.length} vigentes · {vigentes.reduce((t, c) => t + c.cantidad, 0)} vehículos por día</span>
+        </button>
+        {verCompromisos && (<>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end", marginTop: 12 }}>
+            <label style={{ fontSize: 11, color: GRIS }}>Service Center<br /><select value={form.sc} onChange={(e) => setForm({ ...form, sc: e.target.value })} style={input}><option value="">Elige…</option>{scsForm.map((s) => <option key={s} value={s}>{s}</option>)}</select></label>
+            <label style={{ fontSize: 11, color: GRIS }}>Vehículo<br /><select value={form.vehiculo} onChange={(e) => setForm({ ...form, vehiculo: e.target.value })} style={input}><option value="">Elige…</option>{VEHICULOS.map((v) => <option key={v} value={v}>{v}</option>)}<option value="_otro">Otro</option></select></label>
+            {form.vehiculo === "_otro" && <label style={{ fontSize: 11, color: GRIS }}>Cuál<br /><input value={form.vehiculoOtro} onChange={(e) => setForm({ ...form, vehiculoOtro: e.target.value })} style={input} /></label>}
+            <label style={{ fontSize: 11, color: GRIS }}>Tipo<br /><span style={{ display: "flex", gap: 6 }}>{["SDD", "SPOT"].map((m) => <button key={m} type="button" style={boton(form.modelo === m)} onClick={() => setForm({ ...form, modelo: m })}>{m === "SPOT" ? "Spot" : m}</button>)}</span></label>
+            <label style={{ fontSize: 11, color: GRIS }}>Vehículos por día<br /><input type="number" min="0" value={form.cantidad} onChange={(e) => setForm({ ...form, cantidad: e.target.value })} style={{ ...input, width: 90 }} /></label>
+            <label style={{ fontSize: 11, color: GRIS }}>Desde<br /><input type="date" value={form.vigencia} onChange={(e) => setForm({ ...form, vigencia: e.target.value })} style={input} /></label>
+            <label style={{ fontSize: 11, color: GRIS }}>Mail o minuta<br /><input ref={inputArchivo} type="file" accept=".pdf,.eml,.msg,image/*,.doc,.docx" onChange={(e) => setArchivo(e.target.files?.[0] || null)} style={{ fontSize: 12 }} /></label>
+            <label style={{ fontSize: 11, color: GRIS, flex: "1 1 200px" }}>Nota<br /><input value={form.nota} onChange={(e) => setForm({ ...form, nota: e.target.value })} style={{ ...input, width: "100%" }} /></label>
+            <button type="button" onClick={guardarCompromiso} disabled={guardando} style={{ ...boton(true), background: NARANJA, padding: "9px 18px" }}>{guardando ? "Guardando…" : "Guardar"}</button>
+          </div>
+          {msg && <div style={{ marginTop: 10, padding: "8px 12px", borderRadius: 8, fontSize: 12, background: msg.tipo === "ok" ? "#d1fae5" : "#fee2e2", color: msg.tipo === "ok" ? "#047857" : "#b91c1c" }}>{msg.texto}</div>}
+          <div style={{ overflowX: "auto", marginTop: 12 }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead><tr><th style={th}>SC</th><th style={th}>Vehículo</th><th style={th}>Tipo</th><th style={thC}>Por día</th><th style={th}>Vigencia</th><th style={th}>Mail o minuta</th><th style={th}>Cargó</th><th style={th}></th></tr></thead>
+              <tbody>
+                {vigentes.map((c) => (
+                  <tr key={c.id}>
+                    <td style={{ ...td, fontWeight: 700 }}>{c.sc}</td><td style={td}>{c.vehiculo}</td><td style={td}>{c.modelo === "SPOT" ? "Spot" : c.modelo}</td>
+                    <td style={{ ...tdC, fontWeight: 700 }}>{c.cantidad}</td>
+                    <td style={td}>desde {fCorta(c.vigencia_desde)}{c.vigencia_hasta ? ` hasta ${fCorta(c.vigencia_hasta)}` : ""}</td>
+                    <td style={td}><LinkEvidencia path={c.evidencia_path} nombre={c.evidencia_nombre} /></td>
+                    <td style={{ ...td, color: GRIS }}>{c.cargado_por}<div style={{ fontSize: 10 }}>{fHora(c.cargado_at)}</div></td>
+                    <td style={td}><button type="button" onClick={() => cerrarCompromiso(c)} style={{ ...boton(false), padding: "4px 10px", fontSize: 11 }}>Cerrar</button></td>
+                  </tr>
+                ))}
+                {!vigentes.length && <tr><td colSpan={8} style={{ ...td, color: GRIS, textAlign: "center" }}>Sin compromisos cargados.</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </>)}
       </div>
 
       {/* Ranking por SC */}
       {!sc && porSc.length > 0 && (
         <div style={{ ...caja, marginBottom: 14, overflowX: "auto" }}>
-          <div style={{ fontWeight: 700, color: AZUL, fontSize: 14, marginBottom: 8 }}>Ranking por Service Center</div>
+          <div style={{ fontWeight: 700, color: AZUL, fontSize: 14, marginBottom: 8 }}>Por Service Center</div>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead><tr>
-              <th style={th}>SC</th><th style={thC}>Solicitado</th><th style={thC}>Confirmado</th><th style={thC}>Asignado</th>
-              <th style={thC}>Ejecutado</th><th style={thC}>% Ejecutado</th><th style={thC}>No confirmadas</th><th style={thC}>No show</th>
-              <th style={thC}>Cancelación</th><th style={thC}>Sin respuesta</th>
+              <th style={th}>SC</th><th style={thC}>Comprometido</th><th style={{ ...thC, color: NARANJA }}>Acordado</th><th style={thC}>Solicitado</th><th style={thC}>Confirmado</th><th style={thC}>Asignado</th>
+              <th style={thC}>Ejecutado</th><th style={thC}>% Ejecutado</th><th style={thC}>No confirmadas</th><th style={thC}>No show</th><th style={thC}>Cancelación</th><th style={thC}>Otros</th><th style={thC}>Sin respuesta</th><th style={thC}>≠ MELI</th>
             </tr></thead>
             <tbody>
-              {[...porSc].sort((a, b) => (b.no_show_hard + b.no_show_soft + b.cancelado_hard + b.sin_responder)
-                - (a.no_show_hard + a.no_show_soft + a.cancelado_hard + a.sin_responder) || a.sc.localeCompare(b.sc)).map((x) => (
-                <tr key={x.sc} onClick={() => setSc(x.sc)} style={{ cursor: "pointer" }} title="Ver solo este SC">
-                  <td style={{ ...td, fontWeight: 700 }}>{x.sc}</td>
-                  <td style={tdC}>{x.solicitado}</td><td style={tdC}>{x.confirmado}</td><td style={tdC}>{x.asignado}</td>
-                  <td style={tdC}>{x.ejecutado}</td>
-                  <td style={{ ...tdC, fontWeight: 700, color: x.confirmado && x.ejecutado < x.confirmado ? "#b45309" : "#047857" }}>{pct(x.ejecutado, x.confirmado)}</td>
-                  <td style={tdC}>{x.no_show_soft || ""}</td>
-                  <td style={{ ...tdC, color: "#b91c1c", fontWeight: 700 }}>{x.no_show_hard || ""}</td>
-                  <td style={{ ...tdC, color: "#b91c1c", fontWeight: 700 }}>{x.cancelado_hard || ""}</td>
-                  <td style={{ ...tdC, color: "#9f1239", fontWeight: 700 }}>{x.sin_responder || ""}</td>
-                </tr>
-              ))}
+              {[...porSc].sort((a, b) => (b.no_salio_sdd + b.no_salio_spot + b.no_show_soft) - (a.no_salio_sdd + a.no_salio_spot + a.no_show_soft) || a.sc.localeCompare(b.sc)).map((x) => {
+                const m = x.meli || {};
+                const sobre = x.de_mas || 0;
+                return (
+                  <tr key={x.sc} onClick={() => setSc(x.sc)} style={{ cursor: "pointer" }}>
+                    <td style={{ ...td, fontWeight: 700 }}>{x.sc}</td>
+                    <td style={{ ...tdC, color: x.comprometido == null ? "#94a3b8" : "#334155", fontWeight: 700 }}>{x.comprometido ?? "—"}</td>
+                    <td style={{ ...tdC, color: NARANJA, fontWeight: 700 }}>{m.acordado ?? "—"}{sobre > 0 && <div style={{ fontSize: 10, color: "#b91c1c" }}>+{sobre} pedidas de más</div>}</td>
+                    <td style={tdC}><Dos brain={x.solicitado} meli={m.solicitado} /></td>
+                    <td style={tdC}><Dos brain={x.confirmado} meli={m.confirmado} /></td>
+                    <td style={tdC}><Dos brain={x.asignado} meli={m.asignado} /></td>
+                    <td style={tdC}><Dos brain={x.ejecutado} meli={m.ejecutado} /></td>
+                    <td style={{ ...tdC, fontWeight: 700, color: x.confirmado && x.ejecutado < x.confirmado ? "#b45309" : "#047857" }}>{pct(x.ejecutado, x.confirmado)}</td>
+                    <td style={tdC}><Dos brain={x.no_show_soft} meli={m.soft} /></td>
+                    <td style={tdC}><Dos brain={x.no_salio_sdd + x.no_salio_spot} meli={m.hard} /></td>
+                    <td style={{ ...tdC, color: "#b91c1c", fontWeight: 700 }}>{x.cancelado_hard || ""}</td>
+                    <td style={tdC}>{x.no_salio_otro || ""}</td>
+                    <td style={{ ...tdC, color: "#9f1239", fontWeight: 700 }}>{x.sin_responder || ""}</td>
+                    <td style={{ ...tdC, color: "#b91c1c", fontWeight: 700 }}>{x.difieren || ""}</td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
       )}
 
-      {/* No Salidas a Ruta: lo que respondió cada supervisor en la Bitácora (misma tabla que Consolidaciones Bitácora) */}
+      {/* No Salidas a Ruta · Bitácora */}
       {d1 === d2 && (
         <div style={{ ...caja, marginBottom: 14 }}>
-          <button onClick={() => setVerBitacora((v) => !v)}
-            style={{ background: "none", border: "none", padding: 0, cursor: "pointer", fontWeight: 700, color: AZUL, fontSize: 14, display: "flex", gap: 8, alignItems: "center" }}>
-            <span>{verBitacora ? "▼" : "▶"}</span> No Salidas a Ruta · respuesta del supervisor en la Bitácora
-            <span style={{ fontSize: 11, fontWeight: 600, color: GRIS }}>
-              {noSal.length} ruta{noSal.length === 1 ? "" : "s"} · {noSal.filter((x) => x.guardado_at).length} respondidas
-            </span>
+          <button onClick={() => setVerBitacora((v) => !v)} style={{ background: "none", border: "none", padding: 0, cursor: "pointer", fontWeight: 700, color: AZUL, fontSize: 14, display: "flex", gap: 8, alignItems: "center" }}>
+            <span>{verBitacora ? "▼" : "▶"}</span> No Salidas a Ruta · Bitácora
+            <span style={{ fontSize: 11, fontWeight: 600, color: GRIS }}>{noSal.length} ruta{noSal.length === 1 ? "" : "s"} · {noSal.filter((x) => x.guardado_at).length} respondidas</span>
           </button>
-          {verBitacora && (d1 < NOSAL_RUTAS_DESDE ? (
-            <div style={{ fontSize: 12, color: GRIS, marginTop: 8 }}>Este ítem existe en la Bitácora para viajes desde el 4-nov-2026.</div>
-          ) : noSal.length === 0 ? (
-            <div style={{ fontSize: 12, color: GRIS, marginTop: 8 }}>Ese día no hubo rutas sin salir.</div>
-          ) : (
-            [...new Set(noSal.map((x) => x.sc))].sort().filter((s) => !sc || s === sc).map((s) => (
-              <div key={s}>
-                <div style={{ fontWeight: 700, fontSize: 12.5, color: "#334155", marginTop: 12 }}>{s}</div>
-                <NoSalidasSC filas={noSal.filter((x) => x.sc === s)} fechaRuta={fCorta(d1)} />
-              </div>
-            ))
-          ))}
+          {verBitacora && (d1 < NOSAL_RUTAS_DESDE ? <div style={{ fontSize: 12, color: GRIS, marginTop: 8 }}>Sin ítem en la Bitácora para esta fecha.</div>
+            : noSal.length === 0 ? <div style={{ fontSize: 12, color: GRIS, marginTop: 8 }}>Sin rutas sin salir.</div>
+            : [...new Set(noSal.map((x) => x.sc))].sort().filter((s) => !sc || s === sc).map((s) => (
+              <div key={s}><div style={{ fontWeight: 700, fontSize: 12.5, color: "#334155", marginTop: 12 }}>{s}</div><NoSalidasSC filas={noSal.filter((x) => x.sc === s)} fechaRuta={fCorta(d1)} /></div>
+            )))}
         </div>
       )}
 
-      {/* Detalle por estado */}
+      {/* Detalle */}
       <div style={{ ...caja, overflowX: "auto" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 8 }}>
-          <div style={{ fontWeight: 700, color: AZUL, fontSize: 14 }}>Detalle por estado {sc && <span style={{ color: GRIS, fontWeight: 400 }}>· {sc} <a href="#" onClick={(e) => { e.preventDefault(); setSc(""); }}>(ver todos)</a></span>}</div>
+          <div style={{ fontWeight: 700, color: AZUL, fontSize: 14 }}>Detalle {sc && <span style={{ color: GRIS, fontWeight: 400 }}>· {sc} <a href="#" onClick={(e) => { e.preventDefault(); setSc(""); }}>(ver todos)</a></span>}</div>
           <div style={{ display: "flex", gap: 8 }}>
-            <input placeholder="Filtrar: placa, chofer, ruta, viaje, solicitud…" value={buscar} onChange={(e) => setBuscar(e.target.value)} style={{ ...input, width: 200 }} />
-            <select value={ver} onChange={(e) => setVer(e.target.value)} style={input}>
-              {VER.map(([k, t]) => <option key={k} value={k}>Ver servicios: {t} ({filas.filter((f) => pasaVer(f, k)).length})</option>)}
-            </select>
+            <input placeholder="Placa, chofer, ruta, viaje, solicitud…" value={buscar} onChange={(e) => setBuscar(e.target.value)} style={{ ...input, width: 220 }} />
+            <select value={ver} onChange={(e) => setVer(e.target.value)} style={input}>{VER.map(([k, t]) => <option key={k} value={k}>{t} ({filas.filter((f) => pasaVer(f, k)).length})</option>)}</select>
           </div>
         </div>
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
           <thead><tr>
-            <th style={th}>Fecha</th><th style={th}>Service Center</th><th style={th}>Vehículo</th><th style={th}>Transportista</th>
-            <th style={th}>ID de Ruta</th><th style={thC}>Confirmado</th><th style={thC}>Asignado</th><th style={thC}>Ejecutado</th><th style={th}>Resultado</th>
+            <th style={th}>Fecha</th><th style={th}>SC</th><th style={th}>Vehículo</th><th style={th}>Transportista</th><th style={th}>ID de Ruta</th>
+            <th style={thC}>Confirmado</th><th style={thC}>Asignado</th><th style={thC}>Ejecutado</th><th style={{ ...thC, color: NARANJA }}>MELI</th><th style={th}>Resultado</th>
           </tr></thead>
           <tbody>
             {visibles.map((f, i) => {
               const conf = CONFIRMADO[f.confirmado] || ["#475569", "#f1f5f9"];
               const cat = CATEGORIA[f.categoria] || CATEGORIA.otro;
+              const m = f.meli;
+              const dif = m && m.ejecutada !== null && m.ejecutada !== !!f.ejecutado;
               return (
-                <tr key={`${f.request_id}-${f.travel_id}-${i}`}>
+                <tr key={`${f.request_id}-${f.travel_id}-${i}`} style={{ background: dif ? "#fff7ed" : "#fff" }}>
                   <td style={{ ...td, color: GRIS }}>{fCorta(f.fecha)}</td>
                   <td style={{ ...td, fontWeight: 700 }}>{f.sc}</td>
                   <td style={td}>{f.vehiculo || "—"} <span style={{ color: GRIS }}>{f.modelo}</span><br /><b>{f.placa || ""}</b></td>
                   <td style={td}>{f.chofer || ""}<br /><b>{f.driver_id || ""}</b></td>
-                  <td style={td}>
-                    <b>{f.id_ruta || ""}</b>
-                    <div style={{ fontSize: 10.5, color: GRIS, whiteSpace: "nowrap" }}>
-                      {f.travel_id && <>Viaje {f.travel_id}</>}{f.travel_id && f.request_id != null && " · "}{f.request_id != null && <>Solicitud {f.request_id}</>}
-                    </div>
-                  </td>
+                  <td style={td}><b>{f.id_ruta || ""}</b><div style={{ fontSize: 10.5, color: GRIS, whiteSpace: "nowrap" }}>{f.travel_id && <>Viaje {f.travel_id}</>}{f.travel_id && f.request_id != null && " · "}{f.request_id != null && <>Solicitud {f.request_id}</>}</div></td>
                   <td style={tdC}>{f.confirmado ? <Pill t={f.confirmado} c={conf[0]} bg={conf[1]} /> : "—"}</td>
                   <td style={tdC}><Check v={f.asignado} /></td>
                   <td style={tdC}><Check v={f.ejecutado} /></td>
+                  <td style={{ ...tdC, fontSize: 11 }}>{!m ? <span style={{ color: "#cbd5e1" }}>—</span> : m.ejecutada === null ? <span style={{ color: "#94a3b8" }}>sin registro</span>
+                    : m.ejecutada ? <span style={{ color: dif ? "#b91c1c" : "#047857", fontWeight: 700 }}>ejecutada ✓</span> : <span style={{ color: dif ? "#b91c1c" : "#b45309", fontWeight: 700 }}>no ejecutada</span>}</td>
                   <td style={td}>
                     <Pill t={cat[0]} c={cat[1]} bg={cat[2]} />
                     {f.respondido_at && <div style={{ fontSize: 10.5, color: GRIS, marginTop: 3 }}>
                       {f.resultado_supervisor === "si_salio" ? "Sí salió" : f.resultado_supervisor === "no_show" ? "No Show" : f.resultado_supervisor === "cancelacion" ? "Cancelación" : f.resultado_supervisor === "otros" ? "Otros" : f.resultado_supervisor}
-                      {f.etiqueta ? ` · ${etiquetaNosal(f.etiqueta)}` : ""}
-                      {" · "}{f.respondido_por || "supervisor"} · {fHora(f.respondido_at)}{f.pruebas ? ` · ${f.pruebas} prueba${f.pruebas > 1 ? "s" : ""}` : ""}
+                      {f.etiqueta ? ` · ${etiquetaNosal(f.etiqueta)}` : ""}{" · "}{f.respondido_por || "supervisor"} · {fHora(f.respondido_at)}{f.pruebas ? ` · ${f.pruebas} prueba${f.pruebas > 1 ? "s" : ""}` : ""}
                       {f.comentario && <div style={{ color: "#334155", whiteSpace: "pre-wrap" }}>{f.comentario}</div>}
                     </div>}
                     {!f.respondido_at && f.categoria === "sin_responder" && <div style={{ fontSize: 10.5, color: "#9f1239", marginTop: 3 }}>Sin respuesta en la Bitácora</div>}
@@ -425,21 +570,16 @@ export default function Capacidad() {
                 </tr>
               );
             })}
-            {!loading && visibles.length === 0 && <tr><td colSpan={9} style={{ ...td, textAlign: "center", color: GRIS }}>Sin servicios para este filtro.</td></tr>}
+            {!loading && visibles.length === 0 && <tr><td colSpan={10} style={{ ...td, textAlign: "center", color: GRIS }}>Sin viajes para este filtro.</td></tr>}
           </tbody>
         </table>
         {paginas > 1 && (
           <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: 6, marginTop: 10, fontSize: 12 }}>
             <button disabled={pagina === 1} onClick={() => setPagina(pagina - 1)} style={{ ...input, cursor: "pointer" }}>‹ Anterior</button>
-            <span style={{ color: GRIS }}>Página {pagina} de {paginas} · {filtradas.length} servicios</span>
+            <span style={{ color: GRIS }}>Página {pagina} de {paginas} · {filtradas.length} viajes</span>
             <button disabled={pagina === paginas} onClick={() => setPagina(pagina + 1)} style={{ ...input, cursor: "pointer" }}>Siguiente ›</button>
           </div>
         )}
-      </div>
-
-      <div style={{ fontSize: 10.5, color: GRIS, marginTop: 10 }}>
-        Fuente: fn_capacidad (solo el rango pedido, máx. 31 días) · SDD completo + Spot aceptado · meli_rostering_planificado × rutas_monitoreo_mx (misma lógica de la Torre) + mx_pedidos_estado (SDD no confirmados)
-        + bitacora_no_salidas_mx (respuesta del supervisor). Acordado y Escaneado no se muestran todavía.
       </div>
     </div>
   );
