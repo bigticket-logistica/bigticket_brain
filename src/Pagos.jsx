@@ -8,7 +8,7 @@ import Comparativa from "./Comparativa";
 import { avisarPortal } from "./avisarPortal";
 import RechazosMeliMX from "./RechazosMeli";
 import Capacidad from "./Capacidad";
-import { FotoLink, NOSAL_CASO, NOSAL_DESDE, NOSAL_MOTIVO, NoSalidasSC } from "./NoSalidas";
+import { FotoLink, NOSAL_CASO, NOSAL_DESDE, NOSAL_MOTIVO, NoSalidasSC, etiquetaNosal } from "./NoSalidas";
 
 function BotonDescargarExcel({ onClick, disabled, label = "Descargar Excel" }) {
   return (
@@ -1846,10 +1846,10 @@ function PanelControlSupervisores() {
 
       const resumen = [["SERVICIO", "FECHA", "CECOS", "SUPERVISOR", "BITACORA", "CANTIDAD RUTAS",
         "AYUDANTES INFORMADOS", "AYUDANTES APROBADOS", "AMBULANCIAS",
-        "FECHA NO SALIDAS", "NO SALIDAS A RUTA", "NO SHOW", "CANCELACIONES", "SI SALIO A RUTA", "SIN RESPONDER", "PNR",
+        "FECHA NO SALIDAS", "NO SALIDAS A RUTA", "NO SHOW", "CANCELACIONES", "SI SALIO A RUTA", "OTROS", "SIN RESPONDER", "PNR",
         "RUTAS RECHAZADAS SDD", "RUTAS RECHAZADAS SPOT", "OBSERVACIONES"]];
       const nosal = [["SERVICIO", "FECHA RUTA", "FECHA BITACORA", "CECOS", "SUPERVISOR", "PATENTE", "CHOFER", "HORA PACTADA",
-        "CASO", "ESTADO TORRE", "QUE PASO", "ID RUTA DECLARADA", "TIPO RUTA", "TIPO VEHICULO", "VEHICULO MELI",
+        "CASO", "ESTADO TORRE", "QUE PASO", "MOTIVO", "COMENTARIO", "ID RUTA DECLARADA", "TIPO RUTA", "TIPO VEHICULO", "VEHICULO MELI",
         "EMPRESA", "EMPRESA EN LISTADO", "PRUEBAS", "RESPONDIDO POR", "RESPONDIDO EL"]];
 
       for (const sc of scs) {
@@ -1876,14 +1876,14 @@ function PanelControlSupervisores() {
 
         resumen.push(["UM", fecha, cecos(sc), porSc[sc].join(" / "), bitacora, rutasSc[sc] || 0,
           ayud || 0, aprobSc[sc] || 0, amb || 0,
-          fechaAyer, ns.length, nsCuenta("no_show"), nsCuenta("cancelacion"), nsCuenta("si_salio"), nsPend,
+          fechaAyer, ns.length, nsCuenta("no_show"), nsCuenta("cancelacion"), nsCuenta("si_salio"), nsCuenta("otros"), nsPend,
           row?.declarado_pnr_si_no === true ? "SI" : row?.declarado_pnr_si_no === false ? "NO" : "",
           rechSdd[sc] || 0, rechSpot[sc] || 0, obs.join(" · ")]);
 
         for (const x of ns) {
           nosal.push(["UM", fechaAyer, fecha, cecos(sc), porSc[sc].join(" / "), x.placa || "", x.chofer || "",
             x.eta ? String(x.eta).slice(0, 5) : "", NOSAL_CASO[x.caso] || x.caso, x.estado || "",
-            x.motivo ? (NOSAL_MOTIVO[x.motivo] || x.motivo) : "SIN RESPONDER", x.ruta_declarada || "",
+            x.motivo ? (NOSAL_MOTIVO[x.motivo] || x.motivo) : "SIN RESPONDER", etiquetaNosal(x.etiqueta), x.comentario || "", x.ruta_declarada || "",
             x.tipo_ruta || "", x.vehiculo || "", x.vehiculo_meli || "",
             x.empresa || "", x.empresa ? (x.tercero_id ? "SI" : "NO") : "",
             arr(x.adjuntos).length, x.guardado_por || "",

@@ -17,7 +17,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { descargarExcelMultihoja, fechaOperativaOffset, sb } from "./shared";
-import { NoSalidasSC } from "./NoSalidas";
+import { NoSalidasSC, etiquetaNosal } from "./NoSalidas";
 
 // Primeras rutas con el ítem "No Salidas a Ruta" en la Bitácora: las del 4-nov-2026 (se responden el 5).
 const NOSAL_RUTAS_DESDE = "2026-11-04";
@@ -40,6 +40,7 @@ const CATEGORIA = {
   no_show_soft: ["No confirmada (soft no show)", "#b45309", "#fef3c7"],
   no_show_hard: ["No show (hard)", "#b91c1c", "#fee2e2"],
   cancelado_hard: ["Cancelación", "#b91c1c", "#fee2e2"],
+  no_salio_otro: ["No salió · otros", "#475569", "#f1f5f9"],
   sin_responder: ["No salió · sin respuesta del supervisor", "#9f1239", "#ffe4e6"],
   otro: ["Otro", "#475569", "#f1f5f9"],
 };
@@ -57,6 +58,7 @@ const VER = [
   ["soft", "No confirmadas (soft no show)"],
   ["no_show_hard", "No show (hard)"],
   ["cancelado_hard", "Cancelación"],
+  ["no_salio_otro", "No salió · otros"],
   ["sin_responder", "No salió · sin respuesta del supervisor"],
   ["pendiente", "Pendientes"],
 ];
@@ -103,7 +105,7 @@ function Tarjeta({ titulo, total, sub, filas }) {
 function sumar(filas) {
   const t = { solicitado: filas.length, confirmado: 0, asignado: 0, ejecutado: 0, pendiente: 0,
     no_show_soft: 0, no_show_hard: 0, no_show_hard_sdd: 0, no_show_hard_spot: 0,
-    cancelado_hard: 0, cancelado_sdd: 0, cancelado_spot: 0, sin_responder: 0, no_salio_sdd: 0, no_salio_spot: 0 };
+    cancelado_hard: 0, cancelado_sdd: 0, cancelado_spot: 0, no_salio_otro: 0, sin_responder: 0, no_salio_sdd: 0, no_salio_spot: 0 };
   for (const f of filas) {
     const acept = f.confirmado === "Aceptado";
     const sdd = f.modelo === "SDD";
@@ -211,17 +213,17 @@ export default function Capacidad() {
     setExcelBusy(true);
     try {
       const det = [["FECHA", "SC", "MODELO", "REQUEST ID", "TRAVEL ID", "VEHICULO", "PLACA", "CHOFER", "DRIVER ID", "ID RUTA",
-        "CONFIRMADO", "ASIGNADO", "EJECUTADO", "ESTADO TORRE", "RESULTADO", "RESPUESTA SUPERVISOR", "RESPONDIDO POR", "RESPONDIDO EL", "PRUEBAS"]];
+        "CONFIRMADO", "ASIGNADO", "EJECUTADO", "ESTADO TORRE", "RESULTADO", "RESPUESTA SUPERVISOR", "MOTIVO", "COMENTARIO", "RESPONDIDO POR", "RESPONDIDO EL", "PRUEBAS"]];
       for (const f of filtradas) det.push([f.fecha, f.sc, f.modelo, f.request_id ?? "", f.travel_id || "", f.vehiculo || "", f.placa || "",
         f.chofer || "", f.driver_id || "", f.id_ruta || "", f.confirmado || "", f.asignado ? "SI" : "NO", f.ejecutado ? "SI" : "NO",
-        f.estado_torre || "", (CATEGORIA[f.categoria] || [f.categoria])[0], f.resultado_supervisor || "",
+        f.estado_torre || "", (CATEGORIA[f.categoria] || [f.categoria])[0], f.resultado_supervisor || "", etiquetaNosal(f.etiqueta), f.comentario || "",
         f.respondido_por || "", f.respondido_at ? fHora(f.respondido_at) : "", f.pruebas || 0]);
       const res = [["SC", "SOLICITADO", "CONFIRMADO", "ASIGNADO", "EJECUTADO", "% EJECUTADO / CONFIRMADO", "SOFT NO SHOW",
-"HARD NO SHOW SDD", "HARD NO SHOW SPOT", "CANCELACION SDD", "CANCELACION SPOT", "NO SALIO SIN CLASIFICAR", "PENDIENTE"]];
+"HARD NO SHOW SDD", "HARD NO SHOW SPOT", "CANCELACION SDD", "CANCELACION SPOT", "OTROS", "NO SALIO SIN CLASIFICAR", "PENDIENTE"]];
       for (const x of porSc) {
         if (sc && x.sc !== sc) continue;
         res.push([x.sc, x.solicitado, x.confirmado, x.asignado, x.ejecutado, pct(x.ejecutado, x.confirmado), x.no_show_soft,
-          x.no_show_hard_sdd, x.no_show_hard_spot, x.cancelado_sdd, x.cancelado_spot, x.sin_responder, x.pendiente]);
+          x.no_show_hard_sdd, x.no_show_hard_spot, x.cancelado_sdd, x.cancelado_spot, x.no_salio_otro, x.sin_responder, x.pendiente]);
       }
       await descargarExcelMultihoja([{ nombre: "Por SC", datos: res }, { nombre: "Detalle", datos: det }],
         `capacidad_${d1 === d2 ? d1 : d1 + "_a_" + d2}${modelo ? "_" + modelo : ""}${sc ? "_" + sc : ""}`);
@@ -314,6 +316,7 @@ export default function Capacidad() {
             ["Respuesta del supervisor (Bitácora)", "", ""],
             ["   No show", `${tot.no_show_hard || 0}${tot.no_show_hard ? ` (${tot.no_show_hard_sdd || 0} SDD · ${tot.no_show_hard_spot || 0} Spot)` : ""}`, "El supervisor marcó No Show"],
             ["   Cancelación", `${tot.cancelado_hard || 0}${tot.cancelado_hard ? ` (${tot.cancelado_sdd || 0} SDD · ${tot.cancelado_spot || 0} Spot)` : ""}`, "El supervisor marcó Cancelación"],
+            ["   Otros", tot.no_salio_otro || 0, "El supervisor respondió Otros, con comentario"],
             ["   Sin respuesta", tot.sin_responder || 0, "Esperan la respuesta en la Bitácora (ítem No Salidas a Ruta, viajes desde el 4-nov-2026)"],
             ...((tot.pendiente || 0) > 0 ? [["Pendientes de hoy (todavía pueden salir)", tot.pendiente, ""]] : []),
           ]} />
@@ -412,8 +415,10 @@ export default function Capacidad() {
                   <td style={td}>
                     <Pill t={cat[0]} c={cat[1]} bg={cat[2]} />
                     {f.respondido_at && <div style={{ fontSize: 10.5, color: GRIS, marginTop: 3 }}>
-                      {f.resultado_supervisor === "si_salio" ? "Sí salió" : f.resultado_supervisor === "no_show" ? "No Show" : f.resultado_supervisor === "cancelacion" ? "Cancelación" : f.resultado_supervisor}
+                      {f.resultado_supervisor === "si_salio" ? "Sí salió" : f.resultado_supervisor === "no_show" ? "No Show" : f.resultado_supervisor === "cancelacion" ? "Cancelación" : f.resultado_supervisor === "otros" ? "Otros" : f.resultado_supervisor}
+                      {f.etiqueta ? ` · ${etiquetaNosal(f.etiqueta)}` : ""}
                       {" · "}{f.respondido_por || "supervisor"} · {fHora(f.respondido_at)}{f.pruebas ? ` · ${f.pruebas} prueba${f.pruebas > 1 ? "s" : ""}` : ""}
+                      {f.comentario && <div style={{ color: "#334155", whiteSpace: "pre-wrap" }}>{f.comentario}</div>}
                     </div>}
                     {!f.respondido_at && f.categoria === "sin_responder" && <div style={{ fontSize: 10.5, color: "#9f1239", marginTop: 3 }}>Sin respuesta en la Bitácora</div>}
                   </td>

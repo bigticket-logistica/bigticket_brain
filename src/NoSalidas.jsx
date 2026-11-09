@@ -44,8 +44,15 @@ function FotoLink({ path }) {
 // Antes de esa fecha el panel no muestra no salidas pendientes.
 const NOSAL_DESDE = "2026-11-05";
 const NOSAL_CASO = { sin_rostering: "No rosterizada", sin_salida: "Rosterizada sin ruta" };
-const NOSAL_MOTIVO = { no_show: "No Show", cancelacion: "Cancelación", si_salio: "Sí salió a ruta" };
-const NOSAL_COLOR = { no_show: "#b91c1c", cancelacion: "#b45309", si_salio: "#047857" };
+const NOSAL_MOTIVO = { no_show: "No Show", cancelacion: "Cancelación", si_salio: "Sí salió a ruta", otros: "Otros" };
+const NOSAL_COLOR = { no_show: "#b91c1c", cancelacion: "#b45309", si_salio: "#047857", otros: "#475569" };
+// Motivo detallado (etiqueta) que elige el supervisor para No Show y Cancelación
+const NOSAL_ETIQUETA = {
+  falla_mecanica: "Falla mecánica", llegada_tarde: "Llegada tarde", baja_proveedor: "Baja de proveedor",
+  bloqueo_pausa_driver: "Bloqueo o pausa del driver", no_se_presento: "No se presentó", indicacion_otr: "Indicación de OTR",
+  bajo_volumen: "Bajo volumen", cambio_eta: "Cambio de ETA", reasignacion_otra_mlp: "Reasignación de ruta a otra MLP", otros: "Otros",
+};
+const etiquetaNosal = (k) => (k ? NOSAL_ETIQUETA[k] || k : "");
 
 function NoSalidasSC({ filas = [], fechaRuta, noAplica = false }) {
   if (noAplica) return (
@@ -73,7 +80,7 @@ function NoSalidasSC({ filas = [], fechaRuta, noAplica = false }) {
         <div style={{ marginTop: 8, overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11.5 }}>
             <thead><tr style={{ background: "#f8fafc", color: "#64748b", textAlign: "left" }}>
-              {["Placa / chofer", "Caso", "Qué pasó", "Tipo", "Vehículo", "Empresa", "Pruebas", "Respondió"].map((h) => (
+              {["Placa / chofer", "Caso", "Qué pasó", "Tipo", "Vehículo", "Empresa", "Motivo / comentario", "Pruebas", "Respondió"].map((h) => (
                 <th key={h} style={{ padding: "6px 8px", fontWeight: 600, whiteSpace: "nowrap" }}>{h}</th>
               ))}
             </tr></thead>
@@ -94,6 +101,11 @@ function NoSalidasSC({ filas = [], fechaRuta, noAplica = false }) {
                   <td style={{ padding: "6px 8px" }}>{f.tipo_ruta === "SPOT" ? "Spot" : f.tipo_ruta || "—"}</td>
                   <td style={{ padding: "6px 8px" }}>{f.vehiculo || "—"}{f.vehiculo_meli && <div style={{ color: "#9ca3af", fontSize: 10 }}>MELI: {f.vehiculo_meli}</div>}</td>
                   <td style={{ padding: "6px 8px" }}>{f.empresa || "—"}{f.empresa && !f.tercero_id && <div style={{ color: "#b45309", fontSize: 10 }}>escrita a mano</div>}</td>
+                  <td style={{ padding: "6px 8px", minWidth: 160 }}>
+                    {f.etiqueta && <b style={{ color: f.etiqueta === "otros" ? "#475569" : "#374151" }}>{etiquetaNosal(f.etiqueta)}</b>}
+                    {f.comentario && <div style={{ color: "#6b7280", whiteSpace: "pre-wrap" }}>{f.comentario}</div>}
+                    {!f.etiqueta && !f.comentario && <span style={{ color: "#9ca3af" }}>—</span>}
+                  </td>
                   <td style={{ padding: "6px 8px" }}>
                     {(Array.isArray(f.adjuntos) ? f.adjuntos : []).map((a, i) => <FotoLink key={i} path={typeof a === "string" ? a : a?.path} />)}
                     {!(Array.isArray(f.adjuntos) && f.adjuntos.length) && <span style={{ color: "#9ca3af" }}>—</span>}
@@ -110,4 +122,4 @@ function NoSalidasSC({ filas = [], fechaRuta, noAplica = false }) {
 }
 
 
-export { NOSAL_DESDE, NOSAL_CASO, NOSAL_MOTIVO, NOSAL_COLOR, NoSalidasSC, FotoLink, BUCKET_BITACORA };
+export { NOSAL_DESDE, NOSAL_CASO, NOSAL_MOTIVO, NOSAL_COLOR, NOSAL_ETIQUETA, etiquetaNosal, NoSalidasSC, FotoLink, BUCKET_BITACORA };
