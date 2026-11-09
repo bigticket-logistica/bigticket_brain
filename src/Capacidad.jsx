@@ -53,6 +53,8 @@ const pct = (a, b) => (b ? Math.round((a * 100) / b) + "%" : "—");
 const fCorta = (d) => (d ? new Date(d + "T12:00:00").toLocaleDateString("es-MX", { day: "2-digit", month: "short" }) : "");
 const fHora = (v) => (v ? new Date(v).toLocaleString("es-MX", { timeZone: "America/Mexico_City", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : "");
 const fLarga = (d) => (d ? new Date(d + "T12:00:00").toLocaleDateString("es-MX", { weekday: "long", day: "numeric", month: "long", year: "numeric" }) : "");
+// MELI entrega los paquetes como número o como objeto ({value, percentage} o {raw, total})
+const num = (v) => { if (v == null) return null; if (typeof v === "number") return v; if (typeof v === "string") { const n = parseInt(v.replace(/[^0-9]/g, ""), 10); return Number.isNaN(n) ? null : n; } if (typeof v === "object") return num(v.raw ?? v.value ?? v.total ?? v.count ?? null); return null; };
 const placaNorm = (p) => String(p || "").toUpperCase().replace(/^SDD-/, "").replace(/[^A-Z0-9]/g, "");
 
 function Pill({ t, c, bg }) {
@@ -329,7 +331,7 @@ export default function Capacidad({ usuario }) {
       for (const c of prom.compromisos) comp.push([c.sc, c.vehiculo, c.modelo, c.cantidad, c.vigencia_desde, c.vigencia_hasta || "", c.evidencia_nombre || "", c.nota || "", c.cargado_por, fHora(c.cargado_at)]);
       const rec = [["FECHA", "SC", "PLACA", "CHOFER", "DRIVER ID", "ID RUTA", "SALIDA REAL TORRE", "ESTADO TORRE", "EN LISTA DE RUTAS MELI", "PAQUETES TOTAL MELI", "PAQUETES ENTREGADOS MELI", "SUPERVISOR"]];
       for (const f of reclamos) rec.push([f.fecha, f.sc, f.placa || "", f.chofer || "", f.driver_id || "", f.id_ruta || "", f.salida_real ? fHora(f.salida_real) : "", f.estado_torre || "",
-        f.rutaMeli ? "SI" : "NO", f.rutaMeli?.total_packages ?? "", f.rutaMeli?.delivered_packages?.raw ?? f.rutaMeli?.delivered_packages ?? "", f.resultado_supervisor || ""]);
+        f.rutaMeli ? "SI" : "NO", num(f.rutaMeli?.total_packages) ?? "", num(f.rutaMeli?.delivered_packages) ?? "", f.resultado_supervisor || ""]);
       await descargarExcelMultihoja([{ nombre: "Reclamo", datos: rec }, { nombre: "Por SC", datos: res }, { nombre: "Detalle", datos: det }, { nombre: "Compromisos", datos: comp }],
         `capacidad_${d1 === d2 ? d1 : d1 + "_a_" + d2}${modelo ? "_" + modelo : ""}${sc ? "_" + sc : ""}`);
     } catch (e) { alert("No se pudo generar el Excel: " + (e.message || e)); }
@@ -423,7 +425,7 @@ export default function Capacidad({ usuario }) {
                             <td style={{ ...td, fontWeight: 700 }}>{f.id_ruta || "—"}</td>
                             <td style={td}>{f.salida_real ? `${fHora(f.salida_real)} · ${f.estado_torre}` : f.estado_torre}</td>
                             <td style={td}>{f.rutaMeli
-                              ? <span style={{ color: "#047857", fontWeight: 700 }}>ruta en su lista · {f.rutaMeli.delivered_packages?.raw ?? f.rutaMeli.delivered_packages ?? "?"} de {f.rutaMeli.total_packages ?? "?"} paquetes entregados</span>
+                              ? <span style={{ color: "#047857", fontWeight: 700 }}>ruta en su lista · {num(f.rutaMeli.delivered_packages) ?? "?"} de {num(f.rutaMeli.total_packages) ?? "?"} paquetes entregados</span>
                               : <span style={{ color: GRIS }}>no está en su lista de rutas ejecutadas</span>}</td>
                             <td style={td}>{f.respondido_at ? `${f.resultado_supervisor === "si_salio" ? "Sí salió" : f.resultado_supervisor}${f.ruta_declarada ? ` · ruta ${f.ruta_declarada}` : ""}` : <span style={{ color: GRIS }}>—</span>}</td>
                           </tr>
