@@ -5,6 +5,9 @@
 //   · Tareas del supervisor: crear (detención, hallazgo, cámara, auditoría no
 //     hecha, cita en taller), ver respuesta y evidencias, veredicto y envío a
 //     Conciliaciones. Datos: vw_ca_tareas_brain_cl + fn_ca_tarea_*.
+//   · Auditorías: bandeja de Maycol. Cada foto al lado de la anterior, lo que
+//     dijo Biggy, checklist y veredicto (vw_ca_auditorias_brain_cl +
+//     fn_ca_auditoria_detalle_brain / fn_ca_auditoria_veredicto). Sin correos.
 //   · No salidas: fn_ca_no_salidas_dia + avisos enviados (ca_avisos_cl).
 //   · Incumplimientos: tareas vencidas sin respuesta, por supervisor y mes.
 //   · Configuración: plazos por tipo, justificaciones y correos (ca_*_cl).
@@ -31,8 +34,8 @@ async function api(path, o = {}) {
   return t && t.trim() ? JSON.parse(t) : true;
 }
 const rpc = (fn, args) => api(`rpc/${fn}`, { method: "POST", body: JSON.stringify(args || {}) });
-async function urlFirmada(path) {
-  const r = await fetch(`${CL_URL}/storage/v1/object/sign/ca-pruebas-cl/${path.split("/").map(encodeURIComponent).join("/")}`, {
+async function urlFirmada(path, bucket = "ca-pruebas-cl") {
+  const r = await fetch(`${CL_URL}/storage/v1/object/sign/${bucket}/${path.split("/").map(encodeURIComponent).join("/")}`, {
     method: "POST", headers: { apikey: CL_KEY, Authorization: `Bearer ${CL_KEY}`, "Content-Type": "application/json" }, body: JSON.stringify({ expiresIn: 300 }),
   });
   const j = await r.json().catch(() => ({}));
@@ -52,6 +55,7 @@ const inp = { border: `1px solid ${C.borde}`, borderRadius: 8, padding: "7px 10p
 
 export default function CuidadoActivoCL({ usuario, sub }) {
   const quien = usuario?.email || usuario?.nombre || "brain";
+  if (sub === "ca_auditorias") return <Auditorias quien={quien} />;
   if (sub === "ca_nosalidas") return <NoSalidas />;
   if (sub === "ca_incumplimientos") return <Incumplimientos />;
   if (sub === "ca_config") return <Configuracion quien={quien} />;
@@ -254,6 +258,190 @@ function Detalle({ t, quien, onListo }) {
             ))}
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+// ── Auditorías de terceros (bandeja de Maycol) ──────────────────────────────
+const AU_TIPO = { vehiculo: "Vehículo", limpieza: "Limpieza" };
+const AU_ESTADO = {
+  enviada: ["Enviada · Biggy pendiente", "#eef2f8", C.navy], revisar: ["Por revisar", C.ambarT, C.ambar],
+  aprobada: ["Aprobada", C.verdeT, C.verde], rehacer: ["Devuelta: repetir fotos", C.rojoT, C.rojo], rechazada: ["Rechazada", C.rojoT, C.rojo],
+};
+const AU_BIGGY = { aprobada: ["Cumple", C.verdeT, C.verde], revisar: ["Con hallazgo", C.ambarT, C.ambar], rehacer: ["No cumple", C.rojoT, C.rojo] };
+const AU_VER = { cumple: "Cumple", cumple_hallazgo: "Cumple con hallazgo", no_cumple: "No cumple" };
+const AU_FOTO = { ok: ["ok", C.verdeT, C.verde], rehacer: ["repetir", C.rojoT, C.rojo], dano: ["daño", C.ambarT, C.ambar], sucio: ["sucio", C.ambarT, C.ambar] };
+
+function Auditorias({ quien }) {
+  const [filas, setFilas] = useState(null);
+  const [error, setError] = useState("");
+  const [f, setF] = useState({ estado: "por_revisar", tipo: "", texto: "" });
+  const [abierta, setAbierta] = useState(null);
+  const cargar = async () => {
+    try { setFilas(await api("vw_ca_auditorias_brain_cl?select=*&order=enviada_at.desc&limit=500")); setError(""); }
+    catch (e) { setError("No se pudieron cargar las auditorías: " + e.message); setFilas([]); }
+  };
+  useEffect(() => { cargar(); const i = setInterval(cargar, 60000); return () => clearInterval(i); }, []);
+  const vis = (filas || []).filter((x) => {
+    if (f.estado === "por_revisar" && !["revisar", "enviada"].includes(x.estado)) return false;
+    if (f.estado === "aprobadas" && x.estado !== "aprobada") return false;
+    if (f.estado === "devueltas" && x.estado !== "rehacer") return false;
+    if (f.estado === "corregidas" && !x.biggy_corregido) return false;
+    if (f.tipo && x.tipo !== f.tipo) return false;
+    if (f.texto && !`${x.patente} ${x.empresa || ""} ${x.ceco || ""} ${x.hecha_por_nombre || ""}`.toLowerCase().includes(f.texto.toLowerCase())) return false;
+    return true;
+  });
+  const n = (fn) => (filas || []).filter(fn).length;
+  const celda = { padding: "8px 10px", borderBottom: `1px solid ${C.borde}`, fontSize: 13, verticalAlign: "top" };
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
+        {[["Por revisar", n((x) => x.estado === "revisar"), C.ambar],
+          ["Biggy pendiente", n((x) => x.estado === "enviada"), C.navy],
+          ["Devueltas al tercero", n((x) => x.estado === "rehacer"), C.rojo],
+          ["Aprobadas", n((x) => x.estado === "aprobada"), C.verde],
+          ["Correcciones a Biggy", n((x) => x.biggy_corregido), C.suave]].map(([t, v, c]) => (
+          <div key={t} style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, padding: "12px 16px", flex: "1 1 150px" }}>
+            <div style={{ fontSize: 24, fontWeight: 800, color: c }}>{v}</div><div style={{ fontSize: 12.5, color: C.suave }}>{t}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 12 }}>
+        <select style={inp} value={f.estado} onChange={(e) => setF({ ...f, estado: e.target.value })}>
+          <option value="por_revisar">Por revisar</option><option value="devueltas">Devueltas al tercero</option><option value="aprobadas">Aprobadas</option><option value="corregidas">Corregidas a Biggy</option><option value="todas">Todas</option>
+        </select>
+        <select style={inp} value={f.tipo} onChange={(e) => setF({ ...f, tipo: e.target.value })}>
+          <option value="">Vehículo y limpieza</option><option value="vehiculo">Vehículo</option><option value="limpieza">Limpieza</option>
+        </select>
+        <input style={{ ...inp, minWidth: 220 }} placeholder="Patente, empresa, CECO o quién la hizo" value={f.texto} onChange={(e) => setF({ ...f, texto: e.target.value })} />
+        <button style={btn("sec")} onClick={cargar}>Actualizar</button>
+      </div>
+      {error && <div style={{ color: C.rojo, fontSize: 13, marginBottom: 10 }}>{error}</div>}
+      {filas === null ? <div style={{ color: C.tenue }}>Cargando…</div> : (
+        <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 900 }}>
+            <thead><tr style={{ background: C.fondo, textAlign: "left" }}>
+              {["Patente", "Empresa · CECO", "Tipo", "Periodo", "Enviada", "Hecha por", "Biggy propone", "Estado"].map((h) => <th key={h} style={{ ...celda, fontSize: 12, color: C.suave }}>{h}</th>)}
+            </tr></thead>
+            <tbody>
+              {vis.length === 0 && <tr><td colSpan={8} style={{ ...celda, color: C.tenue, textAlign: "center" }}>No hay auditorías con este filtro.</td></tr>}
+              {vis.map((x) => {
+                const es = AU_ESTADO[x.estado] || [x.estado, C.fondo, C.suave];
+                const bg = AU_BIGGY[x.biggy_propuesta];
+                return [
+                  <tr key={x.id} style={{ cursor: "pointer", background: abierta === x.id ? "#fafbfd" : "#fff" }} onClick={() => setAbierta(abierta === x.id ? null : x.id)}>
+                    <td style={{ ...celda, fontWeight: 800, color: C.navy }}>{x.patente}</td>
+                    <td style={celda}>{x.empresa || "—"}<div style={{ color: C.tenue, fontSize: 12 }}>{x.ceco || ""}</div></td>
+                    <td style={celda}>{AU_TIPO[x.tipo] || x.tipo}</td>
+                    <td style={celda}>{x.periodo}</td>
+                    <td style={celda}>{fh(x.enviada_at)}</td>
+                    <td style={celda}>{x.hecha_por_nombre || "—"}</td>
+                    <td style={celda}>{bg ? chip(bg[0], bg[1], bg[2]) : <span style={{ color: C.tenue }}>—</span>}</td>
+                    <td style={celda}>{chip(es[0], es[1], es[2])}{x.veredicto && <div style={{ fontSize: 12, color: C.suave, marginTop: 4 }}>{AU_VER[x.veredicto]}{x.biggy_corregido ? " · corrigió a Biggy" : ""}</div>}</td>
+                  </tr>,
+                  abierta === x.id && <tr key={x.id + "d"}><td colSpan={8} style={{ padding: 0, borderBottom: `1px solid ${C.borde}` }}><DetalleAuditoria a={x} quien={quien} onListo={() => { setAbierta(null); cargar(); }} /></td></tr>,
+                ];
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DetalleAuditoria({ a, quien, onListo }) {
+  const [d, setD] = useState(null);
+  const [urls, setUrls] = useState({});
+  const [rehacer, setRehacer] = useState({});
+  const [nota, setNota] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+  useEffect(() => { (async () => {
+    try {
+      const r = await rpc("fn_ca_auditoria_detalle_brain", { p_id: a.id });
+      setD(r);
+      const marc = {}; for (const x of r.fotos || []) if (x.biggy_estado === "rehacer") marc[x.item] = true;
+      setRehacer(marc);
+      const paths = [...new Set((r.fotos || []).flatMap((x) => [x.path, x.anterior_path]).filter(Boolean))];
+      const pares = await Promise.all(paths.map(async (p) => [p, await urlFirmada(p, "ca-auditorias-cl")]));
+      setUrls(Object.fromEntries(pares));
+    } catch (e) { setMsg(e.message); setD({ fotos: [], checklist: [] }); }
+  })(); }, [a.id]);
+  const veredicto = async (v) => {
+    setBusy(true); setMsg("");
+    try {
+      await rpc("fn_ca_auditoria_veredicto", { p_id: a.id, p_veredicto: v, p_nota: nota || null, p_rehacer: Object.keys(rehacer).filter((k) => rehacer[k]), p_por: quien });
+      onListo();
+    } catch (e) { setMsg(e.message); } finally { setBusy(false); }
+  };
+  if (!d) return <div style={{ padding: 16, color: C.tenue, fontSize: 13 }}>Cargando fotos…</div>;
+  const marcadas = Object.values(rehacer).filter(Boolean).length;
+  const img = (p, alt) => p && urls[p]
+    ? <a href={urls[p]} target="_blank" rel="noreferrer"><img src={urls[p]} alt={alt} style={{ width: "100%", height: 150, objectFit: "cover", borderRadius: 8, border: `1px solid ${C.borde}` }} /></a>
+    : <div style={{ height: 150, borderRadius: 8, border: `1px dashed ${C.borde}`, display: "flex", alignItems: "center", justifyContent: "center", color: C.tenue, fontSize: 12, textAlign: "center", padding: 6 }}>{p ? "No se pudo abrir" : "Sin foto"}</div>;
+  return (
+    <div style={{ padding: 16, background: "#fafbfd" }}>
+      <div style={{ display: "flex", gap: 18, flexWrap: "wrap", fontSize: 13, marginBottom: 12 }}>
+        {a.tipo === "vehiculo" && <div><b>Km declarado:</b> {a.km ?? "—"}</div>}
+        <div><b>Auditoría anterior:</b> {d.anterior_id ? fh(d.anterior_fecha) : "no hay"}</div>
+        {a.energia && <div><b>Energía:</b> {a.energia}</div>}
+      </div>
+      {a.biggy_resumen && <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 10, padding: "10px 12px", fontSize: 13, marginBottom: 12 }}><b style={{ color: C.navy }}>🤖 Biggy:</b> {a.biggy_resumen}</div>}
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 12 }}>
+        {(d.fotos || []).map((x) => {
+          const fe = AU_FOTO[x.biggy_estado];
+          return (
+            <div key={x.item} style={{ background: "#fff", border: `1px solid ${rehacer[x.item] ? C.rojo : C.borde}`, borderRadius: 12, padding: 10 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 6, marginBottom: 6 }}>
+                <b style={{ fontSize: 13, color: C.navy }}>{x.nombre}{!x.activo && <span style={{ color: C.tenue, fontWeight: 400 }}> (ya no se pide)</span>}</b>
+                {fe ? chip(fe[0], fe[1], fe[2]) : chip("sin revisar", C.fondo, C.suave)}
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+                <div><div style={{ fontSize: 11, color: C.suave, marginBottom: 2 }}>Actual · {fh(x.tomada_at)}</div>{img(x.path, x.nombre)}</div>
+                <div><div style={{ fontSize: 11, color: C.suave, marginBottom: 2 }}>Anterior</div>{img(x.anterior_path, x.nombre + " anterior")}</div>
+              </div>
+              {x.biggy_nota && <div style={{ fontSize: 12, color: C.texto, marginTop: 6 }}>{x.biggy_nota}</div>}
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 6, fontSize: 12 }}>
+                <label style={{ display: "flex", gap: 6, alignItems: "center", cursor: "pointer", color: C.rojo, fontWeight: 700 }}>
+                  <input type="checkbox" checked={!!rehacer[x.item]} onChange={(e) => setRehacer({ ...rehacer, [x.item]: e.target.checked })} /> Repetir
+                </label>
+                {x.lat && x.lng && <a href={`https://maps.google.com/?q=${x.lat},${x.lng}`} target="_blank" rel="noreferrer" style={{ color: C.navy }}>🗺️ Dónde se tomó</a>}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {a.tipo === "vehiculo" && (
+        <div style={{ display: "flex", gap: 20, flexWrap: "wrap", marginTop: 14 }}>
+          <div style={{ fontSize: 13 }}>
+            <div style={{ fontWeight: 800, color: C.navy, marginBottom: 4 }}>Checklist</div>
+            {(d.checklist || []).length === 0 ? <div style={{ color: C.tenue }}>Sin respuestas.</div> :
+              d.checklist.map((c, i) => <div key={i} style={{ color: c.cumple ? C.texto : C.rojo, fontWeight: c.cumple ? 400 : 700 }}>{c.cumple ? "✓" : "✗ Hallazgo:"} {c.pregunta}</div>)}
+          </div>
+          <div style={{ fontSize: 13 }}>
+            <div style={{ fontWeight: 800, color: C.navy, marginBottom: 4 }}>¿Amerita reparación?</div>
+            {a.amerita_reparacion === null || a.amerita_reparacion === undefined ? <span style={{ color: C.tenue }}>Sin respuesta</span>
+              : a.amerita_reparacion ? <span style={{ color: C.rojo, fontWeight: 700 }}>Sí · {a.reparacion_obs}</span> : "No"}
+          </div>
+        </div>
+      )}
+
+      {a.veredicto && <div style={{ fontSize: 13, marginTop: 12 }}><b>Veredicto:</b> {AU_VER[a.veredicto]}{a.revision_nota ? ` · ${a.revision_nota}` : ""} <span style={{ color: C.tenue }}>({a.revisada_por}, {fh(a.revisada_at)})</span></div>}
+
+      <div style={{ marginTop: 14 }}>
+        <textarea rows={2} style={{ ...inp, width: "100%" }} value={nota} onChange={(e) => setNota(e.target.value)}
+          placeholder="Motivo para el transportista (si no cumple) o descripción del hallazgo" />
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6, alignItems: "center" }}>
+          <button style={btn("verde")} disabled={busy} onClick={() => veredicto("cumple")}>Cumple</button>
+          <button style={{ ...btn(), background: C.ambar }} disabled={busy} onClick={() => veredicto("cumple_hallazgo")}>Cumple con hallazgo</button>
+          <button style={btn("rojo")} disabled={busy} onClick={() => veredicto("no_cumple")}>No cumple · repetir {marcadas} foto{marcadas === 1 ? "" : "s"}</button>
+          <span style={{ fontSize: 12, color: C.tenue }}>No se envían correos. Si no cumple, el tercero ve en su portal qué fotos repetir.</span>
+        </div>
+        {msg && <div style={{ color: C.rojo, fontSize: 13, marginTop: 8 }}>{msg}</div>}
       </div>
     </div>
   );
