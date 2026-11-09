@@ -265,6 +265,33 @@ export default function Capacidad({ usuario }) {
     });
   }, [delModelo, meliFiltrado, prom, modelo]);
 
+  // Explicación de cada diferencia con MELI, calculada desde los viajes
+  const explicaciones = useMemo(() => {
+    if (!meliTot) return [];
+    const porSc = (lista) => { const g = {}; for (const f of lista) g[f.sc] = (g[f.sc] || 0) + 1; return Object.entries(g).sort((a, b) => b[1] - a[1]).map(([k, n]) => `${k} ${n}`).join(", "); };
+    const acept = filas.filter((f) => f.confirmado === "Aceptado");
+    const sinReg = acept.filter((f) => f.meli?.sinRegistro);                       // en la Torre, sin pedido en MELI
+    const sinRegCancel = sinReg.filter((f) => f.estado_torre === "CANCELADO");
+    const sinRegSalio = sinReg.filter((f) => f.ejecutado);
+    const sinRegNoSalio = sinReg.filter((f) => !f.ejecutado && f.estado_torre !== "CANCELADO");
+    const conReg = acept.filter((f) => f.meli && !f.meli.sinRegistro);
+    const meliSolo = Math.max((meliTot.confirmado || 0) - conReg.filter((f) => f.meli.confirmada).length, 0);   // confirmadas en MELI que no están en la Torre
+    const brainSiMeliNo = filas.filter((f) => f.meli && f.meli.ejecutada === false && f.ejecutado);
+    const meliSiBrainNo = filas.filter((f) => f.meli && f.meli.ejecutada === true && !f.ejecutado);
+    const out = [];
+    if (sinReg.length) out.push({ paso: "Solicitado · Confirmado · Asignado", n: -sinReg.length,
+      texto: `${sinReg.length} ${sinReg.length === 1 ? "viaje aceptado" : "viajes aceptados"} en la Torre que MELI no tiene como pedido` +
+        (sinRegCancel.length ? ` · ${sinRegCancel.length} ${sinRegCancel.length === 1 ? "cancelado" : "cancelados"} por MELI después de rosterizar` : "") +
+        (sinRegSalio.length ? ` · ${sinRegSalio.length} ${sinRegSalio.length === 1 ? "salió" : "salieron"} igual (asignación directa)` : "") +
+        (sinRegNoSalio.length ? ` · ${sinRegNoSalio.length} no ${sinRegNoSalio.length === 1 ? "salió" : "salieron"}` : ""),
+      scs: porSc(sinReg) });
+    if (meliSolo) out.push({ paso: "Confirmado", n: meliSolo, texto: `${meliSolo} ${meliSolo === 1 ? "ruta confirmada" : "rutas confirmadas"} en MELI que no están en la Torre`, scs: "" });
+    if (brainSiMeliNo.length) out.push({ paso: "Ejecutado", n: -brainSiMeliNo.length, texto: `${brainSiMeliNo.length} ${brainSiMeliNo.length === 1 ? "ruta salió" : "rutas salieron"} según la Torre y MELI no la${brainSiMeliNo.length === 1 ? "" : "s"} tiene ejecutada`, scs: porSc(brainSiMeliNo) });
+    if (meliSiBrainNo.length) out.push({ paso: "Ejecutado", n: meliSiBrainNo.length, texto: `${meliSiBrainNo.length} ${meliSiBrainNo.length === 1 ? "ruta" : "rutas"} que MELI da por ejecutada${meliSiBrainNo.length === 1 ? "" : "s"} y en la Torre no ${meliSiBrainNo.length === 1 ? "salió" : "salieron"}`, scs: porSc(meliSiBrainNo) });
+    if (meliTot.hard !== (tot.no_salio_sdd + tot.no_salio_spot)) out.push({ paso: "Hard no show", n: meliTot.hard - (tot.no_salio_sdd + tot.no_salio_spot),
+      texto: `MELI cuenta ${meliTot.hard} hard no show y la Torre ${tot.no_salio_sdd + tot.no_salio_spot} aceptadas que no salieron` + (sinRegCancel.length ? ` (${sinRegCancel.length} cancelados por MELI no cuentan para MELI)` : ""), scs: "" });
+    return out;
+  }, [filas, meliTot, tot]);
   // Pedidas de más: suma por SC (cada SC contra su propio compromiso o acordado)
   const deMasTotal = useMemo(() => porSc.filter((x) => !sc || x.sc === sc).reduce((t, x) => t + (x.de_mas || 0), 0), [porSc, sc]);
   useEffect(() => { setPagina(1); }, [ver, buscar, filas]);
@@ -414,6 +441,17 @@ export default function Capacidad({ usuario }) {
               );
             })}
           </div>
+          {explicaciones.length > 0 && (
+            <div style={{ marginTop: 14, borderTop: `1px solid ${BORDE}`, paddingTop: 10, display: "flex", flexDirection: "column", gap: 6 }}>
+              {explicaciones.map((e, i) => (
+                <div key={i} style={{ display: "flex", gap: 10, alignItems: "baseline", fontSize: 12 }}>
+                  <span style={{ minWidth: 190, fontWeight: 700, color: AZUL, fontSize: 11.5 }}>{e.paso}</span>
+                  <span style={{ minWidth: 34, fontWeight: 700, color: "#b91c1c", textAlign: "right" }}>{e.n > 0 ? "+" : ""}{e.n}</span>
+                  <span style={{ color: "#334155" }}>{e.texto}{e.scs ? <span style={{ color: GRIS }}> · {e.scs}</span> : null}</span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           <Tarjeta titulo="No show" total={`${(tot.no_show_soft || 0) + (tot.no_salio_sdd || 0) + (tot.no_salio_spot || 0)}${meliTot ? ` · MELI ${meliTot.soft + meliTot.hard}` : ""}`} filas={[
