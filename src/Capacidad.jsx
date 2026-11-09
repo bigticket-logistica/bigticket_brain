@@ -12,7 +12,7 @@
 //   · fn_capacidad_prometida(desde, hasta)  compromisos con MELI y comprometido por SC × día
 //   · fn_no_salidas_dia(sc, fecha)          respuesta del supervisor (solo con un día)
 // ═══════════════════════════════════════════════════════════════════════════
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { descargarExcelMultihoja, fechaOperativaOffset, sb } from "./shared";
 import { NoSalidasSC, etiquetaNosal } from "./NoSalidas";
 
@@ -24,16 +24,6 @@ const BORDE = "#e4e7ec";
 const POR_PAGINA = 10;
 const BUCKET_EVIDENCIAS = "evidencias-meli";
 const VEHICULOS = ["Large Van MLP", "Small Van MLP", "Large Van", "Small Van", "Car", "Moto"];
-
-// Pasos del embudo: [clave, título, Brain?, MELI?]
-const PASOS = [
-  ["comprometido", "Comprometido", true, false],
-  ["acordado", "Acordado", false, true],
-  ["solicitado", "Solicitado", true, true],
-  ["confirmado", "Confirmado", true, true],
-  ["asignado", "Asignado", true, true],
-  ["ejecutado", "Ejecutado", true, true],
-];
 
 const CATEGORIA = {
   ejecutado: ["Ejecutado", "#047857", "#d1fae5"],
@@ -127,28 +117,22 @@ function sumar(filas) {
   }
   return t;
 }
-// Totales MELI (gráfico) sumando fechas y modelos; por SC usa el gráfico de ese SC.
-// Mismo universo que Brain: en Spot solo cuentan las aceptadas (MELI ofrece el mismo viaje a varias
-// transportistas), así que "Solicitado" MELI en Spot = confirmadas. Acordado y soft solo existen en SDD.
+// Totales MELI (gráfico SDD) sumando fechas; por SC usa el gráfico de ese SC
 function sumarMeli(entradas, sc) {
-  const t = { acordado: null, solicitado: 0, confirmado: 0, asignado: 0, ejecutado: 0, soft: 0, hard: 0, n: 0, solicitado_sdd: 0, solicitado_spot: 0 };
+  const t = { acordado: 0, solicitado: 0, confirmado: 0, asignado: 0, ejecutado: 0, soft: 0, hard: 0, n: 0 };
   for (const e of entradas) {
     const ch = sc ? (e.por_sc || []).find((x) => x.sc === sc)?.chart : e.chart;
     if (!ch) continue;
     t.n++;
-    if (e.modelo === "SDD") { t.acordado = (t.acordado || 0) + (ch.negotiated || 0); t.solicitado += ch.requested || 0; t.solicitado_sdd += ch.requested || 0; t.soft += ch.soft_no_show || 0; }
-    else { t.solicitado += ch.confirmed || 0; t.solicitado_spot += ch.requested || 0; }
-    t.confirmado += ch.confirmed || 0; t.asignado += ch.rostered || 0; t.ejecutado += ch.executed || 0; t.hard += ch.hard_no_show || 0;
+    t.acordado += ch.negotiated || 0; t.solicitado += ch.requested || 0; t.confirmado += ch.confirmed || 0;
+    t.asignado += ch.rostered || 0; t.ejecutado += ch.executed || 0; t.soft += ch.soft_no_show || 0; t.hard += ch.hard_no_show || 0;
   }
   return t.n ? t : null;
 }
-// Pedidas por sobre lo prometido: SDD contra el compromiso cargado (o el acordado de MELI si no hay);
-// Spot solo contra el compromiso cargado (MELI no registra acordado en Spot)
-function pedidasDeMas(m, compSdd, compSpot) {
+// Pedidas por sobre lo prometido (SDD): contra el compromiso cargado o, si no hay, contra el acordado de MELI
+function pedidasDeMas(m, compSdd) {
   if (!m) return 0;
-  const sdd = Math.max(m.solicitado_sdd - (compSdd ?? m.acordado ?? m.solicitado_sdd), 0);
-  const spot = compSpot != null ? Math.max(m.solicitado_spot - compSpot, 0) : 0;
-  return sdd + spot;
+  return Math.max(m.solicitado - (compSdd ?? m.acordado ?? m.solicitado), 0);
 }
 
 export default function Capacidad({ usuario }) {
@@ -229,7 +213,7 @@ export default function Capacidad({ usuario }) {
   // ── Cruce por ruta con el detalle de MELI (fecha + placa, o route_id) ──
   const meliPorRuta = useMemo(() => {
     const porPlaca = new Map(), porRuta = new Map();
-    for (const e of meli) for (const d of e.detalle || []) {
+    for (const e of meli) for (const d of (e.modelo === "SDD" ? e.detalle || [] : [])) {
       const fila = { ejecutada: d.executed === "✓", confirmada: d.confirmed === "✓", rosterizada: d.rostered === "✓", route_id: d.route_id || null, sc: d.service_center };
       if (d.route_id) porRuta.set(String(d.route_id), fila);
       const p = placaNorm(d.vehicle_plate);
@@ -238,13 +222,14 @@ export default function Capacidad({ usuario }) {
     return { porPlaca, porRuta };
   }, [meli]);
   const filasBase = useMemo(() => todas.map((f) => {
+    if (f.modelo !== "SDD") return { ...f, meli: null };   // MELI solo cobra no show en SDD: Spot no se compara
     const m = (f.id_ruta && meliPorRuta.porRuta.get(String(f.id_ruta))) || (f.placa && meliPorRuta.porPlaca.get(`${f.fecha}|${placaNorm(f.placa)}`)) || null;
     return { ...f, meli: m ? { ...m } : (f.confirmado === "Aceptado" && meli.length ? { ejecutada: null, sinRegistro: true } : null) };
   }), [todas, meli, meliPorRuta]);
 
   const delModelo = useMemo(() => (modelo ? filasBase.filter((f) => f.modelo === modelo) : filasBase), [filasBase, modelo]);
   const filas = useMemo(() => (sc ? delModelo.filter((f) => f.sc === sc) : delModelo), [delModelo, sc]);
-  const meliFiltrado = useMemo(() => (modelo ? meli.filter((e) => e.modelo === modelo) : meli), [meli, modelo]);
+  const meliFiltrado = useMemo(() => meli.filter((e) => e.modelo === "SDD" && (!modelo || modelo === "SDD")), [meli, modelo]);
   const meliTot = useMemo(() => sumarMeli(meliFiltrado, sc || null), [meliFiltrado, sc]);
   const cruceFiltrado = useMemo(() => prom.cruce.filter((x) => (!modelo || x.modelo === modelo) && (!sc || x.sc === sc)), [prom, modelo, sc]);
   const comprometido = useMemo(() => cruceFiltrado.reduce((t, x) => t + (x.comprometido || 0), 0), [cruceFiltrado]);
@@ -260,38 +245,14 @@ export default function Capacidad({ usuario }) {
     return [...scs].map((k) => {
       const cr = prom.cruce.filter((x) => x.sc === k && (!modelo || x.modelo === modelo));
       const m = sumarMeli(meliFiltrado, k);
-      return { sc: k, ...sumar(g[k] || []), meli: m, comprometido: cr.some((x) => x.comprometido != null) ? cr.reduce((t, x) => t + (x.comprometido || 0), 0) : null,
-        de_mas: pedidasDeMas(m, compPor(cr, "SDD"), compPor(cr, "SPOT")) };
+      const sddBrain = sumar((g[k] || []).filter((f) => f.modelo === "SDD"));
+      return { sc: k, ...sumar(g[k] || []), sdd: sddBrain, meli: m, comprometido: cr.some((x) => x.comprometido != null) ? cr.reduce((t, x) => t + (x.comprometido || 0), 0) : null,
+        de_mas: pedidasDeMas(m, compPor(cr, "SDD")) };
     });
   }, [delModelo, meliFiltrado, prom, modelo]);
 
-  // Explicación de cada diferencia con MELI, calculada desde los viajes
-  const explicaciones = useMemo(() => {
-    if (!meliTot) return [];
-    const porSc = (lista) => { const g = {}; for (const f of lista) g[f.sc] = (g[f.sc] || 0) + 1; return Object.entries(g).sort((a, b) => b[1] - a[1]).map(([k, n]) => `${k} ${n}`).join(", "); };
-    const acept = filas.filter((f) => f.confirmado === "Aceptado");
-    const sinReg = acept.filter((f) => f.meli?.sinRegistro);                       // en la Torre, sin pedido en MELI
-    const sinRegCancel = sinReg.filter((f) => f.estado_torre === "CANCELADO");
-    const sinRegSalio = sinReg.filter((f) => f.ejecutado);
-    const sinRegNoSalio = sinReg.filter((f) => !f.ejecutado && f.estado_torre !== "CANCELADO");
-    const conReg = acept.filter((f) => f.meli && !f.meli.sinRegistro);
-    const meliSolo = Math.max((meliTot.confirmado || 0) - conReg.filter((f) => f.meli.confirmada).length, 0);   // confirmadas en MELI que no están en la Torre
-    const brainSiMeliNo = filas.filter((f) => f.meli && f.meli.ejecutada === false && f.ejecutado);
-    const meliSiBrainNo = filas.filter((f) => f.meli && f.meli.ejecutada === true && !f.ejecutado);
-    const out = [];
-    if (sinReg.length) out.push({ paso: "Solicitado · Confirmado · Asignado", n: -sinReg.length,
-      texto: `${sinReg.length} ${sinReg.length === 1 ? "viaje aceptado" : "viajes aceptados"} en la Torre que MELI no tiene como pedido` +
-        (sinRegCancel.length ? ` · ${sinRegCancel.length} ${sinRegCancel.length === 1 ? "cancelado" : "cancelados"} por MELI después de rosterizar` : "") +
-        (sinRegSalio.length ? ` · ${sinRegSalio.length} ${sinRegSalio.length === 1 ? "salió" : "salieron"} igual (asignación directa)` : "") +
-        (sinRegNoSalio.length ? ` · ${sinRegNoSalio.length} no ${sinRegNoSalio.length === 1 ? "salió" : "salieron"}` : ""),
-      scs: porSc(sinReg) });
-    if (meliSolo) out.push({ paso: "Confirmado", n: meliSolo, texto: `${meliSolo} ${meliSolo === 1 ? "ruta confirmada" : "rutas confirmadas"} en MELI que no están en la Torre`, scs: "" });
-    if (brainSiMeliNo.length) out.push({ paso: "Ejecutado", n: -brainSiMeliNo.length, texto: `${brainSiMeliNo.length} ${brainSiMeliNo.length === 1 ? "ruta salió" : "rutas salieron"} según la Torre y MELI no la${brainSiMeliNo.length === 1 ? "" : "s"} tiene ejecutada`, scs: porSc(brainSiMeliNo) });
-    if (meliSiBrainNo.length) out.push({ paso: "Ejecutado", n: meliSiBrainNo.length, texto: `${meliSiBrainNo.length} ${meliSiBrainNo.length === 1 ? "ruta" : "rutas"} que MELI da por ejecutada${meliSiBrainNo.length === 1 ? "" : "s"} y en la Torre no ${meliSiBrainNo.length === 1 ? "salió" : "salieron"}`, scs: porSc(meliSiBrainNo) });
-    if (meliTot.hard !== (tot.no_salio_sdd + tot.no_salio_spot)) out.push({ paso: "Hard no show", n: meliTot.hard - (tot.no_salio_sdd + tot.no_salio_spot),
-      texto: `MELI cuenta ${meliTot.hard} hard no show y la Torre ${tot.no_salio_sdd + tot.no_salio_spot} aceptadas que no salieron` + (sinRegCancel.length ? ` (${sinRegCancel.length} cancelados por MELI no cuentan para MELI)` : ""), scs: "" });
-    return out;
-  }, [filas, meliTot, tot]);
+  const totSdd = useMemo(() => sumar(filas.filter((f) => f.modelo === "SDD")), [filas]);
+  const totSpot = useMemo(() => sumar(filas.filter((f) => f.modelo === "SPOT")), [filas]);
   // Pedidas de más: suma por SC (cada SC contra su propio compromiso o acordado)
   const deMasTotal = useMemo(() => porSc.filter((x) => !sc || x.sc === sc).reduce((t, x) => t + (x.de_mas || 0), 0), [porSc, sc]);
   useEffect(() => { setPagina(1); }, [ver, buscar, filas]);
@@ -399,78 +360,67 @@ export default function Capacidad({ usuario }) {
         <span><b>{d1 === d2 ? fLarga(d1) : `${fLarga(d1)} al ${fLarga(d2)}`}</b>{modelo ? ` · ${modelo === "SDD" ? "SDD" : "Spot"}` : " · SDD y Spot"}{sc ? ` · ${sc}` : ""}
           {!loading && <span style={{ color: GRIS }}> · {todas.length} viajes · {segundos ? `${segundos} s` : ""}</span>}
           {(fechaSel !== d1 || (esRango ? hastaSel : fechaSel) !== d2) && <span style={{ color: "#b45309", fontWeight: 600 }}> · presiona Aplicar</span>}</span>
-        <span style={{ display: "flex", gap: 10, fontSize: 11 }}>
-          <span><span style={{ display: "inline-block", width: 10, height: 10, background: AZUL, borderRadius: 2, marginRight: 4 }} />Brain</span>
-          <span><span style={{ display: "inline-block", width: 10, height: 10, background: NARANJA, borderRadius: 2, marginRight: 4 }} />MELI{meliTot ? "" : " (sin foto)"}</span>
-        </span>
+        {!meliTot && !loading && <span style={{ fontSize: 11, color: NARANJA }}>sin foto de MELI para esta fecha</span>}
       </div>
       {error && <div style={{ background: "#fee2e2", color: "#b91c1c", padding: 10, borderRadius: 8, fontSize: 12, marginBottom: 12 }}><b>No se pudo cargar {d1 === d2 ? d1 : `${d1} al ${d2}`}:</b> {error}</div>}
       {loading && <div style={{ color: GRIS, fontSize: 12, marginBottom: 12 }}>Consultando… {esperando} s</div>}
 
-      {/* Embudo + tarjetas */}
-      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 14 }}>
-        <div style={{ ...caja, flex: "1 1 620px" }}>
-          <div style={{ fontWeight: 700, color: AZUL, fontSize: 14, marginBottom: 10 }}>Ejecución de rutas</div>
-          <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-around", height: 190, borderBottom: `1px solid ${BORDE}` }}>
-            {PASOS.map(([k, t, esBrain, esMeli]) => {
-              const v = valores[k];
-              return (
-                <div key={k} style={{ display: "flex", alignItems: "flex-end", justifyContent: "center", gap: 6, height: "100%", width: 96 }}>
-                  {esBrain && <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-end", height: "100%" }}>
-                    <div style={{ fontSize: 11, fontWeight: 700, color: AZUL, marginBottom: 3 }}>{v.brain ?? "—"}</div>
-                    <div style={{ width: 26, height: `${((v.brain || 0) / maxBarra) * 150}px`, background: AZUL, borderRadius: "4px 4px 0 0", minHeight: 2, opacity: v.brain == null ? 0.15 : 1 }} />
-                  </div>}
-                  {esMeli && <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-end", height: "100%" }}>
-                    <div style={{ fontSize: 11, fontWeight: 700, color: NARANJA, marginBottom: 3 }}>{v.meli ?? "—"}</div>
-                    <div style={{ width: 26, height: `${((v.meli || 0) / maxBarra) * 150}px`, background: NARANJA, borderRadius: "4px 4px 0 0", minHeight: 2, opacity: v.meli == null ? 0.15 : 1 }} />
-                  </div>}
-                </div>
-              );
-            })}
-          </div>
-          <div style={{ display: "flex", justifyContent: "space-around", marginTop: 6 }}>
-            {PASOS.map(([k, t, esBrain]) => {
-              const v = valores[k];
-              const dif = v.brain != null && v.meli != null && v.brain !== v.meli;
-              return (
-                <div key={k} style={{ width: 96, textAlign: "center", fontSize: 11, color: GRIS }}>
-                  {t}
-                  {esBrain && k !== "comprometido" && <div style={{ fontSize: 10 }}>{pct(v.brain || 0, tot.solicitado || 0)}</div>}
-                  {dif && <div style={{ fontSize: 10, color: "#b91c1c", fontWeight: 700 }}>≠ {v.meli - v.brain > 0 ? "+" : ""}{v.meli - v.brain}</div>}
-                </div>
-              );
-            })}
-          </div>
-          {explicaciones.length > 0 && (
-            <div style={{ marginTop: 14, borderTop: `1px solid ${BORDE}`, paddingTop: 10, display: "flex", flexDirection: "column", gap: 6 }}>
-              {explicaciones.map((e, i) => (
-                <div key={i} style={{ display: "flex", gap: 10, alignItems: "baseline", fontSize: 12 }}>
-                  <span style={{ minWidth: 190, fontWeight: 700, color: AZUL, fontSize: 11.5 }}>{e.paso}</span>
-                  <span style={{ minWidth: 34, fontWeight: 700, color: "#b91c1c", textAlign: "right" }}>{e.n > 0 ? "+" : ""}{e.n}</span>
-                  <span style={{ color: "#334155" }}>{e.texto}{e.scs ? <span style={{ color: GRIS }}> · {e.scs}</span> : null}</span>
-                </div>
-              ))}
+      {/* SDD: lo que MELI cobra · Spot: lo que operamos */}
+      {(() => {
+        const compSdd = compPor(cruceFiltrado, "SDD");
+        const colsSdd = [
+          ["Comprometido", compSdd, null],
+          ["Acordado", null, meliTot?.acordado ?? null],
+          ["Solicitado", totSdd.solicitado, meliTot?.solicitado ?? null],
+          ["Confirmado", totSdd.confirmado, meliTot?.confirmado ?? null],
+          ["Asignado", totSdd.asignado, meliTot?.asignado ?? null],
+          ["Ejecutado", totSdd.ejecutado, meliTot?.ejecutado ?? null],
+          ["Soft no show", totSdd.no_show_soft, meliTot?.soft ?? null],
+          ["Hard no show", totSdd.no_salio_sdd || 0, meliTot?.hard ?? null],
+        ];
+        const colsSpot = [["Aceptadas", totSpot.confirmado], ["Con placa y chofer", totSpot.asignado], ["Salieron", totSpot.ejecutado], ["No salieron", totSpot.no_salio_spot || 0]];
+        const cell = (v, color, grande = true) => <td style={{ padding: "8px 10px", textAlign: "center", fontSize: grande ? 15 : 13, fontWeight: 700, color: v == null ? "#cbd5e1" : color, borderTop: `1px solid ${BORDE}` }}>{v ?? "—"}</td>;
+        const fila = (titulo, color) => <td style={{ padding: "8px 10px", fontWeight: 700, color, fontSize: 12, borderTop: `1px solid ${BORDE}`, whiteSpace: "nowrap" }}>{titulo}</td>;
+        return (
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 14 }}>
+            <div style={{ ...caja, flex: "1 1 680px", overflowX: "auto" }}>
+              {modelo !== "SPOT" && (<>
+                <div style={{ fontWeight: 700, color: AZUL, fontSize: 14, marginBottom: 8 }}>SDD <span style={{ color: GRIS, fontWeight: 400, fontSize: 12 }}>· lo que MELI cobra</span></div>
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead><tr><th style={{ ...th, background: "none" }}></th>{colsSdd.map(([t]) => <th key={t} style={{ ...thC, background: "none", fontSize: 11 }}>{t}</th>)}</tr></thead>
+                  <tbody>
+                    <tr>{fila("Brain", AZUL)}{colsSdd.map(([t, b]) => <Fragment key={t}>{cell(b, AZUL)}</Fragment>)}</tr>
+                    <tr>{fila("MELI", NARANJA)}{colsSdd.map(([t, b, m]) => <Fragment key={t}>{cell(m, NARANJA)}</Fragment>)}</tr>
+                    <tr>{fila("Diferencia", GRIS)}{colsSdd.map(([t, b, m]) => { const d = b != null && m != null ? m - b : null; return <Fragment key={t}>{cell(d == null ? null : d === 0 ? "=" : (d > 0 ? "+" : "") + d, d ? "#b91c1c" : "#94a3b8")}</Fragment>; })}</tr>
+                  </tbody>
+                </table>
+                {meliTot && (deMasTotal > 0 || totSdd.difieren > 0) && (
+                  <div style={{ marginTop: 10, display: "flex", gap: 18, fontSize: 12, color: "#334155", flexWrap: "wrap" }}>
+                    {deMasTotal > 0 && <span><b style={{ color: "#b91c1c" }}>{deMasTotal}</b> pedidas por MELI sobre lo prometido</span>}
+                    {totSdd.difieren > 0 && <span><b style={{ color: "#b91c1c" }}>{totSdd.difieren}</b> rutas con resultado distinto · <a href="#" onClick={(e) => { e.preventDefault(); setVer("difieren"); }} style={{ color: AZUL }}>ver en el detalle</a></span>}
+                  </div>
+                )}
+                {!meliTot && !loading && <div style={{ marginTop: 8, fontSize: 12, color: NARANJA }}>Sin foto de MELI para esta fecha</div>}
+              </>)}
+              {modelo !== "SDD" && (<>
+                <div style={{ fontWeight: 700, color: AZUL, fontSize: 14, marginTop: modelo === "SPOT" ? 0 : 18, marginBottom: 8 }}>Spot <span style={{ color: GRIS, fontWeight: 400, fontSize: 12 }}>· lo que operamos</span></div>
+                <table style={{ borderCollapse: "collapse" }}>
+                  <thead><tr><th style={{ ...th, background: "none" }}></th>{colsSpot.map(([t]) => <th key={t} style={{ ...thC, background: "none", fontSize: 11, minWidth: 110 }}>{t}</th>)}</tr></thead>
+                  <tbody><tr>{fila("Brain", AZUL)}{colsSpot.map(([t, b]) => <Fragment key={t}>{cell(b, AZUL)}</Fragment>)}</tr></tbody>
+                </table>
+              </>)}
             </div>
-          )}
-        </div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          <Tarjeta titulo="No show" total={`${(tot.no_show_soft || 0) + (tot.no_salio_sdd || 0) + (tot.no_salio_spot || 0)}${meliTot ? ` · MELI ${meliTot.soft + meliTot.hard}` : ""}`} filas={[
-            ["Soft · no confirmadas", `${tot.no_show_soft || 0}${meliTot ? `  ·  MELI ${meliTot.soft}` : ""}`, "SDD solicitado que no confirmamos"],
-            ["Hard · aceptadas que no salieron", `${(tot.no_salio_sdd || 0) + (tot.no_salio_spot || 0)}${meliTot ? `  ·  MELI ${meliTot.hard}` : ""}`, "Brain: SDD y Spot con placa y chofer que no salieron · MELI: hard no show del reporte"],
-            ["   SDD", tot.no_salio_sdd || 0, ""], ["   Spot", tot.no_salio_spot || 0, ""],
-          ]} />
-          <Tarjeta titulo="Respuesta del supervisor" total={`${(tot.no_salio_sdd || 0) + (tot.no_salio_spot || 0) - (tot.sin_responder || 0)} de ${(tot.no_salio_sdd || 0) + (tot.no_salio_spot || 0)}`} filas={[
-            ["No show", `${tot.no_show_hard || 0}${tot.no_show_hard ? ` (${tot.no_show_hard_sdd || 0} SDD · ${tot.no_show_hard_spot || 0} Spot)` : ""}`, ""],
-            ["Cancelación", `${tot.cancelado_hard || 0}${tot.cancelado_hard ? ` (${tot.cancelado_sdd || 0} SDD · ${tot.cancelado_spot || 0} Spot)` : ""}`, ""],
-            ["Otros", tot.no_salio_otro || 0, ""], ["Sin respuesta", tot.sin_responder || 0, ""],
-            ...((tot.pendiente || 0) > 0 ? [["Pendientes de hoy", tot.pendiente, ""]] : []),
-          ]} />
-          {meliTot && <Tarjeta titulo="MELI" total="" filas={[
-            ["Pedidas por sobre lo prometido", deMasTotal, "Solicitado por MELI por encima del compromiso (SDD contra el compromiso o el acordado; Spot solo contra el compromiso cargado)"],
-            ["Rutas con resultado distinto", tot.difieren || 0, "Brain dice que salió y MELI que no, o al revés"],
-          ]} />}
-        </div>
-      </div>
+            <Tarjeta titulo="Aceptadas que no salieron" total={(tot.no_salio_sdd || 0) + (tot.no_salio_spot || 0)} filas={[
+              ["SDD", tot.no_salio_sdd || 0, ""], ["Spot", tot.no_salio_spot || 0, ""],
+              ["Respuesta del supervisor", "", ""],
+              ["   No show", `${tot.no_show_hard || 0}${tot.no_show_hard ? ` (${tot.no_show_hard_sdd || 0} SDD · ${tot.no_show_hard_spot || 0} Spot)` : ""}`, ""],
+              ["   Cancelación", `${tot.cancelado_hard || 0}${tot.cancelado_hard ? ` (${tot.cancelado_sdd || 0} SDD · ${tot.cancelado_spot || 0} Spot)` : ""}`, ""],
+              ["   Otros", tot.no_salio_otro || 0, ""], ["   Sin respuesta", tot.sin_responder || 0, ""],
+              ...((tot.pendiente || 0) > 0 ? [["   Pendientes de hoy", tot.pendiente, ""]] : []),
+            ]} />
+          </div>
+        );
+      })()}
 
       {/* Compromisos con MELI */}
       <div style={{ ...caja, marginBottom: 14 }}>
@@ -530,17 +480,17 @@ export default function Capacidad({ usuario }) {
                     <td style={{ ...td, fontWeight: 700 }}>{x.sc}</td>
                     <td style={{ ...tdC, color: x.comprometido == null ? "#94a3b8" : "#334155", fontWeight: 700 }}>{x.comprometido ?? "—"}</td>
                     <td style={{ ...tdC, color: NARANJA, fontWeight: 700 }}>{m.acordado ?? "—"}{sobre > 0 && <div style={{ fontSize: 10, color: "#b91c1c" }}>+{sobre} pedidas de más</div>}</td>
-                    <td style={tdC}><Dos brain={x.solicitado} meli={m.solicitado} /></td>
-                    <td style={tdC}><Dos brain={x.confirmado} meli={m.confirmado} /></td>
-                    <td style={tdC}><Dos brain={x.asignado} meli={m.asignado} /></td>
-                    <td style={tdC}><Dos brain={x.ejecutado} meli={m.ejecutado} /></td>
+                    <td style={tdC}><Dos brain={x.solicitado} meli={modelo === "SDD" ? m.solicitado : null} /></td>
+                    <td style={tdC}><Dos brain={x.confirmado} meli={modelo === "SDD" ? m.confirmado : null} /></td>
+                    <td style={tdC}><Dos brain={x.asignado} meli={modelo === "SDD" ? m.asignado : null} /></td>
+                    <td style={tdC}><Dos brain={x.ejecutado} meli={modelo === "SDD" ? m.ejecutado : null} /></td>
                     <td style={{ ...tdC, fontWeight: 700, color: x.confirmado && x.ejecutado < x.confirmado ? "#b45309" : "#047857" }}>{pct(x.ejecutado, x.confirmado)}</td>
                     <td style={tdC}><Dos brain={x.no_show_soft} meli={m.soft} /></td>
-                    <td style={tdC}><Dos brain={x.no_salio_sdd + x.no_salio_spot} meli={m.hard} /></td>
+                    <td style={tdC}><Dos brain={x.no_salio_sdd + x.no_salio_spot} meli={modelo === "SDD" ? m.hard : null} />{modelo !== "SDD" && m.hard != null && <div style={{ fontSize: 10, color: m.hard !== x.no_salio_sdd ? NARANJA : "#94a3b8" }}>MELI SDD {m.hard}</div>}</td>
                     <td style={{ ...tdC, color: "#b91c1c", fontWeight: 700 }}>{x.cancelado_hard || ""}</td>
                     <td style={tdC}>{x.no_salio_otro || ""}</td>
                     <td style={{ ...tdC, color: "#9f1239", fontWeight: 700 }}>{x.sin_responder || ""}</td>
-                    <td style={{ ...tdC, color: "#b91c1c", fontWeight: 700 }}>{x.difieren || ""}</td>
+                    <td style={{ ...tdC, color: "#b91c1c", fontWeight: 700 }}>{x.sdd?.difieren || ""}</td>
                   </tr>
                 );
               })}
@@ -594,7 +544,7 @@ export default function Capacidad({ usuario }) {
                   <td style={tdC}>{f.confirmado ? <Pill t={f.confirmado} c={conf[0]} bg={conf[1]} /> : "—"}</td>
                   <td style={tdC}><Check v={f.asignado} /></td>
                   <td style={tdC}><Check v={f.ejecutado} /></td>
-                  <td style={{ ...tdC, fontSize: 11 }}>{!m ? <span style={{ color: "#cbd5e1" }}>—</span> : m.ejecutada === null ? <span style={{ color: "#94a3b8" }}>sin registro</span>
+                  <td style={{ ...tdC, fontSize: 11 }}>{!m ? <span style={{ color: "#cbd5e1" }}>{f.modelo === "SPOT" ? "" : "—"}</span> : m.ejecutada === null ? <span style={{ color: "#94a3b8" }}>sin registro</span>
                     : m.ejecutada ? <span style={{ color: dif ? "#b91c1c" : "#047857", fontWeight: 700 }}>ejecutada ✓</span> : <span style={{ color: dif ? "#b91c1c" : "#b45309", fontWeight: 700 }}>no ejecutada</span>}</td>
                   <td style={td}>
                     <Pill t={cat[0]} c={cat[1]} bg={cat[2]} />
