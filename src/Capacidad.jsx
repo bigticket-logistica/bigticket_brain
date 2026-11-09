@@ -150,6 +150,7 @@ export default function Capacidad({ usuario }) {
   const [sc, setSc] = useState("");
   const [todas, setTodas] = useState([]);
   const [meli, setMeli] = useState([]);
+  const [rutasMeli, setRutasMeli] = useState([]);   // route_execution de MELI: paquetes por ruta
   const [prom, setProm] = useState({ compromisos: [], cruce: [] });
   const [noSal, setNoSal] = useState([]);
   const [verBitacora, setVerBitacora] = useState(true);
@@ -176,12 +177,13 @@ export default function Capacidad({ usuario }) {
     setLoading(true); setError(null); setEsperando(0);
     const reloj = setInterval(() => setEsperando(Math.round((Date.now() - t0) / 1000)), 1000);
     try {
-      const [r, m, p, ns] = await Promise.race([
+      const [r, m, p, ns, re] = await Promise.race([
         Promise.all([
           sb.rpc("fn_capacidad", { p_desde: d1, p_hasta: d2 }),
           sb.rpc("fn_meli_capacidad", { p_desde: d1, p_hasta: d2 }),
           sb.rpc("fn_capacidad_prometida", { p_desde: d1, p_hasta: d2 }),
           d1 === d2 ? sb.rpc("fn_no_salidas_dia", { p_sc: null, p_fecha: d1 }) : Promise.resolve({ data: [] }),
+          sb.rpc("fn_meli_rutas_ejecutadas", { p_desde: d1, p_hasta: d2 }),
         ]),
         new Promise((_, rej) => setTimeout(() => rej(new Error("Supabase no respondió en 40 segundos")), 40000)),
       ]);
@@ -192,6 +194,7 @@ export default function Capacidad({ usuario }) {
       setMeli(Array.isArray(m?.data) ? m.data : []);
       setProm(p?.data && typeof p.data === "object" ? { compromisos: p.data.compromisos || [], cruce: p.data.cruce || [] } : { compromisos: [], cruce: [] });
       setNoSal(Array.isArray(ns?.data) ? ns.data : []);
+      setRutasMeli(Array.isArray(re?.data) ? re.data : []);
       setSegundos(((Date.now() - t0) / 1000).toFixed(1));
     } catch (e) {
       console.error("Capacidad", d1, d2, e);
@@ -252,6 +255,9 @@ export default function Capacidad({ usuario }) {
   }, [delModelo, meliFiltrado, prom, modelo]);
 
   const totSdd = useMemo(() => sumar(filas.filter((f) => f.modelo === "SDD")), [filas]);
+  const rutaMeli = useMemo(() => new Map(rutasMeli.map((r) => [String(r.route_id), r])), [rutasMeli]);
+  const reclamos = useMemo(() => filas.filter((f) => f.modelo === "SDD" && f.ejecutado && f.meli && f.meli.ejecutada === false)
+    .map((f) => ({ ...f, rutaMeli: f.id_ruta ? rutaMeli.get(String(f.id_ruta)) || null : null })), [filas, rutaMeli]);
   const totSpot = useMemo(() => sumar(filas.filter((f) => f.modelo === "SPOT")), [filas]);
   // Pedidas de más: suma por SC (cada SC contra su propio compromiso o acordado)
   const deMasTotal = useMemo(() => porSc.filter((x) => !sc || x.sc === sc).reduce((t, x) => t + (x.de_mas || 0), 0), [porSc, sc]);
@@ -321,7 +327,10 @@ export default function Capacidad({ usuario }) {
       }
       const comp = [["SC", "VEHICULO", "MODELO", "COMPROMETIDO POR DIA", "VIGENCIA DESDE", "VIGENCIA HASTA", "EVIDENCIA", "NOTA", "CARGO", "CARGADO EL"]];
       for (const c of prom.compromisos) comp.push([c.sc, c.vehiculo, c.modelo, c.cantidad, c.vigencia_desde, c.vigencia_hasta || "", c.evidencia_nombre || "", c.nota || "", c.cargado_por, fHora(c.cargado_at)]);
-      await descargarExcelMultihoja([{ nombre: "Por SC", datos: res }, { nombre: "Detalle", datos: det }, { nombre: "Compromisos", datos: comp }],
+      const rec = [["FECHA", "SC", "PLACA", "CHOFER", "DRIVER ID", "ID RUTA", "SALIDA REAL TORRE", "ESTADO TORRE", "EN LISTA DE RUTAS MELI", "PAQUETES TOTAL MELI", "PAQUETES ENTREGADOS MELI", "SUPERVISOR"]];
+      for (const f of reclamos) rec.push([f.fecha, f.sc, f.placa || "", f.chofer || "", f.driver_id || "", f.id_ruta || "", f.salida_real ? fHora(f.salida_real) : "", f.estado_torre || "",
+        f.rutaMeli ? "SI" : "NO", f.rutaMeli?.total_packages ?? "", f.rutaMeli?.delivered_packages?.raw ?? f.rutaMeli?.delivered_packages ?? "", f.resultado_supervisor || ""]);
+      await descargarExcelMultihoja([{ nombre: "Reclamo", datos: rec }, { nombre: "Por SC", datos: res }, { nombre: "Detalle", datos: det }, { nombre: "Compromisos", datos: comp }],
         `capacidad_${d1 === d2 ? d1 : d1 + "_a_" + d2}${modelo ? "_" + modelo : ""}${sc ? "_" + sc : ""}`);
     } catch (e) { alert("No se pudo generar el Excel: " + (e.message || e)); }
     finally { setExcelBusy(false); }
@@ -401,6 +410,28 @@ export default function Capacidad({ usuario }) {
                   </div>
                 )}
                 {!meliTot && !loading && <div style={{ marginTop: 8, fontSize: 12, color: NARANJA }}>Sin foto de MELI para esta fecha</div>}
+                {reclamos.length > 0 && (
+                  <div style={{ marginTop: 14, border: "1px solid #fecaca", background: "#fff7f7", borderRadius: 10, padding: 12 }}>
+                    <div style={{ fontWeight: 700, color: "#b91c1c", fontSize: 13, marginBottom: 8 }}>Para reclamar a MELI · {reclamos.length} {reclamos.length === 1 ? "ruta" : "rutas"}: MELI dice que no salió, la Torre dice que sí</div>
+                    <table style={{ width: "100%", borderCollapse: "collapse", background: "#fff" }}>
+                      <thead><tr>{["Fecha", "SC", "Placa", "Chofer", "ID de ruta", "Salió según la Torre", "Según MELI (lista de rutas)", "Supervisor"].map((t) => <th key={t} style={{ ...th, fontSize: 10.5 }}>{t}</th>)}</tr></thead>
+                      <tbody>
+                        {reclamos.map((f, i) => (
+                          <tr key={i}>
+                            <td style={td}>{fCorta(f.fecha)}</td><td style={{ ...td, fontWeight: 700 }}>{f.sc}</td><td style={{ ...td, fontFamily: "monospace", fontWeight: 700 }}>{f.placa}</td>
+                            <td style={td}>{f.chofer}<div style={{ fontSize: 10, color: GRIS }}>{f.driver_id}</div></td>
+                            <td style={{ ...td, fontWeight: 700 }}>{f.id_ruta || "—"}</td>
+                            <td style={td}>{f.salida_real ? `${fHora(f.salida_real)} · ${f.estado_torre}` : f.estado_torre}</td>
+                            <td style={td}>{f.rutaMeli
+                              ? <span style={{ color: "#047857", fontWeight: 700 }}>ruta en su lista · {f.rutaMeli.delivered_packages?.raw ?? f.rutaMeli.delivered_packages ?? "?"} de {f.rutaMeli.total_packages ?? "?"} paquetes entregados</span>
+                              : <span style={{ color: GRIS }}>no está en su lista de rutas ejecutadas</span>}</td>
+                            <td style={td}>{f.respondido_at ? `${f.resultado_supervisor === "si_salio" ? "Sí salió" : f.resultado_supervisor}${f.ruta_declarada ? ` · ruta ${f.ruta_declarada}` : ""}` : <span style={{ color: GRIS }}>—</span>}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </>)}
               {modelo !== "SDD" && (<>
                 <div style={{ fontWeight: 700, color: AZUL, fontSize: 14, marginTop: modelo === "SPOT" ? 0 : 18, marginBottom: 8 }}>Spot <span style={{ color: GRIS, fontWeight: 400, fontSize: 12 }}>· lo que operamos</span></div>
@@ -467,9 +498,25 @@ export default function Capacidad({ usuario }) {
         <div style={{ ...caja, marginBottom: 14, overflowX: "auto" }}>
           <div style={{ fontWeight: 700, color: AZUL, fontSize: 14, marginBottom: 8 }}>Por Service Center</div>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead><tr>
-              <th style={th}>SC</th><th style={thC}>Comprometido</th><th style={{ ...thC, color: NARANJA }}>Acordado</th><th style={thC}>Solicitado</th><th style={thC}>Confirmado</th><th style={thC}>Asignado</th>
-              <th style={thC}>Ejecutado</th><th style={thC}>% Ejecutado</th><th style={thC}>No confirmadas</th><th style={thC}>No show</th><th style={thC}>Cancelación</th><th style={thC}>Otros</th><th style={thC}>Sin respuesta</th><th style={thC}>≠ MELI</th>
+            <thead style={{ position: "sticky", top: 0, zIndex: 2 }}><tr>
+              {[
+                ["SC", "", "Service Center"],
+                ["Comprometido", "c", "Vehículos SDD por día comprometidos con MELI (planilla de compromisos)"],
+                ["Acordado", "c", "Vehículos SDD por día que MELI tiene registrados como acordados"],
+                ["Solicitado", "c", "SDD pedidos por MELI + Spot aceptados"],
+                ["Confirmado", "c", "Aceptados por BigTicket"],
+                ["Asignado", "c", "Aceptados con placa y chofer en el rostering"],
+                ["Ejecutado", "c", "Aceptados cuya ruta salió"],
+                ["% Ejecutado", "c", "Ejecutado sobre confirmado"],
+                ["No confirmadas SDD", "c", "SDD pedidos que no aceptamos: soft no show (MELI cobra 75%)"],
+                ["No salió SDD", "c", "SDD aceptados con placa y chofer que no salieron: hard no show (MELI cobra 100%). Debajo, lo que cuenta MELI"],
+                ["No salió Spot", "c", "Spot aceptados con placa y chofer que no salieron (MELI no cobra)"],
+                ["No show", "c", "El supervisor respondió No Show en la Bitácora"],
+                ["Cancelación", "c", "El supervisor respondió Cancelación en la Bitácora"],
+                ["Otros", "c", "El supervisor respondió Otros"],
+                ["Sin respuesta", "c", "No salió y el supervisor todavía no responde"],
+                ["≠ MELI", "c", "Rutas SDD donde MELI y la Torre dicen distinto si salió o no"],
+              ].map(([t, al, ayuda]) => <th key={t} title={ayuda} style={{ ...(al === "c" ? thC : th), color: t === "Acordado" ? NARANJA : GRIS, cursor: "help" }}>{t}</th>)}
             </tr></thead>
             <tbody>
               {[...porSc].sort((a, b) => (b.no_salio_sdd + b.no_salio_spot + b.no_show_soft) - (a.no_salio_sdd + a.no_salio_spot + a.no_show_soft) || a.sc.localeCompare(b.sc)).map((x) => {
@@ -486,7 +533,8 @@ export default function Capacidad({ usuario }) {
                     <td style={tdC}><Dos brain={x.ejecutado} meli={modelo === "SDD" ? m.ejecutado : null} /></td>
                     <td style={{ ...tdC, fontWeight: 700, color: x.confirmado && x.ejecutado < x.confirmado ? "#b45309" : "#047857" }}>{pct(x.ejecutado, x.confirmado)}</td>
                     <td style={tdC}><Dos brain={x.no_show_soft} meli={m.soft} /></td>
-                    <td style={tdC}><Dos brain={x.no_salio_sdd + x.no_salio_spot} meli={modelo === "SDD" ? m.hard : null} />{modelo !== "SDD" && m.hard != null && <div style={{ fontSize: 10, color: m.hard !== x.no_salio_sdd ? NARANJA : "#94a3b8" }}>MELI SDD {m.hard}</div>}</td>
+                    <td style={tdC}><Dos brain={x.no_salio_sdd} meli={m.hard} /></td>
+                    <td style={{ ...tdC, fontWeight: 700, color: x.no_salio_spot ? "#334155" : "#94a3b8" }}>{x.no_salio_spot || "—"}</td>
                     <td style={{ ...tdC, color: "#b91c1c", fontWeight: 700 }}>{x.cancelado_hard || ""}</td>
                     <td style={tdC}>{x.no_salio_otro || ""}</td>
                     <td style={{ ...tdC, color: "#9f1239", fontWeight: 700 }}>{x.sin_responder || ""}</td>
@@ -524,7 +572,7 @@ export default function Capacidad({ usuario }) {
           </div>
         </div>
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
-          <thead><tr>
+          <thead style={{ position: "sticky", top: 0, zIndex: 2 }}><tr>
             <th style={th}>Fecha</th><th style={th}>SC</th><th style={th}>Vehículo</th><th style={th}>Transportista</th><th style={th}>ID de Ruta</th>
             <th style={thC}>Confirmado</th><th style={thC}>Asignado</th><th style={thC}>Ejecutado</th><th style={{ ...thC, color: NARANJA }}>MELI</th><th style={th}>Resultado</th>
           </tr></thead>
@@ -543,7 +591,7 @@ export default function Capacidad({ usuario }) {
                   <td style={td}><b>{f.id_ruta || ""}</b><div style={{ fontSize: 10.5, color: GRIS, whiteSpace: "nowrap" }}>{f.travel_id && <>Viaje {f.travel_id}</>}{f.travel_id && f.request_id != null && " · "}{f.request_id != null && <>Solicitud {f.request_id}</>}</div></td>
                   <td style={tdC}>{f.confirmado ? <Pill t={f.confirmado} c={conf[0]} bg={conf[1]} /> : "—"}</td>
                   <td style={tdC}><Check v={f.asignado} /></td>
-                  <td style={tdC}><Check v={f.ejecutado} /></td>
+                  <td style={tdC}><Check v={f.ejecutado} />{f.salida_real && <div style={{ fontSize: 10, color: GRIS }}>{fHora(f.salida_real).slice(-5)}</div>}</td>
                   <td style={{ ...tdC, fontSize: 11 }}>{!m ? <span style={{ color: "#cbd5e1" }}>{f.modelo === "SPOT" ? "" : "—"}</span> : m.ejecutada === null ? <span style={{ color: "#94a3b8" }}>sin registro</span>
                     : m.ejecutada ? <span style={{ color: dif ? "#b91c1c" : "#047857", fontWeight: 700 }}>ejecutada ✓</span> : <span style={{ color: dif ? "#b91c1c" : "#b45309", fontWeight: 700 }}>no ejecutada</span>}</td>
                   <td style={td}>
