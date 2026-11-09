@@ -693,9 +693,18 @@ function Configuracion({ quien }) {
         </table>
       </div>
       <div>
+        <div style={{ fontWeight: 800, color: C.navy, marginBottom: 6 }}>Plazos de auditorías y bitácora</div>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, background: "#fff", border: `1px solid ${C.borde}`, marginBottom: 18 }}>
+          <tbody>{cfg.filter((c) => /^(aud_|flota_|auditoria_)/.test(c.clave)).map((c) => (
+            <tr key={c.clave}>
+              <td style={{ ...celda, width: 260 }}><b>{c.descripcion || c.clave}</b><div style={{ fontSize: 11.5, color: C.tenue }}>{c.clave}</div></td>
+              <td style={celda}><input style={{ ...inp, width: 140 }} defaultValue={c.valor || ""} onBlur={(e) => { if (e.target.value !== (c.valor || "")) guardar("ca_config_cl", c.clave, "valor", e.target.value); }} /></td>
+            </tr>
+          ))}</tbody>
+        </table>
         <div style={{ fontWeight: 800, color: C.navy, marginBottom: 6 }}>Correos y enlaces</div>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, background: "#fff", border: `1px solid ${C.borde}` }}>
-          <tbody>{cfg.map((c) => (
+          <tbody>{cfg.filter((c) => !/^(aud_|flota_|auditoria_)/.test(c.clave)).map((c) => (
             <tr key={c.clave}>
               <td style={{ ...celda, width: 260 }}><b>{c.clave}</b><div style={{ fontSize: 11.5, color: C.tenue }}>{c.descripcion}</div></td>
               <td style={celda}><input style={{ ...inp, width: "100%" }} defaultValue={c.valor || ""} onBlur={(e) => { if (e.target.value !== (c.valor || "")) guardar("ca_config_cl", c.clave, "valor", e.target.value); }} /></td>
