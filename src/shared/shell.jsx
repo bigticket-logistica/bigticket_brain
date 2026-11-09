@@ -26,8 +26,7 @@ export function ShellBrain({ pais, paisCode, usuario, mods, labels, tab, onTab, 
   const [hora, setHora] = useState(horaDe(pais));
   useEffect(() => { setHora(horaDe(pais)); const t = setInterval(() => setHora(horaDe(pais)), 30000); return () => clearInterval(t); }, [pais]);
   const { listas, activas, elegir } = useMenuSubtabs();
-  const [abierto, setAbierto] = useState(tab);           // madre desplegada en el menú
-  useEffect(() => { setAbierto(tab); }, [tab]);
+  const [abierto, setAbierto] = useState(null);          // madre desplegada en el menú: todas contraídas al abrir; se despliega solo al hacer clic
   const ir = (k) => { setMenu(false); onTab(k); window.scrollTo(0, 0); };
   const irSub = (k, id) => { elegir(k, id); ir(k); };
   return (
