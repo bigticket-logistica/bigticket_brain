@@ -15182,6 +15182,7 @@ function MantenedorSupervisores() {
 
 const TABS_CUIDADO_CL = [
   { id: "ca_tareas", label: "Tareas del supervisor", desc: "Detenciones, hallazgos y avisos al supervisor" },
+  { id: "ca_auditorias", label: "Auditorías", desc: "Revisión de auditorías de terceros con Biggy" },
   { id: "ca_nosalidas", label: "No salidas", desc: "Flota propia sin ruta y su motivo" },
   { id: "ca_incumplimientos", label: "Incumplimientos", desc: "Tareas vencidas por supervisor y mes" },
   { id: "ca_config", label: "Configuración", desc: "Plazos, justificaciones y correos" },
