@@ -8,6 +8,8 @@
 //   · Auditorías: bandeja de Maycol. Cada foto al lado de la anterior, lo que
 //     dijo Biggy, checklist y veredicto (vw_ca_auditorias_brain_cl +
 //     fn_ca_auditoria_detalle_brain / fn_ca_auditoria_veredicto). Sin correos.
+//     "Pedir auditoría" por evento (nuevo, traspaso entrega + recepción, taller,
+//     no programada): fn_ca_auditoria_pedir; lista en vw_ca_solicitudes_brain_cl.
 //   · No salidas: fn_ca_no_salidas_dia + avisos enviados (ca_avisos_cl).
 //   · Incumplimientos: tareas vencidas sin respuesta, por supervisor y mes.
 //   · Configuración: plazos por tipo, justificaciones y correos (ca_*_cl).
@@ -278,8 +280,16 @@ function Auditorias({ quien }) {
   const [error, setError] = useState("");
   const [f, setF] = useState({ estado: "por_revisar", tipo: "", texto: "" });
   const [abierta, setAbierta] = useState(null);
+  const [pedir, setPedir] = useState(false);
+  const [pedidas, setPedidas] = useState([]);
   const cargar = async () => {
-    try { setFilas(await api("vw_ca_auditorias_brain_cl?select=*&order=enviada_at.desc&limit=500")); setError(""); }
+    try {
+      const [a, p] = await Promise.all([
+        api("vw_ca_auditorias_brain_cl?select=*&order=enviada_at.desc&limit=500"),
+        api("vw_ca_solicitudes_brain_cl?select=*&order=creada_at.desc&limit=300"),
+      ]);
+      setFilas(a); setPedidas(p); setError("");
+    }
     catch (e) { setError("No se pudieron cargar las auditorías: " + e.message); setFilas([]); }
   };
   useEffect(() => { cargar(); const i = setInterval(cargar, 60000); return () => clearInterval(i); }, []);
@@ -309,16 +319,19 @@ function Auditorias({ quien }) {
       </div>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 12 }}>
         <select style={inp} value={f.estado} onChange={(e) => setF({ ...f, estado: e.target.value })}>
-          <option value="por_revisar">Por revisar</option><option value="devueltas">Devueltas al tercero</option><option value="aprobadas">Aprobadas</option><option value="corregidas">Corregidas a Biggy</option><option value="todas">Todas</option>
+          <option value="por_revisar">Por revisar</option><option value="devueltas">Devueltas al tercero</option><option value="aprobadas">Aprobadas</option><option value="corregidas">Corregidas a Biggy</option><option value="pedidas">Pedidas por evento</option><option value="todas">Todas</option>
         </select>
         <select style={inp} value={f.tipo} onChange={(e) => setF({ ...f, tipo: e.target.value })}>
           <option value="">Vehículo y limpieza</option><option value="vehiculo">Vehículo</option><option value="limpieza">Limpieza</option>
         </select>
         <input style={{ ...inp, minWidth: 220 }} placeholder="Patente, empresa, CECO o quién la hizo" value={f.texto} onChange={(e) => setF({ ...f, texto: e.target.value })} />
         <button style={btn("sec")} onClick={cargar}>Actualizar</button>
+        <button style={btn()} onClick={() => setPedir(!pedir)}>{pedir ? "Cerrar" : "+ Pedir auditoría"}</button>
       </div>
+      {pedir && <PedirAuditoria quien={quien} onListo={() => { setPedir(false); setF({ ...f, estado: "pedidas" }); cargar(); }} />}
       {error && <div style={{ color: C.rojo, fontSize: 13, marginBottom: 10 }}>{error}</div>}
-      {filas === null ? <div style={{ color: C.tenue }}>Cargando…</div> : (
+      {f.estado === "pedidas" ? <Pedidas filas={pedidas.filter((x) => !f.texto || `${x.patente} ${x.empresa || ""}`.toLowerCase().includes(f.texto.toLowerCase()))} quien={quien} onCambio={cargar} /> :
+       filas === null ? <div style={{ color: C.tenue }}>Cargando…</div> : (
         <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 900 }}>
             <thead><tr style={{ background: C.fondo, textAlign: "left" }}>
@@ -333,7 +346,7 @@ function Auditorias({ quien }) {
                   <tr key={x.id} style={{ cursor: "pointer", background: abierta === x.id ? "#fafbfd" : "#fff" }} onClick={() => setAbierta(abierta === x.id ? null : x.id)}>
                     <td style={{ ...celda, fontWeight: 800, color: C.navy }}>{x.patente}</td>
                     <td style={celda}>{x.empresa || "—"}<div style={{ color: C.tenue, fontSize: 12 }}>{x.ceco || ""}</div></td>
-                    <td style={celda}>{AU_TIPO[x.tipo] || x.tipo}</td>
+                    <td style={celda}>{x.subtipo_nombre || AU_TIPO[x.tipo] || x.tipo}{x.solicitud_motivo && <div style={{ color: C.tenue, fontSize: 12 }}>{x.solicitud_motivo}</div>}</td>
                     <td style={celda}>{x.periodo}</td>
                     <td style={celda}>{fh(x.enviada_at)}</td>
                     <td style={celda}>{x.hecha_por_nombre || "—"}</td>
@@ -347,6 +360,92 @@ function Auditorias({ quien }) {
           </table>
         </div>
       )}
+    </div>
+  );
+}
+
+function PedirAuditoria({ quien, onListo }) {
+  const [tipos, setTipos] = useState([]);
+  const [empresas, setEmpresas] = useState([]);
+  const [d, setD] = useState({ subtipo: "traspaso", patente: "", motivo: "", rut: "", vence: "" });
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+  useEffect(() => {
+    api("ca_auditoria_subtipos_cl?select=*&activo=eq.true&order=orden").then(setTipos).catch(() => setTipos([]));
+    rpc("fn_ca_empresas_portal_cl").then(setEmpresas).catch(() => setEmpresas([]));
+  }, []);
+  const opciones = [{ codigo: "traspaso", nombre: "Traspaso a otro conductor (entrega + recepción)" },
+    ...tipos.filter((t) => !t.codigo.startsWith("traspaso_"))];
+  const plazo = d.subtipo === "traspaso" ? tipos.find((t) => t.codigo === "traspaso_entrega")?.plazo_horas : tipos.find((t) => t.codigo === d.subtipo)?.plazo_horas;
+  const guardar = async () => {
+    if (!d.patente.trim()) return setMsg("Falta la patente.");
+    if (d.subtipo === "traspaso" && !d.rut) return setMsg("Elige la empresa que recibe el vehículo.");
+    setBusy(true); setMsg("");
+    try {
+      const n = await rpc("fn_ca_auditoria_pedir", { p_subtipo: d.subtipo, p_patente: d.patente, p_motivo: d.motivo || null,
+        p_rut_recibe: d.subtipo === "traspaso" ? d.rut : null, p_vence: d.vence ? new Date(d.vence).toISOString() : null, p_por: quien });
+      alert(n === 2 ? "Listo: se pidieron 2 auditorías (la de quien entrega y la de quien recibe)." : "Listo: auditoría pedida.");
+      onListo();
+    } catch (e) { setMsg(e.message); } finally { setBusy(false); }
+  };
+  return (
+    <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, padding: 16, marginBottom: 14 }}>
+      <div style={{ fontWeight: 800, color: C.navy, marginBottom: 10 }}>Pedir auditoría por evento</div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 10 }}>
+        <label style={{ fontSize: 12, color: C.suave }}>Tipo<select style={{ ...inp, width: "100%" }} value={d.subtipo} onChange={(e) => setD({ ...d, subtipo: e.target.value })}>
+          {opciones.map((t) => <option key={t.codigo} value={t.codigo}>{t.nombre}</option>)}</select></label>
+        <label style={{ fontSize: 12, color: C.suave }}>Patente<input style={{ ...inp, width: "100%" }} value={d.patente} onChange={(e) => setD({ ...d, patente: e.target.value.toUpperCase() })} placeholder="JFTC63" /></label>
+        {d.subtipo === "traspaso" && (
+          <label style={{ fontSize: 12, color: C.suave }}>Empresa que recibe<select style={{ ...inp, width: "100%" }} value={d.rut} onChange={(e) => setD({ ...d, rut: e.target.value })}>
+            <option value="">Elige…</option>{[...empresas].sort((a, b) => String(a.empresa).localeCompare(String(b.empresa))).map((x) => <option key={x.rut} value={x.rut}>{x.empresa} · {x.rut}</option>)}</select></label>
+        )}
+        <label style={{ fontSize: 12, color: C.suave }}>Vence (opcional)<input type="datetime-local" style={{ ...inp, width: "100%" }} value={d.vence} onChange={(e) => setD({ ...d, vence: e.target.value })} /></label>
+      </div>
+      <label style={{ fontSize: 12, color: C.suave, display: "block", marginTop: 10 }}>Motivo (lo ve el transportista)<input style={{ ...inp, width: "100%" }} value={d.motivo} onChange={(e) => setD({ ...d, motivo: e.target.value })} placeholder="Ej.: cambio de conductor desde el lunes / cita en taller Kovacs el jueves 10:00" /></label>
+      <div style={{ fontSize: 12, color: C.suave, marginTop: 8 }}>
+        {d.subtipo === "traspaso" ? "Se piden dos auditorías: la empresa que entrega certifica cómo lo deja y la que recibe, cómo lo recibe. " : ""}
+        Si no eliges el vencimiento, el plazo es de {plazo || 24} h. Al transportista le aparece en su portal; no se envía correo.
+      </div>
+      {msg && <div style={{ color: C.rojo, fontSize: 13, marginTop: 8 }}>{msg}</div>}
+      <div style={{ marginTop: 10 }}><button style={btn()} disabled={busy} onClick={guardar}>{busy ? "Pidiendo…" : "Pedir auditoría"}</button></div>
+    </div>
+  );
+}
+
+function Pedidas({ filas, quien, onCambio }) {
+  const [busy, setBusy] = useState(false);
+  const celda = { padding: "8px 10px", borderBottom: `1px solid ${C.borde}`, fontSize: 13, verticalAlign: "top" };
+  const cancelar = async (id) => {
+    if (!window.confirm("¿Cancelar esta auditoría pedida?")) return;
+    setBusy(true);
+    try { await rpc("fn_ca_auditoria_cancelar", { p_id: id, p_por: quien }); onCambio(); } catch (e) { alert(e.message); } finally { setBusy(false); }
+  };
+  const estado = (x) => x.estado === "cancelada" ? ["Cancelada", C.fondo, C.suave]
+    : x.enviada_at ? [x.atrasada ? "Hecha fuera de plazo" : "Hecha", C.verdeT, C.verde]
+    : x.auditoria_id ? [x.atrasada ? "En curso · atrasada" : "En curso", C.ambarT, C.ambar]
+    : x.atrasada ? ["Atrasada", C.rojoT, C.rojo] : ["Pendiente", C.ambarT, C.ambar];
+  return (
+    <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, overflowX: "auto" }}>
+      <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 900 }}>
+        <thead><tr style={{ background: C.fondo, textAlign: "left" }}>
+          {["Patente", "Tipo", "Empresa que la hace", "Motivo", "Vence", "Pedida por", "Estado", ""].map((h) => <th key={h} style={{ ...celda, fontSize: 12, color: C.suave }}>{h}</th>)}
+        </tr></thead>
+        <tbody>
+          {filas.length === 0 && <tr><td colSpan={8} style={{ ...celda, color: C.tenue, textAlign: "center" }}>No hay auditorías pedidas.</td></tr>}
+          {filas.map((x) => { const e = estado(x); return (
+            <tr key={x.id}>
+              <td style={{ ...celda, fontWeight: 800, color: C.navy }}>{x.patente}</td>
+              <td style={celda}>{x.subtipo_nombre}</td>
+              <td style={celda}>{x.empresa || "—"}<div style={{ color: C.tenue, fontSize: 12 }}>{x.rut_empresa}</div></td>
+              <td style={celda}>{x.motivo || "—"}</td>
+              <td style={celda}>{fh(x.vence_at)}</td>
+              <td style={celda}>{x.creada_por}<div style={{ color: C.tenue, fontSize: 12 }}>{fh(x.creada_at)}</div></td>
+              <td style={celda}>{chip(e[0], e[1], e[2])}</td>
+              <td style={celda}>{x.estado === "pendiente" && !x.enviada_at && <button style={btn("sec")} disabled={busy} onClick={() => cancelar(x.id)}>Cancelar</button>}</td>
+            </tr>
+          ); })}
+        </tbody>
+      </table>
     </div>
   );
 }
