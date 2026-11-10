@@ -10,6 +10,10 @@
 //     fn_ca_auditoria_detalle_brain / fn_ca_auditoria_veredicto). Sin correos.
 //     "Pedir auditoría" por evento (nuevo, traspaso entrega + recepción, taller,
 //     no programada): fn_ca_auditoria_pedir; lista en vw_ca_solicitudes_brain_cl.
+//   · Estado de flota: fn_ca_estado_flota_cl (en ruta, alertas de domicilio y
+//     GPS, no salida, jefatura) y % de uso contra la meta. Sin avisos.
+//   · Mantenciones: programa por km (fn_mnt_programa_cl, odómetro de Geotab),
+//     historial migrado de la biblia, pautas por modelo y talleres con historial.
 //   · No salidas: fn_ca_no_salidas_dia + avisos enviados (ca_avisos_cl).
 //   · Incumplimientos: tareas vencidas sin respuesta, por supervisor y mes.
 //   · Configuración: plazos por tipo, justificaciones y correos (ca_*_cl).
@@ -57,6 +61,8 @@ const inp = { border: `1px solid ${C.borde}`, borderRadius: 8, padding: "7px 10p
 
 export default function CuidadoActivoCL({ usuario, sub }) {
   const quien = usuario?.email || usuario?.nombre || "brain";
+  if (sub === "ca_flota") return <EstadoFlota />;
+  if (sub === "ca_mantenciones") return <Mantenciones quien={quien} />;
   if (sub === "ca_auditorias") return <Auditorias quien={quien} />;
   if (sub === "ca_nosalidas") return <NoSalidas />;
   if (sub === "ca_incumplimientos") return <Incumplimientos />;
@@ -547,6 +553,287 @@ function DetalleAuditoria({ a, quien, onListo }) {
         </div>
         {msg && <div style={{ color: C.rojo, fontSize: 13, marginTop: 8 }}>{msg}</div>}
       </div>
+    </div>
+  );
+}
+
+// ── Estado de flota ─────────────────────────────────────────────────────────
+const FL_ESTADO = {
+  en_ruta: ["En ruta", C.verdeT, C.verde], salio: ["Salió", C.verdeT, C.verde],
+  en_bodega: ["Con viaje · en bodega", "#eef2f8", C.navy], por_salir: ["Con viaje · por salir", "#eef2f8", C.navy],
+  alerta_domicilio: ["Alerta · en domicilio", C.rojoT, C.rojo], alerta_gps: ["Alerta · GPS", C.ambarT, C.ambar],
+  no_salida: ["No salida", C.rojoT, C.rojo], jefatura: ["Asignada a jefatura", C.fondo, C.suave], otra_operacion: ["Otra operación", C.fondo, C.suave],
+};
+function EstadoFlota() {
+  const [fecha, setFecha] = useState(hoyCL());
+  const [filas, setFilas] = useState(null);
+  const [meta, setMeta] = useState(90);
+  const [f, setF] = useState({ estado: "", ceco: "", texto: "" });
+  const [hora, setHora] = useState(null);
+  const cargar = async () => {
+    try {
+      const [r, m] = await Promise.all([rpc("fn_ca_estado_flota_cl", { p_fecha: fecha }), api("ca_config_cl?clave=eq.flota_meta_uso&select=valor")]);
+      setFilas(r || []); setHora(new Date());
+      const v = parseFloat(m?.[0]?.valor); if (Number.isFinite(v)) setMeta(v);
+    } catch (e) { setFilas([]); }
+  };
+  useEffect(() => { setFilas(null); cargar(); const i = setInterval(cargar, 300000); return () => clearInterval(i); }, [fecha]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const op = (filas || []).filter((x) => x.grupo === "meli");
+  const conViaje = op.filter((x) => x.estado !== "no_salida").length;
+  const uso = op.length ? Math.round((conViaje / op.length) * 1000) / 10 : 0;
+  const n = (e) => (filas || []).filter((x) => x.estado === e).length;
+  const cecos = [...new Set((filas || []).map((x) => x.ceco))].sort();
+  const vis = (filas || []).filter((x) => (!f.estado || (f.estado === "alertas" ? x.estado.startsWith("alerta") : x.estado === f.estado))
+    && (!f.ceco || x.ceco === f.ceco)
+    && (!f.texto || `${x.patente} ${x.supervisor || ""} ${x.empresa || ""} ${x.conductor || ""}`.toLowerCase().includes(f.texto.toLowerCase())));
+  const kpi = (t, v, c, est) => (
+    <div onClick={() => est !== undefined && setF({ ...f, estado: f.estado === est ? "" : est })}
+      style={{ background: "#fff", border: `1px solid ${f.estado && f.estado === est ? c : C.borde}`, borderRadius: 12, padding: "12px 16px", flex: "1 1 140px", cursor: est !== undefined ? "pointer" : "default" }}>
+      <div style={{ fontSize: 24, fontWeight: 800, color: c }}>{v}</div><div style={{ fontSize: 12.5, color: C.suave }}>{t}</div>
+    </div>
+  );
+  const celda = { padding: "8px 10px", borderBottom: `1px solid ${C.borde}`, fontSize: 13, verticalAlign: "top" };
+  const esHoy = fecha === hoyCL();
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
+        <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, padding: "12px 16px", flex: "1 1 200px" }}>
+          <div style={{ fontSize: 24, fontWeight: 800, color: uso >= meta ? C.verde : C.naranja || "#FF6600" }}>{filas ? `${uso}%` : "…"}</div>
+          <div style={{ fontSize: 12.5, color: C.suave }}>Uso del día · meta {meta}% · {conViaje} de {op.length} vehículos MELI con viaje</div>
+        </div>
+        {esHoy && kpi("En ruta", n("en_ruta"), C.verde, "en_ruta")}
+        {esHoy && kpi("Alertas", n("alerta_domicilio") + n("alerta_gps"), C.rojo, "alertas")}
+        {kpi("No salida", n("no_salida"), C.rojo, "no_salida")}
+        {kpi("Sin motivo", (filas || []).filter((x) => x.estado === "no_salida" && !x.motivo).length, C.ambar)}
+        {kpi("Jefatura / otra op.", n("jefatura") + n("otra_operacion"), C.suave)}
+      </div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 12 }}>
+        <input type="date" style={inp} value={fecha} max={hoyCL()} onChange={(e) => e.target.value && setFecha(e.target.value)} />
+        <select style={inp} value={f.estado} onChange={(e) => setF({ ...f, estado: e.target.value })}>
+          <option value="">Todos los estados</option><option value="alertas">Solo alertas</option>
+          {Object.entries(FL_ESTADO).map(([k, v]) => <option key={k} value={k}>{v[0]}</option>)}
+        </select>
+        <select style={inp} value={f.ceco} onChange={(e) => setF({ ...f, ceco: e.target.value })}>
+          <option value="">Todos los CECO</option>{cecos.map((c) => <option key={c} value={c}>{c}</option>)}
+        </select>
+        <input style={{ ...inp, minWidth: 220 }} placeholder="Patente, supervisor, empresa o conductor" value={f.texto} onChange={(e) => setF({ ...f, texto: e.target.value })} />
+        <button style={btn("sec")} onClick={cargar}>Actualizar</button>
+        <span style={{ fontSize: 12, color: C.tenue }}>{esHoy ? `GPS al ${hora ? hora.toLocaleTimeString("es-CL", { hour: "2-digit", minute: "2-digit" }) : "…"} · se actualiza cada 5 min` : "Fecha pasada: solo salió / no salió"}</span>
+      </div>
+      {filas === null ? <div style={{ color: C.tenue }}>Cargando…</div> : (
+        <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 960 }}>
+            <thead><tr style={{ background: C.fondo, textAlign: "left" }}>
+              {["Patente", "CECO", "Supervisor", "Empresa · conductor", "Estado", "Viaje", "GPS", "Motivo no salida"].map((h) => <th key={h} style={{ ...celda, fontSize: 12, color: C.suave }}>{h}</th>)}
+            </tr></thead>
+            <tbody>
+              {vis.length === 0 && <tr><td colSpan={8} style={{ ...celda, color: C.tenue, textAlign: "center" }}>Nada con este filtro.</td></tr>}
+              {vis.map((x) => { const e = FL_ESTADO[x.estado] || [x.estado, C.fondo, C.suave]; return (
+                <tr key={x.patente}>
+                  <td style={{ ...celda, fontWeight: 800, color: C.navy }}>{x.patente}</td>
+                  <td style={celda}>{x.ceco}</td>
+                  <td style={celda}>{x.supervisor || "—"}</td>
+                  <td style={celda}>{x.empresa || "—"}{x.conductor && <div style={{ color: C.tenue, fontSize: 12 }}>{x.conductor}</div>}</td>
+                  <td style={celda}>{chip(e[0], e[1], e[2])}</td>
+                  <td style={celda}>{x.rutas ? <>{x.hora_ruta ? `${x.hora_ruta} · ` : ""}<span style={{ color: C.tenue, fontSize: 12 }}>{x.rutas}</span></> : "—"}</td>
+                  <td style={{ ...celda, fontSize: 12, color: C.suave }}>{x.gps_fecha ? fh(x.gps_fecha) : "sin equipo"}{x.en_bodega ? " · en bodega" : x.en_domicilio ? " · en domicilio" : ""}</td>
+                  <td style={celda}>{x.estado === "no_salida" ? (x.motivo ? chip(x.motivo, C.fondo, C.suave) : chip("Sin motivo", C.rojoT, C.rojo)) : "—"}{x.comentario ? <div style={{ fontSize: 12, color: C.suave, marginTop: 3 }}>{x.comentario}</div> : null}</td>
+                </tr>
+              ); })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Mantenciones: programa por km, pautas y talleres ───────────────────────
+const MN_ESTADO = {
+  vencida: ["Vencida", C.rojoT, C.rojo], proxima: ["Próxima", C.ambarT, C.ambar], al_dia: ["Al día", C.verdeT, C.verde],
+  sin_pauta: ["Sin pauta", C.fondo, C.suave], sin_km: ["Sin km de Geotab", C.fondo, C.suave], inactivo: ["Inactivo", C.fondo, C.tenue],
+};
+const MN_TIPO = { mantencion: "Mantención", reparacion: "Reparación", siniestro: "Siniestro", otro: "Otro", garantia: "Garantía" };
+const kmf = (v) => (v === null || v === undefined ? "—" : Number(v).toLocaleString("es-CL"));
+const fd = (s) => (s ? new Date(s + "T12:00:00").toLocaleDateString("es-CL") : "—");
+function Mantenciones({ quien }) {
+  const [vista, setVista] = useState("programa");
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
+        {[["programa", "Programa"], ["pautas", "Pautas por modelo"], ["talleres", "Talleres"]].map(([k, t]) => (
+          <button key={k} style={btn(vista === k ? undefined : "sec")} onClick={() => setVista(k)}>{t}</button>
+        ))}
+      </div>
+      {vista === "programa" && <ProgramaMnt />}
+      {vista === "pautas" && <PautasMnt quien={quien} />}
+      {vista === "talleres" && <TalleresMnt quien={quien} />}
+    </div>
+  );
+}
+function ProgramaMnt() {
+  const [filas, setFilas] = useState(null);
+  const [f, setF] = useState({ estado: "", texto: "" });
+  const [abierta, setAbierta] = useState(null);
+  useEffect(() => { rpc("fn_mnt_programa_cl").then(setFilas).catch(() => setFilas([])); }, []);
+  const n = (e) => (filas || []).filter((x) => x.estado === e).length;
+  const vis = (filas || []).filter((x) => (!f.estado ? x.estado !== "inactivo" : x.estado === f.estado)
+    && (!f.texto || `${x.patente} ${x.modelo || ""} ${x.empresa || ""} ${x.ceco || ""}`.toLowerCase().includes(f.texto.toLowerCase())));
+  const kpi = (t, v, c, e) => (
+    <div onClick={() => setF({ ...f, estado: f.estado === e ? "" : e })} style={{ background: "#fff", border: `1px solid ${f.estado === e ? c : C.borde}`, borderRadius: 12, padding: "12px 16px", flex: "1 1 130px", cursor: "pointer" }}>
+      <div style={{ fontSize: 24, fontWeight: 800, color: c }}>{v}</div><div style={{ fontSize: 12.5, color: C.suave }}>{t}</div>
+    </div>
+  );
+  const celda = { padding: "8px 10px", borderBottom: `1px solid ${C.borde}`, fontSize: 13, verticalAlign: "top" };
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
+        {kpi("Vencidas", n("vencida"), C.rojo, "vencida")}
+        {kpi("Próximas", n("proxima"), C.ambar, "proxima")}
+        {kpi("Al día", n("al_dia"), C.verde, "al_dia")}
+        {kpi("Sin pauta", n("sin_pauta"), C.suave, "sin_pauta")}
+        {kpi("Sin km de Geotab", n("sin_km"), C.suave, "sin_km")}
+        {kpi("Inactivos", n("inactivo"), C.tenue, "inactivo")}
+      </div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 12 }}>
+        <input style={{ ...inp, minWidth: 240 }} placeholder="Patente, modelo, empresa o CECO" value={f.texto} onChange={(e) => setF({ ...f, texto: e.target.value })} />
+        <span style={{ fontSize: 12, color: C.tenue }}>Km de Geotab, se actualiza cada 6 h. Próxima = última pauta hecha + intervalo del modelo.</span>
+      </div>
+      {filas === null ? <div style={{ color: C.tenue }}>Cargando…</div> : (
+        <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1000 }}>
+            <thead><tr style={{ background: C.fondo, textAlign: "left" }}>
+              {["Patente", "Modelo · CECO", "Empresa", "Última mantención", "Km actual", "Próxima pauta", "Faltan", "Fecha estimada", "Taller autorizado", "Estado"].map((h) => <th key={h} style={{ ...celda, fontSize: 12, color: C.suave }}>{h}</th>)}
+            </tr></thead>
+            <tbody>
+              {vis.length === 0 && <tr><td colSpan={10} style={{ ...celda, color: C.tenue, textAlign: "center" }}>Nada con este filtro.</td></tr>}
+              {vis.map((x) => { const e = MN_ESTADO[x.estado] || [x.estado, C.fondo, C.suave]; return [
+                <tr key={x.patente} style={{ cursor: "pointer", background: abierta === x.patente ? "#fafbfd" : "#fff" }} onClick={() => setAbierta(abierta === x.patente ? null : x.patente)}>
+                  <td style={{ ...celda, fontWeight: 800, color: C.navy }}>{x.patente}</td>
+                  <td style={celda}>{x.modelo || "—"}<div style={{ color: C.tenue, fontSize: 12 }}>{x.ceco}</div></td>
+                  <td style={celda}>{x.empresa || "—"}</td>
+                  <td style={celda}>{x.ultima_pauta ? <>Pauta {kmf(x.ultima_pauta)}<div style={{ color: C.tenue, fontSize: 12 }}>{fd(x.ultima_fecha)} · {kmf(x.ultima_km)} km · {x.ultima_taller || ""}</div></> : <span style={{ color: C.tenue }}>Sin registro</span>}</td>
+                  <td style={celda}>{kmf(x.km_actual)}{x.km_fecha && <div style={{ color: C.tenue, fontSize: 12 }}>{fd(x.km_fecha)}</div>}</td>
+                  <td style={celda}>{x.proxima_pauta ? kmf(x.proxima_pauta) : "—"}{x.intervalo && <div style={{ color: C.tenue, fontSize: 12 }}>cada {kmf(x.intervalo)}</div>}</td>
+                  <td style={{ ...celda, fontWeight: 700, color: x.faltan_km <= 0 ? C.rojo : C.texto }}>{x.faltan_km === null || x.faltan_km === undefined ? "—" : x.faltan_km <= 0 ? `+${kmf(-x.faltan_km)} pasado` : `${kmf(x.faltan_km)} km`}</td>
+                  <td style={celda}>{x.fecha_estimada ? fd(x.fecha_estimada) : "—"}{x.km_dia && <div style={{ color: C.tenue, fontSize: 12 }}>{kmf(Math.round(x.km_dia))} km/día</div>}</td>
+                  <td style={celda}>{x.taller || "—"}</td>
+                  <td style={celda}>{chip(e[0], e[1], e[2])}</td>
+                </tr>,
+                abierta === x.patente && <tr key={x.patente + "h"}><td colSpan={10} style={{ padding: 0, borderBottom: `1px solid ${C.borde}` }}><HistorialMnt patente={x.patente} /></td></tr>,
+              ]; })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+function HistorialMnt({ patente }) {
+  const [h, setH] = useState(null);
+  const [tipo, setTipo] = useState("");
+  useEffect(() => { api(`ca_mnt_historial_cl?select=*&patente=eq.${encodeURIComponent(patente)}&order=fecha.desc&limit=200`).then(setH).catch(() => setH([])); }, [patente]);
+  if (!h) return <div style={{ padding: 14, color: C.tenue, fontSize: 13 }}>Cargando historial…</div>;
+  const vis = h.filter((x) => !tipo || x.tipo === tipo);
+  const total = vis.reduce((s, x) => s + (Number(x.precio_total) || Number(x.costo) || 0), 0);
+  return (
+    <div style={{ padding: 14, background: "#fafbfd" }}>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8, flexWrap: "wrap" }}>
+        <b style={{ color: C.navy }}>Historial de {patente}</b>
+        <select style={inp} value={tipo} onChange={(e) => setTipo(e.target.value)}><option value="">Todo</option>{Object.entries(MN_TIPO).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select>
+        <span style={{ fontSize: 12.5, color: C.suave }}>{vis.length} registros · ${Math.round(total).toLocaleString("es-CL")}</span>
+      </div>
+      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, background: "#fff" }}>
+        <thead><tr style={{ background: C.fondo, textAlign: "left" }}>{["Fecha", "Tipo", "Km", "Detalle", "Taller", "Costo", "Días"].map((t) => <th key={t} style={{ padding: "6px 8px", color: C.suave }}>{t}</th>)}</tr></thead>
+        <tbody>{vis.map((x) => (
+          <tr key={x.id} style={{ borderTop: `1px solid ${C.borde}` }}>
+            <td style={{ padding: "6px 8px" }}>{fd(x.fecha)}</td><td style={{ padding: "6px 8px" }}>{MN_TIPO[x.tipo] || x.tipo}</td>
+            <td style={{ padding: "6px 8px" }}>{kmf(x.km)}</td>
+            <td style={{ padding: "6px 8px" }}>{x.tipo === "mantencion" && x.pauta_km ? `Pauta ${kmf(x.pauta_km)}` : x.detalle || x.item || "—"}</td>
+            <td style={{ padding: "6px 8px" }}>{x.taller || "—"}</td>
+            <td style={{ padding: "6px 8px" }}>{x.costo || x.precio_total ? `$${Math.round(Number(x.precio_total) || Number(x.costo)).toLocaleString("es-CL")}` : "—"}</td>
+            <td style={{ padding: "6px 8px" }}>{x.dias_taller ?? "—"}</td>
+          </tr>
+        ))}</tbody>
+      </table>
+    </div>
+  );
+}
+function PautasMnt({ quien }) {
+  const [p, setP] = useState(null);
+  const [modelos, setModelos] = useState([]);
+  const [nuevo, setNuevo] = useState({ modelo: "", km: "", taller: "" });
+  const [msg, setMsg] = useState("");
+  const cargar = () => {
+    api("ca_mnt_pautas_cl?select=*&order=modelo").then(setP).catch(() => setP([]));
+    api("ca_activos_cl?select=modelo").then((r) => setModelos([...new Set((r || []).map((x) => x.modelo).filter(Boolean))].sort())).catch(() => {});
+  };
+  useEffect(cargar, []);
+  const guardar = async (modelo, km, taller) => {
+    setMsg("");
+    try { await rpc("fn_mnt_guardar_pauta", { p_modelo: modelo, p_km: Number(km), p_taller: taller || null, p_por: quien }); cargar(); setNuevo({ modelo: "", km: "", taller: "" }); }
+    catch (e) { setMsg(e.message); }
+  };
+  const sinPauta = modelos.filter((m) => !(p || []).some((x) => x.modelo === m));
+  return (
+    <div>
+      {sinPauta.length > 0 && <div style={{ background: C.ambarT, color: C.ambar, borderRadius: 10, padding: "10px 12px", fontSize: 13, marginBottom: 12 }}>Modelos de la flota sin pauta: <b>{sinPauta.join(", ")}</b>. Sin pauta no se calcula su próxima mantención.</div>}
+      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, background: "#fff", border: `1px solid ${C.borde}` }}>
+        <thead><tr style={{ background: C.fondo, textAlign: "left" }}>{["Modelo", "Cada (km)", "Taller autorizado"].map((t) => <th key={t} style={{ padding: "8px 10px", color: C.suave, fontSize: 12 }}>{t}</th>)}</tr></thead>
+        <tbody>
+          {(p || []).map((x) => (
+            <tr key={x.modelo} style={{ borderTop: `1px solid ${C.borde}` }}>
+              <td style={{ padding: "8px 10px", fontWeight: 700 }}>{x.modelo}</td>
+              <td style={{ padding: "8px 10px" }}><input type="number" style={{ ...inp, width: 120 }} defaultValue={x.km_intervalo} onBlur={(e) => Number(e.target.value) !== x.km_intervalo && guardar(x.modelo, e.target.value, x.taller)} /></td>
+              <td style={{ padding: "8px 10px" }}><input style={{ ...inp, width: 280 }} defaultValue={x.taller || ""} onBlur={(e) => e.target.value !== (x.taller || "") && guardar(x.modelo, x.km_intervalo, e.target.value)} /></td>
+            </tr>
+          ))}
+          <tr style={{ borderTop: `1px solid ${C.borde}`, background: "#fafbfd" }}>
+            <td style={{ padding: "8px 10px" }}><input list="mn-modelos" style={{ ...inp, width: 240 }} placeholder="Nuevo modelo" value={nuevo.modelo} onChange={(e) => setNuevo({ ...nuevo, modelo: e.target.value })} /><datalist id="mn-modelos">{sinPauta.map((m) => <option key={m} value={m} />)}</datalist></td>
+            <td style={{ padding: "8px 10px" }}><input type="number" style={{ ...inp, width: 120 }} placeholder="km" value={nuevo.km} onChange={(e) => setNuevo({ ...nuevo, km: e.target.value })} /></td>
+            <td style={{ padding: "8px 10px" }}><input style={{ ...inp, width: 200 }} placeholder="Taller" value={nuevo.taller} onChange={(e) => setNuevo({ ...nuevo, taller: e.target.value })} /> <button style={btn()} onClick={() => guardar(nuevo.modelo, nuevo.km, nuevo.taller)}>Agregar</button></td>
+          </tr>
+        </tbody>
+      </table>
+      {msg && <div style={{ color: C.rojo, fontSize: 13, marginTop: 8 }}>{msg}</div>}
+      <div style={{ fontSize: 12, color: C.tenue, marginTop: 8 }}>Cada cambio queda en el historial (ca_mnt_cambios_cl) con quién y cuándo.</div>
+    </div>
+  );
+}
+function TalleresMnt({ quien }) {
+  const [t, setT] = useState(null);
+  const [nuevo, setNuevo] = useState("");
+  const [msg, setMsg] = useState("");
+  const cargar = () => api("ca_mnt_talleres_cl?select=*&order=nombre").then(setT).catch(() => setT([]));
+  useEffect(() => { cargar(); }, []);
+  const guardar = async (nombre, campo, valor) => {
+    setMsg("");
+    try { await rpc("fn_mnt_guardar_taller", { p_nombre: nombre, p_campo: campo, p_valor: valor, p_por: quien }); if (campo === "nuevo" || campo === "activo") cargar(); }
+    catch (e) { setMsg(e.message); }
+  };
+  const cols = [["direccion", "Dirección", 240], ["comuna", "Comuna", 120], ["contacto", "Contacto", 150], ["telefono", "Teléfono", 120], ["correo", "Correo", 180], ["canal", "Canal de agenda", 140]];
+  return (
+    <div>
+      <div style={{ fontSize: 12.5, color: C.suave, marginBottom: 10 }}>La dirección y el contacto van en la tarea al supervisor y en el aviso al transportista cuando toca una mantención.</div>
+      <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 1100 }}>
+          <thead><tr style={{ background: C.fondo, textAlign: "left" }}>{["Taller", ...cols.map((c) => c[1]), "Activo"].map((h) => <th key={h} style={{ padding: "8px 10px", color: C.suave, fontSize: 12 }}>{h}</th>)}</tr></thead>
+          <tbody>
+            {(t || []).map((x) => (
+              <tr key={x.nombre} style={{ borderTop: `1px solid ${C.borde}`, opacity: x.activo ? 1 : 0.5 }}>
+                <td style={{ padding: "8px 10px", fontWeight: 700 }}>{x.nombre}</td>
+                {cols.map(([k, , w]) => <td key={k} style={{ padding: "6px 8px" }}><input style={{ ...inp, width: w }} defaultValue={x[k] || ""} onBlur={(e) => e.target.value !== (x[k] || "") && guardar(x.nombre, k, e.target.value)} /></td>)}
+                <td style={{ padding: "6px 8px" }}><input type="checkbox" checked={!!x.activo} onChange={(e) => guardar(x.nombre, "activo", String(e.target.checked))} /></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+        <input style={{ ...inp, width: 260 }} placeholder="Nuevo taller" value={nuevo} onChange={(e) => setNuevo(e.target.value)} />
+        <button style={btn()} onClick={() => { if (nuevo.trim()) { guardar(nuevo, "nuevo", ""); setNuevo(""); } }}>Agregar</button>
+      </div>
+      {msg && <div style={{ color: C.rojo, fontSize: 13, marginTop: 8 }}>{msg}</div>}
     </div>
   );
 }
