@@ -15181,6 +15181,7 @@ function MantenedorSupervisores() {
 }
 
 const TABS_CUIDADO_CL = [
+  { id: "ca_flota", label: "Estado de flota", desc: "Qué pasa hoy con cada vehículo propio" },
   { id: "ca_tareas", label: "Tareas del supervisor", desc: "Detenciones, hallazgos y avisos al supervisor" },
   { id: "ca_auditorias", label: "Auditorías", desc: "Revisión de auditorías de terceros con Biggy" },
   { id: "ca_nosalidas", label: "No salidas", desc: "Flota propia sin ruta y su motivo" },
