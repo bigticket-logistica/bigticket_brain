@@ -68,7 +68,7 @@ function Dos({ brain, meli, pequeno }) {
   const dif = meli != null && brain != null && meli !== brain;
   return (
     <span style={{ display: "inline-flex", flexDirection: "column", alignItems: "center", lineHeight: 1.15 }}>
-      <span style={{ fontWeight: 700, color: "#334155", fontSize: pequeno ? 11.5 : 12 }}>{brain ?? "—"}</span>
+      <span style={{ fontWeight: 700, color: "#334155", fontSize: pequeno ? 11.5 : 12 }}>{meli != null && brain != null ? `BT ${brain}` : brain ?? "—"}</span>
       {meli != null && <span style={{ fontSize: 10, color: dif ? NARANJA : "#94a3b8", fontWeight: dif ? 700 : 400 }}>MELI {meli}</span>}
     </span>
   );
@@ -483,7 +483,7 @@ export default function Capacidad({ usuario }) {
                 <table style={{ width: "100%", borderCollapse: "collapse" }}>
                   <thead><tr><th style={{ ...th, background: "none" }}></th>{colsSdd.map(([t]) => <th key={t} style={{ ...thC, background: "none", fontSize: 11 }}>{t}</th>)}</tr></thead>
                   <tbody>
-                    <tr>{fila("Brain", AZUL)}{colsSdd.map(([t, b]) => <Fragment key={t}>{cell(b, AZUL)}</Fragment>)}</tr>
+                    <tr>{fila("BT", AZUL)}{colsSdd.map(([t, b]) => <Fragment key={t}>{cell(b, AZUL)}</Fragment>)}</tr>
                     <tr>{fila("MELI", NARANJA)}{colsSdd.map(([t, b, m]) => <Fragment key={t}>{cell(m, NARANJA)}</Fragment>)}</tr>
                     <tr>{fila("Diferencia", GRIS)}{colsSdd.map(([t, b, m]) => { const d = b != null && m != null ? m - b : null; return <Fragment key={t}>{cell(d == null ? null : d === 0 ? "=" : (d > 0 ? "+" : "") + d, d ? "#b91c1c" : "#94a3b8")}</Fragment>; })}</tr>
                   </tbody>
@@ -528,14 +528,14 @@ export default function Capacidad({ usuario }) {
                 <div style={{ fontWeight: 700, color: AZUL, fontSize: 14, marginTop: modelo === "SPOT" ? 0 : 18, marginBottom: 8 }}>Spot <span style={{ color: GRIS, fontWeight: 400, fontSize: 12 }}>· lo que operamos</span></div>
                 <table style={{ borderCollapse: "collapse" }}>
                   <thead><tr><th style={{ ...th, background: "none" }}></th>{colsSpot.map(([t]) => <th key={t} style={{ ...thC, background: "none", fontSize: 11, minWidth: 110 }}>{t}</th>)}</tr></thead>
-                  <tbody><tr>{fila("Brain", AZUL)}{colsSpot.map(([t, b]) => <Fragment key={t}>{cell(b, AZUL)}</Fragment>)}</tr></tbody>
+                  <tbody><tr>{fila("BT", AZUL)}{colsSpot.map(([t, b]) => <Fragment key={t}>{cell(b, AZUL)}</Fragment>)}</tr></tbody>
                 </table>
               </>)}
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-              {modelo !== "SPOT" && <Tarjeta titulo="No show SDD" total={`${listas.soft.length + listas.hardSdd.length}${meliTot ? ` · MELI ${meliTot.soft + meliTot.hard}` : ""}`} filas={[
-                ["Soft · no confirmadas", `${listas.soft.length}${meliTot ? `  ·  MELI ${meliTot.soft}` : ""}`, `Brain: ${porScTxt(listas.soft)}${meliTot ? `\nMELI: ${meliScTxt("soft_no_show")}` : ""}`],
-                ["Hard · aceptadas que no salieron", `${listas.hardSdd.length}${meliTot ? `  ·  MELI ${meliTot.hard}` : ""}`, `Brain: ${porScTxt(listas.hardSdd)}${meliTot ? `\nMELI: ${meliScTxt("hard_no_show")}` : ""}`],
+              {modelo !== "SPOT" && <Tarjeta titulo="No show SDD" total={`BT ${listas.soft.length + listas.hardSdd.length}${meliTot ? ` · MELI ${meliTot.soft + meliTot.hard}` : ""}`} filas={[
+                ["Soft · no confirmadas", `BT ${listas.soft.length}${meliTot ? `  ·  MELI ${meliTot.soft}` : ""}`, `BT: ${porScTxt(listas.soft)}${meliTot ? `\nMELI: ${meliScTxt("soft_no_show")}` : ""}`],
+                ["Hard · aceptadas que no salieron", `BT ${listas.hardSdd.length}${meliTot ? `  ·  MELI ${meliTot.hard}` : ""}`, `BT: ${porScTxt(listas.hardSdd)}${meliTot ? `\nMELI: ${meliScTxt("hard_no_show")}` : ""}`],
               ]} />}
               <Tarjeta titulo="Aceptadas que no salieron" total={listas.hardSdd.length + listas.spot.length} filas={[
                 ["SDD", listas.hardSdd.length, porScTxt(listas.hardSdd)], ["Spot", listas.spot.length, porScTxt(listas.spot)],
