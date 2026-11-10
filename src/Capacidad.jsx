@@ -158,6 +158,7 @@ export default function Capacidad({ usuario }) {
   const [verBitacora, setVerBitacora] = useState(true);
   const [verCompromisos, setVerCompromisos] = useState(false);
   const [ver, setVer] = useState("todos");
+  const [vistaMeli, setVistaMeli] = useState(false);
   const [buscar, setBuscar] = useState("");
   const [pagina, setPagina] = useState(1);
   const [loading, setLoading] = useState(true);
@@ -217,18 +218,25 @@ export default function Capacidad({ usuario }) {
 
   // ── Cruce por ruta con el detalle de MELI (fecha + placa, o route_id) ──
   const meliPorRuta = useMemo(() => {
-    const porPlaca = new Map(), porRuta = new Map();
+    const porPlaca = new Map(), porRuta = new Map(), todasPorPlaca = new Map();
     for (const e of meli) for (const d of (e.modelo === "SDD" ? e.detalle || [] : [])) {
-      const fila = { ejecutada: d.executed === "✓", confirmada: d.confirmed === "✓", rosterizada: d.rostered === "✓", route_id: d.route_id || null, sc: d.service_center };
+      const fila = { ejecutada: d.executed === "✓", confirmada: d.confirmed === "✓", rosterizada: d.rostered === "✓", route_id: d.route_id || null, sc: d.service_center, driver_id: d.driver_id || null };
       if (d.route_id) porRuta.set(String(d.route_id), fila);
       const p = placaNorm(d.vehicle_plate);
-      if (p) porPlaca.set(`${e.fecha}|${p}`, fila);
+      if (p) {
+        const k = `${e.fecha}|${p}`;
+        // con dos filas de la misma placa, para el cruce manda la del chofer rosterizado; se guardan todas
+        if (!porPlaca.has(k)) porPlaca.set(k, fila);
+        todasPorPlaca.set(k, [...(todasPorPlaca.get(k) || []), fila]);
+      }
     }
-    return { porPlaca, porRuta };
+    return { porPlaca, porRuta, todasPorPlaca };
   }, [meli]);
   const filasBase = useMemo(() => todas.map((f) => {
     if (f.modelo !== "SDD") return { ...f, meli: null };   // MELI solo cobra no show en SDD: Spot no se compara
-    const m = (f.id_ruta && meliPorRuta.porRuta.get(String(f.id_ruta))) || (f.placa && meliPorRuta.porPlaca.get(`${f.fecha}|${placaNorm(f.placa)}`)) || null;
+    const k = f.placa ? `${f.fecha}|${placaNorm(f.placa)}` : null;
+    const delChofer = k && f.driver_id ? (meliPorRuta.todasPorPlaca.get(k) || []).find((x) => String(x.driver_id) === String(f.driver_id)) : null;
+    const m = delChofer || (f.id_ruta && meliPorRuta.porRuta.get(String(f.id_ruta))) || (k && meliPorRuta.porPlaca.get(k)) || null;
     return { ...f, meli: m ? { ...m } : (f.confirmado === "Aceptado" && meli.length ? { ejecutada: null, sinRegistro: true } : null) };
   }), [todas, meli, meliPorRuta]);
 
@@ -259,17 +267,44 @@ export default function Capacidad({ usuario }) {
   const totSdd = useMemo(() => sumar(filas.filter((f) => f.modelo === "SDD")), [filas]);
   const rutaMeli = useMemo(() => new Map(rutasMeli.map((r) => [String(r.route_id), r])), [rutasMeli]);
   const reclamos = useMemo(() => filas.filter((f) => f.modelo === "SDD" && f.ejecutado && f.meli && f.meli.ejecutada === false)
-    .map((f) => ({ ...f, rutaMeli: f.id_ruta ? rutaMeli.get(String(f.id_ruta)) || null : null })), [filas, rutaMeli]);
+    .map((f) => {
+      const otras = (meliPorRuta.todasPorPlaca.get(`${f.fecha}|${placaNorm(f.placa)}`) || []).filter((x) => x.ejecutada && String(x.route_id) !== String(f.meli.route_id));
+      return { ...f, rutaMeli: f.id_ruta ? rutaMeli.get(String(f.id_ruta)) || null : null, otraEjecutada: otras[0] || null };
+    }), [filas, rutaMeli, meliPorRuta]);
   const totSpot = useMemo(() => sumar(filas.filter((f) => f.modelo === "SPOT")), [filas]);
   // Pedidas de más: suma por SC (cada SC contra su propio compromiso o acordado)
   const deMasTotal = useMemo(() => porSc.filter((x) => !sc || x.sc === sc).reduce((t, x) => t + (x.de_mas || 0), 0), [porSc, sc]);
-  useEffect(() => { setPagina(1); }, [ver, buscar, filas]);
+  useEffect(() => { setPagina(1); }, [ver, buscar, filas, vistaMeli]);
   const filtradas = useMemo(() => {
     const q = buscar.trim().toLowerCase();
     return filas.filter((f) => pasaVer(f, ver) && (!q || [f.sc, f.placa, f.chofer, f.driver_id, f.id_ruta, f.travel_id, f.request_id, f.vehiculo].some((x) => x && String(x).toLowerCase().includes(q))));
   }, [filas, ver, buscar]);
-  const paginas = Math.max(1, Math.ceil(filtradas.length / POR_PAGINA));
+  // Vista MELI: la tabla "Detalle por estado" del portal (SDD), con la columna Torre al final
+  const filasMeli = useMemo(() => {
+    const q = buscar.trim().toLowerCase();
+    const brainPorPlaca = new Map();
+    for (const f of filasBase) if (f.modelo === "SDD" && f.placa) {
+      const k = `${f.fecha}|${placaNorm(f.placa)}`;
+      brainPorPlaca.set(k, [...(brainPorPlaca.get(k) || []), f]);
+    }
+    const out = [];
+    for (const e of meli) if (e.modelo === "SDD") for (const d of e.detalle || []) {
+      if (sc && d.service_center !== sc) continue;
+      const lista = d.vehicle_plate ? brainPorPlaca.get(`${e.fecha}|${placaNorm(d.vehicle_plate)}`) || [] : [];
+      const b = lista.find((f) => String(f.driver_id) === String(d.driver_id)) || lista[0] || null;
+      const torreSalio = lista.some((f) => f.ejecutado);
+      const meliSalio = d.executed === "✓";
+      const fila = { fecha: e.fecha, d, b, torreSalio, meliSalio, difiere: !!d.vehicle_plate && d.rostered === "✓" && torreSalio !== meliSalio };
+      if (q && ![d.service_center, d.vehicle_plate, d.driver_id, d.route_id, b?.chofer].some((x) => x && String(x).toLowerCase().includes(q))) continue;
+      if (ver === "difieren" && !fila.difiere) continue;
+      out.push(fila);
+    }
+    return out.sort((a, b) => (b.difiere - a.difiere) || a.d.service_center.localeCompare(b.d.service_center));
+  }, [meli, filasBase, sc, buscar, ver]);
+  const totalVista = vistaMeli ? filasMeli.length : filtradas.length;
+  const paginas = Math.max(1, Math.ceil(totalVista / POR_PAGINA));
   const visibles = filtradas.slice((pagina - 1) * POR_PAGINA, pagina * POR_PAGINA);
+  const visiblesMeli = filasMeli.slice((pagina - 1) * POR_PAGINA, pagina * POR_PAGINA);
 
   const vigentes = useMemo(() => prom.compromisos.filter((c) => c.activo && (!c.vigencia_hasta || c.vigencia_hasta >= hoy)), [prom, hoy]);
   const scsForm = useMemo(() => [...new Set(["SCY1", "SHP1", "SMX1", "SMX10", "SMX2", "SMX20", "SMX22", "SMX7", "SMX8", "SMX9", "SPY1", "SQR1", "STL1", "STX1", "SVH1", ...listaSc])].sort(), [listaSc]);
@@ -329,9 +364,9 @@ export default function Capacidad({ usuario }) {
       }
       const comp = [["SC", "VEHICULO", "MODELO", "COMPROMETIDO POR DIA", "VIGENCIA DESDE", "VIGENCIA HASTA", "EVIDENCIA", "NOTA", "CARGO", "CARGADO EL"]];
       for (const c of prom.compromisos) comp.push([c.sc, c.vehiculo, c.modelo, c.cantidad, c.vigencia_desde, c.vigencia_hasta || "", c.evidencia_nombre || "", c.nota || "", c.cargado_por, fHora(c.cargado_at)]);
-      const rec = [["FECHA", "SC", "PLACA", "CHOFER", "DRIVER ID", "ID RUTA", "SALIDA REAL TORRE", "ESTADO TORRE", "EN LISTA DE RUTAS MELI", "PAQUETES TOTAL MELI", "PAQUETES ENTREGADOS MELI", "SUPERVISOR"]];
-      for (const f of reclamos) rec.push([f.fecha, f.sc, f.placa || "", f.chofer || "", f.driver_id || "", f.id_ruta || "", f.salida_real ? fHora(f.salida_real) : "", f.estado_torre || "",
-        f.rutaMeli ? "SI" : "NO", num(f.rutaMeli?.total_packages) ?? "", num(f.rutaMeli?.delivered_packages) ?? "", f.resultado_supervisor || ""]);
+      const rec = [["FECHA", "SC", "PLACA", "CHOFER ROSTERIZADO", "DRIVER ID", "RUTA MELI SIN EJECUTAR", "RUTA QUE SALIO (TORRE)", "SALIDA REAL TORRE", "ESTADO TORRE", "EN LISTA DE RUTAS MELI", "PAQUETES TOTAL MELI", "PAQUETES ENTREGADOS MELI", "MISMA CAMIONETA: RUTA EJECUTADA EN MELI", "CHOFER DE ESA RUTA", "SUPERVISOR"]];
+      for (const f of reclamos) rec.push([f.fecha, f.sc, f.placa || "", f.chofer || "", f.driver_id || "", f.meli?.route_id || "", f.id_ruta || "", f.salida_real ? fHora(f.salida_real) : "", f.estado_torre || "",
+        f.rutaMeli ? "SI" : "NO", num(f.rutaMeli?.total_packages) ?? "", num(f.rutaMeli?.delivered_packages) ?? "", f.otraEjecutada?.route_id || "", f.otraEjecutada?.driver_id || "", f.resultado_supervisor || ""]);
       await descargarExcelMultihoja([{ nombre: "Reclamo", datos: rec }, { nombre: "Por SC", datos: res }, { nombre: "Detalle", datos: det }, { nombre: "Compromisos", datos: comp }],
         `capacidad_${d1 === d2 ? d1 : d1 + "_a_" + d2}${modelo ? "_" + modelo : ""}${sc ? "_" + sc : ""}`);
     } catch (e) { alert("No se pudo generar el Excel: " + (e.message || e)); }
@@ -416,17 +451,20 @@ export default function Capacidad({ usuario }) {
                   <div style={{ marginTop: 14, border: "1px solid #fecaca", background: "#fff7f7", borderRadius: 10, padding: 12 }}>
                     <div style={{ fontWeight: 700, color: "#b91c1c", fontSize: 13, marginBottom: 8 }}>Para reclamar a MELI · {reclamos.length} {reclamos.length === 1 ? "ruta" : "rutas"}: MELI dice que no salió, la Torre dice que sí</div>
                     <table style={{ width: "100%", borderCollapse: "collapse", background: "#fff" }}>
-                      <thead><tr>{["Fecha", "SC", "Placa", "Chofer", "ID de ruta", "Salió según la Torre", "Según MELI (lista de rutas)", "Supervisor"].map((t) => <th key={t} style={{ ...th, fontSize: 10.5 }}>{t}</th>)}</tr></thead>
+                      <thead><tr>{["Fecha", "SC", "Placa", "Chofer rosterizado", "Ruta MELI sin ejecutar", "Ruta que salió (Torre)", "Según MELI (lista de rutas)", "Misma camioneta en MELI", "Supervisor"].map((t) => <th key={t} style={{ ...th, fontSize: 10.5 }}>{t}</th>)}</tr></thead>
                       <tbody>
                         {reclamos.map((f, i) => (
                           <tr key={i}>
                             <td style={td}>{fCorta(f.fecha)}</td><td style={{ ...td, fontWeight: 700 }}>{f.sc}</td><td style={{ ...td, fontFamily: "monospace", fontWeight: 700 }}>{f.placa}</td>
                             <td style={td}>{f.chofer}<div style={{ fontSize: 10, color: GRIS }}>{f.driver_id}</div></td>
-                            <td style={{ ...td, fontWeight: 700 }}>{f.id_ruta || "—"}</td>
-                            <td style={td}>{f.salida_real ? `${fHora(f.salida_real)} · ${f.estado_torre}` : f.estado_torre}</td>
+                            <td style={{ ...td, fontWeight: 700, color: "#b91c1c" }}>{f.meli?.route_id || "—"}</td>
+                            <td style={td}><b>{f.id_ruta || "—"}</b><div style={{ fontSize: 10.5, color: GRIS }}>{f.salida_real ? `${fHora(f.salida_real)} · ${f.estado_torre}` : f.estado_torre}</div></td>
                             <td style={td}>{f.rutaMeli
                               ? <span style={{ color: "#047857", fontWeight: 700 }}>ruta en su lista · {num(f.rutaMeli.delivered_packages) ?? "?"} de {num(f.rutaMeli.total_packages) ?? "?"} paquetes entregados</span>
                               : <span style={{ color: GRIS }}>no está en su lista de rutas ejecutadas</span>}</td>
+                            <td style={td}>{f.otraEjecutada
+                              ? <span style={{ color: "#047857", fontWeight: 700 }}>ejecutó la ruta {f.otraEjecutada.route_id}<div style={{ fontWeight: 400, color: String(f.otraEjecutada.driver_id) !== String(f.driver_id) ? "#b45309" : GRIS, fontSize: 10.5 }}>chofer {f.otraEjecutada.driver_id}{String(f.otraEjecutada.driver_id) !== String(f.driver_id) ? " (distinto al rosterizado)" : ""}</div></span>
+                              : <span style={{ color: GRIS }}>—</span>}</td>
                             <td style={td}>{f.respondido_at ? `${f.resultado_supervisor === "si_salio" ? "Sí salió" : f.resultado_supervisor}${f.ruta_declarada ? ` · ruta ${f.ruta_declarada}` : ""}` : <span style={{ color: GRIS }}>—</span>}</td>
                           </tr>
                         ))}
@@ -568,11 +606,40 @@ export default function Capacidad({ usuario }) {
       <div style={{ ...caja, overflowX: "auto" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 8 }}>
           <div style={{ fontWeight: 700, color: AZUL, fontSize: 14 }}>Detalle {sc && <span style={{ color: GRIS, fontWeight: 400 }}>· {sc} <a href="#" onClick={(e) => { e.preventDefault(); setSc(""); }}>(ver todos)</a></span>}</div>
-          <div style={{ display: "flex", gap: 8 }}>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <span style={{ display: "flex", gap: 4 }}>
+              <button type="button" onClick={() => setVistaMeli(false)} style={{ ...boton(!vistaMeli), padding: "6px 12px", fontSize: 12 }}>Vista Brain</button>
+              <button type="button" onClick={() => setVistaMeli(true)} style={{ ...boton(vistaMeli), padding: "6px 12px", fontSize: 12, ...(vistaMeli ? { background: NARANJA } : {}) }}>Vista MELI</button>
+            </span>
             <input placeholder="Placa, chofer, ruta, viaje, solicitud…" value={buscar} onChange={(e) => setBuscar(e.target.value)} style={{ ...input, width: 220 }} />
             <select value={ver} onChange={(e) => setVer(e.target.value)} style={input}>{VER.map(([k, t]) => <option key={k} value={k}>{t} ({filas.filter((f) => pasaVer(f, k)).length})</option>)}</select>
           </div>
         </div>
+        {vistaMeli ? (
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead style={{ position: "sticky", top: 0, zIndex: 2 }}><tr>
+              {["Service Center", "Vehículo", "Transportista", "ID de Ruta", "Última actualización"].map((t) => <th key={t} style={th}>{t}</th>)}
+              {["Solicitado", "Confirmado", "Asignado", "Ejecutado"].map((t) => <th key={t} style={{ ...thC, color: NARANJA }}>{t}</th>)}
+              <th style={{ ...thC, color: AZUL }}>Torre</th>
+            </tr></thead>
+            <tbody>
+              {visiblesMeli.map(({ fecha, d, b, torreSalio, meliSalio, difiere }, i) => (
+                <tr key={`${d.route_id}-${d.vehicle_plate}-${i}`} style={{ background: difiere ? "#fff1f2" : "#fff" }}>
+                  <td style={{ ...td, fontWeight: 700 }}>{d.service_center}<div style={{ fontSize: 10, color: GRIS, fontWeight: 400 }}>{fCorta(fecha)}</div></td>
+                  <td style={td}>{d.vehicle}<br /><b>{d.vehicle_plate || ""}</b></td>
+                  <td style={td}>{b && String(b.driver_id) === String(d.driver_id) ? b.chofer : ""}<br /><b>{d.driver_id || ""}</b></td>
+                  <td style={{ ...td, fontWeight: 700 }}>{d.route_id || ""}</td>
+                  <td style={{ ...td, color: GRIS }}>{d.last_update}</td>
+                  {[d.requested, d.confirmed, d.rostered, d.executed].map((v, k) => <td key={k} style={{ ...tdC, fontWeight: 800, color: "#334155" }}>{v === "✓" ? "✓" : ""}</td>)}
+                  <td style={{ ...tdC, fontSize: 11 }}>{!d.vehicle_plate ? "" : torreSalio
+                    ? <span style={{ color: difiere ? "#b91c1c" : "#047857", fontWeight: 700 }}>salió{b?.id_ruta ? ` · ${b.id_ruta}` : ""}</span>
+                    : <span style={{ color: difiere ? "#b91c1c" : "#b45309", fontWeight: 700 }}>no salió</span>}</td>
+                </tr>
+              ))}
+              {!loading && visiblesMeli.length === 0 && <tr><td colSpan={10} style={{ ...td, textAlign: "center", color: GRIS }}>{meli.length ? "Sin filas para este filtro." : "Sin foto de MELI para esta fecha."}</td></tr>}
+            </tbody>
+          </table>
+        ) : (
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
           <thead style={{ position: "sticky", top: 0, zIndex: 2 }}><tr>
             <th style={th}>Fecha</th><th style={th}>SC</th><th style={th}>Vehículo</th><th style={th}>Transportista</th><th style={th}>ID de Ruta</th>
@@ -611,10 +678,11 @@ export default function Capacidad({ usuario }) {
             {!loading && visibles.length === 0 && <tr><td colSpan={10} style={{ ...td, textAlign: "center", color: GRIS }}>Sin viajes para este filtro.</td></tr>}
           </tbody>
         </table>
+        )}
         {paginas > 1 && (
           <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: 6, marginTop: 10, fontSize: 12 }}>
             <button disabled={pagina === 1} onClick={() => setPagina(pagina - 1)} style={{ ...input, cursor: "pointer" }}>‹ Anterior</button>
-            <span style={{ color: GRIS }}>Página {pagina} de {paginas} · {filtradas.length} viajes</span>
+            <span style={{ color: GRIS }}>Página {pagina} de {paginas} · {totalVista} {vistaMeli ? "filas MELI" : "viajes"}</span>
             <button disabled={pagina === paginas} onClick={() => setPagina(pagina + 1)} style={{ ...input, cursor: "pointer" }}>Siguiente ›</button>
           </div>
         )}
