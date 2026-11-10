@@ -169,7 +169,9 @@ export default function Capacidad({ usuario }) {
   const [verCompromisos, setVerCompromisos] = useState(false);
   const [ver, setVer] = useState("todos");
   const [vistaMeli, setVistaMeli] = useState(false);
+  const refDetalle = useRef(null);
   const [buscar, setBuscar] = useState("");
+  const irADiferencias = () => { setBuscar(""); setVer("difieren"); setVistaMeli(false); setTimeout(() => refDetalle.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 50); };
   const [pagina, setPagina] = useState(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -491,7 +493,7 @@ export default function Capacidad({ usuario }) {
                 {meliTot && (deMasTotal > 0 || totSdd.difieren > 0) && (
                   <div style={{ marginTop: 10, display: "flex", gap: 18, fontSize: 12, color: "#334155", flexWrap: "wrap" }}>
                     {deMasTotal > 0 && <span><b style={{ color: "#b91c1c" }}>{deMasTotal}</b> pedidas por MELI sobre lo prometido</span>}
-                    {totSdd.difieren > 0 && <span><b style={{ color: "#b91c1c" }}>{totSdd.difieren}</b> rutas con resultado distinto · <a href="#" onClick={(e) => { e.preventDefault(); setVer("difieren"); }} style={{ color: AZUL }}>ver en el detalle</a></span>}
+                    {totSdd.difieren > 0 && <span><b style={{ color: "#b91c1c" }}>{totSdd.difieren}</b> rutas con resultado distinto · <a href="#" onClick={(e) => { e.preventDefault(); irADiferencias(); }} style={{ color: AZUL }}>ver en el detalle</a></span>}
                   </div>
                 )}
                 {!meliTot && !loading && <div style={{ marginTop: 8, fontSize: 12, color: NARANJA }}>Sin foto de MELI para esta fecha</div>}
@@ -663,7 +665,7 @@ export default function Capacidad({ usuario }) {
       )}
 
       {/* Detalle */}
-      <div style={{ ...caja, overflowX: "auto" }}>
+      <div ref={refDetalle} style={{ ...caja, overflowX: "auto", scrollMarginTop: 80 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 8 }}>
           <div style={{ fontWeight: 700, color: AZUL, fontSize: 14 }}>Detalle {sc && <span style={{ color: GRIS, fontWeight: 400 }}>· {sc} <a href="#" onClick={(e) => { e.preventDefault(); setSc(""); }}>(ver todos)</a></span>}</div>
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
