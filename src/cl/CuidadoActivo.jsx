@@ -677,8 +677,11 @@ function ProgramaMnt({ quien }) {
   const [f, setF] = useState({ estado: "", texto: "" });
   const [abierta, setAbierta] = useState(null);
   const [busy, setBusy] = useState("");
+  const [citas, setCitas] = useState({});
+  const [form, setForm] = useState(null);   // { patente, modo: "agendar" | "registrar" }
   const cargar = () => {
     rpc("fn_mnt_programa_cl").then(setFilas).catch(() => setFilas([]));
+    api("ca_mnt_citas_cl?select=*&estado=eq.agendada").then((r) => setCitas(Object.fromEntries((r || []).map((c) => [c.patente, c])))).catch(() => setCitas({}));
     api("vw_mnt_avisos_cl?select=*&order=creado_at.desc&limit=1000").then((r) => {
       const m = {}; for (const a of r || []) m[`${a.patente}|${a.pauta}`] = a; setAvisos(m);
     }).catch(() => setAvisos({}));
@@ -734,16 +737,22 @@ function ProgramaMnt({ quien }) {
                   <td style={celda}>{x.taller || "—"}</td>
                   <td style={celda}>{chip(e[0], e[1], e[2])}</td>
                   <td style={celda} onClick={(ev) => ev.stopPropagation()}>
+                    {citas[x.patente] && <div style={{ fontSize: 12, color: C.navy, fontWeight: 700, marginBottom: 4 }}>📅 Cita {fh(citas[x.patente].cita_at)}<div style={{ fontWeight: 400, color: C.suave }}>{citas[x.patente].taller}</div></div>}
                     {av ? <>
                       {chip("Avisado", "#eef2f8", C.navy)}
                       <div style={{ fontSize: 11.5, color: C.tenue, marginTop: 3 }}>{fh(av.creado_at)}</div>
                       <div style={{ fontSize: 11.5, color: C.suave }}>Tarea: {(ESTADO[av.tarea_estado] || [av.tarea_estado || "—"])[0]}</div>
                       <div style={{ fontSize: 11.5, color: C.suave }}>Transportista: {av.visto_tercero_at ? `lo vio ${fh(av.visto_tercero_at)}` : "aún no lo ve"}</div>
+                      <div style={{ display: "flex", gap: 4, marginTop: 6, flexWrap: "wrap" }}>
+                        <button style={btn("sec")} onClick={() => setForm({ patente: x.patente, modo: "agendar" })}>{citas[x.patente] ? "Cambiar cita" : "Agendar"}</button>
+                        <button style={btn("verde")} onClick={() => setForm({ patente: x.patente, modo: "registrar" })}>Registrar hecha</button>
+                      </div>
                     </> : ["proxima", "vencida"].includes(x.estado)
                       ? <button style={btn(x.estado === "vencida" ? "rojo" : undefined)} disabled={busy === x.patente} onClick={() => avisar(x)}>{busy === x.patente ? "Avisando…" : "Avisar"}</button>
                       : <span style={{ color: C.tenue }}>—</span>}
                   </td>
                 </tr>,
+                form?.patente === x.patente && <tr key={x.patente + "f"}><td colSpan={11} style={{ padding: 0, borderBottom: `1px solid ${C.borde}` }}><FormMnt x={x} modo={form.modo} quien={quien} onListo={(m) => { setForm(null); if (m) alert(m); cargar(); }} /></td></tr>,
                 abierta === x.patente && <tr key={x.patente + "h"}><td colSpan={11} style={{ padding: 0, borderBottom: `1px solid ${C.borde}` }}><HistorialMnt patente={x.patente} /></td></tr>,
               ]; })}
             </tbody>
@@ -753,6 +762,48 @@ function ProgramaMnt({ quien }) {
     </div>
   );
 }
+function FormMnt({ x, modo, quien, onListo }) {
+  const hoy = hoyCL();
+  const [d, setD] = useState({ taller: x.taller ? String(x.taller).split("/")[0].trim() : "", cita: "", fecha: hoy, km: x.km_actual || "", pauta: x.proxima_pauta || "", costo: "", dias: "", detalle: "" });
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+  const enviar = async () => {
+    setBusy(true); setMsg("");
+    try {
+      const r = modo === "agendar"
+        ? await rpc("fn_mnt_agendar", { p_patente: x.patente, p_taller: d.taller, p_cita: d.cita ? new Date(d.cita).toISOString() : null, p_por: quien })
+        : await rpc("fn_mnt_registrar", { p_patente: x.patente, p_fecha: d.fecha, p_km: Number(d.km) || null, p_pauta: Number(d.pauta) || null, p_taller: d.taller,
+            p_costo: d.costo === "" ? null : Number(d.costo), p_dias: d.dias === "" ? null : Number(d.dias), p_detalle: d.detalle || null, p_por: quien });
+      onListo(r);
+    } catch (e) { setMsg(e.message); } finally { setBusy(false); }
+  };
+  const campo = (k, t, props = {}) => <label style={{ fontSize: 12, color: C.suave }}>{t}<input style={{ ...inp, width: "100%" }} value={d[k]} onChange={(e) => setD({ ...d, [k]: e.target.value })} {...props} /></label>;
+  return (
+    <div style={{ padding: 14, background: "#fafbfd" }}>
+      <div style={{ fontWeight: 800, color: C.navy, marginBottom: 8 }}>{modo === "agendar" ? `Agendar la mantención de ${x.patente}` : `Registrar la mantención hecha de ${x.patente}`}</div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 10 }}>
+        {campo("taller", "Taller")}
+        {modo === "agendar" ? campo("cita", "Día y hora", { type: "datetime-local" }) : <>
+          {campo("fecha", "Fecha", { type: "date", max: hoy })}
+          {campo("km", "Km en la mantención", { type: "number" })}
+          {campo("pauta", "Pauta hecha (km)", { type: "number" })}
+          {campo("costo", "Costo ($)", { type: "number" })}
+          {campo("dias", "Días en taller", { type: "number" })}
+        </>}
+      </div>
+      {modo === "registrar" && <div style={{ marginTop: 10 }}>{campo("detalle", "Detalle (opcional)")}</div>}
+      <div style={{ fontSize: 12, color: C.suave, marginTop: 8 }}>
+        {modo === "agendar" ? "Al agendar se le pide al transportista la auditoría de entrega a taller, con plazo hasta la hora de la cita." : "Al registrar se recalcula la próxima pauta, se oculta el aviso del transportista y se le pide la auditoría de retiro de taller."}
+      </div>
+      {msg && <div style={{ color: C.rojo, fontSize: 13, marginTop: 8 }}>{msg}</div>}
+      <div style={{ display: "flex", gap: 6, marginTop: 10 }}>
+        <button style={btn(modo === "registrar" ? "verde" : undefined)} disabled={busy} onClick={enviar}>{busy ? "Guardando…" : modo === "agendar" ? "Agendar" : "Registrar"}</button>
+        <button style={btn("sec")} onClick={() => onListo(null)}>Cancelar</button>
+      </div>
+    </div>
+  );
+}
+
 function HistorialMnt({ patente }) {
   const [h, setH] = useState(null);
   const [tipo, setTipo] = useState("");
