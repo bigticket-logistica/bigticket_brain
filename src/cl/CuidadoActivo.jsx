@@ -483,7 +483,12 @@ function DetalleAuditoria({ a, quien, onListo }) {
   return (
     <div style={{ padding: 16, background: "#fafbfd" }}>
       <div style={{ display: "flex", gap: 18, flexWrap: "wrap", fontSize: 13, marginBottom: 12 }}>
-        {a.tipo === "vehiculo" && <div><b>Km declarado:</b> {a.km ?? "—"}</div>}
+        {a.tipo === "vehiculo" && <div><b>Km escrito:</b> {a.km ?? "—"}</div>}
+        {a.biggy_km && <div style={{ color: a.biggy_km.alerta ? C.rojo : C.texto, fontWeight: a.biggy_km.alerta ? 700 : 400 }}>
+          <b>Km en la foto:</b> {a.biggy_km.foto ?? "no se lee"} · <b>Geotab:</b> {a.biggy_km.geotab ?? "sin dato"}
+          {a.biggy_km.geotab_fecha ? <span style={{ color: C.tenue, fontWeight: 400 }}> ({fh(a.biggy_km.geotab_fecha)})</span> : null}
+          {a.biggy_km.alerta ? ` · ⚠ ${a.biggy_km.detalle}` : " · ✓ coincide"}
+        </div>}
         <div><b>Auditoría anterior:</b> {d.anterior_id ? fh(d.anterior_fecha) : "no hay"}</div>
         {a.energia && <div><b>Energía:</b> {a.energia}</div>}
       </div>
