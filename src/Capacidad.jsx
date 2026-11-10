@@ -120,18 +120,27 @@ function sumar(filas) {
   }
   return t;
 }
-// Totales MELI (gráfico SDD) sumando fechas; por SC usa el gráfico de ese SC
+// Totales MELI (SDD) contados desde su lista ruta por ruta (los ✓ del "Detalle por estado"):
+// así el total siempre es la suma de los SC y es la misma base del recuadro de reclamo.
+// El acordado no existe en la lista: sale del gráfico (total o del SC).
 function sumarMeli(entradas, sc) {
   const t = { acordado: 0, solicitado: 0, confirmado: 0, asignado: 0, ejecutado: 0, soft: 0, hard: 0, n: 0 };
   for (const e of entradas) {
     const ch = sc ? (e.por_sc || []).find((x) => x.sc === sc)?.chart : e.chart;
-    if (!ch) continue;
+    const filas = (e.detalle || []).filter((d) => !sc || d.service_center === sc);
+    if (!ch && !filas.length) continue;
     t.n++;
-    t.acordado += ch.negotiated || 0; t.solicitado += ch.requested || 0; t.confirmado += ch.confirmed || 0;
-    t.asignado += ch.rostered || 0; t.ejecutado += ch.executed || 0; t.soft += ch.soft_no_show || 0; t.hard += ch.hard_no_show || 0;
+    t.acordado += ch?.negotiated || 0;
+    for (const d of filas) {
+      const sol = d.requested === "✓", conf = d.confirmed === "✓", ros = d.rostered === "✓", eje = d.executed === "✓";
+      if (sol) t.solicitado++; if (conf) t.confirmado++; if (ros) t.asignado++; if (eje) t.ejecutado++;
+      if (sol && !conf) t.soft++;
+      if (conf && ros && !eje) t.hard++;
+    }
   }
   return t.n ? t : null;
 }
+
 // Pedidas por sobre lo prometido (SDD): contra el compromiso cargado o, si no hay, contra el acordado de MELI
 function pedidasDeMas(m, compSdd) {
   if (!m) return 0;
@@ -266,6 +275,16 @@ export default function Capacidad({ usuario }) {
   }, [delModelo, meliFiltrado, prom, modelo]);
 
   const totSdd = useMemo(() => sumar(filas.filter((f) => f.modelo === "SDD")), [filas]);
+  const DIAS_CIERRE_MELI = 2;   // MELI corrige el reporte durante los días siguientes; desde D+2 lo tomamos como cerrado
+  const cierreMeli = useMemo(() => {
+    const sdd = meli.filter((e) => e.modelo === "SDD");
+    if (!sdd.length) return null;
+    const diaMX = (iso) => new Date(new Date(iso).getTime() - 6 * 3600 * 1000).toISOString().slice(0, 10);
+    const sumarD = (iso, n) => { const d = new Date(iso + "T12:00:00Z"); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+    const abiertos = sdd.filter((e) => diaMX(e.capturado_at) < sumarD(e.fecha, DIAS_CIERRE_MELI)).map((e) => e.fecha).sort();
+    const ultima = sdd.map((e) => e.capturado_at).sort().slice(-1)[0];
+    return { cerrado: abiertos.length === 0, cierraEl: abiertos.length ? sumarD(abiertos[abiertos.length - 1], DIAS_CIERRE_MELI) : null, ultima };
+  }, [meli]);
   const rutaMeli = useMemo(() => new Map(rutasMeli.map((r) => [String(r.route_id), r])), [rutasMeli]);
   const reclamos = useMemo(() => filas.filter((f) => f.modelo === "SDD" && f.ejecutado && f.meli && f.meli.ejecutada === false)
     .map((f) => {
@@ -275,7 +294,16 @@ export default function Capacidad({ usuario }) {
   const totSpot = useMemo(() => sumar(filas.filter((f) => f.modelo === "SPOT")), [filas]);
   // "SCY1 2 · SHP1 1": en qué SC está cada número (se ve al posicionarse)
   const porScTxt = (lista) => { const g = {}; for (const f of lista) g[f.sc] = (g[f.sc] || 0) + 1; const t = Object.entries(g).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([k, n]) => `${k} ${n}`).join(" · "); return t || "Ninguno"; };
-  const meliScTxt = (campo) => { const g = {}; for (const e of meliFiltrado) for (const x of e.por_sc || []) { const n = x.chart?.[campo] || 0; if (n && (!sc || x.sc === sc)) g[x.sc] = (g[x.sc] || 0) + n; } const t = Object.entries(g).sort((a, b) => b[1] - a[1]).map(([k, n]) => `${k} ${n}`).join(" · "); return t || "Ninguno"; };
+  const meliScTxt = (campo) => {
+    const g = {};
+    for (const e of meliFiltrado) for (const d of e.detalle || []) {
+      if (sc && d.service_center !== sc) continue;
+      const sol = d.requested === "✓", conf = d.confirmed === "✓", ros = d.rostered === "✓", eje = d.executed === "✓";
+      const cuenta = campo === "soft_no_show" ? sol && !conf : conf && ros && !eje;
+      if (cuenta) g[d.service_center] = (g[d.service_center] || 0) + 1;
+    }
+    const t = Object.entries(g).sort((a, b) => b[1] - a[1]).map(([k, n]) => `${k} ${n}`).join(" · "); return t || "Ninguno";
+  };
   const noSalio = (f) => f.confirmado === "Aceptado" && !f.ejecutado && f.categoria !== "pendiente";
   const listas = useMemo(() => ({
     soft: filas.filter((f) => f.modelo === "SDD" && f.categoria === "no_show_soft"),
@@ -446,7 +474,12 @@ export default function Capacidad({ usuario }) {
           <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 14 }}>
             <div style={{ ...caja, flex: "1 1 680px", overflowX: "auto" }}>
               {modelo !== "SPOT" && (<>
-                <div style={{ fontWeight: 700, color: AZUL, fontSize: 14, marginBottom: 8 }}>SDD <span style={{ color: GRIS, fontWeight: 400, fontSize: 12 }}>· lo que MELI cobra</span></div>
+                <div style={{ fontWeight: 700, color: AZUL, fontSize: 14, marginBottom: 8, display: "flex", gap: 10, alignItems: "baseline", flexWrap: "wrap" }}>
+                  <span>SDD <span style={{ color: GRIS, fontWeight: 400, fontSize: 12 }}>· lo que MELI cobra</span></span>
+                  {cierreMeli && <span title={`Última foto de MELI: ${fHora(cierreMeli.ultima)}`} style={{ fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 10, cursor: "help",
+                    background: cierreMeli.cerrado ? "#d1fae5" : "#fef3c7", color: cierreMeli.cerrado ? "#047857" : "#b45309" }}>
+                    MELI · {cierreMeli.cerrado ? "día cerrado" : `día abierto, cierra el ${fCorta(cierreMeli.cierraEl)}`}</span>}
+                </div>
                 <table style={{ width: "100%", borderCollapse: "collapse" }}>
                   <thead><tr><th style={{ ...th, background: "none" }}></th>{colsSdd.map(([t]) => <th key={t} style={{ ...thC, background: "none", fontSize: 11 }}>{t}</th>)}</tr></thead>
                   <tbody>
@@ -463,8 +496,11 @@ export default function Capacidad({ usuario }) {
                 )}
                 {!meliTot && !loading && <div style={{ marginTop: 8, fontSize: 12, color: NARANJA }}>Sin foto de MELI para esta fecha</div>}
                 {reclamos.length > 0 && (
-                  <div style={{ marginTop: 14, border: "1px solid #fecaca", background: "#fff7f7", borderRadius: 10, padding: 12 }}>
-                    <div style={{ fontWeight: 700, color: "#b91c1c", fontSize: 13, marginBottom: 8 }}>Para reclamar a MELI · {reclamos.length} {reclamos.length === 1 ? "ruta" : "rutas"}: MELI dice que no salió, la Torre dice que sí</div>
+                  <div style={{ marginTop: 14, border: `1px solid ${cierreMeli?.cerrado ? "#fecaca" : "#fde68a"}`, background: cierreMeli?.cerrado ? "#fff7f7" : "#fffbeb", borderRadius: 10, padding: 12 }}>
+                    <div style={{ fontWeight: 700, color: cierreMeli?.cerrado ? "#b91c1c" : "#b45309", fontSize: 13, marginBottom: 8 }}>
+                      {cierreMeli?.cerrado ? "Para reclamar a MELI" : "A vigilar"} · {reclamos.length} {reclamos.length === 1 ? "ruta" : "rutas"}: MELI dice que no salió, la Torre dice que sí
+                      {!cierreMeli?.cerrado && cierreMeli?.cierraEl && <span style={{ fontWeight: 400 }}> · MELI puede corregirlo hasta el {fCorta(cierreMeli.cierraEl)}</span>}
+                    </div>
                     <table style={{ width: "100%", borderCollapse: "collapse", background: "#fff" }}>
                       <thead><tr>{["Fecha", "SC", "Placa", "Chofer rosterizado", "Ruta MELI sin ejecutar", "Ruta que salió (Torre)", "Según MELI (lista de rutas)", "Misma camioneta en MELI", "Supervisor"].map((t) => <th key={t} style={{ ...th, fontSize: 10.5 }}>{t}</th>)}</tr></thead>
                       <tbody>
@@ -556,10 +592,11 @@ export default function Capacidad({ usuario }) {
 
       {/* Ranking por SC */}
       {!sc && porSc.length > 0 && (
-        <div style={{ ...caja, marginBottom: 14, overflowX: "auto" }}>
+        <div style={{ ...caja, marginBottom: 14 }}>
           <div style={{ fontWeight: 700, color: AZUL, fontSize: 14, marginBottom: 8 }}>Por Service Center</div>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead style={{ position: "sticky", top: 0, zIndex: 2 }}><tr>
+          <div style={{ maxHeight: 520, overflow: "auto", border: `1px solid ${BORDE}`, borderRadius: 8 }}>
+          <table style={{ width: "100%", borderCollapse: "separate", borderSpacing: 0 }}>
+            <thead><tr>
               {[
                 ["SC", "", "Service Center"],
                 ["Comprometido", "c", "Vehículos SDD por día comprometidos con MELI (planilla de compromisos)"],
@@ -577,7 +614,7 @@ export default function Capacidad({ usuario }) {
                 ["Otros", "c", "El supervisor respondió Otros"],
                 ["Sin respuesta", "c", "No salió y el supervisor todavía no responde"],
                 ["≠ MELI", "c", "Rutas SDD donde MELI y la Torre dicen distinto si salió o no"],
-              ].map(([t, al, ayuda]) => <th key={t} title={ayuda} style={{ ...(al === "c" ? thC : th), color: t === "Acordado" ? NARANJA : GRIS, cursor: "help" }}>{t}</th>)}
+              ].map(([t, al, ayuda]) => <th key={t} title={ayuda} style={{ ...(al === "c" ? thC : th), color: t === "Acordado" ? NARANJA : GRIS, cursor: "help", position: "sticky", top: 0, zIndex: 2, background: "#f8fafc", borderBottom: `1px solid ${BORDE}` }}>{t}</th>)}
             </tr></thead>
             <tbody>
               {[...porSc].sort((a, b) => (b.no_salio_sdd + b.no_salio_spot + b.no_show_soft) - (a.no_salio_sdd + a.no_salio_spot + a.no_show_soft) || a.sc.localeCompare(b.sc)).map((x) => {
@@ -596,6 +633,7 @@ export default function Capacidad({ usuario }) {
                     <td style={tdC}><Dos brain={x.no_show_soft} meli={m.soft} /></td>
                     <td style={tdC}><Dos brain={x.no_salio_sdd} meli={m.hard} /></td>
                     <td style={{ ...tdC, fontWeight: 700, color: x.no_salio_spot ? "#334155" : "#94a3b8" }}>{x.no_salio_spot || "—"}</td>
+                    <td style={{ ...tdC, color: "#b91c1c", fontWeight: 700 }}>{x.no_show_hard || ""}</td>
                     <td style={{ ...tdC, color: "#b91c1c", fontWeight: 700 }}>{x.cancelado_hard || ""}</td>
                     <td style={tdC}>{x.no_salio_otro || ""}</td>
                     <td style={{ ...tdC, color: "#9f1239", fontWeight: 700 }}>{x.sin_responder || ""}</td>
@@ -605,6 +643,7 @@ export default function Capacidad({ usuario }) {
               })}
             </tbody>
           </table>
+          </div>
         </div>
       )}
 
@@ -638,7 +677,7 @@ export default function Capacidad({ usuario }) {
         </div>
         {vistaMeli ? (
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead style={{ position: "sticky", top: 0, zIndex: 2 }}><tr>
+            <thead><tr>
               {["Service Center", "Vehículo", "Transportista", "ID de Ruta", "Última actualización"].map((t) => <th key={t} style={th}>{t}</th>)}
               {["Solicitado", "Confirmado", "Asignado", "Ejecutado"].map((t) => <th key={t} style={{ ...thC, color: NARANJA }}>{t}</th>)}
               <th style={{ ...thC, color: AZUL }}>Torre</th>
@@ -662,7 +701,7 @@ export default function Capacidad({ usuario }) {
           </table>
         ) : (
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
-          <thead style={{ position: "sticky", top: 0, zIndex: 2 }}><tr>
+          <thead><tr>
             <th style={th}>Fecha</th><th style={th}>SC</th><th style={th}>Vehículo</th><th style={th}>Transportista</th><th style={th}>ID de Ruta</th>
             <th style={thC}>Confirmado</th><th style={thC}>Asignado</th><th style={thC}>Ejecutado</th><th style={{ ...thC, color: NARANJA }}>MELI</th><th style={th}>Resultado</th>
           </tr></thead>
