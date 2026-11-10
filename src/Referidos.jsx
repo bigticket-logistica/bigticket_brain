@@ -95,16 +95,18 @@ export default function ModuloReferidos({ usuario }) {
       sb.from("ref_propuestas").select("*"),
       sb.from("ref_canales").select("*").order("creado_at"),
     ]);
-    const [el, an, ms, la, ea, ec] = await Promise.all([
+    const [el, an, ms, la, ea, ec, ev] = await Promise.all([
       sb.from("ref_eliminados").select("*"),
       sb.from("vw_ref_brain_anfitriones").select("*"),
       sb.from("ref_mensajes").select("*").order("creado_at").limit(5000),
       sb.from("vw_ref_brain_lista_anfitriones").select("*"),
       sb.from("vw_ref_brain_embudo_anfitrion").select("*"),
       sb.from("vw_ref_brain_embudo_canal").select("*"),
+      sb.from("ref_postulacion_eventos").select("codigo, tipo").eq("es_canal", false).limit(20000),
     ]);
     setEliminados(el.data || []); setAnfitriones(an.data || []); setMensajes(ms.data || []); setListaAnf(la.data || []);
-    setEmbudo({ anf: ea.data || [], canal: ec.data || [] });
+    // ev: eventos de links de referidores; si no se puede leer, "Link general" queda en "—".
+    setEmbudo({ anf: ea.data || [], canal: ec.data || [], ev: ev.error ? null : (ev.data || []) });
     const rq = await sb.from("ref_requerimientos").select("id", { count: "exact", head: true }).in("estado", ["pendiente", "en_proceso"]);
     setReqAbiertos(rq.count || 0);
     // Si ref_canales no se puede leer, la pestaña sigue funcionando sin las filas de canal.
@@ -149,7 +151,7 @@ export default function ModuloReferidos({ usuario }) {
           {tab === "referidos" && <Referidos referidos={referidos} canales={canales} eliminados={elimReferidos} onEliminar={(id, m) => eliminar("referido", id, m)} />}
           {tab === "mensajes" && <Mensajes referidores={referidoresVivos} mensajes={mensajes} abierto={chatCon} setAbierto={setChatCon} usuario={usuario} onCambio={cargar} />}
           {tab === "anfitriones" && <Anfitriones lista={anfitriones.filter((a) => !elimReferidores.has(String(a.id)))} anfitriones={listaAnf} embudo={embudo} canales={canales} />}
-          {tab === "embudo" && <Embudo referidos={referidosVivos} anfitriones={anfitriones} listaAnf={listaAnf} embudo={embudo} canales={canales} />}
+          {tab === "embudo" && <Embudo referidos={referidosVivos} codigosElim={new Set(referidores.filter((r) => elimReferidores.has(String(r.id))).map((r) => r.codigo))} anfitriones={anfitriones} listaAnf={listaAnf} embudo={embudo} canales={canales} />}
           {tab === "referidores" && <Referidores referidores={referidores} canales={canales} referidos={referidosVivos} eliminados={elimReferidores} onEliminar={(id, m) => eliminar("referidor", id, m)}
             origen={Object.fromEntries(anfitriones.map((a) => [String(a.id), a]))} listaAnf={listaAnf}
             onMensaje={(id) => { setChatCon(id); setTab("mensajes"); }} />}
@@ -712,8 +714,10 @@ const PASOS = [
   ["abrieron", "Abrieron postulación"], ["si", "Pueden facturar"], ["postularon", "Postularon"],
   ["alta", "Solicitud de alta"], ["firmado", "Contrato firmado"], ["ruta", "En ruta"], ["meta", "Meta 20 rutas"],
 ];
-function Embudo({ referidos = [], anfitriones = [], listaAnf = [], embudo = { anf: [], canal: [] }, canales = [] }) {
+function Embudo({ referidos: todos = [], codigosElim = new Set(), anfitriones = [], listaAnf = [], embudo = { anf: [], canal: [] }, canales = [] }) {
   const n = (v) => Number(v || 0);
+  // Referidores eliminados (pruebas): no cuentan sus referidos ni las visitas a su link.
+  const referidos = todos.filter((r) => r.canal || !codigosElim.has(r.codigo));
   const anfDe = Object.fromEntries(anfitriones.map((a) => [a.codigo, a.anfitrion || null]));
   const cuenta = (rs) => ({
     postularon: rs.length,
@@ -738,7 +742,10 @@ function Embudo({ referidos = [], anfitriones = [], listaAnf = [], embudo = { an
     filas.push({ k: "a-" + a.codigo, nombre: nom, tipo: a.tipo === "supervisor" ? "Supervisor" : "Aliado", abrieron: n(e.visitas_postulacion), si: n(e.factura_si), no: n(e.factura_no), ...cuenta(tomar((r) => !r.canal && anfDe[r.codigo] === a.codigo)) });
   });
   const resto = tomar(() => true);
-  filas.push({ k: "general", nombre: "Link general", tipo: "Referidor sin anfitrión", abrieron: null, si: null, no: null, ...cuenta(resto) });
+  // Link general: eventos de los links de referidores que no llegaron por un anfitrión.
+  const evGen = embudo.ev ? embudo.ev.filter((e) => !anfDe[e.codigo] && !codigosElim.has(e.codigo)) : null;
+  const evN = (t) => (evGen ? evGen.filter((e) => e.tipo === t).length : null);
+  filas.push({ k: "general", nombre: "Link general", tipo: "Referidor sin anfitrión", abrieron: evN("visita"), si: evN("factura_si"), no: evN("factura_no"), ...cuenta(resto) });
   filas.sort((x, y) => (y.postularon - x.postularon) || (n(y.abrieron) - n(x.abrieron)));
   const total = { abrieron: filas.reduce((t, f) => t + n(f.abrieron), 0), si: filas.reduce((t, f) => t + n(f.si), 0), no: filas.reduce((t, f) => t + n(f.no), 0), ...cuenta(referidos) };
   const max = Math.max(1, ...PASOS.map(([k]) => n(total[k])));
