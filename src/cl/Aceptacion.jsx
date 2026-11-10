@@ -16,7 +16,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 import { useState, useEffect, useMemo } from "react";
 
-const NAVY = "#002E5D";
+const NAVY = "#1a3a6b";
 const VERDE = "#0d8043";
 const ROJO = "#b42318";
 const AMBAR = "#a16207";
@@ -60,8 +60,8 @@ const n = (v) => (v === null || v === undefined || v === "" ? 0 : Number(v));
 // ── Estado de cumplimiento de un SC en un día ───────────────────────────────
 const ESTADOS = {
   en_plazo:  { rotulo: "En plazo",   color: AZUL,  fondo: "#eaf1ff" },
-  cumple:    { rotulo: "Cumple",     color: VERDE, fondo: "#e7f6ee" },
-  no_cumple: { rotulo: "No cumple",  color: ROJO,  fondo: "#fdecec" },
+  cumple:    { rotulo: "Cumplió",    color: VERDE, fondo: "#e7f6ee" },
+  no_cumple: { rotulo: "No cumplió", color: ROJO,  fondo: "#fdecec" },
   sin_dato:  { rotulo: "Sin dato",   color: GRIS,  fondo: "#f1f5f9" },
 };
 function estadoDe(f, ahora) {
@@ -79,6 +79,33 @@ function Etiqueta({ estado, extra }) {
       {e.rotulo}{extra ? ` · ${extra}` : ""}
     </span>
   );
+}
+
+// Dos líneas en una celda: el dato principal y una nota chica debajo
+function Celda({ principal, nota, colorNota }) {
+  return (
+    <div style={{ lineHeight: 1.3 }}>
+      <div>{principal}</div>
+      {nota && <div style={{ fontSize: 11, color: colorNota || "#8a94a6", marginTop: 2 }}>{nota}</div>}
+    </div>
+  );
+}
+
+// Lo que pasó con las rutas que MELI publicó antes del corte, en palabras
+function detalleCumplimiento(f, ahora) {
+  const tarde = n(f.aceptadas_tarde);
+  const siguen = Math.max(0, n(f.sin_aceptar_al_corte) - tarde);
+  if (f.estado === "en_plazo") {
+    const falta = f.corte ? duracion(new Date(f.corte).getTime() - ahora) : "";
+    return n(f.pendientes) ? [`${n(f.pendientes)} por aceptar · quedan ${falta}`, AMBAR] : ["todo aceptado", VERDE];
+  }
+  if (f.estado === "cumple") return ["todo aceptado antes de las 20:30", VERDE];
+  if (f.estado === "sin_dato") return ["aceptadas antes de que existiera el registro", GRIS];
+  const partes = [];
+  if (n(f.aceptadas_a_tiempo)) partes.push(`${n(f.aceptadas_a_tiempo)} a tiempo`);
+  if (tarde) partes.push(`${tarde} aceptadas tarde`);
+  if (siguen) partes.push(`${siguen} siguen sin aceptar`);
+  return [partes.join(" · "), ROJO];
 }
 
 function Tarjeta({ titulo, valor, color, sub }) {
@@ -178,8 +205,14 @@ export default function ModuloAceptacionCL() {
     { titulo: "Canceladas", valor: (f) => n(f.canceladas) },
     { titulo: "Pendientes", valor: (f) => n(f.pendientes) },
     { titulo: "Sin aceptar al corte", valor: (f) => n(f.sin_aceptar_al_corte) },
-    { titulo: "Última aceptación", valor: (f) => fechaHora(f.ultima_aceptacion) },
-    { titulo: "Estado 20:30", valor: (f) => ESTADOS[f.estado].rotulo },
+    { titulo: "MELI publicó (primeras)", valor: (f) => fechaHora(f.publicada_desde) },
+    { titulo: "MELI publicó (últimas antes del corte)", valor: (f) => fechaHora(f.publicada_hasta) },
+    { titulo: "Publicadas después del corte", valor: (f) => n(f.ofrecidas_post_corte) },
+    { titulo: "Bigticket aceptó (primeras)", valor: (f) => fechaHora(f.aceptada_desde) },
+    { titulo: "Bigticket aceptó (últimas)", valor: (f) => fechaHora(f.aceptada_hasta) },
+    { titulo: "Aceptadas a tiempo", valor: (f) => n(f.aceptadas_a_tiempo) },
+    { titulo: "Aceptadas tarde", valor: (f) => n(f.aceptadas_tarde) },
+    { titulo: "Cumplimiento 20:30", valor: (f) => ESTADOS[f.estado].rotulo },
   ]);
 
   const botonDia = (f, texto) => (
@@ -246,13 +279,14 @@ export default function ModuloAceptacionCL() {
             <tr>
               <th style={{ ...th, textAlign: "left" }}>SC</th>
               <th style={th}>Totales</th><th style={th}>Aceptadas</th><th style={th}>Rechazadas</th>
-              <th style={th}>Canceladas</th><th style={th}>Pendientes</th><th style={th}>Última aceptación</th>
-              <th style={th}>Antes de las 20:30</th>
+              <th style={th}>Canceladas</th><th style={th}>Pendientes</th>
+              <th style={th}>MELI las publicó</th><th style={th}>Bigticket las aceptó</th>
+              <th style={th}>Cumplimiento corte 20:30</th>
             </tr>
           </thead>
           <tbody>
-            {cargando && !conEstado.length && <tr><td style={{ ...td, color: GRIS }} colSpan={8}>Cargando…</td></tr>}
-            {!cargando && !conEstado.length && <tr><td style={{ ...td, color: GRIS }} colSpan={8}>MELI todavía no ofrece rutas para el {diaTexto(fecha)}.</td></tr>}
+            {cargando && !conEstado.length && <tr><td style={{ ...td, color: GRIS }} colSpan={9}>Cargando…</td></tr>}
+            {!cargando && !conEstado.length && <tr><td style={{ ...td, color: GRIS }} colSpan={9}>MELI todavía no ofrece rutas para el {diaTexto(fecha)}.</td></tr>}
             {conEstado.map((f) => (
               <tr key={f.facility_id}>
                 <td style={{ ...td, textAlign: "left" }}>
@@ -263,16 +297,35 @@ export default function ModuloAceptacionCL() {
                 <td style={{ ...td, color: n(f.rechazadas) ? ROJO : "#98a2b3" }}>{n(f.rechazadas)}</td>
                 <td style={{ ...td, color: "#98a2b3" }}>{n(f.canceladas)}</td>
                 <td style={{ ...td, color: n(f.pendientes) ? AMBAR : "#98a2b3", fontWeight: n(f.pendientes) ? 700 : 400 }}>{n(f.pendientes)}</td>
-                <td style={td}>{fechaHora(f.ultima_aceptacion)}</td>
                 <td style={td}>
-                  <Etiqueta estado={f.estado}
-                    extra={f.estado === "no_cumple" ? `${n(f.sin_aceptar_al_corte)} sin aceptar`
-                         : f.estado === "en_plazo" && n(f.pendientes) ? `${n(f.pendientes)} por aceptar` : null} />
+                  {f.publicada_hasta
+                    ? <Celda principal={fechaHora(f.publicada_hasta)}
+                        nota={[fechaHora(f.publicada_desde) !== fechaHora(f.publicada_hasta) ? `primeras: ${fechaHora(f.publicada_desde)}` : null,
+                               n(f.ofrecidas_post_corte) ? `+${n(f.ofrecidas_post_corte)} después del corte` : null].filter(Boolean).join(" · ") || null} />
+                    : n(f.ofrecidas_post_corte) ? <Celda principal="—" nota={`${n(f.ofrecidas_post_corte)} después del corte`} /> : "—"}
+                </td>
+                <td style={td}>
+                  {f.aceptada_hasta
+                    ? <Celda principal={fechaHora(f.aceptada_hasta)}
+                        nota={fechaHora(f.aceptada_desde) !== fechaHora(f.aceptada_hasta) ? `primeras: ${fechaHora(f.aceptada_desde)}` : null}
+                        colorNota={undefined} />
+                    : "—"}
+                </td>
+                <td style={td}>
+                  {(() => { const [texto, color] = detalleCumplimiento(f, ahora);
+                    return <Celda principal={<Etiqueta estado={f.estado} />} nota={texto} colorNota={color} />; })()}
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
+      </div>
+
+      <div style={{ fontSize: 11.5, color: "#667085", margin: "-10px 0 18px", lineHeight: 1.5 }}>
+        <b>MELI las publicó:</b> hora de la última ruta que MELI publicó antes del corte (debajo, desde cuándo había rutas y cuántas llegaron después del corte, que no cuentan).{" "}
+        <b>Bigticket las aceptó:</b> hora de la última aceptación de esas rutas.{" "}
+        <b>Cumplimiento:</b> <span style={{ color: VERDE }}>Cumplió</span> si a las 20:30 todas las rutas publicadas antes estaban aceptadas;{" "}
+        <span style={{ color: ROJO }}>No cumplió</span> detalla cuántas se aceptaron a tiempo, cuántas tarde y cuántas siguen sin aceptar. Horas de Chile; precisión de 5 minutos.
       </div>
 
       {/* Historial */}
