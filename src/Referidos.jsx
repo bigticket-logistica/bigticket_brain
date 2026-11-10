@@ -57,6 +57,7 @@ const TABS_REFERIDOS = [
   { id: "referidos", label: "Referidos", desc: "Choferes referidos y su avance" },
   { id: "referidores", label: "Referidores", desc: "Quién refiere y sus canales" },
   { id: "anfitriones", label: "Anfitriones", desc: "Supervisores con código anfitrión" },
+  { id: "embudo", label: "Embudo", desc: "De la postulación a la meta, por fuente" },
   { id: "mensajes", label: "Mensajes", desc: "Chat con los referidores" },
   { id: "oportunidades", label: "Oportunidades", desc: "Vacantes por SC" },
   { id: "requerimientos", label: "Requerimientos", desc: "Pedidos de choferes por SC" },
@@ -128,7 +129,7 @@ export default function ModuloReferidos({ usuario }) {
     if (error) { alert("No se pudo eliminar: " + error.message); return false; }
     cargar(); return true;
   };
-  const TABS = [["bonos", "Bonos", porValidar], ["referidos", "Referidos", referidosVivos.length], ["referidores", "Referidores", referidoresVivos.length + canales.length], ["anfitriones", "Anfitriones", null], ["mensajes", "Mensajes", mensajes.filter((m) => m.de === "referidor" && !m.leido_at).length], ["oportunidades", "Oportunidades", vacantes], ["requerimientos", "Requerimientos", reqAbiertos]];
+  const TABS = [["bonos", "Bonos", porValidar], ["referidos", "Referidos", referidosVivos.length], ["referidores", "Referidores", referidoresVivos.length + canales.length], ["anfitriones", "Anfitriones", null], ["embudo", "Embudo", null], ["mensajes", "Mensajes", mensajes.filter((m) => m.de === "referidor" && !m.leido_at).length], ["oportunidades", "Oportunidades", vacantes], ["requerimientos", "Requerimientos", reqAbiertos]];
   // Contadores al menú lateral (solo cuando cambian)
   const conteos = JSON.stringify(TABS.map(([, , n]) => n || 0));
   useEffect(() => { registrarSubtabs("referidos", TABS_REFERIDOS.map((t, i) => ({ ...t, n: TABS[i] ? TABS[i][2] : null }))); }, [conteos]);   // eslint-disable-line react-hooks/exhaustive-deps
@@ -148,6 +149,7 @@ export default function ModuloReferidos({ usuario }) {
           {tab === "referidos" && <Referidos referidos={referidos} canales={canales} eliminados={elimReferidos} onEliminar={(id, m) => eliminar("referido", id, m)} />}
           {tab === "mensajes" && <Mensajes referidores={referidoresVivos} mensajes={mensajes} abierto={chatCon} setAbierto={setChatCon} usuario={usuario} onCambio={cargar} />}
           {tab === "anfitriones" && <Anfitriones lista={anfitriones.filter((a) => !elimReferidores.has(String(a.id)))} anfitriones={listaAnf} embudo={embudo} canales={canales} />}
+          {tab === "embudo" && <Embudo referidos={referidosVivos} anfitriones={anfitriones} listaAnf={listaAnf} embudo={embudo} canales={canales} />}
           {tab === "referidores" && <Referidores referidores={referidores} canales={canales} referidos={referidosVivos} eliminados={elimReferidores} onEliminar={(id, m) => eliminar("referidor", id, m)}
             origen={Object.fromEntries(anfitriones.map((a) => [String(a.id), a]))} listaAnf={listaAnf}
             onMensaje={(id) => { setChatCon(id); setTab("mensajes"); }} />}
@@ -695,6 +697,100 @@ function Referidores({ referidores, canales = [], referidos = [], eliminados = n
           </table>
         </div>
       )}
+    </>
+  );
+}
+
+// ── Embudo: de la postulación a la meta, por fuente ─────────────────────────
+// Arriba (abrieron postulación, ¿puede facturar?) sale de
+// vw_ref_brain_embudo_anfitrion / _canal (desde el 3-nov-2026); abajo
+// (solicitud de alta, contrato, ruta, meta) sale de la etapa de cada referido
+// en vw_ref_brain_referidos. Un referido cuenta en la fuente del referidor que
+// lo trajo: canal BigTicket, el anfitrión de ese referidor o link general.
+const ALTA = ["entrevista_alta", "firma_contrato", ...FIRMADO];
+const PASOS = [
+  ["abrieron", "Abrieron postulación"], ["si", "Pueden facturar"], ["postularon", "Postularon"],
+  ["alta", "Solicitud de alta"], ["firmado", "Contrato firmado"], ["ruta", "En ruta"], ["meta", "Meta 20 rutas"],
+];
+function Embudo({ referidos = [], anfitriones = [], listaAnf = [], embudo = { anf: [], canal: [] }, canales = [] }) {
+  const n = (v) => Number(v || 0);
+  const anfDe = Object.fromEntries(anfitriones.map((a) => [a.codigo, a.anfitrion || null]));
+  const cuenta = (rs) => ({
+    postularon: rs.length,
+    alta: rs.filter((r) => ALTA.includes(r.etapa)).length,
+    firmado: rs.filter((r) => FIRMADO.includes(r.etapa)).length,
+    ruta: rs.filter((r) => EN_RUTA.includes(r.etapa)).length,
+    meta: rs.filter((r) => r.etapa === "quince_rutas").length,
+    rechazo: rs.filter((r) => r.etapa === "no_aprobado").length,
+  });
+  const usados = new Set();
+  const tomar = (fn) => { const rs = referidos.filter((r) => !usados.has(r.referido_id) && fn(r)); rs.forEach((r) => usados.add(r.referido_id)); return rs; };
+  const filas = [];
+  (embudo.canal || []).filter((c) => (canales.find((x) => x.codigo === c.codigo) || {}).activo !== false).forEach((c) => {
+    const nom = (canales.find((x) => x.codigo === c.codigo) || {}).nombre || c.nombre || c.codigo;
+    const ico = c.codigo === "facebook" ? "📘 " : c.codigo === "camioneta" ? "🚐 " : "";
+    filas.push({ k: "c-" + c.codigo, nombre: ico + nom, tipo: "Canal BigTicket", abrieron: n(c.visitas), si: n(c.factura_si), no: n(c.factura_no), ...cuenta(tomar((r) => r.canal === c.codigo)) });
+  });
+  const em = Object.fromEntries((embudo.anf || []).map((e) => [e.codigo, e]));
+  listaAnf.filter((a) => a.en_panel !== false).forEach((a) => {
+    const e = em[a.codigo] || {};
+    const nom = a.tipo === "supervisor" ? a.nombre : `${a.tipo === "facebook" ? "📘" : "🌮"} ${a.nombre}`;
+    filas.push({ k: "a-" + a.codigo, nombre: nom, tipo: a.tipo === "supervisor" ? "Supervisor" : "Aliado", abrieron: n(e.visitas_postulacion), si: n(e.factura_si), no: n(e.factura_no), ...cuenta(tomar((r) => !r.canal && anfDe[r.codigo] === a.codigo)) });
+  });
+  const resto = tomar(() => true);
+  filas.push({ k: "general", nombre: "Link general", tipo: "Referidor sin anfitrión", abrieron: null, si: null, no: null, ...cuenta(resto) });
+  filas.sort((x, y) => (y.postularon - x.postularon) || (n(y.abrieron) - n(x.abrieron)));
+  const total = { abrieron: filas.reduce((t, f) => t + n(f.abrieron), 0), si: filas.reduce((t, f) => t + n(f.si), 0), no: filas.reduce((t, f) => t + n(f.no), 0), ...cuenta(referidos) };
+  const max = Math.max(1, ...PASOS.map(([k]) => n(total[k])));
+  const pct = (a, b) => (b ? Math.round((a * 100) / b) + "%" : "");
+  const Celda = ({ v, de, c }) => (v === null ? <td style={{ ...td, color: GRIS }}>—</td> : (
+    <td style={{ ...td, fontWeight: 700, color: v ? c || AZUL : GRIS }}>{v}{de !== undefined && <div style={sub}>{pct(v, de)}</div>}</td>
+  ));
+  const fila = (f, estilo) => (
+    <tr key={f.k} style={estilo}>
+      <td style={td}><b>{f.nombre}</b>{f.tipo && <div style={sub}>{f.tipo}</div>}</td>
+      <Celda v={f.abrieron} />
+      <Celda v={f.si} de={f.si === null ? undefined : f.si + f.no} c="#166534" />
+      <Celda v={f.no} de={f.no === null ? undefined : f.si + f.no} c="#b42318" />
+      <Celda v={f.postularon} c={NARANJA} />
+      <Celda v={f.alta} de={f.postularon} />
+      <Celda v={f.firmado} de={f.postularon} />
+      <Celda v={f.ruta} de={f.postularon} />
+      <Celda v={f.meta} de={f.postularon} c="#166534" />
+      <Celda v={f.rechazo} de={f.postularon} c="#b42318" />
+    </tr>
+  );
+  return (
+    <>
+      <div className="form-card">
+        {PASOS.map(([k, t], i) => {
+          const v = n(total[k]);
+          const prev = i > 0 ? n(total[PASOS[i - 1][0]]) : null;
+          return (
+            <div key={k} style={{ display: "grid", gridTemplateColumns: "170px 1fr 110px", alignItems: "center", gap: 10, marginBottom: 6 }}>
+              <div style={{ fontSize: 13, color: AZUL, fontWeight: 600 }}>{t}</div>
+              <div style={{ background: "#f2f4f7", borderRadius: 6, height: 22 }}>
+                <div style={{ width: `${Math.max(v ? 2 : 0, (v * 100) / max)}%`, height: 22, borderRadius: 6, background: k === "si" ? "#166534" : i < 3 ? AZUL : NARANJA }} />
+              </div>
+              <div style={{ fontSize: 13 }}><b>{v}</b>{prev !== null && <span style={{ color: GRIS }}> · {pct(v, prev) || "—"}</span>}</div>
+            </div>
+          );
+        })}
+        <div style={{ fontSize: 13, marginTop: 8 }}>
+          <span style={{ color: "#b42318", fontWeight: 700 }}>❌ No pueden facturar: {total.no}</span>
+          {total.si + total.no > 0 && <span style={{ color: GRIS }}> ({pct(total.no, total.si + total.no)} de los que respondieron)</span>}
+          <span style={{ color: GRIS }}> · No aprobados: <b style={{ color: "#b42318" }}>{total.rechazo}</b></span>
+        </div>
+      </div>
+      <div className="form-card" style={{ padding: 0, overflowX: "auto" }}>
+        <table style={tabla}>
+          <thead><tr>{["Fuente", "Abrieron postulación", "✅ Pueden facturar", "❌ No pueden facturar", "Postularon", "Solicitud de alta", "Contrato firmado", "En ruta", "Meta 20 rutas", "No aprobado"].map((h) => <th key={h} style={th}>{h}</th>)}</tr></thead>
+          <tbody>
+            {filas.map((f) => fila(f, { borderTop: `0.5px solid ${BORDE}`, opacity: n(f.abrieron) || f.postularon ? 1 : 0.55 }))}
+            {fila({ ...total, k: "total", nombre: "Total", tipo: "" }, { borderTop: `1.5px solid ${AZUL}`, background: "#f8f9fb" })}
+          </tbody>
+        </table>
+      </div>
     </>
   );
 }
