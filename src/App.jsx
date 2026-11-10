@@ -15182,6 +15182,7 @@ function MantenedorSupervisores() {
 
 const TABS_CUIDADO_CL = [
   { id: "ca_ficha", label: "Ficha del activo", desc: "Todo de cada patente: datos, documentos, costos e historial" },
+  { id: "ca_documentos", label: "Documentos", desc: "Subir y confirmar SOAP, revisión técnica, permiso, seguro y leasing" },
   { id: "ca_flota", label: "Estado de flota", desc: "Qué pasa hoy con cada vehículo propio" },
   { id: "ca_mantenciones", label: "Mantenciones", desc: "Próxima mantención por km (Geotab), pautas y talleres" },
   { id: "ca_tareas", label: "Tareas del supervisor", desc: "Detenciones, hallazgos y avisos al supervisor" },
