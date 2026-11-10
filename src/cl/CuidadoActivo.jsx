@@ -665,17 +665,31 @@ function Mantenciones({ quien }) {
           <button key={k} style={btn(vista === k ? undefined : "sec")} onClick={() => setVista(k)}>{t}</button>
         ))}
       </div>
-      {vista === "programa" && <ProgramaMnt />}
+      {vista === "programa" && <ProgramaMnt quien={quien} />}
       {vista === "pautas" && <PautasMnt quien={quien} />}
       {vista === "talleres" && <TalleresMnt quien={quien} />}
     </div>
   );
 }
-function ProgramaMnt() {
+function ProgramaMnt({ quien }) {
   const [filas, setFilas] = useState(null);
+  const [avisos, setAvisos] = useState({});
   const [f, setF] = useState({ estado: "", texto: "" });
   const [abierta, setAbierta] = useState(null);
-  useEffect(() => { rpc("fn_mnt_programa_cl").then(setFilas).catch(() => setFilas([])); }, []);
+  const [busy, setBusy] = useState("");
+  const cargar = () => {
+    rpc("fn_mnt_programa_cl").then(setFilas).catch(() => setFilas([]));
+    api("vw_mnt_avisos_cl?select=*&order=creado_at.desc&limit=1000").then((r) => {
+      const m = {}; for (const a of r || []) m[`${a.patente}|${a.pauta}`] = a; setAvisos(m);
+    }).catch(() => setAvisos({}));
+  };
+  useEffect(cargar, []);
+  const avisar = async (x) => {
+    if (!window.confirm(`Avisar la mantención de ${x.patente} (pauta ${kmf(x.proxima_pauta)} km):\n\n• Se crea una tarea al supervisor con el taller, su dirección y el plazo.\n• Al transportista le aparece el aviso en su portal.\n\nLos correos salen según el modo de correos (en prueba solo te llegan a ti). ¿Seguir?`)) return;
+    setBusy(x.patente);
+    try { await rpc("fn_mnt_avisar", { p_patente: x.patente, p_por: quien }); cargar(); }
+    catch (e) { alert(e.message); } finally { setBusy(""); }
+  };
   const n = (e) => (filas || []).filter((x) => x.estado === e).length;
   const vis = (filas || []).filter((x) => (!f.estado ? x.estado !== "inactivo" : x.estado === f.estado)
     && (!f.texto || `${x.patente} ${x.modelo || ""} ${x.empresa || ""} ${x.ceco || ""}`.toLowerCase().includes(f.texto.toLowerCase())));
@@ -703,11 +717,11 @@ function ProgramaMnt() {
         <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1000 }}>
             <thead><tr style={{ background: C.fondo, textAlign: "left" }}>
-              {["Patente", "Modelo · CECO", "Empresa", "Última mantención", "Km actual", "Próxima pauta", "Faltan", "Fecha estimada", "Taller autorizado", "Estado"].map((h) => <th key={h} style={{ ...celda, fontSize: 12, color: C.suave }}>{h}</th>)}
+              {["Patente", "Modelo · CECO", "Empresa", "Última mantención", "Km actual", "Próxima pauta", "Faltan", "Fecha estimada", "Taller autorizado", "Estado", "Aviso"].map((h) => <th key={h} style={{ ...celda, fontSize: 12, color: C.suave }}>{h}</th>)}
             </tr></thead>
             <tbody>
-              {vis.length === 0 && <tr><td colSpan={10} style={{ ...celda, color: C.tenue, textAlign: "center" }}>Nada con este filtro.</td></tr>}
-              {vis.map((x) => { const e = MN_ESTADO[x.estado] || [x.estado, C.fondo, C.suave]; return [
+              {vis.length === 0 && <tr><td colSpan={11} style={{ ...celda, color: C.tenue, textAlign: "center" }}>Nada con este filtro.</td></tr>}
+              {vis.map((x) => { const e = MN_ESTADO[x.estado] || [x.estado, C.fondo, C.suave]; const av = avisos[`${x.patente}|${x.proxima_pauta}`]; return [
                 <tr key={x.patente} style={{ cursor: "pointer", background: abierta === x.patente ? "#fafbfd" : "#fff" }} onClick={() => setAbierta(abierta === x.patente ? null : x.patente)}>
                   <td style={{ ...celda, fontWeight: 800, color: C.navy }}>{x.patente}</td>
                   <td style={celda}>{x.modelo || "—"}<div style={{ color: C.tenue, fontSize: 12 }}>{x.ceco}</div></td>
@@ -719,8 +733,18 @@ function ProgramaMnt() {
                   <td style={celda}>{x.fecha_estimada ? fd(x.fecha_estimada) : "—"}{x.km_dia && <div style={{ color: C.tenue, fontSize: 12 }}>{kmf(Math.round(x.km_dia))} km/día</div>}</td>
                   <td style={celda}>{x.taller || "—"}</td>
                   <td style={celda}>{chip(e[0], e[1], e[2])}</td>
+                  <td style={celda} onClick={(ev) => ev.stopPropagation()}>
+                    {av ? <>
+                      {chip("Avisado", "#eef2f8", C.navy)}
+                      <div style={{ fontSize: 11.5, color: C.tenue, marginTop: 3 }}>{fh(av.creado_at)}</div>
+                      <div style={{ fontSize: 11.5, color: C.suave }}>Tarea: {(ESTADO[av.tarea_estado] || [av.tarea_estado || "—"])[0]}</div>
+                      <div style={{ fontSize: 11.5, color: C.suave }}>Transportista: {av.visto_tercero_at ? `lo vio ${fh(av.visto_tercero_at)}` : "aún no lo ve"}</div>
+                    </> : ["proxima", "vencida"].includes(x.estado)
+                      ? <button style={btn(x.estado === "vencida" ? "rojo" : undefined)} disabled={busy === x.patente} onClick={() => avisar(x)}>{busy === x.patente ? "Avisando…" : "Avisar"}</button>
+                      : <span style={{ color: C.tenue }}>—</span>}
+                  </td>
                 </tr>,
-                abierta === x.patente && <tr key={x.patente + "h"}><td colSpan={10} style={{ padding: 0, borderBottom: `1px solid ${C.borde}` }}><HistorialMnt patente={x.patente} /></td></tr>,
+                abierta === x.patente && <tr key={x.patente + "h"}><td colSpan={11} style={{ padding: 0, borderBottom: `1px solid ${C.borde}` }}><HistorialMnt patente={x.patente} /></td></tr>,
               ]; })}
             </tbody>
           </table>
