@@ -16,7 +16,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 import { useEffect, useState } from "react";
 
-const NAVY = "#002E5D", AMBAR = "#a16207", VERDE = "#0d8043", ROJO = "#b42318";
+const NAVY = "#1a3a6b", AMBAR = "#a16207", VERDE = "#0d8043", ROJO = "#b42318";
 const n = (v) => (v === null || v === undefined || v === "" ? 0 : Number(v));
 const fmt = (v) => n(v).toLocaleString("es-CL");
 const vol = (v) => n(v).toLocaleString("es-CL", { minimumFractionDigits: 2, maximumFractionDigits: 3 });
@@ -35,6 +35,30 @@ const hoyCL = () => new Intl.DateTimeFormat("en-CA", { timeZone: "America/Santia
   month: "2-digit", day: "2-digit" }).format(new Date());
 
 // Patente chilena: 4 letras + 2 números (nueva) o 2 letras + 4 números (antigua)
+// Lee el maestro (vw_maestro_canon) de a 1000 filas y le suma el PESO de cada guía
+// (vw_maestro_canon_peso: suma de los ítems de la guía, igual que el volumen).
+// filtro: "fecha=eq.AAAA-MM-DD" o "fecha=gte.X&fecha=lte.Y". Devuelve null si falla.
+async function leerMaestroCanon(apiSuave, filtro, fallos) {
+  const leer = async (vista, select, orden) => {
+    const todo = [];
+    for (let desde = 0; ; desde += 1000) {
+      const lote = await apiSuave(`${vista}?select=${select}&${filtro}&order=${orden}&limit=1000&offset=${desde}`, null, fallos);
+      if (lote === null) return null;
+      todo.push(...lote);
+      if (lote.length < 1000) return todo;
+    }
+  };
+  const [filas, pesos] = await Promise.all([
+    leer("vw_maestro_canon", "*", "fecha.asc,idViajes.asc,FOLIO_GUIA.asc"),
+    leer("vw_maestro_canon_peso", "idViajes,FOLIO_GUIA,PESO", "idViajes.asc,FOLIO_GUIA.asc"),
+  ]);
+  if (filas === null) return null;
+  const pesoDe = Object.fromEntries((pesos || []).map((p) => [`${p.idViajes}|${p.FOLIO_GUIA}`, p.PESO]));
+  return filas.map((r) => ({ ...r, PESO: pesoDe[`${r.idViajes}|${r.FOLIO_GUIA}`] ?? null }));
+}
+const kg = (v) => (v === null || v === undefined || v === "" ? "—" : Number(v).toLocaleString("es-CL", { maximumFractionDigits: 1 }));
+const decimalCL = (v) => String(v ?? "").replace(".", ",");
+
 // Una guía puede traer más de una patente en "patentes"
 const listaPatentes = (s) => String(s || "").split(/[,;/|]+/).map((p) => p.toUpperCase().replace(/[^A-Z0-9]/g, "")).filter(Boolean);
 const patenteValida = (p) => /^([A-Z]{4}\d{2}|[A-Z]{2}\d{4})$/.test(String(p || "").toUpperCase().replace(/[^A-Z0-9]/g, ""));
@@ -309,11 +333,13 @@ export default function MaestroCanon({ fecha, api, apiSuave, descargarCSV, empre
   const [error, setError] = useState("");
   const [vista, setVista] = useState("guias");   // guias · rutas · comparar
   const [f, setF] = useState({ servicio: "", cecos: "", busca: "", soloAlertas: false });
+  const [periodo, setPeriodo] = useState({ desde: fecha, hasta: fecha, bajando: false, msg: "" });
+  useEffect(() => { setPeriodo((p) => ({ ...p, desde: fecha, hasta: fecha, msg: "" })); }, [fecha]);
 
   const cargar = async () => {
     if (!fecha) return;
     const fallos = [];
-    const d = await apiSuave(`vw_maestro_canon?fecha=eq.${fecha}&order=idViajes.asc,FOLIO_GUIA.asc&limit=20000`, null, fallos);
+    const d = await leerMaestroCanon(apiSuave, `fecha=eq.${fecha}`, fallos);
     if (d === null) { setError("No se pudo leer el maestro de Canon" + (fallos.length ? ": " + fallos.join(" | ") : "") + ". ¿Falta correr la migración 80?"); setFilas([]); return; }
     setError(""); setFilas(d);
     // Empresa de cada patente del día (Certronic y, si falta, el Excel de Certificación)
@@ -349,13 +375,33 @@ export default function MaestroCanon({ fecha, api, apiSuave, descargarCSV, empre
     return { idViajes: id, patentes: g[0]?.patentes, conductor: g[0]?.conductor,
              um: g.filter((r) => r.servicio === "UM").length, troncal: g.filter((r) => r.servicio === "TRONCAL").length,
              cargados: suma(g, "cargados"), entregados: suma(g, "entregados"), devueltos: suma(g, "devueltos"),
-             volumen: suma(g, "VOLUMEN"), cecos: [...new Set(g.map((r) => r.cecos || "sin CECO"))].join(" · "),
+             volumen: suma(g, "VOLUMEN"), peso: suma(g, "PESO"), cecos: [...new Set(g.map((r) => r.cecos || "sin CECO"))].join(" · "),
              alertas: [...new Set(g.flatMap((r) => r._alertas))] };
   }).sort((a, b) => b.um + b.troncal - (a.um + a.troncal));
 
-  const descargar = () => descargarCSV(`maestro_canon_${fecha}`, vistaFilas,
-    [...COLUMNAS_MAESTRO.map((c) => ({ titulo: c, valor: (r) => (c === "VOLUMEN" ? String(r[c] ?? "").replace(".", ",") : r[c]) })),
-     { titulo: "EMPRESA", valor: (r) => textoEmpresa(r.patentes, emp) }]);
+  // Columnas del CSV: las 14 del maestro manual y, al final, PESO, COMUNA y EMPRESA
+  const columnasCSV = (empresas) => [
+    ...COLUMNAS_MAESTRO.map((c) => ({ titulo: c, valor: (r) => (c === "VOLUMEN" ? decimalCL(r[c]) : r[c]) })),
+    { titulo: "PESO", valor: (r) => decimalCL(r.PESO) },
+    { titulo: "COMUNA", valor: (r) => r.comuna },
+    { titulo: "EMPRESA", valor: (r) => textoEmpresa(r.patentes, empresas) },
+  ];
+  const descargar = () => descargarCSV(`maestro_canon_${fecha}`, vistaFilas, columnasCSV(emp));
+  // Descarga por período: todas las guías entre "desde" y "hasta" (sin los filtros de pantalla)
+  const descargarPeriodo = async () => {
+    const { desde, hasta } = periodo;
+    if (!desde || !hasta || desde > hasta) { setPeriodo((p) => ({ ...p, msg: "Revisa las fechas: «Desde» debe ser anterior o igual a «Hasta»." })); return; }
+    const dias = (new Date(hasta) - new Date(desde)) / 864e5 + 1;
+    if (dias > 93) { setPeriodo((p) => ({ ...p, msg: "El período puede ser de hasta 3 meses." })); return; }
+    setPeriodo((p) => ({ ...p, bajando: true, msg: "Preparando el archivo…" }));
+    const fallos = [];
+    const d = await leerMaestroCanon(apiSuave, `fecha=gte.${desde}&fecha=lte.${hasta}`, fallos);
+    if (d === null) { setPeriodo((p) => ({ ...p, bajando: false, msg: "No se pudo leer el período. Reintenta." })); return; }
+    let empresas = {};
+    if (empresasDePatentes) { try { empresas = await empresasDePatentes([...new Set(d.flatMap((r) => listaPatentes(r.patentes)))]); } catch (e) { empresas = {}; } }
+    descargarCSV(`maestro_canon_${desde}_a_${hasta}`, d, columnasCSV(empresas));
+    setPeriodo((p) => ({ ...p, bajando: false, msg: `${fmt(d.length)} guías descargadas.` }));
+  };
 
   const chip = (k, v, t) => (
     <button key={v} className="mj-btn" onClick={() => setF((x) => ({ ...x, [k]: x[k] === v ? "" : v }))}
@@ -369,6 +415,7 @@ export default function MaestroCanon({ fecha, api, apiSuave, descargarCSV, empre
         <div style={{ fontSize: 12, color: "#64748b", lineHeight: 1.6, marginTop: 3, maxWidth: 980 }}>
           Una línea por guía, con las columnas del maestro manual. <strong>Cargados, entregados y devueltos son líneas
           de producto</strong> (3 sábanas iguales = 1 línea) y el volumen es la suma de los productos de la guía.
+          El peso es la suma de los ítems de la guía, igual que el volumen.
           TRONCAL cuando el subestado es «Cargado Troncal». Se actualiza solo cada 20 minutos. Las alertas marcan lo que
           conviene revisar al comparar con el maestro manual: no quitan guías.
         </div>
@@ -382,6 +429,7 @@ export default function MaestroCanon({ fecha, api, apiSuave, descargarCSV, empre
              sub={cargUM ? `${(100 * suma(um, "entregados") / cargUM).toLocaleString("es-CL", { maximumFractionDigits: 1 })}% de lo cargado` : ""} />
         <Kpi titulo="Devueltos UM" valor={fmt(suma(um, "devueltos"))} color={ROJO} sub="líneas no entregadas" />
         <Kpi titulo="Volumen UM" valor={vol(suma(um, "VOLUMEN"))} sub={`troncal ${vol(suma(tr, "VOLUMEN"))}`} />
+        <Kpi titulo="Peso UM (kg)" valor={kg(suma(um, "PESO"))} sub={`troncal ${kg(suma(tr, "PESO"))} kg`} />
         <Kpi titulo="Alertas" valor={fmt(alertas.length)} color={alertas.length ? AMBAR : VERDE} sub="guías para revisar" />
       </div>}
 
@@ -406,6 +454,19 @@ export default function MaestroCanon({ fecha, api, apiSuave, descargarCSV, empre
         </>}
       </div>
 
+      {vista !== "comparar" && (
+        <div style={{ background: "#fff", border: "1px solid #e6e9ef", borderRadius: 10, padding: "10px 16px", marginBottom: 12,
+                      display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", fontSize: 12.5, color: "#334155" }}>
+          <strong style={{ color: NAVY }}>Descargar por período</strong>
+          <span>Desde</span>
+          <input type="date" className="mj-input" value={periodo.desde || ""} onChange={(e) => setPeriodo((p) => ({ ...p, desde: e.target.value, msg: "" }))} />
+          <span>Hasta</span>
+          <input type="date" className="mj-input" value={periodo.hasta || ""} onChange={(e) => setPeriodo((p) => ({ ...p, hasta: e.target.value, msg: "" }))} />
+          <button className="mj-btn" onClick={descargarPeriodo} disabled={periodo.bajando}>{periodo.bajando ? "Descargando…" : "Descargar CSV del período"}</button>
+          <span style={{ color: "#64748b" }}>{periodo.msg || "Todas las guías del rango (hasta 3 meses), con peso, comuna y empresa."}</span>
+        </div>
+      )}
+
       {vista === "comparar" && <CompararManual fecha={fecha} api={api} descargarCSV={descargarCSV} />}
 
       {vista !== "comparar" && !filas.length && !error && (
@@ -419,7 +480,7 @@ export default function MaestroCanon({ fecha, api, apiSuave, descargarCSV, empre
           <table className="mj-tabla">
             <thead><tr><th>ID viaje</th><th>Patente</th><th>Empresa (Certronic)</th><th>Conductor</th><th>CECO</th><th className="num">Guías UM</th>
               <th className="num">Troncal</th><th className="num">Carg.</th><th className="num">Entr.</th><th className="num">Dev.</th>
-              <th className="num">Volumen</th><th>Alertas</th></tr></thead>
+              <th className="num">Volumen</th><th className="num">Peso (kg)</th><th>Alertas</th></tr></thead>
             <tbody>
               {porRuta.map((r) => (
                 <tr key={r.idViajes}>
@@ -430,7 +491,7 @@ export default function MaestroCanon({ fecha, api, apiSuave, descargarCSV, empre
                   <td className="num">{fmt(r.um)}</td><td className="num">{fmt(r.troncal)}</td>
                   <td className="num">{fmt(r.cargados)}</td><td className="num" style={{ color: VERDE }}>{fmt(r.entregados)}</td>
                   <td className="num" style={{ color: r.devueltos ? ROJO : "#cbd5e1" }}>{fmt(r.devueltos)}</td>
-                  <td className="num">{vol(r.volumen)}</td>
+                  <td className="num">{vol(r.volumen)}</td><td className="num">{kg(r.peso)}</td>
                   <td style={{ fontSize: 11.5, color: AMBAR }}>{r.alertas.join(" · ")}</td>
                 </tr>
               ))}
@@ -445,7 +506,7 @@ export default function MaestroCanon({ fecha, api, apiSuave, descargarCSV, empre
             <thead><tr>
               <th>ID viaje</th><th>Folio guía</th><th>Servicio</th><th>CECO</th><th>Patente</th><th>Empresa (Certronic)</th><th>Conductor</th>
               <th className="num">Par.</th><th className="num">Carg.</th><th className="num">Entr.</th><th className="num">Dev.</th>
-              <th>Seg. zonal</th><th>Tipo</th><th className="num">Volumen</th><th>Dirección</th><th>Estado</th><th>Alertas</th>
+              <th>Seg. zonal</th><th>Tipo</th><th className="num">Volumen</th><th className="num">Peso (kg)</th><th>Comuna</th><th>Dirección</th><th>Estado</th><th>Alertas</th>
             </tr></thead>
             <tbody>
               {vistaFilas.slice(0, 3000).map((r) => (
@@ -462,7 +523,8 @@ export default function MaestroCanon({ fecha, api, apiSuave, descargarCSV, empre
                   <td className="num" style={{ color: VERDE }}>{fmt(r.entregados)}</td>
                   <td className="num" style={{ color: n(r.devueltos) ? ROJO : "#cbd5e1" }}>{fmt(r.devueltos)}</td>
                   <td style={{ fontSize: 12 }}>{r.segmentacionZonal}</td><td style={{ fontSize: 12 }}>{r.TIPO}</td>
-                  <td className="num">{vol(r.VOLUMEN)}</td>
+                  <td className="num">{vol(r.VOLUMEN)}</td><td className="num">{kg(r.PESO)}</td>
+                  <td style={{ fontSize: 12, whiteSpace: "nowrap" }}>{r.comuna || "—"}</td>
                   <td style={{ fontSize: 12, maxWidth: 320 }}>{r.DIRECCION || "—"}</td>
                   <td style={{ fontSize: 12, color: (ESTADO[r.estado] || {}).c || "#64748b", whiteSpace: "nowrap" }}
                       title={r.subestado || ""}>{(ESTADO[r.estado] || {}).t || r.estado || "—"}{r.subestado ? ` · ${r.subestado}` : ""}</td>
