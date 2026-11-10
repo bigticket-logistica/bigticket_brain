@@ -687,10 +687,17 @@ function ProgramaMnt({ quien }) {
     }).catch(() => setAvisos({}));
   };
   useEffect(cargar, []);
-  const avisar = async (x) => {
-    if (!window.confirm(`Avisar la mantención de ${x.patente} (pauta ${kmf(x.proxima_pauta)} km):\n\n• Se crea una tarea al supervisor con el taller, su dirección y el plazo.\n• Al transportista le aparece el aviso en su portal.\n\nLos correos salen según el modo de correos (en prueba solo te llegan a ti). ¿Seguir?`)) return;
+  const avisar = async (x, forzar = false) => {
+    let pauta = x.proxima_pauta;
+    if (forzar) {
+      const r = window.prompt(`Forzar el aviso de ${x.patente}${x.estado === "sin_pauta" ? " (su modelo no tiene pauta)" : ` (hoy está ${(MN_ESTADO[x.estado] || [x.estado])[0].toLowerCase()}, faltan ${kmf(x.faltan_km)} km)`}.\n\n¿Qué pauta toca? (km)`, pauta || "");
+      if (r === null) return;
+      pauta = Number(String(r).replace(/\D/g, ""));
+      if (!pauta) return alert("Indica la pauta en km, por ejemplo 90000.");
+    }
+    if (!window.confirm(`Avisar la mantención de ${x.patente} (pauta ${kmf(pauta)} km)${forzar ? " de forma adelantada" : ""}:\n\n• Se crea una tarea al supervisor con el taller, su dirección y el plazo.\n• Al transportista le aparece el aviso en su portal.\n\nLos correos salen según el modo de correos (en prueba solo te llegan a ti). ¿Seguir?`)) return;
     setBusy(x.patente);
-    try { await rpc("fn_mnt_avisar", { p_patente: x.patente, p_por: quien }); cargar(); }
+    try { await rpc("fn_mnt_avisar", { p_patente: x.patente, p_por: quien, p_forzar: forzar, p_pauta: forzar ? pauta : null }); cargar(); }
     catch (e) { alert(e.message); } finally { setBusy(""); }
   };
   const n = (e) => (filas || []).filter((x) => x.estado === e).length;
@@ -747,9 +754,15 @@ function ProgramaMnt({ quien }) {
                         <button style={btn("sec")} onClick={() => setForm({ patente: x.patente, modo: "agendar" })}>{citas[x.patente] ? "Cambiar cita" : "Agendar"}</button>
                         <button style={btn("verde")} onClick={() => setForm({ patente: x.patente, modo: "registrar" })}>Registrar hecha</button>
                       </div>
-                    </> : ["proxima", "vencida"].includes(x.estado)
-                      ? <button style={btn(x.estado === "vencida" ? "rojo" : undefined)} disabled={busy === x.patente} onClick={() => avisar(x)}>{busy === x.patente ? "Avisando…" : "Avisar"}</button>
-                      : <span style={{ color: C.tenue }}>—</span>}
+                    </> : x.estado === "inactivo" ? <span style={{ color: C.tenue }}>—</span> : <>
+                      {["proxima", "vencida"].includes(x.estado)
+                        ? <button style={btn(x.estado === "vencida" ? "rojo" : undefined)} disabled={busy === x.patente} onClick={() => avisar(x)}>{busy === x.patente ? "Avisando…" : "Avisar"}</button>
+                        : <button style={btn("sec")} disabled={busy === x.patente} onClick={() => avisar(x, true)}>{busy === x.patente ? "Avisando…" : "Forzar aviso"}</button>}
+                      <div style={{ display: "flex", gap: 8, marginTop: 6, fontSize: 12 }}>
+                        <a href="#" style={{ color: C.navy }} onClick={(ev) => { ev.preventDefault(); setForm({ patente: x.patente, modo: "agendar" }); }}>Agendar</a>
+                        <a href="#" style={{ color: C.verde }} onClick={(ev) => { ev.preventDefault(); setForm({ patente: x.patente, modo: "registrar" }); }}>Registrar hecha</a>
+                      </div>
+                    </>}
                   </td>
                 </tr>,
                 form?.patente === x.patente && <tr key={x.patente + "f"}><td colSpan={11} style={{ padding: 0, borderBottom: `1px solid ${C.borde}` }}><FormMnt x={x} modo={form.modo} quien={quien} onListo={(m) => { setForm(null); if (m) alert(m); cargar(); }} /></td></tr>,
