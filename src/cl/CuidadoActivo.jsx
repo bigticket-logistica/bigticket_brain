@@ -14,6 +14,9 @@
 //     GPS, no salida, jefatura) y % de uso contra la meta. Sin avisos.
 //   · Mantenciones: programa por km (fn_mnt_programa_cl, odómetro de Geotab),
 //     historial migrado de la biblia, pautas por modelo y talleres con historial.
+//   · Ficha del activo: listado con estado documental (fn_ficha_lista_cl) y ficha
+//     completa por patente (fn_ficha_cl): maestro, documentos, Geotab, conductores,
+//     costos, mantención, auditorías, tareas e historial.
 //   · No salidas: fn_ca_no_salidas_dia + avisos enviados (ca_avisos_cl).
 //   · Incumplimientos: tareas vencidas sin respuesta, por supervisor y mes.
 //   · Configuración: plazos por tipo, justificaciones y correos (ca_*_cl).
@@ -61,6 +64,7 @@ const inp = { border: `1px solid ${C.borde}`, borderRadius: 8, padding: "7px 10p
 
 export default function CuidadoActivoCL({ usuario, sub }) {
   const quien = usuario?.email || usuario?.nombre || "brain";
+  if (sub === "ca_ficha") return <FichaActivo />;
   if (sub === "ca_flota") return <EstadoFlota />;
   if (sub === "ca_mantenciones") return <Mantenciones quien={quien} />;
   if (sub === "ca_auditorias") return <Auditorias quien={quien} />;
@@ -922,6 +926,145 @@ function TalleresMnt({ quien }) {
         <button style={btn()} onClick={() => { if (nuevo.trim()) { guardar(nuevo, "nuevo", ""); setNuevo(""); } }}>Agregar</button>
       </div>
       {msg && <div style={{ color: C.rojo, fontSize: 13, marginTop: 8 }}>{msg}</div>}
+    </div>
+  );
+}
+
+// ── Ficha del activo ────────────────────────────────────────────────────────
+const DOC_EST = { vencido: ["Vencido", C.rojoT, C.rojo], por_vencer: ["Por vencer", C.ambarT, C.ambar], sin_dato: ["Sin dato", C.fondo, C.suave], al_dia: ["Al día", C.verdeT, C.verde] };
+const pesos = (v) => (v === null || v === undefined ? "—" : `$${Math.round(Number(v)).toLocaleString("es-CL")}`);
+function FichaActivo() {
+  const [filas, setFilas] = useState(null);
+  const [f, setF] = useState({ activo: "ACTIVO", doc: "", texto: "" });
+  const [abierta, setAbierta] = useState(null);
+  useEffect(() => { rpc("fn_ficha_lista_cl").then(setFilas).catch(() => setFilas([])); }, []);
+  if (abierta) return <FichaDetalle patente={abierta} onVolver={() => setAbierta(null)} />;
+  const act = (filas || []).filter((x) => x.estado === "ACTIVO");
+  const n = (e) => act.filter((x) => x.estado_doc === e).length;
+  const vis = (filas || []).filter((x) => (!f.activo || (f.activo === "ACTIVO" ? x.estado === "ACTIVO" : x.estado !== "ACTIVO"))
+    && (!f.doc || x.estado_doc === f.doc)
+    && (!f.texto || `${x.patente} ${x.modelo || ""} ${x.empresa || ""} ${x.ceco || ""} ${x.supervisor || ""}`.toLowerCase().includes(f.texto.toLowerCase())));
+  const kpi = (t, v, c, doc, activo = "ACTIVO") => (
+    <div onClick={() => setF({ ...f, doc: f.doc === doc && f.activo === activo ? "" : doc, activo })}
+      style={{ background: "#fff", border: `1px solid ${f.doc === doc && f.activo === activo ? c : C.borde}`, borderRadius: 12, padding: "12px 16px", flex: "1 1 130px", cursor: "pointer" }}>
+      <div style={{ fontSize: 24, fontWeight: 800, color: c }}>{v}</div><div style={{ fontSize: 12.5, color: C.suave }}>{t}</div>
+    </div>
+  );
+  const celda = { padding: "8px 10px", borderBottom: `1px solid ${C.borde}`, fontSize: 13, verticalAlign: "top" };
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
+        {kpi("Documento vencido", n("vencido"), C.rojo, "vencido")}
+        {kpi("Por vencer", n("por_vencer"), C.ambar, "por_vencer")}
+        {kpi("Sin dato", n("sin_dato"), C.suave, "sin_dato")}
+        {kpi("Al día", n("al_dia"), C.verde, "al_dia")}
+        {kpi("Inactivos", (filas || []).filter((x) => x.estado !== "ACTIVO").length, C.tenue, "", "INACTIVO")}
+      </div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 12 }}>
+        <select style={inp} value={f.activo} onChange={(e) => setF({ ...f, activo: e.target.value })}>
+          <option value="ACTIVO">Activos</option><option value="INACTIVO">Inactivos</option><option value="">Todos</option>
+        </select>
+        <select style={inp} value={f.doc} onChange={(e) => setF({ ...f, doc: e.target.value })}>
+          <option value="">Todo estado documental</option>{Object.entries(DOC_EST).map(([k, v]) => <option key={k} value={k}>{v[0]}</option>)}
+        </select>
+        <input style={{ ...inp, minWidth: 260 }} placeholder="Patente, modelo, empresa, CECO o supervisor" value={f.texto} onChange={(e) => setF({ ...f, texto: e.target.value })} />
+      </div>
+      {filas === null ? <div style={{ color: C.tenue }}>Cargando…</div> : (
+        <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 960 }}>
+            <thead><tr style={{ background: C.fondo, textAlign: "left" }}>
+              {["Patente", "Modelo · año", "CECO · supervisor", "Empresa", "Documentos", "Próximo vencimiento", "Km", "Mantención"].map((h) => <th key={h} style={{ ...celda, fontSize: 12, color: C.suave }}>{h}</th>)}
+            </tr></thead>
+            <tbody>
+              {vis.length === 0 && <tr><td colSpan={8} style={{ ...celda, color: C.tenue, textAlign: "center" }}>Nada con este filtro.</td></tr>}
+              {vis.map((x) => { const d = DOC_EST[x.estado_doc] || [x.estado_doc || "—", C.fondo, C.suave]; const m = MN_ESTADO[x.mnt_estado]; return (
+                <tr key={x.patente} style={{ cursor: "pointer" }} onClick={() => setAbierta(x.patente)}>
+                  <td style={{ ...celda, fontWeight: 800, color: C.navy, textDecoration: "underline" }}>{x.patente}</td>
+                  <td style={celda}>{x.modelo || "—"}<div style={{ color: C.tenue, fontSize: 12 }}>{x.anio || ""}</div></td>
+                  <td style={celda}>{x.ceco || "—"}<div style={{ color: C.tenue, fontSize: 12 }}>{x.supervisor || ""}</div></td>
+                  <td style={celda}>{x.empresa || "—"}</td>
+                  <td style={celda}>{chip(d[0], d[1], d[2])}</td>
+                  <td style={celda}>{x.doc_proximo ? <>{x.doc_proximo}<div style={{ color: C.tenue, fontSize: 12 }}>{fd(x.doc_proximo_vence)}</div></> : "—"}</td>
+                  <td style={celda}>{kmf(x.km_actual)}</td>
+                  <td style={celda}>{m ? chip(m[0], m[1], m[2]) : "—"}{x.mnt_faltan !== null && x.mnt_faltan !== undefined && <div style={{ color: C.tenue, fontSize: 12 }}>{x.mnt_faltan <= 0 ? "pasada" : `faltan ${kmf(x.mnt_faltan)} km`}</div>}</td>
+                </tr>
+              ); })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+function FichaDetalle({ patente, onVolver }) {
+  const [d, setD] = useState(null);
+  const [err, setErr] = useState("");
+  useEffect(() => { rpc("fn_ficha_cl", { p_patente: patente }).then(setD).catch((e) => { setErr(e.message); setD({}); }); }, [patente]);
+  const card = (t, cont) => (
+    <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, padding: 14 }}>
+      <div style={{ fontWeight: 800, color: C.navy, marginBottom: 8 }}>{t}</div>{cont}
+    </div>
+  );
+  const fila = (k, v) => <div style={{ display: "flex", justifyContent: "space-between", gap: 10, fontSize: 13, padding: "4px 0", borderBottom: `1px solid ${C.fondo}` }}><span style={{ color: C.suave }}>{k}</span><b style={{ textAlign: "right" }}>{v ?? "—"}</b></div>;
+  if (!d) return <div style={{ color: C.tenue }}>Cargando ficha…</div>;
+  const m = d.maestro || {}, ev = d.en_vivo || {}, co = d.conductores || {}, cs = d.costos || {}, mn = d.mantencion;
+  const pt = cs.por_tipo || {};
+  const rotAlta = (co.distintos || 0) >= 3;
+  return (
+    <div>
+      <button style={btn("sec")} onClick={onVolver}>← Volver al listado</button>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 12, margin: "12px 0", flexWrap: "wrap" }}>
+        <h2 style={{ margin: 0, color: C.navy }}>{patente}</h2>
+        <span style={{ color: C.suave }}>{[m.marca, m.modelo, m.anio].filter(Boolean).join(" · ")}</span>
+        {m.estado && chip(m.estado, m.estado === "ACTIVO" ? C.verdeT : C.fondo, m.estado === "ACTIVO" ? C.verde : C.suave)}
+      </div>
+      {err && <div style={{ color: C.rojo, marginBottom: 10 }}>{err}</div>}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 12 }}>
+        {card("Datos maestros", <>
+          {fila("Tipo", m.tipo_vehiculo)}{fila("Energía", m.energia)}{fila("CECO", m.ceco_operacion || m.ceco)}{fila("Supervisor", m.supervisor)}
+          {fila("Empresa asignada", m.empresa)}{fila("RUT empresa", m.rut_empresa)}{fila("VIN", m.vin)}{fila("Motor", m.motor)}
+          {fila("Valor de compra", pesos(m.valor_compra))}{fila("Leasing", [m.leasing_banco, m.leasing_estado].filter(Boolean).join(" · ") || "—")}
+          {m.observacion && <div style={{ fontSize: 12.5, color: C.suave, marginTop: 6 }}>{m.observacion}</div>}
+        </>)}
+        {card("Documentos", <>
+          {(d.documentos || []).map((x) => { const e = DOC_EST[x.estado] || [x.estado, C.fondo, C.suave]; return (
+            <div key={x.nombre} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, fontSize: 13, padding: "5px 0", borderBottom: `1px solid ${C.fondo}` }}>
+              <span><b>{x.nombre}</b>{x.detalle && <div style={{ color: C.tenue, fontSize: 12 }}>{x.detalle}</div>}</span>
+              <span style={{ textAlign: "right" }}>{fd(x.vence)} {chip(e[0], e[1], e[2])}<div style={{ color: C.tenue, fontSize: 11.5 }}>sin respaldo cargado</div></span>
+            </div>
+          ); })}
+          <div style={{ fontSize: 12, color: C.tenue, marginTop: 6 }}>Las fechas vienen de la biblia. La carga de PDF (y que Biggy los lea) llega con el módulo Documentación.</div>
+        </>)}
+        {card("Datos en vivo (Geotab)", <>
+          {fila("Odómetro", ev.km ? `${kmf(ev.km)} km` : null)}{fila("Lectura del odómetro", ev.km_fecha ? fd(ev.km_fecha) : null)}
+          {fila("Última comunicación", ev.gps_fecha ? fh(ev.gps_fecha) : "sin equipo")}{fila("Velocidad", ev.velocidad !== undefined && ev.velocidad !== null ? `${ev.velocidad} km/h` : null)}
+          {fila("Dónde está", ev.en_bodega ? "En bodega" : ev.en_estacionamiento ? "En su estacionamiento" : ev.lat ? "En ruta / fuera de zonas" : null)}
+          {ev.lat && ev.lng && <a href={`https://maps.google.com/?q=${ev.lat},${ev.lng}`} target="_blank" rel="noreferrer" style={{ fontSize: 12.5, color: C.navy }}>🗺️ Ver en el mapa</a>}
+        </>)}
+        {card(`Conductores (últimos ${co.dias || 30} días)`, <>
+          {fila("Último conductor", co.ultimo)}{fila("Última ruta", co.ultimo_fecha ? fd(co.ultimo_fecha) : null)}
+          {fila("Días con ruta", co.dias_con_ruta)}
+          {fila("Conductores distintos", <span style={{ color: rotAlta ? C.rojo : C.texto }}>{co.distintos ?? 0}{rotAlta ? " · rotación alta" : ""}</span>)}
+          {(co.lista || []).map((c) => <div key={c.conductor} style={{ fontSize: 12.5, color: C.suave, padding: "2px 0" }}>{c.conductor} · {c.dias} días · último {fd(c.ultimo)}</div>)}
+        </>)}
+        {card("Costo acumulado", <>
+          {["mantencion", "reparacion", "siniestro", "otro", "garantia"].map((t) => pt[t] && fila(`${MN_TIPO[t]} (${pt[t].n})`, pesos(pt[t].total)))}
+          {fila("Total", pesos(cs.total))}
+          {fila("% del valor de compra", cs.valor_compra && cs.total ? `${Math.round((Number(cs.total) / Number(cs.valor_compra)) * 1000) / 10}%` : null)}
+          {fila("Días en taller", cs.dias_taller)}
+        </>)}
+        {card("Mantención", mn ? <>
+          {fila("Estado", (MN_ESTADO[mn.estado] || [mn.estado])[0])}{fila("Última pauta", mn.ultima_pauta ? `${kmf(mn.ultima_pauta)} · ${fd(mn.ultima_fecha)}` : "sin registro")}
+          {fila("Próxima pauta", mn.proxima_pauta ? kmf(mn.proxima_pauta) : null)}{fila("Faltan", mn.faltan_km !== null && mn.faltan_km !== undefined ? `${kmf(mn.faltan_km)} km` : null)}
+          {fila("Fecha estimada", mn.fecha_estimada ? fd(mn.fecha_estimada) : null)}{fila("Taller autorizado", mn.taller)}
+        </> : <div style={{ color: C.tenue, fontSize: 13 }}>Sin datos.</div>)}
+        {card("Auditorías", (d.auditorias || []).length === 0 ? <div style={{ color: C.tenue, fontSize: 13 }}>Sin auditorías.</div> :
+          d.auditorias.map((a) => <div key={a.id} style={{ fontSize: 13, padding: "4px 0", borderBottom: `1px solid ${C.fondo}` }}>
+            <b>{a.subtipo || (a.tipo === "vehiculo" ? "Vehículo" : "Limpieza")}</b> · {a.estado}{a.veredicto ? ` · ${a.veredicto}` : ""}<div style={{ color: C.tenue, fontSize: 12 }}>{a.enviada_at ? fh(a.enviada_at) : "sin enviar"}</div></div>))}
+        {card("Tareas del supervisor", !d.tareas || d.tareas.length === 0 ? <div style={{ color: C.tenue, fontSize: 13 }}>Sin tareas.</div> :
+          d.tareas.map((t) => <div key={t.id} style={{ fontSize: 13, padding: "4px 0", borderBottom: `1px solid ${C.fondo}` }}>{t.titulo || t.tipo}<div style={{ color: C.tenue, fontSize: 12 }}>{(ESTADO[t.estado] || [t.estado])[0]}</div></div>))}
+      </div>
+      <div style={{ marginTop: 14, background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, overflow: "hidden" }}><HistorialMnt patente={patente} /></div>
     </div>
   );
 }
