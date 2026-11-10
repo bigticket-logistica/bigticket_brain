@@ -81,9 +81,10 @@ function Tarjeta({ titulo, total, filas }) {
       </div>
       <div style={{ borderTop: `1px solid ${BORDE}`, margin: "8px 0 4px" }} />
       {filas.map(([t, v, ayuda]) => (
-        <div key={t} title={ayuda} style={{ display: "flex", justifyContent: "space-between", gap: 12, fontSize: 12, color: GRIS, padding: "3px 0", whiteSpace: "pre",
-          ...(v === "" ? { fontSize: 11, fontWeight: 600, color: AZUL, marginTop: 6 } : {}) }}>
-          <span>{t}</span><span style={{ fontWeight: 700, color: "#334155", whiteSpace: "nowrap", textAlign: "right" }}>{v}</span>
+        <div key={t} title={ayuda || undefined} style={{ display: "flex", justifyContent: "space-between", gap: 12, fontSize: 12, color: GRIS, padding: "3px 0", whiteSpace: "pre",
+          cursor: ayuda ? "help" : "default", ...(v === "" ? { fontSize: 11, fontWeight: 600, color: AZUL, marginTop: 6 } : {}) }}>
+          <span>{t}</span>
+          <span style={{ fontWeight: 700, color: "#334155", whiteSpace: "nowrap", textAlign: "right", ...(ayuda && v !== "" && v !== 0 && v !== "0" ? { borderBottom: "1px dotted #94a3b8" } : {}) }}>{v}</span>
         </div>
       ))}
     </div>
@@ -272,6 +273,20 @@ export default function Capacidad({ usuario }) {
       return { ...f, rutaMeli: f.id_ruta ? rutaMeli.get(String(f.id_ruta)) || null : null, otraEjecutada: otras[0] || null };
     }), [filas, rutaMeli, meliPorRuta]);
   const totSpot = useMemo(() => sumar(filas.filter((f) => f.modelo === "SPOT")), [filas]);
+  // "SCY1 2 · SHP1 1": en qué SC está cada número (se ve al posicionarse)
+  const porScTxt = (lista) => { const g = {}; for (const f of lista) g[f.sc] = (g[f.sc] || 0) + 1; const t = Object.entries(g).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([k, n]) => `${k} ${n}`).join(" · "); return t || "Ninguno"; };
+  const meliScTxt = (campo) => { const g = {}; for (const e of meliFiltrado) for (const x of e.por_sc || []) { const n = x.chart?.[campo] || 0; if (n && (!sc || x.sc === sc)) g[x.sc] = (g[x.sc] || 0) + n; } const t = Object.entries(g).sort((a, b) => b[1] - a[1]).map(([k, n]) => `${k} ${n}`).join(" · "); return t || "Ninguno"; };
+  const noSalio = (f) => f.confirmado === "Aceptado" && !f.ejecutado && f.categoria !== "pendiente";
+  const listas = useMemo(() => ({
+    soft: filas.filter((f) => f.modelo === "SDD" && f.categoria === "no_show_soft"),
+    hardSdd: filas.filter((f) => f.modelo === "SDD" && noSalio(f)),
+    spot: filas.filter((f) => f.modelo === "SPOT" && noSalio(f)),
+    noShow: filas.filter((f) => f.categoria === "no_show_hard"),
+    cancel: filas.filter((f) => f.categoria === "cancelado_hard"),
+    otros: filas.filter((f) => f.categoria === "no_salio_otro"),
+    sinResp: filas.filter((f) => f.categoria === "sin_responder"),
+    pend: filas.filter((f) => f.categoria === "pendiente"),
+  }), [filas]);
   // Pedidas de más: suma por SC (cada SC contra su propio compromiso o acordado)
   const deMasTotal = useMemo(() => porSc.filter((x) => !sc || x.sc === sc).reduce((t, x) => t + (x.de_mas || 0), 0), [porSc, sc]);
   useEffect(() => { setPagina(1); }, [ver, buscar, filas, vistaMeli]);
@@ -481,14 +496,20 @@ export default function Capacidad({ usuario }) {
                 </table>
               </>)}
             </div>
-            <Tarjeta titulo="Aceptadas que no salieron" total={(tot.no_salio_sdd || 0) + (tot.no_salio_spot || 0)} filas={[
-              ["SDD", tot.no_salio_sdd || 0, ""], ["Spot", tot.no_salio_spot || 0, ""],
-              ["Respuesta del supervisor", "", ""],
-              ["   No show", `${tot.no_show_hard || 0}${tot.no_show_hard ? ` (${tot.no_show_hard_sdd || 0} SDD · ${tot.no_show_hard_spot || 0} Spot)` : ""}`, ""],
-              ["   Cancelación", `${tot.cancelado_hard || 0}${tot.cancelado_hard ? ` (${tot.cancelado_sdd || 0} SDD · ${tot.cancelado_spot || 0} Spot)` : ""}`, ""],
-              ["   Otros", tot.no_salio_otro || 0, ""], ["   Sin respuesta", tot.sin_responder || 0, ""],
-              ...((tot.pendiente || 0) > 0 ? [["   Pendientes de hoy", tot.pendiente, ""]] : []),
-            ]} />
+            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              {modelo !== "SPOT" && <Tarjeta titulo="No show SDD" total={`${listas.soft.length + listas.hardSdd.length}${meliTot ? ` · MELI ${meliTot.soft + meliTot.hard}` : ""}`} filas={[
+                ["Soft · no confirmadas", `${listas.soft.length}${meliTot ? `  ·  MELI ${meliTot.soft}` : ""}`, `Brain: ${porScTxt(listas.soft)}${meliTot ? `\nMELI: ${meliScTxt("soft_no_show")}` : ""}`],
+                ["Hard · aceptadas que no salieron", `${listas.hardSdd.length}${meliTot ? `  ·  MELI ${meliTot.hard}` : ""}`, `Brain: ${porScTxt(listas.hardSdd)}${meliTot ? `\nMELI: ${meliScTxt("hard_no_show")}` : ""}`],
+              ]} />}
+              <Tarjeta titulo="Aceptadas que no salieron" total={listas.hardSdd.length + listas.spot.length} filas={[
+                ["SDD", listas.hardSdd.length, porScTxt(listas.hardSdd)], ["Spot", listas.spot.length, porScTxt(listas.spot)],
+                ["Respuesta del supervisor", "", ""],
+                ["   No show", `${tot.no_show_hard || 0}${tot.no_show_hard ? ` (${tot.no_show_hard_sdd || 0} SDD · ${tot.no_show_hard_spot || 0} Spot)` : ""}`, porScTxt(listas.noShow)],
+                ["   Cancelación", `${tot.cancelado_hard || 0}${tot.cancelado_hard ? ` (${tot.cancelado_sdd || 0} SDD · ${tot.cancelado_spot || 0} Spot)` : ""}`, porScTxt(listas.cancel)],
+                ["   Otros", tot.no_salio_otro || 0, porScTxt(listas.otros)], ["   Sin respuesta", tot.sin_responder || 0, porScTxt(listas.sinResp)],
+                ...((tot.pendiente || 0) > 0 ? [["   Pendientes de hoy", tot.pendiente, porScTxt(listas.pend)]] : []),
+              ]} />
+            </div>
           </div>
         );
       })()}
@@ -660,7 +681,7 @@ export default function Capacidad({ usuario }) {
                   <td style={td}><b>{f.id_ruta || ""}</b><div style={{ fontSize: 10.5, color: GRIS, whiteSpace: "nowrap" }}>{f.travel_id && <>Viaje {f.travel_id}</>}{f.travel_id && f.request_id != null && " · "}{f.request_id != null && <>Solicitud {f.request_id}</>}</div></td>
                   <td style={tdC}>{f.confirmado ? <Pill t={f.confirmado} c={conf[0]} bg={conf[1]} /> : "—"}</td>
                   <td style={tdC}><Check v={f.asignado} /></td>
-                  <td style={tdC}><Check v={f.ejecutado} />{f.salida_real && <div style={{ fontSize: 10, color: GRIS }}>{fHora(f.salida_real).slice(-5)}</div>}</td>
+                  <td style={tdC}><Check v={f.ejecutado} />{f.salida_real && <div style={{ fontSize: 10, color: GRIS }}>{new Date(f.salida_real).toLocaleTimeString("es-MX", { timeZone: "America/Mexico_City", hour: "2-digit", minute: "2-digit", hour12: false })}</div>}</td>
                   <td style={{ ...tdC, fontSize: 11 }}>{!m ? <span style={{ color: "#cbd5e1" }}>{f.modelo === "SPOT" ? "" : "—"}</span> : m.ejecutada === null ? <span style={{ color: "#94a3b8" }}>sin registro</span>
                     : m.ejecutada ? <span style={{ color: dif ? "#b91c1c" : "#047857", fontWeight: 700 }}>ejecutada ✓</span> : <span style={{ color: dif ? "#b91c1c" : "#b45309", fontWeight: 700 }}>no ejecutada</span>}</td>
                   <td style={td}>
