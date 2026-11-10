@@ -17,6 +17,8 @@
 //   · Ficha del activo: listado con estado documental (fn_ficha_lista_cl) y ficha
 //     completa por patente (fn_ficha_cl): maestro, documentos, Geotab, conductores,
 //     costos, mantención, auditorías, tareas e historial.
+//   · Documentos: subir PDF o fotos (bucket ca-documentos-cl), revisar y confirmar;
+//     el documento confirmado manda sobre la fecha de la biblia (vw_doc_vigente_cl).
 //   · No salidas: fn_ca_no_salidas_dia + avisos enviados (ca_avisos_cl).
 //   · Incumplimientos: tareas vencidas sin respuesta, por supervisor y mes.
 //   · Configuración: plazos por tipo, justificaciones y correos (ca_*_cl).
@@ -64,7 +66,8 @@ const inp = { border: `1px solid ${C.borde}`, borderRadius: 8, padding: "7px 10p
 
 export default function CuidadoActivoCL({ usuario, sub }) {
   const quien = usuario?.email || usuario?.nombre || "brain";
-  if (sub === "ca_ficha") return <FichaActivo />;
+  if (sub === "ca_ficha") return <FichaActivo quien={quien} />;
+  if (sub === "ca_documentos") return <Documentos quien={quien} />;
   if (sub === "ca_flota") return <EstadoFlota />;
   if (sub === "ca_mantenciones") return <Mantenciones quien={quien} />;
   if (sub === "ca_auditorias") return <Auditorias quien={quien} />;
@@ -933,12 +936,12 @@ function TalleresMnt({ quien }) {
 // ── Ficha del activo ────────────────────────────────────────────────────────
 const DOC_EST = { vencido: ["Vencido", C.rojoT, C.rojo], por_vencer: ["Por vencer", C.ambarT, C.ambar], sin_dato: ["Sin dato", C.fondo, C.suave], al_dia: ["Al día", C.verdeT, C.verde] };
 const pesos = (v) => (v === null || v === undefined ? "—" : `$${Math.round(Number(v)).toLocaleString("es-CL")}`);
-function FichaActivo() {
+function FichaActivo({ quien }) {
   const [filas, setFilas] = useState(null);
   const [f, setF] = useState({ activo: "ACTIVO", doc: "", texto: "" });
   const [abierta, setAbierta] = useState(null);
   useEffect(() => { rpc("fn_ficha_lista_cl").then(setFilas).catch(() => setFilas([])); }, []);
-  if (abierta) return <FichaDetalle patente={abierta} onVolver={() => setAbierta(null)} />;
+  if (abierta) return <FichaDetalle patente={abierta} quien={quien} onVolver={() => setAbierta(null)} />;
   const act = (filas || []).filter((x) => x.estado === "ACTIVO");
   const n = (e) => act.filter((x) => x.estado_doc === e).length;
   const vis = (filas || []).filter((x) => (!f.activo || (f.activo === "ACTIVO" ? x.estado === "ACTIVO" : x.estado !== "ACTIVO"))
@@ -996,7 +999,7 @@ function FichaActivo() {
     </div>
   );
 }
-function FichaDetalle({ patente, onVolver }) {
+function FichaDetalle({ patente, quien, onVolver }) {
   const [d, setD] = useState(null);
   const [err, setErr] = useState("");
   useEffect(() => { rpc("fn_ficha_cl", { p_patente: patente }).then(setD).catch((e) => { setErr(e.message); setD({}); }); }, [patente]);
@@ -1030,10 +1033,23 @@ function FichaDetalle({ patente, onVolver }) {
           {(d.documentos || []).map((x) => { const e = DOC_EST[x.estado] || [x.estado, C.fondo, C.suave]; return (
             <div key={x.nombre} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, fontSize: 13, padding: "5px 0", borderBottom: `1px solid ${C.fondo}` }}>
               <span><b>{x.nombre}</b>{x.detalle && <div style={{ color: C.tenue, fontSize: 12 }}>{x.detalle}</div>}</span>
-              <span style={{ textAlign: "right" }}>{fd(x.vence)} {chip(e[0], e[1], e[2])}<div style={{ color: C.tenue, fontSize: 11.5 }}>sin respaldo cargado</div></span>
+              <span style={{ textAlign: "right" }}>{fd(x.vence)} {chip(e[0], e[1], e[2])}
+                <div style={{ fontSize: 11.5, marginTop: 2 }}>
+                  {x.path ? <a href="#" style={{ color: C.verde }} onClick={async (ev) => { ev.preventDefault(); const u = await urlFirmada(x.path, "ca-documentos-cl"); if (u) window.open(u, "_blank"); }}>📎 Ver respaldo</a> : <span style={{ color: C.tenue }}>sin respaldo</span>}
+                  {" · "}
+                  <label style={{ color: C.navy, cursor: "pointer", textDecoration: "underline" }}>Subir
+                    <input type="file" accept="application/pdf,image/*" style={{ display: "none" }} onChange={async (ev) => {
+                      const file = ev.target.files?.[0]; ev.target.value = ""; if (!file) return;
+                      const v = window.prompt(`¿Fecha de vencimiento del ${x.nombre}? (AAAA-MM-DD, o déjalo vacío y que lo lea Biggy)`, "");
+                      if (v === null) return;
+                      try { await subirDocumento(file, { patente, tipo: x.tipo, vence: /^\d{4}-\d{2}-\d{2}$/.test(v.trim()) ? v.trim() : null, quien });
+                            alert("Subido. Queda en Documentos para confirmar."); } catch (e) { alert(e.message); }
+                    }} />
+                  </label>
+                </div></span>
             </div>
           ); })}
-          <div style={{ fontSize: 12, color: C.tenue, marginTop: 6 }}>Las fechas vienen de la biblia. La carga de PDF (y que Biggy los lea) llega con el módulo Documentación.</div>
+          <div style={{ fontSize: 12, color: C.tenue, marginTop: 6 }}>La fecha viene del documento confirmado o, si no hay, de la biblia. Lo que subas queda en Cuidado de Activo → Documentos para confirmar.</div>
         </>)}
         {card("Datos en vivo (Geotab)", <>
           {fila("Odómetro", ev.km ? `${kmf(ev.km)} km` : null)}{fila("Lectura del odómetro", ev.km_fecha ? fd(ev.km_fecha) : null)}
@@ -1065,6 +1081,140 @@ function FichaDetalle({ patente, onVolver }) {
           d.tareas.map((t) => <div key={t.id} style={{ fontSize: 13, padding: "4px 0", borderBottom: `1px solid ${C.fondo}` }}>{t.titulo || t.tipo}<div style={{ color: C.tenue, fontSize: 12 }}>{(ESTADO[t.estado] || [t.estado])[0]}</div></div>))}
       </div>
       <div style={{ marginTop: 14, background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, overflow: "hidden" }}><HistorialMnt patente={patente} /></div>
+    </div>
+  );
+}
+
+// ── Documentos del activo ───────────────────────────────────────────────────
+const DOC_TIPO = { soap: "SOAP", rt: "Revisión técnica", permiso: "Permiso de circulación", seguro: "Seguro", leasing: "Leasing", otro: "Otro" };
+const DOC_ESTADO = { por_leer: ["Por leer (Biggy)", "#eef2f8", C.navy], por_confirmar: ["Por confirmar", C.ambarT, C.ambar], confirmado: ["Confirmado", C.verdeT, C.verde], rechazado: ["Rechazado", C.fondo, C.suave] };
+async function subirDocumento(file, { patente = null, tipo = null, vence = null, quien }) {
+  const limpio = String(file.name || "archivo").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^A-Za-z0-9._-]+/g, "_").slice(-80);
+  const path = `${patente || "sin_patente"}/${Date.now()}_${limpio}`;
+  const r = await fetch(`${CL_URL}/storage/v1/object/ca-documentos-cl/${path}`, {
+    method: "POST", headers: { apikey: CL_KEY, Authorization: `Bearer ${CL_KEY}`, "Content-Type": file.type || "application/octet-stream" }, body: file,
+  });
+  if (!r.ok) throw new Error(`No se pudo subir ${file.name}: ${(await r.text()).slice(0, 160)}`);
+  return rpc("fn_doc_registrar", { p_path: path, p_nombre: file.name, p_mime: file.type || null, p_patente: patente, p_tipo: tipo, p_vence: vence, p_por: quien });
+}
+function Documentos({ quien }) {
+  const [filas, setFilas] = useState(null);
+  const [f, setF] = useState({ estado: "pendientes", texto: "" });
+  const [abierta, setAbierta] = useState(null);
+  const [carga, setCarga] = useState({ tipo: "", patente: "" });
+  const [subiendo, setSubiendo] = useState("");
+  const cargar = () => api("ca_documentos_cl?select=*&order=cargado_at.desc&limit=500").then(setFilas).catch(() => setFilas([]));
+  useEffect(() => { cargar(); }, []);
+  const subir = async (files) => {
+    const lista = [...(files || [])]; if (!lista.length) return;
+    let ok = 0; const errores = [];
+    for (let i = 0; i < lista.length; i++) {
+      setSubiendo(`Subiendo ${i + 1} de ${lista.length}…`);
+      try { await subirDocumento(lista[i], { patente: carga.patente || null, tipo: carga.tipo || null, quien }); ok++; } catch (e) { errores.push(e.message); }
+    }
+    setSubiendo(""); cargar();
+    alert(`${ok} de ${lista.length} archivos subidos.${errores.length ? "\n\n" + errores.join("\n") : ""}\n\nQuedan «por leer»: Biggy los va a leer y después los confirmas.`);
+  };
+  const n = (e) => (filas || []).filter((x) => x.estado === e).length;
+  const vis = (filas || []).filter((x) => (f.estado === "pendientes" ? ["por_leer", "por_confirmar"].includes(x.estado) : !f.estado || x.estado === f.estado)
+    && (!f.texto || `${(x.patentes || []).join(" ")} ${x.nombre_archivo || ""} ${x.aseguradora || ""} ${x.poliza || ""}`.toLowerCase().includes(f.texto.toLowerCase())));
+  const celda = { padding: "8px 10px", borderBottom: `1px solid ${C.borde}`, fontSize: 13, verticalAlign: "top" };
+  return (
+    <div>
+      <div style={{ background: "#fff", border: `1px dashed ${C.navy}`, borderRadius: 12, padding: 16, marginBottom: 14 }}>
+        <div style={{ fontWeight: 800, color: C.navy, marginBottom: 6 }}>Subir documentos (uno o muchos a la vez)</div>
+        <div style={{ fontSize: 12.5, color: C.suave, marginBottom: 10 }}>PDF o foto del SOAP, revisión técnica, permiso de circulación, póliza de seguro o contrato de leasing. Si todos son del mismo tipo o de la misma patente, indícalo y te ahorras corregir después; si no, déjalo vacío y Biggy lo lee.</div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <select style={inp} value={carga.tipo} onChange={(e) => setCarga({ ...carga, tipo: e.target.value })}>
+            <option value="">Tipo: que lo lea Biggy</option>{Object.entries(DOC_TIPO).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+          </select>
+          <input style={{ ...inp, width: 170 }} placeholder="Patente (opcional)" value={carga.patente} onChange={(e) => setCarga({ ...carga, patente: e.target.value.toUpperCase() })} />
+          <label style={{ ...btn(), display: "inline-block", cursor: subiendo ? "wait" : "pointer" }}>
+            {subiendo || "Elegir archivos"}
+            <input type="file" multiple accept="application/pdf,image/*" style={{ display: "none" }} disabled={!!subiendo} onChange={(e) => { subir(e.target.files); e.target.value = ""; }} />
+          </label>
+        </div>
+      </div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 12 }}>
+        <select style={inp} value={f.estado} onChange={(e) => setF({ ...f, estado: e.target.value })}>
+          <option value="pendientes">Pendientes ({n("por_leer") + n("por_confirmar")})</option>
+          <option value="por_leer">Por leer ({n("por_leer")})</option><option value="por_confirmar">Por confirmar ({n("por_confirmar")})</option>
+          <option value="confirmado">Confirmados ({n("confirmado")})</option><option value="rechazado">Rechazados ({n("rechazado")})</option><option value="">Todos</option>
+        </select>
+        <input style={{ ...inp, minWidth: 240 }} placeholder="Patente, archivo, aseguradora o póliza" value={f.texto} onChange={(e) => setF({ ...f, texto: e.target.value })} />
+        <button style={btn("sec")} onClick={cargar}>Actualizar</button>
+      </div>
+      {filas === null ? <div style={{ color: C.tenue }}>Cargando…</div> : (
+        <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 860 }}>
+            <thead><tr style={{ background: C.fondo, textAlign: "left" }}>
+              {["Archivo", "Tipo", "Patentes", "Vence", "Aseguradora · póliza", "Subido", "Estado"].map((h) => <th key={h} style={{ ...celda, fontSize: 12, color: C.suave }}>{h}</th>)}
+            </tr></thead>
+            <tbody>
+              {vis.length === 0 && <tr><td colSpan={7} style={{ ...celda, color: C.tenue, textAlign: "center" }}>No hay documentos con este filtro.</td></tr>}
+              {vis.map((x) => { const e = DOC_ESTADO[x.estado] || [x.estado, C.fondo, C.suave]; return [
+                <tr key={x.id} style={{ cursor: "pointer", background: abierta === x.id ? "#fafbfd" : "#fff" }} onClick={() => setAbierta(abierta === x.id ? null : x.id)}>
+                  <td style={{ ...celda, fontWeight: 700, color: C.navy, maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis" }}>{x.nombre_archivo || x.path}</td>
+                  <td style={celda}>{DOC_TIPO[x.tipo] || "—"}</td>
+                  <td style={celda}>{(x.patentes || []).join(", ") || "—"}</td>
+                  <td style={celda}>{x.vence ? fd(x.vence) : "—"}</td>
+                  <td style={celda}>{[x.aseguradora, x.poliza].filter(Boolean).join(" · ") || "—"}</td>
+                  <td style={celda}>{fh(x.cargado_at)}<div style={{ color: C.tenue, fontSize: 12 }}>{x.cargado_por}</div></td>
+                  <td style={celda}>{chip(e[0], e[1], e[2])}</td>
+                </tr>,
+                abierta === x.id && <tr key={x.id + "d"}><td colSpan={7} style={{ padding: 0, borderBottom: `1px solid ${C.borde}` }}><DetalleDocumento doc={x} quien={quien} onListo={() => { setAbierta(null); cargar(); }} /></td></tr>,
+              ]; })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+function DetalleDocumento({ doc, quien, onListo }) {
+  const sug = doc.biggy || {};
+  const [d, setD] = useState({ tipo: doc.tipo || sug.tipo || "", patentes: (doc.patentes?.length ? doc.patentes : sug.patentes || []).join(", "),
+    vence: doc.vence || sug.vence || "", aseguradora: doc.aseguradora || sug.aseguradora || "", poliza: doc.poliza || sug.poliza || "" });
+  const [url, setUrl] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+  useEffect(() => { urlFirmada(doc.path, "ca-documentos-cl").then(setUrl); }, [doc.path]);
+  const esPdf = (doc.mime || doc.path || "").toLowerCase().includes("pdf");
+  const confirmar = async () => {
+    setBusy(true); setMsg("");
+    try { await rpc("fn_doc_confirmar", { p_id: doc.id, p_tipo: d.tipo, p_patentes: d.patentes.split(/[\s,;]+/).filter(Boolean), p_vence: d.vence || null, p_aseguradora: d.aseguradora || null, p_poliza: d.poliza || null, p_por: quien }); onListo(); }
+    catch (e) { setMsg(e.message); } finally { setBusy(false); }
+  };
+  const rechazar = async () => {
+    const nota = window.prompt("¿Por qué se rechaza? (por ejemplo: ilegible, no es del vehículo, duplicado)"); if (nota === null) return;
+    setBusy(true); try { await rpc("fn_doc_rechazar", { p_id: doc.id, p_nota: nota, p_por: quien }); onListo(); } catch (e) { setMsg(e.message); } finally { setBusy(false); }
+  };
+  const campo = (k, t, props = {}) => <label style={{ fontSize: 12, color: C.suave }}>{t}<input style={{ ...inp, width: "100%" }} value={d[k]} onChange={(e) => setD({ ...d, [k]: e.target.value })} {...props} /></label>;
+  return (
+    <div style={{ padding: 14, background: "#fafbfd", display: "grid", gridTemplateColumns: "minmax(280px, 1.2fr) minmax(260px, 1fr)", gap: 14 }}>
+      <div>
+        {!url ? <div style={{ color: C.tenue, fontSize: 13 }}>Abriendo el archivo…</div>
+          : esPdf ? <iframe title="documento" src={url} style={{ width: "100%", height: 420, border: `1px solid ${C.borde}`, borderRadius: 8, background: "#fff" }} />
+          : <img src={url} alt="documento" style={{ maxWidth: "100%", maxHeight: 420, borderRadius: 8, border: `1px solid ${C.borde}` }} />}
+        {url && <a href={url} target="_blank" rel="noreferrer" style={{ fontSize: 12.5, color: C.navy }}>Abrir en otra pestaña</a>}
+      </div>
+      <div>
+        {doc.biggy && <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 10, padding: "8px 10px", fontSize: 12.5, marginBottom: 10 }}><b style={{ color: C.navy }}>🤖 Biggy leyó:</b> {sug.resumen || "—"}</div>}
+        <div style={{ display: "grid", gap: 8 }}>
+          <label style={{ fontSize: 12, color: C.suave }}>Tipo<select style={{ ...inp, width: "100%" }} value={d.tipo} onChange={(e) => setD({ ...d, tipo: e.target.value })}>
+            <option value="">Elige…</option>{Object.entries(DOC_TIPO).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></label>
+          {campo("patentes", "Patente(s) — una póliza puede cubrir varias, sepáralas con coma")}
+          {campo("vence", "Vence", { type: "date" })}
+          {d.tipo === "seguro" && <>{campo("aseguradora", "Aseguradora")}{campo("poliza", "N° de póliza")}</>}
+        </div>
+        {doc.nota && <div style={{ fontSize: 12.5, color: C.suave, marginTop: 8 }}>Nota: {doc.nota}</div>}
+        {msg && <div style={{ color: C.rojo, fontSize: 13, marginTop: 8 }}>{msg}</div>}
+        {doc.estado !== "confirmado" && <div style={{ display: "flex", gap: 6, marginTop: 12 }}>
+          <button style={btn("verde")} disabled={busy} onClick={confirmar}>Confirmar</button>
+          <button style={btn("sec")} disabled={busy} onClick={rechazar}>Rechazar</button>
+        </div>}
+        {doc.estado === "confirmado" && <div style={{ fontSize: 12.5, color: C.verde, marginTop: 12 }}>Confirmado por {doc.confirmado_por} el {fh(doc.confirmado_at)}. La fecha ya está en la ficha.</div>}
+      </div>
     </div>
   );
 }
