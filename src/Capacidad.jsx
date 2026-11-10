@@ -460,8 +460,7 @@ export default function Capacidad({ usuario }) {
       {(() => {
         const compSdd = compPor(cruceFiltrado, "SDD");
         const colsSdd = [
-          ["Comprometido", compSdd, null],
-          ["Acordado", null, meliTot?.acordado ?? null],
+          ["Acordado", compSdd, meliTot?.acordado ?? null],
           ["Solicitado", totSdd.solicitado, meliTot?.solicitado ?? null],
           ["Confirmado", totSdd.confirmado, meliTot?.confirmado ?? null],
           ["Asignado", totSdd.asignado, meliTot?.asignado ?? null],
@@ -601,8 +600,7 @@ export default function Capacidad({ usuario }) {
             <thead><tr>
               {[
                 ["SC", "", "Service Center"],
-                ["Comprometido", "c", "Vehículos SDD por día comprometidos con MELI (planilla de compromisos)"],
-                ["Acordado", "c", "Vehículos SDD por día que MELI tiene registrados como acordados"],
+                ["Acordado", "c", "Vehículos SDD por día acordados. MELI: lo que registra el portal. BT: lo cargado en Compromisos con MELI, si hay"],
                 ["Solicitado", "c", "SDD pedidos por MELI + Spot aceptados"],
                 ["Confirmado", "c", "Aceptados por BigTicket"],
                 ["Asignado", "c", "Aceptados con placa y chofer en el rostering"],
@@ -625,8 +623,10 @@ export default function Capacidad({ usuario }) {
                 return (
                   <tr key={x.sc} onClick={() => setSc(x.sc)} style={{ cursor: "pointer" }}>
                     <td style={{ ...td, fontWeight: 700 }}>{x.sc}</td>
-                    <td style={{ ...tdC, color: x.comprometido == null ? "#94a3b8" : "#334155", fontWeight: 700 }}>{x.comprometido ?? "—"}</td>
-                    <td style={{ ...tdC, color: NARANJA, fontWeight: 700 }}>{m.acordado ?? "—"}{sobre > 0 && <div style={{ fontSize: 10, color: "#b91c1c" }}>+{sobre} pedidas de más</div>}</td>
+                    <td style={tdC}>{x.comprometido != null
+                      ? <Dos brain={x.comprometido} meli={m.acordado ?? null} />
+                      : <span style={{ color: NARANJA, fontWeight: 700 }}>{m.acordado != null ? `MELI ${m.acordado}` : "—"}</span>}
+                      {sobre > 0 && <div style={{ fontSize: 10, color: "#b91c1c" }}>+{sobre} pedidas de más</div>}</td>
                     <td style={tdC}><Dos brain={x.solicitado} meli={modelo === "SDD" ? m.solicitado : null} /></td>
                     <td style={tdC}><Dos brain={x.confirmado} meli={modelo === "SDD" ? m.confirmado : null} /></td>
                     <td style={tdC}><Dos brain={x.asignado} meli={modelo === "SDD" ? m.asignado : null} /></td>
