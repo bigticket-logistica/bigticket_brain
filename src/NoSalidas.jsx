@@ -54,13 +54,14 @@ const NOSAL_ETIQUETA = {
 };
 const etiquetaNosal = (k) => (k ? NOSAL_ETIQUETA[k] || k : "");
 
-function NoSalidasSC({ filas = [], fechaRuta, noAplica = false }) {
+function NoSalidasSC({ filas = [], fechaRuta, noAplica = false, abiertoInicial = false }) {
   if (noAplica) return (
     <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid #e5e7eb", fontSize: 12, color: "#9ca3af" }}>
       🚫 No Salidas a Ruta: este ítem existe desde la bitácora del {NOSAL_DESDE}. Para días anteriores ve Cancelaciones y No Show en el formulario.
     </div>
   );
-  const [abierto, setAbierto] = useState(true);
+  // Contraída por defecto: se ve el resumen (rutas y sin responder) y se abre con el botón
+  const [abierto, setAbierto] = useState(abiertoInicial);
   const resp = filas.filter((f) => f.guardado_at).length;
   const pend = filas.length - resp;
   const fh = (v) => (v ? new Date(v).toLocaleString("es-MX", { timeZone: "America/Mexico_City", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : "");
