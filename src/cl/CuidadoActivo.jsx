@@ -351,7 +351,7 @@ function Auditorias({ quien }) {
       </div>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 12 }}>
         <select style={inp} value={f.estado} onChange={(e) => setF({ ...f, estado: e.target.value })}>
-          <option value="por_revisar">Por revisar</option><option value="devueltas">Devueltas al tercero</option><option value="aprobadas">Aprobadas</option><option value="corregidas">Corregidas a Biggy</option><option value="pedidas">Pedidas por evento</option><option value="todas">Todas</option><option value="quien">¿Quién lleva auditoría?</option>
+          <option value="por_revisar">Por revisar</option><option value="devueltas">Devueltas al tercero</option><option value="aprobadas">Aprobadas</option><option value="corregidas">Corregidas a Biggy</option><option value="pedidas">Pedidas por evento</option><option value="todas">Todas</option><option value="quien">¿Quién lleva auditoría?</option><option value="devoluciones">Devoluciones de vehículo</option>
         </select>
         <select style={inp} value={f.tipo} onChange={(e) => setF({ ...f, tipo: e.target.value })}>
           <option value="">Vehículo y limpieza</option><option value="vehiculo">Vehículo</option><option value="limpieza">Limpieza</option>
@@ -362,7 +362,7 @@ function Auditorias({ quien }) {
       </div>
       {pedir && <PedirAuditoria quien={quien} onListo={() => { setPedir(false); setF({ ...f, estado: "pedidas" }); cargar(); }} />}
       {error && <div style={{ color: C.rojo, fontSize: 13, marginBottom: 10 }}>{error}</div>}
-      {f.estado === "quien" ? <QuienLlevaAuditoria quien={quien} texto={f.texto} /> : f.estado === "pedidas" ? <Pedidas filas={pedidas.filter((x) => !f.texto || `${x.patente} ${x.empresa || ""}`.toLowerCase().includes(f.texto.toLowerCase()))} quien={quien} onCambio={cargar} /> :
+      {f.estado === "devoluciones" ? <DevolucionesBrain quien={quien} texto={f.texto} /> : f.estado === "quien" ? <QuienLlevaAuditoria quien={quien} texto={f.texto} /> : f.estado === "pedidas" ? <Pedidas filas={pedidas.filter((x) => !f.texto || `${x.patente} ${x.empresa || ""}`.toLowerCase().includes(f.texto.toLowerCase()))} quien={quien} onCambio={cargar} /> :
        filas === null ? <div style={{ color: C.tenue }}>Cargando…</div> : (
         <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 900 }}>
@@ -490,6 +490,67 @@ function QuienLlevaAuditoria({ quien, texto }) {
                   <td style={{ ...celda, color: C.suave }}>{x.motivo ? `${x.motivo} · ${x.por || ""} · ${fh(x.at)}` : "—"}</td>
                 </tr>
               ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Devoluciones de vehículo avisadas por el transportista desde su portal
+const DEV_EST = { solicitada: ["Por gestionar", C.ambarT, C.ambar], en_traspaso: ["Traspaso en curso", "#eef2f8", C.navy], completada: ["Completada", C.verdeT, C.verde], rechazada: ["Rechazada", C.fondo, C.suave] };
+function DevolucionesBrain({ quien, texto }) {
+  const [filas, setFilas] = useState(null);
+  const [empresas, setEmpresas] = useState([]);
+  const [abierta, setAbierta] = useState(null);
+  const [g, setG] = useState({ rut: "", nota: "", fecha: "" });
+  const cargar = () => api("ca_devoluciones_cl?select=*&order=solicitado_at.desc&limit=500").then(setFilas).catch(() => setFilas([]));
+  useEffect(() => { cargar(); rpc("fn_ca_empresas_portal_cl").then((r) => setEmpresas(r || [])).catch(() => {}); }, []);
+  const gestionar = async (x, accion) => {
+    try { const r = await rpc("fn_dev_gestionar", { p_id: x.id, p_accion: accion, p_rut_recibe: g.rut || null, p_nota: g.nota || null, p_por: quien, p_fecha_recepcion: g.fecha || x.fecha_entrega || null }); alert(r); setAbierta(null); setG({ rut: "", nota: "", fecha: "" }); cargar(); }
+    catch (e) { alert(e.message); }
+  };
+  const vis = (filas || []).filter((x) => !texto || `${x.patente} ${x.empresa || ""} ${x.folio || ""}`.toLowerCase().includes(texto.toLowerCase()));
+  const celda = { padding: "8px 10px", borderBottom: `1px solid ${C.borde}`, fontSize: 13, verticalAlign: "top" };
+  return (
+    <div>
+      <div style={{ fontSize: 12.5, color: C.suave, marginBottom: 10 }}>El transportista avisa desde su portal que deja un vehículo. Al supervisor del CECO le llega una tarea en su bitácora para coordinar la entrega. Aquí se inicia el traspaso (auditoría de entrega para quien lo deja y de recepción para quien lo recibe), se rechaza o se cierra.</div>
+      {filas === null ? <div style={{ color: C.tenue }}>Cargando…</div> : (
+        <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 860 }}>
+            <thead><tr style={{ background: C.fondo, textAlign: "left" }}>{["Folio", "Patente", "Transportista · CECO", "Motivo", "Entrega", "Avisó", "Estado"].map((h) => <th key={h} style={{ ...celda, fontSize: 12, color: C.suave }}>{h}</th>)}</tr></thead>
+            <tbody>
+              {vis.length === 0 && <tr><td colSpan={7} style={{ ...celda, color: C.tenue, textAlign: "center" }}>No hay devoluciones.</td></tr>}
+              {vis.map((x) => { const e = DEV_EST[x.estado] || [x.estado, C.fondo, C.suave]; return [
+                <tr key={x.id} style={{ cursor: "pointer", background: abierta === x.id ? "#fafbfd" : "#fff" }} onClick={() => { setAbierta(abierta === x.id ? null : x.id); setG({ rut: "", nota: "", fecha: x.fecha_entrega || "" }); }}>
+                  <td style={{ ...celda, fontWeight: 700, color: C.navy }}>{x.folio}</td><td style={{ ...celda, fontWeight: 800 }}>{x.patente}</td>
+                  <td style={celda}>{x.empresa}<div style={{ color: C.tenue, fontSize: 12 }}>{x.ceco}</div></td>
+                  <td style={celda}>{x.motivo}{x.detalle && <div style={{ color: C.tenue, fontSize: 12 }}>{x.detalle}</div>}</td>
+                  <td style={celda}>{x.fecha_entrega ? fd(x.fecha_entrega) : "—"}</td>
+                  <td style={celda}>{fh(x.solicitado_at)}<div style={{ color: C.tenue, fontSize: 12 }}>{x.solicitado_nombre || x.solicitado_por}</div></td>
+                  <td style={celda}>{chip(e[0], e[1], e[2])}{x.destino_empresa && <div style={{ color: C.tenue, fontSize: 12 }}>pasa a {x.destino_empresa}</div>}</td>
+                </tr>,
+                abierta === x.id && <tr key={x.id + "g"}><td colSpan={7} style={{ padding: 12, background: "#fafbfd", borderBottom: `1px solid ${C.borde}` }}>
+                  {x.estado === "solicitada" ? (
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end" }}>
+                      <label style={{ fontSize: 12, color: C.suave }}>Empresa que recibe el vehículo
+                        <select style={{ ...inp, display: "block", minWidth: 280 }} value={g.rut} onChange={(ev) => setG({ ...g, rut: ev.target.value })}>
+                          <option value="">Elige…</option>{empresas.filter((m) => m.rut !== x.rut_empresa).map((m) => <option key={m.rut} value={m.rut}>{m.empresa}</option>)}
+                        </select></label>
+                      <label style={{ fontSize: 12, color: C.suave }}>Recepción física (fecha del traspaso)<input type="date" style={{ ...inp, display: "block" }} value={g.fecha} onChange={(ev) => setG({ ...g, fecha: ev.target.value })} /></label>
+                      <label style={{ fontSize: 12, color: C.suave }}>Nota<input style={{ ...inp, display: "block", minWidth: 220 }} value={g.nota} onChange={(ev) => setG({ ...g, nota: ev.target.value })} /></label>
+                      <button style={btn()} onClick={() => gestionar(x, "traspaso")}>Iniciar traspaso</button>
+                      <button style={btn("sec")} onClick={() => gestionar(x, "rechazar")}>Rechazar (con nota)</button>
+                    </div>
+                  ) : x.estado === "en_traspaso" ? (
+                    <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                      <span style={{ fontSize: 13 }}>Auditoría de entrega pedida a {x.empresa} y de recepción a {x.destino_empresa} (recepción el {fd(x.fecha_recepcion)}). Al aprobar la auditoría de recepción, el vehículo pasa solo a {x.destino_empresa} y esta devolución se cierra.</span>
+                      <button style={btn("verde")} onClick={() => gestionar(x, "completar")}>Marcar completada</button>
+                    </div>
+                  ) : <span style={{ fontSize: 13, color: C.suave }}>{x.estado === "rechazada" ? `Rechazada: ${x.nota || ""}` : "Completada"} · {x.gestion_por} · {fh(x.gestion_at)}</span>}
+                </td></tr>,
+              ]; })}
             </tbody>
           </table>
         </div>
