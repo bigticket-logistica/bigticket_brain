@@ -973,7 +973,7 @@ function TalleresMnt({ quien }) {
 }
 
 // ── Ficha del activo ────────────────────────────────────────────────────────
-const DOC_EST = { vencido: ["Vencido", C.rojoT, C.rojo], por_vencer: ["Por vencer", C.ambarT, C.ambar], sin_dato: ["Sin dato", C.fondo, C.suave], al_dia: ["Al día", C.verdeT, C.verde] };
+const DOC_EST = { vencido: ["Vencido", C.rojoT, C.rojo], por_vencer: ["Por vencer", C.ambarT, C.ambar], sin_dato: ["Sin dato", C.fondo, C.suave], al_dia: ["Al día", C.verdeT, C.verde], no_aplica: ["No aplica", C.fondo, C.tenue] };
 const pesos = (v) => (v === null || v === undefined ? "—" : `$${Math.round(Number(v)).toLocaleString("es-CL")}`);
 function FichaActivo({ quien }) {
   const [filas, setFilas] = useState(null);
@@ -1080,7 +1080,7 @@ function FichaDetalle({ patente, quien, onVolver }) {
                   <label style={{ color: C.navy, cursor: "pointer", textDecoration: "underline" }}>Subir
                     <input type="file" accept="application/pdf,image/*" style={{ display: "none" }} onChange={async (ev) => {
                       const file = ev.target.files?.[0]; ev.target.value = ""; if (!file) return;
-                      const v = window.prompt(`¿Fecha de vencimiento del ${x.nombre}? (AAAA-MM-DD, o déjalo vacío y que lo lea Biggy)`, "");
+                      const v = x.tipo === "padron" ? "" : window.prompt(`¿Fecha de vencimiento del ${x.nombre}? (AAAA-MM-DD, o déjalo vacío y que lo lea Biggy)`, "");
                       if (v === null) return;
                       try { await subirDocumento(file, { patente, tipo: x.tipo, vence: /^\d{4}-\d{2}-\d{2}$/.test(v.trim()) ? v.trim() : null, quien });
                             alert("Subido. Queda en Documentos para confirmar."); } catch (e) { alert(e.message); }
@@ -1133,7 +1133,8 @@ function FichaDetalle({ patente, quien, onVolver }) {
 }
 
 // ── Documentos del activo ───────────────────────────────────────────────────
-const DOC_TIPO = { soap: "SOAP", rt: "Revisión técnica", permiso: "Permiso de circulación", seguro: "Seguro", leasing: "Leasing", otro: "Otro" };
+const DOC_TIPO = { padron: "Primera inscripción / padrón", soap: "SOAP", rt: "Revisión técnica", gases: "Emisión de gases", permiso: "Permiso de circulación",
+  seguro_vehiculo: "Seguro del vehículo", seguro_carga: "Seguro de carga", leasing: "Leasing", otro: "Otro" };
 const DOC_ESTADO = { por_leer: ["Por leer (Biggy)", "#eef2f8", C.navy], por_confirmar: ["Por confirmar", C.ambarT, C.ambar], confirmado: ["Confirmado", C.verdeT, C.verde], rechazado: ["Rechazado", C.fondo, C.suave] };
 async function subirDocumento(file, { patente = null, tipo = null, vence = null, quien }) {
   if (file.size > 30 * 1024 * 1024) throw new Error(`${file.name}: pesa más de 30 MB`);
@@ -1161,7 +1162,7 @@ function Documentos({ quien }) {
   const [cargando, setCargando] = useState(false);
   const [hora, setHora] = useState(null);
   const [sel, setSel] = useState({});
-  const completo = (x) => x.estado === "por_confirmar" && x.tipo && (x.patentes || []).length > 0 && (x.vence || x.tipo === "otro");
+  const completo = (x) => x.estado === "por_confirmar" && x.tipo && x.tipo !== "seguro" && (x.patentes || []).length > 0 && (x.vence || ["otro", "padron"].includes(x.tipo));
   const confirmarSel = async () => {
     const lista = (filas || []).filter((x) => sel[x.id] && completo(x));
     if (!lista.length) return;
@@ -1220,7 +1221,7 @@ function Documentos({ quien }) {
     <div>
       <div style={{ background: "#fff", border: `1px dashed ${C.navy}`, borderRadius: 12, padding: 16, marginBottom: 14 }}>
         <div style={{ fontWeight: 800, color: C.navy, marginBottom: 6 }}>Subir documentos (uno o muchos a la vez)</div>
-        <div style={{ fontSize: 12.5, color: C.suave, marginBottom: 10 }}>PDF o foto del SOAP, revisión técnica, permiso de circulación, póliza de seguro o contrato de leasing. Si todos son del mismo tipo o de la misma patente, indícalo y te ahorras corregir después; si no, déjalo vacío y Biggy lo lee.</div>
+        <div style={{ fontSize: 12.5, color: C.suave, marginBottom: 10 }}>PDF o foto del padrón (primera inscripción), SOAP, revisión técnica, emisión de gases, permiso de circulación, seguro del vehículo, seguro de carga o contrato de leasing. Si todos son del mismo tipo o de la misma patente, indícalo y te ahorras corregir después; si no, déjalo vacío y Biggy lo lee.</div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
           <select style={inp} value={carga.tipo} onChange={(e) => setCarga({ ...carga, tipo: e.target.value })}>
             <option value="">Tipo: que lo lea Biggy</option>{Object.entries(DOC_TIPO).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
@@ -1252,6 +1253,11 @@ function Documentos({ quien }) {
         </select>
         <input style={{ ...inp, minWidth: 240 }} placeholder="Patente, archivo, aseguradora o póliza" value={f.texto} onChange={(e) => setF({ ...f, texto: e.target.value })} />
         <button style={btn("sec")} disabled={cargando} onClick={cargar}>{cargando ? "Actualizando…" : "Actualizar"}</button>
+        {f.estado === "rechazado" && n("rechazado") > 0 && <button style={btn("sec")} disabled={cargando} onClick={async () => {
+          if (!window.confirm(`Devolver a revisión los ${n("rechazado")} documentos rechazados. ¿Seguir?`)) return;
+          setCargando(true); for (const x of (filas || []).filter((y) => y.estado === "rechazado")) { try { await rpc("fn_doc_reabrir", { p_id: x.id, p_por: quien }); } catch { /* sigue */ } }
+          await cargar(); setF({ ...f, estado: "pendientes" });
+        }}>Devolver todos a revisión</button>}
         {(filas || []).some(completo) && <>
           <button style={btn("sec")} onClick={() => setSel(Object.fromEntries(vis.filter((x) => completo(x) && x.biggy?.confianza === "alta").map((x) => [x.id, true])))}>Marcar los completos (confianza alta)</button>
           <button style={btn("verde")} disabled={cargando || !Object.values(sel).some(Boolean)} onClick={confirmarSel}>Confirmar seleccionados ({(filas || []).filter((x) => sel[x.id] && completo(x)).length})</button>
@@ -1326,7 +1332,8 @@ function DetalleDocumento({ doc, quien, onListo }) {
             <option value="">Elige…</option>{Object.entries(DOC_TIPO).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></label>
           {campo("patentes", "Patente(s) — una póliza puede cubrir varias, sepáralas con coma")}
           {campo("vence", "Vence", { type: "date" })}
-          {d.tipo === "seguro" && <>{campo("aseguradora", "Aseguradora")}{campo("poliza", "N° de póliza")}</>}
+          {["seguro_vehiculo", "seguro_carga", "soap"].includes(d.tipo) && <>{campo("aseguradora", "Aseguradora")}{campo("poliza", "N° de póliza")}</>}
+          {d.tipo === "padron" && <div style={{ fontSize: 12, color: C.tenue }}>El padrón no vence: basta con el archivo.</div>}
         </div>
         {doc.nota && <div style={{ fontSize: 12.5, color: C.suave, marginTop: 8 }}>Nota: {doc.nota}</div>}
         {msg && <div style={{ color: C.rojo, fontSize: 13, marginTop: 8 }}>{msg}</div>}
@@ -1335,6 +1342,13 @@ function DetalleDocumento({ doc, quien, onListo }) {
           <button style={btn("sec")} disabled={busy} onClick={rechazar}>Rechazar</button>
         </div>}
         {doc.estado === "confirmado" && <div style={{ fontSize: 12.5, color: C.verde, marginTop: 12 }}>Confirmado por {doc.confirmado_por} el {fh(doc.confirmado_at)}. La fecha ya está en la ficha.</div>}
+        {doc.estado === "rechazado" && <div style={{ marginTop: 12 }}>
+          <div style={{ fontSize: 12.5, color: C.suave, marginBottom: 6 }}>Rechazado por {doc.confirmado_por} el {fh(doc.confirmado_at)}. No cuenta para la ficha.</div>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            <button style={btn()} disabled={busy} onClick={async () => { setBusy(true); try { await rpc("fn_doc_reabrir", { p_id: doc.id, p_por: quien }); onListo(); } catch (e) { setMsg(e.message); } finally { setBusy(false); } }}>Devolver a revisión</button>
+            <button style={btn("rojo")} disabled={busy} onClick={async () => { if (!window.confirm("¿Eliminar este documento? Úsalo solo si está duplicado o es un archivo equivocado.")) return; setBusy(true); try { await rpc("fn_doc_eliminar", { p_id: doc.id, p_por: quien }); onListo(); } catch (e) { setMsg(e.message); } finally { setBusy(false); } }}>Eliminar</button>
+          </div>
+        </div>}
       </div>
     </div>
   );
