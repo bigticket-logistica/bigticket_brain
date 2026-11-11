@@ -1551,8 +1551,9 @@ function FichaReparacion({ s, quien, onCambio }) {
 
 // ── Siniestros ──────────────────────────────────────────────────────────────
 const SIN_ESTADO = { abierto: ["Abierto", C.ambarT, C.ambar], en_taller: ["En taller", "#eef2f8", C.navy], cerrado: ["Cerrado", C.fondo, C.suave], cerrado_baja: ["Cerrado por baja", C.fondo, C.tenue] };
-const SIN_CAUSANTE = ["Chofer", "Tercero externo", "Sin responsable", "Por determinar"];
-const SIN_TRIP = ["Conductor solo", "Conductor y ayudante"];
+// Listas de la hoja «VALIDACIÓN DATOS» del seguimiento de Adriana
+const SIN_CAUSANTE = ["Chofer", "Tercero involucrado"];
+const SIN_TRIP = ["Propia", "Externo"];
 function Siniestros({ quien }) {
   const [filas, setFilas] = useState(null);
   const [f, setF] = useState({ estado: "abiertos", texto: "" });
@@ -1560,6 +1561,36 @@ function Siniestros({ quien }) {
   const [nuevo, setNuevo] = useState(false);
   const cargar = () => api("vw_siniestros_cl?select=*&order=fecha_siniestro.desc&limit=1000").then(setFilas).catch(() => setFilas([]));
   const [importando, setImportando] = useState("");
+  // SEGUIMIENTO SINIESTROS de Adriana (hoja BASE). reset = true: borra antes lo importado y no editado a mano.
+  const importarSeguimiento = async (file, reset) => {
+    if (!file) return;
+    try {
+      if (reset) {
+        const pv = await rpc("fn_sin_reset_previa");
+        if (!window.confirm(`Resetear y cargar el seguimiento:\n\n• Se borran ${pv.se_borran} siniestros importados (consolidado y seguimiento) que nadie editó a mano. Quedan respaldados.\n• Se quedan ${pv.se_quedan_editados} editados a mano y ${pv.se_quedan_brain} registrados en el Brain.\n\nDespués se carga el archivo completo. ¿Seguir?`)) return;
+      }
+      setImportando("Leyendo el seguimiento…");
+      const XLSX = await cargarSheetJS();
+      const wb = XLSX.read(await file.arrayBuffer(), { type: "array", cellDates: true });
+      const hoja = wb.SheetNames.find((n) => /^base$/i.test(n.trim())) || wb.SheetNames.find((n) => /base/i.test(n));
+      if (!hoja) throw new Error(`El archivo no tiene la hoja «BASE» (hojas: ${wb.SheetNames.join(", ")})`);
+      const iso = (v) => v instanceof Date ? new Date(v.getTime() - v.getTimezoneOffset() * 60000).toISOString().slice(0, 10) : v;
+      const filasX = XLSX.utils.sheet_to_json(wb.Sheets[hoja], { defval: null }).map((r) => {
+        const o = {}; for (const [k, v] of Object.entries(r)) { const kk = String(k).toUpperCase().replace(/\s+/g, " ").trim(); if (kk !== "HECHOS") o[kk] = iso(v); }   // el relato no se envía
+        return o;
+      }).filter((r) => r["PATENTE"]);
+      if (!filasX.length) throw new Error("La hoja BASE no trae filas con patente");
+      if (reset) { setImportando("Reseteando…"); await rpc("fn_sin_reset", { p_por: quien }); }
+      const tot = {};
+      for (let i = 0; i < filasX.length; i += 100) {
+        setImportando(`Cargando ${Math.min(i + 100, filasX.length)} de ${filasX.length}…`);
+        const r = await rpc("fn_sin_importar_seguimiento", { p_filas: filasX.slice(i, i + 100), p_por: quien });
+        for (const [k, v] of Object.entries(r || {})) tot[k] = (tot[k] || 0) + Number(v || 0);
+      }
+      alert(`Seguimiento «${hoja}»: ${filasX.length} filas.\n\n• Nuevos: ${tot.nuevos || 0}\n• Completados (ya estaban, p. ej. del consolidado): ${tot.completados || 0}\n• Editados a mano en el Brain (no se tocan): ${tot.editados_a_mano || 0}\n• Mercadería (se omiten): ${tot.mercaderia || 0}${tot.patente_no_esta ? `\n• Patente que no está en la ficha: ${tot.patente_no_esta}` : ""}${tot.sin_fecha ? `\n• Sin fecha del siniestro: ${tot.sin_fecha}` : ""}\n\nEl relato (HECHOS) no se guarda.`);
+      cargar();
+    } catch (e) { alert(e.message); } finally { setImportando(""); }
+  };
   // Carga la hoja SINIESTROS del consolidado de vehículos (la «biblia»). Se puede repetir con el archivo actualizado.
   const importar = async (file) => {
     if (!file) return;
@@ -1621,7 +1652,15 @@ function Siniestros({ quien }) {
         <input style={{ ...inp, minWidth: 240 }} placeholder="Folio, patente, conductor, compañía o N°" value={f.texto} onChange={(e) => setF({ ...f, texto: e.target.value })} />
         <button style={btn()} onClick={() => setNuevo(!nuevo)}>{nuevo ? "Cerrar" : "+ Nuevo siniestro"}</button>
         <label style={{ ...btn("sec"), display: "inline-block", cursor: importando ? "wait" : "pointer" }}>
-          {importando || "Cargar consolidado (Excel)"}
+          {importando || "Actualizar desde el seguimiento"}
+          <input type="file" accept=".xlsx,.xls" style={{ display: "none" }} disabled={!!importando} onChange={(e) => { importarSeguimiento(e.target.files?.[0], false); e.target.value = ""; }} />
+        </label>
+        <label style={{ ...btn("sec"), display: "inline-block", cursor: importando ? "wait" : "pointer", color: C.rojo }}>
+          Resetear y cargar seguimiento
+          <input type="file" accept=".xlsx,.xls" style={{ display: "none" }} disabled={!!importando} onChange={(e) => { importarSeguimiento(e.target.files?.[0], true); e.target.value = ""; }} />
+        </label>
+        <label style={{ ...btn("sec"), display: "inline-block", cursor: importando ? "wait" : "pointer" }}>
+          {importando ? "…" : "Cargar consolidado (Excel)"}
           <input type="file" accept=".xlsx,.xls" style={{ display: "none" }} disabled={!!importando} onChange={(e) => { importar(e.target.files?.[0]); e.target.value = ""; }} />
         </label>
       </div>
@@ -1636,7 +1675,7 @@ function Siniestros({ quien }) {
               {vis.length === 0 && <tr><td colSpan={9} style={{ ...celda, color: C.tenue, textAlign: "center" }}>Nada con este filtro.</td></tr>}
               {vis.map((x) => { const e = SIN_ESTADO[x.estado] || [x.estado, C.fondo, C.suave]; return [
                 <tr key={x.id} style={{ cursor: "pointer", background: abierta === x.id ? "#fafbfd" : "#fff" }} onClick={() => setAbierta(abierta === x.id ? null : x.id)}>
-                  <td style={{ ...celda, fontWeight: 700, color: C.navy }}>{x.folio}{x.origen === "consolidado" && <div style={{ color: C.tenue, fontSize: 11.5, fontWeight: 400 }}>del consolidado</div>}</td>
+                  <td style={{ ...celda, fontWeight: 700, color: C.navy }}>{x.folio}{["consolidado", "seguimiento"].includes(x.origen) && <div style={{ color: C.tenue, fontSize: 11.5, fontWeight: 400 }}>del {x.origen}</div>}</td>
                   <td style={celda}>{fd(x.fecha_siniestro)}</td>
                   <td style={{ ...celda, fontWeight: 800 }}>{x.patente}</td>
                   <td style={celda}>{x.conductor || "—"}<div style={{ color: C.tenue, fontSize: 12 }}>{x.causante || ""}</div></td>
@@ -1644,7 +1683,7 @@ function Siniestros({ quien }) {
                   <td style={celda}>{pesos(x.deducible)}{x.cobro_enviado_at && <div style={{ color: C.verde, fontSize: 12 }}>enviado a cobro</div>}</td>
                   <td style={celda}>{pesos(x.costo_reparacion)}</td>
                   <td style={celda}>{x.dias_taller === null || x.dias_taller === undefined ? "—" : x.taller_en_curso ? `${x.dias_taller} · en curso` : x.dias_taller}</td>
-                  <td style={celda}>{chip(e[0], e[1], e[2])}</td>
+                  <td style={celda}>{chip(e[0], e[1], e[2])}{x.estado_origen && x.estado_origen.toLowerCase() !== x.estado && <div style={{ color: C.tenue, fontSize: 11.5 }}>{x.estado_origen.toLowerCase()}</div>}</td>
                 </tr>,
                 abierta === x.id && <tr key={x.id + "d"}><td colSpan={9} style={{ padding: 0, borderBottom: `1px solid ${C.borde}` }}><FormSiniestro s={x} quien={quien} onListo={() => { setAbierta(null); cargar(); }} /></td></tr>,
               ]; })}
@@ -2027,9 +2066,22 @@ function EnviosAlertas() {
   const [log, setLog] = useState(null);
   const [busy, setBusy] = useState(false);
   const cargar = () => {
-    api("ca_config_cl?clave=in.(resumen_diario,resumen_hora,resumen_jefes,correo_modo,correo_prueba,correo_ejecutivo,correo_jefatura)&select=clave,valor")
+    api("ca_config_cl?clave=in.(resumen_diario,resumen_hora,resumen_jefes,correo_modo,correo_prueba,correo_ejecutivo,correo_jefatura,esc_activo,esc_n3_horas,esc_criticos,resumen_programados,resumen_sem_dia,resumen_sem_hora,resumen_operaciones,correo_finanzas)&select=clave,valor")
       .then((r) => setCfg(Object.fromEntries((r || []).map((x) => [x.clave, x.valor])))).catch(() => {});
     api("ca_resumenes_cl?select=*&order=enviado_at.desc&limit=60").then(setLog).catch(() => setLog([]));
+    api("ca_escalamientos_cl?select=*&order=enviado_at.desc&limit=100").then(setEsc).catch(() => setEsc([]));
+  };
+  const [esc, setEsc] = useState(null);
+  const enviarProg = async (tipo, nombre) => {
+    if (!window.confirm(`Enviar ahora el resumen «${nombre}».\n\nModo de correos: ${cfg.correo_modo || "prueba"}. ¿Seguir?`)) return;
+    setBusy(true);
+    try { const r = await rpc("fn_ca_resumenes_programados", { p_tipo: tipo }); alert((r?.enviados || []).length ? `Enviado (modo ${r?.modo}).` : "No había nada que enviar."); cargar(); } catch (e) { alert(e.message); } finally { setBusy(false); }
+  };
+  const DIAS = ["", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"];
+  const escalar = async () => {
+    if (!window.confirm(`Revisar ahora las tareas sin resolver y enviar el escalamiento.\n\nModo de correos: ${cfg.correo_modo || "prueba"}. Cada tarea se escala una sola vez por nivel. ¿Seguir?`)) return;
+    setBusy(true);
+    try { const r = await rpc("fn_ca_escalar", { p_forzar: true }); alert(`Listo: nivel 2 (ejecutivo) ${r?.nivel2 ?? 0} tareas · nivel 3 (jefatura) ${r?.nivel3 ?? 0} tareas.`); cargar(); } catch (e) { alert(e.message); } finally { setBusy(false); }
   };
   useEffect(cargar, []);
   const probar = async () => {
@@ -2054,11 +2106,35 @@ function EnviosAlertas() {
         <button style={btn()} disabled={busy} onClick={probar}>{busy ? "Enviando…" : "Enviar resumen ahora"}</button>
       </div>
       <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, padding: 14 }}>
+        <div style={{ fontWeight: 800, color: C.navy, marginBottom: 8 }}>Escalamiento de tareas sin resolver</div>
+        {fila("Envío automático", cfg.esc_activo === "activo" ? "Activo (cada hora)" : "Apagado")}
+        {fila("Nivel 1", "Supervisor (la tarea)")}
+        {fila("Nivel 2 · vencido el SLA", cfg.correo_ejecutivo)}
+        {fila(`Nivel 3 · ${cfg.esc_n3_horas || 24} h después o crítico`, cfg.correo_jefatura)}
+        {fila("Tipos críticos", cfg.esc_criticos)}
+        <div style={{ fontSize: 12, color: C.tenue, margin: "8px 0" }}>Una tarea sin respuesta ni veredicto, con el plazo vencido, se escala una sola vez por nivel. Se cambia en Configuración: esc_activo, esc_n3_horas y esc_criticos.</div>
+        <button style={btn("sec")} disabled={busy} onClick={escalar}>Revisar y escalar ahora</button>
+        {esc && esc.length > 0 && <div style={{ fontSize: 12, color: C.suave, marginTop: 8 }}>Escaladas: nivel 2 · {esc.filter((x) => x.nivel === 2).length} tareas · nivel 3 · {esc.filter((x) => x.nivel === 3).length} tareas · última {fh(esc[0].enviado_at)}</div>}
+      </div>
+      <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, padding: 14 }}>
+        <div style={{ fontWeight: 800, color: C.navy, marginBottom: 8 }}>Resúmenes programados</div>
+        {fila("Envío automático", cfg.resumen_programados === "activo" ? `Activo · ${DIAS[Number(cfg.resumen_sem_dia) || 1]} ${cfg.resumen_sem_hora || ""}` : "Apagado")}
+        {fila("Operaciones (documentos)", cfg.resumen_operaciones)}{fila("Finanzas (renovación masiva)", cfg.correo_finanzas)}
+        {[["documentos", "Documentos vencidos y por vencer", "semanal · ejecutivo, jefatura y Operaciones"], ["masiva", "Renovación masiva (60 días)", "semanal, solo si hay muchos vencimientos · Finanzas"],
+          ["siniestros", "Siniestros abiertos", "semanal · ejecutivo y jefatura"], ["auditorias", "Cumplimiento de auditorías del mes anterior", "mensual, día 1 · ejecutivo y jefatura"]].map(([k, t, d]) => (
+          <div key={k} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, padding: "6px 0", borderBottom: `1px solid ${C.fondo}` }}>
+            <span style={{ fontSize: 13 }}><b>{t}</b><div style={{ fontSize: 11.5, color: C.tenue }}>{d}</div></span>
+            <button style={btn("sec")} disabled={busy} onClick={() => enviarProg(k, t)}>Enviar ahora</button>
+          </div>
+        ))}
+        <div style={{ fontSize: 12, color: C.tenue, marginTop: 8 }}>Se cambia en Configuración: resumen_programados, resumen_sem_dia, resumen_sem_hora, resumen_operaciones, correo_finanzas, doc_masiva_dias y doc_masiva_min.</div>
+      </div>
+      <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, padding: 14 }}>
         <div style={{ fontWeight: 800, color: C.navy, marginBottom: 8 }}>Últimos envíos</div>
         {log === null ? <div style={{ color: C.tenue }}>Cargando…</div> : log.length === 0 ? <div style={{ color: C.tenue, fontSize: 13 }}>Todavía no se envía ningún resumen.</div> :
           log.map((x) => <div key={x.id} style={{ fontSize: 12.5, padding: "4px 0", borderBottom: `1px solid ${C.fondo}` }}>
-            <b>{fh(x.enviado_at)}</b> · {x.destinatario} · {x.ok ? <span style={{ color: C.verde }}>enviado</span> : <span style={{ color: C.rojo }}>no enviado</span>}
-            {x.detalle && <span style={{ color: C.tenue }}> · uso {x.detalle.uso ?? "—"}% · {x.detalle.no_salidas} sin motivo · {x.detalle.alertas_altas} alertas altas</span>}
+            <b>{fh(x.enviado_at)}</b> · {({ flota_diario: "Flota diario", flota_diario_sup: "Flota supervisor", documentos: "Documentos", masiva: "Renovación masiva", siniestros: "Siniestros", auditorias: "Auditorías" })[x.tipo] || x.tipo} · {x.destinatario} · {x.ok ? <span style={{ color: C.verde }}>enviado</span> : <span style={{ color: C.rojo }}>no enviado</span>}
+            {x.detalle && String(x.tipo).startsWith("flota") && <span style={{ color: C.tenue }}> · uso {x.detalle.uso ?? "—"}% · {x.detalle.no_salidas} sin motivo · {x.detalle.alertas_altas} alertas altas</span>}
           </div>)}
       </div>
     </div>
@@ -2374,7 +2450,7 @@ function Configuracion({ quien }) {
       <div>
         <div style={{ fontWeight: 800, color: C.navy, marginBottom: 6 }}>Plazos y reglas (auditorías, flota, detenciones, mantenciones, documentos, reparaciones, siniestros)</div>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, background: "#fff", border: `1px solid ${C.borde}`, marginBottom: 18 }}>
-          <tbody>{cfg.filter((c) => /^(aud_|flota_|auditoria_|det_|mnt_|doc_|rep_|vu_|sin_|ficha_)/.test(c.clave)).map((c) => (
+          <tbody>{cfg.filter((c) => /^(aud_|flota_|auditoria_|det_|mnt_|doc_|rep_|vu_|sin_|ficha_|esc_|resumen_|correo_finanzas)/.test(c.clave)).map((c) => (
             <tr key={c.clave}>
               <td style={{ ...celda, width: 260 }}><b>{c.descripcion || c.clave}</b><div style={{ fontSize: 11.5, color: C.tenue }}>{c.clave}</div></td>
               <td style={celda}><input style={{ ...inp, width: 140 }} defaultValue={c.valor || ""} onBlur={(e) => { if (e.target.value !== (c.valor || "")) guardar("ca_config_cl", c.clave, "valor", e.target.value); }} /></td>
@@ -2383,7 +2459,7 @@ function Configuracion({ quien }) {
         </table>
         <div style={{ fontWeight: 800, color: C.navy, marginBottom: 6 }}>Correos y enlaces</div>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, background: "#fff", border: `1px solid ${C.borde}` }}>
-          <tbody>{cfg.filter((c) => !/^(aud_|flota_|auditoria_|det_|mnt_|doc_|rep_|vu_|sin_|ficha_)/.test(c.clave)).map((c) => (
+          <tbody>{cfg.filter((c) => !/^(aud_|flota_|auditoria_|det_|mnt_|doc_|rep_|vu_|sin_|ficha_|esc_|resumen_|correo_finanzas)/.test(c.clave)).map((c) => (
             <tr key={c.clave}>
               <td style={{ ...celda, width: 260 }}><b>{c.clave}</b><div style={{ fontSize: 11.5, color: C.tenue }}>{c.descripcion}</div></td>
               <td style={celda}><input style={{ ...inp, width: "100%" }} defaultValue={c.valor || ""} onBlur={(e) => { if (e.target.value !== (c.valor || "")) guardar("ca_config_cl", c.clave, "valor", e.target.value); }} /></td>
