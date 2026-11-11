@@ -2059,7 +2059,7 @@ function ReglasDetencion({ quien, onCambio }) {
   const [abierto, setAbierto] = useState(false);
   const [cfg, setCfg] = useState([]);
   const [msg, setMsg] = useState("");
-  const cargar = () => api("ca_config_cl?clave=like.det_*&select=clave,valor,descripcion&order=clave").then(setCfg).catch(() => setCfg([]));
+  const cargar = () => api("ca_config_cl?clave=like.det_*&clave=neq.det_tareas&select=clave,valor,descripcion&order=clave").then(setCfg).catch(() => setCfg([]));
   useEffect(() => { if (abierto) cargar(); }, [abierto]);
   const guardar = async (clave, valor) => {
     setMsg("");
@@ -2067,7 +2067,7 @@ function ReglasDetencion({ quien, onCambio }) {
     catch (e) { setMsg(e.message); }
   };
   const nombre = { det_umbral_min: "Umbral de detención (min)", det_radio_m: "Radio de la entrega (m)", det_margen_min: "Margen de tiempo (min)", det_min_por_entrega: "Minutos por parada de MELI",
-    det_colacion_max_min: "Colación: máximo (min)", det_colacion_tras_h: "Colación: desde las N horas de ruta", det_bano_max_min: "Baño: máximo por pausa (min)", det_carga_max_min: "Carga eléctrica: máximo (min)" };
+    det_espera_h: "Horas de espera antes de decidir", det_colacion_max_min: "Colación: máximo (min)", det_colacion_tras_h: "Colación: desde las N horas de ruta", det_bano_max_min: "Baño: máximo por pausa (min)", det_carga_max_min: "Carga eléctrica: máximo (min)" };
   return (
     <div style={{ marginBottom: 12 }}>
       <a href="#" style={{ color: C.navy, fontSize: 13, fontWeight: 700 }} onClick={(e) => { e.preventDefault(); setAbierto(!abierto); }}>{abierto ? "▾" : "▸"} Reglas del cruce (editables)</a>
@@ -2081,6 +2081,29 @@ function ReglasDetencion({ quien, onCambio }) {
             </label>
           ))}
           <div style={{ gridColumn: "1 / -1", fontSize: 12, color: msg.startsWith("Guardado") ? C.verde : msg ? C.rojo : C.tenue }}>{msg || "Cada cambio queda en el historial de Configuración. El umbral también define qué paradas guarda el programa de Geotab desde la próxima pasada."}</div>
+        </div>
+      )}
+    </div>
+  );
+}
+function TareasDetencion() {
+  const [r, setR] = useState(null);
+  const [activo, setActivo] = useState(null);
+  useEffect(() => {
+    rpc("fn_det_detectar", { p_crear: false }).then(setR).catch(() => setR([]));
+    api("ca_config_cl?clave=eq.det_tareas&select=valor").then((x) => setActivo(x?.[0]?.valor === "activo")).catch(() => setActivo(false));
+  }, []);
+  if (r === null) return null;
+  const nuevas = r.filter((x) => x.resultado === "se crearía");
+  const hora = (s) => new Date(s).toLocaleString("es-CL", { timeZone: "America/Santiago", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+  return (
+    <div style={{ background: activo ? C.verdeT : C.ambarT, border: `1px solid ${activo ? C.verde : C.ambar}`, borderRadius: 12, padding: "10px 14px", marginBottom: 12, fontSize: 13 }}>
+      <b style={{ color: activo ? C.verde : C.ambar }}>{activo ? "Tareas al supervisor: ACTIVAS." : "Tareas al supervisor: APAGADAS (simulación)."}</b>{" "}
+      {activo ? "Cada hora se crea la tarea «Detención no autorizada» de las paradas que siguen sin explicación 2 h después de terminar."
+              : `Con el interruptor activo se crearían ${nuevas.length} tarea${nuevas.length === 1 ? "" : "s"} (de los últimos 3 días). Se activa en Configuración → det_tareas = activo.`}
+      {nuevas.length > 0 && (
+        <div style={{ marginTop: 8, maxHeight: 160, overflowY: "auto" }}>
+          {nuevas.map((x) => <div key={x.parada_id} style={{ fontSize: 12.5, color: C.texto, padding: "2px 0" }}><b>{x.patente}</b> · {hora(x.inicio)} · {x.minutos} min ({x.min_sin_explicar} sin explicar) · {(UC[x.clasificacion] || [x.clasificacion])[0]}{x.conductor ? ` · ${x.conductor}` : ""}{x.empresa ? ` · ${x.empresa}` : ""}</div>)}
         </div>
       )}
     </div>
@@ -2106,7 +2129,7 @@ function UsoDetenciones({ quien }) {
     <div>
       <div style={{ background: "#eef2f8", borderRadius: 10, padding: "10px 12px", fontSize: 12.5, color: C.navy, marginBottom: 12 }}>
         Cada parada de 10 min o más de Geotab se cruza con las entregas y los intentos fallidos de MELI de esa patente y con las interrupciones (colación, baño, carga) que registra el transportista en su portal (a menos de 150 m y en la misma ventana de tiempo, editable en Configuración).
-        <b> Sin respaldo</b> = en la calle, durante la ruta y sin ninguna entrega cerca. <b>Entrega con exceso</b> = hubo entrega, pero la parada duró bastante más de lo que la justifica. Las entregas de MELI llegan con 1 a 2 horas de atraso. Todavía no se crean tareas.
+        <b> Sin respaldo</b> = en la calle, durante la ruta y sin ninguna entrega cerca. <b>Entrega con exceso</b> = hubo entrega, pero la parada duró bastante más de lo que la justifica. Las entregas de MELI llegan con 1 a 2 horas de atraso; por eso la decisión se toma 2 h después de terminada la parada.
       </div>
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
         {kpi("Para revisar", n((x) => ["sin_respaldo", "entrega_con_exceso", "interrupcion_excedida"].includes(x.clasificacion)), C.rojo, "revisar")}
@@ -2126,6 +2149,7 @@ function UsoDetenciones({ quien }) {
         <span style={{ fontSize: 12, color: C.tenue }}>Paradas de Geotab cada 1 hora · entregas de MELI según el scraper de detalle</span>
       </div>
       <ReglasDetencion quien={quien} onCambio={cargar} />
+      <TareasDetencion key={fecha} />
       {filas === null ? <div style={{ color: C.tenue }}>Cargando…</div> : (
         <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1000 }}>
