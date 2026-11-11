@@ -1135,13 +1135,21 @@ function FichaDetalle({ patente, quien, onVolver }) {
 const DOC_TIPO = { soap: "SOAP", rt: "Revisión técnica", permiso: "Permiso de circulación", seguro: "Seguro", leasing: "Leasing", otro: "Otro" };
 const DOC_ESTADO = { por_leer: ["Por leer (Biggy)", "#eef2f8", C.navy], por_confirmar: ["Por confirmar", C.ambarT, C.ambar], confirmado: ["Confirmado", C.verdeT, C.verde], rechazado: ["Rechazado", C.fondo, C.suave] };
 async function subirDocumento(file, { patente = null, tipo = null, vence = null, quien }) {
+  if (file.size > 30 * 1024 * 1024) throw new Error(`${file.name}: pesa más de 30 MB`);
   const limpio = String(file.name || "archivo").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^A-Za-z0-9._-]+/g, "_").slice(-80);
-  const path = `${patente || "sin_patente"}/${Date.now()}_${limpio}`;
-  const r = await fetch(`${CL_URL}/storage/v1/object/ca-documentos-cl/${path}`, {
-    method: "POST", headers: { apikey: CL_KEY, Authorization: `Bearer ${CL_KEY}`, "Content-Type": file.type || "application/octet-stream" }, body: file,
-  });
-  if (!r.ok) throw new Error(`No se pudo subir ${file.name}: ${(await r.text()).slice(0, 160)}`);
-  return rpc("fn_doc_registrar", { p_path: path, p_nombre: file.name, p_mime: file.type || null, p_patente: patente, p_tipo: tipo, p_vence: vence, p_por: quien });
+  const path = `${patente || "sin_patente"}/${Date.now()}_${Math.random().toString(36).slice(2, 7)}_${limpio}`;
+  let ultimo = "";
+  for (let intento = 1; intento <= 3; intento++) {
+    try {
+      const r = await fetch(`${CL_URL}/storage/v1/object/ca-documentos-cl/${path}`, {
+        method: "POST", headers: { apikey: CL_KEY, Authorization: `Bearer ${CL_KEY}`, "Content-Type": file.type || "application/octet-stream", "x-upsert": "true" }, body: file,
+      });
+      if (!r.ok) { ultimo = (await r.text()).slice(0, 160); if (r.status < 500 && r.status !== 429) break; }
+      else return await rpc("fn_doc_registrar", { p_path: path, p_nombre: file.name, p_mime: file.type || null, p_patente: patente, p_tipo: tipo, p_vence: vence, p_por: quien });
+    } catch (e) { ultimo = e.message; }
+    await new Promise((ok) => setTimeout(ok, 1500 * intento));
+  }
+  throw new Error(`${file.name}: ${ultimo || "no se pudo subir"}`);
 }
 function Documentos({ quien }) {
   const [filas, setFilas] = useState(null);
@@ -1174,15 +1182,32 @@ function Documentos({ quien }) {
   // Mientras haya documentos «por leer», se actualiza sola cada minuto (Biggy lee cada 5 min en el VPS)
   const hayPorLeer = (filas || []).some((x) => x.estado === "por_leer");
   useEffect(() => { if (!hayPorLeer) return; const i = setInterval(cargar, 60000); return () => clearInterval(i); }, [hayPorLeer]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const [avance, setAvance] = useState([]);   // [{ nombre, estado: "espera" | "subiendo" | "ok" | "error", msg }]
+  useEffect(() => {
+    if (!subiendo) return;
+    const aviso = (e) => { e.preventDefault(); e.returnValue = ""; };
+    window.addEventListener("beforeunload", aviso);
+    return () => window.removeEventListener("beforeunload", aviso);
+  }, [subiendo]);
   const subir = async (files) => {
     const lista = [...(files || [])]; if (!lista.length) return;
-    let ok = 0; const errores = [];
-    for (let i = 0; i < lista.length; i++) {
-      setSubiendo(`Subiendo ${i + 1} de ${lista.length}…`);
-      try { await subirDocumento(lista[i], { patente: carga.patente || null, tipo: carga.tipo || null, quien }); ok++; } catch (e) { errores.push(e.message); }
-    }
-    setSubiendo(""); cargar();
-    alert(`${ok} de ${lista.length} archivos subidos.${errores.length ? "\n\n" + errores.join("\n") : ""}\n\nQuedan «por leer»: Biggy los va a leer y después los confirmas.`);
+    const est = lista.map((f) => ({ nombre: f.name, estado: "espera", msg: "" }));
+    setAvance([...est]);
+    let sig = 0, hechos = 0;
+    setSubiendo(`Subiendo 0 de ${lista.length}…`);
+    const trabajador = async () => {
+      while (sig < lista.length) {
+        const i = sig++;
+        est[i].estado = "subiendo"; setAvance([...est]);
+        try { await subirDocumento(lista[i], { patente: carga.patente || null, tipo: carga.tipo || null, quien }); est[i].estado = "ok"; }
+        catch (e) { est[i].estado = "error"; est[i].msg = e.message; }
+        hechos++; setSubiendo(`Subiendo ${hechos} de ${lista.length}…`); setAvance([...est]);
+      }
+    };
+    await Promise.all([trabajador(), trabajador(), trabajador()]);   // 3 archivos a la vez
+    setSubiendo(""); setF((x) => ({ ...x, estado: "pendientes" })); cargar();
+    const malos = est.filter((x) => x.estado === "error").length;
+    alert(`${lista.length - malos} de ${lista.length} archivos subidos.${malos ? `\n\n${malos} con error: se muestran en rojo; puedes volver a subirlos.` : ""}\n\nQuedan «por leer»: Biggy los lee uno por uno y la lista se actualiza sola.`);
   };
   const n = (e) => (filas || []).filter((x) => x.estado === e).length;
   const vis = (filas || []).filter((x) => (f.estado === "pendientes" ? ["por_leer", "por_confirmar"].includes(x.estado) : !f.estado || x.estado === f.estado)
@@ -1203,6 +1228,18 @@ function Documentos({ quien }) {
             <input type="file" multiple accept="application/pdf,image/*" style={{ display: "none" }} disabled={!!subiendo} onChange={(e) => { subir(e.target.files); e.target.value = ""; }} />
           </label>
         </div>
+        {subiendo && <div style={{ fontSize: 12.5, color: C.ambar, marginTop: 8 }}>No cierres ni recargues esta página hasta que termine la carga.</div>}
+        {avance.length > 0 && (
+          <div style={{ marginTop: 10, maxHeight: 180, overflowY: "auto", fontSize: 12.5, border: `1px solid ${C.fondo}`, borderRadius: 8, padding: "6px 8px" }}>
+            {avance.map((a, i) => (
+              <div key={i} style={{ display: "flex", justifyContent: "space-between", gap: 8, padding: "2px 0", color: a.estado === "error" ? C.rojo : a.estado === "ok" ? C.verde : C.suave }}>
+                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.nombre}</span>
+                <span>{a.estado === "ok" ? "✓ subido" : a.estado === "error" ? `✕ ${a.msg.replace(a.nombre + ": ", "")}` : a.estado === "subiendo" ? "subiendo…" : "en espera"}</span>
+              </div>
+            ))}
+            {!subiendo && <a href="#" style={{ color: C.navy, fontSize: 12 }} onClick={(e) => { e.preventDefault(); setAvance([]); }}>Limpiar</a>}
+          </div>
+        )}
       </div>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 12 }}>
         <select style={inp} value={f.estado} onChange={(e) => setF({ ...f, estado: e.target.value })}>
