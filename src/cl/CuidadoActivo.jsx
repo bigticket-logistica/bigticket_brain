@@ -26,6 +26,8 @@
 //   · Vida útil (Mantenciones → verificador y mantenedor por modelo): fn_mnt_vida_util_cl; veredicto por
 //     desgaste en la ficha de autorización de Reparaciones y tarjeta en la Ficha del activo.
 //   · Historial de gastos: vw_gastos_cl (componente estandarizado), registro con OC del Brain y datos de OT/OC/factura.
+//   · Centro de alertas: bandeja única (fn_alertas_cl) y las 21 reglas de Adriana (ca_alertas_reglas_cl),
+//     editables solo por Superadmin. Todavía no envía correos ni WhatsApp.
 //   · No salidas: fn_ca_no_salidas_dia + avisos enviados (ca_avisos_cl).
 //   · Incumplimientos: tareas vencidas sin respuesta, por supervisor y mes.
 //   · Configuración: plazos por tipo, justificaciones y correos (ca_*_cl).
@@ -73,6 +75,7 @@ const inp = { border: `1px solid ${C.borde}`, borderRadius: 8, padding: "7px 10p
 
 export default function CuidadoActivoCL({ usuario, sub }) {
   const quien = usuario?.email || usuario?.nombre || "brain";
+  if (sub === "ca_alertas") return <CentroAlertas quien={quien} rol={usuario?.rol} />;
   if (sub === "ca_ficha") return <FichaActivo quien={quien} />;
   if (sub === "ca_documentos") return <Documentos quien={quien} />;
   if (sub === "ca_flota") return <EstadoFlota />;
@@ -1856,6 +1859,99 @@ function EditarGasto({ g, comps, quien, onListo }) {
         {!g.oc && <button style={btn("sec")} onClick={() => guardar(true)}>Asignar OC del Brain</button>}
         <span style={{ fontSize: 12, color: C.tenue }}>Origen: {g.fuente}{g.editado_por ? ` · editado por ${g.editado_por}` : ""}</span>
       </div>
+    </div>
+  );
+}
+
+// ── Centro de alertas ───────────────────────────────────────────────────────
+const AL_GRAV = { alta: ["Alta", C.rojoT, C.rojo], media: ["Media", C.ambarT, C.ambar], baja: ["Baja", C.fondo, C.suave] };
+function CentroAlertas({ quien, rol }) {
+  const [vista, setVista] = useState("bandeja");
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
+        {[["bandeja", "Bandeja"], ["reglas", "Reglas"]].map(([k, t]) => <button key={k} style={btn(vista === k ? undefined : "sec")} onClick={() => setVista(k)}>{t}</button>)}
+      </div>
+      {vista === "bandeja" ? <BandejaAlertas /> : <ReglasAlertas quien={quien} puede={rol === "superadmin"} />}
+    </div>
+  );
+}
+function BandejaAlertas() {
+  const [filas, setFilas] = useState(null);
+  const [f, setF] = useState({ modulo: "", grav: "", texto: "" });
+  const [hora, setHora] = useState(null);
+  const cargar = () => rpc("fn_alertas_cl").then((r) => { setFilas(r || []); setHora(new Date()); }).catch(() => setFilas([]));
+  useEffect(() => { cargar(); const i = setInterval(cargar, 300000); return () => clearInterval(i); }, []);
+  const ord = { alta: 0, media: 1, baja: 2 };
+  const mods = [...new Set((filas || []).map((x) => x.modulo))];
+  const vis = (filas || []).filter((x) => (!f.modulo || x.modulo === f.modulo) && (!f.grav || x.gravedad === f.grav)
+    && (!f.texto || `${x.patente} ${x.titulo} ${x.detalle || ""}`.toLowerCase().includes(f.texto.toLowerCase())))
+    .sort((a, b) => (ord[a.gravedad] - ord[b.gravedad]) || String(a.modulo).localeCompare(String(b.modulo)) || String(a.patente).localeCompare(String(b.patente)));
+  const celda = { padding: "8px 10px", borderBottom: `1px solid ${C.borde}`, fontSize: 13, verticalAlign: "top" };
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
+        {["alta", "media", "baja"].map((g) => { const e = AL_GRAV[g]; const n = (filas || []).filter((x) => x.gravedad === g).length; return (
+          <div key={g} onClick={() => setF({ ...f, grav: f.grav === g ? "" : g })} style={{ background: "#fff", border: `1px solid ${f.grav === g ? e[2] : C.borde}`, borderRadius: 12, padding: "12px 16px", flex: "1 1 120px", cursor: "pointer" }}>
+            <div style={{ fontSize: 24, fontWeight: 800, color: e[2] }}>{n}</div><div style={{ fontSize: 12.5, color: C.suave }}>Gravedad {e[0].toLowerCase()}</div>
+          </div>); })}
+        {mods.map((m) => { const n = (filas || []).filter((x) => x.modulo === m).length; return (
+          <div key={m} onClick={() => setF({ ...f, modulo: f.modulo === m ? "" : m })} style={{ background: "#fff", border: `1px solid ${f.modulo === m ? C.navy : C.borde}`, borderRadius: 12, padding: "12px 16px", flex: "1 1 120px", cursor: "pointer" }}>
+            <div style={{ fontSize: 20, fontWeight: 800, color: C.navy }}>{n}</div><div style={{ fontSize: 12.5, color: C.suave }}>{m}</div>
+          </div>); })}
+      </div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 12 }}>
+        <input style={{ ...inp, minWidth: 240 }} placeholder="Patente o texto" value={f.texto} onChange={(e) => setF({ ...f, texto: e.target.value })} />
+        <button style={btn("sec")} onClick={cargar}>Actualizar</button>
+        <span style={{ fontSize: 12, color: C.tenue }}>{hora ? `Calculado a las ${hora.toLocaleTimeString("es-CL", { hour: "2-digit", minute: "2-digit" })}` : ""} · se recalcula cada 5 min · todavía no se envían correos ni WhatsApp</span>
+      </div>
+      {filas === null ? <div style={{ color: C.tenue }}>Calculando alertas…</div> : (
+        <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 900 }}>
+            <thead><tr style={{ background: C.fondo, textAlign: "left" }}>{["Gravedad", "Módulo", "Patente", "Alerta", "Detalle", "Avisa a", "Dónde se gestiona"].map((h) => <th key={h} style={{ ...celda, fontSize: 12, color: C.suave }}>{h}</th>)}</tr></thead>
+            <tbody>
+              {vis.length === 0 && <tr><td colSpan={7} style={{ ...celda, color: C.tenue, textAlign: "center" }}>Sin alertas con este filtro.</td></tr>}
+              {vis.map((x, i) => { const e = AL_GRAV[x.gravedad] || [x.gravedad, C.fondo, C.suave]; return (
+                <tr key={i}>
+                  <td style={celda}>{chip(e[0], e[1], e[2])}</td><td style={celda}>{x.modulo}</td>
+                  <td style={{ ...celda, fontWeight: 800, color: C.navy }}>{x.patente || "—"}</td>
+                  <td style={{ ...celda, fontWeight: 700 }}>{x.titulo}</td><td style={{ ...celda, color: C.suave }}>{x.detalle || "—"}</td>
+                  <td style={celda}>{x.avisa_a}</td><td style={{ ...celda, color: C.navy }}>{x.donde}</td>
+                </tr>
+              ); })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+function ReglasAlertas({ quien, puede }) {
+  const [r, setR] = useState(null);
+  const [msg, setMsg] = useState("");
+  const cargar = () => api("ca_alertas_reglas_cl?select=*&order=orden").then(setR).catch(() => setR([]));
+  useEffect(() => { cargar(); }, []);
+  const guardar = async (codigo, campo, valor) => { setMsg(""); try { await rpc("fn_alerta_regla_guardar", { p_codigo: codigo, p_campo: campo, p_valor: valor, p_por: quien }); if (campo === "activo") cargar(); } catch (e) { setMsg(e.message); } };
+  const ed = (x, k, w) => puede ? <input style={{ ...inp, width: w }} defaultValue={x[k] || ""} onBlur={(e) => e.target.value !== (x[k] || "") && guardar(x.codigo, k, e.target.value)} /> : (x[k] || "—");
+  return (
+    <div>
+      <div style={{ fontSize: 12.5, color: C.suave, marginBottom: 10 }}>Las 21 reglas de Adriana. {puede ? "Puedes editarlas (eres Superadmin); cada cambio queda en el historial." : "Solo un Superadmin puede editarlas."} Las marcadas «Próximamente» dependen de módulos que todavía no existen (uso y detenciones, cámaras, combustible).</div>
+      <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, minWidth: 1100 }}>
+          <thead><tr style={{ background: C.fondo, textAlign: "left" }}>{["Módulo", "Regla", "Umbral", "Avisa a", "Canal", "SLA", "Si no se resuelve", "Estado", "Activa"].map((h) => <th key={h} style={{ padding: "8px 10px", color: C.suave }}>{h}</th>)}</tr></thead>
+          <tbody>{(r || []).map((x) => (
+            <tr key={x.codigo} style={{ borderTop: `1px solid ${C.borde}`, opacity: x.activo ? 1 : 0.5 }}>
+              <td style={{ padding: "6px 10px" }}>{x.modulo}</td><td style={{ padding: "6px 10px", fontWeight: 700 }}>{x.regla}</td>
+              <td style={{ padding: "6px 8px" }}>{ed(x, "umbral", 150)}</td><td style={{ padding: "6px 8px" }}>{ed(x, "avisa_a", 150)}</td>
+              <td style={{ padding: "6px 8px" }}>{ed(x, "canal", 120)}</td><td style={{ padding: "6px 8px" }}>{ed(x, "sla", 70)}</td><td style={{ padding: "6px 8px" }}>{ed(x, "escalamiento", 150)}</td>
+              <td style={{ padding: "6px 10px" }}>{x.implementada ? chip("En la bandeja", C.verdeT, C.verde) : chip("Próximamente", C.fondo, C.tenue)}</td>
+              <td style={{ padding: "6px 10px" }}><input type="checkbox" disabled={!puede} checked={!!x.activo} onChange={(e) => guardar(x.codigo, "activo", String(e.target.checked))} /></td>
+            </tr>
+          ))}</tbody>
+        </table>
+      </div>
+      {msg && <div style={{ color: C.rojo, fontSize: 13, marginTop: 8 }}>{msg}</div>}
+      <div style={{ fontSize: 12, color: C.tenue, marginTop: 8 }}>El umbral real de cada cálculo sigue en Configuración (por ejemplo, km de aviso de mantención o días de «por vencer»). Aquí queda la definición de la regla, a quién avisa y por qué canal.</div>
     </div>
   );
 }
