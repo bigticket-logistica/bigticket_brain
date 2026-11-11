@@ -351,7 +351,7 @@ function Auditorias({ quien }) {
       </div>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 12 }}>
         <select style={inp} value={f.estado} onChange={(e) => setF({ ...f, estado: e.target.value })}>
-          <option value="por_revisar">Por revisar</option><option value="devueltas">Devueltas al tercero</option><option value="aprobadas">Aprobadas</option><option value="corregidas">Corregidas a Biggy</option><option value="pedidas">Pedidas por evento</option><option value="todas">Todas</option>
+          <option value="por_revisar">Por revisar</option><option value="devueltas">Devueltas al tercero</option><option value="aprobadas">Aprobadas</option><option value="corregidas">Corregidas a Biggy</option><option value="pedidas">Pedidas por evento</option><option value="todas">Todas</option><option value="quien">¿Quién lleva auditoría?</option>
         </select>
         <select style={inp} value={f.tipo} onChange={(e) => setF({ ...f, tipo: e.target.value })}>
           <option value="">Vehículo y limpieza</option><option value="vehiculo">Vehículo</option><option value="limpieza">Limpieza</option>
@@ -362,7 +362,7 @@ function Auditorias({ quien }) {
       </div>
       {pedir && <PedirAuditoria quien={quien} onListo={() => { setPedir(false); setF({ ...f, estado: "pedidas" }); cargar(); }} />}
       {error && <div style={{ color: C.rojo, fontSize: 13, marginBottom: 10 }}>{error}</div>}
-      {f.estado === "pedidas" ? <Pedidas filas={pedidas.filter((x) => !f.texto || `${x.patente} ${x.empresa || ""}`.toLowerCase().includes(f.texto.toLowerCase()))} quien={quien} onCambio={cargar} /> :
+      {f.estado === "quien" ? <QuienLlevaAuditoria quien={quien} texto={f.texto} /> : f.estado === "pedidas" ? <Pedidas filas={pedidas.filter((x) => !f.texto || `${x.patente} ${x.empresa || ""}`.toLowerCase().includes(f.texto.toLowerCase()))} quien={quien} onCambio={cargar} /> :
        filas === null ? <div style={{ color: C.tenue }}>Cargando…</div> : (
         <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 900 }}>
@@ -440,6 +440,60 @@ function PedirAuditoria({ quien, onListo }) {
       </div>
       {msg && <div style={{ color: C.rojo, fontSize: 13, marginTop: 8 }}>{msg}</div>}
       <div style={{ marginTop: 10 }}><button style={btn()} disabled={busy} onClick={guardar}>{busy ? "Pidiendo…" : "Pedir auditoría"}</button></div>
+    </div>
+  );
+}
+
+// ¿Quién lleva auditoría? El equipo decide por vehículo (con motivo e historial)
+function QuienLlevaAuditoria({ quien, texto }) {
+  const [filas, setFilas] = useState(null);
+  const [sel, setSel] = useState({});
+  const [ver, setVer] = useState("todos");
+  const cargar = () => api("vw_ca_aud_flota_cl?select=*&order=empresa,patente&limit=3000").then(setFilas).catch(() => setFilas([]));
+  useEffect(() => { cargar(); }, []);
+  const vis = (filas || []).filter((x) => (ver === "todos" || (ver === "lleva" ? x.lleva : !x.lleva))
+    && (!texto || `${x.patente} ${x.empresa || ""} ${x.ceco || ""}`.toLowerCase().includes(texto.toLowerCase())));
+  const marcados = Object.keys(sel).filter((k) => sel[k]);
+  const marcar = async (pats, lleva, quitar = false) => {
+    if (!pats.length) return;
+    let motivo = "";
+    if (!quitar) { motivo = window.prompt(`${lleva ? "Marcar que SÍ lleva" : "Marcar que NO lleva"} auditoría: ${pats.length} vehículo(s).\n\n¿Motivo?`, ""); if (!motivo) return; }
+    try { await rpc("fn_ca_aud_marcar", { p_patentes: pats, p_lleva: lleva, p_motivo: motivo, p_por: quien, p_quitar: quitar }); setSel({}); cargar(); } catch (e) { alert(e.message); }
+  };
+  const n = (fn) => (filas || []).filter(fn).length;
+  const celda = { padding: "7px 9px", borderBottom: `1px solid ${C.borde}`, fontSize: 12.5 };
+  return (
+    <div>
+      <div style={{ fontSize: 12.5, color: C.suave, marginBottom: 10 }}>Vehículos activos del portal. Los que no llevan auditoría no generan la tarea «Auditoría no realizada» ni cuentan en el cumplimiento mensual. Por defecto todos llevan, salvo los de Bigticket (empresa en Configuración); cualquier vehículo se puede cambiar aquí, con motivo.</div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 10 }}>
+        {[["todos", `Todos (${n(() => true)})`], ["lleva", `Llevan (${n((x) => x.lleva)})`], ["no", `No llevan (${n((x) => !x.lleva)})`]].map(([k, t]) => <button key={k} style={btn(ver === k ? undefined : "sec")} onClick={() => setVer(k)}>{t}</button>)}
+        <span style={{ flex: 1 }} />
+        <button style={btn("sec")} disabled={!marcados.length} onClick={() => marcar(marcados, true)}>Sí lleva ({marcados.length})</button>
+        <button style={btn("sec")} disabled={!marcados.length} onClick={() => marcar(marcados, false)}>No lleva ({marcados.length})</button>
+        <button style={btn("sec")} disabled={!marcados.length} onClick={() => marcar(marcados, true, true)}>Volver a la regla</button>
+      </div>
+      {filas === null ? <div style={{ color: C.tenue }}>Cargando…</div> : (
+        <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 760 }}>
+            <thead><tr style={{ background: C.fondo, textAlign: "left" }}>
+              <th style={celda}><input type="checkbox" checked={vis.length > 0 && vis.every((x) => sel[x.patente])} onChange={(e) => setSel(e.target.checked ? Object.fromEntries(vis.map((x) => [x.patente, true])) : {})} /></th>
+              {["Patente", "Transportista", "CECO", "¿Lleva auditoría?", "Motivo"].map((h) => <th key={h} style={{ ...celda, color: C.suave }}>{h}</th>)}</tr></thead>
+            <tbody>
+              {vis.map((x) => (
+                <tr key={x.patente}>
+                  <td style={celda}><input type="checkbox" checked={!!sel[x.patente]} onChange={(e) => setSel({ ...sel, [x.patente]: e.target.checked })} /></td>
+                  <td style={{ ...celda, fontWeight: 800, color: C.navy }}>{x.patente}</td><td style={celda}>{x.empresa}</td><td style={celda}>{x.ceco}</td>
+                  <td style={celda}>
+                    <button style={{ ...btn(x.lleva ? "verde" : "sec"), padding: "3px 10px", fontSize: 12 }} onClick={() => marcar([x.patente], !x.lleva)}>{x.lleva ? "Sí" : "No"}</button>
+                    <span style={{ fontSize: 11.5, color: C.tenue, marginLeft: 6 }}>{x.fuente === "manual" ? "decidido a mano" : x.fuente === "regla" ? "por la regla (Bigticket)" : ""}</span>
+                  </td>
+                  <td style={{ ...celda, color: C.suave }}>{x.motivo ? `${x.motivo} · ${x.por || ""} · ${fh(x.at)}` : "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }
