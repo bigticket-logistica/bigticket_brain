@@ -15185,6 +15185,7 @@ const TABS_CUIDADO_CL = [
   { id: "ca_ficha", label: "Ficha del activo", desc: "Todo de cada patente: datos, documentos, costos e historial" },
   { id: "ca_documentos", label: "Documentos", desc: "Subir y confirmar SOAP, revisión técnica, permiso, seguro y leasing" },
   { id: "ca_flota", label: "Estado de flota", desc: "Qué pasa hoy con cada vehículo propio" },
+  { id: "ca_uso", label: "Uso y detenciones", desc: "Paradas de Geotab de la flota propia y su clasificación" },
   { id: "ca_mantenciones", label: "Mantenciones", desc: "Próxima mantención por km (Geotab), pautas y talleres" },
   { id: "ca_reparaciones", label: "Reparaciones", desc: "Solicitud, cotización, aprobación, taller y cierre con gasto" },
   { id: "ca_siniestros", label: "Siniestros", desc: "Registro, deducible al tercero, días en taller y pérdida en venta" },
