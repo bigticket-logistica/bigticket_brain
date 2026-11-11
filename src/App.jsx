@@ -15187,6 +15187,7 @@ const TABS_CUIDADO_CL = [
   { id: "ca_mantenciones", label: "Mantenciones", desc: "Próxima mantención por km (Geotab), pautas y talleres" },
   { id: "ca_reparaciones", label: "Reparaciones", desc: "Solicitud, cotización, aprobación, taller y cierre con gasto" },
   { id: "ca_siniestros", label: "Siniestros", desc: "Registro, deducible al tercero, días en taller y pérdida en venta" },
+  { id: "ca_gastos", label: "Historial de gastos", desc: "Todo lo gastado en la flota: por año, tipo, patente y taller" },
   { id: "ca_tareas", label: "Tareas del supervisor", desc: "Detenciones, hallazgos y avisos al supervisor" },
   { id: "ca_auditorias", label: "Auditorías", desc: "Revisión de auditorías de terceros con Biggy" },
   { id: "ca_nosalidas", label: "No salidas", desc: "Flota propia sin ruta y su motivo" },
