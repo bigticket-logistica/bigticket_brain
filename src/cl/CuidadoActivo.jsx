@@ -25,6 +25,7 @@
 //     días en taller, pérdida en venta (días × tarifa del CECO) e indicadores.
 //   · Vida útil (Mantenciones → verificador y mantenedor por modelo): fn_mnt_vida_util_cl; veredicto por
 //     desgaste en la ficha de autorización de Reparaciones y tarjeta en la Ficha del activo.
+//   · Historial de gastos: vw_gastos_cl (componente estandarizado), registro con OC del Brain y datos de OT/OC/factura.
 //   · No salidas: fn_ca_no_salidas_dia + avisos enviados (ca_avisos_cl).
 //   · Incumplimientos: tareas vencidas sin respuesta, por supervisor y mes.
 //   · Configuración: plazos por tipo, justificaciones y correos (ca_*_cl).
@@ -78,6 +79,7 @@ export default function CuidadoActivoCL({ usuario, sub }) {
   if (sub === "ca_mantenciones") return <Mantenciones quien={quien} />;
   if (sub === "ca_reparaciones") return <Reparaciones quien={quien} />;
   if (sub === "ca_siniestros") return <Siniestros quien={quien} />;
+  if (sub === "ca_gastos") return <HistorialGastos quien={quien} />;
   if (sub === "ca_auditorias") return <Auditorias quien={quien} />;
   if (sub === "ca_nosalidas") return <NoSalidas />;
   if (sub === "ca_incumplimientos") return <Incumplimientos />;
@@ -1144,6 +1146,20 @@ function Documentos({ quien }) {
   const [subiendo, setSubiendo] = useState("");
   const [cargando, setCargando] = useState(false);
   const [hora, setHora] = useState(null);
+  const [sel, setSel] = useState({});
+  const completo = (x) => x.estado === "por_confirmar" && x.tipo && (x.patentes || []).length > 0 && (x.vence || x.tipo === "otro");
+  const confirmarSel = async () => {
+    const lista = (filas || []).filter((x) => sel[x.id] && completo(x));
+    if (!lista.length) return;
+    if (!window.confirm(`Confirmar ${lista.length} documento${lista.length === 1 ? "" : "s"} con lo que leyó Biggy (tipo, patente y vencimiento que se ven en la lista).\n\nConfirma solo los que ya revisaste. ¿Seguir?`)) return;
+    setCargando(true); let ok = 0; const err = [];
+    for (const x of lista) {
+      try { await rpc("fn_doc_confirmar", { p_id: x.id, p_tipo: x.tipo, p_patentes: x.patentes, p_vence: x.vence, p_aseguradora: x.aseguradora, p_poliza: x.poliza, p_por: quien }); ok++; }
+      catch (e) { err.push(`${x.nombre_archivo}: ${e.message}`); }
+    }
+    setSel({}); await cargar();
+    alert(`${ok} de ${lista.length} confirmados.${err.length ? "\n\n" + err.join("\n") : ""}`);
+  };
   const cargar = async () => {
     setCargando(true);
     try { setFilas(await api(`ca_documentos_cl?select=*&order=cargado_at.desc&limit=500&_=${Date.now()}`)); setHora(new Date()); }
@@ -1191,6 +1207,10 @@ function Documentos({ quien }) {
         </select>
         <input style={{ ...inp, minWidth: 240 }} placeholder="Patente, archivo, aseguradora o póliza" value={f.texto} onChange={(e) => setF({ ...f, texto: e.target.value })} />
         <button style={btn("sec")} disabled={cargando} onClick={cargar}>{cargando ? "Actualizando…" : "Actualizar"}</button>
+        {(filas || []).some(completo) && <>
+          <button style={btn("sec")} onClick={() => setSel(Object.fromEntries(vis.filter((x) => completo(x) && x.biggy?.confianza === "alta").map((x) => [x.id, true])))}>Marcar los completos (confianza alta)</button>
+          <button style={btn("verde")} disabled={cargando || !Object.values(sel).some(Boolean)} onClick={confirmarSel}>Confirmar seleccionados ({(filas || []).filter((x) => sel[x.id] && completo(x)).length})</button>
+        </>}
         <span style={{ fontSize: 12, color: C.tenue }}>
           {hora ? `Actualizado a las ${hora.toLocaleTimeString("es-CL", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}` : ""}
           {hayPorLeer ? " · hay documentos por leer: Biggy los lee cada 5 min y esta lista se actualiza sola cada minuto" : ""}
@@ -1200,13 +1220,16 @@ function Documentos({ quien }) {
         <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 860 }}>
             <thead><tr style={{ background: C.fondo, textAlign: "left" }}>
-              {["Archivo", "Tipo", "Patentes", "Vence", "Aseguradora · póliza", "Subido", "Estado"].map((h) => <th key={h} style={{ ...celda, fontSize: 12, color: C.suave }}>{h}</th>)}
+              {["", "Archivo", "Tipo", "Patentes", "Vence", "Aseguradora · póliza", "Subido", "Estado"].map((h) => <th key={h} style={{ ...celda, fontSize: 12, color: C.suave }}>{h}</th>)}
             </tr></thead>
             <tbody>
-              {vis.length === 0 && <tr><td colSpan={7} style={{ ...celda, color: C.tenue, textAlign: "center" }}>No hay documentos con este filtro.</td></tr>}
+              {vis.length === 0 && <tr><td colSpan={8} style={{ ...celda, color: C.tenue, textAlign: "center" }}>No hay documentos con este filtro.</td></tr>}
               {vis.map((x) => { const e = DOC_ESTADO[x.estado] || [x.estado, C.fondo, C.suave]; return [
                 <tr key={x.id} style={{ cursor: "pointer", background: abierta === x.id ? "#fafbfd" : "#fff" }} onClick={() => setAbierta(abierta === x.id ? null : x.id)}>
-                  <td style={{ ...celda, fontWeight: 700, color: C.navy, maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis" }}>{x.nombre_archivo || x.path}</td>
+                  <td style={celda} onClick={(ev) => ev.stopPropagation()}>{completo(x)
+                    ? <input type="checkbox" checked={!!sel[x.id]} onChange={(ev) => setSel({ ...sel, [x.id]: ev.target.checked })} />
+                    : x.estado === "por_confirmar" ? <span title="Falta tipo, patente o vencimiento: ábrelo y complétalo" style={{ color: C.ambar }}>!</span> : null}</td>
+                  <td style={{ ...celda, fontWeight: 700, color: C.navy, maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis" }}>{x.nombre_archivo || x.path}{x.biggy?.confianza && x.estado === "por_confirmar" && <div style={{ fontSize: 11.5, fontWeight: 400, color: x.biggy.confianza === "alta" ? C.verde : C.ambar }}>Biggy: confianza {x.biggy.confianza}</div>}</td>
                   <td style={celda}>{DOC_TIPO[x.tipo] || "—"}</td>
                   <td style={celda}>{(x.patentes || []).join(", ") || "—"}</td>
                   <td style={celda}>{x.vence ? fd(x.vence) : "—"}</td>
@@ -1214,7 +1237,7 @@ function Documentos({ quien }) {
                   <td style={celda}>{fh(x.cargado_at)}<div style={{ color: C.tenue, fontSize: 12 }}>{x.cargado_por}</div></td>
                   <td style={celda}>{chip(e[0], e[1], e[2])}</td>
                 </tr>,
-                abierta === x.id && <tr key={x.id + "d"}><td colSpan={7} style={{ padding: 0, borderBottom: `1px solid ${C.borde}` }}><DetalleDocumento doc={x} quien={quien} onListo={() => { setAbierta(null); cargar(); }} /></td></tr>,
+                abierta === x.id && <tr key={x.id + "d"}><td colSpan={8} style={{ padding: 0, borderBottom: `1px solid ${C.borde}` }}><DetalleDocumento doc={x} quien={quien} onListo={() => { setAbierta(null); cargar(); }} /></td></tr>,
               ]; })}
             </tbody>
           </table>
@@ -1694,6 +1717,145 @@ function VidaModeloMnt({ quien }) {
         ))}</tbody>
       </table>
       {msg && <div style={{ color: C.rojo, fontSize: 13, marginTop: 8 }}>{msg}</div>}
+    </div>
+  );
+}
+
+// ── Historial de gastos ─────────────────────────────────────────────────────
+function HistorialGastos({ quien }) {
+  const [filas, setFilas] = useState(null);
+  const [f, setF] = useState({ desde: "", hasta: "", tipo: "", texto: "", sinOc: false });
+  const [abierta, setAbierta] = useState(null);
+  const [nuevo, setNuevo] = useState(false);
+  const [comps, setComps] = useState([]);
+  const cargar = () => api("vw_gastos_cl?select=*&order=fecha.desc.nullslast&limit=5000").then(setFilas).catch(() => setFilas([]));
+  useEffect(() => { cargar(); api("ca_mnt_componentes_cl?select=componente&order=componente").then((r) => setComps((r || []).map((x) => x.componente))).catch(() => {}); }, []);
+  const todos = filas || [];
+  const anio = new Date().getFullYear();
+  const suma = (arr) => arr.reduce((t, x) => t + (Number(x.gasto) || 0), 0);
+  const pct = (fn) => todos.length ? Math.round((todos.filter(fn).length / todos.length) * 100) : 0;
+  const porAnioTipo = {}; for (const x of todos) { if (!x.anio) continue; porAnioTipo[x.anio] = porAnioTipo[x.anio] || {}; porAnioTipo[x.anio][x.tipo] = (porAnioTipo[x.anio][x.tipo] || 0) + (Number(x.gasto) || 0); }
+  const top = (k) => Object.entries(todos.reduce((m, x) => { const c = x[k] || "—"; m[c] = (m[c] || 0) + (Number(x.gasto) || 0); return m; }, {})).sort((a, b) => b[1] - a[1]).slice(0, 10);
+  const vis = todos.filter((x) => (!f.desde || x.fecha >= f.desde) && (!f.hasta || x.fecha <= f.hasta) && (!f.tipo || x.tipo === f.tipo) && (!f.sinOc || !x.oc)
+    && (!f.texto || `${x.patente} ${x.taller || ""} ${x.detalle || ""} ${x.componente_std || ""} ${x.oc || ""} ${x.factura || ""}`.toLowerCase().includes(f.texto.toLowerCase())));
+  const kpi = (t, v, c = C.texto) => <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, padding: "12px 16px", flex: "1 1 140px" }}><div style={{ fontSize: 20, fontWeight: 800, color: c }}>{v}</div><div style={{ fontSize: 12.5, color: C.suave }}>{t}</div></div>;
+  const celda = { padding: "7px 9px", borderBottom: `1px solid ${C.borde}`, fontSize: 12.5, verticalAlign: "top" };
+  const tablaTop = (t, arr) => (
+    <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, padding: 12, flex: "1 1 260px" }}>
+      <div style={{ fontWeight: 800, color: C.navy, marginBottom: 6 }}>{t}</div>
+      {arr.map(([k, v]) => <div key={k} style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5, padding: "3px 0", borderBottom: `1px solid ${C.fondo}` }}><span>{k}</span><b>{pesos(v)}</b></div>)}
+    </div>
+  );
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
+        {kpi("Gasto total", pesos(suma(todos)), C.navy)}{kpi(`Gasto ${anio}`, pesos(suma(todos.filter((x) => x.anio === anio))), C.navy)}
+        {kpi("Reparaciones", pesos(suma(todos.filter((x) => x.tipo === "reparacion"))))}{kpi("Mantenciones", pesos(suma(todos.filter((x) => x.tipo === "mantencion"))))}
+        {kpi("% con OC", `${pct((x) => !!x.oc)}%`, C.ambar)}{kpi("% con factura", `${pct((x) => !!x.factura)}%`, C.ambar)}
+      </div>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
+        <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, padding: 12, flex: "2 1 420px", overflowX: "auto" }}>
+          <div style={{ fontWeight: 800, color: C.navy, marginBottom: 6 }}>Gasto por año y tipo</div>
+          <table style={{ borderCollapse: "collapse", fontSize: 12.5, width: "100%" }}>
+            <thead><tr style={{ textAlign: "right", color: C.suave }}><th style={{ textAlign: "left" }}>Año</th>{Object.values(MN_TIPO).map((t) => <th key={t}>{t}</th>)}<th>Total</th></tr></thead>
+            <tbody>{Object.keys(porAnioTipo).sort().reverse().map((y) => (
+              <tr key={y} style={{ textAlign: "right", borderTop: `1px solid ${C.fondo}` }}><td style={{ textAlign: "left", fontWeight: 700 }}>{y}</td>
+                {Object.keys(MN_TIPO).map((t) => <td key={t}>{porAnioTipo[y][t] ? pesos(porAnioTipo[y][t]) : "—"}</td>)}
+                <td><b>{pesos(Object.values(porAnioTipo[y]).reduce((a, b) => a + b, 0))}</b></td></tr>
+            ))}</tbody>
+          </table>
+        </div>
+        {tablaTop("Por patente (top 10)", top("patente"))}
+        {tablaTop("Por taller (top 10)", top("taller"))}
+      </div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 12 }}>
+        <input type="date" style={inp} value={f.desde} onChange={(e) => setF({ ...f, desde: e.target.value })} title="Desde" />
+        <input type="date" style={inp} value={f.hasta} onChange={(e) => setF({ ...f, hasta: e.target.value })} title="Hasta" />
+        <select style={inp} value={f.tipo} onChange={(e) => setF({ ...f, tipo: e.target.value })}><option value="">Todos los ítems</option>{Object.entries(MN_TIPO).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select>
+        <input style={{ ...inp, minWidth: 220 }} placeholder="Patente, taller, detalle, OC o factura" value={f.texto} onChange={(e) => setF({ ...f, texto: e.target.value })} />
+        <label style={{ fontSize: 12.5, display: "flex", gap: 4, alignItems: "center" }}><input type="checkbox" checked={f.sinOc} onChange={(e) => setF({ ...f, sinOc: e.target.checked })} /> Solo sin OC</label>
+        <button style={btn()} onClick={() => setNuevo(!nuevo)}>{nuevo ? "Cerrar" : "+ Registrar gasto"}</button>
+        <span style={{ fontSize: 12.5, color: C.suave }}>{vis.length} registros · {pesos(suma(vis))}</span>
+      </div>
+      {nuevo && <FormGasto comps={comps} quien={quien} onListo={() => { setNuevo(false); cargar(); }} />}
+      {filas === null ? <div style={{ color: C.tenue }}>Cargando…</div> : (
+        <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1100 }}>
+            <thead><tr style={{ background: C.fondo, textAlign: "left" }}>{["Fecha", "Patente", "Ítem", "Componente / pauta", "Detalle", "Taller", "Costo", "Días", "OC", "Factura"].map((h) => <th key={h} style={{ ...celda, fontSize: 12, color: C.suave }}>{h}</th>)}</tr></thead>
+            <tbody>
+              {vis.slice(0, 500).map((x) => [
+                <tr key={x.id} style={{ cursor: "pointer", background: abierta === x.id ? "#fafbfd" : "#fff" }} onClick={() => setAbierta(abierta === x.id ? null : x.id)}>
+                  <td style={celda}>{fd(x.fecha)}</td><td style={{ ...celda, fontWeight: 800, color: C.navy }}>{x.patente}</td>
+                  <td style={celda}>{MN_TIPO[x.tipo] || x.tipo}</td>
+                  <td style={celda}>{x.tipo === "mantencion" ? (x.pauta_km ? `Pauta ${kmf(x.pauta_km)}${x.tipo_mantencion ? ` · ${x.tipo_mantencion}` : ""}` : "—") : x.componente_std || "—"}</td>
+                  <td style={{ ...celda, maxWidth: 260 }}>{x.detalle || "—"}</td><td style={celda}>{x.taller || "—"}</td>
+                  <td style={celda}>{pesos(x.gasto)}{x.tipo === "siniestro" && Number(x.costo_total) > Number(x.gasto) && <div style={{ color: C.tenue, fontSize: 11.5 }}>total {pesos(x.costo_total)}</div>}</td>
+                  <td style={celda}>{x.dias_taller ?? "—"}</td>
+                  <td style={celda}>{x.oc || <span style={{ color: C.tenue }}>—</span>}</td><td style={celda}>{x.factura || <span style={{ color: C.tenue }}>—</span>}</td>
+                </tr>,
+                abierta === x.id && <tr key={x.id + "e"}><td colSpan={10} style={{ padding: 0, borderBottom: `1px solid ${C.borde}` }}><EditarGasto g={x} comps={comps} quien={quien} onListo={() => { setAbierta(null); cargar(); }} /></td></tr>,
+              ])}
+            </tbody>
+          </table>
+          {vis.length > 500 && <div style={{ padding: 10, fontSize: 12.5, color: C.tenue }}>Se muestran los 500 más recientes de {vis.length}. Filtra por fecha o patente para ver el resto.</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+function FormGasto({ comps, quien, onListo }) {
+  const [d, setD] = useState({ tipo: "reparacion", patente: "", fecha: hoyCL(), km: "", pauta_km: "", tipo_mantencion: "completa", componente: "", accion: "", detalle: "", taller: "", costo: "", dias_taller: "", responsable: "BIGTICKET", ot: "", factura: "", factura_fecha: "", pago_fecha: "", asignar_oc: true });
+  const [msg, setMsg] = useState("");
+  const guardar = async () => {
+    setMsg(""); const o = {}; for (const [k, v] of Object.entries(d)) o[k] = v === "" ? null : v;
+    try { await rpc("fn_gasto_registrar", { p_datos: o, p_por: quien }); onListo(); } catch (e) { setMsg(e.message); }
+  };
+  const campo = (k, t, props = {}) => <label style={{ fontSize: 12, color: C.suave }}>{t}<input style={{ ...inp, width: "100%" }} value={d[k]} onChange={(e) => setD({ ...d, [k]: e.target.value })} {...props} /></label>;
+  return (
+    <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, padding: 14, marginBottom: 14 }}>
+      <div style={{ fontWeight: 800, color: C.navy, marginBottom: 10 }}>Registrar gasto</div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 10 }}>
+        <label style={{ fontSize: 12, color: C.suave }}>Ítem<select style={{ ...inp, width: "100%" }} value={d.tipo} onChange={(e) => setD({ ...d, tipo: e.target.value })}>{Object.entries(MN_TIPO).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></label>
+        {campo("patente", "Patente", { onChange: (e) => setD({ ...d, patente: e.target.value.toUpperCase() }) })}
+        {campo("fecha", "Fecha de servicio", { type: "date", max: hoyCL() })}
+        {campo("km", "Km (vacío = Geotab)", { type: "number" })}
+        {d.tipo === "mantencion" && <>{campo("pauta_km", "Pauta (km)", { type: "number" })}
+          <label style={{ fontSize: 12, color: C.suave }}>Tipo<select style={{ ...inp, width: "100%" }} value={d.tipo_mantencion} onChange={(e) => setD({ ...d, tipo_mantencion: e.target.value })}><option value="completa">Completa</option><option value="media">Media</option></select></label></>}
+        {d.tipo === "reparacion" && <>
+          <label style={{ fontSize: 12, color: C.suave }}>Componente<select style={{ ...inp, width: "100%" }} value={d.componente} onChange={(e) => setD({ ...d, componente: e.target.value })}><option value="">Elige…</option>{[...comps, "OTROS"].map((c) => <option key={c} value={c}>{c}</option>)}</select></label>
+          {campo("accion", "Acción (cambio, reparación…)")}</>}
+        {campo("taller", "Taller")}{campo("costo", "Costo ($)", { type: "number" })}{campo("dias_taller", "Días en taller", { type: "number" })}
+        <label style={{ fontSize: 12, color: C.suave }}>Paga<select style={{ ...inp, width: "100%" }} value={d.responsable} onChange={(e) => setD({ ...d, responsable: e.target.value })}><option value="BIGTICKET">BigTicket</option><option value="TERCERO">Tercero</option><option value="SEGURO">Seguro</option></select></label>
+        {campo("ot", "OT")}{campo("factura", "Factura")}{campo("factura_fecha", "Fecha factura", { type: "date" })}{campo("pago_fecha", "Fecha de pago", { type: "date" })}
+      </div>
+      <div style={{ marginTop: 10 }}>{campo("detalle", "Detalle")}</div>
+      <label style={{ fontSize: 12.5, display: "flex", gap: 6, alignItems: "center", marginTop: 8 }}><input type="checkbox" checked={d.asignar_oc} onChange={(e) => setD({ ...d, asignar_oc: e.target.checked })} /> Asignar OC del Brain (correlativo OC-CL-…)</label>
+      {msg && <div style={{ color: C.rojo, fontSize: 13, marginTop: 8 }}>{msg}</div>}
+      <div style={{ marginTop: 10 }}><button style={btn()} onClick={guardar}>Registrar</button></div>
+    </div>
+  );
+}
+function EditarGasto({ g, comps, quien, onListo }) {
+  const [d, setD] = useState({ componente: g.componente || "", accion: g.accion || "", ot: g.ot || "", oc: g.oc || "", factura: g.factura || "", factura_fecha: g.factura_fecha || "", pago_fecha: g.pago_fecha || "" });
+  const [msg, setMsg] = useState("");
+  const guardar = async (asignar) => {
+    setMsg(""); const o = {}; for (const [k, v] of Object.entries(d)) o[k] = v === "" ? null : v; if (asignar) o.asignar_oc = true;
+    try { const r = await rpc("fn_gasto_actualizar", { p_id: g.id, p_datos: o, p_por: quien }); if (asignar) alert(`OC asignada: ${r}`); onListo(); } catch (e) { setMsg(e.message); }
+  };
+  const campo = (k, t, props = {}) => <label style={{ fontSize: 12, color: C.suave }}>{t}<input style={{ ...inp, width: "100%" }} value={d[k]} onChange={(e) => setD({ ...d, [k]: e.target.value })} {...props} /></label>;
+  return (
+    <div style={{ padding: 12, background: "#fafbfd" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 8 }}>
+        {g.tipo === "reparacion" && <label style={{ fontSize: 12, color: C.suave }}>Componente<select style={{ ...inp, width: "100%" }} value={d.componente || g.componente_std || ""} onChange={(e) => setD({ ...d, componente: e.target.value })}><option value="">—</option>{[...comps, "OTROS"].map((c) => <option key={c} value={c}>{c}</option>)}</select></label>}
+        {g.tipo === "reparacion" && campo("accion", "Acción")}
+        {campo("ot", "OT")}{campo("oc", "OC")}{campo("factura", "Factura")}{campo("factura_fecha", "Fecha factura", { type: "date" })}{campo("pago_fecha", "Fecha de pago", { type: "date" })}
+      </div>
+      {msg && <div style={{ color: C.rojo, fontSize: 13, marginTop: 6 }}>{msg}</div>}
+      <div style={{ display: "flex", gap: 6, marginTop: 10, flexWrap: "wrap", alignItems: "center" }}>
+        <button style={btn()} onClick={() => guardar(false)}>Guardar</button>
+        {!g.oc && <button style={btn("sec")} onClick={() => guardar(true)}>Asignar OC del Brain</button>}
+        <span style={{ fontSize: 12, color: C.tenue }}>Origen: {g.fuente}{g.editado_por ? ` · editado por ${g.editado_por}` : ""}</span>
+      </div>
     </div>
   );
 }
