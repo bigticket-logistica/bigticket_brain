@@ -15185,6 +15185,7 @@ const TABS_CUIDADO_CL = [
   { id: "ca_documentos", label: "Documentos", desc: "Subir y confirmar SOAP, revisión técnica, permiso, seguro y leasing" },
   { id: "ca_flota", label: "Estado de flota", desc: "Qué pasa hoy con cada vehículo propio" },
   { id: "ca_mantenciones", label: "Mantenciones", desc: "Próxima mantención por km (Geotab), pautas y talleres" },
+  { id: "ca_reparaciones", label: "Reparaciones", desc: "Solicitud, cotización, aprobación, taller y cierre con gasto" },
   { id: "ca_tareas", label: "Tareas del supervisor", desc: "Detenciones, hallazgos y avisos al supervisor" },
   { id: "ca_auditorias", label: "Auditorías", desc: "Revisión de auditorías de terceros con Biggy" },
   { id: "ca_nosalidas", label: "No salidas", desc: "Flota propia sin ruta y su motivo" },
