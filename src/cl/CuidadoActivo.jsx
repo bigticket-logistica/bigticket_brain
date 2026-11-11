@@ -80,6 +80,7 @@ const inp = { border: `1px solid ${C.borde}`, borderRadius: 8, padding: "7px 10p
 export default function CuidadoActivoCL({ usuario, sub }) {
   const quien = usuario?.email || usuario?.nombre || "brain";
   if (sub === "ca_alertas") return <CentroAlertas quien={quien} rol={usuario?.rol} />;
+  if (sub === "ca_evaluacion") return <EvaluacionEjecutivo usuario={usuario} />;
   if (sub === "ca_ficha") return <FichaActivo quien={quien} />;
   if (sub === "ca_documentos") return <Documentos quien={quien} />;
   if (sub === "ca_flota") return <EstadoFlota />;
@@ -561,6 +562,11 @@ function DetalleAuditoria({ a, quien, onListo }) {
             <div style={{ fontWeight: 800, color: C.navy, marginBottom: 4 }}>¿Amerita reparación?</div>
             {a.amerita_reparacion === null || a.amerita_reparacion === undefined ? <span style={{ color: C.tenue }}>Sin respuesta</span>
               : a.amerita_reparacion ? <span style={{ color: C.rojo, fontWeight: 700 }}>Sí · {a.reparacion_obs}</span> : "No"}
+            {a.amerita_reparacion && <div style={{ marginTop: 6 }}><button style={btn("sec")} onClick={async () => {
+              const comp = window.prompt(`Crear la solicitud de reparación de ${a.patente}.\n\n¿Qué componente? (por ejemplo FRENOS, NEUMATICOS, PUERTAS TRASERAS)`, "");
+              if (!comp) return;
+              try { const id = await rpc("fn_rep_desde_auditoria", { p_auditoria: a.id, p_componente: comp, p_por: quien }); alert(`Solicitud de reparación creada. Queda en Reparaciones como «Cotizando».`); } catch (e) { alert(e.message); }
+            }}>Crear solicitud de reparación</button></div>}
           </div>
         </div>
       )}
@@ -1466,6 +1472,33 @@ function NuevaReparacion({ quien, onListo }) {
     </div>
   );
 }
+// Ficha de autorización en una ventana imprimible (el navegador la guarda como PDF)
+function imprimirFichaRep(s, ref, dif, med) {
+  const p = (v) => (v === null || v === undefined || v === "" ? "—" : v);
+  const $ = (v) => (v === null || v === undefined ? "—" : `$${Math.round(Number(v)).toLocaleString("es-CL")}`);
+  const filas = [
+    ["Folio", s.folio], ["Patente · modelo", `${s.patente} · ${p(ref?.modelo)}`], ["Componente", s.componente], ["Descripción", s.descripcion], ["Origen", s.origen],
+    ["Taller", s.taller], ["Monto cotizado", $(s.monto_cotizado)], ["Monto aprobado", $(s.monto_aprobado)], ["Cobro a", s.cobro_a],
+    ["Reparación anterior del componente", ref?.anterior ? `${fd(ref.anterior.fecha)} · ${p(ref.anterior.taller)} · ${$(ref.anterior.costo)}` : "no hay"],
+    ["Precio de referencia (mediana)", med ? `${$(med)} (${ref?.casos || 0} casos)` : "sin casos"], ["Cotizado vs referencia", dif === null ? "—" : `${dif > 0 ? "+" : ""}${dif}%`],
+    ["Vida útil del componente", ref?.vida_util ? `${Math.round(ref.vida_util.pct || 0)}% · ${ref.vida_util.veredicto}` : "—"],
+    ["Garantía vigente", ref?.garantia ? `${ref.garantia.folio} hasta ${fd(ref.garantia.hasta)}` : "no"],
+    ["Montos repetidos del taller", (ref?.repetidos || []).length ? `${ref.repetidos.length} en 12 meses` : "no"],
+    ["Decisión", s.decision ? `${s.decision} · ${p(s.decision_por)} · ${fh(s.decision_at)}` : "pendiente"], ["Nota", s.decision_nota], ["N° de OC", s.oc_numero],
+  ];
+  const w = window.open("", "_blank");
+  if (!w) return alert("El navegador bloqueó la ventana: permite las ventanas emergentes para el Brain.");
+  w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Ficha ${s.folio}</title>
+  <style>body{font-family:Arial,sans-serif;color:#1f2937;margin:32px}h1{color:#002E5D;font-size:20px;margin:0}h2{color:#FF6600;font-size:13px;margin:4px 0 18px}
+  table{border-collapse:collapse;width:100%;font-size:13px}td{padding:7px 10px;border-bottom:1px solid #e4e7ec}td:first-child{color:#475569;width:38%}
+  .firma{margin-top:48px;display:flex;gap:40px}.firma div{flex:1;border-top:1px solid #94a3b8;padding-top:6px;font-size:12px;color:#475569;text-align:center}</style></head>
+  <body><h1>Ficha de autorización de reparación · ${s.folio}</h1><h2>BigTicket · Cuidado de Activo · ${new Date().toLocaleDateString("es-CL")}</h2>
+  <table>${filas.map(([k, v]) => `<tr><td>${k}</td><td><b>${p(v)}</b></td></tr>`).join("")}</table>
+  <div class="firma"><div>Ejecutivo Cuidado de Activo</div><div>Jefatura · aprobación</div></div>
+  <script>window.onload=()=>setTimeout(()=>window.print(),300)</script></body></html>`);
+  w.document.close();
+}
+
 function FichaReparacion({ s, quien, onCambio }) {
   const [ref, setRef] = useState(null);
   const [d, setD] = useState({ monto: s.monto_cotizado || "", taller: s.taller || "", cobro_a: s.cobro_a || "", nota: "", oc: s.oc_numero || "", fecha: hoyCL(), gasto: "", km: "", dias: "", garantia_meses: "" });
@@ -1494,10 +1527,15 @@ function FichaReparacion({ s, quien, onCambio }) {
         {ref?.vida_util && fila(`Veredicto por desgaste (${ref.vida_util.componente})`, <span style={{ color: String(ref.vida_util.veredicto).startsWith("revisar") ? C.rojo : ref.vida_util.veredicto === "evaluar" ? C.ambar : C.verde }}>
           {ref.vida_util.pct !== null && ref.vida_util.pct !== undefined ? `${Math.round(ref.vida_util.pct)}% de vida útil · ` : ""}{ref.vida_util.veredicto}</span>)}
         {dif !== null && fila("Cotizado vs referencia", <span style={{ color: dif > 20 ? C.rojo : dif < -20 ? C.verde : C.texto }}>{dif > 0 ? "+" : ""}{dif}%</span>)}
+        {ref?.garantia && <div style={{ background: C.rojoT, color: C.rojo, borderRadius: 8, padding: "6px 10px", fontSize: 12.5, margin: "6px 0" }}>
+          <b>En garantía:</b> {ref.garantia.folio} en {ref.garantia.taller || "taller"} (salida {fd(ref.garantia.salida)}, {ref.garantia.meses} meses) cubre hasta el {fd(ref.garantia.hasta)}. Corresponde reclamarla al taller, no pagarla de nuevo.</div>}
+        {(ref?.repetidos || []).length > 0 && <div style={{ background: C.ambarT, color: C.ambar, borderRadius: 8, padding: "6px 10px", fontSize: 12.5, margin: "6px 0" }}>
+          <b>Monto repetido:</b> {s.taller} ya cobró exactamente {pesos(ref.repetidos[0].costo)} en {ref.repetidos.length} reparación{ref.repetidos.length === 1 ? "" : "es"} de los últimos 12 meses: {ref.repetidos.slice(0, 4).map((x) => `${x.patente} ${fd(x.fecha)}`).join(", ")}. Revisa que no sea una cotización copiada.</div>}
         {fila("Decisión", s.decision ? `${s.decision} · ${s.decision_por || ""} · ${fh(s.decision_at)}` : "pendiente")}
         {s.decision_nota && <div style={{ fontSize: 12.5, color: C.suave, marginTop: 4 }}>{s.decision_nota}</div>}
         {s.gasto_final && fila("Gasto final", pesos(s.gasto_final))}
         {(ref?.eventos || []).length > 0 && <div style={{ fontSize: 11.5, color: C.tenue, marginTop: 8 }}>{ref.eventos.map((e, i) => <div key={i}>{fh(e.at)} · {e.accion} · {e.por}</div>)}</div>}
+        <button style={{ ...btn("sec"), marginTop: 10 }} onClick={() => imprimirFichaRep(s, ref, dif, med)}>Imprimir ficha / PDF</button>
       </div>
       <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, padding: 12 }}>
         {["solicitada", "cotizando"].includes(s.etapa) && <>
@@ -2236,6 +2274,7 @@ function UsoDetenciones({ quien }) {
   const [fecha, setFecha] = useState(hoyCL());
   const [filas, setFilas] = useState(null);
   const [f, setF] = useState({ vista: "revisar", texto: "" });
+  const [camAbierta, setCamAbierta] = useState(null);
   const cargar = () => {
     const d0 = new Date(`${fecha}T00:00:00-03:00`), d1 = new Date(d0.getTime() + 864e5);
     api(`vw_paradas_cl?select=*&inicio=gte.${d0.toISOString()}&inicio=lt.${d1.toISOString()}&order=inicio.desc&limit=3000`).then(setFilas).catch(() => setFilas([]));
@@ -2276,10 +2315,10 @@ function UsoDetenciones({ quien }) {
       {filas === null ? <div style={{ color: C.tenue }}>Cargando…</div> : (
         <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1000 }}>
-            <thead><tr style={{ background: C.fondo, textAlign: "left" }}>{["Patente", "Desde – hasta", "Min", "Clasificación", "Entregas MELI cerca", "Interrupción", "Sin explicar", "Zona · ruta", "Conductor", "Mapa"].map((h) => <th key={h} style={{ ...celda, fontSize: 12, color: C.suave }}>{h}</th>)}</tr></thead>
+            <thead><tr style={{ background: C.fondo, textAlign: "left" }}>{["Patente", "Desde – hasta", "Min", "Clasificación", "Entregas MELI cerca", "Interrupción", "Sin explicar", "Cámara", "Zona · ruta", "Conductor", "Mapa"].map((h) => <th key={h} style={{ ...celda, fontSize: 12, color: C.suave }}>{h}</th>)}</tr></thead>
             <tbody>
-              {vis.length === 0 && <tr><td colSpan={10} style={{ ...celda, color: C.tenue, textAlign: "center" }}>Sin paradas con este filtro.</td></tr>}
-              {vis.map((x) => { const c = UC[x.clasificacion] || [x.clasificacion, C.fondo, C.suave]; const z = UZ[x.zona] || [x.zona]; return (
+              {vis.length === 0 && <tr><td colSpan={11} style={{ ...celda, color: C.tenue, textAlign: "center" }}>Sin paradas con este filtro.</td></tr>}
+              {vis.map((x) => { const c = UC[x.clasificacion] || [x.clasificacion, C.fondo, C.suave]; const z = UZ[x.zona] || [x.zona]; return [
                 <tr key={x.id}>
                   <td style={{ ...celda, fontWeight: 800, color: C.navy }}>{x.patente}</td>
                   <td style={celda}>{hora(x.inicio)} – {x.en_curso ? <b style={{ color: C.ambar }}>en curso</b> : hora(x.fin)}</td>
@@ -2288,15 +2327,94 @@ function UsoDetenciones({ quien }) {
                   <td style={celda}>{x.paquetes || x.fallidos ? <>{x.paradas_meli} parada{x.paradas_meli === 1 ? "" : "s"} · {x.paquetes} paq.{x.fallidos ? ` · ${x.fallidos} fallido${x.fallidos === 1 ? "" : "s"}` : ""}<div style={{ color: C.tenue, fontSize: 12 }}>a {x.dist_min_m} m</div></> : <span style={{ color: C.tenue }}>—</span>}</td>
                   <td style={celda}>{x.interrupciones ? <>{String(x.interrupcion_tipos || "").replace("colacion", "colación").replace("bano", "baño")}<div style={{ color: C.tenue, fontSize: 12 }}>justifica {x.interrupcion_min} min</div>{x.colacion_temprana && <div style={{ color: C.ambar, fontSize: 12 }}>colación antes de las 4 h de ruta</div>}</> : <span style={{ color: C.tenue }}>—</span>}</td>
                   <td style={{ ...celda, fontWeight: 700, color: x.min_sin_explicar > 10 && x.clasificacion !== "operativa" ? C.rojo : C.suave }}>{x.clasificacion === "operativa" ? "—" : `${x.min_sin_explicar} min`}</td>
+                  <td style={celda}>{x.camara_eventos ? <a href="#" style={{ color: x.camara_cubierta ? C.rojo : C.navy, fontWeight: 700 }} onClick={(e) => { e.preventDefault(); setCamAbierta(camAbierta === x.id ? null : x.id); }}>📹 {x.camara_eventos}{x.camara_cubierta ? " · cubierta" : ""}</a> : <span style={{ color: C.tenue }}>—</span>}
+                    {x.camara_tipos && <div style={{ color: C.tenue, fontSize: 11.5 }}>{x.camara_tipos}</div>}</td>
                   <td style={celda}>{z[0]}{x.zona_nombre ? ` · ${x.zona_nombre}` : ""}<div style={{ color: C.tenue, fontSize: 12 }}>{x.hora_inicio_ruta ? `ruta ${x.hora_inicio_ruta} – ${x.hora_fin_ruta || "en curso"}` : "sin ruta"}</div></td>
                   <td style={celda}>{x.conductor || "—"}</td>
                   <td style={celda}><a href={`https://maps.google.com/?q=${x.lat},${x.lng}`} target="_blank" rel="noreferrer" style={{ color: C.navy }}>🗺️ Ver</a></td>
-                </tr>
-              ); })}
+                </tr>,
+                camAbierta === x.id && (x.camara_detalle || []).length > 0 && <tr key={x.id + "c"}><td colSpan={11} style={{ padding: 12, background: "#fafbfd", borderBottom: `1px solid ${C.borde}` }}>
+                  <div style={{ fontWeight: 800, color: C.navy, fontSize: 13, marginBottom: 8 }}>Cámara Fleetup · {x.patente} durante la parada</div>
+                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                    {x.camara_detalle.map((ev, i) => (
+                      <div key={i} style={{ background: "#fff", border: `1px solid ${ev.cubierta ? C.rojo : C.borde}`, borderRadius: 10, padding: 8, width: 220, fontSize: 12.5 }}>
+                        {ev.miniatura && <img src={ev.miniatura} alt="" style={{ width: "100%", height: 120, objectFit: "cover", borderRadius: 6, background: C.fondo }} />}
+                        <div style={{ fontWeight: 700, marginTop: 4 }}>{ev.tipo || "Evento"}{ev.cubierta ? " · cámara cubierta" : ""}</div>
+                        <div style={{ color: C.tenue }}>{hora(ev.hora)}{ev.riesgo ? ` · riesgo ${ev.riesgo}` : ""}</div>
+                        <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+                          {ev.video_exterior && <a href={ev.video_exterior} target="_blank" rel="noreferrer" style={{ color: C.navy }}>▶ Exterior</a>}
+                          {ev.video_interior && <a href={ev.video_interior} target="_blank" rel="noreferrer" style={{ color: C.navy }}>▶ Interior</a>}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </td></tr>,
+              ]; })}
             </tbody>
           </table>
         </div>
       )}
+    </div>
+  );
+}
+
+// ── Evaluación del ejecutivo (solo jefatura y Superadmin) ───────────────────
+function EvaluacionEjecutivo({ usuario }) {
+  const lunes = (d) => { const x = new Date(d); const k = (x.getDay() + 6) % 7; x.setDate(x.getDate() - k); return x.toISOString().slice(0, 10); };
+  const mas = (s, n) => { const x = new Date(s + "T12:00:00"); x.setDate(x.getDate() + n); return x.toISOString().slice(0, 10); };
+  const [desde, setDesde] = useState(mas(lunes(new Date()), -7));
+  const [d, setD] = useState(null);
+  const [acceso, setAcceso] = useState(null);
+  const hasta = mas(desde, 6);
+  useEffect(() => {
+    api("ca_config_cl?clave=eq.correo_jefatura&select=valor").then((r) => {
+      const jef = String(r?.[0]?.valor || "").toLowerCase();
+      setAcceso(usuario?.rol === "superadmin" || (!!jef && String(usuario?.email || "").toLowerCase() === jef));
+    }).catch(() => setAcceso(usuario?.rol === "superadmin"));
+  }, []);   // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (acceso) { setD(null); rpc("fn_eval_ejecutivo", { p_desde: desde, p_hasta: hasta }).then(setD).catch((e) => setD({ error: e.message })); } }, [acceso, desde]);   // eslint-disable-line react-hooks/exhaustive-deps
+  if (acceso === null) return <div style={{ color: C.tenue }}>Cargando…</div>;
+  if (!acceso) return <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, padding: 16, color: C.suave }}>Esta pestaña es solo para jefatura y Superadmin.</div>;
+  const cumple = (x) => {
+    if (x.valor === null || x.valor === undefined || x.meta === null || x.meta === undefined || x.meta === "") return null;
+    return x.sentido === "menor" ? Number(x.valor) <= Number(x.meta) : Number(x.valor) >= Number(x.meta);
+  };
+  const celda = { padding: "7px 9px", borderBottom: `1px solid ${C.borde}`, fontSize: 12.5 };
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 14 }}>
+        <button style={btn("sec")} onClick={() => setDesde(mas(desde, -7))}>‹ Semana anterior</button>
+        <b style={{ color: C.navy }}>Semana del {fd(desde)} al {fd(hasta)}</b>
+        <button style={btn("sec")} onClick={() => setDesde(mas(desde, 7))}>Semana siguiente ›</button>
+        <span style={{ fontSize: 12, color: C.tenue }}>Metas editables en Configuración (eval_meta_*). Los indicadores marcados «hoy» muestran la foto actual.</span>
+      </div>
+      {!d ? <div style={{ color: C.tenue }}>Calculando…</div> : d.error ? <div style={{ color: C.rojo }}>{d.error}</div> : <>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 10, marginBottom: 16 }}>
+          {(d.indicadores || []).map((x) => { const c = cumple(x); return (
+            <div key={x.clave} style={{ background: "#fff", border: `1px solid ${c === false ? C.rojo : c ? C.verde : C.borde}`, borderRadius: 12, padding: "12px 14px" }}>
+              <div style={{ fontSize: 12.5, color: C.suave, fontWeight: 700 }}>{x.nombre}</div>
+              <div style={{ fontSize: 26, fontWeight: 800, color: c === false ? C.rojo : c ? C.verde : C.navy }}>{x.valor === null || x.valor === undefined ? "—" : `${x.valor}${x.unidad ? ` ${x.unidad}` : ""}`}</div>
+              <div style={{ fontSize: 12, color: C.tenue }}>{x.meta !== null && x.meta !== undefined && x.meta !== "" ? `Meta ${x.sentido === "menor" ? "≤" : "≥"} ${x.meta}${x.unidad ? ` ${x.unidad}` : ""} · ` : ""}{x.detalle}</div>
+            </div>
+          ); })}
+        </div>
+        <div style={{ fontWeight: 800, color: C.navy, marginBottom: 6 }}>Alertas de la semana y tiempo de reacción</div>
+        <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 760 }}>
+            <thead><tr style={{ background: C.fondo, textAlign: "left" }}>{["Alerta", "Patente", "Aviso", "Gestión", "Reacción", "Resultado"].map((h) => <th key={h} style={{ ...celda, color: C.suave }}>{h}</th>)}</tr></thead>
+            <tbody>
+              {(d.reaccion || []).length === 0 && <tr><td colSpan={6} style={{ ...celda, color: C.tenue, textAlign: "center" }}>Sin alertas en esta semana.</td></tr>}
+              {(d.reaccion || []).map((x, i) => (
+                <tr key={i}>
+                  <td style={celda}>{x.alerta}</td><td style={{ ...celda, fontWeight: 700 }}>{x.patente || "—"}</td>
+                  <td style={celda}>{fh(x.aviso)}</td><td style={celda}>{x.gestion ? fh(x.gestion) : <span style={{ color: C.ambar }}>pendiente</span>}</td>
+                  <td style={{ ...celda, fontWeight: 700, color: Number(x.horas) > 24 ? C.rojo : C.texto }}>{x.horas} h</td><td style={celda}>{x.resultado}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </>}
     </div>
   );
 }
