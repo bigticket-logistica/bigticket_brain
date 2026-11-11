@@ -1664,18 +1664,20 @@ function FormSiniestro({ s = null, quien, onListo }) {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
   const cerrado = ["cerrado", "cerrado_baja"].includes(ini.estado);
+  const [cambios, setCambios] = useState([]);
+  useEffect(() => { if (s) api(`ca_siniestros_cambios_cl?siniestro_id=eq.${s.id}&select=*&order=at.desc&limit=20`).then(setCambios).catch(() => setCambios([])); }, [s?.id]);   // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (d.patente.length >= 6 && d.fecha_siniestro) rpc("fn_sin_conductores", { p_patente: d.patente, p_fecha: d.fecha_siniestro }).then((r) => setConductores([...new Set((r || []).map((x) => x.conductor))])).catch(() => {}); }, [d.patente, d.fecha_siniestro]);
   const datos = () => { const o = {}; for (const [k, v] of Object.entries(d)) o[k] = v === "" ? null : v; return o; };
   const guardar = async () => { setBusy(true); setMsg(""); try { await rpc("fn_sin_guardar", { p_id: s ? s.id : null, p_datos: datos(), p_por: quien }); onListo(); } catch (e) { setMsg(e.message); } finally { setBusy(false); } };
   const cobro = async () => { if (!window.confirm(`Enviar a cobro el deducible de ${pesos(d.deducible)} al tercero. ¿Seguir?`)) return; setBusy(true); try { await rpc("fn_sin_guardar", { p_id: s.id, p_datos: datos(), p_por: quien }); await rpc("fn_sin_enviar_cobro", { p_id: s.id, p_por: quien }); onListo(); } catch (e) { setMsg(e.message); } finally { setBusy(false); } };
   const cerrar = async (baja) => { if (!window.confirm(baja ? "Cerrar por baja del vehículo. ¿Seguir?" : "Cerrar el siniestro: el costo queda en el historial del vehículo. ¿Seguir?")) return; setBusy(true); try { await rpc("fn_sin_guardar", { p_id: s.id, p_datos: datos(), p_por: quien }); await rpc("fn_sin_cerrar", { p_id: s.id, p_resolucion: d.resolucion || null, p_baja: baja, p_por: quien }); onListo(); } catch (e) { setMsg(e.message); } finally { setBusy(false); } };
-  const campo = (k, t, props = {}) => <label style={{ fontSize: 12, color: C.suave }}>{t}<input style={{ ...inp, width: "100%" }} value={d[k]} disabled={cerrado} onChange={(e) => setD({ ...d, [k]: e.target.value })} {...props} /></label>;
-  const lista = (k, t, ops) => <label style={{ fontSize: 12, color: C.suave }}>{t}<select style={{ ...inp, width: "100%" }} value={d[k]} disabled={cerrado} onChange={(e) => setD({ ...d, [k]: e.target.value })}><option value="">—</option>{ops.map((o) => <option key={o} value={o}>{o}</option>)}</select></label>;
+  const campo = (k, t, props = {}) => <label style={{ fontSize: 12, color: C.suave }}>{t}<input style={{ ...inp, width: "100%" }} value={d[k]} onChange={(e) => setD({ ...d, [k]: e.target.value })} {...props} /></label>;
+  const lista = (k, t, ops) => <label style={{ fontSize: 12, color: C.suave }}>{t}<select style={{ ...inp, width: "100%" }} value={d[k]} onChange={(e) => setD({ ...d, [k]: e.target.value })}><option value="">—</option>{ops.map((o) => <option key={o} value={o}>{o}</option>)}</select></label>;
   return (
     <div style={{ padding: 14, background: "#fafbfd" }}>
       <div style={{ fontWeight: 800, color: C.navy, marginBottom: 10 }}>{s ? `${s.folio} · ${s.patente}` : "Nuevo siniestro de vehículo"}</div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 10 }}>
-        {campo("patente", "Patente", { disabled: !!s || cerrado, onChange: (e) => setD({ ...d, patente: e.target.value.toUpperCase() }) })}
+        {campo("patente", "Patente", { disabled: !!s, onChange: (e) => setD({ ...d, patente: e.target.value.toUpperCase() }) })}
         {campo("fecha_siniestro", "Fecha del siniestro", { type: "date", max: hoyCL() })}
         {campo("fecha_apertura", "Apertura en la compañía", { type: "date" })}
         {campo("entrada_taller", "Entrada a taller", { type: "date" })}
@@ -1698,12 +1700,14 @@ function FormSiniestro({ s = null, quien, onListo }) {
         {d.entrada_taller && !cerrado ? " Mientras el vehículo esté en taller, conviene dejarlo Inactivo · Siniestrado en la ficha de la flota." : ""}</div>
       {s && s.dias_taller !== null && s.dias_taller !== undefined && <div style={{ fontSize: 13, marginTop: 8 }}><b>Días en taller:</b> {s.dias_taller}{s.taller_en_curso ? " (en curso)" : ""} · <b>Pérdida en venta estimada:</b> {pesos(s.perdida_venta)}{s.tarifa_dia ? ` (${pesos(s.tarifa_dia)} por día)` : " (sin tarifa para su CECO)"}</div>}
       {msg && <div style={{ color: C.rojo, fontSize: 13, marginTop: 8 }}>{msg}</div>}
-      {!cerrado && <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 12 }}>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 12, alignItems: "center" }}>
         <button style={btn()} disabled={busy} onClick={guardar}>{s ? "Guardar cambios" : "Registrar siniestro"}</button>
         {s && !s.cobro_enviado_at && <button style={btn("sec")} disabled={busy} onClick={cobro}>Enviar a cobro</button>}
-        {s && <button style={btn("verde")} disabled={busy} onClick={() => cerrar(false)}>Cerrar siniestro</button>}
-        {s && <button style={btn("sec")} disabled={busy} onClick={() => cerrar(true)}>Cerrar por baja</button>}
-      </div>}
+        {s && !cerrado && <button style={btn("verde")} disabled={busy} onClick={() => cerrar(false)}>Cerrar siniestro</button>}
+        {s && !cerrado && <button style={btn("sec")} disabled={busy} onClick={() => cerrar(true)}>Cerrar por baja</button>}
+        {s && cerrado && <span style={{ fontSize: 12, color: C.tenue }}>Siniestro cerrado: puedes completar o corregir sus datos; cada cambio queda registrado.</span>}
+      </div>
+      {cambios.length > 0 && <div style={{ fontSize: 11.5, color: C.tenue, marginTop: 8 }}>{cambios.map((c) => <div key={c.id}>{fh(c.at)} · {c.por} cambió: {Object.keys(c.cambios || {}).join(", ")}</div>)}</div>}
       {s?.cobro_enviado_at && <div style={{ fontSize: 12.5, color: C.verde, marginTop: 8 }}>Deducible enviado a cobro el {fh(s.cobro_enviado_at)} por {s.cobro_enviado_por}. Queda listo para Conciliaciones.</div>}
     </div>
   );
@@ -1962,9 +1966,9 @@ function CentroAlertas({ quien, rol }) {
   return (
     <div>
       <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
-        {[["bandeja", "Bandeja"], ["reglas", "Reglas"]].map(([k, t]) => <button key={k} style={btn(vista === k ? undefined : "sec")} onClick={() => setVista(k)}>{t}</button>)}
+        {[["bandeja", "Bandeja"], ["envios", "Envíos por correo"], ["reglas", "Reglas"]].map(([k, t]) => <button key={k} style={btn(vista === k ? undefined : "sec")} onClick={() => setVista(k)}>{t}</button>)}
       </div>
-      {vista === "bandeja" ? <BandejaAlertas /> : <ReglasAlertas quien={quien} puede={rol === "superadmin"} />}
+      {vista === "bandeja" ? <BandejaAlertas /> : vista === "envios" ? <EnviosAlertas /> : <ReglasAlertas quien={quien} puede={rol === "superadmin"} />}
     </div>
   );
 }
@@ -2018,6 +2022,49 @@ function BandejaAlertas() {
     </div>
   );
 }
+function EnviosAlertas() {
+  const [cfg, setCfg] = useState({});
+  const [log, setLog] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const cargar = () => {
+    api("ca_config_cl?clave=in.(resumen_diario,resumen_hora,resumen_jefes,correo_modo,correo_prueba,correo_ejecutivo,correo_jefatura)&select=clave,valor")
+      .then((r) => setCfg(Object.fromEntries((r || []).map((x) => [x.clave, x.valor])))).catch(() => {});
+    api("ca_resumenes_cl?select=*&order=enviado_at.desc&limit=60").then(setLog).catch(() => setLog([]));
+  };
+  useEffect(cargar, []);
+  const probar = async () => {
+    if (!window.confirm(`Enviar el resumen del día ahora.\n\nModo de correos: ${cfg.correo_modo || "prueba"}${(cfg.correo_modo || "prueba") !== "activo" ? ` → todo llega solo a ${cfg.correo_prueba || "correo_prueba"}` : " → ¡llega a los destinatarios reales!"}\n\n¿Seguir?`)) return;
+    setBusy(true);
+    try { const r = await rpc("fn_ca_resumen_diario", { p_forzar: true }); alert(`Listo: ${r?.correos ?? 0} correos (modo ${r?.modo}).`); cargar(); } catch (e) { alert(e.message); } finally { setBusy(false); }
+  };
+  const fila = (k, v) => <div style={{ display: "flex", justifyContent: "space-between", gap: 10, fontSize: 13, padding: "4px 0", borderBottom: `1px solid ${C.fondo}` }}><span style={{ color: C.suave }}>{k}</span><b>{v || "—"}</b></div>;
+  const prueba = (cfg.correo_modo || "prueba") !== "activo";
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 12 }}>
+      <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, padding: 14 }}>
+        <div style={{ fontWeight: 800, color: C.navy, marginBottom: 8 }}>Resumen diario de la flota</div>
+        <div style={{ background: prueba ? C.ambarT : C.rojoT, color: prueba ? C.ambar : C.rojo, borderRadius: 8, padding: "8px 10px", fontSize: 12.5, marginBottom: 8 }}>
+          {prueba ? `Modo de correos: PRUEBA. Todo llega solo a ${cfg.correo_prueba || "correo_prueba"}.` : "Modo de correos: ACTIVO. Los correos llegan a los destinatarios reales."}
+        </div>
+        {fila("Envío automático", cfg.resumen_diario === "activo" ? "Activo" : "Apagado")}
+        {fila("Hora de envío", cfg.resumen_hora)}
+        {fila("Ejecutivo", cfg.correo_ejecutivo)}{fila("Jefatura", cfg.correo_jefatura)}{fila("Jefes de operaciones", cfg.resumen_jefes)}
+        {fila("Supervisores", "cada uno con sus CECO (Supervisores)")}
+        <div style={{ fontSize: 12, color: C.tenue, margin: "8px 0" }}>Se cambia en Configuración: resumen_diario, resumen_hora y resumen_jefes. Contenido: uso del día contra la meta, no salidas sin motivo, en domicilio con viaje, GPS sin señal, la lista de vehículos a revisar y las alertas de gravedad alta.</div>
+        <button style={btn()} disabled={busy} onClick={probar}>{busy ? "Enviando…" : "Enviar resumen ahora"}</button>
+      </div>
+      <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, padding: 14 }}>
+        <div style={{ fontWeight: 800, color: C.navy, marginBottom: 8 }}>Últimos envíos</div>
+        {log === null ? <div style={{ color: C.tenue }}>Cargando…</div> : log.length === 0 ? <div style={{ color: C.tenue, fontSize: 13 }}>Todavía no se envía ningún resumen.</div> :
+          log.map((x) => <div key={x.id} style={{ fontSize: 12.5, padding: "4px 0", borderBottom: `1px solid ${C.fondo}` }}>
+            <b>{fh(x.enviado_at)}</b> · {x.destinatario} · {x.ok ? <span style={{ color: C.verde }}>enviado</span> : <span style={{ color: C.rojo }}>no enviado</span>}
+            {x.detalle && <span style={{ color: C.tenue }}> · uso {x.detalle.uso ?? "—"}% · {x.detalle.no_salidas} sin motivo · {x.detalle.alertas_altas} alertas altas</span>}
+          </div>)}
+      </div>
+    </div>
+  );
+}
+
 function ReglasAlertas({ quien, puede }) {
   const [r, setR] = useState(null);
   const [msg, setMsg] = useState("");
