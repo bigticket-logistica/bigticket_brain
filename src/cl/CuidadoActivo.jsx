@@ -21,6 +21,8 @@
 //     el documento confirmado manda sobre la fecha de la biblia (vw_doc_vigente_cl).
 //   · Reparaciones: solicitud → cotización → aprobación (cobro a) → OC → taller → cierre con gasto
 //     (ca_rep_solicitudes_cl, fn_rep_avanzar), con reparación anterior y precio de referencia.
+//   · Siniestros: registro (vw_siniestros_cl, fn_sin_guardar), deducible al tercero y «Enviar a cobro»,
+//     días en taller, pérdida en venta (días × tarifa del CECO) e indicadores.
 //   · No salidas: fn_ca_no_salidas_dia + avisos enviados (ca_avisos_cl).
 //   · Incumplimientos: tareas vencidas sin respuesta, por supervisor y mes.
 //   · Configuración: plazos por tipo, justificaciones y correos (ca_*_cl).
@@ -73,6 +75,7 @@ export default function CuidadoActivoCL({ usuario, sub }) {
   if (sub === "ca_flota") return <EstadoFlota />;
   if (sub === "ca_mantenciones") return <Mantenciones quien={quien} />;
   if (sub === "ca_reparaciones") return <Reparaciones quien={quien} />;
+  if (sub === "ca_siniestros") return <Siniestros quien={quien} />;
   if (sub === "ca_auditorias") return <Auditorias quien={quien} />;
   if (sub === "ca_nosalidas") return <NoSalidas />;
   if (sub === "ca_incumplimientos") return <Incumplimientos />;
@@ -1269,6 +1272,12 @@ function Reparaciones({ quien }) {
   const celda = { padding: "8px 10px", borderBottom: `1px solid ${C.borde}`, fontSize: 13, verticalAlign: "top" };
   return (
     <div>
+      {n("para_aprobar") > 0 && f.etapa !== "para_aprobar" && (
+        <div style={{ background: C.ambarT, border: `1px solid ${C.ambar}`, borderRadius: 12, padding: "10px 14px", marginBottom: 12, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <span style={{ color: C.ambar, fontWeight: 700 }}>⏳ Hay {n("para_aprobar")} reparación{n("para_aprobar") === 1 ? "" : "es"} esperando aprobación.</span>
+          <button style={btn()} onClick={() => setF({ ...f, etapa: "para_aprobar" })}>Ver para aprobar</button>
+        </div>
+      )}
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
         {kpi("Cotizando", n("solicitada") + n("cotizando"), C.navy, "cotizando")}
         {kpi("Para aprobar", n("para_aprobar"), C.ambar, "para_aprobar")}
@@ -1392,7 +1401,7 @@ function FichaReparacion({ s, quien, onCambio }) {
             {campo("nota", "Nota (opcional)")}
           </div>
           <div style={{ display: "flex", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
-            <button style={btn("verde")} disabled={busy} onClick={() => accion("decidir", { decision: "autorizada", cobro_a: d.cobro_a, monto: Number(d.monto) || null, nota: d.nota })}>Autorizar</button>
+            <button style={btn("verde")} disabled={busy} onClick={() => { if (window.confirm("Al autorizar se crea una tarea al supervisor para coordinar el ingreso al taller (el correo sale según el modo de correos: en prueba solo te llega a ti). ¿Seguir?")) accion("decidir", { decision: "autorizada", cobro_a: d.cobro_a, monto: Number(d.monto) || null, nota: d.nota }); }}>Autorizar</button>
             <button style={btn("rojo")} disabled={busy} onClick={() => accion("decidir", { decision: "rechazada", nota: d.nota })}>Rechazar</button>
             <button style={btn("sec")} disabled={busy} onClick={() => accion("decidir", { decision: "pendiente", nota: d.nota })}>Dejar pendiente</button>
           </div>
@@ -1407,6 +1416,8 @@ function FichaReparacion({ s, quien, onCambio }) {
             <div style={{ flex: "1 1 160px" }}>{campo("fecha", "Ingreso a taller", { type: "date", max: hoyCL() })}</div>
             <button style={btn()} disabled={busy} onClick={() => accion("taller", { fecha: d.fecha })}>Pasar a «En taller»</button>
           </div>
+          <div style={{ fontSize: 12, color: C.tenue, marginTop: 4 }}>Al pasar a taller se le pide al transportista la auditoría de entrega a taller.
+          </div>
         </>}
         {["aprobada", "en_taller"].includes(s.etapa) && <>
           <div style={{ fontWeight: 800, color: C.navy, margin: "14px 0 6px" }}>Cerrar con el gasto real</div>
@@ -1416,11 +1427,139 @@ function FichaReparacion({ s, quien, onCambio }) {
             {campo("garantia_meses", "Garantía (meses)", { type: "number" })}
           </div>
           <button style={{ ...btn("verde"), marginTop: 10 }} disabled={busy} onClick={() => accion("cerrar", { fecha: d.fecha, gasto: Number(d.gasto) || null, km: d.km === "" ? null : Number(d.km), dias: d.dias === "" ? null : Number(d.dias), garantia_meses: d.garantia_meses === "" ? null : Number(d.garantia_meses) })}>Cerrar reparación</button>
-          <div style={{ fontSize: 12, color: C.tenue, marginTop: 6 }}>Queda en el historial del vehículo. Si el gasto supera lo aprobado en más de 10 %, se avisa (no bloquea).</div>
+          <div style={{ fontSize: 12, color: C.tenue, marginTop: 6 }}>Queda en el historial del vehículo y se pide la auditoría de retiro de taller. Si el gasto supera lo aprobado en más de 10 %, se avisa (no bloquea).</div>
         </>}
         {["cerrada", "rechazada", "historica"].includes(s.etapa) && <div style={{ fontSize: 13, color: C.suave }}>{s.etapa === "historica" ? "Solicitud aprobada que vino de la planilla de Adriana. Solo para consulta." : `Solicitud ${s.etapa}.`}</div>}
         {msg && <div style={{ color: C.rojo, fontSize: 13, marginTop: 8 }}>{msg}</div>}
       </div>
+    </div>
+  );
+}
+
+// ── Siniestros ──────────────────────────────────────────────────────────────
+const SIN_ESTADO = { abierto: ["Abierto", C.ambarT, C.ambar], en_taller: ["En taller", "#eef2f8", C.navy], cerrado: ["Cerrado", C.fondo, C.suave], cerrado_baja: ["Cerrado por baja", C.fondo, C.tenue] };
+const SIN_CAUSANTE = ["Chofer", "Tercero externo", "Sin responsable", "Por determinar"];
+const SIN_TRIP = ["Conductor solo", "Conductor y ayudante"];
+function Siniestros({ quien }) {
+  const [filas, setFilas] = useState(null);
+  const [f, setF] = useState({ estado: "abiertos", texto: "" });
+  const [abierta, setAbierta] = useState(null);
+  const [nuevo, setNuevo] = useState(false);
+  const cargar = () => api("vw_siniestros_cl?select=*&order=fecha_siniestro.desc&limit=1000").then(setFilas).catch(() => setFilas([]));
+  useEffect(() => { cargar(); }, []);
+  const todos = filas || [];
+  const abiertos = todos.filter((x) => ["abierto", "en_taller"].includes(x.estado));
+  const suma = (arr, k) => arr.reduce((t, x) => t + (Number(x[k]) || 0), 0);
+  const conDias = todos.filter((x) => x.dias_taller !== null && x.dias_taller !== undefined);
+  const pctChofer = todos.length ? Math.round((todos.filter((x) => x.causante === "Chofer").length / todos.length) * 100) : 0;
+  const porAnio = {}; for (const x of todos) { const y = String(x.fecha_siniestro || "").slice(0, 4); if (y) porAnio[y] = (porAnio[y] || 0) + (Number(x.costo_reparacion) || 0); }
+  const reinc = Object.entries(todos.reduce((m, x) => { m[x.patente] = (m[x.patente] || 0) + 1; return m; }, {})).filter(([, k]) => k > 1).sort((a, b) => b[1] - a[1]);
+  const reincC = Object.entries(todos.filter((x) => x.conductor).reduce((m, x) => { m[x.conductor] = (m[x.conductor] || 0) + 1; return m; }, {})).filter(([, k]) => k > 1).sort((a, b) => b[1] - a[1]);
+  const vis = todos.filter((x) => (f.estado === "abiertos" ? ["abierto", "en_taller"].includes(x.estado) : !f.estado || x.estado === f.estado)
+    && (!f.texto || `${x.folio} ${x.patente} ${x.conductor || ""} ${x.compania || ""} ${x.numero_siniestro || ""}`.toLowerCase().includes(f.texto.toLowerCase())));
+  const kpi = (t, v, c) => <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, padding: "12px 16px", flex: "1 1 140px" }}><div style={{ fontSize: 20, fontWeight: 800, color: c }}>{v}</div><div style={{ fontSize: 12.5, color: C.suave }}>{t}</div></div>;
+  const celda = { padding: "8px 10px", borderBottom: `1px solid ${C.borde}`, fontSize: 13, verticalAlign: "top" };
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
+        {kpi("Siniestros", todos.length, C.navy)}{kpi("Abiertos", abiertos.length, C.ambar)}
+        {kpi("Costo de reparación", pesos(suma(todos, "costo_reparacion")), C.texto)}{kpi("Deducibles", pesos(suma(todos, "deducible")), C.texto)}
+        {kpi("Pérdida en venta estimada", pesos(suma(todos, "perdida_venta")), C.rojo)}
+        {kpi("Días en taller promedio", conDias.length ? Math.round(suma(conDias, "dias_taller") / conDias.length) : "—", C.texto)}
+        {kpi("Causante chofer", `${pctChofer}%`, C.texto)}
+      </div>
+      <div style={{ display: "flex", gap: 14, flexWrap: "wrap", fontSize: 12.5, color: C.suave, marginBottom: 12 }}>
+        <span><b>Costo por año:</b> {Object.keys(porAnio).sort().map((y) => `${y} ${pesos(porAnio[y])}`).join(" · ") || "—"}</span>
+        <span><b>Reincidencia patente:</b> {reinc.slice(0, 5).map(([p, k]) => `${p} (${k})`).join(", ") || "—"}</span>
+        <span><b>Reincidencia conductor:</b> {reincC.slice(0, 5).map(([p, k]) => `${p} (${k})`).join(", ") || "—"}</span>
+      </div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 12 }}>
+        <select style={inp} value={f.estado} onChange={(e) => setF({ ...f, estado: e.target.value })}>
+          <option value="abiertos">Abiertos</option>{Object.entries(SIN_ESTADO).map(([k, v]) => <option key={k} value={k}>{v[0]}</option>)}<option value="">Todos</option>
+        </select>
+        <input style={{ ...inp, minWidth: 240 }} placeholder="Folio, patente, conductor, compañía o N°" value={f.texto} onChange={(e) => setF({ ...f, texto: e.target.value })} />
+        <button style={btn()} onClick={() => setNuevo(!nuevo)}>{nuevo ? "Cerrar" : "+ Nuevo siniestro"}</button>
+      </div>
+      {nuevo && <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, marginBottom: 14 }}><FormSiniestro quien={quien} onListo={() => { setNuevo(false); cargar(); }} /></div>}
+      {filas === null ? <div style={{ color: C.tenue }}>Cargando…</div> : (
+        <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 960 }}>
+            <thead><tr style={{ background: C.fondo, textAlign: "left" }}>
+              {["Folio", "Fecha", "Patente", "Conductor · causante", "Compañía · N°", "Deducible", "Costo", "Días taller", "Estado"].map((h) => <th key={h} style={{ ...celda, fontSize: 12, color: C.suave }}>{h}</th>)}
+            </tr></thead>
+            <tbody>
+              {vis.length === 0 && <tr><td colSpan={9} style={{ ...celda, color: C.tenue, textAlign: "center" }}>Nada con este filtro.</td></tr>}
+              {vis.map((x) => { const e = SIN_ESTADO[x.estado] || [x.estado, C.fondo, C.suave]; return [
+                <tr key={x.id} style={{ cursor: "pointer", background: abierta === x.id ? "#fafbfd" : "#fff" }} onClick={() => setAbierta(abierta === x.id ? null : x.id)}>
+                  <td style={{ ...celda, fontWeight: 700, color: C.navy }}>{x.folio}</td>
+                  <td style={celda}>{fd(x.fecha_siniestro)}</td>
+                  <td style={{ ...celda, fontWeight: 800 }}>{x.patente}</td>
+                  <td style={celda}>{x.conductor || "—"}<div style={{ color: C.tenue, fontSize: 12 }}>{x.causante || ""}</div></td>
+                  <td style={celda}>{x.compania || "—"}<div style={{ color: C.tenue, fontSize: 12 }}>{x.numero_siniestro || ""}</div></td>
+                  <td style={celda}>{pesos(x.deducible)}{x.cobro_enviado_at && <div style={{ color: C.verde, fontSize: 12 }}>enviado a cobro</div>}</td>
+                  <td style={celda}>{pesos(x.costo_reparacion)}</td>
+                  <td style={celda}>{x.dias_taller === null || x.dias_taller === undefined ? "—" : x.taller_en_curso ? `${x.dias_taller} · en curso` : x.dias_taller}</td>
+                  <td style={celda}>{chip(e[0], e[1], e[2])}</td>
+                </tr>,
+                abierta === x.id && <tr key={x.id + "d"}><td colSpan={9} style={{ padding: 0, borderBottom: `1px solid ${C.borde}` }}><FormSiniestro s={x} quien={quien} onListo={() => { setAbierta(null); cargar(); }} /></td></tr>,
+              ]; })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+function FormSiniestro({ s = null, quien, onListo }) {
+  const ini = s || {};
+  const [d, setD] = useState({ patente: ini.patente || "", fecha_siniestro: ini.fecha_siniestro || hoyCL(), fecha_apertura: ini.fecha_apertura || "", entrada_taller: ini.entrada_taller || "", salida_taller: ini.salida_taller || "",
+    conductor: ini.conductor || "", tripulacion: ini.tripulacion || "", causante: ini.causante || "", compania: ini.compania || "", numero_siniestro: ini.numero_siniestro || "",
+    taller: ini.taller || "", danos: ini.danos || "", deducible: ini.deducible ?? "", costo_reparacion: ini.costo_reparacion ?? "", resolucion: ini.resolucion || "" });
+  const [conductores, setConductores] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+  const cerrado = ["cerrado", "cerrado_baja"].includes(ini.estado);
+  useEffect(() => { if (d.patente.length >= 6 && d.fecha_siniestro) rpc("fn_sin_conductores", { p_patente: d.patente, p_fecha: d.fecha_siniestro }).then((r) => setConductores([...new Set((r || []).map((x) => x.conductor))])).catch(() => {}); }, [d.patente, d.fecha_siniestro]);
+  const datos = () => { const o = {}; for (const [k, v] of Object.entries(d)) o[k] = v === "" ? null : v; return o; };
+  const guardar = async () => { setBusy(true); setMsg(""); try { await rpc("fn_sin_guardar", { p_id: s ? s.id : null, p_datos: datos(), p_por: quien }); onListo(); } catch (e) { setMsg(e.message); } finally { setBusy(false); } };
+  const cobro = async () => { if (!window.confirm(`Enviar a cobro el deducible de ${pesos(d.deducible)} al tercero. ¿Seguir?`)) return; setBusy(true); try { await rpc("fn_sin_guardar", { p_id: s.id, p_datos: datos(), p_por: quien }); await rpc("fn_sin_enviar_cobro", { p_id: s.id, p_por: quien }); onListo(); } catch (e) { setMsg(e.message); } finally { setBusy(false); } };
+  const cerrar = async (baja) => { if (!window.confirm(baja ? "Cerrar por baja del vehículo. ¿Seguir?" : "Cerrar el siniestro: el costo queda en el historial del vehículo. ¿Seguir?")) return; setBusy(true); try { await rpc("fn_sin_guardar", { p_id: s.id, p_datos: datos(), p_por: quien }); await rpc("fn_sin_cerrar", { p_id: s.id, p_resolucion: d.resolucion || null, p_baja: baja, p_por: quien }); onListo(); } catch (e) { setMsg(e.message); } finally { setBusy(false); } };
+  const campo = (k, t, props = {}) => <label style={{ fontSize: 12, color: C.suave }}>{t}<input style={{ ...inp, width: "100%" }} value={d[k]} disabled={cerrado} onChange={(e) => setD({ ...d, [k]: e.target.value })} {...props} /></label>;
+  const lista = (k, t, ops) => <label style={{ fontSize: 12, color: C.suave }}>{t}<select style={{ ...inp, width: "100%" }} value={d[k]} disabled={cerrado} onChange={(e) => setD({ ...d, [k]: e.target.value })}><option value="">—</option>{ops.map((o) => <option key={o} value={o}>{o}</option>)}</select></label>;
+  return (
+    <div style={{ padding: 14, background: "#fafbfd" }}>
+      <div style={{ fontWeight: 800, color: C.navy, marginBottom: 10 }}>{s ? `${s.folio} · ${s.patente}` : "Nuevo siniestro de vehículo"}</div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 10 }}>
+        {campo("patente", "Patente", { disabled: !!s || cerrado, onChange: (e) => setD({ ...d, patente: e.target.value.toUpperCase() }) })}
+        {campo("fecha_siniestro", "Fecha del siniestro", { type: "date", max: hoyCL() })}
+        {campo("fecha_apertura", "Apertura en la compañía", { type: "date" })}
+        {campo("entrada_taller", "Entrada a taller", { type: "date" })}
+        {campo("salida_taller", "Salida de taller", { type: "date" })}
+        {campo("conductor", "Conductor", { list: "sin-cond", placeholder: conductores.length ? "Elige del maestro de viajes" : "" })}
+        <datalist id="sin-cond">{conductores.map((c) => <option key={c} value={c} />)}</datalist>
+        {lista("tripulacion", "Tripulación", SIN_TRIP)}
+        {lista("causante", "Causante", SIN_CAUSANTE)}
+        {campo("compania", "Compañía")}
+        {campo("numero_siniestro", "N° de siniestro")}
+        {campo("taller", "Taller")}
+        {campo("deducible", "Deducible ($) · al tercero", { type: "number" })}
+        {campo("costo_reparacion", "Costo de reparación total ($)", { type: "number" })}
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 10 }}>
+        {campo("danos", "Daños")}
+        {campo("resolucion", "Resolución")}
+      </div>
+      <div style={{ fontSize: 12, color: C.tenue, marginTop: 8 }}>El relato del siniestro no se guarda (tiene datos de terceros). El deducible siempre se descuenta al tercero.
+        {d.entrada_taller && !cerrado ? " Mientras el vehículo esté en taller, conviene dejarlo Inactivo · Siniestrado en la ficha de la flota." : ""}</div>
+      {s && s.dias_taller !== null && s.dias_taller !== undefined && <div style={{ fontSize: 13, marginTop: 8 }}><b>Días en taller:</b> {s.dias_taller}{s.taller_en_curso ? " (en curso)" : ""} · <b>Pérdida en venta estimada:</b> {pesos(s.perdida_venta)}{s.tarifa_dia ? ` (${pesos(s.tarifa_dia)} por día)` : " (sin tarifa para su CECO)"}</div>}
+      {msg && <div style={{ color: C.rojo, fontSize: 13, marginTop: 8 }}>{msg}</div>}
+      {!cerrado && <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 12 }}>
+        <button style={btn()} disabled={busy} onClick={guardar}>{s ? "Guardar cambios" : "Registrar siniestro"}</button>
+        {s && !s.cobro_enviado_at && <button style={btn("sec")} disabled={busy} onClick={cobro}>Enviar a cobro</button>}
+        {s && <button style={btn("verde")} disabled={busy} onClick={() => cerrar(false)}>Cerrar siniestro</button>}
+        {s && <button style={btn("sec")} disabled={busy} onClick={() => cerrar(true)}>Cerrar por baja</button>}
+      </div>}
+      {s?.cobro_enviado_at && <div style={{ fontSize: 12.5, color: C.verde, marginTop: 8 }}>Deducible enviado a cobro el {fh(s.cobro_enviado_at)} por {s.cobro_enviado_por}. Queda listo para Conciliaciones.</div>}
     </div>
   );
 }
