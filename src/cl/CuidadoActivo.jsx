@@ -35,6 +35,7 @@
 // Todo en Supabase Chile, con la clave anon (como PNR).
 // ═══════════════════════════════════════════════════════════════════════════
 import { useEffect, useMemo, useState } from "react";
+import { cargarSheetJS } from "../shared";
 
 const CL_URL = "https://hmowsazntdjtsvdfgutn.supabase.co";
 const CL_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imhtb3dzYXpudGRqdHN2ZGZndXRuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQ5MTc4NzgsImV4cCI6MjEwMDQ5Mzg3OH0.xAJokU0eFhof--d8R4uCRBr2-CJLzC5re0w1IPRqQR8";
@@ -1557,6 +1558,34 @@ function Siniestros({ quien }) {
   const [abierta, setAbierta] = useState(null);
   const [nuevo, setNuevo] = useState(false);
   const cargar = () => api("vw_siniestros_cl?select=*&order=fecha_siniestro.desc&limit=1000").then(setFilas).catch(() => setFilas([]));
+  const [importando, setImportando] = useState("");
+  // Carga la hoja SINIESTROS del consolidado de vehículos (la «biblia»). Se puede repetir con el archivo actualizado.
+  const importar = async (file) => {
+    if (!file) return;
+    setImportando("Leyendo el Excel…");
+    try {
+      const XLSX = await cargarSheetJS();
+      const wb = XLSX.read(await file.arrayBuffer(), { type: "array", cellDates: true });
+      const hoja = wb.SheetNames.find((n) => /siniestro/i.test(n));
+      if (!hoja) throw new Error(`El archivo no tiene una hoja «SINIESTROS» (hojas: ${wb.SheetNames.join(", ")})`);
+      const crudas = XLSX.utils.sheet_to_json(wb.Sheets[hoja], { defval: null });
+      const norm = (k) => String(k).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase().replace(/\s+/g, " ").trim();
+      const fecha = (v) => { if (!v) return null; if (v instanceof Date) return new Date(v.getTime() - v.getTimezoneOffset() * 60000).toISOString().slice(0, 10); const m = String(v).match(/(\d{1,2})[-/](\d{1,2})[-/](\d{4})/); return m ? `${m[3]}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}` : String(v).slice(0, 10); };
+      const filasX = crudas.map((r) => { const o = {}; for (const [k, v] of Object.entries(r)) o[norm(k)] = v; return {
+        fecha: fecha(o["FECHA DE SERVICIO"] || o["FECHA SINIESTRO"] || o["FECHA"]), patente: o["PATENTE"], ceco: o["CECOS"] || o["CECO"], km: o["ODOMETRO"],
+        item: o["ITEM"], taller: o["TALLER"], costo: o["COSTO"], dias: o["DIAS EN TALLER"], responsable: o["RESPONSABLE"], precio_total: o["PRECIO REPARACION TOTAL"] }; })
+        .filter((r) => r.patente && r.fecha);
+      if (!filasX.length) throw new Error("La hoja de siniestros no trae filas con patente y fecha");
+      const tot = { nuevos: 0, actualizados: 0, omitidos: 0, patente_no_esta: 0 };
+      for (let i = 0; i < filasX.length; i += 200) {
+        setImportando(`Cargando ${Math.min(i + 200, filasX.length)} de ${filasX.length}…`);
+        const r = await rpc("fn_sin_importar", { p_filas: filasX.slice(i, i + 200), p_por: quien });
+        for (const k of Object.keys(tot)) tot[k] += Number(r?.[k] || 0);
+      }
+      alert(`Hoja «${hoja}»: ${filasX.length} filas.\n\n• Nuevos: ${tot.nuevos}\n• Actualizados: ${tot.actualizados}\n• Sin cambios o editados a mano en el Brain: ${tot.omitidos}${tot.patente_no_esta ? `\n• Patente que no está en la ficha de activos: ${tot.patente_no_esta}` : ""}`);
+      cargar();
+    } catch (e) { alert(e.message); } finally { setImportando(""); }
+  };
   useEffect(() => { cargar(); }, []);
   const todos = filas || [];
   const abiertos = todos.filter((x) => ["abierto", "en_taller"].includes(x.estado));
@@ -1590,6 +1619,10 @@ function Siniestros({ quien }) {
         </select>
         <input style={{ ...inp, minWidth: 240 }} placeholder="Folio, patente, conductor, compañía o N°" value={f.texto} onChange={(e) => setF({ ...f, texto: e.target.value })} />
         <button style={btn()} onClick={() => setNuevo(!nuevo)}>{nuevo ? "Cerrar" : "+ Nuevo siniestro"}</button>
+        <label style={{ ...btn("sec"), display: "inline-block", cursor: importando ? "wait" : "pointer" }}>
+          {importando || "Cargar consolidado (Excel)"}
+          <input type="file" accept=".xlsx,.xls" style={{ display: "none" }} disabled={!!importando} onChange={(e) => { importar(e.target.files?.[0]); e.target.value = ""; }} />
+        </label>
       </div>
       {nuevo && <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, marginBottom: 14 }}><FormSiniestro quien={quien} onListo={() => { setNuevo(false); cargar(); }} /></div>}
       {filas === null ? <div style={{ color: C.tenue }}>Cargando…</div> : (
@@ -1602,7 +1635,7 @@ function Siniestros({ quien }) {
               {vis.length === 0 && <tr><td colSpan={9} style={{ ...celda, color: C.tenue, textAlign: "center" }}>Nada con este filtro.</td></tr>}
               {vis.map((x) => { const e = SIN_ESTADO[x.estado] || [x.estado, C.fondo, C.suave]; return [
                 <tr key={x.id} style={{ cursor: "pointer", background: abierta === x.id ? "#fafbfd" : "#fff" }} onClick={() => setAbierta(abierta === x.id ? null : x.id)}>
-                  <td style={{ ...celda, fontWeight: 700, color: C.navy }}>{x.folio}</td>
+                  <td style={{ ...celda, fontWeight: 700, color: C.navy }}>{x.folio}{x.origen === "consolidado" && <div style={{ color: C.tenue, fontSize: 11.5, fontWeight: 400 }}>del consolidado</div>}</td>
                   <td style={celda}>{fd(x.fecha_siniestro)}</td>
                   <td style={{ ...celda, fontWeight: 800 }}>{x.patente}</td>
                   <td style={celda}>{x.conductor || "—"}<div style={{ color: C.tenue, fontSize: 12 }}>{x.causante || ""}</div></td>
