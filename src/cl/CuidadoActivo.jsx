@@ -23,6 +23,8 @@
 //     (ca_rep_solicitudes_cl, fn_rep_avanzar), con reparación anterior y precio de referencia.
 //   · Siniestros: registro (vw_siniestros_cl, fn_sin_guardar), deducible al tercero y «Enviar a cobro»,
 //     días en taller, pérdida en venta (días × tarifa del CECO) e indicadores.
+//   · Vida útil (Mantenciones → verificador y mantenedor por modelo): fn_mnt_vida_util_cl; veredicto por
+//     desgaste en la ficha de autorización de Reparaciones y tarjeta en la Ficha del activo.
 //   · No salidas: fn_ca_no_salidas_dia + avisos enviados (ca_avisos_cl).
 //   · Incumplimientos: tareas vencidas sin respuesta, por supervisor y mes.
 //   · Configuración: plazos por tipo, justificaciones y correos (ca_*_cl).
@@ -674,12 +676,14 @@ function Mantenciones({ quien }) {
   return (
     <div>
       <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
-        {[["programa", "Programa"], ["pautas", "Pautas por modelo"], ["talleres", "Talleres"]].map(([k, t]) => (
+        {[["programa", "Programa"], ["vida", "Vida útil (verificador)"], ["pautas", "Pautas por modelo"], ["vidamod", "Vida útil por modelo"], ["talleres", "Talleres"]].map(([k, t]) => (
           <button key={k} style={btn(vista === k ? undefined : "sec")} onClick={() => setVista(k)}>{t}</button>
         ))}
       </div>
       {vista === "programa" && <ProgramaMnt quien={quien} />}
       {vista === "pautas" && <PautasMnt quien={quien} />}
+      {vista === "vida" && <VerificadorVU />}
+      {vista === "vidamod" && <VidaModeloMnt quien={quien} />}
       {vista === "talleres" && <TalleresMnt quien={quien} />}
     </div>
   );
@@ -1029,7 +1033,8 @@ function FichaActivo({ quien }) {
 function FichaDetalle({ patente, quien, onVolver }) {
   const [d, setD] = useState(null);
   const [err, setErr] = useState("");
-  useEffect(() => { rpc("fn_ficha_cl", { p_patente: patente }).then(setD).catch((e) => { setErr(e.message); setD({}); }); }, [patente]);
+  const [vu, setVu] = useState([]);
+  useEffect(() => { rpc("fn_ficha_cl", { p_patente: patente }).then(setD).catch((e) => { setErr(e.message); setD({}); }); rpc("fn_mnt_vida_util_cl").then((r) => setVu((r || []).filter((x) => x.patente === patente))).catch(() => setVu([])); }, [patente]);
   const card = (t, cont) => (
     <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, padding: 14 }}>
       <div style={{ fontWeight: 800, color: C.navy, marginBottom: 8 }}>{t}</div>{cont}
@@ -1101,6 +1106,13 @@ function FichaDetalle({ patente, quien, onVolver }) {
           {fila("Próxima pauta", mn.proxima_pauta ? kmf(mn.proxima_pauta) : null)}{fila("Faltan", mn.faltan_km !== null && mn.faltan_km !== undefined ? `${kmf(mn.faltan_km)} km` : null)}
           {fila("Fecha estimada", mn.fecha_estimada ? fd(mn.fecha_estimada) : null)}{fila("Taller autorizado", mn.taller)}
         </> : <div style={{ color: C.tenue, fontSize: 13 }}>Sin datos.</div>)}
+        {card("Vida útil de componentes", vu.length === 0 ? <div style={{ color: C.tenue, fontSize: 13 }}>Su modelo no tiene vida útil cargada.</div> :
+          vu.map((x) => { const e = VU_ESTADO[x.estado] || [x.estado, C.fondo, C.suave]; return (
+            <div key={x.componente} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, fontSize: 13, padding: "4px 0", borderBottom: `1px solid ${C.fondo}` }}>
+              <span>{x.componente}<div style={{ color: C.tenue, fontSize: 11.5 }}>{x.ultimo_fecha ? `último cambio ${fd(x.ultimo_fecha)}` : "sin cambio registrado"}</div></span>
+              <span style={{ display: "flex", gap: 6, alignItems: "center" }}><BarraVU pct={x.pct} />{chip(e[0], e[1], e[2])}</span>
+            </div>
+          ); }))}
         {card("Auditorías", (d.auditorias || []).length === 0 ? <div style={{ color: C.tenue, fontSize: 13 }}>Sin auditorías.</div> :
           d.auditorias.map((a) => <div key={a.id} style={{ fontSize: 13, padding: "4px 0", borderBottom: `1px solid ${C.fondo}` }}>
             <b>{a.subtipo || (a.tipo === "vehiculo" ? "Vehículo" : "Limpieza")}</b> · {a.estado}{a.veredicto ? ` · ${a.veredicto}` : ""}<div style={{ color: C.tenue, fontSize: 12 }}>{a.enviada_at ? fh(a.enviada_at) : "sin enviar"}</div></div>))}
@@ -1130,8 +1142,17 @@ function Documentos({ quien }) {
   const [abierta, setAbierta] = useState(null);
   const [carga, setCarga] = useState({ tipo: "", patente: "" });
   const [subiendo, setSubiendo] = useState("");
-  const cargar = () => api("ca_documentos_cl?select=*&order=cargado_at.desc&limit=500").then(setFilas).catch(() => setFilas([]));
+  const [cargando, setCargando] = useState(false);
+  const [hora, setHora] = useState(null);
+  const cargar = async () => {
+    setCargando(true);
+    try { setFilas(await api(`ca_documentos_cl?select=*&order=cargado_at.desc&limit=500&_=${Date.now()}`)); setHora(new Date()); }
+    catch { setFilas((x) => x || []); } finally { setCargando(false); }
+  };
   useEffect(() => { cargar(); }, []);
+  // Mientras haya documentos «por leer», se actualiza sola cada minuto (Biggy lee cada 5 min en el VPS)
+  const hayPorLeer = (filas || []).some((x) => x.estado === "por_leer");
+  useEffect(() => { if (!hayPorLeer) return; const i = setInterval(cargar, 60000); return () => clearInterval(i); }, [hayPorLeer]);   // eslint-disable-line react-hooks/exhaustive-deps
   const subir = async (files) => {
     const lista = [...(files || [])]; if (!lista.length) return;
     let ok = 0; const errores = [];
@@ -1169,7 +1190,11 @@ function Documentos({ quien }) {
           <option value="confirmado">Confirmados ({n("confirmado")})</option><option value="rechazado">Rechazados ({n("rechazado")})</option><option value="">Todos</option>
         </select>
         <input style={{ ...inp, minWidth: 240 }} placeholder="Patente, archivo, aseguradora o póliza" value={f.texto} onChange={(e) => setF({ ...f, texto: e.target.value })} />
-        <button style={btn("sec")} onClick={cargar}>Actualizar</button>
+        <button style={btn("sec")} disabled={cargando} onClick={cargar}>{cargando ? "Actualizando…" : "Actualizar"}</button>
+        <span style={{ fontSize: 12, color: C.tenue }}>
+          {hora ? `Actualizado a las ${hora.toLocaleTimeString("es-CL", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}` : ""}
+          {hayPorLeer ? " · hay documentos por leer: Biggy los lee cada 5 min y esta lista se actualiza sola cada minuto" : ""}
+        </span>
       </div>
       {filas === null ? <div style={{ color: C.tenue }}>Cargando…</div> : (
         <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, overflowX: "auto" }}>
@@ -1380,6 +1405,8 @@ function FichaReparacion({ s, quien, onCambio }) {
         {fila("Origen", s.origen)}
         {fila("Reparación anterior del componente", ref?.anterior ? `${fd(ref.anterior.fecha)} · ${ref.anterior.taller || "—"} · ${pesos(ref.anterior.costo)}` : "no hay")}
         {fila(`Precio de referencia (mediana, ${ref?.casos || 0} casos)`, med ? pesos(med) : "sin casos")}
+        {ref?.vida_util && fila(`Veredicto por desgaste (${ref.vida_util.componente})`, <span style={{ color: String(ref.vida_util.veredicto).startsWith("revisar") ? C.rojo : ref.vida_util.veredicto === "evaluar" ? C.ambar : C.verde }}>
+          {ref.vida_util.pct !== null && ref.vida_util.pct !== undefined ? `${Math.round(ref.vida_util.pct)}% de vida útil · ` : ""}{ref.vida_util.veredicto}</span>)}
         {dif !== null && fila("Cotizado vs referencia", <span style={{ color: dif > 20 ? C.rojo : dif < -20 ? C.verde : C.texto }}>{dif > 0 ? "+" : ""}{dif}%</span>)}
         {fila("Decisión", s.decision ? `${s.decision} · ${s.decision_por || ""} · ${fh(s.decision_at)}` : "pendiente")}
         {s.decision_nota && <div style={{ fontSize: 12.5, color: C.suave, marginTop: 4 }}>{s.decision_nota}</div>}
@@ -1560,6 +1587,113 @@ function FormSiniestro({ s = null, quien, onListo }) {
         {s && <button style={btn("sec")} disabled={busy} onClick={() => cerrar(true)}>Cerrar por baja</button>}
       </div>}
       {s?.cobro_enviado_at && <div style={{ fontSize: 12.5, color: C.verde, marginTop: 8 }}>Deducible enviado a cobro el {fh(s.cobro_enviado_at)} por {s.cobro_enviado_por}. Queda listo para Conciliaciones.</div>}
+    </div>
+  );
+}
+
+// ── Vida útil de componentes ────────────────────────────────────────────────
+const VU_ESTADO = { supera: ["Supera el límite", C.rojoT, C.rojo], alerta: ["En alerta", C.ambarT, C.ambar], en_protocolo: ["En protocolo", "#eef2f8", C.navy], ok: ["Ok", C.verdeT, C.verde], sin_dato: ["Sin dato", C.fondo, C.suave] };
+function BarraVU({ pct }) {
+  if (pct === null || pct === undefined) return <span style={{ color: C.tenue }}>—</span>;
+  const v = Math.min(Number(pct), 130), col = pct >= 100 ? C.rojo : pct >= 85 ? C.ambar : C.verde;
+  return <div style={{ display: "flex", alignItems: "center", gap: 6 }}><div style={{ width: 90, height: 8, background: C.fondo, borderRadius: 4, overflow: "hidden" }}><div style={{ width: `${Math.min(v, 100)}%`, height: "100%", background: col }} /></div><b style={{ color: col, fontSize: 12.5 }}>{Math.round(pct)}%</b></div>;
+}
+function VerificadorVU() {
+  const [filas, setFilas] = useState(null);
+  const [f, setF] = useState({ estado: "atencion", comp: "", texto: "" });
+  useEffect(() => { rpc("fn_mnt_vida_util_cl").then(setFilas).catch(() => setFilas([])); }, []);
+  const n = (e) => (filas || []).filter((x) => x.estado === e).length;
+  const comps = [...new Set((filas || []).map((x) => x.componente))].sort();
+  const vis = (filas || []).filter((x) => (f.estado === "atencion" ? ["supera", "alerta"].includes(x.estado) : !f.estado || x.estado === f.estado)
+    && (!f.comp || x.componente === f.comp) && (!f.texto || `${x.patente} ${x.modelo} ${x.ceco || ""}`.toLowerCase().includes(f.texto.toLowerCase())));
+  const kpi = (t, v, c, e) => <div onClick={() => setF({ ...f, estado: f.estado === e ? "atencion" : e })} style={{ background: "#fff", border: `1px solid ${f.estado === e ? c : C.borde}`, borderRadius: 12, padding: "12px 16px", flex: "1 1 130px", cursor: "pointer" }}><div style={{ fontSize: 24, fontWeight: 800, color: c }}>{v}</div><div style={{ fontSize: 12.5, color: C.suave }}>{t}</div></div>;
+  const celda = { padding: "8px 10px", borderBottom: `1px solid ${C.borde}`, fontSize: 13, verticalAlign: "top" };
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
+        {kpi("Supera el límite", n("supera"), C.rojo, "supera")}{kpi("En alerta", n("alerta"), C.ambar, "alerta")}
+        {kpi("En protocolo", n("en_protocolo"), C.navy, "en_protocolo")}{kpi("Ok", n("ok"), C.verde, "ok")}{kpi("Sin dato", n("sin_dato"), C.suave, "sin_dato")}
+      </div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 12 }}>
+        <select style={inp} value={f.estado} onChange={(e) => setF({ ...f, estado: e.target.value })}><option value="atencion">Supera + en alerta</option>{Object.entries(VU_ESTADO).map(([k, v]) => <option key={k} value={k}>{v[0]}</option>)}<option value="">Todos</option></select>
+        <select style={inp} value={f.comp} onChange={(e) => setF({ ...f, comp: e.target.value })}><option value="">Todos los componentes</option>{comps.map((c) => <option key={c} value={c}>{c}</option>)}</select>
+        <input style={{ ...inp, minWidth: 220 }} placeholder="Patente, modelo o CECO" value={f.texto} onChange={(e) => setF({ ...f, texto: e.target.value })} />
+        <span style={{ fontSize: 12, color: C.tenue }}>Km desde el último cambio (historial) contra la vida útil del modelo. «Sin dato» = no hay cambio registrado con km. No crea solicitudes sola.</span>
+      </div>
+      {filas === null ? <div style={{ color: C.tenue }}>Cargando…</div> : (
+        <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 940 }}>
+            <thead><tr style={{ background: C.fondo, textAlign: "left" }}>{["Patente", "Modelo · CECO", "Componente", "Último cambio", "Km desde el cambio", "Vida útil", "Uso", "Estado"].map((h) => <th key={h} style={{ ...celda, fontSize: 12, color: C.suave }}>{h}</th>)}</tr></thead>
+            <tbody>
+              {vis.length === 0 && <tr><td colSpan={8} style={{ ...celda, color: C.tenue, textAlign: "center" }}>Nada con este filtro.</td></tr>}
+              {vis.map((x) => { const e = VU_ESTADO[x.estado] || [x.estado, C.fondo, C.suave]; return (
+                <tr key={x.patente + x.componente}>
+                  <td style={{ ...celda, fontWeight: 800, color: C.navy }}>{x.patente}</td>
+                  <td style={celda}>{x.modelo}<div style={{ color: C.tenue, fontSize: 12 }}>{x.ceco}</div></td>
+                  <td style={celda}>{x.componente}</td>
+                  <td style={celda}>{x.ultimo_fecha ? <>{fd(x.ultimo_fecha)} · {kmf(x.ultimo_km)} km<div style={{ color: C.tenue, fontSize: 12, maxWidth: 260 }}>{x.ultimo_detalle}</div></> : <span style={{ color: C.tenue }}>sin registro</span>}</td>
+                  <td style={celda}>{x.regla_meses ? `${x.meses_desde ?? "—"} meses` : kmf(x.km_desde)}</td>
+                  <td style={celda}>{x.regla_meses ? `${x.regla_meses} meses` : `${kmf(x.vida_km)} km`}</td>
+                  <td style={celda}><BarraVU pct={x.pct} /></td>
+                  <td style={celda}>{chip(e[0], e[1], e[2])}{x.solicitud_folio && <div style={{ color: C.tenue, fontSize: 12 }}>{x.solicitud_folio}</div>}</td>
+                </tr>
+              ); })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+function VidaModeloMnt({ quien }) {
+  const [v, setV] = useState(null);
+  const [comps, setComps] = useState([]);
+  const [nuevo, setNuevo] = useState({ modelo: "", componente: "", km: "", regla: "" });
+  const [msg, setMsg] = useState("");
+  const cargar = () => {
+    api("ca_mnt_vida_util_cl?select=*&order=modelo,componente").then(setV).catch(() => setV([]));
+    api("ca_mnt_componentes_cl?select=*&order=componente").then(setComps).catch(() => setComps([]));
+  };
+  useEffect(cargar, []);
+  const guardar = async (modelo, componente, km, regla) => { setMsg(""); try { await rpc("fn_mnt_guardar_vida", { p_modelo: modelo, p_componente: componente, p_km: km === "" || km === null ? null : Number(km), p_regla: regla || null, p_por: quien }); cargar(); setNuevo({ modelo: "", componente: "", km: "", regla: "" }); } catch (e) { setMsg(e.message); } };
+  const guardarPatron = async (c, patron) => { setMsg(""); try { await rpc("fn_mnt_guardar_componente", { p_componente: c, p_patron: patron, p_por: quien }); cargar(); } catch (e) { setMsg(e.message); } };
+  const modelos = [...new Set((v || []).map((x) => x.modelo))];
+  const compsUsados = [...new Set((v || []).map((x) => x.componente))];
+  return (
+    <div>
+      <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, overflowX: "auto", marginBottom: 14 }}>
+        <table style={{ borderCollapse: "collapse", fontSize: 13, minWidth: 700 }}>
+          <thead><tr style={{ background: C.fondo, textAlign: "left" }}><th style={{ padding: "8px 10px", color: C.suave, fontSize: 12 }}>Modelo</th>{compsUsados.map((c) => <th key={c} style={{ padding: "8px 10px", color: C.suave, fontSize: 12 }}>{c}</th>)}</tr></thead>
+          <tbody>{modelos.map((m) => (
+            <tr key={m} style={{ borderTop: `1px solid ${C.borde}` }}>
+              <td style={{ padding: "6px 10px", fontWeight: 700 }}>{m}</td>
+              {compsUsados.map((c) => { const x = (v || []).find((y) => y.modelo === m && y.componente === c); return (
+                <td key={c} style={{ padding: "6px 8px" }}><input style={{ ...inp, width: 100 }} defaultValue={x ? (x.km ?? x.regla ?? "") : ""} placeholder="—"
+                  onBlur={(e) => { const val = e.target.value.trim(); const antes = x ? String(x.km ?? x.regla ?? "") : ""; if (val === antes || val === "") return; /^\d+$/.test(val) ? guardar(m, c, val, null) : guardar(m, c, null, val); }} /></td>
+              ); })}
+            </tr>
+          ))}</tbody>
+        </table>
+      </div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end", marginBottom: 18 }}>
+        <label style={{ fontSize: 12, color: C.suave }}>Modelo<input style={{ ...inp, width: 220 }} value={nuevo.modelo} onChange={(e) => setNuevo({ ...nuevo, modelo: e.target.value })} /></label>
+        <label style={{ fontSize: 12, color: C.suave }}>Componente<input list="vu-comps" style={{ ...inp, width: 180 }} value={nuevo.componente} onChange={(e) => setNuevo({ ...nuevo, componente: e.target.value })} /></label>
+        <datalist id="vu-comps">{comps.map((c) => <option key={c.componente} value={c.componente} />)}</datalist>
+        <label style={{ fontSize: 12, color: C.suave }}>Km de vida útil<input type="number" style={{ ...inp, width: 120 }} value={nuevo.km} onChange={(e) => setNuevo({ ...nuevo, km: e.target.value })} /></label>
+        <label style={{ fontSize: 12, color: C.suave }}>o regla en meses<input style={{ ...inp, width: 110 }} placeholder="6 MESES" value={nuevo.regla} onChange={(e) => setNuevo({ ...nuevo, regla: e.target.value })} /></label>
+        <button style={btn()} onClick={() => guardar(nuevo.modelo, nuevo.componente, nuevo.km, nuevo.regla)}>Agregar</button>
+      </div>
+      <div style={{ fontWeight: 800, color: C.navy, marginBottom: 6 }}>Cómo se reconoce cada componente en el historial</div>
+      <div style={{ fontSize: 12.5, color: C.suave, marginBottom: 8 }}>Palabras que se buscan en el detalle de cada reparación o mantención, separadas por «|». Por ejemplo, FRENOS = FRENO|PASTILL|DISCO.</div>
+      <table style={{ borderCollapse: "collapse", fontSize: 13, background: "#fff", border: `1px solid ${C.borde}` }}>
+        <tbody>{comps.map((c) => (
+          <tr key={c.componente} style={{ borderTop: `1px solid ${C.borde}` }}>
+            <td style={{ padding: "6px 10px", fontWeight: 700 }}>{c.componente}</td>
+            <td style={{ padding: "6px 8px" }}><input style={{ ...inp, width: 360 }} defaultValue={c.patron} onBlur={(e) => e.target.value !== c.patron && guardarPatron(c.componente, e.target.value)} /></td>
+          </tr>
+        ))}</tbody>
+      </table>
+      {msg && <div style={{ color: C.rojo, fontSize: 13, marginTop: 8 }}>{msg}</div>}
     </div>
   );
 }
