@@ -1173,10 +1173,12 @@ function Documentos({ quien }) {
     setSel({}); await cargar();
     alert(`${ok} de ${lista.length} confirmados.${err.length ? "\n\n" + err.join("\n") : ""}`);
   };
+  const [errorCarga, setErrorCarga] = useState("");
   const cargar = async () => {
     setCargando(true);
-    try { setFilas(await api(`ca_documentos_cl?select=*&order=cargado_at.desc&limit=500&_=${Date.now()}`)); setHora(new Date()); }
-    catch { setFilas((x) => x || []); } finally { setCargando(false); }
+    try { setFilas(await api(`ca_documentos_cl?select=*&order=cargado_at.desc&limit=2000&_=${Date.now()}`)); setHora(new Date()); setErrorCarga(""); }
+    catch (e) { setErrorCarga(`No se pudo cargar la lista (${e.message}). Los documentos no se pierden: pulsa «Actualizar» en unos segundos.`); setFilas((x) => x || []); }
+    finally { setCargando(false); }
   };
   useEffect(() => { cargar(); }, []);
   // Mientras haya documentos «por leer», se actualiza sola cada minuto (Biggy lee cada 5 min en el VPS)
@@ -1258,6 +1260,7 @@ function Documentos({ quien }) {
           {hayPorLeer ? " · hay documentos por leer: Biggy los lee cada 5 min y esta lista se actualiza sola cada minuto" : ""}
         </span>
       </div>
+      {errorCarga && <div style={{ background: C.rojoT, color: C.rojo, borderRadius: 10, padding: "10px 12px", fontSize: 13, marginBottom: 10 }}>{errorCarga}</div>}
       {filas === null ? <div style={{ color: C.tenue }}>Cargando…</div> : (
         <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 860 }}>
@@ -1265,7 +1268,7 @@ function Documentos({ quien }) {
               {["", "Archivo", "Tipo", "Patentes", "Vence", "Aseguradora · póliza", "Subido", "Estado"].map((h) => <th key={h} style={{ ...celda, fontSize: 12, color: C.suave }}>{h}</th>)}
             </tr></thead>
             <tbody>
-              {vis.length === 0 && <tr><td colSpan={8} style={{ ...celda, color: C.tenue, textAlign: "center" }}>No hay documentos con este filtro.</td></tr>}
+              {vis.length === 0 && <tr><td colSpan={8} style={{ ...celda, color: C.tenue, textAlign: "center" }}>{errorCarga ? "No se pudo cargar la lista." : `No hay documentos con este filtro. En total hay ${(filas || []).length}: revisa el filtro de arriba.`}</td></tr>}
               {vis.map((x) => { const e = DOC_ESTADO[x.estado] || [x.estado, C.fondo, C.suave]; return [
                 <tr key={x.id} style={{ cursor: "pointer", background: abierta === x.id ? "#fafbfd" : "#fff" }} onClick={() => setAbierta(abierta === x.id ? null : x.id)}>
                   <td style={celda} onClick={(ev) => ev.stopPropagation()}>{completo(x)
