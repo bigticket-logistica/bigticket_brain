@@ -15181,6 +15181,7 @@ function MantenedorSupervisores() {
 }
 
 const TABS_CUIDADO_CL = [
+  { id: "ca_alertas", label: "Centro de alertas", desc: "Todas las alertas de la flota en un solo lugar y sus reglas" },
   { id: "ca_ficha", label: "Ficha del activo", desc: "Todo de cada patente: datos, documentos, costos e historial" },
   { id: "ca_documentos", label: "Documentos", desc: "Subir y confirmar SOAP, revisión técnica, permiso, seguro y leasing" },
   { id: "ca_flota", label: "Estado de flota", desc: "Qué pasa hoy con cada vehículo propio" },
