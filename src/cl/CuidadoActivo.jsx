@@ -19,6 +19,8 @@
 //     costos, mantención, auditorías, tareas e historial.
 //   · Documentos: subir PDF o fotos (bucket ca-documentos-cl), revisar y confirmar;
 //     el documento confirmado manda sobre la fecha de la biblia (vw_doc_vigente_cl).
+//   · Reparaciones: solicitud → cotización → aprobación (cobro a) → OC → taller → cierre con gasto
+//     (ca_rep_solicitudes_cl, fn_rep_avanzar), con reparación anterior y precio de referencia.
 //   · No salidas: fn_ca_no_salidas_dia + avisos enviados (ca_avisos_cl).
 //   · Incumplimientos: tareas vencidas sin respuesta, por supervisor y mes.
 //   · Configuración: plazos por tipo, justificaciones y correos (ca_*_cl).
@@ -70,6 +72,7 @@ export default function CuidadoActivoCL({ usuario, sub }) {
   if (sub === "ca_documentos") return <Documentos quien={quien} />;
   if (sub === "ca_flota") return <EstadoFlota />;
   if (sub === "ca_mantenciones") return <Mantenciones quien={quien} />;
+  if (sub === "ca_reparaciones") return <Reparaciones quien={quien} />;
   if (sub === "ca_auditorias") return <Auditorias quien={quien} />;
   if (sub === "ca_nosalidas") return <NoSalidas />;
   if (sub === "ca_incumplimientos") return <Incumplimientos />;
@@ -773,7 +776,7 @@ function ProgramaMnt({ quien }) {
                   </td>
                 </tr>,
                 form?.patente === x.patente && <tr key={x.patente + "f"}><td colSpan={11} style={{ padding: 0, borderBottom: `1px solid ${C.borde}` }}><FormMnt x={x} modo={form.modo} quien={quien} onListo={(m) => { setForm(null); if (m) alert(m); cargar(); }} /></td></tr>,
-                abierta === x.patente && <tr key={x.patente + "h"}><td colSpan={11} style={{ padding: 0, borderBottom: `1px solid ${C.borde}` }}><HistorialMnt patente={x.patente} /></td></tr>,
+                abierta === x.patente && <tr key={x.patente + "h"}><td colSpan={11} style={{ padding: 0, borderBottom: `1px solid ${C.borde}` }}><HistorialMnt patente={x.patente} quien={quien} /></td></tr>,
               ]; })}
             </tbody>
           </table>
@@ -824,10 +827,20 @@ function FormMnt({ x, modo, quien, onListo }) {
   );
 }
 
-function HistorialMnt({ patente }) {
+function HistorialMnt({ patente, quien = "brain" }) {
   const [h, setH] = useState(null);
   const [tipo, setTipo] = useState("");
-  useEffect(() => { api(`ca_mnt_historial_cl?select=*&patente=eq.${encodeURIComponent(patente)}&order=fecha.desc&limit=200`).then(setH).catch(() => setH([])); }, [patente]);
+  const [nuevo, setNuevo] = useState(null);
+  const cargarH = () => api(`ca_mnt_historial_cl?select=*&patente=eq.${encodeURIComponent(patente)}&order=fecha.desc&limit=200`).then(setH).catch(() => setH([]));
+  useEffect(() => { cargarH(); }, [patente]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const guardarNuevo = async () => {
+    try {
+      await rpc("fn_mnt_historial_agregar", { p_tipo: nuevo.tipo, p_patente: patente, p_fecha: nuevo.fecha, p_km: nuevo.km === "" ? null : Number(nuevo.km), p_detalle: nuevo.detalle || null,
+        p_taller: nuevo.taller || null, p_costo: nuevo.costo === "" ? null : Number(nuevo.costo), p_dias: nuevo.dias === "" ? null : Number(nuevo.dias), p_responsable: nuevo.responsable || null, p_por: quien });
+      setNuevo(null); cargarH();
+    } catch (e) { alert(e.message); }
+  };
+  const borrar = async (id) => { if (!window.confirm("¿Borrar este registro?")) return; try { await rpc("fn_mnt_historial_borrar", { p_id: id, p_por: quien }); cargarH(); } catch (e) { alert(e.message); } };
   if (!h) return <div style={{ padding: 14, color: C.tenue, fontSize: 13 }}>Cargando historial…</div>;
   const vis = h.filter((x) => !tipo || x.tipo === tipo);
   const total = vis.reduce((s, x) => s + (Number(x.precio_total) || Number(x.costo) || 0), 0);
@@ -837,7 +850,18 @@ function HistorialMnt({ patente }) {
         <b style={{ color: C.navy }}>Historial de {patente}</b>
         <select style={inp} value={tipo} onChange={(e) => setTipo(e.target.value)}><option value="">Todo</option>{Object.entries(MN_TIPO).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select>
         <span style={{ fontSize: 12.5, color: C.suave }}>{vis.length} registros · ${Math.round(total).toLocaleString("es-CL")}</span>
+        <button style={btn("sec")} onClick={() => setNuevo(nuevo ? null : { tipo: "otro", fecha: hoyCL(), km: "", detalle: "", taller: "", costo: "", dias: "", responsable: "BIGTICKET" })}>{nuevo ? "Cancelar" : "+ Agregar registro"}</button>
       </div>
+      {nuevo && (
+        <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 10, padding: 10, marginBottom: 10, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 8, alignItems: "end" }}>
+          <label style={{ fontSize: 12, color: C.suave }}>Tipo<select style={{ ...inp, width: "100%" }} value={nuevo.tipo} onChange={(e) => setNuevo({ ...nuevo, tipo: e.target.value })}>{Object.entries(MN_TIPO).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></label>
+          {[["fecha", "Fecha", "date"], ["km", "Km", "number"], ["detalle", "Detalle", "text"], ["taller", "Taller", "text"], ["costo", "Costo ($)", "number"], ["dias", "Días en taller", "number"]].map(([k, t, ty]) => (
+            <label key={k} style={{ fontSize: 12, color: C.suave }}>{t}<input type={ty} max={k === "fecha" ? hoyCL() : undefined} style={{ ...inp, width: "100%" }} value={nuevo[k]} onChange={(e) => setNuevo({ ...nuevo, [k]: e.target.value })} /></label>
+          ))}
+          <label style={{ fontSize: 12, color: C.suave }}>Paga<select style={{ ...inp, width: "100%" }} value={nuevo.responsable} onChange={(e) => setNuevo({ ...nuevo, responsable: e.target.value })}><option value="BIGTICKET">BigTicket</option><option value="TERCERO">Tercero</option><option value="SEGURO">Seguro</option></select></label>
+          <button style={btn()} onClick={guardarNuevo}>Guardar</button>
+        </div>
+      )}
       <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, background: "#fff" }}>
         <thead><tr style={{ background: C.fondo, textAlign: "left" }}>{["Fecha", "Tipo", "Km", "Detalle", "Taller", "Costo", "Días"].map((t) => <th key={t} style={{ padding: "6px 8px", color: C.suave }}>{t}</th>)}</tr></thead>
         <tbody>{vis.map((x) => (
@@ -847,7 +871,7 @@ function HistorialMnt({ patente }) {
             <td style={{ padding: "6px 8px" }}>{x.tipo === "mantencion" && x.pauta_km ? `Pauta ${kmf(x.pauta_km)}` : x.detalle || x.item || "—"}</td>
             <td style={{ padding: "6px 8px" }}>{x.taller || "—"}</td>
             <td style={{ padding: "6px 8px" }}>{x.costo || x.precio_total ? `$${Math.round(Number(x.precio_total) || Number(x.costo)).toLocaleString("es-CL")}` : "—"}</td>
-            <td style={{ padding: "6px 8px" }}>{x.dias_taller ?? "—"}</td>
+            <td style={{ padding: "6px 8px" }}>{x.dias_taller ?? "—"}{x.fuente === "brain" && <a href="#" title="Borrar (cargado desde el Brain)" style={{ color: C.rojo, marginLeft: 8 }} onClick={(e) => { e.preventDefault(); borrar(x.id); }}>✕</a>}</td>
           </tr>
         ))}</tbody>
       </table>
@@ -1080,7 +1104,7 @@ function FichaDetalle({ patente, quien, onVolver }) {
         {card("Tareas del supervisor", !d.tareas || d.tareas.length === 0 ? <div style={{ color: C.tenue, fontSize: 13 }}>Sin tareas.</div> :
           d.tareas.map((t) => <div key={t.id} style={{ fontSize: 13, padding: "4px 0", borderBottom: `1px solid ${C.fondo}` }}>{t.titulo || t.tipo}<div style={{ color: C.tenue, fontSize: 12 }}>{(ESTADO[t.estado] || [t.estado])[0]}</div></div>))}
       </div>
-      <div style={{ marginTop: 14, background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, overflow: "hidden" }}><HistorialMnt patente={patente} /></div>
+      <div style={{ marginTop: 14, background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, overflow: "hidden" }}><HistorialMnt patente={patente} quien={quien} /></div>
     </div>
   );
 }
@@ -1214,6 +1238,188 @@ function DetalleDocumento({ doc, quien, onListo }) {
           <button style={btn("sec")} disabled={busy} onClick={rechazar}>Rechazar</button>
         </div>}
         {doc.estado === "confirmado" && <div style={{ fontSize: 12.5, color: C.verde, marginTop: 12 }}>Confirmado por {doc.confirmado_por} el {fh(doc.confirmado_at)}. La fecha ya está en la ficha.</div>}
+      </div>
+    </div>
+  );
+}
+
+// ── Reparaciones ────────────────────────────────────────────────────────────
+const REP_ETAPA = {
+  solicitada: ["Solicitada", "#eef2f8", C.navy], cotizando: ["Cotizando", "#eef2f8", C.navy], para_aprobar: ["Para aprobar", C.ambarT, C.ambar],
+  aprobada: ["Aprobada", C.verdeT, C.verde], en_taller: ["En taller", "#eef2f8", C.navy], cerrada: ["Cerrada", C.fondo, C.suave],
+  rechazada: ["Rechazada", C.rojoT, C.rojo], historica: ["Histórica (biblia)", C.fondo, C.tenue],
+};
+const REP_COBRO = { bigticket: "BigTicket", tercero: "Tercero", seguro: "Seguro" };
+function Reparaciones({ quien }) {
+  const [filas, setFilas] = useState(null);
+  const [f, setF] = useState({ etapa: "abiertas", texto: "" });
+  const [abierta, setAbierta] = useState(null);
+  const [nueva, setNueva] = useState(false);
+  const cargar = () => api("ca_rep_solicitudes_cl?select=*&order=id.desc&limit=1000").then(setFilas).catch(() => setFilas([]));
+  useEffect(() => { cargar(); }, []);
+  const n = (e) => (filas || []).filter((x) => x.etapa === e).length;
+  const abiertas = ["solicitada", "cotizando", "para_aprobar", "aprobada", "en_taller"];
+  const vis = (filas || []).filter((x) => (f.etapa === "abiertas" ? abiertas.includes(x.etapa) : !f.etapa || x.etapa === f.etapa)
+    && (!f.texto || `${x.folio || ""} ${x.patente} ${x.componente || ""} ${x.descripcion || ""} ${x.taller || ""}`.toLowerCase().includes(f.texto.toLowerCase())));
+  const kpi = (t, v, c, e) => (
+    <div onClick={() => setF({ ...f, etapa: f.etapa === e ? "abiertas" : e })} style={{ background: "#fff", border: `1px solid ${f.etapa === e ? c : C.borde}`, borderRadius: 12, padding: "12px 16px", flex: "1 1 120px", cursor: "pointer" }}>
+      <div style={{ fontSize: 24, fontWeight: 800, color: c }}>{v}</div><div style={{ fontSize: 12.5, color: C.suave }}>{t}</div>
+    </div>
+  );
+  const celda = { padding: "8px 10px", borderBottom: `1px solid ${C.borde}`, fontSize: 13, verticalAlign: "top" };
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
+        {kpi("Cotizando", n("solicitada") + n("cotizando"), C.navy, "cotizando")}
+        {kpi("Para aprobar", n("para_aprobar"), C.ambar, "para_aprobar")}
+        {kpi("Aprobadas", n("aprobada"), C.verde, "aprobada")}
+        {kpi("En taller", n("en_taller"), C.navy, "en_taller")}
+        {kpi("Cerradas", n("cerrada"), C.suave, "cerrada")}
+        {kpi("Históricas (biblia)", n("historica"), C.tenue, "historica")}
+      </div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 12 }}>
+        <select style={inp} value={f.etapa} onChange={(e) => setF({ ...f, etapa: e.target.value })}>
+          <option value="abiertas">Abiertas</option>{Object.entries(REP_ETAPA).map(([k, v]) => <option key={k} value={k}>{v[0]}</option>)}<option value="">Todas</option>
+        </select>
+        <input style={{ ...inp, minWidth: 240 }} placeholder="Folio, patente, componente o taller" value={f.texto} onChange={(e) => setF({ ...f, texto: e.target.value })} />
+        <button style={btn()} onClick={() => setNueva(!nueva)}>{nueva ? "Cerrar" : "+ Nueva reparación"}</button>
+      </div>
+      {nueva && <NuevaReparacion quien={quien} onListo={() => { setNueva(false); setF({ ...f, etapa: "abiertas" }); cargar(); }} />}
+      {filas === null ? <div style={{ color: C.tenue }}>Cargando…</div> : (
+        <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 940 }}>
+            <thead><tr style={{ background: C.fondo, textAlign: "left" }}>
+              {["Folio", "Patente", "Componente", "Taller", "Cotizado", "Aprobado", "Cobro a", "Solicitada", "Etapa"].map((h) => <th key={h} style={{ ...celda, fontSize: 12, color: C.suave }}>{h}</th>)}
+            </tr></thead>
+            <tbody>
+              {vis.length === 0 && <tr><td colSpan={9} style={{ ...celda, color: C.tenue, textAlign: "center" }}>Nada con este filtro.</td></tr>}
+              {vis.map((x) => { const e = REP_ETAPA[x.etapa] || [x.etapa, C.fondo, C.suave]; return [
+                <tr key={x.id} style={{ cursor: "pointer", background: abierta === x.id ? "#fafbfd" : "#fff" }} onClick={() => setAbierta(abierta === x.id ? null : x.id)}>
+                  <td style={{ ...celda, fontWeight: 700, color: C.navy }}>{x.folio}</td>
+                  <td style={{ ...celda, fontWeight: 800 }}>{x.patente}</td>
+                  <td style={celda}>{x.componente}<div style={{ color: C.tenue, fontSize: 12 }}>{x.descripcion}</div></td>
+                  <td style={celda}>{x.taller || "—"}</td>
+                  <td style={celda}>{pesos(x.monto_cotizado)}</td>
+                  <td style={celda}>{pesos(x.monto_aprobado)}</td>
+                  <td style={celda}>{REP_COBRO[x.cobro_a] || "—"}</td>
+                  <td style={celda}>{fd(x.fecha_solicitud)}</td>
+                  <td style={celda}>{chip(e[0], e[1], e[2])}</td>
+                </tr>,
+                abierta === x.id && <tr key={x.id + "d"}><td colSpan={9} style={{ padding: 0, borderBottom: `1px solid ${C.borde}` }}><FichaReparacion s={x} quien={quien} onCambio={cargar} /></td></tr>,
+              ]; })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+function NuevaReparacion({ quien, onListo }) {
+  const [d, setD] = useState({ patente: "", componente: "", descripcion: "", origen: "ejecutivo", taller: "", monto: "" });
+  const [talleres, setTalleres] = useState([]);
+  const [msg, setMsg] = useState("");
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { api("ca_mnt_talleres_cl?select=nombre&activo=eq.true&order=nombre").then((r) => setTalleres((r || []).map((x) => x.nombre))).catch(() => {}); }, []);
+  const guardar = async () => {
+    setBusy(true); setMsg("");
+    try { await rpc("fn_rep_crear", { p_patente: d.patente, p_componente: d.componente, p_descripcion: d.descripcion || null, p_origen: d.origen, p_taller: d.taller || null, p_monto: d.monto === "" ? null : Number(d.monto), p_por: quien }); onListo(); }
+    catch (e) { setMsg(e.message); } finally { setBusy(false); }
+  };
+  const campo = (k, t, props = {}) => <label style={{ fontSize: 12, color: C.suave }}>{t}<input style={{ ...inp, width: "100%" }} value={d[k]} onChange={(e) => setD({ ...d, [k]: e.target.value })} {...props} /></label>;
+  return (
+    <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, padding: 16, marginBottom: 14 }}>
+      <div style={{ fontWeight: 800, color: C.navy, marginBottom: 10 }}>Nueva solicitud de reparación</div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 10 }}>
+        {campo("patente", "Patente", { onChange: (e) => setD({ ...d, patente: e.target.value.toUpperCase() }) })}
+        {campo("componente", "Componente", { list: "rep-comp", placeholder: "FRENOS, NEUMATICOS…" })}
+        <datalist id="rep-comp">{["FRENOS", "NEUMATICOS", "EMBRAGUE", "TREN DELANTERO", "BANDEJAS", "SISTEMA ELECTRICO", "PARABRISAS", "LUCES", "PUERTAS TRASERAS", "DIAGNOSTICO", "AMORTIGUADORES", "BATERIA"].map((c) => <option key={c} value={c} />)}</datalist>
+        <label style={{ fontSize: 12, color: C.suave }}>Origen<select style={{ ...inp, width: "100%" }} value={d.origen} onChange={(e) => setD({ ...d, origen: e.target.value })}>
+          <option value="ejecutivo">Ejecutivo</option><option value="supervisor">Pedido del supervisor</option><option value="auditoria">Hallazgo de auditoría</option><option value="verificador">Alerta de vida útil</option></select></label>
+        {campo("taller", "Taller (opcional)", { list: "rep-taller" })}
+        <datalist id="rep-taller">{talleres.map((t) => <option key={t} value={t} />)}</datalist>
+        {campo("monto", "Monto cotizado (opcional)", { type: "number" })}
+      </div>
+      <div style={{ marginTop: 10 }}>{campo("descripcion", "Descripción")}</div>
+      <div style={{ fontSize: 12, color: C.suave, marginTop: 8 }}>Si ya tienes el monto cotizado, queda «Para aprobar»; si no, queda «Cotizando».</div>
+      {msg && <div style={{ color: C.rojo, fontSize: 13, marginTop: 8 }}>{msg}</div>}
+      <div style={{ marginTop: 10 }}><button style={btn()} disabled={busy} onClick={guardar}>{busy ? "Guardando…" : "Crear solicitud"}</button></div>
+    </div>
+  );
+}
+function FichaReparacion({ s, quien, onCambio }) {
+  const [ref, setRef] = useState(null);
+  const [d, setD] = useState({ monto: s.monto_cotizado || "", taller: s.taller || "", cobro_a: s.cobro_a || "", nota: "", oc: s.oc_numero || "", fecha: hoyCL(), gasto: "", km: "", dias: "", garantia_meses: "" });
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+  useEffect(() => { rpc("fn_rep_referencia", { p_id: s.id }).then(setRef).catch(() => setRef({})); }, [s.id]);
+  const accion = async (a, datos) => {
+    setBusy(true); setMsg("");
+    try { const r = await rpc("fn_rep_avanzar", { p_id: s.id, p_accion: a, p_datos: datos, p_por: quien }); if (r && r !== "Listo.") alert(r); onCambio(); }
+    catch (e) { setMsg(e.message); } finally { setBusy(false); }
+  };
+  const med = ref?.mediana ? Number(ref.mediana) : null;
+  const base = Number(s.monto_cotizado || d.monto) || null;
+  const dif = med && base ? Math.round((base / med - 1) * 100) : null;
+  const fila = (k, v) => <div style={{ display: "flex", justifyContent: "space-between", gap: 10, fontSize: 13, padding: "4px 0", borderBottom: `1px solid ${C.fondo}` }}><span style={{ color: C.suave }}>{k}</span><b style={{ textAlign: "right" }}>{v ?? "—"}</b></div>;
+  const campo = (k, t, props = {}) => <label style={{ fontSize: 12, color: C.suave }}>{t}<input style={{ ...inp, width: "100%" }} value={d[k]} onChange={(e) => setD({ ...d, [k]: e.target.value })} {...props} /></label>;
+  return (
+    <div style={{ padding: 14, background: "#fafbfd", display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 14 }}>
+      <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, padding: 12 }}>
+        <div style={{ fontWeight: 800, color: C.navy, marginBottom: 6 }}>Ficha de autorización</div>
+        {fila("Patente · modelo", `${s.patente} · ${ref?.modelo || "—"}`)}
+        {fila("Componente", s.componente)}
+        {fila("Origen", s.origen)}
+        {fila("Reparación anterior del componente", ref?.anterior ? `${fd(ref.anterior.fecha)} · ${ref.anterior.taller || "—"} · ${pesos(ref.anterior.costo)}` : "no hay")}
+        {fila(`Precio de referencia (mediana, ${ref?.casos || 0} casos)`, med ? pesos(med) : "sin casos")}
+        {dif !== null && fila("Cotizado vs referencia", <span style={{ color: dif > 20 ? C.rojo : dif < -20 ? C.verde : C.texto }}>{dif > 0 ? "+" : ""}{dif}%</span>)}
+        {fila("Decisión", s.decision ? `${s.decision} · ${s.decision_por || ""} · ${fh(s.decision_at)}` : "pendiente")}
+        {s.decision_nota && <div style={{ fontSize: 12.5, color: C.suave, marginTop: 4 }}>{s.decision_nota}</div>}
+        {s.gasto_final && fila("Gasto final", pesos(s.gasto_final))}
+        {(ref?.eventos || []).length > 0 && <div style={{ fontSize: 11.5, color: C.tenue, marginTop: 8 }}>{ref.eventos.map((e, i) => <div key={i}>{fh(e.at)} · {e.accion} · {e.por}</div>)}</div>}
+      </div>
+      <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, padding: 12 }}>
+        {["solicitada", "cotizando"].includes(s.etapa) && <>
+          <div style={{ fontWeight: 800, color: C.navy, marginBottom: 6 }}>Registrar la cotización</div>
+          <div style={{ display: "grid", gap: 8 }}>{campo("taller", "Taller")}{campo("monto", "Monto cotizado", { type: "number" })}</div>
+          <button style={{ ...btn(), marginTop: 10 }} disabled={busy} onClick={() => accion("cotizar", { monto: Number(d.monto) || null, taller: d.taller })}>Pasar a «Para aprobar»</button>
+        </>}
+        {s.etapa === "para_aprobar" && <>
+          <div style={{ fontWeight: 800, color: C.navy, marginBottom: 6 }}>Decisión</div>
+          <div style={{ display: "grid", gap: 8 }}>
+            {campo("monto", "Monto a aprobar", { type: "number" })}
+            <label style={{ fontSize: 12, color: C.suave }}>Cobro a (obligatorio para autorizar)<select style={{ ...inp, width: "100%" }} value={d.cobro_a} onChange={(e) => setD({ ...d, cobro_a: e.target.value })}>
+              <option value="">Elige…</option>{Object.entries(REP_COBRO).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></label>
+            {campo("nota", "Nota (opcional)")}
+          </div>
+          <div style={{ display: "flex", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
+            <button style={btn("verde")} disabled={busy} onClick={() => accion("decidir", { decision: "autorizada", cobro_a: d.cobro_a, monto: Number(d.monto) || null, nota: d.nota })}>Autorizar</button>
+            <button style={btn("rojo")} disabled={busy} onClick={() => accion("decidir", { decision: "rechazada", nota: d.nota })}>Rechazar</button>
+            <button style={btn("sec")} disabled={busy} onClick={() => accion("decidir", { decision: "pendiente", nota: d.nota })}>Dejar pendiente</button>
+          </div>
+        </>}
+        {s.etapa === "aprobada" && <>
+          <div style={{ fontWeight: 800, color: C.navy, marginBottom: 6 }}>Aprobada · {pesos(s.monto_aprobado)} · cobro a {REP_COBRO[s.cobro_a]}</div>
+          <div style={{ display: "flex", gap: 6, alignItems: "flex-end", flexWrap: "wrap" }}>
+            <div style={{ flex: "1 1 160px" }}>{campo("oc", "N° de OC (opcional)")}</div>
+            <button style={btn("sec")} disabled={busy} onClick={() => accion("oc", { oc: d.oc })}>Guardar OC</button>
+          </div>
+          <div style={{ display: "flex", gap: 6, alignItems: "flex-end", flexWrap: "wrap", marginTop: 10 }}>
+            <div style={{ flex: "1 1 160px" }}>{campo("fecha", "Ingreso a taller", { type: "date", max: hoyCL() })}</div>
+            <button style={btn()} disabled={busy} onClick={() => accion("taller", { fecha: d.fecha })}>Pasar a «En taller»</button>
+          </div>
+        </>}
+        {["aprobada", "en_taller"].includes(s.etapa) && <>
+          <div style={{ fontWeight: 800, color: C.navy, margin: "14px 0 6px" }}>Cerrar con el gasto real</div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+            {campo("fecha", "Fecha de salida", { type: "date", max: hoyCL() })}{campo("gasto", "Gasto final ($)", { type: "number" })}
+            {campo("km", "Km (opcional)", { type: "number" })}{campo("dias", "Días en taller (opcional)", { type: "number" })}
+            {campo("garantia_meses", "Garantía (meses)", { type: "number" })}
+          </div>
+          <button style={{ ...btn("verde"), marginTop: 10 }} disabled={busy} onClick={() => accion("cerrar", { fecha: d.fecha, gasto: Number(d.gasto) || null, km: d.km === "" ? null : Number(d.km), dias: d.dias === "" ? null : Number(d.dias), garantia_meses: d.garantia_meses === "" ? null : Number(d.garantia_meses) })}>Cerrar reparación</button>
+          <div style={{ fontSize: 12, color: C.tenue, marginTop: 6 }}>Queda en el historial del vehículo. Si el gasto supera lo aprobado en más de 10 %, se avisa (no bloquea).</div>
+        </>}
+        {["cerrada", "rechazada", "historica"].includes(s.etapa) && <div style={{ fontSize: 13, color: C.suave }}>{s.etapa === "historica" ? "Solicitud aprobada que vino de la planilla de Adriana. Solo para consulta." : `Solicitud ${s.etapa}.`}</div>}
+        {msg && <div style={{ color: C.rojo, fontSize: 13, marginTop: 8 }}>{msg}</div>}
       </div>
     </div>
   );
