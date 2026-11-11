@@ -45,6 +45,7 @@ async function api(path, o = {}) {
     method: o.method || "GET",
     headers: { apikey: CL_KEY, Authorization: `Bearer ${CL_KEY}`, "Content-Type": "application/json", ...(o.headers || {}) },
     body: o.body,
+    cache: "no-store",   // siempre datos frescos (sin parámetros extra en la URL: Supabase los toma como filtros)
   });
   if (!r.ok) {
     let msg = await r.text();
@@ -1176,7 +1177,7 @@ function Documentos({ quien }) {
   const [errorCarga, setErrorCarga] = useState("");
   const cargar = async () => {
     setCargando(true);
-    try { setFilas(await api(`ca_documentos_cl?select=*&order=cargado_at.desc&limit=2000&_=${Date.now()}`)); setHora(new Date()); setErrorCarga(""); }
+    try { setFilas(await api(`ca_documentos_cl?select=*&order=cargado_at.desc&limit=2000`)); setHora(new Date()); setErrorCarga(""); }
     catch (e) { setErrorCarga(`No se pudo cargar la lista (${e.message}). Los documentos no se pierden: pulsa «Actualizar» en unos segundos.`); setFilas((x) => x || []); }
     finally { setCargando(false); }
   };
