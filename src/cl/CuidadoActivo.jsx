@@ -83,7 +83,7 @@ export default function CuidadoActivoCL({ usuario, sub }) {
   if (sub === "ca_ficha") return <FichaActivo quien={quien} />;
   if (sub === "ca_documentos") return <Documentos quien={quien} />;
   if (sub === "ca_flota") return <EstadoFlota />;
-  if (sub === "ca_uso") return <UsoDetenciones />;
+  if (sub === "ca_uso") return <UsoDetenciones quien={quien} />;
   if (sub === "ca_mantenciones") return <Mantenciones quien={quien} />;
   if (sub === "ca_reparaciones") return <Reparaciones quien={quien} />;
   if (sub === "ca_siniestros") return <Siniestros quien={quien} />;
@@ -2052,9 +2052,41 @@ function ReglasAlertas({ quien, puede }) {
 const UZ = { calle: ["Calle", C.ambarT, C.ambar], bodega: ["Bodega", C.fondo, C.suave], estacionamiento: ["Su estacionamiento", C.fondo, C.suave] };
 const UC = {
   sin_respaldo: ["Sin respaldo", C.rojoT, C.rojo], entrega_con_exceso: ["Entrega con exceso", C.ambarT, C.ambar],
-  entrega: ["Entrega", C.verdeT, C.verde], fuera_de_ruta: ["Fuera de ruta", "#eef2f8", C.navy], operativa: ["Operativa", C.fondo, C.suave],
+  entrega: ["Entrega", C.verdeT, C.verde], interrupcion: ["Interrupción registrada", C.verdeT, C.verde], interrupcion_excedida: ["Interrupción excedida", C.ambarT, C.ambar],
+  fuera_de_ruta: ["Fuera de ruta", "#eef2f8", C.navy], operativa: ["Operativa", C.fondo, C.suave],
 };
-function UsoDetenciones() {
+function ReglasDetencion({ quien, onCambio }) {
+  const [abierto, setAbierto] = useState(false);
+  const [cfg, setCfg] = useState([]);
+  const [msg, setMsg] = useState("");
+  const cargar = () => api("ca_config_cl?clave=like.det_*&select=clave,valor,descripcion&order=clave").then(setCfg).catch(() => setCfg([]));
+  useEffect(() => { if (abierto) cargar(); }, [abierto]);
+  const guardar = async (clave, valor) => {
+    setMsg("");
+    try { await rpc("fn_ca_mantenedor_guardar", { p_tabla: "ca_config_cl", p_clave: clave, p_campo: "valor", p_valor: String(valor), p_por: quien }); await cargar(); setMsg("Guardado. La clasificación se recalcula con el valor nuevo."); onCambio(); }
+    catch (e) { setMsg(e.message); }
+  };
+  const nombre = { det_umbral_min: "Umbral de detención (min)", det_radio_m: "Radio de la entrega (m)", det_margen_min: "Margen de tiempo (min)", det_min_por_entrega: "Minutos por parada de MELI",
+    det_colacion_max_min: "Colación: máximo (min)", det_colacion_tras_h: "Colación: desde las N horas de ruta", det_bano_max_min: "Baño: máximo por pausa (min)", det_carga_max_min: "Carga eléctrica: máximo (min)" };
+  return (
+    <div style={{ marginBottom: 12 }}>
+      <a href="#" style={{ color: C.navy, fontSize: 13, fontWeight: 700 }} onClick={(e) => { e.preventDefault(); setAbierto(!abierto); }}>{abierto ? "▾" : "▸"} Reglas del cruce (editables)</a>
+      {abierto && (
+        <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, padding: 12, marginTop: 8, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))", gap: 10 }}>
+          {cfg.map((c) => (
+            <label key={c.clave} style={{ fontSize: 12, color: C.suave }}>
+              <b style={{ color: C.texto }}>{nombre[c.clave] || c.clave}</b>
+              <input type="number" style={{ ...inp, width: "100%", marginTop: 4 }} defaultValue={c.valor} onBlur={(e) => e.target.value !== c.valor && guardar(c.clave, e.target.value)} />
+              <div style={{ fontSize: 11.5, color: C.tenue, marginTop: 2 }}>{c.descripcion}</div>
+            </label>
+          ))}
+          <div style={{ gridColumn: "1 / -1", fontSize: 12, color: msg.startsWith("Guardado") ? C.verde : msg ? C.rojo : C.tenue }}>{msg || "Cada cambio queda en el historial de Configuración. El umbral también define qué paradas guarda el programa de Geotab desde la próxima pasada."}</div>
+        </div>
+      )}
+    </div>
+  );
+}
+function UsoDetenciones({ quien }) {
   const [fecha, setFecha] = useState(hoyCL());
   const [filas, setFilas] = useState(null);
   const [f, setF] = useState({ vista: "revisar", texto: "" });
@@ -2065,7 +2097,7 @@ function UsoDetenciones() {
   useEffect(() => { setFilas(null); cargar(); }, [fecha]);   // eslint-disable-line react-hooks/exhaustive-deps
   const todos = filas || [];
   const n = (fn) => todos.filter(fn).length;
-  const vis = todos.filter((x) => (f.vista === "revisar" ? ["sin_respaldo", "entrega_con_exceso"].includes(x.clasificacion) : f.vista === "todas" ? true : x.clasificacion === f.vista)
+  const vis = todos.filter((x) => (f.vista === "revisar" ? ["sin_respaldo", "entrega_con_exceso", "interrupcion_excedida"].includes(x.clasificacion) : f.vista === "todas" ? true : x.clasificacion === f.vista)
     && (!f.texto || `${x.patente} ${x.conductor || ""}`.toLowerCase().includes(f.texto.toLowerCase())));
   const kpi = (t, v, c, k) => <div onClick={() => setF({ ...f, vista: k })} style={{ background: "#fff", border: `1px solid ${f.vista === k ? c : C.borde}`, borderRadius: 12, padding: "12px 16px", flex: "1 1 130px", cursor: "pointer" }}><div style={{ fontSize: 24, fontWeight: 800, color: c }}>{v}</div><div style={{ fontSize: 12.5, color: C.suave }}>{t}</div></div>;
   const celda = { padding: "8px 10px", borderBottom: `1px solid ${C.borde}`, fontSize: 13, verticalAlign: "top" };
@@ -2073,14 +2105,16 @@ function UsoDetenciones() {
   return (
     <div>
       <div style={{ background: "#eef2f8", borderRadius: 10, padding: "10px 12px", fontSize: 12.5, color: C.navy, marginBottom: 12 }}>
-        Cada parada de 10 min o más de Geotab se cruza con las entregas y los intentos fallidos de MELI de esa patente (a menos de 150 m y en la misma ventana de tiempo, editable en Configuración).
+        Cada parada de 10 min o más de Geotab se cruza con las entregas y los intentos fallidos de MELI de esa patente y con las interrupciones (colación, baño, carga) que registra el transportista en su portal (a menos de 150 m y en la misma ventana de tiempo, editable en Configuración).
         <b> Sin respaldo</b> = en la calle, durante la ruta y sin ninguna entrega cerca. <b>Entrega con exceso</b> = hubo entrega, pero la parada duró bastante más de lo que la justifica. Las entregas de MELI llegan con 1 a 2 horas de atraso. Todavía no se crean tareas.
       </div>
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
-        {kpi("Para revisar", n((x) => ["sin_respaldo", "entrega_con_exceso"].includes(x.clasificacion)), C.rojo, "revisar")}
+        {kpi("Para revisar", n((x) => ["sin_respaldo", "entrega_con_exceso", "interrupcion_excedida"].includes(x.clasificacion)), C.rojo, "revisar")}
         {kpi("Sin respaldo", n((x) => x.clasificacion === "sin_respaldo"), C.rojo, "sin_respaldo")}
         {kpi("Entrega con exceso", n((x) => x.clasificacion === "entrega_con_exceso"), C.ambar, "entrega_con_exceso")}
+        {kpi("Interrupción excedida", n((x) => x.clasificacion === "interrupcion_excedida"), C.ambar, "interrupcion_excedida")}
         {kpi("Entregas", n((x) => x.clasificacion === "entrega"), C.verde, "entrega")}
+        {kpi("Interrupciones registradas", n((x) => x.clasificacion === "interrupcion"), C.verde, "interrupcion")}
         {kpi("Fuera de ruta", n((x) => x.clasificacion === "fuera_de_ruta"), C.navy, "fuera_de_ruta")}
         {kpi("Operativas (bodega / estacionamiento)", n((x) => x.clasificacion === "operativa"), C.suave, "operativa")}
         {kpi("Todas", todos.length, C.texto, "todas")}
@@ -2091,12 +2125,13 @@ function UsoDetenciones() {
         <button style={btn("sec")} onClick={cargar}>Actualizar</button>
         <span style={{ fontSize: 12, color: C.tenue }}>Paradas de Geotab cada 1 hora · entregas de MELI según el scraper de detalle</span>
       </div>
+      <ReglasDetencion quien={quien} onCambio={cargar} />
       {filas === null ? <div style={{ color: C.tenue }}>Cargando…</div> : (
         <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1000 }}>
-            <thead><tr style={{ background: C.fondo, textAlign: "left" }}>{["Patente", "Desde – hasta", "Min", "Clasificación", "Entregas MELI cerca", "Sin explicar", "Zona · ruta", "Conductor", "Mapa"].map((h) => <th key={h} style={{ ...celda, fontSize: 12, color: C.suave }}>{h}</th>)}</tr></thead>
+            <thead><tr style={{ background: C.fondo, textAlign: "left" }}>{["Patente", "Desde – hasta", "Min", "Clasificación", "Entregas MELI cerca", "Interrupción", "Sin explicar", "Zona · ruta", "Conductor", "Mapa"].map((h) => <th key={h} style={{ ...celda, fontSize: 12, color: C.suave }}>{h}</th>)}</tr></thead>
             <tbody>
-              {vis.length === 0 && <tr><td colSpan={9} style={{ ...celda, color: C.tenue, textAlign: "center" }}>Sin paradas con este filtro.</td></tr>}
+              {vis.length === 0 && <tr><td colSpan={10} style={{ ...celda, color: C.tenue, textAlign: "center" }}>Sin paradas con este filtro.</td></tr>}
               {vis.map((x) => { const c = UC[x.clasificacion] || [x.clasificacion, C.fondo, C.suave]; const z = UZ[x.zona] || [x.zona]; return (
                 <tr key={x.id}>
                   <td style={{ ...celda, fontWeight: 800, color: C.navy }}>{x.patente}</td>
@@ -2104,6 +2139,7 @@ function UsoDetenciones() {
                   <td style={{ ...celda, fontWeight: 700, color: x.minutos >= 45 ? C.rojo : C.texto }}>{x.minutos}</td>
                   <td style={celda}>{chip(c[0], c[1], c[2])}</td>
                   <td style={celda}>{x.paquetes || x.fallidos ? <>{x.paradas_meli} parada{x.paradas_meli === 1 ? "" : "s"} · {x.paquetes} paq.{x.fallidos ? ` · ${x.fallidos} fallido${x.fallidos === 1 ? "" : "s"}` : ""}<div style={{ color: C.tenue, fontSize: 12 }}>a {x.dist_min_m} m</div></> : <span style={{ color: C.tenue }}>—</span>}</td>
+                  <td style={celda}>{x.interrupciones ? <>{String(x.interrupcion_tipos || "").replace("colacion", "colación").replace("bano", "baño")}<div style={{ color: C.tenue, fontSize: 12 }}>justifica {x.interrupcion_min} min</div>{x.colacion_temprana && <div style={{ color: C.ambar, fontSize: 12 }}>colación antes de las 4 h de ruta</div>}</> : <span style={{ color: C.tenue }}>—</span>}</td>
                   <td style={{ ...celda, fontWeight: 700, color: x.min_sin_explicar > 10 && x.clasificacion !== "operativa" ? C.rojo : C.suave }}>{x.clasificacion === "operativa" ? "—" : `${x.min_sin_explicar} min`}</td>
                   <td style={celda}>{z[0]}{x.zona_nombre ? ` · ${x.zona_nombre}` : ""}<div style={{ color: C.tenue, fontSize: 12 }}>{x.hora_inicio_ruta ? `ruta ${x.hora_inicio_ruta} – ${x.hora_fin_ruta || "en curso"}` : "sin ruta"}</div></td>
                   <td style={celda}>{x.conductor || "—"}</td>
@@ -2265,9 +2301,9 @@ function Configuracion({ quien }) {
         </table>
       </div>
       <div>
-        <div style={{ fontWeight: 800, color: C.navy, marginBottom: 6 }}>Plazos de auditorías y bitácora</div>
+        <div style={{ fontWeight: 800, color: C.navy, marginBottom: 6 }}>Plazos y reglas (auditorías, flota, detenciones, mantenciones, documentos, reparaciones, siniestros)</div>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, background: "#fff", border: `1px solid ${C.borde}`, marginBottom: 18 }}>
-          <tbody>{cfg.filter((c) => /^(aud_|flota_|auditoria_)/.test(c.clave)).map((c) => (
+          <tbody>{cfg.filter((c) => /^(aud_|flota_|auditoria_|det_|mnt_|doc_|rep_|vu_|sin_|ficha_)/.test(c.clave)).map((c) => (
             <tr key={c.clave}>
               <td style={{ ...celda, width: 260 }}><b>{c.descripcion || c.clave}</b><div style={{ fontSize: 11.5, color: C.tenue }}>{c.clave}</div></td>
               <td style={celda}><input style={{ ...inp, width: 140 }} defaultValue={c.valor || ""} onBlur={(e) => { if (e.target.value !== (c.valor || "")) guardar("ca_config_cl", c.clave, "valor", e.target.value); }} /></td>
@@ -2276,7 +2312,7 @@ function Configuracion({ quien }) {
         </table>
         <div style={{ fontWeight: 800, color: C.navy, marginBottom: 6 }}>Correos y enlaces</div>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, background: "#fff", border: `1px solid ${C.borde}` }}>
-          <tbody>{cfg.filter((c) => !/^(aud_|flota_|auditoria_)/.test(c.clave)).map((c) => (
+          <tbody>{cfg.filter((c) => !/^(aud_|flota_|auditoria_|det_|mnt_|doc_|rep_|vu_|sin_|ficha_)/.test(c.clave)).map((c) => (
             <tr key={c.clave}>
               <td style={{ ...celda, width: 260 }}><b>{c.clave}</b><div style={{ fontSize: 11.5, color: C.tenue }}>{c.descripcion}</div></td>
               <td style={celda}><input style={{ ...inp, width: "100%" }} defaultValue={c.valor || ""} onBlur={(e) => { if (e.target.value !== (c.valor || "")) guardar("ca_config_cl", c.clave, "valor", e.target.value); }} /></td>
