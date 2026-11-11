@@ -1072,7 +1072,8 @@ function FichaDetalle({ patente, quien, onVolver }) {
         {card("Documentos", <>
           {(d.documentos || []).map((x) => { const e = DOC_EST[x.estado] || [x.estado, C.fondo, C.suave]; return (
             <div key={x.nombre} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, fontSize: 13, padding: "5px 0", borderBottom: `1px solid ${C.fondo}` }}>
-              <span><b>{x.nombre}</b>{x.detalle && <div style={{ color: C.tenue, fontSize: 12 }}>{x.detalle}</div>}</span>
+              <span><b>{x.nombre}</b>{x.detalle && <div style={{ color: C.tenue, fontSize: 12 }}>{x.detalle}</div>}
+                {x.falta_vigente && <div style={{ color: C.ambar, fontSize: 11.5 }}>El último archivo subido vence el {fd(x.doc_vence)}: falta subir el vigente</div>}</span>
               <span style={{ textAlign: "right" }}>{fd(x.vence)} {chip(e[0], e[1], e[2])}
                 <div style={{ fontSize: 11.5, marginTop: 2 }}>
                   {x.path ? <a href="#" style={{ color: C.verde }} onClick={async (ev) => { ev.preventDefault(); const u = await urlFirmada(x.path, "ca-documentos-cl"); if (u) window.open(u, "_blank"); }}>📎 Ver respaldo</a> : <span style={{ color: C.tenue }}>sin respaldo</span>}
@@ -1313,7 +1314,7 @@ function DetalleDocumento({ doc, quien, onListo }) {
     catch (e) { setMsg(e.message); } finally { setBusy(false); }
   };
   const rechazar = async () => {
-    const nota = window.prompt("¿Por qué se rechaza? (por ejemplo: ilegible, no es del vehículo, duplicado)"); if (nota === null) return;
+    const nota = window.prompt("¿Por qué se rechaza? (ilegible, no es del vehículo, duplicado, no es el documento)\n\nOjo: si el documento solo está VENCIDO, no lo rechaces: confírmalo. Queda como historial y la ficha avisa que hay que renovarlo."); if (nota === null) return;
     setBusy(true); try { await rpc("fn_doc_rechazar", { p_id: doc.id, p_nota: nota, p_por: quien }); onListo(); } catch (e) { setMsg(e.message); } finally { setBusy(false); }
   };
   const campo = (k, t, props = {}) => <label style={{ fontSize: 12, color: C.suave }}>{t}<input style={{ ...inp, width: "100%" }} value={d[k]} onChange={(e) => setD({ ...d, [k]: e.target.value })} {...props} /></label>;
