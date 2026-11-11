@@ -28,7 +28,8 @@
 //   · Historial de gastos: vw_gastos_cl (componente estandarizado), registro con OC del Brain y datos de OT/OC/factura.
 //   · Centro de alertas: bandeja única (fn_alertas_cl) y las 21 reglas de Adriana (ca_alertas_reglas_cl),
 //     editables solo por Superadmin. Todavía no envía correos ni WhatsApp.
-//   · Uso y detenciones (paso U2): paradas de Geotab (gps_paradas_cl, programa paradas-cl) clasificadas por zona y ruta.
+//   · Uso y detenciones (U3): paradas de Geotab cruzadas con las entregas y fallidos de MELI (vw_paradas_cl):
+//     sin respaldo, entrega con exceso, entrega, fuera de ruta u operativa. Todavía no crea tareas.
 //   · No salidas: fn_ca_no_salidas_dia + avisos enviados (ca_avisos_cl).
 //   · Incumplimientos: tareas vencidas sin respuesta, por supervisor y mes.
 //   · Configuración: plazos por tipo, justificaciones y correos (ca_*_cl).
@@ -2049,18 +2050,22 @@ function ReglasAlertas({ quien, puede }) {
 
 // ── Uso y detenciones ───────────────────────────────────────────────────────
 const UZ = { calle: ["Calle", C.ambarT, C.ambar], bodega: ["Bodega", C.fondo, C.suave], estacionamiento: ["Su estacionamiento", C.fondo, C.suave] };
+const UC = {
+  sin_respaldo: ["Sin respaldo", C.rojoT, C.rojo], entrega_con_exceso: ["Entrega con exceso", C.ambarT, C.ambar],
+  entrega: ["Entrega", C.verdeT, C.verde], fuera_de_ruta: ["Fuera de ruta", "#eef2f8", C.navy], operativa: ["Operativa", C.fondo, C.suave],
+};
 function UsoDetenciones() {
   const [fecha, setFecha] = useState(hoyCL());
   const [filas, setFilas] = useState(null);
-  const [f, setF] = useState({ vista: "calle_ruta", texto: "" });
+  const [f, setF] = useState({ vista: "revisar", texto: "" });
   const cargar = () => {
     const d0 = new Date(`${fecha}T00:00:00-03:00`), d1 = new Date(d0.getTime() + 864e5);
-    api(`gps_paradas_cl?select=*&inicio=gte.${d0.toISOString()}&inicio=lt.${d1.toISOString()}&order=inicio.desc&limit=3000`).then(setFilas).catch(() => setFilas([]));
+    api(`vw_paradas_cl?select=*&inicio=gte.${d0.toISOString()}&inicio=lt.${d1.toISOString()}&order=inicio.desc&limit=3000`).then(setFilas).catch(() => setFilas([]));
   };
   useEffect(() => { setFilas(null); cargar(); }, [fecha]);   // eslint-disable-line react-hooks/exhaustive-deps
   const todos = filas || [];
   const n = (fn) => todos.filter(fn).length;
-  const vis = todos.filter((x) => (f.vista === "calle_ruta" ? x.zona === "calle" && x.en_ruta : f.vista === "calle" ? x.zona === "calle" : f.vista === "todas" ? true : x.zona === f.vista)
+  const vis = todos.filter((x) => (f.vista === "revisar" ? ["sin_respaldo", "entrega_con_exceso"].includes(x.clasificacion) : f.vista === "todas" ? true : x.clasificacion === f.vista)
     && (!f.texto || `${x.patente} ${x.conductor || ""}`.toLowerCase().includes(f.texto.toLowerCase())));
   const kpi = (t, v, c, k) => <div onClick={() => setF({ ...f, vista: k })} style={{ background: "#fff", border: `1px solid ${f.vista === k ? c : C.borde}`, borderRadius: 12, padding: "12px 16px", flex: "1 1 130px", cursor: "pointer" }}><div style={{ fontSize: 24, fontWeight: 800, color: c }}>{v}</div><div style={{ fontSize: 12.5, color: C.suave }}>{t}</div></div>;
   const celda = { padding: "8px 10px", borderBottom: `1px solid ${C.borde}`, fontSize: 13, verticalAlign: "top" };
@@ -2068,34 +2073,39 @@ function UsoDetenciones() {
   return (
     <div>
       <div style={{ background: "#eef2f8", borderRadius: 10, padding: "10px 12px", fontSize: 12.5, color: C.navy, marginBottom: 12 }}>
-        Paso 1 de Uso y detenciones: se ven todas las paradas de 10 min o más de la flota propia, clasificadas. Todavía <b>no</b> se cruzan con las entregas de Logistic ni con las interrupciones de ruta, así que una parada en la calle durante la ruta <b>no</b> es necesariamente una detención. No se crean tareas.
+        Cada parada de 10 min o más de Geotab se cruza con las entregas y los intentos fallidos de MELI de esa patente (a menos de 150 m y en la misma ventana de tiempo, editable en Configuración).
+        <b> Sin respaldo</b> = en la calle, durante la ruta y sin ninguna entrega cerca. <b>Entrega con exceso</b> = hubo entrega, pero la parada duró bastante más de lo que la justifica. Las entregas de MELI llegan con 1 a 2 horas de atraso. Todavía no se crean tareas.
       </div>
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
-        {kpi("En la calle durante la ruta", n((x) => x.zona === "calle" && x.en_ruta), C.ambar, "calle_ruta")}
-        {kpi("En la calle (todas)", n((x) => x.zona === "calle"), C.navy, "calle")}
-        {kpi("En bodega", n((x) => x.zona === "bodega"), C.suave, "bodega")}
-        {kpi("En su estacionamiento", n((x) => x.zona === "estacionamiento"), C.suave, "estacionamiento")}
+        {kpi("Para revisar", n((x) => ["sin_respaldo", "entrega_con_exceso"].includes(x.clasificacion)), C.rojo, "revisar")}
+        {kpi("Sin respaldo", n((x) => x.clasificacion === "sin_respaldo"), C.rojo, "sin_respaldo")}
+        {kpi("Entrega con exceso", n((x) => x.clasificacion === "entrega_con_exceso"), C.ambar, "entrega_con_exceso")}
+        {kpi("Entregas", n((x) => x.clasificacion === "entrega"), C.verde, "entrega")}
+        {kpi("Fuera de ruta", n((x) => x.clasificacion === "fuera_de_ruta"), C.navy, "fuera_de_ruta")}
+        {kpi("Operativas (bodega / estacionamiento)", n((x) => x.clasificacion === "operativa"), C.suave, "operativa")}
         {kpi("Todas", todos.length, C.texto, "todas")}
       </div>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 12 }}>
         <input type="date" style={inp} value={fecha} max={hoyCL()} onChange={(e) => e.target.value && setFecha(e.target.value)} />
         <input style={{ ...inp, minWidth: 220 }} placeholder="Patente o conductor" value={f.texto} onChange={(e) => setF({ ...f, texto: e.target.value })} />
         <button style={btn("sec")} onClick={cargar}>Actualizar</button>
-        <span style={{ fontSize: 12, color: C.tenue }}>Geotab, cada 1 hora (últimas 8 horas)</span>
+        <span style={{ fontSize: 12, color: C.tenue }}>Paradas de Geotab cada 1 hora · entregas de MELI según el scraper de detalle</span>
       </div>
       {filas === null ? <div style={{ color: C.tenue }}>Cargando…</div> : (
         <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 900 }}>
-            <thead><tr style={{ background: C.fondo, textAlign: "left" }}>{["Patente", "Desde", "Hasta", "Minutos", "Zona", "Ruta del día", "Conductor", "Mapa"].map((h) => <th key={h} style={{ ...celda, fontSize: 12, color: C.suave }}>{h}</th>)}</tr></thead>
+          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1000 }}>
+            <thead><tr style={{ background: C.fondo, textAlign: "left" }}>{["Patente", "Desde – hasta", "Min", "Clasificación", "Entregas MELI cerca", "Sin explicar", "Zona · ruta", "Conductor", "Mapa"].map((h) => <th key={h} style={{ ...celda, fontSize: 12, color: C.suave }}>{h}</th>)}</tr></thead>
             <tbody>
-              {vis.length === 0 && <tr><td colSpan={8} style={{ ...celda, color: C.tenue, textAlign: "center" }}>Sin paradas con este filtro.</td></tr>}
-              {vis.map((x) => { const z = UZ[x.zona] || [x.zona, C.fondo, C.suave]; return (
+              {vis.length === 0 && <tr><td colSpan={9} style={{ ...celda, color: C.tenue, textAlign: "center" }}>Sin paradas con este filtro.</td></tr>}
+              {vis.map((x) => { const c = UC[x.clasificacion] || [x.clasificacion, C.fondo, C.suave]; const z = UZ[x.zona] || [x.zona]; return (
                 <tr key={x.id}>
                   <td style={{ ...celda, fontWeight: 800, color: C.navy }}>{x.patente}</td>
-                  <td style={celda}>{hora(x.inicio)}</td><td style={celda}>{x.en_curso ? <b style={{ color: C.ambar }}>en curso</b> : hora(x.fin)}</td>
+                  <td style={celda}>{hora(x.inicio)} – {x.en_curso ? <b style={{ color: C.ambar }}>en curso</b> : hora(x.fin)}</td>
                   <td style={{ ...celda, fontWeight: 700, color: x.minutos >= 45 ? C.rojo : C.texto }}>{x.minutos}</td>
-                  <td style={celda}>{chip(z[0], z[1], z[2])}{x.zona_nombre && <div style={{ color: C.tenue, fontSize: 12 }}>{x.zona_nombre}</div>}</td>
-                  <td style={celda}>{x.hora_inicio_ruta ? `${x.hora_inicio_ruta} – ${x.hora_fin_ruta || "en curso"}` : "—"}{x.en_ruta && <div style={{ color: C.ambar, fontSize: 12 }}>durante la ruta</div>}</td>
+                  <td style={celda}>{chip(c[0], c[1], c[2])}</td>
+                  <td style={celda}>{x.paquetes || x.fallidos ? <>{x.paradas_meli} parada{x.paradas_meli === 1 ? "" : "s"} · {x.paquetes} paq.{x.fallidos ? ` · ${x.fallidos} fallido${x.fallidos === 1 ? "" : "s"}` : ""}<div style={{ color: C.tenue, fontSize: 12 }}>a {x.dist_min_m} m</div></> : <span style={{ color: C.tenue }}>—</span>}</td>
+                  <td style={{ ...celda, fontWeight: 700, color: x.min_sin_explicar > 10 && x.clasificacion !== "operativa" ? C.rojo : C.suave }}>{x.clasificacion === "operativa" ? "—" : `${x.min_sin_explicar} min`}</td>
+                  <td style={celda}>{z[0]}{x.zona_nombre ? ` · ${x.zona_nombre}` : ""}<div style={{ color: C.tenue, fontSize: 12 }}>{x.hora_inicio_ruta ? `ruta ${x.hora_inicio_ruta} – ${x.hora_fin_ruta || "en curso"}` : "sin ruta"}</div></td>
                   <td style={celda}>{x.conductor || "—"}</td>
                   <td style={celda}><a href={`https://maps.google.com/?q=${x.lat},${x.lng}`} target="_blank" rel="noreferrer" style={{ color: C.navy }}>🗺️ Ver</a></td>
                 </tr>
