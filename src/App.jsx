@@ -15185,6 +15185,7 @@ const TABS_CUIDADO_CL = [
   { id: "ca_ficha", label: "Ficha del activo", desc: "Todo de cada patente: datos, documentos, costos e historial" },
   { id: "ca_mantenciones", label: "Mantenciones", desc: "Próxima mantención por km (Geotab), vida útil, pautas y talleres" },
   { id: "ca_reparaciones", label: "Reparaciones", desc: "Solicitud, cotización, aprobación, taller y cierre con gasto" },
+  { id: "ca_oc", label: "Órdenes de compra", desc: "OC desde la reparación aprobada, V°B° de Control y envío al taller" },
   { id: "ca_siniestros", label: "Siniestros", desc: "Registro, deducible al tercero, días en taller y pérdida en venta" },
   { id: "ca_flota", label: "Estado de flota", desc: "Qué pasa hoy con cada vehículo propio" },
   { id: "ca_documentos", label: "Documentación", desc: "Subir y confirmar padrón, SOAP, revisión técnica, gases, permiso, seguros y leasing" },
