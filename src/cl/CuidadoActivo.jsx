@@ -2852,7 +2852,8 @@ function IncumplimientosMes({ mes }) {
   const tot = (k) => filas.reduce((t, x) => t + Number(x[k] || 0), 0);
   const exportar = async () => {
     const XLSX = await cargarSheetJS();
-    const data = filas.map((x) => ({ RUT: x.rut, TERCERO: x.empresa, PATENTE: x.patente, CECO: x.ceco, "DETENCIONES": x.detenciones, "NO JUSTIFICADAS": x.no_justificadas,
+    const data = filas.map((x) => ({ RUT: x.rut, TERCERO: x.empresa, PATENTE: x.patente, CECO: x.ceco, "UF AUSENCIAS": x.faltas_1 * (uf[1] ?? 0), "FECHA DE FALTA": x.fechas_1 || "",
+      "DETENCIONES": x.detenciones, "NO JUSTIFICADAS": x.no_justificadas,
       "EVENTOS GRAVES CÁMARA": x.eventos_graves, "CÁMARA CUBIERTA": x.camara_cubierta, "UF AUDITORÍA": x.faltas_13 * (uf[13] ?? 0), "FECHA DE NO CUMPLIMIENTO": x.fechas_13 || "",
       "UF USO NO AUTORIZADO": x.faltas_14 * (uf[14] ?? 0), "FECHA DE USO INDEBIDO": x.fechas_14 || "", "TOTAL UF": Number(x.uf_total) }));
     const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(data), "INCUMPLIMIENTOS");
@@ -2864,21 +2865,22 @@ function IncumplimientosMes({ mes }) {
     <div>
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
         {kpi("Total UF del mes", tot("uf_total"), C.rojo)}{kpi("Detenciones", tot("detenciones"))}{kpi("No justificadas (falta 14)", tot("faltas_14"), C.rojo)}
-        {kpi("Auditorías no hechas (falta 13)", tot("faltas_13"), C.ambar)}{kpi("Eventos graves de cámara", tot("eventos_graves"))}{kpi("Cámara cubierta", tot("camara_cubierta"))}
+        {kpi("No presentación (falta 1)", tot("faltas_1"), C.rojo)}{kpi("Auditorías no hechas (falta 13)", tot("faltas_13"), C.ambar)}{kpi("Eventos graves de cámara", tot("eventos_graves"))}{kpi("Cámara cubierta", tot("camara_cubierta"))}
       </div>
       <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10, flexWrap: "wrap" }}>
         <button style={btn()} onClick={exportar} disabled={!filas.length}>Exportar a Excel</button>
-        <span style={{ fontSize: 12, color: C.tenue }}>Por ahora: faltas 13 y 14. Las faltas 1 (FALTA TERCERO), 10 (domicilios) y 12 (nota Geotab) se suman cuando estén sus datos. «Enviar a cobro» depende de Conciliaciones.</span>
+        <span style={{ fontSize: 12, color: C.tenue }}>Faltas 1 (no salida por FALTA TERCERO), 13 y 14. Las faltas 10 (domicilios) y 12 (nota Geotab) se suman cuando estén sus datos. «Enviar a cobro» depende de Conciliaciones.</span>
       </div>
       <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, overflowX: "auto" }}>
         <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1000 }}>
-          <thead><tr style={{ background: C.fondo, textAlign: "left" }}>{["Tercero", "Patente", "CECO", "Detenciones", "No justificadas · fechas", "Auditorías no hechas · fechas", "Eventos graves", "Cubierta", "Total UF"].map((h) => <th key={h} style={{ ...celda, color: C.suave }}>{h}</th>)}</tr></thead>
+          <thead><tr style={{ background: C.fondo, textAlign: "left" }}>{["Tercero", "Patente", "CECO", "No presentación · fechas", "Detenciones", "No justificadas · fechas", "Auditorías no hechas · fechas", "Eventos graves", "Cubierta", "Total UF"].map((h) => <th key={h} style={{ ...celda, color: C.suave }}>{h}</th>)}</tr></thead>
           <tbody>
-            {filas.length === 0 && <tr><td colSpan={9} style={{ ...celda, color: C.tenue, textAlign: "center" }}>Sin incumplimientos ni eventos en este mes.</td></tr>}
+            {filas.length === 0 && <tr><td colSpan={10} style={{ ...celda, color: C.tenue, textAlign: "center" }}>Sin incumplimientos ni eventos en este mes.</td></tr>}
             {filas.map((x) => (
               <tr key={x.patente}>
                 <td style={celda}>{x.empresa || "—"}<div style={{ color: C.tenue, fontSize: 11.5 }}>{x.rut}</div></td>
                 <td style={{ ...celda, fontWeight: 800, color: C.navy }}>{x.patente}</td><td style={celda}>{x.ceco}</td>
+                <td style={celda}>{x.faltas_1 ? <><b style={{ color: C.rojo }}>{x.faltas_1}</b> · {x.fechas_1}</> : "—"}</td>
                 <td style={celda}>{x.detenciones || "—"}</td>
                 <td style={celda}>{x.faltas_14 ? <><b style={{ color: C.rojo }}>{x.faltas_14}</b> · {x.fechas_14}</> : "—"}</td>
                 <td style={celda}>{x.faltas_13 ? <><b style={{ color: C.ambar }}>{x.faltas_13}</b> · {x.fechas_13}</> : "—"}</td>
