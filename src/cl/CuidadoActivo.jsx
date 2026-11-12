@@ -96,6 +96,18 @@ const DONDE_SUB = { "Estado de flota": "ca_flota", "No salidas": "ca_nosalidas",
   "Mantenciones → Vida útil": "ca_mantenciones", "Reparaciones": "ca_reparaciones", "Auditorías": "ca_auditorias", "Auditorías → Pedidas": "ca_auditorias",
   "Siniestros": "ca_siniestros", "Documentación": "ca_documentos", "GPS y cámaras": "ca_gps", "Uso y detenciones": "ca_uso" };
 
+// ── Filtro de período Desde / Hasta (pedido T-01) ──
+const fechaCLde = (v) => { if (!v) return ""; const t = String(v); return t.length <= 10 ? t : new Date(t).toLocaleDateString("en-CA", { timeZone: "America/Santiago" }); };
+const enPeriodo = (v, f) => { const d = fechaCLde(v); return (!f.desde || (d && d >= f.desde)) && (!f.hasta || (d && d <= f.hasta)); };
+function Periodo({ f, setF, titulo = "" }) {
+  return (
+    <>
+      <label style={{ fontSize: 12, color: C.suave }}>{titulo}Desde <input type="date" style={inp} value={f.desde || ""} onChange={(e) => setF({ ...f, desde: e.target.value })} /></label>
+      <label style={{ fontSize: 12, color: C.suave }}>Hasta <input type="date" style={inp} value={f.hasta || ""} onChange={(e) => setF({ ...f, hasta: e.target.value })} /></label>
+    </>
+  );
+}
+
 export default function CuidadoActivoCL({ usuario, sub }) {
   const quien = usuario?.email || usuario?.nombre || "brain";
   if (sub === "ca_pedido") return <AvancePedido quien={quien} rol={usuario?.rol} />;
@@ -108,6 +120,7 @@ export default function CuidadoActivoCL({ usuario, sub }) {
   if (sub === "ca_gps") return <GpsCamaras quien={quien} />;
   if (sub === "ca_oc") return <OrdenesCompra quien={quien} />;
   if (sub === "ca_combustible") return <Combustible quien={quien} />;
+  if (sub === "ca_mantenedores") return <Mantenedores quien={quien} rol={usuario?.rol} />;
   if (sub === "ca_uso") return <UsoDetenciones quien={quien} />;
   if (sub === "ca_mantenciones") return <Mantenciones quien={quien} />;
   if (sub === "ca_reparaciones") return <Reparaciones quien={quien} />;
@@ -350,6 +363,7 @@ function Auditorias({ quien }) {
   };
   useEffect(() => { cargar(); const i = setInterval(cargar, 60000); return () => clearInterval(i); }, []);
   const vis = (filas || []).filter((x) => {
+    if (!enPeriodo(x.enviada_at, f)) return false;
     if (f.estado === "por_revisar" && !["revisar", "enviada"].includes(x.estado)) return false;
     if (f.estado === "aprobadas" && x.estado !== "aprobada") return false;
     if (f.estado === "devueltas" && x.estado !== "rehacer") return false;
@@ -380,6 +394,7 @@ function Auditorias({ quien }) {
         <select style={inp} value={f.tipo} onChange={(e) => setF({ ...f, tipo: e.target.value })}>
           <option value="">Vehículo y limpieza</option><option value="vehiculo">Vehículo</option><option value="limpieza">Limpieza</option>
         </select>
+        <Periodo f={f} setF={setF} />
         <input style={{ ...inp, minWidth: 220 }} placeholder="Patente, empresa, CECO o quién la hizo" value={f.texto} onChange={(e) => setF({ ...f, texto: e.target.value })} />
         <button style={btn("sec")} onClick={cargar}>Actualizar</button>
         <button style={btn()} onClick={() => setPedir(!pedir)}>{pedir ? "Cerrar" : "+ Pedir auditoría"}</button>
@@ -706,6 +721,11 @@ function DetalleAuditoria({ a, quien, onListo }) {
               if (!comp) return;
               try { const id = await rpc("fn_rep_desde_auditoria", { p_auditoria: a.id, p_componente: comp, p_por: quien }); alert(`Solicitud de reparación creada. Queda en Reparaciones como «Cotizando».`); } catch (e) { alert(e.message); }
             }}>Crear solicitud de reparación</button></div>}
+            <div style={{ marginTop: 10 }}><button style={btn("sec")} onClick={async () => {
+              const det = window.prompt(`Daño nuevo en ${a.patente} contra la auditoría anterior.\n\nDescribe el daño (dónde y qué se ve). Se crea una tarea al supervisor con 48 h para aclarar quién responde.`, "");
+              if (!det) return;
+              try { alert(await rpc("fn_aud_dano_nuevo", { p_auditoria: a.id, p_detalle: det, p_por: quien })); } catch (e) { alert(e.message); }
+            }}>Daño nuevo vs. la anterior</button></div>
           </div>
         </div>
       )}
@@ -982,7 +1002,7 @@ const MN_ESTADO = {
   vencida: ["Vencida", C.rojoT, C.rojo], proxima: ["Próxima", C.ambarT, C.ambar], al_dia: ["Al día", C.verdeT, C.verde],
   sin_pauta: ["Sin pauta", C.fondo, C.suave], sin_km: ["Sin km de Geotab", C.fondo, C.suave], inactivo: ["Inactivo", C.fondo, C.tenue],
 };
-const MN_TIPO = { mantencion: "Mantención", reparacion: "Reparación", siniestro: "Siniestro", otro: "Otro", garantia: "Garantía" };
+const MN_TIPO = { mantencion: "Mantención", reparacion: "Reparación", siniestro: "Siniestro", seguridad: "Seguridad", otro: "Otro", garantia: "Garantía" };
 const kmf = (v) => (v === null || v === undefined ? "—" : Number(v).toLocaleString("es-CL"));
 const fd = (s) => (s ? new Date(s + "T12:00:00").toLocaleDateString("es-CL") : "—");
 function Mantenciones({ quien }) {
@@ -1540,7 +1560,7 @@ function Documentos({ quien }) {
     alert(`${lista.length - malos} de ${lista.length} archivos subidos.${malos ? `\n\n${malos} con error: se muestran en rojo; puedes volver a subirlos.` : ""}\n\nQuedan «por leer»: Biggy los lee uno por uno y la lista se actualiza sola.`);
   };
   const n = (e) => (filas || []).filter((x) => x.estado === e).length;
-  const vis = (filas || []).filter((x) => (f.estado === "pendientes" ? ["por_leer", "por_confirmar"].includes(x.estado) : !f.estado || x.estado === f.estado)
+  const vis = (filas || []).filter((x) => enPeriodo(x.vence, f) && (f.estado === "pendientes" ? ["por_leer", "por_confirmar"].includes(x.estado) : !f.estado || x.estado === f.estado)
     && (!f.texto || `${(x.patentes || []).join(" ")} ${x.nombre_archivo || ""} ${x.aseguradora || ""} ${x.poliza || ""}`.toLowerCase().includes(f.texto.toLowerCase())));
   const celda = { padding: "8px 10px", borderBottom: `1px solid ${C.borde}`, fontSize: 13, verticalAlign: "top" };
   return (
@@ -1577,6 +1597,7 @@ function Documentos({ quien }) {
           <option value="por_leer">Por leer ({n("por_leer")})</option><option value="por_confirmar">Por confirmar ({n("por_confirmar")})</option>
           <option value="confirmado">Confirmados ({n("confirmado")})</option><option value="rechazado">Rechazados ({n("rechazado")})</option><option value="">Todos</option>
         </select>
+        <Periodo f={f} setF={setF} titulo="Vence · " />
         <input style={{ ...inp, minWidth: 240 }} placeholder="Patente, archivo, aseguradora o póliza" value={f.texto} onChange={(e) => setF({ ...f, texto: e.target.value })} />
         <button style={btn("sec")} disabled={cargando} onClick={cargar}>{cargando ? "Actualizando…" : "Actualizar"}</button>
         {f.estado === "rechazado" && n("rechazado") > 0 && <button style={btn("sec")} disabled={cargando} onClick={async () => {
@@ -1696,7 +1717,7 @@ function Reparaciones({ quien }) {
   useEffect(() => { cargar(); }, []);
   const n = (e) => (filas || []).filter((x) => x.etapa === e).length;
   const abiertas = ["solicitada", "cotizando", "para_aprobar", "aprobada", "en_taller"];
-  const vis = (filas || []).filter((x) => (f.etapa === "abiertas" ? abiertas.includes(x.etapa) : !f.etapa || x.etapa === f.etapa)
+  const vis = (filas || []).filter((x) => enPeriodo(x.fecha_solicitud, f) && (f.etapa === "abiertas" ? abiertas.includes(x.etapa) : !f.etapa || x.etapa === f.etapa)
     && (!f.texto || `${x.folio || ""} ${x.patente} ${x.componente || ""} ${x.descripcion || ""} ${x.taller || ""}`.toLowerCase().includes(f.texto.toLowerCase())));
   const kpi = (t, v, c, e) => (
     <div onClick={() => setF({ ...f, etapa: f.etapa === e ? "abiertas" : e })} style={{ background: "#fff", border: `1px solid ${f.etapa === e ? c : C.borde}`, borderRadius: 12, padding: "12px 16px", flex: "1 1 120px", cursor: "pointer" }}>
@@ -1724,6 +1745,7 @@ function Reparaciones({ quien }) {
         <select style={inp} value={f.etapa} onChange={(e) => setF({ ...f, etapa: e.target.value })}>
           <option value="abiertas">Abiertas</option>{Object.entries(REP_ETAPA).map(([k, v]) => <option key={k} value={k}>{v[0]}</option>)}<option value="">Todas</option>
         </select>
+        <Periodo f={f} setF={setF} />
         <input style={{ ...inp, minWidth: 240 }} placeholder="Folio, patente, componente o taller" value={f.texto} onChange={(e) => setF({ ...f, texto: e.target.value })} />
         <button style={btn()} onClick={() => setNueva(!nueva)}>{nueva ? "Cerrar" : "+ Nueva reparación"}</button>
       </div>
@@ -1987,7 +2009,7 @@ function Siniestros({ quien }) {
   const porAnio = {}; for (const x of todos) { const y = String(x.fecha_siniestro || "").slice(0, 4); if (y) porAnio[y] = (porAnio[y] || 0) + (Number(x.costo_reparacion) || 0); }
   const reinc = Object.entries(todos.reduce((m, x) => { m[x.patente] = (m[x.patente] || 0) + 1; return m; }, {})).filter(([, k]) => k > 1).sort((a, b) => b[1] - a[1]);
   const reincC = Object.entries(todos.filter((x) => x.conductor).reduce((m, x) => { m[x.conductor] = (m[x.conductor] || 0) + 1; return m; }, {})).filter(([, k]) => k > 1).sort((a, b) => b[1] - a[1]);
-  const vis = todos.filter((x) => (f.estado === "abiertos" ? ["abierto", "en_taller"].includes(x.estado) : !f.estado || x.estado === f.estado)
+  const vis = todos.filter((x) => enPeriodo(x.fecha_siniestro, f) && (f.estado === "abiertos" ? ["abierto", "en_taller"].includes(x.estado) : !f.estado || x.estado === f.estado)
     && (!f.texto || `${x.folio} ${x.patente} ${x.conductor || ""} ${x.compania || ""} ${x.numero_siniestro || ""}`.toLowerCase().includes(f.texto.toLowerCase())));
   const kpi = (t, v, c) => <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, padding: "12px 16px", flex: "1 1 140px" }}><div style={{ fontSize: 20, fontWeight: 800, color: c }}>{v}</div><div style={{ fontSize: 12.5, color: C.suave }}>{t}</div></div>;
   const celda = { padding: "8px 10px", borderBottom: `1px solid ${C.borde}`, fontSize: 13, verticalAlign: "top" };
@@ -2009,6 +2031,7 @@ function Siniestros({ quien }) {
         <select style={inp} value={f.estado} onChange={(e) => setF({ ...f, estado: e.target.value })}>
           <option value="abiertos">Abiertos</option>{Object.entries(SIN_ESTADO).map(([k, v]) => <option key={k} value={k}>{v[0]}</option>)}<option value="">Todos</option>
         </select>
+        <Periodo f={f} setF={setF} />
         <input style={{ ...inp, minWidth: 240 }} placeholder="Folio, patente, conductor, compañía o N°" value={f.texto} onChange={(e) => setF({ ...f, texto: e.target.value })} />
         <button style={btn()} onClick={() => setNuevo(!nuevo)}>{nuevo ? "Cerrar" : "+ Nuevo siniestro"}</button>
         <label style={{ ...btn("sec"), display: "inline-block", cursor: importando ? "wait" : "pointer" }}>
@@ -3030,7 +3053,17 @@ function IncumplimientosMes({ mes }) {
       "EVENTOS GRAVES CÁMARA": x.eventos_graves, "CÁMARA CUBIERTA": x.camara_cubierta, "UF AUDITORÍA": x.faltas_13 * (uf[13] ?? 0), "FECHA DE NO CUMPLIMIENTO": x.fechas_13 || "",
       "UF USO NO AUTORIZADO": x.faltas_14 * (uf[14] ?? 0), "FECHA DE USO INDEBIDO": x.fechas_14 || "", "TOTAL UF": Number(x.uf_total) }));
     const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(data), "INCUMPLIMIENTOS");
-    XLSX.writeFile(wb, `Incumplimientos_${mes}.xlsx`);
+    // I-15 · Reparaciones con cobro al tercero e I-16 · Combustible sobre la subvención (mismo mes)
+    try {
+      const rep = await api(`vw_ca_rep_tercero_cl?select=*&mes=eq.${mes}-01&order=tercero,patente`);
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet((rep || []).map((r) => ({ RUT: r.rut, TERCERO: r.tercero, PATENTE: r.patente, CECO: r.ceco, "SERVICIO EFECTUADO": r.servicio || "",
+        ITEM: r.item || "", TALLER: r.taller || "", "COSTO CON IVA": Number(r.costo_iva || 0), FOLIO: r.folio || "" }))), "REPARACIONES");
+    } catch { /* sin reparaciones */ }
+    try {
+      const cb = await rpc("fn_comb_mes", { p_mes: `${mes}-01` });
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet((cb || []).filter((r) => Number(r.excedente) > 0).map((r) => ({ RUT: r.rut, EMPRESA: r.tercero, PATENTE: r.patente, MONTO: Number(r.gasto), EXCEDENTE: Number(r.excedente) }))), "COMBUSTIBLE");
+    } catch { /* sin combustible */ }
+    XLSX.writeFile(wb, `Indicadores_${mes}.xlsx`);
   };
   const kpi = (t, v, c = C.navy) => <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, padding: "10px 14px", flex: "1 1 140px" }}><div style={{ fontSize: 22, fontWeight: 800, color: c }}>{v}</div><div style={{ fontSize: 12, color: C.suave }}>{t}</div></div>;
   const celda = { padding: "7px 9px", borderBottom: `1px solid ${C.borde}`, fontSize: 12.5, verticalAlign: "top" };
@@ -3041,7 +3074,7 @@ function IncumplimientosMes({ mes }) {
         {kpi("No presentación (falta 1)", tot("faltas_1"), C.rojo)}{kpi("Auditorías no hechas (falta 13)", tot("faltas_13"), C.ambar)}{kpi("Eventos graves de cámara", tot("eventos_graves"))}{kpi("Cámara cubierta", tot("camara_cubierta"))}
       </div>
       <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10, flexWrap: "wrap" }}>
-        <button style={btn()} onClick={exportar} disabled={!filas.length}>Exportar a Excel</button>
+        <button style={btn()} onClick={exportar}>Exportar a Excel (INCUMPLIMIENTOS, REPARACIONES y COMBUSTIBLE)</button>
         <span style={{ fontSize: 12, color: C.tenue }}>Faltas 1 (no salida por FALTA TERCERO), 13 y 14. Las faltas 10 (domicilios) y 12 (nota Geotab) se suman cuando estén sus datos. «Enviar a cobro» depende de Conciliaciones.</span>
       </div>
       <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, overflowX: "auto" }}>
@@ -3599,6 +3632,91 @@ function CombustibleCargas({ mes }) {
               <td style={celda}>{x.litros}</td><td style={celda}>{pesos(x.precio)}</td><td style={{ ...celda, fontWeight: 700 }}>{pesos(x.monto)}</td><td style={celda}>{x.odometro ? Number(x.odometro).toLocaleString("es-CL") : "—"}</td>
             </tr>
           ))}</tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ── Mantenedores (pedido F-05): todo lo editable de Cuidado de Activo en un solo lugar ──
+const MANT_GRUPOS = [
+  ["Combustible", /^comb_/], ["Flota y estado del activo", /^(flota_|activo_|uso_)/], ["Siniestros · tarifa diaria", /^sin_tarifa/],
+  ["Documentos", /^doc_/], ["Conducción Geotab", /^geo_/], ["Órdenes de compra", /^oc_/], ["GPS y cámaras", /^(gps_|equipos_|camaras_)/],
+  ["Mantenciones", /^mnt_/], ["Registros de prueba", /^prueba_/],
+];
+function Mantenedores({ quien, rol }) {
+  const [vista, setVista] = useState("config");
+  const puede = rol === "superadmin";
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 14 }}>
+        {[["config", "Parámetros"], ["componentes", "Componentes del gasto"], ["proveedores", "Proveedores"], ["multas", "Multas (Anexo III)"]].map(([k, t]) => <button key={k} style={btn(vista === k ? undefined : "sec")} onClick={() => setVista(k)}>{t}</button>)}
+      </div>
+      {vista === "config" ? <MantParametros quien={quien} /> : vista === "componentes" ? <MantComponentes quien={quien} /> : vista === "proveedores" ? <Proveedores quien={quien} /> : <MultasAnexo quien={quien} puede={puede} />}
+      <div style={{ fontSize: 12, color: C.tenue, marginTop: 12 }}>También se editan: pautas, vida útil y talleres en Mantenciones; tipos de tarea, justificaciones y correos en Configuración; reglas en el Centro de alertas; CECO y supervisor en Maestro Operaciones.</div>
+    </div>
+  );
+}
+function MantParametros({ quien }) {
+  const [filas, setFilas] = useState(null);
+  const [msg, setMsg] = useState("");
+  const cargar = () => api("ca_config_cl?select=*&order=clave").then(setFilas).catch(() => setFilas([]));
+  useEffect(() => { cargar(); }, []);
+  const guardar = async (clave, valor) => {
+    setMsg("");
+    try { await rpc("fn_ca_mantenedor_guardar", { p_tabla: "ca_config_cl", p_clave: clave, p_campo: "valor", p_valor: valor, p_por: quien }); setMsg(`Guardado: ${clave}`); cargar(); } catch (e) { setMsg(e.message); }
+  };
+  if (filas === null) return <div style={{ color: C.tenue }}>Cargando…</div>;
+  return (
+    <div>
+      {msg && <div style={{ fontSize: 12.5, marginBottom: 8, color: msg.startsWith("Guardado") ? C.verde : C.rojo }}>{msg}</div>}
+      {MANT_GRUPOS.map(([titulo, re]) => {
+        const g = filas.filter((c) => re.test(c.clave));
+        if (!g.length) return null;
+        return (
+          <div key={titulo} style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, padding: 12, marginBottom: 12 }}>
+            <div style={{ fontWeight: 800, color: C.navy, marginBottom: 8 }}>{titulo}</div>
+            {g.map((c) => (
+              <div key={c.clave} style={{ display: "grid", gridTemplateColumns: "minmax(200px, 1fr) minmax(180px, 320px)", gap: 10, alignItems: "center", padding: "5px 0", borderTop: `1px solid ${C.fondo}` }}>
+                <div style={{ fontSize: 12.5 }}>{c.descripcion || c.clave}<div style={{ color: C.tenue, fontSize: 11 }}>{c.clave}</div></div>
+                <input style={{ ...inp, width: "100%" }} defaultValue={c.valor || ""} onBlur={(e) => e.target.value !== (c.valor || "") && guardar(c.clave, e.target.value)} />
+              </div>
+            ))}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+function MantComponentes({ quien }) {
+  const [filas, setFilas] = useState(null);
+  const [nuevo, setNuevo] = useState({ componente: "", patron: "", orden: 50 });
+  const cargar = () => api("ca_gasto_componentes_cl?select=*&order=orden").then(setFilas).catch(() => setFilas([]));
+  useEffect(() => { cargar(); }, []);
+  const guardar = async (x) => { try { await rpc("fn_gasto_componente_guardar", { p_componente: x.componente, p_patron: x.patron, p_orden: Number(x.orden) || 50, p_activo: x.activo !== false, p_por: quien }); cargar(); } catch (e) { alert(e.message); } };
+  if (filas === null) return <div style={{ color: C.tenue }}>Cargando…</div>;
+  return (
+    <div>
+      <div style={{ fontSize: 12.5, color: C.suave, marginBottom: 10 }}>Los 14 componentes del Historial de gastos. El patrón son palabras separadas por «|» que se buscan en el detalle del gasto (en mayúsculas); gana el de menor orden. Lo que no calza va a «Otros». No cambia la vida útil.</div>
+      <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 700 }}>
+          <thead><tr style={{ background: C.fondo, textAlign: "left" }}>{["Orden", "Componente", "Patrón", "Activo"].map((h) => <th key={h} style={{ padding: "8px 10px", color: C.suave, fontSize: 12 }}>{h}</th>)}</tr></thead>
+          <tbody>
+            {filas.map((x) => (
+              <tr key={x.componente} style={{ borderTop: `1px solid ${C.borde}` }}>
+                <td style={{ padding: "5px 8px" }}><input type="number" style={{ ...inp, width: 70 }} defaultValue={x.orden} onBlur={(e) => String(e.target.value) !== String(x.orden) && guardar({ ...x, orden: e.target.value })} /></td>
+                <td style={{ padding: "5px 8px", fontWeight: 700 }}>{x.componente}</td>
+                <td style={{ padding: "5px 8px" }}>{x.componente === "Otros" ? <span style={{ color: C.tenue }}>(lo que no calza con ninguno)</span> : <input style={{ ...inp, width: "100%" }} defaultValue={x.patron} onBlur={(e) => e.target.value !== x.patron && guardar({ ...x, patron: e.target.value })} />}</td>
+                <td style={{ padding: "5px 8px" }}><input type="checkbox" defaultChecked={x.activo} onChange={(e) => guardar({ ...x, activo: e.target.checked })} /></td>
+              </tr>
+            ))}
+            <tr style={{ borderTop: `1px solid ${C.borde}`, background: "#fafbfd" }}>
+              <td style={{ padding: "5px 8px" }}><input type="number" style={{ ...inp, width: 70 }} value={nuevo.orden} onChange={(e) => setNuevo({ ...nuevo, orden: e.target.value })} /></td>
+              <td style={{ padding: "5px 8px" }}><input style={inp} placeholder="Nuevo componente" value={nuevo.componente} onChange={(e) => setNuevo({ ...nuevo, componente: e.target.value })} /></td>
+              <td style={{ padding: "5px 8px" }}><input style={{ ...inp, width: "100%" }} placeholder="PALABRA|OTRA" value={nuevo.patron} onChange={(e) => setNuevo({ ...nuevo, patron: e.target.value })} /></td>
+              <td style={{ padding: "5px 8px" }}><button style={btn()} onClick={async () => { await guardar({ ...nuevo, activo: true }); setNuevo({ componente: "", patron: "", orden: 50 }); }}>Agregar</button></td>
+            </tr>
+          </tbody>
         </table>
       </div>
     </div>
