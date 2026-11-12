@@ -82,6 +82,7 @@ export default function CuidadoActivoCL({ usuario, sub }) {
   if (sub === "ca_pedido") return <AvancePedido quien={quien} rol={usuario?.rol} />;
   if (sub === "ca_alertas") return <CentroAlertas quien={quien} rol={usuario?.rol} />;
   if (sub === "ca_evaluacion") return <EvaluacionEjecutivo usuario={usuario} />;
+  if (sub === "ca_indicadores") return <Indicadores quien={quien} rol={usuario?.rol} />;
   if (sub === "ca_ficha") return <FichaActivo quien={quien} />;
   if (sub === "ca_documentos") return <Documentos quien={quien} />;
   if (sub === "ca_flota") return <EstadoFlota />;
@@ -2824,6 +2825,123 @@ function EventosCamara() {
           <div style={{ padding: "8px 10px", fontSize: 11.5, color: C.tenue }}>Los enlaces de video de Fleetup se renuevan cada 30 min para los eventos de ayer y hoy; los más antiguos pueden haber vencido. El puntaje de Fleetup no entra en los indicadores.</div>
         </div>
       )}
+    </div>
+  );
+}
+
+// ── Indicadores (pedido sección 5): incumplimientos del mes y multas del Anexo III ──
+function Indicadores({ quien, rol }) {
+  const [vista, setVista] = useState("mes");
+  const [mes, setMes] = useState(hoyCL().slice(0, 7));
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginBottom: 14 }}>
+        {[["mes", "Incumplimientos del mes"], ["detalle", "Detalle de faltas"], ["multas", "Multas (Anexo III)"]].map(([k, t]) => <button key={k} style={btn(vista === k ? undefined : "sec")} onClick={() => setVista(k)}>{t}</button>)}
+        {vista !== "multas" && <label style={{ fontSize: 12.5, color: C.suave, marginLeft: 8 }}>Mes <input type="month" style={inp} value={mes} onChange={(e) => e.target.value && setMes(e.target.value)} /></label>}
+      </div>
+      {vista === "mes" ? <IncumplimientosMes mes={mes} /> : vista === "detalle" ? <DetalleFaltas mes={mes} /> : <MultasAnexo quien={quien} puede={rol === "superadmin"} />}
+    </div>
+  );
+}
+function IncumplimientosMes({ mes }) {
+  const [filas, setFilas] = useState(null);
+  const [uf, setUf] = useState({});
+  useEffect(() => { setFilas(null); rpc("fn_ca_registro_mes_cl", { p_mes: `${mes}-01` }).then(setFilas).catch(() => setFilas([])); }, [mes]);
+  useEffect(() => { api("ca_multas_cl?select=numero,monto").then((r) => setUf(Object.fromEntries((r || []).map((x) => [x.numero, Number(x.monto)])))).catch(() => {}); }, []);
+  if (filas === null) return <div style={{ color: C.tenue }}>Calculando…</div>;
+  const tot = (k) => filas.reduce((t, x) => t + Number(x[k] || 0), 0);
+  const exportar = async () => {
+    const XLSX = await cargarSheetJS();
+    const data = filas.map((x) => ({ RUT: x.rut, TERCERO: x.empresa, PATENTE: x.patente, CECO: x.ceco, "DETENCIONES": x.detenciones, "NO JUSTIFICADAS": x.no_justificadas,
+      "EVENTOS GRAVES CÁMARA": x.eventos_graves, "CÁMARA CUBIERTA": x.camara_cubierta, "UF AUDITORÍA": x.faltas_13 * (uf[13] ?? 0), "FECHA DE NO CUMPLIMIENTO": x.fechas_13 || "",
+      "UF USO NO AUTORIZADO": x.faltas_14 * (uf[14] ?? 0), "FECHA DE USO INDEBIDO": x.fechas_14 || "", "TOTAL UF": Number(x.uf_total) }));
+    const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(data), "INCUMPLIMIENTOS");
+    XLSX.writeFile(wb, `Incumplimientos_${mes}.xlsx`);
+  };
+  const kpi = (t, v, c = C.navy) => <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, padding: "10px 14px", flex: "1 1 140px" }}><div style={{ fontSize: 22, fontWeight: 800, color: c }}>{v}</div><div style={{ fontSize: 12, color: C.suave }}>{t}</div></div>;
+  const celda = { padding: "7px 9px", borderBottom: `1px solid ${C.borde}`, fontSize: 12.5, verticalAlign: "top" };
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
+        {kpi("Total UF del mes", tot("uf_total"), C.rojo)}{kpi("Detenciones", tot("detenciones"))}{kpi("No justificadas (falta 14)", tot("faltas_14"), C.rojo)}
+        {kpi("Auditorías no hechas (falta 13)", tot("faltas_13"), C.ambar)}{kpi("Eventos graves de cámara", tot("eventos_graves"))}{kpi("Cámara cubierta", tot("camara_cubierta"))}
+      </div>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10, flexWrap: "wrap" }}>
+        <button style={btn()} onClick={exportar} disabled={!filas.length}>Exportar a Excel</button>
+        <span style={{ fontSize: 12, color: C.tenue }}>Por ahora: faltas 13 y 14. Las faltas 1 (FALTA TERCERO), 10 (domicilios) y 12 (nota Geotab) se suman cuando estén sus datos. «Enviar a cobro» depende de Conciliaciones.</span>
+      </div>
+      <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1000 }}>
+          <thead><tr style={{ background: C.fondo, textAlign: "left" }}>{["Tercero", "Patente", "CECO", "Detenciones", "No justificadas · fechas", "Auditorías no hechas · fechas", "Eventos graves", "Cubierta", "Total UF"].map((h) => <th key={h} style={{ ...celda, color: C.suave }}>{h}</th>)}</tr></thead>
+          <tbody>
+            {filas.length === 0 && <tr><td colSpan={9} style={{ ...celda, color: C.tenue, textAlign: "center" }}>Sin incumplimientos ni eventos en este mes.</td></tr>}
+            {filas.map((x) => (
+              <tr key={x.patente}>
+                <td style={celda}>{x.empresa || "—"}<div style={{ color: C.tenue, fontSize: 11.5 }}>{x.rut}</div></td>
+                <td style={{ ...celda, fontWeight: 800, color: C.navy }}>{x.patente}</td><td style={celda}>{x.ceco}</td>
+                <td style={celda}>{x.detenciones || "—"}</td>
+                <td style={celda}>{x.faltas_14 ? <><b style={{ color: C.rojo }}>{x.faltas_14}</b> · {x.fechas_14}</> : "—"}</td>
+                <td style={celda}>{x.faltas_13 ? <><b style={{ color: C.ambar }}>{x.faltas_13}</b> · {x.fechas_13}</> : "—"}</td>
+                <td style={celda}>{x.eventos_graves || "—"}</td><td style={celda}>{x.camara_cubierta || "—"}</td>
+                <td style={{ ...celda, fontWeight: 800, color: Number(x.uf_total) ? C.rojo : C.tenue }}>{Number(x.uf_total) ? `${x.uf_total} UF` : "—"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+function DetalleFaltas({ mes }) {
+  const [filas, setFilas] = useState(null);
+  useEffect(() => {
+    const d0 = new Date(`${mes}-01T00:00:00-03:00`); const d1 = new Date(d0); d1.setMonth(d1.getMonth() + 1);
+    setFilas(null);
+    api(`vw_ca_faltas_cl?select=*&fecha=gte.${d0.toISOString()}&fecha=lt.${d1.toISOString()}&order=fecha.desc`).then(setFilas).catch(() => setFilas([]));
+  }, [mes]);
+  if (filas === null) return <div style={{ color: C.tenue }}>Cargando…</div>;
+  const celda = { padding: "7px 9px", borderBottom: `1px solid ${C.borde}`, fontSize: 12.5 };
+  return (
+    <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, overflowX: "auto" }}>
+      <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 760 }}>
+        <thead><tr style={{ background: C.fondo, textAlign: "left" }}>{["Fecha", "Falta", "Patente", "Tercero", "Detalle", "UF"].map((h) => <th key={h} style={{ ...celda, color: C.suave }}>{h}</th>)}</tr></thead>
+        <tbody>
+          {filas.length === 0 && <tr><td colSpan={6} style={{ ...celda, color: C.tenue, textAlign: "center" }}>Sin faltas en este mes.</td></tr>}
+          {filas.map((x) => (
+            <tr key={x.falta + x.origen_id}>
+              <td style={celda}>{fh(x.fecha)}</td><td style={{ ...celda, fontWeight: 700 }}>N° {x.falta}</td>
+              <td style={{ ...celda, fontWeight: 800, color: C.navy }}>{x.patente}</td><td style={celda}>{x.empresa || "—"}</td>
+              <td style={celda}>{x.detalle}</td><td style={{ ...celda, fontWeight: 700 }}>{x.uf ?? "—"}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+function MultasAnexo({ quien, puede }) {
+  const [filas, setFilas] = useState(null);
+  const [msg, setMsg] = useState("");
+  const cargar = () => api("ca_multas_cl?select=*&order=numero").then(setFilas).catch(() => setFilas([]));
+  useEffect(() => { cargar(); }, []);
+  const guardar = async (n, campo, valor) => { setMsg(""); try { await rpc("fn_multa_guardar", { p_numero: n, p_campo: campo, p_valor: valor, p_por: quien }); setMsg("Guardado."); cargar(); } catch (e) { setMsg(e.message); } };
+  if (filas === null) return <div style={{ color: C.tenue }}>Cargando…</div>;
+  return (
+    <div>
+      <div style={{ fontSize: 12.5, color: C.suave, marginBottom: 10 }}>Anexo III «De las multas y sanciones». Todas se aplican cada vez que ocurren. {puede ? "Puedes editar el monto (queda con historial)." : "Solo un Superadmin puede editar."}</div>
+      <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 640 }}>
+          <thead><tr style={{ background: C.fondo, textAlign: "left" }}>{["N°", "Falta", "Monto", "Unidad"].map((h) => <th key={h} style={{ padding: "8px 10px", color: C.suave, fontSize: 12 }}>{h}</th>)}</tr></thead>
+          <tbody>{filas.map((x) => (
+            <tr key={x.numero} style={{ borderTop: `1px solid ${C.borde}` }}>
+              <td style={{ padding: "6px 10px", fontWeight: 800 }}>{x.numero}</td><td style={{ padding: "6px 10px" }}>{x.falta}</td>
+              <td style={{ padding: "6px 8px" }}>{puede ? <input type="number" step="0.5" style={{ ...inp, width: 90 }} defaultValue={x.monto} onBlur={(e) => String(e.target.value) !== String(x.monto) && guardar(x.numero, "monto", e.target.value)} /> : x.monto}</td>
+              <td style={{ padding: "6px 10px", color: C.suave }}>{x.unidad}</td>
+            </tr>
+          ))}</tbody>
+        </table>
+      </div>
+      {msg && <div style={{ fontSize: 12.5, marginTop: 8, color: msg === "Guardado." ? C.verde : C.rojo }}>{msg}</div>}
     </div>
   );
 }
