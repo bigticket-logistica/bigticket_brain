@@ -106,6 +106,7 @@ export default function CuidadoActivoCL({ usuario, sub }) {
   if (sub === "ca_documentos") return <Documentos quien={quien} />;
   if (sub === "ca_flota") return <EstadoFlota />;
   if (sub === "ca_gps") return <GpsCamaras quien={quien} />;
+  if (sub === "ca_oc") return <OrdenesCompra quien={quien} />;
   if (sub === "ca_uso") return <UsoDetenciones quien={quien} />;
   if (sub === "ca_mantenciones") return <Mantenciones quien={quien} />;
   if (sub === "ca_reparaciones") return <Reparaciones quien={quien} />;
@@ -1708,7 +1709,12 @@ function FichaReparacion({ s, quien, onCambio }) {
         {s.decision_nota && <div style={{ fontSize: 12.5, color: C.suave, marginTop: 4 }}>{s.decision_nota}</div>}
         {s.gasto_final && fila("Gasto final", pesos(s.gasto_final))}
         {(ref?.eventos || []).length > 0 && <div style={{ fontSize: 11.5, color: C.tenue, marginTop: 8 }}>{ref.eventos.map((e, i) => <div key={i}>{fh(e.at)} · {e.accion} · {e.por}</div>)}</div>}
-        <button style={{ ...btn("sec"), marginTop: 10 }} onClick={() => imprimirFichaRep(s, ref, dif, med)}>Imprimir ficha / PDF</button>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 10 }}>
+          <button style={btn("sec")} onClick={() => imprimirFichaRep(s, ref, dif, med)}>Imprimir ficha / PDF</button>
+          {["aprobada", "en_taller", "cerrada"].includes(s.etapa) && <button style={btn()} onClick={async () => {
+            try { const id = await rpc("fn_oc_desde_reparacion", { p_rep: s.id, p_por: quien }); ocAbrir = id; irA("ca_oc"); } catch (e) { alert(e.message); }
+          }}>Generar OC</button>}
+        </div>
       </div>
       <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, padding: 12 }}>
         {["solicitada", "cotizando"].includes(s.etapa) && <>
@@ -3134,6 +3140,160 @@ function MultasAnexo({ quien, puede }) {
         </table>
       </div>
       {msg && <div style={{ fontSize: 12.5, marginTop: 8, color: msg === "Guardado." ? C.verde : C.rojo }}>{msg}</div>}
+    </div>
+  );
+}
+
+// ── Órdenes de compra (pedido F-03) ─────────────────────────────────────────
+const OC_EST = { borrador: ["Borrador", C.fondo, C.suave], emitida: ["Emitida", "#eef2f8", C.navy], enviada: ["Enviada al taller", C.ambarT, C.ambar], facturada: ["Facturada", C.verdeT, C.verde], pagada: ["Pagada", C.verdeT, C.verde], anulada: ["Anulada", C.fondo, C.tenue] };
+let ocAbrir = null;
+function OrdenesCompra({ quien }) {
+  const [filas, setFilas] = useState(null);
+  const [f, setF] = useState({ estado: "", texto: "", desde: "", hasta: "" });
+  const [abierta, setAbierta] = useState(() => { const x = ocAbrir; ocAbrir = null; return x; });
+  const cargar = () => api("ca_oc_cl?select=*&order=creado_at.desc&limit=1000").then(setFilas).catch(() => setFilas([]));
+  useEffect(() => { cargar(); }, []);
+  if (abierta !== null) return <FichaOC id={abierta} quien={quien} onVolver={() => { setAbierta(null); cargar(); }} />;
+  if (filas === null) return <div style={{ color: C.tenue }}>Cargando…</div>;
+  const vis = filas.filter((x) => (!f.estado || x.estado === f.estado) && (!f.desde || x.fecha >= f.desde) && (!f.hasta || x.fecha <= f.hasta)
+    && (!f.texto || `${x.numero || ""} ${x.proveedor || ""} ${x.patente || ""} ${x.referencia || ""} ${x.concepto || ""}`.toLowerCase().includes(f.texto.toLowerCase())));
+  const n = (e) => filas.filter((x) => x.estado === e).length;
+  const celda = { padding: "7px 9px", borderBottom: `1px solid ${C.borde}`, fontSize: 13 };
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
+        {Object.entries(OC_EST).map(([k, e]) => (
+          <div key={k} onClick={() => setF({ ...f, estado: f.estado === k ? "" : k })} style={{ background: "#fff", border: `1px solid ${f.estado === k ? e[2] : C.borde}`, borderRadius: 12, padding: "10px 14px", flex: "1 1 110px", cursor: "pointer" }}>
+            <div style={{ fontSize: 22, fontWeight: 800, color: e[2] }}>{n(k)}</div><div style={{ fontSize: 12, color: C.suave }}>{e[0]}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 12 }}>
+        <label style={{ fontSize: 12, color: C.suave }}>Desde <input type="date" style={inp} value={f.desde} onChange={(e) => setF({ ...f, desde: e.target.value })} /></label>
+        <label style={{ fontSize: 12, color: C.suave }}>Hasta <input type="date" style={inp} value={f.hasta} onChange={(e) => setF({ ...f, hasta: e.target.value })} /></label>
+        <input style={{ ...inp, minWidth: 240 }} placeholder="N°, proveedor, patente o referencia" value={f.texto} onChange={(e) => setF({ ...f, texto: e.target.value })} />
+        <button style={btn()} onClick={() => setAbierta(0)}>+ Nueva OC</button>
+        <span style={{ fontSize: 12.5, color: C.suave }}>{vis.length} OC · {pesos(vis.filter((x) => x.estado !== "anulada").reduce((t, x) => t + Number(x.total || 0), 0))}</span>
+      </div>
+      <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 900 }}>
+          <thead><tr style={{ background: C.fondo, textAlign: "left" }}>{["N°", "Fecha", "Proveedor", "Patente", "Concepto", "Total", "V°B°", "Estado"].map((h) => <th key={h} style={{ ...celda, fontSize: 12, color: C.suave }}>{h}</th>)}</tr></thead>
+          <tbody>
+            {vis.length === 0 && <tr><td colSpan={8} style={{ ...celda, color: C.tenue, textAlign: "center" }}>Sin órdenes de compra.</td></tr>}
+            {vis.map((x) => { const e = OC_EST[x.estado] || [x.estado, C.fondo, C.suave]; return (
+              <tr key={x.id} style={{ cursor: "pointer" }} onClick={() => setAbierta(x.id)}>
+                <td style={{ ...celda, fontWeight: 800, color: C.navy }}>{x.numero || "(borrador)"}</td><td style={celda}>{fd(x.fecha)}</td>
+                <td style={celda}>{x.proveedor}</td><td style={celda}><PatLink p={x.patente} /></td>
+                <td style={{ ...celda, maxWidth: 260 }}>{x.concepto}{x.referencia && <div style={{ color: C.tenue, fontSize: 12 }}>{x.referencia}</div>}</td>
+                <td style={{ ...celda, fontWeight: 700 }}>{pesos(x.total)}</td><td style={celda}>{x.vb_at ? "✓" : "—"}</td><td style={celda}>{chip(e[0], e[1], e[2])}</td>
+              </tr>
+            ); })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+function FichaOC({ id, quien, onVolver }) {
+  const nueva = !id;
+  const [o, setO] = useState(nueva ? { proveedor: "", proveedor_rut: "", proveedor_correo: "", patente: "", ceco: "", concepto: "", forma_pago: "", referencia: "", descuento: 0, nota: "", estado: "borrador" } : null);
+  const [lineas, setLineas] = useState(nueva ? [{ descripcion: "", cantidad: 1, precio: 0 }] : []);
+  const [eventos, setEventos] = useState([]);
+  const [talleres, setTalleres] = useState([]);
+  const [msg, setMsg] = useState("");
+  const [busy, setBusy] = useState(false);
+  const cargar = async (oid) => {
+    const [a, l, e] = await Promise.all([api(`ca_oc_cl?id=eq.${oid}&select=*`), api(`ca_oc_lineas_cl?oc_id=eq.${oid}&select=*&order=id`), api(`ca_oc_eventos_cl?oc_id=eq.${oid}&select=*&order=at.desc`)]);
+    setO(a?.[0] || null); setLineas(l || []); setEventos(e || []);
+  };
+  useEffect(() => { if (!nueva) cargar(id); api("ca_mnt_talleres_cl?select=nombre,correo&activo=eq.true&order=nombre").then(setTalleres).catch(() => {}); }, [id]);   // eslint-disable-line react-hooks/exhaustive-deps
+  if (!o) return <div style={{ color: C.tenue }}>Cargando…</div>;
+  const editable = o.estado === "borrador";
+  const iva = 19;
+  const bruto = lineas.reduce((t, l) => t + Number(l.cantidad || 0) * Number(l.precio || 0), 0);
+  const neto = Math.max(bruto - Number(o.descuento || 0), 0);
+  const guardar = async () => {
+    setBusy(true); setMsg("");
+    try { const nid = await rpc("fn_oc_guardar", { p_id: nueva ? null : o.id, p_datos: o, p_lineas: lineas, p_por: quien }); if (nueva) { onVolver(); return; } setMsg("Guardada."); await cargar(nid); }
+    catch (e) { setMsg(e.message); } finally { setBusy(false); }
+  };
+  const accion = async (a, valor) => {
+    setBusy(true); setMsg("");
+    try { const r = await rpc("fn_oc_accion", { p_id: o.id, p_accion: a, p_valor: valor || null, p_por: quien }); setMsg(a === "emitir" ? `Emitida: ${r}` : "Listo."); await cargar(o.id); }
+    catch (e) { setMsg(e.message); } finally { setBusy(false); }
+  };
+  const enviar = async () => {
+    const correo = window.prompt("Correo del taller para enviar la OC:", o.proveedor_correo || ""); if (correo === null) return;
+    setBusy(true); setMsg("");
+    try { setMsg(await rpc("fn_oc_enviar", { p_id: o.id, p_correo: correo, p_por: quien })); await cargar(o.id); } catch (e) { setMsg(e.message); } finally { setBusy(false); }
+  };
+  const imprimir = () => {
+    const $ = (v) => `$${Math.round(Number(v || 0)).toLocaleString("es-CL")}`;
+    const w = window.open("", "_blank"); if (!w) return alert("Permite las ventanas emergentes para el Brain.");
+    w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>OC ${o.numero || "borrador"}</title><style>body{font-family:Arial,sans-serif;color:#1f2937;margin:32px}h1{color:#002E5D;font-size:20px;margin:0}
+    table{border-collapse:collapse;width:100%;font-size:13px;margin-top:14px}td,th{padding:6px 8px;border-bottom:1px solid #e4e7ec;text-align:left}.d{text-align:right}.cab td{border:none;padding:3px 0}
+    .firma{margin-top:48px;display:flex;gap:40px}.firma div{flex:1;border-top:1px solid #94a3b8;padding-top:6px;font-size:12px;color:#475569;text-align:center}</style></head><body>
+    <h1>Orden de compra ${o.numero || "(borrador)"}</h1><div style="color:#FF6600;font-size:13px;margin:4px 0 12px">${o.facturar_a || "Administradora de Servicios BT SpA"}</div>
+    <table class="cab"><tr><td><b>Fecha:</b> ${fd(o.fecha)}</td><td><b>Forma de pago:</b> ${o.forma_pago || "—"}</td></tr><tr><td><b>Proveedor:</b> ${o.proveedor || ""} ${o.proveedor_rut ? "(" + o.proveedor_rut + ")" : ""}</td><td><b>CECO:</b> ${o.ceco || "—"} ${o.patente ? "· Patente " + o.patente : ""}</td></tr>
+    <tr><td><b>Concepto:</b> ${o.concepto || "—"}</td><td><b>Referencia:</b> ${o.referencia || "—"}</td></tr></table>
+    <table><tr><th>Descripción</th><th class="d">Cant.</th><th class="d">Precio</th><th class="d">Total</th></tr>${lineas.map((l) => `<tr><td>${l.descripcion}</td><td class="d">${l.cantidad}</td><td class="d">${$(l.precio)}</td><td class="d">${$(l.cantidad * l.precio)}</td></tr>`).join("")}</table>
+    <table style="width:280px;margin-left:auto"><tr><td>Descuento</td><td class="d">${$(o.descuento)}</td></tr><tr><td>Neto</td><td class="d">${$(o.neto)}</td></tr><tr><td>IVA</td><td class="d">${$(o.iva)}</td></tr><tr><td><b>Total</b></td><td class="d"><b>${$(o.total)}</b></td></tr></table>
+    <p style="font-size:12px">Facturar a ${o.facturar_a || "Administradora de Servicios BT SpA"} indicando el N° de OC.</p>
+    <div class="firma"><div>Solicita · Cuidado de Activo</div><div>V°B° Control ${o.vb_por ? "· " + o.vb_por : ""}</div></div><script>window.onload=()=>setTimeout(()=>window.print(),300)</script></body></html>`);
+    w.document.close();
+  };
+  const campo = (k, t, w = 220, props = {}) => <label style={{ fontSize: 12, color: C.suave }}>{t}<input style={{ ...inp, display: "block", width: w }} disabled={!editable} value={o[k] ?? ""} onChange={(e) => setO({ ...o, [k]: e.target.value })} {...props} /></label>;
+  const e = OC_EST[o.estado] || [o.estado, C.fondo, C.suave];
+  return (
+    <div>
+      <button style={btn("sec")} onClick={onVolver}>← Volver a las OC</button>
+      <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, padding: 16, marginTop: 12 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
+          <div style={{ fontSize: 18, fontWeight: 800, color: C.navy }}>{nueva ? "Nueva orden de compra" : `OC ${o.numero || "(borrador)"}`}</div>
+          {!nueva && chip(e[0], e[1], e[2])}
+        </div>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
+          <label style={{ fontSize: 12, color: C.suave }}>Proveedor<input list="oc-talleres" style={{ ...inp, display: "block", width: 240 }} disabled={!editable} value={o.proveedor || ""}
+            onChange={(ev) => { const t = talleres.find((x) => x.nombre === ev.target.value); setO({ ...o, proveedor: ev.target.value, proveedor_correo: t?.correo || o.proveedor_correo }); }} /></label>
+          <datalist id="oc-talleres">{talleres.map((t) => <option key={t.nombre} value={t.nombre} />)}</datalist>
+          {campo("proveedor_rut", "RUT proveedor", 130)}{campo("proveedor_correo", "Correo del taller", 220)}{campo("patente", "Patente", 100)}{campo("ceco", "CECO", 130)}
+          {campo("forma_pago", "Forma de pago", 130)}{campo("referencia", "Referencia (folio)", 130)}{campo("concepto", "Concepto", 320)}
+        </div>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, marginBottom: 8 }}>
+          <thead><tr style={{ background: C.fondo, textAlign: "left" }}><th style={{ padding: "6px 8px" }}>Descripción</th><th style={{ padding: "6px 8px", width: 90 }}>Cant.</th><th style={{ padding: "6px 8px", width: 140 }}>Precio neto</th><th style={{ padding: "6px 8px", width: 140 }}>Total</th>{editable && <th />}</tr></thead>
+          <tbody>{lineas.map((l, i) => (
+            <tr key={i} style={{ borderTop: `1px solid ${C.fondo}` }}>
+              <td style={{ padding: "4px 6px" }}>{editable ? <input style={{ ...inp, width: "100%" }} value={l.descripcion} onChange={(ev) => setLineas(lineas.map((x, j) => j === i ? { ...x, descripcion: ev.target.value } : x))} /> : l.descripcion}</td>
+              <td style={{ padding: "4px 6px" }}>{editable ? <input type="number" style={{ ...inp, width: 80 }} value={l.cantidad} onChange={(ev) => setLineas(lineas.map((x, j) => j === i ? { ...x, cantidad: ev.target.value } : x))} /> : l.cantidad}</td>
+              <td style={{ padding: "4px 6px" }}>{editable ? <input type="number" style={{ ...inp, width: 130 }} value={l.precio} onChange={(ev) => setLineas(lineas.map((x, j) => j === i ? { ...x, precio: ev.target.value } : x))} /> : pesos(l.precio)}</td>
+              <td style={{ padding: "4px 6px", fontWeight: 700 }}>{pesos(Number(l.cantidad || 0) * Number(l.precio || 0))}</td>
+              {editable && <td><button style={{ ...btn("sec"), padding: "2px 8px" }} onClick={() => setLineas(lineas.filter((_, j) => j !== i))}>✕</button></td>}
+            </tr>
+          ))}</tbody>
+        </table>
+        {editable && <button style={btn("sec")} onClick={() => setLineas([...lineas, { descripcion: "", cantidad: 1, precio: 0 }])}>+ Línea</button>}
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 18, fontSize: 13, marginTop: 10, flexWrap: "wrap" }}>
+          <label style={{ color: C.suave }}>Descuento <input type="number" style={{ ...inp, width: 110 }} disabled={!editable} value={o.descuento ?? 0} onChange={(ev) => setO({ ...o, descuento: ev.target.value })} /></label>
+          <span>Neto <b>{pesos(editable ? neto : o.neto)}</b></span><span>IVA <b>{pesos(editable ? Math.round(neto * iva / 100) : o.iva)}</b></span>
+          <span style={{ fontSize: 15 }}>Total <b>{pesos(editable ? neto + Math.round(neto * iva / 100) : o.total)}</b></span>
+        </div>
+        <div style={{ fontSize: 12, color: C.tenue, marginTop: 6 }}>Facturar a {o.facturar_a || "Administradora de Servicios BT SpA"}. IVA y razón social se editan en Configuración (oc_iva_pct, oc_facturar_a).</div>
+        {msg && <div style={{ fontSize: 13, marginTop: 10, color: /^(Guardada|Emitida|Listo|Enviada)/.test(msg) ? C.verde : C.rojo }}>{msg}</div>}
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 14 }}>
+          {editable && <button style={btn()} disabled={busy} onClick={guardar}>Guardar</button>}
+          {!nueva && editable && <button style={btn("verde")} disabled={busy} onClick={() => accion("emitir")}>Emitir (asigna el N°)</button>}
+          {!nueva && !o.vb_at && o.estado !== "anulada" && <button style={btn("sec")} disabled={busy} onClick={() => accion("vb")}>V°B° Control</button>}
+          {!nueva && <button style={btn("sec")} onClick={imprimir}>Imprimir / PDF</button>}
+          {!nueva && ["emitida", "enviada"].includes(o.estado) && <button style={btn("sec")} disabled={busy} onClick={enviar}>Enviar al taller por correo</button>}
+          {!nueva && ["emitida", "enviada"].includes(o.estado) && <button style={btn("sec")} disabled={busy} onClick={() => { const fct = window.prompt("N° de factura:"); if (fct) accion("factura", fct); }}>Registrar factura</button>}
+          {!nueva && o.estado === "facturada" && <button style={btn("sec")} disabled={busy} onClick={() => accion("estado", "pagada")}>Marcar pagada</button>}
+          {!nueva && !["pagada", "anulada"].includes(o.estado) && <button style={btn("sec")} disabled={busy} onClick={() => window.confirm("¿Anular esta OC?") && accion("estado", "anulada")}>Anular</button>}
+        </div>
+        {o.vb_at && <div style={{ fontSize: 12, color: C.verde, marginTop: 8 }}>V°B° Control: {o.vb_por} · {fh(o.vb_at)}</div>}
+        {o.enviada_at && <div style={{ fontSize: 12, color: C.suave, marginTop: 4 }}>Enviada a {o.enviada_a} · {fh(o.enviada_at)}</div>}
+        {o.factura && <div style={{ fontSize: 12, color: C.suave, marginTop: 4 }}>Factura N° {o.factura}</div>}
+        {eventos.length > 0 && <div style={{ fontSize: 11.5, color: C.tenue, marginTop: 10 }}>{eventos.map((x) => <div key={x.id}>{fh(x.at)} · {x.accion}{x.detalle ? ` (${x.detalle})` : ""} · {x.por}</div>)}</div>}
+      </div>
     </div>
   );
 }
