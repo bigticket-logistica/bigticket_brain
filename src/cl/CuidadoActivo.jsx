@@ -104,9 +104,10 @@ export default function CuidadoActivoCL({ usuario, sub }) {
   if (sub === "ca_indicadores") return <Indicadores quien={quien} rol={usuario?.rol} />;
   if (sub === "ca_ficha") return <FichaActivo quien={quien} />;
   if (sub === "ca_documentos") return <Documentos quien={quien} />;
-  if (sub === "ca_flota") return <EstadoFlota />;
+  if (sub === "ca_flota") return <FlotaTabs quien={quien} />;
   if (sub === "ca_gps") return <GpsCamaras quien={quien} />;
   if (sub === "ca_oc") return <OrdenesCompra quien={quien} />;
+  if (sub === "ca_combustible") return <Combustible quien={quien} />;
   if (sub === "ca_uso") return <UsoDetenciones quien={quien} />;
   if (sub === "ca_mantenciones") return <Mantenciones quien={quien} />;
   if (sub === "ca_reparaciones") return <Reparaciones quien={quien} />;
@@ -764,7 +765,133 @@ function ConfirmacionesFlota() {
   );
 }
 
-function EstadoFlota() {
+// Sugerencias de cambio de estado del activo (P-06b y P-07b): no cambian nada solas
+const MOTIVOS_INACTIVO = ["Vendido", "En taller", "En panne", "Siniestrado", "Baja"];
+function SugerenciasEstado({ quien }) {
+  const [filas, setFilas] = useState([]);
+  const cargar = () => api("vw_ca_sugerencias_estado_cl?select=*&order=patente").then((r) => setFilas(r || [])).catch(() => setFilas([]));
+  useEffect(() => { cargar(); }, []);
+  if (!filas.length) return null;
+  const aplicar = async (x) => {
+    if (!window.confirm(`${x.patente}: pasar a ${x.sugerido === "ACTIVO" ? "Activo" : `Inactivo · ${x.motivo}`}?`)) return;
+    try { await rpc("fn_activo_estado", { p_patente: x.patente, p_estado: x.sugerido, p_motivo: x.motivo, p_nota: x.porque, p_por: quien }); cargar(); } catch (e) { alert(e.message); }
+  };
+  return (
+    <div style={{ background: "#eef2f8", border: `1px solid ${C.borde}`, borderRadius: 12, padding: 12, marginBottom: 14 }}>
+      <div style={{ fontWeight: 800, color: C.navy, marginBottom: 6 }}>Sugerencias de estado ({filas.length})</div>
+      <div style={{ fontSize: 12, color: C.suave, marginBottom: 8 }}>El sistema sugiere; el cambio lo aplicas tú y queda en el historial del vehículo.</div>
+      {filas.map((x, i) => (
+        <div key={i} style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", fontSize: 13, padding: "5px 0", borderTop: i ? `1px solid ${C.borde}` : "none" }}>
+          <PatLink p={x.patente} />
+          <span>→ <b>{x.sugerido === "ACTIVO" ? "Activo" : `Inactivo · ${x.motivo}`}</b></span>
+          <span style={{ color: C.suave, flex: 1 }}>{x.porque}</span>
+          <button style={{ ...btn("sec"), padding: "4px 10px" }} onClick={() => aplicar(x)}>Aplicar</button>
+        </div>
+      ))}
+    </div>
+  );
+}
+function CambiarEstadoActivo({ patente, estado, motivo, quien, onListo }) {
+  const [abierto, setAbierto] = useState(false);
+  const [v, setV] = useState({ estado: estado || "ACTIVO", motivo: motivo || "", nota: "" });
+  const [hist, setHist] = useState([]);
+  useEffect(() => { if (abierto) api(`ca_activos_estado_hist_cl?patente=eq.${patente}&select=*&order=at.desc&limit=10`).then(setHist).catch(() => setHist([])); }, [abierto, patente]);
+  const guardar = async () => {
+    try { await rpc("fn_activo_estado", { p_patente: patente, p_estado: v.estado, p_motivo: v.estado === "INACTIVO" ? v.motivo : null, p_nota: v.nota, p_por: quien }); setAbierto(false); onListo && onListo(); }
+    catch (e) { alert(e.message); }
+  };
+  return (
+    <div style={{ marginTop: 8 }}>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        {chip(estado === "INACTIVO" ? `Inactivo${motivo ? " · " + motivo : ""}` : "Activo", estado === "INACTIVO" ? C.fondo : C.verdeT, estado === "INACTIVO" ? C.suave : C.verde)}
+        <a href="#" style={{ fontSize: 12.5, color: C.navy }} onClick={(e) => { e.preventDefault(); setAbierto(!abierto); }}>{abierto ? "Cancelar" : "Cambiar estado"}</a>
+      </div>
+      {abierto && (
+        <div style={{ background: C.fondo, borderRadius: 8, padding: 10, marginTop: 6, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end" }}>
+          <select style={inp} value={v.estado} onChange={(e) => setV({ ...v, estado: e.target.value })}><option value="ACTIVO">Activo</option><option value="INACTIVO">Inactivo</option></select>
+          {v.estado === "INACTIVO" && <select style={inp} value={v.motivo} onChange={(e) => setV({ ...v, motivo: e.target.value })}><option value="">Motivo…</option>{MOTIVOS_INACTIVO.map((m) => <option key={m} value={m}>{m}</option>)}</select>}
+          <input style={{ ...inp, minWidth: 180 }} placeholder="Nota (opcional)" value={v.nota} onChange={(e) => setV({ ...v, nota: e.target.value })} />
+          <button style={btn()} onClick={guardar}>Guardar</button>
+          {hist.length > 0 && <div style={{ width: "100%", fontSize: 11.5, color: C.tenue }}>{hist.map((h) => <div key={h.id}>{fh(h.at)} · {h.estado}{h.motivo ? ` · ${h.motivo}` : ""} (antes: {h.antes || "—"}){h.nota ? ` · ${h.nota}` : ""} · {h.por}</div>)}</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Estado de flota: «Hoy» y «Uso del mes» (P-07a)
+function FlotaTabs({ quien }) {
+  const [vista, setVista] = useState("hoy");
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
+        {[["hoy", "Hoy"], ["mes", "Uso del mes"]].map(([k, t]) => <button key={k} style={btn(vista === k ? undefined : "sec")} onClick={() => setVista(k)}>{t}</button>)}
+      </div>
+      {vista === "hoy" ? <EstadoFlota quien={quien} /> : <UsoMesFlota />}
+    </div>
+  );
+}
+function UsoMesFlota() {
+  const [mes, setMes] = useState(hoyCL().slice(0, 7));
+  const [d, setD] = useState(null);
+  const [meta, setMeta] = useState(90);
+  useEffect(() => {
+    setD(null);
+    rpc("fn_ca_uso_mes_cl", { p_mes: `${mes}-01` }).then(setD).catch(() => setD({ por_dia: [], ranking: [] }));
+    api("ca_config_cl?clave=eq.flota_meta_uso&select=valor").then((r) => r?.[0]?.valor && setMeta(Number(r[0].valor))).catch(() => {});
+  }, [mes]);
+  const celda = { padding: "6px 8px", borderBottom: `1px solid ${C.borde}`, fontSize: 12.5 };
+  return (
+    <div>
+      <label style={{ fontSize: 12.5, color: C.suave }}>Mes <input type="month" style={inp} value={mes} onChange={(e) => e.target.value && setMes(e.target.value)} /></label>
+      {d === null ? <div style={{ color: C.tenue, marginTop: 10 }}>Calculando…</div> : (
+        <>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", margin: "12px 0" }}>
+            <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, padding: "10px 14px", flex: "1 1 160px" }}>
+              <div style={{ fontSize: 24, fontWeight: 800, color: d.uso_mes >= meta ? C.verde : C.rojo }}>{d.uso_mes ?? "—"}%</div><div style={{ fontSize: 12, color: C.suave }}>Uso del mes (meta {meta}%)</div>
+            </div>
+            <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, padding: "10px 14px", flex: "1 1 160px" }}>
+              <div style={{ fontSize: 24, fontWeight: 800, color: C.navy }}>{(d.ranking || []).length}</div><div style={{ fontSize: 12, color: C.suave }}>Vehículos con días sin salir</div>
+            </div>
+          </div>
+          <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, padding: 12, marginBottom: 12 }}>
+            <div style={{ fontWeight: 800, color: C.navy, fontSize: 13, marginBottom: 8 }}>% de uso por día (la línea es la meta)</div>
+            <div style={{ position: "relative", display: "flex", alignItems: "flex-end", gap: 4, height: 130 }}>
+              <div style={{ position: "absolute", left: 0, right: 0, bottom: `${(meta / 100) * 100 + 18}px`, borderTop: `2px dashed ${C.navy}`, opacity: 0.5 }} />
+              {(d.por_dia || []).map((x) => (
+                <div key={x.fecha} title={`${fd(x.fecha)}: ${x.salieron} de ${x.flota} (${x.uso}%)`} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
+                  <span style={{ fontSize: 9.5, color: C.suave }}>{Math.round(x.uso)}</span>
+                  <div style={{ width: "100%", height: `${x.uso}px`, background: x.uso >= meta ? C.verde : C.ambar, borderRadius: 3 }} />
+                  <span style={{ fontSize: 10, color: C.tenue }}>{String(x.fecha).slice(8, 10)}</span>
+                </div>
+              ))}
+            </div>
+            <div style={{ fontSize: 11.5, color: C.tenue, marginTop: 6 }}>Flota propia activa, sin CECO de jefatura ni domingos (editable: uso_excluir_domingo). Salió = tuvo ruta en el maestro de viajes.</div>
+          </div>
+          <div style={{ fontWeight: 800, color: C.navy, marginBottom: 6 }}>Ranking de días sin salir</div>
+          <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 640 }}>
+              <thead><tr style={{ background: C.fondo, textAlign: "left" }}>{["Patente", "CECO", "Días sin salir", "Sin motivo", "Motivos"].map((h) => <th key={h} style={{ ...celda, color: C.suave }}>{h}</th>)}</tr></thead>
+              <tbody>
+                {(d.ranking || []).length === 0 && <tr><td colSpan={5} style={{ ...celda, color: C.tenue, textAlign: "center" }}>Todos los vehículos salieron todos los días.</td></tr>}
+                {(d.ranking || []).map((x) => (
+                  <tr key={x.patente}>
+                    <td style={celda}><PatLink p={x.patente} /></td><td style={celda}>{x.ceco || "—"}</td>
+                    <td style={{ ...celda, fontWeight: 800, color: x.sin_salir >= 5 ? C.rojo : C.texto }}>{x.sin_salir} de {x.dias}</td>
+                    <td style={{ ...celda, color: x.sin_motivo ? C.rojo : C.tenue }}>{x.sin_motivo || "—"}</td>
+                    <td style={celda}>{x.motivos ? Object.entries(x.motivos).map(([k, v]) => `${k} (${v})`).join(", ") : "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function EstadoFlota({ quien = "brain" }) {
   const [fecha, setFecha] = useState(hoyCL());
   const [filas, setFilas] = useState(null);
   const [meta, setMeta] = useState(90);
@@ -796,6 +923,7 @@ function EstadoFlota() {
   const esHoy = fecha === hoyCL();
   return (
     <div>
+      <SugerenciasEstado quien={quien} />
       <ConfirmacionesFlota />
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
         <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, padding: "12px 16px", flex: "1 1 200px" }}>
@@ -1155,7 +1283,7 @@ function TalleresMnt({ quien }) {
 }
 
 // ── Ficha del activo ────────────────────────────────────────────────────────
-const DOC_EST = { vencido: ["Vencido", C.rojoT, C.rojo], por_vencer: ["Por vencer", C.ambarT, C.ambar], sin_dato: ["Sin dato", C.fondo, C.suave], al_dia: ["Al día", C.verdeT, C.verde], no_aplica: ["No aplica", C.fondo, C.tenue] };
+const DOC_EST = { vencido: ["Vencido", C.rojoT, C.rojo], por_vencer: ["Por vencer", C.ambarT, C.ambar], falta_archivo: ["Falta archivo", C.ambarT, C.ambar], sin_dato: ["Sin dato", C.fondo, C.suave], al_dia: ["Al día", C.verdeT, C.verde], no_aplica: ["No aplica", C.fondo, C.tenue] };
 const pesos = (v) => (v === null || v === undefined ? "—" : `$${Math.round(Number(v)).toLocaleString("es-CL")}`);
 function FichaActivo({ quien }) {
   const [filas, setFilas] = useState(null);
@@ -1252,6 +1380,7 @@ function FichaDetalle({ patente, quien, onVolver }) {
       {err && <div style={{ color: C.rojo, marginBottom: 10 }}>{err}</div>}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 12 }}>
         {card("Datos maestros", <>
+          <CambiarEstadoActivo patente={patente} estado={m.estado} motivo={m.estado_motivo} quien={quien} onListo={() => rpc("fn_ficha_cl", { p_patente: patente }).then(setD)} />
           {fila("Tipo", m.tipo_vehiculo)}{fila("Energía", m.energia)}{fila("CECO", m.ceco_operacion || m.ceco)}{fila("Supervisor", m.supervisor)}
           {fila("Empresa asignada", m.empresa)}{fila("RUT empresa", m.rut_empresa)}{fila("VIN", m.vin)}{fila("Motor", m.motor)}
           {fila("Valor de compra", pesos(m.valor_compra))}{fila("Leasing", [m.leasing_banco, m.leasing_estado].filter(Boolean).join(" · ") || "—")}
@@ -3307,6 +3436,170 @@ function FichaOC({ id, quien, onVolver }) {
         {o.enviada_at && <div style={{ fontSize: 12, color: C.suave, marginTop: 4 }}>Enviada a {o.enviada_a} · {fh(o.enviada_at)}</div>}
         {o.factura && <div style={{ fontSize: 12, color: C.suave, marginTop: 4 }}>Factura N° {o.factura}</div>}
         {eventos.length > 0 && <div style={{ fontSize: 11.5, color: C.tenue, marginTop: 10 }}>{eventos.map((x) => <div key={x.id}>{fh(x.at)} · {x.accion}{x.detalle ? ` (${x.detalle})` : ""} · {x.por}</div>)}</div>}
+      </div>
+    </div>
+  );
+}
+
+// ── Combustible (pedido F-01) ───────────────────────────────────────────────
+const KM_MARCA = { ok: ["Ok", C.verdeT, C.verde], diferencia_km: ["Diferencia de km", C.ambarT, C.ambar], ruta_sin_geotab: ["Ruta sin movimiento en Geotab", C.rojoT, C.rojo],
+  km_ruta_fuera_rango: ["Km de ruta fuera de rango", C.ambarT, C.ambar], sin_ruta: ["Km sin ruta de Logistic", "#eef2f8", C.navy] };
+function Combustible({ quien }) {
+  const [vista, setVista] = useState("mes");
+  const [mes, setMes] = useState(hoyCL().slice(0, 7));
+  const [cargando, setCargando] = useState("");
+  const [rev, setRev] = useState(0);
+  const importar = async (file) => {
+    if (!file) return;
+    setCargando("Leyendo el Excel…");
+    try {
+      const XLSX = await cargarSheetJS();
+      const wb = XLSX.read(await file.arrayBuffer(), { type: "array", cellDates: true });
+      const hoja = wb.SheetNames.find((n) => /^data$/i.test(n.trim())) || wb.SheetNames[0];
+      const iso = (v) => v instanceof Date ? new Date(v.getTime() - v.getTimezoneOffset() * 60000).toISOString().slice(0, 10) : v;
+      const filas = XLSX.utils.sheet_to_json(wb.Sheets[hoja], { defval: null }).map((r) => {
+        const o = {}; for (const [k, v] of Object.entries(r)) { const kk = String(k).trim().toUpperCase(); o[kk] = kk === "HORA" && v instanceof Date ? v.toTimeString().slice(0, 8) : iso(v); }
+        return o;
+      }).filter((r) => r.PATENTE && r.FECHA);
+      if (!filas.length) throw new Error(`La hoja «${hoja}» no trae filas con PATENTE y FECHA`);
+      const tot = { nuevos: 0, repetidos: 0, omitidos: 0 };
+      for (let i = 0; i < filas.length; i += 300) {
+        setCargando(`Cargando ${Math.min(i + 300, filas.length)} de ${filas.length}…`);
+        const r = await rpc("fn_comb_importar", { p_filas: filas.slice(i, i + 300), p_archivo: file.name, p_por: quien });
+        for (const k of Object.keys(tot)) tot[k] += Number(r?.[k] || 0);
+      }
+      alert(`Informe de Copec «${hoja}»: ${filas.length} cargas.\n\n• Nuevas: ${tot.nuevos}\n• Ya estaban (no se duplican): ${tot.repetidos}${tot.omitidos ? `\n• Sin patente o fecha: ${tot.omitidos}` : ""}`);
+      setRev(rev + 1);
+    } catch (e) { alert(e.message); } finally { setCargando(""); }
+  };
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginBottom: 14 }}>
+        {[["mes", "Resumen del mes"], ["km", "Km Geotab vs. ruta"], ["cargas", "Cargas de Copec"]].map(([k, t]) => <button key={k} style={btn(vista === k ? undefined : "sec")} onClick={() => setVista(k)}>{t}</button>)}
+        <label style={{ fontSize: 12.5, color: C.suave, marginLeft: 8 }}>Mes <input type="month" style={inp} value={mes} onChange={(e) => e.target.value && setMes(e.target.value)} /></label>
+        <label style={{ ...btn("sec"), display: "inline-block", cursor: cargando ? "wait" : "pointer" }}>
+          {cargando || "Cargar informe de Copec (Excel)"}
+          <input type="file" accept=".xlsx,.xls" style={{ display: "none" }} disabled={!!cargando} onChange={(e) => { importar(e.target.files?.[0]); e.target.value = ""; }} />
+        </label>
+      </div>
+      {vista === "mes" ? <CombustibleMes key={mes + rev} mes={mes} quien={quien} /> : vista === "km" ? <CombustibleKm key={mes + rev} mes={mes} /> : <CombustibleCargas key={mes + rev} mes={mes} />}
+    </div>
+  );
+}
+function CombustibleMes({ mes, quien }) {
+  const [filas, setFilas] = useState(null);
+  const [sel, setSel] = useState({});
+  const cargar = () => rpc("fn_comb_mes", { p_mes: `${mes}-01` }).then(setFilas).catch(() => setFilas([]));
+  useEffect(() => { cargar(); }, [mes]);   // eslint-disable-line react-hooks/exhaustive-deps
+  if (filas === null) return <div style={{ color: C.tenue }}>Calculando…</div>;
+  const tot = (k) => filas.reduce((t, x) => t + Number(x[k] || 0), 0);
+  const sobre = filas.filter((x) => Number(x.excedente) > 0);
+  const marcados = Object.keys(sel).filter((k) => sel[k]);
+  const enviar = async () => {
+    if (!marcados.length || !window.confirm(`Marcar como enviados a cobro los excedentes de ${marcados.length} patente(s). El cobro real queda para el módulo de Conciliaciones. ¿Seguir?`)) return;
+    try { const n = await rpc("fn_comb_enviar_cobro", { p_mes: `${mes}-01`, p_patentes: marcados, p_por: quien }); alert(`${n} excedente(s) marcados como enviados a cobro.`); setSel({}); cargar(); } catch (e) { alert(e.message); }
+  };
+  const exportar = async () => {
+    const XLSX = await cargarSheetJS();
+    const data = sobre.map((x) => ({ RUT: x.rut, EMPRESA: x.tercero, PATENTE: x.patente, MONTO: Number(x.gasto), EXCEDENTE: Number(x.excedente) }));
+    const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(data), "COMBUSTIBLE"); XLSX.writeFile(wb, `Combustible_${mes}.xlsx`);
+  };
+  const kpi = (t, v, c = C.navy) => <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, padding: "10px 14px", flex: "1 1 140px" }}><div style={{ fontSize: 20, fontWeight: 800, color: c }}>{v}</div><div style={{ fontSize: 12, color: C.suave }}>{t}</div></div>;
+  const celda = { padding: "7px 9px", borderBottom: `1px solid ${C.borde}`, fontSize: 12.5 };
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
+        {kpi("Gasto del mes", pesos(tot("gasto")))}{kpi("Litros", Math.round(tot("litros")).toLocaleString("es-CL"))}
+        {kpi("Precio promedio por litro", tot("litros") ? pesos(tot("gasto") / tot("litros")) : "—")}
+        {kpi("Vehículos sobre la subvención", sobre.length, C.rojo)}{kpi("Excedente total", pesos(tot("excedente")), C.rojo)}
+      </div>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10, flexWrap: "wrap" }}>
+        <button style={btn()} disabled={!marcados.length} onClick={enviar}>Enviar a cobro ({marcados.length})</button>
+        <button style={btn("sec")} disabled={!sobre.length} onClick={exportar}>Hoja COMBUSTIBLE (Excel)</button>
+        <span style={{ fontSize: 12, color: C.tenue }}>Subvención y tolerancias en Configuración (comb_*). Solo vehículos con tarjeta Copec.</span>
+      </div>
+      <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1000 }}>
+          <thead><tr style={{ background: C.fondo, textAlign: "left" }}>
+            <th style={celda} />{["Tercero", "Patente", "Cargas", "Litros", "Gasto", "Subvención", "Excedente", "Km Geotab", "Km ruta", "Dif.", "Días marcados", "Cobro"].map((h) => <th key={h} style={{ ...celda, color: C.suave }}>{h}</th>)}
+          </tr></thead>
+          <tbody>
+            {filas.length === 0 && <tr><td colSpan={13} style={{ ...celda, color: C.tenue, textAlign: "center" }}>Sin cargas de Copec en este mes. Carga el informe.</td></tr>}
+            {filas.map((x) => (
+              <tr key={x.patente}>
+                <td style={celda}>{Number(x.excedente) > 0 && !x.cobro_enviado_at && <input type="checkbox" checked={!!sel[x.patente]} onChange={(e) => setSel({ ...sel, [x.patente]: e.target.checked })} />}</td>
+                <td style={celda}>{x.tercero || "—"}<div style={{ color: C.tenue, fontSize: 11.5 }}>{x.rut}</div></td>
+                <td style={{ ...celda, fontWeight: 800, color: C.navy }}><PatLink p={x.patente} /></td>
+                <td style={celda}>{x.cargas}</td><td style={celda}>{x.litros}</td><td style={{ ...celda, fontWeight: 700 }}>{pesos(x.gasto)}</td><td style={celda}>{pesos(x.subvencion)}</td>
+                <td style={{ ...celda, fontWeight: 800, color: Number(x.excedente) > 0 ? C.rojo : C.tenue }}>{Number(x.excedente) > 0 ? pesos(x.excedente) : "—"}</td>
+                <td style={celda}>{x.km_geotab ?? "—"}</td><td style={celda}>{x.km_ruta ?? "—"}</td>
+                <td style={{ ...celda, color: x.diferencia_pct !== null && Math.abs(x.diferencia_pct) > 20 ? C.ambar : C.texto }}>{x.diferencia_pct !== null ? `${x.diferencia_pct}%` : "—"}</td>
+                <td style={{ ...celda, color: x.dias_marcados ? C.ambar : C.tenue }}>{x.dias_marcados || "—"}</td>
+                <td style={celda}>{x.cobro_enviado_at ? chip("Enviado", C.verdeT, C.verde) : "—"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+function CombustibleKm({ mes }) {
+  const [filas, setFilas] = useState(null);
+  const [f, setF] = useState({ marca: "marcados", texto: "" });
+  useEffect(() => { rpc("fn_comb_km_dia", { p_mes: `${mes}-01` }).then(setFilas).catch(() => setFilas([])); }, [mes]);
+  if (filas === null) return <div style={{ color: C.tenue }}>Calculando…</div>;
+  const vis = filas.filter((x) => (f.marca === "marcados" ? !["ok", "sin_ruta"].includes(x.marca) : !f.marca || x.marca === f.marca) && (!f.texto || x.patente.toLowerCase().includes(f.texto.toLowerCase())));
+  const celda = { padding: "6px 8px", borderBottom: `1px solid ${C.borde}`, fontSize: 12.5 };
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10, alignItems: "center" }}>
+        <select style={inp} value={f.marca} onChange={(e) => setF({ ...f, marca: e.target.value })}><option value="marcados">Solo días marcados</option><option value="">Todos los días</option>{Object.entries(KM_MARCA).map(([k, v]) => <option key={k} value={k}>{v[0]}</option>)}</select>
+        <input style={{ ...inp, width: 140 }} placeholder="Patente" value={f.texto} onChange={(e) => setF({ ...f, texto: e.target.value })} />
+        <span style={{ fontSize: 12, color: C.tenue }}>Km de Geotab (viajes del día) contra km planificados de las rutas de Logistic (rutas_snapshots). Solo patentes con tarjeta Copec.</span>
+      </div>
+      <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 760 }}>
+          <thead><tr style={{ background: C.fondo, textAlign: "left" }}>{["Día", "Patente", "Km Geotab", "Km ruta", "Rutas", "Diferencia", "Marca"].map((h) => <th key={h} style={{ ...celda, color: C.suave }}>{h}</th>)}</tr></thead>
+          <tbody>
+            {vis.length === 0 && <tr><td colSpan={7} style={{ ...celda, color: C.tenue, textAlign: "center" }}>Sin días con este filtro.</td></tr>}
+            {vis.map((x) => { const m = KM_MARCA[x.marca] || [x.marca, C.fondo, C.suave]; return (
+              <tr key={x.fecha + x.patente}>
+                <td style={celda}>{fd(x.fecha)}</td><td style={{ ...celda, fontWeight: 800, color: C.navy }}><PatLink p={x.patente} /></td>
+                <td style={celda}>{x.km_geotab ?? "—"}</td><td style={celda}>{x.km_ruta ?? "—"}</td><td style={celda}>{x.rutas ?? "—"}</td>
+                <td style={celda}>{x.diferencia} km{x.diferencia_pct !== null ? ` (${x.diferencia_pct}%)` : ""}</td><td style={celda}>{chip(m[0], m[1], m[2])}</td>
+              </tr>
+            ); })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+function CombustibleCargas({ mes }) {
+  const [filas, setFilas] = useState(null);
+  const [texto, setTexto] = useState("");
+  useEffect(() => {
+    const fin = new Date(`${mes}-01T12:00:00`); fin.setMonth(fin.getMonth() + 1);
+    api(`ca_combustible_cl?select=*&fecha=gte.${mes}-01&fecha=lt.${fin.toISOString().slice(0, 10)}&order=fecha.desc,hora.desc&limit=3000`).then(setFilas).catch(() => setFilas([]));
+  }, [mes]);
+  if (filas === null) return <div style={{ color: C.tenue }}>Cargando…</div>;
+  const vis = filas.filter((x) => !texto || `${x.patente} ${x.tercero || ""} ${x.comuna || ""}`.toLowerCase().includes(texto.toLowerCase()));
+  const celda = { padding: "6px 8px", borderBottom: `1px solid ${C.borde}`, fontSize: 12.5 };
+  return (
+    <div>
+      <input style={{ ...inp, minWidth: 220, marginBottom: 10 }} placeholder="Patente, tercero o comuna" value={texto} onChange={(e) => setTexto(e.target.value)} />
+      <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 900 }}>
+          <thead><tr style={{ background: C.fondo, textAlign: "left" }}>{["Fecha", "Hora", "Patente", "Tercero", "Estación", "Litros", "Precio", "Monto", "Odómetro"].map((h) => <th key={h} style={{ ...celda, color: C.suave }}>{h}</th>)}</tr></thead>
+          <tbody>{vis.map((x) => (
+            <tr key={x.clave}>
+              <td style={celda}>{fd(x.fecha)}</td><td style={celda}>{x.hora}</td><td style={{ ...celda, fontWeight: 800, color: C.navy }}><PatLink p={x.patente} /></td>
+              <td style={celda}>{x.tercero || "—"}</td><td style={celda}>{x.comuna}<div style={{ color: C.tenue, fontSize: 11.5 }}>{x.direccion}</div></td>
+              <td style={celda}>{x.litros}</td><td style={celda}>{pesos(x.precio)}</td><td style={{ ...celda, fontWeight: 700 }}>{pesos(x.monto)}</td><td style={celda}>{x.odometro ? Number(x.odometro).toLocaleString("es-CL") : "—"}</td>
+            </tr>
+          ))}</tbody>
+        </table>
       </div>
     </div>
   );
