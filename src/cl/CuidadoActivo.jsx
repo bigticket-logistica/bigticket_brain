@@ -1023,8 +1023,10 @@ function FormMnt({ x, modo, quien, onListo }) {
 function HistorialMnt({ patente, quien = "brain" }) {
   const [h, setH] = useState(null);
   const [tipo, setTipo] = useState("");
+  const [desde, setDesde] = useState("");
+  const [hasta, setHasta] = useState("");
   const [nuevo, setNuevo] = useState(null);
-  const cargarH = () => api(`ca_mnt_historial_cl?select=*&patente=eq.${encodeURIComponent(patente)}&order=fecha.desc&limit=200`).then(setH).catch(() => setH([]));
+  const cargarH = () => api(`ca_mnt_historial_cl?select=*&patente=eq.${encodeURIComponent(patente)}&order=fecha.desc&limit=1000`).then(setH).catch(() => setH([]));
   useEffect(() => { cargarH(); }, [patente]);   // eslint-disable-line react-hooks/exhaustive-deps
   const guardarNuevo = async () => {
     try {
@@ -1035,13 +1037,15 @@ function HistorialMnt({ patente, quien = "brain" }) {
   };
   const borrar = async (id) => { if (!window.confirm("¿Borrar este registro?")) return; try { await rpc("fn_mnt_historial_borrar", { p_id: id, p_por: quien }); cargarH(); } catch (e) { alert(e.message); } };
   if (!h) return <div style={{ padding: 14, color: C.tenue, fontSize: 13 }}>Cargando historial…</div>;
-  const vis = h.filter((x) => !tipo || x.tipo === tipo);
+  const vis = h.filter((x) => (!tipo || x.tipo === tipo) && (!desde || (x.fecha || "") >= desde) && (!hasta || (x.fecha || "") <= hasta));
   const total = vis.reduce((s, x) => s + (Number(x.precio_total) || Number(x.costo) || 0), 0);
   return (
     <div style={{ padding: 14, background: "#fafbfd" }}>
       <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8, flexWrap: "wrap" }}>
         <b style={{ color: C.navy }}>Historial de {patente}</b>
         <select style={inp} value={tipo} onChange={(e) => setTipo(e.target.value)}><option value="">Todo</option>{Object.entries(MN_TIPO).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select>
+        <label style={{ fontSize: 12, color: C.suave }}>Desde <input type="date" style={inp} value={desde} onChange={(e) => setDesde(e.target.value)} /></label>
+        <label style={{ fontSize: 12, color: C.suave }}>Hasta <input type="date" style={inp} value={hasta} onChange={(e) => setHasta(e.target.value)} /></label>
         <span style={{ fontSize: 12.5, color: C.suave }}>{vis.length} registros · ${Math.round(total).toLocaleString("es-CL")}</span>
         <button style={btn("sec")} onClick={() => setNuevo(nuevo ? null : { tipo: "otro", fecha: hoyCL(), km: "", detalle: "", taller: "", costo: "", dias: "", responsable: "BIGTICKET" })}>{nuevo ? "Cancelar" : "+ Agregar registro"}</button>
       </div>
@@ -1224,6 +1228,8 @@ function FichaDetalle({ patente, quien, onVolver }) {
   const [d, setD] = useState(null);
   const [err, setErr] = useState("");
   const [vu, setVu] = useState([]);
+  const [sins, setSins] = useState([]);
+  useEffect(() => { api(`vw_siniestros_cl?select=folio,fecha_siniestro,danos,causante,estado,costo_reparacion,deducible,dias_taller,taller_en_curso,compania&patente=eq.${encodeURIComponent(patente)}&order=fecha_siniestro.desc`).then(setSins).catch(() => setSins([])); }, [patente]);
   useEffect(() => { rpc("fn_ficha_cl", { p_patente: patente }).then(setD).catch((e) => { setErr(e.message); setD({}); }); rpc("fn_mnt_vida_util_cl").then((r) => setVu((r || []).filter((x) => x.patente === patente))).catch(() => setVu([])); }, [patente]);
   const card = (t, cont) => (
     <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, padding: 14 }}>
@@ -1304,6 +1310,14 @@ function FichaDetalle({ patente, quien, onVolver }) {
               <span style={{ display: "flex", gap: 6, alignItems: "center" }}><BarraVU pct={x.pct} />{chip(e[0], e[1], e[2])}</span>
             </div>
           ); }))}
+        {card(`Siniestros (${sins.length})`, sins.length === 0 ? <div style={{ color: C.tenue, fontSize: 13 }}>Sin siniestros registrados.</div> :
+          <>{sins.slice(0, 8).map((x) => (
+            <div key={x.folio} style={{ fontSize: 13, padding: "5px 0", borderBottom: `1px solid ${C.fondo}` }}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}><b>{x.folio} · {fd(x.fecha_siniestro)}</b>{chip((SIN_ESTADO[x.estado] || [x.estado])[0], (SIN_ESTADO[x.estado] || [])[1] || C.fondo, (SIN_ESTADO[x.estado] || [])[2] || C.suave)}</div>
+              <div style={{ color: C.suave, fontSize: 12 }}>{x.danos || "—"}{x.causante ? ` · causante ${x.causante}` : ""}</div>
+              <div style={{ color: C.tenue, fontSize: 12 }}>Costo {pesos(x.costo_reparacion)} · deducible {pesos(x.deducible)}{x.dias_taller !== null && x.dias_taller !== undefined ? ` · ${x.dias_taller} días en taller${x.taller_en_curso ? " (en curso)" : ""}` : ""}</div>
+            </div>
+          ))}<div style={{ fontSize: 12, marginTop: 6 }}><a href="#" style={{ color: C.navy }} onClick={(e) => { e.preventDefault(); irA("ca_siniestros"); }}>Ver en Siniestros →</a></div></>)}
         {card("Auditorías", (d.auditorias || []).length === 0 ? <div style={{ color: C.tenue, fontSize: 13 }}>Sin auditorías.</div> :
           d.auditorias.map((a) => <div key={a.id} style={{ fontSize: 13, padding: "4px 0", borderBottom: `1px solid ${C.fondo}` }}>
             <b>{a.subtipo || (a.tipo === "vehiculo" ? "Vehículo" : "Limpieza")}</b> · {a.estado}{a.veredicto ? ` · ${a.veredicto}` : ""}<div style={{ color: C.tenue, fontSize: 12 }}>{a.enviada_at ? fh(a.enviada_at) : "sin enviar"}</div></div>))}
