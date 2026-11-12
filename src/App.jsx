@@ -15181,11 +15181,13 @@ function MantenedorSupervisores() {
 }
 
 const TABS_CUIDADO_CL = [
+  { id: "ca_pedido", label: "Avance del pedido", desc: "Estado de cada ítem del pedido de Cuidado de Activo" },
   { id: "ca_alertas", label: "Centro de alertas", desc: "Todas las alertas de la flota en un solo lugar y sus reglas" },
   { id: "ca_evaluacion", label: "Evaluación del ejecutivo", desc: "Solo jefatura: gestión a tiempo de lo que avisó el sistema" },
   { id: "ca_ficha", label: "Ficha del activo", desc: "Todo de cada patente: datos, documentos, costos e historial" },
   { id: "ca_documentos", label: "Documentos", desc: "Subir y confirmar SOAP, revisión técnica, permiso, seguro y leasing" },
   { id: "ca_flota", label: "Estado de flota", desc: "Qué pasa hoy con cada vehículo propio" },
+  { id: "ca_gps", label: "GPS y cámaras", desc: "Estado de cada GPS y cámara, y los eventos de Fleetup" },
   { id: "ca_uso", label: "Uso y detenciones", desc: "Paradas de Geotab de la flota propia y su clasificación" },
   { id: "ca_mantenciones", label: "Mantenciones", desc: "Próxima mantención por km (Geotab), pautas y talleres" },
   { id: "ca_reparaciones", label: "Reparaciones", desc: "Solicitud, cotización, aprobación, taller y cierre con gasto" },
