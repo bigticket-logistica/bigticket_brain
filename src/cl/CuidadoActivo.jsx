@@ -79,11 +79,13 @@ const inp = { border: `1px solid ${C.borde}`, borderRadius: 8, padding: "7px 10p
 
 export default function CuidadoActivoCL({ usuario, sub }) {
   const quien = usuario?.email || usuario?.nombre || "brain";
+  if (sub === "ca_pedido") return <AvancePedido quien={quien} rol={usuario?.rol} />;
   if (sub === "ca_alertas") return <CentroAlertas quien={quien} rol={usuario?.rol} />;
   if (sub === "ca_evaluacion") return <EvaluacionEjecutivo usuario={usuario} />;
   if (sub === "ca_ficha") return <FichaActivo quien={quien} />;
   if (sub === "ca_documentos") return <Documentos quien={quien} />;
   if (sub === "ca_flota") return <EstadoFlota />;
+  if (sub === "ca_gps") return <GpsCamaras quien={quien} />;
   if (sub === "ca_uso") return <UsoDetenciones quien={quien} />;
   if (sub === "ca_mantenciones") return <Mantenciones quien={quien} />;
   if (sub === "ca_reparaciones") return <Reparaciones quien={quien} />;
@@ -2361,6 +2363,7 @@ const UZ = { calle: ["Calle", C.ambarT, C.ambar], bodega: ["Bodega", C.fondo, C.
 const UC = {
   sin_respaldo: ["Sin respaldo", C.rojoT, C.rojo], entrega_con_exceso: ["Entrega con exceso", C.ambarT, C.ambar],
   entrega: ["Entrega", C.verdeT, C.verde], interrupcion: ["Interrupción registrada", C.verdeT, C.verde], interrupcion_excedida: ["Interrupción excedida", C.ambarT, C.ambar],
+  aviso_pendiente: ["Aviso por revisar del supervisor", "#eef2f8", C.navy],
   fuera_de_ruta: ["Fuera de ruta", "#eef2f8", C.navy], operativa: ["Operativa", C.fondo, C.suave],
 };
 function ReglasDetencion({ quien, onCambio }) {
@@ -2453,6 +2456,7 @@ function UsoDetenciones({ quien }) {
         {kpi("Interrupción excedida", n((x) => x.clasificacion === "interrupcion_excedida"), C.ambar, "interrupcion_excedida")}
         {kpi("Entregas", n((x) => x.clasificacion === "entrega"), C.verde, "entrega")}
         {kpi("Interrupciones registradas", n((x) => x.clasificacion === "interrupcion"), C.verde, "interrupcion")}
+        {kpi("Avisos por revisar", n((x) => x.clasificacion === "aviso_pendiente"), C.navy, "aviso_pendiente")}
         {kpi("Fuera de ruta", n((x) => x.clasificacion === "fuera_de_ruta"), C.navy, "fuera_de_ruta")}
         {kpi("Operativas (bodega / estacionamiento)", n((x) => x.clasificacion === "operativa"), C.suave, "operativa")}
         {kpi("Todas", todos.length, C.texto, "todas")}
@@ -2577,6 +2581,249 @@ function EvaluacionEjecutivo({ usuario }) {
           </table>
         </div>
       </>}
+    </div>
+  );
+}
+
+// ── Avance del pedido (documento de Adriana del 12-nov-2026) ────────────────
+const PED_EST = { hecho: ["Hecho", C.verdeT, C.verde], en_curso: ["En curso", "#eef2f8", C.navy], pendiente: ["Pendiente", C.fondo, C.suave], bloqueado: ["Bloqueado", C.ambarT, C.ambar] };
+function AvancePedido({ quien, rol }) {
+  const [filas, setFilas] = useState(null);
+  const [f, setF] = useState({ estado: "", seccion: "", texto: "" });
+  const [editando, setEditando] = useState(null);
+  const puede = rol === "superadmin";
+  const cargar = () => api("ca_pedido_cl?select=*&order=orden").then(setFilas).catch(() => setFilas([]));
+  useEffect(() => { cargar(); }, []);
+  const guardar = async (x, estado, nota) => {
+    try { await rpc("fn_pedido_actualizar", { p_codigo: x.codigo, p_estado: estado, p_nota: nota, p_por: quien }); setEditando(null); cargar(); } catch (e) { alert(e.message); }
+  };
+  if (filas === null) return <div style={{ color: C.tenue }}>Cargando…</div>;
+  const n = (e) => filas.filter((x) => x.estado === e).length;
+  const pct = filas.length ? Math.round((n("hecho") * 100) / filas.length) : 0;
+  const secciones = [...new Set(filas.map((x) => x.seccion))];
+  const vis = filas.filter((x) => (!f.estado || x.estado === f.estado) && (!f.seccion || x.seccion === f.seccion)
+    && (!f.texto || `${x.codigo} ${x.titulo} ${x.nota || ""}`.toLowerCase().includes(f.texto.toLowerCase())));
+  const celda = { padding: "7px 9px", borderBottom: `1px solid ${C.borde}`, fontSize: 13, verticalAlign: "top" };
+  return (
+    <div>
+      <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, padding: "12px 16px", marginBottom: 12 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 8, alignItems: "baseline" }}>
+          <div style={{ fontWeight: 800, color: C.navy }}>Pedido de desarrollo de Cuidado de Activo · 12-11-2026</div>
+          <div style={{ fontSize: 13, color: C.suave }}>{n("hecho")} de {filas.length} ítems hechos · {pct}%</div>
+        </div>
+        <div style={{ height: 10, background: C.fondo, borderRadius: 6, overflow: "hidden", marginTop: 8, display: "flex" }}>
+          <div style={{ width: `${(n("hecho") * 100) / filas.length}%`, background: C.verde }} />
+          <div style={{ width: `${(n("en_curso") * 100) / filas.length}%`, background: C.navy }} />
+          <div style={{ width: `${(n("bloqueado") * 100) / filas.length}%`, background: C.ambar }} />
+        </div>
+      </div>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
+        {Object.entries(PED_EST).map(([k, e]) => (
+          <div key={k} onClick={() => setF({ ...f, estado: f.estado === k ? "" : k })} style={{ background: "#fff", border: `1px solid ${f.estado === k ? e[2] : C.borde}`, borderRadius: 12, padding: "10px 14px", flex: "1 1 120px", cursor: "pointer" }}>
+            <div style={{ fontSize: 22, fontWeight: 800, color: e[2] }}>{n(k)}</div><div style={{ fontSize: 12.5, color: C.suave }}>{e[0]}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+        <select style={inp} value={f.seccion} onChange={(e) => setF({ ...f, seccion: e.target.value })}><option value="">Todas las secciones</option>{secciones.map((s) => <option key={s} value={s}>{s}</option>)}</select>
+        <input style={{ ...inp, minWidth: 240 }} placeholder="Código o texto" value={f.texto} onChange={(e) => setF({ ...f, texto: e.target.value })} />
+        <span style={{ fontSize: 12, color: C.tenue, alignSelf: "center" }}>{puede ? "Puedes cambiar el estado de cada ítem (queda con historial)." : "Solo lectura."}</span>
+      </div>
+      <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 820 }}>
+          <thead><tr style={{ background: C.fondo, textAlign: "left" }}>{["Código", "Sección", "Qué", "Estado", "Nota", "Actualizado"].map((h) => <th key={h} style={{ ...celda, fontSize: 12, color: C.suave }}>{h}</th>)}</tr></thead>
+          <tbody>{vis.map((x) => { const e = PED_EST[x.estado] || [x.estado, C.fondo, C.suave]; return (
+            <tr key={x.codigo}>
+              <td style={{ ...celda, fontWeight: 800, color: C.navy }}>{x.codigo}</td>
+              <td style={{ ...celda, color: C.suave, fontSize: 12 }}>{x.seccion}</td>
+              <td style={celda}>{x.titulo}</td>
+              <td style={celda}>{editando === x.codigo ? (
+                <select style={inp} defaultValue={x.estado} onChange={(ev) => guardar(x, ev.target.value, x.nota)}>{Object.entries(PED_EST).map(([k, v]) => <option key={k} value={k}>{v[0]}</option>)}</select>
+              ) : <span onClick={() => puede && setEditando(x.codigo)} style={{ cursor: puede ? "pointer" : "default" }}>{chip(e[0], e[1], e[2])}</span>}</td>
+              <td style={{ ...celda, color: C.suave }}>{puede && editando === x.codigo
+                ? <input style={{ ...inp, width: "100%" }} defaultValue={x.nota || ""} onBlur={(ev) => ev.target.value !== (x.nota || "") && guardar(x, x.estado, ev.target.value)} />
+                : (x.nota || "—")}</td>
+              <td style={{ ...celda, fontSize: 12, color: C.tenue }}>{x.actualizado_por ? `${x.actualizado_por} · ` : ""}{fh(x.actualizado_at)}</td>
+            </tr>
+          ); })}</tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ── GPS y cámaras (pedido F-02) ─────────────────────────────────────────────
+const GPS_EST = { ok: ["Transmitiendo", C.verdeT, C.verde], caido: ["Caído (> 24 h)", C.ambarT, C.ambar], caido_escalar: ["Caído > 5 días", C.rojoT, C.rojo], sin_equipo: ["Sin equipo en Geotab", C.fondo, C.suave] };
+const CAM_EST = { ok: ["Con eventos", C.verdeT, C.verde], cubierta: ["Cámara cubierta", C.rojoT, C.rojo], sin_eventos: ["Sin eventos 3 días", C.ambarT, C.ambar], sin_camara: ["Sin cámara", C.fondo, C.suave] };
+function GpsCamaras({ quien }) {
+  const [vista, setVista] = useState("equipos");
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
+        {[["equipos", "Equipos"], ["caidos", "Equipos caídos"], ["eventos", "Eventos de cámara"], ["proveedores", "Proveedores"]].map(([k, t]) => <button key={k} style={btn(vista === k ? undefined : "sec")} onClick={() => setVista(k)}>{t}</button>)}
+      </div>
+      {vista === "equipos" ? <EquiposGps /> : vista === "caidos" ? <EquiposCaidos /> : vista === "proveedores" ? <Proveedores quien={quien} /> : <EventosCamara />}
+    </div>
+  );
+}
+function EquiposGps() {
+  const [filas, setFilas] = useState(null);
+  const [f, setF] = useState({ gps: "", cam: "", texto: "" });
+  useEffect(() => { rpc("fn_gps_camaras_estado_cl").then(setFilas).catch(() => setFilas([])); }, []);
+  if (filas === null) return <div style={{ color: C.tenue }}>Cargando…</div>;
+  const n = (k, v) => filas.filter((x) => x[k] === v).length;
+  const vis = filas.filter((x) => (!f.gps || x.gps_estado === f.gps) && (!f.cam || x.cam_estado === f.cam) && (!f.texto || `${x.patente} ${x.ceco || ""} ${x.empresa || ""}`.toLowerCase().includes(f.texto.toLowerCase())));
+  const kpi = (t, v, c, k, val) => <div onClick={() => setF({ ...f, [k]: f[k] === val ? "" : val })} style={{ background: "#fff", border: `1px solid ${f[k] === val ? c : C.borde}`, borderRadius: 12, padding: "10px 14px", flex: "1 1 120px", cursor: "pointer" }}><div style={{ fontSize: 22, fontWeight: 800, color: c }}>{v}</div><div style={{ fontSize: 12, color: C.suave }}>{t}</div></div>;
+  const celda = { padding: "7px 9px", borderBottom: `1px solid ${C.borde}`, fontSize: 13, verticalAlign: "top" };
+  return (
+    <div>
+      <div style={{ fontSize: 12.5, color: C.suave, marginBottom: 6 }}>GPS</div>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>{Object.entries(GPS_EST).map(([k, e]) => <span key={k} style={{ display: "contents" }}>{kpi(e[0], n("gps_estado", k), e[2], "gps", k)}</span>)}</div>
+      <div style={{ fontSize: 12.5, color: C.suave, marginBottom: 6 }}>Cámaras (Fleetup)</div>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>{Object.entries(CAM_EST).map(([k, e]) => <span key={k} style={{ display: "contents" }}>{kpi(e[0], n("cam_estado", k), e[2], "cam", k)}</span>)}</div>
+      <input style={{ ...inp, minWidth: 240, marginBottom: 12 }} placeholder="Patente, CECO o empresa" value={f.texto} onChange={(e) => setF({ ...f, texto: e.target.value })} />
+      <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 940 }}>
+          <thead><tr style={{ background: C.fondo, textAlign: "left" }}>{["Patente", "CECO · empresa", "GPS", "Última señal", "Cámara", "Último evento", "Eventos hoy", "Riesgo alto hoy", "Cubierta (7 días)"].map((h) => <th key={h} style={{ ...celda, fontSize: 12, color: C.suave }}>{h}</th>)}</tr></thead>
+          <tbody>{vis.map((x) => { const g = GPS_EST[x.gps_estado] || [x.gps_estado]; const c = CAM_EST[x.cam_estado] || [x.cam_estado]; return (
+            <tr key={x.patente}>
+              <td style={{ ...celda, fontWeight: 800, color: C.navy }}>{x.patente}</td>
+              <td style={celda}>{x.ceco}<div style={{ color: C.tenue, fontSize: 12 }}>{x.empresa}</div></td>
+              <td style={celda}>{chip(g[0], g[1], g[2])}</td>
+              <td style={celda}>{x.gps_ultima ? fh(x.gps_ultima) : "—"}{x.gps_horas !== null && x.gps_horas >= 1 && <div style={{ color: C.tenue, fontSize: 12 }}>hace {x.gps_horas >= 48 ? `${Math.round(x.gps_horas / 24)} días` : `${Math.round(x.gps_horas)} h`}</div>}</td>
+              <td style={celda}>{chip(c[0], c[1], c[2])}{x.camara && <div style={{ color: C.tenue, fontSize: 12 }}>{x.camara}</div>}</td>
+              <td style={celda}>{x.cam_ultimo ? fh(x.cam_ultimo) : "—"}</td>
+              <td style={celda}>{x.cam_eventos_hoy || "—"}</td>
+              <td style={{ ...celda, fontWeight: 700, color: x.cam_riesgo_alto_hoy ? C.rojo : C.tenue }}>{x.cam_riesgo_alto_hoy || "—"}</td>
+              <td style={{ ...celda, fontWeight: 700, color: x.cam_cubierta_7d ? C.rojo : C.tenue }}>{x.cam_cubierta_7d || "—"}</td>
+            </tr>
+          ); })}</tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+function EquiposCaidos() {
+  const [filas, setFilas] = useState(null);
+  const [ver, setVer] = useState("abiertos");
+  useEffect(() => { api("ca_equipos_caidos_cl?select=*&order=abierto_at.desc&limit=500").then(setFilas).catch(() => setFilas([])); }, []);
+  if (filas === null) return <div style={{ color: C.tenue }}>Cargando…</div>;
+  const vis = filas.filter((x) => (ver === "abiertos" ? !x.cerrado_at : !!x.cerrado_at));
+  const celda = { padding: "7px 9px", borderBottom: `1px solid ${C.borde}`, fontSize: 13 };
+  const dias = (a, b) => Math.max(0, Math.round(((b ? new Date(b) : new Date()) - new Date(a)) / 864e5));
+  return (
+    <div>
+      <div style={{ fontSize: 12.5, color: C.suave, marginBottom: 10 }}>Cada GPS con más de 24 h sin transmitir abre un caso: alerta al ejecutivo, ticket por correo al proveedor (Proveedores → Geotab) y tarea al supervisor para coordinar. Se cierra solo cuando Geotab vuelve a recibir datos; a los 5 días sin cerrar escala a jefatura. Los avisos quedan apagados hasta el 1-dic (equipos_avisos).</div>
+      <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
+        <button style={btn(ver === "abiertos" ? undefined : "sec")} onClick={() => setVer("abiertos")}>Abiertos ({filas.filter((x) => !x.cerrado_at).length})</button>
+        <button style={btn(ver === "cerrados" ? undefined : "sec")} onClick={() => setVer("cerrados")}>Cerrados ({filas.filter((x) => x.cerrado_at).length})</button>
+      </div>
+      <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 760 }}>
+          <thead><tr style={{ background: C.fondo, textAlign: "left" }}>{["Patente", "Sin señal desde", "Días", "Ticket al proveedor", "Escalado", "Cierre"].map((h) => <th key={h} style={{ ...celda, fontSize: 12, color: C.suave }}>{h}</th>)}</tr></thead>
+          <tbody>
+            {vis.length === 0 && <tr><td colSpan={6} style={{ ...celda, color: C.tenue, textAlign: "center" }}>Sin casos.</td></tr>}
+            {vis.map((x) => (
+              <tr key={x.id}>
+                <td style={{ ...celda, fontWeight: 800, color: C.navy }}>{x.patente}</td>
+                <td style={celda}>{x.desde ? fh(x.desde) : "—"}</td>
+                <td style={{ ...celda, fontWeight: 700, color: dias(x.desde || x.abierto_at, x.cerrado_at) >= 5 ? C.rojo : C.texto }}>{dias(x.desde || x.abierto_at, x.cerrado_at)}</td>
+                <td style={celda}>{x.ticket_at ? <>{fh(x.ticket_at)}<div style={{ color: C.tenue, fontSize: 12 }}>{x.ticket_para}</div></> : <span style={{ color: C.tenue }}>pendiente</span>}</td>
+                <td style={celda}>{x.escalado_at ? fh(x.escalado_at) : "—"}</td>
+                <td style={celda}>{x.cerrado_at ? fh(x.cerrado_at) : "—"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+function Proveedores({ quien }) {
+  const [filas, setFilas] = useState(null);
+  const [msg, setMsg] = useState("");
+  const cargar = () => api("ca_proveedores_cl?select=*&order=codigo").then(setFilas).catch(() => setFilas([]));
+  useEffect(() => { cargar(); }, []);
+  const guardar = async (codigo, campo, valor) => { setMsg(""); try { await rpc("fn_proveedor_guardar", { p_codigo: codigo, p_campo: campo, p_valor: valor, p_por: quien }); setMsg("Guardado."); cargar(); } catch (e) { setMsg(e.message); } };
+  if (filas === null) return <div style={{ color: C.tenue }}>Cargando…</div>;
+  const campo = (x, k, w) => <input style={{ ...inp, width: w }} defaultValue={x[k] || ""} onBlur={(e) => e.target.value !== (x[k] || "") && guardar(x.codigo, k, e.target.value)} />;
+  return (
+    <div>
+      <div style={{ fontSize: 12.5, color: C.suave, marginBottom: 10 }}>A estos correos llegan los tickets (por ejemplo, el de GPS caído va al correo de Geotab). Cada cambio queda con historial.</div>
+      <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, overflowX: "auto" }}>
+        <table style={{ borderCollapse: "collapse", fontSize: 13, minWidth: 820 }}>
+          <thead><tr style={{ background: C.fondo, textAlign: "left" }}>{["Proveedor", "Servicio", "Correo para tickets", "Contacto", "Teléfono"].map((h) => <th key={h} style={{ padding: "8px 10px", color: C.suave, fontSize: 12 }}>{h}</th>)}</tr></thead>
+          <tbody>{filas.map((x) => (
+            <tr key={x.codigo} style={{ borderTop: `1px solid ${C.borde}` }}>
+              <td style={{ padding: "6px 8px" }}>{campo(x, "nombre", 170)}</td><td style={{ padding: "6px 8px" }}>{campo(x, "servicio", 120)}</td>
+              <td style={{ padding: "6px 8px" }}>{campo(x, "correo", 230)}</td><td style={{ padding: "6px 8px" }}>{campo(x, "contacto", 160)}</td><td style={{ padding: "6px 8px" }}>{campo(x, "telefono", 120)}</td>
+            </tr>
+          ))}</tbody>
+        </table>
+      </div>
+      {msg && <div style={{ fontSize: 12.5, marginTop: 8, color: msg === "Guardado." ? C.verde : C.rojo }}>{msg}</div>}
+    </div>
+  );
+}
+
+function EventosCamara() {
+  const [desde, setDesde] = useState(hoyCL());
+  const [hasta, setHasta] = useState(hoyCL());
+  const [filas, setFilas] = useState(null);
+  const [f, setF] = useState({ texto: "", tipo: "", riesgo: "", cubierta: false });
+  const cargar = () => {
+    const d0 = new Date(`${desde}T00:00:00-03:00`), d1 = new Date(new Date(`${hasta}T00:00:00-03:00`).getTime() + 864e5);
+    setFilas(null);
+    api(`vw_fleetup_eventos_cl?select=*&event_time=gte.${d0.toISOString()}&event_time=lt.${d1.toISOString()}&order=event_time.desc&limit=5000`).then(setFilas).catch(() => setFilas([]));
+  };
+  useEffect(() => { cargar(); }, [desde, hasta]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const todos = filas || [];
+  const tipos = [...new Set(todos.map((x) => x.event_type).filter(Boolean))].sort();
+  const vis = todos.filter((x) => (!f.tipo || x.event_type === f.tipo) && (!f.riesgo || x.risk_level === f.riesgo) && (!f.cubierta || x.is_covered)
+    && (!f.texto || `${x.patente} ${x.ceco || ""} ${x.empresa || ""}`.toLowerCase().includes(f.texto.toLowerCase())));
+  const porTipo = Object.entries(vis.reduce((m, x) => { m[x.event_type] = (m[x.event_type] || 0) + 1; return m; }, {})).sort((a, b) => b[1] - a[1]);
+  const porPatente = Object.entries(vis.reduce((m, x) => { m[x.patente] = (m[x.patente] || 0) + 1; return m; }, {})).sort((a, b) => b[1] - a[1]).slice(0, 10);
+  const celda = { padding: "6px 8px", borderBottom: `1px solid ${C.borde}`, fontSize: 12.5, verticalAlign: "top" };
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 12 }}>
+        <label style={{ fontSize: 12, color: C.suave }}>Desde <input type="date" style={inp} value={desde} max={hoyCL()} onChange={(e) => e.target.value && setDesde(e.target.value)} /></label>
+        <label style={{ fontSize: 12, color: C.suave }}>Hasta <input type="date" style={inp} value={hasta} max={hoyCL()} onChange={(e) => e.target.value && setHasta(e.target.value)} /></label>
+        <select style={inp} value={f.tipo} onChange={(e) => setF({ ...f, tipo: e.target.value })}><option value="">Todos los tipos</option>{tipos.map((t) => <option key={t} value={t}>{t}</option>)}</select>
+        <select style={inp} value={f.riesgo} onChange={(e) => setF({ ...f, riesgo: e.target.value })}><option value="">Todos los riesgos</option>{["LOW", "MEDIUM", "HIGH", "CRITICAL"].map((r) => <option key={r} value={r}>{r}</option>)}</select>
+        <label style={{ fontSize: 12.5, display: "flex", gap: 4, alignItems: "center" }}><input type="checkbox" checked={f.cubierta} onChange={(e) => setF({ ...f, cubierta: e.target.checked })} /> Solo cámara cubierta</label>
+        <input style={{ ...inp, minWidth: 200 }} placeholder="Patente, CECO o empresa" value={f.texto} onChange={(e) => setF({ ...f, texto: e.target.value })} />
+        <span style={{ fontSize: 12.5, color: C.suave }}>{filas === null ? "Cargando…" : `${vis.length} eventos`}</span>
+      </div>
+      {filas !== null && (
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
+          {[["Por tipo", porTipo], ["Patentes con más eventos", porPatente]].map(([t, arr]) => (
+            <div key={t} style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, padding: 12, flex: "1 1 260px" }}>
+              <div style={{ fontWeight: 800, color: C.navy, marginBottom: 6, fontSize: 13 }}>{t}</div>
+              {arr.slice(0, 10).map(([k, v]) => <div key={k} style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5, padding: "2px 0" }}><span>{k}</span><b>{v}</b></div>)}
+            </div>
+          ))}
+        </div>
+      )}
+      {filas !== null && (
+        <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 860 }}>
+            <thead><tr style={{ background: C.fondo, textAlign: "left" }}>{["Hora", "Patente", "CECO · empresa", "Tipo", "Riesgo", "Marcas", "Video"].map((h) => <th key={h} style={{ ...celda, color: C.suave }}>{h}</th>)}</tr></thead>
+            <tbody>{vis.slice(0, 500).map((x) => (
+              <tr key={x.event_id}>
+                <td style={celda}>{fh(x.event_time)}</td><td style={{ ...celda, fontWeight: 800, color: C.navy }}>{x.patente || "—"}</td>
+                <td style={celda}>{x.ceco}<div style={{ color: C.tenue, fontSize: 11.5 }}>{x.empresa}</div></td>
+                <td style={celda}>{x.event_type}</td>
+                <td style={{ ...celda, fontWeight: 700, color: ["HIGH", "CRITICAL"].includes(x.risk_level) ? C.rojo : C.suave }}>{x.risk_level || "—"}</td>
+                <td style={celda}>{x.is_covered && chip("Cubierta", C.rojoT, C.rojo)} {x.is_critical && chip("Crítico", C.ambarT, C.ambar)}</td>
+                <td style={celda}>{x.outward_video && <a href={x.outward_video} target="_blank" rel="noreferrer" style={{ color: C.navy, marginRight: 8 }}>▶ Exterior</a>}{x.inward_video && <a href={x.inward_video} target="_blank" rel="noreferrer" style={{ color: C.navy }}>▶ Interior</a>}</td>
+              </tr>
+            ))}</tbody>
+          </table>
+          {vis.length > 500 && <div style={{ padding: 10, fontSize: 12.5, color: C.tenue }}>Se muestran los 500 más recientes de {vis.length}. Usa los filtros para ver el resto.</div>}
+          <div style={{ padding: "8px 10px", fontSize: 11.5, color: C.tenue }}>Los enlaces de video de Fleetup se renuevan cada 30 min para los eventos de ayer y hoy; los más antiguos pueden haber vencido. El puntaje de Fleetup no entra en los indicadores.</div>
+        </div>
+      )}
     </div>
   );
 }
