@@ -710,6 +710,37 @@ const FL_ESTADO = {
   alerta_domicilio: ["Alerta · en domicilio", C.rojoT, C.rojo], alerta_gps: ["Alerta · GPS", C.ambarT, C.ambar],
   no_salida: ["No salida", C.rojoT, C.rojo], jefatura: ["Asignada a jefatura", C.fondo, C.suave], otra_operacion: ["Otra operación", C.fondo, C.suave],
 };
+// Confirmaciones de flota de los supervisores (bitácora → «Confirmar mi flota»)
+function ConfirmacionesFlota() {
+  const [abierto, setAbierto] = useState(false);
+  const [filas, setFilas] = useState(null);
+  useEffect(() => { rpc("fn_ca_flota_confirmaciones_resumen").then(setFilas).catch(() => setFilas([])); }, []);
+  if (filas === null) return null;
+  const atrasadas = filas.filter((x) => x.atrasada).length;
+  const difs = filas.reduce((t, x) => t + (x.diferencias || []).length, 0);
+  const MARCA = { taller: "En taller", detenido: "Detenido sin conductor", no_es_mio: "No es de su CECO" };
+  return (
+    <div style={{ background: "#fff", border: `1px solid ${atrasadas ? C.ambar : C.borde}`, borderRadius: 12, padding: "10px 14px", marginBottom: 12 }}>
+      <a href="#" style={{ color: C.navy, fontWeight: 800, fontSize: 13.5 }} onClick={(e) => { e.preventDefault(); setAbierto(!abierto); }}>
+        {abierto ? "▾" : "▸"} Confirmaciones de flota de los supervisores · {atrasadas} CECO atrasados · {difs} diferencias
+      </a>
+      {abierto && (
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, marginTop: 8 }}>
+          <thead><tr style={{ textAlign: "left", color: C.suave }}>{["CECO", "Supervisor", "Última confirmación", "Estado", "Diferencias informadas"].map((h) => <th key={h} style={{ padding: "4px 6px" }}>{h}</th>)}</tr></thead>
+          <tbody>{filas.map((x) => (
+            <tr key={x.ceco} style={{ borderTop: `1px solid ${C.fondo}` }}>
+              <td style={{ padding: "5px 6px", fontWeight: 700 }}>{x.ceco}</td><td style={{ padding: "5px 6px" }}>{x.supervisor || "—"}</td>
+              <td style={{ padding: "5px 6px" }}>{x.ultima_at ? fh(x.ultima_at) : "nunca"}</td>
+              <td style={{ padding: "5px 6px" }}>{x.atrasada ? chip("Atrasada", C.ambarT, C.ambar) : chip("Al día", C.verdeT, C.verde)}</td>
+              <td style={{ padding: "5px 6px" }}>{(x.diferencias || []).length ? x.diferencias.map((d) => `${d.patente}: ${MARCA[d.estado] || d.estado}${d.nota ? ` (${d.nota})` : ""}`).join(" · ") : "—"}</td>
+            </tr>
+          ))}</tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
 function EstadoFlota() {
   const [fecha, setFecha] = useState(hoyCL());
   const [filas, setFilas] = useState(null);
@@ -742,6 +773,7 @@ function EstadoFlota() {
   const esHoy = fecha === hoyCL();
   return (
     <div>
+      <ConfirmacionesFlota />
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
         <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, padding: "12px 16px", flex: "1 1 200px" }}>
           <div style={{ fontSize: 24, fontWeight: 800, color: uso >= meta ? C.verde : C.naranja || "#FF6600" }}>{filas ? `${uso}%` : "…"}</div>
