@@ -212,6 +212,77 @@ function PanelRazonSocial({ empresa, onActualizada }) {
 }
 
 // ═══ DETALLE DE EMPRESA ═════════════════════════════════════════════════════
+// ── Solicitud de cambio de cuenta bancaria (la envía el transportista desde el
+// portal, maqueta 8.9.22). Certificaciones la aprueba o rechaza con el PIN de
+// aprobación (bóveda: cambio_cuenta_pin). Al aprobar, la nueva cuenta
+// reemplaza a la actual en perfiles_empresa; mientras tanto se paga a la actual.
+const clabeFmt = (c) => { const x = String(c || "").replace(/\D/g, ""); return x ? [x.slice(0, 3), x.slice(3, 6), x.slice(6, 10), x.slice(10, 14), x.slice(14)].join(" ") : "—"; };
+function CambioCuentaPanel({ terceroId, perfil, onResuelta }) {
+  const [sol, setSol] = useState(undefined);
+  const [busy, setBusy] = useState(false);
+  const cargar = async () => {
+    const { data } = await sb.from("solicitudes_cambio_cuenta").select("*").eq("tercero_id", terceroId).eq("estado", "pendiente").maybeSingle();
+    setSol(data || null);
+  };
+  useEffect(() => { cargar(); }, [terceroId]);
+  if (!sol) return null;
+  const ver = async () => {
+    const { data, error } = await sb.storage.from("archivador_empresas").createSignedUrl(sol.comprobante_path, 300);
+    if (error || !data) { alert("No se pudo abrir el comprobante."); return; }
+    window.open(data.signedUrl, "_blank", "noopener");
+  };
+  const resolver = async (aprobar) => {
+    let nota = null;
+    if (!aprobar) { nota = window.prompt("Motivo del rechazo:"); if (!nota || !nota.trim()) return; }
+    else if (!window.confirm(`¿Aprobar el cambio? Desde el próximo pago se depositará en ${sol.banco} · CLABE ${clabeFmt(sol.cuenta_clabe)}.`)) return;
+    const pin = window.prompt("PIN de aprobación de cambios de cuenta:");
+    if (!pin) return;
+    setBusy(true);
+    const { data, error } = await sb.rpc("fn_resolver_cambio_cuenta", { p_id: sol.id, p_aprobar: aprobar, p_por: window.__PERFIL_EMAIL || "analista_brain", p_nota: nota, p_pin: pin });
+    setBusy(false);
+    const msg = error ? error.message : String(data || "");
+    alert(msg);
+    if (!error && !msg.startsWith("ERROR")) { setSol(null); onResuelta && onResuelta(); }
+  };
+  const fila = (k, a, b) => (
+    <tr key={k}>
+      <td style={{ padding: "7px 10px", fontSize: 11, fontWeight: 800, color: "#667085", textTransform: "uppercase", borderBottom: "1px solid #f4e3d3" }}>{k}</td>
+      <td style={{ padding: "7px 10px", fontSize: 12.5, color: "#333", borderBottom: "1px solid #f4e3d3" }}>{a || "—"}</td>
+      <td style={{ padding: "7px 10px", fontSize: 12.5, fontWeight: 800, color: a !== b ? "#b45309" : NAVY, borderBottom: "1px solid #f4e3d3" }}>{b || "—"}</td>
+    </tr>
+  );
+  return (
+    <div style={{ background: "#fff8f0", border: "1.5px solid #fcd9b6", borderRadius: 12, padding: "14px 16px", marginBottom: 16 }}>
+      <div style={{ fontSize: 13.5, fontWeight: 800, color: "#b45309" }}>🏦 Solicitud de cambio de cuenta bancaria · pendiente</div>
+      <div style={{ fontSize: 11.5, color: "#8a4a0f", marginTop: 2, marginBottom: 10 }}>
+        Enviada {fmtF(sol.enviada_at)} por {sol.enviada_por || "el transportista"}. Mientras no se apruebe, los pagos siguen a la cuenta actual. En naranja lo que cambia.
+      </div>
+      <div style={{ overflowX: "auto" }}>
+        <table style={{ borderCollapse: "collapse", width: "100%", minWidth: 520, background: "#fff", borderRadius: 8 }}>
+          <thead><tr>
+            <th style={{ padding: "7px 10px" }} />
+            <th style={{ padding: "7px 10px", textAlign: "left", fontSize: 11.5, color: "#667085" }}>Cuenta actual</th>
+            <th style={{ padding: "7px 10px", textAlign: "left", fontSize: 11.5, color: "#b45309" }}>Cuenta nueva solicitada</th>
+          </tr></thead>
+          <tbody>
+            {fila("Banco", perfil?.banco, sol.banco)}
+            {fila("Tipo de cuenta", perfil?.tipo_cuenta, sol.tipo_cuenta)}
+            {fila("Titular", perfil?.titular_cuenta, sol.titular_cuenta)}
+            {fila("RFC del titular", perfil?.rfc_titular, sol.rfc_titular)}
+            {fila("CLABE", clabeFmt(perfil?.cuenta_clabe), clabeFmt(sol.cuenta_clabe))}
+          </tbody>
+        </table>
+      </div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 12, alignItems: "center" }}>
+        <button onClick={ver} style={{ background: "#fff", border: "1px solid #e4e7ec", color: NAVY, borderRadius: 8, padding: "8px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>📄 Ver comprobante de la nueva cuenta</button>
+        <span style={{ flex: 1 }} />
+        <button disabled={busy} onClick={() => resolver(false)} style={{ background: "#fff", border: "1px solid #f5c6c0", color: "#c0392b", borderRadius: 8, padding: "8px 14px", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>Rechazar</button>
+        <button disabled={busy} onClick={() => resolver(true)} style={{ background: "#166534", border: "none", color: "#fff", borderRadius: 8, padding: "8px 16px", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>{busy ? "Guardando…" : "✓ Aprobar cambio"}</button>
+      </div>
+    </div>
+  );
+}
+
 function DetalleEmpresa({ empresa, onVolver, onActualizada }) {
   const [tab, setTab] = useState("resumen");
   const [perfil, setPerfil] = useState(null);
@@ -600,6 +671,7 @@ function DetalleEmpresa({ empresa, onVolver, onActualizada }) {
       {/* ── DATOS & CUENTA ── */}
       {tab === "datos" && (
         <div style={{ background: "#fff", border: "0.5px solid #e4e7ec", borderRadius: 12, padding: "16px 20px" }}>
+          <CambioCuentaPanel terceroId={empresa.tercero_id} perfil={perfil} onResuelta={() => setPerfil(null)} />
           <div style={{ fontSize: 12, fontWeight: 800, color: "#667085", textTransform: "uppercase", letterSpacing: 1, marginBottom: 10 }}>Perfil de la empresa (lo carga la empresa en su portal)</div>
           {perfil === null ? <div style={{ fontSize: 12, color: "#888" }}>Cargando…</div> : (
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(230px, 1fr))", gap: "10px 18px" }}>
@@ -967,6 +1039,7 @@ export default function ModuloEmpresas() {
   const [conflictos, setConflictos] = useState([]);
   const [verConflictos, setVerConflictos] = useState(false);
   const [pendSet, setPendSet] = useState(new Set());
+  const [cambioSet, setCambioSet] = useState(new Set());   // empresas con cambio de cuenta pendiente
   const [busca, setBusca] = useState("");
   const [filtro, setFiltro] = useState("todas");   // todas | activa | pausada | baja | pagos_pausados | sin_clabe
   const [selected, setSelected] = useState(null);
@@ -979,6 +1052,10 @@ export default function ModuloEmpresas() {
     const { data: sol } = await sb.from("solicitudes_baja").select("tercero_id").in("estado", ["en_revision", "en_proceso"]);
     setPendSet(new Set((sol || []).map((x) => x.tercero_id)));
     setPendientes((sol || []).length);
+    try {
+      const { data: cc } = await sb.from("solicitudes_cambio_cuenta").select("tercero_id").eq("estado", "pendiente");
+      setCambioSet(new Set((cc || []).map((x) => x.tercero_id)));
+    } catch (e) { setCambioSet(new Set()); }
     // Conflictos de datos: RFC repetido, correo compartido, fichas múltiples,
     // o ficha cuyo RFC no coincide con su empresa (fusión indebida).
     try {
@@ -995,6 +1072,7 @@ export default function ModuloEmpresas() {
     if (filtro === "pagos_pausados") return !!e.pagos_pausados;
     if (filtro === "sin_clabe") return !e.cuenta_clabe;
     if (filtro === "con_solicitudes") return pendSet.has(e.tercero_id);
+    if (filtro === "cambio_cuenta") return cambioSet.has(e.tercero_id);
     return (e.estado_operacional || "activa") === filtro;
   });
 
@@ -1052,6 +1130,7 @@ export default function ModuloEmpresas() {
         <Kpi n={n((e) => (e.estado_operacional || "") === "pausada")} label="Pausadas" color="#b45309" activo={filtro === "pausada"} onClick={() => setFiltro("pausada")} />
         <Kpi n={n((e) => !!e.pagos_pausados)} label="Pagos pausados" color="#c0392b" activo={filtro === "pagos_pausados"} onClick={() => setFiltro("pagos_pausados")} />
         <Kpi n={n((e) => !e.cuenta_clabe)} label="Sin CLABE" color={ORANGE} activo={filtro === "sin_clabe"} onClick={() => setFiltro("sin_clabe")} />
+        <Kpi n={cambioSet.size} label="🏦 Cambios de cuenta" color={cambioSet.size ? ORANGE : NAVY} activo={filtro === "cambio_cuenta"} onClick={() => setFiltro("cambio_cuenta")} />
         <Kpi n={pendientes} label="Solicitudes pendientes" color={pendientes ? "#c0392b" : NAVY} activo={filtro === "con_solicitudes"} onClick={() => setFiltro("con_solicitudes")} />
         <Kpi n={conflictos.length} label="⚠ Conflictos de datos" color={conflictos.length ? "#c0392b" : NAVY} activo={verConflictos} onClick={() => setVerConflictos(!verConflictos)} />
       </div>
@@ -1096,7 +1175,7 @@ export default function ModuloEmpresas() {
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-end", flexShrink: 0 }}>
                   <Chip texto={est.label} bg={est.bg} fg={est.fg} />
-                  {pendSet.has(e.tercero_id) ? <Chip texto="📥 SOLICITUD" bg="#fdecea" fg="#c0392b" /> : e.pagos_pausados ? <Chip texto="PAGOS ⏸" bg="#fdecea" fg="#c0392b" /> : !e.cuenta_clabe ? <Chip texto="SIN CLABE" bg="#fff4e5" fg="#b45309" /> : null}
+                  {cambioSet.has(e.tercero_id) ? <Chip texto="🏦 CAMBIO DE CUENTA" bg="#fff4e5" fg="#b45309" /> : pendSet.has(e.tercero_id) ? <Chip texto="📥 SOLICITUD" bg="#fdecea" fg="#c0392b" /> : e.pagos_pausados ? <Chip texto="PAGOS ⏸" bg="#fdecea" fg="#c0392b" /> : !e.cuenta_clabe ? <Chip texto="SIN CLABE" bg="#fff4e5" fg="#b45309" /> : null}
                 </div>
               </div>
             );
