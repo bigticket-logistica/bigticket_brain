@@ -15192,6 +15192,7 @@ const TABS_CUIDADO_CL = [
   { id: "ca_gps", label: "GPS y cámaras", desc: "Estado de cada GPS y cámara, equipos caídos, eventos de Fleetup y proveedores" },
   { id: "ca_uso", label: "Uso y detenciones", desc: "Paradas de Geotab cruzadas con entregas, interrupciones y cámaras" },
   { id: "ca_auditorias", label: "Auditorías", desc: "Revisión de auditorías de terceros con Biggy, quién lleva auditoría y devoluciones" },
+  { id: "ca_combustible", label: "Combustible", desc: "Consumos de Copec contra la subvención y km de Geotab contra km de ruta" },
   { id: "ca_gastos", label: "Historial de gastos", desc: "Todo lo gastado en la flota: por año, tipo, patente y taller" },
   { id: "ca_alertas", label: "Centro de alertas", desc: "Todas las alertas de la flota en un solo lugar, envíos por correo y reglas" },
   { id: "ca_evaluacion", label: "Evaluación del ejecutivo", desc: "Solo jefatura: gestión a tiempo de lo que avisó el sistema" },
