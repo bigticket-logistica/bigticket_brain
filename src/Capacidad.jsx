@@ -301,6 +301,10 @@ export default function Capacidad({ usuario }) {
         brainPorPlacaPrevia.set(kp, [...(brainPorPlacaPrevia.get(kp) || []), f]);
       }
     }
+    // Dónde acreditó MELI cada ruta ejecutada, en todo su reporte (cualquier SC o código, SDD o Spot)
+    const rutasMeliEjec = new Map();
+    for (const e of meli) for (const d of e.detalle || []) if (d.executed === "✓" && d.route_id)
+      rutasMeliEjec.set(`${e.fecha}|${d.route_id}`, { sc: d.service_center, conPedido: d.requested === "✓", modelo: e.modelo, placa: d.vehicle_plate });
     const out = [];
     for (const e of meli) if (e.modelo === "SDD") for (const d of e.detalle || []) {
       if (sc && d.service_center !== sc) continue;
@@ -309,16 +313,23 @@ export default function Capacidad({ usuario }) {
       const directa = d.vehicle_plate ? brainPorPlaca.get(k) || [] : [];
       const reasignado = !directa.length && d.vehicle_plate ? brainPorPlacaPrevia.get(k) || [] : [];
       const lista = directa.length ? directa : reasignado;
-      const salio = lista.find((f) => f.ejecutado) || null;
+      const salioTorre = lista.find((f) => f.ejecutado) || null;
+      const acred = salioTorre?.id_ruta && String(salioTorre.id_ruta) !== String(d.route_id) ? rutasMeliEjec.get(`${e.fecha}|${salioTorre.id_ruta}`) || null : null;
+      // La ruta ya está acreditada a OTRO pedido del mismo SC: ese pedido es el que cumplió; esta fila es un no show efectivo
+      const rutaYaContada = !!(acred && acred.conPedido && acred.sc === d.service_center && acred.modelo === "SDD");
+      // La ruta está acreditada en otro código o sin pedido: el mismo trabajo, anotado en otro lado → reclamable
+      const rutaEnOtroLado = acred && !rutaYaContada ? acred : null;
+      const salio = rutaYaContada ? null : salioTorre;
       const b = salio || lista.find((f) => String(f.driver_id) === String(d.driver_id)) || lista[0] || null;
-      const otras = (meliPorRuta.todasPorPlaca.get(k) || []).filter((x) => x.ejecutada && String(x.route_id) !== String(d.route_id));
+      const otras = [];   // una camioneta con otra fila ejecutada en MELI ya está contada: no respalda a esta
       out.push({
         fecha: e.fecha, sc: d.service_center, placa: d.vehicle_plate || "", chofer: b && String(b.driver_id) === String(d.driver_id) ? b.chofer : "",
         driver_id: d.driver_id || "", meli: { route_id: d.route_id || null },
         id_ruta: salio?.id_ruta || null, salida_real: salio?.salida_real || null,
         estado_torre: salio ? salio.estado_torre : b ? b.estado_torre : "no está en la Torre",
         torreSalio: !!salio, enTorre: lista.length > 0,
-        reasignadoA: reasignado.length ? (salio || reasignado[0]).placa : null,
+        reasignadoA: reasignado.length ? (salioTorre || reasignado[0]).placa : null,
+        rutaYaContada, rutaEnOtroLado, rutaTorre: salioTorre?.id_ruta || null,
         rutaMeli: salio?.id_ruta ? rutaMeli.get(String(salio.id_ruta)) || null : null,
         otraEjecutada: otras[0] || null,
         resultado_supervisor: b?.resultado_supervisor || null, respondido_at: b?.respondido_at || null, ruta_declarada: b?.ruta_declarada || null,
@@ -443,9 +454,10 @@ export default function Capacidad({ usuario }) {
       }
       const comp = [["SC", "VEHICULO", "MODELO", "COMPROMETIDO POR DIA", "VIGENCIA DESDE", "VIGENCIA HASTA", "EVIDENCIA", "NOTA", "CARGO", "CARGADO EL"]];
       for (const c of prom.compromisos) comp.push([c.sc, c.vehiculo, c.modelo, c.cantidad, c.vigencia_desde, c.vigencia_hasta || "", c.evidencia_nombre || "", c.nota || "", c.cargado_por, fHora(c.cargado_at)]);
-      const rec = [["FECHA", "SC", "PLACA", "CHOFER ROSTERIZADO", "DRIVER ID", "RUTA MELI SIN EJECUTAR", "RUTA QUE SALIO (TORRE)", "SALIDA REAL TORRE", "ESTADO TORRE", "EN LISTA DE RUTAS MELI", "PAQUETES TOTAL MELI", "PAQUETES ENTREGADOS MELI", "MISMA CAMIONETA: RUTA EJECUTADA EN MELI", "CHOFER DE ESA RUTA", "REASIGNADO A", "SUPERVISOR"]];
+      const rec = [["FECHA", "SC", "PLACA", "CHOFER ROSTERIZADO", "DRIVER ID", "RUTA MELI SIN EJECUTAR", "RUTA QUE SALIO (TORRE)", "SALIDA REAL TORRE", "ESTADO TORRE", "EN LISTA DE RUTAS MELI", "PAQUETES TOTAL MELI", "PAQUETES ENTREGADOS MELI", "RESULTADO", "MELI LA ANOTO EN", "REASIGNADO A", "SUPERVISOR"]];
       for (const f of reclamos) rec.push([f.fecha, f.sc, f.placa || "", f.chofer || "", f.driver_id || "", f.meli?.route_id || "", f.torreSalio ? f.id_ruta || "" : "", f.salida_real ? fHora(f.salida_real) : "", f.estado_torre || "",
-        f.rutaMeli ? "SI" : "NO", num(f.rutaMeli?.total_packages) ?? "", num(f.rutaMeli?.delivered_packages) ?? "", f.otraEjecutada?.route_id || "", f.otraEjecutada?.driver_id || "", f.reasignadoA || "", f.resultado_supervisor || ""]);
+        f.rutaMeli ? "SI" : "NO", num(f.rutaMeli?.total_packages) ?? "", num(f.rutaMeli?.delivered_packages) ?? "", f.torreSalio ? "RECLAMABLE" : f.rutaYaContada ? "NO SHOW EFECTIVO (RUTA YA CONTADA POR MELI EN OTRO PEDIDO)" : f.enTorre ? "NO SHOW EFECTIVO" : "NO ESTA EN LA TORRE",
+        f.rutaEnOtroLado ? `${f.rutaEnOtroLado.sc}${f.rutaEnOtroLado.conPedido ? "" : " SIN PEDIDO"}` : "", f.reasignadoA || "", f.resultado_supervisor || ""]);
       await descargarExcelMultihoja([{ nombre: "Reclamo", datos: rec }, { nombre: "Por SC", datos: res }, { nombre: "Detalle", datos: det }, { nombre: "Compromisos", datos: comp }],
         `capacidad_${d1 === d2 ? d1 : d1 + "_a_" + d2}${modelo ? "_" + modelo : ""}${sc ? "_" + sc : ""}`);
     } catch (e) { alert("No se pudo generar el Excel: " + (e.message || e)); }
@@ -533,11 +545,11 @@ export default function Capacidad({ usuario }) {
                 {reclamos.length > 0 && (
                   <div style={{ marginTop: 14, border: `1px solid ${cierreMeli?.cerrado ? "#fecaca" : "#fde68a"}`, background: cierreMeli?.cerrado ? "#fff7f7" : "#fffbeb", borderRadius: 10, padding: 12 }}>
                     <div style={{ fontWeight: 700, color: cierreMeli?.cerrado ? "#b91c1c" : "#b45309", fontSize: 13, marginBottom: 8 }}>
-                      {cierreMeli?.cerrado ? "Hard no show de MELI" : "A vigilar · hard no show de MELI"} · {reclamos.length} {reclamos.length === 1 ? "ruta" : "rutas"}{reclamablesN > 0 ? ` · ${reclamablesN} salieron según la Torre` : ""}{reclamos.filter((r) => r.enTorre && !r.torreSalio && !r.otraEjecutada).length > 0 ? ` · ${reclamos.filter((r) => r.enTorre && !r.torreSalio && !r.otraEjecutada).length} no show efectivo` : ""}
+                      {cierreMeli?.cerrado ? "Hard no show de MELI" : "A vigilar · hard no show de MELI"} · {reclamos.length} {reclamos.length === 1 ? "ruta" : "rutas"}{reclamablesN > 0 ? ` · ${reclamablesN} reclamable${reclamablesN === 1 ? "" : "s"}` : ""}{reclamos.filter((r) => r.enTorre && !r.torreSalio && !r.otraEjecutada).length > 0 ? ` · ${reclamos.filter((r) => r.enTorre && !r.torreSalio && !r.otraEjecutada).length} no show efectivo` : ""}
                       {!cierreMeli?.cerrado && cierreMeli?.cierraEl && <span style={{ fontWeight: 400 }}> · MELI puede corregirlo hasta el {fCorta(cierreMeli.cierraEl)}</span>}
                     </div>
                     <table style={{ width: "100%", borderCollapse: "collapse", background: "#fff" }}>
-                      <thead><tr>{["Fecha", "SC", "Placa", "Chofer (MELI)", "Ruta MELI sin ejecutar", "Torre", "Según MELI (lista de rutas)", "Misma camioneta en MELI", "Supervisor"].map((t) => <th key={t} style={{ ...th, fontSize: 10.5 }}>{t}</th>)}</tr></thead>
+                      <thead><tr>{["Fecha", "SC", "Placa", "Chofer (MELI)", "Ruta MELI sin ejecutar", "Torre", "Según MELI (lista de rutas)", "Supervisor"].map((t) => <th key={t} style={{ ...th, fontSize: 10.5 }}>{t}</th>)}</tr></thead>
                       <tbody>
                         {reclamos.map((f, i) => (
                           <tr key={i} style={{ background: f.torreSalio || f.otraEjecutada ? "#fff" : "#f8fafc" }}>
@@ -549,14 +561,15 @@ export default function Capacidad({ usuario }) {
                                   {f.reasignadoA && <div style={{ fontSize: 10.5, color: "#b45309", fontWeight: 700 }}>reasignado a {f.reasignadoA}</div>}
                                   <div style={{ fontSize: 10.5, color: GRIS }}>{f.salida_real ? `${fHora(f.salida_real)} · ${f.estado_torre}` : f.estado_torre}</div></>
                               : f.enTorre
-                                ? <><b style={{ color: "#b91c1c" }}>no show efectivo</b><div style={{ fontSize: 10.5, color: GRIS }}>{f.estado_torre === "QUITADO_ROSTERING" ? "quitado del rostering antes del cierre" : `no salió · ${f.estado_torre}`}</div></>
+                                ? <><b style={{ color: "#b91c1c" }}>no show efectivo</b><div style={{ fontSize: 10.5, color: GRIS }}>{f.rutaYaContada
+                                    ? `la ruta ${f.rutaTorre}${f.reasignadoA ? ` (de ${f.reasignadoA})` : ""} ya está ejecutada en otra fila de MELI: este viaje no tuvo ruta propia`
+                                    : f.estado_torre === "QUITADO_ROSTERING" ? "quitado del rostering antes del cierre" : `no salió · ${f.estado_torre}`}</div></>
                                 : <span style={{ color: GRIS, fontWeight: 700 }}>no está en la Torre</span>}</td>
-                            <td style={td}>{f.rutaMeli
-                              ? <span style={{ color: "#047857", fontWeight: 700 }}>ruta en su lista · {num(f.rutaMeli.delivered_packages) ?? "?"} de {num(f.rutaMeli.total_packages) ?? "?"} paquetes entregados</span>
-                              : <span style={{ color: GRIS }}>no está en su lista de rutas ejecutadas</span>}</td>
-                            <td style={td}>{f.otraEjecutada
-                              ? <span style={{ color: "#047857", fontWeight: 700 }}>ejecutó la ruta {f.otraEjecutada.route_id}<div style={{ fontWeight: 400, color: String(f.otraEjecutada.driver_id) !== String(f.driver_id) ? "#b45309" : GRIS, fontSize: 10.5 }}>chofer {f.otraEjecutada.driver_id}{String(f.otraEjecutada.driver_id) !== String(f.driver_id) ? " (distinto al rosterizado)" : ""}</div></span>
-                              : <span style={{ color: GRIS }}>—</span>}</td>
+                            <td style={td}>
+                              {f.rutaEnOtroLado && <div style={{ color: "#b91c1c", fontWeight: 700 }}>la anotó ejecutada en {f.rutaEnOtroLado.sc}{f.rutaEnOtroLado.conPedido ? "" : ", sin pedido"}{f.rutaEnOtroLado.modelo === "SPOT" ? " (Spot)" : ""}</div>}
+                              {f.rutaMeli
+                                ? <span style={{ color: "#047857", fontWeight: 700 }}>ruta en su lista · {num(f.rutaMeli.delivered_packages) ?? "?"} de {num(f.rutaMeli.total_packages) ?? "?"} paquetes entregados</span>
+                                : <span style={{ color: GRIS }}>no está en su lista de rutas ejecutadas</span>}</td>
                             <td style={td}>{f.respondido_at ? `${f.resultado_supervisor === "si_salio" ? "Sí salió" : f.resultado_supervisor}${f.ruta_declarada ? ` · ruta ${f.ruta_declarada}` : ""}` : <span style={{ color: GRIS }}>—</span>}</td>
                           </tr>
                         ))}
