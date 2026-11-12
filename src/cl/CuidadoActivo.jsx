@@ -37,6 +37,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 import { useEffect, useMemo, useState } from "react";
 import { cargarSheetJS } from "../shared";
+import { elegirSubtab } from "../shared/subtabs";
 
 const CL_URL = "https://hmowsazntdjtsvdfgutn.supabase.co";
 const CL_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imhtb3dzYXpudGRqdHN2ZGZndXRuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQ5MTc4NzgsImV4cCI6MjEwMDQ5Mzg3OH0.xAJokU0eFhof--d8R4uCRBr2-CJLzC5re0w1IPRqQR8";
@@ -76,6 +77,24 @@ const ESTADO = {
 const chip = (txt, bg, fg) => <span style={{ background: bg, color: fg, borderRadius: 20, padding: "2px 9px", fontSize: 11.5, fontWeight: 700, whiteSpace: "nowrap" }}>{txt}</span>;
 const btn = (tono) => ({ border: tono === "sec" ? `1px solid ${C.borde}` : "none", background: tono === "sec" ? "#fff" : tono === "rojo" ? C.rojo : tono === "verde" ? C.verde : C.navy, color: tono === "sec" ? C.navy : "#fff", borderRadius: 8, padding: "7px 12px", fontSize: 12.5, fontWeight: 700, cursor: "pointer" });
 const inp = { border: `1px solid ${C.borde}`, borderRadius: 8, padding: "7px 10px", fontSize: 13, fontFamily: "inherit" };
+
+// ── Navegación: la patente abre su ficha desde cualquier pestaña (P-01a) y los enlaces llevan al módulo (E-10) ──
+let fichaPendiente = null;
+export function abrirFicha(patente) {
+  if (!patente) return;
+  fichaPendiente = String(patente).toUpperCase();
+  elegirSubtab("mantenciones_cl", "ca_ficha");
+  window.dispatchEvent(new CustomEvent("ca-abrir-ficha", { detail: fichaPendiente }));
+}
+export function irA(sub) { elegirSubtab("mantenciones_cl", sub); }
+function PatLink({ p }) {
+  if (!p) return <span style={{ color: C.tenue }}>—</span>;
+  return <a href="#" title="Abrir la ficha del activo" style={{ color: C.navy, fontWeight: 800, textDecoration: "none", borderBottom: `1px dotted ${C.navy}` }}
+    onClick={(e) => { e.preventDefault(); e.stopPropagation(); abrirFicha(p); }}>{p}</a>;
+}
+const DONDE_SUB = { "Estado de flota": "ca_flota", "No salidas": "ca_nosalidas", "Ficha del activo": "ca_ficha", "Mantenciones": "ca_mantenciones",
+  "Mantenciones → Vida útil": "ca_mantenciones", "Reparaciones": "ca_reparaciones", "Auditorías": "ca_auditorias", "Auditorías → Pedidas": "ca_auditorias",
+  "Siniestros": "ca_siniestros", "Documentación": "ca_documentos", "GPS y cámaras": "ca_gps", "Uso y detenciones": "ca_uso" };
 
 export default function CuidadoActivoCL({ usuario, sub }) {
   const quien = usuario?.email || usuario?.nombre || "brain";
@@ -183,7 +202,7 @@ function Tareas({ quien }) {
                 <tr key={x.id} onClick={() => setAbierta(ab ? null : x.id)} style={{ borderTop: `1px solid ${C.borde}`, cursor: "pointer", background: ab ? "#fafbfd" : "#fff" }}>
                   <td style={{ padding: "9px 10px", whiteSpace: "nowrap" }}>{fh(x.creada_at)}</td>
                   <td style={{ padding: "9px 10px" }}>{x.tipo_nombre}</td>
-                  <td style={{ padding: "9px 10px", fontWeight: 700, color: C.navy }}>{x.patente}</td>
+                  <td style={{ padding: "9px 10px", fontWeight: 700, color: C.navy }}><PatLink p={x.patente} /></td>
                   <td style={{ padding: "9px 10px" }}>{x.ceco || "—"}<div style={{ color: C.tenue, fontSize: 12 }}>{x.supervisor_nombre || x.supervisor_email || "sin supervisor"}</div></td>
                   <td style={{ padding: "9px 10px", maxWidth: 320 }}>{x.titulo}</td>
                   <td style={{ padding: "9px 10px", whiteSpace: "nowrap" }}>{x.vence_at ? (x.estado === "pendiente" ? `${x.horas_restantes} h` : fh(x.vence_at)) : "Sin plazo"}{x.atrasada ? <div style={{ color: C.rojo, fontSize: 11.5, fontWeight: 700 }}>atrasada</div> : null}</td>
@@ -379,7 +398,7 @@ function Auditorias({ quien }) {
                 const bg = AU_BIGGY[x.biggy_propuesta];
                 return [
                   <tr key={x.id} style={{ cursor: "pointer", background: abierta === x.id ? "#fafbfd" : "#fff" }} onClick={() => setAbierta(abierta === x.id ? null : x.id)}>
-                    <td style={{ ...celda, fontWeight: 800, color: C.navy }}>{x.patente}</td>
+                    <td style={{ ...celda, fontWeight: 800, color: C.navy }}><PatLink p={x.patente} /></td>
                     <td style={celda}>{x.empresa || "—"}<div style={{ color: C.tenue, fontSize: 12 }}>{x.ceco || ""}</div></td>
                     <td style={celda}>{x.subtipo_nombre || AU_TIPO[x.tipo] || x.tipo}{x.solicitud_motivo && <div style={{ color: C.tenue, fontSize: 12 }}>{x.solicitud_motivo}</div>}</td>
                     <td style={celda}>{x.periodo}</td>
@@ -485,7 +504,7 @@ function QuienLlevaAuditoria({ quien, texto }) {
               {vis.map((x) => (
                 <tr key={x.patente}>
                   <td style={celda}><input type="checkbox" checked={!!sel[x.patente]} onChange={(e) => setSel({ ...sel, [x.patente]: e.target.checked })} /></td>
-                  <td style={{ ...celda, fontWeight: 800, color: C.navy }}>{x.patente}</td><td style={celda}>{x.empresa}</td><td style={celda}>{x.ceco}</td>
+                  <td style={{ ...celda, fontWeight: 800, color: C.navy }}><PatLink p={x.patente} /></td><td style={celda}>{x.empresa}</td><td style={celda}>{x.ceco}</td>
                   <td style={celda}>
                     <button style={{ ...btn(x.lleva ? "verde" : "sec"), padding: "3px 10px", fontSize: 12 }} onClick={() => marcar([x.patente], !x.lleva)}>{x.lleva ? "Sí" : "No"}</button>
                     <span style={{ fontSize: 11.5, color: C.tenue, marginLeft: 6 }}>{x.fuente === "manual" ? "decidido a mano" : x.fuente === "regla" ? "por la regla (Bigticket)" : ""}</span>
@@ -584,7 +603,7 @@ function Pedidas({ filas, quien, onCambio }) {
           {filas.length === 0 && <tr><td colSpan={8} style={{ ...celda, color: C.tenue, textAlign: "center" }}>No hay auditorías pedidas.</td></tr>}
           {filas.map((x) => { const e = estado(x); return (
             <tr key={x.id}>
-              <td style={{ ...celda, fontWeight: 800, color: C.navy }}>{x.patente}</td>
+              <td style={{ ...celda, fontWeight: 800, color: C.navy }}><PatLink p={x.patente} /></td>
               <td style={celda}>{x.subtipo_nombre}</td>
               <td style={celda}>{x.empresa || "—"}<div style={{ color: C.tenue, fontSize: 12 }}>{x.rut_empresa}</div></td>
               <td style={celda}>{x.motivo || "—"}</td>
@@ -811,7 +830,7 @@ function EstadoFlota() {
               {vis.length === 0 && <tr><td colSpan={8} style={{ ...celda, color: C.tenue, textAlign: "center" }}>Nada con este filtro.</td></tr>}
               {vis.map((x) => { const e = FL_ESTADO[x.estado] || [x.estado, C.fondo, C.suave]; return (
                 <tr key={x.patente}>
-                  <td style={{ ...celda, fontWeight: 800, color: C.navy }}>{x.patente}</td>
+                  <td style={{ ...celda, fontWeight: 800, color: C.navy }}><PatLink p={x.patente} /></td>
                   <td style={celda}>{x.ceco}</td>
                   <td style={celda}>{x.supervisor || "—"}</td>
                   <td style={celda}>{x.empresa || "—"}{x.conductor && <div style={{ color: C.tenue, fontSize: 12 }}>{x.conductor}</div>}</td>
@@ -916,7 +935,7 @@ function ProgramaMnt({ quien }) {
               {vis.length === 0 && <tr><td colSpan={11} style={{ ...celda, color: C.tenue, textAlign: "center" }}>Nada con este filtro.</td></tr>}
               {vis.map((x) => { const e = MN_ESTADO[x.estado] || [x.estado, C.fondo, C.suave]; const av = avisos[`${x.patente}|${x.proxima_pauta}`]; return [
                 <tr key={x.patente} style={{ cursor: "pointer", background: abierta === x.patente ? "#fafbfd" : "#fff" }} onClick={() => setAbierta(abierta === x.patente ? null : x.patente)}>
-                  <td style={{ ...celda, fontWeight: 800, color: C.navy }}>{x.patente}</td>
+                  <td style={{ ...celda, fontWeight: 800, color: C.navy }}><PatLink p={x.patente} /></td>
                   <td style={celda}>{x.modelo || "—"}<div style={{ color: C.tenue, fontSize: 12 }}>{x.ceco}</div></td>
                   <td style={celda}>{x.empresa || "—"}</td>
                   <td style={celda}>{x.ultima_pauta ? <>Pauta {kmf(x.ultima_pauta)}<div style={{ color: C.tenue, fontSize: 12 }}>{fd(x.ultima_fecha)} · {kmf(x.ultima_km)} km · {x.ultima_taller || ""}</div></> : <span style={{ color: C.tenue }}>Sin registro</span>}</td>
@@ -1136,7 +1155,11 @@ const pesos = (v) => (v === null || v === undefined ? "—" : `$${Math.round(Num
 function FichaActivo({ quien }) {
   const [filas, setFilas] = useState(null);
   const [f, setF] = useState({ activo: "ACTIVO", doc: "", texto: "" });
-  const [abierta, setAbierta] = useState(null);
+  const [abierta, setAbierta] = useState(() => { const p = fichaPendiente; fichaPendiente = null; return p; });
+  useEffect(() => {
+    const oir = (e) => { fichaPendiente = null; setAbierta(e.detail); };
+    window.addEventListener("ca-abrir-ficha", oir); return () => window.removeEventListener("ca-abrir-ficha", oir);
+  }, []);
   useEffect(() => { rpc("fn_ficha_lista_cl").then(setFilas).catch(() => setFilas([])); }, []);
   if (abierta) return <FichaDetalle patente={abierta} quien={quien} onVolver={() => setAbierta(null)} />;
   const act = (filas || []).filter((x) => x.estado === "ACTIVO");
@@ -1977,7 +2000,7 @@ function VerificadorVU() {
               {vis.length === 0 && <tr><td colSpan={8} style={{ ...celda, color: C.tenue, textAlign: "center" }}>Nada con este filtro.</td></tr>}
               {vis.map((x) => { const e = VU_ESTADO[x.estado] || [x.estado, C.fondo, C.suave]; return (
                 <tr key={x.patente + x.componente}>
-                  <td style={{ ...celda, fontWeight: 800, color: C.navy }}>{x.patente}</td>
+                  <td style={{ ...celda, fontWeight: 800, color: C.navy }}><PatLink p={x.patente} /></td>
                   <td style={celda}>{x.modelo}<div style={{ color: C.tenue, fontSize: 12 }}>{x.ceco}</div></td>
                   <td style={celda}>{x.componente}</td>
                   <td style={celda}>{x.ultimo_fecha ? <>{fd(x.ultimo_fecha)} · {kmf(x.ultimo_km)} km<div style={{ color: C.tenue, fontSize: 12, maxWidth: 260 }}>{x.ultimo_detalle}</div></> : <span style={{ color: C.tenue }}>sin registro</span>}</td>
@@ -2111,7 +2134,7 @@ function HistorialGastos({ quien }) {
             <tbody>
               {vis.slice(0, 500).map((x) => [
                 <tr key={x.id} style={{ cursor: "pointer", background: abierta === x.id ? "#fafbfd" : "#fff" }} onClick={() => setAbierta(abierta === x.id ? null : x.id)}>
-                  <td style={celda}>{fd(x.fecha)}</td><td style={{ ...celda, fontWeight: 800, color: C.navy }}>{x.patente}</td>
+                  <td style={celda}>{fd(x.fecha)}</td><td style={{ ...celda, fontWeight: 800, color: C.navy }}><PatLink p={x.patente} /></td>
                   <td style={celda}>{MN_TIPO[x.tipo] || x.tipo}</td>
                   <td style={celda}>{x.tipo === "mantencion" ? (x.pauta_km ? `Pauta ${kmf(x.pauta_km)}${x.tipo_mantencion ? ` · ${x.tipo_mantencion}` : ""}` : "—") : x.componente_std || "—"}</td>
                   <td style={{ ...celda, maxWidth: 260 }}>{x.detalle || "—"}</td><td style={celda}>{x.taller || "—"}</td>
@@ -2237,9 +2260,9 @@ function BandejaAlertas() {
               {vis.map((x, i) => { const e = AL_GRAV[x.gravedad] || [x.gravedad, C.fondo, C.suave]; return (
                 <tr key={i}>
                   <td style={celda}>{chip(e[0], e[1], e[2])}</td><td style={celda}>{x.modulo}</td>
-                  <td style={{ ...celda, fontWeight: 800, color: C.navy }}>{x.patente || "—"}</td>
+                  <td style={{ ...celda, fontWeight: 800, color: C.navy }}><PatLink p={x.patente} /></td>
                   <td style={{ ...celda, fontWeight: 700 }}>{x.titulo}</td><td style={{ ...celda, color: C.suave }}>{x.detalle || "—"}</td>
-                  <td style={celda}>{x.avisa_a}</td><td style={{ ...celda, color: C.navy }}>{x.donde}</td>
+                  <td style={celda}>{x.avisa_a}</td><td style={celda}>{DONDE_SUB[x.donde] ? <a href="#" style={{ color: C.navy, fontWeight: 700 }} onClick={(e) => { e.preventDefault(); irA(DONDE_SUB[x.donde]); }}>{x.donde} →</a> : x.donde}</td>
                 </tr>
               ); })}
             </tbody>
@@ -2478,7 +2501,7 @@ function UsoDetenciones({ quien }) {
               {vis.length === 0 && <tr><td colSpan={11} style={{ ...celda, color: C.tenue, textAlign: "center" }}>Sin paradas con este filtro.</td></tr>}
               {vis.map((x) => { const c = UC[x.clasificacion] || [x.clasificacion, C.fondo, C.suave]; const z = UZ[x.zona] || [x.zona]; return [
                 <tr key={x.id}>
-                  <td style={{ ...celda, fontWeight: 800, color: C.navy }}>{x.patente}</td>
+                  <td style={{ ...celda, fontWeight: 800, color: C.navy }}><PatLink p={x.patente} /></td>
                   <td style={celda}>{hora(x.inicio)} – {x.en_curso ? <b style={{ color: C.ambar }}>en curso</b> : hora(x.fin)}</td>
                   <td style={{ ...celda, fontWeight: 700, color: x.minutos >= 45 ? C.rojo : C.texto }}>{x.minutos}</td>
                   <td style={celda}>{chip(c[0], c[1], c[2])}</td>
@@ -2688,7 +2711,7 @@ function EquiposGps() {
           <thead><tr style={{ background: C.fondo, textAlign: "left" }}>{["Patente", "CECO · empresa", "GPS", "Última señal", "Cámara", "Último evento", "Eventos hoy", "Riesgo alto hoy", "Cubierta (7 días)"].map((h) => <th key={h} style={{ ...celda, fontSize: 12, color: C.suave }}>{h}</th>)}</tr></thead>
           <tbody>{vis.map((x) => { const g = GPS_EST[x.gps_estado] || [x.gps_estado]; const c = CAM_EST[x.cam_estado] || [x.cam_estado]; return (
             <tr key={x.patente}>
-              <td style={{ ...celda, fontWeight: 800, color: C.navy }}>{x.patente}</td>
+              <td style={{ ...celda, fontWeight: 800, color: C.navy }}><PatLink p={x.patente} /></td>
               <td style={celda}>{x.ceco}<div style={{ color: C.tenue, fontSize: 12 }}>{x.empresa}</div></td>
               <td style={celda}>{chip(g[0], g[1], g[2])}</td>
               <td style={celda}>{x.gps_ultima ? fh(x.gps_ultima) : "—"}{x.gps_horas !== null && x.gps_horas >= 1 && <div style={{ color: C.tenue, fontSize: 12 }}>hace {x.gps_horas >= 48 ? `${Math.round(x.gps_horas / 24)} días` : `${Math.round(x.gps_horas)} h`}</div>}</td>
@@ -2726,7 +2749,7 @@ function EquiposCaidos() {
             {vis.length === 0 && <tr><td colSpan={6} style={{ ...celda, color: C.tenue, textAlign: "center" }}>Sin casos.</td></tr>}
             {vis.map((x) => (
               <tr key={x.id}>
-                <td style={{ ...celda, fontWeight: 800, color: C.navy }}>{x.patente}</td>
+                <td style={{ ...celda, fontWeight: 800, color: C.navy }}><PatLink p={x.patente} /></td>
                 <td style={celda}>{x.desde ? fh(x.desde) : "—"}</td>
                 <td style={{ ...celda, fontWeight: 700, color: dias(x.desde || x.abierto_at, x.cerrado_at) >= 5 ? C.rojo : C.texto }}>{dias(x.desde || x.abierto_at, x.cerrado_at)}</td>
                 <td style={celda}>{x.ticket_at ? <>{fh(x.ticket_at)}<div style={{ color: C.tenue, fontSize: 12 }}>{x.ticket_para}</div></> : <span style={{ color: C.tenue }}>pendiente</span>}</td>
@@ -2812,7 +2835,7 @@ function EventosCamara() {
             <thead><tr style={{ background: C.fondo, textAlign: "left" }}>{["Hora", "Patente", "CECO · empresa", "Tipo", "Riesgo", "Marcas", "Video"].map((h) => <th key={h} style={{ ...celda, color: C.suave }}>{h}</th>)}</tr></thead>
             <tbody>{vis.slice(0, 500).map((x) => (
               <tr key={x.event_id}>
-                <td style={celda}>{fh(x.event_time)}</td><td style={{ ...celda, fontWeight: 800, color: C.navy }}>{x.patente || "—"}</td>
+                <td style={celda}>{fh(x.event_time)}</td><td style={{ ...celda, fontWeight: 800, color: C.navy }}><PatLink p={x.patente} /></td>
                 <td style={celda}>{x.ceco}<div style={{ color: C.tenue, fontSize: 11.5 }}>{x.empresa}</div></td>
                 <td style={celda}>{x.event_type}</td>
                 <td style={{ ...celda, fontWeight: 700, color: ["HIGH", "CRITICAL"].includes(x.risk_level) ? C.rojo : C.suave }}>{x.risk_level || "—"}</td>
@@ -2880,7 +2903,7 @@ function IncumplimientosMes({ mes }) {
             {filas.map((x) => (
               <tr key={x.patente}>
                 <td style={celda}>{x.empresa || "—"}<div style={{ color: C.tenue, fontSize: 11.5 }}>{x.rut}</div></td>
-                <td style={{ ...celda, fontWeight: 800, color: C.navy }}>{x.patente}</td><td style={celda}>{x.ceco}</td>
+                <td style={{ ...celda, fontWeight: 800, color: C.navy }}><PatLink p={x.patente} /></td><td style={celda}>{x.ceco}</td>
                 <td style={{ ...celda, fontWeight: 700, color: x.nota_geotab !== null && x.nota_geotab < 90 ? C.rojo : C.texto }}>{x.nota_geotab ?? "—"}{x.faltas_12 ? " · falta 12" : ""}</td>
                 <td style={celda}>{x.faltas_1 ? <><b style={{ color: C.rojo }}>{x.faltas_1}</b> · {x.fechas_1}</> : "—"}</td>
                 <td style={celda}>{x.detenciones || "—"}</td>
@@ -2914,7 +2937,7 @@ function DetalleFaltas({ mes }) {
           {filas.map((x) => (
             <tr key={x.falta + x.origen_id}>
               <td style={celda}>{fh(x.fecha)}</td><td style={{ ...celda, fontWeight: 700 }}>N° {x.falta}</td>
-              <td style={{ ...celda, fontWeight: 800, color: C.navy }}>{x.patente}</td><td style={celda}>{x.empresa || "—"}</td>
+              <td style={{ ...celda, fontWeight: 800, color: C.navy }}><PatLink p={x.patente} /></td><td style={celda}>{x.empresa || "—"}</td>
               <td style={celda}>{x.detalle}</td><td style={{ ...celda, fontWeight: 700 }}>{x.uf ?? "—"}</td>
             </tr>
           ))}
@@ -2995,7 +3018,7 @@ function ConduccionGeotab({ mes }) {
           </tr></thead>
           <tbody>{vis.map((x) => [
             <tr key={x.patente} style={{ cursor: "pointer", background: abierta === x.patente ? "#fafbfd" : "#fff" }} onClick={() => setAbierta(abierta === x.patente ? null : x.patente)}>
-              <td style={celda}>{x.empresa || "—"}</td><td style={{ ...celda, fontWeight: 800, color: C.navy }}>{x.patente}</td><td style={celda}>{x.tipo}</td><td style={celda}>{x.ceco || "—"}</td>
+              <td style={celda}>{x.empresa || "—"}</td><td style={{ ...celda, fontWeight: 800, color: C.navy }}><PatLink p={x.patente} /></td><td style={celda}>{x.tipo}</td><td style={celda}>{x.ceco || "—"}</td>
               <td style={{ ...celda, fontWeight: 800, color: Number(x.nota) < cfgR.min ? C.rojo : C.texto }}>{x.nota}</td>
               <td style={{ ...celda, fontWeight: 700, color: RIESGO_COL[riesgo(Number(x.nota))] }}>{riesgo(Number(x.nota))}</td>
               <td style={celda}>{Math.round(x.km)}</td><td style={celda}>{x.aceleracion}</td><td style={celda}>{x.frenado}</td><td style={celda}>{x.giro}</td><td style={celda}>{x.exceso}</td><td style={celda}>{x.cinturon}</td><td style={celda}>{x.vel_max} km/h</td>
@@ -3075,7 +3098,7 @@ function UsoFueraHorario({ mes }) {
             {vis.length === 0 && <tr><td colSpan={7} style={{ ...celda, color: C.tenue, textAlign: "center" }}>Sin eventos con este filtro.</td></tr>}
             {vis.map((x) => (
               <tr key={x.id}>
-                <td style={celda}>{x.empresa || "—"}</td><td style={celda}>{fh(x.fecha)}</td><td style={{ ...celda, fontWeight: 800, color: C.navy }}>{x.patente}</td>
+                <td style={celda}>{x.empresa || "—"}</td><td style={celda}>{fh(x.fecha)}</td><td style={{ ...celda, fontWeight: 800, color: C.navy }}><PatLink p={x.patente} /></td>
                 <td style={celda}>{x.minutos ? `${x.minutos} min` : "—"}</td><td style={celda}>{x.motivo}</td>
                 <td style={{ ...celda, maxWidth: 320 }}>{x.comentario || "—"}</td>
                 <td style={{ ...celda, fontWeight: 700, color: x.autorizado === "Sí" ? C.verde : x.autorizado === "No" ? C.rojo : C.ambar }}>{x.autorizado}</td>
@@ -3146,7 +3169,7 @@ function NoSalidas() {
             {filas && vis.length === 0 && <tr><td colSpan={6} style={{ padding: 18, color: C.tenue }}>Nada en esta lista.</td></tr>}
             {vis.map((x) => (
               <tr key={x.patente} style={{ borderTop: `1px solid ${C.borde}` }}>
-                <td style={{ padding: "8px 10px", fontWeight: 700, color: C.navy }}>{x.patente}</td>
+                <td style={{ padding: "8px 10px", fontWeight: 700, color: C.navy }}><PatLink p={x.patente} /></td>
                 <td style={{ padding: "8px 10px" }}>{x.ceco}</td>
                 <td style={{ padding: "8px 10px" }}>{x.supervisor || "—"}</td>
                 <td style={{ padding: "8px 10px" }}>{x.empresa || "—"}</td>
