@@ -2831,15 +2831,15 @@ function EventosCamara() {
 
 // ── Indicadores (pedido sección 5): incumplimientos del mes y multas del Anexo III ──
 function Indicadores({ quien, rol }) {
-  const [vista, setVista] = useState("mes");
+  const [vista, setVista] = useState("geotab");
   const [mes, setMes] = useState(hoyCL().slice(0, 7));
   return (
     <div>
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginBottom: 14 }}>
-        {[["mes", "Incumplimientos del mes"], ["detalle", "Detalle de faltas"], ["multas", "Multas (Anexo III)"]].map(([k, t]) => <button key={k} style={btn(vista === k ? undefined : "sec")} onClick={() => setVista(k)}>{t}</button>)}
+        {[["geotab", "Conducción Geotab"], ["mes", "Incumplimientos del mes"], ["detalle", "Detalle de faltas"], ["uso", "Uso fuera de horario"], ["multas", "Multas (Anexo III)"]].map(([k, t]) => <button key={k} style={btn(vista === k ? undefined : "sec")} onClick={() => setVista(k)}>{t}</button>)}
         {vista !== "multas" && <label style={{ fontSize: 12.5, color: C.suave, marginLeft: 8 }}>Mes <input type="month" style={inp} value={mes} onChange={(e) => e.target.value && setMes(e.target.value)} /></label>}
       </div>
-      {vista === "mes" ? <IncumplimientosMes mes={mes} /> : vista === "detalle" ? <DetalleFaltas mes={mes} /> : <MultasAnexo quien={quien} puede={rol === "superadmin"} />}
+      {vista === "geotab" ? <ConduccionGeotab mes={mes} /> : vista === "mes" ? <IncumplimientosMes mes={mes} /> : vista === "detalle" ? <DetalleFaltas mes={mes} /> : vista === "uso" ? <UsoFueraHorario mes={mes} /> : <MultasAnexo quien={quien} puede={rol === "superadmin"} />}
     </div>
   );
 }
@@ -2852,7 +2852,8 @@ function IncumplimientosMes({ mes }) {
   const tot = (k) => filas.reduce((t, x) => t + Number(x[k] || 0), 0);
   const exportar = async () => {
     const XLSX = await cargarSheetJS();
-    const data = filas.map((x) => ({ RUT: x.rut, TERCERO: x.empresa, PATENTE: x.patente, CECO: x.ceco, "UF AUSENCIAS": x.faltas_1 * (uf[1] ?? 0), "FECHA DE FALTA": x.fechas_1 || "",
+    const data = filas.map((x) => ({ RUT: x.rut, TERCERO: x.empresa, PATENTE: x.patente, CECO: x.ceco, "UF CONDUCCIÓN GEOTAB": (x.faltas_12 || 0) * (uf[12] ?? 0), "NOTA GEOTAB ACUMULADA": x.nota_geotab ?? "",
+      "UF AUSENCIAS": x.faltas_1 * (uf[1] ?? 0), "FECHA DE FALTA": x.fechas_1 || "",
       "DETENCIONES": x.detenciones, "NO JUSTIFICADAS": x.no_justificadas,
       "EVENTOS GRAVES CÁMARA": x.eventos_graves, "CÁMARA CUBIERTA": x.camara_cubierta, "UF AUDITORÍA": x.faltas_13 * (uf[13] ?? 0), "FECHA DE NO CUMPLIMIENTO": x.fechas_13 || "",
       "UF USO NO AUTORIZADO": x.faltas_14 * (uf[14] ?? 0), "FECHA DE USO INDEBIDO": x.fechas_14 || "", "TOTAL UF": Number(x.uf_total) }));
@@ -2873,13 +2874,14 @@ function IncumplimientosMes({ mes }) {
       </div>
       <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, overflowX: "auto" }}>
         <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1000 }}>
-          <thead><tr style={{ background: C.fondo, textAlign: "left" }}>{["Tercero", "Patente", "CECO", "No presentación · fechas", "Detenciones", "No justificadas · fechas", "Auditorías no hechas · fechas", "Eventos graves", "Cubierta", "Total UF"].map((h) => <th key={h} style={{ ...celda, color: C.suave }}>{h}</th>)}</tr></thead>
+          <thead><tr style={{ background: C.fondo, textAlign: "left" }}>{["Tercero", "Patente", "CECO", "Nota Geotab", "No presentación · fechas", "Detenciones", "No justificadas · fechas", "Auditorías no hechas · fechas", "Eventos graves", "Cubierta", "Total UF"].map((h) => <th key={h} style={{ ...celda, color: C.suave }}>{h}</th>)}</tr></thead>
           <tbody>
-            {filas.length === 0 && <tr><td colSpan={10} style={{ ...celda, color: C.tenue, textAlign: "center" }}>Sin incumplimientos ni eventos en este mes.</td></tr>}
+            {filas.length === 0 && <tr><td colSpan={11} style={{ ...celda, color: C.tenue, textAlign: "center" }}>Sin incumplimientos ni eventos en este mes.</td></tr>}
             {filas.map((x) => (
               <tr key={x.patente}>
                 <td style={celda}>{x.empresa || "—"}<div style={{ color: C.tenue, fontSize: 11.5 }}>{x.rut}</div></td>
                 <td style={{ ...celda, fontWeight: 800, color: C.navy }}>{x.patente}</td><td style={celda}>{x.ceco}</td>
+                <td style={{ ...celda, fontWeight: 700, color: x.nota_geotab !== null && x.nota_geotab < 90 ? C.rojo : C.texto }}>{x.nota_geotab ?? "—"}{x.faltas_12 ? " · falta 12" : ""}</td>
                 <td style={celda}>{x.faltas_1 ? <><b style={{ color: C.rojo }}>{x.faltas_1}</b> · {x.fechas_1}</> : "—"}</td>
                 <td style={celda}>{x.detenciones || "—"}</td>
                 <td style={celda}>{x.faltas_14 ? <><b style={{ color: C.rojo }}>{x.faltas_14}</b> · {x.fechas_14}</> : "—"}</td>
@@ -2921,6 +2923,171 @@ function DetalleFaltas({ mes }) {
     </div>
   );
 }
+// Tablero «Gestión de indicadores» · conducción Geotab (I-05 a I-08)
+const RIESGO_COL = { "Básico": C.verde, "Leve": C.navy, "Medio": C.ambar, "Alto": C.rojo };
+function ConduccionGeotab({ mes }) {
+  const [mesRows, setMesRows] = useState(null);
+  const [dias, setDias] = useState([]);
+  const [f, setF] = useState({ tipo: "", ceco: "", texto: "" });
+  const [orden, setOrden] = useState({ k: "nota", asc: true });
+  const [abierta, setAbierta] = useState(null);
+  const [cfgR, setCfgR] = useState({ basico: 95, leve: 75, medio: 60, min: 90, activa: "no" });
+  useEffect(() => {
+    setMesRows(null);
+    const d0 = `${mes}-01`; const fin = new Date(`${mes}-01T12:00:00`); fin.setMonth(fin.getMonth() + 1);
+    Promise.all([
+      api(`vw_geo_mes_cl?select=*&mes=eq.${d0}`),
+      api(`vw_gps_seguridad_cl?select=fecha,patente,ceco,tipo,empresa,km,vel_max,conduccion_min,ralenti_min,frenado,aceleracion,giro,exceso,cinturon,ocurrencias,puntaje&fecha=gte.${d0}&fecha=lt.${fin.toISOString().slice(0, 10)}&order=fecha&limit=20000`),
+      api("ca_config_cl?clave=in.(geo_riesgo_basico,geo_riesgo_leve,geo_riesgo_medio,geo_nota_minima,geo_falta12_activa)&select=clave,valor"),
+    ]).then(([m, d, c]) => {
+      setMesRows(m || []); setDias(d || []);
+      const o = Object.fromEntries((c || []).map((x) => [x.clave, x.valor]));
+      setCfgR({ basico: Number(o.geo_riesgo_basico || 95), leve: Number(o.geo_riesgo_leve || 75), medio: Number(o.geo_riesgo_medio || 60), min: Number(o.geo_nota_minima || 90), activa: o.geo_falta12_activa || "no" });
+    }).catch(() => { setMesRows([]); setDias([]); });
+  }, [mes]);
+  if (mesRows === null) return <div style={{ color: C.tenue }}>Cargando…</div>;
+  const riesgo = (n) => n === null || n === undefined ? "—" : n >= cfgR.basico ? "Básico" : n >= cfgR.leve ? "Leve" : n >= cfgR.medio ? "Medio" : "Alto";
+  const cecos = [...new Set(mesRows.map((x) => x.ceco).filter(Boolean))].sort();
+  const pasa = (x) => (!f.tipo || x.tipo === f.tipo) && (!f.ceco || x.ceco === f.ceco);
+  const vis = mesRows.filter((x) => pasa(x) && (!f.texto || `${x.patente} ${x.empresa || ""}`.toLowerCase().includes(f.texto.toLowerCase())))
+    .sort((a, b) => { const va = a[orden.k] ?? "", vb = b[orden.k] ?? ""; const c = typeof va === "number" || !isNaN(Number(va)) ? Number(va) - Number(vb) : String(va).localeCompare(String(vb)); return orden.asc ? c : -c; });
+  const diasSel = dias.filter(pasa);
+  const porDia = Object.entries(diasSel.reduce((m, x) => { (m[x.fecha] = m[x.fecha] || []).push(Number(x.puntaje)); return m; }, {})).sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([d, arr]) => [d.slice(8, 10) + "-" + d.slice(5, 7), Math.round((arr.reduce((t, v) => t + v, 0) / arr.length) * 10) / 10]);
+  const prom = vis.length ? Math.round((vis.reduce((t, x) => t + Number(x.nota || 0), 0) / vis.length) * 10) / 10 : null;
+  const bajo = vis.filter((x) => Number(x.nota) < cfgR.min).length;
+  const th = (k, t) => <th key={k} onClick={() => setOrden({ k, asc: orden.k === k ? !orden.asc : true })} style={{ padding: "7px 9px", borderBottom: `1px solid ${C.borde}`, fontSize: 12, color: C.suave, cursor: "pointer", whiteSpace: "nowrap" }}>{t}{orden.k === k ? (orden.asc ? " ▲" : " ▼") : ""}</th>;
+  const celda = { padding: "7px 9px", borderBottom: `1px solid ${C.borde}`, fontSize: 12.5 };
+  const kpi = (t, v, c = C.navy) => <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, padding: "10px 14px", flex: "1 1 140px" }}><div style={{ fontSize: 22, fontWeight: 800, color: c }}>{v}</div><div style={{ fontSize: 12, color: C.suave }}>{t}</div></div>;
+  const maxDia = Math.max(1, ...porDia.map((x) => x[1]));
+  return (
+    <div>
+      <div style={{ background: C.ambarT, color: C.ambar, borderRadius: 8, padding: "8px 12px", fontSize: 12.5, marginBottom: 12 }}>
+        Puntaje <b>provisional</b>: se calcula con las ocurrencias de las 5 reglas de Geotab y pesos editables (Configuración, geo_peso_*). Falta calibrarlo con el informe Safety Scorecard. La falta N° 12 está {cfgR.activa === "si" ? "ENCENDIDA" : "apagada"} (geo_falta12_activa).
+      </div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+        <select style={inp} value={f.tipo} onChange={(e) => setF({ ...f, tipo: e.target.value })}><option value="">BT y terceros</option><option value="BT">BT</option><option value="Tercero">Tercero</option></select>
+        <select style={inp} value={f.ceco} onChange={(e) => setF({ ...f, ceco: e.target.value })}><option value="">Todos los CECO</option>{cecos.map((c) => <option key={c} value={c}>{c}</option>)}</select>
+        <input style={{ ...inp, minWidth: 200 }} placeholder="Patente o empresa" value={f.texto} onChange={(e) => setF({ ...f, texto: e.target.value })} />
+      </div>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
+        {kpi("Nota promedio del mes", prom ?? "—", prom !== null && prom < cfgR.min ? C.rojo : C.verde)}{kpi(`Patentes con nota < ${cfgR.min}`, bajo, C.rojo)}
+        {kpi("Patentes", vis.length)}{kpi("Ocurrencias", vis.reduce((t, x) => t + Number(x.ocurrencias || 0), 0))}{kpi("Km", Math.round(vis.reduce((t, x) => t + Number(x.km || 0), 0)).toLocaleString("es-CL"))}
+      </div>
+      <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, padding: 12, marginBottom: 12 }}>
+        <div style={{ fontWeight: 800, color: C.navy, fontSize: 13, marginBottom: 8 }}>Evolución diaria del puntaje (promedio de la selección)</div>
+        <div style={{ display: "flex", alignItems: "flex-end", gap: 4, height: 120 }}>
+          {porDia.map(([d, v]) => (
+            <div key={d} title={`${d}: ${v}`} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
+              <span style={{ fontSize: 10, color: C.suave }}>{v}</span>
+              <div style={{ width: "100%", height: `${(v / maxDia) * 90}px`, background: v < cfgR.min ? C.ambar : C.verde, borderRadius: 3 }} />
+              <span style={{ fontSize: 10, color: C.tenue }}>{d.slice(0, 2)}</span>
+            </div>
+          ))}
+          {porDia.length === 0 && <span style={{ fontSize: 12.5, color: C.tenue }}>Sin datos del mes.</span>}
+        </div>
+      </div>
+      <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1080 }}>
+          <thead><tr style={{ background: C.fondo, textAlign: "left" }}>
+            {th("empresa", "Empresa")}{th("patente", "Patente")}{th("tipo", "Tipo")}{th("ceco", "CECO")}{th("nota", "Nota acumulada")}{th("nota", "Riesgo")}{th("km", "Km")}
+            {th("aceleracion", "Aceleración")}{th("frenado", "Frenado")}{th("giro", "Giro")}{th("exceso", "Exceso > 8 %")}{th("cinturon", "Cinturón")}{th("vel_max", "Vel. máx.")}
+          </tr></thead>
+          <tbody>{vis.map((x) => [
+            <tr key={x.patente} style={{ cursor: "pointer", background: abierta === x.patente ? "#fafbfd" : "#fff" }} onClick={() => setAbierta(abierta === x.patente ? null : x.patente)}>
+              <td style={celda}>{x.empresa || "—"}</td><td style={{ ...celda, fontWeight: 800, color: C.navy }}>{x.patente}</td><td style={celda}>{x.tipo}</td><td style={celda}>{x.ceco || "—"}</td>
+              <td style={{ ...celda, fontWeight: 800, color: Number(x.nota) < cfgR.min ? C.rojo : C.texto }}>{x.nota}</td>
+              <td style={{ ...celda, fontWeight: 700, color: RIESGO_COL[riesgo(Number(x.nota))] }}>{riesgo(Number(x.nota))}</td>
+              <td style={celda}>{Math.round(x.km)}</td><td style={celda}>{x.aceleracion}</td><td style={celda}>{x.frenado}</td><td style={celda}>{x.giro}</td><td style={celda}>{x.exceso}</td><td style={celda}>{x.cinturon}</td><td style={celda}>{x.vel_max} km/h</td>
+            </tr>,
+            abierta === x.patente && <tr key={x.patente + "d"}><td colSpan={13} style={{ padding: 10, background: "#fafbfd", borderBottom: `1px solid ${C.borde}` }}>
+              <table style={{ borderCollapse: "collapse", fontSize: 12 }}>
+                <thead><tr style={{ color: C.suave, textAlign: "left" }}>{["Día", "Puntaje", "Km", "Conducción", "Ralentí", "Vel. máx.", "Acel.", "Fren.", "Giro", "Exceso", "Cinturón"].map((h) => <th key={h} style={{ padding: "3px 8px" }}>{h}</th>)}</tr></thead>
+                <tbody>{dias.filter((d) => d.patente === x.patente).map((d) => (
+                  <tr key={d.fecha}><td style={{ padding: "3px 8px" }}>{fd(d.fecha)}</td><td style={{ padding: "3px 8px", fontWeight: 700, color: Number(d.puntaje) < cfgR.min ? C.rojo : C.texto }}>{d.puntaje}</td>
+                    <td style={{ padding: "3px 8px" }}>{d.km}</td><td style={{ padding: "3px 8px" }}>{d.conduccion_min} min</td><td style={{ padding: "3px 8px" }}>{d.ralenti_min} min</td><td style={{ padding: "3px 8px" }}>{d.vel_max} km/h</td>
+                    <td style={{ padding: "3px 8px" }}>{d.aceleracion}</td><td style={{ padding: "3px 8px" }}>{d.frenado}</td><td style={{ padding: "3px 8px" }}>{d.giro}</td><td style={{ padding: "3px 8px" }}>{d.exceso}</td><td style={{ padding: "3px 8px" }}>{d.cinturon}</td></tr>
+                ))}</tbody>
+              </table>
+            </td></tr>,
+          ])}</tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// Tablero «Uso fuera de horario» (I-09 a I-12)
+function Barras({ titulo, datos, color = C.navy }) {
+  const max = Math.max(1, ...datos.map((d) => d[1]));
+  return (
+    <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, padding: 12, flex: "1 1 280px" }}>
+      <div style={{ fontWeight: 800, color: C.navy, fontSize: 13, marginBottom: 8 }}>{titulo}</div>
+      {datos.length === 0 && <div style={{ fontSize: 12.5, color: C.tenue }}>Sin datos.</div>}
+      {datos.slice(0, 12).map(([k, v]) => (
+        <div key={k} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, marginBottom: 4 }}>
+          <span style={{ width: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: C.suave }} title={k}>{k}</span>
+          <div style={{ flex: 1, background: C.fondo, borderRadius: 4, height: 14 }}><div style={{ width: `${(v * 100) / max}%`, background: color, height: "100%", borderRadius: 4 }} /></div>
+          <b style={{ width: 28, textAlign: "right" }}>{v}</b>
+        </div>
+      ))}
+    </div>
+  );
+}
+function UsoFueraHorario({ mes }) {
+  const [filas, setFilas] = useState(null);
+  const [f, setF] = useState({ autorizado: "", patente: "", ceco: "" });
+  useEffect(() => {
+    const d0 = new Date(`${mes}-01T00:00:00-03:00`); const d1 = new Date(d0); d1.setMonth(d1.getMonth() + 1);
+    setFilas(null);
+    api(`vw_ca_uso_fuera_horario_cl?select=*&fecha=gte.${d0.toISOString()}&fecha=lt.${d1.toISOString()}&order=fecha.desc`).then(setFilas).catch(() => setFilas([]));
+  }, [mes]);
+  if (filas === null) return <div style={{ color: C.tenue }}>Cargando…</div>;
+  const cecos = [...new Set(filas.map((x) => x.ceco).filter(Boolean))].sort();
+  const vis = filas.filter((x) => (!f.autorizado || x.autorizado === f.autorizado) && (!f.ceco || x.ceco === f.ceco) && (!f.patente || String(x.patente).toLowerCase().includes(f.patente.toLowerCase())));
+  const contar = (k) => Object.entries(vis.reduce((m, x) => { const c = x[k] || "—"; m[c] = (m[c] || 0) + 1; return m; }, {})).sort((a, b) => b[1] - a[1]);
+  const porDia = Object.entries(vis.reduce((m, x) => { const d = new Date(x.fecha).toLocaleDateString("es-CL", { timeZone: "America/Santiago", day: "2-digit", month: "2-digit" }); m[d] = (m[d] || 0) + 1; return m; }, {})).sort((a, b) => a[0].split("-").reverse().join().localeCompare(b[0].split("-").reverse().join()));
+  const n = (v) => vis.filter((x) => x.autorizado === v).length;
+  const kpi = (t, v, c, val) => <div onClick={() => val !== undefined && setF({ ...f, autorizado: f.autorizado === val ? "" : val })} style={{ background: "#fff", border: `1px solid ${f.autorizado === val ? c : C.borde}`, borderRadius: 12, padding: "10px 14px", flex: "1 1 140px", cursor: val !== undefined ? "pointer" : "default" }}><div style={{ fontSize: 24, fontWeight: 800, color: c }}>{v}</div><div style={{ fontSize: 12, color: C.suave }}>{t}</div></div>;
+  const celda = { padding: "7px 9px", borderBottom: `1px solid ${C.borde}`, fontSize: 12.5, verticalAlign: "top" };
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+        <select style={inp} value={f.autorizado} onChange={(e) => setF({ ...f, autorizado: e.target.value })}><option value="">Uso autorizado: todos</option><option value="Sí">Sí</option><option value="No">No</option><option value="Pendiente">Pendiente</option></select>
+        <select style={inp} value={f.ceco} onChange={(e) => setF({ ...f, ceco: e.target.value })}><option value="">Todos los CECO</option>{cecos.map((c) => <option key={c} value={c}>{c}</option>)}</select>
+        <input style={{ ...inp, width: 140 }} placeholder="Patente" value={f.patente} onChange={(e) => setF({ ...f, patente: e.target.value })} />
+      </div>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
+        {kpi("Eventos", vis.length, C.navy)}{kpi("Autorizados", n("Sí"), C.verde, "Sí")}{kpi("No autorizados", n("No"), C.rojo, "No")}{kpi("Pendientes", n("Pendiente"), C.ambar, "Pendiente")}
+      </div>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
+        <Barras titulo="Eventos por CECO" datos={contar("ceco")} />
+        <Barras titulo="Evolución en el período" datos={porDia} color={C.suave} />
+        <Barras titulo="Eventos por empresa de transporte" datos={contar("empresa")} />
+        <Barras titulo="Eventos por vehículo" datos={contar("patente")} color={C.ambar} />
+        <Barras titulo="Motivo del uso" datos={contar("motivo")} color={C.verde} />
+      </div>
+      <div style={{ fontWeight: 800, color: C.navy, marginBottom: 6 }}>Comentarios</div>
+      <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 820 }}>
+          <thead><tr style={{ background: C.fondo, textAlign: "left" }}>{["Empresa", "Fecha", "Patente", "Tiempo", "Motivo", "Comentario", "Autorizado"].map((h) => <th key={h} style={{ ...celda, color: C.suave }}>{h}</th>)}</tr></thead>
+          <tbody>
+            {vis.length === 0 && <tr><td colSpan={7} style={{ ...celda, color: C.tenue, textAlign: "center" }}>Sin eventos con este filtro.</td></tr>}
+            {vis.map((x) => (
+              <tr key={x.id}>
+                <td style={celda}>{x.empresa || "—"}</td><td style={celda}>{fh(x.fecha)}</td><td style={{ ...celda, fontWeight: 800, color: C.navy }}>{x.patente}</td>
+                <td style={celda}>{x.minutos ? `${x.minutos} min` : "—"}</td><td style={celda}>{x.motivo}</td>
+                <td style={{ ...celda, maxWidth: 320 }}>{x.comentario || "—"}</td>
+                <td style={{ ...celda, fontWeight: 700, color: x.autorizado === "Sí" ? C.verde : x.autorizado === "No" ? C.rojo : C.ambar }}>{x.autorizado}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 function MultasAnexo({ quien, puede }) {
   const [filas, setFilas] = useState(null);
   const [msg, setMsg] = useState("");
