@@ -2422,6 +2422,12 @@ function UsoDetenciones({ quien }) {
   const [filas, setFilas] = useState(null);
   const [f, setF] = useState({ vista: "revisar", texto: "" });
   const [camAbierta, setCamAbierta] = useState(null);
+  const [ia, setIa] = useState({});
+  useEffect(() => {
+    const ids = (filas || []).filter((x) => x.camara_eventos > 0).map((x) => `"${String(x.id).replace(/"/g, "")}"`);
+    if (!ids.length) { setIa({}); return; }
+    api(`gps_paradas_camara_ia_cl?select=*&parada_id=in.(${encodeURIComponent(ids.join(","))})`).then((r) => setIa(Object.fromEntries((r || []).map((x) => [x.parada_id, x])))).catch(() => setIa({}));
+  }, [filas]);
   const cargar = () => {
     const d0 = new Date(`${fecha}T00:00:00-03:00`), d1 = new Date(d0.getTime() + 864e5);
     api(`vw_paradas_cl?select=*&inicio=gte.${d0.toISOString()}&inicio=lt.${d1.toISOString()}&order=inicio.desc&limit=3000`).then(setFilas).catch(() => setFilas([]));
@@ -2475,13 +2481,22 @@ function UsoDetenciones({ quien }) {
                   <td style={celda}>{x.interrupciones ? <>{String(x.interrupcion_tipos || "").replace("colacion", "colación").replace("bano", "baño")}<div style={{ color: C.tenue, fontSize: 12 }}>justifica {x.interrupcion_min} min</div>{x.colacion_temprana && <div style={{ color: C.ambar, fontSize: 12 }}>colación antes de las 4 h de ruta</div>}</> : <span style={{ color: C.tenue }}>—</span>}</td>
                   <td style={{ ...celda, fontWeight: 700, color: x.min_sin_explicar > 10 && x.clasificacion !== "operativa" ? C.rojo : C.suave }}>{x.clasificacion === "operativa" ? "—" : `${x.min_sin_explicar} min`}</td>
                   <td style={celda}>{x.camara_eventos ? <a href="#" style={{ color: x.camara_cubierta ? C.rojo : C.navy, fontWeight: 700 }} onClick={(e) => { e.preventDefault(); setCamAbierta(camAbierta === x.id ? null : x.id); }}>📹 {x.camara_eventos}{x.camara_cubierta ? " · cubierta" : ""}</a> : <span style={{ color: C.tenue }}>—</span>}
-                    {x.camara_tipos && <div style={{ color: C.tenue, fontSize: 11.5 }}>{x.camara_tipos}</div>}</td>
+                    {x.camara_tipos && <div style={{ color: C.tenue, fontSize: 11.5 }}>{x.camara_tipos}</div>}
+                    {ia[x.id]?.resumen && <div style={{ fontSize: 11.5, color: ia[x.id].camara_tapada || ia[x.id].posible_uso_personal ? C.rojo : C.suave, maxWidth: 220 }}>🤖 {ia[x.id].resumen}</div>}</td>
                   <td style={celda}>{z[0]}{x.zona_nombre ? ` · ${x.zona_nombre}` : ""}<div style={{ color: C.tenue, fontSize: 12 }}>{x.hora_inicio_ruta ? `ruta ${x.hora_inicio_ruta} – ${x.hora_fin_ruta || "en curso"}` : "sin ruta"}</div></td>
                   <td style={celda}>{x.conductor || "—"}</td>
                   <td style={celda}><a href={`https://maps.google.com/?q=${x.lat},${x.lng}`} target="_blank" rel="noreferrer" style={{ color: C.navy }}>🗺️ Ver</a></td>
                 </tr>,
                 camAbierta === x.id && (x.camara_detalle || []).length > 0 && <tr key={x.id + "c"}><td colSpan={11} style={{ padding: 12, background: "#fafbfd", borderBottom: `1px solid ${C.borde}` }}>
                   <div style={{ fontWeight: 800, color: C.navy, fontSize: 13, marginBottom: 8 }}>Cámara Fleetup · {x.patente} durante la parada</div>
+                  {ia[x.id] && (ia[x.id].error ? <div style={{ fontSize: 12.5, color: C.tenue, marginBottom: 8 }}>Biggy no pudo revisar las imágenes: {ia[x.id].error}</div> : (
+                    <div style={{ background: "#eef2f8", borderRadius: 8, padding: "8px 10px", fontSize: 12.5, marginBottom: 8 }}>
+                      <b>🤖 Biggy:</b> {ia[x.id].resumen}
+                      <div style={{ color: C.suave, marginTop: 2 }}>Conductor visible: {ia[x.id].conductor_visible || "—"} · Vehículo: {ia[x.id].vehiculo || "—"} · Lugar: {ia[x.id].lugar || "—"}
+                        {ia[x.id].camara_tapada ? " · CÁMARA TAPADA" : ""}{ia[x.id].posible_uso_personal ? " · posible uso personal" : ""} · confianza {ia[x.id].confianza || "—"} · {ia[x.id].imagenes} imágenes</div>
+                      <div style={{ color: C.tenue, fontSize: 11.5, marginTop: 2 }}>Biggy describe lo que se ve; la decisión es del supervisor y de Cuidado de Activo.</div>
+                    </div>
+                  ))}
                   <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
                     {x.camara_detalle.map((ev, i) => (
                       <div key={i} style={{ background: "#fff", border: `1px solid ${ev.cubierta ? C.rojo : C.borde}`, borderRadius: 10, padding: 8, width: 220, fontSize: 12.5 }}>
