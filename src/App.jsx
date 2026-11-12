@@ -15,6 +15,7 @@ import ModuloPoolMeliMX from "./Pool";
 import { descargarExcelMeli, descargarExcelMultihoja } from "./shared";
 import ModuloPagosMadre from "./Pagos";
 import ModuloContabilidad from "./Contabilidad";
+import Salud from "./Salud";
 import ModuloCertificacionesCL from "./cl/Certificaciones";
 import ModuloMaestroCL from "./cl/Maestro";
 import ModuloGpsSegurosCL from "./cl/GpsSeguros";
@@ -112,7 +113,7 @@ const PAIS_SELECT_CFG = {
 // propios (se irán agregando aquí); México conserva todo lo ya existente.
 const MODULOS_POR_PAIS = {
   "México": {
-    superadmin: ["pool_meli_mx", "pagos", "contabilidad", "maestro", "certificaciones", "empresas", "alertas_portal", "referidos", "auditoria_meli", "configuracion"],
+    superadmin: ["pool_meli_mx", "pagos", "contabilidad", "maestro", "certificaciones", "empresas", "alertas_portal", "referidos", "auditoria_meli", "salud", "configuracion"],
     certificacion: ["certificaciones", "empresas"],
     certificacion_full: ["certificaciones", "empresas"],  // Certificaciones MX + CL (ver Chile abajo)
     certificacion_mant: ["certificaciones", "empresas"],  // Certificaciones MX + CL + Mantenciones CL
@@ -145,6 +146,7 @@ const MODULOS_LABELS = {
   auditoria_meli: "Auditoría MELI",
   pagos: "Administración",
   contabilidad: "Contabilidad",
+  salud: "Salud del sistema",
   configuracion: "Configuración",
 };
 const USUARIOS = {
@@ -15553,6 +15555,13 @@ export default function App() {
         {tabActivo === "auditoria_meli" && <ModuloAuditoriaMeli />}
         {tabActivo === "pagos" && <ModuloPagosMadre usuario={usuario} />}
         {tabActivo === "contabilidad" && <ModuloContabilidad usuario={usuario} />}
+        {tabActivo === "salud" && (
+          <div className="pg">
+            <div className="sec-title">Salud del sistema</div>
+            <div className="sec-sub">Datos, servidores y consultas a MELI</div>
+            <Salud />
+          </div>
+        )}
         {!tabActivo && (
           <div className="pg" style={{ maxWidth: 720 }}>
             <div className="sec-title">Operación {pais}</div>

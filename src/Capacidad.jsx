@@ -16,7 +16,6 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "rea
 import { descargarExcelMultihoja, fechaOperativaOffset, sb } from "./shared";
 import { NoSalidasSC, etiquetaNosal } from "./NoSalidas";
 import Hallazgos from "./Hallazgos";
-import Salud from "./Salud";
 
 const NOSAL_RUTAS_DESDE = "2026-11-04";   // primeras rutas con el ítem "No Salidas a Ruta" en la Bitácora
 const AZUL = "#002E5D";
@@ -524,14 +523,13 @@ export default function Capacidad({ usuario }) {
 
   const pestanas = (
     <div style={{ display: "flex", gap: 4, marginBottom: 12, borderBottom: `1px solid ${BORDE}` }}>
-      {[["capacidad", "Capacidad"], ["hallazgos", "Hallazgos"], ["salud", "Salud del sistema"]].map(([k, t]) => (
+      {[["capacidad", "Capacidad"], ["hallazgos", "Hallazgos"]].map(([k, t]) => (
         <button key={k} type="button" onClick={() => setPestana(k)} style={{ background: "none", border: "none", padding: "8px 14px", cursor: "pointer", fontSize: 13, fontWeight: 700,
           color: pestana === k ? AZUL : GRIS, borderBottom: pestana === k ? `3px solid ${NARANJA}` : "3px solid transparent", marginBottom: -1 }}>{t}</button>
       ))}
     </div>
   );
   if (pestana === "hallazgos") return <div className="pg">{pestanas}<Hallazgos usuario={usuario} /></div>;
-  if (pestana === "salud") return <div className="pg">{pestanas}<Salud /></div>;
 
   return (
     <div className="pg">
