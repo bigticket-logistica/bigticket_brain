@@ -15181,31 +15181,30 @@ function MantenedorSupervisores() {
 }
 
 const TABS_CUIDADO_CL = [
-  { id: "ca_pedido", label: "Avance del pedido", desc: "Estado de cada ítem del pedido de Cuidado de Activo" },
-  { id: "ca_alertas", label: "Centro de alertas", desc: "Todas las alertas de la flota en un solo lugar y sus reglas" },
-  { id: "ca_evaluacion", label: "Evaluación del ejecutivo", desc: "Solo jefatura: gestión a tiempo de lo que avisó el sistema" },
-  { id: "ca_indicadores", label: "Indicadores", desc: "Evaluación del tercero: incumplimientos del mes y multas del Anexo III" },
+  // Orden acordado con Adriana (pedido T-02) y, al final, las pestañas nuevas y las antiguas
   { id: "ca_ficha", label: "Ficha del activo", desc: "Todo de cada patente: datos, documentos, costos e historial" },
-  { id: "ca_documentos", label: "Documentos", desc: "Subir y confirmar SOAP, revisión técnica, permiso, seguro y leasing" },
-  { id: "ca_flota", label: "Estado de flota", desc: "Qué pasa hoy con cada vehículo propio" },
-  { id: "ca_gps", label: "GPS y cámaras", desc: "Estado de cada GPS y cámara, y los eventos de Fleetup" },
-  { id: "ca_uso", label: "Uso y detenciones", desc: "Paradas de Geotab de la flota propia y su clasificación" },
-  { id: "ca_mantenciones", label: "Mantenciones", desc: "Próxima mantención por km (Geotab), pautas y talleres" },
+  { id: "ca_mantenciones", label: "Mantenciones", desc: "Próxima mantención por km (Geotab), vida útil, pautas y talleres" },
   { id: "ca_reparaciones", label: "Reparaciones", desc: "Solicitud, cotización, aprobación, taller y cierre con gasto" },
   { id: "ca_siniestros", label: "Siniestros", desc: "Registro, deducible al tercero, días en taller y pérdida en venta" },
+  { id: "ca_flota", label: "Estado de flota", desc: "Qué pasa hoy con cada vehículo propio" },
+  { id: "ca_documentos", label: "Documentación", desc: "Subir y confirmar padrón, SOAP, revisión técnica, gases, permiso, seguros y leasing" },
+  { id: "ca_gps", label: "GPS y cámaras", desc: "Estado de cada GPS y cámara, equipos caídos, eventos de Fleetup y proveedores" },
+  { id: "ca_uso", label: "Uso y detenciones", desc: "Paradas de Geotab cruzadas con entregas, interrupciones y cámaras" },
+  { id: "ca_auditorias", label: "Auditorías", desc: "Revisión de auditorías de terceros con Biggy, quién lleva auditoría y devoluciones" },
   { id: "ca_gastos", label: "Historial de gastos", desc: "Todo lo gastado en la flota: por año, tipo, patente y taller" },
+  { id: "ca_alertas", label: "Centro de alertas", desc: "Todas las alertas de la flota en un solo lugar, envíos por correo y reglas" },
+  { id: "ca_evaluacion", label: "Evaluación del ejecutivo", desc: "Solo jefatura: gestión a tiempo de lo que avisó el sistema" },
+  { id: "ca_indicadores", label: "Indicadores", desc: "Evaluación del tercero: conducción Geotab, incumplimientos y multas" },
   { id: "ca_tareas", label: "Tareas del supervisor", desc: "Detenciones, hallazgos y avisos al supervisor" },
-  { id: "ca_auditorias", label: "Auditorías", desc: "Revisión de auditorías de terceros con Biggy" },
   { id: "ca_nosalidas", label: "No salidas", desc: "Flota propia sin ruta y su motivo" },
   { id: "ca_incumplimientos", label: "Incumplimientos", desc: "Tareas vencidas por supervisor y mes" },
-  { id: "ca_config", label: "Configuración", desc: "Plazos, justificaciones y correos" },
-  { id: "verificador", label: "Verificador de Componentes", desc: "Vida útil de componentes" },
-  { id: "ficha",       label: "Ficha Vehículo", desc: "Datos, documentos e historial" },
-  { id: "costos",      label: "Flujo de Caja", desc: "Gastos de mantención" },
-  { id: "bitacora",    label: "Bitácora", desc: "Aprobación de solicitudes" },
-  { id: "supervisores", label: "Supervisores", desc: "Supervisores por CECO" },
+  { id: "ca_config", label: "Configuración", desc: "Plazos, reglas, justificaciones y correos" },
+  { id: "ca_pedido", label: "Avance del pedido", desc: "Estado de cada ítem del pedido de Cuidado de Activo" },
+  // Antiguas (base de México): se integran a Mantenciones y Reparaciones (pedido P-03)
+  { id: "costos",      label: "Flujo de Caja (antigua)", desc: "Gastos proyectados de mantención · base México" },
+  { id: "bitacora",    label: "Bitácora (antigua)", desc: "Solicitudes antiguas · base México" },
 ];
-registrarSubtabs("mantenciones_cl", TABS_CUIDADO_CL, "ca_tareas");
+registrarSubtabs("mantenciones_cl", TABS_CUIDADO_CL, "ca_ficha");
 
 function ModuloMantencionesMadre({ usuario }) {
   const [sub] = useSubtab("mantenciones_cl");
@@ -15215,11 +15214,8 @@ function ModuloMantencionesMadre({ usuario }) {
       <div className="sec-sub">Flota propia Chile: tareas al supervisor, no salidas, mantenciones y protocolo de flota</div>
       <div style={{ marginBottom: 16 }}><div style={{ fontSize: 15, fontWeight: 700, color: "#FF6600", fontFamily: "Poppins, 'Open Sans', sans-serif", marginTop: 2 }}>{(TABS_CUIDADO_CL.find((t) => t.id === sub) || {}).label}</div></div>
       {sub.startsWith("ca_") && <CuidadoActivoCL usuario={usuario} sub={sub} />}
-      {sub === "verificador" && <VerificadorComponentes usuario={usuario} />}
-      {sub === "ficha"       && <FichaVehiculo usuario={usuario} />}
       {sub === "costos"      && <FlujoCaja />}
       {sub === "bitacora"    && <Bitacora usuario={usuario} />}
-      {sub === "supervisores" && <MantenedorSupervisores />}
     </div>
   );
 }
