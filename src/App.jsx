@@ -15184,6 +15184,7 @@ const TABS_CUIDADO_CL = [
   { id: "ca_pedido", label: "Avance del pedido", desc: "Estado de cada ítem del pedido de Cuidado de Activo" },
   { id: "ca_alertas", label: "Centro de alertas", desc: "Todas las alertas de la flota en un solo lugar y sus reglas" },
   { id: "ca_evaluacion", label: "Evaluación del ejecutivo", desc: "Solo jefatura: gestión a tiempo de lo que avisó el sistema" },
+  { id: "ca_indicadores", label: "Indicadores", desc: "Evaluación del tercero: incumplimientos del mes y multas del Anexo III" },
   { id: "ca_ficha", label: "Ficha del activo", desc: "Todo de cada patente: datos, documentos, costos e historial" },
   { id: "ca_documentos", label: "Documentos", desc: "Subir y confirmar SOAP, revisión técnica, permiso, seguro y leasing" },
   { id: "ca_flota", label: "Estado de flota", desc: "Qué pasa hoy con cada vehículo propio" },
