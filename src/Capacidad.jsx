@@ -127,8 +127,17 @@ function sumar(filas) {
 function sumarMeli(entradas, sc) {
   const t = { acordado: 0, solicitado: 0, confirmado: 0, asignado: 0, ejecutado: 0, soft: 0, hard: 0, n: 0 };
   for (const e of entradas) {
-    const ch = sc ? (e.por_sc || []).find((x) => x.sc === sc)?.chart : e.chart;
-    const filas = (e.detalle || []).filter((d) => !sc || d.service_center === sc);
+    if (!sc) {
+      // Total: el gráfico de MELI, el mismo número que muestra su portal (compensa rutas anotadas en otros códigos)
+      const ch = e.chart; if (!ch) continue;
+      t.n++;
+      t.acordado += ch.negotiated || 0; t.solicitado += ch.requested || 0; t.confirmado += ch.confirmed || 0;
+      t.asignado += ch.rostered || 0; t.ejecutado += ch.executed || 0; t.soft += ch.soft_no_show || 0; t.hard += ch.hard_no_show || 0;
+      continue;
+    }
+    // Por SC: la lista ruta por ruta de ese SC (el gráfico por SC no ve las rutas anotadas en otros códigos)
+    const ch = (e.por_sc || []).find((x) => x.sc === sc)?.chart;
+    const filas = (e.detalle || []).filter((d) => d.service_center === sc);
     if (!ch && !filas.length) continue;
     t.n++;
     t.acordado += ch?.negotiated || 0;
@@ -288,7 +297,7 @@ export default function Capacidad({ usuario }) {
   }, [delModelo, meliFiltrado, prom, modelo]);
 
   const totSdd = useMemo(() => sumar(filas.filter((f) => f.modelo === "SDD")), [filas]);
-  const DIAS_CIERRE_MELI = 2;   // MELI corrige el reporte durante los días siguientes; desde D+2 lo tomamos como cerrado
+  const DIAS_CIERRE_MELI = 3;   // MELI corrige el reporte durante los días siguientes; desde D+2 lo tomamos como cerrado
   const cierreMeli = useMemo(() => {
     const sdd = meli.filter((e) => e.modelo === "SDD");
     if (!sdd.length) return null;
@@ -341,14 +350,17 @@ export default function Capacidad({ usuario }) {
         torreSalio: !!salio, enTorre: lista.length > 0,
         reasignadoA: reasignado.length ? (salioTorre || reasignado[0]).placa : null,
         rutaYaContada, rutaEnOtroLado, rutaTorre: salioTorre?.id_ruta || null,
+        compensada: !!(salio && rutaEnOtroLado && !rutaEnOtroLado.conPedido),
         rutaMeli: salio?.id_ruta ? rutaMeli.get(String(salio.id_ruta)) || null : null,
         otraEjecutada: otras[0] || null,
         resultado_supervisor: b?.resultado_supervisor || null, respondido_at: b?.respondido_at || null, ruta_declarada: b?.ruta_declarada || null,
       });
     }
-    return out.sort((a, b) => (b.torreSalio - a.torreSalio) || a.sc.localeCompare(b.sc));
+    for (const r of out) r.reclamable = r.torreSalio && !r.compensada;
+    return out.sort((a, b) => (b.reclamable - a.reclamable) || (b.torreSalio - a.torreSalio) || a.sc.localeCompare(b.sc));
   }, [meli, filasBase, sc, meliPorRuta, rutaMeli]);
-  const reclamablesN = reclamos.filter((r) => r.torreSalio || r.otraEjecutada).length;
+  const reclamablesN = reclamos.filter((r) => r.reclamable).length;
+  const compensadasN = reclamos.filter((r) => r.compensada).length;
   async function guardarHallazgo(f, clave) {
     const hora = f.salida_real ? new Date(f.salida_real).toLocaleTimeString("es-MX", { timeZone: "America/Mexico_City", hour: "2-digit", minute: "2-digit", hour12: false }) : null;
     const entregados = num(f.rutaMeli?.delivered_packages), total = num(f.rutaMeli?.total_packages);
@@ -589,7 +601,7 @@ export default function Capacidad({ usuario }) {
                 {reclamos.length > 0 && (
                   <div style={{ marginTop: 14, border: `1px solid ${cierreMeli?.cerrado ? "#fecaca" : "#fde68a"}`, background: cierreMeli?.cerrado ? "#fff7f7" : "#fffbeb", borderRadius: 10, padding: 12 }}>
                     <div style={{ fontWeight: 700, color: cierreMeli?.cerrado ? "#b91c1c" : "#b45309", fontSize: 13, marginBottom: 8 }}>
-                      Hard no show que cobra MELI: {reclamos.length} · {reclamablesN === reclamos.length ? "todos se pueden reclamar" : `${reclamablesN} se ${reclamablesN === 1 ? "puede" : "pueden"} reclamar`}{reclamos.filter((r) => r.enTorre && !r.torreSalio && !r.otraEjecutada).length > 0 ? ` · ${reclamos.filter((r) => r.enTorre && !r.torreSalio && !r.otraEjecutada).length} no show efectivo` : ""}
+                      MELI cobra {meliTot?.hard ?? 0} hard no show{reclamablesN > 0 ? ` · ${reclamablesN} para reclamar` : " · nada para reclamar"}{compensadasN > 0 ? ` · ${compensadasN} compensada${compensadasN === 1 ? "" : "s"} por MELI` : ""}
                       {!cierreMeli?.cerrado && cierreMeli?.cierraEl && <span style={{ fontWeight: 400 }}> · día abierto: MELI puede corregirlo hasta el {fCorta(cierreMeli.cierraEl)}</span>}
                     </div>
                     <table style={{ width: "100%", borderCollapse: "collapse", background: "#fff" }}>
@@ -597,20 +609,22 @@ export default function Capacidad({ usuario }) {
                       <tbody>
                         {reclamos.map((f, i) => {
                           const hora = f.salida_real ? new Date(f.salida_real).toLocaleTimeString("es-MX", { timeZone: "America/Mexico_City", hour: "2-digit", minute: "2-digit", hour12: false }) : null;
-                          const reclamable = f.torreSalio;
+                          const reclamable = f.reclamable;
                           const paq = f.rutaMeli ? `${num(f.rutaMeli.delivered_packages) ?? "?"} de ${num(f.rutaMeli.total_packages) ?? "?"} paquetes` : null;
                           return (
-                            <tr key={i} style={{ background: reclamable ? "#fff" : "#f8fafc" }}>
+                            <tr key={i} style={{ background: reclamable ? "#fff" : "#f8fafc", color: f.compensada ? "#94a3b8" : undefined }}>
                               <td style={{ ...td, whiteSpace: "nowrap" }}><b>{f.sc}</b><div style={{ fontSize: 11, color: GRIS }}>{(supPorSc[f.sc] || []).join(", ") || "sin supervisor asignado"}</div></td>
                               <td style={td}>No show SDD · <b style={{ fontFamily: "monospace" }}>{f.placa}</b>
                                 <div style={{ fontSize: 11, color: GRIS }}>{f.meli?.route_id ? `ruta ${f.meli.route_id} sin ejecutar` : "viaje sin ruta"}{f.chofer ? ` · ${f.chofer}` : ""}</div></td>
-                              <td style={td}>{reclamable
-                                ? <><b style={{ color: "#047857" }}>Salió{hora ? ` a las ${hora}` : ""}</b> con la ruta {f.id_ruta}
+                              <td style={td}>{f.torreSalio
+                                ? <><b style={{ color: f.compensada ? "#94a3b8" : "#047857" }}>Salió{hora ? ` a las ${hora}` : ""}</b> con la ruta {f.id_ruta}
                                     {f.reasignadoA && <div style={{ fontSize: 11, color: "#b45309" }}>en la camioneta {f.reasignadoA} (la reasignaron)</div>}</>
                                 : f.enTorre
                                   ? <><b style={{ color: "#b91c1c" }}>No salió</b><div style={{ fontSize: 11, color: GRIS }}>{f.rutaYaContada ? `la ruta ${f.rutaTorre} ya cumplió otro pedido` : f.estado_torre === "QUITADO_ROSTERING" ? "lo quitaron del rostering" : "no show real"}</div></>
                                   : <span style={{ color: GRIS }}>No está en nuestro rostering</span>}</td>
-                              <td style={td}>{reclamable
+                              <td style={td}>{f.compensada
+                                ? <span><b>Compensada por MELI · no se cobra.</b> Anotó la ruta ejecutada en {f.rutaEnOtroLado.sc}, sin pedido, y su total la descuenta.</span>
+                                : reclamable
                                 ? <>{f.rutaEnOtroLado
                                       ? <span>MELI tiene esa ruta ejecutada{paq ? ` (${paq})` : ""}, pero la anotó en <b style={{ color: "#b91c1c" }}>{f.rutaEnOtroLado.sc}</b>{f.rutaEnOtroLado.conPedido ? "" : ", sin pedido"}</span>
                                       : f.rutaMeli ? <span>MELI tiene esa ruta ejecutada en su lista ({paq})</span>

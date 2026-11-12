@@ -25,6 +25,7 @@ const ESTADO = {
   reclamado: ["Reclamado", "#1d4ed8", "#dbeafe"],
   aceptado: ["Aceptado por MELI", "#047857", "#d1fae5"],
   rechazado: ["Rechazado por MELI", "#b91c1c", "#fee2e2"],
+  no_cobrado: ["No cobrado por MELI", "#475569", "#e2e8f0"],
   descartado: ["Descartado", "#475569", "#f1f5f9"],
 };
 const EVIDENCIA = { capacidad_meli: "Reporte de Capacidad de MELI", rutas_ejecutadas_meli: "Rutas ejecutadas según MELI", rostering_deadlock: "Rostering al cierre", pedido_semanal: "Pedidos de la semana" };
@@ -146,7 +147,7 @@ export default function Hallazgos({ usuario }) {
       </div>
 
       <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 14 }}>
-        {[["Por reclamar", cuenta("detectado"), "#b45309"], ["Reclamados", cuenta("reclamado"), "#1d4ed8"], ["Aceptados", cuenta("aceptado"), "#047857"], ["Rechazados", cuenta("rechazado"), "#b91c1c"]].map(([t, n, c]) => (
+        {[["Por reclamar", cuenta("detectado"), "#b45309"], ["Reclamados", cuenta("reclamado"), "#1d4ed8"], ["Aceptados", cuenta("aceptado"), "#047857"], ["Rechazados", cuenta("rechazado"), "#b91c1c"], ["No cobrados por MELI", cuenta("no_cobrado"), "#475569"]].map(([t, n, c]) => (
           <div key={t} style={{ ...caja, minWidth: 150, padding: "10px 14px" }}>
             <div style={{ fontSize: 11, color: GRIS }}>{t}</div>
             <div style={{ fontSize: 22, fontWeight: 700, color: n ? c : "#94a3b8" }}>{n}</div>
@@ -196,6 +197,7 @@ export default function Hallazgos({ usuario }) {
                     {h.estado !== "reclamado" && <button type="button" onClick={() => cambiarEstado(h, "reclamado")} style={boton("#1d4ed8")}>Marcar reclamado</button>}
                     {h.estado !== "aceptado" && <button type="button" onClick={() => cambiarEstado(h, "aceptado")} style={boton("#047857")}>MELI aceptó</button>}
                     {h.estado !== "rechazado" && <button type="button" onClick={() => cambiarEstado(h, "rechazado")} style={boton("#b91c1c")}>MELI rechazó</button>}
+                    {h.estado !== "no_cobrado" && <button type="button" onClick={() => cambiarEstado(h, "no_cobrado")} style={boton("#475569")}>No cobrado por MELI</button>}
                     {h.estado !== "descartado" && <button type="button" onClick={() => cambiarEstado(h, "descartado")} style={boton("#64748b")}>Descartar</button>}
                   </div>
                 </div>
