@@ -15,6 +15,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { descargarExcelMultihoja, fechaOperativaOffset, sb } from "./shared";
 import { NoSalidasSC, etiquetaNosal } from "./NoSalidas";
+import Hallazgos from "./Hallazgos";
 
 const NOSAL_RUTAS_DESDE = "2026-11-04";   // primeras rutas con el ítem "No Salidas a Ruta" en la Bitácora
 const AZUL = "#002E5D";
@@ -177,6 +178,8 @@ export default function Capacidad({ usuario }) {
   const [verCompromisos, setVerCompromisos] = useState(false);
   const [ver, setVer] = useState("todos");
   const [vistaMeli, setVistaMeli] = useState(false);
+  const [pestana, setPestana] = useState("capacidad");
+  const [guardados, setGuardados] = useState({});   // fila del recuadro → id del hallazgo guardado
   const refDetalle = useRef(null);
   const [buscar, setBuscar] = useState("");
   const irADiferencias = () => { setBuscar(""); setVer("difieren"); setVistaMeli(false); setTimeout(() => refDetalle.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 50); };
@@ -346,6 +349,28 @@ export default function Capacidad({ usuario }) {
     return out.sort((a, b) => (b.torreSalio - a.torreSalio) || a.sc.localeCompare(b.sc));
   }, [meli, filasBase, sc, meliPorRuta, rutaMeli]);
   const reclamablesN = reclamos.filter((r) => r.torreSalio || r.otraEjecutada).length;
+  async function guardarHallazgo(f, clave) {
+    const hora = f.salida_real ? new Date(f.salida_real).toLocaleTimeString("es-MX", { timeZone: "America/Mexico_City", hour: "2-digit", minute: "2-digit", hour12: false }) : null;
+    const entregados = num(f.rutaMeli?.delivered_packages), total = num(f.rutaMeli?.total_packages);
+    const paq = total != null ? ` (${entregados ?? "?"} de ${total} paquetes entregados)` : "";
+    const tipo = f.reasignadoA ? "cambio_placa" : f.rutaEnOtroLado ? "ruta_en_otro_codigo" : "ruta_no_acreditada";
+    const historia = [
+      f.reasignadoA
+        ? `El viaje se rosterizó con ${f.placa} y se reasignó a ${f.reasignadoA}. La camioneta salió${hora ? ` a las ${hora}` : ""} con la ruta ${f.id_ruta}${paq}.`
+        : `La camioneta ${f.placa} salió${hora ? ` a las ${hora}` : ""} con la ruta ${f.id_ruta}${paq}.`,
+      f.meli?.route_id ? `En su reporte de Capacidad MELI marca la ruta ${f.meli.route_id} como no ejecutada y la cuenta como hard no show.` : `MELI dejó el pedido${f.reasignadoA ? ` pegado a la placa ${f.placa}` : ""} sin ruta y lo cuenta como hard no show.`,
+      f.rutaEnOtroLado ? `La ruta real la anotó ejecutada en el código ${f.rutaEnOtroLado.sc}${f.rutaEnOtroLado.conPedido ? "" : ", sin pedido"}: es el mismo trabajo anotado dos veces.` : f.rutaMeli ? "La ruta está en la lista de rutas ejecutadas de MELI." : "",
+    ].filter(Boolean).join(" ");
+    const { data, error: err } = await sb.rpc("fn_hallazgo_guardar", {
+      p_fecha: f.fecha, p_sc: f.sc, p_tipo: tipo, p_placa_meli: f.placa, p_ruta_meli: f.meli?.route_id || null,
+      p_placa_torre: f.reasignadoA || f.placa, p_ruta_torre: f.id_ruta, p_travel_id: null,
+      p_chofer: `${f.chofer || ""}${f.driver_id ? ` (${f.driver_id})` : ""}`.trim(), p_supervisor: (supPorSc[f.sc] || []).join(", "), p_historia: historia,
+      p_datos: { paquetes_entregados: entregados, paquetes_total: total, salida: hora, codigo_meli: f.rutaEnOtroLado?.sc || null, placas_rostering: f.reasignadoA ? [f.placa, f.reasignadoA] : null },
+      p_por: (usuario && (usuario.nombre || usuario.email)) || "Brain",
+    });
+    if (err) { alert("No se pudo guardar: " + err.message); return; }
+    setGuardados((g) => ({ ...g, [clave]: data }));
+  }
   const totSpot = useMemo(() => sumar(filas.filter((f) => f.modelo === "SPOT")), [filas]);
   // "SCY1 2 · SHP1 1": en qué SC está cada número (se ve al posicionarse)
   const porScTxt = (lista) => { const g = {}; for (const f of lista) g[f.sc] = (g[f.sc] || 0) + 1; const t = Object.entries(g).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([k, n]) => `${k} ${n}`).join(" · "); return t || "Ninguno"; };
@@ -484,8 +509,19 @@ export default function Capacidad({ usuario }) {
     asignado: { brain: tot.asignado, meli: meliTot?.asignado ?? null }, ejecutado: { brain: tot.ejecutado, meli: meliTot?.ejecutado ?? null } };
   const maxBarra = Math.max(1, ...Object.values(valores).flatMap((v) => [v.brain || 0, v.meli || 0]));
 
+  const pestanas = (
+    <div style={{ display: "flex", gap: 4, marginBottom: 12, borderBottom: `1px solid ${BORDE}` }}>
+      {[["capacidad", "Capacidad"], ["hallazgos", "Hallazgos"]].map(([k, t]) => (
+        <button key={k} type="button" onClick={() => setPestana(k)} style={{ background: "none", border: "none", padding: "8px 14px", cursor: "pointer", fontSize: 13, fontWeight: 700,
+          color: pestana === k ? AZUL : GRIS, borderBottom: pestana === k ? `3px solid ${NARANJA}` : "3px solid transparent", marginBottom: -1 }}>{t}</button>
+      ))}
+    </div>
+  );
+  if (pestana === "hallazgos") return <div className="pg">{pestanas}<Hallazgos usuario={usuario} /></div>;
+
   return (
     <div className="pg">
+      {pestanas}
       {/* Filtros */}
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end", marginBottom: 10 }}>
         <label style={{ fontSize: 11, color: GRIS }}>{esRango ? "Desde" : "Día"}<br /><input type="date" value={fechaSel} onChange={(e) => setFechaSel(e.target.value)} style={input} /></label>
@@ -578,7 +614,11 @@ export default function Capacidad({ usuario }) {
                                 ? <>{f.rutaEnOtroLado
                                       ? <span>MELI tiene esa ruta ejecutada{paq ? ` (${paq})` : ""}, pero la anotó en <b style={{ color: "#b91c1c" }}>{f.rutaEnOtroLado.sc}</b>{f.rutaEnOtroLado.conPedido ? "" : ", sin pedido"}</span>
                                       : f.rutaMeli ? <span>MELI tiene esa ruta ejecutada en su lista ({paq})</span>
-                                      : <span style={{ color: GRIS }}>Solo la Torre: MELI no la tiene en su lista de rutas</span>}</>
+                                      : <span style={{ color: GRIS }}>Solo la Torre: MELI no la tiene en su lista de rutas</span>}
+                                    <div style={{ marginTop: 6 }}>{guardados[`${f.fecha}|${f.placa}|${f.meli?.route_id}`]
+                                      ? <span style={{ fontSize: 11, color: "#047857", fontWeight: 700 }}>✓ Guardado en Hallazgos</span>
+                                      : <button type="button" onClick={() => guardarHallazgo(f, `${f.fecha}|${f.placa}|${f.meli?.route_id}`)}
+                                          style={{ padding: "4px 10px", fontSize: 11, fontWeight: 700, border: `1px solid ${NARANJA}`, color: NARANJA, background: "#fff", borderRadius: 6, cursor: "pointer" }}>Guardar hallazgo</button>}</div></>
                                 : <span style={{ color: GRIS }}>—</span>}</td>
                             </tr>
                           );
