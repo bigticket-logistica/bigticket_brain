@@ -7,6 +7,7 @@ import Capacidad from "./Capacidad";
 import MallaTurnosMX from "./MallaTurnos";
 // La misma vista de Administración → Consolidaciones Bitácora, sin duplicar código.
 import { PanelControlSupervisores } from "./Pagos";
+import OtrContactos from "./OtrContactos";
 
 // ═══════════════════════════════════════════════════════════════════
 //  TAREAS DEL JEFE DE SUPERVISORES — Alta Operacional (Etapa 7)
@@ -594,6 +595,7 @@ const TABS_INDICADORES = [
   { id: "control_helper", label: "Control Helper", desc: "Helpers no autorizados / certificados / fantasmas" },
   { id: "tareas", label: "📋 Tareas", desc: "Altas operacionales · SLA 24 h" },
   { id: "consolidaciones_bitacora", label: "Consolidaciones Bitácora", desc: "Consolidado por SC: torre de control, ambulancias y bitácora del supervisor" },
+  { id: "otr_contactos", label: "Contactos OTR", desc: "Correos de los OTR de MELI por SC · avisos de No Show y Cancelación" },
 ];
 registrarSubtabs("pool_meli_mx", TABS_INDICADORES, "torre");
 
@@ -637,6 +639,7 @@ function IndicadoresOperacionalesMX({ usuario }) {
       {vista === "validacion_bt" && <PoolMeliValidacionBT usuario={usuario} />}
       {vista === "tareas" && <div style={{ padding: 24 }}><TareasJefeOperaciones /></div>}
       {vista === "consolidaciones_bitacora" && <PanelControlSupervisores />}
+      {vista === "otr_contactos" && <OtrContactos usuario={usuario} />}
 
     </div>
   );
