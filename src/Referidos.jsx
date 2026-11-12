@@ -4,6 +4,8 @@
 //   Bonos       los premios que genera la base cada noche: validar, aprobar,
 //               rechazar y marcar pagados.
 //   Referidos   cada transportista referido y en qué etapa va.
+//   Interesados todos los que dejaron sus datos en la postulación (ref_interesados),
+//               facturen o no y terminen o no, por semana y con descarga a Excel.
 //   Referidores quienes refieren, su código y su cuenta para pagarles.
 //   Oportunidades en qué centros se buscan transportistas, cuántos vehículos y
 //               de qué tipo. Se muestra en el portal de referidos y en la
@@ -55,6 +57,7 @@ function Pill({ par }) {
 const TABS_REFERIDOS = [
   { id: "bonos", label: "Bonos", desc: "Bonos por validar y pagar" },
   { id: "referidos", label: "Referidos", desc: "Choferes referidos y su avance" },
+  { id: "interesados", label: "Interesados", desc: "Quienes dejaron sus datos, facturen o no" },
   { id: "referidores", label: "Referidores", desc: "Quién refiere y sus canales" },
   { id: "anfitriones", label: "Anfitriones", desc: "Supervisores con código anfitrión" },
   { id: "embudo", label: "Embudo", desc: "De la postulación a la meta, por fuente" },
@@ -78,6 +81,7 @@ export default function ModuloReferidos({ usuario }) {
   const [anfitriones, setAnfitriones] = useState([]);
   const [listaAnf, setListaAnf] = useState([]);
   const [embudo, setEmbudo] = useState({ anf: [], canal: [] });   // vw_ref_brain_embudo_anfitrion / _canal   // supervisores y comercios aliados (vw_ref_brain_lista_anfitriones)
+  const [interesados, setInteresados] = useState({ data: [], error: "" });   // ref_interesados
   const [mensajes, setMensajes] = useState([]);   // conversación Bigticket ↔ referidor (ref_mensajes)
   const [chatCon, setChatCon] = useState(null);   // referidor abierto en Mensajes   // referidores con "¿por dónde te enteraste?" (vw_ref_brain_anfitriones)   // referidos y referidores eliminados desde el Brain (ref_eliminados)   // requerimientos del jefe de operaciones sin atender
   const [campana, setCampana] = useState(null);        // requerimiento que se está convirtiendo en campaña
@@ -95,7 +99,7 @@ export default function ModuloReferidos({ usuario }) {
       sb.from("ref_propuestas").select("*"),
       sb.from("ref_canales").select("*").order("creado_at"),
     ]);
-    const [el, an, ms, la, ea, ec, ev] = await Promise.all([
+    const [el, an, ms, la, ea, ec, ev, it] = await Promise.all([
       sb.from("ref_eliminados").select("*"),
       sb.from("vw_ref_brain_anfitriones").select("*"),
       sb.from("ref_mensajes").select("*").order("creado_at").limit(5000),
@@ -103,7 +107,9 @@ export default function ModuloReferidos({ usuario }) {
       sb.from("vw_ref_brain_embudo_anfitrion").select("*"),
       sb.from("vw_ref_brain_embudo_canal").select("*"),
       sb.from("ref_postulacion_eventos").select("codigo, tipo").eq("es_canal", false).limit(20000),
+      sb.from("ref_interesados").select("*").order("creado_at", { ascending: false }).limit(5000),
     ]);
+    setInteresados({ data: it.data || [], error: it.error ? it.error.message : "" });
     setEliminados(el.data || []); setAnfitriones(an.data || []); setMensajes(ms.data || []); setListaAnf(la.data || []);
     // ev: eventos de links de referidores; si no se puede leer, "Link general" queda en "—".
     setEmbudo({ anf: ea.data || [], canal: ec.data || [], ev: ev.error ? null : (ev.data || []) });
@@ -124,6 +130,7 @@ export default function ModuloReferidos({ usuario }) {
   const elim = (tipo) => new Map(eliminados.filter((e) => e.tipo === tipo).map((e) => [String(e.ref_id), e]));
   const elimReferidos = elim("referido"), elimReferidores = elim("referidor");
   const referidosVivos = referidos.filter((r) => !elimReferidos.has(String(r.referido_id)));
+  const codigosElim = new Set(referidores.filter((r) => elimReferidores.has(String(r.id))).map((r) => r.codigo));
   const referidoresVivos = referidores.filter((r) => !elimReferidores.has(String(r.id)));
   const eliminar = async (tipo, id, motivo) => {
     const por = usuario?.email || usuario?.nombre || "brain";
@@ -131,7 +138,7 @@ export default function ModuloReferidos({ usuario }) {
     if (error) { alert("No se pudo eliminar: " + error.message); return false; }
     cargar(); return true;
   };
-  const TABS = [["bonos", "Bonos", porValidar], ["referidos", "Referidos", referidosVivos.length], ["referidores", "Referidores", referidoresVivos.length + canales.length], ["anfitriones", "Anfitriones", null], ["embudo", "Embudo", null], ["mensajes", "Mensajes", mensajes.filter((m) => m.de === "referidor" && !m.leido_at).length], ["oportunidades", "Oportunidades", vacantes], ["requerimientos", "Requerimientos", reqAbiertos]];
+  const TABS = [["bonos", "Bonos", porValidar], ["referidos", "Referidos", referidosVivos.length], ["interesados", "Interesados", null], ["referidores", "Referidores", referidoresVivos.length + canales.length], ["anfitriones", "Anfitriones", null], ["embudo", "Embudo", null], ["mensajes", "Mensajes", mensajes.filter((m) => m.de === "referidor" && !m.leido_at).length], ["oportunidades", "Oportunidades", vacantes], ["requerimientos", "Requerimientos", reqAbiertos]];
   // Contadores al menú lateral (solo cuando cambian)
   const conteos = JSON.stringify(TABS.map(([, , n]) => n || 0));
   useEffect(() => { registrarSubtabs("referidos", TABS_REFERIDOS.map((t, i) => ({ ...t, n: TABS[i] ? TABS[i][2] : null }))); }, [conteos]);   // eslint-disable-line react-hooks/exhaustive-deps
@@ -151,7 +158,8 @@ export default function ModuloReferidos({ usuario }) {
           {tab === "referidos" && <Referidos referidos={referidos} canales={canales} eliminados={elimReferidos} onEliminar={(id, m) => eliminar("referido", id, m)} />}
           {tab === "mensajes" && <Mensajes referidores={referidoresVivos} mensajes={mensajes} abierto={chatCon} setAbierto={setChatCon} usuario={usuario} onCambio={cargar} />}
           {tab === "anfitriones" && <Anfitriones lista={anfitriones.filter((a) => !elimReferidores.has(String(a.id)))} anfitriones={listaAnf} embudo={embudo} canales={canales} />}
-          {tab === "embudo" && <Embudo referidos={referidosVivos} codigosElim={new Set(referidores.filter((r) => elimReferidores.has(String(r.id))).map((r) => r.codigo))} anfitriones={anfitriones} listaAnf={listaAnf} embudo={embudo} canales={canales} />}
+          {tab === "interesados" && <Interesados interesados={interesados} referidores={referidores} canales={canales} codigosElim={codigosElim} />}
+          {tab === "embudo" && <Embudo referidos={referidosVivos} codigosElim={codigosElim} anfitriones={anfitriones} listaAnf={listaAnf} embudo={embudo} canales={canales} />}
           {tab === "referidores" && <Referidores referidores={referidores} canales={canales} referidos={referidosVivos} eliminados={elimReferidores} onEliminar={(id, m) => eliminar("referidor", id, m)}
             origen={Object.fromEntries(anfitriones.map((a) => [String(a.id), a]))} listaAnf={listaAnf}
             onMensaje={(id) => { setChatCon(id); setTab("mensajes"); }} />}
@@ -795,6 +803,148 @@ function Embudo({ referidos: todos = [], codigosElim = new Set(), anfitriones = 
           <tbody>
             {filas.map((f) => fila(f, { borderTop: `0.5px solid ${BORDE}`, opacity: n(f.abrieron) || f.postularon ? 1 : 0.55 }))}
             {fila({ ...total, k: "total", nombre: "Total", tipo: "" }, { borderTop: `1.5px solid ${AZUL}`, background: "#f8f9fb" })}
+          </tbody>
+        </table>
+      </div>
+    </>
+  );
+}
+
+// ── Interesados: todos los que dejaron sus datos en la postulación ──────────
+// Lee ref_interesados (la postulación guarda ahí nombre, WhatsApp, zona,
+// ¿factura? y unidades, terminen o no). Cada intento crea una fila nueva, así
+// que se agrupa por WhatsApp: una persona = una fila, con su cantidad de
+// intentos. No cuentan los interesados de referidores eliminados (pruebas).
+// La semana va de lunes a domingo y se cuenta por la fecha del primer intento.
+const UNIDAD = { small_van: "Small Van", large_van: "Large Van" };
+const unidadesTxt = (us) => {
+  const c = {};
+  (Array.isArray(us) ? us : []).forEach((u) => { const t = UNIDAD[u.tipo] || u.tipo || "?"; c[t] = (c[t] || 0) + 1; });
+  return Object.entries(c).map(([t, k]) => `${k} ${t}`).join(" · ") || "—";
+};
+const lunes = (d) => { const x = new Date(d); x.setHours(0, 0, 0, 0); x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); return x; };
+const diaCorto = (d) => d.toLocaleDateString("es-MX", { day: "numeric", month: "short" });
+const fechaHora = (v) => (v ? new Date(v).toLocaleString("es-MX", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "—");
+
+function Interesados({ interesados, referidores = [], canales = [], codigosElim = new Set() }) {
+  const [semana, setSemana] = useState(0);   // 0 = esta semana, -1 = la anterior… null = todas
+  const [factura, setFactura] = useState("");  // "" · si · no
+  const [estado, setEstado] = useState("");    // "" · postulo · sin_terminar
+  const [q, setQ] = useState("");
+
+  const personas = useMemo(() => {
+    const nomRef = Object.fromEntries(referidores.map((r) => [r.codigo, r.nombre]));
+    const nomCanal = Object.fromEntries(canales.map((c) => [c.codigo, c.nombre]));
+    const grupos = {};
+    (interesados.data || []).filter((i) => i.es_canal || !codigosElim.has(i.codigo)).forEach((i) => {
+      const k = String(i.whatsapp || "").replace(/\D/g, "") || i.id;
+      (grupos[k] = grupos[k] || []).push(i);
+    });
+    return Object.values(grupos).map((g) => {
+      g.sort((a, b) => new Date(b.actualizado_at || b.creado_at) - new Date(a.actualizado_at || a.creado_at));
+      const u = g[0];
+      const primero = g.reduce((m, i) => (new Date(i.creado_at) < m ? new Date(i.creado_at) : m), new Date(u.creado_at));
+      return {
+        ...u, intentos: g.length, primero,
+        ultimo: u.actualizado_at || u.creado_at,
+        postulo: g.some((i) => i.postulo),
+        fuente: u.es_canal ? (nomCanal[u.codigo] || u.codigo) : (nomRef[u.codigo] || "Referidor"),
+        fuenteTipo: u.es_canal ? "Canal BigTicket" : u.codigo,
+      };
+    }).sort((a, b) => b.primero - a.primero);
+  }, [interesados, referidores, canales, codigosElim]);
+
+  const desde = semana === null ? null : (() => { const d = lunes(new Date()); d.setDate(d.getDate() + 7 * semana); return d; })();
+  const hasta = desde ? new Date(desde.getTime() + 7 * 86400000) : null;
+  const enSemana = desde ? personas.filter((p) => p.primero >= desde && p.primero < hasta) : personas;
+  const txt = q.trim().toLowerCase();
+  const filas = enSemana.filter((p) =>
+    (!factura || (factura === "si" ? p.factura === true : p.factura === false)) &&
+    (!estado || (estado === "postulo" ? p.postulo : !p.postulo)) &&
+    (!txt || [p.nombre, p.whatsapp, p.zona, p.fuente, p.codigo].some((v) => String(v || "").toLowerCase().includes(txt))));
+
+  const kpis = [
+    ["Interesados", enSemana.length, AZUL],
+    ["✅ Facturan", enSemana.filter((p) => p.factura === true).length, "#166534"],
+    ["❌ No facturan", enSemana.filter((p) => p.factura === false).length, "#b42318"],
+    ["Postularon", enSemana.filter((p) => p.postulo).length, NARANJA],
+    ["Sin terminar", enSemana.filter((p) => !p.postulo).length, GRIS],
+  ];
+
+  const descargar = async () => {
+    const ExcelJS = (await import("exceljs")).default;
+    const libro = new ExcelJS.Workbook();
+    const hoja = libro.addWorksheet("Interesados");
+    hoja.columns = [
+      { header: "Primer intento", key: "primero", width: 18 }, { header: "Último intento", key: "ultimo", width: 18 },
+      { header: "Nombre", key: "nombre", width: 30 }, { header: "WhatsApp", key: "whatsapp", width: 16 },
+      { header: "Zona", key: "zona", width: 10 }, { header: "¿Factura?", key: "factura", width: 10 },
+      { header: "Unidades", key: "unidades", width: 24 }, { header: "Fuente", key: "fuente", width: 28 },
+      { header: "Código", key: "codigo", width: 12 }, { header: "Intentos", key: "intentos", width: 10 },
+      { header: "Estado", key: "estado", width: 14 },
+    ];
+    filas.forEach((p) => hoja.addRow({
+      primero: p.primero, ultimo: new Date(p.ultimo), nombre: p.nombre, whatsapp: p.whatsapp, zona: p.zona,
+      factura: p.factura === true ? "Sí" : p.factura === false ? "No" : "", unidades: unidadesTxt(p.unidades),
+      fuente: p.fuente, codigo: p.codigo, intentos: p.intentos, estado: p.postulo ? "Postuló" : "Sin terminar",
+    }));
+    ["A", "B"].forEach((c) => { hoja.getColumn(c).numFmt = "dd-mm-yyyy hh:mm"; });
+    hoja.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" } };
+    hoja.getRow(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF002E5D" } };
+    const buf = await libro.xlsx.writeBuffer();
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }));
+    a.download = `interesados_referidos_${desde ? desde.toISOString().slice(0, 10) : "todos"}.xlsx`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  };
+
+  if (interesados.error) return <div className="form-card" style={{ color: "#b42318" }}>No se pudo leer ref_interesados: {interesados.error}</div>;
+  const sel = { padding: "6px 10px", border: `0.5px solid ${BORDE}`, borderRadius: 8, fontSize: 13 };
+  return (
+    <>
+      <div className="form-card" style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+        <button className="btn" style={btnChico} disabled={semana === null} onClick={() => setSemana(semana - 1)}>‹</button>
+        <b style={{ color: AZUL, fontSize: 14, minWidth: 170, textAlign: "center" }}>
+          {semana === null ? "Todas las semanas" : `${semana === 0 ? "Esta semana" : "Semana"} · ${diaCorto(desde)} al ${diaCorto(new Date(hasta.getTime() - 86400000))}`}
+        </b>
+        <button className="btn" style={btnChico} disabled={semana === null || semana >= 0} onClick={() => setSemana(semana + 1)}>›</button>
+        <button className="btn" style={btnChico} onClick={() => setSemana(semana === null ? 0 : null)}>{semana === null ? "Ver por semana" : "Ver todas"}</button>
+        <select style={sel} value={factura} onChange={(e) => setFactura(e.target.value)}>
+          <option value="">Factura: todos</option><option value="si">Sí factura</option><option value="no">No factura</option>
+        </select>
+        <select style={sel} value={estado} onChange={(e) => setEstado(e.target.value)}>
+          <option value="">Estado: todos</option><option value="postulo">Postuló</option><option value="sin_terminar">Sin terminar</option>
+        </select>
+        <input style={{ ...sel, flex: 1, minWidth: 160 }} placeholder="Buscar nombre, WhatsApp, zona o fuente" value={q} onChange={(e) => setQ(e.target.value)} />
+        <button className="btn" style={btnChico} disabled={!filas.length} onClick={descargar}>⬇ Excel</button>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10, marginBottom: 12 }}>
+        {kpis.map(([t, v, c]) => (
+          <div key={t} className="form-card" style={{ margin: 0, textAlign: "center" }}>
+            <div style={{ fontSize: 26, fontWeight: 800, color: v ? c : GRIS }}>{v}</div>
+            <div style={{ fontSize: 12, color: GRIS }}>{t}</div>
+          </div>
+        ))}
+      </div>
+      <div className="form-card" style={{ padding: 0, overflowX: "auto" }}>
+        <table style={tabla}>
+          <thead><tr>{["Primer intento", "Nombre", "WhatsApp", "Zona", "¿Factura?", "Unidades", "Fuente", "Intentos", "Estado"].map((h) => <th key={h} style={th}>{h}</th>)}</tr></thead>
+          <tbody>
+            {filas.map((p) => (
+              <tr key={p.id} style={{ borderTop: `0.5px solid ${BORDE}` }}>
+                <td style={td}>{fechaHora(p.primero)}{p.intentos > 1 && <div style={sub}>último: {fechaHora(p.ultimo)}</div>}</td>
+                <td style={td}><b>{p.nombre || "—"}</b></td>
+                <td style={td}>{p.whatsapp ? <a href={`https://wa.me/${String(p.whatsapp).replace(/\D/g, "")}`} target="_blank" rel="noreferrer">{p.whatsapp}</a> : "—"}</td>
+                <td style={td}>{p.zona || "—"}</td>
+                <td style={{ ...td, fontWeight: 700, color: p.factura === true ? "#166534" : p.factura === false ? "#b42318" : GRIS }}>{p.factura === true ? "Sí" : p.factura === false ? "No" : "—"}</td>
+                <td style={td}>{unidadesTxt(p.unidades)}</td>
+                <td style={td}>{p.fuente}<div style={sub}>{p.fuenteTipo}</div></td>
+                <td style={{ ...td, fontWeight: 700, color: p.intentos > 1 ? NARANJA : AZUL }}>{p.intentos}</td>
+                <td style={{ ...td, fontWeight: 700, color: p.postulo ? "#166534" : NARANJA }}>{p.postulo ? "Postuló" : "Sin terminar"}</td>
+              </tr>
+            ))}
+            {!filas.length && <tr><td style={{ ...td, color: GRIS, textAlign: "center" }} colSpan={9}>Sin interesados en este período</td></tr>}
           </tbody>
         </table>
       </div>
