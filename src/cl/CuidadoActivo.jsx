@@ -2995,7 +2995,7 @@ function ConduccionGeotab({ mes }) {
   const vis = mesRows.filter((x) => pasa(x) && (!f.texto || `${x.patente} ${x.empresa || ""}`.toLowerCase().includes(f.texto.toLowerCase())))
     .sort((a, b) => { const va = a[orden.k] ?? "", vb = b[orden.k] ?? ""; const c = typeof va === "number" || !isNaN(Number(va)) ? Number(va) - Number(vb) : String(va).localeCompare(String(vb)); return orden.asc ? c : -c; });
   const diasSel = dias.filter(pasa);
-  const porDia = Object.entries(diasSel.reduce((m, x) => { (m[x.fecha] = m[x.fecha] || []).push(Number(x.puntaje)); return m; }, {})).sort((a, b) => a[0].localeCompare(b[0]))
+  const porDia = Object.entries(diasSel.filter((x) => x.puntaje !== null && x.puntaje !== undefined).reduce((m, x) => { (m[x.fecha] = m[x.fecha] || []).push(Number(x.puntaje)); return m; }, {})).sort((a, b) => a[0].localeCompare(b[0]))
     .map(([d, arr]) => [d.slice(8, 10) + "-" + d.slice(5, 7), Math.round((arr.reduce((t, v) => t + v, 0) / arr.length) * 10) / 10]);
   const prom = vis.length ? Math.round((vis.reduce((t, x) => t + Number(x.nota || 0), 0) / vis.length) * 10) / 10 : null;
   const bajo = vis.filter((x) => Number(x.nota) < cfgR.min).length;
@@ -3005,8 +3005,8 @@ function ConduccionGeotab({ mes }) {
   const maxDia = Math.max(1, ...porDia.map((x) => x[1]));
   return (
     <div>
-      <div style={{ background: C.ambarT, color: C.ambar, borderRadius: 8, padding: "8px 12px", fontSize: 12.5, marginBottom: 12 }}>
-        Puntaje <b>provisional</b>: se calcula con las ocurrencias de las 5 reglas de Geotab y pesos editables (Configuración, geo_peso_*). Falta calibrarlo con el informe Safety Scorecard. La falta N° 12 está {cfgR.activa === "si" ? "ENCENDIDA" : "apagada"} (geo_falta12_activa).
+      <div style={{ background: "#eef2f8", color: C.navy, borderRadius: 8, padding: "8px 12px", fontSize: 12.5, marginBottom: 12 }}>
+        Puntaje con la fórmula del Safety Scorecard de Geotab: cada regla baja 10 puntos por ocurrencia cada 100 km; total = 15 % aceleración + 25 % frenado + 15 % giro + 35 % exceso &gt; 8 % + 10 % cinturón. Nota del mes = promedio de los días con actividad. Falta N° 12 {cfgR.activa === "si" ? "encendida" : "apagada"}.
       </div>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
         <select style={inp} value={f.tipo} onChange={(e) => setF({ ...f, tipo: e.target.value })}><option value="">BT y terceros</option><option value="BT">BT</option><option value="Tercero">Tercero</option></select>
