@@ -7,8 +7,8 @@
 import { useEffect, useState } from "react";
 import { useMenuSubtabs } from "./subtabs";
 
-// Logo desde el Portal Transportista (ya publicado ahí): el Brain no necesita carpeta public.
-const LOGO = "https://app.fleetbiggy.com/logo-bigticket-blanco.png";
+// Logo oficial del Brand Kit (bt_white, fondo transparente) sobre la cabecera azul (pedido T-05).
+import { LOGO_BLANCO as LOGO } from "./logo";
 
 function horaDe(pais) {
   const cl = pais === "Chile";
@@ -108,7 +108,7 @@ const CSS_BS = `
 .bs-shell button { font-family:inherit; }
 .bs-header { background:var(--navy); height:64px; display:flex; align-items:center; justify-content:space-between; padding:0 28px; gap:20px; position:sticky; top:0; z-index:100; }
 .bs-marca { display:flex; align-items:center; gap:16px; min-width:0; }
-.bs-logo { height:20px; display:block; }
+.bs-logo { height:26px; display:block; }
 .bs-sep { width:1px; height:20px; background:rgba(255,255,255,.22); }
 .bs-rotulo { font-family:Poppins,sans-serif; font-weight:600; font-size:13px; letter-spacing:.08em; text-transform:uppercase; color:#F4F3F3; white-space:nowrap; }
 .bs-hamburguesa { display:none; background:none; border:none; padding:4px; margin-left:-4px; cursor:pointer; }
