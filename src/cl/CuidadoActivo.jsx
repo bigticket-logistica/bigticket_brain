@@ -115,6 +115,7 @@ export default function CuidadoActivoCL({ usuario, sub }) {
   if (sub === "ca_alertas") return <CentroAlertas quien={quien} rol={usuario?.rol} />;
   if (sub === "ca_evaluacion") return <EvaluacionEjecutivo usuario={usuario} />;
   if (sub === "ca_indicadores") return <Indicadores quien={quien} rol={usuario?.rol} />;
+  if (sub === "ca_conc") return <Conciliaciones quien={quien} />;
   if (sub === "ca_ficha") return <FichaActivo quien={quien} />;
   if (sub === "ca_documentos") return <Documentos quien={quien} />;
   if (sub === "ca_flota") return <FlotaTabs quien={quien} />;
@@ -3900,6 +3901,109 @@ function MantComponentes({ quien }) {
           </tbody>
         </table>
       </div>
+    </div>
+  );
+}
+
+// ── Conciliaciones (pedido F-01f, P-09d, I-17): cierre mensual de cobros al tercero ──
+const CONC_EST = { pendiente: ["En revisión de Operaciones", "#eef2f8", C.navy], notificado: ["Notificado al tercero", C.ambarT, C.ambar],
+  rev_operaciones: ["Apelado · Operaciones", C.rojoT, C.rojo], rev_conciliaciones: ["Apelado · Conciliaciones", C.rojoT, C.rojo],
+  firme: ["Firme", C.verdeT, C.verde], anulado: ["Anulado", C.fondo, C.tenue] };
+const CONC_TIPO = { falta: "Multa Anexo III", deducible: "Deducible siniestro", combustible: "Combustible", reparacion: "Reparación" };
+function Conciliaciones({ quien }) {
+  const [mes, setMes] = useState(() => { const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - 1); return d.toISOString().slice(0, 7); });
+  const [cierre, setCierre] = useState(undefined);
+  const [items, setItems] = useState([]);
+  const [resuelven, setResuelven] = useState([]);
+  const [f, setF] = useState({ estado: "", texto: "" });
+  const [busy, setBusy] = useState(false);
+  const cargar = async () => {
+    const c = await api(`ca_conc_cierres_cl?mes=eq.${mes}-01&select=*`).catch(() => []);
+    setCierre(c?.[0] || null);
+    setItems(c?.[0] ? await api(`ca_conc_items_cl?cierre_id=eq.${c[0].id}&select=*&order=empresa,patente,fecha`).catch(() => []) : []);
+  };
+  useEffect(() => { setCierre(undefined); cargar(); }, [mes]);   // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { api("ca_config_cl?clave=eq.conc_resuelven&select=valor").then((r) => setResuelven(String(r?.[0]?.valor || "").toLowerCase().split(",").map((x) => x.trim()).filter(Boolean))).catch(() => {}); }, []);
+  const correr = async (fn, args, ok) => { setBusy(true); try { const r = await rpc(fn, args); if (ok) alert(ok(r)); await cargar(); } catch (e) { alert(e.message); } finally { setBusy(false); } };
+  const puedeResolver = resuelven.includes(String(quien || "").toLowerCase());
+  if (cierre === undefined) return <div style={{ color: C.tenue }}>Cargando…</div>;
+  const vis = items.filter((x) => (!f.estado || x.estado === f.estado) && (!f.texto || `${x.empresa || ""} ${x.patente || ""} ${x.rut || ""}`.toLowerCase().includes(f.texto.toLowerCase())));
+  const porTercero = Object.values(items.filter((x) => x.estado !== "anulado").reduce((m, x) => {
+    const k = x.rut || x.empresa || "—"; m[k] = m[k] || { rut: x.rut, empresa: x.empresa, n: 0, uf: 0, pesos: 0 };
+    m[k].n++; m[k].uf += Number(x.uf || 0); m[k].pesos += Number(x.pesos || 0); return m; }, {})).sort((a, b) => b.uf - a.uf || b.pesos - a.pesos);
+  const apelaciones = items.filter((x) => ["rev_operaciones", "rev_conciliaciones"].includes(x.estado));
+  const exportar = async () => {
+    const XLSX = await cargarSheetJS();
+    const data = items.map((x) => ({ RUT: x.rut, TERCERO: x.empresa, PATENTE: x.patente, CECO: x.ceco, TIPO: CONC_TIPO[x.tipo] || x.tipo, FECHA: x.fecha ? fd(x.fecha) : "",
+      DETALLE: x.detalle, UF: x.uf !== null ? Number(x.uf) : "", PESOS: x.pesos !== null ? Number(x.pesos) : "", ESTADO: (CONC_EST[x.estado] || [x.estado])[0],
+      "JUSTIFICACIÓN OPERACIONES": x.justificacion_op || "", "APELACIÓN": x.apelacion_motivo || "", "DECISIÓN CONCILIACIONES": x.conc_decision || "", "NOTA": x.conc_nota || x.anulado_nota || "" }));
+    const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(data), "COBROS"); XLSX.writeFile(wb, `Conciliaciones_${mes}.xlsx`);
+  };
+  const celda = { padding: "6px 8px", borderBottom: `1px solid ${C.borde}`, fontSize: 12.5, verticalAlign: "top" };
+  const monto = (x) => [x.uf !== null && x.uf !== undefined ? `${Number(x.uf)} UF` : null, x.pesos !== null && x.pesos !== undefined ? pesos(x.pesos) : null].filter(Boolean).join(" · ");
+  const opsAbierto = cierre && cierre.estado === "revision_operaciones" && new Date(cierre.ops_hasta) > new Date();
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 12 }}>
+        <label style={{ fontSize: 12.5, color: C.suave }}>Mes <input type="month" style={inp} value={mes} onChange={(e) => e.target.value && setMes(e.target.value)} /></label>
+        {(!cierre || cierre.estado === "revision_operaciones") && <button style={btn()} disabled={busy} onClick={() => correr("fn_conc_generar", { p_mes: `${mes}-01`, p_por: quien }, (r) => `Cierre con ${r.items} cobros. Operaciones tiene hasta el ${fh(r.ops_hasta)} para justificar.`)}>{cierre ? "Completar cierre" : "Generar cierre del mes"}</button>}
+        {cierre && cierre.estado === "revision_operaciones" && <button style={btn("verde")} disabled={busy || opsAbierto} title={opsAbierto ? "Operaciones todavía está en su plazo" : ""} onClick={() => window.confirm("Se notifica a cada tercero en su portal y empieza su plazo para apelar. ¿Enviar?") && correr("fn_conc_enviar", { p_cierre: cierre.id, p_por: quien }, (r) => `${r.notificados} cobros notificados.`)}>Enviar a los terceros</button>}
+        {cierre && cierre.estado !== "revision_operaciones" && <button style={btn()} disabled={busy} onClick={() => correr("fn_conc_informar_finanzas", { p_cierre: cierre.id, p_por: quien }, (r) => r.informados ? `${r.informados} cobros firmes informados a Finanzas.` : "No hay cobros firmes nuevos por informar.")}>Informar a Finanzas</button>}
+        {cierre && <button style={btn("sec")} onClick={exportar}>Excel</button>}
+      </div>
+      {!cierre ? <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, padding: 16, color: C.suave }}>Sin cierre para este mes. «Generar cierre del mes» junta las multas, deducibles enviados a cobro, excedentes de combustible y reparaciones con cobro al tercero.</div> : (
+        <>
+          <div style={{ background: "#eef2f8", borderRadius: 10, padding: "8px 12px", fontSize: 12.5, color: C.navy, marginBottom: 12 }}>
+            {cierre.estado === "revision_operaciones" ? (opsAbierto ? `Operaciones puede justificar hasta el ${fh(cierre.ops_hasta)}. Después se envía a los terceros.` : "Terminó el plazo de Operaciones: revisa las justificaciones, anula lo que corresponda y envía.")
+              : cierre.estado === "enviado" ? `Enviado el ${fh(cierre.enviado_at)}. Los terceros tienen 15 días para apelar; lo que queda firme se informa a Finanzas.` : `Informado a Finanzas el ${fh(cierre.informado_at)}.`}
+          </div>
+          {apelaciones.length > 0 && (
+            <div style={{ background: "#fff", border: `1px solid ${C.rojo}`, borderRadius: 12, padding: 12, marginBottom: 12 }}>
+              <div style={{ fontWeight: 800, color: C.rojo, marginBottom: 6 }}>Apelaciones ({apelaciones.length}) {puedeResolver ? "· resuelve Conciliaciones" : "· las resuelve Conciliaciones (Nicole o Esteban)"}</div>
+              {apelaciones.map((x) => (
+                <div key={x.id} style={{ borderTop: `1px solid ${C.fondo}`, padding: "8px 0", fontSize: 13 }}>
+                  <div><b>{x.empresa}</b> · <PatLink p={x.patente} /> · {x.detalle} · <b>{monto(x)}</b></div>
+                  <div style={{ color: C.suave }}>Apelación ({fh(x.apelacion_at)}): {x.apelacion_motivo}</div>
+                  <div style={{ color: C.suave }}>Operaciones: {x.estado === "rev_operaciones" ? `pendiente (vence ${fh(x.op_vence_at)})` : x.op_recomienda === "sin_respuesta" ? "no respondió en el plazo" : `${x.op_recomienda === "acepta" ? "recomienda aceptar" : "recomienda rechazar"}${x.op_nota ? ` · ${x.op_nota}` : ""}`}</div>
+                  {puedeResolver && <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                    <button style={btn("verde")} disabled={busy} onClick={() => { const n = window.prompt("¿Por qué se acepta la apelación? (el cobro se anula)"); if (n) correr("fn_conc_resolver", { p_item: x.id, p_decision: "acepta", p_nota: n, p_por: quien }); }}>Aceptar (anula el cobro)</button>
+                    <button style={{ ...btn(), background: C.rojo }} disabled={busy} onClick={() => { const n = window.prompt("Nota para el tercero (opcional):", ""); if (n !== null) correr("fn_conc_resolver", { p_item: x.id, p_decision: "rechaza", p_nota: n, p_por: quien }); }}>Rechazar (queda firme)</button>
+                  </div>}
+                </div>
+              ))}
+            </div>
+          )}
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
+            {Object.entries(CONC_EST).map(([k, e]) => (
+              <div key={k} onClick={() => setF({ ...f, estado: f.estado === k ? "" : k })} style={{ background: "#fff", border: `1px solid ${f.estado === k ? e[2] : C.borde}`, borderRadius: 12, padding: "8px 12px", flex: "1 1 120px", cursor: "pointer" }}>
+                <div style={{ fontSize: 20, fontWeight: 800, color: e[2] }}>{items.filter((x) => x.estado === k).length}</div><div style={{ fontSize: 11.5, color: C.suave }}>{e[0]}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, overflowX: "auto", marginBottom: 12 }}>
+            <div style={{ fontWeight: 800, color: C.navy, padding: "10px 12px 4px" }}>Por tercero (sin anulados)</div>
+            <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 520 }}>
+              <thead><tr style={{ background: C.fondo, textAlign: "left" }}>{["Tercero", "RUT", "Cobros", "UF", "Pesos"].map((h) => <th key={h} style={{ ...celda, color: C.suave }}>{h}</th>)}</tr></thead>
+              <tbody>{porTercero.map((t) => <tr key={t.rut || t.empresa}><td style={celda}>{t.empresa || "—"}</td><td style={celda}>{t.rut}</td><td style={celda}>{t.n}</td><td style={{ ...celda, fontWeight: 700 }}>{Math.round(t.uf * 100) / 100} UF</td><td style={{ ...celda, fontWeight: 700 }}>{pesos(t.pesos)}</td></tr>)}</tbody>
+            </table>
+          </div>
+          <input style={{ ...inp, minWidth: 240, marginBottom: 8 }} placeholder="Tercero, RUT o patente" value={f.texto} onChange={(e) => setF({ ...f, texto: e.target.value })} />
+          <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 980 }}>
+              <thead><tr style={{ background: C.fondo, textAlign: "left" }}>{["Tercero", "Patente", "Tipo", "Fecha", "Detalle", "Monto", "Estado", ""].map((h) => <th key={h} style={{ ...celda, color: C.suave }}>{h}</th>)}</tr></thead>
+              <tbody>{vis.map((x) => { const e = CONC_EST[x.estado] || [x.estado, C.fondo, C.suave]; return (
+                <tr key={x.id}>
+                  <td style={celda}>{x.empresa || "—"}<div style={{ color: C.tenue, fontSize: 11.5 }}>{x.rut}</div></td><td style={celda}><PatLink p={x.patente} /></td>
+                  <td style={celda}>{CONC_TIPO[x.tipo] || x.tipo}</td><td style={celda}>{x.fecha ? fd(x.fecha) : "—"}</td>
+                  <td style={{ ...celda, maxWidth: 320 }}>{x.detalle}{x.justificacion_op && <div style={{ color: C.navy, fontSize: 12 }}>Operaciones: {x.justificacion_op}</div>}{(x.conc_nota || x.anulado_nota) && <div style={{ color: C.tenue, fontSize: 12 }}>{x.conc_nota || x.anulado_nota}</div>}</td>
+                  <td style={{ ...celda, fontWeight: 700, whiteSpace: "nowrap" }}>{monto(x)}</td><td style={celda}>{chip(e[0], e[1], e[2])}</td>
+                  <td style={celda}>{x.estado === "pendiente" && <a href="#" style={{ color: C.rojo }} onClick={(ev) => { ev.preventDefault(); const n = window.prompt("¿Por qué se anula este cobro?"); if (n) correr("fn_conc_anular", { p_item: x.id, p_nota: n, p_por: quien }); }}>Anular</a>}</td>
+                </tr>
+              ); })}</tbody>
+            </table>
+          </div>
+        </>
+      )}
     </div>
   );
 }
