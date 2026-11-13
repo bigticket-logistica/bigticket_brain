@@ -15200,6 +15200,7 @@ const TABS_CUIDADO_CL = [
   { id: "ca_mantenedores", label: "Mantenedores", desc: "Todo lo editable: parámetros, componentes, proveedores y multas" },
   { id: "ca_evaluacion", label: "Evaluación del ejecutivo", desc: "Solo jefatura: gestión a tiempo de lo que avisó el sistema" },
   { id: "ca_indicadores", label: "Indicadores", desc: "Evaluación del tercero: conducción Geotab, incumplimientos y multas" },
+  { id: "ca_conc", label: "Conciliaciones", desc: "Cierre mensual de cobros al tercero, apelaciones e informe a Finanzas" },
   { id: "ca_tareas", label: "Tareas del supervisor", desc: "Detenciones, hallazgos y avisos al supervisor" },
   { id: "ca_nosalidas", label: "No salidas", desc: "Flota propia sin ruta y su motivo" },
   { id: "ca_incumplimientos", label: "Incumplimientos", desc: "Tareas vencidas por supervisor y mes" },
