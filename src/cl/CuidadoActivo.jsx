@@ -123,7 +123,7 @@ export default function CuidadoActivoCL({ usuario, sub }) {
   if (sub === "ca_oc") return <OrdenesCompra quien={quien} />;
   if (sub === "ca_combustible") return <Combustible quien={quien} />;
   if (sub === "ca_mantenedores") return <Mantenedores quien={quien} rol={usuario?.rol} />;
-  if (sub === "ca_uso") return <UsoDetenciones quien={quien} />;
+  if (sub === "ca_uso") return <UsoTabs quien={quien} />;
   if (sub === "ca_mantenciones") return <Mantenciones quien={quien} />;
   if (sub === "ca_reparaciones") return <Reparaciones quien={quien} />;
   if (sub === "ca_siniestros") return <Siniestros quien={quien} />;
@@ -2681,6 +2681,85 @@ function TareasDetencion() {
     </div>
   );
 }
+// Uso y detenciones: «Paradas del día» y «Casos de detención» (mejoras de Maycol, 13-11-2026)
+function UsoTabs({ quien }) {
+  const [vista, setVista] = useState("casos");
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
+        {[["casos", "Casos de detención"], ["paradas", "Paradas del día"]].map(([k, t]) => <button key={k} style={btn(vista === k ? undefined : "sec")} onClick={() => setVista(k)}>{t}</button>)}
+      </div>
+      {vista === "casos" ? <CasosDetencion quien={quien} /> : <UsoDetenciones quien={quien} />}
+    </div>
+  );
+}
+const DET_EST = { por_revisar: ["Por revisar (ejecutivo)", C.ambarT, C.ambar], en_bitacora: ["En bitácora (24 h)", "#eef2f8", C.navy], justificada: ["Justificada", C.verdeT, C.verde],
+  uso_indebido: ["Uso indebido", C.rojoT, C.rojo], enviada_conc: ["Enviada a Conciliaciones", C.fondo, C.suave], descartada: ["Descartada", C.fondo, C.tenue] };
+const DET_ORIGEN = { sin_solicitud: "Sin solicitud", solicitud_excedida: "Solicitud excedida", colacion_colecta: "Colación en colecta" };
+function CasosDetencion({ quien }) {
+  const [filas, setFilas] = useState(null);
+  const [f, setF] = useState({ estado: "por_revisar", texto: "", desde: "", hasta: "" });
+  const [sel, setSel] = useState({});
+  const [modo, setModo] = useState("manual");
+  const [busy, setBusy] = useState(false);
+  const cargar = () => api("ca_det_casos_cl?select=*&order=inicio.desc&limit=2000").then(setFilas).catch(() => setFilas([]));
+  useEffect(() => { cargar(); api("ca_config_cl?clave=eq.det_modo&select=valor").then((r) => setModo(r?.[0]?.valor || "manual")).catch(() => {}); }, []);
+  if (filas === null) return <div style={{ color: C.tenue }}>Cargando…</div>;
+  const vis = filas.filter((x) => (!f.estado || x.estado === f.estado) && enPeriodo(x.inicio, f) && (!f.texto || `${x.patente} ${x.conductor || ""} ${x.empresa || ""}`.toLowerCase().includes(f.texto.toLowerCase())));
+  const decidir = async (x, accion) => {
+    const nota = accion === "descartar" ? window.prompt("¿Por qué se descarta? (queda para que Biggy aprenda)", "") : "";
+    if (accion === "descartar" && nota === null) return;
+    setBusy(true); try { await rpc("fn_det_decidir", { p_caso: x.id, p_accion: accion, p_nota: nota || null, p_por: quien }); await cargar(); } catch (e) { alert(e.message); } finally { setBusy(false); }
+  };
+  const marcados = Object.keys(sel).filter((k) => sel[k]).map(Number);
+  const aConc = async () => {
+    if (!marcados.length || !window.confirm(`Enviar ${marcados.length} caso(s) de uso indebido a Conciliaciones? Entran al cierre mensual como falta N° 14 (a la empresa), con derecho a apelar.`)) return;
+    setBusy(true); try { const n = await rpc("fn_det_enviar_conc", { p_casos: marcados, p_por: quien }); alert(`${n} caso(s) enviados a Conciliaciones.`); setSel({}); await cargar(); } catch (e) { alert(e.message); } finally { setBusy(false); }
+  };
+  const celda = { padding: "7px 9px", borderBottom: `1px solid ${C.borde}`, fontSize: 12.5, verticalAlign: "top" };
+  return (
+    <div>
+      <div style={{ background: modo === "automatico" ? C.verdeT : C.ambarT, color: modo === "automatico" ? C.verde : C.ambar, borderRadius: 8, padding: "8px 12px", fontSize: 12.5, marginBottom: 12 }}>
+        {modo === "automatico" ? "Modo automático: las detenciones van solas a la bitácora y el uso indebido entra solo a Conciliaciones." :
+          "Marcha blanca (manual): tú decides qué detención va a la bitácora del supervisor y qué uso indebido va a Conciliaciones. Las solicitudes excedidas van solas al supervisor. Cada decisión queda guardada para que Biggy aprenda. Se cambia en Mantenedores (det_modo)."}
+      </div>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
+        {Object.entries(DET_EST).map(([k, e]) => (
+          <div key={k} onClick={() => setF({ ...f, estado: f.estado === k ? "" : k })} style={{ background: "#fff", border: `1px solid ${f.estado === k ? e[2] : C.borde}`, borderRadius: 12, padding: "8px 12px", flex: "1 1 120px", cursor: "pointer" }}>
+            <div style={{ fontSize: 20, fontWeight: 800, color: e[2] }}>{filas.filter((x) => x.estado === k).length}</div><div style={{ fontSize: 11.5, color: C.suave }}>{e[0]}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 10 }}>
+        <Periodo f={f} setF={setF} />
+        <input style={{ ...inp, minWidth: 220 }} placeholder="Patente, chofer o transportista" value={f.texto} onChange={(e) => setF({ ...f, texto: e.target.value })} />
+        {f.estado === "uso_indebido" && <button style={btn()} disabled={busy || !marcados.length} onClick={aConc}>Enviar a Conciliaciones ({marcados.length})</button>}
+      </div>
+      <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 980 }}>
+          <thead><tr style={{ background: C.fondo, textAlign: "left" }}><th style={celda} />{["Detención", "Origen", "Detalle", "Estado", ""].map((h) => <th key={h} style={{ ...celda, color: C.suave }}>{h}</th>)}</tr></thead>
+          <tbody>
+            {vis.length === 0 && <tr><td colSpan={6} style={{ ...celda, color: C.tenue, textAlign: "center" }}>Sin casos con este filtro.</td></tr>}
+            {vis.map((x) => { const e = DET_EST[x.estado] || [x.estado, C.fondo, C.suave]; return (
+              <tr key={x.id}>
+                <td style={celda}>{x.estado === "uso_indebido" && <input type="checkbox" checked={!!sel[x.id]} onChange={(ev) => setSel({ ...sel, [x.id]: ev.target.checked })} />}</td>
+                <td style={celda}><PatLink p={x.patente} /> · {fh(x.inicio)}{x.minutos ? ` · ${x.minutos} min` : ""}<div style={{ color: C.tenue, fontSize: 11.5 }}>{x.conductor || "sin chofer"} · {x.empresa || "—"}</div>
+                  {x.lat && <a href={`https://maps.google.com/?q=${x.lat},${x.lng}`} target="_blank" rel="noreferrer" style={{ fontSize: 11.5, color: C.navy }}>Ver en el mapa</a>}</td>
+                <td style={celda}>{DET_ORIGEN[x.origen] || x.origen}</td>
+                <td style={{ ...celda, maxWidth: 420, whiteSpace: "pre-line" }}>{x.detalle}{x.resultado_nota && <div style={{ color: C.navy, marginTop: 4 }}>Resultado: {x.resultado_nota}</div>}{x.decision_nota && <div style={{ color: C.tenue }}>Nota: {x.decision_nota}</div>}</td>
+                <td style={celda}>{chip(e[0], e[1], e[2])}</td>
+                <td style={{ ...celda, whiteSpace: "nowrap" }}>{x.estado === "por_revisar" && <>
+                  <button style={{ ...btn(), padding: "4px 10px" }} disabled={busy} onClick={() => decidir(x, "enviar")}>Enviar a bitácora</button>{" "}
+                  <button style={{ ...btn("sec"), padding: "4px 10px" }} disabled={busy} onClick={() => decidir(x, "descartar")}>Descartar</button></>}</td>
+              </tr>
+            ); })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 function UsoDetenciones({ quien }) {
   const [fecha, setFecha] = useState(hoyCL());
   const [filas, setFilas] = useState(null);
@@ -3823,7 +3902,7 @@ function CombustibleCargas({ mes }) {
 // ── Mantenedores (pedido F-05): todo lo editable de Cuidado de Activo en un solo lugar ──
 const MANT_GRUPOS = [
   ["Combustible", /^comb_/], ["Flota y estado del activo", /^(flota_|activo_|uso_)/], ["Siniestros · tarifa diaria", /^sin_tarifa/],
-  ["Documentos", /^doc_/], ["Conducción Geotab", /^geo_/], ["Órdenes de compra", /^oc_/], ["GPS y cámaras", /^(gps_|equipos_|camaras_)/],
+  ["Documentos", /^doc_/], ["Conducción Geotab", /^geo_/], ["Órdenes de compra", /^oc_/], ["GPS y cámaras", /^(gps_|equipos_|camaras_)/], ["Detenciones", /^det_/],
   ["Mantenciones", /^mnt_/], ["Flujo de caja", /^flujo_/], ["Reparaciones · quién autoriza", /^rep_/], ["Falta 10 · visitas", /^f10_/], ["Registros de prueba", /^prueba_/],
 ];
 function Mantenedores({ quien, rol }) {
