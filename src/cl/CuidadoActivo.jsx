@@ -38,6 +38,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { cargarSheetJS } from "../shared";
 import { elegirSubtab } from "../shared/subtabs";
+import { LOGO_NARANJO } from "../shared/logo";
 
 const CL_URL = "https://hmowsazntdjtsvdfgutn.supabase.co";
 const CL_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imhtb3dzYXpudGRqdHN2ZGZndXRuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQ5MTc4NzgsImV4cCI6MjEwMDQ5Mzg3OH0.xAJokU0eFhof--d8R4uCRBr2-CJLzC5re0w1IPRqQR8";
@@ -1377,7 +1378,7 @@ function FichaDetalle({ patente, quien, onVolver }) {
   const [err, setErr] = useState("");
   const [vu, setVu] = useState([]);
   const [sins, setSins] = useState([]);
-  useEffect(() => { api(`vw_siniestros_cl?select=folio,fecha_siniestro,danos,causante,estado,costo_reparacion,deducible,dias_taller,taller_en_curso,compania&patente=eq.${encodeURIComponent(patente)}&order=fecha_siniestro.desc`).then(setSins).catch(() => setSins([])); }, [patente]);
+  useEffect(() => { api(`vw_siniestros_cl?select=folio,fecha_siniestro,danos,causante,estado,costo_reparacion,deducible,dias_taller,taller_en_curso,compania&patente=eq.${encodeURIComponent(patente)}&estado=neq.anulado&order=fecha_siniestro.desc`).then(setSins).catch(() => setSins([])); }, [patente]);
   useEffect(() => { rpc("fn_ficha_cl", { p_patente: patente }).then(setD).catch((e) => { setErr(e.message); setD({}); }); rpc("fn_mnt_vida_util_cl").then((r) => setVu((r || []).filter((x) => x.patente === patente))).catch(() => setVu([])); }, [patente]);
   const card = (t, cont) => (
     <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, padding: 14 }}>
@@ -1933,7 +1934,7 @@ function FichaReparacion({ s, quien, onCambio }) {
 }
 
 // ── Siniestros ──────────────────────────────────────────────────────────────
-const SIN_ESTADO = { abierto: ["Abierto", C.ambarT, C.ambar], en_taller: ["En taller", "#eef2f8", C.navy], cerrado: ["Cerrado", C.fondo, C.suave], cerrado_baja: ["Cerrado por baja", C.fondo, C.tenue] };
+const SIN_ESTADO = { abierto: ["Abierto", C.ambarT, C.ambar], en_taller: ["En taller", "#eef2f8", C.navy], cerrado: ["Cerrado", C.fondo, C.suave], cerrado_baja: ["Cerrado por baja", C.fondo, C.tenue], anulado: ["Anulado (duplicado)", C.fondo, C.tenue] };
 // Listas de la hoja «VALIDACIÓN DATOS» del seguimiento de Adriana
 const SIN_CAUSANTE = ["Chofer", "Tercero involucrado"];
 const SIN_TRIP = ["Propia", "Externo"];
@@ -2002,7 +2003,8 @@ function Siniestros({ quien }) {
     } catch (e) { alert(e.message); } finally { setImportando(""); }
   };
   useEffect(() => { cargar(); }, []);
-  const todos = filas || [];
+  // Los anulados (duplicados o fuera del seguimiento) no cuentan; se ven solo con el filtro «Anulado»
+  const todos = (filas || []).filter((x) => x.estado !== "anulado");
   const abiertos = todos.filter((x) => ["abierto", "en_taller"].includes(x.estado));
   const suma = (arr, k) => arr.reduce((t, x) => t + (Number(x[k]) || 0), 0);
   const conDias = todos.filter((x) => x.dias_taller !== null && x.dias_taller !== undefined);
@@ -2010,7 +2012,7 @@ function Siniestros({ quien }) {
   const porAnio = {}; for (const x of todos) { const y = String(x.fecha_siniestro || "").slice(0, 4); if (y) porAnio[y] = (porAnio[y] || 0) + (Number(x.costo_reparacion) || 0); }
   const reinc = Object.entries(todos.reduce((m, x) => { m[x.patente] = (m[x.patente] || 0) + 1; return m; }, {})).filter(([, k]) => k > 1).sort((a, b) => b[1] - a[1]);
   const reincC = Object.entries(todos.filter((x) => x.conductor).reduce((m, x) => { m[x.conductor] = (m[x.conductor] || 0) + 1; return m; }, {})).filter(([, k]) => k > 1).sort((a, b) => b[1] - a[1]);
-  const vis = todos.filter((x) => enPeriodo(x.fecha_siniestro, f) && (f.estado === "abiertos" ? ["abierto", "en_taller"].includes(x.estado) : !f.estado || x.estado === f.estado)
+  const vis = (f.estado === "anulado" ? (filas || []) : todos).filter((x) => enPeriodo(x.fecha_siniestro, f) && (f.estado === "abiertos" ? ["abierto", "en_taller"].includes(x.estado) : !f.estado || x.estado === f.estado)
     && (!f.texto || `${x.folio} ${x.patente} ${x.conductor || ""} ${x.compania || ""} ${x.numero_siniestro || ""}`.toLowerCase().includes(f.texto.toLowerCase())));
   const kpi = (t, v, c) => <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, padding: "12px 16px", flex: "1 1 140px" }}><div style={{ fontSize: 20, fontWeight: 800, color: c }}>{v}</div><div style={{ fontSize: 12.5, color: C.suave }}>{t}</div></div>;
   const celda = { padding: "8px 10px", borderBottom: `1px solid ${C.borde}`, fontSize: 13, verticalAlign: "top" };
@@ -2723,22 +2725,49 @@ function UsoDetenciones({ quien }) {
 }
 
 // ── Evaluación del ejecutivo (solo jefatura y Superadmin) ───────────────────
+let evalPinSesion = "";
 function EvaluacionEjecutivo({ usuario }) {
   const lunes = (d) => { const x = new Date(d); const k = (x.getDay() + 6) % 7; x.setDate(x.getDate() - k); return x.toISOString().slice(0, 10); };
   const mas = (s, n) => { const x = new Date(s + "T12:00:00"); x.setDate(x.getDate() + n); return x.toISOString().slice(0, 10); };
   const [desde, setDesde] = useState(mas(lunes(new Date()), -7));
   const [d, setD] = useState(null);
-  const [acceso, setAcceso] = useState(null);
+  // T-03 · Solo con PIN especial (se pide una vez por sesión; el PIN se valida en la base y no se guarda en el navegador)
+  const [pin, setPin] = useState(evalPinSesion);
+  const [pinTxt, setPinTxt] = useState("");
+  const [pinMsg, setPinMsg] = useState("");
+  const [cambio, setCambio] = useState(null);
+  const acceso = !!pin;
   const hasta = mas(desde, 6);
   useEffect(() => {
-    api("ca_config_cl?clave=eq.correo_jefatura&select=valor").then((r) => {
-      const jef = String(r?.[0]?.valor || "").toLowerCase();
-      setAcceso(usuario?.rol === "superadmin" || (!!jef && String(usuario?.email || "").toLowerCase() === jef));
-    }).catch(() => setAcceso(usuario?.rol === "superadmin"));
-  }, []);   // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { if (acceso) { setD(null); rpc("fn_eval_ejecutivo", { p_desde: desde, p_hasta: hasta }).then(setD).catch((e) => setD({ error: e.message })); } }, [acceso, desde]);   // eslint-disable-line react-hooks/exhaustive-deps
-  if (acceso === null) return <div style={{ color: C.tenue }}>Cargando…</div>;
-  if (!acceso) return <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, padding: 16, color: C.suave }}>Esta pestaña es solo para jefatura y Superadmin.</div>;
+    if (!pin) return;
+    setD(null);
+    rpc("fn_eval_ejecutivo_pin", { p_pin: pin, p_desde: desde, p_hasta: hasta }).then((r) => { evalPinSesion = pin; setD(r); })
+      .catch((e) => { if (/PIN/i.test(e.message)) { evalPinSesion = ""; setPin(""); setPinMsg(e.message); } else setD({ error: e.message }); });
+  }, [pin, desde]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const cambiarPin = async () => {
+    try { setPinMsg(await rpc("fn_eval_pin_cambiar", { p_actual: cambio.actual || null, p_nuevo: cambio.nuevo, p_por: usuario?.email || "brain" })); setCambio(null); evalPinSesion = ""; setPin(""); }
+    catch (e) { setPinMsg(e.message); }
+  };
+  if (!acceso) return (
+    <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, padding: 18, maxWidth: 440 }}>
+      <div style={{ fontWeight: 800, color: C.navy, marginBottom: 6 }}>Evaluación del ejecutivo</div>
+      <div style={{ fontSize: 13, color: C.suave, marginBottom: 10 }}>Esta pestaña se abre solo con el PIN especial.</div>
+      {cambio === null ? (
+        <div style={{ display: "flex", gap: 8 }}>
+          <input type="password" inputMode="numeric" autoComplete="off" style={{ ...inp, width: 160 }} placeholder="PIN" value={pinTxt} onChange={(e) => setPinTxt(e.target.value.replace(/\D/g, ""))} onKeyDown={(e) => e.key === "Enter" && pinTxt && (setPinMsg(""), setPin(pinTxt), setPinTxt(""))} />
+          <button style={btn()} disabled={!pinTxt} onClick={() => { setPinMsg(""); setPin(pinTxt); setPinTxt(""); }}>Entrar</button>
+        </div>
+      ) : (
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <input type="password" inputMode="numeric" style={{ ...inp, width: 140 }} placeholder="PIN actual (si hay)" value={cambio.actual || ""} onChange={(e) => setCambio({ ...cambio, actual: e.target.value.replace(/\D/g, "") })} />
+          <input type="password" inputMode="numeric" style={{ ...inp, width: 140 }} placeholder="PIN nuevo (6+ dígitos)" value={cambio.nuevo || ""} onChange={(e) => setCambio({ ...cambio, nuevo: e.target.value.replace(/\D/g, "") })} />
+          <button style={btn()} onClick={cambiarPin}>Guardar PIN</button>
+        </div>
+      )}
+      {pinMsg && <div style={{ fontSize: 12.5, marginTop: 8, color: /actualizado/i.test(pinMsg) ? C.verde : C.rojo }}>{pinMsg}</div>}
+      <a href="#" style={{ display: "inline-block", fontSize: 12, color: C.navy, marginTop: 10 }} onClick={(e) => { e.preventDefault(); setPinMsg(""); setCambio(cambio === null ? { actual: "", nuevo: "" } : null); }}>{cambio === null ? "Crear o cambiar el PIN" : "Volver"}</a>
+    </div>
+  );
   const cumple = (x) => {
     if (x.valor === null || x.valor === undefined || x.meta === null || x.meta === undefined || x.meta === "") return null;
     return x.sentido === "menor" ? Number(x.valor) <= Number(x.meta) : Number(x.valor) >= Number(x.meta);
@@ -3494,7 +3523,7 @@ function FichaOC({ id, quien, onVolver }) {
     table.l th{background:#002E5D;color:#fff;padding:10px;text-align:left;font-size:11.5px}table.l td{padding:9px 10px;border-bottom:1px solid #e4e7ec}.d{text-align:right}
     table.tot{margin-left:auto;font-size:13px;border-collapse:collapse;min-width:330px}table.tot td{padding:8px 10px;border-bottom:1px solid #e4e7ec}
     table.tot tr.b td{background:#002E5D;color:#fff;font-weight:800;font-size:16px}.vb{margin:60px auto 0;width:300px;border-top:1px solid #1f2937;text-align:center;padding-top:6px;font-size:12px}</style></head><body>
-    <div class="top"><div class="logo">bigticket<small>LOGÍSTICA Y TRANSPORTE</small></div><div><div class="t">ORDEN DE COMPRA</div>
+    <div class="top"><img src="${LOGO_NARANJO}" alt="bigticket" style="height:58px"><div><div class="t">ORDEN DE COMPRA</div>
     <div style="text-align:right;font-size:12px;color:#475569;margin-top:6px">FECHA &nbsp; ${fd(o.fecha)} &nbsp; N° <span class="n">${o.numero || "(borrador)"}</span></div></div></div>
     <div class="g"><div><div class="h">FACTURAR A</div><b>${fa}</b><br>RUT ${fact.oc_facturar_rut || ""}<br>${fact.oc_facturar_direccion || ""}<br>Giro: ${fact.oc_facturar_giro || ""}<br>${o.correo_contacto || fact.oc_correo_contacto || ""}</div>
     <div><div class="h">DETALLE</div><div><span class="k">CONCEPTO</span>${o.concepto || ""}</div><div><span class="k">PROVEEDOR</span>${o.proveedor || ""}</div>
