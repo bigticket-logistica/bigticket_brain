@@ -15205,9 +15205,6 @@ const TABS_CUIDADO_CL = [
   { id: "ca_incumplimientos", label: "Incumplimientos", desc: "Tareas vencidas por supervisor y mes" },
   { id: "ca_config", label: "Configuración", desc: "Plazos, reglas, justificaciones y correos" },
   { id: "ca_pedido", label: "Avance del pedido", desc: "Estado de cada ítem del pedido de Cuidado de Activo" },
-  // Antiguas (base de México): se integran a Mantenciones y Reparaciones (pedido P-03)
-  { id: "costos",      label: "Flujo de Caja (antigua)", desc: "Gastos proyectados de mantención · base México" },
-  { id: "bitacora",    label: "Bitácora (antigua)", desc: "Solicitudes antiguas · base México" },
 ];
 registrarSubtabs("mantenciones_cl", TABS_CUIDADO_CL, "ca_ficha");
 
@@ -15219,8 +15216,6 @@ function ModuloMantencionesMadre({ usuario }) {
       <div className="sec-sub">Flota propia Chile: tareas al supervisor, no salidas, mantenciones y protocolo de flota</div>
       <div style={{ marginBottom: 16 }}><div style={{ fontSize: 15, fontWeight: 700, color: "#FF6600", fontFamily: "Poppins, 'Open Sans', sans-serif", marginTop: 2 }}>{(TABS_CUIDADO_CL.find((t) => t.id === sub) || {}).label}</div></div>
       {sub.startsWith("ca_") && <CuidadoActivoCL usuario={usuario} sub={sub} />}
-      {sub === "costos"      && <FlujoCaja />}
-      {sub === "bitacora"    && <Bitacora usuario={usuario} />}
     </div>
   );
 }
