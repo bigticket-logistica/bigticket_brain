@@ -126,7 +126,7 @@ export default function CuidadoActivoCL({ usuario, sub }) {
   if (sub === "ca_mantenciones") return <Mantenciones quien={quien} />;
   if (sub === "ca_reparaciones") return <Reparaciones quien={quien} />;
   if (sub === "ca_siniestros") return <Siniestros quien={quien} />;
-  if (sub === "ca_gastos") return <HistorialGastos quien={quien} />;
+  if (sub === "ca_gastos") return <GastosTabs quien={quien} />;
   if (sub === "ca_auditorias") return <Auditorias quien={quien} />;
   if (sub === "ca_nosalidas") return <NoSalidas />;
   if (sub === "ca_incumplimientos") return <Incumplimientos />;
@@ -2247,6 +2247,66 @@ function VidaModeloMnt({ quien }) {
 }
 
 // ── Historial de gastos ─────────────────────────────────────────────────────
+// Historial de gastos con «Flujo de caja» (P-03b): comprometido (OC sin pagar) y proyectado
+function GastosTabs({ quien }) {
+  const [vista, setVista] = useState("historial");
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
+        {[["historial", "Historial"], ["flujo", "Flujo de caja"]].map(([k, t]) => <button key={k} style={btn(vista === k ? undefined : "sec")} onClick={() => setVista(k)}>{t}</button>)}
+      </div>
+      {vista === "historial" ? <HistorialGastos quien={quien} /> : <FlujoCaja />}
+    </div>
+  );
+}
+function FlujoCaja() {
+  const [d, setD] = useState(null);
+  useEffect(() => { rpc("fn_ca_flujo_caja_cl").then(setD).catch((e) => setD({ error: e.message })); }, []);
+  if (d === null) return <div style={{ color: C.tenue }}>Calculando…</div>;
+  if (d.error) return <div style={{ color: C.rojo }}>{d.error}</div>;
+  const kpi = (t, v, c, sub) => <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, padding: "10px 14px", flex: "1 1 180px" }}><div style={{ fontSize: 20, fontWeight: 800, color: c }}>{pesos(v)}</div><div style={{ fontSize: 12, color: C.suave }}>{t}</div>{sub && <div style={{ fontSize: 11, color: C.tenue }}>{sub}</div>}</div>;
+  const celda = { padding: "6px 8px", borderBottom: `1px solid ${C.borde}`, fontSize: 12.5 };
+  const tabla = (titulo, cols, filas, render) => (
+    <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, overflowX: "auto", marginBottom: 12 }}>
+      <div style={{ fontWeight: 800, color: C.navy, padding: "10px 12px 4px" }}>{titulo} ({filas.length})</div>
+      <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 640 }}>
+        <thead><tr style={{ background: C.fondo, textAlign: "left" }}>{cols.map((h) => <th key={h} style={{ ...celda, color: C.suave }}>{h}</th>)}</tr></thead>
+        <tbody>{filas.length === 0 ? <tr><td colSpan={cols.length} style={{ ...celda, color: C.tenue, textAlign: "center" }}>Nada en este grupo.</td></tr> : filas.map(render)}</tbody>
+      </table>
+    </div>
+  );
+  const maxMes = Math.max(1, ...(d.por_mes || []).map((m) => Number(m.comprometido) + Number(m.proyectado)));
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
+        {kpi("Comprometido (OC sin pagar)", d.comprometido_total, C.navy, "Montos brutos de las OC")}
+        {kpi(`Proyectado: mantenciones (${d.horizonte_dias} días)`, d.mantenciones_total, C.ambar, "Costo promedio del modelo y la pauta")}
+        {kpi("Proyectado: componentes en alerta", d.componentes_total, C.rojo, "Vida útil supera el límite o en alerta")}
+        {kpi("Total comprometido + proyectado", Number(d.comprometido_total) + Number(d.mantenciones_total) + Number(d.componentes_total), C.texto)}
+      </div>
+      <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, padding: 12, marginBottom: 12 }}>
+        <div style={{ fontWeight: 800, color: C.navy, fontSize: 13, marginBottom: 8 }}>Por mes · azul comprometido, naranjo proyectado</div>
+        {(d.por_mes || []).map((m) => (
+          <div key={m.mes} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, marginBottom: 4 }}>
+            <span style={{ width: 70, color: C.suave }}>{m.mes}</span>
+            <div style={{ flex: 1, display: "flex", height: 14, background: C.fondo, borderRadius: 4, overflow: "hidden" }}>
+              <div style={{ width: `${(Number(m.comprometido) * 100) / maxMes}%`, background: C.navy }} /><div style={{ width: `${(Number(m.proyectado) * 100) / maxMes}%`, background: C.ambar }} />
+            </div>
+            <b style={{ width: 120, textAlign: "right" }}>{pesos(Number(m.comprometido) + Number(m.proyectado))}</b>
+          </div>
+        ))}
+      </div>
+      {tabla("Comprometido · OC sin pagar", ["OC", "Fecha", "Proveedor", "Patente", "Concepto", "Estado", "Total"], d.comprometido || [], (x) => (
+        <tr key={x.numero}><td style={{ ...celda, fontWeight: 800, color: C.navy }}>{x.numero}</td><td style={celda}>{fd(x.fecha)}</td><td style={celda}>{x.proveedor}</td><td style={celda}><PatLink p={x.patente} /></td><td style={celda}>{x.concepto}</td><td style={celda}>{x.estado}</td><td style={{ ...celda, fontWeight: 700 }}>{pesos(x.total)}</td></tr>))}
+      {tabla("Proyectado · mantenciones por pauta", ["Patente", "Modelo", "Pauta", "Fecha estimada", "Taller", "Costo de referencia"], d.mantenciones || [], (x) => (
+        <tr key={x.patente + x.proxima_pauta}><td style={celda}><PatLink p={x.patente} /></td><td style={celda}>{x.modelo}</td><td style={celda}>{Number(x.proxima_pauta || 0).toLocaleString("es-CL")} km</td><td style={celda}>{fd(x.fecha_estimada)}</td><td style={celda}>{x.taller || "—"}</td><td style={{ ...celda, fontWeight: 700 }}>{pesos(x.costo)}</td></tr>))}
+      {tabla("Proyectado · componentes en alerta (vida útil)", ["Patente", "Componente", "Estado", "% de vida usada", "Costo de referencia"], d.componentes || [], (x) => (
+        <tr key={x.patente + x.componente}><td style={celda}><PatLink p={x.patente} /></td><td style={celda}>{x.componente}</td><td style={celda}>{x.estado === "supera" ? "Supera el límite" : "En alerta"}</td><td style={celda}>{x.pct !== null ? `${Math.round(x.pct)} %` : "—"}</td><td style={{ ...celda, fontWeight: 700 }}>{x.costo !== null ? pesos(x.costo) : "Sin referencia"}</td></tr>))}
+      <div style={{ fontSize: 12, color: C.tenue }}>Horizonte y costo de referencia editables en Mantenedores (flujo_*). Reemplaza al «Flujo de Caja» antiguo, que leía la base de México.</div>
+    </div>
+  );
+}
+
 function HistorialGastos({ quien }) {
   const [filas, setFilas] = useState(null);
   const [f, setF] = useState({ desde: "", hasta: "", tipo: "", texto: "", sinOc: false });
@@ -3763,7 +3823,7 @@ function CombustibleCargas({ mes }) {
 const MANT_GRUPOS = [
   ["Combustible", /^comb_/], ["Flota y estado del activo", /^(flota_|activo_|uso_)/], ["Siniestros · tarifa diaria", /^sin_tarifa/],
   ["Documentos", /^doc_/], ["Conducción Geotab", /^geo_/], ["Órdenes de compra", /^oc_/], ["GPS y cámaras", /^(gps_|equipos_|camaras_)/],
-  ["Mantenciones", /^mnt_/], ["Reparaciones · quién autoriza", /^rep_/], ["Falta 10 · visitas", /^f10_/], ["Registros de prueba", /^prueba_/],
+  ["Mantenciones", /^mnt_/], ["Flujo de caja", /^flujo_/], ["Reparaciones · quién autoriza", /^rep_/], ["Falta 10 · visitas", /^f10_/], ["Registros de prueba", /^prueba_/],
 ];
 function Mantenedores({ quien, rol }) {
   const [vista, setVista] = useState("config");
