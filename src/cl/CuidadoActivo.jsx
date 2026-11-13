@@ -1874,6 +1874,7 @@ function FichaReparacion({ s, quien, onCambio }) {
         {s.decision_nota && <div style={{ fontSize: 12.5, color: C.suave, marginTop: 4 }}>{s.decision_nota}</div>}
         {s.gasto_final && fila("Gasto final", pesos(s.gasto_final))}
         {(ref?.eventos || []).length > 0 && <div style={{ fontSize: 11.5, color: C.tenue, marginTop: 8 }}>{ref.eventos.map((e, i) => <div key={i}>{fh(e.at)} · {e.accion} · {e.por}</div>)}</div>}
+        <CotizacionesRep rep={s} quien={quien} />
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 10 }}>
           <button style={btn("sec")} onClick={() => imprimirFichaRep(s, ref, dif, med)}>Imprimir ficha / PDF</button>
           {["aprobada", "en_taller", "cerrada"].includes(s.etapa) && <button style={btn()} onClick={async () => {
@@ -2131,6 +2132,7 @@ function FormSiniestro({ s = null, quien, onListo }) {
       </div>
       {cambios.length > 0 && <div style={{ fontSize: 11.5, color: C.tenue, marginTop: 8 }}>{cambios.map((c) => <div key={c.id}>{fh(c.at)} · {c.por} cambió: {Object.keys(c.cambios || {}).join(", ")}</div>)}</div>}
       {s?.cobro_enviado_at && <div style={{ fontSize: 12.5, color: C.verde, marginTop: 8 }}>Deducible enviado a cobro el {fh(s.cobro_enviado_at)} por {s.cobro_enviado_por}. Queda listo para Conciliaciones.</div>}
+      {s && <CotizacionesRep sin={s} quien={quien} />}
     </div>
   );
 }
@@ -3048,6 +3050,7 @@ function IncumplimientosMes({ mes }) {
   const exportar = async () => {
     const XLSX = await cargarSheetJS();
     const data = filas.map((x) => ({ RUT: x.rut, TERCERO: x.empresa, PATENTE: x.patente, CECO: x.ceco, "UF CONDUCCIÓN GEOTAB": (x.faltas_12 || 0) * (uf[12] ?? 0), "NOTA GEOTAB ACUMULADA": x.nota_geotab ?? "",
+      "$ VISITAS < 90 %": Number(x.pesos_10 || 0), "FECHAS VISITAS < 90 %": x.fechas_10 || "",
       "UF AUSENCIAS": x.faltas_1 * (uf[1] ?? 0), "FECHA DE FALTA": x.fechas_1 || "",
       "DETENCIONES": x.detenciones, "NO JUSTIFICADAS": x.no_justificadas,
       "EVENTOS GRAVES CÁMARA": x.eventos_graves, "CÁMARA CUBIERTA": x.camara_cubierta, "UF AUDITORÍA": x.faltas_13 * (uf[13] ?? 0), "FECHA DE NO CUMPLIMIENTO": x.fechas_13 || "",
@@ -3071,22 +3074,23 @@ function IncumplimientosMes({ mes }) {
     <div>
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
         {kpi("Total UF del mes", tot("uf_total"), C.rojo)}{kpi("Detenciones", tot("detenciones"))}{kpi("No justificadas (falta 14)", tot("faltas_14"), C.rojo)}
-        {kpi("No presentación (falta 1)", tot("faltas_1"), C.rojo)}{kpi("Auditorías no hechas (falta 13)", tot("faltas_13"), C.ambar)}{kpi("Eventos graves de cámara", tot("eventos_graves"))}{kpi("Cámara cubierta", tot("camara_cubierta"))}
+        {kpi("Visitas < 90 % (falta 10)", `${tot("faltas_10")} · ${pesos(tot("pesos_10"))}`, C.rojo)}{kpi("No presentación (falta 1)", tot("faltas_1"), C.rojo)}{kpi("Auditorías no hechas (falta 13)", tot("faltas_13"), C.ambar)}{kpi("Eventos graves de cámara", tot("eventos_graves"))}{kpi("Cámara cubierta", tot("camara_cubierta"))}
       </div>
       <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10, flexWrap: "wrap" }}>
         <button style={btn()} onClick={exportar}>Exportar a Excel (INCUMPLIMIENTOS, REPARACIONES y COMBUSTIBLE)</button>
-        <span style={{ fontSize: 12, color: C.tenue }}>Faltas 1 (no salida por FALTA TERCERO), 13 y 14. Las faltas 10 (domicilios) y 12 (nota Geotab) se suman cuando estén sus datos. «Enviar a cobro» depende de Conciliaciones.</span>
+        <span style={{ fontSize: 12, color: C.tenue }}>Faltas 1, 10 (visitas &lt; 90 %: 100 % del pago de la ruta, en pesos), 12, 13 y 14 (en UF). «Enviar a cobro» depende de Conciliaciones.</span>
       </div>
       <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, overflowX: "auto" }}>
         <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1000 }}>
-          <thead><tr style={{ background: C.fondo, textAlign: "left" }}>{["Tercero", "Patente", "CECO", "Nota Geotab", "No presentación · fechas", "Detenciones", "No justificadas · fechas", "Auditorías no hechas · fechas", "Eventos graves", "Cubierta", "Total UF"].map((h) => <th key={h} style={{ ...celda, color: C.suave }}>{h}</th>)}</tr></thead>
+          <thead><tr style={{ background: C.fondo, textAlign: "left" }}>{["Tercero", "Patente", "CECO", "Nota Geotab", "Visitas < 90 % · fechas", "No presentación · fechas", "Detenciones", "No justificadas · fechas", "Auditorías no hechas · fechas", "Eventos graves", "Cubierta", "Total UF"].map((h) => <th key={h} style={{ ...celda, color: C.suave }}>{h}</th>)}</tr></thead>
           <tbody>
-            {filas.length === 0 && <tr><td colSpan={11} style={{ ...celda, color: C.tenue, textAlign: "center" }}>Sin incumplimientos ni eventos en este mes.</td></tr>}
+            {filas.length === 0 && <tr><td colSpan={12} style={{ ...celda, color: C.tenue, textAlign: "center" }}>Sin incumplimientos ni eventos en este mes.</td></tr>}
             {filas.map((x) => (
               <tr key={x.patente}>
                 <td style={celda}>{x.empresa || "—"}<div style={{ color: C.tenue, fontSize: 11.5 }}>{x.rut}</div></td>
                 <td style={{ ...celda, fontWeight: 800, color: C.navy }}><PatLink p={x.patente} /></td><td style={celda}>{x.ceco}</td>
                 <td style={{ ...celda, fontWeight: 700, color: x.nota_geotab !== null && x.nota_geotab < 90 ? C.rojo : C.texto }}>{x.nota_geotab ?? "—"}{x.faltas_12 ? " · falta 12" : ""}</td>
+                <td style={celda}>{x.faltas_10 ? <><b style={{ color: C.rojo }}>{x.faltas_10}</b> · {pesos(x.pesos_10)}<div style={{ color: C.tenue, fontSize: 11.5 }}>{x.fechas_10}</div></> : "—"}</td>
                 <td style={celda}>{x.faltas_1 ? <><b style={{ color: C.rojo }}>{x.faltas_1}</b> · {x.fechas_1}</> : "—"}</td>
                 <td style={celda}>{x.detenciones || "—"}</td>
                 <td style={celda}>{x.faltas_14 ? <><b style={{ color: C.rojo }}>{x.faltas_14}</b> · {x.fechas_14}</> : "—"}</td>
@@ -3113,14 +3117,14 @@ function DetalleFaltas({ mes }) {
   return (
     <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, overflowX: "auto" }}>
       <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 760 }}>
-        <thead><tr style={{ background: C.fondo, textAlign: "left" }}>{["Fecha", "Falta", "Patente", "Tercero", "Detalle", "UF"].map((h) => <th key={h} style={{ ...celda, color: C.suave }}>{h}</th>)}</tr></thead>
+        <thead><tr style={{ background: C.fondo, textAlign: "left" }}>{["Fecha", "Falta", "Patente", "Tercero", "Detalle", "Multa"].map((h) => <th key={h} style={{ ...celda, color: C.suave }}>{h}</th>)}</tr></thead>
         <tbody>
           {filas.length === 0 && <tr><td colSpan={6} style={{ ...celda, color: C.tenue, textAlign: "center" }}>Sin faltas en este mes.</td></tr>}
           {filas.map((x) => (
             <tr key={x.falta + x.origen_id}>
               <td style={celda}>{fh(x.fecha)}</td><td style={{ ...celda, fontWeight: 700 }}>N° {x.falta}</td>
               <td style={{ ...celda, fontWeight: 800, color: C.navy }}><PatLink p={x.patente} /></td><td style={celda}>{x.empresa || "—"}</td>
-              <td style={celda}>{x.detalle}</td><td style={{ ...celda, fontWeight: 700 }}>{x.uf ?? "—"}</td>
+              <td style={celda}>{x.detalle}</td><td style={{ ...celda, fontWeight: 700 }}>{x.uf !== null && x.uf !== undefined ? `${x.uf} UF` : x.monto !== null && x.monto !== undefined ? pesos(x.monto) : "—"}</td>
             </tr>
           ))}
         </tbody>
@@ -3320,6 +3324,77 @@ function MultasAnexo({ quien, puede }) {
   );
 }
 
+// ── Cotizaciones del taller leídas por Biggy (P-05b, P-06a, F-03b) ──
+function CotizacionesRep({ rep = null, sin = null, quien }) {
+  const obj = rep || sin; const esSin = !rep;
+  const [filas, setFilas] = useState(null);
+  const [taller, setTaller] = useState(obj.taller || "");
+  const [subiendo, setSubiendo] = useState("");
+  const [abierta, setAbierta] = useState(null);
+  const cargar = () => api(`ca_rep_cotizaciones_cl?${esSin ? "sin_id" : "rep_id"}=eq.${obj.id}&select=*&order=subida_at`).then(setFilas).catch(() => setFilas([]));
+  useEffect(() => { cargar(); const i = setInterval(cargar, 60000); return () => clearInterval(i); }, [obj.id]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const subir = async (files) => {
+    for (const file of Array.from(files || [])) {
+      setSubiendo(`Subiendo ${file.name}…`);
+      try {
+        const limpio = String(file.name || "cotizacion").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^A-Za-z0-9._-]+/g, "_").slice(-80);
+        const path = `cotizaciones/${obj.patente}/${obj.folio || obj.id}_${Date.now()}_${limpio}`;
+        const r = await fetch(`${CL_URL}/storage/v1/object/ca-documentos-cl/${path}`, { method: "POST", headers: { apikey: CL_KEY, Authorization: `Bearer ${CL_KEY}`, "Content-Type": file.type || "application/octet-stream", "x-upsert": "true" }, body: file });
+        if (!r.ok) throw new Error((await r.text()).slice(0, 160));
+        if (esSin) await rpc("fn_cot_registrar_sin", { p_sin: obj.id, p_path: path, p_nombre: file.name, p_mime: file.type || null, p_taller: taller || null, p_por: quien });
+        else await rpc("fn_cot_registrar", { p_rep: obj.id, p_path: path, p_nombre: file.name, p_mime: file.type || null, p_taller: taller || null, p_por: quien });
+      } catch (e) { alert(`${file.name}: ${e.message}`); }
+    }
+    setSubiendo(""); cargar();
+  };
+  const accion = async (fn, args) => { try { await rpc(fn, args); cargar(); } catch (e) { alert(e.message); } };
+  const leidas = (filas || []).filter((c) => c.estado === "leida" && c.total_neto !== null);
+  const minimo = leidas.length ? Math.min(...leidas.map((c) => Number(c.total_neto))) : null;
+  const ver = async (c) => { try { window.open(await urlFirmada(c.path, "ca-documentos-cl"), "_blank"); } catch (e) { alert(e.message); } };
+  const EST = { por_leer: ["Biggy la está leyendo", "#eef2f8", C.navy], leida: ["Leída", C.verdeT, C.verde], error: ["No se pudo leer", C.rojoT, C.rojo] };
+  return (
+    <div style={{ marginTop: 14, background: "#fafbfd", border: `1px solid ${C.borde}`, borderRadius: 10, padding: 12 }}>
+      <div style={{ fontWeight: 800, color: C.navy, marginBottom: 6 }}>{esSin ? "Presupuestos de reparación (informativo)" : "Cotizaciones del taller"} {filas && filas.length > 1 ? `· comparativo (${filas.length})` : ""}</div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 8 }}>
+        <input style={{ ...inp, width: 200 }} placeholder="Taller (opcional)" value={taller} onChange={(e) => setTaller(e.target.value)} />
+        <label style={{ ...btn("sec"), display: "inline-block", cursor: subiendo ? "wait" : "pointer" }}>
+          {subiendo || "Subir cotización (PDF o foto)"}
+          <input type="file" multiple accept=".pdf,image/*" style={{ display: "none" }} disabled={!!subiendo} onChange={(e) => { subir(e.target.files); e.target.value = ""; }} />
+        </label>
+        <span style={{ fontSize: 12, color: C.tenue }}>{esSin ? "Biggy lee el presupuesto y guarda sus precios por ítem, para comparar si hubiera que reparar de forma particular. El gasto del siniestro sigue siendo el deducible." : "Biggy lee taller, ítems y totales en unos minutos. Elegir una cotización deja su taller y monto en la reparación y arma la OC."}</span>
+      </div>
+      {filas === null ? <div style={{ fontSize: 12.5, color: C.tenue }}>Cargando…</div> : filas.length === 0 ? <div style={{ fontSize: 12.5, color: C.tenue }}>Sin cotizaciones subidas.</div> : (
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, background: "#fff" }}>
+          <thead><tr style={{ background: C.fondo, textAlign: "left" }}>{["Taller", "N° · fecha", "Ítems", "Neto", "Total", "Estado", ""].map((h) => <th key={h} style={{ padding: "6px 8px", color: C.suave }}>{h}</th>)}</tr></thead>
+          <tbody>{filas.map((c) => { const e = EST[c.estado] || [c.estado, C.fondo, C.suave]; const barata = minimo !== null && Number(c.total_neto) === minimo && leidas.length > 1; return [
+            <tr key={c.id} style={{ borderTop: `1px solid ${C.borde}`, background: c.elegida ? C.verdeT : "#fff" }}>
+              <td style={{ padding: "6px 8px", fontWeight: 700 }}>{c.taller || "—"}{c.taller_rut && <div style={{ color: C.tenue, fontSize: 11 }}>{c.taller_rut}</div>}</td>
+              <td style={{ padding: "6px 8px" }}>{c.numero || "—"}{c.fecha && <div style={{ color: C.tenue, fontSize: 11 }}>{fd(c.fecha)}</div>}</td>
+              <td style={{ padding: "6px 8px" }}>{(c.items || []).length ? <a href="#" style={{ color: C.navy }} onClick={(ev) => { ev.preventDefault(); setAbierta(abierta === c.id ? null : c.id); }}>{c.items.length} ítems</a> : "—"}</td>
+              <td style={{ padding: "6px 8px", fontWeight: 800, color: barata ? C.verde : C.texto }}>{c.total_neto !== null ? pesos(c.total_neto) : "—"}{barata && <div style={{ fontSize: 11 }}>la más barata</div>}</td>
+              <td style={{ padding: "6px 8px" }}>{c.total !== null ? pesos(c.total) : "—"}</td>
+              <td style={{ padding: "6px 8px" }}>{c.elegida ? chip("Elegida", C.verdeT, C.verde) : chip(e[0], e[1], e[2])}</td>
+              <td style={{ padding: "6px 8px", whiteSpace: "nowrap" }}>
+                <a href="#" style={{ color: C.navy, marginRight: 8 }} onClick={(ev) => { ev.preventDefault(); ver(c); }}>Ver</a>
+                {!esSin && c.estado === "leida" && !c.elegida && <a href="#" style={{ color: C.verde, fontWeight: 700, marginRight: 8 }} onClick={(ev) => { ev.preventDefault(); accion("fn_cot_elegir", { p_id: c.id, p_por: quien }); }}>Elegir</a>}
+                {c.estado !== "por_leer" && <a href="#" style={{ color: C.suave, marginRight: 8 }} onClick={(ev) => { ev.preventDefault(); accion("fn_cot_accion", { p_id: c.id, p_accion: "releer", p_por: quien }); }}>Releer</a>}
+                {!c.elegida && <a href="#" style={{ color: C.rojo }} onClick={(ev) => { ev.preventDefault(); window.confirm("¿Borrar esta cotización?") && accion("fn_cot_accion", { p_id: c.id, p_accion: "borrar", p_por: quien }); }}>Borrar</a>}
+              </td>
+            </tr>,
+            abierta === c.id && <tr key={c.id + "i"}><td colSpan={7} style={{ padding: 8, background: "#fafbfd" }}>
+              {c.resumen && <div style={{ fontSize: 12, color: C.suave, marginBottom: 4 }}>{c.resumen}</div>}
+              <table style={{ borderCollapse: "collapse", fontSize: 12 }}>
+                <thead><tr style={{ color: C.suave, textAlign: "left" }}>{["Ítem", "Código", "Cant.", "Precio neto", "Total neto"].map((h) => <th key={h} style={{ padding: "2px 8px" }}>{h}</th>)}</tr></thead>
+                <tbody>{(c.items || []).map((i, k) => <tr key={k}><td style={{ padding: "2px 8px" }}>{i.descripcion}</td><td style={{ padding: "2px 8px", color: C.tenue }}>{i.codigo || ""}</td><td style={{ padding: "2px 8px" }}>{i.cantidad}</td><td style={{ padding: "2px 8px" }}>{i.precio_unitario !== null ? pesos(i.precio_unitario) : "—"}</td><td style={{ padding: "2px 8px" }}>{i.total !== null ? pesos(i.total) : "—"}</td></tr>)}</tbody>
+              </table>
+            </td></tr>,
+          ]; })}</tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
 // ── Órdenes de compra (pedido F-03) ─────────────────────────────────────────
 const OC_EST = { borrador: ["Borrador", C.fondo, C.suave], emitida: ["Emitida", "#eef2f8", C.navy], enviada: ["Enviada al taller", C.ambarT, C.ambar], facturada: ["Facturada", C.verdeT, C.verde], pagada: ["Pagada", C.verdeT, C.verde], anulada: ["Anulada", C.fondo, C.tenue] };
 let ocAbrir = null;
@@ -3372,8 +3447,10 @@ function OrdenesCompra({ quien }) {
 }
 function FichaOC({ id, quien, onVolver }) {
   const nueva = !id;
-  const [o, setO] = useState(nueva ? { proveedor: "", proveedor_rut: "", proveedor_correo: "", patente: "", ceco: "", concepto: "", forma_pago: "", referencia: "", descuento: 0, nota: "", estado: "borrador" } : null);
-  const [lineas, setLineas] = useState(nueva ? [{ descripcion: "", cantidad: 1, precio: 0 }] : []);
+  const [o, setO] = useState(nueva ? { proveedor: "", proveedor_rut: "", proveedor_correo: "", patente: "", ceco: "", concepto: "", forma_pago: "TRANSFERENCIA", tipo_ref: "REF. PTTO", referencia: "", descuento_pct: 0, correo_contacto: "", nota: "", estado: "borrador" } : null);
+  const [lineas, setLineas] = useState(nueva ? [{ descripcion: "", codigo: "", cantidad: 1, precio: 0 }] : []);
+  const [fact, setFact] = useState({});
+  useEffect(() => { api("ca_config_cl?clave=in.(oc_facturar_a,oc_facturar_rut,oc_facturar_direccion,oc_facturar_giro,oc_correo_contacto)&select=clave,valor").then((r) => setFact(Object.fromEntries((r || []).map((x) => [x.clave, x.valor])))).catch(() => {}); }, []);
   const [eventos, setEventos] = useState([]);
   const [talleres, setTalleres] = useState([]);
   const [msg, setMsg] = useState("");
@@ -3387,7 +3464,8 @@ function FichaOC({ id, quien, onVolver }) {
   const editable = o.estado === "borrador";
   const iva = 19;
   const bruto = lineas.reduce((t, l) => t + Number(l.cantidad || 0) * Number(l.precio || 0), 0);
-  const neto = Math.max(bruto - Number(o.descuento || 0), 0);
+  const dctoMonto = Math.round(bruto * Number(o.descuento_pct || 0) / 100);
+  const neto = Math.max(bruto - dctoMonto, 0);
   const guardar = async () => {
     setBusy(true); setMsg("");
     try { const nid = await rpc("fn_oc_guardar", { p_id: nueva ? null : o.id, p_datos: o, p_lineas: lineas, p_por: quien }); if (nueva) { onVolver(); return; } setMsg("Guardada."); await cargar(nid); }
@@ -3404,18 +3482,28 @@ function FichaOC({ id, quien, onVolver }) {
     try { setMsg(await rpc("fn_oc_enviar", { p_id: o.id, p_correo: correo, p_por: quien })); await cargar(o.id); } catch (e) { setMsg(e.message); } finally { setBusy(false); }
   };
   const imprimir = () => {
-    const $ = (v) => `$${Math.round(Number(v || 0)).toLocaleString("es-CL")}`;
+    const $ = (v) => Math.round(Number(v || 0)).toLocaleString("es-CL");
     const w = window.open("", "_blank"); if (!w) return alert("Permite las ventanas emergentes para el Brain.");
-    w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>OC ${o.numero || "borrador"}</title><style>body{font-family:Arial,sans-serif;color:#1f2937;margin:32px}h1{color:#002E5D;font-size:20px;margin:0}
-    table{border-collapse:collapse;width:100%;font-size:13px;margin-top:14px}td,th{padding:6px 8px;border-bottom:1px solid #e4e7ec;text-align:left}.d{text-align:right}.cab td{border:none;padding:3px 0}
-    .firma{margin-top:48px;display:flex;gap:40px}.firma div{flex:1;border-top:1px solid #94a3b8;padding-top:6px;font-size:12px;color:#475569;text-align:center}</style></head><body>
-    <h1>Orden de compra ${o.numero || "(borrador)"}</h1><div style="color:#FF6600;font-size:13px;margin:4px 0 12px">${o.facturar_a || "Administradora de Servicios BT SpA"}</div>
-    <table class="cab"><tr><td><b>Fecha:</b> ${fd(o.fecha)}</td><td><b>Forma de pago:</b> ${o.forma_pago || "—"}</td></tr><tr><td><b>Proveedor:</b> ${o.proveedor || ""} ${o.proveedor_rut ? "(" + o.proveedor_rut + ")" : ""}</td><td><b>CECO:</b> ${o.ceco || "—"} ${o.patente ? "· Patente " + o.patente : ""}</td></tr>
-    <tr><td><b>Concepto:</b> ${o.concepto || "—"}</td><td><b>Referencia:</b> ${o.referencia || "—"}</td></tr></table>
-    <table><tr><th>Descripción</th><th class="d">Cant.</th><th class="d">Precio</th><th class="d">Total</th></tr>${lineas.map((l) => `<tr><td>${l.descripcion}</td><td class="d">${l.cantidad}</td><td class="d">${$(l.precio)}</td><td class="d">${$(l.cantidad * l.precio)}</td></tr>`).join("")}</table>
-    <table style="width:280px;margin-left:auto"><tr><td>Descuento</td><td class="d">${$(o.descuento)}</td></tr><tr><td>Neto</td><td class="d">${$(o.neto)}</td></tr><tr><td>IVA</td><td class="d">${$(o.iva)}</td></tr><tr><td><b>Total</b></td><td class="d"><b>${$(o.total)}</b></td></tr></table>
-    <p style="font-size:12px">Facturar a ${o.facturar_a || "Administradora de Servicios BT SpA"} indicando el N° de OC.</p>
-    <div class="firma"><div>Solicita · Cuidado de Activo</div><div>V°B° Control ${o.vb_por ? "· " + o.vb_por : ""}</div></div><script>window.onload=()=>setTimeout(()=>window.print(),300)</script></body></html>`);
+    const fa = (o.facturar_a || fact.oc_facturar_a || "Administradora de Servicios BT SpA").toUpperCase();
+    w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>OC ${o.numero || "borrador"} ${o.patente || ""}</title><style>
+    body{font-family:Arial,sans-serif;color:#1f2937;margin:28px}.top{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:4px solid #002E5D;padding-bottom:12px}
+    .logo{font-size:44px;font-weight:800;color:#FF6600;letter-spacing:-1px;line-height:1}.logo small{display:block;font-size:11px;color:#002E5D;letter-spacing:1px}
+    .t{font-size:30px;font-weight:800;color:#002E5D;text-align:right}.n{color:#FF6600;font-weight:800;font-size:18px}.g{display:flex;gap:40px;margin:18px 0}
+    .g>div{flex:1}.h{font-size:12px;font-weight:800;color:#002E5D;letter-spacing:1px;border-bottom:1px solid #cbd5e1;padding-bottom:4px;margin-bottom:8px}
+    .k{color:#475569;font-size:11px;font-weight:700;width:120px;display:inline-block}table.l{border-collapse:collapse;width:100%;font-size:13px}
+    table.l th{background:#002E5D;color:#fff;padding:10px;text-align:left;font-size:11.5px}table.l td{padding:9px 10px;border-bottom:1px solid #e4e7ec}.d{text-align:right}
+    table.tot{margin-left:auto;font-size:13px;border-collapse:collapse;min-width:330px}table.tot td{padding:8px 10px;border-bottom:1px solid #e4e7ec}
+    table.tot tr.b td{background:#002E5D;color:#fff;font-weight:800;font-size:16px}.vb{margin:60px auto 0;width:300px;border-top:1px solid #1f2937;text-align:center;padding-top:6px;font-size:12px}</style></head><body>
+    <div class="top"><div class="logo">bigticket<small>LOGÍSTICA Y TRANSPORTE</small></div><div><div class="t">ORDEN DE COMPRA</div>
+    <div style="text-align:right;font-size:12px;color:#475569;margin-top:6px">FECHA &nbsp; ${fd(o.fecha)} &nbsp; N° <span class="n">${o.numero || "(borrador)"}</span></div></div></div>
+    <div class="g"><div><div class="h">FACTURAR A</div><b>${fa}</b><br>RUT ${fact.oc_facturar_rut || ""}<br>${fact.oc_facturar_direccion || ""}<br>Giro: ${fact.oc_facturar_giro || ""}<br>${o.correo_contacto || fact.oc_correo_contacto || ""}</div>
+    <div><div class="h">DETALLE</div><div><span class="k">CONCEPTO</span>${o.concepto || ""}</div><div><span class="k">PROVEEDOR</span>${o.proveedor || ""}</div>
+    <div><span class="k">FORMA DE PAGO</span>${o.forma_pago || ""}</div><div><span class="k">CECOS</span>${o.ceco || ""}</div><div><span class="k">${o.tipo_ref || "REF. PTTO"}</span>${o.referencia || ""}</div></div></div>
+    <table class="l"><tr><th>DESCRIPCIÓN</th><th>CÓDIGO PROV.</th><th class="d">CANTIDAD</th><th class="d">PRECIO NETO</th><th class="d">TOTAL NETO</th></tr>
+    ${lineas.map((l) => `<tr><td>${String(l.descripcion || "").toUpperCase()}</td><td>${l.codigo || ""}</td><td class="d">${l.cantidad}</td><td class="d">${$(l.precio)}</td><td class="d"><b>${$(l.cantidad * l.precio)}</b></td></tr>`).join("")}</table>
+    <table class="tot" style="margin-top:14px"><tr><td>SUBTOTAL NETO</td><td class="d">${$(bruto)}</td></tr><tr><td>DCTO (${Number(o.descuento_pct || 0)} %)</td><td class="d">${dctoMonto ? $(dctoMonto) : "-"}</td></tr>
+    <tr><td>TOTAL NETO</td><td class="d">${$(neto)}</td></tr><tr><td>IVA 19%</td><td class="d">${$(Math.round(neto * 0.19))}</td></tr><tr class="b"><td>BRUTO</td><td class="d">${$(neto + Math.round(neto * 0.19))}</td></tr></table>
+    <div class="vb">V°B° CONTROL${o.vb_por ? " · " + o.vb_por : ""}</div><script>window.onload=()=>setTimeout(()=>window.print(),300)</script></body></html>`);
     w.document.close();
   };
   const campo = (k, t, w = 220, props = {}) => <label style={{ fontSize: 12, color: C.suave }}>{t}<input style={{ ...inp, display: "block", width: w }} disabled={!editable} value={o[k] ?? ""} onChange={(e) => setO({ ...o, [k]: e.target.value })} {...props} /></label>;
@@ -3433,13 +3521,16 @@ function FichaOC({ id, quien, onVolver }) {
             onChange={(ev) => { const t = talleres.find((x) => x.nombre === ev.target.value); setO({ ...o, proveedor: ev.target.value, proveedor_correo: t?.correo || o.proveedor_correo }); }} /></label>
           <datalist id="oc-talleres">{talleres.map((t) => <option key={t.nombre} value={t.nombre} />)}</datalist>
           {campo("proveedor_rut", "RUT proveedor", 130)}{campo("proveedor_correo", "Correo del taller", 220)}{campo("patente", "Patente", 100)}{campo("ceco", "CECO", 130)}
-          {campo("forma_pago", "Forma de pago", 130)}{campo("referencia", "Referencia (folio)", 130)}{campo("concepto", "Concepto", 320)}
+          <label style={{ fontSize: 12, color: C.suave }}>Forma de pago<select style={{ ...inp, display: "block" }} disabled={!editable} value={o.forma_pago || "TRANSFERENCIA"} onChange={(e) => setO({ ...o, forma_pago: e.target.value })}>{["TRANSFERENCIA", "CREDITO", "CONTADO"].map((x) => <option key={x}>{x}</option>)}</select></label>
+          <label style={{ fontSize: 12, color: C.suave }}>Tipo de referencia<select style={{ ...inp, display: "block" }} disabled={!editable} value={o.tipo_ref || "REF. PTTO"} onChange={(e) => setO({ ...o, tipo_ref: e.target.value })}>{["REF. PTTO", "REF. COTIZACION"].map((x) => <option key={x}>{x}</option>)}</select></label>
+          {campo("referencia", "N° de referencia", 130)}{campo("correo_contacto", "Correo de contacto", 220)}{campo("concepto", "Concepto", 320)}
         </div>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, marginBottom: 8 }}>
-          <thead><tr style={{ background: C.fondo, textAlign: "left" }}><th style={{ padding: "6px 8px" }}>Descripción</th><th style={{ padding: "6px 8px", width: 90 }}>Cant.</th><th style={{ padding: "6px 8px", width: 140 }}>Precio neto</th><th style={{ padding: "6px 8px", width: 140 }}>Total</th>{editable && <th />}</tr></thead>
+          <thead><tr style={{ background: C.fondo, textAlign: "left" }}><th style={{ padding: "6px 8px" }}>Descripción</th><th style={{ padding: "6px 8px", width: 120 }}>Código prov.</th><th style={{ padding: "6px 8px", width: 90 }}>Cant.</th><th style={{ padding: "6px 8px", width: 140 }}>Precio neto</th><th style={{ padding: "6px 8px", width: 140 }}>Total</th>{editable && <th />}</tr></thead>
           <tbody>{lineas.map((l, i) => (
             <tr key={i} style={{ borderTop: `1px solid ${C.fondo}` }}>
               <td style={{ padding: "4px 6px" }}>{editable ? <input style={{ ...inp, width: "100%" }} value={l.descripcion} onChange={(ev) => setLineas(lineas.map((x, j) => j === i ? { ...x, descripcion: ev.target.value } : x))} /> : l.descripcion}</td>
+              <td style={{ padding: "4px 6px" }}>{editable ? <input style={{ ...inp, width: 110 }} value={l.codigo || ""} onChange={(ev) => setLineas(lineas.map((x, j) => j === i ? { ...x, codigo: ev.target.value } : x))} /> : (l.codigo || "")}</td>
               <td style={{ padding: "4px 6px" }}>{editable ? <input type="number" style={{ ...inp, width: 80 }} value={l.cantidad} onChange={(ev) => setLineas(lineas.map((x, j) => j === i ? { ...x, cantidad: ev.target.value } : x))} /> : l.cantidad}</td>
               <td style={{ padding: "4px 6px" }}>{editable ? <input type="number" style={{ ...inp, width: 130 }} value={l.precio} onChange={(ev) => setLineas(lineas.map((x, j) => j === i ? { ...x, precio: ev.target.value } : x))} /> : pesos(l.precio)}</td>
               <td style={{ padding: "4px 6px", fontWeight: 700 }}>{pesos(Number(l.cantidad || 0) * Number(l.precio || 0))}</td>
@@ -3447,11 +3538,12 @@ function FichaOC({ id, quien, onVolver }) {
             </tr>
           ))}</tbody>
         </table>
-        {editable && <button style={btn("sec")} onClick={() => setLineas([...lineas, { descripcion: "", cantidad: 1, precio: 0 }])}>+ Línea</button>}
+        {editable && <button style={btn("sec")} onClick={() => setLineas([...lineas, { descripcion: "", codigo: "", cantidad: 1, precio: 0 }])}>+ Línea</button>}
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 18, fontSize: 13, marginTop: 10, flexWrap: "wrap" }}>
-          <label style={{ color: C.suave }}>Descuento <input type="number" style={{ ...inp, width: 110 }} disabled={!editable} value={o.descuento ?? 0} onChange={(ev) => setO({ ...o, descuento: ev.target.value })} /></label>
-          <span>Neto <b>{pesos(editable ? neto : o.neto)}</b></span><span>IVA <b>{pesos(editable ? Math.round(neto * iva / 100) : o.iva)}</b></span>
-          <span style={{ fontSize: 15 }}>Total <b>{pesos(editable ? neto + Math.round(neto * iva / 100) : o.total)}</b></span>
+          <span>Subtotal neto <b>{pesos(bruto)}</b></span>
+          <label style={{ color: C.suave }}>Dcto. (%) <input type="number" step="0.5" style={{ ...inp, width: 80 }} disabled={!editable} value={o.descuento_pct ?? 0} onChange={(ev) => setO({ ...o, descuento_pct: ev.target.value })} /></label>
+          <span>Total neto <b>{pesos(editable ? neto : o.neto)}</b></span><span>IVA <b>{pesos(editable ? Math.round(neto * iva / 100) : o.iva)}</b></span>
+          <span style={{ fontSize: 15 }}>Bruto <b>{pesos(editable ? neto + Math.round(neto * iva / 100) : o.total)}</b></span>
         </div>
         <div style={{ fontSize: 12, color: C.tenue, marginTop: 6 }}>Facturar a {o.facturar_a || "Administradora de Servicios BT SpA"}. IVA y razón social se editan en Configuración (oc_iva_pct, oc_facturar_a).</div>
         {msg && <div style={{ fontSize: 13, marginTop: 10, color: /^(Guardada|Emitida|Listo|Enviada)/.test(msg) ? C.verde : C.rojo }}>{msg}</div>}
@@ -3642,7 +3734,7 @@ function CombustibleCargas({ mes }) {
 const MANT_GRUPOS = [
   ["Combustible", /^comb_/], ["Flota y estado del activo", /^(flota_|activo_|uso_)/], ["Siniestros · tarifa diaria", /^sin_tarifa/],
   ["Documentos", /^doc_/], ["Conducción Geotab", /^geo_/], ["Órdenes de compra", /^oc_/], ["GPS y cámaras", /^(gps_|equipos_|camaras_)/],
-  ["Mantenciones", /^mnt_/], ["Registros de prueba", /^prueba_/],
+  ["Mantenciones", /^mnt_/], ["Reparaciones · quién autoriza", /^rep_/], ["Falta 10 · visitas", /^f10_/], ["Registros de prueba", /^prueba_/],
 ];
 function Mantenedores({ quien, rol }) {
   const [vista, setVista] = useState("config");
