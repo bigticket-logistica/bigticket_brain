@@ -2780,6 +2780,48 @@ function ConciliacionTercerosMX({ usuario }) {
   const [asuntoLote, setAsuntoLote] = useState(() => { try { return localStorage.getItem("conc_mx_asunto") || ASUNTO_DEFAULT; } catch { return ASUNTO_DEFAULT; } });
   const [cuerpoLote, setCuerpoLote] = useState(() => { try { return localStorage.getItem("conc_mx_cuerpo") || CUERPO_DEFAULT; } catch { return CUERPO_DEFAULT; } });
   const [editorCorreoOpen, setEditorCorreoOpen] = useState(false);
+  // Comentario de la semana: texto y color que el analista define y que sale al
+  // pie de TODAS las prefacturas de esa semana. Cada semana parte vacía.
+  const COLORES_COMENT = ["#b45309", "#b91c1c", "#1d4ed8", "#15803d", "#002E5D", "#475569"];
+  const [comentOpen, setComentOpen] = useState(false);
+  const [coment, setComent] = useState({ texto: "", color: "#b45309", por: null, at: null });
+  const [comentBorrador, setComentBorrador] = useState({ texto: "", color: "#b45309" });
+  const [guardandoComent, setGuardandoComent] = useState(false);
+  useEffect(() => {
+    let vivo = true;
+    (async () => {
+      try {
+        const { data } = await sb.from("conciliacion_comentarios_mx")
+          .select("texto, color, actualizado_por, actualizado_at").eq("semana", semana).maybeSingle();
+        if (!vivo) return;
+        const c = data ? { texto: data.texto || "", color: data.color || "#b45309", por: data.actualizado_por, at: data.actualizado_at }
+                       : { texto: "", color: "#b45309", por: null, at: null };
+        setComent(c); setComentBorrador({ texto: c.texto, color: c.color });
+      } catch (e) { console.error("comentario semana:", e); }
+    })();
+    return () => { vivo = false; };
+  }, [semana]);
+  const guardarComent = async (vaciar) => {
+    setGuardandoComent(true);
+    try {
+      const texto = vaciar ? "" : String(comentBorrador.texto || "").trim();
+      const color = comentBorrador.color || "#b45309";
+      const por = (usuario && (usuario.nombre || usuario.email)) || "Brain";
+      if (!texto) {
+        const { error } = await sb.from("conciliacion_comentarios_mx").delete().eq("semana", semana);
+        if (error) throw error;
+        setComent({ texto: "", color, por: null, at: null }); setComentBorrador({ texto: "", color });
+      } else {
+        const ahora = new Date().toISOString();
+        const { error } = await sb.from("conciliacion_comentarios_mx")
+          .upsert({ semana, texto, color, actualizado_por: por, actualizado_at: ahora }, { onConflict: "semana" });
+        if (error) throw error;
+        setComent({ texto, color, por, at: ahora });
+      }
+      setComentOpen(false);
+    } catch (e) { alert("No se pudo guardar el comentario: " + (e.message || e)); }
+    setGuardandoComent(false);
+  };
   useEffect(() => { try { localStorage.setItem("conc_mx_asunto", asuntoLote); } catch {} }, [asuntoLote]);
   useEffect(() => { try { localStorage.setItem("conc_mx_cuerpo", cuerpoLote); } catch {} }, [cuerpoLote]);
   const aplicarVarsCorreo = (txt, empresa, sc, periodo, operacion) => String(txt || "").replace(/\{TRANSPORTISTA\}/g, empresa || "").replace(/\{CECO\}/g, sc || "").replace(/\{PERIODO\}/g, periodo || "").replace(/\{OPERACION\}/g, operacion || "");
@@ -4313,6 +4355,13 @@ function ConciliacionTercerosMX({ usuario }) {
       </tr>`).join("");
     const filasPatente = Object.entries(porPatente).map(([p, v]) => `
       <tr><td>${p}</td><td>${v.entregados}</td><td style="text-align:right">${fmtMon(v.neto)}</td></tr>`).join("");
+    // Comentario de la semana, al pie de la prefactura (solo si el analista lo dejó).
+    const escHtml = (s) => String(s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    const comentHtml = (coment && String(coment.texto || "").trim()) ? `
+      <div style="margin-top:22px;border:1px solid ${coment.color};border-left:5px solid ${coment.color};border-radius:4px;padding:10px 12px;page-break-inside:avoid">
+        <div style="font-size:11px;font-weight:700;color:${coment.color};margin-bottom:4px">COMENTARIOS</div>
+        <div style="font-size:11px;color:${coment.color};line-height:1.5">${escHtml(coment.texto).replace(/\n/g, "<br>")}</div>
+      </div>` : "";
     const obsHtml = noPagos.length ? `
       <div class="obs">
         <div class="obs-title">OBSERVACIONES — RUTAS NO PAGADAS (VISITA &lt; 90%)</div>
@@ -4433,6 +4482,7 @@ function ConciliacionTercerosMX({ usuario }) {
       </table>
     </div>
   </div>
+  ${comentHtml}
   <div class="det-title" style="margin-top:22px">DETALLE DE VIAJES — ${operacion}:</div>
   <table class="det">
     <tr><th>FECHA</th><th>PATENTE</th><th>ID RUTA</th><th>CONDUCTOR</th><th>AUXILIAR</th><th>SECTOR</th><th>CARGADO</th><th>ENTREGADO</th><th>%</th><th>KM PAGO</th><th>FACTOR</th><th>BONIF.</th><th>MONTO</th></tr>
@@ -4872,8 +4922,54 @@ function ConciliacionTercerosMX({ usuario }) {
           <button onClick={() => setSemana(s => s + 1)} style={{ padding: "6px 10px", border: "1px solid #e4e7ec", background: "#fff", borderRadius: 6, cursor: "pointer", fontWeight: 700 }}>›</button>
           <button onClick={refrescarTodo} style={{ marginLeft: 6, padding: "6px 12px", border: "1px solid #002E5D", background: "#fff", color: "#002E5D", borderRadius: 6, cursor: "pointer", fontSize: 12, fontWeight: 700 }}>↻ Refrescar</button>
           <button onClick={() => setEditorCorreoOpen(o => !o)} style={{ padding: "6px 12px", border: "1px solid #002E5D", background: editorCorreoOpen ? "#002E5D" : "#fff", color: editorCorreoOpen ? "#fff" : "#002E5D", borderRadius: 6, cursor: "pointer", fontSize: 12, fontWeight: 700 }}>✉️ Cuerpo del correo</button>
+          <button onClick={() => { setComentBorrador({ texto: coment.texto, color: coment.color }); setComentOpen(o => !o); }}
+            style={{ padding: "6px 12px", border: "1px solid " + (coment.texto ? coment.color : "#002E5D"), background: comentOpen ? "#002E5D" : (coment.texto ? "#fffbeb" : "#fff"), color: comentOpen ? "#fff" : (coment.texto ? coment.color : "#002E5D"), borderRadius: 6, cursor: "pointer", fontSize: 12, fontWeight: 700 }}>
+            💬 Comentarios{coment.texto ? " · activo" : ""}
+          </button>
         </div>
       </div>
+
+      {comentOpen && (
+        <div style={{ border: "1px solid #e4e7ec", background: "#f8fafc", borderRadius: 10, padding: 14, marginBottom: 14 }}>
+          <div style={{ fontSize: 13, fontWeight: 800, color: "#002E5D", marginBottom: 2 }}>💬 Comentarios de la semana {semana}</div>
+          <div style={{ fontSize: 11, color: "#64748b", marginBottom: 10 }}>
+            Sale al pie de TODAS las prefacturas de esta semana, en la sección Comentarios. Cada semana parte vacía; si lo dejas en blanco, no aparece.
+            {coment.por ? ` Último cambio: ${coment.por}.` : ""}
+          </div>
+          <textarea value={comentBorrador.texto} onChange={e => setComentBorrador(b => ({ ...b, texto: e.target.value }))} rows={4}
+            placeholder="Ej.: Esta semana se aplicó el nuevo tarifario desde el 21/09. Cualquier diferencia, infórmala desde el portal."
+            style={{ width: "100%", boxSizing: "border-box", padding: 10, border: "1px solid #cbd5e1", borderRadius: 6, fontSize: 12, fontFamily: "inherit", color: comentBorrador.color, resize: "vertical" }} />
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 11, fontWeight: 700, color: "#475569" }}>Color</span>
+            {COLORES_COMENT.map(c => (
+              <button key={c} onClick={() => setComentBorrador(b => ({ ...b, color: c }))} title={c}
+                style={{ width: 22, height: 22, borderRadius: 11, background: c, cursor: "pointer", border: comentBorrador.color === c ? "3px solid #0f172a" : "2px solid #fff", boxShadow: "0 0 0 1px #cbd5e1" }} />
+            ))}
+            <input type="color" value={comentBorrador.color} onChange={e => setComentBorrador(b => ({ ...b, color: e.target.value }))}
+              style={{ width: 30, height: 24, border: "none", background: "none", cursor: "pointer" }} title="Otro color" />
+            <div style={{ flex: 1 }} />
+            {coment.texto && (
+              <button onClick={() => guardarComent(true)} disabled={guardandoComent}
+                style={{ padding: "6px 12px", border: "1px solid #fecaca", background: "#fff", color: "#b91c1c", borderRadius: 6, cursor: "pointer", fontSize: 12, fontWeight: 700 }}>Quitar comentario</button>
+            )}
+            <button onClick={() => setComentOpen(false)}
+              style={{ padding: "6px 12px", border: "1px solid #cbd5e1", background: "#fff", color: "#475569", borderRadius: 6, cursor: "pointer", fontSize: 12, fontWeight: 700 }}>Cancelar</button>
+            <button onClick={() => guardarComent(false)} disabled={guardandoComent}
+              style={{ padding: "6px 14px", border: "none", background: "#002E5D", color: "#fff", borderRadius: 6, cursor: "pointer", fontSize: 12, fontWeight: 700, opacity: guardandoComent ? 0.6 : 1 }}>
+              {guardandoComent ? "Guardando..." : "Guardar"}
+            </button>
+          </div>
+          {String(comentBorrador.texto || "").trim() && (
+            <div style={{ marginTop: 12 }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: "#94a3b8", marginBottom: 4 }}>ASÍ SE VERÁ EN LA PREFACTURA</div>
+              <div style={{ border: "1px solid " + comentBorrador.color, borderLeft: "5px solid " + comentBorrador.color, borderRadius: 4, padding: "10px 12px", background: "#fff" }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: comentBorrador.color, marginBottom: 4 }}>COMENTARIOS</div>
+                <div style={{ fontSize: 11, color: comentBorrador.color, lineHeight: 1.5, whiteSpace: "pre-wrap" }}>{comentBorrador.texto}</div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {editorCorreoOpen && (
         <div style={{ border: "1px solid #e4e7ec", background: "#f8fafc", borderRadius: 10, padding: 14, marginBottom: 14 }}>
