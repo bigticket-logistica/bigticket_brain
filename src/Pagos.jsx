@@ -8669,6 +8669,8 @@ const badgeAux = (estado) => {
 };
 
 const N8N_WEBHOOK_RERUN_HELPERS = "https://bigticket2026.app.n8n.cloud/webhook/rerun-helpers-mx";
+// Pregunta al VPS si hay un barrido de ayudantes corriendo (no lanza nada).
+const N8N_WEBHOOK_ESTADO_HELPERS = "https://bigticket2026.app.n8n.cloud/webhook/estado-helpers-mx";
 
 // ¿Existe get_entregas_helper_dia en la base? null = sin probar.
 // Con la función, la base agrupa los paquetes y devuelve ~200 filas en vez de
@@ -9022,6 +9024,11 @@ function AyudantesDetalleDia({ usuario }) {
   // El monitor no pregunta "corriste?", mide el resultado: cuenta paquetes.
   const [flujoMonitor, setFlujoMonitor] = useState(null);  // { inicio, baseline, actual, rutas, ultimoCambio, estado }
   const [msgFlujo, setMsgFlujo] = useState("");
+  // ── Barrido en curso en el VPS (bloqueo compartido) ──
+  // El VPS corre un solo barrido a la vez, para cualquier fecha y cualquier
+  // persona. Esto pregunta su estado real, así el botón queda bloqueado para
+  // todos los días mientras haya una recuperación corriendo.
+  const [barridoVps, setBarridoVps] = useState(null);  // { fecha, iniciado } o null
 
   // ── Aprobación de ayudantes (movida desde Consolidaciones Bitácora) ──
   const [maestro, setMaestro] = useState([]);          // vw_maestro_supervisores_auto del día
@@ -9773,22 +9780,64 @@ function AyudantesDetalleDia({ usuario }) {
     return () => { vivo = false; clearInterval(id); };
   }, [flujoMonitor?.estado, flujoMonitor?.fecha]);
 
+  // ── Estado real del barrido en el VPS ──
+  // Devuelve { fecha, iniciado } si hay uno corriendo, null si está libre,
+  // y undefined si no se pudo consultar (en ese caso no se bloquea a ciegas).
+  const consultarBarridoVps = async () => {
+    try {
+      const r = await fetch(N8N_WEBHOOK_ESTADO_HELPERS, { method: "GET" });
+      if (!r.ok) return undefined;
+      const j = await r.json();
+      if (!j || j.ok !== true) return undefined;
+      const v = j.corriendo ? { fecha: j.fecha || null, iniciado: j.iniciado || null } : null;
+      setBarridoVps(v);
+      return v;
+    } catch (e) {
+      console.warn("Estado del barrido:", e.message || e);
+      return undefined;
+    }
+  };
+
+  // Se consulta al abrir la pantalla y al cambiar de día. Mientras hay un
+  // barrido corriendo se vuelve a consultar cada 3 minutos, para liberar el
+  // botón solo cuando termine. Si está libre no se sigue consultando.
+  useEffect(() => { consultarBarridoVps(); }, [fecha]);
+  useEffect(() => {
+    if (!barridoVps) return undefined;
+    const id = setInterval(consultarBarridoVps, 180000);
+    return () => clearInterval(id);
+  }, [barridoVps?.iniciado, barridoVps?.fecha]);
+
+  const textoBarridoVps = () => {
+    if (!barridoVps) return "";
+    const desde = barridoVps.iniciado ? new Date(barridoVps.iniciado) : null;
+    const ok = desde && !isNaN(desde);
+    const hora = ok ? desde.toLocaleTimeString("es-CL", { hour: "2-digit", minute: "2-digit" }) : null;
+    const mins = ok ? Math.max(0, Math.round((Date.now() - desde.getTime()) / 60000)) : null;
+    return `Hay una recuperación de ayudantes corriendo${barridoVps.fecha ? ` para el ${barridoVps.fecha}` : ""}${hora ? `, iniciada a las ${hora} hrs (hace ${mins} min)` : ""}. El servidor hace una sola a la vez: el botón queda bloqueado para todos los días y se libera solo cuando termine.`;
+  };
+
   // ── Disparar flujo n8n: SELECTIVO (solo incompletas) o día completo ──
   const ejecutarFlujo = async () => {
     if (N8N_WEBHOOK_RERUN_HELPERS.includes("REEMPLAZAR")) {
       setMsgFlujo("❌ Falta configurar la URL del webhook n8n (constante N8N_WEBHOOK_RERUN_HELPERS).");
       return;
     }
+    // Antes de preguntar nada: ¿el servidor ya está ocupado con otro día?
+    const enCurso = await consultarBarridoVps();
+    if (enCurso) { setMsgFlujo(""); return; }
     // Rutas a reparar: las marcadas INCOMPLETO o SIN_DETALLE en esta vista
     const rutasReparar = detalleEntregas
       .filter(f => f.estado === "INCOMPLETO" || f.estado === "SIN_DETALLE")
       .map(f => f.id_ruta);
     const esSelectivo = rutasReparar.length > 0;
-    const minutos = esSelectivo ? Math.max(5, Math.round(rutasReparar.length * 2)) : null;
+    // Ritmo medido en el VPS (nov-2026): 4 a 6 segundos por paquete, unos 7 minutos por ruta.
+    const minutos = esSelectivo ? Math.max(7, Math.round(rutasReparar.length * 7)) : null;
+    const duracion = minutos === null ? "" : (minutos < 90 ? `${minutos} min` : `${(minutos / 60).toFixed(1).replace(".", ",")} horas`);
 
     const confirmacion = esSelectivo
-      ? `¿Reparar ${rutasReparar.length} ruta(s) incompleta(s) del ${fecha}?\n\nEl barrido recorrerá SOLO esas rutas (~${minutos} min). Requiere sesión MELI vigente (extensión Don B Sync).`
-      : `No hay rutas incompletas para ${fecha} — todo está al 100%.\n\n¿Ejecutar igualmente el barrido del día COMPLETO? (~45–90 min)`;
+      ? `¿Reparar ${rutasReparar.length} ruta(s) incompleta(s) del ${fecha}?\n\nEl barrido recorrerá SOLO esas rutas (~${duracion}). Mientras corre no se puede lanzar otro. Requiere sesión MELI vigente (extensión Don B Sync).`
+      : `No hay rutas incompletas para ${fecha} — todo está al 100%.\n\n¿Ejecutar igualmente el barrido del día COMPLETO? Puede tardar varias horas (unos 7 minutos por ruta) y mientras corre no se puede lanzar otro.`;
     if (!window.confirm(confirmacion)) return;
 
     setDisparando(true);
@@ -9805,7 +9854,16 @@ function AyudantesDetalleDia({ usuario }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      if (!r.ok) {
+        // n8n responde JSON { estado, mensaje, en_curso } cuando el VPS está ocupado o la sesión venció
+        let cuerpo = null;
+        try { cuerpo = await r.json(); } catch (_) { cuerpo = null; }
+        const err = new Error((cuerpo && cuerpo.mensaje) || `HTTP ${r.status}`);
+        err.estado = (cuerpo && cuerpo.estado) || null;
+        err.enCurso = (cuerpo && cuerpo.en_curso) || null;
+        throw err;
+      }
+      setBarridoVps({ fecha, iniciado: new Date().toISOString() });
       if (baseline !== null) {
         const ahora = Date.now();
         setFlujoMonitor({
@@ -9816,13 +9874,32 @@ function AyudantesDetalleDia({ usuario }) {
         });
       }
       setMsgFlujo(esSelectivo
-        ? `✅ Reparación disparada ${new Date().toLocaleTimeString("es-CL", { hour: "2-digit", minute: "2-digit" })} hrs · ${rutasReparar.length} ruta(s) del ${fecha} (~${minutos} min). Vuelve más tarde y presiona ↻ Refrescar.`
-        : `✅ Barrido del día completo disparado ${new Date().toLocaleTimeString("es-CL", { hour: "2-digit", minute: "2-digit" })} hrs para ${fecha} (~45–90 min). Vuelve más tarde y presiona ↻ Refrescar.`);
+        ? `✅ Reparación disparada ${new Date().toLocaleTimeString("es-CL", { hour: "2-digit", minute: "2-digit" })} hrs · ${rutasReparar.length} ruta(s) del ${fecha} (~${duracion}). Vuelve más tarde y presiona ↻ Refrescar.`
+        : `✅ Barrido del día completo disparado ${new Date().toLocaleTimeString("es-CL", { hour: "2-digit", minute: "2-digit" })} hrs para ${fecha}. Puede tardar varias horas. Vuelve más tarde y presiona ↻ Refrescar.`);
     } catch (e) {
-      setMsgFlujo(`❌ No se pudo disparar el flujo: ${e.message}. Revisa que el workflow webhook esté activo en n8n y que la sesión MELI esté vigente.`);
+      if (e.estado === "ocupado") {
+        // Ya hay un barrido corriendo en el VPS: no es una falla, hay que esperar
+        const c = e.enCurso || {};
+        setBarridoVps({ fecha: c.fecha || null, iniciado: c.iniciado || null });
+        const desde = c.iniciado ? new Date(c.iniciado) : null;
+        const hora = desde && !isNaN(desde) ? desde.toLocaleTimeString("es-CL", { hour: "2-digit", minute: "2-digit" }) : null;
+        const mins = desde && !isNaN(desde) ? Math.max(0, Math.round((Date.now() - desde.getTime()) / 60000)) : null;
+        setMsgFlujo(`⏳ Ya hay un barrido de ayudantes corriendo${c.fecha ? ` para el ${c.fecha}` : ""}${hora ? `, iniciado a las ${hora} hrs (hace ${mins} min)` : ""}. No se lanzó uno nuevo. Espera a que termine y vuelve a intentar.`);
+      } else if (e.estado === "error_sesion") {
+        setMsgFlujo("❌ La sesión MELI está vencida o vacía. Refréscala con la extensión Don B Sync y vuelve a intentar.");
+      } else if (e.estado === "error_vps") {
+        setMsgFlujo(`❌ El servidor del barrido respondió con error: ${e.message}`);
+      } else {
+        setMsgFlujo(`❌ No se pudo disparar el flujo: ${e.message}. Revisa que el workflow webhook esté activo en n8n y que la sesión MELI esté vigente.`);
+      }
     }
     setDisparando(false);
   };
+
+  // El botón se bloquea si este navegador está disparando o monitoreando, o si
+  // el VPS informa un barrido corriendo (de cualquier día o persona).
+  const botonBloqueado = disparando || !!barridoVps
+    || !!(flujoMonitor && (flujoMonitor.estado === "esperando" || flujoMonitor.estado === "corriendo"));
 
   // ── Excel: vista entregas ──
   const descargarExcelEntregas = () => {
@@ -9928,13 +10005,14 @@ function AyudantesDetalleDia({ usuario }) {
               segundo click lanzaba otro barrido que competía por el navegador
               del VPS y mataba a los dos. */}
           <button onClick={ejecutarFlujo}
-            disabled={disparando || (flujoMonitor && (flujoMonitor.estado === "esperando" || flujoMonitor.estado === "corriendo"))}
+            disabled={botonBloqueado}
             style={{ padding: "9px 16px",
-              background: (disparando || (flujoMonitor && (flujoMonitor.estado === "esperando" || flujoMonitor.estado === "corriendo"))) ? "#94a3b8" : "#FF6600",
+              background: botonBloqueado ? "#94a3b8" : "#FF6600",
               border: "none", borderRadius: 6, fontSize: 12, fontWeight: 700, color: "#fff",
-              cursor: (disparando || (flujoMonitor && (flujoMonitor.estado === "esperando" || flujoMonitor.estado === "corriendo"))) ? "not-allowed" : "pointer",
+              cursor: botonBloqueado ? "not-allowed" : "pointer",
               whiteSpace: "nowrap" }}>
             {disparando ? "Disparando..."
+              : barridoVps ? `⏳ Recuperando${barridoVps.fecha ? ` el ${barridoVps.fecha}` : ""}…`
               : (flujoMonitor && flujoMonitor.estado === "esperando") ? "⏳ Esperando que arranque…"
               : (flujoMonitor && flujoMonitor.estado === "corriendo") ? "⏳ Flujo en curso…"
               : (detalleEntregas.some(f => f.estado === "INCOMPLETO" || f.estado === "SIN_DETALLE")
@@ -9942,6 +10020,11 @@ function AyudantesDetalleDia({ usuario }) {
                 : `▶ Ejecutar flujo del ${fecha}`)}
           </button>
         </div>
+        {barridoVps && (
+          <div style={{ marginTop: 10, padding: "8px 10px", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 4, fontSize: 12, color: "#92400e" }}>
+            ⏳ {textoBarridoVps()}
+          </div>
+        )}
         {msgFlujo && (
           <div style={{ marginTop: 10, padding: "8px 10px", background: "#fff", border: "1px solid #e4e7ec", borderRadius: 4, fontSize: 12, color: "#1f2937" }}>
             {msgFlujo}
