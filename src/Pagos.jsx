@@ -4359,7 +4359,7 @@ function ConciliacionTercerosMX({ usuario }) {
     const escHtml = (s) => String(s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     const comentHtml = (coment && String(coment.texto || "").trim()) ? `
       <div style="margin-top:22px;border:1px solid ${coment.color};border-left:5px solid ${coment.color};border-radius:4px;padding:10px 12px;page-break-inside:avoid">
-        <div style="font-size:11px;font-weight:700;color:${coment.color};margin-bottom:4px">COMENTARIOS</div>
+        <div style="font-size:11px;font-weight:700;color:${coment.color};margin-bottom:4px">IMPORTANTE</div>
         <div style="font-size:11px;color:${coment.color};line-height:1.5">${escHtml(coment.texto).replace(/\n/g, "<br>")}</div>
       </div>` : "";
     const obsHtml = noPagos.length ? `
@@ -4933,7 +4933,7 @@ function ConciliacionTercerosMX({ usuario }) {
         <div style={{ border: "1px solid #e4e7ec", background: "#f8fafc", borderRadius: 10, padding: 14, marginBottom: 14 }}>
           <div style={{ fontSize: 13, fontWeight: 800, color: "#002E5D", marginBottom: 2 }}>💬 Comentarios de la semana {semana}</div>
           <div style={{ fontSize: 11, color: "#64748b", marginBottom: 10 }}>
-            Sale al pie de TODAS las prefacturas de esta semana, en la sección Comentarios. Cada semana parte vacía; si lo dejas en blanco, no aparece.
+            Sale al pie de TODAS las prefacturas de esta semana, en la sección Importante. Cada semana parte vacía; si lo dejas en blanco, no aparece.
             {coment.por ? ` Último cambio: ${coment.por}.` : ""}
           </div>
           <textarea value={comentBorrador.texto} onChange={e => setComentBorrador(b => ({ ...b, texto: e.target.value }))} rows={4}
@@ -4963,7 +4963,7 @@ function ConciliacionTercerosMX({ usuario }) {
             <div style={{ marginTop: 12 }}>
               <div style={{ fontSize: 10, fontWeight: 700, color: "#94a3b8", marginBottom: 4 }}>ASÍ SE VERÁ EN LA PREFACTURA</div>
               <div style={{ border: "1px solid " + comentBorrador.color, borderLeft: "5px solid " + comentBorrador.color, borderRadius: 4, padding: "10px 12px", background: "#fff" }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: comentBorrador.color, marginBottom: 4 }}>COMENTARIOS</div>
+                <div style={{ fontSize: 11, fontWeight: 700, color: comentBorrador.color, marginBottom: 4 }}>IMPORTANTE</div>
                 <div style={{ fontSize: 11, color: comentBorrador.color, lineHeight: 1.5, whiteSpace: "pre-wrap" }}>{comentBorrador.texto}</div>
               </div>
             </div>
