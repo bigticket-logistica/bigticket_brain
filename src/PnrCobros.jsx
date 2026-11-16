@@ -550,6 +550,9 @@ function ModuloNoShow({ usuario }) {
   const [filtro, setFiltro] = useState("pendientes");
   const [guardando, setGuardando] = useState(null);
   const [msg, setMsg] = useState(null);
+  // Los que cobras en esta sesión se quedan a la vista (en verde) aunque estés
+  // en "Sin cobrar", para que veas que quedó hecho. Al recargar, pasan a "En el portal".
+  const [recien, setRecien] = useState(() => new Set());
   const semana = semanaBrainHoy();
   const quien = (usuario && (usuario.email || usuario.nombre)) || "brain";
 
@@ -627,6 +630,7 @@ function ModuloNoShow({ usuario }) {
         enPrefTxt = " No se pudo agregar a la prefactura: aplícalo desde Conciliación.";
       }
 
+      setRecien((p) => new Set(p).add(clave(f)));
       setMsg({ ok: true, txt: `No show del ${f.fecha} publicado a ${f.empresa} · ${money(monto)}.${enPrefTxt}` });
       await cargar();
     } catch (e) { setMsg({ ok: false, txt: "No se pudo publicar: " + (e.message || e) }); }
@@ -655,10 +659,10 @@ function ModuloNoShow({ usuario }) {
 
   const visibles = useMemo(() => {
     let fs = filas || [];
-    if (filtro === "pendientes") fs = fs.filter(f => f.cobro_estado !== "enviado");
+    if (filtro === "pendientes") fs = fs.filter(f => f.cobro_estado !== "enviado" || recien.has(clave(f)));
     else if (filtro === "publicados") fs = fs.filter(f => f.cobro_estado === "enviado");
     return fs;
-  }, [filas, filtro]);
+  }, [filas, filtro, recien]);
 
   const totPub = (filas || []).filter(f => f.cobro_estado === "enviado")
     .reduce((t, f) => t + Number(f.monto || 0), 0);
@@ -712,8 +716,10 @@ function ModuloNoShow({ usuario }) {
               {visibles.map(f => {
                 const pub = f.cobro_estado === "enviado";
                 return (
-                  <tr key={clave(f)} style={{ background: pub ? "#fbfdfb" : "#fff" }}>
-                    <td style={{ ...td, color: "#64748b", whiteSpace: "nowrap" }}>{f.fecha}</td>
+                  <tr key={clave(f)} style={{ background: pub ? "#ecfdf3" : "#fff", boxShadow: pub ? "inset 4px 0 0 #16a34a" : "none", transition: "background .3s" }}>
+                    <td style={{ ...td, color: pub ? "#166534" : "#64748b", fontWeight: pub ? 700 : 400, whiteSpace: "nowrap" }}>
+                      {pub && <span title="Cobrado" style={{ marginRight: 6 }}>✓</span>}{f.fecha}
+                    </td>
                     <td style={{ ...td, color: "#64748b" }}>{f.sc}</td>
                     <td style={{ ...td, fontWeight: 600, color: "#002E5D" }}>{f.placa}</td>
                     <td style={{ ...td, color: f.empresa ? "#334155" : "#b45309", fontWeight: f.empresa ? 400 : 600 }}>
@@ -728,7 +734,8 @@ function ModuloNoShow({ usuario }) {
                       {pub ? (
                         <div style={{ display: "flex", flexDirection: "column", gap: 5, alignItems: "flex-end" }}>
                           <div>
-                            <div style={{ fontSize: 9.5, fontWeight: 700, color: "#92400e" }}>✓ en el portal</div>
+                            <div style={{ display: "inline-block", fontSize: 10, fontWeight: 800, color: "#fff", background: "#16a34a", borderRadius: 10, padding: "2px 9px" }}>✓ COBRADO</div>
+                            <div style={{ fontSize: 9.5, fontWeight: 700, color: "#166534", marginTop: 3 }}>en el portal</div>
                             <div style={{ fontSize: 8.5, color: "#94a3b8" }}>diario · carril B</div>
                             <button onClick={() => quitar(f)} disabled={guardando === clave(f)}
                               style={{ marginTop: 3, padding: "3px 10px", fontSize: 9.5, fontWeight: 700, borderRadius: 5,
