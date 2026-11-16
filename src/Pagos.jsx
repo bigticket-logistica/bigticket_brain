@@ -7773,16 +7773,19 @@ function ListadoPagosDiarios({ usuario }) {
     if (pend.length === 0) { alert("No hay nada guardado en tarifado para este día."); return; }
     const rutas = pend.reduce((t, r) => t + (guardadoPorSC[r.sc] || 0), 0);
     const yaPub = pend.filter(r => publicaciones[r.sc]).length;
-    const aviso = yaPub > 0 ? `\n\n${yaPub} centro(s) ya están publicados y se omitirán. Para corregirlos, publicá ese centro por separado.` : "";
+    // El día publica SIEMPRE lo último que quedó guardado en tarifado, también
+    // en los centros ya publicados: cada uno sube de versión. Antes se los
+    // saltaba, y un recálculo posterior nunca llegaba al portal.
+    const aviso = yaPub > 0 ? `\n\n${yaPub} centro(s) ya publicados se actualizan a una versión nueva con lo último guardado.` : "";
     const huerf = sinEmpresaDia.n > 0
       ? `\n\n⚠️ ${sinEmpresaDia.n} ruta(s) por $${Number(sinEmpresaDia.monto).toLocaleString("es-MX")} no tienen empresa en el padrón: nadie las va a ver, y ningún tercero las va a reclamar porque no sabe que existen.`
       : "";
-    if (!confirm(`Aprobar y publicar el día ${fecha}\n\n${rutas} rutas · ${pend.length - yaPub} centro(s)${aviso}${huerf}\n\nLos terceros lo verán en su portal. ¿Continuar?`)) return;
+    if (!confirm(`Aprobar y publicar el día ${fecha}\n\n${rutas} rutas · ${pend.length} centro(s)${aviso}${huerf}\n\nLos terceros lo verán en su portal. ¿Continuar?`)) return;
     setPublicando("__DIA__");
     let ok = 0, fallos = [];
     for (const r of pend) {
-      if (publicaciones[r.sc]) continue;
-      try { await publicarUno(r.sc, null); ok++; }
+      const motivo = publicaciones[r.sc] ? "Actualización del día" : null;
+      try { await publicarUno(r.sc, motivo); ok++; }
       catch (e) { fallos.push(`${r.sc}: ${e.message}`); }
     }
     await cargarPublicaciones();
