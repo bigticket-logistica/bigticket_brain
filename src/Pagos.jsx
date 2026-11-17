@@ -5,7 +5,6 @@ import ModuloCobrosMermas from "./Mermas";
 import CobrosTerceros from "./PnrCobros";
 import Diferencias from "./Diferencias";
 import Comparativa from "./Comparativa";
-import { avisarPortal } from "./avisarPortal";
 import RechazosMeliMX from "./RechazosMeli";
 import Capacidad from "./Capacidad";
 import { FotoLink, NOSAL_CASO, NOSAL_DESDE, NOSAL_MOTIVO, NoSalidasSC, etiquetaNosal } from "./NoSalidas";
@@ -7751,9 +7750,10 @@ function ListadoPagosDiarios({ usuario }) {
       const { count } = await sb.from("tarifado_mx").select("id", { count: "exact", head: true }).eq("fecha", fecha);
       yaGuardado = count || 0;
     } catch (e) { /* tabla puede no existir aún */ }
-    const msg = yaGuardado > 0
-      ? `Este día (${fecha}) ya tiene un guardado previo (${yaGuardado} registros).\n\nSe reemplazará por el cálculo actual (${pagos.length} viajes). ¿Continuar?`
-      : `Se guardarán ${pagos.length} viajes tarificados del ${fecha} en tarifado_mx. ¿Continuar?`;
+    const msg = (yaGuardado > 0
+      ? `Este día (${fecha}) ya tiene un guardado previo (${yaGuardado} registros).\n\nSe reemplazará por el cálculo actual (${pagos.length} viajes).`
+      : `Se guardarán ${pagos.length} viajes tarificados del ${fecha}.`)
+      + `\n\nGuardar también PUBLICA: los terceros verán estos montos en su portal de inmediato. ¿Continuar?`;
     if (!confirm(msg)) return;
     setGuardandoTarifado(true);
     try {
@@ -7781,7 +7781,18 @@ function ListadoPagosDiarios({ usuario }) {
         ok += chunk.length;
       }
       if (primerError) throw new Error(primerError);
-      alert(`Guardado en tarifado_mx: ${ok} viajes del ${fecha}. Reemplaza el guardado anterior (consolidado vigente del día).`);
+      // Guardar publica: el portal queda con este guardado, sin paso aparte.
+      let resumenPub = "";
+      try {
+        const r = await publicarAutomatico();
+        resumenPub = `\n\nPortal actualizado: ${r.publicados} centro(s) con cambios publicados`
+          + (r.sinCambio ? `, ${r.sinCambio} sin cambios` : "") + "."
+          + (r.sinEmpresa ? `\n\n⚠️ ${r.sinEmpresa} ruta(s) por $${Number(r.montoSinEmpresa).toLocaleString("es-MX")} sin empresa: nadie las ve hasta que el supervisor asigne la placa en la Bitácora. Cuando lo haga, aparecen solas.` : "")
+          + (r.fallos.length ? `\n\nNo se pudo publicar:\n${r.fallos.join("\n")}` : "");
+      } catch (e) {
+        resumenPub = `\n\n⚠️ El día quedó guardado, pero NO se pudo publicar en el portal: ${e.message}\nUsa "Aprobar y publicar el día" para reintentarlo.`;
+      }
+      alert(`Guardado: ${ok} viajes del ${fecha}.${resumenPub}`);
     } catch (e) {
       console.error(e);
       alert("Error guardando en tarifado_mx:\n\n" + e.message);
@@ -7894,20 +7905,65 @@ function ListadoPagosDiarios({ usuario }) {
       // aquí mismo, la función no llegaba a correr y el aviso al portal se perdía.
       await sb.rpc("fn_portal_refrescar_maestro")
         .then(({ error }) => { if (error) console.error("Refresco del maestro:", error.message); });
-      avisarPortal("publicacion", { fecha, centros: ok });
+      // Sin aviso al tercero: publicar pagos ya no notifica (decisión 17-nov-2026).
+      // Los avisos quedan solo para lo que nace en Cobros.
     }
     alert(fallos.length
       ? `Publicados ${ok} centro(s).\n\nNo se pudo publicar:\n${fallos.join("\n")}`
       : `Publicados ${ok} centro(s) del ${fecha}.`);
   };
 
+  // ── Guardar publica ──
+  // Decisión del 17-nov-2026: cada guardado del día queda publicado en el portal,
+  // sin botón aparte. Se compara lo recién guardado contra lo que el tercero ve
+  // hoy y se publica una versión nueva SOLO en los centros donde algo cambió
+  // (monto, empresa, auxiliar, NS o rutas). Así un día recalculado cinco veces
+  // no deja cinco versiones vacías. No envía aviso al tercero: revisar sus
+  // movimientos es responsabilidad suya.
+  const publicarAutomatico = async () => {
+    const num = (v) => Math.round(Number(v || 0) * 100) / 100;
+    const firma = (r) => [r.tercero_id || "", r.placa || "", r.driver_name || "", num(r.ns_pct), num(r.pct_visitado),
+      r.ns_categoria || "", r.tiene_auxiliar ? 1 : 0, num(r.monto_auxiliar), num(r.pago_neto)].join("|");
+    const [tarR, linR, pubR] = await Promise.all([
+      sb.from("tarifado_mx").select("service_center_id, id_ruta, tercero_id, placa, driver_name, ns_pct, pct_visitado, ns_categoria, tiene_auxiliar, monto_auxiliar, pago_neto").eq("fecha", fecha),
+      sb.from("vw_publicacion_lineas_vigente").select("service_center, id_ruta, tercero_id, placa, driver_name, ns_pct, pct_visitado, ns_categoria, tiene_auxiliar, monto_auxiliar, pago_neto").eq("fecha", fecha),
+      sb.from("vw_publicacion_vigente_mx").select("service_center, version").eq("fecha", fecha),
+    ]);
+    if (tarR.error) throw new Error("no se pudo leer el tarifado guardado: " + tarR.error.message);
+    const porSC = {};
+    for (const r of (tarR.data || [])) (porSC[r.service_center_id] = porSC[r.service_center_id] || []).push(r);
+    const vista = {};
+    for (const l of (linR.data || [])) vista[String(l.id_ruta)] = firma(l);
+    const versionDe = {};
+    for (const v of (pubR.data || [])) versionDe[v.service_center] = Number(v.version || 0);
+
+    let publicados = 0, sinCambio = 0; const fallos = [];
+    for (const sc of Object.keys(porSC).sort()) {
+      const filas = porSC[sc];
+      const cambio = !versionDe[sc] || filas.some(r => vista[String(r.id_ruta)] !== firma(r));
+      if (!cambio) { sinCambio++; continue; }
+      try {
+        await publicarUno(sc, versionDe[sc] ? "Guardado del día" : null, null, (versionDe[sc] || 0) + 1);
+        publicados++;
+      } catch (e) { fallos.push(`${sc}: ${e.message}`); }
+    }
+    const sinEmpresa = (tarR.data || []).filter(r => !r.tercero_id);
+    await cargarPublicaciones();
+    if (publicados > 0) {
+      await sb.rpc("fn_portal_refrescar_maestro")
+        .then(({ error }) => { if (error) console.error("Refresco del maestro:", error.message); });
+    }
+    return { publicados, sinCambio, fallos, sinEmpresa: sinEmpresa.length,
+             montoSinEmpresa: sinEmpresa.reduce((s, r) => s + Number(r.pago_neto || 0), 0) };
+  };
+
   // Escribe la publicación de un SC y la FOTO de cada ruta. La foto es lo que
   // ve el tercero: sin ella, cualquier recálculo posterior le cambia el número
   // en pantalla sin que nadie lo haya decidido.
   // soloRutas: si viene, republica únicamente esas (las demás conservan su foto).
-  const publicarUno = async (sc, motivo, soloRutas = null) => {
+  const publicarUno = async (sc, motivo, soloRutas = null, versionForzada = null) => {
     const vig = publicaciones[sc];
-    const version = vig ? vig.version + 1 : 1;
+    const version = versionForzada != null ? versionForzada : (vig ? vig.version + 1 : 1);
     const { data: guardado, error: eG } = await sb.from("tarifado_mx")
       .select("*").eq("fecha", fecha).eq("service_center_id", sc);
     if (eG) throw new Error("no se pudo leer el tarifado guardado");
@@ -7976,7 +8032,7 @@ function ListadoPagosDiarios({ usuario }) {
       // aquí mismo, la función no llegaba a correr y el aviso al portal se perdía.
       await sb.rpc("fn_portal_refrescar_maestro")
         .then(({ error }) => { if (error) console.error("Refresco del maestro:", error.message); });
-      avisarPortal("publicacion", { fecha, sc });
+      // Sin aviso al tercero: publicar pagos ya no notifica (decisión 17-nov-2026).
     }
     catch (e) { alert("No se pudo publicar:\n\n" + e.message); }
     setPublicando(null);
