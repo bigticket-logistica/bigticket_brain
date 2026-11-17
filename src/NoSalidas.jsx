@@ -64,6 +64,25 @@ function NoSalidasSC({ filas = [], fechaRuta, noAplica = false, abiertoInicial =
   );
   // Contraída por defecto: se ve el resumen (rutas y sin responder) y se abre con el botón
   const [abierto, setAbierto] = useState(abiertoInicial);
+  // Biggy (opinión sobre la prueba) y correo enviado, por ruta: vienen de vw_nosal_consolidado
+  const [extra, setExtra] = useState({});
+  const ids = filas.filter((f) => f.motivo === "no_show" || f.motivo === "cancelacion").map((f) => String(f.travel_id));
+  const clave = ids.join(",");
+  useEffect(() => {
+    if (!abierto || !ids.length) return;
+    let cancel = false;
+    sb.from("vw_nosal_consolidado")
+      .select("travel_id, fecha, sc, biggy_veredicto, biggy_detalle, justificacion_prueba, biggy_codigo, correo_estado, correo_enviado_at, correo_detalle")
+      .in("travel_id", ids)
+      .then(({ data }) => {
+        if (cancel) return;
+        const m = {};
+        for (const x of data || []) m[String(x.travel_id)] = x;
+        setExtra(m);
+      });
+    return () => { cancel = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [abierto, clave]);
   const resp = filas.filter((f) => f.guardado_at).length;
   const pend = filas.length - resp;
   const fh = (v) => (v ? new Date(v).toLocaleString("es-MX", { timeZone: "America/Mexico_City", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : "");
@@ -90,7 +109,7 @@ function NoSalidasSC({ filas = [], fechaRuta, noAplica = false, abiertoInicial =
         <div style={{ marginTop: 8, overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11.5 }}>
             <thead><tr style={{ background: "#f8fafc", color: "#64748b", textAlign: "left" }}>
-              {["Placa / chofer", "Caso", "Qué pasó", "Tipo", "Vehículo", "Empresa", "Motivo / comentario", "Pruebas", "Respondió"].map((h) => (
+              {["Placa / chofer", "Caso", "Qué pasó", "Tipo", "Vehículo", "Empresa", "Motivo / comentario", "Pruebas", "Biggy", "Correo", "Respondió"].map((h) => (
                 <th key={h} style={{ padding: "6px 8px", fontWeight: 600, whiteSpace: "nowrap" }}>{h}</th>
               ))}
             </tr></thead>
@@ -120,6 +139,26 @@ function NoSalidasSC({ filas = [], fechaRuta, noAplica = false, abiertoInicial =
                     {(Array.isArray(f.adjuntos) ? f.adjuntos : []).map((a, i) => <FotoLink key={i} path={typeof a === "string" ? a : a?.path} />)}
                     {!(Array.isArray(f.adjuntos) && f.adjuntos.length) && <span style={{ color: "#9ca3af" }}>—</span>}
                   </td>
+                  {(() => {
+                    const x = extra[String(f.travel_id)];
+                    const aplica = f.motivo === "no_show" || f.motivo === "cancelacion";
+                    const bg = { sirve: ["✓ sirve", "#166534", "#dcfce7"], no_sirve: ["⚠ no sirve", "#9a3412", "#ffedd5"], sin_revision: ["sin revisión", "#64748b", "#f1f5f9"] }[x?.biggy_veredicto];
+                    const co = { enviado: ["✓ enviado", "#166534"], error: ["✕ error", "#b91c1c"], en_cola: ["en cola", "#64748b"], apagado: ["apagado", "#64748b"] }[x?.correo_estado];
+                    const chip = (t, c, b) => <span style={{ fontSize: 10.5, fontWeight: 700, color: c, background: b || "transparent", borderRadius: 4, padding: b ? "1px 6px" : 0, whiteSpace: "nowrap" }}>{t}</span>;
+                    return (<>
+                      <td style={{ padding: "6px 8px", minWidth: 170 }}>
+                        {!aplica ? <span style={{ color: "#9ca3af" }}>—</span> : bg ? chip(bg[0], bg[1], bg[2]) : <span style={{ color: "#9ca3af" }} title="Guardado antes de que Biggy revisara las pruebas">sin revisión</span>}
+                        {x?.biggy_detalle?.resumen && <div style={{ color: "#6b7280", marginTop: 3 }}>{x.biggy_detalle.resumen}</div>}
+                        {x?.justificacion_prueba && <div style={{ color: "#9a3412", marginTop: 3 }}>Supervisor: {x.justificacion_prueba}</div>}
+                        {x?.biggy_codigo && <div style={{ color: "#64748b", marginTop: 3 }}>Timemark: <b>{x.biggy_codigo}</b></div>}
+                      </td>
+                      <td style={{ padding: "6px 8px", whiteSpace: "nowrap" }}>
+                        {!aplica ? <span style={{ color: "#9ca3af" }}>—</span> : co ? chip(co[0], co[1]) : <span style={{ color: "#9ca3af" }} title="Guardado antes de activar los correos">sin correo</span>}
+                        {x?.correo_enviado_at && <div style={{ color: "#94a3b8", fontSize: 10 }}>{fh(x.correo_enviado_at)}</div>}
+                        {x?.correo_estado === "error" && x.correo_detalle && <div style={{ color: "#b91c1c", fontSize: 10, maxWidth: 180, whiteSpace: "normal" }}>{x.correo_detalle}</div>}
+                      </td>
+                    </>);
+                  })()}
                   <td style={{ padding: "6px 8px", color: "#6b7280", whiteSpace: "nowrap" }}>{f.guardado_por || "—"}<div style={{ fontSize: 10 }}>{fh(f.guardado_at)}</div></td>
                 </tr>
               ))}
