@@ -9,6 +9,7 @@ import { avisarPortal } from "./avisarPortal";
 import RechazosMeliMX from "./RechazosMeli";
 import Capacidad from "./Capacidad";
 import { FotoLink, NOSAL_CASO, NOSAL_DESDE, NOSAL_MOTIVO, NoSalidasSC, etiquetaNosal } from "./NoSalidas";
+import NoSalidasRango from "./NoSalidasRango";
 
 function BotonDescargarExcel({ onClick, disabled, label = "Descargar Excel" }) {
   return (
@@ -2121,6 +2122,9 @@ function PanelControlSupervisores() {
           <strong>{totales.completaronHoy}/{totales.total}</strong> completaron Hoy
         </div>
       </div>
+
+      {/* Cancelaciones y No Show de todos los SC en un rango (desde el 6-nov) */}
+      <NoSalidasRango />
 
       {/* Tarjetas de SC con semáforo — tocar una muestra solo ese SC */}
       {!loading && tarjetasSC.length > 0 && (
