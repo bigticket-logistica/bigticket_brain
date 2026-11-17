@@ -2050,7 +2050,7 @@ function PanelControlSupervisores() {
 
                           {/* ─── 3 · No Salidas a Ruta (rutas del día anterior) ─── */}
                           {(filtroEvento === "todos" || filtroEvento === "bitacora") && (
-                            <NoSalidasSC filas={ns} fechaRuta={fechaAyer} noAplica={fecha < NOSAL_DESDE} />
+                            <NoSalidasSC filas={ns} fechaRuta={fechaAyer} noAplica={fecha < NOSAL_DESDE} abiertoInicial />
                           )}
 
                           {/* ─── 6 · Confirmación de Terceros (independiente del formulario) ─── */}

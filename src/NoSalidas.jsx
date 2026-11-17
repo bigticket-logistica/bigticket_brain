@@ -102,6 +102,7 @@ function NoSalidasSC({ filas = [], fechaRuta, noAplica = false, abiertoInicial =
         {filas.length > 0 && pend === 0 && <span style={{ fontSize: 10.5, fontWeight: 700, color: "#166534", background: "#dcfce7", borderRadius: 4, padding: "1px 7px" }}>{resp} de {filas.length} respondidas</span>}
         {pend > 0 && resp > 0 && <span style={{ fontSize: 10.5, fontWeight: 600, color: "#64748b" }}>{resp} respondidas</span>}
         <span style={{ fontSize: 10, fontWeight: 500, color: "#9ca3af" }}>las responde el supervisor en su bitácora</span>
+        {filas.length > 0 && <span style={{ fontSize: 11, fontWeight: 600, color: "#1e3a5f", textDecoration: "underline", textUnderlineOffset: 3 }}>{abierto ? "Ocultar detalle ▴" : "Ver detalle ▾"}</span>}
       </button>
       {abierto && (filas.length === 0 ? (
         <div style={{ fontSize: 12, color: "#6b7280", marginTop: 8 }}>Ese día no hubo rutas sin salir en este SC.</div>
