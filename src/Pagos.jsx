@@ -2773,6 +2773,8 @@ function ConciliacionTercerosMX({ usuario }) {
   const [traslado, setTraslado] = useState(null);              // { empresa, sc, linea, destino } — traslado manual de UN viaje
   const [trasladando, setTrasladando] = useState(false);
   const [sincronizando, setSincronizando] = useState(null);   // clave empresa||sc en resync con motor
+  const [desfaseEnviadas, setDesfaseEnviadas] = useState({}); // clave -> qué cambió en el motor tras el envío
+  const ultimaRevisionEnviadas = useRef("");                  // evita repetir la revisión si nada cambió
   const [buscarEmp, setBuscarEmp] = useState("");             // filtro por nombre de empresa
   const [syncTodo, setSyncTodo] = useState(null);             // { total, hechas, actual } mientras corre el sync masivo
   const [syncResult, setSyncResult] = useState({});           // clave empresa||sc -> { ok, cambios, altas, error }
@@ -2891,6 +2893,32 @@ function ConciliacionTercerosMX({ usuario }) {
         }
         setAjustesEmp(mapE); setAjustesSC(mapS);
         if (extra.length) setResumen([...base, ...extra]);
+        // Prefacturas ENVIADAS: ¿el motor cambió después del envío?
+        // Filtro barato con lo que ya está cargado: se compara lo que el motor
+        // suma hoy para esa empresa y SC contra lo que suman las líneas de motor
+        // guardadas. Solo las que difieren pasan a la revisión exacta, y solo
+        // si su situación cambió desde la última vez que se revisaron.
+        try {
+          const vivoPor = {};
+          for (const r of base) vivoPor[`${norm(r.empresa)}||${norm(r.service_center)}`] = Number(r.total_neto || 0);
+          const sospechosas = []; const firmas = {};
+          for (const c of (concs || [])) {
+            if (c.estado !== "enviada" || c.empresa_nombre === SIN_EMPRESA) continue;
+            const k = `${norm(c.empresa_nombre)}||${norm(c.service_center)}`;
+            const det = Array.isArray(c.detalle) ? c.detalle : [];
+            const guardadoMotor = det.filter(d => d && !d._saldo && !d.traspaso && String(d.origen || "motor") === "motor")
+              .reduce((s, d) => s + Number(d.monto || 0), 0);
+            const vivo = vivoPor[k] != null ? vivoPor[k] : 0;
+            if (Math.abs(vivo - guardadoMotor) < 0.01) continue;
+            firmas[claveCierre(c.empresa_nombre, c.service_center)] = `${vivo.toFixed(2)}|${guardadoMotor.toFixed(2)}`;
+            sospechosas.push({ empresa: c.empresa_nombre, service_center: c.service_center, estado_conciliacion: "enviada" });
+          }
+          const firmaSemana = `${sem}#` + Object.keys(firmas).sort().map(k => `${k}=${firmas[k]}`).join(";");
+          if (firmaSemana !== ultimaRevisionEnviadas.current) {
+            ultimaRevisionEnviadas.current = firmaSemana;
+            revisarEnviadas(sospechosas);   // en segundo plano: no frena la pantalla
+          }
+        } catch (eRev) { console.error("revisión de enviadas:", eRev); }
       } catch (er) {
         // Si el enriquecido falla, se muestra el resumen del motor igual: perder
         // el conteo de ajustes es molesto, quedarse con la pantalla en blanco no.
@@ -3454,13 +3482,25 @@ function ConciliacionTercerosMX({ usuario }) {
   };
 
   // ── Cerrar / reabrir conciliación por empresa+SC ──
-  const cerrarConciliacion = async (empresa, sc, rSC, filasSC) => {
+  const cerrarConciliacion = async (empresa, sc, rSC, filasPantalla) => {
+    // El motor manda: antes de cerrar, la prefactura toma sola el último guardado.
+    let filasSC = filasPantalla;
+    let avisoAlDia = "";
+    try {
+      const pd = await ponerAlDia(empresa, sc);
+      if (!pd.ok) { setMsg({ ok: false, txt: `No se pudo comparar ${empresa} · ${sc} con el motor antes de cerrar: ${pd.error}. No se cerró.` }); return; }
+      if (pd.cambio) {
+        const rr = await leerFilasSC(empresa, sc);
+        filasSC = rr.filas;
+        avisoAlDia = `\n\n🔄 Se puso al día con el motor antes de cerrar: ${pd.cambios} monto(s) actualizados y ${pd.altas} viaje(s) agregados. Los totales de abajo ya lo incluyen.`;
+      }
+    } catch (e) { setMsg({ ok: false, txt: `No se pudo comparar ${empresa} · ${sc} con el motor antes de cerrar: ${e.message || e}. No se cerró.` }); return; }
     if (!filasSC || !filasSC.length) return alert("Sin viajes para cerrar en " + sc + ".");
     const filasFull = filasConSaldoLine(empresa, sc, filasSC);
     const tot = recalcSC(filasFull, cobrosDe(empresa, sc));
     tot.saldoPrevio = saldoPrevioDe(empresa, sc);
     tot.netoViajes = Math.round(filasFull.filter(d => !d._saldo).reduce((s, d) => s + Number(d.monto || 0), 0) * 100) / 100;
-    if (!confirm(`¿Cerrar la conciliación de "${empresa}" — ${sc} — semana ${semana} (${etiquetaSemanaInventario(semana)})?\n\nNeto: ${fmtMon(tot.neto)} · Bruto: ${fmtMon(tot.bruto)} · Cobros: ${fmtMon(tot.cobros)} · Líquido: ${fmtMon(tot.liquido)} · ${tot.nViajes} viajes (${tot.nNoPago} no pago).\n\nEl detalle queda congelado para el PDF y el envío.`)) return;
+    if (!confirm(`¿Cerrar la conciliación de "${empresa}" — ${sc} — semana ${semana} (${etiquetaSemanaInventario(semana)})?\n\nNeto: ${fmtMon(tot.neto)} · Bruto: ${fmtMon(tot.bruto)} · Cobros: ${fmtMon(tot.cobros)} · Líquido: ${fmtMon(tot.liquido)} · ${tot.nViajes} viajes (${tot.nNoPago} no pago).${avisoAlDia}\n\nEl detalle queda congelado para el PDF y el envío.`)) return;
     setCerrando(claveCierre(empresa, sc));
     try {
       const lunes = rangoSemanaInventario(semana).inicio.toISOString().slice(0, 10);
@@ -3805,11 +3845,14 @@ function ConciliacionTercerosMX({ usuario }) {
   // líneas editadas a mano (✏️), manuales, importadas, traspasadas, eliminadas y saldos no se tocan.
   // opts.silencioso = true: sin confirm ni setMsg (lo usa "Sincronizar todo").
   //   Devuelve { ok, cambios, altas } o { ok:false, error } para que el lote informe por empresa.
+  // opts.soloRevisar = true: calcula la diferencia contra el motor y la devuelve
+  //   SIN escribir nada. Sirve también para prefacturas ya enviadas.
   const sincronizarConMotor = async (empresa, sc, opts = {}) => {
-    const silencioso = !!opts.silencioso;
+    const soloRevisar = !!opts.soloRevisar;
+    const silencioso = !!opts.silencioso || soloRevisar;
     const clave = claveCierre(empresa, sc);
     if (sincronizando && !silencioso) return;
-    setSincronizando(clave);
+    if (!soloRevisar) setSincronizando(clave);
     try {
       // 1) motor vigente para esta empresa+SC
       const { data: mot, error } = await sb.rpc("get_conciliacion_terceros_detalle", { p_semana: semana, p_empresa: empresa, p_sc: sc });
@@ -3818,7 +3861,7 @@ function ConciliacionTercerosMX({ usuario }) {
       const motorPorId = {}; for (const d of motor) motorPorId[lineaId(d)] = d;
       // 2) detalle congelado
       const { filas, estado } = await leerFilasSC(empresa, sc);
-      if (estado === "enviada") throw new Error("la prefactura ya fue enviada; reabrila antes de sincronizar");
+      if (estado === "enviada" && !soloRevisar) throw new Error("la prefactura ya fue enviada; reábrela antes de sincronizar");
       // 3) exclusiones: líneas eliminadas o traspasadas a otra empresa (decisiones del analista)
       const { data: ajs } = await sb.from("conciliacion_terceros_ajustes").select("accion, linea")
         .eq("empresa_nombre", empresa).eq("service_center", sc).eq("semana", semana).in("accion", ["eliminar", "traspaso_salida"]);
@@ -3842,6 +3885,19 @@ function ConciliacionTercerosMX({ usuario }) {
       });
       const yaNoEnMotor = filas.filter(d => !d._saldo && !d.traspaso && String(d.origen || "motor") === "motor" && !motorPorId[lineaId(d)]);
       const altas = motor.filter(d => !idsGuardadas.has(lineaId(d)) && !excluidas.has(lineaId(d)));
+      if (soloRevisar) {
+        // Solo informar: qué cambió en el motor respecto de lo guardado.
+        const dCamb = Math.round(cambios.reduce((s, c) => s + (c.despues - c.antes), 0) * 100) / 100;
+        const dAlt = Math.round(altas.reduce((s, d) => s + Number(d.monto || 0), 0) * 100) / 100;
+        return {
+          ok: true, revisado: true, cambios: cambios.length, altas: altas.length,
+          delta: Math.round((dCamb + dAlt) * 100) / 100,
+          lineas: [
+            ...cambios.map(c => `Ruta ${c.linea.id_ruta || "—"} · ${fmtFechaDDMM(c.linea.fecha)}: ${fmtMon(c.antes)} → ${fmtMon(c.despues)}`),
+            ...altas.map(d => `Ruta ${d.id_ruta || "—"} · ${fmtFechaDDMM(d.fecha)}: viaje que no estaba (${fmtMon(d.monto)})`),
+          ],
+        };
+      }
       if (!cambios.length && !altas.length) {
         if (!silencioso) setMsg({ ok: true, txt: `${empresa} · ${sc} ya está al día con el motor.${respetadasEdit.length ? ` (${respetadasEdit.length} línea(s) editadas a mano se respetan.)` : ""}` });
         setSincronizando(null);
@@ -3944,9 +4000,57 @@ function ConciliacionTercerosMX({ usuario }) {
     } catch (e) {
       console.error("sincronizar con motor:", e);
       if (!silencioso) setMsg({ ok: false, txt: "Error sincronizando: " + (e.message || e) });
-      setSincronizando(null);
+      if (!soloRevisar) setSincronizando(null);
       return { ok: false, error: e.message || String(e) };
     }
+  };
+
+  // ── El motor manda: puesta al día automática ──
+  // Decisión del 17-nov-2026: el analista ya no sincroniza a mano. Antes de
+  // CERRAR o de ENVIAR, una prefactura que ya quedó congelada (porque se le
+  // agregó algo manual) toma sola el último guardado del motor. Lo manual, lo
+  // editado, lo eliminado y los saldos no se tocan: es la misma lógica del botón.
+  // Una prefactura sin congelar no necesita nada: lee el motor en vivo.
+  // Una ENVIADA no se toca: se marca en pantalla y decide el analista.
+  // Devuelve { ok, cambio, cambios, altas, estadoPrevio } o { ok:false, error }.
+  const ponerAlDia = async (empresa, sc) => {
+    const { data: row, error } = await sb.from("conciliaciones_terceros").select("estado, detalle")
+      .eq("empresa_nombre", empresa).eq("service_center", sc).eq("semana", semana).maybeSingle();
+    if (error) return { ok: false, error: error.message };
+    if (!row || !Array.isArray(row.detalle) || !row.detalle.length) return { ok: true, cambio: false };
+    if (row.estado === "enviada") return { ok: true, cambio: false, enviada: true };
+    const r = await sincronizarConMotor(empresa, sc, { silencioso: true });
+    if (!r || !r.ok) return { ok: false, error: (r && r.error) || "no se pudo comparar con el motor" };
+    return { ok: true, cambio: !!(r.cambios || r.altas), cambios: r.cambios || 0, altas: r.altas || 0, estadoPrevio: row.estado };
+  };
+
+  // Para los envíos en lote: deja la prefactura al día con el motor y, si eso
+  // la movió, la vuelve a cerrar y devuelve el detalle nuevo para enviar ESE.
+  // retenida = quedó con saldo negativo al recerrar, así que no debe salir.
+  const alDiaParaEnviar = async (empresa, sc) => {
+    const pd = await ponerAlDia(empresa, sc);
+    if (!pd.ok) throw new Error("no se pudo comparar con el motor antes de enviar: " + pd.error);
+    if (!pd.cambio) return { actualizada: false };
+    const rc = await cerrarUno(empresa, sc);
+    const { data: row } = await sb.from("conciliaciones_terceros").select("detalle, total_cobros, estado, liquido_pago")
+      .eq("empresa_nombre", empresa).eq("service_center", sc).eq("semana", semana).maybeSingle();
+    const retenida = !!(rc && rc.negativo) || !row || row.estado !== "cerrada" || Number(row.liquido_pago || 0) < 0;
+    return { actualizada: true, retenida, detalle: row && Array.isArray(row.detalle) ? row.detalle : null, cobros: row ? Number(row.total_cobros || 0) : null };
+  };
+
+  // Revisa las prefacturas ENVIADAS de la semana: si el motor cambió después del
+  // envío (alguien recalculó y guardó un día), queda marcado con el detalle para
+  // que el analista decida si reabre y reenvía. No escribe nada.
+  const revisarEnviadas = async (filas) => {
+    const objetivo = (filas || []).filter(r => r.estado_conciliacion === "enviada" && r.empresa && r.empresa !== SIN_EMPRESA);
+    const res = {};
+    for (const r of objetivo) {
+      try {
+        const d = await sincronizarConMotor(r.empresa, r.service_center, { soloRevisar: true });
+        if (d && d.ok && (d.cambios || d.altas)) res[claveCierre(r.empresa, r.service_center)] = { ...d, empresa: r.empresa, sc: r.service_center };
+      } catch (e) { console.error("revisar enviada:", r.empresa, r.service_center, e); }
+    }
+    setDesfaseEnviadas(res);
   };
 
   // ── Sincronizar TODAS las prefacturas sincronizables de la semana ──
@@ -4596,6 +4700,18 @@ function ConciliacionTercerosMX({ usuario }) {
     if (!m.to.trim()) return alert("Falta el correo destino (To).");
     const clave = claveCierre(m.empresa, m.sc); setEnviando(clave);
     try {
+      // El motor manda: si cambió desde que se cerró, se pone al día y se vuelve
+      // a cerrar. No se envía a ciegas un total que el analista no ha visto.
+      const pd = await ponerAlDia(m.empresa, m.sc);
+      if (!pd.ok) throw new Error("no se pudo comparar con el motor antes de enviar: " + pd.error);
+      if (pd.cambio) {
+        if (pd.estadoPrevio === "cerrada") await cerrarUno(m.empresa, m.sc);
+        setModalEnvio(null);
+        await cargarResumen(semana);
+        setEnviando(null);
+        alert(`${m.empresa} · ${m.sc} NO se envió todavía.\n\nEl motor había cambiado desde el cierre: ${pd.cambios} monto(s) actualizados y ${pd.altas} viaje(s) agregados. La prefactura ya quedó al día${pd.estadoPrevio === "cerrada" ? " y cerrada de nuevo" : ""}.\n\nRevisa el total nuevo y vuelve a presionar Enviar.`);
+        return;
+      }
       await enviarUno(m.empresa, m.sc, m.filasSC, m.rSC, { to: m.to, cc: m.cc, asunto: m.asunto, cuerpo: m.cuerpo });
       setModalEnvio(null);
       setMsg({ ok: true, txt: `Prefactura enviada: ${m.empresa} · ${m.sc} → ${m.to}` });
@@ -4623,17 +4739,26 @@ function ConciliacionTercerosMX({ usuario }) {
     if (!confirm(`¿Enviar ${items.length} prefactura(s)?\n\n${txt}`)) return;
     setEnviando("__lote__");
     let ok = 0, fail = 0; const errores = [];
+    let alDia = 0;
     for (const it of items) {
       if (!it.to) { fail++; errores.push(`${it.empresa}·${it.sc}: sin correo`); continue; }
       if (!it.detalle.length) { fail++; errores.push(`${it.empresa}·${it.sc}: sin detalle congelado`); continue; }
-      try { await enviarUno(it.empresa, it.sc, it.detalle, null, { cobros: it.cobros }); ok++; }
+      try {
+        const fresca = await alDiaParaEnviar(it.empresa, it.sc);
+        if (fresca.actualizada) alDia++;
+        if (fresca.retenida) { fail++; errores.push(`${it.empresa}·${it.sc}: quedó con saldo negativo tras ponerse al día, no se envía`); continue; }
+        await enviarUno(it.empresa, it.sc, fresca.detalle || it.detalle, null, { cobros: fresca.cobros != null ? fresca.cobros : it.cobros }); ok++;
+      }
       catch (e) { fail++; errores.push(`${it.empresa}·${it.sc}: ${e.message || e}`); }
     }
     setEnviando(null); setSeleccion(new Set()); await cargarResumen(semana);
-    setMsg({ ok: fail === 0, txt: `Envío masivo: ${ok} enviada(s), ${fail} con error.` + (errores.length ? " — " + errores.join(" | ") : "") });
+    setMsg({ ok: fail === 0, txt: `Envío masivo: ${ok} enviada(s), ${fail} con error.` + (alDia ? ` ${alDia} se pusieron al día con el motor antes de salir.` : "") + (errores.length ? " — " + errores.join(" | ") : "") });
   };
   // ── Cierre / envío MASIVO (toda la semana) ──
   const cerrarUno = async (empresa, sc) => {
+    // El motor manda: antes de cerrar, toma sola el último guardado.
+    const pd = await ponerAlDia(empresa, sc);
+    if (!pd.ok) throw new Error("no se pudo comparar con el motor: " + pd.error);
     let filas = null, cobros = 0;
     const { data: row } = await sb.from("conciliaciones_terceros").select("*").eq("empresa_nombre", empresa).eq("service_center", sc).eq("semana", semana).maybeSingle();
     if (row && Array.isArray(row.detalle) && row.detalle.length) { filas = row.detalle; cobros = Number(row.total_cobros || 0); }
@@ -4691,15 +4816,20 @@ function ConciliacionTercerosMX({ usuario }) {
     const sinCorreo = enviables.filter(r => !((transpPorNorm[norm(r.empresa_nombre)] || {}).correo_to));
     if (!confirm(`\uD83D\uDCE7 ENVIAR TODO \u2014 semana ${semana}\n\nSe enviar\u00e1n ${enviables.length} prefactura(s) cerradas.\n${negativas.length ? `\u26A0\uFE0F ${negativas.length} negativa(s) NO se env\u00edan (quedan para arrastre).\n` : ""}${sinCorreo.length ? `\u26A0\uFE0F ${sinCorreo.length} sin correo (se omiten).\n` : ""}\n\u00bfContinuar?`)) return;
     setEnviando("__todo__");
-    let ok = 0, fail = 0; const errores = [];
+    let ok = 0, fail = 0, alDia = 0; const errores = [];
     for (const r of enviables) {
       const tt = transpPorNorm[norm(r.empresa_nombre)] || {};
       if (!tt.correo_to) { fail++; errores.push(`${r.empresa_nombre}\u00b7${r.service_center}: sin correo`); continue; }
-      try { await enviarUno(r.empresa_nombre, r.service_center, Array.isArray(r.detalle) ? r.detalle : [], null, { cobros: Number(r.total_cobros || 0) }); ok++; }
+      try {
+        const fresca = await alDiaParaEnviar(r.empresa_nombre, r.service_center);
+        if (fresca.actualizada) alDia++;
+        if (fresca.retenida) { fail++; errores.push(`${r.empresa_nombre}\u00b7${r.service_center}: qued\u00f3 con saldo negativo tras ponerse al d\u00eda, no se env\u00eda`); continue; }
+        await enviarUno(r.empresa_nombre, r.service_center, fresca.detalle || (Array.isArray(r.detalle) ? r.detalle : []), null, { cobros: fresca.cobros != null ? fresca.cobros : Number(r.total_cobros || 0) }); ok++;
+      }
       catch (e) { fail++; errores.push(`${r.empresa_nombre}\u00b7${r.service_center}: ${e.message || e}`); }
     }
     setEnviando(null); await cargarResumen(semana);
-    setMsg({ ok: fail === 0, txt: `Env\u00edo masivo: ${ok} enviada(s), ${negativas.length} negativa(s) retenida(s), ${fail} con error.` + (errores.length ? " \u2014 " + errores.join(" | ") : "") });
+    setMsg({ ok: fail === 0, txt: `Env\u00edo masivo: ${ok} enviada(s), ${negativas.length} negativa(s) retenida(s), ${fail} con error.` + (alDia ? ` ${alDia} se pusieron al d\u00eda con el motor antes de salir.` : "") + (errores.length ? " \u2014 " + errores.join(" | ") : "") });
   };
   const abrirTodo = async () => {
     const { data: rows } = await sb.from("conciliaciones_terceros").select("*").eq("semana", semana);
@@ -4927,6 +5057,24 @@ function ConciliacionTercerosMX({ usuario }) {
           </button>
         </div>
       </div>
+
+      {Object.keys(desfaseEnviadas).length > 0 && (
+        <div style={{ border: "1px solid #fca5a5", background: "#fef2f2", borderRadius: 10, padding: "10px 14px", marginBottom: 14 }}>
+          <div style={{ fontSize: 13, fontWeight: 800, color: "#b91c1c", marginBottom: 4 }}>
+            ⚠ {Object.keys(desfaseEnviadas).length} prefactura(s) enviada(s) quedaron atrás del motor
+          </div>
+          <div style={{ fontSize: 11, color: "#7f1d1d", marginBottom: 6 }}>
+            Alguien recalculó y guardó un día de esta semana después del envío. Lo enviado no se modificó. Abre cada una para ver qué cambió y decidir si se reenvía.
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+            {Object.values(desfaseEnviadas).map(d => (
+              <span key={`${d.empresa}|${d.sc}`} style={{ fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 9, background: "#fee2e2", color: "#b91c1c" }}>
+                {d.empresa} · {d.sc} · {d.delta >= 0 ? "+" : ""}{fmtMon(d.delta)}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
 
       {comentOpen && (
         <div style={{ border: "1px solid #e4e7ec", background: "#f8fafc", borderRadius: 10, padding: 14, marginBottom: 14 }}>
@@ -5565,6 +5713,18 @@ function ConciliacionTercerosMX({ usuario }) {
                               <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
                                 <span style={{ fontWeight: 800, color: "#002E5D", fontSize: 13 }}>SC {rSC.service_center}</span>
                                 {chipEstado(rSC.estado_conciliacion)}
+                                {(() => {
+                                  const df = desfaseEnviadas[claveCierre(g.empresa, rSC.service_center)];
+                                  if (!df || rSC.estado_conciliacion !== "enviada") return null;
+                                  return (
+                                    <button
+                                      onClick={(e) => { e.stopPropagation(); alert(`${g.empresa} · ${rSC.service_center}\n\nEl motor cambió DESPUÉS de enviar esta prefactura (${df.delta >= 0 ? "+" : ""}${fmtMon(df.delta)}):\n\n${df.lineas.slice(0, 20).map(l => "• " + l).join("\n")}${df.lineas.length > 20 ? `\n… y ${df.lineas.length - 20} más` : ""}\n\nLo enviado NO se modificó. Tú decides:\n· Para aplicarlo: Reabrir → Cerrar (se pone al día sola) → Reenviar.\n· Si no corresponde reenviar, déjala como está.`); }}
+                                      title="El motor cambió después del envío. Clic para ver qué cambió."
+                                      style={{ fontSize: 10, fontWeight: 800, padding: "2px 8px", borderRadius: 9, border: "1px solid #fca5a5", background: "#fee2e2", color: "#b91c1c", cursor: "pointer" }}>
+                                      ⚠ El motor cambió tras el envío · {df.cambios + df.altas} cambio(s) · {df.delta >= 0 ? "+" : ""}{fmtMon(df.delta)}
+                                    </button>
+                                  );
+                                })()}
                                 <span style={{ fontSize: 11, color: "#64748b" }}>
                                   Sup: {rSC.supervisor || "—"} · {_viajesSC} viajes · {rSC.n_no_pago} no pago{(ajustesSC[`${norm(g.empresa)}||${norm(rSC.service_center)}`] || 0) > 0 ? ` · ${ajustesSC[`${norm(g.empresa)}||${norm(rSC.service_center)}`]} ajuste(s)` : ""} · Neto {fmtMon(_netoViajesSC)} · Bruto {fmtMon(_brutoBaseSC)}{rSC.tiene_ajustes ? " · ✏️ ajustada" : ""}{rSC.enviado_at ? " · 📤 " + new Date(rSC.enviado_at).toLocaleDateString("es-CL") : ""}{rSC.sync_veces > 0 ? (() => {
                                     const perdidas = (syncLog[`${norm(g.empresa)}||${norm(rSC.service_center)}`] || {}).perdioManuales;
