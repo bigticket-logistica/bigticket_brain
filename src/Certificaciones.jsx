@@ -1038,72 +1038,67 @@ function cargarScriptMifiel() {
 // puede editarlos manualmente, y el Brain llena la plantilla con pdf-lib:
 // Hoja de Firmas (pág 11) + Anexo A (pág 13) + Backup A.2 (pág 14).
 const CONTRATO_COORDS = {
-  // ── Plantilla v3.2 (EO_Inhouse_ContratoTransportista_v3_2) ──
-  // Todas las coordenadas fueron REMEDIDAS sobre esta plantilla el
-  // 4-nov-2026: respecto de la v3.0 la hoja de firmas bajó ~270 pt (las
-  // cláusulas crecieron), las rayas de Nombre/RFC/Representante empiezan
-  // en otra x, y la tabla de líneas del Anexo A se reacomodó (la casilla
-  // de Spot pasó al renglón de abajo, Medium Van quedó en su propio renglón
-  // y Observaciones se angostó). Verificado estampando las 3 filas con
-  // todas las casillas y revisando el render de las páginas 11, 13 y 14.
+  // ── Plantilla v3.3 (EO_Inhouse_ContratoTransportista_v3_3) ──
+  // REMEDIDA completa el 17-nov-2026: la v3.3 cambió márgenes y fuente, así
+  // que todo el texto se re-acomodó respecto de la v3.2 (hoja de firmas ~140
+  // pt más arriba, Anexo A y A.2 corridos). Las rayas de Nombre / RFC /
+  // Representante se midieron sobre la imagen renderizada, porque con la
+  // fuente nueva la raya queda ~2 pt más arriba de lo que indica el glifo.
+  // Verificado estampando las 3 filas con todas las casillas (págs. 11, 13, 14).
   //
-  // Convención: casillas ☐ medidas con pdfplumber (x0, y0) + calibración
-  // +0.5 / +0.3, que es donde pdf-lib centra la X. Rayas: x = inicio de la
-  // raya + 1.8, baseline = tinta + 1.5. Filas de tabla: baseline del
-  // primer carácter de la etiqueta.
-  plantilla: "plantillas/contrato_transportista_v3_2.pdf",
+  // Convención: casillas ☐ = (x0 + 0.5, y0 + 0.3) medidas con pdfplumber;
+  // rayas: baseline = raya + 1.6; filas de tabla: baseline del número de línea.
+  plantilla: "plantillas/contrato_transportista_v3_3.pdf",
   pagFirmas: 10, pagAnexoA: 12, pagA2: 13,
   firmas: {
-    dia: { x: 187.1, y: 426.5, s: 9 }, mes: { x: 224.0, y: 426.5, s: 9 }, anio: { x: 330.0, y: 426.5, s: 9 },
-    // w = ancho útil de la raya; TW achica la fuente para no salirse.
-    nombre: { x: 420.2, y: 386.6, w: 87.0, s: 8 },
-    rfc:    { x: 337.1, y: 376.1, w: 87.0, s: 8.5 },
-    rep:    { x: 423.5, y: 365.6, w: 87.0, s: 8.5 },
-    chkMoral: { x: 372.4, y: 314.3 }, chkFisica: { x: 553.8, y: 314.3 },
+    dia: { x: 154.7, y: 542.4, s: 9 }, mes: { x: 188.7, y: 542.4, s: 9 }, anio: { x: 286.5, y: 542.4, s: 9 },
+    // w = espacio hasta el borde de la celda; TW achica la fuente si no cabe.
+    nombre: { x: 414.8, y: 506.7, w: 153.6, s: 8 },
+    rfc:    { x: 336.3, y: 495.7, w: 232.1, s: 8.5 },
+    rep:    { x: 415.7, y: 484.9, w: 152.7, s: 8.5 },
+    chkMoral: { x: 368.9, y: 435.8 }, chkFisica: { x: 540.3, y: 435.8 },
     col: 311.7,
-    tNombre: 302.8, tRfc: 290.8, tDomicilio: 278.7, tRep: 266.7, tCorreo: 254.6, tRepse: 242.6,
+    tNombre: 423.8, tRfc: 411.3, tDomicilio: 398.8, tRep: 386.3, tCorreo: 373.8, tRepse: 361.3,
   },
   anexoA: {
-    col: 311.7, nombre: 602.7, rfc: 590.6, rep: 578.6, correo: 566.5,
-    chkMeli: { x: 371.6, y: 555.6 }, chkOtro: { x: 406.7, y: 555.6 },
-    chkB2bSi: { x: 322.0, y: 545.3 }, chkB2bNo: { x: 350.4, y: 545.3 },
-    fechaInicio: 533.9, vigencia: 521.8,
-    modX: 223.2, modY: { SDD: 458.3, Spot: 415.5, Backup: 377.3 },
-    // Ancla de cada fila = baseline del número de línea (espaciado ~50 pt).
-    filasY: [292.6, 242.7, 192.8],
-    // Observaciones mide ~50 pt en la v3.2: el texto va en hasta 2 renglones
-    // de 6 pt que se achican para caber (ver generarContrato).
-    svcX: 104.2, cantX: 291.9, obsX: 521.0, obsW: 50,
+    col: 311.7, nombre: 598.3, rfc: 585.8, rep: 573.3, correo: 560.8,
+    chkMeli: { x: 369.4, y: 549.5 }, chkOtro: { x: 402.8, y: 549.5 },
+    chkB2bSi: { x: 321.5, y: 538.8 }, chkB2bNo: { x: 349.1, y: 538.8 },
+    fechaInicio: 526.9, vigencia: 514.4,
+    modX: 223.2, modY: { SDD: 453.7, Spot: 418.7, Backup: 383.8 },
+    // Ancla de cada fila = baseline del número de línea (espaciado 52 pt).
+    filasY: [295.9, 243.9, 191.9],
+    svcX: 104.2, cantX: 291.9, obsX: 521.0, obsW: 48.4,
     lin: {
       modelo: {
-        "SDD": { x: 181.4, dy: 4.3 },
-        "Spot": { x: 163.9, dy: -3.8 },
-        "Backup": { x: 205.1, dy: -3.8 },
+        "SDD": { x: 180.5, dy: 4.6 },
+        "Spot": { x: 163.9, dy: -3.9 },
+        "Backup": { x: 203.4, dy: -3.9 },
       },
       tipo: {
-        "Large Van": { x: 223.2, dy: 4.3 },
-        "Small Van": { x: 223.2, dy: -3.8 },
-        "Car": { x: 250.5, dy: -3.8 },
-        "Medium Van": { x: 264.7, dy: -12.0 },
+        "Large Van": { x: 258.9, dy: 13.1 },
+        "Small Van": { x: 258.0, dy: 4.6 },
+        "Car": { x: 236.8, dy: -3.9 },
+        "Medium Van": { x: 262.6, dy: -12.4 },
       },
       ayudante: {
-        "Sí": { x: 350.3, dy: 8.4 },
-        "No": { x: 375.1, dy: 8.4 },
-        "Según activación": { x: 379.6, dy: -7.9 },
+        "Sí": { x: 349.9, dy: 8.9 },
+        "No": { x: 374.0, dy: 8.9 },
+        "Según activación": { x: 377.5, dy: -8.1 },
       },
       tarifa: {
-        "Tabla vigente": { x: 460.2, dy: 0.3 },
-        "Especial": { x: 460.2, dy: -7.9 },
+        "Tabla vigente": { x: 460.2, dy: 0.4 },
+        "Especial": { x: 460.2, dy: -8.1 },
       },
     },
   },
   a2: {
     col: 311.7,
-    chkSi: { x: 322.0, y: 528.9 }, chkNo: { x: 350.4, y: 528.9 },
-    transportista: 517.5, svc: 505.4, dias: 493.4,
-    chkLarge: { x: 355.3, y: 482.5 }, chkSmall: { x: 413.0, y: 482.5 }, chkCar: { x: 444.2, y: 482.5 },
-    chkCostoSi: { x: 322.0, y: 442.3 }, chkCostoNo: { x: 350.4, y: 442.3 }, chkCostoPropio: { x: 457.9, y: 442.3 },
-    chkAprOper: { x: 364.8, y: 432.0 }, chkAprGer: { x: 418.2, y: 432.0 }, chkAprFin: { x: 470.8, y: 432.0 },
+    chkSi: { x: 321.5, y: 534.8 }, chkNo: { x: 349.1, y: 534.8 },
+    transportista: 522.8, svc: 510.3, dias: 497.8,
+    chkLarge: { x: 353.1, y: 486.6 }, chkSmall: { x: 407.4, y: 486.6 }, chkCar: { x: 437.5, y: 486.6 },
+    chkCostoSi: { x: 321.5, y: 444.8 }, chkCostoNo: { x: 349.1, y: 444.8 }, chkCostoPropio: { x: 452.5, y: 444.8 },
+    chkAprOper: { x: 362.6, y: 434.1 }, chkAprGer: { x: 413.4, y: 434.1 }, chkAprFin: { x: 463.9, y: 434.1 },
   },
 };
 
@@ -1348,7 +1343,7 @@ async function generarContratoPDFDesde(D, { tabla, registro }) {
     casilla("ayudante", l.ayudante || D.ayudante);
     casilla("tarifa",   l.tarifa || D.tarifa);
     // Observaciones: lo que escriba el analista (placa u observación).
-    // Extra Large Van no tiene casilla en la plantilla v3.2, así que el tipo
+    // Extra Large Van no tiene casilla en la plantilla v3.3, así que el tipo
     // se escribe aquí para que el contrato igual lo diga. Sin esto la fila
     // salía sin ningún tipo marcado y nadie se enteraba.
     const partes = [];
