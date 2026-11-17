@@ -7785,7 +7785,8 @@ function ListadoPagosDiarios({ usuario }) {
       let resumenPub = "";
       try {
         const r = await publicarAutomatico();
-        resumenPub = `\n\nPortal actualizado: ${r.publicados} centro(s) con cambios publicados`
+        resumenPub = `\n\nPortal actualizado: ${r.publicados} centro(s), cada uno sube de versión.`
+          + ` ${r.publicados - r.sinCambio} con cambios (${r.rutasCambiadas} ruta(s))`
           + (r.sinCambio ? `, ${r.sinCambio} sin cambios` : "") + "."
           + (r.sinEmpresa ? `\n\n⚠️ ${r.sinEmpresa} ruta(s) por $${Number(r.montoSinEmpresa).toLocaleString("es-MX")} sin empresa: nadie las ve hasta que el supervisor asigne la placa en la Bitácora. Cuando lo haga, aparecen solas.` : "")
           + (r.fallos.length ? `\n\nNo se pudo publicar:\n${r.fallos.join("\n")}` : "");
@@ -7915,36 +7916,45 @@ function ListadoPagosDiarios({ usuario }) {
 
   // ── Guardar publica ──
   // Decisión del 17-nov-2026: cada guardado del día queda publicado en el portal,
-  // sin botón aparte. Se compara lo recién guardado contra lo que el tercero ve
-  // hoy y se publica una versión nueva SOLO en los centros donde algo cambió
-  // (monto, empresa, auxiliar, NS o rutas). Así un día recalculado cinco veces
-  // no deja cinco versiones vacías. No envía aviso al tercero: revisar sus
-  // movimientos es responsabilidad suya.
+  // sin botón aparte. CADA guardado sube la versión de cada centro (v1, v2, v3…):
+  // el número de versión es el contador de cuántas veces se recalculó y guardó
+  // ese día. En el motivo de la versión queda si hubo cambios y en cuántas rutas
+  // (monto, empresa, auxiliar o NS), para distinguir un guardado que movió plata
+  // de uno que no. No envía aviso al tercero: revisar sus movimientos es
+  // responsabilidad suya.
   const publicarAutomatico = async () => {
     const num = (v) => Math.round(Number(v || 0) * 100) / 100;
     const firma = (r) => [r.tercero_id || "", r.placa || "", r.driver_name || "", num(r.ns_pct), num(r.pct_visitado),
       r.ns_categoria || "", r.tiene_auxiliar ? 1 : 0, num(r.monto_auxiliar), num(r.pago_neto)].join("|");
     const [tarR, linR, pubR] = await Promise.all([
       sb.from("tarifado_mx").select("service_center_id, id_ruta, tercero_id, placa, driver_name, ns_pct, pct_visitado, ns_categoria, tiene_auxiliar, monto_auxiliar, pago_neto").eq("fecha", fecha),
-      sb.from("vw_publicacion_lineas_vigente").select("service_center, id_ruta, tercero_id, placa, driver_name, ns_pct, pct_visitado, ns_categoria, tiene_auxiliar, monto_auxiliar, pago_neto").eq("fecha", fecha),
+      // Se compara contra lo último publicado DE ESTE MISMO DÍA, no contra la
+      // vista del portal: una ruta que se repite en varios días se muestra con
+      // la fecha del primero, y en la vista "no existe" para los días siguientes.
+      // Mirando la vista, esos centros se republicarían en cada guardado.
+      sb.from("publicacion_lineas_mx").select("service_center, id_ruta, version, tercero_id, placa, driver_name, ns_pct, pct_visitado, ns_categoria, tiene_auxiliar, monto_auxiliar, pago_neto").eq("fecha", fecha).order("version", { ascending: false }).limit(20000),
       sb.from("vw_publicacion_vigente_mx").select("service_center, version").eq("fecha", fecha),
     ]);
     if (tarR.error) throw new Error("no se pudo leer el tarifado guardado: " + tarR.error.message);
     const porSC = {};
     for (const r of (tarR.data || [])) (porSC[r.service_center_id] = porSC[r.service_center_id] || []).push(r);
     const vista = {};
-    for (const l of (linR.data || [])) vista[String(l.id_ruta)] = firma(l);
+    // Vienen de la versión más nueva a la más vieja: la primera de cada ruta manda.
+    for (const l of (linR.data || [])) { const k = String(l.id_ruta); if (!(k in vista)) vista[k] = firma(l); }
     const versionDe = {};
     for (const v of (pubR.data || [])) versionDe[v.service_center] = Number(v.version || 0);
 
-    let publicados = 0, sinCambio = 0; const fallos = [];
+    let publicados = 0, sinCambio = 0, rutasCambiadas = 0; const fallos = [];
     for (const sc of Object.keys(porSC).sort()) {
       const filas = porSC[sc];
-      const cambio = !versionDe[sc] || filas.some(r => vista[String(r.id_ruta)] !== firma(r));
-      if (!cambio) { sinCambio++; continue; }
+      const previa = versionDe[sc] || 0;
+      const nCamb = previa ? filas.filter(r => vista[String(r.id_ruta)] !== firma(r)).length : filas.length;
+      const motivo = !previa ? null
+        : (nCamb ? `Guardado del día · ${nCamb} ruta(s) con cambios` : "Guardado del día · sin cambios");
       try {
-        await publicarUno(sc, versionDe[sc] ? "Guardado del día" : null, null, (versionDe[sc] || 0) + 1);
+        await publicarUno(sc, motivo, null, previa + 1);
         publicados++;
+        if (previa && !nCamb) sinCambio++; else rutasCambiadas += nCamb;
       } catch (e) { fallos.push(`${sc}: ${e.message}`); }
     }
     const sinEmpresa = (tarR.data || []).filter(r => !r.tercero_id);
@@ -7953,7 +7963,7 @@ function ListadoPagosDiarios({ usuario }) {
       await sb.rpc("fn_portal_refrescar_maestro")
         .then(({ error }) => { if (error) console.error("Refresco del maestro:", error.message); });
     }
-    return { publicados, sinCambio, fallos, sinEmpresa: sinEmpresa.length,
+    return { publicados, sinCambio, rutasCambiadas, fallos, sinEmpresa: sinEmpresa.length,
              montoSinEmpresa: sinEmpresa.reduce((s, r) => s + Number(r.pago_neto || 0), 0) };
   };
 
