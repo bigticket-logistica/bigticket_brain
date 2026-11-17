@@ -54,7 +54,9 @@ const NOSAL_ETIQUETA = {
 };
 const etiquetaNosal = (k) => (k ? NOSAL_ETIQUETA[k] || k : "");
 
-function NoSalidasSC({ filas = [], fechaRuta, noAplica = false, abiertoInicial = false }) {
+// sc (opcional): si viene, el SC va dentro de la cabecera y el bloque se ve como
+// una tarjeta propia (Capacidad lista varios SC uno tras otro).
+function NoSalidasSC({ filas = [], fechaRuta, noAplica = false, abiertoInicial = false, sc = null }) {
   if (noAplica) return (
     <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid #e5e7eb", fontSize: 12, color: "#9ca3af" }}>
       🚫 No Salidas a Ruta: este ítem existe desde la bitácora del {NOSAL_DESDE}. Para días anteriores ve Cancelaciones y No Show en el formulario.
@@ -65,15 +67,22 @@ function NoSalidasSC({ filas = [], fechaRuta, noAplica = false, abiertoInicial =
   const resp = filas.filter((f) => f.guardado_at).length;
   const pend = filas.length - resp;
   const fh = (v) => (v ? new Date(v).toLocaleString("es-MX", { timeZone: "America/Mexico_City", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : "");
+  const color = filas.length === 0 ? "#cbd5e1" : pend > 0 ? "#dc2626" : "#16a34a";
+  const contenedor = sc
+    ? { marginTop: 10, border: "1px solid #e5e7eb", borderRadius: 10, padding: "10px 12px", background: "#fff", boxShadow: `inset 4px 0 0 ${color}` }
+    : { marginTop: 14, paddingTop: 12, borderTop: "1px solid #e5e7eb" };
   return (
-    <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid #e5e7eb" }}>
+    <div style={contenedor}>
       <button onClick={() => setAbierto((v) => !v)}
-        style={{ display: "flex", alignItems: "center", gap: 8, background: "none", border: "none", cursor: "pointer", padding: 0, fontSize: 12, fontWeight: 700, color: "#374151" }}>
-        <span>{abierto ? "▼" : "▶"}</span>
-        🚫 3 · No Salidas a Ruta del {fechaRuta}
-        <span style={{ fontSize: 10, fontWeight: 600, color: "#9ca3af" }}>(se responden en esta bitácora)</span>
-        {pend > 0 && <span style={{ fontSize: 10, fontWeight: 700, color: "#fff", background: "#dc2626", borderRadius: 4, padding: "1px 6px" }}>{pend} sin responder</span>}
-        {filas.length > 0 && pend === 0 && <span style={{ fontSize: 10, fontWeight: 700, color: "#166534", background: "#dcfce7", borderRadius: 4, padding: "1px 6px" }}>todas respondidas</span>}
+        style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", background: "none", border: "none", cursor: "pointer", padding: 0, fontSize: 12, fontWeight: 700, color: "#374151", textAlign: "left" }}>
+        <span style={{ color: "#94a3b8", width: 10 }}>{abierto ? "▼" : "▶"}</span>
+        {sc && <span style={{ fontSize: 12, fontWeight: 800, color: "#fff", background: "#1e3a5f", borderRadius: 5, padding: "2px 8px", fontFamily: "monospace" }}>{sc}</span>}
+        <span>🚫 No Salidas a Ruta del {fechaRuta}</span>
+        <span style={{ fontSize: 11, fontWeight: 600, color: "#64748b" }}>· {filas.length} {filas.length === 1 ? "ruta" : "rutas"}</span>
+        {pend > 0 && <span style={{ fontSize: 10.5, fontWeight: 700, color: "#fff", background: "#dc2626", borderRadius: 4, padding: "1px 7px" }}>{pend} sin responder</span>}
+        {filas.length > 0 && pend === 0 && <span style={{ fontSize: 10.5, fontWeight: 700, color: "#166534", background: "#dcfce7", borderRadius: 4, padding: "1px 7px" }}>{resp} de {filas.length} respondidas</span>}
+        {pend > 0 && resp > 0 && <span style={{ fontSize: 10.5, fontWeight: 600, color: "#64748b" }}>{resp} respondidas</span>}
+        <span style={{ fontSize: 10, fontWeight: 500, color: "#9ca3af" }}>las responde el supervisor en su bitácora</span>
       </button>
       {abierto && (filas.length === 0 ? (
         <div style={{ fontSize: 12, color: "#6b7280", marginTop: 8 }}>Ese día no hubo rutas sin salir en este SC.</div>
