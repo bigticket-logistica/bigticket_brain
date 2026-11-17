@@ -3252,6 +3252,10 @@ function ConciliacionTercerosMX({ usuario }) {
       const filasSC = todas.filter(d => (d.service_center_id || "SIN SC") === sc);
       await guardarBorradorSC(empresa, sc, filasSC, cobrosDe(empresa, sc));
       await auditarAjuste(empresa, sc, "editar_monto", linea.origen || "motor", { ...linea, monto: nuevo, monto_anterior: actual }, (motivo || "").trim());
+      // Si es una ruta del motor, el portal debe mostrar el mismo monto decidido.
+      if (linea.id_ruta && !linea._saldo && String(linea.origen || "motor") === "motor") {
+        await registrarDecisionRuta(linea.id_ruta, nuevo, empresa, sc, `Monto editado al conciliar: ${(motivo || "").trim() || "sin motivo"}`);
+      }
       setDetalles(prev => ({ ...prev, [empresa]: todas }));
       await cargarResumen(semana);
       setMsg({ ok: true, txt: `Monto editado en ${empresa} · ${sc}: ${fmtMon(actual)} → ${fmtMon(nuevo)}.` });
@@ -3578,6 +3582,32 @@ function ConciliacionTercerosMX({ usuario }) {
     setRepBusy(false);
   };
 
+  // Desde esta semana rige la fuente única (regla de empresa, guardar publica,
+  // ruta repetida = una línea). Lunes 16-nov-2026.
+  const SEM_REGLA_UNICA = 48;
+
+  // La decisión del analista sobre el pago de una ruta (unificar una repetida o
+  // editarle el monto) se registra para que el PORTAL muestre ese mismo monto.
+  // Sin esto, la prefactura dice una cosa y los movimientos del tercero otra.
+  // Devuelve true si quedó registrada (o si no aplica), false si falló.
+  const registrarDecisionRuta = async (idRuta, monto, empresa, sc, motivo) => {
+    if (semana < SEM_REGLA_UNICA || !idRuta) return true;
+    try {
+      const { error } = await sb.from("decision_ruta_mx").upsert({
+        id_ruta: String(idRuta), pago_neto: Number(monto || 0), semana,
+        empresa_nombre: empresa, service_center: sc, motivo: motivo || null,
+        usuario: (usuario && (usuario.nombre || usuario.email)) || "Brain",
+        decidido_at: new Date().toISOString(),
+      }, { onConflict: "id_ruta" });
+      if (error) throw error;
+      return true;
+    } catch (e) {
+      console.error("registrar decisión de ruta:", e);
+      alert(`OJO: el cambio en la ruta ${idRuta} quedó en la prefactura, pero NO se pudo llevar al portal (${e.message || e}).\n\nEl tercero seguirá viendo el monto anterior en sus movimientos. Avísale a sistemas.`);
+      return false;
+    }
+  };
+
   const _consolidarNucleo = async (rep) => {
     const empresa = rep.empresa, sc = rep.service_center, idRuta = String(rep.id_ruta);
     const { data: row } = await sb.from("conciliaciones_terceros")
@@ -3595,10 +3625,36 @@ function ConciliacionTercerosMX({ usuario }) {
     if (mismas.length <= 1) return 0;
     const quitar = mismas.slice(1);
     const quitarIds = new Set(quitar.map(lineaId));
-    const filasSC = filas.filter(d => !quitarIds.has(lineaId(d)) && (d.service_center_id || "SIN SC") === sc);
+    const primera = mismas[0], ultima = mismas[mismas.length - 1];
+    const reglaNueva = semana >= SEM_REGLA_UNICA;
+    // Regla nueva: una sola línea, con la FECHA del primer día y los DATOS del
+    // último (el NS de una ruta va en aumento). Se marca como decidida a mano
+    // para que la puesta al día con el motor no la devuelva al primer día.
+    let base = filas;
+    let fusion = null;
+    if (reglaNueva) {
+      fusion = { ...ultima, fecha: primera.fecha, _id: lineaId(primera), _editado: true,
+        monto_original: (primera.monto_original != null ? primera.monto_original : Number(primera.monto || 0)),
+        motivo_edicion: `Ruta repetida unificada: datos del ${String(ultima.fecha).slice(0, 10)}`,
+        editado_por: (usuario && (usuario.nombre || usuario.email)) || "Brain", _unificada: true };
+      const idPrimera = lineaId(primera);
+      base = filas.map(d => lineaId(d) === idPrimera ? fusion : d);
+    }
+    const filasSC = base.filter(d => !quitarIds.has(lineaId(d)) && (d.service_center_id || "SIN SC") === sc);
     await guardarBorradorSC(empresa, sc, filasSC, cobrosDe(empresa, sc));
-    for (const q of quitar) await auditarAjuste(empresa, sc, "eliminar", q.origen || "motor", q, `Consolidación ruta multi-ID ${idRuta}: queda 1er día (${mismas[0].fecha})`);
-    if (detalles[empresa]) setDetalles(prev => ({ ...prev, [empresa]: (prev[empresa] || []).filter(d => !quitarIds.has(lineaId(d))) }));
+    for (const q of quitar) await auditarAjuste(empresa, sc, "eliminar", q.origen || "motor", q,
+      reglaNueva ? `Ruta repetida ${idRuta} unificada: fecha del 1er día (${primera.fecha}), datos del último (${ultima.fecha})`
+                 : `Consolidación ruta multi-ID ${idRuta}: queda 1er día (${mismas[0].fecha})`);
+    if (reglaNueva) {
+      await registrarDecisionRuta(idRuta, fusion.monto, empresa, sc, `Ruta repetida unificada: datos del ${String(ultima.fecha).slice(0, 10)}`);
+      // El detalle en pantalla se vuelve a leer: cambió una línea, no solo se quitaron.
+      if (detalles[empresa]) setDetalles(prev => { const nx = { ...prev }; delete nx[empresa]; return nx; });
+      if (expandida && norm(expandida) === norm(empresa)) {
+        try { const rr = await leerFilasEmpresa(empresa); setDetalles(prev => ({ ...prev, [empresa]: rr.filas })); } catch (er) { console.error(er); }
+      }
+    } else if (detalles[empresa]) {
+      setDetalles(prev => ({ ...prev, [empresa]: (prev[empresa] || []).filter(d => !quitarIds.has(lineaId(d))) }));
+    }
     return quitar.length;
   };
 
@@ -3631,7 +3687,9 @@ function ConciliacionTercerosMX({ usuario }) {
 
   const consolidarTodas = async () => {
     if (!repRows || !repRows.length) return;
-    if (!confirm(`¿Consolidar ${repRows.length} ruta(s) repetida(s)? Se deja el pago del 1er día de cada una y se quitan los días repetidos (queda auditado).`)) return;
+    if (!confirm(semana >= SEM_REGLA_UNICA
+      ? `¿Unificar ${repRows.length} ruta(s) repetida(s)?\n\nCada una queda en UNA línea, con la fecha del primer día y los datos del último. El portal del tercero mostrará ese mismo monto. Queda auditado.\n\nSi alguna necesita otro monto, edítalo después en su línea.`
+      : `¿Consolidar ${repRows.length} ruta(s) repetida(s)? Se deja el pago del 1er día de cada una y se quitan los días repetidos (queda auditado).`)) return;
     setConsolidando("__todas__");
     let ok = 0, fail = 0; const errores = [];
     // Cada ruta hace varias consultas, así que con 20 o 30 el proceso tarda un
@@ -5236,7 +5294,7 @@ function ConciliacionTercerosMX({ usuario }) {
             <span style={{ fontSize: 12, color: "#b45309" }}>{repRows.filter(r => !consolidadas.has(`${r.empresa}||${r.service_center}||${r.id_ruta}`)).length} pendiente(s) · sobre-pago {fmtMon(repRows.filter(r => !consolidadas.has(`${r.empresa}||${r.service_center}||${r.id_ruta}`)).reduce((s, r) => s + Number(r.sobre_pago || 0), 0))}{consolidadas.size > 0 ? ` · ${consolidadas.size} ya consolidada(s)` : ""}</span>
             <button onClick={consolidarTodas} disabled={!!consolidando} style={{ marginLeft: "auto", padding: "6px 14px", background: consolidando ? "#94a3b8" : "#92400e", color: "#fff", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>{consolidando === "__todas__"
               ? (consolidaProgreso ? `Consolidando ${consolidaProgreso.actual} de ${consolidaProgreso.total}…` : "Consolidando…")
-              : "Consolidar todas (dejar 1er día)"}</button>
+              : (semana >= 48 ? "Unificar todas (fecha 1er día, datos del último)" : "Consolidar todas (dejar 1er día)")}</button>
           </div>
           <div style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
