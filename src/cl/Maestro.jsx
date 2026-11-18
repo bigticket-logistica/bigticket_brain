@@ -374,7 +374,8 @@ const horaCL = (v) => {
 function DetalleColecta({ d }) {
   if (!d) return <div style={{ fontSize: 12, color: "#8a94a6" }}>Cargando el detalle de la colecta…</div>;
   if (d.error) return <div style={{ fontSize: 12, color: "#b42318" }}>{d.error}</div>;
-  const tot = n(d.paradas_total), ok = n(d.paradas_exitosas);
+  const c = d.conf;   // lo que confirmó el supervisor manda sobre lo de MELI
+  const tot = c ? n(c.paradas_total) : n(d.paradas_total), ok = c ? n(c.paradas_ejecutadas) : n(d.paradas_exitosas);
   const caja = (titulo, filas) => (
     <div style={{ background: "#fff", border: "1px solid #e4e9f1", borderRadius: 10, padding: "8px 12px", minWidth: 200 }}>
       <div style={{ fontSize: 10.5, fontWeight: 800, color: "#8a94a6", letterSpacing: .4, marginBottom: 4 }}>{titulo}</div>
@@ -393,9 +394,18 @@ function DetalleColecta({ d }) {
         {d.tipo_vehiculo && <span style={{ color: "#8a94a6" }}> · {d.tipo_vehiculo}</span>}
         <span style={{ color: "#8a94a6" }}> · Nivel de Servicio = paradas exitosas ÷ paradas totales = </span>
         <b style={{ color: tot && ok === tot ? "#0d8043" : "#b42318" }}>{tot ? `${ok}/${tot} (${Math.round(100 * ok / tot)} %)` : "—"}</b>
+        <span style={{ color: "#8a94a6" }}>{c ? " · confirmado por el supervisor" : " · según MELI, falta la confirmación del supervisor"}</span>
       </div>
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-        {caja("PARADAS", [
+        {c && caja("CONFIRMADO EN LA BITÁCORA", [
+          ["Paradas de la ruta", fmt(c.paradas_total)],
+          ["Paradas ejecutadas", fmt(c.paradas_ejecutadas), "#0d8043"],
+          ["Por", `${c.confirmado_por || "—"}${c.rol === "analista" ? " (analista)" : ""}`],
+          ["Fecha", c.confirmado_at ? new Date(c.confirmado_at).toLocaleString("es-CL", { timeZone: "America/Santiago", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }) : "—"],
+          c.motivo && ["Motivo", c.motivo, "#7a5b16"],
+          c.comentario && ["Comentario", c.comentario],
+        ])}
+        {caja(c ? "PARADAS SEGÚN MELI" : "PARADAS", [
           ["Totales", fmt(tot)],
           ["Exitosas", fmt(ok), "#0d8043"],
           ["Fallidas", fmt(d.paradas_fallidas), n(d.paradas_fallidas) ? "#b42318" : "#94a3b8"],
@@ -1618,7 +1628,11 @@ function ModuloMaestroCL({ usuario } = {}) {
         + "paradas_total,paradas_exitosas,paradas_fallidas,paradas_con_problema,paradas_pendientes,paradas_parciales,"
         + "paquetes_estimados,paquetes_recolectados,paquetes_preparados,inicio_planificado,inicio,fin_planificado,fin,llego_a_centro,"
         + "volumen:raw->>loadedVolume,capacidad_libre:raw->>vehicleCapacityAvailable");
-      setColDet(d => ({ ...d, [id]: filas?.[0] || { error: "MELI no informó detalle de esta colecta." } }));
+      // Confirmación del supervisor en la bitácora (si ya la hizo)
+      const conf = await apiSuave(`colectas_confirmacion_cl?fecha=eq.${r.fecha}&id_ruta=eq.${id}`
+        + "&select=paradas_total,paradas_ejecutadas,motivo,comentario,confirmado_por,rol,confirmado_at", []);
+      setColDet(d => ({ ...d, [id]: filas?.[0] ? { ...filas[0], conf: conf?.[0] || null }
+                                               : { error: "MELI no informó detalle de esta colecta." } }));
     } catch (e) { setColDet(d => ({ ...d, [id]: { error: e.message } })); }
   };
 
