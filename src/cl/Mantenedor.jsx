@@ -11,11 +11,16 @@
 //                            Antes estaba en Maestro → Vehículos BT.
 //   • Centros de colecta   → a qué CECO va cada centro de first mile de MELI
 //                            (centros_colecta_cl: CLRM03 y CLRM04 → ML_RM_SRM1).
+//   • Justificación de     → qué motivos de devolución se justifican solos: suben
+//     devoluciones           el NS de la ruta y su pago (motivos_justificacion_cl).
+//   • Cuidado de Activo    → parámetros, componentes del gasto, proveedores y
+//                            multas (antes era una subpestaña de Cuidado de Activo).
 //
 // Habla con la API REST del proyecto de Chile por fetch, igual que el Maestro.
 // ═══════════════════════════════════════════════════════════════════════════
 import { useState, useEffect } from "react";
 import { CalendarioRango, fechaCorta, difDias } from "./Maestro";
+import CuidadoActivoCL from "./CuidadoActivo";
 
 const CL_URL = "https://hmowsazntdjtsvdfgutn.supabase.co";
 const CL_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imhtb3dzYXpudGRqdHN2ZGZndXRuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQ5MTc4NzgsImV4cCI6MjEwMDQ5Mzg3OH0.xAJokU0eFhof--d8R4uCRBr2-CJLzC5re0w1IPRqQR8";
@@ -84,13 +89,21 @@ export default function ModuloMantenedorCL({ usuario } = {}) {
     <div className="mt-wrap">
       <style>{CSS}</style>
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 14 }}>
-        {[["reemplazos", "↺ Reemplazos"], ["supervisores", "👤 Supervisores y CECO"], ["colectas", "📦 Centros de colecta"]].map(([k, t]) => (
+        {[["reemplazos", "↺ Reemplazos"], ["supervisores", "👤 Supervisores y CECO"], ["colectas", "📦 Centros de colecta"],
+          ["justif", "⚖️ Justificación de devoluciones"], ["activo", "🛠️ Cuidado de Activo"]].map(([k, t]) => (
           <button key={k} className={`mt-chip ${vista === k ? "on" : ""}`} onClick={() => setVista(k)}>{t}</button>
         ))}
       </div>
       {vista === "reemplazos" && <Reemplazos quien={quien} />}
       {vista === "supervisores" && <Supervisores quien={quien} />}
       {vista === "colectas" && <CentrosColecta quien={quien} />}
+      {vista === "justif" && <JustificacionDevoluciones quien={quien} />}
+      {vista === "activo" && (
+        <div>
+          <div className="mt-sub">Parámetros, componentes del gasto, proveedores y multas de Cuidado de Activo.</div>
+          <CuidadoActivoCL usuario={usuario} sub="ca_mantenedores" />
+        </div>
+      )}
     </div>
   );
 }
@@ -447,6 +460,104 @@ function CentrosColecta({ quien }) {
       </table>
       <div className="mt-sub" style={{ marginTop: 8, color: "#94a3b8" }}>
         Ojo: la colecta de un centro que no está aquí queda sin CECO y con alerta en Revisión zonas.
+      </div>
+    </div>
+  );
+}
+
+// ── Justificación automática de devoluciones ───────────────────────────────
+// Cada motivo de devolución de MELI tiene un grupo y una regla Sí/No. Las
+// devoluciones con un motivo que justifica cuentan como cumplidas en el NS de su
+// ruta: (entregados + justificadas) ÷ cargados, y con eso en el pago.
+const GRUPOS = { A: "Causa del comprador o la dirección", B: "Causa de MELI o la planificación",
+                 C: "Causa operativa del conductor", D: "Fuerza mayor" };
+function JustificacionDevoluciones({ quien }) {
+  const [reglas, setReglas] = useState(null);
+  const [sinRegla, setSinRegla] = useState([]);
+  const [msg, setMsg] = useState("");
+  const cargar = async () => {
+    const desde = sumar(hoyCL(), -30);
+    const [r, d] = await Promise.all([
+      apiSuave("motivos_justificacion_cl?select=*&order=grupo,motivo", null),
+      apiSuave(`vw_devoluciones_justif_cl?fecha=gte.${desde}&grupo=is.null&select=motivo_codigo,motivo&limit=5000`, []),
+    ]);
+    setReglas(r);
+    const cuenta = {};
+    (d || []).forEach(x => { const k = x.motivo_codigo || x.motivo || "(sin motivo)";
+      cuenta[k] = cuenta[k] || { clave: k, codigo: x.motivo_codigo || null, motivo: x.motivo || "", casos: 0 }; cuenta[k].casos++; });
+    setSinRegla(Object.values(cuenta).sort((a, b) => b.casos - a.casos));
+  };
+  useEffect(() => { cargar(); }, []);
+  const guardar = async (x, grupo, justifica) => {
+    setMsg("");
+    try { await rpc("fn_motivo_justif_guardar", { p_clave: x.clave, p_codigo: x.codigo || null, p_motivo: x.motivo || x.clave,
+            p_grupo: grupo, p_justifica: justifica, p_por: quien });
+          setMsg(`✓ ${x.motivo || x.clave}: ${justifica ? "justifica" : "no justifica"} (grupo ${grupo})`); await cargar(); }
+    catch (e) { setMsg("No se pudo guardar: " + e.message); }
+  };
+  if (reglas === null) return (
+    <div className="mt-card"><div className="mt-tit">Justificación de devoluciones</div>
+      <div className="mt-sub" style={{ color: AMBAR }}>No se pudo leer la tabla de reglas: faltan los SQL de esta pasada (motivos_justificacion_cl).</div></div>
+  );
+  return (
+    <div>
+      <div className="mt-card">
+        <div className="mt-tit">Motivos que se justifican solos</div>
+        <div className="mt-sub">
+          Si una devolución tiene un motivo marcado <b>Sí</b>, se justifica automáticamente: cuenta como cumplida en el NS
+          de su ruta, (entregados + justificadas) ÷ cargados, y con eso en el pago. En el Maestro, la línea muestra
+          <b style={{ color: "#FF6600" }}> J</b> con cuántas se justificaron, y cada devolución dice si quedó justificada.
+          Un cambio aquí rige para todos los días que se vuelvan a consultar, incluidos los pasados.
+        </div>
+        {msg && <div className="mt-msg" style={{ color: msg.startsWith("✓") ? VERDE : ROJO }}>{msg}</div>}
+        <div style={{ overflowX: "auto" }}>
+          <table className="mt-tabla">
+            <thead><tr><th>Código MELI</th><th>Motivo</th><th>Grupo</th><th>¿Justifica?</th><th>Último cambio</th></tr></thead>
+            <tbody>
+              {reglas.map(x => (
+                <tr key={x.clave}>
+                  <td style={{ fontFamily: "monospace", fontSize: 11.5, color: "#475569" }}>{x.codigo || "(sin código)"}</td>
+                  <td>{x.motivo}</td>
+                  <td><select className="mt-in" value={x.grupo} onChange={e => guardar(x, e.target.value, x.justifica)}>
+                    {Object.entries(GRUPOS).map(([g, t]) => <option key={g} value={g}>{g} · {t}</option>)}
+                  </select></td>
+                  <td>
+                    <span style={{ display: "inline-flex", border: "1px solid #dfe4ec", borderRadius: 8, overflow: "hidden" }}>
+                      {[[true, "Sí"], [false, "No"]].map(([v, t]) => (
+                        <button key={t} onClick={() => x.justifica !== v && guardar(x, x.grupo, v)}
+                                style={{ border: 0, padding: "4px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit",
+                                         background: x.justifica === v ? (v ? VERDE : ROJO) : "#fff", color: x.justifica === v ? "#fff" : "#64748b" }}>{t}</button>
+                      ))}
+                    </span>
+                  </td>
+                  <td style={{ fontSize: 11, color: "#64748b" }}>{x.actualizado_por || "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div className="mt-card">
+        <div className="mt-tit">Motivos sin regla (últimos 30 días)</div>
+        <div className="mt-sub">Si MELI empieza a usar un motivo nuevo, aparece aquí. Mientras no tenga regla, sus devoluciones no se justifican.</div>
+        {sinRegla.length === 0 ? <div className="mt-sub" style={{ color: VERDE }}>✓ Todos los motivos tienen regla.</div> : (
+          <table className="mt-tabla" style={{ maxWidth: 820 }}>
+            <thead><tr><th>Código</th><th>Motivo</th><th>Casos</th><th>Definir</th></tr></thead>
+            <tbody>
+              {sinRegla.map(x => (
+                <tr key={x.clave}>
+                  <td style={{ fontFamily: "monospace", fontSize: 11.5 }}>{x.codigo || "(sin código)"}</td>
+                  <td>{x.motivo}</td>
+                  <td style={{ textAlign: "right" }}>{x.casos}</td>
+                  <td style={{ whiteSpace: "nowrap" }}>
+                    <button className="mt-btn" onClick={() => guardar(x, "A", true)} style={{ marginRight: 6 }}>Justifica (A)</button>
+                    <button className="mt-btn rojo" onClick={() => guardar(x, "C", false)}>No justifica (C)</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </div>
     </div>
   );

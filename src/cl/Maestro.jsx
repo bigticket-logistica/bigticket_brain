@@ -465,7 +465,8 @@ function ModuloMaestroCL({ usuario } = {}) {
   const [colAbierta, setColAbierta] = useState(null);      // id_viaje de la colecta abierta
   const [colDet, setColDet] = useState({});                // id_viaje -> fila de colectas_dia (o {error})
   const [colConf, setColConf] = useState({});              // id_viaje -> confirmación del supervisor en la bitácora
-  const [reemplazos, setReemplazos] = useState([]);        // reemplazos de supervisor por CECO y fechas (Mantenedor)          // todos los días con jornada (la lista de arriba trae solo 60)
+  const [reemplazos, setReemplazos] = useState([]);
+  const [justif, setJustif] = useState({});                // id_viaje -> devoluciones justificadas automáticamente (motivo)        // reemplazos de supervisor por CECO y fechas (Mantenedor)          // todos los días con jornada (la lista de arriba trae solo 60)
   const [kpiAbierto, setKpiAbierto] = useState(null);
   const [recuadre, setRecuadre] = useState(null);
   const [aCuadrar, setACuadrar] = useState([]);
@@ -604,7 +605,7 @@ function ModuloMaestroCL({ usuario } = {}) {
         const [res, jor, dev, tra, rec, cua, rr, zr, vs, ct, tr, sa] = await Promise.all([
           apiSuave(`vw_maestro_resumen_dia?fecha=eq.${fecha}`, [], fallos),
           apiSuave(`vw_maestro_jornada?fecha=eq.${fecha}&order=cargados.desc.nullslast&limit=3000`, [], fallos),
-          apiSuave(`vw_maestro_devoluciones?fecha=eq.${fecha}&order=cecos.asc&limit=8000`, [], fallos),
+          apiSuave(`vw_devoluciones_justif_cl?fecha=eq.${fecha}&order=cecos.asc&limit=8000`, [], fallos),
           apiSuave(`vw_traspasos_resumen?fecha_operativa=eq.${fecha}&order=paquetes.desc&limit=3000`, [], fallos),
           apiSuave(`vw_estado_recuadre?fecha_operativa=eq.${fecha}`, [], fallos),
           apiSuave(`vw_rutas_a_cuadrar?fecha=eq.${fecha}&select=id_ruta,cecos,conductor,status,cargados,entregados,pendientes,motivos&limit=500`, [], fallos),
@@ -617,7 +618,7 @@ function ModuloMaestroCL({ usuario } = {}) {
         ]);
         if (fallos.length) setError("Algunas consultas no respondieron: " + fallos.join(" | "));
         if (!vivo) return;
-        setResumen(res[0] || null); setJornada(jor); setDevol(dev); setTrasp(tra);
+        setResumen(res[0] || null); setJornada(jor); setDevol(conJustificada(dev)); setTrasp(tra);
         setZonaRuta(Object.fromEntries((zr || []).map(x => [String(x.id_ruta), x])));
         setVehSup(Object.fromEntries((vs || []).map(x => [normPatente(x.patente), x])));
         setCertPat(await indiceCertronicCompleto(ct, jor));
@@ -1584,9 +1585,14 @@ function ModuloMaestroCL({ usuario } = {}) {
   // Cada viaje con su CECOS real, segmentación, alerta del motor de zonas, supervisor,
   // empresa y tipo de ruta. Se usa para el día en pantalla y para la descarga por rango.
   // centro_meli guarda el código del centro de MELI (SRM1, SIL1…) que antes se mostraba como CECOS.
-  const enriquecerJornada = (filas, zonaRuta, tipoRuta, certPat) => filas.map(r => {
+  const enriquecerJornada = (filas, zonaRuta, tipoRuta, certPat, justMap = justif) => filas.map(r => {
     const z = zonaRuta[String(r.id_viaje)];
-    return { ...r, centro_meli: r.cecos, cecos_real: z?.cecos_admin || null,
+    // NS con devoluciones justificadas por motivo: (entregados + justificadas) ÷ cargados.
+    // Las colectas se miden por paradas y no cambian.
+    const dj = r.tipo === "colecta" ? 0 : n(justMap[String(r.id_viaje)]?.justificadas);
+    const pctNs = dj > 0 && n(r.cargados) > 0
+      ? Math.round(1000 * Math.min(1, (n(r.entregados) + dj) / n(r.cargados))) / 10 : r.pct_entrega;
+    return { ...r, devol_justificadas: dj, pct_ns: pctNs, centro_meli: r.cecos, cecos_real: z?.cecos_admin || null,
              segmentacion: z?.segmentacion || null, zona_pago: z?.zona_principal || null,
              alerta_zona: z?.alerta || null, origen_zona: z?.origen_zona || null,
              cecos_fuente: z?.cecos_fuente || null,
@@ -1646,6 +1652,14 @@ function ModuloMaestroCL({ usuario } = {}) {
       + "paradas_total_meli,paradas_exitosas_meli,motivo,comentario,confirmado_por,rol,confirmado_at", [])
       .then(r => setColConf(Object.fromEntries((r || []).map(x => [String(x.id_ruta), x]))));
     setColDet({});   // el detalle se vuelve a leer con la confirmación al día
+  }, [fecha, jornada]);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Devoluciones justificadas por motivo (Mantenedor → Justificación de devoluciones):
+  // suben el NS de la línea (y su pago) y la marcan con J.
+  useEffect(() => {
+    if (!fecha) { setJustif({}); return; }
+    apiSuave(`vw_devol_justificadas_viaje?fecha=eq.${fecha}&select=id_viaje,devoluciones,justificadas&limit=5000`, [])
+      .then(r => setJustif(Object.fromEntries((r || []).map(x => [String(x.id_viaje), x]))));
   }, [fecha, jornada]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   // Abre el detalle de una colecta debajo de su fila; lo lee de colectas_dia la primera vez.
@@ -1708,11 +1722,13 @@ function ModuloMaestroCL({ usuario } = {}) {
         const cp = await empresasDePatentes([...new Set(jor.map(r => r.patente).filter(Boolean))]);
         const z = Object.fromEntries(zr.map(x => [String(x.id_ruta), x]));
         const t = Object.fromEntries(tr.map(x => [String(x.id_ruta), x]));
-        const todas = enriquecerJornada(jor, z, t, cp);
+        const jv = await leerTodo(`vw_devol_justificadas_viaje?${rango("fecha")}&select=fecha,id_viaje,devoluciones,justificadas`, "fecha.asc,id_viaje.asc", "justificadas");
+        const jm = Object.fromEntries(jv.map(x => [String(x.id_viaje), x]));
+        const todas = enriquecerJornada(jor, z, t, cp, jm);
         filas = rFiltros ? filtrarJornada(todas) : todas;
         cols = COLS_JORNADA; nombre = `maestro_jornada_${nombreRango}`;
       } else if (rInforme === "devol") {
-        const dev = await leerTodo(`vw_maestro_devoluciones?${rango("fecha")}`, "fecha.asc,cecos.asc,id_viaje.asc,folio_guia.asc", "devoluciones");
+        const dev = conJustificada(await leerTodo(`vw_devoluciones_justif_cl?${rango("fecha")}`, "fecha.asc,cecos.asc,id_viaje.asc,folio_guia.asc", "devoluciones"));
         filas = rFiltros ? filtrarDevol(dev) : dev;
         cols = COLS_DEVOL; nombre = `devoluciones_${nombreRango}`;
       } else {
@@ -2108,7 +2124,7 @@ function ModuloMaestroCL({ usuario } = {}) {
                       <th>CECO real</th><th>Supervisor</th><th>Tipo de ruta</th><th>Empresa (Certronic)</th><th>Patente</th><th>Conductor</th>
                       <th>Ayud.</th><th className="num">Paradas</th><th className="num">Cargados</th>
                       <th className="num">Entregados</th><th className="num">Devueltos</th><th className="num">Traspasos</th>
-                      <th className="num" title="NS ácido: entregados / cargados. Los justificados del maestro manual no se consideran.">% NS</th>
+                      <th className="num" title="NS: (entregados + devoluciones justificadas por motivo) ÷ cargados. J = cuántas devoluciones se justificaron automáticamente. En colectas: paradas ejecutadas ÷ paradas.">% NS</th>
                       <th>Seg. zonal</th>
                       <th>Hora 1ª</th><th>1ª Parada</th>
                       <th>Hora últ.</th><th>Última Parada</th>
@@ -2258,8 +2274,10 @@ function ModuloMaestroCL({ usuario } = {}) {
                         <td className="num" style={{ color: n(r.devueltos) ? "#b42318" : "#cbd5e1", fontWeight: n(r.devueltos) ? 700 : 400 }}>{fmt(r.devueltos)}</td>
                         <td className="num" style={{ color: n(r.d_justificados) ? ORANGE : "#cbd5e1", fontWeight: n(r.d_justificados) ? 700 : 400 }}>{fmt(r.d_justificados)}</td>
                         </>)}
-                        <td className="num" style={{ fontWeight: 700, color: n(r.pct_entrega) >= 98 ? "#0d8043" : n(r.pct_entrega) >= 90 ? "#7a5b16" : "#b42318" }}>
-                          {r.pct_entrega === null ? "—" : `${r.pct_entrega}%`}
+                        <td className="num" style={{ fontWeight: 700, color: n(r.pct_ns) >= 98 ? "#0d8043" : n(r.pct_ns) >= 90 ? "#7a5b16" : "#b42318" }}
+                            title={r.devol_justificadas > 0 ? `NS ácido ${r.pct_entrega}% → ${r.pct_ns}% con ${r.devol_justificadas} devolución(es) justificada(s) automáticamente por su motivo (Mantenedor → Justificación de devoluciones). Este NS es el que usa el pago.` : undefined}>
+                          {r.devol_justificadas > 0 && <span style={{ background: "#fff1e6", color: ORANGE, borderRadius: 4, padding: "0 4px", fontSize: 10.5, marginRight: 4, cursor: "help" }}>J{r.devol_justificadas}</span>}
+                          {r.pct_ns === null || r.pct_ns === undefined ? "—" : `${r.pct_ns}%`}
                         </td>
                         <td style={{ whiteSpace: "nowrap", fontSize: 12 }}
                             title={r.zona_pago ? `Zona: ${r.zona_pago}` : ""}>
@@ -2324,7 +2342,7 @@ function ModuloMaestroCL({ usuario } = {}) {
                     <thead>
                       <tr>
                         <th>ID Viaje</th><th>CECOS</th><th>Folio Guía</th><th>Patente</th><th>Conductor</th>
-                        <th>Motivo</th><th>Receptor</th><th>Comuna</th><th className="num">Parada</th><th>Hora</th>
+                        <th>Motivo</th><th title="Según la regla del motivo en Mantenedor → Justificación de devoluciones">Justificación</th><th>Receptor</th><th>Comuna</th><th className="num">Parada</th><th>Hora</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -2336,6 +2354,11 @@ function ModuloMaestroCL({ usuario } = {}) {
                           <td style={{ fontWeight: 600 }}>{r.patente || "—"}</td>
                           <td style={{ color: "#334155", maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis" }}>{r.conductor || "—"}</td>
                           <td><Etiqueta texto={r.motivo || "—"} color="#b42318" fondo="#fdecec" /></td>
+                          <td title={r.grupo ? `Grupo ${r.grupo}: ${GRUPOS_JUSTIF[r.grupo] || ""}` : "Este motivo no tiene regla: defínela en Mantenedor → Justificación de devoluciones"}>
+                            {r.justifica ? <Etiqueta texto={`✓ Justificada · ${r.grupo}`} color="#0d8043" fondo="#e7f6ec" />
+                              : r.grupo ? <Etiqueta texto={`No justifica · ${r.grupo}`} color="#64748b" fondo="#eef2f9" />
+                              : <Etiqueta texto="Sin regla" color={AMBAR_} fondo="#fff7e6" />}
+                          </td>
                           <td style={{ color: "#475569", maxWidth: 170, overflow: "hidden", textOverflow: "ellipsis" }}>{r.receptor || "—"}</td>
                           <td style={{ color: "#475569" }}>{r.comuna || "—"}</td>
                           <td className="num">{r.parada ?? "—"}</td>
@@ -2343,7 +2366,7 @@ function ModuloMaestroCL({ usuario } = {}) {
                         </tr>
                       ))}
                       {!devolVista.length && (
-                        <tr><td colSpan={10} style={{ padding: 20, color: "#8a94a6", textAlign: "center" }}>
+                        <tr><td colSpan={11} style={{ padding: 20, color: "#8a94a6", textAlign: "center" }}>
                           Sin devoluciones para este día y estos filtros.
                         </td></tr>
                       )}
@@ -4164,6 +4187,8 @@ const COLS_JORNADA = [
   { titulo: "D_JUSTIFICADOS", campo: "d_justificados" },
   { titulo: "PENDIENTES", campo: "pendientes" },
   { titulo: "PCT_ENTREGA", campo: "pct_entrega" },
+  { titulo: "DEVOL_JUSTIFICADAS", campo: "devol_justificadas" },
+  { titulo: "PCT_NS_JUSTIFICADO", campo: "pct_ns" },
   { titulo: "1_PARADA", campo: "hora_primera_parada" },
   { titulo: "COMUNA_1_PARADA", campo: "comuna_primera_parada" },
   { titulo: "ULTIMA_PARADA", campo: "hora_ultima_parada" },
@@ -4178,6 +4203,10 @@ const COLS_JORNADA = [
   { titulo: "ESTADO", campo: "status" },
   { titulo: "LINE_HAUL", valor: r => (r.is_line_haul ? "SI" : "NO") },
 ];
+// Grupos de justificación de devoluciones (Mantenedor → Justificación de devoluciones)
+const GRUPOS_JUSTIF = { A: "Causa del comprador o la dirección", B: "Causa de MELI o la planificación",
+                        C: "Causa operativa del conductor", D: "Fuerza mayor" };
+const conJustificada = (filas) => (filas || []).map(r => ({ ...r, justificada: r.justifica ? "SI" : r.grupo ? "NO" : "SIN REGLA" }));
 const COLS_DEVOL = [
   { titulo: "FECHA", campo: "fecha" },
   { titulo: "ID_VIAJE", campo: "id_viaje" },
@@ -4187,6 +4216,8 @@ const COLS_DEVOL = [
   { titulo: "CONDUCTOR", campo: "conductor" },
   { titulo: "MOTIVO", campo: "motivo" },
   { titulo: "MOTIVO_CODIGO", campo: "motivo_codigo" },
+  { titulo: "GRUPO_JUSTIFICACION", campo: "grupo" },
+  { titulo: "JUSTIFICADA", campo: "justificada" },
   { titulo: "RECEPTOR", campo: "receptor" },
   { titulo: "COMUNA", campo: "comuna" },
   { titulo: "REGION", campo: "region" },
