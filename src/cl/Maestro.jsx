@@ -1920,23 +1920,33 @@ function ModuloMaestroCL({ usuario } = {}) {
                       </div>
                     </div>
 
-                    <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#475569", marginTop: 10, cursor: "pointer" }}>
-                      <input type="checkbox" checked={rFiltros} onChange={e => setRFiltros(e.target.checked)} disabled={rDescargando} />
-                      Aplicar los filtros de la pantalla
-                      <span style={{ color: "#94a3b8" }}>
-                        ({[cecos && `CECOS ${cecos}`, busca.trim() && `búsqueda "${busca.trim()}"`,
-                           rInforme === "jornada" && (soloReparto ? "sin Line Haul" : "con Line Haul"),
-                           rInforme === "jornada" && tipoServicio !== "todos" && tipoServicio].filter(Boolean).join(" · ") || "ninguno activo"})
-                      </span>
-                    </label>
-
-                    <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 14 }}>
+                    {/* Pie: filtros a la izquierda, descarga a la derecha */}
+                    <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 14, paddingTop: 14,
+                                  borderTop: "1px solid #eef1f5", flexWrap: "wrap" }}>
+                      <label style={{ display: "flex", alignItems: "flex-start", gap: 8, cursor: "pointer", flex: "1 1 260px", minWidth: 0 }}>
+                        <input type="checkbox" checked={rFiltros} onChange={e => setRFiltros(e.target.checked)} disabled={rDescargando}
+                               style={{ width: 16, height: 16, margin: "1px 0 0", flex: "none", accentColor: NAVY, cursor: "pointer" }} />
+                        <span style={{ display: "block", lineHeight: 1.35 }}>
+                          <span style={{ display: "block", fontSize: 12.5, fontWeight: 700, color: "#334155" }}>Aplicar los filtros de la pantalla</span>
+                          <span style={{ display: "block", fontSize: 11, color: "#8a94a6", marginTop: 2 }}>
+                            {[cecos && `CECOS ${cecos}`, busca.trim() && `Búsqueda "${busca.trim()}"`,
+                              rInforme === "jornada" && (soloReparto ? "Sin Line Haul" : "Con Line Haul"),
+                              rInforme === "jornada" && tipoServicio !== "todos" && tipoServicio].filter(Boolean).join(" · ") || "Ningún filtro activo"}
+                          </span>
+                        </span>
+                      </label>
                       <button className="mj-btn" disabled={!rDesde || !rHasta || rDescargando} onClick={descargarRango}
-                              style={{ background: NAVY, color: "#fff", borderColor: NAVY, fontWeight: 700 }}>
+                              style={{ background: NAVY, color: "#fff", borderColor: NAVY, fontWeight: 700, padding: "8px 18px",
+                                       flex: "none", opacity: !rDesde || !rHasta || rDescargando ? .6 : 1 }}>
                         {rDescargando ? "Descargando…" : "Descargar CSV"}
                       </button>
-                      {rMsg && <span style={{ fontSize: 12, color: rMsg.startsWith("No se pudo") ? "#b42318" : "#475569" }}>{rMsg}</span>}
                     </div>
+                    {rMsg && (
+                      <div style={{ marginTop: 10, fontSize: 12, textAlign: "right",
+                                    color: rMsg.startsWith("No se pudo") ? "#b42318" : rMsg.startsWith("Listo") ? "#0d8043" : "#475569" }}>
+                        {rMsg}
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
