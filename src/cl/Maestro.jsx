@@ -233,6 +233,137 @@ function Etiqueta({ texto, color, fondo }) {
   );
 }
 
+// ── Calendario de rango: se "pinta" el rango ───────────────────────────────
+// Clic en el primer día y clic en el último, o mantener apretado y arrastrar.
+const MAX_DIAS_RANGO = 93;
+const isoDe = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+const deIso = (s) => { const [y, m, d] = String(s).split("-").map(Number); return new Date(y, m - 1, d); };
+const sumarDias = (s, k) => { const d = deIso(s); d.setDate(d.getDate() + k); return isoDe(d); };
+const difDias = (a, b) => Math.round((deIso(b) - deIso(a)) / 86400000);
+const MESES_ES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
+const fechaCorta = (s) => { const d = deIso(s); return `${d.getDate()} ${MESES_ES[d.getMonth()].slice(0, 3)} ${d.getFullYear()}`; };
+
+function CalendarioRango({ desde, hasta, onCambio, min, max, conDatos }) {
+  const tope = max || isoDe(new Date());
+  const [ancla, setAncla] = useState(null);        // primer día marcado, esperando el último
+  const [sobre, setSobre] = useState(null);        // día bajo el puntero mientras se pinta
+  const [arrastrando, setArrastrando] = useState(false);
+  const [mesBase, setMesBase] = useState(() => {   // mes de la izquierda (se ven dos)
+    const b = deIso(hasta || tope);
+    return new Date(b.getFullYear(), b.getMonth() - 1, 1);
+  });
+
+  useEffect(() => {
+    const soltar = () => setArrastrando(false);
+    window.addEventListener("mouseup", soltar);
+    return () => window.removeEventListener("mouseup", soltar);
+  }, []);
+
+  const terminar = (a, b) => {
+    let [x, y] = a <= b ? [a, b] : [b, a];
+    if (difDias(x, y) >= MAX_DIAS_RANGO) y = sumarDias(x, MAX_DIAS_RANGO - 1);
+    onCambio(x, y);
+    setAncla(null); setSobre(null); setArrastrando(false);
+  };
+  const fuera = (s) => (min && s < min) || s > tope;
+  const alBajar = (s) => {
+    if (fuera(s)) return;
+    if (ancla && !arrastrando) { terminar(ancla, s); return; }
+    setAncla(s); setSobre(s); setArrastrando(true);
+  };
+  const alEntrar = (s) => { if (ancla && !fuera(s)) setSobre(s); };
+  const alSoltar = (s) => {
+    if (!arrastrando) return;
+    setArrastrando(false);
+    if (ancla && s !== ancla && !fuera(s)) terminar(ancla, s);   // si soltó en el mismo día, espera el segundo clic
+  };
+
+  // Rango que se ve pintado: el que se está marcando, o el elegido
+  const [pA, pB] = ancla ? [ancla, sobre || ancla].sort() : [desde, hasta];
+
+  const mes = (offset) => {
+    const m0 = new Date(mesBase.getFullYear(), mesBase.getMonth() + offset, 1);
+    const primero = (m0.getDay() + 6) % 7;                  // lunes = 0
+    const nDias = new Date(m0.getFullYear(), m0.getMonth() + 1, 0).getDate();
+    const celdas = [];
+    for (let i = 0; i < primero; i++) celdas.push(null);
+    for (let d = 1; d <= nDias; d++) celdas.push(isoDe(new Date(m0.getFullYear(), m0.getMonth(), d)));
+    const hoy = isoDe(new Date());
+    return (
+      <div key={offset} style={{ width: 252 }}>
+        <div style={{ textAlign: "center", fontWeight: 800, color: NAVY, fontSize: 13, marginBottom: 6, textTransform: "capitalize" }}>
+          {MESES_ES[m0.getMonth()]} {m0.getFullYear()}
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 36px)", rowGap: 2 }}>
+          {["L", "M", "M", "J", "V", "S", "D"].map((d, i) => (
+            <div key={"h" + i} style={{ textAlign: "center", fontSize: 10.5, color: "#94a3b8", fontWeight: 700, paddingBottom: 4 }}>{d}</div>
+          ))}
+          {celdas.map((s, i) => {
+            if (!s) return <div key={"v" + i} />;
+            const dentro = pA && pB && s >= pA && s <= pB;
+            const borde = s === pA || s === pB;
+            const off = fuera(s);
+            return (
+              <div key={s}
+                   onMouseDown={(e) => { e.preventDefault(); alBajar(s); }}
+                   onMouseEnter={() => alEntrar(s)}
+                   onMouseUp={() => alSoltar(s)}
+                   title={off ? "Sin datos para ese día" : conDatos && !conDatos.has(s) ? "Día sin jornada cargada" : ""}
+                   style={{
+                     height: 32, display: "flex", alignItems: "center", justifyContent: "center", position: "relative",
+                     fontSize: 12.5, fontWeight: borde ? 800 : 500, userSelect: "none",
+                     cursor: off ? "not-allowed" : "pointer",
+                     color: off ? "#cbd5e1" : borde ? "#fff" : dentro ? NAVY : "#1f2937",
+                     background: borde ? NAVY : dentro ? "#dbe7f7" : "transparent",
+                     borderRadius: borde ? 8 : dentro ? 0 : 8,
+                     outline: s === hoy && !borde ? "1px solid #93a8c6" : "none", outlineOffset: -3,
+                   }}>
+                {Number(s.slice(8))}
+                {conDatos && conDatos.has(s) && !borde && (
+                  <span style={{ position: "absolute", bottom: 3, width: 4, height: 4, borderRadius: 2, background: "#0d8043" }} />
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
+
+  const flecha = (k, txt) => (
+    <button className="mj-btn" style={{ padding: "2px 10px" }}
+            onClick={() => setMesBase(new Date(mesBase.getFullYear(), mesBase.getMonth() + k, 1))}>{txt}</button>
+  );
+  const atajo = (txt, a, b) => (
+    <button className="mj-chip" onClick={() => { setAncla(null); onCambio(a < (min || a) ? min : a, b > tope ? tope : b); }}>{txt}</button>
+  );
+  const t = deIso(tope);
+  const iniMes = isoDe(new Date(t.getFullYear(), t.getMonth(), 1));
+  const iniMesAnt = isoDe(new Date(t.getFullYear(), t.getMonth() - 1, 1));
+  const finMesAnt = isoDe(new Date(t.getFullYear(), t.getMonth(), 0));
+
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
+        {atajo("Últimos 7 días", sumarDias(tope, -6), tope)}
+        {atajo("Últimos 30 días", sumarDias(tope, -29), tope)}
+        {atajo("Este mes", iniMes, tope)}
+        {atajo("Mes pasado", iniMesAnt, finMesAnt)}
+      </div>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+        {flecha(-1, "‹")}
+        <span style={{ fontSize: 11, color: "#8a94a6" }}>
+          {ancla ? "Marca el último día del rango" : "Marca el primer día y luego el último, o arrastra"}
+        </span>
+        {flecha(1, "›")}
+      </div>
+      <div style={{ display: "flex", gap: 24, flexWrap: "wrap", justifyContent: "center" }}>
+        {mes(0)}{mes(1)}
+      </div>
+    </div>
+  );
+}
+
 // ── Módulo ─────────────────────────────────────────────────────────────────
 function ModuloMaestroCL({ usuario } = {}) {
   const [dias, setDias] = useState([]);
@@ -243,6 +374,15 @@ function ModuloMaestroCL({ usuario } = {}) {
   const [tipoServicio, setTipoServicio] = useState("todos");   // todos | Última milla | MELI ONE
   const [cecos, setCecos] = useState("");
   const [busca, setBusca] = useState("");
+  // ── Descarga por rango de fechas ──
+  const [rangoAbierto, setRangoAbierto] = useState(false);
+  const [rDesde, setRDesde] = useState("");
+  const [rHasta, setRHasta] = useState("");
+  const [rInforme, setRInforme] = useState("jornada");    // jornada | devol | traspasos
+  const [rFiltros, setRFiltros] = useState(true);          // aplicar los filtros de la pantalla
+  const [rDescargando, setRDescargando] = useState(false);
+  const [rMsg, setRMsg] = useState("");
+  const [diasRango, setDiasRango] = useState([]);          // todos los días con jornada (la lista de arriba trae solo 60)
   const [kpiAbierto, setKpiAbierto] = useState(null);
   const [recuadre, setRecuadre] = useState(null);
   const [aCuadrar, setACuadrar] = useState([]);
@@ -1351,9 +1491,10 @@ function ModuloMaestroCL({ usuario } = {}) {
   // Filtros en cliente
   const texto = busca.trim().toLowerCase();
   const coincide = (...campos) => !texto || campos.some(c => String(c ?? "").toLowerCase().includes(texto));
-  // Cada viaje con su CECOS real, segmentación y alerta del motor de zonas.
+  // Cada viaje con su CECOS real, segmentación, alerta del motor de zonas, supervisor,
+  // empresa y tipo de ruta. Se usa para el día en pantalla y para la descarga por rango.
   // centro_meli guarda el código del centro de MELI (SRM1, SIL1…) que antes se mostraba como CECOS.
-  const jornadaZ = jornada.map(r => {
+  const enriquecerJornada = (filas, zonaRuta, tipoRuta, certPat) => filas.map(r => {
     const z = zonaRuta[String(r.id_viaje)];
     return { ...r, centro_meli: r.cecos, cecos_real: z?.cecos_admin || null,
              segmentacion: z?.segmentacion || null, zona_pago: z?.zona_principal || null,
@@ -1377,7 +1518,8 @@ function ModuloMaestroCL({ usuario } = {}) {
              })(),
              servicio_txt: r.tipo === "melione" ? "MELI ONE" : r.tipo === "last_mile" ? "ULTIMA MILLA" : (r.tipo_servicio || "") };
   });
-  const jornadaVista = jornadaZ
+  const jornadaZ = enriquecerJornada(jornada, zonaRuta, tipoRuta, certPat);
+  const filtrarJornada = (filas) => filas
     // Tolerante a NULL a propósito: una ruta sin clasificar se trata como última
     // milla en vez de desaparecer de la vista sin explicación.
     .filter(r => (!soloReparto || r.is_line_haul !== true))
@@ -1386,12 +1528,76 @@ function ModuloMaestroCL({ usuario } = {}) {
     .filter(r => coincide(r.id_viaje, r.patente, r.conductor, r.cecos_real, r.centro_meli, r.segmentacion, r.supervisor, r.empresa,
                           r.tipo_ruta ? etiquetaTipo(r.tipo_ruta).t : (r.estado_tipo === "por_confirmar" ? "no planificada" : ""),
                           r.comuna_primera_parada, r.comuna_ultima_parada, r.ciclo));
-  const devolVista = devol
+  const filtrarDevol = (filas) => filas
     .filter(r => !cecos || r.cecos === cecos)
     .filter(r => coincide(r.id_viaje, r.folio_guia, r.patente, r.conductor, r.motivo, r.comuna, r.receptor));
-  const traspVista = trasp
+  const filtrarTrasp = (filas) => filas
     .filter(r => !cecos || r.sc_origen === cecos || r.sc_destino === cecos)
     .filter(r => coincide(r.ruta_origen, r.ruta_destino, r.chofer_origen, r.chofer_destino, r.patente_origen, r.patente_destino));
+  const jornadaVista = filtrarJornada(jornadaZ);
+  const devolVista = filtrarDevol(devol);
+  const traspVista = filtrarTrasp(trasp);
+  const diasR = diasRango.length ? diasRango : dias;
+
+  // ── Descarga por rango de fechas ──
+  // Lee el rango completo en páginas de 1000 filas y arma el mismo CSV que el del día.
+  const abrirRango = () => {
+    if (!rDesde || !rHasta) {   // por defecto, los últimos 7 días con datos
+      const tope = dias[0] || fecha;
+      const piso = dias[dias.length - 1];
+      const ini = sumarDias(tope, -6);
+      setRDesde(piso && ini < piso ? piso : ini); setRHasta(tope);
+    }
+    setRInforme(["jornada", "devol", "traspasos"].includes(tab) ? tab : "jornada");
+    setRMsg(""); setRangoAbierto(true);
+    if (!diasRango.length) {
+      apiSuave("vw_dias_disponibles?select=fecha&order=fecha.desc&limit=1000", [])
+        .then(r => setDiasRango((r || []).map(x => x.fecha)));
+    }
+  };
+  const leerTodo = async (base, orden, etiqueta) => {
+    const filas = [];
+    for (let off = 0; off < 300000; off += 1000) {
+      const pag = await api(`${base}&order=${orden}&limit=1000&offset=${off}`);
+      filas.push(...(pag || []));
+      setRMsg(`Leyendo ${etiqueta}… ${fmt(filas.length)} filas`);
+      if (!pag || pag.length < 1000) break;
+    }
+    return filas;
+  };
+  const descargarRango = async () => {
+    if (!rDesde || !rHasta) return;
+    setRDescargando(true); setRMsg("");
+    try {
+      const rango = (campo) => `${campo}=gte.${rDesde}&${campo}=lte.${rHasta}`;
+      const nombreRango = `${rDesde}_a_${rHasta}`;
+      let filas = [], cols = [], nombre = "";
+      if (rInforme === "jornada") {
+        const jor = await leerTodo(`vw_maestro_jornada?${rango("fecha")}`, "fecha.asc,id_viaje.asc", "viajes");
+        const zr = await leerTodo(`ruta_zona_dia?${rango("fecha")}&select=id_ruta,cecos_admin,segmentacion,zona_principal,origen_zona,alerta,cecos_fuente`, "fecha.asc,id_ruta.asc", "zonas");
+        const tr = await leerTodo(`vw_tipo_ruta_dia?${rango("fecha")}&select=id_ruta,tipo_sugerido,tipo_confirmado,tipo_ruta,estado_tipo,no_planificada,nombre_ruta,line_haul,con_ambulancia,confirmado_por,rol,nota`, "fecha.asc,id_ruta.asc", "tipos de ruta");
+        setRMsg("Buscando la empresa de cada patente…");
+        const cp = await empresasDePatentes([...new Set(jor.map(r => r.patente).filter(Boolean))]);
+        const z = Object.fromEntries(zr.map(x => [String(x.id_ruta), x]));
+        const t = Object.fromEntries(tr.map(x => [String(x.id_ruta), x]));
+        const todas = enriquecerJornada(jor, z, t, cp);
+        filas = rFiltros ? filtrarJornada(todas) : todas;
+        cols = COLS_JORNADA; nombre = `maestro_jornada_${nombreRango}`;
+      } else if (rInforme === "devol") {
+        const dev = await leerTodo(`vw_maestro_devoluciones?${rango("fecha")}`, "fecha.asc,cecos.asc,id_viaje.asc,folio_guia.asc", "devoluciones");
+        filas = rFiltros ? filtrarDevol(dev) : dev;
+        cols = COLS_DEVOL; nombre = `devoluciones_${nombreRango}`;
+      } else {
+        const tra = await leerTodo(`vw_traspasos_resumen?${rango("fecha_operativa")}`, "fecha_operativa.asc,ruta_origen.asc,ruta_destino.asc", "traspasos");
+        filas = rFiltros ? filtrarTrasp(tra) : tra;
+        cols = COLS_TRASP; nombre = `traspasos_${nombreRango}`;
+      }
+      if (!filas.length) { setRMsg("No hay filas en ese rango" + (rFiltros ? " con los filtros de la pantalla." : ".")); return; }
+      descargarCSV(nombre, filas, cols);
+      setRMsg(`Listo: ${fmt(filas.length)} filas descargadas en ${nombre}.csv`);
+    } catch (e) { setRMsg("No se pudo descargar: " + e.message); }
+    finally { setRDescargando(false); }
+  };
 
   // En Jornada se filtra por CECOS real; en Devoluciones y Traspasos, por centro de MELI.
   const listaCecos = tab === "jornada"
@@ -1676,6 +1882,64 @@ function ModuloMaestroCL({ usuario } = {}) {
                 {!soloReparto ? "✓ " : ""}Incluir Line Haul{nLineHaul ? ` (${fmt(nLineHaul)})` : ""}
               </button>
               <div style={{ flex: 1 }} />
+              <button className="mj-btn" onClick={abrirRango} title="Descargar Jornada, Devoluciones o Traspasos de varios días">
+                📅 Descargar por rango
+              </button>
+              {rangoAbierto && (
+                <div onClick={() => !rDescargando && setRangoAbierto(false)}
+                     style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,.35)", zIndex: 1000,
+                              display: "flex", alignItems: "flex-start", justifyContent: "center", padding: "60px 12px", overflowY: "auto" }}>
+                  <div onClick={e => e.stopPropagation()}
+                       style={{ background: "#fff", borderRadius: 14, padding: "18px 20px", width: "100%", maxWidth: 600,
+                                boxShadow: "0 20px 50px rgba(15,23,42,.25)" }}>
+                    <div style={{ display: "flex", alignItems: "center", marginBottom: 12 }}>
+                      <div style={{ fontWeight: 800, color: NAVY, fontSize: 15, flex: 1 }}>Descargar informe por rango de fechas</div>
+                      <button className="mj-btn" disabled={rDescargando} onClick={() => setRangoAbierto(false)}>Cerrar</button>
+                    </div>
+
+                    <div style={{ display: "flex", gap: 6, marginBottom: 14, flexWrap: "wrap" }}>
+                      {[["jornada", "Maestro Jornada"], ["devol", "Devoluciones"], ["traspasos", "Traspasos"]].map(([id, txt]) => (
+                        <button key={id} className={`mj-chip ${rInforme === id ? "on" : ""}`} disabled={rDescargando}
+                                onClick={() => setRInforme(id)}>{rInforme === id ? "✓ " : ""}{txt}</button>
+                      ))}
+                    </div>
+
+                    <CalendarioRango desde={rDesde} hasta={rHasta}
+                                     min={diasR.length ? diasR[diasR.length - 1] : undefined}
+                                     max={diasR.length ? diasR[0] : undefined}
+                                     conDatos={new Set(diasR)}
+                                     onCambio={(a, b) => { setRDesde(a); setRHasta(b); setRMsg(""); }} />
+
+                    <div style={{ marginTop: 14, padding: "10px 12px", background: "#f6f8fb", borderRadius: 10, fontSize: 12.5, color: "#334155" }}>
+                      {rDesde && rHasta
+                        ? <span><b style={{ color: NAVY }}>{fechaCorta(rDesde)}</b> al <b style={{ color: NAVY }}>{fechaCorta(rHasta)}</b> · {difDias(rDesde, rHasta) + 1} días
+                            {" · "}{diasR.filter(d => d >= rDesde && d <= rHasta).length} con jornada cargada</span>
+                        : "Marca el rango en el calendario."}
+                      <div style={{ fontSize: 11, color: "#8a94a6", marginTop: 4 }}>
+                        Máximo {MAX_DIAS_RANGO} días. El punto verde marca los días con jornada cargada.
+                      </div>
+                    </div>
+
+                    <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#475569", marginTop: 10, cursor: "pointer" }}>
+                      <input type="checkbox" checked={rFiltros} onChange={e => setRFiltros(e.target.checked)} disabled={rDescargando} />
+                      Aplicar los filtros de la pantalla
+                      <span style={{ color: "#94a3b8" }}>
+                        ({[cecos && `CECOS ${cecos}`, busca.trim() && `búsqueda "${busca.trim()}"`,
+                           rInforme === "jornada" && (soloReparto ? "sin Line Haul" : "con Line Haul"),
+                           rInforme === "jornada" && tipoServicio !== "todos" && tipoServicio].filter(Boolean).join(" · ") || "ninguno activo"})
+                      </span>
+                    </label>
+
+                    <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 14 }}>
+                      <button className="mj-btn" disabled={!rDesde || !rHasta || rDescargando} onClick={descargarRango}
+                              style={{ background: NAVY, color: "#fff", borderColor: NAVY, fontWeight: 700 }}>
+                        {rDescargando ? "Descargando…" : "Descargar CSV"}
+                      </button>
+                      {rMsg && <span style={{ fontSize: 12, color: rMsg.startsWith("No se pudo") ? "#b42318" : "#475569" }}>{rMsg}</span>}
+                    </div>
+                  </div>
+                </div>
+              )}
               {tab === "jornada" && (
                 <button className="mj-btn" onClick={() => descargarCSV(`maestro_jornada_${fecha}`, jornadaVista, COLS_JORNADA)}>
                   Descargar CSV
