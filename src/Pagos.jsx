@@ -1333,7 +1333,7 @@ function FormularioInicialSC({ scId, fecha, rowPrecargado = undefined }) {
     <div>
       <div style={{ fontSize: 12, fontWeight: 700, color: "#374151", marginBottom: 6 }}>
         📝 Formulario del supervisor ({fecha})
-        {row.estado_dia && <span style={{ fontSize: 10, fontWeight: 600, color: "#9ca3af", marginLeft: 6 }}>· {row.estado_dia}</span>}
+        {row.estado_dia && <span style={{ fontSize: 10, fontWeight: 700, color: row.estado_dia === "cerrado_supervisor" ? "#1e3a5f" : "#b45309", marginLeft: 6 }}>· {{ cerrado_supervisor: "cerrada por el supervisor", cerrado_auto: "cerrada automática", abierto: "abierta (sin cerrar)" }[row.estado_dia] || row.estado_dia}</span>}
       </div>
       {/* Jornada SIN OPERACIÓN — color especial + motivo del supervisor */}
       {row.sin_operacion === true && (
@@ -1751,18 +1751,26 @@ function PanelControlSupervisores() {
           // (The Eyes), no las rosterizadas. Y completo exige que todas estén
           // confirmadas y ninguna sin empresa — antes bastaba con que hubiera
           // algún dato viejo, y el panel marcaba 6/6 sin haberse confirmado nada.
-          const { data, error } = await sb.rpc("fn_flota_dia_sc", { p_sc: sc, p_fecha: esHoy ? mxHoy : fecha });
+          const fDia = esHoy ? mxHoy : fecha;
+          const [{ data, error }, tel] = await Promise.all([
+            sb.rpc("fn_flota_dia_sc", { p_sc: sc, p_fecha: fDia }),
+            sb.rpc("fn_telefonos_ultimos", { p_sc: sc, p_fecha: fDia }),
+          ]);
           if (error) throw error;
           const fs = Array.isArray(data) ? data : [];
+          // Regla de la bitácora (18-nov-2026): el ítem queda listo solo si cada
+          // placa tiene empresa, teléfono guardado y está confirmada ese día.
+          const conTel = new Set((tel.data || []).filter((x) => String(x.telefono || "").replace(/\D/g, "").length >= 10).map((x) => x.placa));
           // Cero placas con viaje: el item aplica igual y queda cumplido, pero
           // se devuelve el objeto — si se devolviera null, el total del panel
           // bajaria a 5 sin decir por que.
-          if (fs.length === 0) return { sc, t: { total: 0, confirmadas: 0, completo: true } };
+          if (fs.length === 0) return { sc, t: { total: 0, confirmadas: 0, conTel: 0, sinEmp: 0, completo: true } };
           const confirmadas = fs.filter((f) => f.confirmado_hoy).length;
           const sinEmp = fs.filter((f) => f.sin_empresa).length;
+          const nConTel = fs.filter((f) => conTel.has(f.placa)).length;
           return { sc, filas: fs, t: {
-            total: fs.length, confirmadas,
-            completo: sinEmp === 0 && confirmadas === fs.length,
+            total: fs.length, confirmadas, conTel: nConTel, sinEmp,
+            completo: sinEmp === 0 && nConTel === fs.length && confirmadas === fs.length,
           } };
         } catch { return { sc, t: { total: 0, confirmadas: 0, completo: false } }; }
       });
@@ -1875,10 +1883,8 @@ function PanelControlSupervisores() {
         const row = bitHoy[sc] || null;
         const est = estadoHoy(row);
         const t6 = item6De(sc);
-        let bitacora = "Sin completar";
-        if (row?.sin_operacion === true) bitacora = "Sin Operación";
-        else if (est.completados === est.total && (!t6 || t6.completo)) bitacora = "Completa";
-        else if (est.completados > 0) bitacora = "Parcial";
+        const eb = estadoBitacora(sc);
+        const bitacora = `${eb.t} (${eb.done}/${eb.totalItems})`;
 
         const ayud = row?.declarado_ayudantes_si_no ? (row.declarado_ayudantes_cantidad ?? arr(row.declarado_ayudantes_detalle).length) : 0;
         const amb = row?.declarado_ambulancias_si_no ? (row.declarado_ambulancias_cantidad ?? arr(row.declarado_ambulancias_detalle).length) : 0;
@@ -1982,19 +1988,38 @@ function PanelControlSupervisores() {
     });
   }
 
+  // ─── Estado de la bitácora de un SC (igual que la bitácora y el panel del jefe)
+  // Cerrada = el supervisor presionó «Cerrar». Completa · sin cerrar = contestó
+  // todo pero no presionó el botón.
+  function estadoBitacora(sc) {
+    const row = bitHoy[sc];
+    const eh = estadoHoy(row);
+    const t6 = item6De(sc);
+    const totalItems = t6 ? 5 : 4;
+    const done = eh.completados + (t6 && t6.completo ? 1 : 0);
+    if (row?.estado_dia === "cerrado_supervisor") return { k: "cerrada", t: "Cerrada", done, totalItems };
+    if (row?.estado_dia === "cerrado_auto") return { k: "auto", t: "Cerrada automática", done, totalItems };
+    if (eh.sinOperacion) return { k: "sinop", t: "Sin operación", done: totalItems, totalItems };
+    if (done === totalItems) return { k: "completa", t: "Completa sin cerrar", done, totalItems };
+    const contesto = row && (eh.items.ayudantes || eh.items.ambulancias || eh.items.pnr);
+    if (!contesto) return { k: "nada", t: "Sin empezar", done: 0, totalItems };
+    return { k: "curso", t: "En curso", done, totalItems };
+  }
+
   // ─── Totales para el resumen ────────────────────────────────────────
   const totales = useMemo(() => {
-    let completaronHoy = 0, conciliaronD1 = 0;
+    let completaronHoy = 0, conciliaronD1 = 0, sinCerrar = 0;
+    const vistos = new Set();
     for (const s of supervisores) {
-      const eh = estadoHoy(bitHoy[s.sc]);
-      const t6 = item6De(s.sc);
-      const totalItems = t6 ? 5 : 4;
-      const done = eh.completados + (t6 && t6.completo ? 1 : 0);
-      if (done === totalItems || eh.sinOperacion) completaronHoy++;
+      if (vistos.has(s.sc)) continue;
+      vistos.add(s.sc);
+      const eb = estadoBitacora(s.sc);
+      if (["cerrada", "auto", "sinop"].includes(eb.k)) completaronHoy++;
+      if (eb.k === "completa") sinCerrar++;
       const ed = estadoD1(bitAyer[s.sc]);
       if (ed.estado === "ok") conciliaronD1++;
     }
-    return { completaronHoy, conciliaronD1, total: supervisores.length };
+    return { completaronHoy, conciliaronD1, sinCerrar, total: vistos.size };
   }, [supervisores, bitHoy, bitAyer, terceros6, t6Activo]);
 
   // ─── Semáforo por SC (bitácora + Torre) ────────────────────────────
@@ -2008,6 +2033,7 @@ function PanelControlSupervisores() {
     const totalItems = t6 ? 5 : 4;
     const done = eh.completados + (t6 && t6.completo ? 1 : 0);
     const completa = eh.sinOperacion || done === totalItems;
+    const eb = estadoBitacora(sc);
     // No salidas del día anterior que el supervisor no ha respondido
     const nsSinDeclarar = (noSalDia[sc] || []).filter((x) => !x.guardado_at).length;
     const pnrSinResolver = (Array.isArray(row?.declarado_pnr_detalle) ? row.declarado_pnr_detalle : [])
@@ -2015,12 +2041,13 @@ function PanelControlSupervisores() {
     const motivos = [];
     if (!eh.sinOperacion && done === 0) motivos.push("bitácora sin completar");
     else if (!completa) motivos.push(`bitácora ${done}/${totalItems}`);
+    else if (eb.k === "completa") motivos.push("completa · sin cerrar");
     if (nsSinDeclarar) motivos.push(`${nsSinDeclarar} no salida(s) sin responder`);
     if (pnrSinResolver) motivos.push(`${pnrSinResolver} PNR sin resolver`);
     let color = "verde";
     if ((!eh.sinOperacion && done === 0) || nsSinDeclarar) color = "rojo";
-    else if (!completa || pnrSinResolver) color = "amarillo";
-    return { color, done, totalItems, sinOp: eh.sinOperacion, motivos };
+    else if (!completa || pnrSinResolver || eb.k === "completa") color = "amarillo";
+    return { color, done, totalItems, sinOp: eh.sinOperacion, motivos, estado: eb };
   };
   const tarjetasSC = useMemo(() => {
     const orden = { rojo: 0, amarillo: 1, verde: 2 };
@@ -2056,7 +2083,7 @@ function PanelControlSupervisores() {
                               { n: "2 · Ambulancias", ok: sinOp || eh.items.ambulancias },
                               { n: "3 · No Salidas a Ruta", ok: nsResp === ns.length, na: fecha < NOSAL_DESDE, extra: ns.length ? ` (${nsResp}/${ns.length})` : " (sin casos)" },
                               { n: "4 · PNR", ok: sinOp || eh.items.pnr },
-                              { n: "5 · Inventario de Flota", ok: !!(t6 && t6.completo), na: !t6, extra: t6 ? ` (${t6.confirmadas}/${t6.total})` : "" },
+                              { n: "5 · Inventario de Flota", ok: !!(t6 && t6.completo), na: !t6, extra: t6 ? (t6.total ? ` (${t6.confirmadas}/${t6.total} confirmadas · ${t6.conTel ?? 0}/${t6.total} con teléfono${t6.sinEmp ? ` · ${t6.sinEmp} sin empresa` : ""})` : " (sin placas)") : "" },
                             ].map((it, k) => (
                               <span key={k} style={{
                                 fontSize: 11, fontWeight: 600, padding: "3px 9px", borderRadius: 14,
@@ -2145,7 +2172,8 @@ function PanelControlSupervisores() {
           {informeBusy ? "⏳ Generando…" : "⬇ Descargar informe"}
         </button>
         <div style={{ marginLeft: "auto", fontSize: 13, color: "#374151" }}>
-          <strong>{totales.completaronHoy}/{totales.total}</strong> completaron Hoy
+          <strong>{totales.completaronHoy}/{totales.total}</strong> cerraron
+          {totales.sinCerrar > 0 && <> · <strong style={{ color: "#b45309" }}>{totales.sinCerrar}</strong> completas sin cerrar</>}
         </div>
       </div>
 
