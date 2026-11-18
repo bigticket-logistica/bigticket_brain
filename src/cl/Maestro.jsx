@@ -364,6 +364,66 @@ function CalendarioRango({ desde, hasta, onCambio, min, max, conDatos }) {
   );
 }
 
+// ── Detalle de una colecta (first mile) dentro de la Jornada ──────────────
+// NS de la colecta = paradas exitosas ÷ paradas totales (no paquetes).
+const horaCL = (v) => {
+  if (!v) return "—";
+  const d = new Date(v);
+  return isNaN(d) ? String(v) : d.toLocaleTimeString("es-CL", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "America/Santiago" });
+};
+function DetalleColecta({ d }) {
+  if (!d) return <div style={{ fontSize: 12, color: "#8a94a6" }}>Cargando el detalle de la colecta…</div>;
+  if (d.error) return <div style={{ fontSize: 12, color: "#b42318" }}>{d.error}</div>;
+  const tot = n(d.paradas_total), ok = n(d.paradas_exitosas);
+  const caja = (titulo, filas) => (
+    <div style={{ background: "#fff", border: "1px solid #e4e9f1", borderRadius: 10, padding: "8px 12px", minWidth: 200 }}>
+      <div style={{ fontSize: 10.5, fontWeight: 800, color: "#8a94a6", letterSpacing: .4, marginBottom: 4 }}>{titulo}</div>
+      {filas.filter(Boolean).map(([k, v, color]) => (
+        <div key={k} style={{ display: "flex", justifyContent: "space-between", gap: 14, fontSize: 12, padding: "2px 0" }}>
+          <span style={{ color: "#64748b" }}>{k}</span>
+          <span style={{ fontWeight: 700, color: color || "#1f2937", fontVariantNumeric: "tabular-nums" }}>{v}</span>
+        </div>
+      ))}
+    </div>
+  );
+  return (
+    <div>
+      <div style={{ fontSize: 12, color: "#334155", marginBottom: 8 }}>
+        <b style={{ color: NAVY }}>Colecta {d.nombre_ruta || ""}</b>
+        {d.tipo_vehiculo && <span style={{ color: "#8a94a6" }}> · {d.tipo_vehiculo}</span>}
+        <span style={{ color: "#8a94a6" }}> · Nivel de Servicio = paradas exitosas ÷ paradas totales = </span>
+        <b style={{ color: tot && ok === tot ? "#0d8043" : "#b42318" }}>{tot ? `${ok}/${tot} (${Math.round(100 * ok / tot)} %)` : "—"}</b>
+      </div>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+        {caja("PARADAS", [
+          ["Totales", fmt(tot)],
+          ["Exitosas", fmt(ok), "#0d8043"],
+          ["Fallidas", fmt(d.paradas_fallidas), n(d.paradas_fallidas) ? "#b42318" : "#94a3b8"],
+          ["Con problema", fmt(d.paradas_con_problema), n(d.paradas_con_problema) ? "#b42318" : "#94a3b8"],
+          ["Pendientes", fmt(d.paradas_pendientes), n(d.paradas_pendientes) ? AMBAR_ : "#94a3b8"],
+          ["Parciales", fmt(d.paradas_parciales), n(d.paradas_parciales) ? AMBAR_ : "#94a3b8"],
+        ])}
+        {caja("PAQUETES (solo referencia)", [
+          ["Estimados", fmt(d.paquetes_estimados)],
+          ["Preparados", fmt(d.paquetes_preparados)],
+          ["Recolectados", fmt(d.paquetes_recolectados), "#0d8043"],
+          d.volumen && ["Volumen cargado", `${d.volumen} m³`],
+          d.capacidad_libre && ["Capacidad libre", `${d.capacidad_libre} m³`],
+        ])}
+        {caja("HORARIOS", [
+          ["Inicio plan / real", `${horaCL(d.inicio_planificado)} / ${horaCL(d.inicio)}`],
+          ["Fin plan / real", `${horaCL(d.fin_planificado)} / ${horaCL(d.fin)}`],
+          ["Llegó al centro", d.llego_a_centro === true || (d.llego_a_centro && d.llego_a_centro !== "false") ? "Sí" : "No",
+            d.llego_a_centro === true || (d.llego_a_centro && d.llego_a_centro !== "false") ? "#0d8043" : "#94a3b8"],
+        ])}
+      </div>
+      <div style={{ fontSize: 11, color: "#8a94a6", marginTop: 8 }}>
+        MELI informa cuántas paradas quedaron en cada estado, pero no cuál fue cada una ni su motivo.
+      </div>
+    </div>
+  );
+}
+
 // ── Módulo ─────────────────────────────────────────────────────────────────
 function ModuloMaestroCL({ usuario } = {}) {
   const [dias, setDias] = useState([]);
@@ -382,7 +442,10 @@ function ModuloMaestroCL({ usuario } = {}) {
   const [rFiltros, setRFiltros] = useState(true);          // aplicar los filtros de la pantalla
   const [rDescargando, setRDescargando] = useState(false);
   const [rMsg, setRMsg] = useState("");
-  const [diasRango, setDiasRango] = useState([]);          // todos los días con jornada (la lista de arriba trae solo 60)
+  const [diasRango, setDiasRango] = useState([]);
+  // ── Detalle de colectas (first mile) en la Jornada ──
+  const [colAbierta, setColAbierta] = useState(null);      // id_viaje de la colecta abierta
+  const [colDet, setColDet] = useState({});                // id_viaje -> fila de colectas_dia (o {error})          // todos los días con jornada (la lista de arriba trae solo 60)
   const [kpiAbierto, setKpiAbierto] = useState(null);
   const [recuadre, setRecuadre] = useState(null);
   const [aCuadrar, setACuadrar] = useState([]);
@@ -1500,10 +1563,15 @@ function ModuloMaestroCL({ usuario } = {}) {
              segmentacion: z?.segmentacion || null, zona_pago: z?.zona_principal || null,
              alerta_zona: z?.alerta || null, origen_zona: z?.origen_zona || null,
              cecos_fuente: z?.cecos_fuente || null,
-             // por patente (Vehículos BT); si no, el supervisor a cargo del CECO (bitácora)
-             supervisor: vehSup[normPatente(r.patente)]?.supervisor || (z?.cecos_admin && supCeco[z.cecos_admin]) || null,
-             supervisor_fuente: vehSup[normPatente(r.patente)]?.supervisor ? "patente"
-                              : (z?.cecos_admin && supCeco[z.cecos_admin]) ? "ceco" : null,
+             // por patente (Vehículos BT); si no, el supervisor a cargo del CECO (bitácora).
+             // Colectas de first mile (solo lunes): siempre el supervisor del CECO (SRM1),
+             // sin importar a quién pertenece la patente.
+             ...(() => {
+               const deCeco = (z?.cecos_admin && supCeco[z.cecos_admin]) || null;
+               const dePatente = vehSup[normPatente(r.patente)]?.supervisor || null;
+               if (r.tipo === "colecta") return { supervisor: deCeco || dePatente, supervisor_fuente: deCeco ? "ceco" : dePatente ? "patente" : null };
+               return { supervisor: dePatente || deCeco, supervisor_fuente: dePatente ? "patente" : deCeco ? "ceco" : null };
+             })(),
              empresa: certPat[normPatente(r.patente)]?.tercero || null,
              empresa_rut: certPat[normPatente(r.patente)]?.rut_tercero || null,
              empresa_estado: certPat[normPatente(r.patente)]?.estado || null,
@@ -1538,6 +1606,21 @@ function ModuloMaestroCL({ usuario } = {}) {
   const devolVista = filtrarDevol(devol);
   const traspVista = filtrarTrasp(trasp);
   const diasR = diasRango.length ? diasRango : dias;
+
+  // Abre el detalle de una colecta debajo de su fila; lo lee de colectas_dia la primera vez.
+  const alternarColecta = async (r) => {
+    const id = String(r.id_viaje);
+    if (colAbierta === id) { setColAbierta(null); return; }
+    setColAbierta(id);
+    if (colDet[id] && !colDet[id].error) return;
+    try {
+      const filas = await api(`colectas_dia?fecha=eq.${r.fecha}&id_ruta=eq.${id}&select=nombre_ruta,tipo_vehiculo,status,`
+        + "paradas_total,paradas_exitosas,paradas_fallidas,paradas_con_problema,paradas_pendientes,paradas_parciales,"
+        + "paquetes_estimados,paquetes_recolectados,paquetes_preparados,inicio_planificado,inicio,fin_planificado,fin,llego_a_centro,"
+        + "volumen:raw->>loadedVolume,capacidad_libre:raw->>vehicleCapacityAvailable");
+      setColDet(d => ({ ...d, [id]: filas?.[0] || { error: "MELI no informó detalle de esta colecta." } }));
+    } catch (e) { setColDet(d => ({ ...d, [id]: { error: e.message } })); }
+  };
 
   // ── Descarga por rango de fechas ──
   // Lee el rango completo en páginas de 1000 filas y arma el mismo CSV que el del día.
@@ -1988,7 +2071,8 @@ function ModuloMaestroCL({ usuario } = {}) {
                   </thead>
                   <tbody>
                     {jornadaVista.map(r => (
-                      <tr key={`${r.id_viaje}-${r.fecha}`}>
+                      <Fragment key={`${r.id_viaje}-${r.fecha}`}>
+                      <tr style={colAbierta === String(r.id_viaje) ? { background: "#f3f7fc" } : undefined}>
                         <td style={{ fontWeight: 700, color: NAVY }}>
                           {r.id_viaje}
                         </td>
@@ -2085,7 +2169,18 @@ function ModuloMaestroCL({ usuario } = {}) {
                         <td style={{ fontWeight: 600 }}>{r.patente || "—"}</td>
                         <td style={{ color: "#334155", maxWidth: 190, overflow: "hidden", textOverflow: "ellipsis" }}>{r.conductor || "—"}</td>
                         <td>{r.con_ayudante ? <Etiqueta texto="Sí" color="#0d8043" fondo="#e7f6ec" /> : <span style={{ color: "#cbd5e1" }}>—</span>}</td>
-                        <td className="num">{fmt(r.paradas)}</td>
+                        <td className="num">
+                          {r.tipo === "colecta" ? (
+                            // Colecta: paradas ejecutadas / totales; se abre el detalle debajo de la fila
+                            <button onClick={() => alternarColecta(r)}
+                                    title="Ver el detalle de la colecta (paradas y paquetes según MELI)"
+                                    style={{ border: "1px solid #cfe0f3", background: colAbierta === String(r.id_viaje) ? NAVY : "#eef4fb",
+                                             color: colAbierta === String(r.id_viaje) ? "#fff" : NAVY, borderRadius: 6,
+                                             padding: "1px 7px", fontSize: 11.5, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>
+                              {colAbierta === String(r.id_viaje) ? "▾" : "▸"} {fmt(Math.round(n(r.pct_entrega) * n(r.paradas) / 100))}/{fmt(r.paradas)}
+                            </button>
+                          ) : fmt(r.paradas)}
+                        </td>
                         <td className="num" style={{ fontWeight: 700 }}>{fmt(r.cargados)}</td>
                         <td className="num" style={{ color: "#0d8043", fontWeight: 700 }}>{fmt(r.entregados)}</td>
                         <td className="num" style={{ color: n(r.devueltos) ? "#b42318" : "#cbd5e1", fontWeight: n(r.devueltos) ? 700 : 400 }}>{fmt(r.devueltos)}</td>
@@ -2119,6 +2214,14 @@ function ModuloMaestroCL({ usuario } = {}) {
                         <td>{r.ciclo || "—"}</td>
                         <td><Etiqueta texto={r.status || "—"} color={r.status === "finished" ? "#0d8043" : "#475569"} fondo={r.status === "finished" ? "#e7f6ec" : "#eef2f9"} /></td>
                       </tr>
+                      {r.tipo === "colecta" && colAbierta === String(r.id_viaje) && (
+                        <tr>
+                          <td colSpan={23} style={{ background: "#f3f7fc", padding: "10px 14px 14px", borderBottom: "2px solid #dbe7f7" }}>
+                            <DetalleColecta d={colDet[String(r.id_viaje)]} />
+                          </td>
+                        </tr>
+                      )}
+                      </Fragment>
                     ))}
                     {!jornadaVista.length && (
                       <tr><td colSpan={23} style={{ padding: 20, color: "#8a94a6", textAlign: "center" }}>
