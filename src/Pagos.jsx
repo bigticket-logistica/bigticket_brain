@@ -2038,16 +2038,17 @@ function PanelControlSupervisores() {
     const nsSinDeclarar = (noSalDia[sc] || []).filter((x) => !x.guardado_at).length;
     const pnrSinResolver = (Array.isArray(row?.declarado_pnr_detalle) ? row.declarado_pnr_detalle : [])
       .filter((d) => d.estado === "sin_resolver").length;
+    // El color es SOLO el estado de la bitácora (igual que el panel del jefe):
+    //   verde = cerrada o sin operación · amarillo = incompleta o completa sin
+    //   cerrar · rojo = sin empezar. Los PNR sin resolver van como aviso aparte.
     const motivos = [];
-    if (!eh.sinOperacion && done === 0) motivos.push("bitácora sin completar");
-    else if (!completa) motivos.push(`bitácora ${done}/${totalItems}`);
+    if (eb.k === "nada") motivos.push("bitácora sin completar");
     else if (eb.k === "completa") motivos.push("completa · sin cerrar");
+    else if (eb.k === "curso") motivos.push(`bitácora ${done}/${totalItems}`);
+    else if (["cerrada", "auto"].includes(eb.k) && !completa) motivos.push(`cerrada con ${done}/${totalItems}`);
     if (nsSinDeclarar) motivos.push(`${nsSinDeclarar} no salida(s) sin responder`);
-    if (pnrSinResolver) motivos.push(`${pnrSinResolver} PNR sin resolver`);
-    let color = "verde";
-    if ((!eh.sinOperacion && done === 0) || nsSinDeclarar) color = "rojo";
-    else if (!completa || pnrSinResolver || eb.k === "completa") color = "amarillo";
-    return { color, done, totalItems, sinOp: eh.sinOperacion, motivos, estado: eb };
+    const color = eb.k === "nada" ? "rojo" : ["cerrada", "auto", "sinop"].includes(eb.k) && completa ? "verde" : "amarillo";
+    return { color, done, totalItems, sinOp: eh.sinOperacion, motivos, estado: eb, pnr: pnrSinResolver };
   };
   const tarjetasSC = useMemo(() => {
     const orden = { rojo: 0, amarillo: 1, verde: 2 };
@@ -2185,7 +2186,7 @@ function PanelControlSupervisores() {
             const c = SEM_COLOR[t.color];
             return (
               <button key={t.sc} onClick={() => elegirSC(t.sc)}
-                title={t.motivos.length ? t.motivos.join(" · ") : "Todo en orden"}
+                title={[...t.motivos, t.pnr ? `${t.pnr} PNR sin resolver` : null].filter(Boolean).join(" · ") || "Todo en orden"}
                 style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", minWidth: 118,
                   background: activo ? "#002E5D" : "#fff", color: activo ? "#fff" : "#1f2937",
                   border: `1px solid ${activo ? "#002E5D" : "#e4e7ec"}`, borderRadius: 8, cursor: "pointer", textAlign: "left",
@@ -2195,8 +2196,9 @@ function PanelControlSupervisores() {
                 <span>
                   <span style={{ display: "block", fontFamily: "monospace", fontWeight: 700, fontSize: 13 }}>{t.sc}</span>
                   <span style={{ display: "block", fontSize: 10, color: activo ? "#cbd5e1" : "#64748b" }}>
-                    {t.sinOp ? "Sin operación" : `${t.done}/${t.totalItems}`}{t.motivos.length && !t.sinOp ? " · " + t.motivos[t.motivos.length - 1] : ""}
+                    {t.sinOp ? "Sin operación" : `${t.done}/${t.totalItems}`}{t.motivos.length && !t.sinOp ? " · " + t.motivos[0] : ""}
                   </span>
+                  {t.pnr > 0 && <span style={{ display: "block", fontSize: 10, fontWeight: 700, color: activo ? "#fdba74" : "#c2410c" }}>⚠ {t.pnr} PNR sin resolver</span>}
                 </span>
               </button>
             );
@@ -2238,7 +2240,8 @@ function PanelControlSupervisores() {
                   </div>
                 </div>
                 <div style={{ textAlign: "right", fontSize: 12, fontWeight: 600, color: sem.color === "verde" ? "#16a34a" : c }}>
-                  {sem.motivos.length ? sem.motivos.map((m, k) => <div key={k}>• {m}</div>) : "Todo en orden"}
+                  {sem.motivos.length ? sem.motivos.map((m, k) => <div key={k}>• {m}</div>) : <div>✓ {sem.estado?.t || "Todo en orden"}</div>}
+                  {sem.pnr > 0 && <div style={{ color: "#c2410c" }}>⚠ {sem.pnr} PNR sin resolver</div>}
                 </div>
               </div>
               <div key={tick} style={{ padding: 18 }}>
