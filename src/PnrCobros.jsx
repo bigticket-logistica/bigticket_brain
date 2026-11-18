@@ -303,7 +303,9 @@ function ModuloRobos({ usuario }) {
     if (!f.patente) { setMsg({ ok: false, txt: `La guía ${f.folio_guia} no tiene placa.` }); return; }
     setGuardando(f.folio_guia); setMsg(null);
     try {
-      const { data: tid } = await sb.rpc("fn_empresa_de_placa", { p_placa: f.patente });
+      // La empresa que tenía la placa el día de la ruta (regla del 18-nov-2026):
+      // si después la placa cambia de responsable, el cobro no se mueve.
+      const { data: tid } = await sb.rpc("fn_empresa_cobro", { p_placa: f.patente, p_fecha: f.fecha_ruta || null });
       if (!tid) throw new Error(`No hay empresa para la placa ${f.patente} en el padrón.`);
       const { data: emp } = await sb.from("terceros").select("nombre").eq("id", tid).maybeSingle();
       const { error } = await sb.from("cobros_merma_mx").upsert({
@@ -545,137 +547,216 @@ function semanaBrainHoy() {
 // capture también el conductor.
 // ═══════════════════════════════════════════════════════════════════════════
 function ModuloNoShow({ usuario }) {
+  // Reglas (18-nov-2026):
+  //  · Lo que declara el supervisor en la Bitácora se publica SOLO en el portal,
+  //    con el monto calculado (tarifa 0-100 km del site × 1.2) y la empresa que
+  //    tenía la placa ese día. Lo hace la base de datos, no esta pantalla.
+  //  · A la prefactura entra solo a mano, con el botón de cada fila.
+  //  · Un no show solo se anula si el analista lo elimina aquí, con motivo: queda
+  //    marcado como eliminado (no se borra) y sale del portal.
   const [filas, setFilas] = useState(null);
-  const [enPref, setEnPref] = useState({});
-  const [filtro, setFiltro] = useState("pendientes");
+  const [cobros, setCobros] = useState({});
   const [guardando, setGuardando] = useState(null);
   const [msg, setMsg] = useState(null);
-  // Los que cobras en esta sesión se quedan a la vista (en verde) aunque estés
-  // en "Sin cobrar", para que veas que quedó hecho. Al recargar, pasan a "En el portal".
-  const [recien, setRecien] = useState(() => new Set());
-  const semana = semanaBrainHoy();
-  const quien = (usuario && (usuario.email || usuario.nombre)) || "brain";
-
-  const cargar = useCallback(async () => {
-    setFilas(null);
-    const [v, concs] = await Promise.all([
-      sb.from("vw_noshow_declarados").select("*").order("fecha", { ascending: false }),
-      sb.from("cobros_noshow_mx").select("id, fecha, service_center, placa, aplicado_semana").eq("estado", "enviado"),
-    ]);
-    setFilas(v.data || []);
-    // Qué cobros ya bajaron a la prefactura. Se marca con aplicado_semana
-    // cuando el botón de Conciliación los aplica, así que acá solo se lee.
-    const ep = {};
-    for (const c of (concs.data || [])) {
-      if (c.aplicado_semana) ep[`${c.fecha}|${c.service_center}|${c.placa}`] = c.aplicado_semana;
-    }
-    setEnPref(ep);
-  }, [semana]);
-
-  useEffect(() => { cargar(); }, [cargar]);
+  const [semSel, setSemSel] = useState(() => semanaBrainHoy());
+  const [filtro, setFiltro] = useState("todos");
+  const quien = (usuario && (usuario.nombre || usuario.email)) || "Brain";
 
   const clave = (f) => `${f.fecha}|${f.sc}|${f.placa}`;
 
-  // CARRIL B · portal. El monto lo pone el analista: no hay tarifa fija.
-  const publicar = async (f) => {
-    if (!f.tercero_id) { setMsg({ ok: false, txt: `La placa ${f.placa} no tiene empresa en el padrón.` }); return; }
+  const cargar = useCallback(async () => {
+    setFilas(null);
+    const [v, cs] = await Promise.all([
+      sb.from("vw_noshow_declarados").select("*").order("fecha", { ascending: false }),
+      sb.from("cobros_noshow_mx").select("id, fecha, service_center, placa, estado, monto, origen, aplicado_semana, asignado_por, eliminado_por, eliminado_at, eliminado_motivo, created_at"),
+    ]);
+    if (v.error) { setMsg({ ok: false, txt: "No se pudo leer la Bitácora: " + v.error.message }); setFilas([]); return; }
+    const m = {};
+    for (const c of (cs.data || [])) m[`${c.fecha}|${c.service_center}|${c.placa}`] = c;
+    setCobros(m);
+    setFilas(v.data || []);
+  }, []);
+
+  useEffect(() => { cargar(); }, [cargar]);
+
+  const fechaHoraMx = (iso) => {
+    if (!iso) return "—";
+    try { return new Date(iso).toLocaleString("es-MX", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit", timeZone: "America/Mexico_City" }); }
+    catch { return String(iso).slice(0, 16).replace("T", " "); }
+  };
+  const diaLargo = (iso) => {
+    try { return new Date(iso + "T12:00:00").toLocaleDateString("es-MX", { weekday: "long", day: "numeric", month: "long" }); }
+    catch { return iso; }
+  };
+
+  // Estado de cada no show, en una sola palabra.
+  const estadoDe = (f) => {
+    const c = cobros[clave(f)];
+    if (c && c.estado === "eliminado") return "eliminado";
+    if (c && c.estado === "enviado") return c.aplicado_semana ? "en_prefactura" : "en_portal";
+    return "pendiente";
+  };
+
+  // Por qué no se publicó solo: falta un dato del supervisor o es anterior al corte.
+  const motivoPendiente = (f) => {
+    if (String(f.fecha) < "2026-11-16") return "anterior al 16-nov: se publica a mano";
+    if (!f.tercero_id) return "sin empresa para la placa";
+    if (f.monto_tarifa == null) return f.tarifa_fuente || "sin tarifa";
+    return "pendiente de publicar";
+  };
+
+  // ── Agregar a la prefactura (siempre manual) ──
+  const agregarPrefactura = async (f) => {
+    const c = cobros[clave(f)];
+    if (!c) return;
+    setGuardando(clave(f)); setMsg(null);
+    try {
+      const semRuta = semanaBrainDe(f.fecha);
+      const { data: res, error } = await sb.rpc("fn_agregar_cobro_prefactura", {
+        p_semana: semRuta, p_empresa: f.empresa, p_sc: f.sc,
+        p_linea: {
+          _id: `noshow|${f.fecha}|${f.sc}|${f.placa}`,
+          origen: "ajuste", es_manual: true, service_center_id: f.sc,
+          fecha: f.fecha, placa: f.placa, id_ruta: "—",
+          driver_name: `No show · ${f.placa}${f.noshow_justificacion ? " · " + f.noshow_justificacion : ""}`,
+          monto: -Math.abs(Number(c.monto || 0)), es_no_pago: false, tiene_auxiliar: false,
+          km_real_meli: null, bonificacion_nombre: null, bonificacion_pct: 0,
+          tiene_bonificacion: false, monto_bonificacion: 0, motivo_no_pago: null,
+        },
+      });
+      if (error) throw error;
+      if (res?.ok) {
+        await sb.from("cobros_noshow_mx").update({ aplicado_semana: String(semRuta) }).eq("id", c.id);
+        setMsg({ ok: true, txt: `No show del ${f.fecha} · ${f.placa} agregado a la prefactura de ${f.empresa}, semana ${semRuta}. En el portal se sigue viendo una sola vez, en su día.` });
+      } else if (res?.motivo === "enviada") {
+        setMsg({ ok: false, txt: `La prefactura de ${f.empresa} de la semana ${semRuta} ya se envió. Para agregarlo hay que reabrirla en Conciliación.` });
+      } else {
+        setMsg({ ok: false, txt: `Todavía no hay prefactura de ${f.empresa} para la semana ${semRuta}. Genérala en Conciliación y vuelve a presionar.` });
+      }
+      await cargar();
+    } catch (e) { setMsg({ ok: false, txt: "No se pudo agregar a la prefactura: " + (e.message || e) }); }
+    setGuardando(null);
+  };
+
+  // ── Eliminar (solo el analista, con motivo). No se borra: queda marcado. ──
+  const eliminar = async (f) => {
+    const c = cobros[clave(f)];
+    if (!c) return;
+    const motivo = window.prompt(
+      `Eliminar el no show del ${f.fecha}\n\n${f.empresa || "sin empresa"} · ${f.placa} · ${money(c.monto)}\n\n` +
+      `Sale del portal del tercero${c.aplicado_semana ? " y de su prefactura" : ""}.\n` +
+      `¿Por qué se elimina? Es obligatorio y queda registrado con tu nombre, el día y la hora.`, "");
+    if (motivo === null) return;
+    if (!String(motivo).trim()) { setMsg({ ok: false, txt: "Hay que escribir el motivo. No se eliminó nada." }); return; }
+    setGuardando(clave(f)); setMsg(null);
+    try {
+      let avisoPref = "";
+      if (c.aplicado_semana) {
+        const { data: res, error } = await sb.rpc("fn_quitar_cobro_prefactura", {
+          p_semana: Number(c.aplicado_semana), p_empresa: f.empresa, p_sc: f.sc,
+          p_id: `noshow|${f.fecha}|${f.sc}|${f.placa}`,
+        });
+        if (error || (res && res.ok === false)) {
+          avisoPref = ` ⚠️ OJO: no se pudo sacar de la prefactura de la semana ${c.aplicado_semana}` +
+            ((res && res.motivo === "enviada") ? " porque ya se envió al tercero: corresponde REEMBOLSARLE ese monto." : `: ${(error && error.message) || (res && res.motivo) || "error"}. Revísalo en Conciliación.`);
+        } else {
+          avisoPref = ` También salió de la prefactura de la semana ${c.aplicado_semana}.`;
+        }
+      }
+      const { error: eU } = await sb.from("cobros_noshow_mx").update({
+        estado: "eliminado", eliminado_por: quien, eliminado_at: new Date().toISOString(),
+        eliminado_motivo: String(motivo).trim(),
+      }).eq("id", c.id);
+      if (eU) throw eU;
+      setMsg({ ok: !avisoPref.includes("OJO"), txt: `No show del ${f.fecha} · ${f.placa} eliminado. Ya no se ve en el portal.${avisoPref}` });
+      await cargar();
+    } catch (e) { setMsg({ ok: false, txt: "No se pudo eliminar: " + (e.message || e) }); }
+    setGuardando(null);
+  };
+
+  // ── Publicar a mano: solo para los que no pudieron publicarse solos ──
+  const publicarManual = async (f) => {
+    if (!f.tercero_id) { setMsg({ ok: false, txt: `La placa ${f.placa} no tiene empresa. Pídele al supervisor que la complete en la Bitácora.` }); return; }
     const m = window.prompt(
-      `Cobro por no show\n\n${f.empresa}\n${f.placa} · ${f.sc} · ${f.fecha}\n\nMonto a cobrar:`,
-      f.monto || "");
+      `Publicar a mano el no show\n\n${f.empresa}\n${f.placa} · ${f.sc} · ${f.fecha}\n\n` +
+      (f.monto_tarifa != null ? `Monto calculado: ${money(f.monto_tarifa)} (${f.tarifa_fuente}).\n` : `No hay monto calculado: ${f.tarifa_fuente || "falta un dato"}.\n`) +
+      `Monto a cobrar:`, f.monto_tarifa != null ? String(f.monto_tarifa) : "");
     if (m === null) return;
     const monto = Number(String(m).replace(/[^\d.\-]/g, ""));
     if (!isFinite(monto) || monto <= 0) { setMsg({ ok: false, txt: "Monto inválido." }); return; }
-
     setGuardando(clave(f)); setMsg(null);
     try {
       const { error } = await sb.from("cobros_noshow_mx").upsert({
         fecha: f.fecha, service_center: f.sc, placa: f.placa,
         tercero_id: f.tercero_id, empresa_nombre: f.empresa,
         monto, semana: String(semanaBrainDe(f.fecha)), estado: "enviado",
-        justificacion: f.noshow_justificacion, asignado_por: quien,
+        justificacion: f.noshow_justificacion, asignado_por: quien, origen: "manual",
       }, { onConflict: "fecha,service_center,placa" });
       if (error) throw error;
-
-      // Se intenta bajarlo a la prefactura en el mismo acto. Si no se puede
-      // —porque ya se envió o todavía no existe— el cobro queda publicado
-      // igual y el botón de Conciliación lo toma después. Así no hay un paso
-      // que alguien tenga que recordar, pero tampoco se pierde si falla.
-      let enPrefTxt = "";
-      try {
-        const semRuta = semanaBrainDe(f.fecha);
-        const { data: res } = await sb.rpc("fn_agregar_cobro_prefactura", {
-          p_semana: semRuta, p_empresa: f.empresa, p_sc: f.sc,
-          p_linea: {
-            _id: `noshow|${f.fecha}|${f.sc}|${f.placa}`,
-            origen: "ajuste", es_manual: true, service_center_id: f.sc,
-            fecha: f.fecha, placa: f.placa, id_ruta: "—",
-            driver_name: `No show · ${f.placa}${f.noshow_justificacion ? " · " + f.noshow_justificacion : ""}`,
-            monto: -Math.abs(monto), es_no_pago: false, tiene_auxiliar: false,
-            km_real_meli: null, bonificacion_nombre: null, bonificacion_pct: 0,
-            tiene_bonificacion: false, monto_bonificacion: 0, motivo_no_pago: null,
-          },
-        });
-        avisarPortal("cobro", { tercero_id: f.tercero_id, sc: f.sc });
-        if (res?.ok) {
-          await sb.from("cobros_noshow_mx").update({ aplicado_semana: String(semRuta) })
-            .eq("fecha", f.fecha).eq("service_center", f.sc).eq("placa", f.placa);
-          enPrefTxt = ` Agregado a la prefactura de la semana ${semRuta}.`;
-        } else if (res?.motivo === "enviada") {
-          enPrefTxt = " La prefactura de esa semana ya se envió: hay que reabrirla y aplicarlo desde Conciliación.";
-        } else {
-          enPrefTxt = " Todavía no hay prefactura de esa semana: se aplica desde Conciliación cuando se genere.";
-        }
-      } catch (e) {
-        console.error("No se pudo agregar a la prefactura:", e);
-        enPrefTxt = " No se pudo agregar a la prefactura: aplícalo desde Conciliación.";
-      }
-
-      setRecien((p) => new Set(p).add(clave(f)));
-      setMsg({ ok: true, txt: `No show del ${f.fecha} publicado a ${f.empresa} · ${money(monto)}.${enPrefTxt}` });
+      avisarPortal("cobro", { tercero_id: f.tercero_id, sc: f.sc });
+      setMsg({ ok: true, txt: `No show del ${f.fecha} publicado a ${f.empresa} · ${money(monto)}. Para cobrarlo en la prefactura, usa "Agregar a prefactura".` });
       await cargar();
     } catch (e) { setMsg({ ok: false, txt: "No se pudo publicar: " + (e.message || e) }); }
     setGuardando(null);
   };
 
-  const quitar = async (f) => {
-    if (!window.confirm(`¿Quitar del portal el no show del ${f.fecha}?\n\n${f.empresa} · ${f.placa} · ${money(f.monto)}`)) return;
-    setGuardando(clave(f));
-    try {
-      // Si ya había bajado a la prefactura, hay que sacarlo de ahí también:
-      // dejarlo sería cobrarle al tercero algo que ya no ve en su portal.
-      if (f.cobro_estado === "enviado" && enPref[clave(f)]) {
-        try {
-          await sb.rpc("fn_quitar_cobro_prefactura", {
-            p_semana: Number(enPref[clave(f)]), p_empresa: f.empresa, p_sc: f.sc,
-            p_id: `noshow|${f.fecha}|${f.sc}|${f.placa}`,
-          });
-        } catch (e) { console.error("No se pudo quitar de la prefactura:", e); }
-      }
-      await sb.from("cobros_noshow_mx").delete().eq("id", f.cobro_id);
-      await cargar();
-    } catch (e) { setMsg({ ok: false, txt: "No se pudo quitar: " + (e.message || e) }); }
-    setGuardando(null);
-  };
+  // Semana elegida, agrupada por día.
+  const deSemana = useMemo(() => (filas || []).filter(f => semanaBrainDe(f.fecha) === semSel), [filas, semSel]);
+  const visibles = useMemo(() => deSemana.filter(f => {
+    const e = estadoDe(f);
+    if (filtro === "todos") return e !== "eliminado";
+    return e === filtro;
+  }), [deSemana, filtro, cobros]);
+  const porDia = useMemo(() => {
+    const g = {};
+    for (const f of visibles) (g[f.fecha] = g[f.fecha] || []).push(f);
+    return Object.entries(g).sort((a, b) => b[0].localeCompare(a[0]));
+  }, [visibles]);
 
-  const visibles = useMemo(() => {
-    let fs = filas || [];
-    if (filtro === "pendientes") fs = fs.filter(f => f.cobro_estado !== "enviado" || recien.has(clave(f)));
-    else if (filtro === "publicados") fs = fs.filter(f => f.cobro_estado === "enviado");
-    return fs;
-  }, [filas, filtro, recien]);
+  const cuenta = useMemo(() => {
+    const r = { en_portal: 0, en_prefactura: 0, pendiente: 0, eliminado: 0, montoPortal: 0, montoPref: 0 };
+    for (const f of deSemana) {
+      const e = estadoDe(f); r[e]++;
+      const c = cobros[clave(f)];
+      if (e === "en_portal") r.montoPortal += Number(c?.monto || 0);
+      if (e === "en_prefactura") r.montoPref += Number(c?.monto || 0);
+    }
+    return r;
+  }, [deSemana, cobros]);
 
-  const totPub = (filas || []).filter(f => f.cobro_estado === "enviado")
-    .reduce((t, f) => t + Number(f.monto || 0), 0);
   const th = { textAlign: "left", padding: "8px 10px", fontSize: 10, fontWeight: 700, color: "#64748b", background: "#f8fafc", textTransform: "uppercase", letterSpacing: .4, whiteSpace: "nowrap" };
-  const td = { padding: "8px 10px", fontSize: 11.5, borderBottom: "1px solid #f1f5f9" };
+  const td = { padding: "8px 10px", fontSize: 11.5, borderBottom: "1px solid #f1f5f9", verticalAlign: "top" };
+  const chip = (bg, fg, txt) => (
+    <span style={{ display: "inline-block", fontSize: 9.5, fontWeight: 800, background: bg, color: fg, borderRadius: 10, padding: "2px 9px", whiteSpace: "nowrap" }}>{txt}</span>
+  );
+  const btn = (color, bg) => ({ padding: "4px 10px", fontSize: 10, fontWeight: 700, borderRadius: 6, border: `1px solid ${color}`, background: bg, color, cursor: "pointer", whiteSpace: "nowrap" });
+
+  const FILTROS = [
+    ["todos", "Todos", deSemana.filter(f => estadoDe(f) !== "eliminado").length],
+    ["en_portal", "En portal · falta prefactura", cuenta.en_portal],
+    ["en_prefactura", "En prefactura", cuenta.en_prefactura],
+    ["pendiente", "No se publicaron", cuenta.pendiente],
+    ["eliminado", "Eliminados", cuenta.eliminado],
+  ];
 
   return (
     <div style={{ padding: 24 }}>
-      <div style={{ marginBottom: 14 }}>
-        <div style={{ fontSize: 17, fontWeight: 700, color: "#002E5D" }}>No Show</div>
-        <div style={{ fontSize: 11.5, color: "#94a3b8", marginTop: 2, maxWidth: 640, lineHeight: 1.5 }}>
-          Placas que el supervisor declaró como no presentadas en su bitácora del día.
-          El monto lo pones tú: no hay tarifa fija todavía.
+      <div style={{ display: "flex", alignItems: "flex-start", gap: 12, marginBottom: 14, flexWrap: "wrap" }}>
+        <div style={{ flex: 1, minWidth: 280 }}>
+          <div style={{ fontSize: 17, fontWeight: 700, color: "#002E5D" }}>No Show</div>
+          <div style={{ fontSize: 11.5, color: "#94a3b8", marginTop: 2, maxWidth: 720, lineHeight: 1.5 }}>
+            Lo que el supervisor declara en la Bitácora se publica solo en el portal del tercero, con el monto calculado
+            (tarifa de 0 a 100 km del site × 1.2). A la prefactura entra solo cuando tú lo agregas. Si fue un error, elimínalo con su motivo.
+          </div>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <button onClick={() => setSemSel(s => s - 1)} style={btn("#002E5D", "#fff")}>‹</button>
+          <div style={{ textAlign: "center", minWidth: 90 }}>
+            <div style={{ fontSize: 13, fontWeight: 800, color: "#002E5D" }}>Semana {semSel}</div>
+            {semSel === semanaBrainHoy() && <div style={{ fontSize: 9.5, color: "#16a34a", fontWeight: 700 }}>en curso</div>}
+          </div>
+          <button onClick={() => setSemSel(s => s + 1)} style={btn("#002E5D", "#fff")}>›</button>
+          <button onClick={cargar} style={{ ...btn("#002E5D", "#fff"), marginLeft: 6 }}>↻ Actualizar</button>
         </div>
       </div>
 
@@ -685,98 +766,123 @@ function ModuloNoShow({ usuario }) {
           padding: "10px 12px", fontSize: 12.5, marginBottom: 12 }}>{msg.txt}</div>
       )}
 
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 10, marginBottom: 12 }}>
+        {[
+          ["En el portal, falta prefactura", cuenta.en_portal, money(cuenta.montoPortal), "#b45309"],
+          ["Ya en prefactura", cuenta.en_prefactura, money(cuenta.montoPref), "#166534"],
+          ["No se publicaron solos", cuenta.pendiente, "revisar dato del supervisor", "#991b1b"],
+          ["Eliminados", cuenta.eliminado, "no se cobran", "#64748b"],
+        ].map(([t, n, s, col]) => (
+          <div key={t} style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10, padding: "10px 12px" }}>
+            <div style={{ fontSize: 10.5, color: "#64748b", fontWeight: 700 }}>{t}</div>
+            <div style={{ fontSize: 20, fontWeight: 800, color: col }}>{n}</div>
+            <div style={{ fontSize: 10.5, color: "#94a3b8" }}>{s}</div>
+          </div>
+        ))}
+      </div>
+
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
-        {[["pendientes", "Sin cobrar"], ["publicados", "En el portal"], ["todas", "Todas"]].map(([id, l]) => (
+        {FILTROS.map(([id, l, n]) => (
           <button key={id} onClick={() => setFiltro(id)}
             style={{ padding: "6px 14px", borderRadius: 16, fontSize: 11.5, fontWeight: 700, cursor: "pointer",
               border: `1px solid ${filtro === id ? "#002E5D" : "#e4e7ec"}`,
-              background: filtro === id ? "#002E5D" : "#fff", color: filtro === id ? "#fff" : "#64748b" }}>{l}</button>
+              background: filtro === id ? "#002E5D" : "#fff", color: filtro === id ? "#fff" : "#64748b" }}>{l} ({n})</button>
         ))}
-        <span style={{ fontSize: 11.5, color: "#64748b", marginLeft: "auto" }}>
-          Cobrado: <b style={{ color: "#b91c1c" }}>{money(totPub)}</b>
-        </span>
       </div>
 
       {filas === null ? (
         <div style={{ padding: 40, textAlign: "center", color: "#94a3b8", fontSize: 13 }}>Cargando…</div>
-      ) : visibles.length === 0 ? (
+      ) : porDia.length === 0 ? (
         <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10, padding: 36, textAlign: "center", color: "#94a3b8", fontSize: 13 }}>
-          {filtro === "pendientes" ? "No hay no shows sin cobrar." : "Sin resultados."}
+          No hay no show en esta vista para la semana {semSel}.
         </div>
-      ) : (
-        <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10, overflow: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead><tr>
-              <th style={th}>Fecha</th><th style={th}>SC</th><th style={th}>Placa</th>
-              <th style={th}>Empresa</th><th style={th}>Justificación</th>
-              <th style={{ ...th, textAlign: "right" }}>Monto</th>
-              <th style={{ ...th, textAlign: "right" }}>Acciones</th>
-            </tr></thead>
-            <tbody>
-              {visibles.map(f => {
-                const pub = f.cobro_estado === "enviado";
-                return (
-                  <tr key={clave(f)} style={{ background: pub ? "#ecfdf3" : "#fff", boxShadow: pub ? "inset 4px 0 0 #16a34a" : "none", transition: "background .3s" }}>
-                    <td style={{ ...td, color: pub ? "#166534" : "#64748b", fontWeight: pub ? 700 : 400, whiteSpace: "nowrap" }}>
-                      {pub && <span title="Cobrado" style={{ marginRight: 6 }}>✓</span>}{f.fecha}
-                    </td>
-                    <td style={{ ...td, color: "#64748b" }}>{f.sc}</td>
-                    <td style={{ ...td, fontWeight: 600, color: "#002E5D" }}>{f.placa}</td>
-                    <td style={{ ...td, color: f.empresa ? "#334155" : "#b45309", fontWeight: f.empresa ? 400 : 600 }}>
-                      {f.empresa || "⚠️ sin empresa en el padrón"}
-                    </td>
-                    <td style={{ ...td, color: "#94a3b8", fontSize: 11 }}>{f.noshow_justificacion || "—"}</td>
-                    <td style={{ ...td, textAlign: "right", fontWeight: 700, fontVariantNumeric: "tabular-nums",
-                      color: f.monto ? "#b91c1c" : "#cbd5e1" }}>
-                      {f.monto ? money(f.monto) : "sin monto"}
-                    </td>
-                    <td style={{ ...td, textAlign: "right", whiteSpace: "nowrap" }}>
-                      {pub ? (
-                        <div style={{ display: "flex", flexDirection: "column", gap: 5, alignItems: "flex-end" }}>
-                          <div>
-                            <div style={{ display: "inline-block", fontSize: 10, fontWeight: 800, color: "#fff", background: "#16a34a", borderRadius: 10, padding: "2px 9px" }}>✓ COBRADO</div>
-                            <div style={{ fontSize: 9.5, fontWeight: 700, color: "#166534", marginTop: 3 }}>en el portal</div>
-                            <div style={{ fontSize: 8.5, color: "#94a3b8" }}>diario · carril B</div>
-                            <button onClick={() => quitar(f)} disabled={guardando === clave(f)}
-                              style={{ marginTop: 3, padding: "3px 10px", fontSize: 9.5, fontWeight: 700, borderRadius: 5,
-                                border: "1px solid #f59e0b", background: "#fffbeb", color: "#92400e", cursor: "pointer" }}>
-                              Quitar del portal
-                            </button>
+      ) : porDia.map(([dia, fs]) => {
+        const totDia = fs.reduce((s, f) => s + Number((cobros[clave(f)] || {}).monto || f.monto_tarifa || 0), 0);
+        return (
+          <div key={dia} style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10, overflow: "auto", marginBottom: 12 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", background: "#f8fafc", borderBottom: "1px solid #e4e7ec" }}>
+              <span style={{ fontSize: 13, fontWeight: 800, color: "#002E5D", textTransform: "capitalize" }}>{diaLargo(dia)}</span>
+              <span style={{ fontSize: 11, color: "#64748b" }}>{fs.length} no show</span>
+              <span style={{ marginLeft: "auto", fontSize: 12, fontWeight: 800, color: "#b91c1c" }}>{money(totDia)}</span>
+            </div>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead><tr>
+                <th style={th}>SC</th><th style={th}>Placa</th><th style={th}>Empresa</th>
+                <th style={th}>Tipo · vehículo</th><th style={th}>Justificación</th>
+                <th style={{ ...th, textAlign: "right" }}>Monto</th>
+                <th style={th}>Estado</th>
+                <th style={{ ...th, textAlign: "right" }}>Acciones</th>
+              </tr></thead>
+              <tbody>
+                {fs.map(f => {
+                  const c = cobros[clave(f)];
+                  const e = estadoDe(f);
+                  const ocupado = guardando === clave(f);
+                  const monto = c ? Number(c.monto || 0) : f.monto_tarifa;
+                  return (
+                    <tr key={clave(f)} style={{ background: e === "eliminado" ? "#f8fafc" : e === "en_prefactura" ? "#f0fdf4" : "#fff", opacity: e === "eliminado" ? .7 : 1 }}>
+                      <td style={{ ...td, color: "#64748b" }}>{f.sc}</td>
+                      <td style={{ ...td, fontWeight: 700, color: "#002E5D", whiteSpace: "nowrap" }}>{f.placa}</td>
+                      <td style={{ ...td, color: f.empresa ? "#334155" : "#b45309", fontWeight: f.empresa ? 400 : 700 }}>
+                        {f.empresa || "⚠️ sin empresa"}
+                      </td>
+                      <td style={{ ...td, color: "#64748b", whiteSpace: "nowrap" }}>
+                        {f.tipo_ruta || "—"} · {f.vehiculo || "—"}
+                        {f.tarifa_0_100 != null && <div style={{ fontSize: 9.5, color: "#94a3b8" }}>tarifa {money(f.tarifa_0_100)} × 1.2</div>}
+                      </td>
+                      <td style={{ ...td, color: "#94a3b8", fontSize: 11, maxWidth: 260 }}>{f.noshow_justificacion || "—"}</td>
+                      <td style={{ ...td, textAlign: "right", fontWeight: 800, fontVariantNumeric: "tabular-nums", color: monto ? "#b91c1c" : "#cbd5e1", whiteSpace: "nowrap" }}>
+                        {monto ? money(monto) : "sin monto"}
+                      </td>
+                      <td style={td}>
+                        {e === "en_portal" && (<>
+                          {chip("#fef3c7", "#92400e", "EN PORTAL · falta prefactura")}
+                          <div style={{ fontSize: 9, color: "#94a3b8", marginTop: 3 }}>
+                            {c.origen === "automatico" ? "publicado solo" : `publicado a mano · ${c.asignado_por || "—"}`} · {fechaHoraMx(c.created_at)}
                           </div>
-                          {/* El carril A no se opera desde acá: el botón que baja los
-                              cobros a las prefacturas vive en Conciliación, que es
-                              donde el analista trabaja el lunes. */}
-                          {enPref[clave(f)] ? (
-                            <div style={{ fontSize: 9.5, fontWeight: 700, color: "#166534" }}>
-                              ✓ en prefactura
-                              <div style={{ fontSize: 8.5, color: "#94a3b8", fontWeight: 400 }}>semana {enPref[clave(f)]}</div>
-                            </div>
-                          ) : (
-                            <div style={{ fontSize: 9, color: "#94a3b8", maxWidth: 150, textAlign: "right", lineHeight: 1.3 }}>
-                              falta bajarlo a la prefactura desde Conciliación
-                            </div>
+                        </>)}
+                        {e === "en_prefactura" && (<>
+                          {chip("#dcfce7", "#166534", `EN PREFACTURA · sem ${c.aplicado_semana}`)}
+                          <div style={{ fontSize: 9, color: "#94a3b8", marginTop: 3 }}>{c.origen === "automatico" ? "publicado solo" : "publicado a mano"}</div>
+                        </>)}
+                        {e === "pendiente" && (<>
+                          {chip("#fee2e2", "#991b1b", "NO SE PUBLICÓ")}
+                          <div style={{ fontSize: 9, color: "#991b1b", marginTop: 3, maxWidth: 180 }}>{motivoPendiente(f)}</div>
+                        </>)}
+                        {e === "eliminado" && (<>
+                          {chip("#e2e8f0", "#475569", "ELIMINADO")}
+                          <div style={{ fontSize: 9, color: "#64748b", marginTop: 3, maxWidth: 200 }}
+                            title={c.eliminado_motivo || ""}>
+                            {c.eliminado_por || "—"} · {fechaHoraMx(c.eliminado_at)}<br />{c.eliminado_motivo || ""}
+                          </div>
+                        </>)}
+                      </td>
+                      <td style={{ ...td, textAlign: "right" }}>
+                        <div style={{ display: "flex", flexDirection: "column", gap: 5, alignItems: "flex-end" }}>
+                          {e === "en_portal" && (
+                            <button onClick={() => agregarPrefactura(f)} disabled={ocupado} style={btn("#1d4ed8", "#eff6ff")}>
+                              {ocupado ? "…" : "Agregar a prefactura"}
+                            </button>
+                          )}
+                          {(e === "en_portal" || e === "en_prefactura") && (
+                            <button onClick={() => eliminar(f)} disabled={ocupado} style={btn("#b91c1c", "#fff")}>Eliminar</button>
+                          )}
+                          {e === "pendiente" && (
+                            <button onClick={() => publicarManual(f)} disabled={ocupado || !f.tercero_id}
+                              style={f.tercero_id ? btn("#92400e", "#fffbeb") : { ...btn("#94a3b8", "#f8fafc"), cursor: "not-allowed" }}>
+                              {ocupado ? "…" : "Publicar a mano"}
+                            </button>
                           )}
                         </div>
-                      ) : (
-                        <div>
-                          <button onClick={() => publicar(f)} disabled={guardando === clave(f) || !f.tercero_id}
-                            style={{ padding: "5px 12px", fontSize: 10.5, fontWeight: 700, borderRadius: 6,
-                              border: "1px solid #f59e0b", background: f.tercero_id ? "#fffbeb" : "#f8fafc",
-                              color: f.tercero_id ? "#92400e" : "#94a3b8",
-                              cursor: f.tercero_id ? "pointer" : "not-allowed" }}>
-                            {guardando === clave(f) ? "…" : "Cobrar y publicar"}
-                          </button>
-                          <div style={{ fontSize: 8.5, color: "#94a3b8", marginTop: 2 }}>diario · carril B</div>
-                        </div>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -892,27 +998,30 @@ function ModuloPnr({ usuario }) {
         for (const k in acc) empSem[k] = [...acc[k]].join(" / ");
       }
 
-      // La empresa se resuelve con fn_empresa_de_placa, igual que el pago: manda
-      // el inventario de certificación y, si la placa no está ahí, el padrón de
-      // la bitácora. Antes se leía flota_terceros_mx —el Excel semanal viejo— y
-      // por eso había placas que el motor sí resolvía y acá salían sin empresa.
-      const placasUnicas = [...new Set((casos || [])
-        .map(c => (jornada[c.route_id] || {}).placa).filter(Boolean)
-        .map(p => normalizarPlaca(p)))];
+      // La empresa es la que tenía la placa EL DÍA DE LA RUTA, con la misma
+      // regla que el pago (fn_empresa_cobro, 18-nov-2026): si después la placa
+      // cambia de responsable, el cobro no se mueve. Por eso la clave es placa
+      // y fecha, no solo placa.
+      const claveEmp = (pl, fe) => `${normalizarPlaca(pl)}||${String(fe || "").slice(0, 10)}`;
+      const pares = {};
+      for (const c of (casos || [])) {
+        const j = jornada[c.route_id] || {};
+        if (j.placa) pares[claveEmp(j.placa, j.fecha)] = { pl: normalizarPlaca(j.placa), fe: j.fecha ? String(j.fecha).slice(0, 10) : null };
+      }
       const empPorPlaca = {};
-      await Promise.all(placasUnicas.map(async (pl) => {
+      await Promise.all(Object.entries(pares).map(async ([k, { pl, fe }]) => {
         try {
-          const { data: tid } = await sb.rpc("fn_empresa_de_placa", { p_placa: pl });
+          const { data: tid } = await sb.rpc("fn_empresa_cobro", { p_placa: pl, p_fecha: fe });
           if (!tid) return;
           const { data: t } = await sb.from("terceros").select("nombre").eq("id", tid).maybeSingle();
-          if (t?.nombre) empPorPlaca[pl] = t.nombre;
-        } catch (e) { console.error("No se pudo resolver la empresa de", pl, e); }
+          if (t?.nombre) empPorPlaca[k] = t.nombre;
+        } catch (e) { console.error("No se pudo resolver la empresa de", pl, fe, e); }
       }));
 
       const out = (casos || []).map(c => {
         const j = jornada[c.route_id] || {};
         const placa = j.placa || null;
-        const empresa = placa ? (empPorPlaca[normalizarPlaca(placa)] || null) : null;
+        const empresa = placa ? (empPorPlaca[claveEmp(placa, j.fecha)] || null) : null;
         const avisos = avisosPorCaso[c.case_id] || [];
         const porTipo = {};
         for (const a of avisos) {
@@ -936,11 +1045,11 @@ function ModuloPnr({ usuario }) {
 
       setFilas(out);
       setCobrados(yaCobrados);
-      // Cambios manuales de empresa: se aplican sobre lo que resolvio la placa y
-      // valen mientras no se recargue el inventario de esa semana.
+      // Cambios manuales de empresa hechos por el analista sobre lo que declaró
+      // el supervisor. Cada uno con su motivo, autor, día y hora.
       try {
         const { data: ov } = await sb.from("cobros_empresa_override_mx")
-          .select("placa_norm, semana, empresa_nombre, motivo, usuario");
+          .select("placa_norm, semana, empresa_nombre, motivo, usuario, actualizado_at, created_at");
         const mapa = {};
         for (const o of (ov || [])) mapa[`${o.placa_norm}|${o.semana}`] = o;
         setOverrides(mapa);
@@ -1020,50 +1129,95 @@ function ModuloPnr({ usuario }) {
     return partes.filter(Boolean).join(" · ");
   };
 
-  // Empresa efectiva de una fila: manda el cambio manual de esa placa y semana;
-  // si no hay, la que resolvio el inventario.
+  // Empresa efectiva de una fila: manda el cambio manual del analista para esa
+  // placa y semana; si no hay, lo que declaró el supervisor en la Bitácora.
+  // Un cambio con empresa vacía significa "volvió a lo del supervisor".
   const empresaDe = (f) => {
     if (!f.placa || f.semana_ruta == null) return f.empresa;
     const o = overrides[`${normalizarPlaca(f.placa)}|${f.semana_ruta}`];
-    return o ? o.empresa_nombre : f.empresa;
+    return o && o.empresa_nombre ? o.empresa_nombre : f.empresa;
   };
   const empresaCambiada = (f) => {
     if (!f.placa || f.semana_ruta == null) return null;
-    return overrides[`${normalizarPlaca(f.placa)}|${f.semana_ruta}`] || null;
+    const o = overrides[`${normalizarPlaca(f.placa)}|${f.semana_ruta}`];
+    return o && o.empresa_nombre ? o : null;
+  };
+  const fechaHoraMx = (iso) => {
+    if (!iso) return "—";
+    try {
+      return new Date(iso).toLocaleString("es-MX", { day: "2-digit", month: "2-digit", year: "numeric",
+        hour: "2-digit", minute: "2-digit", timeZone: "America/Mexico_City" });
+    } catch { return String(iso).slice(0, 16).replace("T", " "); }
   };
 
   // Cambia la empresa de una placa en una semana. Afecta a todos los cobros de
   // esa placa en esa semana, no solo a este caso.
+  // Regla (18-nov-2026): por defecto manda lo que declaró el supervisor en la
+  // Bitácora. El analista puede cambiarlo, pero el motivo es obligatorio y queda
+  // registrado quién, el día y la hora (historial en cobros_empresa_override_log).
   const cambiarEmpresa = async (f) => {
     if (!f.placa || f.semana_ruta == null) {
       setMsg({ ok: false, txt: "Este caso no tiene placa o semana de ruta, así que no se puede reasignar la empresa." });
       return;
     }
     const pl = normalizarPlaca(f.placa);
+    const ov = empresaCambiada(f);
     const nombre = prompt(
       `Empresa responsable de la placa ${f.placa} en la semana ${f.semana_ruta}\n\n` +
-      `El inventario resolvió: ${f.empresa || "sin empresa"}\n` +
-      `Escribe el nombre correcto, o deja vacío para volver al inventario.`,
+      `Lo que declaró el supervisor en la Bitácora: ${f.empresa || "sin empresa"}\n` +
+      (ov ? `Hoy está cambiada a mano a: ${ov.empresa_nombre} (${ov.usuario || "—"}, ${fechaHoraMx(ov.actualizado_at || ov.created_at)})\n` : "") +
+      `\nEscribe el nombre de la empresa correcta, igual que en la pestaña Empresas,\n` +
+      `o deja vacío para volver a lo que declaró el supervisor.`,
       empresaDe(f) || ""
     );
     if (nombre === null) return;
     const limpio = String(nombre).trim();
+    if (!limpio && !ov) {
+      setMsg({ ok: true, txt: `${f.placa} ya está con lo que declaró el supervisor. No hubo cambios.` });
+      return;
+    }
     try {
-      if (!limpio) {
-        const { error } = await sb.from("cobros_empresa_override_mx")
-          .delete().eq("placa_norm", pl).eq("semana", f.semana_ruta);
-        if (error) throw error;
-        setMsg({ ok: true, txt: `${f.placa} vuelve a la empresa del inventario de la semana ${f.semana_ruta}.` });
-      } else {
-        const motivo = prompt("Motivo del cambio (queda registrado):", "Cambio de responsable de la placa") || null;
-        const { error } = await sb.from("cobros_empresa_override_mx")
-          .upsert({
-            placa_norm: pl, semana: f.semana_ruta, empresa_nombre: limpio, motivo,
-            usuario: (usuario && (usuario.nombre || usuario.email)) || "Brain",
-          }, { onConflict: "placa_norm,semana" });
-        if (error) throw error;
-        setMsg({ ok: true, txt: `${f.placa} queda asignada a ${limpio} en la semana ${f.semana_ruta}.` });
+      // La empresa tiene que existir como ficha activa: evita errores de tipeo
+      // que dejarían el cobro en una empresa que nadie ve en su portal.
+      let ficha = null;
+      if (limpio) {
+        const plano = (s) => String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+          .toUpperCase().replace(/\s+/g, " ").trim();
+        const { data: ts, error: eT } = await sb.from("terceros").select("id, nombre, estado").neq("estado", "baja");
+        if (eT) throw eT;
+        ficha = (ts || []).find(x => plano(x.nombre) === plano(limpio)) || null;
+        if (!ficha) {
+          setMsg({ ok: false, txt: `No existe una empresa activa llamada "${limpio}". Escríbela igual que en la pestaña Empresas. No se guardó ningún cambio.` });
+          return;
+        }
+        if (!ov && plano(ficha.nombre) === plano(f.empresa)) {
+          setMsg({ ok: true, txt: `${ficha.nombre} es justo lo que declaró el supervisor. No hubo cambios.` });
+          return;
+        }
       }
+      const motivo = prompt(
+        (ficha
+          ? `¿Por qué cambias la empresa de ${f.placa} (semana ${f.semana_ruta}) a ${ficha.nombre}?`
+          : `¿Por qué devuelves ${f.placa} (semana ${f.semana_ruta}) a lo que declaró el supervisor (${f.empresa || "sin empresa"})?`) +
+        `\n\nEs obligatorio. Queda registrado con tu nombre, el día y la hora.`, "");
+      if (motivo === null) return;
+      if (!String(motivo).trim()) {
+        setMsg({ ok: false, txt: "Hay que escribir el motivo. No se guardó ningún cambio." });
+        return;
+      }
+      const autor = (usuario && (usuario.nombre || usuario.email)) || "Brain";
+      const ahora = new Date().toISOString();
+      const { error } = await sb.from("cobros_empresa_override_mx")
+        .upsert({
+          placa_norm: pl, semana: f.semana_ruta,
+          empresa_nombre: ficha ? ficha.nombre : null,
+          tercero_id: ficha ? ficha.id : null,
+          motivo: String(motivo).trim(), usuario: autor, actualizado_at: ahora,
+        }, { onConflict: "placa_norm,semana" });
+      if (error) throw error;
+      setMsg({ ok: true, txt: ficha
+        ? `${f.placa} queda asignada a ${ficha.nombre} en la semana ${f.semana_ruta}. Registrado por ${autor} el ${fechaHoraMx(ahora)}.`
+        : `${f.placa} vuelve a lo que declaró el supervisor en la semana ${f.semana_ruta}. Registrado por ${autor} el ${fechaHoraMx(ahora)}.` });
       await cargar(semana, true);
     } catch (e) { setMsg({ ok: false, txt: "Error al cambiar la empresa: " + (e.message || e) }); }
   };
@@ -1167,9 +1321,14 @@ function ModuloPnr({ usuario }) {
     for (const f of lista) {
       if (!f.placa) { sinEmpresa.push(`${f.case_id} (sin placa)`); continue; }
       const prep = prepararCobro(f);
-      const { data: tid } = await sb.rpc("fn_empresa_de_placa", { p_placa: f.placa });
-      if (!tid) { sinEmpresa.push(`${f.case_id} · ${f.placa}`); continue; }
-      const { data: emp } = await sb.from("terceros").select("nombre").eq("id", tid).maybeSingle();
+      // Manda el cambio manual del analista; si no hay, lo que declaró el
+      // supervisor el día de la ruta.
+      const ovP = empresaCambiada(f);
+      const { data: tid } = await sb.rpc("fn_empresa_cobro", {
+        p_placa: f.placa, p_fecha: f.fecha_ruta || (f.facturado_en ? String(f.facturado_en).slice(0, 10) : null) });
+      if (!tid && !ovP) { sinEmpresa.push(`${f.case_id} · ${f.placa}`); continue; }
+      const { data: emp } = ovP ? { data: { nombre: ovP.empresa_nombre } }
+        : await sb.from("terceros").select("nombre").eq("id", tid).maybeSingle();
       filas.push({
         pnr_id: String(f.case_id),
         empresa_nombre: emp?.nombre || empresaDe(f),
@@ -1658,8 +1817,8 @@ function ModuloPnr({ usuario }) {
                             </div>
                             {ov && (
                               <div style={{ fontSize: 9, color: "#92400e", marginTop: 2 }}
-                                title={`Puesta a mano por ${ov.usuario || "—"}${ov.motivo ? " · " + ov.motivo : ""}. El inventario decía: ${f.empresa || "sin empresa"}.`}>
-                                cambiada a mano
+                                title={`Cambiada a mano por ${ov.usuario || "—"} el ${fechaHoraMx(ov.actualizado_at || ov.created_at)}.\nMotivo: ${ov.motivo || "—"}\nEl supervisor había declarado: ${f.empresa || "sin empresa"}.`}>
+                                cambiada a mano · {ov.usuario || "—"} · {fechaHoraMx(ov.actualizado_at || ov.created_at)}
                               </div>
                             )}
                             <button onClick={() => cambiarEmpresa(f)}
