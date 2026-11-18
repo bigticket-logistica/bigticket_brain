@@ -1998,7 +1998,10 @@ function PanelControlSupervisores() {
     const totalItems = t6 ? 5 : 4;
     const done = eh.completados + (t6 && t6.completo ? 1 : 0);
     if (eh.sinOperacion) return { k: "sinop", t: "Sin operación", done: totalItems, totalItems };
-    if (row?.estado_dia === "cerrado_supervisor") return { k: "cerrada", t: "Cerrada", done, totalItems };
+    // "Cerrada" solo si además está completa (igual que la bitácora y el panel del jefe).
+    if (row?.estado_dia === "cerrado_supervisor" && done === totalItems) return { k: "cerrada", t: "Cerrada", done, totalItems };
+    if (row?.estado_dia === "cerrado_supervisor" && fecha < fechaHoyOperativa()) return { k: "vencida", t: "Incompleta", done, totalItems };
+    if (row?.estado_dia === "cerrado_supervisor") return { k: "curso", t: "Cerrada · falta completar", done, totalItems };
     // Regla del 18-nov: cerrar es obligatorio. Si el día ya terminó y el
     // supervisor no la cerró, queda "No cerrada" (rojo), aunque esté completa.
     if (fecha < fechaHoyOperativa()) return { k: "vencida", t: "No cerrada", done, totalItems };
@@ -2046,9 +2049,9 @@ function PanelControlSupervisores() {
     const motivos = [];
     if (eb.k === "nada") motivos.push("bitácora sin completar");
     else if (eb.k === "completa") motivos.push("completa · sin cerrar");
-    else if (eb.k === "curso") motivos.push(`bitácora ${done}/${totalItems}`);
+    else if (eb.k === "curso") motivos.push(eb.t === "Cerrada · falta completar" ? `cerrada · falta completar ${done}/${totalItems}` : `bitácora ${done}/${totalItems}`);
     else if (eb.k === "cerrada" && !completa) motivos.push(`cerrada con ${done}/${totalItems}`);
-    else if (eb.k === "vencida") motivos.push(`no cerrada · ${done}/${totalItems}`);
+    else if (eb.k === "vencida") motivos.push(`${eb.t === "Incompleta" ? "incompleta" : "no cerrada"} · ${done}/${totalItems}`);
     if (nsSinDeclarar) motivos.push(`${nsSinDeclarar} no salida(s) sin responder`);
     const color = ["nada", "vencida"].includes(eb.k) ? "rojo" : ["cerrada", "sinop"].includes(eb.k) && completa ? "verde" : "amarillo";
     return { color, done, totalItems, sinOp: eh.sinOperacion, motivos, estado: eb, pnr: pnrSinResolver };
