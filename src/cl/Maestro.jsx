@@ -239,18 +239,19 @@ const MAX_DIAS_RANGO = 93;
 const isoDe = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 const deIso = (s) => { const [y, m, d] = String(s).split("-").map(Number); return new Date(y, m - 1, d); };
 const sumarDias = (s, k) => { const d = deIso(s); d.setDate(d.getDate() + k); return isoDe(d); };
-const difDias = (a, b) => Math.round((deIso(b) - deIso(a)) / 86400000);
+export const difDias = (a, b) => Math.round((deIso(b) - deIso(a)) / 86400000);
 const MESES_ES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
-const fechaCorta = (s) => { const d = deIso(s); return `${d.getDate()} ${MESES_ES[d.getMonth()].slice(0, 3)} ${d.getFullYear()}`; };
+export const fechaCorta = (s) => { const d = deIso(s); return `${d.getDate()} ${MESES_ES[d.getMonth()].slice(0, 3)} ${d.getFullYear()}`; };
 
-function CalendarioRango({ desde, hasta, onCambio, min, max, conDatos }) {
-  const tope = max || isoDe(new Date());
+// futuro: permite marcar días que todavía no pasan (reemplazos, vacaciones)
+export function CalendarioRango({ desde, hasta, onCambio, min, max, conDatos, futuro = false }) {
+  const tope = max || (futuro ? null : isoDe(new Date()));
   const [ancla, setAncla] = useState(null);        // primer día marcado, esperando el último
   const [sobre, setSobre] = useState(null);        // día bajo el puntero mientras se pinta
   const [arrastrando, setArrastrando] = useState(false);
   const [mesBase, setMesBase] = useState(() => {   // mes de la izquierda (se ven dos)
-    const b = deIso(hasta || tope);
-    return new Date(b.getFullYear(), b.getMonth() - 1, 1);
+    const b = deIso(futuro ? (desde || isoDe(new Date())) : (hasta || tope));
+    return new Date(b.getFullYear(), b.getMonth() - (futuro ? 0 : 1), 1);
   });
 
   useEffect(() => {
@@ -265,7 +266,7 @@ function CalendarioRango({ desde, hasta, onCambio, min, max, conDatos }) {
     onCambio(x, y);
     setAncla(null); setSobre(null); setArrastrando(false);
   };
-  const fuera = (s) => (min && s < min) || s > tope;
+  const fuera = (s) => (min && s < min) || (tope && s > tope);
   const alBajar = (s) => {
     if (fuera(s)) return;
     if (ancla && !arrastrando) { terminar(ancla, s); return; }
@@ -335,9 +336,10 @@ function CalendarioRango({ desde, hasta, onCambio, min, max, conDatos }) {
             onClick={() => setMesBase(new Date(mesBase.getFullYear(), mesBase.getMonth() + k, 1))}>{txt}</button>
   );
   const atajo = (txt, a, b) => (
-    <button className="mj-chip" onClick={() => { setAncla(null); onCambio(a < (min || a) ? min : a, b > tope ? tope : b); }}>{txt}</button>
+    <button className="mj-chip" onClick={() => { setAncla(null); onCambio(a < (min || a) ? min : a, tope && b > tope ? tope : b); }}>{txt}</button>
   );
-  const t = deIso(tope);
+  const hoyIso = isoDe(new Date());
+  const t = deIso(tope || hoyIso);
   const iniMes = isoDe(new Date(t.getFullYear(), t.getMonth(), 1));
   const iniMesAnt = isoDe(new Date(t.getFullYear(), t.getMonth() - 1, 1));
   const finMesAnt = isoDe(new Date(t.getFullYear(), t.getMonth(), 0));
@@ -345,10 +347,16 @@ function CalendarioRango({ desde, hasta, onCambio, min, max, conDatos }) {
   return (
     <div>
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
-        {atajo("Últimos 7 días", sumarDias(tope, -6), tope)}
-        {atajo("Últimos 30 días", sumarDias(tope, -29), tope)}
-        {atajo("Este mes", iniMes, tope)}
-        {atajo("Mes pasado", iniMesAnt, finMesAnt)}
+        {futuro ? (<>
+          {atajo("Solo hoy", hoyIso, hoyIso)}
+          {atajo("1 semana desde hoy", hoyIso, sumarDias(hoyIso, 6))}
+          {atajo("2 semanas desde hoy", hoyIso, sumarDias(hoyIso, 13))}
+        </>) : (<>
+          {atajo("Últimos 7 días", sumarDias(tope, -6), tope)}
+          {atajo("Últimos 30 días", sumarDias(tope, -29), tope)}
+          {atajo("Este mes", iniMes, tope)}
+          {atajo("Mes pasado", iniMesAnt, finMesAnt)}
+        </>)}
       </div>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
         {flecha(-1, "‹")}
@@ -455,7 +463,9 @@ function ModuloMaestroCL({ usuario } = {}) {
   const [diasRango, setDiasRango] = useState([]);
   // ── Detalle de colectas (first mile) en la Jornada ──
   const [colAbierta, setColAbierta] = useState(null);      // id_viaje de la colecta abierta
-  const [colDet, setColDet] = useState({});                // id_viaje -> fila de colectas_dia (o {error})          // todos los días con jornada (la lista de arriba trae solo 60)
+  const [colDet, setColDet] = useState({});                // id_viaje -> fila de colectas_dia (o {error})
+  const [colConf, setColConf] = useState({});              // id_viaje -> confirmación del supervisor en la bitácora
+  const [reemplazos, setReemplazos] = useState([]);        // reemplazos de supervisor por CECO y fechas (Mantenedor)          // todos los días con jornada (la lista de arriba trae solo 60)
   const [kpiAbierto, setKpiAbierto] = useState(null);
   const [recuadre, setRecuadre] = useState(null);
   const [aCuadrar, setACuadrar] = useState([]);
@@ -920,7 +930,14 @@ function ModuloMaestroCL({ usuario } = {}) {
     setSupCeco(Object.fromEntries((sc || []).map(x => [x.ceco, x.supervisor])));
     setSupBit(sb || []);
   };
-  useEffect(() => { cargarSupCeco(); }, []);   // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    cargarSupCeco();
+    apiSuave("vw_reemplazos_cl?activo=eq.true&select=ceco,desde,hasta,supervisor_maestro,motivo", [])
+      .then(r => setReemplazos(r || []));
+  }, []);   // eslint-disable-line react-hooks/exhaustive-deps
+  // Supervisor que reemplaza al titular del CECO ese día (vacaciones, licencia…), si hay
+  const reemplazoDe = (ceco, fecha) => (ceco && fecha
+    && reemplazos.find(x => x.ceco === ceco && x.desde <= fecha && fecha <= x.hasta)) || null;
   const actualizarSupBit = async (email, campos) => {
     try {
       await api(`supervisores_bt?email=eq.${encodeURIComponent(email)}`, { method: "PATCH",
@@ -1577,6 +1594,9 @@ function ModuloMaestroCL({ usuario } = {}) {
              // Colectas de first mile (solo lunes): siempre el supervisor del CECO (SRM1),
              // sin importar a quién pertenece la patente.
              ...(() => {
+               // Un reemplazo en el CECO ese día manda sobre todo (también sobre la patente)
+               const rem = reemplazoDe(z?.cecos_admin, r.fecha);
+               if (rem) return { supervisor: rem.supervisor_maestro, supervisor_fuente: "reemplazo", reemplazo_motivo: rem.motivo };
                const deCeco = (z?.cecos_admin && supCeco[z.cecos_admin]) || null;
                const dePatente = vehSup[normPatente(r.patente)]?.supervisor || null;
                if (r.tipo === "colecta") return { supervisor: deCeco || dePatente, supervisor_fuente: deCeco ? "ceco" : dePatente ? "patente" : null };
@@ -1616,6 +1636,17 @@ function ModuloMaestroCL({ usuario } = {}) {
   const devolVista = filtrarDevol(devol);
   const traspVista = filtrarTrasp(trasp);
   const diasR = diasRango.length ? diasRango : dias;
+
+  // Confirmaciones de colectas del día (bitácora del supervisor): marcan la fila
+  // con ✓ si confirmó lo de MELI o ⚠ si corrigió las paradas (eso cambia el NS).
+  useEffect(() => {
+    const hayColectas = jornada.some(r => r.tipo === "colecta");
+    if (!fecha || !hayColectas) { setColConf({}); return; }
+    apiSuave(`colectas_confirmacion_cl?fecha=eq.${fecha}&select=id_ruta,paradas_total,paradas_ejecutadas,`
+      + "paradas_total_meli,paradas_exitosas_meli,motivo,comentario,confirmado_por,rol,confirmado_at", [])
+      .then(r => setColConf(Object.fromEntries((r || []).map(x => [String(x.id_ruta), x]))));
+    setColDet({});   // el detalle se vuelve a leer con la confirmación al día
+  }, [fecha, jornada]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   // Abre el detalle de una colecta debajo de su fila; lo lee de colectas_dia la primera vez.
   const alternarColecta = async (r) => {
@@ -2105,14 +2136,17 @@ function ModuloMaestroCL({ usuario } = {}) {
                           {/* El supervisor se asigna por patente solo a la flota propia: el aviso aparece
                               cuando Certronic dice que el vehículo es de Bigticket y falta en Vehículos BT. */}
                           {r.patente && /bigticket/i.test(r.empresa || "") && r.supervisor_fuente !== "patente"
+                           && r.supervisor_fuente !== "reemplazo" && r.tipo !== "colecta"
                             ? <span style={{ color: AMBAR_, whiteSpace: "nowrap" }}
                                     title={`La patente ${r.patente} es de Bigticket y no tiene supervisor: asígnalo en Vehículos BT`}>⚠ Asignar en Vehículos BT</span>
                             : r.supervisor
-                              ? <span style={{ color: "#334155" }}
-                                      title={r.supervisor_fuente === "ceco" ? `Supervisor a cargo de ${r.cecos_real} (asignado en la bitácora)` : "Supervisor de la patente (Vehículos BT)"}>{r.supervisor}</span>
+                              ? <span style={{ color: r.supervisor_fuente === "reemplazo" ? NAVY : "#334155" }}
+                                      title={r.supervisor_fuente === "reemplazo" ? `Reemplaza al titular de ${r.cecos_real} este día (${r.reemplazo_motivo || "reemplazo"}). Se define en Mantenedor → Reemplazos.`
+                                           : r.supervisor_fuente === "ceco" ? `Supervisor a cargo de ${r.cecos_real} (asignado en la bitácora)` : "Supervisor de la patente (Vehículos BT)"}>
+                                  {r.supervisor_fuente === "reemplazo" && <span style={{ color: ORANGE, fontWeight: 800 }}>↺ </span>}{r.supervisor}</span>
                               : r.cecos_real
                                 ? <span style={{ color: AMBAR_, whiteSpace: "nowrap" }}
-                                        title={`Nadie tiene asignado ${r.cecos_real}: asígnalo en Vehículos BT → Supervisores`}>⚠ CECO sin supervisor</span>
+                                        title={`Nadie tiene asignado ${r.cecos_real}: asígnalo en Mantenedor → Supervisores y CECO`}>⚠ CECO sin supervisor</span>
                                 : <span style={{ color: "#cbd5e1" }}>—</span>}
                         </td>
                         <td style={{ whiteSpace: "nowrap" }}>
@@ -2195,6 +2229,22 @@ function ModuloMaestroCL({ usuario } = {}) {
                               {colAbierta === String(r.id_viaje) ? "▾" : "▸"} {fmt(Math.round(n(r.pct_entrega) * n(r.paradas) / 100))}/{fmt(r.paradas)}
                             </button>
                           ) : fmt(r.paradas)}
+                          {r.tipo === "colecta" && (() => {
+                            const k = colConf[String(r.id_viaje)];
+                            if (!k) return <span title="El supervisor todavía no confirma esta colecta en su bitácora"
+                                                 style={{ marginLeft: 5, color: "#cbd5e1", fontSize: 11 }}>●</span>;
+                            const corrigio = n(k.paradas_total) !== n(k.paradas_total_meli) || n(k.paradas_ejecutadas) !== n(k.paradas_exitosas_meli);
+                            const quien = `${k.confirmado_por || "El supervisor"}${k.rol === "analista" ? " (analista)" : ""}`;
+                            return corrigio ? (
+                              <span title={`${quien} corrigió las paradas en la bitácora: MELI ${n(k.paradas_exitosas_meli)}/${n(k.paradas_total_meli)} → `
+                                           + `${n(k.paradas_ejecutadas)}/${n(k.paradas_total)}. El NS de esta línea cambió.`
+                                           + (k.motivo ? `\nMotivo: ${k.motivo}` : "") + (k.comentario ? `\nComentario: ${k.comentario}` : "")}
+                                    style={{ marginLeft: 5, color: AMBAR_, fontWeight: 800, cursor: "help" }}>⚠</span>
+                            ) : (
+                              <span title={`${quien} confirmó las paradas de MELI en la bitácora`}
+                                    style={{ marginLeft: 5, color: "#0d8043", fontWeight: 800, cursor: "help" }}>✓</span>
+                            );
+                          })()}
                         </td>
                         {r.tipo === "colecta" ? (
                           // Colecta: se mide por paradas; los paquetes van en el detalle desplegable
@@ -3162,132 +3212,15 @@ function ModuloMaestroCL({ usuario } = {}) {
                            disabled={vehGuardando === "__pipefy__"}
                            onChange={e => { const a = e.target.files && e.target.files[0]; e.target.value = ""; subirPipefy(a); }} />
                   </label>
-                  <button className="mj-btn" onClick={() => setSupPanel(v => !v)} style={{ padding: "7px 14px" }}>
-                    {supPanel ? "Cerrar supervisores" : `👤 Supervisores (${supervisores.filter(x => x.activo).length})`}
-                  </button>
+                  <span style={{ fontSize: 11.5, color: "#64748b" }}
+                        title="Supervisores, sus CECO y los reemplazos por vacaciones se editan en la pestaña Mantenedor">
+                    👤 Supervisores y CECO: pestaña <strong>Mantenedor</strong>
+                  </span>
                   <span style={{ flex: 1 }} />
                   <label style={{ fontSize: 10.5, color: "#64748b" }}>Buscar<br/>
                     <input className="mj-input" value={vehBuscar} placeholder="patente, tipo, operación, supervisor…"
                            onChange={e => setVehBuscar(e.target.value)} style={{ width: 180 }} /></label>
                 </div>
-
-                {supPanel && (
-                  <div style={{ background: "#fff", border: "1px solid #e6e9ef", borderRadius: 10,
-                                padding: "12px 16px", marginBottom: 12 }}>
-                    <div style={{ fontSize: 13, fontWeight: 800, color: NAVY }}>Supervisores</div>
-                    <div style={{ fontSize: 12, color: "#64748b", lineHeight: 1.6, margin: "3px 0 10px" }}>
-                      Cambiar un nombre se refleja en todos sus vehículos y en el Maestro. Un supervisor que deja
-                      la operación se desactiva (no se borra): sus vehículos conservan el historial.
-                    </div>
-                    {!supervisores.length ? (
-                      <div style={{ fontSize: 12, color: AMBAR_ }}>Todavía no hay supervisores (falta la migración 65 o la carga de Pipefy).</div>
-                    ) : (
-                      <table className="mj-tabla" style={{ marginBottom: 10 }}>
-                        <thead><tr><th>Nombre completo</th>
-                          <th title="Como aparece en el Maestro y en el export: nombre y primer apellido. Se llena solo; corrígelo si sale mal.">Nombre en el maestro</th>
-                          <th>Correo</th><th>Teléfono</th>
-                          <th title="CECOS que supervisa, aunque no use la bitácora. Separados por coma.">CECOS a cargo</th>
-                          <th className="num">Vehículos</th><th>Estado</th></tr></thead>
-                        <tbody>
-                          {supervisores.map(sp => (
-                            <tr key={sp.id} style={!sp.activo ? { opacity: 0.55 } : {}}>
-                              <td><input className="mj-input" defaultValue={sp.nombre} style={{ fontSize: 12, minWidth: 230 }}
-                                     onBlur={e => { const v = e.target.value.trim().replace(/\s+/g, " ");
-                                       if (v && v !== sp.nombre) actualizarSupervisor(sp.id, { nombre: v }); }} /></td>
-                              <td><input className="mj-input" defaultValue={sp.nombre_corto || ""} placeholder="NOMBRE APELLIDO"
-                                     style={{ fontSize: 12, minWidth: 160, fontWeight: 700 }}
-                                     onBlur={async e => { const v = e.target.value.trim().replace(/\s+/g, " ").toUpperCase();
-                                       if (v && v !== (sp.nombre_corto || "")) { await actualizarSupervisor(sp.id, { nombre_corto: v }); await cargarSupCeco(); } }} /></td>
-                              <td><input className="mj-input" defaultValue={sp.correo || ""} placeholder="correo"
-                                     style={{ fontSize: 12, minWidth: 200 }}
-                                     onBlur={e => { const v = e.target.value.trim();
-                                       if (v !== (sp.correo || "")) actualizarSupervisor(sp.id, { correo: v || null }); }} /></td>
-                              <td><input className="mj-input" defaultValue={sp.telefono || ""} placeholder="teléfono"
-                                     style={{ fontSize: 12, width: 130 }}
-                                     onBlur={e => { const v = e.target.value.trim();
-                                       if (v !== (sp.telefono || "")) actualizarSupervisor(sp.id, { telefono: v || null }); }} /></td>
-                              <td><input className="mj-input" defaultValue={(sp.cecos_a_cargo || []).join(", ")} placeholder="ej. ML_MELIPILLA"
-                                     style={{ fontSize: 12, minWidth: 180 }}
-                                     onBlur={async e => { const v = listaCecosTxt(e.target.value);
-                                       if (v.join(",") !== (sp.cecos_a_cargo || []).join(",")) {
-                                         await actualizarSupervisor(sp.id, { cecos_a_cargo: v }); await cargarSupCeco(); } }} /></td>
-                              <td className="num">{fmt(Object.values(vehOps).filter(x => x.supervisor_id === sp.id).length)}</td>
-                              <td>
-                                <label style={{ fontSize: 11.5, color: "#64748b", whiteSpace: "nowrap" }}>
-                                  <input type="checkbox" checked={!!sp.activo} disabled={supGuardando === sp.id}
-                                         onChange={e => actualizarSupervisor(sp.id, { activo: e.target.checked })} />
-                                  {" "}{sp.activo ? "activo" : "inactivo"}
-                                </label>
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    )}
-                    <div style={{ display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap" }}>
-                      <label style={{ fontSize: 10.5, color: "#64748b" }}>Nombre<br/>
-                        <input className="mj-input" value={supNuevo.nombre} placeholder="NOMBRE APELLIDO APELLIDO"
-                               onChange={e => setSupNuevo(x => ({ ...x, nombre: e.target.value }))} style={{ width: 240 }} /></label>
-                      <label style={{ fontSize: 10.5, color: "#64748b" }}>Correo<br/>
-                        <input className="mj-input" value={supNuevo.correo} placeholder="nombre@bigticket.cl"
-                               onChange={e => setSupNuevo(x => ({ ...x, correo: e.target.value }))} style={{ width: 210 }} /></label>
-                      <label style={{ fontSize: 10.5, color: "#64748b" }}>Teléfono<br/>
-                        <input className="mj-input" value={supNuevo.telefono} placeholder="+56 9…"
-                               onChange={e => setSupNuevo(x => ({ ...x, telefono: e.target.value }))} style={{ width: 130 }} /></label>
-                      <label style={{ fontSize: 10.5, color: "#64748b" }}>CECOS a cargo<br/>
-                        <input className="mj-input" value={supNuevo.cecos} placeholder="ML_MELIPILLA"
-                               onChange={e => setSupNuevo(x => ({ ...x, cecos: e.target.value }))} /></label>
-                      <button className="mj-btn" onClick={agregarSupervisor}
-                              disabled={supGuardando === "__nuevo__" || !supNuevo.nombre.trim()}
-                              style={{ background: NAVY, color: "#fff", borderColor: NAVY }}>
-                        {supGuardando === "__nuevo__" ? "Agregando…" : "➕ Agregar supervisor"}
-                      </button>
-                    </div>
-
-                    <div style={{ fontSize: 13, fontWeight: 800, color: NAVY, marginTop: 18 }}>Supervisores por CECO (bitácora)</div>
-                    <div style={{ fontSize: 12, color: "#64748b", lineHeight: 1.6, margin: "3px 0 10px", maxWidth: 940 }}>
-                      Un viaje sin supervisor por patente toma al supervisor a cargo de su CECO. Son los CECOS que cada
-                      supervisor tiene en la bitácora: <strong>cambiarlos aquí también cambia lo que ve en la bitácora</strong>.
-                      Los usuarios de prueba siguen en la bitácora, pero no aparecen en el Maestro.
-                    </div>
-                    {(() => {
-                      const norm = (c) => String(c || "").toUpperCase().replace(/[_ ]/g, "");
-                      const cubiertos = new Set([
-                        ...supBit.filter(b => b.activo && !b.es_prueba).flatMap(b => (Array.isArray(b.scs_asignados) ? b.scs_asignados : []).map(norm)),
-                        ...supervisores.filter(x => x.activo).flatMap(x => (x.cecos_a_cargo || []).map(norm)) ]);
-                      const sinSup = cecosNombres.filter(c => /^ML_/.test(c) && !cubiertos.has(norm(c)));
-                      return sinSup.length > 0 && (
-                        <div style={{ fontSize: 12, color: AMBAR_, marginBottom: 8 }}>
-                          ⚠ CECOS sin supervisor: <strong>{sinSup.join(", ")}</strong>
-                        </div>
-                      );
-                    })()}
-                    {!supBit.length ? (
-                      <div style={{ fontSize: 12, color: "#94a3b8" }}>No se pudo leer la lista de la bitácora (falta la migración 78).</div>
-                    ) : (
-                      <table className="mj-tabla">
-                        <thead><tr><th>Supervisor</th><th>Correo</th><th>CECOS a cargo (separados por coma)</th><th>Prueba</th></tr></thead>
-                        <tbody>
-                          {supBit.filter(b => b.activo).map(b => (
-                            <tr key={b.email} style={b.es_prueba ? { opacity: 0.55 } : {}}>
-                              <td style={{ fontWeight: 600 }}>{b.nombre}</td>
-                              <td style={{ fontSize: 11.5, color: "#64748b" }}>{b.email}</td>
-                              <td><input className="mj-input" defaultValue={(Array.isArray(b.scs_asignados) ? b.scs_asignados : []).join(", ")} style={{ fontSize: 12, minWidth: 280 }}
-                                     onBlur={e => {
-                                       const lista = e.target.value.split(",").map(x => x.trim().toUpperCase()).filter(Boolean);
-                                       if (lista.join(",") !== (Array.isArray(b.scs_asignados) ? b.scs_asignados : []).join(",")) actualizarSupBit(b.email, { scs_asignados: lista });
-                                     }} /></td>
-                              <td><label style={{ fontSize: 11.5, color: "#64748b", whiteSpace: "nowrap" }}>
-                                <input type="checkbox" checked={!!b.es_prueba} onChange={e => actualizarSupBit(b.email, { es_prueba: e.target.checked })} />
-                                {" "}{b.es_prueba ? "de prueba" : "oficial"}
-                              </label></td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    )}
-                  </div>
-                )}
 
                 {(() => {
                   // Una fila por patente: las que tienen clasificación de tarifa y las que vienen de Pipefy
