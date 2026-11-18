@@ -442,6 +442,49 @@ function DetalleColecta({ d }) {
   );
 }
 
+// ── Devoluciones de una ruta, desplegadas bajo su fila en la Jornada ─────────
+function DetalleDevoluciones({ r, filas }) {
+  const carg = n(r.cargados), ent = n(r.entregados), dj = n(r.devol_justificadas);
+  const pct = (a) => (carg ? `${(Math.round(1000 * Math.min(1, a / carg)) / 10).toLocaleString("es-CL")} %` : "—");
+  return (
+    <div>
+      <div style={{ fontSize: 12, color: "#334155", marginBottom: 8 }}>
+        <b style={{ color: NAVY }}>Devoluciones de la ruta {r.id_viaje}</b>
+        <span style={{ color: "#8a94a6" }}> · NS ácido {fmt(ent)}/{fmt(carg)} = {pct(ent)}</span>
+        {dj > 0 && <span> · <b style={{ color: ORANGE }}>con {dj} justificada{dj > 1 ? "s" : ""}: ({fmt(ent)} + {fmt(dj)}) / {fmt(carg)} = {pct(ent + dj)}</b>
+          <span style={{ color: "#8a94a6" }}> (este es el NS del pago)</span></span>}
+      </div>
+      {filas.length === 0 ? (
+        <div style={{ fontSize: 12, color: "#8a94a6" }}>
+          MELI todavía no informa el detalle de estas devoluciones (motivo y folio). Aparecen cuando el paquete vuelve al SC.
+        </div>
+      ) : (
+        <table className="mj-tabla" style={{ background: "#fff" }}>
+          <thead><tr><th>Folio guía</th><th>Motivo</th><th>Código MELI</th><th>Justificación</th><th>Receptor</th><th>Comuna</th><th className="num">Parada</th><th>Hora</th></tr></thead>
+          <tbody>
+            {filas.map(d => (
+              <tr key={d.folio_guia}>
+                <td style={{ fontVariantNumeric: "tabular-nums" }}>{d.folio_guia}</td>
+                <td><Etiqueta texto={d.motivo || "—"} color="#b42318" fondo="#fdecec" /></td>
+                <td style={{ fontFamily: "monospace", fontSize: 11, color: "#64748b" }}>{d.motivo_codigo || "(sin código)"}</td>
+                <td title={d.grupo ? `Grupo ${d.grupo}: ${GRUPOS_JUSTIF[d.grupo] || ""}` : "Sin regla: defínela en Mantenedor → Justificación de devoluciones"}>
+                  {d.justifica ? <Etiqueta texto={`✓ Justificada · ${d.grupo}`} color="#0d8043" fondo="#e7f6ec" />
+                    : d.grupo ? <Etiqueta texto={`No justifica · ${d.grupo}`} color="#64748b" fondo="#eef2f9" />
+                    : <Etiqueta texto="Sin regla" color={AMBAR_} fondo="#fff7e6" />}
+                </td>
+                <td style={{ color: "#475569", maxWidth: 170, overflow: "hidden", textOverflow: "ellipsis" }}>{d.receptor || "—"}</td>
+                <td style={{ color: "#475569" }}>{d.comuna || "—"}</td>
+                <td className="num">{d.parada ?? "—"}</td>
+                <td style={{ color: "#94a3b8" }}>{d.hora_chile || "—"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
 // ── Módulo ─────────────────────────────────────────────────────────────────
 function ModuloMaestroCL({ usuario } = {}) {
   const [dias, setDias] = useState([]);
@@ -463,6 +506,7 @@ function ModuloMaestroCL({ usuario } = {}) {
   const [diasRango, setDiasRango] = useState([]);
   // ── Detalle de colectas (first mile) en la Jornada ──
   const [colAbierta, setColAbierta] = useState(null);      // id_viaje de la colecta abierta
+  const [devAbierta, setDevAbierta] = useState(null);      // id_viaje con sus devoluciones desplegadas
   const [colDet, setColDet] = useState({});                // id_viaje -> fila de colectas_dia (o {error})
   const [colConf, setColConf] = useState({});              // id_viaje -> confirmación del supervisor en la bitácora
   const [reemplazos, setReemplazos] = useState([]);
@@ -2271,12 +2315,25 @@ function ModuloMaestroCL({ usuario } = {}) {
                         ) : (<>
                         <td className="num" style={{ fontWeight: 700 }}>{fmt(r.cargados)}</td>
                         <td className="num" style={{ color: "#0d8043", fontWeight: 700 }}>{fmt(r.entregados)}</td>
-                        <td className="num" style={{ color: n(r.devueltos) ? "#b42318" : "#cbd5e1", fontWeight: n(r.devueltos) ? 700 : 400 }}>{fmt(r.devueltos)}</td>
+                        <td className="num" style={{ color: n(r.devueltos) ? "#b42318" : "#cbd5e1", fontWeight: n(r.devueltos) ? 700 : 400 }}>
+                          {n(r.devueltos) > 0 || r.devol_justificadas > 0 ? (
+                            <button onClick={() => setDevAbierta(devAbierta === String(r.id_viaje) ? null : String(r.id_viaje))}
+                                    title="Ver las devoluciones de esta ruta, su motivo y si se justificaron"
+                                    style={{ border: "1px solid #f3c9c4", background: devAbierta === String(r.id_viaje) ? "#b42318" : "#fdecec",
+                                             color: devAbierta === String(r.id_viaje) ? "#fff" : "#b42318", borderRadius: 6,
+                                             padding: "1px 7px", fontSize: 11.5, fontWeight: 700, cursor: "pointer" }}>
+                              {devAbierta === String(r.id_viaje) ? "▾" : "▸"} {fmt(r.devueltos)}
+                            </button>
+                          ) : fmt(r.devueltos)}
+                        </td>
                         <td className="num" style={{ color: n(r.d_justificados) ? ORANGE : "#cbd5e1", fontWeight: n(r.d_justificados) ? 700 : 400 }}>{fmt(r.d_justificados)}</td>
                         </>)}
                         <td className="num" style={{ fontWeight: 700, color: n(r.pct_ns) >= 98 ? "#0d8043" : n(r.pct_ns) >= 90 ? "#7a5b16" : "#b42318" }}
                             title={r.devol_justificadas > 0 ? `NS ácido ${r.pct_entrega}% → ${r.pct_ns}% con ${r.devol_justificadas} devolución(es) justificada(s) automáticamente por su motivo (Mantenedor → Justificación de devoluciones). Este NS es el que usa el pago.` : undefined}>
-                          {r.devol_justificadas > 0 && <span style={{ background: "#fff1e6", color: ORANGE, borderRadius: 4, padding: "0 4px", fontSize: 10.5, marginRight: 4, cursor: "help" }}>J{r.devol_justificadas}</span>}
+                          {r.devol_justificadas > 0 && (
+                            <span onClick={() => setDevAbierta(devAbierta === String(r.id_viaje) ? null : String(r.id_viaje))}
+                                  style={{ background: "#fff1e6", color: ORANGE, borderRadius: 4, padding: "0 4px", fontSize: 10.5, marginRight: 4, cursor: "pointer" }}>J{r.devol_justificadas}</span>
+                          )}
                           {r.pct_ns === null || r.pct_ns === undefined ? "—" : `${r.pct_ns}%`}
                         </td>
                         <td style={{ whiteSpace: "nowrap", fontSize: 12 }}
@@ -2305,6 +2362,13 @@ function ModuloMaestroCL({ usuario } = {}) {
                         <td>{r.ciclo || "—"}</td>
                         <td><Etiqueta texto={r.status || "—"} color={r.status === "finished" ? "#0d8043" : "#475569"} fondo={r.status === "finished" ? "#e7f6ec" : "#eef2f9"} /></td>
                       </tr>
+                      {r.tipo !== "colecta" && devAbierta === String(r.id_viaje) && (
+                        <tr>
+                          <td colSpan={23} style={{ background: "#fdf6f5", padding: "10px 14px 14px", borderBottom: "2px solid #f3d4cf" }}>
+                            <DetalleDevoluciones r={r} filas={devol.filter(d => String(d.id_viaje) === String(r.id_viaje))} />
+                          </td>
+                        </tr>
+                      )}
                       {r.tipo === "colecta" && colAbierta === String(r.id_viaje) && (
                         <tr>
                           <td colSpan={23} style={{ background: "#f3f7fc", padding: "10px 14px 14px", borderBottom: "2px solid #dbe7f7" }}>
