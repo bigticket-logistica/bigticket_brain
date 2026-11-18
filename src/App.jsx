@@ -22,6 +22,7 @@ import ModuloGpsSegurosCL from "./cl/GpsSeguros";
 import ModuloPnrCL from "./cl/PNR";
 import ModuloAceptacionCL from "./cl/Aceptacion";
 import CuidadoActivoCL from "./cl/CuidadoActivo";
+import ModuloMantenedorCL from "./cl/Mantenedor";
 const PIPE_ID = "306833898";
 
 // Devuelve el periodo "operativo" actual (mes en México) en formato YYYY-MM
@@ -120,7 +121,7 @@ const MODULOS_POR_PAIS = {
     prefacturas: ["pagos"],
   },
   "Chile": {
-    superadmin: ["certificaciones_cl", "mantenciones_cl", "maestro_cl", "gps_seguros_cl", "pnr_cl", "aceptacion_cl"],
+    superadmin: ["certificaciones_cl", "mantenciones_cl", "maestro_cl", "gps_seguros_cl", "pnr_cl", "aceptacion_cl", "mantenedor_cl"],
     certificacion: [],
     certificacion_full: ["certificaciones_cl"],
     certificacion_mant: ["certificaciones_cl", "mantenciones_cl", "gps_seguros_cl"],
@@ -139,6 +140,7 @@ const MODULOS_LABELS = {
   gps_seguros_cl: "GPS y Seguros",
   pnr_cl: "Posventa",
   aceptacion_cl: "Aceptación de Rutas",
+  mantenedor_cl: "Mantenedor",
   maestro: "Maestro Operaciones",
   mantenciones: "Mantenciones",
   alertas_portal: "Alertas Portal",
@@ -15197,7 +15199,7 @@ const TABS_CUIDADO_CL = [
   { id: "ca_combustible", label: "Combustible", desc: "Consumos de Copec contra la subvención y km de Geotab contra km de ruta" },
   { id: "ca_gastos", label: "Historial de gastos", desc: "Todo lo gastado en la flota: por año, tipo, patente y taller" },
   { id: "ca_alertas", label: "Centro de alertas", desc: "Todas las alertas de la flota en un solo lugar, envíos por correo y reglas" },
-  { id: "ca_mantenedores", label: "Mantenedores", desc: "Todo lo editable: parámetros, componentes, proveedores y multas" },
+  // Mantenedores se mudó a la pestaña Mantenedor (cl/Mantenedor.jsx)
   { id: "ca_evaluacion", label: "Evaluación del ejecutivo", desc: "Solo jefatura: gestión a tiempo de lo que avisó el sistema" },
   { id: "ca_indicadores", label: "Indicadores", desc: "Evaluación del tercero: conducción Geotab, incumplimientos y multas" },
   { id: "ca_conc", label: "Conciliaciones", desc: "Cierre mensual de cobros al tercero, apelaciones e informe a Finanzas" },
@@ -15516,6 +15518,13 @@ export default function App() {
         {tabActivo === "gps_seguros_cl" && <ModuloGpsSegurosCL />}
         {tabActivo === "pnr_cl" && <ModuloPnrCL usuario={usuario} />}
         {tabActivo === "aceptacion_cl" && <ModuloAceptacionCL />}
+        {tabActivo === "mantenedor_cl" && (
+          <div className="pg">
+            <div className="sec-title">Mantenedor</div>
+            <div className="sec-sub">Supervisores, sus CECO, reemplazos por vacaciones o feriados y centros de colecta</div>
+            <ModuloMantenedorCL usuario={usuario} />
+          </div>
+        )}
         {tabActivo === "configuracion" && (
           <div className="pg" style={{ maxWidth: 700 }}>
             <div className="sec-title">Configuración</div>
