@@ -1997,9 +1997,9 @@ function PanelControlSupervisores() {
     const t6 = item6De(sc);
     const totalItems = t6 ? 5 : 4;
     const done = eh.completados + (t6 && t6.completo ? 1 : 0);
+    if (eh.sinOperacion) return { k: "sinop", t: "Sin operación", done: totalItems, totalItems };
     if (row?.estado_dia === "cerrado_supervisor") return { k: "cerrada", t: "Cerrada", done, totalItems };
     if (row?.estado_dia === "cerrado_auto") return { k: "auto", t: "Cerrada automática", done, totalItems };
-    if (eh.sinOperacion) return { k: "sinop", t: "Sin operación", done: totalItems, totalItems };
     if (done === totalItems) return { k: "completa", t: "Completa sin cerrar", done, totalItems };
     const contesto = row && (eh.items.ayudantes || eh.items.ambulancias || eh.items.pnr);
     if (!contesto) return { k: "nada", t: "Sin empezar", done: 0, totalItems };
@@ -2011,7 +2011,7 @@ function PanelControlSupervisores() {
     let completaronHoy = 0, conciliaronD1 = 0, sinCerrar = 0;
     const vistos = new Set();
     for (const s of supervisores) {
-      if (vistos.has(s.sc)) continue;
+      if (vistos.has(s.sc) || /^DEMO/i.test(s.sc)) continue;   // el SC de prueba no cuenta (igual que el panel del jefe)
       vistos.add(s.sc);
       const eb = estadoBitacora(s.sc);
       if (["cerrada", "auto", "sinop"].includes(eb.k)) completaronHoy++;
