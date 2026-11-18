@@ -1711,7 +1711,8 @@ function ModuloMaestroCL({ usuario } = {}) {
   const nVacias   = jornada.filter(r => r.ruta_vacia === true).length;
 
   // Totales de lo que se está viendo (respetan los filtros)
-  const tot = jornadaVista.reduce((a, r) => ({
+  // Las colectas no suman paquetes: se miden por paradas y sus paquetes son recolectados, no repartidos.
+  const tot = jornadaVista.filter(r => r.tipo !== "colecta").reduce((a, r) => ({
     cargados: a.cargados + n(r.cargados), entregados: a.entregados + n(r.entregados),
     devueltos: a.devueltos + n(r.devueltos), dj: a.dj + n(r.d_justificados),
     paradas: a.paradas + n(r.paradas), pendientes: a.pendientes + n(r.pendientes),
@@ -1751,14 +1752,14 @@ function ModuloMaestroCL({ usuario } = {}) {
       valor: fmt(tot.cargados), detalle: `${fmt(tot.paradas)} paradas`,
       que: "Paquetes que salieron a la calle en estos viajes. Es el volumen con el que arrancó la jornada.",
       como: "Es el total de paquetes que MELI asigna a cada ruta (su propio contador). En el Excel corresponde a la columna CARGADOS.",
-      desglose: porCecos("Paquetes cargados por CECOS", r => n(r.cargados), "Cargados"),
+      desglose: porCecos("Paquetes cargados por CECOS", r => (r.tipo === "colecta" ? 0 : n(r.cargados)), "Cargados"),
     },
     {
       id: "entregados", rotulo: "Entregados", color: "#0d8043",
       valor: fmt(tot.entregados), detalle: pct ? `${pct}% de lo cargado` : null,
       que: "Paquetes que llegaron a su destino y quedaron con entrega confirmada.",
       como: "Se cuentan los paquetes que el detalle de cada ruta marcó como entregados. Cuando el detalle todavía no ha corrido (día en curso), se usa el contador de MELI, que va más atrasado.",
-      desglose: porCecos("Paquetes entregados por CECOS", r => n(r.entregados), "Entregados"),
+      desglose: porCecos("Paquetes entregados por CECOS", r => (r.tipo === "colecta" ? 0 : n(r.entregados)), "Entregados"),
     },
     {
       id: "devueltos", rotulo: "Devueltos", color: "#b42318",
@@ -2195,10 +2196,18 @@ function ModuloMaestroCL({ usuario } = {}) {
                             </button>
                           ) : fmt(r.paradas)}
                         </td>
+                        {r.tipo === "colecta" ? (
+                          // Colecta: se mide por paradas; los paquetes van en el detalle desplegable
+                          [0, 1, 2, 3].map(i => (
+                            <td key={"pq" + i} className="num" style={{ color: "#cbd5e1" }}
+                                title="Colecta: se mide por paradas. Los paquetes están en el detalle (botón de Paradas).">—</td>
+                          ))
+                        ) : (<>
                         <td className="num" style={{ fontWeight: 700 }}>{fmt(r.cargados)}</td>
                         <td className="num" style={{ color: "#0d8043", fontWeight: 700 }}>{fmt(r.entregados)}</td>
                         <td className="num" style={{ color: n(r.devueltos) ? "#b42318" : "#cbd5e1", fontWeight: n(r.devueltos) ? 700 : 400 }}>{fmt(r.devueltos)}</td>
                         <td className="num" style={{ color: n(r.d_justificados) ? ORANGE : "#cbd5e1", fontWeight: n(r.d_justificados) ? 700 : 400 }}>{fmt(r.d_justificados)}</td>
+                        </>)}
                         <td className="num" style={{ fontWeight: 700, color: n(r.pct_entrega) >= 98 ? "#0d8043" : n(r.pct_entrega) >= 90 ? "#7a5b16" : "#b42318" }}>
                           {r.pct_entrega === null ? "—" : `${r.pct_entrega}%`}
                         </td>
