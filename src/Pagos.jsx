@@ -1713,7 +1713,7 @@ function PanelControlSupervisores() {
         // No Salidas a Ruta: la bitácora del día elegido responde las rutas del
         // día anterior. Una sola consulta para todos los SC, solo ese día.
         fecha >= NOSAL_DESDE
-          ? sb.rpc("fn_no_salidas_dia", { p_sc: null, p_fecha: fechaAyer })
+          ? sb.rpc("fn_nosal_brain", { p_sc: null, p_fecha: fechaAyer })
           : Promise.resolve({ data: [] }),
       ]);
       if (supsR.error) throw supsR.error;
@@ -1815,7 +1815,7 @@ function PanelControlSupervisores() {
       // pantalla, así el Excel y lo que se ve son el mismo dato del mismo momento.
       let nsAhora = {};
       if (fecha >= NOSAL_DESDE) {
-        const nsR = await sb.rpc("fn_no_salidas_dia", { p_sc: null, p_fecha: fechaAyer });
+        const nsR = await sb.rpc("fn_nosal_brain", { p_sc: null, p_fecha: fechaAyer });
         if (nsR.error) throw new Error("no salidas: " + nsR.error.message);
         for (const r of nsR.data || []) (nsAhora[r.sc] = nsAhora[r.sc] || []).push(r);
         setNoSalDia(nsAhora);
