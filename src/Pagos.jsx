@@ -1692,6 +1692,14 @@ function PanelControlSupervisores() {
   const [tick, setTick] = useState(0);              // fuerza recarga de los detalles expandidos
   const [torreDia, setTorreDia] = useState({});     // {sc: viajes de vw_torre_control_dia} — para el semáforo
   const [noSalDia, setNoSalDia] = useState({});     // {sc: no salidas del día anterior (fn_no_salidas_dia)}
+  // Rutas que el supervisor todavía tiene SIN RESPONDER en su bitácora (la misma
+  // lista que ve él). Solo decide si el ítem 3 está completo; lo que se muestra
+  // sigue siendo lo que guardó.
+  const nsPend = useMemo(() => {
+    const m = {};
+    for (const [sc, filas] of Object.entries(noSalDia)) m[sc] = (filas || []).filter((x) => !x.guardado_at).length;
+    return m;
+  }, [noSalDia]);
 
   // Fecha anterior (D-1) respecto a la seleccionada
   const fechaAyer = useMemo(() => {
@@ -1720,6 +1728,8 @@ function PanelControlSupervisores() {
       const nsIdx = {};
       for (const r of nsR.data || []) (nsIdx[r.sc] = nsIdx[r.sc] || []).push(r);
       setNoSalDia(nsIdx);
+      // Ítem 3: la misma lista de rutas de ayer que ve el supervisor en su bitácora
+      // (respondidas y sin responder). Es obligatorio responderlas todas.
 
       // Armar lista plana: 1 entrada por SC (un supervisor puede tener varios)
       const lista = [];
@@ -1781,15 +1791,7 @@ function PanelControlSupervisores() {
         if (r.filas) t6Rows[r.sc] = r.filas;
       }
 
-      // Torre de Control del día completo (una sola consulta para todos los SC).
-      // La usa el semáforo de las tarjetas y se deja en la caché para que la
-      // sección Torre de cada SC no vuelva a consultar.
-      const torreIdx = {};
-      const { data: torreData } = await sb.from("vw_torre_control_dia")
-        .select(TORRE_SELECT).eq("fecha_operativa", fecha).order("eta_visible").limit(5000);
-      for (const v of torreData || []) (torreIdx[v.sc] = torreIdx[v.sc] || []).push(v);
-      for (const sc of scsUnicos) cacheTorreFilas.set(`${fecha}|${sc}`, torreIdx[sc] || []);
-      setTorreDia(torreIdx);
+      // Regla de oro (18-nov-2026): la Torre no se usa en Consolidaciones.
 
       setTerceros6Rows(t6Rows);
       setTerceros6(t6Idx);
@@ -1939,7 +1941,7 @@ function PanelControlSupervisores() {
   };
 
   // ─── Cálculo de estado HOY: cuántos de los 5 ítems declaró ──────────
-  function estadoHoy(row) {
+  function estadoHoy(row, sc) {
     // Ítems: Ayudantes, Ambulancias, No Salidas a Ruta, PNR (+ Inventario de
     // Flota aparte). Igual que en la bitácora, No Salidas a Ruta nunca impide
     // completar: cuenta como hecho y lo pendiente se ve en el semáforo.
@@ -1947,7 +1949,7 @@ function PanelControlSupervisores() {
     const items = {
       ayudantes: row.declarado_ayudantes_si_no !== null && row.declarado_ayudantes_si_no !== undefined,
       ambulancias: row.declarado_ambulancias_si_no !== null && row.declarado_ambulancias_si_no !== undefined,
-      nosalidas: true,
+      nosalidas: !(sc && nsPend[sc] > 0),   // obligatorio: todas las rutas de ayer respondidas
       pnr: row.declarado_pnr_si_no !== null && row.declarado_pnr_si_no !== undefined,
     };
     const completados = Object.values(items).filter(Boolean).length;
@@ -1993,7 +1995,7 @@ function PanelControlSupervisores() {
   // todo pero no presionó el botón.
   function estadoBitacora(sc) {
     const row = bitHoy[sc];
-    const eh = estadoHoy(row);
+    const eh = estadoHoy(row, sc);
     const t6 = item6De(sc);
     const totalItems = t6 ? 5 : 4;
     const done = eh.completados + (t6 && t6.completo ? 1 : 0);
@@ -2033,14 +2035,14 @@ function PanelControlSupervisores() {
   // Verde: bitácora completa (o sin operación) y sin alertas.
   const semaforoSC = (sc) => {
     const row = bitHoy[sc];
-    const eh = estadoHoy(row);
+    const eh = estadoHoy(row, sc);
     const t6 = item6De(sc);
     const totalItems = t6 ? 5 : 4;
     const done = eh.completados + (t6 && t6.completo ? 1 : 0);
     const completa = eh.sinOperacion || done === totalItems;
     const eb = estadoBitacora(sc);
     // No salidas del día anterior que el supervisor no ha respondido
-    const nsSinDeclarar = (noSalDia[sc] || []).filter((x) => !x.guardado_at).length;
+    const nsSinDeclarar = nsPend[sc] || 0;
     const pnrSinResolver = (Array.isArray(row?.declarado_pnr_detalle) ? row.declarado_pnr_detalle : [])
       .filter((d) => d.estado === "sin_resolver").length;
     // El color es SOLO el estado de la bitácora (igual que el panel del jefe):
@@ -2052,7 +2054,7 @@ function PanelControlSupervisores() {
     else if (eb.k === "curso") motivos.push(eb.t === "Cerrada · falta completar" ? `cerrada · falta completar ${done}/${totalItems}` : `bitácora ${done}/${totalItems}`);
     else if (eb.k === "cerrada" && !completa) motivos.push(`cerrada con ${done}/${totalItems}`);
     else if (eb.k === "vencida") motivos.push(`${eb.t === "Incompleta" ? "incompleta" : "no cerrada"} · ${done}/${totalItems}`);
-    if (nsSinDeclarar) motivos.push(`${nsSinDeclarar} no salida(s) sin responder`);
+    if (nsSinDeclarar) motivos.push(`${nsSinDeclarar} no salida(s) de ayer sin responder`);
     const color = ["nada", "vencida"].includes(eb.k) ? "rojo" : ["cerrada", "sinop"].includes(eb.k) && completa ? "verde" : "amarillo";
     return { color, done, totalItems, sinOp: eh.sinOperacion, motivos, estado: eb, pnr: pnrSinResolver };
   };
@@ -2076,11 +2078,12 @@ function PanelControlSupervisores() {
   // Detalle de un SC: lo usa la fila desplegada y la vista de un solo SC
   // (cuando se toca su tarjeta), así las dos muestran exactamente lo mismo.
   const renderDetalle = (s) => {
-    const eh = estadoHoy(bitHoy[s.sc]);
+    const eh = estadoHoy(bitHoy[s.sc], s.sc);
     const sinOp = eh.sinOperacion;
     const t6 = item6De(s.sc);
     const ns = noSalDia[s.sc] || [];
     const nsResp = ns.filter((x) => x.guardado_at).length;
+    const nsP = nsPend[s.sc] || 0;
     return (
       <>
                           {/* Checklist de los 6 ítems: deja claro cuál está completado */}
@@ -2088,7 +2091,7 @@ function PanelControlSupervisores() {
                             {[
                               { n: "1 · Ayudantes", ok: sinOp || eh.items.ayudantes },
                               { n: "2 · Ambulancias", ok: sinOp || eh.items.ambulancias },
-                              { n: "3 · No Salidas a Ruta", ok: nsResp === ns.length, na: fecha < NOSAL_DESDE, extra: ns.length ? ` (${nsResp}/${ns.length})` : " (sin casos)" },
+                              { n: "3 · No Salidas a Ruta", ok: sinOp || nsP === 0, na: fecha < NOSAL_DESDE, extra: ns.length ? ` (${nsResp} de ${ns.length} respondidas)` : " (sin casos)" },
                               { n: "4 · PNR", ok: sinOp || eh.items.pnr },
                               { n: "5 · Inventario de Flota", ok: !!(t6 && t6.completo), na: !t6, extra: t6 ? (t6.total ? ` (${t6.confirmadas}/${t6.total} confirmadas · ${t6.conTel ?? 0}/${t6.total} con teléfono${t6.sinEmp ? ` · ${t6.sinEmp} sin empresa` : ""})` : " (sin placas)") : "" },
                             ].map((it, k) => (
@@ -2122,10 +2125,7 @@ function PanelControlSupervisores() {
                             </div>
                           )}
 
-                          {/* ─── Torre de Control del SC (mismo día) ─── */}
-                          {(filtroEvento === "todos" || filtroEvento === "torre") && (
-                            <TorreControlSC scId={s.sc} fecha={fecha} row={bitHoy[s.sc] || null} />
-                          )}
+                          {/* Regla de oro (18-nov-2026): la Torre no se usa en Consolidaciones. */}
 
                           {/* ─── Ambulancias del SC (mismo día) ─── */}
                           {(filtroEvento === "todos" || filtroEvento === "ambulancias") && (
@@ -2166,7 +2166,6 @@ function PanelControlSupervisores() {
             style={{ padding: "6px 10px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }}>
             <option value="todos">Todos</option>
             <option value="bitacora">Bitácora del supervisor</option>
-            <option value="torre">Torre de Control</option>
             <option value="ambulancias">Ambulancias</option>
           </select>
         </div>
