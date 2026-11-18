@@ -1999,7 +1999,9 @@ function PanelControlSupervisores() {
     const done = eh.completados + (t6 && t6.completo ? 1 : 0);
     if (eh.sinOperacion) return { k: "sinop", t: "Sin operación", done: totalItems, totalItems };
     if (row?.estado_dia === "cerrado_supervisor") return { k: "cerrada", t: "Cerrada", done, totalItems };
-    if (row?.estado_dia === "cerrado_auto") return { k: "auto", t: "Cerrada automática", done, totalItems };
+    // Regla del 18-nov: cerrar es obligatorio. Si el día ya terminó y el
+    // supervisor no la cerró, queda "No cerrada" (rojo), aunque esté completa.
+    if (fecha < fechaHoyOperativa()) return { k: "vencida", t: "No cerrada", done, totalItems };
     if (done === totalItems) return { k: "completa", t: "Completa sin cerrar", done, totalItems };
     const contesto = row && (eh.items.ayudantes || eh.items.ambulancias || eh.items.pnr);
     if (!contesto) return { k: "nada", t: "Sin empezar", done: 0, totalItems };
@@ -2014,7 +2016,7 @@ function PanelControlSupervisores() {
       if (vistos.has(s.sc) || /^DEMO/i.test(s.sc)) continue;   // el SC de prueba no cuenta (igual que el panel del jefe)
       vistos.add(s.sc);
       const eb = estadoBitacora(s.sc);
-      if (["cerrada", "auto", "sinop"].includes(eb.k)) completaronHoy++;
+      if (["cerrada", "sinop"].includes(eb.k)) completaronHoy++;
       if (eb.k === "completa") sinCerrar++;
       const ed = estadoD1(bitAyer[s.sc]);
       if (ed.estado === "ok") conciliaronD1++;
@@ -2045,9 +2047,10 @@ function PanelControlSupervisores() {
     if (eb.k === "nada") motivos.push("bitácora sin completar");
     else if (eb.k === "completa") motivos.push("completa · sin cerrar");
     else if (eb.k === "curso") motivos.push(`bitácora ${done}/${totalItems}`);
-    else if (["cerrada", "auto"].includes(eb.k) && !completa) motivos.push(`cerrada con ${done}/${totalItems}`);
+    else if (eb.k === "cerrada" && !completa) motivos.push(`cerrada con ${done}/${totalItems}`);
+    else if (eb.k === "vencida") motivos.push(`no cerrada · ${done}/${totalItems}`);
     if (nsSinDeclarar) motivos.push(`${nsSinDeclarar} no salida(s) sin responder`);
-    const color = eb.k === "nada" ? "rojo" : ["cerrada", "auto", "sinop"].includes(eb.k) && completa ? "verde" : "amarillo";
+    const color = ["nada", "vencida"].includes(eb.k) ? "rojo" : ["cerrada", "sinop"].includes(eb.k) && completa ? "verde" : "amarillo";
     return { color, done, totalItems, sinOp: eh.sinOperacion, motivos, estado: eb, pnr: pnrSinResolver };
   };
   const tarjetasSC = useMemo(() => {
