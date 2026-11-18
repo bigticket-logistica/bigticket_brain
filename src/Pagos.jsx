@@ -1810,6 +1810,25 @@ function PanelControlSupervisores() {
   const descargarInforme = async () => {
     setInformeBusy(true);
     try {
+      // No Salidas a Ruta (punto 3 de la bitácora): se vuelven a consultar AHORA,
+      // no se usa lo que la página cargó al abrirse. Con lo mismo se actualiza la
+      // pantalla, así el Excel y lo que se ve son el mismo dato del mismo momento.
+      let nsAhora = {};
+      if (fecha >= NOSAL_DESDE) {
+        const nsR = await sb.rpc("fn_no_salidas_dia", { p_sc: null, p_fecha: fechaAyer });
+        if (nsR.error) throw new Error("no salidas: " + nsR.error.message);
+        for (const r of nsR.data || []) (nsAhora[r.sc] = nsAhora[r.sc] || []).push(r);
+        setNoSalDia(nsAhora);
+      }
+      // Biggy y correo de cada ruta (vw_nosal_consolidado), en tandas de 300
+      const extraNs = {};
+      const idsNs = Object.values(nsAhora).flat().filter((x) => x.motivo === "no_show" || x.motivo === "cancelacion").map((x) => String(x.travel_id));
+      for (let i = 0; i < idsNs.length; i += 300) {
+        const { data: ex } = await sb.from("vw_nosal_consolidado")
+          .select("travel_id, biggy_veredicto, biggy_detalle, justificacion_prueba, biggy_codigo, correo_estado, correo_para, correo_enviado_at")
+          .in("travel_id", idsNs.slice(i, i + 300));
+        for (const x of ex || []) extraNs[String(x.travel_id)] = x;
+      }
       const [rutasR, aprobR, rechR] = await Promise.all([
         sb.from("cierre_rutas_mx").select("service_center_id").eq("fecha", fecha).limit(10000),
         sb.from("aprobaciones_helper").select("service_center_id").eq("fecha", fecha).eq("decision", "aprobado").limit(10000),
@@ -1849,7 +1868,8 @@ function PanelControlSupervisores() {
         "RUTAS RECHAZADAS SDD", "RUTAS RECHAZADAS SPOT", "OBSERVACIONES"]];
       const nosal = [["SERVICIO", "FECHA RUTA", "FECHA BITACORA", "CECOS", "SUPERVISOR", "PATENTE", "CHOFER", "HORA PACTADA",
         "CASO", "ESTADO TORRE", "QUE PASO", "MOTIVO", "COMENTARIO", "ID RUTA DECLARADA", "TIPO RUTA", "TIPO VEHICULO", "VEHICULO MELI",
-        "EMPRESA", "EMPRESA EN LISTADO", "PRUEBAS", "RESPONDIDO POR", "RESPONDIDO EL"]];
+        "EMPRESA", "EMPRESA EN LISTADO", "PRUEBAS", "RESPONDIDO POR", "RESPONDIDO EL",
+        "BIGGY", "BIGGY RESUMEN", "JUSTIFICACION SUPERVISOR", "CODIGO TIMEMARK", "CORREO", "CORREO A", "CORREO ENVIADO EL"]];
 
       for (const sc of scs) {
         const row = bitHoy[sc] || null;
@@ -1862,7 +1882,7 @@ function PanelControlSupervisores() {
 
         const ayud = row?.declarado_ayudantes_si_no ? (row.declarado_ayudantes_cantidad ?? arr(row.declarado_ayudantes_detalle).length) : 0;
         const amb = row?.declarado_ambulancias_si_no ? (row.declarado_ambulancias_cantidad ?? arr(row.declarado_ambulancias_detalle).length) : 0;
-        const ns = noSalDia[sc] || [];
+        const ns = nsAhora[sc] || [];
         const nsCuenta = (m) => ns.filter((x) => x.motivo === m).length;
         const nsPend = ns.filter((x) => !x.guardado_at).length;
         const pnrDet = arr(row?.declarado_pnr_detalle);
@@ -1886,7 +1906,15 @@ function PanelControlSupervisores() {
             x.tipo_ruta || "", x.vehiculo || "", x.vehiculo_meli || "",
             x.empresa || "", x.empresa ? (x.tercero_id ? "SI" : "NO") : "",
             arr(x.adjuntos).length, x.guardado_por || "",
-            x.guardado_at ? new Date(x.guardado_at).toLocaleString("es-MX", { timeZone: "America/Mexico_City" }) : ""]);
+            x.guardado_at ? new Date(x.guardado_at).toLocaleString("es-MX", { timeZone: "America/Mexico_City" }) : "",
+            ...(() => {
+              const e = extraNs[String(x.travel_id)];
+              if (!e) return ["", "", "", "", "", "", ""];
+              return [e.biggy_veredicto === "sirve" ? "SIRVE" : e.biggy_veredicto === "no_sirve" ? "NO SIRVE" : e.biggy_veredicto ? "SIN REVISION" : "",
+                e.biggy_detalle?.resumen || "", e.justificacion_prueba || "", e.biggy_codigo || "",
+                e.correo_estado ? String(e.correo_estado).toUpperCase() : "", e.correo_para || "",
+                e.correo_enviado_at ? new Date(e.correo_enviado_at).toLocaleString("es-MX", { timeZone: "America/Mexico_City" }) : ""];
+            })()]);
         }
       }
 
@@ -1895,7 +1923,7 @@ function PanelControlSupervisores() {
           { nombre: "Resumen", datos: resumen },
           { nombre: "No Salidas a Ruta", datos: nosal },
         ],
-        `informe_bitacoras_${fecha}${filtroSc ? "_" + filtroSc : ""}`
+        `informe_bitacoras_${fecha}_rutas_${fechaAyer}${filtroSc ? "_" + filtroSc : ""}`
       );
     } catch (e) {
       alert("No se pudo generar el informe: " + (e.message || e));
