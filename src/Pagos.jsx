@@ -6903,9 +6903,18 @@ function calcularPagos({ maestro, snapshots, scZonas, especiales, matrizPrecios,
     // km_meli (TMS) y km_planificados NO pagan; el planificado es solo informativo.
     const kmRealMeli = m.km_recorridos_meli != null ? Number(m.km_recorridos_meli) : null;
     const kmPlanif = (m.km_planificados != null && Number(m.km_planificados) > 0) ? Number(m.km_planificados) : null;
-    const km = (kmRealMeli != null && kmRealMeli > 0) ? kmRealMeli : 0;
+    // Regla de kilometraje (18-nov-2026, desde el 16-nov): si MELI no tiene km
+    // reales de la ruta (por ejemplo, el teléfono no transmitió el recorrido),
+    // se paga con los km planificados. Antes del 16-nov se mantiene la regla
+    // anterior (sin km real = 0 km, tramo mínimo) para no mover lo ya cerrado.
+    const _kmFecha = m.fecha ? String(m.fecha).slice(0, 10) : "";
+    const _kmPlanifValeComoPago = _kmFecha >= "2026-11-16";
+    const _tieneKmReal = kmRealMeli != null && kmRealMeli > 0;
+    const kmFuentePago = _tieneKmReal ? "real"
+      : (_kmPlanifValeComoPago && kmPlanif != null) ? "planificado" : "ninguno";
+    const km = kmFuentePago === "real" ? kmRealMeli : kmFuentePago === "planificado" ? kmPlanif : 0;
     const umbralBajo = (cfg && cfg.km_real_bajo_pct != null) ? Number(cfg.km_real_bajo_pct) : 30;
-    const kmRealBajo = km <= 0 || (kmPlanif != null && km < kmPlanif * umbralBajo / 100);
+    const kmRealBajo = kmFuentePago === "ninguno" || (kmFuentePago === "real" && kmPlanif != null && km < kmPlanif * umbralBajo / 100);
 
     // Datos REALES de MELI adicionales (kmRealMeli ya definido arriba: es el km de pago)
     const pctVisitadoReal = m.pct_no_visitado_real != null
@@ -6940,10 +6949,14 @@ function calcularPagos({ maestro, snapshots, scZonas, especiales, matrizPrecios,
     if (!tipologia) obs.push(`Tipología no reconocida: "${vehiculoRaw}"`);
     if (!zona) obs.push(`SC no mapeado en sc_zonas_mx: ${sc}`);
     if (pctVisitado == null) obs.push("Sin % visitado en el snapshot");
-    if (kmRealBajo) obs.push(km <= 0
-      ? "SIN KM REAL \u2014 pagado con 0 km (tramo m\u00ednimo); corregir monto en la prefactura"
+    if (kmFuentePago === "planificado") obs.push(`SIN KM REAL \u2014 pagado con km planificado (${kmPlanif} km)`);
+    if (kmRealBajo) obs.push(kmFuentePago === "ninguno"
+      ? (_kmPlanifValeComoPago
+          ? "SIN KM REAL NI PLANIFICADO \u2014 pagado con 0 km (tramo m\u00ednimo); corregir monto en la prefactura"
+          : "SIN KM REAL \u2014 pagado con 0 km (tramo m\u00ednimo); corregir monto en la prefactura")
       : `KM REAL MUY BAJO: ${km} km vs planificado ${kmPlanif} km \u2014 verificar y corregir en la prefactura si corresponde`);
-    // km_meli (TMS) y km_planificados no pagan: el km de pago es SOLO el real de MELI (route-detail).
+    // km_meli (TMS) no paga. El km de pago es el real de MELI (route-detail);
+    // desde el 16-nov, si no hay real, se usa el planificado.
     if (m.status_final && m.status_final !== "close") obs.push(`Status no cerrado: ${m.status_final} — revisar`);
 
     // Tarifa base
