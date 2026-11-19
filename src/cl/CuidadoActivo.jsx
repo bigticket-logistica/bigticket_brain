@@ -1607,6 +1607,7 @@ function FormMnt({ x, modo, quien, onListo }) {
         </>}
       </div>
       {modo === "registrar" && <div style={{ marginTop: 10 }}>{campo("detalle", "Detalle (opcional)")}</div>}
+      {modo === "registrar" && d.fecha && <CotizacionesRep mnt={{ patente: x.patente, fecha: d.fecha }} quien={quien} />}
       <div style={{ fontSize: 12, color: C.suave, marginTop: 8 }}>
         {modo === "agendar" ? "Al agendar se le pide al transportista la auditoría de entrega a taller, con plazo hasta la hora de la cita." : "Al registrar se recalcula la próxima pauta, se oculta el aviso del transportista y se le pide la auditoría de retiro de taller."}
       </div>
@@ -1823,6 +1824,26 @@ function FichaActivo({ quien }) {
     </div>
   );
 }
+// Paso 3: respaldos de los casos de la patente (OT, cotizaciones y facturas de reparaciones, siniestros y mantenciones)
+function RespaldosPatente({ patente }) {
+  const [filas, setFilas] = useState(null);
+  useEffect(() => { api(`vw_respaldos_cl?patente=eq.${encodeURIComponent(patente)}&select=*&order=subida_at.desc&limit=200`).then(setFilas).catch(() => setFilas([])); }, [patente]);
+  if (!filas || !filas.length) return null;
+  const ver = async (c) => { try { window.open(await urlFirmada(c.path, "ca-documentos-cl"), "_blank"); } catch (e) { alert(e.message); } };
+  return (
+    <div style={{ marginTop: 10 }}>
+      <div style={{ fontWeight: 700, color: C.navy, fontSize: 13, marginBottom: 4 }}>Respaldos de casos ({filas.length})</div>
+      {filas.map((c) => (
+        <div key={c.id} style={{ fontSize: 12.5, padding: "4px 0", borderTop: `1px solid ${C.borde}` }}>
+          <b>{c.caso_ref}</b> · {c.tipo_doc === "factura" ? "Factura" : "OT / Cotización"} · <a href="#" style={{ color: C.navy }} onClick={(e) => { e.preventDefault(); ver(c); }}>{c.nombre_archivo || "ver"}</a>
+          {c.estado === "leida" ? <span style={{ color: C.suave }}> · Biggy leyó: {[c.numero && `folio ${c.numero}`, c.total ? pesos(c.total) : c.total_neto ? `${pesos(c.total_neto)} neto` : null, c.fecha && fd(c.fecha)].filter(Boolean).join(" · ")}</span> : c.estado === "por_leer" ? <span style={{ color: C.tenue }}> · Biggy lo está leyendo</span> : null}
+          {c.oc_numero && <span style={{ color: C.suave }}> · OC {c.oc_numero}</span>}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function FichaDetalle({ patente, quien, onVolver }) {
   const [d, setD] = useState(null);
   const [err, setErr] = useState("");
@@ -1879,6 +1900,7 @@ function FichaDetalle({ patente, quien, onVolver }) {
             </div>
           ); })}
           <div style={{ fontSize: 12, color: C.tenue, marginTop: 6 }}>La fecha viene del documento confirmado o, si no hay, de la biblia. Lo que subas queda en Cuidado de Activo → Documentos para confirmar.</div>
+          <RespaldosPatente patente={patente} />
         </>)}
         {card("Datos en vivo (Geotab)", <>
           {fila("Odómetro", ev.km ? `${kmf(ev.km)} km` : null)}{fila("Lectura del odómetro", ev.km_fecha ? fd(ev.km_fecha) : null)}
@@ -3943,14 +3965,20 @@ function MultasAnexo({ quien, puede }) {
 }
 
 // ── Cotizaciones del taller leídas por Biggy (P-05b, P-06a, F-03b) ──
-function CotizacionesRep({ rep = null, sin = null, quien }) {
-  const obj = rep || sin; const esSin = !rep;
+function CotizacionesRep({ rep = null, sin = null, mnt = null, quien }) {
+  // Paso 3 (pedido 19-11-2026): un solo cargador de respaldos por caso, tipificado (OT/Presupuesto/Cotización o Factura).
+  // mnt = { patente, fecha } para «Registrar la mantención hecha».
+  const obj = rep || sin || { id: `${mnt?.patente}|${mnt?.fecha}`, patente: mnt?.patente, folio: `MNT ${mnt?.fecha}` }; const esSin = !!sin; const esMnt = !!mnt;
+  const [tipoDoc, setTipoDoc] = useState("ot");
+  const [oc, setOc] = useState(null);
   const [filas, setFilas] = useState(null);
   const [taller, setTaller] = useState(obj.taller || "");
   const [subiendo, setSubiendo] = useState("");
   const [abierta, setAbierta] = useState(null);
-  const cargar = () => api(`ca_rep_cotizaciones_cl?${esSin ? "sin_id" : "rep_id"}=eq.${obj.id}&select=*&order=subida_at`).then(setFilas).catch(() => setFilas([]));
+  const cargar = () => api(esMnt ? `ca_rep_cotizaciones_cl?modulo=eq.mantencion&patente=eq.${encodeURIComponent(mnt.patente)}&caso_fecha=eq.${mnt.fecha}&select=*&order=subida_at`
+    : `ca_rep_cotizaciones_cl?${esSin ? "sin_id" : "rep_id"}=eq.${obj.id}&select=*&order=subida_at`).then(setFilas).catch(() => setFilas([]));
   useEffect(() => { cargar(); const i = setInterval(cargar, 60000); return () => clearInterval(i); }, [obj.id]);   // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (rep) api(`ca_oc_cl?origen=eq.reparacion&origen_id=eq.${rep.id}&estado=neq.anulada&select=numero,estado,total&limit=1`).then((r) => setOc(r?.[0] || null)).catch(() => {}); }, [rep?.id]);   // eslint-disable-line react-hooks/exhaustive-deps
   const subir = async (files) => {
     for (const file of Array.from(files || [])) {
       setSubiendo(`Subiendo ${file.name}…`);
@@ -3959,33 +3987,40 @@ function CotizacionesRep({ rep = null, sin = null, quien }) {
         const path = `cotizaciones/${obj.patente}/${obj.folio || obj.id}_${Date.now()}_${limpio}`;
         const r = await fetch(`${CL_URL}/storage/v1/object/ca-documentos-cl/${path}`, { method: "POST", headers: { apikey: CL_KEY, Authorization: `Bearer ${CL_KEY}`, "Content-Type": file.type || "application/octet-stream", "x-upsert": "true" }, body: file });
         if (!r.ok) throw new Error((await r.text()).slice(0, 160));
-        if (esSin) await rpc("fn_cot_registrar_sin", { p_sin: obj.id, p_path: path, p_nombre: file.name, p_mime: file.type || null, p_taller: taller || null, p_por: quien });
-        else await rpc("fn_cot_registrar", { p_rep: obj.id, p_path: path, p_nombre: file.name, p_mime: file.type || null, p_taller: taller || null, p_por: quien });
+        const id = await rpc("fn_respaldo_registrar", { p_modulo: esMnt ? "mantencion" : esSin ? "siniestro" : "reparacion", p_caso: esMnt ? null : obj.id, p_patente: obj.patente,
+          p_fecha: esMnt ? mnt.fecha : null, p_path: path, p_nombre: file.name, p_mime: file.type || null, p_tipo: tipoDoc, p_por: quien });
+        if (taller && id) await api(`ca_rep_cotizaciones_cl?id=eq.${id}`, { method: "PATCH", headers: { Prefer: "return=minimal" }, body: JSON.stringify({ taller: taller.toUpperCase() }) }).catch(() => {});
       } catch (e) { alert(`${file.name}: ${e.message}`); }
     }
     setSubiendo(""); cargar();
   };
   const accion = async (fn, args) => { try { await rpc(fn, args); cargar(); } catch (e) { alert(e.message); } };
-  const leidas = (filas || []).filter((c) => c.estado === "leida" && c.total_neto !== null);
+  const leidas = (filas || []).filter((c) => c.estado === "leida" && c.total_neto !== null && (c.tipo_doc || "ot") === "ot");
   const minimo = leidas.length ? Math.min(...leidas.map((c) => Number(c.total_neto))) : null;
   const ver = async (c) => { try { window.open(await urlFirmada(c.path, "ca-documentos-cl"), "_blank"); } catch (e) { alert(e.message); } };
   const EST = { por_leer: ["Biggy la está leyendo", "#eef2f8", C.navy], leida: ["Leída", C.verdeT, C.verde], error: ["No se pudo leer", C.rojoT, C.rojo] };
   return (
     <div style={{ marginTop: 14, background: "#fafbfd", border: `1px solid ${C.borde}`, borderRadius: 10, padding: 12 }}>
-      <div style={{ fontWeight: 800, color: C.navy, marginBottom: 6 }}>{esSin ? "Presupuestos de reparación (informativo)" : "Cotizaciones del taller"} {filas && filas.length > 1 ? `· comparativo (${filas.length})` : ""}</div>
+      <div style={{ fontWeight: 800, color: C.navy, marginBottom: 2 }}>Documentos de respaldo del caso {leidas.length > 1 ? `· comparativo de cotizaciones (${leidas.length})` : ""}</div>
+      <div style={{ fontSize: 12, color: C.tenue, marginBottom: 6 }}>Un solo cargador: cotización, presupuesto y OT son el mismo papel del taller; la factura va aparte. Todos opcionales: el cierre no se bloquea si falta un documento. Lo adjunto queda en el historial de documentación de {obj.patente}, con el folio del caso.</div>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 8 }}>
+        <select style={inp} value={tipoDoc} onChange={(e) => setTipoDoc(e.target.value)}><option value="ot">OT / Presupuesto / Cotización</option><option value="factura">Factura</option></select>
         <input style={{ ...inp, width: 200 }} placeholder="Taller (opcional)" value={taller} onChange={(e) => setTaller(e.target.value)} />
         <label style={{ ...btn("sec"), display: "inline-block", cursor: subiendo ? "wait" : "pointer" }}>
-          {subiendo || "Subir cotización (PDF o foto)"}
+          {subiendo || "Subir PDF o foto"}
           <input type="file" multiple accept=".pdf,image/*" style={{ display: "none" }} disabled={!!subiendo} onChange={(e) => { subir(e.target.files); e.target.value = ""; }} />
         </label>
-        <span style={{ fontSize: 12, color: C.tenue }}>{esSin ? "Biggy lee el presupuesto y guarda sus precios por ítem, para comparar si hubiera que reparar de forma particular. El gasto del siniestro sigue siendo el deducible." : "Biggy lee taller, ítems y totales en unos minutos. Elegir una cotización deja su taller y monto en la reparación y arma la OC."}</span>
+        <span style={{ fontSize: 12, color: C.tenue }}>{esSin ? "Biggy lee folio, monto y fecha (y los precios por ítem del presupuesto). El gasto del siniestro sigue siendo el deducible." : esMnt ? "Biggy lee folio, monto y fecha; la OT y la factura quedan en el Historial de gastos de esta mantención." : "Biggy lee folio, monto y fecha en unos minutos. Elegir una cotización deja su taller y monto en la reparación y arma la OC."}</span>
       </div>
+      {rep && <div style={{ fontSize: 12.5, marginBottom: 8, padding: "6px 10px", background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 8 }}>
+        <b>OC</b> · {oc ? <>{oc.numero} · {oc.estado}{oc.total ? ` · ${pesos(oc.total)}` : ""}</> : <span style={{ color: C.tenue }}>todavía sin OC</span>} <span style={{ color: C.tenue }}>— se genera en Órdenes de compra y se liga sola; nunca se sube.</span>
+      </div>}
       {filas === null ? <div style={{ fontSize: 12.5, color: C.tenue }}>Cargando…</div> : filas.length === 0 ? <div style={{ fontSize: 12.5, color: C.tenue }}>Sin cotizaciones subidas.</div> : (
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, background: "#fff" }}>
-          <thead><tr style={{ background: C.fondo, textAlign: "left" }}>{["Taller", "N° · fecha", "Ítems", "Neto", "Total", "Estado", ""].map((h) => <th key={h} style={{ padding: "6px 8px", color: C.suave }}>{h}</th>)}</tr></thead>
+          <thead><tr style={{ background: C.fondo, textAlign: "left" }}>{["Tipo", "Taller", "Folio · fecha", "Ítems", "Neto", "Total", "Estado", ""].map((h) => <th key={h} style={{ padding: "6px 8px", color: C.suave }}>{h}</th>)}</tr></thead>
           <tbody>{filas.map((c) => { const e = EST[c.estado] || [c.estado, C.fondo, C.suave]; const barata = minimo !== null && Number(c.total_neto) === minimo && leidas.length > 1; return [
             <tr key={c.id} style={{ borderTop: `1px solid ${C.borde}`, background: c.elegida ? C.verdeT : "#fff" }}>
+              <td style={{ padding: "6px 8px" }}><select style={{ ...inp, padding: "2px 4px", fontSize: 12 }} value={c.tipo_doc || "ot"} onChange={(ev) => accion("fn_respaldo_tipo", { p_id: c.id, p_tipo: ev.target.value, p_por: quien })}><option value="ot">OT / Cotización</option><option value="factura">Factura</option></select></td>
               <td style={{ padding: "6px 8px", fontWeight: 700 }}>{c.taller || "—"}{c.taller_rut && <div style={{ color: C.tenue, fontSize: 11 }}>{c.taller_rut}</div>}</td>
               <td style={{ padding: "6px 8px" }}>{c.numero || "—"}{c.fecha && <div style={{ color: C.tenue, fontSize: 11 }}>{fd(c.fecha)}</div>}</td>
               <td style={{ padding: "6px 8px" }}>{(c.items || []).length ? <a href="#" style={{ color: C.navy }} onClick={(ev) => { ev.preventDefault(); setAbierta(abierta === c.id ? null : c.id); }}>{c.items.length} ítems</a> : "—"}</td>
@@ -3994,12 +4029,12 @@ function CotizacionesRep({ rep = null, sin = null, quien }) {
               <td style={{ padding: "6px 8px" }}>{c.elegida ? chip("Elegida", C.verdeT, C.verde) : chip(e[0], e[1], e[2])}</td>
               <td style={{ padding: "6px 8px", whiteSpace: "nowrap" }}>
                 <a href="#" style={{ color: C.navy, marginRight: 8 }} onClick={(ev) => { ev.preventDefault(); ver(c); }}>Ver</a>
-                {!esSin && c.estado === "leida" && !c.elegida && <a href="#" style={{ color: C.verde, fontWeight: 700, marginRight: 8 }} onClick={(ev) => { ev.preventDefault(); accion("fn_cot_elegir", { p_id: c.id, p_por: quien }); }}>Elegir</a>}
+                {!esSin && !esMnt && (c.tipo_doc || "ot") === "ot" && c.estado === "leida" && !c.elegida && <a href="#" style={{ color: C.verde, fontWeight: 700, marginRight: 8 }} onClick={(ev) => { ev.preventDefault(); accion("fn_cot_elegir", { p_id: c.id, p_por: quien }); }}>Elegir</a>}
                 {c.estado !== "por_leer" && <a href="#" style={{ color: C.suave, marginRight: 8 }} onClick={(ev) => { ev.preventDefault(); accion("fn_cot_accion", { p_id: c.id, p_accion: "releer", p_por: quien }); }}>Releer</a>}
                 {!c.elegida && <a href="#" style={{ color: C.rojo }} onClick={(ev) => { ev.preventDefault(); window.confirm("¿Borrar esta cotización?") && accion("fn_cot_accion", { p_id: c.id, p_accion: "borrar", p_por: quien }); }}>Borrar</a>}
               </td>
             </tr>,
-            abierta === c.id && <tr key={c.id + "i"}><td colSpan={7} style={{ padding: 8, background: "#fafbfd" }}>
+            abierta === c.id && <tr key={c.id + "i"}><td colSpan={8} style={{ padding: 8, background: "#fafbfd" }}>
               {c.resumen && <div style={{ fontSize: 12, color: C.suave, marginBottom: 4 }}>{c.resumen}</div>}
               <table style={{ borderCollapse: "collapse", fontSize: 12 }}>
                 <thead><tr style={{ color: C.suave, textAlign: "left" }}>{["Ítem", "Código", "Cant.", "Precio neto", "Total neto"].map((h) => <th key={h} style={{ padding: "2px 8px" }}>{h}</th>)}</tr></thead>
