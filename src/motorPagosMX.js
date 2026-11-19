@@ -676,3 +676,195 @@ export async function calcularDiaMotor(fecha, { bonificaciones = null } = {}) {
   });
   return { maestro, filas, errores, fuente: mRes.fuente, calculadoAt };
 }
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Guardado y publicación del día (movidos desde Pagos.jsx el 19-nov-2026).
+// Los usan el botón Guardar del Brain y el cálculo automático del VPS.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Escribe el cálculo en maestro_jornada_mx (reemplaza el día completo) y
+// refresca el resumen por empresa. Misma lógica que tenía el botón Calcular.
+export async function escribirMaestroDia(fecha, filas) {
+  const { error: delError } = await sbm().from("maestro_jornada_mx").delete().eq("fecha", fecha);
+  if (delError) throw new Error("DELETE previo falló: " + delError.message);
+
+  let insertados = 0;
+  let primerError = null;
+  for (let i = 0; i < filas.length; i += 100) {
+    const chunk = filas.slice(i, i + 100);
+    const { error: insError } = await sbm().from("maestro_jornada_mx").insert(chunk);
+    if (insError) {
+      for (const fila of chunk) {
+        const { error: e2 } = await sbm().from("maestro_jornada_mx").insert(fila);
+        if (e2) {
+          primerError = { mensaje: e2.message, fila_problema: fila };
+          break;
+        } else {
+          insertados++;
+        }
+      }
+      if (primerError) break;
+    } else {
+      insertados += chunk.length;
+    }
+  }
+
+  if (primerError) {
+    const f = primerError.fila_problema;
+    throw new Error(
+      `Falló al insertar registro:\n\n` +
+      `Chofer: ${f.driver_name}\n` +
+      `Ruta: ${f.id_ruta}\n` +
+      `ns_categoria: "${f.ns_categoria}"\n` +
+      `Mensaje BD: ${primerError.mensaje}\n\n` +
+      `Se insertaron ${insertados} registros antes del error.`
+    );
+  }
+
+  // Refrescar el snapshot por empresa (pagos_terceros_diario) del día calculado
+  try {
+    await sbm().rpc("refrescar_pagos_terceros_diario", { p_fecha: fecha });
+  } catch (e) { console.error("refrescar pagos_terceros_diario:", e); }
+
+  return { insertados };
+}
+
+// Columnas que pasan del cálculo (maestro_jornada_mx) al guardado (tarifado_mx).
+export const COLUMNAS_TARIFADO = ["fecha","id_ruta","driver_id","driver_name","vehiculo_raw","tipo_ruta_sdd","tipologia","placa",
+  "service_center_id","zona","km_recorridos","tramo_km","ciclo","envios_despachados","envios_entregados",
+  "ns_pct","ns_no_visitado","pct_visitado","ns_categoria","factor_ns","tarifa_base","ajuste_ns",
+  "tiene_auxiliar","auxiliar_estado","monto_auxiliar","pago_bruto","descuentos_externos","pago_neto",
+  "semana_pago","tiene_tarifa_especial","ruta_no_operada","pago_meli","observaciones"];
+
+// Guarda el día en tarifado_mx (reemplaza el guardado previo: el consolidado
+// final es siempre el último guardado). "pagos" son las filas del día tal como
+// quedaron en maestro_jornada_mx.
+export async function guardarTarifadoDia(fecha, pagos) {
+  const corridaId = (typeof crypto !== "undefined" && crypto.randomUUID) ? crypto.randomUUID() : `${fecha}-${Date.now()}`;
+  const guardadoAt = new Date().toISOString();
+  const rows = pagos.map(p => {
+    const r = { corrida_id: corridaId, guardado_at: guardadoAt };
+    for (const c of COLUMNAS_TARIFADO) r[c] = (p[c] !== undefined ? p[c] : null);
+    return r;
+  });
+  const { error: delErr } = await sbm().from("tarifado_mx").delete().eq("fecha", fecha);
+  if (delErr) throw new Error("No se pudo limpiar el guardado previo: " + delErr.message);
+
+  let ok = 0, primerError = null;
+  for (let i = 0; i < rows.length; i += 100) {
+    const chunk = rows.slice(i, i + 100);
+    const { error } = await sbm().from("tarifado_mx").insert(chunk);
+    if (error) { primerError = error.message; break; }
+    ok += chunk.length;
+  }
+  if (primerError) throw new Error(primerError);
+  return { ok, corridaId, guardadoAt };
+}
+
+// Escribe la publicación de un SC y la FOTO de cada ruta. La foto es lo que
+// ve el tercero: sin ella, cualquier recálculo posterior le cambia el número
+// en pantalla sin que nadie lo haya decidido.
+// soloRutas: si viene, republica únicamente esas (las demás conservan su foto).
+export async function publicarSCMotor(fecha, sc, { motivo = null, soloRutas = null, version, publicadoPor = "brain" }) {
+  if (!version) throw new Error("falta la versión a publicar");
+  const { data: guardado, error: eG } = await sbm().from("tarifado_mx")
+    .select("*").eq("fecha", fecha).eq("service_center_id", sc);
+  if (eG) throw new Error("no se pudo leer el tarifado guardado");
+  if (!guardado || guardado.length === 0) throw new Error("sin tarifado guardado");
+
+  const { data: exc } = await sbm().from("revision_ruta_mx")
+    .select("id_ruta, estado").eq("fecha", fecha)
+    .in("id_ruta", guardado.map(g => g.id_ruta));
+  const estadoDe = {};
+  for (const e of (exc || [])) estadoDe[e.id_ruta] = e.estado;
+
+  const aPublicar = soloRutas ? guardado.filter(g => soloRutas.includes(g.id_ruta)) : guardado;
+  if (aPublicar.length === 0) throw new Error("no marcaste ninguna ruta");
+
+  const lineas = aPublicar.map(g => ({
+    fecha, service_center: sc, id_ruta: g.id_ruta, version,
+    tercero_id: g.tercero_id, placa: g.placa, driver_name: g.driver_name,
+    ns_pct: g.ns_pct, pct_visitado: g.pct_visitado, ns_categoria: g.ns_categoria,
+    tiene_auxiliar: g.tiene_auxiliar, monto_auxiliar: g.monto_auxiliar,
+    pago_neto: g.pago_neto, motivo,
+    publicado_por: publicadoPor,
+  }));
+  for (let i = 0; i < lineas.length; i += 500) {
+    const { error } = await sbm().from("publicacion_lineas_mx").insert(lineas.slice(i, i + 500));
+    if (error) throw error;
+  }
+
+  const rechazadas = guardado.filter(g => estadoDe[g.id_ruta] === "rechazada").length;
+  const pausadas   = guardado.filter(g => ["pausada", "bloqueada"].includes(estadoDe[g.id_ruta])).length;
+  const { error } = await sbm().from("publicacion_dia_mx").insert({
+    fecha, service_center: sc, version,
+    rutas_total: guardado.length,
+    rutas_aprobadas: guardado.length - rechazadas - pausadas,
+    rutas_rechazadas: rechazadas,
+    rutas_pausadas: pausadas,
+    monto_total: guardado.reduce((t, g) => estadoDe[g.id_ruta] ? t : t + Number(g.pago_neto || 0), 0),
+    motivo_version: motivo,
+    publicado_por: publicadoPor,
+  });
+  if (error) throw error;
+}
+
+// ── Guardar publica ──
+// Decisión del 17-nov-2026: cada guardado del día queda publicado en el portal,
+// sin botón aparte. CADA guardado sube la versión de cada centro (v1, v2, v3…):
+// el número de versión es el contador de cuántas veces se recalculó y guardó
+// ese día. En el motivo de la versión queda si hubo cambios y en cuántas rutas
+// (monto, empresa, auxiliar o NS). No envía aviso al tercero.
+// prefijoMotivo: "Guardado del día" (analista) o "Cálculo automático".
+export async function publicarDiaMotor(fecha, { publicadoPor = "brain", prefijoMotivo = "Guardado del día" } = {}) {
+  const num = (v) => Math.round(Number(v || 0) * 100) / 100;
+  const firma = (r) => [r.tercero_id || "", r.placa || "", r.driver_name || "", num(r.ns_pct), num(r.pct_visitado),
+    r.ns_categoria || "", r.tiene_auxiliar ? 1 : 0, num(r.monto_auxiliar), num(r.pago_neto)].join("|");
+  const [tarR, linR, pubR] = await Promise.all([
+    sbm().from("tarifado_mx").select("service_center_id, id_ruta, tercero_id, placa, driver_name, ns_pct, pct_visitado, ns_categoria, tiene_auxiliar, monto_auxiliar, pago_neto").eq("fecha", fecha),
+    // Se compara contra lo último publicado DE ESTE MISMO DÍA, no contra la
+    // vista del portal: una ruta que se repite en varios días se muestra con
+    // la fecha del primero, y en la vista "no existe" para los días siguientes.
+    sbm().from("publicacion_lineas_mx").select("service_center, id_ruta, version, tercero_id, placa, driver_name, ns_pct, pct_visitado, ns_categoria, tiene_auxiliar, monto_auxiliar, pago_neto").eq("fecha", fecha).order("version", { ascending: false }).limit(20000),
+    sbm().from("vw_publicacion_vigente_mx").select("service_center, version").eq("fecha", fecha),
+  ]);
+  if (tarR.error) throw new Error("no se pudo leer el tarifado guardado: " + tarR.error.message);
+  const porSC = {};
+  for (const r of (tarR.data || [])) (porSC[r.service_center_id] = porSC[r.service_center_id] || []).push(r);
+  const vista = {};
+  // Vienen de la versión más nueva a la más vieja: la primera de cada ruta manda.
+  for (const l of (linR.data || [])) { const k = String(l.id_ruta); if (!(k in vista)) vista[k] = firma(l); }
+  const versionDe = {};
+  for (const v of (pubR.data || [])) versionDe[v.service_center] = Number(v.version || 0);
+
+  let publicados = 0, sinCambio = 0, rutasCambiadas = 0; const fallos = [];
+  for (const sc of Object.keys(porSC).sort()) {
+    const filas = porSC[sc];
+    const previa = versionDe[sc] || 0;
+    const nCamb = previa ? filas.filter(r => vista[String(r.id_ruta)] !== firma(r)).length : filas.length;
+    const motivo = !previa ? (prefijoMotivo === "Guardado del día" ? null : prefijoMotivo)
+      : (nCamb ? `${prefijoMotivo} · ${nCamb} ruta(s) con cambios` : `${prefijoMotivo} · sin cambios`);
+    try {
+      await publicarSCMotor(fecha, sc, { motivo, version: previa + 1, publicadoPor });
+      publicados++;
+      if (previa && !nCamb) sinCambio++; else rutasCambiadas += nCamb;
+    } catch (e) { fallos.push(`${sc}: ${e.message}`); }
+  }
+  const sinEmpresa = (tarR.data || []).filter(r => !r.tercero_id);
+  if (publicados > 0) {
+    await sbm().rpc("fn_portal_refrescar_maestro")
+      .then(({ error }) => { if (error) console.error("Refresco del maestro:", error.message); });
+  }
+  return { publicados, sinCambio, rutasCambiadas, fallos, sinEmpresa: sinEmpresa.length,
+           montoSinEmpresa: sinEmpresa.reduce((s, r) => s + Number(r.pago_neto || 0), 0) };
+}
+
+// Deja registrado quién guardó el día: 'analista' o 'automatico'.
+// El automático nunca pisa un día marcado por el analista.
+export async function marcarDiaGuardado(fecha, { origen, usuario = null, rutas = null, pagoNeto = null }) {
+  const { error } = await sbm().from("dia_guardado_mx").upsert({
+    fecha, origen, usuario, rutas, pago_neto: pagoNeto, guardado_at: new Date().toISOString(),
+  }, { onConflict: "fecha" });
+  if (error) throw new Error("no se pudo marcar quién guardó el día: " + error.message);
+}
