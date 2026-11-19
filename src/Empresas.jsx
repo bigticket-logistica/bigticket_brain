@@ -587,7 +587,7 @@ function DetalleEmpresa({ empresa, onVolver, onActualizada }) {
     ["resumen", "📇 Resumen"], ["datos", "🏦 Datos & Cuenta"], ["placas", "🚚 Placas & Personal"],
     ["docs", "🗂 Documentos"], ["pagos", "💰 Pagos"], ["solicitudes", "📥 Solicitudes"], ["operacion", "📅 Operación"], ["acceso", "🔑 Acceso al portal"],
   ];
-  const lblEv = { acceso_portal_creado: "🔑 Acceso al portal creado", acceso_clave_cambiada: "🔧 Contraseña actualizada", acceso_portal_reset: "✉️ Correo de restablecimiento enviado", estado_pausada: "⏸ Empresa pausada", estado_activa: "▶️ Empresa reactivada", estado_baja: "🛑 Empresa dada de baja", pagos_pausados: "💸⏸ Pagos pausados", pagos_reactivados: "💸▶️ Pagos reactivados", solicitud_aprobada: "✅ Solicitud aprobada", solicitud_rechazada: "❌ Solicitud rechazada", ficha_enviada_finanzas: "📨 Ficha enviada a Finanzas", razon_social_cambiada: "✏️ Razón social actualizada" };
+  const lblEv = { acceso_portal_creado: "🔑 Acceso al portal creado", acceso_clave_cambiada: "🔧 Contraseña actualizada", acceso_portal_reset: "✉️ Correo de restablecimiento enviado", estado_pausada: "⏸ Empresa pausada", estado_activa: "▶️ Empresa reactivada", estado_baja: "🛑 Empresa dada de baja", pagos_pausados: "💸⏸ Pagos pausados", pagos_reactivados: "💸▶️ Pagos reactivados", solicitud_aprobada: "✅ Solicitud aprobada", solicitud_rechazada: "❌ Solicitud rechazada", ficha_enviada_finanzas: "📨 Ficha enviada a Finanzas", razon_social_cambiada: "✏️ Razón social actualizada", representante_actualizado: "👤 Representante legal corregido en el portal", contacto_actualizado: "📇 Contacto actualizado en el portal" };
 
   return (
     <div>
