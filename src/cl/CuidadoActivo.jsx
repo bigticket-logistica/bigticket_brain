@@ -393,7 +393,166 @@ function FlotaDiferencias() {
     </div>
   );
 }
+// ═══ Paso 2 · Acta de entrega de vehículo (modelo WFZF42) ═══
+const ACTA_FOTOS_VEH = [["foto_frontal", "FRONTAL"], ["foto_posterior", "POSTERIOR"], ["foto_lat_der", "LATERAL DERECHO"], ["foto_lat_izq", "LATERAL IZQUIERDO"]];
+const ACTA_FOTOS_DOC = [["doc_permiso", "PERMISO DE CIRCULACIÓN"], ["doc_soap", "SEGURO OBLIGATORIO"], ["doc_revision", "HOMOLOGACIÓN / REV. TÉCNICA"]];
+const ACTA_DOCS = [["doc_permiso", "permiso", "Permiso de circulación"], ["doc_soap", "soap", "Seguro obligatorio (SOAP)"], ["doc_revision", "rt", "Revisión técnica / homologación"]];
+const fdx = (v) => (v && /^\d{4}-\d{2}-\d{2}/.test(v) ? `${v.slice(8, 10)}-${v.slice(5, 7)}-${v.slice(0, 4)}` : v || "");
+const etiquetaInv = (t) => String(t || "").replace(/^¿\s*(Posee\s+)?/i, "").replace(/\?$/, "").replace(/\s+funciona$/i, "").replace(/^\w/, (c) => c.toUpperCase());
+const valorInv = (v) => (v === "Sí" || v === "Óptimo" ? "Sí" : v === "No" || v === "Deficiente" ? "No" : v === "No aplica" || v === "No tiene" ? "N/A" : v || "—");
+async function aDataUrl(path) {
+  if (!path) return null;
+  const u = await urlFirmada(path, "ca-auditorias-cl"); if (!u) return null;
+  try { const b = await (await fetch(u)).blob(); return await new Promise((ok) => { const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = () => ok(null); r.readAsDataURL(b); }); } catch { return null; }
+}
+function ActaEntrega({ solicitud, quien, onCerrar }) {
+  const [d, setD] = useState(null);
+  const [v, setV] = useState({});          // datos del vehículo (editables)
+  const [docs, setDocs] = useState([]);    // [{ nombre, emisor, folio, emision, vigencia }]
+  const [obs, setObs] = useState("");
+  const [f, setF] = useState({ entrega_nombre: "", entrega_cargo: "Responsable de auditoría", entrega_rut: "", entrega_firma: "", recibe_nombre: "", recibe_empresa: "", recibe_rut: "", recibe_firma: "",
+    sup_nombre: "", sup_ceco: "", sup_rut: "", sup_firma: "", ceco: "", lugar: "Santiago" });
+  const [msg, setMsg] = useState("");
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { rpc("fn_acta_datos", { p_solicitud: solicitud }).then((x) => {
+    setD(x);
+    const a = x.activo || {}, pad = x.padron?.padron || {}, veh = x.vehiculo || {}, au = x.auditoria || {}, r = au.respuestas || {};
+    const prev = x.acta?.datos || {};
+    setV(prev.vehiculo || { tipo_vehiculo: a.tipo_vehiculo || pad.tipo_vehiculo || "", anio: a.anio || pad.anio || "", marca: a.marca || pad.marca || "", modelo: a.modelo || pad.modelo || "",
+      color: a.color || pad.color || "", vin: a.vin || pad.vin || "", motor: a.motor || pad.motor || "", energia: a.energia || pad.combustible || "",
+      propietario: a.propietario || pad.propietario || a.leasing_banco || "", propietario_rut: a.propietario_rut || pad.propietario_rut || "", leasing: !!(a.leasing_banco), km: au.km || r.kilometraje || "" });
+    const foto = Object.fromEntries((x.fotos || []).map((q) => [q.item, q]));
+    const dt = Object.fromEntries((x.documentos || []).map((q) => [q.tipo, q]));
+    setDocs(prev.docs || ACTA_DOCS.map(([item, tipo, nombre]) => {
+      const l = foto[item]?.lectura || {}, db = dt[tipo] || (tipo === "rt" ? dt.gases : null) || {};
+      return { item, nombre, emisor: db.aseguradora || "", folio: [l.folio, db.poliza ? `Póliza ${db.poliza}` : ""].filter(Boolean).join(" · "), emision: db.emitido || "", vigencia: l.vence || db.vence || r[item + "_vence"] || "" };
+    }));
+    const posee = (x.preguntas || []).filter((p) => /^¿Posee/i.test(p.texto) && r[p.codigo] === "No").map((p) => etiquetaInv(p.texto).toLowerCase());
+    setObs(prev.obs ?? [posee.length ? `El vehículo se entrega sin ${posee.join(" y sin ")}; el receptor deberá implementarlos antes de iniciar operación.` : "",
+      au.amerita_reparacion ? `El auditor consideró que el vehículo amerita reparación${au.reparacion_obs ? `: ${au.reparacion_obs}` : "."}` : "El auditor no consideró que el vehículo amerite reparación.",
+      au.reparacion_obs && !au.amerita_reparacion ? `Observación del auditor: ${au.reparacion_obs}` : ""].filter(Boolean).join("\n"));
+    const inicial = x.solicitud?.subtipo !== "nuevo";
+    setF((o) => ({ ...o, ...(prev.firmas || {}),
+      entrega_nombre: prev.firmas?.entrega_nombre || au.hecha_por_nombre || "",
+      recibe_nombre: prev.firmas?.recibe_nombre || (inicial ? x.chofer?.nombre || "" : ""), recibe_empresa: prev.firmas?.recibe_empresa || (inicial ? x.empresa?.empresa || x.solicitud?.empresa || "" : ""),
+      recibe_rut: prev.firmas?.recibe_rut || (inicial ? x.chofer?.rut || "" : ""),
+      sup_nombre: prev.firmas?.sup_nombre || veh.supervisor || veh.supervisor_nombre || "", ceco: prev.firmas?.ceco || a.ceco || veh.ceco || "", sup_ceco: prev.firmas?.sup_ceco || a.ceco || veh.ceco || "" }));
+  }).catch((e) => setMsg(e.message)); }, [solicitud]);
+  if (!d) return <div style={{ color: msg ? C.rojo : C.tenue }}>{msg || "Preparando el acta…"}</div>;
+  const r = d.auditoria?.respuestas || {};
+  const inv = (d.preguntas || []).filter((p) => ["si_no", "si_no_na", "si_no_notiene"].includes(p.tipo) && p.codigo !== "amerita_reparacion");
+  const fluidos = (d.preguntas || []).filter((p) => p.tipo === "optimo_deficiente");
+  const fecha = new Date().toLocaleDateString("es-CL", { timeZone: "America/Santiago", day: "2-digit", month: "2-digit", year: "numeric" }).replace(/\//g, "-");
+  const campo = (k, t, w = 160) => <label style={{ fontSize: 12, color: C.suave, display: "flex", flexDirection: "column", gap: 2 }}>{t}<input style={{ ...inp, width: w }} value={v[k] ?? ""} onChange={(e) => setV({ ...v, [k]: e.target.value })} /></label>;
+  const firma = (k, t, w = 170) => <label style={{ fontSize: 12, color: C.suave, display: "flex", flexDirection: "column", gap: 2 }}>{t}<input style={{ ...inp, width: w }} value={f[k] ?? ""} onChange={(e) => setF({ ...f, [k]: e.target.value })} /></label>;
+  const generar = async () => {
+    setBusy(true); setMsg("");
+    try {
+      await rpc("fn_activo_datos_guardar", { p_patente: d.solicitud.patente, p_datos: { tipo_vehiculo: v.tipo_vehiculo, anio: v.anio ? String(v.anio) : "", marca: v.marca, modelo: v.modelo, color: v.color, vin: v.vin, motor: v.motor, energia: v.energia, propietario: v.propietario, propietario_rut: v.propietario_rut }, p_por: quien });
+      const numero = await rpc("fn_acta_registrar", { p_solicitud: solicitud, p_datos: { vehiculo: v, docs, obs, firmas: f, fecha }, p_por: quien });
+      const fotos = {};
+      for (const [k] of [...ACTA_FOTOS_VEH, ...ACTA_FOTOS_DOC]) fotos[k] = await aDataUrl((d.fotos || []).find((q) => q.item === k)?.path);
+      imprimirActa({ numero, fecha, d, v, docs, obs, f, inv, fluidos, r, fotos });
+    } catch (e) { setMsg(e.message); } finally { setBusy(false); }
+  };
+  const caja = { background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, padding: 14, marginBottom: 12 };
+  return (
+    <div>
+      <button style={btn("sec")} onClick={onCerrar}>← Volver a la bandeja</button>
+      <h3 style={{ color: C.navy, margin: "12px 0 4px" }}>Acta de entrega · {d.solicitud.patente} · {d.tipo_nombre}</h3>
+      <div style={{ fontSize: 12.5, color: C.suave, marginBottom: 12 }}>Lo automático ya viene lleno (ficha del activo, auditoría, padrón y documentos leídos por Biggy). Completa lo que falte: lo del vehículo queda guardado en su ficha. La fecha es la de hoy ({fecha}). {d.acta ? `Esta auditoría ya tiene el acta ${d.acta.numero}: se reimprime con el mismo número.` : "El número AE-AAAA-NNNN se asigna al generar."}</div>
+      <div style={caja}><b style={{ color: C.navy }}>1. Vehículo</b>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 8 }}>
+          {campo("tipo_vehiculo", "Tipo")}{campo("anio", "Año", 80)}{campo("marca", "Marca")}{campo("modelo", "Modelo")}{campo("color", "Color", 110)}
+          {campo("vin", "N° chasis (VIN)", 190)}{campo("motor", "N° motor", 150)}{campo("energia", "Combustible", 120)}{campo("km", "Km a la entrega", 110)}
+          {campo("propietario", "Propietario", 240)}{campo("propietario_rut", "RUT propietario", 130)}
+          <label style={{ fontSize: 12, color: C.suave, display: "flex", alignItems: "center", gap: 6, marginTop: 16 }}><input type="checkbox" checked={!!v.leasing} onChange={(e) => setV({ ...v, leasing: e.target.checked })} /> Leasing</label>
+          {firma("ceco", "Operación / CECO", 150)}{firma("lugar", "Lugar", 120)}
+        </div>
+      </div>
+      <div style={caja}><b style={{ color: C.navy }}>2. Documentación</b>
+        {docs.map((x, i) => (
+          <div key={x.item} style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8, alignItems: "flex-end" }}>
+            <div style={{ width: 210, fontSize: 13 }}>{x.nombre}</div>
+            {["emisor", "folio", "emision", "vigencia"].map((k) => <label key={k} style={{ fontSize: 12, color: C.suave, display: "flex", flexDirection: "column", gap: 2 }}>{{ emisor: "Emisor", folio: "N° / folio", emision: "Emisión", vigencia: "Vigencia" }[k]}
+              <input style={{ ...inp, width: k === "emisor" ? 200 : 140 }} value={x[k] || ""} onChange={(e) => setDocs(docs.map((y, j) => (j === i ? { ...y, [k]: e.target.value } : y)))} /></label>)}
+          </div>
+        ))}
+      </div>
+      <div style={caja}><b style={{ color: C.navy }}>7. Observaciones</b>
+        <textarea style={{ ...inp, width: "100%", minHeight: 80, marginTop: 8 }} value={obs} onChange={(e) => setObs(e.target.value)} />
+      </div>
+      <div style={caja}><b style={{ color: C.navy }}>8. Firmas</b> <span style={{ fontSize: 12, color: C.suave }}>(RUT y firma se escriben con el teclado)</span>
+        <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginTop: 8 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}><b style={{ fontSize: 13 }}>Entrega · Bigticket</b>{firma("entrega_nombre", "Nombre")}{firma("entrega_cargo", "Cargo")}{firma("entrega_rut", "RUT")}{firma("entrega_firma", "Firma")}</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}><b style={{ fontSize: 13 }}>Recibe · Empresa de transporte</b>{firma("recibe_nombre", "Nombre")}{firma("recibe_empresa", "Empresa")}{firma("recibe_rut", "RUT")}{firma("recibe_firma", "Firma")}</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}><b style={{ fontSize: 13 }}>V°B° Supervisor</b>{firma("sup_nombre", "Nombre")}{firma("sup_ceco", "CECO")}{firma("sup_rut", "RUT")}{firma("sup_firma", "Firma")}</div>
+        </div>
+      </div>
+      {msg && <div style={{ color: C.rojo, marginBottom: 8 }}>{msg}</div>}
+      <button style={btn()} disabled={busy} onClick={generar}>{busy ? "Generando…" : "Generar acta (imprimir o guardar en PDF)"}</button>
+    </div>
+  );
+}
+function imprimirActa({ numero, fecha, d, v, docs, obs, f, inv, fluidos, r, fotos }) {
+  const e = (x) => String(x ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const pat = String(d.solicitud.patente || "").replace(/^([A-Z]{2})([A-Z]{2}|\d{2})(\d{2})$/, "$1·$2·$3");
+  const raya = (x, w = 120) => (x ? e(x) : `<span style="display:inline-block;width:${w}px;border-bottom:1px solid #999"></span>`);
+  const col = (s) => (s === "Sí" ? "#1A7A3C" : s === "No" ? "#FF6600" : "#545454");
+  const tercio = Math.ceil(inv.length / 3);
+  const invCols = [0, 1, 2].map((c) => inv.slice(c * tercio, (c + 1) * tercio).map((p) => { const s = valorInv(r[p.codigo]); return `<tr><td>${e(etiquetaInv(p.texto))}</td><td style="text-align:right;font-weight:700;color:${col(s)}">${s}</td></tr>`; }).join(""));
+  const foto = (k, t, h) => `<div class="foto"><div class="img" style="height:${h}px">${fotos[k] ? `<img src="${fotos[k]}">` : `<span>Sin foto</span>`}</div><div class="pie">■ ${t}</div></div>`;
+  const firmaB = (tit, filas) => `<div class="firma"><div class="linea"></div><div class="ft">${tit}</div>${filas.map(([k, val]) => `<div>${k}: ${raya(val)}</div>`).join("")}</div>`;
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>Acta ${numero} ${d.solicitud.patente}</title>
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@600;700&family=Open+Sans:wght@400;600;700&display=swap" rel="stylesheet">
+<style>@page{size:A4;margin:14mm 12mm}body{font-family:'Open Sans',Arial,sans-serif;color:#222;font-size:11px;margin:0}
+.top{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:3px solid #FF6600;padding-bottom:8px;margin-bottom:12px}
+.top h1{font-family:Poppins,Arial;color:#002E5D;font-size:20px;margin:0;text-align:right}.top .sub{text-align:right;color:#555;font-size:11px;margin-top:4px}
+.sec{background:#002E5D;color:#fff;font-family:Poppins,Arial;font-weight:700;font-size:12px;padding:6px 10px;border-radius:4px 4px 0 0;margin-top:10px}.sec b{color:#FF6600}.sec span{font-weight:400}
+table{width:100%;border-collapse:collapse}td,th{border:1px solid #E4E3E3;padding:5px 7px;vertical-align:middle}th{background:#F4F3F3;color:#002E5D;font-family:Poppins,Arial;font-size:10px;text-align:left}
+.k{background:#F4F3F3;color:#002E5D;font-family:Poppins,Arial;font-weight:700;font-size:10px;width:14%}
+.inv{display:flex;gap:10px}.inv table td{border:none;border-bottom:1px solid #EEE}.nota{color:#666;font-size:9.5px;margin-top:4px}
+.fotos{display:grid;gap:8px;margin-top:6px}.foto{border:1px solid #002E5D;border-radius:4px;overflow:hidden}.foto .img{display:flex;align-items:center;justify-content:center;background:#F4F3F3}
+.foto img{max-width:100%;max-height:100%;object-fit:contain}.foto span{color:#999}.foto .pie{background:#002E5D;color:#fff;text-align:center;font-family:Poppins,Arial;font-size:10px;padding:4px}
+.foto .pie{color:#fff}.obs{border-left:4px solid #FF6600;background:#FAFAFA;padding:8px 12px;white-space:pre-line;line-height:1.6}
+.firmas{display:flex;gap:18px;margin-top:40px}.firma{flex:1}.firma .linea{border-top:1px solid #333;margin-bottom:6px}.firma .ft{font-family:Poppins,Arial;font-weight:700;color:#002E5D;text-align:center;margin-bottom:4px}
+.pg{page-break-before:always}.foot{color:#888;font-size:9.5px;margin-top:14px;border-top:1px solid #EEE;padding-top:6px}</style></head><body>
+<div class="top"><img src="${LOGO_NARANJO}" style="height:56px"><div><h1>ACTA DE ENTREGA DE VEHÍCULO</h1><div class="sub">N° de acta: <b>${numero}</b> · Fecha: <b>${fecha}</b> · Lugar: <b>${e(f.lugar)}</b></div></div></div>
+<div class="sec"><b>1.</b> IDENTIFICACIÓN DEL VEHÍCULO</div>
+<table><tr><td class="k">PATENTE</td><td><b>${pat}</b></td><td class="k">TIPO</td><td>${e(v.tipo_vehiculo)}</td><td class="k">AÑO</td><td>${e(v.anio)}</td></tr>
+<tr><td class="k">MARCA</td><td>${e(v.marca)}</td><td class="k">MODELO</td><td>${e(v.modelo)}</td><td class="k">COLOR</td><td>${e(v.color)}</td></tr>
+<tr><td class="k">N° CHASIS (VIN)</td><td>${e(v.vin)}</td><td class="k">N° MOTOR</td><td>${e(v.motor)}</td><td class="k">COMBUSTIBLE</td><td>${e(v.energia)}</td></tr>
+<tr><td class="k">PROPIETARIO</td><td colspan="3">${e(v.propietario)}${v.propietario_rut ? ` · RUT ${e(v.propietario_rut)}` : ""}${v.leasing ? " (leasing)" : ""}</td><td class="k">KM A LA ENTREGA</td><td><b>${v.km ? Number(String(v.km).replace(/\D/g, "")).toLocaleString("es-CL") + " km" : ""}</b></td></tr>
+<tr><td class="k">OPERACIÓN / CECO</td><td>${raya(f.ceco)}</td><td class="k">EMPRESA QUE RECIBE</td><td colspan="3">${raya(f.recibe_empresa, 200)} · RUT ${raya(f.recibe_rut, 90)}</td></tr></table>
+<div class="sec"><b>2.</b> DOCUMENTACIÓN ENTREGADA CON EL VEHÍCULO</div>
+<table><tr><th>DOCUMENTO</th><th>EMISOR</th><th>N° / FOLIO</th><th>EMISIÓN</th><th>VIGENCIA</th></tr>
+${docs.map((x) => `<tr><td>${e(x.nombre)}</td><td>${e(x.emisor)}</td><td>${e(x.folio)}</td><td>${e(fdx(x.emision))}</td><td style="font-weight:700;color:#1A7A3C">${e(fdx(x.vigencia))}</td></tr>`).join("")}</table>
+<div class="sec"><b>3.</b> INVENTARIO Y ESTADO DEL VEHÍCULO <span>(${e(d.tipo_nombre || "auditoría")} · ${fdx((d.auditoria?.enviada_at || "").slice(0, 10))})</span></div>
+<div class="inv">${invCols.map((c) => `<table>${c}</table>`).join("")}</div>
+<div class="nota">Sí = conforme · No = no posee o no conforme · N/A = no aplica a este tipo de vehículo</div>
+<div class="sec"><b>4.</b> NIVELES DE FLUIDOS</div>
+<table><tr>${fluidos.map((p) => `<td class="k" style="text-align:center">${e(String(p.texto).replace(/^Nivel de /i, "").toUpperCase())}</td><td style="text-align:center">${e(r[p.codigo] || "—")}</td>`).join("")}</tr></table>
+<div class="foot">Bigticket Logística y Transporte · Cuidado de Activo — Documento generado desde Brain · Página 1 de 2</div>
+<div class="pg"></div>
+<div class="sec"><b>5.</b> REGISTRO FOTOGRÁFICO DEL VEHÍCULO</div>
+<div class="fotos" style="grid-template-columns:1fr 1fr">${ACTA_FOTOS_VEH.map(([k, t]) => foto(k, t, 200)).join("")}</div>
+<div class="sec"><b>6.</b> REGISTRO FOTOGRÁFICO DE LA DOCUMENTACIÓN</div>
+<div class="fotos" style="grid-template-columns:1fr 1fr 1fr">${ACTA_FOTOS_DOC.map(([k, t]) => foto(k, t, 170)).join("")}</div>
+<div class="sec"><b>7.</b> OBSERVACIONES</div><div class="obs">${e(obs).split("\n").map((l) => (l ? "· " + l : "")).join("\n")}</div>
+<div class="sec"><b>8.</b> ENTREGA Y RECEPCIÓN</div>
+<p style="text-align:justify;line-height:1.5">Quien recibe declara haber revisado el vehículo individualizado en este documento y recibirlo conforme, junto con la documentación e implementos detallados en las secciones 2 y 3, en el estado que consta en el registro fotográfico. Asimismo, se obliga a mantener, usar y cuidar el vehículo conforme al contrato de prestación de servicios vigente y sus anexos, y a restituirlo en las mismas condiciones, salvo el desgaste natural por su uso legítimo.</p>
+<div class="firmas">${firmaB("Entrega · Bigticket", [["Nombre", f.entrega_nombre], ["Cargo", f.entrega_cargo], ["RUT", f.entrega_rut], ["Firma", f.entrega_firma]])}
+${firmaB("Recibe · Empresa de transporte", [["Nombre", f.recibe_nombre], ["Empresa", f.recibe_empresa], ["RUT", f.recibe_rut], ["Firma", f.recibe_firma]])}
+${firmaB("V°B° Supervisor", [["Nombre", f.sup_nombre], ["CECO", f.sup_ceco], ["Fecha", fecha], ["Firma", f.sup_firma]])}</div>
+<div class="foot">Los campos y fotografías de este documento se completan automáticamente desde la auditoría inicial y la documentación cargada en Brain.<br>Bigticket Logística y Transporte · Cuidado de Activo — Documento generado desde Brain · Página 2 de 2</div>
+<script>window.onload=()=>setTimeout(()=>window.print(),600)</script></body></html>`;
+  const w = window.open("", "_blank");
+  if (!w) { alert("El navegador bloqueó la ventana del acta: permite las ventanas emergentes para el Brain."); return; }
+  w.document.write(html); w.document.close();
+}
+
 function AudBandeja({ quien }) {
+  const [acta, setActa] = useState(null);         // id de la solicitud con el acta abierta
   const [filas, setFilas] = useState(null);
   const [tipos, setTipos] = useState([]);
   const [justifican, setJustifican] = useState([]);
@@ -405,6 +564,7 @@ function AudBandeja({ quien }) {
     api("ca_auditoria_subtipos_cl?select=codigo,nombre&order=orden").then(setTipos).catch(() => {});
     api("ca_config_cl?clave=eq.aud_justifican&select=valor").then((r) => setJustifican(String(r?.[0]?.valor || "").toLowerCase().split(",").map((x) => x.trim()).filter(Boolean))).catch(() => {});
   }, []);
+  if (acta) return <ActaEntrega solicitud={acta} quien={quien} onCerrar={() => { setActa(null); cargar(); }} />;
   if (filas === null) return <div style={{ color: C.tenue }}>Cargando…</div>;
   const hoy = hoyISO();
   const diaDe = (t) => (t ? new Date(new Date(t).getTime() - 4 * 3600e3).toISOString().slice(0, 10) : "");
@@ -461,7 +621,7 @@ function AudBandeja({ quien }) {
                 <td style={celda}>{chip(e[0], e[1], e[2])}{x.estado === "justificada" && <div style={{ color: C.tenue, fontSize: 11.5 }}>{x.justificacion} · {x.justificada_por}</div>}{x.hecha_por_nombre && <div style={{ color: C.tenue, fontSize: 11.5 }}>Hizo: {x.hecha_por_nombre}</div>}</td>
                 <td style={{ ...celda, whiteSpace: "nowrap" }}>
                   {["incumplida", "pendiente"].includes(x.estado) && puedeJustificar && <button style={{ ...btn("sec"), padding: "4px 10px" }} disabled={busy} onClick={() => justificar(x)}>Justificar no realización</button>}
-                  {x.estado === "aprobada" && ["nuevo", "inicial_chofer", "traspaso_recepcion"].includes(x.subtipo) && <button style={{ ...btn(), padding: "4px 10px" }} disabled title="Llega en el Paso 2 del pedido">Generar acta de entrega</button>}
+                  {x.estado === "aprobada" && ["nuevo", "inicial_chofer", "traspaso_recepcion"].includes(x.subtipo) && <button style={{ ...btn(), padding: "4px 10px" }} onClick={() => setActa(x.id)}>Generar acta de entrega</button>}
                 </td>
               </tr>
             ); })}
