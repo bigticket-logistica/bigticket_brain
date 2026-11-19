@@ -128,7 +128,7 @@ export default function CuidadoActivoCL({ usuario, sub }) {
   if (sub === "ca_reparaciones") return <Reparaciones quien={quien} />;
   if (sub === "ca_siniestros") return <Siniestros quien={quien} />;
   if (sub === "ca_gastos") return <GastosTabs quien={quien} />;
-  if (sub === "ca_auditorias") return <Auditorias quien={quien} />;
+  if (sub === "ca_auditorias") return <AudTabs quien={quien} />;
   if (sub === "ca_nosalidas") return <NoSalidas />;
   if (sub === "ca_incumplimientos") return <Incumplimientos />;
   if (sub === "ca_config") return <Configuracion quien={quien} />;
@@ -345,6 +345,295 @@ const AU_ESTADO = {
 const AU_BIGGY = { aprobada: ["Cumple", C.verdeT, C.verde], revisar: ["Con hallazgo", C.ambarT, C.ambar], rehacer: ["No cumple", C.rojoT, C.rojo] };
 const AU_VER = { cumple: "Cumple", cumple_hallazgo: "Cumple con hallazgo", no_cumple: "No cumple" };
 const AU_FOTO = { ok: ["ok", C.verdeT, C.verde], rehacer: ["repetir", C.rojoT, C.rojo], dano: ["daño", C.ambarT, C.ambar], sucio: ["sucio", C.ambarT, C.ambar] };
+
+// ═══ Paso 1 · Auditorías (pedido 19-11-2026): bandeja del día y mantenedores ═══
+function AudTabs({ quien }) {
+  const [vista, setVista] = useState("bandeja");
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
+        {[["bandeja", "Bandeja de auditorías"], ["revision", "Revisión de lo enviado"], ["diferencias", "Conductor y empresa (diferencias)"]].map(([k, t]) => <button key={k} style={btn(vista === k ? undefined : "sec")} onClick={() => setVista(k)}>{t}</button>)}
+      </div>
+      {vista === "bandeja" ? <AudBandeja quien={quien} /> : vista === "diferencias" ? <FlotaDiferencias /> : <Auditorias quien={quien} />}
+    </div>
+  );
+}
+const AUD_EST = { pendiente: ["Solicitada", "#eef2f8", C.navy], realizada: ["Realizada · Biggy revisando", C.ambarT, C.ambar], aprobada: ["Aprobada", C.verdeT, C.verde],
+  devuelta: ["Devuelta", C.rojoT, C.rojo], incumplida: ["Incumplida · falta 13", C.rojoT, C.rojo], justificada: ["Justificada", C.fondo, C.suave] };
+const hoyISO = () => new Date(Date.now() - 4 * 3600e3).toISOString().slice(0, 10);
+// Lo que declaró el supervisor en «Confirmar mi flota» (conductor y empresa) frente al maestro de hoy y al portal
+function FlotaDiferencias() {
+  const [filas, setFilas] = useState(null);
+  const [solo, setSolo] = useState(true);
+  useEffect(() => { api("vw_flota_diferencias_cl?select=*&order=ceco,patente").then(setFilas).catch(() => setFilas([])); }, []);
+  if (filas === null) return <div style={{ color: C.tenue }}>Cargando…</div>;
+  const vis = filas.filter((x) => !solo || x.dif_conductor || x.dif_empresa);
+  const celda = { padding: "7px 9px", borderBottom: `1px solid ${C.borde}`, fontSize: 12.5 };
+  const marca = (dif, t) => <span style={{ color: dif ? C.rojo : C.texto, fontWeight: dif ? 700 : 400 }}>{t || "—"}</span>;
+  return (
+    <div>
+      <div style={{ fontSize: 12.5, color: C.suave, marginBottom: 10 }}>Último conductor y empresa que declaró el supervisor en su inventario, comparados con el maestro de hoy y con el portal. Si el conductor declarado cambia, se pide sola la auditoría «Inicial chofer».</div>
+      <label style={{ fontSize: 12.5, display: "flex", gap: 6, alignItems: "center", marginBottom: 10 }}><input type="checkbox" checked={solo} onChange={(e) => setSolo(e.target.checked)} /> Solo con diferencias ({filas.filter((x) => x.dif_conductor || x.dif_empresa).length})</label>
+      <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 900 }}>
+          <thead><tr style={{ background: C.fondo, textAlign: "left" }}>{["Patente", "CECO", "Conductor declarado", "Conductor en el maestro", "Empresa declarada", "Empresa en el portal", "Declarado"].map((h) => <th key={h} style={{ ...celda, color: C.suave }}>{h}</th>)}</tr></thead>
+          <tbody>
+            {vis.length === 0 && <tr><td colSpan={7} style={{ ...celda, color: C.tenue, textAlign: "center" }}>{solo ? "Sin diferencias." : "Todavía no hay inventarios con conductor."}</td></tr>}
+            {vis.map((x) => (
+              <tr key={x.patente}>
+                <td style={celda}><PatLink p={x.patente} /></td><td style={celda}>{x.ceco}</td>
+                <td style={celda}>{marca(x.dif_conductor, x.conductor_declarado)}</td><td style={celda}>{x.conductor_maestro || "—"}</td>
+                <td style={celda}>{marca(x.dif_empresa, x.empresa_declarada)}</td><td style={celda}>{x.empresa_portal || "—"}</td>
+                <td style={celda}>{fh(x.confirmado_at)} · {x.supervisor || "—"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+function AudBandeja({ quien }) {
+  const [filas, setFilas] = useState(null);
+  const [tipos, setTipos] = useState([]);
+  const [justifican, setJustifican] = useState([]);
+  const [f, setF] = useState({ tipo: "", estado: "", texto: "", desde: "", hasta: "" });
+  const [busy, setBusy] = useState(false);
+  const cargar = () => api("vw_aud_bandeja_cl?select=*&order=vence_at.desc&limit=5000").then(setFilas).catch(() => setFilas([]));
+  useEffect(() => {
+    cargar();
+    api("ca_auditoria_subtipos_cl?select=codigo,nombre&order=orden").then(setTipos).catch(() => {});
+    api("ca_config_cl?clave=eq.aud_justifican&select=valor").then((r) => setJustifican(String(r?.[0]?.valor || "").toLowerCase().split(",").map((x) => x.trim()).filter(Boolean))).catch(() => {});
+  }, []);
+  if (filas === null) return <div style={{ color: C.tenue }}>Cargando…</div>;
+  const hoy = hoyISO();
+  const diaDe = (t) => (t ? new Date(new Date(t).getTime() - 4 * 3600e3).toISOString().slice(0, 10) : "");
+  const lunesPasado = new Date(Date.now() - 4 * 3600e3 - 7 * 86400e3).toISOString().slice(0, 10);
+  const kpis = [
+    ["Solicitadas hoy", filas.filter((x) => diaDe(x.creada_at) === hoy).length, C.navy, () => setF({ ...f, estado: "", desde: hoy, hasta: hoy })],
+    ["Realizadas hoy", filas.filter((x) => diaDe(x.realizada_at) === hoy).length, C.verde, () => setF({ ...f, estado: "realizada", desde: "", hasta: "" })],
+    ["Pendientes del día", filas.filter((x) => x.estado === "pendiente" && diaDe(x.vence_at) === hoy).length, C.ambar, () => setF({ ...f, estado: "pendiente", desde: "", hasta: "" })],
+    ["Incumplidas (últimos 7 días)", filas.filter((x) => x.estado === "incumplida" && diaDe(x.incumplida_at) >= lunesPasado).length, C.rojo, () => setF({ ...f, estado: "incumplida", desde: "", hasta: "" })],
+    ["Por revisar (Biggy)", filas.filter((x) => x.estado === "realizada").length, C.ambar, () => setF({ ...f, estado: "realizada", desde: "", hasta: "" })],
+  ];
+  const vis = filas.filter((x) => (!f.tipo || x.subtipo === f.tipo) && (!f.estado || x.estado === f.estado) && enPeriodo(x.vence_at || x.creada_at, f)
+    && (!f.texto || `${x.patente} ${x.empresa || ""} ${x.ceco || ""} ${x.hecha_por_nombre || ""}`.toLowerCase().includes(f.texto.toLowerCase())));
+  const puedeJustificar = justifican.includes(String(quien || "").toLowerCase());
+  const origen = (x) => x.origen === "automatica" ? `Agendada automática · ${x.subtipo === "limpieza" ? "lunes" : "día 1"}${x.periodo ? " " + x.periodo : ""}` : `Por evento${x.referencia ? " · " + x.referencia : x.motivo ? " · " + x.motivo : ""}`;
+  const plazo = (x) => {
+    if (!x.vence_at) return "—";
+    const d = diaDe(x.vence_at), dm = d.slice(8, 10) + "-" + d.slice(5, 7);
+    if (["aprobada", "justificada"].includes(x.estado)) return "—";
+    return d < hoy ? `Venció ${dm}` : d === hoy ? `Vence hoy ${dm}` : `Vence ${dm}`;
+  };
+  const justificar = async (x) => {
+    const m = window.prompt(`Motivo por el que no se realizó la auditoría ${x.tipo_nombre} de ${x.patente} (obligatorio):`, "");
+    if (m === null) return;
+    if (!m.trim()) { alert("El motivo es obligatorio."); return; }
+    setBusy(true); try { await rpc("fn_aud_justificar", { p_solicitud: x.id, p_motivo: m.trim(), p_por: quien }); await cargar(); } catch (e) { alert(e.message); } finally { setBusy(false); }
+  };
+  const celda = { padding: "7px 9px", borderBottom: `1px solid ${C.borde}`, fontSize: 12.5, verticalAlign: "top" };
+  return (
+    <div>
+      <div style={{ fontSize: 12.5, color: C.suave, marginBottom: 10 }}>Bandeja del día: las limpiezas se crean solas cada lunes (o el primer día hábil) y las programadas el día 1 (ventana del 1 al 5). La misma bandeja la ven el transportista en su portal (para realizarlas) y el supervisor en su bitácora (seguimiento).</div>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
+        {kpis.map(([t, v, c, fn]) => <div key={t} onClick={fn} style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, padding: "10px 14px", flex: "1 1 140px", cursor: "pointer" }}><div style={{ fontSize: 22, fontWeight: 800, color: c }}>{v}</div><div style={{ fontSize: 11.5, color: C.suave }}>{t}</div></div>)}
+      </div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 10 }}>
+        <select style={inp} value={f.tipo} onChange={(e) => setF({ ...f, tipo: e.target.value })}><option value="">Todos los tipos</option>{tipos.map((t) => <option key={t.codigo} value={t.codigo}>{t.nombre}</option>)}</select>
+        <select style={inp} value={f.estado} onChange={(e) => setF({ ...f, estado: e.target.value })}><option value="">Todos los estados</option>{Object.entries(AUD_EST).map(([k, e]) => <option key={k} value={k}>{e[0]}</option>)}</select>
+        <Periodo f={f} setF={setF} />
+        <input style={{ ...inp, minWidth: 220 }} placeholder="Patente, empresa, CECO o quién la hizo" value={f.texto} onChange={(e) => setF({ ...f, texto: e.target.value })} />
+        <button style={btn("sec")} onClick={cargar}>Actualizar</button>
+      </div>
+      <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1000 }}>
+          <thead><tr style={{ background: C.fondo, textAlign: "left" }}>{["Patente", "Empresa · CECO", "Tipo", "Origen", "Plazo", "Estado", "Acción"].map((h) => <th key={h} style={{ ...celda, color: C.suave }}>{h}</th>)}</tr></thead>
+          <tbody>
+            {vis.length === 0 && <tr><td colSpan={7} style={{ ...celda, color: C.tenue, textAlign: "center" }}>Sin auditorías con este filtro.</td></tr>}
+            {vis.slice(0, 1000).map((x) => { const e = AUD_EST[x.estado] || [x.estado, C.fondo, C.suave]; return (
+              <tr key={x.id}>
+                <td style={celda}><PatLink p={x.patente} /></td>
+                <td style={celda}>{x.empresa || "—"}<div style={{ color: C.tenue, fontSize: 11.5 }}>{x.ceco || ""}</div></td>
+                <td style={celda}>{x.tipo_nombre}{x.amerita_reparacion && <div style={{ color: C.rojo, fontSize: 11.5 }}>Con hallazgo</div>}</td>
+                <td style={celda}>{origen(x)}</td>
+                <td style={celda}>{plazo(x)}</td>
+                <td style={celda}>{chip(e[0], e[1], e[2])}{x.estado === "justificada" && <div style={{ color: C.tenue, fontSize: 11.5 }}>{x.justificacion} · {x.justificada_por}</div>}{x.hecha_por_nombre && <div style={{ color: C.tenue, fontSize: 11.5 }}>Hizo: {x.hecha_por_nombre}</div>}</td>
+                <td style={{ ...celda, whiteSpace: "nowrap" }}>
+                  {["incumplida", "pendiente"].includes(x.estado) && puedeJustificar && <button style={{ ...btn("sec"), padding: "4px 10px" }} disabled={busy} onClick={() => justificar(x)}>Justificar no realización</button>}
+                  {x.estado === "aprobada" && ["nuevo", "inicial_chofer", "traspaso_recepcion"].includes(x.subtipo) && <button style={{ ...btn(), padding: "4px 10px" }} disabled title="Llega en el Paso 2 del pedido">Generar acta de entrega</button>}
+                </td>
+              </tr>
+            ); })}
+          </tbody>
+        </table>
+      </div>
+      {!puedeJustificar && <div style={{ fontSize: 12, color: C.tenue, marginTop: 8 }}>«Justificar no realización» solo aparece para el ejecutivo de Cuidado de Activo o la jefatura (Mantenedores › Parámetros › aud_justifican).</div>}
+    </div>
+  );
+}
+
+const PREG_TIPOS = [["auto", "Automático (del maestro)"], ["km", "Kilometraje"], ["foto", "Foto"], ["si_no", "Sí / No"], ["si_no_na", "Sí / No / No aplica"], ["si_no_notiene", "Sí / No / No tiene"], ["optimo_deficiente", "Óptimo / Deficiente"], ["texto", "Texto"], ["opcion", "Opción de una lista"], ["fecha", "Fecha"]];
+const PREG_FOTO = [["nunca", "Nunca"], ["siempre", "Siempre"], ["si_negativo", "Solo si «No» o «Deficiente»"]];
+const PREG_BIGGY = [["", "—"], ["odometro", "Odómetro (km)"], ["doc_permiso", "Permiso de circulación"], ["doc_soap", "SOAP"], ["doc_revision", "Revisión técnica / gases"], ["fecha_extintor", "Etiqueta del extintor"], ["observacion", "Observación (detecta fallas)"]];
+function MantFormularios({ quien }) {
+  const [forms, setForms] = useState([]);
+  const [form, setForm] = useState("largo");
+  const [filas, setFilas] = useState(null);
+  const [msg, setMsg] = useState("");
+  const [nueva, setNueva] = useState(null);
+  const cargar = () => api(`ca_aud_preguntas_cl?formulario=eq.${form}&select=*&order=orden`).then(setFilas).catch(() => setFilas([]));
+  useEffect(() => { api("ca_aud_formularios_cl?select=*&order=codigo").then(setForms).catch(() => {}); }, []);
+  useEffect(() => { setFilas(null); cargar(); }, [form]);
+  const guardar = async (id, datos) => {
+    setMsg("");
+    try { await rpc("fn_aud_pregunta_guardar", { p_id: id, p_datos: datos, p_por: quien }); setMsg("Guardado"); await cargar(); } catch (e) { setMsg(e.message); }
+  };
+  if (filas === null) return <div style={{ color: C.tenue }}>Cargando…</div>;
+  const bloques = [...new Set(filas.map((x) => x.bloque))];
+  const celda = { padding: "5px 7px", borderBottom: `1px solid ${C.borde}`, fontSize: 12.5, verticalAlign: "top" };
+  const sel = (x, campo, opciones) => <select style={{ ...inp, padding: "3px 6px", fontSize: 12 }} value={x[campo] ?? ""} onChange={(e) => guardar(x.id, { [campo]: e.target.value })}>{opciones.map(([k, t]) => <option key={k} value={k}>{t}</option>)}</select>;
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
+        <select style={inp} value={form} onChange={(e) => setForm(e.target.value)}>{forms.map((x) => <option key={x.codigo} value={x.codigo}>{x.nombre}</option>)}</select>
+        <button style={btn()} onClick={() => setNueva({ formulario: form, bloque: bloques[0] || "Otros", texto: "", codigo: "", tipo: "si_no", foto: "si_negativo", obligatoria: true, orden: (filas.at(-1)?.orden || 0) + 10 })}>+ Agregar pregunta</button>
+        {msg && <span style={{ fontSize: 12.5, color: msg === "Guardado" ? C.verde : C.rojo }}>{msg}</span>}
+      </div>
+      <div style={{ fontSize: 12, color: C.tenue, marginBottom: 10 }}>El portal y la bitácora dibujan el formulario con esta lista. Cada cambio queda en el historial. «Pide foto: solo si No» obliga la foto del ítem dañado; en las preguntas «¿Posee…?» déjalo en «Nunca».</div>
+      {nueva && (
+        <div style={{ background: "#fff", border: `1px solid ${C.navy}`, borderRadius: 10, padding: 12, marginBottom: 12, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <input style={inp} placeholder="Bloque" value={nueva.bloque} onChange={(e) => setNueva({ ...nueva, bloque: e.target.value })} />
+          <input style={{ ...inp, minWidth: 260 }} placeholder="Texto de la pregunta" value={nueva.texto} onChange={(e) => setNueva({ ...nueva, texto: e.target.value })} />
+          <input style={inp} placeholder="Código (sin espacios)" value={nueva.codigo} onChange={(e) => setNueva({ ...nueva, codigo: e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, "_") })} />
+          <select style={inp} value={nueva.tipo} onChange={(e) => setNueva({ ...nueva, tipo: e.target.value })}>{PREG_TIPOS.map(([k, t]) => <option key={k} value={k}>{t}</option>)}</select>
+          <select style={inp} value={nueva.foto} onChange={(e) => setNueva({ ...nueva, foto: e.target.value })}>{PREG_FOTO.map(([k, t]) => <option key={k} value={k}>Foto: {t}</option>)}</select>
+          <button style={btn()} disabled={!nueva.texto.trim() || !nueva.codigo} onClick={async () => { await guardar(null, nueva); setNueva(null); }}>Crear</button>
+          <button style={btn("sec")} onClick={() => setNueva(null)}>Cancelar</button>
+        </div>
+      )}
+      {bloques.map((b) => (
+        <div key={b} style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, marginBottom: 12, overflowX: "auto" }}>
+          <div style={{ padding: "8px 12px", fontWeight: 700, color: C.navy, borderBottom: `1px solid ${C.borde}` }}>{b}</div>
+          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1000 }}>
+            <thead><tr style={{ textAlign: "left" }}>{["Orden", "Pregunta", "Respuesta", "Obligatoria", "Pide foto", "Biggy lee", "Depende de", "Activa"].map((h) => <th key={h} style={{ ...celda, color: C.suave }}>{h}</th>)}</tr></thead>
+            <tbody>
+              {filas.filter((x) => x.bloque === b).map((x) => (
+                <tr key={x.id} style={{ opacity: x.activo ? 1 : 0.5 }}>
+                  <td style={celda}><input style={{ ...inp, width: 60, padding: "3px 6px" }} defaultValue={x.orden} onBlur={(e) => Number(e.target.value) !== x.orden && guardar(x.id, { orden: Number(e.target.value) })} /></td>
+                  <td style={celda}><input style={{ ...inp, width: "100%", minWidth: 240, padding: "3px 6px" }} defaultValue={x.texto} onBlur={(e) => e.target.value.trim() && e.target.value !== x.texto && guardar(x.id, { texto: e.target.value.trim() })} /><div style={{ color: C.tenue, fontSize: 11 }}>{x.codigo}</div></td>
+                  <td style={celda}>{sel(x, "tipo", PREG_TIPOS)}{x.tipo === "opcion" && <input style={{ ...inp, marginTop: 4, padding: "3px 6px", fontSize: 12 }} defaultValue={(x.opciones || []).join(", ")} placeholder="Opciones separadas por coma" onBlur={(e) => guardar(x.id, { opciones: e.target.value.split(",").map((o) => o.trim()).filter(Boolean) })} />}</td>
+                  <td style={celda}><input type="checkbox" checked={!!x.obligatoria} onChange={(e) => guardar(x.id, { obligatoria: e.target.checked })} /></td>
+                  <td style={celda}>{sel(x, "foto", PREG_FOTO)}</td>
+                  <td style={celda}>{sel(x, "biggy", PREG_BIGGY)}</td>
+                  <td style={celda}>{x.depende_de ? `${x.depende_de} = ${x.depende_valor}` : "—"}</td>
+                  <td style={celda}><input type="checkbox" checked={!!x.activo} onChange={(e) => guardar(x.id, { activo: e.target.checked })} /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function MantTiposAud({ quien }) {
+  const [filas, setFilas] = useState(null);
+  const [msg, setMsg] = useState("");
+  const cargar = () => api("ca_auditoria_subtipos_cl?select=*&order=orden").then(setFilas).catch(() => setFilas([]));
+  useEffect(() => { cargar(); }, []);
+  const guardar = async (codigo, campo, valor) => { setMsg(""); try { await rpc("fn_aud_subtipo_guardar", { p_codigo: codigo, p_campo: campo, p_valor: String(valor), p_por: quien }); setMsg("Guardado"); cargar(); } catch (e) { setMsg(e.message); } };
+  if (filas === null) return <div style={{ color: C.tenue }}>Cargando…</div>;
+  const celda = { padding: "6px 9px", borderBottom: `1px solid ${C.borde}`, fontSize: 12.5 };
+  return (
+    <div>
+      {msg && <div style={{ fontSize: 12.5, marginBottom: 8, color: msg === "Guardado" ? C.verde : C.rojo }}>{msg}</div>}
+      <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 800 }}>
+          <thead><tr style={{ background: C.fondo, textAlign: "left" }}>{["Tipo", "Formulario", "Cómo se agenda", "Quién la hace", "Plazo (horas)", "Activo"].map((h) => <th key={h} style={{ ...celda, color: C.suave }}>{h}</th>)}</tr></thead>
+          <tbody>{filas.map((x) => (
+            <tr key={x.codigo}>
+              <td style={celda}><input style={{ ...inp, padding: "3px 6px" }} defaultValue={x.nombre} onBlur={(e) => e.target.value !== x.nombre && guardar(x.codigo, "nombre", e.target.value)} /></td>
+              <td style={celda}>{x.formulario === "limpieza" ? "Corto (limpieza)" : "Largo"}</td>
+              <td style={celda}>{x.agenda === "semanal" ? "Cada lunes" : x.agenda === "mensual" ? "Día 1 de cada mes (ventana en Parámetros)" : "Por evento"}</td>
+              <td style={celda}><input style={{ ...inp, padding: "3px 6px", minWidth: 220 }} defaultValue={x.quien || ""} onBlur={(e) => e.target.value !== (x.quien || "") && guardar(x.codigo, "quien", e.target.value)} /></td>
+              <td style={celda}><input style={{ ...inp, width: 80, padding: "3px 6px" }} defaultValue={x.plazo_horas} onBlur={(e) => Number(e.target.value) !== x.plazo_horas && guardar(x.codigo, "plazo_horas", Number(e.target.value))} /></td>
+              <td style={celda}><input type="checkbox" checked={!!x.activo} onChange={(e) => guardar(x.codigo, "activo", e.target.checked)} /></td>
+            </tr>
+          ))}</tbody>
+        </table>
+      </div>
+      <div style={{ fontSize: 12, color: C.tenue, marginTop: 8 }}>El plazo de la limpieza es el mismo día y el de la programada es la ventana del 1 al 5 (Parámetros › aud_vehiculo_dias). Cada cambio queda en el historial.</div>
+    </div>
+  );
+}
+
+function MantFeriados({ quien }) {
+  const [filas, setFilas] = useState(null);
+  const [n, setN] = useState({ fecha: "", nombre: "" });
+  const [msg, setMsg] = useState("");
+  const cargar = () => api("feriados_cl?select=*&order=fecha").then(setFilas).catch(() => setFilas([]));
+  useEffect(() => { cargar(); }, []);
+  const guardar = async (fecha, nombre, borrar) => {
+    setMsg("");
+    try { await rpc("fn_feriado_guardar", { p_fecha: fecha, p_nombre: nombre, p_borrar: borrar, p_por: quien }); setMsg(borrar ? "Quitado" : "Guardado"); setN({ fecha: "", nombre: "" }); cargar(); } catch (e) { setMsg(e.message); }
+  };
+  if (filas === null) return <div style={{ color: C.tenue }}>Cargando…</div>;
+  const celda = { padding: "6px 9px", borderBottom: `1px solid ${C.borde}`, fontSize: 12.5 };
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 10 }}>
+        <input type="date" style={inp} value={n.fecha} onChange={(e) => setN({ ...n, fecha: e.target.value })} />
+        <input style={{ ...inp, minWidth: 240 }} placeholder="Nombre del feriado" value={n.nombre} onChange={(e) => setN({ ...n, nombre: e.target.value })} />
+        <button style={btn()} disabled={!n.fecha || !n.nombre.trim()} onClick={() => guardar(n.fecha, n.nombre, false)}>Agregar</button>
+        {msg && <span style={{ fontSize: 12.5, color: C.verde }}>{msg}</span>}
+      </div>
+      <div style={{ fontSize: 12, color: C.tenue, marginBottom: 8 }}>Si el lunes es feriado, la limpieza se agenda el primer día hábil siguiente. Los feriados no mueven la ventana de la programada. Cada cambio queda en el historial.</div>
+      <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <thead><tr style={{ background: C.fondo, textAlign: "left" }}>{["Fecha", "Feriado", ""].map((h) => <th key={h} style={{ ...celda, color: C.suave }}>{h}</th>)}</tr></thead>
+          <tbody>{filas.map((x) => <tr key={x.fecha}><td style={celda}>{fd(x.fecha)}</td><td style={celda}>{x.nombre}</td><td style={celda}><button style={{ ...btn("sec"), padding: "3px 10px" }} onClick={() => window.confirm(`¿Quitar el feriado ${fd(x.fecha)}?`) && guardar(x.fecha, null, true)}>Quitar</button></td></tr>)}</tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+const EVT_DEST = { supervisor: "Supervisor", ejecutivo: "Ejecutivo de Cuidado de Activo", jefatura: "Jefatura", transportista: "Transportista (empresa)", chofer: "Chofer (delegado)", operaciones: "Operaciones", finanzas: "Finanzas" };
+function MantEventos({ quien }) {
+  const [filas, setFilas] = useState(null);
+  const [msg, setMsg] = useState("");
+  const cargar = () => api("ca_eventos_avisos_cl?select=*&order=evento,destinatario").then(setFilas).catch(() => setFilas([]));
+  useEffect(() => { cargar(); }, []);
+  const guardar = async (id, campo, valor) => { setMsg(""); try { await rpc("fn_evento_aviso_guardar", { p_id: id, p_campo: campo, p_valor: String(valor ?? ""), p_por: quien }); setMsg("Guardado"); cargar(); } catch (e) { setMsg(e.message); } };
+  if (filas === null) return <div style={{ color: C.tenue }}>Cargando…</div>;
+  const eventos = [...new Set(filas.map((x) => x.evento))];
+  const celda = { padding: "6px 9px", borderBottom: `1px solid ${C.borde}`, fontSize: 12.5 };
+  return (
+    <div>
+      {msg && <div style={{ fontSize: 12.5, marginBottom: 8, color: msg === "Guardado" ? C.verde : C.rojo }}>{msg}</div>}
+      <div style={{ fontSize: 12, color: C.tenue, marginBottom: 10 }}>Por cada evento: a quién avisa, si es tarea (con plazo) o solo aviso, el plazo de cada destinatario y por dónde (canales separados por coma: brain, bitacora, portal, correo, whatsapp). Cada cambio queda en el historial.</div>
+      {eventos.map((ev) => (
+        <div key={ev} style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, marginBottom: 12, overflowX: "auto" }}>
+          <div style={{ padding: "8px 12px", fontWeight: 700, color: C.navy, borderBottom: `1px solid ${C.borde}` }}>{filas.find((x) => x.evento === ev)?.evento_nombre}</div>
+          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 760 }}>
+            <thead><tr style={{ textAlign: "left" }}>{["Destinatario", "Modo", "Plazo (horas)", "Canales", "Activo"].map((h) => <th key={h} style={{ ...celda, color: C.suave }}>{h}</th>)}</tr></thead>
+            <tbody>{filas.filter((x) => x.evento === ev).map((x) => (
+              <tr key={x.id} style={{ opacity: x.activo ? 1 : 0.5 }}>
+                <td style={celda}>{EVT_DEST[x.destinatario] || x.destinatario}</td>
+                <td style={celda}><select style={{ ...inp, padding: "3px 6px" }} value={x.modo} onChange={(e) => guardar(x.id, "modo", e.target.value)}><option value="tarea">Tarea (con plazo)</option><option value="aviso">Solo aviso</option></select></td>
+                <td style={celda}><input style={{ ...inp, width: 80, padding: "3px 6px" }} disabled={x.modo !== "tarea"} defaultValue={x.sla_horas ?? ""} onBlur={(e) => e.target.value !== String(x.sla_horas ?? "") && guardar(x.id, "sla_horas", e.target.value)} /></td>
+                <td style={celda}><input style={{ ...inp, minWidth: 220, padding: "3px 6px" }} defaultValue={(x.canales || []).join(", ")} onBlur={(e) => e.target.value !== (x.canales || []).join(", ") && guardar(x.id, "canales", e.target.value)} /></td>
+                <td style={celda}><input type="checkbox" checked={!!x.activo} onChange={(e) => guardar(x.id, "activo", e.target.checked)} /></td>
+              </tr>
+            ))}</tbody>
+          </table>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 function Auditorias({ quien }) {
   const [filas, setFilas] = useState(null);
@@ -3911,9 +4200,12 @@ function Mantenedores({ quien, rol }) {
   return (
     <div>
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 14 }}>
-        {[["config", "Parámetros"], ["componentes", "Componentes del gasto"], ["proveedores", "Proveedores"], ["multas", "Multas (Anexo III)"]].map(([k, t]) => <button key={k} style={btn(vista === k ? undefined : "sec")} onClick={() => setVista(k)}>{t}</button>)}
+        {[["config", "Parámetros"], ["componentes", "Componentes del gasto"], ["proveedores", "Proveedores"], ["multas", "Multas (Anexo III)"],
+          ["aud_form", "Formularios de auditoría"], ["aud_tipos", "Tipos de auditoría"], ["feriados", "Feriados"], ["eventos", "Avisos por evento"]].map(([k, t]) => <button key={k} style={btn(vista === k ? undefined : "sec")} onClick={() => setVista(k)}>{t}</button>)}
       </div>
-      {vista === "config" ? <MantParametros quien={quien} /> : vista === "componentes" ? <MantComponentes quien={quien} /> : vista === "proveedores" ? <Proveedores quien={quien} /> : <MultasAnexo quien={quien} puede={puede} />}
+      {vista === "config" ? <MantParametros quien={quien} /> : vista === "componentes" ? <MantComponentes quien={quien} /> : vista === "proveedores" ? <Proveedores quien={quien} /> :
+        vista === "aud_form" ? <MantFormularios quien={quien} /> : vista === "aud_tipos" ? <MantTiposAud quien={quien} /> : vista === "feriados" ? <MantFeriados quien={quien} /> :
+        vista === "eventos" ? <MantEventos quien={quien} /> : <MultasAnexo quien={quien} puede={puede} />}
       <div style={{ fontSize: 12, color: C.tenue, marginTop: 12 }}>También se editan: pautas, vida útil y talleres en Mantenciones; tipos de tarea, justificaciones y correos en Configuración; reglas en el Centro de alertas; CECO y supervisor en Maestro Operaciones.</div>
     </div>
   );
