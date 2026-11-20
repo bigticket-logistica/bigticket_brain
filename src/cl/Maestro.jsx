@@ -399,6 +399,26 @@ const internasCSV = (hs, jornadaFilas, supDe) => hs.filter(h => !h.anulado && h.
            entr_pago: amb ? h.entregados : 1, pct_ns: amb ? (n(h.cargados) ? Math.round(1000 * n(h.entregados) / n(h.cargados)) / 10 : null) : 100,
            observacion: [h.motivo, h.texto].filter(Boolean).join(" · "), estado_interno: h.estado };
 });
+// Monto manual de una ruta con "Pago especial" (observación de la bitácora)
+function MontoPagoEspecial({ r, quien, onListo }) {
+  const [v, setV] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const guardar = async () => {
+    setBusy(true); setErr("");
+    try { await api("rpc/fn_pago_especial_monto", { method: "POST", body: JSON.stringify({ p_fecha: r.fecha, p_id_viaje: r.id_viaje, p_monto: Number(v), p_por: quien }) });
+          onListo && onListo(); }
+    catch (e) { setErr(e.message); } finally { setBusy(false); }
+  };
+  return (
+    <span style={{ display: "inline-flex", gap: 4, alignItems: "center" }} title={err || "Monto total a pagar por esta ruta"}>
+      <input className="mj-input" type="number" min="0" value={v} onChange={e => setV(e.target.value)} placeholder="$ monto" style={{ width: 95, fontSize: 11, padding: "2px 6px" }} />
+      <button className="mj-btn" disabled={busy || v === ""} style={{ padding: "2px 8px", fontSize: 11 }} onClick={guardar}>Guardar</button>
+      {err && <span style={{ color: "#b42318", fontSize: 10.5 }}>✕</span>}
+    </span>
+  );
+}
+
 // Administración de un hito desde el Brain (después de la ventana de 24 h)
 function PanelHito({ h, pago, quien, onListo }) {
   const [monto, setMonto] = useState(h.monto_pago ?? "");
@@ -916,10 +936,20 @@ function ModuloMaestroCL({ usuario } = {}) {
   // ── Maestro de Pago: el modelo de operaciones, una fila por viaje ──
   const cargarPago = async () => {
     const fallos = [];
-    const d = await apiSuave(
-      `vw_pago_viaje?fecha=eq.${fecha}&ruta_vacia=eq.false&order=cecos.asc.nullslast,id_viaje&limit=3000`,
-      [], fallos);
-    setPago(d);
+    const [d, hs] = await Promise.all([
+      apiSuave(`vw_pago_viaje?fecha=eq.${fecha}&ruta_vacia=eq.false&order=cecos.asc.nullslast,id_viaje&limit=3000`, [], fallos),
+      apiSuave(`vw_pago_hitos_cl?fecha=eq.${fecha}&order=codigo&limit=3000`, []),
+    ]);
+    // Hitos de la bitácora (sorting y ambulancias internas) como filas del maestro de pago
+    const filasHito = (hs || []).map(h => ({
+      es_hito: true, servicio: h.tipo === "sorting" ? "SORTEO" : "AMBULANCIA", cecos: h.ceco, fecha: h.fecha,
+      id_viaje: h.codigo, patente: h.patente, tercero: h.empresa, cargados: null,
+      entregados: h.tipo === "sorting" ? 1 : h.entregados, segmentacion_zonal: null, tipo_vehiculo_bt: null, nivel_servicio: null,
+      tipo_pago: h.modo === "por_entregado" ? "POR ENTREGADO" : h.modo === "fijo" ? "FIJO" : (h.origen_monto === "consignado" ? "CONSIGNADO" : null),
+      tarifa_aplicada: h.tarifa, pago: Number(h.pago) || 0, estado_pago: h.estado_pago, origen_monto: h.origen_monto, monto: h.monto,
+      alerta_pago: h.estado_pago === "sin tarifa" ? "Define el valor en Mantenedor → Pago de hitos" : null,
+    }));
+    setPago([...(d || []), ...filasHito]);
     if (fallos.length) setError("No se pudieron cargar: " + fallos.join(" | "));
   };
   useEffect(() => { if (tab === "pago") cargarPago(); }, [tab, fecha]);
@@ -3083,8 +3113,9 @@ function ModuloMaestroCL({ usuario } = {}) {
                     <div style={{ fontSize: 12, color: "#64748b", lineHeight: 1.7, marginTop: 3 }}>
                       Las columnas del modelo de operaciones, una fila por viaje. El CECOS y la segmentación
                       se resuelven por la <strong>zona donde entregó</strong>; cuando falta algo, la columna
-                      Estado dice qué (crear la zona o asignarle segmentación). SPOT y SORTING serán ingreso
-                      manual. Los KM son los <strong>planificados</strong> por MELI.
+                      Estado dice qué (crear la zona o asignarle segmentación). Los sorting y las ambulancias
+                      internas vienen de Hitos Maestro de la bitácora y se pagan según Mantenedor → Pago de hitos;
+                      las rutas con "Pago especial" esperan su monto manual. Los KM son los <strong>planificados</strong> por MELI.
                     </div>
                   </div>
                   <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
@@ -3215,8 +3246,18 @@ function ModuloMaestroCL({ usuario } = {}) {
                                         × {String(r.factor_ns).replace(".", ",")} · NS {r.ns_pct ?? "—"}%</div>
                                     )}</td>
                                   <td>
+                                    {r.es_hito && <span style={{ marginRight: 4 }}><Etiqueta texto="HITO" color="#A3440B" fondo="#FDEBDD" /></span>}
                                     {r.estado_pago === "calculado"
                                       ? <Etiqueta texto="CALCULADO" color="#0d8043" fondo="#e7f6ec" />
+                                      : r.estado_pago === "tarificacion manual"
+                                        ? <span title="La ruta tiene una observación de Pago especial en la bitácora: ingresa el monto a pagar en esta fila.">
+                                            <Etiqueta texto="TARIFICACIÓN MANUAL" color="#A3440B" fondo="#FDEBDD" /></span>
+                                      : r.estado_pago === "en ventana"
+                                        ? <span title="El supervisor todavía puede editar el hito (24 h desde que lo registró)."><Etiqueta texto="EN VENTANA" color="#1E3A6E" fondo="#E8EEF8" /></span>
+                                      : r.estado_pago === "por revisar"
+                                        ? <span title="Patente sin empresa certificada: márcalo revisado desde el Maestro (Jornada → código del hito)."><Etiqueta texto="POR REVISAR" color="#7A4A00" fondo="#FFF1DB" /></span>
+                                      : r.estado_pago === "desactivado"
+                                        ? <span title="El pago de este tipo de hito está desactivado en Mantenedor → Pago de hitos."><Etiqueta texto="DESACTIVADO" color="#64748b" fondo="#eef2f9" /></span>
                                       : r.estado_pago === "sin tarifa"
                                         ? <span title={r.alerta_pago || `No existe la llave ${r.cecos || "?"} · ${r.servicio} · ${r.segmentacion_zonal || "?"} · ${r.tipo_vehiculo_bt} en el tarifario: hay que agregarla`}>
                                             <Etiqueta texto="SIN TARIFA" color="#b45309" fondo="#fef3c7" /></span>
@@ -3229,7 +3270,8 @@ function ModuloMaestroCL({ usuario } = {}) {
                                         <Etiqueta texto="MANUAL" color="#5b21b6" fondo="#ede9fe" /></span>}
                                   </td>
                                   <td style={{ whiteSpace: "nowrap" }}>
-                                    {r.estado_pago === "sin tarifa" && r.servicio && (
+                                    {r.estado_pago === "tarificacion manual" && <MontoPagoEspecial r={r} quien={usuario?.nombre || usuario?.email || "analista"} onListo={cargarPago} />}
+                                    {r.estado_pago === "sin tarifa" && r.servicio && !r.es_hito && (
                                       <button className="mj-btn" style={{ padding: "2px 8px", fontSize: 11 }}
                                         title={(r.alerta_pago || "") + " Abre el Tarifario con esta llave ya rellenada."}
                                         onClick={() => crearTarifaDesdePago(r)}>➕ Crear tarifa</button>
