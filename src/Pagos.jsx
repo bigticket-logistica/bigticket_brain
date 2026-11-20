@@ -3092,7 +3092,12 @@ function ConciliacionTercerosMX({ usuario }) {
     const neg = neto < 0;
     const iva = neg ? 0 : Math.round(neto * 0.16 * 100) / 100;
     const bruto = neg ? neto : Math.round(neto * 1.16 * 100) / 100;
-    const c = Number(cobros || 0);
+    // "Total cobros" es solo para cobros que NO están como línea en el detalle,
+    // y siempre se ingresa en positivo (lo que se descuenta). Los no show, PNR y
+    // demás cobros que entran como línea negativa ya bajan el neto: no van aquí.
+    // Un valor negativo nunca puede sumar al líquido (bug de la semana 47: el no
+    // show quedaba en el detalle y además en negativo aquí, y se sumaba).
+    const c = Math.max(0, Number(cobros || 0));
     const liquido = Math.round((bruto - c) * 100) / 100;
     return { neto, iva, bruto, cobros: c, liquido, negativo: neg, nViajes: reales.length, nNoPago: reales.filter(d => d.es_no_pago).length };
   };
@@ -3385,7 +3390,8 @@ function ConciliacionTercerosMX({ usuario }) {
     setGuardandoEdit(null);
   };
 
-  const cambiarCobros = (empresa, sc, valor) => setCobrosPorSC(prev => ({ ...prev, [empresa]: { ...(prev[empresa] || {}), [sc]: Number(valor || 0) } }));
+  // Los cobros se guardan siempre en positivo: si el analista escribe "-500", es un cobro de 500.
+  const cambiarCobros = (empresa, sc, valor) => setCobrosPorSC(prev => ({ ...prev, [empresa]: { ...(prev[empresa] || {}), [sc]: Math.abs(Number(valor || 0)) } }));
   const guardarCobros = async (empresa, sc) => {
     const clave = claveCierre(empresa, sc); setGuardandoEdit(clave);
     try {
@@ -5076,7 +5082,7 @@ function ConciliacionTercerosMX({ usuario }) {
             style={{ padding: "5px 10px", background: "#eff6ff", color: "#1d4ed8", border: "1px solid #bfdbfe", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>＋ Viaje completo</button>
           <span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#475569" }}>
             Total cobros:
-            <input type="number" value={cobros || ""} onClick={e => e.stopPropagation()}
+            <input type="number" min="0" title="Solo cobros que no están como línea en el detalle (los no show ya se descuentan en el detalle)" value={cobros > 0 ? cobros : ""} onClick={e => e.stopPropagation()}
               onChange={e => cambiarCobros(empresa, sc, e.target.value)} onBlur={() => guardarCobros(empresa, sc)}
               style={{ width: 120, padding: "5px 8px", border: "1px solid #e4e7ec", borderRadius: 6, fontSize: 12, textAlign: "right" }} />
           </span>
