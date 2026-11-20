@@ -510,7 +510,8 @@ function ModuloMaestroCL({ usuario } = {}) {
   const [colDet, setColDet] = useState({});                // id_viaje -> fila de colectas_dia (o {error})
   const [colConf, setColConf] = useState({});              // id_viaje -> confirmación del supervisor en la bitácora
   const [reemplazos, setReemplazos] = useState([]);
-  const [justif, setJustif] = useState({});                // id_viaje -> devoluciones justificadas automáticamente (motivo)        // reemplazos de supervisor por CECO y fechas (Mantenedor)          // todos los días con jornada (la lista de arriba trae solo 60)
+  const [justif, setJustif] = useState({});
+  const [recolRuta, setRecolRuta] = useState({});          // id_viaje -> recolectas en ruta UM (Bitácora; se pagan como guía)                // id_viaje -> devoluciones justificadas automáticamente (motivo)        // reemplazos de supervisor por CECO y fechas (Mantenedor)          // todos los días con jornada (la lista de arriba trae solo 60)
   const [kpiAbierto, setKpiAbierto] = useState(null);
   const [recuadre, setRecuadre] = useState(null);
   const [aCuadrar, setACuadrar] = useState([]);
@@ -1629,14 +1630,16 @@ function ModuloMaestroCL({ usuario } = {}) {
   // Cada viaje con su CECOS real, segmentación, alerta del motor de zonas, supervisor,
   // empresa y tipo de ruta. Se usa para el día en pantalla y para la descarga por rango.
   // centro_meli guarda el código del centro de MELI (SRM1, SIL1…) que antes se mostraba como CECOS.
-  const enriquecerJornada = (filas, zonaRuta, tipoRuta, certPat, justMap = justif) => filas.map(r => {
+  const enriquecerJornada = (filas, zonaRuta, tipoRuta, certPat, justMap = justif, recMap = recolRuta) => filas.map(r => {
     const z = zonaRuta[String(r.id_viaje)];
     // NS con devoluciones justificadas por motivo: (entregados + justificadas) ÷ cargados.
     // Las colectas se miden por paradas y no cambian.
     const dj = r.tipo === "colecta" ? 0 : n(justMap[String(r.id_viaje)]?.justificadas);
     const pctNs = dj > 0 && n(r.cargados) > 0
       ? Math.round(1000 * Math.min(1, (n(r.entregados) + dj) / n(r.cargados))) / 10 : r.pct_entrega;
-    return { ...r, devol_justificadas: dj, pct_ns: pctNs, centro_meli: r.cecos, cecos_real: z?.cecos_admin || null,
+    const rec = recMap[String(r.id_viaje)];
+    return { ...r, devol_justificadas: dj, pct_ns: pctNs,
+             recolectas_ruta: n(rec?.cantidad), recolectas_por: rec?.registrado_por || null, centro_meli: r.cecos, cecos_real: z?.cecos_admin || null,
              segmentacion: z?.segmentacion || null, zona_pago: z?.zona_principal || null,
              alerta_zona: z?.alerta || null, origen_zona: z?.origen_zona || null,
              cecos_fuente: z?.cecos_fuente || null,
@@ -1704,6 +1707,8 @@ function ModuloMaestroCL({ usuario } = {}) {
     if (!fecha) { setJustif({}); return; }
     apiSuave(`vw_devol_justificadas_viaje?fecha=eq.${fecha}&select=id_viaje,devoluciones,justificadas&limit=5000`, [])
       .then(r => setJustif(Object.fromEntries((r || []).map(x => [String(x.id_viaje), x]))));
+    apiSuave(`recolectas_ruta_cl?fecha=eq.${fecha}&cantidad=gt.0&select=id_ruta,cantidad,registrado_por&limit=3000`, [])
+      .then(r => setRecolRuta(Object.fromEntries((r || []).map(x => [String(x.id_ruta), x]))));
   }, [fecha, jornada]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   // Abre el detalle de una colecta debajo de su fila; lo lee de colectas_dia la primera vez.
@@ -1768,7 +1773,9 @@ function ModuloMaestroCL({ usuario } = {}) {
         const t = Object.fromEntries(tr.map(x => [String(x.id_ruta), x]));
         const jv = await leerTodo(`vw_devol_justificadas_viaje?${rango("fecha")}&select=fecha,id_viaje,devoluciones,justificadas`, "fecha.asc,id_viaje.asc", "justificadas");
         const jm = Object.fromEntries(jv.map(x => [String(x.id_viaje), x]));
-        const todas = enriquecerJornada(jor, z, t, cp, jm);
+        const rr = await leerTodo(`recolectas_ruta_cl?${rango("fecha")}&cantidad=gt.0&select=fecha,id_ruta,cantidad,registrado_por`, "fecha.asc,id_ruta.asc", "recolectas");
+        const rm = Object.fromEntries(rr.map(x => [String(x.id_ruta), x]));
+        const todas = enriquecerJornada(jor, z, t, cp, jm, rm);
         filas = rFiltros ? filtrarJornada(todas) : todas;
         cols = COLS_JORNADA; nombre = `maestro_jornada_${nombreRango}`;
       } else if (rInforme === "devol") {
@@ -2314,7 +2321,13 @@ function ModuloMaestroCL({ usuario } = {}) {
                           ))
                         ) : (<>
                         <td className="num" style={{ fontWeight: 700 }}>{fmt(r.cargados)}</td>
-                        <td className="num" style={{ color: "#0d8043", fontWeight: 700 }}>{fmt(r.entregados)}</td>
+                        <td className="num" style={{ color: "#0d8043", fontWeight: 700 }}>
+                          {fmt(r.entregados)}
+                          {r.recolectas_ruta > 0 && (
+                            <span title={`${r.recolectas_ruta} recolecta(s) en la ruta, registradas en la bitácora por ${r.recolectas_por || "el supervisor"}. Se pagan como guías: entregados de pago ${fmt(n(r.entregados) + r.recolectas_ruta)}.`}
+                                  style={{ marginLeft: 4, background: "#e0f2fe", color: "#0e7490", borderRadius: 4, padding: "0 4px", fontSize: 10.5, cursor: "help" }}>+{r.recolectas_ruta} rec.</span>
+                          )}
+                        </td>
                         <td className="num" style={{ color: n(r.devueltos) ? "#b42318" : "#cbd5e1", fontWeight: n(r.devueltos) ? 700 : 400 }}>
                           {n(r.devueltos) > 0 || r.devol_justificadas > 0 ? (
                             <button onClick={() => setDevAbierta(devAbierta === String(r.id_viaje) ? null : String(r.id_viaje))}
@@ -4252,6 +4265,7 @@ const COLS_JORNADA = [
   { titulo: "PENDIENTES", campo: "pendientes" },
   { titulo: "PCT_ENTREGA", campo: "pct_entrega" },
   { titulo: "DEVOL_JUSTIFICADAS", campo: "devol_justificadas" },
+  { titulo: "RECOLECTAS_EN_RUTA", campo: "recolectas_ruta" },
   { titulo: "PCT_NS_JUSTIFICADO", campo: "pct_ns" },
   { titulo: "1_PARADA", campo: "hora_primera_parada" },
   { titulo: "COMUNA_1_PARADA", campo: "comuna_primera_parada" },

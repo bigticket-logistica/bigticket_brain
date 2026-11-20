@@ -459,7 +459,48 @@ function CentrosColecta({ quien }) {
         </tbody>
       </table>
       <div className="mt-sub" style={{ marginTop: 8, color: "#94a3b8" }}>
-        Ojo: la colecta de un centro que no está aquí queda sin CECO y con alerta en Revisión zonas.
+        Ojo: la colecta de un centro que no está aquí queda sin CECO y con alerta en Revisión zonas. Esta regla rige
+        solo para las colectas de los lunes; los otros días las rutas de entrega y retiro son de cada SC.
+      </div>
+      <RecolectaEnRuta quien={quien} cecos={cecos} />
+    </div>
+  );
+}
+
+// CECO donde la recolecta va dentro de la ruta UM (hoy Arica): su supervisor la
+// marca en la bitácora y cada recolecta se paga como una guía más de la ruta.
+function RecolectaEnRuta({ quien, cecos }) {
+  const [hab, setHab] = useState(null);
+  const [nuevo, setNuevo] = useState("");
+  const [msg, setMsg] = useState("");
+  const cargar = async () => setHab(await apiSuave("cecos_recolecta_ruta_cl?select=ceco,activo,actualizado_por&order=ceco", null));
+  useEffect(() => { cargar(); }, []);
+  const guardar = async (ceco, activo) => {
+    setMsg("");
+    try { await rpc("fn_ceco_recolecta_guardar", { p_ceco: ceco, p_activo: activo, p_por: quien });
+          setMsg(`✓ ${ceco}: recolecta en ruta ${activo ? "activa" : "desactivada"}`); setNuevo(""); await cargar(); }
+    catch (e) { setMsg("No se pudo guardar: " + e.message); }
+  };
+  if (hab === null) return <div className="mt-sub" style={{ marginTop: 16, color: AMBAR }}>Falta el SQL de recolectas en ruta (cecos_recolecta_ruta_cl).</div>;
+  return (
+    <div style={{ marginTop: 18, paddingTop: 14, borderTop: "1px solid #eef1f5" }}>
+      <div className="mt-tit">Recolecta dentro de la ruta UM</div>
+      <div className="mt-sub">
+        En estos CECO la recolecta es un punto más de la ruta de última milla. Su supervisor marca en la bitácora
+        (ítem "Recolectas en ruta") qué rutas recolectaron y cuántas veces; cada recolecta se paga como una guía más.
+      </div>
+      {msg && <div className="mt-msg" style={{ color: msg.startsWith("✓") ? VERDE : ROJO }}>{msg}</div>}
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+        {hab.map(x => (
+          <label key={x.ceco} className="mt-chip" style={{ display: "inline-flex", gap: 6, alignItems: "center", cursor: "pointer" }}>
+            <input type="checkbox" checked={!!x.activo} onChange={e => guardar(x.ceco, e.target.checked)} />{x.ceco}
+          </label>
+        ))}
+        <select className="mt-in" value={nuevo} onChange={e => setNuevo(e.target.value)}>
+          <option value="">Agregar CECO…</option>
+          {cecos.filter(c => !hab.some(x => x.ceco === c)).map(c => <option key={c}>{c}</option>)}
+        </select>
+        <button className="mt-btn pri" disabled={!nuevo} onClick={() => guardar(nuevo, true)}>Agregar</button>
       </div>
     </div>
   );
