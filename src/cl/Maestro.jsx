@@ -467,11 +467,7 @@ function DetalleDevoluciones({ r, filas }) {
                 <td style={{ fontVariantNumeric: "tabular-nums" }}>{d.folio_guia}</td>
                 <td><Etiqueta texto={d.motivo || "—"} color="#b42318" fondo="#fdecec" /></td>
                 <td style={{ fontFamily: "monospace", fontSize: 11, color: "#64748b" }}>{d.motivo_codigo || "(sin código)"}</td>
-                <td title={d.grupo ? `Grupo ${d.grupo}: ${GRUPOS_JUSTIF[d.grupo] || ""}` : "Sin regla: defínela en Mantenedor → Justificación de devoluciones"}>
-                  {d.justifica ? <Etiqueta texto={`✓ Justificada · ${d.grupo}`} color="#0d8043" fondo="#e7f6ec" />
-                    : d.grupo ? <Etiqueta texto={`No justifica · ${d.grupo}`} color="#64748b" fondo="#eef2f9" />
-                    : <Etiqueta texto="Sin regla" color={AMBAR_} fondo="#fff7e6" />}
-                </td>
+                <td title={tituloJustif(d)}><EtiquetaJustif d={d} /></td>
                 <td style={{ color: "#475569", maxWidth: 170, overflow: "hidden", textOverflow: "ellipsis" }}>{d.receptor || "—"}</td>
                 <td style={{ color: "#475569" }}>{d.comuna || "—"}</td>
                 <td className="num">{d.parada ?? "—"}</td>
@@ -507,6 +503,7 @@ function ModuloMaestroCL({ usuario } = {}) {
   // ── Detalle de colectas (first mile) en la Jornada ──
   const [colAbierta, setColAbierta] = useState(null);      // id_viaje de la colecta abierta
   const [devAbierta, setDevAbierta] = useState(null);      // id_viaje con sus devoluciones desplegadas
+  const [evAbierta, setEvAbierta] = useState(null);        // folio con la evidencia del supervisor desplegada
   const [colDet, setColDet] = useState({});                // id_viaje -> fila de colectas_dia (o {error})
   const [colConf, setColConf] = useState({});              // id_viaje -> confirmación del supervisor en la bitácora
   const [reemplazos, setReemplazos] = useState([]);
@@ -2424,23 +2421,35 @@ function ModuloMaestroCL({ usuario } = {}) {
                     </thead>
                     <tbody>
                       {devolVista.map(r => (
-                        <tr key={`${r.id_viaje}-${r.folio_guia}`}>
+                        <Fragment key={`${r.id_viaje}-${r.folio_guia}`}>
+                        <tr>
                           <td style={{ fontWeight: 700, color: NAVY }}>{r.id_viaje}</td>
                           <td><Etiqueta texto={r.cecos || "—"} /></td>
                           <td style={{ fontVariantNumeric: "tabular-nums" }}>{r.folio_guia}</td>
                           <td style={{ fontWeight: 600 }}>{r.patente || "—"}</td>
                           <td style={{ color: "#334155", maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis" }}>{r.conductor || "—"}</td>
                           <td><Etiqueta texto={r.motivo || "—"} color="#b42318" fondo="#fdecec" /></td>
-                          <td title={r.grupo ? `Grupo ${r.grupo}: ${GRUPOS_JUSTIF[r.grupo] || ""}` : "Este motivo no tiene regla: defínela en Mantenedor → Justificación de devoluciones"}>
-                            {r.justifica ? <Etiqueta texto={`✓ Justificada · ${r.grupo}`} color="#0d8043" fondo="#e7f6ec" />
-                              : r.grupo ? <Etiqueta texto={`No justifica · ${r.grupo}`} color="#64748b" fondo="#eef2f9" />
-                              : <Etiqueta texto="Sin regla" color={AMBAR_} fondo="#fff7e6" />}
+                          <td title={tituloJustif(r)}>
+                            <EtiquetaJustif d={r} />
+                            {["por_aprobar", "aprobada", "rechazada"].includes(r.estado_justif) && (
+                              <button className="mj-btn" style={{ marginLeft: 6, padding: "1px 8px", fontSize: 11 }}
+                                      onClick={() => setEvAbierta(evAbierta === String(r.folio_guia) ? null : String(r.folio_guia))}>
+                                {evAbierta === String(r.folio_guia) ? "▾ Cerrar" : r.estado_justif === "por_aprobar" ? "▸ Revisar" : "▸ Ver"}
+                              </button>
+                            )}
                           </td>
                           <td style={{ color: "#475569", maxWidth: 170, overflow: "hidden", textOverflow: "ellipsis" }}>{r.receptor || "—"}</td>
                           <td style={{ color: "#475569" }}>{r.comuna || "—"}</td>
                           <td className="num">{r.parada ?? "—"}</td>
                           <td style={{ color: "#94a3b8" }}>{r.hora_chile || horaChile(r.ocurrido_at)}</td>
                         </tr>
+                        {evAbierta === String(r.folio_guia) && (
+                          <tr><td colSpan={11} style={{ background: "#f5f8ff", padding: "10px 14px 14px" }}>
+                            <RevisarEvidencia d={r} quien={usuario?.nombre || usuario?.email || "analista"}
+                                              onListo={async () => { setEvAbierta(null); await recargar(); }} />
+                          </td></tr>
+                        )}
+                        </Fragment>
                       ))}
                       {!devolVista.length && (
                         <tr><td colSpan={11} style={{ padding: 20, color: "#8a94a6", textAlign: "center" }}>
@@ -4284,7 +4293,90 @@ const COLS_JORNADA = [
 // Grupos de justificación de devoluciones (Mantenedor → Justificación de devoluciones)
 const GRUPOS_JUSTIF = { A: "Causa del comprador o la dirección", B: "Causa de MELI o la planificación",
                         C: "Causa operativa del conductor", D: "Fuerza mayor" };
-const conJustificada = (filas) => (filas || []).map(r => ({ ...r, justificada: r.justifica ? "SI" : r.grupo ? "NO" : "SIN REGLA" }));
+const TXT_JUSTIF = { auto: "SI", aprobada: "SI (EVIDENCIA APROBADA)", por_aprobar: "POR APROBAR", falta_evidencia: "FALTA EVIDENCIA",
+                    rechazada: "EVIDENCIA RECHAZADA", no: "NO", sin_regla: "SIN REGLA" };
+const conJustificada = (filas) => (filas || []).map(r => ({ ...r,
+  justificada: TXT_JUSTIF[r.estado_justif] || (r.justifica ? "SI" : r.grupo ? "NO" : "SIN REGLA") }));
+// Estado de la justificación de una devolución, con su color
+function EtiquetaJustif({ d }) {
+  const g = d.grupo ? ` · ${d.grupo}` : "";
+  switch (d.estado_justif) {
+    case "aprobada": return <Etiqueta texto="✓ Justificada · evidencia" color="#0d8043" fondo="#e7f6ec" />;
+    case "por_aprobar": return <Etiqueta texto="📎 Evidencia por aprobar" color="#1d4ed8" fondo="#e8f0fe" />;
+    case "falta_evidencia": return <Etiqueta texto="Falta evidencia del supervisor" color={AMBAR_} fondo="#fff7e6" />;
+    case "rechazada": return <Etiqueta texto="✕ Evidencia rechazada" color="#b42318" fondo="#fdecec" />;
+    case "no": return <Etiqueta texto={`No justifica${g}`} color="#64748b" fondo="#eef2f9" />;
+    case "sin_regla": return <Etiqueta texto="Sin regla" color={AMBAR_} fondo="#fff7e6" />;
+    default:
+      return d.justifica ? <Etiqueta texto={`✓ Justificada${g}`} color="#0d8043" fondo="#e7f6ec" />
+        : d.grupo ? <Etiqueta texto={`No justifica${g}`} color="#64748b" fondo="#eef2f9" />
+        : <Etiqueta texto="Sin regla" color={AMBAR_} fondo="#fff7e6" />;
+  }
+}
+const tituloJustif = (d) => d.regla === "evidencia"
+  ? `Este CECO justifica este motivo solo con evidencia del supervisor, aprobada por administración (Mantenedor → Justificación de devoluciones).`
+  : d.grupo ? `Grupo ${d.grupo}: ${GRUPOS_JUSTIF[d.grupo] || ""}` : "Este motivo no tiene regla: defínela en Mantenedor → Justificación de devoluciones";
+
+// Evidencia que dejó el supervisor en la bitácora: se aprueba o rechaza aquí
+function RevisarEvidencia({ d, quien, onListo }) {
+  const [urls, setUrls] = useState([]);
+  const [nota, setNota] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+  const fotos = Array.isArray(d.ev_fotos) ? d.ev_fotos : [];
+  useEffect(() => {
+    (async () => {
+      const r = [];
+      for (const f of fotos) {
+        try {
+          const res = await fetch(`${CL_URL}/storage/v1/object/sign/devol-evidencias-cl/${f.path}`, {
+            method: "POST", headers: { apikey: CL_KEY, Authorization: `Bearer ${CL_KEY}`, "Content-Type": "application/json" },
+            body: JSON.stringify({ expiresIn: 600 }) });
+          const j = await res.json();
+          r.push({ nombre: f.nombre || "evidencia", url: j.signedURL ? `${CL_URL}/storage/v1${j.signedURL}` : null });
+        } catch (e) { r.push({ nombre: f.nombre || "evidencia", url: null }); }
+      }
+      setUrls(r);
+    })();
+  }, [d.folio_guia]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const revisar = async (estado) => {
+    if (estado === "rechazada" && nota.trim().length < 5) { setMsg("Escribe por qué se rechaza: el supervisor lo verá."); return; }
+    setBusy(true); setMsg("");
+    try { await api("rpc/fn_evidencia_revisar", { method: "POST", body: JSON.stringify({
+            p_fecha: d.fecha, p_folio: String(d.folio_guia), p_estado: estado, p_nota: nota.trim() || null, p_por: quien }) });
+          onListo && onListo(); }
+    catch (e) { setMsg("No se pudo guardar: " + e.message); } finally { setBusy(false); }
+  };
+  return (
+    <div style={{ fontSize: 12, color: "#334155" }}>
+      <div style={{ marginBottom: 6 }}><b style={{ color: NAVY }}>Evidencia del supervisor</b>
+        <span style={{ color: "#8a94a6" }}> · {d.ev_por || "—"}{d.ev_at ? ` · ${new Date(d.ev_at).toLocaleString("es-CL", { timeZone: "America/Santiago", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false })}` : ""}</span></div>
+      <div style={{ background: "#fff", border: "1px solid #e4e9f1", borderRadius: 8, padding: "8px 10px", marginBottom: 8 }}>{d.ev_observacion || "—"}</div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+        {urls.map((u, i) => u.url
+          ? <a key={i} href={u.url} target="_blank" rel="noreferrer" className="mj-btn" style={{ textDecoration: "none" }}>📎 {u.nombre}</a>
+          : <span key={i} style={{ color: "#94a3b8" }}>📎 {u.nombre} (no se pudo abrir)</span>)}
+        {!fotos.length && <span style={{ color: "#94a3b8" }}>Sin archivos adjuntos</span>}
+      </div>
+      {d.estado_justif === "por_aprobar" ? (
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <button className="mj-btn" disabled={busy} onClick={() => revisar("aprobada")}
+                  style={{ background: "#0d8043", borderColor: "#0d8043", color: "#fff" }}>✓ Aprobar y justificar</button>
+          <input className="mj-input" value={nota} onChange={e => setNota(e.target.value)} placeholder="Nota (obligatoria para rechazar)" style={{ minWidth: 260 }} />
+          <button className="mj-btn" disabled={busy} onClick={() => revisar("rechazada")} style={{ borderColor: "#b42318", color: "#b42318" }}>✕ Rechazar</button>
+        </div>
+      ) : (
+        <div style={{ color: "#64748b" }}>
+          {d.estado_justif === "aprobada" ? "Aprobada" : "Rechazada"} por {d.ev_revisado_por || "—"}{d.ev_nota ? ` · ${d.ev_nota}` : ""}
+          {" "}<button className="mj-btn" disabled={busy} style={{ marginLeft: 8, padding: "2px 10px" }}
+                   onClick={() => revisar(d.estado_justif === "aprobada" ? "rechazada" : "aprobada")}>
+            {d.estado_justif === "aprobada" ? "Cambiar a rechazada" : "Cambiar a aprobada"}</button>
+        </div>
+      )}
+      {msg && <div style={{ color: "#b42318", marginTop: 6 }}>{msg}</div>}
+    </div>
+  );
+}
 const COLS_DEVOL = [
   { titulo: "FECHA", campo: "fecha" },
   { titulo: "ID_VIAJE", campo: "id_viaje" },

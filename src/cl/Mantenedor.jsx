@@ -520,7 +520,7 @@ function JustificacionDevoluciones({ quien }) {
     const desde = sumar(hoyCL(), -30);
     const [r, d] = await Promise.all([
       apiSuave("motivos_justificacion_cl?select=*&order=grupo,motivo", null),
-      apiSuave(`vw_devoluciones_justif_cl?fecha=gte.${desde}&grupo=is.null&select=motivo_codigo,motivo&limit=5000`, []),
+      apiSuave(`vw_devoluciones_justif_cl?fecha=gte.${desde}&regla=is.null&select=motivo_codigo,motivo&limit=5000`, []),
     ]);
     setReglas(r);
     const cuenta = {};
@@ -578,6 +578,7 @@ function JustificacionDevoluciones({ quien }) {
           </table>
         </div>
       </div>
+      <ExcepcionesCeco quien={quien} reglas={reglas} />
       <div className="mt-card">
         <div className="mt-tit">Motivos sin regla (últimos 30 días)</div>
         <div className="mt-sub">Si MELI empieza a usar un motivo nuevo, aparece aquí. Mientras no tenga regla, sus devoluciones no se justifican.</div>
@@ -599,6 +600,87 @@ function JustificacionDevoluciones({ quien }) {
             </tbody>
           </table>
         )}
+      </div>
+    </div>
+  );
+}
+
+// ── Excepciones por CECO ───────────────────────────────────────────────────
+// Un CECO puede tratar un motivo distinto a la regla general. "Con evidencia":
+// la devolución le pide al supervisor de ese CECO, en su bitácora, la observación
+// y la foto (p. ej. faltante o dañado detectado en la carga); administración la
+// aprueba en el Maestro (Devoluciones) y recién ahí se justifica.
+const MODOS = { si: ["Sí, automático", VERDE], evidencia: ["Con evidencia del supervisor", "#1d4ed8"], no: ["No justifica", ROJO] };
+function ExcepcionesCeco({ quien, reglas }) {
+  const [filas, setFilas] = useState(null);
+  const [cecos, setCecos] = useState([]);
+  const [f, setF] = useState({ ceco: "", clave: "", modo: "evidencia" });
+  const [msg, setMsg] = useState("");
+  const cargar = async () => {
+    const [x, ca] = await Promise.all([
+      apiSuave("justif_ceco_cl?select=*&order=ceco,clave", null),
+      apiSuave("cecos_admin?select=nombre&activo=eq.true&order=nombre", []),
+    ]);
+    setFilas(x); setCecos([...new Set((ca || []).map(c => c.nombre))].filter(c => /^ML_/.test(c)));
+  };
+  useEffect(() => { cargar(); }, []);
+  const guardar = async (ceco, clave, modo) => {
+    setMsg("");
+    try { await rpc("fn_justif_ceco_guardar", { p_ceco: ceco, p_clave: clave, p_modo: modo, p_por: quien });
+          setMsg(modo ? `✓ ${ceco}: guardado` : `✓ ${ceco}: vuelve a la regla general`); setF({ ...f, clave: "" }); await cargar(); }
+    catch (e) { setMsg("No se pudo guardar: " + e.message); }
+  };
+  const motivo = (clave) => (reglas || []).find(r => r.clave === clave)?.motivo || clave;
+  const general = (clave) => { const r = (reglas || []).find(x => x.clave === clave); return r ? (r.justifica ? "Sí" : "No") : "sin regla"; };
+  if (filas === null) return (
+    <div className="mt-card"><div className="mt-tit">Excepciones por CECO</div>
+      <div className="mt-sub" style={{ color: AMBAR }}>Faltan los SQL de esta pasada (justif_ceco_cl).</div></div>
+  );
+  return (
+    <div className="mt-card">
+      <div className="mt-tit">Excepciones por CECO</div>
+      <div className="mt-sub">
+        Un CECO puede justificar un motivo que en general no se justifica, o al revés. Con <b>"Con evidencia del supervisor"</b>,
+        cada devolución con ese motivo le pide al supervisor del CECO, en su bitácora, la observación y la foto (por ejemplo,
+        un faltante que no llegó a la bodega o un dañado detectado en la carga). Administración la aprueba en
+        Maestro → Devoluciones, y recién ahí cuenta en el NS y en el pago. Rige para devoluciones desde el 20-nov-2026.
+      </div>
+      {msg && <div className="mt-msg" style={{ color: msg.startsWith("✓") ? VERDE : ROJO }}>{msg}</div>}
+      {filas.length > 0 && (
+        <table className="mt-tabla" style={{ marginBottom: 12 }}>
+          <thead><tr><th>CECO</th><th>Motivo</th><th>Regla general</th><th>En este CECO</th><th>Último cambio</th><th></th></tr></thead>
+          <tbody>
+            {filas.map(x => (
+              <tr key={x.ceco + x.clave}>
+                <td style={{ fontWeight: 700, color: NAVY }}>{x.ceco}</td>
+                <td>{motivo(x.clave)}</td>
+                <td style={{ color: "#64748b" }}>{general(x.clave)}</td>
+                <td><select className="mt-in" value={x.modo} onChange={e => guardar(x.ceco, x.clave, e.target.value)}
+                            style={{ color: MODOS[x.modo]?.[1], fontWeight: 700 }}>
+                  {Object.entries(MODOS).map(([k, [t]]) => <option key={k} value={k}>{t}</option>)}
+                </select></td>
+                <td style={{ fontSize: 11, color: "#64748b" }}>{x.actualizado_por || "—"}</td>
+                <td><button className="mt-btn rojo" onClick={() => window.confirm(`¿Quitar la excepción de ${x.ceco}? Ese motivo vuelve a la regla general en ese CECO.`) && guardar(x.ceco, x.clave, null)}>Quitar</button></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      <div style={{ display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap" }}>
+        <label className="mt-lbl">CECO
+          <select className="mt-in" value={f.ceco} onChange={e => setF({ ...f, ceco: e.target.value })}>
+            <option value="">Elige el CECO</option>{cecos.map(c => <option key={c}>{c}</option>)}
+          </select></label>
+        <label className="mt-lbl">Motivo
+          <select className="mt-in" value={f.clave} onChange={e => setF({ ...f, clave: e.target.value })}>
+            <option value="">Elige el motivo</option>
+            {(reglas || []).map(r => <option key={r.clave} value={r.clave}>{r.motivo}{r.codigo ? ` (${r.codigo})` : ""}</option>)}
+          </select></label>
+        <label className="mt-lbl">En este CECO
+          <select className="mt-in" value={f.modo} onChange={e => setF({ ...f, modo: e.target.value })}>
+            {Object.entries(MODOS).map(([k, [t]]) => <option key={k} value={k}>{t}</option>)}
+          </select></label>
+        <button className="mt-btn pri" disabled={!f.ceco || !f.clave} onClick={() => guardar(f.ceco, f.clave, f.modo)}>Agregar excepción</button>
       </div>
     </div>
   );
