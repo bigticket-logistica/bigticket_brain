@@ -674,7 +674,37 @@ export async function calcularDiaMotor(fecha, { bonificaciones = null } = {}) {
     placaEmpresa,
     traspasosPorRuta,
   });
+  // Red de certificación (19-nov-2026): cada línea lleva sus alertas de
+  // Certificaciones (empresa no certificada, sin contrato firmado, vehículo o
+  // chofer sin certificar). Hoy los controles están en OBSERVACIÓN: la alerta
+  // se ve en la línea y la ruta se paga normal. Si la validación falla, el
+  // cálculo sigue igual, sin alertas.
+  if (filas.length && String(fecha) >= "2026-11-16") {
+    try {
+      await agregarAlertasCertificacion(fecha, filas);
+    } catch (e) { console.error("[Calculo " + fecha + "] alertas de certificación:", e.message || e); }
+  }
+
   return { maestro, filas, errores, fuente: mRes.fuente, calculadoAt };
+}
+
+// Pide a la base las alertas de certificación de las rutas del día (una sola
+// llamada) y las suma a las observaciones de cada línea. La empresa la resuelve
+// la base con la misma regla única de placa ↔ empresa que usa el pago.
+export async function agregarAlertasCertificacion(fecha, filas) {
+  const rutas = filas.map(f => ({ id_ruta: String(f.id_ruta), placa: f.placa || null, driver_id: f.driver_id != null ? String(f.driver_id) : null }));
+  const { data, error } = await sbm().rpc("fn_red_cert_validar", { p_fecha: fecha, p_rutas: rutas });
+  if (error) throw new Error(error.message);
+  const porRuta = {};
+  for (const r of (data || [])) if (r.alertas && r.alertas.length) porRuta[String(r.id_ruta)] = r.alertas;
+  let n = 0;
+  for (const f of filas) {
+    const al = porRuta[String(f.id_ruta)];
+    if (!al) continue;
+    f.observaciones = [f.observaciones, ...al].filter(Boolean).join(" | ");
+    n++;
+  }
+  return n;
 }
 
 
