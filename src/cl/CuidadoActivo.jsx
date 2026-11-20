@@ -636,6 +636,62 @@ function AudBandeja({ quien }) {
 const PREG_TIPOS = [["auto", "Automático (del maestro)"], ["km", "Kilometraje"], ["foto", "Foto"], ["si_no", "Sí / No"], ["si_no_na", "Sí / No / No aplica"], ["si_no_notiene", "Sí / No / No tiene"], ["optimo_deficiente", "Óptimo / Deficiente"], ["texto", "Texto"], ["opcion", "Opción de una lista"], ["fecha", "Fecha"]];
 const PREG_FOTO = [["nunca", "Nunca"], ["siempre", "Siempre"], ["si_negativo", "Solo si «No» o «Deficiente»"]];
 const PREG_BIGGY = [["", "—"], ["odometro", "Odómetro (km)"], ["doc_permiso", "Permiso de circulación"], ["doc_soap", "SOAP"], ["doc_revision", "Revisión técnica / gases"], ["fecha_extintor", "Etiqueta del extintor"], ["observacion", "Observación (detecta fallas)"]];
+// M-3 · Tipos de alerta de Fleetup en español
+function MantFleetupTipos({ quien }) {
+  const [filas, setFilas] = useState(null);
+  const [msg, setMsg] = useState("");
+  const cargar = () => api("ca_fleetup_tipos_cl?select=*&order=codigo").then(setFilas).catch(() => setFilas([]));
+  useEffect(() => { cargar(); }, []);
+  const guardar = async (c, n) => { setMsg(""); try { await rpc("fn_fleetup_tipo_guardar", { p_codigo: c, p_nombre: n, p_por: quien }); setMsg("Guardado"); cargar(); } catch (e) { setMsg(e.message); } };
+  if (filas === null) return <div style={{ color: C.tenue }}>Cargando…</div>;
+  const celda = { padding: "6px 9px", borderBottom: `1px solid ${C.borde}`, fontSize: 12.5 };
+  return (
+    <div>
+      <div style={{ fontSize: 12, color: C.tenue, marginBottom: 8 }}>Nombre en español de cada tipo de alerta que entrega Fleetup; se usa en GPS y cámaras › Eventos. Los tipos nuevos aparecen con su nombre en inglés hasta que los traduzcas.</div>
+      {msg && <div style={{ fontSize: 12.5, marginBottom: 8, color: msg === "Guardado" ? C.verde : C.rojo }}>{msg}</div>}
+      <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <thead><tr style={{ background: C.fondo, textAlign: "left" }}>{["Tipo en Fleetup", "Nombre en español"].map((h) => <th key={h} style={{ ...celda, color: C.suave }}>{h}</th>)}</tr></thead>
+          <tbody>{filas.map((x) => <tr key={x.codigo}><td style={celda}>{x.codigo}</td><td style={celda}><input style={{ ...inp, minWidth: 260, padding: "3px 6px" }} defaultValue={x.nombre} onBlur={(e) => e.target.value.trim() && e.target.value !== x.nombre && guardar(x.codigo, e.target.value)} /></td></tr>)}</tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// M-6 · Qué indicadores ve el supervisor en su bitácora (por día y por mes)
+function MantBitacoraInd({ quien }) {
+  const [filas, setFilas] = useState(null);
+  const [msg, setMsg] = useState("");
+  const cargar = () => api("ca_bitacora_indicadores_cl?select=*&order=vista,orden").then(setFilas).catch(() => setFilas([]));
+  useEffect(() => { cargar(); }, []);
+  const guardar = async (x, campo, valor) => { setMsg(""); try { await rpc("fn_bitacora_indicador_guardar", { p_codigo: x.codigo, p_vista: x.vista, p_campo: campo, p_valor: String(valor), p_por: quien }); setMsg("Guardado"); cargar(); } catch (e) { setMsg(e.message); } };
+  if (filas === null) return <div style={{ color: C.tenue }}>Cargando…</div>;
+  const celda = { padding: "6px 9px", borderBottom: `1px solid ${C.borde}`, fontSize: 12.5 };
+  return (
+    <div>
+      <div style={{ fontSize: 12, color: C.tenue, marginBottom: 8 }}>Lo que ve el supervisor en su bitácora («Desempeño de terceros»), por día y por mes: marca o desmarca, cambia el nombre y el orden. El umbral de la nota (90) se cambia en Parámetros › geo_nota_minima.</div>
+      {msg && <div style={{ fontSize: 12.5, marginBottom: 8, color: msg === "Guardado" ? C.verde : C.rojo }}>{msg}</div>}
+      {["dia", "mes"].map((vista) => (
+        <div key={vista} style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, marginBottom: 12, overflowX: "auto" }}>
+          <div style={{ padding: "8px 12px", fontWeight: 700, color: C.navy, borderBottom: `1px solid ${C.borde}` }}>{vista === "dia" ? "Vista por día" : "Vista por mes"}</div>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead><tr style={{ textAlign: "left" }}>{["Visible", "Nombre en la bitácora", "Orden", "Dato"].map((h) => <th key={h} style={{ ...celda, color: C.suave }}>{h}</th>)}</tr></thead>
+            <tbody>{filas.filter((x) => x.vista === vista).map((x) => (
+              <tr key={x.codigo + x.vista} style={{ opacity: x.visible ? 1 : 0.5 }}>
+                <td style={celda}><input type="checkbox" checked={!!x.visible} onChange={(e) => guardar(x, "visible", e.target.checked)} /></td>
+                <td style={celda}><input style={{ ...inp, minWidth: 240, padding: "3px 6px" }} defaultValue={x.etiqueta} onBlur={(e) => e.target.value.trim() && e.target.value !== x.etiqueta && guardar(x, "etiqueta", e.target.value)} /></td>
+                <td style={celda}><input style={{ ...inp, width: 70, padding: "3px 6px" }} defaultValue={x.orden} onBlur={(e) => Number(e.target.value) !== x.orden && guardar(x, "orden", Number(e.target.value))} /></td>
+                <td style={{ ...celda, color: C.tenue }}>{x.codigo}</td>
+              </tr>
+            ))}</tbody>
+          </table>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function MantFormularios({ quien }) {
   const [forms, setForms] = useState([]);
   const [form, setForm] = useState("largo");
@@ -3518,6 +3574,7 @@ function EquiposGps() {
       <div style={{ fontSize: 12.5, color: C.suave, marginBottom: 6 }}>GPS</div>
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>{Object.entries(GPS_EST).map(([k, e]) => <span key={k} style={{ display: "contents" }}>{kpi(e[0], n("gps_estado", k), e[2], "gps", k)}</span>)}</div>
       <div style={{ fontSize: 12.5, color: C.suave, marginBottom: 6 }}>Cámaras (Fleetup)</div>
+      <CamTransmitiendo />
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>{Object.entries(CAM_EST).map(([k, e]) => <span key={k} style={{ display: "contents" }}>{kpi(e[0], n("cam_estado", k), e[2], "cam", k)}</span>)}</div>
       <input style={{ ...inp, minWidth: 240, marginBottom: 12 }} placeholder="Patente, CECO o empresa" value={f.texto} onChange={(e) => setF({ ...f, texto: e.target.value })} />
       <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, overflowX: "auto" }}>
@@ -3604,7 +3661,30 @@ function Proveedores({ quien }) {
   );
 }
 
+// M-2 · «Transmitiendo: X de 52»: cámaras con eventos en la ventana (horas) sobre el total; ambos editables en Mantenedores
+function CamTransmitiendo() {
+  const [d, setD] = useState(null);
+  useEffect(() => { (async () => {
+    try {
+      const c = Object.fromEntries((await api("ca_config_cl?clave=in.(camaras_total,camaras_ventana_h)&select=clave,valor")).map((x) => [x.clave, x.valor]));
+      const h = Number(c.camaras_ventana_h || 24), total = Number(c.camaras_total || 52);
+      const ev = await api(`vw_fleetup_eventos_cl?select=patente&event_time=gte.${new Date(Date.now() - h * 3600e3).toISOString()}&limit=20000`);
+      setD({ x: new Set((ev || []).map((e) => e.patente).filter(Boolean)).size, total, h });
+    } catch { setD({ x: null, total: null, h: null }); }
+  })(); }, []);
+  if (!d) return null;
+  return (
+    <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, padding: "10px 14px", marginBottom: 10, display: "inline-block" }}>
+      <div style={{ fontSize: 22, fontWeight: 800, color: d.x !== null && d.total && d.x < d.total ? C.ambar : C.verde }}>Transmitiendo: {d.x ?? "—"} de {d.total ?? "—"}</div>
+      <div style={{ fontSize: 12, color: C.suave }}>Cámaras con eventos en las últimas {d.h} h (total y horas en Mantenedores › Parámetros)</div>
+    </div>
+  );
+}
+
 function EventosCamara() {
+  const [nombres, setNombres] = useState({});
+  useEffect(() => { api("ca_fleetup_tipos_cl?select=codigo,nombre").then((r) => setNombres(Object.fromEntries((r || []).map((x) => [x.codigo, x.nombre])))).catch(() => {}); }, []);
+  const tn = (t) => nombres[t] || t;
   const [desde, setDesde] = useState(hoyCL());
   const [hasta, setHasta] = useState(hoyCL());
   const [filas, setFilas] = useState(null);
@@ -3627,7 +3707,7 @@ function EventosCamara() {
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 12 }}>
         <label style={{ fontSize: 12, color: C.suave }}>Desde <input type="date" style={inp} value={desde} max={hoyCL()} onChange={(e) => e.target.value && setDesde(e.target.value)} /></label>
         <label style={{ fontSize: 12, color: C.suave }}>Hasta <input type="date" style={inp} value={hasta} max={hoyCL()} onChange={(e) => e.target.value && setHasta(e.target.value)} /></label>
-        <select style={inp} value={f.tipo} onChange={(e) => setF({ ...f, tipo: e.target.value })}><option value="">Todos los tipos</option>{tipos.map((t) => <option key={t} value={t}>{t}</option>)}</select>
+        <select style={inp} value={f.tipo} onChange={(e) => setF({ ...f, tipo: e.target.value })}><option value="">Todos los tipos</option>{tipos.map((t) => <option key={t} value={t}>{tn(t)}</option>)}</select>
         <select style={inp} value={f.riesgo} onChange={(e) => setF({ ...f, riesgo: e.target.value })}><option value="">Todos los riesgos</option>{["LOW", "MEDIUM", "HIGH", "CRITICAL"].map((r) => <option key={r} value={r}>{r}</option>)}</select>
         <label style={{ fontSize: 12.5, display: "flex", gap: 4, alignItems: "center" }}><input type="checkbox" checked={f.cubierta} onChange={(e) => setF({ ...f, cubierta: e.target.checked })} /> Solo cámara cubierta</label>
         <input style={{ ...inp, minWidth: 200 }} placeholder="Patente, CECO o empresa" value={f.texto} onChange={(e) => setF({ ...f, texto: e.target.value })} />
@@ -3638,7 +3718,7 @@ function EventosCamara() {
           {[["Por tipo", porTipo], ["Patentes con más eventos", porPatente]].map(([t, arr]) => (
             <div key={t} style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, padding: 12, flex: "1 1 260px" }}>
               <div style={{ fontWeight: 800, color: C.navy, marginBottom: 6, fontSize: 13 }}>{t}</div>
-              {arr.slice(0, 10).map(([k, v]) => <div key={k} style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5, padding: "2px 0" }}><span>{k}</span><b>{v}</b></div>)}
+              {arr.slice(0, 10).map(([k, v]) => <div key={k} style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5, padding: "2px 0" }}><span>{t === "Por tipo" ? tn(k) : k}</span><b>{v}</b></div>)}
             </div>
           ))}
         </div>
@@ -3651,7 +3731,7 @@ function EventosCamara() {
               <tr key={x.event_id}>
                 <td style={celda}>{fh(x.event_time)}</td><td style={{ ...celda, fontWeight: 800, color: C.navy }}><PatLink p={x.patente} /></td>
                 <td style={celda}>{x.ceco}<div style={{ color: C.tenue, fontSize: 11.5 }}>{x.empresa}</div></td>
-                <td style={celda}>{x.event_type}</td>
+                <td style={celda}>{tn(x.event_type)}</td>
                 <td style={{ ...celda, fontWeight: 700, color: ["HIGH", "CRITICAL"].includes(x.risk_level) ? C.rojo : C.suave }}>{x.risk_level || "—"}</td>
                 <td style={celda}>{x.is_covered && chip("Cubierta", C.rojoT, C.rojo)} {x.is_critical && chip("Crítico", C.ambarT, C.ambar)}</td>
                 <td style={celda}>{x.outward_video && <a href={x.outward_video} target="_blank" rel="noreferrer" style={{ color: C.navy, marginRight: 8 }}>▶ Exterior</a>}{x.inward_video && <a href={x.inward_video} target="_blank" rel="noreferrer" style={{ color: C.navy }}>▶ Interior</a>}</td>
@@ -3776,13 +3856,16 @@ function DetalleFaltas({ mes }) {
 const RIESGO_COL = { "Básico": C.verde, "Leve": C.navy, "Medio": C.ambar, "Alto": C.rojo };
 function ConduccionGeotab({ mes }) {
   const [mesRows, setMesRows] = useState(null);
+  const [bajo90, setBajo90] = useState(false);           // M-6: «Nota inferior al 90 %»
+  const [actualizando, setActualizando] = useState(false); // M-7: mantener los últimos valores mientras se recarga
+  const [tick, setTick] = useState(0);
   const [dias, setDias] = useState([]);
   const [f, setF] = useState({ tipo: "", ceco: "", texto: "" });
   const [orden, setOrden] = useState({ k: "nota", asc: true });
   const [abierta, setAbierta] = useState(null);
   const [cfgR, setCfgR] = useState({ basico: 95, leve: 75, medio: 60, min: 90, activa: "no" });
   useEffect(() => {
-    setMesRows(null);
+    setActualizando(true);
     const d0 = `${mes}-01`; const fin = new Date(`${mes}-01T12:00:00`); fin.setMonth(fin.getMonth() + 1);
     Promise.all([
       api(`vw_geo_mes_cl?select=*&mes=eq.${d0}`),
@@ -3792,13 +3875,13 @@ function ConduccionGeotab({ mes }) {
       setMesRows(m || []); setDias(d || []);
       const o = Object.fromEntries((c || []).map((x) => [x.clave, x.valor]));
       setCfgR({ basico: Number(o.geo_riesgo_basico || 95), leve: Number(o.geo_riesgo_leve || 75), medio: Number(o.geo_riesgo_medio || 60), min: Number(o.geo_nota_minima || 90), activa: o.geo_falta12_activa || "no" });
-    }).catch(() => { setMesRows([]); setDias([]); });
-  }, [mes]);
+    }).catch(() => { setMesRows((x) => x || []); setDias((x) => x || []); }).finally(() => setActualizando(false));
+  }, [mes, tick]);
   if (mesRows === null) return <div style={{ color: C.tenue }}>Cargando…</div>;
   const riesgo = (n) => n === null || n === undefined ? "—" : n >= cfgR.basico ? "Básico" : n >= cfgR.leve ? "Leve" : n >= cfgR.medio ? "Medio" : "Alto";
   const cecos = [...new Set(mesRows.map((x) => x.ceco).filter(Boolean))].sort();
   const pasa = (x) => (!f.tipo || x.tipo === f.tipo) && (!f.ceco || x.ceco === f.ceco);
-  const vis = mesRows.filter((x) => pasa(x) && (!f.texto || `${x.patente} ${x.empresa || ""}`.toLowerCase().includes(f.texto.toLowerCase())))
+  const vis = mesRows.filter((x) => pasa(x) && (!bajo90 || (x.nota !== null && x.nota !== undefined && Number(x.nota) < cfgR.min)) && (!f.texto || `${x.patente} ${x.empresa || ""}`.toLowerCase().includes(f.texto.toLowerCase())))
     .sort((a, b) => { const va = a[orden.k] ?? "", vb = b[orden.k] ?? ""; const c = typeof va === "number" || !isNaN(Number(va)) ? Number(va) - Number(vb) : String(va).localeCompare(String(vb)); return orden.asc ? c : -c; });
   const diasSel = dias.filter(pasa);
   const porDia = Object.entries(diasSel.filter((x) => x.puntaje !== null && x.puntaje !== undefined).reduce((m, x) => { (m[x.fecha] = m[x.fecha] || []).push(Number(x.puntaje)); return m; }, {})).sort((a, b) => a[0].localeCompare(b[0]))
@@ -3818,6 +3901,8 @@ function ConduccionGeotab({ mes }) {
         <select style={inp} value={f.tipo} onChange={(e) => setF({ ...f, tipo: e.target.value })}><option value="">BT y terceros</option><option value="BT">BT</option><option value="Tercero">Tercero</option></select>
         <select style={inp} value={f.ceco} onChange={(e) => setF({ ...f, ceco: e.target.value })}><option value="">Todos los CECO</option>{cecos.map((c) => <option key={c} value={c}>{c}</option>)}</select>
         <input style={{ ...inp, minWidth: 200 }} placeholder="Patente o empresa" value={f.texto} onChange={(e) => setF({ ...f, texto: e.target.value })} />
+        <label style={{ fontSize: 12.5, display: "flex", gap: 6, alignItems: "center" }}><input type="checkbox" checked={bajo90} onChange={(e) => setBajo90(e.target.checked)} /> Nota inferior al {cfgR.min} %</label>
+        <button style={btn("sec")} disabled={actualizando} onClick={() => setTick((t) => t + 1)}>{actualizando ? "Actualizando…" : "Actualizar datos"}</button>
       </div>
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
         {kpi("Nota promedio del mes", prom ?? "—", prom !== null && prom < cfgR.min ? C.rojo : C.verde)}{kpi(`Patentes con nota < ${cfgR.min}`, bajo, C.rojo)}
@@ -4396,11 +4481,12 @@ function Mantenedores({ quien, rol }) {
     <div>
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 14 }}>
         {[["config", "Parámetros"], ["componentes", "Componentes del gasto"], ["proveedores", "Proveedores"], ["multas", "Multas (Anexo III)"],
-          ["aud_form", "Formularios de auditoría"], ["aud_tipos", "Tipos de auditoría"], ["feriados", "Feriados"], ["eventos", "Avisos por evento"]].map(([k, t]) => <button key={k} style={btn(vista === k ? undefined : "sec")} onClick={() => setVista(k)}>{t}</button>)}
+          ["aud_form", "Formularios de auditoría"], ["aud_tipos", "Tipos de auditoría"], ["feriados", "Feriados"], ["eventos", "Avisos por evento"],
+          ["fleetup", "Alertas de cámara (español)"], ["bit_ind", "Indicadores de la bitácora"]].map(([k, t]) => <button key={k} style={btn(vista === k ? undefined : "sec")} onClick={() => setVista(k)}>{t}</button>)}
       </div>
       {vista === "config" ? <MantParametros quien={quien} /> : vista === "componentes" ? <MantComponentes quien={quien} /> : vista === "proveedores" ? <Proveedores quien={quien} /> :
         vista === "aud_form" ? <MantFormularios quien={quien} /> : vista === "aud_tipos" ? <MantTiposAud quien={quien} /> : vista === "feriados" ? <MantFeriados quien={quien} /> :
-        vista === "eventos" ? <MantEventos quien={quien} /> : <MultasAnexo quien={quien} puede={puede} />}
+        vista === "eventos" ? <MantEventos quien={quien} /> : vista === "fleetup" ? <MantFleetupTipos quien={quien} /> : vista === "bit_ind" ? <MantBitacoraInd quien={quien} /> : <MultasAnexo quien={quien} puede={puede} />}
       <div style={{ fontSize: 12, color: C.tenue, marginTop: 12 }}>También se editan: pautas, vida útil y talleres en Mantenciones; tipos de tarea, justificaciones y correos en Configuración; reglas en el Centro de alertas; CECO y supervisor en Maestro Operaciones.</div>
     </div>
   );
