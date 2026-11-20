@@ -86,8 +86,8 @@ const CSS = `
 .mj-chip:hover{border-color:${NAVY};color:${NAVY};}
 `;
 
-const MAESTRO_MANT = [["glosario", "📖 Glosario del Maestro"], ["reemplazos", "↺ Reemplazos"], ["supervisores", "👤 Supervisores y CECO"], ["colectas", "📦 Centros de colecta"],
-  ["justif", "⚖️ Justificación de devoluciones"], ["hitos", "💲 Pago de hitos"]];
+const MAESTRO_MANT = [["glosario", "📖 Glosario del Maestro"], ["reemplazos", "↺ Reemplazos"], ["supervisores", "👤 Supervisores y CECO"], ["lideres", "👥 Líderes y supervisores"], ["colectas", "📦 Centros de colecta"],
+  ["justif", "⚖️ Justificación de devoluciones"], ["hitos", "💲 Pago de hitos"], ["categorias", "🏷️ Categorías de observación"]];
 
 export default function ModuloMantenedorCL({ usuario } = {}) {
   const [vista, setVista] = useState("reemplazos");
@@ -121,6 +121,8 @@ export default function ModuloMantenedorCL({ usuario } = {}) {
       {vista === "colectas" && <CentrosColecta quien={quien} />}
       {vista === "justif" && <JustificacionDevoluciones quien={quien} />}
       {vista === "hitos" && <PagoHitos quien={quien} />}
+      {vista === "lideres" && <Lideres quien={quien} />}
+      {vista === "categorias" && <CategoriasObs quien={quien} />}
       {esCA && (
         <div>
           <div className="mt-sub">Cuidado de Activo › {(CA_MANTENEDORES.find((x) => "ca:" + x[0] === vista) || [])[2]} › <b>{(CA_MANTENEDORES.find((x) => "ca:" + x[0] === vista) || [])[1]}</b></div>
@@ -733,7 +735,8 @@ function PagoHitos({ quien }) {
   const guardar = async (r) => {
     setMsg("");
     if (!(Number(r.monto) >= 0) || r.monto === "") { setMsg("Indica el monto."); return; }
-    try { await rpc("fn_hito_tarifa_guardar", { p_tipo: r.tipo, p_ceco: r.ceco, p_modo: r.modo, p_monto: Number(r.monto), p_activo: r.activo !== false, p_por: quien });
+    try { await rpc("fn_hito_tarifa_guardar2", { p_tipo: r.tipo, p_ceco: r.ceco, p_modo: r.modo, p_monto: Number(r.monto), p_activo: r.activo !== false,
+            p_desde: r.vigente_desde || null, p_hasta: r.vigente_hasta || null, p_por: quien });
           setMsg(`✓ ${TIPOS_HITO[r.tipo]} · ${r.ceco}: guardado`); await cargar(); }
     catch (e) { setMsg("No se pudo guardar: " + e.message); }
   };
@@ -753,7 +756,7 @@ function PagoHitos({ quien }) {
       {msg && <div className="mt-msg" style={{ color: msg.startsWith("✓") ? VERDE : ROJO }}>{msg}</div>}
       {filas.length > 0 && (
         <table className="mt-tabla" style={{ marginBottom: 12, maxWidth: 900 }}>
-          <thead><tr><th>Hito</th><th>CECO</th><th>Cómo se paga</th><th>Monto</th><th>Activa</th><th>Último cambio</th></tr></thead>
+          <thead><tr><th>Hito</th><th>CECO</th><th>Cómo se paga</th><th>Monto</th><th>Vigente desde</th><th>Vigente hasta</th><th>Activa</th><th>Último cambio</th></tr></thead>
           <tbody>
             {filas.map(x => (
               <tr key={x.tipo + x.ceco} style={!x.activo ? { opacity: 0.55 } : undefined}>
@@ -764,6 +767,9 @@ function PagoHitos({ quien }) {
                 <td><input className="mt-in" type="number" min="0" defaultValue={x.monto} style={{ width: 120 }}
                            onBlur={e => Number(e.target.value) !== Number(x.monto) && guardar({ ...x, monto: e.target.value })} />
                   <span style={{ fontSize: 11, color: "#94a3b8", marginLeft: 6 }}>{pesos(x.monto)}</span></td>
+                <td><input className="mt-in" type="date" defaultValue={x.vigente_desde || ""} onBlur={e => e.target.value !== (x.vigente_desde || "") && guardar({ ...x, vigente_desde: e.target.value || null })} /></td>
+                <td><input className="mt-in" type="date" defaultValue={x.vigente_hasta || ""} onBlur={e => e.target.value !== (x.vigente_hasta || "") && guardar({ ...x, vigente_hasta: e.target.value || null })} />
+                  {!x.vigente_hasta && <div style={{ fontSize: 10.5, color: "#94a3b8" }}>sin término</div>}</td>
                 <td><input type="checkbox" checked={!!x.activo} onChange={e => guardar({ ...x, activo: e.target.checked })} /></td>
                 <td style={{ fontSize: 11, color: "#64748b" }}>{x.actualizado_por || "—"}</td>
               </tr>
@@ -852,6 +858,182 @@ function Glosario() {
         <div className="mt-sub" style={{ marginTop: 8 }}>
           Las cifras de la API nunca se editan: los ajustes viven en las líneas internas y en las columnas Ajuste AI y Entr. pago.
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Líderes y supervisores ─────────────────────────────────────────────────
+// Qué supervisores administra cada líder (jefe de zona). El líder da el ok al
+// monto de las ambulancias internas de sus supervisores. Para vacaciones del
+// líder, se registra quién lo cubre y entre qué fechas.
+function Lideres({ quien }) {
+  const hoy = hoyCL();
+  const [filas, setFilas] = useState(null);
+  const [rem, setRem] = useState([]);
+  const [supBit, setSupBit] = useState([]);
+  const [nuevo, setNuevo] = useState({ supervisor_nombre: "", lider_nombre: "", zona: "" });
+  const [r, setR] = useState({ lider_nombre: "", reemplazante_nombre: "", desde: hoy, hasta: sumar(hoy, 6), nota: "" });
+  const [msg, setMsg] = useState("");
+  const cargar = async () => {
+    const [x, y, sb] = await Promise.all([
+      apiSuave("lideres_supervisores_cl?select=*&order=zona,lider_nombre,supervisor_nombre", null),
+      apiSuave("lideres_reemplazos_cl?select=*&activo=eq.true&order=desde.desc&limit=100", []),
+      apiSuave("supervisores_bt?select=email,nombre&activo=eq.true&order=nombre", []),
+    ]);
+    setFilas(x); setRem(y || []); setSupBit(sb || []);
+  };
+  useEffect(() => { cargar(); }, []);
+  const guardar = async (f) => {
+    setMsg("");
+    try { await rpc("fn_lider_supervisor_guardar", { p_supervisor: f.supervisor_nombre, p_supervisor_email: f.supervisor_email || null,
+            p_lider: f.lider_nombre, p_lider_email: f.lider_email || null, p_zona: f.zona || null, p_activo: f.activo !== false, p_por: quien });
+          setMsg(`✓ ${f.supervisor_nombre}: guardado`); setNuevo({ supervisor_nombre: "", lider_nombre: "", zona: "" }); await cargar(); }
+    catch (e) { setMsg("No se pudo guardar: " + e.message); }
+  };
+  const guardarRem = async (accion, x) => {
+    setMsg("");
+    try { await rpc("fn_lider_reemplazo", { p_id: x?.id || null, p_lider: r.lider_nombre, p_reemplazante: r.reemplazante_nombre,
+            p_desde: r.desde, p_hasta: r.hasta, p_nota: r.nota || null, p_accion: accion, p_por: quien });
+          setMsg(accion === "anular" ? "✓ Reemplazo anulado" : `✓ ${r.reemplazante_nombre} cubre a ${r.lider_nombre} del ${fechaCorta(r.desde)} al ${fechaCorta(r.hasta)}`);
+          await cargar(); }
+    catch (e) { setMsg("No se pudo guardar: " + e.message); }
+  };
+  if (filas === null) return <div className="mt-card"><div className="mt-tit">Líderes y supervisores</div>
+    <div className="mt-sub" style={{ color: AMBAR }}>Faltan los SQL de esta pasada (lideres_supervisores_cl).</div></div>;
+  const lideres = [...new Set(filas.map(x => x.lider_nombre))].sort();
+  const porLider = lideres.map(l => [l, filas.filter(x => x.lider_nombre === l)]);
+  return (
+    <div>
+      {msg && <div className="mt-msg" style={{ color: msg.startsWith("✓") ? VERDE : ROJO }}>{msg}</div>}
+      <div className="mt-card">
+        <div className="mt-tit">Supervisores que administra cada líder</div>
+        <div className="mt-sub">El líder da el ok al monto de las ambulancias internas de sus supervisores. Cambia el líder de un supervisor con la lista; la cuenta de la bitácora se enlaza por correo.</div>
+        {porLider.map(([l, xs]) => (
+          <div key={l} style={{ marginTop: 12 }}>
+            <div style={{ fontWeight: 800, color: NAVY, fontSize: 13 }}>{l} <span style={{ color: "#94a3b8", fontWeight: 600 }}>· {xs[0]?.zona || ""} · {xs.length} supervisores</span></div>
+            <table className="mt-tabla" style={{ marginTop: 6, maxWidth: 980 }}>
+              <thead><tr><th>Supervisor</th><th>Cuenta en la bitácora</th><th>Líder</th><th>Zona</th><th>Activo</th></tr></thead>
+              <tbody>
+                {xs.map(x => (
+                  <tr key={x.supervisor_nombre} style={!x.activo ? { opacity: 0.5 } : undefined}>
+                    <td style={{ fontWeight: 600 }}>{x.supervisor_nombre}</td>
+                    <td><select className="mt-in" value={x.supervisor_email || ""} onChange={e => guardar({ ...x, supervisor_email: e.target.value })}
+                                style={{ color: x.supervisor_email ? undefined : ROJO }}>
+                      <option value="">Sin enlazar</option>{supBit.map(b => <option key={b.email} value={b.email}>{b.nombre} · {b.email}</option>)}</select></td>
+                    <td><select className="mt-in" value={x.lider_nombre} onChange={e => guardar({ ...x, lider_nombre: e.target.value, lider_email: filas.find(y => y.lider_nombre === e.target.value)?.lider_email })}>
+                      {lideres.map(y => <option key={y}>{y}</option>)}</select></td>
+                    <td><input className="mt-in" defaultValue={x.zona || ""} style={{ width: 90 }} onBlur={e => e.target.value !== (x.zona || "") && guardar({ ...x, zona: e.target.value })} /></td>
+                    <td><input type="checkbox" checked={!!x.activo} onChange={e => guardar({ ...x, activo: e.target.checked })} /></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <div style={{ marginTop: 6, fontSize: 12, color: "#64748b", display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              Correo del líder (para que apruebe en la bitácora):
+              <select className="mt-in" value={xs[0]?.lider_email || ""} onChange={e => xs.forEach(x => guardar({ ...x, lider_email: e.target.value }))}>
+                <option value="">Sin cuenta</option>{supBit.map(b => <option key={b.email} value={b.email}>{b.nombre} · {b.email}</option>)}</select>
+            </div>
+          </div>
+        ))}
+        <div style={{ display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap", marginTop: 14 }}>
+          <label className="mt-lbl">Supervisor nuevo<input className="mt-in" value={nuevo.supervisor_nombre} onChange={e => setNuevo({ ...nuevo, supervisor_nombre: e.target.value.toUpperCase() })} placeholder="NOMBRE APELLIDO" /></label>
+          <label className="mt-lbl">Líder<input className="mt-in" list="lideres-lista" value={nuevo.lider_nombre} onChange={e => setNuevo({ ...nuevo, lider_nombre: e.target.value.toUpperCase() })} />
+            <datalist id="lideres-lista">{lideres.map(l => <option key={l} value={l} />)}</datalist></label>
+          <label className="mt-lbl">Zona<input className="mt-in" value={nuevo.zona} onChange={e => setNuevo({ ...nuevo, zona: e.target.value.toUpperCase() })} style={{ width: 90 }} /></label>
+          <button className="mt-btn pri" disabled={!nuevo.supervisor_nombre || !nuevo.lider_nombre} onClick={() => guardar(nuevo)}>Agregar</button>
+        </div>
+      </div>
+      <div className="mt-card">
+        <div className="mt-tit">Reemplazos de líder (vacaciones, licencia…)</div>
+        <div className="mt-sub">En esas fechas, el reemplazante da el ok a las ambulancias de los supervisores del líder ausente.</div>
+        <div style={{ display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap" }}>
+          <label className="mt-lbl">Líder ausente<select className="mt-in" value={r.lider_nombre} onChange={e => setR({ ...r, lider_nombre: e.target.value })}>
+            <option value="">Elige</option>{lideres.map(l => <option key={l}>{l}</option>)}</select></label>
+          <label className="mt-lbl">Lo reemplaza<input className="mt-in" list="lideres-lista" value={r.reemplazante_nombre} onChange={e => setR({ ...r, reemplazante_nombre: e.target.value.toUpperCase() })} placeholder="NOMBRE" /></label>
+          <label className="mt-lbl">Desde<input className="mt-in" type="date" value={r.desde} onChange={e => setR({ ...r, desde: e.target.value })} /></label>
+          <label className="mt-lbl">Hasta<input className="mt-in" type="date" value={r.hasta} onChange={e => setR({ ...r, hasta: e.target.value })} /></label>
+          <label className="mt-lbl">Nota<input className="mt-in" value={r.nota} onChange={e => setR({ ...r, nota: e.target.value })} placeholder="Vacaciones" /></label>
+          <button className="mt-btn pri" disabled={!r.lider_nombre || !r.reemplazante_nombre || !r.desde || !r.hasta} onClick={() => guardarRem("guardar")}>Guardar</button>
+        </div>
+        {rem.length > 0 && (
+          <table className="mt-tabla" style={{ marginTop: 10, maxWidth: 820 }}>
+            <thead><tr><th>Líder</th><th>Lo reemplaza</th><th>Fechas</th><th>Nota</th><th></th></tr></thead>
+            <tbody>{rem.map(x => (
+              <tr key={x.id} style={x.hasta < hoy ? { opacity: 0.5 } : undefined}>
+                <td style={{ fontWeight: 700 }}>{x.lider_nombre}</td><td>{x.reemplazante_nombre}</td>
+                <td>{fechaCorta(x.desde)} → {fechaCorta(x.hasta)}</td><td>{x.nota || "—"}</td>
+                <td><button className="mt-btn rojo" onClick={() => guardarRem("anular", x)}>Anular</button></td>
+              </tr>))}</tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Categorías de observación (Hitos Maestro) ──────────────────────────────
+// Qué categorías puede usar el supervisor al dejar una observación, qué efecto
+// tiene su monto en el pago, con qué rango de monto y en qué fechas rige.
+const EFECTOS = { informativo: "Solo informativo (no cambia el pago)", suma: "Se suma al pago de la ruta",
+                  descuenta: "Se descuenta del pago de la ruta", cobro: "Se cobra a la empresa (prefactura)",
+                  reemplaza: "Reemplaza el pago de la ruta (tarificación manual)" };
+function CategoriasObs({ quien }) {
+  const [filas, setFilas] = useState(null);
+  const [f, setF] = useState({ categoria: "", efecto: "informativo", monto_min: "", monto_max: "", vigente_desde: "", vigente_hasta: "", descripcion: "" });
+  const [msg, setMsg] = useState("");
+  const cargar = async () => setFilas(await apiSuave("hitos_categorias_cl?select=*&order=orden,categoria", null));
+  useEffect(() => { cargar(); }, []);
+  const n = (v) => (v === "" || v === null || v === undefined ? null : Number(v));
+  const guardar = async (x) => {
+    setMsg("");
+    if (n(x.monto_min) != null && n(x.monto_max) != null && n(x.monto_min) > n(x.monto_max)) { setMsg("El mínimo no puede ser mayor que el máximo."); return; }
+    try { await rpc("fn_hito_categoria_guardar", { p_categoria: x.categoria, p_efecto: x.efecto, p_min: n(x.monto_min), p_max: n(x.monto_max),
+            p_desde: x.vigente_desde || null, p_hasta: x.vigente_hasta || null, p_activa: x.activa !== false, p_descripcion: x.descripcion || null, p_por: quien });
+          setMsg(`✓ ${x.categoria}: guardada`); setF({ categoria: "", efecto: "informativo", monto_min: "", monto_max: "", vigente_desde: "", vigente_hasta: "", descripcion: "" }); await cargar(); }
+    catch (e) { setMsg("No se pudo guardar: " + e.message); }
+  };
+  if (filas === null) return <div className="mt-card"><div className="mt-tit">Categorías de observación</div>
+    <div className="mt-sub" style={{ color: AMBAR }}>Faltan los SQL de esta pasada (hitos_categorias_cl).</div></div>;
+  return (
+    <div className="mt-card">
+      <div className="mt-tit">Categorías de observación</div>
+      <div className="mt-sub">
+        Son las que ve el supervisor en Hitos Maestro → Observación. El monto es obligatorio y la bitácora no deja registrar
+        uno fuera del rango. Una categoría fuera de su vigencia o inactiva no aparece en la bitácora.
+      </div>
+      {msg && <div className="mt-msg" style={{ color: msg.startsWith("✓") ? VERDE : ROJO }}>{msg}</div>}
+      <div style={{ overflowX: "auto" }}>
+        <table className="mt-tabla" style={{ marginBottom: 12 }}>
+          <thead><tr><th>Categoría</th><th>Efecto en el pago</th><th>Monto mínimo</th><th>Monto máximo</th><th>Vigente desde</th><th>Vigente hasta</th><th>Descripción para el supervisor</th><th>Activa</th></tr></thead>
+          <tbody>
+            {filas.map(x => (
+              <tr key={x.categoria} style={!x.activa ? { opacity: 0.55 } : undefined}>
+                <td style={{ fontWeight: 700, color: NAVY }}>{x.categoria}</td>
+                <td><select className="mt-in" value={x.efecto} onChange={e => guardar({ ...x, efecto: e.target.value })}>
+                  {Object.entries(EFECTOS).map(([k, t]) => <option key={k} value={k}>{t}</option>)}</select></td>
+                <td><input className="mt-in" type="number" min="0" defaultValue={x.monto_min ?? ""} style={{ width: 110 }} placeholder="sin mínimo"
+                           onBlur={e => n(e.target.value) !== n(x.monto_min) && guardar({ ...x, monto_min: e.target.value })} /></td>
+                <td><input className="mt-in" type="number" min="0" defaultValue={x.monto_max ?? ""} style={{ width: 110 }} placeholder="sin tope"
+                           onBlur={e => n(e.target.value) !== n(x.monto_max) && guardar({ ...x, monto_max: e.target.value })} /></td>
+                <td><input className="mt-in" type="date" defaultValue={x.vigente_desde || ""} onBlur={e => e.target.value !== (x.vigente_desde || "") && guardar({ ...x, vigente_desde: e.target.value })} /></td>
+                <td><input className="mt-in" type="date" defaultValue={x.vigente_hasta || ""} onBlur={e => e.target.value !== (x.vigente_hasta || "") && guardar({ ...x, vigente_hasta: e.target.value })} /></td>
+                <td><input className="mt-in" defaultValue={x.descripcion || ""} style={{ minWidth: 220 }} onBlur={e => e.target.value !== (x.descripcion || "") && guardar({ ...x, descripcion: e.target.value })} /></td>
+                <td><input type="checkbox" checked={!!x.activa} onChange={e => guardar({ ...x, activa: e.target.checked })} /></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div style={{ display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap" }}>
+        <label className="mt-lbl">Categoría nueva<input className="mt-in" value={f.categoria} onChange={e => setF({ ...f, categoria: e.target.value })} placeholder="Ej.: Peaje" /></label>
+        <label className="mt-lbl">Efecto<select className="mt-in" value={f.efecto} onChange={e => setF({ ...f, efecto: e.target.value })}>
+          {Object.entries(EFECTOS).map(([k, t]) => <option key={k} value={k}>{t}</option>)}</select></label>
+        <label className="mt-lbl">Mínimo<input className="mt-in" type="number" value={f.monto_min} onChange={e => setF({ ...f, monto_min: e.target.value })} style={{ width: 100 }} /></label>
+        <label className="mt-lbl">Máximo<input className="mt-in" type="number" value={f.monto_max} onChange={e => setF({ ...f, monto_max: e.target.value })} style={{ width: 100 }} /></label>
+        <label className="mt-lbl">Desde<input className="mt-in" type="date" value={f.vigente_desde} onChange={e => setF({ ...f, vigente_desde: e.target.value })} /></label>
+        <label className="mt-lbl">Hasta<input className="mt-in" type="date" value={f.vigente_hasta} onChange={e => setF({ ...f, vigente_hasta: e.target.value })} /></label>
+        <button className="mt-btn pri" disabled={!f.categoria.trim()} onClick={() => guardar({ ...f, categoria: f.categoria.trim(), activa: true })}>Agregar</button>
       </div>
     </div>
   );

@@ -1805,7 +1805,7 @@ function ModuloMaestroCL({ usuario } = {}) {
       : ["lista_pago", ""];
     return { ...r, devol_justificadas: dj, pct_ns: pctNs, origen: "API", ajuste_ai: ajusteAi,
              entr_pago: r.tipo === "colecta" ? null : n(r.entregados) - ajusteAi + n(rec?.cantidad),
-             observacion: obs.map(h => `${h.categoria}${h.afecta ? ` (${h.afecta.toLowerCase()})` : ""} · ${h.texto || ""}`).join(" | ") || null,
+             observacion: obs.map(h => `${h.categoria}${h.afecta ? ` (${h.afecta.toLowerCase()})` : ""}${h.monto_pago != null ? ` · $${Math.round(Number(h.monto_pago)).toLocaleString("es-CL")}` : ""} · ${h.texto || ""}`).join(" | ") || null,
              observacion_por: obs.map(h => `${h.registrado_por || ""} · ${new Date(h.registrado_at).toLocaleString("es-CL", { timeZone: "America/Santiago", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false })}`).join(" | ") || null,
              estado_interno: estInt?.[0] || null, estado_interno_sub: estInt?.[1] || null, n_hitos: hs.length,
              recolectas_ruta: n(rec?.cantidad), recolectas_por: rec?.registrado_por || null, centro_meli: r.cecos, cecos_real: z?.cecos_admin || null,
