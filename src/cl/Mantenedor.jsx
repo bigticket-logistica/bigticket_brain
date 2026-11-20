@@ -86,7 +86,7 @@ const CSS = `
 .mj-chip:hover{border-color:${NAVY};color:${NAVY};}
 `;
 
-const MAESTRO_MANT = [["reemplazos", "↺ Reemplazos"], ["supervisores", "👤 Supervisores y CECO"], ["colectas", "📦 Centros de colecta"],
+const MAESTRO_MANT = [["glosario", "📖 Glosario del Maestro"], ["reemplazos", "↺ Reemplazos"], ["supervisores", "👤 Supervisores y CECO"], ["colectas", "📦 Centros de colecta"],
   ["justif", "⚖️ Justificación de devoluciones"], ["hitos", "💲 Pago de hitos"]];
 
 export default function ModuloMantenedorCL({ usuario } = {}) {
@@ -115,6 +115,7 @@ export default function ModuloMantenedorCL({ usuario } = {}) {
           </div>
         ))}
       </div>
+      {vista === "glosario" && <Glosario />}
       {vista === "reemplazos" && <Reemplazos quien={quien} />}
       {vista === "supervisores" && <Supervisores quien={quien} />}
       {vista === "colectas" && <CentrosColecta quien={quien} />}
@@ -783,6 +784,74 @@ function PagoHitos({ quien }) {
         <label className="mt-lbl">Monto ($)
           <input className="mt-in" type="number" min="0" value={f.monto} onChange={e => setF({ ...f, monto: e.target.value })} style={{ width: 120 }} /></label>
         <button className="mt-btn pri" disabled={f.monto === ""} onClick={() => guardar({ ...f, activo: true })}>Agregar regla</button>
+      </div>
+    </div>
+  );
+}
+
+// ── Glosario del Maestro ───────────────────────────────────────────────────
+// Qué significa cada origen, columna nueva y estado interno, y qué decide si una
+// línea se tarifica sola o queda para el analista. Es la referencia común para
+// administración, analistas y supervisores.
+const GLOSARIO = [
+  { tit: "Origen de la línea", filas: [
+    ["API", "#1E3A6E", "#E8EEF8", "La línea viene de la conexión con el sistema del cliente: MELI (Logistic y First Mile), DispatchTrack en Canon, Driv.in en Rosen. Sus cifras (paradas, cargados, entregados) nunca se editan a mano. ID: el de la ruta del cliente, por ejemplo 73294575."],
+    ["Interno", "#A3440B", "#FDEBDD", "La línea nace en la Bitácora del supervisor porque el cliente no la informa: una ambulancia interna o un sorting. Tiene un ID propio para no mezclarse con las del cliente: 73294575-AI1 (ambulancia 1 de la ruta 73294575) o SORT-SRM1-201126-01."],
+  ]},
+  { tit: "Tipos de línea interna", filas: [
+    ["Ambulancia interna", "#E8651A", "#FFF7F1", "Otro vehículo se lleva parte de la carga de una ruta (la ruta madre). Sus paquetes se RESTAN de la madre: la madre paga sus entregados menos los de la ambulancia y la ambulancia paga los suyos. La suma de ambas nunca supera lo que informa la API. El supervisor consigna el monto acordado y ese monto lo aprueba su jefe."],
+    ["Sorting", "#1E3A6E", "#F4F8FF", "Servicio interno de clasificación en bodega: se paga al transporte, no se cobra al cliente. Cuenta como 1 servicio (paradas, cargados y entregados = 1) y se paga según Mantenedor → Pago de hitos."],
+    ["Observación", "#1D6B45", "#F3FAF6", "Nota del supervisor sobre una ruta API (incidencia, descuento, cobro adicional, pago especial u otro). No cambia las cifras; si es «Pago especial» la ruta pasa a tarificación manual."],
+  ]},
+  { tit: "Columnas nuevas del Maestro", filas: [
+    ["Observación", "#334155", "#F6F8FB", "Observaciones de la bitácora sobre esa ruta, con quién y cuándo."],
+    ["Ajuste AI", "#A82E22", "#FDECEC", "Paquetes que pasan de la ruta madre a sus ambulancias internas: −25 en la madre, +25 en la ambulancia."],
+    ["Entr. pago", "#0D2B52", "#F7F9FC", "Entregados que se pagan: entregados de la API − ambulancias + recolectas en ruta. Es lo que alimenta Maestro Pago con el tarificador de cada CECO."],
+    ["Estado cliente", "#475569", "#EEF2F9", "Lo que informa el cliente (MELI, etc.) sobre la ruta. En las líneas internas va «—»."],
+    ["Estado interno", "#1E3A6E", "#E8EEF8", "En qué paso del proceso de pago está la línea (ver abajo). Decide si se tarifica sola o queda para el analista."],
+  ]},
+  { tit: "Estados internos (qué se tarifica solo)", filas: [
+    ["En ventana", "#1E3A6E", "#E8EEF8", "El supervisor todavía puede editar el hito (24 h desde que lo registró). Todavía no se paga."],
+    ["Por revisar", "#7A4A00", "#FFF1DB", "Algo lo debe revisar el analista antes de pagar: empresa sin certificar, ambulancia sin el ok del jefe, ruta sin tarifa o sin CECO. No se paga hasta resolverlo."],
+    ["Tarificación manual", "#A3440B", "#FDEBDD", "No se tarifica automático: la decide el analista. Por ejemplo, una ruta con observación de «Pago especial»: el analista ingresa el monto en Maestro Pago."],
+    ["Lista para pago", "#1E6B3A", "#E6F4EA", "Pasa automático: el tarificador la valoriza y entra al pago."],
+    ["En prefactura", "#3E4656", "#EEF0F3", "La línea ya se incluyó en una prefactura enviada a la empresa. Ya no cambia."],
+  ]},
+];
+function Glosario() {
+  return (
+    <div>
+      {GLOSARIO.map(g => (
+        <div key={g.tit} className="mt-card">
+          <div className="mt-tit">{g.tit}</div>
+          <table className="mt-tabla" style={{ marginTop: 8 }}>
+            <tbody>
+              {g.filas.map(([t, c, f, d]) => (
+                <tr key={t}>
+                  <td style={{ width: 190, verticalAlign: "top" }}>
+                    <span style={{ display: "inline-block", padding: "3px 9px", borderRadius: 8, fontWeight: 800, fontSize: 12, color: c, background: f }}>{t}</span>
+                  </td>
+                  <td style={{ fontSize: 12.5, color: "#334155", lineHeight: 1.55 }}>{d}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ))}
+      <div className="mt-card">
+        <div className="mt-tit">El camino de una línea</div>
+        <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", fontSize: 12.5, marginTop: 8 }}>
+          {[["En ventana", "#E8EEF8", "#1E3A6E"], ["Por revisar / Tarificación manual", "#FFF1DB", "#7A4A00"], ["Lista para pago", "#E6F4EA", "#1E6B3A"], ["En prefactura", "#EEF0F3", "#3E4656"]]
+            .map(([t, f, c], i) => (
+              <span key={t} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                {i > 0 && <span style={{ color: "#94a3b8" }}>→</span>}
+                <span style={{ padding: "4px 10px", borderRadius: 8, fontWeight: 700, background: f, color: c }}>{t}</span>
+              </span>
+            ))}
+        </div>
+        <div className="mt-sub" style={{ marginTop: 8 }}>
+          Las cifras de la API nunca se editan: los ajustes viven en las líneas internas y en las columnas Ajuste AI y Entr. pago.
+        </div>
       </div>
     </div>
   );

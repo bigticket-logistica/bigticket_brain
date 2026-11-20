@@ -651,7 +651,8 @@ function ModuloMaestroCL({ usuario } = {}) {
   const [hitos, setHitos] = useState([]);                  // Hitos Maestro de la bitácora (sorting, ambulancias, observaciones)
   const [origen, setOrigen] = useState("todos");            // todos | api | internos
   const [pagoHitos, setPagoHitos] = useState({});           // codigo -> { monto, pago, estado_pago } (vw_pago_hitos_cl)
-  const [hitoAbierto, setHitoAbierto] = useState(null);     // codigo del hito con su panel de administración abierto          // id_viaje -> recolectas en ruta UM (Bitácora; se pagan como guía)                // id_viaje -> devoluciones justificadas automáticamente (motivo)        // reemplazos de supervisor por CECO y fechas (Mantenedor)          // todos los días con jornada (la lista de arriba trae solo 60)
+  const [hitoAbierto, setHitoAbierto] = useState(null);     // codigo del hito con su panel de administración abierto
+  const [estPago, setEstPago] = useState({});               // id_viaje -> estado_pago (vw_pago_viaje), para el Estado interno          // id_viaje -> recolectas en ruta UM (Bitácora; se pagan como guía)                // id_viaje -> devoluciones justificadas automáticamente (motivo)        // reemplazos de supervisor por CECO y fechas (Mantenedor)          // todos los días con jornada (la lista de arriba trae solo 60)
   const [kpiAbierto, setKpiAbierto] = useState(null);
   const [recuadre, setRecuadre] = useState(null);
   const [aCuadrar, setACuadrar] = useState([]);
@@ -1791,7 +1792,13 @@ function ModuloMaestroCL({ usuario } = {}) {
     const pctNs = dj > 0 && n(r.cargados) > 0
       ? Math.round(1000 * Math.min(1, (n(r.entregados) + dj) / n(r.cargados))) / 10 : r.pct_entrega;
     const rec = recMap[String(r.id_viaje)];
-    const estInt = !hs.length ? null
+    // Estado interno de una línea API: primero lo que digan sus hitos; si no tiene, lo que diga el pago
+    const ep = estPago[String(r.id_viaje)];
+    const PEND = { "sin tarifa": "Sin tarifa en el Tarifario", "sin resolver": "Sin CECO: revisar zona", "tipo por confirmar": "Tipo de ruta por confirmar" };
+    const estInt = !hs.length
+        ? (ep === "tarificacion manual" ? ["tarificacion_manual", "Pago especial"]
+          : PEND[ep] ? ["por_revisar", PEND[ep]]
+          : ep === "calculado" ? ["lista_pago", ""] : null)
       : ambs.some(h => h.estado === "en_ventana") || obs.some(h => h.estado === "en_ventana") ? ["en_ventana", ambs.some(h => h.estado === "en_ventana") ? "Su ambulancia aún es editable" : "Su observación aún es editable"]
       : obs.some(h => h.estado === "tarificacion_manual") ? ["tarificacion_manual", `Pago especial · ${(obs.find(h => h.estado === "tarificacion_manual").afecta || "").toLowerCase()}`]
       : ambs.some(h => h.estado === "por_revisar") ? ["por_revisar", "Ambulancia sin empresa certificada"]
@@ -1877,6 +1884,8 @@ function ModuloMaestroCL({ usuario } = {}) {
       .then(r => setRecolRuta(Object.fromEntries((r || []).map(x => [String(x.id_ruta), x]))));
     apiSuave(`vw_hitos_maestro_cl?fecha=eq.${fecha}&anulado=eq.false&order=codigo&limit=3000`, [])
       .then(r => setHitos(r || []));
+    apiSuave(`vw_pago_viaje?fecha=eq.${fecha}&select=id_viaje,estado_pago&limit=5000`, [])
+      .then(r => setEstPago(Object.fromEntries((r || []).map(x => [String(x.id_viaje), x.estado_pago]))));
     apiSuave(`vw_pago_hitos_cl?fecha=eq.${fecha}&select=codigo,monto,pago,estado_pago,origen_monto&limit=3000`, [])
       .then(r => setPagoHitos(Object.fromEntries((r || []).map(x => [x.codigo, x]))));
   }, [fecha, jornada]);   // eslint-disable-line react-hooks/exhaustive-deps
