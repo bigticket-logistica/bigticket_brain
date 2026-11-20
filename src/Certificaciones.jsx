@@ -7911,7 +7911,7 @@ function OperandoSinCertificar() {
 
       {filas === null ? (
         <div style={{ padding: 40, textAlign: "center", color: "#94a3b8", fontSize: 13 }}>Revisando la semana… puede tardar unos segundos.</div>
-      ) : empresas.length === 0 ? (
+      ) : error ? null : empresas.length === 0 ? (
         <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10, padding: 36, textAlign: "center", color: "#16a34a", fontSize: 13, fontWeight: 600 }}>
           ✓ Nada operando sin certificar en esta vista.
         </div>
