@@ -692,6 +692,199 @@ function MantBitacoraInd({ quien }) {
   );
 }
 
+// Paso 5 · D-17: contactos de WhatsApp (carga masiva con planilla tipo; después agregar, editar o eliminar de a uno)
+const WA_TIPOS = { supervisor: "Supervisor", empresa: "Empresa", ejecutivo: "Ejecutivo", chofer: "Chofer", otro: "Otro" };
+const WA_COLS = ["TIPO", "NOMBRE", "RUT", "EMPRESA", "RUT EMPRESA", "CECO", "CORREO", "CELULAR", "RECIBE WHATSAPP"];
+function MantContactosWa({ quien }) {
+  const [filas, setFilas] = useState(null);
+  const [f, setF] = useState({ tipo: "", texto: "", sinTel: false });
+  const [ed, setEd] = useState(null);          // contacto en edición (id null = nuevo)
+  const [carga, setCarga] = useState(null);    // { filas, nombre } leídas de la planilla, antes de confirmar
+  const [res, setRes] = useState(null);
+  const [msg, setMsg] = useState("");
+  const [busy, setBusy] = useState(false);
+  const cargar = () => api("ca_wa_contactos_cl?select=*&order=tipo,nombre&limit=5000").then(setFilas).catch(() => setFilas([]));
+  useEffect(() => { cargar(); }, []);
+  const plantilla = async () => {
+    const XLSX = await cargarSheetJS();
+    const ej = [
+      ["Supervisor", "Leonardo Castro Toloza", "12.345.678-9", "", "", "ML_RM_SRM1, ML_RM_SRM2", "lcastro@bigticket.cl", "+56 9 1234 5678", "SÍ"],
+      ["Empresa", "Transportes Pérez", "76.123.456-7", "", "", "", "contacto@transportesperez.cl", "9 8765 4321", "SÍ"],
+      ["Ejecutivo", "Maycol Olavarría", "", "", "", "", "maycol.olavarria@bigticket.cl", "+56 9 5555 4444", "SÍ"],
+      ["Chofer", "Juan Soto", "15.111.222-3", "Transportes Pérez", "76.123.456-7", "", "", "9 7777 6666", "SÍ"],
+    ];
+    const ws = XLSX.utils.aoa_to_sheet([WA_COLS, ...ej]);
+    ws["!cols"] = [12, 28, 14, 22, 14, 26, 30, 18, 16].map((w) => ({ wch: w }));
+    const ins = XLSX.utils.aoa_to_sheet([["Cómo llenar la planilla"], [""],
+      ["TIPO: Supervisor, Empresa, Ejecutivo o Chofer (obligatorio)."], ["NOMBRE: nombre de la persona o razón social (obligatorio)."],
+      ["CELULAR: con o sin +56 (por ejemplo 9 1234 5678 o +56 9 1234 5678) (obligatorio)."], ["CECO: solo supervisores; si son varios, sepáralos con coma."],
+      ["EMPRESA y RUT EMPRESA: solo choferes (la empresa a la que pertenecen)."], ["RECIBE WHATSAPP: SÍ o NO (si se deja vacío, SÍ)."],
+      [""], ["Si el contacto ya existe (mismo tipo y mismo celular), se actualiza; si no, se agrega."], ["Borra las filas de ejemplo antes de cargar."]]);
+    ins["!cols"] = [{ wch: 90 }];
+    const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, "Contactos"); XLSX.utils.book_append_sheet(wb, ins, "Instrucciones");
+    XLSX.writeFile(wb, "Contactos_WhatsApp_plantilla.xlsx");
+  };
+  const exportar = async () => {
+    const XLSX = await cargarSheetJS();
+    const ws = XLSX.utils.aoa_to_sheet([WA_COLS, ...(filas || []).map((x) => [WA_TIPOS[x.tipo] || x.tipo, x.nombre, x.rut || "", x.empresa || "", x.empresa_rut || "", (x.cecos || []).join(", "), x.correo || "", x.telefono, x.recibe ? "SÍ" : "NO"])]);
+    const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, "Contactos"); XLSX.writeFile(wb, `Contactos_WhatsApp_${hoyCL()}.xlsx`);
+  };
+  const leer = async (file) => {
+    setRes(null); setMsg("");
+    try {
+      const XLSX = await cargarSheetJS();
+      const wb = XLSX.read(await file.arrayBuffer(), { type: "array" });
+      const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: "" });
+      const norm = (o, k) => { const key = Object.keys(o).find((x) => x.trim().toUpperCase() === k); return key ? String(o[key]).trim() : ""; };
+      const out = rows.map((o) => ({ tipo: norm(o, "TIPO"), nombre: norm(o, "NOMBRE"), rut: norm(o, "RUT"), empresa: norm(o, "EMPRESA"), empresa_rut: norm(o, "RUT EMPRESA"),
+        cecos: norm(o, "CECO"), correo: norm(o, "CORREO"), telefono: norm(o, "CELULAR"), recibe: !/^no$/i.test(norm(o, "RECIBE WHATSAPP")) }))
+        .filter((x) => x.nombre || x.telefono);
+      if (!out.length) { setMsg("La planilla no tiene filas con datos (revisa que la primera hoja tenga los encabezados de la planilla tipo)."); return; }
+      setCarga({ filas: out, nombre: file.name });
+    } catch (e) { setMsg(`No se pudo leer la planilla: ${e.message}`); }
+  };
+  const confirmar = async () => {
+    setBusy(true);
+    try { const r = await rpc("fn_wa_contactos_cargar", { p_filas: carga.filas, p_por: quien }); setRes(r); setCarga(null); cargar(); } catch (e) { setMsg(e.message); } finally { setBusy(false); }
+  };
+  const guardar = async () => {
+    setBusy(true); setMsg("");
+    try { await rpc("fn_wa_contacto_guardar", { p_id: ed.id || null, p_datos: { ...ed, cecos: Array.isArray(ed.cecos) ? ed.cecos.join(", ") : ed.cecos }, p_por: quien }); setEd(null); setMsg("Guardado"); cargar(); }
+    catch (e) { setMsg(e.message); } finally { setBusy(false); }
+  };
+  const borrar = async (x) => { if (!window.confirm(`¿Eliminar a ${x.nombre} (${x.telefono}) de los contactos de WhatsApp?`)) return; try { await rpc("fn_wa_contacto_borrar", { p_id: x.id, p_por: quien }); cargar(); } catch (e) { alert(e.message); } };
+  if (filas === null) return <div style={{ color: C.tenue }}>Cargando…</div>;
+  const vis = filas.filter((x) => (!f.tipo || x.tipo === f.tipo) && (!f.texto || `${x.nombre} ${x.rut || ""} ${x.empresa || ""} ${x.telefono} ${(x.cecos || []).join(" ")} ${x.correo || ""}`.toLowerCase().includes(f.texto.toLowerCase())));
+  const celda = { padding: "6px 9px", borderBottom: `1px solid ${C.borde}`, fontSize: 12.5, verticalAlign: "top" };
+  const campo = (k, t, w = 170) => <label style={{ fontSize: 12, color: C.suave, display: "flex", flexDirection: "column", gap: 2 }}>{t}<input style={{ ...inp, width: w }} value={Array.isArray(ed[k]) ? ed[k].join(", ") : (ed[k] ?? "")} onChange={(e) => setEd({ ...ed, [k]: e.target.value })} /></label>;
+  return (
+    <div>
+      <div style={{ fontSize: 12, color: C.tenue, marginBottom: 10 }}>Celulares de quienes reciben los WhatsApp de Cuidado de Activo. Carga masiva con la planilla tipo; después puedes agregar, editar o eliminar de a uno, o volver a cargar (un contacto se reconoce por tipo y celular). Mientras el sistema esté en modo prueba, los mensajes llegan solo al número de prueba.</div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 10 }}>
+        <button style={btn("sec")} onClick={plantilla}>Descargar planilla tipo</button>
+        <label style={{ ...btn(), display: "inline-block", cursor: "pointer" }}>Cargar planilla<input type="file" accept=".xlsx,.xls,.csv" style={{ display: "none" }} onChange={(e) => { const x = e.target.files?.[0]; e.target.value = ""; x && leer(x); }} /></label>
+        <button style={btn("sec")} onClick={() => setEd({ id: null, tipo: "supervisor", nombre: "", rut: "", empresa: "", empresa_rut: "", cecos: "", correo: "", telefono: "", recibe: true })}>+ Agregar contacto</button>
+        <button style={btn("sec")} onClick={exportar}>Exportar a Excel</button>
+        {msg && <span style={{ fontSize: 12.5, color: msg === "Guardado" ? C.verde : C.rojo }}>{msg}</span>}
+      </div>
+      {carga && (
+        <div style={{ background: C.ambarT, borderRadius: 10, padding: 12, marginBottom: 12 }}>
+          <b>{carga.nombre}</b>: {carga.filas.length} contactos para cargar ({Object.entries(carga.filas.reduce((m, x) => { const t = (x.tipo || "sin tipo").toLowerCase(); m[t] = (m[t] || 0) + 1; return m; }, {})).map(([t, n]) => `${n} ${t}`).join(", ")}).
+          <div style={{ marginTop: 8, display: "flex", gap: 8 }}><button style={btn()} disabled={busy} onClick={confirmar}>{busy ? "Cargando…" : "Confirmar carga"}</button><button style={btn("sec")} onClick={() => setCarga(null)}>Cancelar</button></div>
+        </div>
+      )}
+      {res && (
+        <div style={{ background: res.errores?.length ? C.ambarT : C.verdeT, borderRadius: 10, padding: 12, marginBottom: 12, fontSize: 12.5 }}>
+          <b>{res.guardados} contactos guardados.</b>{res.errores?.length ? ` ${res.errores.length} filas con error:` : ""}
+          {(res.errores || []).map((e, i) => <div key={i}>Fila {e.fila}{e.nombre ? ` (${e.nombre})` : ""}: {e.error}</div>)}
+        </div>
+      )}
+      {ed && (
+        <div style={{ background: "#fff", border: `1px solid ${C.navy}`, borderRadius: 10, padding: 12, marginBottom: 12 }}>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end" }}>
+            <label style={{ fontSize: 12, color: C.suave, display: "flex", flexDirection: "column", gap: 2 }}>Tipo<select style={inp} value={ed.tipo} onChange={(e) => setEd({ ...ed, tipo: e.target.value })}>{Object.entries(WA_TIPOS).map(([k, t]) => <option key={k} value={k}>{t}</option>)}</select></label>
+            {campo("nombre", "Nombre", 220)}{campo("telefono", "Celular", 150)}{campo("rut", "RUT", 120)}{campo("correo", "Correo", 220)}
+            {ed.tipo === "supervisor" && campo("cecos", "CECO (separados por coma)", 240)}
+            {ed.tipo === "chofer" && <>{campo("empresa", "Empresa", 200)}{campo("empresa_rut", "RUT empresa", 120)}</>}
+            <label style={{ fontSize: 12, color: C.suave, display: "flex", alignItems: "center", gap: 6 }}><input type="checkbox" checked={!!ed.recibe} onChange={(e) => setEd({ ...ed, recibe: e.target.checked })} /> Recibe WhatsApp</label>
+            <button style={btn()} disabled={busy} onClick={guardar}>{busy ? "Guardando…" : "Guardar"}</button><button style={btn("sec")} onClick={() => setEd(null)}>Cancelar</button>
+          </div>
+        </div>
+      )}
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 10 }}>
+        <select style={inp} value={f.tipo} onChange={(e) => setF({ ...f, tipo: e.target.value })}><option value="">Todos ({filas.length})</option>{Object.entries(WA_TIPOS).map(([k, t]) => <option key={k} value={k}>{t} ({filas.filter((x) => x.tipo === k).length})</option>)}</select>
+        <input style={{ ...inp, minWidth: 240 }} placeholder="Nombre, RUT, empresa, CECO o celular" value={f.texto} onChange={(e) => setF({ ...f, texto: e.target.value })} />
+      </div>
+      <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 900 }}>
+          <thead><tr style={{ background: C.fondo, textAlign: "left" }}>{["Tipo", "Nombre", "Celular", "RUT", "Empresa / CECO", "Correo", "Recibe", ""].map((h) => <th key={h} style={{ ...celda, color: C.suave }}>{h}</th>)}</tr></thead>
+          <tbody>
+            {vis.length === 0 && <tr><td colSpan={8} style={{ ...celda, color: C.tenue, textAlign: "center" }}>Sin contactos. Descarga la planilla tipo, llénala y cárgala.</td></tr>}
+            {vis.map((x) => (
+              <tr key={x.id} style={{ opacity: x.recibe ? 1 : 0.5 }}>
+                <td style={celda}>{WA_TIPOS[x.tipo] || x.tipo}</td><td style={celda}><b>{x.nombre}</b>{x.origen !== "manual" && <div style={{ color: C.tenue, fontSize: 11 }}>{x.origen === "portal" ? "desde el portal" : "planilla"}</div>}</td>
+                <td style={celda}>+{x.telefono}</td><td style={celda}>{x.rut || "—"}</td>
+                <td style={celda}>{x.tipo === "supervisor" ? (x.cecos || []).join(", ") || "—" : x.empresa || "—"}</td><td style={celda}>{x.correo || "—"}</td>
+                <td style={celda}>{x.recibe ? "Sí" : "No"}</td>
+                <td style={{ ...celda, whiteSpace: "nowrap" }}><a href="#" style={{ color: C.navy, marginRight: 8 }} onClick={(e) => { e.preventDefault(); setEd({ ...x, cecos: (x.cecos || []).join(", ") }); }}>Editar</a><a href="#" style={{ color: C.rojo }} onClick={(e) => { e.preventDefault(); borrar(x); }}>Eliminar</a></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// Paso 5 · Plantillas de WhatsApp: aprobada en Meta (sin eso no sale) y activa (encender o apagar cada una)
+const WA_DEST = { supervisor: "Supervisor (por CECO)", empresa: "Empresa y chofer de la patente", ejecutivo: "Ejecutivo de Cuidado de Activo" };
+function MantPlantillasWa({ quien }) {
+  const [filas, setFilas] = useState(null);
+  const [cfg, setCfg] = useState({});
+  const cargar = () => api("ca_wa_plantillas_cl?select=*&order=codigo").then(setFilas).catch(() => setFilas([]));
+  useEffect(() => { cargar(); api("ca_config_cl?clave=in.(wa_modo,wa_prueba,wa_recordatorio_h,wa_doc_dias,correo_silencio_desde,correo_silencio_hasta)&select=clave,valor").then((r) => setCfg(Object.fromEntries((r || []).map((x) => [x.clave, x.valor])))).catch(() => {}); }, []);
+  const guardar = async (c, campo, v) => { try { await rpc("fn_wa_plantilla_guardar", { p_codigo: c, p_campo: campo, p_valor: v, p_por: quien }); cargar(); } catch (e) { alert(e.message); } };
+  if (filas === null) return <div style={{ color: C.tenue }}>Cargando…</div>;
+  return (
+    <div>
+      <div style={{ background: cfg.wa_modo === "activo" ? C.verdeT : C.ambarT, color: cfg.wa_modo === "activo" ? C.verde : C.ambar, borderRadius: 8, padding: "8px 12px", fontSize: 12.5, marginBottom: 10 }}>
+        WhatsApp en modo <b>{cfg.wa_modo || "prueba"}</b>{cfg.wa_modo !== "activo" ? ` — todo llega solo al número de prueba (+${cfg.wa_prueba || "sin número"})` : ""}. Recordatorio de tareas {cfg.wa_recordatorio_h || 4} h antes · documentos {cfg.wa_doc_dias || "30,15,7"} días antes · silencio de {cfg.correo_silencio_desde || "21:00"} a {cfg.correo_silencio_hasta || "07:00"}. Se cambian en Parámetros.
+      </div>
+      <div style={{ fontSize: 12, color: C.tenue, marginBottom: 10 }}>Cada plantilla se crea en Meta (business.facebook.com › Plantillas de mensajes) con el nombre y el texto exactos. Cuando Meta la apruebe, marca «Aprobada»; sin eso no se envía. «Activa» enciende o apaga ese aviso.</div>
+      {filas.filter((x) => x.codigo !== "prueba").map((x) => (
+        <div key={x.codigo} style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, padding: 12, marginBottom: 10, opacity: x.activa ? 1 : 0.6 }}>
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center", justifyContent: "space-between" }}>
+            <div><b style={{ color: C.navy }}>{x.descripcion}</b><div style={{ fontSize: 12, color: C.suave }}>Nombre en Meta: <code>{x.nombre_meta}</code> · {x.parametros} variables · {WA_DEST[x.destinatario] || x.destinatario || "—"}</div></div>
+            <div style={{ display: "flex", gap: 14, fontSize: 12.5 }}>
+              <label style={{ display: "flex", gap: 5, alignItems: "center" }}><input type="checkbox" checked={!!x.aprobada} onChange={(e) => guardar(x.codigo, "aprobada", e.target.checked)} /> Aprobada en Meta</label>
+              <label style={{ display: "flex", gap: 5, alignItems: "center" }}><input type="checkbox" checked={!!x.activa} onChange={(e) => guardar(x.codigo, "activa", e.target.checked)} /> Activa</label>
+            </div>
+          </div>
+          {x.ejemplo && <div style={{ fontSize: 12.5, color: C.texto, marginTop: 8, background: C.fondo, borderRadius: 8, padding: "8px 10px", whiteSpace: "pre-line" }}>{x.ejemplo}</div>}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// Registro de envíos: qué salió, a quién, qué falló y por qué (incluye «Falta la dirección del taller»)
+const WA_EST = { pendiente: ["Pendiente", C.ambarT, C.ambar], enviado: ["Enviado", C.verdeT, C.verde], error: ["Error", C.rojoT, C.rojo], omitido: ["No enviado", C.fondo, C.suave] };
+function EnviosWa() {
+  const [filas, setFilas] = useState(null);
+  const [f, setF] = useState({ estado: "", texto: "", desde: "", hasta: "" });
+  const cargar = () => api("ca_wa_cola_cl?select=*&order=creado_at.desc&limit=2000").then(setFilas).catch(() => setFilas([]));
+  useEffect(() => { cargar(); }, []);
+  if (filas === null) return <div style={{ color: C.tenue }}>Cargando…</div>;
+  const vis = filas.filter((x) => (!f.estado || x.estado === f.estado) && enPeriodo(x.creado_at, f) && (!f.texto || `${x.plantilla} ${x.destinatario_nombre || ""} ${x.telefono} ${x.origen || ""} ${x.error || ""}`.toLowerCase().includes(f.texto.toLowerCase())));
+  const celda = { padding: "6px 9px", borderBottom: `1px solid ${C.borde}`, fontSize: 12.5, verticalAlign: "top" };
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 10 }}>
+        <select style={inp} value={f.estado} onChange={(e) => setF({ ...f, estado: e.target.value })}><option value="">Todos</option>{Object.entries(WA_EST).map(([k, e]) => <option key={k} value={k}>{e[0]} ({filas.filter((x) => x.estado === k).length})</option>)}</select>
+        <Periodo f={f} setF={setF} />
+        <input style={{ ...inp, minWidth: 220 }} placeholder="Plantilla, destinatario, celular o error" value={f.texto} onChange={(e) => setF({ ...f, texto: e.target.value })} />
+        <button style={btn("sec")} onClick={cargar}>Actualizar</button>
+      </div>
+      <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 900 }}>
+          <thead><tr style={{ background: C.fondo, textAlign: "left" }}>{["Fecha", "Plantilla", "Para", "Estado", "Detalle"].map((h) => <th key={h} style={{ ...celda, color: C.suave }}>{h}</th>)}</tr></thead>
+          <tbody>
+            {vis.length === 0 && <tr><td colSpan={5} style={{ ...celda, color: C.tenue, textAlign: "center" }}>Sin envíos con este filtro.</td></tr>}
+            {vis.map((x) => { const e = WA_EST[x.estado] || [x.estado, C.fondo, C.suave]; return (
+              <tr key={x.id}>
+                <td style={celda}>{fh(x.creado_at)}</td><td style={celda}>{x.plantilla}<div style={{ color: C.tenue, fontSize: 11 }}>{x.origen || ""}</div></td>
+                <td style={celda}>{x.destinatario_nombre || "—"}<div style={{ color: C.tenue, fontSize: 11 }}>{x.telefono !== "-" ? "+" + x.telefono : ""}</div></td>
+                <td style={celda}>{chip(e[0], e[1], e[2])}{x.estado_meta && <div style={{ color: C.tenue, fontSize: 11 }}>Meta: {{ sent: "enviado", delivered: "entregado", read: "leído", failed: "fallido" }[x.estado_meta] || x.estado_meta}</div>}</td>
+                <td style={{ ...celda, maxWidth: 420 }}>{x.error || x.error_meta || (x.enviado_a ? `Enviado a +${x.enviado_a}` : "")}</td>
+              </tr>
+            ); })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 function MantFormularios({ quien }) {
   const [forms, setForms] = useState([]);
   const [form, setForm] = useState("largo");
@@ -1774,6 +1967,7 @@ function PautasMnt({ quien }) {
 }
 function TalleresMnt({ quien }) {
   const [t, setT] = useState(null);
+  const [sinDir, setSinDir] = useState(false);
   const [nuevo, setNuevo] = useState("");
   const [msg, setMsg] = useState("");
   const cargar = () => api("ca_mnt_talleres_cl?select=*&order=nombre").then(setT).catch(() => setT([]));
@@ -1786,12 +1980,13 @@ function TalleresMnt({ quien }) {
   const cols = [["direccion", "Dirección", 240], ["comuna", "Comuna", 120], ["contacto", "Contacto", 150], ["telefono", "Teléfono", 120], ["correo", "Correo", 180], ["canal", "Canal de agenda", 140]];
   return (
     <div>
-      <div style={{ fontSize: 12.5, color: C.suave, marginBottom: 10 }}>La dirección y el contacto van en la tarea al supervisor y en el aviso al transportista cuando toca una mantención.</div>
+      <div style={{ fontSize: 12.5, color: C.suave, marginBottom: 10 }}>La dirección y el contacto van en la tarea al supervisor, en el aviso al transportista cuando toca una mantención y en el WhatsApp de cita en taller (sin dirección, ese WhatsApp no se envía).</div>
+      <label style={{ fontSize: 12.5, display: "flex", gap: 6, alignItems: "center", marginBottom: 10 }}><input type="checkbox" checked={sinDir} onChange={(e) => setSinDir(e.target.checked)} /> Sin dirección ({(t || []).filter((x) => x.activo && !String(x.direccion || "").trim()).length})</label>
       <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, overflowX: "auto" }}>
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 1100 }}>
           <thead><tr style={{ background: C.fondo, textAlign: "left" }}>{["Taller", ...cols.map((c) => c[1]), "Activo"].map((h) => <th key={h} style={{ padding: "8px 10px", color: C.suave, fontSize: 12 }}>{h}</th>)}</tr></thead>
           <tbody>
-            {(t || []).map((x) => (
+            {(t || []).filter((x) => !sinDir || (x.activo && !String(x.direccion || "").trim())).map((x) => (
               <tr key={x.nombre} style={{ borderTop: `1px solid ${C.borde}`, opacity: x.activo ? 1 : 0.5 }}>
                 <td style={{ padding: "8px 10px", fontWeight: 700 }}>{x.nombre}</td>
                 {cols.map(([k, , w]) => <td key={k} style={{ padding: "6px 8px" }}><input style={{ ...inp, width: w }} defaultValue={x[k] || ""} onBlur={(e) => e.target.value !== (x[k] || "") && guardar(x.nombre, k, e.target.value)} /></td>)}
@@ -4482,11 +4677,11 @@ function Mantenedores({ quien, rol }) {
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 14 }}>
         {[["config", "Parámetros"], ["componentes", "Componentes del gasto"], ["proveedores", "Proveedores"], ["multas", "Multas (Anexo III)"],
           ["aud_form", "Formularios de auditoría"], ["aud_tipos", "Tipos de auditoría"], ["feriados", "Feriados"], ["eventos", "Avisos por evento"],
-          ["fleetup", "Alertas de cámara (español)"], ["bit_ind", "Indicadores de la bitácora"]].map(([k, t]) => <button key={k} style={btn(vista === k ? undefined : "sec")} onClick={() => setVista(k)}>{t}</button>)}
+          ["fleetup", "Alertas de cámara (español)"], ["bit_ind", "Indicadores de la bitácora"], ["wa_contactos", "Contactos de WhatsApp"], ["wa_plantillas", "Plantillas de WhatsApp"], ["wa_envios", "Envíos de WhatsApp"]].map(([k, t]) => <button key={k} style={btn(vista === k ? undefined : "sec")} onClick={() => setVista(k)}>{t}</button>)}
       </div>
       {vista === "config" ? <MantParametros quien={quien} /> : vista === "componentes" ? <MantComponentes quien={quien} /> : vista === "proveedores" ? <Proveedores quien={quien} /> :
         vista === "aud_form" ? <MantFormularios quien={quien} /> : vista === "aud_tipos" ? <MantTiposAud quien={quien} /> : vista === "feriados" ? <MantFeriados quien={quien} /> :
-        vista === "eventos" ? <MantEventos quien={quien} /> : vista === "fleetup" ? <MantFleetupTipos quien={quien} /> : vista === "bit_ind" ? <MantBitacoraInd quien={quien} /> : <MultasAnexo quien={quien} puede={puede} />}
+        vista === "eventos" ? <MantEventos quien={quien} /> : vista === "fleetup" ? <MantFleetupTipos quien={quien} /> : vista === "bit_ind" ? <MantBitacoraInd quien={quien} /> : vista === "wa_contactos" ? <MantContactosWa quien={quien} /> : vista === "wa_plantillas" ? <MantPlantillasWa quien={quien} /> : vista === "wa_envios" ? <EnviosWa /> : <MultasAnexo quien={quien} puede={puede} />}
       <div style={{ fontSize: 12, color: C.tenue, marginTop: 12 }}>También se editan: pautas, vida útil y talleres en Mantenciones; tipos de tarea, justificaciones y correos en Configuración; reglas en el Centro de alertas; CECO y supervisor en Maestro Operaciones.</div>
     </div>
   );
