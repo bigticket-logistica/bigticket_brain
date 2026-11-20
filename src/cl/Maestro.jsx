@@ -399,20 +399,64 @@ const internasCSV = (hs, jornadaFilas, supDe) => hs.filter(h => !h.anulado && h.
            entr_pago: amb ? h.entregados : 1, pct_ns: amb ? (n(h.cargados) ? Math.round(1000 * n(h.entregados) / n(h.cargados)) / 10 : null) : 100,
            observacion: [h.motivo, h.texto].filter(Boolean).join(" · "), estado_interno: h.estado };
 });
+// Administración de un hito desde el Brain (después de la ventana de 24 h)
+function PanelHito({ h, pago, quien, onListo }) {
+  const [monto, setMonto] = useState(h.monto_pago ?? "");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+  const enviar = async (cambios, txt) => {
+    setBusy(true); setMsg("");
+    try { await api("rpc/fn_hito_admin", { method: "POST", body: JSON.stringify({ p_codigo: h.codigo, p_monto: null, p_revisado: null, p_anulado: null, p_por: quien, ...cambios }) });
+          setMsg("✓ " + txt); onListo && onListo(); }
+    catch (e) { setMsg("No se pudo guardar: " + e.message); } finally { setBusy(false); }
+  };
+  return (
+    <div style={{ fontSize: 12, color: "#334155", display: "flex", flexDirection: "column", gap: 8 }}>
+      <div><b style={{ color: NAVY }}>{h.codigo}</b> · registrado por {h.registrado_por || "—"}
+        {h.actualizado_por ? ` · último cambio ${h.actualizado_por}` : ""}
+        {pago && <> · pago: <b>{pago.estado_pago}</b>{pago.monto != null ? ` · $${Math.round(Number(pago.monto)).toLocaleString("es-CL")}` : ""}
+          {pago.origen_monto ? ` (${pago.origen_monto})` : ""}</>}</div>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <span>Valor a pagar ($)</span>
+        <input className="mj-input" type="number" min="0" value={monto} onChange={e => setMonto(e.target.value)} style={{ width: 130 }}
+               placeholder={h.tipo === "sorting" ? "Según el Mantenedor" : "Monto"} />
+        <button className="mj-btn" disabled={busy || monto === ""} onClick={() => enviar({ p_monto: Number(monto) }, "Valor guardado")}>Guardar valor</button>
+        {h.tipo === "sorting" && <span style={{ color: "#94a3b8" }}>Vacío = se paga según el Mantenedor (Pago de hitos)</span>}
+      </div>
+      {!h.empresa_certificada && (
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <span style={{ color: "#8A2F12" }}>La patente {h.patente} no tiene empresa certificada en Certronic.</span>
+          {h.revisado
+            ? <span style={{ color: "#0d8043" }}>✓ Revisado por {h.revisado_por}</span>
+            : <button className="mj-btn" disabled={busy} onClick={() => enviar({ p_revisado: true }, "Marcado como revisado: ya se puede pagar")}>Marcar revisado y liberar pago</button>}
+        </div>
+      )}
+      <div>
+        <button className="mj-btn" disabled={busy} style={{ borderColor: "#b42318", color: "#b42318" }}
+                onClick={() => window.confirm(`¿Anular ${h.codigo}? Deja de mostrarse y de pagarse; la ruta madre vuelve a pagar sus entregados completos.`) && enviar({ p_anulado: true }, "Hito anulado")}>Anular hito</button>
+      </div>
+      {msg && <div style={{ color: msg.startsWith("✓") ? "#0d8043" : "#b42318" }}>{msg}</div>}
+    </div>
+  );
+}
 const ventanaTxt = (h) => {
   const ms = new Date(h.editable_hasta) - new Date();
   if (ms <= 0) return "";
   return `Quedan ${Math.floor(ms / 3600000)} h ${String(Math.floor((ms % 3600000) / 60000)).padStart(2, "0")} min`;
 };
 // Una ambulancia (bajo su ruta madre) o un sorting, con las mismas 28 columnas de la Jornada
-function FilaInterna({ h, madre, supervisor }) {
+function FilaInterna({ h, madre, supervisor, pago, abierto, onAbrir }) {
   const amb = h.tipo === "ambulancia";
   const sinCert = !h.empresa_certificada;
   const gris = <span style={{ color: "#cbd5e1" }}>—</span>;
   const sub = h.estado === "en_ventana" ? ventanaTxt(h) : h.estado === "por_revisar" ? "Empresa sin certificar" : "";
   return (
     <tr style={{ background: sinCert ? "#FFF6E8" : "#FFF8F2" }}>
-      <td style={{ fontWeight: 700, color: "#A3440B", whiteSpace: "nowrap" }}>{amb ? `↳ ${h.codigo}` : h.codigo}</td>
+      <td style={{ fontWeight: 700, color: "#A3440B", whiteSpace: "nowrap" }}>
+        <button onClick={onAbrir} title="Ver y administrar el hito: valor a pagar, revisión de empresa, anular"
+                style={{ border: 0, background: "none", padding: 0, font: "inherit", color: "inherit", cursor: "pointer", textDecoration: "underline dotted" }}>
+          {abierto ? "▾ " : ""}{amb ? `↳ ${h.codigo}` : h.codigo}</button>
+      </td>
       <td><Etiqueta texto="Interno" color="#A3440B" fondo="#FDEBDD" /></td>
       <td>{madre?.centro_meli ? <Etiqueta texto={madre.centro_meli} color="#64748b" fondo="#f1f5f9" /> : gris}</td>
       <td><Etiqueta texto={h.ceco} /></td>
@@ -430,7 +474,12 @@ function FilaInterna({ h, madre, supervisor }) {
       <td className="num" style={{ fontWeight: 700 }}>{fmt(h.cargados)}</td>
       <td className="num" style={{ color: "#0d8043", fontWeight: 700 }}>{fmt(h.entregados)}</td>
       <td className="num" style={{ color: "#A3440B", fontWeight: 700 }}>{amb ? `+${fmt(h.entregados)}` : "—"}</td>
-      <td className="num" style={{ fontWeight: 700 }}>{amb ? fmt(h.entregados) : "1 serv."}</td>
+      <td className="num" style={{ fontWeight: 700 }}>
+        {amb ? fmt(h.entregados) : "1 serv."}
+        {pago && <div style={{ fontSize: 10.5, fontWeight: 600, color: pago.estado_pago === "calculado" ? "#0d8043" : "#94a3b8" }}
+                      title={`Estado de pago: ${pago.estado_pago}${pago.origen_monto ? ` · valor ${pago.origen_monto}` : ""}`}>
+          {pago.monto != null ? "$" + Math.round(Number(pago.monto)).toLocaleString("es-CL") : "sin valor"}</div>}
+      </td>
       <td className="num">{gris}</td><td className="num">{gris}</td>
       <td className="num" style={{ fontWeight: 700, color: "#0d8043" }}>
         {amb ? (n(h.cargados) ? `${Math.round(1000 * n(h.entregados) / n(h.cargados)) / 10}%` : "—") : "100%"}</td>
@@ -580,7 +629,9 @@ function ModuloMaestroCL({ usuario } = {}) {
   const [justif, setJustif] = useState({});
   const [recolRuta, setRecolRuta] = useState({});
   const [hitos, setHitos] = useState([]);                  // Hitos Maestro de la bitácora (sorting, ambulancias, observaciones)
-  const [origen, setOrigen] = useState("todos");            // todos | api | internos          // id_viaje -> recolectas en ruta UM (Bitácora; se pagan como guía)                // id_viaje -> devoluciones justificadas automáticamente (motivo)        // reemplazos de supervisor por CECO y fechas (Mantenedor)          // todos los días con jornada (la lista de arriba trae solo 60)
+  const [origen, setOrigen] = useState("todos");            // todos | api | internos
+  const [pagoHitos, setPagoHitos] = useState({});           // codigo -> { monto, pago, estado_pago } (vw_pago_hitos_cl)
+  const [hitoAbierto, setHitoAbierto] = useState(null);     // codigo del hito con su panel de administración abierto          // id_viaje -> recolectas en ruta UM (Bitácora; se pagan como guía)                // id_viaje -> devoluciones justificadas automáticamente (motivo)        // reemplazos de supervisor por CECO y fechas (Mantenedor)          // todos los días con jornada (la lista de arriba trae solo 60)
   const [kpiAbierto, setKpiAbierto] = useState(null);
   const [recuadre, setRecuadre] = useState(null);
   const [aCuadrar, setACuadrar] = useState([]);
@@ -1796,6 +1847,8 @@ function ModuloMaestroCL({ usuario } = {}) {
       .then(r => setRecolRuta(Object.fromEntries((r || []).map(x => [String(x.id_ruta), x]))));
     apiSuave(`vw_hitos_maestro_cl?fecha=eq.${fecha}&anulado=eq.false&order=codigo&limit=3000`, [])
       .then(r => setHitos(r || []));
+    apiSuave(`vw_pago_hitos_cl?fecha=eq.${fecha}&select=codigo,monto,pago,estado_pago,origen_monto&limit=3000`, [])
+      .then(r => setPagoHitos(Object.fromEntries((r || []).map(x => [x.codigo, x]))));
   }, [fecha, jornada]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   // Abre el detalle de una colecta debajo de su fila; lo lee de colectas_dia la primera vez.
@@ -2495,7 +2548,18 @@ function ModuloMaestroCL({ usuario } = {}) {
                         <td><EstadoInterno e={r.estado_interno} sub={r.estado_interno_sub} /></td>
                       </tr>
                       {origen !== "api" && hitos.filter(h => h.tipo === "ambulancia" && String(h.id_ruta_madre) === String(r.id_viaje))
-                        .map(h => <FilaInterna key={h.codigo} h={h} madre={r} />)}
+                        .map(h => (
+                          <Fragment key={h.codigo}>
+                            <FilaInterna h={h} madre={r} pago={pagoHitos[h.codigo]} abierto={hitoAbierto === h.codigo}
+                                         onAbrir={() => setHitoAbierto(hitoAbierto === h.codigo ? null : h.codigo)} />
+                            {hitoAbierto === h.codigo && (
+                              <tr><td colSpan={28} style={{ background: "#FFF4EC", padding: "10px 14px 14px" }}>
+                                <PanelHito h={h} pago={pagoHitos[h.codigo]} quien={usuario?.nombre || usuario?.email || "analista"}
+                                           onListo={async () => { setHitoAbierto(null); await recargar(); }} />
+                              </td></tr>
+                            )}
+                          </Fragment>
+                        ))}
                       {r.tipo !== "colecta" && devAbierta === String(r.id_viaje) && (
                         <tr>
                           <td colSpan={28} style={{ background: "#fdf6f5", padding: "10px 14px 14px", borderBottom: "2px solid #f3d4cf" }}>
@@ -2513,8 +2577,17 @@ function ModuloMaestroCL({ usuario } = {}) {
                       </Fragment>
                     ))}
                     {origen !== "api" && sortVista.map(h => (
-                      <FilaInterna key={h.codigo} h={h}
-                                   supervisor={reemplazoDe(h.ceco, h.fecha)?.supervisor_maestro || supCeco[h.ceco] || null} />
+                      <Fragment key={h.codigo}>
+                        <FilaInterna h={h} pago={pagoHitos[h.codigo]} abierto={hitoAbierto === h.codigo}
+                                     onAbrir={() => setHitoAbierto(hitoAbierto === h.codigo ? null : h.codigo)}
+                                     supervisor={reemplazoDe(h.ceco, h.fecha)?.supervisor_maestro || supCeco[h.ceco] || null} />
+                        {hitoAbierto === h.codigo && (
+                          <tr><td colSpan={28} style={{ background: "#FFF4EC", padding: "10px 14px 14px" }}>
+                            <PanelHito h={h} pago={pagoHitos[h.codigo]} quien={usuario?.nombre || usuario?.email || "analista"}
+                                       onListo={async () => { setHitoAbierto(null); await recargar(); }} />
+                          </td></tr>
+                        )}
+                      </Fragment>
                     ))}
                     {!jornadaVista.length && (
                       <tr><td colSpan={28} style={{ padding: 20, color: "#8a94a6", textAlign: "center" }}>

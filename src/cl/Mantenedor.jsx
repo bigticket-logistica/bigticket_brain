@@ -90,7 +90,7 @@ export default function ModuloMantenedorCL({ usuario } = {}) {
       <style>{CSS}</style>
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 14 }}>
         {[["reemplazos", "↺ Reemplazos"], ["supervisores", "👤 Supervisores y CECO"], ["colectas", "📦 Centros de colecta"],
-          ["justif", "⚖️ Justificación de devoluciones"], ["activo", "🛠️ Cuidado de Activo"]].map(([k, t]) => (
+          ["justif", "⚖️ Justificación de devoluciones"], ["hitos", "💲 Pago de hitos"], ["activo", "🛠️ Cuidado de Activo"]].map(([k, t]) => (
           <button key={k} className={`mt-chip ${vista === k ? "on" : ""}`} onClick={() => setVista(k)}>{t}</button>
         ))}
       </div>
@@ -98,6 +98,7 @@ export default function ModuloMantenedorCL({ usuario } = {}) {
       {vista === "supervisores" && <Supervisores quien={quien} />}
       {vista === "colectas" && <CentrosColecta quien={quien} />}
       {vista === "justif" && <JustificacionDevoluciones quien={quien} />}
+      {vista === "hitos" && <PagoHitos quien={quien} />}
       {vista === "activo" && (
         <div>
           <div className="mt-sub">Parámetros, componentes del gasto, proveedores y multas de Cuidado de Activo.</div>
@@ -681,6 +682,86 @@ function ExcepcionesCeco({ quien, reglas }) {
             {Object.entries(MODOS).map(([k, [t]]) => <option key={k} value={k}>{t}</option>)}
           </select></label>
         <button className="mt-btn pri" disabled={!f.ceco || !f.clave} onClick={() => guardar(f.ceco, f.clave, f.modo)}>Agregar excepción</button>
+      </div>
+    </div>
+  );
+}
+
+// ── Pago de hitos (Bitácora → Hitos Maestro) ───────────────────────────────
+// Cómo se paga cada sorting y cada ambulancia interna, por CECO o para todos.
+// Sorting: monto fijo por servicio. Ambulancia: el supervisor consigna el valor
+// en la bitácora (se le sugiere el de aquí) y administración lo puede corregir
+// en el Maestro. Desactivar una regla deja de pagar ese tipo de hito en ese CECO.
+const TIPOS_HITO = { sorting: "Sorting", ambulancia: "Ambulancia interna" };
+const MODOS_HITO = { fijo: "Monto fijo por servicio", por_entregado: "Monto por entregado" };
+const pesos = (v) => "$" + Math.round(Number(v) || 0).toLocaleString("es-CL");
+function PagoHitos({ quien }) {
+  const [filas, setFilas] = useState(null);
+  const [cecos, setCecos] = useState([]);
+  const [f, setF] = useState({ tipo: "sorting", ceco: "TODOS", modo: "fijo", monto: "" });
+  const [msg, setMsg] = useState("");
+  const cargar = async () => {
+    const [x, ca] = await Promise.all([
+      apiSuave("hitos_tarifas_cl?select=*&order=tipo,ceco", null),
+      apiSuave("cecos_admin?select=nombre&activo=eq.true&order=nombre", []),
+    ]);
+    setFilas(x); setCecos([...new Set((ca || []).map(c => c.nombre))].filter(c => /^ML_/.test(c)));
+  };
+  useEffect(() => { cargar(); }, []);
+  const guardar = async (r) => {
+    setMsg("");
+    if (!(Number(r.monto) >= 0) || r.monto === "") { setMsg("Indica el monto."); return; }
+    try { await rpc("fn_hito_tarifa_guardar", { p_tipo: r.tipo, p_ceco: r.ceco, p_modo: r.modo, p_monto: Number(r.monto), p_activo: r.activo !== false, p_por: quien });
+          setMsg(`✓ ${TIPOS_HITO[r.tipo]} · ${r.ceco}: guardado`); await cargar(); }
+    catch (e) { setMsg("No se pudo guardar: " + e.message); }
+  };
+  if (filas === null) return (
+    <div className="mt-card"><div className="mt-tit">Pago de hitos</div>
+      <div className="mt-sub" style={{ color: AMBAR }}>Faltan los SQL de esta pasada (hitos_tarifas_cl).</div></div>
+  );
+  return (
+    <div className="mt-card">
+      <div className="mt-tit">Pago de hitos de la bitácora</div>
+      <div className="mt-sub">
+        Cómo se paga cada <b>sorting</b> y cada <b>ambulancia interna</b> que registran los supervisores en Hitos Maestro.
+        Una regla de un CECO manda sobre la de "TODOS". En la ambulancia, el supervisor consigna el valor en la bitácora
+        (se le sugiere el de aquí) y administración lo puede corregir en el Maestro. Una regla desactivada deja de pagar ese
+        tipo de hito en ese CECO. La ruta madre paga sus entregados menos los de la ambulancia.
+      </div>
+      {msg && <div className="mt-msg" style={{ color: msg.startsWith("✓") ? VERDE : ROJO }}>{msg}</div>}
+      {filas.length > 0 && (
+        <table className="mt-tabla" style={{ marginBottom: 12, maxWidth: 900 }}>
+          <thead><tr><th>Hito</th><th>CECO</th><th>Cómo se paga</th><th>Monto</th><th>Activa</th><th>Último cambio</th></tr></thead>
+          <tbody>
+            {filas.map(x => (
+              <tr key={x.tipo + x.ceco} style={!x.activo ? { opacity: 0.55 } : undefined}>
+                <td style={{ fontWeight: 700, color: NAVY }}>{TIPOS_HITO[x.tipo]}</td>
+                <td>{x.ceco}</td>
+                <td><select className="mt-in" value={x.modo} onChange={e => guardar({ ...x, modo: e.target.value })}>
+                  {Object.entries(MODOS_HITO).map(([k, t]) => <option key={k} value={k}>{t}</option>)}</select></td>
+                <td><input className="mt-in" type="number" min="0" defaultValue={x.monto} style={{ width: 120 }}
+                           onBlur={e => Number(e.target.value) !== Number(x.monto) && guardar({ ...x, monto: e.target.value })} />
+                  <span style={{ fontSize: 11, color: "#94a3b8", marginLeft: 6 }}>{pesos(x.monto)}</span></td>
+                <td><input type="checkbox" checked={!!x.activo} onChange={e => guardar({ ...x, activo: e.target.checked })} /></td>
+                <td style={{ fontSize: 11, color: "#64748b" }}>{x.actualizado_por || "—"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      <div style={{ display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap" }}>
+        <label className="mt-lbl">Hito
+          <select className="mt-in" value={f.tipo} onChange={e => setF({ ...f, tipo: e.target.value })}>
+            {Object.entries(TIPOS_HITO).map(([k, t]) => <option key={k} value={k}>{t}</option>)}</select></label>
+        <label className="mt-lbl">CECO
+          <select className="mt-in" value={f.ceco} onChange={e => setF({ ...f, ceco: e.target.value })}>
+            <option value="TODOS">TODOS</option>{cecos.map(c => <option key={c}>{c}</option>)}</select></label>
+        <label className="mt-lbl">Cómo se paga
+          <select className="mt-in" value={f.modo} onChange={e => setF({ ...f, modo: e.target.value })}>
+            {Object.entries(MODOS_HITO).map(([k, t]) => <option key={k} value={k}>{t}</option>)}</select></label>
+        <label className="mt-lbl">Monto ($)
+          <input className="mt-in" type="number" min="0" value={f.monto} onChange={e => setF({ ...f, monto: e.target.value })} style={{ width: 120 }} /></label>
+        <button className="mt-btn pri" disabled={f.monto === ""} onClick={() => guardar({ ...f, activo: true })}>Agregar regla</button>
       </div>
     </div>
   );
