@@ -13,14 +13,18 @@
 //                            (centros_colecta_cl: CLRM03 y CLRM04 → ML_RM_SRM1).
 //   • Justificación de     → qué motivos de devolución se justifican solos: suben
 //     devoluciones           el NS de la ruta y su pago (motivos_justificacion_cl).
-//   • Cuidado de Activo    → parámetros, componentes del gasto, proveedores y
-//                            multas (antes era una subpestaña de Cuidado de Activo).
+//   • Pago de hitos        → montos de los hitos.
+// CUIDADO DE ACTIVO (grupo aparte, 19-11-2026): TODOS sus mantenedores viven aquí,
+//   ordenados por tema (General, Mantenciones, Auditorías, GPS y bitácora, WhatsApp).
+//   La lista sale de CA_MANTENEDORES de CuidadoActivo.jsx; cada uno se dibuja allí.
+//   Antes estaban repartidos en Cuidado de Activo (Mantenedores, Configuración y
+//   Mantenciones); esas pestañas ahora avisan que se movieron aquí.
 //
 // Habla con la API REST del proyecto de Chile por fetch, igual que el Maestro.
 // ═══════════════════════════════════════════════════════════════════════════
 import { useState, useEffect } from "react";
 import { CalendarioRango, fechaCorta, difDias } from "./Maestro";
-import CuidadoActivoCL from "./CuidadoActivo";
+import CuidadoActivoCL, { CA_MANTENEDORES } from "./CuidadoActivo";
 
 const CL_URL = "https://hmowsazntdjtsvdfgutn.supabase.co";
 const CL_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imhtb3dzYXpudGRqdHN2ZGZndXRuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQ5MTc4NzgsImV4cCI6MjEwMDQ5Mzg3OH0.xAJokU0eFhof--d8R4uCRBr2-CJLzC5re0w1IPRqQR8";
@@ -82,16 +86,33 @@ const CSS = `
 .mj-chip:hover{border-color:${NAVY};color:${NAVY};}
 `;
 
+const MAESTRO_MANT = [["reemplazos", "↺ Reemplazos"], ["supervisores", "👤 Supervisores y CECO"], ["colectas", "📦 Centros de colecta"],
+  ["justif", "⚖️ Justificación de devoluciones"], ["hitos", "💲 Pago de hitos"]];
+
 export default function ModuloMantenedorCL({ usuario } = {}) {
   const [vista, setVista] = useState("reemplazos");
   const quien = (usuario && (usuario.nombre || usuario.email)) || "brain";
+  const grupos = [...new Set(CA_MANTENEDORES.map((x) => x[2]))];
+  const esCA = vista.startsWith("ca:");
+  const titulo = (t, c) => <div style={{ fontSize: 11, fontWeight: 800, color: c || NAVY, letterSpacing: ".4px", textTransform: "uppercase", margin: "2px 0 6px" }}>{t}</div>;
   return (
     <div className="mt-wrap">
       <style>{CSS}</style>
-      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 14 }}>
-        {[["reemplazos", "↺ Reemplazos"], ["supervisores", "👤 Supervisores y CECO"], ["colectas", "📦 Centros de colecta"],
-          ["justif", "⚖️ Justificación de devoluciones"], ["hitos", "💲 Pago de hitos"], ["activo", "🛠️ Cuidado de Activo"]].map(([k, t]) => (
-          <button key={k} className={`mt-chip ${vista === k ? "on" : ""}`} onClick={() => setVista(k)}>{t}</button>
+      <div className="mt-card" style={{ padding: "10px 14px" }}>
+        {titulo("Maestro y operación")}
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          {MAESTRO_MANT.map(([k, t]) => <button key={k} className={`mt-chip ${vista === k ? "on" : ""}`} onClick={() => setVista(k)}>{t}</button>)}
+        </div>
+      </div>
+      <div className="mt-card" style={{ padding: "10px 14px", borderColor: esCA ? "#FF6600" : undefined }}>
+        {titulo("🛠️ Cuidado de Activo", "#c2410c")}
+        {grupos.map((g) => (
+          <div key={g} style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginBottom: 6 }}>
+            <span style={{ fontSize: 11, color: "#64748b", fontWeight: 700, minWidth: 110 }}>{g}</span>
+            {CA_MANTENEDORES.filter((x) => x[2] === g).map(([k, t]) => (
+              <button key={k} className={`mt-chip ${vista === "ca:" + k ? "on" : ""}`} onClick={() => setVista("ca:" + k)}>{t}</button>
+            ))}
+          </div>
         ))}
       </div>
       {vista === "reemplazos" && <Reemplazos quien={quien} />}
@@ -99,10 +120,10 @@ export default function ModuloMantenedorCL({ usuario } = {}) {
       {vista === "colectas" && <CentrosColecta quien={quien} />}
       {vista === "justif" && <JustificacionDevoluciones quien={quien} />}
       {vista === "hitos" && <PagoHitos quien={quien} />}
-      {vista === "activo" && (
+      {esCA && (
         <div>
-          <div className="mt-sub">Parámetros, componentes del gasto, proveedores y multas de Cuidado de Activo.</div>
-          <CuidadoActivoCL usuario={usuario} sub="ca_mantenedores" />
+          <div className="mt-sub">Cuidado de Activo › {(CA_MANTENEDORES.find((x) => "ca:" + x[0] === vista) || [])[2]} › <b>{(CA_MANTENEDORES.find((x) => "ca:" + x[0] === vista) || [])[1]}</b></div>
+          <CuidadoActivoCL usuario={usuario} sub={"ca_mant:" + vista.slice(3)} />
         </div>
       )}
     </div>

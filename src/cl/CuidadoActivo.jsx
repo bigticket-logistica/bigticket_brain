@@ -122,7 +122,8 @@ export default function CuidadoActivoCL({ usuario, sub }) {
   if (sub === "ca_gps") return <GpsCamaras quien={quien} />;
   if (sub === "ca_oc") return <OrdenesCompra quien={quien} />;
   if (sub === "ca_combustible") return <Combustible quien={quien} />;
-  if (sub === "ca_mantenedores") return <Mantenedores quien={quien} rol={usuario?.rol} />;
+  if (sub && sub.startsWith("ca_mant:")) return <MantenedorCA vista={sub.slice(8)} quien={quien} rol={usuario?.rol} />;
+  if (sub === "ca_mantenedores") return <MovidoAMantenedor que="Los mantenedores de Cuidado de Activo" />;
   if (sub === "ca_uso") return <UsoTabs quien={quien} />;
   if (sub === "ca_mantenciones") return <Mantenciones quien={quien} />;
   if (sub === "ca_reparaciones") return <Reparaciones quien={quien} />;
@@ -131,7 +132,7 @@ export default function CuidadoActivoCL({ usuario, sub }) {
   if (sub === "ca_auditorias") return <AudTabs quien={quien} />;
   if (sub === "ca_nosalidas") return <NoSalidas />;
   if (sub === "ca_incumplimientos") return <Incumplimientos />;
-  if (sub === "ca_config") return <Configuracion quien={quien} />;
+  if (sub === "ca_config") return <MovidoAMantenedor que="La configuración de Cuidado de Activo (tipos de tarea, justificaciones y correos)" />;
   return <Tareas quien={quien} />;
 }
 
@@ -1710,15 +1711,13 @@ function Mantenciones({ quien }) {
   return (
     <div>
       <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
-        {[["programa", "Programa"], ["vida", "Vida útil (verificador)"], ["pautas", "Pautas por modelo"], ["vidamod", "Vida útil por modelo"], ["talleres", "Talleres"]].map(([k, t]) => (
+        {[["programa", "Programa"], ["vida", "Vida útil (verificador)"]].map(([k, t]) => (
           <button key={k} style={btn(vista === k ? undefined : "sec")} onClick={() => setVista(k)}>{t}</button>
         ))}
       </div>
       {vista === "programa" && <ProgramaMnt quien={quien} />}
-      {vista === "pautas" && <PautasMnt quien={quien} />}
       {vista === "vida" && <VerificadorVU />}
-      {vista === "vidamod" && <VidaModeloMnt quien={quien} />}
-      {vista === "talleres" && <TalleresMnt quien={quien} />}
+      <div style={{ fontSize: 12, color: C.tenue, marginTop: 12 }}>Pautas por modelo, vida útil por modelo y talleres se editan en Mantenedor › Cuidado de Activo.</div>
     </div>
   );
 }
@@ -4669,6 +4668,48 @@ const MANT_GRUPOS = [
   ["Documentos", /^doc_/], ["Conducción Geotab", /^geo_/], ["Órdenes de compra", /^oc_/], ["GPS y cámaras", /^(gps_|equipos_|camaras_)/], ["Detenciones", /^det_/],
   ["Mantenciones", /^mnt_/], ["Flujo de caja", /^flujo_/], ["Reparaciones · quién autoriza", /^rep_/], ["Falta 10 · visitas", /^f10_/], ["Registros de prueba", /^prueba_/],
 ];
+// ═══ Mantenedores de Cuidado de Activo: se muestran en el Mantenedor general del Brain (Mantenedor.jsx) ═══
+// [clave, nombre, grupo]. El Mantenedor arma las pestañas con esta lista; aquí se dibuja cada uno.
+export const CA_MANTENEDORES = [
+  ["config", "Parámetros", "General"], ["componentes", "Componentes del gasto", "General"], ["proveedores", "Proveedores", "General"],
+  ["multas", "Multas (Anexo III)", "General"], ["configuracion", "Tareas, justificaciones y correos", "General"], ["eventos", "Avisos por evento", "General"],
+  ["talleres", "Talleres", "Mantenciones"], ["pautas", "Pautas por modelo", "Mantenciones"], ["vidamod", "Vida útil por modelo", "Mantenciones"],
+  ["aud_form", "Formularios de auditoría", "Auditorías"], ["aud_tipos", "Tipos de auditoría", "Auditorías"], ["feriados", "Feriados", "Auditorías"],
+  ["fleetup", "Alertas de cámara (español)", "GPS y bitácora"], ["bit_ind", "Indicadores de la bitácora", "GPS y bitácora"],
+  ["wa_contactos", "Contactos", "WhatsApp"], ["wa_plantillas", "Plantillas", "WhatsApp"], ["wa_envios", "Envíos", "WhatsApp"],
+];
+function MantenedorCA({ vista, quien, rol }) {
+  const puede = rol === "superadmin";
+  switch (vista) {
+    case "config": return <MantParametros quien={quien} />;
+    case "componentes": return <MantComponentes quien={quien} />;
+    case "proveedores": return <Proveedores quien={quien} />;
+    case "multas": return <MultasAnexo quien={quien} puede={puede} />;
+    case "configuracion": return <Configuracion quien={quien} />;
+    case "eventos": return <MantEventos quien={quien} />;
+    case "talleres": return <TalleresMnt quien={quien} />;
+    case "pautas": return <PautasMnt quien={quien} />;
+    case "vidamod": return <VidaModeloMnt quien={quien} />;
+    case "aud_form": return <MantFormularios quien={quien} />;
+    case "aud_tipos": return <MantTiposAud quien={quien} />;
+    case "feriados": return <MantFeriados quien={quien} />;
+    case "fleetup": return <MantFleetupTipos quien={quien} />;
+    case "bit_ind": return <MantBitacoraInd quien={quien} />;
+    case "wa_contactos": return <MantContactosWa quien={quien} />;
+    case "wa_plantillas": return <MantPlantillasWa quien={quien} />;
+    case "wa_envios": return <EnviosWa />;
+    default: return <div style={{ color: C.tenue }}>Mantenedor no encontrado.</div>;
+  }
+}
+function MovidoAMantenedor({ que }) {
+  return (
+    <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, padding: 16, maxWidth: 720 }}>
+      <div style={{ fontWeight: 800, color: C.navy, marginBottom: 6 }}>Ahora está en Mantenedor</div>
+      <div style={{ fontSize: 13, color: C.suave }}>{que} se movió al módulo <b>Mantenedor</b> del menú principal, en el grupo <b>«Cuidado de Activo»</b>, junto a los demás mantenedores. Así todo lo editable queda en un solo lugar.</div>
+    </div>
+  );
+}
+
 function Mantenedores({ quien, rol }) {
   const [vista, setVista] = useState("config");
   const puede = rol === "superadmin";
