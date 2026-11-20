@@ -7805,11 +7805,11 @@ function InventarioFlota() {
 // La regla vive en la base (fn_red_cert_flags); aquí solo se muestra.
 // ═══════════════════════════════════════════════════════════════════════════
 const RED_TIPOS = {
-  chofer:              { t: "Chofer sin certificar",           c: "#b91c1c", bg: "#fef2f2", ayuda: "Su CURP no está en el padrón de ninguna empresa. La empresa debe darlo de alta desde su portal o desde el Brain." },
-  chofer_otra_empresa: { t: "Chofer certificado en otra empresa", c: "#b45309", bg: "#fffbeb", ayuda: "Está en el padrón, pero de otra empresa. Manejó para una empresa que no lo tiene dado de alta." },
-  vehiculo:            { t: "Vehículo sin certificar",          c: "#b91c1c", bg: "#fef2f2", ayuda: "La placa no está en el inventario de Certificaciones ni en el padrón de la empresa." },
-  contrato:            { t: "Empresa sin contrato firmado",     c: "#7c3aed", bg: "#f5f3ff", ayuda: "Sin firma en el Kanban, en el Gestionador ni contrato en el Archivador." },
-  empresa:             { t: "Placa sin empresa en Certificaciones", c: "#0f172a", bg: "#f1f5f9", ayuda: "La placa no tiene empresa certificada (por ejemplo, una empresa anotada a mano). Revísala en Empresas del patio." },
+  chofer:              { t: "Chofer sin certificar",   c: "#b91c1c", bg: "#fef2f2", ayuda: "Su CURP no está en el padrón de ninguna empresa." },
+  chofer_otra_empresa: { t: "Chofer de otra empresa",  c: "#b45309", bg: "#fffbeb", ayuda: "Está certificado, pero en el padrón de OTRA empresa (columna «Certificado en»). Manejó para una empresa que no lo tiene dado de alta." },
+  vehiculo:            { t: "Vehículo sin certificar", c: "#b91c1c", bg: "#fef2f2", ayuda: "La placa no está en el inventario de Certificaciones ni en el padrón de la empresa." },
+  contrato:            { t: "Sin contrato firmado",    c: "#7c3aed", bg: "#f5f3ff", ayuda: "Sin firma en el Kanban, en el Gestionador ni contrato en el Archivador." },
+  empresa:             { t: "Placa sin empresa",       c: "#0f172a", bg: "#f1f5f9", ayuda: "La placa no tiene empresa en Certificaciones (por ejemplo, una empresa anotada a mano). Revísala en Empresas del patio." },
 };
 const SEM_ANCLA_LUNES = new Date("2026-06-01T12:00:00Z"); // lunes de la semana 24 del Brain
 
@@ -7856,13 +7856,26 @@ function OperandoSinCertificar() {
   }
   const q = busca.trim().toUpperCase();
   const visibles = (filas || []).filter(f => (filtro === "todos" || f.tipo === filtro) &&
-    (!q || String(f.empresa || "").toUpperCase().includes(q) || String(f.detalle || "").toUpperCase().includes(q) || String(f.clave || "").toUpperCase().includes(q)));
+    (!q || [f.empresa, f.nombre, f.curp, f.placa, f.certificado_en].some(x => String(x || "").toUpperCase().includes(q))));
+  const SIN_EMP = "Placas sin empresa en Certificaciones";
   const porEmpresa = {};
-  for (const f of visibles) (porEmpresa[f.empresa || "— Sin empresa en Certificaciones —"] = porEmpresa[f.empresa || "— Sin empresa en Certificaciones —"] || []).push(f);
+  for (const f of visibles) { const k = f.empresa || SIN_EMP; (porEmpresa[k] = porEmpresa[k] || []).push(f); }
   const empresas = Object.entries(porEmpresa).sort((a, b) =>
     b[1].reduce((s, x) => s + Number(x.monto || 0), 0) - a[1].reduce((s, x) => s + Number(x.monto || 0), 0));
   const modoDe = (tipo) => modos[tipo === "chofer_otra_empresa" ? "chofer" : tipo] || "observacion";
-  const etiquetaModo = (m) => m === "encendido" ? "⛔ Retenido" : m === "apagado" ? "Apagado" : "⚠️ En observación (se paga)";
+  const etiquetaModo = (m) => m === "encendido" ? "⛔ Retenido" : m === "apagado" ? "Apagado" : "⚠️ En observación: se paga";
+
+  const COLS = [
+    ["Situación", 170, "left"], ["Chofer / pendiente", 200, "left"], ["CURP", 175, "left"], ["Placa", 95, "left"],
+    ["Certificado en", 210, "left"], ["Centro", 75, "left"], ["Rutas", 60, "right"], ["Días", 105, "left"], ["Monto", 110, "right"],
+  ];
+  const th = (a) => ({ padding: "8px 10px", fontSize: 10, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: .4, textAlign: a, background: "#f8fafc", borderBottom: "1px solid #e4e7ec", whiteSpace: "nowrap" });
+  const td = (a, extra) => ({ padding: "7px 10px", fontSize: 12, textAlign: a, borderBottom: "1px solid #f1f5f9", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", ...extra });
+  const certEn = (f) => {
+    if (f.tipo === "chofer_otra_empresa") return { txt: f.certificado_en || "—", c: "#b45309", w: 700 };
+    if (f.tipo === "chofer") return { txt: f.curp ? "En ningún padrón" : "MELI no tiene su CURP", c: "#b91c1c", w: 600 };
+    return { txt: "—", c: "#cbd5e1", w: 400 };
+  };
 
   return (
     <div>
@@ -7870,8 +7883,8 @@ function OperandoSinCertificar() {
         <div style={{ flex: 1, minWidth: 300 }}>
           <div style={{ fontSize: 16, fontWeight: 700, color: "#002E5D" }}>Operando sin certificar</div>
           <div style={{ fontSize: 12, color: "#64748b", marginTop: 3, maxWidth: 760, lineHeight: 1.5 }}>
-            Lo que hizo viajes en la semana sin estar certificado, por empresa. El chofer se reconoce por su CURP:
-            la ruta trae el chofer de MELI, MELI da su CURP y se busca en el padrón de la empresa.
+            Lo que hizo viajes en la semana sin estar certificado, agrupado por la empresa para la que operó.
+            El chofer se reconoce por su CURP: la ruta trae el chofer de MELI, MELI da su CURP y se busca en el padrón.
             Para regularizar, la empresa da de alta al chofer o al vehículo desde su portal, o se hace en <b>Vehículos y Personal</b>.
           </div>
         </div>
@@ -7888,22 +7901,23 @@ function OperandoSinCertificar() {
 
       {error && <div style={{ background: "#fef2f2", color: "#991b1b", border: "1px solid #fca5a5", borderRadius: 8, padding: "10px 12px", fontSize: 12.5, marginBottom: 12 }}>No se pudo cargar: {error}</div>}
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 10, marginBottom: 12 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 10, marginBottom: 8 }}>
         {Object.keys(RED_TIPOS).map(k => {
           const x = resumen[k] || { n: 0, rutas: 0, monto: 0 };
           return (
             <button key={k} onClick={() => setFiltro(filtro === k ? "todos" : k)}
               style={{ textAlign: "left", background: filtro === k ? RED_TIPOS[k].bg : "#fff", border: `1px solid ${filtro === k ? RED_TIPOS[k].c : "#e4e7ec"}`, borderRadius: 10, padding: "10px 12px", cursor: "pointer" }}>
-              <div style={{ fontSize: 11, color: "#64748b", fontWeight: 700 }}>{RED_TIPOS[k].t}</div>
-              <div style={{ fontSize: 20, fontWeight: 800, color: x.n ? RED_TIPOS[k].c : "#cbd5e1" }}>{x.n}</div>
-              <div style={{ fontSize: 10.5, color: "#94a3b8" }}>{x.rutas} ruta(s) · {plata(x.monto)}</div>
-              <div style={{ fontSize: 10, color: "#64748b", marginTop: 3 }}>{etiquetaModo(modoDe(k))}</div>
+              <div style={{ fontSize: 11.5, color: RED_TIPOS[k].c, fontWeight: 800 }}>{RED_TIPOS[k].t}</div>
+              <div style={{ fontSize: 22, fontWeight: 800, color: x.n ? RED_TIPOS[k].c : "#cbd5e1", lineHeight: 1.2 }}>{x.n}</div>
+              <div style={{ fontSize: 10.5, color: "#64748b" }}>{x.rutas} ruta(s) · {plata(x.monto)}</div>
+              <div style={{ fontSize: 10.5, color: "#94a3b8", marginTop: 4, lineHeight: 1.35 }}>{RED_TIPOS[k].ayuda}</div>
+              <div style={{ fontSize: 10, color: "#64748b", marginTop: 4, fontWeight: 700 }}>{etiquetaModo(modoDe(k))}</div>
             </button>
           );
         })}
       </div>
 
-      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 12, flexWrap: "wrap" }}>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", margin: "12px 0", flexWrap: "wrap" }}>
         <input value={busca} onChange={e => setBusca(e.target.value)} placeholder="Buscar empresa, chofer, CURP o placa…"
           style={{ flex: 1, minWidth: 240, padding: "7px 10px", border: "1px solid #e4e7ec", borderRadius: 8, fontSize: 12.5 }} />
         {filtro !== "todos" && <button onClick={() => setFiltro("todos")} style={{ padding: "6px 12px", border: "1px solid #e4e7ec", background: "#fff", borderRadius: 8, fontSize: 12, cursor: "pointer" }}>Ver todos</button>}
@@ -7915,35 +7929,51 @@ function OperandoSinCertificar() {
         <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10, padding: 36, textAlign: "center", color: "#16a34a", fontSize: 13, fontWeight: 600 }}>
           ✓ Nada operando sin certificar en esta vista.
         </div>
-      ) : empresas.map(([emp, fs]) => {
-        const tot = fs.reduce((s, x) => s + Number(x.monto || 0), 0);
-        return (
-          <div key={emp} style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10, marginBottom: 10, overflow: "hidden" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", background: "#f8fafc", borderBottom: "1px solid #e4e7ec" }}>
-              <span style={{ fontSize: 13, fontWeight: 800, color: "#002E5D" }}>{emp}</span>
-              <span style={{ fontSize: 11, color: "#64748b" }}>{fs.length} pendiente(s)</span>
-              <span style={{ marginLeft: "auto", fontSize: 12, fontWeight: 800, color: "#334155" }}>{plata(tot)}</span>
-            </div>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-              <tbody>
-                {fs.map((f, i) => (
-                  <tr key={f.tipo + f.clave + i} style={{ borderBottom: "1px solid #f1f5f9" }}>
-                    <td style={{ padding: "7px 12px", width: 210 }}>
-                      <span title={RED_TIPOS[f.tipo]?.ayuda || ""} style={{ fontSize: 10.5, fontWeight: 800, color: RED_TIPOS[f.tipo]?.c, background: RED_TIPOS[f.tipo]?.bg, borderRadius: 10, padding: "2px 9px", whiteSpace: "nowrap" }}>
-                        {RED_TIPOS[f.tipo]?.t || f.tipo}
-                      </span>
-                    </td>
-                    <td style={{ padding: "7px 12px", color: "#334155" }}>{f.detalle}</td>
-                    <td style={{ padding: "7px 12px", color: "#64748b", whiteSpace: "nowrap" }}>{f.service_centers}</td>
-                    <td style={{ padding: "7px 12px", color: "#64748b", whiteSpace: "nowrap" }}>{f.rutas} ruta(s) · {ddmm(f.primer_dia)}{f.ultimo_dia !== f.primer_dia ? ` al ${ddmm(f.ultimo_dia)}` : ""}</td>
-                    <td style={{ padding: "7px 12px", textAlign: "right", fontWeight: 700, color: "#334155", whiteSpace: "nowrap" }}>{plata(f.monto)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        );
-      })}
+      ) : (
+        <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10, overflowX: "auto" }}>
+          <table style={{ width: "100%", minWidth: 1200, borderCollapse: "collapse", tableLayout: "fixed" }}>
+            <colgroup>{COLS.map(([h, w]) => <col key={h} style={{ width: w }} />)}</colgroup>
+            <thead><tr>{COLS.map(([h, , a]) => <th key={h} style={th(a)}>{h}</th>)}</tr></thead>
+            <tbody>
+              {empresas.map(([emp, fs]) => {
+                const tot = fs.reduce((s, x) => s + Number(x.monto || 0), 0);
+                return (
+                  <Fragment key={emp}>
+                    <tr>
+                      <td colSpan={COLS.length - 1} style={{ padding: "9px 10px", background: "#f1f5f9", borderTop: "1px solid #e4e7ec", borderBottom: "1px solid #e4e7ec" }}>
+                        <span style={{ fontSize: 10.5, color: "#64748b", fontWeight: 700 }}>OPERÓ PARA </span>
+                        <span style={{ fontSize: 13, fontWeight: 800, color: "#002E5D" }}>{emp}</span>
+                        <span style={{ fontSize: 11, color: "#64748b" }}> · {fs.length} pendiente(s)</span>
+                      </td>
+                      <td style={{ padding: "9px 10px", background: "#f1f5f9", borderTop: "1px solid #e4e7ec", borderBottom: "1px solid #e4e7ec", textAlign: "right", fontSize: 12.5, fontWeight: 800, color: "#334155" }}>{plata(tot)}</td>
+                    </tr>
+                    {fs.map((f, i) => {
+                      const ce = certEn(f);
+                      return (
+                        <tr key={f.tipo + (f.curp || f.placa || "") + i}>
+                          <td style={td("left")} title={RED_TIPOS[f.tipo]?.ayuda || ""}>
+                            <span style={{ fontSize: 10.5, fontWeight: 800, color: RED_TIPOS[f.tipo]?.c, background: RED_TIPOS[f.tipo]?.bg, borderRadius: 10, padding: "2px 9px" }}>
+                              {RED_TIPOS[f.tipo]?.t || f.tipo}
+                            </span>
+                          </td>
+                          <td style={td("left", { color: "#0f172a", fontWeight: 600 })} title={f.nombre || ""}>{f.nombre || "—"}</td>
+                          <td style={td("left", { color: "#475569", fontFamily: "monospace", fontSize: 11.5 })}>{f.curp || "—"}</td>
+                          <td style={td("left", { color: "#475569" })} title={f.placa || ""}>{f.placa || "—"}</td>
+                          <td style={td("left", { color: ce.c, fontWeight: ce.w })} title={ce.txt}>{ce.txt}</td>
+                          <td style={td("left", { color: "#64748b" })}>{f.service_centers}</td>
+                          <td style={td("right", { color: "#334155" })}>{f.rutas}</td>
+                          <td style={td("left", { color: "#64748b" })}>{ddmm(f.primer_dia)}{f.ultimo_dia !== f.primer_dia ? ` al ${ddmm(f.ultimo_dia)}` : ""}</td>
+                          <td style={td("right", { fontWeight: 700, color: "#334155" })}>{plata(f.monto)}</td>
+                        </tr>
+                      );
+                    })}
+                  </Fragment>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }
