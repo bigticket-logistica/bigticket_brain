@@ -372,6 +372,76 @@ export function CalendarioRango({ desde, hasta, onCambio, min, max, conDatos, fu
   );
 }
 
+// ── Hitos Maestro: filas internas (bitácora) y estado interno ─────────────
+const EST_INT = {
+  en_ventana: ["En ventana", "#E8EEF8", "#1E3A6E"], por_revisar: ["Por revisar", "#FFF1DB", "#7A4A00"],
+  tarificacion_manual: ["Tarificación manual", "#FDEBDD", "#A3440B"], lista_pago: ["Lista para pago", "#E6F4EA", "#1E6B3A"],
+  en_prefactura: ["En prefactura", "#EEF0F3", "#3E4656"],
+};
+function EstadoInterno({ e, sub }) {
+  if (!e) return <span style={{ color: "#cbd5e1" }}>—</span>;
+  const x = EST_INT[e] || [e, "#eef2f9", "#475569"];
+  return (
+    <div style={{ whiteSpace: "nowrap" }}>
+      <span style={{ display: "inline-block", padding: "1px 7px", borderRadius: 10, fontSize: 10.5, fontWeight: 700, background: x[1], color: x[2] }}>{x[0]}</span>
+      {sub && <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 2 }}>{sub}</div>}
+    </div>
+  );
+}
+// Hitos como filas del CSV de la Jornada (mismas columnas)
+const internasCSV = (hs, jornadaFilas, supDe) => hs.filter(h => !h.anulado && h.tipo !== "observacion").map(h => {
+  const madre = jornadaFilas.find(r => String(r.id_viaje) === String(h.id_ruta_madre) && r.fecha === h.fecha);
+  const amb = h.tipo === "ambulancia";
+  return { fecha: h.fecha, id_viaje: h.codigo, origen: "INTERNO", cecos_real: h.ceco, centro_meli: madre?.centro_meli || "",
+           supervisor: madre ? madre.supervisor : supDe(h), tipo_hito_txt: amb ? "AMBULANCIA INTERNA" : `SORTING TURNO ${h.turno || ""}`,
+           segmentacion: amb ? (madre?.segmentacion || "") : "", empresa: h.empresa || "SIN EMPRESA CERTIFICADA",
+           patente: h.patente, conductor: h.conductor, paradas: h.paradas, cargados: h.cargados, entregados: h.entregados,
+           entr_pago: amb ? h.entregados : 1, pct_ns: amb ? (n(h.cargados) ? Math.round(1000 * n(h.entregados) / n(h.cargados)) / 10 : null) : 100,
+           observacion: [h.motivo, h.texto].filter(Boolean).join(" · "), estado_interno: h.estado };
+});
+const ventanaTxt = (h) => {
+  const ms = new Date(h.editable_hasta) - new Date();
+  if (ms <= 0) return "";
+  return `Quedan ${Math.floor(ms / 3600000)} h ${String(Math.floor((ms % 3600000) / 60000)).padStart(2, "0")} min`;
+};
+// Una ambulancia (bajo su ruta madre) o un sorting, con las mismas 28 columnas de la Jornada
+function FilaInterna({ h, madre, supervisor }) {
+  const amb = h.tipo === "ambulancia";
+  const sinCert = !h.empresa_certificada;
+  const gris = <span style={{ color: "#cbd5e1" }}>—</span>;
+  const sub = h.estado === "en_ventana" ? ventanaTxt(h) : h.estado === "por_revisar" ? "Empresa sin certificar" : "";
+  return (
+    <tr style={{ background: sinCert ? "#FFF6E8" : "#FFF8F2" }}>
+      <td style={{ fontWeight: 700, color: "#A3440B", whiteSpace: "nowrap" }}>{amb ? `↳ ${h.codigo}` : h.codigo}</td>
+      <td><Etiqueta texto="Interno" color="#A3440B" fondo="#FDEBDD" /></td>
+      <td>{madre?.centro_meli ? <Etiqueta texto={madre.centro_meli} color="#64748b" fondo="#f1f5f9" /> : gris}</td>
+      <td><Etiqueta texto={h.ceco} /></td>
+      <td style={{ fontSize: 11.5, color: "#334155" }}>{(madre ? madre.supervisor : supervisor) || "—"}</td>
+      <td><Etiqueta texto={amb ? "Ambulancia interna" : `Sorting · turno ${h.turno || "—"}`} color="#A3440B" fondo="#FDEBDD" /></td>
+      <td style={{ fontSize: 11, color: sinCert ? "#8A2F12" : "#33425A", maxWidth: 200 }}>{h.empresa || "Patente sin empresa certificada"}</td>
+      <td style={{ fontWeight: 600 }}>{h.patente || "—"}</td>
+      <td style={{ color: "#334155", maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis" }}>{h.conductor || "—"}</td>
+      <td style={{ color: "#94a3b8", fontSize: 11 }}>N/A</td>
+      <td style={{ maxWidth: 220, fontSize: 11, color: "#64748b" }} title={h.texto || undefined}>
+        {h.motivo || ""}{h.texto ? ` · ${h.texto}` : ""}
+        <div style={{ color: "#94a3b8", fontSize: 10.5 }}>{h.registrado_por || ""}</div>
+      </td>
+      <td className="num">{fmt(h.paradas)}</td>
+      <td className="num" style={{ fontWeight: 700 }}>{fmt(h.cargados)}</td>
+      <td className="num" style={{ color: "#0d8043", fontWeight: 700 }}>{fmt(h.entregados)}</td>
+      <td className="num" style={{ color: "#A3440B", fontWeight: 700 }}>{amb ? `+${fmt(h.entregados)}` : "—"}</td>
+      <td className="num" style={{ fontWeight: 700 }}>{amb ? fmt(h.entregados) : "1 serv."}</td>
+      <td className="num">{gris}</td><td className="num">{gris}</td>
+      <td className="num" style={{ fontWeight: 700, color: "#0d8043" }}>
+        {amb ? (n(h.cargados) ? `${Math.round(1000 * n(h.entregados) / n(h.cargados)) / 10}%` : "—") : "100%"}</td>
+      <td style={{ fontSize: 11, color: "#64748b" }}>{amb ? `${madre?.segmentacion || "—"} (madre)` : "N/A"}</td>
+      <td>{gris}</td><td>{gris}</td><td>{gris}</td><td>{gris}</td><td>{gris}</td><td>{gris}</td>
+      <td>{gris}</td>
+      <td><EstadoInterno e={h.estado} sub={sub} /></td>
+    </tr>
+  );
+}
+
 // ── Detalle de una colecta (first mile) dentro de la Jornada ──────────────
 // NS de la colecta = paradas exitosas ÷ paradas totales (no paquetes).
 const horaCL = (v) => {
@@ -508,7 +578,9 @@ function ModuloMaestroCL({ usuario } = {}) {
   const [colConf, setColConf] = useState({});              // id_viaje -> confirmación del supervisor en la bitácora
   const [reemplazos, setReemplazos] = useState([]);
   const [justif, setJustif] = useState({});
-  const [recolRuta, setRecolRuta] = useState({});          // id_viaje -> recolectas en ruta UM (Bitácora; se pagan como guía)                // id_viaje -> devoluciones justificadas automáticamente (motivo)        // reemplazos de supervisor por CECO y fechas (Mantenedor)          // todos los días con jornada (la lista de arriba trae solo 60)
+  const [recolRuta, setRecolRuta] = useState({});
+  const [hitos, setHitos] = useState([]);                  // Hitos Maestro de la bitácora (sorting, ambulancias, observaciones)
+  const [origen, setOrigen] = useState("todos");            // todos | api | internos          // id_viaje -> recolectas en ruta UM (Bitácora; se pagan como guía)                // id_viaje -> devoluciones justificadas automáticamente (motivo)        // reemplazos de supervisor por CECO y fechas (Mantenedor)          // todos los días con jornada (la lista de arriba trae solo 60)
   const [kpiAbierto, setKpiAbierto] = useState(null);
   const [recuadre, setRecuadre] = useState(null);
   const [aCuadrar, setACuadrar] = useState([]);
@@ -1627,7 +1699,10 @@ function ModuloMaestroCL({ usuario } = {}) {
   // Cada viaje con su CECOS real, segmentación, alerta del motor de zonas, supervisor,
   // empresa y tipo de ruta. Se usa para el día en pantalla y para la descarga por rango.
   // centro_meli guarda el código del centro de MELI (SRM1, SIL1…) que antes se mostraba como CECOS.
-  const enriquecerJornada = (filas, zonaRuta, tipoRuta, certPat, justMap = justif, recMap = recolRuta) => filas.map(r => {
+  const enriquecerJornada = (filas, zonaRuta, tipoRuta, certPat, justMap = justif, recMap = recolRuta, hitosDia = hitos) => filas.map(r => {
+    const hs = hitosDia.filter(h => String(h.id_ruta_madre) === String(r.id_viaje) && h.fecha === r.fecha);
+    const ambs = hs.filter(h => h.tipo === "ambulancia"), obs = hs.filter(h => h.tipo === "observacion");
+    const ajusteAi = ambs.reduce((a, h) => a + n(h.entregados), 0);
     const z = zonaRuta[String(r.id_viaje)];
     // NS con devoluciones justificadas por motivo: (entregados + justificadas) ÷ cargados.
     // Las colectas se miden por paradas y no cambian.
@@ -1635,7 +1710,16 @@ function ModuloMaestroCL({ usuario } = {}) {
     const pctNs = dj > 0 && n(r.cargados) > 0
       ? Math.round(1000 * Math.min(1, (n(r.entregados) + dj) / n(r.cargados))) / 10 : r.pct_entrega;
     const rec = recMap[String(r.id_viaje)];
-    return { ...r, devol_justificadas: dj, pct_ns: pctNs,
+    const estInt = !hs.length ? null
+      : ambs.some(h => h.estado === "en_ventana") || obs.some(h => h.estado === "en_ventana") ? ["en_ventana", ambs.some(h => h.estado === "en_ventana") ? "Su ambulancia aún es editable" : "Su observación aún es editable"]
+      : obs.some(h => h.estado === "tarificacion_manual") ? ["tarificacion_manual", `Pago especial · ${(obs.find(h => h.estado === "tarificacion_manual").afecta || "").toLowerCase()}`]
+      : ambs.some(h => h.estado === "por_revisar") ? ["por_revisar", "Ambulancia sin empresa certificada"]
+      : ["lista_pago", ""];
+    return { ...r, devol_justificadas: dj, pct_ns: pctNs, origen: "API", ajuste_ai: ajusteAi,
+             entr_pago: r.tipo === "colecta" ? null : n(r.entregados) - ajusteAi + n(rec?.cantidad),
+             observacion: obs.map(h => `${h.categoria}${h.afecta ? ` (${h.afecta.toLowerCase()})` : ""} · ${h.texto || ""}`).join(" | ") || null,
+             observacion_por: obs.map(h => `${h.registrado_por || ""} · ${new Date(h.registrado_at).toLocaleString("es-CL", { timeZone: "America/Santiago", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false })}`).join(" | ") || null,
+             estado_interno: estInt?.[0] || null, estado_interno_sub: estInt?.[1] || null, n_hitos: hs.length,
              recolectas_ruta: n(rec?.cantidad), recolectas_por: rec?.registrado_por || null, centro_meli: r.cecos, cecos_real: z?.cecos_admin || null,
              segmentacion: z?.segmentacion || null, zona_pago: z?.zona_principal || null,
              alerta_zona: z?.alerta || null, origen_zona: z?.origen_zona || null,
@@ -1683,6 +1767,10 @@ function ModuloMaestroCL({ usuario } = {}) {
     .filter(r => !cecos || r.sc_origen === cecos || r.sc_destino === cecos)
     .filter(r => coincide(r.ruta_origen, r.ruta_destino, r.chofer_origen, r.chofer_destino, r.patente_origen, r.patente_destino));
   const jornadaVista = filtrarJornada(jornadaZ);
+  // Sorting registrados en la bitácora (filas internas sin ruta madre)
+  const sortVista = hitos.filter(h => h.tipo === "sorting")
+    .filter(h => !cecos || h.ceco === cecos)
+    .filter(h => coincide(h.codigo, h.patente, h.conductor, h.ceco, h.empresa));
   const devolVista = filtrarDevol(devol);
   const traspVista = filtrarTrasp(trasp);
   const diasR = diasRango.length ? diasRango : dias;
@@ -1706,6 +1794,8 @@ function ModuloMaestroCL({ usuario } = {}) {
       .then(r => setJustif(Object.fromEntries((r || []).map(x => [String(x.id_viaje), x]))));
     apiSuave(`recolectas_ruta_cl?fecha=eq.${fecha}&cantidad=gt.0&select=id_ruta,cantidad,registrado_por&limit=3000`, [])
       .then(r => setRecolRuta(Object.fromEntries((r || []).map(x => [String(x.id_ruta), x]))));
+    apiSuave(`vw_hitos_maestro_cl?fecha=eq.${fecha}&anulado=eq.false&order=codigo&limit=3000`, [])
+      .then(r => setHitos(r || []));
   }, [fecha, jornada]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   // Abre el detalle de una colecta debajo de su fila; lo lee de colectas_dia la primera vez.
@@ -1772,8 +1862,11 @@ function ModuloMaestroCL({ usuario } = {}) {
         const jm = Object.fromEntries(jv.map(x => [String(x.id_viaje), x]));
         const rr = await leerTodo(`recolectas_ruta_cl?${rango("fecha")}&cantidad=gt.0&select=fecha,id_ruta,cantidad,registrado_por`, "fecha.asc,id_ruta.asc", "recolectas");
         const rm = Object.fromEntries(rr.map(x => [String(x.id_ruta), x]));
-        const todas = enriquecerJornada(jor, z, t, cp, jm, rm);
+        const hr = await leerTodo(`vw_hitos_maestro_cl?${rango("fecha")}&anulado=eq.false`, "fecha.asc,codigo.asc", "hitos");
+        const todas = enriquecerJornada(jor, z, t, cp, jm, rm, hr);
         filas = rFiltros ? filtrarJornada(todas) : todas;
+        const hrVis = hr.filter(h => h.tipo === "sorting" ? (!rFiltros || !cecos || h.ceco === cecos) : filas.some(r => String(r.id_viaje) === String(h.id_ruta_madre) && r.fecha === h.fecha));
+        filas = [...filas, ...internasCSV(hrVis, filas, h => reemplazoDe(h.ceco, h.fecha)?.supervisor_maestro || supCeco[h.ceco] || "")];
         cols = COLS_JORNADA; nombre = `maestro_jornada_${nombreRango}`;
       } else if (rInforme === "devol") {
         const dev = conJustificada(await leerTodo(`vw_devoluciones_justif_cl?${rango("fecha")}`, "fecha.asc,cecos.asc,id_viaje.asc,folio_guia.asc", "devoluciones"));
@@ -2074,6 +2167,15 @@ function ModuloMaestroCL({ usuario } = {}) {
                 title="Las rutas de Line Haul son transferencias entre centros, no reparto a clientes. Por defecto quedan fuera.">
                 {!soloReparto ? "✓ " : ""}Incluir Line Haul{nLineHaul ? ` (${fmt(nLineHaul)})` : ""}
               </button>
+              {tab === "jornada" && hitos.length > 0 && (
+                <span style={{ display: "inline-flex", gap: 4, alignItems: "center" }}
+                      title="API: lo que informa MELI. Internos: hitos que registran los supervisores en la bitácora (sorting y ambulancias).">
+                  <span style={{ fontSize: 11, color: "#64748b" }}>Origen</span>
+                  {[["todos", "Todos"], ["api", "Solo API"], ["internos", "Solo internos"]].map(([k, t]) => (
+                    <button key={k} className={`mj-chip ${origen === k ? "on" : ""}`} onClick={() => setOrigen(k)}>{t}</button>
+                  ))}
+                </span>
+              )}
               <div style={{ flex: 1 }} />
               <button className="mj-btn" onClick={abrirRango} title="Descargar Jornada, Devoluciones o Traspasos de varios días">
                 📅 Descargar por rango
@@ -2144,7 +2246,10 @@ function ModuloMaestroCL({ usuario } = {}) {
                 </div>
               )}
               {tab === "jornada" && (
-                <button className="mj-btn" onClick={() => descargarCSV(`maestro_jornada_${fecha}`, jornadaVista, COLS_JORNADA)}>
+                <button className="mj-btn" onClick={() => descargarCSV(`maestro_jornada_${fecha}`,
+                  [...(origen === "internos" ? [] : jornadaVista),
+                   ...(origen === "api" ? [] : internasCSV(hitos.filter(h => h.tipo === "sorting" ? sortVista.includes(h) : jornadaVista.some(r => String(r.id_viaje) === String(h.id_ruta_madre))), jornadaVista,
+                       h => reemplazoDe(h.ceco, h.fecha)?.supervisor_maestro || supCeco[h.ceco] || ""))], COLS_JORNADA)}>
                   Descargar CSV
                 </button>
               )}
@@ -2168,24 +2273,31 @@ function ModuloMaestroCL({ usuario } = {}) {
                 <table className="mj-tabla">
                   <thead>
                     <tr>
-                      <th>ID Viaje</th><th title="Bodega de origen en MELI (lo que antes se mostraba como CECOS)">Bodega</th>
+                      <th>ID Viaje</th><th title="API: informado por MELI · Interno: hito de la bitácora">Origen</th>
+                      <th title="Bodega de origen en MELI (lo que antes se mostraba como CECOS)">Bodega</th>
                       <th>CECO real</th><th>Supervisor</th><th>Tipo de ruta</th><th>Empresa (Certronic)</th><th>Patente</th><th>Conductor</th>
-                      <th>Ayud.</th><th className="num">Paradas</th><th className="num">Cargados</th>
-                      <th className="num">Entregados</th><th className="num">Devueltos</th><th className="num">Traspasos</th>
+                      <th>Ayud.</th><th title="Observaciones del supervisor en Hitos Maestro">Observación</th>
+                      <th className="num">Paradas</th><th className="num">Cargados</th>
+                      <th className="num">Entregados</th>
+                      <th className="num" title="Entregados que pasan a ambulancias internas (se restan de la ruta madre para el pago). Las cifras de API no se editan.">Ajuste AI</th>
+                      <th className="num" title="Entregados que se pagan: entregados − ambulancias + recolectas en ruta">Entr. pago</th>
+                      <th className="num">Devueltos</th><th className="num">Traspasos</th>
                       <th className="num" title="NS: (entregados + devoluciones justificadas por motivo) ÷ cargados. J = cuántas devoluciones se justificaron automáticamente. En colectas: paradas ejecutadas ÷ paradas.">% NS</th>
                       <th>Seg. zonal</th>
                       <th>Hora 1ª</th><th>1ª Parada</th>
                       <th>Hora últ.</th><th>Última Parada</th>
-                      <th className="num">Hrs ruta</th><th>Ciclo</th><th>Estado</th>
+                      <th className="num">Hrs ruta</th><th>Ciclo</th><th title="Estado que informa MELI">Estado cliente</th>
+                      <th title="En ventana (24 h editable en la bitácora) · Por revisar · Tarificación manual → Lista para pago → En prefactura">Estado interno</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {jornadaVista.map(r => (
+                    {(origen === "internos" ? [] : jornadaVista).map(r => (
                       <Fragment key={`${r.id_viaje}-${r.fecha}`}>
                       <tr style={colAbierta === String(r.id_viaje) ? { background: "#f3f7fc" } : undefined}>
                         <td style={{ fontWeight: 700, color: NAVY }}>
                           {r.id_viaje}
                         </td>
+                        <td><Etiqueta texto="API" color="#1E3A6E" fondo="#E8EEF8" /></td>
                         <td><Etiqueta texto={r.centro_meli || "—"} color="#64748b" fondo="#f1f5f9" /></td>
                         <td style={{ whiteSpace: "nowrap" }}
                             title={r.cecos_fuente === "meli_destino" ? "CECOS informado por MELI (destino de la ruta)"
@@ -2282,6 +2394,12 @@ function ModuloMaestroCL({ usuario } = {}) {
                         <td style={{ fontWeight: 600 }}>{r.patente || "—"}</td>
                         <td style={{ color: "#334155", maxWidth: 190, overflow: "hidden", textOverflow: "ellipsis" }}>{r.conductor || "—"}</td>
                         <td>{r.con_ayudante ? <Etiqueta texto="Sí" color="#0d8043" fondo="#e7f6ec" /> : <span style={{ color: "#cbd5e1" }}>—</span>}</td>
+                        <td style={{ maxWidth: 220, fontSize: 11.5 }} title={r.observacion || undefined}>
+                          {r.observacion ? <>
+                            <div style={{ color: "#1D6B45", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.observacion}</div>
+                            <div style={{ color: "#94a3b8", fontSize: 10.5 }}>{r.observacion_por}</div>
+                          </> : <span style={{ color: "#cbd5e1" }}>—</span>}
+                        </td>
                         <td className="num">
                           {r.tipo === "colecta" ? (
                             // Colecta: paradas ejecutadas / totales; se abre el detalle debajo de la fila
@@ -2312,7 +2430,7 @@ function ModuloMaestroCL({ usuario } = {}) {
                         </td>
                         {r.tipo === "colecta" ? (
                           // Colecta: se mide por paradas; los paquetes van en el detalle desplegable
-                          [0, 1, 2, 3].map(i => (
+                          [0, 1, 2, 3, 4, 5].map(i => (
                             <td key={"pq" + i} className="num" style={{ color: "#cbd5e1" }}
                                 title="Colecta: se mide por paradas. Los paquetes están en el detalle (botón de Paradas).">—</td>
                           ))
@@ -2325,6 +2443,9 @@ function ModuloMaestroCL({ usuario } = {}) {
                                   style={{ marginLeft: 4, background: "#e0f2fe", color: "#0e7490", borderRadius: 4, padding: "0 4px", fontSize: 10.5, cursor: "help" }}>+{r.recolectas_ruta} rec.</span>
                           )}
                         </td>
+                        <td className="num" style={{ color: r.ajuste_ai ? "#A82E22" : "#cbd5e1", fontWeight: r.ajuste_ai ? 700 : 400 }}>
+                          {r.ajuste_ai ? `−${fmt(r.ajuste_ai)}` : "—"}</td>
+                        <td className="num" style={{ fontWeight: 700, color: r.entr_pago !== n(r.entregados) ? "#A3440B" : "#334155" }}>{fmt(r.entr_pago)}</td>
                         <td className="num" style={{ color: n(r.devueltos) ? "#b42318" : "#cbd5e1", fontWeight: n(r.devueltos) ? 700 : 400 }}>
                           {n(r.devueltos) > 0 || r.devol_justificadas > 0 ? (
                             <button onClick={() => setDevAbierta(devAbierta === String(r.id_viaje) ? null : String(r.id_viaje))}
@@ -2371,25 +2492,32 @@ function ModuloMaestroCL({ usuario } = {}) {
                         <td className="num" style={{ color: "#64748b" }}>{r.horas_en_ruta ?? "—"}</td>
                         <td>{r.ciclo || "—"}</td>
                         <td><Etiqueta texto={r.status || "—"} color={r.status === "finished" ? "#0d8043" : "#475569"} fondo={r.status === "finished" ? "#e7f6ec" : "#eef2f9"} /></td>
+                        <td><EstadoInterno e={r.estado_interno} sub={r.estado_interno_sub} /></td>
                       </tr>
+                      {origen !== "api" && hitos.filter(h => h.tipo === "ambulancia" && String(h.id_ruta_madre) === String(r.id_viaje))
+                        .map(h => <FilaInterna key={h.codigo} h={h} madre={r} />)}
                       {r.tipo !== "colecta" && devAbierta === String(r.id_viaje) && (
                         <tr>
-                          <td colSpan={23} style={{ background: "#fdf6f5", padding: "10px 14px 14px", borderBottom: "2px solid #f3d4cf" }}>
+                          <td colSpan={28} style={{ background: "#fdf6f5", padding: "10px 14px 14px", borderBottom: "2px solid #f3d4cf" }}>
                             <DetalleDevoluciones r={r} filas={devol.filter(d => String(d.id_viaje) === String(r.id_viaje))} />
                           </td>
                         </tr>
                       )}
                       {r.tipo === "colecta" && colAbierta === String(r.id_viaje) && (
                         <tr>
-                          <td colSpan={23} style={{ background: "#f3f7fc", padding: "10px 14px 14px", borderBottom: "2px solid #dbe7f7" }}>
+                          <td colSpan={28} style={{ background: "#f3f7fc", padding: "10px 14px 14px", borderBottom: "2px solid #dbe7f7" }}>
                             <DetalleColecta d={colDet[String(r.id_viaje)]} />
                           </td>
                         </tr>
                       )}
                       </Fragment>
                     ))}
+                    {origen !== "api" && sortVista.map(h => (
+                      <FilaInterna key={h.codigo} h={h}
+                                   supervisor={reemplazoDe(h.ceco, h.fecha)?.supervisor_maestro || supCeco[h.ceco] || null} />
+                    ))}
                     {!jornadaVista.length && (
-                      <tr><td colSpan={23} style={{ padding: 20, color: "#8a94a6", textAlign: "center" }}>
+                      <tr><td colSpan={28} style={{ padding: 20, color: "#8a94a6", textAlign: "center" }}>
                         Ningún viaje coincide con los filtros. Prueba limpiando la búsqueda o el CECOS.
                       </td></tr>
                     )}
@@ -4251,10 +4379,11 @@ function ModuloMaestroCL({ usuario } = {}) {
 const COLS_JORNADA = [
   { titulo: "FECHA", campo: "fecha" },
   { titulo: "ID_VIAJE", campo: "id_viaje" },
+  { titulo: "ORIGEN", valor: r => r.origen || "API" },
   { titulo: "CECOS", valor: r => r.cecos_real || "" },
   { titulo: "BODEGA", campo: "centro_meli" },
   { titulo: "SUPERVISOR", valor: r => r.supervisor || "" },
-  { titulo: "TIPO_RUTA", valor: r => r.tipo_ruta ? etiquetaTipo(r.tipo_ruta).t : (r.estado_tipo === "por_confirmar" ? "NO PLANIFICADA (por confirmar)" : "") },
+  { titulo: "TIPO_RUTA", valor: r => r.tipo_hito_txt || (r.tipo_ruta ? etiquetaTipo(r.tipo_ruta).t : (r.estado_tipo === "por_confirmar" ? "NO PLANIFICADA (por confirmar)" : "")) },
   { titulo: "TIPO_RUTA_ESTADO", valor: r => r.estado_tipo || "" },
   { titulo: "CON_AMBULANCIA", valor: r => r.con_ambulancia ? "SI" : "" },
   { titulo: "SERVICIO_MELI", valor: r => r.servicio_txt || "" },
@@ -4269,6 +4398,10 @@ const COLS_JORNADA = [
   { titulo: "PARADAS", campo: "paradas" },
   { titulo: "CARGADOS", campo: "cargados" },
   { titulo: "ENTREGADOS", campo: "entregados" },
+  { titulo: "AJUSTE_AI", valor: r => (r.origen === "INTERNO" ? (r.tipo_hito_txt === "AMBULANCIA INTERNA" ? `+${r.entregados}` : "") : (r.ajuste_ai ? `-${r.ajuste_ai}` : "")) },
+  { titulo: "ENTREGADOS_PAGO", campo: "entr_pago" },
+  { titulo: "OBSERVACION", campo: "observacion" },
+  { titulo: "ESTADO_INTERNO", valor: r => (r.estado_interno ? (EST_INT[r.estado_interno]?.[0] || r.estado_interno).toUpperCase() : "") },
   { titulo: "DEVUELTOS", campo: "devueltos" },
   { titulo: "D_JUSTIFICADOS", campo: "d_justificados" },
   { titulo: "PENDIENTES", campo: "pendientes" },
