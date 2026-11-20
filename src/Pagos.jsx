@@ -2772,6 +2772,91 @@ function ConciliacionTercerosMX({ usuario }) {
   // PNR, robos) mientras el analista la tenía abierta: al guardar, esas líneas
   // "externas" se conservan en vez de desaparecer (caso semana 47).
   const idsConocidosRef = useRef({});
+
+  // ── Cobros publicados en el portal que no están en ninguna prefactura ──
+  // Regla (20-nov-2026): no show y PNR se publican solos en el portal y se
+  // incluyen a mano en la prefactura; portal y prefactura deben sumar lo mismo.
+  // Si al enviar quedan cobros sin incluir, se avisa y el analista puede seguir
+  // solo con un comentario, que queda registrado con su nombre y la hora.
+  const [cobrosSinPref, setCobrosSinPref] = useState([]);
+  const [agregandoCobro, setAgregandoCobro] = useState(null);
+  const quienSoy = () => (usuario && (usuario.nombre || usuario.email)) || "Brain";
+
+  const cargarCobrosSinPref = async (sem) => {
+    try {
+      const { data, error } = await sb.rpc("fn_cobros_sin_prefactura", { p_semana: sem });
+      if (error) throw error;
+      setCobrosSinPref(data || []);
+    } catch (e) { console.error("cobros sin prefactura:", e); setCobrosSinPref([]); }
+  };
+  useEffect(() => { cargarCobrosSinPref(semana); }, [semana]);
+
+  const agregarCobroPendiente = async (c) => {
+    if (c.tipo !== "noshow") { alert("Los PNR se agregan desde la pestaña PNR de Cobros."); return; }
+    setAgregandoCobro(c.linea_id);
+    try {
+      const fecha = String(c.fecha).slice(0, 10);
+      const { data: res, error } = await sb.rpc("fn_agregar_cobro_prefactura", {
+        p_semana: semana, p_empresa: c.empresa_nombre, p_sc: c.service_center,
+        p_linea: {
+          _id: c.linea_id, origen: "ajuste", es_manual: true, service_center_id: c.service_center,
+          fecha, placa: c.placa, id_ruta: "—", driver_name: c.concepto || `No show · ${c.placa}`,
+          monto: -Math.abs(Number(c.monto || 0)), es_no_pago: false, tiene_auxiliar: false,
+          km_real_meli: null, bonificacion_nombre: null, bonificacion_pct: 0,
+          tiene_bonificacion: false, monto_bonificacion: 0, motivo_no_pago: null,
+        },
+      });
+      if (error) throw error;
+      if (res?.ok) {
+        await sb.from("cobros_noshow_mx").update({ aplicado_semana: String(semana) })
+          .eq("fecha", fecha).eq("service_center", c.service_center).eq("placa", c.placa);
+        // La empresa se vuelve a leer de la base para que la pantalla no guarde una versión vieja.
+        delete idsConocidosRef.current[c.empresa_nombre];
+        setDetalles(prev => { const n = { ...prev }; delete n[c.empresa_nombre]; return n; });
+        setMsg({ ok: true, txt: `No show ${c.placa} agregado a la prefactura de ${c.empresa_nombre} · ${c.service_center}.` });
+      } else if (res?.motivo === "enviada") {
+        alert(`La prefactura de ${c.empresa_nombre} · ${c.service_center} ya se envió. Para agregarlo hay que reabrirla.`);
+      } else {
+        alert(`Todavía no hay prefactura generada de ${c.empresa_nombre} · ${c.service_center} para la semana ${semana}. Ciérrala primero y vuelve a intentar.`);
+      }
+      await cargarCobrosSinPref(semana);
+      await cargarResumen(semana);
+    } catch (e) { alert("No se pudo agregar: " + (e.message || e)); }
+    setAgregandoCobro(null);
+  };
+
+  // Compuerta antes de enviar: lista los cobros publicados sin incluir de esas
+  // prefacturas. Si hay, pide comentario; sin comentario no se envía. Devuelve
+  // true si se puede seguir.
+  const confirmarCobrosPendientes = async (pares) => {
+    let pendientes = [];
+    try {
+      const { data } = await sb.rpc("fn_cobros_sin_prefactura", { p_semana: semana });
+      const claves = new Set(pares.map(p => `${p.empresa}||${p.sc}`));
+      pendientes = (data || []).filter(c => !c.omitido && claves.has(`${c.empresa_nombre}||${c.service_center}`));
+    } catch (e) { console.error("revisar cobros pendientes:", e); }
+    if (!pendientes.length) return true;
+    const total = pendientes.reduce((s, c) => s + Number(c.monto || 0), 0);
+    const lista = pendientes.slice(0, 15).map(c =>
+      `• ${c.empresa_nombre} · ${c.service_center} · ${c.tipo === "pnr" ? "PNR" : "No show"} ${c.placa || ""} ${String(c.fecha).slice(0, 10)} · ${fmtMon(c.monto)}`).join("\n");
+    const comentario = window.prompt(
+      `⚠️ Hay ${pendientes.length} cobro(s) publicados en el portal del tercero que NO están en ${pares.length > 1 ? "estas prefacturas" : "esta prefactura"} (${fmtMon(total)}):\n\n` +
+      lista + (pendientes.length > 15 ? `\n… y ${pendientes.length - 15} más` : "") +
+      `\n\nSi envías así, el portal y la prefactura NO van a sumar lo mismo.\n` +
+      `Para incluirlos: Cancelar y usar "Agregar" en el aviso de arriba.\n\n` +
+      `Para enviar igual, escribe el motivo (obligatorio; queda registrado con tu nombre):`, "");
+    if (comentario === null) return false;
+    if (!String(comentario).trim()) { alert("Sin motivo no se envía. No se envió nada."); return false; }
+    const filasOmit = pendientes.map(c => ({
+      semana, empresa_nombre: c.empresa_nombre, service_center: c.service_center, linea_id: c.linea_id,
+      tipo: c.tipo, monto: c.monto, comentario: String(comentario).trim(), usuario: quienSoy(),
+    }));
+    const { error } = await sb.from("prefactura_cobros_omitidos")
+      .upsert(filasOmit, { onConflict: "semana,empresa_nombre,service_center,linea_id" });
+    if (error) { alert("No se pudo registrar el motivo: " + error.message + "\n\nNo se envió nada."); return false; }
+    await cargarCobrosSinPref(semana);
+    return true;
+  };
   const [auxMap, setAuxMap] = useState({});            // id_ruta -> { decision, motivo } (aprobaciones_helper)
   const [loadingDetalle, setLoadingDetalle] = useState(false);
   const [transportistas, setTransportistas] = useState([]); // prefacturas_transportistas_mx
@@ -4877,6 +4962,7 @@ function ConciliacionTercerosMX({ usuario }) {
         alert(`${m.empresa} · ${m.sc} NO se envió todavía.\n\nEl motor había cambiado desde el cierre: ${pd.cambios} monto(s) actualizados y ${pd.altas} viaje(s) agregados. La prefactura ya quedó al día${pd.estadoPrevio === "cerrada" ? " y cerrada de nuevo" : ""}.\n\nRevisa el total nuevo y vuelve a presionar Enviar.`);
         return;
       }
+      if (!(await confirmarCobrosPendientes([{ empresa: m.empresa, sc: m.sc }]))) { setEnviando(null); return; }
       await enviarUno(m.empresa, m.sc, m.filasSC, m.rSC, { to: m.to, cc: m.cc, asunto: m.asunto, cuerpo: m.cuerpo });
       setModalEnvio(null);
       setMsg({ ok: true, txt: `Prefactura enviada: ${m.empresa} · ${m.sc} → ${m.to}` });
@@ -4902,6 +4988,7 @@ function ConciliacionTercerosMX({ usuario }) {
     }).filter(Boolean);
     const txt = items.map(i => `• ${i.empresa} · ${i.sc} → ${i.to || "SIN CORREO"}`).join("\n");
     if (!confirm(`¿Enviar ${items.length} prefactura(s)?\n\n${txt}`)) return;
+    if (!(await confirmarCobrosPendientes(items.map(i => ({ empresa: i.empresa, sc: i.sc }))))) return;
     setEnviando("__lote__");
     let ok = 0, fail = 0; const errores = [];
     let alDia = 0;
@@ -4980,6 +5067,7 @@ function ConciliacionTercerosMX({ usuario }) {
     if (!enviables.length) return alert("No hay prefacturas cerradas (no negativas) para enviar. Primero cerr\u00e1 todo.");
     const sinCorreo = enviables.filter(r => !((transpPorNorm[norm(r.empresa_nombre)] || {}).correo_to));
     if (!confirm(`\uD83D\uDCE7 ENVIAR TODO \u2014 semana ${semana}\n\nSe enviar\u00e1n ${enviables.length} prefactura(s) cerradas.\n${negativas.length ? `\u26A0\uFE0F ${negativas.length} negativa(s) NO se env\u00edan (quedan para arrastre).\n` : ""}${sinCorreo.length ? `\u26A0\uFE0F ${sinCorreo.length} sin correo (se omiten).\n` : ""}\n\u00bfContinuar?`)) return;
+    if (!(await confirmarCobrosPendientes(enviables.map(r => ({ empresa: r.empresa_nombre, sc: r.service_center }))))) return;
     setEnviando("__todo__");
     let ok = 0, fail = 0, alDia = 0; const errores = [];
     for (const r of enviables) {
@@ -5222,6 +5310,44 @@ function ConciliacionTercerosMX({ usuario }) {
           </button>
         </div>
       </div>
+
+      {/* Cobros publicados en el portal que no están en ninguna prefactura */}
+      {cobrosSinPref.length > 0 && (() => {
+        const pend = cobrosSinPref.filter(c => !c.omitido);
+        const omit = cobrosSinPref.filter(c => c.omitido);
+        const tot = pend.reduce((s, c) => s + Number(c.monto || 0), 0);
+        return (
+          <div style={{ background: pend.length ? "#fff7ed" : "#f8fafc", border: `1px solid ${pend.length ? "#fdba74" : "#e2e8f0"}`, borderRadius: 10, padding: "10px 14px", marginBottom: 12 }}>
+            {pend.length > 0 && (
+              <div style={{ fontSize: 13, fontWeight: 700, color: "#9a3412", marginBottom: 6 }}>
+                ⚠️ {pend.length} cobro(s) publicados en el portal que no están en ninguna prefactura de la semana {semana} · {fmtMon(tot)}
+                <span style={{ fontWeight: 400, color: "#9a3412" }}> — hasta incluirlos, el portal y la prefactura no suman lo mismo.</span>
+              </div>
+            )}
+            {[...pend, ...omit].map(c => (
+              <div key={c.linea_id} style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 12, padding: "4px 0", borderTop: "1px solid #fde7d2", color: c.omitido ? "#94a3b8" : "#334155" }}>
+                <span style={{ minWidth: 70, fontWeight: 700 }}>{c.tipo === "pnr" ? "PNR" : "No show"}</span>
+                <span style={{ minWidth: 80 }}>{fmtFechaDDMM(c.fecha)}</span>
+                <span style={{ minWidth: 90 }}>{c.placa || "—"}</span>
+                <span style={{ flex: 1 }}>{c.empresa_nombre} · {c.service_center}</span>
+                <span style={{ minWidth: 90, textAlign: "right", fontWeight: 700 }}>{fmtMon(c.monto)}</span>
+                {c.omitido ? (
+                  <span style={{ minWidth: 220, fontSize: 11 }} title={c.omitido_comentario || ""}>
+                    Enviado sin incluir · {c.omitido_por} · {c.omitido_comentario}
+                  </span>
+                ) : c.tipo === "noshow" ? (
+                  <button onClick={() => agregarCobroPendiente(c)} disabled={agregandoCobro === c.linea_id}
+                    style={{ minWidth: 120, padding: "4px 10px", fontSize: 11, fontWeight: 700, borderRadius: 6, border: "1px solid #1d4ed8", background: "#eff6ff", color: "#1d4ed8", cursor: "pointer" }}>
+                    {agregandoCobro === c.linea_id ? "…" : "Agregar a prefactura"}
+                  </button>
+                ) : (
+                  <span style={{ minWidth: 120, fontSize: 11 }}>Agregar desde la pestaña PNR</span>
+                )}
+              </div>
+            ))}
+          </div>
+        );
+      })()}
 
       {Object.keys(desfaseEnviadas).length > 0 && (
         <div style={{ border: "1px solid #fca5a5", background: "#fef2f2", borderRadius: 10, padding: "10px 14px", marginBottom: 14 }}>
