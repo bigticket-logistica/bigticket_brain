@@ -904,6 +904,11 @@ function ModuloPnr({ usuario }) {
   const [cobrados, setCobrados] = useState({});
   const [overrides, setOverrides] = useState({});        // "placa|semana" -> empresa puesta a mano
   const [enPrefactura, setEnPrefactura] = useState({});  // pnr_id -> ya tiene linea en la conciliacion
+  // PNR automático (20-nov-2026): desde el 16-nov los PNR se publican solos en
+  // el portal y se retiran solos si MELI los anula. Aquí se ven los anulados y
+  // los reembolsos pendientes (anulado con la prefactura ya enviada).
+  const [anulados, setAnulados] = useState({});          // pnr_id -> cobro anulado por MELI
+  const [reembolsos, setReembolsos] = useState([]);      // reembolsos pendientes (todas las semanas)
   const [loading, setLoading] = useState(false);
   const [guardando, setGuardando] = useState(null);
   const [msg, setMsg] = useState(null);
@@ -968,10 +973,15 @@ function ModuloPnr({ usuario }) {
 
       // 2c) los que ya se agregaron a una conciliación
       const yaCobrados = {};
+      const anul = {};
       const { data: cob } = await sb.from("cobros_pnr_mx")
-        .select("pnr_id, empresa_nombre, service_center, semana, monto, asignado_por, enviado_a_cobro_en")
+        .select("pnr_id, empresa_nombre, service_center, semana, monto, asignado_por, enviado_a_cobro_en, estado, origen, anulado_at, anulado_motivo")
         .in("pnr_id", ids.map(String));
-      for (const c of cob || []) yaCobrados[c.pnr_id] = c;
+      for (const c of cob || []) {
+        if (c.estado === "anulado") anul[c.pnr_id] = c;
+        else yaCobrados[c.pnr_id] = c;
+      }
+      setAnulados(anul);
 
       // 3) placa y fecha de ruta desde la jornada
       const rutas = [...new Set((casos || []).map(c => c.route_id).filter(Boolean))];
@@ -1045,6 +1055,11 @@ function ModuloPnr({ usuario }) {
 
       setFilas(out);
       setCobrados(yaCobrados);
+      try {
+        const { data: rb } = await sb.from("pnr_reembolsos_pendientes").select("*")
+          .is("resuelto_at", null).order("detectado_at", { ascending: false });
+        setReembolsos(rb || []);
+      } catch (e) { console.error("reembolsos PNR:", e); }
       // Cambios manuales de empresa hechos por el analista sobre lo que declaró
       // el supervisor. Cada uno con su motivo, autor, día y hora.
       try {
@@ -1308,6 +1323,21 @@ function ModuloPnr({ usuario }) {
     return nuevas.length;
   };
 
+  const resolverReembolso = async (r) => {
+    const nota = window.prompt(
+      `Reembolso del PNR ${r.pnr_id}\n${r.empresa_nombre} · ${r.service_center} · ${money(r.monto)}\n` +
+      `MELI lo anuló cuando ya iba en la prefactura enviada de la semana ${r.semana_prefactura}.\n\n` +
+      `¿Cómo se resolvió? (por ejemplo: "devuelto en la prefactura de la semana 49")`, "");
+    if (nota === null) return;
+    if (!String(nota).trim()) { setMsg({ ok: false, txt: "Hay que escribir cómo se resolvió." }); return; }
+    const { error } = await sb.from("pnr_reembolsos_pendientes")
+      .update({ resuelto_at: new Date().toISOString(), resuelto_por: quien, nota: String(nota).trim() })
+      .eq("id", r.id);
+    if (error) { setMsg({ ok: false, txt: "No se pudo marcar: " + error.message }); return; }
+    setReembolsos(rs => rs.filter(x => x.id !== r.id));
+    setMsg({ ok: true, txt: `Reembolso del PNR ${r.pnr_id} marcado como resuelto.` });
+  };
+
   // ── CARRIL B · Publicar al portal ────────────────────────────────────────
   // Escribe solo en cobros_pnr_mx, que es lo que lee el portal del tercero. No
   // toca la prefactura: ese es el carril A, que sigue armándose el lunes.
@@ -1403,7 +1433,9 @@ function ModuloPnr({ usuario }) {
         if (eIns) throw eIns;
 
         for (const fila of g.filas) await avisarSupervisorPnr(fila.pnr_id);
-        insertadas = g.filas.map(x => x.pnr_id);
+        // Si después falla la prefactura, solo se deshace lo que esta acción creó:
+        // un PNR que ya estaba en el portal (por ejemplo, publicado solo) se queda.
+        insertadas = g.filas.map(x => x.pnr_id).filter(id => !cobrados[id]);
         const n = await cargarEnConciliacion(g.empresa, g.sc, g.lineas);
         ok += n;
         movidos += g.lineas.filter(l => l.service_center_id !== l.pnr_sc_original).length;
@@ -1669,6 +1701,28 @@ function ModuloPnr({ usuario }) {
 
   return (
     <div style={{ padding: 24, fontFamily: "'Open Sans', sans-serif" }}>
+      <div style={{ background: "#eff6ff", border: "1px solid #bfdbfe", color: "#1e3a8a", borderRadius: 8, padding: "8px 12px", fontSize: 12, marginBottom: 12 }}>
+        Desde el lunes 16-nov los PNR se <b>publican solos en el portal</b> apenas MELI los pasa a cobrables, y se <b>retiran solos</b> si MELI los anula.
+        A la prefactura entran <b>solo a mano</b>, con "Agregar a prefactura".
+      </div>
+      {reembolsos.length > 0 && (
+        <div style={{ background: "#fef2f2", border: "1px solid #fca5a5", borderRadius: 8, padding: "10px 12px", marginBottom: 12 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#991b1b", marginBottom: 6 }}>
+            ⚠️ {reembolsos.length} reembolso(s) pendiente(s): MELI anuló el PNR cuando ya iba en una prefactura enviada · {money(reembolsos.reduce((s, r) => s + Number(r.monto || 0), 0))}
+          </div>
+          {reembolsos.map(r => (
+            <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 12, padding: "4px 0", borderTop: "1px solid #fecaca", color: "#334155" }}>
+              <span style={{ minWidth: 90, fontWeight: 700 }}>PNR {r.pnr_id}</span>
+              <span style={{ flex: 1 }}>{r.empresa_nombre} · {r.service_center} · prefactura semana {r.semana_prefactura}</span>
+              <span style={{ minWidth: 90, textAlign: "right", fontWeight: 700 }}>{money(r.monto)}</span>
+              <button onClick={() => resolverReembolso(r)}
+                style={{ padding: "3px 10px", fontSize: 11, fontWeight: 700, borderRadius: 6, border: "1px solid #b91c1c", background: "#fff", color: "#b91c1c", cursor: "pointer" }}>
+                Marcar resuelto
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
       <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 14 }}>
         <div>
           <div style={{ fontSize: 16, fontWeight: 700, color: "#002E5D" }}>PNR — cobro a terceros</div>
@@ -1840,12 +1894,21 @@ function ModuloPnr({ usuario }) {
                       </div>
                     </td>
                     <td style={{ ...td, textAlign: "right", whiteSpace: "nowrap" }}>
-                      {ya ? (
+                      {!ya && anulados[String(f.case_id)] ? (
+                        <div style={{ textAlign: "center" }}>
+                          <div style={{ fontSize: 9.5, fontWeight: 700, color: "#64748b" }}>✕ anulado por MELI</div>
+                          <div style={{ fontSize: 8.5, color: "#94a3b8" }}>retirado del portal · {fechaHoraMx(anulados[String(f.case_id)].anulado_at)}</div>
+                          {reembolsos.some(r => String(r.pnr_id) === String(f.case_id)) && (
+                            <div style={{ fontSize: 8.5, color: "#b91c1c", fontWeight: 700 }}>reembolso pendiente</div>
+                          )}
+                        </div>
+                      ) : ya ? (
                         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                           {/* CARRIL B · portal */}
                           <div>
                             <div style={{ fontSize: 9.5, fontWeight: 700, color: "#92400e" }}>✓ en el portal</div>
                             <div style={{ fontSize: 8.5, color: "#94a3b8" }}>{ya.empresa_nombre}</div>
+                            <div style={{ fontSize: 8.5, color: "#94a3b8" }}>{ya.origen === "automatico" ? "publicado solo" : `publicado por ${ya.asignado_por || "—"}`}</div>
                             <button onClick={() => quitarDelPortal(f, ya)} disabled={guardando === f.case_id}
                               title="Solo del portal del tercero y de la prefactura diaria."
                               style={{ marginTop: 3, width: "100%", padding: "3px 8px", fontSize: 9.5, fontWeight: 700,
