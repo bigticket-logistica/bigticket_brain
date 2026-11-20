@@ -2767,6 +2767,11 @@ function ConciliacionTercerosMX({ usuario }) {
   const [loading, setLoading] = useState(true);
   const [expandida, setExpandida] = useState(null);    // nombre de empresa abierta
   const [detalles, setDetalles] = useState({});        // empresa -> filas (todos los SC)
+  // Ids de las líneas que esta pantalla ya conoce, por empresa. Sirve para no
+  // pisar líneas que se agregaron a la prefactura desde OTRA pantalla (no show,
+  // PNR, robos) mientras el analista la tenía abierta: al guardar, esas líneas
+  // "externas" se conservan en vez de desaparecer (caso semana 47).
+  const idsConocidosRef = useRef({});
   const [auxMap, setAuxMap] = useState({});            // id_ruta -> { decision, motivo } (aprobaciones_helper)
   const [loadingDetalle, setLoadingDetalle] = useState(false);
   const [transportistas, setTransportistas] = useState([]); // prefacturas_transportistas_mx
@@ -3017,7 +3022,7 @@ function ConciliacionTercerosMX({ usuario }) {
     } catch (e) { console.error("maestros prefacturas:", e); }
   };
 
-  useEffect(() => { cargarResumen(semana); setConsolidadas(new Set()); cargarRepetidas(semana); cargarAux(semana); setExpandida(null); setDetalles({}); setAsignacionSel({}); setTrasp(null); setTraspRows(null); cargarTraspasos(semana); cargarNoPagados(semana); setNoPagVerQuitados(false); }, [semana]);
+  useEffect(() => { cargarResumen(semana); setConsolidadas(new Set()); cargarRepetidas(semana); cargarAux(semana); setExpandida(null); idsConocidosRef.current = {}; setDetalles({}); setAsignacionSel({}); setTrasp(null); setTraspRows(null); cargarTraspasos(semana); cargarNoPagados(semana); setNoPagVerQuitados(false); }, [semana]);
   useEffect(() => { cargarMaestros(); }, []);
 
   const cargarDetalle = async (empresa) => {
@@ -3040,6 +3045,7 @@ function ConciliacionTercerosMX({ usuario }) {
           for (const c of editados) for (const ln of c.detalle) filas.push({ ...ln, _id: ln._id || lineaId(ln), origen: ln.origen || "motor" });
         }
       }
+      idsConocidosRef.current[empresa] = new Set(filas.map(f => f._id || lineaId(f)));
       setDetalles(prev => ({ ...prev, [empresa]: filas }));
     } catch (e) {
       console.error("detalle conciliación:", e);
@@ -3274,6 +3280,28 @@ function ConciliacionTercerosMX({ usuario }) {
 
   const guardarBorradorSC = async (empresa, sc, filasSCnuevas, cobros) => {
     const lunes = rangoSemanaInventario(semana).inicio.toISOString().slice(0, 10);
+    // Antes de escribir, se mira lo que hay HOY en la base: si alguien agregó una
+    // línea desde otra pantalla (no show, PNR, robo) después de que esta pantalla
+    // cargó la empresa, esa línea se conserva. Las líneas que el analista quitó
+    // aquí sí se van, porque esta pantalla ya las conocía.
+    const conocidos = idsConocidosRef.current[empresa] || new Set();
+    const nuevosIds = new Set(filasSCnuevas.map(d => d._id || lineaId(d)));
+    let externas = [];
+    try {
+      const { data: actual } = await sb.from("conciliaciones_terceros").select("detalle")
+        .eq("empresa_nombre", empresa).eq("service_center", sc).eq("semana", semana).maybeSingle();
+      externas = (Array.isArray(actual?.detalle) ? actual.detalle : [])
+        .filter(l => { const id = l._id || lineaId(l); return !conocidos.has(id) && !nuevosIds.has(id); })
+        .map(l => ({ ...l, _id: l._id || lineaId(l), origen: l.origen || "motor" }));
+    } catch (e) { console.error("leer prefactura antes de guardar:", e); }
+    if (externas.length) {
+      filasSCnuevas = [...filasSCnuevas, ...externas];
+      setDetalles(prev => ({ ...prev, [empresa]: [...(prev[empresa] || []), ...externas] }));
+      setMsg({ ok: true, txt: `${empresa} · ${sc}: se conservaron ${externas.length} línea(s) agregada(s) desde otra pantalla (por ejemplo, un no show). Revisa el detalle.` });
+    }
+    const conocidosNuevos = idsConocidosRef.current[empresa] || new Set();
+    for (const d of filasSCnuevas) conocidosNuevos.add(d._id || lineaId(d));
+    idsConocidosRef.current[empresa] = conocidosNuevos;
     const tot = recalcSC(filasSCnuevas, cobros);
     const { error } = await sb.from("conciliaciones_terceros").upsert({
       empresa_nombre: empresa, service_center: sc, semana, semana_inicio: lunes, estado: "borrador",
