@@ -443,6 +443,14 @@ function PanelHito({ h, pago, quien, onListo }) {
         <button className="mj-btn" disabled={busy || monto === ""} onClick={() => enviar({ p_monto: Number(monto) }, "Valor guardado")}>Guardar valor</button>
         {h.tipo === "sorting" && <span style={{ color: "#94a3b8" }}>Vacío = se paga según el Mantenedor (Pago de hitos)</span>}
       </div>
+      {h.tipo === "ambulancia" && (
+        <div style={{ color: h.aprobacion_estado === "aprobada" ? "#0d8043" : h.aprobacion_estado === "rechazada" ? "#b42318" : "#7A4A00" }}>
+          {h.aprobacion_estado === "aprobada" ? `✓ Ok del líder: ${h.aprobado_por}${h.aprobado_at ? ` · ${new Date(h.aprobado_at).toLocaleString("es-CL", { timeZone: "America/Santiago", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false })}` : ""}`
+            : h.aprobacion_estado === "rechazada" ? `✕ Rechazada por ${h.aprobado_por}${h.aprobacion_nota ? `: ${h.aprobacion_nota}` : ""}`
+            : "Esperando el ok del líder en la bitácora. Sin el ok no se paga."}
+          {h.aprobacion_estado && <span style={{ color: "#94a3b8" }}> · si cambias el valor, vuelve a pedir el ok</span>}
+        </div>
+      )}
       {!h.empresa_certificada && (
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           <span style={{ color: "#8A2F12" }}>La patente {h.patente} no tiene empresa certificada en Certronic.</span>
@@ -469,7 +477,12 @@ function FilaInterna({ h, madre, supervisor, pago, abierto, onAbrir }) {
   const amb = h.tipo === "ambulancia";
   const sinCert = !h.empresa_certificada;
   const gris = <span style={{ color: "#cbd5e1" }}>—</span>;
-  const sub = h.estado === "en_ventana" ? ventanaTxt(h) : h.estado === "por_revisar" ? "Empresa sin certificar" : "";
+  const okLider = !amb || h.aprobacion_estado === "aprobada";
+  const sub = h.estado === "en_ventana" ? ventanaTxt(h)
+    : h.estado === "por_revisar"
+      ? (!okLider ? (h.aprobacion_estado === "rechazada" ? `Rechazada por ${h.aprobado_por || "el líder"}` : "Falta el ok del líder")
+         : "Empresa sin certificar")
+    : amb && h.aprobacion_estado === "aprobada" ? `Ok de ${h.aprobado_por}` : "";
   return (
     <tr style={{ background: sinCert ? "#FFF6E8" : "#FFF8F2" }}>
       <td style={{ fontWeight: 700, color: "#A3440B", whiteSpace: "nowrap" }}>
