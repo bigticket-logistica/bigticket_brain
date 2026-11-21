@@ -7813,7 +7813,7 @@ const RED_TIPOS = {
 };
 const SEM_ANCLA_LUNES = new Date("2026-06-01T12:00:00Z"); // lunes de la semana 24 del Brain
 
-function OperandoSinCertificar() {
+function OperandoSinCertificar({ usuario }) {
   const hoyMx = () => new Intl.DateTimeFormat("en-CA", { timeZone: "America/Mexico_City" }).format(new Date());
   const semanaDe = (iso) => 24 + Math.floor((new Date(iso + "T12:00:00Z") - SEM_ANCLA_LUNES) / (7 * 86400000));
   const rango = (sem) => {
@@ -7830,6 +7830,38 @@ function OperandoSinCertificar() {
   const [filtro, setFiltro] = useState("todos");
   const [busca, setBusca] = useState("");
   const [error, setError] = useState(null);
+  // Aviso en el portal: lo gatilla Certificaciones, por semana.
+  const [aviso, setAviso] = useState(null);       // fila de red_cert_aviso_portal de la semana
+  const [avisando, setAvisando] = useState(false);
+  const quien = (usuario && (usuario.email || usuario.nombre)) || window.__PERFIL_EMAIL || "certificaciones_brain";
+
+  const cargarAviso = async (s) => {
+    const { data } = await sb.from("red_cert_aviso_portal").select("*").eq("semana", s).maybeSingle();
+    setAviso(data || null);
+  };
+
+  const publicarAviso = async () => {
+    const yaEsta = aviso && aviso.publicado;
+    if (!window.confirm(
+      (yaEsta ? `Actualizar el aviso de la semana ${sem} en el portal.` : `Publicar el aviso de la semana ${sem} en el portal de los terceros.`) +
+      `\n\nCada empresa verá en "Mi flota" SOLO sus pendientes: choferes y vehículos que operaron sin certificar y, si aplica, el contrato sin firmar. ` +
+      `No ven montos.\n\nSi ya había otra semana publicada, el portal pasa a mostrar esta.`)) return;
+    setAvisando(true);
+    const { data, error } = await sb.rpc("fn_red_cert_publicar_aviso", { p_semana: sem, p_usuario: quien });
+    setAvisando(false);
+    if (error) { alert("No se pudo publicar: " + error.message); return; }
+    alert(`Aviso publicado: ${data} pendiente(s) quedaron visibles para sus empresas.`);
+    await cargarAviso(sem);
+  };
+
+  const retirarAviso = async () => {
+    if (!window.confirm(`Retirar el aviso de la semana ${sem} del portal. Las empresas dejan de verlo.`)) return;
+    setAvisando(true);
+    const { error } = await sb.rpc("fn_red_cert_retirar_aviso", { p_semana: sem, p_usuario: quien });
+    setAvisando(false);
+    if (error) { alert("No se pudo retirar: " + error.message); return; }
+    await cargarAviso(sem);
+  };
 
   const cargar = async () => {
     setFilas(null); setError(null);
@@ -7843,7 +7875,7 @@ function OperandoSinCertificar() {
     setFilas(p.data || []);
     const mm = {}; for (const x of (m.data || [])) mm[x.control] = x.modo; setModos(mm);
   };
-  useEffect(() => { cargar(); }, [sem]);
+  useEffect(() => { cargar(); cargarAviso(sem); }, [sem]);
 
   const plata = (n) => "$" + Number(n || 0).toLocaleString("es-MX", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const ddmm = (iso) => { const s = String(iso || "").slice(0, 10); const [y, m, d] = s.split("-"); return d ? `${d}-${m}` : s; };
@@ -7915,6 +7947,28 @@ function OperandoSinCertificar() {
             </button>
           );
         })}
+      </div>
+
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", background: aviso?.publicado ? "#f0fdf4" : "#f8fafc", border: `1px solid ${aviso?.publicado ? "#86efac" : "#e4e7ec"}`, borderRadius: 10, padding: "10px 12px", marginTop: 12 }}>
+        <div style={{ flex: 1, minWidth: 260, fontSize: 12.5, color: "#334155" }}>
+          {aviso?.publicado ? (
+            <><b style={{ color: "#166534" }}>✓ Aviso publicado en el portal</b> · {aviso.filas} pendiente(s) · por {aviso.publicado_por} el {new Date(aviso.publicado_at).toLocaleString("es-MX", { timeZone: "America/Mexico_City", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}.
+              <span style={{ color: "#64748b" }}> Cada empresa ve solo sus pendientes en "Mi flota". Lo que se regularice después no se actualiza solo: usa "Actualizar aviso".</span></>
+          ) : (
+            <><b>El portal no muestra nada de esta semana.</b> <span style={{ color: "#64748b" }}>Cuando la revisen, publícala para que cada empresa vea sus pendientes en "Mi flota".</span>
+              {aviso?.retirado_at && <span style={{ color: "#94a3b8" }}> (Retirado por {aviso.retirado_por}.)</span>}</>
+          )}
+        </div>
+        <button onClick={publicarAviso} disabled={avisando || filas === null || !!error}
+          style={{ padding: "7px 14px", borderRadius: 8, border: "1px solid #1d4ed8", background: "#1d4ed8", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+          {avisando ? "…" : aviso?.publicado ? "Actualizar aviso" : "Publicar aviso en el portal"}
+        </button>
+        {aviso?.publicado && (
+          <button onClick={retirarAviso} disabled={avisando}
+            style={{ padding: "7px 14px", borderRadius: 8, border: "1px solid #b91c1c", background: "#fff", color: "#b91c1c", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+            Retirar aviso
+          </button>
+        )}
       </div>
 
       <div style={{ display: "flex", gap: 8, alignItems: "center", margin: "12px 0", flexWrap: "wrap" }}>
