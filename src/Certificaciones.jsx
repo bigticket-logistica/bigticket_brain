@@ -7485,8 +7485,17 @@ function EmpresasDelPatio({ onContador }) {
   );
 }
 
+// El analista ve solo la ÚLTIMA carga del Excel. Las placas de cargas
+// anteriores siguen en la base (no se borra nada: la historia sirve para
+// pagos y auditoría), pero no se muestran. Las cargas anteriores a este
+// corte no se muestran nunca: el padrón arranca limpio con la primera carga
+// de la base real.
+const FLOTA_CORTE = new Date("2026-11-23T00:00:00Z").getTime();
+
 function InventarioFlota() {
-  const [rows, setRows] = useState(null);
+  const [rows, setRows] = useState(null);       // solo las placas de la última carga
+  const [todas, setTodas] = useState([]);       // todo el padrón, para contar nuevas al subir
+  const [ultimaCargaTs, setUltimaCargaTs] = useState(0);
   const [cargas, setCargas] = useState([]);
   const [busca, setBusca] = useState("");
   const [fEmpresa, setFEmpresa] = useState("todas");
@@ -7499,11 +7508,20 @@ function InventarioFlota() {
   const [nDif, setNDif] = useState(0);        // diferencias del dia, para el contador de la subpestaña
 
   const cargar = async () => {
-    const [{ data: inv }, { data: cg }] = await Promise.all([
+    const [{ data: inv }, { data: cg }, { data: marcas }] = await Promise.all([
       sb.from("vw_inventario_flota").select("*").order("placa").limit(3000),
       sb.from("inventario_flota_cargas").select("*").order("cargado_at", { ascending: false }).limit(5),
+      // cargado_at se lee de la tabla base: todas las placas de una misma
+      // subida llevan exactamente la misma marca de tiempo.
+      sb.from("inventario_flota").select("placa, cargado_at").limit(3000),
     ]);
-    setRows(inv || []);
+    const ts = {};
+    for (const m of marcas || []) ts[m.placa] = m.cargado_at ? new Date(m.cargado_at).getTime() : 0;
+    const ultima = Math.max(0, ...Object.values(ts));
+    const hayCargaNueva = ultima >= FLOTA_CORTE;
+    setTodas(inv || []);
+    setUltimaCargaTs(hayCargaNueva ? ultima : 0);
+    setRows(hayCargaNueva ? (inv || []).filter(r => ts[r.placa] === ultima) : []);
     setCargas(cg || []);
 
   };
@@ -7572,7 +7590,7 @@ function InventarioFlota() {
       }
       if (!filas.length) throw new Error("No se encontró ninguna fila con placa válida.");
 
-      const previas = new Set((rows || []).map(r => r.placa));
+      const previas = new Set((todas || []).map(r => r.placa));
       const nuevas = filas.filter(f => !previas.has(f.placa)).length;
 
       // En lotes: un upsert de 500 filas de una vez suele cortarse.
@@ -7714,7 +7732,14 @@ function InventarioFlota() {
         <Kpi label="Empresa no está en el Brain" valor={kpi.sinEmpresa} color="#c0392b" bg="#fbeaea" />
       </div>
 
-      {cargas.length > 0 && (
+      {!ultimaCargaTs && rows !== null && (
+        <div style={{ fontSize: 12.5, color: "#8a4a00", background: "#fff7e6", border: "1px solid #f5d29a",
+          borderRadius: 10, padding: "11px 14px", marginBottom: 12 }}>
+          <b>Sube el Excel del día para ver el padrón.</b> Desde ahora se muestra solo la última carga: cada archivo nuevo reemplaza en pantalla al anterior.
+        </div>
+      )}
+
+      {ultimaCargaTs > 0 && cargas.length > 0 && (
         <div style={{ fontSize: 11.5, color: "#667085", background: "#fff", border: "0.5px solid #e4e7ec",
           borderRadius: 10, padding: "9px 13px", marginBottom: 12 }}>
           <b>Última carga:</b> {fMX(cargas[0].cargado_at, { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}
