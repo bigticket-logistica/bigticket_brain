@@ -7975,22 +7975,6 @@ function OperandoSinCertificar({ usuario }) {
 
       {error && <div style={{ background: "#fef2f2", color: "#991b1b", border: "1px solid #fca5a5", borderRadius: 8, padding: "10px 12px", fontSize: 12.5, marginBottom: 12 }}>No se pudo cargar: {error}</div>}
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 10, marginBottom: 8 }}>
-        {Object.keys(RED_TIPOS).map(k => {
-          const x = resumen[k] || { n: 0, rutas: 0, monto: 0 };
-          return (
-            <button key={k} onClick={() => setFiltro(filtro === k ? "todos" : k)}
-              style={{ textAlign: "left", background: filtro === k ? RED_TIPOS[k].bg : "#fff", border: `1px solid ${filtro === k ? RED_TIPOS[k].c : "#e4e7ec"}`, borderRadius: 10, padding: "10px 12px", cursor: "pointer" }}>
-              <div style={{ fontSize: 11.5, color: RED_TIPOS[k].c, fontWeight: 800 }}>{RED_TIPOS[k].t}</div>
-              <div style={{ fontSize: 22, fontWeight: 800, color: x.n ? RED_TIPOS[k].c : "#cbd5e1", lineHeight: 1.2 }}>{x.n}</div>
-              <div style={{ fontSize: 10.5, color: "#64748b" }}>{x.rutas} ruta(s) · {plata(x.monto)}</div>
-              <div style={{ fontSize: 10.5, color: "#94a3b8", marginTop: 4, lineHeight: 1.35 }}>{RED_TIPOS[k].ayuda}</div>
-              <div style={{ fontSize: 10, color: "#64748b", marginTop: 4, fontWeight: 700 }}>{etiquetaModo(modoDe(k))}</div>
-            </button>
-          );
-        })}
-      </div>
-
       {/* Interruptores de la retención: los maneja Certificaciones */}
       <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10, padding: "10px 12px", marginTop: 12 }}>
         <div style={{ fontSize: 12.5, fontWeight: 800, color: "#002E5D", marginBottom: 8 }}>Retención de pagos por certificación</div>
@@ -8077,6 +8061,32 @@ function OperandoSinCertificar({ usuario }) {
             Retirar aviso
           </button>
         )}
+      </div>
+
+      <div style={{ fontSize: 12.5, fontWeight: 800, color: "#002E5D", margin: "16px 0 8px" }}>
+        Qué falla la regla en la semana {sem} <span style={{ fontWeight: 400, color: "#64748b" }}>· haz clic en una tarjeta para filtrar la tabla de abajo</span>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 10, marginBottom: 8 }}>
+        {Object.keys(RED_TIPOS).map(k => {
+          const x = resumen[k] || { n: 0, rutas: 0, monto: 0 };
+          return (
+            <button key={k} onClick={() => setFiltro(filtro === k ? "todos" : k)}
+              style={{ textAlign: "left", background: filtro === k ? RED_TIPOS[k].bg : "#fff", border: `1px solid ${filtro === k ? RED_TIPOS[k].c : "#e4e7ec"}`, borderRadius: 10, padding: "10px 12px", cursor: "pointer" }}>
+              <div style={{ fontSize: 11.5, color: RED_TIPOS[k].c, fontWeight: 800 }}>{RED_TIPOS[k].t}</div>
+              <div style={{ fontSize: 22, fontWeight: 800, color: x.n ? RED_TIPOS[k].c : "#cbd5e1", lineHeight: 1.2 }}>{x.n}</div>
+              <div style={{ fontSize: 10.5, color: "#64748b" }}>{x.rutas} ruta(s) · {plata(x.monto)}</div>
+              <div style={{ fontSize: 10.5, color: "#94a3b8", marginTop: 4, lineHeight: 1.35 }}>{RED_TIPOS[k].ayuda}</div>
+              <div style={{ fontSize: 10, color: "#64748b", marginTop: 4, fontWeight: 700 }}>{etiquetaModo(modoDe(k))}</div>
+              {modoDe(k) === "encendido" && (() => {
+                const claves = new Set((filas || []).filter(f => f.tipo === k).map(f => k === "contrato" ? String(f.empresa || "") : String(f.placa || "")));
+                const ok = retenidos.filter(v => v.estado !== "retenido" && claves.has(k === "contrato" ? String(v.empresa || "") : String(v.placa || "")));
+                const pend = retenidos.filter(v => v.estado === "retenido" && claves.has(k === "contrato" ? String(v.empresa || "") : String(v.placa || "")));
+                if (!ok.length && !pend.length) return null;
+                return <div style={{ fontSize: 10, color: "#64748b", marginTop: 2 }}>{pend.length} ruta(s) retenida(s) · {ok.length} habilitada(s) o liberada(s)</div>;
+              })()}
+            </button>
+          );
+        })}
       </div>
 
       <div style={{ display: "flex", gap: 8, alignItems: "center", margin: "12px 0", flexWrap: "wrap" }}>
