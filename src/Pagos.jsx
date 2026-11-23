@@ -2808,8 +2808,40 @@ function ConciliacionTercerosMX({ usuario }) {
   };
   useEffect(() => { cargarRetenidos(semana); }, [semana]);
 
+  // Línea de PNR para la prefactura: la misma que arma la pestaña PNR de Cobros
+  // (mismo _id, mismos campos y la copia del historial de avisos como prueba).
+  const armarLineaPnr = async (c) => {
+    const caseId = String(c.linea_id).replace(/^pnr\|/, "");
+    const [{ data: cob }, { data: caso }, { data: avs }] = await Promise.all([
+      sb.from("cobros_pnr_mx").select("*").eq("pnr_id", caseId).maybeSingle(),
+      sb.from("pnr_casos_mx").select("case_id, shipment_id, conductor, route_id, sub_estado").eq("case_id", caseId).maybeSingle(),
+      sb.from("vw_pnr_avisos_historial").select("tipo, destino, creado_en, horas_restantes").eq("case_id", caseId).order("creado_en", { ascending: true }),
+    ]);
+    if (!cob) throw new Error(`No encontré el cobro del PNR ${caseId}`);
+    const monto = Math.abs(Number(cob.monto || c.monto || 0));
+    const fechaRuta = cob.fecha_ruta ? String(cob.fecha_ruta).slice(0, 10) : null;
+    const shipment = cob.shipment_id || caso?.shipment_id || null;
+    const motivo = cob.concepto || "PNR";
+    return {
+      _id: `pnr|${caseId}`, origen: "pnr", es_manual: true,
+      fecha: fechaRuta, placa: cob.placa || c.placa || "—",
+      id_ruta: caso?.route_id ? String(caso.route_id) : "",
+      driver_name: [`COBRO PNR ${caseId}`, shipment ? `guía ${shipment}` : null, fechaRuta ? `ruta del ${fmtFechaDDMM(fechaRuta)}` : null].filter(Boolean).join(" · "),
+      service_center_id: c.service_center,
+      tiene_auxiliar: false, cargado: null, entregado: null,
+      monto: -monto, es_no_pago: false,
+      pnr_case_id: caseId, pnr_shipment_id: shipment, pnr_motivo: motivo,
+      pnr_conductor: cob.driver_name || caso?.conductor || null,
+      pnr_facturado_en: cob.facturado_en || null,
+      pnr_sc_original: c.service_center, pnr_fecha_ruta: fechaRuta,
+      pnr_avisos: (avs || []).map(a => ({ t: a.tipo || "aviso", d: a.destino || null, f: a.creado_en, h: a.horas_restantes != null ? a.horas_restantes : null })),
+      agregado_por: window.__PERFIL_EMAIL || "conciliacion_brain",
+      agregado_at: new Date().toISOString(),
+    };
+  };
+
   const agregarCobroPendiente = async (c) => {
-    if (c.tipo !== "noshow") { alert("Los PNR se agregan desde la pestaña PNR de Cobros."); return; }
+    if (c.tipo === "pnr") return agregarPnrPendiente(c);
     setAgregandoCobro(c.linea_id);
     try {
       const fecha = String(c.fecha).slice(0, 10);
@@ -2839,6 +2871,35 @@ function ConciliacionTercerosMX({ usuario }) {
       await cargarCobrosSinPref(semana);
       await cargarResumen(semana);
     } catch (e) { alert("No se pudo agregar: " + (e.message || e)); }
+    setAgregandoCobro(null);
+  };
+
+  const agregarPnrPendiente = async (c) => {
+    setAgregandoCobro(c.linea_id);
+    try {
+      const linea = await armarLineaPnr(c);
+      const { data: res, error } = await sb.rpc("fn_agregar_cobro_prefactura", {
+        p_semana: semana, p_empresa: c.empresa_nombre, p_sc: c.service_center, p_linea: linea,
+      });
+      if (error) throw error;
+      if (res?.ok) {
+        await sb.from("conciliacion_terceros_ajustes").insert({
+          empresa_nombre: c.empresa_nombre, service_center: c.service_center, semana,
+          accion: "agregar", origen_linea: "pnr", linea,
+          motivo: `Cobro de PNR ${linea.pnr_case_id} · ${linea.pnr_motivo} (guía ${linea.pnr_shipment_id || "—"}) por ${fmtMon(Math.abs(linea.monto))} · agregado desde Conciliación`,
+          usuario: window.__PERFIL_EMAIL || "conciliacion_brain",
+        });
+        delete idsConocidosRef.current[c.empresa_nombre];
+        setDetalles(prev => { const n = { ...prev }; delete n[c.empresa_nombre]; return n; });
+        setMsg({ ok: true, txt: `PNR ${linea.pnr_case_id} agregado a la prefactura de ${c.empresa_nombre} · ${c.service_center}.` });
+      } else if (res?.motivo === "enviada") {
+        alert(`La prefactura de ${c.empresa_nombre} · ${c.service_center} ya se envió. Para agregarlo hay que reabrirla.`);
+      } else {
+        alert(`Todavía no hay prefactura generada de ${c.empresa_nombre} · ${c.service_center} para la semana ${semana}. Ciérrala primero y vuelve a intentar.`);
+      }
+      await cargarCobrosSinPref(semana);
+      await cargarResumen(semana);
+    } catch (e) { alert("No se pudo agregar el PNR: " + (e.message || e)); }
     setAgregandoCobro(null);
   };
 
@@ -5389,7 +5450,7 @@ function ConciliacionTercerosMX({ usuario }) {
                   <span style={{ minWidth: 220, fontSize: 11 }} title={c.omitido_comentario || ""}>
                     Enviado sin incluir · {c.omitido_por} · {c.omitido_comentario}
                   </span>
-                ) : c.tipo === "noshow" ? (
+                ) : (c.tipo === "noshow" || c.tipo === "pnr") ? (
                   <button onClick={() => agregarCobroPendiente(c)} disabled={agregandoCobro === c.linea_id}
                     style={{ minWidth: 120, padding: "4px 10px", fontSize: 11, fontWeight: 700, borderRadius: 6, border: "1px solid #1d4ed8", background: "#eff6ff", color: "#1d4ed8", cursor: "pointer" }}>
                     {agregandoCobro === c.linea_id ? "…" : "Agregar a prefactura"}
