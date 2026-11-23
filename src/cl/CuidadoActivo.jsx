@@ -122,6 +122,7 @@ export default function CuidadoActivoCL({ usuario, sub }) {
   if (sub === "ca_gps") return <GpsCamaras quien={quien} />;
   if (sub === "ca_oc") return <OrdenesCompra quien={quien} />;
   if (sub === "ca_combustible") return <Combustible quien={quien} />;
+  if (sub === "ca_chat") return <ChatWhatsApp quien={quien} />;
   if (sub && sub.startsWith("ca_mant:")) return <MantenedorCA vista={sub.slice(8)} quien={quien} rol={usuario?.rol} />;
   if (sub === "ca_mantenedores") return <MovidoAMantenedor que="Los mantenedores de Cuidado de Activo" />;
   if (sub === "ca_uso") return <UsoTabs quien={quien} />;
@@ -4668,6 +4669,205 @@ const MANT_GRUPOS = [
   ["Documentos", /^doc_/], ["Conducción Geotab", /^geo_/], ["Órdenes de compra", /^oc_/], ["GPS y cámaras", /^(gps_|equipos_|camaras_)/], ["Detenciones", /^det_/],
   ["Mantenciones", /^mnt_/], ["Flujo de caja", /^flujo_/], ["Reparaciones · quién autoriza", /^rep_/], ["Falta 10 · visitas", /^f10_/], ["Registros de prueba", /^prueba_/],
 ];
+// ═══ Chat WhatsApp de Cuidado de Activo (+56 9 5858 1911): Biggy (agente de IA) y el analista ═══
+// Como Consultas de Posventa, en tres columnas y sin tickets (hay un solo analista):
+//  [1] conversaciones (filtros por estado, búsqueda, sin leer, urgentes)
+//  [2] el hilo: lo que escribe la persona, lo que responde Biggy y lo que responde el analista; responder, tomar, devolver, cerrar
+//  [3] quién es (tipo, empresa, CECO, taller), motivo, derivación y métricas de la semana
+// Arriba, el interruptor del bot (ag_modo): apagado / prueba / marcha blanca / activo.
+const AG_MODOS = [["apagado", "Apagado", "Biggy no responde a nadie; los mensajes igual quedan aquí"], ["prueba", "Prueba", "Biggy responde solo a los números de prueba (wa_prueba)"],
+  ["marcha_blanca", "Marcha blanca", "Biggy responde a los números de prueba y a los contactos marcados «marcha blanca»"], ["activo", "Activo", "Biggy responde a todos los contactos registrados"]];
+const AG_EST = { bot: ["Biggy", "#eef2f8", C.navy], derivada: ["Derivada", C.ambarT, C.ambar], humano: ["Analista", C.verdeT, C.verde], cerrada: ["Cerrada", C.fondo, C.suave] };
+const AG_TIPO = { supervisor: "Supervisor", empresa: "Empresa", chofer: "Chofer", ejecutivo: "Ejecutivo", taller: "Taller", jefe: "Jefe zonal", otro: "Otro" };
+const MEDIA = { image: "📷 Foto", audio: "🎤 Audio", document: "📄 Documento", location: "📍 Ubicación", video: "🎥 Video", sticker: "Sticker" };
+const horaCL = (t) => (t ? new Date(t).toLocaleString("es-CL", { timeZone: "America/Santiago", hour: "2-digit", minute: "2-digit", day: "2-digit", month: "2-digit" }) : "");
+function ChatWhatsApp({ quien }) {
+  const [cfg, setCfg] = useState({});
+  const [convs, setConvs] = useState(null);
+  const [ultimos, setUltimos] = useState({});
+  const [contactos, setContactos] = useState({});
+  const [sel, setSel] = useState(null);
+  const [msgs, setMsgs] = useState([]);
+  const [cola, setCola] = useState({});
+  const [f, setF] = useState({ estado: "abiertas", texto: "" });
+  const [texto, setTexto] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+  const [metricas, setMetricas] = useState([]);
+  const finRef = useState({ el: null })[0];
+  const cargarCfg = () => api("ca_config_cl?clave=in.(ag_modo,wa_modo,wa_prueba,ag_nombre)&select=clave,valor").then((r) => setCfg(Object.fromEntries((r || []).map((x) => [x.clave, x.valor])))).catch(() => {});
+  const cargarLista = async () => {
+    try {
+      const [cv, um, ct] = await Promise.all([
+        api("ca_ag_conversaciones_cl?select=*&order=ultimo_msg_at.desc&limit=300"),
+        api("ca_ag_mensajes_cl?select=conversacion_id,texto,tipo,autor,direccion,creado_at&order=id.desc&limit=600"),
+        api("ca_wa_contactos_cl?select=id,tipo,nombre,empresa,cecos,taller,telefono,rut,correo,marcha_blanca"),
+      ]);
+      const u = {}; for (const m of um || []) if (!u[m.conversacion_id]) u[m.conversacion_id] = m;
+      setConvs(cv || []); setUltimos(u); setContactos(Object.fromEntries((ct || []).map((x) => [x.id, x])));
+    } catch { setConvs((x) => x || []); }
+  };
+  const cargarHilo = async (id) => {
+    if (!id) return;
+    try {
+      const m = await api(`ca_ag_mensajes_cl?conversacion_id=eq.${id}&select=*&order=id`);
+      setMsgs(m || []);
+      const ids = (m || []).map((x) => x.cola_id).filter(Boolean);
+      if (ids.length) { const c = await api(`ca_wa_cola_cl?id=in.(${ids.join(",")})&select=id,estado,estado_meta,error`); setCola(Object.fromEntries((c || []).map((x) => [x.id, x]))); }
+    } catch { /* se reintenta en el próximo ciclo */ }
+  };
+  useEffect(() => {
+    cargarCfg(); cargarLista();
+    api("vw_ag_metricas_cl?select=*&limit=4").then(setMetricas).catch(() => {});
+    const i = setInterval(cargarLista, 10000); return () => clearInterval(i);
+  }, []);   // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!sel) return;
+    cargarHilo(sel); rpc("fn_ag_leida", { p_conversacion: sel }).catch(() => {});
+    const i = setInterval(() => cargarHilo(sel), 5000); return () => clearInterval(i);
+  }, [sel]);   // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { finRef.el?.scrollIntoView({ block: "end" }); }, [msgs.length]);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  const modo = cfg.ag_modo || "prueba";
+  const cambiarModo = async (m) => {
+    if (m === modo) return;
+    if (m === "activo" && !window.confirm("¿Activar a Biggy para TODOS los contactos registrados? Desde ahora responderá a supervisores, empresas, choferes, talleres y jefes.")) return;
+    try { await rpc("fn_ca_mantenedor_guardar", { p_tabla: "ca_config_cl", p_clave: "ag_modo", p_campo: "valor", p_valor: m, p_por: quien }); cargarCfg(); } catch (e) { alert(e.message); }
+  };
+  if (convs === null) return <div style={{ color: C.tenue }}>Cargando…</div>;
+  const c = convs.find((x) => x.id === sel) || null;
+  const persona = c ? contactos[c.contacto_id] || null : null;
+  const sinLeer = (x) => { const u = ultimos[x.id]; return u && u.direccion === "in" && (!x.leida_at || new Date(u.creado_at) > new Date(x.leida_at)); };
+  const cuenta = (k) => convs.filter((x) => (k === "abiertas" ? x.estado !== "cerrada" : k === "sin_leer" ? sinLeer(x) : k === "urgentes" ? x.prioridad === "urgente" && x.estado !== "cerrada" : x.estado === k)).length;
+  const vis = convs.filter((x) => (f.estado === "todas" || (f.estado === "abiertas" ? x.estado !== "cerrada" : f.estado === "sin_leer" ? sinLeer(x) : f.estado === "urgentes" ? x.prioridad === "urgente" && x.estado !== "cerrada" : x.estado === f.estado))
+    && (!f.texto || `${x.nombre || ""} ${x.telefono} ${x.motivo || ""} ${(contactos[x.contacto_id] || {}).empresa || ""}`.toLowerCase().includes(f.texto.toLowerCase())));
+  const ultimaEntrada = [...msgs].reverse().find((m) => m.direccion === "in");
+  const ventana = ultimaEntrada && Date.now() - new Date(ultimaEntrada.creado_at).getTime() < 24 * 3600e3;
+  const enviar = async () => {
+    const t = texto.trim(); if (!t || !c) return;
+    setBusy(true); setMsg("");
+    try { await rpc("fn_ag_enviar", { p_conversacion: c.id, p_texto: t, p_autor: "humano", p_autor_nombre: quien }); setTexto(""); await Promise.all([cargarHilo(c.id), cargarLista()]); }
+    catch (e) { setMsg(e.message); } finally { setBusy(false); }
+  };
+  const accion = async (a) => {
+    if (a === "cerrar" && !window.confirm("¿Cerrar la conversación? Si la persona vuelve a escribir, se abre una nueva.")) return;
+    try { await rpc("fn_ag_conversacion", { p_conversacion: c.id, p_accion: a, p_por: quien }); await cargarLista(); } catch (e) { alert(e.message); }
+  };
+  const ticks = (m) => { const q = cola[m.cola_id]; if (!q) return ""; if (q.estado === "error") return " · ⚠ no se envió"; return q.estado_meta === "read" ? " · ✓✓ leído" : q.estado_meta === "delivered" ? " · ✓✓" : q.estado === "enviado" ? " · ✓" : " · enviando…"; };
+  const col = { background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, overflow: "hidden", display: "flex", flexDirection: "column" };
+  return (
+    <div>
+      {/* Interruptor del bot */}
+      <div style={{ background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, padding: "10px 14px", marginBottom: 12, display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+        <div style={{ fontWeight: 800, color: C.navy }}>🤖 {cfg.ag_nombre || "Biggy"}</div>
+        <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+          {AG_MODOS.map(([k, t]) => <button key={k} onClick={() => cambiarModo(k)} style={{ ...btn(modo === k ? undefined : "sec"), padding: "5px 12px", background: modo === k ? (k === "apagado" ? C.rojo : k === "activo" ? C.verde : C.navy) : undefined }}>{t}</button>)}
+        </div>
+        <div style={{ fontSize: 12.5, color: C.suave, flex: "1 1 300px" }}>{(AG_MODOS.find((x) => x[0] === modo) || [])[2]}{modo === "prueba" && cfg.wa_prueba ? ` (+${cfg.wa_prueba})` : ""}. Avisos con plantilla: modo <b>{cfg.wa_modo || "—"}</b> (Mantenedor › Parámetros).</div>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "300px minmax(360px, 1fr) 260px", gap: 12, height: "calc(100vh - 260px)", minHeight: 480 }}>
+        {/* [1] Conversaciones */}
+        <div style={col}>
+          <div style={{ padding: 10, borderBottom: `1px solid ${C.borde}` }}>
+            <input style={{ ...inp, width: "100%", boxSizing: "border-box", marginBottom: 6 }} placeholder="Nombre, celular, empresa o motivo" value={f.texto} onChange={(e) => setF({ ...f, texto: e.target.value })} />
+            <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+              {[["abiertas", "Abiertas"], ["sin_leer", "Sin leer"], ["urgentes", "Urgentes"], ["derivada", "Derivadas"], ["humano", "Analista"], ["bot", "Biggy"], ["cerrada", "Cerradas"], ["todas", "Todas"]].map(([k, t]) => (
+                <button key={k} onClick={() => setF({ ...f, estado: k })} style={{ fontSize: 11.5, padding: "3px 8px", borderRadius: 12, cursor: "pointer", border: `1px solid ${f.estado === k ? C.navy : C.borde}`, background: f.estado === k ? C.navy : "#fff", color: f.estado === k ? "#fff" : C.texto }}>
+                  {t}{k !== "todas" ? ` ${cuenta(k)}` : ""}</button>
+              ))}
+            </div>
+          </div>
+          <div style={{ overflowY: "auto", flex: 1 }}>
+            {vis.length === 0 && <div style={{ padding: 14, color: C.tenue, fontSize: 12.5 }}>Sin conversaciones con este filtro.</div>}
+            {vis.map((x) => { const e = AG_EST[x.estado] || [x.estado, C.fondo, C.suave], u = ultimos[x.id], nl = sinLeer(x); return (
+              <div key={x.id} onClick={() => setSel(x.id)} style={{ padding: "9px 12px", borderBottom: `1px solid ${C.borde}`, cursor: "pointer", background: sel === x.id ? "#eef2f8" : "#fff" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 6 }}>
+                  <b style={{ fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{nl && <span style={{ color: C.rojo }}>● </span>}{x.nombre || "+" + x.telefono}</b>
+                  <span style={{ fontSize: 11, color: C.tenue, whiteSpace: "nowrap" }}>{horaCL(x.ultimo_msg_at)}</span>
+                </div>
+                <div style={{ fontSize: 12, color: C.suave, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{u ? `${u.autor === "persona" ? "" : u.autor === "agente" ? "Biggy: " : "Tú: "}${u.texto || MEDIA[u.tipo] || ""}` : ""}</div>
+                <div style={{ display: "flex", gap: 4, marginTop: 3, flexWrap: "wrap" }}>
+                  {chip(e[0], e[1], e[2])}{x.prioridad === "urgente" && x.estado !== "cerrada" && chip("URGENTE", C.rojoT, C.rojo)}
+                  {x.tipo && <span style={{ fontSize: 11, color: C.tenue }}>{AG_TIPO[x.tipo] || x.tipo}</span>}{x.motivo && <span style={{ fontSize: 11, color: C.tenue }}>· {x.motivo}</span>}
+                </div>
+              </div>
+            ); })}
+          </div>
+        </div>
+        {/* [2] Hilo */}
+        <div style={col}>
+          {!c ? <div style={{ margin: "auto", color: C.tenue, fontSize: 13 }}>Elige una conversación.</div> : <>
+            <div style={{ padding: "8px 12px", borderBottom: `1px solid ${C.borde}`, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <b style={{ color: C.navy }}>{c.nombre || "+" + c.telefono}</b><span style={{ fontSize: 12, color: C.tenue }}>+{c.telefono}</span>
+              {chip(...(AG_EST[c.estado] || [c.estado, C.fondo, C.suave]))}
+              <span style={{ flex: 1 }} />
+              {c.estado !== "humano" && c.estado !== "cerrada" && <button style={{ ...btn(), padding: "4px 10px" }} onClick={() => accion("tomar")} title="Biggy deja de responder esta conversación">Tomar</button>}
+              {(c.estado === "humano" || c.estado === "derivada") && <button style={{ ...btn("sec"), padding: "4px 10px" }} onClick={() => accion("devolver")} title="Biggy vuelve a responder">Devolver a Biggy</button>}
+              {c.estado !== "cerrada" && <button style={{ ...btn("sec"), padding: "4px 10px" }} onClick={() => accion("cerrar")}>Cerrar</button>}
+            </div>
+            <div style={{ flex: 1, overflowY: "auto", padding: 12, background: "#f7f8fa" }}>
+              {msgs.map((m) => { const out = m.direccion === "out", bot = m.autor === "agente"; return (
+                <div key={m.id} style={{ display: "flex", justifyContent: out ? "flex-end" : "flex-start", margin: "5px 0" }}>
+                  <div style={{ maxWidth: "75%", background: out ? (bot ? "#e6eefb" : "#fde9d9") : "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, padding: "7px 10px" }}>
+                    {out && <div style={{ fontSize: 11, fontWeight: 700, color: bot ? C.navy : "#c2410c", marginBottom: 2 }}>{bot ? `🤖 ${m.autor_nombre || "Biggy"}` : m.autor_nombre || "Analista"}</div>}
+                    {m.tipo && m.tipo !== "text" && <div style={{ fontSize: 12.5, color: C.suave }}>{MEDIA[m.tipo] || m.tipo}</div>}
+                    {m.texto && <div style={{ fontSize: 13.5, whiteSpace: "pre-wrap" }}>{m.texto}</div>}
+                    <div style={{ fontSize: 10.5, color: C.tenue, textAlign: "right", marginTop: 2 }}>{horaCL(m.creado_at)}{out ? ticks(m) : ""}</div>
+                  </div>
+                </div>
+              ); })}
+              <div ref={(el) => { finRef.el = el; }} />
+            </div>
+            <div style={{ borderTop: `1px solid ${C.borde}`, padding: 10 }}>
+              {!ventana ? <div style={{ fontSize: 12.5, color: C.ambar }}>Pasaron más de 24 horas desde el último mensaje de la persona: WhatsApp solo permite escribirle con una plantilla. Cuando vuelva a escribir, podrás responder aquí.</div> : <>
+                {c.estado === "bot" && <div style={{ fontSize: 11.5, color: C.tenue, marginBottom: 4 }}>Si respondes, tomas la conversación y Biggy deja de responder (puedes devolvérsela).</div>}
+                <div style={{ display: "flex", gap: 8 }}>
+                  <textarea style={{ ...inp, flex: 1, minHeight: 44, resize: "vertical" }} placeholder="Escribe tu respuesta (Enter envía, Shift+Enter cambia de línea)" value={texto}
+                    onChange={(e) => setTexto(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); enviar(); } }} />
+                  <button style={btn()} disabled={busy || !texto.trim()} onClick={enviar}>{busy ? "Enviando…" : "Enviar"}</button>
+                </div>
+              </>}
+              {msg && <div style={{ fontSize: 12, color: C.rojo, marginTop: 4 }}>{msg}</div>}
+            </div>
+          </>}
+        </div>
+        {/* [3] Persona y métricas */}
+        <div style={{ ...col, padding: 12, overflowY: "auto", gap: 10 }}>
+          {c ? <div>
+            <div style={{ fontWeight: 800, color: C.navy, marginBottom: 6 }}>Quién escribe</div>
+            {persona ? <div style={{ fontSize: 12.5, lineHeight: 1.7 }}>
+              <div><b>{persona.nombre}</b> · {AG_TIPO[persona.tipo] || persona.tipo}</div>
+              {persona.empresa && <div>Empresa: {persona.empresa}</div>}
+              {persona.cecos?.length ? <div>CECO: {persona.cecos.join(", ")}</div> : null}
+              {persona.taller && <div>Taller: {persona.taller}</div>}
+              {persona.rut && <div>RUT: {persona.rut}</div>}
+              {persona.correo && <div>{persona.correo}</div>}
+              {persona.marcha_blanca && <div style={{ color: C.navy }}>En marcha blanca</div>}
+            </div> : <div style={{ fontSize: 12.5, color: C.ambar }}>Número no registrado en Contactos de WhatsApp (Mantenedor › Cuidado de Activo › WhatsApp).</div>}
+            <div style={{ fontSize: 12.5, marginTop: 10, lineHeight: 1.7 }}>
+              {c.motivo && <div>Motivo: <b>{c.motivo}</b></div>}
+              {c.prioridad === "urgente" && <div style={{ color: C.rojo, fontWeight: 700 }}>Prioridad urgente</div>}
+              {c.derivada_at && <div>Derivada {horaCL(c.derivada_at)}{c.derivada_a ? ` a ${c.derivada_a}` : ""}</div>}
+              {c.tomada_por && <div>Atiende: {c.tomada_por}</div>}
+              <div style={{ color: C.tenue }}>Abierta {horaCL(c.creada_at)}</div>
+            </div>
+          </div> : <div style={{ fontSize: 12.5, color: C.tenue }}>Aquí aparece quién escribe, el motivo y la derivación.</div>}
+          <div>
+            <div style={{ fontWeight: 800, color: C.navy, margin: "8px 0 6px" }}>Semana</div>
+            {metricas.length === 0 ? <div style={{ fontSize: 12, color: C.tenue }}>Todavía sin conversaciones.</div> : metricas.slice(0, 1).map((x) => (
+              <div key={x.semana} style={{ fontSize: 12.5, lineHeight: 1.7 }}>
+                <div>{x.conversaciones} conversaciones · {x.resueltas_agente} resueltas por Biggy</div>
+                <div>{x.derivadas} derivadas · {x.urgentes} urgentes{x.horas_respuesta_humana !== null ? ` · ${x.horas_respuesta_humana} h de respuesta` : ""}</div>
+                {x.motivos && <div style={{ color: C.suave }}>{Object.entries(x.motivos).sort((a, b) => b[1] - a[1]).slice(0, 6).map(([k, n]) => `${k} ${n}`).join(" · ")}</div>}
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ═══ Mantenedores de Cuidado de Activo: se muestran en el Mantenedor general del Brain (Mantenedor.jsx) ═══
 // [clave, nombre, grupo]. El Mantenedor arma las pestañas con esta lista; aquí se dibuja cada uno.
 export const CA_MANTENEDORES = [
