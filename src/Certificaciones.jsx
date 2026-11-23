@@ -7835,6 +7835,48 @@ function OperandoSinCertificar({ usuario }) {
   const [avisando, setAvisando] = useState(false);
   const quien = (usuario && (usuario.email || usuario.nombre)) || window.__PERFIL_EMAIL || "certificaciones_brain";
 
+  // ── Retención: viajes retenidos de la semana e interruptores ──
+  const [retenidos, setRetenidos] = useState([]);
+  const [configs, setConfigs] = useState([]);
+  const cargarRetencion = async (s) => {
+    const r = rango(s);
+    const [v, c] = await Promise.all([
+      sb.from("viajes_retenidos_mx").select("*").gte("fecha", r.desde).lte("fecha", r.domingo).order("fecha"),
+      sb.from("red_certificacion_config").select("*"),
+    ]);
+    setRetenidos(v.data || []);
+    setConfigs(c.data || []);
+  };
+  const habilitarPago = async (v) => {
+    const motivo = window.prompt(
+      `Habilitar el pago de la ruta ${v.id_ruta}\n${v.empresa || "Sin empresa"} · ${v.placa || "—"} · ${v.service_center}\n` +
+      `Retenida por: ${v.motivos}\nMonto: ${plata(v.monto)}\n\n` +
+      `Se pagará en el próximo cálculo de ese día. ¿Por qué se habilita? (obligatorio; queda registrado con tu nombre)`, "");
+    if (motivo === null) return;
+    if (!String(motivo).trim()) { alert("Sin motivo no se habilita."); return; }
+    const { error } = await sb.rpc("fn_red_cert_habilitar", { p_id_ruta: v.id_ruta, p_usuario: quien, p_motivo: String(motivo).trim() });
+    if (error) { alert("No se pudo habilitar: " + error.message); return; }
+    await cargarRetencion(sem);
+  };
+  const CONTROLES = [
+    ["vehiculo", "Vehículo certificado"], ["contrato", "Contrato firmado"],
+    ["empresa", "Empresa certificada"], ["chofer", "Chofer certificado"],
+  ];
+  const cambiarModo = async (control, modo) => {
+    const nombre = (CONTROLES.find(c => c[0] === control) || [, control])[1];
+    const motivo = window.prompt(
+      (modo === "encendido"
+        ? `ENCENDER la retención de "${nombre}".\n\nDesde el próximo cálculo, las rutas que fallen este control NO se pagan hasta regularizarse o habilitarse.`
+        : `Pasar "${nombre}" a OBSERVACIÓN.\n\nLas rutas se pagan normal y solo llevan la alerta.`) +
+      `\n\n¿Por qué? (obligatorio; queda registrado con tu nombre)`, "");
+    if (motivo === null) return;
+    if (!String(motivo).trim()) { alert("Sin motivo no se cambia."); return; }
+    const { error } = await sb.rpc("fn_red_cert_cambiar_modo", { p_control: control, p_modo: modo, p_usuario: quien, p_motivo: String(motivo).trim() });
+    if (error) { alert("No se pudo cambiar: " + error.message); return; }
+    await cargarRetencion(sem);
+    await cargar();
+  };
+
   const cargarAviso = async (s) => {
     const { data } = await sb.from("red_cert_aviso_portal").select("*").eq("semana", s).maybeSingle();
     setAviso(data || null);
@@ -7875,7 +7917,7 @@ function OperandoSinCertificar({ usuario }) {
     setFilas(p.data || []);
     const mm = {}; for (const x of (m.data || [])) mm[x.control] = x.modo; setModos(mm);
   };
-  useEffect(() => { cargar(); cargarAviso(sem); }, [sem]);
+  useEffect(() => { cargar(); cargarAviso(sem); cargarRetencion(sem); }, [sem]);
 
   const plata = (n) => "$" + Number(n || 0).toLocaleString("es-MX", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const ddmm = (iso) => { const s = String(iso || "").slice(0, 10); const [y, m, d] = s.split("-"); return d ? `${d}-${m}` : s; };
@@ -7948,6 +7990,65 @@ function OperandoSinCertificar({ usuario }) {
           );
         })}
       </div>
+
+      {/* Interruptores de la retención: los maneja Certificaciones */}
+      <div style={{ background: "#fff", border: "1px solid #e4e7ec", borderRadius: 10, padding: "10px 12px", marginTop: 12 }}>
+        <div style={{ fontSize: 12.5, fontWeight: 800, color: "#002E5D", marginBottom: 8 }}>Retención de pagos por certificación</div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))", gap: 8 }}>
+          {CONTROLES.map(([k, nombre]) => {
+            const c = configs.find(x => x.control === k) || {};
+            const on = c.modo === "encendido";
+            const esChofer = k === "chofer";
+            return (
+              <div key={k} style={{ border: `1px solid ${on ? "#fca5a5" : "#e4e7ec"}`, background: on ? "#fef2f2" : "#f8fafc", borderRadius: 8, padding: "8px 10px" }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: "#334155" }}>{nombre}</div>
+                <div style={{ fontSize: 11.5, fontWeight: 800, color: on ? "#b91c1c" : "#b45309", margin: "2px 0 6px" }}>
+                  {on ? "⛔ Encendido: retiene" : c.modo === "apagado" ? "Apagado" : "⚠️ Observación: solo alerta, se paga"}
+                </div>
+                {esChofer ? (
+                  <div style={{ fontSize: 10.5, color: "#94a3b8" }}>Lo enciende finanzas.</div>
+                ) : (
+                  <button onClick={() => cambiarModo(k, on ? "observacion" : "encendido")}
+                    style={{ padding: "4px 10px", fontSize: 11, fontWeight: 700, borderRadius: 6, cursor: "pointer",
+                      border: `1px solid ${on ? "#64748b" : "#b91c1c"}`, background: "#fff", color: on ? "#334155" : "#b91c1c" }}>
+                    {on ? "Pasar a observación" : "Encender retención"}
+                  </button>
+                )}
+                {c.actualizado_por && <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 4 }} title={c.motivo || ""}>Último cambio: {c.actualizado_por}</div>}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Viajes retenidos de la semana: Certificaciones los habilita */}
+      {retenidos.length > 0 && (
+        <div style={{ background: "#fff", border: "1px solid #fca5a5", borderRadius: 10, padding: "10px 12px", marginTop: 12 }}>
+          <div style={{ fontSize: 12.5, fontWeight: 800, color: "#991b1b", marginBottom: 6 }}>
+            ⛔ Viajes retenidos · semana {sem} · {retenidos.filter(v => v.estado === "retenido").length} retenido(s) · {plata(retenidos.filter(v => v.estado === "retenido").reduce((s, v) => s + Number(v.monto || 0), 0))}
+            <span style={{ fontWeight: 400, color: "#64748b" }}> — se liberan solos al regularizarse; o habilítalos aquí con motivo.</span>
+          </div>
+          {retenidos.map(v => (
+            <div key={v.id_ruta} style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 12, padding: "5px 0", borderTop: "1px solid #f1f5f9", color: v.estado === "retenido" ? "#334155" : "#94a3b8" }}>
+              <span style={{ minWidth: 50 }}>{ddmm(v.fecha)}</span>
+              <span style={{ minWidth: 80, fontWeight: 700 }}>{v.placa || "—"}</span>
+              <span style={{ flex: 1 }}>{v.empresa || "Sin empresa"} · {v.service_center} · ruta {v.id_ruta}</span>
+              <span style={{ minWidth: 220 }}>{v.motivos}</span>
+              <span style={{ minWidth: 90, textAlign: "right", fontWeight: 700 }}>{plata(v.monto)}</span>
+              {v.estado === "retenido" ? (
+                <button onClick={() => habilitarPago(v)}
+                  style={{ minWidth: 110, padding: "3px 10px", fontSize: 11, fontWeight: 700, borderRadius: 6, border: "1px solid #16a34a", background: "#f0fdf4", color: "#166534", cursor: "pointer" }}>
+                  Habilitar pago
+                </button>
+              ) : (
+                <span style={{ minWidth: 110, fontSize: 11 }} title={v.habilitado_motivo || ""}>
+                  {v.estado === "liberado" ? "Liberado: se regularizó" : `Habilitado por ${v.habilitado_por}`}
+                </span>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
 
       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", background: aviso?.publicado ? "#f0fdf4" : "#f8fafc", border: `1px solid ${aviso?.publicado ? "#86efac" : "#e4e7ec"}`, borderRadius: 10, padding: "10px 12px", marginTop: 12 }}>
         <div style={{ flex: 1, minWidth: 260, fontSize: 12.5, color: "#334155" }}>

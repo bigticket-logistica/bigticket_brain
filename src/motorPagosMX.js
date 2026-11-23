@@ -696,14 +696,36 @@ export async function agregarAlertasCertificacion(fecha, filas) {
   const { data, error } = await sbm().rpc("fn_red_cert_validar", { p_fecha: fecha, p_rutas: rutas });
   if (error) throw new Error(error.message);
   const porRuta = {};
-  for (const r of (data || [])) if (r.alertas && r.alertas.length) porRuta[String(r.id_ruta)] = r.alertas;
+  for (const r of (data || [])) porRuta[String(r.id_ruta)] = r;
   let n = 0;
+  const retenidas = [];
   for (const f of filas) {
-    const al = porRuta[String(f.id_ruta)];
-    if (!al) continue;
-    f.observaciones = [f.observaciones, ...al].filter(Boolean).join(" | ");
-    n++;
+    const r = porRuta[String(f.id_ruta)];
+    if (!r) continue;
+    if (r.alertas && r.alertas.length) {
+      f.observaciones = [f.observaciones, ...r.alertas].filter(Boolean).join(" | ");
+      n++;
+    }
+    // Retención (21-nov-2026): si falla un control ENCENDIDO y Certificaciones
+    // no la habilitó, la ruta no se paga. Su monto queda guardado en
+    // viajes_retenidos_mx y se paga cuando se regulariza o se habilita.
+    const monto = Number(f.pago_neto || 0);
+    if (r.retener && monto > 0) {
+      retenidas.push({
+        id_ruta: String(f.id_ruta), tercero_id: r.tercero_id || null, empresa: r.empresa || null,
+        placa: f.placa || null, service_center: f.service_center_id || null,
+        monto, motivos: r.motivos_retencion || null,
+      });
+      f.pago_neto = 0;
+      f.observaciones = [f.observaciones,
+        `⛔ RETENIDO por certificación: ${r.motivos_retencion || "control encendido"} · se habría pagado $${monto.toFixed(2)} · lo habilita Certificaciones`]
+        .filter(Boolean).join(" | ");
+    }
   }
+  // Se registra siempre (aunque no haya retenidas): así lo que estaba retenido
+  // ese día y ya se regularizó queda "liberado".
+  const { error: eReg } = await sbm().rpc("fn_red_cert_registrar_retenidas", { p_fecha: fecha, p_retenidas: retenidas });
+  if (eReg) console.error("[Calculo " + fecha + "] registrar retenidas:", eReg.message);
   return n;
 }
 

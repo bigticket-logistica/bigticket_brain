@@ -2791,6 +2791,23 @@ function ConciliacionTercerosMX({ usuario }) {
   };
   useEffect(() => { cargarCobrosSinPref(semana); }, [semana]);
 
+  // ── Viajes retenidos por certificación (red de certificación, 21-nov-2026) ──
+  // Rutas que no se pagan porque falla un control encendido (vehículo, contrato,
+  // empresa certificada). Las habilita Certificaciones; aquí solo se muestran.
+  const [retenidos, setRetenidos] = useState([]);
+  const [verRetenidos, setVerRetenidos] = useState(false);
+  const cargarRetenidos = async (sem) => {
+    try {
+      const r = rangoSemanaInventario(sem);
+      const desde = r.inicio.toISOString().slice(0, 10);
+      const hasta = new Date(r.inicio.getTime() + 6 * 86400000).toISOString().slice(0, 10);
+      const { data } = await sb.from("viajes_retenidos_mx").select("*")
+        .gte("fecha", desde).lte("fecha", hasta).order("fecha");
+      setRetenidos(data || []);
+    } catch (e) { console.error("viajes retenidos:", e); setRetenidos([]); }
+  };
+  useEffect(() => { cargarRetenidos(semana); }, [semana]);
+
   const agregarCobroPendiente = async (c) => {
     if (c.tipo !== "noshow") { alert("Los PNR se agregan desde la pestaña PNR de Cobros."); return; }
     setAgregandoCobro(c.linea_id);
@@ -5310,6 +5327,43 @@ function ConciliacionTercerosMX({ usuario }) {
           </button>
         </div>
       </div>
+
+      {/* Viajes retenidos por certificación */}
+      {retenidos.length > 0 && (() => {
+        const ret = retenidos.filter(v => v.estado === "retenido");
+        const otros = retenidos.filter(v => v.estado !== "retenido");
+        const tot = ret.reduce((s, v) => s + Number(v.monto || 0), 0);
+        return (
+          <div style={{ background: ret.length ? "#fef2f2" : "#f8fafc", border: `1px solid ${ret.length ? "#fca5a5" : "#e2e8f0"}`, borderRadius: 10, padding: "10px 14px", marginBottom: 12 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              <div style={{ flex: 1, fontSize: 13, fontWeight: 700, color: ret.length ? "#991b1b" : "#475569" }}>
+                {ret.length
+                  ? <>⛔ {ret.length} viaje(s) retenido(s) por certificación en la semana {semana} · {fmtMon(tot)}
+                      <span style={{ fontWeight: 400 }}> — no se pagan hasta que Certificaciones los habilite o se regularicen.</span></>
+                  : <>Sin viajes retenidos esta semana.</>}
+                {otros.length > 0 && <span style={{ fontWeight: 400, color: "#64748b" }}> {otros.length} ya liberado(s) o habilitado(s).</span>}
+              </div>
+              <button onClick={() => setVerRetenidos(v => !v)}
+                style={{ padding: "4px 12px", fontSize: 11.5, fontWeight: 700, borderRadius: 6, border: "1px solid #cbd5e1", background: "#fff", color: "#334155", cursor: "pointer" }}>
+                {verRetenidos ? "Ocultar" : "Ver detalle"}
+              </button>
+            </div>
+            {verRetenidos && [...ret, ...otros].map(v => (
+              <div key={v.id_ruta} style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 12, padding: "4px 0", borderTop: "1px solid #fecaca", color: v.estado === "retenido" ? "#334155" : "#94a3b8" }}>
+                <span style={{ minWidth: 80 }}>{fmtFechaDDMM(v.fecha)}</span>
+                <span style={{ minWidth: 80 }}>{v.placa || "—"}</span>
+                <span style={{ minWidth: 90 }}>Ruta {v.id_ruta}</span>
+                <span style={{ flex: 1 }}>{v.empresa || "Sin empresa"} · {v.service_center}</span>
+                <span style={{ minWidth: 240 }}>{v.motivos}</span>
+                <span style={{ minWidth: 90, textAlign: "right", fontWeight: 700 }}>{fmtMon(v.monto)}</span>
+                <span style={{ minWidth: 150, fontSize: 11 }}>
+                  {v.estado === "retenido" ? "Retenido" : v.estado === "liberado" ? "Liberado: se regularizó" : `Habilitado por ${v.habilitado_por}`}
+                </span>
+              </div>
+            ))}
+          </div>
+        );
+      })()}
 
       {/* Cobros publicados en el portal que no están en ninguna prefactura */}
       {cobrosSinPref.length > 0 && (() => {
