@@ -183,6 +183,7 @@ const ETIQUETA_TIPO = {
   "SAME DAY": { t: "Same Day", c: "#0d8043", f: "#e7f6ec" },
   "TRONCAL": { t: "Troncal", c: "#7a5b16", f: "#fdf3d8" },
   "SORTEO": { t: "Sorteo", c: "#475569", f: "#eef2f9" },
+  "SAME DAY": { t: "Same Day", c: "#7c3aed", f: "#f3e8ff" },
 };
 const etiquetaTipo = (cod) => ETIQUETA_TIPO[cod] || { t: cod, c: "#475569", f: "#eef2f9" };
 
@@ -1174,7 +1175,7 @@ function ModuloMaestroCL({ usuario } = {}) {
   useEffect(() => { if (tab === "vehiculos") cargarVehiculos(); }, [tab]);
 
   // ── Tarifario: el catálogo de tarifas que alimenta vw_pago_viaje ──
-  const SERVICIOS_TARIFA = ["UM", "MELI ONE", "RECOLECTA", "SPOT", "SORTEO", "TRONCAL"];
+  const SERVICIOS_TARIFA = ["UM", "MELI ONE", "RECOLECTA", "SPOT", "SORTEO", "TRONCAL", "SAME DAY"];
   const TIPOS_PAGO = ["GUIAS", "ARRIENDO", "PISO"];
   const VEHICULOS_TARIFA = ["COMBUSTION", "BIG VAN", "COMBUSTION LARGE VAN", "ELECTRICA"];
   const TARIFA_NUEVA0 = { cecos_admin: "", segmentacion: "", servicio: "UM", tipo_pago: "GUIAS",

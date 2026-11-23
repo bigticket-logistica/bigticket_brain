@@ -86,7 +86,7 @@ const CSS = `
 .mj-chip:hover{border-color:${NAVY};color:${NAVY};}
 `;
 
-const MAESTRO_MANT = [["glosario", "📖 Glosario del Maestro"], ["reemplazos", "↺ Reemplazos"], ["supervisores", "👤 Supervisores y CECO"], ["lideres", "👥 Líderes y supervisores"], ["colectas", "📦 Centros de colecta"],
+const MAESTRO_MANT = [["glosario", "📖 Glosario del Maestro"], ["cecos", "🏢 CECO y centros MELI"], ["reemplazos", "↺ Reemplazos"], ["supervisores", "👤 Supervisores y CECO"], ["lideres", "👥 Líderes y supervisores"], ["colectas", "📦 Centros de colecta"],
   ["justif", "⚖️ Justificación de devoluciones"], ["hitos", "💲 Pago de hitos"], ["categorias", "🏷️ Categorías de observación"]];
 
 export default function ModuloMantenedorCL({ usuario } = {}) {
@@ -116,6 +116,7 @@ export default function ModuloMantenedorCL({ usuario } = {}) {
         ))}
       </div>
       {vista === "glosario" && <Glosario />}
+      {vista === "cecos" && <CecosCentros quien={quien} />}
       {vista === "reemplazos" && <Reemplazos quien={quien} />}
       {vista === "supervisores" && <Supervisores quien={quien} />}
       {vista === "colectas" && <CentrosColecta quien={quien} />}
@@ -1034,6 +1035,153 @@ function CategoriasObs({ quien }) {
         <label className="mt-lbl">Desde<input className="mt-in" type="date" value={f.vigente_desde} onChange={e => setF({ ...f, vigente_desde: e.target.value })} /></label>
         <label className="mt-lbl">Hasta<input className="mt-in" type="date" value={f.vigente_hasta} onChange={e => setF({ ...f, vigente_hasta: e.target.value })} /></label>
         <button className="mt-btn pri" disabled={!f.categoria.trim()} onClick={() => guardar({ ...f, categoria: f.categoria.trim(), activa: true })}>Agregar</button>
+      </div>
+    </div>
+  );
+}
+
+// ── CECO y centros MELI ────────────────────────────────────────────────────
+// Los centros de MELI (SRM1, SIL1, SLT1…) de los que el VPS captura rutas salen
+// de la tabla cecos (capturar = sí): el scraper la lee en cada vuelta, así que
+// un CECO nuevo se agrega aquí sin tocar el servidor. Debajo, lo que le falta a
+// cada CECO para que su operación se pague bien, y la regla de Same Day.
+function CecosCentros({ quien }) {
+  const [centros, setCentros] = useState(null);
+  const [admin, setAdmin] = useState([]);
+  const [chk, setChk] = useState({});
+  const [sd, setSd] = useState([]);
+  const [f, setF] = useState({ nombre: "ML_", codigo: "" });
+  const [fsd, setFsd] = useState({ cecos_admin: "", ciclo: "PM1" });
+  const [msg, setMsg] = useState("");
+  const cargar = async () => {
+    const [c, a, sbt, tar, bono, seg, sdr] = await Promise.all([
+      apiSuave("cecos?select=codigo,capturar,fuente&order=codigo", null),
+      apiSuave("cecos_admin?select=nombre,codigo_meli,activo&order=nombre", []),
+      apiSuave("supervisores_bt?select=nombre,scs_asignados,activo,es_prueba&activo=eq.true", []),
+      apiSuave("tarifas?select=cecos_admin,servicio&activa=eq.true&limit=2000", []),
+      apiSuave("bono_ns_tramos?select=cecos_admin&activo=eq.true&limit=2000", []),
+      apiSuave("segmentaciones?select=nombre,cecos_admin&limit=2000", []),
+      apiSuave("reglas_same_day_cl?select=*&order=cecos_admin", []),
+    ]);
+    setCentros(c); setAdmin(a || []); setSd(sdr || []);
+    const m = {};
+    (a || []).filter(x => /^ML_/.test(x.nombre)).forEach(x => {
+      const n = x.nombre;
+      m[n] = m[n] || { centros: new Set(), sup: [], tarifas: new Set(), bono: 0, seg: 0 };
+      if (x.codigo_meli) m[n].centros.add(x.codigo_meli);
+    });
+    Object.keys(m).forEach(n => {
+      m[n].sup = (sbt || []).filter(b => !b.es_prueba && arr(b.scs_asignados).includes(n)).map(b => b.nombre);
+      (tar || []).filter(t => t.cecos_admin === n).forEach(t => m[n].tarifas.add(t.servicio));
+      m[n].bono = (bono || []).filter(b => b.cecos_admin === n).length;
+      m[n].seg = (seg || []).filter(x => x.cecos_admin === n).length;
+    });
+    setChk(m);
+  };
+  useEffect(() => { cargar(); }, []);
+  const capt = new Set((centros || []).filter(c => c.capturar).map(c => c.codigo));
+  const toggle = async (codigo, v) => {
+    setMsg("");
+    try { await api(`cecos?codigo=eq.${encodeURIComponent(codigo)}`, { method: "PATCH", headers: { Prefer: "return=minimal" },
+            body: JSON.stringify({ capturar: v, actualizado_por: quien }) });
+          setMsg(`✓ ${codigo}: ${v ? "el VPS capturará sus rutas desde la próxima vuelta" : "el VPS deja de capturar sus rutas"}`); await cargar(); }
+    catch (e) { setMsg("No se pudo guardar: " + e.message); }
+  };
+  const agregar = async () => {
+    const nombre = f.nombre.trim().toUpperCase().replace(/\s+/g, " "), codigo = f.codigo.trim().toUpperCase();
+    if (!/^ML_.+/.test(nombre) || codigo.length < 3) { setMsg("Escribe el CECO (ML_…) y el código del centro MELI (ej. SIL1)."); return; }
+    setMsg("");
+    try {
+      await api("cecos?on_conflict=codigo", { method: "POST", headers: { Prefer: "return=minimal,resolution=merge-duplicates" },
+        body: JSON.stringify([{ codigo, fuente: "mantenedor", capturar: true, actualizado_por: quien }]) });
+      await api("cecos_admin?on_conflict=nombre,codigo_meli", { method: "POST", headers: { Prefer: "return=minimal,resolution=merge-duplicates" },
+        body: JSON.stringify([{ nombre, codigo_meli: codigo, actualizado_por: quien }]) });
+      setMsg(`✓ ${nombre} (${codigo}) agregado: el VPS captura sus rutas desde la próxima vuelta. Completa lo que le falta en la tabla de abajo.`);
+      setF({ nombre: "ML_", codigo: "" }); await cargar();
+    } catch (e) { setMsg("No se pudo agregar: " + e.message); }
+  };
+  const guardarSd = async (cecos_admin, ciclo, activo) => {
+    setMsg("");
+    try { await rpc("fn_regla_same_day", { p_cecos: cecos_admin, p_ciclo: ciclo, p_activo: activo, p_por: quien });
+          setMsg(`✓ Same Day ${cecos_admin} · ${ciclo}: ${activo ? "activa" : "apagada"}`); setFsd({ cecos_admin: "", ciclo: "PM1" }); await cargar(); }
+    catch (e) { setMsg("No se pudo guardar: " + e.message); }
+  };
+  if (centros === null) return <div className="mt-card"><div className="mt-tit">CECO y centros MELI</div>
+    <div className="mt-sub" style={{ color: AMBAR }}>No se pudo leer la tabla cecos: faltan los SQL de esta pasada.</div></div>;
+  const ok = (b) => <span style={{ color: b ? VERDE : ROJO, fontWeight: 700 }}>{b ? "✓" : "✕"}</span>;
+  const cecosML = Object.keys(chk).sort();
+  return (
+    <div>
+      {msg && <div className="mt-msg" style={{ color: msg.startsWith("✓") ? VERDE : ROJO }}>{msg}</div>}
+      <div className="mt-card">
+        <div className="mt-tit">Agregar un CECO nuevo</div>
+        <div className="mt-sub">El CECO del Brain (ML_…) y el código del centro de MELI de donde salen sus rutas. Al guardarlo, el VPS empieza a capturar ese centro en su próxima vuelta (cada pocos minutos), sin tocar el servidor.</div>
+        <div style={{ display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap" }}>
+          <label className="mt-lbl">CECO<input className="mt-in" value={f.nombre} onChange={e => setF({ ...f, nombre: e.target.value.toUpperCase() })} placeholder="ML_TALCA" /></label>
+          <label className="mt-lbl">Centro MELI<input className="mt-in" value={f.codigo} onChange={e => setF({ ...f, codigo: e.target.value.toUpperCase() })} placeholder="STL1" style={{ width: 100 }} /></label>
+          <button className="mt-btn pri" onClick={agregar}>Agregar y capturar</button>
+        </div>
+      </div>
+
+      <div className="mt-card">
+        <div className="mt-tit">Qué le falta a cada CECO</div>
+        <div className="mt-sub">Para que un CECO se pague bien necesita: centro MELI capturado, supervisor titular, tarifas, tramos de bono por NS y zonas o segmentación. Lo que tenga ✕ se completa en su mantenedor (Supervisores y CECO, Tarifario, Factores NS, Zonas de pago).</div>
+        <div style={{ overflowX: "auto" }}>
+          <table className="mt-tabla">
+            <thead><tr><th>CECO</th><th>Centros MELI</th><th>Captura rutas</th><th>Supervisor</th><th>Tarifas (servicios)</th><th>Bono NS</th><th>Segmentación</th></tr></thead>
+            <tbody>
+              {cecosML.map(n => {
+                const x = chk[n]; const cs = [...x.centros];
+                return (
+                  <tr key={n}>
+                    <td style={{ fontWeight: 700, color: NAVY }}>{n}</td>
+                    <td style={{ fontFamily: "monospace", fontSize: 11.5 }}>{cs.join(", ") || "—"}</td>
+                    <td>{ok(cs.some(c => capt.has(c)))} <span style={{ fontSize: 11, color: "#64748b" }}>{cs.filter(c => capt.has(c)).join(", ")}</span></td>
+                    <td>{ok(x.sup.length > 0)} <span style={{ fontSize: 11, color: "#64748b" }}>{x.sup.join(", ")}</span></td>
+                    <td>{ok(x.tarifas.size > 0)} <span style={{ fontSize: 11, color: "#64748b" }}>{[...x.tarifas].sort().join(", ")}</span></td>
+                    <td>{ok(x.bono > 0)} <span style={{ fontSize: 11, color: "#64748b" }}>{x.bono ? `${x.bono} tramos` : "factor 1,00"}</span></td>
+                    <td>{ok(x.seg > 0)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="mt-card">
+        <div className="mt-tit">Centros MELI que captura el VPS</div>
+        <div className="mt-sub">Encender o apagar un centro rige desde la próxima vuelta del scraper. Si un centro se apaga, sus rutas dejan de llegar al Maestro.</div>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          {centros.map(c => (
+            <label key={c.codigo} className="mt-chip" style={{ display: "inline-flex", gap: 6, alignItems: "center", cursor: "pointer",
+                                                         borderColor: c.capturar ? VERDE : undefined }}>
+              <input type="checkbox" checked={!!c.capturar} onChange={e => toggle(c.codigo, e.target.checked)} />
+              <span style={{ fontFamily: "monospace" }}>{c.codigo}</span>
+            </label>
+          ))}
+        </div>
+      </div>
+
+      <div className="mt-card">
+        <div className="mt-tit">Regla de Same Day</div>
+        <div className="mt-sub">Una ruta de estos CECO con este ciclo de MELI se paga como servicio SAME DAY (con su tarifa del Tarifario), salvo que el supervisor haya confirmado otro tipo de ruta. Hoy: Melipilla, Salamanca y Pichilemu con ciclo PM1 (salen en la tarde con menos paradas).</div>
+        {sd.length > 0 && (
+          <table className="mt-tabla" style={{ maxWidth: 620, marginBottom: 10 }}>
+            <thead><tr><th>CECO</th><th>Ciclo MELI</th><th>Activa</th></tr></thead>
+            <tbody>{sd.map(x => (
+              <tr key={x.cecos_admin + x.ciclo} style={!x.activo ? { opacity: 0.5 } : undefined}>
+                <td style={{ fontWeight: 700 }}>{x.cecos_admin}</td><td style={{ fontFamily: "monospace" }}>{x.ciclo}</td>
+                <td><input type="checkbox" checked={!!x.activo} onChange={e => guardarSd(x.cecos_admin, x.ciclo, e.target.checked)} /></td>
+              </tr>))}</tbody>
+          </table>
+        )}
+        <div style={{ display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap" }}>
+          <label className="mt-lbl">CECO<select className="mt-in" value={fsd.cecos_admin} onChange={e => setFsd({ ...fsd, cecos_admin: e.target.value })}>
+            <option value="">Elige</option>{cecosML.map(n => <option key={n}>{n}</option>)}</select></label>
+          <label className="mt-lbl">Ciclo<input className="mt-in" value={fsd.ciclo} onChange={e => setFsd({ ...fsd, ciclo: e.target.value.toUpperCase() })} style={{ width: 80 }} /></label>
+          <button className="mt-btn pri" disabled={!fsd.cecos_admin || !fsd.ciclo} onClick={() => guardarSd(fsd.cecos_admin, fsd.ciclo, true)}>Agregar regla</button>
+        </div>
       </div>
     </div>
   );
