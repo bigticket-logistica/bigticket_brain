@@ -4679,7 +4679,9 @@ const AG_MODOS = [["apagado", "Apagado", "Biggy no responde a nadie; los mensaje
   ["marcha_blanca", "Marcha blanca", "Biggy responde a los números de prueba y a los contactos marcados «marcha blanca»"], ["activo", "Activo", "Biggy responde a todos los contactos registrados"]];
 const AG_EST = { bot: ["Biggy", "#eef2f8", C.navy], derivada: ["Derivada", C.ambarT, C.ambar], humano: ["Analista", C.verdeT, C.verde], cerrada: ["Cerrada", C.fondo, C.suave] };
 const AG_TIPO = { supervisor: "Supervisor", empresa: "Empresa", chofer: "Chofer", ejecutivo: "Ejecutivo", taller: "Taller", jefe: "Jefe zonal", otro: "Otro" };
-const MEDIA = { image: "📷 Foto", audio: "🎤 Audio", document: "📄 Documento", location: "📍 Ubicación", video: "🎥 Video", sticker: "Sticker" };
+const MEDIA = { image: "📷 Foto", audio: "🎤 Audio", document: "📄 Documento", location: "📍 Ubicación", video: "🎥 Video", sticker: "Sticker",
+  unsupported: "Mensaje que WhatsApp no permite ver aquí (por ejemplo, una encuesta o un mensaje de una sola vista)", reaction: "Reaccionó a un mensaje", contacts: "👤 Contacto compartido", interactive: "Respuesta a un botón" };
+const CON_ARCHIVO = new Set(["image", "audio", "video", "document", "sticker"]);
 const horaCL = (t) => (t ? new Date(t).toLocaleString("es-CL", { timeZone: "America/Santiago", hour: "2-digit", minute: "2-digit", day: "2-digit", month: "2-digit" }) : "");
 const EMOJIS = "😀 😃 😄 😊 🙂 😉 😍 🤝 👍 👌 🙏 👏 💪 🙌 👋 ✅ ✔️ ❌ ⚠️ ❗ ❓ 📌 📍 📎 📄 📷 🚚 🚐 🛻 🔧 🛠️ ⛽ 🔋 🕐 ⏰ 📅 📞 💬 ✉️ 🎉 😅 😕 😔 😢 😡".split(" ");
 const tipoAdjunto = (f) => { const t = f.type || ""; if (t === "image/jpeg" || t === "image/png") return "image"; if (t.startsWith("audio/")) return "audio"; if (t === "video/mp4" || t === "video/3gpp") return "video"; return "document"; };
@@ -4687,7 +4689,7 @@ const MAX_ADJ = { image: 5, audio: 16, video: 16, document: 100 };   // MB, lím
 function MediaWa({ m }) {
   const [url, setUrl] = useState(null);
   useEffect(() => { let vivo = true; if (m.media_path) urlFirmada(m.media_path, "ca-whatsapp-cl").then((u) => vivo && setUrl(u)).catch(() => {}); return () => { vivo = false; }; }, [m.media_path]);
-  if (!m.media_path) return <div style={{ fontSize: 12.5, color: C.suave }}>{MEDIA[m.tipo] || m.tipo}{m.tipo !== "text" && m.tipo !== "location" ? " (guardándose…)" : ""}</div>;
+  if (!m.media_path) return <div style={{ fontSize: 12.5, color: C.suave, fontStyle: CON_ARCHIVO.has(m.tipo) ? "normal" : "italic" }}>{MEDIA[m.tipo] || `Mensaje de tipo «${m.tipo}»`}{CON_ARCHIVO.has(m.tipo) && m.media_id ? " (guardándose…)" : ""}</div>;
   if (!url) return <div style={{ fontSize: 12, color: C.tenue }}>Cargando {(MEDIA[m.tipo] || "archivo").toLowerCase()}…</div>;
   if (m.tipo === "image" || m.tipo === "sticker") return <a href={url} target="_blank" rel="noreferrer"><img src={url} alt="foto" style={{ maxWidth: 260, maxHeight: 260, borderRadius: 8, display: "block" }} /></a>;
   if (m.tipo === "audio") return <audio controls src={url} style={{ maxWidth: 260 }} />;
