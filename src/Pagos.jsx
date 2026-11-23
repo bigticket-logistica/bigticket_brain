@@ -9282,8 +9282,11 @@ function AyudantesDetalleDia({ usuario }) {
     const rutas = {};
     const sumar = (idRuta, sc, driverName, userId, nombre, n) => {
       const k = String(idRuta);
-      if (!rutas[k]) rutas[k] = { id_ruta: idRuta, sc, driver_name: driverName, total: 0, sinRegistro: 0, personas: {} };
+      if (!rutas[k]) rutas[k] = { id_ruta: idRuta, sc, driver_name: driverName, total: 0, sinRegistro: 0, noMuestreado: 0, personas: {} };
       rutas[k].total += n;
+      // Paquete capturado pero no consultado (muestra del 60%, 23-nov-2026):
+      // cuenta para la cobertura, no para el reparto chofer/ayudante.
+      if (nombre === "__no_muestreado") { rutas[k].noMuestreado += n; return; }
       if (userId == null) { rutas[k].sinRegistro += n; return; }
       const uk = String(userId);
       if (!rutas[k].personas[uk]) rutas[k].personas[uk] = { user_id: userId, nombre, paquetes: 0 };
@@ -9339,7 +9342,9 @@ function AyudantesDetalleDia({ usuario }) {
       if (!pagaMaestro) continue;
       vistas.add(k);
 
-      const pct = (n) => r.total > 0 ? Math.round((n / r.total) * 1000) / 10 : 0;
+      // El reparto chofer/ayudante se proyecta sobre los paquetes consultados.
+      const baseMuestra = r.total - (r.noMuestreado || 0);
+      const pct = (n) => baseMuestra > 0 ? Math.round((n / baseMuestra) * 1000) / 10 : 0;
       const driverPaq = driverRows.reduce((a, p) => a + p.paquetes, 0);
       const esperado = m && m.envios_entregados != null ? Number(m.envios_entregados) : null;
       const cobertura = esperado ? Math.round((r.total / esperado) * 100) : null;
