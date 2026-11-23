@@ -5390,7 +5390,7 @@ function ConciliacionTercerosMX({ usuario }) {
       </div>
 
       {/* Viajes retenidos por certificación */}
-      {retenidos.length > 0 && (() => {
+      {semana >= 48 && (() => {
         const ret = retenidos.filter(v => v.estado === "retenido");
         const otros = retenidos.filter(v => v.estado !== "retenido");
         const tot = ret.reduce((s, v) => s + Number(v.monto || 0), 0);
@@ -5401,13 +5401,16 @@ function ConciliacionTercerosMX({ usuario }) {
                 {ret.length
                   ? <>⛔ {ret.length} viaje(s) retenido(s) por certificación en la semana {semana} · {fmtMon(tot)}
                       <span style={{ fontWeight: 400 }}> — no se pagan hasta que Certificaciones los habilite o se regularicen.</span></>
-                  : <>Sin viajes retenidos esta semana.</>}
+                  : <>Sin viajes retenidos registrados en la semana {semana}.
+                      <span style={{ fontWeight: 400 }}> Se registran al calcular cada día con la retención encendida; si se encendió después de guardar un día, hay que recalcularlo.</span></>}
                 {otros.length > 0 && <span style={{ fontWeight: 400, color: "#64748b" }}> {otros.length} ya liberado(s) o habilitado(s).</span>}
               </div>
+              {retenidos.length > 0 && (
               <button onClick={() => setVerRetenidos(v => !v)}
                 style={{ padding: "4px 12px", fontSize: 11.5, fontWeight: 700, borderRadius: 6, border: "1px solid #cbd5e1", background: "#fff", color: "#334155", cursor: "pointer" }}>
                 {verRetenidos ? "Ocultar" : "Ver detalle"}
               </button>
+              )}
             </div>
             {verRetenidos && [...ret, ...otros].map(v => (
               <div key={v.id_ruta} style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 12, padding: "4px 0", borderTop: "1px solid #fecaca", color: v.estado === "retenido" ? "#334155" : "#94a3b8" }}>

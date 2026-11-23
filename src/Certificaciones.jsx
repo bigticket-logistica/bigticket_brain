@@ -8021,13 +8021,20 @@ function OperandoSinCertificar({ usuario }) {
         </div>
       </div>
 
-      {/* Viajes retenidos de la semana: Certificaciones los habilita */}
-      {retenidos.length > 0 && (
+      {/* Viajes retenidos de la semana: Certificaciones los habilita. Siempre
+          visible cuando hay un control encendido, aunque todavía esté vacía. */}
+      {(retenidos.length > 0 || configs.some(c => c.modo === "encendido")) && (
         <div style={{ background: "#fff", border: "1px solid #fca5a5", borderRadius: 10, padding: "10px 12px", marginTop: 12 }}>
           <div style={{ fontSize: 12.5, fontWeight: 800, color: "#991b1b", marginBottom: 6 }}>
             ⛔ Viajes retenidos · semana {sem} · {retenidos.filter(v => v.estado === "retenido").length} retenido(s) · {plata(retenidos.filter(v => v.estado === "retenido").reduce((s, v) => s + Number(v.monto || 0), 0))}
             <span style={{ fontWeight: 400, color: "#64748b" }}> — se liberan solos al regularizarse; o habilítalos aquí con motivo.</span>
           </div>
+          {retenidos.length === 0 && (
+            <div style={{ fontSize: 12, color: "#64748b", padding: "6px 0" }}>
+              Todavía no hay viajes retenidos registrados en la semana {sem}. Se registran <b>cuando se calcula cada día</b> con la retención encendida:
+              los días que ya estaban guardados antes de encenderla hay que <b>recalcularlos en Pagos</b>. Las tarjetas de arriba muestran lo que se va a retener.
+            </div>
+          )}
           {retenidos.map(v => (
             <div key={v.id_ruta} style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 12, padding: "5px 0", borderTop: "1px solid #f1f5f9", color: v.estado === "retenido" ? "#334155" : "#94a3b8" }}>
               <span style={{ minWidth: 50 }}>{ddmm(v.fecha)}</span>
