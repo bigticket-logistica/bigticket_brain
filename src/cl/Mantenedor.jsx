@@ -1093,7 +1093,7 @@ function CecosCentros({ quien }) {
     setMsg("");
     try {
       await api("cecos?on_conflict=codigo", { method: "POST", headers: { Prefer: "return=minimal,resolution=merge-duplicates" },
-        body: JSON.stringify([{ codigo, fuente: "mantenedor", capturar: true, actualizado_por: quien }]) });
+        body: JSON.stringify([{ codigo, fuente: "manual", capturar: true, actualizado_por: quien }]) });
       await api("cecos_admin?on_conflict=nombre,codigo_meli", { method: "POST", headers: { Prefer: "return=minimal,resolution=merge-duplicates" },
         body: JSON.stringify([{ nombre, codigo_meli: codigo, actualizado_por: quien }]) });
       setMsg(`✓ ${nombre} (${codigo}) agregado: el VPS captura sus rutas desde la próxima vuelta. Completa lo que le falta en la tabla de abajo.`);
