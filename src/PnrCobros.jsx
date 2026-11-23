@@ -564,18 +564,36 @@ function ModuloNoShow({ usuario }) {
 
   const clave = (f) => `${f.fecha}|${f.sc}|${f.placa}`;
 
+  // Códigos de los no show que ya están en alguna prefactura (noshow|fecha|SC|placa).
+  const [idsEnPref, setIdsEnPref] = useState(new Set());
+
+  // Se lee SOLO la semana elegida (23-nov-2026): la base entrega como máximo
+  // 1.000 filas por consulta, y sin filtro de fecha los no show recientes
+  // quedaban fuera y la pantalla los mostraba como "no se publicó".
   const cargar = useCallback(async () => {
     setFilas(null);
-    const [v, cs] = await Promise.all([
-      sb.from("vw_noshow_declarados").select("*").order("fecha", { ascending: false }),
-      sb.from("cobros_noshow_mx").select("id, fecha, service_center, placa, estado, monto, origen, aplicado_semana, asignado_por, eliminado_por, eliminado_at, eliminado_motivo, created_at"),
+    const lunes = new Date(Date.UTC(2026, 5, 1) + (semSel - 24) * 7 * 86400000);
+    const desde = lunes.toISOString().slice(0, 10);
+    const hasta = new Date(lunes.getTime() + 6 * 86400000).toISOString().slice(0, 10);
+    const [v, cs, pf] = await Promise.all([
+      sb.from("vw_noshow_declarados").select("*").gte("fecha", desde).lte("fecha", hasta).order("fecha", { ascending: false }),
+      sb.from("cobros_noshow_mx").select("id, fecha, service_center, placa, estado, monto, origen, aplicado_semana, asignado_por, eliminado_por, eliminado_at, eliminado_motivo, created_at")
+        .gte("fecha", desde).lte("fecha", hasta),
+      // Prefacturas donde puede estar un no show de esta semana (esta y las 3 siguientes)
+      sb.from("conciliaciones_terceros").select("detalle").gte("semana", semSel).lte("semana", semSel + 3),
     ]);
     if (v.error) { setMsg({ ok: false, txt: "No se pudo leer la Bitácora: " + v.error.message }); setFilas([]); return; }
     const m = {};
     for (const c of (cs.data || [])) m[`${c.fecha}|${c.service_center}|${c.placa}`] = c;
+    const ids = new Set();
+    for (const r of (pf.data || [])) for (const d of (Array.isArray(r.detalle) ? r.detalle : [])) {
+      const id = String((d && d._id) || "");
+      if (id.startsWith("noshow|")) ids.add(id.slice(7));
+    }
+    setIdsEnPref(ids);
     setCobros(m);
     setFilas(v.data || []);
-  }, []);
+  }, [semSel]);
 
   useEffect(() => { cargar(); }, [cargar]);
 
@@ -593,7 +611,9 @@ function ModuloNoShow({ usuario }) {
   const estadoDe = (f) => {
     const c = cobros[clave(f)];
     if (c && c.estado === "eliminado") return "eliminado";
-    if (c && c.estado === "enviado") return c.aplicado_semana ? "en_prefactura" : "en_portal";
+    // En prefactura: si quedó marcado, o si su código está en alguna prefactura,
+    // haya entrado por donde haya entrado.
+    if (c && c.estado === "enviado") return (c.aplicado_semana || idsEnPref.has(clave(f))) ? "en_prefactura" : "en_portal";
     return "pendiente";
   };
 

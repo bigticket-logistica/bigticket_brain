@@ -4560,8 +4560,6 @@ function ConciliacionTercerosMX({ usuario }) {
         let error = "", warn = "";
         if (!empresa || !sc) error = "Falta empresa o SC";
         else if (isNaN(montoNum)) error = "Monto no numérico";
-        else if (tipo !== "viaje" && /^\s*(no show|cobro pnr|pnr\b)/i.test(String(concepto || "")))
-          error = "Los no show y PNR se agregan desde la pestaña Cobros (así no se duplican)";
         if (!error) {
           const avisos = [];
           if (match && match.nueva) avisos.push("empresa/SC nuevo: se creará la prefactura");
@@ -4596,30 +4594,39 @@ function ConciliacionTercerosMX({ usuario }) {
       if (error) throw error;
       filas = (data || []).map(d => ({ ...d, _id: lineaId(d), origen: "motor" }));
     }
-    // No show importado desde Excel (23-nov-2026): usa el identificador oficial
-    // del no show (noshow|fecha|SC|placa), el mismo del portal y del aviso de
-    // Conciliación, y si ese no show ya está en la prefactura NO se agrega de
-    // nuevo. Así un no show nunca queda dos veces.
-    const claveNoShow = (a) => {
+    // CÓDIGO ÚNICO POR COBRO (23-nov-2026). Cada no show, PNR, merma o ajuste
+    // entra a la prefactura con su código oficial, el mismo que usan el portal,
+    // la pestaña Cobros y el aviso de Conciliación:
+    //   no show → noshow|fecha|SC|placa     PNR → pnr|número de caso
+    //   merma   → merma|id                  ajuste de diferencias → ajuste|id
+    // Si ese código ya está en la prefactura, NO se agrega otra vez, venga del
+    // botón de pendientes, del importador de Excel o de donde sea.
+    const codigoCobro = (a) => {
+      if (a._codigo) return a._codigo;
+      if (a.kind === "viaje") return null;
       const txt = String(a.concepto || "");
-      if (!/^no show/i.test(txt)) return null;
-      const partes = txt.split(" · ");
-      const placa = String(a.placa || partes[1] || "").trim().toUpperCase();
-      const fecha = String(a.fecha || partes[2] || "").slice(0, 10);
-      if (!placa || !/^\d{4}-\d{2}-\d{2}$/.test(fecha)) return null;
-      return `noshow|${fecha}|${sc}|${placa}`;
+      const pnr = txt.match(/cobro\s+pnr\s+(\d+)/i);
+      if (pnr) return `pnr|${pnr[1]}`;
+      if (/^\s*no show/i.test(txt)) {
+        const partes = txt.split(" · ");
+        const placa = String(a.placa || partes[1] || "").trim().toUpperCase();
+        const fecha = String(a.fecha || partes[2] || "").slice(0, 10);
+        if (placa && /^\d{4}-\d{2}-\d{2}$/.test(fecha)) return `noshow|${fecha}|${sc}|${placa}`;
+      }
+      return null;
     };
     const yaEstan = new Set(filas.map(d => String(d._id || "")));
-    let omitidosNs = 0;
+    let repetidos = 0;
     items = items.filter(a => {
-      const k = a.kind === "viaje" ? null : claveNoShow(a);
-      if (k && yaEstan.has(k)) { omitidosNs++; return false; }
+      const k = codigoCobro(a);
+      if (k && yaEstan.has(k)) { repetidos++; return false; }
       if (k) yaEstan.add(k);
       return true;
     });
-    if (omitidosNs) console.info(`[importar] ${empresa} · ${sc}: ${omitidosNs} no show ya estaban en la prefactura, no se repiten`);
+    if (repetidos) console.info(`[prefactura] ${empresa} · ${sc}: ${repetidos} cobro(s) ya estaban, no se repiten`);
+    if (!items.length) return 0;
     const nuevas = items.map((a, idx) => {
-      const _id = (a.kind === "viaje" ? null : claveNoShow(a)) || `imp|${Date.now()}|${idx}|${Math.random().toString(36).slice(2, 6)}`;
+      const _id = codigoCobro(a) || `imp|${Date.now()}|${idx}|${Math.random().toString(36).slice(2, 6)}`;
       const baseLn = { _id, es_manual: true, importado: true, service_center_id: sc,
         km_real_meli: null, bonificacion_nombre: null, bonificacion_pct: 0, tiene_bonificacion: false,
         es_no_pago: false, motivo_no_pago: null };
@@ -4697,6 +4704,8 @@ function ConciliacionTercerosMX({ usuario }) {
       grupos[k].items.push({
         kind: "ajuste", fecha: a.fecha, placa: a.placa, id_ruta: a.id_ruta,
         concepto: a.concepto, montoFirmado: a.monto, aux: false,
+        _codigo: a._tipo === "noshow" ? `noshow|${String(a.fecha || "").slice(0, 10)}|${a.sc}|${String(a.placa || "").trim().toUpperCase()}`
+               : a._tipo === "merma" ? `merma|${a.id}` : `ajuste|${a.id}`,
       });
       const tabla = a._tipo === "ajuste" ? "ajustes_pago_mx"
                   : a._tipo === "noshow" ? "cobros_noshow_mx" : "cobros_merma_mx";
