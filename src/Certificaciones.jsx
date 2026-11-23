@@ -7833,6 +7833,9 @@ function OperandoSinCertificar({ usuario }) {
   // Aviso en el portal: lo gatilla Certificaciones, por semana.
   const [aviso, setAviso] = useState(null);       // fila de red_cert_aviso_portal de la semana
   const [avisando, setAvisando] = useState(false);
+  // Qué se muestra en el portal: lo elige el analista. Por defecto, vehículos y contrato.
+  const TIPOS_AVISO = [["vehiculo", "Vehículos"], ["contrato", "Contrato"], ["chofer", "Choferes"], ["chofer_otra_empresa", "Chofer de otra empresa"]];
+  const [tiposAviso, setTiposAviso] = useState(["vehiculo", "contrato"]);
   const quien = (usuario && (usuario.email || usuario.nombre)) || window.__PERFIL_EMAIL || "certificaciones_brain";
 
   // ── Retención: viajes retenidos de la semana e interruptores ──
@@ -7880,16 +7883,20 @@ function OperandoSinCertificar({ usuario }) {
   const cargarAviso = async (s) => {
     const { data } = await sb.from("red_cert_aviso_portal").select("*").eq("semana", s).maybeSingle();
     setAviso(data || null);
+    if (data?.publicado && Array.isArray(data.tipos) && data.tipos.length) setTiposAviso(data.tipos);
   };
 
   const publicarAviso = async () => {
     const yaEsta = aviso && aviso.publicado;
+    if (!tiposAviso.length) { alert("Marca al menos un tipo de pendiente para mostrar."); return; }
+    const nombresTipos = TIPOS_AVISO.filter(([k]) => tiposAviso.includes(k)).map(([, n]) => n).join(", ");
     if (!window.confirm(
       (yaEsta ? `Actualizar el aviso de la semana ${sem} en el portal.` : `Publicar el aviso de la semana ${sem} en el portal de los terceros.`) +
-      `\n\nCada empresa verá en "Mi flota" SOLO sus pendientes: choferes y vehículos que operaron sin certificar y, si aplica, el contrato sin firmar. ` +
-      `No ven montos.\n\nSi ya había otra semana publicada, el portal pasa a mostrar esta.`)) return;
+      `\n\nSe mostrará: ${nombresTipos}.\nCada empresa ve SOLO sus pendientes de esos tipos, sin montos. ` +
+      `Lo que regularice (alta del vehículo, firma, certificación del chofer) desaparece solo de su aviso.` +
+      `\n\nSi ya había otra semana publicada, el portal pasa a mostrar esta.`)) return;
     setAvisando(true);
-    const { data, error } = await sb.rpc("fn_red_cert_publicar_aviso", { p_semana: sem, p_usuario: quien });
+    const { data, error } = await sb.rpc("fn_red_cert_publicar_aviso", { p_semana: sem, p_usuario: quien, p_tipos: tiposAviso });
     setAvisando(false);
     if (error) { alert("No se pudo publicar: " + error.message); return; }
     alert(`Aviso publicado: ${data} pendiente(s) quedaron visibles para sus empresas.`);
@@ -8044,12 +8051,22 @@ function OperandoSinCertificar({ usuario }) {
       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", background: aviso?.publicado ? "#f0fdf4" : "#f8fafc", border: `1px solid ${aviso?.publicado ? "#86efac" : "#e4e7ec"}`, borderRadius: 10, padding: "10px 12px", marginTop: 12 }}>
         <div style={{ flex: 1, minWidth: 260, fontSize: 12.5, color: "#334155" }}>
           {aviso?.publicado ? (
-            <><b style={{ color: "#166534" }}>✓ Aviso publicado en el portal</b> · {aviso.filas} pendiente(s) · por {aviso.publicado_por} el {new Date(aviso.publicado_at).toLocaleString("es-MX", { timeZone: "America/Mexico_City", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}.
-              <span style={{ color: "#64748b" }}> Cada empresa ve solo sus pendientes en "Mi flota". Lo que se regularice después no se actualiza solo: usa "Actualizar aviso".</span></>
+            <><b style={{ color: "#166534" }}>✓ Aviso publicado en el portal</b> · {(aviso.tipos || []).map(k => (TIPOS_AVISO.find(x => x[0] === k) || [, k])[1]).join(", ")} · {aviso.filas} pendiente(s) · por {aviso.publicado_por} el {new Date(aviso.publicado_at).toLocaleString("es-MX", { timeZone: "America/Mexico_City", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}.
+              <span style={{ color: "#64748b" }}> Cada empresa ve solo sus pendientes en "Mi flota". Lo que regularice desaparece solo; los pendientes nuevos de la semana entran con "Actualizar aviso".</span></>
           ) : (
             <><b>El portal no muestra nada de esta semana.</b> <span style={{ color: "#64748b" }}>Cuando la revisen, publícala para que cada empresa vea sus pendientes en "Mi flota".</span>
               {aviso?.retirado_at && <span style={{ color: "#94a3b8" }}> (Retirado por {aviso.retirado_por}.)</span>}</>
           )}
+        </div>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", fontSize: 12 }}>
+          <span style={{ color: "#64748b" }}>Mostrar:</span>
+          {TIPOS_AVISO.map(([k, n]) => (
+            <label key={k} style={{ display: "flex", alignItems: "center", gap: 4, cursor: "pointer" }}>
+              <input type="checkbox" checked={tiposAviso.includes(k)}
+                onChange={e => setTiposAviso(v => e.target.checked ? [...v, k] : v.filter(x => x !== k))} />
+              {n}
+            </label>
+          ))}
         </div>
         <button onClick={publicarAviso} disabled={avisando || filas === null || !!error}
           style={{ padding: "7px 14px", borderRadius: 8, border: "1px solid #1d4ed8", background: "#1d4ed8", color: "#fff", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
