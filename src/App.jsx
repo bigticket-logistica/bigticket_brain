@@ -15199,6 +15199,7 @@ const TABS_CUIDADO_CL = [
   { id: "ca_combustible", label: "Combustible", desc: "Consumos de Copec contra la subvención y km de Geotab contra km de ruta" },
   { id: "ca_gastos", label: "Historial de gastos", desc: "Todo lo gastado en la flota: por año, tipo, patente y taller" },
   { id: "ca_alertas", label: "Centro de alertas", desc: "Todas las alertas de la flota en un solo lugar, envíos por correo y reglas" },
+  { id: "ca_chat", label: "Chat WhatsApp", desc: "Conversaciones del +56 9 5858 1911: lo que responde Biggy, responder como analista y encender el bot" },
   // Mantenedores se mudó a la pestaña Mantenedor (cl/Mantenedor.jsx)
   { id: "ca_evaluacion", label: "Evaluación del ejecutivo", desc: "Solo jefatura: gestión a tiempo de lo que avisó el sistema" },
   { id: "ca_indicadores", label: "Indicadores", desc: "Evaluación del tercero: conducción Geotab, incumplimientos y multas" },
