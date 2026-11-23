@@ -737,7 +737,8 @@ function ModuloMaestroCL({ usuario } = {}) {
   const [servGuardando, setServGuardando] = useState(null);
   const [bonoNs, setBonoNs] = useState([]);              // tramos de bono/castigo por NS (migración 74)
   const [bonoPanel, setBonoPanel] = useState(false);
-  const BONO_NUEVO0 = { ns_desde: "", ns_hasta: "", factor: "", servicio: "", cecos_admin: "", vigente_desde: "2026-11-01", vigente_hasta: "", nota: "" };
+  const BONO_NUEVO0 = { ns_desde: "", ns_hasta: "", factor: "", servicio: "", cecos_admin: "", tipo_vehiculo: "", vigente_desde: "2026-11-01", vigente_hasta: "", nota: "" };
+  const TIPOS_VEH_BONO = ["COMBUSTION", "ELECTRICA", "BIG VAN", "COMBUSTION LARGE VAN", "CAMION"];
   const [bonoNuevo, setBonoNuevo] = useState(BONO_NUEVO0);
   const [bonoGuardando, setBonoGuardando] = useState(null);
   const [adminCat, setAdminCat] = useState([]);             // nombres de cecos_admin para el alta
@@ -1262,7 +1263,7 @@ function ModuloMaestroCL({ usuario } = {}) {
     return null;
   };
   const filaTramo = (b) => ({ ns_desde: numOVacio(b.ns_desde), ns_hasta: numOVacio(b.ns_hasta), factor: numOVacio(b.factor),
-    servicio: b.servicio || null, cecos_admin: b.cecos_admin || null, vigente_desde: b.vigente_desde,
+    servicio: b.servicio || null, cecos_admin: b.cecos_admin || null, tipo_vehiculo: b.tipo_vehiculo || null, vigente_desde: b.vigente_desde,
     vigente_hasta: b.vigente_hasta || null, nota: (b.nota || "").trim() || null });
   const agregarTramo = async () => {
     const e = validarTramo(bonoNuevo); if (e) { setError(e); return; }
@@ -3871,12 +3872,12 @@ function ModuloMaestroCL({ usuario } = {}) {
                         El factor multiplica el pago del viaje cuando su NS ácido (entregados ÷ cargados; en colectas,
                         recolectados ÷ estimados) cae en el rango: <strong>desde ≤ NS &lt; hasta</strong> (hasta vacío = sin tope).
                         1,05 = bono de 5%; 0,95 = castigo de 5%. Si calzan varios tramos, gana el más específico
-                        (con servicio, luego con CECOS). <strong>Sin tramos activos, el factor es 1,00</strong> y el pago no cambia.
+                        (con servicio, luego con CECOS, luego con tipo de vehículo). <strong>Sin tramos activos, el factor es 1,00</strong> y el pago no cambia.
                       </div>
                       {bonoNs.length > 0 && (
                         <table className="mj-tabla" style={{ marginBottom: 10 }}>
                           <thead><tr><th className="num">% NS desde</th><th className="num">% NS hasta</th><th className="num">Factor</th>
-                            <th>Servicio</th><th>CECOS</th><th>Vigente desde</th><th>Hasta</th><th>Nota</th><th>Estado</th></tr></thead>
+                            <th>Servicio</th><th>CECOS</th><th>Vehículo</th><th>Vigente desde</th><th>Hasta</th><th>Nota</th><th>Estado</th></tr></thead>
                           <tbody>
                             {bonoNs.map(b => (
                               <tr key={b.id} style={!b.activo ? { opacity: 0.55 } : {}}>
@@ -3896,6 +3897,11 @@ function ModuloMaestroCL({ usuario } = {}) {
                                   onChange={e => actualizarTramo(b, { cecos_admin: e.target.value || null })}>
                                   <option value="">Todos</option>
                                   {[...new Set([...adminCat, b.cecos_admin].filter(Boolean))].map(c => <option key={c} value={c}>{c}</option>)}
+                                </select></td>
+                                <td><select className="mj-input" value={b.tipo_vehiculo || ""} style={{ fontSize: 12 }}
+                                  onChange={e => actualizarTramo(b, { tipo_vehiculo: e.target.value || null })}>
+                                  <option value="">Todos</option>
+                                  {[...new Set([...TIPOS_VEH_BONO, b.tipo_vehiculo].filter(Boolean))].map(v => <option key={v} value={v}>{v}</option>)}
                                 </select></td>
                                 <td><input className="mj-input" type="date" defaultValue={b.vigente_desde || ""} style={{ fontSize: 12 }}
                                   onBlur={e => { if (e.target.value && e.target.value !== b.vigente_desde) actualizarTramo(b, { vigente_desde: e.target.value }); }} /></td>
@@ -3927,6 +3933,11 @@ function ModuloMaestroCL({ usuario } = {}) {
                           <select className="mj-input" value={bonoNuevo.cecos_admin} onChange={e => setBonoNuevo(x => ({ ...x, cecos_admin: e.target.value }))}>
                             <option value="">Todos</option>
                             {adminCat.map(c => <option key={c} value={c}>{c}</option>)}
+                          </select></label>
+                        <label style={{ fontSize: 10.5, color: "#64748b" }}>Vehículo<br/>
+                          <select className="mj-input" value={bonoNuevo.tipo_vehiculo} onChange={e => setBonoNuevo(x => ({ ...x, tipo_vehiculo: e.target.value }))}>
+                            <option value="">Todos</option>
+                            {TIPOS_VEH_BONO.map(v => <option key={v} value={v}>{v}</option>)}
                           </select></label>
                         <label style={{ fontSize: 10.5, color: "#64748b" }}>Vigente desde<br/>
                           <input className="mj-input" type="date" value={bonoNuevo.vigente_desde}
