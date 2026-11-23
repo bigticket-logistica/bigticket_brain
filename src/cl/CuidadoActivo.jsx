@@ -4681,7 +4681,23 @@ const AG_EST = { bot: ["Biggy", "#eef2f8", C.navy], derivada: ["Derivada", C.amb
 const AG_TIPO = { supervisor: "Supervisor", empresa: "Empresa", chofer: "Chofer", ejecutivo: "Ejecutivo", taller: "Taller", jefe: "Jefe zonal", otro: "Otro" };
 const MEDIA = { image: "📷 Foto", audio: "🎤 Audio", document: "📄 Documento", location: "📍 Ubicación", video: "🎥 Video", sticker: "Sticker" };
 const horaCL = (t) => (t ? new Date(t).toLocaleString("es-CL", { timeZone: "America/Santiago", hour: "2-digit", minute: "2-digit", day: "2-digit", month: "2-digit" }) : "");
+const EMOJIS = "😀 😃 😄 😊 🙂 😉 😍 🤝 👍 👌 🙏 👏 💪 🙌 👋 ✅ ✔️ ❌ ⚠️ ❗ ❓ 📌 📍 📎 📄 📷 🚚 🚐 🛻 🔧 🛠️ ⛽ 🔋 🕐 ⏰ 📅 📞 💬 ✉️ 🎉 😅 😕 😔 😢 😡".split(" ");
+const tipoAdjunto = (f) => { const t = f.type || ""; if (t === "image/jpeg" || t === "image/png") return "image"; if (t.startsWith("audio/")) return "audio"; if (t === "video/mp4" || t === "video/3gpp") return "video"; return "document"; };
+const MAX_ADJ = { image: 5, audio: 16, video: 16, document: 100 };   // MB, límites de WhatsApp
+function MediaWa({ m }) {
+  const [url, setUrl] = useState(null);
+  useEffect(() => { let vivo = true; if (m.media_path) urlFirmada(m.media_path, "ca-whatsapp-cl").then((u) => vivo && setUrl(u)).catch(() => {}); return () => { vivo = false; }; }, [m.media_path]);
+  if (!m.media_path) return <div style={{ fontSize: 12.5, color: C.suave }}>{MEDIA[m.tipo] || m.tipo}{m.tipo !== "text" && m.tipo !== "location" ? " (guardándose…)" : ""}</div>;
+  if (!url) return <div style={{ fontSize: 12, color: C.tenue }}>Cargando {(MEDIA[m.tipo] || "archivo").toLowerCase()}…</div>;
+  if (m.tipo === "image" || m.tipo === "sticker") return <a href={url} target="_blank" rel="noreferrer"><img src={url} alt="foto" style={{ maxWidth: 260, maxHeight: 260, borderRadius: 8, display: "block" }} /></a>;
+  if (m.tipo === "audio") return <audio controls src={url} style={{ maxWidth: 260 }} />;
+  if (m.tipo === "video") return <video controls src={url} style={{ maxWidth: 280, borderRadius: 8 }} />;
+  return <a href={url} target="_blank" rel="noreferrer" style={{ color: C.navy, fontWeight: 700, fontSize: 13 }}>📄 {m.media_nombre || "Documento"}</a>;
+}
 function ChatWhatsApp({ quien }) {
+  const [adj, setAdj] = useState(null);           // { file, url, tipo }
+  const [emojis, setEmojis] = useState(false);
+  const [arrastre, setArrastre] = useState(false);
   const [cfg, setCfg] = useState({});
   const [convs, setConvs] = useState(null);
   const [ultimos, setUltimos] = useState({});
@@ -4743,11 +4759,26 @@ function ChatWhatsApp({ quien }) {
     && (!f.texto || `${x.nombre || ""} ${x.telefono} ${x.motivo || ""} ${(contactos[x.contacto_id] || {}).empresa || ""}`.toLowerCase().includes(f.texto.toLowerCase())));
   const ultimaEntrada = [...msgs].reverse().find((m) => m.direccion === "in");
   const ventana = ultimaEntrada && Date.now() - new Date(ultimaEntrada.creado_at).getTime() < 24 * 3600e3;
+  const elegirAdjunto = (file) => {
+    if (!file) return;
+    const tipo = tipoAdjunto(file);
+    if (file.size > MAX_ADJ[tipo] * 1024 * 1024) { setMsg(`${file.name}: WhatsApp acepta hasta ${MAX_ADJ[tipo]} MB para este tipo de archivo.`); return; }
+    setMsg(""); setAdj({ file, tipo, url: file.type.startsWith("image/") ? URL.createObjectURL(file) : null });
+  };
   const enviar = async () => {
-    const t = texto.trim(); if (!t || !c) return;
+    const t = texto.trim(); if ((!t && !adj) || !c) return;
     setBusy(true); setMsg("");
-    try { await rpc("fn_ag_enviar", { p_conversacion: c.id, p_texto: t, p_autor: "humano", p_autor_nombre: quien }); setTexto(""); await Promise.all([cargarHilo(c.id), cargarLista()]); }
-    catch (e) { setMsg(e.message); } finally { setBusy(false); }
+    try {
+      if (adj) {
+        const limpio = String(adj.file.name || "archivo").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^A-Za-z0-9._-]+/g, "_").slice(-80);
+        const path = `salientes/${c.id}/${Date.now()}_${limpio}`;
+        const r = await fetch(`${CL_URL}/storage/v1/object/ca-whatsapp-cl/${path}`, { method: "POST", headers: { apikey: CL_KEY, Authorization: `Bearer ${CL_KEY}`, "Content-Type": adj.file.type || "application/octet-stream" }, body: adj.file });
+        if (!r.ok) throw new Error(`No se pudo subir el archivo: ${(await r.text()).slice(0, 160)}`);
+        await rpc("fn_ag_enviar_media", { p_conversacion: c.id, p_path: path, p_tipo: adj.tipo, p_nombre: adj.file.name || limpio, p_texto: t || null, p_autor_nombre: quien });
+        setAdj(null);
+      } else await rpc("fn_ag_enviar", { p_conversacion: c.id, p_texto: t, p_autor: "humano", p_autor_nombre: quien });
+      setTexto(""); setEmojis(false); await Promise.all([cargarHilo(c.id), cargarLista()]);
+    } catch (e) { setMsg(e.message); } finally { setBusy(false); }
   };
   const accion = async (a) => {
     if (a === "cerrar" && !window.confirm("¿Cerrar la conversación? Si la persona vuelve a escribir, se abre una nueva.")) return;
@@ -4805,12 +4836,14 @@ function ChatWhatsApp({ quien }) {
               {(c.estado === "humano" || c.estado === "derivada") && <button style={{ ...btn("sec"), padding: "4px 10px" }} onClick={() => accion("devolver")} title="Biggy vuelve a responder">Devolver a Biggy</button>}
               {c.estado !== "cerrada" && <button style={{ ...btn("sec"), padding: "4px 10px" }} onClick={() => accion("cerrar")}>Cerrar</button>}
             </div>
-            <div style={{ flex: 1, overflowY: "auto", padding: 12, background: "#f7f8fa" }}>
+            <div style={{ flex: 1, overflowY: "auto", padding: 12, background: arrastre ? "#e6eefb" : "#f7f8fa", outline: arrastre ? `2px dashed ${C.navy}` : "none" }}
+              onDragOver={(e) => { if (ventana) { e.preventDefault(); setArrastre(true); } }} onDragLeave={() => setArrastre(false)}
+              onDrop={(e) => { e.preventDefault(); setArrastre(false); if (ventana) elegirAdjunto(e.dataTransfer.files?.[0]); }}>
               {msgs.map((m) => { const out = m.direccion === "out", bot = m.autor === "agente"; return (
                 <div key={m.id} style={{ display: "flex", justifyContent: out ? "flex-end" : "flex-start", margin: "5px 0" }}>
                   <div style={{ maxWidth: "75%", background: out ? (bot ? "#e6eefb" : "#fde9d9") : "#fff", border: `1px solid ${C.borde}`, borderRadius: 12, padding: "7px 10px" }}>
                     {out && <div style={{ fontSize: 11, fontWeight: 700, color: bot ? C.navy : "#c2410c", marginBottom: 2 }}>{bot ? `🤖 ${m.autor_nombre || "Biggy"}` : m.autor_nombre || "Analista"}</div>}
-                    {m.tipo && m.tipo !== "text" && <div style={{ fontSize: 12.5, color: C.suave }}>{MEDIA[m.tipo] || m.tipo}</div>}
+                    {m.tipo && m.tipo !== "text" && <MediaWa m={m} />}
                     {m.texto && <div style={{ fontSize: 13.5, whiteSpace: "pre-wrap" }}>{m.texto}</div>}
                     <div style={{ fontSize: 10.5, color: C.tenue, textAlign: "right", marginTop: 2 }}>{horaCL(m.creado_at)}{out ? ticks(m) : ""}</div>
                   </div>
@@ -4821,10 +4854,25 @@ function ChatWhatsApp({ quien }) {
             <div style={{ borderTop: `1px solid ${C.borde}`, padding: 10 }}>
               {!ventana ? <div style={{ fontSize: 12.5, color: C.ambar }}>Pasaron más de 24 horas desde el último mensaje de la persona: WhatsApp solo permite escribirle con una plantilla. Cuando vuelva a escribir, podrás responder aquí.</div> : <>
                 {c.estado === "bot" && <div style={{ fontSize: 11.5, color: C.tenue, marginBottom: 4 }}>Si respondes, tomas la conversación y Biggy deja de responder (puedes devolvérsela).</div>}
-                <div style={{ display: "flex", gap: 8 }}>
-                  <textarea style={{ ...inp, flex: 1, minHeight: 44, resize: "vertical" }} placeholder="Escribe tu respuesta (Enter envía, Shift+Enter cambia de línea)" value={texto}
-                    onChange={(e) => setTexto(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); enviar(); } }} />
-                  <button style={btn()} disabled={busy || !texto.trim()} onClick={enviar}>{busy ? "Enviando…" : "Enviar"}</button>
+                {adj && (
+                  <div style={{ display: "flex", gap: 8, alignItems: "center", background: C.fondo, borderRadius: 8, padding: 6, marginBottom: 6 }}>
+                    {adj.url ? <img src={adj.url} alt="adjunto" style={{ height: 54, borderRadius: 6 }} /> : <span style={{ fontSize: 22 }}>{adj.tipo === "audio" ? "🎤" : adj.tipo === "video" ? "🎥" : "📄"}</span>}
+                    <div style={{ fontSize: 12.5, flex: 1 }}><b>{adj.file.name || "captura"}</b><div style={{ color: C.tenue }}>{(adj.file.size / 1024 / 1024).toFixed(1)} MB · {adj.tipo === "audio" ? "el texto va en un mensaje aparte" : "el texto va como descripción"}</div></div>
+                    <button style={{ ...btn("sec"), padding: "3px 10px" }} onClick={() => setAdj(null)}>Quitar</button>
+                  </div>
+                )}
+                {emojis && <div style={{ display: "flex", flexWrap: "wrap", gap: 2, background: "#fff", border: `1px solid ${C.borde}`, borderRadius: 8, padding: 6, marginBottom: 6 }}>
+                  {EMOJIS.map((e) => <button key={e} onClick={() => setTexto((t) => t + e)} style={{ border: "none", background: "none", fontSize: 20, cursor: "pointer", padding: 2 }}>{e}</button>)}
+                </div>}
+                <div style={{ display: "flex", gap: 6, alignItems: "flex-end" }}>
+                  <button title="Emojis" style={{ ...btn("sec"), padding: "8px 10px" }} onClick={() => setEmojis((x) => !x)}>😊</button>
+                  <label title="Adjuntar foto, audio, video o documento" style={{ ...btn("sec"), padding: "8px 10px", cursor: "pointer" }}>📎
+                    <input type="file" style={{ display: "none" }} accept="image/jpeg,image/png,audio/*,video/mp4,application/pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv" onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; elegirAdjunto(f); }} />
+                  </label>
+                  <textarea style={{ ...inp, flex: 1, minHeight: 44, resize: "vertical" }} placeholder={adj ? "Descripción (opcional)" : "Escribe tu respuesta (Enter envía, Shift+Enter cambia de línea). Puedes pegar una captura con Ctrl+V o arrastrar un archivo."} value={texto}
+                    onChange={(e) => setTexto(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); enviar(); } }}
+                    onPaste={(e) => { const it = [...(e.clipboardData?.items || [])].find((i) => i.kind === "file"); if (it) { e.preventDefault(); const f = it.getAsFile(); if (f) elegirAdjunto(f.name ? f : new File([f], `captura_${Date.now()}.png`, { type: f.type || "image/png" })); } }} />
+                  <button style={btn()} disabled={busy || (!texto.trim() && !adj)} onClick={enviar}>{busy ? "Enviando…" : "Enviar"}</button>
                 </div>
               </>}
               {msg && <div style={{ fontSize: 12, color: C.rojo, marginTop: 4 }}>{msg}</div>}
