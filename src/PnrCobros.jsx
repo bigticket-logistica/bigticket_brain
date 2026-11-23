@@ -562,7 +562,8 @@ function ModuloNoShow({ usuario }) {
   const [filtro, setFiltro] = useState("todos");
   const quien = (usuario && (usuario.nombre || usuario.email)) || "Brain";
 
-  const clave = (f) => `${f.fecha}|${f.sc}|${f.placa}`;
+  // Llave del no show: fecha|SC|placa, sin espacios y en mayúsculas en ambos lados.
+  const clave = (f) => `${String(f.fecha || "").slice(0, 10)}|${String(f.sc || "").trim().toUpperCase()}|${String(f.placa || "").trim().toUpperCase()}`;
 
   // Códigos de los no show que ya están en alguna prefactura (noshow|fecha|SC|placa).
   const [idsEnPref, setIdsEnPref] = useState(new Set());
@@ -577,14 +578,16 @@ function ModuloNoShow({ usuario }) {
     const hasta = new Date(lunes.getTime() + 6 * 86400000).toISOString().slice(0, 10);
     const [v, cs, pf] = await Promise.all([
       sb.from("vw_noshow_declarados").select("*").gte("fecha", desde).lte("fecha", hasta).order("fecha", { ascending: false }),
-      sb.from("cobros_noshow_mx").select("id, fecha, service_center, placa, estado, monto, origen, aplicado_semana, asignado_por, eliminado_por, eliminado_at, eliminado_motivo, created_at")
-        .gte("fecha", desde).lte("fecha", hasta),
+      sb.from("cobros_noshow_mx").select("*").gte("fecha", desde).lte("fecha", hasta),
       // Prefacturas donde puede estar un no show de esta semana (esta y las 3 siguientes)
       sb.from("conciliaciones_terceros").select("detalle").gte("semana", semSel).lte("semana", semSel + 3),
     ]);
     if (v.error) { setMsg({ ok: false, txt: "No se pudo leer la Bitácora: " + v.error.message }); setFilas([]); return; }
+    // Si no se pudo leer lo publicado, se avisa: nunca se muestra todo como "no se publicó".
+    if (cs.error) { setMsg({ ok: false, txt: "No se pudieron leer los no show publicados: " + cs.error.message }); setFilas([]); return; }
     const m = {};
-    for (const c of (cs.data || [])) m[`${c.fecha}|${c.service_center}|${c.placa}`] = c;
+    const k3 = (fe, sc, pl) => `${String(fe || "").slice(0, 10)}|${String(sc || "").trim().toUpperCase()}|${String(pl || "").trim().toUpperCase()}`;
+    for (const c of (cs.data || [])) m[k3(c.fecha, c.service_center, c.placa)] = c;
     const ids = new Set();
     for (const r of (pf.data || [])) for (const d of (Array.isArray(r.detalle) ? r.detalle : [])) {
       const id = String((d && d._id) || "");
