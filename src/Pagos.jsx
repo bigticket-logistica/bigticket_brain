@@ -4560,6 +4560,8 @@ function ConciliacionTercerosMX({ usuario }) {
         let error = "", warn = "";
         if (!empresa || !sc) error = "Falta empresa o SC";
         else if (isNaN(montoNum)) error = "Monto no numérico";
+        else if (tipo !== "viaje" && /^\s*(no show|cobro pnr|pnr\b)/i.test(String(concepto || "")))
+          error = "Los no show y PNR se agregan desde la pestaña Cobros (así no se duplican)";
         if (!error) {
           const avisos = [];
           if (match && match.nueva) avisos.push("empresa/SC nuevo: se creará la prefactura");
@@ -4594,8 +4596,30 @@ function ConciliacionTercerosMX({ usuario }) {
       if (error) throw error;
       filas = (data || []).map(d => ({ ...d, _id: lineaId(d), origen: "motor" }));
     }
+    // No show importado desde Excel (23-nov-2026): usa el identificador oficial
+    // del no show (noshow|fecha|SC|placa), el mismo del portal y del aviso de
+    // Conciliación, y si ese no show ya está en la prefactura NO se agrega de
+    // nuevo. Así un no show nunca queda dos veces.
+    const claveNoShow = (a) => {
+      const txt = String(a.concepto || "");
+      if (!/^no show/i.test(txt)) return null;
+      const partes = txt.split(" · ");
+      const placa = String(a.placa || partes[1] || "").trim().toUpperCase();
+      const fecha = String(a.fecha || partes[2] || "").slice(0, 10);
+      if (!placa || !/^\d{4}-\d{2}-\d{2}$/.test(fecha)) return null;
+      return `noshow|${fecha}|${sc}|${placa}`;
+    };
+    const yaEstan = new Set(filas.map(d => String(d._id || "")));
+    let omitidosNs = 0;
+    items = items.filter(a => {
+      const k = a.kind === "viaje" ? null : claveNoShow(a);
+      if (k && yaEstan.has(k)) { omitidosNs++; return false; }
+      if (k) yaEstan.add(k);
+      return true;
+    });
+    if (omitidosNs) console.info(`[importar] ${empresa} · ${sc}: ${omitidosNs} no show ya estaban en la prefactura, no se repiten`);
     const nuevas = items.map((a, idx) => {
-      const _id = `imp|${Date.now()}|${idx}|${Math.random().toString(36).slice(2, 6)}`;
+      const _id = (a.kind === "viaje" ? null : claveNoShow(a)) || `imp|${Date.now()}|${idx}|${Math.random().toString(36).slice(2, 6)}`;
       const baseLn = { _id, es_manual: true, importado: true, service_center_id: sc,
         km_real_meli: null, bonificacion_nombre: null, bonificacion_pct: 0, tiene_bonificacion: false,
         es_no_pago: false, motivo_no_pago: null };
@@ -5453,13 +5477,12 @@ function ConciliacionTercerosMX({ usuario }) {
                   <span style={{ minWidth: 220, fontSize: 11 }} title={c.omitido_comentario || ""}>
                     Enviado sin incluir · {c.omitido_por} · {c.omitido_comentario}
                   </span>
-                ) : (c.tipo === "noshow" || c.tipo === "pnr") ? (
-                  <button onClick={() => agregarCobroPendiente(c)} disabled={agregandoCobro === c.linea_id}
-                    style={{ minWidth: 120, padding: "4px 10px", fontSize: 11, fontWeight: 700, borderRadius: 6, border: "1px solid #1d4ed8", background: "#eff6ff", color: "#1d4ed8", cursor: "pointer" }}>
-                    {agregandoCobro === c.linea_id ? "…" : "Agregar a prefactura"}
-                  </button>
                 ) : (
-                  <span style={{ minWidth: 120, fontSize: 11 }}>Agregar desde la pestaña PNR</span>
+                  // Un solo lado (23-nov-2026): los no show y PNR se agregan a la
+                  // prefactura SOLO desde la pestaña Cobros. Aquí solo se informa.
+                  <span style={{ minWidth: 170, fontSize: 11, color: "#475569" }}>
+                    Publicado · falta en prefactura · agrégalo en <b>Cobros → {c.tipo === "pnr" ? "PNR" : "No show"}</b>
+                  </span>
                 )}
               </div>
             ))}
